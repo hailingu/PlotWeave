@@ -1,0 +1,40 @@
+# --- Node / 前端 ---
+node_modules/
+dist/
+dist-ssr/
+*.local
+.vite/
+coverage/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# 注意：Tauri 应用为二进制交付，src-tauri/Cargo.lock 应当提交，不忽略
+
+# --- Rust / Tauri ---
+src-tauri/target/
+src-tauri/gen/schemas/
+**/*.rs.bk
+
+# --- 环境变量 ---
+.env
+.env.*
+!.env.example
+
+# --- 编辑器 / IDE ---
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.suo
+*.njsproj
+*.sln
+*.sw?
+
+# --- 操作系统 ---
+.DS_Store
+Thumbs.db
+
+# --- 日志与临时文件 ---
+*.log
+tmp/
