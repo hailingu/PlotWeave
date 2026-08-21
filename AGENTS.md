@@ -59,14 +59,14 @@ For each affected path or operation, evaluate the rows below in listed order and
 | --- | --- | --- | --- | --- |
 | `AGENTS.md` and any companion agent entry-point files (e.g., `CLAUDE.md`) | This guide's Non-Negotiable Gates, Execution Workflow, and Version-Control Safety sections | repository root | None configured — perform a structured review and report that no automated check exists | Documentation-only changes do not require Red-Green-Refactor. |
 | `README.md`, `docs/**` | This guide | repository root | None configured — perform a structured review and report that no automated check exists | Documentation-only changes do not require Red-Green-Refactor. |
-| `src/**` and root frontend manifests or config (e.g., `package.json`, `tsconfig.json`, `vite.config.*`) | This guide and the frontend standards once they are added under `docs/` | repository root | `npm run lint && npm run build`; add `npm test` once a test script exists; adapt to the package manager chosen when the frontend is scaffolded | React Flow / TypeScript frontend rendered inside the Tauri webview. |
+| `src/**` and root frontend manifests or config (e.g., `package.json`, `tsconfig.json`, `vite.config.*`, `eslint.config.js`, `.nvmrc`) | This guide and the frontend standards once they are added under `docs/` | repository root | `npm run lint && npm run build`; add `npm test` once a test script exists | React Flow（`@xyflow/react`）/ TypeScript frontend rendered inside the Tauri webview. npm is the package manager; the Node version is pinned by `.nvmrc` (24.18.0). |
 | `src-tauri/**` | This guide and the Rust standards once they are added under `docs/` | `src-tauri` | `cargo fmt --check && cargo clippy -- -D warnings && cargo test` | Rust backend and Tauri shell: commands, persistence, and native integrations live here. |
 
 If no Scope Routing row matches, discover and run the narrowest relevant non-interactive check for every affected path. If no automated check exists, perform a structured review, report that no configured automated check was available, and record what was inspected instead of inventing a command.
 
 Before adding the first maintained source or configuration path for a new service, package, language, or platform, add its explicit Scope Routing row in the same change, including applicable standards, working directory, and non-interactive verification command. The fallback above supports discovery and exceptional unmatched paths; it MUST NOT become the permanent route for a maintained source or configuration area.
 
-When the frontend or backend scaffolding lands, align the routing rows above with the actual package manager, scripts, and workspace layout in the same change.
+Whenever the package manager, npm scripts, workspace layout, or toolchain versions change, update the routing rows above in the same change so they always reflect the actual commands.
 
 ## Security
 
