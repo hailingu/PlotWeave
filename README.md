@@ -25,13 +25,13 @@
 
 桌面端由 Tauri 打包，前端负责画布交互，业务逻辑与文件读写下沉到 Rust 侧。
 
-## 仓库结构（规划）
+## 仓库结构
 
 ```
 PlotWeave/
 ├── src/            # React + React Flow 前端
 ├── src-tauri/      # Rust 后端与 Tauri 壳（commands、持久化、导出）
-├── docs/           # 项目文档
+├── docs/           # 项目文档（待补充）
 ├── AGENTS.md       # AI 代理协作规范
 ├── README.md
 └── LICENSE
@@ -55,7 +55,16 @@ feature/  ●───●  ●──●      任务分支（PR → dev）
 
 ## 快速开始
 
-项目处于初始化阶段，脚手架尚未生成。待 Tauri 工程落地后，此处将提供安装依赖、启动开发调试与构建的完整命令。
+```bash
+nvm use            # 切换到 .nvmrc 指定的 Node 版本（24.18.0）
+npm install        # 安装前端依赖
+npm run tauri dev  # 启动 Tauri 开发调试（Vite 前端 + Rust 壳）
+```
+
+常用校验命令：
+
+- 前端：仓库根目录执行 `npm run lint && npm run build`
+- 后端：`src-tauri/` 目录执行 `cargo fmt --check && cargo clippy -- -D warnings && cargo test`
 
 ## 文档与协作
 

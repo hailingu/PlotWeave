@@ -1,0 +1,15 @@
+/* 画布占满整个窗口，页面自身不产生滚动条。 */
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.canvas-root {
+  width: 100%;
+  height: 100%;
+}
