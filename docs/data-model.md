@@ -1,0 +1,519 @@
+# PlotWeave 数据模型设计
+
+> 状态：草案 v1（待评审）
+> 适用范围：画布文档模型、设定与资产模型、命令与撤销、本地存储体系、AI Agent 交互。
+> 明确不在范围内：用户体系、租户、余额/计费。PlotWeave 是单用户 BYOK 桌面工具；若未来出现此类需求，另起《服务端领域模型》文档。
+
+## 一、设计背景与原则
+
+PlotWeave 是 Tauri + React Flow + Rust 的单用户桌面工具：创作者在画布上把剧本、场景、角色与剧情分支组织为节点图。模型配置走 BYOK——用户自己在客户端里配置 provider（base URL + API key），无服务端、无计费。
+
+全部模型设计从五条原则推出，后文每个决策都能回溯到其中之一：
+
+1. **单一文档真源**：一个项目的画布数据收敛为一份带 `schemaVersion` 的 JSON 文档。备份、导出、版本兼容都只围绕这一份文件。
+2. **数据按职责分区**：渲染布局、会话状态、用户意图、元信息分开存放，互不污染。
+3. **一切变更走命令**：状态修改有唯一入口，撤销/重做、持久化、AI 操作画布都建立在这条通道上。
+4. **资产文件化**：媒体内容落盘为文件，文档内只存引用。
+5. **不为不存在的问题付费**：单写者桌面场景不引入并发仲裁、协同合并、任务编排等机制。
+
+## 二、总体分层
+
+```
+React 组件层（节点组件、设定面板、资产库面板）
+   ↓ 交互意图
+Store 桥接层（useGraphStore hook）
+   ↓ 命令（GraphCommand）
+模型层（纯 TypeScript，无框架依赖）
+   ProjectDocument ← GraphStore（applyCommand / undo / redo / 防抖持久化回调）
+   ↓ invoke
+Rust 持久化层（Tauri commands：文件读写、资产导入、设置与密钥、LLM 代理）
+```
+
+两条约束贯穿所有层：
+
+- 模型层是纯 TS：不可变更新，对外暴露只读快照。便于单测，也便于未来需要时平移到 Rust。
+- 画布状态的唯一真源是 GraphStore；React Flow 只作渲染与交互层，不持有业务状态。
+
+下文顺序：先定义数据本身（三~七）与引用规则（八），再定义变更机制（九：命令与撤销），然后是落地（十：存储；十一：加载归一化），最后是建立在命令通道之上的 AI 能力（十二）与演进方向（十三）。
+
+## 三、ProjectDocument
+
+一个项目一份文档，序列化为 `project.json`：
+
+```ts
+/** 项目文档：画布数据的序列化真源。 */
+interface ProjectDocument {
+  schemaVersion: 1
+  project: {
+    id: string            // 目录名，创建时生成的 UUID
+    name: string
+    description?: string
+    createdAt: string     // ISO 8601
+    updatedAt: string
+  }
+  graph: {
+    nodes: StoryNode[]    // 见第四节
+    edges: StoryEdge[]    // 见第五节
+    viewport: { x: number; y: number; zoom: number }  // 单用户场景直接随文档持久化
+  }
+  settings: {             // 设定集：节点通过 id 引用，见第六节
+    characters: Record<string, Character>
+    locations: Record<string, Location>
+    props: Record<string, PropItem>
+  }
+  assets: {
+    byId: Record<string, AssetRef>  // 项目资产索引；文件本体在项目 assets/ 目录，见第七节
+  }
+}
+```
+
+文档**不**持久化会话态：撤销/重做栈、选中态（`ui.selected` 加载时重置）、拖拽中的临时位置。这些留在内存，随会话结束消失。
+
+## 四、节点模型
+
+### 4.1 通用结构
+
+```ts
+/** 画布节点：叙事单元（场景/桥段/对白/分支）。 */
+interface StoryNode {
+  id: string
+  type: NodeType                     // 'scene' | 'beat' | 'dialogue' | 'branch'
+  layout: {                          // 渲染布局
+    position: { x: number; y: number }
+    size?: { width: number; height: number }
+    zIndex?: number
+  }
+  ui: {                              // 会话态，加载时重置
+    selected: boolean
+    expanded: boolean
+  }
+  data: {
+    spec: NodeSpec                   // 用户意图，按节点类型不同（见 4.2）
+    meta: {                          // 元信息
+      label: string                  // 节点标题
+      createdAt: string
+      updatedAt: string
+    }
+  }
+}
+```
+
+节点数据只保留四个分区：渲染布局（`layout`）、会话状态（`ui`）、用户意图（`data.spec`）、元信息（`data.meta`）。画布没有执行引擎，因此不设输入缓存、产物、运行状态等分区——没有写者的字段不进模型（原则 5）。
+
+### 4.2 各类型 spec
+
+节点里写的一切内容——梗概、台词、以及将来 AI 生成的 prompt——都是 `spec` 的字段，随 `project.json` 持久化，无需额外存储。
+
+```ts
+type NodeSpec = SceneSpec | BeatSpec | DialogueSpec | BranchSpec
+
+/** 场景：一个时空单元的叙事容器。 */
+interface SceneSpec {
+  locationId?: string        // 引用 settings.locations
+  time?: string              // 自由文本，如「夜·雨」
+  summary: string            // 场景梗概
+  characterIds: string[]     // 出场角色，引用 settings.characters
+}
+
+/** 桥段：场景内的情节拍点（转折、反转、高潮）。 */
+interface BeatSpec {
+  summary: string
+  emotionalTone?: string     // 如「压抑」「爆发」
+}
+
+/** 对白：一段角色对话。 */
+interface DialogueSpec {
+  lines: Array<{
+    characterId: string      // 引用 settings.characters
+    text: string
+  }>
+}
+
+/** 分支：剧情分岔点，出口由带 label 的 branch 边表达（见第五节）。 */
+interface BranchSpec {
+  prompt: string             // 分岔事由，如「女主是否发现真相」
+}
+```
+
+### 4.3 端口与连接
+
+直接使用 React Flow 多 handle：
+
+- `scene` / `beat` / `dialogue`：`input`（target）+ `output`（source）各一个。
+- `branch`：一个 `input`（target）+ 多个出口 source handle（`option-1`、`option-2`……动态增删）。
+- 连接校验在前端交互层（`isValidConnection`）做：禁止自环、禁止成环（BFS 传递闭包检查）；命令层不重复校验。
+
+## 五、边模型
+
+```ts
+/** 剧情连线：顺序流或分支流。 */
+interface StoryEdge {
+  id: string
+  source: string
+  target: string
+  sourceHandle?: string      // branch 节点的出口 id
+  targetHandle?: string
+  data: {
+    kind: 'sequence' | 'branch'
+    label?: string           // kind='branch' 时的选项文案，如「坦白」「隐瞒」
+    order?: number           // 同一 source 多出口的排列顺序
+  }
+}
+```
+
+- `sequence`：剧情顺序流，无 label。
+- `branch`：从 branch 节点出口引出，必须带 label；多结局用多条 branch 边指向不同子图表达。
+
+## 六、设定集（settings）
+
+角色/地点/道具是项目级实体，节点只存 id 引用——改一处人设，所有引用它的节点同时生效：
+
+```ts
+interface Character {
+  id: string
+  name: string
+  description?: string       // 人设、关系、口癖等自由文本
+  avatarAssetId?: string     // 引用 assets.byId
+}
+interface Location { id: string; name: string; description?: string }
+interface PropItem { id: string; name: string; description?: string }
+```
+
+**悬空引用规则**：设定被删除时不级联改节点（避免静默丢数据），节点侧按「引用失效」样式展示（如灰色角标），由用户决定替换或清除。只做检测与展示，不引入级联状态机（原则 5）。
+
+## 七、资产模型
+
+### 7.1 两个作用域
+
+- **项目资产**：归属于某个项目，文件存于项目目录内，`project.json` 的 `assets.byId` 只索引本项目资产。项目是**自包含**的——导出、备份、移动项目目录不会丢失任何引用。
+- **个人资产库**：跨项目复用的素材（角色立绘、参考图、常用模板），存于应用级 `library/` 目录，由独立的 `library.json` 索引，不进任何 ProjectDocument。
+
+两个作用域共享同一个引用结构：
+
+```ts
+/** 资产引用：媒体本体是文件，文档只存引用。 */
+interface AssetRef {
+  id: string
+  relPath: string            // 项目资产相对项目目录；库资产相对 library/ 目录
+  mime: string
+  source: 'upload' | 'generated'
+  createdAt: string
+}
+```
+
+### 7.2 库资产的分类与编组
+
+资产库要回答"我有哪些人物/场景/道具的哪些视图"，扁平标签不足以表达（"三视图"是结构而非标签），因此采用结构化分类 + 编组 + 自由标签三层：
+
+```ts
+/** 资产视角：三视图/多角度视图等结构化分类。 */
+type AssetView = 'front' | 'side' | 'back' | 'three_quarter' | 'top' | 'other'
+
+/** 个人资产库索引项：在 AssetRef 之上带分类与组织信息。 */
+interface LibraryAsset extends AssetRef {
+  name: string
+  kind: 'character' | 'location' | 'prop' | 'reference' | 'other'  // 人物/场景/道具/参考图
+  view?: AssetView           // 视角；三视图即同一 group 下 front/side/back 各一张
+  groupId?: string           // 同一主体的多视图编组，引用 library.json 的 groups
+  tags: string[]             // 自由标签，补充 kind/view 表达不了的维度
+}
+
+/** 资产组：同一主体（如某角色）的多张视图/变体的集合。 */
+interface AssetGroup {
+  id: string
+  name: string               // 如「女主·林晚」
+  kind: LibraryAsset['kind']
+}
+```
+
+- **分工**：`kind` 回答"是什么"，`view` 回答"哪个角度"，`groupId` 把同一主体的三视图绑成一组；`tags` 只用于前两者覆盖不了的自由维度（如「赛博朋克」「雨夜」）。能用结构化字段表达的不写成标签，避免同义标签发散。
+- **绑定方式**：分类信息写在 `library.json` 索引项里、以资产 id 为键；改标签、换组、改视角只更新索引，不动媒体文件。
+- **快速读取**：`library.json` 启动时全量载入内存（桌面量级，数千条索引项仅数百 KB），列表页筛选/搜索全走内存过滤，媒体文件懒加载。规模失控时再迁 SQLite（见十三）。
+
+### 7.3 流转规则
+
+- **库资产进入项目 = 拷贝**：把库素材放上画布或设为角色头像时，文件拷入项目 `assets/` 并生成项目级 AssetRef（新 id）。项目不持有对库文件的引用，因此库侧可随时清理而不产生项目内的悬空引用。
+- **AI 生成结果（未来接入）必须落盘后再引用**：厂商临时 URL 不得出现在文档里——临时链接会过期，直接引用会导致画布内容日后无法打开。生成结果默认落项目资产，用户可显式「收藏到资产库」。
+- **延迟回收**：删除引用资产的节点/设定时不立即删文件，由后续「清理未引用资产」命令统一回收（首版可只做手动触发）。
+
+## 八、引用模型与联动规则
+
+节点、设定、资产之间的引用是画布最容易出错的区域。本节定义引用的分类、唯一真相归属与联动规则。核心只有一条：**每个引用事实只存一处，其余全部是派生视图**。
+
+### 8.1 引用类型与真相归属
+
+| 引用类型 | 例子 | 唯一真相 | 派生物（不持久化） |
+| --- | --- | --- | --- |
+| 剧情流向 | 场景 → 对白 | `graph.edges` | 无 |
+| 节点 → 设定 | 场景的 `characterIds` | spec 字段（id 数组） | 反向索引（「谁引用了这个角色」） |
+| 文本内 @ 提及 | 对白文本里的 @角色 | 文本 token（只存 id） | 提及列表、高亮、反向索引——**不落边** |
+| 节点/设定 → 资产 | 角色头像 `avatarAssetId` | assetId 字段 | 引用计数（清理未引用资产时现算） |
+| 节点 → 节点输入（未来媒体节点） | 视频节点的立绘输入 | `graph.edges` | 执行输入在解析时现算，不物化镜像 |
+
+细则：
+
+1. **禁止镜像字段**：不设任何「引用的第二份拷贝」（如 inputs 镜像、边上冗余的引用标签副本）。派生信息需要时现算或重建，不持久化。
+2. **文本 token 只存 id**：`@[character:{id}]` 形式，不存名称快照；显示名永远按 id 实时解析——改名不断引用，也无需回写任何文本。
+3. **反向索引由模型层维护**：GraphStore 在每次 `applyCommand` 后增量重建「被引用方 → 引用方列表」索引，供「查看引用」「删除前确认」使用。索引是内存派生物，不进文档，不依赖任何组件的挂载状态。
+
+### 8.2 生命周期联动规则
+
+引用的建立、断开、悬空处理全部收敛到命令层（第九节），UI 只是发起者：
+
+1. **建立**：连线 = `connect_edge`；@ 提及 = 编辑 spec 文本（`update_node_spec`）。引用关系随文本天然一致，不存在单独的「同步」步骤。
+2. **断开 ≠ 删除**：断开连线只移除该边，不触碰对方的 spec/文本。删除节点连带删边，且节点与连带边进同一 `batch`——inverse 完整恢复两者（见 9.3），撤销后引用关系原样回来。
+3. **删除被引用方**：不级联清理引用方（避免静默丢数据）。引用按「失效」展示（灰色角标/删除线），由用户决定替换或清除。
+4. **加载修复而非拒绝**：归一化管线（第十一节）对悬空引用统一标记；孤儿边隔离并记录警告——单条坏数据不得导致整个项目加载失败。
+
+### 8.3 为什么这样设计（失效模式对照）
+
+引用系统的典型故障全部来自「同一事实多份拷贝 + 操作只更新部分副本」：
+
+- 文本存一份、边存一份、镜像字段再存一份，编辑路径只更新其中一两个 → 各副本互相矛盾；
+- 副本间的同步逻辑挂在组件生命周期上，组件卸载（节点收起/切换项目）同步即停止 → 引用残留或丢失；
+- 删除节点清了边却忘了文本里的提及，或撤销删除只恢复节点不恢复连带边 → 引用关系永久错乱。
+
+本节三条规则分别消灭这三类故障：没有副本就没有不一致（8.1）；派生重建在模型层，不依赖组件生死（8.1.3）；删除/撤销的级联在命令层一次完成（8.2.2）。
+
+## 九、命令与撤销
+
+数据与引用规则定义完毕，本节定义它们的唯一变更入口（原则 3）。
+
+### 9.1 命令结构
+
+单写者场景无需并发基线与路径级补丁。命令信封固定为六个字段：`id` / `type` / `actor`（变更来源：用户操作或 AI Agent，用于审计与 UI 标记，见十二节）/ `patch`（正向补丁）/ `inverse`（逆向补丁，执行时自动捕获）/ `timestamp`；另有可选的 `transient` 标记（瞬时 UI 命令：不落盘、不进撤销栈）。
+
+`patch` 的具体形状由 `type` 决定，完整定义见 9.3。
+
+### 9.2 命令清单
+
+| 类别 | 命令 | 说明 |
+| --- | --- | --- |
+| 节点 | `create_node` / `delete_node` / `move_node` / `resize_node` | delete 连带删除关联边，inverse 一并恢复 |
+| 节点数据 | `update_node_spec` / `update_node_meta` / `update_node_ui` | |
+| 连接 | `connect_edge` / `disconnect_edge` | |
+| 设定 | `upsert_character` / `delete_character`（地点、道具同构） | |
+| 资产 | `set_asset` / `remove_asset` | |
+| 视口 | `update_viewport` | transient，不进撤销栈 |
+| 批量 | `batch` | 一等命令，整批作为单个撤销单元 |
+
+### 9.3 命令数据模型
+
+命令创建时只携带**变更意图**（目标值）；`inverse` 不由创建者填写，而是 `applyCommand` 执行时从变更前文档（docBefore）自动捕获。这保证 undo 数据永远与文档真实旧值一致，创建者不可能填错。
+
+```ts
+type Point = { x: number; y: number }
+type Size = { width: number; height: number }
+type Viewport = { x: number; y: number; zoom: number }
+type NodeMeta = StoryNode['data']['meta']
+type NodeUi = StoryNode['ui']
+
+/** 命令类型与负载形状的映射。 */
+interface CommandPayloads {
+  // ── 节点 ──
+  create_node: { node: StoryNode }              // 完整节点，含初始 layout/spec/meta
+  delete_node: { nodeId: string }               // inverse 捕获被删节点 + 连带边
+  move_node: { nodeId: string; to: Point }
+  resize_node: { nodeId: string; to: Size }
+  // ── 节点数据（set 为部分对象，只写变更字段）──
+  update_node_spec: { nodeId: string; set: Partial<NodeSpec> }
+  update_node_meta: { nodeId: string; set: Partial<NodeMeta> }
+  update_node_ui: { nodeId: string; set: Partial<NodeUi> }
+  // ── 连接 ──
+  connect_edge: { edge: StoryEdge }             // 完整边，含 data.kind/label
+  disconnect_edge: { edgeId: string }           // inverse 捕获被删边
+  // ── 设定（地点、道具同构，略）──
+  upsert_character: { character: Character }    // id 已存在 = 更新，否则 = 新增
+  delete_character: { characterId: string }     // inverse 捕获被删实体
+  // ── 资产 ──
+  set_asset: { asset: AssetRef }
+  remove_asset: { assetId: string }             // 只移除索引，不删文件（见 7.3）
+  // ── 视口 ──
+  update_viewport: { to: Viewport }
+  // ── 批量 ──
+  batch: { commands: GraphCommand[] }           // 子命令，逆序 undo
+}
+
+type CommandType = keyof CommandPayloads
+
+/** 类型化的命令信封：patch 形状由 type 决定。 */
+type GraphCommand<T extends CommandType = CommandType> = {
+  id: string
+  type: T
+  actor: 'user' | 'agent'
+  patch: CommandPayloads[T]
+  /** 执行时自动捕获的逆向补丁；命令创建者不传。 */
+  inverse?: CommandPayloads[T]
+  transient?: boolean
+  timestamp: number
+}
+```
+
+**inverse 捕获规则**（applyCommand 内置，逐类型固定）：
+
+| 命令 | inverse 内容 |
+| --- | --- |
+| `create_node` | 等效 `delete_node { nodeId }` |
+| `delete_node` | 等效 `create_node { node }` + 每条连带边的 `connect_edge` |
+| `move_node` / `resize_node` / `update_viewport` | 同结构，`to` 换为 docBefore 中的旧值 |
+| `update_node_*` | 同结构，`set` 只含被覆盖字段的旧值 |
+| `connect_edge` / `disconnect_edge` | 互逆，边数据取自 docBefore |
+| `upsert_character` | 新增 → `delete_character`；更新 → 旧实体整体 |
+| `delete_character` | 等效 `upsert_character { character: 旧实体 }` |
+| `set_asset` / `remove_asset` | 互逆，AssetRef 取自 docBefore |
+| `batch` | 子命令 inverse 的**逆序**数组 |
+
+### 9.4 撤销规则
+
+- 撤销/重做栈仅存于会话，不持久化；上限 50 条。
+- 拖拽中发 `move_node { transient: true }`，松手时补发一条正式命令进撤销栈。
+- `update_node_ui`（选中、展开折叠）与 `update_viewport` 不进撤销栈。
+
+## 十、本地存储体系
+
+命令产出的文档变更，经防抖持久化回调落到以下布局。
+
+### 10.1 目录布局
+
+```
+应用数据目录/                           # Tauri app_data_dir，禁止硬编码路径
+├── projects/
+│   └── {projectId}/
+│       ├── project.json               # ProjectDocument
+│       └── assets/                    # 项目资产（自包含）
+│           ├── {assetId}.png
+│           └── {assetId}.mp4
+├── library/                           # 个人资产库（跨项目复用）
+│   └── assets/
+│       └── {assetId}.png
+├── library.json                       # 库索引：assets.byId（分类/视角/标签）+ groups.byId（编组）
+├── index.json                         # 项目索引：首页列表元数据（id/名称/缩略图/updatedAt）
+└── settings.json                      # AppSettings：provider 配置与模型选择（不含 API key）
+```
+
+### 10.2 写入安全
+
+单写者场景**不需要**文件锁、版本号等并发机制；但需要防崩溃截断——写到一半进程被杀、断电、磁盘满，会留下截断的 JSON，导致整个项目无法打开。因此：
+
+- 写 `project.json.tmp`，flush 后 rename 覆盖 `project.json`（rename 原子，读者只见旧版或新版，不见半个文件）。`index.json` / `library.json` / `settings.json` 同样处理。
+- 前端防抖 500ms 提交一次；失败回队重试；`flushPersist()` 在关闭窗口/切换项目前调用。
+
+### 10.3 Provider 与模型配置
+
+BYOK 下 provider 分两层：**内置适配器在代码里，用户配置在 `settings.json`，API key 在系统钥匙串**。
+
+代码层（不进配置文件的静态定义）：
+
+```ts
+/** 内置 provider：请求适配器，非纯数据。 */
+interface ProviderDef {
+  key: string                // 'openai' | 'ark' | ...
+  label: string
+  defaultBaseUrl: string
+  endpoints: { chat?: string; image?: string; video?: string }
+  /** 统一参数 ↔ 厂商格式的双向适配；OpenAI 兼容 provider 用默认透传实现。 */
+  requestAdapter: (op: string, params: unknown) => unknown
+  responseAdapter: (op: string, raw: unknown) => unknown
+}
+
+/** 内置模型目录：能力与可选参数清单。 */
+interface ModelDef {
+  key: string
+  label: string
+  type: 'text' | 'image' | 'video'
+  providers: string[]        // 支持哪些 provider
+  capabilities: string[]     // 如 'text-to-image' / 'first-frame' / 'tool-calling'
+  options?: Record<string, string[]>   // 可选参数清单：sizes / ratios / durations...
+  defaultParams?: Record<string, unknown>
+}
+```
+
+`settings.json` 中用户可改的部分（按 provider key 分桶）：
+
+```ts
+/** 应用级设置：provider 配置与模型选择，不含密钥。 */
+interface AppSettings {
+  providers: Record<string, ProviderSettings>
+  selectedModels: { text?: string; image?: string; video?: string }
+  theme?: 'dark' | 'light'
+}
+
+interface ProviderSettings {
+  baseUrl?: string                                    // 覆盖默认值
+  customModels?: Array<{ key: string; label: string }> // 用户自建模型条目
+  disabledModelKeys?: string[]                        // 用户隐藏的内置模型
+}
+```
+
+**模型可见性 = 三层过滤**：在内置目录或自定义条目里 → 所属 provider 已配置（key + baseUrl 齐备）→ 未被用户禁用。过滤结果是计算属性，不持久化。
+
+### 10.4 密钥管理
+
+provider 的 API key **不写入 `settings.json`**，经 `keyring` crate 存系统钥匙串、按 provider key 索引；配置文件仅存非敏感项。
+
+### 10.5 Rust 持久化命令（Tauri commands）
+
+| 命令 | 职责 |
+| --- | --- |
+| `list_projects()` | 读 `index.json`，返回项目列表 |
+| `create_project(name)` | 建目录 + 初始 `project.json` + 更新索引 |
+| `load_project(projectId)` | 读 `project.json`，schemaVersion 迁移 + 归一化（见十一） |
+| `save_project(projectId, doc)` | tmp + rename 原子写 + 更新索引的 updatedAt |
+| `import_asset(projectId, file)` | 拷贝入项目 `assets/`，返回 `AssetRef` |
+| `list_library_assets()` | 读 `library.json`，返回资产库列表（含编组） |
+| `import_library_asset(file, meta)` | 拷贝入 `library/assets/` + 更新库索引，meta 含 name/kind/view/groupId/tags |
+| `update_library_asset(assetId, patch)` | 修改索引项：改名、改标签、改视角、换编组（只动索引不动文件） |
+| `delete_library_asset(assetId)` | 删库文件 + 索引项（不影响已拷入项目的副本） |
+| `collect_library_asset(projectId, projectAssetId, meta)` | 把项目资产拷贝入资产库（「收藏」） |
+| `get_settings()` / `update_settings(patch)` | 非敏感配置读写 |
+| `set_provider_key(provider, key)` / `get_provider_key(provider)` | 钥匙串读写 |
+| `llm_chat(messages, tools)` | LLM 请求代理：key 从钥匙串取，绕开 webview CORS（见 12.2） |
+
+## 十一、加载与归一化
+
+`load_project` 后、交付前端前执行归一化管线，保证任何历史版本的文档都以当前形态进入会话：
+
+1. `schemaVersion` 低于当前版本时按迁移链逐级升级；高于当前版本时拒绝并提示升级应用。
+2. 重置所有节点 `ui.selected = false`。
+3. 隔离孤儿边（source/target 节点已不存在）并记录警告——修复而非拒绝，单条坏数据不阻断加载（见 8.2.4）。
+4. 标记（而非清除）悬空的设定引用与资产引用。
+5. 扫描文本中的 @ 提及 token，目标已不存在的标记为失效（token 本身保留，见 8.1.2）。
+6. 重建 id 生成器的计数基线，防止新 id 与存量冲突。
+
+## 十二、AI Agent 交互
+
+用户通过对话让 AI 操作画布——创建/删除节点、修改 spec、连线、批量调整剧情结构。这一能力完全建立在第九节的命令通道上。
+
+### 12.1 核心决策：Agent 是命令的另一个生产者
+
+Agent 不直接触碰文档状态，只产出 `GraphCommand`（`actor: 'agent'`），经同一条 applyCommand 链路执行。由此免费获得：
+
+- 撤销/重做天然覆盖 AI 操作，误操作一键回滚；
+- 持久化、归一化、悬空引用检测不需要为 Agent 写第二套；
+- `actor` 字段为审计与 UI 标记（「此改动来自 AI」）提供依据。
+
+### 12.2 应用内 Agent（首版）
+
+不引入 Agent 编排框架。画布操作是「读快照 → 发一批结构化命令」的低轮次任务，朴素的 tool-calling 循环足够：
+
+```
+用户对话 → [系统提示 + 画布快照摘要 + 工具 schema] → LLM（BYOK，OpenAI 兼容 tool calling）
+        → 解析 tool_calls → 映射为 GraphCommand 批量执行 → 结果摘要回喂 →（需要时再一轮）
+```
+
+- **工具集 = 命令清单的封装**：读工具 `get_graph_snapshot` / `get_node`；写工具 `create_node` / `delete_node` / `update_node_spec` / `connect_edge` / `disconnect_edge` / `batch`。
+- **快照摘要而非全量**：大项目全量 JSON 会超出上下文，默认只给压缩视图（节点 id/type/label/连接关系），详情由模型用读工具按需拉取。
+- **调用路径**：前端驱动循环；LLM 请求经 Rust command `llm_chat` 代理发出——API key 存于系统钥匙串、前端不持有，同时绕开 webview 的 CORS 限制。
+- **可控性**：Agent 的写操作执行前弹批量预览（涉及哪些节点、什么变更），用户确认后才进命令通道；undo 始终兜底。
+
+### 12.3 MCP 暴露（可选，后置）
+
+同一套工具可经 MCP server（Rust 侧实现，stdio/HTTP）暴露给外部 LLM 客户端，让外部 Agent 操作画布。因为工具即命令，MCP 只是命令通道的第二个入口，边际成本低；但它依赖用户自行运行外部客户端，属于高级玩法，不替代产品内 Agent。触发条件：有明确的「在外部 Agent 工作流中编排 PlotWeave」需求时再做。
+
+## 十三、后续演进预留
+
+以下方向发生时需要修订本文档或另起文档：
+
+- **画布内 AI 生成**（文生图/AI 编剧）：新增媒体节点类型（图片节点、视频节点，如角色立绘、场景概念图），建模遵循三分原则——**引用类输入走边**（如图生视频的立绘引用），**参数类配置走 `spec.params`**（尺寸/时长/seed），**操作类型由 `spec.operation` + 输入证据推断**（有参考图 → 图生图，无需用户显式选择）；产物是 `outputs` 里的 AssetRef 槽位（`primary` / `poster` / `preview`，附宽高、时长等 metadata）。节点的 prompt、模型选择作为 `data.spec` 字段随 `project.json` 持久化，无需额外存储；需要新增的是 job 状态机（落盘 + 启动恢复）与输入签名（防旧结果覆盖新编辑），进程内以 tokio task + 取消令牌实现。
+- **多端同步/协作/官方代付**：另起《服务端领域模型》文档；`schemaVersion` 迁移机制届时成为前后端契约的一部分。
+- **跨项目搜索、资产去重**：评估 SQLite 索引层。

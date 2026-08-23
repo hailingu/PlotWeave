@@ -31,7 +31,7 @@
 PlotWeave/
 ├── src/            # React + React Flow 前端
 ├── src-tauri/      # Rust 后端与 Tauri 壳（commands、持久化、导出）
-├── docs/           # 项目文档（待补充）
+├── docs/           # 项目文档（数据模型设计等）
 ├── AGENTS.md       # AI 代理协作规范
 ├── README.md
 └── LICENSE
