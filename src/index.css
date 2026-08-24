@@ -1,3 +1,6 @@
+@import './styles/tokens.css';
+@import './home/home.css';
+
 /* 画布占满整个窗口，页面自身不产生滚动条。 */
 html,
 body,
@@ -7,6 +10,17 @@ body,
   width: 100%;
   height: 100%;
   overflow: hidden;
+}
+
+/* 字体栈跟随系统（docs/ui-design.md §2.4），窗口底色用语义令牌。 */
+body {
+  font-family:
+    -apple-system,
+    'PingFang SC',
+    'Segoe UI',
+    sans-serif;
+  background: var(--surface-window);
+  color: var(--text-primary);
 }
 
 .canvas-root {

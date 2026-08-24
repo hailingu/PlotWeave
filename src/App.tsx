@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { useCallback, useState } from 'react'
 import {
   ReactFlow,
   Background,
@@ -11,6 +11,11 @@ import {
   type Node,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
+import HomePage from './home/HomePage'
+import {
+  createSampleProjects,
+  type ProjectSummary,
+} from './home/projects'
 
 /**
  * 占位初始节点：演示「场景 → 对白 → 分支」三类叙事单元的连线关系，
@@ -40,8 +45,8 @@ const initialEdges: Edge[] = [
   { id: 'e-dialog-branch', source: 'dialog-1', target: 'branch-1' },
 ]
 
-/** 应用根组件：承载剧本画布，提供节点拖拽、连线与缩放导航能力。 */
-export default function App() {
+/** 剧本画布编辑器：节点拖拽、连线与缩放导航。 */
+function EditorView() {
   const [nodes, , onNodesChange] = useNodesState(initialNodes)
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges)
 
@@ -64,5 +69,39 @@ export default function App() {
         <Controls />
       </ReactFlow>
     </div>
+  )
+}
+
+/**
+ * 应用根组件：文档式双界面（docs/ui-design.md §3.1）——
+ * 项目首页与编辑器是同一窗口的两种状态，`openProjectId` 非空即编辑器。
+ * 项目数据目前为内存占位，持久化命令（list_projects 等）落地后改由后端驱动。
+ */
+export default function App() {
+  const [projects, setProjects] = useState<ProjectSummary[]>(() =>
+    createSampleProjects(),
+  )
+  const [openProjectId, setOpenProjectId] = useState<string | null>(null)
+
+  const handleCreateProject = useCallback(() => {
+    const project: ProjectSummary = {
+      id: `local-${Date.now()}`,
+      name: '未命名短剧',
+      sceneCount: 0,
+      updatedAt: new Date().toISOString(),
+    }
+    setProjects((list) => [project, ...list])
+    setOpenProjectId(project.id)
+  }, [])
+
+  if (openProjectId !== null) {
+    return <EditorView />
+  }
+  return (
+    <HomePage
+      projects={projects}
+      onOpenProject={setOpenProjectId}
+      onCreateProject={handleCreateProject}
+    />
   )
 }

@@ -1,0 +1,69 @@
+/* PlotWeave 设计令牌：语义层（docs/ui-design.md §2）。
+ * 组件只引用此处的语义变量，不硬编码颜色；浅色/深色由系统外观切换，
+ * 应用内不提供主题开关（HIG 原则 1）。 */
+:root {
+  /* 表面 */
+  --surface-window: #f4f4f6;
+  --surface-canvas: #fbfbfc;
+  --surface-card: #ffffff;
+  --material-titlebar: rgba(248, 248, 250, 0.95);
+
+  /* 文本 */
+  --text-primary: #1d1d1f;
+  --text-secondary: #8e8e93;
+
+  /* 品牌与状态（浅色下加深以满足对比度） */
+  --accent: #e0176e;
+  --accent-alt: #00b3d8;
+  --danger: #d70015;
+  --brand-gradient: linear-gradient(120deg, var(--accent-alt), var(--accent));
+
+  /* 填充与描边 */
+  --fill-quaternary: rgba(0, 0, 0, 0.06);
+  --border-hairline: rgba(0, 0, 0, 0.12);
+
+  /* 关键操作按钮：浅色 = 深底浅字，深色 = 浅底深字 */
+  --control-primary-bg: #1d1d1f;
+  --control-primary-fg: #ffffff;
+
+  /* 圆角（§2.5） */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 14px;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface-window: #131316;
+    --surface-canvas: #131316;
+    --surface-card: rgba(38, 38, 44, 0.94);
+    --material-titlebar: rgba(28, 28, 32, 0.92);
+
+    --text-primary: #f2f2f7;
+    --text-secondary: #8e8e96;
+
+    --accent: #ff2e88;
+    --accent-alt: #21d4fd;
+    --danger: #ff6961;
+
+    --fill-quaternary: rgba(255, 255, 255, 0.1);
+    --border-hairline: rgba(255, 255, 255, 0.14);
+
+    --control-primary-bg: #f2f2f7;
+    --control-primary-fg: #1d1d1f;
+
+    color-scheme: dark;
+  }
+}
+
+/* 增强对比度：背景近实色、描边更明确（§2.6）。 */
+@media (prefers-contrast: more) {
+  :root {
+    --material-titlebar: var(--surface-window);
+    --fill-quaternary: rgba(0, 0, 0, 0.12);
+    --border-hairline: rgba(0, 0, 0, 0.35);
+  }
+}
