@@ -10,10 +10,12 @@
   color: var(--text-primary);
 }
 
-/* 工具栏：应用名居左，搜索 + 新建居右；材质底 + 背景模糊。 */
+/* 工具栏：应用名居左，搜索 + 新建居右；材质底 + 背景模糊。
+ * 高度 28px 与 macOS 原生标题栏条带一致——Overlay 模式下红绿灯
+ * 中心线距窗口顶部约 13.5pt，内容垂直居中即与其同处一条水平线。 */
 .home-titlebar {
   flex: none;
-  height: 40px;
+  height: 28px;
   display: flex;
   align-items: center;
   padding: 0 16px;
@@ -44,7 +46,7 @@
 .home-search {
   width: 180px;
   font-size: 12px;
-  padding: 4px 10px;
+  padding: 2px 10px;
   border-radius: var(--radius-md);
   border: 1px solid var(--border-hairline);
   background: var(--surface-card);
@@ -63,7 +65,7 @@
 .home-create {
   font-size: 12px;
   font-weight: 600;
-  padding: 5px 12px;
+  padding: 3px 12px;
   border: none;
   border-radius: var(--radius-md);
   background: var(--control-primary-bg);
