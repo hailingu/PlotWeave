@@ -1,0 +1,54 @@
+/* 编辑器窗口 chrome：统一工具栏（docs/ui-design.md §3.3）。
+ * 组件层只引用语义令牌；右区操作随功能落地后补充。 */
+
+.editor-root {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-canvas);
+  color: var(--text-primary);
+}
+
+.editor-titlebar {
+  position: relative;
+  flex: none;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  background: var(--material-titlebar);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid var(--border-hairline);
+}
+
+/* Tauri Overlay 标题栏：为左侧红绿灯留出安全区（约 78pt）。 */
+.is-tauri .editor-titlebar {
+  padding-left: 80px;
+}
+
+/* 返回首页：画布退回文档浏览器的唯一入口。 */
+.editor-back {
+  font-size: 12px;
+  padding: 4px 10px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.editor-back:hover {
+  background: var(--fill-quaternary);
+  color: var(--text-primary);
+}
+
+/* 项目名居中（§3.3 中区）。 */
+.editor-title {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 13px;
+  font-weight: 600;
+}

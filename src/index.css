@@ -1,5 +1,6 @@
 @import './styles/tokens.css';
 @import './home/home.css';
+@import './editor/editor.css';
 
 /* 画布占满整个窗口，页面自身不产生滚动条。 */
 html,
@@ -23,7 +24,9 @@ body {
   color: var(--text-primary);
 }
 
+/* 画布占满编辑器工具栏之外的剩余高度。 */
 .canvas-root {
+  flex: 1;
+  min-height: 0;
   width: 100%;
-  height: 100%;
 }
