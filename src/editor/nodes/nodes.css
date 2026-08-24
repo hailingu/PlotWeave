@@ -85,9 +85,7 @@
 .pw-index {
   width: 340px;
   position: relative;
-  background: #fbfbfc;
-  color: #1d1d1f;
-  border-radius: 14px;
+  border-radius: 10px;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
   transition: transform 0.15s;
 }
@@ -96,16 +94,24 @@
   transform: translateY(-1px);
 }
 
-/* 顶部标尺线：索引卡的红色刻度线；选中时亮显为品牌渐变。 */
-.pw-index-rule {
-  height: 4px;
-  border-radius: 14px 14px 0 0;
-  background: #e0352b;
-  opacity: 0.75;
-}
-
+/* 索引卡纸面：暖白底 + 满页蓝色横格线 + 左侧红色竖边距线。 */
 .pw-index-body {
-  padding: 12px 16px 16px;
+  border-radius: 10px;
+  padding: 12px 16px 16px 40px;
+  color: #1d1d1f;
+  background:
+    linear-gradient(
+      to right,
+      transparent 27px,
+      rgba(224, 49, 43, 0.45) 27px 28.5px,
+      transparent 28.5px
+    ),
+    repeating-linear-gradient(
+      to bottom,
+      transparent 0 27px,
+      rgba(90, 130, 190, 0.28) 27px 28px
+    ),
+    #fdfdf8;
 }
 
 .pw-index-tb {
@@ -163,32 +169,23 @@
   border-radius: 99px;
   padding: 1px 8px;
   color: rgba(60, 60, 67, 0.6);
+  background: #fdfdf8;
 }
 
-/* 梗概书写在索引卡横线上。 */
+/* 梗概直接压在索引卡横格线上。 */
 .pw-index-syn {
   margin: 12px 0 0;
   font-size: 12.5px;
-  line-height: 24px;
+  line-height: 28px;
   color: rgba(29, 29, 31, 0.85);
-  background: repeating-linear-gradient(
-    to bottom,
-    transparent 0 23px,
-    rgba(0, 0, 0, 0.08) 23px 24px
-  );
 }
 
-/* 选中 = 品牌渐变描边 + 标尺线亮显（§4.2）。 */
+/* 选中 = 品牌渐变描边 + 投影加深（§4.3 通用反馈）。 */
 .pw-index.pw-on {
   border: 2px solid transparent;
   background:
-    linear-gradient(#fbfbfc, #fbfbfc) padding-box,
+    linear-gradient(#fdfdf8, #fdfdf8) padding-box,
     var(--brand-gradient) border-box;
-}
-
-.pw-index.pw-on .pw-index-rule {
-  background: var(--brand-gradient);
-  opacity: 1;
 }
 
 /* ---- 对白节点 = 气泡流（编剧侧纸面，双外观恒定） ---- */

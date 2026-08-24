@@ -3,15 +3,14 @@ import type { SceneFlowNode } from './types'
 
 /**
  * 场景节点 = 索引卡（docs/ui-design.md §4.2，编剧侧纸面）。
- * 经典编剧索引卡形态：纸面卡片 + 顶部红色标尺线 + 梗概书写横线；
+ * 经典编剧索引卡形态：暖白纸面 + 满页蓝色横格线 + 左侧红色竖边距线；
  * 分区为名称 + SCENE 编号 + 🎞 镜数 + ⚙️ 的标题栏、地点/时间 chip 行、
- * 梗概、在场角色头像串。选中时顶部标尺线亮显为品牌渐变。
+ * 梗概（压在横格线上）、在场角色头像串。选中为通用品牌渐变描边。
  * 结构先行：⚙️ 设置面板、双击改名等交互随后续任务落地。
  */
 export default function SceneNode({ data, selected }: NodeProps<SceneFlowNode>) {
   return (
     <div className={`pw-index${selected ? ' pw-on' : ''}`}>
-      <div className="pw-index-rule" aria-hidden />
       <div className="pw-index-body">
         <div className="pw-index-tb">
           <span className="pw-index-name">{data.name}</span>
