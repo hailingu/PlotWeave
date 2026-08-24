@@ -46,15 +46,21 @@ const CHEN_MO: NodeAvatar = {
 }
 
 /**
- * 示例画布：「雨夜天台 → 真相逼近 → 是否发现真相？→ 坦白 / 隐瞒」，
- * 索引卡下游挂一张分镜卡（AI 燃料占位），复现设计稿 §4 的剧情流结构，
- * 随后由真实剧本数据替换。
+ * 示例画布：按生产管线的上下游排布——节奏卡（节拍表）在最上游，
+ * 向下游依次展开为索引卡（场景）→ 对白 → 分支 → 两条支线的后续场景；
+ * 索引卡下游挂一张分镜卡（AI 燃料占位）。随后由真实剧本数据替换。
  */
 const initialNodes: CanvasNode[] = [
   {
+    id: 'beat-1',
+    type: 'beat',
+    position: { x: 0, y: 80 },
+    data: { name: '雨夜对峙', tone: '压抑渐强' },
+  },
+  {
     id: 'scene-1',
     type: 'scene',
-    position: { x: 0, y: 40 },
+    position: { x: 300, y: 40 },
     selected: true,
     data: {
       name: '雨夜天台',
@@ -71,7 +77,7 @@ const initialNodes: CanvasNode[] = [
   {
     id: 'shot-1',
     type: 'shot',
-    position: { x: 20, y: 400 },
+    position: { x: 320, y: 420 },
     data: {
       shotNo: 1,
       size: '远景',
@@ -87,7 +93,7 @@ const initialNodes: CanvasNode[] = [
   {
     id: 'dialogue-1',
     type: 'dialogue',
-    position: { x: 430, y: 60 },
+    position: { x: 730, y: 60 },
     data: {
       name: '真相逼近',
       lines: [
@@ -105,25 +111,51 @@ const initialNodes: CanvasNode[] = [
   {
     id: 'branch-1',
     type: 'branch',
-    position: { x: 880, y: 60 },
+    position: { x: 1180, y: 60 },
     data: { prompt: '林晚是否发现真相？', options: ['坦白', '隐瞒'] },
   },
   {
-    id: 'beat-1',
-    type: 'beat',
-    position: { x: 1290, y: 40 },
-    data: { name: '身份揭晓', tone: '爆发' },
+    id: 'scene-2',
+    type: 'scene',
+    position: { x: 1600, y: 0 },
+    data: {
+      name: '天台摊牌',
+      sceneNo: 4,
+      shotCount: 0,
+      interior: false,
+      location: '天台',
+      time: '🌙 夜',
+      weather: '🌧 雨',
+      synopsis: '陈默坦白当年真相，林晚在雨中久久无言。',
+      characters: [LIN_WAN, CHEN_MO],
+    },
   },
   {
-    id: 'beat-2',
-    type: 'beat',
-    position: { x: 1290, y: 160 },
-    data: { name: '独自离开', tone: '压抑' },
+    id: 'scene-3',
+    type: 'scene',
+    position: { x: 1600, y: 240 },
+    data: {
+      name: '独自离开',
+      sceneNo: 5,
+      shotCount: 0,
+      interior: false,
+      location: '天台',
+      time: '🌙 夜',
+      weather: '🌧 雨',
+      synopsis: '陈默选择隐瞒，林晚转身离开，雨幕吞没背影。',
+      characters: [LIN_WAN],
+    },
   },
 ]
 
 /** 示例连线：sequence 中性灰；branch 从分支选项端口出发、带选项胶囊。 */
 const initialEdges: Edge[] = [
+  {
+    id: 'e-beat-scene',
+    source: 'beat-1',
+    target: 'scene-1',
+    className: 'pw-edge-sequence',
+  },
   {
     id: 'e-scene-shot',
     source: 'scene-1',
@@ -146,7 +178,7 @@ const initialEdges: Edge[] = [
     id: 'e-branch-confess',
     source: 'branch-1',
     sourceHandle: `${BRANCH_OPTION_HANDLE_PREFIX}0`,
-    target: 'beat-1',
+    target: 'scene-2',
     type: 'branch',
     data: { optionLabel: '坦白' },
   },
@@ -154,7 +186,7 @@ const initialEdges: Edge[] = [
     id: 'e-branch-hide',
     source: 'branch-1',
     sourceHandle: `${BRANCH_OPTION_HANDLE_PREFIX}1`,
-    target: 'beat-2',
+    target: 'scene-3',
     type: 'branch',
     data: { optionLabel: '隐瞒' },
   },
