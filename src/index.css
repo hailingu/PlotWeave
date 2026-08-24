@@ -1,6 +1,7 @@
 @import './styles/tokens.css';
 @import './home/home.css';
 @import './editor/editor.css';
+@import './editor/nodes/nodes.css';
 
 /* 画布占满整个窗口，页面自身不产生滚动条。 */
 html,

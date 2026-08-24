@@ -22,6 +22,10 @@
   --fill-quaternary: rgba(0, 0, 0, 0.06);
   --border-hairline: rgba(0, 0, 0, 0.12);
 
+  /* 画布：网点与 sequence 连线（§4.4 中性灰贝塞尔） */
+  --canvas-dot: rgba(0, 0, 0, 0.09);
+  --edge-sequence: #98989f;
+
   /* 关键操作按钮：浅色 = 深底浅字，深色 = 浅底深字 */
   --control-primary-bg: #1d1d1f;
   --control-primary-fg: #ffffff;
@@ -51,6 +55,8 @@
 
     --fill-quaternary: rgba(255, 255, 255, 0.1);
     --border-hairline: rgba(255, 255, 255, 0.14);
+
+    --canvas-dot: rgba(255, 255, 255, 0.1);
 
     --control-primary-bg: #f2f2f7;
     --control-primary-fg: #1d1d1f;
