@@ -17,15 +17,17 @@ import SceneNode from './nodes/SceneNode'
 import DialogueNode from './nodes/DialogueNode'
 import BeatNode from './nodes/BeatNode'
 import BranchNode, { BRANCH_OPTION_HANDLE_PREFIX } from './nodes/BranchNode'
+import ShotNode from './nodes/ShotNode'
 import BranchEdge from './edges/BranchEdge'
 import type { CanvasNode, NodeAvatar } from './nodes/types'
 
-/** 画布节点类型注册：场景 / 对白 / 桥段 / 分支（docs/ui-design.md §4.2）。 */
+/** 画布节点类型注册：索引卡 / 对白 / 节奏卡 / 分支 / 分镜卡（docs/ui-design.md §4.2）。 */
 const nodeTypes: NodeTypes = {
   scene: SceneNode,
   dialogue: DialogueNode,
   beat: BeatNode,
   branch: BranchNode,
+  shot: ShotNode,
 }
 
 /** 连线类型注册：branch = 品牌渐变 + 选项胶囊；sequence 用默认贝塞尔加样式类。 */
@@ -45,7 +47,8 @@ const CHEN_MO: NodeAvatar = {
 
 /**
  * 示例画布：「雨夜天台 → 真相逼近 → 是否发现真相？→ 坦白 / 隐瞒」，
- * 复现设计稿 §4 的剧情流结构，随后由真实剧本数据替换。
+ * 索引卡下游挂一张分镜卡（AI 燃料占位），复现设计稿 §4 的剧情流结构，
+ * 随后由真实剧本数据替换。
  */
 const initialNodes: CanvasNode[] = [
   {
@@ -56,13 +59,29 @@ const initialNodes: CanvasNode[] = [
     data: {
       name: '雨夜天台',
       sceneNo: 3,
-      shotCount: 0,
+      shotCount: 1,
       interior: false,
       location: '天台',
       time: '🌙 夜',
       weather: '🌧 雨',
       synopsis: '林晚翻出父亲死亡当夜的档案，陈默突然出现，要她立刻离开天台。',
       characters: [LIN_WAN, CHEN_MO],
+    },
+  },
+  {
+    id: 'shot-1',
+    type: 'shot',
+    position: { x: 20, y: 400 },
+    data: {
+      shotNo: 1,
+      size: '远景',
+      picture: '雨夜城市天台全景，林晚撑伞站在栏杆边，陈默从阴影中走出。',
+      prompt: 'rainy rooftop at night, cinematic wide shot, neon reflections, two figures confronting',
+      refs: [
+        { kind: 'character', label: '林晚垫图' },
+        { kind: 'location', label: '天台底图' },
+        { kind: 'audio', label: '雨声' },
+      ],
     },
   },
   {
@@ -105,6 +124,12 @@ const initialNodes: CanvasNode[] = [
 
 /** 示例连线：sequence 中性灰；branch 从分支选项端口出发、带选项胶囊。 */
 const initialEdges: Edge[] = [
+  {
+    id: 'e-scene-shot',
+    source: 'scene-1',
+    target: 'shot-1',
+    className: 'pw-edge-sequence',
+  },
   {
     id: 'e-scene-dialogue',
     source: 'scene-1',
