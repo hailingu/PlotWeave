@@ -28,8 +28,12 @@ export default function HomePage({
 
   return (
     <div className="home-root">
-      <header className="home-titlebar">
-        <span className="home-title">PlotWeave</span>
+      {/* Overlay 标题栏下整行作为窗口拖拽区；按钮与输入框不带
+          data-tauri-drag-region，保持可点击。 */}
+      <header className="home-titlebar" data-tauri-drag-region>
+        <span className="home-title" data-tauri-drag-region>
+          PlotWeave
+        </span>
         <span className="home-titlebar-actions">
           <input
             className="home-search"

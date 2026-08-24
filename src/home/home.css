@@ -29,6 +29,11 @@
   font-weight: 600;
 }
 
+/* Tauri Overlay 标题栏：为左侧红绿灯留出安全区（约 78pt）。 */
+.is-tauri .home-titlebar {
+  padding-left: 80px;
+}
+
 .home-titlebar-actions {
   margin-left: auto;
   display: flex;
