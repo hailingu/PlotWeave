@@ -13,7 +13,7 @@ import {
   type EdgeTypes,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import SceneNode from './nodes/SceneNode'
+import SceneNode, { SCENE_SHOT_HANDLE } from './nodes/SceneNode'
 import DialogueNode from './nodes/DialogueNode'
 import BeatNode from './nodes/BeatNode'
 import BranchNode, { BRANCH_OPTION_HANDLE_PREFIX } from './nodes/BranchNode'
@@ -82,7 +82,7 @@ const initialNodes: CanvasNode[] = [
   {
     id: 'shot-1',
     type: 'shot',
-    position: { x: 340, y: 420 },
+    position: { x: 175, y: 320 },
     data: {
       shotNo: 1,
       size: '远景',
@@ -98,7 +98,7 @@ const initialNodes: CanvasNode[] = [
   {
     id: 'shot-2',
     type: 'shot',
-    position: { x: 700, y: 460 },
+    position: { x: 505, y: 320 },
     data: {
       shotNo: 2,
       size: '特写',
@@ -197,7 +197,7 @@ const initialNodes: CanvasNode[] = [
   {
     id: 'shot-3',
     type: 'shot',
-    position: { x: 2550, y: 460 },
+    position: { x: 2550, y: 340 },
     data: {
       shotNo: 3,
       size: '中景',
@@ -247,12 +247,25 @@ const initialNodes: CanvasNode[] = [
   },
 ]
 
-/** 示例连线：sequence 中性灰；branch 从分支选项端口出发、带选项胶囊。 */
+/** 示例连线：sequence 中性灰走横向剧情流；attach 细虚线从索引卡底部垂直下挂分镜卡；
+ * branch 从分支选项端口出发、带选项胶囊。 */
 const initialEdges: Edge[] = [
   // 第一幕：节奏卡 → 索引卡 → 对白 → 分支
   { id: 'e-beat1-scene3', source: 'beat-1', target: 'scene-3', className: 'pw-edge-sequence' },
-  { id: 'e-scene3-shot1', source: 'scene-3', target: 'shot-1', className: 'pw-edge-sequence' },
-  { id: 'e-scene3-shot2', source: 'scene-3', target: 'shot-2', className: 'pw-edge-sequence' },
+  {
+    id: 'e-scene3-shot1',
+    source: 'scene-3',
+    sourceHandle: SCENE_SHOT_HANDLE,
+    target: 'shot-1',
+    className: 'pw-edge-attach',
+  },
+  {
+    id: 'e-scene3-shot2',
+    source: 'scene-3',
+    sourceHandle: SCENE_SHOT_HANDLE,
+    target: 'shot-2',
+    className: 'pw-edge-attach',
+  },
   { id: 'e-scene3-dialogue1', source: 'scene-3', target: 'dialogue-1', className: 'pw-edge-sequence' },
   { id: 'e-dialogue1-branch1', source: 'dialogue-1', target: 'branch-1', className: 'pw-edge-sequence' },
   // 支线：坦白 / 隐瞒
@@ -277,7 +290,13 @@ const initialEdges: Edge[] = [
   { id: 'e-dialogue2-scene6', source: 'dialogue-2', target: 'scene-6', className: 'pw-edge-sequence' },
   { id: 'e-scene5-scene6', source: 'scene-5', target: 'scene-6', className: 'pw-edge-sequence' },
   { id: 'e-beat2-scene6', source: 'beat-2', target: 'scene-6', className: 'pw-edge-sequence' },
-  { id: 'e-scene6-shot3', source: 'scene-6', target: 'shot-3', className: 'pw-edge-sequence' },
+  {
+    id: 'e-scene6-shot3',
+    source: 'scene-6',
+    sourceHandle: SCENE_SHOT_HANDLE,
+    target: 'shot-3',
+    className: 'pw-edge-attach',
+  },
   // 结局分支：双结局
   { id: 'e-scene6-branch2', source: 'scene-6', target: 'branch-2', className: 'pw-edge-sequence' },
   {
@@ -314,18 +333,22 @@ export default function EditorView({ projectName, onBackHome }: EditorViewProps)
   const [nodes, , onNodesChange] = useNodesState<CanvasNode>(initialNodes)
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges)
 
-  // 从分支选项端口拉出的连线建成 branch 边，其余为 sequence（§4.4）。
+  // 从分支选项端口拉出的连线建成 branch 边；从索引卡底部端口拉出的建成
+  // attach 派生边（垂直下挂分镜卡）；其余为 sequence（§4.4）。
   const onConnect = useCallback(
     (connection: Connection) => {
       const fromBranchOption = connection.sourceHandle?.startsWith(
         BRANCH_OPTION_HANDLE_PREFIX,
       )
+      const fromShotHandle = connection.sourceHandle === SCENE_SHOT_HANDLE
       const edge: Edge = {
         ...connection,
         id: `e-${connection.source}-${connection.sourceHandle ?? 'out'}-${connection.target}`,
         ...(fromBranchOption
           ? { type: 'branch' }
-          : { className: 'pw-edge-sequence' }),
+          : fromShotHandle
+            ? { className: 'pw-edge-attach' }
+            : { className: 'pw-edge-sequence' }),
       }
       setEdges((eds) => addEdge(edge, eds))
     },

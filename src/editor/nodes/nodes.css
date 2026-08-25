@@ -504,6 +504,15 @@
   stroke-width: 1.3;
 }
 
+/* attach：索引卡底部 → 分镜卡的派生从属边——细虚线、无标签，
+ * 与横向剧情主线一眼可辨（横向 = 剧情顺序，垂直 = 派生从属，§4.4）。 */
+.react-flow__edge.pw-edge-attach .react-flow__edge-path {
+  stroke: var(--edge-sequence);
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+  opacity: 0.75;
+}
+
 /* branch：线上选项胶囊（品牌渐变，文案与分支选项同源）。 */
 .pw-edge-label {
   position: absolute;
