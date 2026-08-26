@@ -11,7 +11,7 @@
 import type { Edge } from '@xyflow/react'
 import { SCENE_SHOT_HANDLE } from './nodes/SceneNode'
 import { BRANCH_OPTION_HANDLE_PREFIX } from './nodes/BranchNode'
-import { LIN_WAN, CHEN_MO } from './sampleData'
+import { LIN_WAN_ID, CHEN_MO_ID, LOC_ROOFTOP_ID, LOC_APARTMENT_ID, LOC_STATION_ID } from './sampleData'
 import type { CanvasNode } from './nodes/types'
 
 export const SAMPLE_NODES: CanvasNode[] = [
@@ -30,11 +30,11 @@ export const SAMPLE_NODES: CanvasNode[] = [
       name: '雨夜天台',
       sceneNo: 3,
       interior: false,
-      location: '天台',
+      locationId: LOC_ROOFTOP_ID,
       time: '🌙 夜',
       weather: '🌧 雨',
       synopsis: '林晚翻出父亲死亡当夜的档案，陈默突然出现，要她立刻离开天台。',
-      characters: [LIN_WAN, CHEN_MO],
+      characterIds: [LIN_WAN_ID, CHEN_MO_ID],
     },
   },
   {
@@ -75,9 +75,9 @@ export const SAMPLE_NODES: CanvasNode[] = [
     data: {
       name: '真相逼近',
       lines: [
-        { kind: 'line', speaker: LIN_WAN, side: 'left', text: '你早就知道，对吗？' },
+        { kind: 'line', speaker: LIN_WAN_ID, side: 'left', text: '你早就知道，对吗？' },
         { kind: 'action', text: '陈默沉默，雨声渐大' },
-        { kind: 'line', speaker: CHEN_MO, side: 'right', text: '……我是为了保护你。' },
+        { kind: 'line', speaker: CHEN_MO_ID, side: 'right', text: '……我是为了保护你。' },
       ],
     },
   },
@@ -95,11 +95,11 @@ export const SAMPLE_NODES: CanvasNode[] = [
       name: '天台摊牌',
       sceneNo: 4,
       interior: false,
-      location: '天台',
+      locationId: LOC_ROOFTOP_ID,
       time: '🌙 夜',
       weather: '🌧 雨',
       synopsis: '陈默坦白当年真相，林晚在雨中久久无言。',
-      characters: [LIN_WAN, CHEN_MO],
+      characterIds: [LIN_WAN_ID, CHEN_MO_ID],
     },
   },
   {
@@ -109,8 +109,8 @@ export const SAMPLE_NODES: CanvasNode[] = [
     data: {
       name: '十年前的雨',
       lines: [
-        { kind: 'line', speaker: CHEN_MO, side: 'left', text: '那晚，我也在旧公寓。' },
-        { kind: 'line', speaker: LIN_WAN, side: 'right', text: '为什么十年都不告诉我？' },
+        { kind: 'line', speaker: CHEN_MO_ID, side: 'left', text: '那晚，我也在旧公寓。' },
+        { kind: 'line', speaker: LIN_WAN_ID, side: 'right', text: '为什么十年都不告诉我？' },
       ],
     },
   },
@@ -122,11 +122,11 @@ export const SAMPLE_NODES: CanvasNode[] = [
       name: '独自离开',
       sceneNo: 5,
       interior: false,
-      location: '天台',
+      locationId: LOC_ROOFTOP_ID,
       time: '🌙 夜',
       weather: '🌧 雨',
       synopsis: '陈默选择隐瞒，林晚转身离开，雨幕吞没背影。',
-      characters: [LIN_WAN],
+      characterIds: [LIN_WAN_ID],
     },
   },
   {
@@ -143,10 +143,10 @@ export const SAMPLE_NODES: CanvasNode[] = [
       name: '旧公寓',
       sceneNo: 6,
       interior: true,
-      location: '旧公寓',
+      locationId: LOC_APARTMENT_ID,
       time: '🌙 夜',
       synopsis: '林晚在旧公寓找到父亲留下的第二张照片，两条支线的真相在此汇合。',
-      characters: [LIN_WAN],
+      characterIds: [LIN_WAN_ID],
     },
   },
   {
@@ -178,10 +178,10 @@ export const SAMPLE_NODES: CanvasNode[] = [
       name: '天台黎明',
       sceneNo: 7,
       interior: false,
-      location: '天台',
+      locationId: LOC_ROOFTOP_ID,
       time: '🌅 晨',
       synopsis: '雨停了，两人并肩坐在天台边缘，看城市醒来。',
-      characters: [LIN_WAN, CHEN_MO],
+      characterIds: [LIN_WAN_ID, CHEN_MO_ID],
     },
   },
   {
@@ -192,10 +192,10 @@ export const SAMPLE_NODES: CanvasNode[] = [
       name: '车站告别',
       sceneNo: 8,
       interior: false,
-      location: '车站',
+      locationId: LOC_STATION_ID,
       time: '🌅 晨',
       synopsis: '林晚独自踏上列车，把那张照片留在了站台长椅上。',
-      characters: [LIN_WAN],
+      characterIds: [LIN_WAN_ID],
     },
   },
 ]

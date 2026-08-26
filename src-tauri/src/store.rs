@@ -11,13 +11,17 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
-/// 项目文件：name + 更新时间（epoch 毫秒）+ 画布两数组（前端自有结构）。
+/// 项目文件：name + 更新时间（epoch 毫秒）+ 画布两数组 + 设定集
+/// （nodes/edges/settings 对前端是自有数据，以 `serde_json::Value` 透传）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectFile {
     pub name: String,
     pub updated_at: u64,
     pub nodes: serde_json::Value,
     pub edges: serde_json::Value,
+    /// 设定集实体（角色/地点）；旧版文件缺失时按空对象处理。
+    #[serde(default = "empty_settings")]
+    pub settings: serde_json::Value,
 }
 
 /// 项目摘要：首页海报卡的展示模型；统计从 nodes 派生，不落镜像字段。
@@ -66,6 +70,11 @@ pub fn new_id() -> String {
         .unwrap_or(0);
     let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
     format!("p-{ms:x}-{seq:x}")
+}
+
+/// settings 字段缺省值：空对象（而非 Null），前端 normalizeSettings 兜底。
+fn empty_settings() -> serde_json::Value {
+    serde_json::json!({})
 }
 
 fn now_ms() -> u64 {
@@ -163,6 +172,7 @@ pub fn create_project(app: AppHandle, name: String) -> Result<ProjectMeta, Strin
         updated_at: now_ms(),
         nodes: serde_json::json!([]),
         edges: serde_json::json!([]),
+        settings: serde_json::json!({ "characters": [], "locations": [] }),
     };
     let path = project_path(&app, &id)?;
     let text = serde_json::to_string_pretty(&file).map_err(|e| format!("序列化失败：{e}"))?;
@@ -187,6 +197,7 @@ pub fn save_project(app: AppHandle, id: String, doc: ProjectFile) -> Result<Proj
         updated_at: now_ms(),
         nodes: doc.nodes,
         edges: doc.edges,
+        settings: doc.settings,
     };
     let path = project_path(&app, &id)?;
     let text = serde_json::to_string_pretty(&file).map_err(|e| format!("序列化失败：{e}"))?;
@@ -259,12 +270,25 @@ mod tests {
     }
 
     #[test]
+    fn legacy_file_without_settings_defaults_empty() {
+        let legacy = json!({
+            "name": "旧项目",
+            "updated_at": 1,
+            "nodes": [],
+            "edges": [],
+        });
+        let file: ProjectFile = serde_json::from_value(legacy).unwrap();
+        assert_eq!(file.settings, json!({}));
+    }
+
+    #[test]
     fn project_file_round_trip() {
         let file = ProjectFile {
             name: "午夜出租车".into(),
             updated_at: 42,
             nodes: json!([{ "id": "a", "type": "scene", "data": {} }]),
             edges: json!([]),
+            settings: json!({ "characters": [], "locations": [] }),
         };
         let text = serde_json::to_string(&file).unwrap();
         let back: ProjectFile = serde_json::from_str(&text).unwrap();

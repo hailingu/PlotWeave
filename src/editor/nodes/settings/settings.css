@@ -253,3 +253,9 @@ select.pw-set-input {
     animation: none;
   }
 }
+
+/* 表单内空态提示（设定集无角色等） */
+.pw-set-empty {
+  font-size: 11px;
+  color: var(--text-secondary);
+}

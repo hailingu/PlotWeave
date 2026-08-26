@@ -1,13 +1,21 @@
 import { useEffect, useRef, useState, type DragEvent as ReactDragEvent } from 'react'
 import SegmentedControl from './SegmentedControl'
 import PanelResizer from './PanelResizer'
-import {
-  ASSET_CATEGORIES,
-  SAMPLE_CHARACTERS,
-  SAMPLE_LOCATIONS,
-} from '../sampleData'
+import { ASSET_CATEGORIES } from '../sampleData'
 import { PW_ENTITY_MIME, type EntityDragPayload } from '../dragDrop'
+import { EditableName } from '../nodes/settings/NodeSettingsPanel'
+import type { ProjectSettings } from '../settings'
 import type { CanvasNode } from '../nodes/types'
+
+/** 设定集条目编辑动作（§5：增/改名/删，走命令栈可撤销）。 */
+export interface SettingsActions {
+  addCharacter: () => void
+  renameCharacter: (id: string, name: string) => void
+  deleteCharacter: (id: string) => void
+  addLocation: () => void
+  renameLocation: (id: string, name: string) => void
+  deleteLocation: (id: string) => void
+}
 
 /** 左栏分段（docs/ui-design.md §3.4）：大纲 = 故事脊线线性投影，设定集/资产 = 引用源。 */
 type LeftTab = 'outline' | 'settings' | 'assets'
@@ -56,6 +64,10 @@ interface LeftPanelProps {
   onLocate?: (id: string) => void
   /** 画布当前选中节点 id：大纲行反向高亮并滚动到可见。 */
   selectedId?: string
+  /** 项目设定集（§5）：设定集分段的数据源。 */
+  settings: ProjectSettings
+  /** 设定集条目编辑动作（§5）。 */
+  settingsActions: SettingsActions
 }
 
 /**
@@ -65,7 +77,16 @@ interface LeftPanelProps {
  * 大纲与画布双向联动（点击定位 / 选中高亮）；大纲拖拽排序、
  * 设定集条目编辑、资产拖拽引用随后续任务落地。
  */
-export default function LeftPanel({ open, width, onResize, nodes, onLocate, selectedId }: LeftPanelProps) {
+export default function LeftPanel({
+  open,
+  width,
+  onResize,
+  nodes,
+  onLocate,
+  selectedId,
+  settings,
+  settingsActions,
+}: LeftPanelProps) {
   const [tab, setTab] = useState<LeftTab>('outline')
   const rows = outlineRows(nodes)
   const outlineRef = useRef<HTMLDivElement>(null)
@@ -110,50 +131,88 @@ export default function LeftPanel({ open, width, onResize, nodes, onLocate, sele
           {tab === 'settings' && (
             <div className="pw-settings">
               <div className="pw-settings-group">角色</div>
-              {SAMPLE_CHARACTERS.map((c) => (
+              {settings.characters.map((c) => (
                 <div
-                  key={c.name}
+                  key={c.id}
                   className="pw-settings-item pw-draggable"
                   draggable
                   title="拖到画布节点建立引用，或拖到空白处新建场景"
                   onDragStart={(e: ReactDragEvent) => {
                     e.dataTransfer.setData(
                       PW_ENTITY_MIME,
-                      JSON.stringify({ kind: 'character', name: c.name, avatar: c.avatar } satisfies EntityDragPayload),
+                      JSON.stringify({ kind: 'character', id: c.id, name: c.name } satisfies EntityDragPayload),
                     )
                     e.dataTransfer.effectAllowed = 'copy'
                   }}
                 >
-                  <span className="pw-av pw-av-sm" style={{ background: c.avatar.gradient }}>
-                    {c.avatar.label}
+                  <span className="pw-av pw-av-sm" style={{ background: c.gradient }}>
+                    {c.name.charAt(0)}
                   </span>
                   <span className="pw-settings-item-body">
-                    <span className="pw-settings-item-name">{c.name}</span>
-                    <span className="pw-settings-item-note">{c.bio}</span>
+                    <EditableName
+                      value={c.name}
+                      ariaLabel={`角色名 ${c.name}`}
+                      onChange={(name) => settingsActions.renameCharacter(c.id, name)}
+                    />
                   </span>
+                  <button
+                    type="button"
+                    className="pw-settings-x"
+                    aria-label={`删除角色 ${c.name}`}
+                    title="删除角色（节点引用将标记失效）"
+                    onClick={() => settingsActions.deleteCharacter(c.id)}
+                  >
+                    ✕
+                  </button>
                 </div>
               ))}
+              <button
+                type="button"
+                className="pw-settings-add"
+                onClick={settingsActions.addCharacter}
+              >
+                ＋ 新增角色
+              </button>
               <div className="pw-settings-group">地点</div>
-              {SAMPLE_LOCATIONS.map((l) => (
+              {settings.locations.map((l) => (
                 <div
-                  key={l.name}
+                  key={l.id}
                   className="pw-settings-item pw-draggable"
                   draggable
                   title="拖到索引卡设置地点，或拖到空白处新建场景"
                   onDragStart={(e: ReactDragEvent) => {
                     e.dataTransfer.setData(
                       PW_ENTITY_MIME,
-                      JSON.stringify({ kind: 'location', name: l.name, note: l.note } satisfies EntityDragPayload),
+                      JSON.stringify({ kind: 'location', id: l.id, name: l.name } satisfies EntityDragPayload),
                     )
                     e.dataTransfer.effectAllowed = 'copy'
                   }}
                 >
                   <span className="pw-settings-item-body">
-                    <span className="pw-settings-item-name">📍 {l.name}</span>
-                    <span className="pw-settings-item-note">{l.note}</span>
+                    <EditableName
+                      value={l.name}
+                      ariaLabel={`地点名 ${l.name}`}
+                      onChange={(name) => settingsActions.renameLocation(l.id, name)}
+                    />
                   </span>
+                  <button
+                    type="button"
+                    className="pw-settings-x"
+                    aria-label={`删除地点 ${l.name}`}
+                    title="删除地点（节点引用将标记失效）"
+                    onClick={() => settingsActions.deleteLocation(l.id)}
+                  >
+                    ✕
+                  </button>
                 </div>
               ))}
+              <button
+                type="button"
+                className="pw-settings-add"
+                onClick={settingsActions.addLocation}
+              >
+                ＋ 新增地点
+              </button>
             </div>
           )}
           {tab === 'assets' && (

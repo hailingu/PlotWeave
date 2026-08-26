@@ -1,10 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { useNodeEdit } from '../../nodeEdit'
-import {
-  SAMPLE_CHARACTERS,
-  LIN_WAN,
-  type SettingCharacter,
-} from '../../sampleData'
+import type { ProjectSettings } from '../../settings'
 import type {
   BeatNodeData,
   BranchNodeData,
@@ -41,15 +37,15 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 }
 
 /** 场景表单：名称/地点/时间/天气/内外景/梗概/出场角色（设定集引用切换）。 */
-function SceneForm({ node }: { node: Extract<PanelNode, { type: 'scene' }> }) {
+function SceneForm({ node, settings }: { node: Extract<PanelNode, { type: 'scene' }>; settings: ProjectSettings }) {
   const { patchNode } = useNodeEdit()
   const d = node.data
-  const toggleCharacter = (c: SettingCharacter) => {
-    const on = d.characters.some((ch) => ch.label === c.avatar.label)
+  const toggleCharacter = (id: string) => {
+    const on = d.characterIds.includes(id)
     patchNode(node.id, {
-      characters: on
-        ? d.characters.filter((ch) => ch.label !== c.avatar.label)
-        : [...d.characters, c.avatar],
+      characterIds: on
+        ? d.characterIds.filter((cid) => cid !== id)
+        : [...d.characterIds, id],
     })
   }
   return (
@@ -63,11 +59,18 @@ function SceneForm({ node }: { node: Extract<PanelNode, { type: 'scene' }> }) {
       </Field>
       <div className="pw-set-cols">
         <Field label="地点">
-          <input
+          <select
             className="pw-set-input"
-            value={d.location}
-            onChange={(e) => patchNode(node.id, { location: e.target.value })}
-          />
+            value={d.locationId ?? ''}
+            onChange={(e) => patchNode(node.id, { locationId: e.target.value || undefined })}
+          >
+            <option value="">未指定</option>
+            {settings.locations.map((l) => (
+              <option key={l.id} value={l.id}>
+                {l.name}
+              </option>
+            ))}
+          </select>
         </Field>
         <Field label="时间">
           <input
@@ -113,23 +116,26 @@ function SceneForm({ node }: { node: Extract<PanelNode, { type: 'scene' }> }) {
       </Field>
       <Field label="出场角色">
         <div className="pw-set-chips">
-          {SAMPLE_CHARACTERS.map((c) => {
-            const on = d.characters.some((ch) => ch.label === c.avatar.label)
+          {settings.characters.map((c) => {
+            const on = d.characterIds.includes(c.id)
             return (
               <button
-                key={c.name}
+                key={c.id}
                 type="button"
                 className={`pw-set-chip${on ? ' on' : ''}`}
-                onClick={() => toggleCharacter(c)}
+                onClick={() => toggleCharacter(c.id)}
                 aria-pressed={on}
               >
-                <span className="pw-av pw-av-sm" style={{ background: c.avatar.gradient }}>
-                  {c.avatar.label}
+                <span className="pw-av pw-av-sm" style={{ background: c.gradient }}>
+                  {c.name.charAt(0)}
                 </span>
                 {c.name}
               </button>
             )
           })}
+          {settings.characters.length === 0 && (
+            <span className="pw-set-empty">设定集暂无角色，请在左栏新增</span>
+          )}
         </div>
       </Field>
     </>
@@ -160,8 +166,15 @@ function BeatForm({ node }: { node: Extract<PanelNode, { type: 'beat' }> }) {
 }
 
 /** 对白表单：名称 + 台词列表（台词/动作、说话人、增删）。@ 提及与排序随后续任务。 */
-function DialogueForm({ node }: { node: Extract<PanelNode, { type: 'dialogue' }> }) {
+function DialogueForm({
+  node,
+  settings,
+}: {
+  node: Extract<PanelNode, { type: 'dialogue' }>
+  settings: ProjectSettings
+}) {
   const { patchNode } = useNodeEdit()
+  const defaultSpeaker = settings.characters[0]?.id
   const d = node.data
   const patchLine = (i: number, patch: Record<string, unknown>) => {
     patchNode(node.id, {
@@ -189,7 +202,7 @@ function DialogueForm({ node }: { node: Extract<PanelNode, { type: 'dialogue' }>
                 if (e.target.value === 'action') {
                   patchLine(i, { kind: 'action', speaker: undefined, side: undefined })
                 } else {
-                  patchLine(i, { kind: 'line', speaker: LIN_WAN, side: 'left' })
+                  patchLine(i, { kind: 'line', speaker: defaultSpeaker, side: 'left' })
                 }
               }}
             >
@@ -199,15 +212,12 @@ function DialogueForm({ node }: { node: Extract<PanelNode, { type: 'dialogue' }>
             {line.kind === 'line' && (
               <select
                 className="pw-set-input pw-set-speaker"
-                value={line.speaker?.label ?? ''}
+                value={line.speaker ?? ''}
                 aria-label="说话人"
-                onChange={(e) => {
-                  const c = SAMPLE_CHARACTERS.find((ch) => ch.avatar.label === e.target.value)
-                  if (c) patchLine(i, { speaker: c.avatar })
-                }}
+                onChange={(e) => patchLine(i, { speaker: e.target.value || undefined })}
               >
-                {SAMPLE_CHARACTERS.map((c) => (
-                  <option key={c.avatar.label} value={c.avatar.label}>
+                {settings.characters.map((c) => (
+                  <option key={c.id} value={c.id}>
                     {c.name}
                   </option>
                 ))}
@@ -238,7 +248,7 @@ function DialogueForm({ node }: { node: Extract<PanelNode, { type: 'dialogue' }>
         className="pw-set-add"
         onClick={() =>
           patchNode(node.id, {
-            lines: [...d.lines, { kind: 'line', speaker: LIN_WAN, side: 'left', text: '' }],
+            lines: [...d.lines, { kind: 'line', speaker: defaultSpeaker, side: 'left', text: '' }],
           })
         }
       >
@@ -409,7 +419,7 @@ function ShotForm({ node }: { node: Extract<PanelNode, { type: 'shot' }> }) {
  * 由各节点组件在 openSettingsId 命中时渲染于卡片下方。
  */
 export default function NodeSettingsPanel({ node }: { node: PanelNode }) {
-  const { duplicateNode, deleteNode } = useNodeEdit()
+  const { duplicateNode, deleteNode, settings } = useNodeEdit()
 
   return (
     <div
@@ -420,9 +430,9 @@ export default function NodeSettingsPanel({ node }: { node: PanelNode }) {
       onPointerDown={(e) => e.stopPropagation()}
     >
       <div className="pw-settings-scroll">
-        {node.type === 'scene' && <SceneForm node={node} />}
+        {node.type === 'scene' && <SceneForm node={node} settings={settings} />}
         {node.type === 'beat' && <BeatForm node={node} />}
-        {node.type === 'dialogue' && <DialogueForm node={node} />}
+        {node.type === 'dialogue' && <DialogueForm node={node} settings={settings} />}
         {node.type === 'branch' && <BranchForm node={node} />}
         {node.type === 'shot' && <ShotForm node={node} />}
       </div>

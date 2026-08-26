@@ -1,6 +1,10 @@
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { useNodeEdit } from '../nodeEdit'
 import NodeSettingsPanel, { EditableName } from './settings/NodeSettingsPanel'
+import {
+  resolveCharacterAvatar,
+  resolveLocationName,
+} from '../settings'
 import type { SceneFlowNode } from './types'
 
 /** 索引卡底部下挂分镜卡的专属源端口 id（§4.4：横向 = 剧情顺序，垂直 = 派生从属）。 */
@@ -15,8 +19,12 @@ export const SCENE_SHOT_HANDLE = 'shots'
  * 名称双击内联改名；⚙️ 打开设置面板（§4.3，编辑即命令）。
  */
 export default function SceneNode({ id, data, selected }: NodeProps<SceneFlowNode>) {
-  const { openSettingsId, toggleSettings, patchNode, shotCountOf } = useNodeEdit()
+  const { openSettingsId, toggleSettings, patchNode, shotCountOf, settings } = useNodeEdit()
   const settingsOpen = openSettingsId === id
+  const locationName = data.locationId
+    ? resolveLocationName(settings, data.locationId)
+    : null
+  const invalidLocation = Boolean(data.locationId) && locationName === null
 
   return (
     <div className={`pw-index${selected ? ' pw-on' : ''}`}>
@@ -48,23 +56,28 @@ export default function SceneNode({ id, data, selected }: NodeProps<SceneFlowNod
         </div>
         <div className="pw-index-meta">
           <span className="pw-index-ie">{data.interior ? '内' : '外'}</span>
-          <span>📍 {data.location}</span>
+          <span className={invalidLocation ? 'pw-invalid' : undefined}>
+            {invalidLocation ? '⚠ 未指定' : `📍 ${locationName ?? '📍 未指定'}`}
+          </span>
           <span className="pw-index-sep">·</span>
           <span>{data.time}</span>
           {data.weather && <span className="pw-index-wx">{data.weather}</span>}
         </div>
         <p className="pw-index-syn">{data.synopsis}</p>
-        {data.characters.length > 0 && (
+        {data.characterIds.length > 0 && (
           <div className="pw-avs">
-            {data.characters.map((c) => (
-              <span
-                key={c.label}
-                className="pw-av"
-                style={{ background: c.gradient }}
-              >
-                {c.label}
-              </span>
-            ))}
+            {data.characterIds.map((cid) => {
+              const avatar = resolveCharacterAvatar(settings, cid)
+              return avatar ? (
+                <span key={cid} className="pw-av" style={{ background: avatar.gradient }}>
+                  {avatar.label}
+                </span>
+              ) : (
+                <span key={cid} className="pw-av pw-av-invalid" title="设定集条目已删除">
+                  ✕
+                </span>
+              )
+            })}
           </div>
         )}
       </div>

@@ -7,13 +7,16 @@
 import type { Edge } from '@xyflow/react'
 import type { CanvasNode } from './editor/nodes/types'
 import { SAMPLE_NODES, SAMPLE_EDGES } from './editor/sampleGraph'
+import { SAMPLE_SETTINGS } from './editor/sampleData'
+import { normalizeSettings, type ProjectSettings } from './editor/settings'
 import type { ProjectSummary } from './home/projects'
 
-/** 项目完整内容：名称 + 画布两数组。 */
+/** 项目完整内容：名称 + 画布两数组 + 设定集。 */
 export interface ProjectDocument {
   name: string
   nodes: CanvasNode[]
   edges: Edge[]
+  settings: ProjectSettings
 }
 
 /** 首次启动的种子项目：沿用演示画布，让首页与编辑器开箱即有内容。 */
@@ -30,7 +33,7 @@ function seedProjects(): { meta: ProjectSummary; doc: ProjectDocument }[] {
         endingCount: 2,
         updatedAt: hoursAgo(26),
       },
-      doc: { name: '午夜出租车', nodes: SAMPLE_NODES, edges: SAMPLE_EDGES },
+      doc: { name: '午夜出租车', nodes: SAMPLE_NODES, edges: SAMPLE_EDGES, settings: SAMPLE_SETTINGS },
     },
     {
       meta: {
@@ -41,7 +44,7 @@ function seedProjects(): { meta: ProjectSummary; doc: ProjectDocument }[] {
         cover: 'linear-gradient(160deg, #2b2f4c, #e0176e)',
         updatedAt: hoursAgo(2),
       },
-      doc: { name: '都市奇缘', nodes: SAMPLE_NODES, edges: SAMPLE_EDGES },
+      doc: { name: '都市奇缘', nodes: SAMPLE_NODES, edges: SAMPLE_EDGES, settings: SAMPLE_SETTINGS },
     },
   ]
 }
@@ -123,11 +126,16 @@ async function tauriCreate(name: string): Promise<ProjectSummary> {
 
 async function tauriLoad(id: string): Promise<ProjectDocument> {
   const { invoke } = await import('@tauri-apps/api/core')
-  const file = await invoke<{ name: string; nodes: CanvasNode[]; edges: Edge[] }>(
+  const file = await invoke<{ name: string; nodes: CanvasNode[]; edges: Edge[]; settings?: unknown }>(
     'load_project',
     { id },
   )
-  return { name: file.name, nodes: file.nodes, edges: file.edges }
+  return {
+    name: file.name,
+    nodes: file.nodes,
+    edges: file.edges,
+    settings: normalizeSettings(file.settings),
+  }
 }
 
 async function tauriSave(id: string, doc: ProjectDocument): Promise<void> {
@@ -139,6 +147,7 @@ async function tauriSave(id: string, doc: ProjectDocument): Promise<void> {
       updated_at: 0, // 由 Rust 端盖服务端时间
       nodes: doc.nodes,
       edges: doc.edges,
+      settings: doc.settings,
     },
   })
 }
@@ -187,7 +196,7 @@ export const projectStore = {
 function memoryCreate(name: string): ProjectSummary {
   const id = `local-${Date.now().toString(36)}`
   const now = Date.now()
-  memoryStore.set(id, { doc: { name, nodes: [], edges: [] }, updatedAt: now })
+  memoryStore.set(id, { doc: { name, nodes: [], edges: [], settings: { characters: [], locations: [] } }, updatedAt: now })
   return { id, name, sceneCount: 0, updatedAt: new Date(now).toISOString() }
 }
 

@@ -38,7 +38,11 @@ import { readEntityPayload, PW_ENTITY_MIME } from './dragDrop'
 import ExportDialog from './ExportDialog'
 import { buildScriptMarkdown } from './exportScript'
 import { EditableName } from './nodes/settings/NodeSettingsPanel'
-import { LIN_WAN } from './sampleData'
+import {
+  createCharacter,
+  createLocation,
+  type ProjectSettings,
+} from './settings'
 import type { CanvasNode } from './nodes/types'
 
 /** 画布节点类型注册：索引卡 / 对白 / 节奏卡 / 分支 / 分镜卡（docs/ui-design.md §4.2）。 */
@@ -62,13 +66,14 @@ interface EditorViewProps {
     name: string
     nodes: CanvasNode[]
     edges: Edge[]
+    settings: ProjectSettings
   }
   /** 返回项目首页：同一窗口从编辑器状态切回文档浏览器（§3.1）。 */
   onBackHome: () => void
   /** 项目名内联重命名（§3.3 中区：更新 project.name + 首页索引）。 */
   onRenameProject: (name: string) => void
   /** 持久化写入（防抖节流由本组件负责；浏览器预览下为内存回退实现）。 */
-  onSave: (doc: { name: string; nodes: CanvasNode[]; edges: Edge[] }) => void
+  onSave: (doc: { name: string; nodes: CanvasNode[]; edges: Edge[]; settings: ProjectSettings }) => void
 }
 
 /** ＋节点下拉的创建项（docs/ui-design.md §3.3：场景/节奏卡/对白/分支/分镜卡）。 */
@@ -119,6 +124,7 @@ export default function EditorView(props: EditorViewProps) {
 function EditorWindow({ project, onBackHome, onRenameProject, onSave }: EditorViewProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNode>(project.nodes)
   const [edges, setEdges, onEdgesChange] = useEdgesState(project.edges)
+  const [settings, setSettings] = useState<ProjectSettings>(project.settings)
   const { screenToFlowPosition, fitView } = useReactFlow()
   const canvasRef = useRef<HTMLDivElement>(null)
 
@@ -133,14 +139,15 @@ function EditorWindow({ project, onBackHome, onRenameProject, onSave }: EditorVi
   // 跳过首次加载，仅在脏状态下卸载冲刷，避免「只打开不编辑」也盖更新时间戳。
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const dirtyRef = useRef(false)
-  const latestRef = useRef({ name: project.name, nodes, edges })
-  latestRef.current = { name: project.name, nodes, edges }
+  const latestRef = useRef({ name: project.name, nodes, edges, settings })
+  latestRef.current = { name: project.name, nodes, edges, settings }
   const firstRender = useRef(true)
   const flushSave = useCallback(() => {
     if (!dirtyRef.current) return
     dirtyRef.current = false
     const { name, nodes: ns, edges: es } = latestRef.current
-    onSave({ name, nodes: ns.map(stripNode), edges: es.map(stripEdge) })
+    const { settings: st } = latestRef.current
+    onSave({ name, nodes: ns.map(stripNode), edges: es.map(stripEdge), settings: st })
   }, [onSave])
   useEffect(() => {
     if (firstRender.current) {
@@ -153,7 +160,7 @@ function EditorWindow({ project, onBackHome, onRenameProject, onSave }: EditorVi
       saveTimer.current = null
       flushSave()
     }, 600)
-  }, [nodes, edges, project.name, flushSave])
+  }, [nodes, edges, settings, project.name, flushSave])
   useEffect(() => {
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current)
@@ -293,6 +300,60 @@ function EditorWindow({ project, onBackHome, onRenameProject, onSave }: EditorVi
   /** 🗑 单节点删除（⚙️ 面板入口），走同一命令路径。 */
   const deleteNode = useCallback((id: string) => deleteNodesByIds([id]), [deleteNodesByIds])
 
+  /** 设定集补丁命令（§5）：undo/redo 闭包整体替换 settings。 */
+  const applySettings = useCallback(
+    (next: ProjectSettings) => setSettings(next),
+    [],
+  )
+  const patchSettings = useCallback(
+    (before: ProjectSettings, after: ProjectSettings) => {
+      setSettings(after)
+      pushHistory({ undo: () => applySettings(before), redo: () => applySettings(after) })
+    },
+    [applySettings, pushHistory],
+  )
+
+  /** 设定集编辑动作（§5）：新增用占位名，改名经 Map 替换，删除不自动清除节点引用。 */
+  const settingsActions = useMemo(
+    () => ({
+      addCharacter: () => {
+        const entity = createCharacter('新角色')
+        patchSettings(settings, {
+          ...settings,
+          characters: [...settings.characters, entity],
+        })
+      },
+      renameCharacter: (id: string, name: string) =>
+        patchSettings(settings, {
+          ...settings,
+          characters: settings.characters.map((c) => (c.id === id ? { ...c, name } : c)),
+        }),
+      deleteCharacter: (id: string) =>
+        patchSettings(settings, {
+          ...settings,
+          characters: settings.characters.filter((c) => c.id !== id),
+        }),
+      addLocation: () => {
+        const entity = createLocation('新地点')
+        patchSettings(settings, {
+          ...settings,
+          locations: [...settings.locations, entity],
+        })
+      },
+      renameLocation: (id: string, name: string) =>
+        patchSettings(settings, {
+          ...settings,
+          locations: settings.locations.map((l) => (l.id === id ? { ...l, name } : l)),
+        }),
+      deleteLocation: (id: string) =>
+        patchSettings(settings, {
+          ...settings,
+          locations: settings.locations.filter((l) => l.id !== id),
+        }),
+    }),
+    [patchSettings, settings],
+  )
+
   /** 索引卡的 🎞 镜数：派生自该场 attach 下挂边数量（§7.2，不落镜像字段）。 */
   const shotCountOf = useCallback(
     (id: string) =>
@@ -363,10 +424,9 @@ function EditorWindow({ project, onBackHome, onRenameProject, onSave }: EditorVi
             name: '新场景',
             sceneNo: maxNo((n) => (n.type === 'scene' ? n.data.sceneNo : 0)),
             interior: true,
-            location: '地点',
             time: '🌙 夜',
             synopsis: '这一场发生了什么…',
-            characters: [],
+            characterIds: [],
             ...opts?.data,
           },
         }
@@ -386,7 +446,9 @@ function EditorWindow({ project, onBackHome, onRenameProject, onSave }: EditorVi
           selected: true,
           data: {
             name: '新对白',
-            lines: [{ kind: 'line', speaker: LIN_WAN, side: 'left', text: '新台词…' }],
+            lines: [
+              { kind: 'line', speaker: settings.characters[0]?.id, side: 'left', text: '新台词…' },
+            ],
             ...opts?.data,
           },
         }
@@ -436,7 +498,7 @@ function EditorWindow({ project, onBackHome, onRenameProject, onSave }: EditorVi
       setPlusOpen(false)
       setOpenSettingsId(null)
     },
-    [pushHistory, screenToFlowPosition, setNodes],
+    [pushHistory, screenToFlowPosition, setNodes, settings],
   )
 
   const nodeEditApi = useMemo<NodeEditApi>(
@@ -448,8 +510,9 @@ function EditorWindow({ project, onBackHome, onRenameProject, onSave }: EditorVi
       duplicateNode,
       deleteNode,
       shotCountOf,
+      settings,
     }),
-    [openSettingsId, toggleSettings, closeSettings, patchNode, duplicateNode, deleteNode, shotCountOf],
+    [openSettingsId, toggleSettings, closeSettings, patchNode, duplicateNode, deleteNode, shotCountOf, settings],
   )
 
   // 失焦收起（§4.3）＋ 全局快捷键：⌘Z/⌘⇧Z 撤销重做、Delete 删除选中。
@@ -545,17 +608,17 @@ function EditorWindow({ project, onBackHome, onRenameProject, onSave }: EditorVi
 
       if (node) {
         if (entity.kind === 'character') {
-          if (node.type === 'scene' && !node.data.characters.some((c) => c.label === entity.avatar.label)) {
-            patchNode(node.id, { characters: [...node.data.characters, entity.avatar] })
+          if (node.type === 'scene' && !node.data.characterIds.includes(entity.id)) {
+            patchNode(node.id, { characterIds: [...node.data.characterIds, entity.id] })
           } else if (node.type === 'dialogue') {
             patchNode(node.id, {
-              lines: [...node.data.lines, { kind: 'line', speaker: entity.avatar, side: 'left', text: '新台词…' }],
+              lines: [...node.data.lines, { kind: 'line', speaker: entity.id, side: 'left', text: '新台词…' }],
             })
           } else if (node.type === 'shot' && !node.data.refs.some((r) => r.label === `${entity.name}垫图`)) {
             patchNode(node.id, { refs: [...node.data.refs, { kind: 'character', label: `${entity.name}垫图` }] })
           }
         } else if (node.type === 'scene') {
-          patchNode(node.id, { location: entity.name })
+          patchNode(node.id, { locationId: entity.id })
         } else if (node.type === 'shot' && !node.data.refs.some((r) => r.label === `${entity.name}底图`)) {
           patchNode(node.id, { refs: [...node.data.refs, { kind: 'location', label: `${entity.name}底图` }] })
         }
@@ -565,9 +628,9 @@ function EditorWindow({ project, onBackHome, onRenameProject, onSave }: EditorVi
       // 空白处：按实体预填生成场景（§5 拖上空画布直接生成预填节点）
       const at = screenToFlowPosition({ x: e.clientX, y: e.clientY })
       if (entity.kind === 'character') {
-        createNode('scene', { at, data: { characters: [entity.avatar] } })
+        createNode('scene', { at, data: { characterIds: [entity.id] } })
       } else {
-        createNode('scene', { at, data: { location: entity.name } })
+        createNode('scene', { at, data: { locationId: entity.id } })
       }
     },
     [createNode, patchNode, screenToFlowPosition],
@@ -755,6 +818,8 @@ function EditorWindow({ project, onBackHome, onRenameProject, onSave }: EditorVi
           nodes={nodes}
           onLocate={locateNode}
           selectedId={selectedNode?.id}
+          settings={settings}
+          settingsActions={settingsActions}
         />
         <div className="canvas-root" ref={canvasRef} onDragOver={onCanvasDragOver} onDrop={onCanvasDrop}>
           <ReactFlow
@@ -796,6 +861,7 @@ function EditorWindow({ project, onBackHome, onRenameProject, onSave }: EditorVi
           }}
           selectedNode={selectedNode}
           attachedShotCount={selectedNode ? shotCountOf(selectedNode.id) : 0}
+          settings={settings}
         />
       </div>
       {/* 右键上下文菜单：节点 = 设置/复制/删除；空白 = 五类新增（§4.3） */}
@@ -879,7 +945,7 @@ function EditorWindow({ project, onBackHome, onRenameProject, onSave }: EditorVi
       {exportOpen && (
         <ExportDialog
           projectName={project.name}
-          text={buildScriptMarkdown(project.name, nodes, edges)}
+          text={buildScriptMarkdown(project.name, nodes, edges, settings)}
           onClose={() => setExportOpen(false)}
         />
       )}

@@ -1,6 +1,7 @@
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { useNodeEdit } from '../nodeEdit'
 import NodeSettingsPanel, { EditableName } from './settings/NodeSettingsPanel'
+import { resolveCharacterAvatar, resolveCharacterName } from '../settings'
 import type { DialogueFlowNode } from './types'
 
 /**
@@ -10,10 +11,10 @@ import type { DialogueFlowNode } from './types'
  * 名称双击内联改名；⚙️ 打开设置面板（§4.3，编辑即命令）。
  */
 export default function DialogueNode({ id, data, selected }: NodeProps<DialogueFlowNode>) {
-  const { openSettingsId, toggleSettings, patchNode } = useNodeEdit()
+  const { openSettingsId, toggleSettings, patchNode, settings } = useNodeEdit()
   const settingsOpen = openSettingsId === id
   const speakers = new Set(
-    data.lines.filter((l) => l.kind === 'line' && l.speaker).map((l) => l.speaker!.label),
+    data.lines.flatMap((l) => (l.kind === 'line' && l.speaker ? [l.speaker] : [])),
   )
   const lineCount = data.lines.filter((l) => l.kind === 'line').length
 
@@ -54,15 +55,26 @@ export default function DialogueNode({ id, data, selected }: NodeProps<DialogueF
               key={i}
               className={`pw-dlg-bubrow${line.side === 'right' ? ' pw-right' : ''}`}
             >
-              {line.speaker && (
-                <span
-                  className="pw-av pw-av-sm"
-                  style={{ background: line.speaker.gradient }}
-                >
-                  {line.speaker.label}
-                </span>
-              )}
+              {line.speaker &&
+                (() => {
+                  const avatar = resolveCharacterAvatar(settings, line.speaker)
+                  return avatar ? (
+                    <span
+                      className="pw-av pw-av-sm"
+                      style={{ background: avatar.gradient }}
+                    >
+                      {avatar.label}
+                    </span>
+                  ) : (
+                    <span className="pw-av pw-av-sm pw-av-invalid" title="设定集条目已删除">
+                      ✕
+                    </span>
+                  )
+                })()}
               <span className="pw-dlg-bub">
+                {line.speaker && !resolveCharacterName(settings, line.speaker) && (
+                  <span className="pw-invalid">已删除角色：</span>
+                )}
                 {line.text}
                 {line.vo && <span className="pw-dlg-vo">VO</span>}
               </span>

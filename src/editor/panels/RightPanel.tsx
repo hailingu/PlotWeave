@@ -1,5 +1,10 @@
 import SegmentedControl from './SegmentedControl'
 import PanelResizer from './PanelResizer'
+import {
+  resolveCharacterName,
+  resolveLocationName,
+  type ProjectSettings,
+} from '../settings'
 import type { CanvasNode } from '../nodes/types'
 
 /** 右栏分段（docs/ui-design.md §3.4）：检查器 = 选中节点的字段视图；✦AI = 对话面板。 */
@@ -19,23 +24,39 @@ const TYPE_LABELS: Record<CanvasNode['type'], string> = {
 }
 
 /** 检查器字段行：按节点类型派生只读视图（编辑随后续 ⚙️ 设置面板任务落地）。 */
-function inspectorRows(node: CanvasNode, shotCount: number): { label: string; value: string }[] {
+function inspectorRows(
+  node: CanvasNode,
+  shotCount: number,
+  settings: ProjectSettings,
+): { label: string; value: string }[] {
   switch (node.type) {
-    case 'scene':
+    case 'scene': {
+      const locationName = node.data.locationId
+        ? resolveLocationName(settings, node.data.locationId)
+        : null
       return [
         { label: '名称', value: node.data.name },
         { label: '场号', value: `SCENE ${String(node.data.sceneNo).padStart(2, '0')}` },
         { label: '内外景', value: node.data.interior ? '内' : '外' },
-        { label: '地点', value: node.data.location },
+        { label: '地点', value: locationName ?? (node.data.locationId ? '（已删除）' : '未指定') },
         { label: '时间', value: node.data.time },
         ...(node.data.weather ? [{ label: '天气', value: node.data.weather }] : []),
         { label: '分镜', value: `🎞 ${shotCount} 镜` },
         { label: '梗概', value: node.data.synopsis },
-        { label: '在场角色', value: node.data.characters.map((c) => c.label).join(' / ') || '—' },
+        {
+          label: '在场角色',
+          value:
+            node.data.characterIds
+              .map((id) => resolveCharacterName(settings, id) ?? '（已删除）')
+              .join(' / ') || '—',
+        },
       ]
+    }
     case 'dialogue': {
       const speakers = new Set(
-        node.data.lines.flatMap((l) => (l.kind === 'line' && l.speaker ? [l.speaker.label] : [])),
+        node.data.lines.flatMap((l) =>
+          l.kind === 'line' && l.speaker ? [resolveCharacterName(settings, l.speaker) ?? '（已删除）'] : [],
+        ),
       )
       const actions = node.data.lines.filter((l) => l.kind === 'action').length
       return [
@@ -76,6 +97,8 @@ interface RightPanelProps {
   selectedNode?: CanvasNode
   /** 选中索引卡的 attach 下挂分镜数（§7.2 派生，检查器展示用）。 */
   attachedShotCount?: number
+  /** 项目设定集：检查器解析实体引用（§5）。 */
+  settings: ProjectSettings
 }
 
 /**
@@ -92,8 +115,9 @@ export default function RightPanel({
   onTabChange,
   selectedNode,
   attachedShotCount = 0,
+  settings,
 }: RightPanelProps) {
-  const rows = selectedNode ? inspectorRows(selectedNode, attachedShotCount) : []
+  const rows = selectedNode ? inspectorRows(selectedNode, attachedShotCount, settings) : []
 
   return (
     <aside

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import HomePage from './home/HomePage'
 import { projectStore, type ProjectDocument } from './projectStore'
+import { EMPTY_SETTINGS } from './editor/settings'
 import EditorView from './editor/EditorView'
 import type { ProjectSummary } from './home/projects'
 
@@ -40,7 +41,7 @@ export default function App() {
     const meta = await projectStore.create('未命名短剧')
     setOpenProject({
       id: meta.id,
-      doc: { name: meta.name, nodes: [], edges: [] },
+      doc: { name: meta.name, nodes: [], edges: [], settings: { ...EMPTY_SETTINGS } },
     })
     void refreshProjects()
   }, [refreshProjects])
@@ -121,6 +122,7 @@ export default function App() {
           name: openProject.doc.name,
           nodes: openProject.doc.nodes,
           edges: openProject.doc.edges,
+          settings: openProject.doc.settings,
         }}
         onBackHome={handleBackHome}
         onRenameProject={handleEditorRename}

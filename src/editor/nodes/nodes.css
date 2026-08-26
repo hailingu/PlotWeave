@@ -577,3 +577,20 @@
     transform: none;
   }
 }
+
+/* ---- 失效引用（§4.3：设定被删 → 灰虚线角标 + 删除线，不自动清除） ---- */
+.pw-av.pw-av-invalid {
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(142, 142, 147, 0.35) 0 3px,
+    transparent 3px 6px
+  );
+  color: var(--text-secondary);
+  border: 1px dashed var(--border-hairline);
+  text-decoration: line-through;
+}
+
+.pw-invalid {
+  color: var(--text-secondary);
+  text-decoration: line-through;
+}

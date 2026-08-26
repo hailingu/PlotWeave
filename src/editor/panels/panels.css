@@ -337,3 +337,45 @@
     transition: none;
   }
 }
+
+/* 设定集条目编辑（§5） */
+.pw-settings-x {
+  margin-left: auto;
+  align-self: center;
+  border: none;
+  background: none;
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.pw-settings-item:hover .pw-settings-x {
+  opacity: 1;
+}
+
+.pw-settings-x:hover {
+  background: var(--danger);
+  color: #fff;
+}
+
+.pw-settings-add {
+  display: block;
+  width: calc(100% - 12px);
+  margin: 4px 6px 8px;
+  border: 1px dashed var(--border-hairline);
+  border-radius: var(--radius-md);
+  background: none;
+  padding: 5px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.pw-settings-add:hover {
+  color: var(--text-primary);
+  border-color: var(--accent-alt);
+}

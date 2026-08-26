@@ -15,26 +15,32 @@ export interface NodeAvatar {
   gradient: string
 }
 
-/** 场景节点（索引卡）：卡片分区对应索引卡字段。 */
+/**
+ * 场景节点（索引卡）：卡片分区对应索引卡字段。
+ * 引用一律存设定集实体 id（§5 改名不断引用），渲染时经 ProjectSettings 解析；
+ * 实体被删时按「失效引用」展示（§4.3），不自动清除。
+ */
 export interface SceneNodeData extends Record<string, unknown> {
   name: string
   /** 剧本场景头编号，展示为 SCENE 03。 */
   sceneNo: number
   /** 内景/外景徽标。 */
   interior: boolean
-  location: string
+  /** 地点实体 id（设定集地点）。 */
+  locationId?: string
   time: string
   weather?: string
   synopsis: string
-  characters: NodeAvatar[]
+  /** 在场角色实体 id 列表（设定集角色）。 */
+  characterIds: string[]
 }
 
 /** 对白的一行：角色台词（带说话人与左右侧）或居中动作行。 */
 export interface DialogueLine {
   kind: 'line' | 'action'
   text: string
-  /** kind = line 时的说话人头像；左右交替由 side 决定。 */
-  speaker?: NodeAvatar
+  /** kind = line 时的说话人实体 id（设定集角色）；左右交替由 side 决定。 */
+  speaker?: string
   side?: 'left' | 'right'
   /** 画外音标记（VO 徽标）。 */
   vo?: boolean

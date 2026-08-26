@@ -1,7 +1,7 @@
 import type { Edge } from '@xyflow/react'
 import { SCENE_SHOT_HANDLE } from './nodes/SceneNode'
-import { SAMPLE_CHARACTERS } from './sampleData'
-import type { CanvasNode, NodeAvatar, SceneFlowNode, ShotFlowNode } from './nodes/types'
+import { resolveCharacterName, resolveLocationName, type ProjectSettings } from './settings'
+import type { CanvasNode, SceneFlowNode, ShotFlowNode } from './nodes/types'
 
 /**
  * 剧本导出生成器（docs/ui-design.md §3.5/§5）。
@@ -10,12 +10,9 @@ import type { CanvasNode, NodeAvatar, SceneFlowNode, ShotFlowNode } from './node
  * 场景顺序 = 画布横向剧情流（position.x 排序）。
  */
 
-/** 头像单字标签 → 设定集全名（未知角色回退单字标签）。 */
-function speakerName(avatar: NodeAvatar): string {
-  return (
-    SAMPLE_CHARACTERS.find((c) => c.avatar.label === avatar.label)?.name ??
-    avatar.label
-  )
+/** 说话人 id → 设定集全名（失效引用标注，§4.3）。 */
+function speakerName(settings: ProjectSettings, id: string): string {
+  return resolveCharacterName(settings, id) ?? '已删除角色'
 }
 
 /** 单场分镜附录：按 attach 边归组、镜号排序。 */
@@ -47,6 +44,7 @@ export function buildScriptMarkdown(
   projectName: string,
   nodes: CanvasNode[],
   edges: Edge[],
+  settings: ProjectSettings,
 ): string {
   const ordered = [...nodes].sort((a, b) => a.position.x - b.position.x)
   const lines: string[] = [`# ${projectName}`, '']
@@ -55,19 +53,25 @@ export function buildScriptMarkdown(
   for (const node of ordered) {
     if (node.type === 'scene') {
       const d = node.data
-      const meta = [d.interior ? '内' : '外', d.location, d.time, d.weather]
+      const locationName = d.locationId ? resolveLocationName(settings, d.locationId) : null
+      const meta = [
+        d.interior ? '内' : '外',
+        locationName ?? (d.locationId ? '（地点已删除）' : null),
+        d.time,
+        d.weather,
+      ]
         .filter(Boolean)
         .join(' · ')
       lines.push(`## 场 ${String(d.sceneNo).padStart(2, '0')} · ${d.name}`, '', meta, '')
       if (d.synopsis) lines.push(`> ${d.synopsis}`, '')
-      const cast = d.characters.map(speakerName).join('、')
+      const cast = d.characterIds.map((id) => speakerName(settings, id)).join('、')
       if (cast) lines.push(`在场：${cast}`, '')
     } else if (node.type === 'dialogue') {
       for (const line of node.data.lines) {
         if (line.kind === 'action') {
           lines.push(`（${line.text}）`)
         } else {
-          const name = line.speaker ? speakerName(line.speaker) : '？'
+          const name = line.speaker ? speakerName(settings, line.speaker) : '？'
           lines.push(`${name}：${line.text}${line.vo ? '（VO）' : ''}`)
         }
       }
