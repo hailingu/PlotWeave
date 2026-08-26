@@ -8,7 +8,11 @@ import type { Edge } from '@xyflow/react'
 import type { CanvasNode } from './editor/nodes/types'
 import { SAMPLE_NODES, SAMPLE_EDGES } from './editor/sampleGraph'
 import { SAMPLE_SETTINGS } from './editor/sampleData'
-import { normalizeSettings, type ProjectSettings } from './editor/settings'
+import {
+  newEntityId,
+  normalizeSettings,
+  type ProjectSettings,
+} from './editor/settings'
 import type { ProjectSummary } from './home/projects'
 
 /** 项目完整内容：名称 + 画布两数组 + 设定集。 */
@@ -17,6 +21,108 @@ export interface ProjectDocument {
   nodes: CanvasNode[]
   edges: Edge[]
   settings: ProjectSettings
+}
+
+/**
+ * 旧 schema 判定（引用 id 化之前落盘的文档）：
+ * scene 的 characters 是头像对象数组 / location 是字符串 / 对白 speaker 是对象。
+ */
+function needsMigration(file: { nodes?: CanvasNode[]; settings?: unknown }): boolean {
+  const nodes = file.nodes ?? []
+  if (Array.isArray(file.settings) || (file.settings && typeof file.settings === 'object' && file.settings !== null && !('characters' in file.settings))) {
+    // settings 缺失视作旧文件，由迁移补全
+  }
+  return nodes.some((n) => {
+    const d = n.data as Record<string, unknown>
+    if (n.type === 'scene') {
+      return Array.isArray(d.characters) || typeof d.location === 'string' || !Array.isArray(d.characterIds)
+    }
+    if (n.type === 'dialogue') {
+      return Array.isArray(d.lines) && (d.lines as { speaker?: unknown }[]).some((l) => l.speaker && typeof l.speaker === 'object')
+    }
+    return false
+  }) || file.settings === undefined
+}
+
+/**
+ * 旧 schema → 新 schema 迁移（保用户数据）：
+ * - scene.characters（头像对象）→ characterIds；scene.location（字符串）→ locationId；
+ *   dialogue 台词 speaker（对象）→ 实体 id。
+ * - 缺失的设定集实体就地补建：角色按「名字首字 + 渐变」匹配，地点按名字匹配；
+ *   匹配不到建新实体（角色名回退头像单字，用户可改名）。
+ */
+export function migrateProjectDocument(doc: ProjectDocument): {
+  doc: ProjectDocument
+  migrated: boolean
+} {
+  const settings: ProjectSettings = normalizeSettings(doc.settings)
+  let migrated = false
+
+  const ensureCharacter = (label: string, gradient?: string): string => {
+    const hit =
+      settings.characters.find((c) => c.gradient === gradient && c.name.charAt(0) === label) ??
+      settings.characters.find((c) => c.name.charAt(0) === label)
+    if (hit) return hit.id
+    const entity = {
+      id: newEntityId('ch'),
+      name: label,
+      gradient: gradient ?? 'linear-gradient(135deg,#8e8e93,#636366)',
+    }
+    settings.characters.push(entity)
+    migrated = true
+    return entity.id
+  }
+
+  const ensureLocation = (name: string): string => {
+    const hit = settings.locations.find((l) => l.name === name)
+    if (hit) return hit.id
+    const entity = { id: newEntityId('loc'), name }
+    settings.locations.push(entity)
+    migrated = true
+    return entity.id
+  }
+
+  const nodes = doc.nodes.map((node) => {
+    if (node.type === 'scene') {
+      const d = { ...(node.data as Record<string, unknown>) }
+      const avatars = d.characters
+      let characterIds: string[]
+      if (Array.isArray(avatars)) {
+        characterIds = (avatars as { label: string; gradient?: string }[]).map((av) =>
+          ensureCharacter(av.label, av.gradient),
+        )
+        delete d.characters
+        migrated = true
+      } else if (Array.isArray(d.characterIds)) {
+        characterIds = d.characterIds as string[]
+      } else {
+        characterIds = []
+        migrated = true
+      }
+      let locationId = d.locationId as string | undefined
+      if (typeof d.location === 'string') {
+        locationId = ensureLocation(d.location)
+        delete d.location
+        migrated = true
+      }
+      return { ...node, data: { ...d, characterIds, locationId } } as CanvasNode
+    }
+    if (node.type === 'dialogue') {
+      const d = node.data
+      const lines = d.lines.map((line) => {
+        if (line.kind === 'line' && line.speaker && typeof line.speaker === 'object') {
+          const av = line.speaker as { label: string; gradient?: string }
+          migrated = true
+          return { ...line, speaker: ensureCharacter(av.label, av.gradient) }
+        }
+        return line
+      })
+      return { ...node, data: { ...d, lines } } as CanvasNode
+    }
+    return node
+  })
+
+  return { doc: { ...doc, nodes, edges: doc.edges, settings }, migrated }
 }
 
 /** 首次启动的种子项目：沿用演示画布，让首页与编辑器开箱即有内容。 */
@@ -116,6 +222,18 @@ async function tauriList(): Promise<ProjectSummary[]> {
     }
     return tauriList()
   }
+  // 种子文件升级：示例项目仍是旧 schema（引用 id 化之前落盘）时直接覆盖新种子
+  for (const meta of metas) {
+    if (!meta.id.startsWith('sample-')) continue
+    const seed = seedProjects().find((s) => s.meta.id === meta.id)
+    if (!seed) continue
+    const file = await invoke<{ nodes: CanvasNode[]; settings?: unknown }>('load_project', {
+      id: meta.id,
+    })
+    if (needsMigration(file)) {
+      await tauriSave(meta.id, seed.doc)
+    }
+  }
   return metas.map(toSummary)
 }
 
@@ -130,12 +248,15 @@ async function tauriLoad(id: string): Promise<ProjectDocument> {
     'load_project',
     { id },
   )
-  return {
+  const doc = migrateProjectDocument({
     name: file.name,
     nodes: file.nodes,
     edges: file.edges,
     settings: normalizeSettings(file.settings),
-  }
+  })
+  // 迁移发生则写回磁盘，下次打开不再迁移
+  if (doc.migrated) void tauriSave(id, doc.doc)
+  return doc.doc
 }
 
 async function tauriSave(id: string, doc: ProjectDocument): Promise<void> {
@@ -203,7 +324,8 @@ function memoryCreate(name: string): ProjectSummary {
 async function memoryLoad(id: string): Promise<ProjectDocument> {
   const entry = memoryStore.get(id)
   if (!entry) throw new Error(`项目不存在：${id}`)
-  return JSON.parse(JSON.stringify(entry.doc)) as ProjectDocument
+  const raw = JSON.parse(JSON.stringify(entry.doc)) as ProjectDocument
+  return migrateProjectDocument(raw).doc
 }
 
 async function memorySave(id: string, doc: ProjectDocument): Promise<void> {

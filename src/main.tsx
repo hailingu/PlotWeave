@@ -1,6 +1,7 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
+import ErrorBoundary from './ErrorBoundary'
 import './index.css'
 
 /* Tauri 桌面端使用 macOS Overlay 标题栏（红绿灯悬浮在内容上），
@@ -14,6 +15,8 @@ if ('__TAURI_INTERNALS__' in window) {
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   </StrictMode>,
 )
