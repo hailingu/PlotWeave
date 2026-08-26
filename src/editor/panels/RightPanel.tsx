@@ -19,7 +19,7 @@ const TYPE_LABELS: Record<CanvasNode['type'], string> = {
 }
 
 /** 检查器字段行：按节点类型派生只读视图（编辑随后续 ⚙️ 设置面板任务落地）。 */
-function inspectorRows(node: CanvasNode): { label: string; value: string }[] {
+function inspectorRows(node: CanvasNode, shotCount: number): { label: string; value: string }[] {
   switch (node.type) {
     case 'scene':
       return [
@@ -29,7 +29,7 @@ function inspectorRows(node: CanvasNode): { label: string; value: string }[] {
         { label: '地点', value: node.data.location },
         { label: '时间', value: node.data.time },
         ...(node.data.weather ? [{ label: '天气', value: node.data.weather }] : []),
-        { label: '分镜', value: `🎞 ${node.data.shotCount} 镜` },
+        { label: '分镜', value: `🎞 ${shotCount} 镜` },
         { label: '梗概', value: node.data.synopsis },
         { label: '在场角色', value: node.data.characters.map((c) => c.label).join(' / ') || '—' },
       ]
@@ -74,6 +74,8 @@ interface RightPanelProps {
   onTabChange: (tab: RightTab) => void
   /** 画布当前选中节点；无选中时检查器显示空态。 */
   selectedNode?: CanvasNode
+  /** 选中索引卡的 attach 下挂分镜数（§7.2 派生，检查器展示用）。 */
+  attachedShotCount?: number
 }
 
 /**
@@ -89,8 +91,9 @@ export default function RightPanel({
   tab,
   onTabChange,
   selectedNode,
+  attachedShotCount = 0,
 }: RightPanelProps) {
-  const rows = selectedNode ? inspectorRows(selectedNode) : []
+  const rows = selectedNode ? inspectorRows(selectedNode, attachedShotCount) : []
 
   return (
     <aside

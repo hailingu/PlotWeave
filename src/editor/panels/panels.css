@@ -112,13 +112,20 @@
 
 /* ---- 大纲（§3.5 线性投影） ---- */
 .pw-outline-row {
+  display: block;
+  width: 100%;
+  border: none;
+  background: none;
+  text-align: left;
   font-size: 12px;
+  font-family: inherit;
   padding: 4px 6px;
   border-radius: 5px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--text-primary);
+  cursor: pointer;
 }
 
 .pw-outline-row:first-child {
@@ -127,6 +134,12 @@
 
 .pw-outline-row:hover {
   background: var(--fill-quaternary);
+}
+
+/* 画布选中节点对应行的高亮（大纲 ⇄ 画布联动） */
+.pw-outline-row.pw-outline-on {
+  background: var(--fill-quaternary);
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 /* 节拍行弱化（节奏层，非正文） */

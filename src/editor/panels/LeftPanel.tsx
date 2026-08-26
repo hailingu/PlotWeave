@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import SegmentedControl from './SegmentedControl'
 import PanelResizer from './PanelResizer'
 import {
@@ -17,8 +17,9 @@ const TABS = [
   { value: 'assets' as const, label: '资产' },
 ]
 
-/** 大纲行：类型决定缩进层级，线性投影画布的剧情流（§3.5 结构占位，点击联动随后续任务）。 */
+/** 大纲行：类型决定缩进层级 + 归属节点 id（点击定位联动，§3.5）。 */
 interface OutlineRow {
+  id: string
   level: number
   label: string
 }
@@ -30,15 +31,15 @@ function outlineRows(nodes: CanvasNode[]): OutlineRow[] {
     .map((n) => {
       switch (n.type) {
         case 'beat':
-          return { level: 0, label: `节拍 · ${n.data.name}` }
+          return { id: n.id, level: 0, label: `节拍 · ${n.data.name}` }
         case 'scene':
-          return { level: 1, label: `场 ${String(n.data.sceneNo).padStart(2, '0')} · ${n.data.name}` }
+          return { id: n.id, level: 1, label: `场 ${String(n.data.sceneNo).padStart(2, '0')} · ${n.data.name}` }
         case 'dialogue':
-          return { level: 2, label: `对白 · ${n.data.name}` }
+          return { id: n.id, level: 2, label: `对白 · ${n.data.name}` }
         case 'branch':
-          return { level: 2, label: `分支 · ${n.data.prompt}` }
+          return { id: n.id, level: 2, label: `分支 · ${n.data.prompt}` }
         case 'shot':
-          return { level: 3, label: `SHOT ${String(n.data.shotNo).padStart(2, '0')} · ${n.data.size}` }
+          return { id: n.id, level: 3, label: `SHOT ${String(n.data.shotNo).padStart(2, '0')} · ${n.data.size}` }
       }
     })
 }
@@ -50,17 +51,31 @@ interface LeftPanelProps {
   onResize: (width: number) => void
   /** 画布节点，用于派生大纲行。 */
   nodes: CanvasNode[]
+  /** 大纲 ⇄ 画布联动（§3.5）：点击大纲行选中并居中该节点。 */
+  onLocate?: (id: string) => void
+  /** 画布当前选中节点 id：大纲行反向高亮并滚动到可见。 */
+  selectedId?: string
 }
 
 /**
  * 编辑器左栏（docs/ui-design.md §3.4/§3.5/§8.1）：
  * 「大纲 / 设定集 / 资产」三分段。半透明材质 + 内容下滚动 + 边缘渐隐，
- * 无 1px 硬分隔线；内缘挂拖拽调宽手柄。首版为结构占位——
- * 大纲选中联动、设定集条目编辑、资产拖拽引用随后续任务落地。
+ * 无 1px 硬分隔线；内缘挂拖拽调宽手柄。
+ * 大纲与画布双向联动（点击定位 / 选中高亮）；大纲拖拽排序、
+ * 设定集条目编辑、资产拖拽引用随后续任务落地。
  */
-export default function LeftPanel({ open, width, onResize, nodes }: LeftPanelProps) {
+export default function LeftPanel({ open, width, onResize, nodes, onLocate, selectedId }: LeftPanelProps) {
   const [tab, setTab] = useState<LeftTab>('outline')
   const rows = outlineRows(nodes)
+  const outlineRef = useRef<HTMLDivElement>(null)
+
+  // 反向联动：画布选中变化时，大纲行滚动到可见（不抢横向滚动）。
+  useEffect(() => {
+    if (tab !== 'outline' || !selectedId) return
+    outlineRef.current
+      ?.querySelector('.pw-outline-on')
+      ?.scrollIntoView({ block: 'nearest' })
+  }, [selectedId, tab])
 
   return (
     <aside
@@ -74,17 +89,20 @@ export default function LeftPanel({ open, width, onResize, nodes }: LeftPanelPro
         </div>
         <div className="pw-panel-scroll">
           {tab === 'outline' && (
-            <div className="pw-outline" role="list" aria-label="故事大纲">
-              {rows.map((row, i) => (
-                <div
-                  key={i}
-                  className="pw-outline-row"
+            <div className="pw-outline" role="list" aria-label="故事大纲" ref={outlineRef}>
+              {rows.map((row) => (
+                <button
+                  key={row.id}
+                  type="button"
+                  className={`pw-outline-row${row.id === selectedId ? ' pw-outline-on' : ''}`}
                   role="listitem"
                   data-level={row.level}
                   style={{ paddingLeft: 10 + row.level * 16 }}
+                  onClick={() => onLocate?.(row.id)}
+                  title="点击定位到画布"
                 >
                   {row.label}
-                </div>
+                </button>
               ))}
             </div>
           )}

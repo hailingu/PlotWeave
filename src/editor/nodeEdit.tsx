@@ -18,6 +18,8 @@ export interface NodeEditApi {
   duplicateNode: (id: string) => void
   /** 🗑 删除：移除节点及其全部连线（撤销能力随命令栈任务补齐）。 */
   deleteNode: (id: string) => void
+  /** 索引卡的分镜计数：派生自该场 attach 下挂边数量（§7.2，不落镜像字段）。 */
+  shotCountOf: (id: string) => number
 }
 
 export const NodeEditContext = createContext<NodeEditApi | null>(null)

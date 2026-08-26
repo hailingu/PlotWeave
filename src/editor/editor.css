@@ -128,6 +128,27 @@
   background: var(--fill-quaternary);
 }
 
+.editor-menu-danger {
+  color: var(--danger);
+}
+
+.editor-menu-danger:hover {
+  background: var(--danger);
+  color: #fff;
+}
+
+/* 右键上下文菜单：fixed 定位在指针处（§4.3） */
+.editor-ctx {
+  position: fixed;
+  z-index: 200;
+  min-width: 136px;
+  padding: 4px;
+  background: var(--surface-card);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-md);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.24);
+}
+
 /* ✦AI 开关：全 chrome 唯一品牌渐变元素（§2.3 受限用途）。 */
 .editor-tbtn-ai {
   font-weight: 600;

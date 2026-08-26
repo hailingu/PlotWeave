@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type MouseEvent as ReactMouseEvent,
 } from 'react'
 import {
   ReactFlow,
@@ -74,7 +75,6 @@ const initialNodes: CanvasNode[] = [
     data: {
       name: '雨夜天台',
       sceneNo: 3,
-      shotCount: 2,
       interior: false,
       location: '天台',
       time: '🌙 夜',
@@ -140,7 +140,6 @@ const initialNodes: CanvasNode[] = [
     data: {
       name: '天台摊牌',
       sceneNo: 4,
-      shotCount: 0,
       interior: false,
       location: '天台',
       time: '🌙 夜',
@@ -168,7 +167,6 @@ const initialNodes: CanvasNode[] = [
     data: {
       name: '独自离开',
       sceneNo: 5,
-      shotCount: 0,
       interior: false,
       location: '天台',
       time: '🌙 夜',
@@ -190,7 +188,6 @@ const initialNodes: CanvasNode[] = [
     data: {
       name: '旧公寓',
       sceneNo: 6,
-      shotCount: 1,
       interior: true,
       location: '旧公寓',
       time: '🌙 夜',
@@ -226,7 +223,6 @@ const initialNodes: CanvasNode[] = [
     data: {
       name: '天台黎明',
       sceneNo: 7,
-      shotCount: 0,
       interior: false,
       location: '天台',
       time: '🌅 晨',
@@ -241,7 +237,6 @@ const initialNodes: CanvasNode[] = [
     data: {
       name: '车站告别',
       sceneNo: 8,
-      shotCount: 0,
       interior: false,
       location: '车站',
       time: '🌅 晨',
@@ -362,7 +357,7 @@ export default function EditorView(props: EditorViewProps) {
 function EditorWindow({ projectName, onBackHome }: EditorViewProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNode>(initialNodes)
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges)
-  const { screenToFlowPosition } = useReactFlow()
+  const { screenToFlowPosition, fitView } = useReactFlow()
   const canvasRef = useRef<HTMLDivElement>(null)
 
   // 状态镜像：命令的 undo/redo 需要读取「当前」状态计算逆操作；
@@ -389,9 +384,15 @@ function EditorWindow({ projectName, onBackHome }: EditorViewProps) {
   const [rightTab, setRightTab] = useState<RightTab>('inspector')
   const selectedNode = nodes.find((n) => n.selected)
 
-  // ⚙️ 设置面板与 ＋节点下拉（§4.3：失焦收起）
+  // ⚙️ 设置面板、＋节点下拉与右键上下文菜单（§4.3：失焦收起）
   const [openSettingsId, setOpenSettingsId] = useState<string | null>(null)
   const [plusOpen, setPlusOpen] = useState(false)
+  const [ctxMenu, setCtxMenu] = useState<{
+    x: number
+    y: number
+    nodeId?: string
+    edgeId?: string
+  } | null>(null)
 
   const toggleSettings = useCallback((id: string) => {
     setOpenSettingsId((cur) => (cur === id ? null : id))
@@ -497,6 +498,58 @@ function EditorWindow({ projectName, onBackHome }: EditorViewProps) {
   /** 🗑 单节点删除（⚙️ 面板入口），走同一命令路径。 */
   const deleteNode = useCallback((id: string) => deleteNodesByIds([id]), [deleteNodesByIds])
 
+  /** 索引卡的 🎞 镜数：派生自该场 attach 下挂边数量（§7.2，不落镜像字段）。 */
+  const shotCountOf = useCallback(
+    (id: string) =>
+      edgesRef.current.filter(
+        (e) => e.source === id && e.sourceHandle === SCENE_SHOT_HANDLE,
+      ).length,
+    [],
+  )
+
+  /** 大纲 ⇄ 画布联动（§3.5）：点击大纲行 = 选中该节点并居中。 */
+  const locateNode = useCallback(
+    (id: string) => {
+      setNodes((nds) => nds.map((n) => ({ ...n, selected: n.id === id })))
+      fitView({ nodes: [{ id }], duration: 400, maxZoom: 1 })
+    },
+    [fitView, setNodes],
+  )
+
+  /** 连线实时校验（§4.3）：自环 / 成环 / 重复边为非法；attach 下挂一对多合法。 */
+  const isValidConnection = useCallback(
+    (conn: Connection | Edge): boolean => {
+      if (conn.source === conn.target) return false
+      const existing = edgesRef.current
+      const duplicate = existing.some(
+        (e) =>
+          e.source === conn.source &&
+          e.target === conn.target &&
+          e.sourceHandle === conn.sourceHandle,
+      )
+      if (duplicate) return false
+      if (conn.sourceHandle === SCENE_SHOT_HANDLE) return true
+      // 成环检测：从 target 沿现有边能否回到 source
+      const adjacency = new Map<string, string[]>()
+      for (const e of existing) {
+        const list = adjacency.get(e.source) ?? []
+        list.push(e.target)
+        adjacency.set(e.source, list)
+      }
+      const seen = new Set<string>()
+      const stack = [conn.target]
+      while (stack.length > 0) {
+        const cur = stack.pop()!
+        if (cur === conn.source) return false
+        if (seen.has(cur)) continue
+        seen.add(cur)
+        for (const next of adjacency.get(cur) ?? []) stack.push(next)
+      }
+      return true
+    },
+    [],
+  )
+
   /** 新建节点的默认字段（占位文案引导填写；场号/镜号取当前最大值 +1）。 */
   const createNode = useCallback(
     (type: CreatableType) => {
@@ -513,7 +566,6 @@ function EditorWindow({ projectName, onBackHome }: EditorViewProps) {
           data: {
             name: '新场景',
             sceneNo: maxNo((n) => (n.type === 'scene' ? n.data.sceneNo : 0)),
-            shotCount: 0,
             interior: true,
             location: '地点',
             time: '🌙 夜',
@@ -585,17 +637,26 @@ function EditorWindow({ projectName, onBackHome }: EditorViewProps) {
   )
 
   const nodeEditApi = useMemo<NodeEditApi>(
-    () => ({ openSettingsId, toggleSettings, closeSettings, patchNode, duplicateNode, deleteNode }),
-    [openSettingsId, toggleSettings, closeSettings, patchNode, duplicateNode, deleteNode],
+    () => ({
+      openSettingsId,
+      toggleSettings,
+      closeSettings,
+      patchNode,
+      duplicateNode,
+      deleteNode,
+      shotCountOf,
+    }),
+    [openSettingsId, toggleSettings, closeSettings, patchNode, duplicateNode, deleteNode, shotCountOf],
   )
 
   // 失焦收起（§4.3）＋ 全局快捷键：⌘Z/⌘⇧Z 撤销重做、Delete 删除选中。
   useEffect(() => {
     const onPointerDown = (e: PointerEvent) => {
       const target = e.target as HTMLElement
-      if (!target.closest('[data-pw-settings],[data-pw-gear],.editor-plus')) {
+      if (!target.closest('[data-pw-settings],[data-pw-gear],.editor-plus,.editor-ctx')) {
         closeSettings()
         setPlusOpen(false)
+        setCtxMenu(null)
       }
     }
     const onKeyDown = (e: KeyboardEvent) => {
@@ -604,6 +665,7 @@ function EditorWindow({ projectName, onBackHome }: EditorViewProps) {
       if (e.key === 'Escape') {
         closeSettings()
         setPlusOpen(false)
+        setCtxMenu(null)
         return
       }
       if (typing) return
@@ -640,6 +702,25 @@ function EditorWindow({ projectName, onBackHome }: EditorViewProps) {
       document.removeEventListener('keydown', onKeyDown)
     }
   }, [closeSettings, deleteEdgesByIds, deleteNodesByIds, redoHistory, undoHistory])
+
+  // 右键上下文菜单（§4.3：全部操作同时可从右键菜单到达）。
+  // 节点菜单在右键时单选该节点；空白菜单复用 ＋节点 的五类创建。
+  const onNodeContextMenu = useCallback(
+    (e: ReactMouseEvent, node: CanvasNode) => {
+      e.preventDefault()
+      setNodes((nds) => nds.map((n) => ({ ...n, selected: n.id === node.id })))
+      setCtxMenu({ x: e.clientX, y: e.clientY, nodeId: node.id })
+    },
+    [setNodes],
+  )
+  const onEdgeContextMenu = useCallback((e: ReactMouseEvent, edge: Edge) => {
+    e.preventDefault()
+    setCtxMenu({ x: e.clientX, y: e.clientY, edgeId: edge.id })
+  }, [])
+  const onPaneContextMenu = useCallback((e: ReactMouseEvent | MouseEvent) => {
+    e.preventDefault()
+    setCtxMenu({ x: e.clientX, y: e.clientY })
+  }, [])
 
   // 节点拖拽整段记为一步撤销：起点位置在 dragStart 记录、落点入栈。
   const dragStartPos = useRef<Map<string, XYPosition> | null>(null)
@@ -806,6 +887,8 @@ function EditorWindow({ projectName, onBackHome }: EditorViewProps) {
           width={leftWidth}
           onResize={setLeftWidth}
           nodes={nodes}
+          onLocate={locateNode}
+          selectedId={selectedNode?.id}
         />
         <div className="canvas-root" ref={canvasRef}>
           <ReactFlow
@@ -819,6 +902,10 @@ function EditorWindow({ projectName, onBackHome }: EditorViewProps) {
             onConnect={onConnect}
             onNodeDragStart={onNodeDragStart}
             onNodeDragStop={onNodeDragStop}
+            onNodeContextMenu={onNodeContextMenu}
+            onEdgeContextMenu={onEdgeContextMenu}
+            onPaneContextMenu={onPaneContextMenu}
+            isValidConnection={isValidConnection}
             /* 删除统一走命令栈（含连线清理），禁用内置 Delete 行为 */
             deleteKeyCode={null}
             fitView
@@ -842,8 +929,86 @@ function EditorWindow({ projectName, onBackHome }: EditorViewProps) {
             setRightOpen(true)
           }}
           selectedNode={selectedNode}
+          attachedShotCount={selectedNode ? shotCountOf(selectedNode.id) : 0}
         />
       </div>
+      {/* 右键上下文菜单：节点 = 设置/复制/删除；空白 = 五类新增（§4.3） */}
+      {ctxMenu && (
+        <div
+          className="editor-ctx"
+          style={{
+            left: Math.min(ctxMenu.x, window.innerWidth - 150),
+            top: ctxMenu.y,
+          }}
+          role="menu"
+          aria-label="画布上下文菜单"
+        >
+          {ctxMenu.nodeId ? (
+            <>
+              <button
+                type="button"
+                className="editor-menu-item"
+                role="menuitem"
+                onClick={() => {
+                  toggleSettings(ctxMenu.nodeId!)
+                  setCtxMenu(null)
+                }}
+              >
+                ⚙️ 打开设置
+              </button>
+              <button
+                type="button"
+                className="editor-menu-item"
+                role="menuitem"
+                onClick={() => {
+                  duplicateNode(ctxMenu.nodeId!)
+                  setCtxMenu(null)
+                }}
+              >
+                ⧉ 复制
+              </button>
+              <button
+                type="button"
+                className="editor-menu-item editor-menu-danger"
+                role="menuitem"
+                onClick={() => {
+                  deleteNodesByIds([ctxMenu.nodeId!])
+                  setCtxMenu(null)
+                }}
+              >
+                🗑 删除
+              </button>
+            </>
+          ) : ctxMenu.edgeId ? (
+            <button
+              type="button"
+              className="editor-menu-item editor-menu-danger"
+              role="menuitem"
+              onClick={() => {
+                deleteEdgesByIds([ctxMenu.edgeId!])
+                setCtxMenu(null)
+              }}
+            >
+              ✂️ 删除连线
+            </button>
+          ) : (
+            CREATABLE_TYPES.map((type) => (
+              <button
+                key={type}
+                type="button"
+                className="editor-menu-item"
+                role="menuitem"
+                onClick={() => {
+                  createNode(type)
+                  setCtxMenu(null)
+                }}
+              >
+                ＋ {CREATE_LABELS[type]}
+              </button>
+            ))
+          )}
+        </div>
+      )}
     </div>
     </NodeEditContext.Provider>
   )

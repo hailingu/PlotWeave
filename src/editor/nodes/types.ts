@@ -20,8 +20,6 @@ export interface SceneNodeData extends Record<string, unknown> {
   name: string
   /** 剧本场景头编号，展示为 SCENE 03。 */
   sceneNo: number
-  /** 分镜计数，派生自下游邻接分镜卡数量（占位期手写）。 */
-  shotCount: number
   /** 内景/外景徽标。 */
   interior: boolean
   location: string

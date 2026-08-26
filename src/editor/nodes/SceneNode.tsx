@@ -15,7 +15,7 @@ export const SCENE_SHOT_HANDLE = 'shots'
  * 名称双击内联改名；⚙️ 打开设置面板（§4.3，编辑即命令）。
  */
 export default function SceneNode({ id, data, selected }: NodeProps<SceneFlowNode>) {
-  const { openSettingsId, toggleSettings, patchNode } = useNodeEdit()
+  const { openSettingsId, toggleSettings, patchNode, shotCountOf } = useNodeEdit()
   const settingsOpen = openSettingsId === id
 
   return (
@@ -31,7 +31,7 @@ export default function SceneNode({ id, data, selected }: NodeProps<SceneFlowNod
             SCENE {String(data.sceneNo).padStart(2, '0')}
           </span>
           <span className="pw-sp" />
-          <span className="pw-index-shots">🎞 {data.shotCount} 镜</span>
+          <span className="pw-index-shots">🎞 {shotCountOf(id)} 镜</span>
           <button
             type="button"
             className={`pw-gear pw-gear-light nodrag${settingsOpen ? ' pw-gear-open' : ''}`}
