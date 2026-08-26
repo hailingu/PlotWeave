@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type DragEvent as ReactDragEvent } from 'react'
 import SegmentedControl from './SegmentedControl'
 import PanelResizer from './PanelResizer'
 import {
@@ -6,6 +6,7 @@ import {
   SAMPLE_CHARACTERS,
   SAMPLE_LOCATIONS,
 } from '../sampleData'
+import { PW_ENTITY_MIME, type EntityDragPayload } from '../dragDrop'
 import type { CanvasNode } from '../nodes/types'
 
 /** 左栏分段（docs/ui-design.md §3.4）：大纲 = 故事脊线线性投影，设定集/资产 = 引用源。 */
@@ -110,8 +111,20 @@ export default function LeftPanel({ open, width, onResize, nodes, onLocate, sele
             <div className="pw-settings">
               <div className="pw-settings-group">角色</div>
               {SAMPLE_CHARACTERS.map((c) => (
-                <div key={c.name} className="pw-settings-item">
-                  <span className="pw-av" style={{ background: c.avatar.gradient }}>
+                <div
+                  key={c.name}
+                  className="pw-settings-item pw-draggable"
+                  draggable
+                  title="拖到画布节点建立引用，或拖到空白处新建场景"
+                  onDragStart={(e: ReactDragEvent) => {
+                    e.dataTransfer.setData(
+                      PW_ENTITY_MIME,
+                      JSON.stringify({ kind: 'character', name: c.name, avatar: c.avatar } satisfies EntityDragPayload),
+                    )
+                    e.dataTransfer.effectAllowed = 'copy'
+                  }}
+                >
+                  <span className="pw-av pw-av-sm" style={{ background: c.avatar.gradient }}>
                     {c.avatar.label}
                   </span>
                   <span className="pw-settings-item-body">
@@ -122,7 +135,19 @@ export default function LeftPanel({ open, width, onResize, nodes, onLocate, sele
               ))}
               <div className="pw-settings-group">地点</div>
               {SAMPLE_LOCATIONS.map((l) => (
-                <div key={l.name} className="pw-settings-item">
+                <div
+                  key={l.name}
+                  className="pw-settings-item pw-draggable"
+                  draggable
+                  title="拖到索引卡设置地点，或拖到空白处新建场景"
+                  onDragStart={(e: ReactDragEvent) => {
+                    e.dataTransfer.setData(
+                      PW_ENTITY_MIME,
+                      JSON.stringify({ kind: 'location', name: l.name, note: l.note } satisfies EntityDragPayload),
+                    )
+                    e.dataTransfer.effectAllowed = 'copy'
+                  }}
+                >
                   <span className="pw-settings-item-body">
                     <span className="pw-settings-item-name">📍 {l.name}</span>
                     <span className="pw-settings-item-note">{l.note}</span>

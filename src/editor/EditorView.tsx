@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type DragEvent as ReactDragEvent,
   type MouseEvent as ReactMouseEvent,
 } from 'react'
 import {
@@ -33,6 +34,9 @@ import LeftPanel from './panels/LeftPanel'
 import RightPanel, { type RightTab } from './panels/RightPanel'
 import { NodeEditContext, type NodeEditApi } from './nodeEdit'
 import { useCommandHistory } from './history'
+import { readEntityPayload, PW_ENTITY_MIME } from './dragDrop'
+import ExportDialog from './ExportDialog'
+import { buildScriptMarkdown } from './exportScript'
 import { LIN_WAN, CHEN_MO } from './sampleData'
 import type { CanvasNode } from './nodes/types'
 
@@ -384,9 +388,10 @@ function EditorWindow({ projectName, onBackHome }: EditorViewProps) {
   const [rightTab, setRightTab] = useState<RightTab>('inspector')
   const selectedNode = nodes.find((n) => n.selected)
 
-  // ⚙️ 设置面板、＋节点下拉与右键上下文菜单（§4.3：失焦收起）
+  // ⚙️ 设置面板、＋节点下拉、右键菜单与导出对话框（§4.3：失焦收起）
   const [openSettingsId, setOpenSettingsId] = useState<string | null>(null)
   const [plusOpen, setPlusOpen] = useState(false)
+  const [exportOpen, setExportOpen] = useState(false)
   const [ctxMenu, setCtxMenu] = useState<{
     x: number
     y: number
@@ -550,9 +555,10 @@ function EditorWindow({ projectName, onBackHome }: EditorViewProps) {
     [],
   )
 
-  /** 新建节点的默认字段（占位文案引导填写；场号/镜号取当前最大值 +1）。 */
+  /** 新建节点的默认字段（占位文案引导填写；场号/镜号取当前最大值 +1）。
+   * opts.at 指定落点（拖拽生成预填节点），opts.data 合并覆盖默认字段。 */
   const createNode = useCallback(
-    (type: CreatableType) => {
+    (type: CreatableType, opts?: { at?: XYPosition; data?: Record<string, unknown> }) => {
       const nds = nodesRef.current
       const maxNo = (pick: (n: CanvasNode) => number) =>
         Math.max(0, ...nds.map(pick)) + 1
@@ -571,6 +577,7 @@ function EditorWindow({ projectName, onBackHome }: EditorViewProps) {
             time: '🌙 夜',
             synopsis: '这一场发生了什么…',
             characters: [],
+            ...opts?.data,
           },
         }
       } else if (type === 'beat') {
@@ -579,7 +586,7 @@ function EditorWindow({ projectName, onBackHome }: EditorViewProps) {
           type: 'beat',
           position: { x: 0, y: 0 },
           selected: true,
-          data: { name: '新节拍', tone: '待定' },
+          data: { name: '新节拍', tone: '待定', ...opts?.data },
         }
       } else if (type === 'dialogue') {
         node = {
@@ -590,6 +597,7 @@ function EditorWindow({ projectName, onBackHome }: EditorViewProps) {
           data: {
             name: '新对白',
             lines: [{ kind: 'line', speaker: LIN_WAN, side: 'left', text: '新台词…' }],
+            ...opts?.data,
           },
         }
       } else if (type === 'branch') {
@@ -598,7 +606,7 @@ function EditorWindow({ projectName, onBackHome }: EditorViewProps) {
           type: 'branch',
           position: { x: 0, y: 0 },
           selected: true,
-          data: { prompt: '新的分岔是…？', options: ['选项 A', '选项 B'] },
+          data: { prompt: '新的分岔是…？', options: ['选项 A', '选项 B'], ...opts?.data },
         }
       } else {
         node = {
@@ -612,18 +620,23 @@ function EditorWindow({ projectName, onBackHome }: EditorViewProps) {
             picture: '画面描述…',
             prompt: '',
             refs: [],
+            ...opts?.data,
           },
         }
       }
-      // 落在当前视口中心，连续创建时阶梯偏移避免叠死
-      const rect = canvasRef.current?.getBoundingClientRect()
-      if (rect) {
-        const center = screenToFlowPosition({
-          x: rect.left + rect.width / 2,
-          y: rect.top + rect.height / 2,
-        })
-        const cascade = (nds.length % 5) * 28
-        node.position = { x: center.x - 170 + cascade, y: center.y - 60 + cascade }
+      if (opts?.at) {
+        node.position = opts.at
+      } else {
+        // 落在当前视口中心，连续创建时阶梯偏移避免叠死
+        const rect = canvasRef.current?.getBoundingClientRect()
+        if (rect) {
+          const center = screenToFlowPosition({
+            x: rect.left + rect.width / 2,
+            y: rect.top + rect.height / 2,
+          })
+          const cascade = (nds.length % 5) * 28
+          node.position = { x: center.x - 170 + cascade, y: center.y - 60 + cascade }
+        }
       }
       setNodes((all) => [...all.map((n) => ({ ...n, selected: false })), node])
       pushHistory({
@@ -666,6 +679,7 @@ function EditorWindow({ projectName, onBackHome }: EditorViewProps) {
         closeSettings()
         setPlusOpen(false)
         setCtxMenu(null)
+        setExportOpen(false)
         return
       }
       if (typing) return
@@ -721,6 +735,53 @@ function EditorWindow({ projectName, onBackHome }: EditorViewProps) {
     e.preventDefault()
     setCtxMenu({ x: e.clientX, y: e.clientY })
   }, [])
+
+  // 设定集 → 画布拖放（§5 建立引用 = 拖拽）：
+  // 拖上节点建引用（角色→索引卡出场角色/对白台词/分镜垫图；地点→索引卡地点/分镜底图），
+  // 拖上空白按实体预填生成场景节点。全部走 patch/create 命令，可撤销。
+  const onCanvasDragOver = useCallback((e: ReactDragEvent) => {
+    if (e.dataTransfer.types.includes(PW_ENTITY_MIME)) {
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'copy'
+    }
+  }, [])
+  const onCanvasDrop = useCallback(
+    (e: ReactDragEvent) => {
+      const entity = readEntityPayload(e.dataTransfer)
+      if (!entity) return
+      e.preventDefault()
+      const nodeId = (e.target as HTMLElement).closest?.('.react-flow__node')?.getAttribute('data-id')
+      const node = nodeId ? nodesRef.current.find((n) => n.id === nodeId) : undefined
+
+      if (node) {
+        if (entity.kind === 'character') {
+          if (node.type === 'scene' && !node.data.characters.some((c) => c.label === entity.avatar.label)) {
+            patchNode(node.id, { characters: [...node.data.characters, entity.avatar] })
+          } else if (node.type === 'dialogue') {
+            patchNode(node.id, {
+              lines: [...node.data.lines, { kind: 'line', speaker: entity.avatar, side: 'left', text: '新台词…' }],
+            })
+          } else if (node.type === 'shot' && !node.data.refs.some((r) => r.label === `${entity.name}垫图`)) {
+            patchNode(node.id, { refs: [...node.data.refs, { kind: 'character', label: `${entity.name}垫图` }] })
+          }
+        } else if (node.type === 'scene') {
+          patchNode(node.id, { location: entity.name })
+        } else if (node.type === 'shot' && !node.data.refs.some((r) => r.label === `${entity.name}底图`)) {
+          patchNode(node.id, { refs: [...node.data.refs, { kind: 'location', label: `${entity.name}底图` }] })
+        }
+        return
+      }
+
+      // 空白处：按实体预填生成场景（§5 拖上空画布直接生成预填节点）
+      const at = screenToFlowPosition({ x: e.clientX, y: e.clientY })
+      if (entity.kind === 'character') {
+        createNode('scene', { at, data: { characters: [entity.avatar] } })
+      } else {
+        createNode('scene', { at, data: { location: entity.name } })
+      }
+    },
+    [createNode, patchNode, screenToFlowPosition],
+  )
 
   // 节点拖拽整段记为一步撤销：起点位置在 dragStart 记录、落点入栈。
   const dragStartPos = useRef<Map<string, XYPosition> | null>(null)
@@ -856,6 +917,15 @@ function EditorWindow({ projectName, onBackHome }: EditorViewProps) {
         </div>
         <button
           type="button"
+          className="editor-tbtn"
+          onClick={() => setExportOpen(true)}
+          aria-label="导出剧本"
+          title="导出剧本（场景 + 对白，分镜附录）"
+        >
+          ⤓ 导出
+        </button>
+        <button
+          type="button"
           className={`editor-tbtn${rightOpen && rightTab === 'inspector' ? ' on' : ''}`}
           onClick={() => {
             setRightTab('inspector')
@@ -890,7 +960,7 @@ function EditorWindow({ projectName, onBackHome }: EditorViewProps) {
           onLocate={locateNode}
           selectedId={selectedNode?.id}
         />
-        <div className="canvas-root" ref={canvasRef}>
+        <div className="canvas-root" ref={canvasRef} onDragOver={onCanvasDragOver} onDrop={onCanvasDrop}>
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -1008,6 +1078,14 @@ function EditorWindow({ projectName, onBackHome }: EditorViewProps) {
             ))
           )}
         </div>
+      )}
+      {/* 剧本导出对话框（§3.3/§3.5）：打开时按当前画布生成 */}
+      {exportOpen && (
+        <ExportDialog
+          projectName={projectName}
+          text={buildScriptMarkdown(projectName, nodes, edges)}
+          onClose={() => setExportOpen(false)}
+        />
       )}
     </div>
     </NodeEditContext.Provider>

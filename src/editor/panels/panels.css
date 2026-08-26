@@ -167,6 +167,11 @@
   background: var(--fill-quaternary);
 }
 
+/* 可拖拽建引用的条目（§5：建立引用 = 拖拽） */
+.pw-settings-item.pw-draggable {
+  cursor: grab;
+}
+
 .pw-settings-item-body {
   display: flex;
   flex-direction: column;
