@@ -421,6 +421,7 @@ export default function EditorView({ projectName, onBackHome }: EditorViewProps)
             edges={edges}
             nodeTypes={nodeTypes}
             edgeTypes={edgeTypes}
+            proOptions={{ hideAttribution: true }}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
