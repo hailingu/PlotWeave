@@ -3,6 +3,7 @@ import HomePage from './home/HomePage'
 import { projectStore, type ProjectDocument } from './projectStore'
 import { EMPTY_SETTINGS } from './editor/settings'
 import EditorView from './editor/EditorView'
+import SettingsView from './settings/SettingsView'
 import type { ProjectSummary } from './home/projects'
 
 /** 编辑器态：已加载的项目（id + 名称 + 画布文档）。 */
@@ -12,15 +13,16 @@ interface OpenProject {
 }
 
 /**
- * 应用根组件：文档式双界面（docs/ui-design.md §3.1）——
- * 项目首页与编辑器是同一窗口的两种状态，openProject 非空即编辑器。
- * 项目数据经 projectStore 持久化（Tauri 落盘 / 浏览器内存回退）；
- * 返回首页时刷新列表，统计与更新时间随画布保存即时反映。
+ * 应用根组件：文档式双界面（docs/ui-design.md §3.1）+ 设置界面——
+ * 项目首页 / 编辑器是同一窗口的两种状态，设置页经 ⌘, 叠加打开
+ * （独立窗口形态随桌面端演进升级），关闭后回到原界面。
+ * 项目数据经 projectStore 持久化（Tauri 落盘 / 浏览器内存回退）。
  */
 export default function App() {
   const [projects, setProjects] = useState<ProjectSummary[]>([])
   const [openProject, setOpenProject] = useState<OpenProject | null>(null)
   const [loading, setLoading] = useState(true)
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   const refreshProjects = useCallback(async () => {
     try {
@@ -36,6 +38,18 @@ export default function App() {
   useEffect(() => {
     void refreshProjects()
   }, [refreshProjects])
+
+  // ⌘, 打开设置（macOS 惯例，§8.2）；输入控件聚焦时不触发
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === ',' && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault()
+        setSettingsOpen(true)
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [])
 
   const handleCreateProject = useCallback(async () => {
     const meta = await projectStore.create('未命名短剧')
@@ -113,6 +127,10 @@ export default function App() {
     [refreshProjects],
   )
 
+  if (settingsOpen) {
+    return <SettingsView onClose={() => setSettingsOpen(false)} />
+  }
+
   if (openProject) {
     return (
       <EditorView
@@ -126,6 +144,7 @@ export default function App() {
         }}
         onBackHome={handleBackHome}
         onRenameProject={handleEditorRename}
+        onOpenSettings={() => setSettingsOpen(true)}
         onSave={handleSave(openProject.id)}
       />
     )

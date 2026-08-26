@@ -72,6 +72,8 @@ interface EditorViewProps {
   onBackHome: () => void
   /** 项目名内联重命名（§3.3 中区：更新 project.name + 首页索引）。 */
   onRenameProject: (name: string) => void
+  /** 打开设置页（§8.2 BYOK 配置入口，⌘,）。 */
+  onOpenSettings?: () => void
   /** 持久化写入（防抖节流由本组件负责；浏览器预览下为内存回退实现）。 */
   onSave: (doc: { name: string; nodes: CanvasNode[]; edges: Edge[]; settings: ProjectSettings }) => void
 }
@@ -121,7 +123,7 @@ export default function EditorView(props: EditorViewProps) {
  * 复制/删除，以及三栏面板开关。全部写操作经命令栈可撤销/重做
  * （§3.3 撤销重做、§4.3 删除可撤销）；画布变化防抖落盘（持久化）。
  */
-function EditorWindow({ project, onBackHome, onRenameProject, onSave }: EditorViewProps) {
+function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, onSave }: EditorViewProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNode>(project.nodes)
   const [edges, setEdges, onEdgesChange] = useEdgesState(project.edges)
   const [settings, setSettings] = useState<ProjectSettings>(project.settings)
@@ -362,6 +364,29 @@ function EditorWindow({ project, onBackHome, onRenameProject, onSave }: EditorVi
       ).length,
     [],
   )
+
+  /** 画布上下文快照（§6「了解当前画布」）：id/type/名称 + 连接关系压缩文本。 */
+  const canvasDigest = useMemo(() => {
+    const label = (n: CanvasNode): string => {
+      switch (n.type) {
+        case 'scene': return `场${n.data.sceneNo}·${n.data.name}`
+        case 'dialogue': return `对白·${n.data.name}`
+        case 'beat': return `节拍·${n.data.name}`
+        case 'branch': return `分支·${n.data.prompt}`
+        case 'shot': return `SHOT${n.data.shotNo}·${n.data.size}`
+      }
+    }
+    const nodeLines = nodes.map((n) => `- ${label(n)}`).join('\n')
+    const edgeLines = edges
+      .map((e) => {
+        const src = nodes.find((n) => n.id === e.source)
+        const dst = nodes.find((n) => n.id === e.target)
+        return src && dst ? `${label(src)} → ${label(dst)}` : null
+      })
+      .filter((x): x is string => x !== null)
+      .join('\n')
+    return `节点：\n${nodeLines}\n\n连接：\n${edgeLines}`
+  }, [nodes, edges])
 
   /** 大纲 ⇄ 画布联动（§3.5）：点击大纲行 = 选中该节点并居中。 */
   const locateNode = useCallback(
@@ -862,6 +887,8 @@ function EditorWindow({ project, onBackHome, onRenameProject, onSave }: EditorVi
           selectedNode={selectedNode}
           attachedShotCount={selectedNode ? shotCountOf(selectedNode.id) : 0}
           settings={settings}
+          onOpenSettings={onOpenSettings}
+          canvasDigest={canvasDigest}
         />
       </div>
       {/* 右键上下文菜单：节点 = 设置/复制/删除；空白 = 五类新增（§4.3） */}

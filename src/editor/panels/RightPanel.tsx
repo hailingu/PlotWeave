@@ -1,5 +1,9 @@
+import { useEffect, useRef, useState } from 'react'
 import SegmentedControl from './SegmentedControl'
 import PanelResizer from './PanelResizer'
+import { sendChat, type ChatMessage } from '../ai/chat'
+import { settingsStore } from '../../settings/settingsStore'
+import { resolveChatModel, type AppSettings } from '../../settings/types'
 import {
   resolveCharacterName,
   resolveLocationName,
@@ -99,6 +103,10 @@ interface RightPanelProps {
   attachedShotCount?: number
   /** 项目设定集：检查器解析实体引用（§5）。 */
   settings: ProjectSettings
+  /** 打开设置页（§8.2 BYOK 配置入口）。 */
+  onOpenSettings?: () => void
+  /** 画布上下文快照（§6「了解当前画布」）：附到 system prompt。 */
+  canvasDigest?: string
 }
 
 /**
@@ -116,6 +124,8 @@ export default function RightPanel({
   selectedNode,
   attachedShotCount = 0,
   settings,
+  onOpenSettings,
+  canvasDigest,
 }: RightPanelProps) {
   const rows = selectedNode ? inspectorRows(selectedNode, attachedShotCount, settings) : []
 
@@ -148,22 +158,144 @@ export default function RightPanel({
               <div className="pw-empty">在画布中选择一个节点，查看它的字段。</div>
             ))}
           {tab === 'ai' && (
-            <div className="pw-ai">
-              <div className="pw-ai-guide">
-                <div className="pw-ai-guide-title">尚未接入 AI 服务</div>
-                <p>在设置页配置 BYOK provider 后，可在这里与 AI 讨论剧情；AI 的改动会先以预览卡呈现，确认后才执行。</p>
-                <button type="button" className="pw-ai-guide-btn" disabled>
-                  前往设置页
-                </button>
-              </div>
-              <div className="pw-ai-input">
-                <input type="text" disabled placeholder="配置 provider 后可输入…" aria-label="AI 对话输入" />
-                <span className="pw-ai-ctx">◈ 了解当前画布</span>
-              </div>
-            </div>
+            <AiThread onOpenSettings={onOpenSettings} canvasDigest={canvasDigest} />
           )}
         </div>
       </div>
     </aside>
+  )
+}
+
+/**
+ * ✦AI 会话（§6）：用户 = 品牌渐变右气泡，Agent = 浅色左气泡带 ✦。
+ * 输入区常驻「了解当前画布」标识——开启时把画布快照压缩进 system prompt；
+ * 未配置 provider/模型时显示引导卡并直达设置页（§8.2）。
+ * AI 不直接改动画布：改动预览卡随数据模型 §12 流程评审落地。
+ */
+function AiThread({
+  onOpenSettings,
+  canvasDigest,
+}: {
+  onOpenSettings?: () => void
+  canvasDigest?: string
+}) {
+  const [appSettings, setAppSettings] = useState<AppSettings | null>(null)
+  const [keyOk, setKeyOk] = useState<boolean | null>(null)
+  const [thread, setThread] = useState<ChatMessage[]>([])
+  const [draft, setDraft] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [knowsCanvas, setKnowsCanvas] = useState(true)
+  const threadRef = useRef<HTMLDivElement>(null)
+
+  // 每次切到 AI 分段重载配置（从设置页回来也能刷新）
+  useEffect(() => {
+    void settingsStore.load().then(async (s) => {
+      setAppSettings(s)
+      const chat = resolveChatModel(s)
+      setKeyOk(chat ? await settingsStore.hasProviderKey(chat.provider.id).catch(() => false) : null)
+    })
+  }, [])
+
+  useEffect(() => {
+    threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight })
+  }, [thread, busy, error])
+
+  const chatModel = appSettings ? resolveChatModel(appSettings) : null
+  const ready = Boolean(chatModel && keyOk)
+
+  const send = async () => {
+    const text = draft.trim()
+    if (!text || busy || !chatModel) return
+    const userMsg: ChatMessage = { role: 'user', content: text }
+    const history = [...thread, userMsg]
+    setThread(history)
+    setDraft('')
+    setBusy(true)
+    setError(null)
+    try {
+      const system: ChatMessage = {
+        role: 'system',
+        content:
+          '你是短剧创作助手，帮助编剧讨论剧情结构、人物动机与台词。当前不直接修改画布数据。',
+      }
+      const messages = [
+        system,
+        ...(knowsCanvas && canvasDigest
+          ? [{ role: 'system' as const, content: `当前画布快照：\n${canvasDigest}` }]
+          : []),
+        ...history,
+      ]
+      const reply = await sendChat(chatModel.provider, chatModel.model, messages)
+      setThread((t) => [...t, { role: 'assistant', content: reply }])
+    } catch (err) {
+      setError(String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="pw-ai">
+      {!ready && (
+        <div className="pw-ai-guide">
+          <div className="pw-ai-guide-title">尚未接入 AI 服务</div>
+          <p>
+            {chatModel === null
+              ? '在设置页选择默认对话模型（需先启用 provider 并添加模型）。'
+              : '该 provider 尚未配置 API key（存系统钥匙串）。'}
+          </p>
+          <button
+            type="button"
+            className="pw-ai-guide-btn"
+            disabled={!onOpenSettings}
+            onClick={onOpenSettings}
+          >
+            前往设置页（⌘,）
+          </button>
+        </div>
+      )}
+      <div className="pw-ai-thread" ref={threadRef}>
+        {thread.length === 0 && ready && (
+          <div className="pw-empty">和 AI 聊聊这一幕怎么写？</div>
+        )}
+        {thread.map((msg, i) =>
+          msg.role === 'user' ? (
+            <div key={i} className="pw-ai-msg pw-ai-msg-user">
+              {msg.content}
+            </div>
+          ) : (
+            <div key={i} className="pw-ai-msg pw-ai-msg-agent">
+              <span className="pw-ai-agent-flag">✦ ASSISTANT</span>
+              {msg.content}
+            </div>
+          ),
+        )}
+        {busy && <div className="pw-ai-thinking">✦ 正在思考…</div>}
+        {error && <div className="pw-ai-msg pw-ai-msg-error">{error}</div>}
+      </div>
+      <div className="pw-ai-input">
+        <input
+          type="text"
+          value={draft}
+          placeholder={ready ? '输入消息，Enter 发送…' : '配置后可输入…'}
+          aria-label="AI 对话输入"
+          disabled={!ready || busy}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void send()
+          }}
+        />
+        <button
+          type="button"
+          className={`pw-ai-ctx-toggle${knowsCanvas ? ' on' : ''}`}
+          aria-pressed={knowsCanvas}
+          title="开启后向 AI 提供画布结构快照"
+          onClick={() => setKnowsCanvas((v) => !v)}
+        >
+          ◈ 了解当前画布
+        </button>
+      </div>
+    </div>
   )
 }
