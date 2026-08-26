@@ -7,6 +7,7 @@
   --surface-canvas: #fbfbfc;
   --surface-card: #ffffff;
   --material-titlebar: rgba(248, 248, 250, 0.95);
+  --material-sidebar: rgba(240, 240, 245, 0.78);
 
   /* 文本 */
   --text-primary: #1d1d1f;
@@ -45,6 +46,7 @@
     --surface-canvas: #131316;
     --surface-card: rgba(38, 38, 44, 0.94);
     --material-titlebar: rgba(28, 28, 32, 0.92);
+    --material-sidebar: rgba(26, 26, 31, 0.72);
 
     --text-primary: #f2f2f7;
     --text-secondary: #8e8e96;
@@ -69,6 +71,7 @@
 @media (prefers-contrast: more) {
   :root {
     --material-titlebar: var(--surface-window);
+    --material-sidebar: var(--surface-window);
     --fill-quaternary: rgba(0, 0, 0, 0.12);
     --border-hairline: rgba(0, 0, 0, 0.35);
   }

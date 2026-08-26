@@ -1,5 +1,5 @@
 /* 编辑器窗口 chrome：统一工具栏（docs/ui-design.md §3.3）。
- * 组件层只引用语义令牌；右区操作随功能落地后补充。 */
+ * 组件层只引用语义令牌；右区其余操作（＋节点/导出/撤销重做）随功能落地后补充。 */
 
 .editor-root {
   width: 100%;
@@ -16,6 +16,7 @@
   height: 28px;
   display: flex;
   align-items: center;
+  gap: 2px;
   padding: 0 16px;
   background: var(--material-titlebar);
   backdrop-filter: blur(20px);
@@ -51,4 +52,46 @@
   transform: translateX(-50%);
   font-size: 13px;
   font-weight: 600;
+}
+
+/* 工具栏开关按钮（§3.3：边栏开关 / 检查器开关 / ✦AI 开关）。 */
+.editor-tbtn {
+  border: none;
+  background: none;
+  border-radius: var(--radius-sm);
+  padding: 3px 7px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.editor-tbtn:hover {
+  background: var(--fill-quaternary);
+  color: var(--text-primary);
+}
+
+.editor-tbtn.on {
+  background: var(--fill-quaternary);
+  color: var(--text-primary);
+}
+
+/* 右区首个按钮：推到工具栏右端。 */
+.editor-tbtn.io {
+  margin-left: auto;
+}
+
+/* ✦AI 开关：全 chrome 唯一品牌渐变元素（§2.3 受限用途）。 */
+.editor-tbtn-ai {
+  font-weight: 600;
+  background: var(--brand-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.editor-tbtn-ai.on {
+  background: var(--brand-gradient);
+  -webkit-background-clip: border-box;
+  background-clip: border-box;
+  color: #fff;
 }

@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { useCallback, useState } from 'react'
 import {
   ReactFlow,
   Background,
@@ -19,7 +19,10 @@ import BeatNode from './nodes/BeatNode'
 import BranchNode, { BRANCH_OPTION_HANDLE_PREFIX } from './nodes/BranchNode'
 import ShotNode from './nodes/ShotNode'
 import BranchEdge from './edges/BranchEdge'
-import type { CanvasNode, NodeAvatar } from './nodes/types'
+import LeftPanel from './panels/LeftPanel'
+import RightPanel, { type RightTab } from './panels/RightPanel'
+import { LIN_WAN, CHEN_MO } from './sampleData'
+import type { CanvasNode } from './nodes/types'
 
 /** 画布节点类型注册：索引卡 / 对白 / 节奏卡 / 分支 / 分镜卡（docs/ui-design.md §4.2）。 */
 const nodeTypes: NodeTypes = {
@@ -33,16 +36,6 @@ const nodeTypes: NodeTypes = {
 /** 连线类型注册：branch = 品牌渐变 + 选项胶囊；sequence 用默认贝塞尔加样式类。 */
 const edgeTypes: EdgeTypes = {
   branch: BranchEdge,
-}
-
-/** 示例角色头像（占位期直接存渐变串，后续由设定集头像派生）。 */
-const LIN_WAN: NodeAvatar = {
-  label: '晚',
-  gradient: 'linear-gradient(135deg,#e0176e,#7f6cf0)',
-}
-const CHEN_MO: NodeAvatar = {
-  label: '默',
-  gradient: 'linear-gradient(135deg,#00b3d8,#5e5ce6)',
 }
 
 /**
@@ -333,6 +326,14 @@ export default function EditorView({ projectName, onBackHome }: EditorViewProps)
   const [nodes, , onNodesChange] = useNodesState<CanvasNode>(initialNodes)
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges)
 
+  // 三栏面板状态（§3.4：220–320pt 可调，显隐会话内记忆——组件态即会话态）
+  const [leftOpen, setLeftOpen] = useState(true)
+  const [leftWidth, setLeftWidth] = useState(248)
+  const [rightOpen, setRightOpen] = useState(true)
+  const [rightWidth, setRightWidth] = useState(264)
+  const [rightTab, setRightTab] = useState<RightTab>('inspector')
+  const selectedNode = nodes.find((n) => n.selected)
+
   // 从分支选项端口拉出的连线建成 branch 边；从索引卡底部端口拉出的建成
   // attach 派生边（垂直下挂分镜卡）；其余为 sequence（§4.4）。
   const onConnect = useCallback(
@@ -357,8 +358,18 @@ export default function EditorView({ projectName, onBackHome }: EditorViewProps)
 
   return (
     <div className="editor-root">
-      {/* Overlay 标题栏下整行作为窗口拖拽区；返回按钮可点击。 */}
+      {/* Overlay 标题栏下整行作为窗口拖拽区；按钮可点击（§3.3）。 */}
       <header className="editor-titlebar" data-tauri-drag-region>
+        <button
+          type="button"
+          className={`editor-tbtn${leftOpen ? ' on' : ''}`}
+          onClick={() => setLeftOpen((v) => !v)}
+          aria-pressed={leftOpen}
+          aria-label="切换边栏"
+          title="显示或隐藏边栏"
+        >
+          ▤
+        </button>
         <button
           type="button"
           className="editor-back"
@@ -370,26 +381,71 @@ export default function EditorView({ projectName, onBackHome }: EditorViewProps)
         <span className="editor-title" data-tauri-drag-region>
           {projectName}
         </span>
-      </header>
-      <div className="canvas-root">
-        <ReactFlow
-          nodes={nodes}
-          edges={edges}
-          nodeTypes={nodeTypes}
-          edgeTypes={edgeTypes}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
-          onConnect={onConnect}
-          fitView
+        <button
+          type="button"
+          className={`editor-tbtn io${rightOpen && rightTab === 'inspector' ? ' on' : ''}`}
+          onClick={() => {
+            setRightTab('inspector')
+            setRightOpen(rightTab !== 'inspector' || !rightOpen)
+          }}
+          aria-pressed={rightOpen && rightTab === 'inspector'}
+          aria-label="切换检查器"
+          title="显示或隐藏检查器"
         >
-          <Background
-            variant={BackgroundVariant.Dots}
-            gap={22}
-            size={1}
-            color="var(--canvas-dot)"
-          />
-          <Controls />
-        </ReactFlow>
+          ◫
+        </button>
+        <button
+          type="button"
+          className={`editor-tbtn editor-tbtn-ai${rightTab === 'ai' && rightOpen ? ' on' : ''}`}
+          onClick={() => {
+            setRightTab('ai')
+            setRightOpen(rightTab !== 'ai' || !rightOpen)
+          }}
+          aria-pressed={rightTab === 'ai' && rightOpen}
+          aria-label="切换 AI 面板"
+          title="显示或隐藏 ✦AI"
+        >
+          ✦ AI
+        </button>
+      </header>
+      <div className="editor-body">
+        <LeftPanel
+          open={leftOpen}
+          width={leftWidth}
+          onResize={setLeftWidth}
+          nodes={nodes}
+        />
+        <div className="canvas-root">
+          <ReactFlow
+            nodes={nodes}
+            edges={edges}
+            nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            onConnect={onConnect}
+            fitView
+          >
+            <Background
+              variant={BackgroundVariant.Dots}
+              gap={22}
+              size={1}
+              color="var(--canvas-dot)"
+            />
+            <Controls />
+          </ReactFlow>
+        </div>
+        <RightPanel
+          open={rightOpen}
+          width={rightWidth}
+          onResize={setRightWidth}
+          tab={rightTab}
+          onTabChange={(t) => {
+            setRightTab(t)
+            setRightOpen(true)
+          }}
+          selectedNode={selectedNode}
+        />
       </div>
     </div>
   )
