@@ -159,6 +159,21 @@ export const projectStore = {
   save: (id: string, doc: ProjectDocument): Promise<void> =>
     isTauri ? tauriSave(id, doc) : memorySave(id, doc),
 
+  /** 删除项目（首页卡片菜单，§3.2；确认框由界面层负责）。 */
+  delete: (id: string): Promise<void> =>
+    isTauri
+      ? import('@tauri-apps/api/core').then(({ invoke }) => invoke('delete_project', { id }))
+      : memoryDelete(id),
+
+  /** 复制项目：读原文档 → 新建「副本」项目 → 写入画布（§3.2）。 */
+  duplicate: async (id: string): Promise<ProjectSummary> => {
+    const doc = await projectStore.load(id)
+    const name = `${doc.name} 副本`
+    const meta = await projectStore.create(name)
+    await projectStore.saveQuiet(meta.id, { ...doc, name })
+    return { ...meta, sceneCount: meta.sceneCount }
+  },
+
   /** 静默吞掉持久化错误：画布交互不因落盘失败中断，仅控制台留痕。 */
   saveQuiet: async (id: string, doc: ProjectDocument): Promise<void> => {
     try {
@@ -184,4 +199,8 @@ async function memoryLoad(id: string): Promise<ProjectDocument> {
 
 async function memorySave(id: string, doc: ProjectDocument): Promise<void> {
   memoryStore.set(id, { doc, updatedAt: Date.now() })
+}
+
+async function memoryDelete(id: string): Promise<void> {
+  memoryStore.delete(id)
 }

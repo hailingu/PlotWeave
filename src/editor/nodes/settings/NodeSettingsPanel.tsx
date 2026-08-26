@@ -448,31 +448,38 @@ export default function NodeSettingsPanel({ node }: { node: PanelNode }) {
 }
 
 /**
- * 双击内联改名（docs/ui-design.md §4.3 名称在卡片头部）。
- * 双击进入编辑，Enter/失焦提交、Esc 取消；空值不提交。
+ * 双击内联改名（docs/ui-design.md §4.3 名称在卡片头部；§3.3 项目名单击改名）。
+ * 双击进入编辑（节点名称），或单击进入（工具栏项目名，singleClick）；
+ * Enter/失焦提交、Esc 取消；空值不提交。
  */
 export function EditableName({
   value,
   onChange,
   ariaLabel,
+  singleClick = false,
 }: {
   value: string
   onChange: (next: string) => void
   ariaLabel: string
+  /** true = 单击进入编辑（工具栏项目名）；默认双击（节点名称）。 */
+  singleClick?: boolean
 }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(value)
+
+  const beginEdit = (e: { stopPropagation: () => void }) => {
+    e.stopPropagation()
+    setDraft(value)
+    setEditing(true)
+  }
 
   if (!editing) {
     return (
       <span
         className="pw-editable"
-        title="双击改名"
-        onDoubleClick={(e) => {
-          e.stopPropagation()
-          setDraft(value)
-          setEditing(true)
-        }}
+        title={singleClick ? '点击重命名' : '双击改名'}
+        onClick={singleClick ? beginEdit : undefined}
+        onDoubleClick={singleClick ? undefined : beginEdit}
       >
         {value}
       </span>

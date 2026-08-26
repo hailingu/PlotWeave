@@ -201,6 +201,33 @@
   cursor: pointer;
 }
 
+/* 窄对话框（重命名 / 删除确认，§3.2） */
+.pw-dialog-sm {
+  width: min(360px, calc(100vw - 96px));
+  max-height: none;
+}
+
+.pw-dialog-body {
+  padding: 14px 16px;
+}
+
+.pw-dialog-text {
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--text-primary);
+}
+
+.pw-dialog-danger {
+  border-color: transparent;
+  background: var(--danger);
+  color: #fff;
+}
+
+.pw-dialog-danger:hover {
+  background: var(--danger);
+  opacity: 0.88;
+}
+
 .pw-dialog-x:hover {
   background: var(--fill-quaternary);
   color: var(--text-primary);

@@ -88,8 +88,36 @@
 }
 
 .project-card {
+  position: relative;
   display: flex;
   flex-direction: column;
+}
+
+/* 悬停浮现的项目菜单按钮（§3.2 右键/悬停菜单同源入口） */
+.project-menu-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 3;
+  border: none;
+  border-radius: var(--radius-md);
+  padding: 3px 8px;
+  font-size: 13px;
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--text-primary);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+}
+
+.project-card:hover .project-menu-btn,
+.project-menu-btn:focus-visible {
+  opacity: 1;
+}
+
+.project-menu-btn:hover {
+  background: #fff;
 }
 
 .project-poster {

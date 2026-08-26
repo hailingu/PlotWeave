@@ -69,6 +69,49 @@ export default function App() {
     [],
   )
 
+  /** 编辑器工具栏项目名内联改名（§3.3）：更新打开态，随防抖落盘。 */
+  const handleEditorRename = useCallback((name: string) => {
+    setOpenProject((p) => (p ? { ...p, doc: { ...p.doc, name } } : p))
+  }, [])
+
+  /** 首页卡片菜单 · 重命名（§3.2）：读原文档改 name 后保存。 */
+  const handleRenameProject = useCallback(
+    async (id: string, name: string) => {
+      try {
+        const doc = await projectStore.load(id)
+        await projectStore.saveQuiet(id, { ...doc, name })
+        await refreshProjects()
+      } catch (err) {
+        console.warn('[App] 重命名失败', err)
+      }
+    },
+    [refreshProjects],
+  )
+
+  const handleDuplicateProject = useCallback(
+    async (id: string) => {
+      try {
+        await projectStore.duplicate(id)
+        await refreshProjects()
+      } catch (err) {
+        console.warn('[App] 复制项目失败', err)
+      }
+    },
+    [refreshProjects],
+  )
+
+  const handleDeleteProject = useCallback(
+    async (id: string) => {
+      try {
+        await projectStore.delete(id)
+        await refreshProjects()
+      } catch (err) {
+        console.warn('[App] 删除项目失败', err)
+      }
+    },
+    [refreshProjects],
+  )
+
   if (openProject) {
     return (
       <EditorView
@@ -80,6 +123,7 @@ export default function App() {
           edges: openProject.doc.edges,
         }}
         onBackHome={handleBackHome}
+        onRenameProject={handleEditorRename}
         onSave={handleSave(openProject.id)}
       />
     )
@@ -90,6 +134,9 @@ export default function App() {
       loading={loading}
       onOpenProject={handleOpenProject}
       onCreateProject={() => void handleCreateProject()}
+      onRenameProject={(id, name) => void handleRenameProject(id, name)}
+      onDuplicateProject={(id) => void handleDuplicateProject(id)}
+      onDeleteProject={(id) => void handleDeleteProject(id)}
     />
   )
 }

@@ -37,6 +37,7 @@ import { useCommandHistory } from './history'
 import { readEntityPayload, PW_ENTITY_MIME } from './dragDrop'
 import ExportDialog from './ExportDialog'
 import { buildScriptMarkdown } from './exportScript'
+import { EditableName } from './nodes/settings/NodeSettingsPanel'
 import { LIN_WAN } from './sampleData'
 import type { CanvasNode } from './nodes/types'
 
@@ -64,6 +65,8 @@ interface EditorViewProps {
   }
   /** 返回项目首页：同一窗口从编辑器状态切回文档浏览器（§3.1）。 */
   onBackHome: () => void
+  /** 项目名内联重命名（§3.3 中区：更新 project.name + 首页索引）。 */
+  onRenameProject: (name: string) => void
   /** 持久化写入（防抖节流由本组件负责；浏览器预览下为内存回退实现）。 */
   onSave: (doc: { name: string; nodes: CanvasNode[]; edges: Edge[] }) => void
 }
@@ -113,7 +116,7 @@ export default function EditorView(props: EditorViewProps) {
  * 复制/删除，以及三栏面板开关。全部写操作经命令栈可撤销/重做
  * （§3.3 撤销重做、§4.3 删除可撤销）；画布变化防抖落盘（持久化）。
  */
-function EditorWindow({ project, onBackHome, onSave }: EditorViewProps) {
+function EditorWindow({ project, onBackHome, onRenameProject, onSave }: EditorViewProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNode>(project.nodes)
   const [edges, setEdges, onEdgesChange] = useEdgesState(project.edges)
   const { screenToFlowPosition, fitView } = useReactFlow()
@@ -670,8 +673,14 @@ function EditorWindow({ project, onBackHome, onSave }: EditorViewProps) {
         >
           ‹ 首页
         </button>
-        <span className="editor-title" data-tauri-drag-region>
-          {project.name}
+        {/* 项目名居中（§3.3 中区）：点击内联重命名 */}
+        <span className="editor-title">
+          <EditableName
+            value={project.name}
+            ariaLabel="项目名"
+            singleClick
+            onChange={onRenameProject}
+          />
         </span>
         <div className="editor-plus">
           <button
