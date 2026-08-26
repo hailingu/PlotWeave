@@ -1,12 +1,14 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ReactFlow,
+  ReactFlowProvider,
   Background,
   BackgroundVariant,
   Controls,
   addEdge,
-  useNodesState,
   useEdgesState,
+  useNodesState,
+  useReactFlow,
   type Connection,
   type Edge,
   type NodeTypes,
@@ -21,6 +23,7 @@ import ShotNode from './nodes/ShotNode'
 import BranchEdge from './edges/BranchEdge'
 import LeftPanel from './panels/LeftPanel'
 import RightPanel, { type RightTab } from './panels/RightPanel'
+import { NodeEditContext, type NodeEditApi } from './nodeEdit'
 import { LIN_WAN, CHEN_MO } from './sampleData'
 import type { CanvasNode } from './nodes/types'
 
@@ -317,14 +320,41 @@ interface EditorViewProps {
   onBackHome: () => void
 }
 
+/** ＋节点下拉的创建项（docs/ui-design.md §3.3：场景/节奏卡/对白/分支/分镜卡）。 */
+const CREATABLE_TYPES = ['scene', 'beat', 'dialogue', 'branch', 'shot'] as const
+type CreatableType = (typeof CREATABLE_TYPES)[number]
+
+const CREATE_LABELS: Record<CreatableType, string> = {
+  scene: '场景',
+  beat: '节奏卡',
+  dialogue: '对白',
+  branch: '分支',
+  shot: '分镜卡',
+}
+
 /**
- * 剧本画布编辑器：顶部统一工具栏（左 = 返回首页，中 = 项目名），
- * 下方为节点画布。工具栏右区（＋节点 / 导出 / 检查器 / ✦AI）
- * 与撤销重做随对应功能落地（docs/ui-design.md §3.3）。
+ * 剧本画布编辑器：顶部统一工具栏（§3.3 左 = 边栏开关 + 返回首页，
+ * 中 = 项目名，右 = ＋节点 / 检查器 / ✦AI），下方为三栏布局（§3.4）。
+ * 本组件只负责挂 ReactFlowProvider（供内部 useReactFlow 计算创建位置），
+ * 状态与交互全部在 EditorWindow 中。
  */
-export default function EditorView({ projectName, onBackHome }: EditorViewProps) {
-  const [nodes, , onNodesChange] = useNodesState<CanvasNode>(initialNodes)
+export default function EditorView(props: EditorViewProps) {
+  return (
+    <ReactFlowProvider>
+      <EditorWindow {...props} />
+    </ReactFlowProvider>
+  )
+}
+
+/**
+ * 编辑器主体：节点创建（＋节点下拉）、⚙️ 设置面板（编辑即命令）、
+ * 复制/删除，以及三栏面板开关。撤销/重做与持久化随后续命令栈任务落地。
+ */
+function EditorWindow({ projectName, onBackHome }: EditorViewProps) {
+  const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNode>(initialNodes)
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges)
+  const { screenToFlowPosition } = useReactFlow()
+  const canvasRef = useRef<HTMLDivElement>(null)
 
   // 三栏面板状态（§3.4：220–320pt 可调，显隐会话内记忆——组件态即会话态）
   const [leftOpen, setLeftOpen] = useState(true)
@@ -333,6 +363,169 @@ export default function EditorView({ projectName, onBackHome }: EditorViewProps)
   const [rightWidth, setRightWidth] = useState(264)
   const [rightTab, setRightTab] = useState<RightTab>('inspector')
   const selectedNode = nodes.find((n) => n.selected)
+
+  // ⚙️ 设置面板与 ＋节点下拉（§4.3：失焦收起）
+  const [openSettingsId, setOpenSettingsId] = useState<string | null>(null)
+  const [plusOpen, setPlusOpen] = useState(false)
+
+  const toggleSettings = useCallback((id: string) => {
+    setOpenSettingsId((cur) => (cur === id ? null : id))
+  }, [])
+  const closeSettings = useCallback(() => setOpenSettingsId(null), [])
+
+  /** 编辑即命令：实时合并字段补丁（§4.3）。 */
+  const patchNode = useCallback(
+    (id: string, patch: Record<string, unknown>) => {
+      setNodes((nds) =>
+        nds.map((n) =>
+          n.id === id ? ({ ...n, data: { ...n.data, ...patch } } as CanvasNode) : n,
+        ),
+      )
+    },
+    [setNodes],
+  )
+
+  /** ⧉ 复制：同 data 新 id，右下偏移并只选中新副本。 */
+  const duplicateNode = useCallback(
+    (id: string) => {
+      setNodes((nds) => {
+        const src = nds.find((n) => n.id === id)
+        if (!src) return nds
+        const copy = {
+          ...src,
+          id: `${src.type}-${Date.now()}`,
+          position: { x: src.position.x + 48, y: src.position.y + 40 },
+          selected: true,
+          data: { ...src.data },
+        } as CanvasNode
+        return [...nds.map((n) => ({ ...n, selected: false })), copy]
+      })
+      setOpenSettingsId(null)
+    },
+    [setNodes],
+  )
+
+  /** 🗑 删除：移除节点及全部连线（撤销随命令栈任务补齐，§4.3）。 */
+  const deleteNode = useCallback(
+    (id: string) => {
+      setEdges((eds) => eds.filter((e) => e.source !== id && e.target !== id))
+      setNodes((nds) => nds.filter((n) => n.id !== id))
+      setOpenSettingsId(null)
+    },
+    [setEdges, setNodes],
+  )
+
+  /** 新建节点的默认字段（占位文案引导填写；场号/镜号取当前最大值 +1）。 */
+  const createNode = useCallback(
+    (type: CreatableType) => {
+      setNodes((nds) => {
+        const maxNo = (pick: (n: CanvasNode) => number) =>
+          Math.max(0, ...nds.map(pick)) + 1
+        let node: CanvasNode
+        if (type === 'scene') {
+          node = {
+            id: `scene-${Date.now()}`,
+            type: 'scene',
+            position: { x: 0, y: 0 },
+            selected: true,
+            data: {
+              name: '新场景',
+              sceneNo: maxNo((n) => (n.type === 'scene' ? n.data.sceneNo : 0)),
+              shotCount: 0,
+              interior: true,
+              location: '地点',
+              time: '🌙 夜',
+              synopsis: '这一场发生了什么…',
+              characters: [],
+            },
+          }
+        } else if (type === 'beat') {
+          node = {
+            id: `beat-${Date.now()}`,
+            type: 'beat',
+            position: { x: 0, y: 0 },
+            selected: true,
+            data: { name: '新节拍', tone: '待定' },
+          }
+        } else if (type === 'dialogue') {
+          node = {
+            id: `dialogue-${Date.now()}`,
+            type: 'dialogue',
+            position: { x: 0, y: 0 },
+            selected: true,
+            data: {
+              name: '新对白',
+              lines: [{ kind: 'line', speaker: LIN_WAN, side: 'left', text: '新台词…' }],
+            },
+          }
+        } else if (type === 'branch') {
+          node = {
+            id: `branch-${Date.now()}`,
+            type: 'branch',
+            position: { x: 0, y: 0 },
+            selected: true,
+            data: { prompt: '新的分岔是…？', options: ['选项 A', '选项 B'] },
+          }
+        } else {
+          node = {
+            id: `shot-${Date.now()}`,
+            type: 'shot',
+            position: { x: 0, y: 0 },
+            selected: true,
+            data: {
+              shotNo: maxNo((n) => (n.type === 'shot' ? n.data.shotNo : 0)),
+              size: '中景',
+              picture: '画面描述…',
+              prompt: '',
+              refs: [],
+            },
+          }
+        }
+        // 落在当前视口中心，连续创建时阶梯偏移避免叠死
+        const rect = canvasRef.current?.getBoundingClientRect()
+        if (rect) {
+          const center = screenToFlowPosition({
+            x: rect.left + rect.width / 2,
+            y: rect.top + rect.height / 2,
+          })
+          const cascade = (nds.length % 5) * 28
+          node.position = { x: center.x - 170 + cascade, y: center.y - 60 + cascade }
+        }
+        return [...nds.map((n) => ({ ...n, selected: false })), node]
+      })
+      setPlusOpen(false)
+      setOpenSettingsId(null)
+    },
+    [screenToFlowPosition, setNodes],
+  )
+
+  const nodeEditApi = useMemo<NodeEditApi>(
+    () => ({ openSettingsId, toggleSettings, closeSettings, patchNode, duplicateNode, deleteNode }),
+    [openSettingsId, toggleSettings, closeSettings, patchNode, duplicateNode, deleteNode],
+  )
+
+  // 失焦收起（§4.3）：点击面板与 ⚙️ 之外的区域关闭设置面板与 ＋节点下拉。
+  useEffect(() => {
+    const onPointerDown = (e: PointerEvent) => {
+      const target = e.target as HTMLElement
+      if (!target.closest('[data-pw-settings],[data-pw-gear],.editor-plus')) {
+        closeSettings()
+        setPlusOpen(false)
+      }
+    }
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        closeSettings()
+        setPlusOpen(false)
+      }
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [closeSettings])
 
   // 从分支选项端口拉出的连线建成 branch 边；从索引卡底部端口拉出的建成
   // attach 派生边（垂直下挂分镜卡）；其余为 sequence（§4.4）。
@@ -357,6 +550,7 @@ export default function EditorView({ projectName, onBackHome }: EditorViewProps)
   )
 
   return (
+    <NodeEditContext.Provider value={nodeEditApi}>
     <div className="editor-root">
       {/* Overlay 标题栏下整行作为窗口拖拽区；按钮可点击（§3.3）。 */}
       <header className="editor-titlebar" data-tauri-drag-region>
@@ -381,9 +575,38 @@ export default function EditorView({ projectName, onBackHome }: EditorViewProps)
         <span className="editor-title" data-tauri-drag-region>
           {projectName}
         </span>
+        <div className="editor-plus">
+          <button
+            type="button"
+            className={`editor-tbtn io${plusOpen ? ' on' : ''}`}
+            onClick={() => setPlusOpen((v) => !v)}
+            aria-pressed={plusOpen}
+            aria-haspopup="menu"
+            aria-expanded={plusOpen}
+            aria-label="新增节点"
+            title="新增节点"
+          >
+            ＋ 节点 ▾
+          </button>
+          {plusOpen && (
+            <div className="editor-menu" role="menu" aria-label="节点类型">
+              {CREATABLE_TYPES.map((type) => (
+                <button
+                  key={type}
+                  type="button"
+                  className="editor-menu-item"
+                  role="menuitem"
+                  onClick={() => createNode(type)}
+                >
+                  {CREATE_LABELS[type]}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
         <button
           type="button"
-          className={`editor-tbtn io${rightOpen && rightTab === 'inspector' ? ' on' : ''}`}
+          className={`editor-tbtn${rightOpen && rightTab === 'inspector' ? ' on' : ''}`}
           onClick={() => {
             setRightTab('inspector')
             setRightOpen(rightTab !== 'inspector' || !rightOpen)
@@ -415,7 +638,7 @@ export default function EditorView({ projectName, onBackHome }: EditorViewProps)
           onResize={setLeftWidth}
           nodes={nodes}
         />
-        <div className="canvas-root">
+        <div className="canvas-root" ref={canvasRef}>
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -449,5 +672,6 @@ export default function EditorView({ projectName, onBackHome }: EditorViewProps)
         />
       </div>
     </div>
+    </NodeEditContext.Provider>
   )
 }

@@ -1,4 +1,6 @@
 import { Handle, Position, type NodeProps } from '@xyflow/react'
+import { useNodeEdit } from '../nodeEdit'
+import NodeSettingsPanel, { EditableName } from './settings/NodeSettingsPanel'
 import type { BranchFlowNode } from './types'
 
 /** 分支选项出口端口的 handle id 前缀（对应数据模型 option-n）。 */
@@ -6,18 +8,36 @@ export const BRANCH_OPTION_HANDLE_PREFIX = 'option-'
 
 /**
  * 分支节点 = 岔路路标（docs/ui-design.md §4.2，剧本族）。
- * 虚线外框 = 「此处未定」；问句即名称；每个选项条右缘带独立出口端口
- * （handle id 为 option-n，供 branch 边连线），「＋ 添加选项」行内完成（本阶段仅展示结构）。
- * 外观跟随画布：浅色画布为纸面变体，深色画布为虚线暗框。
+ * 虚线外框 = 「此处未定」；问句即名称（双击内联编辑）；每个选项条右缘带
+ * 独立出口端口（handle id 为 option-n，供 branch 边连线）；
+ * 「＋ 添加选项」由 ⚙️ 设置面板承载（§4.3）。外观跟随画布：
+ * 浅色画布为纸面变体，深色画布为虚线暗框。
  */
-export default function BranchNode({ data, selected }: NodeProps<BranchFlowNode>) {
+export default function BranchNode({ id, data, selected }: NodeProps<BranchFlowNode>) {
+  const { openSettingsId, toggleSettings, patchNode } = useNodeEdit()
+  const settingsOpen = openSettingsId === id
+
   return (
     <div className={`pw-branch${selected ? ' pw-on' : ''}`}>
       <div className="pw-branch-q">
         <span aria-hidden>🔀</span>
-        <span>{data.prompt}</span>
+        <EditableName
+          value={data.prompt}
+          ariaLabel="分支问句"
+          onChange={(prompt) => patchNode(id, { prompt })}
+        />
         <span className="pw-sp" />
-        <button type="button" className="pw-gear pw-gear-light" aria-label="分支设置">
+        <button
+          type="button"
+          className={`pw-gear pw-gear-light nodrag${settingsOpen ? ' pw-gear-open' : ''}`}
+          data-pw-gear
+          aria-label="分支设置"
+          aria-expanded={settingsOpen}
+          onClick={(e) => {
+            e.stopPropagation()
+            toggleSettings(id)
+          }}
+        >
           ⚙️
         </button>
       </div>
@@ -32,9 +52,7 @@ export default function BranchNode({ data, selected }: NodeProps<BranchFlowNode>
           />
         </div>
       ))}
-      <div className="pw-branch-addopt" aria-hidden>
-        ＋ 添加选项
-      </div>
+      {settingsOpen && <NodeSettingsPanel node={{ id, type: 'branch', data }} />}
       <Handle type="target" position={Position.Left} className="pw-port" />
     </div>
   )

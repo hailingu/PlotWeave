@@ -66,6 +66,12 @@
   color: rgba(60, 60, 67, 0.85);
 }
 
+/* ⚙️ 打开设置面板时的常亮态（§4.3）。 */
+.pw-gear.pw-gear-open {
+  background: var(--fill-quaternary);
+  color: var(--text-primary);
+}
+
 /* 端口：React Flow Handle 覆盖为设计稿的圆点（左右边缘中点）。 */
 .react-flow__handle.pw-port {
   width: 11px;
@@ -190,11 +196,11 @@
 
 /* ---- 对白节点 = 气泡流（编剧侧纸面，双外观恒定） ---- */
 .pw-dlg {
+  position: relative;
   width: 360px;
   background: #f5f5f7;
   color: #1d1d1f;
   border-radius: 14px;
-  overflow: hidden;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
   transition: transform 0.15s;
 }
