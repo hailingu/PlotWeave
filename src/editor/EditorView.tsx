@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -13,6 +19,7 @@ import {
   type Edge,
   type NodeTypes,
   type EdgeTypes,
+  type XYPosition,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import SceneNode, { SCENE_SHOT_HANDLE } from './nodes/SceneNode'
@@ -24,6 +31,7 @@ import BranchEdge from './edges/BranchEdge'
 import LeftPanel from './panels/LeftPanel'
 import RightPanel, { type RightTab } from './panels/RightPanel'
 import { NodeEditContext, type NodeEditApi } from './nodeEdit'
+import { useCommandHistory } from './history'
 import { LIN_WAN, CHEN_MO } from './sampleData'
 import type { CanvasNode } from './nodes/types'
 
@@ -348,13 +356,30 @@ export default function EditorView(props: EditorViewProps) {
 
 /**
  * 编辑器主体：节点创建（＋节点下拉）、⚙️ 设置面板（编辑即命令）、
- * 复制/删除，以及三栏面板开关。撤销/重做与持久化随后续命令栈任务落地。
+ * 复制/删除，以及三栏面板开关。全部写操作经命令栈可撤销/重做
+ * （§3.3 撤销重做、§4.3 删除可撤销）；持久化随后续任务落地。
  */
 function EditorWindow({ projectName, onBackHome }: EditorViewProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNode>(initialNodes)
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges)
   const { screenToFlowPosition } = useReactFlow()
   const canvasRef = useRef<HTMLDivElement>(null)
+
+  // 状态镜像：命令的 undo/redo 需要读取「当前」状态计算逆操作；
+  // StrictMode 下 setState updater 会双调，副作用必须在 updater 外完成。
+  const nodesRef = useRef(nodes)
+  const edgesRef = useRef(edges)
+  nodesRef.current = nodes
+  edgesRef.current = edges
+
+  // 命令栈（§3.3/§4.3）：全部写操作入栈，undo 始终兜底
+  const {
+    push: pushHistory,
+    undo: undoHistory,
+    redo: redoHistory,
+    canUndo,
+    canRedo,
+  } = useCommandHistory()
 
   // 三栏面板状态（§3.4：220–320pt 可调，显隐会话内记忆——组件态即会话态）
   const [leftOpen, setLeftOpen] = useState(true)
@@ -373,8 +398,8 @@ function EditorWindow({ projectName, onBackHome }: EditorViewProps) {
   }, [])
   const closeSettings = useCallback(() => setOpenSettingsId(null), [])
 
-  /** 编辑即命令：实时合并字段补丁（§4.3）。 */
-  const patchNode = useCallback(
+  /** 字段补丁的纯状态写入，patch 命令的 undo/redo 共用。 */
+  const applyDataPatch = useCallback(
     (id: string, patch: Record<string, unknown>) => {
       setNodes((nds) =>
         nds.map((n) =>
@@ -385,118 +410,178 @@ function EditorWindow({ projectName, onBackHome }: EditorViewProps) {
     [setNodes],
   )
 
-  /** ⧉ 复制：同 data 新 id，右下偏移并只选中新副本。 */
+  /** 编辑即命令：实时合并字段补丁；连续同类补丁合并为一步撤销（§4.3）。 */
+  const patchNode = useCallback(
+    (id: string, patch: Record<string, unknown>) => {
+      const cur = nodesRef.current.find((n) => n.id === id)
+      if (!cur) return
+      const keys = Object.keys(patch)
+      const before: Record<string, unknown> = {}
+      for (const k of keys) before[k] = (cur.data as Record<string, unknown>)[k]
+      applyDataPatch(id, patch)
+      pushHistory({
+        coalesceKey: `patch:${id}:${[...keys].sort().join(',')}`,
+        undo: () => applyDataPatch(id, before),
+        redo: () => applyDataPatch(id, patch),
+      })
+    },
+    [applyDataPatch, pushHistory],
+  )
+
+  /** ⧉ 复制：同 data 新 id，右下偏移并只选中新副本；入栈可撤销。 */
   const duplicateNode = useCallback(
     (id: string) => {
-      setNodes((nds) => {
-        const src = nds.find((n) => n.id === id)
-        if (!src) return nds
-        const copy = {
-          ...src,
-          id: `${src.type}-${Date.now()}`,
-          position: { x: src.position.x + 48, y: src.position.y + 40 },
-          selected: true,
-          data: { ...src.data },
-        } as CanvasNode
-        return [...nds.map((n) => ({ ...n, selected: false })), copy]
+      const src = nodesRef.current.find((n) => n.id === id)
+      if (!src) return
+      const copy = {
+        ...src,
+        id: `${src.type}-${Date.now()}`,
+        position: { x: src.position.x + 48, y: src.position.y + 40 },
+        selected: true,
+        data: { ...src.data },
+      } as CanvasNode
+      setNodes((nds) => [...nds.map((n) => ({ ...n, selected: false })), copy])
+      pushHistory({
+        undo: () => setNodes((nds) => nds.filter((n) => n.id !== copy.id)),
+        redo: () => setNodes((nds) => [...nds, copy]),
       })
       setOpenSettingsId(null)
     },
-    [setNodes],
+    [pushHistory, setNodes],
   )
 
-  /** 🗑 删除：移除节点及全部连线（撤销随命令栈任务补齐，§4.3）。 */
-  const deleteNode = useCallback(
-    (id: string) => {
-      setEdges((eds) => eds.filter((e) => e.source !== id && e.target !== id))
-      setNodes((nds) => nds.filter((n) => n.id !== id))
+  /** 🗑 删除一组节点及其全部连线：入栈可撤销（§4.3 删除可撤销，无需确认）。 */
+  const deleteNodesByIds = useCallback(
+    (ids: string[]) => {
+      const idSet = new Set(ids)
+      const removedNodes = nodesRef.current.filter((n) => idSet.has(n.id))
+      if (removedNodes.length === 0) return
+      const removedEdges = edgesRef.current.filter(
+        (e) => idSet.has(e.source) || idSet.has(e.target),
+      )
+      const apply = (remove: boolean) => {
+        setNodes((nds) =>
+          remove
+            ? nds.filter((n) => !idSet.has(n.id))
+            : [...nds, ...removedNodes],
+        )
+        setEdges((eds) =>
+          remove
+            ? eds.filter((e) => !idSet.has(e.source) && !idSet.has(e.target))
+            : [...eds, ...removedEdges],
+        )
+      }
+      apply(true)
+      pushHistory({ undo: () => apply(false), redo: () => apply(true) })
       setOpenSettingsId(null)
     },
-    [setEdges, setNodes],
+    [pushHistory, setEdges, setNodes],
   )
+
+  /** 删除一组连线（选中边 + Delete）：入栈可撤销。 */
+  const deleteEdgesByIds = useCallback(
+    (ids: string[]) => {
+      const idSet = new Set(ids)
+      const removed = edgesRef.current.filter((e) => idSet.has(e.id))
+      if (removed.length === 0) return
+      const apply = (remove: boolean) =>
+        setEdges((eds) =>
+          remove ? eds.filter((e) => !idSet.has(e.id)) : [...eds, ...removed],
+        )
+      apply(true)
+      pushHistory({ undo: () => apply(false), redo: () => apply(true) })
+    },
+    [pushHistory, setEdges],
+  )
+
+  /** 🗑 单节点删除（⚙️ 面板入口），走同一命令路径。 */
+  const deleteNode = useCallback((id: string) => deleteNodesByIds([id]), [deleteNodesByIds])
 
   /** 新建节点的默认字段（占位文案引导填写；场号/镜号取当前最大值 +1）。 */
   const createNode = useCallback(
     (type: CreatableType) => {
-      setNodes((nds) => {
-        const maxNo = (pick: (n: CanvasNode) => number) =>
-          Math.max(0, ...nds.map(pick)) + 1
-        let node: CanvasNode
-        if (type === 'scene') {
-          node = {
-            id: `scene-${Date.now()}`,
-            type: 'scene',
-            position: { x: 0, y: 0 },
-            selected: true,
-            data: {
-              name: '新场景',
-              sceneNo: maxNo((n) => (n.type === 'scene' ? n.data.sceneNo : 0)),
-              shotCount: 0,
-              interior: true,
-              location: '地点',
-              time: '🌙 夜',
-              synopsis: '这一场发生了什么…',
-              characters: [],
-            },
-          }
-        } else if (type === 'beat') {
-          node = {
-            id: `beat-${Date.now()}`,
-            type: 'beat',
-            position: { x: 0, y: 0 },
-            selected: true,
-            data: { name: '新节拍', tone: '待定' },
-          }
-        } else if (type === 'dialogue') {
-          node = {
-            id: `dialogue-${Date.now()}`,
-            type: 'dialogue',
-            position: { x: 0, y: 0 },
-            selected: true,
-            data: {
-              name: '新对白',
-              lines: [{ kind: 'line', speaker: LIN_WAN, side: 'left', text: '新台词…' }],
-            },
-          }
-        } else if (type === 'branch') {
-          node = {
-            id: `branch-${Date.now()}`,
-            type: 'branch',
-            position: { x: 0, y: 0 },
-            selected: true,
-            data: { prompt: '新的分岔是…？', options: ['选项 A', '选项 B'] },
-          }
-        } else {
-          node = {
-            id: `shot-${Date.now()}`,
-            type: 'shot',
-            position: { x: 0, y: 0 },
-            selected: true,
-            data: {
-              shotNo: maxNo((n) => (n.type === 'shot' ? n.data.shotNo : 0)),
-              size: '中景',
-              picture: '画面描述…',
-              prompt: '',
-              refs: [],
-            },
-          }
+      const nds = nodesRef.current
+      const maxNo = (pick: (n: CanvasNode) => number) =>
+        Math.max(0, ...nds.map(pick)) + 1
+      let node: CanvasNode
+      if (type === 'scene') {
+        node = {
+          id: `scene-${Date.now()}`,
+          type: 'scene',
+          position: { x: 0, y: 0 },
+          selected: true,
+          data: {
+            name: '新场景',
+            sceneNo: maxNo((n) => (n.type === 'scene' ? n.data.sceneNo : 0)),
+            shotCount: 0,
+            interior: true,
+            location: '地点',
+            time: '🌙 夜',
+            synopsis: '这一场发生了什么…',
+            characters: [],
+          },
         }
-        // 落在当前视口中心，连续创建时阶梯偏移避免叠死
-        const rect = canvasRef.current?.getBoundingClientRect()
-        if (rect) {
-          const center = screenToFlowPosition({
-            x: rect.left + rect.width / 2,
-            y: rect.top + rect.height / 2,
-          })
-          const cascade = (nds.length % 5) * 28
-          node.position = { x: center.x - 170 + cascade, y: center.y - 60 + cascade }
+      } else if (type === 'beat') {
+        node = {
+          id: `beat-${Date.now()}`,
+          type: 'beat',
+          position: { x: 0, y: 0 },
+          selected: true,
+          data: { name: '新节拍', tone: '待定' },
         }
-        return [...nds.map((n) => ({ ...n, selected: false })), node]
+      } else if (type === 'dialogue') {
+        node = {
+          id: `dialogue-${Date.now()}`,
+          type: 'dialogue',
+          position: { x: 0, y: 0 },
+          selected: true,
+          data: {
+            name: '新对白',
+            lines: [{ kind: 'line', speaker: LIN_WAN, side: 'left', text: '新台词…' }],
+          },
+        }
+      } else if (type === 'branch') {
+        node = {
+          id: `branch-${Date.now()}`,
+          type: 'branch',
+          position: { x: 0, y: 0 },
+          selected: true,
+          data: { prompt: '新的分岔是…？', options: ['选项 A', '选项 B'] },
+        }
+      } else {
+        node = {
+          id: `shot-${Date.now()}`,
+          type: 'shot',
+          position: { x: 0, y: 0 },
+          selected: true,
+          data: {
+            shotNo: maxNo((n) => (n.type === 'shot' ? n.data.shotNo : 0)),
+            size: '中景',
+            picture: '画面描述…',
+            prompt: '',
+            refs: [],
+          },
+        }
+      }
+      // 落在当前视口中心，连续创建时阶梯偏移避免叠死
+      const rect = canvasRef.current?.getBoundingClientRect()
+      if (rect) {
+        const center = screenToFlowPosition({
+          x: rect.left + rect.width / 2,
+          y: rect.top + rect.height / 2,
+        })
+        const cascade = (nds.length % 5) * 28
+        node.position = { x: center.x - 170 + cascade, y: center.y - 60 + cascade }
+      }
+      setNodes((all) => [...all.map((n) => ({ ...n, selected: false })), node])
+      pushHistory({
+        undo: () => setNodes((all) => all.filter((n) => n.id !== node.id)),
+        redo: () => setNodes((all) => [...all, node]),
       })
       setPlusOpen(false)
       setOpenSettingsId(null)
     },
-    [screenToFlowPosition, setNodes],
+    [pushHistory, screenToFlowPosition, setNodes],
   )
 
   const nodeEditApi = useMemo<NodeEditApi>(
@@ -504,7 +589,7 @@ function EditorWindow({ projectName, onBackHome }: EditorViewProps) {
     [openSettingsId, toggleSettings, closeSettings, patchNode, duplicateNode, deleteNode],
   )
 
-  // 失焦收起（§4.3）：点击面板与 ⚙️ 之外的区域关闭设置面板与 ＋节点下拉。
+  // 失焦收起（§4.3）＋ 全局快捷键：⌘Z/⌘⇧Z 撤销重做、Delete 删除选中。
   useEffect(() => {
     const onPointerDown = (e: PointerEvent) => {
       const target = e.target as HTMLElement
@@ -514,9 +599,38 @@ function EditorWindow({ projectName, onBackHome }: EditorViewProps) {
       }
     }
     const onKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement
+      const typing = target.closest('input,textarea,select,[contenteditable="true"]')
       if (e.key === 'Escape') {
         closeSettings()
         setPlusOpen(false)
+        return
+      }
+      if (typing) return
+      const mod = e.metaKey || e.ctrlKey
+      if (mod && e.key.toLowerCase() === 'z') {
+        e.preventDefault()
+        if (e.shiftKey) redoHistory()
+        else undoHistory()
+        return
+      }
+      if (mod && e.key.toLowerCase() === 'y') {
+        e.preventDefault()
+        redoHistory()
+        return
+      }
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        const nodeIds = nodesRef.current.filter((n) => n.selected).map((n) => n.id)
+        if (nodeIds.length > 0) {
+          e.preventDefault()
+          deleteNodesByIds(nodeIds)
+          return
+        }
+        const edgeIds = edgesRef.current.filter((ed) => ed.selected).map((ed) => ed.id)
+        if (edgeIds.length > 0) {
+          e.preventDefault()
+          deleteEdgesByIds(edgeIds)
+        }
       }
     }
     document.addEventListener('pointerdown', onPointerDown)
@@ -525,10 +639,41 @@ function EditorWindow({ projectName, onBackHome }: EditorViewProps) {
       document.removeEventListener('pointerdown', onPointerDown)
       document.removeEventListener('keydown', onKeyDown)
     }
-  }, [closeSettings])
+  }, [closeSettings, deleteEdgesByIds, deleteNodesByIds, redoHistory, undoHistory])
+
+  // 节点拖拽整段记为一步撤销：起点位置在 dragStart 记录、落点入栈。
+  const dragStartPos = useRef<Map<string, XYPosition> | null>(null)
+  const onNodeDragStart = useCallback(
+    (_e: MouseEvent | TouchEvent, _node: CanvasNode, dragged: CanvasNode[]) => {
+      dragStartPos.current = new Map(dragged.map((n) => [n.id, { ...n.position }]))
+    },
+    [],
+  )
+  const onNodeDragStop = useCallback(
+    (_e: MouseEvent | TouchEvent, _node: CanvasNode, dragged: CanvasNode[]) => {
+      const before = dragStartPos.current
+      dragStartPos.current = null
+      if (!before) return
+      const moved = dragged.filter((n) => {
+        const b = before.get(n.id)
+        return b && (b.x !== n.position.x || b.y !== n.position.y)
+      })
+      if (moved.length === 0) return
+      const after = new Map(moved.map((n) => [n.id, { ...n.position }]))
+      const apply = (positions: Map<string, XYPosition>) =>
+        setNodes((nds) =>
+          nds.map((n) => {
+            const p = positions.get(n.id)
+            return p ? { ...n, position: { ...p } } : n
+          }),
+        )
+      pushHistory({ undo: () => apply(before), redo: () => apply(after) })
+    },
+    [pushHistory, setNodes],
+  )
 
   // 从分支选项端口拉出的连线建成 branch 边；从索引卡底部端口拉出的建成
-  // attach 派生边（垂直下挂分镜卡）；其余为 sequence（§4.4）。
+  // attach 派生边（垂直下挂分镜卡）；其余为 sequence（§4.4）。入栈可撤销。
   const onConnect = useCallback(
     (connection: Connection) => {
       const fromBranchOption = connection.sourceHandle?.startsWith(
@@ -545,8 +690,12 @@ function EditorWindow({ projectName, onBackHome }: EditorViewProps) {
             : { className: 'pw-edge-sequence' }),
       }
       setEdges((eds) => addEdge(edge, eds))
+      pushHistory({
+        undo: () => setEdges((eds) => eds.filter((e) => e.id !== edge.id)),
+        redo: () => setEdges((eds) => addEdge(edge, eds)),
+      })
     },
-    [setEdges],
+    [pushHistory, setEdges],
   )
 
   return (
@@ -563,6 +712,26 @@ function EditorWindow({ projectName, onBackHome }: EditorViewProps) {
           title="显示或隐藏边栏"
         >
           ▤
+        </button>
+        <button
+          type="button"
+          className="editor-tbtn"
+          onClick={undoHistory}
+          disabled={!canUndo}
+          aria-label="撤销"
+          title="撤销 (⌘Z)"
+        >
+          ↩︎
+        </button>
+        <button
+          type="button"
+          className="editor-tbtn"
+          onClick={redoHistory}
+          disabled={!canRedo}
+          aria-label="重做"
+          title="重做 (⌘⇧Z)"
+        >
+          ↪︎
         </button>
         <button
           type="button"
@@ -648,6 +817,10 @@ function EditorWindow({ projectName, onBackHome }: EditorViewProps) {
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
+            onNodeDragStart={onNodeDragStart}
+            onNodeDragStop={onNodeDragStop}
+            /* 删除统一走命令栈（含连线清理），禁用内置 Delete 行为 */
+            deleteKeyCode={null}
             fitView
           >
             <Background

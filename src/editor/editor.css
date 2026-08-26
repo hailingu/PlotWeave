@@ -77,6 +77,17 @@
   color: var(--text-primary);
 }
 
+/* 跟随命令栈状态置灰（§3.3 撤销/重做）。 */
+.editor-tbtn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.editor-tbtn:disabled:hover {
+  background: none;
+  color: var(--text-secondary);
+}
+
 /* 右区首个按钮：推到工具栏右端。 */
 .editor-tbtn.io {
   margin-left: auto;

@@ -2,9 +2,9 @@ import { createContext, useContext } from 'react'
 
 /**
  * 节点编辑上下文（docs/ui-design.md §4.3 ⚙️ 设置面板 = 节点编辑器）。
- * EditorView 持有全部实现（编辑即命令：实时 patch，无保存按钮）；
- * 节点组件经此上下文触发面板开关、字段补丁与复制/删除。
- * 命令栈（撤销/重做）落地后，patch/duplicate/delete 将改为入栈命令。
+ * EditorView 持有全部实现（编辑即命令：实时 patch，无保存按钮；
+ * 全部写操作经命令栈可撤销/重做）；节点组件经此上下文触发面板开关、
+ * 字段补丁与复制/删除。
  */
 export interface NodeEditApi {
   /** 当前展开设置面板的节点 id；null = 全部收起。 */
