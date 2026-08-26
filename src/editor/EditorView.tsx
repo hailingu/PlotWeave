@@ -37,7 +37,7 @@ import { useCommandHistory } from './history'
 import { readEntityPayload, PW_ENTITY_MIME } from './dragDrop'
 import ExportDialog from './ExportDialog'
 import { buildScriptMarkdown } from './exportScript'
-import { LIN_WAN, CHEN_MO } from './sampleData'
+import { LIN_WAN } from './sampleData'
 import type { CanvasNode } from './nodes/types'
 
 /** 画布节点类型注册：索引卡 / 对白 / 节奏卡 / 分支 / 分镜卡（docs/ui-design.md §4.2）。 */
@@ -54,277 +54,18 @@ const edgeTypes: EdgeTypes = {
   branch: BranchEdge,
 }
 
-/**
- * 示例画布：一个两幕短剧结构，演示生产管线的完整上下游关系——
- * 第一幕：节奏卡「雨夜对峙」→ 索引卡「雨夜天台」（挂两张分镜卡）
- * → 对白「真相逼近」→ 分支「是否发现真相」；
- * 支线：坦白 → 索引卡「天台摊牌」→ 对白「十年前的雨」；
- *       隐瞒 → 索引卡「独自离开」；
- * 第二幕：节奏卡「身份揭晓」→ 两线汇合于索引卡「旧公寓」（挂一张分镜卡）
- * → 分支「是否原谅」→ 双结局「天台黎明」/「车站告别」。
- * 随后由真实剧本数据替换。
- */
-const initialNodes: CanvasNode[] = [
-  {
-    id: 'beat-1',
-    type: 'beat',
-    position: { x: 0, y: 80 },
-    data: { name: '雨夜对峙', tone: '压抑渐强' },
-  },
-  {
-    id: 'scene-3',
-    type: 'scene',
-    position: { x: 320, y: 40 },
-    selected: true,
-    data: {
-      name: '雨夜天台',
-      sceneNo: 3,
-      interior: false,
-      location: '天台',
-      time: '🌙 夜',
-      weather: '🌧 雨',
-      synopsis: '林晚翻出父亲死亡当夜的档案，陈默突然出现，要她立刻离开天台。',
-      characters: [LIN_WAN, CHEN_MO],
-    },
-  },
-  {
-    id: 'shot-1',
-    type: 'shot',
-    position: { x: 175, y: 320 },
-    data: {
-      shotNo: 1,
-      size: '远景',
-      picture: '雨夜城市天台全景，林晚撑伞站在栏杆边，陈默从阴影中走出。',
-      prompt: 'rainy rooftop at night, cinematic wide shot, neon reflections, two figures confronting',
-      refs: [
-        { kind: 'character', label: '林晚垫图' },
-        { kind: 'location', label: '天台底图' },
-        { kind: 'audio', label: '雨声' },
-      ],
-    },
-  },
-  {
-    id: 'shot-2',
-    type: 'shot',
-    position: { x: 505, y: 320 },
-    data: {
-      shotNo: 2,
-      size: '特写',
-      picture: '档案袋里的旧照片特写，指尖颤抖，雨水滴落在照片上。',
-      prompt: 'extreme close-up of trembling hands holding an old photo, raindrops, shallow depth of field',
-      refs: [
-        { kind: 'character', label: '林晚垫图' },
-        { kind: 'audio', label: '雨声' },
-      ],
-    },
-  },
-  {
-    id: 'dialogue-1',
-    type: 'dialogue',
-    position: { x: 770, y: 60 },
-    data: {
-      name: '真相逼近',
-      lines: [
-        { kind: 'line', speaker: LIN_WAN, side: 'left', text: '你早就知道，对吗？' },
-        { kind: 'action', text: '陈默沉默，雨声渐大' },
-        { kind: 'line', speaker: CHEN_MO, side: 'right', text: '……我是为了保护你。' },
-      ],
-    },
-  },
-  {
-    id: 'branch-1',
-    type: 'branch',
-    position: { x: 1230, y: 60 },
-    data: { prompt: '林晚是否发现真相？', options: ['坦白', '隐瞒'] },
-  },
-  {
-    id: 'scene-4',
-    type: 'scene',
-    position: { x: 1630, y: -60 },
-    data: {
-      name: '天台摊牌',
-      sceneNo: 4,
-      interior: false,
-      location: '天台',
-      time: '🌙 夜',
-      weather: '🌧 雨',
-      synopsis: '陈默坦白当年真相，林晚在雨中久久无言。',
-      characters: [LIN_WAN, CHEN_MO],
-    },
-  },
-  {
-    id: 'dialogue-2',
-    type: 'dialogue',
-    position: { x: 2080, y: -60 },
-    data: {
-      name: '十年前的雨',
-      lines: [
-        { kind: 'line', speaker: CHEN_MO, side: 'left', text: '那晚，我也在旧公寓。' },
-        { kind: 'line', speaker: LIN_WAN, side: 'right', text: '为什么十年都不告诉我？' },
-      ],
-    },
-  },
-  {
-    id: 'scene-5',
-    type: 'scene',
-    position: { x: 1630, y: 240 },
-    data: {
-      name: '独自离开',
-      sceneNo: 5,
-      interior: false,
-      location: '天台',
-      time: '🌙 夜',
-      weather: '🌧 雨',
-      synopsis: '陈默选择隐瞒，林晚转身离开，雨幕吞没背影。',
-      characters: [LIN_WAN],
-    },
-  },
-  {
-    id: 'beat-2',
-    type: 'beat',
-    position: { x: 2080, y: 260 },
-    data: { name: '身份揭晓', tone: '爆发' },
-  },
-  {
-    id: 'scene-6',
-    type: 'scene',
-    position: { x: 2530, y: 80 },
-    data: {
-      name: '旧公寓',
-      sceneNo: 6,
-      interior: true,
-      location: '旧公寓',
-      time: '🌙 夜',
-      synopsis: '林晚在旧公寓找到父亲留下的第二张照片，两条支线的真相在此汇合。',
-      characters: [LIN_WAN],
-    },
-  },
-  {
-    id: 'shot-3',
-    type: 'shot',
-    position: { x: 2550, y: 340 },
-    data: {
-      shotNo: 3,
-      size: '中景',
-      picture: '旧公寓昏黄灯光下，林晚蹲在纸箱前，手里的照片微微发抖。',
-      prompt: 'dim old apartment, medium shot, woman crouching by cardboard boxes, warm tungsten light',
-      refs: [
-        { kind: 'character', label: '林晚垫图' },
-        { kind: 'location', label: '旧公寓底图' },
-      ],
-    },
-  },
-  {
-    id: 'branch-2',
-    type: 'branch',
-    position: { x: 2980, y: 80 },
-    data: { prompt: '林晚是否原谅陈默？', options: ['原谅', '不原谅'] },
-  },
-  {
-    id: 'scene-7',
-    type: 'scene',
-    position: { x: 3430, y: -20 },
-    data: {
-      name: '天台黎明',
-      sceneNo: 7,
-      interior: false,
-      location: '天台',
-      time: '🌅 晨',
-      synopsis: '雨停了，两人并肩坐在天台边缘，看城市醒来。',
-      characters: [LIN_WAN, CHEN_MO],
-    },
-  },
-  {
-    id: 'scene-8',
-    type: 'scene',
-    position: { x: 3430, y: 260 },
-    data: {
-      name: '车站告别',
-      sceneNo: 8,
-      interior: false,
-      location: '车站',
-      time: '🌅 晨',
-      synopsis: '林晚独自踏上列车，把那张照片留在了站台长椅上。',
-      characters: [LIN_WAN],
-    },
-  },
-]
-
-/** 示例连线：sequence 中性灰走横向剧情流；attach 细虚线从索引卡底部垂直下挂分镜卡；
- * branch 从分支选项端口出发、带选项胶囊。 */
-const initialEdges: Edge[] = [
-  // 第一幕：节奏卡 → 索引卡 → 对白 → 分支
-  { id: 'e-beat1-scene3', source: 'beat-1', target: 'scene-3', className: 'pw-edge-sequence' },
-  {
-    id: 'e-scene3-shot1',
-    source: 'scene-3',
-    sourceHandle: SCENE_SHOT_HANDLE,
-    target: 'shot-1',
-    className: 'pw-edge-attach',
-  },
-  {
-    id: 'e-scene3-shot2',
-    source: 'scene-3',
-    sourceHandle: SCENE_SHOT_HANDLE,
-    target: 'shot-2',
-    className: 'pw-edge-attach',
-  },
-  { id: 'e-scene3-dialogue1', source: 'scene-3', target: 'dialogue-1', className: 'pw-edge-sequence' },
-  { id: 'e-dialogue1-branch1', source: 'dialogue-1', target: 'branch-1', className: 'pw-edge-sequence' },
-  // 支线：坦白 / 隐瞒
-  {
-    id: 'e-branch1-confess',
-    source: 'branch-1',
-    sourceHandle: `${BRANCH_OPTION_HANDLE_PREFIX}0`,
-    target: 'scene-4',
-    type: 'branch',
-    data: { optionLabel: '坦白' },
-  },
-  {
-    id: 'e-branch1-hide',
-    source: 'branch-1',
-    sourceHandle: `${BRANCH_OPTION_HANDLE_PREFIX}1`,
-    target: 'scene-5',
-    type: 'branch',
-    data: { optionLabel: '隐瞒' },
-  },
-  { id: 'e-scene4-dialogue2', source: 'scene-4', target: 'dialogue-2', className: 'pw-edge-sequence' },
-  // 第二幕：节奏卡 → 两线汇合于旧公寓
-  { id: 'e-dialogue2-scene6', source: 'dialogue-2', target: 'scene-6', className: 'pw-edge-sequence' },
-  { id: 'e-scene5-scene6', source: 'scene-5', target: 'scene-6', className: 'pw-edge-sequence' },
-  { id: 'e-beat2-scene6', source: 'beat-2', target: 'scene-6', className: 'pw-edge-sequence' },
-  {
-    id: 'e-scene6-shot3',
-    source: 'scene-6',
-    sourceHandle: SCENE_SHOT_HANDLE,
-    target: 'shot-3',
-    className: 'pw-edge-attach',
-  },
-  // 结局分支：双结局
-  { id: 'e-scene6-branch2', source: 'scene-6', target: 'branch-2', className: 'pw-edge-sequence' },
-  {
-    id: 'e-branch2-forgive',
-    source: 'branch-2',
-    sourceHandle: `${BRANCH_OPTION_HANDLE_PREFIX}0`,
-    target: 'scene-7',
-    type: 'branch',
-    data: { optionLabel: '原谅' },
-  },
-  {
-    id: 'e-branch2-leave',
-    source: 'branch-2',
-    sourceHandle: `${BRANCH_OPTION_HANDLE_PREFIX}1`,
-    target: 'scene-8',
-    type: 'branch',
-    data: { optionLabel: '不原谅' },
-  },
-]
-
 interface EditorViewProps {
-  /** 项目名，展示在统一工具栏中区（内联重命名随编辑器工具栏落地）。 */
-  projectName: string
+  /** 打开的项目：id 用于持久化，name 用于标题栏与导出，doc 为已加载画布。 */
+  project: {
+    id: string
+    name: string
+    nodes: CanvasNode[]
+    edges: Edge[]
+  }
   /** 返回项目首页：同一窗口从编辑器状态切回文档浏览器（§3.1）。 */
   onBackHome: () => void
+  /** 持久化写入（防抖节流由本组件负责；浏览器预览下为内存回退实现）。 */
+  onSave: (doc: { name: string; nodes: CanvasNode[]; edges: Edge[] }) => void
 }
 
 /** ＋节点下拉的创建项（docs/ui-design.md §3.3：场景/节奏卡/对白/分支/分镜卡）。 */
@@ -337,6 +78,20 @@ const CREATE_LABELS: Record<CreatableType, string> = {
   dialogue: '对白',
   branch: '分支',
   shot: '分镜卡',
+}
+
+/** 落盘时剥离 React Flow 运行态字段（selected/measured/dragging 等），只存持久语义。 */
+function stripNode(n: CanvasNode): CanvasNode {
+  return { id: n.id, type: n.type, position: n.position, data: n.data } as CanvasNode
+}
+
+function stripEdge(e: Edge): Edge {
+  const out: Edge = { id: e.id, source: e.source, target: e.target }
+  if (e.sourceHandle) out.sourceHandle = e.sourceHandle
+  if (e.type) out.type = e.type
+  if (e.className) out.className = e.className
+  if (e.data !== undefined) out.data = e.data
+  return out
 }
 
 /**
@@ -356,11 +111,11 @@ export default function EditorView(props: EditorViewProps) {
 /**
  * 编辑器主体：节点创建（＋节点下拉）、⚙️ 设置面板（编辑即命令）、
  * 复制/删除，以及三栏面板开关。全部写操作经命令栈可撤销/重做
- * （§3.3 撤销重做、§4.3 删除可撤销）；持久化随后续任务落地。
+ * （§3.3 撤销重做、§4.3 删除可撤销）；画布变化防抖落盘（持久化）。
  */
-function EditorWindow({ projectName, onBackHome }: EditorViewProps) {
-  const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNode>(initialNodes)
-  const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges)
+function EditorWindow({ project, onBackHome, onSave }: EditorViewProps) {
+  const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNode>(project.nodes)
+  const [edges, setEdges, onEdgesChange] = useEdgesState(project.edges)
   const { screenToFlowPosition, fitView } = useReactFlow()
   const canvasRef = useRef<HTMLDivElement>(null)
 
@@ -370,6 +125,38 @@ function EditorWindow({ projectName, onBackHome }: EditorViewProps) {
   const edgesRef = useRef(edges)
   nodesRef.current = nodes
   edgesRef.current = edges
+
+  // 持久化：画布变化防抖 600ms 全量落盘（剥离 React Flow 运行态字段）；
+  // 跳过首次加载，仅在脏状态下卸载冲刷，避免「只打开不编辑」也盖更新时间戳。
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const dirtyRef = useRef(false)
+  const latestRef = useRef({ name: project.name, nodes, edges })
+  latestRef.current = { name: project.name, nodes, edges }
+  const firstRender = useRef(true)
+  const flushSave = useCallback(() => {
+    if (!dirtyRef.current) return
+    dirtyRef.current = false
+    const { name, nodes: ns, edges: es } = latestRef.current
+    onSave({ name, nodes: ns.map(stripNode), edges: es.map(stripEdge) })
+  }, [onSave])
+  useEffect(() => {
+    if (firstRender.current) {
+      firstRender.current = false
+      return
+    }
+    dirtyRef.current = true
+    if (saveTimer.current) clearTimeout(saveTimer.current)
+    saveTimer.current = setTimeout(() => {
+      saveTimer.current = null
+      flushSave()
+    }, 600)
+  }, [nodes, edges, project.name, flushSave])
+  useEffect(() => {
+    return () => {
+      if (saveTimer.current) clearTimeout(saveTimer.current)
+      flushSave()
+    }
+  }, [flushSave])
 
   // 命令栈（§3.3/§4.3）：全部写操作入栈，undo 始终兜底
   const {
@@ -884,7 +671,7 @@ function EditorWindow({ projectName, onBackHome }: EditorViewProps) {
           ‹ 首页
         </button>
         <span className="editor-title" data-tauri-drag-region>
-          {projectName}
+          {project.name}
         </span>
         <div className="editor-plus">
           <button
@@ -1082,8 +869,8 @@ function EditorWindow({ projectName, onBackHome }: EditorViewProps) {
       {/* 剧本导出对话框（§3.3/§3.5）：打开时按当前画布生成 */}
       {exportOpen && (
         <ExportDialog
-          projectName={projectName}
-          text={buildScriptMarkdown(projectName, nodes, edges)}
+          projectName={project.name}
+          text={buildScriptMarkdown(project.name, nodes, edges)}
           onClose={() => setExportOpen(false)}
         />
       )}

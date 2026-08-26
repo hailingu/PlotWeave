@@ -4,6 +4,8 @@ import { filterProjects, type ProjectSummary } from './projects'
 
 interface HomePageProps {
   projects: ProjectSummary[]
+  /** 列表首次加载中（持久化命令异步返回）；加载完前不显示空状态引导。 */
+  loading?: boolean
   /** 双击海报卡打开项目，窗口切换为编辑器（文档式双界面，§3.1）。 */
   onOpenProject: (id: string) => void
   /** 工具栏「＋ 新建项目」、网格末尾「＋ 新剧」与空状态引导共用此入口。 */
@@ -17,6 +19,7 @@ interface HomePageProps {
  */
 export default function HomePage({
   projects,
+  loading = false,
   onOpenProject,
   onCreateProject,
 }: HomePageProps) {
@@ -53,7 +56,7 @@ export default function HomePage({
         </span>
       </header>
 
-      {projects.length === 0 ? (
+      {!loading && projects.length === 0 ? (
         <div className="home-empty">
           <button
             type="button"
