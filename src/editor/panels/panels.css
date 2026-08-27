@@ -260,7 +260,163 @@
   text-align: center;
 }
 
-/* ---- ✦AI 对话（§6 结构占位） ---- */
+/* ---- 大纲集分组（§3.5：集 = 逻辑分类，编号 + 行内标题） ---- */
+.pw-outline-group {
+  margin-bottom: 6px;
+}
+
+.pw-outline-ep {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px 2px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+.pw-outline-ep.static {
+  padding-left: 10px;
+  opacity: 0.7;
+}
+
+.pw-outline-ep-btn {
+  border: none;
+  background: none;
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.pw-outline-ep-btn:hover {
+  background: var(--fill-quaternary);
+}
+
+.pw-outline-ep-btn.on {
+  color: #fff;
+  background: var(--brand-gradient);
+}
+
+.pw-outline-ep-count {
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+/* ---- ✦AI 改动预览卡（§6：整卡 = 一个 batch 命令，删除置顶二次确认） ---- */
+.pw-ai-entry {
+  margin: 0 0 4px;
+}
+
+.pw-ai-note {
+  margin: 4px 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.pw-ai-card {
+  margin: 6px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-lg);
+  background: var(--fill-quaternary);
+}
+
+.pw-ai-card.danger {
+  border-color: var(--danger);
+}
+
+.pw-ai-card-head {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
+
+.pw-ai-card.danger .pw-ai-card-head {
+  color: var(--danger);
+}
+
+.pw-ai-items,
+.pw-ai-issues {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.pw-ai-item,
+.pw-ai-issue {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.pw-ai-item.danger {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.pw-ai-item-icon {
+  flex: none;
+  width: 14px;
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.pw-ai-item.danger .pw-ai-item-icon {
+  color: var(--danger);
+}
+
+.pw-ai-issue {
+  color: var(--danger);
+}
+
+.pw-ai-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.pw-ai-btn {
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-md);
+  background: none;
+  padding: 3px 12px;
+  font-size: 11.5px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.pw-ai-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.pw-ai-btn.primary {
+  background: var(--control-primary-bg);
+  color: var(--control-primary-fg);
+  border-color: transparent;
+}
+
+/* 删除类批次：确认按钮 danger 色，执行是显式动作（§6 不设自动执行） */
+.pw-ai-btn.primary.danger {
+  background: var(--danger);
+  color: #fff;
+}
+
+/* ---- ✦AI 对话（§6：气泡、引导卡、输入区） ---- */
 .pw-ai {
   display: flex;
   flex-direction: column;
@@ -378,4 +534,32 @@
 .pw-settings-add:hover {
   color: var(--text-primary);
   border-color: var(--accent-alt);
+}
+
+/* ---- 大纲拖拽（§3.5：拖拽排序 = 重排 sequence 边；跨组 = 改集归属） ---- */
+.pw-outline-row[draggable='true'] {
+  cursor: grab;
+}
+
+.pw-outline-row[draggable='true']:active {
+  cursor: grabbing;
+}
+
+.pw-outline-row.pw-drop-above {
+  box-shadow: inset 0 2px 0 var(--accent-alt);
+}
+
+.pw-outline-row.pw-drop-below {
+  box-shadow: inset 0 -2px 0 var(--accent-alt);
+}
+
+.pw-outline-ep.pw-drop-into {
+  outline: 1.5px dashed var(--accent-alt);
+  outline-offset: -1px;
+  border-radius: var(--radius-sm);
+}
+
+/* 大纲行的节拍兑现徽标（§3.5：待兑现 = 节奏漏洞，一眼可查） */
+.pw-beat-state {
+  margin-left: 8px;
 }

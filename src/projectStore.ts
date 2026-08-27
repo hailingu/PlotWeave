@@ -15,12 +15,27 @@ import {
 } from './editor/settings'
 import type { ProjectSummary } from './home/projects'
 
-/** 项目完整内容：名称 + 画布两数组 + 设定集。 */
+/** 项目完整内容：名称 + 画布两数组 + 设定集 + 大纲集标题。 */
 export interface ProjectDocument {
   name: string
   nodes: CanvasNode[]
   edges: Edge[]
   settings: ProjectSettings
+  /** 集 = 编号 + 大纲行内标题（§3.5，不建集实体表）；缺省视为无命名集。 */
+  episodeTitles?: Record<number, string>
+}
+
+/** 集标题表归一化：JSON 键是字符串，只保留「数字键 → 非空标题」映射。 */
+function normalizeEpisodeTitles(v: unknown): Record<number, string> {
+  const out: Record<number, string> = {}
+  if (typeof v !== 'object' || v === null) return out
+  for (const [k, title] of Object.entries(v as Record<string, unknown>)) {
+    const ep = Number(k)
+    if (Number.isInteger(ep) && ep > 0 && typeof title === 'string' && title.trim() !== '') {
+      out[ep] = title.trim()
+    }
+  }
+  return out
 }
 
 /**
@@ -244,15 +259,19 @@ async function tauriCreate(name: string): Promise<ProjectSummary> {
 
 async function tauriLoad(id: string): Promise<ProjectDocument> {
   const { invoke } = await import('@tauri-apps/api/core')
-  const file = await invoke<{ name: string; nodes: CanvasNode[]; edges: Edge[]; settings?: unknown }>(
-    'load_project',
-    { id },
-  )
+  const file = await invoke<{
+    name: string
+    nodes: CanvasNode[]
+    edges: Edge[]
+    settings?: unknown
+    episodeTitles?: unknown
+  }>('load_project', { id })
   const doc = migrateProjectDocument({
     name: file.name,
     nodes: file.nodes,
     edges: file.edges,
     settings: normalizeSettings(file.settings),
+    episodeTitles: normalizeEpisodeTitles(file.episodeTitles),
   })
   // 迁移发生则写回磁盘，下次打开不再迁移
   if (doc.migrated) void tauriSave(id, doc.doc)
@@ -269,6 +288,7 @@ async function tauriSave(id: string, doc: ProjectDocument): Promise<void> {
       nodes: doc.nodes,
       edges: doc.edges,
       settings: doc.settings,
+      episodeTitles: doc.episodeTitles ?? {},
     },
   })
 }

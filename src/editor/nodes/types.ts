@@ -33,6 +33,8 @@ export interface SceneNodeData extends Record<string, unknown> {
   synopsis: string
   /** 在场角色实体 id 列表（设定集角色）。 */
   characterIds: string[]
+  /** 集归属（§3.5 大纲分组的唯一依据；不建「集」实体表）。 */
+  episodeNo?: number
 }
 
 /** 对白的一行：角色台词（带说话人与左右侧）或居中动作行。 */
@@ -50,6 +52,8 @@ export interface DialogueLine {
 export interface DialogueNodeData extends Record<string, unknown> {
   name: string
   lines: DialogueLine[]
+  /** 集归属（§3.5）。 */
+  episodeNo?: number
 }
 
 /** 节奏卡节点（节拍胶囊）：承载节奏而非内容。 */
@@ -57,12 +61,16 @@ export interface BeatNodeData extends Record<string, unknown> {
   name: string
   /** 情绪基调（emotionalTone）。 */
   tone: string
+  /** 集归属（§3.5）。 */
+  episodeNo?: number
 }
 
 /** 分支节点（岔路路标）：分岔事由为问句，选项右缘各带独立出口端口。 */
 export interface BranchNodeData extends Record<string, unknown> {
   prompt: string
   options: string[]
+  /** 集归属（§3.5）。 */
+  episodeNo?: number
 }
 
 /** 分镜卡的 AI 燃料引用位：角色垫图 / 场景底图 / 音频，首版为缩略 chip 占位。 */

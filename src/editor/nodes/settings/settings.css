@@ -259,3 +259,14 @@ select.pw-set-input {
   font-size: 11px;
   color: var(--text-secondary);
 }
+
+/* 集归属（§3.5） */
+.pw-set-ep {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pw-set-ep .pw-set-input {
+  flex: 1;
+}

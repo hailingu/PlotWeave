@@ -1,4 +1,5 @@
 import { createContext, useContext } from 'react'
+import type { BeatFulfillment } from './outline'
 import type { ProjectSettings } from './settings'
 
 /**
@@ -21,6 +22,8 @@ export interface NodeEditApi {
   deleteNode: (id: string) => void
   /** 索引卡的分镜计数：派生自该场 attach 下挂边数量（§7.2，不落镜像字段）。 */
   shotCountOf: (id: string) => number
+  /** 节拍兑现状态（§3.5）：sequence 邻接派生；非节拍 id 返回 null。 */
+  beatFulfillmentOf: (id: string) => BeatFulfillment | null
   /** 项目设定集：节点渲染实体引用（角色头像/地点名）的解析源（§5）。 */
   settings: ProjectSettings
 }

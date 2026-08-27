@@ -38,9 +38,29 @@ import { readEntityPayload, PW_ENTITY_MIME } from './dragDrop'
 import ExportDialog from './ExportDialog'
 import { buildScriptMarkdown } from './exportScript'
 import { EditableName } from './nodes/settings/NodeSettingsPanel'
+import { isDuplicateEdge, branchOptionHandle, wouldCreateCycle } from './graphRules'
+import { buildGraphDigest } from './ai/graphDigest'
+import {
+  beatFulfillmentMap,
+  buildOutlineGroups,
+  episodeOfNode,
+  hostSceneMap,
+  type BeatFulfillment,
+  type OutlineDropTarget,
+} from './outline'
+import { planSpliceIntoSpine, type SplicePlan } from './spine'
+import {
+  extractBatchJson,
+  validateAiBatch,
+  type AiCommand,
+  type AiGraphSnapshot,
+  type BatchValidation,
+} from './ai/commands'
 import {
   createCharacter,
   createLocation,
+  resolveCharacterName,
+  resolveLocationName,
   type ProjectSettings,
 } from './settings'
 import type { CanvasNode } from './nodes/types'
@@ -67,6 +87,8 @@ interface EditorViewProps {
     nodes: CanvasNode[]
     edges: Edge[]
     settings: ProjectSettings
+    /** 大纲集标题（§3.5：集 = 编号 + 行内标题）。 */
+    episodeTitles?: Record<number, string>
   }
   /** 返回项目首页：同一窗口从编辑器状态切回文档浏览器（§3.1）。 */
   onBackHome: () => void
@@ -75,7 +97,13 @@ interface EditorViewProps {
   /** 打开设置页（§8.2 BYOK 配置入口，⌘,）。 */
   onOpenSettings?: () => void
   /** 持久化写入（防抖节流由本组件负责；浏览器预览下为内存回退实现）。 */
-  onSave: (doc: { name: string; nodes: CanvasNode[]; edges: Edge[]; settings: ProjectSettings }) => void
+  onSave: (doc: {
+    name: string
+    nodes: CanvasNode[]
+    edges: Edge[]
+    settings: ProjectSettings
+    episodeTitles: Record<number, string>
+  }) => void
 }
 
 /** ＋节点下拉的创建项（docs/ui-design.md §3.3：场景/节奏卡/对白/分支/分镜卡）。 */
@@ -127,6 +155,11 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNode>(project.nodes)
   const [edges, setEdges, onEdgesChange] = useEdgesState(project.edges)
   const [settings, setSettings] = useState<ProjectSettings>(project.settings)
+  /** 大纲集标题（§3.5）与集聚焦态：聚焦时该集节点提亮、其余降透明度。 */
+  const [episodeTitles, setEpisodeTitles] = useState<Record<number, string>>(
+    project.episodeTitles ?? {},
+  )
+  const [focusedEpisode, setFocusedEpisode] = useState<number | null>(null)
   const { screenToFlowPosition, fitView } = useReactFlow()
   const canvasRef = useRef<HTMLDivElement>(null)
 
@@ -136,20 +169,27 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
   const edgesRef = useRef(edges)
   nodesRef.current = nodes
   edgesRef.current = edges
+  const episodeTitlesRef = useRef(episodeTitles)
+  episodeTitlesRef.current = episodeTitles
 
   // 持久化：画布变化防抖 600ms 全量落盘（剥离 React Flow 运行态字段）；
   // 跳过首次加载，仅在脏状态下卸载冲刷，避免「只打开不编辑」也盖更新时间戳。
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const dirtyRef = useRef(false)
-  const latestRef = useRef({ name: project.name, nodes, edges, settings })
-  latestRef.current = { name: project.name, nodes, edges, settings }
+  const latestRef = useRef({
+    name: project.name,
+    nodes,
+    edges,
+    settings,
+    episodeTitles,
+  })
+  latestRef.current = { name: project.name, nodes, edges, settings, episodeTitles }
   const firstRender = useRef(true)
   const flushSave = useCallback(() => {
     if (!dirtyRef.current) return
     dirtyRef.current = false
-    const { name, nodes: ns, edges: es } = latestRef.current
-    const { settings: st } = latestRef.current
-    onSave({ name, nodes: ns.map(stripNode), edges: es.map(stripEdge), settings: st })
+    const { name, nodes: ns, edges: es, settings: st, episodeTitles: et } = latestRef.current
+    onSave({ name, nodes: ns.map(stripNode), edges: es.map(stripEdge), settings: st, episodeTitles: et })
   }, [onSave])
   useEffect(() => {
     if (firstRender.current) {
@@ -356,6 +396,142 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
     [patchSettings, settings],
   )
 
+  /** 集 = 编号 + 大纲行内标题（§3.5，不建集实体表）：改名即命令，连续
+   * 输入按同键合并为一步撤销；标题清空 = 移除该集命名。 */
+  const renameEpisode = useCallback(
+    (no: number, title: string) => {
+      const before = episodeTitlesRef.current[no] ?? ''
+      const next = title.trim()
+      setEpisodeTitles((t) => {
+        if (next === '') {
+          const rest = { ...t }
+          delete rest[no]
+          return rest
+        }
+        return { ...t, [no]: next }
+      })
+      pushHistory({
+        coalesceKey: `episode-title:${no}`,
+        undo: () =>
+          setEpisodeTitles((t) => {
+            if (before === '') {
+              const rest = { ...t }
+              delete rest[no]
+              return rest
+            }
+            return { ...t, [no]: before }
+          }),
+        redo: () =>
+          setEpisodeTitles((t) => (next === '' ? { ...t, [no]: next } : { ...t, [no]: next })),
+      })
+    },
+    [pushHistory],
+  )
+
+  /** 点击大纲集行（§3.5）：该集全部节点提亮、其余降透明度退后；再点取消。 */
+  const toggleEpisodeFocus = useCallback((no: number | null) => {
+    setFocusedEpisode((cur) => (cur === no ? null : no))
+  }, [])
+
+  /** 集聚焦的画布投影：成员保持原样，非成员加降透明度类（§3.5 ~30%）。
+   * className 是运行态样式（stripNode 落盘时剥离），不入持久化。 */
+  const displayNodes = useMemo(() => {
+    if (focusedEpisode === null) return nodes
+    const sceneByShot = hostSceneMap(nodes, edges)
+    return nodes.map((n) =>
+      episodeOfNode(n, (id) => sceneByShot.get(id)) === focusedEpisode
+        ? n
+        : ({ ...n, className: 'pw-node-dim' } as CanvasNode),
+    )
+  }, [nodes, edges, focusedEpisode])
+
+  /** 大纲拖拽落点（§3.5）：重排 sequence 边 + 跨组改集归属，
+   * 计划由 spine.ts 纯函数产出，这里整体翻译为**一条**可撤销命令。 */
+  const onOutlineDrop = useCallback(
+    (draggedId: string, target: OutlineDropTarget) => {
+      const dragged = nodesRef.current.find((n) => n.id === draggedId)
+      if (!dragged) return
+
+      // 1) 接缝计划（groupEnd 锚到该组最后一个剧情流行）
+      let plan: SplicePlan | null = null
+      let anchorId: string | null = null
+      if (target.kind === 'row') {
+        anchorId = target.anchorId
+        plan = planSpliceIntoSpine(edgesRef.current, draggedId, anchorId, target.position)
+        if (!plan) return
+      } else {
+        const group = buildOutlineGroups(
+          nodesRef.current,
+          edgesRef.current,
+          episodeTitlesRef.current,
+        ).find((g) => g.episode === target.episode)
+        const spineRows = (group?.rows ?? []).filter(
+          (r) => r.id !== draggedId && r.level < 3,
+        )
+        for (let i = spineRows.length - 1; i >= 0; i--) {
+          const cand = planSpliceIntoSpine(
+            edgesRef.current,
+            draggedId,
+            spineRows[i].id,
+            'after',
+          )
+          if (cand) {
+            plan = cand
+            anchorId = spineRows[i].id
+            break
+          }
+        }
+      }
+      if (!plan) return
+
+      // 2) 落点集归属：行落点随锚点所在组，组尾落点即目标组
+      const sceneByShot = hostSceneMap(nodesRef.current, edgesRef.current)
+      const anchorNode =
+        anchorId !== null ? nodesRef.current.find((n) => n.id === anchorId) : undefined
+      const targetEpisode =
+        target.kind === 'groupEnd' ? target.episode : episodeOfNode(anchorNode!, (id) => sceneByShot.get(id))
+      const oldEpisodeRaw = (dragged.data as { episodeNo?: unknown }).episodeNo
+      const oldEpisode = typeof oldEpisodeRaw === 'number' ? oldEpisodeRaw : null
+      const episodeChanged = targetEpisode !== oldEpisode
+
+      const noSplice = plan.removes.length === 0 && plan.adds.length === 0
+      if (noSplice && !episodeChanged) return
+
+      // 3) 单命令执行：边手术 + episodeNo 补丁，一步撤销整批回滚
+      const stamp = Date.now().toString(36)
+      const removedEdges = edgesRef.current.filter((e) => plan!.removes.includes(e.id))
+      const addedEdges: Edge[] = plan!.adds.map(({ source, target: t }, i) => ({
+        id: `e-${source}-out-${t}-mv-${stamp}-${i}`,
+        source,
+        target: t,
+        className: 'pw-edge-sequence',
+      }))
+      const applyEdges = (remove: boolean) => {
+        if (addedEdges.length === 0 && removedEdges.length === 0) return
+        setEdges((eds) =>
+          remove
+            ? [...eds.filter((e) => !removedEdges.some((r) => r.id === e.id)), ...addedEdges]
+            : [...eds.filter((e) => !addedEdges.some((a) => a.id === e.id)), ...removedEdges],
+        )
+      }
+      const patchEp = (ep: number | null) =>
+        applyDataPatch(draggedId, { episodeNo: ep ?? undefined })
+      applyEdges(true)
+      if (episodeChanged) patchEp(targetEpisode)
+      pushHistory({
+        undo: () => {
+          applyEdges(false)
+          if (episodeChanged) patchEp(oldEpisode)
+        },
+        redo: () => {
+          applyEdges(true)
+          if (episodeChanged) patchEp(targetEpisode)
+        },
+      })
+    },
+    [applyDataPatch, pushHistory, setEdges],
+  )
+
   /** 索引卡的 🎞 镜数：派生自该场 attach 下挂边数量（§7.2，不落镜像字段）。 */
   const shotCountOf = useCallback(
     (id: string) =>
@@ -365,28 +541,67 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
     [],
   )
 
-  /** 画布上下文快照（§6「了解当前画布」）：id/type/名称 + 连接关系压缩文本。 */
-  const canvasDigest = useMemo(() => {
-    const label = (n: CanvasNode): string => {
-      switch (n.type) {
-        case 'scene': return `场${n.data.sceneNo}·${n.data.name}`
-        case 'dialogue': return `对白·${n.data.name}`
-        case 'beat': return `节拍·${n.data.name}`
-        case 'branch': return `分支·${n.data.prompt}`
-        case 'shot': return `SHOT${n.data.shotNo}·${n.data.size}`
-      }
+  /** 节拍兑现状态（§3.5）：sequence 邻接派生，供胶囊与大纲行展示。 */
+  const beatFulfillment = useMemo(() => beatFulfillmentMap(nodes, edges), [nodes, edges])
+  const beatFulfillmentOf = useCallback(
+    (id: string): BeatFulfillment | null => beatFulfillment.get(id) ?? null,
+    [beatFulfillment],
+  )
+
+  /** 节点人读标签：画布快照、改动预览与批次执行共用。 */
+  const nodeLabel = useCallback((n: CanvasNode): string => {
+    switch (n.type) {
+      case 'scene': return `场${n.data.sceneNo}·${n.data.name}`
+      case 'dialogue': return `对白·${n.data.name}`
+      case 'beat': return `节拍·${n.data.name}`
+      case 'branch': return `分支·${n.data.prompt}`
+      case 'shot': return `SHOT${n.data.shotNo}·${n.data.size}`
     }
-    const nodeLines = nodes.map((n) => `- ${label(n)}`).join('\n')
-    const edgeLines = edges
-      .map((e) => {
-        const src = nodes.find((n) => n.id === e.source)
-        const dst = nodes.find((n) => n.id === e.target)
-        return src && dst ? `${label(src)} → ${label(dst)}` : null
-      })
-      .filter((x): x is string => x !== null)
-      .join('\n')
-    return `节点：\n${nodeLines}\n\n连接：\n${edgeLines}`
-  }, [nodes, edges])
+  }, [])
+
+  /** 画布上下文快照（§6「了解当前画布」+ 数据模型 §12.2 压缩视图）：
+   * 节点 id/参数、连线语义、剧情流投影与设定集 id——AI 写回命令的锚点。 */
+  const canvasDigest = useMemo(
+    () =>
+      buildGraphDigest(nodes, edges, {
+        characters: settings.characters,
+        locations: settings.locations,
+        characterName: (id) => resolveCharacterName(settings, id),
+        locationName: (id) => resolveLocationName(settings, id),
+      }),
+    [nodes, edges, settings],
+  )
+
+  /** AI 校验用的图快照（§12.2）：类型 + 分支选项数供分类型校验。 */
+  const aiSnapshot = useCallback(
+    (): AiGraphSnapshot => ({
+      nodes: nodesRef.current.map((n) => ({
+        id: n.id,
+        type: n.type,
+        label: nodeLabel(n),
+        ...(n.type === 'branch' ? { optionsCount: n.data.options.length } : {}),
+      })),
+      edges: edgesRef.current.map((e) => ({
+        source: e.source,
+        target: e.target,
+        sourceHandle: e.sourceHandle,
+        type: e.type,
+      })),
+    }),
+    [nodeLabel],
+  )
+
+  /** 解析并整批校验助手回复里的命令；无批次（纯讨论）返回 null。
+   * 校验语义见 ai/commands.ts：任一条非法则整批拒绝。 */
+  const validateAiReply = useCallback(
+    (text: string): BatchValidation | null => {
+      const parsed = extractBatchJson(text)
+      if (!parsed) return null
+      return validateAiBatch(parsed.commands, aiSnapshot())
+    },
+    [aiSnapshot],
+  )
+
 
   /** 大纲 ⇄ 画布联动（§3.5）：点击大纲行 = 选中该节点并居中。 */
   const locateNode = useCallback(
@@ -397,54 +612,40 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
     [fitView, setNodes],
   )
 
-  /** 连线实时校验（§4.3）：自环 / 成环 / 重复边为非法；attach 下挂一对多合法。 */
+  /** 连线实时校验（§4.3）：自环 / 成环 / 重复边为非法；attach 下挂一对多合法。
+   * 判定语义与 AI 批量校验共用 graphRules 纯函数；attach 是垂直派生边，
+   * 不参与剧情流环检测（§4.4 横向 = 剧情顺序，垂直 = 派生从属）。 */
   const isValidConnection = useCallback(
     (conn: Connection | Edge): boolean => {
       if (conn.source === conn.target) return false
       const existing = edgesRef.current
-      const duplicate = existing.some(
-        (e) =>
-          e.source === conn.source &&
-          e.target === conn.target &&
-          e.sourceHandle === conn.sourceHandle,
-      )
-      if (duplicate) return false
+      if (isDuplicateEdge(existing, conn)) return false
       if (conn.sourceHandle === SCENE_SHOT_HANDLE) return true
-      // 成环检测：从 target 沿现有边能否回到 source
-      const adjacency = new Map<string, string[]>()
-      for (const e of existing) {
-        const list = adjacency.get(e.source) ?? []
-        list.push(e.target)
-        adjacency.set(e.source, list)
-      }
-      const seen = new Set<string>()
-      const stack = [conn.target]
-      while (stack.length > 0) {
-        const cur = stack.pop()!
-        if (cur === conn.source) return false
-        if (seen.has(cur)) continue
-        seen.add(cur)
-        for (const next of adjacency.get(cur) ?? []) stack.push(next)
-      }
-      return true
+      const flowEdges = existing.filter((e) => e.sourceHandle !== SCENE_SHOT_HANDLE)
+      return !wouldCreateCycle(flowEdges, conn.source, conn.target)
     },
     [],
   )
 
-  /** 新建节点的默认字段（占位文案引导填写；场号/镜号取当前最大值 +1）。
-   * opts.at 指定落点（拖拽生成预填节点），opts.data 合并覆盖默认字段。 */
-  const createNode = useCallback(
-    (type: CreatableType, opts?: { at?: XYPosition; data?: Record<string, unknown> }) => {
-      const nds = nodesRef.current
+  /** 新建节点的对象构建（默认字段 + 落点），不入状态、不入栈。
+   * 手动创建与 ✦AI 批量创建共用；against 提供场号/镜号的基线列表
+   * （批量连续创建时传模拟数组防止编号重复）。 */
+  const buildNewNode = useCallback(
+    (
+      type: CreatableType,
+      opts?: { at?: XYPosition; selected?: boolean; data?: Record<string, unknown>; against?: CanvasNode[] },
+    ): CanvasNode => {
+      const nds = opts?.against ?? nodesRef.current
+      const select = opts?.selected ?? true
       const maxNo = (pick: (n: CanvasNode) => number) =>
         Math.max(0, ...nds.map(pick)) + 1
       let node: CanvasNode
       if (type === 'scene') {
         node = {
-          id: `scene-${Date.now()}`,
+          id: `scene-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
           type: 'scene',
           position: { x: 0, y: 0 },
-          selected: true,
+          selected: select,
           data: {
             name: '新场景',
             sceneNo: maxNo((n) => (n.type === 'scene' ? n.data.sceneNo : 0)),
@@ -457,18 +658,18 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
         }
       } else if (type === 'beat') {
         node = {
-          id: `beat-${Date.now()}`,
+          id: `beat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
           type: 'beat',
           position: { x: 0, y: 0 },
-          selected: true,
+          selected: select,
           data: { name: '新节拍', tone: '待定', ...opts?.data },
         }
       } else if (type === 'dialogue') {
         node = {
-          id: `dialogue-${Date.now()}`,
+          id: `dialogue-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
           type: 'dialogue',
           position: { x: 0, y: 0 },
-          selected: true,
+          selected: select,
           data: {
             name: '新对白',
             lines: [
@@ -479,18 +680,18 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
         }
       } else if (type === 'branch') {
         node = {
-          id: `branch-${Date.now()}`,
+          id: `branch-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
           type: 'branch',
           position: { x: 0, y: 0 },
-          selected: true,
+          selected: select,
           data: { prompt: '新的分岔是…？', options: ['选项 A', '选项 B'], ...opts?.data },
         }
       } else {
         node = {
-          id: `shot-${Date.now()}`,
+          id: `shot-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
           type: 'shot',
           position: { x: 0, y: 0 },
-          selected: true,
+          selected: select,
           data: {
             shotNo: maxNo((n) => (n.type === 'shot' ? n.data.shotNo : 0)),
             size: '中景',
@@ -501,6 +702,7 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
           },
         }
       }
+      const cascade = (nds.length % 5) * 28
       if (opts?.at) {
         node.position = opts.at
       } else {
@@ -511,10 +713,18 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
             x: rect.left + rect.width / 2,
             y: rect.top + rect.height / 2,
           })
-          const cascade = (nds.length % 5) * 28
           node.position = { x: center.x - 170 + cascade, y: center.y - 60 + cascade }
         }
       }
+      return node
+    },
+    [screenToFlowPosition, settings],
+  )
+
+  /** ＋节点/拖拽生成：构建节点 → 入状态 → 单步入栈可撤销。 */
+  const createNode = useCallback(
+    (type: CreatableType, opts?: { at?: XYPosition; data?: Record<string, unknown> }) => {
+      const node = buildNewNode(type, { at: opts?.at, selected: true, data: opts?.data })
       setNodes((all) => [...all.map((n) => ({ ...n, selected: false })), node])
       pushHistory({
         undo: () => setNodes((all) => all.filter((n) => n.id !== node.id)),
@@ -523,7 +733,145 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
       setPlusOpen(false)
       setOpenSettingsId(null)
     },
-    [pushHistory, screenToFlowPosition, setNodes, settings],
+    [buildNewNode, pushHistory, setNodes],
+  )
+
+  /** ✦AI 改动落地（§6 改动预览卡、数据模型 §12 Agent 是命令的另一个生产者）：
+   * 先按当前图重新整批校验（防预览后用户又改了画布），再逐条翻译为
+   * setNodes/setEdges 的前进/回退闭包，整体作为**一条**复合命令入栈——
+   * 执行整批生效，⌘Z 一步撤销即整批回滚。返回错误文案或 null。 */
+  const applyAiBatch = useCallback(
+    (batch: AiCommand[]): string | null => {
+      if (batch.length === 0) return null
+      const fresh = validateAiBatch(batch, aiSnapshot())
+      if (!fresh.ok) {
+        return `改动无法安全执行：${fresh.issues[0]?.message ?? '批次校验未通过'}`
+      }
+
+      // 折叠模拟：批量创建时场号/镜号基线与引用解析都基于虚拟终态，
+      // 每个动作的前进/回退闭包在模拟期一次性捕获，不做运行期查询。
+      let simNodes = [...nodesRef.current]
+      let simEdges = [...edgesRef.current]
+      const refToId = new Map<string, string>()
+      const resolveId = (raw: string): string => refToId.get(raw) ?? raw
+      const forward: Array<() => void> = []
+      const backward: Array<() => void> = []
+
+      for (const cmd of batch) {
+        switch (cmd.op) {
+          case 'create_node': {
+            const node = buildNewNode(cmd.nodeType as CreatableType, {
+              selected: false,
+              data: (cmd.data as Record<string, unknown>) ?? undefined,
+              against: simNodes,
+            })
+            if (typeof cmd.ref === 'string' && cmd.ref !== '') refToId.set(cmd.ref, node.id)
+            simNodes = [...simNodes, node]
+            forward.push(() => setNodes((all) => [...all, node]))
+            backward.push(() => setNodes((all) => all.filter((n) => n.id !== node.id)))
+            break
+          }
+          case 'update_node': {
+            const id = resolveId(cmd.nodeId)
+            const target = simNodes.find((n) => n.id === id)
+            if (!target) continue
+            const keys = Object.keys(cmd.patch)
+            const before: Record<string, unknown> = {}
+            for (const k of keys) before[k] = (target.data as Record<string, unknown>)[k]
+            simNodes = simNodes.map((n) =>
+              n.id === id ? ({ ...n, data: { ...n.data, ...cmd.patch } } as CanvasNode) : n,
+            )
+            forward.push(() => applyDataPatch(id, cmd.patch))
+            backward.push(() => applyDataPatch(id, before))
+            break
+          }
+          case 'delete_node': {
+            const removedId = resolveId(cmd.nodeId)
+            const idSet = new Set([removedId])
+            const removedNodes = simNodes.filter((n) => idSet.has(n.id))
+            if (removedNodes.length === 0) continue
+            const removedEdges = simEdges.filter((e) => idSet.has(e.source) || idSet.has(e.target))
+            simNodes = simNodes.filter((n) => !idSet.has(n.id))
+            simEdges = simEdges.filter((e) => !idSet.has(e.source) && !idSet.has(e.target))
+            // 状态删除内联（不走 deleteNodesByIds——那会额外入栈破坏单步撤销）
+            forward.push(() => {
+              setNodes((all) => all.filter((n) => n.id !== removedId))
+              setEdges((eds) => eds.filter((e) => e.source !== removedId && e.target !== removedId))
+            })
+            backward.push(() => {
+              setNodes((all) => [...all, ...removedNodes])
+              setEdges((eds) => [...eds, ...removedEdges])
+            })
+            break
+          }
+          case 'connect_edge': {
+            const srcId = resolveId(cmd.sourceId)
+            const dstId = resolveId(cmd.targetId)
+            const kind = typeof cmd.edgeKind === 'string' ? cmd.edgeKind : 'sequence'
+            let edge: Edge
+            if (kind === 'attach') {
+              // 分镜下挂（§4.4 垂直派生边）
+              edge = {
+                id: `e-${srcId}-shots-${dstId}-ai-${forward.length}`,
+                source: srcId,
+                target: dstId,
+                sourceHandle: SCENE_SHOT_HANDLE,
+                className: 'pw-edge-attach',
+              }
+            } else if (kind === 'branch') {
+              // 分支选项出口：胶囊文案与分支选项同源（§4.4 不落第二份拷贝语义）
+              const idx = typeof cmd.optionIndex === 'number' ? cmd.optionIndex : 0
+              const branchNode = simNodes.find((n) => n.id === srcId)
+              const optionLabel =
+                branchNode?.type === 'branch' ? (branchNode.data.options[idx] ?? '') : ''
+              edge = {
+                id: `e-${srcId}-${branchOptionHandle(idx)}-${dstId}-ai-${forward.length}`,
+                source: srcId,
+                target: dstId,
+                sourceHandle: branchOptionHandle(idx),
+                type: 'branch',
+                data: { optionLabel },
+              }
+            } else {
+              edge = {
+                id: `e-${srcId}-${dstId}-ai-${forward.length}`,
+                source: srcId,
+                target: dstId,
+                className: 'pw-edge-sequence',
+              }
+            }
+            simEdges = [...simEdges, edge]
+            forward.push(() => setEdges((eds) => addEdge(edge, eds)))
+            backward.push(() => setEdges((eds) => eds.filter((e) => e.id !== edge.id)))
+            break
+          }
+          case 'disconnect_edge': {
+            const srcId = resolveId(cmd.sourceId)
+            const dstId = resolveId(cmd.targetId)
+            const hitIdx = simEdges.findIndex(
+              (e) => e.source === srcId && e.target === dstId,
+            )
+            if (hitIdx < 0) continue
+            const removed = simEdges[hitIdx]
+            simEdges = [...simEdges.slice(0, hitIdx), ...simEdges.slice(hitIdx + 1)]
+            forward.push(() =>
+              setEdges((eds) => eds.filter((e) => !(e.source === removed.source && e.target === removed.target))),
+            )
+            backward.push(() => setEdges((eds) => addEdge(removed, eds)))
+            break
+          }
+        }
+      }
+
+      forward.forEach((f) => f())
+      pushHistory({
+        undo: () => [...backward].reverse().forEach((f) => f()),
+        redo: () => forward.forEach((f) => f()),
+      })
+      setOpenSettingsId(null)
+      return null
+    },
+    [aiSnapshot, applyDataPatch, buildNewNode, pushHistory, setEdges, setNodes],
   )
 
   const nodeEditApi = useMemo<NodeEditApi>(
@@ -535,9 +883,10 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
       duplicateNode,
       deleteNode,
       shotCountOf,
+      beatFulfillmentOf,
       settings,
     }),
-    [openSettingsId, toggleSettings, closeSettings, patchNode, duplicateNode, deleteNode, shotCountOf, settings],
+    [openSettingsId, toggleSettings, closeSettings, patchNode, duplicateNode, deleteNode, shotCountOf, beatFulfillmentOf, settings],
   )
 
   // 失焦收起（§4.3）＋ 全局快捷键：⌘Z/⌘⇧Z 撤销重做、Delete 删除选中。
@@ -692,19 +1041,28 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
     [pushHistory, setNodes],
   )
 
-  // 从分支选项端口拉出的连线建成 branch 边；从索引卡底部端口拉出的建成
-  // attach 派生边（垂直下挂分镜卡）；其余为 sequence（§4.4）。入栈可撤销。
+  // 从分支选项端口拉出的连线建成 branch 边（胶囊文案取自该选项，与节点
+  // 选项同源）；从索引卡底部端口拉出的建成 attach 派生边（垂直下挂分镜卡）；
+  // 其余为 sequence（§4.4）。入栈可撤销。
   const onConnect = useCallback(
     (connection: Connection) => {
       const fromBranchOption = connection.sourceHandle?.startsWith(
         BRANCH_OPTION_HANDLE_PREFIX,
       )
       const fromShotHandle = connection.sourceHandle === SCENE_SHOT_HANDLE
+      let branchData: { optionLabel: string } | undefined
+      if (fromBranchOption) {
+        const idx = Number(connection.sourceHandle!.slice(BRANCH_OPTION_HANDLE_PREFIX.length))
+        const srcNode = nodesRef.current.find((n) => n.id === connection.source)
+        branchData = {
+          optionLabel: srcNode?.type === 'branch' ? (srcNode.data.options[idx] ?? '') : '',
+        }
+      }
       const edge: Edge = {
         ...connection,
         id: `e-${connection.source}-${connection.sourceHandle ?? 'out'}-${connection.target}`,
         ...(fromBranchOption
-          ? { type: 'branch' }
+          ? { type: 'branch' as const, data: branchData }
           : fromShotHandle
             ? { className: 'pw-edge-attach' }
             : { className: 'pw-edge-sequence' }),
@@ -841,14 +1199,20 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
           width={leftWidth}
           onResize={setLeftWidth}
           nodes={nodes}
+          edges={edges}
           onLocate={locateNode}
           selectedId={selectedNode?.id}
           settings={settings}
           settingsActions={settingsActions}
+          episodeTitles={episodeTitles}
+          focusedEpisode={focusedEpisode}
+          onFocusEpisode={toggleEpisodeFocus}
+          onRenameEpisode={renameEpisode}
+          onOutlineDrop={onOutlineDrop}
         />
         <div className="canvas-root" ref={canvasRef} onDragOver={onCanvasDragOver} onDrop={onCanvasDrop}>
           <ReactFlow
-            nodes={nodes}
+            nodes={displayNodes}
             edges={edges}
             nodeTypes={nodeTypes}
             edgeTypes={edgeTypes}
@@ -889,6 +1253,8 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
           settings={settings}
           onOpenSettings={onOpenSettings}
           canvasDigest={canvasDigest}
+          onValidateAi={validateAiReply}
+          onApplyAiBatch={applyAiBatch}
         />
       </div>
       {/* 右键上下文菜单：节点 = 设置/复制/删除；空白 = 五类新增（§4.3） */}

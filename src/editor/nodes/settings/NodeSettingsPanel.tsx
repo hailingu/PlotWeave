@@ -36,6 +36,41 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   )
 }
 
+/** 集归属（§3.5：集 = 编号 + 行内标题，节点以 episodeNo 归属集）。
+ * 清空 = 移出所有集；分镜卡随宿主场景（attach 派生），不出此字段。 */
+function EpisodeField({ nodeId, episodeNo }: { nodeId: string; episodeNo?: number }) {
+  const { patchNode } = useNodeEdit()
+  return (
+    <Field label="集">
+      <div className="pw-set-ep">
+        <input
+          className="pw-set-input"
+          type="number"
+          min={1}
+          value={episodeNo ?? ''}
+          placeholder="未分集"
+          onChange={(e) => {
+            const raw = e.target.value
+            const n = raw === '' ? NaN : Math.max(1, Math.floor(Number(raw)))
+            patchNode(nodeId, { episodeNo: Number.isFinite(n) ? n : undefined })
+          }}
+        />
+        {episodeNo !== undefined && (
+          <button
+            type="button"
+            className="pw-set-x"
+            aria-label="移出集"
+            title="移出集（未分集）"
+            onClick={() => patchNode(nodeId, { episodeNo: undefined })}
+          >
+            ✕
+          </button>
+        )}
+      </div>
+    </Field>
+  )
+}
+
 /** 场景表单：名称/地点/时间/天气/内外景/梗概/出场角色（设定集引用切换）。 */
 function SceneForm({ node, settings }: { node: Extract<PanelNode, { type: 'scene' }>; settings: ProjectSettings }) {
   const { patchNode } = useNodeEdit()
@@ -138,6 +173,7 @@ function SceneForm({ node, settings }: { node: Extract<PanelNode, { type: 'scene
           )}
         </div>
       </Field>
+      <EpisodeField nodeId={node.id} episodeNo={d.episodeNo} />
     </>
   )
 }
@@ -161,6 +197,7 @@ function BeatForm({ node }: { node: Extract<PanelNode, { type: 'beat' }> }) {
           onChange={(e) => patchNode(node.id, { tone: e.target.value })}
         />
       </Field>
+      <EpisodeField nodeId={node.id} episodeNo={node.data.episodeNo} />
     </>
   )
 }
@@ -254,6 +291,7 @@ function DialogueForm({
       >
         ＋ 添加台词
       </button>
+      <EpisodeField nodeId={node.id} episodeNo={d.episodeNo} />
     </>
   )
 }
@@ -308,6 +346,7 @@ function BranchForm({ node }: { node: Extract<PanelNode, { type: 'branch' }> }) 
       >
         ＋ 添加选项
       </button>
+      <EpisodeField nodeId={node.id} episodeNo={d.episodeNo} />
     </>
   )
 }
@@ -410,6 +449,7 @@ function ShotForm({ node }: { node: Extract<PanelNode, { type: 'shot' }> }) {
       >
         ＋ 添加引用
       </button>
+      <p className="pw-set-empty">集归属随宿主场景（下挂索引卡）。</p>
     </>
   )
 }

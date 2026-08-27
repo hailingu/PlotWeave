@@ -1,10 +1,11 @@
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { useNodeEdit } from '../nodeEdit'
+import { BRANCH_OPTION_HANDLE_PREFIX } from '../graphRules'
 import NodeSettingsPanel, { EditableName } from './settings/NodeSettingsPanel'
 import type { BranchFlowNode } from './types'
 
-/** 分支选项出口端口的 handle id 前缀（对应数据模型 option-n）。 */
-export const BRANCH_OPTION_HANDLE_PREFIX = 'option-'
+// 常量权威定义在 graphRules（连线规则纯函数），此处按原导出名转出
+export { BRANCH_OPTION_HANDLE_PREFIX }
 
 /**
  * 分支节点 = 岔路路标（docs/ui-design.md §4.2，剧本族）。

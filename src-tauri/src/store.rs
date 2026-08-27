@@ -11,8 +11,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
-/// 项目文件：name + 更新时间（epoch 毫秒）+ 画布两数组 + 设定集
-/// （nodes/edges/settings 对前端是自有数据，以 `serde_json::Value` 透传）。
+/// 项目文件：name + 更新时间（epoch 毫秒）+ 画布两数组 + 设定集 + 集标题表
+/// （nodes/edges/settings/episodeTitles 对前端是自有数据，以 `serde_json::Value` 透传）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectFile {
     pub name: String,
@@ -22,6 +22,9 @@ pub struct ProjectFile {
     /// 设定集实体（角色/地点）；旧版文件缺失时按空对象处理。
     #[serde(default = "empty_settings")]
     pub settings: serde_json::Value,
+    /// 大纲集标题（§3.5：集 = 编号 + 行内标题，不建实体表）；键为集号字符串。
+    #[serde(default = "empty_settings", rename = "episodeTitles")]
+    pub episode_titles: serde_json::Value,
 }
 
 /// 项目摘要：首页海报卡的展示模型；统计从 nodes 派生，不落镜像字段。
@@ -173,6 +176,7 @@ pub fn create_project(app: AppHandle, name: String) -> Result<ProjectMeta, Strin
         nodes: serde_json::json!([]),
         edges: serde_json::json!([]),
         settings: serde_json::json!({ "characters": [], "locations": [] }),
+        episode_titles: serde_json::json!({}),
     };
     let path = project_path(&app, &id)?;
     let text = serde_json::to_string_pretty(&file).map_err(|e| format!("序列化失败：{e}"))?;
@@ -198,6 +202,7 @@ pub fn save_project(app: AppHandle, id: String, doc: ProjectFile) -> Result<Proj
         nodes: doc.nodes,
         edges: doc.edges,
         settings: doc.settings,
+        episode_titles: doc.episode_titles,
     };
     let path = project_path(&app, &id)?;
     let text = serde_json::to_string_pretty(&file).map_err(|e| format!("序列化失败：{e}"))?;
@@ -289,10 +294,14 @@ mod tests {
             nodes: json!([{ "id": "a", "type": "scene", "data": {} }]),
             edges: json!([]),
             settings: json!({ "characters": [], "locations": [] }),
+            episode_titles: json!({ "1": "开端" }),
         };
         let text = serde_json::to_string(&file).unwrap();
         let back: ProjectFile = serde_json::from_str(&text).unwrap();
         assert_eq!(back.name, "午夜出租车");
         assert_eq!(back.updated_at, 42);
+        // 集标题表以 camelCase 键落盘（前端契约），缺省时按空对象处理
+        assert_eq!(back.episode_titles, json!({ "1": "开端" }));
+        assert!(text.contains("episodeTitles"));
     }
 }

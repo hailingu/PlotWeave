@@ -1,5 +1,6 @@
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { useNodeEdit } from '../nodeEdit'
+import { SCENE_SHOT_HANDLE } from '../graphRules'
 import NodeSettingsPanel, { EditableName } from './settings/NodeSettingsPanel'
 import {
   resolveCharacterAvatar,
@@ -7,8 +8,8 @@ import {
 } from '../settings'
 import type { SceneFlowNode } from './types'
 
-/** 索引卡底部下挂分镜卡的专属源端口 id（§4.4：横向 = 剧情顺序，垂直 = 派生从属）。 */
-export const SCENE_SHOT_HANDLE = 'shots'
+// 常量权威定义在 graphRules（连线规则纯函数），此处按原导出名转出
+export { SCENE_SHOT_HANDLE }
 
 /**
  * 场景节点 = 索引卡（docs/ui-design.md §4.2，编剧侧纸面）。

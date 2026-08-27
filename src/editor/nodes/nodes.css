@@ -594,3 +594,42 @@
   color: var(--text-secondary);
   text-decoration: line-through;
 }
+
+/* ---- 集聚焦（§3.5：点击大纲集行，该集提亮、其余降透明度退后） ----
+   className 是 React Flow 运行态字段，不入持久化。 */
+.react-flow__node.pw-node-dim {
+  opacity: 0.3;
+  transition: opacity 0.25s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .react-flow__node.pw-node-dim {
+    transition: none;
+  }
+}
+
+/* ---- 节拍兑现状态（§3.5：待兑现虚线态；✓ 兑现派生自 sequence 邻接） ---- */
+.pw-beat.pw-beat-pending {
+  outline: 1.5px dashed var(--border-hairline);
+  outline-offset: 2px;
+}
+
+.pw-beat-state {
+  flex: none;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.pw-beat-state.pending {
+  color: var(--text-secondary);
+  border: 1px dashed var(--border-hairline);
+}
+
+.pw-beat-state.ok {
+  color: #fff;
+  background: var(--accent-alt);
+}

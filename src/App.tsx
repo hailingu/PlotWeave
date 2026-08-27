@@ -141,6 +141,7 @@ export default function App() {
           nodes: openProject.doc.nodes,
           edges: openProject.doc.edges,
           settings: openProject.doc.settings,
+          episodeTitles: openProject.doc.episodeTitles,
         }}
         onBackHome={handleBackHome}
         onRenameProject={handleEditorRename}
