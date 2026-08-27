@@ -107,15 +107,18 @@ pub fn has_provider_key(provider_id: String) -> Result<bool, String> {
     }
 }
 
-/// AI 对话代理（§6）：key 只在钥匙串与 Rust 内存中流转，不出后端；
-/// 前端只传 provider 配置与消息列表。OpenAI 兼容 chat completions，非流式。
+/// LLM 对话代理（§6/数据模型 §12.2）：key 只在钥匙串与 Rust 内存中
+/// 流转，不出后端；前端只传 provider 配置、消息列表与可选工具表。
+/// OpenAI 兼容 chat completions，非流式；返回 choices[0].message 原文
+/// （content 字符串 + 可选 tool_calls 数组），工具调用由前端解析执行。
 #[tauri::command]
-pub async fn ai_chat(
+pub async fn llm_chat(
     provider_id: String,
     base_url: String,
     model: String,
     messages: serde_json::Value,
-) -> Result<String, String> {
+    tools: Option<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
     validate_provider_id(&provider_id)?;
     if model.trim().is_empty() {
         return Err("未选择模型".into());
@@ -127,7 +130,13 @@ pub async fn ai_chat(
         .map_err(|_| "未配置 API key，请在设置页填写".to_string())?;
 
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
-    let body = serde_json::json!({ "model": model, "messages": messages, "stream": false });
+    let mut body = serde_json::json!({ "model": model, "messages": messages, "stream": false });
+    if let Some(tools) = tools {
+        if tools.is_array() && !tools.as_array().is_none_or(|t| t.is_empty()) {
+            body["tools"] = tools;
+            body["tool_choice"] = serde_json::json!("auto");
+        }
+    }
     let client = reqwest::Client::new();
     let response = client
         .post(&url)
@@ -147,11 +156,11 @@ pub async fn ai_chat(
     }
     let parsed: serde_json::Value =
         serde_json::from_str(&text).map_err(|e| format!("响应不是有效 JSON：{e}"))?;
-    let reply = parsed
-        .pointer("/choices/0/message/content")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| "服务未返回回复内容".to_string())?;
-    Ok(reply.to_string())
+    parsed
+        .pointer("/choices/0/message")
+        .cloned()
+        .filter(|m| m.is_object())
+        .ok_or_else(|| "服务未返回回复内容".to_string())
 }
 
 #[cfg(test)]

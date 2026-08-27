@@ -99,3 +99,28 @@ export function resolveChatModel(settings: AppSettings): {
   }
   return { provider, model }
 }
+
+/** 可用对话模型条目（AI 面板选择器用，§6）。 */
+export interface ChatModelOption {
+  /** "providerId:modelId"，与 defaultChat 同构。 */
+  key: string
+  providerId: string
+  providerLabel: string
+  model: string
+}
+
+/**
+ * 三层过滤的可用模型枚举（§6 模型选择器）：模型在 provider 清单中 →
+ * provider 启用且 Base URL 就绪；第三层（API key 已配置）依赖钥匙串
+ * 异步查询，由调用方按 providerId 叠加置灰。
+ */
+export function listChatModels(settings: AppSettings): ChatModelOption[] {
+  const out: ChatModelOption[] = []
+  for (const p of settings.providers) {
+    if (!p.enabled || !p.baseUrl) continue
+    for (const m of p.models) {
+      out.push({ key: `${p.id}:${m}`, providerId: p.id, providerLabel: p.label, model: m })
+    }
+  }
+  return out
+}

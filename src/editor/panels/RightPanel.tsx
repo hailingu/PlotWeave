@@ -1,13 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import SegmentedControl from './SegmentedControl'
 import PanelResizer from './PanelResizer'
-import { sendChat, type ChatMessage } from '../ai/chat'
-import {
-  type AiCommand,
-  type BatchValidation,
-} from '../ai/commands'
+import { llmChat, type ChatMessage } from '../ai/chat'
+import { AI_TOOLS, toolCallsToCommands } from '../ai/tools'
+import { type AiCommand, type BatchValidation } from '../ai/commands'
 import { settingsStore } from '../../settings/settingsStore'
-import { resolveChatModel, type AppSettings } from '../../settings/types'
+import { listChatModels, type AppSettings, type ChatModelOption } from '../../settings/types'
 import {
   resolveCharacterName,
   resolveLocationName,
@@ -109,10 +107,14 @@ interface RightPanelProps {
   settings: ProjectSettings
   /** 打开设置页（§8.2 BYOK 配置入口）。 */
   onOpenSettings?: () => void
-  /** 画布上下文快照（§6「了解当前画布」）：附到 system prompt。 */
+  /** 画布上下文快照（§6「了解当前画布」）：附到 system prompt，并作为读工具返回。 */
   canvasDigest?: string
   /** 校验助手回复中的命令批次（§6/数据模型 §12）；纯讨论回复返回 null。 */
   onValidateAi?: (text: string) => BatchValidation | null
+  /** 校验工具调用映射出的命令数组（tool-calling 通道）。 */
+  onValidateCommands?: (commands: AiCommand[]) => BatchValidation | null
+  /** 读工具 get_node：返回节点 JSON 文本，节点不存在返回 null。 */
+  onReadNode?: (nodeId: string) => string | null
   /** 执行已确认的批次：整批为一条复合命令入栈，返回错误文案或 null。 */
   onApplyAiBatch?: (commands: AiCommand[]) => string | null
 }
@@ -135,6 +137,8 @@ export default function RightPanel({
   onOpenSettings,
   canvasDigest,
   onValidateAi,
+  onValidateCommands,
+  onReadNode,
   onApplyAiBatch,
 }: RightPanelProps) {
   const rows = selectedNode ? inspectorRows(selectedNode, attachedShotCount, settings) : []
@@ -172,6 +176,8 @@ export default function RightPanel({
               onOpenSettings={onOpenSettings}
               canvasDigest={canvasDigest}
               onValidateAi={onValidateAi}
+              onValidateCommands={onValidateCommands}
+              onReadNode={onReadNode}
               onApplyAiBatch={onApplyAiBatch}
             />
           )}
@@ -193,24 +199,33 @@ interface ThreadEntry {
 }
 
 /**
- * ✦AI 会话（§6、数据模型 §12）：Agent 只产出命令——
- * 讨论走普通气泡；批次命令经 onValidateAi 整批校验后渲染为改动预览卡，
- * 用户确认才执行（删除类二次确认），整批一条复合命令入栈、⌘Z 一步回滚。
- * 输入区常驻「了解当前画布」标识；未配置 provider/模型时显示引导卡（§8.2）。
+ * ✦AI 会话（§6、数据模型 §12.2 朴素 tool-calling 循环）：
+ * - 模型选择器：三层过滤后的可用模型（key 未配置的置灰）；
+ * - 读工具（画布快照/节点详情）就地执行回喂，最多三轮；
+ * - 写工具调用映射为命令批次 → 整批校验 → 改动预览卡 → 用户确认执行，
+ *   删除类二次确认，整批一条复合命令入栈、⌘Z 一步回滚；
+ * - 服务不支持工具时退回 ```json 围栏批次文本协议。
  */
 function AiThread({
   onOpenSettings,
   canvasDigest,
   onValidateAi,
+  onValidateCommands,
+  onReadNode,
   onApplyAiBatch,
 }: {
   onOpenSettings?: () => void
   canvasDigest?: string
   onValidateAi?: (text: string) => BatchValidation | null
+  onValidateCommands?: (commands: AiCommand[]) => BatchValidation | null
+  onReadNode?: (nodeId: string) => string | null
   onApplyAiBatch?: (commands: AiCommand[]) => string | null
 }) {
   const [appSettings, setAppSettings] = useState<AppSettings | null>(null)
-  const [keyOk, setKeyOk] = useState<boolean | null>(null)
+  /** 各 provider 的钥匙串 key 状态（选择器置灰第三层）。 */
+  const [keyOkByProvider, setKeyOkByProvider] = useState<Record<string, boolean>>({})
+  /** 面板内选中的模型 key；null = 跟随设置页默认。 */
+  const [modelKey, setModelKey] = useState<string | null>(null)
   const [thread, setThread] = useState<ThreadEntry[]>([])
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
@@ -224,8 +239,10 @@ function AiThread({
   useEffect(() => {
     void settingsStore.load().then(async (s) => {
       setAppSettings(s)
-      const chat = resolveChatModel(s)
-      setKeyOk(chat ? await settingsStore.hasProviderKey(chat.provider.id).catch(() => false) : null)
+      const statuses = await Promise.all(
+        s.providers.map(async (p) => [p.id, await settingsStore.hasProviderKey(p.id).catch(() => false)] as const),
+      )
+      setKeyOkByProvider(Object.fromEntries(statuses))
     })
   }, [])
 
@@ -233,12 +250,24 @@ function AiThread({
     threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight })
   }, [thread, busy, error])
 
-  const chatModel = appSettings ? resolveChatModel(appSettings) : null
-  const ready = Boolean(chatModel && keyOk)
+  const options: ChatModelOption[] = appSettings ? listChatModels(appSettings) : []
+  const activeKey =
+    modelKey ??
+    (appSettings?.defaultChat && options.some((o) => o.key === appSettings.defaultChat)
+      ? appSettings.defaultChat
+      : options[0]?.key) ??
+    null
+  const activeOption = options.find((o) => o.key === activeKey) ?? null
+  const activeKeyOk = activeOption ? keyOkByProvider[activeOption.providerId] === true : false
+  const ready = activeOption !== null && activeKeyOk
 
   const send = async () => {
     const text = draft.trim()
-    if (!text || busy || !chatModel) return
+    if (!text || busy || !appSettings) return
+    const provider = activeOption
+      ? appSettings.providers.find((p) => p.id === activeOption.providerId)
+      : null
+    if (!activeOption || !provider) return
     setThread((t) => [...t, { kind: 'msg', role: 'user', text }])
     setDraft('')
     setBusy(true)
@@ -249,35 +278,20 @@ function AiThread({
         role: 'system',
         content:
           '你是短剧创作助手，帮助编剧讨论剧情结构、人物动机与台词。\n' +
-          '需要改动画布时，Agent 只产出命令（执行前界面会向用户展示改动预览并等待确认，' +
-          '所以你不要声称已经完成修改）：在回复中输出一个 ```json 围栏，' +
-          '格式 {"commands":[…]}。\n' +
-          '命令集：\n' +
-          '- {"op":"create_node","nodeType":"scene|beat|dialogue|branch|shot","ref":"临时别名","data":{…}}' +
-          '（data 可只写要定制的字段，其余用默认；ref 供后续命令引用新节点）\n' +
-          '- {"op":"update_node","nodeId":"id 或 ref","patch":{…}}（只写要改的字段）\n' +
-          '- {"op":"delete_node","nodeId":"id 或 ref"}\n' +
-          '- {"op":"connect_edge","sourceId":"…","targetId":"…"}（缺省 = 剧情流 sequence）\n' +
-          '- {"op":"connect_edge","sourceId":"…","targetId":"…","edgeKind":"branch","optionIndex":0}' +
-          '（分支选项出口，optionIndex 从 0 起）\n' +
-          '- {"op":"connect_edge","sourceId":"场景id","targetId":"分镜id","edgeKind":"attach"}' +
-          '（分镜卡垂直下挂）\n' +
-          '- {"op":"disconnect_edge","sourceId":"…","targetId":"…"}\n' +
-          '各类型节点字段（data/patch 只接受这些字段）：\n' +
-          '- scene 场景：name、sceneNo(场号)、interior(内外景)、locationId、time、weather、synopsis(梗概)、characterIds(在场角色 id 数组)\n' +
-          '- beat 节奏卡：name、tone(情绪基调)\n' +
-          '- dialogue 对白：name、lines[{kind:"line"|"action", text, speaker(角色 id), side:"left"|"right", vo}]\n' +
-          '- branch 分支：prompt(问句)、options[字符串数组]\n' +
-          '- shot 分镜卡：shotNo(镜号)、size(景别)、picture(画面描述)、prompt(镜头 Prompt)、refs\n' +
+          '需要改动画布时，只产出命令：执行前界面会向用户展示改动预览并等待确认，' +
+          '所以你不要声称已经完成修改。优先调用工具（推荐把一次改动的全部命令放进' +
+          '一个 batch）；服务不支持工具时退回 ```json 围栏批次（格式 {"commands":[…]}）。\n' +
+          '需要画布信息时先调用读工具 get_graph_snapshot / get_node。\n' +
+          '命令要点：create_node 的 data 只写要定制的字段，ref 供本批后续命令引用' +
+          '新节点；update_node_spec 的 patch 只写要改的字段；connect_edge 缺省为剧情流，' +
+          'branch 需 optionIndex（0 基），attach 仅 场景→分镜卡；episodeNo 仅' +
+          'scene/beat/dialogue/branch 可写（分镜随宿主场景）。\n' +
           '画布快照的「剧情流顺序」即大纲投影：重排剧情 = 同一批次内先 disconnect 旧边' +
-          '再 connect 新边；调整场次/镜号直接 patch sceneNo/shotNo；\n' +
-          '分集：scene/beat/dialogue/branch 支持 episodeNo（数字集号，大纲按它分组，' +
-          '快照节点行的「集N」即当前归属）；分镜卡随宿主场景，不可单独分集；\n' +
-          '设定集段落给出角色/地点实体 id，写 characterIds/locationId 时引用它们。\n' +
+          '再 connect 新边；设定集段落给出角色/地点实体 id，写 characterIds/locationId 时引用它们。\n' +
           '规则：只使用快照里出现过的 id（新节点用 ref）；连线不得自环或成环；' +
-          '把全部变更放进同一个批次；每条命令可用 "reason" 说明理由。',
+          '每条命令可用 reason 说明理由。',
       }
-      const messages: ChatMessage[] = [
+      let messages: ChatMessage[] = [
         system,
         ...(knowsCanvas && canvasDigest
           ? [{ role: 'system' as const, content: `当前画布快照：\n${canvasDigest}` }]
@@ -288,17 +302,58 @@ function AiThread({
         if (e.kind === 'msg') messages.push({ role: e.role ?? 'assistant', content: e.text })
       }
       messages.push({ role: 'user', content: text })
-      const reply = await sendChat(chatModel.provider, chatModel.model, messages)
-      const v = onValidateAi?.(reply) ?? null
-      // 有批次时：围栏 JSON 只进预览卡，气泡与历史回喂都只保留散文部分
-      const prose = v ? reply.replace(/```json[\s\S]*?```/gi, '').trim() : reply
+
+      let prose = ''
+      let toolCommands: AiCommand[] | null = null
+      let toolErrors: string[] = []
+      // 朴素循环：读工具回喂后重问；写命令或纯文本终止（数据模型 §12.2）
+      for (let round = 0; round < 3; round++) {
+        const reply = await llmChat(provider, activeOption.model, messages, AI_TOOLS)
+        const calls = reply.tool_calls ?? []
+        const { commands: cmds, readRequests, errors } = toolCallsToCommands(calls)
+        const hasWrites = cmds.length > 0 || errors.length > 0
+        if (hasWrites) {
+          prose = (reply.content ?? '').trim()
+          toolCommands = cmds
+          toolErrors = errors
+          break
+        }
+        if (readRequests.length > 0) {
+          messages = [
+            ...messages,
+            { role: 'assistant', content: reply.content ?? '', tool_calls: calls },
+            ...readRequests.map((r) => ({
+              role: 'tool' as const,
+              tool_call_id: r.id,
+              content: executeReadTool(r.name, r.args),
+            })),
+          ]
+          continue
+        }
+        prose = (reply.content ?? '').trim()
+        toolErrors = errors
+        break
+      }
+
+      // 验证与展示：工具命令直接校验；纯文本走围栏解析（兼容无工具的服务）
+      const validation =
+        toolCommands && toolCommands.length > 0
+          ? (onValidateCommands?.(toolCommands) ?? null)
+          : (onValidateAi?.(prose) ?? null)
+      let displayText = validation
+        ? prose.replace(/```json[\s\S]*?```/gi, '').trim()
+        : prose
+      if (!displayText && !validation) displayText = '（模型未返回内容）'
       setThread((t) => [
         ...t,
+        ...(toolErrors.length > 0
+          ? [{ kind: 'note' as const, text: `⚠ ${toolErrors.join('；')}` }]
+          : []),
         {
           kind: 'msg',
           role: 'assistant',
-          text: prose || '（本次回复只有改动批次，见下方预览卡）',
-          ...(v ? { card: { v, status: 'pending' as const } } : {}),
+          text: displayText || (validation ? '（本次回复只有改动批次，见下方预览卡）' : ''),
+          ...(validation ? { card: { v: validation, status: 'pending' as const } } : {}),
         },
       ])
     } catch (err) {
@@ -306,6 +361,16 @@ function AiThread({
     } finally {
       setBusy(false)
     }
+  }
+
+  /** 读工具就地执行：快照来自常驻 prop，节点详情按 id 现查。 */
+  const executeReadTool = (name: string, args: Record<string, unknown>): string => {
+    if (name === 'get_graph_snapshot') return canvasDigest ?? '（画布为空）'
+    if (name === 'get_node') {
+      const id = typeof args.nodeId === 'string' ? args.nodeId : ''
+      return onReadNode?.(id) ?? `node not found: ${id}`
+    }
+    return `unknown read tool: ${name}`
   }
 
   /** 执行预览卡：成功 → 置状态并追加回执；失败 → 错误回执（批次未动）。 */
@@ -347,9 +412,9 @@ function AiThread({
         <div className="pw-ai-guide">
           <div className="pw-ai-guide-title">尚未接入 AI 服务</div>
           <p>
-            {chatModel === null
-              ? '在设置页选择默认对话模型（需先启用 provider 并添加模型）。'
-              : '该 provider 尚未配置 API key（存系统钥匙串）。'}
+            {options.length === 0
+              ? '在设置页启用 provider 并添加模型（需先配置 API key）。'
+              : '所选 provider 尚未配置 API key（存系统钥匙串）。'}
           </p>
           <button
             type="button"
@@ -360,6 +425,22 @@ function AiThread({
             前往设置页（⌘,）
           </button>
         </div>
+      )}
+      {options.length > 0 && (
+        <select
+          className="pw-ai-model"
+          value={activeKey ?? ''}
+          aria-label="对话模型"
+          title="AI 面板内选择本次会话使用的模型（§6 模型选择器）"
+          onChange={(e) => setModelKey(e.target.value)}
+        >
+          {options.map((o) => (
+            <option key={o.key} value={o.key} disabled={keyOkByProvider[o.providerId] !== true}>
+              {o.providerLabel} · {o.model}
+              {keyOkByProvider[o.providerId] ? '' : '（未配置 key）'}
+            </option>
+          ))}
+        </select>
       )}
       <div className="pw-ai-thread" ref={threadRef}>
         {thread.length === 0 && ready && (

@@ -2,8 +2,10 @@
 //!
 //! - `store`：项目持久化命令（list/create/load/save/delete_project）。
 //! - `prefs`：应用设置与 provider 密钥（设置 JSON 落盘 + 钥匙串），
-//!   并代理 AI 对话请求（key 只在钥匙串与 Rust 内流转，§6/§8.2）。
+//!   并代理 LLM 对话请求（key 只在钥匙串与 Rust 内流转，§6/§8.2）。
+//! - `library`：个人资产库（应用级 library/ 目录，索引 + 媒体文件，§8.1）。
 
+mod library;
 mod prefs;
 mod store;
 
@@ -22,7 +24,12 @@ pub fn run() {
             prefs::set_provider_key,
             prefs::clear_provider_key,
             prefs::has_provider_key,
-            prefs::ai_chat,
+            prefs::llm_chat,
+            library::library_dir_path,
+            library::library_list,
+            library::library_put,
+            library::library_update_meta,
+            library::library_delete,
         ])
         .run(tauri::generate_context!())
         .expect("启动 PlotWeave 应用失败");

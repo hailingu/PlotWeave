@@ -602,6 +602,18 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
     [aiSnapshot],
   )
 
+  /** tool-calling 通道：工具调用映射出的命令数组走同一整批校验。 */
+  const validateCommands = useCallback(
+    (commands: AiCommand[]): BatchValidation | null => validateAiBatch(commands, aiSnapshot()),
+    [aiSnapshot],
+  )
+
+  /** 读工具 get_node：返回节点完整字段 JSON；不存在返回 null。 */
+  const readNode = useCallback((nodeId: string): string | null => {
+    const n = nodesRef.current.find((x) => x.id === nodeId)
+    return n ? JSON.stringify({ id: n.id, type: n.type, data: n.data }) : null
+  }, [])
+
 
   /** 大纲 ⇄ 画布联动（§3.5）：点击大纲行 = 选中该节点并居中。 */
   const locateNode = useCallback(
@@ -1254,6 +1266,8 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
           onOpenSettings={onOpenSettings}
           canvasDigest={canvasDigest}
           onValidateAi={validateAiReply}
+          onValidateCommands={validateCommands}
+          onReadNode={readNode}
           onApplyAiBatch={applyAiBatch}
         />
       </div>
