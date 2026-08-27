@@ -222,8 +222,6 @@ function AiThread({
   onApplyAiBatch?: (commands: AiCommand[]) => string | null
 }) {
   const [appSettings, setAppSettings] = useState<AppSettings | null>(null)
-  /** 各 provider 的钥匙串 key 状态（选择器置灰第三层）。 */
-  const [keyOkByProvider, setKeyOkByProvider] = useState<Record<string, boolean>>({})
   /** 面板内选中的模型 key；null = 跟随设置页默认。 */
   const [modelKey, setModelKey] = useState<string | null>(null)
   const [thread, setThread] = useState<ThreadEntry[]>([])
@@ -235,15 +233,10 @@ function AiThread({
   const [armedIdx, setArmedIdx] = useState<number | null>(null)
   const threadRef = useRef<HTMLDivElement>(null)
 
-  // 每次切到 AI 分段重载配置（从设置页回来也能刷新）
+  // 每次切到 AI 分段重载配置（从设置页回来也能刷新）；
+  // key 状态直接从 provider 配置派生（keyEnc 密文存在即已配置）
   useEffect(() => {
-    void settingsStore.load().then(async (s) => {
-      setAppSettings(s)
-      const statuses = await Promise.all(
-        s.providers.map(async (p) => [p.id, await settingsStore.hasProviderKey(p.id).catch(() => false)] as const),
-      )
-      setKeyOkByProvider(Object.fromEntries(statuses))
-    })
+    void settingsStore.load().then(setAppSettings)
   }, [])
 
   useEffect(() => {
@@ -258,6 +251,9 @@ function AiThread({
       : options[0]?.key) ??
     null
   const activeOption = options.find((o) => o.key === activeKey) ?? null
+  const keyOkByProvider: Record<string, boolean> = Object.fromEntries(
+    (appSettings?.providers ?? []).map((p) => [p.id, Boolean(p.keyEnc)]),
+  )
   const activeKeyOk = activeOption ? keyOkByProvider[activeOption.providerId] === true : false
   const ready = activeOption !== null && activeKeyOk
 
@@ -414,7 +410,7 @@ function AiThread({
           <p>
             {options.length === 0
               ? '在设置页启用 provider 并添加模型（需先配置 API key）。'
-              : '所选 provider 尚未配置 API key（存系统钥匙串）。'}
+              : '所选 provider 尚未配置 API key（加密保存于本机设置）。'}
           </p>
           <button
             type="button"

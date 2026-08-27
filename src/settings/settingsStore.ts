@@ -1,7 +1,8 @@
 /**
- * 设置与钥匙串的前端门面（docs/ui-design.md §8.2）。
- * Tauri 环境走 Rust 命令（settings.json 落盘 + 系统钥匙串）；
- * 浏览器预览回退内存实现（key 状态不可用，仅保 UI 可预览）。
+ * 设置与 API key 加密的前端门面（docs/ui-design.md §8.2 修订）。
+ * Tauri 环境走 Rust 命令（settings.json 落盘；key 由 Rust 加密后
+ * 返回密文 envelope，随 provider 配置落盘，明文不回前端）；
+ * 浏览器预览回退内存实现。
  */
 import {
   defaultSettings,
@@ -47,28 +48,29 @@ export const settingsStore = {
     return tauriSave(settings)
   },
 
-  /** 写入 provider API key（钥匙串；浏览器预览不可用）。 */
-  setProviderKey: (providerId: string, key: string): Promise<void> => {
-    if (!isTauri) {
-      return Promise.reject(new Error('浏览器预览无法访问钥匙串'))
+  /**
+   * 加密并保存 provider API key：Rust 返回密文 envelope，
+   * 合并进 provider 配置后返回**新的 settings**（由调用方走
+   * 防抖落盘）；key 明文不回前端、不进钥匙串。
+   * 浏览器预览仅内存态（base64 标记 preview:，不落盘）。
+   */
+  setProviderKey: async (
+    settings: AppSettings,
+    providerId: string,
+    key: string,
+  ): Promise<AppSettings> => {
+    let keyEnc: string
+    if (isTauri) {
+      const { invoke } = await import('@tauri-apps/api/core')
+      keyEnc = await invoke<string>('set_provider_key', { providerId, key })
+    } else {
+      keyEnc = `pw1:preview:${btoa(String.fromCharCode(...new TextEncoder().encode(key)))}`
     }
-    return import('@tauri-apps/api/core').then(({ invoke }) =>
-      invoke('set_provider_key', { providerId, key }),
-    )
-  },
-
-  clearProviderKey: (providerId: string): Promise<void> => {
-    if (!isTauri) return Promise.resolve()
-    return import('@tauri-apps/api/core').then(({ invoke }) =>
-      invoke('clear_provider_key', { providerId }),
-    )
-  },
-
-  /** 查询 key 是否已配置（不回传明文，§8.2）。 */
-  hasProviderKey: (providerId: string): Promise<boolean> => {
-    if (!isTauri) return Promise.resolve(false)
-    return import('@tauri-apps/api/core').then(({ invoke }) =>
-      invoke<boolean>('has_provider_key', { providerId }),
-    )
+    return {
+      ...settings,
+      providers: settings.providers.map((p) =>
+        p.id === providerId ? { ...p, keyEnc } : p,
+      ),
+    }
   },
 }

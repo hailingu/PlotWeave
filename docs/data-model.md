@@ -426,7 +426,7 @@ type GraphCommand<T extends CommandType = CommandType> = {
 
 ### 10.3 Provider 与模型配置
 
-BYOK 下 provider 分两层：**内置适配器在代码里，用户配置在 `settings.json`，API key 在系统钥匙串**。
+BYOK 下 provider 分两层：**内置适配器在代码里，用户配置（含加密后的 API key）在 `settings.json`**。
 
 代码层（不进配置文件的静态定义）：
 
@@ -475,7 +475,7 @@ interface ProviderSettings {
 
 ### 10.4 密钥管理
 
-provider 的 API key **不写入 `settings.json`**，经 `keyring` crate 存系统钥匙串、按 provider key 索引；配置文件仅存非敏感项。
+provider 的 API key 以**密文 `keyEnc`** 存于 provider 配置：Rust `seal` 模块 AES-256-GCM 加密（密钥 = 应用常数 + IOPlatformUUID + 随机盐，封装于 envelope），明文只在加密/请求的进程内存中出现；历史钥匙串数据保留只读回退，不再写入。
 
 ### 10.5 Rust 持久化命令（Tauri commands）
 
@@ -492,8 +492,8 @@ provider 的 API key **不写入 `settings.json`**，经 `keyring` crate 存系�
 | `delete_library_asset(assetId)` | 删库文件 + 索引项（不影响已拷入项目的副本） |
 | `collect_library_asset(projectId, projectAssetId, meta)` | 把项目资产拷贝入资产库（「收藏」） |
 | `get_settings()` / `update_settings(patch)` | 非敏感配置读写 |
-| `set_provider_key(provider, key)` / `get_provider_key(provider)` | 钥匙串读写 |
-| `llm_chat(messages, tools)` | LLM 请求代理：key 从钥匙串取，绕开 webview CORS（见 12.2） |
+| `set_provider_key(provider, key)` | 加密并返回 envelope 密文（由前端随 settings 落盘；解密走 `seal::open`，无独立读命令） |
+| `llm_chat(messages, tools)` | LLM 请求代理：key 由 settings 密文在 Rust 内存解密，绕开 webview CORS（见 12.2） |
 
 ## 十一、加载与归一化
 
@@ -529,7 +529,7 @@ Agent 不直接触碰文档状态，只产出 `GraphCommand`（`actor: 'agent'`�
 
 - **工具集 = 命令清单的封装**：读工具 `get_graph_snapshot` / `get_node`；写工具 `create_node` / `delete_node` / `update_node_spec` / `connect_edge` / `disconnect_edge` / `batch`。
 - **快照摘要而非全量**：大项目全量 JSON 会超出上下文，默认只给压缩视图（节点 id/type/label/连接关系），详情由模型用读工具按需拉取。
-- **调用路径**：前端驱动循环；LLM 请求经 Rust command `llm_chat` 代理发出——API key 存于系统钥匙串、前端不持有，同时绕开 webview 的 CORS 限制。
+- **调用路径**：前端驱动循环；LLM 请求经 Rust command `llm_chat` 代理发出——API key 以密文随 settings 落盘、在 Rust 内存解密，前端不持有明文，同时绕开 webview 的 CORS 限制。
 - **可控性**：Agent 的写操作执行前弹批量预览（涉及哪些节点、什么变更），用户确认后才进命令通道；undo 始终兜底。
 
 ### 12.3 MCP 暴露（可选，后置）

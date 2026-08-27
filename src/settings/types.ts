@@ -1,13 +1,15 @@
 /**
- * 应用设置模型（docs/ui-design.md §8.2 设置页）。
+ * 应用设置模型（docs/ui-design.md §8.2 修订）。
  * - Provider 分段：内置适配器（OpenAI 兼容 / 火山引擎 Ark）+ 自定义；
  *   每 provider 配 Base URL、启用开关、模型清单与默认模型。
- * - API key 只进系统钥匙串（Rust 命令），设置 JSON 不含 key。
+ * - API key 不入钥匙串：Rust `set_provider_key` 加密（AES-256-GCM 绑定
+ *   本机）后返回密文 envelope，存于 provider 的 `keyEnc`，随设置落盘；
+ *   解密只在 Rust 发起 LLM 请求时进行，明文不回前端。
  * - 三层过滤（内置目录 → provider 已配置 → 未禁用）在 normalize 中计算，
  *   供默认模型下拉与 AI 面板共用。
  */
 
-/** 单个 provider 的配置（key 状态单独经钥匙串命令查询）。 */
+/** 单个 provider 的配置（keyEnc 为加密 envelope，不含明文）。 */
 export interface ProviderConfig {
   id: string
   label: string
@@ -16,6 +18,8 @@ export interface ProviderConfig {
   enabled: boolean
   /** 该 provider 下可选的模型 id 列表（用户维护）。 */
   models: string[]
+  /** API key 密文（`pw1:` envelope；缺省 = 未配置）。 */
+  keyEnc?: string
 }
 
 /** 应用设置（settings.json 结构）。 */
@@ -51,10 +55,15 @@ export function defaultSettings(): AppSettings {
   }
 }
 
-/** 旧文件/缺失字段合并为完整设置；内置 provider 缺席时补回。 */
+/** 旧文件/缺失字段合并为完整设置；内置 provider 缺席时补回。
+ * keyEnc 随 provider 配置透传（非字符串/空串丢弃）。 */
 export function normalizeSettings(raw: unknown): AppSettings {
   const obj = (typeof raw === 'object' && raw !== null ? raw : {}) as Partial<AppSettings>
   const stored = Array.isArray(obj.providers) ? obj.providers : []
+  const keyEncOf = (found: unknown): string | undefined => {
+    const v = (found as { keyEnc?: unknown } | null)?.keyEnc
+    return typeof v === 'string' && v.startsWith('pw1:') ? v : undefined
+  }
   const providers = BUILTIN_PROVIDERS.map((builtin) => {
     const found = stored.find((p) => p?.id === builtin.id)
     if (!found) return { ...builtin, models: [...builtin.models] }
@@ -63,6 +72,7 @@ export function normalizeSettings(raw: unknown): AppSettings {
       baseUrl: typeof found.baseUrl === 'string' && found.baseUrl ? found.baseUrl : builtin.baseUrl,
       enabled: found.enabled !== false,
       models: Array.isArray(found.models) ? found.models.filter((m) => typeof m === 'string') : [],
+      keyEnc: keyEncOf(found),
     }
   })
   // 自定义 provider（内置之外）
@@ -74,6 +84,7 @@ export function normalizeSettings(raw: unknown): AppSettings {
         baseUrl: typeof p.baseUrl === 'string' ? p.baseUrl : '',
         enabled: p.enabled !== false,
         models: Array.isArray(p.models) ? p.models.filter((m) => typeof m === 'string') : [],
+        keyEnc: keyEncOf(p),
       })
     }
   }

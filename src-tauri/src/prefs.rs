@@ -1,9 +1,12 @@
-//! 应用设置与 Provider 密钥（docs/ui-design.md §8.2 设置页）。
+//! 应用设置与 Provider 密钥（docs/ui-design.md §8.2 修订）。
 //!
-//! - 设置本体（provider 配置 / 默认模型）存应用数据目录 `settings.json`，
-//!   结构对前端自有，以 `serde_json::Value` 透传，仅做大小与文件名校验。
-//! - API key 只进系统钥匙串（macOS Security Framework，经 `keyring` crate），
-//!   界面只经命令读「是否已配置」状态，从不回显明文。
+//! - 设置本体（provider 配置 / 默认模型 / 加密 key）存应用数据目录
+//!   `settings.json`，结构对前端自有，以 `serde_json::Value` 透传，
+//!   仅做大小与文件名校验。
+//! - API key 不入钥匙串：经 `seal` 模块 AES-256-GCM 加密（绑定本机），
+//!   密文随 provider 配置落 `settings.json`（`keyEnc` 字段）；
+//!   明文只在加密/请求的进程内存中出现，不落盘、不回显。
+//!   历史钥匙串数据保留只读回退，不再写入。
 
 use std::fs;
 use std::path::PathBuf;
@@ -67,59 +70,54 @@ fn validate_provider_id(id: &str) -> Result<(), String> {
     }
 }
 
-/// 写入 provider API key（只进钥匙串，不落 JSON、不回显）。
-/// 保存必须幂等：macOS SecItemAdd 不做更新，条目已存在时直接 set_password
-/// 会报 duplicate item——先删旧条目再写入（等效更新），无旧条目则跳过。
+/// 加密 provider API key：返回 envelope 密文，由前端随 settings.json 落盘。
+/// 明文只在本次调用的进程内存中出现，不落盘、不回显、不入钥匙串。
 #[tauri::command]
-pub fn set_provider_key(provider_id: String, key: String) -> Result<(), String> {
+pub fn set_provider_key(provider_id: String, key: String) -> Result<String, String> {
     validate_provider_id(&provider_id)?;
-    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, &provider_id)
-        .map_err(|e| format!("钥匙串不可用：{e}"))?;
     if key.trim().is_empty() {
         return Err("API key 不能为空".into());
     }
-    match entry.delete_credential() {
-        Ok(()) => {}
-        Err(keyring::Error::NoEntry) => {}
-        Err(e) => return Err(format!("清理旧 key 失败：{e}")),
-    }
-    entry
-        .set_password(key.trim())
-        .map_err(|e| format!("写入钥匙串失败：{e}"))
+    crate::seal::seal(key.trim())
 }
 
-/// 清除 provider API key。
-#[tauri::command]
-pub fn clear_provider_key(provider_id: String) -> Result<(), String> {
-    validate_provider_id(&provider_id)?;
-    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, &provider_id)
-        .map_err(|e| format!("钥匙串不可用：{e}"))?;
-    match entry.delete_credential() {
-        Ok(()) => Ok(()),
-        Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(format!("清除钥匙串失败：{e}")),
+/// 解析 provider 当前可用的 key：优先 settings.json 的 `keyEnc` 密文；
+/// 密文缺失时只读回退历史钥匙串数据（不再写入钥匙串）。
+fn provider_secret(app: &AppHandle, provider_id: &str) -> Result<String, String> {
+    validate_provider_id(provider_id)?;
+    let path = prefs_path(app)?;
+    if let Ok(text) = fs::read_to_string(path) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+            let enc = v
+                .get("providers")
+                .and_then(|p| p.as_array())
+                .and_then(|arr| {
+                    arr.iter()
+                        .find(|p| p.get("id").and_then(|x| x.as_str()) == Some(provider_id))
+                })
+                .and_then(|p| p.get("keyEnc"))
+                .and_then(|x| x.as_str());
+            if let Some(envelope) = enc {
+                return crate::seal::open(envelope);
+            }
+        }
     }
-}
-
-/// 查询 provider API key 状态：仅返回是否已配置，不回传明文（§8.2）。
-#[tauri::command]
-pub fn has_provider_key(provider_id: String) -> Result<bool, String> {
-    validate_provider_id(&provider_id)?;
-    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, &provider_id)
+    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, provider_id)
         .map_err(|e| format!("钥匙串不可用：{e}"))?;
     match entry.get_password() {
-        Ok(_) => Ok(true),
-        Err(keyring::Error::NoEntry) => Ok(false),
-        Err(e) => Err(format!("读取钥匙串失败：{e}")),
+        Ok(key) => Ok(key),
+        Err(keyring::Error::NoEntry) => Err("未配置 API key，请在设置页填写".to_string()),
+        Err(e) => Err(format!("读取 key 失败：{e}")),
     }
 }
 
-/// LLM 对话代理（§6/数据模型 §12.2）：key 只在钥匙串与 Rust 内存中
-/// 流转，不出后端；前端只传 provider 配置、消息列表与可选工具表。
-/// OpenAI 兼容 chat completions，非流式；返回 choices[0].message 原文
-/// （content 字符串 + 可选 tool_calls 数组），工具调用由前端解析执行。
+/// LLM 对话代理（§6/数据模型 §12.2）：key 的密文存 settings.json，
+/// 请求前在 Rust 内存中解密——明文不出后端；前端只传 provider 配置、
+/// 消息列表与可选工具表。OpenAI 兼容 chat completions，非流式；
+/// 返回 choices[0].message 原文（content 字符串 + 可选 tool_calls 数组）。
 #[tauri::command]
 pub async fn llm_chat(
+    app: AppHandle,
     provider_id: String,
     base_url: String,
     model: String,
@@ -130,11 +128,7 @@ pub async fn llm_chat(
     if model.trim().is_empty() {
         return Err("未选择模型".into());
     }
-    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, &provider_id)
-        .map_err(|e| format!("钥匙串不可用：{e}"))?;
-    let key = entry
-        .get_password()
-        .map_err(|_| "未配置 API key，请在设置页填写".to_string())?;
+    let key = provider_secret(&app, &provider_id)?;
 
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     let mut body = serde_json::json!({ "model": model, "messages": messages, "stream": false });

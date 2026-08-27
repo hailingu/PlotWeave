@@ -13,15 +13,13 @@ interface SettingsViewProps {
 }
 
 /**
- * 设置页（docs/ui-design.md §8.2）：⌘, 打开，左侧分段列表。
- * Provider 分段：Base URL / 启用 / API key（只进钥匙串，不回显明文）/
- * 模型清单；默认模型分段：三层过滤后的可用组合下拉。
+ * 设置页（docs/ui-design.md §8.2 修订）：⌘, 打开，左侧分段列表。
+ * Provider 分段：Base URL / 启用 / API key（加密后存本机设置，
+ * 不回显明文）/ 模型清单；默认模型分段：三层过滤后的可用组合下拉。
  * 编辑即保存（防抖 500ms）；无外观设置（跟随系统，原则 1）。
  */
 export default function SettingsView({ onClose }: SettingsViewProps) {
   const [settings, setSettings] = useState<AppSettings>(defaultSettings)
-  const [loaded, setLoaded] = useState(false)
-  const [keyStatus, setKeyStatus] = useState<Record<string, boolean>>({})
   const [keyDraft, setKeyDraft] = useState<Record<string, string>>({})
   const [keyError, setKeyError] = useState<Record<string, string>>({})
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -29,21 +27,8 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
   useEffect(() => {
     void settingsStore.load().then((s) => {
       setSettings(s)
-      setLoaded(true)
     })
   }, [])
-
-  // 钥匙串状态轮询一次（打开设置时）
-  useEffect(() => {
-    if (!loaded) return
-    void (async () => {
-      const status: Record<string, boolean> = {}
-      for (const p of settings.providers) {
-        status[p.id] = await settingsStore.hasProviderKey(p.id).catch(() => false)
-      }
-      setKeyStatus(status)
-    })()
-  }, [loaded, settings.providers])
 
   // 编辑即保存：防抖 500ms 全量落盘
   const update = (next: AppSettings) => {
@@ -68,8 +53,8 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
     const key = (keyDraft[providerId] ?? '').trim()
     if (!key) return
     try {
-      await settingsStore.setProviderKey(providerId, key)
-      setKeyStatus((s) => ({ ...s, [providerId]: true }))
+      // Rust 加密返回密文 envelope → 合并进 provider 配置走防抖落盘
+      update(await settingsStore.setProviderKey(settings, providerId, key))
       setKeyDraft((d) => ({ ...d, [providerId]: '' }))
       setKeyError((e) => ({ ...e, [providerId]: '' }))
     } catch (err) {
@@ -77,10 +62,14 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
     }
   }
 
-  const removeKey = async (providerId: string) => {
-    await settingsStore.clearProviderKey(providerId).catch(() => undefined)
-    setKeyStatus((s) => ({ ...s, [providerId]: false }))
+  const removeKey = (providerId: string) => {
+    patchProvider(providerId, { keyEnc: undefined })
   }
+
+  // key 状态直接从 provider 配置派生（keyEnc 存在即已配置）
+  const keyStatus = Object.fromEntries(
+    settings.providers.map((p) => [p.id, Boolean(p.keyEnc)]),
+  )
 
   const chatModel = resolveChatModel(settings)
   const chatOptions = settings.providers
@@ -204,7 +193,10 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
                   : '尚未选择默认模型，AI 面板将显示引导。'}
             </p>
           </div>
-          <p className="settings-hint">API key 仅存于系统钥匙串；外观跟随系统，不设主题开关。</p>
+          <p className="settings-hint">
+            API key 经 AES-256-GCM 加密后保存在本机设置文件（绑定此电脑），不回显明文；
+            外观跟随系统，不设主题开关。
+          </p>
         </section>
       </main>
     </div>

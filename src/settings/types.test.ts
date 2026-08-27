@@ -33,4 +33,16 @@ describe('listChatModels（§6 模型选择器：三层过滤的枚举）', () =
       new Set(['openai']),
     )
   })
+
+  it('keyEnc 密文随 provider 透传；非 pw1 envelope 的值丢弃', () => {
+    const s = normalizeSettings({
+      providers: [
+        { id: 'openai', keyEnc: 'pw1:0123:abcd' },
+        { id: 'volcengine-ark', keyEnc: 'plaintext-key' },
+      ],
+    })
+    expect(s.providers.find((p) => p.id === 'openai')?.keyEnc).toBe('pw1:0123:abcd')
+    expect(s.providers.find((p) => p.id === 'volcengine-ark')?.keyEnc).toBeUndefined()
+    expect(listChatModels(s).every((o) => !o.key.includes('keyEnc'))).toBe(true)
+  })
 })
