@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent 
 import type { Edge } from '@xyflow/react'
 import SegmentedControl from './SegmentedControl'
 import PanelResizer from './PanelResizer'
-import { ASSET_CATEGORIES } from '../sampleData'
+import AssetsPanel from './AssetsPanel'
 import { buildOutlineGroups, type OutlineDropTarget } from '../outline'
 import { PW_ENTITY_MIME, type EntityDragPayload } from '../dragDrop'
 import { EditableName } from '../nodes/settings/NodeSettingsPanel'
@@ -327,19 +327,7 @@ export default function LeftPanel({
               </button>
             </div>
           )}
-          {tab === 'assets' && (
-            <div className="pw-assets">
-              <div className="pw-assets-hint">个人资产库 · 跨项目</div>
-              {ASSET_CATEGORIES.map((cat) => (
-                <div key={cat.kind} className="pw-assets-row">
-                  <span>{cat.icon}</span>
-                  <span className="pw-assets-label">{cat.label}</span>
-                  <span className="pw-sp" />
-                  <span className="pw-assets-count">{cat.count}</span>
-                </div>
-              ))}
-            </div>
-          )}
+          {tab === 'assets' && <AssetsPanel />}
         </div>
       </div>
       {open && (
