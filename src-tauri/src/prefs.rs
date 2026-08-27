@@ -68,6 +68,8 @@ fn validate_provider_id(id: &str) -> Result<(), String> {
 }
 
 /// 写入 provider API key（只进钥匙串，不落 JSON、不回显）。
+/// 保存必须幂等：macOS SecItemAdd 不做更新，条目已存在时直接 set_password
+/// 会报 duplicate item——先删旧条目再写入（等效更新），无旧条目则跳过。
 #[tauri::command]
 pub fn set_provider_key(provider_id: String, key: String) -> Result<(), String> {
     validate_provider_id(&provider_id)?;
@@ -75,6 +77,11 @@ pub fn set_provider_key(provider_id: String, key: String) -> Result<(), String> 
         .map_err(|e| format!("钥匙串不可用：{e}"))?;
     if key.trim().is_empty() {
         return Err("API key 不能为空".into());
+    }
+    match entry.delete_credential() {
+        Ok(()) => {}
+        Err(keyring::Error::NoEntry) => {}
+        Err(e) => return Err(format!("清理旧 key 失败：{e}")),
     }
     entry
         .set_password(key.trim())
