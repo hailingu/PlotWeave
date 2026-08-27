@@ -67,12 +67,47 @@
   }
 }
 
-/* 增强对比度：背景近实色、描边更明确（§2.6）。 */
+/* 增强对比度：背景近实色、描边更明确、次级文本对比度升一档（§2.6）。 */
 @media (prefers-contrast: more) {
   :root {
     --material-titlebar: var(--surface-window);
     --material-sidebar: var(--surface-window);
+    --text-secondary: #48484d;
     --fill-quaternary: rgba(0, 0, 0, 0.12);
     --border-hairline: rgba(0, 0, 0, 0.35);
+    --canvas-dot: rgba(0, 0, 0, 0.2);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --text-secondary: #d2d2d7;
+      --fill-quaternary: rgba(255, 255, 255, 0.18);
+      --border-hairline: rgba(255, 255, 255, 0.4);
+      --canvas-dot: rgba(255, 255, 255, 0.22);
+    }
+  }
+}
+
+/* 降低透明度：材质退化为不透明实色（§2.6；模糊由全局规则一并关闭）。
+ * 实色取材质同源的窗口底色，保证叠放层次不变。 */
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --surface-card: #ffffff;
+    --material-titlebar: #f8f8fa;
+    --material-sidebar: #f0f0f5;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --surface-card: #26262c;
+      --material-titlebar: #1c1c20;
+      --material-sidebar: #1a1a1f;
+    }
+  }
+
+  /* 用户偏好优先于组件局部模糊效果（材质语义已由上方实色令牌承载） */
+  * {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
   }
 }
