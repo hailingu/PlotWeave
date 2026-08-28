@@ -171,12 +171,14 @@ export const projectStore = {
       ? import('@tauri-apps/api/core').then(({ invoke }) => invoke('delete_project', { id }))
       : memoryDelete(id),
 
-  /** 复制项目：读原文档 → 新建「副本」项目 → 写入画布（§3.2）。 */
+  /** 复制项目：读原文档 → 新建「副本」项目 → 写入画布（§3.2）。
+   * 副本创建时间取复制时刻；不带源资产索引——relPath 相对源项目目录，
+   * 携带即悬空文件引用（§7.3）；资产文件整目录拷贝随 §7.1 落地后实现。 */
   duplicate: async (id: string): Promise<ProjectSummary> => {
     const doc = await projectStore.load(id)
     const name = `${doc.name} 副本`
     const meta = await projectStore.create(name)
-    await projectStore.saveQuiet(meta.id, { ...doc, name })
+    await projectStore.saveQuiet(meta.id, { ...doc, name, createdAt: undefined, assets: undefined })
     return { ...meta, sceneCount: meta.sceneCount }
   },
 

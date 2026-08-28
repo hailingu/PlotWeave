@@ -56,6 +56,26 @@ describe('projectStore 内存门面（浏览器回退）', () => {
     expect(copyDoc.name).toBe('原剧 副本')
   })
 
+  it('duplicate：副本创建时间是新的，且不携带源资产索引（§7.3 复制不指向源项目文件）', async () => {
+    const meta = await projectStore.create('原剧')
+    await projectStore.save(meta.id, {
+      name: '原剧',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      nodes: [],
+      edges: [],
+      settings: { characters: [], locations: [] },
+      assets: { byId: { 'a-1': { id: 'a-1', relPath: 'assets/x.png', mime: 'image/png', source: 'upload', createdAt: '' } } },
+    })
+    const copy = await projectStore.duplicate(meta.id)
+    const copyDoc = await projectStore.load(copy.id)
+    expect(copyDoc.createdAt).not.toBe('2026-01-01T00:00:00.000Z')
+    // relPath 相对源项目目录：复制不带索引，避免悬空文件引用
+    expect(copyDoc.assets).toBeUndefined()
+    // 源项目自己的索引不受影响
+    const srcDoc = await projectStore.load(meta.id)
+    expect(srcDoc.assets?.byId['a-1']).toBeDefined()
+  })
+
   it('saveQuiet 吞掉异常不打断调用方', async () => {
     await expect(
       projectStore.saveQuiet('ghost-id-不校验', { name: 'x', nodes: [], edges: [], settings: { characters: [], locations: [] } }),

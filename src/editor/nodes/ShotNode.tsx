@@ -44,8 +44,9 @@ export default function ShotNode({ id, data, selected }: NodeProps<ShotFlowNode>
       </div>
       <div className="pw-shot-refs">
         {data.refs.map((ref) => (
-          <span key={`${ref.kind}-${ref.label}`} className="pw-shot-ref">
-            {REF_ICONS[ref.kind]} {ref.label}
+          <span key={ref.id} className="pw-shot-ref">
+            {/* 有 targetId 时显示名应由 id 实时解析（§8.1）；解析器接线前回退 targetId/label */}
+            {REF_ICONS[ref.kind]} {ref.label ?? ref.targetId ?? ''}
           </span>
         ))}
         <span className="pw-shot-ref pw-shot-ref-add" aria-hidden>
