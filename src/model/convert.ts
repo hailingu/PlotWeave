@@ -155,16 +155,16 @@ export interface ParseResult {
   warnings: string[]
 }
 
-/** 场景节点的悬空角色/地点引用警告（§11.4）：只记警告，不清除 id。
+/** 场景节点的悬空角色/地点/头像资产引用警告（§11.4）：只记警告，不清除 id。
  * 桶缺失（Rust 兼容默认 settings:{}）按空集合处理，不抛错。 */
 function sceneRefWarnings(
   n: StoryNode,
-  settings: ProjectDocument['settings'],
+  doc: ProjectDocument,
   warnings: string[],
 ): void {
-  const s = n.data.spec as { characterIds?: string[]; locationId?: string }
-  const characters = settings.characters ?? {}
-  const locations = settings.locations ?? {}
+  const s = n.data.spec as { characterIds?: string[]; locationId?: string; avatarAssetId?: string }
+  const characters = doc.settings.characters ?? {}
+  const locations = doc.settings.locations ?? {}
   for (const cid of s.characterIds ?? []) {
     if (!characters[cid]) {
       warnings.push(`节点 ${n.id} 引用了不存在的角色 ${cid}`)
@@ -173,15 +173,18 @@ function sceneRefWarnings(
   if (s.locationId && !locations[s.locationId]) {
     warnings.push(`节点 ${n.id} 引用了不存在的地点 ${s.locationId}`)
   }
+  if (s.avatarAssetId && !doc.assets?.byId[s.avatarAssetId]) {
+    warnings.push(`节点 ${n.id} 引用了不存在的资产 ${s.avatarAssetId}`)
+  }
 }
 
 /** 对白节点的悬空 speaker 引用警告（§11.4）：只记警告，不清除 id。 */
 function dialogueRefWarnings(
   n: StoryNode,
-  settings: ProjectDocument['settings'],
+  doc: ProjectDocument,
   warnings: string[],
 ): void {
-  const characters = settings.characters ?? {}
+  const characters = doc.settings.characters ?? {}
   for (const line of (n.data.spec as { lines?: { speaker?: string }[] }).lines ?? []) {
     if (line.speaker && !characters[line.speaker]) {
       warnings.push(`节点 ${n.id} 的对白引用了不存在的角色 ${line.speaker}`)
@@ -189,14 +192,32 @@ function dialogueRefWarnings(
   }
 }
 
-/** 按节点类型分发悬空设定引用检查（§11.4）。 */
+/** 分镜节点的悬空引用位警告（§11.4）：targetId 按类别解析到设定集或资产索引。 */
+function shotRefWarnings(n: StoryNode, doc: ProjectDocument, warnings: string[]): void {
+  for (const ref of (n.data.spec as { refs?: Array<{ id: string; kind: string; targetId?: string }> }).refs ?? []) {
+    if (!ref.targetId) continue
+    if (!refTargetKnown(doc, ref.kind, ref.targetId)) {
+      warnings.push(`节点 ${n.id} 的分镜引用指向不存在的目标 ${ref.targetId}`)
+    }
+  }
+}
+
+/** 引用目标是否可解析：character/location 查设定集，audio 查资产索引。 */
+function refTargetKnown(doc: ProjectDocument, kind: string, targetId: string): boolean {
+  if (kind === 'character') return !!doc.settings.characters?.[targetId]
+  if (kind === 'location') return !!doc.settings.locations?.[targetId]
+  return !!doc.assets?.byId[targetId]
+}
+
+/** 按节点类型分发悬空设定/资产引用检查（§11.4）。 */
 function collectDanglingRefWarnings(
   n: StoryNode,
-  settings: ProjectDocument['settings'],
+  doc: ProjectDocument,
   warnings: string[],
 ): void {
-  if (n.type === 'scene') sceneRefWarnings(n, settings, warnings)
-  if (n.type === 'dialogue') dialogueRefWarnings(n, settings, warnings)
+  if (n.type === 'scene') sceneRefWarnings(n, doc, warnings)
+  if (n.type === 'dialogue') dialogueRefWarnings(n, doc, warnings)
+  if (n.type === 'shot') shotRefWarnings(n, doc, warnings)
 }
 
 /** 孤儿边判定（§11.3）：端点节点缺失；branch 边绑定的选项已不存在同论。 */
@@ -220,7 +241,7 @@ function normalizeDocument(doc: ProjectDocument): { doc: ProjectDocument; warnin
     return !orphan
   })
   const nodes = doc.graph.nodes.map((n) => {
-    collectDanglingRefWarnings(n, doc.settings, warnings)
+    collectDanglingRefWarnings(n, doc, warnings)
     return { ...n, ui: { ...n.ui, selected: false } }
   })
   return { doc: { ...doc, graph: { ...doc.graph, nodes, edges } }, warnings }

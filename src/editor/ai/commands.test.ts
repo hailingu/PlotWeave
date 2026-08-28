@@ -351,6 +351,24 @@ describe('分类型连线校验（剧情流 / 分支选项出口 / 分镜下挂�
     }
   })
 
+  it('update_node 删选项连带从校验快照移除其出口边：不误判成环（§8.2.2）', () => {
+    const snap = richSnap()
+    // 现有边：b1 --option-ob-a--> s1。批次：删选项 ob-a，再连 s1 → b1。
+    // 若校验态不清除被删选项的边，BFS 会把 s1→b1 误判为成环而拒绝合法批次。
+    const snapWithEdge: AiGraphSnapshot = {
+      ...snap,
+      edges: [{ source: 'b1', target: 's1', sourceHandle: 'option-ob-a', type: 'branch' }],
+    }
+    const v = validateAiBatch(
+      [
+        { op: 'update_node', nodeId: 'b1', patch: { options: [{ id: 'ob-b', label: '不追' }] } },
+        { op: 'connect_edge', sourceId: 's1', targetId: 'b1' },
+      ],
+      snapWithEdge,
+    )
+    expect(v.ok, JSON.stringify(v.issues)).toBe(true)
+  })
+
   it('branch 需要来源为分支节点且 optionIndex 在选项范围内', () => {
     const ok = validateAiBatch(
       [{ op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 1 }],

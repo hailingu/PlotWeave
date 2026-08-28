@@ -1,4 +1,4 @@
-import { branchOptionHandle, SCENE_SHOT_HANDLE, wouldCreateCycle } from '../graphRules'
+import { branchOptionHandle, removedOptionHandles, SCENE_SHOT_HANDLE, wouldCreateCycle } from '../graphRules'
 import { uid } from '../../uid'
 
 /**
@@ -286,8 +286,19 @@ function foldUpdate(st: FoldState, cmd: Record<string, unknown>, index: number):
     label: `${OP_LABELS.update} ${st.labels.get(id) ?? '未知节点'}（${Object.keys(patch).join('、')}）${reasonOf(cmd)}`,
   })
   const normalized = normalizeNodeFields(st.types.get(id) ?? '', patch)
-  // 分支选项被替换时刷新登记，同批后续 connect_edge 按新选项 id 解析端口
+  // 分支选项被替换时：登记刷新 + 被删选项的出口边从校验态移除（§8.2.2
+  // 级联与 simulateBatch 同规则）——否则后续连线的成环检测会被旧边误判
   if (st.types.get(id) === 'branch' && Array.isArray(normalized.options)) {
+    const removed = removedOptionHandles(
+      st.branchOptions.get(id) ?? [],
+      normalized.options as Array<{ id: string }>,
+    )
+    if (removed.length > 0) {
+      const gone = new Set(removed)
+      st.virtualEdges = st.virtualEdges.filter(
+        (e) => !(e.source === id && e.sourceHandle && gone.has(e.sourceHandle)),
+      )
+    }
     st.branchOptions.set(id, normalized.options as Array<{ id: string; label: string }>)
   }
   st.commands.push({

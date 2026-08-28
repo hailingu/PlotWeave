@@ -82,18 +82,17 @@ export interface BranchNodeData extends Record<string, unknown> {
   episodeNo?: number
 }
 
-/** 分镜卡的 AI 燃料引用位：角色垫图 / 场景底图 / 音频。
- * 引用的唯一真相是 targetId（§8.1：显示名按 id 实时解析，禁止镜像）；
- * label 仅作无 targetId 的自由引用位兜底。id 为列表项稳定标识
- * （S6479：渲染/编辑的 key 不用数组下标），非引用目标。 */
-export interface ShotRef {
+/** 分镜卡的 AI 燃料引用位：引用位与自由位互斥（targetId / label 不共存）。
+ * 引用位的唯一真相是 targetId（§8.1：显示名按 id 实时解析，禁止镜像）；
+ * 自由位为手填文案。id 为列表项稳定标识（S6479），非引用目标。 */
+export interface ShotRefBase {
   id: string
   kind: 'character' | 'location' | 'audio'
-  /** 引用目标：settings 实体 id（character/location）或资产 id（audio）。 */
-  targetId?: string
-  /** 自由引用位的手填显示文案（无 targetId 时才有意义）。 */
-  label?: string
 }
+
+export type ShotRef =
+  | (ShotRefBase & { targetId: string; label?: never })
+  | (ShotRefBase & { label: string; targetId?: never })
 
 /** 分镜卡节点（监视器卡，生成侧）：一张卡 = 一个镜头及其 AI 燃料。 */
 export interface ShotNodeData extends Record<string, unknown> {

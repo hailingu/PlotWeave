@@ -306,6 +306,20 @@ describe('parseProject（ProjectDocument → 会话文档，§11 归一化）', 
     expect(round.content.settings.locations).toEqual([])
   })
 
+  it('悬空分镜引用与头像资产引用：按 §11.4 标记警告（targetId / avatarAssetId）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    const shot = doc.graph.nodes.find((n) => n.id === 'sh1')!
+    ;(shot.data.spec as { refs: unknown[] }).refs = [
+      { id: 'ref-1', kind: 'character', targetId: 'ch-gone' },
+      { id: 'ref-2', kind: 'audio', targetId: 'a-gone' },
+    ]
+    const scene = doc.graph.nodes.find((n) => n.id === 's1')!
+    ;(scene.data.spec as { avatarAssetId?: string }).avatarAssetId = 'a-gone'
+    const round = parseProject(doc)
+    expect(round.warnings.some((w) => w.includes('ch-gone'))).toBe(true)
+    expect(round.warnings.filter((w) => w.includes('a-gone'))).toHaveLength(2)
+  })
+
   it('存储文档中的 ui.selected 一律重置（§11.2）', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW) as ProjectDocument
     doc.graph.nodes[0].ui.selected = true
