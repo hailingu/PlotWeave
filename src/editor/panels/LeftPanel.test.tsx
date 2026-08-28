@@ -5,7 +5,7 @@
  * 设定集分段的增删改与实体拖拽负载、资产分段挂载。
  */
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, createEvent, fireEvent, render, screen } from '@testing-library/react'
 import LeftPanel, { type SettingsActions } from './LeftPanel'
 import { PW_ENTITY_MIME, type EntityDragPayload } from '../dragDrop'
 import type { CanvasNode } from '../nodes/types'
@@ -164,6 +164,53 @@ describe('LeftPanel 大纲拖拽', () => {
     fireEvent.drop(row('场 01 · 场一'), { dataTransfer: dt({ [OUTLINE_MIME]: 's1' }) })
     expect(spies.onOutlineDrop).not.toHaveBeenCalled()
   })
+
+  it('行 dragOver：上半 before / 下半 after 插入线提示；dragLeave 清除', () => {
+    setup()
+    const target = row('场 01 · 场一')
+    // happy-dom 的 getBoundingClientRect 全零：clientY < 0 = 上半；
+    // 且其 DragEvent 忽略 init 里的 clientY，须建事件后显式覆写
+    const dragOverAt = (clientY: number) => {
+      const ev = createEvent.dragOver(target, { dataTransfer: dt({ [OUTLINE_MIME]: 'b1' }) })
+      Object.defineProperty(ev, 'clientY', { value: clientY })
+      fireEvent(target, ev)
+    }
+    dragOverAt(-1)
+    expect(target.className).toContain('pw-drop-above')
+
+    dragOverAt(10)
+    expect(target.className).toContain('pw-drop-below')
+
+    fireEvent.dragLeave(target)
+    expect(target.className).not.toContain('pw-drop-below')
+  })
+
+  it('dragOver 非大纲 MIME 不出提示；分镜行（level ≥ 3）不接收排序悬停', () => {
+    setup()
+    const target = row('场 01 · 场一')
+    fireEvent.dragOver(target, { dataTransfer: dt({ 'text/plain': 'x' }), clientY: -1 })
+    expect(target.className).not.toContain('pw-drop-above')
+  })
+
+  it('编号集组头：dragOver 出整组落点提示、drop 派发该集 groupEnd、dragLeave 清除', () => {
+    const spies = setup()
+    const head = screen.getByText('第 1 集').closest('.pw-outline-ep')!
+    fireEvent.dragOver(head, { dataTransfer: dt({ [OUTLINE_MIME]: 'd1' }) })
+    expect(head.className).toContain('pw-drop-into')
+
+    fireEvent.drop(head, { dataTransfer: dt({ [OUTLINE_MIME]: 'd1' }) })
+    expect(spies.onOutlineDrop).toHaveBeenCalledWith('d1', { kind: 'groupEnd', episode: 1 })
+    expect(head.className).not.toContain('pw-drop-into')
+  })
+
+  it('「未分集」组头：dragOver 出提示，dragLeave 清除', () => {
+    setup()
+    const head = screen.getByText('未分集')
+    fireEvent.dragOver(head, { dataTransfer: dt({ [OUTLINE_MIME]: 'd1' }) })
+    expect(head.className).toContain('pw-drop-into')
+    fireEvent.dragLeave(head)
+    expect(head.className).not.toContain('pw-drop-into')
+  })
 })
 
 describe('LeftPanel 设定集分段', () => {
@@ -202,6 +249,21 @@ describe('LeftPanel 设定集分段', () => {
     fireEvent.dragStart(screen.getByTitle(/拖到画布节点建立引用/), { dataTransfer: d })
     const payload = JSON.parse(d.store[PW_ENTITY_MIME]) as EntityDragPayload
     expect(payload).toEqual({ kind: 'character', id: 'c1', name: '林晚' })
+  })
+
+  it('地点行内改名透传 renameLocation；地点拖拽负载为 location 实体', () => {
+    const spies = setup()
+    toSettingsTab()
+    fireEvent.doubleClick(screen.getByRole('button', { name: '天台' }))
+    const input = screen.getByRole('textbox', { name: '地点名 天台' })
+    fireEvent.change(input, { target: { value: '旧天台' } })
+    fireEvent.blur(input)
+    expect(spies.settingsActions.renameLocation).toHaveBeenCalledWith('l1', '旧天台')
+
+    const d = dt()
+    fireEvent.dragStart(screen.getByTitle(/拖到索引卡设置地点/), { dataTransfer: d })
+    const payload = JSON.parse(d.store[PW_ENTITY_MIME]) as EntityDragPayload
+    expect(payload).toEqual({ kind: 'location', id: 'l1', name: '天台' })
   })
 })
 

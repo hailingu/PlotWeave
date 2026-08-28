@@ -1,5 +1,7 @@
+// @vitest-environment happy-dom
 import { describe, expect, it, vi } from 'vitest'
-import { CommandStack, type HistoryCommand } from './history'
+import { act, renderHook } from '@testing-library/react'
+import { CommandStack, useCommandHistory, type HistoryCommand } from './history'
 
 /** 可注入时钟的命令栈：t 递增受控推进。 */
 function stack(opts?: { coalesceMs?: number; limit?: number }) {
@@ -143,5 +145,41 @@ describe('CommandStack：栈深上限', () => {
     s.undo() // a 已不在栈中
     expect(oldestUndo).not.toHaveBeenCalled()
     expect(s.canUndo).toBe(false)
+  })
+})
+
+describe('useCommandHistory（命令栈 hook：惰性构建 + version 驱动重渲染）', () => {
+  it('push/undo/redo/clear 委托栈实现；canUndo/canRedo 随 version 重算', () => {
+    const { result } = renderHook(() => useCommandHistory())
+    expect(result.current.canUndo).toBe(false)
+    expect(result.current.canRedo).toBe(false)
+    const v0 = result.current.version
+
+    const c: HistoryCommand = { undo: vi.fn(), redo: vi.fn() }
+    act(() => result.current.push(c))
+    expect(result.current.canUndo).toBe(true)
+    expect(result.current.version).toBeGreaterThan(v0)
+
+    act(() => result.current.undo())
+    expect(c.undo).toHaveBeenCalledTimes(1)
+    expect(result.current.canUndo).toBe(false)
+    expect(result.current.canRedo).toBe(true)
+
+    act(() => result.current.redo())
+    expect(c.redo).toHaveBeenCalledTimes(1)
+    expect(result.current.canUndo).toBe(true)
+
+    act(() => result.current.clear())
+    expect(result.current.canUndo).toBe(false)
+    expect(result.current.canRedo).toBe(false)
+  })
+
+  it('重渲染复用同一栈实例（回调引用稳定）', () => {
+    const { result, rerender } = renderHook(() => useCommandHistory())
+    const pushRef = result.current.push
+    act(() => result.current.push(cmd('k')))
+    rerender()
+    expect(result.current.push).toBe(pushRef)
+    expect(result.current.canUndo).toBe(true) // 栈未随重渲染重建
   })
 })
