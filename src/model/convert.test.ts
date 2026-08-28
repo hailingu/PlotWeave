@@ -306,18 +306,23 @@ describe('parseProject（ProjectDocument → 会话文档，§11 归一化）', 
     expect(round.content.settings.locations).toEqual([])
   })
 
-  it('悬空分镜引用与头像资产引用：按 §11.4 标记警告（targetId / avatarAssetId）', () => {
+  it('悬空分镜引用：按 §11.4 标记警告（targetId 按类别解析设定集/资产索引）', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW)
     const shot = doc.graph.nodes.find((n) => n.id === 'sh1')!
     ;(shot.data.spec as { refs: unknown[] }).refs = [
       { id: 'ref-1', kind: 'character', targetId: 'ch-gone' },
       { id: 'ref-2', kind: 'audio', targetId: 'a-gone' },
     ]
-    const scene = doc.graph.nodes.find((n) => n.id === 's1')!
-    ;(scene.data.spec as { avatarAssetId?: string }).avatarAssetId = 'a-gone'
     const round = parseProject(doc)
     expect(round.warnings.some((w) => w.includes('ch-gone'))).toBe(true)
-    expect(round.warnings.filter((w) => w.includes('a-gone'))).toHaveLength(2)
+    expect(round.warnings.some((w) => w.includes('a-gone'))).toBe(true)
+  })
+
+  it('角色实体头像资产悬空：按 §11.4 标记警告（avatarAssetId 在设定集实体上）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    doc.settings.characters['ch-1'].avatarAssetId = 'a-gone'
+    const round = parseProject(doc)
+    expect(round.warnings.some((w) => w.includes('a-gone'))).toBe(true)
   })
 
   it('存储文档中的 ui.selected 一律重置（§11.2）', () => {

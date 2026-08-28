@@ -155,14 +155,14 @@ export interface ParseResult {
   warnings: string[]
 }
 
-/** 场景节点的悬空角色/地点/头像资产引用警告（§11.4）：只记警告，不清除 id。
+/** 场景节点的悬空角色/地点引用警告（§11.4）：只记警告，不清除 id。
  * 桶缺失（Rust 兼容默认 settings:{}）按空集合处理，不抛错。 */
 function sceneRefWarnings(
   n: StoryNode,
   doc: ProjectDocument,
   warnings: string[],
 ): void {
-  const s = n.data.spec as { characterIds?: string[]; locationId?: string; avatarAssetId?: string }
+  const s = n.data.spec as { characterIds?: string[]; locationId?: string }
   const characters = doc.settings.characters ?? {}
   const locations = doc.settings.locations ?? {}
   for (const cid of s.characterIds ?? []) {
@@ -173,8 +173,15 @@ function sceneRefWarnings(
   if (s.locationId && !locations[s.locationId]) {
     warnings.push(`节点 ${n.id} 引用了不存在的地点 ${s.locationId}`)
   }
-  if (s.avatarAssetId && !doc.assets?.byId[s.avatarAssetId]) {
-    warnings.push(`节点 ${n.id} 引用了不存在的资产 ${s.avatarAssetId}`)
+}
+
+/** 设定集实体的悬空头像资产引用警告（§11.4）：avatarAssetId 在
+ * Character 实体上（非节点 spec），指向 assets.byId 中不存在的条目即警告。 */
+function characterAvatarWarnings(doc: ProjectDocument, warnings: string[]): void {
+  for (const ch of Object.values(doc.settings.characters ?? {})) {
+    if (ch.avatarAssetId && !doc.assets?.byId[ch.avatarAssetId]) {
+      warnings.push(`角色 ${ch.name}（${ch.id}）的头像引用了不存在的资产 ${ch.avatarAssetId}`)
+    }
   }
 }
 
@@ -244,6 +251,7 @@ function normalizeDocument(doc: ProjectDocument): { doc: ProjectDocument; warnin
     collectDanglingRefWarnings(n, doc, warnings)
     return { ...n, ui: { ...n.ui, selected: false } }
   })
+  characterAvatarWarnings(doc, warnings)
   return { doc: { ...doc, graph: { ...doc.graph, nodes, edges } }, warnings }
 }
 
