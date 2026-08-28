@@ -21,6 +21,7 @@ import {
   type NodeTypes,
   type EdgeTypes,
   type XYPosition,
+  type Viewport,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import SceneNode from './nodes/SceneNode'
@@ -64,6 +65,7 @@ import { buildCanvasNode } from './nodeFactory'
 import type { CreatableType } from './creatable'
 import type { ProjectSettings } from './settings'
 import type { CanvasNode } from './nodes/types'
+import type { ProjectContent } from '../model/content'
 
 /** 画布节点类型注册：索引卡 / 对白 / 节奏卡 / 分支 / 分镜卡（docs/ui-design.md §4.2）。 */
 const nodeTypes: NodeTypes = {
@@ -80,16 +82,8 @@ const edgeTypes: EdgeTypes = {
 }
 
 interface EditorViewProps {
-  /** 打开的项目：id 用于持久化，name 用于标题栏与导出，doc 为已加载画布。 */
-  readonly project: {
-    id: string
-    name: string
-    nodes: CanvasNode[]
-    edges: Edge[]
-    settings: ProjectSettings
-    /** 大纲集标题（§3.5：集 = 编号 + 行内标题）。 */
-    episodeTitles?: Record<number, string>
-  }
+  /** 打开的项目：id 用于持久化，doc 为已加载的会话文档（含名称/画布/设定集/集标题/视口）。 */
+  readonly project: { id: string } & ProjectContent
   /** 返回项目首页：同一窗口从编辑器状态切回文档浏览器（§3.1）。 */
   readonly onBackHome: () => void
   /** 项目名内联重命名（§3.3 中区：更新 project.name + 首页索引）。 */
@@ -97,13 +91,7 @@ interface EditorViewProps {
   /** 打开设置页（§8.2 BYOK 配置入口，⌘,）。 */
   readonly onOpenSettings?: () => void
   /** 持久化写入（防抖节流由本组件负责；浏览器预览下为内存回退实现）。 */
-  readonly onSave: (doc: {
-    name: string
-    nodes: CanvasNode[]
-    edges: Edge[]
-    settings: ProjectSettings
-    episodeTitles: Record<number, string>
-  }) => void
+  readonly onSave: (doc: ProjectContent) => void
 }
 
 /**
@@ -149,8 +137,20 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
   const episodeTitlesRef = useRef(episodeTitles)
   episodeTitlesRef.current = episodeTitles
 
+  // 视口随文档持久化（数据模型 §3），但本身是 transient：平移/缩放不触发
+  // 脏保存，只在下一次内容落盘时捎带最新值（§9.4 update_viewport 规则）。
+  const viewportRef = useRef<Viewport | undefined>(project.viewport)
+
   useDebouncedSave(
-    { name: project.name, nodes, edges, settings, episodeTitles },
+    {
+      name: project.name,
+      createdAt: project.createdAt,
+      nodes,
+      edges,
+      settings,
+      episodeTitles,
+      viewport: viewportRef.current,
+    },
     onSave,
   )
 
@@ -309,7 +309,7 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
   }, [])
 
   /** 集聚焦的画布投影：成员保持原样，非成员加降透明度类（§3.5 ~30%）。
-   * className 是运行态样式（stripNode 落盘时剥离），不入持久化。 */
+   * className 是运行态样式（落盘时由模型层序列化剥离），不入持久化。 */
   const displayNodes = useMemo(() => {
     if (focusedEpisode === null) return nodes
     const sceneByShot = hostSceneMap(nodes, edges)
@@ -699,7 +699,12 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
             isValidConnection={isValidConnection}
             /* 删除统一走命令栈（含连线清理），禁用内置 Delete 行为 */
             deleteKeyCode={null}
-            fitView
+            /* 有持久化视口则恢复，否则首开 fitView（§3 视口随文档持久化） */
+            defaultViewport={project.viewport}
+            fitView={!project.viewport}
+            onMoveEnd={(_, vp) => {
+              viewportRef.current = vp
+            }}
           >
             <Background
               variant={BackgroundVariant.Dots}

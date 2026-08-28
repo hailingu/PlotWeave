@@ -5,8 +5,8 @@ import type { Node } from '@xyflow/react'
  * 分族对齐生产管线「节奏卡 → 索引卡 → 剧本 → 分镜 → AI 燃料 → 渲染」：
  * 编剧侧（纸面浅色）= 节奏卡 / 索引卡 / 对白 / 分支；
  * 生成侧（深色石板）= 分镜卡，未来的渲染节点同族。
- * 首版为画布内存态占位结构，字段名对齐《数据模型设计》的 spec/meta 拆分，
- * 持久化落地时由 ProjectDocument 替换。
+ * 首版为画布内存态结构，字段名对齐《数据模型设计》的 spec/meta 拆分；
+ * 落盘时经 src/model/convert.ts 转换为 ProjectDocument（四分区信封）。
  */
 
 /** 角色头像的派生视图：label 为单字名，gradient 为设定集头像配色的占位渐变。 */

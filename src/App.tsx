@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import HomePage from './home/HomePage'
-import { projectStore, type ProjectDocument } from './projectStore'
+import { projectStore, type ProjectContent } from './projectStore'
 import { EMPTY_SETTINGS } from './editor/settings'
 import EditorView from './editor/EditorView'
 import SettingsView from './settings/SettingsView'
@@ -9,7 +9,7 @@ import type { ProjectSummary } from './home/projects'
 /** 编辑器态：已加载的项目（id + 名称 + 画布文档）。 */
 interface OpenProject {
   id: string
-  doc: ProjectDocument
+  doc: ProjectContent
 }
 
 /**
@@ -78,7 +78,7 @@ export default function App() {
   }, [refreshProjects])
 
   const handleSave = useCallback(
-    (id: string) => (doc: ProjectDocument) => {
+    (id: string) => (doc: ProjectContent) => {
       void projectStore.saveQuiet(id, doc)
     },
     [],
@@ -135,14 +135,7 @@ export default function App() {
     return (
       <EditorView
         key={openProject.id}
-        project={{
-          id: openProject.id,
-          name: openProject.doc.name,
-          nodes: openProject.doc.nodes,
-          edges: openProject.doc.edges,
-          settings: openProject.doc.settings,
-          episodeTitles: openProject.doc.episodeTitles,
-        }}
+        project={{ id: openProject.id, ...openProject.doc }}
         onBackHome={handleBackHome}
         onRenameProject={handleEditorRename}
         onOpenSettings={() => setSettingsOpen(true)}

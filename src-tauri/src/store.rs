@@ -1,7 +1,10 @@
-//! 项目持久化（docs/ui-design.md §3.2 / 数据模型 §11）：
+//! 项目持久化（docs/data-model.md v1 §10/§11）：
 //! 每个项目一个 JSON 文件，存于应用数据目录 `projects/` 下，文件名即项目 id。
-//! 画布 nodes/edges 对前端是自有数据，Rust 端以 `serde_json::Value` 透传，
-//! 仅校验项目名与 id（信任边界内的自有格式，不做逐字段断言）。
+//! 落盘格式为 ProjectDocument 信封（schemaVersion + project 元信息 + graph +
+//! settings + episodeTitles + assets）；graph/settings/assets 对前端是自有数据，
+//! Rust 端以 `serde_json::Value` 透传，仅校验项目名与 id（信任边界内的自有格式）。
+//! 旧扁平格式（无 schemaVersion）在 load 时包装为 v0 信封交付前端，节点级
+//! 迁移与归一化由前端模型层（§11）完成。
 
 use std::collections::HashSet;
 use std::fs;
@@ -9,30 +12,49 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use tauri::{AppHandle, Manager};
 
-/// 项目文件：name + 更新时间（epoch 毫秒）+ 画布两数组 + 设定集 + 集标题表
-/// （nodes/edges/settings/episodeTitles 对前端是自有数据，以 `serde_json::Value` 透传）。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProjectFile {
+/// 项目元信息：id/name + ISO 8601 创建与更新时间（§3）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ProjectInfo {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
     pub name: String,
-    pub updated_at: u64,
-    pub nodes: serde_json::Value,
-    pub edges: serde_json::Value,
-    /// 设定集实体（角色/地点）；旧版文件缺失时按空对象处理。
-    #[serde(default = "empty_settings")]
-    pub settings: serde_json::Value,
-    /// 大纲集标题（§3.5：集 = 编号 + 行内标题，不建实体表）；键为集号字符串。
-    #[serde(default = "empty_settings", rename = "episodeTitles")]
-    pub episode_titles: serde_json::Value,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default, rename = "createdAt")]
+    pub created_at: String,
+    #[serde(default, rename = "updatedAt")]
+    pub updated_at: String,
 }
 
-/// 项目摘要：首页海报卡的展示模型；统计从 nodes 派生，不落镜像字段。
+/// 项目文件：ProjectDocument 信封。graph/settings/episodeTitles/assets
+/// 以 `serde_json::Value` 透传；缺省字段按空对象兜底（旧文件兼容）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectFile {
+    #[serde(default, rename = "schemaVersion")]
+    pub schema_version: u32,
+    #[serde(default)]
+    pub project: ProjectInfo,
+    #[serde(default)]
+    pub graph: serde_json::Value,
+    #[serde(default = "empty_object")]
+    pub settings: serde_json::Value,
+    #[serde(default = "empty_object", rename = "episodeTitles")]
+    pub episode_titles: serde_json::Value,
+    #[serde(default = "empty_assets")]
+    pub assets: serde_json::Value,
+}
+
+/// 项目摘要：首页海报卡的展示模型；统计从 graph 派生，不落镜像字段。
 #[derive(Debug, Clone, Serialize)]
 pub struct ProjectMeta {
     pub id: String,
     pub name: String,
-    pub updated_at: u64,
+    /// ISO 8601；字典序即时间序，排序无需解析。
+    pub updated_at: String,
     pub scene_count: u64,
     pub ending_count: u64,
 }
@@ -75,16 +97,41 @@ pub fn new_id() -> String {
     format!("p-{ms:x}-{seq:x}")
 }
 
-/// settings 字段缺省值：空对象（而非 Null），前端 normalizeSettings 兜底。
-fn empty_settings() -> serde_json::Value {
-    serde_json::json!({})
+/// epoch 毫秒 → ISO 8601（UTC，civil-from-days 算法，无外部依赖）。
+fn iso_from_ms(ms: u64) -> String {
+    let secs = ms / 1000;
+    let millis = ms % 1000;
+    let days = (secs / 86400) as i64;
+    let rem = secs % 86400;
+    let (h, m, s) = (rem / 3600, rem % 3600 / 60, rem % 60);
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
+    let mo = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+    let y = if mo <= 2 { y + 1 } else { y };
+    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{m:02}:{s:02}.{millis:03}Z")
 }
 
-fn now_ms() -> u64 {
-    SystemTime::now()
+fn now_iso() -> String {
+    let ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+        .unwrap_or(0);
+    iso_from_ms(ms)
+}
+
+/// settings 等对象字段缺省值：空对象（而非 Null），前端归一化兜底。
+fn empty_object() -> serde_json::Value {
+    json!({})
+}
+
+fn empty_assets() -> serde_json::Value {
+    json!({ "byId": {} })
 }
 
 fn projects_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -102,13 +149,20 @@ fn project_path(app: &AppHandle, id: &str) -> Result<PathBuf, String> {
     Ok(projects_dir(app)?.join(format!("{id}.json")))
 }
 
-/// 从画布 nodes 派生统计：场数 = scene 节点数；结局数 = 无剧情流出边的
+/// 从画布 graph 派生统计：场数 = scene 节点数；结局数 = 无剧情流出边的
 /// 场景数（分支剧情的叶子场景即结局）。attach 下挂边（索引卡 → 分镜卡，
 /// 垂直派生从属）不算出边——挂了分镜的场景仍是叶子结局。
-pub fn graph_stats(nodes: &serde_json::Value, edges: &serde_json::Value) -> (u64, u64) {
+/// v1 文档边带显式 data.kind；v0 运行态边按 sourceHandle/className 判别。
+pub fn graph_stats(graph: &serde_json::Value) -> (u64, u64) {
     let empty: Vec<serde_json::Value> = Vec::new();
-    let nodes = nodes.as_array().unwrap_or(&empty);
-    let edges = edges.as_array().unwrap_or(&empty);
+    let nodes = graph
+        .get("nodes")
+        .and_then(|v| v.as_array())
+        .unwrap_or(&empty);
+    let edges = graph
+        .get("edges")
+        .and_then(|v| v.as_array())
+        .unwrap_or(&empty);
 
     let scene_ids: HashSet<&str> = nodes
         .iter()
@@ -116,7 +170,8 @@ pub fn graph_stats(nodes: &serde_json::Value, edges: &serde_json::Value) -> (u64
         .filter_map(|n| n.get("id").and_then(|i| i.as_str()))
         .collect();
     let is_attach = |e: &serde_json::Value| {
-        e.get("sourceHandle").and_then(|h| h.as_str()) == Some("shots")
+        e.pointer("/data/kind").and_then(|k| k.as_str()) == Some("attach")
+            || e.get("sourceHandle").and_then(|h| h.as_str()) == Some("shots")
             || e.get("className").and_then(|c| c.as_str()) == Some("pw-edge-attach")
     };
     let mut has_outgoing: HashSet<&str> = HashSet::new();
@@ -136,13 +191,46 @@ pub fn graph_stats(nodes: &serde_json::Value, edges: &serde_json::Value) -> (u64
 }
 
 fn read_meta(id: &str, file: &ProjectFile) -> ProjectMeta {
-    let (scene_count, ending_count) = graph_stats(&file.nodes, &file.edges);
+    let (scene_count, ending_count) = graph_stats(&file.graph);
     ProjectMeta {
         id: id.to_string(),
-        name: file.name.clone(),
-        updated_at: file.updated_at,
+        name: file.project.name.clone(),
+        updated_at: file.project.updated_at.clone(),
         scene_count,
         ending_count,
+    }
+}
+
+/// 旧扁平格式（无 schemaVersion）→ v0 信封：节点/边上移 graph，
+/// epoch 毫秒时间戳转 ISO；节点级字段迁移由前端模型层完成（§11.1）。
+fn wrap_legacy(id: &str, v: &serde_json::Value) -> ProjectFile {
+    let name = v
+        .get("name")
+        .and_then(|x| x.as_str())
+        .unwrap_or("未命名")
+        .to_string();
+    let updated_at = v
+        .get("updated_at")
+        .and_then(|x| x.as_u64())
+        .map(iso_from_ms)
+        .unwrap_or_default();
+    ProjectFile {
+        schema_version: 0,
+        project: ProjectInfo {
+            id: id.to_string(),
+            name,
+            description: None,
+            created_at: String::new(),
+            updated_at,
+        },
+        graph: json!({
+            "nodes": v.get("nodes").cloned().unwrap_or(json!([])),
+            "edges": v.get("edges").cloned().unwrap_or(json!([])),
+            "viewport": { "x": 0, "y": 0, "zoom": 1 },
+        }),
+        settings: v.get("settings").cloned().unwrap_or_else(|| json!({})),
+        episode_titles: v.get("episodeTitles").cloned().unwrap_or_else(|| json!({})),
+        assets: empty_assets(),
     }
 }
 
@@ -165,26 +253,52 @@ pub fn list_projects(app: AppHandle) -> Result<Vec<ProjectMeta>, String> {
         let Ok(text) = fs::read_to_string(&path) else {
             continue;
         };
-        if let Ok(file) = serde_json::from_str::<ProjectFile>(&text) {
+        if let Ok(file) = parse_file(id, &text) {
             metas.push(read_meta(id, &file));
         }
     }
-    metas.sort_by_key(|m| std::cmp::Reverse(m.updated_at));
+    metas.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     Ok(metas)
 }
 
-/// 新建空项目（空画布），返回其摘要。
+/// 解析项目文件：v1 信封直接反序列化（缺省字段兜底）；
+/// 无 schemaVersion 的旧扁平格式包装为 v0 信封。
+fn parse_file(id: &str, text: &str) -> Result<ProjectFile, serde_json::Error> {
+    let value: serde_json::Value = serde_json::from_str(text)?;
+    if value.get("schemaVersion").is_some() {
+        let mut file: ProjectFile = serde_json::from_value(value)?;
+        if file.project.id.is_empty() {
+            file.project.id = id.to_string();
+        }
+        Ok(file)
+    } else {
+        Ok(wrap_legacy(id, &value))
+    }
+}
+
+/// 新建空项目（空画布 v1 信封），返回其摘要。
 #[tauri::command]
 pub fn create_project(app: AppHandle, name: String) -> Result<ProjectMeta, String> {
     let name = sanitize_name(&name)?;
     let id = new_id();
+    let now = now_iso();
     let file = ProjectFile {
-        name,
-        updated_at: now_ms(),
-        nodes: serde_json::json!([]),
-        edges: serde_json::json!([]),
-        settings: serde_json::json!({ "characters": [], "locations": [] }),
-        episode_titles: serde_json::json!({}),
+        schema_version: 1,
+        project: ProjectInfo {
+            id: id.clone(),
+            name,
+            description: None,
+            created_at: now.clone(),
+            updated_at: now,
+        },
+        graph: json!({
+            "nodes": [],
+            "edges": [],
+            "viewport": { "x": 0, "y": 0, "zoom": 1 },
+        }),
+        settings: json!({ "characters": {}, "locations": {}, "props": {} }),
+        episode_titles: json!({}),
+        assets: empty_assets(),
     };
     let path = project_path(&app, &id)?;
     let text = serde_json::to_string_pretty(&file).map_err(|e| format!("序列化失败：{e}"))?;
@@ -192,25 +306,31 @@ pub fn create_project(app: AppHandle, name: String) -> Result<ProjectMeta, Strin
     Ok(read_meta(&id, &file))
 }
 
-/// 读取项目完整内容（含画布）。
+/// 读取项目完整内容（含画布）；旧扁平格式包装为 v0 信封返回。
 #[tauri::command]
 pub fn load_project(app: AppHandle, id: String) -> Result<ProjectFile, String> {
     let path = project_path(&app, &id)?;
     let text = fs::read_to_string(path).map_err(|_| format!("项目不存在：{id}"))?;
-    serde_json::from_str(&text).map_err(|e| format!("项目文件损坏：{e}"))
+    parse_file(&id, &text).map_err(|e| format!("项目文件损坏：{e}"))
 }
 
-/// 全量保存：更新时间由服务端盖上，防前端时钟漂移。
+/// 全量保存：项目名在信任边界校验；updatedAt 由前端模型层盖戳。
 #[tauri::command]
 pub fn save_project(app: AppHandle, id: String, doc: ProjectFile) -> Result<ProjectMeta, String> {
-    let name = sanitize_name(&doc.name)?;
+    let name = sanitize_name(&doc.project.name)?;
     let file = ProjectFile {
-        name,
-        updated_at: now_ms(),
-        nodes: doc.nodes,
-        edges: doc.edges,
+        schema_version: doc.schema_version,
+        project: ProjectInfo {
+            id: id.clone(),
+            name,
+            description: doc.project.description,
+            created_at: doc.project.created_at,
+            updated_at: doc.project.updated_at,
+        },
+        graph: doc.graph,
         settings: doc.settings,
         episode_titles: doc.episode_titles,
+        assets: doc.assets,
     };
     let path = project_path(&app, &id)?;
     let text = serde_json::to_string_pretty(&file).map_err(|e| format!("序列化失败：{e}"))?;
@@ -258,6 +378,14 @@ mod tests {
     }
 
     #[test]
+    fn iso_from_ms_marks_known_instants() {
+        assert_eq!(iso_from_ms(0), "1970-01-01T00:00:00.000Z");
+        assert_eq!(iso_from_ms(1_700_000_000_000), "2023-11-14T22:13:20.000Z");
+        // 闰日边界：2024-02-29T00:00:00Z = 1_709_164_800_000
+        assert_eq!(iso_from_ms(1_709_164_800_000), "2024-02-29T00:00:00.000Z");
+    }
+
+    #[test]
     fn graph_stats_ignores_attach_edges_for_endings() {
         let nodes = json!([
             { "id": "s1", "type": "scene", "data": {} },
@@ -265,19 +393,25 @@ mod tests {
             { "id": "sh", "type": "shot", "data": {} },
         ]);
         // s1 只下挂分镜（attach 派生边）：仍是叶子结局；s2 无任何出边同为结局
-        let attach_only = json!([
-            { "id": "e1", "source": "s1", "target": "sh",
-              "sourceHandle": "shots", "className": "pw-edge-attach" },
-        ]);
-        assert_eq!(graph_stats(&nodes, &attach_only), (2, 2));
+        let attach_only = json!({
+            "nodes": nodes,
+            "edges": [
+                { "id": "e1", "source": "s1", "target": "sh",
+                  "sourceHandle": "shots", "className": "pw-edge-attach" },
+            ],
+        });
+        assert_eq!(graph_stats(&attach_only), (2, 2));
 
-        // s1 有剧情流出边 → 非结局
-        let with_sequence = json!([
-            { "id": "e1", "source": "s1", "target": "sh",
-              "sourceHandle": "shots", "className": "pw-edge-attach" },
-            { "id": "e2", "source": "s1", "target": "s2", "className": "pw-edge-sequence" },
-        ]);
-        assert_eq!(graph_stats(&nodes, &with_sequence), (2, 1));
+        // s1 有剧情流出边 → 非结局（v1 形态：kind 显式存于 data.kind）
+        let with_sequence = json!({
+            "nodes": nodes,
+            "edges": [
+                { "id": "e1", "source": "s1", "target": "sh",
+                  "sourceHandle": "shots", "data": { "kind": "attach" } },
+                { "id": "e2", "source": "s1", "target": "s2", "data": { "kind": "sequence" } },
+            ],
+        });
+        assert_eq!(graph_stats(&with_sequence), (2, 1));
     }
 
     #[test]
@@ -287,52 +421,92 @@ mod tests {
 
     #[test]
     fn stats_count_scenes_and_leaf_endings() {
-        let nodes = json!([
-            { "id": "s1", "type": "scene" },
-            { "id": "d1", "type": "dialogue" },
-            { "id": "s2", "type": "scene" },
-            { "id": "s3", "type": "scene" },
-        ]);
-        let edges = json!([
-            { "source": "s1", "target": "d1" },
-            { "source": "d1", "target": "s2" },
-        ]);
-        assert_eq!(graph_stats(&nodes, &edges), (3, 2)); // s2/s3 无出边 = 结局
+        let graph = json!({
+            "nodes": [
+                { "id": "s1", "type": "scene" },
+                { "id": "d1", "type": "dialogue" },
+                { "id": "s2", "type": "scene" },
+                { "id": "s3", "type": "scene" },
+            ],
+            "edges": [
+                { "source": "s1", "target": "d1" },
+                { "source": "d1", "target": "s2" },
+            ],
+        });
+        assert_eq!(graph_stats(&graph), (3, 2)); // s2/s3 无出边 = 结局
     }
 
     #[test]
     fn stats_on_malformed_graph_fall_back_to_zero() {
-        assert_eq!(graph_stats(&json!(null), &json!("oops")), (0, 0));
+        assert_eq!(graph_stats(&json!(null)), (0, 0));
+        assert_eq!(graph_stats(&json!({ "nodes": "oops" })), (0, 0));
     }
 
     #[test]
-    fn legacy_file_without_settings_defaults_empty() {
+    fn legacy_flat_file_wraps_as_v0_envelope() {
         let legacy = json!({
             "name": "旧项目",
-            "updated_at": 1,
-            "nodes": [],
+            "updated_at": 1_700_000_000_000_i64,
+            "nodes": [{ "id": "a", "type": "scene", "data": {} }],
             "edges": [],
+            "settings": { "characters": [], "locations": [] },
+            "episodeTitles": { "1": "开端" },
         });
-        let file: ProjectFile = serde_json::from_value(legacy).unwrap();
-        assert_eq!(file.settings, json!({}));
+        let file = parse_file("p-old", &legacy.to_string()).unwrap();
+        assert_eq!(file.schema_version, 0);
+        assert_eq!(file.project.id, "p-old");
+        assert_eq!(file.project.name, "旧项目");
+        assert_eq!(file.project.updated_at, "2023-11-14T22:13:20.000Z");
+        assert_eq!(file.graph["nodes"][0]["id"], json!("a"));
+        assert_eq!(file.graph["viewport"], json!({ "x": 0, "y": 0, "zoom": 1 }));
+        assert_eq!(file.episode_titles, json!({ "1": "开端" }));
     }
 
     #[test]
     fn project_file_round_trip() {
         let file = ProjectFile {
-            name: "午夜出租车".into(),
-            updated_at: 42,
-            nodes: json!([{ "id": "a", "type": "scene", "data": {} }]),
-            edges: json!([]),
-            settings: json!({ "characters": [], "locations": [] }),
+            schema_version: 1,
+            project: ProjectInfo {
+                id: "p-1".into(),
+                name: "午夜出租车".into(),
+                description: None,
+                created_at: "2026-08-01T00:00:00.000Z".into(),
+                updated_at: "2026-08-28T12:00:00.000Z".into(),
+            },
+            graph: json!({
+                "nodes": [{ "id": "a", "type": "scene", "layout": { "position": { "x": 0, "y": 0 } },
+                            "ui": { "selected": false, "expanded": true },
+                            "data": { "spec": {}, "meta": { "label": "场一" } } }],
+                "edges": [],
+                "viewport": { "x": 0, "y": 0, "zoom": 1 },
+            }),
+            settings: json!({ "characters": {}, "locations": {}, "props": {} }),
             episode_titles: json!({ "1": "开端" }),
+            assets: json!({ "byId": {} }),
         };
         let text = serde_json::to_string(&file).unwrap();
         let back: ProjectFile = serde_json::from_str(&text).unwrap();
-        assert_eq!(back.name, "午夜出租车");
-        assert_eq!(back.updated_at, 42);
-        // 集标题表以 camelCase 键落盘（前端契约），缺省时按空对象处理
-        assert_eq!(back.episode_titles, json!({ "1": "开端" }));
+        assert_eq!(back.project.name, "午夜出租车");
+        // 信封键名为 camelCase（前端契约）
+        assert!(text.contains("schemaVersion"));
+        assert!(text.contains("createdAt"));
         assert!(text.contains("episodeTitles"));
+        assert_eq!(back.episode_titles, json!({ "1": "开端" }));
+        // 统计从 graph 派生
+        assert_eq!(graph_stats(&back.graph), (1, 1));
+    }
+
+    #[test]
+    fn v1_envelope_with_missing_buckets_defaults_empty() {
+        let sparse = json!({
+            "schemaVersion": 1,
+            "project": { "name": "稀疏文档" },
+            "graph": { "nodes": [], "edges": [] },
+        });
+        let file = parse_file("p-1", &sparse.to_string()).unwrap();
+        assert_eq!(file.schema_version, 1);
+        assert_eq!(file.project.id, "p-1"); // 缺省时以文件名回填
+        assert_eq!(file.settings, json!({}));
+        assert_eq!(file.assets, json!({ "byId": {} }));
     }
 }

@@ -1,11 +1,12 @@
 // @vitest-environment happy-dom
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { useDebouncedSave, type EditorDocument } from './useDebouncedSave'
+import { useDebouncedSave } from './useDebouncedSave'
 import { EMPTY_SETTINGS } from './settings'
+import type { ProjectContent } from '../model/content'
 import type { CanvasNode } from './nodes/types'
 
-function mkDoc(name = '项目'): EditorDocument {
+function mkDoc(name = '项目'): ProjectContent {
   return {
     name,
     nodes: [
@@ -14,13 +15,13 @@ function mkDoc(name = '项目'): EditorDocument {
         type: 'scene',
         position: { x: 0, y: 0 },
         selected: true,
-        className: 'pw-node-dim',
         data: { name: '场', sceneNo: 1 },
       } as unknown as CanvasNode,
     ],
     edges: [{ id: 'e1', source: 'a', target: 'b', selected: true }],
     settings: EMPTY_SETTINGS,
     episodeTitles: { 1: '初遇' },
+    viewport: { x: 12, y: -8, zoom: 1.5 },
   }
 }
 
@@ -38,7 +39,7 @@ describe('useDebouncedSave（防抖落盘 + 脏态卸载冲刷）', () => {
     expect(onSave).not.toHaveBeenCalled()
   })
 
-  it('doc 变化后防抖落盘：剥离运行态字段（selected/className）', () => {
+  it('doc 变化后防抖落盘：会话文档原样透传（序列化在模型层完成）', () => {
     const onSave = vi.fn()
     const { rerender } = renderHook(({ doc }) => useDebouncedSave(doc, onSave), {
       initialProps: { doc: mkDoc() },
@@ -56,16 +57,12 @@ describe('useDebouncedSave（防抖落盘 + 脏态卸载冲刷）', () => {
       vi.advanceTimersByTime(1)
     })
     expect(onSave).toHaveBeenCalledTimes(1)
-    const saved = onSave.mock.calls[0][0] as EditorDocument
+    const saved = onSave.mock.calls[0][0] as ProjectContent
     expect(saved.name).toBe('改名')
-    expect(saved.nodes[0]).toEqual({
-      id: 's1',
-      type: 'scene',
-      position: { x: 0, y: 0 },
-      data: { name: '场', sceneNo: 1 },
-    })
-    expect(saved.edges[0]).toEqual({ id: 'e1', source: 'a', target: 'b' })
+    expect(saved.nodes[0].id).toBe('s1')
     expect(saved.episodeTitles).toEqual({ 1: '初遇' })
+    // 视口随内容落盘捎带（transient：本身不触发保存）
+    expect(saved.viewport).toEqual({ x: 12, y: -8, zoom: 1.5 })
   })
 
   it('窗口内连续变化只落最后一次（防抖重置）', () => {
@@ -90,7 +87,7 @@ describe('useDebouncedSave（防抖落盘 + 脏态卸载冲刷）', () => {
       vi.advanceTimersByTime(200)
     })
     expect(onSave).toHaveBeenCalledTimes(1)
-    expect((onSave.mock.calls[0][0] as EditorDocument).name).toBe('v2')
+    expect((onSave.mock.calls[0][0] as ProjectContent).name).toBe('v2')
   })
 
   it('计时器未到时卸载：脏数据立即冲刷一次', () => {
@@ -103,7 +100,7 @@ describe('useDebouncedSave（防抖落盘 + 脏态卸载冲刷）', () => {
     })
     unmount()
     expect(onSave).toHaveBeenCalledTimes(1)
-    expect((onSave.mock.calls[0][0] as EditorDocument).name).toBe('未落定')
+    expect((onSave.mock.calls[0][0] as ProjectContent).name).toBe('未落定')
   })
 
   it('落盘后再卸载不重复冲刷（脏标记已清）', () => {

@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { ProjectDocument } from './projectStore'
+import type { ProjectContent } from './projectStore'
 
 /** projectStore 的 Tauri 路径：mock IPC，isTauri 判真后动态 import。
- * invoke 按命令名路由，行为由各用例编排。 */
+ * invoke 按命令名路由，行为由各用例编排。
+ * load_project 返回的是 ProjectDocument 信封（Rust 侧已把旧扁平格式包装为 v0）。 */
 
 const handlers = new Map<string, (args: unknown) => unknown>()
 const calls: Array<{ cmd: string; args: unknown }> = []
@@ -24,26 +25,64 @@ beforeEach(() => {
 
 const load = async (): Promise<typeof import('./projectStore')> => import('./projectStore')
 
+const UPDATED_ISO = new Date(1_700_000_000_000).toISOString()
+
 const meta = (id: string) => ({
   id,
   name: id,
-  updated_at: 1_700_000_000_000,
+  updated_at: UPDATED_ISO,
   scene_count: 3,
   ending_count: 2,
 })
 
+/** v1 信封：四分区节点 + Record 设定集。 */
 const modernFile = () => ({
-  name: '现代剧',
-  nodes: [
-    {
-      id: 's1',
-      type: 'scene',
-      position: { x: 0, y: 0 },
-      data: { name: '场一', sceneNo: 1, interior: true, time: '🌙 夜', synopsis: '', characterIds: [] },
-    },
-  ],
-  edges: [],
+  schemaVersion: 1,
+  project: { id: 'p1', name: '现代剧', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: UPDATED_ISO },
+  graph: {
+    nodes: [
+      {
+        id: 's1',
+        type: 'scene',
+        layout: { position: { x: 0, y: 0 } },
+        ui: { selected: false, expanded: true },
+        data: {
+          spec: { sceneNo: 1, interior: true, time: '🌙 夜', synopsis: '', characterIds: [] },
+          meta: { label: '场一' },
+        },
+      },
+    ],
+    edges: [],
+    viewport: { x: 0, y: 0, zoom: 1 },
+  },
+  settings: { characters: {}, locations: {}, props: {} },
+  episodeTitles: {},
+  assets: { byId: {} },
+})
+
+/** v0 信封：旧扁平格式的节点字段（头像对象、地点字符串）经 Rust 包装。 */
+const legacyFile = () => ({
+  schemaVersion: 0,
+  project: { id: 'p1', name: '旧剧', createdAt: '', updatedAt: UPDATED_ISO },
+  graph: {
+    nodes: [
+      {
+        id: 's1',
+        type: 'scene',
+        position: { x: 0, y: 0 },
+        data: {
+          name: '场一', sceneNo: 1, interior: true, time: '🌙 夜', synopsis: '',
+          characters: [{ label: '林', gradient: 'g' }],
+          location: '天台',
+        },
+      },
+    ],
+    edges: [],
+    viewport: { x: 0, y: 0, zoom: 1 },
+  },
   settings: { characters: [], locations: [] },
+  episodeTitles: {},
+  assets: { byId: {} },
 })
 
 describe('tauriLoad：归一化与迁移回写', () => {
@@ -58,26 +97,20 @@ describe('tauriLoad：归一化与迁移回写', () => {
     expect(calls.map((c) => c.cmd)).toEqual(['load_project']) // 新 schema 不回写
   })
 
-  it('旧 schema 触发迁移并回写 save_project（下次打开不再迁移）', async () => {
-    handlers.set('load_project', () => ({
-      name: '旧剧',
-      nodes: [
-        {
-          id: 's1',
-          type: 'scene',
-          position: { x: 0, y: 0 },
-          data: {
-            name: '场一', sceneNo: 1, interior: true, time: '🌙 夜', synopsis: '',
-            characters: [{ label: '林', gradient: 'g' }],
-            location: '天台',
-          },
-        },
-      ],
-      edges: [],
-    }))
+  it('v1 文档解析为会话文档：spec/meta 拍平回节点 data', async () => {
+    handlers.set('load_project', () => modernFile())
+    const { projectStore } = await load()
+    const doc = await projectStore.load('p1')
+    expect(doc.name).toBe('现代剧')
+    expect(doc.createdAt).toBe('2026-01-01T00:00:00.000Z')
+    expect(doc.nodes[0].data).toMatchObject({ name: '场一', sceneNo: 1, characterIds: [] })
+  })
+
+  it('旧格式（v0）触发迁移并回写 save_project（下次打开不再迁移）', async () => {
+    handlers.set('load_project', () => legacyFile())
     handlers.set('save_project', () => undefined)
     const { projectStore } = await load()
-    const doc: ProjectDocument = await projectStore.load('p1')
+    const doc: ProjectContent = await projectStore.load('p1')
     const scene = doc.nodes[0].data as { characterIds: string[]; locationId?: string }
     expect(scene.characterIds).toHaveLength(1)
     expect(doc.settings.locations.map((l) => l.name)).toEqual(['天台'])
@@ -88,7 +121,10 @@ describe('tauriLoad：归一化与迁移回写', () => {
     const save = calls.find((c) => c.cmd === 'save_project')
     expect(save).toBeDefined()
     expect((save?.args as { id: string }).id).toBe('p1')
-    expect((save?.args as { doc: { episodeTitles: unknown } }).doc.episodeTitles).toEqual({})
+    // 回写内容为 v1 信封
+    const savedDoc = (save?.args as { doc: { schemaVersion: number; episodeTitles: unknown } }).doc
+    expect(savedDoc.schemaVersion).toBe(1)
+    expect(savedDoc.episodeTitles).toEqual({})
   })
 })
 
@@ -103,24 +139,23 @@ describe('tauriList：空库播种与示例升级', () => {
       return []
     })
     handlers.set('save_project', () => undefined)
-    // 递归重列后的升级检查会读取示例文件：返回新 schema → 无需覆盖
+    // 递归重列后的升级检查会读取示例文件：返回 v1 信封 → 无需覆盖
     handlers.set('load_project', () => modernFile())
     const { projectStore } = await load()
     const list = await projectStore.list()
     expect(list.map((x) => x.id)).toEqual(['sample-wu-ye-chu-zu-che', 'sample-du-shi-qi-yuan', 'user-p1'])
     // 两个种子各写盘一次
     expect(calls.filter((c) => c.cmd === 'save_project')).toHaveLength(2)
-    // Rust epoch 毫秒 → ISO 字符串
-    expect(list[0].updatedAt).toBe(new Date(1_700_000_000_000).toISOString())
+    expect(list[0].updatedAt).toBe(UPDATED_ISO)
     expect(list[0].endingCount).toBe(2)
   })
 
-  it('示例项目仍是旧 schema 时覆盖新种子；用户项目不读取不覆盖', async () => {
+  it('示例项目仍是旧格式时覆盖新种子；用户项目不读取不覆盖', async () => {
     handlers.set('list_projects', () => [meta('sample-wu-ye-chu-zu-che'), meta('user-p1')])
     handlers.set('load_project', (args) => {
       const { id } = args as { id: string }
       if (id !== 'sample-wu-ye-chu-zu-che') throw new Error('不应读取用户项目')
-      return { name: '旧示例', nodes: [], edges: [] } // settings 缺失 → 需迁移
+      return { ...legacyFile(), project: { ...legacyFile().project, id, name: '旧示例' } }
     })
     handlers.set('save_project', () => undefined)
     const { projectStore } = await load()
@@ -150,6 +185,7 @@ describe('tauriCreate / delete / duplicate', () => {
     const copy = await projectStore.duplicate('p1')
     expect(copy.name).toBe('现代剧 副本')
     const save = calls.find((c) => c.cmd === 'save_project')
-    expect((save?.args as { doc: { name: string } }).doc.name).toBe('现代剧 副本')
+    const savedDoc = (save?.args as { doc: { project: { name: string } } }).doc
+    expect(savedDoc.project.name).toBe('现代剧 副本')
   })
 })

@@ -9,7 +9,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import App from './App'
 import { projectStore } from './projectStore'
-import type { ProjectDocument } from './projectStore'
+import type { ProjectContent } from './projectStore'
 
 /** 子视图最近一次的 props（回调经此触发，断言经此读参）。 */
 const homeProps: { current: Record<string, unknown> } = { current: {} }
@@ -57,7 +57,7 @@ const store = projectStore as unknown as {
   delete: ReturnType<typeof vi.fn>
 }
 
-const DOC: ProjectDocument = {
+const DOC: ProjectContent = {
   name: '雨夜',
   nodes: [],
   edges: [],
@@ -135,7 +135,7 @@ describe('App（双界面路由壳）', () => {
     expect((editorProps.current.project as { name: string }).name).toBe('雨夜·修订')
 
     const savedDoc = { ...DOC, name: '雨夜·修订' }
-    ;(editorProps.current.onSave as (doc: ProjectDocument) => void)(savedDoc)
+    ;(editorProps.current.onSave as (doc: ProjectContent) => void)(savedDoc)
     expect(store.saveQuiet).toHaveBeenCalledWith('p1', savedDoc)
 
     await act(async () => {
