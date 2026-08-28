@@ -6,6 +6,10 @@
 > 定稿评审修订（2026-08-29）：§9 补 `set_episode_title` 命令（集标题变更走命令通道）；`settings.documents` 补为 SettingsDocument 的持久化位置；§10.5 `load_project` 职责更正为信封级兼容（与 §11 分层一致）；分支边 `sourceHandle` 由数组下标（option-N）改为稳定选项 id（option-\<id\>），删除选项连带其连线进同一 `batch`，杜绝下标位移导致的静默改接。
 >
 > 二轮评审修订（2026-08-29）：§11.1 迁移链首环写明「补选项稳定 id → 改写旧式下标句柄 → 孤儿边隔离」的先后依赖（P1）；§9 设定文档命令显式化为 `upsert_document` / `delete_document`（含 inverse 捕获）；docs/ui-design.md §10 对照清单标记全部落地。
+>
+> 三轮评审修订（2026-08-29）：§9.3 inverse 改为 InverseCommand 判别联合，捕获表补 inverse.type 列；ui-design §4.2 端口描述收口 option-\<id\>。
+>
+> 四轮评审修订（2026-08-29）：§4.2 ShotRef 契约改为 targetId 引用目标（§8.1 单一真相，显示名实时解析），label 降级为自由引用位兜底；ui-design §4.3 分支改名路由更正为 `update_node_spec`（标题由 spec.prompt 派生，不落 meta.label 镜像）。
 > 适用范围：画布文档模型、设定与资产模型、命令与撤销、本地存储体系、AI Agent 交互。
 > 明确不在范围内：用户体系、租户、余额/计费。PlotWeave 是单用户 BYOK 桌面工具；若未来出现此类需求，另起《服务端领域模型》文档。
 
@@ -166,12 +170,15 @@ interface ShotSpec {
   refs: ShotRef[]            // 引用位：角色垫图 / 场景底图 / 音频
 }
 
-/** 分镜卡引用位：首版为缩略 chip 占位（id/kind/label 自包含），
- * 项目资产（§7.1）落地后升级为 AssetRef 引用，随 §13 演进评审。 */
+/** 分镜卡引用位：引用的唯一真相是 targetId（§8.1）——显示名按 id 实时解析，
+ * 改名不断引用，被删按 §8.2.3 失效展示。label 仅作无 targetId 的自由引用位
+ * （手填文案）的显示兜底；有 targetId 时不落 label（禁止镜像字段）。
+ * 项目资产（§7.1）落地后 audio 引用目标为 assets.byId 资产 id。 */
 interface ShotRef {
-  id: string
+  id: string               // 列表项稳定标识（列表 key），非引用目标
   kind: 'character' | 'location' | 'audio'
-  label: string
+  targetId?: string        // 引用目标：settings 实体 id（character/location）或资产 id（audio）
+  label?: string           // 自由引用位的手填显示文案（无 targetId 时才有意义）
 }
 ```
 
