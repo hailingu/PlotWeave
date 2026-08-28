@@ -1,7 +1,7 @@
 {
-  "$schema": "https://schema.tauri.app/config/2",
+  "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "默认能力集：授予主窗口 Tauri 核心权限",
+  "description": "默认能力集：授予主窗口 Tauri 核心权限（start-dragging 不在 core:window:default 内，须显式授予，标题栏 data-tauri-drag-region 依赖它）",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "core:window:allow-start-dragging"]
 }
