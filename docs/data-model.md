@@ -10,6 +10,8 @@
 > 三轮评审修订（2026-08-29）：§9.3 inverse 改为 InverseCommand 判别联合，捕获表补 inverse.type 列；ui-design §4.2 端口描述收口 option-\<id\>。
 >
 > 四轮评审修订（2026-08-29）：§4.2 ShotRef 契约改为 targetId 引用目标（§8.1 单一真相，显示名实时解析），label 降级为自由引用位兜底；ui-design §4.3 分支改名路由更正为 `update_node_spec`（标题由 spec.prompt 派生，不落 meta.label 镜像）。
+>
+> 五轮评审修订（2026-08-29）：§9.3 `connect_edge` 负载说明去掉 label（分支胶囊文案按 sourceHandle 派生）；ui-design §4.2 引用位描述统一为 `spec.refs`（删去不存在的 spec.params）；§7.3 写明项目复制的资产携带规则（索引随文档走，整目录拷贝随 §7.1 落地）。
 > 适用范围：画布文档模型、设定与资产模型、命令与撤销、本地存储体系、AI Agent 交互。
 > 明确不在范围内：用户体系、租户、余额/计费。PlotWeave 是单用户 BYOK 桌面工具；若未来出现此类需求，另起《服务端领域模型》文档。
 
@@ -295,6 +297,11 @@ interface AssetGroup {
 - **库资产进入项目 = 拷贝**：把库素材放上画布或设为角色头像时，文件拷入项目 `assets/` 并生成项目级 AssetRef（新 id）。项目不持有对库文件的引用，因此库侧可随时清理而不产生项目内的悬空引用。
 - **AI 生成结果（未来接入）必须落盘后再引用**：厂商临时 URL 不得出现在文档里——临时链接会过期，直接引用会导致画布内容日后无法打开。生成结果默认落项目资产，用户可显式「收藏到资产库」。
 - **延迟回收**：删除引用资产的节点/设定时不立即删文件，由后续「清理未引用资产」命令统一回收（首版可只做手动触发）。
+- **项目复制 = 文档级复制**：资产索引随文档原样带走（与 `avatarAssetId` 等
+  引用字段保持一致解析，§8.1）；媒体文件的整目录拷贝（project.json + assets/）
+  随 §7.1 项目资产落地时升级为 Rust 侧原子复制——届时复制件的 relPath 指向
+  自己目录内的新文件。§7.1 落地前应用不管理媒体文件，不存在「索引在而文件不在
+  自己目录」的中间态。
 
 ## 八、引用模型与联动规则
 
@@ -382,7 +389,7 @@ interface CommandPayloads {
   update_node_meta: { nodeId: string; set: Partial<NodeMeta> }
   update_node_ui: { nodeId: string; set: Partial<NodeUi> }
   // ── 连接 ──
-  connect_edge: { edge: StoryEdge }             // 完整边，含 data.kind/label
+  connect_edge: { edge: StoryEdge }             // 完整边，含 data.kind；branch 边不落 label（胶囊文案按 sourceHandle 派生，§5）
   disconnect_edge: { edgeId: string }           // inverse 捕获被删边
   // ── 设定（地点、道具同构，略）──
   upsert_character: { character: Character }    // id 已存在 = 更新，否则 = 新增
