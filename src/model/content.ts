@@ -9,10 +9,12 @@ import type { ProjectSettings } from '../editor/settings'
 import type { AssetRef } from './document'
 
 /** 项目会话内容：名称 + 创建时间 + 画布两数组 + 设定集 + 集标题 + 视口。
- * assets 为项目资产索引的透传桶（§7.1）：首版编辑器不产生资产，
- * 但解析/保存必须原样保留，否则已有资产的项目一保存即丢索引。 */
+ * description / assets 为编辑器首版不编辑的透传字段：解析进会话、
+ * 保存原样回写，否则已有描述或资产的项目一保存即丢（§3/§7.1）。 */
 export interface ProjectContent {
   name: string
+  /** 项目描述（§3 project.description，透传）。 */
+  description?: string
   /** ISO 8601；新建项目缺省时首次落盘补盖。 */
   createdAt?: string
   nodes: CanvasNode[]

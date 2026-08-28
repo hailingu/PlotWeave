@@ -228,6 +228,26 @@ describe('parseProject（ProjectDocument → 会话文档，§11 归一化）', 
     ])
   })
 
+  it('透传字段往返保留：project.description / settings.props / edge data.order（§3/§5/§6）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    doc.project.description = '午夜出租车故事板'
+    doc.settings.props['pr-1'] = { id: 'pr-1', name: '怀表', description: '关键道具' }
+    doc.graph.edges[0].data.order = 1
+    doc.graph.edges[1].data.order = 2
+    const round = parseProject(doc)
+    // 会话态携带透传字段（含运行态边 data.order）
+    expect(round.content.description).toBe('午夜出租车故事板')
+    expect(round.content.settings.props?.map((p) => p.id)).toEqual(['pr-1'])
+    expect(round.content.edges[0].data).toMatchObject({ order: 1 })
+    expect(round.content.edges[1].data).toMatchObject({ optionLabel: '隐瞒', order: 2 })
+    // 再次落盘不丢
+    const again = serializeProject(round.content, 'p-1', NOW)
+    expect(again.project.description).toBe('午夜出租车故事板')
+    expect(again.settings.props['pr-1']).toEqual({ id: 'pr-1', name: '怀表', description: '关键道具' })
+    expect(again.graph.edges[0].data.order).toBe(1)
+    expect(again.graph.edges[1].data.order).toBe(2)
+  })
+
   it('schemaVersion 高于当前版本：拒绝并提示升级应用', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW)
     expect(() =>

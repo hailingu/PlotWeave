@@ -59,6 +59,7 @@ import { outlineSplicePlan, spliceEdgesWith } from './outlineDrop'
 import { entityDropPatch } from './entityDrop'
 import { applyEpisodeTitle } from './episodeTitle'
 import { useDebouncedSave } from './useDebouncedSave'
+import { sessionDoc } from './sessionDoc'
 import { useEditorHotkeys } from './useEditorHotkeys'
 import { useSettingsActions } from './useSettingsActions'
 import { useAiBridge } from './useAiBridge'
@@ -144,32 +145,30 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
   const viewportRef = useRef<Viewport | undefined>(project.viewport)
 
   const markDirty = useDebouncedSave(
-    {
-      name: project.name,
-      createdAt: project.createdAt,
+    sessionDoc(project, {
       nodes,
       edges,
       settings,
       episodeTitles,
       viewport: viewportRef.current,
-    },
+    }),
     onSave,
   )
 
   const onMoveEnd = useCallback(
     (_: unknown, vp: Viewport) => {
       viewportRef.current = vp
-      markDirty({
-        name: project.name,
-        createdAt: project.createdAt,
-        nodes,
-        edges,
-        settings,
-        episodeTitles,
-        viewport: vp,
-      })
+      markDirty(
+        sessionDoc(project, {
+          nodes,
+          edges,
+          settings,
+          episodeTitles,
+          viewport: vp,
+        }),
+      )
     },
-    [markDirty, project.name, project.createdAt, nodes, edges, settings, episodeTitles],
+    [markDirty, project, nodes, edges, settings, episodeTitles],
   )
 
   // 命令栈（§3.3/§4.3）：全部写操作入栈，undo 始终兜底

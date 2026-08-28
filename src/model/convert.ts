@@ -64,42 +64,54 @@ export function toStoryEdge(e: Edge): StoryEdge {
     target: e.target,
     data: { kind: edgeKindOf(e) },
   }
+  // data.order：同 source 多出口的排列顺序（§5），运行态在边 data 里携带
+  const order = (e.data as { order?: number } | undefined)?.order
+  if (order !== undefined) out.data.order = order
   if (e.sourceHandle) out.sourceHandle = e.sourceHandle
   if (e.targetHandle) out.targetHandle = e.targetHandle
   return out
 }
 
-/** 落盘边 → 运行态：恢复 type/className；branch 胶囊文案按 sourceHandle 绑定的选项 id 从分支节点派生。 */
+/** 落盘边 → 运行态：恢复 type/className；branch 胶囊文案按 sourceHandle 绑定的选项 id 从分支节点派生；
+ * data.order 原样保留。 */
 export function fromStoryEdge(e: StoryEdge, nodesById: Map<string, StoryNode>): Edge {
   const out: Edge = { id: e.id, source: e.source, target: e.target }
   if (e.sourceHandle) out.sourceHandle = e.sourceHandle
   if (e.targetHandle) out.targetHandle = e.targetHandle
+  const order = e.data.order
   if (e.data.kind === 'branch') {
     out.type = 'branch'
     const optionId = branchOptionIdOf(e.sourceHandle)
     const src = nodesById.get(e.source)
     const options = src?.type === 'branch' ? (src.data.spec as BranchSpec).options : undefined
-    out.data = { optionLabel: options?.find((o) => o.id === optionId)?.label ?? '' }
+    out.data = {
+      optionLabel: options?.find((o) => o.id === optionId)?.label ?? '',
+      ...(order !== undefined ? { order } : {}),
+    }
   } else {
     out.className = e.data.kind === 'attach' ? 'pw-edge-attach' : 'pw-edge-sequence'
+    if (order !== undefined) out.data = { order }
   }
   return out
 }
 
-/** 设定集 → 落盘形态：数组转 Record<id, 实体>，补空 props 桶。 */
+/** 设定集 → 落盘形态：数组转 Record<id, 实体>。props 首版只透传
+ * （UI 未开放编辑），原样回写保真。 */
 export function toDocSettings(settings: ProjectSettings): ProjectDocument['settings'] {
   return {
     characters: Object.fromEntries(settings.characters.map((c) => [c.id, c])),
     locations: Object.fromEntries(settings.locations.map((l) => [l.id, l])),
-    props: {},
+    props: Object.fromEntries((settings.props ?? []).map((p) => [p.id, p])),
   }
 }
 
-/** 设定集 → 运行态：Record 转数组（插入序即展示序），容忍缺桶。 */
+/** 设定集 → 运行态：Record 转数组（插入序即展示序），容忍缺桶；
+ * props 桶透传进会话（契约实体，不得静默丢弃）。 */
 export function fromDocSettings(settings: Partial<ProjectDocument['settings']>): ProjectSettings {
   return {
     characters: Object.values(settings.characters ?? {}),
     locations: Object.values(settings.locations ?? {}),
+    props: Object.values(settings.props ?? {}),
   }
 }
 
@@ -118,6 +130,7 @@ export function serializeProject(
     project: {
       id,
       name: content.name,
+      description: content.description,
       createdAt: content.createdAt ?? now.toISOString(),
       updatedAt: now.toISOString(),
     },
@@ -256,6 +269,7 @@ function fromDocument(doc: ProjectDocument): ProjectContent {
   const nodesById = new Map(doc.graph.nodes.map((n) => [n.id, n]))
   return {
     name: doc.project.name,
+    description: doc.project.description,
     createdAt: doc.project.createdAt || undefined,
     nodes: doc.graph.nodes.map(fromStoryNode),
     edges: doc.graph.edges.map((e) => fromStoryEdge(e, nodesById)),

@@ -22,10 +22,19 @@ export interface LocationEntity {
   note?: string
 }
 
-/** 项目设定集：随 ProjectDocument 持久化。 */
+/** 道具实体：契约桶（数据模型 §6）。首版 UI 未开放道具编辑，
+ * 会话仅透传保真——漏带即保存丢实体。 */
+export interface PropEntity {
+  id: string
+  name: string
+  description?: string
+}
+
+/** 项目设定集：随 ProjectDocument 持久化。props 首版只透传不编辑。 */
 export interface ProjectSettings {
   characters: CharacterEntity[]
   locations: LocationEntity[]
+  props?: PropEntity[]
 }
 
 export const EMPTY_SETTINGS: ProjectSettings = { characters: [], locations: [] }
