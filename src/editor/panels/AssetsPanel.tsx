@@ -80,6 +80,14 @@ export default function AssetsPanel() {
     // 删除不可恢复：确认对话框（HIG 仅真正不可逆操作使用确认）
     if (!window.confirm(`删除资产「${asset.name}」？此操作不可撤销。`)) return
     setAssets((list) => list.filter((a) => a.id !== asset.id))
+    // 回收缩略图 object URL（浏览器预览态），防长会话内存泄漏
+    const url = urls[asset.id]
+    if (url?.startsWith('blob:')) URL.revokeObjectURL(url)
+    setUrls((u) => {
+      const next = { ...u }
+      delete next[asset.id]
+      return next
+    })
     libraryStore.remove(asset.id).catch((err) => setError(String(err)))
   }
 

@@ -37,7 +37,7 @@ pub fn machine_material() -> String {
         .get_or_init(|| {
             #[cfg(target_os = "macos")]
             {
-                if let Ok(out) = std::process::Command::new("ioreg")
+                if let Ok(out) = std::process::Command::new("/usr/sbin/ioreg")
                     .args(["-rd1", "-c", "IOPlatformExpertDevice"])
                     .output()
                 {

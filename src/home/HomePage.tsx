@@ -54,7 +54,9 @@ export default function HomePage({
   useEffect(() => {
     if (!menu) return
     const onDown = (e: PointerEvent) => {
-      if (!(e.target as HTMLElement).closest('.editor-ctx')) setMenu(null)
+      // e.target 可能是非 Element 的 EventTarget（如 document），安全判断避免抛错
+      const target = e.target
+      if (target instanceof Element && !target.closest('.editor-ctx')) setMenu(null)
     }
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setMenu(null)

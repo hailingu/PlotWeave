@@ -86,7 +86,11 @@ pub fn set_provider_key(provider_id: String, key: String) -> Result<String, Stri
 fn provider_secret(app: &AppHandle, provider_id: &str) -> Result<String, String> {
     validate_provider_id(provider_id)?;
     let path = prefs_path(app)?;
-    if let Ok(text) = fs::read_to_string(path) {
+    if let Ok(text) = fs::read_to_string(&path) {
+        // 信任边界：与 load_prefs 同一大小上限，防篡改的超大文件拖垮解析
+        if text.len() > PREFS_MAX_BYTES {
+            return Err("设置文件过大，拒绝读取密文".into());
+        }
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
             let enc = v
                 .get("providers")

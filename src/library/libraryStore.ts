@@ -95,10 +95,7 @@ async function tauriPut(file: File, kind: LibraryKind): Promise<LibraryAsset> {
 }
 
 async function tauriMediaUrl(asset: LibraryAsset): Promise<string> {
-  const [{ invoke }, { convertFileSrc }] = await Promise.all([
-    import('@tauri-apps/api/core'),
-    import('@tauri-apps/api/core'),
-  ])
+  const { invoke, convertFileSrc } = await import('@tauri-apps/api/core')
   const base = await invoke<string>('library_dir_path')
   return convertFileSrc(`${base}/${asset.relPath}`)
 }

@@ -19,10 +19,15 @@ export default function ExportDialog({ projectName, text, onClose }: ExportDialo
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
     return () => {
+      document.removeEventListener('keydown', onKey)
       if (copyTimer.current) clearTimeout(copyTimer.current)
     }
-  }, [])
+  }, [onClose])
 
   const copyAll = async () => {
     // 无剪贴板权限的环境（部分 WebView）clipboard API 会挂起，限时回退到全选预览

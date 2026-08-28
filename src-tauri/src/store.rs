@@ -102,8 +102,9 @@ fn project_path(app: &AppHandle, id: &str) -> Result<PathBuf, String> {
     Ok(projects_dir(app)?.join(format!("{id}.json")))
 }
 
-/// 从画布 nodes 派生统计：场数 = scene 节点数；结局数 = 无出边的场景数
-/// （分支剧情的叶子场景即结局）。
+/// 从画布 nodes 派生统计：场数 = scene 节点数；结局数 = 无剧情流出边的
+/// 场景数（分支剧情的叶子场景即结局）。attach 下挂边（索引卡 → 分镜卡，
+/// 垂直派生从属）不算出边——挂了分镜的场景仍是叶子结局。
 pub fn graph_stats(nodes: &serde_json::Value, edges: &serde_json::Value) -> (u64, u64) {
     let empty: Vec<serde_json::Value> = Vec::new();
     let nodes = nodes.as_array().unwrap_or(&empty);
@@ -114,8 +115,15 @@ pub fn graph_stats(nodes: &serde_json::Value, edges: &serde_json::Value) -> (u64
         .filter(|n| n.get("type").and_then(|t| t.as_str()) == Some("scene"))
         .filter_map(|n| n.get("id").and_then(|i| i.as_str()))
         .collect();
+    let is_attach = |e: &serde_json::Value| {
+        e.get("sourceHandle").and_then(|h| h.as_str()) == Some("shots")
+            || e.get("className").and_then(|c| c.as_str()) == Some("pw-edge-attach")
+    };
     let mut has_outgoing: HashSet<&str> = HashSet::new();
     for e in edges {
+        if is_attach(e) {
+            continue;
+        }
         if let Some(src) = e.get("source").and_then(|s| s.as_str()) {
             has_outgoing.insert(src);
         }
@@ -247,6 +255,29 @@ mod tests {
         assert!(validate_id("../etc").is_err());
         assert!(validate_id("a b").is_err());
         assert!(validate_id(&"x".repeat(65)).is_err());
+    }
+
+    #[test]
+    fn graph_stats_ignores_attach_edges_for_endings() {
+        let nodes = json!([
+            { "id": "s1", "type": "scene", "data": {} },
+            { "id": "s2", "type": "scene", "data": {} },
+            { "id": "sh", "type": "shot", "data": {} },
+        ]);
+        // s1 只下挂分镜（attach 派生边）：仍是叶子结局；s2 无任何出边同为结局
+        let attach_only = json!([
+            { "id": "e1", "source": "s1", "target": "sh",
+              "sourceHandle": "shots", "className": "pw-edge-attach" },
+        ]);
+        assert_eq!(graph_stats(&nodes, &attach_only), (2, 2));
+
+        // s1 有剧情流出边 → 非结局
+        let with_sequence = json!([
+            { "id": "e1", "source": "s1", "target": "sh",
+              "sourceHandle": "shots", "className": "pw-edge-attach" },
+            { "id": "e2", "source": "s1", "target": "s2", "className": "pw-edge-sequence" },
+        ]);
+        assert_eq!(graph_stats(&nodes, &with_sequence), (2, 1));
     }
 
     #[test]
