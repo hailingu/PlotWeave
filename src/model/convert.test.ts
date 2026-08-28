@@ -363,6 +363,42 @@ describe('parseProject（ProjectDocument → 会话文档，§11 归一化）', 
     expect(round.warnings.some((w) => w.includes('e-dead'))).toBe(true)
   })
 
+  it('schemaVersion 0 旧信封：边判别字段（type/className）归类为显式 data.kind', () => {
+    const v0 = {
+      schemaVersion: 0,
+      project: { id: 'p-old', name: '旧剧', createdAt: '', updatedAt: '2026-01-01T00:00:00.000Z' },
+      graph: {
+        nodes: [
+          { id: 'br1', type: 'branch', position: { x: 0, y: 0 }, data: { prompt: '去哪', options: [{ id: 'opt-a', label: '左' }] } },
+          { id: 's1', type: 'scene', position: { x: 0, y: 0 }, data: { name: '场一', sceneNo: 1 } },
+          { id: 's2', type: 'scene', position: { x: 0, y: 0 }, data: { name: '场二', sceneNo: 2 } },
+          { id: 'sh1', type: 'shot', position: { x: 0, y: 0 }, data: { shotNo: 1, size: '特写', picture: '', prompt: '', refs: [] } },
+        ],
+        edges: [
+          // 旧运行态判别：type=branch / className=attach / className=sequence
+          { id: 'e1', source: 'br1', target: 's1', sourceHandle: 'option-0', type: 'branch', data: { optionLabel: '左' } },
+          { id: 'e2', source: 's1', target: 'sh1', sourceHandle: 'shots', className: 'pw-edge-attach' },
+          { id: 'e3', source: 's1', target: 's2', className: 'pw-edge-sequence' },
+        ],
+      },
+      settings: { characters: [], locations: [] },
+      episodeTitles: {},
+      assets: { byId: {} },
+    }
+    const round = parseProject(v0)
+    expect(round.migrated).toBe(true)
+    // 会话态按归类结果恢复：branch 有 type，attach/sequence 有对应 className
+    const e1 = round.content.edges.find((e) => e.id === 'e1')!
+    const e2 = round.content.edges.find((e) => e.id === 'e2')!
+    const e3 = round.content.edges.find((e) => e.id === 'e3')!
+    expect(e1.type).toBe('branch')
+    expect(e2.className).toBe('pw-edge-attach')
+    expect(e3.className).toBe('pw-edge-sequence')
+    // 再落盘：data.kind 显式化，无 type/className 残留
+    const again = serializeProject(round.content, 'p-old', new Date('2026-08-29T00:00:00.000Z'))
+    expect(again.graph.edges.map((e) => e.data.kind)).toEqual(['branch', 'attach', 'sequence'])
+  })
+
   it('schemaVersion 0 旧信封：数组下标句柄改写为稳定选项 id；越界句柄按孤儿边隔离', () => {
     const v0 = {
       schemaVersion: 0,
