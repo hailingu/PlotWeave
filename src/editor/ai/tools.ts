@@ -118,12 +118,21 @@ export const AI_TOOLS: ToolSpec[] = [
     type: 'function',
     function: {
       name: 'batch',
-      description: '把一次改动的全部命令放进同一个批次（推荐：用户只确认一次）',
+      description:
+        '把一次改动的全部命令放进同一个批次（推荐：用户只确认一次）。' +
+        'commands 元素形如 {"op":"…",…}，op 只能取：' +
+        'create_node / update_node / delete_node / connect_edge / disconnect_edge' +
+        '（注意是 update_node，不是 update_node_spec），其余字段与上述写工具参数一致',
       parameters: obj(
         {
           commands: {
             type: 'array',
-            description: '命令数组，元素为上述写工具的参数形状（另含 op 字段）',
+            description:
+              '命令数组：{"op":"create_node","nodeType":"…","ref":"…","data":{…}} | ' +
+              '{"op":"update_node","nodeId":"…","patch":{…}} | ' +
+              '{"op":"delete_node","nodeId":"…"} | ' +
+              '{"op":"connect_edge","sourceId":"…","targetId":"…"} | ' +
+              '{"op":"disconnect_edge","sourceId":"…","targetId":"…"}',
             items: { type: 'object' },
           },
         },
@@ -222,10 +231,24 @@ export function toolCallsToCommands(calls: ToolCall[]): ToolCallParse {
         reason: args.reason,
       })
     } else {
-      // batch：commands 数组原样并入，形状由下游校验器把关
+      // batch：commands 数组并入，形状由下游校验器把关；
+      // 模型常把工具名当 op 写进批次（update_node_spec）——在此归一为命令词表
       const inner = args.commands
-      if (Array.isArray(inner)) commands.push(...(inner as AiCommand[]))
-      else errors.push(`batch 工具（${c.id}）：commands 不是数组`)
+      if (Array.isArray(inner)) {
+        commands.push(
+          ...inner.map((cmd) => {
+            if (
+              typeof cmd === 'object' &&
+              cmd !== null &&
+              !Array.isArray(cmd) &&
+              (cmd as { op?: unknown }).op === 'update_node_spec'
+            ) {
+              return { ...(cmd as Record<string, unknown>), op: 'update_node' } as AiCommand
+            }
+            return cmd as AiCommand
+          }),
+        )
+      } else errors.push(`batch 工具（${c.id}）：commands 不是数组`)
     }
   }
 

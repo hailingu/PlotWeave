@@ -39,6 +39,22 @@ describe('toolCallsToCommands（§12.2 tool_calls → 预览卡命令）', () =>
     expect(commands).toEqual(inner)
   })
 
+  it('batch 内的工具名 op 归一为命令词表（update_node_spec → update_node）', () => {
+    const { commands, errors } = toolCallsToCommands([
+      call('batch', {
+        commands: [
+          { op: 'update_node_spec', nodeId: 'n1', patch: { options: ['坦白', '隐瞒', '沉默'] } },
+          { op: 'update_node', nodeId: 'n2', patch: { tone: '爆发' } },
+        ],
+      }),
+    ])
+    expect(errors).toEqual([])
+    expect(commands).toEqual([
+      { op: 'update_node', nodeId: 'n1', patch: { options: ['坦白', '隐瞒', '沉默'] } },
+      { op: 'update_node', nodeId: 'n2', patch: { tone: '爆发' } },
+    ])
+  })
+
   it('读工具进入 readRequests，不产生命令', () => {
     const { commands, readRequests } = toolCallsToCommands([
       call('get_graph_snapshot', {}),
