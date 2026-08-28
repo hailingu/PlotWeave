@@ -91,6 +91,7 @@ interface StoryNode {
     spec: NodeSpec                   // 用户意图，按节点类型不同（见 4.2）
     meta: {                          // 元信息
       label: string                  // 节点标题
+      episodeNo?: number             // 集归属（大纲分组的唯一依据；分镜卡随宿主场景，不单独分集）
       createdAt: string
       updatedAt: string
     }
@@ -100,12 +101,14 @@ interface StoryNode {
 
 节点数据只保留四个分区：渲染布局（`layout`）、会话状态（`ui`）、用户意图（`data.spec`）、元信息（`data.meta`）。画布没有执行引擎，因此不设输入缓存、产物、运行状态等分区——没有写者的字段不进模型（原则 5）。
 
+「集」是逻辑分类而非实体：首版集 = 编号 + 大纲行内标题，标题存文档级 `episodeTitles: Record<number, string>`（键 = 集号），不建「集」实体表。
+
 ### 4.2 各类型 spec
 
 节点里写的一切内容——梗概、台词、以及将来 AI 生成的 prompt——都是 `spec` 的字段，随 `project.json` 持久化，无需额外存储。
 
 ```ts
-type NodeSpec = SceneSpec | BeatSpec | DialogueSpec | BranchSpec
+type NodeSpec = SceneSpec | BeatSpec | DialogueSpec | BranchSpec | ShotSpec
 
 /** 场景：一个时空单元的叙事容器。 */
 interface SceneSpec {
@@ -133,6 +136,17 @@ interface DialogueSpec {
 interface BranchSpec {
   prompt: string             // 分岔事由，如「女主是否发现真相」
 }
+
+/** 分镜卡（生成侧）：一张卡 = 一个镜头及其 AI 燃料。
+ * 画布一等节点类型，经 attach 边垂直下挂在索引卡正下方（见 4.3），
+ * 不参与横向剧情流；首版为结构占位，拖拽引用与渲染联动随演进评审。 */
+interface ShotSpec {
+  shotNo: number             // 镜号
+  size: string               // 景别（特写 / 中景 / 全景…）
+  picture: string            // 画面描述
+  prompt: string             // 镜头 Prompt（AI 视频模型的直接输入）
+  refs: AssetRef[]           // 引用位：角色垫图 / 场景底图 / 音频
+}
 ```
 
 ### 4.3 端口与连接
@@ -141,6 +155,7 @@ interface BranchSpec {
 
 - `scene` / `beat` / `dialogue`：`input`（target）+ `output`（source）各一个。
 - `branch`：一个 `input`（target）+ 多个出口 source handle（`option-1`、`option-2`……动态增删）。
+- `scene`：额外带底部 source handle（`shots`），经 attach 边垂直下挂分镜卡——**横向 = 剧情顺序，垂直 = 派生从属**（一对多合法，attach 不参与剧情流环检测）。
 - 连接校验在前端交互层（`isValidConnection`）做：禁止自环、禁止成环（BFS 传递闭包检查）；命令层不重复校验。
 
 ## 五、边模型
@@ -154,7 +169,7 @@ interface StoryEdge {
   sourceHandle?: string      // branch 节点的出口 id
   targetHandle?: string
   data: {
-    kind: 'sequence' | 'branch'
+    kind: 'sequence' | 'branch' | 'attach'
     label?: string           // kind='branch' 时的选项文案，如「坦白」「隐瞒」
     order?: number           // 同一 source 多出口的排列顺序
   }
@@ -163,6 +178,7 @@ interface StoryEdge {
 
 - `sequence`：剧情顺序流，无 label。
 - `branch`：从 branch 节点出口引出，必须带 label；多结局用多条 branch 边指向不同子图表达。
+- `attach`：索引卡底部端口 → 分镜卡顶部端口的派生从属边（垂直下挂），无 label，不参与剧情流环检测。
 
 ## 六、设定集（settings）
 
@@ -177,6 +193,15 @@ interface Character {
 }
 interface Location { id: string; name: string; description?: string }
 interface PropItem { id: string; name: string; description?: string }
+
+/** 文档条目（写作原料）：人物小传 / 世界观 / 术语表等自由文本，
+ * 与结构化条目双向关联（如小传挂在角色名下）；全文进入 AI 上下文快照的按需读取范围。 */
+interface SettingsDocument {
+  id: string
+  title: string
+  body: string
+  relatedIds: string[]       // 关联的 Character / Location id
+}
 ```
 
 **悬空引用规则**：设定被删除时不级联改节点（避免静默丢数据），节点侧按「引用失效」样式展示（如灰色角标），由用户决定替换或清除。只做检测与展示，不引入级联状态机（原则 5）。
@@ -206,13 +231,13 @@ interface AssetRef {
 资产库要回答"我有哪些人物/场景/道具的哪些视图"，扁平标签不足以表达（"三视图"是结构而非标签），因此采用结构化分类 + 编组 + 自由标签三层：
 
 ```ts
-/** 资产视角：三视图/多角度视图等结构化分类。 */
-type AssetView = 'front' | 'side' | 'back' | 'three_quarter' | 'top' | 'other'
+/** 资产视角：三视图/多角度/表情/定妆等结构化分类。 */
+type AssetView = 'front' | 'side' | 'back' | 'three_quarter' | 'top' | 'expression' | 'turnout' | 'other'
 
 /** 个人资产库索引项：在 AssetRef 之上带分类与组织信息。 */
 interface LibraryAsset extends AssetRef {
   name: string
-  kind: 'character' | 'location' | 'prop' | 'reference' | 'other'  // 人物/场景/道具/参考图
+  kind: 'character' | 'location' | 'wardrobe' | 'colorlight' | 'reference' | 'other'  // 角色设定/场景设定/服化道/色彩光影/风格参考/其他
   view?: AssetView           // 视角；三视图即同一 group 下 front/side/back 各一张
   groupId?: string           // 同一主体的多视图编组，引用 library.json 的 groups
   tags: string[]             // 自由标签，补充 kind/view 表达不了的维度
@@ -227,6 +252,7 @@ interface AssetGroup {
 ```
 
 - **分工**：`kind` 回答"是什么"，`view` 回答"哪个角度"，`groupId` 把同一主体的三视图绑成一组；`tags` 只用于前两者覆盖不了的自由维度（如「赛博朋克」「雨夜」）。能用结构化字段表达的不写成标签，避免同义标签发散。
+- **迁移规则（`prop` → `wardrobe`）**：现实剧组服化道同属一个部门，旧 `prop`（道具）条目并入 `wardrobe`（服装/妆发/道具）；新增 `colorlight` 承载色彩脚本（color script）与光影氛围参考。
 - **绑定方式**：分类信息写在 `library.json` 索引项里、以资产 id 为键；改标签、换组、改视角只更新索引，不动媒体文件。
 - **快速读取**：`library.json` 启动时全量载入内存（桌面量级，数千条索引项仅数百 KB），列表页筛选/搜索全走内存过滤，媒体文件懒加载。规模失控时再迁 SQLite（见十三）。
 
@@ -400,7 +426,7 @@ type GraphCommand<T extends CommandType = CommandType> = {
 
 ### 10.3 Provider 与模型配置
 
-BYOK 下 provider 分两层：**内置适配器在代码里，用户配置在 `settings.json`，API key 在系统钥匙串**。
+BYOK 下 provider 分两层：**内置适配器在代码里，用户配置（含加密后的 API key）在 `settings.json`**。
 
 代码层（不进配置文件的静态定义）：
 
@@ -431,11 +457,11 @@ interface ModelDef {
 `settings.json` 中用户可改的部分（按 provider key 分桶）：
 
 ```ts
-/** 应用级设置：provider 配置与模型选择，不含密钥。 */
+/** 应用级设置：provider 配置与模型选择，不含密钥。
+ * 无外观字段：跟随系统外观（HIG——应用内不设主题开关）。 */
 interface AppSettings {
   providers: Record<string, ProviderSettings>
   selectedModels: { text?: string; image?: string; video?: string }
-  theme?: 'dark' | 'light'
 }
 
 interface ProviderSettings {
@@ -449,7 +475,7 @@ interface ProviderSettings {
 
 ### 10.4 密钥管理
 
-provider 的 API key **不写入 `settings.json`**，经 `keyring` crate 存系统钥匙串、按 provider key 索引；配置文件仅存非敏感项。
+provider 的 API key 以**密文 `keyEnc`** 存于 provider 配置：Rust `seal` 模块 AES-256-GCM 加密（密钥 = 应用常数 + IOPlatformUUID + 随机盐，封装于 envelope），明文只在加密/请求的进程内存中出现；历史钥匙串数据保留只读回退，不再写入。
 
 ### 10.5 Rust 持久化命令（Tauri commands）
 
@@ -466,8 +492,8 @@ provider 的 API key **不写入 `settings.json`**，经 `keyring` crate 存系�
 | `delete_library_asset(assetId)` | 删库文件 + 索引项（不影响已拷入项目的副本） |
 | `collect_library_asset(projectId, projectAssetId, meta)` | 把项目资产拷贝入资产库（「收藏」） |
 | `get_settings()` / `update_settings(patch)` | 非敏感配置读写 |
-| `set_provider_key(provider, key)` / `get_provider_key(provider)` | 钥匙串读写 |
-| `llm_chat(messages, tools)` | LLM 请求代理：key 从钥匙串取，绕开 webview CORS（见 12.2） |
+| `set_provider_key(provider, key)` | 加密并返回 envelope 密文（由前端随 settings 落盘；解密走 `seal::open`，无独立读命令） |
+| `llm_chat(messages, tools)` | LLM 请求代理：key 由 settings 密文在 Rust 内存解密，绕开 webview CORS（见 12.2） |
 
 ## 十一、加载与归一化
 
@@ -503,7 +529,7 @@ Agent 不直接触碰文档状态，只产出 `GraphCommand`（`actor: 'agent'`�
 
 - **工具集 = 命令清单的封装**：读工具 `get_graph_snapshot` / `get_node`；写工具 `create_node` / `delete_node` / `update_node_spec` / `connect_edge` / `disconnect_edge` / `batch`。
 - **快照摘要而非全量**：大项目全量 JSON 会超出上下文，默认只给压缩视图（节点 id/type/label/连接关系），详情由模型用读工具按需拉取。
-- **调用路径**：前端驱动循环；LLM 请求经 Rust command `llm_chat` 代理发出——API key 存于系统钥匙串、前端不持有，同时绕开 webview 的 CORS 限制。
+- **调用路径**：前端驱动循环；LLM 请求经 Rust command `llm_chat` 代理发出——API key 以密文随 settings 落盘、在 Rust 内存解密，前端不持有明文，同时绕开 webview 的 CORS 限制。
 - **可控性**：Agent 的写操作执行前弹批量预览（涉及哪些节点、什么变更），用户确认后才进命令通道；undo 始终兜底。
 
 ### 12.3 MCP 暴露（可选，后置）

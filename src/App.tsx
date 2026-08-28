@@ -1,68 +1,164 @@
-import { useCallback } from 'react'
-import {
-  ReactFlow,
-  Background,
-  Controls,
-  addEdge,
-  useNodesState,
-  useEdgesState,
-  type Connection,
-  type Edge,
-  type Node,
-} from '@xyflow/react'
-import '@xyflow/react/dist/style.css'
+import { useCallback, useEffect, useState } from 'react'
+import HomePage from './home/HomePage'
+import { projectStore, type ProjectDocument } from './projectStore'
+import { EMPTY_SETTINGS } from './editor/settings'
+import EditorView from './editor/EditorView'
+import SettingsView from './settings/SettingsView'
+import type { ProjectSummary } from './home/projects'
+
+/** 编辑器态：已加载的项目（id + 名称 + 画布文档）。 */
+interface OpenProject {
+  id: string
+  doc: ProjectDocument
+}
 
 /**
- * 占位初始节点：演示「场景 → 对白 → 分支」三类叙事单元的连线关系，
- * 后续由真实的剧本数据模型替换。
+ * 应用根组件：文档式双界面（docs/ui-design.md §3.1）+ 设置界面——
+ * 项目首页 / 编辑器是同一窗口的两种状态，设置页经 ⌘, 叠加打开
+ * （独立窗口形态随桌面端演进升级），关闭后回到原界面。
+ * 项目数据经 projectStore 持久化（Tauri 落盘 / 浏览器内存回退）。
  */
-const initialNodes: Node[] = [
-  {
-    id: 'scene-1',
-    position: { x: 0, y: 0 },
-    data: { label: '场景：雨夜天台' },
-  },
-  {
-    id: 'dialog-1',
-    position: { x: 240, y: 120 },
-    data: { label: '对白：真相逼近' },
-  },
-  {
-    id: 'branch-1',
-    position: { x: 480, y: 0 },
-    data: { label: '分支：坦白 / 隐瞒' },
-  },
-]
-
-/** 占位初始连线：表达剧情流向与分支走向。 */
-const initialEdges: Edge[] = [
-  { id: 'e-scene-dialog', source: 'scene-1', target: 'dialog-1' },
-  { id: 'e-dialog-branch', source: 'dialog-1', target: 'branch-1' },
-]
-
-/** 应用根组件：承载剧本画布，提供节点拖拽、连线与缩放导航能力。 */
 export default function App() {
-  const [nodes, , onNodesChange] = useNodesState(initialNodes)
-  const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges)
+  const [projects, setProjects] = useState<ProjectSummary[]>([])
+  const [openProject, setOpenProject] = useState<OpenProject | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
-  const onConnect = useCallback(
-    (connection: Connection) => setEdges((eds) => addEdge(connection, eds)),
-    [setEdges],
+  const refreshProjects = useCallback(async () => {
+    try {
+      setProjects(await projectStore.list())
+    } catch (err) {
+      console.warn('[App] 项目列表加载失败', err)
+      setProjects([])
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void refreshProjects()
+  }, [refreshProjects])
+
+  // ⌘, 打开设置（macOS 惯例，§8.2）；输入控件聚焦时不触发
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === ',' && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault()
+        setSettingsOpen(true)
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [])
+
+  const handleCreateProject = useCallback(async () => {
+    const meta = await projectStore.create('未命名短剧')
+    setOpenProject({
+      id: meta.id,
+      doc: { name: meta.name, nodes: [], edges: [], settings: { ...EMPTY_SETTINGS } },
+    })
+    void refreshProjects()
+  }, [refreshProjects])
+
+  const handleOpenProject = useCallback(
+    async (id: string) => {
+      try {
+        const doc = await projectStore.load(id)
+        setOpenProject({ id, doc })
+      } catch (err) {
+        console.warn('[App] 打开项目失败', err)
+      }
+    },
+    [],
   )
 
+  const handleBackHome = useCallback(() => {
+    setOpenProject(null)
+    void refreshProjects()
+  }, [refreshProjects])
+
+  const handleSave = useCallback(
+    (id: string) => (doc: ProjectDocument) => {
+      void projectStore.saveQuiet(id, doc)
+    },
+    [],
+  )
+
+  /** 编辑器工具栏项目名内联改名（§3.3）：更新打开态，随防抖落盘。 */
+  const handleEditorRename = useCallback((name: string) => {
+    setOpenProject((p) => (p ? { ...p, doc: { ...p.doc, name } } : p))
+  }, [])
+
+  /** 首页卡片菜单 · 重命名（§3.2）：读原文档改 name 后保存。 */
+  const handleRenameProject = useCallback(
+    async (id: string, name: string) => {
+      try {
+        const doc = await projectStore.load(id)
+        await projectStore.saveQuiet(id, { ...doc, name })
+        await refreshProjects()
+      } catch (err) {
+        console.warn('[App] 重命名失败', err)
+      }
+    },
+    [refreshProjects],
+  )
+
+  const handleDuplicateProject = useCallback(
+    async (id: string) => {
+      try {
+        await projectStore.duplicate(id)
+        await refreshProjects()
+      } catch (err) {
+        console.warn('[App] 复制项目失败', err)
+      }
+    },
+    [refreshProjects],
+  )
+
+  const handleDeleteProject = useCallback(
+    async (id: string) => {
+      try {
+        await projectStore.delete(id)
+        await refreshProjects()
+      } catch (err) {
+        console.warn('[App] 删除项目失败', err)
+      }
+    },
+    [refreshProjects],
+  )
+
+  if (settingsOpen) {
+    return <SettingsView onClose={() => setSettingsOpen(false)} />
+  }
+
+  if (openProject) {
+    return (
+      <EditorView
+        key={openProject.id}
+        project={{
+          id: openProject.id,
+          name: openProject.doc.name,
+          nodes: openProject.doc.nodes,
+          edges: openProject.doc.edges,
+          settings: openProject.doc.settings,
+          episodeTitles: openProject.doc.episodeTitles,
+        }}
+        onBackHome={handleBackHome}
+        onRenameProject={handleEditorRename}
+        onOpenSettings={() => setSettingsOpen(true)}
+        onSave={handleSave(openProject.id)}
+      />
+    )
+  }
   return (
-    <div className="canvas-root">
-      <ReactFlow
-        nodes={nodes}
-        edges={edges}
-        onNodesChange={onNodesChange}
-        onEdgesChange={onEdgesChange}
-        onConnect={onConnect}
-        fitView
-      >
-        <Background />
-        <Controls />
-      </ReactFlow>
-    </div>
+    <HomePage
+      projects={projects}
+      loading={loading}
+      onOpenProject={handleOpenProject}
+      onCreateProject={() => void handleCreateProject()}
+      onRenameProject={(id, name) => void handleRenameProject(id, name)}
+      onDuplicateProject={(id) => void handleDuplicateProject(id)}
+      onDeleteProject={(id) => void handleDeleteProject(id)}
+    />
   )
 }

@@ -1,0 +1,703 @@
+/* 编辑器三栏面板（docs/ui-design.md §3.4）：半透明材质、内容下滚动、
+ * 边缘渐隐、无 1px 硬分隔线；折叠走弹簧动画。分段控件为 macOS 风格。 */
+
+.editor-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+/* ---- 面板外壳 ---- */
+.pw-panel {
+  position: relative;
+  flex: none;
+  overflow: hidden;
+  background: var(--material-sidebar);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  /* 弹簧折叠（§3.4 折叠用弹簧动画） */
+  transition: width 0.35s cubic-bezier(0.34, 1.3, 0.4, 1);
+}
+
+.pw-panel-closed {
+  width: 0;
+}
+
+/* 内容定宽，避免折叠动画期间重排 */
+.pw-panel-inner {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.pw-panel-head {
+  flex: none;
+  padding: 10px 12px 8px;
+}
+
+.pw-panel-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2px 12px 16px;
+  /* 滚动边缘渐变过渡（内容在材质下滚动） */
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 12px,
+    #000 calc(100% - 14px),
+    transparent 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 12px,
+    #000 calc(100% - 14px),
+    transparent 100%
+  );
+}
+
+/* 拖拽调宽手柄：贴面板内缘的窄热区，无可见线 */
+.pw-panel-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  cursor: col-resize;
+  z-index: 5;
+}
+
+.pw-panel-left .pw-panel-resizer {
+  right: 0;
+}
+
+.pw-panel-right .pw-panel-resizer {
+  left: 0;
+}
+
+.pw-panel-resizer:hover,
+.pw-panel-resizer:active {
+  background: var(--fill-quaternary);
+}
+
+/* ---- 分段控件 ---- */
+.pw-seg {
+  display: flex;
+  background: var(--fill-quaternary);
+  border-radius: 7px;
+  padding: 2px;
+}
+
+.pw-seg-item {
+  flex: 1;
+  border: none;
+  background: none;
+  border-radius: 5px;
+  padding: 3px 0;
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.pw-seg-item:hover {
+  color: var(--text-primary);
+}
+
+.pw-seg-item-on {
+  background: var(--surface-card);
+  color: var(--text-primary);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+}
+
+/* ---- 大纲（§3.5 线性投影） ---- */
+.pw-outline-row {
+  display: block;
+  width: 100%;
+  border: none;
+  background: none;
+  text-align: left;
+  font-size: 12px;
+  font-family: inherit;
+  padding: 4px 6px;
+  border-radius: 5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.pw-outline-row:first-child {
+  padding-top: 6px;
+}
+
+.pw-outline-row:hover {
+  background: var(--fill-quaternary);
+}
+
+/* 画布选中节点对应行的高亮（大纲 ⇄ 画布联动） */
+.pw-outline-row.pw-outline-on {
+  background: var(--fill-quaternary);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* 节拍行弱化（节奏层，非正文） */
+.pw-outline-row[data-level='0'] {
+  color: var(--text-secondary);
+}
+
+/* ---- 设定集 ---- */
+.pw-settings-group {
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+  padding: 12px 6px 5px;
+}
+
+.pw-settings-item {
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+  padding: 6px;
+  border-radius: 7px;
+}
+
+.pw-settings-item:hover {
+  background: var(--fill-quaternary);
+}
+
+/* 可拖拽建引用的条目（§5：建立引用 = 拖拽） */
+.pw-settings-item.pw-draggable {
+  cursor: grab;
+}
+
+.pw-settings-item-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.pw-settings-item-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.pw-settings-item-note {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+/* ---- 资产库（§8.1 六分类） ---- */
+.pw-assets-hint {
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  padding: 4px 6px 8px;
+}
+
+.pw-assets-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text-primary);
+  padding: 6px;
+  border-radius: 7px;
+}
+
+.pw-assets-row:hover {
+  background: var(--fill-quaternary);
+}
+
+.pw-assets-label {
+  flex: none;
+}
+
+.pw-assets-count {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+/* ---- 检查器 ---- */
+.pw-inspector-type {
+  font-size: 11px;
+  color: var(--text-secondary);
+  padding: 2px 6px 10px;
+}
+
+.pw-inspector-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 6px;
+  border-radius: 7px;
+}
+
+.pw-inspector-row:hover {
+  background: var(--fill-quaternary);
+}
+
+.pw-inspector-label {
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+}
+
+.pw-inspector-value {
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-primary);
+}
+
+.pw-empty {
+  margin: 24px 10px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+/* ---- 大纲集分组（§3.5：集 = 逻辑分类，编号 + 行内标题） ---- */
+.pw-outline-group {
+  margin-bottom: 6px;
+}
+
+.pw-outline-ep {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px 2px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+.pw-outline-ep.static {
+  padding-left: 10px;
+  opacity: 0.7;
+}
+
+.pw-outline-ep-btn {
+  border: none;
+  background: none;
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.pw-outline-ep-btn:hover {
+  background: var(--fill-quaternary);
+}
+
+.pw-outline-ep-btn.on {
+  color: #fff;
+  background: var(--brand-gradient);
+}
+
+.pw-outline-ep-count {
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+/* ---- ✦AI 改动预览卡（§6：整卡 = 一个 batch 命令，删除置顶二次确认） ---- */
+.pw-ai-entry {
+  margin: 0 0 4px;
+}
+
+.pw-ai-note {
+  margin: 4px 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.pw-ai-card {
+  margin: 6px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-lg);
+  background: var(--fill-quaternary);
+}
+
+.pw-ai-card.danger {
+  border-color: var(--danger);
+}
+
+.pw-ai-card-head {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
+
+.pw-ai-card.danger .pw-ai-card-head {
+  color: var(--danger);
+}
+
+.pw-ai-items,
+.pw-ai-issues {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.pw-ai-item,
+.pw-ai-issue {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.pw-ai-item.danger {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.pw-ai-item-icon {
+  flex: none;
+  width: 14px;
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.pw-ai-item.danger .pw-ai-item-icon {
+  color: var(--danger);
+}
+
+.pw-ai-issue {
+  color: var(--danger);
+}
+
+.pw-ai-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.pw-ai-btn {
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-md);
+  background: none;
+  padding: 3px 12px;
+  font-size: 11.5px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.pw-ai-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.pw-ai-btn.primary {
+  background: var(--control-primary-bg);
+  color: var(--control-primary-fg);
+  border-color: transparent;
+}
+
+/* 删除类批次：确认按钮 danger 色，执行是显式动作（§6 不设自动执行） */
+.pw-ai-btn.primary.danger {
+  background: var(--danger);
+  color: #fff;
+}
+
+/* ---- ✦AI 对话（§6：气泡、引导卡、输入区） ---- */
+.pw-ai {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.pw-ai-guide {
+  margin: 18px 4px 12px;
+  padding: 16px 14px;
+  border: 1px dashed var(--border-hairline);
+  border-radius: var(--radius-lg);
+  text-align: center;
+}
+
+.pw-ai-guide-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
+
+.pw-ai-guide p {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  margin: 0 0 12px;
+}
+
+.pw-ai-guide-btn {
+  border: none;
+  border-radius: 6px;
+  padding: 4px 12px;
+  font-size: 11.5px;
+  background: var(--control-primary-bg);
+  color: var(--control-primary-fg);
+  cursor: pointer;
+}
+
+.pw-ai-guide-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.pw-ai-input {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 4px 4px;
+}
+
+.pw-ai-input input {
+  border: none;
+  border-radius: 8px;
+  padding: 7px 10px;
+  font-size: 12px;
+  background: var(--fill-quaternary);
+  color: var(--text-primary);
+}
+
+.pw-ai-input input:disabled {
+  opacity: 0.5;
+}
+
+.pw-ai-ctx {
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+/* 减弱动态：折叠改为瞬时宽度切换 */
+@media (prefers-reduced-motion: reduce) {
+  .pw-panel {
+    transition: none;
+  }
+}
+
+/* 设定集条目编辑（§5） */
+.pw-settings-x {
+  margin-left: auto;
+  align-self: center;
+  border: none;
+  background: none;
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.pw-settings-item:hover .pw-settings-x {
+  opacity: 1;
+}
+
+.pw-settings-x:hover {
+  background: var(--danger);
+  color: #fff;
+}
+
+.pw-settings-add {
+  display: block;
+  width: calc(100% - 12px);
+  margin: 4px 6px 8px;
+  border: 1px dashed var(--border-hairline);
+  border-radius: var(--radius-md);
+  background: none;
+  padding: 5px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.pw-settings-add:hover {
+  color: var(--text-primary);
+  border-color: var(--accent-alt);
+}
+
+/* ---- 大纲拖拽（§3.5：拖拽排序 = 重排 sequence 边；跨组 = 改集归属） ---- */
+.pw-outline-row[draggable='true'] {
+  cursor: grab;
+}
+
+.pw-outline-row[draggable='true']:active {
+  cursor: grabbing;
+}
+
+.pw-outline-row.pw-drop-above {
+  box-shadow: inset 0 2px 0 var(--accent-alt);
+}
+
+.pw-outline-row.pw-drop-below {
+  box-shadow: inset 0 -2px 0 var(--accent-alt);
+}
+
+.pw-outline-ep.pw-drop-into {
+  outline: 1.5px dashed var(--accent-alt);
+  outline-offset: -1px;
+  border-radius: var(--radius-sm);
+}
+
+/* 大纲行的节拍兑现徽标（§3.5：待兑现 = 节奏漏洞，一眼可查） */
+.pw-beat-state {
+  margin-left: 8px;
+}
+
+/* ---- AI 模型选择器（§6：三层过滤，key 未配置置灰） ---- */
+.pw-ai-model {
+  margin: 8px 4px 0;
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-md);
+  padding: 4px 6px;
+  font-size: 11.5px;
+  background: var(--fill-quaternary);
+  color: var(--text-primary);
+}
+
+/* ---- 资产库真实实现（§8.1：分类计数 → 类别内导入/缩略/改名/标签/删除） ---- */
+.pw-assets-row-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pw-assets-open {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: none;
+  background: none;
+  border-radius: var(--radius-sm);
+  padding: 4px 6px;
+  font-size: 12px;
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+}
+
+.pw-assets-open:hover {
+  background: var(--fill-quaternary);
+}
+
+.pw-assets-import {
+  flex: none;
+  border: 1px dashed var(--border-hairline);
+  border-radius: var(--radius-sm);
+  background: none;
+  padding: 2px 8px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.pw-assets-import:hover {
+  color: var(--text-primary);
+  border-color: var(--accent-alt);
+}
+
+.pw-assets-import:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.pw-assets-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.pw-assets-back {
+  border: none;
+  background: none;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+
+.pw-assets-back:hover {
+  color: var(--text-primary);
+}
+
+.pw-asset {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px;
+  border-radius: var(--radius-md);
+}
+
+.pw-asset:hover {
+  background: var(--fill-quaternary);
+}
+
+.pw-asset:hover .pw-settings-x {
+  opacity: 1;
+}
+
+.pw-asset-thumb {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-hairline);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: var(--fill-quaternary);
+  color: var(--text-secondary);
+}
+
+.pw-asset-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.pw-asset-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.pw-asset-tags {
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+  font-size: 10.5px;
+  background: var(--fill-quaternary);
+  color: var(--text-secondary);
+}
+
+.pw-assets-error {
+  color: var(--danger);
+}

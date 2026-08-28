@@ -1,0 +1,301 @@
+/* 编辑器窗口 chrome：统一工具栏（docs/ui-design.md §3.3）。
+ * 组件层只引用语义令牌；右区其余操作（＋节点/导出/撤销重做）随功能落地后补充。 */
+
+.editor-root {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-canvas);
+  color: var(--text-primary);
+}
+
+.editor-titlebar {
+  position: relative;
+  /* 抬高使 ＋节点下拉菜单覆盖在 editor-body 之上 */
+  z-index: 20;
+  flex: none;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 16px;
+  background: var(--material-titlebar);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid var(--border-hairline);
+}
+
+/* Tauri Overlay 标题栏：为左侧红绿灯留出安全区（约 78pt）。 */
+.is-tauri .editor-titlebar {
+  padding-left: 80px;
+}
+
+/* 返回首页：画布退回文档浏览器的唯一入口。 */
+.editor-back {
+  font-size: 12px;
+  padding: 3px 10px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.editor-back:hover {
+  background: var(--fill-quaternary);
+  color: var(--text-primary);
+}
+
+/* 项目名居中（§3.3 中区）。 */
+.editor-title {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* 工具栏开关按钮（§3.3：边栏开关 / 检查器开关 / ✦AI 开关）。 */
+.editor-tbtn {
+  border: none;
+  background: none;
+  border-radius: var(--radius-sm);
+  padding: 3px 7px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.editor-tbtn:hover {
+  background: var(--fill-quaternary);
+  color: var(--text-primary);
+}
+
+.editor-tbtn.on {
+  background: var(--fill-quaternary);
+  color: var(--text-primary);
+}
+
+/* 跟随命令栈状态置灰（§3.3 撤销/重做）。 */
+.editor-tbtn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.editor-tbtn:disabled:hover {
+  background: none;
+  color: var(--text-secondary);
+}
+
+/* 右区首个按钮：推到工具栏右端。 */
+.editor-tbtn.io {
+  margin-left: auto;
+}
+
+/* ＋节点下拉（§3.3 右区）：触发按钮容器与菜单。 */
+.editor-plus {
+  position: relative;
+}
+
+.editor-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 100;
+  min-width: 128px;
+  padding: 4px;
+  background: var(--surface-card);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-md);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22);
+}
+
+.editor-menu-item {
+  display: block;
+  width: 100%;
+  border: none;
+  background: none;
+  border-radius: var(--radius-sm);
+  padding: 5px 12px;
+  font-size: 12px;
+  text-align: left;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.editor-menu-item:hover {
+  background: var(--fill-quaternary);
+}
+
+.editor-menu-danger {
+  color: var(--danger);
+}
+
+.editor-menu-danger:hover {
+  background: var(--danger);
+  color: #fff;
+}
+
+/* 右键上下文菜单：fixed 定位在指针处（§4.3） */
+.editor-ctx {
+  position: fixed;
+  z-index: 200;
+  min-width: 136px;
+  padding: 4px;
+  background: var(--surface-card);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-md);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.24);
+}
+
+/* ---- 剧本导出对话框（§3.3/§3.5） ---- */
+.pw-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.32);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+.pw-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(680px, calc(100vw - 96px));
+  max-height: min(78vh, 720px);
+  background: var(--surface-card);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-xl);
+  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+}
+
+.pw-dialog-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-hairline);
+}
+
+.pw-dialog-head b {
+  font-size: 13.5px;
+}
+
+.pw-dialog-file {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.pw-dialog-x {
+  border: none;
+  background: none;
+  border-radius: var(--radius-sm);
+  padding: 3px 7px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+/* 窄对话框（重命名 / 删除确认，§3.2） */
+.pw-dialog-sm {
+  width: min(360px, calc(100vw - 96px));
+  max-height: none;
+}
+
+.pw-dialog-body {
+  padding: 14px 16px;
+}
+
+.pw-dialog-text {
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--text-primary);
+}
+
+.pw-dialog-danger {
+  border-color: transparent;
+  background: var(--danger);
+  color: #fff;
+}
+
+.pw-dialog-danger:hover {
+  background: var(--danger);
+  opacity: 0.88;
+}
+
+.pw-dialog-x:hover {
+  background: var(--fill-quaternary);
+  color: var(--text-primary);
+}
+
+.pw-export-pre {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  margin: 0;
+  padding: 14px 18px;
+  font-size: 12px;
+  line-height: 1.8;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  white-space: pre-wrap;
+  color: var(--text-primary);
+}
+
+.pw-dialog-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border-hairline);
+}
+
+.pw-dialog-hint {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.pw-dialog-btn {
+  border: 1px solid var(--border-hairline);
+  border-radius: 6px;
+  background: none;
+  padding: 5px 14px;
+  font-size: 12px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.pw-dialog-btn:hover {
+  background: var(--fill-quaternary);
+}
+
+.pw-dialog-btn-primary {
+  border-color: transparent;
+  background: var(--control-primary-bg);
+  color: var(--control-primary-fg);
+}
+
+.pw-dialog-btn-primary:hover {
+  opacity: 0.88;
+  background: var(--control-primary-bg);
+}
+
+/* ✦AI 开关：全 chrome 唯一品牌渐变元素（§2.3 受限用途）。 */
+.editor-tbtn-ai {
+  font-weight: 600;
+  background: var(--brand-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.editor-tbtn-ai.on {
+  background: var(--brand-gradient);
+  -webkit-background-clip: border-box;
+  background-clip: border-box;
+  color: #fff;
+}
