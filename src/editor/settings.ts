@@ -42,9 +42,9 @@ const AVATAR_GRADIENTS = [
 
 let paletteCursor = 0
 
-/** 新实体 id：类型前缀 + 时间戳 36 进制。 */
+/** 新实体 id：类型前缀 + 时间戳 36 进制 + 随机尾（同毫秒防碰撞）。 */
 export function newEntityId(prefix: 'ch' | 'loc'): string {
-  return `${prefix}-${Date.now().toString(36)}`
+  return `${prefix}-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`
 }
 
 /** 新建角色实体（名字去空白；渐变从调色板轮转）。 */

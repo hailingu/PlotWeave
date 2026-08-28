@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { useNodeEdit } from '../../nodeEdit'
 import type { ProjectSettings } from '../../settings'
+import { uid } from '../../../uid'
 import type {
   BeatNodeData,
   BranchNodeData,
@@ -27,7 +28,7 @@ export type PanelNode =
   | { id: string; type: 'shot'; data: ShotNodeData }
 
 /** 表单字段行：小标签 + 控件。 */
-function Field({ label, children }: { label: string; children: ReactNode }) {
+function Field({ label, children }: { readonly label: string; readonly children: ReactNode }) {
   return (
     <label className="pw-set-field">
       <span className="pw-set-label">{label}</span>
@@ -38,7 +39,7 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 
 /** 集归属（§3.5：集 = 编号 + 行内标题，节点以 episodeNo 归属集）。
  * 清空 = 移出所有集；分镜卡随宿主场景（attach 派生），不出此字段。 */
-function EpisodeField({ nodeId, episodeNo }: { nodeId: string; episodeNo?: number }) {
+function EpisodeField({ nodeId, episodeNo }: { readonly nodeId: string; readonly episodeNo?: number }) {
   const { patchNode } = useNodeEdit()
   return (
     <Field label="集">
@@ -51,7 +52,7 @@ function EpisodeField({ nodeId, episodeNo }: { nodeId: string; episodeNo?: numbe
           placeholder="未分集"
           onChange={(e) => {
             const raw = e.target.value
-            const n = raw === '' ? NaN : Math.max(1, Math.floor(Number(raw)))
+            const n = raw === '' ? Number.NaN : Math.max(1, Math.floor(Number(raw)))
             patchNode(nodeId, { episodeNo: Number.isFinite(n) ? n : undefined })
           }}
         />
@@ -72,7 +73,7 @@ function EpisodeField({ nodeId, episodeNo }: { nodeId: string; episodeNo?: numbe
 }
 
 /** 场景表单：名称/地点/时间/天气/内外景/梗概/出场角色（设定集引用切换）。 */
-function SceneForm({ node, settings }: { node: Extract<PanelNode, { type: 'scene' }>; settings: ProjectSettings }) {
+function SceneForm({ node, settings }: { readonly node: Extract<PanelNode, { type: 'scene' }>; readonly settings: ProjectSettings }) {
   const { patchNode } = useNodeEdit()
   const d = node.data
   const toggleCharacter = (id: string) => {
@@ -179,7 +180,7 @@ function SceneForm({ node, settings }: { node: Extract<PanelNode, { type: 'scene
 }
 
 /** 节奏卡表单：内容 + 基调。 */
-function BeatForm({ node }: { node: Extract<PanelNode, { type: 'beat' }> }) {
+function BeatForm({ node }: { readonly node: Extract<PanelNode, { type: 'beat' }> }) {
   const { patchNode } = useNodeEdit()
   return (
     <>
@@ -207,8 +208,8 @@ function DialogueForm({
   node,
   settings,
 }: {
-  node: Extract<PanelNode, { type: 'dialogue' }>
-  settings: ProjectSettings
+  readonly node: Extract<PanelNode, { type: 'dialogue' }>
+  readonly settings: ProjectSettings
 }) {
   const { patchNode } = useNodeEdit()
   const defaultSpeaker = settings.characters[0]?.id
@@ -229,7 +230,7 @@ function DialogueForm({
       </Field>
       <div className="pw-set-label">台词</div>
       {d.lines.map((line, i) => (
-        <div key={i} className="pw-set-line">
+        <div key={line.id} className="pw-set-line">
           <div className="pw-set-line-bar">
             <select
               className="pw-set-input pw-set-kind"
@@ -285,7 +286,7 @@ function DialogueForm({
         className="pw-set-add"
         onClick={() =>
           patchNode(node.id, {
-            lines: [...d.lines, { kind: 'line', speaker: defaultSpeaker, side: 'left', text: '' }],
+            lines: [...d.lines, { id: uid('line'), kind: 'line', speaker: defaultSpeaker, side: 'left', text: '' }],
           })
         }
       >
@@ -297,7 +298,7 @@ function DialogueForm({
 }
 
 /** 分支表单：问句 + 选项增删（排序随后续任务）。 */
-function BranchForm({ node }: { node: Extract<PanelNode, { type: 'branch' }> }) {
+function BranchForm({ node }: { readonly node: Extract<PanelNode, { type: 'branch' }> }) {
   const { patchNode } = useNodeEdit()
   const d = node.data
   return (
@@ -311,9 +312,9 @@ function BranchForm({ node }: { node: Extract<PanelNode, { type: 'branch' }> }) 
       </Field>
       <div className="pw-set-label">选项</div>
       {d.options.map((option, i) => (
-        <div key={i} className="pw-set-line">
+        <div key={option.id} className="pw-set-line">
           <div className="pw-set-line-bar">
-            <span className="pw-set-optno">{String.fromCharCode(65 + i)}</span>
+            <span className="pw-set-optno">{String.fromCodePoint(65 + i)}</span>
             <span className="pw-sp" />
             <button
               type="button"
@@ -328,10 +329,10 @@ function BranchForm({ node }: { node: Extract<PanelNode, { type: 'branch' }> }) 
           </div>
           <input
             className="pw-set-input"
-            value={option}
+            value={option.label}
             onChange={(e) =>
               patchNode(node.id, {
-                options: d.options.map((o, idx) => (idx === i ? e.target.value : o)),
+                options: d.options.map((o, idx) => (idx === i ? { ...o, label: e.target.value } : o)),
               })
             }
           />
@@ -341,7 +342,9 @@ function BranchForm({ node }: { node: Extract<PanelNode, { type: 'branch' }> }) 
         type="button"
         className="pw-set-add"
         onClick={() =>
-          patchNode(node.id, { options: [...d.options, `选项 ${String.fromCharCode(65 + d.options.length)}`] })
+          patchNode(node.id, {
+            options: [...d.options, { id: uid('opt'), label: `选项 ${String.fromCodePoint(65 + d.options.length)}` }],
+          })
         }
       >
         ＋ 添加选项
@@ -358,7 +361,7 @@ const REF_KIND_LABELS: Record<ShotRef['kind'], string> = {
 }
 
 /** 分镜卡表单：镜号/景别/画面描述/镜头 Prompt/引用位（增删改）。 */
-function ShotForm({ node }: { node: Extract<PanelNode, { type: 'shot' }> }) {
+function ShotForm({ node }: { readonly node: Extract<PanelNode, { type: 'shot' }> }) {
   const { patchNode } = useNodeEdit()
   const d = node.data
   return (
@@ -399,7 +402,7 @@ function ShotForm({ node }: { node: Extract<PanelNode, { type: 'shot' }> }) {
       </Field>
       <div className="pw-set-label">引用位</div>
       {d.refs.map((ref, i) => (
-        <div key={i} className="pw-set-line">
+        <div key={ref.id} className="pw-set-line">
           <div className="pw-set-line-bar">
             <select
               className="pw-set-input pw-set-kind"
@@ -444,7 +447,7 @@ function ShotForm({ node }: { node: Extract<PanelNode, { type: 'shot' }> }) {
         type="button"
         className="pw-set-add"
         onClick={() =>
-          patchNode(node.id, { refs: [...d.refs, { kind: 'character', label: '' }] })
+          patchNode(node.id, { refs: [...d.refs, { id: uid('ref'), kind: 'character', label: '' }] })
         }
       >
         ＋ 添加引用
@@ -458,14 +461,14 @@ function ShotForm({ node }: { node: Extract<PanelNode, { type: 'shot' }> }) {
  * 设置面板外壳：按节点类型分发表单；底部 ⧉ 复制 / 🗑 删除（§4.3）。
  * 由各节点组件在 openSettingsId 命中时渲染于卡片下方。
  */
-export default function NodeSettingsPanel({ node }: { node: PanelNode }) {
+export default function NodeSettingsPanel({ node }: { readonly node: PanelNode }) {
   const { duplicateNode, deleteNode, settings } = useNodeEdit()
 
   return (
-    <div
+    // 内嵌表单面板而非模态对话框：原生 section 地标（S6819），不冒用 dialog 角色
+    <section
       className="pw-settings nodrag nowheel"
       data-pw-settings
-      role="dialog"
       aria-label="节点设置"
       onPointerDown={(e) => e.stopPropagation()}
     >
@@ -493,14 +496,15 @@ export default function NodeSettingsPanel({ node }: { node: PanelNode }) {
           🗑 删除
         </button>
       </div>
-    </div>
+    </section>
   )
 }
 
 /**
  * 双击内联改名（docs/ui-design.md §4.3 名称在卡片头部；§3.3 项目名单击改名）。
  * 双击进入编辑（节点名称），或单击进入（工具栏项目名，singleClick）；
- * Enter/失焦提交、Esc 取消；空值不提交。
+ * Enter/失焦提交、Esc 取消；空值不提交。非编辑态是原生 button：
+ * Tab 可聚焦，Enter/Space 进入编辑（S1082/S6848）。
  */
 export function EditableName({
   value,
@@ -508,11 +512,11 @@ export function EditableName({
   ariaLabel,
   singleClick = false,
 }: {
-  value: string
-  onChange: (next: string) => void
-  ariaLabel: string
+  readonly value: string
+  readonly onChange: (next: string) => void
+  readonly ariaLabel: string
   /** true = 单击进入编辑（工具栏项目名）；默认双击（节点名称）。 */
-  singleClick?: boolean
+  readonly singleClick?: boolean
 }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(value)
@@ -525,14 +529,22 @@ export function EditableName({
 
   if (!editing) {
     return (
-      <span
+      <button
+        type="button"
         className="pw-editable"
         title={singleClick ? '点击重命名' : '双击改名'}
         onClick={singleClick ? beginEdit : undefined}
         onDoubleClick={singleClick ? undefined : beginEdit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            // preventDefault 抑制按钮原生 click，避免键盘激活重复触发
+            e.preventDefault()
+            beginEdit(e)
+          }
+        }}
       >
         {value}
-      </span>
+      </button>
     )
   }
   return (

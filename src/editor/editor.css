@@ -172,6 +172,10 @@
   border-radius: var(--radius-xl);
   box-shadow: 0 32px 80px rgba(0, 0, 0, 0.4);
   overflow: hidden;
+  /* 原生 <dialog> 的 UA 定位/内距/前景色重置：遮罩层用 flex 居中 */
+  position: static;
+  padding: 0;
+  color: inherit;
 }
 
 .pw-dialog-head {

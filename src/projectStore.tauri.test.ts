@@ -1,0 +1,155 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { ProjectDocument } from './projectStore'
+
+/** projectStore 的 Tauri 路径：mock IPC，isTauri 判真后动态 import。
+ * invoke 按命令名路由，行为由各用例编排。 */
+
+const handlers = new Map<string, (args: unknown) => unknown>()
+const calls: Array<{ cmd: string; args: unknown }> = []
+
+beforeEach(() => {
+  vi.resetModules()
+  vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
+  handlers.clear()
+  calls.length = 0
+  vi.doMock('@tauri-apps/api/core', () => ({
+    invoke: async (cmd: string, args: unknown) => {
+      calls.push({ cmd, args })
+      const h = handlers.get(cmd)
+      if (!h) throw new Error(`未编排的命令：${cmd}`)
+      return h(args)
+    },
+  }))
+})
+
+const load = async (): Promise<typeof import('./projectStore')> => import('./projectStore')
+
+const meta = (id: string) => ({
+  id,
+  name: id,
+  updated_at: 1_700_000_000_000,
+  scene_count: 3,
+  ending_count: 2,
+})
+
+const modernFile = () => ({
+  name: '现代剧',
+  nodes: [
+    {
+      id: 's1',
+      type: 'scene',
+      position: { x: 0, y: 0 },
+      data: { name: '场一', sceneNo: 1, interior: true, time: '🌙 夜', synopsis: '', characterIds: [] },
+    },
+  ],
+  edges: [],
+  settings: { characters: [], locations: [] },
+})
+
+describe('tauriLoad：归一化与迁移回写', () => {
+  it('episodeTitles 只保留「正整数键 → 非空标题」，标题去空白', async () => {
+    handlers.set('load_project', () => ({
+      ...modernFile(),
+      episodeTitles: { 1: ' 开局 ', 2: '   ', x: 'y', 0: '零', '-1': '负', '3.5': '小数', 4: 7 },
+    }))
+    const { projectStore } = await load()
+    const doc = await projectStore.load('p1')
+    expect(doc.episodeTitles).toEqual({ 1: '开局' })
+    expect(calls.map((c) => c.cmd)).toEqual(['load_project']) // 新 schema 不回写
+  })
+
+  it('旧 schema 触发迁移并回写 save_project（下次打开不再迁移）', async () => {
+    handlers.set('load_project', () => ({
+      name: '旧剧',
+      nodes: [
+        {
+          id: 's1',
+          type: 'scene',
+          position: { x: 0, y: 0 },
+          data: {
+            name: '场一', sceneNo: 1, interior: true, time: '🌙 夜', synopsis: '',
+            characters: [{ label: '林', gradient: 'g' }],
+            location: '天台',
+          },
+        },
+      ],
+      edges: [],
+    }))
+    handlers.set('save_project', () => undefined)
+    const { projectStore } = await load()
+    const doc: ProjectDocument = await projectStore.load('p1')
+    const scene = doc.nodes[0].data as { characterIds: string[]; locationId?: string }
+    expect(scene.characterIds).toHaveLength(1)
+    expect(doc.settings.locations.map((l) => l.name)).toEqual(['天台'])
+    // 回写是 fire-and-forget（void tauriSave）：轮询等到 save_project 落盘调用
+    await vi.waitFor(() => {
+      expect(calls.some((c) => c.cmd === 'save_project')).toBe(true)
+    })
+    const save = calls.find((c) => c.cmd === 'save_project')
+    expect(save).toBeDefined()
+    expect((save?.args as { id: string }).id).toBe('p1')
+    expect((save?.args as { doc: { episodeTitles: unknown } }).doc.episodeTitles).toEqual({})
+  })
+})
+
+describe('tauriList：空库播种与示例升级', () => {
+  it('首次（无项目文件）写入两个种子项目后重列', async () => {
+    let listed = false
+    handlers.set('list_projects', () => {
+      if (listed) {
+        return [meta('sample-wu-ye-chu-zu-che'), meta('sample-du-shi-qi-yuan'), meta('user-p1')]
+      }
+      listed = true
+      return []
+    })
+    handlers.set('save_project', () => undefined)
+    // 递归重列后的升级检查会读取示例文件：返回新 schema → 无需覆盖
+    handlers.set('load_project', () => modernFile())
+    const { projectStore } = await load()
+    const list = await projectStore.list()
+    expect(list.map((x) => x.id)).toEqual(['sample-wu-ye-chu-zu-che', 'sample-du-shi-qi-yuan', 'user-p1'])
+    // 两个种子各写盘一次
+    expect(calls.filter((c) => c.cmd === 'save_project')).toHaveLength(2)
+    // Rust epoch 毫秒 → ISO 字符串
+    expect(list[0].updatedAt).toBe(new Date(1_700_000_000_000).toISOString())
+    expect(list[0].endingCount).toBe(2)
+  })
+
+  it('示例项目仍是旧 schema 时覆盖新种子；用户项目不读取不覆盖', async () => {
+    handlers.set('list_projects', () => [meta('sample-wu-ye-chu-zu-che'), meta('user-p1')])
+    handlers.set('load_project', (args) => {
+      const { id } = args as { id: string }
+      if (id !== 'sample-wu-ye-chu-zu-che') throw new Error('不应读取用户项目')
+      return { name: '旧示例', nodes: [], edges: [] } // settings 缺失 → 需迁移
+    })
+    handlers.set('save_project', () => undefined)
+    const { projectStore } = await load()
+    await projectStore.list()
+    expect(calls.filter((c) => c.cmd === 'load_project')).toHaveLength(1)
+    expect(calls.filter((c) => c.cmd === 'save_project')).toHaveLength(1)
+  })
+})
+
+describe('tauriCreate / delete / duplicate', () => {
+  it('create 与 delete 的命令透传', async () => {
+    handlers.set('create_project', () => ({ ...meta('new-1'), name: '新剧' }))
+    handlers.set('delete_project', () => undefined)
+    const { projectStore } = await load()
+    const created = await projectStore.create('新剧')
+    expect(created.id).toBe('new-1')
+    expect(calls[0]).toEqual({ cmd: 'create_project', args: { name: '新剧' } })
+    await projectStore.delete('new-1')
+    expect(calls[1]).toEqual({ cmd: 'delete_project', args: { id: 'new-1' } })
+  })
+
+  it('duplicate = load → create → saveQuiet 全链路（副本名拼接）', async () => {
+    handlers.set('load_project', () => modernFile())
+    handlers.set('create_project', (args) => ({ ...meta('copy-1'), name: (args as { name: string }).name }))
+    handlers.set('save_project', () => undefined)
+    const { projectStore } = await load()
+    const copy = await projectStore.duplicate('p1')
+    expect(copy.name).toBe('现代剧 副本')
+    const save = calls.find((c) => c.cmd === 'save_project')
+    expect((save?.args as { doc: { name: string } }).doc.name).toBe('现代剧 副本')
+  })
+})

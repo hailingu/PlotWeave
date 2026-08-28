@@ -9,7 +9,17 @@ import { settingsStore } from './settingsStore'
 
 interface SettingsViewProps {
   /** 关闭设置返回上一界面（编辑器或首页）。 */
-  onClose: () => void
+  readonly onClose: () => void
+}
+
+/** 默认模型分段的提示文案：无可用模型 / 已选 / 未选（S3358 独立成函数）。 */
+function defaultModelHint(
+  optionCount: number,
+  chatModel: { provider: ProviderConfig; model: string } | null,
+): string {
+  if (optionCount === 0) return '暂无可用模型：请启用 provider、配置 API key 并添加模型 id。'
+  if (chatModel) return `当前对话走 ${chatModel.provider.label} · ${chatModel.model}。`
+  return '尚未选择默认模型，AI 面板将显示引导。'
 }
 
 /**
@@ -108,7 +118,9 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
                     checked={p.enabled}
                     onChange={(e) => patchProvider(p.id, { enabled: e.target.checked })}
                   />
-                  启用
+                  {/* 表达式容器显式化文本，避免与前一元素间的空白歧义（S6772）；
+                      视觉间距由 .settings-toggle 的 gap 提供 */}
+                  {'启用'}
                 </label>
               </div>
               <label className="pw-set-field">
@@ -133,14 +145,14 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
                     aria-label={`${p.label} API key`}
                     onChange={(e) => setKeyDraft((d) => ({ ...d, [p.id]: e.target.value }))}
                     onKeyDown={(e) => {
-                      if (e.key === 'Enter') void submitKey(p.id)
+                      if (e.key === 'Enter') submitKey(p.id)
                     }}
                   />
-                  <button type="button" className="pw-dialog-btn" onClick={() => void submitKey(p.id)}>
+                  <button type="button" className="pw-dialog-btn" onClick={() => submitKey(p.id)}>
                     保存
                   </button>
                   {keyStatus[p.id] && (
-                    <button type="button" className="pw-dialog-btn" onClick={() => void removeKey(p.id)}>
+                    <button type="button" className="pw-dialog-btn" onClick={() => removeKey(p.id)}>
                       清除
                     </button>
                   )}
@@ -185,13 +197,7 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
                 ))}
               </select>
             </label>
-            <p className="settings-hint">
-              {chatOptions.length === 0
-                ? '暂无可用模型：请启用 provider、配置 API key 并添加模型 id。'
-                : chatModel
-                  ? `当前对话走 ${chatModel.provider.label} · ${chatModel.model}。`
-                  : '尚未选择默认模型，AI 面板将显示引导。'}
-            </p>
+            <p className="settings-hint">{defaultModelHint(chatOptions.length, chatModel)}</p>
           </div>
           <p className="settings-hint">
             API key 经 AES-256-GCM 加密后保存在本机设置文件（绑定此电脑），不回显明文；

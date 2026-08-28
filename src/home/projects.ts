@@ -23,12 +23,17 @@ export interface ProjectSummary {
   updatedAt: string
 }
 
+/** 结局数后缀：恰双结局用固定文案，更多则计数；单结局/未知不加。 */
+function endingsSuffix(endings: number): string {
+  if (endings === 2) return ' · 双结局'
+  if (endings > 2) return ` · ${endings} 结局`
+  return ''
+}
+
 /** 海报底部统计文案：「24 场 · 双结局」。 */
 export function projectStatsLabel(project: ProjectSummary): string {
   const endings = project.endingCount ?? 0
-  const suffix =
-    endings === 2 ? ' · 双结局' : endings > 2 ? ` · ${endings} 结局` : ''
-  return `${project.sceneCount} 场${suffix}`
+  return `${project.sceneCount} 场${endingsSuffix(endings)}`
 }
 
 /** 按剧名做内存过滤；空白查询返回全部。 */

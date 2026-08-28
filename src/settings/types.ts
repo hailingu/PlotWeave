@@ -55,38 +55,66 @@ export function defaultSettings(): AppSettings {
   }
 }
 
+/** 字符串读取：非字符串取兜底。 */
+function strOf(v: unknown, fallback: string): string {
+  return typeof v === 'string' ? v : fallback
+}
+
+/** 非空字符串读取：空串也取兜底。 */
+function nonEmptyOf(v: unknown, fallback: string): string {
+  const s = typeof v === 'string' ? v : ''
+  return s !== '' ? s : fallback
+}
+
+/** 字符串数组读取：过滤非字符串项。 */
+function strArrayOf(v: unknown): string[] {
+  return Array.isArray(v) ? v.filter((m): m is string => typeof m === 'string') : []
+}
+
+/** stored 条目里读取可透传的 keyEnc envelope（非 pw1: 前缀丢弃）。 */
+function keyEncOf(found: unknown): string | undefined {
+  const v = (found as { keyEnc?: unknown } | null)?.keyEnc
+  return typeof v === 'string' && v.startsWith('pw1:') ? v : undefined
+}
+
+/** 内置 provider 与存量配置合并：存量缺席时补回内置默认（S3776 拆分）。 */
+function mergeBuiltinProvider(builtin: ProviderConfig, stored: unknown[]): ProviderConfig {
+  const found = stored.find((p) => (p as { id?: unknown } | null)?.id === builtin.id)
+  if (!found) return { ...builtin, models: [...builtin.models] }
+  return {
+    ...builtin,
+    baseUrl: nonEmptyOf((found as { baseUrl?: unknown }).baseUrl, builtin.baseUrl),
+    enabled: (found as { enabled?: unknown }).enabled !== false,
+    models: strArrayOf((found as { models?: unknown }).models),
+    keyEnc: keyEncOf(found),
+  }
+}
+
+/** 自定义 provider（内置之外）的规范化条目；无效条目返回 null。 */
+function customProviderOf(p: unknown): ProviderConfig | null {
+  if (typeof p !== 'object' || p === null) return null
+  const id = (p as { id?: unknown }).id
+  if (typeof id !== 'string' || BUILTIN_PROVIDERS.some((b) => b.id === id)) return null
+  const rec = p as Record<string, unknown>
+  return {
+    id,
+    label: nonEmptyOf(rec.label, id),
+    baseUrl: strOf(rec.baseUrl, ''),
+    enabled: rec.enabled !== false,
+    models: strArrayOf(rec.models),
+    keyEnc: keyEncOf(rec),
+  }
+}
+
 /** 旧文件/缺失字段合并为完整设置；内置 provider 缺席时补回。
  * keyEnc 随 provider 配置透传（非字符串/空串丢弃）。 */
 export function normalizeSettings(raw: unknown): AppSettings {
   const obj = (typeof raw === 'object' && raw !== null ? raw : {}) as Partial<AppSettings>
   const stored = Array.isArray(obj.providers) ? obj.providers : []
-  const keyEncOf = (found: unknown): string | undefined => {
-    const v = (found as { keyEnc?: unknown } | null)?.keyEnc
-    return typeof v === 'string' && v.startsWith('pw1:') ? v : undefined
-  }
-  const providers = BUILTIN_PROVIDERS.map((builtin) => {
-    const found = stored.find((p) => p?.id === builtin.id)
-    if (!found) return { ...builtin, models: [...builtin.models] }
-    return {
-      ...builtin,
-      baseUrl: typeof found.baseUrl === 'string' && found.baseUrl ? found.baseUrl : builtin.baseUrl,
-      enabled: found.enabled !== false,
-      models: Array.isArray(found.models) ? found.models.filter((m) => typeof m === 'string') : [],
-      keyEnc: keyEncOf(found),
-    }
-  })
-  // 自定义 provider（内置之外）
+  const providers = BUILTIN_PROVIDERS.map((b) => mergeBuiltinProvider(b, stored))
   for (const p of stored) {
-    if (p && typeof p.id === 'string' && !BUILTIN_PROVIDERS.some((b) => b.id === p.id)) {
-      providers.push({
-        id: p.id,
-        label: typeof p.label === 'string' && p.label ? p.label : p.id,
-        baseUrl: typeof p.baseUrl === 'string' ? p.baseUrl : '',
-        enabled: p.enabled !== false,
-        models: Array.isArray(p.models) ? p.models.filter((m) => typeof m === 'string') : [],
-        keyEnc: keyEncOf(p),
-      })
-    }
+    const custom = customProviderOf(p)
+    if (custom) providers.push(custom)
   }
   return {
     providers,

@@ -57,7 +57,7 @@
   );
 }
 
-/* 拖拽调宽手柄：贴面板内缘的窄热区，无可见线 */
+/* 拖拽调宽手柄：贴面板内缘的窄热区，无可见线（原生 hr，重置 UA 边框/外距） */
 .pw-panel-resizer {
   position: absolute;
   top: 0;
@@ -65,6 +65,8 @@
   width: 5px;
   cursor: col-resize;
   z-index: 5;
+  border: none;
+  margin: 0;
 }
 
 .pw-panel-left .pw-panel-resizer {
@@ -80,12 +82,15 @@
   background: var(--fill-quaternary);
 }
 
-/* ---- 分段控件 ---- */
+/* ---- 分段控件（原生 fieldset，重置 UA 边框/外距） ---- */
 .pw-seg {
   display: flex;
   background: var(--fill-quaternary);
   border-radius: 7px;
   padding: 2px;
+  border: none;
+  margin: 0;
+  min-inline-size: 0;
 }
 
 .pw-seg-item {

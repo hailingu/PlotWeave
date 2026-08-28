@@ -43,7 +43,7 @@ describe('buildGraphDigest（§6/§12.2 画布快照：id + 参数 + 连线语�
       id: 'br1',
       type: 'branch',
       position: { x: 600, y: 0 },
-      data: { prompt: '追或不追？', options: ['追', '不追'] },
+      data: { prompt: '追或不追？', options: [{ id: 'o1', label: '追' }, { id: 'o2', label: '不追' }] },
     }),
     node({
       id: 'sh1',

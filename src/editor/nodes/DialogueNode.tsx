@@ -45,14 +45,14 @@ export default function DialogueNode({ id, data, selected }: NodeProps<DialogueF
         </button>
       </div>
       <div className="pw-dlg-body">
-        {data.lines.map((line, i) =>
+        {data.lines.map((line) =>
           line.kind === 'action' ? (
-            <div key={i} className="pw-dlg-act">
+            <div key={line.id} className="pw-dlg-act">
               {line.text}
             </div>
           ) : (
             <div
-              key={i}
+              key={line.id}
               className={`pw-dlg-bubrow${line.side === 'right' ? ' pw-right' : ''}`}
             >
               {line.speaker &&

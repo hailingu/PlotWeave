@@ -61,6 +61,18 @@ export function wouldCreateCycle(
   return false
 }
 
+/** 新连线的差异化字段（§4.4，EditorView.onConnect 用）：
+ * branch 选项出口 / attach 下挂 / 默认 sequence。 */
+export function connectEdgeExtras(
+  fromBranchOption: boolean,
+  branchData: { optionLabel: string } | undefined,
+  fromShotHandle: boolean,
+): { type?: 'branch'; data?: { optionLabel: string }; className?: string } {
+  if (fromBranchOption) return { type: 'branch' as const, data: branchData }
+  if (fromShotHandle) return { className: 'pw-edge-attach' }
+  return { className: 'pw-edge-sequence' }
+}
+
 /** 同端点重复边；sourceHandle 不同视为不同端口的不同边。 */
 export function isDuplicateEdge(
   edges: Iterable<EndpointPair & { sourceHandle?: string | null }>,

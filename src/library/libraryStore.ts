@@ -5,6 +5,8 @@
  * 「拖上画布 = 拷贝进项目」随项目资产管线另行落地）。
  */
 
+import { uid } from '../uid'
+
 export type LibraryKind =
   | 'character'
   | 'location'
@@ -51,8 +53,11 @@ interface RawAsset {
   createdAt?: unknown
 }
 
-function normalizeAsset(raw: RawAsset): LibraryAsset | null {
-  if (typeof raw.id !== 'string' || raw.id === '') return null
+function normalizeAsset(raw: RawAsset | null): LibraryAsset | null {
+  // IPC 信任边界：非对象载荷（含 null）整条丢弃，不向上抛 TypeError
+  if (raw === null || typeof raw !== 'object' || typeof raw.id !== 'string' || raw.id === '') {
+    return null
+  }
   return {
     id: raw.id,
     name: typeof raw.name === 'string' && raw.name !== '' ? raw.name : '未命名资产',
@@ -107,7 +112,7 @@ export const libraryStore = {
 
   put: (file: File, kind: LibraryKind): Promise<LibraryAsset> => {
     if (isTauri) return tauriPut(file, kind)
-    const id = `local-la-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
+    const id = uid('local-la')
     const asset: LibraryAsset = {
       id,
       name: file.name,

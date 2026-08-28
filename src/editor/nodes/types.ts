@@ -37,8 +37,10 @@ export interface SceneNodeData extends Record<string, unknown> {
   episodeNo?: number
 }
 
-/** 对白的一行：角色台词（带说话人与左右侧）或居中动作行。 */
+/** 对白的一行：角色台词（带说话人与左右侧）或居中动作行。
+ * id 为稳定标识（S6479：列表渲染/编辑的 key 不用数组下标）。 */
 export interface DialogueLine {
+  id: string
   kind: 'line' | 'action'
   text: string
   /** kind = line 时的说话人实体 id（设定集角色）；左右交替由 side 决定。 */
@@ -65,16 +67,25 @@ export interface BeatNodeData extends Record<string, unknown> {
   episodeNo?: number
 }
 
+/** 分支的一个选项：出口端口按下标定位（option-N），label 为胶囊文案。
+ * id 为稳定标识（S6479：列表渲染/编辑的 key 不用数组下标）。 */
+export interface BranchOption {
+  id: string
+  label: string
+}
+
 /** 分支节点（岔路路标）：分岔事由为问句，选项右缘各带独立出口端口。 */
 export interface BranchNodeData extends Record<string, unknown> {
   prompt: string
-  options: string[]
+  options: BranchOption[]
   /** 集归属（§3.5）。 */
   episodeNo?: number
 }
 
-/** 分镜卡的 AI 燃料引用位：角色垫图 / 场景底图 / 音频，首版为缩略 chip 占位。 */
+/** 分镜卡的 AI 燃料引用位：角色垫图 / 场景底图 / 音频，首版为缩略 chip 占位。
+ * id 为稳定标识（S6479：列表渲染/编辑的 key 不用数组下标）。 */
 export interface ShotRef {
+  id: string
   kind: 'character' | 'location' | 'audio'
   label: string
 }

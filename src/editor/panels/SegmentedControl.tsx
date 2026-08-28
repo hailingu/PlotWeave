@@ -10,10 +10,10 @@ export interface SegmentOption<T extends string> {
 
 interface SegmentedControlProps<T extends string> {
   /** 无障碍分组名（如「左栏分段」）。 */
-  groupLabel: string
-  options: SegmentOption<T>[]
-  value: T
-  onChange: (value: T) => void
+  readonly groupLabel: string
+  readonly options: SegmentOption<T>[]
+  readonly value: T
+  readonly onChange: (value: T) => void
 }
 
 export default function SegmentedControl<T extends string>({
@@ -23,7 +23,8 @@ export default function SegmentedControl<T extends string>({
   onChange,
 }: SegmentedControlProps<T>) {
   return (
-    <div className="pw-seg" role="group" aria-label={groupLabel}>
+    // 原生 fieldset 承载分组语义（S6819）；UA 边框/外距在 .pw-seg 重置
+    <fieldset className="pw-seg" aria-label={groupLabel}>
       {options.map((opt) => (
         <button
           key={opt.value}
@@ -35,6 +36,6 @@ export default function SegmentedControl<T extends string>({
           {opt.label}
         </button>
       ))}
-    </div>
+    </fieldset>
   )
 }

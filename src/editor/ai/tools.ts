@@ -152,6 +152,60 @@ export const WRITE_TOOL_NAMES = new Set([
   'batch',
 ])
 
+/** LLM 参数安全字符串化：非字符串（对象/数组/数字）一律归空，
+ * 避免 '[object Object]' 之类的默认串化潜入命令字段（S6551）。 */
+const asId = (v: unknown): string => (typeof v === 'string' ? v : '')
+
+/** patch 参数形状守卫：非纯对象回退为空补丁，由下游校验器把关。 */
+const asPatch = (v: unknown): Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v)
+    ? (v as Record<string, unknown>)
+    : {}
+
+/** 单工具 → 单命令的映射表（S3776：替代 if/else 链）；batch 一对多，循环内单独处理。 */
+const WRITE_MAPPERS: Record<string, (args: Record<string, unknown>) => AiCommand> = {
+  create_node: (a) => ({
+    op: 'create_node',
+    nodeType: asId(a.nodeType),
+    ref: a.ref,
+    data: a.data,
+    reason: a.reason,
+  }),
+  update_node_spec: (a) => ({
+    op: 'update_node',
+    nodeId: asId(a.nodeId),
+    patch: asPatch(a.patch),
+    reason: a.reason,
+  }),
+  delete_node: (a) => ({ op: 'delete_node', nodeId: asId(a.nodeId), reason: a.reason }),
+  connect_edge: (a) => ({
+    op: 'connect_edge',
+    sourceId: asId(a.sourceId),
+    targetId: asId(a.targetId),
+    edgeKind: a.edgeKind,
+    optionIndex: a.optionIndex,
+    reason: a.reason,
+  }),
+  disconnect_edge: (a) => ({
+    op: 'disconnect_edge',
+    sourceId: asId(a.sourceId),
+    targetId: asId(a.targetId),
+    reason: a.reason,
+  }),
+}
+
+/** batch 内单条命令归一：模型常把工具名当 op 写进批次
+ * （update_node_spec）——在此归一为命令词表。 */
+function normalizeBatchCommand(cmd: unknown): AiCommand {
+  const isSpecAlias =
+    typeof cmd === 'object' &&
+    cmd !== null &&
+    !Array.isArray(cmd) &&
+    (cmd as { op?: unknown }).op === 'update_node_spec'
+  if (isSpecAlias) return { ...(cmd as Record<string, unknown>), op: 'update_node' } as AiCommand
+  return cmd as AiCommand
+}
+
 export interface ReadRequest {
   /** tool_call id，回喂 role:'tool' 消息时透传。 */
   id: string
@@ -190,66 +244,18 @@ export function toolCallsToCommands(calls: ToolCall[]): ToolCallParse {
       readRequests.push({ id: c.id, name, args })
       continue
     }
-    if (!WRITE_TOOL_NAMES.has(name)) {
-      errors.push(`未知工具：${name}（${c.id}）`)
+    const mapper = WRITE_MAPPERS[name]
+    if (mapper) {
+      commands.push(mapper(args))
       continue
     }
-
-    if (name === 'create_node') {
-      commands.push({
-        op: 'create_node',
-        nodeType: String(args.nodeType ?? ''),
-        ref: args.ref,
-        data: args.data,
-        reason: args.reason,
-      })
-    } else if (name === 'update_node_spec') {
-      commands.push({
-        op: 'update_node',
-        nodeId: String(args.nodeId ?? ''),
-        patch: (typeof args.patch === 'object' && args.patch !== null && !Array.isArray(args.patch)
-          ? args.patch
-          : {}) as Record<string, unknown>,
-        reason: args.reason,
-      })
-    } else if (name === 'delete_node') {
-      commands.push({ op: 'delete_node', nodeId: String(args.nodeId ?? ''), reason: args.reason })
-    } else if (name === 'connect_edge') {
-      commands.push({
-        op: 'connect_edge',
-        sourceId: String(args.sourceId ?? ''),
-        targetId: String(args.targetId ?? ''),
-        edgeKind: args.edgeKind,
-        optionIndex: args.optionIndex,
-        reason: args.reason,
-      })
-    } else if (name === 'disconnect_edge') {
-      commands.push({
-        op: 'disconnect_edge',
-        sourceId: String(args.sourceId ?? ''),
-        targetId: String(args.targetId ?? ''),
-        reason: args.reason,
-      })
-    } else {
-      // batch：commands 数组并入，形状由下游校验器把关；
-      // 模型常把工具名当 op 写进批次（update_node_spec）——在此归一为命令词表
+    if (name === 'batch') {
       const inner = args.commands
-      if (Array.isArray(inner)) {
-        commands.push(
-          ...inner.map((cmd) => {
-            if (
-              typeof cmd === 'object' &&
-              cmd !== null &&
-              !Array.isArray(cmd) &&
-              (cmd as { op?: unknown }).op === 'update_node_spec'
-            ) {
-              return { ...(cmd as Record<string, unknown>), op: 'update_node' } as AiCommand
-            }
-            return cmd as AiCommand
-          }),
-        )
-      } else errors.push(`batch 工具（${c.id}）：commands 不是数组`)
+      if (Array.isArray(inner)) commands.push(...inner.map(normalizeBatchCommand))
+      else errors.push(`batch 工具（${c.id}）：commands 不是数组`)
+      continue
     }
+    errors.push(`未知工具：${name}（${c.id}）`)
   }
 
   return { commands, readRequests, errors }

@@ -1,6 +1,5 @@
 import {
   useCallback,
-  useEffect,
   useMemo,
   useRef,
   useState,
@@ -24,45 +23,46 @@ import {
   type XYPosition,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import SceneNode, { SCENE_SHOT_HANDLE } from './nodes/SceneNode'
+import SceneNode from './nodes/SceneNode'
 import DialogueNode from './nodes/DialogueNode'
 import BeatNode from './nodes/BeatNode'
-import BranchNode, { BRANCH_OPTION_HANDLE_PREFIX } from './nodes/BranchNode'
+import BranchNode from './nodes/BranchNode'
 import ShotNode from './nodes/ShotNode'
 import BranchEdge from './edges/BranchEdge'
 import LeftPanel from './panels/LeftPanel'
 import RightPanel, { type RightTab } from './panels/RightPanel'
+import EditorTitlebar from './EditorTitlebar'
+import CanvasContextMenu from './CanvasContextMenu'
 import { NodeEditContext, type NodeEditApi } from './nodeEdit'
 import { useCommandHistory } from './history'
 import { readEntityPayload, PW_ENTITY_MIME } from './dragDrop'
 import ExportDialog from './ExportDialog'
 import { buildScriptMarkdown } from './exportScript'
-import { EditableName } from './nodes/settings/NodeSettingsPanel'
-import { isDuplicateEdge, branchOptionHandle, wouldCreateCycle } from './graphRules'
-import { buildGraphDigest } from './ai/graphDigest'
+import {
+  BRANCH_OPTION_HANDLE_PREFIX,
+  SCENE_SHOT_HANDLE,
+  connectEdgeExtras,
+  isDuplicateEdge,
+  wouldCreateCycle,
+} from './graphRules'
+import { compareCodeUnits } from '../compare'
 import {
   beatFulfillmentMap,
-  buildOutlineGroups,
   episodeOfNode,
   hostSceneMap,
   type BeatFulfillment,
   type OutlineDropTarget,
 } from './outline'
-import { planSpliceIntoSpine, type SplicePlan } from './spine'
-import {
-  extractBatchJson,
-  validateAiBatch,
-  type AiCommand,
-  type AiGraphSnapshot,
-  type BatchValidation,
-} from './ai/commands'
-import {
-  createCharacter,
-  createLocation,
-  resolveCharacterName,
-  resolveLocationName,
-  type ProjectSettings,
-} from './settings'
+import { outlineSplicePlan, spliceEdgesWith } from './outlineDrop'
+import { entityDropPatch } from './entityDrop'
+import { applyEpisodeTitle } from './episodeTitle'
+import { useDebouncedSave } from './useDebouncedSave'
+import { useEditorHotkeys } from './useEditorHotkeys'
+import { useSettingsActions } from './useSettingsActions'
+import { useAiBridge } from './useAiBridge'
+import { buildCanvasNode } from './nodeFactory'
+import type { CreatableType } from './creatable'
+import type { ProjectSettings } from './settings'
 import type { CanvasNode } from './nodes/types'
 
 /** 画布节点类型注册：索引卡 / 对白 / 节奏卡 / 分支 / 分镜卡（docs/ui-design.md §4.2）。 */
@@ -81,7 +81,7 @@ const edgeTypes: EdgeTypes = {
 
 interface EditorViewProps {
   /** 打开的项目：id 用于持久化，name 用于标题栏与导出，doc 为已加载画布。 */
-  project: {
+  readonly project: {
     id: string
     name: string
     nodes: CanvasNode[]
@@ -91,45 +91,19 @@ interface EditorViewProps {
     episodeTitles?: Record<number, string>
   }
   /** 返回项目首页：同一窗口从编辑器状态切回文档浏览器（§3.1）。 */
-  onBackHome: () => void
+  readonly onBackHome: () => void
   /** 项目名内联重命名（§3.3 中区：更新 project.name + 首页索引）。 */
-  onRenameProject: (name: string) => void
+  readonly onRenameProject: (name: string) => void
   /** 打开设置页（§8.2 BYOK 配置入口，⌘,）。 */
-  onOpenSettings?: () => void
+  readonly onOpenSettings?: () => void
   /** 持久化写入（防抖节流由本组件负责；浏览器预览下为内存回退实现）。 */
-  onSave: (doc: {
+  readonly onSave: (doc: {
     name: string
     nodes: CanvasNode[]
     edges: Edge[]
     settings: ProjectSettings
     episodeTitles: Record<number, string>
   }) => void
-}
-
-/** ＋节点下拉的创建项（docs/ui-design.md §3.3：场景/节奏卡/对白/分支/分镜卡）。 */
-const CREATABLE_TYPES = ['scene', 'beat', 'dialogue', 'branch', 'shot'] as const
-type CreatableType = (typeof CREATABLE_TYPES)[number]
-
-const CREATE_LABELS: Record<CreatableType, string> = {
-  scene: '场景',
-  beat: '节奏卡',
-  dialogue: '对白',
-  branch: '分支',
-  shot: '分镜卡',
-}
-
-/** 落盘时剥离 React Flow 运行态字段（selected/measured/dragging 等），只存持久语义。 */
-function stripNode(n: CanvasNode): CanvasNode {
-  return { id: n.id, type: n.type, position: n.position, data: n.data } as CanvasNode
-}
-
-function stripEdge(e: Edge): Edge {
-  const out: Edge = { id: e.id, source: e.source, target: e.target }
-  if (e.sourceHandle) out.sourceHandle = e.sourceHandle
-  if (e.type) out.type = e.type
-  if (e.className) out.className = e.className
-  if (e.data !== undefined) out.data = e.data
-  return out
 }
 
 /**
@@ -150,6 +124,9 @@ export default function EditorView(props: EditorViewProps) {
  * 编辑器主体：节点创建（＋节点下拉）、⚙️ 设置面板（编辑即命令）、
  * 复制/删除，以及三栏面板开关。全部写操作经命令栈可撤销/重做
  * （§3.3 撤销重做、§4.3 删除可撤销）；画布变化防抖落盘（持久化）。
+ * 纯逻辑已拆至邻近模块：落盘调度 useDebouncedSave、全局快捷键
+ * useEditorHotkeys、设定集动作 useSettingsActions、✦AI 桥 useAiBridge、
+ * 大纲拖拽 outlineDrop、实体拖放 entityDrop、AI 批量模拟 ai/batchSim。
  */
 function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, onSave }: EditorViewProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNode>(project.nodes)
@@ -172,43 +149,10 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
   const episodeTitlesRef = useRef(episodeTitles)
   episodeTitlesRef.current = episodeTitles
 
-  // 持久化：画布变化防抖 600ms 全量落盘（剥离 React Flow 运行态字段）；
-  // 跳过首次加载，仅在脏状态下卸载冲刷，避免「只打开不编辑」也盖更新时间戳。
-  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const dirtyRef = useRef(false)
-  const latestRef = useRef({
-    name: project.name,
-    nodes,
-    edges,
-    settings,
-    episodeTitles,
-  })
-  latestRef.current = { name: project.name, nodes, edges, settings, episodeTitles }
-  const firstRender = useRef(true)
-  const flushSave = useCallback(() => {
-    if (!dirtyRef.current) return
-    dirtyRef.current = false
-    const { name, nodes: ns, edges: es, settings: st, episodeTitles: et } = latestRef.current
-    onSave({ name, nodes: ns.map(stripNode), edges: es.map(stripEdge), settings: st, episodeTitles: et })
-  }, [onSave])
-  useEffect(() => {
-    if (firstRender.current) {
-      firstRender.current = false
-      return
-    }
-    dirtyRef.current = true
-    if (saveTimer.current) clearTimeout(saveTimer.current)
-    saveTimer.current = setTimeout(() => {
-      saveTimer.current = null
-      flushSave()
-    }, 600)
-  }, [nodes, edges, settings, project.name, flushSave])
-  useEffect(() => {
-    return () => {
-      if (saveTimer.current) clearTimeout(saveTimer.current)
-      flushSave()
-    }
-  }, [flushSave])
+  useDebouncedSave(
+    { name: project.name, nodes, edges, settings, episodeTitles },
+    onSave,
+  )
 
   // 命令栈（§3.3/§4.3）：全部写操作入栈，undo 始终兜底
   const {
@@ -265,7 +209,7 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
       for (const k of keys) before[k] = (cur.data as Record<string, unknown>)[k]
       applyDataPatch(id, patch)
       pushHistory({
-        coalesceKey: `patch:${id}:${[...keys].sort().join(',')}`,
+        coalesceKey: `patch:${id}:${[...keys].sort(compareCodeUnits).join(',')}`,
         undo: () => applyDataPatch(id, before),
         redo: () => applyDataPatch(id, patch),
       })
@@ -342,87 +286,18 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
   /** 🗑 单节点删除（⚙️ 面板入口），走同一命令路径。 */
   const deleteNode = useCallback((id: string) => deleteNodesByIds([id]), [deleteNodesByIds])
 
-  /** 设定集补丁命令（§5）：undo/redo 闭包整体替换 settings。 */
-  const applySettings = useCallback(
-    (next: ProjectSettings) => setSettings(next),
-    [],
-  )
-  const patchSettings = useCallback(
-    (before: ProjectSettings, after: ProjectSettings) => {
-      setSettings(after)
-      pushHistory({ undo: () => applySettings(before), redo: () => applySettings(after) })
-    },
-    [applySettings, pushHistory],
-  )
-
-  /** 设定集编辑动作（§5）：新增用占位名，改名经 Map 替换，删除不自动清除节点引用。 */
-  const settingsActions = useMemo(
-    () => ({
-      addCharacter: () => {
-        const entity = createCharacter('新角色')
-        patchSettings(settings, {
-          ...settings,
-          characters: [...settings.characters, entity],
-        })
-      },
-      renameCharacter: (id: string, name: string) =>
-        patchSettings(settings, {
-          ...settings,
-          characters: settings.characters.map((c) => (c.id === id ? { ...c, name } : c)),
-        }),
-      deleteCharacter: (id: string) =>
-        patchSettings(settings, {
-          ...settings,
-          characters: settings.characters.filter((c) => c.id !== id),
-        }),
-      addLocation: () => {
-        const entity = createLocation('新地点')
-        patchSettings(settings, {
-          ...settings,
-          locations: [...settings.locations, entity],
-        })
-      },
-      renameLocation: (id: string, name: string) =>
-        patchSettings(settings, {
-          ...settings,
-          locations: settings.locations.map((l) => (l.id === id ? { ...l, name } : l)),
-        }),
-      deleteLocation: (id: string) =>
-        patchSettings(settings, {
-          ...settings,
-          locations: settings.locations.filter((l) => l.id !== id),
-        }),
-    }),
-    [patchSettings, settings],
-  )
+  const { settingsActions } = useSettingsActions(settings, setSettings, pushHistory)
 
   /** 集 = 编号 + 大纲行内标题（§3.5，不建集实体表）：改名即命令，连续
    * 输入按同键合并为一步撤销；标题清空 = 移除该集命名。 */
   const renameEpisode = useCallback(
     (no: number, title: string) => {
       const before = episodeTitlesRef.current[no] ?? ''
-      const next = title.trim()
-      setEpisodeTitles((t) => {
-        if (next === '') {
-          const rest = { ...t }
-          delete rest[no]
-          return rest
-        }
-        return { ...t, [no]: next }
-      })
+      setEpisodeTitles((t) => applyEpisodeTitle(t, no, title))
       pushHistory({
         coalesceKey: `episode-title:${no}`,
-        undo: () =>
-          setEpisodeTitles((t) => {
-            if (before === '') {
-              const rest = { ...t }
-              delete rest[no]
-              return rest
-            }
-            return { ...t, [no]: before }
-          }),
-        redo: () =>
-          setEpisodeTitles((t) => (next === '' ? { ...t, [no]: next } : { ...t, [no]: next })),
+        undo: () => setEpisodeTitles((t) => applyEpisodeTitle(t, no, before)),
+        redo: () => setEpisodeTitles((t) => applyEpisodeTitle(t, no, title)),
       })
     },
     [pushHistory],
@@ -446,48 +321,26 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
   }, [nodes, edges, focusedEpisode])
 
   /** 大纲拖拽落点（§3.5）：重排 sequence 边 + 跨组改集归属，
-   * 计划由 spine.ts 纯函数产出，这里整体翻译为**一条**可撤销命令。 */
+   * 计划由 outlineDrop/spine 纯函数产出，这里整体翻译为**一条**可撤销命令。 */
   const onOutlineDrop = useCallback(
     (draggedId: string, target: OutlineDropTarget) => {
       const dragged = nodesRef.current.find((n) => n.id === draggedId)
       if (!dragged) return
 
       // 1) 接缝计划（groupEnd 锚到该组最后一个剧情流行）
-      let plan: SplicePlan | null = null
-      let anchorId: string | null = null
-      if (target.kind === 'row') {
-        anchorId = target.anchorId
-        plan = planSpliceIntoSpine(edgesRef.current, draggedId, anchorId, target.position)
-        if (!plan) return
-      } else {
-        const group = buildOutlineGroups(
-          nodesRef.current,
-          edgesRef.current,
-          episodeTitlesRef.current,
-        ).find((g) => g.episode === target.episode)
-        const spineRows = (group?.rows ?? []).filter(
-          (r) => r.id !== draggedId && r.level < 3,
-        )
-        for (let i = spineRows.length - 1; i >= 0; i--) {
-          const cand = planSpliceIntoSpine(
-            edgesRef.current,
-            draggedId,
-            spineRows[i].id,
-            'after',
-          )
-          if (cand) {
-            plan = cand
-            anchorId = spineRows[i].id
-            break
-          }
-        }
-      }
-      if (!plan) return
+      const planned = outlineSplicePlan(
+        nodesRef.current,
+        edgesRef.current,
+        episodeTitlesRef.current,
+        draggedId,
+        target,
+      )
+      if (!planned) return
+      const { plan, anchorId } = planned
 
       // 2) 落点集归属：行落点随锚点所在组，组尾落点即目标组
       const sceneByShot = hostSceneMap(nodesRef.current, edgesRef.current)
-      const anchorNode =
-        anchorId !== null ? nodesRef.current.find((n) => n.id === anchorId) : undefined
+      const anchorNode = nodesRef.current.find((n) => n.id === anchorId)
       const targetEpisode =
         target.kind === 'groupEnd' ? target.episode : episodeOfNode(anchorNode!, (id) => sceneByShot.get(id))
       const oldEpisodeRaw = (dragged.data as { episodeNo?: unknown }).episodeNo
@@ -499,20 +352,16 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
 
       // 3) 单命令执行：边手术 + episodeNo 补丁，一步撤销整批回滚
       const stamp = Date.now().toString(36)
-      const removedEdges = edgesRef.current.filter((e) => plan!.removes.includes(e.id))
-      const addedEdges: Edge[] = plan!.adds.map(({ source, target: t }, i) => ({
+      const removedEdges = edgesRef.current.filter((e) => plan.removes.includes(e.id))
+      const addedEdges: Edge[] = plan.adds.map(({ source, target: t }, i) => ({
         id: `e-${source}-out-${t}-mv-${stamp}-${i}`,
         source,
         target: t,
         className: 'pw-edge-sequence',
       }))
-      const applyEdges = (remove: boolean) => {
+      const applyEdges = (redo: boolean) => {
         if (addedEdges.length === 0 && removedEdges.length === 0) return
-        setEdges((eds) =>
-          remove
-            ? [...eds.filter((e) => !removedEdges.some((r) => r.id === e.id)), ...addedEdges]
-            : [...eds.filter((e) => !addedEdges.some((a) => a.id === e.id)), ...removedEdges],
-        )
+        setEdges((eds) => spliceEdgesWith(eds, removedEdges, addedEdges, redo))
       }
       const patchEp = (ep: number | null) =>
         applyDataPatch(draggedId, { episodeNo: ep ?? undefined })
@@ -548,82 +397,6 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
     [beatFulfillment],
   )
 
-  /** 节点人读标签：画布快照、改动预览与批次执行共用。 */
-  const nodeLabel = useCallback((n: CanvasNode): string => {
-    switch (n.type) {
-      case 'scene': return `场${n.data.sceneNo}·${n.data.name}`
-      case 'dialogue': return `对白·${n.data.name}`
-      case 'beat': return `节拍·${n.data.name}`
-      case 'branch': return `分支·${n.data.prompt}`
-      case 'shot': return `SHOT${n.data.shotNo}·${n.data.size}`
-    }
-  }, [])
-
-  /** 画布上下文快照（§6「了解当前画布」+ 数据模型 §12.2 压缩视图）：
-   * 节点 id/参数、连线语义、剧情流投影与设定集 id——AI 写回命令的锚点。 */
-  const canvasDigest = useMemo(
-    () =>
-      buildGraphDigest(nodes, edges, {
-        characters: settings.characters,
-        locations: settings.locations,
-        characterName: (id) => resolveCharacterName(settings, id),
-        locationName: (id) => resolveLocationName(settings, id),
-      }),
-    [nodes, edges, settings],
-  )
-
-  /** AI 校验用的图快照（§12.2）：类型 + 分支选项数供分类型校验。 */
-  const aiSnapshot = useCallback(
-    (): AiGraphSnapshot => ({
-      nodes: nodesRef.current.map((n) => ({
-        id: n.id,
-        type: n.type,
-        label: nodeLabel(n),
-        ...(n.type === 'branch' ? { optionsCount: n.data.options.length } : {}),
-      })),
-      edges: edgesRef.current.map((e) => ({
-        source: e.source,
-        target: e.target,
-        sourceHandle: e.sourceHandle,
-        type: e.type,
-      })),
-    }),
-    [nodeLabel],
-  )
-
-  /** 解析并整批校验助手回复里的命令；无批次（纯讨论）返回 null。
-   * 校验语义见 ai/commands.ts：任一条非法则整批拒绝。 */
-  const validateAiReply = useCallback(
-    (text: string): BatchValidation | null => {
-      const parsed = extractBatchJson(text)
-      if (!parsed) return null
-      return validateAiBatch(parsed.commands, aiSnapshot())
-    },
-    [aiSnapshot],
-  )
-
-  /** tool-calling 通道：工具调用映射出的命令数组走同一整批校验。 */
-  const validateCommands = useCallback(
-    (commands: AiCommand[]): BatchValidation | null => validateAiBatch(commands, aiSnapshot()),
-    [aiSnapshot],
-  )
-
-  /** 读工具 get_node：返回节点完整字段 JSON；不存在返回 null。 */
-  const readNode = useCallback((nodeId: string): string | null => {
-    const n = nodesRef.current.find((x) => x.id === nodeId)
-    return n ? JSON.stringify({ id: n.id, type: n.type, data: n.data }) : null
-  }, [])
-
-
-  /** 大纲 ⇄ 画布联动（§3.5）：点击大纲行 = 选中该节点并居中。 */
-  const locateNode = useCallback(
-    (id: string) => {
-      setNodes((nds) => nds.map((n) => ({ ...n, selected: n.id === id })))
-      fitView({ nodes: [{ id }], duration: 400, maxZoom: 1 })
-    },
-    [fitView, setNodes],
-  )
-
   /** 连线实时校验（§4.3）：自环 / 成环 / 重复边为非法；attach 下挂一对多合法。
    * 判定语义与 AI 批量校验共用 graphRules 纯函数；attach 是垂直派生边，
    * 不参与剧情流环检测（§4.4 横向 = 剧情顺序，垂直 = 派生从属）。 */
@@ -641,94 +414,24 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
 
   /** 新建节点的对象构建（默认字段 + 落点），不入状态、不入栈。
    * 手动创建与 ✦AI 批量创建共用；against 提供场号/镜号的基线列表
-   * （批量连续创建时传模拟数组防止编号重复）。 */
+   * （批量连续创建时传模拟数组防止编号重复）。纯构建逻辑见 nodeFactory。 */
   const buildNewNode = useCallback(
     (
       type: CreatableType,
       opts?: { at?: XYPosition; selected?: boolean; data?: Record<string, unknown>; against?: CanvasNode[] },
     ): CanvasNode => {
-      const nds = opts?.against ?? nodesRef.current
-      const select = opts?.selected ?? true
-      const maxNo = (pick: (n: CanvasNode) => number) =>
-        Math.max(0, ...nds.map(pick)) + 1
-      let node: CanvasNode
-      if (type === 'scene') {
-        node = {
-          id: `scene-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          type: 'scene',
-          position: { x: 0, y: 0 },
-          selected: select,
-          data: {
-            name: '新场景',
-            sceneNo: maxNo((n) => (n.type === 'scene' ? n.data.sceneNo : 0)),
-            interior: true,
-            time: '🌙 夜',
-            synopsis: '这一场发生了什么…',
-            characterIds: [],
-            ...opts?.data,
-          },
-        }
-      } else if (type === 'beat') {
-        node = {
-          id: `beat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          type: 'beat',
-          position: { x: 0, y: 0 },
-          selected: select,
-          data: { name: '新节拍', tone: '待定', ...opts?.data },
-        }
-      } else if (type === 'dialogue') {
-        node = {
-          id: `dialogue-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          type: 'dialogue',
-          position: { x: 0, y: 0 },
-          selected: select,
-          data: {
-            name: '新对白',
-            lines: [
-              { kind: 'line', speaker: settings.characters[0]?.id, side: 'left', text: '新台词…' },
-            ],
-            ...opts?.data,
-          },
-        }
-      } else if (type === 'branch') {
-        node = {
-          id: `branch-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          type: 'branch',
-          position: { x: 0, y: 0 },
-          selected: select,
-          data: { prompt: '新的分岔是…？', options: ['选项 A', '选项 B'], ...opts?.data },
-        }
-      } else {
-        node = {
-          id: `shot-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          type: 'shot',
-          position: { x: 0, y: 0 },
-          selected: select,
-          data: {
-            shotNo: maxNo((n) => (n.type === 'shot' ? n.data.shotNo : 0)),
-            size: '中景',
-            picture: '画面描述…',
-            prompt: '',
-            refs: [],
-            ...opts?.data,
-          },
-        }
-      }
-      const cascade = (nds.length % 5) * 28
-      if (opts?.at) {
-        node.position = opts.at
-      } else {
-        // 落在当前视口中心，连续创建时阶梯偏移避免叠死
-        const rect = canvasRef.current?.getBoundingClientRect()
-        if (rect) {
-          const center = screenToFlowPosition({
+      const rect = opts?.at ? undefined : canvasRef.current?.getBoundingClientRect()
+      const center = rect
+        ? screenToFlowPosition({
             x: rect.left + rect.width / 2,
             y: rect.top + rect.height / 2,
           })
-          node.position = { x: center.x - 170 + cascade, y: center.y - 60 + cascade }
-        }
-      }
-      return node
+        : null
+      return buildCanvasNode(type, opts, {
+        against: opts?.against ?? nodesRef.current,
+        characters: settings.characters,
+        center,
+      })
     },
     [screenToFlowPosition, settings],
   )
@@ -748,142 +451,28 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
     [buildNewNode, pushHistory, setNodes],
   )
 
-  /** ✦AI 改动落地（§6 改动预览卡、数据模型 §12 Agent 是命令的另一个生产者）：
-   * 先按当前图重新整批校验（防预览后用户又改了画布），再逐条翻译为
-   * setNodes/setEdges 的前进/回退闭包，整体作为**一条**复合命令入栈——
-   * 执行整批生效，⌘Z 一步撤销即整批回滚。返回错误文案或 null。 */
-  const applyAiBatch = useCallback(
-    (batch: AiCommand[]): string | null => {
-      if (batch.length === 0) return null
-      const fresh = validateAiBatch(batch, aiSnapshot())
-      if (!fresh.ok) {
-        return `改动无法安全执行：${fresh.issues[0]?.message ?? '批次校验未通过'}`
-      }
+  // ✦AI 桥（§6/§12）：画布快照、整批校验、读工具、改动落地（一条复合命令入栈）
+  const { canvasDigest, validateAiReply, validateCommands, readNode, applyAiBatch } = useAiBridge({
+    nodes,
+    edges,
+    settings,
+    nodesRef,
+    edgesRef,
+    buildNewNode,
+    applyDataPatch,
+    setNodes,
+    setEdges,
+    pushHistory,
+    closeSettings,
+  })
 
-      // 折叠模拟：批量创建时场号/镜号基线与引用解析都基于虚拟终态，
-      // 每个动作的前进/回退闭包在模拟期一次性捕获，不做运行期查询。
-      let simNodes = [...nodesRef.current]
-      let simEdges = [...edgesRef.current]
-      const refToId = new Map<string, string>()
-      const resolveId = (raw: string): string => refToId.get(raw) ?? raw
-      const forward: Array<() => void> = []
-      const backward: Array<() => void> = []
-
-      for (const cmd of batch) {
-        switch (cmd.op) {
-          case 'create_node': {
-            const node = buildNewNode(cmd.nodeType as CreatableType, {
-              selected: false,
-              data: (cmd.data as Record<string, unknown>) ?? undefined,
-              against: simNodes,
-            })
-            if (typeof cmd.ref === 'string' && cmd.ref !== '') refToId.set(cmd.ref, node.id)
-            simNodes = [...simNodes, node]
-            forward.push(() => setNodes((all) => [...all, node]))
-            backward.push(() => setNodes((all) => all.filter((n) => n.id !== node.id)))
-            break
-          }
-          case 'update_node': {
-            const id = resolveId(cmd.nodeId)
-            const target = simNodes.find((n) => n.id === id)
-            if (!target) continue
-            const keys = Object.keys(cmd.patch)
-            const before: Record<string, unknown> = {}
-            for (const k of keys) before[k] = (target.data as Record<string, unknown>)[k]
-            simNodes = simNodes.map((n) =>
-              n.id === id ? ({ ...n, data: { ...n.data, ...cmd.patch } } as CanvasNode) : n,
-            )
-            forward.push(() => applyDataPatch(id, cmd.patch))
-            backward.push(() => applyDataPatch(id, before))
-            break
-          }
-          case 'delete_node': {
-            const removedId = resolveId(cmd.nodeId)
-            const idSet = new Set([removedId])
-            const removedNodes = simNodes.filter((n) => idSet.has(n.id))
-            if (removedNodes.length === 0) continue
-            const removedEdges = simEdges.filter((e) => idSet.has(e.source) || idSet.has(e.target))
-            simNodes = simNodes.filter((n) => !idSet.has(n.id))
-            simEdges = simEdges.filter((e) => !idSet.has(e.source) && !idSet.has(e.target))
-            // 状态删除内联（不走 deleteNodesByIds——那会额外入栈破坏单步撤销）
-            forward.push(() => {
-              setNodes((all) => all.filter((n) => n.id !== removedId))
-              setEdges((eds) => eds.filter((e) => e.source !== removedId && e.target !== removedId))
-            })
-            backward.push(() => {
-              setNodes((all) => [...all, ...removedNodes])
-              setEdges((eds) => [...eds, ...removedEdges])
-            })
-            break
-          }
-          case 'connect_edge': {
-            const srcId = resolveId(cmd.sourceId)
-            const dstId = resolveId(cmd.targetId)
-            const kind = typeof cmd.edgeKind === 'string' ? cmd.edgeKind : 'sequence'
-            let edge: Edge
-            if (kind === 'attach') {
-              // 分镜下挂（§4.4 垂直派生边）
-              edge = {
-                id: `e-${srcId}-shots-${dstId}-ai-${forward.length}`,
-                source: srcId,
-                target: dstId,
-                sourceHandle: SCENE_SHOT_HANDLE,
-                className: 'pw-edge-attach',
-              }
-            } else if (kind === 'branch') {
-              // 分支选项出口：胶囊文案与分支选项同源（§4.4 不落第二份拷贝语义）
-              const idx = typeof cmd.optionIndex === 'number' ? cmd.optionIndex : 0
-              const branchNode = simNodes.find((n) => n.id === srcId)
-              const optionLabel =
-                branchNode?.type === 'branch' ? (branchNode.data.options[idx] ?? '') : ''
-              edge = {
-                id: `e-${srcId}-${branchOptionHandle(idx)}-${dstId}-ai-${forward.length}`,
-                source: srcId,
-                target: dstId,
-                sourceHandle: branchOptionHandle(idx),
-                type: 'branch',
-                data: { optionLabel },
-              }
-            } else {
-              edge = {
-                id: `e-${srcId}-${dstId}-ai-${forward.length}`,
-                source: srcId,
-                target: dstId,
-                className: 'pw-edge-sequence',
-              }
-            }
-            simEdges = [...simEdges, edge]
-            forward.push(() => setEdges((eds) => addEdge(edge, eds)))
-            backward.push(() => setEdges((eds) => eds.filter((e) => e.id !== edge.id)))
-            break
-          }
-          case 'disconnect_edge': {
-            const srcId = resolveId(cmd.sourceId)
-            const dstId = resolveId(cmd.targetId)
-            const hitIdx = simEdges.findIndex(
-              (e) => e.source === srcId && e.target === dstId,
-            )
-            if (hitIdx < 0) continue
-            const removed = simEdges[hitIdx]
-            simEdges = [...simEdges.slice(0, hitIdx), ...simEdges.slice(hitIdx + 1)]
-            forward.push(() =>
-              setEdges((eds) => eds.filter((e) => !(e.source === removed.source && e.target === removed.target))),
-            )
-            backward.push(() => setEdges((eds) => addEdge(removed, eds)))
-            break
-          }
-        }
-      }
-
-      forward.forEach((f) => f())
-      pushHistory({
-        undo: () => [...backward].reverse().forEach((f) => f()),
-        redo: () => forward.forEach((f) => f()),
-      })
-      setOpenSettingsId(null)
-      return null
+  /** 大纲 ⇄ 画布联动（§3.5）：点击大纲行 = 选中该节点并居中。 */
+  const locateNode = useCallback(
+    (id: string) => {
+      setNodes((nds) => nds.map((n) => ({ ...n, selected: n.id === id })))
+      fitView({ nodes: [{ id }], duration: 400, maxZoom: 1 })
     },
-    [aiSnapshot, applyDataPatch, buildNewNode, pushHistory, setEdges, setNodes],
+    [fitView, setNodes],
   )
 
   const nodeEditApi = useMemo<NodeEditApi>(
@@ -902,59 +491,31 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
   )
 
   // 失焦收起（§4.3）＋ 全局快捷键：⌘Z/⌘⇧Z 撤销重做、Delete 删除选中。
-  useEffect(() => {
-    const onPointerDown = (e: PointerEvent) => {
-      const target = e.target as HTMLElement
-      if (!target.closest('[data-pw-settings],[data-pw-gear],.editor-plus,.editor-ctx')) {
-        closeSettings()
-        setPlusOpen(false)
-        setCtxMenu(null)
-      }
-    }
-    const onKeyDown = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement
-      const typing = target.closest('input,textarea,select,[contenteditable="true"]')
-      if (e.key === 'Escape') {
-        closeSettings()
-        setPlusOpen(false)
-        setCtxMenu(null)
-        setExportOpen(false)
-        return
-      }
-      if (typing) return
-      const mod = e.metaKey || e.ctrlKey
-      if (mod && e.key.toLowerCase() === 'z') {
-        e.preventDefault()
-        if (e.shiftKey) redoHistory()
-        else undoHistory()
-        return
-      }
-      if (mod && e.key.toLowerCase() === 'y') {
-        e.preventDefault()
-        redoHistory()
-        return
-      }
-      if (e.key === 'Delete' || e.key === 'Backspace') {
-        const nodeIds = nodesRef.current.filter((n) => n.selected).map((n) => n.id)
-        if (nodeIds.length > 0) {
-          e.preventDefault()
-          deleteNodesByIds(nodeIds)
-          return
-        }
-        const edgeIds = edgesRef.current.filter((ed) => ed.selected).map((ed) => ed.id)
-        if (edgeIds.length > 0) {
-          e.preventDefault()
-          deleteEdgesByIds(edgeIds)
-        }
-      }
-    }
-    document.addEventListener('pointerdown', onPointerDown)
-    document.addEventListener('keydown', onKeyDown)
-    return () => {
-      document.removeEventListener('pointerdown', onPointerDown)
-      document.removeEventListener('keydown', onKeyDown)
-    }
-  }, [closeSettings, deleteEdgesByIds, deleteNodesByIds, redoHistory, undoHistory])
+  useEditorHotkeys({
+    onEscape: useCallback(() => {
+      closeSettings()
+      setPlusOpen(false)
+      setCtxMenu(null)
+      setExportOpen(false)
+    }, [closeSettings]),
+    onCloseTransient: useCallback(() => {
+      closeSettings()
+      setPlusOpen(false)
+      setCtxMenu(null)
+    }, [closeSettings]),
+    onUndo: undoHistory,
+    onRedo: redoHistory,
+    selectedNodeIds: useCallback(
+      () => nodesRef.current.filter((n) => n.selected).map((n) => n.id),
+      [],
+    ),
+    selectedEdgeIds: useCallback(
+      () => edgesRef.current.filter((ed) => ed.selected).map((ed) => ed.id),
+      [],
+    ),
+    onDeleteNodes: deleteNodesByIds,
+    onDeleteEdges: deleteEdgesByIds,
+  })
 
   // 右键上下文菜单（§4.3：全部操作同时可从右键菜单到达）。
   // 节点菜单在右键时单选该节点；空白菜单复用 ＋节点 的五类创建。
@@ -989,25 +550,13 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
       const entity = readEntityPayload(e.dataTransfer)
       if (!entity) return
       e.preventDefault()
-      const nodeId = (e.target as HTMLElement).closest?.('.react-flow__node')?.getAttribute('data-id')
+      const hit = (e.target as HTMLElement).closest?.('.react-flow__node') as HTMLElement | null
+      const nodeId = hit?.dataset.id
       const node = nodeId ? nodesRef.current.find((n) => n.id === nodeId) : undefined
 
       if (node) {
-        if (entity.kind === 'character') {
-          if (node.type === 'scene' && !node.data.characterIds.includes(entity.id)) {
-            patchNode(node.id, { characterIds: [...node.data.characterIds, entity.id] })
-          } else if (node.type === 'dialogue') {
-            patchNode(node.id, {
-              lines: [...node.data.lines, { kind: 'line', speaker: entity.id, side: 'left', text: '新台词…' }],
-            })
-          } else if (node.type === 'shot' && !node.data.refs.some((r) => r.label === `${entity.name}垫图`)) {
-            patchNode(node.id, { refs: [...node.data.refs, { kind: 'character', label: `${entity.name}垫图` }] })
-          }
-        } else if (node.type === 'scene') {
-          patchNode(node.id, { locationId: entity.id })
-        } else if (node.type === 'shot' && !node.data.refs.some((r) => r.label === `${entity.name}底图`)) {
-          patchNode(node.id, { refs: [...node.data.refs, { kind: 'location', label: `${entity.name}底图` }] })
-        }
+        const patch = entityDropPatch(node, entity)
+        if (patch) patchNode(node.id, patch)
         return
       }
 
@@ -1067,17 +616,13 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
         const idx = Number(connection.sourceHandle!.slice(BRANCH_OPTION_HANDLE_PREFIX.length))
         const srcNode = nodesRef.current.find((n) => n.id === connection.source)
         branchData = {
-          optionLabel: srcNode?.type === 'branch' ? (srcNode.data.options[idx] ?? '') : '',
+          optionLabel: srcNode?.type === 'branch' ? (srcNode.data.options[idx]?.label ?? '') : '',
         }
       }
       const edge: Edge = {
         ...connection,
         id: `e-${connection.source}-${connection.sourceHandle ?? 'out'}-${connection.target}`,
-        ...(fromBranchOption
-          ? { type: 'branch' as const, data: branchData }
-          : fromShotHandle
-            ? { className: 'pw-edge-attach' }
-            : { className: 'pw-edge-sequence' }),
+        ...connectEdgeExtras(fromBranchOption ?? false, branchData, fromShotHandle),
       }
       setEdges((eds) => addEdge(edge, eds))
       pushHistory({
@@ -1088,123 +633,37 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
     [pushHistory, setEdges],
   )
 
+  /** 右栏页切换：同页再点收起，异页直接切换并展开。 */
+  const toggleRight = useCallback(
+    (tab: RightTab) => {
+      setRightTab(tab)
+      setRightOpen(rightTab !== tab || !rightOpen)
+    },
+    [rightTab, rightOpen],
+  )
+
   return (
     <NodeEditContext.Provider value={nodeEditApi}>
     <div className="editor-root">
       {/* Overlay 标题栏下整行作为窗口拖拽区；按钮可点击（§3.3）。 */}
-      <header className="editor-titlebar" data-tauri-drag-region>
-        <button
-          type="button"
-          className={`editor-tbtn${leftOpen ? ' on' : ''}`}
-          onClick={() => setLeftOpen((v) => !v)}
-          aria-pressed={leftOpen}
-          aria-label="切换边栏"
-          title="显示或隐藏边栏"
-        >
-          ▤
-        </button>
-        <button
-          type="button"
-          className="editor-tbtn"
-          onClick={undoHistory}
-          disabled={!canUndo}
-          aria-label="撤销"
-          title="撤销 (⌘Z)"
-        >
-          ↩︎
-        </button>
-        <button
-          type="button"
-          className="editor-tbtn"
-          onClick={redoHistory}
-          disabled={!canRedo}
-          aria-label="重做"
-          title="重做 (⌘⇧Z)"
-        >
-          ↪︎
-        </button>
-        <button
-          type="button"
-          className="editor-back"
-          onClick={onBackHome}
-          aria-label="返回首页"
-        >
-          ‹ 首页
-        </button>
-        {/* 项目名居中（§3.3 中区）：点击内联重命名 */}
-        <span className="editor-title">
-          <EditableName
-            value={project.name}
-            ariaLabel="项目名"
-            singleClick
-            onChange={onRenameProject}
-          />
-        </span>
-        <div className="editor-plus">
-          <button
-            type="button"
-            className={`editor-tbtn io${plusOpen ? ' on' : ''}`}
-            onClick={() => setPlusOpen((v) => !v)}
-            aria-pressed={plusOpen}
-            aria-haspopup="menu"
-            aria-expanded={plusOpen}
-            aria-label="新增节点"
-            title="新增节点"
-          >
-            ＋ 节点 ▾
-          </button>
-          {plusOpen && (
-            <div className="editor-menu" role="menu" aria-label="节点类型">
-              {CREATABLE_TYPES.map((type) => (
-                <button
-                  key={type}
-                  type="button"
-                  className="editor-menu-item"
-                  role="menuitem"
-                  onClick={() => createNode(type)}
-                >
-                  {CREATE_LABELS[type]}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-        <button
-          type="button"
-          className="editor-tbtn"
-          onClick={() => setExportOpen(true)}
-          aria-label="导出剧本"
-          title="导出剧本（场景 + 对白，分镜附录）"
-        >
-          ⤓ 导出
-        </button>
-        <button
-          type="button"
-          className={`editor-tbtn${rightOpen && rightTab === 'inspector' ? ' on' : ''}`}
-          onClick={() => {
-            setRightTab('inspector')
-            setRightOpen(rightTab !== 'inspector' || !rightOpen)
-          }}
-          aria-pressed={rightOpen && rightTab === 'inspector'}
-          aria-label="切换检查器"
-          title="显示或隐藏检查器"
-        >
-          ◫
-        </button>
-        <button
-          type="button"
-          className={`editor-tbtn editor-tbtn-ai${rightTab === 'ai' && rightOpen ? ' on' : ''}`}
-          onClick={() => {
-            setRightTab('ai')
-            setRightOpen(rightTab !== 'ai' || !rightOpen)
-          }}
-          aria-pressed={rightTab === 'ai' && rightOpen}
-          aria-label="切换 AI 面板"
-          title="显示或隐藏 ✦AI"
-        >
-          ✦ AI
-        </button>
-      </header>
+      <EditorTitlebar
+        projectName={project.name}
+        onRenameProject={onRenameProject}
+        leftOpen={leftOpen}
+        onToggleLeft={() => setLeftOpen((v) => !v)}
+        canUndo={canUndo}
+        canRedo={canRedo}
+        onUndo={undoHistory}
+        onRedo={redoHistory}
+        onBackHome={onBackHome}
+        plusOpen={plusOpen}
+        onTogglePlus={() => setPlusOpen((v) => !v)}
+        onCreateNode={(type) => createNode(type)}
+        onOpenExport={() => setExportOpen(true)}
+        inspectorOn={rightOpen && rightTab === 'inspector'}
+        aiOn={rightTab === 'ai' && rightOpen}
+        onToggleRight={toggleRight}
+      />
       <div className="editor-body">
         <LeftPanel
           open={leftOpen}
@@ -1273,80 +732,18 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
       </div>
       {/* 右键上下文菜单：节点 = 设置/复制/删除；空白 = 五类新增（§4.3） */}
       {ctxMenu && (
-        <div
-          className="editor-ctx"
-          style={{
-            left: Math.min(ctxMenu.x, window.innerWidth - 150),
-            top: ctxMenu.y,
-          }}
-          role="menu"
-          aria-label="画布上下文菜单"
-        >
-          {ctxMenu.nodeId ? (
-            <>
-              <button
-                type="button"
-                className="editor-menu-item"
-                role="menuitem"
-                onClick={() => {
-                  toggleSettings(ctxMenu.nodeId!)
-                  setCtxMenu(null)
-                }}
-              >
-                ⚙️ 打开设置
-              </button>
-              <button
-                type="button"
-                className="editor-menu-item"
-                role="menuitem"
-                onClick={() => {
-                  duplicateNode(ctxMenu.nodeId!)
-                  setCtxMenu(null)
-                }}
-              >
-                ⧉ 复制
-              </button>
-              <button
-                type="button"
-                className="editor-menu-item editor-menu-danger"
-                role="menuitem"
-                onClick={() => {
-                  deleteNodesByIds([ctxMenu.nodeId!])
-                  setCtxMenu(null)
-                }}
-              >
-                🗑 删除
-              </button>
-            </>
-          ) : ctxMenu.edgeId ? (
-            <button
-              type="button"
-              className="editor-menu-item editor-menu-danger"
-              role="menuitem"
-              onClick={() => {
-                deleteEdgesByIds([ctxMenu.edgeId!])
-                setCtxMenu(null)
-              }}
-            >
-              ✂️ 删除连线
-            </button>
-          ) : (
-            CREATABLE_TYPES.map((type) => (
-              <button
-                key={type}
-                type="button"
-                className="editor-menu-item"
-                role="menuitem"
-                onClick={() => {
-                  createNode(type)
-                  setCtxMenu(null)
-                }}
-              >
-                ＋ {CREATE_LABELS[type]}
-              </button>
-            ))
-          )}
-        </div>
+        <CanvasContextMenu
+          x={ctxMenu.x}
+          y={ctxMenu.y}
+          nodeId={ctxMenu.nodeId}
+          edgeId={ctxMenu.edgeId}
+          onToggleSettings={toggleSettings}
+          onDuplicate={duplicateNode}
+          onDeleteNode={(id) => deleteNodesByIds([id])}
+          onDeleteEdge={(id) => deleteEdgesByIds([id])}
+          onCreate={(type) => createNode(type)}
+          onClose={() => setCtxMenu(null)}
+        />
       )}
       {/* 剧本导出对话框（§3.3/§3.5）：打开时按当前画布生成 */}
       {exportOpen && (

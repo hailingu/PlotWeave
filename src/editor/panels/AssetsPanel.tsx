@@ -206,9 +206,9 @@ function AssetThumb({
   url,
   onVisible,
 }: {
-  asset: LibraryAsset
-  url?: string
-  onVisible: (asset: LibraryAsset) => void
+  readonly asset: LibraryAsset
+  readonly url?: string
+  readonly onVisible: (asset: LibraryAsset) => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {

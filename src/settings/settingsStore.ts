@@ -64,7 +64,7 @@ export const settingsStore = {
       const { invoke } = await import('@tauri-apps/api/core')
       keyEnc = await invoke<string>('set_provider_key', { providerId, key })
     } else {
-      keyEnc = `pw1:preview:${btoa(String.fromCharCode(...new TextEncoder().encode(key)))}`
+      keyEnc = `pw1:preview:${btoa(String.fromCodePoint(...new TextEncoder().encode(key)))}`
     }
     return {
       ...settings,

@@ -38,6 +38,24 @@ describe('extractBatchJson', () => {
     expect(extractBatchJson('纯文本回复，不改动画布')).toBeUndefined()
     expect(extractBatchJson('```json\nnot-json\n```')).toBeUndefined()
   })
+  it('多个围栏只取最后一个；最后一个非法时不回退到前面的合法围栏', () => {
+    expect(extractBatchJson('```json\nnot-json\n```\n```json\n{"commands":[]}\n```')).toEqual({
+      commands: [],
+    })
+    expect(extractBatchJson('```json\n{"commands":[]}\n```\n```json\nnot-json\n```')).toBeUndefined()
+  })
+  it('围栏标记大小写不敏感（```JSON 亦可）', () => {
+    expect(extractBatchJson('```JSON\n{"commands":[]}\n```')).toEqual({ commands: [] })
+  })
+  it('非 json 围栏（如 ```ts）不参与提取', () => {
+    expect(extractBatchJson('```ts\nconst x = 1\n```\n```json\n{"commands":[]}\n```')).toEqual({
+      commands: [],
+    })
+  })
+  it('未闭合的围栏不产出候选；裸批次须为完整文本，混入围栏杂讯则拒绝', () => {
+    expect(extractBatchJson('```json\n{"commands":[]}')).toBeUndefined()
+    expect(extractBatchJson('{"commands":[]}\n```json\nnot-closed')).toBeUndefined()
+  })
 })
 
 describe('validateAiBatch：校验折叠（数据模型 §12，执行前批量预览）', () => {
@@ -111,6 +129,127 @@ describe('validateAiBatch：校验折叠（数据模型 §12，执行前批量�
       snap(),
     )
     expect(badV.ok).toBe(false)
+  })
+})
+
+describe('列表项稳定 id 归一化（S6479 信任边界：AI 可送旧形态，落画布前补 id）', () => {
+  it('create_node 对白：无 id 的 lines 回填 line- 前缀 id；已有 id 原样保留（幂等）', () => {
+    const v = validateAiBatch(
+      [
+        {
+          op: 'create_node',
+          nodeType: 'dialogue',
+          data: {
+            name: '摊牌',
+            lines: [
+              { kind: 'line', speaker: 'ch1', side: 'left', text: '别走' },
+              { id: 'line-keep', kind: 'action', text: '雨声渐大' },
+            ],
+          },
+        },
+      ],
+      snap(),
+    )
+    expect(v.ok).toBe(true)
+    const cmd = v.commands[0] as { data: { lines: Array<{ id: string }> } }
+    expect(cmd.data.lines[0].id).toMatch(/^line-/)
+    expect(cmd.data.lines[1].id).toBe('line-keep')
+  })
+
+  it('create_node 分支：字符串选项升级为 {id,label}；缺 id 对象只补 id；已有 id 保留', () => {
+    const v = validateAiBatch(
+      [
+        {
+          op: 'create_node',
+          nodeType: 'branch',
+          data: { prompt: '追或不追？', options: ['追', { label: '不追' }, { id: 'opt-keep', label: '观望' }] },
+        },
+      ],
+      snap(),
+    )
+    expect(v.ok).toBe(true)
+    const cmd = v.commands[0] as { data: { options: Array<{ id: string; label: string }> } }
+    expect(cmd.data.options.map((o) => o.label)).toEqual(['追', '不追', '观望'])
+    expect(cmd.data.options[0].id).toMatch(/^opt-/)
+    expect(cmd.data.options[1].id).toMatch(/^opt-/)
+    expect(cmd.data.options[2].id).toBe('opt-keep')
+  })
+
+  it('create_node 分镜：refs 无 id 回填 ref- 前缀 id', () => {
+    const v = validateAiBatch(
+      [
+        {
+          op: 'create_node',
+          nodeType: 'shot',
+          data: { shotNo: 1, size: '中景', picture: '', prompt: '', refs: [{ kind: 'audio', label: '雨声' }] },
+        },
+      ],
+      snap(),
+    )
+    expect(v.ok).toBe(true)
+    const cmd = v.commands[0] as { data: { refs: Array<{ id: string }> } }
+    expect(cmd.data.refs[0].id).toMatch(/^ref-/)
+  })
+
+  it('update_node 的 patch 按快照中既有节点类型同样归一化', () => {
+    const s: AiGraphSnapshot = {
+      nodes: [{ id: 'd9', type: 'dialogue', label: '对白 · 夜谈' }],
+      edges: [],
+    }
+    const v = validateAiBatch(
+      [{ op: 'update_node', nodeId: 'd9', patch: { lines: [{ kind: 'action', text: '沉默' }] } }],
+      s,
+    )
+    expect(v.ok).toBe(true)
+    const cmd = v.commands[0] as unknown as { patch: { lines: Array<{ id: string }> } }
+    expect(cmd.patch.lines[0].id).toMatch(/^line-/)
+  })
+
+  it('重复或空串 id 不信任：列表内冲突/空白 id 重生成（React key 唯一性）', () => {
+    const v = validateAiBatch(
+      [
+        {
+          op: 'create_node',
+          nodeType: 'dialogue',
+          data: {
+            name: '摊牌',
+            lines: [
+              { id: 'dup', kind: 'line', speaker: 'ch1', side: 'left', text: '一' },
+              { id: 'dup', kind: 'line', speaker: 'ch1', side: 'left', text: '二' },
+              { id: '', kind: 'action', text: '三' },
+              { id: 'solo', kind: 'action', text: '四' },
+            ],
+          },
+        },
+        {
+          op: 'create_node',
+          nodeType: 'branch',
+          data: { prompt: '？', options: [{ id: 'x', label: 'A' }, { id: 'x', label: 'B' }] },
+        },
+        {
+          op: 'create_node',
+          nodeType: 'shot',
+          data: { shotNo: 1, size: '中景', picture: '', prompt: '', refs: [{ id: '', kind: 'audio', label: '雨声' }] },
+        },
+      ],
+      snap(),
+    )
+    expect(v.ok).toBe(true)
+    const lines = (v.commands[0] as unknown as { data: { lines: Array<{ id: string }> } }).data.lines
+    const lineIds = lines.map((l) => l.id)
+    expect(new Set(lineIds).size).toBe(4) // 全唯一
+    expect(lineIds.every((id) => id !== '')).toBe(true)
+    expect(lineIds[0]).toBe('dup') // 首个保留
+    expect(lineIds[1]).toMatch(/^line-/) // 冲突重生成
+    expect(lineIds[2]).toMatch(/^line-/) // 空串重生成
+    expect(lineIds[3]).toBe('solo') // 无冲突原样
+
+    const options = (v.commands[1] as unknown as { data: { options: Array<{ id: string }> } }).data.options
+    expect(options[0].id).toBe('x')
+    expect(options[1].id).toMatch(/^opt-/)
+
+    const refs = (v.commands[2] as unknown as { data: { refs: Array<{ id: string }> } }).data.refs
+    expect(refs[0].id).toMatch(/^ref-/)
   })
 })
 
