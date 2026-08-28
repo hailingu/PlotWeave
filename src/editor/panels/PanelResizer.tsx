@@ -8,11 +8,11 @@ import type { PointerEvent as ReactPointerEvent } from 'react'
 
 interface PanelResizerProps {
   /** 方向系数：右移增大宽度 = 1，右移减小宽度 = -1。 */
-  direction: 1 | -1
+  readonly direction: 1 | -1
   /** 拖拽中持续回调目标宽度（已按 direction 换算，未钳制）。 */
-  onResize: (width: number) => void
+  readonly onResize: (width: number) => void
   /** 拖拽起始时的面板宽度。 */
-  startWidth: number
+  readonly startWidth: number
 }
 
 export const PANEL_WIDTH_MIN = 220
@@ -42,9 +42,9 @@ export default function PanelResizer({ direction, onResize, startWidth }: PanelR
   }
 
   return (
-    <div
+    // 原生 hr 承载分隔语义（S6819）；边框与外距在 .pw-panel-resizer 重置
+    <hr
       className="pw-panel-resizer"
-      role="separator"
       aria-orientation="vertical"
       onPointerDown={handlePointerDown}
     />

@@ -1,11 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import SegmentedControl from './SegmentedControl'
 import PanelResizer from './PanelResizer'
-import { llmChat, type ChatMessage } from '../ai/chat'
-import { AI_TOOLS, toolCallsToCommands } from '../ai/tools'
+import { llmChat, type AssistantMessage, type ChatMessage } from '../ai/chat'
+import { AI_TOOLS, toolCallsToCommands, type ToolCall } from '../ai/tools'
 import { type AiCommand, type BatchValidation } from '../ai/commands'
 import { settingsStore } from '../../settings/settingsStore'
-import { listChatModels, type AppSettings, type ChatModelOption } from '../../settings/types'
+import {
+  listChatModels,
+  type AppSettings,
+  type ChatModelOption,
+  type ProviderConfig,
+} from '../../settings/types'
 import {
   resolveCharacterName,
   resolveLocationName,
@@ -94,29 +99,29 @@ function inspectorRows(
 }
 
 interface RightPanelProps {
-  open: boolean
-  width: number
-  onResize: (width: number) => void
-  tab: RightTab
-  onTabChange: (tab: RightTab) => void
+  readonly open: boolean
+  readonly width: number
+  readonly onResize: (width: number) => void
+  readonly tab: RightTab
+  readonly onTabChange: (tab: RightTab) => void
   /** 画布当前选中节点；无选中时检查器显示空态。 */
-  selectedNode?: CanvasNode
+  readonly selectedNode?: CanvasNode
   /** 选中索引卡的 attach 下挂分镜数（§7.2 派生，检查器展示用）。 */
-  attachedShotCount?: number
+  readonly attachedShotCount?: number
   /** 项目设定集：检查器解析实体引用（§5）。 */
-  settings: ProjectSettings
+  readonly settings: ProjectSettings
   /** 打开设置页（§8.2 BYOK 配置入口）。 */
-  onOpenSettings?: () => void
+  readonly onOpenSettings?: () => void
   /** 画布上下文快照（§6「了解当前画布」）：附到 system prompt，并作为读工具返回。 */
-  canvasDigest?: string
+  readonly canvasDigest?: string
   /** 校验助手回复中的命令批次（§6/数据模型 §12）；纯讨论回复返回 null。 */
-  onValidateAi?: (text: string) => BatchValidation | null
+  readonly onValidateAi?: (text: string) => BatchValidation | null
   /** 校验工具调用映射出的命令数组（tool-calling 通道）。 */
-  onValidateCommands?: (commands: AiCommand[]) => BatchValidation | null
+  readonly onValidateCommands?: (commands: AiCommand[]) => BatchValidation | null
   /** 读工具 get_node：返回节点 JSON 文本，节点不存在返回 null。 */
-  onReadNode?: (nodeId: string) => string | null
+  readonly onReadNode?: (nodeId: string) => string | null
   /** 执行已确认的批次：整批为一条复合命令入栈，返回错误文案或 null。 */
-  onApplyAiBatch?: (commands: AiCommand[]) => string | null
+  readonly onApplyAiBatch?: (commands: AiCommand[]) => string | null
 }
 
 /**
@@ -187,8 +192,10 @@ export default function RightPanel({
   )
 }
 
-/** 会话条目：对话消息（助手消息可携带改动预览卡状态）或系统回执。 */
+/** 会话条目：对话消息（助手消息可携带改动预览卡状态）或系统回执。
+ * id 为面板内自增序号——条目只追加不删除，作稳定渲染 key（S6479）。 */
 interface ThreadEntry {
+  id: number
   kind: 'msg' | 'note'
   role?: 'user' | 'assistant'
   text: string
@@ -196,6 +203,79 @@ interface ThreadEntry {
     v: BatchValidation
     status: 'pending' | 'executed' | 'dismissed'
   }
+}
+
+/** 助手人格与命令协议说明（§6/数据模型 §12.2）。 */
+const SYSTEM_PROMPT =
+  '你是短剧创作助手，帮助编剧讨论剧情结构、人物动机与台词。\n' +
+  '需要改动画布时，只产出命令：执行前界面会向用户展示改动预览并等待确认，' +
+  '所以你不要声称已经完成修改。优先调用工具（推荐把一次改动的全部命令放进' +
+  '一个 batch）；服务不支持工具时退回 ```json 围栏批次（格式 {"commands":[…]}）。\n' +
+  '需要画布信息时先调用读工具 get_graph_snapshot / get_node。\n' +
+  '命令要点：create_node 的 data 只写要定制的字段，ref 供本批后续命令引用' +
+  '新节点；update_node_spec 的 patch 只写要改的字段；connect_edge 缺省为剧情流，' +
+  'branch 需 optionIndex（0 基），attach 仅 场景→分镜卡；episodeNo 仅' +
+  'scene/beat/dialogue/branch 可写（分镜随宿主场景）。\n' +
+  '画布快照的「剧情流顺序」即大纲投影：重排剧情 = 同一批次内先 disconnect 旧边' +
+  '再 connect 新边；设定集段落给出角色/地点实体 id，写 characterIds/locationId 时引用它们。\n' +
+  '规则：只使用快照里出现过的 id（新节点用 ref）；连线不得自环或成环；' +
+  '每条命令可用 reason 说明理由。'
+
+/** 组装本次请求的消息序列：系统提示 + 画布快照（可选）+ 会话历史 + 新输入。
+ * 历史里的批次文本不再重复喂回（已渲染为预览卡，防止上下文膨胀）。 */
+function buildMessages(
+  thread: ThreadEntry[],
+  text: string,
+  knowsCanvas: boolean,
+  canvasDigest?: string,
+): ChatMessage[] {
+  const messages: ChatMessage[] = [
+    { role: 'system', content: SYSTEM_PROMPT },
+    ...(knowsCanvas && canvasDigest
+      ? [{ role: 'system' as const, content: `当前画布快照：\n${canvasDigest}` }]
+      : []),
+  ]
+  for (const e of thread) {
+    if (e.kind === 'msg') messages.push({ role: e.role ?? 'assistant', content: e.text })
+  }
+  messages.push({ role: 'user', content: text })
+  return messages
+}
+
+/** 朴素 tool-calling 循环（数据模型 §12.2）：读工具就地执行回喂后重问，
+ * 最多三轮；产出写命令/错误或纯文本即终止。messages 原地追加。 */
+async function runAgentLoop(
+  provider: ProviderConfig,
+  model: string,
+  messages: ChatMessage[],
+  readTool: (name: string, args: Record<string, unknown>) => string,
+): Promise<{ prose: string; toolCommands: AiCommand[] | null; toolErrors: string[] }> {
+  let prose = ''
+  let toolCommands: AiCommand[] | null = null
+  let toolErrors: string[] = []
+  for (let round = 0; round < 3; round++) {
+    const reply: AssistantMessage = await llmChat(provider, model, messages, AI_TOOLS)
+    const calls: ToolCall[] = reply.tool_calls ?? []
+    const { commands: cmds, readRequests, errors } = toolCallsToCommands(calls)
+    const hasWrites = cmds.length > 0 || errors.length > 0
+    if (hasWrites) {
+      prose = (reply.content ?? '').trim()
+      toolCommands = cmds
+      toolErrors = errors
+      break
+    }
+    if (readRequests.length > 0) {
+      messages.push({ role: 'assistant', content: reply.content ?? '', tool_calls: calls })
+      for (const r of readRequests) {
+        messages.push({ role: 'tool', tool_call_id: r.id, content: readTool(r.name, r.args) })
+      }
+      continue
+    }
+    prose = (reply.content ?? '').trim()
+    toolErrors = errors
+    break
+  }
+  return { prose, toolCommands, toolErrors }
 }
 
 /**
@@ -214,12 +294,12 @@ function AiThread({
   onReadNode,
   onApplyAiBatch,
 }: {
-  onOpenSettings?: () => void
-  canvasDigest?: string
-  onValidateAi?: (text: string) => BatchValidation | null
-  onValidateCommands?: (commands: AiCommand[]) => BatchValidation | null
-  onReadNode?: (nodeId: string) => string | null
-  onApplyAiBatch?: (commands: AiCommand[]) => string | null
+  readonly onOpenSettings?: () => void
+  readonly canvasDigest?: string
+  readonly onValidateAi?: (text: string) => BatchValidation | null
+  readonly onValidateCommands?: (commands: AiCommand[]) => BatchValidation | null
+  readonly onReadNode?: (nodeId: string) => string | null
+  readonly onApplyAiBatch?: (commands: AiCommand[]) => string | null
 }) {
   const [appSettings, setAppSettings] = useState<AppSettings | null>(null)
   /** 面板内选中的模型 key；null = 跟随设置页默认。 */
@@ -231,6 +311,9 @@ function AiThread({
   const [knowsCanvas, setKnowsCanvas] = useState(true)
   /** 危险批次的两步确认：处于武装态的会话条目下标，null = 无。 */
   const [armedIdx, setArmedIdx] = useState<number | null>(null)
+  /** 会话条目自增 id（组件内稳定 key）。 */
+  const entryIdRef = useRef(0)
+  const nextId = () => ++entryIdRef.current
   const threadRef = useRef<HTMLDivElement>(null)
 
   // 每次切到 AI 分段重载配置（从设置页回来也能刷新）；
@@ -264,72 +347,19 @@ function AiThread({
       ? appSettings.providers.find((p) => p.id === activeOption.providerId)
       : null
     if (!activeOption || !provider) return
-    setThread((t) => [...t, { kind: 'msg', role: 'user', text }])
+    setThread((t) => [...t, { id: nextId(), kind: 'msg', role: 'user', text }])
     setDraft('')
     setBusy(true)
     setError(null)
     setArmedIdx(null)
     try {
-      const system: ChatMessage = {
-        role: 'system',
-        content:
-          '你是短剧创作助手，帮助编剧讨论剧情结构、人物动机与台词。\n' +
-          '需要改动画布时，只产出命令：执行前界面会向用户展示改动预览并等待确认，' +
-          '所以你不要声称已经完成修改。优先调用工具（推荐把一次改动的全部命令放进' +
-          '一个 batch）；服务不支持工具时退回 ```json 围栏批次（格式 {"commands":[…]}）。\n' +
-          '需要画布信息时先调用读工具 get_graph_snapshot / get_node。\n' +
-          '命令要点：create_node 的 data 只写要定制的字段，ref 供本批后续命令引用' +
-          '新节点；update_node_spec 的 patch 只写要改的字段；connect_edge 缺省为剧情流，' +
-          'branch 需 optionIndex（0 基），attach 仅 场景→分镜卡；episodeNo 仅' +
-          'scene/beat/dialogue/branch 可写（分镜随宿主场景）。\n' +
-          '画布快照的「剧情流顺序」即大纲投影：重排剧情 = 同一批次内先 disconnect 旧边' +
-          '再 connect 新边；设定集段落给出角色/地点实体 id，写 characterIds/locationId 时引用它们。\n' +
-          '规则：只使用快照里出现过的 id（新节点用 ref）；连线不得自环或成环；' +
-          '每条命令可用 reason 说明理由。',
-      }
-      let messages: ChatMessage[] = [
-        system,
-        ...(knowsCanvas && canvasDigest
-          ? [{ role: 'system' as const, content: `当前画布快照：\n${canvasDigest}` }]
-          : []),
-      ]
-      // 历史里的批次文本不再重复喂回（已渲染为预览卡，防止上下文膨胀）
-      for (const e of thread) {
-        if (e.kind === 'msg') messages.push({ role: e.role ?? 'assistant', content: e.text })
-      }
-      messages.push({ role: 'user', content: text })
-
-      let prose = ''
-      let toolCommands: AiCommand[] | null = null
-      let toolErrors: string[] = []
-      // 朴素循环：读工具回喂后重问；写命令或纯文本终止（数据模型 §12.2）
-      for (let round = 0; round < 3; round++) {
-        const reply = await llmChat(provider, activeOption.model, messages, AI_TOOLS)
-        const calls = reply.tool_calls ?? []
-        const { commands: cmds, readRequests, errors } = toolCallsToCommands(calls)
-        const hasWrites = cmds.length > 0 || errors.length > 0
-        if (hasWrites) {
-          prose = (reply.content ?? '').trim()
-          toolCommands = cmds
-          toolErrors = errors
-          break
-        }
-        if (readRequests.length > 0) {
-          messages = [
-            ...messages,
-            { role: 'assistant', content: reply.content ?? '', tool_calls: calls },
-            ...readRequests.map((r) => ({
-              role: 'tool' as const,
-              tool_call_id: r.id,
-              content: executeReadTool(r.name, r.args),
-            })),
-          ]
-          continue
-        }
-        prose = (reply.content ?? '').trim()
-        toolErrors = errors
-        break
-      }
+      const messages = buildMessages(thread, text, knowsCanvas, canvasDigest)
+      const { prose, toolCommands, toolErrors } = await runAgentLoop(
+        provider,
+        activeOption.model,
+        messages,
+        executeReadTool,
+      )
 
       // 验证与展示：工具命令直接校验；纯文本走围栏解析（兼容无工具的服务）
       const validation =
@@ -343,9 +373,10 @@ function AiThread({
       setThread((t) => [
         ...t,
         ...(toolErrors.length > 0
-          ? [{ kind: 'note' as const, text: `⚠ ${toolErrors.join('；')}` }]
+          ? [{ id: nextId(), kind: 'note' as const, text: `⚠ ${toolErrors.join('；')}` }]
           : []),
         {
+          id: nextId(),
           kind: 'msg',
           role: 'assistant',
           text: displayText || (validation ? '（本次回复只有改动批次，见下方预览卡）' : ''),
@@ -371,8 +402,9 @@ function AiThread({
 
   /** 执行预览卡：成功 → 置状态并追加回执；失败 → 错误回执（批次未动）。 */
   const executeCard = (idx: number) => {
-    const card = thread[idx].card
-    if (!card || card.status !== 'pending' || !onApplyAiBatch) return
+    const entry = thread[idx]
+    if (entry.card?.status !== 'pending' || !onApplyAiBatch) return
+    const card = entry.card
     const err = onApplyAiBatch(card.v.commands)
     setThread((t) =>
       t.map((e, i) =>
@@ -385,8 +417,9 @@ function AiThread({
     setThread((t) => [
       ...t,
       err
-        ? { kind: 'note' as const, text: `执行失败：${err}` }
+        ? { id: nextId(), kind: 'note' as const, text: `执行失败：${err}` }
         : {
+            id: nextId(),
             kind: 'note' as const,
             text: `✓ 已执行 ${card.v.commands.length} 项改动，⌘Z 可整批撤销。`,
           },
@@ -400,6 +433,31 @@ function AiThread({
       ),
     )
     setArmedIdx(null)
+  }
+
+  /** 会话条目正文：回执 / 用户消息 / 助手消息（可附预览卡）（S3358 拆分）。 */
+  const entryBody = (entry: ThreadEntry, i: number) => {
+    if (entry.kind === 'note') return <div className="pw-ai-note">{entry.text}</div>
+    if (entry.role === 'user') return <div className="pw-ai-msg pw-ai-msg-user">{entry.text}</div>
+    return (
+      <>
+        <div className="pw-ai-msg pw-ai-msg-agent">
+          <span className="pw-ai-agent-flag">✦ ASSISTANT</span>
+          {entry.text}
+        </div>
+        {entry.card && (
+          <PreviewCard
+            v={entry.card.v}
+            status={entry.card.status}
+            armed={armedIdx === i}
+            busy={busy}
+            onArm={() => setArmedIdx(armedIdx === i ? null : i)}
+            onExecute={() => executeCard(i)}
+            onDismiss={() => markDismissed(i)}
+          />
+        )}
+      </>
+    )
   }
 
   return (
@@ -443,28 +501,8 @@ function AiThread({
           <div className="pw-empty">和 AI 聊聊这一幕怎么写，或让它直接调整画布（会先出改动预览）。</div>
         )}
         {thread.map((entry, i) => (
-          <div key={i} className="pw-ai-entry">
-            {entry.kind === 'note' ? (
-              <div className="pw-ai-note">{entry.text}</div>
-            ) : entry.role === 'user' ? (
-              <div className="pw-ai-msg pw-ai-msg-user">{entry.text}</div>
-            ) : (
-              <>
-                <div className="pw-ai-msg pw-ai-msg-agent">
-                  <span className="pw-ai-agent-flag">✦ ASSISTANT</span>
-                  {entry.text}
-                </div>
-                {entry.card && <PreviewCard
-                  v={entry.card.v}
-                  status={entry.card.status}
-                  armed={armedIdx === i}
-                  busy={busy}
-                  onArm={() => setArmedIdx(armedIdx === i ? null : i)}
-                  onExecute={() => executeCard(i)}
-                  onDismiss={() => markDismissed(i)}
-                />}
-              </>
-            )}
+          <div key={entry.id} className="pw-ai-entry">
+            {entryBody(entry, i)}
           </div>
         ))}
         {busy && <div className="pw-ai-thinking">✦ 正在思考…</div>}
@@ -504,6 +542,13 @@ const ITEM_ICONS: Record<BatchValidation['items'][number]['kind'], string> = {
   delete: '🗑',
 }
 
+/** 执行按钮文案：含删除时按武装态分两步（S3358 独立成函数）。 */
+function executeLabel(v: BatchValidation, armed: boolean): string {
+  if (!v.hasDeletes) return '✓ 执行改动'
+  if (armed) return '再点一次确认执行删除'
+  return `执行（含 ${v.items.filter((i) => i.danger).length} 项删除）`
+}
+
 /**
  * 改动预览卡（§6）：整卡 = 一个 batch 命令。删除项 danger 置顶
  * （校验器已排序）；含删除时执行需两步确认，不提供自动执行开关。
@@ -517,29 +562,30 @@ function PreviewCard({
   onExecute,
   onDismiss,
 }: {
-  v: BatchValidation
-  status: 'pending' | 'executed' | 'dismissed'
-  armed: boolean
-  busy: boolean
-  onArm: () => void
-  onExecute: () => void
-  onDismiss: () => void
+  readonly v: BatchValidation
+  readonly status: 'pending' | 'executed' | 'dismissed'
+  readonly armed: boolean
+  readonly busy: boolean
+  readonly onArm: () => void
+  readonly onExecute: () => void
+  readonly onDismiss: () => void
 }) {
   if (status === 'dismissed') return null
   return (
-    <div className={`pw-ai-card${v.hasDeletes ? ' danger' : ''}`} role="group" aria-label="AI 改动预览">
+    // 原生 section 地标承载分组语义（S6819）
+    <section className={`pw-ai-card${v.hasDeletes ? ' danger' : ''}`} aria-label="AI 改动预览">
       <div className="pw-ai-card-head">✦ 改动预览 · {v.commands.length} 项</div>
       {!v.ok && (
         <ul className="pw-ai-issues">
-          {v.issues.map((iss, k) => (
-            <li key={k} className="pw-ai-issue">第 {iss.index + 1} 条：{iss.message}</li>
+          {v.issues.map((iss) => (
+            <li key={iss.index} className="pw-ai-issue">第 {iss.index + 1} 条：{iss.message}</li>
           ))}
         </ul>
       )}
       {v.ok && (
         <ul className="pw-ai-items">
-          {v.items.map((item, k) => (
-            <li key={k} className={`pw-ai-item${item.danger ? ' danger' : ''}`}>
+          {v.items.map((item) => (
+            <li key={item.key} className={`pw-ai-item${item.danger ? ' danger' : ''}`}>
               <span className="pw-ai-item-icon" aria-hidden>{ITEM_ICONS[item.kind]}</span>
               {item.label}
             </li>
@@ -568,16 +614,12 @@ function PreviewCard({
                 else onArm()
               }}
             >
-              {v.hasDeletes
-                ? armed
-                  ? '再点一次确认执行删除'
-                  : `执行（含 ${v.items.filter((i) => i.danger).length} 项删除）`
-                : '✓ 执行改动'}
+              {executeLabel(v, armed)}
             </button>
           </>
         )}
       </div>
       {!v.ok && <div className="pw-ai-note">批次未通过校验，画布未发生任何变化。</div>}
-    </div>
+    </section>
   )
 }

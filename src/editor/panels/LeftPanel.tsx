@@ -39,31 +39,31 @@ const TABS = [
 
 interface LeftPanelProps {
   /** 面板展开状态：折叠时宽度动画到 0（弹簧），组件保持挂载以保留分段状态。 */
-  open: boolean
-  width: number
-  onResize: (width: number) => void
+  readonly open: boolean
+  readonly width: number
+  readonly onResize: (width: number) => void
   /** 画布节点，用于派生大纲行。 */
-  nodes: CanvasNode[]
+  readonly nodes: CanvasNode[]
   /** 画布连线：下挂分镜的集归属随宿主场景派生（§7.2）。 */
-  edges: Edge[]
+  readonly edges: Edge[]
   /** 大纲 ⇄ 画布联动（§3.5）：点击大纲行选中并居中该节点。 */
-  onLocate?: (id: string) => void
+  readonly onLocate?: (id: string) => void
   /** 画布当前选中节点 id：大纲行反向高亮并滚动到可见。 */
-  selectedId?: string
+  readonly selectedId?: string
   /** 项目设定集（§5）：设定集分段的数据源。 */
-  settings: ProjectSettings
+  readonly settings: ProjectSettings
   /** 设定集条目编辑动作（§5）。 */
-  settingsActions: SettingsActions
+  readonly settingsActions: SettingsActions
   /** 集 = 编号 + 行内标题（§3.5）。 */
-  episodeTitles: Record<number, string>
+  readonly episodeTitles: Record<number, string>
   /** 当前聚焦的集；null = 无聚焦。 */
-  focusedEpisode: number | null
+  readonly focusedEpisode: number | null
   /** 点击集行：该集提亮、其余退后；再点取消。 */
-  onFocusEpisode?: (episode: number | null) => void
+  readonly onFocusEpisode?: (episode: number | null) => void
   /** 集标题行内改名（编辑即命令）。 */
-  onRenameEpisode?: (episode: number, title: string) => void
+  readonly onRenameEpisode?: (episode: number, title: string) => void
   /** 大纲拖拽落点（§3.5：重排 sequence 边 / 跨组改集归属）。 */
-  onOutlineDrop?: (draggedId: string, target: OutlineDropTarget) => void
+  readonly onOutlineDrop?: (draggedId: string, target: OutlineDropTarget) => void
 }
 
 /**
@@ -94,7 +94,7 @@ export default function LeftPanel({
     () => buildOutlineGroups(nodes, edges, episodeTitles),
     [nodes, edges, episodeTitles],
   )
-  const outlineRef = useRef<HTMLDivElement>(null)
+  const outlineRef = useRef<HTMLElement>(null)
   const [dropHint, setDropHint] = useState<DropHint>(null)
 
   // level < 3 = 编剧侧四类（分镜随宿主场景，不参与拖拽排序）
@@ -154,7 +154,8 @@ export default function LeftPanel({
         </div>
         <div className="pw-panel-scroll">
           {tab === 'outline' && (
-            <div className="pw-outline" role="list" aria-label="故事大纲" ref={outlineRef}>
+            // 原生 section + aria-label（隐式 region），替代 div role="group"（S6819）
+            <section className="pw-outline" aria-label="故事大纲" ref={outlineRef}>
               {groups.map((group) => (
                 <div key={group.episode ?? 'none'} className="pw-outline-group">
                   {group.episode === null ? (
@@ -205,7 +206,6 @@ export default function LeftPanel({
                           hint === 'before' ? ' pw-drop-above' : '',
                           hint === 'after' ? ' pw-drop-below' : '',
                         ].join('')}
-                        role="listitem"
                         data-level={row.level}
                         style={{ paddingLeft: 10 + row.level * 16 }}
                         draggable={draggable}
@@ -238,7 +238,7 @@ export default function LeftPanel({
                   })}
                 </div>
               ))}
-            </div>
+            </section>
           )}
           {tab === 'settings' && (
             <div className="pw-settings">
