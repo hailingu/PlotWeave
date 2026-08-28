@@ -2,6 +2,8 @@
 
 > 状态：v1（2026-08-28 定稿）
 > 本版相对草案的修订：ProjectDocument 补 `episodeTitles` 字段；§4.2 各 spec 字段对齐 UI 设计已实现的节点形态（场景卡 sceneNo/interior/weather、对白行 kind/side/vo、分支 options 入 spec）；§5 分支边不再持久化 label 拷贝；§6 Character/Location 字段对齐运行态实体（gradient/bio/note，长篇自由文本由 SettingsDocument 承载）；§11 明确归一化管线位于前端模型层，并登记 schemaVersion 0（旧扁平存储格式）→ 1 的迁移。
+>
+> 定稿评审修订（2026-08-29）：§9 补 `set_episode_title` 命令（集标题变更走命令通道）；`settings.documents` 补为 SettingsDocument 的持久化位置；§10.5 `load_project` 职责更正为信封级兼容（与 §11 分层一致）；分支边 `sourceHandle` 由数组下标（option-N）改为稳定选项 id（option-\<id\>），删除选项连带其连线进同一 `batch`，杜绝下标位移导致的静默改接。
 > 适用范围：画布文档模型、设定与资产模型、命令与撤销、本地存储体系、AI Agent 交互。
 > 明确不在范围内：用户体系、租户、余额/计费。PlotWeave 是单用户 BYOK 桌面工具；若未来出现此类需求，另起《服务端领域模型》文档。
 
@@ -61,6 +63,7 @@ interface ProjectDocument {
     characters: Record<string, Character>
     locations: Record<string, Location>
     props: Record<string, PropItem>
+    documents: Record<string, SettingsDocument>  // 长篇自由文本条目（小传/世界观/术语表）
   }
   episodeTitles: Record<number, string>  // 集标题表：键 = 集号（见 4.1，不建「集」实体表）
   assets: {
@@ -144,10 +147,10 @@ interface DialogueLine {
 }
 
 /** 分支：剧情分岔点。选项存在 spec 里（端口/胶囊渲染的唯一真相）；
- * 出口连线经 sourceHandle（option-N）指向选项，label 由选项派生，边上不落拷贝（见第五节）。 */
+ * 出口连线经 sourceHandle（option-<选项 id>）指向选项，label 由选项派生，边上不落拷贝（见第五节）。 */
 interface BranchSpec {
   prompt: string             // 分岔事由，如「女主是否发现真相」
-  options: Array<{ id: string; label: string }>  // id 为稳定标识；sourceHandle 按数组下标定位（option-N）
+  options: Array<{ id: string; label: string }>  // id 为稳定标识；sourceHandle 按 id 定位（option-<id>），删选项不位移其他连线
 }
 
 /** 分镜卡（生成侧）：一张卡 = 一个镜头及其 AI 燃料。
@@ -175,7 +178,7 @@ interface ShotRef {
 直接使用 React Flow 多 handle：
 
 - `scene` / `beat` / `dialogue`：`input`（target）+ `output`（source）各一个。
-- `branch`：一个 `input`（target）+ 多个出口 source handle（`option-1`、`option-2`……动态增删）。
+- `branch`：一个 `input`（target）+ 多个出口 source handle（`option-<选项 id>`，动态增删；用稳定 id 而非数组下标，删除任一选项不影响其余出口的连线归属）。
 - `scene`：额外带底部 source handle（`shots`），经 attach 边垂直下挂分镜卡——**横向 = 剧情顺序，垂直 = 派生从属**（一对多合法，attach 不参与剧情流环检测）。
 - 连接校验在前端交互层（`isValidConnection`）做：禁止自环、禁止成环（BFS 传递闭包检查）；命令层不重复校验。
 
@@ -187,7 +190,7 @@ interface StoryEdge {
   id: string
   source: string
   target: string
-  sourceHandle?: string      // branch 节点的出口 id
+  sourceHandle?: string      // branch 节点的出口 id（option-<选项 id>）
   targetHandle?: string
   data: {
     kind: 'sequence' | 'branch' | 'attach'
@@ -197,7 +200,7 @@ interface StoryEdge {
 ```
 
 - `sequence`：剧情顺序流，无 label。
-- `branch`：从 branch 节点出口引出；**边上不存 label 拷贝**——胶囊文案按 `sourceHandle`（`option-N`）解析分支节点 `spec.options[N]` 派生（§8.1.1 禁止镜像字段）；多结局用多条 branch 边指向不同子图表达。
+- `branch`：从 branch 节点出口引出；**边上不存 label 拷贝**——胶囊文案按 `sourceHandle`（`option-<选项 id>`）解析分支节点 `spec.options` 中同 id 选项的 label 派生（§8.1.1 禁止镜像字段）；多结局用多条 branch 边指向不同子图表达。
 - `attach`：索引卡底部端口 → 分镜卡顶部端口的派生从属边（垂直下挂），无 label，不参与剧情流环检测。
 
 ## 六、设定集（settings）
@@ -215,8 +218,9 @@ interface Character {
 interface Location { id: string; name: string; note?: string }
 interface PropItem { id: string; name: string; description?: string }
 
-/** 文档条目（写作原料）：人物小传 / 世界观 / 术语表等自由文本，
- * 与结构化条目双向关联（如小传挂在角色名下）；全文进入 AI 上下文快照的按需读取范围。 */
+/** 文档条目（写作原料）：人物小传 / 世界观 / 术语表等自由文本，持久化于
+ * ProjectDocument.settings.documents；与结构化条目双向关联（如小传挂在角色名下）；
+ * 全文进入 AI 上下文快照的按需读取范围。 */
 interface SettingsDocument {
   id: string
   title: string
@@ -308,7 +312,7 @@ interface AssetGroup {
 引用的建立、断开、悬空处理全部收敛到命令层（第九节），UI 只是发起者：
 
 1. **建立**：连线 = `connect_edge`；@ 提及 = 编辑 spec 文本（`update_node_spec`）。引用关系随文本天然一致，不存在单独的「同步」步骤。
-2. **断开 ≠ 删除**：断开连线只移除该边，不触碰对方的 spec/文本。删除节点连带删边，且节点与连带边进同一 `batch`——inverse 完整恢复两者（见 9.3），撤销后引用关系原样回来。
+2. **断开 ≠ 删除**：断开连线只移除该边，不触碰对方的 spec/文本。删除节点连带删边，且节点与连带边进同一 `batch`——inverse 完整恢复两者（见 9.3），撤销后引用关系原样回来。删除分支选项同理：选项自其引出的 branch 边一并删除（`update_node_spec` + 各 `disconnect_edge` 进同一 `batch`），不留悬空连线，也绝不让既有连线静默改接到别的选项。
 3. **删除被引用方**：不级联清理引用方（避免静默丢数据）。引用按「失效」展示（灰色角标/删除线），由用户决定替换或清除。
 4. **加载修复而非拒绝**：归一化管线（第十一节）对悬空引用统一标记；孤儿边隔离并记录警告——单条坏数据不得导致整个项目加载失败。
 
@@ -339,7 +343,8 @@ interface AssetGroup {
 | 节点 | `create_node` / `delete_node` / `move_node` / `resize_node` | delete 连带删除关联边，inverse 一并恢复 |
 | 节点数据 | `update_node_spec` / `update_node_meta` / `update_node_ui` | |
 | 连接 | `connect_edge` / `disconnect_edge` | |
-| 设定 | `upsert_character` / `delete_character`（地点、道具同构） | |
+| 设定 | `upsert_character` / `delete_character`（地点、道具、设定文档同构） | |
+| 集标题 | `set_episode_title` | title 为空串 = 删除该集的标题键 |
 | 资产 | `set_asset` / `remove_asset` | |
 | 视口 | `update_viewport` | transient，不进撤销栈 |
 | 批量 | `batch` | 一等命令，整批作为单个撤销单元 |
@@ -369,9 +374,11 @@ interface CommandPayloads {
   // ── 连接 ──
   connect_edge: { edge: StoryEdge }             // 完整边，含 data.kind/label
   disconnect_edge: { edgeId: string }           // inverse 捕获被删边
-  // ── 设定（地点、道具同构，略）──
+  // ── 设定（地点、道具、设定文档同构，略）──
   upsert_character: { character: Character }    // id 已存在 = 更新，否则 = 新增
   delete_character: { characterId: string }     // inverse 捕获被删实体
+  // ── 集标题 ──
+  set_episode_title: { episodeNo: number; title: string }  // title 为空串 = 删除该键
   // ── 资产 ──
   set_asset: { asset: AssetRef }
   remove_asset: { assetId: string }             // 只移除索引，不删文件（见 7.3）
@@ -407,6 +414,7 @@ type GraphCommand<T extends CommandType = CommandType> = {
 | `connect_edge` / `disconnect_edge` | 互逆，边数据取自 docBefore |
 | `upsert_character` | 新增 → `delete_character`；更新 → 旧实体整体 |
 | `delete_character` | 等效 `upsert_character { character: 旧实体 }` |
+| `set_episode_title` | 同结构，title 换为旧值；原来无该键 → inverse 为空串（即删除） |
 | `set_asset` / `remove_asset` | 互逆，AssetRef 取自 docBefore |
 | `batch` | 子命令 inverse 的**逆序**数组 |
 
@@ -504,7 +512,7 @@ provider 的 API key 以**密文 `keyEnc`** 存于 provider 配置：Rust `seal`
 | --- | --- |
 | `list_projects()` | 读 `index.json`，返回项目列表 |
 | `create_project(name)` | 建目录 + 初始 `project.json` + 更新索引 |
-| `load_project(projectId)` | 读 `project.json`，schemaVersion 迁移 + 归一化（见十一） |
+| `load_project(projectId)` | 读 `project.json`；信封级兼容（旧扁平格式包装为 v0 信封）。节点级 schemaVersion 迁移与归一化在前端模型层（见十一），Rust 不参与 |
 | `save_project(projectId, doc)` | tmp + rename 原子写 + 更新索引的 updatedAt |
 | `import_asset(projectId, file)` | 拷贝入项目 `assets/`，返回 `AssetRef` |
 | `list_library_assets()` | 读 `library.json`，返回资产库列表（含编组） |
@@ -522,7 +530,7 @@ provider 的 API key 以**密文 `keyEnc`** 存于 provider 配置：Rust `seal`
 
 1. `schemaVersion` 低于当前版本时按迁移链逐级升级；高于当前版本时拒绝并提示升级应用。**迁移链首环**：schemaVersion 0（首版扁平存储格式：顶层 `name`/`updated_at`/`nodes`/`edges`/`settings`/`episodeTitles`，节点数据未分区、设定集为数组）→ 1（本文档结构）。
 2. 重置所有节点 `ui.selected = false`。
-3. 隔离孤儿边（source/target 节点已不存在）并记录警告——修复而非拒绝，单条坏数据不阻断加载（见 8.2.4）。
+3. 隔离孤儿边（source/target 节点已不存在；branch 边的 `sourceHandle` 指向的选项已不存在同论）并记录警告——修复而非拒绝，单条坏数据不阻断加载（见 8.2.4）。
 4. 标记（而非清除）悬空的设定引用与资产引用。
 5. 扫描文本中的 @ 提及 token，目标已不存在的标记为失效（token 本身保留，见 8.1.2）。
 6. 重建 id 生成器的计数基线，防止新 id 与存量冲突（当前 id = 类型前缀 + 时间戳 + 随机尾，天然无计数基线；本条为将来引入计数式 id 时的保留动作）。
