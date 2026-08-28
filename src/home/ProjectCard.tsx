@@ -3,7 +3,7 @@ import { formatRelativeTime, projectStatsLabel, type ProjectSummary } from './pr
 
 interface ProjectCardProps {
   project: ProjectSummary
-  /** 双击海报打开项目（docs/ui-design.md §3.2）。 */
+  /** 单击海报打开项目（docs/ui-design.md §3.2；应用方修订：由双击改单击）。 */
   onOpen: (id: string) => void
   /** 右键海报或点悬停 ⋯ 按钮弹出项目菜单（§3.2）。 */
   onMenu: (e: { clientX: number; clientY: number; preventDefault: () => void }, project: ProjectSummary) => void
@@ -25,7 +25,7 @@ export default function ProjectCard({ project, onOpen, onMenu }: ProjectCardProp
         type="button"
         className={`project-poster${project.cover ? '' : ' project-poster--weave'}`}
         style={posterStyle}
-        onDoubleClick={() => onOpen(project.id)}
+        onClick={() => onOpen(project.id)}
         onContextMenu={(e) => onMenu(e, project)}
         aria-label={`打开项目 ${project.name}`}
       >
