@@ -113,8 +113,9 @@
 }
 
 .settings-key-state.ok {
-  background: rgba(52, 199, 89, 0.16);
-  color: #248a3d;
+  /* 不透明暗绿底 + 亮绿字：声明自洽（≈6.7:1），Sonar 与暗色主题实况计算一致（S7924） */
+  background: #1e4629;
+  color: #7ce69a;
 }
 
 .settings-key-input {
@@ -151,7 +152,7 @@
   font-size: 12px;
   line-height: 1.6;
   white-space: pre-wrap;
-  word-break: break-word;
+  overflow-wrap: break-word;
 }
 
 .pw-ai-msg-user {
