@@ -103,6 +103,21 @@ describe('useDebouncedSave（防抖落盘 + 脏态卸载冲刷）', () => {
     expect((onSave.mock.calls[0][0] as ProjectContent).name).toBe('未落定')
   })
 
+  it('markDirty 标脏并携带最新文档：纯视口移动（无重渲染）也会落盘', () => {
+    const onSave = vi.fn()
+    const { result } = renderHook(() => useDebouncedSave(mkDoc(), onSave))
+    // 模拟 EditorView.onMoveEnd：ref 更新后显式标脏，文档带最新视口
+    const moved: ProjectContent = { ...mkDoc(), viewport: { x: 500, y: 300, zoom: 0.8 } }
+    act(() => {
+      result.current(moved)
+    })
+    act(() => {
+      vi.advanceTimersByTime(600)
+    })
+    expect(onSave).toHaveBeenCalledTimes(1)
+    expect((onSave.mock.calls[0][0] as ProjectContent).viewport).toEqual({ x: 500, y: 300, zoom: 0.8 })
+  })
+
   it('落盘后再卸载不重复冲刷（脏标记已清）', () => {
     const onSave = vi.fn()
     const { rerender, unmount } = renderHook(({ doc }) => useDebouncedSave(doc, onSave), {

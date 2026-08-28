@@ -6,8 +6,11 @@
 import type { Edge, Viewport } from '@xyflow/react'
 import type { CanvasNode } from '../editor/nodes/types'
 import type { ProjectSettings } from '../editor/settings'
+import type { AssetRef } from './document'
 
-/** 项目会话内容：名称 + 创建时间 + 画布两数组 + 设定集 + 集标题 + 视口。 */
+/** 项目会话内容：名称 + 创建时间 + 画布两数组 + 设定集 + 集标题 + 视口。
+ * assets 为项目资产索引的透传桶（§7.1）：首版编辑器不产生资产，
+ * 但解析/保存必须原样保留，否则已有资产的项目一保存即丢索引。 */
 export interface ProjectContent {
   name: string
   /** ISO 8601；新建项目缺省时首次落盘补盖。 */
@@ -19,4 +22,6 @@ export interface ProjectContent {
   episodeTitles?: Record<number, string>
   /** 视口随文档持久化（§3）；缺省时打开后 fitView。 */
   viewport?: Viewport
+  /** 项目资产索引透传（缺省 = 无资产）。 */
+  assets?: { byId: Record<string, AssetRef> }
 }

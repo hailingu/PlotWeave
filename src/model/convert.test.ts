@@ -165,11 +165,26 @@ describe('serializeProject（会话文档 → ProjectDocument 落盘格式）', 
     expect(doc.settings.props).toEqual({})
   })
 
-  it('缺 createdAt/视口时补默认：createdAt=保存时间，viewport=原始点', () => {
+  it('缺 createdAt 时补盖；视口缺省不伪造（留给打开时 fitView）', () => {
     const bare = { ...mkContent(), createdAt: undefined, viewport: undefined }
     const doc = serializeProject(bare, 'p-1', NOW)
     expect(doc.project.createdAt).toBe(NOW.toISOString())
-    expect(doc.graph.viewport).toEqual({ x: 0, y: 0, zoom: 1 })
+    expect(doc.graph.viewport).toBeUndefined()
+  })
+
+  it('assets.byId 透传：解析进会话、保存原样保留，不被清空（§7.1）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    doc.assets.byId['a-1'] = {
+      id: 'a-1',
+      relPath: 'assets/lin.png',
+      mime: 'image/png',
+      source: 'upload',
+      createdAt: '2026-08-01T00:00:00.000Z',
+    }
+    const round = parseProject(doc)
+    expect(round.content.assets?.byId['a-1']).toEqual(doc.assets.byId['a-1'])
+    const again = serializeProject(round.content, 'p-1', NOW)
+    expect(again.assets.byId['a-1']).toEqual(doc.assets.byId['a-1'])
   })
 })
 
@@ -316,7 +331,7 @@ describe('parseProject（ProjectDocument → 会话文档，§11 归一化）', 
     expect(round.warnings.some((w) => w.includes('e2'))).toBe(true)
   })
 
-  it('schemaVersion 0 旧信封：节点字段迁移（头像对象 → characterIds）后按 v1 进入会话', () => {
+  it('schemaVersion 0 旧信封：节点字段迁移（头像对象 → characterIds）后按 v1 进入会话；旧格式无视口，迁移不伪造', () => {
     const v0 = {
       schemaVersion: 0,
       project: { id: 'p-old', name: '旧剧', createdAt: '', updatedAt: '2026-01-01T00:00:00.000Z' },
@@ -338,7 +353,6 @@ describe('parseProject（ProjectDocument → 会话文档，§11 归一化）', 
           },
         ],
         edges: [],
-        viewport: { x: 0, y: 0, zoom: 1 },
       },
       settings: { characters: [], locations: [] },
       episodeTitles: {},
@@ -351,5 +365,7 @@ describe('parseProject（ProjectDocument → 会话文档，§11 归一化）', 
     expect(scene.locationId).toBeDefined()
     expect(round.content.settings.characters.map((c) => c.name)).toEqual(['林'])
     expect(round.content.settings.locations.map((l) => l.name)).toEqual(['天台'])
+    // 旧格式从未持久化视口：保持缺省，打开时 fitView（不伪造原点视口）
+    expect(round.content.viewport).toBeUndefined()
   })
 })

@@ -6,11 +6,13 @@
 /** 当前文档版本；旧扁平存储格式视为 0，由 §11 迁移链升级。 */
 export const CURRENT_SCHEMA_VERSION = 1
 
+/** 画布坐标点（像素）。 */
 export interface Point {
   x: number
   y: number
 }
 
+/** 视口：画布平移与缩放状态；随文档持久化，但变更不触发脏保存（transient）。 */
 export interface Viewport {
   x: number
   y: number
@@ -46,16 +48,19 @@ export interface DialogueLine {
   vo?: boolean
 }
 
+/** 对白节点：台词/动作行的有序列表。 */
 export interface DialogueSpec {
   lines: DialogueLine[]
 }
 
-/** 分支选项：端口/胶囊渲染的唯一真相；边经 sourceHandle（option-N）引用下标。 */
+/** 分支选项：端口/胶囊渲染的唯一真相；边经 sourceHandle（option-<选项 id>）引用，
+ * 删选项不位移其余出口的连线归属。 */
 export interface BranchOption {
   id: string
   label: string
 }
 
+/** 分支节点 spec：分岔问句 + 选项列表。 */
 export interface BranchSpec {
   prompt: string
   options: BranchOption[]
@@ -77,12 +82,25 @@ export interface ShotSpec {
   refs: ShotRef[]
 }
 
+/** 节点 spec 的判别联合：形状由 StoryNode.type 决定。 */
 export type NodeSpec = SceneSpec | BeatSpec | DialogueSpec | BranchSpec | ShotSpec
+
+/** 节点 meta：标题与集归属等元信息（§4.1）。 */
+export interface NodeMeta {
+  /** 节点标题；分支/分镜卡省略（由 spec.prompt / spec.shotNo 派生，不落镜像字段）。 */
+  label?: string
+  /** 集归属（大纲分组的唯一依据；分镜卡随宿主场景）。 */
+  episodeNo?: number
+  /** 首版运行态不维护时间戳，落盘可省略；保留字段为演进占位。 */
+  createdAt?: string
+  updatedAt?: string
+}
 
 /** 画布节点：叙事单元，四分区（layout/ui/spec/meta）。 */
 export interface StoryNode {
   id: string
   type: NodeType
+  /** 渲染布局：位置必填，尺寸/层级可选。 */
   layout: {
     position: Point
     size?: { width: number; height: number }
@@ -91,29 +109,26 @@ export interface StoryNode {
   /** 会话态，加载时重置（§11.2）。 */
   ui: {
     selected: boolean
+    /** 首版节点无折叠形态，恒 true；保留字段为演进占位。 */
     expanded: boolean
   }
   data: {
     spec: NodeSpec
-    meta: {
-      /** 节点标题；分支/分镜卡省略（由 spec.prompt / spec.shotNo 派生，不落镜像字段）。 */
-      label?: string
-      episodeNo?: number
-      createdAt?: string
-      updatedAt?: string
-    }
+    meta: NodeMeta
   }
 }
 
-/** 剧情连线：顺序流 / 分支流 / 派生从属。 */
+/** 剧情连线：顺序流 / 分支流 / 派生从属（§5）。 */
 export interface StoryEdge {
   id: string
   source: string
   target: string
+  /** branch 节点的出口 id（option-<选项 id>）；attach 的 shots 端口等。 */
   sourceHandle?: string
   targetHandle?: string
   data: {
     kind: 'sequence' | 'branch' | 'attach'
+    /** 同一 source 多出口的排列顺序。 */
     order?: number
   }
 }
@@ -130,12 +145,14 @@ export interface Character {
   avatarAssetId?: string
 }
 
+/** 地点实体：节点按 id 引用。 */
 export interface Location {
   id: string
   name: string
   note?: string
 }
 
+/** 道具实体：节点按 id 引用。 */
 export interface PropItem {
   id: string
   name: string
@@ -164,7 +181,8 @@ export interface ProjectDocument {
   graph: {
     nodes: StoryNode[]
     edges: StoryEdge[]
-    viewport: Viewport
+    /** 视口随文档持久化；缺省 = 从未保存过视口（打开时 fitView），字段可省略。 */
+    viewport?: Viewport
   }
   settings: {
     characters: Record<string, Character>

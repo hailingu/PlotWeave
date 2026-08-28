@@ -9,12 +9,13 @@ import { useCallback, useEffect, useRef } from 'react'
 import type { ProjectContent } from '../model/content'
 
 /** 画布变化防抖落盘：doc 任意片段变化后 delayMs 内无新变化才写入；
- * 组件卸载时若仍有脏数据则立即冲刷。 */
+ * 组件卸载时若仍有脏数据则立即冲刷。返回 markDirty(doc)：供无重渲染的
+ * transient 变更（如视口 ref 更新）显式标脏并换入最新文档。 */
 export function useDebouncedSave(
   doc: ProjectContent,
   onSave: (doc: ProjectContent) => void,
   delayMs = 600,
-): void {
+): (doc: ProjectContent) => void {
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const dirtyRef = useRef(false)
   const latestRef = useRef(doc)
@@ -27,6 +28,19 @@ export function useDebouncedSave(
     onSave(latestRef.current)
   }, [onSave])
 
+  const markDirty = useCallback(
+    (next: ProjectContent) => {
+      latestRef.current = next
+      dirtyRef.current = true
+      if (saveTimer.current) clearTimeout(saveTimer.current)
+      saveTimer.current = setTimeout(() => {
+        saveTimer.current = null
+        flushSave()
+      }, delayMs)
+    },
+    [flushSave, delayMs],
+  )
+
   useEffect(() => {
     if (firstRender.current) {
       firstRender.current = false
@@ -38,7 +52,7 @@ export function useDebouncedSave(
       saveTimer.current = null
       flushSave()
     }, delayMs)
-    // 名称/节点/边/设定集触发防抖（集标题、视口经卸载冲刷或下次保存兜底）
+    // 名称/节点/边/设定集触发防抖（集标题、视口经 markDirty 或卸载冲刷兜底）
   }, [doc.name, doc.nodes, doc.edges, doc.settings, flushSave, delayMs])
 
   useEffect(() => {
@@ -47,4 +61,6 @@ export function useDebouncedSave(
       flushSave()
     }
   }, [flushSave])
+
+  return markDirty
 }

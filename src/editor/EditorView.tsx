@@ -138,11 +138,12 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
   const episodeTitlesRef = useRef(episodeTitles)
   episodeTitlesRef.current = episodeTitles
 
-  // 视口随文档持久化（数据模型 §3），但本身是 transient：平移/缩放不触发
-  // 脏保存，只在下一次内容落盘时捎带最新值（§9.4 update_viewport 规则）。
+  // 视口随文档持久化（数据模型 §3）：本身无重渲染，onMoveEnd 更新 ref 后
+  // 经 markDirty 显式标脏并换入最新文档——纯平移/缩放也会防抖落盘，
+  // 卸载冲刷与后续内容保存拿到的都是最新视口（不落 stale 值）。
   const viewportRef = useRef<Viewport | undefined>(project.viewport)
 
-  useDebouncedSave(
+  const markDirty = useDebouncedSave(
     {
       name: project.name,
       createdAt: project.createdAt,
@@ -153,6 +154,22 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
       viewport: viewportRef.current,
     },
     onSave,
+  )
+
+  const onMoveEnd = useCallback(
+    (_: unknown, vp: Viewport) => {
+      viewportRef.current = vp
+      markDirty({
+        name: project.name,
+        createdAt: project.createdAt,
+        nodes,
+        edges,
+        settings,
+        episodeTitles,
+        viewport: vp,
+      })
+    },
+    [markDirty, project.name, project.createdAt, nodes, edges, settings, episodeTitles],
   )
 
   // 命令栈（§3.3/§4.3）：全部写操作入栈，undo 始终兜底
@@ -706,9 +723,7 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
             /* 有持久化视口则恢复，否则首开 fitView（§3 视口随文档持久化） */
             defaultViewport={project.viewport}
             fitView={!project.viewport}
-            onMoveEnd={(_, vp) => {
-              viewportRef.current = vp
-            }}
+            onMoveEnd={onMoveEnd}
           >
             <Background
               variant={BackgroundVariant.Dots}

@@ -226,7 +226,7 @@ fn wrap_legacy(id: &str, v: &serde_json::Value) -> ProjectFile {
         graph: json!({
             "nodes": v.get("nodes").cloned().unwrap_or(json!([])),
             "edges": v.get("edges").cloned().unwrap_or(json!([])),
-            "viewport": { "x": 0, "y": 0, "zoom": 1 },
+            // 旧格式从未持久化视口：保持缺省（前端打开时 fitView），不伪造原点
         }),
         settings: v.get("settings").cloned().unwrap_or_else(|| json!({})),
         episode_titles: v.get("episodeTitles").cloned().unwrap_or_else(|| json!({})),
@@ -458,7 +458,8 @@ mod tests {
         assert_eq!(file.project.name, "旧项目");
         assert_eq!(file.project.updated_at, "2023-11-14T22:13:20.000Z");
         assert_eq!(file.graph["nodes"][0]["id"], json!("a"));
-        assert_eq!(file.graph["viewport"], json!({ "x": 0, "y": 0, "zoom": 1 }));
+        // 旧格式无视口：信封不伪造，前端打开时 fitView
+        assert!(file.graph.get("viewport").is_none());
         assert_eq!(file.episode_titles, json!({ "1": "开端" }));
     }
 

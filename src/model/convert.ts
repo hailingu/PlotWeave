@@ -103,11 +103,10 @@ export function fromDocSettings(settings: Partial<ProjectDocument['settings']>):
   }
 }
 
-const DEFAULT_VIEWPORT: Viewport = { x: 0, y: 0, zoom: 1 }
-
 /**
  * 序列化：会话文档 → ProjectDocument。updatedAt 由时钟参数盖戳（默认现在）；
- * createdAt 缺省时与 updatedAt 同刻（新建项目首次落盘）。
+ * createdAt 缺省时与 updatedAt 同刻（新建项目首次落盘）。视口/资产桶缺省时
+ * 省略字段而非伪造缺省值——视口省略 = 打开时 fitView；资产省略 = 无资产。
  */
 export function serializeProject(
   content: ProjectContent,
@@ -125,11 +124,11 @@ export function serializeProject(
     graph: {
       nodes: content.nodes.map(toStoryNode),
       edges: content.edges.map(toStoryEdge),
-      viewport: content.viewport ?? DEFAULT_VIEWPORT,
+      ...(content.viewport ? { viewport: content.viewport } : {}),
     },
     settings: toDocSettings(content.settings),
     episodeTitles: content.episodeTitles ?? {},
-    assets: { byId: {} },
+    assets: content.assets ?? { byId: {} },
   }
 }
 
@@ -251,7 +250,8 @@ export function parseProject(raw: unknown): ParseResult {
   return { content: fromDocument(normalized), migrated: false, warnings }
 }
 
-/** 落盘文档 → 会话文档（归一化之后调用）。 */
+/** 落盘文档 → 会话文档（归一化之后调用）。视口/资产桶缺省字段保持缺省：
+ * 视口缺省 = 打开时 fitView；资产缺省 = 无资产（透传桶，见 content.ts）。 */
 function fromDocument(doc: ProjectDocument): ProjectContent {
   const nodesById = new Map(doc.graph.nodes.map((n) => [n.id, n]))
   return {
@@ -261,6 +261,7 @@ function fromDocument(doc: ProjectDocument): ProjectContent {
     edges: doc.graph.edges.map((e) => fromStoryEdge(e, nodesById)),
     settings: fromDocSettings(doc.settings),
     episodeTitles: normalizeEpisodeTitles(doc.episodeTitles),
-    viewport: doc.graph.viewport ?? DEFAULT_VIEWPORT,
+    viewport: doc.graph.viewport,
+    assets: doc.assets,
   }
 }
