@@ -13,6 +13,7 @@ import {
   normalizeSettings,
   type ProjectSettings,
 } from './editor/settings'
+import { uid } from './uid'
 import type { ProjectSummary } from './home/projects'
 
 /** 项目完整内容：名称 + 画布两数组 + 设定集 + 大纲集标题。 */
@@ -53,7 +54,24 @@ function needsMigration(file: { nodes?: CanvasNode[]; settings?: unknown }): boo
       return Array.isArray(d.characters) || typeof d.location === 'string' || !Array.isArray(d.characterIds)
     }
     if (n.type === 'dialogue') {
-      return Array.isArray(d.lines) && (d.lines as { speaker?: unknown }[]).some((l) => l.speaker && typeof l.speaker === 'object')
+      const lines = d.lines as Array<{ id?: unknown; speaker?: unknown }> | undefined
+      return (
+        Array.isArray(lines) &&
+        (lines.some((l) => l.speaker && typeof l.speaker === 'object') ||
+          lines.some((l) => typeof l.id !== 'string'))
+      )
+    }
+    if (n.type === 'branch') {
+      // 选项为字符串（id 化之前）或缺 id 的对象
+      const opts = d.options as Array<string | { id?: unknown }> | undefined
+      return (
+        Array.isArray(opts) &&
+        opts.some((o) => typeof o === 'string' || typeof (o as { id?: unknown }).id !== 'string')
+      )
+    }
+    if (n.type === 'shot') {
+      const refs = d.refs as Array<{ id?: unknown }> | undefined
+      return Array.isArray(refs) && refs.some((r) => typeof r.id !== 'string')
     }
     return false
   }) || file.settings === undefined
@@ -63,6 +81,8 @@ function needsMigration(file: { nodes?: CanvasNode[]; settings?: unknown }): boo
  * 旧 schema → 新 schema 迁移（保用户数据）：
  * - scene.characters（头像对象）→ characterIds；scene.location（字符串）→ locationId；
  *   dialogue 台词 speaker（对象）→ 实体 id。
+ * - 列表项稳定 id 回填（S6479）：dialogue.lines / branch.options / shot.refs；
+ *   branch 选项字符串形态升级为 {id, label} 对象。
  * - 缺失的设定集实体就地补建：角色按「名字首字 + 渐变」匹配，地点按名字匹配；
  *   匹配不到建新实体（角色名回退头像单字，用户可改名）。
  */
@@ -125,14 +145,45 @@ export function migrateProjectDocument(doc: ProjectDocument): {
     if (node.type === 'dialogue') {
       const d = node.data
       const lines = d.lines.map((line) => {
-        if (line.kind === 'line' && line.speaker && typeof line.speaker === 'object') {
-          const av = line.speaker as { label: string; gradient?: string }
+        let next = line
+        if (next.kind === 'line' && next.speaker && typeof next.speaker === 'object') {
+          const av = next.speaker as { label: string; gradient?: string }
           migrated = true
-          return { ...line, speaker: ensureCharacter(av.label, av.gradient) }
+          next = { ...next, speaker: ensureCharacter(av.label, av.gradient) }
         }
-        return line
+        if (typeof next.id !== 'string') {
+          migrated = true
+          next = { ...next, id: uid('line') }
+        }
+        return next
       })
       return { ...node, data: { ...d, lines } } as CanvasNode
+    }
+    if (node.type === 'branch') {
+      const d = node.data
+      const options = d.options.map((o) => {
+        if (typeof o === 'string') {
+          migrated = true
+          return { id: uid('opt'), label: o }
+        }
+        if (typeof (o as { id?: unknown }).id !== 'string') {
+          migrated = true
+          return { ...(o as { label: string }), id: uid('opt') }
+        }
+        return o
+      })
+      return { ...node, data: { ...d, options } } as CanvasNode
+    }
+    if (node.type === 'shot') {
+      const d = node.data
+      const refs = d.refs.map((r) => {
+        if (typeof (r as { id?: unknown }).id !== 'string') {
+          migrated = true
+          return { ...r, id: uid('ref') }
+        }
+        return r
+      })
+      return { ...node, data: { ...d, refs } } as CanvasNode
     }
     return node
   })

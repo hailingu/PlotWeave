@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { useNodeEdit } from '../../nodeEdit'
 import type { ProjectSettings } from '../../settings'
+import { uid } from '../../../uid'
 import type {
   BeatNodeData,
   BranchNodeData,
@@ -229,7 +230,7 @@ function DialogueForm({
       </Field>
       <div className="pw-set-label">台词</div>
       {d.lines.map((line, i) => (
-        <div key={i} className="pw-set-line">
+        <div key={line.id} className="pw-set-line">
           <div className="pw-set-line-bar">
             <select
               className="pw-set-input pw-set-kind"
@@ -285,7 +286,7 @@ function DialogueForm({
         className="pw-set-add"
         onClick={() =>
           patchNode(node.id, {
-            lines: [...d.lines, { kind: 'line', speaker: defaultSpeaker, side: 'left', text: '' }],
+            lines: [...d.lines, { id: uid('line'), kind: 'line', speaker: defaultSpeaker, side: 'left', text: '' }],
           })
         }
       >
@@ -311,7 +312,7 @@ function BranchForm({ node }: { readonly node: Extract<PanelNode, { type: 'branc
       </Field>
       <div className="pw-set-label">选项</div>
       {d.options.map((option, i) => (
-        <div key={i} className="pw-set-line">
+        <div key={option.id} className="pw-set-line">
           <div className="pw-set-line-bar">
             <span className="pw-set-optno">{String.fromCodePoint(65 + i)}</span>
             <span className="pw-sp" />
@@ -328,10 +329,10 @@ function BranchForm({ node }: { readonly node: Extract<PanelNode, { type: 'branc
           </div>
           <input
             className="pw-set-input"
-            value={option}
+            value={option.label}
             onChange={(e) =>
               patchNode(node.id, {
-                options: d.options.map((o, idx) => (idx === i ? e.target.value : o)),
+                options: d.options.map((o, idx) => (idx === i ? { ...o, label: e.target.value } : o)),
               })
             }
           />
@@ -341,7 +342,9 @@ function BranchForm({ node }: { readonly node: Extract<PanelNode, { type: 'branc
         type="button"
         className="pw-set-add"
         onClick={() =>
-          patchNode(node.id, { options: [...d.options, `选项 ${String.fromCodePoint(65 + d.options.length)}`] })
+          patchNode(node.id, {
+            options: [...d.options, { id: uid('opt'), label: `选项 ${String.fromCodePoint(65 + d.options.length)}` }],
+          })
         }
       >
         ＋ 添加选项
@@ -399,7 +402,7 @@ function ShotForm({ node }: { readonly node: Extract<PanelNode, { type: 'shot' }
       </Field>
       <div className="pw-set-label">引用位</div>
       {d.refs.map((ref, i) => (
-        <div key={i} className="pw-set-line">
+        <div key={ref.id} className="pw-set-line">
           <div className="pw-set-line-bar">
             <select
               className="pw-set-input pw-set-kind"
@@ -444,7 +447,7 @@ function ShotForm({ node }: { readonly node: Extract<PanelNode, { type: 'shot' }
         type="button"
         className="pw-set-add"
         onClick={() =>
-          patchNode(node.id, { refs: [...d.refs, { kind: 'character', label: '' }] })
+          patchNode(node.id, { refs: [...d.refs, { id: uid('ref'), kind: 'character', label: '' }] })
         }
       >
         ＋ 添加引用

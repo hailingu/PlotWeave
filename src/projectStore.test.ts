@@ -105,6 +105,58 @@ describe('migrateProjectDocument（旧 schema → 引用 id 化）', () => {
   })
 })
 
+describe('migrateProjectDocument · 列表项稳定 id 回填（S6479）', () => {
+  it('分支字符串选项升级为 {id,label}；缺 id 对象只补 id；已有 id 原样保留', () => {
+    const branch = node({
+      id: 'b1',
+      type: 'branch',
+      position: { x: 0, y: 0 },
+      data: { prompt: '？', options: ['坦白', { label: '隐瞒' }, { id: 'opt-keep', label: '沉默' }] },
+    } as unknown as CanvasNode)
+    const { doc, migrated } = migrateProjectDocument({
+      name: 'x',
+      nodes: [branch],
+      edges: [],
+      settings: { characters: [], locations: [] },
+    })
+    expect(migrated).toBe(true)
+    const options = (doc.nodes[0].data as { options: Array<{ id: string; label: string }> }).options
+    expect(options.map((o) => o.label)).toEqual(['坦白', '隐瞒', '沉默'])
+    expect(options[0].id).toMatch(/^opt-/)
+    expect(options[1].id).toMatch(/^opt-/)
+    expect(options[2].id).toBe('opt-keep')
+  })
+
+  it('对白 lines / 分镜 refs 无 id 回填；迁移幂等（二刷 migrated=false）', () => {
+    const dialogue = node({
+      id: 'd1',
+      type: 'dialogue',
+      position: { x: 0, y: 0 },
+      data: { name: '对白', lines: [{ kind: 'action', text: '雨停' }] },
+    } as unknown as CanvasNode)
+    const shot = node({
+      id: 'sh1',
+      type: 'shot',
+      position: { x: 0, y: 0 },
+      data: { shotNo: 1, size: '中景', picture: '', prompt: '', refs: [{ kind: 'audio', label: '雨声' }] },
+    } as unknown as CanvasNode)
+    const { doc, migrated } = migrateProjectDocument({
+      name: 'x',
+      nodes: [dialogue, shot],
+      edges: [],
+      settings: { characters: [], locations: [] },
+    })
+    expect(migrated).toBe(true)
+    const lines = (doc.nodes[0].data as { lines: Array<{ id: string }> }).lines
+    const refs = (doc.nodes[1].data as { refs: Array<{ id: string }> }).refs
+    expect(lines[0].id).toMatch(/^line-/)
+    expect(refs[0].id).toMatch(/^ref-/)
+
+    const again = migrateProjectDocument({ name: 'x', nodes: doc.nodes, edges: [], settings: doc.settings })
+    expect(again.migrated).toBe(false)
+  })
+})
+
 describe('projectStore 内存门面（浏览器回退）', () => {
   it('list 首次返回两个种子项目，按更新时间倒序', async () => {
     const list = await projectStore.list()

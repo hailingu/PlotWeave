@@ -47,9 +47,9 @@ export const SAMPLE_NODES: CanvasNode[] = [
       picture: '雨夜城市天台全景，林晚撑伞站在栏杆边，陈默从阴影中走出。',
       prompt: 'rainy rooftop at night, cinematic wide shot, neon reflections, two figures confronting',
       refs: [
-        { kind: 'character', label: '林晚垫图' },
-        { kind: 'location', label: '天台底图' },
-        { kind: 'audio', label: '雨声' },
+        { id: 'ref-sg-1', kind: 'character', label: '林晚垫图' },
+        { id: 'ref-sg-2', kind: 'location', label: '天台底图' },
+        { id: 'ref-sg-3', kind: 'audio', label: '雨声' },
       ],
     },
   },
@@ -63,8 +63,8 @@ export const SAMPLE_NODES: CanvasNode[] = [
       picture: '档案袋里的旧照片特写，指尖颤抖，雨水滴落在照片上。',
       prompt: 'extreme close-up of trembling hands holding an old photo, raindrops, shallow depth of field',
       refs: [
-        { kind: 'character', label: '林晚垫图' },
-        { kind: 'audio', label: '雨声' },
+        { id: 'ref-sg-4', kind: 'character', label: '林晚垫图' },
+        { id: 'ref-sg-5', kind: 'audio', label: '雨声' },
       ],
     },
   },
@@ -75,9 +75,9 @@ export const SAMPLE_NODES: CanvasNode[] = [
     data: {
       name: '真相逼近',
       lines: [
-        { kind: 'line', speaker: LIN_WAN_ID, side: 'left', text: '你早就知道，对吗？' },
-        { kind: 'action', text: '陈默沉默，雨声渐大' },
-        { kind: 'line', speaker: CHEN_MO_ID, side: 'right', text: '……我是为了保护你。' },
+        { id: 'line-sg-1', kind: 'line', speaker: LIN_WAN_ID, side: 'left', text: '你早就知道，对吗？' },
+        { id: 'line-sg-2', kind: 'action', text: '陈默沉默，雨声渐大' },
+        { id: 'line-sg-3', kind: 'line', speaker: CHEN_MO_ID, side: 'right', text: '……我是为了保护你。' },
       ],
     },
   },
@@ -85,7 +85,10 @@ export const SAMPLE_NODES: CanvasNode[] = [
     id: 'branch-1',
     type: 'branch',
     position: { x: 1230, y: 60 },
-    data: { prompt: '林晚是否发现真相？', options: ['坦白', '隐瞒'] },
+    data: { prompt: '林晚是否发现真相？', options: [
+        { id: 'opt-sg-1', label: '坦白' },
+        { id: 'opt-sg-2', label: '隐瞒' },
+      ] },
   },
   {
     id: 'scene-4',
@@ -109,8 +112,8 @@ export const SAMPLE_NODES: CanvasNode[] = [
     data: {
       name: '十年前的雨',
       lines: [
-        { kind: 'line', speaker: CHEN_MO_ID, side: 'left', text: '那晚，我也在旧公寓。' },
-        { kind: 'line', speaker: LIN_WAN_ID, side: 'right', text: '为什么十年都不告诉我？' },
+        { id: 'line-sg-4', kind: 'line', speaker: CHEN_MO_ID, side: 'left', text: '那晚，我也在旧公寓。' },
+        { id: 'line-sg-5', kind: 'line', speaker: LIN_WAN_ID, side: 'right', text: '为什么十年都不告诉我？' },
       ],
     },
   },
@@ -159,8 +162,8 @@ export const SAMPLE_NODES: CanvasNode[] = [
       picture: '旧公寓昏黄灯光下，林晚蹲在纸箱前，手里的照片微微发抖。',
       prompt: 'dim old apartment, medium shot, woman crouching by cardboard boxes, warm tungsten light',
       refs: [
-        { kind: 'character', label: '林晚垫图' },
-        { kind: 'location', label: '旧公寓底图' },
+        { id: 'ref-sg-6', kind: 'character', label: '林晚垫图' },
+        { id: 'ref-sg-7', kind: 'location', label: '旧公寓底图' },
       ],
     },
   },
@@ -168,7 +171,10 @@ export const SAMPLE_NODES: CanvasNode[] = [
     id: 'branch-2',
     type: 'branch',
     position: { x: 2980, y: 80 },
-    data: { prompt: '林晚是否原谅陈默？', options: ['原谅', '不原谅'] },
+    data: { prompt: '林晚是否原谅陈默？', options: [
+        { id: 'opt-sg-3', label: '原谅' },
+        { id: 'opt-sg-4', label: '不原谅' },
+      ] },
   },
   {
     id: 'scene-7',

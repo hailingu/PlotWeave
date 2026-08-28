@@ -85,7 +85,7 @@ function inspectorRows(
     case 'branch':
       return [
         { label: '问句', value: node.data.prompt },
-        { label: '选项', value: node.data.options.join(' / ') },
+        { label: '选项', value: node.data.options.map((o) => o.label).join(' / ') },
       ]
     case 'shot':
       return [

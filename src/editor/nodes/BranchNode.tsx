@@ -43,8 +43,8 @@ export default function BranchNode({ id, data, selected }: NodeProps<BranchFlowN
         </button>
       </div>
       {data.options.map((option, i) => (
-        <div key={i} className="pw-branch-opt">
-          {option}
+        <div key={option.id} className="pw-branch-opt">
+          {option.label}
           <Handle
             id={`${BRANCH_OPTION_HANDLE_PREFIX}${i}`}
             type="source"

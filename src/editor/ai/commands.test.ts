@@ -132,6 +132,80 @@ describe('validateAiBatch：校验折叠（数据模型 §12，执行前批量�
   })
 })
 
+describe('列表项稳定 id 归一化（S6479 信任边界：AI 可送旧形态，落画布前补 id）', () => {
+  it('create_node 对白：无 id 的 lines 回填 line- 前缀 id；已有 id 原样保留（幂等）', () => {
+    const v = validateAiBatch(
+      [
+        {
+          op: 'create_node',
+          nodeType: 'dialogue',
+          data: {
+            name: '摊牌',
+            lines: [
+              { kind: 'line', speaker: 'ch1', side: 'left', text: '别走' },
+              { id: 'line-keep', kind: 'action', text: '雨声渐大' },
+            ],
+          },
+        },
+      ],
+      snap(),
+    )
+    expect(v.ok).toBe(true)
+    const cmd = v.commands[0] as { data: { lines: Array<{ id: string }> } }
+    expect(cmd.data.lines[0].id).toMatch(/^line-/)
+    expect(cmd.data.lines[1].id).toBe('line-keep')
+  })
+
+  it('create_node 分支：字符串选项升级为 {id,label}；缺 id 对象只补 id；已有 id 保留', () => {
+    const v = validateAiBatch(
+      [
+        {
+          op: 'create_node',
+          nodeType: 'branch',
+          data: { prompt: '追或不追？', options: ['追', { label: '不追' }, { id: 'opt-keep', label: '观望' }] },
+        },
+      ],
+      snap(),
+    )
+    expect(v.ok).toBe(true)
+    const cmd = v.commands[0] as { data: { options: Array<{ id: string; label: string }> } }
+    expect(cmd.data.options.map((o) => o.label)).toEqual(['追', '不追', '观望'])
+    expect(cmd.data.options[0].id).toMatch(/^opt-/)
+    expect(cmd.data.options[1].id).toMatch(/^opt-/)
+    expect(cmd.data.options[2].id).toBe('opt-keep')
+  })
+
+  it('create_node 分镜：refs 无 id 回填 ref- 前缀 id', () => {
+    const v = validateAiBatch(
+      [
+        {
+          op: 'create_node',
+          nodeType: 'shot',
+          data: { shotNo: 1, size: '中景', picture: '', prompt: '', refs: [{ kind: 'audio', label: '雨声' }] },
+        },
+      ],
+      snap(),
+    )
+    expect(v.ok).toBe(true)
+    const cmd = v.commands[0] as { data: { refs: Array<{ id: string }> } }
+    expect(cmd.data.refs[0].id).toMatch(/^ref-/)
+  })
+
+  it('update_node 的 patch 按快照中既有节点类型同样归一化', () => {
+    const s: AiGraphSnapshot = {
+      nodes: [{ id: 'd9', type: 'dialogue', label: '对白 · 夜谈' }],
+      edges: [],
+    }
+    const v = validateAiBatch(
+      [{ op: 'update_node', nodeId: 'd9', patch: { lines: [{ kind: 'action', text: '沉默' }] } }],
+      s,
+    )
+    expect(v.ok).toBe(true)
+    const cmd = v.commands[0] as unknown as { patch: { lines: Array<{ id: string }> } }
+    expect(cmd.patch.lines[0].id).toMatch(/^line-/)
+  })
+})
+
 describe('wouldCreateCycle（连线防环，画布与批量共用）', () => {
   it('沿现有边回到 source 即成环，反之放行', () => {
     const edges = [

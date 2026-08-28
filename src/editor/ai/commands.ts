@@ -1,4 +1,5 @@
 import { branchOptionHandle, SCENE_SHOT_HANDLE, wouldCreateCycle } from '../graphRules'
+import { uid } from '../../uid'
 
 /**
  * AI 批量命令的解析与校验（docs/ui-design.md §6 改动预览卡、数据模型 §12）。
@@ -204,6 +205,32 @@ function resolveRef(st: FoldState, cmd: Record<string, unknown>, key: string): s
   return owner !== undefined && st.exists.has(owner) ? owner : null
 }
 
+/** 入站归一化（信任边界）：列表项稳定 id 补齐（S6479）。
+ * AI 可按旧契约发送无 id 的台词行/引用位、或纯字符串选项；
+ * 进画布前统一升级为带 id 结构；已有 id 原样保留（幂等），
+ * 非对象条目原样放行（内部形状校验不在本层职责内）。 */
+function normalizeNodeFields(nodeType: string, fields: Record<string, unknown>): Record<string, unknown> {
+  const out = { ...fields }
+  if (nodeType === 'dialogue' && Array.isArray(out.lines)) {
+    out.lines = (out.lines as unknown[]).map((l) =>
+      plainObject(l) && typeof l.id !== 'string' ? { ...l, id: uid('line') } : l,
+    )
+  }
+  if (nodeType === 'branch' && Array.isArray(out.options)) {
+    out.options = (out.options as unknown[]).map((o) => {
+      if (typeof o === 'string') return { id: uid('opt'), label: o }
+      if (plainObject(o) && typeof o.id !== 'string') return { ...o, id: uid('opt') }
+      return o
+    })
+  }
+  if (nodeType === 'shot' && Array.isArray(out.refs)) {
+    out.refs = (out.refs as unknown[]).map((r) =>
+      plainObject(r) && typeof r.id !== 'string' ? { ...r, id: uid('ref') } : r,
+    )
+  }
+  return out
+}
+
 function foldCreate(st: FoldState, cmd: Record<string, unknown>, index: number): void {
   const nodeType = asText(cmd.nodeType)
   if (!(nodeType in NODE_TYPE_LABELS)) return st.fail(index, `未知节点类型：${nodeType || '（空）'}`)
@@ -220,7 +247,12 @@ function foldCreate(st: FoldState, cmd: Record<string, unknown>, index: number):
   st.types.set(virtualId, nodeType)
   if (refName !== '') st.refOwner.set(refName, virtualId)
   st.items.push({ kind: 'create', danger: false, key: `c${index}`, label: `${OP_LABELS.create} ${typeLabel} · ${name}` })
-  st.commands.push({ op: 'create_node', nodeType, ref: refName === '' ? undefined : refName, data })
+  st.commands.push({
+    op: 'create_node',
+    nodeType,
+    ref: refName === '' ? undefined : refName,
+    data: normalizeNodeFields(nodeType, data),
+  })
 }
 
 function foldUpdate(st: FoldState, cmd: Record<string, unknown>, index: number): void {
@@ -236,7 +268,12 @@ function foldUpdate(st: FoldState, cmd: Record<string, unknown>, index: number):
     key: `u${index}`,
     label: `${OP_LABELS.update} ${st.labels.get(id) ?? '未知节点'}（${Object.keys(patch).join('、')}）${reasonOf(cmd)}`,
   })
-  st.commands.push({ op: 'update_node', nodeId: asText(cmd.nodeId), patch, reason: asText(cmd.reason) })
+  st.commands.push({
+    op: 'update_node',
+    nodeId: asText(cmd.nodeId),
+    patch: normalizeNodeFields(st.types.get(id) ?? '', patch),
+    reason: asText(cmd.reason),
+  })
 }
 
 function foldDelete(st: FoldState, cmd: Record<string, unknown>, index: number): void {

@@ -60,7 +60,7 @@ function nodeLine(n: CanvasNode, r: DigestResolvers): string {
       return `- ${n.id} ${epTag(n.data)}对白·${n.data.name}（${speakers.size} 人 · ${lineCount} 句）`
     }
     case 'branch':
-      return `- ${n.id} ${epTag(n.data)}分支·${cut(n.data.prompt)}（选项:${n.data.options.map((o) => cut(o, 16)).join('/')}）`
+      return `- ${n.id} ${epTag(n.data)}分支·${cut(n.data.prompt)}（选项:${n.data.options.map((o) => cut(o.label, 16)).join('/')}）`
     case 'shot':
       return `- ${n.id} SHOT${pad2(n.data.shotNo)}·${n.data.size}（画面:${cut(n.data.picture, 24)} · Prompt:${cut(n.data.prompt, 24)}）`
   }
