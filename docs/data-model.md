@@ -16,6 +16,8 @@
 > 六轮评审修订（2026-08-29）：§4.2 ShotRef 改为引用位/自由位互斥判别联合（targetId 与 label 不共存，迁移不得残留旧 label）；§9.3 命令信封改为判别相关的 GraphCommand，type 与 patch 异型组合在类型层不可表示；ui-design §4.2 节奏卡字段名对齐 `tone`、§7.4 集持久化改为已定稿的 episodeTitles。
 >
 > 七轮评审修订（2026-08-29）：ShotRef 对侧成员补 never 禁写（混写形状彻底不可表示）；GraphCommand 收敛为单一判别联合名（GraphCommandOf\<K\> 供已知类型提取）；§9 补 `rename_project` 命令（payload + inverse 捕获旧名）；ui-design §4.3 注明分镜卡无内联改名（镜号标题由 spec.shotNo 派生，面板内编辑）。
+>
+> 八轮评审修订（2026-08-29）：§11.1 迁移链首环补第三步——旧式边判别字段（type/className）改写为显式 data.kind；§9.3 batch.commands 放宽为 `Array<GraphCommand | InverseCommand>`（batch 的 undo 是子命令 inverse 的逆序数组，须可赋值）；§10.5 `save_project` 索引同步扩为 name/updatedAt（rename_project 的索引一致性在此发生）。
 > 适用范围：画布文档模型、设定与资产模型、命令与撤销、本地存储体系、AI Agent 交互。
 > 明确不在范围内：用户体系、租户、余额/计费。PlotWeave 是单用户 BYOK 桌面工具；若未来出现此类需求，另起《服务端领域模型》文档。
 
@@ -410,7 +412,7 @@ interface CommandPayloads {
   // ── 视口 ──
   update_viewport: { to: Viewport }
   // ── 批量 ──
-  batch: { commands: GraphCommand[] }           // 子命令，逆序 undo
+  batch: { commands: Array<GraphCommand | InverseCommand> }  // 子命令，逆序 undo；batch 自身的 inverse = 子命令 inverse 的逆序数组（InverseCommand 形状）
 }
 
 type CommandType = keyof CommandPayloads
@@ -557,7 +559,7 @@ provider 的 API key 以**密文 `keyEnc`** 存于 provider 配置：Rust `seal`
 | `list_projects()` | 读 `index.json`，返回项目列表 |
 | `create_project(name)` | 建目录 + 初始 `project.json` + 更新索引 |
 | `load_project(projectId)` | 读 `project.json`；信封级兼容（旧扁平格式包装为 v0 信封）。节点级 schemaVersion 迁移与归一化在前端模型层（见十一），Rust 不参与 |
-| `save_project(projectId, doc)` | tmp + rename 原子写 + 更新索引的 updatedAt |
+| `save_project(projectId, doc)` | tmp + rename 原子写 + 更新索引的 name/updatedAt（重命名后索引同步在此发生） |
 | `import_asset(projectId, file)` | 拷贝入项目 `assets/`，返回 `AssetRef` |
 | `list_library_assets()` | 读 `library.json`，返回资产库列表（含编组） |
 | `import_library_asset(file, meta)` | 拷贝入 `library/assets/` + 更新库索引，meta 含 name/kind/view/groupId/tags |
@@ -572,7 +574,7 @@ provider 的 API key 以**密文 `keyEnc`** 存于 provider 配置：Rust `seal`
 
 `load_project` 返回后、交付画布前执行归一化管线，保证任何历史版本的文档都以当前形态进入会话。管线位于**前端模型层**（纯 TS，无框架依赖，与 §2 分层一致）——Rust 持久化层对节点/边结构不透明，只做信封透传与项目名/id 校验；信封级兼容（旧扁平格式缺 `schemaVersion` 时包装为 v0 信封）由 Rust 在 `load_project` 内完成。
 
-1. `schemaVersion` 低于当前版本时按迁移链逐级升级；高于当前版本时拒绝并提示升级应用。**迁移链首环**：schemaVersion 0（首版扁平存储格式：顶层 `name`/`updated_at`/`nodes`/`edges`/`settings`/`episodeTitles`，节点数据未分区、设定集为数组）→ 1（本文档结构）。首环包含两次改写，先补列表项稳定 id（`branch.options` 等），**再**把分支边的旧式下标句柄（`option-0`、`option-1`…）按「下标 → 迁移后选项 id」改写为稳定 id 句柄（`option-<id>`）——改写必须发生在补 id 之后、孤儿边隔离之前，否则旧连线会在加载时被误隔离；无法解析的越界下标原样保留，交由第 3 步隔离并警告。
+1. `schemaVersion` 低于当前版本时按迁移链逐级升级；高于当前版本时拒绝并提示升级应用。**迁移链首环**：schemaVersion 0（首版扁平存储格式：顶层 `name`/`updated_at`/`nodes`/`edges`/`settings`/`episodeTitles`，节点数据未分区、设定集为数组）→ 1（本文档结构）。首环包含三次改写，全部发生在孤儿边隔离之前：① 补列表项稳定 id（`branch.options` 等）；② 把分支边的旧式下标句柄（`option-0`、`option-1`…）按「下标 → 迁移后选项 id」改写为稳定 id 句柄（`option-<id>`）——必须在补 id 之后，否则旧连线会在加载时被误隔离，无法解析的越界下标原样保留，交由第 3 步隔离并警告；③ 把边的旧式运行态判别字段（`type: 'branch'`、`className: 'pw-edge-attach'/'pw-edge-sequence'`）按归类规则（§4.3 连线语义）改写为显式 `data.kind`——缺失此步 attach 边会混入剧情流、branch 语义丢失。
 2. 重置所有节点 `ui.selected = false`。
 3. 隔离孤儿边（source/target 节点已不存在；branch 边的 `sourceHandle` 指向的选项已不存在同论）并记录警告——修复而非拒绝，单条坏数据不阻断加载（见 8.2.4）。
 4. 标记（而非清除）悬空的设定引用与资产引用。
