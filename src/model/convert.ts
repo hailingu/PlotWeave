@@ -141,6 +141,46 @@ export interface ParseResult {
   warnings: string[]
 }
 
+/** 场景节点的悬空角色/地点引用警告（§11.4）：只记警告，不清除 id。 */
+function sceneRefWarnings(
+  n: StoryNode,
+  settings: ProjectDocument['settings'],
+  warnings: string[],
+): void {
+  const s = n.data.spec as { characterIds?: string[]; locationId?: string }
+  for (const cid of s.characterIds ?? []) {
+    if (!settings.characters[cid]) {
+      warnings.push(`节点 ${n.id} 引用了不存在的角色 ${cid}`)
+    }
+  }
+  if (s.locationId && !settings.locations[s.locationId]) {
+    warnings.push(`节点 ${n.id} 引用了不存在的地点 ${s.locationId}`)
+  }
+}
+
+/** 对白节点的悬空 speaker 引用警告（§11.4）：只记警告，不清除 id。 */
+function dialogueRefWarnings(
+  n: StoryNode,
+  settings: ProjectDocument['settings'],
+  warnings: string[],
+): void {
+  for (const line of (n.data.spec as { lines?: { speaker?: string }[] }).lines ?? []) {
+    if (line.speaker && !settings.characters[line.speaker]) {
+      warnings.push(`节点 ${n.id} 的对白引用了不存在的角色 ${line.speaker}`)
+    }
+  }
+}
+
+/** 按节点类型分发悬空设定引用检查（§11.4）。 */
+function collectDanglingRefWarnings(
+  n: StoryNode,
+  settings: ProjectDocument['settings'],
+  warnings: string[],
+): void {
+  if (n.type === 'scene') sceneRefWarnings(n, settings, warnings)
+  if (n.type === 'dialogue') dialogueRefWarnings(n, settings, warnings)
+}
+
 /** 归一化（§11.2–§11.4）：重置选中态、隔离孤儿边、标记悬空设定引用。 */
 function normalizeDocument(doc: ProjectDocument): { doc: ProjectDocument; warnings: string[] } {
   const warnings: string[] = []
@@ -151,25 +191,7 @@ function normalizeDocument(doc: ProjectDocument): { doc: ProjectDocument; warnin
     return !orphan
   })
   const nodes = doc.graph.nodes.map((n) => {
-    const { spec } = n.data
-    if (n.type === 'scene') {
-      const s = spec as { characterIds?: string[]; locationId?: string }
-      for (const cid of s.characterIds ?? []) {
-        if (!doc.settings.characters[cid]) {
-          warnings.push(`节点 ${n.id} 引用了不存在的角色 ${cid}`)
-        }
-      }
-      if (s.locationId && !doc.settings.locations[s.locationId]) {
-        warnings.push(`节点 ${n.id} 引用了不存在的地点 ${s.locationId}`)
-      }
-    }
-    if (n.type === 'dialogue') {
-      for (const line of (spec as { lines?: { speaker?: string }[] }).lines ?? []) {
-        if (line.speaker && !doc.settings.characters[line.speaker]) {
-          warnings.push(`节点 ${n.id} 的对白引用了不存在的角色 ${line.speaker}`)
-        }
-      }
-    }
+    collectDanglingRefWarnings(n, doc.settings, warnings)
     return { ...n, ui: { ...n.ui, selected: false } }
   })
   return { doc: { ...doc, graph: { ...doc.graph, nodes, edges } }, warnings }
@@ -181,11 +203,11 @@ function normalizeDocument(doc: ProjectDocument): { doc: ProjectDocument; warnin
  */
 export function parseProject(raw: unknown): ParseResult {
   if (typeof raw !== 'object' || raw === null) {
-    throw new Error('项目文件损坏：不是有效的文档对象')
+    throw new TypeError('项目文件损坏：不是有效的文档对象')
   }
   const version = (raw as { schemaVersion?: unknown }).schemaVersion
   if (typeof version !== 'number') {
-    throw new Error('项目文件损坏：缺少 schemaVersion')
+    throw new TypeError('项目文件损坏：缺少 schemaVersion')
   }
   if (version > CURRENT_SCHEMA_VERSION) {
     throw new Error(`文档版本过新（schemaVersion ${version}），请升级应用`)
