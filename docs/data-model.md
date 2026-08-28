@@ -12,6 +12,8 @@
 > 四轮评审修订（2026-08-29）：§4.2 ShotRef 契约改为 targetId 引用目标（§8.1 单一真相，显示名实时解析），label 降级为自由引用位兜底；ui-design §4.3 分支改名路由更正为 `update_node_spec`（标题由 spec.prompt 派生，不落 meta.label 镜像）。
 >
 > 五轮评审修订（2026-08-29）：§9.3 `connect_edge` 负载说明去掉 label（分支胶囊文案按 sourceHandle 派生）；ui-design §4.2 引用位描述统一为 `spec.refs`（删去不存在的 spec.params）；§7.3 写明项目复制的资产携带规则（索引随文档走，整目录拷贝随 §7.1 落地）。
+>
+> 六轮评审修订（2026-08-29）：§4.2 ShotRef 改为引用位/自由位互斥判别联合（targetId 与 label 不共存，迁移不得残留旧 label）；§9.3 命令信封改为 GraphCommandBase + 判别相关的 GraphCommand\<K\>/TypedGraphCommand，type 与 patch 异型组合在类型层不可表示；ui-design §4.2 节奏卡字段名对齐 `tone`、§7.4 集持久化改为已定稿的 episodeTitles。
 > 适用范围：画布文档模型、设定与资产模型、命令与撤销、本地存储体系、AI Agent 交互。
 > 明确不在范围内：用户体系、租户、余额/计费。PlotWeave 是单用户 BYOK 桌面工具；若未来出现此类需求，另起《服务端领域模型》文档。
 
@@ -172,16 +174,13 @@ interface ShotSpec {
   refs: ShotRef[]            // 引用位：角色垫图 / 场景底图 / 音频
 }
 
-/** 分镜卡引用位：引用的唯一真相是 targetId（§8.1）——显示名按 id 实时解析，
- * 改名不断引用，被删按 §8.2.3 失效展示。label 仅作无 targetId 的自由引用位
- * （手填文案）的显示兜底；有 targetId 时不落 label（禁止镜像字段）。
+/** 分镜卡引用位：引用位与自由位互斥（targetId / label 不共存）。
+ * 引用位的唯一真相是 targetId（§8.1）——显示名按 id 实时解析，改名不断引用，
+ * 被删按 §8.2.3 失效展示；落 label 即镜像字段（禁止，§8.1.1）。
  * 项目资产（§7.1）落地后 audio 引用目标为 assets.byId 资产 id。 */
-interface ShotRef {
-  id: string               // 列表项稳定标识（列表 key），非引用目标
-  kind: 'character' | 'location' | 'audio'
-  targetId?: string        // 引用目标：settings 实体 id（character/location）或资产 id（audio）
-  label?: string           // 自由引用位的手填显示文案（无 targetId 时才有意义）
-}
+type ShotRef =
+  | { id: string; kind: 'character' | 'location' | 'audio'; targetId: string }  // 引用位
+  | { id: string; kind: 'character' | 'location' | 'audio'; label: string }     // 自由位：手填文案
 ```
 
 ### 4.3 端口与连接
@@ -405,7 +404,7 @@ interface CommandPayloads {
   // ── 视口 ──
   update_viewport: { to: Viewport }
   // ── 批量 ──
-  batch: { commands: GraphCommand[] }           // 子命令，逆序 undo
+  batch: { commands: TypedGraphCommand[] }      // 子命令，逆序 undo
 }
 
 type CommandType = keyof CommandPayloads
@@ -416,19 +415,30 @@ type InverseCommand = {
   [K in CommandType]: { type: K; patch: CommandPayloads[K] }
 }[CommandType]
 
-/** 类型化的命令信封：patch 形状由 type 决定。
+/** 类型化的命令信封：type 与 patch 必须同源于同一个 K（判别相关）。
  * inverse 是「另一条命令」（类型常与正向不同：upsert_character 新增的
  * inverse 是 delete_character），故为 InverseCommand 而非 CommandPayloads[T]。 */
-type GraphCommand<T extends CommandType = CommandType> = {
+interface GraphCommandBase {
   id: string
-  type: T
   actor: 'user' | 'agent'
-  patch: CommandPayloads[T]
   /** 执行时自动捕获的逆向命令；命令创建者不传。 */
   inverse?: InverseCommand
   transient?: boolean
   timestamp: number
 }
+
+/** 已知具体类型时使用（如 applyCommand 的逐类型分发）。 */
+type GraphCommand<K extends CommandType = CommandType> = GraphCommandBase & {
+  type: K
+  patch: CommandPayloads[K]
+}
+
+/** 命令数组/存储/传输的默认形状：type 与 patch 判别相关的联合——
+ * 裸 `type: K` 与异型 patch 的组合（如 delete_node 配 remove_asset 负载）
+ * 在类型层即不可表示。 */
+type TypedGraphCommand = {
+  [K in CommandType]: GraphCommand<K>
+}[CommandType]
 ```
 
 **inverse 捕获规则**（applyCommand 内置，逐类型固定；inverse 的 type 按「捕获到的实际逆操作」取值）：
