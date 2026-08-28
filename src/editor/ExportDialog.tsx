@@ -2,10 +2,10 @@ import { useEffect, useRef, useState } from 'react'
 
 interface ExportDialogProps {
   /** 项目名，用于标题与默认文件名。 */
-  projectName: string
+  readonly projectName: string
   /** 已生成的剧本 Markdown 全文。 */
-  text: string
-  onClose: () => void
+  readonly text: string
+  readonly onClose: () => void
 }
 
 /**
@@ -62,11 +62,11 @@ export default function ExportDialog({ projectName, text, onClose }: ExportDialo
   }
 
   return (
-    <div className="pw-overlay" onPointerDown={onClose} role="presentation">
-      <div
+    <div className="pw-overlay" onPointerDown={onClose}>
+      {/* 原生 dialog 承载对话框语义（S6819）；非模态，Esc/遮罩关闭为手动处理 */}
+      <dialog
+        open
         className="pw-dialog"
-        role="dialog"
-        aria-modal="true"
         aria-label="导出剧本"
         onPointerDown={(e) => e.stopPropagation()}
       >
@@ -89,7 +89,7 @@ export default function ExportDialog({ projectName, text, onClose }: ExportDialo
             下载 .md
           </button>
         </div>
-      </div>
+      </dialog>
     </div>
   )
 }
