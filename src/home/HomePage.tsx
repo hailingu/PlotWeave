@@ -4,19 +4,19 @@ import { ConfirmDeleteDialog, RenameDialog } from './Dialogs'
 import { filterProjects, type ProjectSummary } from './projects'
 
 interface HomePageProps {
-  projects: ProjectSummary[]
+  readonly projects: ProjectSummary[]
   /** 列表首次加载中（持久化命令异步返回）；加载完前不显示空状态引导。 */
-  loading?: boolean
+  readonly loading?: boolean
   /** 单击海报卡打开项目，窗口切换为编辑器（文档式双界面，§3.1；应用方修订：由双击改单击）。 */
-  onOpenProject: (id: string) => void
+  readonly onOpenProject: (id: string) => void
   /** 工具栏「＋ 新建项目」、网格末尾「＋ 新剧」与空状态引导共用此入口。 */
-  onCreateProject: () => void
+  readonly onCreateProject: () => void
   /** 卡片菜单 · 重命名（§3.2）。 */
-  onRenameProject: (id: string, name: string) => void
+  readonly onRenameProject: (id: string, name: string) => void
   /** 卡片菜单 · 复制（§3.2）。 */
-  onDuplicateProject: (id: string) => void
+  readonly onDuplicateProject: (id: string) => void
   /** 卡片菜单 · 删除（§3.2，确认对话框在本层弹出）。 */
-  onDeleteProject: (id: string) => void
+  readonly onDeleteProject: (id: string) => void
 }
 
 /**

@@ -2,11 +2,11 @@ import WeaveCover from './WeaveCover'
 import { formatRelativeTime, projectStatsLabel, type ProjectSummary } from './projects'
 
 interface ProjectCardProps {
-  project: ProjectSummary
+  readonly project: ProjectSummary
   /** 单击海报打开项目（docs/ui-design.md §3.2；应用方修订：由双击改单击）。 */
-  onOpen: (id: string) => void
+  readonly onOpen: (id: string) => void
   /** 右键海报或点悬停 ⋯ 按钮弹出项目菜单（§3.2）。 */
-  onMenu: (e: { clientX: number; clientY: number; preventDefault: () => void }, project: ProjectSummary) => void
+  readonly onMenu: (e: { clientX: number; clientY: number; preventDefault: () => void }, project: ProjectSummary) => void
 }
 
 /**

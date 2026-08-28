@@ -9,9 +9,9 @@ import { useEffect, useRef, useState } from 'react'
 
 interface RenameDialogProps {
   /** 当前项目名，作为输入初值。 */
-  currentName: string
-  onCancel: () => void
-  onConfirm: (name: string) => void
+  readonly currentName: string
+  readonly onCancel: () => void
+  readonly onConfirm: (name: string) => void
 }
 
 export function RenameDialog({ currentName, onCancel, onConfirm }: RenameDialogProps) {
@@ -30,11 +30,12 @@ export function RenameDialog({ currentName, onCancel, onConfirm }: RenameDialogP
   }
 
   return (
-    <div className="pw-overlay" onPointerDown={onCancel} role="presentation">
-      <div
+    <div className="pw-overlay" onPointerDown={onCancel}>
+      {/* 原生 dialog 承载对话框语义（S6819）；非模态——焦点圈定不存在，
+          手动 Esc 处理保留 */}
+      <dialog
+        open
         className="pw-dialog pw-dialog-sm"
-        role="dialog"
-        aria-modal="true"
         aria-label="重命名项目"
         onPointerDown={(e) => e.stopPropagation()}
       >
@@ -68,15 +69,15 @@ export function RenameDialog({ currentName, onCancel, onConfirm }: RenameDialogP
             重命名
           </button>
         </div>
-      </div>
+      </dialog>
     </div>
   )
 }
 
 interface ConfirmDeleteDialogProps {
-  projectName: string
-  onCancel: () => void
-  onConfirm: () => void
+  readonly projectName: string
+  readonly onCancel: () => void
+  readonly onConfirm: () => void
 }
 
 export function ConfirmDeleteDialog({
@@ -93,11 +94,10 @@ export function ConfirmDeleteDialog({
   }, [onCancel])
 
   return (
-    <div className="pw-overlay" onPointerDown={onCancel} role="presentation">
-      <div
+    <div className="pw-overlay" onPointerDown={onCancel}>
+      <dialog
+        open
         className="pw-dialog pw-dialog-sm"
-        role="dialog"
-        aria-modal="true"
         aria-label="删除项目"
         onPointerDown={(e) => e.stopPropagation()}
       >
@@ -118,7 +118,7 @@ export function ConfirmDeleteDialog({
             删除
           </button>
         </div>
-      </div>
+      </dialog>
     </div>
   )
 }
