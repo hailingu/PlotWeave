@@ -13,7 +13,9 @@
 >
 > 五轮评审修订（2026-08-29）：§9.3 `connect_edge` 负载说明去掉 label（分支胶囊文案按 sourceHandle 派生）；ui-design §4.2 引用位描述统一为 `spec.refs`（删去不存在的 spec.params）；§7.3 写明项目复制的资产携带规则（索引随文档走，整目录拷贝随 §7.1 落地）。
 >
-> 六轮评审修订（2026-08-29）：§4.2 ShotRef 改为引用位/自由位互斥判别联合（targetId 与 label 不共存，迁移不得残留旧 label）；§9.3 命令信封改为 GraphCommandBase + 判别相关的 GraphCommand\<K\>/TypedGraphCommand，type 与 patch 异型组合在类型层不可表示；ui-design §4.2 节奏卡字段名对齐 `tone`、§7.4 集持久化改为已定稿的 episodeTitles。
+> 六轮评审修订（2026-08-29）：§4.2 ShotRef 改为引用位/自由位互斥判别联合（targetId 与 label 不共存，迁移不得残留旧 label）；§9.3 命令信封改为判别相关的 GraphCommand，type 与 patch 异型组合在类型层不可表示；ui-design §4.2 节奏卡字段名对齐 `tone`、§7.4 集持久化改为已定稿的 episodeTitles。
+>
+> 七轮评审修订（2026-08-29）：ShotRef 对侧成员补 never 禁写（混写形状彻底不可表示）；GraphCommand 收敛为单一判别联合名（GraphCommandOf\<K\> 供已知类型提取）；§9 补 `rename_project` 命令（payload + inverse 捕获旧名）；ui-design §4.3 注明分镜卡无内联改名（镜号标题由 spec.shotNo 派生，面板内编辑）。
 > 适用范围：画布文档模型、设定与资产模型、命令与撤销、本地存储体系、AI Agent 交互。
 > 明确不在范围内：用户体系、租户、余额/计费。PlotWeave 是单用户 BYOK 桌面工具；若未来出现此类需求，另起《服务端领域模型》文档。
 
@@ -174,13 +176,14 @@ interface ShotSpec {
   refs: ShotRef[]            // 引用位：角色垫图 / 场景底图 / 音频
 }
 
-/** 分镜卡引用位：引用位与自由位互斥（targetId / label 不共存）。
+/** 分镜卡引用位：引用位与自由位互斥（targetId / label 不共存——
+ * 对侧成员以 never 禁写，混写形状在类型层不可表示）。
  * 引用位的唯一真相是 targetId（§8.1）——显示名按 id 实时解析，改名不断引用，
  * 被删按 §8.2.3 失效展示；落 label 即镜像字段（禁止，§8.1.1）。
  * 项目资产（§7.1）落地后 audio 引用目标为 assets.byId 资产 id。 */
 type ShotRef =
-  | { id: string; kind: 'character' | 'location' | 'audio'; targetId: string }  // 引用位
-  | { id: string; kind: 'character' | 'location' | 'audio'; label: string }     // 自由位：手填文案
+  | { id: string; kind: 'character' | 'location' | 'audio'; targetId: string; label?: never }  // 引用位
+  | { id: string; kind: 'character' | 'location' | 'audio'; label: string; targetId?: never }  // 自由位：手填文案
 ```
 
 ### 4.3 端口与连接
@@ -361,6 +364,7 @@ interface AssetGroup {
 | 设定 | `upsert_character` / `delete_character`（地点、道具同构） |
 | 设定文档 | `upsert_document` / `delete_document` | | |
 | 集标题 | `set_episode_title` | title 为空串 = 删除该集的标题键 |
+| 项目 | `rename_project` | 改 `project.name`；name 在信任边界校验，索引同步由持久化层负责 |
 | 资产 | `set_asset` / `remove_asset` | |
 | 视口 | `update_viewport` | transient，不进撤销栈 |
 | 批量 | `batch` | 一等命令，整批作为单个撤销单元 |
@@ -398,13 +402,15 @@ interface CommandPayloads {
   delete_document: { documentId: string }          // inverse 捕获被删文档
   // ── 集标题 ──
   set_episode_title: { episodeNo: number; title: string }  // title 为空串 = 删除该键
+  // ── 项目 ──
+  rename_project: { name: string }
   // ── 资产 ──
   set_asset: { asset: AssetRef }
   remove_asset: { assetId: string }             // 只移除索引，不删文件（见 7.3）
   // ── 视口 ──
   update_viewport: { to: Viewport }
   // ── 批量 ──
-  batch: { commands: TypedGraphCommand[] }      // 子命令，逆序 undo
+  batch: { commands: GraphCommand[] }           // 子命令，逆序 undo
 }
 
 type CommandType = keyof CommandPayloads
@@ -427,18 +433,15 @@ interface GraphCommandBase {
   timestamp: number
 }
 
-/** 已知具体类型时使用（如 applyCommand 的逐类型分发）。 */
-type GraphCommand<K extends CommandType = CommandType> = GraphCommandBase & {
-  type: K
-  patch: CommandPayloads[K]
-}
-
-/** 命令数组/存储/传输的默认形状：type 与 patch 判别相关的联合——
+/** 命令信封（数组/存储/传输/Agent 产出的默认形状）：type 与 patch 判别相关——
  * 裸 `type: K` 与异型 patch 的组合（如 delete_node 配 remove_asset 负载）
  * 在类型层即不可表示。 */
-type TypedGraphCommand = {
-  [K in CommandType]: GraphCommand<K>
+type GraphCommand = GraphCommandBase & {
+  [K in CommandType]: { type: K; patch: CommandPayloads[K] }
 }[CommandType]
+
+/** 已知具体类型时的提取（applyCommand 逐类型分发）。 */
+type GraphCommandOf<K extends CommandType> = Extract<GraphCommand, { type: K }>
 ```
 
 **inverse 捕获规则**（applyCommand 内置，逐类型固定；inverse 的 type 按「捕获到的实际逆操作」取值）：
@@ -455,6 +458,7 @@ type TypedGraphCommand = {
 | `upsert_document` | 新增 → `delete_document`；更新 → 旧文档整体 | 视新增/更新而定 |
 | `delete_document` | 等效 `upsert_document { document: 旧文档 }` | `upsert_document` |
 | `set_episode_title` | 同结构，title 换为旧值；原来无该键 → inverse 为空串（即删除） | `set_episode_title` |
+| `rename_project` | 同结构，name 换为 docBefore 中的旧名 | `rename_project` |
 | `set_asset` / `remove_asset` | 互逆，AssetRef 取自 docBefore | 对偶命令 |
 | `batch` | 子命令 inverse 的**逆序**数组，进同一 `batch` | `batch` |
 
