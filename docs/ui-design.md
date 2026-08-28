@@ -257,16 +257,16 @@ macOS 惯例 ⌘, 独立设置窗口，左侧分段列表：
 
 ## 十、对《数据模型设计》的修订清单
 
-本设计确认后，需修订 docs/data-model.md 的以下条目（修订本身另走评审）：
+下表条目已在《数据模型设计》v1 定稿（2026-08-28，含 08-29 定稿评审修订）中全部落地，此处保留作对照记录；后续以 docs/data-model.md 为准：
 
-| 条目 | 现状 | 修订 |
+| 条目 | 原现状 | 落地情况 |
 | --- | --- | --- |
-| §10.3 `AppSettings.theme` | `theme?: 'dark' \| 'light'` | 移除——HIG 禁止 App 内外观开关，跟随系统 |
-| §7.2 `LibraryAsset.kind` | `character/location/prop/reference/other` | 扩展为 `character/location/wardrobe/colorlight/reference/other`；`prop` 并入 `wardrobe`，附迁移规则 |
-| §7.2 `AssetView` | `front/side/back/three_quarter/top/other` | 增补 `expression`（表情集）、`turnout`（定妆/造型） |
-| §4.2 `SceneSpec` | 无分镜结构 | 分镜建模为画布一等节点类型 `shot`（镜号/景别/画面/镜头 Prompt/引用位），经 `attach` 边垂直下挂索引卡；随 §13 流程评审 |
-| §4 节点 `meta` | 无集归属 | 增补 `episodeNo?: number`（大纲分组的唯一依据；不建「集」实体表，首版集 = 编号 + 大纲行内标题） |
-| §7 设定集条目 | 仅结构化字段 + 资产引用 | 增补「文档」条目类型（自由文本：小传/世界观/术语表），与结构化条目双向关联 |
+| §10.3 `AppSettings.theme` | `theme?: 'dark' \| 'light'` | ✅ 已移除——HIG 禁止 App 内外观开关，跟随系统（`AppSettings` 无外观字段） |
+| §7.2 `LibraryAsset.kind` | `character/location/prop/reference/other` | ✅ 已扩展为 `character/location/wardrobe/colorlight/reference/other`；`prop` 并入 `wardrobe`，迁移规则见 §7.2 |
+| §7.2 `AssetView` | `front/side/back/three_quarter/top/other` | ✅ 已增补 `expression`（表情集）、`turnout`（定妆/造型） |
+| §4.2 `SceneSpec` | 无分镜结构 | ✅ 分镜已建模为画布一等节点类型 `shot`（ShotSpec：镜号/景别/画面/镜头 Prompt/引用位），经 `attach` 边垂直下挂索引卡 |
+| §4 节点 `meta` | 无集归属 | ✅ 已增补 `episodeNo?: number`（大纲分组的唯一依据；不建「集」实体表，标题存 `episodeTitles`） |
+| §7 设定集条目 | 仅结构化字段 + 资产引用 | ✅ 已增补「文档」条目类型 `SettingsDocument`，持久化于 `settings.documents`（§6/§3） |
 
 ## 十一、Windows 适配预留
 

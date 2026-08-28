@@ -4,6 +4,8 @@
 > 本版相对草案的修订：ProjectDocument 补 `episodeTitles` 字段；§4.2 各 spec 字段对齐 UI 设计已实现的节点形态（场景卡 sceneNo/interior/weather、对白行 kind/side/vo、分支 options 入 spec）；§5 分支边不再持久化 label 拷贝；§6 Character/Location 字段对齐运行态实体（gradient/bio/note，长篇自由文本由 SettingsDocument 承载）；§11 明确归一化管线位于前端模型层，并登记 schemaVersion 0（旧扁平存储格式）→ 1 的迁移。
 >
 > 定稿评审修订（2026-08-29）：§9 补 `set_episode_title` 命令（集标题变更走命令通道）；`settings.documents` 补为 SettingsDocument 的持久化位置；§10.5 `load_project` 职责更正为信封级兼容（与 §11 分层一致）；分支边 `sourceHandle` 由数组下标（option-N）改为稳定选项 id（option-\<id\>），删除选项连带其连线进同一 `batch`，杜绝下标位移导致的静默改接。
+>
+> 二轮评审修订（2026-08-29）：§11.1 迁移链首环写明「补选项稳定 id → 改写旧式下标句柄 → 孤儿边隔离」的先后依赖（P1）；§9 设定文档命令显式化为 `upsert_document` / `delete_document`（含 inverse 捕获）；docs/ui-design.md §10 对照清单标记全部落地。
 > 适用范围：画布文档模型、设定与资产模型、命令与撤销、本地存储体系、AI Agent 交互。
 > 明确不在范围内：用户体系、租户、余额/计费。PlotWeave 是单用户 BYOK 桌面工具；若未来出现此类需求，另起《服务端领域模型》文档。
 
@@ -343,7 +345,8 @@ interface AssetGroup {
 | 节点 | `create_node` / `delete_node` / `move_node` / `resize_node` | delete 连带删除关联边，inverse 一并恢复 |
 | 节点数据 | `update_node_spec` / `update_node_meta` / `update_node_ui` | |
 | 连接 | `connect_edge` / `disconnect_edge` | |
-| 设定 | `upsert_character` / `delete_character`（地点、道具、设定文档同构） | |
+| 设定 | `upsert_character` / `delete_character`（地点、道具同构） |
+| 设定文档 | `upsert_document` / `delete_document` | | |
 | 集标题 | `set_episode_title` | title 为空串 = 删除该集的标题键 |
 | 资产 | `set_asset` / `remove_asset` | |
 | 视口 | `update_viewport` | transient，不进撤销栈 |
@@ -374,9 +377,12 @@ interface CommandPayloads {
   // ── 连接 ──
   connect_edge: { edge: StoryEdge }             // 完整边，含 data.kind/label
   disconnect_edge: { edgeId: string }           // inverse 捕获被删边
-  // ── 设定（地点、道具、设定文档同构，略）──
+  // ── 设定（地点、道具同构，略）──
   upsert_character: { character: Character }    // id 已存在 = 更新，否则 = 新增
   delete_character: { characterId: string }     // inverse 捕获被删实体
+  // ── 设定文档（SettingsDocument，§6）──
+  upsert_document: { document: SettingsDocument }  // id 已存在 = 更新，否则 = 新增
+  delete_document: { documentId: string }          // inverse 捕获被删文档
   // ── 集标题 ──
   set_episode_title: { episodeNo: number; title: string }  // title 为空串 = 删除该键
   // ── 资产 ──
@@ -414,6 +420,8 @@ type GraphCommand<T extends CommandType = CommandType> = {
 | `connect_edge` / `disconnect_edge` | 互逆，边数据取自 docBefore |
 | `upsert_character` | 新增 → `delete_character`；更新 → 旧实体整体 |
 | `delete_character` | 等效 `upsert_character { character: 旧实体 }` |
+| `upsert_document` | 新增 → `delete_document`；更新 → 旧文档整体 |
+| `delete_document` | 等效 `upsert_document { document: 旧文档 }` |
 | `set_episode_title` | 同结构，title 换为旧值；原来无该键 → inverse 为空串（即删除） |
 | `set_asset` / `remove_asset` | 互逆，AssetRef 取自 docBefore |
 | `batch` | 子命令 inverse 的**逆序**数组 |
@@ -528,7 +536,7 @@ provider 的 API key 以**密文 `keyEnc`** 存于 provider 配置：Rust `seal`
 
 `load_project` 返回后、交付画布前执行归一化管线，保证任何历史版本的文档都以当前形态进入会话。管线位于**前端模型层**（纯 TS，无框架依赖，与 §2 分层一致）——Rust 持久化层对节点/边结构不透明，只做信封透传与项目名/id 校验；信封级兼容（旧扁平格式缺 `schemaVersion` 时包装为 v0 信封）由 Rust 在 `load_project` 内完成。
 
-1. `schemaVersion` 低于当前版本时按迁移链逐级升级；高于当前版本时拒绝并提示升级应用。**迁移链首环**：schemaVersion 0（首版扁平存储格式：顶层 `name`/`updated_at`/`nodes`/`edges`/`settings`/`episodeTitles`，节点数据未分区、设定集为数组）→ 1（本文档结构）。
+1. `schemaVersion` 低于当前版本时按迁移链逐级升级；高于当前版本时拒绝并提示升级应用。**迁移链首环**：schemaVersion 0（首版扁平存储格式：顶层 `name`/`updated_at`/`nodes`/`edges`/`settings`/`episodeTitles`，节点数据未分区、设定集为数组）→ 1（本文档结构）。首环包含两次改写，先补列表项稳定 id（`branch.options` 等），**再**把分支边的旧式下标句柄（`option-0`、`option-1`…）按「下标 → 迁移后选项 id」改写为稳定 id 句柄（`option-<id>`）——改写必须发生在补 id 之后、孤儿边隔离之前，否则旧连线会在加载时被误隔离；无法解析的越界下标原样保留，交由第 3 步隔离并警告。
 2. 重置所有节点 `ui.selected = false`。
 3. 隔离孤儿边（source/target 节点已不存在；branch 边的 `sourceHandle` 指向的选项已不存在同论）并记录警告——修复而非拒绝，单条坏数据不阻断加载（见 8.2.4）。
 4. 标记（而非清除）悬空的设定引用与资产引用。
