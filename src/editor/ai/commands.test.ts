@@ -204,6 +204,53 @@ describe('列表项稳定 id 归一化（S6479 信任边界：AI 可送旧形态
     const cmd = v.commands[0] as unknown as { patch: { lines: Array<{ id: string }> } }
     expect(cmd.patch.lines[0].id).toMatch(/^line-/)
   })
+
+  it('重复或空串 id 不信任：列表内冲突/空白 id 重生成（React key 唯一性）', () => {
+    const v = validateAiBatch(
+      [
+        {
+          op: 'create_node',
+          nodeType: 'dialogue',
+          data: {
+            name: '摊牌',
+            lines: [
+              { id: 'dup', kind: 'line', speaker: 'ch1', side: 'left', text: '一' },
+              { id: 'dup', kind: 'line', speaker: 'ch1', side: 'left', text: '二' },
+              { id: '', kind: 'action', text: '三' },
+              { id: 'solo', kind: 'action', text: '四' },
+            ],
+          },
+        },
+        {
+          op: 'create_node',
+          nodeType: 'branch',
+          data: { prompt: '？', options: [{ id: 'x', label: 'A' }, { id: 'x', label: 'B' }] },
+        },
+        {
+          op: 'create_node',
+          nodeType: 'shot',
+          data: { shotNo: 1, size: '中景', picture: '', prompt: '', refs: [{ id: '', kind: 'audio', label: '雨声' }] },
+        },
+      ],
+      snap(),
+    )
+    expect(v.ok).toBe(true)
+    const lines = (v.commands[0] as unknown as { data: { lines: Array<{ id: string }> } }).data.lines
+    const lineIds = lines.map((l) => l.id)
+    expect(new Set(lineIds).size).toBe(4) // 全唯一
+    expect(lineIds.every((id) => id !== '')).toBe(true)
+    expect(lineIds[0]).toBe('dup') // 首个保留
+    expect(lineIds[1]).toMatch(/^line-/) // 冲突重生成
+    expect(lineIds[2]).toMatch(/^line-/) // 空串重生成
+    expect(lineIds[3]).toBe('solo') // 无冲突原样
+
+    const options = (v.commands[1] as unknown as { data: { options: Array<{ id: string }> } }).data.options
+    expect(options[0].id).toBe('x')
+    expect(options[1].id).toMatch(/^opt-/)
+
+    const refs = (v.commands[2] as unknown as { data: { refs: Array<{ id: string }> } }).data.refs
+    expect(refs[0].id).toMatch(/^ref-/)
+  })
 })
 
 describe('wouldCreateCycle（连线防环，画布与批量共用）', () => {

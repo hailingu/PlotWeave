@@ -207,26 +207,37 @@ function resolveRef(st: FoldState, cmd: Record<string, unknown>, key: string): s
 
 /** 入站归一化（信任边界）：列表项稳定 id 补齐（S6479）。
  * AI 可按旧契约发送无 id 的台词行/引用位、或纯字符串选项；
- * 进画布前统一升级为带 id 结构；已有 id 原样保留（幂等），
- * 非对象条目原样放行（内部形状校验不在本层职责内）。 */
+ * 进画布前统一升级为带 id 结构。已有 id 仅在「非空且列表内唯一」时
+ * 保留（幂等）；空串/重复 id 就地重生成——这些 id 直接作 React key，
+ * 冲突会导致行复用/误编辑。非对象条目原样放行（形状校验不在本层）。 */
 function normalizeNodeFields(nodeType: string, fields: Record<string, unknown>): Record<string, unknown> {
-  const out = { ...fields }
-  if (nodeType === 'dialogue' && Array.isArray(out.lines)) {
-    out.lines = (out.lines as unknown[]).map((l) =>
-      plainObject(l) && typeof l.id !== 'string' ? { ...l, id: uid('line') } : l,
-    )
-  }
-  if (nodeType === 'branch' && Array.isArray(out.options)) {
-    out.options = (out.options as unknown[]).map((o) => {
-      if (typeof o === 'string') return { id: uid('opt'), label: o }
-      if (plainObject(o) && typeof o.id !== 'string') return { ...o, id: uid('opt') }
-      return o
+  /** 列表项 id 归一化：非空唯一保留，否则重生成。 */
+  const normalizeIds = (items: unknown[], prefix: string): unknown[] => {
+    const seen = new Set<string>()
+    return items.map((item) => {
+      if (!plainObject(item)) return item
+      const id = item.id
+      if (typeof id === 'string' && id !== '' && !seen.has(id)) {
+        seen.add(id)
+        return item
+      }
+      const fresh = uid(prefix)
+      seen.add(fresh)
+      return { ...item, id: fresh }
     })
   }
-  if (nodeType === 'shot' && Array.isArray(out.refs)) {
-    out.refs = (out.refs as unknown[]).map((r) =>
-      plainObject(r) && typeof r.id !== 'string' ? { ...r, id: uid('ref') } : r,
+  const out = { ...fields }
+  if (nodeType === 'dialogue' && Array.isArray(out.lines)) {
+    out.lines = normalizeIds(out.lines as unknown[], 'line')
+  }
+  if (nodeType === 'branch' && Array.isArray(out.options)) {
+    out.options = normalizeIds(
+      (out.options as unknown[]).map((o) => (typeof o === 'string' ? { label: o } : o)),
+      'opt',
     )
+  }
+  if (nodeType === 'shot' && Array.isArray(out.refs)) {
+    out.refs = normalizeIds(out.refs as unknown[], 'ref')
   }
   return out
 }
