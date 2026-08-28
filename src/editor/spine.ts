@@ -1,4 +1,5 @@
 import { edgeKindOf, wouldCreateCycle } from './graphRules'
+import { compareCodeUnits } from '../compare'
 
 /**
  * 剧情流接缝计划（docs/ui-design.md §3.5：大纲内拖拽排序 = 重排 sequence 边）。
@@ -25,7 +26,45 @@ type SpliceEdge = {
 }
 
 const pairSig = (pairs: Array<{ source: string; target: string }>): string =>
-  pairs.map((p) => `${p.source}->${p.target}`).sort().join(',')
+  pairs.map((p) => `${p.source}->${p.target}`).sort(compareCodeUnits).join(',')
+
+/** id 是否剧情流成员（只有 attach 下挂边的分镜卡不算）。 */
+function isSpineMember(seq: SpliceEdge[], id: string): boolean {
+  return seq.some((e) => e.source === id || e.target === id)
+}
+
+/** 恰一条入边时返回唯一前邻；多入口返回 null（语义上不应发生）。 */
+function uniquePredecessor(seq: SpliceEdge[], id: string): string | null {
+  const into = seq.filter((e) => e.target === id)
+  return into.length === 1 ? into[0].source : null
+}
+
+/** 恰一条出边时返回唯一后继；多出口的分叉返回 null（不擅自直连）。 */
+function uniqueSuccessor(seq: SpliceEdge[], id: string): string | null {
+  const out = seq.filter((e) => e.source === id)
+  return out.length === 1 ? out[0].target : null
+}
+
+/** 拔出 dragged 后锚点前/后插入位的实际邻居：
+ * 锚点恰是原前邻时，X 的新后继仍是原后继（其余边已随拔出移除），余同理。 */
+function insertionNeighbors(
+  remaining: SpliceEdge[],
+  anchorId: string,
+  position: 'before' | 'after',
+  prev: string | null,
+  next: string | null,
+): { upstream: string | null; downstream: string | null } {
+  if (position === 'after') {
+    const upstream = anchorId
+    const downstream =
+      upstream === prev ? next : (remaining.find((e) => e.source === upstream)?.target ?? null)
+    return { upstream, downstream }
+  }
+  const downstream = anchorId
+  const upstream =
+    downstream === next ? prev : (remaining.find((e) => e.target === downstream)?.source ?? null)
+  return { upstream, downstream }
+}
 
 /**
  * 计划把 draggedId 移动到 anchorId 的前/后。
@@ -41,32 +80,15 @@ export function planSpliceIntoSpine(
   if (draggedId === anchorId) return null
   const seq = edges.filter((e) => edgeKindOf(e) === 'sequence')
   // 锚点必须是剧情流成员（只有 attach 下挂边的分镜卡不可作锚点）
-  if (!seq.some((e) => e.source === anchorId || e.target === anchorId)) return null
+  if (!isSpineMember(seq, anchorId)) return null
   const mine = seq.filter((e) => e.source === draggedId || e.target === draggedId)
   const mineIds = new Set(mine.map((e) => e.id))
   const remaining = seq.filter((e) => !mineIds.has(e.id))
 
   // 原位前邻/后邻（恰各一条时才可缝合；多出口的分叉不擅自直连）
-  const oldIn = seq.filter((e) => e.target === draggedId)
-  const oldOut = seq.filter((e) => e.source === draggedId)
-  const prev = oldIn.length === 1 ? oldIn[0].source : null
-  const next = oldOut.length === 1 ? oldOut[0].target : null
-
-  const succOf = (id: string): string | null =>
-    remaining.find((e) => e.source === id)?.target ?? null
-  const predOf = (id: string): string | null =>
-    remaining.find((e) => e.target === id)?.source ?? null
-
-  let upstream: string | null
-  let downstream: string | null
-  if (position === 'after') {
-    upstream = anchorId
-    // 锚点恰是原前邻时，X 的新后继仍是原后继（其余边已随拔出移除）
-    downstream = upstream === prev ? next : succOf(upstream)
-  } else {
-    downstream = anchorId
-    upstream = downstream === next ? prev : predOf(downstream)
-  }
+  const prev = uniquePredecessor(seq, draggedId)
+  const next = uniqueSuccessor(seq, draggedId)
+  const { upstream, downstream } = insertionNeighbors(remaining, anchorId, position, prev, next)
 
   const adds: Array<{ source: string; target: string }> = []
   // 新位恰为原位时不缝合（否则会给 A→X→C 平行一条 A→C 捷径）

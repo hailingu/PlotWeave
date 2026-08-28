@@ -38,6 +38,24 @@ describe('extractBatchJson', () => {
     expect(extractBatchJson('纯文本回复，不改动画布')).toBeUndefined()
     expect(extractBatchJson('```json\nnot-json\n```')).toBeUndefined()
   })
+  it('多个围栏只取最后一个；最后一个非法时不回退到前面的合法围栏', () => {
+    expect(extractBatchJson('```json\nnot-json\n```\n```json\n{"commands":[]}\n```')).toEqual({
+      commands: [],
+    })
+    expect(extractBatchJson('```json\n{"commands":[]}\n```\n```json\nnot-json\n```')).toBeUndefined()
+  })
+  it('围栏标记大小写不敏感（```JSON 亦可）', () => {
+    expect(extractBatchJson('```JSON\n{"commands":[]}\n```')).toEqual({ commands: [] })
+  })
+  it('非 json 围栏（如 ```ts）不参与提取', () => {
+    expect(extractBatchJson('```ts\nconst x = 1\n```\n```json\n{"commands":[]}\n```')).toEqual({
+      commands: [],
+    })
+  })
+  it('未闭合的围栏不产出候选；裸批次须为完整文本，混入围栏杂讯则拒绝', () => {
+    expect(extractBatchJson('```json\n{"commands":[]}')).toBeUndefined()
+    expect(extractBatchJson('{"commands":[]}\n```json\nnot-closed')).toBeUndefined()
+  })
 })
 
 describe('validateAiBatch：校验折叠（数据模型 §12，执行前批量预览）', () => {

@@ -25,68 +25,92 @@ const COALESCE_MS = 800
 const STACK_LIMIT = 200
 
 /**
+ * 纯命令栈（useCommandHistory 的可测核心）：栈操作与合并窗口不依赖
+ * React，时钟/上限可注入；每次状态变化经 onChange 通知宿主重渲染。
+ */
+export class CommandStack {
+  private undoStack: HistoryCommand[] = []
+  private redoStack: HistoryCommand[] = []
+
+  constructor(
+    private readonly coalesceMs: number = COALESCE_MS,
+    private readonly limit: number = STACK_LIMIT,
+    private readonly now: () => number = Date.now,
+    private readonly onChange?: () => void,
+  ) {}
+
+  get canUndo(): boolean {
+    return this.undoStack.length > 0
+  }
+
+  get canRedo(): boolean {
+    return this.redoStack.length > 0
+  }
+
+  /** 入栈并清空重做分支；窗口内的同类补丁合并为一步（redo 换新，undo 保留首条）。 */
+  push(cmd: HistoryCommand): void {
+    const top = this.undoStack[this.undoStack.length - 1]
+    const mergeable =
+      cmd.coalesceKey !== undefined &&
+      top?.coalesceKey === cmd.coalesceKey &&
+      this.now() - (top.timestamp ?? 0) < this.coalesceMs
+    if (mergeable) {
+      top.redo = cmd.redo
+      top.timestamp = this.now()
+    } else {
+      this.undoStack.push({ ...cmd, timestamp: this.now() })
+      if (this.undoStack.length > this.limit) this.undoStack.shift()
+    }
+    this.redoStack = []
+    this.onChange?.()
+  }
+
+  undo(): void {
+    const cmd = this.undoStack.pop()
+    if (!cmd) return
+    cmd.undo()
+    this.redoStack.push(cmd)
+    this.onChange?.()
+  }
+
+  redo(): void {
+    const cmd = this.redoStack.pop()
+    if (!cmd) return
+    cmd.redo()
+    this.undoStack.push(cmd)
+    this.onChange?.()
+  }
+
+  clear(): void {
+    this.undoStack = []
+    this.redoStack = []
+    this.onChange?.()
+  }
+}
+
+/**
  * 撤销/重做栈 hook。canUndo/canRedo 随 version 重算；
  * 命令执行（undo/redo 内的 setState）驱动画布重渲染。
  */
 export function useCommandHistory() {
-  const stacks = useRef<{ undo: HistoryCommand[]; redo: HistoryCommand[] }>({
-    undo: [],
-    redo: [],
-  })
   const [version, setVersion] = useState(0)
-  const bump = useCallback(() => setVersion((v) => v + 1), [])
-
-  /** 入栈并清空重做分支；窗口内的同类补丁合并为一步。 */
-  const push = useCallback(
-    (cmd: HistoryCommand) => {
-      const { undo: undoStack } = stacks.current
-      const top = undoStack[undoStack.length - 1]
-      const mergeable =
-        cmd.coalesceKey !== undefined &&
-        top?.coalesceKey === cmd.coalesceKey &&
-        Date.now() - (top.timestamp ?? 0) < COALESCE_MS
-      if (mergeable) {
-        top.redo = cmd.redo
-        top.timestamp = Date.now()
-      } else {
-        undoStack.push({ ...cmd, timestamp: Date.now() })
-        if (undoStack.length > STACK_LIMIT) undoStack.shift()
-      }
-      stacks.current.redo = []
-      bump()
-    },
-    [bump],
+  const stackRef = useRef<CommandStack | null>(null)
+  // 惰性构建：setVersion 只在变更回调里触发，构造期不产生渲染副作用
+  stackRef.current ??= new CommandStack(
+    COALESCE_MS,
+    STACK_LIMIT,
+    Date.now,
+    () => setVersion((v) => v + 1),
   )
-
-  const undo = useCallback(() => {
-    const cmd = stacks.current.undo.pop()
-    if (!cmd) return
-    cmd.undo()
-    stacks.current.redo.push(cmd)
-    bump()
-  }, [bump])
-
-  const redo = useCallback(() => {
-    const cmd = stacks.current.redo.pop()
-    if (!cmd) return
-    cmd.redo()
-    stacks.current.undo.push(cmd)
-    bump()
-  }, [bump])
-
-  const clear = useCallback(() => {
-    stacks.current.undo = []
-    stacks.current.redo = []
-    bump()
-  }, [bump])
+  const stack = stackRef.current
 
   return {
-    push,
-    undo,
-    redo,
-    clear,
-    canUndo: stacks.current.undo.length > 0,
-    canRedo: stacks.current.redo.length > 0,
+    push: useCallback((cmd: HistoryCommand) => stack.push(cmd), [stack]),
+    undo: useCallback(() => stack.undo(), [stack]),
+    redo: useCallback(() => stack.redo(), [stack]),
+    clear: useCallback(() => stack.clear(), [stack]),
+    canUndo: stack.canUndo,
+    canRedo: stack.canRedo,
     version,
   }
 }

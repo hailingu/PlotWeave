@@ -1,4 +1,4 @@
-import type { CharacterEntity, LocationEntity, ProjectSettings } from './settings'
+import type { ProjectSettings } from './settings'
 
 /**
  * 示例项目数据（docs/ui-design.md §5–§8）。
@@ -52,4 +52,4 @@ export const ASSET_CATEGORIES: AssetCategory[] = [
   { kind: 'other', label: '其他', icon: '📦', count: 0 },
 ]
 
-export type { CharacterEntity, LocationEntity, ProjectSettings }
+export type { CharacterEntity, LocationEntity } from './settings'

@@ -130,7 +130,7 @@ export function buildOutlineGroups(
     if (n.type === 'beat') {
       const f = fulfillment.get(n.id)
       row.beat =
-        f && f.status === 'fulfilled'
+        f?.status === 'fulfilled'
           ? { pending: false, label: f.sceneLabel }
           : { pending: true }
     }

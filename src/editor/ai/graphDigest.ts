@@ -71,6 +71,22 @@ function nodeLine(n: CanvasNode, r: DigestResolvers): string {
  * 从没有 sequence 入边的节点出发，沿 sequence 边按边序走；被分支
  * 甩出或游离的节点不进脊线。
  */
+/** 脊线行的节点标签：按类型取最具辨识度的字段（独立函数替代嵌套三元，S3358）。 */
+function spineNodeLabel(n: CanvasNode): string {
+  switch (n.type) {
+    case 'scene':
+      return `场${pad2(n.data.sceneNo)}·${n.data.name}`
+    case 'dialogue':
+      return `对白·${n.data.name}`
+    case 'beat':
+      return `节拍·${n.data.name}`
+    case 'branch':
+      return `分支·${cut(n.data.prompt, 24)}`
+    default:
+      return `SHOT${pad2(n.data.shotNo)}·${n.data.size}`
+  }
+}
+
 function spineLines(nodes: CanvasNode[], edges: Edge[]): string[] {
   const byId = new Map(nodes.map((n) => [n.id, n]))
   const seqEdges = edges.filter((e) => edgeKindOf(e) === 'sequence')
@@ -83,18 +99,7 @@ function spineLines(nodes: CanvasNode[], edges: Edge[]): string[] {
   }
   const label = (id: string): string => {
     const n = byId.get(id)
-    if (!n) return id
-    const name =
-      n.type === 'scene'
-        ? `场${pad2(n.data.sceneNo)}·${n.data.name}`
-        : n.type === 'dialogue'
-          ? `对白·${n.data.name}`
-          : n.type === 'beat'
-            ? `节拍·${n.data.name}`
-            : n.type === 'branch'
-              ? `分支·${cut(n.data.prompt, 24)}`
-              : `SHOT${pad2(n.data.shotNo)}·${n.data.size}`
-    return name
+    return n ? spineNodeLabel(n) : id
   }
   const lines: string[] = []
   const visited = new Set<string>()

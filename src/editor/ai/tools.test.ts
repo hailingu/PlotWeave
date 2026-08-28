@@ -81,6 +81,16 @@ describe('toolCallsToCommands（§12.2 tool_calls → 预览卡命令）', () =>
     expect(errors).toHaveLength(2)
     expect(errors[0]).toContain('call-bad')
   })
+
+  it('id/nodeType 参数为对象或数组时归空，而非 [object Object]（S6551）', () => {
+    const { commands, errors } = toolCallsToCommands([
+      call('create_node', { nodeType: { scene: true } }),
+      call('delete_node', { nodeId: ['n1', 'n2'] }),
+    ])
+    expect(errors).toEqual([])
+    expect(commands[0]).toMatchObject({ op: 'create_node', nodeType: '' })
+    expect(commands[1]).toMatchObject({ op: 'delete_node', nodeId: '' })
+  })
 })
 
 describe('工具表定义', () => {

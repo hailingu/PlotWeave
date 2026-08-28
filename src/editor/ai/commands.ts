@@ -43,6 +43,8 @@ export interface PreviewItem {
   kind: 'delete' | 'disconnect' | 'create' | 'update' | 'connect'
   danger: boolean
   label: string
+  /** 渲染 key = 来源命令序号（折叠时注入，排序后仍唯一稳定）。 */
+  key: string
 }
 
 export interface BatchIssue {
@@ -93,10 +95,35 @@ const EDGE_KIND_LABELS: Record<string, string> = {
  * 从助手回复中提取批次对象：优先取最后一个 ```json 围栏，
  * 其次裸 `{"commands":[...]}` 前缀。无法解析返回 undefined（纯讨论回复）。
  */
-export function extractBatchJson(text: string): { commands: unknown[] } | undefined {
-  const fence = /```json\s*([\s\S]*?)```/gi
+
+/** 取最后一个 ```json 围栏的正文；无闭合围栏返回 null。
+ * 用 indexOf 线性扫描等价替代 /```json\s*([\s\S]*?)```/gi 的惰性匹配，
+ * 消除超线性回溯（SonarQube S8786）；大小写不敏感与「取最后一个」
+ * 语义由 extractBatchJson 测试钉住。标记大小写不敏感按码元逐段比较，
+ * 避免 toLowerCase 改变字符串长度导致下标漂移（如 İ）。 */
+function lastFenceBody(text: string): string | null {
   let last: string | null = null
-  for (const m of text.matchAll(fence)) last = m[1]
+  let from = 0
+  for (;;) {
+    const open = text.indexOf('```', from)
+    if (open === -1) break
+    const afterTicks = open + 3
+    if (text.slice(afterTicks, afterTicks + 4).toLowerCase() !== 'json') {
+      from = afterTicks
+      continue
+    }
+    let bodyStart = afterTicks + 4
+    while (bodyStart < text.length && /\s/.test(text[bodyStart])) bodyStart++
+    const close = text.indexOf('```', bodyStart)
+    if (close === -1) break // 之后不再有 ```，自然也不再有可闭合的围栏
+    last = text.slice(bodyStart, close)
+    from = close + 3
+  }
+  return last
+}
+
+export function extractBatchJson(text: string): { commands: unknown[] } | undefined {
+  const last = lastFenceBody(text)
   const candidates: string[] = []
   if (last !== null) candidates.push(last)
   const trimmed = text.trim()
@@ -126,6 +153,12 @@ function asText(v: unknown): string {
   return typeof v === 'string' ? v.trim() : ''
 }
 
+/** 预览标签尾部的理由后缀：有理由才追加「：理由」。 */
+function reasonOf(cmd: Record<string, unknown>): string {
+  const r = asText(cmd.reason)
+  return r ? `：${r}` : ''
+}
+
 /** data/patch 字段白名单校验；返回错误文案或 null。 */
 function checkFieldKeys(nodeType: string, fields: Record<string, unknown>): string | null {
   const allowed = NODE_FIELD_KEYS[nodeType]
@@ -139,203 +172,241 @@ function checkFieldKeys(nodeType: string, fields: Record<string, unknown>): stri
  * 逐条折叠校验：维护「当前图 + 本批已建未删」的虚拟状态，
  * 让批次内引用（ref 建链）与成环/重复判定都按最终态计算。
  * 任一问题 → ok=false（整批拒绝），commands 为空。
+ *
+ * 复杂度拆解（S3776）：每个 op 的折叠逻辑是独立的顶层函数
+ * （foldCreate/foldUpdate/foldDelete/foldEdge），共享的虚拟图状态
+ * 收敛在 FoldState；本函数只负责建状态与分发。
  */
-export function validateAiBatch(rawCommands: unknown, graph: AiGraphSnapshot): BatchValidation {
-  const labels = new Map(graph.nodes.map((n) => [n.id, n.label]))
-  const types = new Map(graph.nodes.map((n) => [n.id, n.type]))
-  const optionsCounts = new Map(
-    graph.nodes.filter((n) => typeof n.optionsCount === 'number').map((n) => [n.id, n.optionsCount as number]),
-  )
-  const virtualEdges: Array<{
-    source: string
-    target: string
-    sourceHandle?: string | null
-    type?: string
-  }> = graph.edges.map((e) => ({ ...e }))
-  const exists = new Set(labels.keys())
-  const refOwner = new Map<string, string>()
 
-  const items: PreviewItem[] = []
-  const issues: BatchIssue[] = []
-  const commands: AiCommand[] = []
+/** 折叠校验的虚拟图状态：随每条命令演进的最终态投影。 */
+interface FoldState {
+  labels: Map<string, string>
+  types: Map<string, string>
+  optionsCounts: Map<string, number>
+  virtualEdges: Array<{ source: string; target: string; sourceHandle?: string | null; type?: string }>
+  /** 本批尚未删除的节点 id（含 __new__ 虚拟 id）。 */
+  exists: Set<string>
+  /** ref 别名 → 所属节点 id。 */
+  refOwner: Map<string, string>
+  items: PreviewItem[]
+  issues: BatchIssue[]
+  commands: AiCommand[]
+  fail: (index: number, message: string) => void
+}
 
-  if (!Array.isArray(rawCommands)) {
-    return { ok: false, items, commands, issues: [{ index: -1, message: '批次不是命令数组' }], hasDeletes: false }
+/** nodeId/sourceId/targetId 解析：允许既有 id 或本批新建的 ref；
+ * 已被本批删除的节点（含按 ref 引用的）一律视为不存在。 */
+function resolveRef(st: FoldState, cmd: Record<string, unknown>, key: string): string | null {
+  const s = asText(cmd[key])
+  if (s === '') return null
+  if (st.exists.has(s)) return s
+  const owner = st.refOwner.get(s)
+  return owner !== undefined && st.exists.has(owner) ? owner : null
+}
+
+function foldCreate(st: FoldState, cmd: Record<string, unknown>, index: number): void {
+  const nodeType = asText(cmd.nodeType)
+  if (!(nodeType in NODE_TYPE_LABELS)) return st.fail(index, `未知节点类型：${nodeType || '（空）'}`)
+  const data = cmd.data ?? {}
+  if (!plainObject(data)) return st.fail(index, 'data 必须是字段对象')
+  const keyError = checkFieldKeys(nodeType, data)
+  if (keyError) return st.fail(index, keyError)
+  const typeLabel = NODE_TYPE_LABELS[nodeType]
+  const name = asText(data.name) || asText(data.prompt) || '未命名'
+  const virtualId = `__new__:${index}`
+  const refName = typeof cmd.ref === 'string' ? cmd.ref.trim() : ''
+  st.exists.add(virtualId)
+  st.labels.set(virtualId, `${typeLabel} · ${name}（新建）`)
+  st.types.set(virtualId, nodeType)
+  if (refName !== '') st.refOwner.set(refName, virtualId)
+  st.items.push({ kind: 'create', danger: false, key: `c${index}`, label: `${OP_LABELS.create} ${typeLabel} · ${name}` })
+  st.commands.push({ op: 'create_node', nodeType, ref: refName === '' ? undefined : refName, data })
+}
+
+function foldUpdate(st: FoldState, cmd: Record<string, unknown>, index: number): void {
+  const id = resolveRef(st, cmd, 'nodeId')
+  if (!id) return st.fail(index, `节点不存在：${asText(cmd.nodeId)}`)
+  const patch = cmd.patch
+  if (!plainObject(patch) || Object.keys(patch).length === 0) return st.fail(index, 'patch 为空')
+  const keyError = checkFieldKeys(st.types.get(id) ?? '', patch)
+  if (keyError) return st.fail(index, keyError)
+  st.items.push({
+    kind: 'update',
+    danger: false,
+    key: `u${index}`,
+    label: `${OP_LABELS.update} ${st.labels.get(id) ?? '未知节点'}（${Object.keys(patch).join('、')}）${reasonOf(cmd)}`,
+  })
+  st.commands.push({ op: 'update_node', nodeId: asText(cmd.nodeId), patch, reason: asText(cmd.reason) })
+}
+
+function foldDelete(st: FoldState, cmd: Record<string, unknown>, index: number): void {
+  const id = resolveRef(st, cmd, 'nodeId')
+  if (!id) return st.fail(index, `节点不存在：${asText(cmd.nodeId)}`)
+  st.exists.delete(id)
+  for (const [ref, owner] of st.refOwner) if (owner === id) st.refOwner.delete(ref)
+  st.virtualEdges.forEach((e) => {
+    if (e.source === id) e.source = `__deleted__:${id}`
+    if (e.target === id) e.target = `__deleted__:${id}`
+  })
+  st.items.push({
+    kind: 'delete',
+    danger: true,
+    key: `d${index}`,
+    label: `${OP_LABELS.delete} ${st.labels.get(id) ?? '未知节点'}${reasonOf(cmd)}`,
+  })
+  st.commands.push({ op: 'delete_node', nodeId: asText(cmd.nodeId), reason: asText(cmd.reason) })
+}
+
+/** 预览标签的连线种类后缀；branch 追加选项序号（S3358/S4624：独立成函数）。 */
+function connectKindTag(kind: string, optionIndex: number | undefined): string {
+  if (kind === 'sequence') return ''
+  if (kind === 'branch') return `（${EDGE_KIND_LABELS[kind]} ${(optionIndex ?? 0) + 1}）`
+  return `（${EDGE_KIND_LABELS[kind]}）`
+}
+
+/** 连线端口的分端口校验（§4.4）：产出目标 handle 与选项序号；
+ * 返回 string = 错误文案。 */
+function edgePortOf(
+  st: FoldState,
+  kind: string,
+  cmd: Record<string, unknown>,
+  src: string,
+  dst: string,
+): { handle: string | null; optionIndex: number | undefined } | string {
+  if (kind === 'branch') {
+    if (st.types.get(src) !== 'branch') {
+      return `branch 出口只能来自分支节点：${st.labels.get(src) ?? src} → ${st.labels.get(dst) ?? dst}`
+    }
+    const count = st.optionsCounts.get(src)
+    const idx = cmd.optionIndex
+    const idxValid = typeof idx === 'number' && Number.isInteger(idx) && idx >= 0 && idx < (count ?? -1)
+    if (!idxValid || count === undefined) {
+      const pair = `${st.labels.get(src) ?? src} → ${st.labels.get(dst) ?? dst}`
+      return `optionIndex 必须是 0～${(count ?? 1) - 1} 的整数：${pair}`
+    }
+    return { handle: branchOptionHandle(idx), optionIndex: idx }
+  }
+  if (kind === 'attach') {
+    if (st.types.get(src) !== 'scene' || st.types.get(dst) !== 'shot') {
+      return `分镜下挂只能从场景连向分镜卡：${st.labels.get(src) ?? src} → ${st.labels.get(dst) ?? dst}`
+    }
+    return { handle: SCENE_SHOT_HANDLE, optionIndex: undefined }
+  }
+  return { handle: null, optionIndex: undefined }
+}
+
+/** connect_edge / disconnect_edge 的折叠校验。 */
+function foldEdge(st: FoldState, cmd: Record<string, unknown>, index: number, op: string): void {
+  const src = resolveRef(st, cmd, 'sourceId')
+  const dst = resolveRef(st, cmd, 'targetId')
+  if (!src || !dst) {
+    return st.fail(index, `端点不存在：${asText(cmd.sourceId)} → ${asText(cmd.targetId)}`)
+  }
+  const pairLabel = `${st.labels.get(src) ?? '未知节点'} → ${st.labels.get(dst) ?? '未知节点'}`
+
+  if (op === 'disconnect_edge') {
+    const hitIdx = st.virtualEdges.findIndex((e) => e.source === src && e.target === dst)
+    if (hitIdx < 0) return st.fail(index, `没有这条连线：${pairLabel}`)
+    st.virtualEdges.splice(hitIdx, 1)
+    st.items.push({
+      kind: 'disconnect',
+      danger: false,
+      key: `x${index}`,
+      label: `${OP_LABELS.disconnect} ${pairLabel}${reasonOf(cmd)}`,
+    })
+    st.commands.push({
+      op,
+      sourceId: asText(cmd.sourceId),
+      targetId: asText(cmd.targetId),
+      reason: asText(cmd.reason),
+    })
+    return
   }
 
-  const fail = (index: number, message: string) => issues.push({ index, message })
+  // connect_edge：按连线语义分端口校验（§4.4）
+  const kind = asText(cmd.edgeKind) || 'sequence'
+  if (!(kind in EDGE_KIND_LABELS)) return st.fail(index, `未知连线类型：${kind}`)
+  const port = edgePortOf(st, kind, cmd, src, dst)
+  if (typeof port === 'string') return st.fail(index, port)
+  const { handle, optionIndex } = port
+  if (st.virtualEdges.some((e) => e.source === src && e.target === dst && (e.sourceHandle ?? null) === handle)) {
+    return st.fail(index, `重复连线：${pairLabel}`)
+  }
+  // attach 是派生从属边（§4.4 垂直语义）：自身不查环，也不参与
+  // 剧情流环检测——环只可能出现在横向剧情流上
+  if (kind !== 'attach') {
+    const flowEdges = st.virtualEdges.filter((e) => e.sourceHandle !== SCENE_SHOT_HANDLE)
+    if (wouldCreateCycle(flowEdges, src, dst)) {
+      return st.fail(index, `会造成循环剧情：${pairLabel}`)
+    }
+  }
+  st.virtualEdges.push({
+    source: src,
+    target: dst,
+    sourceHandle: handle,
+    ...(kind === 'branch' ? { type: 'branch' } : {}),
+  })
+  st.items.push({
+    kind: 'connect',
+    danger: false,
+    key: `e${index}`,
+    label: `${OP_LABELS.connect}${connectKindTag(kind, optionIndex)} ${pairLabel}${reasonOf(cmd)}`,
+  })
+  st.commands.push({
+    op: 'connect_edge',
+    sourceId: asText(cmd.sourceId),
+    targetId: asText(cmd.targetId),
+    edgeKind: kind,
+    ...(optionIndex !== undefined ? { optionIndex } : {}),
+    reason: asText(cmd.reason),
+  })
+}
+
+/** 折叠器分发表：op → 处理函数。 */
+const FOLDERS: Record<string, (st: FoldState, cmd: Record<string, unknown>, index: number) => void> = {
+  create_node: foldCreate,
+  update_node: foldUpdate,
+  delete_node: foldDelete,
+  connect_edge: (st, cmd, index) => foldEdge(st, cmd, index, 'connect_edge'),
+  disconnect_edge: (st, cmd, index) => foldEdge(st, cmd, index, 'disconnect_edge'),
+}
+
+export function validateAiBatch(rawCommands: unknown, graph: AiGraphSnapshot): BatchValidation {
+  const st: FoldState = {
+    labels: new Map(graph.nodes.map((n) => [n.id, n.label])),
+    types: new Map(graph.nodes.map((n) => [n.id, n.type])),
+    optionsCounts: new Map(
+      graph.nodes.filter((n) => typeof n.optionsCount === 'number').map((n) => [n.id, n.optionsCount as number]),
+    ),
+    virtualEdges: graph.edges.map((e) => ({ ...e })),
+    exists: new Set(graph.nodes.map((n) => n.id)),
+    refOwner: new Map(),
+    items: [],
+    issues: [],
+    commands: [],
+    fail: (index, message) => st.issues.push({ index, message }),
+  }
+
+  if (!Array.isArray(rawCommands)) {
+    return { ok: false, items: [], commands: [], issues: [{ index: -1, message: '批次不是命令数组' }], hasDeletes: false }
+  }
 
   rawCommands.forEach((raw, index) => {
-    if (issues.length > 0) return // 已坏，仅统计首个问题即可
-    if (!plainObject(raw)) return fail(index, '条目不是对象')
-    const cmd = raw as Record<string, unknown>
-    const op = cmd.op
-
-    if (op === 'create_node') {
-      const nodeType = asText(cmd.nodeType)
-      if (!(nodeType in NODE_TYPE_LABELS)) return fail(index, `未知节点类型：${nodeType || '（空）'}`)
-      const data = cmd.data ?? {}
-      if (!plainObject(data)) return fail(index, 'data 必须是字段对象')
-      const keyError = checkFieldKeys(nodeType, data)
-      if (keyError) return fail(index, keyError)
-      const typeLabel = NODE_TYPE_LABELS[nodeType]
-      const name = asText(data.name) || asText(data.prompt) || '未命名'
-      const virtualId = `__new__:${index}`
-      const refName = typeof cmd.ref === 'string' ? cmd.ref.trim() : ''
-      exists.add(virtualId)
-      labels.set(virtualId, `${typeLabel} · ${name}（新建）`)
-      types.set(virtualId, nodeType)
-      if (refName !== '') refOwner.set(refName, virtualId)
-      items.push({ kind: 'create', danger: false, label: `${OP_LABELS.create} ${typeLabel} · ${name}` })
-      commands.push({ op: 'create_node', nodeType, ref: refName === '' ? undefined : refName, data })
-      return
-    }
-
-    // 以下操作的 nodeId 允许引用本批新建节点的 ref 或既有 id；
-    // 已被本批删除的节点（含按 ref 引用的）一律视为不存在。
-    const resolve = (key: string): string | null => {
-      const s = asText(cmd[key])
-      if (s === '') return null
-      if (exists.has(s)) return s
-      const owner = refOwner.get(s)
-      return owner !== undefined && exists.has(owner) ? owner : null
-    }
-    const describe = (id: string): string => labels.get(id) ?? '未知节点'
-    const typeOf = (id: string): string => types.get(id) ?? ''
-    const reasonSuffix = () => {
-      const r = asText(cmd.reason)
-      return r ? `：${r}` : ''
-    }
-
-    if (op === 'update_node') {
-      const id = resolve('nodeId')
-      if (!id) return fail(index, `节点不存在：${asText(cmd.nodeId)}`)
-      const patch = cmd.patch
-      if (!plainObject(patch) || Object.keys(patch).length === 0) return fail(index, 'patch 为空')
-      const keyError = checkFieldKeys(typeOf(id), patch)
-      if (keyError) return fail(index, keyError)
-      items.push({
-        kind: 'update',
-        danger: false,
-        label: `${OP_LABELS.update} ${describe(id)}（${Object.keys(patch).join('、')}）${reasonSuffix()}`,
-      })
-      commands.push({ op: 'update_node', nodeId: asText(cmd.nodeId), patch, reason: asText(cmd.reason) })
-      return
-    }
-
-    if (op === 'delete_node') {
-      const id = resolve('nodeId')
-      if (!id) return fail(index, `节点不存在：${asText(cmd.nodeId)}`)
-      exists.delete(id)
-      for (const [ref, owner] of refOwner) if (owner === id) refOwner.delete(ref)
-      virtualEdges.forEach((e) => {
-        if (e.source === id) e.source = `__deleted__:${id}`
-        if (e.target === id) e.target = `__deleted__:${id}`
-      })
-      items.push({ kind: 'delete', danger: true, label: `${OP_LABELS.delete} ${describe(id)}${reasonSuffix()}` })
-      commands.push({ op: 'delete_node', nodeId: asText(cmd.nodeId), reason: asText(cmd.reason) })
-      return
-    }
-
-    if (op === 'connect_edge' || op === 'disconnect_edge') {
-      const src = resolve('sourceId')
-      const dst = resolve('targetId')
-      if (!src || !dst) {
-        return fail(
-          index,
-          `端点不存在：${asText(cmd.sourceId)} → ${asText(cmd.targetId)}`,
-        )
-      }
-      const pairLabel = `${describe(src)} → ${describe(dst)}`
-
-      if (op === 'disconnect_edge') {
-        const hitIdx = virtualEdges.findIndex((e) => e.source === src && e.target === dst)
-        if (hitIdx < 0) return fail(index, `没有这条连线：${pairLabel}`)
-        virtualEdges.splice(hitIdx, 1)
-        items.push({
-          kind: 'disconnect',
-          danger: false,
-          label: `${OP_LABELS.disconnect} ${pairLabel}${reasonSuffix()}`,
-        })
-        commands.push({
-          op,
-          sourceId: asText(cmd.sourceId),
-          targetId: asText(cmd.targetId),
-          reason: asText(cmd.reason),
-        })
-        return
-      }
-
-      // connect_edge：按连线语义分端口校验（§4.4）
-      const kind = asText(cmd.edgeKind) || 'sequence'
-      if (!(kind in EDGE_KIND_LABELS)) return fail(index, `未知连线类型：${kind}`)
-      let handle: string | null = null
-      let optionIndex: number | undefined
-      if (kind === 'branch') {
-        if (typeOf(src) !== 'branch') return fail(index, `branch 出口只能来自分支节点：${pairLabel}`)
-        const count = optionsCounts.get(src)
-        const idx = cmd.optionIndex
-        if (typeof idx !== 'number' || !Number.isInteger(idx) || count === undefined || idx < 0 || idx >= count) {
-          return fail(index, `optionIndex 必须是 0～${(count ?? 1) - 1} 的整数：${pairLabel}`)
-        }
-        handle = branchOptionHandle(idx)
-        optionIndex = idx
-      } else if (kind === 'attach') {
-        if (typeOf(src) !== 'scene' || typeOf(dst) !== 'shot') {
-          return fail(index, `分镜下挂只能从场景连向分镜卡：${pairLabel}`)
-        }
-        handle = SCENE_SHOT_HANDLE
-      }
-      if (
-        virtualEdges.some(
-          (e) =>
-            e.source === src && e.target === dst && (e.sourceHandle ?? null) === handle,
-        )
-      ) {
-        return fail(index, `重复连线：${pairLabel}`)
-      }
-      // attach 是派生从属边（§4.4 垂直语义）：自身不查环，也不参与
-      // 剧情流环检测——环只可能出现在横向剧情流上
-      if (kind !== 'attach') {
-        const flowEdges = virtualEdges.filter((e) => e.sourceHandle !== SCENE_SHOT_HANDLE)
-        if (wouldCreateCycle(flowEdges, src, dst)) {
-          return fail(index, `会造成循环剧情：${pairLabel}`)
-        }
-      }
-      virtualEdges.push({
-        source: src,
-        target: dst,
-        sourceHandle: handle,
-        ...(kind === 'branch' ? { type: 'branch' } : {}),
-      })
-      const kindTag = kind === 'sequence' ? '' : `（${EDGE_KIND_LABELS[kind]}${kind === 'branch' ? ` ${optionIndex! + 1}` : ''}）`
-      items.push({
-        kind: 'connect',
-        danger: false,
-        label: `${OP_LABELS.connect}${kindTag} ${pairLabel}${reasonSuffix()}`,
-      })
-      commands.push({
-        op: 'connect_edge',
-        sourceId: asText(cmd.sourceId),
-        targetId: asText(cmd.targetId),
-        edgeKind: kind,
-        ...(optionIndex !== undefined ? { optionIndex } : {}),
-        reason: asText(cmd.reason),
-      })
-      return
-    }
-
-    fail(index, `未知操作：${String(op)}`)
+    if (st.issues.length > 0) return // 已坏，仅统计首个问题即可
+    if (!plainObject(raw)) return st.fail(index, '条目不是对象')
+    const folder = FOLDERS[raw.op as string]
+    if (folder) folder(st, raw, index)
+    else st.fail(index, `未知操作：${String(raw.op)}`)
   })
 
-  const ok = issues.length === 0
+  const ok = st.issues.length === 0
   // 删除类置顶（§6 危险操作升级）；其余按到达顺序稳定排列
-  const sorted = [...items.filter((i) => i.danger), ...items.filter((i) => !i.danger)]
+  const sorted = [...st.items.filter((i) => i.danger), ...st.items.filter((i) => !i.danger)]
   return {
     ok,
     items: sorted,
-    commands: ok ? commands : [],
-    issues,
+    commands: ok ? st.commands : [],
+    issues: st.issues,
     hasDeletes: sorted.some((i) => i.kind === 'delete'),
   }
 }

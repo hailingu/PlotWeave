@@ -34,11 +34,13 @@ import LeftPanel from './panels/LeftPanel'
 import RightPanel, { type RightTab } from './panels/RightPanel'
 import { NodeEditContext, type NodeEditApi } from './nodeEdit'
 import { useCommandHistory } from './history'
-import { readEntityPayload, PW_ENTITY_MIME } from './dragDrop'
+import { readEntityPayload, PW_ENTITY_MIME, type EntityDragPayload } from './dragDrop'
 import ExportDialog from './ExportDialog'
 import { buildScriptMarkdown } from './exportScript'
 import { EditableName } from './nodes/settings/NodeSettingsPanel'
 import { isDuplicateEdge, branchOptionHandle, wouldCreateCycle } from './graphRules'
+import { uid } from '../uid'
+import { compareCodeUnits } from '../compare'
 import { buildGraphDigest } from './ai/graphDigest'
 import {
   beatFulfillmentMap,
@@ -49,6 +51,7 @@ import {
   type OutlineDropTarget,
 } from './outline'
 import { planSpliceIntoSpine, type SplicePlan } from './spine'
+import { applyEpisodeTitle } from './episodeTitle'
 import {
   extractBatchJson,
   validateAiBatch,
@@ -81,7 +84,7 @@ const edgeTypes: EdgeTypes = {
 
 interface EditorViewProps {
   /** 打开的项目：id 用于持久化，name 用于标题栏与导出，doc 为已加载画布。 */
-  project: {
+  readonly project: {
     id: string
     name: string
     nodes: CanvasNode[]
@@ -91,13 +94,13 @@ interface EditorViewProps {
     episodeTitles?: Record<number, string>
   }
   /** 返回项目首页：同一窗口从编辑器状态切回文档浏览器（§3.1）。 */
-  onBackHome: () => void
+  readonly onBackHome: () => void
   /** 项目名内联重命名（§3.3 中区：更新 project.name + 首页索引）。 */
-  onRenameProject: (name: string) => void
+  readonly onRenameProject: (name: string) => void
   /** 打开设置页（§8.2 BYOK 配置入口，⌘,）。 */
-  onOpenSettings?: () => void
+  readonly onOpenSettings?: () => void
   /** 持久化写入（防抖节流由本组件负责；浏览器预览下为内存回退实现）。 */
-  onSave: (doc: {
+  readonly onSave: (doc: {
     name: string
     nodes: CanvasNode[]
     edges: Edge[]
@@ -130,6 +133,243 @@ function stripEdge(e: Edge): Edge {
   if (e.className) out.className = e.className
   if (e.data !== undefined) out.data = e.data
   return out
+}
+
+/** AI 批量命令模拟器的虚拟终态与闭包收集（applyAiBatch 拆分用，S3776）。 */
+interface BatchSim {
+  nodes: CanvasNode[]
+  edges: Edge[]
+  refToId: Map<string, string>
+  forward: Array<() => void>
+  backward: Array<() => void>
+}
+
+/** 模拟器所需的画布写入动作。 */
+interface BatchOps {
+  buildNewNode: (
+    type: CreatableType,
+    opts?: { selected?: boolean; data?: Record<string, unknown>; against?: CanvasNode[] },
+  ) => CanvasNode
+  applyDataPatch: (id: string, patch: Record<string, unknown>) => void
+  setNodes: (updater: (all: CanvasNode[]) => CanvasNode[]) => void
+  setEdges: (updater: (eds: Edge[]) => Edge[]) => void
+}
+
+const simCreate = (
+  sim: BatchSim,
+  ops: BatchOps,
+  cmd: Extract<AiCommand, { op: 'create_node' }>,
+): void => {
+  const node = ops.buildNewNode(cmd.nodeType as CreatableType, {
+    selected: false,
+    data: (cmd.data as Record<string, unknown>) ?? undefined,
+    against: sim.nodes,
+  })
+  if (typeof cmd.ref === 'string' && cmd.ref !== '') sim.refToId.set(cmd.ref, node.id)
+  sim.nodes = [...sim.nodes, node]
+  sim.forward.push(() => ops.setNodes((all) => [...all, node]))
+  sim.backward.push(() => ops.setNodes((all) => all.filter((n) => n.id !== node.id)))
+}
+
+const simUpdate = (
+  sim: BatchSim,
+  ops: BatchOps,
+  cmd: Extract<AiCommand, { op: 'update_node' }>,
+): void => {
+  const id = sim.refToId.get(cmd.nodeId) ?? cmd.nodeId
+  const target = sim.nodes.find((n) => n.id === id)
+  if (!target) return
+  const before: Record<string, unknown> = {}
+  for (const k of Object.keys(cmd.patch)) before[k] = (target.data as Record<string, unknown>)[k]
+  sim.nodes = sim.nodes.map((n) =>
+    n.id === id ? ({ ...n, data: { ...n.data, ...cmd.patch } } as CanvasNode) : n,
+  )
+  sim.forward.push(() => ops.applyDataPatch(id, cmd.patch))
+  sim.backward.push(() => ops.applyDataPatch(id, before))
+}
+
+const simDelete = (
+  sim: BatchSim,
+  ops: BatchOps,
+  cmd: Extract<AiCommand, { op: 'delete_node' }>,
+): void => {
+  const removedId = sim.refToId.get(cmd.nodeId) ?? cmd.nodeId
+  const idSet = new Set([removedId])
+  const removedNodes = sim.nodes.filter((n) => idSet.has(n.id))
+  if (removedNodes.length === 0) return
+  const removedEdges = sim.edges.filter((e) => idSet.has(e.source) || idSet.has(e.target))
+  sim.nodes = sim.nodes.filter((n) => !idSet.has(n.id))
+  sim.edges = sim.edges.filter((e) => !idSet.has(e.source) && !idSet.has(e.target))
+  // 状态删除内联（不走 deleteNodesByIds——那会额外入栈破坏单步撤销）
+  sim.forward.push(() => {
+    ops.setNodes((all) => all.filter((n) => n.id !== removedId))
+    ops.setEdges((eds) => eds.filter((e) => e.source !== removedId && e.target !== removedId))
+  })
+  sim.backward.push(() => {
+    ops.setNodes((all) => [...all, ...removedNodes])
+    ops.setEdges((eds) => [...eds, ...removedEdges])
+  })
+}
+
+/** connect_edge 的目标边：attach / branch / sequence 三态（§4.4）。 */
+const connectEdgeOf = (
+  sim: BatchSim,
+  cmd: Extract<AiCommand, { op: 'connect_edge' }>,
+  srcId: string,
+  dstId: string,
+): Edge => {
+  const kind = typeof cmd.edgeKind === 'string' ? cmd.edgeKind : 'sequence'
+  if (kind === 'attach') {
+    // 分镜下挂（§4.4 垂直派生边）
+    return {
+      id: `e-${srcId}-shots-${dstId}-ai-${sim.forward.length}`,
+      source: srcId,
+      target: dstId,
+      sourceHandle: SCENE_SHOT_HANDLE,
+      className: 'pw-edge-attach',
+    }
+  }
+  if (kind === 'branch') {
+    // 分支选项出口：胶囊文案与分支选项同源（§4.4 不落第二份拷贝语义）
+    const idx = typeof cmd.optionIndex === 'number' ? cmd.optionIndex : 0
+    const branchNode = sim.nodes.find((n) => n.id === srcId)
+    const optionLabel = branchNode?.type === 'branch' ? (branchNode.data.options[idx] ?? '') : ''
+    return {
+      id: `e-${srcId}-${branchOptionHandle(idx)}-${dstId}-ai-${sim.forward.length}`,
+      source: srcId,
+      target: dstId,
+      sourceHandle: branchOptionHandle(idx),
+      type: 'branch',
+      data: { optionLabel },
+    }
+  }
+  return {
+    id: `e-${srcId}-${dstId}-ai-${sim.forward.length}`,
+    source: srcId,
+    target: dstId,
+    className: 'pw-edge-sequence',
+  }
+}
+
+const simConnect = (
+  sim: BatchSim,
+  ops: BatchOps,
+  cmd: Extract<AiCommand, { op: 'connect_edge' }>,
+): void => {
+  const srcId = sim.refToId.get(cmd.sourceId) ?? cmd.sourceId
+  const dstId = sim.refToId.get(cmd.targetId) ?? cmd.targetId
+  const edge = connectEdgeOf(sim, cmd, srcId, dstId)
+  sim.edges = [...sim.edges, edge]
+  sim.forward.push(() => ops.setEdges((eds) => addEdge(edge, eds)))
+  sim.backward.push(() => ops.setEdges((eds) => eds.filter((e) => e.id !== edge.id)))
+}
+
+const simDisconnect = (
+  sim: BatchSim,
+  ops: BatchOps,
+  cmd: Extract<AiCommand, { op: 'disconnect_edge' }>,
+): void => {
+  const srcId = sim.refToId.get(cmd.sourceId) ?? cmd.sourceId
+  const dstId = sim.refToId.get(cmd.targetId) ?? cmd.targetId
+  const hitIdx = sim.edges.findIndex((e) => e.source === srcId && e.target === dstId)
+  if (hitIdx < 0) return
+  const removed = sim.edges[hitIdx]
+  sim.edges = [...sim.edges.slice(0, hitIdx), ...sim.edges.slice(hitIdx + 1)]
+  sim.forward.push(() =>
+    ops.setEdges((eds) => eds.filter((e) => !(e.source === removed.source && e.target === removed.target))),
+  )
+  sim.backward.push(() => ops.setEdges((eds) => addEdge(removed, eds)))
+}
+
+/** 新连线的差异化字段（§4.4，onConnect 用，S3358 拆分）：
+ * branch 选项出口 / attach 下挂 / 默认 sequence。 */
+function connectEdgeExtras(
+  fromBranchOption: boolean,
+  branchData: { optionLabel: string } | undefined,
+  fromShotHandle: boolean,
+): Pick<Edge, 'type' | 'data' | 'className'> {
+  if (fromBranchOption) return { type: 'branch' as const, data: branchData }
+  if (fromShotHandle) return { className: 'pw-edge-attach' }
+  return { className: 'pw-edge-sequence' }
+}
+
+/** 大纲拖拽的接缝计划（onOutlineDrop 步骤 1，S3776 拆分）：行落点直接
+ * 锚定锚点；组尾落点从该组最后一个剧情流行向上找第一个可执行锚点。 */
+function outlineSplicePlan(
+  nodes: CanvasNode[],
+  edges: Edge[],
+  titles: Record<number, string>,
+  draggedId: string,
+  target: OutlineDropTarget,
+): { plan: SplicePlan; anchorId: string } | null {
+  if (target.kind === 'row') {
+    const plan = planSpliceIntoSpine(edges, draggedId, target.anchorId, target.position)
+    return plan ? { plan, anchorId: target.anchorId } : null
+  }
+  const group = buildOutlineGroups(nodes, edges, titles).find((g) => g.episode === target.episode)
+  const spineRows = (group?.rows ?? []).filter((r) => r.id !== draggedId && r.level < 3)
+  for (let i = spineRows.length - 1; i >= 0; i--) {
+    const plan = planSpliceIntoSpine(edges, draggedId, spineRows[i].id, 'after')
+    if (plan) return { plan, anchorId: spineRows[i].id }
+  }
+  return null
+}
+
+/** 大纲拖拽的边重排应用（onOutlineDrop 步骤 3，S2004 拆分）：
+ * redo = 去旧边加新边；undo = 去新边还原旧边。 */
+function spliceEdgesWith(eds: Edge[], removed: Edge[], added: Edge[], redo: boolean): Edge[] {
+  const dropIds = new Set((redo ? removed : added).map((e) => e.id))
+  const kept = eds.filter((e) => !dropIds.has(e.id))
+  return redo ? [...kept, ...added] : [...kept, ...removed]
+}
+
+/** 分镜引用补丁：同名引用已存在则返回 null（去重）。 */
+function refPatch(
+  refs: Array<{ label: string }>,
+  kind: 'character' | 'location',
+  label: string,
+): Record<string, unknown> | null {
+  if (refs.some((r) => r.label === label)) return null
+  return { refs: [...refs, { kind, label }] }
+}
+
+/** 角色实体 → 节点的引用补丁：场景出场 / 对白新台词 / 分镜垫图。 */
+function characterDropPatch(
+  node: CanvasNode,
+  entity: EntityDragPayload,
+): Record<string, unknown> | null {
+  if (node.type === 'scene') {
+    const ids = node.data.characterIds
+    if (ids.includes(entity.id)) return null
+    return { characterIds: [...ids, entity.id] }
+  }
+  if (node.type === 'dialogue') {
+    return {
+      lines: [...node.data.lines, { kind: 'line', speaker: entity.id, side: 'left', text: '新台词…' }],
+    }
+  }
+  if (node.type === 'shot') return refPatch(node.data.refs, 'character', `${entity.name}垫图`)
+  return null
+}
+
+/** 地点实体 → 节点的引用补丁：场景地点 / 分镜底图。 */
+function locationDropPatch(
+  node: CanvasNode,
+  entity: EntityDragPayload,
+): Record<string, unknown> | null {
+  if (node.type === 'scene') return { locationId: entity.id }
+  if (node.type === 'shot') return refPatch(node.data.refs, 'location', `${entity.name}底图`)
+  return null
+}
+
+/** 设定集实体拖上节点的引用补丁（§5，onCanvasDrop 拆分用）：
+ * 返回 null = 该节点不接收或已存在同类引用。 */
+function entityDropPatch(
+  node: CanvasNode,
+  entity: EntityDragPayload,
+): Record<string, unknown> | null {
+  if (entity.kind === 'character') return characterDropPatch(node, entity)
+  return locationDropPatch(node, entity)
 }
 
 /**
@@ -265,7 +505,7 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
       for (const k of keys) before[k] = (cur.data as Record<string, unknown>)[k]
       applyDataPatch(id, patch)
       pushHistory({
-        coalesceKey: `patch:${id}:${[...keys].sort().join(',')}`,
+        coalesceKey: `patch:${id}:${[...keys].sort(compareCodeUnits).join(',')}`,
         undo: () => applyDataPatch(id, before),
         redo: () => applyDataPatch(id, patch),
       })
@@ -401,28 +641,11 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
   const renameEpisode = useCallback(
     (no: number, title: string) => {
       const before = episodeTitlesRef.current[no] ?? ''
-      const next = title.trim()
-      setEpisodeTitles((t) => {
-        if (next === '') {
-          const rest = { ...t }
-          delete rest[no]
-          return rest
-        }
-        return { ...t, [no]: next }
-      })
+      setEpisodeTitles((t) => applyEpisodeTitle(t, no, title))
       pushHistory({
         coalesceKey: `episode-title:${no}`,
-        undo: () =>
-          setEpisodeTitles((t) => {
-            if (before === '') {
-              const rest = { ...t }
-              delete rest[no]
-              return rest
-            }
-            return { ...t, [no]: before }
-          }),
-        redo: () =>
-          setEpisodeTitles((t) => (next === '' ? { ...t, [no]: next } : { ...t, [no]: next })),
+        undo: () => setEpisodeTitles((t) => applyEpisodeTitle(t, no, before)),
+        redo: () => setEpisodeTitles((t) => applyEpisodeTitle(t, no, title)),
       })
     },
     [pushHistory],
@@ -453,41 +676,19 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
       if (!dragged) return
 
       // 1) 接缝计划（groupEnd 锚到该组最后一个剧情流行）
-      let plan: SplicePlan | null = null
-      let anchorId: string | null = null
-      if (target.kind === 'row') {
-        anchorId = target.anchorId
-        plan = planSpliceIntoSpine(edgesRef.current, draggedId, anchorId, target.position)
-        if (!plan) return
-      } else {
-        const group = buildOutlineGroups(
-          nodesRef.current,
-          edgesRef.current,
-          episodeTitlesRef.current,
-        ).find((g) => g.episode === target.episode)
-        const spineRows = (group?.rows ?? []).filter(
-          (r) => r.id !== draggedId && r.level < 3,
-        )
-        for (let i = spineRows.length - 1; i >= 0; i--) {
-          const cand = planSpliceIntoSpine(
-            edgesRef.current,
-            draggedId,
-            spineRows[i].id,
-            'after',
-          )
-          if (cand) {
-            plan = cand
-            anchorId = spineRows[i].id
-            break
-          }
-        }
-      }
-      if (!plan) return
+      const planned = outlineSplicePlan(
+        nodesRef.current,
+        edgesRef.current,
+        episodeTitlesRef.current,
+        draggedId,
+        target,
+      )
+      if (!planned) return
+      const { plan, anchorId } = planned
 
       // 2) 落点集归属：行落点随锚点所在组，组尾落点即目标组
       const sceneByShot = hostSceneMap(nodesRef.current, edgesRef.current)
-      const anchorNode =
-        anchorId !== null ? nodesRef.current.find((n) => n.id === anchorId) : undefined
+      const anchorNode = nodesRef.current.find((n) => n.id === anchorId)
       const targetEpisode =
         target.kind === 'groupEnd' ? target.episode : episodeOfNode(anchorNode!, (id) => sceneByShot.get(id))
       const oldEpisodeRaw = (dragged.data as { episodeNo?: unknown }).episodeNo
@@ -499,20 +700,16 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
 
       // 3) 单命令执行：边手术 + episodeNo 补丁，一步撤销整批回滚
       const stamp = Date.now().toString(36)
-      const removedEdges = edgesRef.current.filter((e) => plan!.removes.includes(e.id))
-      const addedEdges: Edge[] = plan!.adds.map(({ source, target: t }, i) => ({
+      const removedEdges = edgesRef.current.filter((e) => plan.removes.includes(e.id))
+      const addedEdges: Edge[] = plan.adds.map(({ source, target: t }, i) => ({
         id: `e-${source}-out-${t}-mv-${stamp}-${i}`,
         source,
         target: t,
         className: 'pw-edge-sequence',
       }))
-      const applyEdges = (remove: boolean) => {
+      const applyEdges = (redo: boolean) => {
         if (addedEdges.length === 0 && removedEdges.length === 0) return
-        setEdges((eds) =>
-          remove
-            ? [...eds.filter((e) => !removedEdges.some((r) => r.id === e.id)), ...addedEdges]
-            : [...eds.filter((e) => !addedEdges.some((a) => a.id === e.id)), ...removedEdges],
-        )
+        setEdges((eds) => spliceEdgesWith(eds, removedEdges, addedEdges, redo))
       }
       const patchEp = (ep: number | null) =>
         applyDataPatch(draggedId, { episodeNo: ep ?? undefined })
@@ -654,7 +851,7 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
       let node: CanvasNode
       if (type === 'scene') {
         node = {
-          id: `scene-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          id: uid('scene'),
           type: 'scene',
           position: { x: 0, y: 0 },
           selected: select,
@@ -670,7 +867,7 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
         }
       } else if (type === 'beat') {
         node = {
-          id: `beat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          id: uid('beat'),
           type: 'beat',
           position: { x: 0, y: 0 },
           selected: select,
@@ -678,7 +875,7 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
         }
       } else if (type === 'dialogue') {
         node = {
-          id: `dialogue-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          id: uid('dialogue'),
           type: 'dialogue',
           position: { x: 0, y: 0 },
           selected: select,
@@ -692,7 +889,7 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
         }
       } else if (type === 'branch') {
         node = {
-          id: `branch-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          id: uid('branch'),
           type: 'branch',
           position: { x: 0, y: 0 },
           selected: select,
@@ -700,7 +897,7 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
         }
       } else {
         node = {
-          id: `shot-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          id: uid('shot'),
           type: 'shot',
           position: { x: 0, y: 0 },
           selected: select,
@@ -762,123 +959,26 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
 
       // 折叠模拟：批量创建时场号/镜号基线与引用解析都基于虚拟终态，
       // 每个动作的前进/回退闭包在模拟期一次性捕获，不做运行期查询。
-      let simNodes = [...nodesRef.current]
-      let simEdges = [...edgesRef.current]
-      const refToId = new Map<string, string>()
-      const resolveId = (raw: string): string => refToId.get(raw) ?? raw
-      const forward: Array<() => void> = []
-      const backward: Array<() => void> = []
-
+      const ops: BatchOps = { buildNewNode, applyDataPatch, setNodes, setEdges }
+      const sim: BatchSim = {
+        nodes: [...nodesRef.current],
+        edges: [...edgesRef.current],
+        refToId: new Map(),
+        forward: [],
+        backward: [],
+      }
       for (const cmd of batch) {
-        switch (cmd.op) {
-          case 'create_node': {
-            const node = buildNewNode(cmd.nodeType as CreatableType, {
-              selected: false,
-              data: (cmd.data as Record<string, unknown>) ?? undefined,
-              against: simNodes,
-            })
-            if (typeof cmd.ref === 'string' && cmd.ref !== '') refToId.set(cmd.ref, node.id)
-            simNodes = [...simNodes, node]
-            forward.push(() => setNodes((all) => [...all, node]))
-            backward.push(() => setNodes((all) => all.filter((n) => n.id !== node.id)))
-            break
-          }
-          case 'update_node': {
-            const id = resolveId(cmd.nodeId)
-            const target = simNodes.find((n) => n.id === id)
-            if (!target) continue
-            const keys = Object.keys(cmd.patch)
-            const before: Record<string, unknown> = {}
-            for (const k of keys) before[k] = (target.data as Record<string, unknown>)[k]
-            simNodes = simNodes.map((n) =>
-              n.id === id ? ({ ...n, data: { ...n.data, ...cmd.patch } } as CanvasNode) : n,
-            )
-            forward.push(() => applyDataPatch(id, cmd.patch))
-            backward.push(() => applyDataPatch(id, before))
-            break
-          }
-          case 'delete_node': {
-            const removedId = resolveId(cmd.nodeId)
-            const idSet = new Set([removedId])
-            const removedNodes = simNodes.filter((n) => idSet.has(n.id))
-            if (removedNodes.length === 0) continue
-            const removedEdges = simEdges.filter((e) => idSet.has(e.source) || idSet.has(e.target))
-            simNodes = simNodes.filter((n) => !idSet.has(n.id))
-            simEdges = simEdges.filter((e) => !idSet.has(e.source) && !idSet.has(e.target))
-            // 状态删除内联（不走 deleteNodesByIds——那会额外入栈破坏单步撤销）
-            forward.push(() => {
-              setNodes((all) => all.filter((n) => n.id !== removedId))
-              setEdges((eds) => eds.filter((e) => e.source !== removedId && e.target !== removedId))
-            })
-            backward.push(() => {
-              setNodes((all) => [...all, ...removedNodes])
-              setEdges((eds) => [...eds, ...removedEdges])
-            })
-            break
-          }
-          case 'connect_edge': {
-            const srcId = resolveId(cmd.sourceId)
-            const dstId = resolveId(cmd.targetId)
-            const kind = typeof cmd.edgeKind === 'string' ? cmd.edgeKind : 'sequence'
-            let edge: Edge
-            if (kind === 'attach') {
-              // 分镜下挂（§4.4 垂直派生边）
-              edge = {
-                id: `e-${srcId}-shots-${dstId}-ai-${forward.length}`,
-                source: srcId,
-                target: dstId,
-                sourceHandle: SCENE_SHOT_HANDLE,
-                className: 'pw-edge-attach',
-              }
-            } else if (kind === 'branch') {
-              // 分支选项出口：胶囊文案与分支选项同源（§4.4 不落第二份拷贝语义）
-              const idx = typeof cmd.optionIndex === 'number' ? cmd.optionIndex : 0
-              const branchNode = simNodes.find((n) => n.id === srcId)
-              const optionLabel =
-                branchNode?.type === 'branch' ? (branchNode.data.options[idx] ?? '') : ''
-              edge = {
-                id: `e-${srcId}-${branchOptionHandle(idx)}-${dstId}-ai-${forward.length}`,
-                source: srcId,
-                target: dstId,
-                sourceHandle: branchOptionHandle(idx),
-                type: 'branch',
-                data: { optionLabel },
-              }
-            } else {
-              edge = {
-                id: `e-${srcId}-${dstId}-ai-${forward.length}`,
-                source: srcId,
-                target: dstId,
-                className: 'pw-edge-sequence',
-              }
-            }
-            simEdges = [...simEdges, edge]
-            forward.push(() => setEdges((eds) => addEdge(edge, eds)))
-            backward.push(() => setEdges((eds) => eds.filter((e) => e.id !== edge.id)))
-            break
-          }
-          case 'disconnect_edge': {
-            const srcId = resolveId(cmd.sourceId)
-            const dstId = resolveId(cmd.targetId)
-            const hitIdx = simEdges.findIndex(
-              (e) => e.source === srcId && e.target === dstId,
-            )
-            if (hitIdx < 0) continue
-            const removed = simEdges[hitIdx]
-            simEdges = [...simEdges.slice(0, hitIdx), ...simEdges.slice(hitIdx + 1)]
-            forward.push(() =>
-              setEdges((eds) => eds.filter((e) => !(e.source === removed.source && e.target === removed.target))),
-            )
-            backward.push(() => setEdges((eds) => addEdge(removed, eds)))
-            break
-          }
-        }
+        if (cmd.op === 'create_node') simCreate(sim, ops, cmd)
+        else if (cmd.op === 'update_node') simUpdate(sim, ops, cmd)
+        else if (cmd.op === 'delete_node') simDelete(sim, ops, cmd)
+        else if (cmd.op === 'connect_edge') simConnect(sim, ops, cmd)
+        else simDisconnect(sim, ops, cmd)
       }
 
-      forward.forEach((f) => f())
+      sim.forward.forEach((f) => f())
       pushHistory({
-        undo: () => [...backward].reverse().forEach((f) => f()),
-        redo: () => forward.forEach((f) => f()),
+        undo: () => [...sim.backward].reverse().forEach((f) => f()),
+        redo: () => sim.forward.forEach((f) => f()),
       })
       setOpenSettingsId(null)
       return null
@@ -989,25 +1089,13 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
       const entity = readEntityPayload(e.dataTransfer)
       if (!entity) return
       e.preventDefault()
-      const nodeId = (e.target as HTMLElement).closest?.('.react-flow__node')?.getAttribute('data-id')
+      const hit = (e.target as HTMLElement).closest?.('.react-flow__node') as HTMLElement | null
+      const nodeId = hit?.dataset.id
       const node = nodeId ? nodesRef.current.find((n) => n.id === nodeId) : undefined
 
       if (node) {
-        if (entity.kind === 'character') {
-          if (node.type === 'scene' && !node.data.characterIds.includes(entity.id)) {
-            patchNode(node.id, { characterIds: [...node.data.characterIds, entity.id] })
-          } else if (node.type === 'dialogue') {
-            patchNode(node.id, {
-              lines: [...node.data.lines, { kind: 'line', speaker: entity.id, side: 'left', text: '新台词…' }],
-            })
-          } else if (node.type === 'shot' && !node.data.refs.some((r) => r.label === `${entity.name}垫图`)) {
-            patchNode(node.id, { refs: [...node.data.refs, { kind: 'character', label: `${entity.name}垫图` }] })
-          }
-        } else if (node.type === 'scene') {
-          patchNode(node.id, { locationId: entity.id })
-        } else if (node.type === 'shot' && !node.data.refs.some((r) => r.label === `${entity.name}底图`)) {
-          patchNode(node.id, { refs: [...node.data.refs, { kind: 'location', label: `${entity.name}底图` }] })
-        }
+        const patch = entityDropPatch(node, entity)
+        if (patch) patchNode(node.id, patch)
         return
       }
 
@@ -1073,11 +1161,7 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
       const edge: Edge = {
         ...connection,
         id: `e-${connection.source}-${connection.sourceHandle ?? 'out'}-${connection.target}`,
-        ...(fromBranchOption
-          ? { type: 'branch' as const, data: branchData }
-          : fromShotHandle
-            ? { className: 'pw-edge-attach' }
-            : { className: 'pw-edge-sequence' }),
+        ...connectEdgeExtras(fromBranchOption ?? false, branchData, fromShotHandle),
       }
       setEdges((eds) => addEdge(edge, eds))
       pushHistory({
@@ -1087,6 +1171,78 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
     },
     [pushHistory, setEdges],
   )
+
+  /** 右键菜单内容（S3358 拆分）：节点菜单 / 连线菜单 / 空白处新建菜单。 */
+  const ctxMenuBody = () => {
+    if (ctxMenu?.nodeId) {
+      return (
+        <>
+          <button
+            type="button"
+            className="editor-menu-item"
+            role="menuitem"
+            onClick={() => {
+              toggleSettings(ctxMenu.nodeId!)
+              setCtxMenu(null)
+            }}
+          >
+            ⚙️ 打开设置
+          </button>
+          <button
+            type="button"
+            className="editor-menu-item"
+            role="menuitem"
+            onClick={() => {
+              duplicateNode(ctxMenu.nodeId!)
+              setCtxMenu(null)
+            }}
+          >
+            ⧉ 复制
+          </button>
+          <button
+            type="button"
+            className="editor-menu-item editor-menu-danger"
+            role="menuitem"
+            onClick={() => {
+              deleteNodesByIds([ctxMenu.nodeId!])
+              setCtxMenu(null)
+            }}
+          >
+            🗑 删除
+          </button>
+        </>
+      )
+    }
+    if (ctxMenu?.edgeId) {
+      return (
+        <button
+          type="button"
+          className="editor-menu-item editor-menu-danger"
+          role="menuitem"
+          onClick={() => {
+            deleteEdgesByIds([ctxMenu.edgeId!])
+            setCtxMenu(null)
+          }}
+        >
+          ✂️ 删除连线
+        </button>
+      )
+    }
+    return CREATABLE_TYPES.map((type) => (
+      <button
+        key={type}
+        type="button"
+        className="editor-menu-item"
+        role="menuitem"
+        onClick={() => {
+          createNode(type)
+          setCtxMenu(null)
+        }}
+      >
+        ＋ {CREATE_LABELS[type]}
+      </button>
+    ))
+  }
 
   return (
     <NodeEditContext.Provider value={nodeEditApi}>
@@ -1282,70 +1438,7 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
           role="menu"
           aria-label="画布上下文菜单"
         >
-          {ctxMenu.nodeId ? (
-            <>
-              <button
-                type="button"
-                className="editor-menu-item"
-                role="menuitem"
-                onClick={() => {
-                  toggleSettings(ctxMenu.nodeId!)
-                  setCtxMenu(null)
-                }}
-              >
-                ⚙️ 打开设置
-              </button>
-              <button
-                type="button"
-                className="editor-menu-item"
-                role="menuitem"
-                onClick={() => {
-                  duplicateNode(ctxMenu.nodeId!)
-                  setCtxMenu(null)
-                }}
-              >
-                ⧉ 复制
-              </button>
-              <button
-                type="button"
-                className="editor-menu-item editor-menu-danger"
-                role="menuitem"
-                onClick={() => {
-                  deleteNodesByIds([ctxMenu.nodeId!])
-                  setCtxMenu(null)
-                }}
-              >
-                🗑 删除
-              </button>
-            </>
-          ) : ctxMenu.edgeId ? (
-            <button
-              type="button"
-              className="editor-menu-item editor-menu-danger"
-              role="menuitem"
-              onClick={() => {
-                deleteEdgesByIds([ctxMenu.edgeId!])
-                setCtxMenu(null)
-              }}
-            >
-              ✂️ 删除连线
-            </button>
-          ) : (
-            CREATABLE_TYPES.map((type) => (
-              <button
-                key={type}
-                type="button"
-                className="editor-menu-item"
-                role="menuitem"
-                onClick={() => {
-                  createNode(type)
-                  setCtxMenu(null)
-                }}
-              >
-                ＋ {CREATE_LABELS[type]}
-              </button>
-            ))
-          )}
+          {ctxMenuBody()}
         </div>
       )}
       {/* 剧本导出对话框（§3.3/§3.5）：打开时按当前画布生成 */}
