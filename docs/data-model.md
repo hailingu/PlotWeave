@@ -1,6 +1,7 @@
 # PlotWeave 数据模型设计
 
-> 状态：草案 v1（待评审）
+> 状态：v1（2026-08-28 定稿）
+> 本版相对草案的修订：ProjectDocument 补 `episodeTitles` 字段；§4.2 各 spec 字段对齐 UI 设计已实现的节点形态（场景卡 sceneNo/interior/weather、对白行 kind/side/vo、分支 options 入 spec）；§5 分支边不再持久化 label 拷贝；§11 明确归一化管线位于前端模型层，并登记 schemaVersion 0（旧扁平存储格式）→ 1 的迁移。
 > 适用范围：画布文档模型、设定与资产模型、命令与撤销、本地存储体系、AI Agent 交互。
 > 明确不在范围内：用户体系、租户、余额/计费。PlotWeave 是单用户 BYOK 桌面工具；若未来出现此类需求，另起《服务端领域模型》文档。
 
@@ -61,6 +62,7 @@ interface ProjectDocument {
     locations: Record<string, Location>
     props: Record<string, PropItem>
   }
+  episodeTitles: Record<number, string>  // 集标题表：键 = 集号（见 4.1，不建「集」实体表）
   assets: {
     byId: Record<string, AssetRef>  // 项目资产索引；文件本体在项目 assets/ 目录，见第七节
   }
@@ -85,15 +87,15 @@ interface StoryNode {
   }
   ui: {                              // 会话态，加载时重置
     selected: boolean
-    expanded: boolean
+    expanded: boolean                // 首版节点无折叠形态，恒 true；保留字段为演进占位
   }
   data: {
     spec: NodeSpec                   // 用户意图，按节点类型不同（见 4.2）
     meta: {                          // 元信息
-      label: string                  // 节点标题
+      label?: string                 // 节点标题；分支/分镜卡省略（标题由 spec.prompt / spec.shotNo 派生，不落镜像字段）
       episodeNo?: number             // 集归属（大纲分组的唯一依据；分镜卡随宿主场景，不单独分集）
-      createdAt: string
-      updatedAt: string
+      createdAt?: string             // 首版运行态不维护时间戳，落盘可省略；保留字段为演进占位
+      updatedAt?: string
     }
   }
 }
@@ -110,31 +112,42 @@ interface StoryNode {
 ```ts
 type NodeSpec = SceneSpec | BeatSpec | DialogueSpec | BranchSpec | ShotSpec
 
-/** 场景：一个时空单元的叙事容器。 */
+/** 场景：一个时空单元的叙事容器（UI 形态 = 索引卡，字段对齐 ui-design §4.2）。 */
 interface SceneSpec {
+  sceneNo: number            // 剧本场景头编号，展示为 SCENE 03
+  interior: boolean          // 内景/外景徽标
   locationId?: string        // 引用 settings.locations
   time?: string              // 自由文本，如「夜·雨」
-  summary: string            // 场景梗概
+  weather?: string           // 天气，自由文本
+  synopsis: string           // 场景梗概
   characterIds: string[]     // 出场角色，引用 settings.characters
 }
 
-/** 桥段：场景内的情节拍点（转折、反转、高潮）。 */
+/** 桥段：场景内的情节拍点（转折、反转、高潮）。承载节奏而非内容，不设正文。 */
 interface BeatSpec {
-  summary: string
-  emotionalTone?: string     // 如「压抑」「爆发」
+  tone: string               // 情绪基调（UI 设计文中的 emotionalTone），如「压抑」「爆发」
 }
 
 /** 对白：一段角色对话。 */
 interface DialogueSpec {
-  lines: Array<{
-    characterId: string      // 引用 settings.characters
-    text: string
-  }>
+  lines: DialogueLine[]
 }
 
-/** 分支：剧情分岔点，出口由带 label 的 branch 边表达（见第五节）。 */
+/** 对白的一行：角色台词或居中动作行；id 为稳定标识（列表 key 不用数组下标）。 */
+interface DialogueLine {
+  id: string
+  kind: 'line' | 'action'
+  text: string
+  speaker?: string           // kind='line' 时的说话人，引用 settings.characters
+  side?: 'left' | 'right'    // 气泡左右侧
+  vo?: boolean               // 画外音（VO 徽标）
+}
+
+/** 分支：剧情分岔点。选项存在 spec 里（端口/胶囊渲染的唯一真相）；
+ * 出口连线经 sourceHandle（option-N）指向选项，label 由选项派生，边上不落拷贝（见第五节）。 */
 interface BranchSpec {
   prompt: string             // 分岔事由，如「女主是否发现真相」
+  options: Array<{ id: string; label: string }>  // id 为稳定标识；sourceHandle 按数组下标定位（option-N）
 }
 
 /** 分镜卡（生成侧）：一张卡 = 一个镜头及其 AI 燃料。
@@ -145,7 +158,15 @@ interface ShotSpec {
   size: string               // 景别（特写 / 中景 / 全景…）
   picture: string            // 画面描述
   prompt: string             // 镜头 Prompt（AI 视频模型的直接输入）
-  refs: AssetRef[]           // 引用位：角色垫图 / 场景底图 / 音频
+  refs: ShotRef[]            // 引用位：角色垫图 / 场景底图 / 音频
+}
+
+/** 分镜卡引用位：首版为缩略 chip 占位（id/kind/label 自包含），
+ * 项目资产（§7.1）落地后升级为 AssetRef 引用，随 §13 演进评审。 */
+interface ShotRef {
+  id: string
+  kind: 'character' | 'location' | 'audio'
+  label: string
 }
 ```
 
@@ -170,14 +191,13 @@ interface StoryEdge {
   targetHandle?: string
   data: {
     kind: 'sequence' | 'branch' | 'attach'
-    label?: string           // kind='branch' 时的选项文案，如「坦白」「隐瞒」
     order?: number           // 同一 source 多出口的排列顺序
   }
 }
 ```
 
 - `sequence`：剧情顺序流，无 label。
-- `branch`：从 branch 节点出口引出，必须带 label；多结局用多条 branch 边指向不同子图表达。
+- `branch`：从 branch 节点出口引出；**边上不存 label 拷贝**——胶囊文案按 `sourceHandle`（`option-N`）解析分支节点 `spec.options[N]` 派生（§8.1.1 禁止镜像字段）；多结局用多条 branch 边指向不同子图表达。
 - `attach`：索引卡底部端口 → 分镜卡顶部端口的派生从属边（垂直下挂），无 label，不参与剧情流环检测。
 
 ## 六、设定集（settings）
@@ -497,14 +517,14 @@ provider 的 API key 以**密文 `keyEnc`** 存于 provider 配置：Rust `seal`
 
 ## 十一、加载与归一化
 
-`load_project` 后、交付前端前执行归一化管线，保证任何历史版本的文档都以当前形态进入会话：
+`load_project` 返回后、交付画布前执行归一化管线，保证任何历史版本的文档都以当前形态进入会话。管线位于**前端模型层**（纯 TS，无框架依赖，与 §2 分层一致）——Rust 持久化层对节点/边结构不透明，只做信封透传与项目名/id 校验；信封级兼容（旧扁平格式缺 `schemaVersion` 时包装为 v0 信封）由 Rust 在 `load_project` 内完成。
 
-1. `schemaVersion` 低于当前版本时按迁移链逐级升级；高于当前版本时拒绝并提示升级应用。
+1. `schemaVersion` 低于当前版本时按迁移链逐级升级；高于当前版本时拒绝并提示升级应用。**迁移链首环**：schemaVersion 0（首版扁平存储格式：顶层 `name`/`updated_at`/`nodes`/`edges`/`settings`/`episodeTitles`，节点数据未分区、设定集为数组）→ 1（本文档结构）。
 2. 重置所有节点 `ui.selected = false`。
 3. 隔离孤儿边（source/target 节点已不存在）并记录警告——修复而非拒绝，单条坏数据不阻断加载（见 8.2.4）。
 4. 标记（而非清除）悬空的设定引用与资产引用。
 5. 扫描文本中的 @ 提及 token，目标已不存在的标记为失效（token 本身保留，见 8.1.2）。
-6. 重建 id 生成器的计数基线，防止新 id 与存量冲突。
+6. 重建 id 生成器的计数基线，防止新 id 与存量冲突（当前 id = 类型前缀 + 时间戳 + 随机尾，天然无计数基线；本条为将来引入计数式 id 时的保留动作）。
 
 ## 十二、AI Agent 交互
 
