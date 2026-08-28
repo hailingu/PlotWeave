@@ -75,8 +75,8 @@ export function migrateProjectDocument(doc: ProjectDocument): {
 
   const ensureCharacter = (label: string, gradient?: string): string => {
     const hit =
-      settings.characters.find((c) => c.gradient === gradient && c.name.charAt(0) === label) ??
-      settings.characters.find((c) => c.name.charAt(0) === label)
+      settings.characters.find((c) => c.gradient === gradient && c.name.startsWith(label)) ??
+      settings.characters.find((c) => c.name.startsWith(label))
     if (hit) return hit.id
     const entity = {
       id: newEntityId('ch'),
@@ -335,7 +335,8 @@ export const projectStore = {
 }
 
 function memoryCreate(name: string): ProjectSummary {
-  const id = `local-${Date.now().toString(36)}`
+  // 随机尾防同毫秒碰撞（如「复制」紧跟「新建」）：时间戳 id 撞 key 会静默覆盖项目
+  const id = `local-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`
   const now = Date.now()
   memoryStore.set(id, { doc: { name, nodes: [], edges: [], settings: { characters: [], locations: [] } }, updatedAt: now })
   return { id, name, sceneCount: 0, updatedAt: new Date(now).toISOString() }

@@ -206,14 +206,8 @@ pub fn library_put(
     Ok(entry)
 }
 
-/// 更新条目元信息（改名/分类/视角/标签/编组）；id 与媒体文件不变。
-#[tauri::command]
-pub fn library_update_meta(
-    app: AppHandle,
-    id: String,
-    patch: serde_json::Value,
-) -> Result<serde_json::Value, String> {
-    validate_asset_id(&id)?;
+/// 校验元信息补丁：字段白名单 + name/kind/view 取值合法性（S3776 拆分）。
+fn validate_meta_patch(patch: &serde_json::Value) -> Result<(), String> {
     if !patch.is_object() {
         return Err("patch 必须是对象".into());
     }
@@ -223,22 +217,40 @@ pub fn library_update_meta(
             return Err(format!("不可修改的字段：{key}"));
         }
     }
-    let name_patch = patch.get("name").and_then(|v| v.as_str());
-    if let Some(n) = name_patch {
+    if let Some(n) = patch.get("name").and_then(|v| v.as_str()) {
         validate_name(n)?;
     }
-    let kind_patch = patch.get("kind").and_then(|v| v.as_str());
-    if let Some(k) = kind_patch {
+    if let Some(k) = patch.get("kind").and_then(|v| v.as_str()) {
         validate_kind(k)?;
     }
-    let view_patch = patch.get("view");
-    if let Some(v) = view_patch {
-        match v.as_str() {
-            None => {}
-            Some(s) if VIEWS.contains(&s) => {}
-            Some(other) => return Err(format!("未知视角：{other}")),
+    if let Some(s) = patch.get("view").and_then(|v| v.as_str()) {
+        if !VIEWS.contains(&s) {
+            return Err(format!("未知视角：{s}"));
         }
     }
+    Ok(())
+}
+
+/// 应用 groupId 补丁：null/空白归 null；≤64 字符 trim 后写入。
+fn apply_group_id(entry: &mut serde_json::Value, g: &serde_json::Value) -> Result<(), String> {
+    match g {
+        serde_json::Value::Null => entry["groupId"] = json!(null),
+        serde_json::Value::String(s) if s.trim().is_empty() => entry["groupId"] = json!(null),
+        serde_json::Value::String(s) if s.len() <= 64 => entry["groupId"] = json!(s.trim()),
+        _ => return Err("groupId 必须是 ≤64 字符的字符串或 null".into()),
+    }
+    Ok(())
+}
+
+/// 更新条目元信息（改名/分类/视角/标签/编组）；id 与媒体文件不变。
+#[tauri::command]
+pub fn library_update_meta(
+    app: AppHandle,
+    id: String,
+    patch: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    validate_asset_id(&id)?;
+    validate_meta_patch(&patch)?;
     let tags = normalize_tags(patch.get("tags"));
 
     let mut index = read_index(&app)?;
@@ -247,25 +259,20 @@ pub fn library_update_meta(
         .iter_mut()
         .find(|a| a.get("id").and_then(|v| v.as_str()) == Some(id.as_str()))
         .ok_or_else(|| format!("资产不存在：{id}"))?;
-    if let Some(n) = name_patch {
+    if let Some(n) = patch.get("name").and_then(|v| v.as_str()) {
         entry["name"] = json!(n.trim());
     }
-    if let Some(k) = kind_patch {
+    if let Some(k) = patch.get("kind").and_then(|v| v.as_str()) {
         entry["kind"] = json!(k);
     }
-    if let Some(v) = view_patch {
+    if let Some(v) = patch.get("view") {
         entry["view"] = v.clone();
     }
     if patch.get("tags").is_some() {
         entry["tags"] = json!(tags);
     }
     if let Some(g) = patch.get("groupId") {
-        match g {
-            serde_json::Value::Null => entry["groupId"] = json!(null),
-            serde_json::Value::String(s) if s.trim().is_empty() => entry["groupId"] = json!(null),
-            serde_json::Value::String(s) if s.len() <= 64 => entry["groupId"] = json!(s.trim()),
-            _ => return Err("groupId 必须是 ≤64 字符的字符串或 null".into()),
-        }
+        apply_group_id(entry, g)?;
     }
     let updated = entry.clone();
     write_index(&app, &index)?;
