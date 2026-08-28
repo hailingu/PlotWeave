@@ -396,35 +396,43 @@ interface CommandPayloads {
 
 type CommandType = keyof CommandPayloads
 
-/** 类型化的命令信封：patch 形状由 type 决定。 */
+/** inverse 的类型安全形状：自带类型标签，patch 形状随标签走。
+ * 多命令复合的 undo（如 delete_node 的连带边恢复）统一用 batch 承载。 */
+type InverseCommand = {
+  [K in CommandType]: { type: K; patch: CommandPayloads[K] }
+}[CommandType]
+
+/** 类型化的命令信封：patch 形状由 type 决定。
+ * inverse 是「另一条命令」（类型常与正向不同：upsert_character 新增的
+ * inverse 是 delete_character），故为 InverseCommand 而非 CommandPayloads[T]。 */
 type GraphCommand<T extends CommandType = CommandType> = {
   id: string
   type: T
   actor: 'user' | 'agent'
   patch: CommandPayloads[T]
-  /** 执行时自动捕获的逆向补丁；命令创建者不传。 */
-  inverse?: CommandPayloads[T]
+  /** 执行时自动捕获的逆向命令；命令创建者不传。 */
+  inverse?: InverseCommand
   transient?: boolean
   timestamp: number
 }
 ```
 
-**inverse 捕获规则**（applyCommand 内置，逐类型固定）：
+**inverse 捕获规则**（applyCommand 内置，逐类型固定；inverse 的 type 按「捕获到的实际逆操作」取值）：
 
-| 命令 | inverse 内容 |
-| --- | --- |
-| `create_node` | 等效 `delete_node { nodeId }` |
-| `delete_node` | 等效 `create_node { node }` + 每条连带边的 `connect_edge` |
-| `move_node` / `resize_node` / `update_viewport` | 同结构，`to` 换为 docBefore 中的旧值 |
-| `update_node_*` | 同结构，`set` 只含被覆盖字段的旧值 |
-| `connect_edge` / `disconnect_edge` | 互逆，边数据取自 docBefore |
-| `upsert_character` | 新增 → `delete_character`；更新 → 旧实体整体 |
-| `delete_character` | 等效 `upsert_character { character: 旧实体 }` |
-| `upsert_document` | 新增 → `delete_document`；更新 → 旧文档整体 |
-| `delete_document` | 等效 `upsert_document { document: 旧文档 }` |
-| `set_episode_title` | 同结构，title 换为旧值；原来无该键 → inverse 为空串（即删除） |
-| `set_asset` / `remove_asset` | 互逆，AssetRef 取自 docBefore |
-| `batch` | 子命令 inverse 的**逆序**数组 |
+| 命令 | inverse 内容 | inverse.type |
+| --- | --- | --- |
+| `create_node` | 等效 `delete_node { nodeId }` | `delete_node` |
+| `delete_node` | 等效 `create_node { node }` + 每条连带边的 `connect_edge`，进同一 `batch` | `batch` |
+| `move_node` / `resize_node` / `update_viewport` | 同结构，`to` 换为 docBefore 中的旧值 | 同正向 |
+| `update_node_*` | 同结构，`set` 只含被覆盖字段的旧值 | 同正向 |
+| `connect_edge` / `disconnect_edge` | 互逆，边数据取自 docBefore | 对偶命令 |
+| `upsert_character` | 新增 → `delete_character`；更新 → 旧实体整体 | 视新增/更新而定 |
+| `delete_character` | 等效 `upsert_character { character: 旧实体 }` | `upsert_character` |
+| `upsert_document` | 新增 → `delete_document`；更新 → 旧文档整体 | 视新增/更新而定 |
+| `delete_document` | 等效 `upsert_document { document: 旧文档 }` | `upsert_document` |
+| `set_episode_title` | 同结构，title 换为旧值；原来无该键 → inverse 为空串（即删除） | `set_episode_title` |
+| `set_asset` / `remove_asset` | 互逆，AssetRef 取自 docBefore | 对偶命令 |
+| `batch` | 子命令 inverse 的**逆序**数组，进同一 `batch` | `batch` |
 
 ### 9.4 撤销规则
 
