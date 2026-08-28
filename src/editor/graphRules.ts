@@ -27,6 +27,16 @@ export function branchOptionIdOf(handle?: string | null): string | undefined {
   return handle.slice(BRANCH_OPTION_HANDLE_PREFIX.length)
 }
 
+/** 删选项级联（§8.2.2）：返回「前态有、新态无」选项的出口句柄，
+ * 供调用方把对应的 branch 边一并删除（同一撤销单元）；重排不影响。 */
+export function removedOptionHandles(
+  prev: Array<{ id: string }>,
+  next: Array<{ id: string }>,
+): string[] {
+  const kept = new Set(next.map((o) => o.id))
+  return prev.filter((o) => !kept.has(o.id)).map((o) => branchOptionHandle(o.id))
+}
+
 /** 连线语义（§4.4）：横向剧情流 / 分支选项出口 / 分镜下挂。 */
 export type EdgeKind = 'sequence' | 'branch' | 'attach'
 

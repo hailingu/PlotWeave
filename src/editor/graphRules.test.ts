@@ -5,6 +5,7 @@ import {
   SCENE_SHOT_HANDLE,
   branchOptionHandle,
   branchOptionIdOf,
+  removedOptionHandles,
   edgeKindOf,
   isDuplicateEdge,
   wouldCreateCycle,
@@ -39,6 +40,23 @@ describe('branchOptionHandle（选项端口绑稳定 id，删选项不位移其�
     expect(branchOptionIdOf('shots')).toBeUndefined()
     expect(branchOptionIdOf(null)).toBeUndefined()
     expect(branchOptionIdOf(undefined)).toBeUndefined()
+  })
+})
+
+describe('removedOptionHandles（§8.2.2 删选项连带删边的级联依据）', () => {
+  it('返回被删除选项的出口句柄；保留项与重排不影响', () => {
+    const prev = [
+      { id: 'a', label: '甲' },
+      { id: 'b', label: '乙' },
+      { id: 'c', label: '丙' },
+    ]
+    expect(removedOptionHandles(prev, [prev[1], prev[2]])).toEqual(['option-a'])
+    expect(removedOptionHandles(prev, [prev[2], prev[0], prev[1]])).toEqual([])
+    expect(removedOptionHandles(prev, [])).toEqual([
+      'option-a',
+      'option-b',
+      'option-c',
+    ])
   })
 })
 

@@ -45,6 +45,7 @@ import {
   branchOptionIdOf,
   connectEdgeExtras,
   isDuplicateEdge,
+  removedOptionHandles,
   wouldCreateCycle,
 } from './graphRules'
 import { compareCodeUnits } from '../compare'
@@ -216,7 +217,9 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
     [setNodes],
   )
 
-  /** 编辑即命令：实时合并字段补丁；连续同类补丁合并为一步撤销（§4.3）。 */
+  /** 编辑即命令：实时合并字段补丁；连续同类补丁合并为一步撤销（§4.3）。
+   * 分支节点的 options 补丁若删除了选项，其出口 branch 边一并删除且
+   * 与选项进同一撤销单元（§8.2.2——不留悬空连线，不静默改接）。 */
   const patchNode = useCallback(
     (id: string, patch: Record<string, unknown>) => {
       const cur = nodesRef.current.find((n) => n.id === id)
@@ -225,13 +228,42 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
       const before: Record<string, unknown> = {}
       for (const k of keys) before[k] = (cur.data as Record<string, unknown>)[k]
       applyDataPatch(id, patch)
-      pushHistory({
-        coalesceKey: `patch:${id}:${[...keys].sort(compareCodeUnits).join(',')}`,
-        undo: () => applyDataPatch(id, before),
-        redo: () => applyDataPatch(id, patch),
-      })
+      // 级联：新态缺失的选项句柄 → 删其出口边（branch 节点限定）
+      const removedHandles =
+        cur.type === 'branch' && Array.isArray(patch.options)
+          ? removedOptionHandles(
+              (cur.data as { options: Array<{ id: string }> }).options,
+              patch.options as Array<{ id: string }>,
+            )
+          : []
+      const beforeEdges = edgesRef.current
+      if (removedHandles.length > 0) {
+        const gone = new Set(removedHandles)
+        setEdges((eds) => eds.filter((e) => !(e.source === id && e.sourceHandle && gone.has(e.sourceHandle))))
+      }
+      const undo = () => {
+        applyDataPatch(id, before)
+        if (removedHandles.length > 0) setEdges(beforeEdges)
+      }
+      const redo = () => {
+        applyDataPatch(id, patch)
+        if (removedHandles.length > 0) {
+          const gone = new Set(removedHandles)
+          setEdges((eds) => eds.filter((e) => !(e.source === id && e.sourceHandle && gone.has(e.sourceHandle))))
+        }
+      }
+      // 有边级联时不可与普通补丁合并撤销，单独成步
+      if (removedHandles.length > 0) {
+        pushHistory({ undo, redo })
+      } else {
+        pushHistory({
+          coalesceKey: `patch:${id}:${[...keys].sort(compareCodeUnits).join(',')}`,
+          undo,
+          redo,
+        })
+      }
     },
-    [applyDataPatch, pushHistory],
+    [applyDataPatch, pushHistory, setEdges],
   )
 
   /** ⧉ 复制：同 data 新 id，右下偏移并只选中新副本；入栈可撤销。 */
