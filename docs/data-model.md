@@ -1,7 +1,7 @@
 # PlotWeave 数据模型设计
 
 > 状态：v1（2026-08-28 定稿）
-> 本版相对草案的修订：ProjectDocument 补 `episodeTitles` 字段；§4.2 各 spec 字段对齐 UI 设计已实现的节点形态（场景卡 sceneNo/interior/weather、对白行 kind/side/vo、分支 options 入 spec）；§5 分支边不再持久化 label 拷贝；§11 明确归一化管线位于前端模型层，并登记 schemaVersion 0（旧扁平存储格式）→ 1 的迁移。
+> 本版相对草案的修订：ProjectDocument 补 `episodeTitles` 字段；§4.2 各 spec 字段对齐 UI 设计已实现的节点形态（场景卡 sceneNo/interior/weather、对白行 kind/side/vo、分支 options 入 spec）；§5 分支边不再持久化 label 拷贝；§6 Character/Location 字段对齐运行态实体（gradient/bio/note，长篇自由文本由 SettingsDocument 承载）；§11 明确归一化管线位于前端模型层，并登记 schemaVersion 0（旧扁平存储格式）→ 1 的迁移。
 > 适用范围：画布文档模型、设定与资产模型、命令与撤销、本地存储体系、AI Agent 交互。
 > 明确不在范围内：用户体系、租户、余额/计费。PlotWeave 是单用户 BYOK 桌面工具；若未来出现此类需求，另起《服务端领域模型》文档。
 
@@ -208,10 +208,11 @@ interface StoryEdge {
 interface Character {
   id: string
   name: string
-  description?: string       // 人设、关系、口癖等自由文本
-  avatarAssetId?: string     // 引用 assets.byId
+  gradient: string            // 头像配色渐变（设定集头像与节点头像串共用）
+  bio?: string                // 一句小传；长篇人设/世界观走 SettingsDocument
+  avatarAssetId?: string      // 引用 assets.byId（项目资产落地后启用）
 }
-interface Location { id: string; name: string; description?: string }
+interface Location { id: string; name: string; note?: string }
 interface PropItem { id: string; name: string; description?: string }
 
 /** 文档条目（写作原料）：人物小传 / 世界观 / 术语表等自由文本，
