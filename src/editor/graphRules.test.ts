@@ -4,6 +4,7 @@ import {
   BRANCH_OPTION_HANDLE_PREFIX,
   SCENE_SHOT_HANDLE,
   branchOptionHandle,
+  branchOptionIdOf,
   edgeKindOf,
   isDuplicateEdge,
   wouldCreateCycle,
@@ -28,10 +29,16 @@ describe('edgeKindOf（§4.4 连线语义归类）', () => {
   })
 })
 
-describe('branchOptionHandle', () => {
-  it('0 基选项端口名：option-0、option-1…', () => {
-    expect(branchOptionHandle(0)).toBe(`${BRANCH_OPTION_HANDLE_PREFIX}0`)
-    expect(branchOptionHandle(3)).toBe('option-3')
+describe('branchOptionHandle（选项端口绑稳定 id，删选项不位移其他连线）', () => {
+  it('端口名 = option-<选项 id>；branchOptionIdOf 可逆解析', () => {
+    expect(branchOptionHandle('opt-x1')).toBe(`${BRANCH_OPTION_HANDLE_PREFIX}opt-x1`)
+    expect(branchOptionIdOf('option-opt-x1')).toBe('opt-x1')
+  })
+
+  it('非选项端口/空值解析为 undefined', () => {
+    expect(branchOptionIdOf('shots')).toBeUndefined()
+    expect(branchOptionIdOf(null)).toBeUndefined()
+    expect(branchOptionIdOf(undefined)).toBeUndefined()
   })
 })
 

@@ -33,8 +33,8 @@ export interface AiGraphSnapshot {
     id: string
     type: string
     label: string
-    /** branch 节点必填：选项条数，branch 连线的 optionIndex 越界校验用。 */
-    optionsCount?: number
+    /** branch 节点必填：选项（id + 文案），branch 连线的 optionIndex 校验与端口 id 解析用。 */
+    options?: Array<{ id: string; label: string }>
   }>
   edges: Array<{ source: string; target: string; sourceHandle?: string | null; type?: string }>
 }
@@ -183,7 +183,8 @@ function checkFieldKeys(nodeType: string, fields: Record<string, unknown>): stri
 interface FoldState {
   labels: Map<string, string>
   types: Map<string, string>
-  optionsCounts: Map<string, number>
+  /** branch 节点 id → 选项列表（校验 optionIndex 并解析稳定选项 id 端口）。 */
+  branchOptions: Map<string, Array<{ id: string; label: string }>>
   virtualEdges: Array<{ source: string; target: string; sourceHandle?: string | null; type?: string }>
   /** 本批尚未删除的节点 id（含 __new__ 虚拟 id）。 */
   exists: Set<string>
@@ -258,11 +259,16 @@ function foldCreate(st: FoldState, cmd: Record<string, unknown>, index: number):
   st.types.set(virtualId, nodeType)
   if (refName !== '') st.refOwner.set(refName, virtualId)
   st.items.push({ kind: 'create', danger: false, key: `c${index}`, label: `${OP_LABELS.create} ${typeLabel} · ${name}` })
+  const normalized = normalizeNodeFields(nodeType, data)
+  // 新建分支节点登记选项 id，同批后续 connect_edge 才能解析稳定端口
+  if (nodeType === 'branch' && Array.isArray(normalized.options)) {
+    st.branchOptions.set(virtualId, normalized.options as Array<{ id: string; label: string }>)
+  }
   st.commands.push({
     op: 'create_node',
     nodeType,
     ref: refName === '' ? undefined : refName,
-    data: normalizeNodeFields(nodeType, data),
+    data: normalized,
   })
 }
 
@@ -279,10 +285,15 @@ function foldUpdate(st: FoldState, cmd: Record<string, unknown>, index: number):
     key: `u${index}`,
     label: `${OP_LABELS.update} ${st.labels.get(id) ?? '未知节点'}（${Object.keys(patch).join('、')}）${reasonOf(cmd)}`,
   })
+  const normalized = normalizeNodeFields(st.types.get(id) ?? '', patch)
+  // 分支选项被替换时刷新登记，同批后续 connect_edge 按新选项 id 解析端口
+  if (st.types.get(id) === 'branch' && Array.isArray(normalized.options)) {
+    st.branchOptions.set(id, normalized.options as Array<{ id: string; label: string }>)
+  }
   st.commands.push({
     op: 'update_node',
     nodeId: asText(cmd.nodeId),
-    patch: normalizeNodeFields(st.types.get(id) ?? '', patch),
+    patch: normalized,
     reason: asText(cmd.reason),
   })
 }
@@ -325,14 +336,14 @@ function edgePortOf(
     if (st.types.get(src) !== 'branch') {
       return `branch 出口只能来自分支节点：${st.labels.get(src) ?? src} → ${st.labels.get(dst) ?? dst}`
     }
-    const count = st.optionsCounts.get(src)
+    const options = st.branchOptions.get(src)
     const idx = cmd.optionIndex
-    const idxValid = typeof idx === 'number' && Number.isInteger(idx) && idx >= 0 && idx < (count ?? -1)
-    if (!idxValid || count === undefined) {
+    const idxValid = typeof idx === 'number' && Number.isInteger(idx) && idx >= 0 && idx < (options?.length ?? -1)
+    if (!idxValid || options === undefined) {
       const pair = `${st.labels.get(src) ?? src} → ${st.labels.get(dst) ?? dst}`
-      return `optionIndex 必须是 0～${(count ?? 1) - 1} 的整数：${pair}`
+      return `optionIndex 必须是 0～${(options?.length ?? 1) - 1} 的整数：${pair}`
     }
-    return { handle: branchOptionHandle(idx), optionIndex: idx }
+    return { handle: branchOptionHandle(options[idx].id), optionIndex: idx }
   }
   if (kind === 'attach') {
     if (st.types.get(src) !== 'scene' || st.types.get(dst) !== 'shot') {
@@ -423,8 +434,8 @@ export function validateAiBatch(rawCommands: unknown, graph: AiGraphSnapshot): B
   const st: FoldState = {
     labels: new Map(graph.nodes.map((n) => [n.id, n.label])),
     types: new Map(graph.nodes.map((n) => [n.id, n.type])),
-    optionsCounts: new Map(
-      graph.nodes.filter((n) => typeof n.optionsCount === 'number').map((n) => [n.id, n.optionsCount as number]),
+    branchOptions: new Map(
+      graph.nodes.filter((n) => Array.isArray(n.options)).map((n) => [n.id, n.options!]),
     ),
     virtualEdges: graph.edges.map((e) => ({ ...e })),
     exists: new Set(graph.nodes.map((n) => n.id)),

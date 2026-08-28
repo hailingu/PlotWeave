@@ -57,13 +57,13 @@ function setup(openSettingsId: string | null = null) {
 }
 
 describe('BranchNode（岔路路标）', () => {
-  it('问句 + 选项条逐条渲染，每选项右缘独立出口端口 option-n', () => {
+  it('问句 + 选项条逐条渲染，每选项右缘独立出口端口 option-<选项 id>', () => {
     setup()
     expect(screen.getByText('林晚是否发现真相？')).toBeTruthy()
     expect(screen.getByText('坦白')).toBeTruthy()
     expect(screen.getByText('隐瞒')).toBeTruthy()
-    expect(screen.getByTestId(`handle-source-${BRANCH_OPTION_HANDLE_PREFIX}0`)).toBeTruthy()
-    expect(screen.getByTestId(`handle-source-${BRANCH_OPTION_HANDLE_PREFIX}1`)).toBeTruthy()
+    expect(screen.getByTestId(`handle-source-${BRANCH_OPTION_HANDLE_PREFIX}o1`)).toBeTruthy()
+    expect(screen.getByTestId(`handle-source-${BRANCH_OPTION_HANDLE_PREFIX}o2`)).toBeTruthy()
     expect(screen.getByTestId('handle-target')).toBeTruthy()
   })
 

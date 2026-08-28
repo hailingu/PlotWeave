@@ -67,8 +67,8 @@ export interface BeatNodeData extends Record<string, unknown> {
   episodeNo?: number
 }
 
-/** 分支的一个选项：出口端口按下标定位（option-N），label 为胶囊文案。
- * id 为稳定标识（S6479：列表渲染/编辑的 key 不用数组下标）。 */
+/** 分支的一个选项：出口端口按稳定 id 定位（option-<id>），label 为胶囊文案。
+ * 删选项不位移其余出口的连线归属；id 同时作列表渲染/编辑的 key（S6479）。 */
 export interface BranchOption {
   id: string
   label: string

@@ -114,17 +114,18 @@ const connectEdgeOf = (
     }
   }
   if (kind === 'branch') {
-    // 分支选项出口：胶囊文案与分支选项同源（§4.4 不落第二份拷贝语义）
+    // 分支选项出口：端口绑稳定选项 id（删选项不位移其他连线），胶囊文案同源
     const idx = typeof cmd.optionIndex === 'number' ? cmd.optionIndex : 0
     const branchNode = sim.nodes.find((n) => n.id === srcId)
-    const optionLabel = branchNode?.type === 'branch' ? (branchNode.data.options[idx]?.label ?? '') : ''
+    const option = branchNode?.type === 'branch' ? branchNode.data.options[idx] : undefined
+    const handle = branchOptionHandle(option?.id ?? `${idx}`)
     return {
-      id: `e-${srcId}-${branchOptionHandle(idx)}-${dstId}-ai-${sim.forward.length}`,
+      id: `e-${srcId}-${handle}-${dstId}-ai-${sim.forward.length}`,
       source: srcId,
       target: dstId,
-      sourceHandle: branchOptionHandle(idx),
+      sourceHandle: handle,
       type: 'branch',
-      data: { optionLabel },
+      data: { optionLabel: option?.label ?? '' },
     }
   }
   return {

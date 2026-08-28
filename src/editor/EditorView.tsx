@@ -42,6 +42,7 @@ import { buildScriptMarkdown } from './exportScript'
 import {
   BRANCH_OPTION_HANDLE_PREFIX,
   SCENE_SHOT_HANDLE,
+  branchOptionIdOf,
   connectEdgeExtras,
   isDuplicateEdge,
   wouldCreateCycle,
@@ -613,10 +614,13 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
       const fromShotHandle = connection.sourceHandle === SCENE_SHOT_HANDLE
       let branchData: { optionLabel: string } | undefined
       if (fromBranchOption) {
-        const idx = Number(connection.sourceHandle!.slice(BRANCH_OPTION_HANDLE_PREFIX.length))
+        const optionId = branchOptionIdOf(connection.sourceHandle)
         const srcNode = nodesRef.current.find((n) => n.id === connection.source)
         branchData = {
-          optionLabel: srcNode?.type === 'branch' ? (srcNode.data.options[idx]?.label ?? '') : '',
+          optionLabel:
+            srcNode?.type === 'branch'
+              ? (srcNode.data.options.find((o) => o.id === optionId)?.label ?? '')
+              : '',
         }
       }
       const edge: Edge = {

@@ -5,6 +5,10 @@
  */
 import type { CanvasNode } from '../editor/nodes/types'
 import {
+  branchOptionHandle,
+  branchOptionIdOf,
+} from '../editor/graphRules'
+import {
   newEntityId,
   normalizeSettings,
   type ProjectSettings,
@@ -137,4 +141,21 @@ export function migrateProjectDocument(doc: ProjectContent): {
   })
 
   return { doc: { ...doc, nodes, edges: doc.edges, settings }, migrated }
+}
+
+/** 旧运行态的分支边按数组下标定位出口（option-N）；v1 绑稳定选项 id（§4.2 修订）。
+ * 须在 migrateProjectDocument 之后调用（此时选项已带稳定 id）；
+ * 能解析的下标就地改写，越界的原样保留，留给归一化按孤儿边隔离（§11.3）。 */
+export function rewriteIndexOptionHandles(doc: ProjectContent): ProjectContent {
+  const nodesById = new Map(doc.nodes.map((n) => [n.id, n]))
+  const edges = doc.edges.map((e) => {
+    const optionId = branchOptionIdOf(e.sourceHandle)
+    // 只改写旧式的纯数字下标句柄；id 句柄与其他端口原样放行
+    if (optionId === undefined || !/^\d+$/.test(optionId)) return e
+    const src = nodesById.get(e.source)
+    if (src?.type !== 'branch') return e
+    const option = src.data.options[Number(optionId)]
+    return option ? { ...e, sourceHandle: branchOptionHandle(option.id) } : e
+  })
+  return { ...doc, edges }
 }

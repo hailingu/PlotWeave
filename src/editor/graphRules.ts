@@ -13,11 +13,18 @@ export interface EndpointPair {
 /** 索引卡底部端口：attach 下挂分镜卡（§4.4 垂直 = 派生从属）。 */
 export const SCENE_SHOT_HANDLE = 'shots'
 
-/** 分支选项出口端口前缀（0 基）：option-0、option-1…。 */
+/** 分支选项出口端口前缀：option-<选项 id>。绑定稳定 id 而非数组下标，
+ * 删除任一选项不会位移其余出口的连线归属（docs/data-model.md §4.2/§5）。 */
 export const BRANCH_OPTION_HANDLE_PREFIX = 'option-'
 
-export function branchOptionHandle(index: number): string {
-  return `${BRANCH_OPTION_HANDLE_PREFIX}${index}`
+export function branchOptionHandle(optionId: string): string {
+  return `${BRANCH_OPTION_HANDLE_PREFIX}${optionId}`
+}
+
+/** 逆解析端口名中的选项 id；非选项端口返回 undefined。 */
+export function branchOptionIdOf(handle?: string | null): string | undefined {
+  if (!handle?.startsWith(BRANCH_OPTION_HANDLE_PREFIX)) return undefined
+  return handle.slice(BRANCH_OPTION_HANDLE_PREFIX.length)
 }
 
 /** 连线语义（§4.4）：横向剧情流 / 分支选项出口 / 分镜下挂。 */

@@ -7,7 +7,7 @@
 import type { Edge } from '@xyflow/react'
 import type { CanvasNode } from '../editor/nodes/types'
 import {
-  BRANCH_OPTION_HANDLE_PREFIX,
+  branchOptionIdOf,
   edgeKindOf,
 } from '../editor/graphRules'
 import type { ProjectSettings } from '../editor/settings'
@@ -20,7 +20,7 @@ import {
   type StoryNode,
   type Viewport,
 } from './document'
-import { migrateProjectDocument, normalizeEpisodeTitles } from './legacy'
+import { migrateProjectDocument, normalizeEpisodeTitles, rewriteIndexOptionHandles } from './legacy'
 
 /** 节点 → 落盘形态：四分区拆分；name/episodeNo 上移 meta，其余字段进 spec。 */
 export function toStoryNode(n: CanvasNode): StoryNode {
@@ -69,17 +69,17 @@ export function toStoryEdge(e: Edge): StoryEdge {
   return out
 }
 
-/** 落盘边 → 运行态：恢复 type/className；branch 胶囊文案按 sourceHandle 从分支节点派生。 */
+/** 落盘边 → 运行态：恢复 type/className；branch 胶囊文案按 sourceHandle 绑定的选项 id 从分支节点派生。 */
 export function fromStoryEdge(e: StoryEdge, nodesById: Map<string, StoryNode>): Edge {
   const out: Edge = { id: e.id, source: e.source, target: e.target }
   if (e.sourceHandle) out.sourceHandle = e.sourceHandle
   if (e.targetHandle) out.targetHandle = e.targetHandle
   if (e.data.kind === 'branch') {
     out.type = 'branch'
-    const idx = Number(e.sourceHandle?.slice(BRANCH_OPTION_HANDLE_PREFIX.length))
+    const optionId = branchOptionIdOf(e.sourceHandle)
     const src = nodesById.get(e.source)
     const options = src?.type === 'branch' ? (src.data.spec as BranchSpec).options : undefined
-    out.data = { optionLabel: options?.[idx]?.label ?? '' }
+    out.data = { optionLabel: options?.find((o) => o.id === optionId)?.label ?? '' }
   } else {
     out.className = e.data.kind === 'attach' ? 'pw-edge-attach' : 'pw-edge-sequence'
   }
@@ -181,13 +181,24 @@ function collectDanglingRefWarnings(
   if (n.type === 'dialogue') dialogueRefWarnings(n, settings, warnings)
 }
 
+/** 孤儿边判定（§11.3）：端点节点缺失；branch 边绑定的选项已不存在同论。 */
+function isOrphanEdge(e: StoryEdge, nodesById: Map<string, StoryNode>): boolean {
+  const src = nodesById.get(e.source)
+  if (!src || !nodesById.has(e.target)) return true
+  if (e.data.kind !== 'branch') return false
+  if (src.type !== 'branch') return true
+  const optionId = branchOptionIdOf(e.sourceHandle)
+  const options = (src.data.spec as BranchSpec).options
+  return optionId === undefined || !options.some((o) => o.id === optionId)
+}
+
 /** 归一化（§11.2–§11.4）：重置选中态、隔离孤儿边、标记悬空设定引用。 */
 function normalizeDocument(doc: ProjectDocument): { doc: ProjectDocument; warnings: string[] } {
   const warnings: string[] = []
-  const nodeIds = new Set(doc.graph.nodes.map((n) => n.id))
+  const nodesById = new Map(doc.graph.nodes.map((n) => [n.id, n]))
   const edges = doc.graph.edges.filter((e) => {
-    const orphan = !nodeIds.has(e.source) || !nodeIds.has(e.target)
-    if (orphan) warnings.push(`已隔离孤儿边 ${e.id}：端点节点不存在`)
+    const orphan = isOrphanEdge(e, nodesById)
+    if (orphan) warnings.push(`已隔离孤儿边 ${e.id}：端点节点或绑定选项不存在`)
     return !orphan
   })
   const nodes = doc.graph.nodes.map((n) => {
@@ -230,7 +241,7 @@ export function parseProject(raw: unknown): ParseResult {
       viewport: env.graph?.viewport,
     }
     const migrated = migrateProjectDocument(legacy)
-    const doc = serializeProject(migrated.doc, env.project?.id ?? '')
+    const doc = serializeProject(rewriteIndexOptionHandles(migrated.doc), env.project?.id ?? '')
     const { doc: normalized, warnings } = normalizeDocument(doc)
     return { content: fromDocument(normalized), migrated: true, warnings }
   }

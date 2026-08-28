@@ -19,7 +19,15 @@ function richSnap(): AiGraphSnapshot {
     nodes: [
       { id: 's1', type: 'scene', label: '场 01 · 天台' },
       { id: 'sh1', type: 'shot', label: 'SHOT01·中景' },
-      { id: 'b1', type: 'branch', label: '分支 · 追或不追？', optionsCount: 2 },
+      {
+        id: 'b1',
+        type: 'branch',
+        label: '分支 · 追或不追？',
+        options: [
+          { id: 'ob-a', label: '追' },
+          { id: 'ob-b', label: '不追' },
+        ],
+      },
     ],
     edges: [],
   }

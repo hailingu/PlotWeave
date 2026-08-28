@@ -190,7 +190,7 @@ describe('simulateBatch · connect_edge（§4.4 三态边形态）', () => {
     )
     forward.forEach((f) => f())
     expect(state.edges[0]).toMatchObject({
-      sourceHandle: 'option-1',
+      sourceHandle: 'option-o-r',
       type: 'branch',
       data: { optionLabel: '右' },
     })
@@ -208,7 +208,7 @@ describe('simulateBatch · connect_edge（§4.4 三态边形态）', () => {
       state.edges,
     )
     forward.forEach((f) => f())
-    expect(state.edges[0]).toMatchObject({ sourceHandle: 'option-0', data: { optionLabel: '左' } })
+    expect(state.edges[0]).toMatchObject({ sourceHandle: 'option-o-l', data: { optionLabel: '左' } })
     expect(state.edges[1]).toMatchObject({ data: { optionLabel: '' } })
   })
 

@@ -1,5 +1,5 @@
 import type { Edge } from '@xyflow/react'
-import { BRANCH_OPTION_HANDLE_PREFIX, SCENE_SHOT_HANDLE, edgeKindOf } from '../graphRules'
+import { SCENE_SHOT_HANDLE, branchOptionIdOf, edgeKindOf } from '../graphRules'
 import type { CanvasNode } from '../nodes/types'
 
 /**
@@ -130,10 +130,10 @@ export function buildGraphDigest(nodes: CanvasNode[], edges: Edge[], r: DigestRe
       return `SHOT${pad2(n.data.shotNo)}·${n.data.size}`
     }
     if (kind === 'branch') {
-      const optIdx = e.sourceHandle?.startsWith(BRANCH_OPTION_HANDLE_PREFIX)
-        ? e.sourceHandle.slice(BRANCH_OPTION_HANDLE_PREFIX.length)
-        : '?'
-      return `- branch(选项${optIdx} · ${e.sourceHandle ?? '?'}): ${e.source} → ${e.target}（${endLabel(src)} → ${endLabel(dst)}）`
+      // 端口绑稳定选项 id：按 id 回源解析选项文案，不给模型看下标
+      const optId = branchOptionIdOf(e.sourceHandle)
+      const opt = src?.type === 'branch' ? src.data.options.find((o) => o.id === optId) : undefined
+      return `- branch(选项${opt?.label ?? '?'} · ${e.sourceHandle ?? '?'}): ${e.source} → ${e.target}（${endLabel(src)} → ${endLabel(dst)}）`
     }
     if (kind === 'attach' || e.sourceHandle === SCENE_SHOT_HANDLE) {
       return `- attach: ${e.source} → ${e.target}（下挂分镜：${endLabel(src)} → ${endLabel(dst)}）`

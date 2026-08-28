@@ -77,7 +77,7 @@ function mkContent(): ProjectContent {
       {
         id: 'e2',
         source: 'br1',
-        sourceHandle: 'option-1',
+        sourceHandle: 'option-opt-2',
         target: 'd1',
         type: 'branch',
         data: { optionLabel: '隐瞒' },
@@ -153,7 +153,7 @@ describe('serializeProject（会话文档 → ProjectDocument 落盘格式）', 
     const doc = serializeProject(mkContent(), 'p-1', NOW)
     expect(doc.graph.edges).toEqual([
       { id: 'e1', source: 's1', target: 'd1', data: { kind: 'sequence' } },
-      { id: 'e2', source: 'br1', target: 'd1', sourceHandle: 'option-1', data: { kind: 'branch' } },
+      { id: 'e2', source: 'br1', target: 'd1', sourceHandle: 'option-opt-2', data: { kind: 'branch' } },
       { id: 'e3', source: 's1', target: 'sh1', sourceHandle: 'shots', data: { kind: 'attach' } },
     ])
   })
@@ -199,11 +199,11 @@ describe('parseProject（ProjectDocument → 会话文档，§11 归一化）', 
       characterIds: ['ch-1'],
       episodeNo: 2,
     })
-    // branch 边恢复 type/胶囊文案（由分支节点 options[1] 派生）
+    // branch 边恢复 type/胶囊文案（由分支节点中 id = opt-2 的选项派生）
     const branchEdge = round.content.edges.find((e) => e.id === 'e2')!
     expect(branchEdge.type).toBe('branch')
     expect(branchEdge.data).toEqual({ optionLabel: '隐瞒' })
-    expect(branchEdge.sourceHandle).toBe('option-1')
+    expect(branchEdge.sourceHandle).toBe('option-opt-2')
     // sequence/attach 恢复 className
     expect(round.content.edges.find((e) => e.id === 'e1')!.className).toBe('pw-edge-sequence')
     expect(round.content.edges.find((e) => e.id === 'e3')!.className).toBe('pw-edge-attach')
@@ -242,6 +242,78 @@ describe('parseProject（ProjectDocument → 会话文档，§11 归一化）', 
     doc.graph.nodes[0].ui.selected = true
     const round = parseProject(doc)
     expect(round.content.nodes[0].selected).toBe(false)
+  })
+
+  it('branch 边胶囊文案按稳定选项 id 派生，与数组顺序无关（§8.1.1）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    const branch = doc.graph.nodes.find((n) => n.id === 'br1')!
+    branch.data.spec = {
+      prompt: '去哪',
+      options: [
+        { id: 'opt-9', label: '甲' },
+        { id: 'opt-1', label: '乙' },
+      ],
+    }
+    doc.graph.edges = [
+      { id: 'e-x', source: 'br1', target: 'd1', sourceHandle: 'option-opt-1', data: { kind: 'branch' } },
+    ]
+    const round = parseProject(doc)
+    expect(round.content.edges[0].data).toEqual({ optionLabel: '乙' })
+  })
+
+  it('branch 边指向已删除的选项：按孤儿边隔离并记录警告（§11.3）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    doc.graph.edges.push({
+      id: 'e-dead',
+      source: 'br1',
+      target: 'd1',
+      sourceHandle: 'option-opt-gone',
+      data: { kind: 'branch' },
+    })
+    const round = parseProject(doc)
+    expect(round.content.edges.map((e) => e.id)).not.toContain('e-dead')
+    expect(round.warnings.some((w) => w.includes('e-dead'))).toBe(true)
+  })
+
+  it('schemaVersion 0 旧信封：数组下标句柄改写为稳定选项 id；越界句柄按孤儿边隔离', () => {
+    const v0 = {
+      schemaVersion: 0,
+      project: { id: 'p-old', name: '旧剧', createdAt: '', updatedAt: '2026-01-01T00:00:00.000Z' },
+      graph: {
+        nodes: [
+          {
+            id: 'br1',
+            type: 'branch',
+            position: { x: 0, y: 0 },
+            data: {
+              prompt: '去哪',
+              options: [
+                { id: 'opt-a', label: '左' },
+                { id: 'opt-b', label: '右' },
+              ],
+            },
+          },
+          { id: 's1', type: 'scene', position: { x: 0, y: 0 }, data: { name: '场一', sceneNo: 1 } },
+          { id: 's2', type: 'scene', position: { x: 0, y: 0 }, data: { name: '场二', sceneNo: 2 } },
+        ],
+        edges: [
+          { id: 'e1', source: 'br1', target: 's1', sourceHandle: 'option-1', type: 'branch', data: { optionLabel: '右' } },
+          { id: 'e2', source: 'br1', target: 's2', sourceHandle: 'option-9', type: 'branch', data: { optionLabel: '越界' } },
+        ],
+        viewport: { x: 0, y: 0, zoom: 1 },
+      },
+      settings: { characters: [], locations: [] },
+      episodeTitles: {},
+      assets: { byId: {} },
+    }
+    const round = parseProject(v0)
+    expect(round.migrated).toBe(true)
+    const e1 = round.content.edges.find((e) => e.id === 'e1')!
+    expect(e1.sourceHandle).toBe('option-opt-b')
+    expect(e1.data).toEqual({ optionLabel: '右' })
+    // 越界下标无法改写，归一化按孤儿边隔离（§11.3）
+    expect(round.content.edges.map((e) => e.id)).not.toContain('e2')
+    expect(round.warnings.some((w) => w.includes('e2'))).toBe(true)
   })
 
   it('schemaVersion 0 旧信封：节点字段迁移（头像对象 → characterIds）后按 v1 进入会话', () => {

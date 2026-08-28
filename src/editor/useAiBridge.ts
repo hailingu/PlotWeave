@@ -89,14 +89,14 @@ export function useAiBridge(deps: AiBridgeDeps): AiBridge {
     [nodes, edges, settings],
   )
 
-  /** AI 校验用的图快照（§12.2）：类型 + 分支选项数供分类型校验。 */
+  /** AI 校验用的图快照（§12.2）：类型 + 分支选项（id）供分类型校验与端口解析。 */
   const aiSnapshot = useCallback(
     (): AiGraphSnapshot => ({
       nodes: nodesRef.current.map((n) => ({
         id: n.id,
         type: n.type,
         label: nodeLabelOf(n),
-        ...(n.type === 'branch' ? { optionsCount: n.data.options.length } : {}),
+        ...(n.type === 'branch' ? { options: n.data.options.map((o) => ({ id: o.id, label: o.label })) } : {}),
       })),
       edges: edgesRef.current.map((e) => ({
         source: e.source,
