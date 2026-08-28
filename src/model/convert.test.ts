@@ -272,6 +272,19 @@ describe('parseProject（ProjectDocument → 会话文档，§11 归一化）', 
     expect(round.warnings.some((w) => w.includes('ch-1'))).toBe(true)
   })
 
+  it('v1 信封缺设定集桶：悬空引用只警告，项目照常打开（§11 修复而非拒绝）', () => {
+    // Rust ProjectFile 的兼容默认会把缺 settings 的文件解析为 {}（桶全缺）
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    doc.settings = {} as unknown as ProjectDocument['settings']
+    const round = parseProject(doc)
+    const scene = round.content.nodes.find((n) => n.id === 's1')!
+    expect((scene.data as { characterIds: string[] }).characterIds).toEqual(['ch-1'])
+    expect(round.warnings.some((w) => w.includes('ch-1'))).toBe(true)
+    // 会话设定集仍为合法空集合
+    expect(round.content.settings.characters).toEqual([])
+    expect(round.content.settings.locations).toEqual([])
+  })
+
   it('存储文档中的 ui.selected 一律重置（§11.2）', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW) as ProjectDocument
     doc.graph.nodes[0].ui.selected = true

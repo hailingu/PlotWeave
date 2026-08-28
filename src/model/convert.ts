@@ -153,19 +153,22 @@ export interface ParseResult {
   warnings: string[]
 }
 
-/** 场景节点的悬空角色/地点引用警告（§11.4）：只记警告，不清除 id。 */
+/** 场景节点的悬空角色/地点引用警告（§11.4）：只记警告，不清除 id。
+ * 桶缺失（Rust 兼容默认 settings:{}）按空集合处理，不抛错。 */
 function sceneRefWarnings(
   n: StoryNode,
   settings: ProjectDocument['settings'],
   warnings: string[],
 ): void {
   const s = n.data.spec as { characterIds?: string[]; locationId?: string }
+  const characters = settings.characters ?? {}
+  const locations = settings.locations ?? {}
   for (const cid of s.characterIds ?? []) {
-    if (!settings.characters[cid]) {
+    if (!characters[cid]) {
       warnings.push(`节点 ${n.id} 引用了不存在的角色 ${cid}`)
     }
   }
-  if (s.locationId && !settings.locations[s.locationId]) {
+  if (s.locationId && !locations[s.locationId]) {
     warnings.push(`节点 ${n.id} 引用了不存在的地点 ${s.locationId}`)
   }
 }
@@ -176,8 +179,9 @@ function dialogueRefWarnings(
   settings: ProjectDocument['settings'],
   warnings: string[],
 ): void {
+  const characters = settings.characters ?? {}
   for (const line of (n.data.spec as { lines?: { speaker?: string }[] }).lines ?? []) {
-    if (line.speaker && !settings.characters[line.speaker]) {
+    if (line.speaker && !characters[line.speaker]) {
       warnings.push(`节点 ${n.id} 的对白引用了不存在的角色 ${line.speaker}`)
     }
   }
