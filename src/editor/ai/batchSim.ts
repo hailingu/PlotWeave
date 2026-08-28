@@ -6,7 +6,7 @@
  * 产出的 forward/backward 闭包列表由调用方整体入栈为一条复合命令。
  */
 import { addEdge, type Edge, type XYPosition } from '@xyflow/react'
-import { SCENE_SHOT_HANDLE, branchOptionHandle } from '../graphRules'
+import { SCENE_SHOT_HANDLE, branchOptionHandle, removedOptionHandles } from '../graphRules'
 import type { CreatableType } from '../creatable'
 import type { CanvasNode } from '../nodes/types'
 import type { AiCommand } from './commands'
@@ -68,8 +68,36 @@ const simUpdate = (
   sim.nodes = sim.nodes.map((n) =>
     n.id === id ? ({ ...n, data: { ...n.data, ...cmd.patch } } as CanvasNode) : n,
   )
-  sim.forward.push(() => ops.applyDataPatch(id, cmd.patch))
-  sim.backward.push(() => ops.applyDataPatch(id, before))
+  // 分支选项级联（§8.2.2，与 EditorView.patchNode 同规则）：替换 options
+  // 删掉的选项，其出口 branch 边一并移除——模拟态与真实画布同一撤销单元
+  const removedHandles =
+    target.type === 'branch' && Array.isArray(cmd.patch.options)
+      ? removedOptionHandles(
+          (target.data as { options: Array<{ id: string }> }).options,
+          cmd.patch.options as Array<{ id: string }>,
+        )
+      : []
+  const removedEdges =
+    removedHandles.length > 0
+      ? sim.edges.filter((e) => e.source === id && e.sourceHandle && removedHandles.includes(e.sourceHandle))
+      : []
+  if (removedEdges.length > 0) {
+    const gone = new Set(removedEdges.map((e) => e.id))
+    sim.edges = sim.edges.filter((e) => !gone.has(e.id))
+  }
+  sim.forward.push(() => {
+    ops.applyDataPatch(id, cmd.patch)
+    if (removedEdges.length > 0) {
+      const gone = new Set(removedEdges.map((e) => e.id))
+      ops.setEdges((eds) => eds.filter((e) => !gone.has(e.id)))
+    }
+  })
+  sim.backward.push(() => {
+    ops.applyDataPatch(id, before)
+    if (removedEdges.length > 0) {
+      ops.setEdges((eds) => [...eds, ...removedEdges])
+    }
+  })
 }
 
 const simDelete = (

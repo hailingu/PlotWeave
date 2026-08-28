@@ -263,17 +263,30 @@ pub fn list_projects(app: AppHandle) -> Result<Vec<ProjectMeta>, String> {
 
 /// 解析项目文件：v1 信封直接反序列化（缺省字段兜底）；
 /// 无 schemaVersion 的旧扁平格式包装为 v0 信封。
+/// 缺失的时间戳就地修复为有效 ISO（serde 默认空串）——否则前端
+/// new Date('') 抛 RangeError 会清空整个首页列表。
 fn parse_file(id: &str, text: &str) -> Result<ProjectFile, serde_json::Error> {
     let value: serde_json::Value = serde_json::from_str(text)?;
-    if value.get("schemaVersion").is_some() {
+    let mut file = if value.get("schemaVersion").is_some() {
         let mut file: ProjectFile = serde_json::from_value(value)?;
         if file.project.id.is_empty() {
             file.project.id = id.to_string();
         }
-        Ok(file)
+        file
     } else {
-        Ok(wrap_legacy(id, &value))
+        wrap_legacy(id, &value)
+    };
+    if file.project.updated_at.is_empty() {
+        file.project.updated_at = if file.project.created_at.is_empty() {
+            now_iso()
+        } else {
+            file.project.created_at.clone()
+        };
     }
+    if file.project.created_at.is_empty() {
+        file.project.created_at = file.project.updated_at.clone();
+    }
+    Ok(file)
 }
 
 /// 新建空项目（空画布 v1 信封），返回其摘要。
@@ -440,6 +453,23 @@ mod tests {
     fn stats_on_malformed_graph_fall_back_to_zero() {
         assert_eq!(graph_stats(&json!(null)), (0, 0));
         assert_eq!(graph_stats(&json!({ "nodes": "oops" })), (0, 0));
+    }
+
+    #[test]
+    fn v1_file_missing_timestamps_gets_repaired() {
+        // 缺 project 时间戳的信封（serde 默认空串）：读取即修复为有效 ISO，
+        // 否则前端 new Date('').toISOString() 抛 RangeError，首页列表被清空
+        let v1 = json!({
+            "schemaVersion": 1,
+            "project": { "id": "p-1", "name": "旧时间" },
+            "graph": { "nodes": [], "edges": [] },
+            "settings": {},
+            "episodeTitles": {},
+            "assets": { "byId": {} },
+        });
+        let file = parse_file("p-1", &v1.to_string()).unwrap();
+        assert!(!file.project.updated_at.is_empty());
+        assert!(!file.project.created_at.is_empty());
     }
 
     #[test]

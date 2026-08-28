@@ -56,7 +56,7 @@ describe('projectStore 内存门面（浏览器回退）', () => {
     expect(copyDoc.name).toBe('原剧 副本')
   })
 
-  it('duplicate：副本创建时间是新的，且不携带源资产索引（§7.3 复制不指向源项目文件）', async () => {
+  it('duplicate：副本创建时间是新的；资产索引随文档走，与引用字段一致解析（§7.3/§8.1）', async () => {
     const meta = await projectStore.create('原剧')
     await projectStore.save(meta.id, {
       name: '原剧',
@@ -69,8 +69,9 @@ describe('projectStore 内存门面（浏览器回退）', () => {
     const copy = await projectStore.duplicate(meta.id)
     const copyDoc = await projectStore.load(copy.id)
     expect(copyDoc.createdAt).not.toBe('2026-01-01T00:00:00.000Z')
-    // relPath 相对源项目目录：复制不带索引，避免悬空文件引用
-    expect(copyDoc.assets).toBeUndefined()
+    // 索引随文档走：avatarAssetId 等 id 在副本内仍可解析到 AssetRef；
+    // 媒体文件整目录拷贝随 §7.1 落地（当前应用不管理媒体文件）
+    expect(copyDoc.assets?.byId['a-1']).toBeDefined()
     // 源项目自己的索引不受影响
     const srcDoc = await projectStore.load(meta.id)
     expect(srcDoc.assets?.byId['a-1']).toBeDefined()

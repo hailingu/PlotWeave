@@ -30,11 +30,22 @@ export interface PropEntity {
   description?: string
 }
 
-/** 项目设定集：随 ProjectDocument 持久化。props 首版只透传不编辑。 */
+/** 设定文档实体：长篇自由文本（人物小传/世界观/术语表，数据模型 §6）。
+ * 首版 UI 未开放编辑，会话仅透传保真——漏带即保存丢文档。 */
+export interface DocumentEntity {
+  id: string
+  title: string
+  body: string
+  /** 关联的 Character / Location id。 */
+  relatedIds: string[]
+}
+
+/** 项目设定集：随 ProjectDocument 持久化。props/documents 首版只透传不编辑。 */
 export interface ProjectSettings {
   characters: CharacterEntity[]
   locations: LocationEntity[]
   props?: PropEntity[]
+  documents?: DocumentEntity[]
 }
 
 export const EMPTY_SETTINGS: ProjectSettings = { characters: [], locations: [] }
@@ -92,12 +103,14 @@ export function resolveLocationName(settings: ProjectSettings, id: string): stri
   return settings.locations.find((l) => l.id === id)?.name ?? null
 }
 
-/** 项目文档缺省合并：旧文件无 settings 或字段缺失时补空集（向后兼容）。 */
+/** 项目文档缺省合并：旧文件无 settings 或字段缺失时补空集（向后兼容）。
+ * documents 为契约透传桶：存在即原样保留（漏带即保存丢文档）。 */
 export function normalizeSettings(raw: unknown): ProjectSettings {
   if (typeof raw !== 'object' || raw === null) return { ...EMPTY_SETTINGS }
   const obj = raw as Partial<ProjectSettings>
   return {
     characters: Array.isArray(obj.characters) ? obj.characters : [],
     locations: Array.isArray(obj.locations) ? obj.locations : [],
+    ...(Array.isArray(obj.documents) ? { documents: obj.documents } : {}),
   }
 }

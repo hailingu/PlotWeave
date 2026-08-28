@@ -95,23 +95,25 @@ export function fromStoryEdge(e: StoryEdge, nodesById: Map<string, StoryNode>): 
   return out
 }
 
-/** 设定集 → 落盘形态：数组转 Record<id, 实体>。props 首版只透传
+/** 设定集 → 落盘形态：数组转 Record<id, 实体>。props/documents 首版只透传
  * （UI 未开放编辑），原样回写保真。 */
 export function toDocSettings(settings: ProjectSettings): ProjectDocument['settings'] {
   return {
     characters: Object.fromEntries(settings.characters.map((c) => [c.id, c])),
     locations: Object.fromEntries(settings.locations.map((l) => [l.id, l])),
     props: Object.fromEntries((settings.props ?? []).map((p) => [p.id, p])),
+    documents: Object.fromEntries((settings.documents ?? []).map((d) => [d.id, d])),
   }
 }
 
 /** 设定集 → 运行态：Record 转数组（插入序即展示序），容忍缺桶；
- * props 桶透传进会话（契约实体，不得静默丢弃）。 */
+ * props/documents 桶透传进会话（契约实体，不得静默丢弃）。 */
 export function fromDocSettings(settings: Partial<ProjectDocument['settings']>): ProjectSettings {
   return {
     characters: Object.values(settings.characters ?? {}),
     locations: Object.values(settings.locations ?? {}),
     props: Object.values(settings.props ?? {}),
+    documents: Object.values(settings.documents ?? {}),
   }
 }
 

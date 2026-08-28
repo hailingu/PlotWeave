@@ -165,6 +165,27 @@ describe('serializeProject（会话文档 → ProjectDocument 落盘格式）', 
     expect(doc.settings.props).toEqual({})
   })
 
+  it('settings.documents 往返保留：解析进会话、保存原样回写（§3/§6）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    doc.settings.documents = {
+      'doc-1': { id: 'doc-1', title: '林晚小传', body: '……', relatedIds: ['ch-1'] },
+    }
+    const round = parseProject(doc)
+    expect(round.content.settings.documents?.[0]).toEqual({
+      id: 'doc-1',
+      title: '林晚小传',
+      body: '……',
+      relatedIds: ['ch-1'],
+    })
+    const again = serializeProject(round.content, 'p-1', NOW)
+    expect(again.settings.documents['doc-1']).toEqual({
+      id: 'doc-1',
+      title: '林晚小传',
+      body: '……',
+      relatedIds: ['ch-1'],
+    })
+  })
+
   it('缺 createdAt 时补盖；视口缺省不伪造（留给打开时 fitView）', () => {
     const bare = { ...mkContent(), createdAt: undefined, viewport: undefined }
     const doc = serializeProject(bare, 'p-1', NOW)

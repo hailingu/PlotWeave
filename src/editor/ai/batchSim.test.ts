@@ -212,6 +212,35 @@ describe('simulateBatch · connect_edge（§4.4 三态边形态）', () => {
     expect(state.edges[1]).toMatchObject({ data: { optionLabel: '' } })
   })
 
+  it('update_node 替换分支选项删掉已连线选项：连带删边，undo 一并恢复（§8.2.2）', () => {
+    const { state, ops } = mkOps([branchNode('b1'), sceneNode('s1')], [
+      {
+        id: 'e1',
+        source: 'b1',
+        sourceHandle: 'option-o-l',
+        target: 's1',
+        type: 'branch',
+        data: { optionLabel: '左' },
+      },
+    ])
+    const { forward, backward } = simulateBatch(
+      [{ op: 'update_node', nodeId: 'b1', patch: { options: [{ id: 'o-r', label: '右' }] } }],
+      ops,
+      state.nodes,
+      state.edges,
+    )
+    forward.forEach((f) => f())
+    // 被删选项的出口边级联移除，不留悬空连线
+    expect(state.edges).toHaveLength(0)
+    expect(state.nodes[0].data.options).toEqual([{ id: 'o-r', label: '右' }])
+    backward.forEach((b) => b())
+    expect(state.edges).toHaveLength(1)
+    expect(state.nodes[0].data.options).toEqual([
+      { id: 'o-l', label: '左' },
+      { id: 'o-r', label: '右' },
+    ])
+  })
+
   it('undo 移除已建边', () => {
     const { state, ops } = mkOps([sceneNode('s1'), sceneNode('s2')])
     const { forward, backward } = simulateBatch(

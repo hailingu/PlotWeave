@@ -46,7 +46,8 @@ function seedProjects(): { meta: ProjectSummary; doc: ProjectContent }[] {
 const isTauri =
   typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
-/** Rust ProjectMeta → 首页 ProjectSummary；updated_at 为 ISO 字符串。 */
+/** Rust ProjectMeta → 首页 ProjectSummary；updated_at 为 ISO 字符串。
+ * 非法时间戳（空串/坏格式）回退 epoch，绝不让 new Date 抛错清空首页列表。 */
 function toSummary(m: {
   id: string
   name: string
@@ -54,12 +55,13 @@ function toSummary(m: {
   scene_count: number
   ending_count: number
 }): ProjectSummary {
+  const t = Date.parse(m.updated_at)
   return {
     id: m.id,
     name: m.name,
     sceneCount: m.scene_count,
     ...(m.ending_count > 1 ? { endingCount: m.ending_count } : {}),
-    updatedAt: new Date(m.updated_at).toISOString(),
+    updatedAt: new Date(Number.isFinite(t) ? t : 0).toISOString(),
   }
 }
 
@@ -172,13 +174,14 @@ export const projectStore = {
       : memoryDelete(id),
 
   /** 复制项目：读原文档 → 新建「副本」项目 → 写入画布（§3.2）。
-   * 副本创建时间取复制时刻；不带源资产索引——relPath 相对源项目目录，
-   * 携带即悬空文件引用（§7.3）；资产文件整目录拷贝随 §7.1 落地后实现。 */
+   * 副本创建时间取复制时刻。资产索引随文档原样带走——与 avatarAssetId
+   * 等引用字段保持一致解析（§8.1）；媒体文件整目录拷贝随 §7.1 落地后
+   * 升级为 Rust 侧原子复制（§7.3）。 */
   duplicate: async (id: string): Promise<ProjectSummary> => {
     const doc = await projectStore.load(id)
     const name = `${doc.name} 副本`
     const meta = await projectStore.create(name)
-    await projectStore.saveQuiet(meta.id, { ...doc, name, createdAt: undefined, assets: undefined })
+    await projectStore.saveQuiet(meta.id, { ...doc, name, createdAt: undefined })
     return { ...meta, sceneCount: meta.sceneCount }
   },
 

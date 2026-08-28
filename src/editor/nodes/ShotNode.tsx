@@ -14,8 +14,20 @@ const REF_ICONS = { character: '👤', location: '🏞', audio: '🎵' } as cons
  * ⚙️ 打开设置面板（§4.3，编辑即命令）；镜号标题行不设内联改名。
  */
 export default function ShotNode({ id, data, selected }: NodeProps<ShotFlowNode>) {
-  const { openSettingsId, toggleSettings } = useNodeEdit()
+  const { openSettingsId, toggleSettings, settings } = useNodeEdit()
   const settingsOpen = openSettingsId === id
+
+  /** 引用位显示名（§8.1）：targetId 按设定集实时解析；
+   * 解析不到（失效引用）回退 label，再回退原始 id 供辨认。 */
+  const refText = (ref: ShotFlowNode['data']['refs'][number]): string => {
+    if (ref.kind === 'character') {
+      return settings.characters.find((c) => c.id === ref.targetId)?.name ?? ref.label ?? ref.targetId ?? ''
+    }
+    if (ref.kind === 'location') {
+      return settings.locations.find((l) => l.id === ref.targetId)?.name ?? ref.label ?? ref.targetId ?? ''
+    }
+    return ref.label ?? ref.targetId ?? ''
+  }
 
   return (
     <div className={`pw-shot${selected ? ' pw-on' : ''}`}>
@@ -45,8 +57,7 @@ export default function ShotNode({ id, data, selected }: NodeProps<ShotFlowNode>
       <div className="pw-shot-refs">
         {data.refs.map((ref) => (
           <span key={ref.id} className="pw-shot-ref">
-            {/* 有 targetId 时显示名应由 id 实时解析（§8.1）；解析器接线前回退 targetId/label */}
-            {REF_ICONS[ref.kind]} {ref.label ?? ref.targetId ?? ''}
+            {REF_ICONS[ref.kind]} {refText(ref)}
           </span>
         ))}
         <span className="pw-shot-ref pw-shot-ref-add" aria-hidden>

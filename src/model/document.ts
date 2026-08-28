@@ -165,6 +165,16 @@ export interface PropItem {
   description?: string
 }
 
+/** 设定文档条目：长篇自由文本（人物小传/世界观/术语表，§6），
+ * 持久化于 settings.documents；与结构化条目双向关联。 */
+export interface SettingsDocument {
+  id: string
+  title: string
+  body: string
+  /** 关联的 Character / Location id。 */
+  relatedIds: string[]
+}
+
 /** 资产引用：媒体本体是文件，文档只存引用（§7.1）。 */
 export interface AssetRef {
   id: string
@@ -194,6 +204,8 @@ export interface ProjectDocument {
     characters: Record<string, Character>
     locations: Record<string, Location>
     props: Record<string, PropItem>
+    /** 长篇自由文本条目（§6）；编辑器首版只透传不编辑。 */
+    documents: Record<string, SettingsDocument>
   }
   /** 集标题表：键 = 集号（不建「集」实体表）。 */
   episodeTitles: Record<number, string>
