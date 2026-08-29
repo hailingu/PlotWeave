@@ -38,6 +38,8 @@
 > 十七轮评审修订（2026-08-29）：§4.1 StoryNode 改为按 type 判别的五变体联合——scene/beat/dialogue 的 meta.label 必填（名称型节点显示并编辑名称），branch/shot 用无 label 的 DerivedMeta（标题派生，禁止镜像）；spec 随类型同步判别相关。
 >
 > 十八轮评审修订（2026-08-29）：§11.1 ④ 明确名称型节点的旧 data.name 上移为必填 meta.label；§9.3 update_node_spec/meta 的 set 增加按解析节点类型的校验契约（spec 字段须属该类型、label 仅名称型节点可写）；inverse 表 update_node_* 的 inverse.type 更正为「同正向，级联例外为 batch」。
+>
+> 十九轮评审修订（2026-08-29）：§4.1 DerivedMeta 补 `label?: never`（结构性禁写镜像标题）；分镜卡改用独立的 ShotMeta——无 episodeNo（随宿主场景分集，§3.5）、无 label，两者均 never 禁写；Agent/导入边界的同不变量校验由 §9.3 update 校验契约承接。
 > 适用范围：画布文档模型、设定与资产模型、命令与撤销、本地存储体系、AI Agent 交互。
 > 明确不在范围内：用户体系、租户、余额/计费。PlotWeave 是单用户 BYOK 桌面工具；若未来出现此类需求，另起《服务端领域模型》文档。
 
@@ -138,9 +140,20 @@ interface LabeledMeta {
   updatedAt?: string
 }
 
-/** 派生标题节点 meta：无 label（branch/shot 专属）。 */
+/** 派生标题节点 meta：无 label（branch 专属；label?: never 禁写，
+ * 结构上杜绝可变对象/spread 携带镜像标题，§8.1.1）。 */
 interface DerivedMeta {
+  label?: never
   episodeNo?: number
+  createdAt?: string
+  updatedAt?: string
+}
+
+/** 分镜卡 meta：无 episodeNo（分镜卡随宿主场景分集，§4.1/§3.5）、
+ * 无 label（镜号由 shotNo 派生）——两者均 never 禁写。 */
+interface ShotMeta {
+  label?: never
+  episodeNo?: never
   createdAt?: string
   updatedAt?: string
 }
@@ -163,7 +176,7 @@ interface BranchDocNode extends StoryNodeBase {
 }
 interface ShotDocNode extends StoryNodeBase {
   type: 'shot'
-  data: { spec: ShotSpec; meta: DerivedMeta }
+  data: { spec: ShotSpec; meta: ShotMeta }
 }
 
 type StoryNode = SceneDocNode | BeatDocNode | DialogueDocNode | BranchDocNode | ShotDocNode
