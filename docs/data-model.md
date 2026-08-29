@@ -44,6 +44,8 @@
 > 二十轮评审修订（2026-08-29）：§5/§11.3 补剧情流端点约束——sequence/branch 边任一端点为 shot 即非法（分镜卡不参与横向剧情流），命令层拒绝、归一化隔离；§9.3 update 校验契约补 meta 字段相关性——episodeNo 不可用于 shot。
 >
 > 二十一轮评审修订（2026-08-29）：§9.3 `update_node_meta.set` 由交集改为联合（`Partial<LabeledMeta> | Partial<DerivedMeta>`）——交集的 never 可选属性使改名补丁类型上不可成立；运行时裁决仍按解析出的节点类型拒绝 branch/shot 的 label 与 shot 的 episodeNo。
+>
+> 二十二轮评审修订（2026-08-29）：§10.5 `save_project` 明文要求以同一时刻盖戳 `doc.project.updatedAt` 与索引 updatedAt（文档时间戳不因保存而滞留）；§9.3 `set_episode_title` 增加命令边界校验——episodeNo 须为正整数、title 落盘前去空白（与 §11.1 归一化口径一致）。
 > 适用范围：画布文档模型、设定与资产模型、命令与撤销、本地存储体系、AI Agent 交互。
 > 明确不在范围内：用户体系、租户、余额/计费。PlotWeave 是单用户 BYOK 桌面工具；若未来出现此类需求，另起《服务端领域模型》文档。
 
@@ -495,7 +497,10 @@ interface CommandPayloads {
   upsert_document: { document: SettingsDocument }  // id 已存在 = 更新，否则 = 新增
   delete_document: { documentId: string }          // inverse 捕获被删文档
   // ── 集标题 ──
-  set_episode_title: { episodeNo: number; title: string }  // title 为空串 = 删除该键
+  // episodeNo 必须为正整数（Number.isInteger 且 > 0，与 §11.1 归一化口径
+  // 一致——零/负/小数/非有限值在命令边界拒绝）；title 落盘前去首尾空白，
+  // 空串 = 删除该键
+  set_episode_title: { episodeNo: number; title: string }
   // ── 项目 ──
   rename_project: { name: string }
   // ── 资产 ──
@@ -666,7 +671,7 @@ provider 的 API key 以**密文 `keyEnc`** 存于 provider 配置：Rust `seal`
 | `list_projects()` | 读 `index.json`，返回项目列表 |
 | `create_project(name)` | 建目录 + 初始 `project.json` + 更新索引 |
 | `load_project(projectId)` | 读 `project.json`；信封级兼容（旧扁平格式包装为 v0 信封）。节点级 schemaVersion 迁移与归一化在前端模型层（见十一），Rust 不参与 |
-| `save_project(projectId, doc)` | tmp + rename 原子写 + 更新索引的 name/updatedAt（重命名后索引同步在此发生） |
+| `save_project(projectId, doc)` | tmp + rename 原子写；`doc.project.updatedAt` 以本次保存时刻盖戳（与写入索引的 updatedAt 同值，前端 serializeProject 盖戳、Rust 校验非空）+ 更新索引的 name/updatedAt（重命名后索引同步在此发生） |
 | `import_asset(projectId, file)` | 拷贝入项目 `assets/`，返回 `AssetRef` |
 | `list_library_assets()` | 读 `library.json`，返回资产库列表（含编组） |
 | `import_library_asset(file, meta)` | 拷贝入 `library/assets/` + 更新库索引，meta 含 name/kind/view/groupId/tags |
