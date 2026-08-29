@@ -22,6 +22,8 @@
 > 九轮评审修订（2026-08-29）：§11.1 首环改写步骤补全——③ 明确删除镜像的 data.optionLabel（改写后按稳定句柄重新派生）、④ 节点结构转换（旧 React Flow 形状拆入四分区，未转换不得 stamped 为 v1）；ui-design §3.2 项目卡片的分集信息数据源改为已定稿的 episodeTitles/episodeNo，卡片展示归 UI 迭代项。
 >
 > 十轮评审修订（2026-08-29）：§11.1 首环补 ⑤ 信封装配——文档级映射（name/updated_at/节点边上移/settings 数组键化）与缺省回退（id 回填、createdAt 同刻、viewport 不伪造、props/documents/assets 空桶）明文化，Rust `wrap_legacy` 与前端 `serializeProject` 的分工注记。
+>
+> 十一轮评审修订（2026-08-29）：§3 `graph.viewport` 改为可选字段（缺省 = 从未保存过视口，打开 fitView——与迁移装配及实现一致，v0 迁移件不再结构性无效）；§7.3 项目复制明文要求替换 `project.id`（持久化层强制 id = 目标路径 id）并取新创建时间；ui-design §4.2/§4.3 场景面板补内外景（interior）/天气（weather）两个用户可编辑字段。
 > 适用范围：画布文档模型、设定与资产模型、命令与撤销、本地存储体系、AI Agent 交互。
 > 明确不在范围内：用户体系、租户、余额/计费。PlotWeave 是单用户 BYOK 桌面工具；若未来出现此类需求，另起《服务端领域模型》文档。
 
@@ -75,7 +77,7 @@ interface ProjectDocument {
   graph: {
     nodes: StoryNode[]    // 见第四节
     edges: StoryEdge[]    // 见第五节
-    viewport: { x: number; y: number; zoom: number }  // 单用户场景直接随文档持久化
+    viewport?: { x: number; y: number; zoom: number }  // 单用户场景直接随文档持久化；缺省 = 从未保存过视口（打开时 fitView）
   }
   settings: {             // 设定集：节点通过 id 引用，见第六节
     characters: Record<string, Character>
@@ -305,7 +307,7 @@ interface AssetGroup {
 - **库资产进入项目 = 拷贝**：把库素材放上画布或设为角色头像时，文件拷入项目 `assets/` 并生成项目级 AssetRef（新 id）。项目不持有对库文件的引用，因此库侧可随时清理而不产生项目内的悬空引用。
 - **AI 生成结果（未来接入）必须落盘后再引用**：厂商临时 URL 不得出现在文档里——临时链接会过期，直接引用会导致画布内容日后无法打开。生成结果默认落项目资产，用户可显式「收藏到资产库」。
 - **延迟回收**：删除引用资产的节点/设定时不立即删文件，由后续「清理未引用资产」命令统一回收（首版可只做手动触发）。
-- **项目复制 = 文档级复制**：资产索引随文档原样带走（与 `avatarAssetId` 等
+- **项目复制 = 文档级复制**：复制件的 `project.id` 必须替换为目标项目的新 id（持久化层强制 id = 目标路径 id，禁止沿用源 id），创建时间取复制时刻；资产索引随文档原样带走（与 `avatarAssetId` 等
   引用字段保持一致解析，§8.1）；媒体文件的整目录拷贝（project.json + assets/）
   随 §7.1 项目资产落地时升级为 Rust 侧原子复制——届时复制件的 relPath 指向
   自己目录内的新文件。§7.1 落地前应用不管理媒体文件，不存在「索引在而文件不在
