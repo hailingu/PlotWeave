@@ -48,6 +48,8 @@
 > 二十二轮评审修订（2026-08-29）：§10.5 `save_project` 明文要求以同一时刻盖戳 `doc.project.updatedAt` 与索引 updatedAt（文档时间戳不因保存而滞留）；§9.3 `set_episode_title` 增加命令边界校验——episodeNo 须为正整数、title 落盘前去空白（与 §11.1 归一化口径一致）。
 >
 > 二十三轮评审修订（2026-08-29）：§9.3 create_node 补命令边界校验（spec 属类型、label 仅名称型、shot 无 episodeNo，与 update 同款）；connect_edge 补端点解析校验（branch source 须为分支节点且选项 id 存在于 options）；ui-design §4.3 场景面板补场次（sceneNo）控件——插入/重排后可修正编号。
+>
+> 二十四轮评审修订（2026-08-29）：§9.3 create_node 边界补 node.id 唯一性校验——id 已存在于活动图即拒绝（防止歧义节点及 inverse 误删既有节点），必要时由命令边界分配新 id；inverse 捕获规则更正 set_asset 的逆操作——覆盖已有 id 时 inverse 为恢复旧 AssetRef 的 set_asset（而非 remove_asset，避免 undo 删除条目使既有引用悬空），remove_asset 仅用于新增情形。
 > 适用范围：画布文档模型、设定与资产模型、命令与撤销、本地存储体系、AI Agent 交互。
 > 明确不在范围内：用户体系、租户、余额/计费。PlotWeave 是单用户 BYOK 桌面工具；若未来出现此类需求，另起《服务端领域模型》文档。
 
@@ -457,7 +459,7 @@ interface AssetGroup {
 | 设定文档 | `upsert_document` / `delete_document` | | |
 | 集标题 | `set_episode_title` | title 为空串 = 删除该集的标题键 |
 | 项目 | `rename_project` | 改 `project.name`；name 在信任边界校验，索引同步由持久化层负责 |
-| 资产 | `set_asset` / `remove_asset` | |
+| 资产 | `set_asset` / `remove_asset` | set 为 upsert 语义（id 已存在 = 覆盖），inverse 视新增/覆盖而定（见 9.3） |
 | 视口 | `update_viewport` | transient，不进撤销栈 |
 | 批量 | `batch` | 一等命令，整批作为单个撤销单元 |
 
@@ -476,6 +478,9 @@ interface CommandPayloads {
   // ── 节点 ──
   // create_node 在命令边界按 nodeType 做同款校验（§4.1 判别联合）：
   // spec 须属于该类型；meta.label 仅名称型节点；shot 不得携带 episodeNo。
+  // 另校验 node.id 全局唯一：id 已存在于活动图时拒绝执行——否则追加会产生
+  // 同 id 的歧义节点，且生成的 delete_node inverse 会把既有节点一并抹掉。
+  // 导入器/Agent 须自行保证 id 新鲜；必要时由命令边界分配新 id 后再应用。
   create_node: { node: StoryNode }              // 完整节点，含初始 layout/spec/meta
   delete_node: { nodeId: string }               // inverse 捕获被删节点 + 连带边
   move_node: { nodeId: string; to: Point }
@@ -511,6 +516,9 @@ interface CommandPayloads {
   // ── 项目 ──
   rename_project: { name: string }
   // ── 资产 ──
+  // set_asset 语义同 upsert：id 不存在 = 新增，已存在 = 覆盖；inverse 视
+  // 新增/覆盖分别捕获（见下方 inverse 捕获规则），覆盖时恢复旧 AssetRef
+  // 而非删除条目，避免 undo 让既有引用悬空。
   set_asset: { asset: AssetRef }
   remove_asset: { assetId: string }             // 只移除索引，不删文件（见 7.3）
   // ── 视口 ──
@@ -572,7 +580,8 @@ type GraphCommandOf<K extends CommandType> = Extract<GraphCommand, { type: K }>
 | `delete_document` | 等效 `upsert_document { document: 旧文档 }` | `upsert_document` |
 | `set_episode_title` | 同结构，title 换为旧值；原来无该键 → inverse 为空串（即删除） | `set_episode_title` |
 | `rename_project` | 同结构，name 换为 docBefore 中的旧名 | `rename_project` |
-| `set_asset` / `remove_asset` | 互逆，AssetRef 取自 docBefore | 对偶命令 |
+| `set_asset` | 新增 → `remove_asset { assetId }`；覆盖已有 id → `set_asset { asset: docBefore 中的旧 AssetRef }`（恢复旧值，而非删除条目） | 视新增/覆盖而定 |
+| `remove_asset` | 等效 `set_asset { asset: docBefore 中的旧 AssetRef }` | `set_asset` |
 | `batch` | 子命令 inverse 的**逆序**数组，进同一 `batch` | `batch` |
 
 ### 9.4 撤销规则
