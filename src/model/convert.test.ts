@@ -284,6 +284,23 @@ describe('parseProject（ProjectDocument → 会话文档，§11 归一化）', 
     expect(round.warnings.some((w) => w.includes('e-ghost'))).toBe(true)
   })
 
+  it('kind/句柄矛盾的边按孤儿边隔离（§5 句柄保留字面量）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    // 故意构造非法边（kind/句柄矛盾），验证归一化兜底隔离
+    const invalid = (e: unknown) => e as ProjectDocument['graph']['edges'][number]
+    doc.graph.edges.push(
+      invalid({ id: 'e-bad1', source: 's1', target: 'd1', sourceHandle: 'shots', data: { kind: 'sequence' } }),
+      invalid({ id: 'e-bad2', source: 's1', target: 'd1', sourceHandle: 'option-opt-1', data: { kind: 'attach' } }),
+    )
+    const round = parseProject(doc)
+    expect(round.content.edges.map((e) => e.id)).not.toContain('e-bad1')
+    expect(round.content.edges.map((e) => e.id)).not.toContain('e-bad2')
+    expect(round.warnings.some((w) => w.includes('e-bad1'))).toBe(true)
+    expect(round.warnings.some((w) => w.includes('e-bad2'))).toBe(true)
+    // 合法边不受影响
+    expect(round.content.edges.some((e) => e.id === 'e3' && e.sourceHandle === 'shots')).toBe(true)
+  })
+
   it('悬空设定引用：标记警告但保留 id，不静默清除（§11.4 / §8.2.3）', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW)
     delete doc.settings.characters['ch-1']

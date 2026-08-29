@@ -236,10 +236,13 @@ function collectDanglingRefWarnings(
   if (n.type === 'shot') shotRefWarnings(n, doc, warnings)
 }
 
-/** 孤儿边判定（§11.3）：端点节点缺失；branch 边绑定的选项已不存在同论。 */
+/** 孤儿边判定（§11.3）：端点节点缺失；branch 边绑定的选项已不存在；
+ * kind/句柄矛盾（shots 为 attach 专属句柄，§5 保留字面量）同论。 */
 function isOrphanEdge(e: StoryEdge, nodesById: Map<string, StoryNode>): boolean {
   const src = nodesById.get(e.source)
   if (!src || !nodesById.has(e.target)) return true
+  if (e.data.kind !== 'attach' && e.sourceHandle === SCENE_SHOT_HANDLE) return true
+  if (e.data.kind === 'attach' && e.sourceHandle !== SCENE_SHOT_HANDLE) return true
   if (e.data.kind !== 'branch') return false
   if (src.type !== 'branch') return true
   const optionId = branchOptionIdOf(e.sourceHandle)
