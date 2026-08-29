@@ -46,6 +46,8 @@
 > 二十一轮评审修订（2026-08-29）：§9.3 `update_node_meta.set` 由交集改为联合（`Partial<LabeledMeta> | Partial<DerivedMeta>`）——交集的 never 可选属性使改名补丁类型上不可成立；运行时裁决仍按解析出的节点类型拒绝 branch/shot 的 label 与 shot 的 episodeNo。
 >
 > 二十二轮评审修订（2026-08-29）：§10.5 `save_project` 明文要求以同一时刻盖戳 `doc.project.updatedAt` 与索引 updatedAt（文档时间戳不因保存而滞留）；§9.3 `set_episode_title` 增加命令边界校验——episodeNo 须为正整数、title 落盘前去空白（与 §11.1 归一化口径一致）。
+>
+> 二十三轮评审修订（2026-08-29）：§9.3 create_node 补命令边界校验（spec 属类型、label 仅名称型、shot 无 episodeNo，与 update 同款）；connect_edge 补端点解析校验（branch source 须为分支节点且选项 id 存在于 options）；ui-design §4.3 场景面板补场次（sceneNo）控件——插入/重排后可修正编号。
 > 适用范围：画布文档模型、设定与资产模型、命令与撤销、本地存储体系、AI Agent 交互。
 > 明确不在范围内：用户体系、租户、余额/计费。PlotWeave 是单用户 BYOK 桌面工具；若未来出现此类需求，另起《服务端领域模型》文档。
 
@@ -472,6 +474,8 @@ type NodeUi = StoryNode['ui']
 /** 命令类型与负载形状的映射。 */
 interface CommandPayloads {
   // ── 节点 ──
+  // create_node 在命令边界按 nodeType 做同款校验（§4.1 判别联合）：
+  // spec 须属于该类型；meta.label 仅名称型节点；shot 不得携带 episodeNo。
   create_node: { node: StoryNode }              // 完整节点，含初始 layout/spec/meta
   delete_node: { nodeId: string }               // inverse 捕获被删节点 + 连带边
   move_node: { nodeId: string; to: Point }
@@ -488,6 +492,9 @@ interface CommandPayloads {
   update_node_meta: { nodeId: string; set: Partial<LabeledMeta> | Partial<DerivedMeta> }
   update_node_ui: { nodeId: string; set: Partial<NodeUi> }
   // ── 连接 ──
+  // connect_edge 在命令边界解析端点校验：branch 边的 source 须为分支节点、
+  // sourceHandle 中的选项 id 须存在于该节点 options（不可解出的连线留到
+  // 加载才隔离会长期滞留活动图）；attach 端点类型校验同理（§5）。
   connect_edge: { edge: StoryEdge }             // 完整边，含 data.kind；branch 边不落 label（胶囊文案按 sourceHandle 派生，§5）
   disconnect_edge: { edgeId: string }           // inverse 捕获被删边
   // ── 设定（地点、道具同构，略）──
