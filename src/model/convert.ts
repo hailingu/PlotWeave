@@ -9,6 +9,7 @@ import type { CanvasNode } from '../editor/nodes/types'
 import {
   branchOptionIdOf,
   edgeKindOf,
+  SCENE_SHOT_HANDLE,
 } from '../editor/graphRules'
 import type { ProjectSettings } from '../editor/settings'
 import type { ProjectContent } from './content'
@@ -73,7 +74,9 @@ export function toStoryEdge(e: Edge): StoryEdge {
     return { ...base, sourceHandle: e.sourceHandle ?? '', data: { kind: 'branch', ...optionalOrder } }
   }
   if (kind === 'attach') {
-    return { ...base, ...optionalHandle, data: { kind: 'attach', ...optionalOrder } }
+    // attach 定义上只从 shots 端口发起（§4.3）：句柄恒为 shots，
+    // 顺带归一化历史遗留的缺失/异常句柄
+    return { ...base, sourceHandle: SCENE_SHOT_HANDLE, data: { kind: 'attach', ...optionalOrder } }
   }
   return { ...base, ...optionalHandle, data: { kind: 'sequence', ...optionalOrder } }
 }

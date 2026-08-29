@@ -146,8 +146,8 @@ export interface BranchEdge extends EdgeBase {
 }
 
 export interface AttachEdge extends EdgeBase {
-  /** 索引卡底部端口 shots。 */
-  sourceHandle?: string
+  /** 必填字面量：索引卡底部端口 shots（§4.3，attach 仅从该端口发起）。 */
+  sourceHandle: 'shots'
   data: { kind: 'attach'; order?: number }
 }
 
