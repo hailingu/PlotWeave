@@ -257,7 +257,8 @@ function collectDanglingRefWarnings(
 
 /** 孤儿边判定（§11.3）：端点节点缺失；branch 边绑定的选项已不存在；
  * kind/句柄矛盾（§5 保留字面量：shots 为 attach 专属、option-<id> 为
- * branch 专属）；attach 边端点类型不合法（必须 scene → shot）同论。 */
+ * branch 专属）；attach 边端点类型不合法（必须 scene → shot）；
+ * 剧情流边端点为 shot（§4.2 分镜卡不参与横向剧情流）同论。 */
 function isOrphanEdge(e: StoryEdge, nodesById: Map<string, StoryNode>): boolean {
   const src = nodesById.get(e.source)
   const dst = nodesById.get(e.target)
@@ -268,6 +269,8 @@ function isOrphanEdge(e: StoryEdge, nodesById: Map<string, StoryNode>): boolean 
   }
   if (e.sourceHandle === SCENE_SHOT_HANDLE) return true
   if (e.data.kind === 'sequence' && branchOptionIdOf(e.sourceHandle) !== undefined) return true
+  // 剧情流端点约束：分镜卡不参与横向剧情流（§4.2）
+  if (src.type === 'shot' || dst.type === 'shot') return true
   if (e.data.kind !== 'branch') return false
   if (src.type !== 'branch') return true
   const optionId = branchOptionIdOf(e.sourceHandle)

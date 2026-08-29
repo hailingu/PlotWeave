@@ -319,6 +319,19 @@ describe('parseProject（ProjectDocument → 会话文档，§11 归一化）', 
     expect(round.content.edges.some((e) => e.id === 'e3')).toBe(true)
   })
 
+  it('剧情流边端点为 shot 的按孤儿边隔离（§4.2 分镜卡不参与横向剧情流）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    doc.graph.edges.push(
+      { id: 'e-seq-shot', source: 's1', target: 'sh1', data: { kind: 'sequence' } },
+      { id: 'e-br-shot', source: 'br1', target: 'sh1', sourceHandle: 'option-opt-1', data: { kind: 'branch' } },
+    )
+    const round = parseProject(doc)
+    expect(round.content.edges.map((e) => e.id)).not.toContain('e-seq-shot')
+    expect(round.content.edges.map((e) => e.id)).not.toContain('e-br-shot')
+    expect(round.warnings.some((w) => w.includes('e-seq-shot'))).toBe(true)
+    expect(round.warnings.some((w) => w.includes('e-br-shot'))).toBe(true)
+  })
+
   it('悬空设定引用：标记警告但保留 id，不静默清除（§11.4 / §8.2.3）', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW)
     delete doc.settings.characters['ch-1']
