@@ -68,6 +68,20 @@ describe('SceneForm', () => {
     expect(patchOf(api, 1)).toEqual({ locationId: undefined })
   })
 
+  it('场次可改：正整数入 patch；清空不产生非法值（§4.3 场次编辑）', () => {
+    const { api } = setup(sceneNode)
+    const noInput = screen.getByDisplayValue('1')
+    expect((noInput as HTMLInputElement).type).toBe('number')
+    fireEvent.change(noInput, { target: { value: '5' } })
+    expect(patchOf(api)).toEqual({ sceneNo: 5 })
+    // 小数向下取整
+    fireEvent.change(noInput, { target: { value: '7.9' } })
+    expect(patchOf(api, 1)).toEqual({ sceneNo: 7 })
+    // 清空：场景号必填，非法输入不产生 patch
+    fireEvent.change(noInput, { target: { value: '' } })
+    expect(api.patchNode).toHaveBeenCalledTimes(2)
+  })
+
   it('内外景分段与角色 chip 切换（引用设定集 id 增删）', () => {
     const { api, container } = setup(sceneNode)
     // happy-dom 会把 label 内点击同步激活其首个可标记控件（多派发一次 内），

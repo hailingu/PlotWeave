@@ -93,6 +93,23 @@ function SceneForm({ node, settings }: { readonly node: Extract<PanelNode, { typ
           onChange={(e) => patchNode(node.id, { name: e.target.value })}
         />
       </Field>
+      <Field label="场次">
+        <input
+          className="pw-set-input"
+          type="number"
+          min={1}
+          value={d.sceneNo}
+          aria-label="场次"
+          onChange={(e) => {
+            // 场次必填（导出/卡片头消费）：清空/非法输入不产生 patch，
+            // 保留原值等用户输入完成
+            const raw = e.target.value
+            if (raw === '') return
+            const n = Math.max(1, Math.floor(Number(raw)))
+            if (Number.isFinite(n) && n !== d.sceneNo) patchNode(node.id, { sceneNo: n })
+          }}
+        />
+      </Field>
       <div className="pw-set-cols">
         <Field label="地点">
           <select
