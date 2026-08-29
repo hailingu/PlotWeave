@@ -15,38 +15,55 @@ import type { ProjectSettings } from '../editor/settings'
 import type { ProjectContent } from './content'
 import {
   CURRENT_SCHEMA_VERSION,
+  type BeatSpec,
   type BranchSpec,
+  type DialogueSpec,
+  type LabeledMeta,
   type ProjectDocument,
+  type SceneSpec,
+  type ShotSpec,
   type StoryEdge,
   type StoryNode,
   type Viewport,
 } from './document'
 import { migrateProjectDocument, normalizeEpisodeTitles, rewriteIndexOptionHandles } from './legacy'
 
-/** 节点 → 落盘形态：四分区拆分；name/episodeNo 上移 meta，其余字段进 spec。 */
+/** 节点 → 落盘形态：四分区拆分；name/episodeNo 上移 meta，其余字段进 spec。
+ * meta 按 type 判别（§4.1）：名称型节点 label 必填（运行态保证有 name，
+ * 缺失时兜底空串），branch/shot 不落 label 镜像。 */
 export function toStoryNode(n: CanvasNode): StoryNode {
   const { name, episodeNo, ...spec } = n.data as Record<string, unknown> & {
     name?: string
     episodeNo?: number
   }
-  const meta: StoryNode['data']['meta'] = {}
-  // 分支/分镜卡无 name：标题由 prompt/shotNo 派生，不落 meta.label 镜像
-  if (name !== undefined) meta.label = name
-  if (episodeNo !== undefined) meta.episodeNo = episodeNo
-  return {
+  const optionalMeta =
+    episodeNo !== undefined ? { episodeNo } : {}
+  const base = {
     id: n.id,
-    type: n.type,
     layout: { position: { x: n.position.x, y: n.position.y } },
     ui: { selected: false, expanded: true },
-    data: { spec: spec as unknown as StoryNode['data']['spec'], meta },
   }
+  if (n.type === 'branch' || n.type === 'shot') {
+    // 派生标题节点：不落 meta.label 镜像
+    return {
+      ...base,
+      type: n.type,
+      data: { spec: spec as unknown as BranchSpec & ShotSpec, meta: { ...optionalMeta } },
+    } as unknown as StoryNode
+  }
+  const labeled: LabeledMeta = { label: name ?? '', ...optionalMeta }
+  return {
+    ...base,
+    type: n.type,
+    data: { spec: spec as unknown as SceneSpec & BeatSpec & DialogueSpec, meta: labeled },
+  } as unknown as StoryNode
 }
 
 /** 落盘节点 → 运行态：meta/spec 拍平回 data，ui.selected 恒为 false。 */
 export function fromStoryNode(n: StoryNode): CanvasNode {
   const { spec, meta } = n.data
   const data: Record<string, unknown> = { ...(spec as unknown as Record<string, unknown>) }
-  if (meta.label !== undefined) data.name = meta.label
+  if ('label' in meta) data.name = meta.label
   if (meta.episodeNo !== undefined) data.episodeNo = meta.episodeNo
   return {
     id: n.id,

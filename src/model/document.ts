@@ -91,19 +91,26 @@ export interface ShotSpec {
 /** 节点 spec 的判别联合：形状由 StoryNode.type 决定。 */
 export type NodeSpec = SceneSpec | BeatSpec | DialogueSpec | BranchSpec | ShotSpec
 
-/** 节点 meta：标题与集归属等元信息（§4.1）。 */
-export interface NodeMeta {
-  /** 节点标题；分支/分镜卡省略（由 spec.prompt / spec.shotNo 派生，不落镜像字段）。 */
-  label?: string
-  /** 集归属（大纲分组的唯一依据；分镜卡随宿主场景）。 */
+/** 名称型节点 meta：label 必填（scene/beat/dialogue 显示并编辑名称）。 */
+export interface LabeledMeta {
+  label: string
+  /** 集归属（大纲分组的唯一依据）。 */
   episodeNo?: number
   /** 首版运行态不维护时间戳，落盘可省略；保留字段为演进占位。 */
   createdAt?: string
   updatedAt?: string
 }
 
-/** 画布节点：叙事单元，四分区（layout/ui/spec/meta）。 */
-export interface StoryNode {
+/** 派生标题节点 meta：无 label（branch/shot 专属，标题由 spec 派生，§8.1.1 禁止镜像）。 */
+export interface DerivedMeta {
+  episodeNo?: number
+  createdAt?: string
+  updatedAt?: string
+}
+
+/** 画布节点：叙事单元，四分区（layout/ui/spec/meta）；
+ * type 与 data.spec/meta 判别相关（§4.1 十七轮修订）。 */
+interface StoryNodeBase {
   id: string
   type: NodeType
   /** 渲染布局：位置必填，尺寸/层级可选。 */
@@ -118,11 +125,34 @@ export interface StoryNode {
     /** 首版节点无折叠形态，恒 true；保留字段为演进占位。 */
     expanded: boolean
   }
-  data: {
-    spec: NodeSpec
-    meta: NodeMeta
-  }
 }
+
+export interface SceneDocNode extends StoryNodeBase {
+  type: 'scene'
+  data: { spec: SceneSpec; meta: LabeledMeta }
+}
+
+export interface BeatDocNode extends StoryNodeBase {
+  type: 'beat'
+  data: { spec: BeatSpec; meta: LabeledMeta }
+}
+
+export interface DialogueDocNode extends StoryNodeBase {
+  type: 'dialogue'
+  data: { spec: DialogueSpec; meta: LabeledMeta }
+}
+
+export interface BranchDocNode extends StoryNodeBase {
+  type: 'branch'
+  data: { spec: BranchSpec; meta: DerivedMeta }
+}
+
+export interface ShotDocNode extends StoryNodeBase {
+  type: 'shot'
+  data: { spec: ShotSpec; meta: DerivedMeta }
+}
+
+export type StoryNode = SceneDocNode | BeatDocNode | DialogueDocNode | BranchDocNode | ShotDocNode
 
 /** 剧情连线：按 data.kind 判别的三种变体（§5）。
  * branch 变体必须携带 sourceHandle（option-<选项 id>）——边上无镜像 label 后
