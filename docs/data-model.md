@@ -42,6 +42,8 @@
 > 十九轮评审修订（2026-08-29）：§4.1 DerivedMeta 补 `label?: never`（结构性禁写镜像标题）；分镜卡改用独立的 ShotMeta——无 episodeNo（随宿主场景分集，§3.5）、无 label，两者均 never 禁写；Agent/导入边界的同不变量校验由 §9.3 update 校验契约承接。
 >
 > 二十轮评审修订（2026-08-29）：§5/§11.3 补剧情流端点约束——sequence/branch 边任一端点为 shot 即非法（分镜卡不参与横向剧情流），命令层拒绝、归一化隔离；§9.3 update 校验契约补 meta 字段相关性——episodeNo 不可用于 shot。
+>
+> 二十一轮评审修订（2026-08-29）：§9.3 `update_node_meta.set` 由交集改为联合（`Partial<LabeledMeta> | Partial<DerivedMeta>`）——交集的 never 可选属性使改名补丁类型上不可成立；运行时裁决仍按解析出的节点类型拒绝 branch/shot 的 label 与 shot 的 episodeNo。
 > 适用范围：画布文档模型、设定与资产模型、命令与撤销、本地存储体系、AI Agent 交互。
 > 明确不在范围内：用户体系、租户、余额/计费。PlotWeave 是单用户 BYOK 桌面工具；若未来出现此类需求，另起《服务端领域模型》文档。
 
@@ -477,8 +479,11 @@ interface CommandPayloads {
   // meta 字段同样按类型相关——label 仅名称型节点（scene/beat/dialogue）可写
   // （branch/shot 写 label 即镜像字段）；episodeNo 不可用于 shot（随宿主场景
   // 分集，§3.5）。异型 set 拒绝执行。
+  // update_node_meta 的 set 是联合而非交集：改名走 LabeledMeta 分支，
+  // branch/shot 的 meta 编辑走 DerivedMeta 分支——交集会因 never 可选属性
+  // 让改名补丁（{ label: '新名称' }）在类型上不可能成立。
   update_node_spec: { nodeId: string; set: Partial<NodeSpec> }
-  update_node_meta: { nodeId: string; set: Partial<LabeledMeta & DerivedMeta> }
+  update_node_meta: { nodeId: string; set: Partial<LabeledMeta> | Partial<DerivedMeta> }
   update_node_ui: { nodeId: string; set: Partial<NodeUi> }
   // ── 连接 ──
   connect_edge: { edge: StoryEdge }             // 完整边，含 data.kind；branch 边不落 label（胶囊文案按 sourceHandle 派生，§5）
