@@ -291,12 +291,15 @@ describe('parseProject（ProjectDocument → 会话文档，§11 归一化）', 
     doc.graph.edges.push(
       invalid({ id: 'e-bad1', source: 's1', target: 'd1', sourceHandle: 'shots', data: { kind: 'sequence' } }),
       invalid({ id: 'e-bad2', source: 's1', target: 'd1', sourceHandle: 'option-opt-1', data: { kind: 'attach' } }),
+      invalid({ id: 'e-bad3', source: 's1', target: 'd1', sourceHandle: 'option-opt-1', data: { kind: 'sequence' } }),
     )
     const round = parseProject(doc)
     expect(round.content.edges.map((e) => e.id)).not.toContain('e-bad1')
     expect(round.content.edges.map((e) => e.id)).not.toContain('e-bad2')
+    expect(round.content.edges.map((e) => e.id)).not.toContain('e-bad3')
     expect(round.warnings.some((w) => w.includes('e-bad1'))).toBe(true)
     expect(round.warnings.some((w) => w.includes('e-bad2'))).toBe(true)
+    expect(round.warnings.some((w) => w.includes('e-bad3'))).toBe(true)
     // 合法边不受影响
     expect(round.content.edges.some((e) => e.id === 'e3' && e.sourceHandle === 'shots')).toBe(true)
   })
