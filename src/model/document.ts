@@ -124,20 +124,34 @@ export interface StoryNode {
   }
 }
 
-/** 剧情连线：顺序流 / 分支流 / 派生从属（§5）。 */
-export interface StoryEdge {
+/** 剧情连线：按 data.kind 判别的三种变体（§5）。
+ * branch 变体必须携带 sourceHandle（option-<选项 id>）——边上无镜像 label 后
+ * 胶囊文案的唯一解析依据，缺句柄的 branch 边非法（归一化按孤儿边隔离）。 */
+interface EdgeBase {
   id: string
   source: string
   target: string
-  /** branch 节点的出口 id（option-<选项 id>）；attach 的 shots 端口等。 */
-  sourceHandle?: string
   targetHandle?: string
-  data: {
-    kind: 'sequence' | 'branch' | 'attach'
-    /** 同一 source 多出口的排列顺序。 */
-    order?: number
-  }
 }
+
+export interface SequenceEdge extends EdgeBase {
+  sourceHandle?: string
+  data: { kind: 'sequence'; order?: number }
+}
+
+export interface BranchEdge extends EdgeBase {
+  /** 必填：option-<选项 id>。 */
+  sourceHandle: string
+  data: { kind: 'branch'; order?: number }
+}
+
+export interface AttachEdge extends EdgeBase {
+  /** 索引卡底部端口 shots。 */
+  sourceHandle?: string
+  data: { kind: 'attach'; order?: number }
+}
+
+export type StoryEdge = SequenceEdge | BranchEdge | AttachEdge
 
 /** 设定集实体：节点只存 id 引用，改一处全部引用同时生效。 */
 export interface Character {

@@ -58,18 +58,24 @@ export function fromStoryNode(n: StoryNode): CanvasNode {
 
 /** 边 → 落盘形态：kind 显式化；branch 胶囊文案是分支选项的派生物，不落拷贝。 */
 export function toStoryEdge(e: Edge): StoryEdge {
-  const out: StoryEdge = {
+  const base = {
     id: e.id,
     source: e.source,
     target: e.target,
-    data: { kind: edgeKindOf(e) },
+    ...(e.targetHandle ? { targetHandle: e.targetHandle } : {}),
   }
-  // data.order：同 source 多出口的排列顺序（§5），运行态在边 data 里携带
   const order = (e.data as { order?: number } | undefined)?.order
-  if (order !== undefined) out.data.order = order
-  if (e.sourceHandle) out.sourceHandle = e.sourceHandle
-  if (e.targetHandle) out.targetHandle = e.targetHandle
-  return out
+  const optionalOrder = order !== undefined ? { order } : {}
+  const optionalHandle = e.sourceHandle ? { sourceHandle: e.sourceHandle } : {}
+  const kind = edgeKindOf(e)
+  if (kind === 'branch') {
+    // branch 边必带选项句柄（§5 判别联合）；无句柄属非法形态，归一化按孤儿边隔离
+    return { ...base, sourceHandle: e.sourceHandle ?? '', data: { kind: 'branch', ...optionalOrder } }
+  }
+  if (kind === 'attach') {
+    return { ...base, ...optionalHandle, data: { kind: 'attach', ...optionalOrder } }
+  }
+  return { ...base, ...optionalHandle, data: { kind: 'sequence', ...optionalOrder } }
 }
 
 /** 落盘边 → 运行态：恢复 type/className；branch 胶囊文案按 sourceHandle 绑定的选项 id 从分支节点派生；
