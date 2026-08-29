@@ -101,9 +101,18 @@ export interface LabeledMeta {
   updatedAt?: string
 }
 
-/** 派生标题节点 meta：无 label（branch/shot 专属，标题由 spec 派生，§8.1.1 禁止镜像）。 */
+/** 派生标题节点 meta：无 label（branch 专属；label?: never 结构性禁写镜像标题）。 */
 export interface DerivedMeta {
+  label?: never
   episodeNo?: number
+  createdAt?: string
+  updatedAt?: string
+}
+
+/** 分镜卡 meta：无 episodeNo（分镜卡随宿主场景分集，§3.5）、无 label，均 never 禁写。 */
+export interface ShotMeta {
+  label?: never
+  episodeNo?: never
   createdAt?: string
   updatedAt?: string
 }
@@ -149,7 +158,7 @@ export interface BranchDocNode extends StoryNodeBase {
 
 export interface ShotDocNode extends StoryNodeBase {
   type: 'shot'
-  data: { spec: ShotSpec; meta: DerivedMeta }
+  data: { spec: ShotSpec; meta: ShotMeta }
 }
 
 export type StoryNode = SceneDocNode | BeatDocNode | DialogueDocNode | BranchDocNode | ShotDocNode

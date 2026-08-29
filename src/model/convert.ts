@@ -44,11 +44,13 @@ export function toStoryNode(n: CanvasNode): StoryNode {
     ui: { selected: false, expanded: true },
   }
   if (n.type === 'branch' || n.type === 'shot') {
-    // 派生标题节点：不落 meta.label 镜像
+    // 派生标题节点：不落 meta.label 镜像；分镜卡随宿主场景分集，
+    // 不落独立 episodeNo（§3.5）
+    const meta = n.type === 'shot' ? {} : { ...optionalMeta }
     return {
       ...base,
       type: n.type,
-      data: { spec: spec as unknown as BranchSpec & ShotSpec, meta: { ...optionalMeta } },
+      data: { spec: spec as unknown as BranchSpec & ShotSpec, meta },
     } as unknown as StoryNode
   }
   const labeled: LabeledMeta = { label: name ?? '', ...optionalMeta }
@@ -64,7 +66,7 @@ export function fromStoryNode(n: StoryNode): CanvasNode {
   const { spec, meta } = n.data
   const data: Record<string, unknown> = { ...(spec as unknown as Record<string, unknown>) }
   if ('label' in meta) data.name = meta.label
-  if (meta.episodeNo !== undefined) data.episodeNo = meta.episodeNo
+  if ('episodeNo' in meta && meta.episodeNo !== undefined) data.episodeNo = meta.episodeNo
   return {
     id: n.id,
     type: n.type,
