@@ -62,6 +62,8 @@
 > 二十九轮评审修订（2026-08-29）：§5 补端口归属反向约束——source 为 branch 节点的边必须是 branch 变体且携带合法 option-\<id\> 句柄（branch 节点无匿名 output 端口，sequence/attach 从 branch 发出即绕过选项语义），命令层拒绝、归一化按孤儿边隔离；targetHandle 收紧为必须省略（各节点仅一个匿名 target 端口，实现中 Handle 无 id），命令层拒绝携带任意值的边，归一化剥离该字段并警告（端口匿名唯一，剥离不改变连接语义）；§9.3 connect_edge 边界校验同步补这两条。
 >
 > 三十轮评审修订（2026-08-29）：匿名端口句柄规则由 targetHandle 扩至 sequence 边 sourceHandle——scene/beat/dialogue 的剧情流出口同为匿名 output 端口（Handle 无 id），携带任意值即非法（命令层拒绝、归一化剥离），保留字面量规则中 sequence 携带 shots/option-\<id\> 的两条矛盾形态被本条吸收；§9.3 update_node_spec/meta 补 `unset?: string[]` 清除语义——JSON 无法传输 undefined，省略属性只表示不修改，清除可选字段（episodeNo 回退未分集、locationId 解除引用）须走 unset；unset 与 set 同名、必选字段、不存在字段一律拒绝；inverse 捕获规则同步——被清除字段的旧值进 inverse 的 set，被 set 新增的字段进 inverse 的 unset。
+>
+> 三十一轮评审修订（2026-08-29）：§5/§9.3 connect_edge 补逻辑重复边拒绝——同（source, target, sourceHandle）的边全局唯一（新 edge.id 不改变重复本质，重叠连线令遍历/统计重复计数；交互层与 AI 路径已有同款检查，命令边界兜底），§11.1 第 3 步保留文档序首条、其余隔离；§11.1 第 3 步补节点判别形状校验（§4.1 联合在加载路径的对等兜底——JSON 边界已擦除类型）：never 禁写字段被携带（branch/shot 的 label、shot 的 episodeNo）剥离并警告；type 与 spec 形态错位、名称型节点缺必填 meta.label 等无法机械修复的异型节点，连同关联边隔离并警告，不交付画布。
 > 适用范围：画布文档模型、设定与资产模型、命令与撤销、本地存储体系、AI Agent 交互。
 > 明确不在范围内：用户体系、租户、余额/计费。PlotWeave 是单用户 BYOK 桌面工具；若未来出现此类需求，另起《服务端领域模型》文档。
 
@@ -323,7 +325,7 @@ type StoryEdge = SequenceEdge | BranchEdge | AttachEdge
 
 **句柄保留字面量**：`shots` 为 attach 变体专属（§4.3 attach 仅从索引卡底部端口发起）；`option-<id>` 句柄为 branch 变体专属（§8.1.1 无镜像 label 后的文案解析依据）。`sequence`/`branch` 边携带 `shots` 句柄、`sequence` 边携带 `option-<id>` 句柄、`attach` 边携带非 `shots` 句柄，均属 kind/句柄矛盾——命令层校验拒绝，漏网者由归一化按孤儿边隔离（§11.3）。attach 边另受**端点类型约束**：必须 `scene → shot`（非 scene 源或非 shot 目标同样命令层拒绝、归一化隔离），否则分镜计数与下挂布局会被脏数据污染；并受**宿主唯一约束**：目标 shot 已有入向 attach 边时命令层拒绝第二条（更换宿主走「断开 + 重连」同 `batch` 的原子操作），漏网者归一化保留文档序首条、其余按孤儿边隔离（§11.1 第 3 步）。
 
-**端口归属反向约束**：branch 节点没有匿名 output 端口（§4.3 出口只有 `option-<id>`）——source 为 branch 节点的边必须是 branch 变体且携带合法选项句柄，`sequence`/`attach` 边从 branch 发出即绕过选项语义，命令层拒绝、归一化按孤儿边隔离。匿名端口句柄必须省略：各节点仅一个匿名 target 端口，scene/beat/dialogue 的剧情流出口同为匿名 output 端口（实现中 Handle 均无 id）——`targetHandle` 与 sequence 边的 `sourceHandle` 携带任意值都无法绑定到真实端口，命令层拒绝；归一化剥离该字段并记录警告（端口匿名唯一，剥离不改变连接语义，无需隔离）。此前句柄保留字面量规则中 sequence 携带 `shots`/`option-<id>` 的两条矛盾形态被本条吸收（更严：任何值均非法）。
+**端口归属反向约束**：branch 节点没有匿名 output 端口（§4.3 出口只有 `option-<id>`）——source 为 branch 节点的边必须是 branch 变体且携带合法选项句柄，`sequence`/`attach` 边从 branch 发出即绕过选项语义，命令层拒绝、归一化按孤儿边隔离。匿名端口句柄必须省略：各节点仅一个匿名 target 端口，scene/beat/dialogue 的剧情流出口同为匿名 output 端口（实现中 Handle 均无 id）——`targetHandle` 与 sequence 边的 `sourceHandle` 携带任意值都无法绑定到真实端口，命令层拒绝；归一化剥离该字段并记录警告（端口匿名唯一，剥离不改变连接语义，无需隔离）。此前句柄保留字面量规则中 sequence 携带 `shots`/`option-<id>` 的两条矛盾形态被本条吸收（更严：任何值均非法）。**逻辑重复边**：同（source, target, sourceHandle）的边全局唯一——重复边产生重叠连线并令遍历/统计重复计数，命令层拒绝，漏网者归一化保留文档序首条、其余按孤儿边隔离（§11.1 第 3 步）。
 
 **剧情流端点约束**：分镜卡不参与横向剧情流（§4.2，只经 attach 垂直下挂）——`sequence`/`branch` 边的任一端点为 shot 节点即非法：命令层校验拒绝，漏网者由归一化按孤儿边隔离。
 
@@ -544,6 +546,9 @@ interface CommandPayloads {
   // sequence/attach 从 branch 发出即绕过选项语义；targetHandle 必须省略，
   // sequence 边的 sourceHandle 同样必须省略（剧情流出口为匿名 output
   // 端口，Handle 无 id）——匿名端口句柄携带任意值即拒绝。
+  // 另拒绝逻辑重复边：同（source, target, sourceHandle）的边已存在于活动图
+  // 即拒绝——新 edge.id 不改变重复本质，重叠连线会令遍历与统计重复计数
+  // （交互层与 AI 路径已有同款检查，本边界为兜底）。
   connect_edge: { edge: StoryEdge }             // 完整边，含 data.kind；branch 边不落 label（胶囊文案按 sourceHandle 派生，§5）
   disconnect_edge: { edgeId: string }           // inverse 捕获被删边
   // ── 设定（地点、道具同构，略）──
@@ -753,7 +758,7 @@ provider 的 API key 以**密文 `keyEnc`** 存于 provider 配置：Rust `seal`
 
 1. `schemaVersion` 低于当前版本时按迁移链逐级升级；高于当前版本时拒绝并提示升级应用。**迁移链首环**：schemaVersion 0（首版扁平存储格式：顶层 `name`/`updated_at`/`nodes`/`edges`/`settings`/`episodeTitles`，节点数据未分区、设定集为数组）→ 1（本文档结构）。首环包含四次改写与一次信封装配，改写全部发生在孤儿边隔离之前：① 补列表项稳定 id（`branch.options` 等），**并在同一数组内去重——v0 已存在的重复选项 id 在此重发新 id**（必须在 ② 之前完成：旧下标句柄按「下标 → 选项」定位，若重复 id 留到 ② 之后才去重，指向后一重复项的连线会先被改写为重复 id 的句柄、再随去重被静默改接到首见项）；② 把分支边的旧式下标句柄（`option-0`、`option-1`…）按「下标 → 迁移后选项 id」改写为稳定 id 句柄（`option-<id>`）——必须在补 id（含去重）之后，否则旧连线会在加载时被误隔离，无法解析的越界下标原样保留，交由第 3 步隔离并警告；③ 把边的旧式运行态判别字段（`type: 'branch'`、`className: 'pw-edge-attach'/'pw-edge-sequence'`）按归类规则（§4.3 连线语义）改写为显式 `data.kind`，**并删除镜像的 `data.optionLabel`**（§5 禁止边上落 label，胶囊文案按改写后的稳定句柄重新派生）；④ 节点结构转换：旧 React Flow 形状（顶层 `position`/`selected`、类型字段平铺于 `data`）拆入四分区（`layout`/`ui`/`data.spec`/`data.meta`），**名称型节点（scene/beat/dialogue）的旧 `data.name` 上移为 `meta.label`（必填）**，`ui.selected` 重置、`ui.expanded` 初始化为 `true`（旧节点无该字段）——v0 节点未经此转换不得 stamped 为 v1。⑤ **信封装配**（文档级映射与缺省回退，经 Rust `wrap_legacy` + 前端 `serializeProject` 协作完成）：顶层 `name` → `project.name`；顶层 `updated_at`（epoch 毫秒）→ ISO 8601 → `project.updatedAt`，`createdAt` 缺省与 `updatedAt` 同刻；`project.id` 由项目文件名回填（信任边界校验）；`nodes`/`edges` 上移 `graph`，`viewport` 缺省不伪造（打开时 fitView）；`settings` 的嵌套数组键化：`settings.characters[]` / `settings.locations[]` → `Record<id, 实体>`（v0 的 `settings` 本身是对象，数组在成员上——勿把整个 settings 当数组转换），`props`/`documents` 补空桶；`episodeTitles` 归一化（字符串键 → 数字键、去空标题），缺省 `{}`（v0 早于集标题功能的文件没有该字段）；`assets` 补 `{ byId: {} }`。⑤ 完成前文档不得 stamped 为 v1。
 2. 重置所有节点 `ui.selected = false`。
-3. 隔离孤儿边（source/target 节点已不存在；branch 边的 `sourceHandle` 指向的选项已不存在、kind/句柄矛盾（§5 保留字面量）、sequence/attach 边 source 为 branch 节点（§5 端口归属反向约束）、attach 边端点类型不合法——必须 scene → shot——、sequence/branch 边端点为 shot（§4.2 分镜卡不参与剧情流）同论）并记录警告——修复而非拒绝，单条坏数据不阻断加载（见 8.2.4）。边携带 `targetHandle` 或 sequence 边携带 `sourceHandle` 时不隔离而剥离——匿名端口唯一（§5），剥离不改变连接语义，记录警告。剧情流边的自环与成环同款隔离：按文档序逐边重建剧情流图，source 等于 target 的自环边、加入即闭合回路的 sequence/branch 边均按孤儿边隔离并警告（attach 垂直从属不参与环检测，§4.3）。节点 id 重复时保留文档序首个节点、后续同 id 节点重发新 id 并记录警告——按 id 的引用（边端点等）本就解析到首个节点，重发节点成为无连线孤儿节点（内容保留，由用户处置）。branch 节点 `options` 内出现重复 id 时同样修复：保留首见项，后续重复项重发新 id 并记录警告——v1 文档的连线按 id 解析，本就归属首见项，重发不产生改接（v0 迁移路径的重复 id 已在首环 ① 去重，不经此条）；其余键控列表（`dialogue.lines`、`shot.refs`）的重复 id 同款修复——它们不被边引用，重发纯为列表 key 去歧。边 id 重复时保留文档序首条、后续重复边重发新 id 并记录警告（边 id 不被数据引用，仅命令与 inverse 使用，重发无副作用）。同一 shot 存在多条入向 attach 边时保留文档序首条、其余按孤儿边隔离并警告（宿主场景唯一，见 §5 attach 宿主约束）。节点 `meta.episodeNo` 非法（非正整数或非有限值，§9.3 命令边界同域）时删除该字段并记录警告——回退为未分集，不阻断加载。
+3. 隔离孤儿边（source/target 节点已不存在；branch 边的 `sourceHandle` 指向的选项已不存在、kind/句柄矛盾（§5 保留字面量）、sequence/attach 边 source 为 branch 节点（§5 端口归属反向约束）、attach 边端点类型不合法——必须 scene → shot——、sequence/branch 边端点为 shot（§4.2 分镜卡不参与剧情流）同论）并记录警告——修复而非拒绝，单条坏数据不阻断加载（见 8.2.4）。边携带 `targetHandle` 或 sequence 边携带 `sourceHandle` 时不隔离而剥离——匿名端口唯一（§5），剥离不改变连接语义，记录警告。剧情流边的自环与成环同款隔离：按文档序逐边重建剧情流图，source 等于 target 的自环边、加入即闭合回路的 sequence/branch 边均按孤儿边隔离并警告（attach 垂直从属不参与环检测，§4.3）。节点 id 重复时保留文档序首个节点、后续同 id 节点重发新 id 并记录警告——按 id 的引用（边端点等）本就解析到首个节点，重发节点成为无连线孤儿节点（内容保留，由用户处置）。branch 节点 `options` 内出现重复 id 时同样修复：保留首见项，后续重复项重发新 id 并记录警告——v1 文档的连线按 id 解析，本就归属首见项，重发不产生改接（v0 迁移路径的重复 id 已在首环 ① 去重，不经此条）；其余键控列表（`dialogue.lines`、`shot.refs`）的重复 id 同款修复——它们不被边引用，重发纯为列表 key 去歧。边 id 重复时保留文档序首条、后续重复边重发新 id 并记录警告（边 id 不被数据引用，仅命令与 inverse 使用，重发无副作用）。同一 shot 存在多条入向 attach 边时保留文档序首条、其余按孤儿边隔离并警告（宿主场景唯一，见 §5 attach 宿主约束）。节点 `meta.episodeNo` 非法（非正整数或非有限值，§9.3 命令边界同域）时删除该字段并记录警告——回退为未分集，不阻断加载。逻辑重复边（同 source/target/sourceHandle，§5）保留文档序首条、其余按孤儿边隔离并警告。按 §4.1 判别联合校验节点 `type` 与 `spec`/`meta` 的对应：never 禁写字段被携带（branch/shot 的 `label`、shot 的 `episodeNo`）时剥离该字段并警告；type 与 spec 形态错位（如 scene 携带 BranchSpec）、名称型节点缺必填 `meta.label` 等无法机械修复的异型节点，隔离该节点及其关联边并记录警告，不交付画布——JSON 边界已擦除 TypeScript 类型，此校验是 §9.3 create_node 边界校验在加载路径的对等兜底。
 4. 标记（而非清除）悬空的设定引用与资产引用。
 5. 扫描文本中的 @ 提及 token，目标已不存在的标记为失效（token 本身保留，见 8.1.2）。
 6. 重建 id 生成器的计数基线，防止新 id 与存量冲突（当前 id = 类型前缀 + 时间戳 + 随机尾，天然无计数基线；本条为将来引入计数式 id 时的保留动作）。
