@@ -77,6 +77,40 @@ describe('projectStore 内存门面（浏览器回退）', () => {
     expect(srcDoc.assets?.byId['a-1']).toBeDefined()
   })
 
+  it('memory 保存路径与桌面一致：会话态（selected/className/measured）落存前剥离', async () => {
+    const meta = await projectStore.create('会话态')
+    await projectStore.save(meta.id, {
+      name: '会话态',
+      nodes: [
+        {
+          id: 's1',
+          type: 'scene',
+          position: { x: 0, y: 0 },
+          selected: true,
+          dragging: true,
+          className: 'pw-node-dim',
+          measured: { width: 10, height: 10 },
+          data: { name: '场', sceneNo: 1 },
+        } as unknown as CanvasNode,
+        {
+          id: 's2',
+          type: 'scene',
+          position: { x: 10, y: 0 },
+          data: { name: '场二', sceneNo: 2 },
+        } as unknown as CanvasNode,
+      ],
+      edges: [{ id: 'e1', source: 's1', target: 's2', selected: true } as never],
+      settings: { characters: [], locations: [] },
+    })
+    const loaded = await projectStore.load(meta.id)
+    expect(loaded.nodes[0].selected).toBe(false)
+    const n = loaded.nodes[0] as { className?: string; measured?: unknown; dragging?: boolean }
+    expect(n.className).toBeUndefined()
+    expect(n.measured).toBeUndefined()
+    expect(n.dragging).toBeUndefined()
+    expect(loaded.edges[0].selected).toBeUndefined()
+  })
+
   it('saveQuiet 吞掉异常不打断调用方', async () => {
     await expect(
       projectStore.saveQuiet('ghost-id-不校验', { name: 'x', nodes: [], edges: [], settings: { characters: [], locations: [] } }),

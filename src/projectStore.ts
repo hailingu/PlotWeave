@@ -65,15 +65,21 @@ function toSummary(m: {
   }
 }
 
-/** 内存回退实现：模块级 Map，会话内持久。 */
+/** 内存回退实现：模块级 Map，会话内持久。存归一化后的会话文档——
+ * 与桌面路径同规则（保存即序列化剥离会话态 + 归一化），行为不因环境分叉。 */
 const memoryStore = new Map<string, { doc: ProjectContent; updatedAt: number }>()
 let memorySeeded = false
+
+/** 会话文档 → 归一化后的会话文档（serialize 剥离运行态 + parse 重置选中态）。 */
+function memoryNormalize(doc: ProjectContent, id: string): ProjectContent {
+  return parseProject(serializeProject(doc, id)).content
+}
 
 function memoryList(): ProjectSummary[] {
   if (!memorySeeded) {
     for (const seed of seedProjects()) {
       memoryStore.set(seed.meta.id, {
-        doc: seed.doc,
+        doc: memoryNormalize(seed.doc, seed.meta.id),
         updatedAt: Date.parse(seed.meta.updatedAt),
       })
     }
@@ -220,7 +226,7 @@ async function memoryLoad(id: string): Promise<ProjectContent> {
 }
 
 async function memorySave(id: string, doc: ProjectContent): Promise<void> {
-  memoryStore.set(id, { doc, updatedAt: Date.now() })
+  memoryStore.set(id, { doc: memoryNormalize(doc, id), updatedAt: Date.now() })
 }
 
 async function memoryDelete(id: string): Promise<void> {
