@@ -24,6 +24,8 @@
 > 十轮评审修订（2026-08-29）：§11.1 首环补 ⑤ 信封装配——文档级映射（name/updated_at/节点边上移/settings 数组键化）与缺省回退（id 回填、createdAt 同刻、viewport 不伪造、props/documents/assets 空桶）明文化，Rust `wrap_legacy` 与前端 `serializeProject` 的分工注记。
 >
 > 十一轮评审修订（2026-08-29）：§3 `graph.viewport` 改为可选字段（缺省 = 从未保存过视口，打开 fitView——与迁移装配及实现一致，v0 迁移件不再结构性无效）；§7.3 项目复制明文要求替换 `project.id`（持久化层强制 id = 目标路径 id）并取新创建时间；ui-design §4.2/§4.3 场景面板补内外景（interior）/天气（weather）两个用户可编辑字段。
+>
+> 十二轮评审修订（2026-08-29）：§5 StoryEdge 改为按 kind 判别的三变体联合，branch 变体必填 `sourceHandle`（无镜像 label 后唯一的文案解析依据，缺句柄非法）；§8.2.2 选项级联收敛到命令层——applyCommand 内置检测被移除选项并断开其出口边，不依赖调用方拼装 batch。
 > 适用范围：画布文档模型、设定与资产模型、命令与撤销、本地存储体系、AI Agent 交互。
 > 明确不在范围内：用户体系、租户、余额/计费。PlotWeave 是单用户 BYOK 桌面工具；若未来出现此类需求，另起《服务端领域模型》文档。
 
@@ -206,18 +208,32 @@ type ShotRef =
 ## 五、边模型
 
 ```ts
-/** 剧情连线：顺序流或分支流。 */
-interface StoryEdge {
+/** 剧情连线：按 data.kind 判别的三种变体。
+ * branch 变体必须携带 sourceHandle（option-<选项 id>）——边上无镜像 label 后
+ * 胶囊文案的唯一解析依据，缺句柄的 branch 边非法（归一化按孤儿边隔离）。 */
+interface EdgeBase {
   id: string
   source: string
   target: string
-  sourceHandle?: string      // branch 节点的出口 id（option-<选项 id>）
   targetHandle?: string
-  data: {
-    kind: 'sequence' | 'branch' | 'attach'
-    order?: number           // 同一 source 多出口的排列顺序
-  }
 }
+
+interface SequenceEdge extends EdgeBase {
+  sourceHandle?: string
+  data: { kind: 'sequence'; order?: number }  // order = 同一 source 多出口的排列顺序
+}
+
+interface BranchEdge extends EdgeBase {
+  sourceHandle: string                        // 必填：option-<选项 id>
+  data: { kind: 'branch'; order?: number }
+}
+
+interface AttachEdge extends EdgeBase {
+  sourceHandle?: string                       // 索引卡底部端口 shots
+  data: { kind: 'attach'; order?: number }
+}
+
+type StoryEdge = SequenceEdge | BranchEdge | AttachEdge
 ```
 
 - `sequence`：剧情顺序流，无 label。
@@ -338,7 +354,7 @@ interface AssetGroup {
 引用的建立、断开、悬空处理全部收敛到命令层（第九节），UI 只是发起者：
 
 1. **建立**：连线 = `connect_edge`；@ 提及 = 编辑 spec 文本（`update_node_spec`）。引用关系随文本天然一致，不存在单独的「同步」步骤。
-2. **断开 ≠ 删除**：断开连线只移除该边，不触碰对方的 spec/文本。删除节点连带删边，且节点与连带边进同一 `batch`——inverse 完整恢复两者（见 9.3），撤销后引用关系原样回来。删除分支选项同理：选项自其引出的 branch 边一并删除（`update_node_spec` + 各 `disconnect_edge` 进同一 `batch`），不留悬空连线，也绝不让既有连线静默改接到别的选项。
+2. **断开 ≠ 删除**：断开连线只移除该边，不触碰对方的 spec/文本。删除节点连带删边，且节点与连带边进同一 `batch`——inverse 完整恢复两者（见 9.3），撤销后引用关系原样回来。删除分支选项同理：其引出的 branch 边由 **applyCommand 内置级联**一并删除——`update_node_spec` 收窄 `branch.options` 时，命令层自动检测被移除的选项 id 并在同一撤销单元内断开其出口边，**不依赖调用方自行拼装 batch**（Agent 走通用 `update_node_spec` 工具同样受保护）；inverse 同时恢复选项与被断开的边。
 3. **删除被引用方**：不级联清理引用方（避免静默丢数据）。引用按「失效」展示（灰色角标/删除线），由用户决定替换或清除。
 4. **加载修复而非拒绝**：归一化管线（第十一节）对悬空引用统一标记；孤儿边隔离并记录警告——单条坏数据不得导致整个项目加载失败。
 
