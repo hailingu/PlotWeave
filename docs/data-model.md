@@ -50,6 +50,8 @@
 > 二十三轮评审修订（2026-08-29）：§9.3 create_node 补命令边界校验（spec 属类型、label 仅名称型、shot 无 episodeNo，与 update 同款）；connect_edge 补端点解析校验（branch source 须为分支节点且选项 id 存在于 options）；ui-design §4.3 场景面板补场次（sceneNo）控件——插入/重排后可修正编号。
 >
 > 二十四轮评审修订（2026-08-29）：§9.3 create_node 边界补 node.id 唯一性校验——id 已存在于活动图即拒绝（防止歧义节点及 inverse 误删既有节点），必要时由命令边界分配新 id；inverse 捕获规则更正 set_asset 的逆操作——覆盖已有 id 时 inverse 为恢复旧 AssetRef 的 set_asset（而非 remove_asset，避免 undo 删除条目使既有引用悬空），remove_asset 仅用于新增情形。
+>
+> 二十五轮评审修订（2026-08-29）：§4.2 BranchSpec.options 明确选项 id 数组内唯一；§9.3 create_node/update_node_spec 命令边界补同款校验（重复 id 映射同一 option-\<id\> 句柄致 label 解析歧义，且删除其一不触发移除识别、级联会把既有连线静默改接到剩余同 id 选项）；§11.1 归一化第 3 步补加载期修复——重复 id 保留首见项、后续重复项重发新 id（既有连线本就解析到首见项，不产生改接）。
 > 适用范围：画布文档模型、设定与资产模型、命令与撤销、本地存储体系、AI Agent 交互。
 > 明确不在范围内：用户体系、租户、余额/计费。PlotWeave 是单用户 BYOK 桌面工具；若未来出现此类需求，另起《服务端领域模型》文档。
 
@@ -238,7 +240,7 @@ interface DialogueLine {
  * 出口连线经 sourceHandle（option-<选项 id>）指向选项，label 由选项派生，边上不落拷贝（见第五节）。 */
 interface BranchSpec {
   prompt: string             // 分岔事由，如「女主是否发现真相」
-  options: Array<{ id: string; label: string }>  // id 为稳定标识；sourceHandle 按 id 定位（option-<id>），删选项不位移其他连线
+  options: Array<{ id: string; label: string }>  // id 为稳定标识且数组内唯一（命令边界与归一化均校验，§9.3/§11）；sourceHandle 按 id 定位（option-<id>），删选项不位移其他连线
 }
 
 /** 分镜卡（生成侧）：一张卡 = 一个镜头及其 AI 燃料。
@@ -478,6 +480,9 @@ interface CommandPayloads {
   // ── 节点 ──
   // create_node 在命令边界按 nodeType 做同款校验（§4.1 判别联合）：
   // spec 须属于该类型；meta.label 仅名称型节点；shot 不得携带 episodeNo。
+  // branch 节点的 spec.options 内选项 id 不得重复——重复 id 映射到同一
+  // option-<id> 句柄，label 解析歧义，且删除其一不被识别为移除，级联会把
+  // 既有连线静默改接到剩余同 id 选项上。
   // 另校验 node.id 全局唯一：id 已存在于活动图时拒绝执行——否则追加会产生
   // 同 id 的歧义节点，且生成的 delete_node inverse 会把既有节点一并抹掉。
   // 导入器/Agent 须自行保证 id 新鲜；必要时由命令边界分配新 id 后再应用。
@@ -489,7 +494,8 @@ interface CommandPayloads {
   // applyCommand 按解析出的节点类型校验 set：spec 字段须属于该类型的 Spec；
   // meta 字段同样按类型相关——label 仅名称型节点（scene/beat/dialogue）可写
   // （branch/shot 写 label 即镜像字段）；episodeNo 不可用于 shot（随宿主场景
-  // 分集，§3.5）。异型 set 拒绝执行。
+  // 分集，§3.5）。异型 set 拒绝执行。branch 的 options 补丁同样校验选项 id
+  // 数组内唯一（与 create_node 同款，理由见其注释）。
   // update_node_meta 的 set 是联合而非交集：改名走 LabeledMeta 分支，
   // branch/shot 的 meta 编辑走 DerivedMeta 分支——交集会因 never 可选属性
   // 让改名补丁（{ label: '新名称' }）在类型上不可能成立。
@@ -704,7 +710,7 @@ provider 的 API key 以**密文 `keyEnc`** 存于 provider 配置：Rust `seal`
 
 1. `schemaVersion` 低于当前版本时按迁移链逐级升级；高于当前版本时拒绝并提示升级应用。**迁移链首环**：schemaVersion 0（首版扁平存储格式：顶层 `name`/`updated_at`/`nodes`/`edges`/`settings`/`episodeTitles`，节点数据未分区、设定集为数组）→ 1（本文档结构）。首环包含四次改写与一次信封装配，改写全部发生在孤儿边隔离之前：① 补列表项稳定 id（`branch.options` 等）；② 把分支边的旧式下标句柄（`option-0`、`option-1`…）按「下标 → 迁移后选项 id」改写为稳定 id 句柄（`option-<id>`）——必须在补 id 之后，否则旧连线会在加载时被误隔离，无法解析的越界下标原样保留，交由第 3 步隔离并警告；③ 把边的旧式运行态判别字段（`type: 'branch'`、`className: 'pw-edge-attach'/'pw-edge-sequence'`）按归类规则（§4.3 连线语义）改写为显式 `data.kind`，**并删除镜像的 `data.optionLabel`**（§5 禁止边上落 label，胶囊文案按改写后的稳定句柄重新派生）；④ 节点结构转换：旧 React Flow 形状（顶层 `position`/`selected`、类型字段平铺于 `data`）拆入四分区（`layout`/`ui`/`data.spec`/`data.meta`），**名称型节点（scene/beat/dialogue）的旧 `data.name` 上移为 `meta.label`（必填）**，`ui.selected` 重置、`ui.expanded` 初始化为 `true`（旧节点无该字段）——v0 节点未经此转换不得 stamped 为 v1。⑤ **信封装配**（文档级映射与缺省回退，经 Rust `wrap_legacy` + 前端 `serializeProject` 协作完成）：顶层 `name` → `project.name`；顶层 `updated_at`（epoch 毫秒）→ ISO 8601 → `project.updatedAt`，`createdAt` 缺省与 `updatedAt` 同刻；`project.id` 由项目文件名回填（信任边界校验）；`nodes`/`edges` 上移 `graph`，`viewport` 缺省不伪造（打开时 fitView）；`settings` 的嵌套数组键化：`settings.characters[]` / `settings.locations[]` → `Record<id, 实体>`（v0 的 `settings` 本身是对象，数组在成员上——勿把整个 settings 当数组转换），`props`/`documents` 补空桶；`episodeTitles` 归一化（字符串键 → 数字键、去空标题），缺省 `{}`（v0 早于集标题功能的文件没有该字段）；`assets` 补 `{ byId: {} }`。⑤ 完成前文档不得 stamped 为 v1。
 2. 重置所有节点 `ui.selected = false`。
-3. 隔离孤儿边（source/target 节点已不存在；branch 边的 `sourceHandle` 指向的选项已不存在、kind/句柄矛盾（§5 保留字面量）、attach 边端点类型不合法——必须 scene → shot——、sequence/branch 边端点为 shot（§4.2 分镜卡不参与剧情流）同论）并记录警告——修复而非拒绝，单条坏数据不阻断加载（见 8.2.4）。
+3. 隔离孤儿边（source/target 节点已不存在；branch 边的 `sourceHandle` 指向的选项已不存在、kind/句柄矛盾（§5 保留字面量）、attach 边端点类型不合法——必须 scene → shot——、sequence/branch 边端点为 shot（§4.2 分镜卡不参与剧情流）同论）并记录警告——修复而非拒绝，单条坏数据不阻断加载（见 8.2.4）。branch 节点 `options` 内出现重复 id 时同样修复：保留首见项，后续重复项重发新 id 并记录警告——既有连线经 `option-<id>` 本就解析到首见项，重发 id 不产生静默改接。
 4. 标记（而非清除）悬空的设定引用与资产引用。
 5. 扫描文本中的 @ 提及 token，目标已不存在的标记为失效（token 本身保留，见 8.1.2）。
 6. 重建 id 生成器的计数基线，防止新 id 与存量冲突（当前 id = 类型前缀 + 时间戳 + 随机尾，天然无计数基线；本条为将来引入计数式 id 时的保留动作）。
