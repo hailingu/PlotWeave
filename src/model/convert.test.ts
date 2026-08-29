@@ -301,6 +301,21 @@ describe('parseProject（ProjectDocument → 会话文档，§11 归一化）', 
     expect(round.content.edges.some((e) => e.id === 'e3' && e.sourceHandle === 'shots')).toBe(true)
   })
 
+  it('attach 边端点类型不合法（非 scene → shot）按孤儿边隔离（§5 端点约束）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    doc.graph.edges.push(
+      { id: 'e-att1', source: 'd1', target: 'sh1', sourceHandle: 'shots', data: { kind: 'attach' } },
+      { id: 'e-att2', source: 's1', target: 'b1', sourceHandle: 'shots', data: { kind: 'attach' } },
+    )
+    const round = parseProject(doc)
+    expect(round.content.edges.map((e) => e.id)).not.toContain('e-att1')
+    expect(round.content.edges.map((e) => e.id)).not.toContain('e-att2')
+    expect(round.warnings.some((w) => w.includes('e-att1'))).toBe(true)
+    expect(round.warnings.some((w) => w.includes('e-att2'))).toBe(true)
+    // 合法的 scene → shot 下挂不受影响
+    expect(round.content.edges.some((e) => e.id === 'e3')).toBe(true)
+  })
+
   it('悬空设定引用：标记警告但保留 id，不静默清除（§11.4 / §8.2.3）', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW)
     delete doc.settings.characters['ch-1']
