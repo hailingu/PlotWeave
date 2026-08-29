@@ -74,6 +74,7 @@
 > 三十六轮评审修订（2026-08-29）：§7.1 relPath 校验由词法规范化升级为真实路径包含判定——资产根与目标路径 canonicalize（解析符号链接）后判定包含，新增资产目标不存在时拒绝路径各级符号链接（词法合法的 `assets/link` 经符号链接仍逃逸资产根，词法检查防不住）；§11.1 ⑤ 与第 3 步收紧 episodeTitles 键为规范十进制正整数字符串且限安全整数范围——`"01"`/`"1e0"` 等非规范数字串与规范键折叠到同一集号会按属性序静默覆盖标题，转换只接受规范键、其余删除并警告。
 > 三十七轮评审修订（2026-08-29）：§5 EdgeBase.targetHandle 与 SequenceEdge.sourceHandle 由可选 string 改为 never 禁写（静态类型与 connect_edge 边界契约一致，非法形状编译期即不可表示）；episodeNo 域统一收紧为安全整数（Number.isSafeInteger 且 > 0，§4.1/§9.3 create_node/update_node_meta/set_episode_title/§11.1 同域）——超出安全整数范围的集号作为对象键会与相邻集号折叠，命令写入后重载即被归一化删除；§9.3 补「目标缺失」通则——删除/更新类命令在边界要求目标存在（inverse 依赖 docBefore 捕获，目标缺失即拒绝；需吞掉过期命令时为不入栈的显式 no-op）；§11.1 第 3 步补键控实体桶 Record 键与值内嵌 id 一致性校验（所有版本）——不一致时以记录键为准改写值内 id（引用按键解析，改写保住既有引用且键天然唯一、不产生碰撞）。
 > 三十八轮评审修订（2026-08-29）：SettingsDocument.relatedIds 补数组内 (kind, id) 唯一约束——§9.3 upsert_document 边界拒绝重复项，§11.1 第 3 步归一化保留首见、其余删除并警告（重复关联持久化会让反向索引/导航重复列出同一文档）；§9.3 set_episode_title 补 title 的 typeof string 前置校验——TS 类型在 JSON 边界已擦除，非字符串值直接 trim 抛异常、原样写入则重载即被归一化删除，须先验类型再去空白。
+> 三十九轮评审修订（2026-08-29）：§9.3 补项目名校验口径（rename_project 命令边界、create_project、持久化层项目名校验三处共用）——先验 typeof string，去首尾空白后非空且 ≤ 100 字符，命令边界拒绝非法值并保存规范化结果（否则无效名称先入活动文档与撤销栈、随后持续保存失败）；inverse 捕获 docBefore 旧名原值。
 > 适用范围：画布文档模型、设定与资产模型、命令与撤销、本地存储体系、AI Agent 交互。
 > 明确不在范围内：用户体系、租户、余额/计费。PlotWeave 是单用户 BYOK 桌面工具；若未来出现此类需求，另起《服务端领域模型》文档。
 
@@ -489,7 +490,7 @@ interface AssetGroup {
 | 设定 | `upsert_character` / `delete_character`（地点、道具同构） |
 | 设定文档 | `upsert_document` / `delete_document` | | |
 | 集标题 | `set_episode_title` | title 为空串 = 删除该集的标题键 |
-| 项目 | `rename_project` | 改 `project.name`；name 在信任边界校验，索引同步由持久化层负责 |
+| 项目 | `rename_project` | 改 `project.name`；name 在命令边界按 §9.3 项目名校验口径校验并保存规范化结果，索引同步由持久化层负责 |
 | 资产 | `set_asset` / `remove_asset` | set 为 upsert 语义（id 已存在 = 覆盖），inverse 视新增/覆盖而定（见 9.3） |
 | 视口 | `update_viewport` | transient，不进撤销栈 |
 | 批量 | `batch` | 一等命令，整批作为单个撤销单元；整批原子——预校验任一子命令失败即整批拒绝、零变更（见 9.3） |
@@ -588,6 +589,12 @@ interface CommandPayloads {
   // 原样写入则重载即被归一化删除），再去首尾空白，空串 = 删除该键
   set_episode_title: { episodeNo: number; title: string }
   // ── 项目 ──
+  // 项目名校验口径（rename_project 命令边界、create_project、持久化层的
+  // 项目名/id 校验三处共用）：先校验 typeof 为 string（TS 类型在 JSON
+  // 边界已擦除），去首尾空白后非空且长度 ≤ 100 字符。命令边界拒绝非法值
+  // 并保存去空白后的规范化结果——否则无效名称先写入活动文档与撤销栈、
+  // 随后持续保存失败，非字符串值还会破坏按字符串消费名称的 UI。
+  // inverse 捕获 docBefore 中的旧名原值（不经规范化）。
   rename_project: { name: string }
   // ── 资产 ──
   // set_asset 语义同 upsert：id 不存在 = 新增，已存在 = 覆盖；inverse 视
@@ -767,7 +774,7 @@ provider 的 API key 以**密文 `keyEnc`** 存于 provider 配置：Rust `seal`
 | 命令 | 职责 |
 | --- | --- |
 | `list_projects()` | 读 `index.json`，返回项目列表 |
-| `create_project(name)` | 建目录 + 初始 `project.json` + 更新索引 |
+| `create_project(name)` | 建目录 + 初始 `project.json` + 更新索引；name 按 §9.3 项目名校验口径校验（与 rename_project 同规则） |
 | `load_project(projectId)` | 读 `project.json`；信封级兼容（旧扁平格式包装为 v0 信封）。节点级 schemaVersion 迁移与归一化在前端模型层（见十一），Rust 不参与 |
 | `save_project(projectId, doc)` | tmp + rename 原子写；`doc.project.updatedAt` 以本次保存时刻盖戳（与写入索引的 updatedAt 同值，前端 serializeProject 盖戳、Rust 校验非空）+ 更新索引的 name/updatedAt（重命名后索引同步在此发生） |
 | `import_asset(projectId, file)` | 拷贝入项目 `assets/`，返回 `AssetRef` |
