@@ -40,6 +40,8 @@
 > 十八轮评审修订（2026-08-29）：§11.1 ④ 明确名称型节点的旧 data.name 上移为必填 meta.label；§9.3 update_node_spec/meta 的 set 增加按解析节点类型的校验契约（spec 字段须属该类型、label 仅名称型节点可写）；inverse 表 update_node_* 的 inverse.type 更正为「同正向，级联例外为 batch」。
 >
 > 十九轮评审修订（2026-08-29）：§4.1 DerivedMeta 补 `label?: never`（结构性禁写镜像标题）；分镜卡改用独立的 ShotMeta——无 episodeNo（随宿主场景分集，§3.5）、无 label，两者均 never 禁写；Agent/导入边界的同不变量校验由 §9.3 update 校验契约承接。
+>
+> 二十轮评审修订（2026-08-29）：§5/§11.3 补剧情流端点约束——sequence/branch 边任一端点为 shot 即非法（分镜卡不参与横向剧情流），命令层拒绝、归一化隔离；§9.3 update 校验契约补 meta 字段相关性——episodeNo 不可用于 shot。
 > 适用范围：画布文档模型、设定与资产模型、命令与撤销、本地存储体系、AI Agent 交互。
 > 明确不在范围内：用户体系、租户、余额/计费。PlotWeave 是单用户 BYOK 桌面工具；若未来出现此类需求，另起《服务端领域模型》文档。
 
@@ -298,6 +300,8 @@ type StoryEdge = SequenceEdge | BranchEdge | AttachEdge
 
 **句柄保留字面量**：`shots` 为 attach 变体专属（§4.3 attach 仅从索引卡底部端口发起）；`option-<id>` 句柄为 branch 变体专属（§8.1.1 无镜像 label 后的文案解析依据）。`sequence`/`branch` 边携带 `shots` 句柄、`sequence` 边携带 `option-<id>` 句柄、`attach` 边携带非 `shots` 句柄，均属 kind/句柄矛盾——命令层校验拒绝，漏网者由归一化按孤儿边隔离（§11.3）。attach 边另受**端点类型约束**：必须 `scene → shot`（非 scene 源或非 shot 目标同样命令层拒绝、归一化隔离），否则分镜计数与下挂布局会被脏数据污染。
 
+**剧情流端点约束**：分镜卡不参与横向剧情流（§4.2，只经 attach 垂直下挂）——`sequence`/`branch` 边的任一端点为 shot 节点即非法：命令层校验拒绝，漏网者由归一化按孤儿边隔离。
+
 ## 六、设定集（settings）
 
 角色/地点/道具是项目级实体，节点只存 id 引用——改一处人设，所有引用它的节点同时生效：
@@ -470,8 +474,9 @@ interface CommandPayloads {
   resize_node: { nodeId: string; to: Size }
   // ── 节点数据（set 为部分对象，只写变更字段）──
   // applyCommand 按解析出的节点类型校验 set：spec 字段须属于该类型的 Spec；
-  // label 仅名称型节点（scene/beat/dialogue）可写，branch/shot 写 label 即
-  // 镜像字段，拒绝执行（§4.1/§8.1.1）。
+  // meta 字段同样按类型相关——label 仅名称型节点（scene/beat/dialogue）可写
+  // （branch/shot 写 label 即镜像字段）；episodeNo 不可用于 shot（随宿主场景
+  // 分集，§3.5）。异型 set 拒绝执行。
   update_node_spec: { nodeId: string; set: Partial<NodeSpec> }
   update_node_meta: { nodeId: string; set: Partial<LabeledMeta & DerivedMeta> }
   update_node_ui: { nodeId: string; set: Partial<NodeUi> }
@@ -673,7 +678,7 @@ provider 的 API key 以**密文 `keyEnc`** 存于 provider 配置：Rust `seal`
 
 1. `schemaVersion` 低于当前版本时按迁移链逐级升级；高于当前版本时拒绝并提示升级应用。**迁移链首环**：schemaVersion 0（首版扁平存储格式：顶层 `name`/`updated_at`/`nodes`/`edges`/`settings`/`episodeTitles`，节点数据未分区、设定集为数组）→ 1（本文档结构）。首环包含四次改写与一次信封装配，改写全部发生在孤儿边隔离之前：① 补列表项稳定 id（`branch.options` 等）；② 把分支边的旧式下标句柄（`option-0`、`option-1`…）按「下标 → 迁移后选项 id」改写为稳定 id 句柄（`option-<id>`）——必须在补 id 之后，否则旧连线会在加载时被误隔离，无法解析的越界下标原样保留，交由第 3 步隔离并警告；③ 把边的旧式运行态判别字段（`type: 'branch'`、`className: 'pw-edge-attach'/'pw-edge-sequence'`）按归类规则（§4.3 连线语义）改写为显式 `data.kind`，**并删除镜像的 `data.optionLabel`**（§5 禁止边上落 label，胶囊文案按改写后的稳定句柄重新派生）；④ 节点结构转换：旧 React Flow 形状（顶层 `position`/`selected`、类型字段平铺于 `data`）拆入四分区（`layout`/`ui`/`data.spec`/`data.meta`），**名称型节点（scene/beat/dialogue）的旧 `data.name` 上移为 `meta.label`（必填）**，`ui.selected` 重置、`ui.expanded` 初始化为 `true`（旧节点无该字段）——v0 节点未经此转换不得 stamped 为 v1。⑤ **信封装配**（文档级映射与缺省回退，经 Rust `wrap_legacy` + 前端 `serializeProject` 协作完成）：顶层 `name` → `project.name`；顶层 `updated_at`（epoch 毫秒）→ ISO 8601 → `project.updatedAt`，`createdAt` 缺省与 `updatedAt` 同刻；`project.id` 由项目文件名回填（信任边界校验）；`nodes`/`edges` 上移 `graph`，`viewport` 缺省不伪造（打开时 fitView）；`settings` 的嵌套数组键化：`settings.characters[]` / `settings.locations[]` → `Record<id, 实体>`（v0 的 `settings` 本身是对象，数组在成员上——勿把整个 settings 当数组转换），`props`/`documents` 补空桶；`episodeTitles` 归一化（字符串键 → 数字键、去空标题），缺省 `{}`（v0 早于集标题功能的文件没有该字段）；`assets` 补 `{ byId: {} }`。⑤ 完成前文档不得 stamped 为 v1。
 2. 重置所有节点 `ui.selected = false`。
-3. 隔离孤儿边（source/target 节点已不存在；branch 边的 `sourceHandle` 指向的选项已不存在、kind/句柄矛盾（§5 保留字面量）、attach 边端点类型不合法——必须 scene → shot——同论）并记录警告——修复而非拒绝，单条坏数据不阻断加载（见 8.2.4）。
+3. 隔离孤儿边（source/target 节点已不存在；branch 边的 `sourceHandle` 指向的选项已不存在、kind/句柄矛盾（§5 保留字面量）、attach 边端点类型不合法——必须 scene → shot——、sequence/branch 边端点为 shot（§4.2 分镜卡不参与剧情流）同论）并记录警告——修复而非拒绝，单条坏数据不阻断加载（见 8.2.4）。
 4. 标记（而非清除）悬空的设定引用与资产引用。
 5. 扫描文本中的 @ 提及 token，目标已不存在的标记为失效（token 本身保留，见 8.1.2）。
 6. 重建 id 生成器的计数基线，防止新 id 与存量冲突（当前 id = 类型前缀 + 时间戳 + 随机尾，天然无计数基线；本条为将来引入计数式 id 时的保留动作）。
