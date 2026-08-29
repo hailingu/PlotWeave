@@ -34,6 +34,8 @@
 > 十五轮评审修订（2026-08-29）：§10.1 补存储布局迁移——明确文档 schema 迁移与文件布局迁移是两条独立的轴，目录化落地时必须布局迁移或路径回退（防既有项目消失）；§5/§11.3 补 attach 端点类型约束（必须 scene → shot，命令层拒绝、归一化隔离）。
 >
 > 十六轮评审修订（2026-08-29）：§11.1 ⑤ settings 转换表述更正为嵌套数组键化（settings.characters[]/locations[] → Record，v0 的 settings 本身是对象）；§9.3 batch 收敛回完整信封（正向 ForwardBatch.commands: GraphCommand[]），batch 的 inverse 用独立的 InverseBatch 负载（InverseCommand[]，applyCommand 内部构造、不经命令通道）；§5 保留句柄扩至 option-\<id\>（branch 专属，sequence 边携带即矛盾）。
+>
+> 十七轮评审修订（2026-08-29）：§4.1 StoryNode 改为按 type 判别的五变体联合——scene/beat/dialogue 的 meta.label 必填（名称型节点显示并编辑名称），branch/shot 用无 label 的 DerivedMeta（标题派生，禁止镜像）；spec 随类型同步判别相关。
 > 适用范围：画布文档模型、设定与资产模型、命令与撤销、本地存储体系、AI Agent 交互。
 > 明确不在范围内：用户体系、租户、余额/计费。PlotWeave 是单用户 BYOK 桌面工具；若未来出现此类需求，另起《服务端领域模型》文档。
 
@@ -109,10 +111,12 @@ interface ProjectDocument {
 ### 4.1 通用结构
 
 ```ts
-/** 画布节点：叙事单元（场景/桥段/对白/分支）。 */
-interface StoryNode {
+/** 画布节点：叙事单元，四分区（layout/ui/spec/meta）。
+ * type 与 data.spec/meta 判别相关：scene/beat/dialogue 显示并编辑名称
+ * → meta.label 必填；branch/shot 标题由 spec.prompt / spec.shotNo 派生
+ * → 不落 label（§8.1.1 禁止镜像字段）。 */
+interface StoryNodeBase {
   id: string
-  type: NodeType                     // 'scene' | 'beat' | 'dialogue' | 'branch'
   layout: {                          // 渲染布局
     position: { x: number; y: number }
     size?: { width: number; height: number }
@@ -122,16 +126,45 @@ interface StoryNode {
     selected: boolean
     expanded: boolean                // 首版节点无折叠形态，恒 true；保留字段为演进占位
   }
-  data: {
-    spec: NodeSpec                   // 用户意图，按节点类型不同（见 4.2）
-    meta: {                          // 元信息
-      label?: string                 // 节点标题；分支/分镜卡省略（标题由 spec.prompt / spec.shotNo 派生，不落镜像字段）
-      episodeNo?: number             // 集归属（大纲分组的唯一依据；分镜卡随宿主场景，不单独分集）
-      createdAt?: string             // 首版运行态不维护时间戳，落盘可省略；保留字段为演进占位
-      updatedAt?: string
-    }
-  }
 }
+
+/** 名称型节点 meta：label 必填（卡片头部/大纲/Agent 摘要的显示与编辑目标）。 */
+interface LabeledMeta {
+  label: string
+  episodeNo?: number             // 集归属（大纲分组的唯一依据）
+  createdAt?: string             // 首版运行态不维护时间戳，落盘可省略；保留字段为演进占位
+  updatedAt?: string
+}
+
+/** 派生标题节点 meta：无 label（branch/shot 专属）。 */
+interface DerivedMeta {
+  episodeNo?: number
+  createdAt?: string
+  updatedAt?: string
+}
+
+interface SceneDocNode extends StoryNodeBase {
+  type: 'scene'
+  data: { spec: SceneSpec; meta: LabeledMeta }
+}
+interface BeatDocNode extends StoryNodeBase {
+  type: 'beat'
+  data: { spec: BeatSpec; meta: LabeledMeta }
+}
+interface DialogueDocNode extends StoryNodeBase {
+  type: 'dialogue'
+  data: { spec: DialogueSpec; meta: LabeledMeta }
+}
+interface BranchDocNode extends StoryNodeBase {
+  type: 'branch'
+  data: { spec: BranchSpec; meta: DerivedMeta }
+}
+interface ShotDocNode extends StoryNodeBase {
+  type: 'shot'
+  data: { spec: ShotSpec; meta: DerivedMeta }
+}
+
+type StoryNode = SceneDocNode | BeatDocNode | DialogueDocNode | BranchDocNode | ShotDocNode
 ```
 
 节点数据只保留四个分区：渲染布局（`layout`）、会话状态（`ui`）、用户意图（`data.spec`）、元信息（`data.meta`）。画布没有执行引擎，因此不设输入缓存、产物、运行状态等分区——没有写者的字段不进模型（原则 5）。
