@@ -1,6 +1,7 @@
 # PlotWeave 数据模型设计
 
 > 状态：v1（2026-08-28 定稿）
+> 实施状态：本文是 v1 **目标契约**，不表示当前旧运行态已经完成切换。`ProjectDocument` v1 类型、`settings.documents`（连同 characters/locations/props）的无损归一化与序列化、§11 加载管线及回归测试全部落地前，现有运行态仍按 v0 处理，**不得写入或保存 `schemaVersion: 1`**；否则会把未被旧模型承载的字段静默丢弃后再错误盖章为已迁移。
 > 本版相对草案的修订：ProjectDocument 补 `episodeTitles` 字段；§4.2 各 spec 字段对齐 UI 设计已实现的节点形态（场景卡 sceneNo/interior/weather、对白行 kind/side/vo、分支 options 入 spec）；§5 分支边不再持久化 label 拷贝；§6 Character/Location 字段对齐运行态实体（gradient/bio/note，长篇自由文本由 SettingsDocument 承载）；§11 明确归一化管线位于前端模型层，并登记 schemaVersion 0（旧扁平存储格式）→ 1 的迁移。
 >
 > 定稿评审修订（2026-08-29）：§9 补 `set_episode_title` 命令（集标题变更走命令通道）；`settings.documents` 补为 SettingsDocument 的持久化位置；§10.5 `load_project` 职责更正为信封级兼容（与 §11 分层一致）；分支边 `sourceHandle` 由数组下标（option-N）改为稳定选项 id（option-\<id\>），删除选项连带其连线进同一 `batch`，杜绝下标位移导致的静默改接。
