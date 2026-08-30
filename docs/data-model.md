@@ -94,6 +94,7 @@
 > 五十五轮评审修订（2026-08-30）：§9.3 `create_node` 在类型相关校验前新增 StoryNodeBase 完整外壳校验；§11.1 为缺失、非字符串与空白 id 统一规定重发顺序及非法引用处置；§7.1 把资产路径信任链上溯到 canonical 应用数据根，拒绝中间基准目录的符号链接逃逸；§10.2/§10.5 明确 `index.json` 是由项目文档重建的缓存，项目文档先提交，启动或列表读取前校正缓存以恢复跨文件中断。
 > 五十六轮评审修订（2026-08-30）：§11.1 为现行迁移器已支持的 v0 内嵌设定引用增加优先兼容子步骤——旧 `data.characters`、`data.location` 与对象型 `speaker` 先复用/补建设定实体并改写为 id，再允许通用列表补缺；§5/§9.3/§11.1 补完整边判别联合运行时校验，未知 `data.kind` 在句柄、环、重复边与 inverse 处理前即拒绝或隔离。
 > 五十七轮评审修订（2026-08-30）：§7.1/§9.3/§11.1 为 `AssetRef` 补完整运行时形状校验——命令边界拒绝异型 id/relPath/mime/source/createdAt，项目与库加载在键/id 修复后规范化可安全修复的 MIME 与时间戳表示，其余异型条目连同警告隔离。
+> 五十八轮评审修订（2026-08-30）：§7.2/§10.5 将库边界从共享 `AssetRef` 扩展为完整 `LibraryAsset`/`AssetGroup` 校验——读取先安全归一化分类、标签与可选编组字段，所有写入口校验补丁并复验合并后的完整条目；补组增删改命令与「资产和组 kind 一致」不变量；§10.1 将库索引位置校正为与现行 Rust 及 relPath 基准一致的 `library/library.json`。
 > 适用范围：画布文档模型、设定与资产模型、命令与撤销、本地存储体系、AI Agent 交互。
 > 明确不在范围内：用户体系、租户、余额/计费。PlotWeave 是单用户 BYOK 桌面工具；若未来出现此类需求，另起《服务端领域模型》文档。
 
@@ -438,9 +439,11 @@ interface AssetGroup {
 }
 ```
 
+- **完整库形状与加载归一化**：`library.json` 根值及目标格式的 `assets.byId`/`groups.byId` 必须是普通对象，桶成员也必须是普通对象；异型根拒绝读取，异型桶或成员隔离并警告，均不得在字段检查前解引用。键/id 按上文兼容迁移及 §8.1 共同规则一致化后，资产先执行 §7.1 的完整 `AssetRef` 校验，再校验 `name` 是去首尾空白后 1–128 字符的字符串、`kind` 严格属于声明联合、`tags` 是至多 16 项的数组且每项是去空白后 1–64 字符并在规范化后唯一；`view` 存在时必须是 `AssetView`，`groupId` 存在时必须是 §8.1 合法字符串 id。组同款校验 `name` 与 `kind`；合法 name 保存去空白后的值，必填 `name`/`kind` 或 AssetRef 字段异型时整个条目隔离。可选组织信息允许安全降级：加载时 `tags` 非数组重置为 `[]`；数组成员先去空白，异型/空白/超长/重复项删除，超过 16 个规范成员时只保留文档序前 16 项；非法 `view`/`groupId` 剥离，均警告。组条目隔离完成后再解析资产 `groupId`：目标组不存在或组与资产的 `kind` 不同即剥离该引用并警告，活动库内始终保持同组同类。
+- **库写边界**：`import_library_asset`/`collect_library_asset` 对 meta 及构造出的完整 `LibraryAsset` 执行上述规则后才写索引。`update_library_asset` 要求 patch 是普通对象且仅含 `name`/`kind`/`view`/`groupId`/`tags`：字段一旦出现就先做运行时类型和值域校验，`view: null`/`groupId: null` 是唯一清除标记且落盘时删除对应可选字段，其他异型值拒绝；字符串保存规范化值，tags 须在输入时满足数组、成员和值域规则。补丁应用到当前条目后必须复验**完整合并结果**（含不可编辑的 AssetRef 字段及 groupId 存在性/kind 一致性），失败则整次命令不写盘，不能让本次未触及的旧脏字段继续落盘。组写入由 `upsert_library_group` 执行同款完整形状校验；修改组 kind 若会与任一成员资产冲突则拒绝。`delete_library_group` 要求组存在，并在同一次原子索引写入中删除该组、剥离成员资产的 `groupId`；因此不会留下悬空编组引用。每个库写命令在操作当时重新读取并按本节归一化索引，或只消费本会话已验证且不再重读磁盘的内存快照；不得把补丁直接套在重新读出的原始 JSON 上。最终索引经 tmp + flush + rename 成功后才替换会话快照。
 - **分工**：`kind` 回答"是什么"，`view` 回答"哪个角度"，`groupId` 把同一主体的三视图绑成一组；`tags` 只用于前两者覆盖不了的自由维度（如「赛博朋克」「雨夜」）。能用结构化字段表达的不写成标签，避免同义标签发散。
 - **迁移规则（`prop` → `wardrobe`）**：现实剧组服化道同属一个部门，旧 `prop`（道具）条目并入 `wardrobe`（服装/妆发/道具）；新增 `colorlight` 承载色彩脚本（color script）与光影氛围参考。
-- **现行库索引兼容迁移**：当前已发布的 `library.json` 使用 `assets: LibraryAsset[]`/`groups: AssetGroup[]`，条目 `createdAt` 是 epoch 毫秒、`source` 缺失，且可选 `view`/`groupId` 用 `null` 表示。升级目标索引前先安全预检两个数组及普通对象成员，再复用 §11.1 的 v0 数组键化规则校验 id：重复 id 保留文档序首项、后续项重发本域未占用 id，缺失/非字符串/空白 id 同样重发，最后才键化为 `assets.byId`/`groups.byId`。组 id 重复时既有 `groupId` 引用本就解析到首项，不随后续项重发而改接；仅一个空白原 id 组时建立映射并同步改写精确匹配的 `groupId`，多个同值空白组则映射歧义，删除相关 `groupId` 并警告。当前库资产均由本地导入产生，缺失 `source` 确定性补为 `upload`，非负安全整数且能表示有效日期的毫秒时间戳转为 UTC ISO 8601，`null` 可选字段删除，旧 `prop` kind 按上条改写。完成这些兼容改写及 Record 键/id 引用同步后才执行 AssetRef 完整校验；缺失/异型时间戳或显式未知 source 不得猜测，隔离条目并警告。不得把目标校验直接套在旧数组成员上，否则所有缺 source、数字时间戳的现有库资产都会被误删。
+- **现行库索引兼容迁移**：当前已发布的 `library.json` 使用 `assets: LibraryAsset[]`/`groups: AssetGroup[]`，条目 `createdAt` 是 epoch 毫秒、`source` 缺失，且可选 `view`/`groupId` 用 `null` 表示。升级目标索引前先安全预检两个数组及普通对象成员，再复用 §11.1 的 v0 数组键化规则校验 id：重复 id 保留文档序首项、后续项重发本域未占用 id，缺失/非字符串/空白 id 同样重发，最后才键化为 `assets.byId`/`groups.byId`。组 id 重复时既有 `groupId` 引用本就解析到首项，不随后续项重发而改接；仅一个空白原 id 组时建立映射并同步改写精确匹配的 `groupId`，多个同值空白组则映射歧义，删除相关 `groupId` 并警告。当前库资产均由本地导入产生，缺失 `source` 确定性补为 `upload`，非负安全整数且能表示有效日期的毫秒时间戳转为 UTC ISO 8601，`null` 可选字段删除，旧 `prop` kind 按上条改写。完成这些兼容改写及 Record 键/id 引用同步后才按上一条顺序执行完整 `AssetGroup`、`LibraryAsset` 与跨条目 groupId/kind 校验；缺失/异型时间戳或显式未知 source 不得猜测，隔离条目并警告。不得把目标校验直接套在旧数组成员上，否则所有缺 source、数字时间戳的现有库资产都会被误删。
 - **绑定方式**：分类信息写在 `library.json` 索引项里、以资产 id 为键；改标签、换组、改视角只更新索引，不动媒体文件。
 - **快速读取**：`library.json` 启动时全量载入内存（桌面量级，数千条索引项仅数百 KB），列表页筛选/搜索全走内存过滤，媒体文件懒加载。规模失控时再迁 SQLite（见十三）。
 
@@ -752,9 +755,9 @@ type GraphCommandOf<K extends CommandType> = Extract<GraphCommand, { type: K }>
 │           ├── {assetId}.png
 │           └── {assetId}.mp4
 ├── library/                           # 个人资产库（跨项目复用）
+│   ├── library.json                   # 库索引：assets.byId（分类/视角/标签）+ groups.byId（编组）
 │   └── assets/
 │       └── {assetId}.png
-├── library.json                       # 库索引：assets.byId（分类/视角/标签）+ groups.byId（编组）
 ├── index.json                         # 项目索引：首页列表元数据（id/名称/缩略图/updatedAt）
 └── settings.json                      # AppSettings：provider 配置与模型选择（不含 API key）
 ```
@@ -837,9 +840,11 @@ provider 的 API key 以**密文 `keyEnc`** 存于 provider 配置：Rust `seal`
 | `load_project(projectId)` | 读 `project.json`；按 §11.1 第 0 步只做信封判型：旧扁平形状包装为 v0，缺失/异型版本号的 v1 形状标记为待修复 v1，混合/无法判定的信封或显式版本与形状冲突时拒绝且不改写；并随原始文档返回受信 `projectId` 与可用的索引元数据。v1 的 `project` 父容器或成员异型不得在 Rust 层整份拒绝，交由前端归一化修复；节点级 schemaVersion 迁移与归一化同样在前端模型层（见十一），Rust 不参与 |
 | `save_project(projectId, doc)` | Rust 在命令边界为本次尝试只取一次 Rust 端系统时间，**无条件覆盖**调用方携带的 `doc.project.updatedAt`（不信任旧值、未来值或前端时钟），再先以 tmp + flush + rename 原子替换 `project.json`；随后以同一 name/updatedAt 更新可重建的 `index.json` 缓存，跨文件中断由 §10.2 的启动/列表校正恢复。成功回执返回该权威 updatedAt，供前端刷新内存元数据而不触发新一轮脏写；失败重试重新取时，`serializeProject` 只负责结构序列化、不负责保存时刻盖戳 |
 | `import_asset(projectId, file)` | 拷贝入项目 `assets/`，返回 `AssetRef` |
-| `list_library_assets()` | 读 `library.json`，返回资产库列表（含编组） |
-| `import_library_asset(file, meta)` | 拷贝入 `library/assets/` + 更新库索引，meta 含 name/kind/view/groupId/tags |
-| `update_library_asset(assetId, patch)` | 修改索引项：改名、改标签、改视角、换编组（只动索引不动文件） |
+| `list_library_assets()` | 读 `library.json`，按 §7.2 迁移并完整归一化 LibraryAsset/AssetGroup 后返回资产库列表（含编组与警告） |
+| `import_library_asset(file, meta)` | 按 §7.2 校验 meta 与完整构造结果后，拷贝入 `library/assets/` + 原子更新库索引；meta 含 name/kind/view/groupId/tags |
+| `update_library_asset(assetId, patch)` | 按 §7.2 校验白名单 patch 并复验完整合并结果后修改索引项：改名、改标签、改视角、换编组（只动索引不动文件） |
+| `upsert_library_group(group)` | 按 §7.2 校验完整 AssetGroup 后新增/更新编组；kind 变更不得与成员资产冲突 |
+| `delete_library_group(groupId)` | 要求组存在；原子删除组并剥离成员资产的 groupId，不留下悬空编组引用 |
 | `delete_library_asset(assetId)` | 删库文件 + 索引项（不影响已拷入项目的副本） |
 | `collect_library_asset(projectId, projectAssetId, meta)` | 把项目资产拷贝入资产库（「收藏」） |
 | `get_settings()` / `update_settings(patch)` | 非敏感配置读写 |
