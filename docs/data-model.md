@@ -90,6 +90,7 @@
 > 五十一轮评审修订（2026-08-29）：§11.1 第 2 步成员过滤后补嵌套容器校验——节点 data/spec/meta/layout、边 data 异型即隔离，options/lines/refs 非数组置空，先于第 3 步读取 data.kind、迭代 options 的一切逐项修复（普通对象成员的异型内部容器此前直达第 3 步，在形状校验前先崩坏）；第 3 步空 id 歧义判定改为以修复前计数为准、先于通用重复 id 去重（节点 id 与 options 同款）——空串本身是「重复 id」，先去重会把多个空 id 折叠为一个、指向空串的连线被错接而非隔离。
 > 五十二轮评审修订（2026-08-30）：§9.3 `connect_edge` 统一前置解析 source/target，任一端点不在活动图即拒绝，再做变体、句柄、类型、环与重复边校验；§11.1 第 2 步把 `project` 纳入父容器修复，并在任何成员读取前补齐 project 必填元数据；项目文档的嵌套列表校验扩至 `characterIds`/`relatedIds` 及所有对象列表成员，杜绝逐项遍历前解引用异型值。
 > 五十三轮评审修订（2026-08-30）：§10.5/§11.1 缺失或异型 `schemaVersion` 改为先按互斥信封特征判型，版本与形状冲突或混合信封一律拒绝且不改写，v1 形状不得误走 v0 迁移；v0 逐项改写前新增旧路径容器、成员与嵌套列表安全预检，避免迁移先于通用容器校验解引用异型值；所有持久化 id 的“非空”口径统一为 `trim()` 后非空，加载时对空白 Record 键及同域内嵌 id 执行确定性重发与引用改写。
+> 五十四轮评审修订（2026-08-30）：§10.2/§10.5 把 `updatedAt` 的权威盖戳收回 Rust 保存边界——每次保存尝试只取一次服务端时间、无条件覆盖调用方值，文档与索引共用该值并随成功回执返回；失败后重试同一序列化载荷仍重新盖戳，避免旧值、未来值或前端时钟漂移污染最近项目排序。
 > 适用范围：画布文档模型、设定与资产模型、命令与撤销、本地存储体系、AI Agent 交互。
 > 明确不在范围内：用户体系、租户、余额/计费。PlotWeave 是单用户 BYOK 桌面工具；若未来出现此类需求，另起《服务端领域模型》文档。
 
@@ -748,7 +749,7 @@ type GraphCommandOf<K extends CommandType> = Extract<GraphCommand, { type: K }>
 单写者场景**不需要**文件锁、版本号等并发机制；但需要防崩溃截断——写到一半进程被杀、断电、磁盘满，会留下截断的 JSON，导致整个项目无法打开。因此：
 
 - 写 `project.json.tmp`，flush 后 rename 覆盖 `project.json`（rename 原子，读者只见旧版或新版，不见半个文件）。`index.json` / `library.json` / `settings.json` 同样处理。
-- 前端防抖 500ms 提交一次；失败回队重试；`flushPersist()` 在关闭窗口/切换项目前调用。
+- 前端防抖 500ms 提交一次；失败回队重试；`flushPersist()` 在关闭窗口/切换项目前调用。重试可以复用同一份序列化载荷，但其中的 `project.updatedAt` 不具有权威性：每次 `save_project` 尝试都由 Rust 在保存边界重新生成时间，调用方不得通过预先盖戳或重放旧值决定本次保存时刻。
 
 ### 10.3 Provider 与模型配置
 
@@ -810,7 +811,7 @@ provider 的 API key 以**密文 `keyEnc`** 存于 provider 配置：Rust `seal`
 | `list_projects()` | 读 `index.json`，返回项目列表 |
 | `create_project(name)` | 建目录 + 初始 `project.json` + 更新索引；name 按 §9.3 项目名校验口径校验（与 rename_project 同规则） |
 | `load_project(projectId)` | 读 `project.json`；按 §11.1 第 0 步只做信封判型：旧扁平形状包装为 v0，缺失/异型版本号的 v1 形状标记为待修复 v1，混合/无法判定的信封或显式版本与形状冲突时拒绝且不改写；并随原始文档返回受信 `projectId` 与可用的索引元数据。v1 的 `project` 父容器或成员异型不得在 Rust 层整份拒绝，交由前端归一化修复；节点级 schemaVersion 迁移与归一化同样在前端模型层（见十一），Rust 不参与 |
-| `save_project(projectId, doc)` | tmp + rename 原子写；`doc.project.updatedAt` 以本次保存时刻盖戳（与写入索引的 updatedAt 同值，前端 serializeProject 盖戳、Rust 校验非空）+ 更新索引的 name/updatedAt（重命名后索引同步在此发生） |
+| `save_project(projectId, doc)` | Rust 在命令边界为本次尝试只取一次服务端时间，**无条件覆盖**调用方携带的 `doc.project.updatedAt`（不信任旧值、未来值或前端时钟），再以该值写 `project.json`；更新索引的 name/updatedAt 时复用同一时间值（重命名后索引同步在此发生），成功回执也返回该权威 updatedAt，供前端刷新内存元数据而不触发新一轮脏写。项目文档与索引各自使用 tmp + flush + rename 原子写；失败重试重新取时，`serializeProject` 只负责结构序列化、不负责保存时刻盖戳 |
 | `import_asset(projectId, file)` | 拷贝入项目 `assets/`，返回 `AssetRef` |
 | `list_library_assets()` | 读 `library.json`，返回资产库列表（含编组） |
 | `import_library_asset(file, meta)` | 拷贝入 `library/assets/` + 更新库索引，meta 含 name/kind/view/groupId/tags |
