@@ -203,144 +203,156 @@ const REQUIRED_LISTS: Record<string, string> = {
   shot: 'refs',
 }
 
-/** §11.1 第 2 步容器级形状校验（先于一切逐项规则；父容器先于子容器）：
- * 异型父/子容器重置为可遍历空容器，非普通对象成员过滤，节点嵌套容器
- * （data/spec/meta/layout + position 坐标）无法机械修复时隔离该节点，
- * 项目必填元数据补齐（受信 id 覆盖、名称回退链、时间戳修复），节点 ui
- * 默认值补齐。修复而非拒绝：均记录警告，单个脏字段不阻断加载（§8.2.4）。 */
-function normalizeContainers(
-  raw: Record<string, unknown>,
-  env: NormalizeEnv,
+/** 普通键值对象的成员过滤：非普通对象（含数组——下标 "0"/"1" 会被误当权威实体 id）
+ * 整体重置为空 Record，桶内异型条目移除；缺失视为空，不警告。 */
+function plainObjectEntries(
+  v: unknown,
+  label: string,
   warnings: string[],
-): ProjectDocument {
-  // 父容器
-  // 父容器（异型重置为可遍历空容器；缺失视为空，不警告）
-  const containerOf = (v: unknown, warning: string): Record<string, unknown> => {
-    if (isPlainObject(v)) return v
-    if (v !== undefined) warnings.push(warning)
+): Record<string, unknown> {
+  if (!isPlainObject(v)) {
+    if (v !== undefined) warnings.push(`${label} 非普通键值对象，已重置为空 Record`)
     return {}
   }
-  const projectRaw = containerOf(raw.project, 'project 容器异型，已重置为空对象后逐字段修复')
-  const graphRaw = containerOf(raw.graph, 'graph 容器异型，已重置为空画布')
-  const settingsRaw = containerOf(raw.settings, 'settings 容器异型，已重置为默认空桶')
-  const assetsRaw = containerOf(raw.assets, 'assets 容器异型，已重置为空资产索引')
-
-  // 子容器
-  const arrayOf = (v: unknown, warning: string): unknown[] => {
-    if (Array.isArray(v)) return v
-    if (v !== undefined) warnings.push(warning)
-    return []
+  const entries: Record<string, unknown> = {}
+  for (const [k, item] of Object.entries(v)) {
+    if (isPlainObject(item)) entries[k] = item
+    else warnings.push(`${label} 的条目 ${k} 不是普通对象，已移除`)
   }
-  const nodesRaw = arrayOf(graphRaw.nodes, 'graph.nodes 非数组，已重置为空数组')
-  const edgesRaw = arrayOf(graphRaw.edges, 'graph.edges 非数组，已重置为空数组')
+  return entries
+}
+
+/** 设定文档 relatedIds 的形状修复（§6 的 {kind,id} 对）：缺失/非数组置空，异型成员移除。 */
+function normalizeRelatedIds(key: string, entry: Record<string, unknown>, warnings: string[]): void {
+  const related = entry.relatedIds
+  if (!Array.isArray(related)) {
+    warnings.push(`设定文档 ${key} 的 relatedIds 缺失或非数组，已重置为空数组`)
+    entry.relatedIds = []
+    return
+  }
+  const kept = related.filter((r: unknown) => {
+    const ok = isPlainObject(r)
+    if (!ok) warnings.push(`设定文档 ${key} 的 relatedIds 含异型成员，已移除`)
+    return ok
+  })
+  if (kept.length !== related.length) entry.relatedIds = kept
+}
+
+/** settings 四桶：异型桶重置为空 Record、桶内异型条目移除，随后修复设定文档 relatedIds。 */
+function normalizeSettingsBuckets(
+  settingsRaw: Record<string, unknown>,
+  warnings: string[],
+): Record<string, Record<string, unknown>> {
   const settings: Record<string, Record<string, unknown>> = {}
   for (const bucket of SETTINGS_BUCKETS) {
-    const b = settingsRaw[bucket]
-    if (!isPlainObject(b)) {
-      // 数组同为对象：下标 "0"/"1" 会被误当权威实体 id，必须显式排除
-      if (b !== undefined) warnings.push(`settings.${bucket} 非普通键值对象，已重置为空 Record`)
-      settings[bucket] = {}
-      continue
-    }
-    const entries: Record<string, unknown> = {}
-    for (const [k, v] of Object.entries(b)) {
-      if (isPlainObject(v)) entries[k] = v
-      else warnings.push(`settings.${bucket} 的条目 ${k} 不是普通对象，已移除`)
-    }
-    settings[bucket] = entries
+    settings[bucket] = plainObjectEntries(settingsRaw[bucket], `settings.${bucket}`, warnings)
   }
   for (const [k, v] of Object.entries(settings.documents)) {
     // 桶成员已经上方过滤为普通对象
-    const entry = v as Record<string, unknown>
-    const related = entry.relatedIds
-    if (!Array.isArray(related)) {
-      warnings.push(`设定文档 ${k} 的 relatedIds 缺失或非数组，已重置为空数组`)
-      entry.relatedIds = []
-    } else {
-      const kept = related.filter((r: unknown) => {
-        const ok = isPlainObject(r)
-        if (!ok) warnings.push(`设定文档 ${k} 的 relatedIds 含异型成员，已移除`)
-        return ok
-      })
-      if (kept.length !== related.length) entry.relatedIds = kept
-    }
+    normalizeRelatedIds(k, v as Record<string, unknown>, warnings)
   }
-  const byId: Record<string, unknown> = {}
-  const byIdRaw = assetsRaw.byId
-  if (isPlainObject(byIdRaw)) {
-    for (const [k, v] of Object.entries(byIdRaw)) {
-      if (isPlainObject(v)) byId[k] = v
-      else warnings.push(`assets.byId 的条目 ${k} 不是普通对象，已移除`)
-    }
-  } else if (byIdRaw !== undefined) {
-    warnings.push('assets.byId 非普通键值对象，已重置为空 Record')
-  }
-  const titlesRaw = containerOf(raw.episodeTitles, 'episodeTitles 非普通键值对象，已重置为空 Record')
+  return settings
+}
 
-  // 成员过滤 + 嵌套容器：节点
-  const nodes: StoryNode[] = []
-  for (const member of nodesRaw) {
-    if (!isPlainObject(member)) {
-      warnings.push('graph.nodes 中的非普通对象成员已隔离')
-      continue
-    }
-    const nid = typeof member.id === 'string' && member.id ? member.id : '(缺失 id)'
-    const data = member.data
-    const layout = member.layout
-    if (
-      !isPlainObject(data) ||
-      !isPlainObject(data.spec) ||
-      !isPlainObject(data.meta) ||
-      !isPlainObject(layout)
-    ) {
-      warnings.push(`节点 ${nid} 的 data/spec/meta/layout 容器缺失或异型，无法机械修复，已隔离`)
-      continue
-    }
-    const pos = layout.position
-    if (!isPlainObject(pos) || !Number.isFinite(pos.x) || !Number.isFinite(pos.y)) {
-      warnings.push(`节点 ${nid} 的 layout.position 坐标非法，无法机械修复，已隔离`)
-      continue
-    }
-    const spec = data.spec
-    const listKey = REQUIRED_LISTS[member.type as string]
-    if (listKey) {
-      const list = spec[listKey]
-      if (!Array.isArray(list)) {
-        warnings.push(`节点 ${nid} 的 spec.${listKey} 缺失或非数组，已重置为空数组`)
-        spec[listKey] = []
-      } else {
-        const kept = list.filter((item) => {
-          const ok = listKey === 'characterIds' ? typeof item === 'string' : isPlainObject(item)
-          if (!ok) warnings.push(`节点 ${nid} 的 spec.${listKey} 含异型成员，已移除`)
-          return ok
-        })
-        if (kept.length !== list.length) spec[listKey] = kept
-      }
-    }
-    const ui = member.ui
-    if (!isPlainObject(ui) || typeof ui.selected !== 'boolean' || typeof ui.expanded !== 'boolean') {
-      warnings.push(`节点 ${nid} 的 ui 缺失或异型，已重置为默认值`)
-      member.ui = { selected: false, expanded: true }
-    }
-    nodes.push(member as unknown as StoryNode)
+/** 节点 spec 必填列表（§4.2）：缺失/非数组可确定性置空，异型成员移除；
+ * 指向被清空选项的连线由孤儿边规则处理。 */
+function normalizeRequiredList(
+  spec: Record<string, unknown>,
+  type: unknown,
+  nid: string,
+  warnings: string[],
+): void {
+  const listKey = REQUIRED_LISTS[type as string]
+  if (!listKey) return
+  const list = spec[listKey]
+  if (!Array.isArray(list)) {
+    warnings.push(`节点 ${nid} 的 spec.${listKey} 缺失或非数组，已重置为空数组`)
+    spec[listKey] = []
+    return
   }
-  // 成员过滤 + 嵌套容器：边（判别依据 data 缺失即无法机械修复）
-  const edges: StoryEdge[] = []
-  for (const member of edgesRaw) {
-    if (!isPlainObject(member)) {
-      warnings.push('graph.edges 中的非普通对象成员已隔离')
-      continue
-    }
-    if (!isPlainObject(member.data)) {
-      warnings.push(
-        `边 ${typeof member.id === 'string' && member.id ? member.id : '(缺失 id)'} 的 data 缺失或异型，已隔离`,
-      )
-      continue
-    }
-    edges.push(member as unknown as StoryEdge)
-  }
+  const kept = list.filter((item) => {
+    const ok = listKey === 'characterIds' ? typeof item === 'string' : isPlainObject(item)
+    if (!ok) warnings.push(`节点 ${nid} 的 spec.${listKey} 含异型成员，已移除`)
+    return ok
+  })
+  if (kept.length !== list.length) spec[listKey] = kept
+}
 
-  // 项目必填元数据（容器就位后、逐项规则前补齐）
+/** 单个节点的成员形状校验与机械修复；嵌套容器（data/spec/meta/layout +
+ * position 坐标）无法机械修复时隔离该节点（返回 null）。 */
+function normalizeNode(member: unknown, warnings: string[]): StoryNode | null {
+  if (!isPlainObject(member)) {
+    warnings.push('graph.nodes 中的非普通对象成员已隔离')
+    return null
+  }
+  const nid = typeof member.id === 'string' && member.id ? member.id : '(缺失 id)'
+  const data = member.data
+  const layout = member.layout
+  if (
+    !isPlainObject(data) ||
+    !isPlainObject(data.spec) ||
+    !isPlainObject(data.meta) ||
+    !isPlainObject(layout)
+  ) {
+    warnings.push(`节点 ${nid} 的 data/spec/meta/layout 容器缺失或异型，无法机械修复，已隔离`)
+    return null
+  }
+  const pos = layout.position
+  if (!isPlainObject(pos) || !Number.isFinite(pos.x) || !Number.isFinite(pos.y)) {
+    warnings.push(`节点 ${nid} 的 layout.position 坐标非法，无法机械修复，已隔离`)
+    return null
+  }
+  normalizeRequiredList(data.spec, member.type, nid, warnings)
+  const ui = member.ui
+  if (!isPlainObject(ui) || typeof ui.selected !== 'boolean' || typeof ui.expanded !== 'boolean') {
+    warnings.push(`节点 ${nid} 的 ui 缺失或异型，已重置为默认值`)
+    member.ui = { selected: false, expanded: true }
+  }
+  return member as unknown as StoryNode
+}
+
+/** 单个边的成员形状校验：非普通对象或判别依据 data 缺失即无法机械修复，隔离（返回 null）。 */
+function normalizeEdge(member: unknown, warnings: string[]): StoryEdge | null {
+  if (!isPlainObject(member)) {
+    warnings.push('graph.edges 中的非普通对象成员已隔离')
+    return null
+  }
+  if (!isPlainObject(member.data)) {
+    warnings.push(
+      `边 ${typeof member.id === 'string' && member.id ? member.id : '(缺失 id)'} 的 data 缺失或异型，已隔离`,
+    )
+    return null
+  }
+  return member as unknown as StoryEdge
+}
+
+/** 名称修复链：trim 后合法则采用，否则回退索引名，再退「未命名项目」。 */
+function normalizeProjectName(rawName: unknown, env: NormalizeEnv, warnings: string[]): string {
+  const fallbackName = (): string => {
+    const idx = typeof env.indexName === 'string' ? env.indexName.trim() : ''
+    return idx && [...idx].length <= 64 ? idx : '未命名项目'
+  }
+  if (typeof rawName !== 'string') {
+    const name = fallbackName()
+    warnings.push(`project.name 缺失或非字符串，已回退为「${name}」`)
+    return name
+  }
+  const trimmed = rawName.trim()
+  if (!trimmed || [...trimmed].length > 64) {
+    const name = fallbackName()
+    warnings.push(`project.name 空白或超过 64 字符，已回退为「${name}」`)
+    return name
+  }
+  if (trimmed !== rawName) warnings.push('project.name 已去首尾空白')
+  return trimmed
+}
+
+/** 项目必填元数据修复：受信 id 覆盖、名称回退链、时间戳修复、非字符串描述剥离。 */
+function normalizeProjectMeta(
+  projectRaw: Record<string, unknown>,
+  env: NormalizeEnv,
+  warnings: string[],
+): { id: string; name: string; description?: string; createdAt: string; updatedAt: string } {
   const rawId = projectRaw.id
   let id: string
   if (env.projectId !== undefined) {
@@ -351,24 +363,7 @@ function normalizeContainers(
   } else {
     id = typeof rawId === 'string' ? rawId : ''
   }
-  const fallbackName = (): string => {
-    const idx = typeof env.indexName === 'string' ? env.indexName.trim() : ''
-    return idx && [...idx].length <= 64 ? idx : '未命名项目'
-  }
-  let name: string
-  if (typeof projectRaw.name === 'string') {
-    const trimmed = projectRaw.name.trim()
-    if (trimmed && [...trimmed].length <= 64) {
-      name = trimmed
-      if (name !== projectRaw.name) warnings.push('project.name 已去首尾空白')
-    } else {
-      name = fallbackName()
-      warnings.push(`project.name 空白或超过 64 字符，已回退为「${name}」`)
-    }
-  } else {
-    name = fallbackName()
-    warnings.push(`project.name 缺失或非字符串，已回退为「${name}」`)
-  }
+  const name = normalizeProjectName(projectRaw.name, env, warnings)
   const parseableIso = (v: unknown): v is string =>
     typeof v === 'string' && Number.isFinite(Date.parse(v))
   let updatedAt: string
@@ -390,32 +385,80 @@ function normalizeContainers(
     if (typeof projectRaw.description === 'string') description = projectRaw.description
     else warnings.push('project.description 非字符串，已剥离')
   }
+  return { id, name, description, createdAt, updatedAt }
+}
 
-  // 视口形状：非法即删除（回退打开时 fitView，§3 缺省语义）
-  let viewport: Viewport | undefined
-  if (graphRaw.viewport !== undefined) {
-    const vp = graphRaw.viewport
-    if (
-      isPlainObject(vp) &&
-      Number.isFinite(vp.x) &&
-      Number.isFinite(vp.y) &&
-      Number.isFinite(vp.zoom) &&
-      (vp.zoom as number) > 0
-    ) {
-      viewport = { x: vp.x as number, y: vp.y as number, zoom: vp.zoom as number }
-    } else {
-      warnings.push('graph.viewport 形状非法，已删除（打开时 fitView）')
-    }
+/** 视口形状校验：非法即删除（回退打开时 fitView，§3 缺省语义）。 */
+function normalizeViewportShape(v: unknown, warnings: string[]): Viewport | undefined {
+  if (v === undefined) return undefined
+  if (
+    isPlainObject(v) &&
+    Number.isFinite(v.x) &&
+    Number.isFinite(v.y) &&
+    Number.isFinite(v.zoom) &&
+    (v.zoom as number) > 0
+  ) {
+    return { x: v.x as number, y: v.y as number, zoom: v.zoom as number }
   }
+  warnings.push('graph.viewport 形状非法，已删除（打开时 fitView）')
+  return undefined
+}
+
+/** §11.1 第 2 步容器级形状校验（先于一切逐项规则；父容器先于子容器）：
+ * 异型父/子容器重置为可遍历空容器，非普通对象成员过滤，节点嵌套容器
+ * （data/spec/meta/layout + position 坐标）无法机械修复时隔离该节点，
+ * 项目必填元数据补齐（受信 id 覆盖、名称回退链、时间戳修复），节点 ui
+ * 默认值补齐。修复而非拒绝：均记录警告，单个脏字段不阻断加载（§8.2.4）。 */
+function normalizeContainers(
+  raw: Record<string, unknown>,
+  env: NormalizeEnv,
+  warnings: string[],
+): ProjectDocument {
+  // 父/子容器（异型重置为可遍历空容器；缺失视为空，不警告）
+  const containerOf = (v: unknown, warning: string): Record<string, unknown> => {
+    if (isPlainObject(v)) return v
+    if (v !== undefined) warnings.push(warning)
+    return {}
+  }
+  const arrayOf = (v: unknown, warning: string): unknown[] => {
+    if (Array.isArray(v)) return v
+    if (v !== undefined) warnings.push(warning)
+    return []
+  }
+  const projectRaw = containerOf(raw.project, 'project 容器异型，已重置为空对象后逐字段修复')
+  const graphRaw = containerOf(raw.graph, 'graph 容器异型，已重置为空画布')
+  const settingsRaw = containerOf(raw.settings, 'settings 容器异型，已重置为默认空桶')
+  const assetsRaw = containerOf(raw.assets, 'assets 容器异型，已重置为空资产索引')
+  const nodesRaw = arrayOf(graphRaw.nodes, 'graph.nodes 非数组，已重置为空数组')
+  const edgesRaw = arrayOf(graphRaw.edges, 'graph.edges 非数组，已重置为空数组')
+
+  // 成员过滤 + 嵌套容器修复
+  const settings = normalizeSettingsBuckets(settingsRaw, warnings)
+  const byId = plainObjectEntries(assetsRaw.byId, 'assets.byId', warnings)
+  const titlesRaw = containerOf(raw.episodeTitles, 'episodeTitles 非普通键值对象，已重置为空 Record')
+  const nodes: StoryNode[] = []
+  for (const member of nodesRaw) {
+    const node = normalizeNode(member, warnings)
+    if (node) nodes.push(node)
+  }
+  const edges: StoryEdge[] = []
+  for (const member of edgesRaw) {
+    const edge = normalizeEdge(member, warnings)
+    if (edge) edges.push(edge)
+  }
+
+  // 项目必填元数据（容器就位后、逐项规则前补齐）
+  const meta = normalizeProjectMeta(projectRaw, env, warnings)
+  const viewport = normalizeViewportShape(graphRaw.viewport, warnings)
 
   return {
     schemaVersion: CURRENT_SCHEMA_VERSION,
     project: {
-      id,
-      name,
-      ...(description !== undefined ? { description } : {}),
-      createdAt,
-      updatedAt,
+      id: meta.id,
+      name: meta.name,
+      ...(meta.description !== undefined ? { description: meta.description } : {}),
+      createdAt: meta.createdAt,
+      updatedAt: meta.updatedAt,
     },
     graph: { nodes, edges, ...(viewport ? { viewport } : {}) },
     settings: settings as unknown as ProjectDocument['settings'],
