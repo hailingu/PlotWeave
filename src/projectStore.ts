@@ -72,7 +72,7 @@ let memorySeeded = false
 
 /** 会话文档 → 归一化后的会话文档（serialize 剥离运行态 + parse 重置选中态）。 */
 function memoryNormalize(doc: ProjectContent, id: string): ProjectContent {
-  return parseProject(serializeProject(doc, id)).content
+  return parseProject(serializeProject(doc, id), { projectId: id }).content
 }
 
 function memoryList(): ProjectSummary[] {
@@ -124,7 +124,7 @@ async function tauriList(): Promise<ProjectSummary[]> {
     const seed = seedProjects().find((s) => s.meta.id === meta.id)
     if (!seed) continue
     const file = await invoke<unknown>('load_project', { id: meta.id })
-    if (parseProject(file).migrated) {
+    if (parseProject(file, { projectId: meta.id }).migrated) {
       await tauriSave(meta.id, seed.doc)
     }
   }
@@ -144,8 +144,9 @@ async function tauriCreate(name: string): Promise<ProjectSummary> {
 async function tauriLoad(id: string): Promise<ProjectContent> {
   const { invoke } = await import('@tauri-apps/api/core')
   const file = await invoke<unknown>('load_project', { id })
-  // §11 归一化管线：迁移 + 孤儿边隔离 + 悬空引用标记
-  const { content, migrated, warnings } = parseProject(file)
+  // §11 归一化管线：迁移 + 孤儿边隔离 + 悬空引用标记；
+  // projectId 为路径给定的受信 id，供 §11.1 元数据修复覆盖 project.id
+  const { content, migrated, warnings } = parseProject(file, { projectId: id })
   for (const w of warnings) console.warn(`[projectStore] ${w}`)
   // 迁移发生则写回磁盘，下次打开不再迁移
   if (migrated) void tauriSave(id, content)

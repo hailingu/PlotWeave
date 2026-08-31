@@ -224,8 +224,9 @@ export interface SettingsDocument {
   id: string
   title: string
   body: string
-  /** 关联的 Character / Location id。 */
-  relatedIds: string[]
+  /** 关联的 Character / Location 条目：kind + id 显式成对
+   * （两个桶是独立 id 空间，裸 id 无法解析归属，§6）。 */
+  relatedIds: Array<{ kind: 'character' | 'location'; id: string }>
 }
 
 /** 资产引用：媒体本体是文件，文档只存引用（§7.1）。 */

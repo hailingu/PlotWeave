@@ -16,15 +16,37 @@ import {
 import { uid } from '../uid'
 import type { ProjectContent } from './content'
 
-/** 集标题表归一化：JSON 键是字符串，只保留「数字键 → 非空标题」映射。 */
-export function normalizeEpisodeTitles(v: unknown): Record<number, string> {
+/** 集标题表归一化（§11.1 键值域，对所有版本统一执行）：JSON 键是字符串，
+ * 只保留「规范十进制正整数键（安全整数范围内）→ 非空白标题」映射——
+ * "01"/"1e0"/" 1" 等非规范书写与规范键折叠到同一集号、转换时按遍历序
+ * 静默覆盖其一，删除并警告；零/负/小数/超安全整数键同论。值为非字符串
+ * 或去空白后为空串的删除并警告（与 set_episode_title 落盘口径一致）。
+ * 数组形态不是 Record：数组下标不参与转换，整体重置为空并警告。 */
+export function normalizeEpisodeTitles(
+  v: unknown,
+  warnings?: string[],
+): Record<number, string> {
   const out: Record<number, string> = {}
-  if (typeof v !== 'object' || v === null) return out
+  if (v === undefined || v === null) return out
+  if (typeof v !== 'object' || Array.isArray(v)) {
+    warnings?.push('episodeTitles 不是普通键值对象，已重置为空 Record')
+    return out
+  }
   for (const [k, title] of Object.entries(v as Record<string, unknown>)) {
-    const ep = Number(k)
-    if (Number.isInteger(ep) && ep > 0 && typeof title === 'string' && title.trim() !== '') {
-      out[ep] = title.trim()
+    if (!/^[1-9]\d*$/.test(k) || !Number.isSafeInteger(Number(k))) {
+      warnings?.push(`episodeTitles 键 "${k}" 不是规范十进制正整数（或超出安全整数范围），已删除`)
+      continue
     }
+    if (typeof title !== 'string') {
+      warnings?.push(`episodeTitles["${k}"] 的值不是字符串，已删除`)
+      continue
+    }
+    const trimmed = title.trim()
+    if (!trimmed) {
+      warnings?.push(`episodeTitles["${k}"] 的标题去空白后为空，已删除`)
+      continue
+    }
+    out[Number(k)] = trimmed
   }
   return out
 }

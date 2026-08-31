@@ -168,21 +168,27 @@ describe('serializeProject（会话文档 → ProjectDocument 落盘格式）', 
   it('settings.documents 往返保留：解析进会话、保存原样回写（§3/§6）', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW)
     doc.settings.documents = {
-      'doc-1': { id: 'doc-1', title: '林晚小传', body: '……', relatedIds: ['ch-1'] },
+      // §6：relatedIds 为 { kind, id } 显式成对（两桶独立 id 空间）
+      'doc-1': {
+        id: 'doc-1',
+        title: '林晚小传',
+        body: '……',
+        relatedIds: [{ kind: 'character', id: 'ch-1' }],
+      },
     }
     const round = parseProject(doc)
     expect(round.content.settings.documents?.[0]).toEqual({
       id: 'doc-1',
       title: '林晚小传',
       body: '……',
-      relatedIds: ['ch-1'],
+      relatedIds: [{ kind: 'character', id: 'ch-1' }],
     })
     const again = serializeProject(round.content, 'p-1', NOW)
     expect(again.settings.documents['doc-1']).toEqual({
       id: 'doc-1',
       title: '林晚小传',
       body: '……',
-      relatedIds: ['ch-1'],
+      relatedIds: [{ kind: 'character', id: 'ch-1' }],
     })
   })
 
@@ -284,19 +290,24 @@ describe('parseProject（ProjectDocument → 会话文档，§11 归一化）', 
     expect(round.warnings.some((w) => w.includes('e-ghost'))).toBe(true)
   })
 
-  it('kind/句柄矛盾的边按孤儿边隔离（§5 句柄保留字面量）', () => {
+  it('kind/句柄矛盾：sequence 携带任意句柄确定性剥离并保留；attach 携带非 shots 句柄无法修复，按孤儿边隔离（§5）', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW)
-    // 故意构造非法边（kind/句柄矛盾），验证归一化兜底隔离
+    // 故意构造非法边，验证归一化兜底
     const invalid = (e: unknown) => e as ProjectDocument['graph']['edges'][number]
     doc.graph.edges.push(
-      invalid({ id: 'e-bad1', source: 's1', target: 'd1', sourceHandle: 'shots', data: { kind: 'sequence' } }),
+      invalid({ id: 'e-bad1', source: 's1', target: 'b1', sourceHandle: 'shots', data: { kind: 'sequence' } }),
       invalid({ id: 'e-bad2', source: 's1', target: 'd1', sourceHandle: 'option-opt-1', data: { kind: 'attach' } }),
-      invalid({ id: 'e-bad3', source: 's1', target: 'd1', sourceHandle: 'option-opt-1', data: { kind: 'sequence' } }),
+      invalid({ id: 'e-bad3', source: 's1', target: 'b1', sourceHandle: 'option-opt-1', data: { kind: 'sequence' } }),
     )
     const round = parseProject(doc)
-    expect(round.content.edges.map((e) => e.id)).not.toContain('e-bad1')
-    expect(round.content.edges.map((e) => e.id)).not.toContain('e-bad2')
-    expect(round.content.edges.map((e) => e.id)).not.toContain('e-bad3')
+    const edgeIds = round.content.edges.map((e) => e.id)
+    // sequence 边携带任意 sourceHandle：端口匿名唯一，剥离不改变连接语义，保留并警告
+    expect(edgeIds).toContain('e-bad1')
+    expect(edgeIds).toContain('e-bad3')
+    expect(round.content.edges.find((e) => e.id === 'e-bad1')!.sourceHandle).toBeUndefined()
+    expect(round.content.edges.find((e) => e.id === 'e-bad3')!.sourceHandle).toBeUndefined()
+    // attach 句柄必须是字面量 shots：非 shots 无法确定性修复，隔离
+    expect(edgeIds).not.toContain('e-bad2')
     expect(round.warnings.some((w) => w.includes('e-bad1'))).toBe(true)
     expect(round.warnings.some((w) => w.includes('e-bad2'))).toBe(true)
     expect(round.warnings.some((w) => w.includes('e-bad3'))).toBe(true)
@@ -524,5 +535,269 @@ describe('parseProject（ProjectDocument → 会话文档，§11 归一化）', 
     expect(round.content.settings.locations.map((l) => l.name)).toEqual(['天台'])
     // 旧格式从未持久化视口：保持缺省，打开时 fitView（不伪造原点视口）
     expect(round.content.viewport).toBeUndefined()
+  })
+})
+
+describe('归一化一期：容器级形状校验（§11.1 第 2 步）', () => {
+  it('顶层容器异型：重置为可遍历空容器并记录警告，项目照常打开', () => {
+    const round = parseProject({
+      schemaVersion: 1,
+      project: null,
+      graph: 'oops',
+      settings: [1, 2],
+      episodeTitles: ['旁白'],
+      assets: null,
+    })
+    expect(round.content.name).toBe('未命名项目')
+    expect(round.content.nodes).toEqual([])
+    expect(round.content.edges).toEqual([])
+    expect(round.content.settings.characters).toEqual([])
+    expect(round.content.episodeTitles).toEqual({})
+    expect(round.content.assets).toEqual({ byId: {} })
+    expect(round.warnings.length).toBeGreaterThan(0)
+  })
+
+  it('子容器异型：graph.nodes/edges 非数组重置为空；settings 桶数组形态重置为空 Record（下标不被当成实体 id）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
+      graph: { nodes: unknown; edges: unknown }
+      settings: { characters: unknown }
+    }
+    doc.graph.nodes = 'oops'
+    doc.graph.edges = null
+    doc.settings.characters = [{ id: 'ch-9', name: '不应以键 0 入桶' }]
+    const round = parseProject(doc)
+    expect(round.content.nodes).toEqual([])
+    expect(round.content.edges).toEqual([])
+    expect(round.content.settings.characters).toEqual([])
+    expect(round.warnings.length).toBeGreaterThan(0)
+  })
+
+  it('成员级异型过滤：节点/边数组中的非普通对象成员隔离，Record 桶中的异型值移除', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
+      graph: { nodes: unknown[]; edges: unknown[] }
+      settings: { characters: Record<string, unknown> }
+    }
+    doc.graph.nodes.push(null, 42)
+    doc.graph.edges.push(null, 'oops')
+    doc.settings.characters['bad'] = null
+    const round = parseProject(doc)
+    expect(round.content.nodes.map((n) => n.id)).toEqual(['s1', 'b1', 'd1', 'br1', 'sh1'])
+    expect(round.content.edges.map((e) => e.id)).toEqual(['e1', 'e2', 'e3'])
+    expect(round.content.settings.characters.map((c) => c.id)).toEqual(['ch-1'])
+    expect(round.warnings.length).toBeGreaterThan(0)
+  })
+
+  it('节点缺 data/spec/meta/layout 或边缺 data：无法机械修复，隔离节点（关联边随之成孤儿）/隔离该边', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
+      graph: { nodes: Record<string, unknown>[]; edges: Record<string, unknown>[] }
+    }
+    const scene = doc.graph.nodes.find((n) => n.id === 's1')!
+    delete scene.data // s1 是 e1/e3 的端点
+    const branch = doc.graph.edges.find((e) => e.id === 'e2')!
+    delete branch.data
+    const round = parseProject(doc)
+    expect(round.content.nodes.map((n) => n.id)).not.toContain('s1')
+    const edgeIds = round.content.edges.map((e) => e.id)
+    expect(edgeIds).not.toContain('e1') // 端点节点已隔离 → 孤儿边
+    expect(edgeIds).not.toContain('e3')
+    expect(edgeIds).not.toContain('e2') // data 缺失的边直接隔离
+    expect(round.warnings.some((w) => w.includes('s1'))).toBe(true)
+    expect(round.warnings.some((w) => w.includes('e2'))).toBe(true)
+  })
+
+  it('节点 layout.position 坐标非有限数值：隔离该节点并警告（缺坐标会让画布渲染崩溃）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    const beat = doc.graph.nodes.find((n) => n.id === 'b1')!
+    beat.layout.position = { x: Number.NaN, y: 0 }
+    const round = parseProject(doc)
+    expect(round.content.nodes.map((n) => n.id)).not.toContain('b1')
+    expect(round.warnings.some((w) => w.includes('b1'))).toBe(true)
+  })
+
+  it('按类型的必填列表缺失/非数组：重置为空数组并警告，节点保留', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
+      graph: { nodes: { id: string; data: { spec: Record<string, unknown> } }[] }
+    }
+    for (const n of doc.graph.nodes) {
+      if (n.id === 's1') delete n.data.spec.characterIds
+      if (n.id === 'd1') n.data.spec.lines = 'oops'
+      if (n.id === 'br1') delete n.data.spec.options
+      if (n.id === 'sh1') n.data.spec.refs = null
+    }
+    const round = parseProject(doc)
+    expect(round.content.nodes.map((n) => n.id)).toEqual(['s1', 'b1', 'd1', 'br1', 'sh1'])
+    const scene = round.content.nodes[0].data as { characterIds: string[] }
+    expect(scene.characterIds).toEqual([])
+    // branch 选项被清空后，绑定选项的 e2 边成为孤儿边被隔离
+    expect(round.content.edges.map((e) => e.id)).not.toContain('e2')
+    expect(round.warnings.length).toBeGreaterThan(0)
+  })
+
+  it('列表成员过滤：characterIds 非字符串成员、lines/options 非普通对象成员移除并警告', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
+      graph: { nodes: { id: string; data: { spec: Record<string, unknown> } }[] }
+    }
+    for (const n of doc.graph.nodes) {
+      if (n.id === 's1') n.data.spec.characterIds = ['ch-1', 7, null]
+      if (n.id === 'd1') n.data.spec.lines = [{ id: 'line-1', kind: 'line', text: '别走' }, null]
+    }
+    const round = parseProject(doc)
+    const scene = round.content.nodes.find((n) => n.id === 's1')!.data as { characterIds: string[] }
+    expect(scene.characterIds).toEqual(['ch-1'])
+    const dialogue = round.content.nodes.find((n) => n.id === 'd1')!.data as { lines: unknown[] }
+    expect(dialogue.lines).toHaveLength(1)
+    expect(round.warnings.length).toBeGreaterThan(0)
+  })
+
+  it('节点 ui 缺失/异型：重置默认值并警告，加载后 selected 恒为 false', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
+      graph: { nodes: { id: string; ui?: unknown }[] }
+    }
+    delete doc.graph.nodes.find((n) => n.id === 'b1')!.ui
+    doc.graph.nodes.find((n) => n.id === 'd1')!.ui = { selected: 'yes' }
+    const round = parseProject(doc)
+    expect(round.content.nodes.every((n) => n.selected === false)).toBe(true)
+    expect(round.warnings.length).toBeGreaterThan(0)
+  })
+})
+
+describe('归一化一期：project 元数据修复（§11.1 第 2 步，受信 id / 索引名回退链）', () => {
+  it('project.id 与受信 projectId 不一致：以受信 id 覆盖并警告', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    doc.project.id = 'p-alien'
+    const round = parseProject(doc, { projectId: 'p-1' })
+    expect(round.warnings.some((w) => w.includes('p-alien'))).toBe(true)
+  })
+
+  it('project.name 异型/空白/超长：回退索引名，再回退「未命名项目」并警告', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
+      project: { name: unknown }
+    }
+    doc.project.name = '   '
+    expect(parseProject(doc, { indexName: '索引名' }).content.name).toBe('索引名')
+    expect(parseProject(doc).content.name).toBe('未命名项目')
+    doc.project.name = 42
+    expect(parseProject(doc, { indexName: '索引名' }).content.name).toBe('索引名')
+    doc.project.name = '长'.repeat(65)
+    expect(parseProject(doc).content.name).toBe('未命名项目')
+    // 合法名称去首尾空白后采用
+    doc.project.name = '  午夜出租车  '
+    expect(parseProject(doc).content.name).toBe('午夜出租车')
+  })
+
+  it('createdAt/updatedAt 非可解析时间戳：修复为有效 ISO 并警告；description 非字符串剥离', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    doc.project.createdAt = 'not-a-date'
+    doc.project.updatedAt = ''
+    const round = parseProject(doc)
+    expect(Number.isFinite(Date.parse(round.content.createdAt!))).toBe(true)
+    expect(round.warnings.length).toBeGreaterThan(0)
+
+    const doc2 = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
+      project: { description: unknown }
+    }
+    doc2.project.description = 7
+    expect(parseProject(doc2).content.description).toBeUndefined()
+  })
+})
+
+describe('归一化一期：episodeTitles 键值严格化（§11.1 键值域）', () => {
+  it('非规范键（前导零/科学计数/空白/零/负/小数/超安全整数）与非字符串值删除并警告；合法值去空白', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
+      episodeTitles: unknown
+    }
+    doc.episodeTitles = {
+      '2': ' 摊牌 ',
+      '01': '前导零',
+      '1e0': '科学计数',
+      ' 1': '含空白',
+      '0': '零',
+      '-1': '负',
+      '1.5': '小数',
+      '9007199254740992': '超安全整数',
+      abc: '非数字',
+      '3': 42,
+      '4': '   ',
+    }
+    const round = parseProject(doc)
+    expect(round.content.episodeTitles).toEqual({ 2: '摊牌' })
+    expect(round.warnings.length).toBeGreaterThan(0)
+  })
+
+  it('episodeTitles 为数组形态：按非 Record 重置为空（数组下标不参与转换）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
+      episodeTitles: unknown
+    }
+    doc.episodeTitles = ['零', '一']
+    const round = parseProject(doc)
+    expect(round.content.episodeTitles).toEqual({})
+  })
+})
+
+describe('归一化一期：视口形状校验（§11.1）', () => {
+  it('viewport 非对象/坐标非有限/zoom 非正：删除字段并警告（回退打开时 fitView）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
+      graph: { viewport: unknown }
+    }
+    doc.graph.viewport = { x: Number.NaN, y: 0, zoom: 1 }
+    expect(parseProject(doc).content.viewport).toBeUndefined()
+    doc.graph.viewport = { x: 0, y: 0, zoom: 0 }
+    expect(parseProject(doc).content.viewport).toBeUndefined()
+    doc.graph.viewport = 'oops'
+    expect(parseProject(doc).content.viewport).toBeUndefined()
+    doc.graph.viewport = { x: 5, y: 6, zoom: 2 }
+    expect(parseProject(doc).content.viewport).toEqual({ x: 5, y: 6, zoom: 2 })
+  })
+})
+
+describe('边句柄规范（§5：匿名端口句柄必须省略）', () => {
+  it('落盘剥离：sequence 边的 sourceHandle 与任意 targetHandle 不进入载荷', () => {
+    const content = mkContent()
+    content.edges[0] = {
+      ...content.edges[0],
+      sourceHandle: 'stale-option',
+      targetHandle: 't-in',
+    } as Edge
+    content.edges[2] = { ...content.edges[2], targetHandle: 't-in' } as Edge
+    const doc = serializeProject(content, 'p-1', NOW)
+    expect(doc.graph.edges[0]).toEqual({
+      id: 'e1',
+      source: 's1',
+      target: 'd1',
+      data: { kind: 'sequence' },
+    })
+    expect(doc.graph.edges[2]).toEqual({
+      id: 'e3',
+      source: 's1',
+      target: 'sh1',
+      sourceHandle: 'shots',
+      data: { kind: 'attach' },
+    })
+  })
+
+  it('加载剥离：已知 kind 边携带 targetHandle 不隔离，剥离并警告', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
+      graph: { edges: Record<string, unknown>[] }
+    }
+    doc.graph.edges[0].targetHandle = 't-in' // sequence
+    doc.graph.edges[1].targetHandle = 't-in' // branch
+    doc.graph.edges[2].targetHandle = 't-in' // attach
+    const round = parseProject(doc)
+    expect(round.content.edges.map((e) => e.id)).toEqual(['e1', 'e2', 'e3'])
+    expect(round.content.edges.every((e) => e.targetHandle === undefined)).toBe(true)
+    expect(round.warnings.length).toBeGreaterThan(0)
+  })
+
+  it('未知/非字符串 kind 的边隔离并警告（§5 判别联合边界，绝不为未知 kind 猜测变体）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    doc.graph.edges.push({
+      id: 'e-unknown',
+      source: 's1',
+      target: 'd1',
+      data: { kind: 'teleport' },
+    } as unknown as ProjectDocument['graph']['edges'][number])
+    const round = parseProject(doc)
+    expect(round.content.edges.map((e) => e.id)).not.toContain('e-unknown')
+    expect(round.warnings.some((w) => w.includes('e-unknown'))).toBe(true)
   })
 })

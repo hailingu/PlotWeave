@@ -36,8 +36,8 @@ export interface DocumentEntity {
   id: string
   title: string
   body: string
-  /** 关联的 Character / Location id。 */
-  relatedIds: string[]
+  /** 关联的 Character / Location 条目：kind + id 显式成对（§6）。 */
+  relatedIds: Array<{ kind: 'character' | 'location'; id: string }>
 }
 
 /** 项目设定集：随 ProjectDocument 持久化。props/documents 首版只透传不编辑。 */
