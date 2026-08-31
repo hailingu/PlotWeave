@@ -5,8 +5,9 @@
 //! 透传，但保存边界（§10.5）执行完整信封校验：版本、容器形状、时间戳、
 //! 集标题键、AssetRef 形状——只验证不修复，异型值整次拒绝；updatedAt 由 Rust
 //! 端盖戳，id 以受信路径参数覆盖。落盘走原子写（§10.2）。
-//! 旧扁平格式（无 schemaVersion）在 load 时包装为 v0 信封交付前端，节点级
-//! 迁移与归一化由前端模型层（§11）完成。
+//! 旧扁平格式（无 schemaVersion）在 load 时按第 0 步信封判型：形状特征
+//! 匹配旧扁平格式才包装为 v0 信封交付前端，丢失版本号但保持 v1 信封特征
+//! 的文档按 v1 交付；节点级迁移与归一化由前端模型层（§11）完成。
 
 use std::collections::HashSet;
 use std::fs;
@@ -628,21 +629,38 @@ pub fn list_projects(app: AppHandle) -> Result<Vec<ProjectMeta>, String> {
     Ok(metas)
 }
 
-/// 解析项目文件：v1 信封直接反序列化（缺省字段兜底）；
-/// 无 schemaVersion 的旧扁平格式包装为 v0 信封。
-/// 缺失的时间戳就地修复为有效 ISO（serde 默认空串）——否则前端
-/// new Date('') 抛 RangeError 会清空整个首页列表。
-fn parse_file(id: &str, text: &str) -> Result<ProjectFile, serde_json::Error> {
-    let value: serde_json::Value = serde_json::from_str(text)?;
+/// 解析项目文件（§11 第 0 步信封判型）：显式 `schemaVersion` 直接定族；
+/// 版本号缺失时按顶层键形状特征判型——仅出现 v1 专属键（project/graph/assets）
+/// 且无旧扁平键时赋予待修复的有效版本 1；仅旧扁平特征键（≥2 个且含
+/// nodes/edges）时包装为 v0 信封。混合信封或两组特征都不满足的损坏文档
+/// 拒绝加载并保留原文件——绝不把保持 v1 形状的文档误包装成空 v0 图后
+/// 回写摧毁原画布。缺失的时间戳就地修复为有效 ISO（serde 默认空串）——
+/// 否则前端 new Date('') 抛 RangeError 会清空整个首页列表。
+fn parse_file(id: &str, text: &str) -> Result<ProjectFile, String> {
+    let value: serde_json::Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
+    let v1_keys = ["project", "graph", "assets"]
+        .iter()
+        .filter(|k| value.get(*k).is_some())
+        .count();
+    let legacy_keys = ["name", "updated_at", "nodes", "edges"]
+        .iter()
+        .filter(|k| value.get(*k).is_some())
+        .count();
+    let has_legacy_list = value.get("nodes").is_some() || value.get("edges").is_some();
     let mut file = if value.get("schemaVersion").is_some() {
-        let mut file: ProjectFile = serde_json::from_value(value)?;
-        if file.project.id.is_empty() {
-            file.project.id = id.to_string();
-        }
+        serde_json::from_value::<ProjectFile>(value).map_err(|e| e.to_string())?
+    } else if v1_keys > 0 && legacy_keys == 0 {
+        let mut file: ProjectFile = serde_json::from_value(value).map_err(|e| e.to_string())?;
+        file.schema_version = 1;
         file
-    } else {
+    } else if v1_keys == 0 && legacy_keys >= 2 && has_legacy_list {
         wrap_legacy(id, &value)
+    } else {
+        return Err("无法判别文档信封：v1 与旧扁平特征键混合或均不足（已保留原文件）".into());
     };
+    if file.project.id.is_empty() {
+        file.project.id = id.to_string();
+    }
     if file.project.updated_at.is_empty() {
         file.project.updated_at = if file.project.created_at.is_empty() {
             now_iso()
@@ -829,7 +847,7 @@ mod tests {
     fn legacy_flat_file_wraps_as_v0_envelope() {
         let legacy = json!({
             "name": "旧项目",
-            "updated_at": 1_700_000_000_000_i64,
+            "updated_at": 1_700_000_000_000u64,
             "nodes": [{ "id": "a", "type": "scene", "data": {} }],
             "edges": [],
             "settings": { "characters": [], "locations": [] },
@@ -844,6 +862,50 @@ mod tests {
         // 旧格式无视口：信封不伪造，前端打开时 fitView
         assert!(file.graph.get("viewport").is_none());
         assert_eq!(file.episode_titles, json!({ "1": "开端" }));
+    }
+
+    #[test]
+    fn versionless_v1_envelope_classifies_as_v1_and_keeps_graph() {
+        // 丢失版本号但保持 v1 信封特征（§11 第 0 步）：按 v1 交付归一化，
+        // 绝不按旧扁平格式读取顶层 nodes/edges 装配出空画布并回写摧毁原文件
+        let v1 = json!({
+            "project": {
+                "id": "p-1", "name": "丢版本号",
+                "createdAt": "2026-08-01T00:00:00.000Z",
+                "updatedAt": "2026-08-28T12:00:00.000Z",
+            },
+            "graph": {
+                "nodes": [{ "id": "s1", "type": "scene",
+                            "layout": { "position": { "x": 0, "y": 0 } },
+                            "ui": { "selected": false, "expanded": true },
+                            "data": { "spec": {}, "meta": { "label": "场一" } } }],
+                "edges": [],
+            },
+            "settings": { "characters": {}, "locations": {}, "props": {}, "documents": {} },
+            "episodeTitles": {},
+            "assets": { "byId": {} },
+        });
+        let file = parse_file("p-1", &v1.to_string()).unwrap();
+        assert_eq!(file.schema_version, 1);
+        assert_eq!(file.graph["nodes"][0]["id"], json!("s1"));
+    }
+
+    #[test]
+    fn mixed_or_unclassifiable_envelope_is_rejected() {
+        // v1 专属键与旧扁平键并存（混合信封）、或两组特征都不满足的损坏文档：
+        // 拒绝加载并保留原文件（§11 第 0 步），不得回退为空 v0 图
+        let mixed = json!({
+            "project": { "name": "混合信封" },
+            "name": "旧名",
+            "updated_at": 1_700_000_000_000u64,
+            "nodes": [],
+            "edges": [],
+        });
+        assert!(parse_file("p-1", &mixed.to_string()).is_err());
+        assert!(parse_file("p-1", "{}").is_err());
+        assert!(parse_file("p-1", r#"{"foo": 1}"#).is_err());
+        // 单个旧扁平键不足以判型
+        assert!(parse_file("p-1", r#"{"nodes": []}"#).is_err());
     }
 
     #[test]

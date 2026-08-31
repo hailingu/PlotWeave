@@ -255,6 +255,163 @@ function normalizeSettingsBuckets(
   return settings
 }
 
+/** 桶内单条实体的必填形状（§11.3，与 §9.3 upsert 边界同域）：
+ * 返回隔离原因；null 表示通过。 */
+function entityIsolationReason(
+  bucket: 'characters' | 'locations' | 'props',
+  entry: Record<string, unknown>,
+): string | null {
+  const name = entry.name
+  if (typeof name !== 'string' || !name.trim()) {
+    return 'name 缺失、非字符串或空白'
+  }
+  if (bucket === 'characters' && typeof entry.gradient !== 'string') {
+    return 'gradient 缺失或非字符串'
+  }
+  return null
+}
+
+/** 可选字符串字段（bio/note/description/avatarAssetId）存在但类型错误时
+ * 剥离该字段并警告，条目保留。 */
+function stripWrongTypedOptionalFields(
+  bucket: string,
+  key: string,
+  entry: Record<string, unknown>,
+  fields: readonly string[],
+  warnings: string[],
+): void {
+  for (const field of fields) {
+    if (entry[field] !== undefined && typeof entry[field] !== 'string') {
+      warnings.push(`settings.${bucket} 条目 ${key} 的可选字段 ${field} 非字符串，已剥离`)
+      delete entry[field]
+    }
+  }
+}
+
+/** 设定集实体形状校验（§11.3）：必填字段无法机械修复的条目从桶中隔离并警告
+ * （否则 name: null 之类的值交付画布后，头像渲染的 trim 在运行期崩溃），
+ * 既有引用按 §8.2.3 悬空标记。documents 桶为透传契约，另按 §6 判别，
+ * 不在此判定。 */
+function normalizeEntityShapes(
+  settings: Record<string, Record<string, unknown>>,
+  warnings: string[],
+): void {
+  const optionalStringFields: Record<string, string[]> = {
+    characters: ['bio', 'avatarAssetId'],
+    locations: ['note'],
+    props: ['description'],
+  }
+  for (const bucket of ['characters', 'locations', 'props'] as const) {
+    const entries = settings[bucket]
+    // 桶成员已经 plainObjectEntries/成员过滤保证为普通对象
+    for (const [key, entry] of Object.entries(entries) as [string, Record<string, unknown>][]) {
+      const reason = entityIsolationReason(bucket, entry)
+      if (reason) {
+        const label = bucket === 'characters' ? `角色 ${key}` : `settings.${bucket} 条目 ${key}`
+        warnings.push(`${label} 的 ${reason}，已隔离`)
+        delete entries[key]
+        continue
+      }
+      stripWrongTypedOptionalFields(bucket, key, entry, optionalStringFields[bucket], warnings)
+    }
+  }
+}
+
+/** RFC 7230 token（与 Rust is_mime_token 同域）：MIME 类型的单个组成部分。 */
+function isMimeToken(s: string): boolean {
+  return /^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/.test(s)
+}
+
+/** 规范 MIME（§7.1，与 Rust is_canonical_mime 同域）：恰好两个 token 以 / 分隔；
+ * 调用方先完成大小写/空白规范化。 */
+function isCanonicalMime(s: string): boolean {
+  const parts = s.split('/')
+  return parts.length === 2 && isMimeToken(parts[0]) && isMimeToken(parts[1])
+}
+
+/** relPath 词法校验（§7.1，与 Rust is_valid_asset_rel_path 同域）：纯相对路径，
+ * 首段固定 assets、组件不含空段/`.`/`..`——解析目标必须位于项目资产子目录内
+ * （空串经首段检查一并拒绝）。 */
+function isLexicalAssetRelPath(p: string): boolean {
+  if (p.includes('\\') || p.startsWith('/') || p !== p.trim()) return false
+  const comps = p.split('/')
+  return (
+    comps[0] === 'assets' &&
+    comps.length >= 2 &&
+    comps.slice(1).every((c) => c !== '' && c !== '.' && c !== '..')
+  )
+}
+
+/** 严格 ISO 8601（与 Rust 保存边界 is_valid_iso8601 同域）：
+ * `YYYY-MM-DDTHH:MM:SS[.fff](Z|±HH:MM)`，含字段取值范围与闰年规则——
+ * Date.parse 的宽松超集（如 "2026-08-01"）不放行，否则下一次保存被
+ * Rust 边界整份拒绝。 */
+function isStrictIso8601(s: string): boolean {
+  const m =
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-]\d{2}:\d{2})$/.exec(s)
+  if (!m) return false
+  const year = Number(m[1])
+  const month = Number(m[2])
+  const day = Number(m[3])
+  if (month < 1 || month > 12) return false
+  if (Number(m[4]) > 23 || Number(m[5]) > 59 || Number(m[6]) > 59) return false
+  const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0
+  const daysInMonth = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1]
+  if (day < 1 || day > daysInMonth) return false
+  if (m[7] !== 'Z') {
+    const offset = m[7].slice(1).split(':')
+    if (Number(offset[0]) > 23 || Number(offset[1]) > 59) return false
+  }
+  return true
+}
+
+/** 单条资产条目的逐字段形状校验（§11.3）：返回隔离原因；null 表示通过。
+ * MIME 的合法性按已规范化（trim + 小写）后的值判定。 */
+function assetIsolationReason(entry: Record<string, unknown>): string | null {
+  if (typeof entry.relPath !== 'string' || !isLexicalAssetRelPath(entry.relPath)) {
+    return 'relPath 缺失、非字符串或越出资产子目录'
+  }
+  if (typeof entry.mime !== 'string' || !isCanonicalMime(entry.mime.trim().toLowerCase())) {
+    return 'mime 缺失或非规范形式'
+  }
+  if (entry.source !== 'upload' && entry.source !== 'generated') {
+    return 'source 非法'
+  }
+  if (typeof entry.createdAt !== 'string' || !isStrictIso8601(entry.createdAt)) {
+    return 'createdAt 不是严格 ISO 8601 时间戳'
+  }
+  return null
+}
+
+/** assets.byId 完整 AssetRef 形状校验（§11.3，Rust 保存边界 §10.5 的加载侧
+ * 对等）：记录键为权威 id——内嵌 id 缺失或漂移以键改写；relPath 词法、规范
+ * MIME（合法大小写/首尾空白规范化后保留）、source 枚举、严格 ISO 8601
+ * createdAt 任一非法即从活动索引隔离并警告——脏条目若原样进会话，下一次
+ * 保存被 Rust 边界整份拒绝、用户编辑无法持久化；被隔离条目的引用按
+ * §8.2.3 悬空展示。真实路径包含判定归 Rust load_project（§7.1 分层执行）。 */
+function normalizeAssetRecords(
+  byId: Record<string, Record<string, unknown>>,
+  warnings: string[],
+): void {
+  for (const [key, entry] of Object.entries(byId)) {
+    if (entry.id !== key) {
+      warnings.push(`资产 ${key} 的内嵌 id 缺失或与记录键不一致，已以记录键为准改写`)
+      entry.id = key
+    }
+    const reason = assetIsolationReason(entry)
+    if (reason) {
+      warnings.push(`资产 ${key} 的 ${reason}，已隔离`)
+      delete byId[key]
+      continue
+    }
+    const mime = (entry.mime as string).trim().toLowerCase()
+    if (mime !== entry.mime) {
+      warnings.push(`资产 ${key} 的 mime 已规范化为 ${mime}`)
+      entry.mime = mime
+    }
+  }
+}
+
 /** 节点 spec 必填列表（§4.2）：缺失/非数组可确定性置空，异型成员移除；
  * 指向被清空选项的连线由孤儿边规则处理。 */
 function normalizeRequiredList(
@@ -435,7 +592,10 @@ function normalizeContainers(
 
   // 成员过滤 + 嵌套容器修复
   const settings = normalizeSettingsBuckets(settingsRaw, warnings)
+  normalizeEntityShapes(settings, warnings)
   const byId = plainObjectEntries(assetsRaw.byId, 'assets.byId', warnings)
+  // plainObjectEntries 已过滤为普通对象成员
+  normalizeAssetRecords(byId as Record<string, Record<string, unknown>>, warnings)
   const titlesRaw = containerOf(raw.episodeTitles, 'episodeTitles 非普通键值对象，已重置为空 Record')
   const nodes: StoryNode[] = []
   for (const member of nodesRaw) {
@@ -543,6 +703,7 @@ function collectDanglingRefWarnings(
 /** 孤儿边判定（§11.3）：端点节点缺失；branch 边绑定的选项已不存在；
  * attach 边句柄非字面量 shots（无法确定性修复）；attach 边端点类型不合法
  * （必须 scene → shot）；剧情流边端点为 shot（§4.2 分镜卡不参与横向剧情流）
+ * 或 source 为 branch（§5 端口归属反向约束——branch 无匿名输出端口）
  * 同论。句柄可剥离的矛盾形态已在 stripAlienHandles 阶段处理，不在此隔离。 */
 function isOrphanEdge(e: StoryEdge, nodesById: Map<string, StoryNode>): boolean {
   const src = nodesById.get(e.source)
@@ -554,6 +715,8 @@ function isOrphanEdge(e: StoryEdge, nodesById: Map<string, StoryNode>): boolean 
   }
   // 剧情流端点约束：分镜卡不参与横向剧情流（§4.2）
   if (src.type === 'shot' || dst.type === 'shot') return true
+  // §5 端口归属反向约束：branch 无匿名输出端口，不能引出 sequence 边
+  if (e.data.kind === 'sequence' && src.type === 'branch') return true
   if (e.data.kind !== 'branch') return false
   if (src.type !== 'branch') return true
   const optionId = branchOptionIdOf(e.sourceHandle)
@@ -665,9 +828,25 @@ function isolateExtraAttachHosts(edges: StoryEdge[], warnings: string[]): StoryE
   return kept
 }
 
+/** 逻辑重复边隔离（§11.3）：同 source/target/sourceHandle 的边保留文档序首条，
+ * 其余按孤儿边隔离并警告——并行重复边会被 React Flow 重叠渲染，
+ * 图遍历与统计也把同一关系重复计数。 */
+function isolateDuplicateEdges(edges: StoryEdge[], warnings: string[]): StoryEdge[] {
+  const seen = new Set<string>()
+  return edges.filter((e) => {
+    const key = `${e.source}\u0000${e.target}\u0000${e.sourceHandle ?? ''}`
+    if (seen.has(key)) {
+      warnings.push(`已隔离重复边 ${e.id}：与既有边同 source/target/sourceHandle（逻辑重复）`)
+      return false
+    }
+    seen.add(key)
+    return true
+  })
+}
+
 /** 归一化（§11.1 第 2 步容器校验 → 第 3 步重复节点 id 重发 → 句柄剥离 →
- * §11.3 孤儿边隔离 → 第 3 步成环/attach 宿主唯一隔离 → §11.2 选中态重置 →
- * §11.4 悬空引用标记）。 */
+ * §11.3 孤儿边隔离 → 第 3 步成环/attach 宿主唯一/逻辑重复边隔离 →
+ * §11.2 选中态重置 → §11.4 悬空引用标记）。 */
 function normalizeDocument(
   raw: Record<string, unknown>,
   env: NormalizeEnv,
@@ -676,16 +855,19 @@ function normalizeDocument(
   const shaped = normalizeContainers(raw, env, warnings)
   const activeNodes = reissueDuplicateNodeIds(shaped.graph.nodes, warnings)
   const nodesById = new Map(activeNodes.map((n) => [n.id, n]))
-  const edges = isolateExtraAttachHosts(
-    isolateCycleEdges(
-      shaped.graph.edges
-        .map((e) => stripAlienHandles(e, warnings))
-        .filter((e): e is StoryEdge => e !== null)
-        .filter((e) => {
-          const orphan = isOrphanEdge(e, nodesById)
-          if (orphan) warnings.push(`已隔离孤儿边 ${e.id}：端点节点或绑定选项不存在`)
-          return !orphan
-        }),
+  const edges = isolateDuplicateEdges(
+    isolateExtraAttachHosts(
+      isolateCycleEdges(
+        shaped.graph.edges
+          .map((e) => stripAlienHandles(e, warnings))
+          .filter((e): e is StoryEdge => e !== null)
+          .filter((e) => {
+            const orphan = isOrphanEdge(e, nodesById)
+            if (orphan) warnings.push(`已隔离孤儿边 ${e.id}：端点节点缺失、绑定选项不存在或端口归属不合法`)
+            return !orphan
+          }),
+        warnings,
+      ),
       warnings,
     ),
     warnings,

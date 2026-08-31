@@ -303,14 +303,14 @@ describe('parseProject（ProjectDocument → 会话文档，§11 归一化）', 
     const edgeIds = round.content.edges.map((e) => e.id)
     // sequence 边携带任意 sourceHandle：端口匿名唯一，剥离不改变连接语义，保留并警告
     expect(edgeIds).toContain('e-bad1')
-    expect(edgeIds).toContain('e-bad3')
     expect(round.content.edges.find((e) => e.id === 'e-bad1')!.sourceHandle).toBeUndefined()
-    expect(round.content.edges.find((e) => e.id === 'e-bad3')!.sourceHandle).toBeUndefined()
     // attach 句柄必须是字面量 shots：非 shots 无法确定性修复，隔离
     expect(edgeIds).not.toContain('e-bad2')
     expect(round.warnings.some((w) => w.includes('e-bad1'))).toBe(true)
     expect(round.warnings.some((w) => w.includes('e-bad2'))).toBe(true)
-    expect(round.warnings.some((w) => w.includes('e-bad3'))).toBe(true)
+    // e-bad3 剥离句柄后与 e-bad1 同为 (s1→b1, 匿名端口)：逻辑重复，保留文档序首条
+    expect(edgeIds).not.toContain('e-bad3')
+    expect(round.warnings.some((w) => w.includes('e-bad3') && w.includes('重复'))).toBe(true)
     // 合法边不受影响
     expect(round.content.edges.some((e) => e.id === 'e3' && e.sourceHandle === 'shots')).toBe(true)
   })
@@ -891,5 +891,127 @@ describe('归一化：§11.1 第 3 步 id 重发 / 成环 / attach 宿主唯一'
     expect(edgeIds).toContain('e3') // 文档序首条保留
     expect(edgeIds).not.toContain('e-attach2')
     expect(round.warnings.some((w) => w.includes('e-attach2') && w.includes('宿主'))).toBe(true)
+  })
+
+  it('sequence 边 source 为 branch 节点：按孤儿边隔离并警告（§5 端口归属反向约束）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    doc.graph.edges.push({
+      id: 'e-seq-from-branch',
+      source: 'br1', // branch 无匿名输出端口，不能引出 sequence 边
+      target: 'd1',
+      data: { kind: 'sequence' },
+    } as unknown as ProjectDocument['graph']['edges'][number])
+    const round = parseProject(doc)
+    expect(round.content.edges.map((e) => e.id)).not.toContain('e-seq-from-branch')
+    expect(round.warnings.some((w) => w.includes('e-seq-from-branch'))).toBe(true)
+    // branch 经选项端口引出的 branch 边不受影响
+    expect(round.content.edges.map((e) => e.id)).toContain('e2')
+  })
+
+  it('同 source/target/sourceHandle 的逻辑重复边：保留文档序首条，其余隔离并警告（§11.3）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    doc.graph.edges.push(
+      { id: 'e-dup-seq', source: 's1', target: 'd1', data: { kind: 'sequence' } },
+      { id: 'e-dup-opt', source: 'br1', target: 'd1', sourceHandle: 'option-opt-2', data: { kind: 'branch' } },
+    ) as unknown as ProjectDocument['graph']['edges'][number][]
+    const round = parseProject(doc)
+    const edgeIds = round.content.edges.map((e) => e.id)
+    expect(edgeIds).toContain('e1') // 文档序首条 sequence 保留
+    expect(edgeIds).toContain('e2') // 文档序首条 branch（option-opt-2）保留
+    expect(edgeIds).not.toContain('e-dup-seq')
+    expect(edgeIds).not.toContain('e-dup-opt')
+    expect(round.warnings.some((w) => w.includes('e-dup-seq') && w.includes('重复'))).toBe(true)
+    expect(round.warnings.some((w) => w.includes('e-dup-opt') && w.includes('重复'))).toBe(true)
+  })
+})
+
+describe('归一化：设定集实体形状校验（§11.3，与 §9.3 upsert 边界同域）', () => {
+  it('name 非字符串/空白或角色缺 gradient：条目从桶中隔离并警告（头像渲染 trim 不再崩溃）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
+      settings: Record<string, Record<string, unknown>>
+    }
+    doc.settings.characters['ch-bad'] = { id: 'ch-bad', name: null, gradient: 'g' }
+    doc.settings.characters['ch-blank'] = { id: 'ch-blank', name: '   ', gradient: 'g' }
+    doc.settings.characters['ch-nog'] = { id: 'ch-nog', name: '无渐变' }
+    doc.settings.locations['loc-bad'] = { id: 'loc-bad', name: 42 }
+    const round = parseProject(doc)
+    expect(round.content.settings.characters.map((c) => c.id)).toEqual(['ch-1'])
+    expect(round.content.settings.locations.map((l) => l.id)).toEqual(['loc-1'])
+    expect(round.warnings.some((w) => w.includes('ch-bad'))).toBe(true)
+    expect(round.warnings.some((w) => w.includes('ch-blank'))).toBe(true)
+    expect(round.warnings.some((w) => w.includes('ch-nog'))).toBe(true)
+    expect(round.warnings.some((w) => w.includes('loc-bad'))).toBe(true)
+    // 被隔离条目的既有引用按 §8.2.3 悬空标记，不清除 id
+    const scene = round.content.nodes.find((n) => n.id === 's1')!.data as { characterIds: string[] }
+    expect(scene.characterIds).toEqual(['ch-1'])
+  })
+
+  it('可选字段（bio/note/description/avatarAssetId）类型错误：剥离该字段并警告，条目保留', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
+      settings: Record<string, Record<string, Record<string, unknown>>>
+    }
+    doc.settings.characters['ch-1'].bio = 7
+    doc.settings.characters['ch-1'].avatarAssetId = { nope: true }
+    doc.settings.locations['loc-1'].note = []
+    doc.settings.props['pr-1'] = { id: 'pr-1', name: '怀表', description: 42 }
+    const round = parseProject(doc)
+    expect(round.content.settings.characters[0]).toEqual({ id: 'ch-1', name: '林晚', gradient: 'g-lin' })
+    expect(round.content.settings.locations[0]).toEqual({ id: 'loc-1', name: '天台' })
+    expect(round.content.settings.props?.[0]).toEqual({ id: 'pr-1', name: '怀表' })
+    expect(round.warnings.length).toBeGreaterThan(0)
+  })
+})
+
+describe('归一化：assets.byId 完整 AssetRef 形状校验（§11.3，Rust 保存边界的加载侧对等）', () => {
+  const goodAsset = {
+    id: 'a-1',
+    relPath: 'assets/lin.png',
+    mime: 'image/png',
+    source: 'upload',
+    createdAt: '2026-08-01T00:00:00.000Z',
+  }
+
+  it('内嵌 id 缺失或与记录键漂移：以记录键为准改写并警告（条目保留）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
+      assets: { byId: Record<string, Record<string, unknown>> }
+    }
+    doc.assets.byId['a-1'] = { ...goodAsset, id: 'a-other' }
+    const noId: Record<string, unknown> = { ...goodAsset, relPath: 'assets/two.png' }
+    delete noId.id
+    doc.assets.byId['a-2'] = noId
+    const round = parseProject(doc)
+    expect(round.content.assets?.byId['a-1']?.id).toBe('a-1')
+    expect(round.content.assets?.byId['a-2']?.id).toBe('a-2')
+    expect(round.warnings.some((w) => w.includes('a-other') || w.includes('a-1'))).toBe(true)
+    // 合法条目原样透传
+    const again = serializeProject(round.content, 'p-1', NOW)
+    expect(again.assets.byId['a-1'].relPath).toBe('assets/lin.png')
+  })
+
+  it('relPath 越界 / source 非法 / createdAt 非严格 ISO / mime 无法规范化 / 空条目：隔离并警告（下次保存不再整份被拒）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
+      assets: { byId: Record<string, Record<string, unknown>> }
+    }
+    doc.assets.byId['a-path'] = { ...goodAsset, id: 'a-path', relPath: 'assets/../secret' }
+    doc.assets.byId['a-src'] = { ...goodAsset, id: 'a-src', source: 'unknown' }
+    doc.assets.byId['a-time'] = { ...goodAsset, id: 'a-time', createdAt: '2026-08-01' }
+    doc.assets.byId['a-mime'] = { ...goodAsset, id: 'a-mime', mime: 'image' }
+    doc.assets.byId['a-empty'] = {}
+    const round = parseProject(doc)
+    expect(round.content.assets).toEqual({ byId: {} })
+    for (const key of ['a-path', 'a-src', 'a-time', 'a-mime', 'a-empty']) {
+      expect(round.warnings.some((w) => w.includes(key))).toBe(true)
+    }
+  })
+
+  it('合法大小写/首尾空白的 mime：规范化后保留并警告（时区形式不同的合法时间戳保留）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
+      assets: { byId: Record<string, Record<string, unknown>> }
+    }
+    doc.assets.byId['a-1'] = { ...goodAsset, mime: ' IMAGE/PNG ' }
+    doc.assets.byId['a-2'] = { ...goodAsset, id: 'a-2', relPath: 'assets/a.wav', mime: 'audio/wav', createdAt: '2026-08-01T08:00:00+08:00' }
+    const round = parseProject(doc)
+    expect(round.content.assets?.byId['a-1']?.mime).toBe('image/png')
+    expect(round.content.assets?.byId['a-2']?.createdAt).toBe('2026-08-01T08:00:00+08:00')
   })
 })

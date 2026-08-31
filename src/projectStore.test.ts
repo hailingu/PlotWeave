@@ -64,7 +64,7 @@ describe('projectStore 内存门面（浏览器回退）', () => {
       nodes: [],
       edges: [],
       settings: { characters: [], locations: [] },
-      assets: { byId: { 'a-1': { id: 'a-1', relPath: 'assets/x.png', mime: 'image/png', source: 'upload', createdAt: '' } } },
+      assets: { byId: { 'a-1': { id: 'a-1', relPath: 'assets/x.png', mime: 'image/png', source: 'upload', createdAt: '2026-01-01T00:00:00.000Z' } } },
     })
     const copy = await projectStore.duplicate(meta.id)
     const copyDoc = await projectStore.load(copy.id)
