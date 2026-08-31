@@ -429,8 +429,8 @@ describe('parseProject（ProjectDocument → 会话文档，§11 归一化）', 
       graph: {
         nodes: [
           { id: 'br1', type: 'branch', position: { x: 0, y: 0 }, data: { prompt: '去哪', options: [{ id: 'opt-a', label: '左' }] } },
-          { id: 's1', type: 'scene', position: { x: 0, y: 0 }, data: { name: '场一', sceneNo: 1 } },
-          { id: 's2', type: 'scene', position: { x: 0, y: 0 }, data: { name: '场二', sceneNo: 2 } },
+          { id: 's1', type: 'scene', position: { x: 0, y: 0 }, data: { name: '场一', sceneNo: 1, interior: true, synopsis: '' } },
+          { id: 's2', type: 'scene', position: { x: 0, y: 0 }, data: { name: '场二', sceneNo: 2, interior: true, synopsis: '' } },
           { id: 'sh1', type: 'shot', position: { x: 0, y: 0 }, data: { shotNo: 1, size: '特写', picture: '', prompt: '', refs: [] } },
         ],
         edges: [
@@ -476,8 +476,8 @@ describe('parseProject（ProjectDocument → 会话文档，§11 归一化）', 
               ],
             },
           },
-          { id: 's1', type: 'scene', position: { x: 0, y: 0 }, data: { name: '场一', sceneNo: 1 } },
-          { id: 's2', type: 'scene', position: { x: 0, y: 0 }, data: { name: '场二', sceneNo: 2 } },
+          { id: 's1', type: 'scene', position: { x: 0, y: 0 }, data: { name: '场一', sceneNo: 1, interior: true, synopsis: '' } },
+          { id: 's2', type: 'scene', position: { x: 0, y: 0 }, data: { name: '场二', sceneNo: 2, interior: true, synopsis: '' } },
         ],
         edges: [
           { id: 'e1', source: 'br1', target: 's1', sourceHandle: 'option-1', type: 'branch', data: { optionLabel: '右' } },
@@ -923,6 +923,24 @@ describe('归一化：§11.1 第 3 步 id 重发 / 成环 / attach 宿主唯一'
     expect(round.warnings.some((w) => w.includes('e-dup-seq') && w.includes('重复'))).toBe(true)
     expect(round.warnings.some((w) => w.includes('e-dup-opt') && w.includes('重复'))).toBe(true)
   })
+
+  it('重复边 id：保留文档序首条原 id，后续同 id 边重发新 id 并警告（§11.1 第 3 步）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    doc.graph.edges.push({
+      id: 'e1', // 与首条 sequence 边撞 id，但端点不同（非逻辑重复）
+      source: 'b1',
+      target: 'd1',
+      data: { kind: 'sequence' },
+    } as unknown as ProjectDocument['graph']['edges'][number])
+    const round = parseProject(doc)
+    const withE1 = round.content.edges.filter((e) => e.id === 'e1')
+    expect(withE1).toHaveLength(1)
+    expect(withE1[0].source).toBe('s1') // 文档序首条保留原 id
+    // 后续同 id 边以新 id 存活：React Flow 身份唯一，选中/删除不再歧义
+    const reissued = round.content.edges.find((e) => e.source === 'b1')!
+    expect(reissued.id).not.toBe('e1')
+    expect(round.warnings.some((w) => w.includes('重复') && w.includes('e1'))).toBe(true)
+  })
 })
 
 describe('归一化：设定集实体形状校验（§11.3，与 §9.3 upsert 边界同域）', () => {
@@ -1000,6 +1018,199 @@ describe('归一化：对白行判别与必填字段（§4.2 DialogueLine，§11
     expect(round.warnings.some((w) => w.includes('d1') && w.includes('spec.lines'))).toBe(true)
     // 合法行的 speaker 引用照常解析，不误报悬空
     expect(round.warnings.some((w) => w.includes('不存在的角色 ch-1'))).toBe(false)
+  })
+})
+
+describe('归一化：节点判别联合形状校验（§4.1/§11.1 第 3 步，§9.3 create_node 的加载侧对等）', () => {
+  const specOf = (doc: ProjectDocument, id: string) =>
+    (doc.graph.nodes.find((n) => n.id === id)!.data as unknown as { spec: Record<string, unknown> }).spec
+  const metaOf = (doc: ProjectDocument, id: string) =>
+    (doc.graph.nodes.find((n) => n.id === id)!.data as unknown as { meta: Record<string, unknown> }).meta
+
+  it('spec 必填标量异型（beat.tone 为对象）：节点隔离并警告——渲染 React 子节点的崩溃源', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    specOf(doc, 'b1').tone = { broken: true }
+    const round = parseProject(doc)
+    expect(round.content.nodes.map((n) => n.id)).not.toContain('b1')
+    expect(round.warnings.some((w) => w.includes('b1') && w.includes('tone'))).toBe(true)
+  })
+
+  it('spec 必填标量缺失（synopsis/prompt/size）与未知节点类型：隔离并警告，关联边随孤儿规则隔离', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    delete specOf(doc, 's1').synopsis
+    delete specOf(doc, 'br1').prompt
+    delete specOf(doc, 'sh1').size
+    ;(doc.graph.nodes.find((n) => n.id === 'd1')! as { type: string }).type = 'montage'
+    const round = parseProject(doc)
+    expect(round.content.nodes.map((n) => n.id)).toEqual(['b1'])
+    // 指向已隔离节点的边不残留
+    expect(round.content.edges).toEqual([])
+    expect(round.warnings.some((w) => w.includes('s1') && w.includes('synopsis'))).toBe(true)
+    expect(round.warnings.some((w) => w.includes('br1') && w.includes('prompt'))).toBe(true)
+    expect(round.warnings.some((w) => w.includes('sh1') && w.includes('size'))).toBe(true)
+    expect(round.warnings.some((w) => w.includes('d1') && w.includes('类型'))).toBe(true)
+  })
+
+  it('名称型节点缺必填 meta.label：隔离并警告（§4.1 LabeledMeta）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    delete metaOf(doc, 'b1').label
+    const round = parseProject(doc)
+    expect(round.content.nodes.map((n) => n.id)).not.toContain('b1')
+    expect(round.warnings.some((w) => w.includes('b1') && w.includes('label'))).toBe(true)
+  })
+
+  it('never 禁写字段：branch/shot 的 meta.label 与 shot 的 meta.episodeNo 剥离并警告，节点保留', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    metaOf(doc, 'br1').label = '镜像标题'
+    metaOf(doc, 'sh1').label = '分镜名'
+    metaOf(doc, 'sh1').episodeNo = 3
+    const round = parseProject(doc)
+    const branch = round.content.nodes.find((n) => n.id === 'br1')!
+    const shot = round.content.nodes.find((n) => n.id === 'sh1')!
+    expect('name' in branch.data).toBe(false)
+    expect('name' in shot.data).toBe(false)
+    expect('episodeNo' in shot.data).toBe(false)
+    expect(round.warnings.filter((w) => w.includes('禁写'))).toHaveLength(3)
+  })
+
+  it('episodeNo 非法（零/负/小数/超安全整数）：删除字段回退未分集并警告，节点保留', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    metaOf(doc, 's1').episodeNo = 0
+    metaOf(doc, 'b1').episodeNo = -1
+    metaOf(doc, 'd1').episodeNo = 1.5
+    metaOf(doc, 'br1').episodeNo = 2 ** 53
+    const round = parseProject(doc)
+    for (const id of ['s1', 'b1', 'd1', 'br1']) {
+      expect('episodeNo' in round.content.nodes.find((n) => n.id === id)!.data).toBe(false)
+    }
+    expect(round.warnings.filter((w) => w.includes('episodeNo'))).toHaveLength(4)
+  })
+
+  it('非法 sceneNo/shotNo：按文档序顺位重发为正整数并警告（场号/镜号可在面板修正）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    specOf(doc, 's1').sceneNo = '3' // 非数值
+    specOf(doc, 'sh1').shotNo = 0 // 非正整数
+    const round = parseProject(doc)
+    const scene = round.content.nodes.find((n) => n.id === 's1')!.data as { sceneNo: number }
+    const shot = round.content.nodes.find((n) => n.id === 'sh1')!.data as { shotNo: number }
+    expect(scene.sceneNo).toBe(1)
+    expect(shot.shotNo).toBe(1)
+    expect(round.warnings.some((w) => w.includes('s1') && w.includes('sceneNo'))).toBe(true)
+    expect(round.warnings.some((w) => w.includes('sh1') && w.includes('shotNo'))).toBe(true)
+  })
+})
+
+describe('归一化：键控列表 id 非空且数组内唯一（§4.2/§11.1 第 3 步）', () => {
+  type RawOptionsDoc = {
+    graph: {
+      nodes: {
+        id: string
+        data: { spec: { options?: { id: string; label: string }[] } }
+      }[]
+      edges: Record<string, unknown>[]
+    }
+  }
+  const optionsOf = (doc: RawOptionsDoc, id: string) =>
+    doc.graph.nodes.find((n) => n.id === id)!.data.spec.options!
+
+  it('branch 选项重复 id：保留首见项、后续重发新 id；绑定既有选项的连线不改接', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as RawOptionsDoc
+    optionsOf(doc, 'br1').push({ id: 'opt-1', label: '重复项' })
+    const round = parseProject(doc)
+    const options = (round.content.nodes.find((n) => n.id === 'br1')!.data as {
+      options: { id: string; label: string }[]
+    }).options
+    expect(options).toHaveLength(3)
+    expect(new Set(options.map((o) => o.id)).size).toBe(3)
+    expect(options[0]).toEqual({ id: 'opt-1', label: '坦白' }) // 首见项保留
+    expect(options[2].label).toBe('重复项')
+    expect(options[2].id).not.toBe('opt-1')
+    // e2 绑定 opt-2 不受影响
+    expect(round.content.edges.find((e) => e.id === 'e2')!.sourceHandle).toBe('option-opt-2')
+    expect(round.warnings.some((w) => w.includes('br1') && w.includes('重复'))).toBe(true)
+  })
+
+  it('唯一空选项 id：重发新 id 并同步改写该 branch 引出边的 option- 句柄（连线保留）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as RawOptionsDoc
+    optionsOf(doc, 'br1').push({ id: '', label: '丙' })
+    doc.graph.edges.push({
+      id: 'e-empty',
+      source: 'br1',
+      target: 's1',
+      sourceHandle: 'option-', // 空 id 选项的句柄
+      data: { kind: 'branch' },
+    })
+    const round = parseProject(doc)
+    const third = (round.content.nodes.find((n) => n.id === 'br1')!.data as {
+      options: { id: string; label: string }[]
+    }).options.find((o) => o.label === '丙')!
+    expect(third.id).not.toBe('')
+    const edge = round.content.edges.find((e) => e.id === 'e-empty')!
+    expect(edge.sourceHandle).toBe(`option-${third.id}`)
+    expect(round.warnings.some((w) => w.includes('e-empty') && w.includes('改写'))).toBe(true)
+  })
+
+  it('同 branch 多个空选项 id：映射歧义不改写，指向空句柄的连线按孤儿边隔离', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as RawOptionsDoc
+    doc.graph.nodes.push({
+      id: 'br2',
+      type: 'branch',
+      layout: { position: { x: 0, y: 0 } },
+      ui: { selected: false, expanded: true },
+      data: {
+        spec: {
+          prompt: '选',
+          options: [
+            { id: '', label: '甲' },
+            { id: '', label: '乙' },
+          ],
+        },
+        meta: {},
+      },
+    } as unknown as RawOptionsDoc['graph']['nodes'][number])
+    doc.graph.edges.push({
+      id: 'e-amb',
+      source: 'br2',
+      target: 'd1',
+      sourceHandle: 'option-',
+      data: { kind: 'branch' },
+    })
+    const round = parseProject(doc)
+    expect(round.content.edges.map((e) => e.id)).not.toContain('e-amb')
+    expect(round.warnings.some((w) => w.includes('e-amb'))).toBe(true)
+    // 两个空 id 选项均已重发为唯一非空 id
+    const options = (round.content.nodes.find((n) => n.id === 'br2')!.data as {
+      options: { id: string }[]
+    }).options
+    expect(new Set(options.map((o) => o.id)).size).toBe(2)
+    expect(options.every((o) => o.id !== '')).toBe(true)
+  })
+
+  it('dialogue lines / shot refs 的重复与空 id：重发去歧（不被边引用，纯列表 key）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
+      graph: {
+        nodes: {
+          id: string
+          data: { spec: { lines?: Record<string, unknown>[]; refs?: Record<string, unknown>[] } }
+        }[]
+      }
+    }
+    const spec = (id: string) => doc.graph.nodes.find((n) => n.id === id)!.data.spec
+    spec('d1').lines!.push({ id: 'line-1', kind: 'line', text: '重复 id' }, { kind: 'action', text: '无 id' })
+    spec('sh1').refs!.push(
+      { id: 'ref-1', kind: 'character', label: '重复' },
+      { id: '', kind: 'location', label: '空 id' },
+    )
+    const round = parseProject(doc)
+    const lines = (round.content.nodes.find((n) => n.id === 'd1')!.data as { lines: { id: string }[] })
+      .lines
+    const refs = (round.content.nodes.find((n) => n.id === 'sh1')!.data as { refs: { id: string }[] })
+      .refs
+    expect(new Set(lines.map((l) => l.id)).size).toBe(3)
+    expect(lines.every((l) => l.id !== '')).toBe(true)
+    expect(new Set(refs.map((r) => r.id)).size).toBe(3)
+    expect(refs.every((r) => r.id !== '')).toBe(true)
+    expect(round.warnings.filter((w) => w.includes('重发')).length).toBeGreaterThanOrEqual(4)
   })
 })
 

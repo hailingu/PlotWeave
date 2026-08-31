@@ -16,6 +16,7 @@ import type { ProjectContent } from './content'
 import {
   CURRENT_SCHEMA_VERSION,
   type BeatSpec,
+  type BranchEdge,
   type BranchSpec,
   type DialogueSpec,
   type LabeledMeta,
@@ -432,6 +433,124 @@ function isDialogueLineShape(item: unknown): boolean {
   return typeof item.text === 'string'
 }
 
+const NODE_TYPES = new Set(['scene', 'beat', 'dialogue', 'branch', 'shot'])
+
+/** 名称型节点（§4.1 LabeledMeta）：meta.label 必填。 */
+const LABELED_TYPES = new Set(['scene', 'beat', 'dialogue'])
+
+/** spec 类型相关必填标量（§4.2 判别联合）：编号 sceneNo/shotNo 可顺位重发、
+ * 必填列表可确定性置空，均不在此判定；此处只收无法机械修复的标量。 */
+const REQUIRED_SCALARS: Record<string, Record<string, 'string' | 'boolean'>> = {
+  scene: { interior: 'boolean', synopsis: 'string' },
+  beat: { tone: 'string' },
+  branch: { prompt: 'string' },
+  shot: { size: 'string', picture: 'string', prompt: 'string' },
+}
+
+/** never 禁写 meta 字段剥离（§4.1 DerivedMeta/ShotMeta）：branch/shot 不落
+ * label 镜像；分镜卡随宿主场景分集，无独立 episodeNo。 */
+function stripForbiddenMeta(
+  type: string,
+  meta: Record<string, unknown>,
+  nid: string,
+  warnings: string[],
+): void {
+  if ((type === 'branch' || type === 'shot') && 'label' in meta) {
+    warnings.push(`节点 ${nid} 携带 never 禁写的 meta.label，已剥离`)
+    delete meta.label
+  }
+  if (type === 'shot' && 'episodeNo' in meta) {
+    warnings.push(`分镜卡 ${nid} 携带 never 禁写的 meta.episodeNo（随宿主场景分集），已剥离`)
+    delete meta.episodeNo
+  }
+}
+
+/** meta.episodeNo 值域（§4.1/§9.3 同域：安全整数且 > 0）：非法删除该字段
+ * 回退未分集，不阻断加载。 */
+function normalizeEpisodeNo(meta: Record<string, unknown>, nid: string, warnings: string[]): void {
+  if (!('episodeNo' in meta)) return
+  const ep = meta.episodeNo
+  if (typeof ep !== 'number' || !Number.isSafeInteger(ep) || ep <= 0) {
+    warnings.push(`节点 ${nid} 的 meta.episodeNo 非法，已删除（回退未分集）`)
+    delete meta.episodeNo
+  }
+}
+
+/** 节点判别联合形状校验（§11.1 第 3 步节点校验细则——§4.1 联合在加载路径的
+ * 对等兜底，JSON 边界已擦除 TS 类型）：never 禁写字段剥离、episodeNo 非法
+ * 删除为就地修复；未知类型、spec 必填标量缺失/异型（形态错位，如 beat 的
+ * tone 为对象——交付画布后被当 React 子节点渲染而崩溃）、名称型节点缺必填
+ * meta.label 等无法机械修复的形态返回隔离原因；null 表示通过。 */
+function nodeDiscriminantError(
+  member: Record<string, unknown>,
+  nid: string,
+  warnings: string[],
+): string | null {
+  const type = member.type
+  const data = member.data as { spec: Record<string, unknown>; meta: Record<string, unknown> }
+  if (typeof type !== 'string' || !NODE_TYPES.has(type)) {
+    return `未知节点类型 ${String(type)}`
+  }
+  stripForbiddenMeta(type, data.meta, nid, warnings)
+  if (LABELED_TYPES.has(type) && typeof data.meta.label !== 'string') {
+    return '缺必填 meta.label'
+  }
+  normalizeEpisodeNo(data.meta, nid, warnings)
+  for (const [field, kind] of Object.entries(REQUIRED_SCALARS[type] ?? {})) {
+    if (typeof data.spec[field] !== kind) return `spec.${field} 缺失或类型错误（spec 形态错位）`
+  }
+  return null
+}
+
+/** 键控列表成员 id 的非法原因（§8.1 共同值域：非空字符串）。 */
+function keyedIdIssue(id: unknown): string {
+  if (typeof id !== 'string') return '非字符串'
+  if (!id.trim()) return '缺失或空白'
+  return '重复'
+}
+
+const KEYED_LIST_PREFIX: Record<string, string> = { lines: 'line', options: 'opt', refs: 'ref' }
+
+/** 键控列表成员 id 修复（§11.1 第 3 步：id 非空且数组内唯一——重复 id 会令
+ * 删除/重排 reconcile 到错误项，重复选项 id 还让 removedOptionHandles 识别
+ * 失效、把既有连线静默改接到剩余同 id 选项）：缺失/非字符串/空白/重复 id
+ * 均重发本列表未占用的新 id（重复保留首见项）。返回 branch 选项的「空 id
+ * 原值 → 新 id」明确映射：同一空白原值在列表中仅出现一次时映射唯一，供
+ * 引出边 option- 句柄同步改写；多次出现即歧义不建映射，指向它的连线随
+ * 重发失效、按孤儿边隔离。 */
+function normalizeKeyedListIds(
+  list: unknown[],
+  listKey: string,
+  nid: string,
+  warnings: string[],
+): Map<string, string> {
+  const blankCounts = new Map<string, number>()
+  for (const item of list) {
+    const id = (item as Record<string, unknown>).id
+    if (typeof id === 'string' && !id.trim()) {
+      blankCounts.set(id, (blankCounts.get(id) ?? 0) + 1)
+    }
+  }
+  const seen = new Set<string>()
+  const remap = new Map<string, string>()
+  for (const item of list) {
+    const rec = item as Record<string, unknown>
+    const id = rec.id
+    if (typeof id === 'string' && id.trim() && !seen.has(id)) {
+      seen.add(id)
+      continue
+    }
+    let fresh = uid(KEYED_LIST_PREFIX[listKey])
+    while (seen.has(fresh)) fresh = uid(KEYED_LIST_PREFIX[listKey])
+    seen.add(fresh)
+    // 非字符串 id 不为它建句柄映射：字符串句柄不得猜测为某个非字符串选项 id
+    if (typeof id === 'string' && !id.trim() && blankCounts.get(id) === 1) remap.set(id, fresh)
+    warnings.push(`节点 ${nid} 的 ${listKey} 成员 id ${keyedIdIssue(id)}，已重发新 id ${fresh}`)
+    rec.id = fresh
+  }
+  return remap
+}
+
 /** 必填列表成员形状判别（§4.2）：characterIds 为字符串引用；lines 另需
  * DialogueLine 判别值与必填字段校验；其余列表成员至少须为普通对象。 */
 function listMemberShapeOk(listKey: string, item: unknown): boolean {
@@ -464,9 +583,39 @@ function normalizeRequiredList(
   if (kept.length !== list.length) spec[listKey] = kept
 }
 
+/** 键控列表 id 修复的分发（§11.1 第 3 步）：dialogue.lines / branch.options /
+ * shot.refs 三处键控列表逐表修复；branch 空选项 id 的明确句柄映射记入
+ * optionIdRemap（以节点 id 为键，首个记录生效），供归一化末段的引出边
+ * option- 句柄改写。 */
+function repairKeyedListIds(
+  member: Record<string, unknown>,
+  spec: Record<string, unknown>,
+  nid: string,
+  warnings: string[],
+  optionIdRemap: Map<string, Map<string, string>>,
+): void {
+  const listKey = REQUIRED_LISTS[member.type as string]
+  if (listKey !== 'lines' && listKey !== 'options' && listKey !== 'refs') return
+  const remap = normalizeKeyedListIds(spec[listKey] as unknown[], listKey, nid, warnings)
+  if (
+    listKey === 'options' &&
+    remap.size > 0 &&
+    typeof member.id === 'string' &&
+    member.id &&
+    !optionIdRemap.has(member.id)
+  ) {
+    optionIdRemap.set(member.id, remap)
+  }
+}
+
 /** 单个节点的成员形状校验与机械修复；嵌套容器（data/spec/meta/layout +
- * position 坐标）无法机械修复时隔离该节点（返回 null）。 */
-function normalizeNode(member: unknown, warnings: string[]): StoryNode | null {
+ * position 坐标）或判别联合形状（§4.1/§4.2）无法机械修复时隔离该节点
+ * （返回 null）。 */
+function normalizeNode(
+  member: unknown,
+  warnings: string[],
+  optionIdRemap: Map<string, Map<string, string>>,
+): StoryNode | null {
   if (!isPlainObject(member)) {
     warnings.push('graph.nodes 中的非普通对象成员已隔离')
     return null
@@ -489,6 +638,12 @@ function normalizeNode(member: unknown, warnings: string[]): StoryNode | null {
     return null
   }
   normalizeRequiredList(data.spec, member.type, nid, warnings)
+  const shapeError = nodeDiscriminantError(member, nid, warnings)
+  if (shapeError) {
+    warnings.push(`节点 ${nid} 的判别形状非法（${shapeError}），已隔离`)
+    return null
+  }
+  repairKeyedListIds(member, data.spec, nid, warnings, optionIdRemap)
   const ui = member.ui
   if (!isPlainObject(ui) || typeof ui.selected !== 'boolean' || typeof ui.expanded !== 'boolean') {
     warnings.push(`节点 ${nid} 的 ui 缺失或异型，已重置为默认值`)
@@ -590,16 +745,41 @@ function normalizeViewportShape(v: unknown, warnings: string[]): Viewport | unde
   return undefined
 }
 
+/** 场景/分镜编号顺位重发（§4.2 sceneNo/shotNo 值域：正的安全整数）：编号
+ * 非法（非数、非整数、≤ 0、越界）时按文档序取本类型内最小未占用正整数
+ * 并警告——编号仅作展示序号，重发不触碰任何引用；合法编号保留，包括重复。 */
+function renumberSeqFields(nodes: StoryNode[], warnings: string[]): void {
+  const used: Record<'scene' | 'shot', Set<number>> = { scene: new Set(), shot: new Set() }
+  for (const n of nodes) {
+    if (n.type !== 'scene' && n.type !== 'shot') continue
+    const key = n.type === 'scene' ? 'sceneNo' : 'shotNo'
+    const spec = n.data.spec as unknown as Record<string, unknown>
+    const cur = spec[key]
+    if (typeof cur === 'number' && Number.isSafeInteger(cur) && cur > 0) {
+      used[n.type].add(cur)
+      continue
+    }
+    let next = 1
+    while (used[n.type].has(next)) next += 1
+    used[n.type].add(next)
+    spec[key] = next
+    warnings.push(`节点 ${n.id} 的 spec.${key} 非法（须为正的安全整数），已按文档序顺位重发为 ${next}`)
+  }
+}
+
 /** §11.1 第 2 步容器级形状校验（先于一切逐项规则；父容器先于子容器）：
  * 异型父/子容器重置为可遍历空容器，非普通对象成员过滤，节点嵌套容器
- * （data/spec/meta/layout + position 坐标）无法机械修复时隔离该节点，
- * 项目必填元数据补齐（受信 id 覆盖、名称回退链、时间戳修复），节点 ui
- * 默认值补齐。修复而非拒绝：均记录警告，单个脏字段不阻断加载（§8.2.4）。 */
+ * （data/spec/meta/layout + position 坐标）与判别联合形状（§4.1/§4.2）
+ * 无法机械修复时隔离该节点，项目必填元数据补齐（受信 id 覆盖、名称回退链、
+ * 时间戳修复），节点 ui 默认值补齐，键控列表成员 id 重发与编号顺位重发。
+ * 修复而非拒绝：均记录警告，单个脏字段不阻断加载（§8.2.4）。
+ * 返回的 optionIdRemap 携带 branch 空选项 id 的明确句柄映射（节点 id →
+ * 原空 id → 新 id），供归一化末段的引出边 option- 句柄同步改写。 */
 function normalizeContainers(
   raw: Record<string, unknown>,
   env: NormalizeEnv,
   warnings: string[],
-): ProjectDocument {
+): { doc: ProjectDocument; optionIdRemap: Map<string, Map<string, string>> } {
   // 父/子容器（异型重置为可遍历空容器；缺失视为空，不警告）
   const containerOf = (v: unknown, warning: string): Record<string, unknown> => {
     if (isPlainObject(v)) return v
@@ -625,11 +805,13 @@ function normalizeContainers(
   // plainObjectEntries 已过滤为普通对象成员
   normalizeAssetRecords(byId as Record<string, Record<string, unknown>>, warnings)
   const titlesRaw = containerOf(raw.episodeTitles, 'episodeTitles 非普通键值对象，已重置为空 Record')
+  const optionIdRemap = new Map<string, Map<string, string>>()
   const nodes: StoryNode[] = []
   for (const member of nodesRaw) {
-    const node = normalizeNode(member, warnings)
+    const node = normalizeNode(member, warnings, optionIdRemap)
     if (node) nodes.push(node)
   }
+  renumberSeqFields(nodes, warnings)
   const edges: StoryEdge[] = []
   for (const member of edgesRaw) {
     const edge = normalizeEdge(member, warnings)
@@ -640,7 +822,7 @@ function normalizeContainers(
   const meta = normalizeProjectMeta(projectRaw, env, warnings)
   const viewport = normalizeViewportShape(graphRaw.viewport, warnings)
 
-  return {
+  const doc: ProjectDocument = {
     schemaVersion: CURRENT_SCHEMA_VERSION,
     project: {
       id: meta.id,
@@ -654,6 +836,7 @@ function normalizeContainers(
     episodeTitles: titlesRaw as unknown as ProjectDocument['episodeTitles'],
     assets: { byId: byId as unknown as Record<string, ProjectDocument['assets']['byId'][string]> },
   }
+  return { doc, optionIdRemap }
 }
 
 /** 场景节点的悬空角色/地点引用警告（§11.4）：只记警告，不清除 id。
@@ -752,6 +935,31 @@ function isOrphanEdge(e: StoryEdge, nodesById: Map<string, StoryNode>): boolean 
   return optionId === undefined || !options.some((o) => o.id === optionId)
 }
 
+/** branch 边类型谓词：嵌套 data.kind 不能直接窄化联合，显式谓词供句柄改写使用。 */
+function isBranchEdge(e: StoryEdge): e is BranchEdge {
+  return e.data.kind === 'branch'
+}
+
+/** 空选项 id 重发后的引出边句柄改写（§11.1 第 3 步）：branch 的空选项 id
+ * 在键控列表修复中重发且映射唯一（同一空白原值仅出现一次）时，option- 句柄
+ * 指向原空 id 的边同步改写为新 id，避免改接丢失；无明确映射（歧义多次出现）
+ * 的句柄不改写，随选项 id 重发失效后按孤儿边隔离。 */
+function rewriteRemappedOptionHandles(
+  e: StoryEdge,
+  optionIdRemap: Map<string, Map<string, string>>,
+  warnings: string[],
+): StoryEdge {
+  // option- 句柄只在 branch 边上有意义；attach/sequence 的异型句柄由
+  // stripAlienHandles / 孤儿边规则处理，不在此改写
+  if (!isBranchEdge(e)) return e
+  const handle = e.sourceHandle
+  if (typeof handle !== 'string' || !handle.startsWith('option-')) return e
+  const mapped = optionIdRemap.get(e.source)?.get(handle.slice('option-'.length))
+  if (mapped === undefined) return e
+  warnings.push(`边 ${e.id} 的句柄 ${handle} 指向已重发的空选项 id，已改写为 option-${mapped}`)
+  return { ...e, sourceHandle: `option-${mapped}` }
+}
+
 /** 已知 kind 边的确定性句柄剥离（§5）：匿名端口唯一，targetHandle 与
  * sequence 的 sourceHandle 无法绑定真实端口——剥离不改变连接语义，
  * 记录警告而不隔离。未知/非字符串 kind 无法判定变体，直接隔离并警告
@@ -789,6 +997,26 @@ function reissueDuplicateNodeIds(nodes: StoryNode[], warnings: string[]): StoryN
     warnings.push(`节点 id ${n.id} 重复：保留文档序首个，后续节点已重发新 id ${fresh}（引用仍解析到首见节点）`)
     seen.add(fresh)
     return { ...n, id: fresh }
+  })
+}
+
+/** 重复/非法边 id 修复（§11.1 第 3 步，与节点 id 同款规则）：保留文档序
+ * 首条，后续同 id 边重发本域未占用的新 id 并警告；缺失/非字符串/空 id
+ * 同款重发。边 id 不被任何数据引用（端点/句柄只指向节点与选项），重发
+ * 无副作用；身份唯一后 React Flow 的选中/删除不再歧义。 */
+function reissueDuplicateEdgeIds(edges: StoryEdge[], warnings: string[]): StoryEdge[] {
+  const seen = new Set<string>()
+  return edges.map((e) => {
+    if (typeof e.id === 'string' && e.id && !seen.has(e.id)) {
+      seen.add(e.id)
+      return e
+    }
+    let fresh = uid('edge')
+    while (seen.has(fresh)) fresh = uid('edge')
+    seen.add(fresh)
+    const reason = typeof e.id === 'string' && e.id ? `边 id ${e.id} 重复` : '边 id 缺失或非法'
+    warnings.push(`${reason}：保留文档序首条原 id，后续边已重发新 id ${fresh}`)
+    return { ...e, id: fresh }
   })
 }
 
@@ -872,21 +1100,22 @@ function isolateDuplicateEdges(edges: StoryEdge[], warnings: string[]): StoryEdg
   })
 }
 
-/** 归一化（§11.1 第 2 步容器校验 → 第 3 步重复节点 id 重发 → 句柄剥离 →
- * §11.3 孤儿边隔离 → 第 3 步成环/attach 宿主唯一/逻辑重复边隔离 →
- * §11.2 选中态重置 → §11.4 悬空引用标记）。 */
+/** 归一化（§11.1 第 2 步容器校验 → 第 3 步重复节点/边 id 重发 → 空选项
+ * 句柄改写 → 句柄剥离 → §11.3 孤儿边隔离 → 第 3 步成环/attach 宿主唯一/
+ * 逻辑重复边隔离 → §11.2 选中态重置 → §11.4 悬空引用标记）。 */
 function normalizeDocument(
   raw: Record<string, unknown>,
   env: NormalizeEnv,
 ): { doc: ProjectDocument; warnings: string[] } {
   const warnings: string[] = []
-  const shaped = normalizeContainers(raw, env, warnings)
+  const { doc: shaped, optionIdRemap } = normalizeContainers(raw, env, warnings)
   const activeNodes = reissueDuplicateNodeIds(shaped.graph.nodes, warnings)
   const nodesById = new Map(activeNodes.map((n) => [n.id, n]))
   const edges = isolateDuplicateEdges(
     isolateExtraAttachHosts(
       isolateCycleEdges(
-        shaped.graph.edges
+        reissueDuplicateEdgeIds(shaped.graph.edges, warnings)
+          .map((e) => rewriteRemappedOptionHandles(e, optionIdRemap, warnings))
           .map((e) => stripAlienHandles(e, warnings))
           .filter((e): e is StoryEdge => e !== null)
           .filter((e) => {
