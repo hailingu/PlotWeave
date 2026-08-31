@@ -289,6 +289,124 @@ function stripWrongTypedOptionalFields(
   }
 }
 
+/** 键控桶空记录键修复（§11.1 第 3 步，记录键非空前置——先于各桶形状校验
+ * 与键 id 一致性改写）：空/空白键条目确定性重发本桶未占用的新键，值内 id
+ * 随键同步（键是引用解析的权威值）——空身份会与 upsert 边界冲突并留下无法
+ * 更新的实体/空 React key。返回「空键 → 新键」映射供同桶引用改写：JSON 键
+ * 唯一，同一空键串在每桶至多出现一次，映射恒明确。 */
+function reKeyBlankEntries(
+  record: Record<string, Record<string, unknown>>,
+  bucketLabel: string,
+  prefix: string,
+  warnings: string[],
+): Map<string, string> {
+  const remap = new Map<string, string>()
+  for (const key of Object.keys(record)) {
+    if (key.trim()) continue
+    let fresh = uid(prefix)
+    while (fresh in record) fresh = uid(prefix)
+    const entry = record[key]
+    delete record[key]
+    record[fresh] = entry
+    entry.id = fresh
+    remap.set(key, fresh)
+    warnings.push(`${bucketLabel} 存在空记录键，已重发新键 ${fresh}（值内 id 随键同步）`)
+  }
+  return remap
+}
+
+/** 单值引用改写：命中「空键 → 新键」映射则返回新 id 并警告，否则原样返回。 */
+function rewriteRef(
+  map: Map<string, string>,
+  value: unknown,
+  describe: string,
+  warnings: string[],
+): unknown {
+  if (typeof value !== 'string') return value
+  const mapped = map.get(value)
+  if (mapped === undefined) return value
+  warnings.push(`${describe} 指向已重发的空记录键，已改写为新 id ${mapped}`)
+  return mapped
+}
+
+/** 各桶「空键 → 新键」映射集合：characters/locations 来自设定桶，
+ * assets 来自资产索引。 */
+interface BlankKeyRemaps {
+  characters: Map<string, string>
+  locations: Map<string, string>
+  assets: Map<string, string>
+}
+
+/** 场景节点的空键引用改写：characterIds 数组项与 locationId。 */
+function rewriteSceneBlankRefs(
+  nid: string,
+  spec: Record<string, unknown>,
+  remaps: BlankKeyRemaps,
+  warnings: string[],
+): void {
+  if (Array.isArray(spec.characterIds)) {
+    spec.characterIds = (spec.characterIds as unknown[]).map((cid, i) =>
+      rewriteRef(remaps.characters, cid, `节点 ${nid} 的 characterIds[${i}]`, warnings),
+    )
+  }
+  if ('locationId' in spec) {
+    spec.locationId = rewriteRef(remaps.locations, spec.locationId, `节点 ${nid} 的 locationId`, warnings)
+  }
+}
+
+/** 对白节点的空键引用改写：各行 speaker 指向 characters 桶。 */
+function rewriteDialogueBlankRefs(
+  nid: string,
+  spec: Record<string, unknown>,
+  characters: Map<string, string>,
+  warnings: string[],
+): void {
+  if (!Array.isArray(spec.lines)) return
+  for (const [i, line] of (spec.lines as unknown[]).entries()) {
+    if (!isPlainObject(line) || !('speaker' in line)) continue
+    line.speaker = rewriteRef(characters, line.speaker, `节点 ${nid} 的对白行 ${i} speaker`, warnings)
+  }
+}
+
+/** 分镜节点的空键引用改写：targetId 按类别解析到设定集或资产索引（与
+ * §11.4 悬空判定的解析口径一致）。 */
+function rewriteShotBlankRefs(
+  nid: string,
+  spec: Record<string, unknown>,
+  remaps: BlankKeyRemaps,
+  warnings: string[],
+): void {
+  if (!Array.isArray(spec.refs)) return
+  for (const ref of spec.refs as unknown[]) {
+    if (!isPlainObject(ref) || !('targetId' in ref)) continue
+    let map = remaps.assets
+    if (ref.kind === 'character') map = remaps.characters
+    else if (ref.kind === 'location') map = remaps.locations
+    ref.targetId = rewriteRef(map, ref.targetId, `节点 ${nid} 的分镜引用 ${String(ref.id)}`, warnings)
+  }
+}
+
+/** 空键重发后的同桶引用改写（§11.1 第 3 步）：指向空串的引用字段（场景
+ * characterIds/locationId、对白 speaker、分镜 targetId 按类别、角色
+ * avatarAssetId）随重发改写到新 id 而非变悬空——脏写引用侧同样可出现空串。 */
+function rewriteBlankKeyReferences(
+  nodes: StoryNode[],
+  settings: Record<string, Record<string, unknown>>,
+  remaps: BlankKeyRemaps,
+  warnings: string[],
+): void {
+  for (const n of nodes) {
+    const spec = n.data.spec as unknown as Record<string, unknown>
+    if (n.type === 'scene') rewriteSceneBlankRefs(n.id, spec, remaps, warnings)
+    if (n.type === 'dialogue') rewriteDialogueBlankRefs(n.id, spec, remaps.characters, warnings)
+    if (n.type === 'shot') rewriteShotBlankRefs(n.id, spec, remaps, warnings)
+  }
+  for (const [key, ch] of Object.entries(settings.characters) as [string, Record<string, unknown>][]) {
+    if (!('avatarAssetId' in ch)) continue
+    ch.avatarAssetId = rewriteRef(remaps.assets, ch.avatarAssetId, `角色 ${key} 的 avatarAssetId`, warnings)
+  }
+}
+
 /** 设定集实体形状校验（§11.3）：必填字段无法机械修复的条目从桶中隔离并警告
  * （否则 name: null 之类的值交付画布后，头像渲染的 trim 在运行期崩溃），
  * 既有引用按 §8.2.3 悬空标记；记录键为权威 id，内嵌 id 缺失或漂移以键改写
@@ -771,7 +889,8 @@ function renumberSeqFields(nodes: StoryNode[], warnings: string[]): void {
  * 异型父/子容器重置为可遍历空容器，非普通对象成员过滤，节点嵌套容器
  * （data/spec/meta/layout + position 坐标）与判别联合形状（§4.1/§4.2）
  * 无法机械修复时隔离该节点，项目必填元数据补齐（受信 id 覆盖、名称回退链、
- * 时间戳修复），节点 ui 默认值补齐，键控列表成员 id 重发与编号顺位重发。
+ * 时间戳修复），节点 ui 默认值补齐，键控桶空记录键重发与同桶引用改写、
+ * 键控列表成员 id 重发与编号顺位重发。
  * 修复而非拒绝：均记录警告，单个脏字段不阻断加载（§8.2.4）。
  * 返回的 optionIdRemap 携带 branch 空选项 id 的明确句柄映射（节点 id →
  * 原空 id → 新 id），供归一化末段的引出边 option- 句柄同步改写。 */
@@ -798,10 +917,26 @@ function normalizeContainers(
   const nodesRaw = arrayOf(graphRaw.nodes, 'graph.nodes 非数组，已重置为空数组')
   const edgesRaw = arrayOf(graphRaw.edges, 'graph.edges 非数组，已重置为空数组')
 
-  // 成员过滤 + 嵌套容器修复
+  // 成员过滤 + 嵌套容器修复；空记录键重发先于形状校验与键 id 一致性改写
+  // （§11.1 第 3 步记录键非空前置），引用改写待节点就位后统一执行
   const settings = normalizeSettingsBuckets(settingsRaw, warnings)
-  normalizeEntityShapes(settings, warnings)
   const byId = plainObjectEntries(assetsRaw.byId, 'assets.byId', warnings)
+  // 桶成员已经 plainObjectEntries 过滤为普通对象
+  const entityBucket = (bucket: string) =>
+    settings[bucket] as Record<string, Record<string, unknown>>
+  const blankRemaps: BlankKeyRemaps = {
+    characters: reKeyBlankEntries(entityBucket('characters'), 'settings.characters', 'ch', warnings),
+    locations: reKeyBlankEntries(entityBucket('locations'), 'settings.locations', 'loc', warnings),
+    assets: reKeyBlankEntries(
+      byId as Record<string, Record<string, unknown>>,
+      'assets.byId',
+      'asset',
+      warnings,
+    ),
+  }
+  // props 桶无节点引用面，仅重发空键保证身份可用
+  reKeyBlankEntries(entityBucket('props'), 'settings.props', 'prop', warnings)
+  normalizeEntityShapes(settings, warnings)
   // plainObjectEntries 已过滤为普通对象成员
   normalizeAssetRecords(byId as Record<string, Record<string, unknown>>, warnings)
   const titlesRaw = containerOf(raw.episodeTitles, 'episodeTitles 非普通键值对象，已重置为空 Record')
@@ -812,6 +947,7 @@ function normalizeContainers(
     if (node) nodes.push(node)
   }
   renumberSeqFields(nodes, warnings)
+  rewriteBlankKeyReferences(nodes, settings, blankRemaps, warnings)
   const edges: StoryEdge[] = []
   for (const member of edgesRaw) {
     const edge = normalizeEdge(member, warnings)
@@ -940,6 +1076,30 @@ function isBranchEdge(e: StoryEdge): e is BranchEdge {
   return e.data.kind === 'branch'
 }
 
+/** 空节点 id 重发后的边端点改写（§11.1 第 3 步）：空字符串可被脏写的
+ * source/target 指向，唯一空 id 节点的映射明确、端点同步改写为新 id、
+ * 连线保留；无映射（多个空 id 节点歧义，或端点值非空 id 串）时保持原值，
+ * 随孤儿边规则隔离。 */
+function rewriteBlankNodeEndpoints(
+  e: StoryEdge,
+  nodeIdRemap: Map<string, string>,
+  warnings: string[],
+): StoryEdge {
+  const source = nodeIdRemap.get(e.source)
+  const target = nodeIdRemap.get(e.target)
+  if (source === undefined && target === undefined) return e
+  const out = { ...e }
+  if (source !== undefined) {
+    out.source = source
+    warnings.push(`边 ${e.id} 的 source 指向已重发的空节点 id，已改写为 ${source}`)
+  }
+  if (target !== undefined) {
+    out.target = target
+    warnings.push(`边 ${e.id} 的 target 指向已重发的空节点 id，已改写为 ${target}`)
+  }
+  return out
+}
+
 /** 空选项 id 重发后的引出边句柄改写（§11.1 第 3 步）：branch 的空选项 id
  * 在键控列表修复中重发且映射唯一（同一空白原值仅出现一次）时，option- 句柄
  * 指向原空 id 的边同步改写为新 id，避免改接丢失；无明确映射（歧义多次出现）
@@ -982,22 +1142,50 @@ function stripAlienHandles(e: StoryEdge, warnings: string[]): StoryEdge | null {
   return out
 }
 
-/** 重复节点 id 修复（§11.1 第 3 步）：保留文档序首个，后续同 id 节点重发
- * 本域未占用的新 id 并警告——按 id 的引用（边端点等）本就解析到首见项，
- * 重发节点成为无连线孤儿节点（内容保留，由用户处置），不产生改接。 */
-function reissueDuplicateNodeIds(nodes: StoryNode[], warnings: string[]): StoryNode[] {
+/** 节点 id 的非法原因（§8.1 共同值域：非空字符串）。 */
+function nodeIdIssue(id: unknown): string {
+  if (typeof id !== 'string') return '缺失或非字符串'
+  if (!id.trim()) return '缺失或空白'
+  return '重复'
+}
+
+/** 非法/重复节点 id 修复（§11.1 第 3 步）：id 缺失、非字符串或空白一律重发
+ * 本域未占用的新 id——非法身份交付画布会令 React Flow 渲染/选中/删除歧义；
+ * 合法 id 重复保留文档序首个、后续重发（按 id 的引用本就解析到首见项，重发
+ * 节点成无连线孤儿由用户处置，不产生改接）。空 id 重发时建立「空 id → 新 id」
+ * 映射供边端点改写——空字符串可被脏写的 source/target 指向，同一空 id 串仅
+ * 一个节点持有时映射唯一、连线保留；多个节点同空 id 映射歧义则不建映射，
+ * 指向空串的边随孤儿边规则隔离。 */
+function reissueDuplicateNodeIds(
+  nodes: StoryNode[],
+  warnings: string[],
+): { nodes: StoryNode[]; nodeIdRemap: Map<string, string> } {
+  const blankCounts = new Map<string, number>()
+  for (const n of nodes) {
+    if (typeof n.id === 'string' && !n.id.trim()) {
+      blankCounts.set(n.id, (blankCounts.get(n.id) ?? 0) + 1)
+    }
+  }
   const seen = new Set<string>()
-  return nodes.map((n) => {
-    if (typeof n.id !== 'string' || !n.id || !seen.has(n.id)) {
-      if (typeof n.id === 'string' && n.id) seen.add(n.id)
+  const nodeIdRemap = new Map<string, string>()
+  const out = nodes.map((n) => {
+    if (typeof n.id === 'string' && n.id.trim() && !seen.has(n.id)) {
+      seen.add(n.id)
       return n
     }
     let fresh = uid('node')
     while (seen.has(fresh)) fresh = uid('node')
-    warnings.push(`节点 id ${n.id} 重复：保留文档序首个，后续节点已重发新 id ${fresh}（引用仍解析到首见节点）`)
     seen.add(fresh)
+    if (typeof n.id === 'string' && !n.id.trim() && blankCounts.get(n.id) === 1) {
+      nodeIdRemap.set(n.id, fresh)
+    }
+    const shown = typeof n.id === 'string' && n.id.trim() ? `${n.id} ` : ''
+    warnings.push(
+      `节点 id ${shown}${nodeIdIssue(n.id)}：已重发新 id ${fresh}（合法 id 重复保留文档序首个，引用仍解析到首见节点）`,
+    )
     return { ...n, id: fresh }
   })
+  return { nodes: out, nodeIdRemap }
 }
 
 /** 重复/非法边 id 修复（§11.1 第 3 步，与节点 id 同款规则）：保留文档序
@@ -1100,21 +1288,30 @@ function isolateDuplicateEdges(edges: StoryEdge[], warnings: string[]): StoryEdg
   })
 }
 
-/** 归一化（§11.1 第 2 步容器校验 → 第 3 步重复节点/边 id 重发 → 空选项
- * 句柄改写 → 句柄剥离 → §11.3 孤儿边隔离 → 第 3 步成环/attach 宿主唯一/
- * 逻辑重复边隔离 → §11.2 选中态重置 → §11.4 悬空引用标记）。 */
+/** 归一化（§11.1 第 2 步容器校验 → 第 3 步非法/重复节点与边 id 重发 →
+ * 空端点/空选项句柄改写 → 句柄剥离 → §11.3 孤儿边隔离 → 第 3 步成环/
+ * attach 宿主唯一/逻辑重复边隔离 → §11.2 选中态重置 → §11.4 悬空引用标记）。 */
 function normalizeDocument(
   raw: Record<string, unknown>,
   env: NormalizeEnv,
 ): { doc: ProjectDocument; warnings: string[] } {
   const warnings: string[] = []
   const { doc: shaped, optionIdRemap } = normalizeContainers(raw, env, warnings)
-  const activeNodes = reissueDuplicateNodeIds(shaped.graph.nodes, warnings)
+  const { nodes: activeNodes, nodeIdRemap } = reissueDuplicateNodeIds(shaped.graph.nodes, warnings)
+  // 空节点 id 重发后，branch 空选项句柄映射表的键同步迁移到新节点 id
+  for (const [oldId, newId] of nodeIdRemap) {
+    const handles = optionIdRemap.get(oldId)
+    if (handles) {
+      optionIdRemap.delete(oldId)
+      optionIdRemap.set(newId, handles)
+    }
+  }
   const nodesById = new Map(activeNodes.map((n) => [n.id, n]))
   const edges = isolateDuplicateEdges(
     isolateExtraAttachHosts(
       isolateCycleEdges(
         reissueDuplicateEdgeIds(shaped.graph.edges, warnings)
+          .map((e) => rewriteBlankNodeEndpoints(e, nodeIdRemap, warnings))
           .map((e) => rewriteRemappedOptionHandles(e, optionIdRemap, warnings))
           .map((e) => stripAlienHandles(e, warnings))
           .filter((e): e is StoryEdge => e !== null)

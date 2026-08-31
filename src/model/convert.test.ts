@@ -1267,3 +1267,133 @@ describe('归一化：assets.byId 完整 AssetRef 形状校验（§11.3，Rust �
     expect(round.content.assets?.byId['a-2']?.createdAt).toBe('2026-08-01T08:00:00+08:00')
   })
 })
+
+describe('归一化：非法节点 id 重发与空端点改写（§8.1/§11.1 第 3 步）', () => {
+  /** 可改写的脏 v1 文档视图。 */
+  type DirtyDoc = {
+    graph: { nodes: Record<string, unknown>[]; edges: Record<string, unknown>[] }
+  }
+
+  it('缺失/非字符串/空白节点 id：一律重发本域未占用新 id 并警告（不交付非法身份给画布）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as DirtyDoc
+    const beat = doc.graph.nodes.find((n) => n.id === 'b1')!
+    delete beat.id
+    const branch = doc.graph.nodes.find((n) => n.id === 'br1')!
+    branch.id = ''
+    const shot = doc.graph.nodes.find((n) => n.id === 'sh1')!
+    shot.id = '   '
+    const round = parseProject(doc)
+    const ids = round.content.nodes.map((n) => n.id)
+    expect(ids).toHaveLength(5)
+    expect(ids.every((id) => id.trim().length > 0)).toBe(true)
+    expect(new Set(ids).size).toBe(5)
+    expect(ids).toContain('s1')
+    expect(ids).toContain('d1')
+    expect(round.warnings.filter((w) => w.includes('重发')).length).toBeGreaterThanOrEqual(3)
+  })
+
+  it('唯一空 id 节点：建立「空 id → 新 id」映射，指向空串的边端点同步改写、连线保留', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as DirtyDoc
+    const beat = doc.graph.nodes.find((n) => n.id === 'b1')!
+    beat.id = ''
+    doc.graph.edges.push({ id: 'e-b', source: '', target: 'd1', data: { kind: 'sequence' } })
+    const round = parseProject(doc)
+    const newBeatId = round.content.nodes.find(
+      (n) => (n.data as { tone?: string }).tone === '压抑',
+    )!.id
+    expect(newBeatId.trim().length).toBeGreaterThan(0)
+    const eb = round.content.edges.find((e) => e.id === 'e-b')!
+    expect(eb.source).toBe(newBeatId)
+    expect(round.warnings.some((w) => w.includes('e-b') && w.includes('改写'))).toBe(true)
+  })
+
+  it('多个空 id 节点：映射歧义不建映射，指向空串的边按孤儿边隔离', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as DirtyDoc
+    doc.graph.nodes.find((n) => n.id === 'b1')!.id = ''
+    doc.graph.nodes.find((n) => n.id === 'br1')!.id = ''
+    doc.graph.edges.push({ id: 'e-x', source: '', target: 'd1', data: { kind: 'sequence' } })
+    const round = parseProject(doc)
+    const ids = round.content.nodes.map((n) => n.id)
+    expect(ids.every((id) => id.trim().length > 0)).toBe(true)
+    expect(new Set(ids).size).toBe(5)
+    expect(round.content.edges.map((e) => e.id)).not.toContain('e-x')
+    expect(round.warnings.some((w) => w.includes('e-x'))).toBe(true)
+  })
+})
+
+describe('归一化：键控桶空记录键重发与同桶引用改写（§11.1 第 3 步）', () => {
+  /** 可改写的脏 v1 文档视图（设定桶 + 资产索引 + 节点）。 */
+  type DirtyDoc = {
+    graph: { nodes: Record<string, unknown>[] }
+    settings: Record<string, Record<string, Record<string, unknown>>>
+    assets: { byId: Record<string, Record<string, unknown>> }
+  }
+
+  it('characters 空键：确定性重发新键（值内 id 随键同步），场景 characterIds 与对白 speaker 的空串引用随重发改写', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as DirtyDoc
+    doc.settings.characters[''] = { id: '', name: '幽灵', gradient: 'g-ghost' }
+    const scene = doc.graph.nodes.find((n) => n.id === 's1')!
+    ;(scene.data as { spec: { characterIds: string[] } }).spec.characterIds.push('')
+    const dlg = doc.graph.nodes.find((n) => n.id === 'd1')!
+    ;(dlg.data as { spec: { lines: { speaker?: string }[] } }).spec.lines[0].speaker = ''
+    const round = parseProject(doc)
+    const ghost = round.content.settings.characters.find((c) => c.name === '幽灵')!
+    expect(ghost.id.trim().length).toBeGreaterThan(0)
+    const sceneData = round.content.nodes.find((n) => n.id === 's1')!.data as {
+      characterIds: string[]
+    }
+    expect(sceneData.characterIds).toContain(ghost.id)
+    const lines = (round.content.nodes.find((n) => n.id === 'd1')!.data as {
+      lines: { speaker?: string }[]
+    }).lines
+    expect(lines[0].speaker).toBe(ghost.id)
+    // 改写后引用解析到新实体，不误报悬空
+    expect(round.warnings.some((w) => w.includes('不存在的角色'))).toBe(false)
+    expect(round.warnings.some((w) => w.includes('重发'))).toBe(true)
+    expect(round.warnings.some((w) => w.includes('改写'))).toBe(true)
+  })
+
+  it('locations 空白键：重发新键，场景 locationId 的空串引用随重发改写', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as DirtyDoc
+    doc.settings.locations['  '] = { id: '  ', name: '废墟' }
+    const scene = doc.graph.nodes.find((n) => n.id === 's1')!
+    ;(scene.data as { spec: { locationId?: string } }).spec.locationId = '  '
+    const round = parseProject(doc)
+    const ruin = round.content.settings.locations.find((l) => l.name === '废墟')!
+    expect(ruin.id.trim().length).toBeGreaterThan(0)
+    const sceneData = round.content.nodes.find((n) => n.id === 's1')!.data as {
+      locationId?: string
+    }
+    expect(sceneData.locationId).toBe(ruin.id)
+    expect(round.warnings.some((w) => w.includes('不存在的地点'))).toBe(false)
+    expect(round.warnings.some((w) => w.includes('重发'))).toBe(true)
+  })
+
+  it('assets.byId 空键：重发新键，角色 avatarAssetId 与分镜音频引用的空串 targetId 随重发改写', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as DirtyDoc
+    doc.assets.byId[''] = {
+      id: '',
+      relPath: 'assets/ghost.wav',
+      mime: 'audio/wav',
+      source: 'upload',
+      createdAt: '2026-08-01T00:00:00.000Z',
+    }
+    doc.settings.characters['ch-1'].avatarAssetId = ''
+    const shot = doc.graph.nodes.find((n) => n.id === 'sh1')!
+    ;(shot.data as { spec: { refs: unknown[] } }).spec.refs = [
+      { id: 'ref-1', kind: 'audio', targetId: '' },
+    ]
+    const round = parseProject(doc)
+    const byId = round.content.assets?.byId ?? {}
+    const assetId = Object.keys(byId).find((k) => byId[k].relPath === 'assets/ghost.wav')!
+    expect(assetId.trim().length).toBeGreaterThan(0)
+    const ch = round.content.settings.characters.find((c) => c.id === 'ch-1')!
+    expect((ch as { avatarAssetId?: string }).avatarAssetId).toBe(assetId)
+    const refs = (round.content.nodes.find((n) => n.id === 'sh1')!.data as {
+      refs: { targetId?: string }[]
+    }).refs
+    expect(refs[0].targetId).toBe(assetId)
+    expect(round.warnings.some((w) => w.includes('不存在的目标'))).toBe(false)
+    expect(round.warnings.some((w) => w.includes('重发'))).toBe(true)
+  })
+})
