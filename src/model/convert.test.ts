@@ -809,8 +809,8 @@ describe('归一化：§11.1 第 3 步 id 重发 / 成环 / attach 宿主唯一'
     doc.graph.nodes.push(dup) // 文档序末尾再放一份 d1
     const round = parseProject(doc)
     const ids = round.content.nodes.map((n) => n.id)
-    expect(ids.length).toBe(6)
-    expect(ids.filter((i) => i === 'd1').length).toBe(1)
+    expect(ids).toHaveLength(6)
+    expect(ids.filter((i) => i === 'd1')).toHaveLength(1)
     expect(ids[2]).toBe('d1') // 首见节点保留原 id 与位置
     const reissued = ids[5]
     expect(reissued).not.toBe('d1')
