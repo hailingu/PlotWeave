@@ -27,6 +27,7 @@ import {
   type Viewport,
 } from './document'
 import { migrateProjectDocument, normalizeEpisodeTitles, rewriteIndexOptionHandles } from './legacy'
+import { uid } from '../uid'
 
 /** 节点 → 落盘形态：四分区拆分；name/episodeNo 上移 meta，其余字段进 spec。
  * meta 按 type 判别（§4.1）：名称型节点 label 必填（运行态保证有 name，
@@ -582,24 +583,114 @@ function stripAlienHandles(e: StoryEdge, warnings: string[]): StoryEdge | null {
   return out
 }
 
-/** 归一化（§11.1 第 2 步容器校验 → 句柄剥离 → §11.3 孤儿边隔离 →
- * §11.2 选中态重置 → §11.4 悬空引用标记）。 */
+/** 重复节点 id 修复（§11.1 第 3 步）：保留文档序首个，后续同 id 节点重发
+ * 本域未占用的新 id 并警告——按 id 的引用（边端点等）本就解析到首见项，
+ * 重发节点成为无连线孤儿节点（内容保留，由用户处置），不产生改接。 */
+function reissueDuplicateNodeIds(nodes: StoryNode[], warnings: string[]): StoryNode[] {
+  const seen = new Set<string>()
+  return nodes.map((n) => {
+    if (typeof n.id !== 'string' || !n.id || !seen.has(n.id)) {
+      if (typeof n.id === 'string' && n.id) seen.add(n.id)
+      return n
+    }
+    let fresh = uid('node')
+    while (seen.has(fresh)) fresh = uid('node')
+    warnings.push(`节点 id ${n.id} 重复：保留文档序首个，后续节点已重发新 id ${fresh}（引用仍解析到首见节点）`)
+    seen.add(fresh)
+    return { ...n, id: fresh }
+  })
+}
+
+/** 已接受剧情流边中 from 是否可达 to（BFS 传递闭包，§4.3 DAG 不变量）。 */
+function flowReaches(adj: Map<string, string[]>, from: string, to: string): boolean {
+  const seen = new Set([from])
+  const queue = [from]
+  while (queue.length > 0) {
+    const cur = queue.pop() as string
+    for (const next of adj.get(cur) ?? []) {
+      if (next === to) return true
+      if (!seen.has(next)) {
+        seen.add(next)
+        queue.push(next)
+      }
+    }
+  }
+  return false
+}
+
+/** 剧情流成环隔离（§11.1 第 3 步）：候选边按文档序逐边重建剧情流图，
+ * 自环（source === target）与加入即闭合回路的 sequence/branch 边按孤儿边
+ * 隔离并警告；attach 垂直从属不参与环检测（§4.3）。 */
+function isolateCycleEdges(edges: StoryEdge[], warnings: string[]): StoryEdge[] {
+  const adj = new Map<string, string[]>()
+  const kept: StoryEdge[] = []
+  for (const e of edges) {
+    if (e.data.kind === 'attach') {
+      kept.push(e)
+      continue
+    }
+    if (e.source === e.target) {
+      warnings.push(`已隔离自环边 ${e.id}：source 与 target 相同`)
+      continue
+    }
+    if (flowReaches(adj, e.target, e.source)) {
+      warnings.push(`已隔离成环边 ${e.id}：加入后剧情流闭合回路（${e.target} 已可达 ${e.source}）`)
+      continue
+    }
+    const list = adj.get(e.source)
+    if (list) list.push(e.target)
+    else adj.set(e.source, [e.target])
+    kept.push(e)
+  }
+  return kept
+}
+
+/** attach 宿主唯一（§5/§11.1 第 3 步）：同一 shot 至多一条入向 attach 边
+ * （分集归属与下挂布局的唯一依据）——保留文档序首条，其余按孤儿边隔离并警告。 */
+function isolateExtraAttachHosts(edges: StoryEdge[], warnings: string[]): StoryEdge[] {
+  const hosted = new Set<string>()
+  const kept: StoryEdge[] = []
+  for (const e of edges) {
+    if (e.data.kind !== 'attach') {
+      kept.push(e)
+      continue
+    }
+    if (hosted.has(e.target)) {
+      warnings.push(`已隔离多余的 attach 边 ${e.id}：分镜 ${e.target} 已有宿主场景（宿主唯一）`)
+      continue
+    }
+    hosted.add(e.target)
+    kept.push(e)
+  }
+  return kept
+}
+
+/** 归一化（§11.1 第 2 步容器校验 → 第 3 步重复节点 id 重发 → 句柄剥离 →
+ * §11.3 孤儿边隔离 → 第 3 步成环/attach 宿主唯一隔离 → §11.2 选中态重置 →
+ * §11.4 悬空引用标记）。 */
 function normalizeDocument(
   raw: Record<string, unknown>,
   env: NormalizeEnv,
 ): { doc: ProjectDocument; warnings: string[] } {
   const warnings: string[] = []
   const shaped = normalizeContainers(raw, env, warnings)
-  const nodesById = new Map(shaped.graph.nodes.map((n) => [n.id, n]))
-  const edges = shaped.graph.edges
-    .map((e) => stripAlienHandles(e, warnings))
-    .filter((e): e is StoryEdge => e !== null)
-    .filter((e) => {
-      const orphan = isOrphanEdge(e, nodesById)
-      if (orphan) warnings.push(`已隔离孤儿边 ${e.id}：端点节点或绑定选项不存在`)
-      return !orphan
-    })
-  const nodes = shaped.graph.nodes.map((n) => {
+  const activeNodes = reissueDuplicateNodeIds(shaped.graph.nodes, warnings)
+  const nodesById = new Map(activeNodes.map((n) => [n.id, n]))
+  const edges = isolateExtraAttachHosts(
+    isolateCycleEdges(
+      shaped.graph.edges
+        .map((e) => stripAlienHandles(e, warnings))
+        .filter((e): e is StoryEdge => e !== null)
+        .filter((e) => {
+          const orphan = isOrphanEdge(e, nodesById)
+          if (orphan) warnings.push(`已隔离孤儿边 ${e.id}：端点节点或绑定选项不存在`)
+          return !orphan
+        }),
+      warnings,
+    ),
+    warnings,
+  )
+  const nodes = activeNodes.map((n) => {
     collectDanglingRefWarnings(n, shaped, warnings)
     return { ...n, ui: { ...n.ui, selected: false } }
   })

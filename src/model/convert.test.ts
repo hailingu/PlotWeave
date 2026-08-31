@@ -801,3 +801,95 @@ describe('边句柄规范（§5：匿名端口句柄必须省略）', () => {
     expect(round.warnings.some((w) => w.includes('e-unknown'))).toBe(true)
   })
 })
+
+describe('归一化：§11.1 第 3 步 id 重发 / 成环 / attach 宿主唯一', () => {
+  it('重复节点 id：保留文档序首个，后续重发本域未占用新 id（按 id 的引用仍解析到首见节点）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    const dup = structuredClone(doc.graph.nodes.find((n) => n.id === 'd1')!)
+    doc.graph.nodes.push(dup) // 文档序末尾再放一份 d1
+    const round = parseProject(doc)
+    const ids = round.content.nodes.map((n) => n.id)
+    expect(ids.length).toBe(6)
+    expect(ids.filter((i) => i === 'd1').length).toBe(1)
+    expect(ids[2]).toBe('d1') // 首见节点保留原 id 与位置
+    const reissued = ids[5]
+    expect(reissued).not.toBe('d1')
+    expect(new Set(ids).size).toBe(6) // 重发 id 不与任何既有 id 碰撞
+    // 重发节点内容保留（无连线孤儿，由用户处置）
+    const orphan = round.content.nodes[5].data as { name?: string; lines?: unknown[] }
+    expect(orphan.name).toBe('对白')
+    expect(orphan.lines).toHaveLength(1)
+    // 指向 d1 的边仍解析到首见节点，不产生改接
+    expect(round.content.edges.map((e) => e.id)).toContain('e1')
+    expect(round.warnings.some((w) => w.includes('重复') && w.includes('d1'))).toBe(true)
+  })
+
+  it('自环边（source === target）隔离并警告', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    doc.graph.edges.push({
+      id: 'e-self',
+      source: 'b1',
+      target: 'b1',
+      data: { kind: 'sequence' },
+    } as unknown as ProjectDocument['graph']['edges'][number])
+    const round = parseProject(doc)
+    expect(round.content.edges.map((e) => e.id)).not.toContain('e-self')
+    expect(round.warnings.some((w) => w.includes('e-self') && w.includes('自环'))).toBe(true)
+  })
+
+  it('成环边：按文档序重建剧情流图，加入即闭合回路的 sequence 边隔离', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    doc.graph.edges.push({
+      id: 'e-back',
+      source: 'd1',
+      target: 's1', // 与既有 e1（s1→d1）闭合回路
+      data: { kind: 'sequence' },
+    } as unknown as ProjectDocument['graph']['edges'][number])
+    const round = parseProject(doc)
+    const edgeIds = round.content.edges.map((e) => e.id)
+    expect(edgeIds).toContain('e1') // 文档序首条保留
+    expect(edgeIds).not.toContain('e-back')
+    expect(round.warnings.some((w) => w.includes('e-back') && w.includes('环'))).toBe(true)
+  })
+
+  it('成环边：branch 边同样参与环检测（传递闭包）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    // 既有 e2 = br1→d1（option-opt-2）；再加 d1→br1 即闭合 br1→d1→br1
+    doc.graph.edges.push({
+      id: 'e-cycle',
+      source: 'd1',
+      target: 'br1',
+      data: { kind: 'sequence' },
+    } as unknown as ProjectDocument['graph']['edges'][number])
+    const round = parseProject(doc)
+    const edgeIds = round.content.edges.map((e) => e.id)
+    expect(edgeIds).toContain('e2')
+    expect(edgeIds).not.toContain('e-cycle')
+    expect(round.warnings.some((w) => w.includes('e-cycle') && w.includes('环'))).toBe(true)
+  })
+
+  it('attach 边不参与环检测：scene↔shot 垂直从属照常保留', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    const round = parseProject(doc)
+    expect(round.content.edges.map((e) => e.id)).toContain('e3')
+  })
+
+  it('同一 shot 的多条入向 attach 边：保留文档序首条，其余按孤儿边隔离并警告', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    const secondScene = structuredClone(doc.graph.nodes.find((n) => n.id === 's1')!)
+    secondScene.id = 's2'
+    doc.graph.nodes.push(secondScene)
+    doc.graph.edges.push({
+      id: 'e-attach2',
+      source: 's2',
+      target: 'sh1', // sh1 已有 e3（s1→sh1）宿主
+      sourceHandle: 'shots',
+      data: { kind: 'attach' },
+    } as unknown as ProjectDocument['graph']['edges'][number])
+    const round = parseProject(doc)
+    const edgeIds = round.content.edges.map((e) => e.id)
+    expect(edgeIds).toContain('e3') // 文档序首条保留
+    expect(edgeIds).not.toContain('e-attach2')
+    expect(round.warnings.some((w) => w.includes('e-attach2') && w.includes('宿主'))).toBe(true)
+  })
+})
