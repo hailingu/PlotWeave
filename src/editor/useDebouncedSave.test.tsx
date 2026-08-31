@@ -118,6 +118,60 @@ describe('useDebouncedSave（防抖落盘 + 脏态卸载冲刷）', () => {
     expect((onSave.mock.calls[0][0] as ProjectContent).viewport).toEqual({ x: 500, y: 300, zoom: 0.8 })
   })
 
+  it('纯选择/运行态变化不置脏（§9.4：update_node_ui 不落盘、不刷新 updatedAt）', () => {
+    const onSave = vi.fn()
+    const { rerender, unmount } = renderHook(({ doc }) => useDebouncedSave(doc, onSave), {
+      initialProps: { doc: mkDoc() },
+    })
+    // React Flow 选中/拖拽过程帧只翻转会话态字段，节点数组随之换新引用
+    const base = mkDoc()
+    const sessionOnly: ProjectContent = {
+      ...base,
+      nodes: [
+        {
+          ...base.nodes[0],
+          selected: false,
+          dragging: true,
+          measured: { width: 200, height: 80 },
+        } as unknown as CanvasNode,
+      ],
+      edges: [{ id: 'e1', source: 'a', target: 'b', selected: false }],
+    }
+    act(() => {
+      rerender({ doc: sessionOnly })
+    })
+    act(() => {
+      vi.advanceTimersByTime(1000)
+    })
+    expect(onSave).not.toHaveBeenCalled()
+    // 卸载同样不冲刷（纯选择不刷新 updatedAt，不改变首页排序）
+    unmount()
+    expect(onSave).not.toHaveBeenCalled()
+  })
+
+  it('会话态变化之后的真实内容变化仍正常落盘', () => {
+    const onSave = vi.fn()
+    const { rerender } = renderHook(({ doc }) => useDebouncedSave(doc, onSave), {
+      initialProps: { doc: mkDoc() },
+    })
+    act(() => {
+      rerender({
+        doc: {
+          ...mkDoc(),
+          nodes: [{ ...mkDoc().nodes[0], selected: false } as unknown as CanvasNode],
+        },
+      })
+    })
+    act(() => {
+      rerender({ doc: mkDoc('真改动') })
+    })
+    act(() => {
+      vi.advanceTimersByTime(600)
+    })
+    expect(onSave).toHaveBeenCalledTimes(1)
+    expect((onSave.mock.calls[0][0] as ProjectContent).name).toBe('真改动')
+  })
+
   it('落盘后再卸载不重复冲刷（脏标记已清）', () => {
     const onSave = vi.fn()
     const { rerender, unmount } = renderHook(({ doc }) => useDebouncedSave(doc, onSave), {
