@@ -104,6 +104,7 @@
 > 六十五轮评审修订（2026-08-31）：§7.1/§9.2/§9.3/§10.5 为 `set_asset` 补 Rust 实路径预检与 `save_project` 全量复验，原始 JSON 调用不得绕过；§7.1/§7.2/§10.1/§10.5 将库资产删除改为持久化日志驱动的身份绑定隔离事务，禁止索引提交后按原文件名直接 unlink。
 > 六十六轮评审修订（2026-08-31）：§11.1 第 3 步空键/空白键重发的引用改写由「角色桶只改 speaker」扩为指向该桶的全部结构化引用——角色桶含 `speaker`/`SceneSpec.characterIds` 成员/`relatedIds` 中 character 项，地点桶含 `SceneSpec.locationId`/`relatedIds` 中 location 项，资产桶含 `avatarAssetId`/`ShotRef.assetId`，`relatedIds` 按 kind 对应桶改写、禁止跨命名空间；迁移链 ⑤ 的引用枚举同步补全，消除与同节「改写全部同桶引用」通则的矛盾。
 > 六十七轮评审修订（2026-08-31）：§10.5 `save_project` 补完整项目信封校验——`project.id` 无条件以受信路径参数覆盖，`project.name` 按 §9.3 项目名校验口径拒绝非法值、采用规范化值，原始 IPC 调用方不得绕过 rename_project/create_project 的名称规则持久化分裂身份；§7.2 库删除恢复协议补冲突期条目隔离——身份冲突未解决前对应 assetId 在规范化索引与内存投影中标为冲突不可用，媒体协议与 relPath 打开拒绝为其服务，不再把占用原路径的后来文件当作原资产展示。
+> 六十八轮评审修订（2026-08-31）：§9.1/§9.2/§9.4 区分「不进撤销栈」与「不持久化」两个维度——`transient` 收敛为手势过程帧语义，update_viewport 交互结束帧置脏随防抖落盘（§3 视口持久化契约）；§9.3/§9.4 补拖拽手势 inverse 捕获——正式 move_node 的逆操作取自手势开始时的原坐标，而非已被 transient 帧推进的 docBefore（否则 undo 只回到最后一个拖拽帧）；§10.5 `save_project` 信封校验扩为完整顶层形状——schemaVersion 严格等于当前支持版本，graph/settings 及其必需容器逐一判型，异型整次拒绝，杜绝落盘后由加载归一化清成空图的内容丢失。
 > 适用范围：画布文档模型、设定与资产模型、命令与撤销、本地存储体系、AI Agent 交互。
 > 明确不在范围内：用户体系、租户、余额/计费。PlotWeave 是单用户 BYOK 桌面工具；若未来出现此类需求，另起《服务端领域模型》文档。
 
@@ -523,7 +524,7 @@ interface AssetGroup {
 
 ### 9.1 命令结构
 
-单写者场景无需并发基线与路径级补丁。命令信封固定为六个字段：`id` / `type` / `actor`（变更来源：用户操作或 AI Agent，用于审计与 UI 标记，见十二节）/ `patch`（正向补丁）/ `inverse`（逆向补丁，执行时自动捕获）/ `timestamp`；另有可选的 `transient` 标记（瞬时 UI 命令：不落盘、不进撤销栈）。
+单写者场景无需并发基线与路径级补丁。命令信封固定为六个字段：`id` / `type` / `actor`（变更来源：用户操作或 AI Agent，用于审计与 UI 标记，见十二节）/ `patch`（正向补丁）/ `inverse`（逆向补丁，执行时自动捕获）/ `timestamp`；另有可选的 `transient` 标记（瞬时 UI 命令，仅供拖拽/缩放等手势的过程帧使用：不进撤销栈、不置脏不落盘）。「不进撤销栈」与「不持久化」是两个独立维度——前者由 §9.4 按命令类型裁定，后者仅 transient 过程帧成立；需要持久化但不进栈的变更（如视口终帧）以非 transient 命令提交、按 §9.4 排除出栈，见 §9.4。
 
 `patch` 的具体形状由 `type` 决定，完整定义见 9.3。
 
@@ -539,7 +540,7 @@ interface AssetGroup {
 | 集标题 | `set_episode_title` | title 为空串 = 删除该集的标题键 |
 | 项目 | `rename_project` | 改 `project.name`；name 在命令边界按 §9.3 项目名校验口径校验并保存规范化结果，索引同步由持久化层负责 |
 | 资产 | `set_asset` / `remove_asset` | set 为 upsert 语义（id 已存在 = 覆盖），但必须经公开 dispatcher 的 Rust 实路径预检后才交给内部 reducer；inverse 视新增/覆盖而定（见 9.3） |
-| 视口 | `update_viewport` | transient，不进撤销栈 |
+| 视口 | `update_viewport` | 不进撤销栈；过程帧 transient 不落盘，交互结束帧置脏随防抖持久化（§9.4） |
 | 批量 | `batch` | 一等命令，整批作为单个撤销单元；整批原子——预校验任一子命令失败即整批拒绝、零变更（见 9.3） |
 
 ### 9.3 命令数据模型
@@ -747,7 +748,7 @@ type GraphCommandOf<K extends CommandType> = Extract<GraphCommand, { type: K }>
 | --- | --- | --- |
 | `create_node` | 等效 `delete_node { nodeId }` | `delete_node` |
 | `delete_node` | 等效 `create_node { node }` + 每条连带边的 `connect_edge`，进同一 `batch` | `batch` |
-| `move_node` / `resize_node` / `update_viewport` | 同结构，`to` 换为 docBefore 中的旧值 | 同正向 |
+| `move_node` / `resize_node` / `update_viewport` | 同结构，`to` 换为 docBefore 中的旧值；**手势例外**：拖拽/缩放手势结束提交的正式 `move_node`/`resize_node`，inverse 的 `to` 取 dispatcher 在手势开始时捕获的原坐标，而非松手时的 docBefore（§9.4——transient 过程帧已把 docBefore 推进到最后一帧） | 同正向 |
 | `update_node_*` | 同结构，`set` 只含被覆盖与被清除字段的旧值；被 `set` 新增（原先不存在）的字段进 inverse 的 `unset` | 同正向；**唯一例外**：触发选项级联的 `update_node_spec`（§8.2.2）→ inverse 为 `batch`——旧 spec 补丁 + 每条被级联删除边的 `connect_edge`，整体恢复 |
 | `connect_edge` / `disconnect_edge` | 互逆，边数据取自 docBefore | 对偶命令 |
 | `upsert_character` | 新增 → `delete_character`；更新 → 旧实体整体 | 视新增/更新而定 |
@@ -763,8 +764,8 @@ type GraphCommandOf<K extends CommandType> = Extract<GraphCommand, { type: K }>
 ### 9.4 撤销规则
 
 - 撤销/重做栈仅存于会话，不持久化；上限 50 条。
-- 拖拽中发 `move_node { transient: true }`，松手时补发一条正式命令进撤销栈。
-- `update_node_ui`（选中、展开折叠）与 `update_viewport` 不进撤销栈。
+- 拖拽中发 `move_node { transient: true }`（过程帧只更新内存文档，不置脏不落盘、不进栈），松手时补发一条正式命令进撤销栈。**正式命令的 inverse 不得按默认规则从 docBefore 捕获**——transient 帧已把文档推进到最后一帧拖拽位置，从 docBefore 捕获会让 undo 只回到最后一个拖拽帧（常与终点相同）而非拖拽起点；dispatcher 必须在手势开始时捕获并持有各被拖节点的原坐标，松手提交正式 `move_node`/`resize_node` 时以该原坐标显式填充 inverse，或把整个手势（transient 帧 + 正式命令）作为同一手势事务合并捕获一次 inverse。缩放（resize）手势同款。
+- `update_node_ui`（选中、展开折叠）与 `update_viewport` 不进撤销栈，但二者语义不同：`update_node_ui` 的变更随文档正常置脏持久化；`update_viewport` 同样必须最终落盘——`graph.viewport` 随项目持久化（§3），平移/缩放的过程帧发 `update_viewport { transient: true }`（只更新内存、不置脏不落盘），交互结束时补发一条非 transient 的 `update_viewport` 终帧：置脏并随 §10.5 防抖保存落盘，但按本条仍不进撤销栈。若全部视口变更都停留在 transient 帧，关闭项目时视口修改不会产生可保存的脏状态，重开只能得到旧视口或 fitView。
 
 ## 十、本地存储体系
 
@@ -868,7 +869,7 @@ provider 的 API key 以**密文 `keyEnc`** 存于 provider 配置：Rust `seal`
 | `list_projects()` | 按 §10.2 先验证应用根、项目目录与每个候选控制文件，再扫描项目文档真源并与 `index.json` 缓存校正后返回内存投影；索引缺失、损坏或与文档的 id/name/updatedAt 不一致时重建并原子回写，不直接返回陈旧缓存 |
 | `create_project(name)` | 按 §10.2 验证/创建项目目录及控制文件目标后，先原子写初始 `project.json`，再更新可重建索引；name 按 §9.3 项目名校验口径校验（与 rename_project 同规则），跨文件中断由 §10.2 校正恢复 |
 | `load_project(projectId)` | 按 §10.2 验证完整目录/文件信任链后才读 `project.json`；项目基准目录或文件逃逸即拒绝整个加载。随后按 §11.1 第 0 步只做信封判型：旧扁平形状包装为 v0，缺失/异型版本号的 v1 形状标记为待修复 v1，混合/无法判定的信封或显式版本与形状冲突时拒绝且不改写；并随原始文档返回受信 `projectId` 与可用的索引元数据。v1 的 `project` 父容器或成员异型不得在 Rust 层整份拒绝，交由前端归一化修复；节点级 schemaVersion 迁移与归一化同样在前端模型层（见十一），Rust 不参与 |
-| `save_project(projectId, doc)` | 按 §10.2 验证完整目录、目标与临时文件信任链后，先校验完整项目信封：确认 `doc.project` 是普通对象；`project.id` **无条件以受信路径参数 `projectId` 覆盖**——调用方自报的 id 不构成授权，不得把与路径参数不一致的 id 落盘（否则内存会话、项目真源与首页索引出现分裂身份）；`project.name` 按 §9.3 项目名校验口径校验（与 rename_project/create_project 同规则）——先验 typeof string，去首尾空白后非空且按字符数 ≤ 64，非法值整次拒绝（保存边界不替调用方修复，普通命令无法产生的名称不得经原始 IPC 持久化），合法时采用规范化后的值。再确认 `doc.assets`/`doc.assets.byId` 均为普通对象，再把每个键和值当作不可信输入执行 §7.1 完整形状、Record 键/id 一致性及 MIME/时间戳规范形式校验（保存边界不替调用方修复，非规范值直接拒绝，避免内存与落盘分叉），并逐项以受信项目资产根句柄 no-follow 打开当前 relPath、确认普通文件和真实路径包含关系；任一校验失败即在创建临时文件、生成保存时间或更新索引前拒绝整次保存，返回具体字段或 assetId 诊断，不得静默剥离。全部通过后，Rust 为本次尝试只取一次系统时间，**无条件覆盖**调用方携带的 `doc.project.updatedAt`（不信任旧值、未来值或前端时钟），再以排他创建的同目录临时文件 + flush + rename 原子替换 `project.json`；随后以规范化后的 name 与同一 updatedAt 更新可重建的 `index.json` 缓存，跨文件中断由 §10.2 的启动/列表校正恢复。成功回执返回权威 updatedAt，供前端刷新内存元数据而不触发新一轮脏写；失败重试重新执行信封与资产复验并取新时间，`serializeProject` 只负责结构序列化、不负责保存时刻盖戳 |
+| `save_project(projectId, doc)` | 按 §10.2 验证完整目录、目标与临时文件信任链后，先校验完整项目信封：确认 `doc.project` 是普通对象；`project.id` **无条件以受信路径参数 `projectId` 覆盖**——调用方自报的 id 不构成授权，不得把与路径参数不一致的 id 落盘（否则内存会话、项目真源与首页索引出现分裂身份）；`project.name` 按 §9.3 项目名校验口径校验（与 rename_project/create_project 同规则）——先验 typeof string，去首尾空白后非空且按字符数 ≤ 64，非法值整次拒绝（保存边界不替调用方修复，普通命令无法产生的名称不得经原始 IPC 持久化），合法时采用规范化后的值。信封其余必需顶层成员同款前置校验：`schemaVersion` 必须严格等于当前支持版本（1）——缺失、异型或未来版本号整次拒绝（缺失/异型版本落盘后下次加载按 §11.1 第 0 步标记待修复，未来版本则直接拒绝，均不得由保存产生）；`graph` 是普通对象且其 `nodes`/`edges` 均为数组，`settings` 是普通对象且其 `characters`/`locations`/`props`/`documents` 各桶均为普通对象——任一异型即整次拒绝，不得把 `graph: null`、异型 `settings` 之类的载荷落盘后靠 §11.1 归一化重置为空容器，把无法判型的损坏静默变成内容丢失。再确认 `doc.assets`/`doc.assets.byId` 均为普通对象，再把每个键和值当作不可信输入执行 §7.1 完整形状、Record 键/id 一致性及 MIME/时间戳规范形式校验（保存边界不替调用方修复，非规范值直接拒绝，避免内存与落盘分叉），并逐项以受信项目资产根句柄 no-follow 打开当前 relPath、确认普通文件和真实路径包含关系；任一校验失败即在创建临时文件、生成保存时间或更新索引前拒绝整次保存，返回具体字段或 assetId 诊断，不得静默剥离。全部通过后，Rust 为本次尝试只取一次系统时间，**无条件覆盖**调用方携带的 `doc.project.updatedAt`（不信任旧值、未来值或前端时钟），再以排他创建的同目录临时文件 + flush + rename 原子替换 `project.json`；随后以规范化后的 name 与同一 updatedAt 更新可重建的 `index.json` 缓存，跨文件中断由 §10.2 的启动/列表校正恢复。成功回执返回权威 updatedAt，供前端刷新内存元数据而不触发新一轮脏写；失败重试重新执行信封与资产复验并取新时间，`serializeProject` 只负责结构序列化、不负责保存时刻盖戳 |
 | `delete_project(projectId)` | 按 §10.2 验证完整目录/文件信任链后只删除受信项目控制文件/目录；目标缺失为幂等成功，符号链接或越界目标拒绝且不跟随 |
 | `validate_project_asset(projectId, asset)` | `set_asset` 的只读 Rust 前置命令：projectId 只接受 dispatcher 当前受信活动会话值，不接受命令负载自报；先按 §7.1 校验完整 AssetRef 与词法 relPath，再从受信项目目录/资产根句柄逐组件 no-follow 打开目标，确认它是资产根内普通文件；返回本次规范化后的完整 AssetRef。不得缓存结果或把它视为保存授权；公开 dispatcher 只把本次返回值立即交给模块私有 reducer，失败时活动文档、历史栈与脏标记零变更 |
 | `import_asset(projectId, file)` | 按 §7.1 从受信项目目录句柄打开 `assets/` 根，在其下排他创建临时文件并以句柄相对 rename 落位，返回 `AssetRef`；不得按拼接后的绝对目标路径写入 |
