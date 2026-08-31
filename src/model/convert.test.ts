@@ -946,6 +946,23 @@ describe('归一化：设定集实体形状校验（§11.3，与 §9.3 upsert �
     expect(scene.characterIds).toEqual(['ch-1'])
   })
 
+  it('桶键与内嵌 id 漂移：以记录键为权威改写内嵌 id 并警告（引用按键解析不误标悬空）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
+      settings: Record<string, Record<string, Record<string, unknown>>>
+    }
+    doc.settings.characters['ch-1'].id = 'ch-drift'
+    doc.settings.locations['loc-1'].id = 'loc-drift'
+    delete doc.settings.props
+    const round = parseProject(doc)
+    expect(round.content.settings.characters[0].id).toBe('ch-1')
+    expect(round.content.settings.locations[0].id).toBe('loc-1')
+    // 场景对 ch-1/loc-1 的引用按键解析，漂移修复后不得误报悬空
+    expect(round.warnings.some((w) => w.includes('不存在的角色 ch-1'))).toBe(false)
+    expect(round.warnings.some((w) => w.includes('不存在的地点 loc-1'))).toBe(false)
+    expect(round.warnings.some((w) => w.includes('ch-1') && w.includes('内嵌 id'))).toBe(true)
+    expect(round.warnings.some((w) => w.includes('loc-1') && w.includes('内嵌 id'))).toBe(true)
+  })
+
   it('可选字段（bio/note/description/avatarAssetId）类型错误：剥离该字段并警告，条目保留', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
       settings: Record<string, Record<string, Record<string, unknown>>>
@@ -959,6 +976,30 @@ describe('归一化：设定集实体形状校验（§11.3，与 §9.3 upsert �
     expect(round.content.settings.locations[0]).toEqual({ id: 'loc-1', name: '天台' })
     expect(round.content.settings.props?.[0]).toEqual({ id: 'pr-1', name: '怀表' })
     expect(round.warnings.length).toBeGreaterThan(0)
+  })
+})
+
+describe('归一化：对白行判别与必填字段（§4.2 DialogueLine，§11.3）', () => {
+  it('kind 非法或 text 非字符串的行隔离并警告，合法行保留——坏行不阻挡画布打开', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
+      graph: { nodes: Record<string, unknown>[] }
+    }
+    const dlg = doc.graph.nodes.find((n) => n.id === 'd1')!
+    const spec = (dlg.data as { spec: { lines: unknown[] } }).spec
+    spec.lines = [
+      { id: 'l1', kind: 'line', text: '别走', speaker: 'ch-1' },
+      { id: 'l2', kind: 'line', text: { broken: true } }, // text 异型：DialogueNode 渲染崩溃源
+      { id: 'l3', kind: 'narration', text: '画外' }, // 非法判别值
+      { id: 'l4', kind: 'action', text: '雨更大了' },
+      'not-an-object',
+    ]
+    const round = parseProject(doc)
+    const lines = (round.content.nodes.find((n) => n.id === 'd1')!.data as { lines: { id: string }[] })
+      .lines
+    expect(lines.map((l) => l.id)).toEqual(['l1', 'l4'])
+    expect(round.warnings.some((w) => w.includes('d1') && w.includes('spec.lines'))).toBe(true)
+    // 合法行的 speaker 引用照常解析，不误报悬空
+    expect(round.warnings.some((w) => w.includes('不存在的角色 ch-1'))).toBe(false)
   })
 })
 

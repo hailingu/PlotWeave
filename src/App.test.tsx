@@ -109,15 +109,21 @@ describe('App（双界面路由壳）', () => {
     warn.mockRestore()
   })
 
-  it('新建项目：create 后直接进编辑器（空画布文档），并刷新列表', async () => {
+  it('新建项目：create 后按落盘文档载入会话（保留 createdAt 溯源），并刷新列表', async () => {
+    const createdDoc: ProjectContent = { ...DOC, name: '未命名短剧', createdAt: '2026-08-31T00:00:00.000Z' }
+    store.load.mockResolvedValue(structuredClone(createdDoc))
     render(<App />)
     await screen.findByTestId('home')
     await act(async () => {
       ;(homeProps.current.onCreateProject as () => void)()
     })
     expect(store.create).toHaveBeenCalledWith('未命名短剧')
+    // create 只回摘要：须 load 落盘文档进会话，否则首次保存把保存时刻误盖为创建时间
+    expect(store.load).toHaveBeenCalledWith('new-1')
     expect(await screen.findByTestId('editor')).toBeTruthy()
-    expect(screen.getByText('未命名短剧')).toBeTruthy()
+    expect((editorProps.current.project as { createdAt?: string }).createdAt).toBe(
+      '2026-08-31T00:00:00.000Z',
+    )
     expect(store.list).toHaveBeenCalledTimes(2)
   })
 

@@ -290,7 +290,8 @@ function stripWrongTypedOptionalFields(
 
 /** 设定集实体形状校验（§11.3）：必填字段无法机械修复的条目从桶中隔离并警告
  * （否则 name: null 之类的值交付画布后，头像渲染的 trim 在运行期崩溃），
- * 既有引用按 §8.2.3 悬空标记。documents 桶为透传契约，另按 §6 判别，
+ * 既有引用按 §8.2.3 悬空标记；记录键为权威 id，内嵌 id 缺失或漂移以键改写
+ * （与 assets.byId 同域）。documents 桶为透传契约，另按 §6 判别，
  * 不在此判定。 */
 function normalizeEntityShapes(
   settings: Record<string, Record<string, unknown>>,
@@ -311,6 +312,15 @@ function normalizeEntityShapes(
         warnings.push(`${label} 的 ${reason}，已隔离`)
         delete entries[key]
         continue
+      }
+      // 记录键为权威 id（与 assets.byId 同域）：内嵌 id 缺失或漂移以键改写——
+      // 否则悬空引用判定按键解析而 fromDocSettings 暴露内嵌值，引用被误标
+      // 删除，下次保存又把实体重键为漂移值（§8.2.3）
+      if (entry.id !== key) {
+        warnings.push(
+          `settings.${bucket} 条目 ${key} 的内嵌 id 缺失或与记录键不一致，已以记录键为准改写`,
+        )
+        entry.id = key
       }
       stripWrongTypedOptionalFields(bucket, key, entry, optionalStringFields[bucket], warnings)
     }
@@ -412,6 +422,24 @@ function normalizeAssetRecords(
   }
 }
 
+/** 对白行成员形状（§4.2 DialogueLine）：判别字段 kind ∈ line/action 且
+ * text 必填字符串——text 异型的行进会话后会被 DialogueNode 当 React 子节点
+ * 渲染而崩溃，一行坏行不应阻挡整个项目画布打开。id 缺失不致命（列表 key
+ * 退化但不崩溃），旧格式的 id 回填由迁移链（legacy.ts）负责，不在此判别。 */
+function isDialogueLineShape(item: unknown): boolean {
+  if (!isPlainObject(item)) return false
+  if (item.kind !== 'line' && item.kind !== 'action') return false
+  return typeof item.text === 'string'
+}
+
+/** 必填列表成员形状判别（§4.2）：characterIds 为字符串引用；lines 另需
+ * DialogueLine 判别值与必填字段校验；其余列表成员至少须为普通对象。 */
+function listMemberShapeOk(listKey: string, item: unknown): boolean {
+  if (listKey === 'characterIds') return typeof item === 'string'
+  if (listKey === 'lines') return isDialogueLineShape(item)
+  return isPlainObject(item)
+}
+
 /** 节点 spec 必填列表（§4.2）：缺失/非数组可确定性置空，异型成员移除；
  * 指向被清空选项的连线由孤儿边规则处理。 */
 function normalizeRequiredList(
@@ -429,7 +457,7 @@ function normalizeRequiredList(
     return
   }
   const kept = list.filter((item) => {
-    const ok = listKey === 'characterIds' ? typeof item === 'string' : isPlainObject(item)
+    const ok = listMemberShapeOk(listKey, item)
     if (!ok) warnings.push(`节点 ${nid} 的 spec.${listKey} 含异型成员，已移除`)
     return ok
   })

@@ -5,9 +5,10 @@
 //! 透传，但保存边界（§10.5）执行完整信封校验：版本、容器形状、时间戳、
 //! 集标题键、AssetRef 形状——只验证不修复，异型值整次拒绝；updatedAt 由 Rust
 //! 端盖戳，id 以受信路径参数覆盖。落盘走原子写（§10.2）。
-//! 旧扁平格式（无 schemaVersion）在 load 时按第 0 步信封判型：形状特征
-//! 匹配旧扁平格式才包装为 v0 信封交付前端，丢失版本号但保持 v1 信封特征
-//! 的文档按 v1 交付；节点级迁移与归一化由前端模型层（§11）完成。
+//! 旧扁平格式在 load 时按第 0 步信封判型：形状特征匹配旧扁平格式才包装为
+//! v0 信封交付前端（显式 schemaVersion 0 同论），丢失版本号但保持 v1 信封
+//! 特征的文档按 v1 交付；显式版本号与信封形状两族矛盾的文档拒绝加载并保留
+//! 原文件。节点级迁移与归一化由前端模型层（§11）完成。
 
 use std::collections::HashSet;
 use std::fs;
@@ -629,13 +630,62 @@ pub fn list_projects(app: AppHandle) -> Result<Vec<ProjectMeta>, String> {
     Ok(metas)
 }
 
-/// 解析项目文件（§11 第 0 步信封判型）：显式 `schemaVersion` 直接定族；
-/// 版本号缺失时按顶层键形状特征判型——仅出现 v1 专属键（project/graph/assets）
-/// 且无旧扁平键时赋予待修复的有效版本 1；仅旧扁平特征键（≥2 个且含
-/// nodes/edges）时包装为 v0 信封。混合信封或两组特征都不满足的损坏文档
-/// 拒绝加载并保留原文件——绝不把保持 v1 形状的文档误包装成空 v0 图后
-/// 回写摧毁原画布。缺失的时间戳就地修复为有效 ISO（serde 默认空串）——
-/// 否则前端 new Date('') 抛 RangeError 会清空整个首页列表。
+/// 显式 schemaVersion 的家族一致性校验与解析（§11 第 0 步）：0 属旧扁平
+/// 家族、≥1 属 v1 家族，版本号与信封形状两族矛盾即拒绝并保留原文件——
+/// 否则 v1 StoryNode 会被送进旧版迁移器，且每次 v0 加载都被视为已迁移
+/// 并回写，可能摧毁节点字段；显式 0 且保持扁平形状时包装为 v0 信封。
+fn parse_explicit_envelope(
+    id: &str,
+    value: serde_json::Value,
+    v1_keys: usize,
+    legacy_keys: usize,
+) -> Result<ProjectFile, String> {
+    let Some(version) = value.get("schemaVersion").and_then(|sv| sv.as_u64()) else {
+        return Err("schemaVersion 不是非负整数，无法判别文档信封（已保留原文件）".into());
+    };
+    if version == 0 {
+        if v1_keys > 0 {
+            return Err(
+                "文档信封自相矛盾：schemaVersion 0 却携带 v1 专属键（已保留原文件）".into(),
+            );
+        }
+        return Ok(wrap_legacy(id, &value));
+    }
+    if legacy_keys > 0 {
+        return Err(
+            "文档信封自相矛盾：schemaVersion ≥ 1 却携带旧扁平特征键（已保留原文件）".into(),
+        );
+    }
+    serde_json::from_value::<ProjectFile>(value).map_err(|e| e.to_string())
+}
+
+/// 无版本号信封的形状判型（§11 第 0 步）：v1 专属键（project/graph/assets）
+/// 独占时赋予待修复的有效版本 1；旧扁平特征键（≥2 个且含 nodes/edges）独占
+/// 时包装为 v0 信封；混合或两组特征均不足的损坏文档拒绝加载并保留原文件——
+/// 绝不把保持 v1 形状的文档误包装成空 v0 图后回写摧毁原画布。
+fn classify_versionless(
+    id: &str,
+    value: serde_json::Value,
+    v1_keys: usize,
+    legacy_keys: usize,
+    has_legacy_list: bool,
+) -> Result<ProjectFile, String> {
+    if v1_keys > 0 && legacy_keys == 0 {
+        let mut file: ProjectFile = serde_json::from_value(value).map_err(|e| e.to_string())?;
+        file.schema_version = 1;
+        return Ok(file);
+    }
+    if v1_keys == 0 && legacy_keys >= 2 && has_legacy_list {
+        return Ok(wrap_legacy(id, &value));
+    }
+    Err("无法判别文档信封：v1 与旧扁平特征键混合或均不足（已保留原文件）".into())
+}
+
+/// 解析项目文件（§11 第 0 步信封判型）：显式 `schemaVersion` 定族并经
+/// 家族一致性校验（parse_explicit_envelope），缺失时按顶层键形状特征判型
+/// （classify_versionless）；两族矛盾或不可判型一律拒绝并保留原文件。
+/// 缺失的时间戳就地修复为有效 ISO（serde 默认空串）——否则前端
+/// new Date('') 抛 RangeError 会清空整个首页列表。
 fn parse_file(id: &str, text: &str) -> Result<ProjectFile, String> {
     let value: serde_json::Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
     let v1_keys = ["project", "graph", "assets"]
@@ -647,16 +697,9 @@ fn parse_file(id: &str, text: &str) -> Result<ProjectFile, String> {
         .filter(|k| value.get(*k).is_some())
         .count();
     let has_legacy_list = value.get("nodes").is_some() || value.get("edges").is_some();
-    let mut file = if value.get("schemaVersion").is_some() {
-        serde_json::from_value::<ProjectFile>(value).map_err(|e| e.to_string())?
-    } else if v1_keys > 0 && legacy_keys == 0 {
-        let mut file: ProjectFile = serde_json::from_value(value).map_err(|e| e.to_string())?;
-        file.schema_version = 1;
-        file
-    } else if v1_keys == 0 && legacy_keys >= 2 && has_legacy_list {
-        wrap_legacy(id, &value)
-    } else {
-        return Err("无法判别文档信封：v1 与旧扁平特征键混合或均不足（已保留原文件）".into());
+    let mut file = match value.get("schemaVersion") {
+        Some(_) => parse_explicit_envelope(id, value, v1_keys, legacy_keys)?,
+        None => classify_versionless(id, value, v1_keys, legacy_keys, has_legacy_list)?,
     };
     if file.project.id.is_empty() {
         file.project.id = id.to_string();
@@ -906,6 +949,51 @@ mod tests {
         assert!(parse_file("p-1", r#"{"foo": 1}"#).is_err());
         // 单个旧扁平键不足以判型
         assert!(parse_file("p-1", r#"{"nodes": []}"#).is_err());
+    }
+
+    #[test]
+    fn explicit_version_conflicting_with_envelope_family_is_rejected() {
+        // 显式 schemaVersion: 0 却携带 v1 专属键（§11 第 0 步两族冲突）：
+        // 若放行，前端会把 v1 StoryNode 送进旧版迁移器，且每次 v0 加载都
+        // 视为已迁移并回写，可能摧毁节点字段——拒绝加载并保留原文件
+        let v0_with_v1 = json!({
+            "schemaVersion": 0,
+            "project": { "name": "伪装旧版" },
+            "graph": { "nodes": [], "edges": [] },
+            "assets": { "byId": {} },
+        });
+        assert!(parse_file("p-1", &v0_with_v1.to_string()).is_err());
+        // 反向冲突：显式 v1 信封携带旧扁平专属键（顶层 name/updated_at/nodes/edges）
+        let v1_with_legacy = json!({
+            "schemaVersion": 1,
+            "project": { "name": "x" },
+            "graph": { "nodes": [], "edges": [] },
+            "name": "旧名",
+            "nodes": [],
+        });
+        assert!(parse_file("p-1", &v1_with_legacy.to_string()).is_err());
+        // 非数字版本号不可判型
+        assert!(parse_file(
+            "p-1",
+            r#"{"schemaVersion": "1", "project": {}, "graph": {}}"#
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn explicit_v0_with_legacy_shape_wraps_as_v0_envelope() {
+        // 显式 0 = 旧扁平家族：信封保持扁平形状时与无版本号路径一致包装
+        let legacy = json!({
+            "schemaVersion": 0,
+            "name": "显式旧版",
+            "updated_at": 1_700_000_000_000u64,
+            "nodes": [{ "id": "a", "type": "scene", "data": {} }],
+            "edges": [],
+        });
+        let file = parse_file("p-old", &legacy.to_string()).unwrap();
+        assert_eq!(file.schema_version, 0);
+        assert_eq!(file.project.name, "显式旧版");
+        assert_eq!(file.graph["nodes"][0]["id"], json!("a"));
     }
 
     #[test]
