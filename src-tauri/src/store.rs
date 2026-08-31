@@ -1,8 +1,10 @@
 //! 项目持久化（docs/data-model.md v1 §10/§11）：
 //! 每个项目一个 JSON 文件，存于应用数据目录 `projects/` 下，文件名即项目 id。
 //! 落盘格式为 ProjectDocument 信封（schemaVersion + project 元信息 + graph +
-//! settings + episodeTitles + assets）；graph/settings/assets 对前端是自有数据，
-//! Rust 端以 `serde_json::Value` 透传，仅校验项目名与 id（信任边界内的自有格式）。
+//! settings + episodeTitles + assets）。graph/settings/assets 以 `serde_json::Value`
+//! 透传，但保存边界（§10.5）执行完整信封校验：版本、容器形状、时间戳、
+//! 集标题键、AssetRef 形状——只验证不修复，异型值整次拒绝；updatedAt 由 Rust
+//! 端盖戳，id 以受信路径参数覆盖。落盘走原子写（§10.2）。
 //! 旧扁平格式（无 schemaVersion）在 load 时包装为 v0 信封交付前端，节点级
 //! 迁移与归一化由前端模型层（§11）完成。
 
@@ -125,6 +127,325 @@ fn now_iso() -> String {
     iso_from_ms(ms)
 }
 
+/// 当前支持的文档版本（§3）。
+const CURRENT_SCHEMA_VERSION: u32 = 1;
+
+/// ISO 8601 校验（保存边界）：`YYYY-MM-DDTHH:MM:SS[.fff](Z|±HH:MM)`，
+/// 含各字段取值范围与闰年规则——反序列化不校验字符串内容，边界自行把关。
+fn is_valid_iso8601(s: &str) -> bool {
+    let b = s.as_bytes();
+    if b.len() < 20 {
+        return false;
+    }
+    for i in [0usize, 1, 2, 3, 5, 6, 8, 9, 11, 12, 14, 15, 17, 18] {
+        if !b[i].is_ascii_digit() {
+            return false;
+        }
+    }
+    if b[4] != b'-' || b[7] != b'-' || b[10] != b'T' || b[13] != b':' || b[16] != b':' {
+        return false;
+    }
+    let num = |from: usize, to: usize| s[from..to].parse::<u32>().unwrap_or(u32::MAX);
+    let (year, month, day, hour, min, sec) = (
+        num(0, 4) as i64,
+        num(5, 7),
+        num(8, 10),
+        num(11, 13),
+        num(14, 16),
+        num(17, 19),
+    );
+    if !(1..=12).contains(&month) || hour > 23 || min > 59 || sec > 59 {
+        return false;
+    }
+    let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    let days_in_month = [
+        31,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ][(month - 1) as usize];
+    if day < 1 || day > days_in_month {
+        return false;
+    }
+    let mut i = 19;
+    if i < b.len() && b[i] == b'.' {
+        i += 1;
+        let start = i;
+        while i < b.len() && b[i].is_ascii_digit() {
+            i += 1;
+        }
+        if i == start {
+            return false;
+        }
+    }
+    if i >= b.len() {
+        return false;
+    }
+    if b[i] == b'Z' {
+        return i + 1 == b.len();
+    }
+    if b[i] != b'+' && b[i] != b'-' {
+        return false;
+    }
+    if b.len() != i + 6 || b[i + 3] != b':' {
+        return false;
+    }
+    for j in [i + 1, i + 2, i + 4, i + 5] {
+        if !b[j].is_ascii_digit() {
+            return false;
+        }
+    }
+    let off_h = s[i + 1..i + 3].parse::<u32>().unwrap_or(u32::MAX);
+    let off_m = s[i + 4..i + 6].parse::<u32>().unwrap_or(u32::MAX);
+    off_h <= 23 && off_m <= 59
+}
+
+/// RFC 9110 tchar 且排除 `*`（索引不保存通配媒体类型，§7.1）。
+fn is_mime_token(s: &str) -> bool {
+    !s.is_empty()
+        && s.bytes().all(|c| {
+            c.is_ascii_alphanumeric()
+                || matches!(
+                    c,
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'+'
+                        | b'-'
+                        | b'.'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'|'
+                        | b'~'
+                )
+        })
+}
+
+/// 规范 MIME 形式（§7.1）：已去首尾空白、已小写、恰好两个具体 token 以 `/` 分隔。
+fn is_canonical_mime(s: &str) -> bool {
+    if s != s.trim() || s != s.to_ascii_lowercase() {
+        return false;
+    }
+    let mut parts = s.split('/');
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some(t), Some(st), None) => is_mime_token(t) && is_mime_token(st),
+        _ => false,
+    }
+}
+
+/// 词法 relPath（§7.1）：纯相对路径（正斜杠分隔，拒绝绝对路径/盘符/反斜杠），
+/// 解析目标必须位于项目资产子目录内——首段固定 `assets`，组件不含空段/`.`/`..`。
+fn is_valid_asset_rel_path(p: &str) -> bool {
+    if p.is_empty() || p != p.trim() {
+        return false;
+    }
+    if p.starts_with('/') || p.contains('\\') {
+        return false;
+    }
+    if p.len() >= 2 && p.as_bytes()[1] == b':' {
+        return false;
+    }
+    let mut comps = p.split('/');
+    if comps.next() != Some("assets") {
+        return false;
+    }
+    let mut rest = 0;
+    for c in comps {
+        if c.is_empty() || c == "." || c == ".." {
+            return false;
+        }
+        rest += 1;
+    }
+    rest > 0
+}
+
+/// 规范集号键（§11.1 第 3 步同域）：无前导零的十进制正整数，且在安全整数范围。
+fn is_canonical_episode_key(k: &str) -> bool {
+    if k.is_empty() || !k.bytes().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    if k.len() > 1 && k.starts_with('0') {
+        return false;
+    }
+    match k.parse::<u64>() {
+        Ok(v) => (1..=9_007_199_254_740_991).contains(&v),
+        Err(_) => false,
+    }
+}
+
+fn validate_save_graph(graph: &serde_json::Value) -> Result<(), String> {
+    let g = graph.as_object().ok_or("graph 必须是普通对象")?;
+    if !matches!(g.get("nodes"), Some(v) if v.is_array()) {
+        return Err("graph.nodes 必须是数组".into());
+    }
+    if !matches!(g.get("edges"), Some(v) if v.is_array()) {
+        return Err("graph.edges 必须是数组".into());
+    }
+    if let Some(vp) = g.get("viewport") {
+        let vp = vp.as_object().ok_or("graph.viewport 必须是普通对象")?;
+        let finite = |k: &str| vp.get(k).and_then(|v| v.as_f64()).filter(|f| f.is_finite());
+        if finite("x").is_none() || finite("y").is_none() {
+            return Err("graph.viewport 的 x/y 必须是有限数值".into());
+        }
+        if !matches!(finite("zoom"), Some(z) if z > 0.0) {
+            return Err("graph.viewport.zoom 必须是正有限数".into());
+        }
+    }
+    Ok(())
+}
+
+fn validate_save_settings(settings: &serde_json::Value) -> Result<(), String> {
+    let s = settings.as_object().ok_or("settings 必须是普通对象")?;
+    for bucket in ["characters", "locations", "props", "documents"] {
+        // 数组同为 JSON 对象之外的合法形态，必须由 as_object 显式排除（§11.1 第 2 步同域）
+        if let Some(v) = s.get(bucket) {
+            if !v.is_object() {
+                return Err(format!("settings.{bucket} 必须是普通对象"));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_save_episode_titles(titles: &serde_json::Value) -> Result<(), String> {
+    let t = titles.as_object().ok_or("episodeTitles 必须是普通对象")?;
+    for (k, v) in t {
+        if !is_canonical_episode_key(k) {
+            return Err(format!("episodeTitles 键 {k:?} 不是规范十进制正整数"));
+        }
+        if !v.is_string() {
+            return Err(format!("episodeTitles[{k:?}] 的值必须是字符串"));
+        }
+    }
+    Ok(())
+}
+
+/// §7.1 完整 AssetRef 形状 + Record 键/id 一致性 + 规范形式（MIME/时间戳）。
+/// 保存边界不替调用方修复：非规范值直接拒绝，避免内存与落盘分叉。
+fn validate_save_assets(assets: &serde_json::Value) -> Result<(), String> {
+    let a = assets.as_object().ok_or("assets 必须是普通对象")?;
+    let by_id = a
+        .get("byId")
+        .and_then(|v| v.as_object())
+        .ok_or("assets.byId 必须是普通对象")?;
+    for (key, entry) in by_id {
+        let e = entry
+            .as_object()
+            .ok_or_else(|| format!("资产 {key} 必须是普通对象"))?;
+        let get_str = |f: &str| e.get(f).and_then(|v| v.as_str());
+        match get_str("id") {
+            Some(eid) if !eid.is_empty() && eid == key => {}
+            _ => return Err(format!("资产 {key} 的 Record 键与内嵌 id 不一致")),
+        }
+        match get_str("relPath") {
+            Some(p) if is_valid_asset_rel_path(p) => {}
+            _ => return Err(format!("资产 {key} 的 relPath 非法或越出资产子目录")),
+        }
+        match get_str("mime") {
+            Some(m) if is_canonical_mime(m) => {}
+            _ => return Err(format!("资产 {key} 的 mime 非规范形式")),
+        }
+        match get_str("source") {
+            Some("upload") | Some("generated") => {}
+            _ => return Err(format!("资产 {key} 的 source 非法")),
+        }
+        match get_str("createdAt") {
+            Some(t) if is_valid_iso8601(t) => {}
+            _ => return Err(format!("资产 {key} 的 createdAt 不是可解析的 ISO 8601")),
+        }
+    }
+    Ok(())
+}
+
+/// save_project 的信封校验与规范化（§10.5）：在创建临时文件、生成保存时间
+/// 或更新索引之前完成——任一校验失败整次拒绝，不得静默剥离。全部通过后
+/// 以受信路径参数覆盖 id，并由 Rust 为本次尝试只取一次系统时间无条件盖戳
+/// updatedAt（不信任旧值、未来值或前端时钟）。
+fn prepare_save(id: &str, doc: &ProjectFile) -> Result<ProjectFile, String> {
+    if doc.schema_version != CURRENT_SCHEMA_VERSION {
+        return Err(format!(
+            "文档版本不受支持（schemaVersion {}），拒绝保存",
+            doc.schema_version
+        ));
+    }
+    let name = sanitize_name(&doc.project.name)?;
+    if !is_valid_iso8601(&doc.project.created_at) {
+        return Err("project.createdAt 不是可解析的 ISO 8601 时间戳".into());
+    }
+    if !is_valid_iso8601(&doc.project.updated_at) {
+        return Err("project.updatedAt 不是可解析的 ISO 8601 时间戳".into());
+    }
+    validate_save_graph(&doc.graph)?;
+    validate_save_settings(&doc.settings)?;
+    validate_save_episode_titles(&doc.episode_titles)?;
+    validate_save_assets(&doc.assets)?;
+    Ok(ProjectFile {
+        schema_version: doc.schema_version,
+        project: ProjectInfo {
+            id: id.to_string(),
+            name,
+            description: doc.project.description.clone(),
+            created_at: doc.project.created_at.clone(),
+            updated_at: now_iso(),
+        },
+        graph: doc.graph.clone(),
+        settings: doc.settings.clone(),
+        episode_titles: doc.episode_titles.clone(),
+        assets: doc.assets.clone(),
+    })
+}
+
+/// 原子写控制文件（§10.2）：同目录随机名临时文件排他创建（避免预置 `.tmp`
+/// 符号链接截获）→ 写入 + flush/fsync → rename 原子覆盖 → 父目录 fsync；
+/// 失败尽力清理临时文件。现存目标为符号链接或非普通文件时拒绝，不跟随。
+fn atomic_write(dir: &std::path::Path, path: &std::path::Path, text: &str) -> Result<(), String> {
+    use std::io::Write;
+    if let Ok(md) = fs::symlink_metadata(path) {
+        if md.file_type().is_symlink() {
+            return Err("拒绝符号链接形式的项目文件".into());
+        }
+        if !md.file_type().is_file() {
+            return Err("项目路径不是普通文件".into());
+        }
+    }
+    let file_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or("项目路径不含有效文件名")?;
+    let tmp = dir.join(format!(".{file_name}.{}.tmp", new_id()));
+    let result = (|| -> Result<(), String> {
+        let mut f = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)
+            .map_err(|e| format!("创建临时文件失败：{e}"))?;
+        f.write_all(text.as_bytes())
+            .map_err(|e| format!("写入项目失败：{e}"))?;
+        f.sync_all().map_err(|e| format!("同步临时文件失败：{e}"))?;
+        drop(f);
+        fs::rename(&tmp, path).map_err(|e| format!("落盘项目失败：{e}"))?;
+        if let Ok(d) = fs::File::open(dir) {
+            let _ = d.sync_all();
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    result
+}
+
 /// settings 等对象字段缺省值：空对象（而非 Null），前端归一化兜底。
 fn empty_object() -> serde_json::Value {
     json!({})
@@ -134,13 +455,34 @@ fn empty_assets() -> serde_json::Value {
     json!({ "byId": {} })
 }
 
+/// 项目根目录（§10.2 信任链）：canonicalize 应用数据根并逐级复核包含关系，
+/// `projects/` 为符号链接或 canonical 路径越出受信根时拒绝整个对应操作。
 fn projects_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
+    let root = app
         .path()
         .app_data_dir()
-        .map_err(|e| format!("无法定位应用数据目录：{e}"))?
-        .join("projects");
-    fs::create_dir_all(&dir).map_err(|e| format!("创建项目目录失败：{e}"))?;
+        .map_err(|e| format!("无法定位应用数据目录：{e}"))?;
+    fs::create_dir_all(&root).map_err(|e| format!("创建应用数据目录失败：{e}"))?;
+    let root = root
+        .canonicalize()
+        .map_err(|e| format!("解析应用数据目录真实路径失败：{e}"))?;
+    let dir = root.join("projects");
+    if !dir.exists() {
+        fs::create_dir(&dir).map_err(|e| format!("创建项目目录失败：{e}"))?;
+    }
+    let md = fs::symlink_metadata(&dir).map_err(|e| format!("读取项目目录元数据失败：{e}"))?;
+    if md.file_type().is_symlink() {
+        return Err("拒绝符号链接形式的项目目录".into());
+    }
+    if !md.is_dir() {
+        return Err("项目目录路径不是目录".into());
+    }
+    let dir = dir
+        .canonicalize()
+        .map_err(|e| format!("解析项目目录真实路径失败：{e}"))?;
+    if !dir.starts_with(&root) {
+        return Err("项目目录逃逸应用数据根".into());
+    }
     Ok(dir)
 }
 
@@ -315,7 +657,8 @@ pub fn create_project(app: AppHandle, name: String) -> Result<ProjectMeta, Strin
     };
     let path = project_path(&app, &id)?;
     let text = serde_json::to_string_pretty(&file).map_err(|e| format!("序列化失败：{e}"))?;
-    fs::write(path, text).map_err(|e| format!("写入项目失败：{e}"))?;
+    let dir = projects_dir(&app)?;
+    atomic_write(&dir, &path, &text)?;
     Ok(read_meta(&id, &file))
 }
 
@@ -327,30 +670,15 @@ pub fn load_project(app: AppHandle, id: String) -> Result<ProjectFile, String> {
     parse_file(&id, &text).map_err(|e| format!("项目文件损坏：{e}"))
 }
 
-/// 全量保存：项目名在信任边界校验；updatedAt 由前端模型层盖戳。
+/// 全量保存（§10.5 保存边界）：完整信封校验先行，任一失败整次拒绝；
+/// 通过后以受信路径参数覆盖 id、Rust 端无条件盖戳 updatedAt，再原子落盘。
 #[tauri::command]
 pub fn save_project(app: AppHandle, id: String, doc: ProjectFile) -> Result<ProjectMeta, String> {
-    let name = sanitize_name(&doc.project.name)?;
-    let file = ProjectFile {
-        schema_version: doc.schema_version,
-        project: ProjectInfo {
-            id: id.clone(),
-            name,
-            description: doc.project.description,
-            created_at: doc.project.created_at,
-            updated_at: doc.project.updated_at,
-        },
-        graph: doc.graph,
-        settings: doc.settings,
-        episode_titles: doc.episode_titles,
-        assets: doc.assets,
-    };
+    let file = prepare_save(&id, &doc)?;
     let path = project_path(&app, &id)?;
     let text = serde_json::to_string_pretty(&file).map_err(|e| format!("序列化失败：{e}"))?;
-    // 先写临时文件再原子改名，避免保存中途崩溃留下半截文件
-    let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, text).map_err(|e| format!("写入项目失败：{e}"))?;
-    fs::rename(&tmp, &path).map_err(|e| format!("落盘项目失败：{e}"))?;
+    let dir = projects_dir(&app)?;
+    atomic_write(&dir, &path, &text)?;
     Ok(read_meta(&id, &file))
 }
 
@@ -539,5 +867,187 @@ mod tests {
         assert_eq!(file.project.id, "p-1"); // 缺省时以文件名回填
         assert_eq!(file.settings, json!({}));
         assert_eq!(file.assets, json!({ "byId": {} }));
+    }
+
+    /// 合法 v1 信封（保存边界校验的基线载荷）。
+    fn valid_save_doc() -> ProjectFile {
+        ProjectFile {
+            schema_version: 1,
+            project: ProjectInfo {
+                id: "p-self-reported".into(),
+                name: "午夜出租车".into(),
+                description: None,
+                created_at: "2026-08-01T00:00:00.000Z".into(),
+                updated_at: "2026-08-28T12:00:00.000Z".into(),
+            },
+            graph: json!({
+                "nodes": [], "edges": [], "viewport": { "x": 0, "y": 0, "zoom": 1 },
+            }),
+            settings: json!({
+                "characters": {}, "locations": {}, "props": {}, "documents": {},
+            }),
+            episode_titles: json!({ "1": "开端" }),
+            assets: json!({ "byId": {} }),
+        }
+    }
+
+    #[test]
+    fn save_rejects_unsupported_schema_version() {
+        // schemaVersion 999 落盘后下次加载按未来版本拒绝（§11.1 第 0 步）；
+        // 保存边界必须先行拦截
+        let mut doc = valid_save_doc();
+        doc.schema_version = 999;
+        assert!(prepare_save("p-1", &doc).is_err());
+        doc.schema_version = 0;
+        assert!(prepare_save("p-1", &doc).is_err());
+    }
+
+    #[test]
+    fn save_rejects_alien_top_level_containers() {
+        // graph: null 之类的载荷若落盘，下次加载会被归一化重置为空图，
+        // 把无法判型的损坏静默变成内容丢失（§10.5）——保存边界整次拒绝
+        let mut doc = valid_save_doc();
+        doc.graph = json!(null);
+        assert!(prepare_save("p-1", &doc).is_err());
+        let mut doc = valid_save_doc();
+        doc.graph = json!({ "nodes": {}, "edges": [] });
+        assert!(prepare_save("p-1", &doc).is_err());
+        let mut doc = valid_save_doc();
+        doc.settings = json!([]);
+        assert!(prepare_save("p-1", &doc).is_err());
+        let mut doc = valid_save_doc();
+        doc.settings = json!({ "characters": [] });
+        assert!(prepare_save("p-1", &doc).is_err());
+        // 数组型标题表落盘后下次加载被重置为 {}，标题静默丢失
+        let mut doc = valid_save_doc();
+        doc.episode_titles = json!(["第一集"]);
+        assert!(prepare_save("p-1", &doc).is_err());
+        let mut doc = valid_save_doc();
+        doc.assets = json!({ "byId": [] });
+        assert!(prepare_save("p-1", &doc).is_err());
+    }
+
+    #[test]
+    fn save_rejects_bad_project_metadata_and_viewport() {
+        let mut doc = valid_save_doc();
+        doc.project.created_at = "not-a-date".into();
+        assert!(prepare_save("p-1", &doc).is_err());
+        // updatedAt 虽被无条件覆盖，异型值仍拒绝（信封形状先行）
+        let mut doc = valid_save_doc();
+        doc.project.updated_at = String::new();
+        assert!(prepare_save("p-1", &doc).is_err());
+        let mut doc = valid_save_doc();
+        doc.graph = json!({ "nodes": [], "edges": [], "viewport": { "x": 0, "y": 0, "zoom": 0 } });
+        assert!(prepare_save("p-1", &doc).is_err());
+        let mut doc = valid_save_doc();
+        doc.graph =
+            json!({ "nodes": [], "edges": [], "viewport": { "x": "0", "y": 0, "zoom": 1 } });
+        assert!(prepare_save("p-1", &doc).is_err());
+    }
+
+    #[test]
+    fn save_rejects_non_canonical_episode_title_keys() {
+        // "01"/"1e0" 与规范键折叠到同一集号，转换时按遍历序静默覆盖（§11.1 第 3 步）
+        for bad in ["01", "1e0", " 1", "0", "-1", "9007199254740992"] {
+            let mut doc = valid_save_doc();
+            doc.episode_titles = json!({ bad: "标题" });
+            assert!(prepare_save("p-1", &doc).is_err(), "应拒绝键 {bad:?}");
+        }
+        let mut doc = valid_save_doc();
+        doc.episode_titles = json!({ "1": 42 });
+        assert!(prepare_save("p-1", &doc).is_err());
+    }
+
+    #[test]
+    fn save_rejects_bad_asset_entries() {
+        let good = json!({
+            "id": "a1", "relPath": "assets/pic.png", "mime": "image/png",
+            "source": "upload", "createdAt": "2026-08-01T00:00:00.000Z",
+        });
+        let with_asset = |entry: serde_json::Value, key: &str| {
+            let mut doc = valid_save_doc();
+            doc.assets = json!({ "byId": { key: entry } });
+            doc
+        };
+        // 基线合法
+        assert!(prepare_save("p-1", &with_asset(good.clone(), "a1")).is_ok());
+        // Record 键与内嵌 id 不一致（分裂身份）
+        assert!(prepare_save("p-1", &with_asset(good.clone(), "a2")).is_err());
+        // relPath 越出资产子目录
+        for bad_path in [
+            "../secret",
+            "assets/../../etc/passwd",
+            "/abs/path",
+            "library.json",
+            "assets/",
+            "",
+        ] {
+            let mut e = good.clone();
+            e["relPath"] = json!(bad_path);
+            assert!(
+                prepare_save("p-1", &with_asset(e, "a1")).is_err(),
+                "应拒绝 {bad_path:?}"
+            );
+        }
+        // MIME 非规范形式（大写/带空白/通配/缺 subtype）
+        for bad_mime in [
+            "IMAGE/PNG",
+            " image/png",
+            "image/*",
+            "image",
+            "image/png; q=1",
+        ] {
+            let mut e = good.clone();
+            e["mime"] = json!(bad_mime);
+            assert!(
+                prepare_save("p-1", &with_asset(e, "a1")).is_err(),
+                "应拒绝 {bad_mime:?}"
+            );
+        }
+        let mut e = good.clone();
+        e["source"] = json!("unknown");
+        assert!(prepare_save("p-1", &with_asset(e, "a1")).is_err());
+        let mut e = good.clone();
+        e["createdAt"] = json!("2026-08-01");
+        assert!(prepare_save("p-1", &with_asset(e, "a1")).is_err());
+        let mut e = good.clone();
+        e["createdAt"] = json!(null);
+        assert!(prepare_save("p-1", &with_asset(e, "a1")).is_err());
+    }
+
+    #[test]
+    fn save_overrides_id_and_stamps_updated_at() {
+        // 调用方自报 id 不落盘：无条件以受信路径参数覆盖（§10.5）
+        let doc = valid_save_doc();
+        let out = prepare_save("p-1", &doc).unwrap();
+        assert_eq!(out.project.id, "p-1");
+        // updatedAt 由 Rust 保存边界无条件盖戳，不信任调用方携带的旧值/未来值
+        assert_ne!(out.project.updated_at, "2026-08-28T12:00:00.000Z");
+        assert!(is_valid_iso8601(&out.project.updated_at));
+        // createdAt/name 保留（name 为规范化值）
+        assert_eq!(out.project.created_at, "2026-08-01T00:00:00.000Z");
+        assert_eq!(out.project.name, "午夜出租车");
+    }
+
+    #[test]
+    fn iso8601_accepts_z_and_offset_forms() {
+        assert!(is_valid_iso8601("2026-08-31T06:27:27.000Z"));
+        assert!(is_valid_iso8601("2026-08-31T06:27:27Z"));
+        assert!(is_valid_iso8601("2026-08-31T14:27:27+08:00"));
+        assert!(is_valid_iso8601("2024-02-29T00:00:00.000Z")); // 闰日
+        for bad in [
+            "",
+            "2026-08-31",               // 缺时间
+            "2026-08-31T06:27:27",      // 缺时区
+            "2026-13-01T00:00:00.000Z", // 月份越界
+            "2026-08-32T00:00:00.000Z", // 日期越界
+            "2023-02-29T00:00:00.000Z", // 非闰年 2/29
+            "2026-08-31T25:00:00.000Z", // 小时越界
+            "2026-08-31T06:27:27.",     // 小数秒无数字
+            "2026-08-31T06:27:27+0800", // 偏移缺冒号
+            "not-a-date",
+        ] {
+            assert!(!is_valid_iso8601(bad), "应拒绝 {bad:?}");
+        }
     }
 }
