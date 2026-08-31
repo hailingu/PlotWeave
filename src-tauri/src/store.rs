@@ -130,71 +130,66 @@ fn now_iso() -> String {
 /// 当前支持的文档版本（§3）。
 const CURRENT_SCHEMA_VERSION: u32 = 1;
 
-/// ISO 8601 校验（保存边界）：`YYYY-MM-DDTHH:MM:SS[.fff](Z|±HH:MM)`，
-/// 含各字段取值范围与闰年规则——反序列化不校验字符串内容，边界自行把关。
-fn is_valid_iso8601(s: &str) -> bool {
+/// ISO 8601 固定前缀 `YYYY-MM-DDTHH:MM:SS` 的解析结果。
+struct IsoFields {
+    year: i64,
+    month: u32,
+    day: u32,
+    hour: u32,
+    min: u32,
+    sec: u32,
+}
+
+/// 解析固定前缀的形状（长度、数字位、分隔符）；形状不符返回 None。
+fn parse_iso_prefix(s: &str) -> Option<IsoFields> {
     let b = s.as_bytes();
     if b.len() < 20 {
-        return false;
+        return None;
     }
     for i in [0usize, 1, 2, 3, 5, 6, 8, 9, 11, 12, 14, 15, 17, 18] {
         if !b[i].is_ascii_digit() {
-            return false;
+            return None;
         }
     }
     if b[4] != b'-' || b[7] != b'-' || b[10] != b'T' || b[13] != b':' || b[16] != b':' {
-        return false;
+        return None;
     }
     let num = |from: usize, to: usize| s[from..to].parse::<u32>().unwrap_or(u32::MAX);
-    let (year, month, day, hour, min, sec) = (
-        num(0, 4) as i64,
-        num(5, 7),
-        num(8, 10),
-        num(11, 13),
-        num(14, 16),
-        num(17, 19),
-    );
-    if !(1..=12).contains(&month) || hour > 23 || min > 59 || sec > 59 {
-        return false;
-    }
+    Some(IsoFields {
+        year: num(0, 4) as i64,
+        month: num(5, 7),
+        day: num(8, 10),
+        hour: num(11, 13),
+        min: num(14, 16),
+        sec: num(17, 19),
+    })
+}
+
+/// 月份天数；month 越界返回 0，由调用方的范围检查一并拒绝。
+fn days_in_month(year: i64, month: u32) -> u32 {
     let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
-    let days_in_month = [
-        31,
-        if leap { 29 } else { 28 },
-        31,
-        30,
-        31,
-        30,
-        31,
-        31,
-        30,
-        31,
-        30,
-        31,
-    ][(month - 1) as usize];
-    if day < 1 || day > days_in_month {
-        return false;
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => 0,
     }
-    let mut i = 19;
-    if i < b.len() && b[i] == b'.' {
-        i += 1;
-        let start = i;
-        while i < b.len() && b[i].is_ascii_digit() {
-            i += 1;
-        }
-        if i == start {
-            return false;
-        }
-    }
-    if i >= b.len() {
-        return false;
-    }
-    if b[i] == b'Z' {
-        return i + 1 == b.len();
-    }
-    if b[i] != b'+' && b[i] != b'-' {
-        return false;
-    }
+}
+
+/// 各字段取值范围（含闰年月份天数）。
+fn iso_fields_in_range(f: &IsoFields) -> bool {
+    (1..=12).contains(&f.month)
+        && f.hour <= 23
+        && f.min <= 59
+        && f.sec <= 59
+        && f.day >= 1
+        && f.day <= days_in_month(f.year, f.month)
+}
+
+/// 校验 `±HH:MM` 时区偏移：从符号位起恰好消费剩余 6 字节。
+fn zone_offset_valid(s: &str, i: usize) -> bool {
+    let b = s.as_bytes();
     if b.len() != i + 6 || b[i + 3] != b':' {
         return false;
     }
@@ -206,6 +201,36 @@ fn is_valid_iso8601(s: &str) -> bool {
     let off_h = s[i + 1..i + 3].parse::<u32>().unwrap_or(u32::MAX);
     let off_m = s[i + 4..i + 6].parse::<u32>().unwrap_or(u32::MAX);
     off_h <= 23 && off_m <= 59
+}
+
+/// 校验可选小数秒与结尾时区（`Z` 或 `±HH:MM`），从第 19 字节起消费到串尾。
+fn iso_suffix_valid(s: &str) -> bool {
+    let b = s.as_bytes();
+    let mut i = 19;
+    if b.get(i) == Some(&b'.') {
+        i += 1;
+        let start = i;
+        while i < b.len() && b[i].is_ascii_digit() {
+            i += 1;
+        }
+        if i == start {
+            return false;
+        }
+    }
+    match b.get(i) {
+        Some(b'Z') => i + 1 == b.len(),
+        Some(b'+') | Some(b'-') => zone_offset_valid(s, i),
+        _ => false,
+    }
+}
+
+/// ISO 8601 校验（保存边界）：`YYYY-MM-DDTHH:MM:SS[.fff](Z|±HH:MM)`，
+/// 含各字段取值范围与闰年规则——反序列化不校验字符串内容，边界自行把关。
+fn is_valid_iso8601(s: &str) -> bool {
+    match parse_iso_prefix(s) {
+        Some(f) => iso_fields_in_range(&f) && iso_suffix_valid(s),
+        None => false,
+    }
 }
 
 /// RFC 9110 tchar 且排除 `*`（索引不保存通配媒体类型，§7.1）。
