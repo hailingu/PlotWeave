@@ -8,7 +8,8 @@
 //! 旧扁平格式在 load 时按第 0 步信封判型：形状特征匹配旧扁平格式才包装为
 //! v0 信封交付前端（显式 schemaVersion 0 同论），丢失版本号但保持 v1 信封
 //! 特征的文档按 v1 交付；显式版本号与信封形状两族矛盾的文档拒绝加载并保留
-//! 原文件。节点级迁移与归一化由前端模型层（§11）完成。
+//! 原文件。v1 信封的 project 元信息逐字段宽容提取，字段级损坏不阻断加载，
+//! 修复与警告归前端归一化层。节点级迁移与归一化由前端模型层（§11）完成。
 
 use std::collections::HashSet;
 use std::fs;
@@ -334,11 +335,16 @@ fn validate_save_graph(graph: &serde_json::Value) -> Result<(), String> {
 
 fn validate_save_settings(settings: &serde_json::Value) -> Result<(), String> {
     let s = settings.as_object().ok_or("settings 必须是普通对象")?;
+    // 四桶必须齐备且均为普通对象（§10.5 持久化信任边界）：缺桶落盘后下次
+    // 加载被归一化为空 Record，既有内容永久丢失——不能只校验碰巧在场的桶
     for bucket in ["characters", "locations", "props", "documents"] {
-        // 数组同为 JSON 对象之外的合法形态，必须由 as_object 显式排除（§11.1 第 2 步同域）
-        if let Some(v) = s.get(bucket) {
-            if !v.is_object() {
-                return Err(format!("settings.{bucket} 必须是普通对象"));
+        match s.get(bucket) {
+            Some(v) if v.is_object() => {}
+            Some(_) => return Err(format!("settings.{bucket} 必须是普通对象")),
+            None => {
+                return Err(format!(
+                    "settings.{bucket} 缺失，拒绝保存（缺桶会在下次加载被归一化为空）"
+                ));
             }
         }
     }
@@ -630,6 +636,44 @@ pub fn list_projects(app: AppHandle) -> Result<Vec<ProjectMeta>, String> {
     Ok(metas)
 }
 
+/// project 元信息的宽容提取（§11 第 0 步）：project 容器非对象或字段异型
+/// （name/description/时间戳为 null 或非字符串等）时逐字段回退缺省——可恢复
+/// 的元数据损坏不拒绝整个项目，字段级修复与警告归前端归一化层（§11.1 第 3
+/// 步）；id/时间戳的空值由 parse_file 就地补齐为有效值。
+fn parse_project_info(v: Option<&serde_json::Value>) -> ProjectInfo {
+    let get = |k: &str| v.and_then(|x| x.get(k)).and_then(|x| x.as_str());
+    ProjectInfo {
+        id: get("id").unwrap_or_default().to_string(),
+        name: get("name").unwrap_or_default().to_string(),
+        description: get("description").map(str::to_string),
+        created_at: get("createdAt").unwrap_or_default().to_string(),
+        updated_at: get("updatedAt").unwrap_or_default().to_string(),
+    }
+}
+
+/// v1 信封的宽容解析（§11 第 0 步）：project 元信息经 parse_project_info
+/// 逐字段提取；graph/settings/episodeTitles/assets 以 untyped 值原样透传
+/// （缺省补空容器），容器级与逐项校验都归前端归一化层——持久化层只拒绝
+/// 两族矛盾或不可判型的信封，不因字段形状损坏阻断加载。
+fn parse_v1_envelope(value: &serde_json::Value) -> ProjectFile {
+    let schema_version = value
+        .get("schemaVersion")
+        .and_then(|v| v.as_u64())
+        .and_then(|v| u32::try_from(v).ok())
+        .unwrap_or(1);
+    ProjectFile {
+        schema_version,
+        project: parse_project_info(value.get("project")),
+        graph: value.get("graph").cloned().unwrap_or_else(|| json!({})),
+        settings: value.get("settings").cloned().unwrap_or_else(empty_object),
+        episode_titles: value
+            .get("episodeTitles")
+            .cloned()
+            .unwrap_or_else(empty_object),
+        assets: value.get("assets").cloned().unwrap_or_else(empty_assets),
+    }
+}
+
 /// 显式 schemaVersion 的家族一致性校验与解析（§11 第 0 步）：0 属旧扁平
 /// 家族、≥1 属 v1 家族，版本号与信封形状两族矛盾即拒绝并保留原文件——
 /// 否则 v1 StoryNode 会被送进旧版迁移器，且每次 v0 加载都被视为已迁移
@@ -656,7 +700,7 @@ fn parse_explicit_envelope(
             "文档信封自相矛盾：schemaVersion ≥ 1 却携带旧扁平特征键（已保留原文件）".into(),
         );
     }
-    serde_json::from_value::<ProjectFile>(value).map_err(|e| e.to_string())
+    Ok(parse_v1_envelope(&value))
 }
 
 /// 无版本号信封的形状判型（§11 第 0 步）：v1 专属键（project/graph/assets）
@@ -671,9 +715,7 @@ fn classify_versionless(
     has_legacy_list: bool,
 ) -> Result<ProjectFile, String> {
     if v1_keys > 0 && legacy_keys == 0 {
-        let mut file: ProjectFile = serde_json::from_value(value).map_err(|e| e.to_string())?;
-        file.schema_version = 1;
-        return Ok(file);
+        return Ok(parse_v1_envelope(&value));
     }
     if v1_keys == 0 && legacy_keys >= 2 && has_legacy_list {
         return Ok(wrap_legacy(id, &value));
@@ -994,6 +1036,55 @@ mod tests {
         assert_eq!(file.schema_version, 0);
         assert_eq!(file.project.name, "显式旧版");
         assert_eq!(file.graph["nodes"][0]["id"], json!("a"));
+    }
+
+    #[test]
+    fn v1_file_with_recoverable_project_metadata_loads_for_frontend_repair() {
+        // project 容器/字段异型不再整份拒绝（§11 第 0 步）：逐字段回退缺省，
+        // 字段级修复与警告归前端归一化层（§11.1 第 3 步）——可恢复的元数据
+        // 损坏不应让整个项目打不开
+        let doc = json!({
+            "schemaVersion": 1,
+            "project": null,
+            "graph": { "nodes": [], "edges": [] },
+            "settings": {},
+            "episodeTitles": {},
+            "assets": { "byId": {} },
+        });
+        let file = parse_file("p-1", &doc.to_string()).unwrap();
+        assert_eq!(file.project.id, "p-1"); // 受信路径 id 回填
+        assert!(file.project.name.is_empty()); // 名称缺省，前端按回退链修复
+
+        // 字段级异型：name/description/时间戳非字符串，id 非字符串
+        let doc = json!({
+            "schemaVersion": 1,
+            "project": { "id": 7, "name": null, "description": 42, "createdAt": 5, "updatedAt": [] },
+            "graph": { "nodes": [{ "id": "s1" }], "edges": [] },
+        });
+        let file = parse_file("p-1", &doc.to_string()).unwrap();
+        assert_eq!(file.project.id, "p-1");
+        assert!(file.project.name.is_empty());
+        assert_eq!(file.project.description, None);
+        assert!(is_valid_iso8601(&file.project.created_at));
+        assert!(is_valid_iso8601(&file.project.updated_at));
+        // graph 原样透传，内容不丢
+        assert_eq!(file.graph["nodes"][0]["id"], json!("s1"));
+    }
+
+    #[test]
+    fn save_rejects_missing_settings_buckets() {
+        // 缺桶落盘后下次加载被归一化为空 Record，既有 characters/locations/
+        // props/documents 永久丢失——持久化信任边界（§10.5）要求四桶齐备且
+        // 均为普通对象，而不是只校验碰巧在场的桶
+        let mut doc = valid_save_doc();
+        doc.settings = json!({});
+        assert!(prepare_save("p-1", &doc).is_err());
+        let mut doc = valid_save_doc();
+        doc.settings = json!({ "characters": {}, "locations": {}, "props": {} });
+        let err = prepare_save("p-1", &doc).unwrap_err();
+        assert!(err.contains("documents"), "错误应指名缺失的桶：{err}");
+        // 四桶齐备才放行
+        assert!(prepare_save("p-1", &valid_save_doc()).is_ok());
     }
 
     #[test]
