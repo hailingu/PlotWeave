@@ -58,7 +58,7 @@ pub struct ProjectFile {
 pub struct ProjectMeta {
     pub id: String,
     pub name: String,
-    /// ISO 8601；字典序即时间序，排序无需解析。
+    /// ISO 8601；可含时区偏移/小数秒变体，排序须按解析后的瞬间比较。
     pub updated_at: String,
     pub scene_count: u64,
     pub ending_count: u64,
@@ -234,6 +234,67 @@ fn is_valid_iso8601(s: &str) -> bool {
         Some(f) => iso_fields_in_range(&f) && iso_suffix_valid(s),
         None => false,
     }
+}
+
+/// 从 ISO 串尾部提取毫秒小数与分钟级时区偏移（Z 视为 0）；
+/// 形状由 is_valid_iso8601 先行校验，此处不做防御性检查。
+fn iso_suffix_parts(s: &str) -> (i64, i64) {
+    let b = s.as_bytes();
+    let mut i = 19;
+    let mut millis = 0i64;
+    if b.get(i) == Some(&b'.') {
+        i += 1;
+        let start = i;
+        while i < b.len() && b[i].is_ascii_digit() {
+            i += 1;
+        }
+        let frac = &s[start..i];
+        millis = frac[..frac.len().min(3)].parse().unwrap_or(0);
+        for _ in frac.len()..3 {
+            millis *= 10;
+        }
+    }
+    let offset_min = match b.get(i) {
+        Some(b'+') | Some(b'-') => {
+            let h: i64 = s[i + 1..i + 3].parse().unwrap_or(0);
+            let m: i64 = s[i + 4..i + 6].parse().unwrap_or(0);
+            let v = h * 60 + m;
+            if b[i] == b'-' {
+                -v
+            } else {
+                v
+            }
+        }
+        _ => 0,
+    };
+    (millis, offset_min)
+}
+
+/// 民用日期 → 1970-01-01 起的天数（Howard Hinnant 算法，公历全程有效）。
+fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y.rem_euclid(400);
+    let mp = i64::from((m + 9) % 12);
+    let doy = (153 * mp + 2) / 5 + i64::from(d) - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+/// ISO 8601 → Unix epoch 毫秒（项目列表排序键）：时区偏移与小数秒归一化后
+/// 同一瞬间得同一键——字典序无法比较 `+10:00` 与 `Z` 之类的等价/交错写法；
+/// 非法串返回 None，由调用方决定兜底次序。
+fn iso8601_to_epoch_millis(s: &str) -> Option<i64> {
+    if !is_valid_iso8601(s) {
+        return None;
+    }
+    let f = parse_iso_prefix(s)?;
+    let (millis, offset_min) = iso_suffix_parts(s);
+    let local_secs = days_from_civil(f.year, f.month, f.day) * 86_400
+        + i64::from(f.hour) * 3_600
+        + i64::from(f.min) * 60
+        + i64::from(f.sec);
+    Some((local_secs - offset_min * 60) * 1_000 + millis)
 }
 
 /// RFC 9110 tchar 且排除 `*`（索引不保存通配媒体类型，§7.1）。
@@ -613,6 +674,12 @@ fn wrap_legacy(id: &str, v: &serde_json::Value) -> ProjectFile {
     }
 }
 
+/// 项目列表排序：按更新瞬间（ISO 解析为 epoch 毫秒）新→旧；加载侧宽容保留
+/// 的非法/缺失时间戳无法解析，排最后，不混入有效项之间。
+fn sort_metas_by_recency(metas: &mut [ProjectMeta]) {
+    metas.sort_by_key(|m| std::cmp::Reverse(iso8601_to_epoch_millis(&m.updated_at)));
+}
+
 /// 列出全部项目，按更新时间新→旧排序。
 #[tauri::command]
 pub fn list_projects(app: AppHandle) -> Result<Vec<ProjectMeta>, String> {
@@ -636,7 +703,7 @@ pub fn list_projects(app: AppHandle) -> Result<Vec<ProjectMeta>, String> {
             metas.push(read_meta(id, &file));
         }
     }
-    metas.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    sort_metas_by_recency(&mut metas);
     Ok(metas)
 }
 
@@ -1365,5 +1432,54 @@ mod tests {
         ] {
             assert!(!is_valid_iso8601(bad), "应拒绝 {bad:?}");
         }
+    }
+
+    #[test]
+    fn iso8601_to_epoch_millis_normalizes_offsets_and_precision() {
+        // 同一瞬间的三种合法写法必须得到同一排序键
+        assert_eq!(iso8601_to_epoch_millis("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(
+            iso8601_to_epoch_millis("1970-01-01T08:00:00+08:00"),
+            Some(0)
+        );
+        assert_eq!(
+            iso8601_to_epoch_millis("1969-12-31T16:00:00-08:00"),
+            Some(0)
+        );
+        // 小数秒补齐/截断到毫秒
+        assert_eq!(
+            iso8601_to_epoch_millis("1970-01-01T00:00:00.500Z"),
+            Some(500)
+        );
+        assert_eq!(iso8601_to_epoch_millis("1970-01-01T00:00:00.5Z"), Some(500));
+        // 非法串无排序键
+        assert_eq!(iso8601_to_epoch_millis("not-a-date"), None);
+        assert_eq!(iso8601_to_epoch_millis(""), None);
+    }
+
+    fn meta(id: &str, updated_at: &str) -> ProjectMeta {
+        ProjectMeta {
+            id: id.into(),
+            name: id.into(),
+            updated_at: updated_at.into(),
+            scene_count: 0,
+            ending_count: 0,
+        }
+    }
+
+    #[test]
+    fn project_list_sorts_by_instant_not_text() {
+        // 字典序把 "2026-01-01T00:00:00+10:00" 排在 "2025-12-31T20:00:00Z" 之前，
+        // 但前者实为更早的瞬间（2025-12-31T14:00:00Z）——排序必须按瞬间比较，
+        // 缺失/非法时间戳排最后
+        let mut metas = vec![
+            meta("b", "2026-01-01T00:00:00+10:00"),
+            meta("a", "2025-12-31T20:00:00Z"),
+            meta("c", "2025-12-31T20:00:00.500Z"),
+            meta("d", "garbage"),
+        ];
+        sort_metas_by_recency(&mut metas);
+        let ids: Vec<&str> = metas.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["c", "a", "b", "d"]);
     }
 }
