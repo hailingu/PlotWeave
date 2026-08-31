@@ -440,8 +440,9 @@ fn prepare_save(id: &str, doc: &ProjectFile) -> Result<ProjectFile, String> {
 }
 
 /// 原子写控制文件（§10.2）：同目录随机名临时文件排他创建（避免预置 `.tmp`
-/// 符号链接截获）→ 写入 + flush/fsync → rename 原子覆盖 → 父目录 fsync；
-/// 失败尽力清理临时文件。现存目标为符号链接或非普通文件时拒绝，不跟随。
+/// 符号链接截获）→ 写入 + flush/fsync → rename 原子覆盖 → 父目录 fsync
+/// （持久性屏障，打开/同步失败向上传播、不粉饰成功）；失败尽力清理临时文件。
+/// 现存目标为符号链接或非普通文件时拒绝，不跟随。
 fn atomic_write(dir: &std::path::Path, path: &std::path::Path, text: &str) -> Result<(), String> {
     use std::io::Write;
     if let Ok(md) = fs::symlink_metadata(path) {
@@ -468,9 +469,12 @@ fn atomic_write(dir: &std::path::Path, path: &std::path::Path, text: &str) -> Re
         f.sync_all().map_err(|e| format!("同步临时文件失败：{e}"))?;
         drop(f);
         fs::rename(&tmp, path).map_err(|e| format!("落盘项目失败：{e}"))?;
-        if let Ok(d) = fs::File::open(dir) {
-            let _ = d.sync_all();
-        }
+        // 父目录 fsync 是 rename 的持久性屏障（§10.2）：打开/同步失败不得
+        // 静默吞掉——否则崩溃或掉电后，已报告的「保存成功」可能并不存在
+        let d =
+            fs::File::open(dir).map_err(|e| format!("打开项目目录失败（持久性屏障缺失）：{e}"))?;
+        d.sync_all()
+            .map_err(|e| format!("同步项目目录失败（持久性屏障缺失）：{e}"))?;
         Ok(())
     })();
     if result.is_err() {
@@ -700,6 +704,11 @@ fn parse_explicit_envelope(
             "文档信封自相矛盾：schemaVersion ≥ 1 却携带旧扁平特征键（已保留原文件）".into(),
         );
     }
+    if version > u64::from(u32::MAX) {
+        // 超出 u32 的版本号无法无损载入信封：截断回退会把未来文档当作当前
+        // v1 交付，保存时按 v1 回写并丢弃未知字段——拒绝加载并保留原文件
+        return Err("schemaVersion 超出可表示范围（疑似未来版本），拒绝加载并保留原文件".into());
+    }
     Ok(parse_v1_envelope(&value))
 }
 
@@ -760,15 +769,13 @@ fn parse_file(id: &str, text: &str) -> Result<ProjectFile, String> {
 }
 
 /// 新建空项目（空画布 v1 信封），返回其摘要。
-#[tauri::command]
-pub fn create_project(app: AppHandle, name: String) -> Result<ProjectMeta, String> {
-    let name = sanitize_name(&name)?;
-    let id = new_id();
-    let now = now_iso();
-    let file = ProjectFile {
+/// 新建项目的初始 v1 文档：settings 四桶齐备（§10.5 保存边界同域）——
+/// 新建文档必须无需归一化修复即可通过 create → load → save 原始链路。
+fn new_project_file(id: &str, name: String, now: String) -> ProjectFile {
+    ProjectFile {
         schema_version: 1,
         project: ProjectInfo {
-            id: id.clone(),
+            id: id.to_string(),
             name,
             description: None,
             created_at: now.clone(),
@@ -779,10 +786,17 @@ pub fn create_project(app: AppHandle, name: String) -> Result<ProjectMeta, Strin
             "edges": [],
             "viewport": { "x": 0, "y": 0, "zoom": 1 },
         }),
-        settings: json!({ "characters": {}, "locations": {}, "props": {} }),
+        settings: json!({ "characters": {}, "locations": {}, "props": {}, "documents": {} }),
         episode_titles: json!({}),
         assets: empty_assets(),
-    };
+    }
+}
+
+#[tauri::command]
+pub fn create_project(app: AppHandle, name: String) -> Result<ProjectMeta, String> {
+    let name = sanitize_name(&name)?;
+    let id = new_id();
+    let file = new_project_file(&id, name, now_iso());
     let path = project_path(&app, &id)?;
     let text = serde_json::to_string_pretty(&file).map_err(|e| format!("序列化失败：{e}"))?;
     let dir = projects_dir(&app)?;
@@ -1085,6 +1099,42 @@ mod tests {
         assert!(err.contains("documents"), "错误应指名缺失的桶：{err}");
         // 四桶齐备才放行
         assert!(prepare_save("p-1", &valid_save_doc()).is_ok());
+    }
+
+    #[test]
+    fn explicit_schema_version_beyond_u32_is_rejected() {
+        // schemaVersion 超出 u32 可表示范围：截断回退为 1 会让未来版本文档被
+        // 当作当前 v1 交付，随后保存按 v1 回写、未知字段静默丢弃——拒绝加载
+        // 并保留原文件（§11 第 0 步；可表示的更大版本仍交付前端「版本过新」判定）
+        let doc = json!({
+            "schemaVersion": 4_294_967_296u64, // u32::MAX + 1
+            "project": { "name": "未来文档" },
+            "graph": { "nodes": [], "edges": [] },
+        });
+        assert!(parse_file("p-1", &doc.to_string()).is_err());
+        // 可表示范围内的未来版本照旧放行给前端判定
+        let doc = json!({
+            "schemaVersion": 2,
+            "project": { "name": "未来文档" },
+            "graph": { "nodes": [], "edges": [] },
+        });
+        let file = parse_file("p-1", &doc.to_string()).unwrap();
+        assert_eq!(file.schema_version, 2);
+    }
+
+    #[test]
+    fn new_project_document_carries_all_settings_buckets() {
+        // create_project 产出的初始文档必须四桶齐备——否则 create → load →
+        // save 的原始链路在保存边界被拒（§10.5），只能依赖前端归一化碰巧修复
+        let file = new_project_file("p-x", "新剧".into(), "2026-08-31T00:00:00.000Z".into());
+        let s = file.settings.as_object().unwrap();
+        for bucket in ["characters", "locations", "props", "documents"] {
+            assert!(
+                s.get(bucket).is_some_and(|v| v.is_object()),
+                "缺桶 {bucket}"
+            );
+        }
+        assert!(prepare_save("p-x", &file).is_ok());
     }
 
     #[test]

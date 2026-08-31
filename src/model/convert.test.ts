@@ -1397,3 +1397,32 @@ describe('归一化：键控桶空记录键重发与同桶引用改写（§11.1 
     expect(round.warnings.some((w) => w.includes('重发'))).toBe(true)
   })
 })
+
+describe('归一化：设定文档 relatedIds 成员校验（§6/§11.1 第 3 步，§9.3 upsert_document 的加载侧对等）', () => {
+  it('未知 kind / 非字符串或空白 id / 重复 (kind,id) 对：删除并警告，合法关联保留', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
+      settings: { documents: Record<string, Record<string, unknown>> }
+    }
+    doc.settings.documents = {
+      'doc-1': {
+        id: 'doc-1',
+        title: '人物小传',
+        relatedIds: [
+          { kind: 'character', id: 'ch-1' },
+          { kind: 'prop', id: 7 }, // 未知 kind 且 id 非字符串
+          { kind: 'location', id: '  ' }, // 空白 id
+          { kind: 'character', id: 'ch-1' }, // 重复 (kind,id) 对：保留首见
+          { kind: 'location', id: 'loc-1' },
+          'not-an-object',
+        ],
+      },
+    }
+    const round = parseProject(doc)
+    const d = (round.content.settings.documents ?? []).find((x) => x.id === 'doc-1')!
+    expect(d.relatedIds).toEqual([
+      { kind: 'character', id: 'ch-1' },
+      { kind: 'location', id: 'loc-1' },
+    ])
+    expect(round.warnings.filter((w) => w.includes('doc-1')).length).toBeGreaterThanOrEqual(4)
+  })
+})

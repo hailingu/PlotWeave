@@ -224,7 +224,23 @@ function plainObjectEntries(
   return entries
 }
 
-/** 设定文档 relatedIds 的形状修复（§6 的 {kind,id} 对）：缺失/非数组置空，异型成员移除。 */
+/** relatedIds 成员的非法原因（§6 的 {kind,id} 显式成对：kind ∈
+ * character/location、id 非空字符串；(kind,id) 数组内唯一——重复关联会让
+ * 反向索引/导航重复列出同一文档）；null 表示通过并登记首见。 */
+function relatedIdIssue(r: unknown, seen: Set<string>): string | null {
+  if (!isPlainObject(r)) return '异型（非普通对象）'
+  if (r.kind !== 'character' && r.kind !== 'location') return `kind 未知（${String(r.kind)}）`
+  if (typeof r.id !== 'string' || !r.id.trim()) return 'id 缺失、非字符串或空白'
+  const pair = `${r.kind} ${r.id}`
+  if (seen.has(pair)) return '与首见项 (kind, id) 重复'
+  seen.add(pair)
+  return null
+}
+
+/** 设定文档 relatedIds 的形状修复（§6/§11.1 第 3 步，与 §9.3 upsert_document
+ * 边界同域）：缺失/非数组置空；异型成员、未知 kind、非字符串/空白 id、重复
+ * (kind,id) 对（保留首见）逐项移除并警告——非法关联若原样进会话会以 typed
+ * DocumentEntity 暴露给反向索引/导航，且保存边界只验桶容器、会原样落盘。 */
 function normalizeRelatedIds(key: string, entry: Record<string, unknown>, warnings: string[]): void {
   const related = entry.relatedIds
   if (!Array.isArray(related)) {
@@ -232,10 +248,11 @@ function normalizeRelatedIds(key: string, entry: Record<string, unknown>, warnin
     entry.relatedIds = []
     return
   }
+  const seen = new Set<string>()
   const kept = related.filter((r: unknown) => {
-    const ok = isPlainObject(r)
-    if (!ok) warnings.push(`设定文档 ${key} 的 relatedIds 含异型成员，已移除`)
-    return ok
+    const issue = relatedIdIssue(r, seen)
+    if (issue) warnings.push(`设定文档 ${key} 的 relatedIds 成员${issue}，已移除`)
+    return issue === null
   })
   if (kept.length !== related.length) entry.relatedIds = kept
 }
