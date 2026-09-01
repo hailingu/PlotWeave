@@ -1,4 +1,11 @@
-import { branchOptionHandle, removedOptionHandles, SCENE_SHOT_HANDLE, wouldCreateCycle } from '../graphRules'
+import {
+  branchOptionHandle,
+  connectionEndpointIssue,
+  type EdgeKind,
+  removedOptionHandles,
+  SCENE_SHOT_HANDLE,
+  wouldCreateCycle,
+} from '../graphRules'
 import { uid } from '../../uid'
 
 /**
@@ -253,6 +260,100 @@ function branchOptionsError(options: unknown[]): string | null {
   return bad ? '分支 options 含异型成员（须为字符串或带字符串 label 的对象）' : null
 }
 
+/** shot.refs 成员的引用位联合（§4.2 ShotRef 的信任边界对等）。 */
+function isShotRefMember(r: unknown): boolean {
+  if (!plainObject(r)) return false
+  if (r.kind !== 'character' && r.kind !== 'location' && r.kind !== 'audio') return false
+  const hasAsset = typeof r.assetId === 'string'
+  const hasLabel = typeof r.label === 'string'
+  return hasAsset !== hasLabel
+}
+
+/** 各类型的标量字段值形状（nodeValueShapeError 的分类型明细）。 */
+function scalarShapeIssues(nodeType: string, fields: Record<string, unknown>): string[] {
+  const issues: string[] = []
+  const str = (f: string) => {
+    if (fields[f] !== undefined && typeof fields[f] !== 'string') issues.push(`${f} 须为字符串`)
+  }
+  // 数值字段只拦类型（崩溃形状）；正整数/安全整数域由 §9.3 命令边界与
+  // §11.1 加载归一化负责——批量层历史上即容忍 episodeNo: 0（加载时删除）
+  const finiteNumber = (f: string) => {
+    const v = fields[f]
+    if (v !== undefined && !(typeof v === 'number' && Number.isFinite(v))) {
+      issues.push(`${f} 须为数字`)
+    }
+  }
+  switch (nodeType) {
+    case 'scene':
+      ;['name', 'locationId', 'time', 'weather', 'synopsis'].forEach(str)
+      finiteNumber('sceneNo')
+      finiteNumber('episodeNo')
+      if (fields.interior !== undefined && typeof fields.interior !== 'boolean') {
+        issues.push('interior 须为布尔')
+      }
+      break
+    case 'dialogue':
+      str('name')
+      finiteNumber('episodeNo')
+      break
+    case 'beat':
+      str('name')
+      str('tone')
+      finiteNumber('episodeNo')
+      break
+    case 'branch':
+      str('prompt')
+      finiteNumber('episodeNo')
+      break
+    case 'shot':
+      ;['size', 'picture', 'prompt'].forEach(str)
+      finiteNumber('shotNo')
+      break
+    default:
+      break
+  }
+  return issues
+}
+
+/** 各类型的列表成员值形状（nodeValueShapeError 的分类型明细）。 */
+function listShapeIssues(nodeType: string, fields: Record<string, unknown>): string[] {
+  const issues: string[] = []
+  if (nodeType === 'scene' && fields.characterIds !== undefined) {
+    const arr = fields.characterIds
+    if (!Array.isArray(arr) || arr.some((c) => typeof c !== 'string')) {
+      issues.push('characterIds 须为字符串数组')
+    }
+  }
+  if (nodeType === 'dialogue' && fields.lines !== undefined) {
+    const arr = fields.lines
+    const bad =
+      !Array.isArray(arr) ||
+      arr.some(
+        (l) =>
+          !plainObject(l) ||
+          typeof l.text !== 'string' ||
+          ('speaker' in l && typeof l.speaker !== 'string'),
+      )
+    if (bad) issues.push('lines 须为带字符串 text 的对象数组（speaker 可选字符串）')
+  }
+  if (nodeType === 'shot' && fields.refs !== undefined) {
+    const arr = fields.refs
+    if (!Array.isArray(arr) || arr.some((r) => !isShotRefMember(r))) {
+      issues.push('refs 须为引用位对象数组（kind ∈ character/location/audio，assetId/label 恰一为字符串）')
+    }
+  }
+  return issues
+}
+
+/** 逐类型载荷值形状校验（信任边界，§9.3/§11.3 的批命令对等）：字段键
+ * 白名单只拦未知字段，异型**值**若放行会经 buildCanvasNode 摊进活动节点，
+ * 渲染层（ShotNode 的 picture/refs、DialogueNode 的 lines）解引用即崩，
+ * 加载归一化来不及兜底。字段存在才校验（patch 局部更新）；null 表示通过。 */
+function nodeValueShapeError(nodeType: string, fields: Record<string, unknown>): string | null {
+  const issues = [...scalarShapeIssues(nodeType, fields), ...listShapeIssues(nodeType, fields)]
+  return issues.length > 0 ? `载荷形状错误：${issues.join('；')}` : null
+}
+
 function foldCreate(st: FoldState, cmd: Record<string, unknown>, index: number): void {
   const nodeType = asText(cmd.nodeType)
   if (!(nodeType in NODE_TYPE_LABELS)) return st.fail(index, `未知节点类型：${nodeType || '（空）'}`)
@@ -260,6 +361,8 @@ function foldCreate(st: FoldState, cmd: Record<string, unknown>, index: number):
   if (!plainObject(data)) return st.fail(index, 'data 必须是字段对象')
   const keyError = checkFieldKeys(nodeType, data)
   if (keyError) return st.fail(index, keyError)
+  const shapeError = nodeValueShapeError(nodeType, data)
+  if (shapeError) return st.fail(index, shapeError)
   if (nodeType === 'branch' && Array.isArray(data.options)) {
     const optError = branchOptionsError(data.options as unknown[])
     if (optError) return st.fail(index, optError)
@@ -293,6 +396,8 @@ function foldUpdate(st: FoldState, cmd: Record<string, unknown>, index: number):
   if (!plainObject(patch) || Object.keys(patch).length === 0) return st.fail(index, 'patch 为空')
   const keyError = checkFieldKeys(st.types.get(id) ?? '', patch)
   if (keyError) return st.fail(index, keyError)
+  const patchShapeError = nodeValueShapeError(st.types.get(id) ?? '', patch)
+  if (patchShapeError) return st.fail(index, patchShapeError)
   if (st.types.get(id) === 'branch' && Array.isArray(patch.options)) {
     const optError = branchOptionsError(patch.options as unknown[])
     if (optError) return st.fail(index, optError)
@@ -417,6 +522,14 @@ function foldEdge(st: FoldState, cmd: Record<string, unknown>, index: number, op
   const port = edgePortOf(st, kind, cmd, src, dst)
   if (typeof port === 'string') return st.fail(index, port)
   const { handle, optionIndex } = port
+  // 端点类型约束（§5 端口归属）：与加载归一化的孤儿边规则对等——放行
+  // 「保存后下次加载即被静默删除」的连线（分镜卡参与剧情流等）是坏体验
+  const endpointIssue = connectionEndpointIssue(
+    st.types.get(src),
+    st.types.get(dst),
+    kind as EdgeKind,
+  )
+  if (endpointIssue) return st.fail(index, `${endpointIssue}：${pairLabel}`)
   if (st.virtualEdges.some((e) => e.source === src && e.target === dst && (e.sourceHandle ?? null) === handle)) {
     return st.fail(index, `重复连线：${pairLabel}`)
   }

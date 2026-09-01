@@ -325,19 +325,20 @@ describe('参数字段校验（⚙️ 设置面板字段的 AI 通道）', () =>
 })
 
 describe('分类型连线校验（剧情流 / 分支选项出口 / 分镜下挂）', () => {
-  it('默认 sequence：普通节点间连线合法', () => {
-    const v = validateAiBatch([{ op: 'connect_edge', sourceId: 'b1', targetId: 's1' }], richSnap())
+  it('默认 sequence：普通节点间连线合法；分支 source 走 sequence 拒绝（§5 端口归属）', () => {
+    const v = validateAiBatch([{ op: 'connect_edge', sourceId: 'n2', targetId: 'n1' }], { ...snap(), edges: [] })
     expect(v.ok).toBe(true)
     expect(v.commands[0]).toMatchObject({ edgeKind: 'sequence' })
+    const fromBranch = validateAiBatch([{ op: 'connect_edge', sourceId: 'b1', targetId: 's1' }], richSnap())
+    expect(fromBranch.ok).toBe(false)
   })
 
   it('attach 仅允许 场景 → 分镜（下挂），且不做环检测', () => {
+    // 快照携带旧草案遗留的反向边（sh1→s1）：attach 是垂直派生边，即便快照
+    // 中存在这样的横向路径也不参与环检测——但批次不得再新建分镜端点的剧情流边
     const ok = validateAiBatch(
-      [
-        { op: 'connect_edge', sourceId: 's1', targetId: 'sh1', edgeKind: 'attach' },
-        { op: 'connect_edge', sourceId: 'sh1', targetId: 's1', edgeKind: 'sequence' }, // 反向不成环
-      ],
-      richSnap(),
+      [{ op: 'connect_edge', sourceId: 's1', targetId: 'sh1', edgeKind: 'attach' }],
+      { ...richSnap(), edges: [{ source: 'sh1', target: 's1' }] },
     )
     expect(ok.ok).toBe(true)
     expect(ok.commands[0]).toMatchObject({ edgeKind: 'attach' })
@@ -408,15 +409,13 @@ describe('分类型连线校验（剧情流 / 分支选项出口 / 分镜下挂�
     expect(ok.ok).toBe(true)
   })
 
-  it('同对节点的 sequence 与 attach 视为不同端口，不判重复', () => {
+  it('同对节点的 sequence 涉及分镜卡：拒绝——attach 才是场景↔分镜的唯一连线', () => {
     const v = validateAiBatch(
-      [
-        { op: 'connect_edge', sourceId: 's1', targetId: 'sh1', edgeKind: 'sequence' },
-        { op: 'connect_edge', sourceId: 's1', targetId: 'sh1', edgeKind: 'attach' },
-      ],
+      [{ op: 'connect_edge', sourceId: 's1', targetId: 'sh1', edgeKind: 'sequence' }],
       richSnap(),
     )
-    expect(v.ok).toBe(true)
+    expect(v.ok).toBe(false)
+    expect(v.issues[0].message).toContain('分镜')
   })
 })
 
@@ -449,6 +448,89 @@ describe('validateAiBatch：分支 options 级联簿记前的成员形状校验�
         },
       ],
       richSnap(),
+    )
+    expect(good.ok).toBe(true)
+  })
+})
+
+describe('AI 批量命令的逐类型载荷形状校验（信任边界：字段键白名单之外的值形状）', () => {
+  it('shot 的 picture 非字符串 / refs 含 null：整批拒绝并给出字段级诊断', () => {
+    const bad = validateAiBatch(
+      [
+        {
+          op: 'create_node',
+          nodeType: 'shot',
+          data: { shotNo: 1, size: '特写', picture: {}, prompt: '', refs: [null] },
+        },
+      ],
+      snap(),
+    )
+    expect(bad.ok).toBe(false)
+    const msg = bad.issues.map((i) => i.message).join('\n')
+    expect(msg).toContain('picture')
+    expect(msg).toContain('refs')
+  })
+
+  it('scene 的标量/列表形状：interior 非布尔、characterIds 含非字符串成员均拒绝', () => {
+    const bad = validateAiBatch(
+      [
+        { op: 'create_node', nodeType: 'scene', data: { name: '场', sceneNo: 1, interior: 'yes', characterIds: ['ch-1', 7] } },
+      ],
+      snap(),
+    )
+    expect(bad.ok).toBe(false)
+    const msg = bad.issues.map((i) => i.message).join('\n')
+    expect(msg).toContain('interior')
+    expect(msg).toContain('characterIds')
+  })
+
+  it('dialogue 的 lines 成员须为带字符串 text 的对象；update patch 同域校验', () => {
+    const badCreate = validateAiBatch(
+      [{ op: 'create_node', nodeType: 'dialogue', data: { name: '对白', lines: [{ id: 'l1', kind: 'line', speaker: '', text: 42 }] } }],
+      snap(),
+    )
+    expect(badCreate.ok).toBe(false)
+    expect(badCreate.issues.map((i) => i.message).join('\n')).toContain('lines')
+
+    const badUpdate = validateAiBatch(
+      [{ op: 'update_node', nodeId: 'n1', patch: { synopsis: {} } }],
+      snap(),
+    )
+    expect(badUpdate.ok).toBe(false)
+    expect(badUpdate.issues.map((i) => i.message).join('\n')).toContain('synopsis')
+  })
+
+  it('shot refs 成员违反引用位联合（kind 未知 / assetId 与 label 并存）：拒绝', () => {
+    const bad = validateAiBatch(
+      [
+        {
+          op: 'create_node',
+          nodeType: 'shot',
+          data: {
+            shotNo: 1, size: '特写', picture: '', prompt: '',
+            refs: [
+              { id: 'r1', kind: 'ghost', label: '异灵' },
+              { id: 'r2', kind: 'audio', assetId: 'a-1', label: '并存' },
+            ],
+          },
+        },
+      ],
+      snap(),
+    )
+    expect(bad.ok).toBe(false)
+    expect(bad.issues.map((i) => i.message).join('\n')).toContain('refs')
+  })
+
+  it('合法载荷照常通过（不因形状校验收紧而误拒）', () => {
+    const good = validateAiBatch(
+      [
+        {
+          op: 'create_node',
+          nodeType: 'shot',
+          data: { shotNo: 2, size: '全景', picture: '夜景街道', prompt: '雨夜', refs: [{ kind: 'audio', label: '雨声' }] },
+        },
+      ],
+      snap(),
     )
     expect(good.ok).toBe(true)
   })

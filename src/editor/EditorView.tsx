@@ -44,6 +44,8 @@ import {
   SCENE_SHOT_HANDLE,
   branchOptionIdOf,
   connectEdgeExtras,
+  connectionEndpointIssue,
+  edgeKindOf,
   isDuplicateEdge,
   removedOptionHandles,
   wouldCreateCycle,
@@ -472,17 +474,24 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
     [beatFulfillment],
   )
 
-  /** 连线实时校验（§4.3）：自环 / 成环 / 重复边为非法；attach 下挂一对多合法。
-   * 判定语义与 AI 批量校验共用 graphRules 纯函数；attach 是垂直派生边，
-   * 不参与剧情流环检测（§4.4 横向 = 剧情顺序，垂直 = 派生从属）。 */
+  /** 连线实时校验（§4.3）：自环 / 成环 / 重复边 / 端点类型越界为非法；
+   * attach 下挂一对多合法。判定语义与 AI 批量校验共用 graphRules 纯函数；
+   * attach 是垂直派生边，不参与剧情流环检测（§4.4 横向 = 剧情顺序，
+   * 垂直 = 派生从属）；端点类型约束是加载侧孤儿边规则的交互对等——
+   * 放行分镜卡参与剧情流之类的连线，会在下次加载被静默删除。 */
   const isValidConnection = useCallback(
     (conn: Connection | Edge): boolean => {
       if (conn.source === conn.target) return false
       const existing = edgesRef.current
       if (isDuplicateEdge(existing, conn)) return false
-      if (conn.sourceHandle === SCENE_SHOT_HANDLE) return true
+      const nodeTypeOf = (id: string) => nodesRef.current.find((n) => n.id === id)?.type
+      if (conn.sourceHandle === SCENE_SHOT_HANDLE) {
+        return connectionEndpointIssue(nodeTypeOf(conn.source), nodeTypeOf(conn.target), 'attach') === null
+      }
       const flowEdges = existing.filter((e) => e.sourceHandle !== SCENE_SHOT_HANDLE)
-      return !wouldCreateCycle(flowEdges, conn.source, conn.target)
+      if (wouldCreateCycle(flowEdges, conn.source, conn.target)) return false
+      const kind = edgeKindOf(conn as { type?: string; className?: string; sourceHandle?: string | null })
+      return connectionEndpointIssue(nodeTypeOf(conn.source), nodeTypeOf(conn.target), kind) === null
     },
     [],
   )

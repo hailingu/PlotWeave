@@ -5,6 +5,7 @@ import {
   SCENE_SHOT_HANDLE,
   branchOptionHandle,
   branchOptionIdOf,
+  connectionEndpointIssue,
   removedOptionHandles,
   edgeKindOf,
   isDuplicateEdge,
@@ -131,5 +132,26 @@ describe('connectEdgeExtras（§4.4 新连线差异化字段）', () => {
       type: 'branch',
       data: { optionLabel: 'A' },
     })
+  })
+})
+
+describe('connectionEndpointIssue（§5 端口归属：加载侧孤儿边规则的交互/AI 对等）', () => {
+  it('剧情流端点为分镜卡：拒绝（保存也会在下次加载被静默删除）', () => {
+    expect(connectionEndpointIssue('shot', 'scene', 'sequence')).toContain('分镜')
+    expect(connectionEndpointIssue('scene', 'shot', 'sequence')).toContain('分镜')
+    expect(connectionEndpointIssue('branch', 'shot', 'branch')).toContain('分镜')
+  })
+  it('sequence/attach 的 source 为分支：拒绝（分支只经选项出口）', () => {
+    expect(connectionEndpointIssue('branch', 'scene', 'sequence')).toContain('分支')
+    expect(connectionEndpointIssue('branch', 'shot', 'attach')).toContain('分支')
+  })
+  it('attach 端点类型不合法（须 scene → shot）：拒绝', () => {
+    expect(connectionEndpointIssue('scene', 'scene', 'attach')).toContain('attach')
+    expect(connectionEndpointIssue('scene', 'shot', 'attach')).toBeNull()
+  })
+  it('合法剧情流/分支出口连线放行', () => {
+    expect(connectionEndpointIssue('scene', 'scene', 'sequence')).toBeNull()
+    expect(connectionEndpointIssue('branch', 'scene', 'branch')).toBeNull()
+    expect(connectionEndpointIssue('beat', 'scene', 'sequence')).toBeNull()
   })
 })
