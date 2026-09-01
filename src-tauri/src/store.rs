@@ -686,6 +686,27 @@ fn prepare_save(id: &str, doc: &ProjectFile) -> Result<ProjectFile, String> {
     })
 }
 
+/// rename 的父目录持久性屏障（§10.2）。Unix：打开目录句柄并 sync_all。
+/// Windows：std 的 `File::open` 不带目录句柄所需的 FILE_FLAG_BACKUP_
+/// SEMANTICS，打开必然失败——且发生在 rename 已提交之后，会把每次成功的
+/// 写落盘误报为失败（自动保存无限重试）。该平台跳过屏障而非误报。
+fn sync_directory(dir: &std::path::Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        let d =
+            fs::File::open(dir).map_err(|e| format!("打开项目目录失败（持久性屏障缺失）：{e}"))?;
+        d.sync_all()
+            .map_err(|e| format!("同步项目目录失败（持久性屏障缺失）：{e}"))?;
+    }
+    #[cfg(not(unix))]
+    {
+        // std 无法以目录语义打开句柄；「打开/同步失败不粉饰成功」的契约
+        // 只对可实现该屏障的平台生效
+        let _ = dir;
+    }
+    Ok(())
+}
+
 /// 原子写控制文件（§10.2）：同目录随机名临时文件排他创建（避免预置 `.tmp`
 /// 符号链接截获）→ 写入 + flush/fsync → rename 原子覆盖 → 父目录 fsync
 /// （持久性屏障，打开/同步失败向上传播、不粉饰成功）；失败尽力清理临时文件。
@@ -716,12 +737,7 @@ fn atomic_write(dir: &std::path::Path, path: &std::path::Path, text: &str) -> Re
         f.sync_all().map_err(|e| format!("同步临时文件失败：{e}"))?;
         drop(f);
         fs::rename(&tmp, path).map_err(|e| format!("落盘项目失败：{e}"))?;
-        // 父目录 fsync 是 rename 的持久性屏障（§10.2）：打开/同步失败不得
-        // 静默吞掉——否则崩溃或掉电后，已报告的「保存成功」可能并不存在
-        let d =
-            fs::File::open(dir).map_err(|e| format!("打开项目目录失败（持久性屏障缺失）：{e}"))?;
-        d.sync_all()
-            .map_err(|e| format!("同步项目目录失败（持久性屏障缺失）：{e}"))?;
+        sync_directory(dir)?;
         Ok(())
     })();
     if result.is_err() {
@@ -1113,12 +1129,15 @@ pub fn save_project(app: AppHandle, id: String, doc: ProjectFile) -> Result<Proj
     persist_project(&dir, &id, doc)
 }
 
-/// save_project 的可测内核（给定已验证的 projects 目录）。
+/// save_project 的可测内核（给定已验证的 projects 目录）。id 是 IPC 调用方
+/// 传入的不可信参数：词法校验先于任何路径拼接——否则 `../prefs` 式 id 可把
+/// 空资产索引（复验不设防）的整份文档写到 projects/ 之外。
 fn persist_project(
     dir: &std::path::Path,
     id: &str,
     doc: ProjectFile,
 ) -> Result<ProjectMeta, String> {
+    validate_id(id)?;
     // 句柄持有至函数结束——复验过的实体覆盖整个保存决策
     let _verified_assets = verify_save_asset_files(dir, id, &doc.assets)?;
     let file = prepare_save(id, &doc)?;
@@ -2088,6 +2107,30 @@ mod tests {
         let meta = persist_project(&projects, "p-1", doc).expect("保存");
         assert_eq!(meta.name, "剧");
         assert!(projects.join("p-1.json").exists(), "项目文件应落盘");
+        cleanup_temp(&projects);
+    }
+    #[test]
+    fn persist_project_rejects_untrusted_id_before_any_join() {
+        let projects = temp_projects_dir();
+        let doc = new_project_file("p-1", "剧".into(), now_iso());
+        // 空资产索引下复验不设防：id 词法校验必须在任何路径拼接前拒绝
+        let err = persist_project(&projects, "../evil", doc).unwrap_err();
+        assert!(err.contains("非法"), "意外诊断：{err}");
+        // 不得在 projects/ 之外创建任何文件
+        assert!(
+            fs::symlink_metadata(projects.parent().expect("临时根").join("evil.json")).is_err(),
+            "越界 id 不应写出 projects/"
+        );
+        cleanup_temp(&projects);
+    }
+
+    #[test]
+    fn sync_directory_syncs_openable_directory_on_unix_like_targets() {
+        let projects = temp_projects_dir();
+        #[cfg(unix)]
+        assert!(sync_directory(&projects).is_ok());
+        #[cfg(not(unix))]
+        assert!(sync_directory(&projects).is_ok());
         cleanup_temp(&projects);
     }
 }
