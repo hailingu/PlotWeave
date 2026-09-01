@@ -32,7 +32,8 @@ import { uid } from '../uid'
 
 /** 节点 → 落盘形态：四分区拆分；name/episodeNo 上移 meta，其余字段进 spec。
  * meta 按 type 判别（§4.1）：名称型节点 label 必填（运行态保证有 name，
- * 缺失时兜底空串），branch/shot 不落 label 镜像。 */
+ * 缺失时兜底空串），branch/shot 不落 label 镜像。可选布局字段 size/zIndex
+ * 与 React Flow 的 width/height/zIndex 互转，携带即落盘（§4.1）。 */
 export function toStoryNode(n: CanvasNode): StoryNode {
   const { name, episodeNo, ...spec } = n.data as Record<string, unknown> & {
     name?: string
@@ -40,9 +41,15 @@ export function toStoryNode(n: CanvasNode): StoryNode {
   }
   const optionalMeta =
     episodeNo !== undefined ? { episodeNo } : {}
+  const optionalLayout = {
+    ...(typeof n.width === 'number' && typeof n.height === 'number'
+      ? { size: { width: n.width, height: n.height } }
+      : {}),
+    ...(n.zIndex !== undefined ? { zIndex: n.zIndex } : {}),
+  }
   const base = {
     id: n.id,
-    layout: { position: { x: n.position.x, y: n.position.y } },
+    layout: { position: { x: n.position.x, y: n.position.y }, ...optionalLayout },
     ui: { selected: false, expanded: true },
   }
   if (n.type === 'branch' || n.type === 'shot') {
@@ -63,7 +70,8 @@ export function toStoryNode(n: CanvasNode): StoryNode {
   } as unknown as StoryNode
 }
 
-/** 落盘节点 → 运行态：meta/spec 拍平回 data，ui.selected 恒为 false。 */
+/** 落盘节点 → 运行态：meta/spec 拍平回 data，ui.selected 恒为 false；
+ * 可选 layout.size/zIndex 恢复为 React Flow 的 width/height/zIndex。 */
 export function fromStoryNode(n: StoryNode): CanvasNode {
   const { spec, meta } = n.data
   const data: Record<string, unknown> = { ...(spec as unknown as Record<string, unknown>) }
@@ -73,6 +81,8 @@ export function fromStoryNode(n: StoryNode): CanvasNode {
     id: n.id,
     type: n.type,
     position: { x: n.layout.position.x, y: n.layout.position.y },
+    ...(n.layout.size ? { width: n.layout.size.width, height: n.layout.size.height } : {}),
+    ...(n.layout.zIndex !== undefined ? { zIndex: n.layout.zIndex } : {}),
     selected: false,
     data,
   } as CanvasNode
@@ -686,11 +696,35 @@ function normalizeKeyedListIds(
   return remap
 }
 
-/** 必填列表成员形状判别（§4.2）：characterIds 为字符串引用；lines 另需
- * DialogueLine 判别值与必填字段校验；其余列表成员至少须为普通对象。 */
+/** 分支选项成员形状（§4.2 BranchOption）：label 必填字符串——对象形态的
+ * label 进会话后会被 BranchNode 当 React 子节点渲染而崩溃；id 缺失/空白
+ * 不致命，由键控列表 id 修复兜底，不在此判别。 */
+function isBranchOptionShape(item: unknown): boolean {
+  return isPlainObject(item) && typeof item.label === 'string'
+}
+
+/** 分镜引用位成员形状（§4.2 ShotRef 判别联合）：kind ∈ character/location/audio，
+ * 且 targetId（引用位，字符串）与 label（自由位，字符串）恰居其一——两落即
+ * 镜像字段（禁止），两缺无法判位，均无法机械修复；对象形态 label 会被 ShotNode
+ * 当 React 子节点渲染而崩溃。 */
+function isShotRefShape(item: unknown): boolean {
+  if (!isPlainObject(item)) return false
+  if (item.kind !== 'character' && item.kind !== 'location' && item.kind !== 'audio') return false
+  const hasTarget = typeof item.targetId === 'string'
+  const hasLabel = typeof item.label === 'string'
+  if ('targetId' in item && 'label' in item) return false
+  return hasTarget !== hasLabel
+}
+
+/** 必填列表成员形状判别（§4.2 完整联合）：characterIds 为字符串引用；lines
+ * 需 DialogueLine 判别值与必填字段；options/refs 需 BranchOption/ShotRef 的
+ * 类型相关字段。无法机械修复的异型成员移除，指向被移除选项的连线由孤儿边
+ * 规则收口。 */
 function listMemberShapeOk(listKey: string, item: unknown): boolean {
   if (listKey === 'characterIds') return typeof item === 'string'
   if (listKey === 'lines') return isDialogueLineShape(item)
+  if (listKey === 'options') return isBranchOptionShape(item)
+  if (listKey === 'refs') return isShotRefShape(item)
   return isPlainObject(item)
 }
 
@@ -743,6 +777,29 @@ function repairKeyedListIds(
   }
 }
 
+/** 可选布局数值字段归一化（§4.1/§11.1 节点校验细则，与 §9.3 create_node
+ * 边界同域）：size 存在时须为普通对象且 width/height 为正有限数，zIndex
+ * 存在时须为有限数——非法即剥离该字段并警告（节点本体保留，回退默认尺寸/
+ * 层级），合法字段双向保留，不随打开-保存丢失。 */
+function normalizeLayoutOptionals(layout: Record<string, unknown>, nid: string, warnings: string[]): void {
+  if ('size' in layout) {
+    const size = layout.size
+    const w = isPlainObject(size) ? size.width : undefined
+    const h = isPlainObject(size) ? size.height : undefined
+    const ok =
+      typeof w === 'number' && Number.isFinite(w) && w > 0 &&
+      typeof h === 'number' && Number.isFinite(h) && h > 0
+    if (!ok) {
+      warnings.push(`节点 ${nid} 的 layout.size 非法（须为普通对象且 width/height 为正有限数），已剥离`)
+      delete layout.size
+    }
+  }
+  if ('zIndex' in layout && (typeof layout.zIndex !== 'number' || !Number.isFinite(layout.zIndex))) {
+    warnings.push(`节点 ${nid} 的 layout.zIndex 非法（须为有限数），已剥离`)
+    delete layout.zIndex
+  }
+}
+
 /** 单个节点的成员形状校验与机械修复；嵌套容器（data/spec/meta/layout +
  * position 坐标）或判别联合形状（§4.1/§4.2）无法机械修复时隔离该节点
  * （返回 null）。 */
@@ -772,6 +829,7 @@ function normalizeNode(
     warnings.push(`节点 ${nid} 的 layout.position 坐标非法，无法机械修复，已隔离`)
     return null
   }
+  normalizeLayoutOptionals(layout, nid, warnings)
   normalizeRequiredList(data.spec, member.type, nid, warnings)
   const shapeError = nodeDiscriminantError(member, nid, warnings)
   if (shapeError) {

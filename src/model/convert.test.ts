@@ -1525,3 +1525,103 @@ describe('schemaVersion 0 迁移：键控身份的数组语义保全（§11.1 �
     expect(round.warnings.some((w) => w.includes('不存在的角色') || w.includes('不存在的地点'))).toBe(false)
   })
 })
+
+describe('归一化：键控列表成员的类型字段校验（§4.2 BranchOption/ShotRef 完整判别联合，§9.3 加载侧对等）', () => {
+  it('选项 label 非字符串/缺失、引用位 kind 未知/label 异型/targetId 与 label 两落或两缺：成员移除并警告，合法成员保留', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
+      graph: { nodes: { id: string; data: { spec: Record<string, unknown> } }[] }
+    }
+    const br = doc.graph.nodes.find((n) => n.id === 'br1')!
+    br.data.spec.options = [
+      { id: 'opt-1', label: '坦白' }, // 合法保留
+      { id: 'opt-bad', label: {} }, // label 对象：BranchNode 当 React 子节点渲染即崩溃
+      { id: 'opt-missing' }, // label 缺失
+      'plain-string',
+    ]
+    const sh = doc.graph.nodes.find((n) => n.id === 'sh1')!
+    sh.data.spec.refs = [
+      { id: 'ref-1', kind: 'character', label: '林晚' }, // 合法自由位保留
+      { id: 'ref-2', kind: 'audio', targetId: 'a-1' }, // 合法引用位保留
+      { id: 'ref-3', kind: 'prop', targetId: 'a-1' }, // kind 未知
+      { id: 'ref-4', kind: 'audio', label: {} }, // label 异型
+      { id: 'ref-5', kind: 'audio', targetId: 'a-1', label: '旁白' }, // 镜像两落（§4.2 禁止）
+      { id: 'ref-6', kind: 'location' }, // 两缺
+    ]
+    const round = parseProject(doc)
+    const brData = round.content.nodes.find((n) => n.id === 'br1')!.data as {
+      options: { id: string; label: string }[]
+    }
+    expect(brData.options).toEqual([{ id: 'opt-1', label: '坦白' }])
+    const shData = round.content.nodes.find((n) => n.id === 'sh1')!.data as { refs: unknown[] }
+    expect(shData.refs).toEqual([
+      { id: 'ref-1', kind: 'character', label: '林晚' },
+      { id: 'ref-2', kind: 'audio', targetId: 'a-1' },
+    ])
+    expect(round.warnings.filter((w) => w.includes('异型成员'))).toHaveLength(7)
+  })
+
+  it('指向被移除选项的连线按孤儿边隔离，绑定幸存选项的连线保留', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
+      graph: {
+        nodes: { id: string; data: { spec: Record<string, unknown> } }[]
+        edges: Record<string, unknown>[]
+      }
+    }
+    const br = doc.graph.nodes.find((n) => n.id === 'br1')!
+    br.data.spec.options = [
+      { id: 'opt-1', label: '坦白' },
+      { id: 'opt-2', label: {} }, // e2 绑定的选项被移除
+    ]
+    const round = parseProject(doc)
+    expect(round.content.edges.map((e) => e.id)).not.toContain('e2')
+    expect(round.warnings.some((w) => w.includes('e2'))).toBe(true)
+    expect(round.content.edges.map((e) => e.id)).toEqual(['e1', 'e3'])
+  })
+})
+
+describe('layout.size / layout.zIndex 往返（§4.1 可选布局字段，§9.3 命令边界同域）', () => {
+  it('合法 size 与 zIndex：会话 ⇄ 落盘双向保留；未携带的节点不落可选字段', () => {
+    const content = mkContent()
+    const s1 = content.nodes.find((n) => n.id === 's1')!
+    s1.width = 320
+    s1.height = 200
+    s1.zIndex = 3
+    const doc = serializeProject(content, 'p-1', NOW)
+    const sc = doc.graph.nodes.find((n) => n.id === 's1')!
+    expect(sc.layout.size).toEqual({ width: 320, height: 200 })
+    expect(sc.layout.zIndex).toBe(3)
+    const b1 = doc.graph.nodes.find((n) => n.id === 'b1')!
+    expect('size' in b1.layout).toBe(false)
+    expect('zIndex' in b1.layout).toBe(false)
+    const round = parseProject(doc)
+    const r1 = round.content.nodes.find((n) => n.id === 's1')!
+    expect(r1.width).toBe(320)
+    expect(r1.height).toBe(200)
+    expect(r1.zIndex).toBe(3)
+    const again = serializeProject(round.content, 'p-1', NOW)
+    const sc2 = again.graph.nodes.find((n) => n.id === 's1')!
+    expect(sc2.layout.size).toEqual({ width: 320, height: 200 })
+    expect(sc2.layout.zIndex).toBe(3)
+  })
+
+  it('非法 size（非对象/字段异型/非正数）与非法 zIndex：剥离字段并警告，节点本体保留', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    const layoutOf = (id: string) =>
+      (doc.graph.nodes.find((n) => n.id === id) as unknown as { layout: Record<string, unknown> }).layout
+    layoutOf('s1').size = { width: 0, height: 200 } // 非正
+    layoutOf('s1').zIndex = 'top'
+    layoutOf('b1').size = { width: 'wide', height: 100 } // 字段异型
+    layoutOf('b1').zIndex = Number.POSITIVE_INFINITY
+    layoutOf('d1').size = 'big' // 非普通对象
+    const round = parseProject(doc)
+    expect(round.content.nodes.find((n) => n.id === 's1')).toBeDefined()
+    expect(round.content.nodes.find((n) => n.id === 'b1')).toBeDefined()
+    expect(round.content.nodes.find((n) => n.id === 'd1')).toBeDefined()
+    const r1 = round.content.nodes.find((n) => n.id === 's1')!
+    expect(r1.width).toBeUndefined()
+    expect(r1.height).toBeUndefined()
+    expect(r1.zIndex).toBeUndefined()
+    expect(round.warnings.filter((w) => w.includes('layout.size'))).toHaveLength(3)
+    expect(round.warnings.filter((w) => w.includes('layout.zIndex'))).toHaveLength(2)
+  })
+})
