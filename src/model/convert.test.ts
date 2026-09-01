@@ -1805,3 +1805,50 @@ describe('归一化：边句柄的运行时类型校验（§11.1，JSON 边界�
     expect(round.content.edges.map((e) => e.id)).toEqual(['e1', 'e2'])
   })
 })
+
+describe('归一化：v0 图形容器/成员异型先修复再迁移（§11.1，损坏旧档仍可打开）', () => {
+  const v0Base = (graph: unknown) => ({
+    schemaVersion: 0,
+    project: { id: 'p-old', name: '旧剧', createdAt: '', updatedAt: '2026-01-01T00:00:00.000Z' },
+    graph,
+    settings: { characters: [], locations: [] },
+    episodeTitles: {},
+    assets: { byId: {} },
+  })
+  const scene = (id: string) => ({
+    id,
+    type: 'scene',
+    position: { x: 0, y: 0 },
+    data: { name: id, sceneNo: 1, interior: true, synopsis: '' },
+  })
+
+  it('graph.nodes 为字符串容器：重置为空数组并警告，项目照常打开', () => {
+    const round = parseProject(v0Base({ nodes: 'oops', edges: [] }))
+    expect(round.migrated).toBe(true)
+    expect(round.content.nodes).toEqual([])
+    expect(round.warnings.some((w) => w.includes('graph.nodes'))).toBe(true)
+  })
+
+  it('graph.nodes 含 null 成员：丢弃该成员并警告，合法节点保留', () => {
+    const round = parseProject(v0Base({ nodes: [null, scene('s1')], edges: [] }))
+    expect(round.content.nodes.map((n) => n.id)).toEqual(['s1'])
+    expect(round.warnings.some((w) => w.includes('graph.nodes'))).toBe(true)
+  })
+
+  it('graph.edges 为数字容器：重置为空数组并警告', () => {
+    const round = parseProject(v0Base({ nodes: [scene('s1')], edges: 42 }))
+    expect(round.content.edges).toEqual([])
+    expect(round.warnings.some((w) => w.includes('graph.edges'))).toBe(true)
+  })
+
+  it('graph.edges 含字符串成员：丢弃并警告，合法边保留', () => {
+    const round = parseProject(
+      v0Base({
+        nodes: [scene('s1'), scene('s2')],
+        edges: [{ id: 'e1', source: 's1', target: 's2' }, 'garbage'],
+      }),
+    )
+    expect(round.content.edges.map((e) => e.id)).toEqual(['e1'])
+    expect(round.warnings.some((w) => w.includes('graph.edges'))).toBe(true)
+  })
+})

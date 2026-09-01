@@ -10,7 +10,8 @@ import type { ProjectContent } from '../model/content'
 
 /** 持久化签名（§9.4）：剥离 React Flow 会话态（selected/dragging/measured）
  * 后序列化参与置脏判定的字段。纯选择/拖拽过程帧只改这些字段，签名不变
- * 即不置脏——update_node_ui 语义：不落盘、不刷新 updatedAt 改变首页排序。 */
+ * 即不置脏——update_node_ui 语义：不落盘、不刷新 updatedAt 改变首页排序。
+ * 集标题（§3.5 renameEpisode）无独立脏标记通道，纳入签名随 effect 置脏。 */
 function persistSignature(doc: ProjectContent): string {
   const strip = <T extends Record<string, unknown>>(item: T, keys: string[]) => {
     const rest: Record<string, unknown> = { ...item }
@@ -22,6 +23,7 @@ function persistSignature(doc: ProjectContent): string {
     nodes: doc.nodes.map((n) => strip(n, ['selected', 'dragging', 'measured'])),
     edges: doc.edges.map((e) => strip(e, ['selected'])),
     settings: doc.settings,
+    episodeTitles: doc.episodeTitles ?? {},
   })
 }
 
@@ -73,10 +75,10 @@ export function useDebouncedSave(
       saveTimer.current = null
       flushSave()
     }, delayMs)
-    // 名称/节点/边/设定集触发防抖（集标题、视口经 markDirty 或卸载冲刷兜底）；
+    // 名称/节点/边/设定集/集标题触发防抖（视口经 markDirty 或卸载冲刷兜底）；
     // doc 仅用于计算签名，依赖以签名的组成字段为准
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc.name, doc.nodes, doc.edges, doc.settings, flushSave, delayMs])
+  }, [doc.name, doc.nodes, doc.edges, doc.settings, doc.episodeTitles, flushSave, delayMs])
 
   useEffect(() => {
     return () => {

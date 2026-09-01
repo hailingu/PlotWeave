@@ -172,6 +172,31 @@ describe('useDebouncedSave（防抖落盘 + 脏态卸载冲刷）', () => {
     expect((onSave.mock.calls[0][0] as ProjectContent).name).toBe('真改动')
   })
 
+  it('仅集标题变化（renameEpisode 的改名/清空）也置脏落盘，不静默丢失', () => {
+    const onSave = vi.fn()
+    const { rerender } = renderHook(({ doc }) => useDebouncedSave(doc, onSave), {
+      initialProps: { doc: mkDoc() },
+    })
+    // 大纲行内改名：name/nodes/edges/settings 全不变，只有 episodeTitles 变
+    act(() => {
+      rerender({ doc: { ...mkDoc(), episodeTitles: { 1: '重逢' } } })
+    })
+    act(() => {
+      vi.advanceTimersByTime(600)
+    })
+    expect(onSave).toHaveBeenCalledTimes(1)
+    expect((onSave.mock.calls[0][0] as ProjectContent).episodeTitles).toEqual({ 1: '重逢' })
+    // 清空该集命名（applyEpisodeTitle 删除键）同样触发
+    act(() => {
+      rerender({ doc: { ...mkDoc(), episodeTitles: {} } })
+    })
+    act(() => {
+      vi.advanceTimersByTime(600)
+    })
+    expect(onSave).toHaveBeenCalledTimes(2)
+    expect((onSave.mock.calls[1][0] as ProjectContent).episodeTitles).toEqual({})
+  })
+
   it('落盘后再卸载不重复冲刷（脏标记已清）', () => {
     const onSave = vi.fn()
     const { rerender, unmount } = renderHook(({ doc }) => useDebouncedSave(doc, onSave), {

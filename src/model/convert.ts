@@ -1603,14 +1603,35 @@ export function parseProject(raw: unknown, env: NormalizeEnv = {}): ParseResult 
       episodeTitles?: unknown
     }
     const v0Warnings: string[] = []
+    // 图形容器/成员先归一化再进迁移器（§11.1）：异型容器重置、非对象成员
+    // 丢弃——损坏的旧档按可修复数据对待，绝不因迁移器解引用崩溃而整档拒绝
+    const graphRaw = isPlainObject(env0.graph)
+      ? (env0.graph as Record<string, unknown>)
+      : {}
+    if (!isPlainObject(env0.graph) && env0.graph !== undefined) {
+      v0Warnings.push('graph 容器异型，已重置为空画布')
+    }
+    const v0Array = (v: unknown, label: string): unknown[] => {
+      if (Array.isArray(v)) return v
+      if (v !== undefined) v0Warnings.push(`${label} 非数组，已重置为空数组`)
+      return []
+    }
+    const v0Members = (v: unknown[], label: string): Record<string, unknown>[] => {
+      const out: Record<string, unknown>[] = []
+      v.forEach((item, i) => {
+        if (isPlainObject(item)) out.push(item)
+        else v0Warnings.push(`${label} 的成员 #${i} 不是对象，已丢弃`)
+      })
+      return out
+    }
     const legacy: ProjectContent = {
       name: env0.project?.name ?? '',
       createdAt: env0.project?.createdAt || undefined,
-      nodes: env0.graph?.nodes ?? [],
-      edges: env0.graph?.edges ?? [],
+      nodes: v0Members(v0Array(graphRaw.nodes, 'graph.nodes'), 'graph.nodes') as CanvasNode[],
+      edges: v0Members(v0Array(graphRaw.edges, 'graph.edges'), 'graph.edges') as Edge[],
       settings: (env0.settings ?? {}) as ProjectContent['settings'],
       episodeTitles: normalizeEpisodeTitles(env0.episodeTitles, v0Warnings),
-      viewport: env0.graph?.viewport,
+      viewport: graphRaw.viewport as Viewport | undefined,
     }
     const migrated = migrateProjectDocument(legacy)
     const doc = serializeProject(rewriteIndexOptionHandles(migrated.doc), env0.project?.id ?? '')

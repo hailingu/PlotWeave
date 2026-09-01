@@ -126,6 +126,26 @@ describe('tauriLoad：归一化与迁移回写', () => {
     expect(savedDoc.schemaVersion).toBe(1)
     expect(savedDoc.episodeTitles).toEqual({})
   })
+
+  it('迁移回写失败：内存副本照常交付，显式诊断且不留未处理拒绝', async () => {
+    handlers.set('load_project', () => legacyFile())
+    handlers.set('save_project', () => {
+      throw new Error('目录只读')
+    })
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const { projectStore } = await load()
+      const doc = await projectStore.load('p1')
+      expect(doc.name).toBe('旧剧')
+      await vi.waitFor(() => {
+        expect(
+          errSpy.mock.calls.some((c) => String(c[0]).includes('迁移回写')),
+        ).toBe(true)
+      })
+    } finally {
+      errSpy.mockRestore()
+    }
+  })
 })
 
 describe('tauriList：空库播种与示例升级', () => {
