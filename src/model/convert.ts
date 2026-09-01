@@ -52,17 +52,23 @@ export function toStoryNode(n: CanvasNode): StoryNode {
     layout: { position: { x: n.position.x, y: n.position.y }, ...optionalLayout },
     ui: { selected: false, expanded: true },
   }
+  // meta 时间戳透传（§4.1 演进占位）：会话带上才写回，缺失即省略
+  const ts = n.meta as { createdAt?: unknown; updatedAt?: unknown } | undefined
+  const passthroughTs = {
+    ...(typeof ts?.createdAt === 'string' ? { createdAt: ts.createdAt } : {}),
+    ...(typeof ts?.updatedAt === 'string' ? { updatedAt: ts.updatedAt } : {}),
+  }
   if (n.type === 'branch' || n.type === 'shot') {
     // 派生标题节点：不落 meta.label 镜像；分镜卡随宿主场景分集，
     // 不落独立 episodeNo（§3.5）
-    const meta = n.type === 'shot' ? {} : { ...optionalMeta }
+    const meta = n.type === 'shot' ? { ...passthroughTs } : { ...optionalMeta, ...passthroughTs }
     return {
       ...base,
       type: n.type,
       data: { spec: spec as unknown as BranchSpec & ShotSpec, meta },
     } as unknown as StoryNode
   }
-  const labeled: LabeledMeta = { label: name ?? '', ...optionalMeta }
+  const labeled: LabeledMeta = { label: name ?? '', ...optionalMeta, ...passthroughTs }
   return {
     ...base,
     type: n.type,
@@ -71,12 +77,19 @@ export function toStoryNode(n: CanvasNode): StoryNode {
 }
 
 /** 落盘节点 → 运行态：meta/spec 拍平回 data，ui.selected 恒为 false；
- * 可选 layout.size/zIndex 恢复为 React Flow 的 width/height/zIndex。 */
+ * 可选 layout.size/zIndex 恢复为 React Flow 的 width/height/zIndex；
+ * meta.createdAt/updatedAt（§4.1 演进占位）经顶层 meta 透传，非字符串
+ * 值不带（下游不落盘即剥离）。 */
 export function fromStoryNode(n: StoryNode): CanvasNode {
   const { spec, meta } = n.data
   const data: Record<string, unknown> = { ...(spec as unknown as Record<string, unknown>) }
   if ('label' in meta) data.name = meta.label
   if ('episodeNo' in meta && meta.episodeNo !== undefined) data.episodeNo = meta.episodeNo
+  const metaTs: { createdAt?: string; updatedAt?: string } = {}
+  if (typeof meta.createdAt === 'string') metaTs.createdAt = meta.createdAt
+  if (typeof meta.updatedAt === 'string') metaTs.updatedAt = meta.updatedAt
+  const passthrough =
+    metaTs.createdAt !== undefined || metaTs.updatedAt !== undefined ? { meta: metaTs } : {}
   return {
     id: n.id,
     type: n.type,
@@ -84,6 +97,7 @@ export function fromStoryNode(n: StoryNode): CanvasNode {
     ...(n.layout.size ? { width: n.layout.size.width, height: n.layout.size.height } : {}),
     ...(n.layout.zIndex !== undefined ? { zIndex: n.layout.zIndex } : {}),
     selected: false,
+    ...passthrough,
     data,
   } as CanvasNode
 }
@@ -240,12 +254,15 @@ function plainObjectEntries(
 }
 
 /** relatedIds 成员的非法原因（§6 的 {kind,id} 显式成对：kind ∈
- * character/location、id 非空字符串；(kind,id) 数组内唯一——重复关联会让
- * 反向索引/导航重复列出同一文档）；null 表示通过并登记首见。 */
+ * character/location、id 字符串；(kind,id) 数组内唯一——重复关联会让
+ * 反向索引/导航重复列出同一文档）；null 表示通过并登记首见。
+ * 空白字符串 id 暂留：可能指向即将重发新键的同桶空白键实体，后续经
+ * rewriteBlankKeyReferences 按 kind 改写（第 3 步）；改写后仍空白的项
+ * 在那里移除——提前删除会把有效关联连同空白键实体一起误杀。 */
 function relatedIdIssue(r: unknown, seen: Set<string>): string | null {
   if (!isPlainObject(r)) return '异型（非普通对象）'
   if (r.kind !== 'character' && r.kind !== 'location') return `kind 未知（${String(r.kind)}）`
-  if (typeof r.id !== 'string' || !r.id.trim()) return 'id 缺失、非字符串或空白'
+  if (typeof r.id !== 'string') return 'id 非字符串'
   const pair = `${r.kind} ${r.id}`
   if (seen.has(pair)) return '与首见项 (kind, id) 重复'
   seen.add(pair)
@@ -253,8 +270,9 @@ function relatedIdIssue(r: unknown, seen: Set<string>): string | null {
 }
 
 /** 设定文档 relatedIds 的形状修复（§6/§11.1 第 3 步，与 §9.3 upsert_document
- * 边界同域）：缺失/非数组置空；异型成员、未知 kind、非字符串/空白 id、重复
- * (kind,id) 对（保留首见）逐项移除并警告——非法关联若原样进会话会以 typed
+ * 边界同域）：缺失/非数组置空；异型成员、未知 kind、非字符串 id、重复
+ * (kind,id) 对（保留首见）逐项移除并警告——空白字符串 id 暂留待空键重发
+ * 改写（见 relatedIdIssue）。非法关联若原样进会话会以 typed
  * DocumentEntity 暴露给反向索引/导航，且保存边界只验桶容器、会原样落盘。 */
 function normalizeRelatedIds(key: string, entry: Record<string, unknown>, warnings: string[]): void {
   const related = entry.relatedIds
@@ -422,9 +440,42 @@ function rewriteShotBlankRefs(
   }
 }
 
-/** 空键重发后的同桶引用改写（§11.1 第 3 步）：指向空串的引用字段（场景
- * characterIds/locationId、对白 speaker、分镜 assetId、角色
- * avatarAssetId）随重发改写到新 id 而非变悬空——脏写引用侧同样可出现空串。 */
+/** 设定文档 relatedIds 的空键改写（§11.1 第 3 步，六十六轮）：按 kind
+ * 对应桶改写（禁止跨命名空间）；改写后仍指向空白 id 且无对应重发的项
+ * 移除并警告。 */
+function rewriteDocumentBlankRefs(
+  settings: Record<string, Record<string, unknown>>,
+  remaps: BlankKeyRemaps,
+  warnings: string[],
+): void {
+  for (const [key, doc] of Object.entries(settings.documents) as [string, Record<string, unknown>][]) {
+    if (!Array.isArray(doc.relatedIds)) continue
+    doc.relatedIds = rewrittenDocumentRelations(key, doc.relatedIds as unknown[], remaps, warnings)
+  }
+}
+
+/** 单个设定文档的 relatedIds 空键改写：返回改写并清理后的成员列表。 */
+function rewrittenDocumentRelations(
+  key: string,
+  related: unknown[],
+  remaps: BlankKeyRemaps,
+  warnings: string[],
+): unknown[] {
+  const kept: unknown[] = []
+  for (const r of related) {
+    if (!isPlainObject(r) || (r.kind !== 'character' && r.kind !== 'location')) continue
+    const map = r.kind === 'character' ? remaps.characters : remaps.locations
+    if (typeof r.id === 'string' && map.has(r.id)) r.id = map.get(r.id) as string
+    if (typeof r.id === 'string' && r.id.trim()) kept.push(r)
+    else warnings.push(`设定文档 ${key} 的 relatedIds 项指向空白 id 且无对应重发，已移除`)
+  }
+  return kept
+}
+
+/** 空键重发后的同桶引用改写（§11.1 第 3 步，六十六轮）：指向空串的引用
+ * 字段（场景 characterIds/locationId、对白 speaker、分镜 assetId、角色
+ * avatarAssetId、设定文档 relatedIds 按 kind 对应桶）随重发改写到新 id
+ * 而非变悬空——脏写引用侧同样可出现空串。 */
 function rewriteBlankKeyReferences(
   nodes: StoryNode[],
   settings: Record<string, Record<string, unknown>>,
@@ -441,6 +492,7 @@ function rewriteBlankKeyReferences(
     if (!('avatarAssetId' in ch)) continue
     ch.avatarAssetId = rewriteRef(remaps.assets, ch.avatarAssetId, `角色 ${key} 的 avatarAssetId`, warnings)
   }
+  rewriteDocumentBlankRefs(settings, remaps, warnings)
 }
 
 /** 设定集实体形状校验（§11.3）：必填字段无法机械修复的条目从桶中隔离并警告
@@ -1718,7 +1770,7 @@ function parseLegacyProject(raw: Record<string, unknown>, env: NormalizeEnv): Pa
   const legacy: ProjectContent = {
     name: env0.project?.name ?? '',
     createdAt: env0.project?.createdAt || undefined,
-    nodes: v0Nodes as CanvasNode[],
+    nodes: v0Nodes as unknown as CanvasNode[],
     edges: v0Members(v0Array(graphRaw.edges, 'graph.edges'), 'graph.edges') as Edge[],
     settings: (env0.settings ?? {}) as ProjectContent['settings'],
     episodeTitles: normalizeEpisodeTitles(env0.episodeTitles, v0Warnings),

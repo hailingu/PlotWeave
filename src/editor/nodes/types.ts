@@ -114,10 +114,18 @@ export type BeatFlowNode = Node<BeatNodeData, 'beat'>
 export type BranchFlowNode = Node<BranchNodeData, 'branch'>
 export type ShotFlowNode = Node<ShotNodeData, 'shot'>
 
+/** 落盘 meta 时间戳透传（§4.1 演进占位字段）：编辑器不维护也不展示，
+ * 加载时带上、序列化原样写回——打开→保存不得静默删除既有溯源元数据。 */
+export interface NodeMetaPassthrough {
+  meta?: { createdAt?: string; updatedAt?: string }
+}
+
 /** 画布节点的并集类型，供 useNodesState 使用。 */
-export type CanvasNode =
+export type CanvasNode = (
   | SceneFlowNode
   | DialogueFlowNode
   | BeatFlowNode
   | BranchFlowNode
   | ShotFlowNode
+) &
+  NodeMetaPassthrough

@@ -71,13 +71,28 @@ export function migrateProjectDocument(doc: ProjectContent): {
   let migrated = false
 
   /** v0 设定集数组的实体 id 修复（先于 Record 键控）：数组语义下同 id 引用
-   * 命中首见实体；缺失/非字符串/空白或与首见重复的 id 就地重发，首见不动——
-   * 既不丢实体数据，也不改变既有引用的指向。 */
-  const reissueEntityIds = <T extends { id?: unknown }>(list: T[], prefix: 'ch' | 'loc'): T[] => {
+   * 命中首见实体；缺失、非字符串、空白或与首见重复的 id 就地重发，首见不动
+   * ——既不丢实体数据，也不改变既有引用的指向。空白字符串 id 的重发保留
+   * 「原值 → 新 id」映射（数组内该原值唯一时映射明确，多次出现即歧义不建
+   * 映射），供节点引用与 relatedIds 同步改写（迁移链 ⑤），否则重发即悬空。 */
+  const reissueEntityIds = <T extends { id?: unknown }>(
+    list: T[],
+    prefix: 'ch' | 'loc',
+  ): { list: T[]; remap: Map<string, string> } => {
+    const rawOf = (e: T): string | null =>
+      e !== null && typeof e === 'object' && typeof (e as { id?: unknown }).id === 'string'
+        ? ((e as { id?: unknown }).id as string)
+        : null
+    const blankCount = new Map<string, number>()
+    for (const e of list) {
+      const raw = rawOf(e)
+      if (raw !== null && !raw.trim()) blankCount.set(raw, (blankCount.get(raw) ?? 0) + 1)
+    }
+    const remap = new Map<string, string>()
     const seen = new Set<string>()
-    return list.map((e) => {
-      const raw = e !== null && typeof e === 'object' ? e.id : undefined
-      const id = typeof raw === 'string' ? raw : ''
+    const out = list.map((e) => {
+      const raw = rawOf(e)
+      const id = raw ?? ''
       if (id.trim() && !seen.has(id)) {
         seen.add(id)
         return e
@@ -85,11 +100,40 @@ export function migrateProjectDocument(doc: ProjectContent): {
       migrated = true
       const nid = newEntityId(prefix)
       seen.add(nid)
+      if (raw !== null && blankCount.get(raw) === 1) remap.set(raw, nid)
       return { ...(e as object), id: nid } as T
     })
+    return { list: out, remap }
   }
-  settings.characters = reissueEntityIds(settings.characters, 'ch')
-  settings.locations = reissueEntityIds(settings.locations, 'loc')
+  const { list: characterList, remap: characterRemap } = reissueEntityIds(
+    settings.characters,
+    'ch',
+  )
+  settings.characters = characterList as typeof settings.characters
+  const { list: locationList, remap: locationRemap } = reissueEntityIds(
+    settings.locations,
+    'loc',
+  )
+  settings.locations = locationList as typeof settings.locations
+
+  /** 同桶空白 id 引用改写（迁移链 ⑤ 与 §11.1 第 3 步同款）：relatedIds 按
+   * kind 对应桶改写，禁止跨命名空间。 */
+  const bucketRemapOf = (kind: unknown): Map<string, string> | null => {
+    if (kind === 'character') return characterRemap
+    if (kind === 'location') return locationRemap
+    return null
+  }
+  const rewriteByBucket = (kind: unknown, id: unknown): unknown => {
+    if (typeof id !== 'string') return id
+    return bucketRemapOf(kind)?.get(id) ?? id
+  }
+  for (const doc of settings.documents ?? []) {
+    if (!Array.isArray(doc?.relatedIds)) continue
+    doc.relatedIds = doc.relatedIds.map((r) => {
+      const id = rewriteByBucket(r?.kind, r?.id)
+      return typeof id === 'string' ? { ...r, id } : r
+    })
+  }
 
   /** 头像按「名字首字 + 渐变」解析到既有实体（§8.1）。JSON 边界擦除类型：
    * 设定数组成员的 name 可能非字符串——谓词先验类型再调用 startsWith，
@@ -132,12 +176,18 @@ export function migrateProjectDocument(doc: ProjectContent): {
         delete d.characters
         migrated = true
       } else if (Array.isArray(d.characterIds)) {
-        characterIds = d.characterIds as string[]
+        // 引用随空白 id 重发改写（⑤）：保持指向重发后的实体而非悬空
+        characterIds = (d.characterIds as unknown[]).map((c) =>
+          typeof c === 'string' && characterRemap.has(c) ? characterRemap.get(c) : c,
+        ) as string[]
       } else {
         characterIds = []
         migrated = true
       }
       let locationId = d.locationId as string | undefined
+      if (typeof locationId === 'string' && locationRemap.has(locationId)) {
+        locationId = locationRemap.get(locationId)
+      }
       if (typeof d.location === 'string') {
         locationId = ensureLocation(d.location)
         delete d.location
@@ -153,6 +203,9 @@ export function migrateProjectDocument(doc: ProjectContent): {
           const av = next.speaker as { label: string; gradient?: string }
           migrated = true
           next = { ...next, speaker: ensureCharacter(av.label, av.gradient) }
+        } else if (typeof next.speaker === 'string' && characterRemap.has(next.speaker)) {
+          // 字符串 speaker 随空白 id 重发改写（⑤）
+          next = { ...next, speaker: characterRemap.get(next.speaker) as string }
         }
         if (typeof next.id !== 'string') {
           migrated = true

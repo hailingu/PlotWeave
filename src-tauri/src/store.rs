@@ -462,17 +462,70 @@ fn validate_save_assets(assets: &serde_json::Value) -> Result<(), String> {
     Ok(())
 }
 
+/// 资产路径组件的 no-follow 元数据，缺失映射为「资产文件不存在」。
+fn asset_lstat(path: &std::path::Path, rel_path: &str) -> Result<fs::Metadata, String> {
+    fs::symlink_metadata(path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            format!("资产文件不存在：{rel_path}")
+        } else {
+            format!("读取资产路径元数据失败（{rel_path}）：{e}")
+        }
+    })
+}
+
+/// Unix 组件身份 (dev, ino)。
+#[cfg(unix)]
+fn asset_identity(md: &fs::Metadata) -> (u64, u64) {
+    use std::os::unix::fs::MetadataExt;
+    (md.dev(), md.ino())
+}
+
+/// 打开句柄后的三方一致性复核（Unix）：重新逐组件 no-follow 并与第一遍
+/// 记录的 (dev, ino) 比对，句柄元数据须与终点组件一致——校验期间终点或
+/// 任一中间组件被替换（含换成符号链接或另一实体）即拒绝。
+#[cfg(unix)]
+fn bind_asset_handle_identity(
+    root: &std::path::Path,
+    comps: &[&str],
+    comp_ids: &[(u64, u64)],
+    file: &fs::File,
+    rel_path: &str,
+) -> Result<(), String> {
+    let mut recheck = root.to_path_buf();
+    for (i, comp) in comps.iter().enumerate() {
+        recheck.push(comp);
+        let md = asset_lstat(&recheck, rel_path)?;
+        if md.file_type().is_symlink() {
+            return Err(format!("资产路径在复验期间被替换为符号链接：{rel_path}"));
+        }
+        if asset_identity(&md) != comp_ids[i] {
+            return Err(format!("资产路径在复验期间被替换：{rel_path}"));
+        }
+    }
+    let fm = file
+        .metadata()
+        .map_err(|e| format!("读取资产句柄元数据失败（{rel_path}）：{e}"))?;
+    if asset_identity(&fm) != comp_ids[comps.len() - 1] {
+        return Err(format!("资产文件在复验期间被替换：{rel_path}"));
+    }
+    Ok(())
+}
+
 /// §10.5 保存边界——资产实路径复验（relPath 词法校验之外的文件系统事实）。
 /// 当前扁平布局下项目资产根为 `projects/{id}/`（§10.1 目录化布局随 §7.1 落地
 /// 后由同一函数承接）：根现存时必须是非符号链接的实际目录，随后对 relPath
 /// 逐组件 `symlink_metadata` 拒绝符号链接（no-follow，§10.2 信任链），终点
-/// 必须是普通文件，并以 canonical 包含关系复核未逃逸项目资产根。任一失败
-/// 拒绝整次保存——本函数在盖戳、临时文件与索引更新之前调用。
+/// 必须是普通文件，并以 canonical 包含关系复核未逃逸项目资产根。
+/// 复验与实体绑定：打开终点文件取得句柄，句柄、逐组件 no-follow 元数据与
+/// canonical 路径三方按 (dev, ino) 比对一致才通过（Unix），并把句柄返回给
+/// 调用方持有至保存完成后释放。校验与落盘之间被替换的残余窗口由加载侧
+/// 复验（verify_project_assets）在下次打开时隔离兜底；§10.2 的目录句柄
+/// openat 解析器落地前，这是 std 能力内的最强绑定。
 fn verify_asset_real_path(
     projects: &std::path::Path,
     id: &str,
     rel_path: &str,
-) -> Result<(), String> {
+) -> Result<fs::File, String> {
     let root = projects.join(id);
     let root_md = fs::symlink_metadata(&root)
         .map_err(|_| format!("项目资产根不存在，资产文件不存在：{rel_path}"))?;
@@ -486,43 +539,60 @@ fn verify_asset_real_path(
         .canonicalize()
         .map_err(|e| format!("解析项目资产根真实路径失败：{e}"))?;
 
-    let mut cur = root;
-    for comp in rel_path.split('/') {
+    // 第一遍逐组件 no-follow：拒绝符号链接，中间组件须为目录，记录组件身份
+    #[cfg(unix)]
+    let mut comp_ids: Vec<(u64, u64)> = Vec::new();
+    let comps: Vec<&str> = rel_path.split('/').collect();
+    let mut cur = root.clone();
+    for (i, comp) in comps.iter().enumerate() {
         cur.push(comp);
-        let md = fs::symlink_metadata(&cur).map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                format!("资产文件不存在：{rel_path}")
-            } else {
-                format!("读取资产路径元数据失败（{rel_path}）：{e}")
-            }
-        })?;
+        let md = asset_lstat(&cur, rel_path)?;
         if md.file_type().is_symlink() {
             return Err(format!("资产路径含符号链接：{rel_path}"));
         }
+        if i + 1 < comps.len() && !md.is_dir() {
+            return Err(format!("资产路径的中间组件不是目录：{rel_path}"));
+        }
+        #[cfg(unix)]
+        comp_ids.push(asset_identity(&md));
     }
-    let md = fs::symlink_metadata(&cur)
-        .map_err(|e| format!("读取资产路径元数据失败（{rel_path}）：{e}"))?;
-    if !md.is_file() {
+
+    // 打开终点取得句柄，现场 lstat 复核非符号链接的普通文件，再与第一遍
+    // 的组件身份三方绑定（Unix）
+    let file = fs::File::open(&cur).map_err(|e| format!("打开资产文件失败（{rel_path}）：{e}"))?;
+    let fresh = asset_lstat(&cur, rel_path)?;
+    if fresh.file_type().is_symlink() {
+        return Err(format!("资产路径含符号链接：{rel_path}"));
+    }
+    if !fresh.is_file() {
         return Err(format!("资产路径不是普通文件：{rel_path}"));
     }
+    #[cfg(unix)]
+    bind_asset_handle_identity(&root, &comps, &comp_ids, &file, rel_path)?;
+    #[cfg(not(unix))]
+    let _ = &file;
+
     let real = cur
         .canonicalize()
         .map_err(|e| format!("解析资产真实路径失败（{rel_path}）：{e}"))?;
     if !real.starts_with(&canonical_root) {
         return Err(format!("资产路径逃逸项目资产根：{rel_path}"));
     }
-    Ok(())
+    Ok(file)
 }
 
 /// §10.5：保存前逐项复验资产 relPath 的真实路径。relPath 词法非法（§7.1）
 /// 或字段形状缺失的条目交给 prepare_save 的信封诊断，此处跳过避免重复误报。
+/// 返回已验证资产的打开句柄——调用方持有至保存完成后释放，期间实体不可
+/// 被替换为未验证目标（句柄绑定见 verify_asset_real_path）。
 fn verify_save_asset_files(
     projects: &std::path::Path,
     id: &str,
     assets: &serde_json::Value,
-) -> Result<(), String> {
+) -> Result<Vec<fs::File>, String> {
+    let mut handles = Vec::new();
     let Some(by_id) = assets.get("byId").and_then(|v| v.as_object()) else {
-        return Ok(());
+        return Ok(handles);
     };
     for (key, entry) in by_id {
         let Some(rel) = entry.get("relPath").and_then(|v| v.as_str()) else {
@@ -531,9 +601,11 @@ fn verify_save_asset_files(
         if !is_valid_asset_rel_path(rel) {
             continue;
         }
-        verify_asset_real_path(projects, id, rel).map_err(|e| format!("资产 {key}：{e}"))?;
+        let handle =
+            verify_asset_real_path(projects, id, rel).map_err(|e| format!("资产 {key}：{e}"))?;
+        handles.push(handle);
     }
-    Ok(())
+    Ok(handles)
 }
 
 /// §7.1/§10.5 加载侧资产实路径复验内核：返回文档 assets.byId 中词法合法、
@@ -1035,7 +1107,8 @@ pub fn load_project(app: AppHandle, id: String) -> Result<ProjectFile, String> {
 #[tauri::command]
 pub fn save_project(app: AppHandle, id: String, doc: ProjectFile) -> Result<ProjectMeta, String> {
     let dir = projects_dir(&app)?;
-    verify_save_asset_files(&dir, &id, &doc.assets)?;
+    // 句柄持有至原子写完成后随作用域释放——复验过的实体覆盖整个保存决策
+    let _verified_assets = verify_save_asset_files(&dir, &id, &doc.assets)?;
     let file = prepare_save(&id, &doc)?;
     let path = project_path(&app, &id)?;
     let text = serde_json::to_string_pretty(&file).map_err(|e| format!("序列化失败：{e}"))?;
@@ -1947,6 +2020,19 @@ mod tests {
         std::os::unix::fs::symlink(&outside, projects.join("p-1.json")).expect("建符号链接");
         let err = verify_control_file(&projects, &projects.join("p-1.json")).unwrap_err();
         assert!(err.contains("符号链接"), "意外诊断：{err}");
+        cleanup_temp(&projects);
+    }
+    #[test]
+    fn verify_asset_real_path_returns_open_handle_of_verified_file() {
+        let projects = temp_projects_dir();
+        let assets = projects.join("p-1").join("assets");
+        fs::create_dir_all(&assets).expect("建资产目录");
+        fs::write(assets.join("a1.png"), b"png").expect("写资产文件");
+        // 复验绑定打开句柄：调用方（save_project）持有至保存完成才释放
+        let handle = verify_asset_real_path(&projects, "p-1", "assets/a1.png")
+            .expect("复验通过应返回已打开的句柄");
+        let md = handle.metadata().expect("句柄元数据可读");
+        assert!(md.is_file());
         cleanup_temp(&projects);
     }
 }

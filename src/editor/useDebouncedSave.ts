@@ -13,8 +13,8 @@ import type { ProjectContent } from '../model/content'
  * 即不置脏——update_node_ui 语义：不落盘、不刷新 updatedAt 改变首页排序。
  * 集标题（§3.5 renameEpisode）无独立脏标记通道，纳入签名随 effect 置脏。 */
 function persistSignature(doc: ProjectContent): string {
-  const strip = <T extends Record<string, unknown>>(item: T, keys: string[]) => {
-    const rest: Record<string, unknown> = { ...item }
+  const strip = (item: object, keys: string[]) => {
+    const rest = { ...item } as Record<string, unknown>
     for (const k of keys) delete rest[k]
     return rest
   }

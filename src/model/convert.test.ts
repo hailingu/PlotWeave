@@ -2040,3 +2040,71 @@ describe('归一化：v0 options 槽位保序与设定集成员字段容错（§
     expect(names).toContain('林')
   })
 })
+
+describe('归一化：空白 id 引用的重发改写贯通与节点时间戳透传（§6/§11.1 第 3 步/迁移链 ⑤/§4.1）', () => {
+  it('v1 relatedIds 指向空白键实体：随空键重发改写到新 id，不再提前删除', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
+      settings: { characters: Record<string, Record<string, unknown>>; documents: Record<string, Record<string, unknown>> }
+    }
+    doc.settings.characters = { '': { id: '', name: '林', gradient: 'g' } }
+    doc.settings.documents = {
+      'doc-1': { id: 'doc-1', title: '小传', body: '正文', relatedIds: [{ kind: 'character', id: '' }] },
+    }
+    const round = parseProject(doc)
+    const ch = round.content.settings.characters.find((c) => c.name === '林')!
+    expect(ch.id.startsWith('ch-')).toBe(true)
+    const rel = (round.content.settings.documents ?? []).find((d) => d.id === 'doc-1')!.relatedIds
+    expect(rel).toEqual([{ kind: 'character', id: ch.id }])
+  })
+
+  it('v0 空白实体 id 重发时改写节点引用：characterIds/speaker/locationId 不悬空', () => {
+    const v0 = {
+      schemaVersion: 0,
+      project: { id: 'p-old', name: '旧剧', createdAt: '', updatedAt: '2026-01-01T00:00:00.000Z' },
+      graph: {
+        nodes: [
+          {
+            id: 's1', type: 'scene', position: { x: 0, y: 0 },
+            data: { name: '场一', sceneNo: 1, interior: true, synopsis: '', characterIds: [''], locationId: '' },
+          },
+          {
+            id: 'd1', type: 'dialogue', position: { x: 0, y: 0 },
+            data: { name: '对白', lines: [{ kind: 'line' as const, speaker: '', text: '台词' }] },
+          },
+        ],
+        edges: [],
+      },
+      settings: {
+        characters: [{ id: '', name: '林', gradient: 'g' }],
+        locations: [{ id: '', name: '天台' }],
+      },
+      episodeTitles: {},
+      assets: { byId: {} },
+    }
+    const round = parseProject(v0)
+    const spec = round.content.nodes.find((n) => n.id === 's1')!.data as {
+      characterIds: string[]; locationId?: string
+    }
+    expect(spec.characterIds).toHaveLength(1)
+    expect(spec.characterIds[0].startsWith('ch-')).toBe(true)
+    expect(spec.locationId?.startsWith('loc-')).toBe(true)
+    const d1 = round.content.nodes.find((n) => n.id === 'd1')!.data as {
+      lines: Array<{ speaker: string }>
+    }
+    expect(d1.lines[0].speaker.startsWith('ch-')).toBe(true)
+  })
+
+  it('节点 meta.createdAt/updatedAt 经会话模型往返保留，打开→保存不静默删除', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    doc.graph.nodes[0].data.meta.createdAt = '2026-01-02T03:04:05.000Z'
+    doc.graph.nodes[0].data.meta.updatedAt = '2026-02-03T04:05:06.000Z'
+    const round = parseProject(doc)
+    const node = round.content.nodes[0] as { meta?: { createdAt?: string; updatedAt?: string } }
+    expect(node.meta?.createdAt).toBe('2026-01-02T03:04:05.000Z')
+    expect(node.meta?.updatedAt).toBe('2026-02-03T04:05:06.000Z')
+    const again = serializeProject(round.content, 'p-1', NOW)
+    const persisted = again.graph.nodes[0].data.meta
+    expect(persisted.createdAt).toBe('2026-01-02T03:04:05.000Z')
+    expect(persisted.updatedAt).toBe('2026-02-03T04:05:06.000Z')
+  })
+})
