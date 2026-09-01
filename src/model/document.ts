@@ -66,8 +66,9 @@ export interface BranchSpec {
   options: BranchOption[]
 }
 
-/** 分镜卡引用位：引用位与自由位互斥（targetId / label 不共存，§4.2）。
- * 引用位的唯一真相是 targetId（§8.1）——显示名按 id 实时解析；
+/** 分镜卡引用位：引用位与自由位互斥（assetId / label 不共存，§4.2）。
+ * 引用位的唯一真相是 assetId（§8.1）——只按本项目 assets.byId 实时解析；
+ * kind 只表达生成用途（character/location 限 image/*，audio 限 audio/*）；
  * 自由位为手填文案。落两者即镜像字段（禁止）。 */
 export interface ShotRefBase {
   /** 列表项稳定标识（列表 key），非引用目标。 */
@@ -76,8 +77,8 @@ export interface ShotRefBase {
 }
 
 export type ShotRef =
-  | (ShotRefBase & { targetId: string; label?: never })
-  | (ShotRefBase & { label: string; targetId?: never })
+  | (ShotRefBase & { assetId: string; label?: never })
+  | (ShotRefBase & { label: string; assetId?: never })
 
 /** 分镜卡（监视器卡）：一张卡 = 一个镜头及其 AI 燃料。 */
 export interface ShotSpec {

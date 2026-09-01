@@ -243,6 +243,16 @@ function normalizeNodeFields(nodeType: string, fields: Record<string, unknown>):
   return out
 }
 
+/** 分支 options 入站成员校验（信任边界）：字符串选项（随后由归一化升级为
+ * {label} 对象）或带字符串 label 的普通对象才合法。异型成员（null/数字/
+ * 缺 label/对象形态 label）若放行，级联簿记的 removedOptionHandles 会对
+ * o.id 解引用直接抛异常，对象形态 label 进画布后还会被 BranchNode 当
+ * React 子节点渲染而崩溃——返回拒绝原因，null 表示通过。 */
+function branchOptionsError(options: unknown[]): string | null {
+  const bad = options.some((o) => typeof o !== 'string' && (!plainObject(o) || typeof o.label !== 'string'))
+  return bad ? '分支 options 含异型成员（须为字符串或带字符串 label 的对象）' : null
+}
+
 function foldCreate(st: FoldState, cmd: Record<string, unknown>, index: number): void {
   const nodeType = asText(cmd.nodeType)
   if (!(nodeType in NODE_TYPE_LABELS)) return st.fail(index, `未知节点类型：${nodeType || '（空）'}`)
@@ -250,6 +260,10 @@ function foldCreate(st: FoldState, cmd: Record<string, unknown>, index: number):
   if (!plainObject(data)) return st.fail(index, 'data 必须是字段对象')
   const keyError = checkFieldKeys(nodeType, data)
   if (keyError) return st.fail(index, keyError)
+  if (nodeType === 'branch' && Array.isArray(data.options)) {
+    const optError = branchOptionsError(data.options as unknown[])
+    if (optError) return st.fail(index, optError)
+  }
   const typeLabel = NODE_TYPE_LABELS[nodeType]
   const name = asText(data.name) || asText(data.prompt) || '未命名'
   const virtualId = `__new__:${index}`
@@ -279,6 +293,10 @@ function foldUpdate(st: FoldState, cmd: Record<string, unknown>, index: number):
   if (!plainObject(patch) || Object.keys(patch).length === 0) return st.fail(index, 'patch 为空')
   const keyError = checkFieldKeys(st.types.get(id) ?? '', patch)
   if (keyError) return st.fail(index, keyError)
+  if (st.types.get(id) === 'branch' && Array.isArray(patch.options)) {
+    const optError = branchOptionsError(patch.options as unknown[])
+    if (optError) return st.fail(index, optError)
+  }
   st.items.push({
     kind: 'update',
     danger: false,

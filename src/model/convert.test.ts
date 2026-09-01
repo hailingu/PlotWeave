@@ -365,16 +365,21 @@ describe('parseProject（ProjectDocument → 会话文档，§11 归一化）', 
     expect(round.content.settings.locations).toEqual([])
   })
 
-  it('悬空分镜引用：按 §11.4 标记警告（targetId 按类别解析设定集/资产索引）', () => {
+  it('悬空分镜引用：assetId 只按 assets.byId 解析，缺失按 §11.4 标记警告并保留', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW)
     const shot = doc.graph.nodes.find((n) => n.id === 'sh1')!
     ;(shot.data.spec as { refs: unknown[] }).refs = [
-      { id: 'ref-1', kind: 'character', targetId: 'ch-gone' },
-      { id: 'ref-2', kind: 'audio', targetId: 'a-gone' },
+      { id: 'ref-1', kind: 'character', assetId: 'a-gone' },
+      { id: 'ref-2', kind: 'audio', assetId: 'a-gone2' },
     ]
     const round = parseProject(doc)
-    expect(round.warnings.some((w) => w.includes('ch-gone'))).toBe(true)
+    const refs = (round.content.nodes.find((n) => n.id === 'sh1')!.data as {
+      refs: { assetId?: string }[]
+    }).refs
+    // 悬空引用保留（§8.2.3 不删除用户选择）
+    expect(refs.map((r) => r.assetId)).toEqual(['a-gone', 'a-gone2'])
     expect(round.warnings.some((w) => w.includes('a-gone'))).toBe(true)
+    expect(round.warnings.some((w) => w.includes('a-gone2'))).toBe(true)
   })
 
   it('角色实体头像资产悬空：按 §11.4 标记警告（avatarAssetId 在设定集实体上）', () => {
@@ -1369,7 +1374,7 @@ describe('归一化：键控桶空记录键重发与同桶引用改写（§11.1 
     expect(round.warnings.some((w) => w.includes('重发'))).toBe(true)
   })
 
-  it('assets.byId 空键：重发新键，角色 avatarAssetId 与分镜音频引用的空串 targetId 随重发改写', () => {
+  it('assets.byId 空键：重发新键，角色 avatarAssetId 与分镜音频引用的空串 assetId 随重发改写', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as DirtyDoc
     doc.assets.byId[''] = {
       id: '',
@@ -1381,7 +1386,7 @@ describe('归一化：键控桶空记录键重发与同桶引用改写（§11.1 
     doc.settings.characters['ch-1'].avatarAssetId = ''
     const shot = doc.graph.nodes.find((n) => n.id === 'sh1')!
     ;(shot.data as { spec: { refs: unknown[] } }).spec.refs = [
-      { id: 'ref-1', kind: 'audio', targetId: '' },
+      { id: 'ref-1', kind: 'audio', assetId: '' },
     ]
     const round = parseProject(doc)
     const byId = round.content.assets?.byId ?? {}
@@ -1390,9 +1395,9 @@ describe('归一化：键控桶空记录键重发与同桶引用改写（§11.1 
     const ch = round.content.settings.characters.find((c) => c.id === 'ch-1')!
     expect((ch as { avatarAssetId?: string }).avatarAssetId).toBe(assetId)
     const refs = (round.content.nodes.find((n) => n.id === 'sh1')!.data as {
-      refs: { targetId?: string }[]
+      refs: { assetId?: string }[]
     }).refs
-    expect(refs[0].targetId).toBe(assetId)
+    expect(refs[0].assetId).toBe(assetId)
     expect(round.warnings.some((w) => w.includes('不存在的目标'))).toBe(false)
     expect(round.warnings.some((w) => w.includes('重发'))).toBe(true)
   })
@@ -1527,7 +1532,7 @@ describe('schemaVersion 0 迁移：键控身份的数组语义保全（§11.1 �
 })
 
 describe('归一化：键控列表成员的类型字段校验（§4.2 BranchOption/ShotRef 完整判别联合，§9.3 加载侧对等）', () => {
-  it('选项 label 非字符串/缺失、引用位 kind 未知/label 异型/targetId 与 label 两落或两缺：成员移除并警告，合法成员保留', () => {
+  it('选项 label 非字符串/缺失、引用位 kind 未知/label 异型/assetId 与 label 两落或两缺：成员移除并警告，合法成员保留', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
       graph: { nodes: { id: string; data: { spec: Record<string, unknown> } }[] }
     }
@@ -1541,10 +1546,10 @@ describe('归一化：键控列表成员的类型字段校验（§4.2 BranchOpti
     const sh = doc.graph.nodes.find((n) => n.id === 'sh1')!
     sh.data.spec.refs = [
       { id: 'ref-1', kind: 'character', label: '林晚' }, // 合法自由位保留
-      { id: 'ref-2', kind: 'audio', targetId: 'a-1' }, // 合法引用位保留
-      { id: 'ref-3', kind: 'prop', targetId: 'a-1' }, // kind 未知
+      { id: 'ref-2', kind: 'audio', assetId: 'a-1' }, // 合法引用位保留
+      { id: 'ref-3', kind: 'prop', assetId: 'a-1' }, // kind 未知
       { id: 'ref-4', kind: 'audio', label: {} }, // label 异型
-      { id: 'ref-5', kind: 'audio', targetId: 'a-1', label: '旁白' }, // 镜像两落（§4.2 禁止）
+      { id: 'ref-5', kind: 'audio', assetId: 'a-1', label: '旁白' }, // 镜像两落（§4.2 禁止）
       { id: 'ref-6', kind: 'location' }, // 两缺
     ]
     const round = parseProject(doc)
@@ -1555,7 +1560,7 @@ describe('归一化：键控列表成员的类型字段校验（§4.2 BranchOpti
     const shData = round.content.nodes.find((n) => n.id === 'sh1')!.data as { refs: unknown[] }
     expect(shData.refs).toEqual([
       { id: 'ref-1', kind: 'character', label: '林晚' },
-      { id: 'ref-2', kind: 'audio', targetId: 'a-1' },
+      { id: 'ref-2', kind: 'audio', assetId: 'a-1' },
     ])
     expect(round.warnings.filter((w) => w.includes('异型成员'))).toHaveLength(7)
   })
@@ -1623,5 +1628,86 @@ describe('layout.size / layout.zIndex 往返（§4.1 可选布局字段，§9.3 
     expect(r1.zIndex).toBeUndefined()
     expect(round.warnings.filter((w) => w.includes('layout.size'))).toHaveLength(3)
     expect(round.warnings.filter((w) => w.includes('layout.zIndex'))).toHaveLength(2)
+  })
+})
+
+describe('归一化：ShotRef 旧草案 targetId 的无歧义兼容与资产命名空间（§4.2/§8.1/§11.1 六十四轮）', () => {
+  /** 可改写的脏 v1 文档视图（资产索引 + 节点）。 */
+  type RefDoc = {
+    graph: { nodes: Record<string, unknown>[] }
+    settings: Record<string, Record<string, Record<string, unknown>>>
+    assets: { byId: Record<string, Record<string, unknown>> }
+  }
+  const mkAsset = (id: string, relPath: string, mime: string) => ({
+    id,
+    relPath,
+    mime,
+    source: 'upload',
+    createdAt: '2026-08-01T00:00:00.000Z',
+  })
+  const setRefs = (doc: RefDoc, refs: unknown[]) => {
+    const shot = doc.graph.nodes.find((n) => n.id === 'sh1')!
+    ;(shot.data as { spec: { refs: unknown[] } }).spec.refs = refs
+  }
+  const refsOf = (round: ReturnType<typeof parseProject>) =>
+    (round.content.nodes.find((n) => n.id === 'sh1')!.data as unknown as { refs: Record<string, unknown>[] }).refs
+
+  it('audio 旧 targetId 视为项目资产 id：改名 assetId；目标缺失保留为悬空引用并警告', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as RefDoc
+    doc.assets.byId['a-wav'] = mkAsset('a-wav', 'assets/rain.wav', 'audio/wav')
+    setRefs(doc, [
+      { id: 'r1', kind: 'audio', targetId: 'a-wav' },
+      { id: 'r2', kind: 'audio', targetId: 'a-gone' },
+    ])
+    const round = parseProject(doc)
+    expect(refsOf(round)).toEqual([
+      { id: 'r1', kind: 'audio', assetId: 'a-wav' },
+      { id: 'r2', kind: 'audio', assetId: 'a-gone' },
+    ])
+    expect(round.warnings.some((w) => w.includes('a-gone'))).toBe(true)
+  })
+
+  it('character/location 旧 targetId：唯一命中活动 image/* 资产且未命中对应设定桶实体才改名，否则隔离', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as RefDoc
+    doc.assets.byId['a-img'] = mkAsset('a-img', 'assets/portrait.png', 'image/png')
+    doc.assets.byId['a-wav'] = mkAsset('a-wav', 'assets/rain.wav', 'audio/wav')
+    setRefs(doc, [
+      { id: 'r1', kind: 'character', targetId: 'a-img' }, // 唯一命中 image 资产、未命中实体 → 改名
+      { id: 'r2', kind: 'character', targetId: 'ch-1' }, // 命中角色实体 → 禁止实体 id 当资产 id，隔离
+      { id: 'r3', kind: 'character', targetId: 'a-wav' }, // 命中资产但 MIME 家族不符 → 隔离
+      { id: 'r4', kind: 'location', targetId: 'loc-gone' }, // 资产与实体两不沾 → 隔离
+    ])
+    const round = parseProject(doc)
+    expect(refsOf(round)).toEqual([{ id: 'r1', kind: 'character', assetId: 'a-img' }])
+    expect(round.warnings.filter((w) => w.includes('targetId')).length).toBeGreaterThanOrEqual(3)
+  })
+
+  it('旧 targetId 与 assetId/label 并存、空白或非字符串：按歧义/异型隔离该 ref', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as RefDoc
+    doc.assets.byId['a-wav'] = mkAsset('a-wav', 'assets/rain.wav', 'audio/wav')
+    setRefs(doc, [
+      { id: 'r1', kind: 'audio', targetId: 'a-wav', assetId: 'a-wav' }, // 并存 assetId
+      { id: 'r2', kind: 'audio', targetId: 'a-wav', label: '旁白' }, // 并存 label
+      { id: 'r3', kind: 'audio', targetId: '' }, // 空白旧值
+      { id: 'r4', kind: 'audio', targetId: 7 }, // 非字符串旧值
+      { id: 'r5', kind: 'audio', targetId: 'a-wav' }, // 正常改名保留
+    ])
+    const round = parseProject(doc)
+    expect(refsOf(round)).toEqual([{ id: 'r5', kind: 'audio', assetId: 'a-wav' }])
+    expect(round.warnings.filter((w) => w.includes('targetId'))).toHaveLength(4)
+  })
+
+  it('assetId 的 MIME 家族与 kind 用途不匹配：保留为不可用引用并警告，不改按其他命名空间解释', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as RefDoc
+    doc.assets.byId['a-img'] = mkAsset('a-img', 'assets/portrait.png', 'image/png')
+    doc.assets.byId['a-wav'] = mkAsset('a-wav', 'assets/rain.wav', 'audio/wav')
+    setRefs(doc, [
+      { id: 'r1', kind: 'character', assetId: 'a-wav' }, // audio 资产作角色垫图
+      { id: 'r2', kind: 'audio', assetId: 'a-img' }, // image 资产作音频
+      { id: 'r3', kind: 'location', assetId: 'a-img' }, // 匹配，无警告
+    ])
+    const round = parseProject(doc)
+    expect(refsOf(round)).toHaveLength(3)
+    expect(round.warnings.filter((w) => w.includes('MIME'))).toHaveLength(2)
   })
 })

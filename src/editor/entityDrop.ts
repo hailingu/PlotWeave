@@ -7,15 +7,16 @@ import type { EntityDragPayload } from './dragDrop'
 import { uid } from '../uid'
 import type { CanvasNode, ShotRef } from './nodes/types'
 
-/** 分镜引用补丁（§4.2 引用位）：引用目标 = targetId（§8.1 唯一真相），
- * 显示名由解析层按 id 派生；同一目标已引用则返回 null（去重）。 */
+/** 分镜引用补丁（§4.2 自由位）：引用位（assetId）只绑项目资产，设定集实体
+ * 不是合法目标——实体尚无媒体资产时落自由位手填文案（实体名），待资产导入后
+ * 由用户改绑；同名自由位已存在则返回 null（去重）。 */
 function refPatch(
   refs: ShotRef[],
   kind: 'character' | 'location',
-  targetId: string,
+  label: string,
 ): Record<string, unknown> | null {
-  if (refs.some((r) => r.targetId === targetId)) return null
-  return { refs: [...refs, { id: uid('ref'), kind, targetId }] }
+  if (refs.some((r) => r.label === label)) return null
+  return { refs: [...refs, { id: uid('ref'), kind, label }] }
 }
 
 /** 角色实体 → 节点的引用补丁：场景出场 / 对白新台词 / 分镜垫图。 */
@@ -36,7 +37,7 @@ function characterDropPatch(
       ],
     }
   }
-  if (node.type === 'shot') return refPatch(node.data.refs, 'character', entity.id)
+  if (node.type === 'shot') return refPatch(node.data.refs, 'character', entity.name)
   return null
 }
 
@@ -46,7 +47,7 @@ function locationDropPatch(
   entity: EntityDragPayload,
 ): Record<string, unknown> | null {
   if (node.type === 'scene') return { locationId: entity.id }
-  if (node.type === 'shot') return refPatch(node.data.refs, 'location', entity.id)
+  if (node.type === 'shot') return refPatch(node.data.refs, 'location', entity.name)
   return null
 }
 

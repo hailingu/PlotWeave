@@ -395,8 +395,8 @@ function rewriteDialogueBlankRefs(
   }
 }
 
-/** 分镜节点的空键引用改写：targetId 按类别解析到设定集或资产索引（与
- * §11.4 悬空判定的解析口径一致）。 */
+/** 分镜节点的空键引用改写（§11.1 六十四轮）：assetId 只按资产索引解析——
+ * 引用位的唯一命名空间是 assets.byId，不再按 kind 分派设定集桶。 */
 function rewriteShotBlankRefs(
   nid: string,
   spec: Record<string, unknown>,
@@ -405,16 +405,13 @@ function rewriteShotBlankRefs(
 ): void {
   if (!Array.isArray(spec.refs)) return
   for (const ref of spec.refs as unknown[]) {
-    if (!isPlainObject(ref) || !('targetId' in ref)) continue
-    let map = remaps.assets
-    if (ref.kind === 'character') map = remaps.characters
-    else if (ref.kind === 'location') map = remaps.locations
-    ref.targetId = rewriteRef(map, ref.targetId, `节点 ${nid} 的分镜引用 ${String(ref.id)}`, warnings)
+    if (!isPlainObject(ref) || !('assetId' in ref)) continue
+    ref.assetId = rewriteRef(remaps.assets, ref.assetId, `节点 ${nid} 的分镜引用 ${String(ref.id)}`, warnings)
   }
 }
 
 /** 空键重发后的同桶引用改写（§11.1 第 3 步）：指向空串的引用字段（场景
- * characterIds/locationId、对白 speaker、分镜 targetId 按类别、角色
+ * characterIds/locationId、对白 speaker、分镜 assetId、角色
  * avatarAssetId）随重发改写到新 id 而非变悬空——脏写引用侧同样可出现空串。 */
 function rewriteBlankKeyReferences(
   nodes: StoryNode[],
@@ -568,6 +565,106 @@ function normalizeAssetRecords(
   }
 }
 
+/** 桶成员身份快照（六十四轮 targetId 兼容的「修复前后的身份」判定）：记录
+ * 每个记录键与其一致性改写前的内嵌 id（字符串时）——须在键/id 改写前捕获；
+ * 判定时再按桶当前成员过滤，已被隔离的条目不参与命中。 */
+interface IdentitySnapshot {
+  key: string
+  ids: Set<string>
+}
+
+/** 捕获桶内每条记录的身份集合：最终记录键 + 当前内嵌 id（字符串时）。 */
+function identitySnapshot(record: Record<string, Record<string, unknown>>): IdentitySnapshot[] {
+  return Object.entries(record).map(([key, entry]) => {
+    const ids = new Set<string>([key])
+    if (typeof entry.id === 'string' && entry.id.trim()) ids.add(entry.id)
+    return { key, ids }
+  })
+}
+/** targetId 兼容判定的输入面：修复后的设定桶/资产索引（当前成员身份）、
+ * 修复前身份快照与资产空键重发映射。 */
+interface LegacyTargetIdCtx {
+  characters: Record<string, unknown>
+  characterIds0: IdentitySnapshot[]
+  locations: Record<string, unknown>
+  locationIds0: IdentitySnapshot[]
+  byId: Record<string, Record<string, unknown>>
+  assetIds0: IdentitySnapshot[]
+  assetRemap: Map<string, string>
+}
+
+/** 旧值是否命中对应设定桶实体（修复前后的身份，已隔离实体不计）。 */
+function legacyEntityHit(value: string, bucket: Record<string, unknown>, snap: IdentitySnapshot[]): boolean {
+  return snap.some((e) => e.key in bucket && e.ids.has(value))
+}
+
+/** 旧值按资产键修复前后的身份唯一命中活动 image/* 资产时返回最终记录键；
+ * 零命中、多命中（歧义）或命中资产已被隔离/家族不符时返回 null。 */
+function legacyImageAssetKey(value: string, ctx: LegacyTargetIdCtx): string | null {
+  const hits = ctx.assetIds0.filter((a) => {
+    const asset = ctx.byId[a.key]
+    return asset !== undefined && typeof asset.mime === 'string' && asset.mime.startsWith('image/') && a.ids.has(value)
+  })
+  return hits.length === 1 ? hits[0].key : null
+}
+
+/** 单条 ref 的旧 targetId 兼容转换：成功改名 assetId 并删除 targetId；
+ * 歧义/异型时隔离该 ref（返回空数组）并警告；不带 targetId 或 kind 未知的
+ * 成员原样交给当前联合校验。 */
+function compatOneShotTargetId(
+  nid: string,
+  ref: unknown,
+  ctx: LegacyTargetIdCtx,
+  warnings: string[],
+): unknown[] {
+  if (!isPlainObject(ref) || !('targetId' in ref)) return [ref]
+  const isolate = (reason: string): unknown[] => {
+    warnings.push(`节点 ${nid} 的分镜引用携带旧字段 targetId（${reason}），已隔离该引用`)
+    return []
+  }
+  if ('assetId' in ref || 'label' in ref) return isolate('与 assetId/label 并存，歧义')
+  const value = ref.targetId
+  if (typeof value !== 'string' || !value.trim()) return isolate('旧值不是合法字符串 id')
+  if (ref.kind === 'audio') {
+    ref.assetId = ctx.assetRemap.get(value) ?? value
+    delete ref.targetId
+    return [ref]
+  }
+  if (ref.kind !== 'character' && ref.kind !== 'location') return [ref]
+  const bucket = ref.kind === 'character' ? ctx.characters : ctx.locations
+  const snap = ref.kind === 'character' ? ctx.characterIds0 : ctx.locationIds0
+  const assetKey = legacyImageAssetKey(value, ctx)
+  if (assetKey !== null && !legacyEntityHit(value, bucket, snap)) {
+    ref.assetId = assetKey
+    delete ref.targetId
+    return [ref]
+  }
+  return isolate('无法无歧义解析为唯一活动 image/* 资产')
+}
+
+/** ShotRef 旧草案 targetId 的无歧义兼容子步骤（§11.1 六十四轮，本步节点
+ * 联合校验的一部分、先于 refs 成员形状筛选）：kind === 'audio' 的旧值依原
+ * 契约视为项目资产 id（随资产空键重发映射）改名 assetId，目标缺失保留为
+ * 悬空引用；kind === 'character' | 'location' 仅当旧值按资产键修复前后的
+ * 身份唯一命中活动 image/* 项目资产、且按对应设定桶修复前后的身份均未命中
+ * 实体时才改名，否则隔离并警告。成功转换后删除 targetId；角色/地点实体 id
+ * 不得当成资产 id，也不隐式追随 Character.avatarAssetId。只处理可遍历的
+ * shot 节点（data/spec 为普通对象且 refs 为数组），其余形态由节点校验收口。 */
+function compatLegacyShotTargetIds(
+  nodesRaw: unknown[],
+  ctx: LegacyTargetIdCtx,
+  warnings: string[],
+): void {
+  for (const member of nodesRaw) {
+    if (!isPlainObject(member) || member.type !== 'shot') continue
+    if (!isPlainObject(member.data) || !isPlainObject(member.data.spec)) continue
+    const spec = member.data.spec
+    if (!Array.isArray(spec.refs)) continue
+    const nid = typeof member.id === 'string' ? member.id : '未知'
+    spec.refs = (spec.refs as unknown[]).flatMap((ref) => compatOneShotTargetId(nid, ref, ctx, warnings))
+  }
+}
+
 /** 对白行成员形状（§4.2 DialogueLine）：判别字段 kind ∈ line/action 且
  * text 必填字符串——text 异型的行进会话后会被 DialogueNode 当 React 子节点
  * 渲染而崩溃，一行坏行不应阻挡整个项目画布打开。id 缺失不致命（列表 key
@@ -703,17 +800,19 @@ function isBranchOptionShape(item: unknown): boolean {
   return isPlainObject(item) && typeof item.label === 'string'
 }
 
-/** 分镜引用位成员形状（§4.2 ShotRef 判别联合）：kind ∈ character/location/audio，
- * 且 targetId（引用位，字符串）与 label（自由位，字符串）恰居其一——两落即
- * 镜像字段（禁止），两缺无法判位，均无法机械修复；对象形态 label 会被 ShotNode
- * 当 React 子节点渲染而崩溃。 */
+/** 分镜引用位成员形状（§4.2 ShotRef 判别联合，六十四轮）：kind ∈
+ * character/location/audio，且 assetId（引用位，字符串）与 label（自由位，
+ * 字符串）恰居其一——两落即镜像字段（禁止），两缺无法判位，均无法机械修复；
+ * 对象形态 label 会被 ShotNode 当 React 子节点渲染而崩溃。空白串 assetId
+ * 在此放行，由随后的资产空键重发改写兜底（§11.1 第 3 步）；旧草案 targetId
+ * 已由兼容子步骤先行转换或隔离，到达此处即异型。 */
 function isShotRefShape(item: unknown): boolean {
   if (!isPlainObject(item)) return false
   if (item.kind !== 'character' && item.kind !== 'location' && item.kind !== 'audio') return false
-  const hasTarget = typeof item.targetId === 'string'
+  if ('assetId' in item && 'label' in item) return false
+  const hasAsset = typeof item.assetId === 'string'
   const hasLabel = typeof item.label === 'string'
-  if ('targetId' in item && 'label' in item) return false
-  return hasTarget !== hasLabel
+  return hasAsset !== hasLabel
 }
 
 /** 必填列表成员形状判别（§4.2 完整联合）：characterIds 为字符串引用；lines
@@ -965,7 +1064,8 @@ function renumberSeqFields(nodes: StoryNode[], warnings: string[]): void {
  * （data/spec/meta/layout + position 坐标）与判别联合形状（§4.1/§4.2）
  * 无法机械修复时隔离该节点，项目必填元数据补齐（受信 id 覆盖、名称回退链、
  * 时间戳修复），节点 ui 默认值补齐，键控桶空记录键重发与同桶引用改写、
- * 键控列表成员 id 重发与编号顺位重发。
+ * 键控列表成员 id 重发与编号顺位重发；分镜 refs 的旧草案 targetId 兼容
+ * 子步骤（六十四轮）在节点联合校验前按资产命名空间无歧义转换或隔离。
  * 修复而非拒绝：均记录警告，单个脏字段不阻断加载（§8.2.4）。
  * 返回的 optionIdRemap 携带 branch 空选项 id 的明确句柄映射（节点 id →
  * 原空 id → 新 id），供归一化末段的引出边 option- 句柄同步改写。 */
@@ -1011,9 +1111,27 @@ function normalizeContainers(
   }
   // props 桶无节点引用面，仅重发空键保证身份可用
   reKeyBlankEntries(entityBucket('props'), 'settings.props', 'prop', warnings)
+  // 六十四轮 targetId 兼容的「修复前身份」快照：须在键/id 一致性改写前捕获
+  const characterIds0 = identitySnapshot(entityBucket('characters'))
+  const locationIds0 = identitySnapshot(entityBucket('locations'))
+  const assetIds0 = identitySnapshot(byId as Record<string, Record<string, unknown>>)
   normalizeEntityShapes(settings, warnings)
   // plainObjectEntries 已过滤为普通对象成员
   normalizeAssetRecords(byId as Record<string, Record<string, unknown>>, warnings)
+  // 旧草案 targetId 兼容：先于节点联合校验（refs 成员形状筛选只认当前联合）
+  compatLegacyShotTargetIds(
+    nodesRaw,
+    {
+      characters: entityBucket('characters'),
+      characterIds0,
+      locations: entityBucket('locations'),
+      locationIds0,
+      byId: byId as Record<string, Record<string, unknown>>,
+      assetIds0,
+      assetRemap: blankRemaps.assets,
+    },
+    warnings,
+  )
   const titlesRaw = containerOf(raw.episodeTitles, 'episodeTitles 非普通键值对象，已重置为空 Record')
   const optionIdRemap = new Map<string, Map<string, string>>()
   const nodes: StoryNode[] = []
@@ -1094,21 +1212,30 @@ function dialogueRefWarnings(
   }
 }
 
-/** 分镜节点的悬空引用位警告（§11.4）：targetId 按类别解析到设定集或资产索引。 */
-function shotRefWarnings(n: StoryNode, doc: ProjectDocument, warnings: string[]): void {
-  for (const ref of (n.data.spec as { refs?: Array<{ id: string; kind: string; targetId?: string }> }).refs ?? []) {
-    if (!ref.targetId) continue
-    if (!refTargetKnown(doc, ref.kind, ref.targetId)) {
-      warnings.push(`节点 ${n.id} 的分镜引用指向不存在的目标 ${ref.targetId}`)
-    }
-  }
+/** 分镜引用位的 MIME 家族与 kind 用途匹配（§4.2 六十四轮）：character/
+ * location 是垫图/底图用途限 image/*，audio 用途限 audio/*。 */
+function shotRefMimeMatches(kind: string, mime: string): boolean {
+  if (kind === 'audio') return mime.startsWith('audio/')
+  return mime.startsWith('image/')
 }
 
-/** 引用目标是否可解析：character/location 查设定集，audio 查资产索引。 */
-function refTargetKnown(doc: ProjectDocument, kind: string, targetId: string): boolean {
-  if (kind === 'character') return !!doc.settings.characters?.[targetId]
-  if (kind === 'location') return !!doc.settings.locations?.[targetId]
-  return !!doc.assets?.byId[targetId]
+/** 分镜节点的引用位警告（§11.4 + §4.2 六十四轮）：assetId 只按本项目
+ * assets.byId 解析——目标缺失保留为悬空引用并警告（不删除用户选择）；
+ * 目标存在但 MIME 家族与 kind 用途不匹配时保留为不可用引用并警告，
+ * 不改按其他命名空间解释。 */
+function shotRefWarnings(n: StoryNode, doc: ProjectDocument, warnings: string[]): void {
+  const refs = (n.data.spec as { refs?: Array<{ id: string; kind: string; assetId?: string }> }).refs ?? []
+  for (const ref of refs) {
+    if (!ref.assetId) continue
+    const asset = doc.assets?.byId[ref.assetId]
+    if (!asset) {
+      warnings.push(`节点 ${n.id} 的分镜引用指向不存在的资产 ${ref.assetId}`)
+      continue
+    }
+    if (!shotRefMimeMatches(ref.kind, asset.mime)) {
+      warnings.push(`节点 ${n.id} 的分镜引用 ${ref.id} 的 MIME 家族与 kind 用途不匹配（资产 ${ref.assetId} 为 ${asset.mime}），保留为不可用引用`)
+    }
+  }
 }
 
 /** 按节点类型分发悬空设定/资产引用检查（§11.4）。 */

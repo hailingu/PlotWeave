@@ -14,20 +14,13 @@ const REF_ICONS = { character: '👤', location: '🏞', audio: '🎵' } as cons
  * ⚙️ 打开设置面板（§4.3，编辑即命令）；镜号标题行不设内联改名。
  */
 export default function ShotNode({ id, data, selected }: NodeProps<ShotFlowNode>) {
-  const { openSettingsId, toggleSettings, settings } = useNodeEdit()
+  const { openSettingsId, toggleSettings } = useNodeEdit()
   const settingsOpen = openSettingsId === id
 
-  /** 引用位显示名（§8.1）：targetId 按设定集实时解析；
-   * 解析不到（失效引用）回退 label，再回退原始 id 供辨认。 */
-  const refText = (ref: ShotFlowNode['data']['refs'][number]): string => {
-    if (ref.kind === 'character') {
-      return settings.characters.find((c) => c.id === ref.targetId)?.name ?? ref.label ?? ref.targetId ?? ''
-    }
-    if (ref.kind === 'location') {
-      return settings.locations.find((l) => l.id === ref.targetId)?.name ?? ref.label ?? ref.targetId ?? ''
-    }
-    return ref.label ?? ref.targetId ?? ''
-  }
+  /** 引用位显示名（§8.1）：自由位显示手填文案；引用位的缩略图/媒体内容
+   * 按 assets.byId 实时解析（随资产 UI 演进），当前回退 assetId 供辨认。 */
+  const refText = (ref: ShotFlowNode['data']['refs'][number]): string =>
+    ref.label ?? ref.assetId ?? ''
 
   return (
     <div className={`pw-shot${selected ? ' pw-on' : ''}`}>

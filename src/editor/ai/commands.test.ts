@@ -419,3 +419,37 @@ describe('分类型连线校验（剧情流 / 分支选项出口 / 分镜下挂�
     expect(v.ok).toBe(true)
   })
 })
+
+describe('validateAiBatch：分支 options 级联簿记前的成员形状校验（信任边界）', () => {
+  it('update_node 的 options 含异型成员（null / 缺 label）：整批拒绝而非抛异常', () => {
+    const withNull = validateAiBatch(
+      [{ op: 'update_node', nodeId: 'b1', patch: { options: [null] } }],
+      richSnap(),
+    )
+    expect(withNull.ok).toBe(false)
+    const noLabel = validateAiBatch(
+      [{ op: 'update_node', nodeId: 'b1', patch: { options: [{ id: 'o1' }] } }],
+      richSnap(),
+    )
+    expect(noLabel.ok).toBe(false)
+  })
+
+  it('create_node 的 options 含异型成员：整批拒绝；字符串选项与完整成员仍放行', () => {
+    const bad = validateAiBatch(
+      [{ op: 'create_node', nodeType: 'branch', data: { prompt: '？', options: [42] } }],
+      richSnap(),
+    )
+    expect(bad.ok).toBe(false)
+    const good = validateAiBatch(
+      [
+        {
+          op: 'create_node',
+          nodeType: 'branch',
+            data: { prompt: '？', options: ['徒手', { id: 'o2', label: '叫人' }] },
+        },
+      ],
+      richSnap(),
+    )
+    expect(good.ok).toBe(true)
+  })
+})
