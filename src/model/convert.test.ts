@@ -1782,3 +1782,26 @@ describe('归一化：场景 time/weather 文本字段校验（§11.1 节点校�
     expect(round.warnings.some((w) => w.includes('s1') && w.includes('weather') && w.includes('剥离'))).toBe(true)
   })
 })
+
+describe('归一化：边句柄的运行时类型校验（§11.1，JSON 边界类型擦除）', () => {
+  /** 可改写的脏 v1 文档视图（仅边数组）。 */
+  type EdgeDoc = { graph: { edges: Record<string, unknown>[] } }
+
+  it('branch 边 sourceHandle 非字符串：隔离该边并警告，其余边保留、项目照常打开', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as EdgeDoc
+    doc.graph.edges.find((e) => e.id === 'e2')!.sourceHandle = 42
+    const round = parseProject(doc)
+    expect(round.content.edges.find((e) => e.id === 'e2')).toBeUndefined()
+    expect(round.warnings.some((w) => w.includes('e2') && w.includes('sourceHandle'))).toBe(true)
+    expect(round.content.edges.map((e) => e.id)).toEqual(['e1', 'e3'])
+  })
+
+  it('attach 边 sourceHandle 为对象：隔离该边并警告，不触发 startsWith 类型异常', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as EdgeDoc
+    doc.graph.edges.find((e) => e.id === 'e3')!.sourceHandle = { handle: 'shots' }
+    const round = parseProject(doc)
+    expect(round.content.edges.find((e) => e.id === 'e3')).toBeUndefined()
+    expect(round.warnings.some((w) => w.includes('e3') && w.includes('sourceHandle'))).toBe(true)
+    expect(round.content.edges.map((e) => e.id)).toEqual(['e1', 'e2'])
+  })
+})

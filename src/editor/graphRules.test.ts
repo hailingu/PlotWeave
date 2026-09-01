@@ -41,6 +41,11 @@ describe('branchOptionHandle（选项端口绑稳定 id，删选项不位移其�
     expect(branchOptionIdOf(null)).toBeUndefined()
     expect(branchOptionIdOf(undefined)).toBeUndefined()
   })
+
+  it('JSON 边界擦除类型后的非字符串句柄（数字/对象）解析为 undefined 而非抛异常', () => {
+    expect(branchOptionIdOf(42 as unknown as string)).toBeUndefined()
+    expect(branchOptionIdOf({} as unknown as string)).toBeUndefined()
+  })
 })
 
 describe('removedOptionHandles（§8.2.2 删选项连带删边的级联依据）', () => {

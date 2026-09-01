@@ -1376,6 +1376,13 @@ function stripAlienHandles(e: StoryEdge, warnings: string[]): StoryEdge | null {
     warnings.push(`sequence 边 ${e.id} 的 sourceHandle 无法绑定匿名端口，已剥离`)
     delete (out as { sourceHandle?: string }).sourceHandle
   }
+  // branch/attach 的 sourceHandle 承载连接语义（选项出口 / shots 端口），
+  // JSON 边界擦除类型后的非字符串值无法剥离修复（剥离即改接语义），隔离该边
+  const sh = (out as { sourceHandle?: unknown }).sourceHandle
+  if ((kind === 'branch' || kind === 'attach') && sh !== undefined && typeof sh !== 'string') {
+    warnings.push(`已隔离边 ${e.id}：${kind} 边的 sourceHandle 非字符串，无法绑定端口`)
+    return null
+  }
   return out
 }
 

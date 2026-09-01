@@ -462,6 +462,80 @@ fn validate_save_assets(assets: &serde_json::Value) -> Result<(), String> {
     Ok(())
 }
 
+/// §10.5 保存边界——资产实路径复验（relPath 词法校验之外的文件系统事实）。
+/// 当前扁平布局下项目资产根为 `projects/{id}/`（§10.1 目录化布局随 §7.1 落地
+/// 后由同一函数承接）：根现存时必须是非符号链接的实际目录，随后对 relPath
+/// 逐组件 `symlink_metadata` 拒绝符号链接（no-follow，§10.2 信任链），终点
+/// 必须是普通文件，并以 canonical 包含关系复核未逃逸项目资产根。任一失败
+/// 拒绝整次保存——本函数在盖戳、临时文件与索引更新之前调用。
+fn verify_asset_real_path(
+    projects: &std::path::Path,
+    id: &str,
+    rel_path: &str,
+) -> Result<(), String> {
+    let root = projects.join(id);
+    let root_md = fs::symlink_metadata(&root)
+        .map_err(|_| format!("项目资产根不存在，资产文件不存在：{rel_path}"))?;
+    if root_md.file_type().is_symlink() {
+        return Err(format!("项目资产根是符号链接，拒绝校验资产：{rel_path}"));
+    }
+    if !root_md.is_dir() {
+        return Err(format!("项目资产根不是目录，资产文件不存在：{rel_path}"));
+    }
+    let canonical_root = root
+        .canonicalize()
+        .map_err(|e| format!("解析项目资产根真实路径失败：{e}"))?;
+
+    let mut cur = root;
+    for comp in rel_path.split('/') {
+        cur.push(comp);
+        let md = fs::symlink_metadata(&cur).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                format!("资产文件不存在：{rel_path}")
+            } else {
+                format!("读取资产路径元数据失败（{rel_path}）：{e}")
+            }
+        })?;
+        if md.file_type().is_symlink() {
+            return Err(format!("资产路径含符号链接：{rel_path}"));
+        }
+    }
+    let md = fs::symlink_metadata(&cur)
+        .map_err(|e| format!("读取资产路径元数据失败（{rel_path}）：{e}"))?;
+    if !md.is_file() {
+        return Err(format!("资产路径不是普通文件：{rel_path}"));
+    }
+    let real = cur
+        .canonicalize()
+        .map_err(|e| format!("解析资产真实路径失败（{rel_path}）：{e}"))?;
+    if !real.starts_with(&canonical_root) {
+        return Err(format!("资产路径逃逸项目资产根：{rel_path}"));
+    }
+    Ok(())
+}
+
+/// §10.5：保存前逐项复验资产 relPath 的真实路径。relPath 词法非法（§7.1）
+/// 或字段形状缺失的条目交给 prepare_save 的信封诊断，此处跳过避免重复误报。
+fn verify_save_asset_files(
+    projects: &std::path::Path,
+    id: &str,
+    assets: &serde_json::Value,
+) -> Result<(), String> {
+    let Some(by_id) = assets.get("byId").and_then(|v| v.as_object()) else {
+        return Ok(());
+    };
+    for (key, entry) in by_id {
+        let Some(rel) = entry.get("relPath").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        if !is_valid_asset_rel_path(rel) {
+            continue;
+        }
+        verify_asset_real_path(projects, id, rel).map_err(|e| format!("资产 {key}：{e}"))?;
+    }
+    Ok(())
+}
+
 /// save_project 的信封校验与规范化（§10.5）：在创建临时文件、生成保存时间
 /// 或更新索引之前完成——任一校验失败整次拒绝，不得静默剥离。全部通过后
 /// 以受信路径参数覆盖 id，并由 Rust 为本次尝试只取一次系统时间无条件盖戳
@@ -880,13 +954,15 @@ pub fn load_project(app: AppHandle, id: String) -> Result<ProjectFile, String> {
 }
 
 /// 全量保存（§10.5 保存边界）：完整信封校验先行，任一失败整次拒绝；
-/// 通过后以受信路径参数覆盖 id、Rust 端无条件盖戳 updatedAt，再原子落盘。
+/// 资产 relPath 在已验证的 projects 目录下做实路径复验（no-follow +
+/// canonical 包含），通过后才盖戳 updatedAt、创建临时文件并原子落盘。
 #[tauri::command]
 pub fn save_project(app: AppHandle, id: String, doc: ProjectFile) -> Result<ProjectMeta, String> {
+    let dir = projects_dir(&app)?;
+    verify_save_asset_files(&dir, &id, &doc.assets)?;
     let file = prepare_save(&id, &doc)?;
     let path = project_path(&app, &id)?;
     let text = serde_json::to_string_pretty(&file).map_err(|e| format!("序列化失败：{e}"))?;
-    let dir = projects_dir(&app)?;
     atomic_write(&dir, &path, &text)?;
     Ok(read_meta(&id, &file))
 }
@@ -1481,5 +1557,68 @@ mod tests {
         sort_metas_by_recency(&mut metas);
         let ids: Vec<&str> = metas.iter().map(|m| m.id.as_str()).collect();
         assert_eq!(ids, ["c", "a", "b", "d"]);
+    }
+
+    /// 唯一临时项目根：`{tmp}/pw-store-test-{new_id}/projects/`，返回 projects 目录。
+    fn temp_projects_dir() -> PathBuf {
+        let dir = std::env::temp_dir()
+            .join(format!("pw-store-test-{}", new_id()))
+            .join("projects");
+        fs::create_dir_all(&dir).expect("创建临时 projects 目录");
+        dir
+    }
+
+    fn cleanup_temp(projects: &std::path::Path) {
+        if let Some(parent) = projects.parent() {
+            let _ = fs::remove_dir_all(parent);
+        }
+    }
+
+    #[test]
+    fn verify_asset_real_path_accepts_regular_file_under_project_root() {
+        let projects = temp_projects_dir();
+        let assets = projects.join("p-1").join("assets");
+        fs::create_dir_all(&assets).expect("创建资产目录");
+        fs::write(assets.join("a1.png"), b"png").expect("写入资产文件");
+        assert!(verify_asset_real_path(&projects, "p-1", "assets/a1.png").is_ok());
+        cleanup_temp(&projects);
+    }
+
+    #[test]
+    fn verify_asset_real_path_rejects_missing_file_and_missing_root() {
+        let projects = temp_projects_dir();
+        fs::create_dir_all(projects.join("p-1").join("assets")).expect("创建资产目录");
+        let err = verify_asset_real_path(&projects, "p-1", "assets/gone.png").unwrap_err();
+        assert!(err.contains("资产文件不存在"), "意外诊断：{err}");
+        // 项目资产根本身缺失同样拒存（该项目从未落过资产文件）
+        assert!(verify_asset_real_path(&projects, "p-2", "assets/a1.png").is_err());
+        cleanup_temp(&projects);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn verify_asset_real_path_rejects_symlink_escape() {
+        let projects = temp_projects_dir();
+        let assets = projects.join("p-1").join("assets");
+        fs::create_dir_all(&assets).expect("创建资产目录");
+        let outside = projects.parent().expect("临时根").join("secret.png");
+        fs::write(&outside, b"secret").expect("写入根外文件");
+        std::os::unix::fs::symlink(&outside, assets.join("link.png")).expect("建立符号链接");
+        let err = verify_asset_real_path(&projects, "p-1", "assets/link.png").unwrap_err();
+        assert!(err.contains("符号链接"), "意外诊断：{err}");
+        cleanup_temp(&projects);
+    }
+
+    #[test]
+    fn verify_save_asset_files_prefixes_asset_key_and_skips_lexical_invalid() {
+        let projects = temp_projects_dir();
+        // relPath 词法非法的条目交给 prepare_save 的形状诊断，实路径复验跳过不误报
+        let doc_assets = json!({ "byId": { "a-bad": { "relPath": "../evil.png" } } });
+        assert!(verify_save_asset_files(&projects, "p-1", &doc_assets).is_ok());
+
+        let doc_assets = json!({ "byId": { "a1": { "relPath": "assets/a1.png" } } });
+        let err = verify_save_asset_files(&projects, "p-1", &doc_assets).unwrap_err();
+        assert!(err.contains("资产 a1"), "诊断缺资产键：{err}");
+        cleanup_temp(&projects);
     }
 }

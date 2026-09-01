@@ -21,9 +21,12 @@ export function branchOptionHandle(optionId: string): string {
   return `${BRANCH_OPTION_HANDLE_PREFIX}${optionId}`
 }
 
-/** 逆解析端口名中的选项 id；非选项端口返回 undefined。 */
+/** 逆解析端口名中的选项 id；非选项端口返回 undefined。
+ * JSON 边界会擦除类型（句柄可能是数字/对象），非字符串一律视为非选项端口，
+ * 不得对非字符串调用字符串方法。 */
 export function branchOptionIdOf(handle?: string | null): string | undefined {
-  if (!handle?.startsWith(BRANCH_OPTION_HANDLE_PREFIX)) return undefined
+  if (typeof handle !== 'string') return undefined
+  if (!handle.startsWith(BRANCH_OPTION_HANDLE_PREFIX)) return undefined
   return handle.slice(BRANCH_OPTION_HANDLE_PREFIX.length)
 }
 
