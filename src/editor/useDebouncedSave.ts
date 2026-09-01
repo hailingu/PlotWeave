@@ -30,10 +30,11 @@ function persistSignature(doc: ProjectContent): string {
 }
 
 /** 画布变化防抖落盘：doc 任意片段变化后 delayMs 内无新变化才写入；
- * 组件卸载时若仍有脏数据则立即冲刷。onSave 可为异步，失败时重新置脏、
- * 按防抖节律自动重试并经 onSaveResult 上报（null 表示本次成功）。
- * 返回 markDirty(doc)：供无重渲染的 transient 变更（如视口 ref 更新）
- * 显式标脏并换入最新文档。 */
+ * 组件卸载时若仍有脏数据则立即冲刷。onSave 可为异步；同一时刻至多一个
+ * 保存在途（在途期间的新编辑合并进后续保存，旧文档不得后完成覆盖新内容），
+ * 失败时重新置脏、按防抖节律自动重试并经 onSaveResult 上报（null 表示
+ * 本次成功）。返回 markDirty(doc)：供无重渲染的 transient 变更（如视口
+ * ref 更新）显式标脏并换入最新文档。 */
 export function useDebouncedSave(
   doc: ProjectContent,
   onSave: (doc: ProjectContent) => void | Promise<void>,
@@ -49,23 +50,33 @@ export function useDebouncedSave(
   // 卸载后终止失败重试：后台循环持有旧文档持续落盘，重开同一项目会出现
   // 第二个保存循环，存储恢复后陈旧循环可能覆盖新会话的编辑
   const unmountedRef = useRef(false)
+  // 保存串行化：在途保存期间的新编辑合并进后续保存——并发起存时，先发起
+  // 的旧文档若后完成（资产复验/文件系统延迟），会原子覆盖新内容且双双报成功
+  const inFlightRef = useRef(false)
 
   const flushSave = useCallback(async () => {
-    if (!dirtyRef.current) return
-    dirtyRef.current = false
-    try {
-      await onSave(latestRef.current)
-      onSaveResult?.(null)
-    } catch (err) {
-      onSaveResult?.(err)
-      if (unmountedRef.current) return
-      // 失败不丢数据：重新置脏，按防抖节律自动重试
-      dirtyRef.current = true
-      if (saveTimer.current) return
-      saveTimer.current = setTimeout(() => {
-        saveTimer.current = null
-        void flushSave()
-      }, delayMs)
+    if (inFlightRef.current) return // 在途：本轮跳过，新脏数据由在途循环接力
+    while (dirtyRef.current) {
+      dirtyRef.current = false
+      inFlightRef.current = true
+      try {
+        await onSave(latestRef.current)
+        onSaveResult?.(null)
+      } catch (err) {
+        onSaveResult?.(err)
+        if (!unmountedRef.current) {
+          // 失败不丢数据：重新置脏，按防抖节律自动重试（不紧循环）
+          dirtyRef.current = true
+          saveTimer.current ??= setTimeout(() => {
+            saveTimer.current = null
+            void flushSave()
+          }, delayMs)
+        }
+        return
+      } finally {
+        inFlightRef.current = false
+      }
+      if (unmountedRef.current) return // 卸载后不接力（覆盖新会话编辑）
     }
   }, [onSave, onSaveResult, delayMs])
 

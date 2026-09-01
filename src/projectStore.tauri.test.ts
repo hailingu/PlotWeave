@@ -133,6 +133,41 @@ describe('tauriLoad：归一化与迁移回写', () => {
     expect(savedDoc.episodeTitles).toEqual({})
   })
 
+  it('迁移回写先于返回：慢回写在途时 load 不得返回（后续改名保存不被旧内容覆盖）', async () => {
+    let releaseWriteback: (() => void) | null = null
+    handlers.set('load_project', () => legacyFile())
+    handlers.set('save_project', () =>
+      new Promise<void>((resolve) => {
+        if (releaseWriteback === null) {
+          // 首个调用 = 迁移回写：挂起模拟慢盘
+          releaseWriteback = resolve
+          return
+        }
+        resolve()
+      }),
+    )
+    const { projectStore } = await load()
+    const loaded = projectStore.load('p1')
+    let returned = false
+    void loaded.then(() => {
+      returned = true
+    })
+    // 等到迁移回写已发起并挂起（慢盘）
+    await vi.waitFor(() => {
+      expect(calls.filter((c) => c.cmd === 'save_project')).toHaveLength(1)
+    })
+    // 回写在途：load 不得先于回写完成而返回（否则紧随的保存会被慢回写反向覆盖）
+    expect(returned).toBe(false)
+    ;(releaseWriteback as unknown as (() => void) | undefined)?.()
+    const doc = await loaded
+    // 回写完成后，紧随的改名保存是最后一个落盘者
+    await projectStore.save('p1', { ...doc, name: '新名' })
+    const saves = calls.filter((c) => c.cmd === 'save_project')
+    expect(saves).toHaveLength(2)
+    const last = saves[saves.length - 1]
+    expect((last.args as { doc: { project: { name: string } } }).doc.project.name).toBe('新名')
+  })
+
   it('迁移回写失败：内存副本照常交付，显式诊断且不留未处理拒绝', async () => {
     handlers.set('load_project', () => legacyFile())
     handlers.set('save_project', () => {

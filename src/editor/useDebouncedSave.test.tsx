@@ -172,17 +172,18 @@ describe('useDebouncedSave（防抖落盘 + 脏态卸载冲刷）', () => {
     expect((onSave.mock.calls[0][0] as ProjectContent).name).toBe('真改动')
   })
 
-  it('仅集标题变化（renameEpisode 的改名/清空）也置脏落盘，不静默丢失', () => {
+  it('仅集标题变化（renameEpisode 的改名/清空）也置脏落盘，不静默丢失', async () => {
     const onSave = vi.fn()
     const { rerender } = renderHook(({ doc }) => useDebouncedSave(doc, onSave), {
       initialProps: { doc: mkDoc() },
     })
-    // 大纲行内改名：name/nodes/edges/settings 全不变，只有 episodeTitles 变
+    // 大纲行内改名：name/nodes/edges/settings 全不变，只有 episodeTitles 变。
+    // 异步 advance：串行化下在途保存的完成续体需微任务冲刷后才释放在途标记
     act(() => {
       rerender({ doc: { ...mkDoc(), episodeTitles: { 1: '重逢' } } })
     })
-    act(() => {
-      vi.advanceTimersByTime(600)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600)
     })
     expect(onSave).toHaveBeenCalledTimes(1)
     expect((onSave.mock.calls[0][0] as ProjectContent).episodeTitles).toEqual({ 1: '重逢' })
@@ -190,8 +191,8 @@ describe('useDebouncedSave（防抖落盘 + 脏态卸载冲刷）', () => {
     act(() => {
       rerender({ doc: { ...mkDoc(), episodeTitles: {} } })
     })
-    act(() => {
-      vi.advanceTimersByTime(600)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600)
     })
     expect(onSave).toHaveBeenCalledTimes(2)
     expect((onSave.mock.calls[1][0] as ProjectContent).episodeTitles).toEqual({})
@@ -286,5 +287,54 @@ describe('useDebouncedSave（卸载后终止失败重试）', () => {
       await vi.advanceTimersByTimeAsync(6000)
     })
     expect(onSave).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('useDebouncedSave（保存串行化：在途保存期间的新编辑合并进后续保存）', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it('保存 A 在途时新编辑 B 不得并发起存；A 完成后接力保存最新文档', async () => {
+    const savedNames: string[] = []
+    let releaseA: (() => void) | null = null
+    const onSave = vi.fn(
+      (doc: ProjectContent) =>
+        new Promise<void>((resolve) => {
+          if (releaseA === null) {
+            releaseA = () => {
+              savedNames.push(doc.name)
+              resolve()
+            }
+            return
+          }
+          savedNames.push(doc.name)
+          resolve()
+        }),
+    )
+    const { rerender } = renderHook(({ doc }) => useDebouncedSave(doc, onSave, 600), {
+      initialProps: { doc: mkDoc() },
+    })
+    act(() => {
+      rerender({ doc: mkDoc('A') })
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600)
+    })
+    expect(onSave).toHaveBeenCalledTimes(1) // A 在途（挂起）
+    // A 在途时编辑 B → 防抖到点：不得并发发起第二次保存
+    act(() => {
+      rerender({ doc: mkDoc('B') })
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600)
+    })
+    expect(onSave).toHaveBeenCalledTimes(1)
+    // A 完成后接力：用最新文档（B）补一次保存
+    await act(async () => {
+      releaseA?.()
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(onSave).toHaveBeenCalledTimes(2)
+    expect(savedNames).toEqual(['A', 'B'])
   })
 })

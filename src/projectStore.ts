@@ -172,13 +172,16 @@ async function tauriLoad(id: string): Promise<ProjectContent> {
   // projectId 为路径给定的受信 id，供 §11.1 元数据修复覆盖 project.id
   const { content, migrated, warnings } = parseProject(file, { projectId: id, invalidAssetKeys })
   for (const w of warnings) console.warn(`[projectStore] ${w}`)
-  // 迁移发生则写回磁盘，下次打开不再迁移；失败只诊断不阻断——内存已
-  // 交付迁移结果，磁盘保持旧格式，下次打开会重新迁移（显式 catch，
-  // 绝不留下未处理拒绝）
+  // 迁移发生则写回磁盘（下次打开不再迁移）。回写完成前不返回：load 后
+  // 紧随的保存（如首页改名）不得与慢回写竞态——先返回再让旧内容后完成
+  // 落盘会反向覆盖新保存。失败只诊断不阻断（显式 catch，不留未处理拒绝）：
+  // 内存已交付迁移结果，磁盘保持旧格式，下次打开会重新迁移
   if (migrated) {
-    tauriSave(id, content).catch((err) => {
+    try {
+      await tauriSave(id, content)
+    } catch (err) {
       console.error('[projectStore] 迁移回写失败，磁盘仍为旧格式（下次打开将重新迁移）', err)
-    })
+    }
   }
   return content
 }
