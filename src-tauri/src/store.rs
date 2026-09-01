@@ -1107,14 +1107,23 @@ pub fn create_project(app: AppHandle, name: String) -> Result<ProjectMeta, Strin
 #[tauri::command]
 pub fn load_project(app: AppHandle, id: String) -> Result<ProjectFile, String> {
     let dir = projects_dir(&app)?;
+    load_project_file(&dir, &id)
+}
+
+/// load_project 的可测内核：id 是 IPC 调用方传入的不可信参数，词法校验
+/// 先于任何路径拼接——嵌套路径形态的 id（如 `p-1/assets/x`）不得把
+/// projects/ 内的任意 JSON 经项目通道读出（verify_control_file 只验包含
+/// 关系，拦不住深度嵌套的常规文件）。
+fn load_project_file(dir: &std::path::Path, id: &str) -> Result<ProjectFile, String> {
+    validate_id(id)?;
     let path = dir.join(format!("{id}.json"));
     if !path.exists() {
         return Err(format!("项目不存在：{id}"));
     }
     // §10.2：读取前对现存控制文件做符号链接/普通文件/包含关系校验
-    verify_control_file(&dir, &path).map_err(|e| format!("拒绝读取项目文件：{e}"))?;
+    verify_control_file(dir, &path).map_err(|e| format!("拒绝读取项目文件：{e}"))?;
     let text = fs::read_to_string(path).map_err(|_| format!("项目不存在：{id}"))?;
-    parse_file(&id, &text).map_err(|e| format!("项目文件损坏：{e}"))
+    parse_file(id, &text).map_err(|e| format!("项目文件损坏：{e}"))
 }
 
 /// 全量保存（§10.5 保存边界）：完整信封校验先行，任一失败整次拒绝；
@@ -2131,6 +2140,17 @@ mod tests {
         assert!(sync_directory(&projects).is_ok());
         #[cfg(not(unix))]
         assert!(sync_directory(&projects).is_ok());
+        cleanup_temp(&projects);
+    }
+    #[test]
+    fn load_project_file_rejects_path_like_id_before_any_join() {
+        let projects = temp_projects_dir();
+        // 嵌套路径形态的 id：projects/ 内的资产/私有 JSON 不得经 load_project 读出
+        let err = load_project_file(&projects, "p-1/assets/private").unwrap_err();
+        assert!(
+            err.contains("非法") || err.contains("不存在"),
+            "意外诊断：{err}"
+        );
         cleanup_temp(&projects);
     }
 }

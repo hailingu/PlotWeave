@@ -535,3 +535,57 @@ describe('AI 批量命令的逐类型载荷形状校验（信任边界：字段�
     expect(good.ok).toBe(true)
   })
 })
+
+describe('对白行判别字段与可选字段（信任边界：不被下次加载静默删除）', () => {
+  it('kind 非 line/action 拒绝；缺省 kind 归一为 line', () => {
+    const bad = validateAiBatch(
+      [{ op: 'create_node', nodeType: 'dialogue', data: { name: '对白', lines: [{ id: 'l1', kind: 'narration', text: '旁白' }] } }],
+      snap(),
+    )
+    expect(bad.ok).toBe(false)
+    expect(bad.issues.map((i) => i.message).join('\n')).toContain('lines')
+
+    const ok = validateAiBatch(
+      [{ op: 'create_node', nodeType: 'dialogue', ref: 'd', data: { name: '对白', lines: [{ text: '台词' }, { kind: 'action', text: '转身' }] } }],
+      snap(),
+    )
+    expect(ok.ok).toBe(true)
+    const cmd = ok.commands[0] as { data: { lines: Array<{ kind: string }> } }
+    expect(cmd.data.lines[0].kind).toBe('line')
+    expect(cmd.data.lines[1].kind).toBe('action')
+  })
+
+  it('可选字段 side/vo 异型拒绝', () => {
+    const bad = validateAiBatch(
+      [{ op: 'create_node', nodeType: 'dialogue', data: { name: '对白', lines: [{ kind: 'line', text: 'x', side: 'middle', vo: 1 }] } }],
+      snap(),
+    )
+    expect(bad.ok).toBe(false)
+    expect(bad.issues.map((i) => i.message).join('\n')).toContain('lines')
+  })
+})
+
+describe('attach 宿主唯一（§5：交互/AI 侧对等，不留「重开即消失」的连线）', () => {
+  it('目标分镜已有入向 attach：拒绝第二条；断开+重连（换宿主）同批合法', () => {
+    const snapWithHost: AiGraphSnapshot = {
+      ...richSnap(),
+      nodes: [...richSnap().nodes, { id: 's9', type: 'scene', label: '场 09' }],
+      edges: [{ source: 's9', target: 'sh1', sourceHandle: 'shots' }],
+    }
+    const bad = validateAiBatch(
+      [{ op: 'connect_edge', sourceId: 's1', targetId: 'sh1', edgeKind: 'attach' }],
+      snapWithHost,
+    )
+    expect(bad.ok).toBe(false)
+    expect(bad.issues[0].message).toContain('宿主')
+
+    const rehost = validateAiBatch(
+      [
+        { op: 'disconnect_edge', sourceId: 's9', targetId: 'sh1' },
+        { op: 'connect_edge', sourceId: 's1', targetId: 'sh1', edgeKind: 'attach' },
+      ],
+      snapWithHost,
+    )
+    expect(rehost.ok, JSON.stringify(rehost.issues)).toBe(true)
+  })
+})

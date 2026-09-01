@@ -69,6 +69,25 @@ export function connectionEndpointIssue(
   return null
 }
 
+/** attach 宿主唯一（§5）：分镜卡至多一条入向下挂边，换宿主是
+ * 「断开 + 重连」同 batch 原子操作。与加载侧 isolateExtraAttachHosts
+ * 对等——交互/AI 侧放行第二宿主会留下「重开即消失」的连线。 */
+export function hasAttachHost(
+  edges: Iterable<{
+    source: string
+    target: string
+    sourceHandle?: string | null
+    className?: string
+    type?: string
+  }>,
+  target: string,
+): boolean {
+  for (const e of edges) {
+    if (e.target === target && edgeKindOf(e) === 'attach') return true
+  }
+  return false
+}
+
 /** 按边的运行态字段归类连线语义；未知形态一律按剧情流处理。 */
 export function edgeKindOf(e: {
   type?: string

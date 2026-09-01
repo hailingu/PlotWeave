@@ -2,6 +2,7 @@ import {
   branchOptionHandle,
   connectionEndpointIssue,
   type EdgeKind,
+  hasAttachHost,
   removedOptionHandles,
   SCENE_SHOT_HANDLE,
   wouldCreateCycle,
@@ -236,7 +237,14 @@ function normalizeNodeFields(nodeType: string, fields: Record<string, unknown>):
   }
   const out = { ...fields }
   if (nodeType === 'dialogue' && Array.isArray(out.lines)) {
-    out.lines = normalizeIds(out.lines as unknown[], 'line')
+    // 缺省 kind 归一为 'line'（保存内容不被下次加载的判别联合静默删除），
+    // 再补稳定 id
+    out.lines = normalizeIds(
+      (out.lines as unknown[]).map((l) =>
+        plainObject(l) && l.kind === undefined ? { ...l, kind: 'line' as const } : l,
+      ),
+      'line',
+    )
   }
   if (nodeType === 'branch' && Array.isArray(out.options)) {
     out.options = normalizeIds(
@@ -326,15 +334,16 @@ function listShapeIssues(nodeType: string, fields: Record<string, unknown>): str
   }
   if (nodeType === 'dialogue' && fields.lines !== undefined) {
     const arr = fields.lines
-    const bad =
-      !Array.isArray(arr) ||
-      arr.some(
-        (l) =>
-          !plainObject(l) ||
-          typeof l.text !== 'string' ||
-          ('speaker' in l && typeof l.speaker !== 'string'),
-      )
-    if (bad) issues.push('lines 须为带字符串 text 的对象数组（speaker 可选字符串）')
+    const lineIssue = (l: unknown): boolean =>
+      !plainObject(l) ||
+      typeof l.text !== 'string' ||
+      ('speaker' in l && typeof l.speaker !== 'string') ||
+      (l.kind !== undefined && l.kind !== 'line' && l.kind !== 'action') ||
+      (l.side !== undefined && l.side !== 'left' && l.side !== 'right') ||
+      (l.vo !== undefined && typeof l.vo !== 'boolean')
+    if (!Array.isArray(arr) || arr.some(lineIssue)) {
+      issues.push('lines 须为对象数组（text 字符串必填；kind ∈ line/action、speaker 字符串、side ∈ left/right、vo 布尔可选）')
+    }
   }
   if (nodeType === 'shot' && fields.refs !== undefined) {
     const arr = fields.refs
@@ -530,6 +539,9 @@ function foldEdge(st: FoldState, cmd: Record<string, unknown>, index: number, op
     kind as EdgeKind,
   )
   if (endpointIssue) return st.fail(index, `${endpointIssue}：${pairLabel}`)
+  if (kind === 'attach' && hasAttachHost(st.virtualEdges, dst)) {
+    return st.fail(index, `分镜卡已有宿主，换宿主须先断开：${pairLabel}`)
+  }
   if (st.virtualEdges.some((e) => e.source === src && e.target === dst && (e.sourceHandle ?? null) === handle)) {
     return st.fail(index, `重复连线：${pairLabel}`)
   }

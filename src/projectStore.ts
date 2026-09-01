@@ -191,6 +191,44 @@ async function tauriSave(id: string, doc: ProjectContent): Promise<void> {
   await invoke('save_project', { id, doc: serializeProject(doc, id) })
 }
 
+/** §3.1 项目级持久化所有者：保存按项目串行（后保存者的内容永不早于先
+ * 保存者落盘）；失败把最新文档登记为待重试并按固定节律后台重试——编辑
+ * 器卸载/导航后组件不复存在，最新文档只存在于这里，瞬时故障（磁盘满/
+ * 权限）不得永久丢编辑。同项目后续保存成功即清登记，重试不会用旧文档
+ * 覆盖新内容。 */
+const SAVE_RETRY_DELAY_MS = 5000
+const saveChains = new Map<string, Promise<unknown>>()
+const pendingRetryDocs = new Map<string, ProjectContent>()
+const retryTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+function scheduleSaveRetry(id: string): void {
+  retryTimers.set(
+    id,
+    setTimeout(() => {
+      retryTimers.delete(id)
+      const doc = pendingRetryDocs.get(id)
+      if (doc !== undefined) void enqueueSave(id, doc).catch(() => undefined)
+    }, SAVE_RETRY_DELAY_MS),
+  )
+}
+
+function enqueueSave(id: string, doc: ProjectContent): Promise<void> {
+  const run = (saveChains.get(id) ?? Promise.resolve()).catch(() => undefined)
+  const next = run.then(async () => {
+    try {
+      await tauriSave(id, doc)
+      pendingRetryDocs.delete(id)
+    } catch (err) {
+      pendingRetryDocs.set(id, doc)
+      if (!retryTimers.has(id)) scheduleSaveRetry(id)
+      console.error('[projectStore] 保存失败，已登记后台重试', err)
+      throw err
+    }
+  })
+  saveChains.set(id, next)
+  return next
+}
+
 /** 统一门面：两种环境同签名。 */
 export const projectStore = {
   list: (): Promise<ProjectSummary[]> =>
@@ -205,7 +243,7 @@ export const projectStore = {
     isTauri ? tauriLoad(id) : memoryLoad(id),
 
   save: (id: string, doc: ProjectContent): Promise<void> =>
-    isTauri ? tauriSave(id, doc) : memorySave(id, doc),
+    isTauri ? enqueueSave(id, doc) : memorySave(id, doc),
 
   /** 删除项目（首页卡片菜单，§3.2；确认框由界面层负责）。 */
   delete: (id: string): Promise<void> =>

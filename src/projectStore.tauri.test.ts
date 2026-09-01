@@ -321,3 +321,59 @@ describe('tauriCreate / delete / duplicate', () => {
     }
   })
 })
+
+describe('项目级持久化所有者（保存失败重试不随编辑器卸载而丢编辑）', () => {
+  it('保存失败后按节律后台重试，最终以最新文档落盘', async () => {
+    let failures = 3 // 初始 v1、重试 v1、新文档 v2 各失败一次，之后的重试成功
+    handlers.set('load_project', () => modernFile())
+    handlers.set('save_project', () => {
+      if (failures > 0) {
+        failures -= 1
+        throw new Error('磁盘满')
+      }
+      return undefined
+    })
+    vi.useFakeTimers()
+    try {
+      const { projectStore } = await load()
+      await expect(projectStore.save('p1', { name: 'v1', nodes: [], edges: [], settings: { characters: [], locations: [] } })).rejects.toThrow('磁盘满')
+      await vi.advanceTimersByTimeAsync(5000)
+      await expect(projectStore.save('p1', { name: 'v2', nodes: [], edges: [], settings: { characters: [], locations: [] } })).rejects.toThrow('磁盘满')
+      // 编辑器此时卸载：无组件持有文档——所有者仍按节律重试最新（v2）文档
+      await vi.advanceTimersByTimeAsync(5000)
+      await vi.advanceTimersByTimeAsync(5000)
+      const saves = calls.filter((c) => c.cmd === 'save_project')
+      expect(saves.length).toBeGreaterThanOrEqual(3)
+      const last = saves[saves.length - 1].args as { doc: { project: { name: string } } }
+      expect(last.doc.project.name).toBe('v2')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('同项目后续保存成功即清待重试：不重复落盘旧文档', async () => {
+    let failFirst = true
+    handlers.set('load_project', () => modernFile())
+    handlers.set('save_project', () => {
+      if (failFirst) {
+        failFirst = false
+        throw new Error('只读')
+      }
+      return undefined
+    })
+    vi.useFakeTimers()
+    try {
+      const { projectStore } = await load()
+      await expect(projectStore.save('p1', { name: '旧', nodes: [], edges: [], settings: { characters: [], locations: [] } })).rejects.toThrow('只读')
+      // 恢复后新会话手动保存更新文档（成功）——待重试登记被清除
+      await projectStore.save('p1', { name: '新', nodes: [], edges: [], settings: { characters: [], locations: [] } })
+      await vi.advanceTimersByTimeAsync(20000)
+      const names = calls
+        .filter((c) => c.cmd === 'save_project')
+        .map((c) => (c.args as { doc: { project: { name: string } } }).doc.project.name)
+      expect(names).toEqual(['旧', '新'])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

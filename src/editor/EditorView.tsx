@@ -46,6 +46,7 @@ import {
   connectEdgeExtras,
   connectionEndpointIssue,
   edgeKindOf,
+  hasAttachHost,
   isDuplicateEdge,
   removedOptionHandles,
   wouldCreateCycle,
@@ -486,7 +487,11 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
       if (isDuplicateEdge(existing, conn)) return false
       const nodeTypeOf = (id: string) => nodesRef.current.find((n) => n.id === id)?.type
       if (conn.sourceHandle === SCENE_SHOT_HANDLE) {
-        return connectionEndpointIssue(nodeTypeOf(conn.source), nodeTypeOf(conn.target), 'attach') === null
+        if (connectionEndpointIssue(nodeTypeOf(conn.source), nodeTypeOf(conn.target), 'attach') !== null) {
+          return false
+        }
+        // 宿主唯一（§5）：已有宿主的分镜不接受第二条下挂——换宿主须先断开
+        return !hasAttachHost(existing, conn.target)
       }
       const flowEdges = existing.filter((e) => e.sourceHandle !== SCENE_SHOT_HANDLE)
       if (wouldCreateCycle(flowEdges, conn.source, conn.target)) return false

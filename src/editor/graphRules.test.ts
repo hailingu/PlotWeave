@@ -8,6 +8,7 @@ import {
   connectionEndpointIssue,
   removedOptionHandles,
   edgeKindOf,
+  hasAttachHost,
   isDuplicateEdge,
   wouldCreateCycle,
 } from './graphRules'
@@ -153,5 +154,14 @@ describe('connectionEndpointIssue（§5 端口归属：加载侧孤儿边规则�
     expect(connectionEndpointIssue('scene', 'scene', 'sequence')).toBeNull()
     expect(connectionEndpointIssue('branch', 'scene', 'branch')).toBeNull()
     expect(connectionEndpointIssue('beat', 'scene', 'sequence')).toBeNull()
+  })
+})
+
+describe('hasAttachHost（§5 attach 宿主唯一：加载侧 isolateExtraAttachHosts 的交互/AI 对等）', () => {
+  it('目标已有入向 attach 边即报告（含 legacy className 形态）；出向或其他目标不算', () => {
+    expect(hasAttachHost([{ source: 'a', target: 'sh1', sourceHandle: 'shots' }], 'sh1')).toBe(true)
+    expect(hasAttachHost([{ source: 'a', target: 'sh1', className: 'pw-edge-attach' }], 'sh1')).toBe(true)
+    expect(hasAttachHost([{ source: 'a', target: 'sh1' }], 'sh1')).toBe(false)
+    expect(hasAttachHost([{ source: 'sh1', target: 'a', sourceHandle: 'shots' }], 'sh1')).toBe(false)
   })
 })
