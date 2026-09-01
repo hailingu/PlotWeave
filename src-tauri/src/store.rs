@@ -1103,17 +1103,35 @@ pub fn load_project(app: AppHandle, id: String) -> Result<ProjectFile, String> {
 
 /// 全量保存（§10.5 保存边界）：完整信封校验先行，任一失败整次拒绝；
 /// 资产 relPath 在已验证的 projects 目录下做实路径复验（no-follow +
-/// canonical 包含），通过后才盖戳 updatedAt、创建临时文件并原子落盘。
+/// canonical 包含），通过后才盖戳 updatedAt、创建临时文件并原子落盘；
+/// 落盘后再复验一次——句柄只绑定打开时的 inode，不钉住路径名，保存期间
+/// 被并发进程替换（unlink/重命名/换符号链接）的路径在写后复验中上浮为
+/// 显式失败（文档虽已提交，篡改不得静默；下次加载复验会隔离条目兜底）。
 #[tauri::command]
 pub fn save_project(app: AppHandle, id: String, doc: ProjectFile) -> Result<ProjectMeta, String> {
     let dir = projects_dir(&app)?;
-    // 句柄持有至原子写完成后随作用域释放——复验过的实体覆盖整个保存决策
-    let _verified_assets = verify_save_asset_files(&dir, &id, &doc.assets)?;
-    let file = prepare_save(&id, &doc)?;
-    let path = project_path(&app, &id)?;
+    persist_project(&dir, &id, doc)
+}
+
+/// save_project 的可测内核（给定已验证的 projects 目录）。
+fn persist_project(
+    dir: &std::path::Path,
+    id: &str,
+    doc: ProjectFile,
+) -> Result<ProjectMeta, String> {
+    // 句柄持有至函数结束——复验过的实体覆盖整个保存决策
+    let _verified_assets = verify_save_asset_files(dir, id, &doc.assets)?;
+    let file = prepare_save(id, &doc)?;
+    let path = dir.join(format!("{id}.json"));
     let text = serde_json::to_string_pretty(&file).map_err(|e| format!("序列化失败：{e}"))?;
-    atomic_write(&dir, &path, &text)?;
-    Ok(read_meta(&id, &file))
+    atomic_write(dir, &path, &text)?;
+    if let Err(e) = verify_save_asset_files(dir, id, &doc.assets) {
+        eprintln!("[store] 保存后资产复验失败，路径可能在保存期间被替换：{e}");
+        return Err(format!(
+            "保存后资产复验失败（路径可能在保存期间被替换）：{e}"
+        ));
+    }
+    Ok(read_meta(id, &file))
 }
 
 /// 删除项目（首页卡片菜单，§3.2）：移除 `projects/{id}.json` 与项目资产
@@ -2061,6 +2079,15 @@ mod tests {
             projects.join("p-1.json").exists(),
             "项目记录先于资产目录被删，失败后媒体成不可发现孤儿"
         );
+        cleanup_temp(&projects);
+    }
+    #[test]
+    fn persist_project_writes_envelope_and_passes_post_verify() {
+        let projects = temp_projects_dir();
+        let doc = new_project_file("p-1", "剧".into(), now_iso());
+        let meta = persist_project(&projects, "p-1", doc).expect("保存");
+        assert_eq!(meta.name, "剧");
+        assert!(projects.join("p-1.json").exists(), "项目文件应落盘");
         cleanup_temp(&projects);
     }
 }

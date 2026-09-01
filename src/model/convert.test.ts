@@ -2168,3 +2168,40 @@ describe('归一化：v0 节点基础布局预归一化（toStoryNode 解引用�
     expect(round.warnings.some((w) => w.includes('s2') && w.includes('position'))).toBe(true)
   })
 })
+
+describe('归一化：角色 id/token 专项修复（§6 子值域 [A-Za-z0-9_-]{1,64}，五十九轮）', () => {
+  it('非法字符集/超长角色键：重发安全键，characterIds/speaker/文本 token 同步改写', () => {
+    const content = mkContent()
+    content.settings.characters = [
+      { id: 'bad]id', name: '林', gradient: 'g' },
+      { id: 'x'.repeat(65), name: '陈', gradient: 'g' },
+    ] as never
+    ;(content.nodes.find((n) => n.id === 's1')!.data as Record<string, unknown>).characterIds = [
+      'bad]id',
+      'x'.repeat(65),
+    ]
+    const dialogue = content.nodes.find((n) => n.id === 'd1')!.data as {
+      lines: Array<{ id: string; kind: string; text: string; speaker: string; side: string; vo: boolean }>
+    }
+    dialogue.lines = [
+      { id: 'line-1', kind: 'line', speaker: 'bad]id', text: '喂 @[character:bad]id] 看这里', side: 'left', vo: false },
+    ]
+    const round = parseProject(serializeProject(content, 'p-1', NOW))
+    const chars = round.content.settings.characters
+    const lin = chars.find((c) => c.name === '林')!
+    const chen = chars.find((c) => c.name === '陈')!
+    expect(/^[A-Za-z0-9_-]{1,64}$/.test(lin.id)).toBe(true)
+    expect(/^[A-Za-z0-9_-]{1,64}$/.test(chen.id)).toBe(true)
+    const sceneData = round.content.nodes.find((n) => n.id === 's1')!.data as {
+      characterIds: string[]
+    }
+    expect(sceneData.characterIds).toEqual([lin.id, chen.id])
+    const d1 = round.content.nodes.find((n) => n.id === 'd1')!.data as {
+      lines: Array<{ speaker: string; text: string }>
+    }
+    expect(d1.lines[0].speaker).toBe(lin.id)
+    // 文本 token 字面量替换（旧 id 含 ]，只能按完整字面量匹配）
+    expect(d1.lines[0].text).toBe(`喂 @[character:${lin.id}] 看这里`)
+    expect(round.warnings.some((w) => w.includes('bad]id'))).toBe(true)
+  })
+})

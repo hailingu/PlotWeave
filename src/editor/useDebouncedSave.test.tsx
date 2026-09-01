@@ -338,3 +338,47 @@ describe('useDebouncedSave（保存串行化：在途保存期间的新编辑合
     expect(savedNames).toEqual(['A', 'B'])
   })
 })
+
+describe('useDebouncedSave（在途保存期间卸载：待冲刷编辑不丢）', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it('保存 A 在途时卸载：新编辑 B 由在途完成后的最后一次合并冲刷落盘', async () => {
+    const names: string[] = []
+    let releaseA: (() => void) | null = null
+    const onSave = vi.fn(
+      (doc: ProjectContent) =>
+        new Promise<void>((resolve) => {
+          if (releaseA === null) {
+            releaseA = () => {
+              names.push(doc.name)
+              resolve()
+            }
+            return
+          }
+          names.push(doc.name)
+          resolve()
+        }),
+    )
+    const { rerender, unmount } = renderHook(({ doc }) => useDebouncedSave(doc, onSave, 600), {
+      initialProps: { doc: mkDoc() },
+    })
+    act(() => {
+      rerender({ doc: mkDoc('A') })
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600)
+    })
+    expect(onSave).toHaveBeenCalledTimes(1) // A 在途
+    act(() => {
+      rerender({ doc: mkDoc('B') })
+    }) // B 置脏（防抖计时器未到）
+    unmount() // 卸载冲刷被在途挡回：B 不得丢
+    await act(async () => {
+      releaseA?.()
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(names).toEqual(['A', 'B'])
+  })
+})

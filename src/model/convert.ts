@@ -386,12 +386,41 @@ function rewriteRef(
   return mapped
 }
 
-/** 各桶「空键 → 新键」映射集合：characters/locations 来自设定桶，
- * assets 来自资产索引。 */
+/** 各桶「旧键 → 新键」重发映射集合（空键与角色安全子值域重发共用）：
+ * characters/locations 来自设定桶，assets 来自资产索引。 */
 interface BlankKeyRemaps {
   characters: Map<string, string>
   locations: Map<string, string>
   assets: Map<string, string>
+}
+
+/** 角色 id 的文本语法子值域（§6，五十九轮）：`@[character:<id>]` token 的
+ * `<id>` 不得含 `]`、空白等分隔字符，须完整匹配 ASCII 安全字符集。 */
+const SAFE_CHARACTER_ID = /^[A-Za-z0-9_-]{1,64}$/
+
+/** 角色桶的非安全记录键重发（§11.1 第 3 步「角色 id/token 专项修复」，
+ * 空白键已由 reKeyBlankEntries 处理）：键违反 `[A-Za-z0-9_-]{1,64}` 时
+ * 重发本桶未占用的安全键、值内 id 随键同步，返回「旧键 → 新键」映射供
+ * 结构化引用与文本 token 改写——不安全身份无法由固定 token 语法表示。 */
+function reKeyUnsafeCharacterKeys(
+  record: Record<string, Record<string, unknown>>,
+  warnings: string[],
+): Map<string, string> {
+  const remap = new Map<string, string>()
+  for (const key of Object.keys(record)) {
+    if (!key.trim() || SAFE_CHARACTER_ID.test(key)) continue
+    let fresh = uid('ch')
+    while (fresh in record) fresh = uid('ch')
+    const entry = record[key]
+    delete record[key]
+    record[fresh] = entry
+    entry.id = fresh
+    remap.set(key, fresh)
+    warnings.push(
+      `settings.characters 键 ${key} 不满足角色 id 安全字符集（[A-Za-z0-9_-]{1,64}），已重发新键 ${fresh}`,
+    )
+  }
+  return remap
 }
 
 /** 场景节点的空键引用改写：characterIds 数组项与 locationId。 */
@@ -440,10 +469,46 @@ function rewriteShotBlankRefs(
   }
 }
 
+/** 对白文本中的 @ 提及 token 字面量改写（§8.1.2/五十九轮）：随角色 id
+ * 重发同步——旧 id 可能含 `]`、换行等，不得用新 token 正则扫描，须按
+ * 已知旧身份构造完整字面量 `@[character:<旧 id>]`，以 split/join 的
+ * 字面量匹配替换为新 token。 */
+function rewriteCharacterMentionTokens(
+  nodes: StoryNode[],
+  remaps: Map<string, string>,
+  warnings: string[],
+): void {
+  if (remaps.size === 0) return
+  for (const n of nodes) {
+    if (n.type !== 'dialogue') continue
+    for (const line of n.data.spec.lines) {
+      if (typeof line.text !== 'string') continue
+      line.text = replaceMentionLiterals(line.text, remaps, n.id, warnings)
+    }
+  }
+}
+
+/** 单段文本的字面量 token 替换内核。 */
+function replaceMentionLiterals(
+  text: string,
+  remaps: Map<string, string>,
+  nid: string,
+  warnings: string[],
+): string {
+  let out = text
+  for (const [oldId, newId] of remaps) {
+    if (!oldId) continue
+    const literal = `@[character:${oldId}]`
+    if (!out.includes(literal)) continue
+    out = out.split(literal).join(`@[character:${newId}]`)
+    warnings.push(`节点 ${nid} 的对白文本提及 token 已随角色 id 重发改写`)
+  }
+  return out
+}
+
 /** 设定文档 relatedIds 的空键改写（§11.1 第 3 步，六十六轮）：按 kind
  * 对应桶改写（禁止跨命名空间）；改写后仍指向空白 id 且无对应重发的项
- * 移除并警告。 */
-function rewriteDocumentBlankRefs(
+ * 移除并警告。 */function rewriteDocumentBlankRefs(
   settings: Record<string, Record<string, unknown>>,
   remaps: BlankKeyRemaps,
   warnings: string[],
@@ -1198,14 +1263,24 @@ function normalizeContainers(
   const edgesRaw = arrayOf(graphRaw.edges, 'graph.edges 非数组，已重置为空数组')
 
   // 成员过滤 + 嵌套容器修复；空记录键重发先于形状校验与键 id 一致性改写
-  // （§11.1 第 3 步记录键非空前置），引用改写待节点就位后统一执行
+  // （§11.1 第 3 步记录键非空前置），引用改写待节点就位后统一执行；
+  // 角色桶另执行安全子值域重发（§6 五十九轮，映射并入同一改写通道）
   const settings = normalizeSettingsBuckets(settingsRaw, warnings)
   const byId = plainObjectEntries(assetsRaw.byId, 'assets.byId', warnings)
   // 桶成员已经 plainObjectEntries 过滤为普通对象
   const entityBucket = (bucket: string) =>
     settings[bucket] as Record<string, Record<string, unknown>>
+  const characterRemaps = reKeyBlankEntries(
+    entityBucket('characters'),
+    'settings.characters',
+    'ch',
+    warnings,
+  )
+  for (const [oldKey, newKey] of reKeyUnsafeCharacterKeys(entityBucket('characters'), warnings)) {
+    characterRemaps.set(oldKey, newKey)
+  }
   const blankRemaps: BlankKeyRemaps = {
-    characters: reKeyBlankEntries(entityBucket('characters'), 'settings.characters', 'ch', warnings),
+    characters: characterRemaps,
     locations: reKeyBlankEntries(entityBucket('locations'), 'settings.locations', 'loc', warnings),
     assets: reKeyBlankEntries(
       byId as Record<string, Record<string, unknown>>,
@@ -1251,6 +1326,7 @@ function normalizeContainers(
   }
   renumberSeqFields(nodes, warnings)
   rewriteBlankKeyReferences(nodes, settings, blankRemaps, warnings)
+  rewriteCharacterMentionTokens(nodes, blankRemaps.characters, warnings)
   const edges: StoryEdge[] = []
   for (const member of edgesRaw) {
     const edge = normalizeEdge(member, warnings)

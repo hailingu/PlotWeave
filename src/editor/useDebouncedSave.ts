@@ -65,7 +65,8 @@ export function useDebouncedSave(
       } catch (err) {
         onSaveResult?.(err)
         if (!unmountedRef.current) {
-          // 失败不丢数据：重新置脏，按防抖节律自动重试（不紧循环）
+          // 失败不丢数据：重新置脏，按防抖节律自动重试（不紧循环）；
+          // 卸载后不排新计时器——后台循环不得覆盖新会话的编辑
           dirtyRef.current = true
           saveTimer.current ??= setTimeout(() => {
             saveTimer.current = null
@@ -76,7 +77,9 @@ export function useDebouncedSave(
       } finally {
         inFlightRef.current = false
       }
-      if (unmountedRef.current) return // 卸载后不接力（覆盖新会话编辑）
+      // 卸载后不再发起「新一轮」冲刷，但在途保存完成时仍须把卸载前置脏的
+      // 最新文档补存一次（§3.1 flushPersist 导航契约：离开编辑器不丢编辑）
+      if (unmountedRef.current && !dirtyRef.current) return
     }
   }, [onSave, onSaveResult, delayMs])
 
