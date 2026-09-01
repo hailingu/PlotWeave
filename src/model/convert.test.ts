@@ -2143,3 +2143,28 @@ describe('归一化：数值型稳定 id 与越界旧下标句柄的歧义隔离
     expect(eOk.sourceHandle).toBe('option-9')
   })
 })
+
+describe('归一化：v0 节点基础布局预归一化（toStoryNode 解引用前置）', () => {
+  const v0Base = (nodes: unknown[]) => ({
+    schemaVersion: 0,
+    project: { id: 'p-old', name: '旧剧', createdAt: '', updatedAt: '2026-01-01T00:00:00.000Z' },
+    graph: { nodes, edges: [] },
+    settings: { characters: [], locations: [] },
+    episodeTitles: {},
+    assets: { byId: {} },
+  })
+  const sceneData = (id: string) => ({ name: id, sceneNo: 1, interior: true, synopsis: '' })
+
+  it('position 缺失或为 null：补默认 (0,0) 并警告，不因 n.position.x 解引用崩溃', () => {
+    const round = parseProject(v0Base([
+      { id: 's1', type: 'scene', data: sceneData('场一') },
+      { id: 's2', type: 'scene', position: null, data: sceneData('场二') },
+      { id: 's3', type: 'scene', position: { x: 5, y: 5 }, data: sceneData('场三') },
+    ]))
+    expect(round.content.nodes.map((n) => n.id)).toEqual(['s1', 's2', 's3'])
+    expect(round.content.nodes[0].position).toEqual({ x: 0, y: 0 })
+    expect(round.content.nodes[2].position).toEqual({ x: 5, y: 5 })
+    expect(round.warnings.some((w) => w.includes('s1') && w.includes('position'))).toBe(true)
+    expect(round.warnings.some((w) => w.includes('s2') && w.includes('position'))).toBe(true)
+  })
+})

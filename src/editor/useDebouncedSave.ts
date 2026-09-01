@@ -46,6 +46,9 @@ export function useDebouncedSave(
   latestRef.current = doc
   const firstRender = useRef(true)
   const lastSigRef = useRef(persistSignature(doc))
+  // 卸载后终止失败重试：后台循环持有旧文档持续落盘，重开同一项目会出现
+  // 第二个保存循环，存储恢复后陈旧循环可能覆盖新会话的编辑
+  const unmountedRef = useRef(false)
 
   const flushSave = useCallback(async () => {
     if (!dirtyRef.current) return
@@ -54,9 +57,10 @@ export function useDebouncedSave(
       await onSave(latestRef.current)
       onSaveResult?.(null)
     } catch (err) {
-      // 失败不丢数据：重新置脏，按防抖节律自动重试；错误上浮供用户诊断
-      dirtyRef.current = true
       onSaveResult?.(err)
+      if (unmountedRef.current) return
+      // 失败不丢数据：重新置脏，按防抖节律自动重试
+      dirtyRef.current = true
       if (saveTimer.current) return
       saveTimer.current = setTimeout(() => {
         saveTimer.current = null
@@ -98,8 +102,14 @@ export function useDebouncedSave(
   }, [doc.name, doc.nodes, doc.edges, doc.settings, doc.episodeTitles, flushSave, delayMs])
 
   useEffect(() => {
+    // flushSave 依赖变化会重跑本 effect：重置卸载标记，仅真正的卸载终止重试
+    unmountedRef.current = false
     return () => {
-      if (saveTimer.current) clearTimeout(saveTimer.current)
+      unmountedRef.current = true
+      if (saveTimer.current) {
+        clearTimeout(saveTimer.current)
+        saveTimer.current = null
+      }
       void flushSave()
     }
   }, [flushSave])

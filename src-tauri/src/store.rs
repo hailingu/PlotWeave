@@ -1126,16 +1126,19 @@ pub fn delete_project(app: AppHandle, id: String) -> Result<(), String> {
     delete_project_files(&dir, &id)
 }
 
-/// delete_project 的可测内核：项目 JSON 与资产目录的成对移除，幂等。
+/// delete_project 的可测内核：资产目录与项目 JSON 的成对移除，幂等。
+/// 顺序契约：先删资产树再删权威项目文件——树删除失败时项目仍在列表中
+/// 可发现、可重试删除；反过来先删 JSON 会让失败留下不可发现的孤儿媒体。
 fn delete_project_files(dir: &std::path::Path, id: &str) -> Result<(), String> {
     validate_id(id)?;
+    remove_tree_no_follow(&dir.join(id))?;
     let json = dir.join(format!("{id}.json"));
     match fs::remove_file(&json) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(format!("删除项目失败：{e}")),
     }
-    remove_tree_no_follow(&dir.join(id))
+    Ok(())
 }
 
 /// 递归删除目录树（no-follow）：符号链接条目仅移除链接自身，普通文件与
@@ -2033,6 +2036,31 @@ mod tests {
             .expect("复验通过应返回已打开的句柄");
         let md = handle.metadata().expect("句柄元数据可读");
         assert!(md.is_file());
+        cleanup_temp(&projects);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn delete_project_files_keeps_record_when_asset_tree_removal_fails() {
+        let projects = temp_projects_dir();
+        let assets = projects.join("p-1").join("assets");
+        fs::create_dir_all(&assets).expect("建资产目录");
+        fs::write(assets.join("a.png"), b"A").expect("写资产");
+        fs::write(projects.join("p-1.json"), b"{}").expect("写项目文件");
+        // 只读化资产目录：子项删除失败（非 root 用户无法 unlink）
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&assets).unwrap().permissions();
+        perms.set_mode(0o555);
+        fs::set_permissions(&assets, perms).expect("只读化");
+        let result = delete_project_files(&projects, "p-1");
+        let mut perms = fs::metadata(&assets).unwrap().permissions();
+        perms.set_mode(0o755);
+        let _ = fs::set_permissions(&assets, perms);
+        assert!(result.is_err(), "资产目录删除失败应显式报错");
+        // 权威项目文件必须仍在：项目可发现、删除可重试，不留孤儿媒体树
+        assert!(
+            projects.join("p-1.json").exists(),
+            "项目记录先于资产目录被删，失败后媒体成不可发现孤儿"
+        );
         cleanup_temp(&projects);
     }
 }

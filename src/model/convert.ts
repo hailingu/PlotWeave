@@ -1690,50 +1690,68 @@ function v0List(
 function normalizeV0NodeShapes(nodes: Record<string, unknown>[], warnings: string[]): void {
   const isObjectMember = (m: unknown) => isPlainObject(m)
   for (const node of nodes) {
-    const nid = typeof node.id === 'string' && node.id ? node.id : '(无 id)'
-    let data: Record<string, unknown>
-    if (isPlainObject(node.data)) {
-      data = node.data
-    } else {
-      warnings.push(`节点 ${nid} 的 data 缺失或非对象，已重置为空对象`)
-      data = {}
-      node.data = data
-    }
-      switch (node.type) {
-        case 'scene':
-          v0List(data, 'characters', nid, isObjectMember, false, warnings)
-          break
-        case 'dialogue':
-          v0List(data, 'lines', nid, isObjectMember, true, warnings)
-          break
-        case 'branch': {
-          // 槽位保序（§11.1 ①）：旧下标句柄改写前不得压缩数组——异型成员以
-          // 占位对象顶位（迁移器为其补发 id，改写后由 v1 形状校验移除并
-          // 警告），指向该槽位的连线按孤儿边隔离而非滑向后一选项
-          const options = data.options
-          if (options === undefined) {
-            data.options = []
-            break
-          }
-          if (!Array.isArray(options)) {
-            warnings.push(`节点 ${nid} 的 options 非数组，已重置为空数组`)
-            data.options = []
-            break
-          }
-          data.options = options.map((m, i) => {
-            if (typeof m === 'string' || isPlainObject(m)) return m
-            warnings.push(`节点 ${nid} 的 options 成员 #${i} 异型，已置占位`)
-            return {}
-          })
-          break
-        }
-        case 'shot':
-          v0List(data, 'refs', nid, isObjectMember, true, warnings)
-          break
-        default:
-          break
-      }
+    normalizeV0NodeShape(node, isObjectMember, warnings)
   }
+}
+
+/** 单个 v0 节点的嵌套形状预归一化（normalizeV0NodeShapes 内核）：position
+ * 缺失/非对象补默认 (0,0)（toStoryNode 解引用 n.position.x，不补则单个
+ * 损坏旧节点令整档迁移崩溃）；data 非对象重置；类型专属列表见 v0List。 */
+function normalizeV0NodeShape(
+  node: Record<string, unknown>,
+  isObjectMember: (m: unknown) => boolean,
+  warnings: string[],
+): void {
+  const nid = typeof node.id === 'string' && node.id ? node.id : '(无 id)'
+  if (!isPlainObject(node.position)) {
+    warnings.push(`节点 ${nid} 的 position 缺失或非对象，已置 (0,0)`)
+    node.position = { x: 0, y: 0 }
+  }
+  let data: Record<string, unknown>
+  if (isPlainObject(node.data)) {
+    data = node.data
+  } else {
+    warnings.push(`节点 ${nid} 的 data 缺失或非对象，已重置为空对象`)
+    data = {}
+    node.data = data
+  }
+  switch (node.type) {
+    case 'scene':
+      v0List(data, 'characters', nid, isObjectMember, false, warnings)
+      break
+    case 'dialogue':
+      v0List(data, 'lines', nid, isObjectMember, true, warnings)
+      break
+    case 'branch':
+      normalizeV0Options(data, nid, warnings)
+      break
+    case 'shot':
+      v0List(data, 'refs', nid, isObjectMember, true, warnings)
+      break
+    default:
+      break
+  }
+}
+
+/** branch.options 的槽位保序预归一化（§11.1 ①）：旧下标句柄改写前不得
+ * 压缩数组——异型成员以占位对象顶位（迁移器为其补发 id，改写后由 v1
+ * 形状校验移除并警告），指向该槽位的连线按孤儿边隔离而非滑向后一选项。 */
+function normalizeV0Options(data: Record<string, unknown>, nid: string, warnings: string[]): void {
+  const options = data.options
+  if (options === undefined) {
+    data.options = []
+    return
+  }
+  if (!Array.isArray(options)) {
+    warnings.push(`节点 ${nid} 的 options 非数组，已重置为空数组`)
+    data.options = []
+    return
+  }
+  data.options = options.map((m, i) => {
+    if (typeof m === 'string' || isPlainObject(m)) return m
+    warnings.push(`节点 ${nid} 的 options 成员 #${i} 异型，已置占位`)
+    return {}
+  })
 }
 
 /** v0 信封解析（parseProject 按 schemaVersion 分派）：图形容器/成员与节点

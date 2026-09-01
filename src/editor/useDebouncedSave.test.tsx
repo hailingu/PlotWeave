@@ -257,3 +257,34 @@ describe('useDebouncedSave（保存失败上浮与防抖重试）', () => {
     expect(onResult).toHaveBeenCalledWith(expect.objectContaining({ message: '只读' }))
   })
 })
+
+describe('useDebouncedSave（卸载后终止失败重试）', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it('卸载后才失败的保存不得复活重试循环（不留后台循环覆盖新会话编辑）', async () => {
+    let rejectSave: ((e: Error) => void) | null = null
+    const onSave = vi.fn(
+      () => new Promise<void>((_, rej) => { rejectSave = rej }),
+    )
+    const onResult = vi.fn()
+    const { rerender, unmount } = renderHook(
+      ({ doc }) => useDebouncedSave(doc, onSave, 600, onResult),
+      { initialProps: { doc: mkDoc() } },
+    )
+    act(() => {
+      rerender({ doc: mkDoc('改') })
+    })
+    // 防抖到点：保存挂起中（Promise 未决），随后立即卸载
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600)
+    })
+    expect(onSave).toHaveBeenCalledTimes(1)
+    unmount()
+    await act(async () => {
+      rejectSave?.(new Error('卸载后才失败'))
+      await vi.advanceTimersByTimeAsync(6000)
+    })
+    expect(onSave).toHaveBeenCalledTimes(1)
+  })
+})
