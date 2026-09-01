@@ -967,15 +967,128 @@ pub fn save_project(app: AppHandle, id: String, doc: ProjectFile) -> Result<Proj
     Ok(read_meta(&id, &file))
 }
 
-/// 删除项目（首页卡片菜单，§3.2）。
+/// 删除项目（首页卡片菜单，§3.2）：移除 `projects/{id}.json` 与项目资产
+/// 目录 `projects/{id}/`（当前扁平布局的资产根，§10.1）。目录删除逐项
+/// no-follow（§10.2）——符号链接条目只移除链接本身，绝不跟随；任一失败
+/// 显式报错，不静默遗留媒体文件。
 #[tauri::command]
 pub fn delete_project(app: AppHandle, id: String) -> Result<(), String> {
-    let path = project_path(&app, &id)?;
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(format!("删除项目失败：{e}")),
+    let dir = projects_dir(&app)?;
+    delete_project_files(&dir, &id)
+}
+
+/// delete_project 的可测内核：项目 JSON 与资产目录的成对移除，幂等。
+fn delete_project_files(dir: &std::path::Path, id: &str) -> Result<(), String> {
+    validate_id(id)?;
+    let json = dir.join(format!("{id}.json"));
+    match fs::remove_file(&json) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("删除项目失败：{e}")),
     }
+    remove_tree_no_follow(&dir.join(id))
+}
+
+/// 递归删除目录树（no-follow）：符号链接条目仅移除链接自身，普通文件与
+/// 目录递归删除；路径本身缺失视为已完成（幂等）。
+fn remove_tree_no_follow(path: &std::path::Path) -> Result<(), String> {
+    let md = match fs::symlink_metadata(path) {
+        Ok(md) => md,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(format!("读取待删路径元数据失败（{}）：{e}", path.display())),
+    };
+    if md.file_type().is_symlink() {
+        return fs::remove_file(path)
+            .map_err(|e| format!("移除符号链接失败（{}）：{e}", path.display()));
+    }
+    if md.is_dir() {
+        let entries = fs::read_dir(path)
+            .map_err(|e| format!("扫描待删目录失败（{}）：{e}", path.display()))?;
+        for entry in entries {
+            let entry =
+                entry.map_err(|e| format!("扫描待删目录失败（{}）：{e}", path.display()))?;
+            remove_tree_no_follow(&entry.path())?;
+        }
+        return fs::remove_dir(path)
+            .map_err(|e| format!("删除目录失败（{}）：{e}", path.display()));
+    }
+    fs::remove_file(path).map_err(|e| format!("删除文件失败（{}）：{e}", path.display()))
+}
+
+/// §7.3 复制项目：整目录拷贝项目资产（当前扁平布局下 `projects/{fromId}/
+/// assets` → `projects/{toId}/assets`），供 §10.5 保存边界的实路径复验在
+/// 副本侧通过。源资产目录缺失视为无资产（no-op）；存在时源根必须为非
+/// 符号链接的实际目录，子树逐项 no-follow——符号链接与非普通文件条目
+/// 拒绝；目标目录已存在视为异常（新副本 id 刚分配）。任一失败整次报错
+/// 并回滚已拷贝的目标子树，不遗留半拷贝。
+#[tauri::command]
+pub fn copy_project_assets(app: AppHandle, from_id: String, to_id: String) -> Result<(), String> {
+    let dir = projects_dir(&app)?;
+    copy_assets_tree(&dir, &from_id, &to_id)
+}
+
+/// copy_project_assets 的可测内核。
+fn copy_assets_tree(dir: &std::path::Path, from_id: &str, to_id: &str) -> Result<(), String> {
+    validate_id(from_id)?;
+    validate_id(to_id)?;
+    let src = dir.join(from_id).join("assets");
+    let md = match fs::symlink_metadata(&src) {
+        Ok(md) => md,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(format!("读取源资产目录元数据失败：{e}")),
+    };
+    if md.file_type().is_symlink() {
+        return Err("源资产目录是符号链接，拒绝复制".into());
+    }
+    if !md.is_dir() {
+        return Err("源资产路径不是目录，拒绝复制".into());
+    }
+    let dst_root = dir.join(to_id);
+    match fs::symlink_metadata(&dst_root) {
+        Ok(_) => return Err(format!("目标资产目录已存在，拒绝复制：{to_id}")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("读取目标资产目录元数据失败：{e}")),
+    }
+    // 拷贝目标是 {to}/assets：与 relPath 首段（§7.1）及实路径复验的资产根一致
+    if let Err(e) = copy_dir_no_follow(&src, &dst_root.join("assets")) {
+        let _ = remove_tree_no_follow(&dst_root);
+        return Err(e);
+    }
+    Ok(())
+}
+
+/// 递归拷贝目录树（no-follow）：目录对应创建，普通文件逐个拷贝，
+/// 符号链接与异型条目拒绝——副本绝不携带根外内容。
+fn copy_dir_no_follow(src: &std::path::Path, dst: &std::path::Path) -> Result<(), String> {
+    fs::create_dir_all(dst).map_err(|e| format!("创建目标资产目录失败：{e}"))?;
+    let entries = fs::read_dir(src).map_err(|e| format!("扫描源资产目录失败：{e}"))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("扫描源资产目录失败：{e}"))?;
+        // DirEntry::metadata 取 lstat 语义，不跟随符号链接
+        let md = entry
+            .metadata()
+            .map_err(|e| format!("读取源资产条目元数据失败：{e}"))?;
+        let name = entry.file_name();
+        let ft = md.file_type();
+        if ft.is_symlink() {
+            return Err(format!(
+                "源资产子树含符号链接，拒绝复制：{}",
+                entry.path().display()
+            ));
+        }
+        if ft.is_dir() {
+            copy_dir_no_follow(&entry.path(), &dst.join(&name))?;
+        } else if ft.is_file() {
+            fs::copy(entry.path(), dst.join(&name))
+                .map_err(|e| format!("拷贝资产文件失败（{}）：{e}", entry.path().display()))?;
+        } else {
+            return Err(format!(
+                "源资产子树含非普通文件条目，拒绝复制：{}",
+                entry.path().display()
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1619,6 +1732,86 @@ mod tests {
         let doc_assets = json!({ "byId": { "a1": { "relPath": "assets/a1.png" } } });
         let err = verify_save_asset_files(&projects, "p-1", &doc_assets).unwrap_err();
         assert!(err.contains("资产 a1"), "诊断缺资产键：{err}");
+        cleanup_temp(&projects);
+    }
+
+    #[test]
+    fn copy_assets_tree_copies_regular_files_recursively() {
+        let projects = temp_projects_dir();
+        let src = projects.join("p-1").join("assets");
+        fs::create_dir_all(src.join("sub")).expect("建源目录");
+        fs::write(src.join("a.png"), b"A").expect("写资产");
+        fs::write(src.join("sub").join("b.png"), b"B").expect("写子目录资产");
+        copy_assets_tree(&projects, "p-1", "p-2").expect("拷贝项目资产");
+        let dst = projects.join("p-2").join("assets");
+        assert_eq!(fs::read(dst.join("a.png")).expect("副本文件缺失"), b"A");
+        assert_eq!(
+            fs::read(dst.join("sub").join("b.png")).expect("子目录副本缺失"),
+            b"B"
+        );
+        cleanup_temp(&projects);
+    }
+
+    #[test]
+    fn copy_assets_tree_noop_without_source_and_rejects_existing_destination() {
+        let projects = temp_projects_dir();
+        // 源项目无资产目录：no-op 成功（无资产项目的复制路径）
+        assert!(copy_assets_tree(&projects, "p-1", "p-2").is_ok());
+        fs::create_dir_all(projects.join("p-1").join("assets")).expect("建源目录");
+        fs::create_dir_all(projects.join("p-3")).expect("预置目标");
+        let err = copy_assets_tree(&projects, "p-1", "p-3").unwrap_err();
+        assert!(err.contains("目标资产目录已存在"), "意外诊断：{err}");
+        cleanup_temp(&projects);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_assets_tree_rejects_symlink_and_rolls_back_partial_copy() {
+        let projects = temp_projects_dir();
+        let src = projects.join("p-1").join("assets");
+        fs::create_dir_all(&src).expect("建源目录");
+        fs::write(src.join("a.png"), b"A").expect("写资产");
+        let outside = projects.parent().expect("临时根").join("outside.png");
+        fs::write(&outside, b"secret").expect("写根外文件");
+        std::os::unix::fs::symlink(&outside, src.join("link.png")).expect("建符号链接");
+        let err = copy_assets_tree(&projects, "p-1", "p-2").unwrap_err();
+        assert!(err.contains("符号链接"), "意外诊断：{err}");
+        // 失败回滚：不遗留半拷贝的目标目录
+        assert!(fs::symlink_metadata(projects.join("p-2")).is_err());
+        cleanup_temp(&projects);
+    }
+
+    #[test]
+    fn delete_project_files_removes_json_and_asset_tree_idempotently() {
+        let projects = temp_projects_dir();
+        let assets = projects.join("p-1").join("assets");
+        fs::create_dir_all(&assets).expect("建资产目录");
+        fs::write(assets.join("a.png"), b"A").expect("写资产");
+        fs::write(projects.join("p-1.json"), b"{}").expect("写项目文件");
+        delete_project_files(&projects, "p-1").expect("删除项目");
+        assert!(fs::symlink_metadata(projects.join("p-1.json")).is_err());
+        assert!(fs::symlink_metadata(projects.join("p-1")).is_err());
+        // 幂等：文件与目录均已缺失时再删不报错
+        assert!(delete_project_files(&projects, "p-1").is_ok());
+        cleanup_temp(&projects);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn delete_project_files_unlinks_symlinks_without_following() {
+        let projects = temp_projects_dir();
+        let assets = projects.join("p-1").join("assets");
+        fs::create_dir_all(&assets).expect("建资产目录");
+        let outside_dir = projects.parent().expect("临时根").join("keep");
+        fs::create_dir_all(&outside_dir).expect("建根外目录");
+        fs::write(outside_dir.join("secret.png"), b"s").expect("写根外文件");
+        std::os::unix::fs::symlink(&outside_dir, assets.join("link")).expect("建目录符号链接");
+        fs::write(projects.join("p-1.json"), b"{}").expect("写项目文件");
+        delete_project_files(&projects, "p-1").expect("删除项目");
+        // 链接被移除但未跟随：根外目录与文件原样保留
+        assert!(fs::symlink_metadata(outside_dir.join("secret.png")).is_ok());
+        assert!(fs::symlink_metadata(&outside_dir).is_ok());
+        assert!(fs::symlink_metadata(projects.join("p-1")).is_err());
         cleanup_temp(&projects);
     }
 }

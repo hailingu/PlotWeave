@@ -180,15 +180,28 @@ export const projectStore = {
       ? import('@tauri-apps/api/core').then(({ invoke }) => invoke('delete_project', { id }))
       : memoryDelete(id),
 
-  /** 复制项目：读原文档 → 新建「副本」项目 → 写入画布（§3.2）。
-   * 副本创建时间取复制时刻。资产索引随文档原样带走——与 avatarAssetId
-   * 等引用字段保持一致解析（§8.1）；媒体文件整目录拷贝随 §7.1 落地后
-   * 升级为 Rust 侧原子复制（§7.3）。 */
+  /** 复制项目：读原文档 → 新建「副本」项目 → 整目录拷贝项目资产 → 写入
+   * 画布（§3.2）。副本创建时间取复制时刻。资产索引随文档原样带走——与
+   * avatarAssetId 等引用字段保持一致解析（§8.1）；媒体文件由 Rust 侧
+   * no-follow 拷贝 `projects/{fromId}/assets` → `projects/{toId}/assets`
+   * （§7.1/§7.3），先拷贝后保存，保存边界 §10.5 的实路径复验才能通过。
+   * 任一步失败：清理刚建的空副本项目后向前抛出，绝不静默吞错返回空项目。 */
   duplicate: async (id: string): Promise<ProjectSummary> => {
     const doc = await projectStore.load(id)
     const name = `${doc.name} 副本`
     const meta = await projectStore.create(name)
-    await projectStore.saveQuiet(meta.id, { ...doc, name, createdAt: undefined })
+    try {
+      if (isTauri) {
+        const { invoke } = await import('@tauri-apps/api/core')
+        await invoke('copy_project_assets', { fromId: id, toId: meta.id })
+      }
+      await projectStore.save(meta.id, { ...doc, name, createdAt: undefined })
+    } catch (err) {
+      console.warn('[projectStore] 复制项目失败，清理已建副本', err)
+      // 清理完成后再抛：调用方看到失败时首页不会遗留空「副本」卡片
+      await projectStore.delete(meta.id).catch(() => undefined)
+      throw err
+    }
     return { ...meta, sceneCount: meta.sceneCount }
   },
 

@@ -70,7 +70,7 @@ describe('projectStore 内存门面（浏览器回退）', () => {
     const copyDoc = await projectStore.load(copy.id)
     expect(copyDoc.createdAt).not.toBe('2026-01-01T00:00:00.000Z')
     // 索引随文档走：avatarAssetId 等 id 在副本内仍可解析到 AssetRef；
-    // 媒体文件整目录拷贝随 §7.1 落地（当前应用不管理媒体文件）
+    // 媒体文件整目录拷贝是桌面路径（copy_project_assets），内存回退无媒体文件
     expect(copyDoc.assets?.byId['a-1']).toBeDefined()
     // 源项目自己的索引不受影响
     const srcDoc = await projectStore.load(meta.id)

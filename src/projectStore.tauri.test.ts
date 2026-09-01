@@ -177,9 +177,10 @@ describe('tauriCreate / delete / duplicate', () => {
     expect(calls[1]).toEqual({ cmd: 'delete_project', args: { id: 'new-1' } })
   })
 
-  it('duplicate = load → create → saveQuiet 全链路（副本名拼接）', async () => {
+  it('duplicate = load → create → copy_project_assets → save 全链路（副本名拼接）', async () => {
     handlers.set('load_project', () => modernFile())
     handlers.set('create_project', (args) => ({ ...meta('copy-1'), name: (args as { name: string }).name }))
+    handlers.set('copy_project_assets', () => undefined)
     handlers.set('save_project', () => undefined)
     const { projectStore } = await load()
     const copy = await projectStore.duplicate('p1')
@@ -187,5 +188,35 @@ describe('tauriCreate / delete / duplicate', () => {
     const save = calls.find((c) => c.cmd === 'save_project')
     const savedDoc = (save?.args as { doc: { project: { name: string } } }).doc
     expect(savedDoc.project.name).toBe('现代剧 副本')
+  })
+
+  it('duplicate：带资产索引的项目先整目录拷贝(from→to)再保存，供 §10.5 实路径复验通过', async () => {
+    handlers.set('load_project', () => ({
+      ...modernFile(),
+      assets: { byId: { 'a-1': { id: 'a-1', relPath: 'assets/x.png', mime: 'image/png', source: 'upload', createdAt: '2026-01-01T00:00:00.000Z' } } },
+    }))
+    handlers.set('create_project', () => meta('copy-9'))
+    handlers.set('copy_project_assets', () => undefined)
+    handlers.set('save_project', () => undefined)
+    const { projectStore } = await load()
+    await projectStore.duplicate('p1')
+    const copyCall = calls.find((c) => c.cmd === 'copy_project_assets')
+    expect(copyCall?.args).toEqual({ fromId: 'p1', toId: 'copy-9' })
+    const order = calls.map((c) => c.cmd)
+    expect(order.indexOf('copy_project_assets')).toBeLessThan(order.indexOf('save_project'))
+  })
+
+  it('duplicate：保存失败向前抛出并清理刚建的空副本，不再静默返回空项目', async () => {
+    handlers.set('load_project', () => modernFile())
+    handlers.set('create_project', () => meta('copy-x'))
+    handlers.set('copy_project_assets', () => undefined)
+    handlers.set('save_project', () => {
+      throw new Error('资产 a-1：资产文件不存在：assets/x.png')
+    })
+    handlers.set('delete_project', () => undefined)
+    const { projectStore } = await load()
+    await expect(projectStore.duplicate('p1')).rejects.toThrow(/资产文件不存在/)
+    const cleanup = calls.find((c) => c.cmd === 'delete_project')
+    expect((cleanup?.args as { id: string }).id).toBe('copy-x')
   })
 })
