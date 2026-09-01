@@ -59,6 +59,9 @@ export function normalizeEpisodeTitles(
  *   branch 选项字符串形态升级为 {id, label} 对象。
  * - 缺失的设定集实体就地补建：角色按「名字首字 + 渐变」匹配，地点按名字匹配；
  *   匹配不到建新实体（角色名回退头像单字，用户可改名）。
+ * - 键控身份的数组语义保全：设定集数组与 branch 选项的重复/空白 id 保首见、
+ *   后续就地重发——下游 Record 键控只留末见、下标句柄改写假定选项 id 唯一，
+ *   不在此修复会丢实体或让连线静默滑向首见项。
  */
 export function migrateProjectDocument(doc: ProjectContent): {
   doc: ProjectContent
@@ -66,6 +69,27 @@ export function migrateProjectDocument(doc: ProjectContent): {
 } {
   const settings: ProjectSettings = normalizeSettings(doc.settings)
   let migrated = false
+
+  /** v0 设定集数组的实体 id 修复（先于 Record 键控）：数组语义下同 id 引用
+   * 命中首见实体；缺失/非字符串/空白或与首见重复的 id 就地重发，首见不动——
+   * 既不丢实体数据，也不改变既有引用的指向。 */
+  const reissueEntityIds = <T extends { id?: unknown }>(list: T[], prefix: 'ch' | 'loc'): T[] => {
+    const seen = new Set<string>()
+    return list.map((e) => {
+      const raw = e !== null && typeof e === 'object' ? e.id : undefined
+      const id = typeof raw === 'string' ? raw : ''
+      if (id.trim() && !seen.has(id)) {
+        seen.add(id)
+        return e
+      }
+      migrated = true
+      const nid = newEntityId(prefix)
+      seen.add(nid)
+      return { ...(e as object), id: nid } as T
+    })
+  }
+  settings.characters = reissueEntityIds(settings.characters, 'ch')
+  settings.locations = reissueEntityIds(settings.locations, 'loc')
 
   const ensureCharacter = (label: string, gradient?: string): string => {
     const hit =
@@ -135,15 +159,26 @@ export function migrateProjectDocument(doc: ProjectContent): {
     }
     if (node.type === 'branch') {
       const d = node.data
+      // 下标句柄改写（rewriteIndexOptionHandles）与 v1 归一化的键控列表修复
+      // 都以「选项 id 唯一非空」为前提：空白或与首见重复的 id 在此保首见重发，
+      // 否则下标改写绑定的重复 id 会被归一化二次重发，连线静默滑向首见选项
+      const seen = new Set<string>()
       const options = d.options.map((o) => {
         if (typeof o === 'string') {
           migrated = true
-          return { id: uid('opt'), label: o }
+          const id = uid('opt')
+          seen.add(id)
+          return { id, label: o }
         }
-        if (typeof (o as { id?: unknown }).id !== 'string') {
+        const raw = (o as { id?: unknown }).id
+        const id = typeof raw === 'string' ? raw : ''
+        if (!id.trim() || seen.has(id)) {
           migrated = true
-          return { ...(o as { label: string }), id: uid('opt') }
+          const nid = uid('opt')
+          seen.add(nid)
+          return { ...(o as { label: string }), id: nid }
         }
+        seen.add(id)
         return o
       })
       return { ...node, data: { ...d, options } } as CanvasNode

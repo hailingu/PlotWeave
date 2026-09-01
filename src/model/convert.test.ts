@@ -1426,3 +1426,102 @@ describe('归一化：设定文档 relatedIds 成员校验（§6/§11.1 第 3 �
     expect(round.warnings.filter((w) => w.includes('doc-1')).length).toBeGreaterThanOrEqual(4)
   })
 })
+
+describe('schemaVersion 0 迁移：键控身份的数组语义保全（§11.1 迁移链，重复/空白 id 先于键控与句柄改写修复）', () => {
+  it('分支选项重复/空白 id 在迁移期重发，下标句柄仍绑定原数组位的选项', () => {
+    const v0 = {
+      schemaVersion: 0,
+      project: { id: 'p-old', name: '旧剧', createdAt: '', updatedAt: '2026-01-01T00:00:00.000Z' },
+      graph: {
+        nodes: [
+          {
+            id: 'br1',
+            type: 'branch',
+            position: { x: 0, y: 0 },
+            data: {
+              prompt: '去哪',
+              options: [
+                { id: 'opt-dup', label: '左' },
+                { id: 'opt-dup', label: '右' }, // 与首见重复
+                { id: '', label: '中' }, // 空白 id
+              ],
+            },
+          },
+          { id: 's1', type: 'scene', position: { x: 0, y: 0 }, data: { name: '场一', sceneNo: 1, interior: true, synopsis: '' } },
+          { id: 's2', type: 'scene', position: { x: 0, y: 0 }, data: { name: '场二', sceneNo: 2, interior: true, synopsis: '' } },
+          { id: 's3', type: 'scene', position: { x: 0, y: 0 }, data: { name: '场三', sceneNo: 3, interior: true, synopsis: '' } },
+        ],
+        edges: [
+          { id: 'e1', source: 'br1', target: 's1', sourceHandle: 'option-0', type: 'branch', data: { optionLabel: '左' } },
+          { id: 'e2', source: 'br1', target: 's2', sourceHandle: 'option-1', type: 'branch', data: { optionLabel: '右' } },
+          { id: 'e3', source: 'br1', target: 's3', sourceHandle: 'option-2', type: 'branch', data: { optionLabel: '中' } },
+        ],
+      },
+      settings: { characters: [], locations: [] },
+      episodeTitles: {},
+      assets: { byId: {} },
+    }
+    const round = parseProject(v0)
+    const br = round.content.nodes.find((n) => n.id === 'br1')!
+    const options = (br.data as { options: { id: string; label: string }[] }).options
+    // 三个选项都保留，id 唯一且非空
+    expect(options.map((o) => o.label)).toEqual(['左', '右', '中'])
+    expect(new Set(options.map((o) => o.id)).size).toBe(3)
+    // 下标句柄按原数组位绑定：e2 必须仍指向「右」（重发后的新 id），
+    // 不得因 v1 归一化二次重发而滑向首见选项
+    const e1 = round.content.edges.find((e) => e.id === 'e1')!
+    const e2 = round.content.edges.find((e) => e.id === 'e2')!
+    const e3 = round.content.edges.find((e) => e.id === 'e3')!
+    expect(e1.sourceHandle).toBe(`option-${options[0].id}`)
+    expect(e2.sourceHandle).toBe(`option-${options[1].id}`)
+    expect(e3.sourceHandle).toBe(`option-${options[2].id}`)
+    expect(e2.data).toEqual({ optionLabel: '右' })
+    expect(e3.data).toEqual({ optionLabel: '中' })
+  })
+
+  it('设定集数组重复/空白 id 在迁移期重发（保首见）：实体不丢，引用仍指首见实体', () => {
+    const v0 = {
+      schemaVersion: 0,
+      project: { id: 'p-old', name: '旧剧', createdAt: '', updatedAt: '2026-01-01T00:00:00.000Z' },
+      graph: {
+        nodes: [
+          {
+            id: 's1',
+            type: 'scene',
+            position: { x: 0, y: 0 },
+            data: { name: '场一', sceneNo: 1, interior: true, synopsis: '', characterIds: ['ch-dup'], locationId: 'loc-dup' },
+          },
+        ],
+        edges: [],
+      },
+      settings: {
+        characters: [
+          { id: 'ch-dup', name: '甲', gradient: 'g1' },
+          { id: 'ch-dup', name: '乙', gradient: 'g2' }, // 与首见重复
+          { id: '', name: '丙', gradient: 'g3' }, // 空白 id
+        ],
+        locations: [
+          { id: 'loc-dup', name: '天台' },
+          { id: 'loc-dup', name: '地下室' }, // 与首见重复
+        ],
+      },
+      episodeTitles: {},
+      assets: { byId: {} },
+    }
+    const round = parseProject(v0)
+    // 实体一个不丢，id 唯一；首见实体保留原 id
+    const chars = round.content.settings.characters
+    expect(chars.map((c) => c.name)).toEqual(['甲', '乙', '丙'])
+    expect(new Set(chars.map((c) => c.id)).size).toBe(3)
+    expect(chars[0].id).toBe('ch-dup')
+    const locs = round.content.settings.locations
+    expect(locs.map((l) => l.name)).toEqual(['天台', '地下室'])
+    expect(locs[0].id).toBe('loc-dup')
+    // 数组语义下引用命中首见实体：ch-dup/loc-dup 仍指 甲/天台，无悬空警告
+    const s1 = round.content.nodes.find((n) => n.id === 's1')!
+    const spec = s1.data as { characterIds: string[]; locationId?: string }
+    expect(spec.characterIds).toEqual(['ch-dup'])
+    expect(spec.locationId).toBe('loc-dup')
+    expect(round.warnings.some((w) => w.includes('不存在的角色') || w.includes('不存在的地点'))).toBe(false)
+  })
+})
