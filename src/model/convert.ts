@@ -1782,7 +1782,7 @@ function parseLegacyProject(raw: Record<string, unknown>, env: NormalizeEnv): Pa
   )
   const legacyNow = Number.isFinite(legacyAtMs) ? new Date(legacyAtMs) : new Date()
   const doc = serializeProject(
-    rewriteIndexOptionHandles(migrated.doc),
+    rewriteIndexOptionHandles(migrated.doc, v0Warnings),
     env0.project?.id ?? '',
     legacyNow,
   )

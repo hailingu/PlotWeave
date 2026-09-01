@@ -20,6 +20,7 @@ vi.mock('./projectStore', () => ({
     list: vi.fn(),
     create: vi.fn(),
     load: vi.fn(),
+    save: vi.fn(),
     saveQuiet: vi.fn(),
     duplicate: vi.fn(),
     delete: vi.fn(),
@@ -52,6 +53,7 @@ const store = projectStore as unknown as {
   list: ReturnType<typeof vi.fn>
   create: ReturnType<typeof vi.fn>
   load: ReturnType<typeof vi.fn>
+  save: ReturnType<typeof vi.fn>
   saveQuiet: ReturnType<typeof vi.fn>
   duplicate: ReturnType<typeof vi.fn>
   delete: ReturnType<typeof vi.fn>
@@ -127,7 +129,7 @@ describe('App（双界面路由壳）', () => {
     expect(store.list).toHaveBeenCalledTimes(2)
   })
 
-  it('编辑器回调：改名更新打开态文档名；保存委托 saveQuiet；返回首页刷新', async () => {
+  it('编辑器回调：改名更新打开态文档名；保存委托 save（失败上浮给编辑器重试/横幅）；返回首页刷新', async () => {
     render(<App />)
     await screen.findByTestId('home')
     await act(async () => {
@@ -142,7 +144,7 @@ describe('App（双界面路由壳）', () => {
 
     const savedDoc = { ...DOC, name: '雨夜·修订' }
     ;(editorProps.current.onSave as (doc: ProjectContent) => void)(savedDoc)
-    expect(store.saveQuiet).toHaveBeenCalledWith('p1', savedDoc)
+    expect(store.save).toHaveBeenCalledWith('p1', savedDoc)
 
     await act(async () => {
       ;(editorProps.current.onBackHome as () => void)()

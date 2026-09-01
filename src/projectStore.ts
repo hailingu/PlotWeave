@@ -43,6 +43,23 @@ function seedProjects(): { meta: ProjectSummary; doc: ProjectContent }[] {
   ]
 }
 
+/** 复制命名（§7.3）：新名 = `{源名} 副本`，与现存项目名冲突则递增序号
+ * （` 副本 2`、` 副本 3`…）；拼接结果按字符数超 64（§9.3 校验口径）时先
+ * 截断源名至可容纳后缀再拼接——复制必须总能成功，不得因上限被持久化层拒绝。 */
+function duplicateName(source: string, taken: ReadonlySet<string>): string {
+  const build = (suffix: string): string => {
+    const room = Math.max(1, 64 - [...suffix].length)
+    const head = [...source.trim()].slice(0, room).join('').trimEnd() || '未命名'
+    return head + suffix
+  }
+  const first = build(' 副本')
+  if (!taken.has(first)) return first
+  for (let n = 2; ; n++) {
+    const candidate = build(` 副本 ${n}`)
+    if (!taken.has(candidate)) return candidate
+  }
+}
+
 const isTauri =
   typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
@@ -201,7 +218,9 @@ export const projectStore = {
    * 任一步失败：清理刚建的空副本项目后向前抛出，绝不静默吞错返回空项目。 */
   duplicate: async (id: string): Promise<ProjectSummary> => {
     const doc = await projectStore.load(id)
-    const name = `${doc.name} 副本`
+    // 命名先于创建（§7.3）：截断保上限 + 冲突递增序号，create 永不因名校验拒绝
+    const taken = new Set((await projectStore.list()).map((p) => p.name))
+    const name = duplicateName(doc.name, taken)
     const meta = await projectStore.create(name)
     try {
       if (isTauri) {

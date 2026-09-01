@@ -3,6 +3,7 @@
  * schemaVersion 0 文档的节点/设定集仍是「引用 id 化之前」的形态，
  * 本模块把它升级为当前运行态形状，再由 convert.ts 包装为 v1 信封。
  */
+import type { Edge } from '@xyflow/react'
 import type { CanvasNode } from '../editor/nodes/types'
 import {
   branchOptionHandle,
@@ -260,17 +261,26 @@ export function migrateProjectDocument(doc: ProjectContent): {
 
 /** 旧运行态的分支边按数组下标定位出口（option-N）；v1 绑稳定选项 id（§4.2 修订）。
  * 须在 migrateProjectDocument 之后调用（此时选项已带稳定 id）；
- * 能解析的下标就地改写，越界的原样保留，留给归一化按孤儿边隔离（§11.3）。 */
-export function rewriteIndexOptionHandles(doc: ProjectContent): ProjectContent {
+ * 能解析的下标就地改写。越界/指向已删槽位的数字句柄在迁移期直接隔离并
+ * 警告（§11.1 ②）：数字字面量可能碰巧等于某选项的数值型稳定 id，原样
+ * 保留会被 v1 当稳定句柄解释而静默改接到该选项。 */
+export function rewriteIndexOptionHandles(
+  doc: ProjectContent,
+  warnings?: string[],
+): ProjectContent {
   const nodesById = new Map(doc.nodes.map((n) => [n.id, n]))
-  const edges = doc.edges.map((e) => {
-    const optionId = branchOptionIdOf(e.sourceHandle)
-    // 只改写旧式的纯数字下标句柄；id 句柄与其他端口原样放行
-    if (optionId === undefined || !/^\d+$/.test(optionId)) return e
-    const src = nodesById.get(e.source)
-    if (src?.type !== 'branch') return e
-    const option = src.data.options[Number(optionId)]
-    return option ? { ...e, sourceHandle: branchOptionHandle(option.id) } : e
-  })
+  const edges = doc.edges
+    .map((e): Edge | null => {
+      const optionId = branchOptionIdOf(e.sourceHandle)
+      // 只改写旧式的纯数字下标句柄；id 句柄与其他端口原样放行
+      if (optionId === undefined || !/^\d+$/.test(optionId)) return e
+      const src = nodesById.get(e.source)
+      if (src?.type !== 'branch') return e
+      const option = src.data.options[Number(optionId)]
+      if (option) return { ...e, sourceHandle: branchOptionHandle(option.id) }
+      warnings?.push(`边 ${e.id} 的旧下标句柄 ${String(e.sourceHandle)} 越界或指向已删选项，已隔离`)
+      return null
+    })
+    .filter((e): e is Edge => e !== null)
   return { ...doc, edges }
 }

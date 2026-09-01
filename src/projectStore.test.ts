@@ -131,3 +131,23 @@ describe('projectStore 内存门面（浏览器回退）', () => {
     expect(me?.endingCount).toBe(2) // b、c 无出边
   })
 })
+
+describe('复制命名（§7.3：截断源名保上限 + 冲突递增序号）', () => {
+  it('源名逼近 64 字符上限：截断源名再拼「 副本」，总长不超上限', async () => {
+    const meta = await projectStore.create('剧'.repeat(63))
+    const copy = await projectStore.duplicate(meta.id)
+    expect([...copy.name].length).toBeLessThanOrEqual(64)
+    expect(copy.name.endsWith('副本')).toBe(true)
+    const copyDoc = await projectStore.load(copy.id)
+    expect([...copyDoc.name].length).toBeLessThanOrEqual(64)
+  })
+
+  it('同名副本已存在：递增序号（副本 2、副本 3 …）', async () => {
+    // 内存存储跨用例共享：源名取本用例唯一值，避免撞先前用例的副本名
+    const meta = await projectStore.create('独一剧')
+    const copy1 = await projectStore.duplicate(meta.id)
+    const copy2 = await projectStore.duplicate(meta.id)
+    expect(copy1.name).toBe('独一剧 副本')
+    expect(copy2.name).toBe('独一剧 副本 2')
+  })
+})

@@ -4,6 +4,8 @@
  * 避免「只打开不编辑」也盖更新时间戳。
  * 序列化（运行态剥离、ProjectDocument 包装）在 projectStore 保存时
  * 经 src/model/convert.ts 完成，本 hook 只透传会话文档。
+ * 保存失败不丢数据：重新置脏并按防抖节律自动重试，错误经 onSaveResult
+ * 上浮给调用方做用户可见诊断（磁盘满/只读/保存边界拒收等）。
  */
 import { useCallback, useEffect, useRef } from 'react'
 import type { ProjectContent } from '../model/content'
@@ -28,12 +30,15 @@ function persistSignature(doc: ProjectContent): string {
 }
 
 /** 画布变化防抖落盘：doc 任意片段变化后 delayMs 内无新变化才写入；
- * 组件卸载时若仍有脏数据则立即冲刷。返回 markDirty(doc)：供无重渲染的
- * transient 变更（如视口 ref 更新）显式标脏并换入最新文档。 */
+ * 组件卸载时若仍有脏数据则立即冲刷。onSave 可为异步，失败时重新置脏、
+ * 按防抖节律自动重试并经 onSaveResult 上报（null 表示本次成功）。
+ * 返回 markDirty(doc)：供无重渲染的 transient 变更（如视口 ref 更新）
+ * 显式标脏并换入最新文档。 */
 export function useDebouncedSave(
   doc: ProjectContent,
-  onSave: (doc: ProjectContent) => void,
+  onSave: (doc: ProjectContent) => void | Promise<void>,
   delayMs = 600,
+  onSaveResult?: (err: unknown) => void,
 ): (doc: ProjectContent) => void {
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const dirtyRef = useRef(false)
@@ -42,11 +47,23 @@ export function useDebouncedSave(
   const firstRender = useRef(true)
   const lastSigRef = useRef(persistSignature(doc))
 
-  const flushSave = useCallback(() => {
+  const flushSave = useCallback(async () => {
     if (!dirtyRef.current) return
     dirtyRef.current = false
-    onSave(latestRef.current)
-  }, [onSave])
+    try {
+      await onSave(latestRef.current)
+      onSaveResult?.(null)
+    } catch (err) {
+      // 失败不丢数据：重新置脏，按防抖节律自动重试；错误上浮供用户诊断
+      dirtyRef.current = true
+      onSaveResult?.(err)
+      if (saveTimer.current) return
+      saveTimer.current = setTimeout(() => {
+        saveTimer.current = null
+        void flushSave()
+      }, delayMs)
+    }
+  }, [onSave, onSaveResult, delayMs])
 
   const markDirty = useCallback(
     (next: ProjectContent) => {
@@ -55,7 +72,7 @@ export function useDebouncedSave(
       if (saveTimer.current) clearTimeout(saveTimer.current)
       saveTimer.current = setTimeout(() => {
         saveTimer.current = null
-        flushSave()
+        void flushSave()
       }, delayMs)
     },
     [flushSave, delayMs],
@@ -73,7 +90,7 @@ export function useDebouncedSave(
     if (saveTimer.current) clearTimeout(saveTimer.current)
     saveTimer.current = setTimeout(() => {
       saveTimer.current = null
-      flushSave()
+      void flushSave()
     }, delayMs)
     // 名称/节点/边/设定集/集标题触发防抖（视口经 markDirty 或卸载冲刷兜底）；
     // doc 仅用于计算签名，依赖以签名的组成字段为准
@@ -83,7 +100,7 @@ export function useDebouncedSave(
   useEffect(() => {
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current)
-      flushSave()
+      void flushSave()
     }
   }, [flushSave])
 

@@ -80,10 +80,10 @@ export default function App() {
     void refreshProjects()
   }, [refreshProjects])
 
+  /** 画布防抖保存（§10.2）：失败 Promise 上浮给编辑器——重置脏标记自动
+   * 重试并横幅提示，不再经 saveQuiet 静默吞错丢编辑。 */
   const handleSave = useCallback(
-    (id: string) => (doc: ProjectContent) => {
-      void projectStore.saveQuiet(id, doc)
-    },
+    (id: string) => (doc: ProjectContent) => projectStore.save(id, doc),
     [],
   )
 

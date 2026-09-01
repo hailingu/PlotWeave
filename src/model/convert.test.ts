@@ -2108,3 +2108,38 @@ describe('归一化：空白 id 引用的重发改写贯通与节点时间戳透
     expect(persisted.updatedAt).toBe('2026-02-03T04:05:06.000Z')
   })
 })
+
+describe('归一化：数值型稳定 id 与越界旧下标句柄的歧义隔离（§11.1 迁移链 ②）', () => {
+  it('选项稳定 id 为数字串时，越界的 option-N 旧句柄不得被解释为该稳定 id', () => {
+    const v0 = {
+      schemaVersion: 0,
+      project: { id: 'p-old', name: '旧剧', createdAt: '', updatedAt: '2026-01-01T00:00:00.000Z' },
+      graph: {
+        nodes: [
+          {
+            id: 'br1', type: 'branch', position: { x: 0, y: 0 },
+            data: { prompt: '去哪', options: [{ id: '9', label: 'A' }] },
+          },
+          { id: 's1', type: 'scene', position: { x: 0, y: 0 }, data: { name: '场一', sceneNo: 1, interior: true, synopsis: '' } },
+        ],
+        edges: [
+          // 旧下标 9 越界（仅下标 0 存在）：不得碰巧解析为稳定 id "9" 而接给 A
+          { id: 'e-bad', source: 'br1', target: 's1', sourceHandle: 'option-9', type: 'branch', data: { optionLabel: '越界' } },
+          // 下标 0 正常改写到稳定 id "9"
+          { id: 'e-ok', source: 'br1', target: 's1', sourceHandle: 'option-0', type: 'branch', data: { optionLabel: 'A' } },
+        ],
+      },
+      settings: { characters: [], locations: [] },
+      episodeTitles: {},
+      assets: { byId: {} },
+    }
+    const round = parseProject(v0)
+    const ids = round.content.edges.map((e) => e.id)
+    expect(ids).toContain('e-ok')
+    expect(ids).not.toContain('e-bad')
+    expect(round.warnings.some((w) => w.includes('e-bad'))).toBe(true)
+    // e-ok 确实指向选项 9（label A）
+    const eOk = round.content.edges.find((e) => e.id === 'e-ok')!
+    expect(eOk.sourceHandle).toBe('option-9')
+  })
+})

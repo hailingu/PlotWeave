@@ -93,8 +93,9 @@ interface EditorViewProps {
   readonly onRenameProject: (name: string) => void
   /** 打开设置页（§8.2 BYOK 配置入口，⌘,）。 */
   readonly onOpenSettings?: () => void
-  /** 持久化写入（防抖节流由本组件负责；浏览器预览下为内存回退实现）。 */
-  readonly onSave: (doc: ProjectContent) => void
+  /** 持久化写入（防抖节流由本组件负责；浏览器预览下为内存回退实现）。
+   * 返回 Promise 时失败会上浮：重置脏标记自动重试并横幅提示。 */
+  readonly onSave: (doc: ProjectContent) => void | Promise<void>
 }
 
 /**
@@ -109,6 +110,18 @@ export default function EditorView(props: EditorViewProps) {
       <EditorWindow {...props} />
     </ReactFlowProvider>
   )
+}
+
+/** 防抖保存失败的横幅文案：Error 取 message，其余类型安全字符串化
+ * （String(对象) 只会得到 '[object Object]'）。 */
+function saveErrorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message
+  if (typeof err === 'string') return err
+  try {
+    return JSON.stringify(err) ?? '未知错误'
+  } catch {
+    return '未知错误'
+  }
 }
 
 /**
@@ -145,6 +158,17 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
   // 卸载冲刷与后续内容保存拿到的都是最新视口（不落 stale 值）。
   const viewportRef = useRef<Viewport | undefined>(project.viewport)
 
+  // 防抖保存失败的用户可见诊断（§10.2）：失败即横幅提示并自动重试，
+  // 成功后清除——保存失败不再只留在开发者控制台里丢编辑
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const handleSaveResult = useCallback((err: unknown) => {
+    if (err === null) {
+      setSaveError(null)
+      return
+    }
+    setSaveError(saveErrorMessage(err))
+  }, [])
+
   const markDirty = useDebouncedSave(
     sessionDoc(project, {
       nodes,
@@ -154,6 +178,8 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
       viewport: viewportRef.current,
     }),
     onSave,
+    600,
+    handleSaveResult,
   )
 
   const onMoveEnd = useCallback(
@@ -716,6 +742,19 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
         aiOn={rightTab === 'ai' && rightOpen}
         onToggleRight={toggleRight}
       />
+      {saveError !== null && (
+        <div
+          role="alert"
+          style={{
+            padding: '6px 16px',
+            background: '#5c1d1d',
+            color: '#ffe3e3',
+            fontSize: 13,
+          }}
+        >
+          自动保存失败：{saveError}（修改已保留，正在自动重试；可检查磁盘后继续编辑）
+        </div>
+      )}
       <div className="editor-body">
         <LeftPanel
           open={leftOpen}

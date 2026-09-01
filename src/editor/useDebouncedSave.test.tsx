@@ -210,3 +210,50 @@ describe('useDebouncedSave（防抖落盘 + 脏态卸载冲刷）', () => {
     expect(onSave).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('useDebouncedSave（保存失败上浮与防抖重试）', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it('保存失败：重新置脏、防抖自动重试，失败经 onResult 上报', async () => {
+    const onSave = vi.fn()
+      .mockRejectedValueOnce(new Error('磁盘已满'))
+      .mockResolvedValue(undefined)
+    const onResult = vi.fn()
+    const { rerender } = renderHook(
+      ({ doc }) => useDebouncedSave(doc, onSave, 600, onResult),
+      { initialProps: { doc: mkDoc() } },
+    )
+    act(() => {
+      rerender({ doc: mkDoc('改而未落') })
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600)
+    })
+    expect(onSave).toHaveBeenCalledTimes(1)
+    expect(onResult).toHaveBeenCalledWith(expect.objectContaining({ message: '磁盘已满' }))
+    // 失败重新置脏 → 防抖到点自动重试
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600)
+    })
+    expect(onSave).toHaveBeenCalledTimes(2)
+    expect(onResult).toHaveBeenCalledWith(null)
+  })
+
+  it('失败后未到重试时间卸载：冲刷仍发起保存，失败不产生未处理拒绝', async () => {
+    const onSave = vi.fn().mockRejectedValue(new Error('只读'))
+    const onResult = vi.fn()
+    const { rerender, unmount } = renderHook(
+      ({ doc }) => useDebouncedSave(doc, onSave, 600, onResult),
+      { initialProps: { doc: mkDoc() } },
+    )
+    act(() => {
+      rerender({ doc: mkDoc('卸载前') })
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600)
+    })
+    unmount()
+    expect(onResult).toHaveBeenCalledWith(expect.objectContaining({ message: '只读' }))
+  })
+})

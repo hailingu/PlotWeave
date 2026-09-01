@@ -15,6 +15,9 @@ beforeEach(() => {
   calls.length = 0
   // tauriLoad 固定先做加载侧资产复验：默认无不可验证键，专项用例自行覆盖
   handlers.set('verify_project_assets', () => [])
+  // duplicate 命名先查现存名（§7.3）：默认返回非空列表——空表会触发
+  // tauriList 的空库播种递归，mock 恒空即无限循环
+  handlers.set('list_projects', () => [meta('p1')])
   vi.doMock('@tauri-apps/api/core', () => ({
     invoke: async (cmd: string, args: unknown) => {
       calls.push({ cmd, args })
