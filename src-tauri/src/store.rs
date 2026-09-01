@@ -794,6 +794,32 @@ fn sort_metas_by_recency(metas: &mut [ProjectMeta]) {
     metas.sort_by_key(|m| std::cmp::Reverse(iso8601_to_epoch_millis(&m.updated_at)));
 }
 
+/// §10.2 控制文件信任链——现存 `projects/{id}.json` 的读取前置校验：
+/// symlink_metadata 拒绝符号链接（无论指向根内或根外），要求普通文件，
+/// canonical 真实路径须仍位于已验证的项目目录内。任一不满足即拒绝读取，
+/// 防止把读取重定向到应用数据根之外。
+fn verify_control_file(dir: &std::path::Path, path: &std::path::Path) -> Result<(), String> {
+    let md = fs::symlink_metadata(path).map_err(|e| format!("读取项目文件元数据失败：{e}"))?;
+    if md.file_type().is_symlink() {
+        return Err("项目文件是符号链接，拒绝读取".into());
+    }
+    if !md.is_file() {
+        return Err("项目文件不是普通文件".into());
+    }
+    // 双方都取 canonical 再比对包含（dir 已 canonical 时幂等；平台差异如
+    // macOS 的 /var → /private/var 不影响判定）
+    let dir = dir
+        .canonicalize()
+        .map_err(|e| format!("解析项目目录真实路径失败：{e}"))?;
+    let real = path
+        .canonicalize()
+        .map_err(|e| format!("解析项目文件真实路径失败：{e}"))?;
+    if !real.starts_with(&dir) {
+        return Err("项目文件真实路径逃逸项目目录".into());
+    }
+    Ok(())
+}
+
 /// 列出全部项目，按更新时间新→旧排序。
 #[tauri::command]
 pub fn list_projects(app: AppHandle) -> Result<Vec<ProjectMeta>, String> {
@@ -808,6 +834,10 @@ pub fn list_projects(app: AppHandle) -> Result<Vec<ProjectMeta>, String> {
             continue;
         };
         if validate_id(id).is_err() {
+            continue;
+        }
+        // §10.2 目录扫描跳过符号链接/异型项，绝不跟随
+        if verify_control_file(&dir, &path).is_err() {
             continue;
         }
         let Ok(text) = fs::read_to_string(&path) else {
@@ -988,7 +1018,13 @@ pub fn create_project(app: AppHandle, name: String) -> Result<ProjectMeta, Strin
 /// 读取项目完整内容（含画布）；旧扁平格式包装为 v0 信封返回。
 #[tauri::command]
 pub fn load_project(app: AppHandle, id: String) -> Result<ProjectFile, String> {
-    let path = project_path(&app, &id)?;
+    let dir = projects_dir(&app)?;
+    let path = dir.join(format!("{id}.json"));
+    if !path.exists() {
+        return Err(format!("项目不存在：{id}"));
+    }
+    // §10.2：读取前对现存控制文件做符号链接/普通文件/包含关系校验
+    verify_control_file(&dir, &path).map_err(|e| format!("拒绝读取项目文件：{e}"))?;
     let text = fs::read_to_string(path).map_err(|_| format!("项目不存在：{id}"))?;
     parse_file(&id, &text).map_err(|e| format!("项目文件损坏：{e}"))
 }
@@ -1884,6 +1920,33 @@ mod tests {
         let assets = json!({ "byId": { "a-link": { "relPath": "assets/link.png" } } });
         let keys = unverifiable_asset_keys(&projects, "p-1", &assets);
         assert_eq!(keys, vec!["a-link".to_string()]);
+        cleanup_temp(&projects);
+    }
+    #[test]
+    fn verify_control_file_requires_regular_file() {
+        let projects = temp_projects_dir();
+        let file = projects.join("p-1.json");
+        fs::write(&file, b"{}").expect("写项目文件");
+        assert!(verify_control_file(&projects, &file).is_ok());
+        // 目录占位：不是普通文件
+        let dir_as_file = projects.join("p-2.json");
+        fs::create_dir(&dir_as_file).expect("建目录占位");
+        let err = verify_control_file(&projects, &dir_as_file).unwrap_err();
+        assert!(err.contains("普通文件"), "意外诊断：{err}");
+        // 缺失文件拒绝（读取前置）
+        assert!(verify_control_file(&projects, &projects.join("p-3.json")).is_err());
+        cleanup_temp(&projects);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn verify_control_file_rejects_symlinked_project_file() {
+        let projects = temp_projects_dir();
+        let outside = projects.parent().expect("临时根").join("evil.json");
+        fs::write(&outside, b"{}").expect("写根外文件");
+        std::os::unix::fs::symlink(&outside, projects.join("p-1.json")).expect("建符号链接");
+        let err = verify_control_file(&projects, &projects.join("p-1.json")).unwrap_err();
+        assert!(err.contains("符号链接"), "意外诊断：{err}");
         cleanup_temp(&projects);
     }
 }

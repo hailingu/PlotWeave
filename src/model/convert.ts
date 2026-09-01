@@ -1602,9 +1602,10 @@ function normalizeDocument(
 }
 
 /** v0 键控列表的单字段预归一化：非数组重置为空并警告、异型成员按 keep
- * 谓词丢弃并警告。缺省是否物化空数组因字段而异：lines/options/refs
- * 缺省会让迁移器 map 崩溃，须补空；scene.characters 的缺省有语义
- * （该场无头像列，characterIds 路径不被覆盖），保持缺省。 */
+ * 谓词丢弃并警告（branch.options 有槽位保序要求，另行走位处理，不经此
+ * 函数）。缺省是否物化空数组因字段而异：lines/refs 缺省会让迁移器 map
+ * 崩溃，须补空；scene.characters 的缺省有语义（该场无头像列，
+ * characterIds 路径不被覆盖），保持缺省。 */
 function v0List(
   data: Record<string, unknown>,
   field: string,
@@ -1646,29 +1647,40 @@ function normalizeV0NodeShapes(nodes: Record<string, unknown>[], warnings: strin
       data = {}
       node.data = data
     }
-    switch (node.type) {
-      case 'scene':
-        v0List(data, 'characters', nid, isObjectMember, false, warnings)
-        break
-      case 'dialogue':
-        v0List(data, 'lines', nid, isObjectMember, true, warnings)
-        break
-      case 'branch':
-        v0List(
-          data,
-          'options',
-          nid,
-          (m) => isPlainObject(m) || typeof m === 'string',
-          true,
-          warnings,
-        )
-        break
-      case 'shot':
-        v0List(data, 'refs', nid, isObjectMember, true, warnings)
-        break
-      default:
-        break
-    }
+      switch (node.type) {
+        case 'scene':
+          v0List(data, 'characters', nid, isObjectMember, false, warnings)
+          break
+        case 'dialogue':
+          v0List(data, 'lines', nid, isObjectMember, true, warnings)
+          break
+        case 'branch': {
+          // 槽位保序（§11.1 ①）：旧下标句柄改写前不得压缩数组——异型成员以
+          // 占位对象顶位（迁移器为其补发 id，改写后由 v1 形状校验移除并
+          // 警告），指向该槽位的连线按孤儿边隔离而非滑向后一选项
+          const options = data.options
+          if (options === undefined) {
+            data.options = []
+            break
+          }
+          if (!Array.isArray(options)) {
+            warnings.push(`节点 ${nid} 的 options 非数组，已重置为空数组`)
+            data.options = []
+            break
+          }
+          data.options = options.map((m, i) => {
+            if (typeof m === 'string' || isPlainObject(m)) return m
+            warnings.push(`节点 ${nid} 的 options 成员 #${i} 异型，已置占位`)
+            return {}
+          })
+          break
+        }
+        case 'shot':
+          v0List(data, 'refs', nid, isObjectMember, true, warnings)
+          break
+        default:
+          break
+      }
   }
 }
 

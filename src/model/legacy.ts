@@ -91,10 +91,15 @@ export function migrateProjectDocument(doc: ProjectContent): {
   settings.characters = reissueEntityIds(settings.characters, 'ch')
   settings.locations = reissueEntityIds(settings.locations, 'loc')
 
+  /** 头像按「名字首字 + 渐变」解析到既有实体（§8.1）。JSON 边界擦除类型：
+   * 设定数组成员的 name 可能非字符串——谓词先验类型再调用 startsWith，
+   * 坏实体留给 v1 归一化按 §11.3 隔离，绝不在迁移期崩溃。 */
   const ensureCharacter = (label: string, gradient?: string): string => {
     const hit =
-      settings.characters.find((c) => c.gradient === gradient && c.name.startsWith(label)) ??
-      settings.characters.find((c) => c.name.startsWith(label))
+      settings.characters.find(
+        (c) => c.gradient === gradient && typeof c.name === 'string' && c.name.startsWith(label),
+      ) ??
+      settings.characters.find((c) => typeof c.name === 'string' && c.name.startsWith(label))
     if (hit) return hit.id
     const entity = {
       id: newEntityId('ch'),

@@ -1985,3 +1985,58 @@ describe('归一化：设定文档的键修复与 v0 时间戳保真（§6/§11.
     expect(envelope.project.createdAt).toBe('2025-12-31T23:59:59.000Z')
   })
 })
+
+describe('归一化：v0 options 槽位保序与设定集成员字段容错（§11.1 ①/迁移器解引用前置）', () => {
+  const v0Doc = (nodes: unknown[], edges: unknown[]) => ({
+    schemaVersion: 0,
+    project: { id: 'p-old', name: '旧剧', createdAt: '', updatedAt: '2026-01-01T00:00:00.000Z' },
+    graph: { nodes, edges },
+    settings: { characters: [], locations: [] },
+    episodeTitles: {},
+    assets: { byId: {} },
+  })
+  const scene = (id: string) => ({
+    id, type: 'scene', position: { x: 0, y: 0 },
+    data: { name: id, sceneNo: 1, interior: true, synopsis: '' },
+  })
+
+  it('options 含 null 槽位：指向该槽位的旧下标连线按孤儿边隔离，不滑向后一选项', () => {
+    const round = parseProject(v0Doc(
+      [
+        { id: 'br1', type: 'branch', position: { x: 0, y: 0 }, data: { prompt: '去哪', options: [null, { label: 'B' }] } },
+        scene('s1'),
+      ],
+      [
+        { id: 'e0', source: 'br1', target: 's1', sourceHandle: 'option-0', type: 'branch', data: { optionLabel: '已删' } },
+        { id: 'e1', source: 'br1', target: 's1', sourceHandle: 'option-1', type: 'branch', data: { optionLabel: 'B' } },
+      ],
+    ))
+    const edges = round.content.edges
+    // 指向已删槽位的连线：隔离并警告（§11.1 ②），绝不改接到 B
+    expect(edges.find((e) => e.id === 'e0')).toBeUndefined()
+    expect(round.warnings.some((w) => w.includes('e0'))).toBe(true)
+    // 槽位 1 的连线仍指向 B（稳定 id 句柄）
+    const e1 = edges.find((e) => e.id === 'e1')!
+    expect(e1.sourceHandle).toMatch(/^option-/)
+    expect(e1.sourceHandle).not.toBe('option-1')
+    // 最终选项只剩 B
+    const br = round.content.nodes.find((n) => n.id === 'br1')!
+    expect((br.data as { options: Array<{ label: string }> }).options.map((o) => o.label)).toEqual(['B'])
+  })
+
+  it('设定集角色 name 非字符串：头像解析不崩溃，坏实体按 §11.3 隔离、新实体照常补建', () => {
+    const again = parseProject({
+      ...v0Doc([{
+        id: 's1', type: 'scene', position: { x: 0, y: 0 },
+        data: { name: '场一', sceneNo: 1, interior: true, synopsis: '', characters: [{ label: '林', gradient: 'g' }] },
+      }], []),
+      settings: { characters: [{ id: 'ch-bad', name: 42, gradient: 'g' }], locations: [] },
+    })
+    expect(again.migrated).toBe(true)
+    expect(again.content.nodes.map((n) => n.id)).toContain('s1')
+    expect(again.warnings.some((w) => w.includes('ch-bad'))).toBe(true)
+    // 头像「林」匹配不到坏实体，按迁移规则补建新实体
+    const names = again.content.settings.characters.map((c) => c.name)
+    expect(names).toContain('林')
+  })
+})
