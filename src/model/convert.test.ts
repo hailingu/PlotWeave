@@ -1711,3 +1711,74 @@ describe('归一化：ShotRef 旧草案 targetId 的无歧义兼容与资产命�
     expect(round.warnings.filter((w) => w.includes('MIME'))).toHaveLength(2)
   })
 })
+
+describe('归一化：project 时间戳严格校验与规范化（§11.1，与 Rust 保存边界 is_valid_iso8601 同域）', () => {
+  it('严格且已规范的 UTC 时间戳原样保留，无警告', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    const round = parseProject(doc)
+    expect(round.content.createdAt).toBe('2026-08-01T00:00:00.000Z')
+    expect(round.warnings.some((w) => w.includes('createdAt'))).toBe(false)
+    expect(round.warnings.some((w) => w.includes('updatedAt'))).toBe(false)
+  })
+
+  it('带偏移/无小数秒的严格合法表示确定性规范化为 UTC toISOString 并警告', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    doc.project.createdAt = '2026-08-01T02:00:00+02:00'
+    doc.project.updatedAt = '2026-08-02T12:30:00.5+08:00'
+    const round = parseProject(doc)
+    expect(round.content.createdAt).toBe('2026-08-01T00:00:00.000Z')
+    expect(round.warnings.some((w) => w.includes('createdAt') && w.includes('规范化'))).toBe(true)
+    expect(round.warnings.some((w) => w.includes('updatedAt') && w.includes('规范化'))).toBe(true)
+  })
+
+  it('Date.parse 的宽松超集（纯日期/无显式时区）不放行：修复并警告，再保存不被 Rust 边界拒绝', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    doc.project.createdAt = '2026-08-01'
+    doc.project.updatedAt = '2026-08-02T12:30:00'
+    const round = parseProject(doc)
+    expect(round.warnings.some((w) => w.includes('createdAt'))).toBe(true)
+    expect(round.warnings.some((w) => w.includes('updatedAt'))).toBe(true)
+    // createdAt 回退到修复后的 updatedAt；两者均为带显式 Z 的严格形式
+    expect(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(round.content.createdAt ?? '')).toBe(true)
+    // 修复后的值随 serializeProject 原样回写，下一次 save_project 不再被整份拒绝
+    const again = serializeProject(round.content, 'p-1', NOW)
+    expect(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(again.project.createdAt)).toBe(true)
+  })
+})
+
+describe('归一化：场景 time/weather 文本字段校验（§11.1 节点校验细则，SceneNode 渲染安全）', () => {
+  /** 可改写的脏 v1 文档视图（仅节点数组）。 */
+  type SceneDoc = { graph: { nodes: Record<string, unknown>[] } }
+  const sceneSpec = (doc: SceneDoc): Record<string, unknown> => {
+    const s = doc.graph.nodes.find((n) => n.id === 's1')!
+    return (s.data as { spec: Record<string, unknown> }).spec
+  }
+
+  it('场景 time 缺失（§4.2 可选缺省）：确定性置空串并警告，节点保留', () => {
+    const missing = serializeProject(mkContent(), 'p-1', NOW) as unknown as SceneDoc
+    delete sceneSpec(missing).time
+    const round = parseProject(missing)
+    const scene = round.content.nodes.find((n) => n.id === 's1')
+    expect(scene).toBeDefined()
+    expect((scene!.data as { time: string }).time).toBe('')
+    expect(round.warnings.some((w) => w.includes('s1') && w.includes('time') && w.includes('置空串'))).toBe(true)
+  })
+
+  it('场景 time 非字符串（形态错位，如 time: {}）：节点隔离并警告——对象进会话会被 SceneNode 当 React 子节点渲染', () => {
+    const badType = serializeProject(mkContent(), 'p-1', NOW) as unknown as SceneDoc
+    sceneSpec(badType).time = {}
+    const round = parseProject(badType)
+    expect(round.content.nodes.find((n) => n.id === 's1')).toBeUndefined()
+    expect(round.warnings.some((w) => w.includes('s1') && w.includes('time') && w.includes('隔离'))).toBe(true)
+  })
+
+  it('场景 weather 非字符串：剥离该可选字段并警告，节点保留', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as SceneDoc
+    sceneSpec(doc).weather = { text: '雨' }
+    const round = parseProject(doc)
+    const scene = round.content.nodes.find((n) => n.id === 's1')
+    expect(scene).toBeDefined()
+    expect('weather' in (scene!.data as Record<string, unknown>)).toBe(false)
+    expect(round.warnings.some((w) => w.includes('s1') && w.includes('weather') && w.includes('剥离'))).toBe(true)
+  })
+})

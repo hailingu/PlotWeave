@@ -718,6 +718,30 @@ function normalizeEpisodeNo(meta: Record<string, unknown>, nid: string, warnings
   }
 }
 
+/** 场景自由文本字段的就地修复与形态校验（§4.2/§11.1，SceneNode 渲染安全）：
+ * time 在存储契约中为可选缺省，但运行态 SceneNodeData.time 是必填字符串且
+ * SceneNode 无条件渲染——缺失确定性置空串并警告；非字符串值（形态错位，如
+ * time: {}）会被当成 React 子节点渲染而崩溃，返回隔离原因。可选 weather 的
+ * 非字符串值是真值，同样会被条件渲染成 React 子节点——剥离该字段并警告，
+ * 节点本体保留。返回 null 表示通过。 */
+function normalizeSceneTextFields(
+  spec: Record<string, unknown>,
+  nid: string,
+  warnings: string[],
+): string | null {
+  if ('weather' in spec && typeof spec.weather !== 'string') {
+    warnings.push(`节点 ${nid} 的 spec.weather 非字符串，已剥离`)
+    delete spec.weather
+  }
+  if (!('time' in spec)) {
+    spec.time = ''
+    warnings.push(`节点 ${nid} 的 spec.time 缺失，已置空串`)
+    return null
+  }
+  if (typeof spec.time !== 'string') return 'spec.time 类型错误（spec 形态错位）'
+  return null
+}
+
 /** 节点判别联合形状校验（§11.1 第 3 步节点校验细则——§4.1 联合在加载路径的
  * 对等兜底，JSON 边界已擦除 TS 类型）：never 禁写字段剥离、episodeNo 非法
  * 删除为就地修复；未知类型、spec 必填标量缺失/异型（形态错位，如 beat 的
@@ -738,6 +762,10 @@ function nodeDiscriminantError(
     return '缺必填 meta.label'
   }
   normalizeEpisodeNo(data.meta, nid, warnings)
+  if (type === 'scene') {
+    const textIssue = normalizeSceneTextFields(data.spec, nid, warnings)
+    if (textIssue) return textIssue
+  }
   for (const [field, kind] of Object.entries(REQUIRED_SCALARS[type] ?? {})) {
     if (typeof data.spec[field] !== kind) return `spec.${field} 缺失或类型错误（spec 形态错位）`
   }
@@ -980,7 +1008,11 @@ function normalizeProjectName(rawName: unknown, env: NormalizeEnv, warnings: str
   return trimmed
 }
 
-/** 项目必填元数据修复：受信 id 覆盖、名称回退链、时间戳修复、非字符串描述剥离。 */
+/** 项目必填元数据修复：受信 id 覆盖、名称回退链、时间戳修复、非字符串描述剥离。
+ * 时间戳与 Rust 保存边界 is_valid_iso8601 同域：Date.parse 的宽松超集（纯日期、
+ * 无显式时区）不放行——此类值原样进会话后会被 serializeProject 复用，下一次
+ * save_project 整份拒绝；严格合法的偏移/精度变体确定性规范化为 UTC
+ * toISOString 并警告（与 §7.1 AssetRef 时间戳规范化同口径）。 */
 function normalizeProjectMeta(
   projectRaw: Record<string, unknown>,
   env: NormalizeEnv,
@@ -997,22 +1029,25 @@ function normalizeProjectMeta(
     id = typeof rawId === 'string' ? rawId : ''
   }
   const name = normalizeProjectName(projectRaw.name, env, warnings)
-  const parseableIso = (v: unknown): v is string =>
-    typeof v === 'string' && Number.isFinite(Date.parse(v))
-  let updatedAt: string
-  if (parseableIso(projectRaw.updatedAt)) {
-    updatedAt = projectRaw.updatedAt
-  } else {
-    warnings.push('project.updatedAt 不是可解析的时间戳，已取本次加载时刻')
-    updatedAt = new Date().toISOString()
+  /** 单个时间戳字段修复：严格合法则规范化输出，否则回退并警告。 */
+  const repairTimestamp = (v: unknown, label: string, fallback: string, fallbackReason: string): string => {
+    if (typeof v === 'string' && isStrictIso8601(v)) {
+      const canon = new Date(v).toISOString()
+      if (canon !== v) {
+        warnings.push(`project.${label} 是合法的偏移/精度变体，已确定性规范化为 UTC ISO 8601`)
+      }
+      return canon
+    }
+    warnings.push(`project.${label} 不是严格 ISO 8601 时间戳，${fallbackReason}`)
+    return fallback
   }
-  let createdAt: string
-  if (parseableIso(projectRaw.createdAt)) {
-    createdAt = projectRaw.createdAt
-  } else {
-    warnings.push('project.createdAt 不是可解析的时间戳，已采用修复后的 updatedAt')
-    createdAt = updatedAt
-  }
+  const updatedAt = repairTimestamp(
+    projectRaw.updatedAt,
+    'updatedAt',
+    new Date().toISOString(),
+    '已取本次加载时刻',
+  )
+  const createdAt = repairTimestamp(projectRaw.createdAt, 'createdAt', updatedAt, '已采用修复后的 updatedAt')
   let description: string | undefined
   if (projectRaw.description !== undefined) {
     if (typeof projectRaw.description === 'string') description = projectRaw.description
