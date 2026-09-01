@@ -22,6 +22,7 @@ pub fn run() {
             store::save_project,
             store::delete_project,
             store::copy_project_assets,
+            store::verify_project_assets,
             prefs::load_prefs,
             prefs::save_prefs,
             prefs::set_provider_key,

@@ -536,6 +536,46 @@ fn verify_save_asset_files(
     Ok(())
 }
 
+/// §7.1/§10.5 加载侧资产实路径复验内核：返回文档 assets.byId 中词法合法、
+/// 但以受信资产根 no-follow 验证失败（缺失/符号链接/非普通文件/逃逸）的
+/// 记录键。词法非法或形状缺失的条目不在此报告——前端形状归一化负责隔离。
+fn unverifiable_asset_keys(
+    dir: &std::path::Path,
+    id: &str,
+    assets: &serde_json::Value,
+) -> Vec<String> {
+    let mut bad = Vec::new();
+    let Some(by_id) = assets.get("byId").and_then(|v| v.as_object()) else {
+        return bad;
+    };
+    for (key, entry) in by_id {
+        let Some(rel) = entry.get("relPath").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        if !is_valid_asset_rel_path(rel) {
+            continue;
+        }
+        if verify_asset_real_path(dir, id, rel).is_err() {
+            bad.push(key.clone());
+        }
+    }
+    bad
+}
+
+/// 加载侧资产复验命令：调用方回传刚加载文档的资产索引（避免二次读盘），
+/// 返回不可验证键，交前端归一化层隔离——否则下一次保存会被保存边界
+/// 拒收，防抖静默吞错后用户编辑永不落盘。加载本身保持只读。
+#[tauri::command]
+pub fn verify_project_assets(
+    app: AppHandle,
+    id: String,
+    assets: serde_json::Value,
+) -> Result<Vec<String>, String> {
+    validate_id(&id)?;
+    let dir = projects_dir(&app)?;
+    Ok(unverifiable_asset_keys(&dir, &id, &assets))
+}
+
 /// save_project 的信封校验与规范化（§10.5）：在创建临时文件、生成保存时间
 /// 或更新索引之前完成——任一校验失败整次拒绝，不得静默剥离。全部通过后
 /// 以受信路径参数覆盖 id，并由 Rust 为本次尝试只取一次系统时间无条件盖戳
@@ -1812,6 +1852,38 @@ mod tests {
         assert!(fs::symlink_metadata(outside_dir.join("secret.png")).is_ok());
         assert!(fs::symlink_metadata(&outside_dir).is_ok());
         assert!(fs::symlink_metadata(projects.join("p-1")).is_err());
+        cleanup_temp(&projects);
+    }
+    #[test]
+    fn unverifiable_asset_keys_reports_real_path_failures_only() {
+        let projects = temp_projects_dir();
+        let assets_dir = projects.join("p-1").join("assets");
+        fs::create_dir_all(&assets_dir).expect("建资产目录");
+        fs::write(assets_dir.join("ok.png"), b"x").expect("写正常资产");
+        // 词法非法/形状缺失条目不在此报告：前端形状归一化负责隔离
+        let assets = json!({ "byId": {
+            "a-ok": { "relPath": "assets/ok.png" },
+            "a-miss": { "relPath": "assets/gone.png" },
+            "a-bad": { "relPath": "../evil.png" },
+            "a-noshape": {},
+        }});
+        let keys = unverifiable_asset_keys(&projects, "p-1", &assets);
+        assert_eq!(keys, vec!["a-miss".to_string()]);
+        cleanup_temp(&projects);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unverifiable_asset_keys_reports_symlinked_entries() {
+        let projects = temp_projects_dir();
+        let assets_dir = projects.join("p-1").join("assets");
+        fs::create_dir_all(&assets_dir).expect("建资产目录");
+        let outside = projects.parent().expect("临时根").join("outside.png");
+        fs::write(&outside, b"s").expect("写根外文件");
+        std::os::unix::fs::symlink(&outside, assets_dir.join("link.png")).expect("建符号链接");
+        let assets = json!({ "byId": { "a-link": { "relPath": "assets/link.png" } } });
+        let keys = unverifiable_asset_keys(&projects, "p-1", &assets);
+        assert_eq!(keys, vec!["a-link".to_string()]);
         cleanup_temp(&projects);
     }
 }

@@ -144,9 +144,16 @@ async function tauriCreate(name: string): Promise<ProjectSummary> {
 async function tauriLoad(id: string): Promise<ProjectContent> {
   const { invoke } = await import('@tauri-apps/api/core')
   const file = await invoke<unknown>('load_project', { id })
+  // §7.1/§10.5 加载侧资产实路径复验：Rust 以受信资产根 no-follow 验证
+  // （前端无法访问文件系统），不可验证键交归一化层隔离、引用位标记悬空
+  // ——否则下一次保存会被保存边界拒收而防抖吞错，用户编辑永不落盘
+  const invalidAssetKeys = await invoke<string[]>('verify_project_assets', {
+    id,
+    assets: (file as { assets?: unknown }).assets ?? {},
+  })
   // §11 归一化管线：迁移 + 孤儿边隔离 + 悬空引用标记；
   // projectId 为路径给定的受信 id，供 §11.1 元数据修复覆盖 project.id
-  const { content, migrated, warnings } = parseProject(file, { projectId: id })
+  const { content, migrated, warnings } = parseProject(file, { projectId: id, invalidAssetKeys })
   for (const w of warnings) console.warn(`[projectStore] ${w}`)
   // 迁移发生则写回磁盘，下次打开不再迁移；失败只诊断不阻断——内存已
   // 交付迁移结果，磁盘保持旧格式，下次打开会重新迁移（显式 catch，
@@ -204,8 +211,15 @@ export const projectStore = {
       await projectStore.save(meta.id, { ...doc, name, createdAt: undefined })
     } catch (err) {
       console.warn('[projectStore] 复制项目失败，清理已建副本', err)
-      // 清理完成后再抛：调用方看到失败时首页不会遗留空「副本」卡片
-      await projectStore.delete(meta.id).catch(() => undefined)
+      // 清理完成后再抛：调用方看到失败时首页不会遗留空「副本」卡片；
+      // 清理自身也失败时合并双错向前抛出并报告可能遗留的副本 id，
+      // 绝不静默吞掉（否则空/半拷贝副本永留首页且无人知晓）
+      await projectStore.delete(meta.id).catch((cleanupErr: unknown) => {
+        console.error('[projectStore] 副本清理失败，首页可能遗留空副本，可手动删除', meta.id, cleanupErr)
+        throw new Error(
+          `复制项目失败（${String(err)}），且副本 ${meta.id} 清理失败（${String(cleanupErr)}）——首页可能遗留空副本，可手动删除`,
+        )
+      })
       throw err
     }
     return { ...meta, sceneCount: meta.sceneCount }

@@ -197,6 +197,11 @@ export interface NormalizeEnv {
   projectId?: string
   /** 项目索引中的合法名称：project.name 非法时优先回退到它。 */
   indexName?: string
+  /** Rust 加载侧实路径复验（§7.1/§10.5）未通过的资产键：前端无法访问
+   * 文件系统，受信根 no-follow 验证的事实由调用方带入，归一化据此隔离
+   * 索引条目并标记引用悬空——否则下次保存被保存边界拒收、防抖吞错，
+   * 用户编辑永不落盘。 */
+  invalidAssetKeys?: readonly string[]
 }
 
 /** 普通对象：JSON 边界排除了 TypeScript 类型，数组也是 object 须显式排除。 */
@@ -277,8 +282,15 @@ function normalizeSettingsBuckets(
     settings[bucket] = plainObjectEntries(settingsRaw[bucket], `settings.${bucket}`, warnings)
   }
   for (const [k, v] of Object.entries(settings.documents)) {
-    // 桶成员已经上方过滤为普通对象
-    normalizeRelatedIds(k, v as Record<string, unknown>, warnings)
+    // 桶成员已经上方过滤为普通对象；title/body 为必填字符串（§6），
+    // 非字符串形态无法机械修复——隔离，防止 fromDocSettings 暴露异型标量
+    const entry = v as Record<string, unknown>
+    if (typeof entry.title !== 'string' || typeof entry.body !== 'string') {
+      warnings.push(`设定文档 ${k} 的 title/body 缺失或非字符串，已隔离`)
+      delete settings.documents[k]
+      continue
+    }
+    normalizeRelatedIds(k, entry, warnings)
   }
   return settings
 }
@@ -545,8 +557,14 @@ function assetIsolationReason(entry: Record<string, unknown>): string | null {
 function normalizeAssetRecords(
   byId: Record<string, Record<string, unknown>>,
   warnings: string[],
+  invalidKeys: ReadonlySet<string>,
 ): void {
   for (const [key, entry] of Object.entries(byId)) {
+    if (invalidKeys.has(key)) {
+      warnings.push(`资产 ${key} 的媒体文件实路径复验未通过（缺失/符号链接/逃逸），已从索引隔离`)
+      delete byId[key]
+      continue
+    }
     if (entry.id !== key) {
       warnings.push(`资产 ${key} 的内嵌 id 缺失或与记录键不一致，已以记录键为准改写`)
       entry.id = key
@@ -1151,8 +1169,12 @@ function normalizeContainers(
   const locationIds0 = identitySnapshot(entityBucket('locations'))
   const assetIds0 = identitySnapshot(byId as Record<string, Record<string, unknown>>)
   normalizeEntityShapes(settings, warnings)
-  // plainObjectEntries 已过滤为普通对象成员
-  normalizeAssetRecords(byId as Record<string, Record<string, unknown>>, warnings)
+  // plainObjectEntries 已过滤为普通对象成员；实路径不可验证键经空键重发
+  // 映射对齐（重发换键不改变媒体文件的事实）
+  const invalidAssets = new Set(
+    (env.invalidAssetKeys ?? []).map((k) => blankRemaps.assets.get(k) ?? k),
+  )
+  normalizeAssetRecords(byId as Record<string, Record<string, unknown>>, warnings, invalidAssets)
   // 旧草案 targetId 兼容：先于节点联合校验（refs 成员形状筛选只认当前联合）
   compatLegacyShotTargetIds(
     nodesRaw,

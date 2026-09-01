@@ -13,6 +13,8 @@ beforeEach(() => {
   vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
   handlers.clear()
   calls.length = 0
+  // tauriLoad 固定先做加载侧资产复验：默认无不可验证键，专项用例自行覆盖
+  handlers.set('verify_project_assets', () => [])
   vi.doMock('@tauri-apps/api/core', () => ({
     invoke: async (cmd: string, args: unknown) => {
       calls.push({ cmd, args })
@@ -94,7 +96,8 @@ describe('tauriLoad：归一化与迁移回写', () => {
     const { projectStore } = await load()
     const doc = await projectStore.load('p1')
     expect(doc.episodeTitles).toEqual({ 1: '开局' })
-    expect(calls.map((c) => c.cmd)).toEqual(['load_project']) // 新 schema 不回写
+    // 新 schema 不回写；加载侧资产复验固定先行
+    expect(calls.map((c) => c.cmd)).toEqual(['load_project', 'verify_project_assets'])
   })
 
   it('v1 文档解析为会话文档：spec/meta 拍平回节点 data', async () => {
@@ -145,6 +148,26 @@ describe('tauriLoad：归一化与迁移回写', () => {
     } finally {
       errSpy.mockRestore()
     }
+  })
+
+  it('加载侧资产实路径复验：不可验证键传入归一化层隔离，引用位标记悬空', async () => {
+    handlers.set('load_project', () => ({
+      ...modernFile(),
+      assets: {
+        byId: {
+          'a-1': { id: 'a-1', relPath: 'assets/lost.png', mime: 'image/png', source: 'upload', createdAt: '2026-01-01T00:00:00.000Z' },
+        },
+      },
+    }))
+    handlers.set('verify_project_assets', () => ['a-1'])
+    const { projectStore } = await load()
+    const doc = await projectStore.load('p1')
+    expect(doc.assets?.byId['a-1']).toBeUndefined()
+    // 复验命令拿到的是刚加载文档的资产索引
+    const verify = calls.find((c) => c.cmd === 'verify_project_assets')
+    expect((verify?.args as { id: string }).id).toBe('p1')
+    const sent = (verify?.args as { assets: { byId: unknown } }).assets
+    expect((sent as { byId: Record<string, unknown> }).byId['a-1']).toBeDefined()
   })
 })
 
@@ -238,5 +261,25 @@ describe('tauriCreate / delete / duplicate', () => {
     await expect(projectStore.duplicate('p1')).rejects.toThrow(/资产文件不存在/)
     const cleanup = calls.find((c) => c.cmd === 'delete_project')
     expect((cleanup?.args as { id: string }).id).toBe('copy-x')
+  })
+
+  it('duplicate：保存与清理双双失败——合并错误向前抛出，报告可能遗留的副本 id', async () => {
+    handlers.set('load_project', () => modernFile())
+    handlers.set('create_project', () => meta('copy-y'))
+    handlers.set('copy_project_assets', () => undefined)
+    handlers.set('save_project', () => {
+      throw new Error('资产 a-1：资产文件不存在：assets/x.png')
+    })
+    handlers.set('delete_project', () => {
+      throw new Error('目录只读，删不掉')
+    })
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const { projectStore } = await load()
+      await expect(projectStore.duplicate('p1')).rejects.toThrow(/copy-y/)
+      await expect(projectStore.duplicate('p1')).rejects.toThrow(/清理失败/)
+    } finally {
+      errSpy.mockRestore()
+    }
   })
 })

@@ -1412,6 +1412,7 @@ describe('归一化：设定文档 relatedIds 成员校验（§6/§11.1 第 3 �
       'doc-1': {
         id: 'doc-1',
         title: '人物小传',
+        body: '女主角的背景设定。',
         relatedIds: [
           { kind: 'character', id: 'ch-1' },
           { kind: 'prop', id: 7 }, // 未知 kind 且 id 非字符串
@@ -1850,5 +1851,50 @@ describe('归一化：v0 图形容器/成员异型先修复再迁移（§11.1，
     )
     expect(round.content.edges.map((e) => e.id)).toEqual(['e1'])
     expect(round.warnings.some((w) => w.includes('graph.edges'))).toBe(true)
+  })
+})
+
+describe('归一化：不可验证资产与设定文档形状（§7.1/§6/§11.3，加载侧实路径复验联动）', () => {
+  const docWithAsset = () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    doc.assets.byId['a-1'] = {
+      id: 'a-1',
+      relPath: 'assets/lin.png',
+      mime: 'image/png',
+      source: 'upload',
+      createdAt: '2026-08-01T00:00:00.000Z',
+    }
+    return doc
+  }
+
+  it('invalidAssetKeys：实路径复验未过的资产从索引隔离并警告，引用位按悬空标记', () => {
+    const doc = docWithAsset()
+    doc.settings.characters['ch-1'].avatarAssetId = 'a-1'
+    const round = parseProject(doc, { invalidAssetKeys: ['a-1'] })
+    expect(round.content.assets?.byId['a-1']).toBeUndefined()
+    expect(round.warnings.some((w) => w.includes('a-1'))).toBe(true)
+    // 引用该资产的角色头像现按悬空标记（§11.4 既有警告语义）
+    expect(round.warnings.some((w) => w.includes('不存在的资产 a-1'))).toBe(true)
+    // 再落盘：索引不再含不可验证条目，保存可过实路径复验
+    const again = serializeProject(round.content, 'p-1', NOW)
+    expect(again.assets.byId['a-1']).toBeUndefined()
+  })
+
+  it('设定文档 title/body 非字符串：条目隔离并警告；合法条目保留', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
+      settings: { documents: Record<string, Record<string, unknown>> }
+    }
+    doc.settings.documents = {
+      'doc-bad-title': { id: 'doc-bad-title', title: {}, body: '正文', relatedIds: [] },
+      'doc-bad-body': { id: 'doc-bad-body', title: '小传', relatedIds: [] },
+      'doc-ok': { id: 'doc-ok', title: '世界观', body: '设定', relatedIds: [{ kind: 'ghost' }] },
+    }
+    const round = parseProject(doc)
+    const docs = round.content.settings.documents ?? []
+    expect(docs.map((d) => d.id)).toEqual(['doc-ok'])
+    expect(round.warnings.some((w) => w.includes('doc-bad-title'))).toBe(true)
+    expect(round.warnings.some((w) => w.includes('doc-bad-body'))).toBe(true)
+    // 合法条目的 relatedIds 修复照旧（未知 kind 删除）
+    expect(docs.find((d) => d.id === 'doc-ok')?.relatedIds).toEqual([])
   })
 })
