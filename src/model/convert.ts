@@ -282,25 +282,25 @@ function normalizeSettingsBuckets(
     settings[bucket] = plainObjectEntries(settingsRaw[bucket], `settings.${bucket}`, warnings)
   }
   for (const [k, v] of Object.entries(settings.documents)) {
-    // 桶成员已经上方过滤为普通对象；title/body 为必填字符串（§6），
-    // 非字符串形态无法机械修复——隔离，防止 fromDocSettings 暴露异型标量
-    const entry = v as Record<string, unknown>
-    if (typeof entry.title !== 'string' || typeof entry.body !== 'string') {
-      warnings.push(`设定文档 ${k} 的 title/body 缺失或非字符串，已隔离`)
-      delete settings.documents[k]
-      continue
-    }
-    normalizeRelatedIds(k, entry, warnings)
+    // 桶成员已经上方过滤为普通对象；title/body 形状与键修复在
+    // normalizeEntityShapes/reKeyBlankEntries 与其它桶同款执行
+    normalizeRelatedIds(k, v as Record<string, unknown>, warnings)
   }
   return settings
 }
 
 /** 桶内单条实体的必填形状（§11.3，与 §9.3 upsert 边界同域）：
- * 返回隔离原因；null 表示通过。 */
+ * 返回隔离原因；null 表示通过。documents 按 §6 判别必填 title/body。 */
 function entityIsolationReason(
-  bucket: 'characters' | 'locations' | 'props',
+  bucket: 'characters' | 'locations' | 'props' | 'documents',
   entry: Record<string, unknown>,
 ): string | null {
+  if (bucket === 'documents') {
+    if (typeof entry.title !== 'string' || typeof entry.body !== 'string') {
+      return 'title/body 缺失或非字符串'
+    }
+    return null
+  }
   const name = entry.name
   if (typeof name !== 'string' || !name.trim()) {
     return 'name 缺失、非字符串或空白'
@@ -446,8 +446,7 @@ function rewriteBlankKeyReferences(
 /** 设定集实体形状校验（§11.3）：必填字段无法机械修复的条目从桶中隔离并警告
  * （否则 name: null 之类的值交付画布后，头像渲染的 trim 在运行期崩溃），
  * 既有引用按 §8.2.3 悬空标记；记录键为权威 id，内嵌 id 缺失或漂移以键改写
- * （与 assets.byId 同域）。documents 桶为透传契约，另按 §6 判别，
- * 不在此判定。 */
+ * （与 assets.byId 同域）。documents 桶按 §6 判别必填 title/body。 */
 function normalizeEntityShapes(
   settings: Record<string, Record<string, unknown>>,
   warnings: string[],
@@ -456,8 +455,9 @@ function normalizeEntityShapes(
     characters: ['bio', 'avatarAssetId'],
     locations: ['note'],
     props: ['description'],
+    documents: [],
   }
-  for (const bucket of ['characters', 'locations', 'props'] as const) {
+  for (const bucket of ['characters', 'locations', 'props', 'documents'] as const) {
     const entries = settings[bucket]
     // 桶成员已经 plainObjectEntries/成员过滤保证为普通对象
     for (const [key, entry] of Object.entries(entries) as [string, Record<string, unknown>][]) {
@@ -1162,8 +1162,9 @@ function normalizeContainers(
       warnings,
     ),
   }
-  // props 桶无节点引用面，仅重发空键保证身份可用
+  // props/documents 桶无节点引用面，仅重发空键保证身份可用
   reKeyBlankEntries(entityBucket('props'), 'settings.props', 'prop', warnings)
+  reKeyBlankEntries(entityBucket('documents'), 'settings.documents', 'doc', warnings)
   // 六十四轮 targetId 兼容的「修复前身份」快照：须在键/id 一致性改写前捕获
   const characterIds0 = identitySnapshot(entityBucket('characters'))
   const locationIds0 = identitySnapshot(entityBucket('locations'))
@@ -1600,6 +1601,138 @@ function normalizeDocument(
   return { doc: { ...shaped, graph: { ...shaped.graph, nodes, edges } }, warnings }
 }
 
+/** v0 键控列表的单字段预归一化：非数组重置为空并警告、异型成员按 keep
+ * 谓词丢弃并警告。缺省是否物化空数组因字段而异：lines/options/refs
+ * 缺省会让迁移器 map 崩溃，须补空；scene.characters 的缺省有语义
+ * （该场无头像列，characterIds 路径不被覆盖），保持缺省。 */
+function v0List(
+  data: Record<string, unknown>,
+  field: string,
+  nid: string,
+  keep: (m: unknown) => boolean,
+  materialize: boolean,
+  warnings: string[],
+): void {
+  const list = data[field]
+  if (list === undefined) {
+    if (materialize) data[field] = []
+    return
+  }
+  if (!Array.isArray(list)) {
+    warnings.push(`节点 ${nid} 的 ${field} 非数组，已重置为空数组`)
+    data[field] = []
+    return
+  }
+  const kept = list.filter(keep)
+  if (kept.length !== list.length) {
+    warnings.push(`节点 ${nid} 的 ${field} 含异型成员，已丢弃`)
+    data[field] = kept
+  }
+}
+
+/** v0 节点嵌套形状预归一化（迁移器解引用前置）：data 非对象重置为空对象；
+ * 类型专属键控列表按 §4.2 各自的成员域过滤——branch.options 的字符串成员
+ * 是合法旧形态须放行。损坏的单节点数据按可修复项处理，绝不让迁移器的
+ * map/成员读取把整份旧档打成打不开。就地改写传入的成员对象。 */
+function normalizeV0NodeShapes(nodes: Record<string, unknown>[], warnings: string[]): void {
+  const isObjectMember = (m: unknown) => isPlainObject(m)
+  for (const node of nodes) {
+    const nid = typeof node.id === 'string' && node.id ? node.id : '(无 id)'
+    let data: Record<string, unknown>
+    if (isPlainObject(node.data)) {
+      data = node.data
+    } else {
+      warnings.push(`节点 ${nid} 的 data 缺失或非对象，已重置为空对象`)
+      data = {}
+      node.data = data
+    }
+    switch (node.type) {
+      case 'scene':
+        v0List(data, 'characters', nid, isObjectMember, false, warnings)
+        break
+      case 'dialogue':
+        v0List(data, 'lines', nid, isObjectMember, true, warnings)
+        break
+      case 'branch':
+        v0List(
+          data,
+          'options',
+          nid,
+          (m) => isPlainObject(m) || typeof m === 'string',
+          true,
+          warnings,
+        )
+        break
+      case 'shot':
+        v0List(data, 'refs', nid, isObjectMember, true, warnings)
+        break
+      default:
+        break
+    }
+  }
+}
+
+/** v0 信封解析（parseProject 按 schemaVersion 分派）：图形容器/成员与节点
+ * 嵌套形状先归一化再进迁移器（§11.1——损坏旧档按可修复数据对待），迁移
+ * 链 ⑤ 把 v0 的 updated_at 瞬间带入 v1 信封（createdAt 缺省与之同刻，
+ * 不用迁移时刻冒充），产物再以 v1 走完整归一化管线。 */
+function parseLegacyProject(raw: Record<string, unknown>, env: NormalizeEnv): ParseResult {
+  const env0 = raw as Partial<ProjectDocument> & {
+    project?: Partial<ProjectDocument['project']>
+    graph?: { nodes?: CanvasNode[]; edges?: Edge[]; viewport?: Viewport }
+    settings?: unknown
+    episodeTitles?: unknown
+  }
+  const v0Warnings: string[] = []
+  const graphRaw = isPlainObject(env0.graph) ? (env0.graph as Record<string, unknown>) : {}
+  if (!isPlainObject(env0.graph) && env0.graph !== undefined) {
+    v0Warnings.push('graph 容器异型，已重置为空画布')
+  }
+  const v0Array = (v: unknown, label: string): unknown[] => {
+    if (Array.isArray(v)) return v
+    if (v !== undefined) v0Warnings.push(`${label} 非数组，已重置为空数组`)
+    return []
+  }
+  const v0Members = (v: unknown[], label: string): Record<string, unknown>[] => {
+    const out: Record<string, unknown>[] = []
+    v.forEach((item, i) => {
+      if (isPlainObject(item)) out.push(item)
+      else v0Warnings.push(`${label} 的成员 #${i} 不是对象，已丢弃`)
+    })
+    return out
+  }
+  const v0Nodes = v0Members(v0Array(graphRaw.nodes, 'graph.nodes'), 'graph.nodes')
+  normalizeV0NodeShapes(v0Nodes, v0Warnings)
+  const legacy: ProjectContent = {
+    name: env0.project?.name ?? '',
+    createdAt: env0.project?.createdAt || undefined,
+    nodes: v0Nodes as CanvasNode[],
+    edges: v0Members(v0Array(graphRaw.edges, 'graph.edges'), 'graph.edges') as Edge[],
+    settings: (env0.settings ?? {}) as ProjectContent['settings'],
+    episodeTitles: normalizeEpisodeTitles(env0.episodeTitles, v0Warnings),
+    viewport: graphRaw.viewport as Viewport | undefined,
+  }
+  const migrated = migrateProjectDocument(legacy)
+  const legacyAtMs = Date.parse(
+    typeof env0.project?.updatedAt === 'string' ? env0.project.updatedAt : '',
+  )
+  const legacyNow = Number.isFinite(legacyAtMs) ? new Date(legacyAtMs) : new Date()
+  const doc = serializeProject(
+    rewriteIndexOptionHandles(migrated.doc),
+    env0.project?.id ?? '',
+    legacyNow,
+  )
+  const { doc: normalized, warnings } = normalizeDocument(
+    doc as unknown as Record<string, unknown>,
+    env,
+  )
+  return {
+    content: fromDocument(normalized, warnings),
+    migrated: true,
+    warnings: [...v0Warnings, ...warnings],
+  }
+}
+
 /**
  * 归一化管线入口（§11）：schemaVersion 校验与迁移 → 归一化 → 会话文档。
  * v0 信封（旧扁平格式经 Rust 包装）先走节点字段迁移，再按 v1 解析。
@@ -1618,54 +1751,7 @@ export function parseProject(raw: unknown, env: NormalizeEnv = {}): ParseResult 
   }
 
   if (version === 0) {
-    const env0 = raw as Partial<ProjectDocument> & {
-      project?: Partial<ProjectDocument['project']>
-      graph?: { nodes?: CanvasNode[]; edges?: Edge[]; viewport?: Viewport }
-      settings?: unknown
-      episodeTitles?: unknown
-    }
-    const v0Warnings: string[] = []
-    // 图形容器/成员先归一化再进迁移器（§11.1）：异型容器重置、非对象成员
-    // 丢弃——损坏的旧档按可修复数据对待，绝不因迁移器解引用崩溃而整档拒绝
-    const graphRaw = isPlainObject(env0.graph)
-      ? (env0.graph as Record<string, unknown>)
-      : {}
-    if (!isPlainObject(env0.graph) && env0.graph !== undefined) {
-      v0Warnings.push('graph 容器异型，已重置为空画布')
-    }
-    const v0Array = (v: unknown, label: string): unknown[] => {
-      if (Array.isArray(v)) return v
-      if (v !== undefined) v0Warnings.push(`${label} 非数组，已重置为空数组`)
-      return []
-    }
-    const v0Members = (v: unknown[], label: string): Record<string, unknown>[] => {
-      const out: Record<string, unknown>[] = []
-      v.forEach((item, i) => {
-        if (isPlainObject(item)) out.push(item)
-        else v0Warnings.push(`${label} 的成员 #${i} 不是对象，已丢弃`)
-      })
-      return out
-    }
-    const legacy: ProjectContent = {
-      name: env0.project?.name ?? '',
-      createdAt: env0.project?.createdAt || undefined,
-      nodes: v0Members(v0Array(graphRaw.nodes, 'graph.nodes'), 'graph.nodes') as CanvasNode[],
-      edges: v0Members(v0Array(graphRaw.edges, 'graph.edges'), 'graph.edges') as Edge[],
-      settings: (env0.settings ?? {}) as ProjectContent['settings'],
-      episodeTitles: normalizeEpisodeTitles(env0.episodeTitles, v0Warnings),
-      viewport: graphRaw.viewport as Viewport | undefined,
-    }
-    const migrated = migrateProjectDocument(legacy)
-    const doc = serializeProject(rewriteIndexOptionHandles(migrated.doc), env0.project?.id ?? '')
-    const { doc: normalized, warnings } = normalizeDocument(
-      doc as unknown as Record<string, unknown>,
-      env,
-    )
-    return {
-      content: fromDocument(normalized, warnings),
-      migrated: true,
-      warnings: [...v0Warnings, ...warnings],
-    }
+    return parseLegacyProject(raw as Record<string, unknown>, env)
   }
 
   const { doc: normalized, warnings } = normalizeDocument(

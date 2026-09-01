@@ -1898,3 +1898,90 @@ describe('归一化：不可验证资产与设定文档形状（§7.1/§6/§11.3
     expect(docs.find((d) => d.id === 'doc-ok')?.relatedIds).toEqual([])
   })
 })
+
+describe('归一化：v0 节点嵌套形状预归一化（迁移器解引用前置，损坏单节点不阻断整档）', () => {
+  const v0Base = (nodes: unknown[]) => ({
+    schemaVersion: 0,
+    project: { id: 'p-old', name: '旧剧', createdAt: '', updatedAt: '2026-01-01T00:00:00.000Z' },
+    graph: { nodes, edges: [] },
+    settings: { characters: [], locations: [] },
+    episodeTitles: {},
+    assets: { byId: {} },
+  })
+
+  it('dialogue 节点 data 为 null：重置为空对象、lines 置空，项目照常打开', () => {
+    const round = parseProject(v0Base([
+      { id: 'd1', type: 'dialogue', position: { x: 0, y: 0 }, data: null },
+      { id: 's1', type: 'scene', position: { x: 0, y: 0 }, data: { name: '场一', sceneNo: 1, interior: true, synopsis: '' } },
+    ]))
+    expect(round.migrated).toBe(true)
+    expect(round.content.nodes.map((n) => n.id)).toContain('s1')
+    expect(round.warnings.some((w) => w.includes('d1') && w.includes('data'))).toBe(true)
+  })
+
+  it('dialogue 的 lines 为字符串：重置为空数组并警告，不因 map 崩溃', () => {
+    const round = parseProject(v0Base([
+      { id: 'd1', type: 'dialogue', position: { x: 0, y: 0 }, data: { lines: 'oops', name: '对白' } },
+    ]))
+    expect(round.content.nodes.map((n) => n.id)).toContain('d1')
+    expect(round.warnings.some((w) => w.includes('d1') && w.includes('lines'))).toBe(true)
+  })
+
+  it('branch 的 options 含 null 成员：丢弃并警告，合法选项与下标句柄改写不受影响', () => {
+    const round = parseProject(v0Base([
+      { id: 'br1', type: 'branch', position: { x: 0, y: 0 }, data: { prompt: '去哪', options: [{ id: 'opt-a', label: '左' }, null] } },
+    ]))
+    const br = round.content.nodes.find((n) => n.id === 'br1')
+    const options = (br?.data as { options: Array<{ id: string; label: string }> }).options
+    expect(options.map((o) => o.id)).toEqual(['opt-a'])
+    expect(round.warnings.some((w) => w.includes('br1') && w.includes('options'))).toBe(true)
+  })
+
+  it('shot 的 refs 含字符串成员：丢弃并警告，对象成员保留', () => {
+    const round = parseProject(v0Base([
+      { id: 'sh1', type: 'shot', position: { x: 0, y: 0 }, data: { shotNo: 1, size: '特写', picture: '', prompt: '', refs: ['garbage', { kind: 'character' as const, label: '图' }] } },
+    ]))
+    const refs = (round.content.nodes.find((n) => n.id === 'sh1')?.data as { refs: unknown[] }).refs
+    expect(refs).toHaveLength(1)
+    expect(round.warnings.some((w) => w.includes('sh1') && w.includes('refs'))).toBe(true)
+  })
+})
+
+describe('归一化：设定文档的键修复与 v0 时间戳保真（§6/§11.1 第 3 步/迁移链 ⑤）', () => {
+  it('documents 空键重发新键，值内 id 随键；非空键与漂移内嵌 id 以记录键为准改写', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
+      settings: { documents: Record<string, Record<string, unknown>> }
+    }
+    doc.settings.documents = {
+      '': { id: '', title: '空白键', body: '正文', relatedIds: [] },
+      'doc-x': { id: 'other', title: '漂移', body: '正文', relatedIds: [] },
+    }
+    const round = parseProject(doc)
+    const docs = round.content.settings.documents ?? []
+    const blank = docs.find((d) => d.title === '空白键')!
+    expect(blank.id.startsWith('doc-')).toBe(true)
+    expect(blank.id).not.toBe('')
+    const drifted = docs.find((d) => d.title === '漂移')!
+    expect(drifted.id).toBe('doc-x')
+    expect(round.warnings.some((w) => w.includes('doc-x'))).toBe(true)
+    // 再落盘：Record 键与内嵌 id 一致
+    const again = serializeProject(round.content, 'p-1', NOW)
+    expect(again.settings.documents['doc-x'].id).toBe('doc-x')
+  })
+
+  it('v0 迁移保留旧档 updatedAt 瞬间：createdAt 缺省与之同刻（⑤），不用迁移时刻', () => {
+    const v0 = {
+      schemaVersion: 0,
+      project: { id: 'p-old', name: '旧剧', createdAt: '', updatedAt: '2025-12-31T23:59:59.000Z' },
+      graph: { nodes: [], edges: [] },
+      settings: { characters: [], locations: [] },
+      episodeTitles: {},
+      assets: { byId: {} },
+    }
+    const round = parseProject(v0)
+    expect(round.content.createdAt).toBe('2025-12-31T23:59:59.000Z')
+    // 信封 updatedAt 同为旧档瞬间（而非本次转换时刻）
+    const envelope = serializeProject(round.content, 'p-old', new Date('2026-09-01T00:00:00.000Z'))
+    expect(envelope.project.createdAt).toBe('2025-12-31T23:59:59.000Z')
+  })
+})
