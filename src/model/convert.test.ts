@@ -382,6 +382,25 @@ describe('parseProject（ProjectDocument → 会话文档，§11 归一化）', 
     expect(round.warnings.some((w) => w.includes('a-gone2'))).toBe(true)
   })
 
+  it('原型链键名（constructor）的 assetId：不误命中 Object.prototype 成员，按悬空引用警告且不抛异常', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    const shot = doc.graph.nodes.find((n) => n.id === 'sh1')!
+    ;(shot.data.spec as { refs: unknown[] }).refs = [
+      { id: 'ref-1', kind: 'character', assetId: 'constructor' },
+      { id: 'ref-2', kind: 'audio', assetId: 'toString' },
+    ]
+    // 红：byId 是普通对象，'constructor'/'toString' 经原型链解析出
+    // Object.prototype 成员（函数对象），asset.mime 为 undefined →
+    // shotRefMimeMatches 的 mime.startsWith 抛 TypeError
+    const round = parseProject(doc)
+    const refs = (round.content.nodes.find((n) => n.id === 'sh1')!.data as {
+      refs: { assetId?: string }[]
+    }).refs
+    expect(refs.map((r) => r.assetId)).toEqual(['constructor', 'toString'])
+    expect(round.warnings.some((w) => w.includes('constructor'))).toBe(true)
+    expect(round.warnings.some((w) => w.includes('toString'))).toBe(true)
+  })
+
   it('空白 assetId 的分镜引用：按异型成员移除（空串是 string 但不可解析，保留即永久悬空引用）', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW)
     const shot = doc.graph.nodes.find((n) => n.id === 'sh1')!

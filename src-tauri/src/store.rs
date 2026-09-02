@@ -16,6 +16,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use cap_std::{ambient_authority, fs::Dir as CapDir};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::{AppHandle, Manager};
@@ -1204,8 +1205,9 @@ fn persist_project(
 
 /// 删除项目（首页卡片菜单，§3.2）：移除 `projects/{id}.json` 与项目资产
 /// 目录 `projects/{id}/`（当前扁平布局的资产根，§10.1）。目录删除逐项
-/// no-follow（§10.2）——符号链接条目只移除链接本身，绝不跟随；任一失败
-/// 显式报错，不静默遗留媒体文件。
+/// no-follow 且全程相对已打开的 projects 根目录句柄（§10.2 openat 语义，
+/// cap-std）——符号链接条目只移除链接本身，绝不跟随；任一失败显式报错，
+/// 不静默遗留媒体文件。
 #[tauri::command]
 pub fn delete_project(app: AppHandle, id: String) -> Result<(), String> {
     let dir = projects_dir(&app)?;
@@ -1215,75 +1217,30 @@ pub fn delete_project(app: AppHandle, id: String) -> Result<(), String> {
 /// delete_project 的可测内核：资产目录与项目 JSON 的成对移除，幂等。
 /// 顺序契约：先删资产树再删权威项目文件——树删除失败时项目仍在列表中
 /// 可发现、可重试删除；反过来先删 JSON 会让失败留下不可发现的孤儿媒体。
+/// 元数据读取、树删除与 unlink 均相对已打开的 projects 根目录句柄进行
+/// （cap-std remove_dir_all 内部同样是逐组件 no-follow 的句柄相对实现），
+/// 归类后 `projects/{id}` 被并发换成符号链接也无法把删除引到根外——链接
+/// 自身按 remove_file 移除，不进入其指向的外部树。
 fn delete_project_files(dir: &std::path::Path, id: &str) -> Result<(), String> {
     validate_id(id)?;
-    remove_tree_no_follow(&dir.join(id))?;
-    let json = dir.join(format!("{id}.json"));
-    match fs::remove_file(&json) {
+    let root = CapDir::open_ambient_dir(dir, ambient_authority())
+        .map_err(|e| format!("打开项目根目录失败：{e}"))?;
+    match root.symlink_metadata(id) {
+        Ok(md) if md.is_dir() => root
+            .remove_dir_all(id)
+            .map_err(|e| format!("删除项目资产目录失败（{id}）：{e}"))?,
+        // 符号链接与普通文件同款：remove_file 只移除该目录项自身
+        Ok(_) => root
+            .remove_file(id)
+            .map_err(|e| format!("移除项目资产路径失败（{id}）：{e}"))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("读取待删资产路径元数据失败（{id}）：{e}")),
+    }
+    match root.remove_file(format!("{id}.json")) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(format!("删除项目失败：{e}")),
     }
-    Ok(())
-}
-
-/// 递归删除目录树（no-follow）：符号链接条目仅移除链接自身，普通文件与
-/// 目录递归删除；路径本身缺失视为已完成（幂等）。目录在打开迭代器前后
-/// 按 (dev, ino) 复核身份（Unix）：被换成符号链接会让迭代器指向根外树，
-/// 命名时点即中止——尚未删除任何条目，外部树只被列举不被破坏；子项删除
-/// 后再次复核，期间被替换则不再对该路径 remove_dir。完全闭合需要 §10.2
-/// 的目录句柄 openat 解析器（需新增依赖），此处为 std 能力内的最强绑定。
-fn remove_tree_no_follow(path: &std::path::Path) -> Result<(), String> {
-    let md = match fs::symlink_metadata(path) {
-        Ok(md) => md,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(format!("读取待删路径元数据失败（{}）：{e}", path.display())),
-    };
-    if md.file_type().is_symlink() {
-        return fs::remove_file(path)
-            .map_err(|e| format!("移除符号链接失败（{}）：{e}", path.display()));
-    }
-    if md.is_dir() {
-        let entries = fs::read_dir(path)
-            .map_err(|e| format!("扫描待删目录失败（{}）：{e}", path.display()))?;
-        verify_tree_identity(path, &md, "扫描")?;
-        for entry in entries {
-            let entry =
-                entry.map_err(|e| format!("扫描待删目录失败（{}）：{e}", path.display()))?;
-            remove_tree_no_follow(&entry.path())?;
-        }
-        verify_tree_identity(path, &md, "子项删除")?;
-        return fs::remove_dir(path)
-            .map_err(|e| format!("删除目录失败（{}）：{e}", path.display()));
-    }
-    fs::remove_file(path).map_err(|e| format!("删除文件失败（{}）：{e}", path.display()))
-}
-
-/// 目录删除路径的身份复核（Unix）：现场 lstat 须仍为同一目录实体且非
-/// 符号链接——路径名在归类后被替换即中止删除。
-#[cfg(unix)]
-fn verify_tree_identity(
-    path: &std::path::Path,
-    classified: &fs::Metadata,
-    stage: &str,
-) -> Result<(), String> {
-    let fresh = fs::symlink_metadata(path)
-        .map_err(|e| format!("复核目录身份失败（{}）：{e}", path.display()))?;
-    if fresh.file_type().is_symlink() || asset_identity(&fresh) != asset_identity(classified) {
-        return Err(format!(
-            "目录在{stage}期间被替换（疑似符号链接逃逸），中止删除：{}",
-            path.display()
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn verify_tree_identity(
-    _path: &std::path::Path,
-    _classified: &fs::Metadata,
-    _stage: &str,
-) -> Result<(), String> {
     Ok(())
 }
 
@@ -1323,7 +1280,11 @@ fn copy_assets_tree(dir: &std::path::Path, from_id: &str, to_id: &str) -> Result
     }
     // 拷贝目标是 {to}/assets：与 relPath 首段（§7.1）及实路径复验的资产根一致
     if let Err(e) = copy_dir_no_follow(&src, &dst_root.join("assets")) {
-        let _ = remove_tree_no_follow(&dst_root);
+        // 回滚清理同款句柄相对删除（§10.2）：dst_root 被并发换成符号链接时
+        // remove_dir_all 只移除链接自身，不进入其指向的外部树
+        if let Ok(root) = CapDir::open_ambient_dir(dir, ambient_authority()) {
+            let _ = root.remove_dir_all(to_id);
+        }
         return Err(e);
     }
     Ok(())
@@ -1334,8 +1295,9 @@ fn copy_assets_tree(dir: &std::path::Path, from_id: &str, to_id: &str) -> Result
 /// （Unix：打开后按 (dev, ino) 与归类时身份比对，被换符号链接/另一实体
 /// 即拒绝），从**同一句柄**读出——不再用已校验的路径名重开；目标文件以
 /// create_new 排他创建，预置在目标路径上的符号链接无法截获写入（Unix 的
-/// O_CREAT|O_EXCL 拒绝跟随既有符号链接）。中间目录被并发替换的残余
-/// 窗口仍需 §10.2 目录句柄解析器（依赖决策）方可闭合。
+/// O_CREAT|O_EXCL 拒绝跟随既有符号链接）。中间目录被并发替换的残余窗口
+/// 仍待迁移到 §10.2 的句柄相对解析（cap-std 已随删除路径引入，拷贝侧
+/// 未在本轮范围内）。
 fn copy_dir_no_follow(src: &std::path::Path, dst: &std::path::Path) -> Result<(), String> {
     fs::create_dir_all(dst).map_err(|e| format!("创建目标资产目录失败：{e}"))?;
     let entries = fs::read_dir(src).map_err(|e| format!("扫描源资产目录失败：{e}"))?;

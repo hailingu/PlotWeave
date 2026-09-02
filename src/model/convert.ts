@@ -236,24 +236,27 @@ const REQUIRED_LISTS: Record<string, string> = {
 
 /** 普通键值对象的成员过滤：非普通对象（含数组——下标 "0"/"1" 会被误当权威实体 id）
  * 整体重置为空 Record，桶内异型条目移除；缺失视为空，不警告。
- * 条目经 Object.fromEntries 重建：`__proto__` 是合法 id（安全字符集允许下划线），
- * 普通 {} 赋值会触发原型 setter——条目不进 Object.entries/Object.values 而静默丢失，
- * 按键查找却经原型链误命中（悬空引用漏报，下次保存永久丢条目）。 */
+ * 返回空原型记录（Object.create(null) 逐项赋值）：`__proto__` 是合法 id
+ * （安全字符集允许下划线），普通 {} 赋值会触发原型 setter——条目不进
+ * Object.entries/Object.values 而静默丢失；空原型上 `__proto__` 赋值直接成为
+ * own 属性。同时 `constructor`/`toString` 等原型链键名不再误命中
+ * Object.prototype 成员（否则按键查找拿到非条目值，下游如 mime.startsWith
+ * 直接抛 TypeError，悬空引用漏报且文档打不开）。 */
 function plainObjectEntries(
   v: unknown,
   label: string,
   warnings: string[],
 ): Record<string, unknown> {
+  const out: Record<string, unknown> = Object.create(null)
   if (!isPlainObject(v)) {
     if (v !== undefined) warnings.push(`${label} 非普通键值对象，已重置为空 Record`)
-    return {}
+    return out
   }
-  const kept: [string, unknown][] = []
   for (const [k, item] of Object.entries(v)) {
-    if (isPlainObject(item)) kept.push([k, item])
+    if (isPlainObject(item)) out[k] = item
     else warnings.push(`${label} 的条目 ${k} 不是普通对象，已移除`)
   }
-  return Object.fromEntries(kept)
+  return out
 }
 
 /** relatedIds 成员的非法原因（§6 的 {kind,id} 显式成对：kind ∈
