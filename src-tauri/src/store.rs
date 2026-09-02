@@ -885,8 +885,13 @@ fn sort_metas_by_recency(metas: &mut [ProjectMeta]) {
 /// §10.2 控制文件信任链——现存 `projects/{id}.json` 的读取前置校验：
 /// symlink_metadata 拒绝符号链接（无论指向根内或根外），要求普通文件，
 /// canonical 真实路径须仍位于已验证的项目目录内。任一不满足即拒绝读取，
-/// 防止把读取重定向到应用数据根之外。
-fn verify_control_file(dir: &std::path::Path, path: &std::path::Path) -> Result<(), String> {
+/// 防止把读取重定向到应用数据根之外。返回最终组件身份（Unix 为
+/// (dev, ino)）供调用方在打开后绑定同一实体——校验与打开之间被替换
+/// （换成符号链接或另一文件）即拒绝且不读取。
+fn verify_control_file(
+    dir: &std::path::Path,
+    path: &std::path::Path,
+) -> Result<Option<(u64, u64)>, String> {
     let md = fs::symlink_metadata(path).map_err(|e| format!("读取项目文件元数据失败：{e}"))?;
     if md.file_type().is_symlink() {
         return Err("项目文件是符号链接，拒绝读取".into());
@@ -905,7 +910,13 @@ fn verify_control_file(dir: &std::path::Path, path: &std::path::Path) -> Result<
     if !real.starts_with(&dir) {
         return Err("项目文件真实路径逃逸项目目录".into());
     }
-    Ok(())
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Ok(Some((md.dev(), md.ino())))
+    }
+    #[cfg(not(unix))]
+    Ok(None)
 }
 
 /// 列出全部项目，按更新时间新→旧排序。
@@ -1113,16 +1124,33 @@ pub fn load_project(app: AppHandle, id: String) -> Result<ProjectFile, String> {
 /// load_project 的可测内核：id 是 IPC 调用方传入的不可信参数，词法校验
 /// 先于任何路径拼接——嵌套路径形态的 id（如 `p-1/assets/x`）不得把
 /// projects/ 内的任意 JSON 经项目通道读出（verify_control_file 只验包含
-/// 关系，拦不住深度嵌套的常规文件）。
+/// 关系，拦不住深度嵌套的常规文件）。读取绑定已验证实体：打开句柄并按
+/// (dev, ino) 与校验时身份比对一致后才从**同一句柄**读取——校验与打开
+/// 之间路径被换成符号链接/另一文件时拒绝且不读取，打开之后的路径替换
+/// 不影响所读内容。
 fn load_project_file(dir: &std::path::Path, id: &str) -> Result<ProjectFile, String> {
     validate_id(id)?;
     let path = dir.join(format!("{id}.json"));
     if !path.exists() {
         return Err(format!("项目不存在：{id}"));
     }
-    // §10.2：读取前对现存控制文件做符号链接/普通文件/包含关系校验
-    verify_control_file(dir, &path).map_err(|e| format!("拒绝读取项目文件：{e}"))?;
-    let text = fs::read_to_string(path).map_err(|_| format!("项目不存在：{id}"))?;
+    let verified_identity =
+        verify_control_file(dir, &path).map_err(|e| format!("拒绝读取项目文件：{e}"))?;
+    use std::io::Read;
+    let mut file = fs::File::open(&path).map_err(|_| format!("项目不存在：{id}"))?;
+    #[cfg(unix)]
+    if let Some((dev, ino)) = verified_identity {
+        use std::os::unix::fs::MetadataExt;
+        let fm = file
+            .metadata()
+            .map_err(|e| format!("读取项目文件句柄元数据失败：{e}"))?;
+        if (fm.dev(), fm.ino()) != (dev, ino) {
+            return Err("项目文件在读取前被替换，拒绝读取".into());
+        }
+    }
+    let mut text = String::new();
+    file.read_to_string(&mut text)
+        .map_err(|e| format!("读取项目文件失败：{e}"))?;
     parse_file(id, &text).map_err(|e| format!("项目文件损坏：{e}"))
 }
 
@@ -2151,6 +2179,16 @@ mod tests {
             err.contains("非法") || err.contains("不存在"),
             "意外诊断：{err}"
         );
+        cleanup_temp(&projects);
+    }
+    #[test]
+    fn load_project_file_reads_envelope_from_verified_handle() {
+        let projects = temp_projects_dir();
+        let doc = new_project_file("p-1", "午夜出租车".into(), now_iso());
+        persist_project(&projects, "p-1", doc).expect("先保存");
+        let loaded = load_project_file(&projects, "p-1").expect("从已验证句柄读取");
+        assert_eq!(loaded.project.name, "午夜出租车");
+        assert_eq!(loaded.schema_version, 1);
         cleanup_temp(&projects);
     }
 }

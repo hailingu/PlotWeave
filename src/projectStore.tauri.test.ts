@@ -377,3 +377,77 @@ describe('项目级持久化所有者（保存失败重试不随编辑器卸载�
     }
   })
 })
+
+describe('持久化所有者的代次与删除串行（陈旧重试/复活防护）', () => {
+  it('陈旧代次的重试作废：新保存排队后，旧文档的重试不得覆盖新内容', async () => {
+    let aFailed = false
+    let releaseB: (() => void) | null = null
+    handlers.set('load_project', () => modernFile())
+    handlers.set('save_project', (args) =>
+      new Promise<void>((resolve, reject) => {
+        const name = (args as { doc: { project: { name: string } } }).doc.project.name
+        if (name === '旧') {
+          if (!aFailed) {
+            aFailed = true
+            reject(new Error('瞬时故障'))
+            return
+          }
+          resolve() // 重试若被放行会成功——正是要证明它不该跑
+          return
+        }
+        releaseB = resolve // 新文档挂起（在途超过重试周期）
+      }),
+    )
+    vi.useFakeTimers()
+    try {
+      const { projectStore } = await load()
+      await expect(projectStore.save('p1', { name: '旧', nodes: [], edges: [], settings: { characters: [], locations: [] } })).rejects.toThrow('瞬时故障')
+      const savingB = projectStore.save('p1', { name: '新', nodes: [], edges: [], settings: { characters: [], locations: [] } })
+      await vi.advanceTimersByTimeAsync(5000) // 重试到点：须因新保存已排队而作废
+      ;(releaseB as unknown as (() => void) | undefined)?.()
+      await savingB
+      await vi.advanceTimersByTimeAsync(20000)
+      const names = calls
+        .filter((c) => c.cmd === 'save_project')
+        .map((c) => (c.args as { doc: { project: { name: string } } }).doc.project.name)
+      expect(names).toEqual(['旧', '新'])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('删除排在在途保存之后：保存完成前不得发出 delete_project', async () => {
+    let releaseSave: (() => void) | null = null
+    handlers.set('load_project', () => modernFile())
+    handlers.set('save_project', () => new Promise<void>((resolve) => { releaseSave = resolve }))
+    handlers.set('delete_project', () => undefined)
+    const { projectStore } = await load()
+    const saving = projectStore.save('p1', { name: 'x', nodes: [], edges: [], settings: { characters: [], locations: [] } })
+    const deleting = projectStore.delete('p1')
+    // 等保存真正挂起（invoke 链有多跳微任务），删除此时不得越过它
+    await vi.waitFor(() => expect(releaseSave).not.toBeNull())
+    expect(calls.some((c) => c.cmd === 'delete_project')).toBe(false) // 红：未串行即提前发出
+    ;(releaseSave as unknown as (() => void) | undefined)?.()
+    await saving
+    await deleting
+    expect(calls.some((c) => c.cmd === 'delete_project')).toBe(true)
+  })
+
+  it('删除取消重试状态：已删项目不被登记中的重试复活', async () => {
+    handlers.set('load_project', () => modernFile())
+    handlers.set('save_project', () => {
+      throw new Error('只读')
+    })
+    handlers.set('delete_project', () => undefined)
+    vi.useFakeTimers()
+    try {
+      const { projectStore } = await load()
+      await expect(projectStore.save('p1', { name: 'x', nodes: [], edges: [], settings: { characters: [], locations: [] } })).rejects.toThrow('只读')
+      await projectStore.delete('p1')
+      await vi.advanceTimersByTimeAsync(20000)
+      expect(calls.filter((c) => c.cmd === 'save_project')).toHaveLength(1) // 红：重试复活
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

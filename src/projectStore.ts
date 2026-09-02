@@ -194,18 +194,32 @@ async function tauriSave(id: string, doc: ProjectContent): Promise<void> {
 /** §3.1 项目级持久化所有者：保存按项目串行（后保存者的内容永不早于先
  * 保存者落盘）；失败把最新文档登记为待重试并按固定节律后台重试——编辑
  * 器卸载/导航后组件不复存在，最新文档只存在于这里，瞬时故障（磁盘满/
- * 权限）不得永久丢编辑。同项目后续保存成功即清登记，重试不会用旧文档
- * 覆盖新内容。 */
+ * 权限）不得永久丢编辑。重试绑定**保存代次**：每次入队自增，新保存一
+ * 排队旧代次重试即作废——陈旧文档的重试不得后完成覆盖新内容。删除同样
+ * 排进链：在途保存落定后才删，且先取消全部重试登记，已删项目不得被
+ * 迟到的完成/重试复活。 */
 const SAVE_RETRY_DELAY_MS = 5000
 const saveChains = new Map<string, Promise<unknown>>()
 const pendingRetryDocs = new Map<string, ProjectContent>()
 const retryTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const saveGenerations = new Map<string, number>()
 
-function scheduleSaveRetry(id: string): void {
+function clearSaveRetry(id: string): void {
+  const timer = retryTimers.get(id)
+  if (timer !== undefined) {
+    clearTimeout(timer)
+    retryTimers.delete(id)
+  }
+  pendingRetryDocs.delete(id)
+}
+
+function scheduleSaveRetry(id: string, generation: number): void {
   retryTimers.set(
     id,
     setTimeout(() => {
       retryTimers.delete(id)
+      // 代次已前进（有更新的保存排队/完成）：本次登记作废，由新代次自洽
+      if (saveGenerations.get(id) !== generation) return
       const doc = pendingRetryDocs.get(id)
       if (doc !== undefined) void enqueueSave(id, doc).catch(() => undefined)
     }, SAVE_RETRY_DELAY_MS),
@@ -213,6 +227,8 @@ function scheduleSaveRetry(id: string): void {
 }
 
 function enqueueSave(id: string, doc: ProjectContent): Promise<void> {
+  const generation = (saveGenerations.get(id) ?? 0) + 1
+  saveGenerations.set(id, generation)
   const run = (saveChains.get(id) ?? Promise.resolve()).catch(() => undefined)
   const next = run.then(async () => {
     try {
@@ -220,10 +236,24 @@ function enqueueSave(id: string, doc: ProjectContent): Promise<void> {
       pendingRetryDocs.delete(id)
     } catch (err) {
       pendingRetryDocs.set(id, doc)
-      if (!retryTimers.has(id)) scheduleSaveRetry(id)
+      if (!retryTimers.has(id)) scheduleSaveRetry(id, generation)
       console.error('[projectStore] 保存失败，已登记后台重试', err)
       throw err
     }
+  })
+  saveChains.set(id, next)
+  return next
+}
+
+/** 删除排进同项目保存链：在途保存落定后才发出删除（迟到的保存完成不得
+ * 重建 JSON 复活项目）；并取消全部重试登记（登记中的重试同样会复活）。 */
+function enqueueDelete(id: string): Promise<void> {
+  clearSaveRetry(id)
+  const run = (saveChains.get(id) ?? Promise.resolve()).catch(() => undefined)
+  const next = run.then(async () => {
+    clearSaveRetry(id)
+    const { invoke } = await import('@tauri-apps/api/core')
+    await invoke('delete_project', { id })
   })
   saveChains.set(id, next)
   return next
@@ -245,11 +275,10 @@ export const projectStore = {
   save: (id: string, doc: ProjectContent): Promise<void> =>
     isTauri ? enqueueSave(id, doc) : memorySave(id, doc),
 
-  /** 删除项目（首页卡片菜单，§3.2；确认框由界面层负责）。 */
+  /** 删除项目（首页卡片菜单，§3.2；确认框由界面层负责）。排进保存链，
+   * 迟到的保存/重试不得复活已删项目。 */
   delete: (id: string): Promise<void> =>
-    isTauri
-      ? import('@tauri-apps/api/core').then(({ invoke }) => invoke('delete_project', { id }))
-      : memoryDelete(id),
+    isTauri ? enqueueDelete(id) : memoryDelete(id),
 
   /** 复制项目：读原文档 → 新建「副本」项目 → 整目录拷贝项目资产 → 写入
    * 画布（§3.2）。副本创建时间取复制时刻。资产索引随文档原样带走——与
