@@ -581,8 +581,9 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
       shotCountOf,
       beatFulfillmentOf,
       settings,
+      assets: assetsRef.current,
     }),
-    [openSettingsId, toggleSettings, closeSettings, patchNode, duplicateNode, deleteNode, shotCountOf, beatFulfillmentOf, settings],
+    [openSettingsId, toggleSettings, closeSettings, patchNode, duplicateNode, deleteNode, shotCountOf, beatFulfillmentOf, settings, assetsRef],
   )
 
   // 失焦收起（§4.3）＋ 全局快捷键：⌘Z/⌘⇧Z 撤销重做、Delete 删除选中。

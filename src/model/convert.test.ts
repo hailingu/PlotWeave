@@ -465,6 +465,73 @@ describe('parseProject（ProjectDocument → 会话文档，§11 归一化）', 
     expect(round.warnings.some((w) => w.includes('e-dead'))).toBe(true)
   })
 
+  it('schemaVersion 0 旧信封：props/documents 数组的重复/空 id 在键化前重发——不因 Object.fromEntries 折叠丢条目', () => {
+    const v0 = {
+      schemaVersion: 0,
+      project: { id: 'p-old', name: '旧剧', createdAt: '', updatedAt: '2026-01-01T00:00:00.000Z' },
+      graph: { nodes: [], edges: [] },
+      settings: {
+        characters: [],
+        locations: [],
+        props: [
+          { id: 'prop-1', name: '怀表', description: '' },
+          { id: 'prop-1', name: '同 id 道具', description: '' },
+          { id: '', name: '空 id 道具', description: '' },
+        ],
+        documents: [
+          { id: 'doc-1', title: '设定', body: '一', relatedIds: [] },
+          { id: 'doc-1', title: '同 id 文档', body: '二', relatedIds: [] },
+        ],
+      },
+      episodeTitles: {},
+      assets: { byId: {} },
+    }
+    const round = parseProject(v0)
+    expect(round.migrated).toBe(true)
+    // 红：toDocSettings 的 Object.fromEntries 在归一化重发前按键折叠，
+    // 除末见外全部条目被迁移回写永久丢弃（角色/地点已有数组期重发）
+    const propIds = round.content.settings.props?.map((p) => p.id) ?? []
+    expect(propIds).toHaveLength(3)
+    expect(new Set(propIds).size).toBe(3)
+    expect(round.content.settings.documents).toHaveLength(2)
+    expect(new Set(round.content.settings.documents?.map((d) => d.id)).size).toBe(2)
+  })
+
+  it('逻辑重复边的元组键不可因 id 含 \\u0000 而碰撞：不同端点的两条边都保留', () => {
+    // id 是不可信输入，JSON 字符串可含 \u0000——拼接键会让
+    // (a → b\0c) 与 (a\0b → c) 折叠成同键，第二条被误判重复并随修复回写移除
+    const beat = (id: string) =>
+      ({
+        id,
+        type: 'beat',
+        position: { x: 0, y: 0 },
+        selected: false,
+        data: { name: `节拍 ${id}`, tone: 't' },
+      }) as unknown as CanvasNode
+    const content: ProjectContent = {
+      name: 'x',
+      nodes: [beat('a'), beat('a\u0000b'), beat('b\u0000c'), beat('c')],
+      edges: [
+        { id: 'e1', source: 'a', target: 'b\u0000c' },
+        { id: 'e2', source: 'a\u0000b', target: 'c' },
+      ],
+      settings: { characters: [], locations: [] },
+    }
+    const round = parseProject(serializeProject(content, 'p-1', NOW))
+    expect(round.content.edges).toHaveLength(2)
+    expect(round.warnings.some((w) => w.includes('逻辑重复'))).toBe(false)
+    // 控制组：真正同端点同句柄的重复边仍被隔离
+    const dupContent: ProjectContent = {
+      ...content,
+      edges: [
+        { id: 'e1', source: 'a', target: 'b\u0000c' },
+        { id: 'e1b', source: 'a', target: 'b\u0000c' },
+      ],
+    }
+    const dupRound = parseProject(serializeProject(dupContent, 'p-1', NOW))
+    expect(dupRound.content.edges).toHaveLength(1)
+  })
+
   it('schemaVersion 0 旧信封：边判别字段（type/className）归类为显式 data.kind', () => {
     const v0 = {
       schemaVersion: 0,

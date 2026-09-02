@@ -2,6 +2,8 @@ import { useState, type ReactNode } from 'react'
 import { useNodeEdit } from '../../nodeEdit'
 import type { ProjectSettings } from '../../settings'
 import { uid } from '../../../uid'
+import { shotRefMimeMatches } from '../../../model/convert'
+import type { ProjectContent } from '../../../model/content'
 import type {
   BeatNodeData,
   BranchNodeData,
@@ -384,9 +386,21 @@ const REF_KIND_LABELS: Record<ShotRef['kind'], string> = {
   audio: '音频',
 }
 
-/** 分镜卡表单：镜号/景别/画面描述/镜头 Prompt/引用位（增删改）。 */
+/** 资产 MIME 解析（§7.1）：own 属性判定防原型链键误命中（库内键控桶
+ * 同款口径）；悬空引用（资产已删）返回 undefined——kind 切换不设限。 */
+function assetMimeOf(assets: ProjectContent['assets'], id: string): string | undefined {
+  const byId = assets?.byId
+  if (byId === undefined || !Object.prototype.hasOwnProperty.call(byId, id)) return undefined
+  const mime = byId[id].mime
+  return typeof mime === 'string' ? mime : undefined
+}
+
+/** 分镜卡表单：镜号/景别/画面描述/镜头 Prompt/引用位（增删改）。
+ * 资产引用位的 kind 切换受资产 MIME 家族约束（§4.2，与归一化
+ * shotRefMimeMatches 同域）：错配 kind 保存后重开只是「不可用引用」
+ * 警告——在编辑边界直接禁用，不产出注定不可用的引用。 */
 function ShotForm({ node }: { readonly node: Extract<PanelNode, { type: 'shot' }> }) {
-  const { patchNode } = useNodeEdit()
+  const { patchNode, assets } = useNodeEdit()
   const d = node.data
   return (
     <>
@@ -444,11 +458,19 @@ function ShotForm({ node }: { readonly node: Extract<PanelNode, { type: 'shot' }
                 })
               }
             >
-              {Object.entries(REF_KIND_LABELS).map(([kind, label]) => (
-                <option key={kind} value={kind}>
-                  {label}
-                </option>
-              ))}
+              {Object.entries(REF_KIND_LABELS).map(([kind, label]) => {
+                const mime =
+                  ref.assetId !== undefined ? assetMimeOf(assets, ref.assetId) : undefined
+                return (
+                  <option
+                    key={kind}
+                    value={kind}
+                    disabled={mime !== undefined && !shotRefMimeMatches(kind, mime)}
+                  >
+                    {label}
+                  </option>
+                )
+              })}
             </select>
             <span className="pw-sp" />
             <button

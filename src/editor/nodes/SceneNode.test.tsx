@@ -56,6 +56,7 @@ function setup(data: Partial<SceneNodeData> = {}, openSettingsId: string | null 
     shotCountOf: () => 2,
     beatFulfillmentOf: () => null,
     settings: structuredClone(SETTINGS),
+    assets: undefined,
   }
   const props = {
     id: 's1',

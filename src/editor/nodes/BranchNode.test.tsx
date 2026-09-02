@@ -36,6 +36,7 @@ function setup(openSettingsId: string | null = null) {
     shotCountOf: () => 0,
     beatFulfillmentOf: () => null,
     settings: { characters: [], locations: [] },
+    assets: undefined,
   }
   const props = {
     id: 'br1',

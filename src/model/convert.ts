@@ -1557,8 +1557,9 @@ function dialogueRefWarnings(
 }
 
 /** 分镜引用位的 MIME 家族与 kind 用途匹配（§4.2 六十四轮）：character/
- * location 是垫图/底图用途限 image/*，audio 用途限 audio/*。 */
-function shotRefMimeMatches(kind: string, mime: string): boolean {
+ * location 是垫图/底图用途限 image/*，audio 用途限 audio/*。
+ * 归一化（不可用引用警告）与设置面板的编辑边界（禁用错配 kind）共用。 */
+export function shotRefMimeMatches(kind: string, mime: string): boolean {
   if (kind === 'audio') return mime.startsWith('audio/')
   return mime.startsWith('image/')
 }
@@ -1832,11 +1833,13 @@ function isolateExtraAttachHosts(edges: StoryEdge[], warnings: string[]): StoryE
 
 /** 逻辑重复边隔离（§11.3）：同 source/target/sourceHandle 的边保留文档序首条，
  * 其余按孤儿边隔离并警告——并行重复边会被 React Flow 重叠渲染，
- * 图遍历与统计也把同一关系重复计数。 */
+ * 图遍历与统计也把同一关系重复计数。元组键用 JSON 编码：source/target
+ * 是不可信输入，JSON 字符串可含任意分隔字符（含 \u0000）——拼接键会让
+ * 不同端点的边折叠成同键、被误判重复并随修复回写永久移除。 */
 function isolateDuplicateEdges(edges: StoryEdge[], warnings: string[]): StoryEdge[] {
   const seen = new Set<string>()
   return edges.filter((e) => {
-    const key = `${e.source}\u0000${e.target}\u0000${e.sourceHandle ?? ''}`
+    const key = JSON.stringify([e.source, e.target, e.sourceHandle ?? ''])
     if (seen.has(key)) {
       warnings.push(`已隔离重复边 ${e.id}：与既有边同 source/target/sourceHandle（逻辑重复）`)
       return false

@@ -31,6 +31,12 @@ function setup(node: PanelNode) {
     shotCountOf: () => 0,
     beatFulfillmentOf: () => null,
     settings: structuredClone(SETTINGS),
+    assets: {
+      byId: {
+        'a-1': { id: 'a-1', relPath: 'assets/a-1.png', mime: 'image/png', source: 'upload', createdAt: '2026-01-01T00:00:00.000Z' },
+        'a-aud': { id: 'a-aud', relPath: 'assets/a-aud.mp3', mime: 'audio/mpeg', source: 'upload', createdAt: '2026-01-01T00:00:00.000Z' },
+      },
+    },
   }
   const { container } = render(
     <NodeEditContext.Provider value={api}>
@@ -278,6 +284,51 @@ describe('ShotForm', () => {
     // 双字段形态保存成功但下次加载被归一化静默删除）
     fireEvent.change(screen.getByPlaceholderText(/a-1/), { target: { value: '人物垫图' } })
     expect(patchOf(api).refs).toEqual([{ id: 'r1', kind: 'character', label: '人物垫图' }])
+  })
+
+  it('资产引用位的 kind 切换受 MIME 家族约束：音频资产不可改为垫图/底图用途', () => {
+    const assetShot: PanelNode = {
+      id: 's3',
+      type: 'shot',
+      data: {
+        shotNo: 1,
+        size: '中景',
+        picture: '',
+        prompt: '',
+        refs: [{ id: 'r1', kind: 'audio', assetId: 'a-aud' }],
+      },
+    }
+    setup(assetShot)
+    const optionOf = (value: string) =>
+      screen.getByRole('combobox', { name: '引用类型' }).querySelector(
+        `option[value="${value}"]`,
+      ) as HTMLOptionElement | null
+    // 错配 kind（§4.2：audio 限 audio/*）保存后重开只是"不可用引用"警告——
+    // 编辑边界直接禁用；本 kind 与同家族切换保持可用
+    expect(optionOf('audio')?.disabled).toBe(false)
+    expect(optionOf('character')?.disabled).toBe(true)
+    expect(optionOf('location')?.disabled).toBe(true)
+
+    // 自由位（label）无资产绑定：全部 kind 可用
+    const freeShot: PanelNode = {
+      id: 's4',
+      type: 'shot',
+      data: {
+        shotNo: 1,
+        size: '中景',
+        picture: '',
+        prompt: '',
+        refs: [{ id: 'r1', kind: 'character', label: '自由文案' }],
+      },
+    }
+    setup(freeShot)
+    const selects = screen.getAllByRole('combobox', { name: '引用类型' })
+    const lastSelect = selects[selects.length - 1]
+    const freeOptionOf = (value: string) =>
+      lastSelect.querySelector(`option[value="${value}"]`) as HTMLOptionElement | null
+    expect(freeOptionOf('audio')?.disabled).toBe(false)
+    expect(freeOptionOf('character')?.disabled).toBe(false)
+    expect(freeOptionOf('location')?.disabled).toBe(false)
   })
 })
 

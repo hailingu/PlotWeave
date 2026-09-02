@@ -84,7 +84,7 @@ export function migrateProjectDocument(
    * 映射），供节点引用与 relatedIds 同步改写（迁移链 ⑤），否则重发即悬空。 */
   const reissueEntityIds = <T extends { id?: unknown }>(
     list: T[],
-    prefix: 'ch' | 'loc',
+    prefix: string,
   ): { list: T[]; remap: Map<string, string> } => {
     const rawOf = (e: T): string | null =>
       e !== null && typeof e === 'object' && typeof (e as { id?: unknown }).id === 'string'
@@ -122,6 +122,14 @@ export function migrateProjectDocument(
     'loc',
   )
   settings.locations = locationList as typeof settings.locations
+  // props/documents 同款数组期重发：v0 数组里重复/非法 id 若留到键化
+  // （toDocSettings 的 Object.fromEntries）才处理，同键折叠会永久丢弃
+  // 除末见外的全部条目——迁移回写即丢失；两桶无被引用字段，重发即可
+  settings.props = reissueEntityIds(settings.props ?? [], 'prop').list as typeof settings.props
+  settings.documents = reissueEntityIds(
+    settings.documents ?? [],
+    'doc',
+  ).list as typeof settings.documents
 
   /** 同桶空白 id 引用改写（迁移链 ⑤ 与 §11.1 第 3 步同款）：relatedIds 按
    * kind 对应桶改写，禁止跨命名空间。 */

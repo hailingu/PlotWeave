@@ -36,6 +36,7 @@ function setup(fulfillment: BeatFulfillment | null = null) {
     shotCountOf: () => 0,
     beatFulfillmentOf: () => fulfillment,
     settings: { characters: [], locations: [] },
+    assets: undefined,
   }
   const props = {
     id: 'b1',
