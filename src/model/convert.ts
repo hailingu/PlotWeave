@@ -1003,6 +1003,12 @@ function nodeDiscriminantError(
   }
   normalizeEpisodeNo(data.meta, nid, warnings)
   if (type === 'scene') {
+    // 可选引用 locationId 非字符串（脏写/导入）就地剥离：原样进会话会
+    // 直达设置面板的 <select> 并被序列化原样落盘，归一化永远修不回来
+    if ('locationId' in data.spec && typeof data.spec.locationId !== 'string') {
+      warnings.push(`节点 ${nid} 的 spec.locationId 非字符串，已剥离`)
+      delete data.spec.locationId
+    }
     const textIssue = normalizeSceneTextFields(data.spec, nid, warnings)
     if (textIssue) return textIssue
   }
@@ -1310,10 +1316,18 @@ function normalizeProjectMeta(
   const repairTimestamp = (v: unknown, label: string, fallback: string, fallbackReason: string): string => {
     if (typeof v === 'string' && isStrictIso8601(v)) {
       const canon = new Date(v).toISOString()
-      if (canon !== v) {
-        warnings.push(`project.${label} 是合法的偏移/精度变体，已确定性规范化为 UTC ISO 8601`)
+      // 规范化结果须仍在可保存域（四位年份）：合法的极端偏移换算成 UTC
+      // 可越过 9999 年（toISOString 产出 +010000-…），前端谓词与 Rust
+      // 保存边界都不再接受——修复回写与后续自动保存全被拒收，项目永久
+      // 不可保存；越域即按不可修复走回退链
+      if (isStrictIso8601(canon)) {
+        if (canon !== v) {
+          warnings.push(`project.${label} 是合法的偏移/精度变体，已确定性规范化为 UTC ISO 8601`)
+        }
+        return canon
       }
-      return canon
+      warnings.push(`project.${label} 规范化后越出四位年份域，${fallbackReason}`)
+      return fallback
     }
     warnings.push(`project.${label} 不是严格 ISO 8601 时间戳，${fallbackReason}`)
     return fallback

@@ -161,6 +161,15 @@ async function tauriCreate(name: string): Promise<ProjectSummary> {
 
 async function tauriLoad(id: string): Promise<ProjectContent> {
   const { invoke } = await import('@tauri-apps/api/core')
+  // §3.1 保存链先于读取：编辑器卸载后的冲刷可能在途/排队，直接读盘会
+  // 拿到旧文档——重开后的编辑把旧内容重新排队落盘，反向覆盖刚冲刷的
+  // 新编辑
+  await saveChains.get(id)?.catch(() => undefined)
+  // 链上失败登记的最新文档比磁盘新（冲刷失败待重试）：以它交付会话
+  // （经保存同款归一化，剥离运行态），否则用户看到丢编辑的旧版本，
+  // 且随后编辑与重试登记竞态
+  const pending = pendingRetryDocs.get(id)
+  if (pending !== undefined) return memoryNormalize(pending, id)
   const file = await invoke<unknown>('load_project', { id })
   // §7.1/§10.5 加载侧资产实路径复验：Rust 以受信资产根 no-follow 验证
   // （前端无法访问文件系统），不可验证键交归一化层隔离、引用位标记悬空

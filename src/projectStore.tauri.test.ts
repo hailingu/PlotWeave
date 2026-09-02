@@ -104,6 +104,53 @@ describe('tauriLoad：归一化与迁移回写', () => {
     expect(calls.map((c) => c.cmd)).toEqual(['load_project', 'verify_project_assets', 'save_project'])
   })
 
+  it('加载等待在途保存链落定：关闭后立即重开不读旧盘（编辑不基于旧内容反向覆盖新冲刷）', async () => {
+    let releaseSave: (() => void) | null = null
+    handlers.set('load_project', () => modernFile())
+    handlers.set('verify_project_assets', () => [])
+    handlers.set('save_project', () =>
+      new Promise<void>((resolve) => {
+        releaseSave = resolve
+      }),
+    )
+    const { projectStore } = await load()
+    const docOf = (name: string) => ({ name, nodes: [], edges: [], settings: { characters: [], locations: [] } })
+    // 用户编辑 v2 后立即离开编辑器：卸载冲刷挂起（慢盘）
+    const saving = projectStore.save('p1', docOf('v2'))
+    await vi.waitFor(() => expect(releaseSave).not.toBeNull())
+    // 冲刷未落盘时立即重开：load 不得先于冲刷完成返回（否则读到旧盘内容，
+    // 随后编辑把旧文档重新排队落盘，覆盖刚冲刷的新编辑）
+    const loading = projectStore.load('p1')
+    let resolved = false
+    void loading.then(() => {
+      resolved = true
+    })
+    await Promise.resolve()
+    expect(resolved).toBe(false)
+    ;(releaseSave as unknown as () => void)()
+    await saving
+    const doc = await loading
+    expect(doc.name).toBe('现代剧')
+  })
+
+  it('加载优先交付失败登记的最新文档：磁盘滞后时不展示丢编辑的旧版本', async () => {
+    handlers.set('load_project', () => modernFile())
+    handlers.set('save_project', () => {
+      throw new Error('磁盘满')
+    })
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const { projectStore } = await load()
+      const docOf = (name: string) => ({ name, nodes: [], edges: [], settings: { characters: [], locations: [] } })
+      await expect(projectStore.save('p1', docOf('最新'))).rejects.toThrow('磁盘满')
+      // 红：直接读盘拿到的是滞后内容（现代剧），丢掉待重试的最新编辑
+      const doc = await projectStore.load('p1')
+      expect(doc.name).toBe('最新')
+    } finally {
+      errSpy.mockRestore()
+    }
+  })
+
   it('v1 修复型归一化回写 save_project（下次打开不再重复修复）；干净 v1 不回写', async () => {
     handlers.set('load_project', () => ({
       ...modernFile(),

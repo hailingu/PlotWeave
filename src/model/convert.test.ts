@@ -1471,6 +1471,36 @@ describe('归一化：assets.byId 完整 AssetRef 形状校验（§11.3，Rust �
     expect(round.content.assets?.byId['a-1']?.mime).toBe('image/png')
     expect(round.content.assets?.byId['a-2']?.createdAt).toBe('2026-08-01T08:00:00+08:00')
   })
+
+  it('时间戳规范化结果须仍在可保存域：越出四位年份（+010000）的合法输入按回退链修复，项目不得永久不可保存', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
+      project: Record<string, unknown>
+    }
+    // 合法的 -23:59 偏移使 UTC 换算越过 9999 年：toISOString 产出
+    // +010000-…——前端严格谓词与 Rust 保存边界都不再接受，修复回写与
+    // 此后每次自动保存全被拒收
+    doc.project.updatedAt = '9999-12-31T23:59:59-23:59'
+    doc.project.createdAt = '9999-12-31T23:59:59-23:59'
+    const round = parseProject(doc)
+    // 会话不携带 updatedAt（保存时重新盖戳），修复结果经 createdAt 观察：
+    // 回退链产出四位年份域内的时间戳
+    expect(round.content.createdAt).toMatch(/^\d{4}-/)
+    // 再落盘可过保存边界（四位年份域内）
+    const again = serializeProject(round.content, 'p-1', new Date(round.content.createdAt!))
+    expect(again.project.updatedAt).toMatch(/^\d{4}-/)
+    expect(again.project.createdAt).toBe(round.content.createdAt)
+  })
+
+  it('scene 的 locationId 非字符串：加载边界剥离并警告——不得直达设置面板 select 并原样落盘', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
+      graph: { nodes: Array<{ data: { spec: Record<string, unknown> } }> }
+    }
+    doc.graph.nodes[0].data.spec.locationId = {}
+    const round = parseProject(doc)
+    const scene = round.content.nodes[0].data as { locationId?: unknown }
+    expect(scene.locationId).toBeUndefined()
+    expect(round.warnings.some((w) => w.includes('locationId'))).toBe(true)
+  })
 })
 
 describe('归一化：非法节点 id 重发与空端点改写（§8.1/§11.1 第 3 步）', () => {
