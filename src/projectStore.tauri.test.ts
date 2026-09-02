@@ -319,24 +319,65 @@ describe('tauriList：空库播种与示例升级', () => {
     expect(list[0].endingCount).toBe(2)
   })
 
-  it('示例项目仍是旧格式但已被编辑：迁移回写用户内容，不用新种子覆盖', async () => {
-    handlers.set('list_projects', () => [meta('sample-wu-ye-chu-zu-che'), meta('user-p1')])
-    handlers.set('load_project', (args) => {
-      const { id } = args as { id: string }
-      if (id !== 'sample-wu-ye-chu-zu-che') throw new Error('不应读取用户项目')
-      // 用户编辑过的示例（已改名，仍是 v0 旧扁平格式）
-      return { ...legacyFile(), project: { ...legacyFile().project, id, name: '我的修改版' } }
+  it('示例迁移/修复回写后重列：首页拿到写后的名称与排序，不滞留写前快照', async () => {
+    let listCalls = 0
+    handlers.set('list_projects', () => {
+      listCalls += 1
+      if (listCalls === 1) return [{ ...meta('sample-wu-ye-chu-zu-che'), name: '旧名' }]
+      return [{ ...meta('sample-wu-ye-chu-zu-che'), name: '新名' }]
+    })
+    let loadCalls = 0
+    handlers.set('load_project', () => {
+      loadCalls += 1
+      if (loadCalls === 1) {
+        // 脏 v1（空白边 id）：触发修复回写
+        return {
+          ...modernFile(),
+          project: { ...modernFile().project, id: 'sample-wu-ye-chu-zu-che', name: '新名' },
+          graph: { ...modernFile().graph, edges: [{ id: '   ', source: 's1', target: 's1', data: { kind: 'sequence' } }] },
+        }
+      }
+      // 回写后的净本：重列的升级检查不再触发写
+      return {
+        ...modernFile(),
+        project: { ...modernFile().project, id: 'sample-wu-ye-chu-zu-che', name: '新名' },
+      }
     })
     handlers.set('save_project', () => undefined)
     const { projectStore } = await load()
-    await projectStore.list()
-    expect(calls.filter((c) => c.cmd === 'load_project')).toHaveLength(1)
+    const list = await projectStore.list()
+    // 红：返回写前快照——首页滞留旧名直到下次刷新
+    expect(list[0].name).toBe('新名')
+    expect(calls.filter((c) => c.cmd === 'save_project')).toHaveLength(1)
+  })
+
+  it('示例项目仍是旧格式但已被编辑：迁移回写用户内容，不用新种子覆盖', async () => {
+    handlers.set('list_projects', () => [meta('sample-wu-ye-chu-zu-che'), meta('user-p1')])
+    let loadCalls = 0
+    handlers.set('load_project', (args) => {
+      const { id } = args as { id: string }
+      if (id !== 'sample-wu-ye-chu-zu-che') throw new Error('不应读取用户项目')
+      loadCalls += 1
+      if (loadCalls === 1) {
+        // 用户编辑过的示例（已改名，仍是 v0 旧扁平格式）
+        return { ...legacyFile(), project: { ...legacyFile().project, id, name: '我的修改版' } }
+      }
+      // 回写后的净本（重列的升级检查读到迁移产物，不再触发写）
+      return { ...modernFile(), project: { ...modernFile().project, id, name: '我的修改版' } }
+    })
+    handlers.set('save_project', () => undefined)
+    const { projectStore } = await load()
+    const list = await projectStore.list()
+    // 迁移回写触发重列：示例被读取两次（初检 + 重列复检）、只写一次
+    expect(calls.filter((c) => c.cmd === 'load_project')).toHaveLength(2)
     const saves = calls.filter((c) => c.cmd === 'save_project')
     expect(saves).toHaveLength(1)
     // 写回的是迁移后的用户内容，不是硬编码种子的「午夜出租车」
     const saved = (saves[0].args as { doc: { schemaVersion: number; project: { name: string } } }).doc
     expect(saved.schemaVersion).toBe(1)
     expect(saved.project.name).toBe('我的修改版')
+    // 重列返回的首页列表就绪（不再抛未处理拒绝）
+    expect(list.map((x) => x.id)).toContain('sample-wu-ye-chu-zu-che')
   })
 })
 

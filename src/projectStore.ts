@@ -139,13 +139,20 @@ async function tauriList(): Promise<ProjectSummary[]> {
   // 写回**迁移/修复后的用户内容**——示例可能已被编辑（改名/加场景/资产），
   // 用硬编码种子覆盖会在升级后首次打开首页时静默摧毁这些编辑；
   // 演示内容刷新只经由空库播种路径发生
+  let repairedAny = false
   for (const meta of metas) {
     if (!meta.id.startsWith('sample-')) continue
     if (!seedProjects().some((s) => s.meta.id === meta.id)) continue
     const file = await invoke<unknown>('load_project', { id: meta.id })
     const { content, migrated, repaired } = parseProject(file, { projectId: meta.id })
-    if (migrated || repaired) await tauriSave(meta.id, content)
+    if (migrated || repaired) {
+      await tauriSave(meta.id, content)
+      repairedAny = true
+    }
   }
+  // 回写改写了名称/统计与盖戳 updatedAt：metas 是写前快照，直接返回会让
+  // 首页滞留旧名旧序——重列一次（回写后的净本不再触发写，递归有界）
+  if (repairedAny) return tauriList()
   return metas.map(toSummary)
 }
 

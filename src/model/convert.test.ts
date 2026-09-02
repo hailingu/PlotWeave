@@ -1515,6 +1515,21 @@ describe('归一化：assets.byId 完整 AssetRef 形状校验（§11.3，Rust �
     expect(again.project.createdAt).toBe(round.content.createdAt)
   })
 
+  it('空键重发改写后仍空白且无映射的场景引用：移除并警告——不留虚构的"已删除引用"原样落盘', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
+      graph: { nodes: Array<{ data: { spec: Record<string, unknown> } }> }
+    }
+    // 空白 id 在 §8.1 共同值域之外；无空键实体可重发改写时不可恢复
+    doc.graph.nodes[0].data.spec.characterIds = ['ch-1', '   ']
+    doc.graph.nodes[0].data.spec.locationId = '   '
+    const round = parseProject(doc)
+    const scene = round.content.nodes[0].data as { characterIds: string[]; locationId?: string }
+    expect(scene.characterIds).toEqual(['ch-1'])
+    expect(scene.locationId).toBeUndefined()
+    expect(round.warnings.some((w) => w.includes('characterIds'))).toBe(true)
+    expect(round.warnings.some((w) => w.includes('locationId'))).toBe(true)
+  })
+
   it('scene 的 locationId 非字符串：加载边界剥离并警告——不得直达设置面板 select 并原样落盘', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
       graph: { nodes: Array<{ data: { spec: Record<string, unknown> } }> }

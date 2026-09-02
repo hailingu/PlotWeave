@@ -460,7 +460,9 @@ function reKeyUnsafeCharacterKeys(
   return remap
 }
 
-/** 场景节点的空键引用改写：characterIds 数组项与 locationId。 */
+/** 场景节点的空键引用改写：characterIds 数组项与 locationId。空键重发
+ * 映射改写后仍空白且无映射的引用（§8.1 共同值域之外、不可恢复）直接
+ * 移除——原样进会话只会显示成虚构的「已删除引用」并被原样落盘。 */
 function rewriteSceneBlankRefs(
   nid: string,
   spec: Record<string, unknown>,
@@ -468,12 +470,21 @@ function rewriteSceneBlankRefs(
   warnings: string[],
 ): void {
   if (Array.isArray(spec.characterIds)) {
-    spec.characterIds = (spec.characterIds as unknown[]).map((cid, i) =>
+    const remapped = (spec.characterIds as unknown[]).map((cid, i) =>
       rewriteRef(remaps.characters, cid, `节点 ${nid} 的 characterIds[${i}]`, warnings),
     )
+    const kept = remapped.filter((cid) => !(typeof cid === 'string' && !cid.trim()))
+    if (kept.length !== remapped.length) {
+      warnings.push(`节点 ${nid} 的 characterIds 含无映射可改写的空白引用，已移除`)
+    }
+    spec.characterIds = kept
   }
   if ('locationId' in spec) {
     spec.locationId = rewriteRef(remaps.locations, spec.locationId, `节点 ${nid} 的 locationId`, warnings)
+    if (typeof spec.locationId === 'string' && !spec.locationId.trim()) {
+      warnings.push(`节点 ${nid} 的 locationId 为无映射可改写的空白引用，已移除`)
+      delete spec.locationId
+    }
   }
 }
 
