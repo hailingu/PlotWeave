@@ -54,12 +54,15 @@ export function normalizeEpisodeTitles(
 
 /**
  * 旧 schema → 新 schema 迁移（保用户数据）：
- * - scene.characters（头像对象）→ characterIds；scene.location（字符串）→ locationId；
+ * - scene.characters（头像对象）与已有合法 characterIds 合并去重为
+ *   characterIds；scene.location（字符串）→ locationId；
  *   dialogue 台词 speaker（对象）→ 实体 id。
  * - 列表项稳定 id 回填（S6479）：dialogue.lines / branch.options / shot.refs；
  *   branch 选项字符串形态升级为 {id, label} 对象。
- * - 缺失的设定集实体就地补建：角色按「名字首字 + 渐变」匹配，地点按名字匹配；
- *   匹配不到建新实体（角色名回退头像单字，用户可改名）。
+ * - 缺失的设定集实体就地补建：角色按「同名同 gradient → 同名 → 单字标签
+ *   的唯一兼容前缀」确定性匹配（§11 兼容子步骤：比较值取 trim 后 label，
+ *   歧义/零命中即新建本域未占用 id 的独立实体），地点按名字匹配；
+ *   匹配不到建新实体（名称取规范化 label，用户可改名）。
  * - 键控身份的数组语义保全：设定集数组与 branch 选项的重复/空白 id 保首见、
  *   后续就地重发——下游 Record 键控只留末见、下标句柄改写假定选项 id 唯一，
  *   不在此修复会丢实体或让连线静默滑向首见项。
@@ -136,18 +139,44 @@ export function migrateProjectDocument(doc: ProjectContent): {
     })
   }
 
-  /** 头像按「名字首字 + 渐变」解析到既有实体（§8.1）。JSON 边界擦除类型：
-   * 设定数组成员的 name 可能非字符串——谓词先验类型再调用 startsWith，
-   * 坏实体留给 v1 归一化按 §11.3 隔离，绝不在迁移期崩溃。 */
-  const ensureCharacter = (label: string, gradient?: string): string => {
-    const hit =
-      settings.characters.find(
-        (c) => c.gradient === gradient && typeof c.name === 'string' && c.name.startsWith(label),
-      ) ??
-      settings.characters.find((c) => typeof c.name === 'string' && c.name.startsWith(label))
-    if (hit) return hit.id
+  /** 头像按「同名同 gradient → 同名 → 单字标签的唯一兼容前缀」确定性解析到
+   * 既有实体（§11 v0 兼容子步骤）：比较值与新实体名均取 trim 后的 label
+   * （空白差异不制造重复实体）；候选集只收形状合法（name 非空白字符串、
+   * gradient 字符串）的实体——异型实体留给 v1 归一化隔离，不因兼容匹配
+   * 读取其字段而中断迁移。单字标签在兼容 gradient 的既有名称中前缀命中
+   * 不止一个即歧义：错绑首见项会把出场/台词静默改接到无关角色，歧义与
+   * 零命中共用兜底——新建本域未占用 id 的 Character。JSON 边界擦除类型：
+   * 谓词先验类型再比较，绝不在迁移期崩溃。 */
+  const ensureCharacter = (rawLabel: string, gradient?: string): string => {
+    const label = rawLabel.trim()
+    const candidates = settings.characters.filter(
+      (c) =>
+        typeof c.name === 'string' &&
+        c.name.trim() !== '' &&
+        typeof c.gradient === 'string' &&
+        typeof c.id === 'string' &&
+        c.id.trim() !== '',
+    )
+    const nameOf = (c: (typeof candidates)[number]) => (c.name as string).trim()
+    if (gradient !== undefined) {
+      const exactWithGradient = candidates.find(
+        (c) => c.gradient === gradient && nameOf(c) === label,
+      )
+      if (exactWithGradient) return exactWithGradient.id
+    }
+    const exact = candidates.find((c) => nameOf(c) === label)
+    if (exact) return exact.id
+    if ([...label].length === 1) {
+      const prefixHits = candidates.filter(
+        (c) => (gradient === undefined || c.gradient === gradient) && nameOf(c).startsWith(label),
+      )
+      if (prefixHits.length === 1) return prefixHits[0].id
+    }
+    // 新建 id 避开本域已有键与本轮已分配 id（§11 兼容子步骤）
+    let fresh = newEntityId('ch')
+    while (settings.characters.some((c) => c.id === fresh)) fresh = newEntityId('ch')
     const entity = {
-      id: newEntityId('ch'),
+      id: fresh,
       name: label,
       gradient: gradient ?? 'linear-gradient(135deg,#8e8e93,#636366)',
     }
@@ -165,24 +194,32 @@ export function migrateProjectDocument(doc: ProjectContent): {
     return entity.id
   }
 
-  /** 场景节点的 v0 字段迁移（迁移链 ④ 内核）：头像列 → characterIds；
-   * 结构化 locationId 有效时胜过过时的字符串镜像（合法 id 优先、废弃镜像
-   * 删除——字符串可能指向已被改名的旧地点）；引用随空白 id 重发改写（⑤）。 */
+  /** 场景节点的 v0 字段迁移（迁移链 ④ 内核）：头像列解析为角色 id 后与已有
+   * 合法 characterIds（仅字符串成员，随空白 id 重发改写（⑤））按原顺序合并
+   * 去重（§11 v0 兼容子步骤：两来源并存不得互斥覆盖——空头像列也不清空
+   * 结构化引用），成功转换后才删除 characters；只有两种来源都不存在时才
+   * 补空数组。结构化 locationId 有效时胜过过时的字符串镜像（合法 id 优先、
+   * 废弃镜像删除——字符串可能指向已被改名的旧地点）。 */
   const migrateSceneNode = (node: CanvasNode): CanvasNode => {
     const d = { ...(node.data as Record<string, unknown>) }
     const avatars = d.characters
+    const existingIds = Array.isArray(d.characterIds)
+      ? (d.characterIds as unknown[])
+          .filter((c): c is string => typeof c === 'string')
+          .map((c) => characterRemap.get(c) ?? c)
+      : null
     let characterIds: string[]
     if (Array.isArray(avatars)) {
-      characterIds = (avatars as { label: string; gradient?: string }[]).map((av) =>
+      const avatarIds = (avatars as { label: string; gradient?: string }[]).map((av) =>
         ensureCharacter(av.label, av.gradient),
+      )
+      characterIds = [...avatarIds, ...(existingIds ?? [])].filter(
+        (id, i, all) => all.indexOf(id) === i,
       )
       delete d.characters
       migrated = true
-    } else if (Array.isArray(d.characterIds)) {
-      // 引用随空白 id 重发改写（⑤）：保持指向重发后的实体而非悬空
-      characterIds = (d.characterIds as unknown[]).map((c) =>
-        typeof c === 'string' && characterRemap.has(c) ? characterRemap.get(c) : c,
-      ) as string[]
+    } else if (existingIds !== null) {
+      characterIds = existingIds
     } else {
       characterIds = []
       migrated = true

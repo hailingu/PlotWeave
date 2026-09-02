@@ -708,41 +708,59 @@ fn sync_directory(dir: &std::path::Path) -> Result<(), String> {
     Ok(())
 }
 
-/// 原子写控制文件（§10.2）：同目录随机名临时文件排他创建（避免预置 `.tmp`
-/// 符号链接截获）→ 写入 + flush/fsync → rename 原子覆盖 → 父目录 fsync
-/// （持久性屏障，打开/同步失败向上传播、不粉饰成功）；失败尽力清理临时文件。
-/// 现存目标为符号链接或非普通文件时拒绝，不跟随。
-fn atomic_write(dir: &std::path::Path, path: &std::path::Path, text: &str) -> Result<(), String> {
+/// 原子写控制文件（§10.2）：全程相对已验证父目录的打开句柄执行（cap-std
+/// openat 语义）——目标归类与 rename 前复核（现存目标为符号链接或非普通
+/// 文件即拒绝，不跟随）、随机同目录名临时文件以 O_CREAT|O_EXCL 排他创建
+/// （预置 `.tmp` 符号链接无法截获写入）、写入 + flush/fsync、句柄相对
+/// rename 原子覆盖（cap-std 在 Windows 上以替换语义实现 rename，std::fs::
+/// rename 在该平台不替换已存在目标，已建项目的每次保存都会失败）→ 父目录
+/// fsync（持久性屏障，打开/同步失败向上传播、不粉饰成功）；失败尽力清理
+/// 临时文件。file_name 须为单段文件名（不含路径分量）：归类、创建与
+/// rename 之外的越界形态在此拒绝，不得相对句柄逃出 projects/。
+fn atomic_write(dir: &std::path::Path, file_name: &str, text: &str) -> Result<(), String> {
     use std::io::Write;
-    if let Ok(md) = fs::symlink_metadata(path) {
-        if md.file_type().is_symlink() {
-            return Err("拒绝符号链接形式的项目文件".into());
-        }
-        if !md.file_type().is_file() {
-            return Err("项目路径不是普通文件".into());
-        }
+    if std::path::Path::new(file_name).components().count() != 1 {
+        return Err(format!("项目文件名含路径分量，拒绝：{file_name}"));
     }
-    let file_name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .ok_or("项目路径不含有效文件名")?;
-    let tmp = dir.join(format!(".{file_name}.{}.tmp", new_id()));
+    // 句柄锚定（§10.2 信任链）：归类与写入、rename 之间路径被并发进程替换
+    // （含换成符号链接）时，实际 open/create/rename 仍相对本句柄解析，
+    // 不退回未绑定的字符串路径
+    let root = CapDir::open_ambient_dir(dir, ambient_authority())
+        .map_err(|e| format!("打开项目根目录失败：{e}"))?;
+    let check_target = || -> Result<(), String> {
+        if let Ok(md) = root.symlink_metadata(file_name) {
+            if md.file_type().is_symlink() {
+                return Err("拒绝符号链接形式的项目文件".into());
+            }
+            if !md.file_type().is_file() {
+                return Err("项目路径不是普通文件".into());
+            }
+        }
+        Ok(())
+    };
+    check_target()?;
+    let tmp_name = format!(".{file_name}.{}.tmp", new_id());
     let result = (|| -> Result<(), String> {
-        let mut f = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&tmp)
+        let mut f = root
+            .open_with(
+                &tmp_name,
+                cap_std::fs::OpenOptions::new().write(true).create_new(true),
+            )
             .map_err(|e| format!("创建临时文件失败：{e}"))?;
         f.write_all(text.as_bytes())
             .map_err(|e| format!("写入项目失败：{e}"))?;
         f.sync_all().map_err(|e| format!("同步临时文件失败：{e}"))?;
         drop(f);
-        fs::rename(&tmp, path).map_err(|e| format!("落盘项目失败：{e}"))?;
+        // rename 前复核现存目标（§10.2）：写临时文件期间被换上的符号链接
+        // 或异型条目在此拒绝，不被 rename 覆盖
+        check_target()?;
+        root.rename(&tmp_name, &root, file_name)
+            .map_err(|e| format!("落盘项目失败：{e}"))?;
         sync_directory(dir)?;
         Ok(())
     })();
     if result.is_err() {
-        let _ = fs::remove_file(&tmp);
+        let _ = root.remove_file(&tmp_name);
     }
     result
 }
@@ -785,11 +803,6 @@ fn projects_dir(app: &AppHandle) -> Result<PathBuf, String> {
         return Err("项目目录逃逸应用数据根".into());
     }
     Ok(dir)
-}
-
-fn project_path(app: &AppHandle, id: &str) -> Result<PathBuf, String> {
-    validate_id(id)?;
-    Ok(projects_dir(app)?.join(format!("{id}.json")))
 }
 
 /// 从画布 graph 派生统计：场数 = scene 节点数；结局数 = 无剧情流出边的
@@ -1112,11 +1125,13 @@ fn new_project_file(id: &str, name: String, now: String) -> ProjectFile {
 pub fn create_project(app: AppHandle, name: String) -> Result<ProjectMeta, String> {
     let name = sanitize_name(&name)?;
     let id = new_id();
+    // 边界校验先于任何文件名拼接（与 persist_project 同款）：id 虽为本地
+    // 生成，仍以同一口径复核后才参与路径构造
+    validate_id(&id)?;
     let file = new_project_file(&id, name, now_iso());
-    let path = project_path(&app, &id)?;
-    let text = serde_json::to_string_pretty(&file).map_err(|e| format!("序列化失败：{e}"))?;
     let dir = projects_dir(&app)?;
-    atomic_write(&dir, &path, &text)?;
+    let text = serde_json::to_string_pretty(&file).map_err(|e| format!("序列化失败：{e}"))?;
+    atomic_write(&dir, &format!("{id}.json"), &text)?;
     Ok(read_meta(&id, &file))
 }
 
@@ -1191,9 +1206,8 @@ fn persist_project(
     // 句柄持有至函数结束——复验过的实体覆盖整个保存决策
     let _verified_assets = verify_save_asset_files(dir, id, &doc.assets)?;
     let file = prepare_save(id, &doc)?;
-    let path = dir.join(format!("{id}.json"));
     let text = serde_json::to_string_pretty(&file).map_err(|e| format!("序列化失败：{e}"))?;
-    atomic_write(dir, &path, &text)?;
+    atomic_write(dir, &format!("{id}.json"), &text)?;
     if let Err(e) = verify_save_asset_files(dir, id, &doc.assets) {
         eprintln!("[store] 保存后资产复验失败，路径可能在保存期间被替换：{e}");
         return Err(format!(
@@ -2201,6 +2215,57 @@ mod tests {
         assert!(
             fs::symlink_metadata(projects.parent().expect("临时根").join("evil.json")).is_err(),
             "越界 id 不应写出 projects/"
+        );
+        cleanup_temp(&projects);
+    }
+
+    #[test]
+    fn persist_project_replaces_existing_file_and_leaves_no_temp() {
+        let projects = temp_projects_dir();
+        let first = new_project_file("p-1", "一版".into(), now_iso());
+        persist_project(&projects, "p-1", first).expect("首存");
+        let second = new_project_file("p-1", "二版".into(), now_iso());
+        persist_project(&projects, "p-1", second).expect("覆盖保存（rename 替换已存在目标）");
+        let loaded = load_project_file(&projects, "p-1").expect("重读");
+        assert_eq!(loaded.project.name, "二版");
+        let leftovers: Vec<String> = fs::read_dir(&projects)
+            .expect("扫描项目目录")
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "遗留临时文件：{leftovers:?}");
+        cleanup_temp(&projects);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn persist_project_rejects_symlinked_target_without_following() {
+        let projects = temp_projects_dir();
+        let outside = projects.parent().expect("临时根").join("evil-target.json");
+        fs::write(&outside, b"{}").expect("写根外文件");
+        std::os::unix::fs::symlink(&outside, projects.join("p-1.json")).expect("建符号链接");
+        let doc = new_project_file("p-1", "剧".into(), now_iso());
+        let err = persist_project(&projects, "p-1", doc).unwrap_err();
+        assert!(err.contains("符号链接"), "意外诊断：{err}");
+        // 链接未被跟随或覆盖：根外文件原样保留，链接本身仍在
+        assert_eq!(fs::read(&outside).expect("读根外文件"), b"{}".to_vec());
+        assert!(fs::symlink_metadata(projects.join("p-1.json"))
+            .expect("链接仍在")
+            .file_type()
+            .is_symlink());
+        cleanup_temp(&projects);
+    }
+
+    #[test]
+    fn atomic_write_rejects_path_like_file_name() {
+        let projects = temp_projects_dir();
+        // 句柄相对写入的最后边界：嵌套形态的文件名不得相对句柄逃出 projects/
+        let err = atomic_write(&projects, "../evil.json", "{}").unwrap_err();
+        assert!(err.contains("路径分量"), "意外诊断：{err}");
+        assert!(
+            fs::symlink_metadata(projects.parent().expect("临时根").join("evil.json")).is_err(),
+            "含路径分量的文件名不应写出 projects/"
         );
         cleanup_temp(&projects);
     }

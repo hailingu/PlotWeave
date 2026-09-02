@@ -106,6 +106,82 @@ describe('migrateProjectDocument（旧 schema → 引用 id 化）', () => {
   })
 })
 
+describe('migrateProjectDocument · v0 头像兼容子步骤（§11：合并去重与确定性匹配）', () => {
+  const sceneWith = (extra: Record<string, unknown>) =>
+    node({
+      id: 's9',
+      type: 'scene',
+      position: { x: 0, y: 0 },
+      selected: false,
+      data: { name: '过渡场', sceneNo: 9, interior: true, time: '🌙 夜', synopsis: '', ...extra },
+    } as unknown as CanvasNode)
+  const run = (
+    scene: CanvasNode,
+    characters: ProjectContent['settings']['characters'],
+  ) => migrateProjectDocument({ name: 'x', nodes: [scene], edges: [], settings: { characters, locations: [] } })
+  const idsOf = (doc: ReturnType<typeof migrateProjectDocument>['doc']) =>
+    (doc.nodes[0].data as { characterIds: string[] }).characterIds
+
+  it('头像解析 id 与已有合法 characterIds 按原顺序合并去重，不整体覆盖', () => {
+    const existing = { id: 'ch-keep', name: '陈总', gradient: 'g-chen' }
+    const { doc } = run(
+      sceneWith({
+        characters: [{ label: '林', gradient: 'g-lin' }],
+        characterIds: ['ch-keep', 'ch-keep'],
+      }),
+      [existing],
+    )
+    const scene = doc.nodes[0].data as { characterIds: string[]; characters?: unknown }
+    expect(scene.characters).toBeUndefined()
+    // 头像建出的新 id 在前，既有结构化引用保留，重复 ch-keep 去重
+    expect(scene.characterIds).toHaveLength(2)
+    expect(scene.characterIds[1]).toBe('ch-keep')
+    expect(doc.settings.characters.some((c) => c.id === scene.characterIds[0])).toBe(true)
+  })
+
+  it('空头像数组不清空已有 characterIds（可恢复来源为零时保留结构化引用）', () => {
+    const { doc } = run(sceneWith({ characters: [], characterIds: ['ch-1'] }), [
+      { id: 'ch-1', name: '林晚', gradient: 'g' },
+    ])
+    expect(idsOf(doc)).toEqual(['ch-1'])
+  })
+
+  it('同名优先复用（gradient 不一致仍按完整名复用）；多字标签不做前缀匹配', () => {
+    const { doc } = run(sceneWith({ characters: [{ label: '张三', gradient: 'g-y' }] }), [
+      { id: 'ch-a', name: '张三', gradient: 'g-x' },
+    ])
+    expect(idsOf(doc)).toEqual(['ch-a'])
+    expect(doc.settings.characters).toHaveLength(1)
+
+    const { doc: doc2 } = run(sceneWith({ characters: [{ label: '张三', gradient: 'g-a' }] }), [
+      { id: 'ch-b', name: '张三丰', gradient: 'g-a' },
+    ])
+    expect(idsOf(doc2)).not.toContain('ch-b')
+    expect(doc2.settings.characters.map((c) => c.name)).toEqual(['张三丰', '张三'])
+  })
+
+  it('单字标签前缀歧义（张三/张四）→ 新建独立角色，不错绑首见项', () => {
+    const { doc } = run(sceneWith({ characters: [{ label: '张', gradient: 'g-a' }] }), [
+      { id: 'ch-a', name: '张三', gradient: 'g-a' },
+      { id: 'ch-b', name: '张四', gradient: 'g-a' },
+    ])
+    const ids = idsOf(doc)
+    expect(ids).toHaveLength(1)
+    expect(ids[0]).not.toBe('ch-a')
+    expect(ids[0]).not.toBe('ch-b')
+    expect(doc.settings.characters.map((c) => c.name)).toEqual(['张三', '张四', '张'])
+    expect(doc.settings.characters[2].id).toBe(ids[0])
+  })
+
+  it('label 与既有名称按 trim 规范化比较：空白差异不制造重复实体', () => {
+    const { doc } = run(sceneWith({ characters: [{ label: ' 林晚 ' }] }), [
+      { id: 'ch-lin', name: '林晚', gradient: 'g' },
+    ])
+    expect(idsOf(doc)).toEqual(['ch-lin'])
+    expect(doc.settings.characters).toHaveLength(1)
+  })
+})
+
 describe('migrateProjectDocument · 列表项稳定 id 回填（S6479）', () => {
   it('分支字符串选项升级为 {id,label}；缺 id 对象只补 id；已有 id 原样保留', () => {
     const branch = node({

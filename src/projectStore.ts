@@ -267,15 +267,22 @@ function enqueueSave(id: string, doc: ProjectContent): Promise<void> {
 }
 
 /** 删除排进同项目保存链：在途保存落定后才发出删除（迟到的保存完成不得
- * 重建 JSON 复活项目）；并先取消全部重试登记（登记中的重试同样会复活）；
- * 墓碑先行，删除排队期间及之后的保存一律吸收。删除失败（项目仍在磁盘）
- * 时回吐吸收的最新文档重新排队保存——吸收的冲刷已被上游视为成功，不回吐
- * 则最新编辑既没落盘也无重试登记；删除成功则吸收的文档随项目一并丢弃。 */
+ * 重建 JSON 复活项目）；并先取消全部重试登记（登记中的重试同样会复活）
+ * ——取消的是定时器与登记，登记中的文档留存待删除结果处置（编辑器可能
+ * 已卸载，最新编辑只存于此）；墓碑先行，删除排队期间及之后的保存一律
+ * 吸收。删除失败（项目仍在磁盘）时按入队序回吐：先墓碑前失败保存留存
+ * 的重试文档、再墓碑期间吸收的最新文档重新排队保存——吸收的冲刷已被
+ * 上游视为成功，不回吐则最新编辑既没落盘也无重试登记；删除成功则留存
+ * 与吸收的文档随项目一并丢弃。 */
 function enqueueDelete(id: string): Promise<void> {
   deletingIds.add(id)
+  let retainedRetryDoc = pendingRetryDocs.get(id)
   clearSaveRetry(id)
   const run = (saveChains.get(id) ?? Promise.resolve()).catch(() => undefined)
   const next = run.then(async () => {
+    // 在途保存（墓碑前排队、未被吸收）失败后新登记的重试文档同款留存：
+    // 它在下方第二处清除时被摘下，删除失败即无回吐来源
+    retainedRetryDoc = pendingRetryDocs.get(id) ?? retainedRetryDoc
     clearSaveRetry(id)
     const { invoke } = await import('@tauri-apps/api/core')
     await invoke('delete_project', { id })
@@ -290,8 +297,10 @@ function enqueueDelete(id: string): Promise<void> {
       },
       () => {
         // 墓碑已解除（finally 先行）：回吐的保存走正常排队，不再被吸收
+        const retained = retainedRetryDoc
         const absorbed = absorbedSaveDocs.get(id)
         absorbedSaveDocs.delete(id)
+        if (retained !== undefined) void enqueueSave(id, retained).catch(() => undefined)
         if (absorbed !== undefined) void enqueueSave(id, absorbed).catch(() => undefined)
       },
     )

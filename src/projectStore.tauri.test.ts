@@ -311,8 +311,15 @@ describe('tauriCreate / delete / duplicate', () => {
     handlers.set('load_project', () => modernFile())
     handlers.set('create_project', () => meta('copy-y'))
     handlers.set('copy_project_assets', () => undefined)
+    // 只让两次 duplicate 主流程的保存失败；删除失败后回吐的重存放行——
+    // 回吐再失败会留下跨用例的 5s 重试定时器，把保存调用注入后续用例
+    let saveCalls = 0
     handlers.set('save_project', () => {
-      throw new Error('资产 a-1：资产文件不存在：assets/x.png')
+      saveCalls += 1
+      if (saveCalls === 1 || saveCalls === 3) {
+        throw new Error('资产 a-1：资产文件不存在：assets/x.png')
+      }
+      return undefined
     })
     handlers.set('delete_project', () => {
       throw new Error('目录只读，删不掉')
@@ -321,6 +328,10 @@ describe('tauriCreate / delete / duplicate', () => {
     try {
       const { projectStore } = await load()
       await expect(projectStore.duplicate('p1')).rejects.toThrow(/copy-y/)
+      // 第一次 duplicate 的回吐重存落定后再开第二轮：与其 import 竞态
+      await vi.waitFor(() => {
+        expect(calls.filter((c) => c.cmd === 'save_project')).toHaveLength(2)
+      })
       await expect(projectStore.duplicate('p1')).rejects.toThrow(/清理失败/)
     } finally {
       errSpy.mockRestore()
@@ -533,6 +544,64 @@ describe('持久化所有者的代次重排与删除墓碑', () => {
         .filter((c) => c.cmd === 'save_project')
         .map((c) => (c.args as { doc: { project: { name: string } } }).doc.project.name)
       expect(names).toEqual(['新迟到']) // 只回吐最新一份
+    })
+  })
+
+  it('删除失败回吐删除前已登记重试的文档：墓碑清除不丢最新编辑', async () => {
+    let failed = false
+    handlers.set('load_project', () => modernFile())
+    handlers.set('save_project', () => {
+      if (!failed) {
+        failed = true
+        throw new Error('磁盘满')
+      }
+      return undefined
+    })
+    handlers.set('delete_project', () => {
+      throw new Error('占用')
+    })
+    const { projectStore } = await load()
+    await expect(projectStore.save('p1', docOf('Z'))).rejects.toThrow('磁盘满')
+    await expect(projectStore.delete('p1')).rejects.toThrow('占用')
+    // 红：重试登记被删除开场的 clearSaveRetry 摘除——项目仍在磁盘，
+    // 最新编辑（编辑器已卸载时只存于登记）既没落盘也无重试
+    await vi.waitFor(() => {
+      const names = calls
+        .filter((c) => c.cmd === 'save_project')
+        .map((c) => (c.args as { doc: { project: { name: string } } }).doc.project.name)
+      expect(names).toEqual(['Z', 'Z'])
+    })
+  })
+
+  it('删除失败回吐墓碑前在途保存失败登记的重试文档（评审场景）', async () => {
+    let rejectA: ((err: Error) => void) | null = null
+    handlers.set('load_project', () => modernFile())
+    handlers.set('save_project', () => {
+      if (rejectA === null) {
+        // 保存 A 在删除排队期间落定失败：登记重试后即被删除链二次清除
+        return new Promise<void>((_resolve, reject) => {
+          rejectA = reject
+        })
+      }
+      return Promise.resolve() // 回吐重存成功
+    })
+    handlers.set('delete_project', () => {
+      throw new Error('占用')
+    })
+    const { projectStore } = await load()
+    const savingA = projectStore.save('p1', docOf('A'))
+    const deleting = projectStore.delete('p1')
+    await vi.waitFor(() => expect(rejectA).not.toBeNull())
+    ;(rejectA as unknown as (e: Error) => void)(new Error('磁盘满'))
+    await expect(savingA).rejects.toThrow('磁盘满')
+    await expect(deleting).rejects.toThrow('占用')
+    // 红：A 排队于墓碑之前未被吸收，二次 clearSaveRetry 丢弃登记后删除又失败
+    // ——项目仍在磁盘，最新编辑永远无人重试
+    await vi.waitFor(() => {
+      const names = calls
+        .filter((c) => c.cmd === 'save_project')
+        .map((c) => (c.args as { doc: { project: { name: string } } }).doc.project.name)
+      expect(names).toEqual(['A', 'A'])
     })
   })
 })
