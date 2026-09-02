@@ -135,15 +135,16 @@ async function tauriList(): Promise<ProjectSummary[]> {
     }
     return tauriList()
   }
-  // 示例项目的旧格式（schemaVersion 0）迁移：写回**迁移后的用户内容**——
-  // 示例可能已被编辑（改名/加场景/资产），用硬编码种子覆盖会在升级后首次
-  // 打开首页时静默摧毁这些编辑；演示内容刷新只经由空库播种路径发生
+  // 示例项目的旧格式（schemaVersion 0）迁移与 v1 修复型归一化同样回写：
+  // 写回**迁移/修复后的用户内容**——示例可能已被编辑（改名/加场景/资产），
+  // 用硬编码种子覆盖会在升级后首次打开首页时静默摧毁这些编辑；
+  // 演示内容刷新只经由空库播种路径发生
   for (const meta of metas) {
     if (!meta.id.startsWith('sample-')) continue
     if (!seedProjects().some((s) => s.meta.id === meta.id)) continue
     const file = await invoke<unknown>('load_project', { id: meta.id })
-    const { content, migrated } = parseProject(file, { projectId: meta.id })
-    if (migrated) await tauriSave(meta.id, content)
+    const { content, migrated, repaired } = parseProject(file, { projectId: meta.id })
+    if (migrated || repaired) await tauriSave(meta.id, content)
   }
   return metas.map(toSummary)
 }
@@ -170,17 +171,20 @@ async function tauriLoad(id: string): Promise<ProjectContent> {
   })
   // §11 归一化管线：迁移 + 孤儿边隔离 + 悬空引用标记；
   // projectId 为路径给定的受信 id，供 §11.1 元数据修复覆盖 project.id
-  const { content, migrated, warnings } = parseProject(file, { projectId: id, invalidAssetKeys })
+  const { content, migrated, repaired, warnings } = parseProject(file, { projectId: id, invalidAssetKeys })
   for (const w of warnings) console.warn(`[projectStore] ${w}`)
-  // 迁移发生则写回磁盘（下次打开不再迁移）。回写完成前不返回：load 后
-  // 紧随的保存（如首页改名）不得与慢回写竞态——先返回再让旧内容后完成
-  // 落盘会反向覆盖新保存。失败只诊断不阻断（显式 catch，不留未处理拒绝）：
-  // 内存已交付迁移结果，磁盘保持旧格式，下次打开会重新迁移
-  if (migrated) {
+  // 迁移或修复发生则写回磁盘（下次打开不再迁移/重复修复）。v1 的可修复
+  // 脏数据（空白/重复 id 等）只修在内存时，用户只开不编辑（防抖保存跳过
+  // 首帧）会让脏文件长留磁盘，每次打开都重新生成不同的"稳定" id——修复
+  // 必须落定。回写完成前不返回：load 后紧随的保存（如首页改名）不得与慢
+  // 回写竞态——先返回再让旧内容后完成落盘会反向覆盖新保存。失败只诊断
+  // 不阻断（显式 catch，不留未处理拒绝）：内存已交付修复结果，磁盘保持
+  // 旧内容，下次打开会重新修复
+  if (migrated || repaired) {
     try {
       await tauriSave(id, content)
     } catch (err) {
-      console.error('[projectStore] 迁移回写失败，磁盘仍为旧格式（下次打开将重新迁移）', err)
+      console.error('[projectStore] 迁移/修复回写失败，磁盘仍为旧内容（下次打开将重新修复）', err)
     }
   }
   return content

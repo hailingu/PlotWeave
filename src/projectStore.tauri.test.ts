@@ -60,7 +60,7 @@ const modernFile = () => ({
     edges: [],
     viewport: { x: 0, y: 0, zoom: 1 },
   },
-  settings: { characters: {}, locations: {}, props: {} },
+  settings: { characters: {}, locations: {}, props: {}, documents: {} },
   episodeTitles: {},
   assets: { byId: {} },
 })
@@ -96,11 +96,33 @@ describe('tauriLoad：归一化与迁移回写', () => {
       ...modernFile(),
       episodeTitles: { 1: ' 开局 ', 2: '   ', x: 'y', 0: '零', '-1': '负', '3.5': '小数', 4: 7 },
     }))
+    handlers.set('save_project', () => undefined)
     const { projectStore } = await load()
     const doc = await projectStore.load('p1')
     expect(doc.episodeTitles).toEqual({ 1: '开局' })
-    // 新 schema 不回写；加载侧资产复验固定先行
-    expect(calls.map((c) => c.cmd)).toEqual(['load_project', 'verify_project_assets'])
+    // 修复型归一化（键值域修复）同样回写落定；加载侧资产复验固定先行
+    expect(calls.map((c) => c.cmd)).toEqual(['load_project', 'verify_project_assets', 'save_project'])
+  })
+
+  it('v1 修复型归一化回写 save_project（下次打开不再重复修复）；干净 v1 不回写', async () => {
+    handlers.set('load_project', () => ({
+      ...modernFile(),
+      graph: {
+        ...modernFile().graph,
+        edges: [{ id: '   ', source: 's1', target: 's1', data: { kind: 'sequence' } }],
+      },
+    }))
+    handlers.set('save_project', () => undefined)
+    const { projectStore } = await load()
+    await projectStore.load('p1')
+    // 红：脏 v1（空白边 id + 自环隔离）修复只留内存——磁盘长留脏文件，
+    // 每次打开都重新生成不同的"稳定" id
+    expect(calls.some((c) => c.cmd === 'save_project')).toBe(true)
+
+    // 干净 v1 不回写：无编辑的打开不得刷 updatedAt 改变首页最近项目排序
+    handlers.set('load_project', () => modernFile())
+    await projectStore.load('p1')
+    expect(calls.filter((c) => c.cmd === 'save_project')).toHaveLength(1)
   })
 
   it('v1 文档解析为会话文档：spec/meta 拍平回节点 data', async () => {
@@ -168,7 +190,7 @@ describe('tauriLoad：归一化与迁移回写', () => {
     expect((last.args as { doc: { project: { name: string } } }).doc.project.name).toBe('新名')
   })
 
-  it('迁移回写失败：内存副本照常交付，显式诊断且不留未处理拒绝', async () => {
+  it('回写失败：内存副本照常交付，显式诊断且不留未处理拒绝', async () => {
     handlers.set('load_project', () => legacyFile())
     handlers.set('save_project', () => {
       throw new Error('目录只读')
@@ -180,7 +202,7 @@ describe('tauriLoad：归一化与迁移回写', () => {
       expect(doc.name).toBe('旧剧')
       await vi.waitFor(() => {
         expect(
-          errSpy.mock.calls.some((c) => String(c[0]).includes('迁移回写')),
+          errSpy.mock.calls.some((c) => String(c[0]).includes('回写失败')),
         ).toBe(true)
       })
     } finally {
@@ -220,8 +242,13 @@ describe('tauriList：空库播种与示例升级', () => {
       return []
     })
     handlers.set('save_project', () => undefined)
-    // 递归重列后的升级检查会读取示例文件：返回 v1 信封 → 无需覆盖
-    handlers.set('load_project', () => modernFile())
+    // 递归重列后的升级检查会读取示例文件：返回各自携带匹配 project.id 的
+    // 干净 v1 信封 → 无需覆盖（id 与受信路径不一致会被 §11.1 受信 id 覆盖
+    // 修复改写并触发回写）
+    handlers.set('load_project', (args) => ({
+      ...modernFile(),
+      project: { ...modernFile().project, id: (args as { id: string }).id },
+    }))
     const { projectStore } = await load()
     const list = await projectStore.list()
     expect(list.map((x) => x.id)).toEqual(['sample-wu-ye-chu-zu-che', 'sample-du-shi-qi-yuan', 'user-p1'])

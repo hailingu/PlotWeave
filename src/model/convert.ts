@@ -201,6 +201,10 @@ export interface ParseResult {
   content: ProjectContent
   /** 发生了格式迁移（v0 → v1），调用方应回写磁盘。 */
   migrated: boolean
+  /** 归一化修复改写了内容（重发 id/隔离边/规范化字段等，含 v0 迁移）：
+   * 同样应回写磁盘——只修在内存时，用户只开不编辑（防抖保存跳过首帧）
+   * 会让脏文件长留磁盘，每次打开都重新生成不同的"稳定" id、重复修复。 */
+  repaired: boolean
   /** 归一化警告：孤儿边隔离、悬空引用标记（§11.3/§11.4）。 */
   warnings: string[]
 }
@@ -221,6 +225,33 @@ export interface NormalizeEnv {
 /** 普通对象：JSON 边界排除了 TypeScript 类型，数组也是 object 须显式排除。 */
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
+/** 确定性码点序比较器（规范化产物须跨环境一致，非 locale 相关：
+ * localeCompare 会随 ICU 数据漂移）。 */
+function byCodeUnit(a: string, b: string): number {
+  if (a < b) return -1
+  if (a > b) return 1
+  return 0
+}
+
+/** 递归按键序排序的规范化视图（空原型记录承接 `__proto__` 等合法键——
+ * 普通对象字面量赋值会触发原型 setter 丢失条目，键控桶同款口径）。 */
+function sortedDeep(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(sortedDeep)
+  if (isPlainObject(v)) {
+    const out: Record<string, unknown> = Object.create(null)
+    for (const k of Object.keys(v).sort(byCodeUnit)) out[k] = sortedDeep(v[k])
+    return out
+  }
+  return v
+}
+
+/** 「归一化是否改写了内容」的语义比较（键序无关、数组保序、值逐项相等）。
+ * normalizeDocument 就地改写传入对象（id 重发/字段剥离等），调用方必须
+ * 先克隆原始文档再比较——对改写后的同一批对象自比较永远相等。 */
+function sameCanonicalJson(a: unknown, b: unknown): boolean {
+  return JSON.stringify(sortedDeep(a)) === JSON.stringify(sortedDeep(b))
 }
 
 const SETTINGS_BUCKETS = ['characters', 'locations', 'props', 'documents'] as const
@@ -1468,7 +1499,11 @@ function normalizeContainers(
     },
     graph: { nodes, edges, ...(viewport ? { viewport } : {}) },
     settings: settings as unknown as ProjectDocument['settings'],
-    episodeTitles: titlesRaw as unknown as ProjectDocument['episodeTitles'],
+    // 键值域修复上移到 doc 装配层（§11.1 第 3 步对所有版本执行）：修复
+    // 是否改写内容以本层产物为准——只留在 fromDocument 会让回写判定
+    // （repaired）看不见标题去空白/非法键删除；fromDocument 的二次归一化
+    // 幂等（已规范化的输入不再产生警告）
+    episodeTitles: normalizeEpisodeTitles(titlesRaw, warnings) as unknown as ProjectDocument['episodeTitles'],
     assets: { byId: byId as unknown as Record<string, ProjectDocument['assets']['byId'][string]> },
   }
   return { doc, optionIdRemap, nodeIdRemap }
@@ -2033,6 +2068,7 @@ function parseLegacyProject(raw: Record<string, unknown>, env: NormalizeEnv): Pa
   return {
     content: fromDocument(normalized, warnings),
     migrated: true,
+    repaired: true,
     warnings: [...v0Warnings, ...warnings],
   }
 }
@@ -2058,11 +2094,16 @@ export function parseProject(raw: unknown, env: NormalizeEnv = {}): ParseResult 
     return parseLegacyProject(raw as Record<string, unknown>, env)
   }
 
-  const { doc: normalized, warnings } = normalizeDocument(
-    raw as Record<string, unknown>,
-    env,
-  )
-  return { content: fromDocument(normalized, warnings), migrated: false, warnings }
+  // 原始文档先克隆：归一化就地改写（id 重发/字段剥离/隔离），事后与改写
+  // 产物比较须以未改动的原始为基准——repaired 决定调用方是否回写落定修复
+  const pristine = structuredClone(raw)
+  const { doc: normalized, warnings } = normalizeDocument(raw as Record<string, unknown>, env)
+  return {
+    content: fromDocument(normalized, warnings),
+    migrated: false,
+    repaired: !sameCanonicalJson(pristine, normalized),
+    warnings,
+  }
 }
 
 /** 落盘文档 → 会话文档（归一化之后调用）。视口/资产桶缺省字段保持缺省：

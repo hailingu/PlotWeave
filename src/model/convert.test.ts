@@ -220,6 +220,8 @@ describe('parseProject（ProjectDocument → 会话文档，§11 归一化）', 
     const content = mkContent()
     const round = parseProject(serializeProject(content, 'p-1', NOW))
     expect(round.migrated).toBe(false)
+    // 干净 v1：归一化零改写，repaired=false（打开不应触发回写刷 updatedAt）
+    expect(round.repaired).toBe(false)
     expect(round.warnings).toEqual([])
     expect(round.content.name).toBe('午夜出租车')
     expect(round.content.createdAt).toBe('2026-08-01T00:00:00.000Z')
@@ -1010,6 +1012,33 @@ describe('归一化：§11.1 第 3 步 id 重发 / 成环 / attach 宿主唯一'
     const reissued = round.content.edges.find((e) => e.source === 'b1' && e.target === 'd1')!
     expect(reissued.id).toMatch(/^edge-/)
     expect(round.warnings.some((w) => w.includes('边 id 缺失或非法'))).toBe(true)
+  })
+
+  it('v1 可修复脏数据 repaired=true（回写依据）——修复不得只留内存、每次打开重造"稳定" id', () => {
+    // 空白边 id（就地重发）与标题去空白（值改写）两类修复都要能被察觉：
+    // normalizeDocument 就地改写传入对象，比较必须对原始克隆进行
+    const dirty = serializeProject(mkContent(), 'p-1', NOW)
+    dirty.graph.edges.push({
+      id: '   ',
+      source: 'b1',
+      target: 'd1',
+      data: { kind: 'sequence' },
+    } as unknown as ProjectDocument['graph']['edges'][number])
+    dirty.episodeTitles = { 1: ' 开局 ' }
+    expect(parseProject(dirty).repaired).toBe(true)
+
+    // 只读警告（悬空引用标记，§11.4）不改写内容：不触发回写
+    const danglingOnly = serializeProject(mkContent(), 'p-1', NOW)
+    danglingOnly.graph.nodes.push({
+      id: 'ghost-ref',
+      type: 'scene',
+      layout: { position: { x: 0, y: 0 } },
+      ui: { selected: false, expanded: true },
+      data: { spec: { characterIds: ['ch-none'], interior: true, sceneNo: 9, synopsis: '', time: '' }, meta: { label: '悬空' } },
+    } as unknown as ProjectDocument['graph']['nodes'][number])
+    const round = parseProject(danglingOnly)
+    expect(round.warnings.some((w) => w.includes('ch-none'))).toBe(true)
+    expect(round.repaired).toBe(false)
   })
 })
 
