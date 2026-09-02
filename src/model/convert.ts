@@ -916,6 +916,20 @@ function keyedIdIssue(id: unknown): string {
 
 const KEYED_LIST_PREFIX: Record<string, string> = { lines: 'line', options: 'opt', refs: 'ref' }
 
+/** 键控列表成员中空白字符串 id 的原值计数（「空 id → 新 id」映射的唯一性
+ * 判定：同一空白原值仅出现一次时映射明确）。非对象成员无 id 可计。 */
+function blankIdCounts(list: unknown[]): Map<string, number> {
+  const counts = new Map<string, number>()
+  for (const item of list) {
+    if (!isPlainObject(item)) continue
+    const id = item.id
+    if (typeof id === 'string' && !id.trim()) {
+      counts.set(id, (counts.get(id) ?? 0) + 1)
+    }
+  }
+  return counts
+}
+
 /** 键控列表成员 id 修复（§11.1 第 3 步：id 非空且数组内唯一——重复 id 会令
  * 删除/重排 reconcile 到错误项，重复选项 id 还让 removedOptionHandles 识别
  * 失效、把既有连线静默改接到剩余同 id 选项）：缺失/非字符串/空白/重复 id
@@ -929,18 +943,14 @@ function normalizeKeyedListIds(
   nid: string,
   warnings: string[],
 ): Map<string, string> {
-  const blankCounts = new Map<string, number>()
-  for (const item of list) {
-    const id = (item as Record<string, unknown>).id
-    if (typeof id === 'string' && !id.trim()) {
-      blankCounts.set(id, (blankCounts.get(id) ?? 0) + 1)
-    }
-  }
+  // 在未过滤列表上运行（§11.1 顺序：身份分析先于异型成员过滤）——非对象
+  // 成员不占身份位（无 id 可占），原样留给后续过滤
+  const blankCounts = blankIdCounts(list)
   const seen = new Set<string>()
   const remap = new Map<string, string>()
   for (const item of list) {
-    const rec = item as Record<string, unknown>
-    const id = rec.id
+    if (!isPlainObject(item)) continue
+    const id = item.id
     if (typeof id === 'string' && id.trim() && !seen.has(id)) {
       seen.add(id)
       continue
@@ -951,7 +961,7 @@ function normalizeKeyedListIds(
     // 非字符串 id 不为它建句柄映射：字符串句柄不得猜测为某个非字符串选项 id
     if (typeof id === 'string' && !id.trim() && blankCounts.get(id) === 1) remap.set(id, fresh)
     warnings.push(`节点 ${nid} 的 ${listKey} 成员 id ${keyedIdIssue(id)}，已重发新 id ${fresh}`)
-    rec.id = fresh
+    item.id = fresh
   }
   return remap
 }
@@ -990,9 +1000,9 @@ function listMemberShapeOk(listKey: string, item: unknown): boolean {
   return isPlainObject(item)
 }
 
-/** 节点 spec 必填列表（§4.2）：缺失/非数组可确定性置空，异型成员移除；
- * 指向被清空选项的连线由孤儿边规则处理。 */
-function normalizeRequiredList(
+/** 必填列表的容器修复（§11.1 第 2 步）：缺失/非数组确定性置空，所属
+ * 节点保留；成员过滤由 filterListMembers 在键控 id 分析之后执行。 */
+function ensureRequiredListContainer(
   spec: Record<string, unknown>,
   type: unknown,
   nid: string,
@@ -1004,8 +1014,23 @@ function normalizeRequiredList(
   if (!Array.isArray(list)) {
     warnings.push(`节点 ${nid} 的 spec.${listKey} 缺失或非数组，已重置为空数组`)
     spec[listKey] = []
-    return
   }
+}
+
+/** 必填列表的异型成员过滤（§11.1 第 3 步，**在键控 id 分析之后**——首见
+ * 成员即使随后被此过滤移除，其 id 也已在身份分析中占据首见位，后见同 id
+ * 成员持新 id、指向原 id 的连线按孤儿边隔离而非被继承）；指向被清空
+ * 选项的连线由孤儿边规则处理。 */
+function filterListMembers(
+  spec: Record<string, unknown>,
+  type: unknown,
+  nid: string,
+  warnings: string[],
+): void {
+  const listKey = REQUIRED_LISTS[type as string]
+  if (!listKey) return
+  const list = spec[listKey]
+  if (!Array.isArray(list)) return
   const kept = list.filter((item) => {
     const ok = listMemberShapeOk(listKey, item)
     if (!ok) warnings.push(`节点 ${nid} 的 spec.${listKey} 含异型成员，已移除`)
@@ -1092,13 +1117,15 @@ function normalizeNode(
     return null
   }
   normalizeLayoutOptionals(layout, nid, warnings)
-  normalizeRequiredList(data.spec, member.type, nid, warnings)
+  // §11.1 第 3 步顺序契约：键控列表身份分析先于异型成员过滤与判别隔离
+  ensureRequiredListContainer(data.spec, member.type, nid, warnings)
+  repairKeyedListIds(member, data.spec, nid, warnings, optionIdRemap)
+  filterListMembers(data.spec, member.type, nid, warnings)
   const shapeError = nodeDiscriminantError(member, nid, warnings)
   if (shapeError) {
     warnings.push(`节点 ${nid} 的判别形状非法（${shapeError}），已隔离`)
     return null
   }
-  repairKeyedListIds(member, data.spec, nid, warnings, optionIdRemap)
   const ui = member.ui
   if (!isPlainObject(ui) || typeof ui.selected !== 'boolean' || typeof ui.expanded !== 'boolean') {
     warnings.push(`节点 ${nid} 的 ui 缺失或异型，已重置为默认值`)
@@ -1243,7 +1270,11 @@ function normalizeContainers(
   raw: Record<string, unknown>,
   env: NormalizeEnv,
   warnings: string[],
-): { doc: ProjectDocument; optionIdRemap: Map<string, Map<string, string>> } {
+): {
+  doc: ProjectDocument
+  optionIdRemap: Map<string, Map<string, string>>
+  nodeIdRemap: Map<string, string>
+} {
   // 父/子容器（异型重置为可遍历空容器；缺失视为空，不警告）
   const containerOf = (v: unknown, warning: string): Record<string, unknown> => {
     if (isPlainObject(v)) return v
@@ -1318,9 +1349,12 @@ function normalizeContainers(
     warnings,
   )
   const titlesRaw = containerOf(raw.episodeTitles, 'episodeTitles 非普通键值对象，已重置为空 Record')
+  // §11.1 第 3 步顺序契约：id 修复先于形状隔离（reissueDuplicateNodeIds
+  // 文档注释），边端点改写用的映射随管线带出
+  const { members: idRepaired, nodeIdRemap } = reissueDuplicateNodeIds(nodesRaw, warnings)
   const optionIdRemap = new Map<string, Map<string, string>>()
   const nodes: StoryNode[] = []
-  for (const member of nodesRaw) {
+  for (const member of idRepaired) {
     const node = normalizeNode(member, warnings, optionIdRemap)
     if (node) nodes.push(node)
   }
@@ -1351,7 +1385,7 @@ function normalizeContainers(
     episodeTitles: titlesRaw as unknown as ProjectDocument['episodeTitles'],
     assets: { byId: byId as unknown as Record<string, ProjectDocument['assets']['byId'][string]> },
   }
-  return { doc, optionIdRemap }
+  return { doc, optionIdRemap, nodeIdRemap }
 }
 
 /** 场景节点的悬空角色/地点引用警告（§11.4）：只记警告，不清除 id。
@@ -1544,43 +1578,46 @@ function nodeIdIssue(id: unknown): string {
   return '重复'
 }
 
-/** 非法/重复节点 id 修复（§11.1 第 3 步）：id 缺失、非字符串或空白一律重发
- * 本域未占用的新 id——非法身份交付画布会令 React Flow 渲染/选中/删除歧义；
- * 合法 id 重复保留文档序首个、后续重发（按 id 的引用本就解析到首见项，重发
- * 节点成无连线孤儿由用户处置，不产生改接）。空 id 重发时建立「空 id → 新 id」
- * 映射供边端点改写——空字符串可被脏写的 source/target 指向，同一空 id 串仅
- * 一个节点持有时映射唯一、连线保留；多个节点同空 id 映射歧义则不建映射，
- * 指向空串的边随孤儿边规则隔离。 */
+/** 非法/重复节点 id 修复（§11.1 第 3 步，**先于判别形状隔离**）：id 缺失、
+ * 非字符串或空白一律重发本域未占用的新 id——非法身份交付画布会令 React
+ * Flow 渲染/选中/删除歧义；合法 id 重复保留文档序首个、后续重发（按 id
+ * 的引用本就解析到首见项，重发节点成无连线孤儿由用户处置，不产生改接）。
+ * 顺序契约：首见节点随后因形状非法被隔离时，后见同 id 节点已持新 id——
+ * 指向原 id 的边按孤儿边隔离，而非静默改接到后见节点。空 id 重发时建立
+ * 「空 id → 新 id」映射供边端点改写——同一空 id 串仅一个节点持有时映射
+ * 唯一、连线保留；多个节点同空 id 映射歧义则不建映射，指向空串的边随
+ * 孤儿边规则隔离。非对象成员原样放行（占位身份无从谈起，后续形状隔离）。 */
 function reissueDuplicateNodeIds(
-  nodes: StoryNode[],
+  members: unknown[],
   warnings: string[],
-): { nodes: StoryNode[]; nodeIdRemap: Map<string, string> } {
+): { members: unknown[]; nodeIdRemap: Map<string, string> } {
   const blankCounts = new Map<string, number>()
-  for (const n of nodes) {
-    if (typeof n.id === 'string' && !n.id.trim()) {
-      blankCounts.set(n.id, (blankCounts.get(n.id) ?? 0) + 1)
+  for (const m of members) {
+    if (isPlainObject(m) && typeof m.id === 'string' && !m.id.trim()) {
+      blankCounts.set(m.id, (blankCounts.get(m.id) ?? 0) + 1)
     }
   }
   const seen = new Set<string>()
   const nodeIdRemap = new Map<string, string>()
-  const out = nodes.map((n) => {
-    if (typeof n.id === 'string' && n.id.trim() && !seen.has(n.id)) {
-      seen.add(n.id)
-      return n
+  const out = members.map((m) => {
+    if (!isPlainObject(m)) return m
+    if (typeof m.id === 'string' && m.id.trim() && !seen.has(m.id)) {
+      seen.add(m.id)
+      return m
     }
     let fresh = uid('node')
     while (seen.has(fresh)) fresh = uid('node')
     seen.add(fresh)
-    if (typeof n.id === 'string' && !n.id.trim() && blankCounts.get(n.id) === 1) {
-      nodeIdRemap.set(n.id, fresh)
+    if (typeof m.id === 'string' && !m.id.trim() && blankCounts.get(m.id) === 1) {
+      nodeIdRemap.set(m.id, fresh)
     }
-    const shown = typeof n.id === 'string' && n.id.trim() ? `${n.id} ` : ''
+    const shown = typeof m.id === 'string' && m.id.trim() ? `${m.id} ` : ''
     warnings.push(
-      `节点 id ${shown}${nodeIdIssue(n.id)}：已重发新 id ${fresh}（合法 id 重复保留文档序首个，引用仍解析到首见节点）`,
+      `节点 id ${shown}${nodeIdIssue(m.id)}：已重发新 id ${fresh}（合法 id 重复保留文档序首个，引用仍解析到首见节点）`,
     )
-    return { ...n, id: fresh }
+    return { ...m, id: fresh }
   })
-  return { nodes: out, nodeIdRemap }
+  return { members: out, nodeIdRemap }
 }
 
 /** 重复/非法边 id 修复（§11.1 第 3 步，与节点 id 同款规则）：保留文档序
@@ -1691,8 +1728,8 @@ function normalizeDocument(
   env: NormalizeEnv,
 ): { doc: ProjectDocument; warnings: string[] } {
   const warnings: string[] = []
-  const { doc: shaped, optionIdRemap } = normalizeContainers(raw, env, warnings)
-  const { nodes: activeNodes, nodeIdRemap } = reissueDuplicateNodeIds(shaped.graph.nodes, warnings)
+  const { doc: shaped, optionIdRemap, nodeIdRemap } = normalizeContainers(raw, env, warnings)
+  const activeNodes = shaped.graph.nodes
   // 空节点 id 重发后，branch 空选项句柄映射表的键同步迁移到新节点 id
   for (const [oldId, newId] of nodeIdRemap) {
     const handles = optionIdRemap.get(oldId)

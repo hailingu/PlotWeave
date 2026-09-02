@@ -2244,3 +2244,61 @@ describe('v0 迁移的字段优先级与头像预过滤（迁移链 ④ 前置�
     expect(round.warnings.some((w) => w.includes('s1') && w.includes('characters'))).toBe(true)
   })
 })
+
+describe('§11.1 第 3 步顺序：身份修复先于形状隔离（重复 id 不改接语义）', () => {
+  const sceneSpec = (over: Record<string, unknown> = {}) => ({
+    sceneNo: 1, interior: true, time: '', synopsis: '', characterIds: [], ...over,
+  })
+
+  it('重复节点 id：首见（异型被隔离）占据 id，后见节点重发新 id，指向原 id 的边按孤儿隔离', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    ;(doc.graph.nodes as unknown as Record<string, unknown>[]).splice(0, doc.graph.nodes.length,
+      { id: 's0', type: 'scene', layout: { position: { x: 0, y: 0 } }, data: { spec: sceneSpec(), meta: { label: '源头' } } },
+      // 首见 n1：spec 缺 synopsis（REQUIRED_SCALARS）→ 形状隔离
+      { id: 'n1', type: 'scene', layout: { position: { x: 1, y: 0 } }, data: { spec: { sceneNo: 2, interior: true, time: '', characterIds: [] }, meta: { label: '坏节点' } } },
+      // 后见 n1：合法
+      { id: 'n1', type: 'scene', layout: { position: { x: 2, y: 0 } }, data: { spec: sceneSpec({ sceneNo: 3 }), meta: { label: '好节点' } } },
+    )
+    ;(doc.graph.edges as unknown as unknown[]).splice(0, doc.graph.edges.length,
+      { id: 'e1', source: 's0', target: 'n1', data: { kind: 'sequence' } },
+    )
+    const round = parseProject(doc)
+    // 后见节点持新 id（不再是 n1）
+    const labels = round.content.nodes.map((n) => (n.data as { name?: string }).name)
+    expect(labels).toContain('源头')
+    expect(labels).toContain('好节点')
+    const good = round.content.nodes.find((n) => (n.data as { name?: string }).name === '好节点')!
+    expect(good.id).not.toBe('n1')
+    // 指向原 id 的边：孤儿隔离（首见节点已被隔离），不得改接到好节点
+    expect(round.content.edges.find((e) => e.id === 'e1')).toBeUndefined()
+    expect(round.warnings.some((w) => w.includes('e1'))).toBe(true)
+  })
+
+  it('重复选项 id：首见（异型被过滤）占据 id，后见选项重发新 id，option-x 连线按孤儿隔离', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    ;(doc.graph.nodes as unknown as Record<string, unknown>[]).splice(0, doc.graph.nodes.length,
+      { id: 's0', type: 'scene', layout: { position: { x: 0, y: 0 } }, data: { spec: sceneSpec(), meta: { label: '靶' } } },
+      {
+        id: 'br1', type: 'branch', layout: { position: { x: 1, y: 0 } },
+        data: {
+          spec: { prompt: '去哪', options: [
+            { id: 'x', label: 5 },
+            { id: 'x', label: 'B' },
+          ] },
+          meta: {},
+        },
+      },
+    )
+    ;(doc.graph.edges as unknown as unknown[]).splice(0, doc.graph.edges.length,
+      { id: 'e1', source: 'br1', target: 's0', sourceHandle: 'option-x', data: { kind: 'branch' } },
+    )
+    const round = parseProject(doc)
+    const br = round.content.nodes.find((n) => n.id === 'br1')!
+    const options = (br.data as { options: Array<{ id: string; label: string }> }).options
+    expect(options).toHaveLength(1)
+    expect(options[0].label).toBe('B')
+    expect(options[0].id).not.toBe('x') // 后见选项持新 id，不继承首见的 x
+    expect(round.content.edges.find((e) => e.id === 'e1')).toBeUndefined()
+    expect(round.warnings.some((w) => w.includes('e1'))).toBe(true)
+  })
+})

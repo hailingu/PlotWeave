@@ -286,39 +286,39 @@ function scalarShapeIssues(nodeType: string, fields: Record<string, unknown>): s
   const str = (f: string) => {
     if (fields[f] !== undefined && typeof fields[f] !== 'string') issues.push(`${f} 须为字符串`)
   }
-  // 数值字段只拦类型（崩溃形状）；正整数/安全整数域由 §9.3 命令边界与
-  // §11.1 加载归一化负责——批量层历史上即容忍 episodeNo: 0（加载时删除）
-  const finiteNumber = (f: string) => {
+  // 数值编号域（§9.3 命令边界）：正安全整数——放行 1.5/0/-2 这类值会被
+  // 下次加载的归一化静默重编号/删除分集，接受的 AI 输出重开即变样
+  const positiveSafeInt = (f: string) => {
     const v = fields[f]
-    if (v !== undefined && !(typeof v === 'number' && Number.isFinite(v))) {
-      issues.push(`${f} 须为数字`)
+    if (v !== undefined && !(typeof v === 'number' && Number.isSafeInteger(v) && v > 0)) {
+      issues.push(`${f} 须为正整数`)
     }
   }
   switch (nodeType) {
     case 'scene':
       ;['name', 'locationId', 'time', 'weather', 'synopsis'].forEach(str)
-      finiteNumber('sceneNo')
-      finiteNumber('episodeNo')
+      positiveSafeInt('sceneNo')
+      positiveSafeInt('episodeNo')
       if (fields.interior !== undefined && typeof fields.interior !== 'boolean') {
         issues.push('interior 须为布尔')
       }
       break
     case 'dialogue':
       str('name')
-      finiteNumber('episodeNo')
+      positiveSafeInt('episodeNo')
       break
     case 'beat':
       str('name')
       str('tone')
-      finiteNumber('episodeNo')
+      positiveSafeInt('episodeNo')
       break
     case 'branch':
       str('prompt')
-      finiteNumber('episodeNo')
+      positiveSafeInt('episodeNo')
       break
     case 'shot':
       ;['size', 'picture', 'prompt'].forEach(str)
-      finiteNumber('shotNo')
+      positiveSafeInt('shotNo')
       break
     default:
       break

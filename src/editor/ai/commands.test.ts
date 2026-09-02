@@ -312,8 +312,8 @@ describe('参数字段校验（⚙️ 设置面板字段的 AI 通道）', () =>
       [{ op: 'update_node', nodeId: 'n1', patch: { episodeNo: 0 } }],
       { ...snap(), nodes: [...snap().nodes, { id: 'x', type: 'shot', label: 'SHOT01' }] },
     )
-    // n1 是 scene：合法
-    expect(bad.ok).toBe(true)
+    // n1 是 scene：字段可写但值域非法（§9.3 正整数）——零/负/小数拒绝
+    expect(bad.ok).toBe(false)
 
     const shotBad = validateAiBatch(
       [{ op: 'update_node', nodeId: 'x', patch: { episodeNo: 1 } }],
@@ -604,5 +604,28 @@ describe('ShotRef 双字段并存（§4.2 联合的键在场判定）', () => {
     )
     expect(bad.ok).toBe(false)
     expect(bad.issues.map((i) => i.message).join('\n')).toContain('refs')
+  })
+})
+
+describe('AI 数值域（§9.3 命令边界：正安全整数，加载不静默改写）', () => {
+  it('sceneNo 1.5 / shotNo -2 / episodeNo 0 均拒绝', () => {
+    const bad1 = validateAiBatch(
+      [{ op: 'create_node', nodeType: 'scene', data: { name: '场', sceneNo: 1.5 } }],
+      snap(),
+    )
+    expect(bad1.ok).toBe(false)
+    expect(bad1.issues.map((i) => i.message).join('\n')).toContain('sceneNo')
+    const bad2 = validateAiBatch(
+      [{ op: 'create_node', nodeType: 'shot', data: { shotNo: -2, size: '特写', picture: '', prompt: '' } }],
+      snap(),
+    )
+    expect(bad2.ok).toBe(false)
+    expect(bad2.issues.map((i) => i.message).join('\n')).toContain('shotNo')
+    const bad3 = validateAiBatch(
+      [{ op: 'update_node', nodeId: 'n1', patch: { episodeNo: 0 } }],
+      snap(),
+    )
+    expect(bad3.ok).toBe(false)
+    expect(bad3.issues.map((i) => i.message).join('\n')).toContain('episodeNo')
   })
 })

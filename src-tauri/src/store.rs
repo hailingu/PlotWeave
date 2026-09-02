@@ -1216,7 +1216,11 @@ fn delete_project_files(dir: &std::path::Path, id: &str) -> Result<(), String> {
 }
 
 /// 递归删除目录树（no-follow）：符号链接条目仅移除链接自身，普通文件与
-/// 目录递归删除；路径本身缺失视为已完成（幂等）。
+/// 目录递归删除；路径本身缺失视为已完成（幂等）。目录在打开迭代器前后
+/// 按 (dev, ino) 复核身份（Unix）：被换成符号链接会让迭代器指向根外树，
+/// 命名时点即中止——尚未删除任何条目，外部树只被列举不被破坏；子项删除
+/// 后再次复核，期间被替换则不再对该路径 remove_dir。完全闭合需要 §10.2
+/// 的目录句柄 openat 解析器（需新增依赖），此处为 std 能力内的最强绑定。
 fn remove_tree_no_follow(path: &std::path::Path) -> Result<(), String> {
     let md = match fs::symlink_metadata(path) {
         Ok(md) => md,
@@ -1230,15 +1234,45 @@ fn remove_tree_no_follow(path: &std::path::Path) -> Result<(), String> {
     if md.is_dir() {
         let entries = fs::read_dir(path)
             .map_err(|e| format!("扫描待删目录失败（{}）：{e}", path.display()))?;
+        verify_tree_identity(path, &md, "扫描")?;
         for entry in entries {
             let entry =
                 entry.map_err(|e| format!("扫描待删目录失败（{}）：{e}", path.display()))?;
             remove_tree_no_follow(&entry.path())?;
         }
+        verify_tree_identity(path, &md, "子项删除")?;
         return fs::remove_dir(path)
             .map_err(|e| format!("删除目录失败（{}）：{e}", path.display()));
     }
     fs::remove_file(path).map_err(|e| format!("删除文件失败（{}）：{e}", path.display()))
+}
+
+/// 目录删除路径的身份复核（Unix）：现场 lstat 须仍为同一目录实体且非
+/// 符号链接——路径名在归类后被替换即中止删除。
+#[cfg(unix)]
+fn verify_tree_identity(
+    path: &std::path::Path,
+    classified: &fs::Metadata,
+    stage: &str,
+) -> Result<(), String> {
+    let fresh = fs::symlink_metadata(path)
+        .map_err(|e| format!("复核目录身份失败（{}）：{e}", path.display()))?;
+    if fresh.file_type().is_symlink() || asset_identity(&fresh) != asset_identity(classified) {
+        return Err(format!(
+            "目录在{stage}期间被替换（疑似符号链接逃逸），中止删除：{}",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn verify_tree_identity(
+    _path: &std::path::Path,
+    _classified: &fs::Metadata,
+    _stage: &str,
+) -> Result<(), String> {
+    Ok(())
 }
 
 /// §7.3 复制项目：整目录拷贝项目资产（当前扁平布局下 `projects/{fromId}/
@@ -1284,7 +1318,12 @@ fn copy_assets_tree(dir: &std::path::Path, from_id: &str, to_id: &str) -> Result
 }
 
 /// 递归拷贝目录树（no-follow）：目录对应创建，普通文件逐个拷贝，
-/// 符号链接与异型条目拒绝——副本绝不携带根外内容。
+/// 符号链接与异型条目拒绝——副本绝不携带根外内容。文件拷贝绑定打开句柄
+/// （Unix：打开后按 (dev, ino) 与归类时身份比对，被换符号链接/另一实体
+/// 即拒绝），从**同一句柄**读出——不再用已校验的路径名重开；目标文件以
+/// create_new 排他创建，预置在目标路径上的符号链接无法截获写入（Unix 的
+/// O_CREAT|O_EXCL 拒绝跟随既有符号链接）。中间目录被并发替换的残余
+/// 窗口仍需 §10.2 目录句柄解析器（依赖决策）方可闭合。
 fn copy_dir_no_follow(src: &std::path::Path, dst: &std::path::Path) -> Result<(), String> {
     fs::create_dir_all(dst).map_err(|e| format!("创建目标资产目录失败：{e}"))?;
     let entries = fs::read_dir(src).map_err(|e| format!("扫描源资产目录失败：{e}"))?;
@@ -1305,8 +1344,7 @@ fn copy_dir_no_follow(src: &std::path::Path, dst: &std::path::Path) -> Result<()
         if ft.is_dir() {
             copy_dir_no_follow(&entry.path(), &dst.join(&name))?;
         } else if ft.is_file() {
-            fs::copy(entry.path(), dst.join(&name))
-                .map_err(|e| format!("拷贝资产文件失败（{}）：{e}", entry.path().display()))?;
+            copy_file_bound(&entry.path(), &md, &dst.join(&name))?;
         } else {
             return Err(format!(
                 "源资产子树含非普通文件条目，拒绝复制：{}",
@@ -1315,6 +1353,38 @@ fn copy_dir_no_follow(src: &std::path::Path, dst: &std::path::Path) -> Result<()
         }
     }
     Ok(())
+}
+
+/** 单文件绑定拷贝：源从句柄读（身份与归类时一致），目标排他创建。 */
+fn copy_file_bound(
+    src_path: &std::path::Path,
+    classified: &fs::Metadata,
+    dst: &std::path::Path,
+) -> Result<(), String> {
+    let mut src = fs::File::open(src_path)
+        .map_err(|e| format!("打开源资产失败（{}）：{e}", src_path.display()))?;
+    #[cfg(unix)]
+    {
+        let fm = src
+            .metadata()
+            .map_err(|e| format!("读取源资产句柄元数据失败（{}）：{e}", src_path.display()))?;
+        if asset_identity(&fm) != asset_identity(classified) {
+            return Err(format!(
+                "源资产在拷贝期间被替换，拒绝复制：{}",
+                src_path.display()
+            ));
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = classified;
+    let mut dst_file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(dst)
+        .map_err(|e| format!("创建目标资产失败（{}）：{e}", dst.display()))?;
+    std::io::copy(&mut src, &mut dst_file)
+        .map(|_| ())
+        .map_err(|e| format!("拷贝资产文件失败（{}）：{e}", src_path.display()))
 }
 
 #[cfg(test)]
