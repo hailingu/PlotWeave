@@ -135,15 +135,15 @@ async function tauriList(): Promise<ProjectSummary[]> {
     }
     return tauriList()
   }
-  // 种子文件升级：示例项目仍是旧格式（schemaVersion 0）时直接覆盖新种子
+  // 示例项目的旧格式（schemaVersion 0）迁移：写回**迁移后的用户内容**——
+  // 示例可能已被编辑（改名/加场景/资产），用硬编码种子覆盖会在升级后首次
+  // 打开首页时静默摧毁这些编辑；演示内容刷新只经由空库播种路径发生
   for (const meta of metas) {
     if (!meta.id.startsWith('sample-')) continue
-    const seed = seedProjects().find((s) => s.meta.id === meta.id)
-    if (!seed) continue
+    if (!seedProjects().some((s) => s.meta.id === meta.id)) continue
     const file = await invoke<unknown>('load_project', { id: meta.id })
-    if (parseProject(file, { projectId: meta.id }).migrated) {
-      await tauriSave(meta.id, seed.doc)
-    }
+    const { content, migrated } = parseProject(file, { projectId: meta.id })
+    if (migrated) await tauriSave(meta.id, content)
   }
   return metas.map(toSummary)
 }
