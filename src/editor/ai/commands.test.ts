@@ -232,6 +232,7 @@ describe('列表项稳定 id 归一化（S6479 信任边界：AI 可送旧形态
               { id: 'dup', kind: 'line', speaker: 'ch1', side: 'left', text: '二' },
               { id: '', kind: 'action', text: '三' },
               { id: 'solo', kind: 'action', text: '四' },
+              { id: '   ', kind: 'action', text: '五' },
             ],
           },
         },
@@ -251,12 +252,15 @@ describe('列表项稳定 id 归一化（S6479 信任边界：AI 可送旧形态
     expect(v.ok).toBe(true)
     const lines = (v.commands[0] as unknown as { data: { lines: Array<{ id: string }> } }).data.lines
     const lineIds = lines.map((l) => l.id)
-    expect(new Set(lineIds).size).toBe(4) // 全唯一
+    expect(new Set(lineIds).size).toBe(5) // 全唯一
     expect(lineIds.every((id) => id !== '')).toBe(true)
     expect(lineIds[0]).toBe('dup') // 首个保留
     expect(lineIds[1]).toMatch(/^line-/) // 冲突重生成
     expect(lineIds[2]).toMatch(/^line-/) // 空串重生成
     expect(lineIds[3]).toBe('solo') // 无冲突原样
+    // 纯空白 id（§8.1 trim 口径）：保留会让加载侧按空白 id 重发改写身份——
+    // 被接受的命令不得自带重开即变的“稳定”身份
+    expect(lineIds[4]).toMatch(/^line-/)
 
     const options = (v.commands[1] as unknown as { data: { options: Array<{ id: string }> } }).data.options
     expect(options[0].id).toBe('x')

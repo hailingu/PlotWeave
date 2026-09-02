@@ -221,17 +221,19 @@ function resolveRef(st: FoldState, cmd: Record<string, unknown>, key: string): s
 
 /** 入站归一化（信任边界）：列表项稳定 id 补齐（S6479）。
  * AI 可按旧契约发送无 id 的台词行/引用位、或纯字符串选项；
- * 进画布前统一升级为带 id 结构。已有 id 仅在「非空且列表内唯一」时
- * 保留（幂等）；空串/重复 id 就地重生成——这些 id 直接作 React key，
+ * 进画布前统一升级为带 id 结构。已有 id 仅在「非空白（§8.1 共同值域
+ * trim 口径，与加载边界同款）且列表内唯一」时保留（幂等）；空白/空串/
+ * 重复 id 就地重生成——空白 id 直接作 React key 不可靠，且加载侧会按
+ * 空白 id 重发改写身份，被接受的命令不得自带重开即变的“稳定”身份；
  * 冲突会导致行复用/误编辑。非对象条目原样放行（形状校验不在本层）。 */
 function normalizeNodeFields(nodeType: string, fields: Record<string, unknown>): Record<string, unknown> {
-  /** 列表项 id 归一化：非空唯一保留，否则重生成。 */
+  /** 列表项 id 归一化：非空白唯一保留，否则重生成。 */
   const normalizeIds = (items: unknown[], prefix: string): unknown[] => {
     const seen = new Set<string>()
     return items.map((item) => {
       if (!plainObject(item)) return item
       const id = item.id
-      if (typeof id === 'string' && id !== '' && !seen.has(id)) {
+      if (typeof id === 'string' && id.trim() !== '' && !seen.has(id)) {
         seen.add(id)
         return item
       }
