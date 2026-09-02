@@ -52,8 +52,14 @@ function EpisodeField({ nodeId, episodeNo }: { readonly nodeId: string; readonly
           placeholder="未分集"
           onChange={(e) => {
             const raw = e.target.value
-            const n = raw === '' ? Number.NaN : Math.max(1, Math.floor(Number(raw)))
-            patchNode(nodeId, { episodeNo: Number.isFinite(n) ? n : undefined })
+            if (raw === '') {
+              patchNode(nodeId, { episodeNo: undefined })
+              return
+            }
+            const n = Math.max(1, Math.floor(Number(raw)))
+            // §4.1 正安全整数域：有限但越界（如 1e20）落载后会被顺位重发，
+            // 输入边界同域拒收——不 patch，保留原值等用户输入完成
+            if (Number.isSafeInteger(n)) patchNode(nodeId, { episodeNo: n })
           }}
         />
         {episodeNo !== undefined && (
@@ -106,7 +112,8 @@ function SceneForm({ node, settings }: { readonly node: Extract<PanelNode, { typ
             const raw = e.target.value
             if (raw === '') return
             const n = Math.max(1, Math.floor(Number(raw)))
-            if (Number.isFinite(n) && n !== d.sceneNo) patchNode(node.id, { sceneNo: n })
+            // §4.1 正安全整数域：有限但越界（如 1e20）落载后会被顺位重发，同域拒收
+            if (Number.isSafeInteger(n) && n !== d.sceneNo) patchNode(node.id, { sceneNo: n })
           }}
         />
       </Field>
@@ -390,7 +397,11 @@ function ShotForm({ node }: { readonly node: Extract<PanelNode, { type: 'shot' }
             type="number"
             min={1}
             value={d.shotNo}
-            onChange={(e) => patchNode(node.id, { shotNo: Number(e.target.value) || 1 })}
+            onChange={(e) => {
+              // 非法输入回退 1；§4.1 正安全整数域：有限但越界（如 1e20）同属非法
+              const n = Math.max(1, Math.floor(Number(e.target.value)))
+              patchNode(node.id, { shotNo: Number.isSafeInteger(n) ? n : 1 })
+            }}
           />
         </Field>
         <Field label="景别">

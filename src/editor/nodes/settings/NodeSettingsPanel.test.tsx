@@ -82,6 +82,13 @@ describe('SceneForm', () => {
     expect(api.patchNode).toHaveBeenCalledTimes(2)
   })
 
+  it('场次/集归属拒绝非安全整数（§4.1 正安全整数域：有限但越界如 1e20 落载后会被顺位重发，输入边界同域拒收、保留原值）', () => {
+    const { api } = setup(sceneNode)
+    fireEvent.change(screen.getByDisplayValue('1'), { target: { value: '100000000000000000000' } })
+    fireEvent.change(screen.getByPlaceholderText('未分集'), { target: { value: '100000000000000000000' } })
+    expect(api.patchNode).not.toHaveBeenCalled()
+  })
+
   it('内外景分段与角色 chip 切换（引用设定集 id 增删）', () => {
     const { api, container } = setup(sceneNode)
     // happy-dom 会把 label 内点击同步激活其首个可标记控件（多派发一次 内），
@@ -229,20 +236,24 @@ describe('ShotForm', () => {
     fireEvent.change(screen.getByDisplayValue('3'), { target: { value: 'abc' } })
     expect(patchOf(api)).toEqual({ shotNo: 1 })
 
+    // 非安全整数同属非法（§4.1 正安全整数域，落载后会被顺位重发）：同款回退 1
+    fireEvent.change(screen.getByDisplayValue('3'), { target: { value: '100000000000000000000' } })
+    expect(patchOf(api, 1)).toEqual({ shotNo: 1 })
+
     fireEvent.change(screen.getByRole('combobox', { name: '引用类型' }), {
       target: { value: 'audio' },
     })
-    const refs = patchOf(api, 1).refs as Array<{ kind: string }>
+    const refs = patchOf(api, 2).refs as Array<{ kind: string }>
     expect(refs[0].kind).toBe('audio')
 
     fireEvent.click(screen.getByRole('button', { name: '＋ 添加引用' }))
-    const added = patchOf(api, 2).refs as Array<{ id: string; kind: string; label: string }>
+    const added = patchOf(api, 3).refs as Array<{ id: string; kind: string; label: string }>
     expect(added).toHaveLength(2)
     expect(added[1]).toMatchObject({ kind: 'character', label: '' })
     expect(added[1].id).toMatch(/^ref-/)
 
     fireEvent.click(screen.getAllByRole('button', { name: '删除此引用' })[0])
-    expect(patchOf(api, 3).refs).toEqual([])
+    expect(patchOf(api, 4).refs).toEqual([])
   })
 
   it('分镜卡不出集归属字段（随宿主场景派生）', () => {

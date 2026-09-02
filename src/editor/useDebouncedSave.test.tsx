@@ -381,4 +381,42 @@ describe('useDebouncedSave（在途保存期间卸载：待冲刷编辑不丢）
     })
     expect(names).toEqual(['A', 'B'])
   })
+
+  it('A 在途、B 置脏后卸载，A 失败：最新文档 B 仍补交一次（项目级重试只持有 A，否则 B 静默丢失）', async () => {
+    const names: string[] = []
+    let rejectA: ((e: Error) => void) | null = null
+    const onSave = vi.fn(
+      (doc: ProjectContent) =>
+        new Promise<void>((resolve, rej) => {
+          if (rejectA === null) {
+            rejectA = rej // 首次保存（A）挂起，稍后失败
+            return
+          }
+          names.push(doc.name)
+          resolve()
+        }),
+    )
+    const { rerender, unmount } = renderHook(({ doc }) => useDebouncedSave(doc, onSave, 600), {
+      initialProps: { doc: mkDoc() },
+    })
+    act(() => {
+      rerender({ doc: mkDoc('A') })
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600)
+    })
+    expect(onSave).toHaveBeenCalledTimes(1) // A 在途
+    act(() => {
+      rerender({ doc: mkDoc('B') })
+    }) // B 置脏（防抖计时器未到）
+    unmount() // 卸载冲刷被在途挡回
+    await act(async () => {
+      rejectA?.(new Error('磁盘满'))
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    // 红：catch 见 unmounted 直接 return，B 从未交付 onSave，既没落盘也无重试登记
+    expect(onSave).toHaveBeenCalledTimes(2)
+    expect(names).toEqual(['B'])
+  })
 })

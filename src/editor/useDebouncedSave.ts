@@ -72,6 +72,20 @@ export function useDebouncedSave(
             saveTimer.current = null
             void flushSave()
           }, delayMs)
+          return
+        }
+        // 卸载后在途失败：不排重试计时器，但卸载前置脏的最新文档从未交付过
+        // onSave（项目级重试只持有本次失败的旧文档）——补交一次，其成败与
+        // 重试登记由存储层接管（§3.1 flushPersist 导航契约：离开不丢编辑）
+        if (dirtyRef.current) {
+          dirtyRef.current = false
+          const latest = latestRef.current
+          void Promise.resolve()
+            .then(() => onSave(latest))
+            .then(
+              () => onSaveResult?.(null),
+              (e: unknown) => onSaveResult?.(e),
+            )
         }
         return
       } finally {
