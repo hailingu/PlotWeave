@@ -99,6 +99,18 @@ export function edgeKindOf(e: {
   return 'sequence'
 }
 
+/** 拖线瞬间的连线语义归类：React Flow 的 Connection 不带 type/className，
+ * 语义只能从端口推出——选项出口端口（option-<id>）即 branch、下挂端口即
+ * attach、其余 sequence。与 edgeKindOf 分工：edgeKindOf 按已入库边的显式
+ * 字段归类（落盘边 kind 显式，option-* 端口不得反推），本函数只用于
+ * isValidConnection 的交互判定——误归 sequence 会被「分支不得以 sequence
+ * 连出」拒绝，分支选项的连线全部拖不出来。 */
+export function connectionKindOf(conn: { sourceHandle?: string | null }): EdgeKind {
+  if (branchOptionIdOf(conn.sourceHandle) !== undefined) return 'branch'
+  if (conn.sourceHandle === SCENE_SHOT_HANDLE) return 'attach'
+  return 'sequence'
+}
+
 /**
  * 成环检测：从 target 沿现有边能否回到 source。
  * 返回 true 表示这条连线会造成环（自环由调用方先行排除）。

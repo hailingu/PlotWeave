@@ -2243,6 +2243,44 @@ describe('v0 迁移的字段优先级与头像预过滤（迁移链 ④ 前置�
     expect(names).not.toContain('')
     expect(round.warnings.some((w) => w.includes('s1') && w.includes('characters'))).toBe(true)
   })
+
+  it('对白 speaker 头像预过滤：空 label 不静默关联首角色（startsWith 空串恒真），异型 gradient 一并置空', () => {
+    const round = parseProject({
+      schemaVersion: 0,
+      project: { id: 'p-old', name: '旧剧', createdAt: '', updatedAt: '2026-01-01T00:00:00.000Z' },
+      graph: {
+        nodes: [
+          {
+            id: 'd1',
+            type: 'dialogue',
+            position: { x: 0, y: 0 },
+            data: {
+              name: '对白',
+              lines: [
+                { id: 'l1', kind: 'line', text: '别走', speaker: { label: '', gradient: 'g' }, side: 'left', vo: false },
+                { id: 'l2', kind: 'line', text: '嗯', speaker: { label: '林', gradient: 1 }, side: 'left', vo: false },
+                { id: 'l3', kind: 'line', text: '好', speaker: { label: '林' }, side: 'left', vo: false },
+              ],
+            },
+          },
+        ],
+        edges: [],
+      },
+      settings: { characters: [{ id: 'ch-1', name: '甲', gradient: 'g1' }], locations: [] },
+      episodeTitles: {},
+      assets: { byId: {} },
+    })
+    const spec = round.content.nodes[0].data as { lines: Array<{ speaker: unknown }> }
+    // 空 label / 异型 gradient 的 speaker 头像置空，不得命中首角色「甲」
+    expect(spec.lines[0].speaker).toBeNull()
+    expect(spec.lines[1].speaker).toBeNull()
+    // 合法头像按规则补建实体
+    const lin = round.content.settings.characters.find((c) => c.name === '林')
+    expect(lin).toBeDefined()
+    expect(spec.lines[2].speaker).toBe(lin?.id)
+    expect(round.content.settings.characters.some((c) => c.name === '')).toBe(false)
+    expect(round.warnings.some((w) => w.includes('d1') && w.includes('speaker'))).toBe(true)
+  })
 })
 
 describe('§11.1 第 3 步顺序：身份修复先于形状隔离（重复 id 不改接语义）', () => {

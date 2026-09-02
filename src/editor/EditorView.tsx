@@ -45,7 +45,7 @@ import {
   branchOptionIdOf,
   connectEdgeExtras,
   connectionEndpointIssue,
-  edgeKindOf,
+  connectionKindOf,
   hasAttachHost,
   isDuplicateEdge,
   removedOptionHandles,
@@ -495,7 +495,9 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
       }
       const flowEdges = existing.filter((e) => e.sourceHandle !== SCENE_SHOT_HANDLE)
       if (wouldCreateCycle(flowEdges, conn.source, conn.target)) return false
-      const kind = edgeKindOf(conn as { type?: string; className?: string; sourceHandle?: string | null })
+      // Connection 无 type/className，语义从端口推出（选项出口 = branch），
+      // 误归 sequence 会被「分支不得以 sequence 连出」拒绝而拖不出连线
+      const kind = connectionKindOf(conn)
       return connectionEndpointIssue(nodeTypeOf(conn.source), nodeTypeOf(conn.target), kind) === null
     },
     [],

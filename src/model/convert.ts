@@ -1802,9 +1802,10 @@ function v0List(
  * map/成员读取把整份旧档打成打不开。就地改写传入的成员对象。 */
 function normalizeV0NodeShapes(nodes: Record<string, unknown>[], warnings: string[]): void {
   const isObjectMember = (m: unknown) => isPlainObject(m)
-  /** 场景头像成员（迁移链 ④ 前置过滤）：非空白字符串 label + 可选字符串
-   * gradient 才可用——空 label 会让 ensureCharacter 以 startsWith('') 命中
-   * 首个既有角色（静默错关联），缺失/异型 label 补建的实体也终将被隔离。 */
+  /** 头像成员预过滤谓词（迁移链 ④ 前置，场景头像与对白 speaker 共用）：
+   * 非空白字符串 label + 可选字符串 gradient 才可用——空 label 会让
+   * ensureCharacter 以 startsWith('') 命中首个既有角色（静默错关联），
+   * 缺失/异型 label 补建的实体也终将被隔离。 */
   const isUsableAvatar = (m: unknown) =>
     isPlainObject(m) &&
     typeof m.label === 'string' &&
@@ -1841,9 +1842,20 @@ function normalizeV0NodeShape(
     case 'scene':
       v0List(data, 'characters', nid, isUsableAvatar, false, warnings)
       break
-    case 'dialogue':
+    case 'dialogue': {
       v0List(data, 'lines', nid, isObjectMember, true, warnings)
+      // 台词 speaker 头像与场景头像同一谓词（isUsableAvatar）：对象形态
+      // speaker 的 label 空白/缺失会让迁移的 ensureCharacter 以
+      // startsWith('') 命中首个既有角色（静默错关联）——不可用头像置空；
+      // 字符串 id 引用不在此处置，交由空键重发/悬空引用规则处理
+      for (const line of data.lines as Record<string, unknown>[]) {
+        if (isPlainObject(line.speaker) && !isUsableAvatar(line.speaker)) {
+          warnings.push(`节点 ${nid} 的对白行 speaker 头像不可用（label 缺失/空白或 gradient 异型），已置空`)
+          line.speaker = null
+        }
+      }
       break
+    }
     case 'branch':
       normalizeV0Options(data, nid, warnings)
       break

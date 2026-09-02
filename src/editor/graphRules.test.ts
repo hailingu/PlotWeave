@@ -6,6 +6,7 @@ import {
   branchOptionHandle,
   branchOptionIdOf,
   connectionEndpointIssue,
+  connectionKindOf,
   removedOptionHandles,
   edgeKindOf,
   hasAttachHost,
@@ -29,6 +30,20 @@ describe('edgeKindOf（§4.4 连线语义归类）', () => {
   it('sourceHandle 为 null / 未知字符串均按剧情流处理', () => {
     expect(edgeKindOf({ sourceHandle: null })).toBe('sequence')
     expect(edgeKindOf({ sourceHandle: 'whatever' })).toBe('sequence')
+  })
+})
+
+describe('connectionKindOf（拖线瞬间 Connection 的语义归类：Connection 无 type 字段）', () => {
+  it('选项出口端口 → branch；下挂端口 → attach；其余 → sequence', () => {
+    expect(connectionKindOf({ sourceHandle: 'option-1' })).toBe('branch')
+    expect(connectionKindOf({ sourceHandle: SCENE_SHOT_HANDLE })).toBe('attach')
+    expect(connectionKindOf({})).toBe('sequence')
+    expect(connectionKindOf({ sourceHandle: null })).toBe('sequence')
+    expect(connectionKindOf({ sourceHandle: 'whatever' })).toBe('sequence')
+  })
+
+  it('分支选项出口的连线经端口归类为 branch，不被端点校验拒绝（回归：误判 sequence 会拒绝全部交互分支连线）', () => {
+    expect(connectionEndpointIssue('branch', 'scene', connectionKindOf({ sourceHandle: 'option-o1' }))).toBeNull()
   })
 })
 

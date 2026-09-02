@@ -923,8 +923,16 @@ fn verify_control_file(
 #[tauri::command]
 pub fn list_projects(app: AppHandle) -> Result<Vec<ProjectMeta>, String> {
     let dir = projects_dir(&app)?;
+    list_project_metas(&dir)
+}
+
+/// list_projects 的可测内核（给定已验证的 projects 目录）。目录扫描逐条
+/// 跳过符号链接/异型项/坏文件（单条坏数据不阻断列表），读取走
+/// read_verified_file 的已验证句柄绑定——校验通过后路径被并发替换为
+/// 符号链接或另一文件时，读到的仍是校验时的同一实体，否则跳过该条目。
+fn list_project_metas(dir: &std::path::Path) -> Result<Vec<ProjectMeta>, String> {
     let mut metas: Vec<ProjectMeta> = Vec::new();
-    for entry in fs::read_dir(&dir).map_err(|e| format!("读取项目目录失败：{e}"))? {
+    for entry in fs::read_dir(dir).map_err(|e| format!("读取项目目录失败：{e}"))? {
         let path = entry.map_err(|e| format!("遍历项目目录失败：{e}"))?.path();
         if path.extension().and_then(|e| e.to_str()) != Some("json") {
             continue;
@@ -935,11 +943,8 @@ pub fn list_projects(app: AppHandle) -> Result<Vec<ProjectMeta>, String> {
         if validate_id(id).is_err() {
             continue;
         }
-        // §10.2 目录扫描跳过符号链接/异型项，绝不跟随
-        if verify_control_file(&dir, &path).is_err() {
-            continue;
-        }
-        let Ok(text) = fs::read_to_string(&path) else {
+        // §10.2 目录扫描：校验 + 打开 + 读取绑定同一实体，绝不跟随替换
+        let Ok(text) = read_verified_file(dir, &path) else {
             continue;
         };
         if let Ok(file) = parse_file(id, &text) {
@@ -1124,20 +1129,27 @@ pub fn load_project(app: AppHandle, id: String) -> Result<ProjectFile, String> {
 /// load_project 的可测内核：id 是 IPC 调用方传入的不可信参数，词法校验
 /// 先于任何路径拼接——嵌套路径形态的 id（如 `p-1/assets/x`）不得把
 /// projects/ 内的任意 JSON 经项目通道读出（verify_control_file 只验包含
-/// 关系，拦不住深度嵌套的常规文件）。读取绑定已验证实体：打开句柄并按
-/// (dev, ino) 与校验时身份比对一致后才从**同一句柄**读取——校验与打开
-/// 之间路径被换成符号链接/另一文件时拒绝且不读取，打开之后的路径替换
-/// 不影响所读内容。
+/// 关系，拦不住深度嵌套的常规文件）。读取走 read_verified_file 的已验证
+/// 句柄绑定。
 fn load_project_file(dir: &std::path::Path, id: &str) -> Result<ProjectFile, String> {
     validate_id(id)?;
     let path = dir.join(format!("{id}.json"));
     if !path.exists() {
         return Err(format!("项目不存在：{id}"));
     }
-    let verified_identity =
-        verify_control_file(dir, &path).map_err(|e| format!("拒绝读取项目文件：{e}"))?;
+    let text = read_verified_file(dir, &path).map_err(|e| format!("拒绝读取项目文件：{e}"))?;
+    parse_file(id, &text).map_err(|e| format!("项目文件损坏：{e}"))
+}
+
+/// 经已验证句柄读取项目文件文本（load/list 共用内核）：verify_control_file
+/// 校验后打开句柄并按 (dev, ino) 与校验时身份比对一致后才从**同一句柄**
+/// 读取——校验与打开之间路径被换成符号链接/另一文件时拒绝且不读取，打开
+/// 之后的路径替换不影响所读内容。目录扫描（list）与按 id 读取（load）
+/// 共用此绑定，杜绝「验一个路径、读另一个实体」的 TOCTOU 窗口。
+fn read_verified_file(dir: &std::path::Path, path: &std::path::Path) -> Result<String, String> {
+    let verified_identity = verify_control_file(dir, path)?;
     use std::io::Read;
-    let mut file = fs::File::open(&path).map_err(|_| format!("项目不存在：{id}"))?;
+    let mut file = fs::File::open(path).map_err(|e| format!("打开项目文件失败：{e}"))?;
     #[cfg(unix)]
     if let Some((dev, ino)) = verified_identity {
         use std::os::unix::fs::MetadataExt;
@@ -1151,7 +1163,7 @@ fn load_project_file(dir: &std::path::Path, id: &str) -> Result<ProjectFile, Str
     let mut text = String::new();
     file.read_to_string(&mut text)
         .map_err(|e| format!("读取项目文件失败：{e}"))?;
-    parse_file(id, &text).map_err(|e| format!("项目文件损坏：{e}"))
+    Ok(text)
 }
 
 /// 全量保存（§10.5 保存边界）：完整信封校验先行，任一失败整次拒绝；
@@ -2259,6 +2271,26 @@ mod tests {
         let loaded = load_project_file(&projects, "p-1").expect("从已验证句柄读取");
         assert_eq!(loaded.project.name, "午夜出租车");
         assert_eq!(loaded.schema_version, 1);
+        cleanup_temp(&projects);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn list_project_metas_reads_only_verified_entries() {
+        let projects = temp_projects_dir();
+        let doc = new_project_file("p-1", "午夜出租车".into(), now_iso());
+        persist_project(&projects, "p-1", doc).expect("先保存");
+        // 指向根外文件的符号链接条目不得经列表路径读出（§10.2 信任链）
+        let outside = projects.parent().expect("临时根").join("outside.json");
+        fs::write(
+            &outside,
+            r#"{"schemaVersion":1,"project":{"id":"p-2","name":"外部","createdAt":"","updatedAt":""}}"#,
+        )
+        .expect("写根外文件");
+        std::os::unix::fs::symlink(&outside, projects.join("p-2.json")).expect("建符号链接");
+        let metas = list_project_metas(&projects).expect("列出项目");
+        assert_eq!(metas.len(), 1);
+        assert_eq!(metas[0].id, "p-1");
         cleanup_temp(&projects);
     }
 }
