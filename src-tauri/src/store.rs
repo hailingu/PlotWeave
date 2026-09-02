@@ -440,8 +440,11 @@ fn validate_save_assets(assets: &serde_json::Value) -> Result<(), String> {
             .ok_or_else(|| format!("资产 {key} 必须是普通对象"))?;
         let get_str = |f: &str| e.get(f).and_then(|v| v.as_str());
         match get_str("id") {
-            Some(eid) if !eid.is_empty() && eid == key => {}
-            _ => return Err(format!("资产 {key} 的 Record 键与内嵌 id 不一致")),
+            // 空白 id（§8.1 共同值域 trim 口径，键与内嵌 id 一致时同论）在
+            // 加载侧会被空白键重发改写身份并重连引用——保存边界接受的
+            // 数据重开即变 id，按非规范值整次拒绝
+            Some(eid) if !eid.trim().is_empty() && eid == key => {}
+            _ => return Err(format!("资产 {key} 的内嵌 id 空白或与 Record 键不一致")),
         }
         match get_str("relPath") {
             Some(p) if is_valid_asset_rel_path(p) => {}
@@ -1829,6 +1832,12 @@ mod tests {
         assert!(prepare_save("p-1", &with_asset(good.clone(), "a1")).is_ok());
         // Record 键与内嵌 id 不一致（分裂身份）
         assert!(prepare_save("p-1", &with_asset(good.clone(), "a2")).is_err());
+        // 空白 id（§8.1 共同值域 trim 口径）：键与内嵌 id 一致但纯空白——
+        // 加载侧归一化会按空白键重发改写身份并重连引用，保存边界接受的
+        // 数据重开即变 id，须整次拒绝
+        let mut blank = good.clone();
+        blank["id"] = json!("   ");
+        assert!(prepare_save("p-1", &with_asset(blank, "   ")).is_err());
         // relPath 越出资产子目录
         for bad_path in [
             "../secret",
