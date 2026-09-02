@@ -207,6 +207,10 @@ const saveGenerations = new Map<string, number>()
  * 合并冲刷/重试不得重建 JSON 复活用户刚删的项目；删除落定（成功或失败）
  * 后清除，失败时项目仍在、可继续保存。 */
 const deletingIds = new Set<string>()
+/** 删除期间被吸收的迟到保存：留存最新文档——删除失败（项目仍在磁盘）时
+ * 回吐重存，否则该次冲刷已被上游视为成功，最新编辑既没落盘也无重试
+ * 登记；删除成功即随项目一并丢弃，绝不复活已删项目。 */
+const absorbedSaveDocs = new Map<string, ProjectContent>()
 
 function clearSaveRetry(id: string): void {
   const timer = retryTimers.get(id)
@@ -232,6 +236,8 @@ function scheduleSaveRetry(id: string, generation: number): void {
 
 function enqueueSave(id: string, doc: ProjectContent): Promise<void> {
   if (deletingIds.has(id)) {
+    // 吸收但不丢弃：留存最新文档，删除失败时回吐（见 enqueueDelete）
+    absorbedSaveDocs.set(id, doc)
     console.warn('[projectStore] 项目删除中，吸收本次保存排队', id)
     return Promise.resolve()
   }
@@ -262,7 +268,9 @@ function enqueueSave(id: string, doc: ProjectContent): Promise<void> {
 
 /** 删除排进同项目保存链：在途保存落定后才发出删除（迟到的保存完成不得
  * 重建 JSON 复活项目）；并先取消全部重试登记（登记中的重试同样会复活）；
- * 墓碑先行，删除排队期间及之后的保存一律吸收。 */
+ * 墓碑先行，删除排队期间及之后的保存一律吸收。删除失败（项目仍在磁盘）
+ * 时回吐吸收的最新文档重新排队保存——吸收的冲刷已被上游视为成功，不回吐
+ * 则最新编辑既没落盘也无重试登记；删除成功则吸收的文档随项目一并丢弃。 */
 function enqueueDelete(id: string): Promise<void> {
   deletingIds.add(id)
   clearSaveRetry(id)
@@ -276,6 +284,17 @@ function enqueueDelete(id: string): Promise<void> {
     .finally(() => {
       deletingIds.delete(id)
     })
+    .then(
+      () => {
+        absorbedSaveDocs.delete(id)
+      },
+      () => {
+        // 墓碑已解除（finally 先行）：回吐的保存走正常排队，不再被吸收
+        const absorbed = absorbedSaveDocs.get(id)
+        absorbedSaveDocs.delete(id)
+        if (absorbed !== undefined) void enqueueSave(id, absorbed).catch(() => undefined)
+      },
+    )
     .catch(() => undefined)
   saveChains.set(id, next.catch(() => undefined))
   return next

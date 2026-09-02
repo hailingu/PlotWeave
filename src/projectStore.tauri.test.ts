@@ -507,4 +507,32 @@ describe('持久化所有者的代次重排与删除墓碑', () => {
     expect(calls.filter((c) => c.cmd === 'save_project')).toHaveLength(1)
     expect(calls.some((c) => c.cmd === 'delete_project')).toBe(true)
   })
+
+  it('删除失败时回吐删除期间吸收的最新文档重存：迟到编辑不落空', async () => {
+    let rejectDelete: ((err: Error) => void) | null = null
+    handlers.set('load_project', () => modernFile())
+    handlers.set('save_project', () => undefined)
+    handlers.set('delete_project', () =>
+      new Promise<void>((_resolve, reject) => {
+        rejectDelete = reject
+      }),
+    )
+    const { projectStore } = await load()
+    const deleting = projectStore.delete('p1')
+    // 删除在途期间，编辑器卸载冲刷被墓碑吸收（视为成功但未落盘）
+    await projectStore.save('p1', docOf('旧迟到'))
+    await projectStore.save('p1', docOf('新迟到'))
+    expect(calls.some((c) => c.cmd === 'save_project')).toBe(false)
+    // 等 delete_project 真正挂起（invoke 链有多跳微任务）再令其失败
+    await vi.waitFor(() => expect(rejectDelete).not.toBeNull())
+    ;(rejectDelete as unknown as (err: Error) => void)(new Error('占用'))
+    await expect(deleting).rejects.toThrow('占用')
+    // 红：吸收的文档随墓碑清除被丢弃——项目仍在磁盘，最新编辑既没落盘也无重试
+    await vi.waitFor(() => {
+      const names = calls
+        .filter((c) => c.cmd === 'save_project')
+        .map((c) => (c.args as { doc: { project: { name: string } } }).doc.project.name)
+      expect(names).toEqual(['新迟到']) // 只回吐最新一份
+    })
+  })
 })
