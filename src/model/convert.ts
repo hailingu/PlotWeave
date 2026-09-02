@@ -1707,20 +1707,22 @@ function reissueDuplicateNodeIds(
 }
 
 /** 重复/非法边 id 修复（§11.1 第 3 步，与节点 id 同款规则）：保留文档序
- * 首条，后续同 id 边重发本域未占用的新 id 并警告；缺失/非字符串/空 id
- * 同款重发。边 id 不被任何数据引用（端点/句柄只指向节点与选项），重发
- * 无副作用；身份唯一后 React Flow 的选中/删除不再歧义。 */
+ * 首条，后续同 id 边重发本域未占用的新 id 并警告；缺失、非字符串或空白
+ * id（§8.1 共同值域：trim 后非空——空白串真值非空但 React Flow 身份不可靠，
+ * 选中/删除/撤销会命中错误边）同款重发。边 id 不被任何数据引用（端点/句柄
+ * 只指向节点与选项），重发无副作用；身份唯一后 React Flow 的选中/删除
+ * 不再歧义。 */
 function reissueDuplicateEdgeIds(edges: StoryEdge[], warnings: string[]): StoryEdge[] {
   const seen = new Set<string>()
   return edges.map((e) => {
-    if (typeof e.id === 'string' && e.id && !seen.has(e.id)) {
+    if (typeof e.id === 'string' && e.id.trim() && !seen.has(e.id)) {
       seen.add(e.id)
       return e
     }
     let fresh = uid('edge')
     while (seen.has(fresh)) fresh = uid('edge')
     seen.add(fresh)
-    const reason = typeof e.id === 'string' && e.id ? `边 id ${e.id} 重复` : '边 id 缺失或非法'
+    const reason = typeof e.id === 'string' && e.id.trim() ? `边 id ${e.id} 重复` : '边 id 缺失或非法'
     warnings.push(`${reason}：保留文档序首条原 id，后续边已重发新 id ${fresh}`)
     return { ...e, id: fresh }
   })
@@ -2014,7 +2016,7 @@ function parseLegacyProject(raw: Record<string, unknown>, env: NormalizeEnv): Pa
     episodeTitles: normalizeEpisodeTitles(env0.episodeTitles, v0Warnings),
     viewport: graphRaw.viewport as Viewport | undefined,
   }
-  const migrated = migrateProjectDocument(legacy)
+  const migrated = migrateProjectDocument(legacy, v0Warnings)
   const legacyAtMs = Date.parse(
     typeof env0.project?.updatedAt === 'string' ? env0.project.updatedAt : '',
   )

@@ -604,4 +604,37 @@ describe('持久化所有者的代次重排与删除墓碑', () => {
       expect(names).toEqual(['A', 'A'])
     })
   })
+
+  it('删除失败不回吐已被后续成功保存取代的登记文档（陈旧重试不得覆盖新内容）', async () => {
+    let failFirst = true
+    handlers.set('load_project', () => modernFile())
+    handlers.set('save_project', () => {
+      if (failFirst) {
+        failFirst = false
+        throw new Error('磁盘满')
+      }
+      return undefined
+    })
+    handlers.set('delete_project', () => {
+      throw new Error('占用')
+    })
+    vi.useFakeTimers()
+    try {
+      const { projectStore } = await load()
+      await expect(projectStore.save('p1', docOf('旧A'))).rejects.toThrow('磁盘满')
+      // B 排在 A 之后、删除排队时仍在途：B 成功即取代 A 的重试登记
+      const savingB = projectStore.save('p1', docOf('新B'))
+      const deleting = projectStore.delete('p1')
+      await savingB
+      await expect(deleting).rejects.toThrow('占用')
+      // 红：回吐捕获的 A 登记会把旧文档重放覆盖已成功落盘的 B
+      await vi.advanceTimersByTimeAsync(20000)
+      const names = calls
+        .filter((c) => c.cmd === 'save_project')
+        .map((c) => (c.args as { doc: { project: { name: string } } }).doc.project.name)
+      expect(names).toEqual(['旧A', '新B'])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

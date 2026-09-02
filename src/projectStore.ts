@@ -212,12 +212,19 @@ const deletingIds = new Set<string>()
  * 登记；删除成功即随项目一并丢弃，绝不复活已删项目。 */
 const absorbedSaveDocs = new Map<string, ProjectContent>()
 
-function clearSaveRetry(id: string): void {
+/** 取消后台重试定时器（不触碰登记文档）：删除开场只需停摆定时器——墓碑
+ * 期定时器即使触发也只会被 enqueueSave 吸收（不会复活已删项目），但停摆
+ * 更干净；登记文档留待链落定处的全量清除与回吐判定。 */
+function clearSaveRetryTimer(id: string): void {
   const timer = retryTimers.get(id)
   if (timer !== undefined) {
     clearTimeout(timer)
     retryTimers.delete(id)
   }
+}
+
+function clearSaveRetry(id: string): void {
+  clearSaveRetryTimer(id)
   pendingRetryDocs.delete(id)
 }
 
@@ -267,22 +274,23 @@ function enqueueSave(id: string, doc: ProjectContent): Promise<void> {
 }
 
 /** 删除排进同项目保存链：在途保存落定后才发出删除（迟到的保存完成不得
- * 重建 JSON 复活项目）；并先取消全部重试登记（登记中的重试同样会复活）
- * ——取消的是定时器与登记，登记中的文档留存待删除结果处置（编辑器可能
- * 已卸载，最新编辑只存于此）；墓碑先行，删除排队期间及之后的保存一律
- * 吸收。删除失败（项目仍在磁盘）时按入队序回吐：先墓碑前失败保存留存
- * 的重试文档、再墓碑期间吸收的最新文档重新排队保存——吸收的冲刷已被
- * 上游视为成功，不回吐则最新编辑既没落盘也无重试登记；删除成功则留存
- * 与吸收的文档随项目一并丢弃。 */
+ * 重建 JSON 复活项目）；开场只停摆重试定时器、保留登记文档——登记反映
+ * 「最新未落盘的失败保存」，后续保存成功会自行清除它；墓碑先行，删除排队
+ * 期间及之后的保存一律吸收。链落定时读取登记（在途保存失败后新登记的、
+ * 或开场留存仍未被取代的）并全量清除，随后删除。删除失败（项目仍在磁盘）
+ * 时按入队序回吐：先链落定时留存的登记文档、再墓碑期间吸收的最新文档
+ * 重新排队保存——不回吐则最新编辑既没落盘也无重试登记；登记为空即最新
+ * 保存已成功（或从未失败），不得回放更早的旧登记（陈旧文档的重试不得
+ * 覆盖新内容）；删除成功则登记与吸收的文档随项目一并丢弃。 */
 function enqueueDelete(id: string): Promise<void> {
   deletingIds.add(id)
-  let retainedRetryDoc = pendingRetryDocs.get(id)
-  clearSaveRetry(id)
+  clearSaveRetryTimer(id)
   const run = (saveChains.get(id) ?? Promise.resolve()).catch(() => undefined)
+  let retainedRetryDoc: ProjectContent | undefined
   const next = run.then(async () => {
-    // 在途保存（墓碑前排队、未被吸收）失败后新登记的重试文档同款留存：
-    // 它在下方第二处清除时被摘下，删除失败即无回吐来源
-    retainedRetryDoc = pendingRetryDocs.get(id) ?? retainedRetryDoc
+    // 只认此刻的登记：后续保存成功已把它清除（旧代次作废），回退到开场
+    // 捕获值会把被取代的旧文档重放覆盖已落盘的新内容
+    retainedRetryDoc = pendingRetryDocs.get(id)
     clearSaveRetry(id)
     const { invoke } = await import('@tauri-apps/api/core')
     await invoke('delete_project', { id })

@@ -180,6 +180,47 @@ describe('migrateProjectDocument · v0 头像兼容子步骤（§11：合并去�
     expect(idsOf(doc)).toEqual(['ch-lin'])
     expect(doc.settings.characters).toHaveLength(1)
   })
+
+  it('location 按 trim 规范化：空白差异复用既有地点，不建重复实体', () => {
+    const existing = { id: 'loc-1', name: '厨房' }
+    const sceneAt = (location: string) =>
+      node({
+        id: 's-loc',
+        type: 'scene',
+        position: { x: 0, y: 0 },
+        selected: false,
+        data: { name: '厨房戏', sceneNo: 7, interior: true, time: '日', synopsis: '', location },
+      } as unknown as CanvasNode)
+    const { doc } = migrateProjectDocument({
+      name: 'x',
+      nodes: [sceneAt('  厨房 ')],
+      edges: [],
+      settings: { characters: [], locations: [existing] },
+    })
+    expect((doc.nodes[0].data as { locationId?: string }).locationId).toBe('loc-1')
+    expect(doc.settings.locations).toHaveLength(1)
+  })
+
+  it('location 纯空白：删除镜像不建实体、留警告，不产生悬空 locationId', () => {
+    const sceneAt = () =>
+      node({
+        id: 's-blank',
+        type: 'scene',
+        position: { x: 0, y: 0 },
+        selected: false,
+        data: { name: '空白地点场', sceneNo: 8, interior: true, time: '日', synopsis: '', location: '   ' },
+      } as unknown as CanvasNode)
+    const warnings: string[] = []
+    const { doc } = migrateProjectDocument(
+      { name: 'x', nodes: [sceneAt()], edges: [], settings: { characters: [], locations: [] } },
+      warnings,
+    )
+    const scene = doc.nodes[0].data as { locationId?: string; location?: unknown }
+    expect(scene.locationId).toBeUndefined()
+    expect(scene.location).toBeUndefined()
+    expect(doc.settings.locations).toEqual([])
+    expect(warnings.some((w) => w.includes('空白'))).toBe(true)
+  })
 })
 
 describe('migrateProjectDocument · 列表项稳定 id 回填（S6479）', () => {

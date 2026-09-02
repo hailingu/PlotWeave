@@ -67,7 +67,10 @@ export function normalizeEpisodeTitles(
  *   后续就地重发——下游 Record 键控只留末见、下标句柄改写假定选项 id 唯一，
  *   不在此修复会丢实体或让连线静默滑向首见项。
  */
-export function migrateProjectDocument(doc: ProjectContent): {
+export function migrateProjectDocument(
+  doc: ProjectContent,
+  warnings?: string[],
+): {
   doc: ProjectContent
   migrated: boolean
 } {
@@ -185,10 +188,17 @@ export function migrateProjectDocument(doc: ProjectContent): {
     return entity.id
   }
 
+  /** 地点按完整名复用（§11 v0 兼容子步骤）：名称经同一 trim() 规范化比较，
+   * 空白差异不制造重复实体；新建 id 避开本域已有键与本轮已分配 id。调用方
+   * 须传入 trim 后非空的名称。 */
   const ensureLocation = (name: string): string => {
-    const hit = settings.locations.find((l) => l.name === name)
+    const hit = settings.locations.find(
+      (l) => typeof l.name === 'string' && l.name.trim() === name,
+    )
     if (hit) return hit.id
-    const entity = { id: newEntityId('loc'), name }
+    let fresh = newEntityId('loc')
+    while (settings.locations.some((l) => l.id === fresh)) fresh = newEntityId('loc')
+    const entity = { id: fresh, name }
     settings.locations.push(entity)
     migrated = true
     return entity.id
@@ -198,8 +208,10 @@ export function migrateProjectDocument(doc: ProjectContent): {
    * 合法 characterIds（仅字符串成员，随空白 id 重发改写（⑤））按原顺序合并
    * 去重（§11 v0 兼容子步骤：两来源并存不得互斥覆盖——空头像列也不清空
    * 结构化引用），成功转换后才删除 characters；只有两种来源都不存在时才
-   * 补空数组。结构化 locationId 有效时胜过过时的字符串镜像（合法 id 优先、
-   * 废弃镜像删除——字符串可能指向已被改名的旧地点）。 */
+   * 补空数组。地点镜像按 trim 规范化（§11 v0 兼容子步骤）：规范化后为空
+   * 删除并警告、不建实体（否则建出的空白名实体必被 v1 归一化隔离，场景
+   * 徒留悬空 locationId）；结构化 locationId 有效时胜过过时的字符串镜像
+   * （合法 id 优先、废弃镜像删除——字符串可能指向已被改名的旧地点）。 */
   const migrateSceneNode = (node: CanvasNode): CanvasNode => {
     const d = { ...(node.data as Record<string, unknown>) }
     const avatars = d.characters
@@ -229,8 +241,11 @@ export function migrateProjectDocument(doc: ProjectContent): {
       locationId = locationRemap.get(locationId)
     }
     if (typeof d.location === 'string') {
-      if (!(typeof locationId === 'string' && locationId.trim())) {
-        locationId = ensureLocation(d.location)
+      const locationName = d.location.trim()
+      if (!locationName) {
+        warnings?.push(`节点 ${String(node.id)} 的旧地点镜像为空白，已删除（不建实体）`)
+      } else if (!(typeof locationId === 'string' && locationId.trim())) {
+        locationId = ensureLocation(locationName)
       }
       delete d.location
       migrated = true

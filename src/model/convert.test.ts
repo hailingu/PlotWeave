@@ -997,6 +997,20 @@ describe('归一化：§11.1 第 3 步 id 重发 / 成环 / attach 宿主唯一'
     expect(reissued.id).not.toBe('e1')
     expect(round.warnings.some((w) => w.includes('重复') && w.includes('e1'))).toBe(true)
   })
+
+  it('空白边 id：非空串同款按 §8.1 trim 口径重发新 id 并警告', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    doc.graph.edges.push({
+      id: '   ', // 真值非空但 trim 后为空：React Flow 身份（选中/删除/撤销）不可靠
+      source: 'b1',
+      target: 'd1',
+      data: { kind: 'sequence' },
+    } as unknown as ProjectDocument['graph']['edges'][number])
+    const round = parseProject(doc)
+    const reissued = round.content.edges.find((e) => e.source === 'b1' && e.target === 'd1')!
+    expect(reissued.id).toMatch(/^edge-/)
+    expect(round.warnings.some((w) => w.includes('边 id 缺失或非法'))).toBe(true)
+  })
 })
 
 describe('归一化：设定集实体形状校验（§11.3，与 §9.3 upsert 边界同域）', () => {
