@@ -133,6 +133,40 @@ describe('tauriLoad：归一化与迁移回写', () => {
     expect(doc.name).toBe('现代剧')
   })
 
+  it('加载等到保存链静止：A 在途期间 B 入队，读盘不得早于 B 落定', async () => {
+    let releaseA: (() => void) | null = null
+    let saveCalls = 0
+    handlers.set('load_project', () => modernFile())
+    handlers.set('verify_project_assets', () => [])
+    handlers.set('save_project', () => {
+      saveCalls += 1
+      if (saveCalls === 1) {
+        // A 挂起（慢盘）
+        return new Promise<void>((resolve) => {
+          releaseA = resolve
+        })
+      }
+      return undefined // B 立即完成
+    })
+    const { projectStore } = await load()
+    const docOf = (name: string) => ({ name, nodes: [], edges: [], settings: { characters: [], locations: [] } })
+    const savingA = projectStore.save('p1', docOf('A'))
+    await vi.waitFor(() => expect(releaseA).not.toBeNull())
+    // load 先捕获 A 的链（单次等待只能看到 A）
+    const loading = projectStore.load('p1')
+    await new Promise((r) => setTimeout(r, 0))
+    // A 在途期间旧编辑器卸载冲刷把 B 排进链；随后 A 落定
+    const savingB = projectStore.save('p1', docOf('B'))
+    ;(releaseA as unknown as () => void)()
+    await savingA
+    await savingB
+    await loading
+    // 红：单次等待在 A 落定后立即读盘（B 尚未起跑）——读到的旧会话被编辑
+    // 即覆盖 B；须循环等到链静止
+    const order = calls.map((c) => c.cmd)
+    expect(order.indexOf('load_project')).toBeGreaterThan(order.lastIndexOf('save_project'))
+  })
+
   it('加载优先交付失败登记的最新文档：磁盘滞后时不展示丢编辑的旧版本', async () => {
     handlers.set('load_project', () => modernFile())
     handlers.set('save_project', () => {

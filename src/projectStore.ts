@@ -168,10 +168,16 @@ async function tauriCreate(name: string): Promise<ProjectSummary> {
 
 async function tauriLoad(id: string): Promise<ProjectContent> {
   const { invoke } = await import('@tauri-apps/api/core')
-  // §3.1 保存链先于读取：编辑器卸载后的冲刷可能在途/排队，直接读盘会
-  // 拿到旧文档——重开后的编辑把旧内容重新排队落盘，反向覆盖刚冲刷的
-  // 新编辑
-  await saveChains.get(id)?.catch(() => undefined)
+  // §3.1 保存链静止先于读取：编辑器卸载后的冲刷可能在途/排队，且旧
+  // 编辑器的防抖可能在 A 在途时又补交 B——单次等待只等 A，读盘会落在
+  // B 之前，重开后的编辑把旧内容重新落盘、反向覆盖 B。循环等到观察的
+  // 链不再变化（await 后仍是同一 Promise 即静止）为止
+  for (;;) {
+    const chain = saveChains.get(id)
+    if (chain === undefined) break
+    await chain.catch(() => undefined)
+    if (saveChains.get(id) === chain) break
+  }
   // 链上失败登记的最新文档比磁盘新（冲刷失败待重试）：以它交付会话
   // （经保存同款归一化，剥离运行态），否则用户看到丢编辑的旧版本，
   // 且随后编辑与重试登记竞态

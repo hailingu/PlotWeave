@@ -594,6 +594,24 @@ describe('AI 批量命令的逐类型载荷形状校验（信任边界：字段�
     expect(noAssets.issues[0].message).toContain('不存在')
   })
 
+  it('scene 引用字段空白域拒收：characterIds 成员与 locationId 须 trim 后非空（§8.1 同域）', () => {
+    const sceneWith = (patch: Record<string, unknown>) => [
+      { op: 'update_node', nodeId: 's1', patch },
+    ]
+    // 红：只查成员类型——空白引用进画布落盘，下次加载被归一化移除，
+    // 接受过的 AI 改动重开即变样
+    const badIds = validateAiBatch(sceneWith({ characterIds: ['ch-1', '   '] }), richSnap())
+    expect(badIds.ok).toBe(false)
+    expect(badIds.issues[0].message).toContain('characterIds')
+
+    const badLoc = validateAiBatch(sceneWith({ locationId: '  ' }), richSnap())
+    expect(badLoc.ok).toBe(false)
+    expect(badLoc.issues[0].message).toContain('locationId')
+
+    const good = validateAiBatch(sceneWith({ characterIds: ['ch-1'] }), richSnap())
+    expect(good.ok).toBe(true)
+  })
+
   it('update_node 的 refs 同款资产校验（patch 路径与 create 同一信任边界）', () => {
     const bad = validateAiBatch(
       [

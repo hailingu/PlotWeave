@@ -320,7 +320,15 @@ function scalarShapeIssues(nodeType: string, fields: Record<string, unknown>): s
   }
   switch (nodeType) {
     case 'scene':
-      ;['name', 'locationId', 'time', 'weather', 'synopsis'].forEach(str)
+      ;['name', 'time', 'weather', 'synopsis'].forEach(str)
+      // 引用 id 须 trim 后非空（§8.1 共同值域）：空白引用进画布落盘后会被
+      // 加载侧归一化移除——接受过的 AI 改动不得重开即变样
+      if (
+        fields.locationId !== undefined &&
+        (typeof fields.locationId !== 'string' || fields.locationId.trim() === '')
+      ) {
+        issues.push('locationId 须为非空白字符串')
+      }
       positiveSafeInt('sceneNo')
       positiveSafeInt('episodeNo')
       if (fields.interior !== undefined && typeof fields.interior !== 'boolean') {
@@ -369,8 +377,9 @@ function listShapeIssues(
   const issues: string[] = []
   if (nodeType === 'scene' && fields.characterIds !== undefined) {
     const arr = fields.characterIds
-    if (!Array.isArray(arr) || arr.some((c) => typeof c !== 'string')) {
-      issues.push('characterIds 须为字符串数组')
+    // 成员 trim 后非空（§8.1）：空白成员会被加载侧移除，接受的批次重开即变
+    if (!Array.isArray(arr) || arr.some((c) => typeof c !== 'string' || c.trim() === '')) {
+      issues.push('characterIds 须为非空白字符串数组')
     }
   }
   if (nodeType === 'dialogue' && fields.lines !== undefined) {

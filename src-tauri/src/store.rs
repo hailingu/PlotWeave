@@ -419,8 +419,14 @@ fn validate_save_episode_titles(titles: &serde_json::Value) -> Result<(), String
         if !is_canonical_episode_key(k) {
             return Err(format!("episodeTitles 键 {k:?} 不是规范十进制正整数"));
         }
-        if !v.is_string() {
+        let Some(title) = v.as_str() else {
             return Err(format!("episodeTitles[{k:?}] 的值必须是字符串"));
+        };
+        // 值域与 set_episode_title 同域（落盘前 trim、去空白后非空）：
+        // 空白/带空白标题若放行，下次加载被 trim/删除并触发修复回写——
+        // 保存边界接受过的文档不得重开即变
+        if title.trim() != title || title.trim().is_empty() {
+            return Err(format!("episodeTitles[{k:?}] 的标题须为去空白后的非空串"));
         }
     }
     Ok(())
@@ -1876,6 +1882,17 @@ mod tests {
         let mut doc = valid_save_doc();
         doc.episode_titles = json!({ "1": 42 });
         assert!(prepare_save("p-1", &doc).is_err());
+        // 值域与 set_episode_title 同域（落盘前 trim、去空白后非空）：空白/
+        // 带空白标题若放行，下次加载被 trim/删除并触发修复回写——保存边界
+        // 接受过的文档不得重开即变
+        for bad_title in ["   ", " 开局 ", ""] {
+            let mut doc = valid_save_doc();
+            doc.episode_titles = json!({ "1": bad_title });
+            assert!(
+                prepare_save("p-1", &doc).is_err(),
+                "应拒绝标题 {bad_title:?}"
+            );
+        }
     }
 
     #[test]
