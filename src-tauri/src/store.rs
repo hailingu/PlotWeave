@@ -1087,8 +1087,12 @@ fn classify_versionless(
 /// 解析项目文件（§11 第 0 步信封判型）：显式 `schemaVersion` 定族并经
 /// 家族一致性校验（parse_explicit_envelope），缺失时按顶层键形状特征判型
 /// （classify_versionless）；两族矛盾或不可判型一律拒绝并保留原文件。
-/// 缺失的时间戳就地修复为有效 ISO（serde 默认空串）——否则前端
-/// new Date('') 抛 RangeError 会清空整个首页列表。
+/// 缺失/异型的 project 元数据（id/时间戳等）以空串**原样透传**，不在读取
+/// 侧预合成——预合成会让前端 repaired 检测看不见缺陷（载荷已是修好的
+/// 值）：修复不回写、脏文件长留磁盘，且每次 list 都合成新的当前时刻把
+/// 未动过的项目顶到最近列表顶端。修复与落盘归前端 §11.1 第 2 步
+/// （受信 id 覆盖、时间戳回退链，随 repaired 标志回写）；列表排序把
+/// 不可解析时间戳稳定排最后（sort_metas_by_recency）。
 fn parse_file(id: &str, text: &str) -> Result<ProjectFile, String> {
     let value: serde_json::Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
     let v1_keys = ["project", "graph", "assets"]
@@ -1100,24 +1104,10 @@ fn parse_file(id: &str, text: &str) -> Result<ProjectFile, String> {
         .filter(|k| value.get(*k).is_some())
         .count();
     let has_legacy_list = value.get("nodes").is_some() || value.get("edges").is_some();
-    let mut file = match value.get("schemaVersion") {
+    Ok(match value.get("schemaVersion") {
         Some(_) => parse_explicit_envelope(id, value, v1_keys, legacy_keys)?,
         None => classify_versionless(id, value, v1_keys, legacy_keys, has_legacy_list)?,
-    };
-    if file.project.id.is_empty() {
-        file.project.id = id.to_string();
-    }
-    if file.project.updated_at.is_empty() {
-        file.project.updated_at = if file.project.created_at.is_empty() {
-            now_iso()
-        } else {
-            file.project.created_at.clone()
-        };
-    }
-    if file.project.created_at.is_empty() {
-        file.project.created_at = file.project.updated_at.clone();
-    }
-    Ok(file)
+    })
 }
 
 /// 新建空项目（空画布 v1 信封），返回其摘要。
@@ -1534,9 +1524,12 @@ mod tests {
     }
 
     #[test]
-    fn v1_file_missing_timestamps_gets_repaired() {
-        // 缺 project 时间戳的信封（serde 默认空串）：读取即修复为有效 ISO，
-        // 否则前端 new Date('').toISOString() 抛 RangeError，首页列表被清空
+    fn v1_file_missing_timestamps_pass_through_for_frontend_repair() {
+        // 缺 project 时间戳的信封原样透传（空串）：Rust 侧预合成会让前端
+        // repaired 检测看不见缺陷（快照已是修好的值）——修复不回写、脏文件
+        // 长留，且每次 list 都合成新时刻把未动过的项目顶到最近列表顶端。
+        // 前端 §11.1 第 2 步修复时间戳并按 repaired 回写落定；列表排序把
+        // 不可解析时间戳稳定排最后（sort_metas_by_recency）。
         let v1 = json!({
             "schemaVersion": 1,
             "project": { "id": "p-1", "name": "旧时间" },
@@ -1546,8 +1539,8 @@ mod tests {
             "assets": { "byId": {} },
         });
         let file = parse_file("p-1", &v1.to_string()).unwrap();
-        assert!(!file.project.updated_at.is_empty());
-        assert!(!file.project.created_at.is_empty());
+        assert!(file.project.updated_at.is_empty());
+        assert!(file.project.created_at.is_empty());
     }
 
     #[test]
@@ -1674,21 +1667,23 @@ mod tests {
             "assets": { "byId": {} },
         });
         let file = parse_file("p-1", &doc.to_string()).unwrap();
-        assert_eq!(file.project.id, "p-1"); // 受信路径 id 回填
+        // id 缺省同样透传（空串）：前端以受信路径 id 覆盖并按 repaired 回写
+        assert!(file.project.id.is_empty());
         assert!(file.project.name.is_empty()); // 名称缺省，前端按回退链修复
 
-        // 字段级异型：name/description/时间戳非字符串，id 非字符串
+        // 字段级异型：name/description/时间戳非字符串，id 非字符串——
+        // 一律回退空串透传，修复与落盘归前端归一化层
         let doc = json!({
             "schemaVersion": 1,
             "project": { "id": 7, "name": null, "description": 42, "createdAt": 5, "updatedAt": [] },
             "graph": { "nodes": [{ "id": "s1" }], "edges": [] },
         });
         let file = parse_file("p-1", &doc.to_string()).unwrap();
-        assert_eq!(file.project.id, "p-1");
+        assert!(file.project.id.is_empty());
         assert!(file.project.name.is_empty());
         assert_eq!(file.project.description, None);
-        assert!(is_valid_iso8601(&file.project.created_at));
-        assert!(is_valid_iso8601(&file.project.updated_at));
+        assert!(file.project.created_at.is_empty());
+        assert!(file.project.updated_at.is_empty());
         // graph 原样透传，内容不丢
         assert_eq!(file.graph["nodes"][0]["id"], json!("s1"));
     }
@@ -1788,7 +1783,8 @@ mod tests {
         });
         let file = parse_file("p-1", &sparse.to_string()).unwrap();
         assert_eq!(file.schema_version, 1);
-        assert_eq!(file.project.id, "p-1"); // 缺省时以文件名回填
+        // 缺省 id 透传空串：前端以受信路径 id 覆盖并随 repaired 回写落定
+        assert_eq!(file.project.id, "");
         assert_eq!(file.settings, json!({}));
         assert_eq!(file.assets, json!({ "byId": {} }));
     }

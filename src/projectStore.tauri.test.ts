@@ -125,6 +125,20 @@ describe('tauriLoad：归一化与迁移回写', () => {
     expect(calls.filter((c) => c.cmd === 'save_project')).toHaveLength(1)
   })
 
+  it('v1 缺失时间戳：前端归一化修复并回写——Rust 不再预合成，未动过的项目不再被每次 list 顶到最近列表顶端', async () => {
+    handlers.set('load_project', () => ({
+      ...modernFile(),
+      project: { id: 'p1', name: '缺时间' },
+    }))
+    handlers.set('save_project', () => undefined)
+    const { projectStore } = await load()
+    const doc = await projectStore.load('p1')
+    expect(doc.createdAt).toBeDefined()
+    // 红：Rust 读取时就把缺失时间戳预合成为当前时刻，前端 repaired 检测
+    // 看不见缺陷（载荷已是修好的值）——修复不回写，磁盘长留无时间戳文件
+    expect(calls.some((c) => c.cmd === 'save_project')).toBe(true)
+  })
+
   it('v1 文档解析为会话文档：spec/meta 拍平回节点 data', async () => {
     handlers.set('load_project', () => modernFile())
     const { projectStore } = await load()
