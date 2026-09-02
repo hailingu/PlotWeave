@@ -22,6 +22,7 @@ import {
   type ProjectSettings,
 } from './settings'
 import type { CanvasNode } from './nodes/types'
+import type { ProjectContent } from '../model/content'
 
 /** 节点人读标签：画布快照、改动预览与批次执行共用。 */
 export function nodeLabelOf(n: CanvasNode): string {
@@ -41,6 +42,9 @@ export interface AiBridgeDeps {
   settings: ProjectSettings
   nodesRef: { current: CanvasNode[] }
   edgesRef: { current: Edge[] }
+  /** 项目资产索引镜像（会话内不编辑资产，透传桶的稳定引用）：
+   * shot.refs 引用位的资产存在性/用途校验在快照里消费。 */
+  assetsRef: { current: ProjectContent['assets'] }
   buildNewNode: BuildNewNode
   applyDataPatch: (id: string, patch: Record<string, unknown>) => void
   setNodes: (updater: (all: CanvasNode[]) => CanvasNode[]) => void
@@ -70,6 +74,7 @@ export function useAiBridge(deps: AiBridgeDeps): AiBridge {
     settings,
     nodesRef,
     edgesRef,
+    assetsRef,
     buildNewNode,
     applyDataPatch,
     setNodes,
@@ -89,7 +94,8 @@ export function useAiBridge(deps: AiBridgeDeps): AiBridge {
     [nodes, edges, settings],
   )
 
-  /** AI 校验用的图快照（§12.2）：类型 + 分支选项（id）供分类型校验与端口解析。 */
+  /** AI 校验用的图快照（§12.2）：类型 + 分支选项（id）供分类型校验与端口解析；
+   * 资产索引（id → MIME）供 shot.refs 引用位的存在性/用途校验。 */
   const aiSnapshot = useCallback(
     (): AiGraphSnapshot => ({
       nodes: nodesRef.current.map((n) => ({
@@ -104,8 +110,12 @@ export function useAiBridge(deps: AiBridgeDeps): AiBridge {
         sourceHandle: e.sourceHandle,
         type: e.type,
       })),
+      // Map 精确匹配避免普通对象键的原型链误命中（如 assetId "constructor"）
+      assets: new Map(
+        Object.entries(assetsRef.current?.byId ?? {}).map(([id, a]) => [id, a.mime]),
+      ),
     }),
-    [nodesRef, edgesRef],
+    [nodesRef, edgesRef, assetsRef],
   )
 
   const validateAiReply = useCallback(

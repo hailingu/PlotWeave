@@ -153,6 +153,9 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
   const edgesRef = useRef(edges)
   nodesRef.current = nodes
   edgesRef.current = edges
+  /** 资产索引镜像（会话内不编辑资产，透传桶的稳定引用）：
+   * AI 快照与剧本导出的引用位解析按当前资产索引消费。 */
+  const assetsRef = useRef(project.assets)
   const episodeTitlesRef = useRef(episodeTitles)
   episodeTitlesRef.current = episodeTitles
 
@@ -549,6 +552,7 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
     settings,
     nodesRef,
     edgesRef,
+    assetsRef,
     buildNewNode,
     applyDataPatch,
     setNodes,
@@ -859,7 +863,7 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
       {exportOpen && (
         <ExportDialog
           projectName={project.name}
-          text={buildScriptMarkdown(project.name, nodes, edges, settings)}
+          text={buildScriptMarkdown(project.name, nodes, edges, settings, assetsRef.current)}
           onClose={() => setExportOpen(false)}
         />
       )}

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { extractBatchJson, validateAiBatch, type AiGraphSnapshot } from './commands'
 import { wouldCreateCycle } from '../graphRules'
 
-/** 测试用快照：节拍 n2 → 场景 n1 的两节点剧情流。 */
+/** 测试用快照：节拍 n2 → 场景 n1 的两节点剧情流（无资产）。 */
 function snap(): AiGraphSnapshot {
   return {
     nodes: [
@@ -10,10 +10,11 @@ function snap(): AiGraphSnapshot {
       { id: 'n2', type: 'beat', label: '节拍 · 开端' },
     ],
     edges: [{ source: 'n2', target: 'n1' }],
+    assets: new Map(),
   }
 }
 
-/** 测试用快照：场景 s1 下挂分镜 sh1，分支 b1（两个选项）。 */
+/** 测试用快照：场景 s1 下挂分镜 sh1，分支 b1（两个选项）；含 image/audio 资产。 */
 function richSnap(): AiGraphSnapshot {
   return {
     nodes: [
@@ -30,6 +31,10 @@ function richSnap(): AiGraphSnapshot {
       },
     ],
     edges: [],
+    assets: new Map([
+      ['a-img', 'image/png'],
+      ['a-aud', 'audio/mpeg'],
+    ]),
   }
 }
 
@@ -203,6 +208,7 @@ describe('列表项稳定 id 归一化（S6479 信任边界：AI 可送旧形态
     const s: AiGraphSnapshot = {
       nodes: [{ id: 'd9', type: 'dialogue', label: '对白 · 夜谈' }],
       edges: [],
+      assets: new Map(),
     }
     const v = validateAiBatch(
       [{ op: 'update_node', nodeId: 'd9', patch: { lines: [{ kind: 'action', text: '沉默' }] } }],
@@ -540,6 +546,63 @@ describe('AI 批量命令的逐类型载荷形状校验（信任边界：字段�
     )
     expect(bad.ok).toBe(false)
     expect(bad.issues.map((i) => i.message).join('\n')).toContain('refs')
+  })
+
+  it('shot refs 引用位：assetId 须命中快照资产且 MIME 家族匹配用途（§7.1/§11.3 对等）', () => {
+    const shotWith = (refs: unknown[]) => [
+      {
+        op: 'create_node',
+        nodeType: 'shot',
+        data: { shotNo: 1, size: '中景', picture: '', prompt: '', refs },
+      },
+    ]
+    const good = validateAiBatch(
+      shotWith([
+        { id: 'r1', kind: 'character', assetId: 'a-img' },
+        { id: 'r2', kind: 'audio', assetId: 'a-aud' },
+      ]),
+      richSnap(),
+    )
+    expect(good.ok).toBe(true)
+
+    const mismatch = validateAiBatch(
+      shotWith([{ id: 'r1', kind: 'audio', assetId: 'a-img' }]),
+      richSnap(),
+    )
+    expect(mismatch.ok).toBe(false)
+    expect(mismatch.issues[0].message).toContain('a-img')
+    expect(mismatch.issues[0].message).toContain('用途不匹配')
+
+    const ghost = validateAiBatch(
+      shotWith([{ id: 'r1', kind: 'character', assetId: 'ghost' }]),
+      richSnap(),
+    )
+    expect(ghost.ok).toBe(false)
+    expect(ghost.issues[0].message).toContain('ghost')
+    expect(ghost.issues[0].message).toContain('不存在')
+
+    // 快照无资产（空索引）：引用位无目标可解析，一律拒绝（AI 只能改用自由位）
+    const noAssets = validateAiBatch(
+      shotWith([{ id: 'r1', kind: 'character', assetId: 'a-img' }]),
+      snap(),
+    )
+    expect(noAssets.ok).toBe(false)
+    expect(noAssets.issues[0].message).toContain('不存在')
+  })
+
+  it('update_node 的 refs 同款资产校验（patch 路径与 create 同一信任边界）', () => {
+    const bad = validateAiBatch(
+      [
+        {
+          op: 'update_node',
+          nodeId: 'sh1',
+          patch: { refs: [{ id: 'r1', kind: 'location', assetId: 'a-aud' }] },
+        },
+      ],
+      richSnap(),
+    )
+    expect(bad.ok).toBe(false)
+    expect(bad.issues[0].message).toContain('用途不匹配')
   })
 
   it('合法载荷照常通过（不因形状校验收紧而误拒）', () => {

@@ -53,11 +53,22 @@ const nodes: CanvasNode[] = [
       size: '全景',
       picture: '雨夜天台',
       prompt: 'wide shot, rooftop',
-      refs: [{ kind: 'location', label: '氛围图' }],
+      refs: [
+        { id: 'r1', kind: 'location', label: '氛围图' },
+        { id: 'r2', kind: 'audio', assetId: 'aud-1' },
+        { id: 'r3', kind: 'character', assetId: 'gone-1' },
+      ],
     },
     selected: false,
   }),
 ]
+
+/** 项目资产索引：aud-1 存在，gone-1 已删（悬空引用按 §8.2.3 保留）。 */
+const assets = {
+  byId: {
+    'aud-1': { id: 'aud-1', relPath: 'assets/aud-1.mp3', mime: 'audio/mpeg', source: 'upload', createdAt: '2026-01-01T00:00:00.000Z' },
+  },
+} as Parameters<typeof buildScriptMarkdown>[4]
 
 const edges = [
   { id: 'e1', source: 's1', target: 'd1', sourceHandle: null },
@@ -65,7 +76,7 @@ const edges = [
 ] as unknown as Parameters<typeof buildScriptMarkdown>[2]
 
 describe('buildScriptMarkdown（§3.5/§5 导出）', () => {
-  const md = buildScriptMarkdown('样例剧', nodes, edges, settings)
+  const md = buildScriptMarkdown('样例剧', nodes, edges, settings, assets)
 
   it('场景头：场号 + 内外/地点/时间/天气 + 梗概 + 在场角色', () => {
     expect(md).toContain('## 场 01 · 天台夜话')
@@ -85,7 +96,13 @@ describe('buildScriptMarkdown（§3.5/§5 导出）', () => {
     expect(md).toContain('### 场 01 · 天台夜话（1 镜）')
     expect(md).toContain('**SHOT 01 · 全景** — 雨夜天台')
     expect(md).toContain('Prompt：wide shot, rooftop')
-    expect(md).toContain('引用：氛围图')
+    // 自由位出文案；引用位出资产 id（与卡片渲染同口径），悬空引用标注缺失
+    expect(md).toContain('引用：氛围图 / aud-1 / gone-1（资产缺失）')
+  })
+
+  it('未提供资产索引时引用位按悬空标注（不静默丢引用资产）', () => {
+    const bare = buildScriptMarkdown('x', nodes, edges, settings)
+    expect(bare).toContain('引用：氛围图 / aud-1（资产缺失） / gone-1（资产缺失）')
   })
 
   it('节拍与分支不出现在正文；失效角色引用标注已删除', () => {

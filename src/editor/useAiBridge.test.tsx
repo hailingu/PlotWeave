@@ -70,6 +70,13 @@ function setup(initialNodes: CanvasNode[] = [sceneNode('s1')], initialEdges: Edg
     settings: EMPTY_SETTINGS,
     nodesRef: { current: state.nodes },
     edgesRef: { current: state.edges },
+    assetsRef: {
+      current: {
+        byId: {
+          'a-img': { id: 'a-img', relPath: 'assets/a-img.png', mime: 'image/png', source: 'upload', createdAt: '2026-01-01T00:00:00.000Z' },
+        },
+      },
+    },
     buildNewNode: (type, opts) =>
       ({
         id: `ai-${type}-${state.nodes.length}`,
@@ -127,6 +134,27 @@ describe('useAiBridge（§6/§12 AI 桥回调族）', () => {
       { op: 'update_node', nodeId: 's1', patch: { hack: 1 } },
     ])
     expect(bad?.ok).toBe(false)
+  })
+
+  it('快照携带资产索引：shot refs 的 assetId 按项目资产校验存在性与用途', () => {
+    const { result } = setup()
+    const good = result.current.validateCommands([
+      {
+        op: 'create_node',
+        nodeType: 'shot',
+        data: { shotNo: 1, size: '中景', picture: '', prompt: '', refs: [{ kind: 'character', assetId: 'a-img' }] },
+      },
+    ])
+    expect(good?.ok).toBe(true)
+    const ghost = result.current.validateCommands([
+      {
+        op: 'create_node',
+        nodeType: 'shot',
+        data: { shotNo: 1, size: '中景', picture: '', prompt: '', refs: [{ kind: 'audio', assetId: 'a-img' }] },
+      },
+    ])
+    expect(ghost?.ok).toBe(false)
+    expect(ghost?.issues[0].message).toContain('用途不匹配')
   })
 
   it('readNode：存在返回 JSON 片段；不存在返回 null', () => {

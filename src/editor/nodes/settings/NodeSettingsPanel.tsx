@@ -462,10 +462,20 @@ function ShotForm({ node }: { readonly node: Extract<PanelNode, { type: 'shot' }
           </div>
           <input
             className="pw-set-input"
-            value={ref.label}
+            value={ref.label ?? ''}
+            placeholder={
+              ref.assetId !== undefined
+                ? `资产引用 ${ref.assetId}——输入文字将转为自由文案`
+                : undefined
+            }
             onChange={(e) =>
               patchNode(node.id, {
-                refs: d.refs.map((r, idx) => (idx === i ? { ...r, label: e.target.value } : r)),
+                // 输入文字即切换为自由位（§4.2 assetId/label 互斥）：剥离
+                // assetId 而非并存——双字段形态保存成功但下次加载被归一化
+                // 静默删除，用户输入凭空丢失
+                refs: d.refs.map((r, idx) =>
+                  idx === i ? { id: r.id, kind: r.kind, label: e.target.value } : r,
+                ),
               })
             }
           />

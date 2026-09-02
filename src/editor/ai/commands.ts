@@ -45,6 +45,9 @@ export interface AiGraphSnapshot {
     options?: Array<{ id: string; label: string }>
   }>
   edges: Array<{ source: string; target: string; sourceHandle?: string | null; type?: string }>
+  /** 项目资产索引（id → MIME）：shot.refs 引用位的资产存在性与用途匹配校验
+   * （§7.1/§11.3 的批命令对等）。空索引 = 无资产，引用位一律拒绝。 */
+  assets: ReadonlyMap<string, string>
 }
 
 /** 预览卡的单行条目（§6：逐项列出受影响节点与变更类型）。 */
@@ -198,6 +201,8 @@ interface FoldState {
   exists: Set<string>
   /** ref 别名 → 所属节点 id。 */
   refOwner: Map<string, string>
+  /** 项目资产索引（id → MIME）：shot.refs 引用位校验用。 */
+  assets: ReadonlyMap<string, string>
   items: PreviewItem[]
   issues: BatchIssue[]
   commands: AiCommand[]
@@ -268,18 +273,33 @@ function branchOptionsError(options: unknown[]): string | null {
   return bad ? '分支 options 含异型成员（须为字符串或带字符串 label 的对象）' : null
 }
 
-/** shot.refs 成员的引用位联合（§4.2 ShotRef 的信任边界对等）：与加载侧
- * isShotRefShape 同口径——双字段**键在场**即非法（值类型 XOR 不足以判定
- * `{assetId, label: 5}` 这类成员），避免交付后被下次加载静默删除；
- * assetId 须非空白——空串是 string 但不可解析，装上即永久悬空引用
- * （加载侧空白的唯一出路是指向空键资产随重发改写，无映射即移除）。 */
-function isShotRefMember(r: unknown): boolean {
-  if (!plainObject(r)) return false
-  if (r.kind !== 'character' && r.kind !== 'location' && r.kind !== 'audio') return false
-  if ('assetId' in r && 'label' in r) return false
+/** shot.refs 成员的引用位联合 + 资产目标校验（§4.2 ShotRef 的信任边界对等，
+ * §7.1/§11.3）：与加载侧 isShotRefShape 同口径——双字段**键在场**即非法
+ * （值类型 XOR 不足以判定 `{assetId, label: 5}` 这类成员），assetId 须非空白
+ * ——空串是 string 但不可解析，装上即永久悬空引用。引用位还须命中快照资产
+ * 且 MIME 家族匹配用途（character/location → image/*，audio → audio/*，
+ * 与加载侧归一化同域）——不存在的资产或用途错配的引用进画布即悬空/不可用，
+ * 保存虽成功、加载侧只会标记问题，AI 边界须前置拒绝。返回拒绝原因；
+ * null 表示通过。 */
+function shotRefMemberIssue(r: unknown, assets: ReadonlyMap<string, string>): string | null {
+  if (!plainObject(r)) return '不是普通对象'
+  if (r.kind !== 'character' && r.kind !== 'location' && r.kind !== 'audio') {
+    return `kind 未知（${String(r.kind)}）`
+  }
+  if ('assetId' in r && 'label' in r) return 'assetId 与 label 并存（引用位与自由位互斥）'
   const hasAsset = typeof r.assetId === 'string' && r.assetId.trim() !== ''
   const hasLabel = typeof r.label === 'string'
-  return hasAsset !== hasLabel
+  if (hasAsset === hasLabel) return 'assetId 非空白字符串 / label 字符串须恰居其一'
+  if (!hasAsset) return null
+  const mime = assets.get(r.assetId as string)
+  if (mime === undefined) {
+    return `资产 ${r.assetId as string} 不存在（引用位只按本项目资产索引解析）`
+  }
+  const family = r.kind === 'audio' ? 'audio/' : 'image/'
+  if (!mime.startsWith(family)) {
+    return `资产 ${r.assetId as string}（${mime}）与 ${r.kind} 引用用途不匹配（须 ${family}*）`
+  }
+  return null
 }
 
 /** 各类型的标量字段值形状（nodeValueShapeError 的分类型明细）。 */
@@ -328,8 +348,22 @@ function scalarShapeIssues(nodeType: string, fields: Record<string, unknown>): s
   return issues
 }
 
+/** shot.refs 列表的成员校验（S3776 拆解）：返回首见成员问题文案或 null。 */
+function shotRefsIssue(refs: unknown, assets: ReadonlyMap<string, string>): string | null {
+  if (!Array.isArray(refs)) return 'refs 须为对象数组'
+  for (const [i, r] of refs.entries()) {
+    const issue = shotRefMemberIssue(r, assets)
+    if (issue !== null) return `refs[${i}] ${issue}`
+  }
+  return null
+}
+
 /** 各类型的列表成员值形状（nodeValueShapeError 的分类型明细）。 */
-function listShapeIssues(nodeType: string, fields: Record<string, unknown>): string[] {
+function listShapeIssues(
+  nodeType: string,
+  fields: Record<string, unknown>,
+  assets: ReadonlyMap<string, string>,
+): string[] {
   const issues: string[] = []
   if (nodeType === 'scene' && fields.characterIds !== undefined) {
     const arr = fields.characterIds
@@ -351,10 +385,8 @@ function listShapeIssues(nodeType: string, fields: Record<string, unknown>): str
     }
   }
   if (nodeType === 'shot' && fields.refs !== undefined) {
-    const arr = fields.refs
-    if (!Array.isArray(arr) || arr.some((r) => !isShotRefMember(r))) {
-      issues.push('refs 须为引用位对象数组（kind ∈ character/location/audio，assetId 非空白字符串 / label 字符串恰一）')
-    }
+    const issue = shotRefsIssue(fields.refs, assets)
+    if (issue !== null) issues.push(issue)
   }
   return issues
 }
@@ -363,8 +395,12 @@ function listShapeIssues(nodeType: string, fields: Record<string, unknown>): str
  * 白名单只拦未知字段，异型**值**若放行会经 buildCanvasNode 摊进活动节点，
  * 渲染层（ShotNode 的 picture/refs、DialogueNode 的 lines）解引用即崩，
  * 加载归一化来不及兜底。字段存在才校验（patch 局部更新）；null 表示通过。 */
-function nodeValueShapeError(nodeType: string, fields: Record<string, unknown>): string | null {
-  const issues = [...scalarShapeIssues(nodeType, fields), ...listShapeIssues(nodeType, fields)]
+function nodeValueShapeError(
+  nodeType: string,
+  fields: Record<string, unknown>,
+  assets: ReadonlyMap<string, string>,
+): string | null {
+  const issues = [...scalarShapeIssues(nodeType, fields), ...listShapeIssues(nodeType, fields, assets)]
   return issues.length > 0 ? `载荷形状错误：${issues.join('；')}` : null
 }
 
@@ -375,7 +411,7 @@ function foldCreate(st: FoldState, cmd: Record<string, unknown>, index: number):
   if (!plainObject(data)) return st.fail(index, 'data 必须是字段对象')
   const keyError = checkFieldKeys(nodeType, data)
   if (keyError) return st.fail(index, keyError)
-  const shapeError = nodeValueShapeError(nodeType, data)
+  const shapeError = nodeValueShapeError(nodeType, data, st.assets)
   if (shapeError) return st.fail(index, shapeError)
   if (nodeType === 'branch' && Array.isArray(data.options)) {
     const optError = branchOptionsError(data.options as unknown[])
@@ -410,7 +446,7 @@ function foldUpdate(st: FoldState, cmd: Record<string, unknown>, index: number):
   if (!plainObject(patch) || Object.keys(patch).length === 0) return st.fail(index, 'patch 为空')
   const keyError = checkFieldKeys(st.types.get(id) ?? '', patch)
   if (keyError) return st.fail(index, keyError)
-  const patchShapeError = nodeValueShapeError(st.types.get(id) ?? '', patch)
+  const patchShapeError = nodeValueShapeError(st.types.get(id) ?? '', patch, st.assets)
   if (patchShapeError) return st.fail(index, patchShapeError)
   if (st.types.get(id) === 'branch' && Array.isArray(patch.options)) {
     const optError = branchOptionsError(patch.options as unknown[])
@@ -599,6 +635,7 @@ export function validateAiBatch(rawCommands: unknown, graph: AiGraphSnapshot): B
     virtualEdges: graph.edges.map((e) => ({ ...e })),
     exists: new Set(graph.nodes.map((n) => n.id)),
     refOwner: new Map(),
+    assets: graph.assets,
     items: [],
     issues: [],
     commands: [],

@@ -260,6 +260,25 @@ describe('ShotForm', () => {
     setup(shotNode)
     expect(screen.queryByPlaceholderText('未分集')).toBeNull()
   })
+
+  it('资产引用位输入文字即转自由位：剥离 assetId，不产出双字段禁写形态', () => {
+    const assetShot: PanelNode = {
+      id: 's2',
+      type: 'shot',
+      data: {
+        shotNo: 1,
+        size: '中景',
+        picture: '',
+        prompt: '',
+        refs: [{ id: 'r1', kind: 'character', assetId: 'a-1' }],
+      },
+    }
+    const { api } = setup(assetShot)
+    // 引用位显示资产 id 占位；输入文字即切换为自由位（§4.2 assetId/label 互斥——
+    // 双字段形态保存成功但下次加载被归一化静默删除）
+    fireEvent.change(screen.getByPlaceholderText(/a-1/), { target: { value: '人物垫图' } })
+    expect(patchOf(api).refs).toEqual([{ id: 'r1', kind: 'character', label: '人物垫图' }])
+  })
 })
 
 describe('面板动作', () => {
