@@ -1943,7 +1943,10 @@ function v0List(
  * 类型专属键控列表按 §4.2 各自的成员域过滤——branch.options 的字符串成员
  * 是合法旧形态须放行。损坏的单节点数据按可修复项处理，绝不让迁移器的
  * map/成员读取把整份旧档打成打不开。就地改写传入的成员对象。 */
-function normalizeV0NodeShapes(nodes: Record<string, unknown>[], warnings: string[]): void {
+function normalizeV0NodeShapes(
+  nodes: Record<string, unknown>[],
+  warnings: string[],
+): Record<string, unknown>[] {
   const isObjectMember = (m: unknown) => isPlainObject(m)
   /** 头像成员预过滤谓词（迁移链 ④ 前置，场景头像与对白 speaker 共用）：
    * 非空白字符串 label + 可选字符串 gradient 才可用——空 label 会让
@@ -1954,14 +1957,24 @@ function normalizeV0NodeShapes(nodes: Record<string, unknown>[], warnings: strin
     typeof m.label === 'string' &&
     m.label.trim() !== '' &&
     (m.gradient === undefined || typeof m.gradient === 'string')
-  for (const node of nodes) {
+  return nodes.filter((node) => {
+    // data 容器异型（null/字符串等）整个节点隔离（§11.1 第 0 步）：重置为
+    // {} 会让迁移造出 lines:[] + 空 label 的"合法"空白节点——修复回写把
+    // 损坏节点永久固化成空白节点；关联边随孤儿边规则隔离
+    if (!isPlainObject(node.data)) {
+      const nid = typeof node.id === 'string' && node.id ? node.id : '(无 id)'
+      warnings.push(`节点 ${nid} 的 data 缺失或非对象，无法机械修复，已隔离`)
+      return false
+    }
     normalizeV0NodeShape(node, isObjectMember, isUsableAvatar, warnings)
-  }
+    return true
+  })
 }
 
-/** 单个 v0 节点的嵌套形状预归一化（normalizeV0NodeShapes 内核）：position
- * 缺失/非对象补默认 (0,0)（toStoryNode 解引用 n.position.x，不补则单个
- * 损坏旧节点令整档迁移崩溃）；data 非对象重置；类型专属列表见 v0List。 */
+/** 单个 v0 节点的嵌套形状预归一化（normalizeV0NodeShapes 内核，仅处理
+ * data 容器为普通对象的节点——异型容器已由调用方隔离）：position 缺失/
+ * 非对象补默认 (0,0)（toStoryNode 解引用 n.position.x，不补则单个损坏
+ * 旧节点令整档迁移崩溃）；类型专属列表见 v0List。 */
 function normalizeV0NodeShape(
   node: Record<string, unknown>,
   isObjectMember: (m: unknown) => boolean,
@@ -1973,14 +1986,7 @@ function normalizeV0NodeShape(
     warnings.push(`节点 ${nid} 的 position 缺失或非对象，已置 (0,0)`)
     node.position = { x: 0, y: 0 }
   }
-  let data: Record<string, unknown>
-  if (isPlainObject(node.data)) {
-    data = node.data
-  } else {
-    warnings.push(`节点 ${nid} 的 data 缺失或非对象，已重置为空对象`)
-    data = {}
-    node.data = data
-  }
+  const data = node.data as Record<string, unknown>
   switch (node.type) {
     case 'scene':
       v0List(data, 'characters', nid, isUsableAvatar, false, warnings)
@@ -2060,8 +2066,10 @@ function parseLegacyProject(raw: Record<string, unknown>, env: NormalizeEnv): Pa
     })
     return out
   }
-  const v0Nodes = v0Members(v0Array(graphRaw.nodes, 'graph.nodes'), 'graph.nodes')
-  normalizeV0NodeShapes(v0Nodes, v0Warnings)
+  const v0Nodes = normalizeV0NodeShapes(
+    v0Members(v0Array(graphRaw.nodes, 'graph.nodes'), 'graph.nodes'),
+    v0Warnings,
+  )
   const legacy: ProjectContent = {
     name: env0.project?.name ?? '',
     createdAt: env0.project?.createdAt || undefined,

@@ -330,9 +330,11 @@ export function migrateProjectDocument(
 
 /** 旧运行态的分支边按数组下标定位出口（option-N）；v1 绑稳定选项 id（§4.2 修订）。
  * 须在 migrateProjectDocument 之后调用（此时选项已带稳定 id）；
- * 能解析的下标就地改写。越界/指向已删槽位的数字句柄在迁移期直接隔离并
- * 警告（§11.1 ②）：数字字面量可能碰巧等于某选项的数值型稳定 id，原样
- * 保留会被 v1 当稳定句柄解释而静默改接到该选项。 */
+ * 能解析的下标就地改写。规范 0 基句柄（0|[1-9]\d*）之外与越界/指向已删
+ * 槽位的数字句柄都在迁移期直接隔离并警告（§11.1 ②）：数字字面量可能碰巧
+ * 等于某选项的数值型稳定 id，原样保留会被 v1 当稳定句柄解释而静默改接到
+ * 该选项；非规范书写（option-01 等）同样不得按其数值解释——Number('01')
+ * 会静默改接选项归属，且 v0 选项 id 恒为 opt- 前缀，纯数字只能是旧式句柄。 */
 export function rewriteIndexOptionHandles(
   doc: ProjectContent,
   warnings?: string[],
@@ -341,10 +343,13 @@ export function rewriteIndexOptionHandles(
   const edges = doc.edges
     .map((e): Edge | null => {
       const optionId = branchOptionIdOf(e.sourceHandle)
-      // 只改写旧式的纯数字下标句柄；id 句柄与其他端口原样放行
-      if (optionId === undefined || !/^\d+$/.test(optionId)) return e
+      if (optionId === undefined) return e
       const src = nodesById.get(e.source)
       if (src?.type !== 'branch') return e
+      if (!/^(0|[1-9]\d*)$/.test(optionId)) {
+        warnings?.push(`边 ${e.id} 的旧下标句柄 ${String(e.sourceHandle)} 非规范书写（须 0 基规范十进制），已隔离`)
+        return null
+      }
       const option = src.data.options[Number(optionId)]
       if (option) return { ...e, sourceHandle: branchOptionHandle(option.id) }
       warnings?.push(`边 ${e.id} 的旧下标句柄 ${String(e.sourceHandle)} 越界或指向已删选项，已隔离`)

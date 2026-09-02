@@ -532,6 +532,30 @@ describe('parseProject（ProjectDocument → 会话文档，§11 归一化）', 
     expect(dupRound.content.edges).toHaveLength(1)
   })
 
+  it('schemaVersion 0 节点 data 容器异型（null/字符串）：隔离节点与关联边，不制造空白合法节点被回写固化', () => {
+    const v0 = {
+      schemaVersion: 0,
+      project: { id: 'p-old', name: '旧剧', createdAt: '', updatedAt: '2026-01-01T00:00:00.000Z' },
+      graph: {
+        nodes: [
+          // data 非普通对象：预检若重置为 {}，迁移会造出 lines:[] + 空 label
+          // 的"合法"空白对白——修复回写把损坏节点永久固化成空白节点
+          { id: 'd1', type: 'dialogue', position: { x: 0, y: 0 }, data: null },
+          { id: 's1', type: 'scene', position: { x: 0, y: 0 }, data: { name: '场一', sceneNo: 1, interior: true, synopsis: '' } },
+        ],
+        edges: [{ id: 'e1', source: 's1', target: 'd1', className: 'pw-edge-sequence' }],
+      },
+      settings: { characters: [], locations: [] },
+      episodeTitles: {},
+      assets: { byId: {} },
+    }
+    const round = parseProject(v0)
+    expect(round.content.nodes.some((n) => n.id === 'd1')).toBe(false)
+    // 关联边随孤儿边规则隔离
+    expect(round.content.edges).toHaveLength(0)
+    expect(round.warnings.some((w) => w.includes('d1') && w.includes('隔离'))).toBe(true)
+  })
+
   it('schemaVersion 0 旧信封：边判别字段（type/className）归类为显式 data.kind', () => {
     const v0 = {
       schemaVersion: 0,

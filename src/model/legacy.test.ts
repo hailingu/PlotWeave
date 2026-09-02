@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { migrateProjectDocument } from './legacy'
+import { migrateProjectDocument, rewriteIndexOptionHandles } from './legacy'
 import type { ProjectContent } from './content'
 import type { CanvasNode } from '../editor/nodes/types'
 
@@ -272,5 +272,56 @@ describe('migrateProjectDocument · 列表项稳定 id 回填（S6479）', () =>
 
     const again = migrateProjectDocument({ name: 'x', nodes: doc.nodes, edges: [], settings: doc.settings })
     expect(again.migrated).toBe(false)
+  })
+})
+
+describe('rewriteIndexOptionHandles（旧下标句柄改写，§11.1 ②）', () => {
+  const branchOf = (options: unknown[]) =>
+    node({
+      id: 'b1',
+      type: 'branch',
+      position: { x: 0, y: 0 },
+      data: { prompt: '？', options },
+    } as unknown as CanvasNode)
+  const scene = node({
+    id: 't1',
+    type: 'scene',
+    position: { x: 0, y: 0 },
+    data: { name: '目标', sceneNo: 1, interior: true, time: '', synopsis: '', characterIds: [] },
+  } as unknown as CanvasNode)
+
+  it('规范 0 基下标改写到稳定选项 id；越界句柄隔离', () => {
+    const { doc } = migrateProjectDocument({
+      name: 'x',
+      nodes: [branchOf(['左', '右']), scene],
+      edges: [],
+      settings: { characters: [], locations: [] },
+    })
+    const options = (doc.nodes[0].data as { options: Array<{ id: string }> }).options
+    const edges = [
+      { id: 'e-ok', source: 'b1', target: 't1', sourceHandle: 'option-1' },
+      { id: 'e-oob', source: 'b1', target: 't1', sourceHandle: 'option-9' },
+    ] as unknown as ProjectContent['edges']
+    const warnings: string[] = []
+    const out = rewriteIndexOptionHandles({ ...doc, edges }, warnings)
+    expect(out.edges).toHaveLength(1)
+    expect(out.edges[0].sourceHandle).toBe(`option-${options[1].id}`)
+    expect(warnings.some((w) => w.includes('e-oob'))).toBe(true)
+  })
+
+  it('非规范下标书写（option-01）不按数值解释：迁移期隔离并警告——Number(01) 会静默改接选项归属', () => {
+    const { doc } = migrateProjectDocument({
+      name: 'x',
+      nodes: [branchOf(['左', '右']), scene],
+      edges: [],
+      settings: { characters: [], locations: [] },
+    })
+    const edges = [
+      { id: 'e-nc', source: 'b1', target: 't1', sourceHandle: 'option-01' },
+    ] as unknown as ProjectContent['edges']
+    const warnings: string[] = []
+    const out = rewriteIndexOptionHandles({ ...doc, edges }, warnings)
+    expect(out.edges).toHaveLength(0)
+    expect(warnings.some((w) => w.includes('e-nc') && w.includes('非规范'))).toBe(true)
   })
 })
