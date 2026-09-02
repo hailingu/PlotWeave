@@ -451,3 +451,54 @@ describe('持久化所有者的代次与删除串行（陈旧重试/复活防护
     }
   })
 })
+
+describe('持久化所有者的代次重排与删除墓碑', () => {
+  const docOf = (name: string) => ({ name, nodes: [], edges: [], settings: { characters: [], locations: [] } })
+
+  it('新代次失败须接管重试定时器：最新失败文档最终落盘', async () => {
+    handlers.set('load_project', () => modernFile())
+    handlers.set('save_project', () => {
+      throw new Error('只读')
+    })
+    vi.useFakeTimers()
+    try {
+      const { projectStore } = await load()
+      await expect(projectStore.save('p1', docOf('旧'))).rejects.toThrow('只读')
+      await expect(projectStore.save('p1', docOf('新'))).rejects.toThrow('只读')
+      // 红：A 的旧定时器触发即自灭，B 的登记无人重试
+      await vi.advanceTimersByTimeAsync(5000)
+      const names = calls
+        .filter((c) => c.cmd === 'save_project')
+        .map((c) => (c.args as { doc: { project: { name: string } } }).doc.project.name)
+      expect(names).toEqual(['旧', '新', '新']) // 重试以最新文档发起
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('删除开始后的保存排队被吸收：不复活已删项目', async () => {
+    let releaseA: (() => void) | null = null
+    handlers.set('load_project', () => modernFile())
+    handlers.set('save_project', () =>
+      new Promise<void>((resolve) => {
+        if (releaseA !== null) {
+          resolve() // 首次之后的保存立即完成：红态下 B 复活项目即被断言抓住
+          return
+        }
+        releaseA = resolve
+      }),
+    )
+    handlers.set('delete_project', () => undefined)
+    const { projectStore } = await load()
+    const savingA = projectStore.save('p1', docOf('A'))
+    const deleting = projectStore.delete('p1')
+    await vi.waitFor(() => expect(releaseA).not.toBeNull())
+    ;(releaseA as unknown as () => void)()
+    await savingA
+    // 编辑器卸载后的合并冲刷（B）在 A 完成后才排队：不得复活已删项目
+    await projectStore.save('p1', docOf('B'))
+    await deleting
+    expect(calls.filter((c) => c.cmd === 'save_project')).toHaveLength(1)
+    expect(calls.some((c) => c.cmd === 'delete_project')).toBe(true)
+  })
+})

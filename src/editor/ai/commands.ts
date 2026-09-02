@@ -268,10 +268,13 @@ function branchOptionsError(options: unknown[]): string | null {
   return bad ? '分支 options 含异型成员（须为字符串或带字符串 label 的对象）' : null
 }
 
-/** shot.refs 成员的引用位联合（§4.2 ShotRef 的信任边界对等）。 */
+/** shot.refs 成员的引用位联合（§4.2 ShotRef 的信任边界对等）：与加载侧
+ * isShotRefShape 同口径——双字段**键在场**即非法（值类型 XOR 不足以判定
+ * `{assetId, label: 5}` 这类成员），避免交付后被下次加载静默删除。 */
 function isShotRefMember(r: unknown): boolean {
   if (!plainObject(r)) return false
   if (r.kind !== 'character' && r.kind !== 'location' && r.kind !== 'audio') return false
+  if ('assetId' in r && 'label' in r) return false
   const hasAsset = typeof r.assetId === 'string'
   const hasLabel = typeof r.label === 'string'
   return hasAsset !== hasLabel

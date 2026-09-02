@@ -165,36 +165,45 @@ export function migrateProjectDocument(doc: ProjectContent): {
     return entity.id
   }
 
+  /** 场景节点的 v0 字段迁移（迁移链 ④ 内核）：头像列 → characterIds；
+   * 结构化 locationId 有效时胜过过时的字符串镜像（合法 id 优先、废弃镜像
+   * 删除——字符串可能指向已被改名的旧地点）；引用随空白 id 重发改写（⑤）。 */
+  const migrateSceneNode = (node: CanvasNode): CanvasNode => {
+    const d = { ...(node.data as Record<string, unknown>) }
+    const avatars = d.characters
+    let characterIds: string[]
+    if (Array.isArray(avatars)) {
+      characterIds = (avatars as { label: string; gradient?: string }[]).map((av) =>
+        ensureCharacter(av.label, av.gradient),
+      )
+      delete d.characters
+      migrated = true
+    } else if (Array.isArray(d.characterIds)) {
+      // 引用随空白 id 重发改写（⑤）：保持指向重发后的实体而非悬空
+      characterIds = (d.characterIds as unknown[]).map((c) =>
+        typeof c === 'string' && characterRemap.has(c) ? characterRemap.get(c) : c,
+      ) as string[]
+    } else {
+      characterIds = []
+      migrated = true
+    }
+    let locationId = d.locationId as string | undefined
+    if (typeof locationId === 'string' && locationRemap.has(locationId)) {
+      locationId = locationRemap.get(locationId)
+    }
+    if (typeof d.location === 'string') {
+      if (!(typeof locationId === 'string' && locationId.trim())) {
+        locationId = ensureLocation(d.location)
+      }
+      delete d.location
+      migrated = true
+    }
+    return { ...node, data: { ...d, characterIds, locationId } } as CanvasNode
+  }
+
   const nodes = doc.nodes.map((node) => {
     if (node.type === 'scene') {
-      const d = { ...(node.data as Record<string, unknown>) }
-      const avatars = d.characters
-      let characterIds: string[]
-      if (Array.isArray(avatars)) {
-        characterIds = (avatars as { label: string; gradient?: string }[]).map((av) =>
-          ensureCharacter(av.label, av.gradient),
-        )
-        delete d.characters
-        migrated = true
-      } else if (Array.isArray(d.characterIds)) {
-        // 引用随空白 id 重发改写（⑤）：保持指向重发后的实体而非悬空
-        characterIds = (d.characterIds as unknown[]).map((c) =>
-          typeof c === 'string' && characterRemap.has(c) ? characterRemap.get(c) : c,
-        ) as string[]
-      } else {
-        characterIds = []
-        migrated = true
-      }
-      let locationId = d.locationId as string | undefined
-      if (typeof locationId === 'string' && locationRemap.has(locationId)) {
-        locationId = locationRemap.get(locationId)
-      }
-      if (typeof d.location === 'string') {
-        locationId = ensureLocation(d.location)
-        delete d.location
-        migrated = true
-      }
-      return { ...node, data: { ...d, characterIds, locationId } } as CanvasNode
+      return migrateSceneNode(node)
     }
     if (node.type === 'dialogue') {
       const d = node.data

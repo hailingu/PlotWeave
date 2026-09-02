@@ -203,6 +203,10 @@ const saveChains = new Map<string, Promise<unknown>>()
 const pendingRetryDocs = new Map<string, ProjectContent>()
 const retryTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const saveGenerations = new Map<string, number>()
+/** 删除墓碑：删除开始即立——之后为该项目排队的任何保存被吸收，迟到的
+ * 合并冲刷/重试不得重建 JSON 复活用户刚删的项目；删除落定（成功或失败）
+ * 后清除，失败时项目仍在、可继续保存。 */
+const deletingIds = new Set<string>()
 
 function clearSaveRetry(id: string): void {
   const timer = retryTimers.get(id)
@@ -227,6 +231,10 @@ function scheduleSaveRetry(id: string, generation: number): void {
 }
 
 function enqueueSave(id: string, doc: ProjectContent): Promise<void> {
+  if (deletingIds.has(id)) {
+    console.warn('[projectStore] 项目删除中，吸收本次保存排队', id)
+    return Promise.resolve()
+  }
   const generation = (saveGenerations.get(id) ?? 0) + 1
   saveGenerations.set(id, generation)
   const run = (saveChains.get(id) ?? Promise.resolve()).catch(() => undefined)
@@ -236,7 +244,14 @@ function enqueueSave(id: string, doc: ProjectContent): Promise<void> {
       pendingRetryDocs.delete(id)
     } catch (err) {
       pendingRetryDocs.set(id, doc)
-      if (!retryTimers.has(id)) scheduleSaveRetry(id, generation)
+      // 新代次失败接管定时器：旧代次定时器留着会在触发时因代次不符自灭，
+      // 最新登记将无人重试（编辑器已卸载时即永久丢编辑）
+      const stale = retryTimers.get(id)
+      if (stale !== undefined) {
+        clearTimeout(stale)
+        retryTimers.delete(id)
+      }
+      scheduleSaveRetry(id, generation)
       console.error('[projectStore] 保存失败，已登记后台重试', err)
       throw err
     }
@@ -246,8 +261,10 @@ function enqueueSave(id: string, doc: ProjectContent): Promise<void> {
 }
 
 /** 删除排进同项目保存链：在途保存落定后才发出删除（迟到的保存完成不得
- * 重建 JSON 复活项目）；并取消全部重试登记（登记中的重试同样会复活）。 */
+ * 重建 JSON 复活项目）；并先取消全部重试登记（登记中的重试同样会复活）；
+ * 墓碑先行，删除排队期间及之后的保存一律吸收。 */
 function enqueueDelete(id: string): Promise<void> {
+  deletingIds.add(id)
   clearSaveRetry(id)
   const run = (saveChains.get(id) ?? Promise.resolve()).catch(() => undefined)
   const next = run.then(async () => {
@@ -255,7 +272,12 @@ function enqueueDelete(id: string): Promise<void> {
     const { invoke } = await import('@tauri-apps/api/core')
     await invoke('delete_project', { id })
   })
-  saveChains.set(id, next)
+  next
+    .finally(() => {
+      deletingIds.delete(id)
+    })
+    .catch(() => undefined)
+  saveChains.set(id, next.catch(() => undefined))
   return next
 }
 

@@ -589,3 +589,20 @@ describe('attach 宿主唯一（§5：交互/AI 侧对等，不留「重开即�
     expect(rehost.ok, JSON.stringify(rehost.issues)).toBe(true)
   })
 })
+
+describe('ShotRef 双字段并存（§4.2 联合的键在场判定）', () => {
+  it('assetId 与 label 同时在场（即使 label 非字符串）：拒绝，不得交给加载侧静默删除', () => {
+    const bad = validateAiBatch(
+      [
+        {
+          op: 'create_node',
+          nodeType: 'shot',
+          data: { shotNo: 1, size: '特写', picture: '', prompt: '', refs: [{ kind: 'audio', assetId: 'a1', label: 5 }] },
+        },
+      ],
+      snap(),
+    )
+    expect(bad.ok).toBe(false)
+    expect(bad.issues.map((i) => i.message).join('\n')).toContain('refs')
+  })
+})

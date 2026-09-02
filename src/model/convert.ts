@@ -1765,8 +1765,16 @@ function v0List(
  * map/成员读取把整份旧档打成打不开。就地改写传入的成员对象。 */
 function normalizeV0NodeShapes(nodes: Record<string, unknown>[], warnings: string[]): void {
   const isObjectMember = (m: unknown) => isPlainObject(m)
+  /** 场景头像成员（迁移链 ④ 前置过滤）：非空白字符串 label + 可选字符串
+   * gradient 才可用——空 label 会让 ensureCharacter 以 startsWith('') 命中
+   * 首个既有角色（静默错关联），缺失/异型 label 补建的实体也终将被隔离。 */
+  const isUsableAvatar = (m: unknown) =>
+    isPlainObject(m) &&
+    typeof m.label === 'string' &&
+    m.label.trim() !== '' &&
+    (m.gradient === undefined || typeof m.gradient === 'string')
   for (const node of nodes) {
-    normalizeV0NodeShape(node, isObjectMember, warnings)
+    normalizeV0NodeShape(node, isObjectMember, isUsableAvatar, warnings)
   }
 }
 
@@ -1776,6 +1784,7 @@ function normalizeV0NodeShapes(nodes: Record<string, unknown>[], warnings: strin
 function normalizeV0NodeShape(
   node: Record<string, unknown>,
   isObjectMember: (m: unknown) => boolean,
+  isUsableAvatar: (m: unknown) => boolean,
   warnings: string[],
 ): void {
   const nid = typeof node.id === 'string' && node.id ? node.id : '(无 id)'
@@ -1793,7 +1802,7 @@ function normalizeV0NodeShape(
   }
   switch (node.type) {
     case 'scene':
-      v0List(data, 'characters', nid, isObjectMember, false, warnings)
+      v0List(data, 'characters', nid, isUsableAvatar, false, warnings)
       break
     case 'dialogue':
       v0List(data, 'lines', nid, isObjectMember, true, warnings)

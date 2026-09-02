@@ -2205,3 +2205,42 @@ describe('归一化：角色 id/token 专项修复（§6 子值域 [A-Za-z0-9_-]
     expect(round.warnings.some((w) => w.includes('bad]id'))).toBe(true)
   })
 })
+
+describe('v0 迁移的字段优先级与头像预过滤（迁移链 ④ 前置）', () => {
+  const v0Doc = (sceneData: Record<string, unknown>, characters: unknown[] = [], locations: unknown[] = []) => ({
+    schemaVersion: 0,
+    project: { id: 'p-old', name: '旧剧', createdAt: '', updatedAt: '2026-01-01T00:00:00.000Z' },
+    graph: {
+      nodes: [{ id: 's1', type: 'scene', position: { x: 0, y: 0 }, data: sceneData }],
+      edges: [],
+    },
+    settings: { characters, locations },
+    episodeTitles: {},
+    assets: { byId: {} },
+  })
+
+  it('合法 locationId 胜过过时的 location 字符串镜像：不补建实体、不改指向', () => {
+    const round = parseProject(v0Doc(
+      { name: '场一', sceneNo: 1, interior: true, synopsis: '', locationId: 'loc-1', location: '废弃地址' },
+      [],
+      [{ id: 'loc-1', name: '天台' }],
+    ))
+    const spec = round.content.nodes[0].data as { locationId?: string }
+    expect(spec.locationId).toBe('loc-1')
+    expect(round.content.settings.locations.map((l) => l.name)).toEqual(['天台'])
+  })
+
+  it('空 label 头像预过滤：不静默关联首角色、不补建空名实体', () => {
+    const round = parseProject(v0Doc(
+      { name: '场一', sceneNo: 1, interior: true, synopsis: '', characters: [{ label: '', gradient: 'g' }, { label: '林', gradient: 'g' }] },
+      [{ id: 'ch-1', name: '甲', gradient: 'g1' }],
+    ))
+    const spec = round.content.nodes[0].data as { characterIds: string[] }
+    // 空 label 头像不得命中首角色「甲」；「林」按规则补建
+    expect(spec.characterIds).toHaveLength(1)
+    const names = round.content.settings.characters.map((c) => c.name)
+    expect(names).toContain('林')
+    expect(names).not.toContain('')
+    expect(round.warnings.some((w) => w.includes('s1') && w.includes('characters'))).toBe(true)
+  })
+})
