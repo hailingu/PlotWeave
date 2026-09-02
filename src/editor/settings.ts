@@ -104,13 +104,14 @@ export function resolveLocationName(settings: ProjectSettings, id: string): stri
 }
 
 /** 项目文档缺省合并：旧文件无 settings 或字段缺失时补空集（向后兼容）。
- * documents 为契约透传桶：存在即原样保留（漏带即保存丢文档）。 */
+ * props/documents 为契约透传桶：存在即原样保留（漏带即保存/迁移回写丢失）。 */
 export function normalizeSettings(raw: unknown): ProjectSettings {
   if (typeof raw !== 'object' || raw === null) return { ...EMPTY_SETTINGS }
   const obj = raw as Partial<ProjectSettings>
   return {
     characters: Array.isArray(obj.characters) ? obj.characters : [],
     locations: Array.isArray(obj.locations) ? obj.locations : [],
+    ...(Array.isArray(obj.props) ? { props: obj.props } : {}),
     ...(Array.isArray(obj.documents) ? { documents: obj.documents } : {}),
   }
 }

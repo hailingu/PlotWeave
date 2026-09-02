@@ -67,4 +67,19 @@ describe('normalizeSettings（旧文件缺省合并）', () => {
       locations: [],
     })
   })
+
+  it('props/documents 契约透传桶：合法数组原样保留，异型丢弃（v0 迁移回写不得丢道具/文档）', () => {
+    const props = [{ id: 'pr1', name: '旧皮箱' }]
+    const documents = [{ id: 'doc1', title: '人物小传', body: '…', relatedIds: [] }]
+    expect(normalizeSettings({ props, documents })).toEqual({
+      characters: [],
+      locations: [],
+      props,
+      documents,
+    })
+    expect(normalizeSettings({ props: 'x', documents: 1 })).toEqual({
+      characters: [],
+      locations: [],
+    })
+  })
 })
