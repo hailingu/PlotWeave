@@ -650,9 +650,12 @@ function normalizeEntityShapes(
   }
 }
 
-/** RFC 7230 token（与 Rust is_mime_token 同域）：MIME 类型的单个组成部分。 */
+/** MIME token 字符集（与 Rust is_mime_token 同域）：RFC 7230 token 减去
+ * `*`——通配符是能力标记而非具体文件类型，Rust 保存边界刻意排除；加载侧
+ * 若放行 `image/*` 之类的条目，此后每次 save_project 都被保存边界整份
+ * 拒收（防抖吞错，用户编辑永不落盘），须在此同域隔离。 */
 function isMimeToken(s: string): boolean {
-  return /^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/.test(s)
+  return /^[A-Za-z0-9!#$%&'+.^_`|~-]+$/.test(s)
 }
 
 /** 规范 MIME（§7.1，与 Rust is_canonical_mime 同域）：恰好两个 token 以 / 分隔；

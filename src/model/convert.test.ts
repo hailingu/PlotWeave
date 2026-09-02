@@ -1380,6 +1380,20 @@ describe('归一化：assets.byId 完整 AssetRef 形状校验（§11.3，Rust �
     }
   })
 
+  it('通配 mime（image/*）：与 Rust 保存边界同域隔离——放行会让项目打得开但编辑永不落盘', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
+      assets: { byId: Record<string, Record<string, unknown>> }
+    }
+    doc.assets.byId['a-wild'] = { ...goodAsset, id: 'a-wild', mime: 'image/*' }
+    doc.assets.byId['a-keep'] = { ...goodAsset, id: 'a-keep' }
+    const round = parseProject(doc)
+    // 红：RFC 7230 允许 *，加载侧放行通配 mime——而 Rust is_mime_token 刻意
+    // 排除 *，此后每次 save_project 整份被拒（防抖吞错，编辑永不落盘）
+    expect(round.content.assets?.byId['a-wild']).toBeUndefined()
+    expect(round.content.assets?.byId['a-keep']).toBeDefined()
+    expect(round.warnings.some((w) => w.includes('a-wild'))).toBe(true)
+  })
+
   it('合法大小写/首尾空白的 mime：规范化后保留并警告（时区形式不同的合法时间戳保留）', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
       assets: { byId: Record<string, Record<string, unknown>> }

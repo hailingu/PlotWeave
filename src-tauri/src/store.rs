@@ -479,9 +479,29 @@ fn asset_lstat(path: &std::path::Path, rel_path: &str) -> Result<fs::Metadata, S
 
 /// Unix 组件身份 (dev, ino)。
 #[cfg(unix)]
-fn asset_identity(md: &fs::Metadata) -> (u64, u64) {
-    use std::os::unix::fs::MetadataExt;
-    (md.dev(), md.ino())
+/// (dev, ino) 身份提取：std 与 cap-std 的 Metadata 分属两个同方法的
+/// MetadataExt trait，以本地 trait 归一供 asset_identity 同时接受。
+#[cfg(unix)]
+trait IdentityExt {
+    fn dev_ino(&self) -> (u64, u64);
+}
+#[cfg(unix)]
+impl IdentityExt for fs::Metadata {
+    fn dev_ino(&self) -> (u64, u64) {
+        use std::os::unix::fs::MetadataExt;
+        (self.dev(), self.ino())
+    }
+}
+#[cfg(unix)]
+impl IdentityExt for cap_std::fs::Metadata {
+    fn dev_ino(&self) -> (u64, u64) {
+        use cap_std::fs::MetadataExt;
+        (self.dev(), self.ino())
+    }
+}
+#[cfg(unix)]
+fn asset_identity(md: &impl IdentityExt) -> (u64, u64) {
+    md.dev_ino()
 }
 
 /// 打开句柄后的三方一致性复核（Unix）：重新逐组件 no-follow 并与第一遍
@@ -1273,12 +1293,17 @@ pub fn copy_project_assets(app: AppHandle, from_id: String, to_id: String) -> Re
     copy_assets_tree(&dir, &from_id, &to_id)
 }
 
-/// copy_project_assets 的可测内核。
+/// copy_project_assets 的可测内核。全程相对已打开的 projects 根目录句柄
+/// 执行（§10.2 openat 语义，cap-std）：归类、目录打开、递归与文件创建
+/// 不再退回路径名拼接——源/目标子目录在元数据检查后被并发替换（含换成
+/// 符号链接）时，句柄相对解析仍不逃出 projects/，越界符号链接被沙箱拒绝。
 fn copy_assets_tree(dir: &std::path::Path, from_id: &str, to_id: &str) -> Result<(), String> {
     validate_id(from_id)?;
     validate_id(to_id)?;
-    let src = dir.join(from_id).join("assets");
-    let md = match fs::symlink_metadata(&src) {
+    let root = CapDir::open_ambient_dir(dir, ambient_authority())
+        .map_err(|e| format!("打开项目根目录失败：{e}"))?;
+    let src_rel = format!("{from_id}/assets");
+    let md = match root.symlink_metadata(&src_rel) {
         Ok(md) => md,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(e) => return Err(format!("读取源资产目录元数据失败：{e}")),
@@ -1289,35 +1314,73 @@ fn copy_assets_tree(dir: &std::path::Path, from_id: &str, to_id: &str) -> Result
     if !md.is_dir() {
         return Err("源资产路径不是目录，拒绝复制".into());
     }
-    let dst_root = dir.join(to_id);
-    match fs::symlink_metadata(&dst_root) {
+    match root.symlink_metadata(to_id) {
         Ok(_) => return Err(format!("目标资产目录已存在，拒绝复制：{to_id}")),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(format!("读取目标资产目录元数据失败：{e}")),
     }
     // 拷贝目标是 {to}/assets：与 relPath 首段（§7.1）及实路径复验的资产根一致
-    if let Err(e) = copy_dir_no_follow(&src, &dst_root.join("assets")) {
+    let src_dir = open_dir_bound(&root, &src_rel, &md, "源资产目录")?;
+    root.create_dir_all(to_id)
+        .map_err(|e| format!("创建目标项目目录失败：{e}"))?;
+    let dst_root = root
+        .open_dir(to_id)
+        .map_err(|e| format!("打开目标项目目录失败：{e}"))?;
+    dst_root
+        .create_dir("assets")
+        .map_err(|e| format!("创建目标资产目录失败：{e}"))?;
+    let dst_assets = dst_root
+        .open_dir("assets")
+        .map_err(|e| format!("打开目标资产目录失败：{e}"))?;
+    if let Err(e) = copy_dir_handles(&src_dir, &dst_assets) {
         // 回滚清理同款句柄相对删除（§10.2）：dst_root 被并发换成符号链接时
         // remove_dir_all 只移除链接自身，不进入其指向的外部树
-        if let Ok(root) = CapDir::open_ambient_dir(dir, ambient_authority()) {
-            let _ = root.remove_dir_all(to_id);
-        }
+        let _ = root.remove_dir_all(to_id);
         return Err(e);
     }
     Ok(())
 }
 
-/// 递归拷贝目录树（no-follow）：目录对应创建，普通文件逐个拷贝，
-/// 符号链接与异型条目拒绝——副本绝不携带根外内容。文件拷贝绑定打开句柄
-/// （Unix：打开后按 (dev, ino) 与归类时身份比对，被换符号链接/另一实体
-/// 即拒绝），从**同一句柄**读出——不再用已校验的路径名重开；目标文件以
-/// create_new 排他创建，预置在目标路径上的符号链接无法截获写入（Unix 的
-/// O_CREAT|O_EXCL 拒绝跟随既有符号链接）。中间目录被并发替换的残余窗口
-/// 仍待迁移到 §10.2 的句柄相对解析（cap-std 已随删除路径引入，拷贝侧
-/// 未在本轮范围内）。
-fn copy_dir_no_follow(src: &std::path::Path, dst: &std::path::Path) -> Result<(), String> {
-    fs::create_dir_all(dst).map_err(|e| format!("创建目标资产目录失败：{e}"))?;
-    let entries = fs::read_dir(src).map_err(|e| format!("扫描源资产目录失败：{e}"))?;
+/// 打开已归类为实际目录的子目录并绑定身份（§10.2）：cap-std 的 open_dir
+/// 在沙箱内跟随符号链接，Unix 上以打开句柄的 (dev, ino) 与归类时身份比对
+/// ——归类后被换成符号链接/另一实体即拒绝，不从被替换的目标读出；
+/// 非 Unix 平台仅靠 cap-std 沙箱界。
+#[allow(unused_variables)]
+fn open_dir_bound<P: AsRef<std::path::Path>>(
+    parent: &CapDir,
+    rel: P,
+    classified: &cap_std::fs::Metadata,
+    label: &str,
+) -> Result<CapDir, String> {
+    let opened = parent
+        .open_dir(&rel)
+        .map_err(|e| format!("打开{label}失败：{e}"))?;
+    #[cfg(unix)]
+    {
+        let fm = opened
+            .dir_metadata()
+            .map_err(|e| format!("读取{label}句柄元数据失败：{e}"))?;
+        if asset_identity(&fm) != asset_identity(classified) {
+            return Err(format!("{label}在归类后被替换，拒绝复制"));
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = classified;
+    Ok(opened)
+}
+
+/// 递归拷贝目录树（句柄相对 + 逐项 no-follow，§10.2）：目录对应创建，
+/// 普通文件逐个拷贝，符号链接与异型条目拒绝——副本绝不携带根外内容。
+/// 递归与创建全部相对**已打开的目录句柄**进行：中间目录被并发替换时不再
+/// 按路径名重新解析。源子目录经 open_dir_bound 绑定身份；源文件绑定打开
+/// 句柄（Unix：按 (dev, ino) 与归类时身份比对），从同一句柄读出；目标
+/// 文件以 create_new 排他创建，预置在目标路径上的符号链接无法截获写入；
+/// 目标子目录 create_dir 排他创建后立即打开，残余窗口内的替换也被 cap-std
+/// 沙箱限定在 projects/ 树内。
+fn copy_dir_handles(src: &CapDir, dst: &CapDir) -> Result<(), String> {
+    let entries = src
+        .entries()
+        .map_err(|e| format!("扫描源资产目录失败：{e}"))?;
     for entry in entries {
         let entry = entry.map_err(|e| format!("扫描源资产目录失败：{e}"))?;
         // DirEntry::metadata 取 lstat 语义，不跟随符号链接
@@ -1325,57 +1388,59 @@ fn copy_dir_no_follow(src: &std::path::Path, dst: &std::path::Path) -> Result<()
             .metadata()
             .map_err(|e| format!("读取源资产条目元数据失败：{e}"))?;
         let name = entry.file_name();
+        let shown = name.to_string_lossy();
         let ft = md.file_type();
         if ft.is_symlink() {
-            return Err(format!(
-                "源资产子树含符号链接，拒绝复制：{}",
-                entry.path().display()
-            ));
+            return Err(format!("源资产子树含符号链接，拒绝复制：{shown}"));
         }
         if ft.is_dir() {
-            copy_dir_no_follow(&entry.path(), &dst.join(&name))?;
+            let child_src = open_dir_bound(src, &name, &md, "源资产子目录")?;
+            dst.create_dir(&name)
+                .map_err(|e| format!("创建目标资产子目录失败（{shown}）：{e}"))?;
+            let child_dst = dst
+                .open_dir(&name)
+                .map_err(|e| format!("打开目标资产子目录失败（{shown}）：{e}"))?;
+            copy_dir_handles(&child_src, &child_dst)?;
         } else if ft.is_file() {
-            copy_file_bound(&entry.path(), &md, &dst.join(&name))?;
+            copy_file_bound(src, &name, &md, dst)?;
         } else {
-            return Err(format!(
-                "源资产子树含非普通文件条目，拒绝复制：{}",
-                entry.path().display()
-            ));
+            return Err(format!("源资产子树含非普通文件条目：{shown}"));
         }
     }
     Ok(())
 }
 
-/** 单文件绑定拷贝：源从句柄读（身份与归类时一致），目标排他创建。 */
+/// 单文件绑定拷贝（句柄相对）：源从句柄读（身份与归类时一致），目标排他创建。
 fn copy_file_bound(
-    src_path: &std::path::Path,
-    classified: &fs::Metadata,
-    dst: &std::path::Path,
+    src_dir: &CapDir,
+    name: &std::ffi::OsStr,
+    classified: &cap_std::fs::Metadata,
+    dst_dir: &CapDir,
 ) -> Result<(), String> {
-    let mut src = fs::File::open(src_path)
-        .map_err(|e| format!("打开源资产失败（{}）：{e}", src_path.display()))?;
+    let shown = name.to_string_lossy();
+    let mut src = src_dir
+        .open(name)
+        .map_err(|e| format!("打开源资产失败（{shown}）：{e}"))?;
     #[cfg(unix)]
     {
         let fm = src
             .metadata()
-            .map_err(|e| format!("读取源资产句柄元数据失败（{}）：{e}", src_path.display()))?;
+            .map_err(|e| format!("读取源资产句柄元数据失败（{shown}）：{e}"))?;
         if asset_identity(&fm) != asset_identity(classified) {
-            return Err(format!(
-                "源资产在拷贝期间被替换，拒绝复制：{}",
-                src_path.display()
-            ));
+            return Err(format!("源资产在拷贝期间被替换，拒绝复制：{shown}"));
         }
     }
     #[cfg(not(unix))]
     let _ = classified;
-    let mut dst_file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(dst)
-        .map_err(|e| format!("创建目标资产失败（{}）：{e}", dst.display()))?;
+    let mut dst_file = dst_dir
+        .open_with(
+            name,
+            cap_std::fs::OpenOptions::new().write(true).create_new(true),
+        )
+        .map_err(|e| format!("创建目标资产失败（{shown}）：{e}"))?;
     std::io::copy(&mut src, &mut dst_file)
         .map(|_| ())
-        .map_err(|e| format!("拷贝资产文件失败（{}）：{e}", src_path.display()))
+        .map_err(|e| format!("拷贝资产文件失败（{shown}）：{e}"))
 }
 
 #[cfg(test)]
