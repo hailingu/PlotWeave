@@ -841,6 +841,21 @@ describe('边句柄规范（§5：匿名端口句柄必须省略）', () => {
     expect(round.content.edges.map((e) => e.id)).not.toContain('e-unknown')
     expect(round.warnings.some((w) => w.includes('e-unknown'))).toBe(true)
   })
+
+  it('data.order 异型（非有限数）：确定性剥离并警告，边本身保留不隔离（§5 存在时须为有限数）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
+      graph: { edges: Record<string, unknown>[] }
+    }
+    ;(doc.graph.edges[0].data as Record<string, unknown>).order = 'first' // 字符串
+    ;(doc.graph.edges[1].data as Record<string, unknown>).order = { seq: 1 } // 对象
+    ;(doc.graph.edges[2].data as Record<string, unknown>).order = Number.NaN // 非有限
+    const round = parseProject(doc)
+    expect(round.content.edges.map((e) => e.id)).toEqual(['e1', 'e2', 'e3'])
+    expect(round.content.edges.every((e) => (e.data as { order?: unknown } | undefined)?.order === undefined)).toBe(
+      true,
+    )
+    expect(round.warnings.filter((w) => w.includes('order'))).toHaveLength(3)
+  })
 })
 
 describe('归一化：§11.1 第 3 步 id 重发 / 成环 / attach 宿主唯一', () => {
@@ -1059,6 +1074,31 @@ describe('归一化：对白行判别与必填字段（§4.2 DialogueLine，§11
     expect(round.warnings.some((w) => w.includes('d1') && w.includes('spec.lines'))).toBe(true)
     // 合法行的 speaker 引用照常解析，不误报悬空
     expect(round.warnings.some((w) => w.includes('不存在的角色 ch-1'))).toBe(false)
+  })
+
+  it('可选字段异型（speaker 对象 / side 非左右值 / vo 非布尔）：逐字段剥离并警告，行与合法字段保留', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
+      graph: { nodes: Record<string, unknown>[] }
+    }
+    const dlg = doc.graph.nodes.find((n) => n.id === 'd1')!
+    ;((dlg.data as { spec: { lines: unknown[] } }).spec).lines = [
+      // 三个可选字段全异型：对象 speaker 会进到 <select>，'false' 字符串真值渲染 VO 徽标
+      { id: 'l1', kind: 'line', text: '别走', speaker: { id: 'ch-1' }, side: 'up', vo: 'false' },
+      { id: 'l2', kind: 'action', text: '雨停了', speaker: null }, // null speaker：v0 兼容链产物的合法形态
+      { id: 'l3', kind: 'line', text: '嗯', speaker: 'ch-1', side: 'right', vo: true }, // 全合法原样保留
+    ]
+    const round = parseProject(doc)
+    const lines = (round.content.nodes.find((n) => n.id === 'd1')!.data as unknown as {
+      lines: Record<string, unknown>[]
+    }).lines
+    expect(lines).toEqual([
+      { id: 'l1', kind: 'line', text: '别走' },
+      { id: 'l2', kind: 'action', text: '雨停了', speaker: null },
+      { id: 'l3', kind: 'line', text: '嗯', speaker: 'ch-1', side: 'right', vo: true },
+    ])
+    for (const f of ['speaker', 'side', 'vo']) {
+      expect(round.warnings.some((w) => w.includes('d1') && w.includes('l1') && w.includes(f))).toBe(true)
+    }
   })
 })
 

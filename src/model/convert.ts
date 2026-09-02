@@ -845,11 +845,40 @@ function compatLegacyShotTargetIds(
 /** 对白行成员形状（§4.2 DialogueLine）：判别字段 kind ∈ line/action 且
  * text 必填字符串——text 异型的行进会话后会被 DialogueNode 当 React 子节点
  * 渲染而崩溃，一行坏行不应阻挡整个项目画布打开。id 缺失不致命（列表 key
- * 退化但不崩溃），旧格式的 id 回填由迁移链（legacy.ts）负责，不在此判别。 */
+ * 退化但不崩溃），旧格式的 id 回填由迁移链（legacy.ts）负责，不在此判别。
+ * 可选字段（speaker/side/vo）的值域由 normalizeDialogueLineOptionals 在
+ * 成员过滤后逐字段剥离，不在此判别（字段异型不连累整行文本）。 */
 function isDialogueLineShape(item: unknown): boolean {
   if (!isPlainObject(item)) return false
   if (item.kind !== 'line' && item.kind !== 'action') return false
   return typeof item.text === 'string'
+}
+
+/** 对白行可选字段的值域修复（§4.2 DialogueLine，与 AI 命令边界
+ * speaker 字符串 / side ∈ left/right / vo 布尔同域）：异型字段确定性剥离
+ * 并警告——对象 speaker 会进 <select>、真值字符串 vo 会渲染 VO 徽标；
+ * speaker: null 是 v0 兼容链「无说话人」的合法产物，按缺省保留。 */
+function normalizeDialogueLineOptionals(
+  spec: Record<string, unknown>,
+  nid: string,
+  warnings: string[],
+): void {
+  if (!Array.isArray(spec.lines)) return
+  for (const line of spec.lines as Record<string, unknown>[]) {
+    const lid = typeof line.id === 'string' && line.id ? line.id : '(缺失 id)'
+    if (line.speaker !== undefined && line.speaker !== null && typeof line.speaker !== 'string') {
+      warnings.push(`节点 ${nid} 的对白行 ${lid} 的 speaker 异型（须为角色 id 字符串），已剥离`)
+      delete line.speaker
+    }
+    if (line.side !== undefined && line.side !== 'left' && line.side !== 'right') {
+      warnings.push(`节点 ${nid} 的对白行 ${lid} 的 side 异型（须为 left/right），已剥离`)
+      delete line.side
+    }
+    if (line.vo !== undefined && typeof line.vo !== 'boolean') {
+      warnings.push(`节点 ${nid} 的对白行 ${lid} 的 vo 异型（须为布尔），已剥离`)
+      delete line.vo
+    }
+  }
 }
 
 const NODE_TYPES = new Set(['scene', 'beat', 'dialogue', 'branch', 'shot'])
@@ -1164,6 +1193,7 @@ function normalizeNode(
   ensureRequiredListContainer(data.spec, member.type, nid, warnings)
   repairKeyedListIds(member, data.spec, nid, warnings, optionIdRemap)
   filterListMembers(data.spec, member.type, nid, warnings)
+  if (member.type === 'dialogue') normalizeDialogueLineOptionals(data.spec, nid, warnings)
   const shapeError = nodeDiscriminantError(member, nid, warnings)
   if (shapeError) {
     warnings.push(`节点 ${nid} 的判别形状非法（${shapeError}），已隔离`)
@@ -1177,7 +1207,9 @@ function normalizeNode(
   return member as unknown as StoryNode
 }
 
-/** 单个边的成员形状校验：非普通对象或判别依据 data 缺失即无法机械修复，隔离（返回 null）。 */
+/** 单个边的成员形状校验：非普通对象或判别依据 data 缺失即无法机械修复，隔离（返回 null）。
+ * data.order 存在时须为有限数（§5，先于端点/kind 处理）：异型值确定性剥离
+ * 并警告——order 只影响同端点边的展示排序，剥离不改变连接语义，边保留。 */
 function normalizeEdge(member: unknown, warnings: string[]): StoryEdge | null {
   if (!isPlainObject(member)) {
     warnings.push('graph.edges 中的非普通对象成员已隔离')
@@ -1188,6 +1220,12 @@ function normalizeEdge(member: unknown, warnings: string[]): StoryEdge | null {
       `边 ${typeof member.id === 'string' && member.id ? member.id : '(缺失 id)'} 的 data 缺失或异型，已隔离`,
     )
     return null
+  }
+  if (member.data.order !== undefined && !Number.isFinite(member.data.order)) {
+    warnings.push(
+      `边 ${typeof member.id === 'string' && member.id ? member.id : '(缺失 id)'} 的 data.order 非有限数，已剥离`,
+    )
+    delete member.data.order
   }
   return member as unknown as StoryEdge
 }
