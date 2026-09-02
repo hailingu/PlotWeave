@@ -382,6 +382,23 @@ describe('parseProject（ProjectDocument → 会话文档，§11 归一化）', 
     expect(round.warnings.some((w) => w.includes('a-gone2'))).toBe(true)
   })
 
+  it('空白 assetId 的分镜引用：按异型成员移除（空串是 string 但不可解析，保留即永久悬空引用）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    const shot = doc.graph.nodes.find((n) => n.id === 'sh1')!
+    ;(shot.data.spec as { refs: unknown[] }).refs = [
+      { id: 'ref-1', kind: 'audio', assetId: '' },
+      { id: 'ref-2', kind: 'audio', assetId: '  ' },
+      { id: 'ref-3', kind: 'audio', assetId: 'a-ok' },
+    ]
+    const round = parseProject(doc)
+    const refs = (round.content.nodes.find((n) => n.id === 'sh1')!.data as {
+      refs: { assetId?: string }[]
+    }).refs
+    // 红：isShotRefShape 只验类型不验空白，空串 assetId 被保留
+    expect(refs.map((r) => r.assetId)).toEqual(['a-ok'])
+    expect(round.warnings.some((w) => w.includes('assetId'))).toBe(true)
+  })
+
   it('角色实体头像资产悬空：按 §11.4 标记警告（avatarAssetId 在设定集实体上）', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW)
     doc.settings.characters['ch-1'].avatarAssetId = 'a-gone'
@@ -2230,6 +2247,20 @@ describe('归一化：角色 id/token 专项修复（§6 子值域 [A-Za-z0-9_-]
     // 文本 token 字面量替换（旧 id 含 ]，只能按完整字面量匹配）
     expect(d1.lines[0].text).toBe(`喂 @[character:${lin.id}] 看这里`)
     expect(round.warnings.some((w) => w.includes('bad]id'))).toBe(true)
+  })
+
+  it('__proto__ 是合法 id（安全字符集允许下划线）：桶条目按 own 属性保留，解析与回存均不丢', () => {
+    const content = mkContent()
+    content.settings.characters = [
+      ...content.settings.characters,
+      { id: '__proto__', name: '原型', gradient: 'g' },
+    ]
+    const round = parseProject(serializeProject(content, 'p-1', NOW))
+    // 红：普通 {} 赋值触发原型 setter，条目不进 Object.entries/Object.values 而丢失
+    expect(round.content.settings.characters.map((c) => c.name)).toContain('原型')
+    // 回存也不得丢（漏带即下次保存永久删除该实体）
+    const out = serializeProject(round.content, 'p-1', NOW)
+    expect(Object.keys(out.settings.characters)).toContain('__proto__')
   })
 })
 

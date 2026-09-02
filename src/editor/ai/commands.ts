@@ -270,12 +270,14 @@ function branchOptionsError(options: unknown[]): string | null {
 
 /** shot.refs 成员的引用位联合（§4.2 ShotRef 的信任边界对等）：与加载侧
  * isShotRefShape 同口径——双字段**键在场**即非法（值类型 XOR 不足以判定
- * `{assetId, label: 5}` 这类成员），避免交付后被下次加载静默删除。 */
+ * `{assetId, label: 5}` 这类成员），避免交付后被下次加载静默删除；
+ * assetId 须非空白——空串是 string 但不可解析，装上即永久悬空引用
+ * （加载侧空白的唯一出路是指向空键资产随重发改写，无映射即移除）。 */
 function isShotRefMember(r: unknown): boolean {
   if (!plainObject(r)) return false
   if (r.kind !== 'character' && r.kind !== 'location' && r.kind !== 'audio') return false
   if ('assetId' in r && 'label' in r) return false
-  const hasAsset = typeof r.assetId === 'string'
+  const hasAsset = typeof r.assetId === 'string' && r.assetId.trim() !== ''
   const hasLabel = typeof r.label === 'string'
   return hasAsset !== hasLabel
 }
@@ -351,7 +353,7 @@ function listShapeIssues(nodeType: string, fields: Record<string, unknown>): str
   if (nodeType === 'shot' && fields.refs !== undefined) {
     const arr = fields.refs
     if (!Array.isArray(arr) || arr.some((r) => !isShotRefMember(r))) {
-      issues.push('refs 须为引用位对象数组（kind ∈ character/location/audio，assetId/label 恰一为字符串）')
+      issues.push('refs 须为引用位对象数组（kind ∈ character/location/audio，assetId 非空白字符串 / label 字符串恰一）')
     }
   }
   return issues

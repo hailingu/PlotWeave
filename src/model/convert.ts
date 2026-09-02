@@ -235,7 +235,10 @@ const REQUIRED_LISTS: Record<string, string> = {
 }
 
 /** 普通键值对象的成员过滤：非普通对象（含数组——下标 "0"/"1" 会被误当权威实体 id）
- * 整体重置为空 Record，桶内异型条目移除；缺失视为空，不警告。 */
+ * 整体重置为空 Record，桶内异型条目移除；缺失视为空，不警告。
+ * 条目经 Object.fromEntries 重建：`__proto__` 是合法 id（安全字符集允许下划线），
+ * 普通 {} 赋值会触发原型 setter——条目不进 Object.entries/Object.values 而静默丢失，
+ * 按键查找却经原型链误命中（悬空引用漏报，下次保存永久丢条目）。 */
 function plainObjectEntries(
   v: unknown,
   label: string,
@@ -245,12 +248,12 @@ function plainObjectEntries(
     if (v !== undefined) warnings.push(`${label} 非普通键值对象，已重置为空 Record`)
     return {}
   }
-  const entries: Record<string, unknown> = {}
+  const kept: [string, unknown][] = []
   for (const [k, item] of Object.entries(v)) {
-    if (isPlainObject(item)) entries[k] = item
+    if (isPlainObject(item)) kept.push([k, item])
     else warnings.push(`${label} 的条目 ${k} 不是普通对象，已移除`)
   }
-  return entries
+  return Object.fromEntries(kept)
 }
 
 /** relatedIds 成员的非法原因（§6 的 {kind,id} 显式成对：kind ∈
@@ -455,7 +458,10 @@ function rewriteDialogueBlankRefs(
 }
 
 /** 分镜节点的空键引用改写（§11.1 六十四轮）：assetId 只按资产索引解析——
- * 引用位的唯一命名空间是 assets.byId，不再按 kind 分派设定集桶。 */
+ * 引用位的唯一命名空间是 assets.byId，不再按 kind 分派设定集桶。
+ * 空白 assetId 的唯一合法出路是指向空键资产（随重发改写）；无映射的空白
+ * 引用不可解析，装上画布即永久悬空——在此移除并警告（AI 边界同口径拒绝，
+ * 见 ai/commands.ts 的 isShotRefMember）。 */
 function rewriteShotBlankRefs(
   nid: string,
   spec: Record<string, unknown>,
@@ -463,10 +469,21 @@ function rewriteShotBlankRefs(
   warnings: string[],
 ): void {
   if (!Array.isArray(spec.refs)) return
+  const kept: unknown[] = []
   for (const ref of spec.refs as unknown[]) {
-    if (!isPlainObject(ref) || !('assetId' in ref)) continue
-    ref.assetId = rewriteRef(remaps.assets, ref.assetId, `节点 ${nid} 的分镜引用 ${String(ref.id)}`, warnings)
+    if (!isPlainObject(ref) || !('assetId' in ref)) {
+      kept.push(ref)
+      continue
+    }
+    const next = rewriteRef(remaps.assets, ref.assetId, `节点 ${nid} 的分镜引用 ${String(ref.id)}`, warnings)
+    if (typeof next === 'string' && !next.trim()) {
+      warnings.push(`节点 ${nid} 的分镜引用 ${String(ref.id)} 的 assetId 空白且无空键资产映射，已移除`)
+      continue
+    }
+    ref.assetId = next
+    kept.push(ref)
   }
+  spec.refs = kept
 }
 
 /** 对白文本中的 @ 提及 token 字面量改写（§8.1.2/五十九轮）：随角色 id
@@ -999,8 +1016,9 @@ function isBranchOptionShape(item: unknown): boolean {
  * character/location/audio，且 assetId（引用位，字符串）与 label（自由位，
  * 字符串）恰居其一——两落即镜像字段（禁止），两缺无法判位，均无法机械修复；
  * 对象形态 label 会被 ShotNode 当 React 子节点渲染而崩溃。空白串 assetId
- * 在此放行，由随后的资产空键重发改写兜底（§11.1 第 3 步）；旧草案 targetId
- * 已由兼容子步骤先行转换或隔离，到达此处即异型。 */
+ * 在此放行，由随后的资产空键重发改写兜底；无空键映射的空白引用在改写阶段
+ * 移除（§11.1 第 3 步）；旧草案 targetId 已由兼容子步骤先行转换或隔离，
+ * 到达此处即异型。 */
 function isShotRefShape(item: unknown): boolean {
   if (!isPlainObject(item)) return false
   if (item.kind !== 'character' && item.kind !== 'location' && item.kind !== 'audio') return false

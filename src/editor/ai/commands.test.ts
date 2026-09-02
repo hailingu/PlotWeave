@@ -521,6 +521,27 @@ describe('AI 批量命令的逐类型载荷形状校验（信任边界：字段�
     expect(bad.issues.map((i) => i.message).join('\n')).toContain('refs')
   })
 
+  it('shot refs 的 assetId 为空白字符串：拒绝（空串是 string 但不可解析，装上即永久悬空引用）', () => {
+    const bad = validateAiBatch(
+      [
+        {
+          op: 'create_node',
+          nodeType: 'shot',
+          data: {
+            shotNo: 1, size: '特写', picture: '', prompt: '',
+            refs: [
+              { id: 'r1', kind: 'audio', assetId: '' },
+              { id: 'r2', kind: 'audio', assetId: '  ' },
+            ],
+          },
+        },
+      ],
+      snap(),
+    )
+    expect(bad.ok).toBe(false)
+    expect(bad.issues.map((i) => i.message).join('\n')).toContain('refs')
+  })
+
   it('合法载荷照常通过（不因形状校验收紧而误拒）', () => {
     const good = validateAiBatch(
       [
