@@ -700,18 +700,40 @@ function normalizeAssetRecords(
   }
 }
 
+/** 改写前身份捕获（六十四轮 targetId 兼容的「修复前身份」输入）：以条目
+ * 对象引用记录每条记录的原始记录键与原始内嵌 id（非空白字符串时）——
+ * 空键重发与角色安全子值域重发都会改写记录键并同步内嵌 id，须在一切
+ * 键/id 改写前捕获；否则旧 targetId 指向的被重发实体/资产在兼容判定时
+ * 查无此身份：歧义引用被误转为资产，或本可唯一命中的资产被误隔离。 */
+function capturePreRepairIds(
+  record: Record<string, Record<string, unknown>>,
+): Map<Record<string, unknown>, Set<string>> {
+  const captured = new Map<Record<string, unknown>, Set<string>>()
+  for (const [key, entry] of Object.entries(record)) {
+    const ids = new Set<string>()
+    if (key.trim()) ids.add(key)
+    if (typeof entry.id === 'string' && entry.id.trim()) ids.add(entry.id)
+    captured.set(entry, ids)
+  }
+  return captured
+}
+
 /** 桶成员身份快照（六十四轮 targetId 兼容的「修复前后的身份」判定）：记录
- * 每个记录键与其一致性改写前的内嵌 id（字符串时）——须在键/id 改写前捕获；
- * 判定时再按桶当前成员过滤，已被隔离的条目不参与命中。 */
+ * 每条记录的最终键、改写前捕获的原始身份与当前内嵌 id——判定时再按桶当前
+ * 成员过滤（e.key in bucket），已被隔离的条目不参与命中。 */
 interface IdentitySnapshot {
   key: string
   ids: Set<string>
 }
 
-/** 捕获桶内每条记录的身份集合：最终记录键 + 当前内嵌 id（字符串时）。 */
-function identitySnapshot(record: Record<string, Record<string, unknown>>): IdentitySnapshot[] {
+/** 捕获桶内每条记录的身份集合：最终记录键 + 改写前身份 + 当前内嵌 id。 */
+function identitySnapshot(
+  record: Record<string, Record<string, unknown>>,
+  preRepair: Map<Record<string, unknown>, Set<string>>,
+): IdentitySnapshot[] {
   return Object.entries(record).map(([key, entry]) => {
-    const ids = new Set<string>([key])
+    const ids = new Set(preRepair.get(entry) ?? [])
+    ids.add(key)
     if (typeof entry.id === 'string' && entry.id.trim()) ids.add(entry.id)
     return { key, ids }
   })
@@ -1301,6 +1323,11 @@ function normalizeContainers(
   // 桶成员已经 plainObjectEntries 过滤为普通对象
   const entityBucket = (bucket: string) =>
     settings[bucket] as Record<string, Record<string, unknown>>
+  // 六十四轮 targetId 兼容的「修复前身份」捕获：须在一切键/id 改写（空键
+  // 重发、角色安全子值域重发、键 id 一致性改写）之前以条目对象引用完成
+  const preCharacterIds = capturePreRepairIds(entityBucket('characters'))
+  const preLocationIds = capturePreRepairIds(entityBucket('locations'))
+  const preAssetIds = capturePreRepairIds(byId as Record<string, Record<string, unknown>>)
   const characterRemaps = reKeyBlankEntries(
     entityBucket('characters'),
     'settings.characters',
@@ -1323,10 +1350,10 @@ function normalizeContainers(
   // props/documents 桶无节点引用面，仅重发空键保证身份可用
   reKeyBlankEntries(entityBucket('props'), 'settings.props', 'prop', warnings)
   reKeyBlankEntries(entityBucket('documents'), 'settings.documents', 'doc', warnings)
-  // 六十四轮 targetId 兼容的「修复前身份」快照：须在键/id 一致性改写前捕获
-  const characterIds0 = identitySnapshot(entityBucket('characters'))
-  const locationIds0 = identitySnapshot(entityBucket('locations'))
-  const assetIds0 = identitySnapshot(byId as Record<string, Record<string, unknown>>)
+  // 六十四轮 targetId 兼容的身份快照：最终记录键 + 修复前身份（改写前捕获）
+  const characterIds0 = identitySnapshot(entityBucket('characters'), preCharacterIds)
+  const locationIds0 = identitySnapshot(entityBucket('locations'), preLocationIds)
+  const assetIds0 = identitySnapshot(byId as Record<string, Record<string, unknown>>, preAssetIds)
   normalizeEntityShapes(settings, warnings)
   // plainObjectEntries 已过滤为普通对象成员；实路径不可验证键经空键重发
   // 映射对齐（重发换键不改变媒体文件的事实）

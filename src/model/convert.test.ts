@@ -1698,6 +1698,33 @@ describe('归一化：ShotRef 旧草案 targetId 的无歧义兼容与资产命�
     expect(round.warnings.filter((w) => w.includes('targetId'))).toHaveLength(4)
   })
 
+  it('角色键被安全子值域重发：旧 targetId 仍按修复前身份命中角色，歧义引用隔离而非误转同名资产（§11.1）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as RefDoc
+    // 角色原始键/内嵌 id 均为 bad]id（不满足安全字符集 [A-Za-z0-9_-]，将被重发）；
+    // 同名 image 资产并存 → 旧 targetId 同时命中修复前角色身份与资产，须隔离
+    doc.settings.characters['bad]id'] = { id: 'bad]id', name: '阿灿', gradient: 'g' }
+    doc.assets.byId['bad]id'] = mkAsset('bad]id', 'assets/portrait.png', 'image/png')
+    setRefs(doc, [{ id: 'r1', kind: 'character', targetId: 'bad]id' }])
+    const round = parseProject(doc)
+    // 红：快照在重发后捕获，查无 bad]id 身份 → 误转 assetId
+    expect(refsOf(round)).toEqual([])
+    expect(round.warnings.some((w) => w.includes('targetId') && w.includes('隔离'))).toBe(true)
+  })
+
+  it('资产空键被重发：旧 targetId 按修复前身份仍唯一命中该资产并改名（身份捕获先于一切键/id 改写）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as RefDoc
+    // 空键资产的原始内嵌 id 为 a-old；空键重发换键并同步内嵌 id
+    doc.assets.byId[''] = mkAsset('a-old', 'assets/portrait.png', 'image/png')
+    setRefs(doc, [{ id: 'r1', kind: 'character', targetId: 'a-old' }])
+    const round = parseProject(doc)
+    const refs = refsOf(round)
+    // 红：快照丢失修复前身份 a-old → 零命中被隔离；修复后改名 assetId 为重发新键
+    expect(refs).toHaveLength(1)
+    expect(refs[0].kind).toBe('character')
+    expect(typeof refs[0].assetId).toBe('string')
+    expect(refs[0].assetId).not.toBe('a-old')
+  })
+
   it('assetId 的 MIME 家族与 kind 用途不匹配：保留为不可用引用并警告，不改按其他命名空间解释', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as RefDoc
     doc.assets.byId['a-img'] = mkAsset('a-img', 'assets/portrait.png', 'image/png')
