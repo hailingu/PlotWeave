@@ -197,6 +197,9 @@ export function serializeProject(
   }
 }
 
+/** parseProject 的结果：交付会话的归一化内容 + 迁移/修复是否改写磁盘
+ * 形态的标志（调用方据此回写落定，下次打开不再重复修复）+ 归一化警告
+ * （孤儿边隔离、悬空引用标记等，§11.3/§11.4）。 */
 export interface ParseResult {
   content: ProjectContent
   /** 发生了格式迁移（v0 → v1），调用方应回写磁盘。 */
@@ -768,6 +771,14 @@ function normalizeAssetRecords(
     if (mime !== entry.mime) {
       warnings.push(`资产 ${key} 的 mime 已规范化为 ${mime}`)
       entry.mime = mime
+    }
+    // createdAt 统一落为 UTC toISOString()（§7.1）：带显式时区的合法表示
+    // 确定性规范化并警告——同一瞬间只保留一种持久化表示；规范化越出
+    // 四位年份域（极端偏移换算）时保留原值（其本身可过保存边界）
+    const canon = new Date(entry.createdAt as string).toISOString()
+    if (isStrictIso8601(canon) && canon !== entry.createdAt) {
+      warnings.push(`资产 ${key} 的 createdAt 已规范化为 UTC ISO 8601`)
+      entry.createdAt = canon
     }
   }
 }

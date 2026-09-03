@@ -171,11 +171,14 @@ interface EdgeBase {
   id: string
   source: string
   target: string
-  targetHandle?: string
+  /** 匿名端口唯一（§5）：targetHandle 禁写——可选 never 使静态类型与命令
+   * 边界/归一化剥离同契约，类型化数据往返不再变形。 */
+  targetHandle?: never
 }
 
 export interface SequenceEdge extends EdgeBase {
-  sourceHandle?: string
+  /** 匿名端口唯一（§5）：sequence 的 sourceHandle 同为禁写。 */
+  sourceHandle?: never
   data: { kind: 'sequence'; order?: number }
 }
 

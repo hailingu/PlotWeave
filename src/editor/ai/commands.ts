@@ -226,7 +226,11 @@ function resolveRef(st: FoldState, cmd: Record<string, unknown>, key: string): s
  * 重复 id 就地重生成——空白 id 直接作 React key 不可靠，且加载侧会按
  * 空白 id 重发改写身份，被接受的命令不得自带重开即变的“稳定”身份；
  * 冲突会导致行复用/误编辑。非对象条目原样放行（形状校验不在本层）。 */
-function normalizeNodeFields(nodeType: string, fields: Record<string, unknown>): Record<string, unknown> {
+function normalizeNodeFields(
+  nodeType: string,
+  fields: Record<string, unknown>,
+  existingOptions?: Array<{ id: string; label: string }>,
+): Record<string, unknown> {
   /** 列表项 id 归一化：非空白唯一保留，否则重生成。 */
   const normalizeIds = (items: unknown[], prefix: string): unknown[] => {
     const seen = new Set<string>()
@@ -254,8 +258,17 @@ function normalizeNodeFields(nodeType: string, fields: Record<string, unknown>):
     )
   }
   if (nodeType === 'branch' && Array.isArray(out.options)) {
+    // 字符串选项（旧契约紧凑形态）在更新路径按位置对位复用既有选项的
+    // 稳定 id——整体重发新 id 会让全部既有 option- 句柄被折叠/模拟当作
+    // 已删选项，引出连线被静默清除而预览只显示一次普通选项更新；
+    // create 无既有选项，超出现有数的字符串仍是新增（normalizeIds 补 id）
+    const existing = existingOptions ?? []
     out.options = normalizeIds(
-      (out.options as unknown[]).map((o) => (typeof o === 'string' ? { label: o } : o)),
+      (out.options as unknown[]).map((o, i) => {
+        if (typeof o !== 'string') return o
+        const prev = existing[i]
+        return prev !== undefined ? { id: prev.id, label: o } : { label: o }
+      }),
       'opt',
     )
   }
@@ -471,7 +484,7 @@ function foldUpdate(st: FoldState, cmd: Record<string, unknown>, index: number):
     key: `u${index}`,
     label: `${OP_LABELS.update} ${st.labels.get(id) ?? '未知节点'}（${Object.keys(patch).join('、')}）${reasonOf(cmd)}`,
   })
-  const normalized = normalizeNodeFields(st.types.get(id) ?? '', patch)
+  const normalized = normalizeNodeFields(st.types.get(id) ?? '', patch, st.branchOptions.get(id))
   // 分支选项被替换时：登记刷新 + 被删选项的出口边从校验态移除（§8.2.2
   // 级联与 simulateBatch 同规则）——否则后续连线的成环检测会被旧边误判
   if (st.types.get(id) === 'branch' && Array.isArray(normalized.options)) {

@@ -1485,7 +1485,7 @@ describe('归一化：assets.byId 完整 AssetRef 形状校验（§11.3，Rust �
     expect(round.warnings.some((w) => w.includes('a-wild'))).toBe(true)
   })
 
-  it('合法大小写/首尾空白的 mime：规范化后保留并警告（时区形式不同的合法时间戳保留）', () => {
+  it('合法大小写/首尾空白的 mime 与带时区的 createdAt：规范化为规范形式并警告（§7.1 统一落 UTC）', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
       assets: { byId: Record<string, Record<string, unknown>> }
     }
@@ -1493,7 +1493,10 @@ describe('归一化：assets.byId 完整 AssetRef 形状校验（§11.3，Rust �
     doc.assets.byId['a-2'] = { ...goodAsset, id: 'a-2', relPath: 'assets/a.wav', mime: 'audio/wav', createdAt: '2026-08-01T08:00:00+08:00' }
     const round = parseProject(doc)
     expect(round.content.assets?.byId['a-1']?.mime).toBe('image/png')
-    expect(round.content.assets?.byId['a-2']?.createdAt).toBe('2026-08-01T08:00:00+08:00')
+    // 红：偏移形式原样保留——同一瞬间存在多种持久化表示（§7.1 要求
+    // 统一落为 UTC toISOString()）
+    expect(round.content.assets?.byId['a-2']?.createdAt).toBe('2026-08-01T00:00:00.000Z')
+    expect(round.warnings.some((w) => w.includes('createdAt'))).toBe(true)
   })
 
   it('时间戳规范化结果须仍在可保存域：越出四位年份（+010000）的合法输入按回退链修复，项目不得永久不可保存', () => {

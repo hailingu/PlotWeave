@@ -594,6 +594,33 @@ describe('AI 批量命令的逐类型载荷形状校验（信任边界：字段�
     expect(noAssets.issues[0].message).toContain('不存在')
   })
 
+  it('update_node 的字符串选项按位置复用既有稳定 id：重命名不清空引出连线', () => {
+    // 红：字符串形态整体重发新 id——全部既有 option- 句柄被视为已删选项，
+    // 折叠/模拟静默清除每条引出线，而预览只显示一次普通选项更新
+    const v = validateAiBatch(
+      [{ op: 'update_node', nodeId: 'b1', patch: { options: ['追！', '不追'] } }],
+      richSnap(),
+    )
+    expect(v.ok).toBe(true)
+    const patch = (v.commands[0] as unknown as {
+      patch: { options: Array<{ id: string; label: string }> }
+    }).patch
+    expect(patch.options).toEqual([
+      { id: 'ob-a', label: '追！' },
+      { id: 'ob-b', label: '不追' },
+    ])
+    // 超出现有选项数的字符串仍是新增（发新 id）
+    const grown = validateAiBatch(
+      [{ op: 'update_node', nodeId: 'b1', patch: { options: ['追！', '不追', '再想想'] } }],
+      richSnap(),
+    )
+    const grownOptions = (grown.commands[0] as unknown as {
+      patch: { options: Array<{ id: string }> }
+    }).patch.options
+    expect(grownOptions[0].id).toBe('ob-a')
+    expect(grownOptions[2].id).toMatch(/^opt-/)
+  })
+
   it('对白行 speaker 空白域拒收：加载侧会移除该值——接受的 AI 改动不得重开即变样', () => {
     const snapWithDialogue = (): AiGraphSnapshot => ({
       ...snap(),
