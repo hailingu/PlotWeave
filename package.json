@@ -13,7 +13,9 @@
     "lint": "eslint .",
     "test": "vitest run",
     "tauri": "tauri",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "hooks:install": "git config core.hooksPath .githooks",
+    "sonar:gate": "sh scripts/sonar-quality-gate.sh"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
