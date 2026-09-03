@@ -1575,6 +1575,22 @@ describe('归一化：assets.byId 完整 AssetRef 形状校验（§11.3，Rust �
     expect(round.warnings.some((w) => w.includes('speaker'))).toBe(true)
   })
 
+  it('对白 action 行携带 speaker：归一化剥离并标记 repaired——隐藏引用不得存留（§4.2 只允许 line 行有说话人）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
+      graph: { nodes: Array<{ type?: string; data: { spec: { lines?: Array<Record<string, unknown>> } } }> }
+    }
+    const dialogue = doc.graph.nodes.find((n) => n.type === 'dialogue')!
+    dialogue.data.spec.lines!.push({ id: 'line-act', kind: 'action', text: '雨声渐大', speaker: 'ch-1' })
+    const round = parseProject(doc)
+    const out = round.content.nodes.find((n) => n.type === 'dialogue')!.data as unknown as {
+      lines: Array<Record<string, unknown>>
+    }
+    const action = out.lines.find((l) => l.kind === 'action')!
+    expect('speaker' in action).toBe(false)
+    expect(round.warnings.some((w) => w.includes('action') && w.includes('speaker'))).toBe(true)
+    expect(round.repaired).toBe(true)
+  })
+
   it('空键重发改写后仍空白且无映射的场景引用：移除并警告——不留虚构的"已删除引用"原样落盘', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
       graph: { nodes: Array<{ data: { spec: Record<string, unknown> } }> }

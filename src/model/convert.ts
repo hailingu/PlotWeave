@@ -924,10 +924,28 @@ function isDialogueLineShape(item: unknown): boolean {
   return typeof item.text === 'string'
 }
 
+/** 对白行 speaker 域收口（§4.2，供 normalizeDialogueLineOptionals 调用）：
+ * action 行携带 speaker（契约只允许 line 行有说话人——AI 边界已拒新输入，
+ * 此为加载/导入侧的对等收口）或异型（非角色 id 字符串）均剥离并警告；
+ * null 是 v0 兼容链「无说话人」的合法产物，按缺省保留。 */
+function stripIllegalSpeaker(
+  line: Record<string, unknown>,
+  nid: string,
+  lid: string,
+  warnings: string[],
+): void {
+  const speaker = line.speaker
+  if (speaker === undefined || speaker === null) return
+  const action = line.kind === 'action'
+  if (!action && typeof speaker === 'string') return
+  warnings.push(`节点 ${nid} 的对白行 ${lid} 的 speaker ${action ? '为 action 行携带（只允许 line 行有说话人）' : '异型（须为角色 id 字符串）'}，已剥离`)
+  delete line.speaker
+}
+
 /** 对白行可选字段的值域修复（§4.2 DialogueLine，与 AI 命令边界
- * speaker 字符串 / side ∈ left/right / vo 布尔同域）：异型字段确定性剥离
- * 并警告——对象 speaker 会进 <select>、真值字符串 vo 会渲染 VO 徽标；
- * speaker: null 是 v0 兼容链「无说话人」的合法产物，按缺省保留。 */
+ * speaker/side/vo 同域）：异型字段确定性剥离并警告——对象 speaker 会进
+ * <select>、真值字符串 vo 会渲染 VO 徽标；speaker 域收口见
+ * stripIllegalSpeaker。 */
 function normalizeDialogueLineOptionals(
   spec: Record<string, unknown>,
   nid: string,
@@ -936,10 +954,7 @@ function normalizeDialogueLineOptionals(
   if (!Array.isArray(spec.lines)) return
   for (const line of spec.lines as Record<string, unknown>[]) {
     const lid = typeof line.id === 'string' && line.id ? line.id : '(缺失 id)'
-    if (line.speaker !== undefined && line.speaker !== null && typeof line.speaker !== 'string') {
-      warnings.push(`节点 ${nid} 的对白行 ${lid} 的 speaker 异型（须为角色 id 字符串），已剥离`)
-      delete line.speaker
-    }
+    stripIllegalSpeaker(line, nid, lid, warnings)
     if (line.side !== undefined && line.side !== 'left' && line.side !== 'right') {
       warnings.push(`节点 ${nid} 的对白行 ${lid} 的 side 异型（须为 left/right），已剥离`)
       delete line.side
