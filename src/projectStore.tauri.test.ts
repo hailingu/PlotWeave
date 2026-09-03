@@ -185,6 +185,43 @@ describe('tauriLoad：归一化与迁移回写', () => {
     }
   })
 
+  it('失败登记文档交付前过资产实路径复验：坏资产隔离并替换重试登记，后台重试以净载荷落盘', async () => {
+    handlers.set('load_project', () => modernFile())
+    handlers.set('verify_project_assets', () => ['a-1'])
+    handlers.set('save_project', (args) => {
+      const byId = (args as { doc: { assets: { byId: Record<string, unknown> } } }).doc.assets.byId
+      if ('a-1' in byId) throw new Error('资产 a-1：资产文件不存在')
+      return undefined
+    })
+    vi.useFakeTimers()
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const { projectStore } = await load()
+      const docOf = (name: string) => ({ name, nodes: [], edges: [], settings: { characters: [], locations: [] } })
+      const dirty = {
+        ...docOf('最新'),
+        assets: {
+          byId: {
+            'a-1': { id: 'a-1', relPath: 'assets/a-1.png', mime: 'image/png', source: 'upload', createdAt: '2026-01-01T00:00:00.000Z' },
+          },
+        },
+      } as unknown as ProjectContent
+      await expect(projectStore.save('p1', dirty)).rejects.toThrow('资产 a-1')
+      // 红：登记文档直接经 memoryNormalize 交付，未过 verify_project_assets——
+      // 坏资产保持活动、重试登记原样持有未复验内容，此后每次重试注定失败
+      const doc = await projectStore.load('p1')
+      expect(doc.assets?.byId['a-1']).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(5000)
+      const saves = calls.filter((c) => c.cmd === 'save_project')
+      expect(saves).toHaveLength(2)
+      const retried = (saves[1].args as { doc: { assets: { byId: Record<string, unknown> } } }).doc.assets.byId
+      expect('a-1' in retried).toBe(false)
+    } finally {
+      errSpy.mockRestore()
+      vi.useRealTimers()
+    }
+  })
+
   it('v1 修复型归一化回写 save_project（下次打开不再重复修复）；干净 v1 不回写', async () => {
     handlers.set('load_project', () => ({
       ...modernFile(),

@@ -87,9 +87,17 @@ function toSummary(m: {
 const memoryStore = new Map<string, { doc: ProjectContent; updatedAt: number }>()
 let memorySeeded = false
 
-/** 会话文档 → 归一化后的会话文档（serialize 剥离运行态 + parse 重置选中态）。 */
-function memoryNormalize(doc: ProjectContent, id: string): ProjectContent {
-  return parseProject(serializeProject(doc, id), { projectId: id }).content
+/** 会话文档 → 归一化后的会话文档（serialize 剥离运行态 + parse 重置选中态）；
+ * invalidAssetKeys 为 Rust 实路径复验未通过的资产键，归一化据此隔离索引。 */
+function memoryNormalize(
+  doc: ProjectContent,
+  id: string,
+  invalidAssetKeys?: readonly string[],
+): ProjectContent {
+  return parseProject(serializeProject(doc, id), {
+    projectId: id,
+    ...(invalidAssetKeys !== undefined ? { invalidAssetKeys } : {}),
+  }).content
 }
 
 function memoryList(): ProjectSummary[] {
@@ -180,9 +188,20 @@ async function tauriLoad(id: string): Promise<ProjectContent> {
   }
   // 链上失败登记的最新文档比磁盘新（冲刷失败待重试）：以它交付会话
   // （经保存同款归一化，剥离运行态），否则用户看到丢编辑的旧版本，
-  // 且随后编辑与重试登记竞态
+  // 且随后编辑与重试登记竞态。登记文档同样过加载侧资产实路径复验：
+  // 保存失败的常见原因正是资产文件缺失/被换符号链接——不复验就把带
+  // 坏资产的文档交付会话、重试登记也原样持有，此后每次重试与后续编辑
+  // 都注定失败；隔离后的修复内容同时替换重试登记（后台重试改持净载荷）
   const pending = pendingRetryDocs.get(id)
-  if (pending !== undefined) return memoryNormalize(pending, id)
+  if (pending !== undefined) {
+    const invalid = await invoke<string[]>('verify_project_assets', {
+      id,
+      assets: pending.assets ?? {},
+    })
+    const verified = memoryNormalize(pending, id, invalid)
+    pendingRetryDocs.set(id, verified)
+    return verified
+  }
   const file = await invoke<unknown>('load_project', { id })
   // §7.1/§10.5 加载侧资产实路径复验：Rust 以受信资产根 no-follow 验证
   // （前端无法访问文件系统），不可验证键交归一化层隔离、引用位标记悬空

@@ -499,6 +499,13 @@ function rewriteDialogueBlankRefs(
   for (const [i, line] of (spec.lines as unknown[]).entries()) {
     if (!isPlainObject(line) || !('speaker' in line)) continue
     line.speaker = rewriteRef(characters, line.speaker, `节点 ${nid} 的对白行 ${i} speaker`, warnings)
+    // 空键重发改写后仍空白且无映射（§8.1 共同值域之外、不可恢复）直接
+    // 移除——与场景/分镜路径同口径：原样保留只会展示/落盘虚构的
+    // 「已删除说话人」引用
+    if (typeof line.speaker === 'string' && !line.speaker.trim()) {
+      warnings.push(`节点 ${nid} 的对白行 ${i} speaker 为无映射可改写的空白引用，已移除`)
+      delete line.speaker
+    }
   }
 }
 

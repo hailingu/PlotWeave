@@ -1515,6 +1515,22 @@ describe('归一化：assets.byId 完整 AssetRef 形状校验（§11.3，Rust �
     expect(again.project.createdAt).toBe(round.content.createdAt)
   })
 
+  it('对白行 speaker 空白且无映射：移除并警告——与场景/分镜路径同口径收口', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
+      graph: { nodes: Array<{ type?: string; data: { spec: { lines?: Array<Record<string, unknown>> } } }> }
+    }
+    const dialogue = doc.graph.nodes.find((n) => n.type === 'dialogue')!
+    const lines = dialogue.data.spec.lines!
+    const line = lines.find((l) => l.kind === 'line') ?? lines[0]
+    line.speaker = '   '
+    const round = parseProject(doc)
+    const out = round.content.nodes.find((n) => n.type === 'dialogue')!.data as unknown as {
+      lines: Array<Record<string, unknown>>
+    }
+    expect(out.lines[0].speaker).toBeUndefined()
+    expect(round.warnings.some((w) => w.includes('speaker'))).toBe(true)
+  })
+
   it('空键重发改写后仍空白且无映射的场景引用：移除并警告——不留虚构的"已删除引用"原样落盘', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
       graph: { nodes: Array<{ data: { spec: Record<string, unknown> } }> }
