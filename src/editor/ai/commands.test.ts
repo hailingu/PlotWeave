@@ -594,6 +594,36 @@ describe('AI 批量命令的逐类型载荷形状校验（信任边界：字段�
     expect(noAssets.issues[0].message).toContain('不存在')
   })
 
+  it('选项替换的级联断线进预览并触发删除级确认：一键不得静默删除剧情路径', () => {
+    const snapWithEdge = (): AiGraphSnapshot => ({
+      ...richSnap(),
+      edges: [{ source: 'b1', target: 's1', sourceHandle: 'option-ob-a', type: 'branch' }],
+    })
+    // 显式合法 id 的替换对象：被换选项（ob-a/ob-b）的引出边会被级联删除
+    const v = validateAiBatch(
+      [
+        {
+          op: 'update_node',
+          nodeId: 'b1',
+          patch: { options: [{ id: 'replacement', label: '新选项' }] },
+        },
+      ],
+      snapWithEdge(),
+    )
+    expect(v.ok).toBe(true)
+    // 红：预览只有普通"修改"项——hasDeletes=false，一键确认静默删除连线
+    expect(v.items.some((i) => i.kind === 'disconnect' && i.danger)).toBe(true)
+    expect(v.hasDeletes).toBe(true)
+    expect(v.items[0].danger).toBe(true) // 危险项置顶（§6）
+
+    // 对照：显式 disconnect_edge（用户主动断开）仍为普通确认
+    const explicit = validateAiBatch(
+      [{ op: 'disconnect_edge', sourceId: 'b1', targetId: 's1' }],
+      snapWithEdge(),
+    )
+    expect(explicit.hasDeletes).toBe(false)
+  })
+
   it('update_node 的无 id 对象简写同款按位复用既有稳定 id（孪生路径）', () => {
     // 红：id-less 对象被 normalizeIds 整体发新 id——全部既有 option- 句柄
     // 被视为已删选项，引出连线被静默清除

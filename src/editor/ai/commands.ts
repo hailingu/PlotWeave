@@ -72,6 +72,7 @@ export interface BatchValidation {
   /** 待执行命令：已校验的合法子集，原始顺序（执行语义必须按序折叠）。 */
   commands: AiCommand[]
   issues: BatchIssue[]
+  /** 删除类或级联断线（danger）在预览中：置顶展示并要求二次确认（§6）。 */
   hasDeletes: boolean
 }
 
@@ -493,20 +494,8 @@ function foldUpdate(st: FoldState, cmd: Record<string, unknown>, index: number):
     label: `${OP_LABELS.update} ${st.labels.get(id) ?? '未知节点'}（${Object.keys(patch).join('、')}）${reasonOf(cmd)}`,
   })
   const normalized = normalizeNodeFields(st.types.get(id) ?? '', patch, st.branchOptions.get(id))
-  // 分支选项被替换时：登记刷新 + 被删选项的出口边从校验态移除（§8.2.2
-  // 级联与 simulateBatch 同规则）——否则后续连线的成环检测会被旧边误判
   if (st.types.get(id) === 'branch' && Array.isArray(normalized.options)) {
-    const removed = removedOptionHandles(
-      st.branchOptions.get(id) ?? [],
-      normalized.options as Array<{ id: string }>,
-    )
-    if (removed.length > 0) {
-      const gone = new Set(removed)
-      st.virtualEdges = st.virtualEdges.filter(
-        (e) => !(e.source === id && e.sourceHandle && gone.has(e.sourceHandle)),
-      )
-    }
-    st.branchOptions.set(id, normalized.options as Array<{ id: string; label: string }>)
+    foldBranchCascade(st, id, cmd, index, normalized)
   }
   st.commands.push({
     op: 'update_node',
@@ -514,6 +503,42 @@ function foldUpdate(st: FoldState, cmd: Record<string, unknown>, index: number):
     patch: normalized,
     reason: asText(cmd.reason),
   })
+}
+
+/** 分支选项替换的级联断线簿记（foldUpdate 内核）：登记刷新 + 被替换/
+ * 删除选项的出口边从校验态移除（§8.2.2 级联与 simulateBatch 同规则，
+ * 否则后续连线的成环检测被旧边误判）。级联断线同时以 danger 项进预览
+ * （§6）：simulateBatch 会同样删除这些边——只显示普通"修改选项"会让
+ * 一键确认静默删除剧情路径；danger 断线项置顶并计入 hasDeletes。 */
+function foldBranchCascade(
+  st: FoldState,
+  id: string,
+  cmd: Record<string, unknown>,
+  index: number,
+  normalized: Record<string, unknown>,
+): void {
+  const removed = removedOptionHandles(
+    st.branchOptions.get(id) ?? [],
+    normalized.options as Array<{ id: string }>,
+  )
+  if (removed.length > 0) {
+    const gone = new Set(removed)
+    let cascade = 0
+    for (const e of st.virtualEdges) {
+      if (e.source !== id || !e.sourceHandle || !gone.has(e.sourceHandle)) continue
+      cascade += 1
+      st.items.push({
+        kind: 'disconnect',
+        danger: true,
+        key: `u${index}c${cascade}`,
+        label: `${OP_LABELS.disconnect} ${st.labels.get(id) ?? id} → ${st.labels.get(e.target) ?? e.target}（选项被替换，级联删除连线）${reasonOf(cmd)}`,
+      })
+    }
+    st.virtualEdges = st.virtualEdges.filter(
+      (e) => !(e.source === id && e.sourceHandle && gone.has(e.sourceHandle)),
+    )
+  }
+  st.branchOptions.set(id, normalized.options as Array<{ id: string; label: string }>)
 }
 
 function foldDelete(st: FoldState, cmd: Record<string, unknown>, index: number): void {
@@ -689,13 +714,13 @@ export function validateAiBatch(rawCommands: unknown, graph: AiGraphSnapshot): B
   })
 
   const ok = st.issues.length === 0
-  // 删除类置顶（§6 危险操作升级）；其余按到达顺序稳定排列
+  // 删除类与级联断线置顶（§6 危险操作升级）；其余按到达顺序稳定排列
   const sorted = [...st.items.filter((i) => i.danger), ...st.items.filter((i) => !i.danger)]
   return {
     ok,
     items: sorted,
     commands: ok ? st.commands : [],
     issues: st.issues,
-    hasDeletes: sorted.some((i) => i.kind === 'delete'),
+    hasDeletes: sorted.some((i) => i.kind === 'delete' || (i.kind === 'disconnect' && i.danger)),
   }
 }
