@@ -449,6 +449,36 @@ describe('tauriLoad：归一化与迁移回写', () => {
 })
 
 describe('tauriList：空库播种与示例升级', () => {
+  it('空列表≠空目录：唯一项目是不可读的坏文件时不播种、不覆盖可能可恢复的内容', async () => {
+    // list_project_metas 跳过损坏/不可读文件——唯一项目若是 JSON 损坏的
+    // 已编辑示例，metas 为空但目录非空；播种必须是 no-replace 语义
+    let listCalls = 0
+    handlers.set('list_projects', () => {
+      listCalls += 1
+      // 恒空会令现实现播种后无限递归；重列返回播种产物使递归有界
+      return listCalls === 1 ? [] : [meta('sample-wu-ye-chu-zu-che')]
+    })
+    handlers.set('load_project', () => {
+      throw new Error('项目文件损坏：无法判别文档信封（已保留原文件）')
+    })
+    handlers.set('save_project', () => undefined)
+    const { projectStore } = await load()
+    const list = await projectStore.list()
+    // 红：无条件播种会用硬编码种子原子覆盖可能可恢复的用户文件
+    expect(calls.filter((c) => c.cmd === 'save_project')).toHaveLength(0)
+    expect(list.map((x) => x.id)).toEqual([])
+  })
+
+  it('示例为未来版本（schemaVersion 高于当前）：升级检查单例隔离，list 不中止、摘要原样', async () => {
+    handlers.set('list_projects', () => [meta('sample-wu-ye-chu-zu-che'), meta('user-p1')])
+    handlers.set('load_project', () => ({ ...modernFile(), schemaVersion: 99 }))
+    const { projectStore } = await load()
+    // 红：parseProject 抛「版本过新」令 list 整体拒绝，首页被清成空列表
+    const list = await projectStore.list()
+    expect(list.map((x) => x.id)).toEqual(['sample-wu-ye-chu-zu-che', 'user-p1'])
+  })
+
+
   it('首次（无项目文件）写入两个种子项目后重列', async () => {
     let listed = false
     handlers.set('list_projects', () => {
@@ -459,13 +489,18 @@ describe('tauriList：空库播种与示例升级', () => {
       return []
     })
     handlers.set('save_project', () => undefined)
-    // 递归重列后的升级检查会读取示例文件：返回各自携带匹配 project.id 的
-    // 干净 v1 信封 → 无需覆盖（id 与受信路径不一致会被 §11.1 受信 id 覆盖
-    // 修复改写并触发回写）
-    handlers.set('load_project', (args) => ({
-      ...modernFile(),
-      project: { ...modernFile().project, id: (args as { id: string }).id },
-    }))
+    // 播种是 no-replace：探测期（文件未写）返回「项目不存在」，播种后
+    // 重列的升级检查读到各自携带匹配 project.id 的干净 v1 信封 → 无需
+    // 覆盖（id 与受信路径不一致会被 §11.1 受信 id 覆盖修复改写并触发回写）
+    let loadCalls = 0
+    handlers.set('load_project', (args) => {
+      loadCalls += 1
+      if (loadCalls <= 2) throw new Error(`项目不存在：${(args as { id: string }).id}`)
+      return {
+        ...modernFile(),
+        project: { ...modernFile().project, id: (args as { id: string }).id },
+      }
+    })
     const { projectStore } = await load()
     const list = await projectStore.list()
     expect(list.map((x) => x.id)).toEqual(['sample-wu-ye-chu-zu-che', 'sample-du-shi-qi-yuan', 'user-p1'])

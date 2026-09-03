@@ -131,44 +131,79 @@ function memoryList(): ProjectSummary[] {
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
 }
 
-async function tauriList(): Promise<ProjectSummary[]> {
+/** 首次启动（无任何项目文件）时写入种子示例。metas 为空不证明目录为空：
+ * list_project_metas 会跳过损坏/不可读文件——唯一项目若是 JSON 损坏的已
+ * 编辑示例，无条件播种会用硬编码种子原子覆盖可能可恢复的用户文件。
+ * 播种为 no-replace 语义：仅当 load_project 确证「项目不存在」才写种子，
+ * 文件存在（含不可读）一律跳过并留痕。返回是否写入了任一种子。 */
+async function seedFirstRun(): Promise<boolean> {
   const { invoke } = await import('@tauri-apps/api/core')
-  const metas = await invoke<
-    { id: string; name: string; updated_at: string; scene_count: number; ending_count: number }[]
-  >('list_projects')
-  // 首次启动（无任何项目文件）时写入种子示例，保证开箱即有内容
-  if (metas.length === 0) {
-    for (const seed of seedProjects()) {
+  const notFound = (e: unknown) =>
+    (typeof e === 'string' || e instanceof Error) && String(e).includes('项目不存在')
+  let seeded = false
+  for (const seed of seedProjects()) {
+    try {
+      await invoke<unknown>('load_project', { id: seed.meta.id })
+      console.warn('[projectStore] 播种跳过：项目已存在', seed.meta.id)
+    } catch (err) {
+      if (!notFound(err)) {
+        console.warn('[projectStore] 播种跳过：项目文件不可读，不覆盖可能可恢复的内容', seed.meta.id, err)
+        continue
+      }
       await tauriSave(seed.meta.id, seed.doc)
+      seeded = true
     }
-    return tauriList()
   }
-  // 示例项目的旧格式（schemaVersion 0）迁移与 v1 修复型归一化同样回写：
-  // 写回**迁移/修复后的用户内容**——示例可能已被编辑（改名/加场景/资产），
-  // 用硬编码种子覆盖会在升级后首次打开首页时静默摧毁这些编辑；
-  // 演示内容刷新只经由空库播种路径发生
+  return seeded
+}
+
+/** 已知示例的旧格式（schemaVersion 0）迁移与 v1 修复型归一化回写：写回
+ * **迁移/修复后的用户内容**——示例可能已被编辑（改名/加场景/资产），用
+ * 硬编码种子覆盖会在升级后首次打开首页时静默摧毁这些编辑；演示内容刷新
+ * 只经由空库播种路径发生。与 tauriLoad 同款加载侧资产复验（§7.1/§10.5）：
+ * 索引资产文件缺失/被换链接时先隔离再回写，回写不被保存边界拒收。
+ * 单例隔离：该示例升级检查失败（如未来版本 schemaVersion——Rust 列表与
+ * 信封仍返回、parseProject 才拒绝）只跳过该例并留痕，摘要原样保留，版本
+ * 错误延迟到该项目被打开时呈现。返回是否发生回写。 */
+async function upgradeKnownSamples(metas: { id: string }[]): Promise<boolean> {
+  const { invoke } = await import('@tauri-apps/api/core')
   let repairedAny = false
   for (const meta of metas) {
     if (!meta.id.startsWith('sample-')) continue
     if (!seedProjects().some((s) => s.meta.id === meta.id)) continue
-    const file = await invoke<unknown>('load_project', { id: meta.id })
-    // 与 tauriLoad 同款加载侧资产复验（§7.1/§10.5）：示例可能带已损坏（文件
-    // 缺失/被换符号链接）的索引资产——不复验直接回写会被保存边界整次拒收，
-    // list 因此中止、首页被清成空列表；不可验证键交归一化隔离后再回写
-    const invalidAssetKeys = await invoke<string[]>('verify_project_assets', {
-      id: meta.id,
-      assets: (file as { assets?: unknown }).assets ?? {},
-    })
-    const { content, migrated, repaired } = parseProject(file, { projectId: meta.id, invalidAssetKeys })
-    if (migrated || repaired) {
-      await tauriSave(meta.id, content)
-      repairedAny = true
+    try {
+      const file = await invoke<unknown>('load_project', { id: meta.id })
+      const invalidAssetKeys = await invoke<string[]>('verify_project_assets', {
+        id: meta.id,
+        assets: (file as { assets?: unknown }).assets ?? {},
+      })
+      const { content, migrated, repaired } = parseProject(file, { projectId: meta.id, invalidAssetKeys })
+      if (migrated || repaired) {
+        await tauriSave(meta.id, content)
+        repairedAny = true
+      }
+    } catch (err) {
+      console.warn('[projectStore] 示例升级检查失败，保留该示例现状', meta.id, err)
     }
   }
-  // 回写改写了名称/统计与盖戳 updatedAt：metas 是写前快照，直接返回会让
-  // 首页滞留旧名旧序——重列一次（回写后的净本不再触发写，递归有界）
-  if (repairedAny) return tauriList()
-  return metas.map(toSummary)
+  return repairedAny
+}
+
+async function tauriList(): Promise<ProjectSummary[]> {
+  const { invoke } = await import('@tauri-apps/api/core')
+  // 回写改写了名称/统计并盖戳 updatedAt：metas 是写前快照，直接返回会让
+  // 首页滞留旧名旧序——重列直到无回写（回写后的净本不再触发写，循环有界）
+  for (;;) {
+    const metas = await invoke<
+      { id: string; name: string; updated_at: string; scene_count: number; ending_count: number }[]
+    >('list_projects')
+    if (metas.length === 0) {
+      if (!(await seedFirstRun())) return metas.map(toSummary)
+      continue
+    }
+    if (await upgradeKnownSamples(metas)) continue
+    return metas.map(toSummary)
+  }
 }
 
 async function tauriCreate(name: string): Promise<ProjectSummary> {
