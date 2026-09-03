@@ -38,11 +38,12 @@ pub struct ProjectInfo {
     pub updated_at: String,
 }
 
-/// 项目文件：ProjectDocument 信封。graph/settings/episodeTitles/assets
-/// 以 `serde_json::Value` 透传；缺省字段按空对象兜底（旧文件兼容）。
+/// 项目文件：ProjectDocument 信封。graph/settings/episodeTitles/assets 以
+/// `serde_json::Value` 透传。反序列化（save IPC 载荷）不设 serde 缺省：六键
+/// 缺一整次拒绝——缺桶默认补空值会静默清光既有数据；加载宽容由手工构造承担。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectFile {
-    #[serde(default, rename = "schemaVersion")]
+    #[serde(rename = "schemaVersion")]
     pub schema_version: u32,
     /// 信封判型发现文件缺 schemaVersion（按形状判为 v1，§11 第 0 步）：
     /// IPC 标记由前端 repaired 检测消费（载荷额外键使规范化比较必然不等，
@@ -50,15 +51,11 @@ pub struct ProjectFile {
     /// 契约；持久化输出恒为 false（保存必盖显式版本）。
     #[serde(default, skip_serializing_if = "is_false")]
     pub versionless: bool,
-    #[serde(default)]
     pub project: ProjectInfo,
-    #[serde(default)]
     pub graph: serde_json::Value,
-    #[serde(default = "empty_object")]
     pub settings: serde_json::Value,
-    #[serde(default = "empty_object", rename = "episodeTitles")]
+    #[serde(rename = "episodeTitles")]
     pub episode_titles: serde_json::Value,
-    #[serde(default = "empty_assets")]
     pub assets: serde_json::Value,
 }
 
@@ -236,8 +233,14 @@ fn iso_suffix_valid(s: &str) -> bool {
     }
 }
 
-/// ISO 8601 校验（保存边界）：`YYYY-MM-DDTHH:MM:SS[.fff](Z|±HH:MM)`，
-/// 含各字段取值范围与闰年规则——反序列化不校验字符串内容，边界自行把关。
+/// 规范 UTC 时间戳（§7.1/§10.5）：toISOString() 同形——恒 3 位毫秒、恒 `Z`
+/// （长 24）；偏移/缺毫秒的合法 ISO 往返不稳定，资产 createdAt 保存只收此形。
+fn is_canonical_utc_timestamp(s: &str) -> bool {
+    is_valid_iso8601(s) && s.len() == 24 && s.ends_with('Z')
+}
+
+/// ISO 8601 校验：`YYYY-MM-DDTHH:MM:SS[.fff](Z|±HH:MM)`，含各字段取值
+/// 范围与闰年规则——反序列化不校验字符串内容，边界自行把关。
 fn is_valid_iso8601(s: &str) -> bool {
     match parse_iso_prefix(s) {
         Some(f) => iso_fields_in_range(&f) && iso_suffix_valid(s),
@@ -473,8 +476,12 @@ fn validate_save_assets(assets: &serde_json::Value) -> Result<(), String> {
             _ => return Err(format!("资产 {key} 的 source 非法")),
         }
         match get_str("createdAt") {
-            Some(t) if is_valid_iso8601(t) => {}
-            _ => return Err(format!("资产 {key} 的 createdAt 不是可解析的 ISO 8601")),
+            Some(t) if is_canonical_utc_timestamp(t) => {}
+            _ => {
+                return Err(format!(
+                    "资产 {key} 的 createdAt 不是规范 UTC 时间戳（toISOString 形）"
+                ))
+            }
         }
     }
     Ok(())
@@ -2446,5 +2453,32 @@ mod tests {
         assert_eq!(metas.len(), 1);
         assert_eq!(metas[0].id, "p-1");
         cleanup_temp(&projects);
+    }
+
+    #[test]
+    fn save_ipc_payload_requires_all_envelope_buckets() {
+        // IPC 反序列化不设 serde 缺省：缺桶载荷默认补空值落盘，清光既有数据
+        let full = serde_json::to_value(new_project_file("p-1", "剧".into(), now_iso())).unwrap();
+        for key in "schemaVersion project graph settings episodeTitles assets".split(' ') {
+            let mut missing = full.clone();
+            missing.as_object_mut().expect("对象").remove(key);
+            let err = serde_json::from_value::<ProjectFile>(missing).unwrap_err();
+            assert!(err.to_string().contains(key), "缺 {key} 应整次拒绝：{err}");
+        }
+        assert!(serde_json::from_value::<ProjectFile>(full).is_ok());
+    }
+
+    #[test]
+    fn validate_save_assets_requires_canonical_utc_timestamps() {
+        let entry = |ts: &str| {
+            json!({ "byId": { "a-1": { "id": "a-1", "relPath": "assets/a1.png",
+                "mime": "image/png", "source": "upload", "createdAt": ts } } })
+        };
+        // 偏移/缺毫秒的合法 ISO 加载会规范化重写触发修复回写，保存只收规范形
+        for bad in ["2026-08-01T08:00:00+08:00", "2026-08-01T08:00:00Z"] {
+            let err = validate_save_assets(&entry(bad)).unwrap_err();
+            assert!(err.contains("createdAt"), "{bad} 意外诊断：{err}");
+        }
+        assert!(validate_save_assets(&entry("2026-08-01T00:00:00.000Z")).is_ok());
     }
 }
