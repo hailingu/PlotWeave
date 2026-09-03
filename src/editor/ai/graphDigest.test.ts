@@ -59,7 +59,7 @@ describe('buildGraphDigest（§6/§12.2 画布快照：id + 参数 + 连线语�
       source: 'br1',
       target: 'd1',
       type: 'branch',
-      sourceHandle: 'option-1',
+      sourceHandle: 'option-o2',
       data: { optionLabel: '不追' },
     },
     { id: 'e3', source: 's1', target: 'sh1', className: 'pw-edge-attach', sourceHandle: 'shots' },
@@ -97,7 +97,7 @@ describe('buildGraphDigest（§6/§12.2 画布快照：id + 参数 + 连线语�
   it('连线行区分 sequence / branch 选项 / attach 下挂', () => {
     expect(digest).toContain('sequence: b1 → s1')
     expect(digest).toContain('branch')
-    expect(digest).toContain('option-1')
+    expect(digest).toContain('branch(选项不追 · option-o2)')
     expect(digest).toContain('attach: s1 → sh1')
   })
 

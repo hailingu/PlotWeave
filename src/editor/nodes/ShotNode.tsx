@@ -17,6 +17,11 @@ export default function ShotNode({ id, data, selected }: NodeProps<ShotFlowNode>
   const { openSettingsId, toggleSettings } = useNodeEdit()
   const settingsOpen = openSettingsId === id
 
+  /** 引用位显示名（§8.1）：自由位显示手填文案；引用位的缩略图/媒体内容
+   * 按 assets.byId 实时解析（随资产 UI 演进），当前回退 assetId 供辨认。 */
+  const refText = (ref: ShotFlowNode['data']['refs'][number]): string =>
+    ref.label ?? ref.assetId ?? ''
+
   return (
     <div className={`pw-shot${selected ? ' pw-on' : ''}`}>
       <div className="pw-shot-tb">
@@ -44,8 +49,8 @@ export default function ShotNode({ id, data, selected }: NodeProps<ShotFlowNode>
       </div>
       <div className="pw-shot-refs">
         {data.refs.map((ref) => (
-          <span key={`${ref.kind}-${ref.label}`} className="pw-shot-ref">
-            {REF_ICONS[ref.kind]} {ref.label}
+          <span key={ref.id} className="pw-shot-ref">
+            {REF_ICONS[ref.kind]} {refText(ref)}
           </span>
         ))}
         <span className="pw-shot-ref pw-shot-ref-add" aria-hidden>

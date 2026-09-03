@@ -5,8 +5,8 @@ import type { Node } from '@xyflow/react'
  * 分族对齐生产管线「节奏卡 → 索引卡 → 剧本 → 分镜 → AI 燃料 → 渲染」：
  * 编剧侧（纸面浅色）= 节奏卡 / 索引卡 / 对白 / 分支；
  * 生成侧（深色石板）= 分镜卡，未来的渲染节点同族。
- * 首版为画布内存态占位结构，字段名对齐《数据模型设计》的 spec/meta 拆分，
- * 持久化落地时由 ProjectDocument 替换。
+ * 首版为画布内存态结构，字段名对齐《数据模型设计》的 spec/meta 拆分；
+ * 落盘时经 src/model/convert.ts 转换为 ProjectDocument（四分区信封）。
  */
 
 /** 角色头像的派生视图：label 为单字名，gradient 为设定集头像配色的占位渐变。 */
@@ -67,8 +67,8 @@ export interface BeatNodeData extends Record<string, unknown> {
   episodeNo?: number
 }
 
-/** 分支的一个选项：出口端口按下标定位（option-N），label 为胶囊文案。
- * id 为稳定标识（S6479：列表渲染/编辑的 key 不用数组下标）。 */
+/** 分支的一个选项：出口端口按稳定 id 定位（option-<id>），label 为胶囊文案。
+ * 删选项不位移其余出口的连线归属；id 同时作列表渲染/编辑的 key（S6479）。 */
 export interface BranchOption {
   id: string
   label: string
@@ -82,13 +82,21 @@ export interface BranchNodeData extends Record<string, unknown> {
   episodeNo?: number
 }
 
-/** 分镜卡的 AI 燃料引用位：角色垫图 / 场景底图 / 音频，首版为缩略 chip 占位。
- * id 为稳定标识（S6479：列表渲染/编辑的 key 不用数组下标）。 */
-export interface ShotRef {
+/** 分镜卡的 AI 燃料引用位：引用位与自由位互斥（assetId / label 不共存）。
+ * 引用位的唯一真相是 assetId（§8.1：只按本项目 assets.byId 解析，禁止镜像）；
+ * kind 只表达垫图/底图/音频用途（character/location 限 image/* 资产，audio
+ * 限 audio/* 资产）；自由位为手填文案。id 为列表项稳定标识（S6479），非引用目标。 */
+export interface ShotRefBase {
   id: string
   kind: 'character' | 'location' | 'audio'
-  label: string
 }
+
+/** 分镜引用位的判别联合：assetId 引用位（按 assets.byId 解析的唯一真相）
+ * 与 label 自由位（手填文案）互斥——`?: never` 使运行时判别与序列化校验
+ * 共用同一穷尽形状，二者并存或皆无在归一化层按异型成员隔离。 */
+export type ShotRef =
+  | (ShotRefBase & { assetId: string; label?: never })
+  | (ShotRefBase & { label: string; assetId?: never })
 
 /** 分镜卡节点（监视器卡，生成侧）：一张卡 = 一个镜头及其 AI 燃料。 */
 export interface ShotNodeData extends Record<string, unknown> {
@@ -103,16 +111,26 @@ export interface ShotNodeData extends Record<string, unknown> {
   refs: ShotRef[]
 }
 
+/** 各节点形态的 React Flow 别名：为 useNodesState 等泛型上下文钉住
+ * Node<Data, Type> 的精确组合，避免在各消费点重复展开联合。 */
 export type SceneFlowNode = Node<SceneNodeData, 'scene'>
 export type DialogueFlowNode = Node<DialogueNodeData, 'dialogue'>
 export type BeatFlowNode = Node<BeatNodeData, 'beat'>
 export type BranchFlowNode = Node<BranchNodeData, 'branch'>
 export type ShotFlowNode = Node<ShotNodeData, 'shot'>
 
+/** 落盘 meta 时间戳透传（§4.1 演进占位字段）：编辑器不维护也不展示，
+ * 加载时带上、序列化原样写回——打开→保存不得静默删除既有溯源元数据。 */
+export interface NodeMetaPassthrough {
+  meta?: { createdAt?: string; updatedAt?: string }
+}
+
 /** 画布节点的并集类型，供 useNodesState 使用。 */
-export type CanvasNode =
+export type CanvasNode = (
   | SceneFlowNode
   | DialogueFlowNode
   | BeatFlowNode
   | BranchFlowNode
   | ShotFlowNode
+) &
+  NodeMetaPassthrough

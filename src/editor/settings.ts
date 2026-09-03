@@ -22,10 +22,30 @@ export interface LocationEntity {
   note?: string
 }
 
-/** 项目设定集：随 ProjectDocument 持久化。 */
+/** 道具实体：契约桶（数据模型 §6）。首版 UI 未开放道具编辑，
+ * 会话仅透传保真——漏带即保存丢实体。 */
+export interface PropEntity {
+  id: string
+  name: string
+  description?: string
+}
+
+/** 设定文档实体：长篇自由文本（人物小传/世界观/术语表，数据模型 §6）。
+ * 首版 UI 未开放编辑，会话仅透传保真——漏带即保存丢文档。 */
+export interface DocumentEntity {
+  id: string
+  title: string
+  body: string
+  /** 关联的 Character / Location 条目：kind + id 显式成对（§6）。 */
+  relatedIds: Array<{ kind: 'character' | 'location'; id: string }>
+}
+
+/** 项目设定集：随 ProjectDocument 持久化。props/documents 首版只透传不编辑。 */
 export interface ProjectSettings {
   characters: CharacterEntity[]
   locations: LocationEntity[]
+  props?: PropEntity[]
+  documents?: DocumentEntity[]
 }
 
 export const EMPTY_SETTINGS: ProjectSettings = { characters: [], locations: [] }
@@ -42,8 +62,9 @@ const AVATAR_GRADIENTS = [
 
 let paletteCursor = 0
 
-/** 新实体 id：类型前缀 + 时间戳 36 进制 + 随机尾（同毫秒防碰撞）。 */
-export function newEntityId(prefix: 'ch' | 'loc'): string {
+/** 新实体 id：类型前缀 + 时间戳 36 进制 + 随机尾（同毫秒防碰撞）。
+ * 前缀随桶扩展（ch/loc/prop/doc），调用方按域选用。 */
+export function newEntityId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`
 }
 
@@ -83,12 +104,15 @@ export function resolveLocationName(settings: ProjectSettings, id: string): stri
   return settings.locations.find((l) => l.id === id)?.name ?? null
 }
 
-/** 项目文档缺省合并：旧文件无 settings 或字段缺失时补空集（向后兼容）。 */
+/** 项目文档缺省合并：旧文件无 settings 或字段缺失时补空集（向后兼容）。
+ * props/documents 为契约透传桶：存在即原样保留（漏带即保存/迁移回写丢失）。 */
 export function normalizeSettings(raw: unknown): ProjectSettings {
   if (typeof raw !== 'object' || raw === null) return { ...EMPTY_SETTINGS }
   const obj = raw as Partial<ProjectSettings>
   return {
     characters: Array.isArray(obj.characters) ? obj.characters : [],
     locations: Array.isArray(obj.locations) ? obj.locations : [],
+    ...(Array.isArray(obj.props) ? { props: obj.props } : {}),
+    ...(Array.isArray(obj.documents) ? { documents: obj.documents } : {}),
   }
 }

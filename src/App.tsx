@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import HomePage from './home/HomePage'
-import { projectStore, type ProjectDocument } from './projectStore'
-import { EMPTY_SETTINGS } from './editor/settings'
+import { projectStore, type ProjectContent } from './projectStore'
 import EditorView from './editor/EditorView'
 import SettingsView from './settings/SettingsView'
 import type { ProjectSummary } from './home/projects'
@@ -9,7 +8,7 @@ import type { ProjectSummary } from './home/projects'
 /** 编辑器态：已加载的项目（id + 名称 + 画布文档）。 */
 interface OpenProject {
   id: string
-  doc: ProjectDocument
+  doc: ProjectContent
 }
 
 /**
@@ -52,11 +51,15 @@ export default function App() {
   }, [])
 
   const handleCreateProject = useCallback(async () => {
-    const meta = await projectStore.create('未命名短剧')
-    setOpenProject({
-      id: meta.id,
-      doc: { name: meta.name, nodes: [], edges: [], settings: { ...EMPTY_SETTINGS } },
-    })
+    try {
+      const meta = await projectStore.create('未命名短剧')
+      // create 只回摘要：按落盘文档载入会话，保留 create_project 盖的 createdAt——
+      // 手工拼空文档会丢创建时间，首次保存把保存时刻误盖为创建时间（§3 溯源字段）
+      const doc = await projectStore.load(meta.id)
+      setOpenProject({ id: meta.id, doc })
+    } catch (err) {
+      console.warn('[App] 新建项目失败', err)
+    }
     void refreshProjects()
   }, [refreshProjects])
 
@@ -77,10 +80,10 @@ export default function App() {
     void refreshProjects()
   }, [refreshProjects])
 
+  /** 画布防抖保存（§10.2）：失败 Promise 上浮给编辑器——重置脏标记自动
+   * 重试并横幅提示，不再经 saveQuiet 静默吞错丢编辑。 */
   const handleSave = useCallback(
-    (id: string) => (doc: ProjectDocument) => {
-      void projectStore.saveQuiet(id, doc)
-    },
+    (id: string) => (doc: ProjectContent) => projectStore.save(id, doc),
     [],
   )
 
@@ -135,14 +138,7 @@ export default function App() {
     return (
       <EditorView
         key={openProject.id}
-        project={{
-          id: openProject.id,
-          name: openProject.doc.name,
-          nodes: openProject.doc.nodes,
-          edges: openProject.doc.edges,
-          settings: openProject.doc.settings,
-          episodeTitles: openProject.doc.episodeTitles,
-        }}
+        project={{ id: openProject.id, ...openProject.doc }}
         onBackHome={handleBackHome}
         onRenameProject={handleEditorRename}
         onOpenSettings={() => setSettingsOpen(true)}

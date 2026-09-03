@@ -21,6 +21,7 @@ import {
   type NodeTypes,
   type EdgeTypes,
   type XYPosition,
+  type Viewport,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import SceneNode from './nodes/SceneNode'
@@ -41,8 +42,13 @@ import { buildScriptMarkdown } from './exportScript'
 import {
   BRANCH_OPTION_HANDLE_PREFIX,
   SCENE_SHOT_HANDLE,
+  branchOptionIdOf,
   connectEdgeExtras,
+  connectionEndpointIssue,
+  connectionKindOf,
+  hasAttachHost,
   isDuplicateEdge,
+  removedOptionHandles,
   wouldCreateCycle,
 } from './graphRules'
 import { compareCodeUnits } from '../compare'
@@ -57,6 +63,7 @@ import { outlineSplicePlan, spliceEdgesWith } from './outlineDrop'
 import { entityDropPatch } from './entityDrop'
 import { applyEpisodeTitle } from './episodeTitle'
 import { useDebouncedSave } from './useDebouncedSave'
+import { sessionDoc } from './sessionDoc'
 import { useEditorHotkeys } from './useEditorHotkeys'
 import { useSettingsActions } from './useSettingsActions'
 import { useAiBridge } from './useAiBridge'
@@ -64,6 +71,7 @@ import { buildCanvasNode } from './nodeFactory'
 import type { CreatableType } from './creatable'
 import type { ProjectSettings } from './settings'
 import type { CanvasNode } from './nodes/types'
+import type { ProjectContent } from '../model/content'
 
 /** 画布节点类型注册：索引卡 / 对白 / 节奏卡 / 分支 / 分镜卡（docs/ui-design.md §4.2）。 */
 const nodeTypes: NodeTypes = {
@@ -80,30 +88,17 @@ const edgeTypes: EdgeTypes = {
 }
 
 interface EditorViewProps {
-  /** 打开的项目：id 用于持久化，name 用于标题栏与导出，doc 为已加载画布。 */
-  readonly project: {
-    id: string
-    name: string
-    nodes: CanvasNode[]
-    edges: Edge[]
-    settings: ProjectSettings
-    /** 大纲集标题（§3.5：集 = 编号 + 行内标题）。 */
-    episodeTitles?: Record<number, string>
-  }
+  /** 打开的项目：id 用于持久化，doc 为已加载的会话文档（含名称/画布/设定集/集标题/视口）。 */
+  readonly project: { id: string } & ProjectContent
   /** 返回项目首页：同一窗口从编辑器状态切回文档浏览器（§3.1）。 */
   readonly onBackHome: () => void
   /** 项目名内联重命名（§3.3 中区：更新 project.name + 首页索引）。 */
   readonly onRenameProject: (name: string) => void
   /** 打开设置页（§8.2 BYOK 配置入口，⌘,）。 */
   readonly onOpenSettings?: () => void
-  /** 持久化写入（防抖节流由本组件负责；浏览器预览下为内存回退实现）。 */
-  readonly onSave: (doc: {
-    name: string
-    nodes: CanvasNode[]
-    edges: Edge[]
-    settings: ProjectSettings
-    episodeTitles: Record<number, string>
-  }) => void
+  /** 持久化写入（防抖节流由本组件负责；浏览器预览下为内存回退实现）。
+   * 返回 Promise 时失败会上浮：重置脏标记自动重试并横幅提示。 */
+  readonly onSave: (doc: ProjectContent) => void | Promise<void>
 }
 
 /**
@@ -118,6 +113,18 @@ export default function EditorView(props: EditorViewProps) {
       <EditorWindow {...props} />
     </ReactFlowProvider>
   )
+}
+
+/** 防抖保存失败的横幅文案：Error 取 message，其余类型安全字符串化
+ * （String(对象) 只会得到 '[object Object]'）。 */
+function saveErrorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message
+  if (typeof err === 'string') return err
+  try {
+    return JSON.stringify(err) ?? '未知错误'
+  } catch {
+    return '未知错误'
+  }
 }
 
 /**
@@ -146,12 +153,55 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
   const edgesRef = useRef(edges)
   nodesRef.current = nodes
   edgesRef.current = edges
+  /** 资产索引镜像（会话内不编辑资产，透传桶的稳定引用）：
+   * AI 快照与剧本导出的引用位解析按当前资产索引消费。 */
+  const assetsRef = useRef(project.assets)
   const episodeTitlesRef = useRef(episodeTitles)
   episodeTitlesRef.current = episodeTitles
 
-  useDebouncedSave(
-    { name: project.name, nodes, edges, settings, episodeTitles },
+  // 视口随文档持久化（数据模型 §3）：本身无重渲染，onMoveEnd 更新 ref 后
+  // 经 markDirty 显式标脏并换入最新文档——纯平移/缩放也会防抖落盘，
+  // 卸载冲刷与后续内容保存拿到的都是最新视口（不落 stale 值）。
+  const viewportRef = useRef<Viewport | undefined>(project.viewport)
+
+  // 防抖保存失败的用户可见诊断（§10.2）：失败即横幅提示并自动重试，
+  // 成功后清除——保存失败不再只留在开发者控制台里丢编辑
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const handleSaveResult = useCallback((err: unknown) => {
+    if (err === null) {
+      setSaveError(null)
+      return
+    }
+    setSaveError(saveErrorMessage(err))
+  }, [])
+
+  const markDirty = useDebouncedSave(
+    sessionDoc(project, {
+      nodes,
+      edges,
+      settings,
+      episodeTitles,
+      viewport: viewportRef.current,
+    }),
     onSave,
+    600,
+    handleSaveResult,
+  )
+
+  const onMoveEnd = useCallback(
+    (_: unknown, vp: Viewport) => {
+      viewportRef.current = vp
+      markDirty(
+        sessionDoc(project, {
+          nodes,
+          edges,
+          settings,
+          episodeTitles,
+          viewport: vp,
+        }),
+      )
+    },
+    [markDirty, project, nodes, edges, settings, episodeTitles],
   )
 
   // 命令栈（§3.3/§4.3）：全部写操作入栈，undo 始终兜底
@@ -199,7 +249,9 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
     [setNodes],
   )
 
-  /** 编辑即命令：实时合并字段补丁；连续同类补丁合并为一步撤销（§4.3）。 */
+  /** 编辑即命令：实时合并字段补丁；连续同类补丁合并为一步撤销（§4.3）。
+   * 分支节点的 options 补丁若删除了选项，其出口 branch 边一并删除且
+   * 与选项进同一撤销单元（§8.2.2——不留悬空连线，不静默改接）。 */
   const patchNode = useCallback(
     (id: string, patch: Record<string, unknown>) => {
       const cur = nodesRef.current.find((n) => n.id === id)
@@ -208,13 +260,42 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
       const before: Record<string, unknown> = {}
       for (const k of keys) before[k] = (cur.data as Record<string, unknown>)[k]
       applyDataPatch(id, patch)
-      pushHistory({
-        coalesceKey: `patch:${id}:${[...keys].sort(compareCodeUnits).join(',')}`,
-        undo: () => applyDataPatch(id, before),
-        redo: () => applyDataPatch(id, patch),
-      })
+      // 级联：新态缺失的选项句柄 → 删其出口边（branch 节点限定）
+      const removedHandles =
+        cur.type === 'branch' && Array.isArray(patch.options)
+          ? removedOptionHandles(
+              (cur.data as { options: Array<{ id: string }> }).options,
+              patch.options as Array<{ id: string }>,
+            )
+          : []
+      const beforeEdges = edgesRef.current
+      if (removedHandles.length > 0) {
+        const gone = new Set(removedHandles)
+        setEdges((eds) => eds.filter((e) => !(e.source === id && e.sourceHandle && gone.has(e.sourceHandle))))
+      }
+      const undo = () => {
+        applyDataPatch(id, before)
+        if (removedHandles.length > 0) setEdges(beforeEdges)
+      }
+      const redo = () => {
+        applyDataPatch(id, patch)
+        if (removedHandles.length > 0) {
+          const gone = new Set(removedHandles)
+          setEdges((eds) => eds.filter((e) => !(e.source === id && e.sourceHandle && gone.has(e.sourceHandle))))
+        }
+      }
+      // 有边级联时不可与普通补丁合并撤销，单独成步
+      if (removedHandles.length > 0) {
+        pushHistory({ undo, redo })
+      } else {
+        pushHistory({
+          coalesceKey: `patch:${id}:${[...keys].sort(compareCodeUnits).join(',')}`,
+          undo,
+          redo,
+        })
+      }
     },
-    [applyDataPatch, pushHistory],
+    [applyDataPatch, pushHistory, setEdges],
   )
 
   /** ⧉ 复制：同 data 新 id，右下偏移并只选中新副本；入栈可撤销。 */
@@ -309,7 +390,7 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
   }, [])
 
   /** 集聚焦的画布投影：成员保持原样，非成员加降透明度类（§3.5 ~30%）。
-   * className 是运行态样式（stripNode 落盘时剥离），不入持久化。 */
+   * className 是运行态样式（落盘时由模型层序列化剥离），不入持久化。 */
   const displayNodes = useMemo(() => {
     if (focusedEpisode === null) return nodes
     const sceneByShot = hostSceneMap(nodes, edges)
@@ -397,17 +478,30 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
     [beatFulfillment],
   )
 
-  /** 连线实时校验（§4.3）：自环 / 成环 / 重复边为非法；attach 下挂一对多合法。
-   * 判定语义与 AI 批量校验共用 graphRules 纯函数；attach 是垂直派生边，
-   * 不参与剧情流环检测（§4.4 横向 = 剧情顺序，垂直 = 派生从属）。 */
+  /** 连线实时校验（§4.3）：自环 / 成环 / 重复边 / 端点类型越界为非法；
+   * attach 下挂一对多合法。判定语义与 AI 批量校验共用 graphRules 纯函数；
+   * attach 是垂直派生边，不参与剧情流环检测（§4.4 横向 = 剧情顺序，
+   * 垂直 = 派生从属）；端点类型约束是加载侧孤儿边规则的交互对等——
+   * 放行分镜卡参与剧情流之类的连线，会在下次加载被静默删除。 */
   const isValidConnection = useCallback(
     (conn: Connection | Edge): boolean => {
       if (conn.source === conn.target) return false
       const existing = edgesRef.current
       if (isDuplicateEdge(existing, conn)) return false
-      if (conn.sourceHandle === SCENE_SHOT_HANDLE) return true
+      const nodeTypeOf = (id: string) => nodesRef.current.find((n) => n.id === id)?.type
+      if (conn.sourceHandle === SCENE_SHOT_HANDLE) {
+        if (connectionEndpointIssue(nodeTypeOf(conn.source), nodeTypeOf(conn.target), 'attach') !== null) {
+          return false
+        }
+        // 宿主唯一（§5）：已有宿主的分镜不接受第二条下挂——换宿主须先断开
+        return !hasAttachHost(existing, conn.target)
+      }
       const flowEdges = existing.filter((e) => e.sourceHandle !== SCENE_SHOT_HANDLE)
-      return !wouldCreateCycle(flowEdges, conn.source, conn.target)
+      if (wouldCreateCycle(flowEdges, conn.source, conn.target)) return false
+      // Connection 无 type/className，语义从端口推出（选项出口 = branch），
+      // 误归 sequence 会被「分支不得以 sequence 连出」拒绝而拖不出连线
+      const kind = connectionKindOf(conn)
+      return connectionEndpointIssue(nodeTypeOf(conn.source), nodeTypeOf(conn.target), kind) === null
     },
     [],
   )
@@ -458,6 +552,7 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
     settings,
     nodesRef,
     edgesRef,
+    assetsRef,
     buildNewNode,
     applyDataPatch,
     setNodes,
@@ -486,8 +581,9 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
       shotCountOf,
       beatFulfillmentOf,
       settings,
+      assets: assetsRef.current,
     }),
-    [openSettingsId, toggleSettings, closeSettings, patchNode, duplicateNode, deleteNode, shotCountOf, beatFulfillmentOf, settings],
+    [openSettingsId, toggleSettings, closeSettings, patchNode, duplicateNode, deleteNode, shotCountOf, beatFulfillmentOf, settings, assetsRef],
   )
 
   // 失焦收起（§4.3）＋ 全局快捷键：⌘Z/⌘⇧Z 撤销重做、Delete 删除选中。
@@ -613,10 +709,13 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
       const fromShotHandle = connection.sourceHandle === SCENE_SHOT_HANDLE
       let branchData: { optionLabel: string } | undefined
       if (fromBranchOption) {
-        const idx = Number(connection.sourceHandle!.slice(BRANCH_OPTION_HANDLE_PREFIX.length))
+        const optionId = branchOptionIdOf(connection.sourceHandle)
         const srcNode = nodesRef.current.find((n) => n.id === connection.source)
         branchData = {
-          optionLabel: srcNode?.type === 'branch' ? (srcNode.data.options[idx]?.label ?? '') : '',
+          optionLabel:
+            srcNode?.type === 'branch'
+              ? (srcNode.data.options.find((o) => o.id === optionId)?.label ?? '')
+              : '',
         }
       }
       const edge: Edge = {
@@ -664,6 +763,19 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
         aiOn={rightTab === 'ai' && rightOpen}
         onToggleRight={toggleRight}
       />
+      {saveError !== null && (
+        <div
+          role="alert"
+          style={{
+            padding: '6px 16px',
+            background: '#5c1d1d',
+            color: '#ffe3e3',
+            fontSize: 13,
+          }}
+        >
+          自动保存失败：{saveError}（修改已保留，正在自动重试；可检查磁盘后继续编辑）
+        </div>
+      )}
       <div className="editor-body">
         <LeftPanel
           open={leftOpen}
@@ -699,7 +811,10 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
             isValidConnection={isValidConnection}
             /* 删除统一走命令栈（含连线清理），禁用内置 Delete 行为 */
             deleteKeyCode={null}
-            fitView
+            /* 有持久化视口则恢复，否则首开 fitView（§3 视口随文档持久化） */
+            defaultViewport={project.viewport}
+            fitView={!project.viewport}
+            onMoveEnd={onMoveEnd}
           >
             <Background
               variant={BackgroundVariant.Dots}
@@ -749,7 +864,7 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
       {exportOpen && (
         <ExportDialog
           projectName={project.name}
-          text={buildScriptMarkdown(project.name, nodes, edges, settings)}
+          text={buildScriptMarkdown(project.name, nodes, edges, settings, assetsRef.current)}
           onClose={() => setExportOpen(false)}
         />
       )}

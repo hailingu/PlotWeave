@@ -1,38 +1,89 @@
-//! 项目持久化（docs/ui-design.md §3.2 / 数据模型 §11）：
+//! 项目持久化（docs/data-model.md v1 §10/§11）：
 //! 每个项目一个 JSON 文件，存于应用数据目录 `projects/` 下，文件名即项目 id。
-//! 画布 nodes/edges 对前端是自有数据，Rust 端以 `serde_json::Value` 透传，
-//! 仅校验项目名与 id（信任边界内的自有格式，不做逐字段断言）。
+//! 落盘格式为 ProjectDocument 信封（schemaVersion + project 元信息 + graph +
+//! settings + episodeTitles + assets）。graph/settings/assets 以 `serde_json::Value`
+//! 透传，但保存边界（§10.5）执行完整信封校验：版本、容器形状、时间戳、
+//! 集标题键、AssetRef 形状——只验证不修复，异型值整次拒绝；updatedAt 由 Rust
+//! 端盖戳，id 以受信路径参数覆盖。落盘走原子写（§10.2）。
+//! 旧扁平格式在 load 时按第 0 步信封判型：形状特征匹配旧扁平格式才包装为
+//! v0 信封交付前端（显式 schemaVersion 0 同论），丢失版本号但保持 v1 信封
+//! 特征的文档按 v1 交付；显式版本号与信封形状两族矛盾的文档拒绝加载并保留
+//! 原文件。v1 信封的 project 元信息逐字段宽容提取，字段级损坏不阻断加载，
+//! 修复与警告归前端归一化层。节点级迁移与归一化由前端模型层（§11）完成。
 
 use std::collections::HashSet;
 use std::fs;
-use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::isotime::{
+    is_canonical_utc_timestamp, is_valid_iso8601, iso8601_to_epoch_millis, iso_from_ms, now_iso,
+};
+use cap_std::{ambient_authority, fs::Dir as CapDir};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use tauri::{AppHandle, Manager};
 
-/// 项目文件：name + 更新时间（epoch 毫秒）+ 画布两数组 + 设定集 + 集标题表
-/// （nodes/edges/settings/episodeTitles 对前端是自有数据，以 `serde_json::Value` 透传）。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProjectFile {
-    pub name: String,
-    pub updated_at: u64,
-    pub nodes: serde_json::Value,
-    pub edges: serde_json::Value,
-    /// 设定集实体（角色/地点）；旧版文件缺失时按空对象处理。
-    #[serde(default = "empty_settings")]
-    pub settings: serde_json::Value,
-    /// 大纲集标题（§3.5：集 = 编号 + 行内标题，不建实体表）；键为集号字符串。
-    #[serde(default = "empty_settings", rename = "episodeTitles")]
-    pub episode_titles: serde_json::Value,
+/// description 字段的在场保留反序列化：显式 null 映射为 Some(Null) 而非
+/// None——serde 对 Option 的默认行为会把 null 与缺场折叠，保存边界因此
+/// 看不见非字符串值（键被静默省略，既有描述被无声抹掉）。
+fn raw_description<'de, D>(d: D) -> Result<Option<serde_json::Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    serde_json::Value::deserialize(d).map(Some)
 }
 
-/// 项目摘要：首页海报卡的展示模型；统计从 nodes 派生，不落镜像字段。
+/// 项目元信息：id/name + ISO 8601 创建与更新时间（§3）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ProjectInfo {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    // None 省略键；字符串原样透传；非字符串（含显式 null，经 raw_description
+    // 保留在场）也原样透传——前端 §11.1 剥离并警告、repaired 回写落定（折叠
+    // 为 None 会让 repaired 检测看不见缺陷、保存边界看不见非法值而静默
+    // 省略键抹掉既有描述）；保存边界（prepare_save）只收字符串
+    #[serde(
+        default,
+        deserialize_with = "raw_description",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub description: Option<serde_json::Value>,
+    #[serde(default, rename = "createdAt")]
+    pub created_at: String,
+    #[serde(default, rename = "updatedAt")]
+    pub updated_at: String,
+}
+
+/// 项目文件：ProjectDocument 信封。graph/settings/episodeTitles/assets 以
+/// `serde_json::Value` 透传。反序列化（save IPC 载荷）不设 serde 缺省：六键
+/// 缺一整次拒绝——缺桶默认补空值会静默清光既有数据；加载宽容由手工构造承担。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectFile {
+    #[serde(rename = "schemaVersion")]
+    pub schema_version: u32,
+    /// 信封判型发现文件缺 schemaVersion（按形状判为 v1，§11 第 0 步）：
+    /// IPC 标记由前端 repaired 检测消费（载荷额外键使规范化比较必然不等，
+    /// 触发回写补盖版本号）——否则文件永久无版本，违反 §10.5/§11.1 收敛
+    /// 契约；持久化输出恒为 false（保存必盖显式版本）。
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub versionless: bool,
+    pub project: ProjectInfo,
+    pub graph: serde_json::Value,
+    pub settings: serde_json::Value,
+    #[serde(rename = "episodeTitles")]
+    pub episode_titles: serde_json::Value,
+    pub assets: serde_json::Value,
+}
+
+/// 项目摘要：首页海报卡的展示模型；统计从 graph 派生，不落镜像字段。
 #[derive(Debug, Clone, Serialize)]
 pub struct ProjectMeta {
     pub id: String,
     pub name: String,
-    pub updated_at: u64,
+    /// ISO 8601；可含时区偏移/小数秒变体，排序须按解析后的瞬间比较。
+    pub updated_at: String,
     pub scene_count: u64,
     pub ending_count: u64,
 }
@@ -75,40 +126,497 @@ pub fn new_id() -> String {
     format!("p-{ms:x}-{seq:x}")
 }
 
-/// settings 字段缺省值：空对象（而非 Null），前端 normalizeSettings 兜底。
-fn empty_settings() -> serde_json::Value {
-    serde_json::json!({})
+/// 当前支持的文档版本（§3）。
+const CURRENT_SCHEMA_VERSION: u32 = 1;
+
+/// RFC 9110 tchar 且排除 `*`（索引不保存通配媒体类型，§7.1）。
+fn is_mime_token(s: &str) -> bool {
+    !s.is_empty()
+        && s.bytes().all(|c| {
+            c.is_ascii_alphanumeric()
+                || matches!(
+                    c,
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'+'
+                        | b'-'
+                        | b'.'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'|'
+                        | b'~'
+                )
+        })
 }
 
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+/// 规范 MIME 形式（§7.1）：已去首尾空白、已小写、恰好两个具体 token 以 `/` 分隔。
+fn is_canonical_mime(s: &str) -> bool {
+    if s != s.trim() || s != s.to_ascii_lowercase() {
+        return false;
+    }
+    let mut parts = s.split('/');
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some(t), Some(st), None) => is_mime_token(t) && is_mime_token(st),
+        _ => false,
+    }
 }
 
-fn projects_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
+/// 词法 relPath（§7.1）：纯相对路径（正斜杠分隔，拒绝绝对路径/盘符/反斜杠），
+/// 解析目标必须位于项目资产子目录内——首段固定 `assets`，组件不含空段/`.`/`..`。
+fn is_valid_asset_rel_path(p: &str) -> bool {
+    if p.is_empty() || p != p.trim() {
+        return false;
+    }
+    if p.starts_with('/') || p.contains('\\') {
+        return false;
+    }
+    if p.len() >= 2 && p.as_bytes()[1] == b':' {
+        return false;
+    }
+    let mut comps = p.split('/');
+    if comps.next() != Some("assets") {
+        return false;
+    }
+    let mut rest = 0;
+    for c in comps {
+        if c.is_empty() || c == "." || c == ".." {
+            return false;
+        }
+        rest += 1;
+    }
+    rest > 0
+}
+
+/// 规范集号键（§11.1 第 3 步同域）：无前导零的十进制正整数，且在安全整数范围。
+fn is_canonical_episode_key(k: &str) -> bool {
+    if k.is_empty() || !k.bytes().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    if k.len() > 1 && k.starts_with('0') {
+        return false;
+    }
+    match k.parse::<u64>() {
+        Ok(v) => (1..=9_007_199_254_740_991).contains(&v),
+        Err(_) => false,
+    }
+}
+
+fn validate_save_graph(graph: &serde_json::Value) -> Result<(), String> {
+    let g = graph.as_object().ok_or("graph 必须是普通对象")?;
+    if !matches!(g.get("nodes"), Some(v) if v.is_array()) {
+        return Err("graph.nodes 必须是数组".into());
+    }
+    if !matches!(g.get("edges"), Some(v) if v.is_array()) {
+        return Err("graph.edges 必须是数组".into());
+    }
+    if let Some(vp) = g.get("viewport") {
+        let vp = vp.as_object().ok_or("graph.viewport 必须是普通对象")?;
+        let finite = |k: &str| vp.get(k).and_then(|v| v.as_f64()).filter(|f| f.is_finite());
+        if finite("x").is_none() || finite("y").is_none() {
+            return Err("graph.viewport 的 x/y 必须是有限数值".into());
+        }
+        if !matches!(finite("zoom"), Some(z) if z > 0.0) {
+            return Err("graph.viewport.zoom 必须是正有限数".into());
+        }
+    }
+    Ok(())
+}
+
+fn validate_save_settings(settings: &serde_json::Value) -> Result<(), String> {
+    let s = settings.as_object().ok_or("settings 必须是普通对象")?;
+    // 四桶必须齐备且均为普通对象（§10.5 持久化信任边界）：缺桶落盘后下次
+    // 加载被归一化为空 Record，既有内容永久丢失——不能只校验碰巧在场的桶
+    for bucket in ["characters", "locations", "props", "documents"] {
+        match s.get(bucket) {
+            Some(v) if v.is_object() => {}
+            Some(_) => return Err(format!("settings.{bucket} 必须是普通对象")),
+            None => {
+                return Err(format!(
+                    "settings.{bucket} 缺失，拒绝保存（缺桶会在下次加载被归一化为空）"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_save_episode_titles(titles: &serde_json::Value) -> Result<(), String> {
+    let t = titles.as_object().ok_or("episodeTitles 必须是普通对象")?;
+    for (k, v) in t {
+        if !is_canonical_episode_key(k) {
+            return Err(format!("episodeTitles 键 {k:?} 不是规范十进制正整数"));
+        }
+        let Some(title) = v.as_str() else {
+            return Err(format!("episodeTitles[{k:?}] 的值必须是字符串"));
+        };
+        // 值域与 set_episode_title 同域（落盘前 trim、去空白后非空）：
+        // 空白/带空白标题若放行，下次加载被 trim/删除并触发修复回写——
+        // 保存边界接受过的文档不得重开即变
+        if title.trim() != title || title.trim().is_empty() {
+            return Err(format!("episodeTitles[{k:?}] 的标题须为去空白后的非空串"));
+        }
+    }
+    Ok(())
+}
+
+/// §7.1 完整 AssetRef 形状 + Record 键/id 一致性 + 规范形式（MIME/时间戳）。
+/// 保存边界不替调用方修复：非规范值直接拒绝，避免内存与落盘分叉。
+fn validate_save_assets(assets: &serde_json::Value) -> Result<(), String> {
+    let a = assets.as_object().ok_or("assets 必须是普通对象")?;
+    let by_id = a
+        .get("byId")
+        .and_then(|v| v.as_object())
+        .ok_or("assets.byId 必须是普通对象")?;
+    for (key, entry) in by_id {
+        let e = entry
+            .as_object()
+            .ok_or_else(|| format!("资产 {key} 必须是普通对象"))?;
+        let get_str = |f: &str| e.get(f).and_then(|v| v.as_str());
+        match get_str("id") {
+            // 空白 id（§8.1 共同值域 trim 口径，键与内嵌 id 一致时同论）在
+            // 加载侧会被空白键重发改写身份并重连引用——保存边界接受的
+            // 数据重开即变 id，按非规范值整次拒绝
+            Some(eid) if !eid.trim().is_empty() && eid == key => {}
+            _ => return Err(format!("资产 {key} 的内嵌 id 空白或与 Record 键不一致")),
+        }
+        match get_str("relPath") {
+            Some(p) if is_valid_asset_rel_path(p) => {}
+            _ => return Err(format!("资产 {key} 的 relPath 非法或越出资产子目录")),
+        }
+        match get_str("mime") {
+            Some(m) if is_canonical_mime(m) => {}
+            _ => return Err(format!("资产 {key} 的 mime 非规范形式")),
+        }
+        match get_str("source") {
+            Some("upload") | Some("generated") => {}
+            _ => return Err(format!("资产 {key} 的 source 非法")),
+        }
+        match get_str("createdAt") {
+            Some(t) if is_canonical_utc_timestamp(t) => {}
+            _ => {
+                return Err(format!(
+                    "资产 {key} 的 createdAt 不是规范 UTC 时间戳（toISOString 形）"
+                ))
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 资产路径组件的 no-follow 元数据（相对锚定句柄），缺失映射为「资产文件不存在」。
+fn asset_stat(dir: &CapDir, comp: &str, rel_path: &str) -> Result<cap_std::fs::Metadata, String> {
+    dir.symlink_metadata(comp).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            format!("资产文件不存在：{rel_path}")
+        } else {
+            format!("读取资产路径元数据失败（{rel_path}）：{e}")
+        }
+    })
+}
+
+/// Unix 组件身份 (dev, ino)：读取与资产校验全程句柄相对后，身份比对只在
+/// cap-std 元数据之间进行（归类元数据与打开句柄元数据同源）。
+#[cfg(unix)]
+fn asset_identity(md: &cap_std::fs::Metadata) -> (u64, u64) {
+    use cap_std::fs::MetadataExt;
+    (md.dev(), md.ino())
+}
+
+/// §10.5 保存边界——资产实路径复验（relPath 词法校验之外的文件系统事实）。
+/// 当前扁平布局下项目资产根为 `projects/{id}/`（§10.1 目录化布局随 §7.1 落地
+/// 后由同一函数承接）：全程相对 projects_dir 返回的**受信根锚定句柄**解析
+/// （§10.2 openat 语义，cap-std 沙箱保证不逃出 projects/，canonical 路径比对
+/// 不再需要——路径名比对在校验期间被整体替换的 projects/ 上会验到替换树）。
+/// 项目资产根现存时必须是非符号链接的实际目录（open_dir_bound 身份绑定），
+/// 随后对 relPath 逐组件 `symlink_metadata` 拒绝符号链接（no-follow）、中间
+/// 组件须为目录（逐级 open_dir_bound 绑定身份），终点必须是普通文件且打开
+/// 句柄按 (dev, ino) 与归类实体一致（Unix）——校验与打开之间被替换（含换成
+/// 符号链接或另一实体）即拒绝，句柄返回给调用方持有至保存完成后释放。
+/// 校验与落盘之间被替换的残余窗口由加载侧复验（verify_project_assets）在
+/// 下次打开时隔离兜底。
+fn verify_asset_real_path(
+    root: &CapDir,
+    id: &str,
+    rel_path: &str,
+) -> Result<cap_std::fs::File, String> {
+    let root_md = root
+        .symlink_metadata(id)
+        .map_err(|_| format!("项目资产根不存在，资产文件不存在：{rel_path}"))?;
+    if root_md.file_type().is_symlink() {
+        return Err(format!("项目资产根是符号链接，拒绝校验资产：{rel_path}"));
+    }
+    if !root_md.is_dir() {
+        return Err(format!("项目资产根不是目录，资产文件不存在：{rel_path}"));
+    }
+    let mut dir = open_dir_bound(root, id, &root_md, "项目资产根")?;
+    let comps: Vec<&str> = rel_path.split('/').collect();
+    let Some((last, parents)) = comps.split_last() else {
+        return Err(format!("资产路径为空：{rel_path}"));
+    };
+    for comp in parents {
+        let md = asset_stat(&dir, comp, rel_path)?;
+        if md.file_type().is_symlink() {
+            return Err(format!("资产路径含符号链接：{rel_path}"));
+        }
+        if !md.is_dir() {
+            return Err(format!("资产路径的中间组件不是目录：{rel_path}"));
+        }
+        dir = open_dir_bound(&dir, comp, &md, "资产中间目录")?;
+    }
+    let md = asset_stat(&dir, last, rel_path)?;
+    if md.file_type().is_symlink() {
+        return Err(format!("资产路径含符号链接：{rel_path}"));
+    }
+    if !md.is_file() {
+        return Err(format!("资产路径不是普通文件：{rel_path}"));
+    }
+    let file = dir
+        .open(last)
+        .map_err(|e| format!("打开资产文件失败（{rel_path}）：{e}"))?;
+    #[cfg(unix)]
+    {
+        let fm = file
+            .metadata()
+            .map_err(|e| format!("读取资产句柄元数据失败（{rel_path}）：{e}"))?;
+        if asset_identity(&fm) != asset_identity(&md) {
+            return Err(format!("资产文件在校验期间被替换：{rel_path}"));
+        }
+    }
+    Ok(file)
+}
+
+/// §10.5：保存前逐项复验资产 relPath 的真实路径。relPath 词法非法（§7.1）
+/// 或字段形状缺失的条目交给 prepare_save 的信封诊断，此处跳过避免重复误报。
+/// 返回已验证资产的打开句柄——调用方持有至保存完成后释放，期间实体不可
+/// 被替换为未验证目标（句柄绑定见 verify_asset_real_path）。
+fn verify_save_asset_files(
+    root: &CapDir,
+    id: &str,
+    assets: &serde_json::Value,
+) -> Result<Vec<cap_std::fs::File>, String> {
+    let mut handles = Vec::new();
+    let Some(by_id) = assets.get("byId").and_then(|v| v.as_object()) else {
+        return Ok(handles);
+    };
+    for (key, entry) in by_id {
+        let Some(rel) = entry.get("relPath").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        if !is_valid_asset_rel_path(rel) {
+            continue;
+        }
+        let handle =
+            verify_asset_real_path(root, id, rel).map_err(|e| format!("资产 {key}：{e}"))?;
+        handles.push(handle);
+    }
+    Ok(handles)
+}
+
+/// §7.1/§10.5 加载侧资产实路径复验内核：返回文档 assets.byId 中词法合法、
+/// 但以受信资产根 no-follow 验证失败（缺失/符号链接/非普通文件/逃逸）的
+/// 记录键。词法非法或形状缺失的条目不在此报告——前端形状归一化负责隔离。
+fn unverifiable_asset_keys(root: &CapDir, id: &str, assets: &serde_json::Value) -> Vec<String> {
+    let mut bad = Vec::new();
+    let Some(by_id) = assets.get("byId").and_then(|v| v.as_object()) else {
+        return bad;
+    };
+    for (key, entry) in by_id {
+        let Some(rel) = entry.get("relPath").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        if !is_valid_asset_rel_path(rel) {
+            continue;
+        }
+        if verify_asset_real_path(root, id, rel).is_err() {
+            bad.push(key.clone());
+        }
+    }
+    bad
+}
+
+/// 加载侧资产复验命令：调用方回传刚加载文档的资产索引（避免二次读盘），
+/// 返回不可验证键，交前端归一化层隔离——否则下一次保存会被保存边界
+/// 拒收，防抖静默吞错后用户编辑永不落盘。加载本身保持只读；复验相对
+/// projects_dir 的受信根锚定句柄执行。
+#[tauri::command]
+pub fn verify_project_assets(
+    app: AppHandle,
+    id: String,
+    assets: serde_json::Value,
+) -> Result<Vec<String>, String> {
+    validate_id(&id)?;
+    let root = projects_dir(&app)?;
+    Ok(unverifiable_asset_keys(&root, &id, &assets))
+}
+
+/// save_project 的信封校验与规范化（§10.5）：在创建临时文件、生成保存时间
+/// 或更新索引之前完成——任一校验失败整次拒绝，不得静默剥离。全部通过后
+/// 以受信路径参数覆盖 id，并由 Rust 为本次尝试只取一次系统时间无条件盖戳
+/// updatedAt（不信任旧值、未来值或前端时钟）。
+fn prepare_save(id: &str, doc: &ProjectFile) -> Result<ProjectFile, String> {
+    if doc.schema_version != CURRENT_SCHEMA_VERSION {
+        return Err(format!(
+            "文档版本不受支持（schemaVersion {}），拒绝保存",
+            doc.schema_version
+        ));
+    }
+    let name = sanitize_name(&doc.project.name)?;
+    if let Some(d) = &doc.project.description {
+        if !d.is_string() {
+            return Err("project.description 非字符串，拒绝保存".into());
+        }
+    }
+    if !is_valid_iso8601(&doc.project.created_at) {
+        return Err("project.createdAt 不是可解析的 ISO 8601 时间戳".into());
+    }
+    if !is_valid_iso8601(&doc.project.updated_at) {
+        return Err("project.updatedAt 不是可解析的 ISO 8601 时间戳".into());
+    }
+    validate_save_graph(&doc.graph)?;
+    validate_save_settings(&doc.settings)?;
+    validate_save_episode_titles(&doc.episode_titles)?;
+    validate_save_assets(&doc.assets)?;
+    Ok(ProjectFile {
+        schema_version: doc.schema_version,
+        versionless: false,
+        project: ProjectInfo {
+            id: id.to_string(),
+            name,
+            description: doc.project.description.clone(),
+            created_at: doc.project.created_at.clone(),
+            updated_at: now_iso(),
+        },
+        graph: doc.graph.clone(),
+        settings: doc.settings.clone(),
+        episode_titles: doc.episode_titles.clone(),
+        assets: doc.assets.clone(),
+    })
+}
+
+/// 原子写控制文件（§10.2）：全程相对已验证父目录的打开句柄执行（cap-std
+/// openat 语义）——目标归类与 rename 前复核（现存目标为符号链接或非普通
+/// 文件即拒绝，不跟随）、随机同目录名临时文件以 O_CREAT|O_EXCL 排他创建
+/// （预置 `.tmp` 符号链接无法截获写入）、写入 + flush/fsync、句柄相对
+/// rename 原子覆盖（cap-std 在 Windows 上以替换语义实现 rename，std::fs::
+/// rename 在该平台不替换已存在目标，已建项目的每次保存都会失败）→ 父目录
+/// fsync（持久性屏障，打开/同步失败向上传播、不粉饰成功）；失败尽力清理
+/// 临时文件。file_name 须为单段文件名（不含路径分量）：归类、创建与
+/// rename 之外的越界形态在此拒绝，不得相对句柄逃出 projects/。
+fn atomic_write(root: &CapDir, file_name: &str, text: &str) -> Result<(), String> {
+    use std::io::Write;
+    if std::path::Path::new(file_name).components().count() != 1 {
+        return Err(format!("项目文件名含路径分量，拒绝：{file_name}"));
+    }
+    // 目标归类（现存为符号链接或非普通文件即拒绝，不跟随）：仅**确证缺失**
+    // 视作新建目标——权限/瞬态 I/O 错误当缺失放行会跳过归类，rename 可能
+    // 覆盖未验证的目录项（fail closed）
+    let check_target = || -> Result<(), String> {
+        match root.symlink_metadata(file_name) {
+            Ok(md) if md.file_type().is_symlink() => Err("拒绝符号链接形式的项目文件".into()),
+            Ok(md) if !md.is_file() => Err("项目路径不是普通文件".into()),
+            Ok(_) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(format!("读取项目文件元数据失败：{e}")),
+        }
+    };
+    check_target()?;
+    let tmp_name = format!(".{file_name}.{}.tmp", new_id());
+    let result = (|| -> Result<(), String> {
+        let mut f = root
+            .open_with(
+                &tmp_name,
+                cap_std::fs::OpenOptions::new().write(true).create_new(true),
+            )
+            .map_err(|e| format!("创建临时文件失败：{e}"))?;
+        f.write_all(text.as_bytes())
+            .map_err(|e| format!("写入项目失败：{e}"))?;
+        f.sync_all().map_err(|e| format!("同步临时文件失败：{e}"))?;
+        drop(f);
+        // rename 前复核现存目标（§10.2）：写临时文件期间被换上的符号链接
+        // 或异型条目在此拒绝，不被 rename 覆盖
+        check_target()?;
+        root.rename(&tmp_name, root, file_name)
+            .map_err(|e| format!("落盘项目失败：{e}"))?;
+        // 持久性屏障同步锚定句柄本身（经其重新绑定自身再 fsync，不按路径名
+        // 重开——否则屏障加到并发替换后的目录上，保存成功而加载另一棵树）
+        #[cfg(unix)]
+        root.open_dir(".")
+            .and_then(|d| d.into_std_file().sync_all())
+            .map_err(|e| format!("同步项目目录失败（持久性屏障缺失）：{e}"))?;
+        // Windows 无法对目录句柄 fsync：跳过屏障而非误报成功写失败
+        #[cfg(not(unix))]
+        let _ = root;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = root.remove_file(&tmp_name);
+    }
+    result
+}
+
+/// serde 谓词：false 时省略键（versionless 标记仅真值跨 IPC）。
+fn is_false(v: &bool) -> bool {
+    !*v
+}
+
+fn empty_assets() -> serde_json::Value {
+    json!({ "byId": {} })
+}
+
+/// 项目根目录（§10.2 信任链）：canonicalize 应用数据根并以**受信根句柄**
+/// 锚定——`projects/` 的创建、非符号链接校验与打开全部相对该句柄执行，
+/// 打开经 (dev, ino) 身份绑定。返回的 projects 句柄供读/写/删/拷与持久性
+/// 屏障内核复用，不按路径名重开（`open_ambient_dir` 与 fsync 重开都会把
+/// 并发替换后的目录变成表面根）。路径名被换时：越界被沙箱拒绝，界内
+/// 替换被身份绑定拒绝。
+fn projects_dir(app: &AppHandle) -> Result<CapDir, String> {
+    let root_path = app
         .path()
         .app_data_dir()
-        .map_err(|e| format!("无法定位应用数据目录：{e}"))?
-        .join("projects");
-    fs::create_dir_all(&dir).map_err(|e| format!("创建项目目录失败：{e}"))?;
-    Ok(dir)
+        .map_err(|e| format!("无法定位应用数据目录：{e}"))?;
+    fs::create_dir_all(&root_path).map_err(|e| format!("创建应用数据目录失败：{e}"))?;
+    let root_path = root_path
+        .canonicalize()
+        .map_err(|e| format!("解析应用数据目录真实路径失败：{e}"))?;
+    let root = CapDir::open_ambient_dir(&root_path, ambient_authority())
+        .map_err(|e| format!("打开应用数据根目录失败：{e}"))?;
+    match root.symlink_metadata("projects") {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => root
+            .create_dir("projects")
+            .map_err(|e| format!("创建项目目录失败：{e}"))?,
+        Err(e) => return Err(format!("读取项目目录元数据失败：{e}")),
+    }
+    let md = root
+        .symlink_metadata("projects")
+        .map_err(|e| format!("读取项目目录元数据失败：{e}"))?;
+    if md.file_type().is_symlink() {
+        return Err("拒绝符号链接形式的项目目录".into());
+    }
+    if !md.is_dir() {
+        return Err("项目目录路径不是目录".into());
+    }
+    open_dir_bound(&root, "projects", &md, "项目目录")
 }
 
-fn project_path(app: &AppHandle, id: &str) -> Result<PathBuf, String> {
-    validate_id(id)?;
-    Ok(projects_dir(app)?.join(format!("{id}.json")))
-}
-
-/// 从画布 nodes 派生统计：场数 = scene 节点数；结局数 = 无剧情流出边的
+/// 从画布 graph 派生统计：场数 = scene 节点数；结局数 = 无剧情流出边的
 /// 场景数（分支剧情的叶子场景即结局）。attach 下挂边（索引卡 → 分镜卡，
 /// 垂直派生从属）不算出边——挂了分镜的场景仍是叶子结局。
-pub fn graph_stats(nodes: &serde_json::Value, edges: &serde_json::Value) -> (u64, u64) {
+/// v1 文档边带显式 data.kind；v0 运行态边按 sourceHandle/className 判别。
+pub fn graph_stats(graph: &serde_json::Value) -> (u64, u64) {
     let empty: Vec<serde_json::Value> = Vec::new();
-    let nodes = nodes.as_array().unwrap_or(&empty);
-    let edges = edges.as_array().unwrap_or(&empty);
+    let nodes = graph
+        .get("nodes")
+        .and_then(|v| v.as_array())
+        .unwrap_or(&empty);
+    let edges = graph
+        .get("edges")
+        .and_then(|v| v.as_array())
+        .unwrap_or(&empty);
 
     let scene_ids: HashSet<&str> = nodes
         .iter()
@@ -116,7 +624,8 @@ pub fn graph_stats(nodes: &serde_json::Value, edges: &serde_json::Value) -> (u64
         .filter_map(|n| n.get("id").and_then(|i| i.as_str()))
         .collect();
     let is_attach = |e: &serde_json::Value| {
-        e.get("sourceHandle").and_then(|h| h.as_str()) == Some("shots")
+        e.pointer("/data/kind").and_then(|k| k.as_str()) == Some("attach")
+            || e.get("sourceHandle").and_then(|h| h.as_str()) == Some("shots")
             || e.get("className").and_then(|c| c.as_str()) == Some("pw-edge-attach")
     };
     let mut has_outgoing: HashSet<&str> = HashSet::new();
@@ -135,107 +644,680 @@ pub fn graph_stats(nodes: &serde_json::Value, edges: &serde_json::Value) -> (u64
     (scene_ids.len() as u64, endings)
 }
 
+/// 列表侧名称回退（§10.2）：空白/异型/超 64 字符（§9.3 名称域外，打开时
+/// 会被前端归一化替换）的名不得交给首页——非示例项目不经前端归一化，
+/// 空名直留空白卡片、超长名破坏排版；回退「未命名项目」占位。
+fn legal_display_name(name: &str) -> String {
+    let trimmed = name.trim();
+    let legal = !trimmed.is_empty() && trimmed.chars().count() <= 64;
+    (if legal { trimmed } else { "未命名项目" }).to_string()
+}
+
 fn read_meta(id: &str, file: &ProjectFile) -> ProjectMeta {
-    let (scene_count, ending_count) = graph_stats(&file.nodes, &file.edges);
+    let (scene_count, ending_count) = graph_stats(&file.graph);
     ProjectMeta {
         id: id.to_string(),
-        name: file.name.clone(),
-        updated_at: file.updated_at,
+        name: legal_display_name(&file.project.name),
+        updated_at: file.project.updated_at.clone(),
         scene_count,
         ending_count,
     }
 }
 
-/// 列出全部项目，按更新时间新→旧排序。
+/// 旧扁平格式（无 schemaVersion）→ v0 信封：节点/边上移 graph，
+/// epoch 毫秒时间戳转 ISO；节点级字段迁移由前端模型层完成（§11.1）。
+fn wrap_legacy(id: &str, v: &serde_json::Value) -> ProjectFile {
+    let name = v
+        .get("name")
+        .and_then(|x| x.as_str())
+        .unwrap_or("未命名")
+        .to_string();
+    let updated_at = v
+        .get("updated_at")
+        .and_then(|x| x.as_u64())
+        .map(iso_from_ms)
+        .unwrap_or_default();
+    ProjectFile {
+        schema_version: 0,
+        versionless: false,
+        project: ProjectInfo {
+            id: id.to_string(),
+            name,
+            description: None,
+            created_at: String::new(),
+            updated_at,
+        },
+        graph: json!({
+            "nodes": v.get("nodes").cloned().unwrap_or(json!([])),
+            "edges": v.get("edges").cloned().unwrap_or(json!([])),
+            // 旧格式从未持久化视口：保持缺省（前端打开时 fitView），不伪造原点
+        }),
+        settings: v.get("settings").cloned().unwrap_or_else(|| json!({})),
+        episode_titles: v.get("episodeTitles").cloned().unwrap_or_else(|| json!({})),
+        assets: empty_assets(),
+    }
+}
+
+/// 项目列表排序：按更新瞬间（ISO 解析为 epoch 毫秒）新→旧；加载侧宽容保留
+/// 的非法/缺失时间戳无法解析，排最后，不混入有效项之间。
+fn sort_metas_by_recency(metas: &mut [ProjectMeta]) {
+    metas.sort_by_key(|m| std::cmp::Reverse(iso8601_to_epoch_millis(&m.updated_at)));
+}
+
+/// §10.2 控制文件信任链——读取前置校验（句柄相对，no-follow）：拒绝符号
+/// 链接（无论指向根内或根外）、要求普通文件。相对 projects_dir 的**受信
+/// 根锚定句柄**解析使包含关系由 cap-std 沙箱保证，无需 canonical 路径
+/// 比对——路径名比对在 projects/ 校验后被并发整体替换时会验到替换树、
+/// 相互包含照样通过。返回目录项身份（Unix 为 (dev, ino)）供调用方在打开
+/// 后绑定同一实体——校验与打开之间被替换（换成符号链接或另一文件）即
+/// 拒绝且不读取。
+fn verify_control_file(root: &CapDir, name: &str) -> Result<Option<(u64, u64)>, String> {
+    let md = root
+        .symlink_metadata(name)
+        .map_err(|e| format!("读取项目文件元数据失败：{e}"))?;
+    if md.file_type().is_symlink() {
+        return Err("项目文件是符号链接，拒绝读取".into());
+    }
+    if !md.is_file() {
+        return Err("项目文件不是普通文件".into());
+    }
+    #[cfg(unix)]
+    {
+        Ok(Some(asset_identity(&md)))
+    }
+    #[cfg(not(unix))]
+    Ok(None)
+}
+
+/// 列出全部项目，按更新时间新→旧排序。扫描相对受信根锚定句柄执行。
 #[tauri::command]
 pub fn list_projects(app: AppHandle) -> Result<Vec<ProjectMeta>, String> {
-    let dir = projects_dir(&app)?;
+    let root = projects_dir(&app)?;
+    list_project_metas(&root)
+}
+
+/// list_projects 的可测内核（给定已验证的 projects 根句柄）。目录扫描逐条
+/// 跳过符号链接/异型项/坏文件（单条坏数据不阻断列表），扫描与读取全程
+/// 句柄相对——projects/ 路径名被并发整体替换也不会列出替换树的条目；
+/// 读取走 read_verified_file 的身份绑定，校验通过后被并发替换为符号链接
+/// 或另一文件时读到的仍是校验时的同一实体，否则跳过该条目。
+fn list_project_metas(root: &CapDir) -> Result<Vec<ProjectMeta>, String> {
     let mut metas: Vec<ProjectMeta> = Vec::new();
-    for entry in fs::read_dir(&dir).map_err(|e| format!("读取项目目录失败：{e}"))? {
-        let path = entry.map_err(|e| format!("遍历项目目录失败：{e}"))?.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+    for entry in root
+        .entries()
+        .map_err(|e| format!("读取项目目录失败：{e}"))?
+    {
+        let entry = entry.map_err(|e| format!("遍历项目目录失败：{e}"))?;
+        let file_name = entry.file_name();
+        let Some(name) = file_name.to_str() else {
             continue;
-        }
-        let Some(id) = path.file_stem().and_then(|s| s.to_str()) else {
+        };
+        let Some(id) = name.strip_suffix(".json") else {
             continue;
         };
         if validate_id(id).is_err() {
             continue;
         }
-        let Ok(text) = fs::read_to_string(&path) else {
+        // §10.2 目录扫描：校验 + 打开 + 读取绑定同一实体，绝不跟随替换
+        let Ok(text) = read_verified_file(root, name) else {
             continue;
         };
-        if let Ok(file) = serde_json::from_str::<ProjectFile>(&text) {
+        if let Ok(file) = parse_file(id, &text) {
             metas.push(read_meta(id, &file));
         }
     }
-    metas.sort_by_key(|m| std::cmp::Reverse(m.updated_at));
+    sort_metas_by_recency(&mut metas);
     Ok(metas)
 }
 
-/// 新建空项目（空画布），返回其摘要。
+/// project 元信息的宽容提取（§11 第 0 步）：project 容器非对象或字段异型
+/// （name/description/时间戳为 null 或非字符串等）时逐字段回退缺省——可恢复
+/// 的元数据损坏不拒绝整个项目，字段级修复与警告归前端归一化层（§11.1 第 3
+/// 步）；id/时间戳的空值由 parse_file 就地补齐为有效值。
+fn parse_project_info(v: Option<&serde_json::Value>) -> ProjectInfo {
+    let get = |k: &str| v.and_then(|x| x.get(k)).and_then(|x| x.as_str());
+    ProjectInfo {
+        id: get("id").unwrap_or_default().to_string(),
+        name: get("name").unwrap_or_default().to_string(),
+        description: v.and_then(|x| x.get("description")).cloned(),
+        created_at: get("createdAt").unwrap_or_default().to_string(),
+        updated_at: get("updatedAt").unwrap_or_default().to_string(),
+    }
+}
+
+/// v1 信封的宽容解析（§11 第 0 步）：project 元信息经 parse_project_info
+/// 逐字段提取；graph/settings/episodeTitles/assets 以 untyped 值原样透传，
+/// **缺失以 Null 透传**（与 project 元信息空串同款原则）：预补空容器会让
+/// 前端 repaired 检测看不见缺陷——载荷比对已是完整信封，缺桶永不回写
+/// 收敛；Null 由前端 §11.1 第 2 步补齐（视为异型容器，修复并标记
+/// repaired）。持久化层只拒绝两族矛盾或不可判型的信封。
+fn parse_v1_envelope(value: &serde_json::Value) -> ProjectFile {
+    let schema_version = value
+        .get("schemaVersion")
+        .and_then(|v| v.as_u64())
+        .and_then(|v| u32::try_from(v).ok())
+        .unwrap_or(1);
+    ProjectFile {
+        schema_version,
+        versionless: false,
+        project: parse_project_info(value.get("project")),
+        graph: value
+            .get("graph")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+        settings: value
+            .get("settings")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+        episode_titles: value
+            .get("episodeTitles")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+        assets: value
+            .get("assets")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+    }
+}
+
+/// 显式 schemaVersion 的家族一致性校验与解析（§11 第 0 步）：0 属旧扁平
+/// 家族、≥1 属 v1 家族，版本号与信封形状两族矛盾即拒绝并保留原文件——
+/// 否则 v1 StoryNode 会被送进旧版迁移器，且每次 v0 加载都被视为已迁移
+/// 并回写，可能摧毁节点字段；显式 0 且保持扁平形状时包装为 v0 信封。
+fn parse_explicit_envelope(
+    id: &str,
+    value: serde_json::Value,
+    v1_keys: usize,
+    legacy_keys: usize,
+) -> Result<ProjectFile, String> {
+    let Some(version) = value.get("schemaVersion").and_then(|sv| sv.as_u64()) else {
+        return Err("schemaVersion 不是非负整数，无法判别文档信封（已保留原文件）".into());
+    };
+    if version == 0 {
+        if v1_keys > 0 {
+            return Err(
+                "文档信封自相矛盾：schemaVersion 0 却携带 v1 专属键（已保留原文件）".into(),
+            );
+        }
+        return Ok(wrap_legacy(id, &value));
+    }
+    if legacy_keys > 0 {
+        return Err(
+            "文档信封自相矛盾：schemaVersion ≥ 1 却携带旧扁平特征键（已保留原文件）".into(),
+        );
+    }
+    if version > u64::from(u32::MAX) {
+        // 超出 u32 的版本号无法无损载入信封：截断回退会把未来文档当作当前
+        // v1 交付，保存时按 v1 回写并丢弃未知字段——拒绝加载并保留原文件
+        return Err("schemaVersion 超出可表示范围（疑似未来版本），拒绝加载并保留原文件".into());
+    }
+    Ok(parse_v1_envelope(&value))
+}
+
+/// 无版本号信封的形状判型（§11 第 0 步）：v1 专属键（project/graph/assets）
+/// 独占时赋予待修复的有效版本 1；旧扁平特征键（≥2 个且含 nodes/edges）独占
+/// 时包装为 v0 信封；混合或两组特征均不足的损坏文档拒绝加载并保留原文件——
+/// 绝不把保持 v1 形状的文档误包装成空 v0 图后回写摧毁原画布。
+fn classify_versionless(
+    id: &str,
+    value: serde_json::Value,
+    v1_keys: usize,
+    legacy_keys: usize,
+    has_legacy_list: bool,
+) -> Result<ProjectFile, String> {
+    if v1_keys > 0 && legacy_keys == 0 {
+        let mut file = parse_v1_envelope(&value);
+        file.versionless = true;
+        return Ok(file);
+    }
+    if v1_keys == 0 && legacy_keys >= 2 && has_legacy_list {
+        return Ok(wrap_legacy(id, &value));
+    }
+    Err("无法判别文档信封：v1 与旧扁平特征键混合或均不足（已保留原文件）".into())
+}
+
+/// 解析项目文件（§11 第 0 步信封判型）：显式 `schemaVersion` 定族并经
+/// 家族一致性校验（parse_explicit_envelope），缺失时按顶层键形状特征判型
+/// （classify_versionless）；两族矛盾或不可判型一律拒绝并保留原文件。
+/// 缺失/异型的 project 元数据（id/时间戳等）以空串**原样透传**，不在读取
+/// 侧预合成——预合成会让前端 repaired 检测看不见缺陷（载荷已是修好的
+/// 值）：修复不回写、脏文件长留磁盘，且每次 list 都合成新的当前时刻把
+/// 未动过的项目顶到最近列表顶端。修复与落盘归前端 §11.1 第 2 步
+/// （受信 id 覆盖、时间戳回退链，随 repaired 标志回写）；列表排序把
+/// 不可解析时间戳稳定排最后（sort_metas_by_recency）。
+fn parse_file(id: &str, text: &str) -> Result<ProjectFile, String> {
+    let value: serde_json::Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
+    let v1_keys = ["project", "graph", "assets"]
+        .iter()
+        .filter(|k| value.get(*k).is_some())
+        .count();
+    let legacy_keys = ["name", "updated_at", "nodes", "edges"]
+        .iter()
+        .filter(|k| value.get(*k).is_some())
+        .count();
+    let has_legacy_list = value.get("nodes").is_some() || value.get("edges").is_some();
+    Ok(match value.get("schemaVersion") {
+        Some(_) => parse_explicit_envelope(id, value, v1_keys, legacy_keys)?,
+        None => classify_versionless(id, value, v1_keys, legacy_keys, has_legacy_list)?,
+    })
+}
+
+/// 新建空项目（空画布 v1 信封），返回其摘要。
+/// 新建项目的初始 v1 文档：settings 四桶齐备（§10.5 保存边界同域）——
+/// 新建文档必须无需归一化修复即可通过 create → load → save 原始链路。
+fn new_project_file(id: &str, name: String, now: String) -> ProjectFile {
+    ProjectFile {
+        schema_version: 1,
+        versionless: false,
+        project: ProjectInfo {
+            id: id.to_string(),
+            name,
+            description: None,
+            created_at: now.clone(),
+            updated_at: now,
+        },
+        graph: json!({
+            "nodes": [],
+            "edges": [],
+            "viewport": { "x": 0, "y": 0, "zoom": 1 },
+        }),
+        settings: json!({ "characters": {}, "locations": {}, "props": {}, "documents": {} }),
+        episode_titles: json!({}),
+        assets: empty_assets(),
+    }
+}
+
 #[tauri::command]
 pub fn create_project(app: AppHandle, name: String) -> Result<ProjectMeta, String> {
     let name = sanitize_name(&name)?;
     let id = new_id();
-    let file = ProjectFile {
-        name,
-        updated_at: now_ms(),
-        nodes: serde_json::json!([]),
-        edges: serde_json::json!([]),
-        settings: serde_json::json!({ "characters": [], "locations": [] }),
-        episode_titles: serde_json::json!({}),
-    };
-    let path = project_path(&app, &id)?;
+    // 边界校验先于任何文件名拼接（与 persist_project 同款）：id 虽为本地
+    // 生成，仍以同一口径复核后才参与路径构造
+    validate_id(&id)?;
+    let file = new_project_file(&id, name, now_iso());
+    let root = projects_dir(&app)?;
     let text = serde_json::to_string_pretty(&file).map_err(|e| format!("序列化失败：{e}"))?;
-    fs::write(path, text).map_err(|e| format!("写入项目失败：{e}"))?;
+    atomic_write(&root, &format!("{id}.json"), &text)?;
     Ok(read_meta(&id, &file))
 }
 
-/// 读取项目完整内容（含画布）。
+/// 读取项目完整内容（含画布）；旧扁平格式包装为 v0 信封返回。读取相对
+/// projects_dir 的受信根锚定句柄解析（§10.2），不按路径名重开。
 #[tauri::command]
 pub fn load_project(app: AppHandle, id: String) -> Result<ProjectFile, String> {
-    let path = project_path(&app, &id)?;
-    let text = fs::read_to_string(path).map_err(|_| format!("项目不存在：{id}"))?;
-    serde_json::from_str(&text).map_err(|e| format!("项目文件损坏：{e}"))
+    let root = projects_dir(&app)?;
+    load_project_file(&root, &id)
 }
 
-/// 全量保存：更新时间由服务端盖上，防前端时钟漂移。
+/// load_project 的可测内核：id 是 IPC 调用方传入的不可信参数，词法校验
+/// 先于任何路径拼接——嵌套路径形态的 id（如 `p-1/assets/x`）不得把
+/// projects/ 内的任意 JSON 经项目通道读出（句柄相对解析被沙箱限定在
+/// projects/ 树内）。读取走 read_verified_file 的锚定句柄绑定。
+fn load_project_file(root: &CapDir, id: &str) -> Result<ProjectFile, String> {
+    validate_id(id)?;
+    let name = format!("{id}.json");
+    match root.symlink_metadata(&name) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(format!("项目不存在：{id}"))
+        }
+        Err(e) => return Err(format!("读取项目文件元数据失败：{e}")),
+        Ok(_) => {}
+    }
+    let text = read_verified_file(root, &name).map_err(|e| format!("拒绝读取项目文件：{e}"))?;
+    parse_file(id, &text).map_err(|e| format!("项目文件损坏：{e}"))
+}
+
+/// 经已验证句柄读取项目文件文本（load/list 共用内核）：校验、打开与读取
+/// 全程相对 projects_dir 返回的**受信根锚定句柄**——归类（no-follow 元数据，
+/// 拒符号链接、要求普通文件）、打开与 (dev, ino) 身份比对均不按路径名重新
+/// 解析，projects/ 路径名在校验后被并发整体替换（rename 换目录树）也无法
+/// 把读取引到替换树；cap-std 沙箱保证解析不逃出锚定根，校验与打开之间的
+/// 目录项替换（换成符号链接或另一文件）由身份比对拒绝且不读取。
+fn read_verified_file(root: &CapDir, name: &str) -> Result<String, String> {
+    let verified_identity = verify_control_file(root, name)?;
+    use std::io::Read;
+    let mut file = root
+        .open(name)
+        .map_err(|e| format!("打开项目文件失败：{e}"))?;
+    #[cfg(unix)]
+    if let Some(id) = verified_identity {
+        let fm = file
+            .metadata()
+            .map_err(|e| format!("读取项目文件句柄元数据失败：{e}"))?;
+        if asset_identity(&fm) != id {
+            return Err("项目文件在读取前被替换，拒绝读取".into());
+        }
+    }
+    // 非 Unix 无 (dev, ino) 可比：打开后重走 no-follow 归类，换成符号链接/
+    // 异型即拒绝（换成另一普通文件的残余窗口仍在，由 cap-std 沙箱限界内）
+    #[cfg(not(unix))]
+    {
+        verify_control_file(root, name)?;
+        match file.metadata() {
+            Ok(fm) if fm.is_file() => {}
+            _ => return Err("项目文件在读取前被替换，拒绝读取".into()),
+        }
+    }
+    let mut text = String::new();
+    file.read_to_string(&mut text)
+        .map_err(|e| format!("读取项目文件失败：{e}"))?;
+    Ok(text)
+}
+
+/// 全量保存（§10.5 保存边界）：完整信封校验先行，任一失败整次拒绝；
+/// 资产 relPath 在已验证的 projects 目录下做实路径复验（no-follow +
+/// canonical 包含），通过后才盖戳 updatedAt、创建临时文件并原子落盘；
+/// 落盘后再复验一次——句柄只绑定打开时的 inode，不钉住路径名，保存期间
+/// 被并发进程替换（unlink/重命名/换符号链接）的路径在写后复验中上浮为
+/// 显式失败（文档虽已提交，篡改不得静默；下次加载复验会隔离条目兜底）。
 #[tauri::command]
 pub fn save_project(app: AppHandle, id: String, doc: ProjectFile) -> Result<ProjectMeta, String> {
-    let name = sanitize_name(&doc.name)?;
-    let file = ProjectFile {
-        name,
-        updated_at: now_ms(),
-        nodes: doc.nodes,
-        edges: doc.edges,
-        settings: doc.settings,
-        episode_titles: doc.episode_titles,
-    };
-    let path = project_path(&app, &id)?;
-    let text = serde_json::to_string_pretty(&file).map_err(|e| format!("序列化失败：{e}"))?;
-    // 先写临时文件再原子改名，避免保存中途崩溃留下半截文件
-    let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, text).map_err(|e| format!("写入项目失败：{e}"))?;
-    fs::rename(&tmp, &path).map_err(|e| format!("落盘项目失败：{e}"))?;
-    Ok(read_meta(&id, &file))
+    let root = projects_dir(&app)?;
+    persist_project(&root, &id, doc)
 }
 
-/// 删除项目（首页卡片菜单，§3.2）。
+/// save_project 的可测内核（给定已验证的 projects 目录）。id 是 IPC 调用方
+/// 传入的不可信参数：词法校验先于任何路径拼接——否则 `../prefs` 式 id 可把
+/// 空资产索引（复验不设防）的整份文档写到 projects/ 之外。
+fn persist_project(root: &CapDir, id: &str, doc: ProjectFile) -> Result<ProjectMeta, String> {
+    validate_id(id)?;
+    // 句柄持有至函数结束——复验过的实体覆盖整个保存决策
+    let _verified_assets = verify_save_asset_files(root, id, &doc.assets)?;
+    let file = prepare_save(id, &doc)?;
+    let text = serde_json::to_string_pretty(&file).map_err(|e| format!("序列化失败：{e}"))?;
+    atomic_write(root, &format!("{id}.json"), &text)?;
+    if let Err(e) = verify_save_asset_files(root, id, &doc.assets) {
+        eprintln!("[store] 保存后资产复验失败，路径可能在保存期间被替换：{e}");
+        return Err(format!(
+            "保存后资产复验失败（路径可能在保存期间被替换）：{e}"
+        ));
+    }
+    Ok(read_meta(id, &file))
+}
+
+/// 删除项目（首页卡片菜单，§3.2）：移除 `projects/{id}.json` 与项目资产
+/// 目录 `projects/{id}/`（当前扁平布局的资产根，§10.1）。目录删除逐项
+/// no-follow 且全程相对已打开的 projects 根目录句柄（§10.2 openat 语义，
+/// cap-std）——符号链接条目只移除链接本身，绝不跟随；任一失败显式报错，
+/// 不静默遗留媒体文件。
 #[tauri::command]
 pub fn delete_project(app: AppHandle, id: String) -> Result<(), String> {
-    let path = project_path(&app, &id)?;
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(format!("删除项目失败：{e}")),
+    let root = projects_dir(&app)?;
+    delete_project_files(&root, &id)
+}
+
+/// delete_project 的可测内核：资产目录与项目 JSON 的成对移除，幂等。
+/// 顺序契约：先删资产树再删权威项目文件——树删除失败时项目仍在列表中
+/// 可发现、可重试删除；反过来先删 JSON 会让失败留下不可发现的孤儿媒体。
+/// 元数据读取、树删除与 unlink 均相对已打开的 projects 根目录句柄进行
+/// （cap-std remove_dir_all 内部同样是逐组件 no-follow 的句柄相对实现），
+/// 归类后 `projects/{id}` 被并发换成符号链接也无法把删除引到根外——链接
+/// 自身按 remove_file 移除，不进入其指向的外部树。
+/// 句柄相对递归删除（§10.2）：目录条目先 open_dir_bound 绑定身份再删
+/// 内容——remove_dir_all 按名字重解析，归类后被换名的子目录会被误删；
+/// 符号链接与非目录条目只移除目录项自身（remove_file 不跟随），目录清空
+/// 后由调用方在复核身份下移除名字。
+fn remove_dir_contents_bound(dir: &CapDir) -> Result<(), String> {
+    for entry in dir
+        .entries()
+        .map_err(|e| format!("扫描待删目录失败：{e}"))?
+    {
+        let entry = entry.map_err(|e| format!("扫描待删目录失败：{e}"))?;
+        // DirEntry::metadata 取 lstat 语义，不跟随符号链接
+        let md = entry
+            .metadata()
+            .map_err(|e| format!("读取待删条目元数据失败：{e}"))?;
+        let name = entry.file_name();
+        if md.is_dir() {
+            let child = open_dir_bound(dir, &name, &md, "待删子目录")?;
+            remove_dir_contents_bound(&child)?;
+            dir.remove_dir(&name)
+                .map_err(|e| format!("删除子目录失败（{name:?}）：{e}"))?;
+        } else {
+            dir.remove_file(&name)
+                .map_err(|e| format!("移除条目失败（{name:?}）：{e}"))?;
+        }
     }
+    Ok(())
+}
+
+fn delete_project_files(root: &CapDir, id: &str) -> Result<(), String> {
+    validate_id(id)?;
+    match root.symlink_metadata(id) {
+        Ok(md) if md.is_dir() => {
+            // 先绑定被归类目录的身份再删内容（§10.2）：remove_dir_all(id)
+            // 按名字重解析——归类后 {id} 被并发换成根内另一真实项目目录时，
+            // 被递归删除的是替换目录，无辜项目的资产被清光而本项目 JSON
+            // 照删；绑定句柄后内容相对句柄删除，删空前再复核目录项身份，
+            // 名字被换即显式失败（不误删也不静默遗留）
+            let dir = open_dir_bound(root, id, &md, "待删项目目录")?;
+            remove_dir_contents_bound(&dir)?;
+            #[cfg(unix)]
+            if let Ok(recheck) = root.symlink_metadata(id) {
+                if asset_identity(&recheck) != asset_identity(&md) {
+                    return Err(format!(
+                        "项目资产目录在删除期间被替换，拒绝移除目录项：{id}"
+                    ));
+                }
+            }
+            root.remove_dir(id)
+                .map_err(|e| format!("删除项目资产目录失败（{id}）：{e}"))?;
+        }
+        // 符号链接与普通文件同款：remove_file 只移除该目录项自身
+        Ok(_) => root
+            .remove_file(id)
+            .map_err(|e| format!("移除项目资产路径失败（{id}）：{e}"))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("读取待删资产路径元数据失败（{id}）：{e}")),
+    }
+    match root.remove_file(format!("{id}.json")) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("删除项目失败：{e}")),
+    }
+    Ok(())
+}
+
+/// §7.3 复制项目：整目录拷贝项目资产（当前扁平布局下 `projects/{fromId}/
+/// assets` → `projects/{toId}/assets`），供 §10.5 保存边界的实路径复验在
+/// 副本侧通过。源资产目录缺失视为无资产（no-op）；存在时源根必须为非
+/// 符号链接的实际目录，子树逐项 no-follow——符号链接与非普通文件条目
+/// 拒绝；目标目录已存在视为异常（新副本 id 刚分配）。任一失败整次报错
+/// 并回滚已拷贝的目标子树，不遗留半拷贝。
+#[tauri::command]
+pub fn copy_project_assets(app: AppHandle, from_id: String, to_id: String) -> Result<(), String> {
+    let root = projects_dir(&app)?;
+    copy_assets_tree(&root, &from_id, &to_id)
+}
+
+/// copy_project_assets 的可测内核。全程相对已打开的 projects 根目录句柄
+/// 执行（§10.2 openat 语义，cap-std）：归类、目录打开、递归与文件创建
+/// 不再退回路径名拼接——源/目标子目录在元数据检查后被并发替换（含换成
+/// 符号链接）时，句柄相对解析仍不逃出 projects/，越界符号链接被沙箱拒绝。
+fn copy_assets_tree(root: &CapDir, from_id: &str, to_id: &str) -> Result<(), String> {
+    validate_id(from_id)?;
+    validate_id(to_id)?;
+    // 源项目目录先归类绑定（§10.2）：组合路径 `{from_id}/assets` 的
+    // symlink_metadata 会跟随中间的 {from_id} 符号链接——projects/{from}
+    // 被换成指向根内其他项目的链接时，归类与身份绑定都落在错误项目的
+    // 真实目录上，复制会把无关媒体拷进新项目
+    let proj_md = match root.symlink_metadata(from_id) {
+        Ok(md) => md,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(format!("读取源项目目录元数据失败：{e}")),
+    };
+    if proj_md.file_type().is_symlink() {
+        return Err("源项目目录是符号链接，拒绝复制".into());
+    }
+    if !proj_md.is_dir() {
+        return Err("源项目路径不是目录，拒绝复制".into());
+    }
+    let src_proj = open_dir_bound(root, from_id, &proj_md, "源项目目录")?;
+    let md = match src_proj.symlink_metadata("assets") {
+        Ok(md) => md,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(format!("读取源资产目录元数据失败：{e}")),
+    };
+    if md.file_type().is_symlink() {
+        return Err("源资产目录是符号链接，拒绝复制".into());
+    }
+    if !md.is_dir() {
+        return Err("源资产路径不是目录，拒绝复制".into());
+    }
+    match root.symlink_metadata(to_id) {
+        Ok(_) => return Err(format!("目标资产目录已存在，拒绝复制：{to_id}")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("读取目标资产目录元数据失败：{e}")),
+    }
+    // 拷贝目标是 {to}/assets：与 relPath 首段（§7.1）及实路径复验的资产根一致
+    let src_dir = open_dir_bound(&src_proj, "assets", &md, "源资产目录")?;
+    root.create_dir_all(to_id)
+        .map_err(|e| format!("创建目标项目目录失败：{e}"))?;
+    let dst_root = root
+        .open_dir(to_id)
+        .map_err(|e| format!("打开目标项目目录失败：{e}"))?;
+    dst_root
+        .create_dir("assets")
+        .map_err(|e| format!("创建目标资产目录失败：{e}"))?;
+    let dst_assets = dst_root
+        .open_dir("assets")
+        .map_err(|e| format!("打开目标资产目录失败：{e}"))?;
+    if let Err(e) = copy_dir_handles(&src_dir, &dst_assets) {
+        // 回滚清理同款句柄相对删除（§10.2）：dst_root 被并发换成符号链接时
+        // remove_dir_all 只移除链接自身，不进入其指向的外部树
+        let _ = root.remove_dir_all(to_id);
+        return Err(e);
+    }
+    Ok(())
+}
+
+/// 打开已归类为实际目录的子目录并绑定身份（§10.2）：cap-std 的 open_dir
+/// 在沙箱内跟随符号链接，Unix 上以打开句柄的 (dev, ino) 与归类时身份比对
+/// ——归类后被换成符号链接/另一实体即拒绝，不从被替换的目标读出；非
+/// Unix 无身份可比，改为打开后重走 no-follow 归类复核（换名残余窗口由
+/// cap-std 沙箱限定在 projects/ 树内）。
+#[allow(unused_variables)]
+fn open_dir_bound<P: AsRef<std::path::Path>>(
+    parent: &CapDir,
+    rel: P,
+    classified: &cap_std::fs::Metadata,
+    label: &str,
+) -> Result<CapDir, String> {
+    let opened = parent
+        .open_dir(&rel)
+        .map_err(|e| format!("打开{label}失败：{e}"))?;
+    #[cfg(unix)]
+    {
+        let fm = opened
+            .dir_metadata()
+            .map_err(|e| format!("读取{label}句柄元数据失败：{e}"))?;
+        if asset_identity(&fm) != asset_identity(classified) {
+            return Err(format!("{label}在归类后被替换，拒绝操作"));
+        }
+    }
+    // 非 Unix 无 (dev, ino) 可比（该助手已服务破坏性删除递归——不绑定的
+    // 话，归类后被换名的目录会被按名重开、无辜项目被清空）：打开后重走
+    // no-follow 归类，换成符号链接/异型即拒绝（换成另一真实目录的残余
+    // 窗口仍在，由 cap-std 沙箱限定在 projects/ 树内）
+    #[cfg(not(unix))]
+    {
+        let recheck = parent
+            .symlink_metadata(&rel)
+            .map_err(|e| format!("复核{label}元数据失败：{e}"))?;
+        if recheck.file_type().is_symlink()
+            || !recheck.is_dir()
+            || !opened
+                .dir_metadata()
+                .map_err(|e| format!("读取{label}句柄元数据失败：{e}"))?
+                .is_dir()
+        {
+            return Err(format!("{label}在归类后被替换，拒绝操作"));
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = classified;
+    Ok(opened)
+}
+
+/// 递归拷贝目录树（句柄相对 + 逐项 no-follow，§10.2）：目录对应创建，
+/// 普通文件逐个拷贝，符号链接与异型条目拒绝——副本绝不携带根外内容。
+/// 递归与创建全部相对**已打开的目录句柄**进行：中间目录被并发替换时不再
+/// 按路径名重新解析。源子目录经 open_dir_bound 绑定身份；源文件绑定打开
+/// 句柄（Unix：按 (dev, ino) 与归类时身份比对），从同一句柄读出；目标
+/// 文件以 create_new 排他创建，预置在目标路径上的符号链接无法截获写入；
+/// 目标子目录 create_dir 排他创建后立即打开，残余窗口内的替换也被 cap-std
+/// 沙箱限定在 projects/ 树内。
+fn copy_dir_handles(src: &CapDir, dst: &CapDir) -> Result<(), String> {
+    let entries = src
+        .entries()
+        .map_err(|e| format!("扫描源资产目录失败：{e}"))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("扫描源资产目录失败：{e}"))?;
+        // DirEntry::metadata 取 lstat 语义，不跟随符号链接
+        let md = entry
+            .metadata()
+            .map_err(|e| format!("读取源资产条目元数据失败：{e}"))?;
+        let name = entry.file_name();
+        let shown = name.to_string_lossy();
+        let ft = md.file_type();
+        if ft.is_symlink() {
+            return Err(format!("源资产子树含符号链接，拒绝复制：{shown}"));
+        }
+        if ft.is_dir() {
+            let child_src = open_dir_bound(src, &name, &md, "源资产子目录")?;
+            dst.create_dir(&name)
+                .map_err(|e| format!("创建目标资产子目录失败（{shown}）：{e}"))?;
+            let child_dst = dst
+                .open_dir(&name)
+                .map_err(|e| format!("打开目标资产子目录失败（{shown}）：{e}"))?;
+            copy_dir_handles(&child_src, &child_dst)?;
+        } else if ft.is_file() {
+            copy_file_bound(src, &name, &md, dst)?;
+        } else {
+            return Err(format!("源资产子树含非普通文件条目：{shown}"));
+        }
+    }
+    Ok(())
+}
+
+/// 单文件绑定拷贝（句柄相对）：源从句柄读（身份与归类时一致），目标排他创建。
+fn copy_file_bound(
+    src_dir: &CapDir,
+    name: &std::ffi::OsStr,
+    classified: &cap_std::fs::Metadata,
+    dst_dir: &CapDir,
+) -> Result<(), String> {
+    let shown = name.to_string_lossy();
+    let mut src = src_dir
+        .open(name)
+        .map_err(|e| format!("打开源资产失败（{shown}）：{e}"))?;
+    #[cfg(unix)]
+    {
+        let fm = src
+            .metadata()
+            .map_err(|e| format!("读取源资产句柄元数据失败（{shown}）：{e}"))?;
+        if asset_identity(&fm) != asset_identity(classified) {
+            return Err(format!("源资产在拷贝期间被替换，拒绝复制：{shown}"));
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = classified;
+    let mut dst_file = dst_dir
+        .open_with(
+            name,
+            cap_std::fs::OpenOptions::new().write(true).create_new(true),
+        )
+        .map_err(|e| format!("创建目标资产失败（{shown}）：{e}"))?;
+    std::io::copy(&mut src, &mut dst_file)
+        .map(|_| ())
+        .map_err(|e| format!("拷贝资产文件失败（{shown}）：{e}"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::path::PathBuf;
 
     #[test]
     fn name_rules() {
@@ -265,19 +1347,25 @@ mod tests {
             { "id": "sh", "type": "shot", "data": {} },
         ]);
         // s1 只下挂分镜（attach 派生边）：仍是叶子结局；s2 无任何出边同为结局
-        let attach_only = json!([
-            { "id": "e1", "source": "s1", "target": "sh",
-              "sourceHandle": "shots", "className": "pw-edge-attach" },
-        ]);
-        assert_eq!(graph_stats(&nodes, &attach_only), (2, 2));
+        let attach_only = json!({
+            "nodes": nodes,
+            "edges": [
+                { "id": "e1", "source": "s1", "target": "sh",
+                  "sourceHandle": "shots", "className": "pw-edge-attach" },
+            ],
+        });
+        assert_eq!(graph_stats(&attach_only), (2, 2));
 
-        // s1 有剧情流出边 → 非结局
-        let with_sequence = json!([
-            { "id": "e1", "source": "s1", "target": "sh",
-              "sourceHandle": "shots", "className": "pw-edge-attach" },
-            { "id": "e2", "source": "s1", "target": "s2", "className": "pw-edge-sequence" },
-        ]);
-        assert_eq!(graph_stats(&nodes, &with_sequence), (2, 1));
+        // s1 有剧情流出边 → 非结局（v1 形态：kind 显式存于 data.kind）
+        let with_sequence = json!({
+            "nodes": nodes,
+            "edges": [
+                { "id": "e1", "source": "s1", "target": "sh",
+                  "sourceHandle": "shots", "data": { "kind": "attach" } },
+                { "id": "e2", "source": "s1", "target": "s2", "data": { "kind": "sequence" } },
+            ],
+        });
+        assert_eq!(graph_stats(&with_sequence), (2, 1));
     }
 
     #[test]
@@ -287,52 +1375,1074 @@ mod tests {
 
     #[test]
     fn stats_count_scenes_and_leaf_endings() {
-        let nodes = json!([
-            { "id": "s1", "type": "scene" },
-            { "id": "d1", "type": "dialogue" },
-            { "id": "s2", "type": "scene" },
-            { "id": "s3", "type": "scene" },
-        ]);
-        let edges = json!([
-            { "source": "s1", "target": "d1" },
-            { "source": "d1", "target": "s2" },
-        ]);
-        assert_eq!(graph_stats(&nodes, &edges), (3, 2)); // s2/s3 无出边 = 结局
+        let graph = json!({
+            "nodes": [
+                { "id": "s1", "type": "scene" },
+                { "id": "d1", "type": "dialogue" },
+                { "id": "s2", "type": "scene" },
+                { "id": "s3", "type": "scene" },
+            ],
+            "edges": [
+                { "source": "s1", "target": "d1" },
+                { "source": "d1", "target": "s2" },
+            ],
+        });
+        assert_eq!(graph_stats(&graph), (3, 2)); // s2/s3 无出边 = 结局
     }
 
     #[test]
     fn stats_on_malformed_graph_fall_back_to_zero() {
-        assert_eq!(graph_stats(&json!(null), &json!("oops")), (0, 0));
+        assert_eq!(graph_stats(&json!(null)), (0, 0));
+        assert_eq!(graph_stats(&json!({ "nodes": "oops" })), (0, 0));
     }
 
     #[test]
-    fn legacy_file_without_settings_defaults_empty() {
+    fn v1_file_missing_timestamps_pass_through_for_frontend_repair() {
+        // 缺 project 时间戳的信封原样透传（空串）：Rust 侧预合成会让前端
+        // repaired 检测看不见缺陷（快照已是修好的值）——修复不回写、脏文件
+        // 长留，且每次 list 都合成新时刻把未动过的项目顶到最近列表顶端。
+        // 前端 §11.1 第 2 步修复时间戳并按 repaired 回写落定；列表排序把
+        // 不可解析时间戳稳定排最后（sort_metas_by_recency）。
+        let v1 = json!({
+            "schemaVersion": 1,
+            "project": { "id": "p-1", "name": "旧时间" },
+            "graph": { "nodes": [], "edges": [] },
+            "settings": {},
+            "episodeTitles": {},
+            "assets": { "byId": {} },
+        });
+        let file = parse_file("p-1", &v1.to_string()).unwrap();
+        assert!(file.project.updated_at.is_empty());
+        assert!(file.project.created_at.is_empty());
+    }
+
+    #[test]
+    fn legacy_flat_file_wraps_as_v0_envelope() {
         let legacy = json!({
             "name": "旧项目",
-            "updated_at": 1,
+            "updated_at": 1_700_000_000_000u64,
+            "nodes": [{ "id": "a", "type": "scene", "data": {} }],
+            "edges": [],
+            "settings": { "characters": [], "locations": [] },
+            "episodeTitles": { "1": "开端" },
+        });
+        let file = parse_file("p-old", &legacy.to_string()).unwrap();
+        assert_eq!(file.schema_version, 0);
+        assert_eq!(file.project.id, "p-old");
+        assert_eq!(file.project.name, "旧项目");
+        assert_eq!(file.project.updated_at, "2023-11-14T22:13:20.000Z");
+        assert_eq!(file.graph["nodes"][0]["id"], json!("a"));
+        // 旧格式无视口：信封不伪造，前端打开时 fitView
+        assert!(file.graph.get("viewport").is_none());
+        assert_eq!(file.episode_titles, json!({ "1": "开端" }));
+    }
+
+    #[test]
+    fn versionless_v1_envelope_classifies_as_v1_and_keeps_graph() {
+        // 丢失版本号但保持 v1 信封特征（§11 第 0 步）：按 v1 交付归一化，
+        // 绝不按旧扁平格式读取顶层 nodes/edges 装配出空画布并回写摧毁原文件
+        let v1 = json!({
+            "project": {
+                "id": "p-1", "name": "丢版本号",
+                "createdAt": "2026-08-01T00:00:00.000Z",
+                "updatedAt": "2026-08-28T12:00:00.000Z",
+            },
+            "graph": {
+                "nodes": [{ "id": "s1", "type": "scene",
+                            "layout": { "position": { "x": 0, "y": 0 } },
+                            "ui": { "selected": false, "expanded": true },
+                            "data": { "spec": {}, "meta": { "label": "场一" } } }],
+                "edges": [],
+            },
+            "settings": { "characters": {}, "locations": {}, "props": {}, "documents": {} },
+            "episodeTitles": {},
+            "assets": { "byId": {} },
+        });
+        let file = parse_file("p-1", &v1.to_string()).unwrap();
+        assert_eq!(file.schema_version, 1);
+        assert_eq!(file.graph["nodes"][0]["id"], json!("s1"));
+        // 判型打 versionless IPC 标记：载荷额外键让前端 repaired 比较必然
+        // 不等，回写补盖显式版本号——文件不再永久无版本（§10.5/§11.1 收敛）
+        assert!(file.versionless);
+        let ipc = serde_json::to_value(&file).unwrap();
+        assert_eq!(ipc["versionless"], json!(true));
+        // 显式版本与 v0 包装不打标记（v0 迁移本身即回写）
+        let explicit = json!({
+            "schemaVersion": 1,
+            "project": { "id": "p-1", "name": "显式" },
+            "graph": { "nodes": [], "edges": [] },
+        });
+        assert!(
+            !parse_file("p-1", &explicit.to_string())
+                .unwrap()
+                .versionless
+        );
+        let v0 = json!({
+            "name": "旧项目", "updated_at": 1_700_000_000_000u64,
+            "nodes": [], "edges": [],
+        });
+        assert!(!parse_file("p-1", &v0.to_string()).unwrap().versionless);
+    }
+
+    #[test]
+    fn mixed_or_unclassifiable_envelope_is_rejected() {
+        // v1 专属键与旧扁平键并存（混合信封）、或两组特征都不满足的损坏文档：
+        // 拒绝加载并保留原文件（§11 第 0 步），不得回退为空 v0 图
+        let mixed = json!({
+            "project": { "name": "混合信封" },
+            "name": "旧名",
+            "updated_at": 1_700_000_000_000u64,
             "nodes": [],
             "edges": [],
         });
-        let file: ProjectFile = serde_json::from_value(legacy).unwrap();
-        assert_eq!(file.settings, json!({}));
+        assert!(parse_file("p-1", &mixed.to_string()).is_err());
+        assert!(parse_file("p-1", "{}").is_err());
+        assert!(parse_file("p-1", r#"{"foo": 1}"#).is_err());
+        // 单个旧扁平键不足以判型
+        assert!(parse_file("p-1", r#"{"nodes": []}"#).is_err());
+    }
+
+    #[test]
+    fn explicit_version_conflicting_with_envelope_family_is_rejected() {
+        // 显式 schemaVersion: 0 却携带 v1 专属键（§11 第 0 步两族冲突）：
+        // 若放行，前端会把 v1 StoryNode 送进旧版迁移器，且每次 v0 加载都
+        // 视为已迁移并回写，可能摧毁节点字段——拒绝加载并保留原文件
+        let v0_with_v1 = json!({
+            "schemaVersion": 0,
+            "project": { "name": "伪装旧版" },
+            "graph": { "nodes": [], "edges": [] },
+            "assets": { "byId": {} },
+        });
+        assert!(parse_file("p-1", &v0_with_v1.to_string()).is_err());
+        // 反向冲突：显式 v1 信封携带旧扁平专属键（顶层 name/updated_at/nodes/edges）
+        let v1_with_legacy = json!({
+            "schemaVersion": 1,
+            "project": { "name": "x" },
+            "graph": { "nodes": [], "edges": [] },
+            "name": "旧名",
+            "nodes": [],
+        });
+        assert!(parse_file("p-1", &v1_with_legacy.to_string()).is_err());
+        // 非数字版本号不可判型
+        assert!(parse_file(
+            "p-1",
+            r#"{"schemaVersion": "1", "project": {}, "graph": {}}"#
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn explicit_v0_with_legacy_shape_wraps_as_v0_envelope() {
+        // 显式 0 = 旧扁平家族：信封保持扁平形状时与无版本号路径一致包装
+        let legacy = json!({
+            "schemaVersion": 0,
+            "name": "显式旧版",
+            "updated_at": 1_700_000_000_000u64,
+            "nodes": [{ "id": "a", "type": "scene", "data": {} }],
+            "edges": [],
+        });
+        let file = parse_file("p-old", &legacy.to_string()).unwrap();
+        assert_eq!(file.schema_version, 0);
+        assert_eq!(file.project.name, "显式旧版");
+        assert_eq!(file.graph["nodes"][0]["id"], json!("a"));
+    }
+
+    #[test]
+    fn v1_file_with_recoverable_project_metadata_loads_for_frontend_repair() {
+        // project 容器/字段异型不再整份拒绝（§11 第 0 步）：逐字段回退缺省，
+        // 字段级修复与警告归前端归一化层（§11.1 第 3 步）——可恢复的元数据
+        // 损坏不应让整个项目打不开
+        let doc = json!({
+            "schemaVersion": 1,
+            "project": null,
+            "graph": { "nodes": [], "edges": [] },
+            "settings": {},
+            "episodeTitles": {},
+            "assets": { "byId": {} },
+        });
+        let file = parse_file("p-1", &doc.to_string()).unwrap();
+        // id 缺省同样透传（空串）：前端以受信路径 id 覆盖并按 repaired 回写
+        assert!(file.project.id.is_empty());
+        assert!(file.project.name.is_empty()); // 名称缺省，前端按回退链修复
+
+        // 字段级异型：name/description/时间戳非字符串，id 非字符串——
+        // 一律回退空串透传，修复与落盘归前端归一化层
+        let doc = json!({
+            "schemaVersion": 1,
+            "project": { "id": 7, "name": null, "description": 42, "createdAt": 5, "updatedAt": [] },
+            "graph": { "nodes": [{ "id": "s1" }], "edges": [] },
+        });
+        let file = parse_file("p-1", &doc.to_string()).unwrap();
+        assert!(file.project.id.is_empty());
+        assert!(file.project.name.is_empty());
+        assert_eq!(file.project.description, Some(json!(42)));
+        assert!(file.project.created_at.is_empty());
+        assert!(file.project.updated_at.is_empty());
+        // graph 原样透传，内容不丢
+        assert_eq!(file.graph["nodes"][0]["id"], json!("s1"));
+    }
+
+    #[test]
+    fn save_rejects_missing_settings_buckets() {
+        // 缺桶落盘后下次加载被归一化为空 Record，既有 characters/locations/
+        // props/documents 永久丢失——持久化信任边界（§10.5）要求四桶齐备且
+        // 均为普通对象，而不是只校验碰巧在场的桶
+        let mut doc = valid_save_doc();
+        doc.settings = json!({});
+        assert!(prepare_save("p-1", &doc).is_err());
+        let mut doc = valid_save_doc();
+        doc.settings = json!({ "characters": {}, "locations": {}, "props": {} });
+        let err = prepare_save("p-1", &doc).unwrap_err();
+        assert!(err.contains("documents"), "错误应指名缺失的桶：{err}");
+        // 四桶齐备才放行
+        assert!(prepare_save("p-1", &valid_save_doc()).is_ok());
+    }
+
+    #[test]
+    fn explicit_schema_version_beyond_u32_is_rejected() {
+        // schemaVersion 超出 u32 可表示范围：截断回退为 1 会让未来版本文档被
+        // 当作当前 v1 交付，随后保存按 v1 回写、未知字段静默丢弃——拒绝加载
+        // 并保留原文件（§11 第 0 步；可表示的更大版本仍交付前端「版本过新」判定）
+        let doc = json!({
+            "schemaVersion": 4_294_967_296u64, // u32::MAX + 1
+            "project": { "name": "未来文档" },
+            "graph": { "nodes": [], "edges": [] },
+        });
+        assert!(parse_file("p-1", &doc.to_string()).is_err());
+        // 可表示范围内的未来版本照旧放行给前端判定
+        let doc = json!({
+            "schemaVersion": 2,
+            "project": { "name": "未来文档" },
+            "graph": { "nodes": [], "edges": [] },
+        });
+        let file = parse_file("p-1", &doc.to_string()).unwrap();
+        assert_eq!(file.schema_version, 2);
+    }
+
+    #[test]
+    fn new_project_document_carries_all_settings_buckets() {
+        // create_project 产出的初始文档必须四桶齐备——否则 create → load →
+        // save 的原始链路在保存边界被拒（§10.5），只能依赖前端归一化碰巧修复
+        let file = new_project_file("p-x", "新剧".into(), "2026-08-31T00:00:00.000Z".into());
+        let s = file.settings.as_object().unwrap();
+        for bucket in ["characters", "locations", "props", "documents"] {
+            assert!(
+                s.get(bucket).is_some_and(|v| v.is_object()),
+                "缺桶 {bucket}"
+            );
+        }
+        assert!(prepare_save("p-x", &file).is_ok());
+    }
+
+    #[test]
+    fn project_info_none_description_is_omitted_not_null() {
+        // description 缺省若序列化为 null：前端归一化把 null 当异型剥离
+        // （repaired=true）→ 回写 → Rust 又写回 null——示例项目的列表升级
+        // 循环永不收敛（全新启动首页加载不完、示例文件被反复重写）；
+        // 缺省必须省略键，往返才收敛
+        let file = new_project_file("p-1", "剧".into(), now_iso());
+        let text = serde_json::to_string(&file).unwrap();
+        assert!(!text.contains("\"description\""), "None 应省略键：{text}");
+        let mut file = file;
+        file.project.description = Some("简介".into());
+        let text = serde_json::to_string(&file).unwrap();
+        assert!(text.contains("\"description\":\"简介\""));
+        // 省略键的解析往返：回到 None
+        let bare = serde_json::to_string(&new_project_file("p-1", "剧".into(), now_iso())).unwrap();
+        let back: ProjectFile = serde_json::from_str(&bare).unwrap();
+        assert_eq!(back.project.description, None);
     }
 
     #[test]
     fn project_file_round_trip() {
         let file = ProjectFile {
-            name: "午夜出租车".into(),
-            updated_at: 42,
-            nodes: json!([{ "id": "a", "type": "scene", "data": {} }]),
-            edges: json!([]),
-            settings: json!({ "characters": [], "locations": [] }),
+            schema_version: 1,
+            versionless: false,
+            project: ProjectInfo {
+                id: "p-1".into(),
+                name: "午夜出租车".into(),
+                description: None,
+                created_at: "2026-08-01T00:00:00.000Z".into(),
+                updated_at: "2026-08-28T12:00:00.000Z".into(),
+            },
+            graph: json!({
+                "nodes": [{ "id": "a", "type": "scene", "layout": { "position": { "x": 0, "y": 0 } },
+                            "ui": { "selected": false, "expanded": true },
+                            "data": { "spec": {}, "meta": { "label": "场一" } } }],
+                "edges": [],
+                "viewport": { "x": 0, "y": 0, "zoom": 1 },
+            }),
+            settings: json!({ "characters": {}, "locations": {}, "props": {} }),
             episode_titles: json!({ "1": "开端" }),
+            assets: json!({ "byId": {} }),
         };
         let text = serde_json::to_string(&file).unwrap();
         let back: ProjectFile = serde_json::from_str(&text).unwrap();
-        assert_eq!(back.name, "午夜出租车");
-        assert_eq!(back.updated_at, 42);
-        // 集标题表以 camelCase 键落盘（前端契约），缺省时按空对象处理
-        assert_eq!(back.episode_titles, json!({ "1": "开端" }));
+        assert_eq!(back.project.name, "午夜出租车");
+        // 信封键名为 camelCase（前端契约）
+        assert!(text.contains("schemaVersion"));
+        assert!(text.contains("createdAt"));
         assert!(text.contains("episodeTitles"));
+        assert_eq!(back.episode_titles, json!({ "1": "开端" }));
+        // 统计从 graph 派生
+        assert_eq!(graph_stats(&back.graph), (1, 1));
+    }
+
+    #[test]
+    fn v1_envelope_with_missing_buckets_defaults_empty() {
+        let sparse = json!({
+            "schemaVersion": 1,
+            "project": { "name": "稀疏文档" },
+            "graph": { "nodes": [], "edges": [] },
+        });
+        let file = parse_file("p-1", &sparse.to_string()).unwrap();
+        assert_eq!(file.schema_version, 1);
+        // 缺省 id 透传空串：前端以受信路径 id 覆盖并随 repaired 回写落定
+        assert_eq!(file.project.id, "");
+        // 缺省桶以 Null 透传（同款原则）：前端 §11.1 第 2 步补齐并标记
+        // repaired，缺桶信封随回写收敛
+        assert_eq!(file.settings, serde_json::Value::Null);
+        assert_eq!(file.assets, serde_json::Value::Null);
+    }
+
+    /// 合法 v1 信封（保存边界校验的基线载荷）。
+    fn valid_save_doc() -> ProjectFile {
+        ProjectFile {
+            schema_version: 1,
+            versionless: false,
+            project: ProjectInfo {
+                id: "p-self-reported".into(),
+                name: "午夜出租车".into(),
+                description: None,
+                created_at: "2026-08-01T00:00:00.000Z".into(),
+                updated_at: "2026-08-28T12:00:00.000Z".into(),
+            },
+            graph: json!({
+                "nodes": [], "edges": [], "viewport": { "x": 0, "y": 0, "zoom": 1 },
+            }),
+            settings: json!({
+                "characters": {}, "locations": {}, "props": {}, "documents": {},
+            }),
+            episode_titles: json!({ "1": "开端" }),
+            assets: json!({ "byId": {} }),
+        }
+    }
+
+    #[test]
+    fn save_rejects_unsupported_schema_version() {
+        // schemaVersion 999 落盘后下次加载按未来版本拒绝（§11.1 第 0 步）；
+        // 保存边界必须先行拦截
+        let mut doc = valid_save_doc();
+        doc.schema_version = 999;
+        assert!(prepare_save("p-1", &doc).is_err());
+        doc.schema_version = 0;
+        assert!(prepare_save("p-1", &doc).is_err());
+    }
+
+    #[test]
+    fn save_rejects_alien_top_level_containers() {
+        // graph: null 之类的载荷若落盘，下次加载会被归一化重置为空图，
+        // 把无法判型的损坏静默变成内容丢失（§10.5）——保存边界整次拒绝
+        let mut doc = valid_save_doc();
+        doc.graph = json!(null);
+        assert!(prepare_save("p-1", &doc).is_err());
+        let mut doc = valid_save_doc();
+        doc.graph = json!({ "nodes": {}, "edges": [] });
+        assert!(prepare_save("p-1", &doc).is_err());
+        let mut doc = valid_save_doc();
+        doc.settings = json!([]);
+        assert!(prepare_save("p-1", &doc).is_err());
+        let mut doc = valid_save_doc();
+        doc.settings = json!({ "characters": [] });
+        assert!(prepare_save("p-1", &doc).is_err());
+        // 数组型标题表落盘后下次加载被重置为 {}，标题静默丢失
+        let mut doc = valid_save_doc();
+        doc.episode_titles = json!(["第一集"]);
+        assert!(prepare_save("p-1", &doc).is_err());
+        let mut doc = valid_save_doc();
+        doc.assets = json!({ "byId": [] });
+        assert!(prepare_save("p-1", &doc).is_err());
+    }
+
+    #[test]
+    fn save_rejects_bad_project_metadata_and_viewport() {
+        let mut doc = valid_save_doc();
+        doc.project.created_at = "not-a-date".into();
+        assert!(prepare_save("p-1", &doc).is_err());
+        // updatedAt 虽被无条件覆盖，异型值仍拒绝（信封形状先行）
+        let mut doc = valid_save_doc();
+        doc.project.updated_at = String::new();
+        assert!(prepare_save("p-1", &doc).is_err());
+        let mut doc = valid_save_doc();
+        doc.graph = json!({ "nodes": [], "edges": [], "viewport": { "x": 0, "y": 0, "zoom": 0 } });
+        assert!(prepare_save("p-1", &doc).is_err());
+        let mut doc = valid_save_doc();
+        doc.graph =
+            json!({ "nodes": [], "edges": [], "viewport": { "x": "0", "y": 0, "zoom": 1 } });
+        assert!(prepare_save("p-1", &doc).is_err());
+    }
+
+    #[test]
+    fn save_rejects_non_canonical_episode_title_keys() {
+        // "01"/"1e0" 与规范键折叠到同一集号，转换时按遍历序静默覆盖（§11.1 第 3 步）
+        for bad in ["01", "1e0", " 1", "0", "-1", "9007199254740992"] {
+            let mut doc = valid_save_doc();
+            doc.episode_titles = json!({ bad: "标题" });
+            assert!(prepare_save("p-1", &doc).is_err(), "应拒绝键 {bad:?}");
+        }
+        let mut doc = valid_save_doc();
+        doc.episode_titles = json!({ "1": 42 });
+        assert!(prepare_save("p-1", &doc).is_err());
+        // 值域与 set_episode_title 同域（落盘前 trim、去空白后非空）：空白/
+        // 带空白标题若放行，下次加载被 trim/删除并触发修复回写——保存边界
+        // 接受过的文档不得重开即变
+        for bad_title in ["   ", " 开局 ", ""] {
+            let mut doc = valid_save_doc();
+            doc.episode_titles = json!({ "1": bad_title });
+            assert!(
+                prepare_save("p-1", &doc).is_err(),
+                "应拒绝标题 {bad_title:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn save_rejects_bad_asset_entries() {
+        let good = json!({
+            "id": "a1", "relPath": "assets/pic.png", "mime": "image/png",
+            "source": "upload", "createdAt": "2026-08-01T00:00:00.000Z",
+        });
+        let with_asset = |entry: serde_json::Value, key: &str| {
+            let mut doc = valid_save_doc();
+            doc.assets = json!({ "byId": { key: entry } });
+            doc
+        };
+        // 基线合法
+        assert!(prepare_save("p-1", &with_asset(good.clone(), "a1")).is_ok());
+        // Record 键与内嵌 id 不一致（分裂身份）
+        assert!(prepare_save("p-1", &with_asset(good.clone(), "a2")).is_err());
+        // 空白 id（§8.1 共同值域 trim 口径）：键与内嵌 id 一致但纯空白——
+        // 加载侧归一化会按空白键重发改写身份并重连引用，保存边界接受的
+        // 数据重开即变 id，须整次拒绝
+        let mut blank = good.clone();
+        blank["id"] = json!("   ");
+        assert!(prepare_save("p-1", &with_asset(blank, "   ")).is_err());
+        // relPath 越出资产子目录
+        for bad_path in [
+            "../secret",
+            "assets/../../etc/passwd",
+            "/abs/path",
+            "library.json",
+            "assets/",
+            "",
+        ] {
+            let mut e = good.clone();
+            e["relPath"] = json!(bad_path);
+            assert!(
+                prepare_save("p-1", &with_asset(e, "a1")).is_err(),
+                "应拒绝 {bad_path:?}"
+            );
+        }
+        // MIME 非规范形式（大写/带空白/通配/缺 subtype）
+        for bad_mime in [
+            "IMAGE/PNG",
+            " image/png",
+            "image/*",
+            "image",
+            "image/png; q=1",
+        ] {
+            let mut e = good.clone();
+            e["mime"] = json!(bad_mime);
+            assert!(
+                prepare_save("p-1", &with_asset(e, "a1")).is_err(),
+                "应拒绝 {bad_mime:?}"
+            );
+        }
+        let mut e = good.clone();
+        e["source"] = json!("unknown");
+        assert!(prepare_save("p-1", &with_asset(e, "a1")).is_err());
+        let mut e = good.clone();
+        e["createdAt"] = json!("2026-08-01");
+        assert!(prepare_save("p-1", &with_asset(e, "a1")).is_err());
+        let mut e = good.clone();
+        e["createdAt"] = json!(null);
+        assert!(prepare_save("p-1", &with_asset(e, "a1")).is_err());
+    }
+
+    #[test]
+    fn save_overrides_id_and_stamps_updated_at() {
+        // 调用方自报 id 不落盘：无条件以受信路径参数覆盖（§10.5）
+        let doc = valid_save_doc();
+        let out = prepare_save("p-1", &doc).unwrap();
+        assert_eq!(out.project.id, "p-1");
+        // updatedAt 由 Rust 保存边界无条件盖戳，不信任调用方携带的旧值/未来值
+        assert_ne!(out.project.updated_at, "2026-08-28T12:00:00.000Z");
+        assert!(is_valid_iso8601(&out.project.updated_at));
+        // createdAt/name 保留（name 为规范化值）
+        assert_eq!(out.project.created_at, "2026-08-01T00:00:00.000Z");
+        assert_eq!(out.project.name, "午夜出租车");
+    }
+
+    fn meta(id: &str, updated_at: &str) -> ProjectMeta {
+        ProjectMeta {
+            id: id.into(),
+            name: id.into(),
+            updated_at: updated_at.into(),
+            scene_count: 0,
+            ending_count: 0,
+        }
+    }
+
+    #[test]
+    fn project_list_sorts_by_instant_not_text() {
+        // 字典序把 "2026-01-01T00:00:00+10:00" 排在 "2025-12-31T20:00:00Z" 之前，
+        // 但前者实为更早的瞬间（2025-12-31T14:00:00Z）——排序必须按瞬间比较，
+        // 缺失/非法时间戳排最后
+        let mut metas = vec![
+            meta("b", "2026-01-01T00:00:00+10:00"),
+            meta("a", "2025-12-31T20:00:00Z"),
+            meta("c", "2025-12-31T20:00:00.500Z"),
+            meta("d", "garbage"),
+        ];
+        sort_metas_by_recency(&mut metas);
+        let ids: Vec<&str> = metas.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["c", "a", "b", "d"]);
+    }
+
+    /// 唯一临时项目根：`{tmp}/pw-store-test-{new_id}/projects/`，返回 projects 目录。
+    /// 测试内核用的受信句柄：对临时 projects 目录做环境打开（等价生产端
+    /// projects_dir 返回的锚定句柄）。
+    fn cap(p: &std::path::Path) -> CapDir {
+        CapDir::open_ambient_dir(p, ambient_authority()).expect("打开测试项目根句柄")
+    }
+
+    fn temp_projects_dir() -> PathBuf {
+        let dir = std::env::temp_dir()
+            .join(format!("pw-store-test-{}", new_id()))
+            .join("projects");
+        fs::create_dir_all(&dir).expect("创建临时 projects 目录");
+        dir
+    }
+
+    fn cleanup_temp(projects: &std::path::Path) {
+        if let Some(parent) = projects.parent() {
+            let _ = fs::remove_dir_all(parent);
+        }
+    }
+
+    #[test]
+    fn verify_asset_real_path_accepts_regular_file_under_project_root() {
+        let projects = temp_projects_dir();
+        let assets = projects.join("p-1").join("assets");
+        fs::create_dir_all(&assets).expect("创建资产目录");
+        fs::write(assets.join("a1.png"), b"png").expect("写入资产文件");
+        assert!(verify_asset_real_path(&cap(&projects), "p-1", "assets/a1.png").is_ok());
+        cleanup_temp(&projects);
+    }
+
+    #[test]
+    fn verify_asset_real_path_rejects_missing_file_and_missing_root() {
+        let projects = temp_projects_dir();
+        fs::create_dir_all(projects.join("p-1").join("assets")).expect("创建资产目录");
+        let err = verify_asset_real_path(&cap(&projects), "p-1", "assets/gone.png").unwrap_err();
+        assert!(err.contains("资产文件不存在"), "意外诊断：{err}");
+        // 项目资产根本身缺失同样拒存（该项目从未落过资产文件）
+        assert!(verify_asset_real_path(&cap(&projects), "p-2", "assets/a1.png").is_err());
+        cleanup_temp(&projects);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn verify_asset_real_path_rejects_symlink_escape() {
+        let projects = temp_projects_dir();
+        let assets = projects.join("p-1").join("assets");
+        fs::create_dir_all(&assets).expect("创建资产目录");
+        let outside = projects.parent().expect("临时根").join("secret.png");
+        fs::write(&outside, b"secret").expect("写入根外文件");
+        std::os::unix::fs::symlink(&outside, assets.join("link.png")).expect("建立符号链接");
+        let err = verify_asset_real_path(&cap(&projects), "p-1", "assets/link.png").unwrap_err();
+        assert!(err.contains("符号链接"), "意外诊断：{err}");
+        cleanup_temp(&projects);
+    }
+
+    #[test]
+    fn verify_save_asset_files_prefixes_asset_key_and_skips_lexical_invalid() {
+        let projects = temp_projects_dir();
+        // relPath 词法非法的条目交给 prepare_save 的形状诊断，实路径复验跳过不误报
+        let doc_assets = json!({ "byId": { "a-bad": { "relPath": "../evil.png" } } });
+        assert!(verify_save_asset_files(&cap(&projects), "p-1", &doc_assets).is_ok());
+
+        let doc_assets = json!({ "byId": { "a1": { "relPath": "assets/a1.png" } } });
+        let err = verify_save_asset_files(&cap(&projects), "p-1", &doc_assets).unwrap_err();
+        assert!(err.contains("资产 a1"), "诊断缺资产键：{err}");
+        cleanup_temp(&projects);
+    }
+
+    #[test]
+    fn copy_assets_tree_copies_regular_files_recursively() {
+        let projects = temp_projects_dir();
+        let src = projects.join("p-1").join("assets");
+        fs::create_dir_all(src.join("sub")).expect("建源目录");
+        fs::write(src.join("a.png"), b"A").expect("写资产");
+        fs::write(src.join("sub").join("b.png"), b"B").expect("写子目录资产");
+        copy_assets_tree(&cap(&projects), "p-1", "p-2").expect("拷贝项目资产");
+        let dst = projects.join("p-2").join("assets");
+        assert_eq!(fs::read(dst.join("a.png")).expect("副本文件缺失"), b"A");
+        assert_eq!(
+            fs::read(dst.join("sub").join("b.png")).expect("子目录副本缺失"),
+            b"B"
+        );
+        cleanup_temp(&projects);
+    }
+
+    #[test]
+    fn copy_assets_tree_noop_without_source_and_rejects_existing_destination() {
+        let projects = temp_projects_dir();
+        // 源项目无资产目录：no-op 成功（无资产项目的复制路径）
+        assert!(copy_assets_tree(&cap(&projects), "p-1", "p-2").is_ok());
+        fs::create_dir_all(projects.join("p-1").join("assets")).expect("建源目录");
+        fs::create_dir_all(projects.join("p-3")).expect("预置目标");
+        let err = copy_assets_tree(&cap(&projects), "p-1", "p-3").unwrap_err();
+        assert!(err.contains("目标资产目录已存在"), "意外诊断：{err}");
+        cleanup_temp(&projects);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_assets_tree_rejects_symlink_and_rolls_back_partial_copy() {
+        let projects = temp_projects_dir();
+        let src = projects.join("p-1").join("assets");
+        fs::create_dir_all(&src).expect("建源目录");
+        fs::write(src.join("a.png"), b"A").expect("写资产");
+        let outside = projects.parent().expect("临时根").join("outside.png");
+        fs::write(&outside, b"secret").expect("写根外文件");
+        std::os::unix::fs::symlink(&outside, src.join("link.png")).expect("建符号链接");
+        let err = copy_assets_tree(&cap(&projects), "p-1", "p-2").unwrap_err();
+        assert!(err.contains("符号链接"), "意外诊断：{err}");
+        // 失败回滚：不遗留半拷贝的目标目录
+        assert!(fs::symlink_metadata(projects.join("p-2")).is_err());
+        cleanup_temp(&projects);
+    }
+
+    #[test]
+    fn delete_project_files_removes_nested_asset_subtrees() {
+        let projects = temp_projects_dir();
+        let assets = projects.join("p-1").join("assets");
+        fs::create_dir_all(assets.join("sub").join("deep")).expect("建嵌套目录");
+        fs::write(assets.join("a.png"), b"A").expect("写资产");
+        fs::write(assets.join("sub").join("b.png"), b"B").expect("写子目录资产");
+        fs::write(assets.join("sub").join("deep").join("c.png"), b"C").expect("写深层资产");
+        fs::write(projects.join("p-1.json"), b"{}").expect("写项目文件");
+        delete_project_files(&cap(&projects), "p-1").expect("删除项目");
+        assert!(fs::symlink_metadata(projects.join("p-1")).is_err());
+        assert!(fs::symlink_metadata(projects.join("p-1.json")).is_err());
+        cleanup_temp(&projects);
+    }
+
+    #[test]
+    fn delete_project_files_removes_json_and_asset_tree_idempotently() {
+        let projects = temp_projects_dir();
+        let assets = projects.join("p-1").join("assets");
+        fs::create_dir_all(&assets).expect("建资产目录");
+        fs::write(assets.join("a.png"), b"A").expect("写资产");
+        fs::write(projects.join("p-1.json"), b"{}").expect("写项目文件");
+        delete_project_files(&cap(&projects), "p-1").expect("删除项目");
+        assert!(fs::symlink_metadata(projects.join("p-1.json")).is_err());
+        assert!(fs::symlink_metadata(projects.join("p-1")).is_err());
+        // 幂等：文件与目录均已缺失时再删不报错
+        assert!(delete_project_files(&cap(&projects), "p-1").is_ok());
+        cleanup_temp(&projects);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn delete_project_files_unlinks_symlinks_without_following() {
+        let projects = temp_projects_dir();
+        let assets = projects.join("p-1").join("assets");
+        fs::create_dir_all(&assets).expect("建资产目录");
+        let outside_dir = projects.parent().expect("临时根").join("keep");
+        fs::create_dir_all(&outside_dir).expect("建根外目录");
+        fs::write(outside_dir.join("secret.png"), b"s").expect("写根外文件");
+        std::os::unix::fs::symlink(&outside_dir, assets.join("link")).expect("建目录符号链接");
+        fs::write(projects.join("p-1.json"), b"{}").expect("写项目文件");
+        delete_project_files(&cap(&projects), "p-1").expect("删除项目");
+        // 链接被移除但未跟随：根外目录与文件原样保留
+        assert!(fs::symlink_metadata(outside_dir.join("secret.png")).is_ok());
+        assert!(fs::symlink_metadata(&outside_dir).is_ok());
+        assert!(fs::symlink_metadata(projects.join("p-1")).is_err());
+        cleanup_temp(&projects);
+    }
+    #[test]
+    fn unverifiable_asset_keys_reports_real_path_failures_only() {
+        let projects = temp_projects_dir();
+        let assets_dir = projects.join("p-1").join("assets");
+        fs::create_dir_all(&assets_dir).expect("建资产目录");
+        fs::write(assets_dir.join("ok.png"), b"x").expect("写正常资产");
+        // 词法非法/形状缺失条目不在此报告：前端形状归一化负责隔离
+        let assets = json!({ "byId": {
+            "a-ok": { "relPath": "assets/ok.png" },
+            "a-miss": { "relPath": "assets/gone.png" },
+            "a-bad": { "relPath": "../evil.png" },
+            "a-noshape": {},
+        }});
+        let keys = unverifiable_asset_keys(&cap(&projects), "p-1", &assets);
+        assert_eq!(keys, vec!["a-miss".to_string()]);
+        cleanup_temp(&projects);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unverifiable_asset_keys_reports_symlinked_entries() {
+        let projects = temp_projects_dir();
+        let assets_dir = projects.join("p-1").join("assets");
+        fs::create_dir_all(&assets_dir).expect("建资产目录");
+        let outside = projects.parent().expect("临时根").join("outside.png");
+        fs::write(&outside, b"s").expect("写根外文件");
+        std::os::unix::fs::symlink(&outside, assets_dir.join("link.png")).expect("建符号链接");
+        let assets = json!({ "byId": { "a-link": { "relPath": "assets/link.png" } } });
+        let keys = unverifiable_asset_keys(&cap(&projects), "p-1", &assets);
+        assert_eq!(keys, vec!["a-link".to_string()]);
+        cleanup_temp(&projects);
+    }
+    #[test]
+    fn verify_control_file_requires_regular_file() {
+        let projects = temp_projects_dir();
+        let file = projects.join("p-1.json");
+        fs::write(&file, b"{}").expect("写项目文件");
+        assert!(verify_control_file(&cap(&projects), "p-1.json").is_ok());
+        // 目录占位：不是普通文件
+        let dir_as_file = projects.join("p-2.json");
+        fs::create_dir(&dir_as_file).expect("建目录占位");
+        let err = verify_control_file(&cap(&projects), "p-2.json").unwrap_err();
+        assert!(err.contains("普通文件"), "意外诊断：{err}");
+        // 缺失文件拒绝（读取前置）
+        assert!(verify_control_file(&cap(&projects), "p-3.json").is_err());
+        cleanup_temp(&projects);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn verify_control_file_rejects_symlinked_project_file() {
+        let projects = temp_projects_dir();
+        let outside = projects.parent().expect("临时根").join("evil.json");
+        fs::write(&outside, b"{}").expect("写根外文件");
+        std::os::unix::fs::symlink(&outside, projects.join("p-1.json")).expect("建符号链接");
+        let err = verify_control_file(&cap(&projects), "p-1.json").unwrap_err();
+        assert!(err.contains("符号链接"), "意外诊断：{err}");
+        cleanup_temp(&projects);
+    }
+    #[test]
+    fn verify_asset_real_path_returns_open_handle_of_verified_file() {
+        let projects = temp_projects_dir();
+        let assets = projects.join("p-1").join("assets");
+        fs::create_dir_all(&assets).expect("建资产目录");
+        fs::write(assets.join("a1.png"), b"png").expect("写资产文件");
+        // 复验绑定打开句柄：调用方（save_project）持有至保存完成才释放
+        let handle = verify_asset_real_path(&cap(&projects), "p-1", "assets/a1.png")
+            .expect("复验通过应返回已打开的句柄");
+        let md = handle.metadata().expect("句柄元数据可读");
+        assert!(md.is_file());
+        cleanup_temp(&projects);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn delete_project_files_keeps_record_when_asset_tree_removal_fails() {
+        let projects = temp_projects_dir();
+        let assets = projects.join("p-1").join("assets");
+        fs::create_dir_all(&assets).expect("建资产目录");
+        fs::write(assets.join("a.png"), b"A").expect("写资产");
+        fs::write(projects.join("p-1.json"), b"{}").expect("写项目文件");
+        // 只读化资产目录：子项删除失败（非 root 用户无法 unlink）
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&assets).unwrap().permissions();
+        perms.set_mode(0o555);
+        fs::set_permissions(&assets, perms).expect("只读化");
+        let result = delete_project_files(&cap(&projects), "p-1");
+        let mut perms = fs::metadata(&assets).unwrap().permissions();
+        perms.set_mode(0o755);
+        let _ = fs::set_permissions(&assets, perms);
+        assert!(result.is_err(), "资产目录删除失败应显式报错");
+        // 权威项目文件必须仍在：项目可发现、删除可重试，不留孤儿媒体树
+        assert!(
+            projects.join("p-1.json").exists(),
+            "项目记录先于资产目录被删，失败后媒体成不可发现孤儿"
+        );
+        cleanup_temp(&projects);
+    }
+    #[test]
+    fn persist_project_writes_envelope_and_passes_post_verify() {
+        let projects = temp_projects_dir();
+        let doc = new_project_file("p-1", "剧".into(), now_iso());
+        let meta = persist_project(&cap(&projects), "p-1", doc).expect("保存");
+        assert_eq!(meta.name, "剧");
+        assert!(projects.join("p-1.json").exists(), "项目文件应落盘");
+        cleanup_temp(&projects);
+    }
+    #[test]
+    fn persist_project_rejects_untrusted_id_before_any_join() {
+        let projects = temp_projects_dir();
+        let doc = new_project_file("p-1", "剧".into(), now_iso());
+        // 空资产索引下复验不设防：id 词法校验必须在任何路径拼接前拒绝
+        let err = persist_project(&cap(&projects), "../evil", doc).unwrap_err();
+        assert!(err.contains("非法"), "意外诊断：{err}");
+        // 不得在 projects/ 之外创建任何文件
+        assert!(
+            fs::symlink_metadata(projects.parent().expect("临时根").join("evil.json")).is_err(),
+            "越界 id 不应写出 projects/"
+        );
+        cleanup_temp(&projects);
+    }
+
+    #[test]
+    fn persist_project_replaces_existing_file_and_leaves_no_temp() {
+        let projects = temp_projects_dir();
+        let first = new_project_file("p-1", "一版".into(), now_iso());
+        persist_project(&cap(&projects), "p-1", first).expect("首存");
+        let second = new_project_file("p-1", "二版".into(), now_iso());
+        persist_project(&cap(&projects), "p-1", second).expect("覆盖保存（rename 替换已存在目标）");
+        let loaded = load_project_file(&cap(&projects), "p-1").expect("重读");
+        assert_eq!(loaded.project.name, "二版");
+        let leftovers: Vec<String> = fs::read_dir(&projects)
+            .expect("扫描项目目录")
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "遗留临时文件：{leftovers:?}");
+        cleanup_temp(&projects);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn persist_project_rejects_symlinked_target_without_following() {
+        let projects = temp_projects_dir();
+        let outside = projects.parent().expect("临时根").join("evil-target.json");
+        fs::write(&outside, b"{}").expect("写根外文件");
+        std::os::unix::fs::symlink(&outside, projects.join("p-1.json")).expect("建符号链接");
+        let doc = new_project_file("p-1", "剧".into(), now_iso());
+        let err = persist_project(&cap(&projects), "p-1", doc).unwrap_err();
+        assert!(err.contains("符号链接"), "意外诊断：{err}");
+        // 链接未被跟随或覆盖：根外文件原样保留，链接本身仍在
+        assert_eq!(fs::read(&outside).expect("读根外文件"), b"{}".to_vec());
+        assert!(fs::symlink_metadata(projects.join("p-1.json"))
+            .expect("链接仍在")
+            .file_type()
+            .is_symlink());
+        cleanup_temp(&projects);
+    }
+
+    #[test]
+    fn atomic_write_rejects_path_like_file_name() {
+        let projects = temp_projects_dir();
+        // 句柄相对写入的最后边界：嵌套形态的文件名不得相对句柄逃出 projects/
+        let err = atomic_write(&cap(&projects), "../evil.json", "{}").unwrap_err();
+        assert!(err.contains("路径分量"), "意外诊断：{err}");
+        assert!(
+            fs::symlink_metadata(projects.parent().expect("临时根").join("evil.json")).is_err(),
+            "含路径分量的文件名不应写出 projects/"
+        );
+        cleanup_temp(&projects);
+    }
+
+    #[test]
+    fn load_project_file_rejects_path_like_id_before_any_join() {
+        let projects = temp_projects_dir();
+        // 嵌套路径形态的 id：projects/ 内的资产/私有 JSON 不得经 load_project 读出
+        let err = load_project_file(&cap(&projects), "p-1/assets/private").unwrap_err();
+        assert!(
+            err.contains("非法") || err.contains("不存在"),
+            "意外诊断：{err}"
+        );
+        cleanup_temp(&projects);
+    }
+    #[test]
+    fn load_project_file_reads_envelope_from_verified_handle() {
+        let projects = temp_projects_dir();
+        let doc = new_project_file("p-1", "午夜出租车".into(), now_iso());
+        persist_project(&cap(&projects), "p-1", doc).expect("先保存");
+        let loaded = load_project_file(&cap(&projects), "p-1").expect("从已验证句柄读取");
+        assert_eq!(loaded.project.name, "午夜出租车");
+        assert_eq!(loaded.schema_version, 1);
+        cleanup_temp(&projects);
+    }
+
+    #[test]
+    fn load_and_list_read_anchored_tree_after_dir_replacement() {
+        let projects = temp_projects_dir();
+        let doc = new_project_file("p-1", "正版".into(), now_iso());
+        persist_project(&cap(&projects), "p-1", doc).expect("先保存");
+        // 受信根锚定后，另一本地进程把 projects/ 路径名整体换成外部目录树
+        let root = cap(&projects);
+        let tmp_root = projects.parent().expect("临时根").to_path_buf();
+        let rogue = tmp_root.join("rogue");
+        fs::create_dir_all(&rogue).expect("建替换目录");
+        fs::write(
+            rogue.join("p-1.json"),
+            r#"{"schemaVersion":1,"project":{"id":"p-1","name":"外部内容","createdAt":"","updatedAt":""}}"#,
+        )
+        .expect("写替换内容");
+        fs::rename(&projects, tmp_root.join("stolen")).expect("移走锚定目录");
+        fs::rename(&rogue, &projects).expect("占用原路径名");
+        // 读取/列表只认锚定句柄：不得从替换树读出外部内容
+        let loaded = load_project_file(&root, "p-1").expect("读取");
+        assert_eq!(loaded.project.name, "正版");
+        let metas = list_project_metas(&root).expect("列表");
+        assert_eq!(metas.len(), 1);
+        assert_eq!(metas[0].name, "正版");
+        cleanup_temp(&projects);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn list_project_metas_reads_only_verified_entries() {
+        let projects = temp_projects_dir();
+        let doc = new_project_file("p-1", "午夜出租车".into(), now_iso());
+        persist_project(&cap(&projects), "p-1", doc).expect("先保存");
+        // 指向根外文件的符号链接条目不得经列表路径读出（§10.2 信任链）
+        let outside = projects.parent().expect("临时根").join("outside.json");
+        fs::write(
+            &outside,
+            r#"{"schemaVersion":1,"project":{"id":"p-2","name":"外部","createdAt":"","updatedAt":""}}"#,
+        )
+        .expect("写根外文件");
+        std::os::unix::fs::symlink(&outside, projects.join("p-2.json")).expect("建符号链接");
+        let metas = list_project_metas(&cap(&projects)).expect("列出项目");
+        assert_eq!(metas.len(), 1);
+        assert_eq!(metas[0].id, "p-1");
+        cleanup_temp(&projects);
+    }
+
+    #[test]
+    fn save_ipc_payload_requires_all_envelope_buckets() {
+        // IPC 反序列化不设 serde 缺省：缺桶载荷默认补空值落盘，清光既有数据
+        let full = serde_json::to_value(new_project_file("p-1", "剧".into(), now_iso())).unwrap();
+        for key in "schemaVersion project graph settings episodeTitles assets".split(' ') {
+            let mut missing = full.clone();
+            missing.as_object_mut().expect("对象").remove(key);
+            let err = serde_json::from_value::<ProjectFile>(missing).unwrap_err();
+            assert!(err.to_string().contains(key), "缺 {key} 应整次拒绝：{err}");
+        }
+        assert!(serde_json::from_value::<ProjectFile>(full).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_fails_closed_on_target_metadata_errors() {
+        let projects = temp_projects_dir();
+        let root = cap(&projects);
+        // 收权让 symlink_metadata 报 EACCES（非 NotFound）：归类步骤必须
+        // 显式上抛，不得把错误当目标缺失放行后误报后续步骤
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&projects).unwrap().permissions();
+        perms.set_mode(0o000);
+        fs::set_permissions(&projects, perms).expect("收权");
+        let err = atomic_write(&root, "p-1.json", "{}").unwrap_err();
+        let mut perms = fs::metadata(&projects).unwrap().permissions();
+        perms.set_mode(0o755);
+        let _ = fs::set_permissions(&projects, perms);
+        assert!(err.contains("元数据"), "意外诊断：{err}");
+        cleanup_temp(&projects);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_assets_tree_rejects_symlinked_source_project() {
+        let projects = temp_projects_dir();
+        // p-1 被换成指向根内其他项目 p-2 的符号链接：组合路径 {p-1}/assets
+        // 的 no-follow 只看终点组件，归类与身份绑定都落在 p-2 的真实目录上
+        let victim = projects.join("p-2").join("assets");
+        fs::create_dir_all(&victim).expect("建资产目录");
+        fs::write(victim.join("secret.png"), b"s").expect("写资产");
+        std::os::unix::fs::symlink(projects.join("p-2"), projects.join("p-1"))
+            .expect("建项目符号链接");
+        let err = copy_assets_tree(&cap(&projects), "p-1", "p-3").unwrap_err();
+        assert!(err.contains("符号链接"), "意外诊断：{err}");
+        cleanup_temp(&projects);
+    }
+
+    #[test]
+    fn v1_invalid_description_passes_through_for_frontend_repair() {
+        // 非字符串 description 原样透传：折叠为 None 会让前端 repaired 检测
+        // 看不见缺陷（§11.1「存在但非字符串时剥离并警告」永不触发）
+        let text = r#"{"schemaVersion":1,"project":{"id":"p-1","name":"剧","createdAt":"","updatedAt":"","description":42},"graph":{"nodes":[],"edges":[]}}"#;
+        let file = parse_file("p-1", text).expect("解析 v1");
+        assert_eq!(file.project.description, Some(json!(42)));
+    }
+
+    #[test]
+    fn save_ipc_explicit_null_description_preserved_and_rejected() {
+        // 显式 null 不得被 serde 折叠为 None：那会让保存边界看不见非字符串
+        // 值而静默省略键——既有描述被无声抹掉
+        let mut payload = serde_json::to_value(valid_save_doc()).unwrap();
+        payload["project"]["description"] = serde_json::Value::Null;
+        let file: ProjectFile = serde_json::from_value(payload).expect("反序列化");
+        assert_eq!(file.project.description, Some(serde_json::Value::Null));
+        let err = prepare_save("p-1", &file).unwrap_err();
+        assert!(err.contains("description"), "意外诊断：{err}");
+    }
+
+    #[test]
+    fn prepare_save_rejects_non_string_description() {
+        let mut doc = valid_save_doc();
+        doc.project.description = Some(json!(42));
+        let err = prepare_save("p-1", &doc).unwrap_err();
+        assert!(err.contains("description"), "意外诊断：{err}");
+    }
+
+    #[test]
+    fn v1_missing_buckets_pass_through_null_for_frontend_repair() {
+        // 缺桶以 Null 透传：前端 §11.1 第 2 步补齐并标记 repaired 回写——
+        // 预补空容器会让 repaired 检测看不见缺陷，缺桶信封永不收敛
+        let text = r#"{"schemaVersion":1,"project":{"id":"p-1","name":"剧","createdAt":"","updatedAt":""}}"#;
+        let file = parse_file("p-1", text).expect("解析 v1");
+        assert_eq!(file.graph, serde_json::Value::Null);
+        assert_eq!(file.settings, serde_json::Value::Null);
+        assert_eq!(file.episode_titles, serde_json::Value::Null);
+        assert_eq!(file.assets, serde_json::Value::Null);
+    }
+
+    #[test]
+    fn list_projects_falls_back_to_placeholder_for_overlong_name() {
+        let projects = temp_projects_dir();
+        let long = "剧".repeat(65);
+        fs::write(
+            projects.join("p-1.json"),
+            format!(
+                r#"{{"schemaVersion":1,"project":{{"id":"p-1","name":"{long}","createdAt":"","updatedAt":""}},"graph":{{"nodes":[],"edges":[]}}}}"#
+            ),
+        )
+        .expect("写项目文件");
+        let metas = list_project_metas(&cap(&projects)).expect("列出项目");
+        // 超 64 字符在 §9.3 名称域外（打开时会被前端归一化替换）：列表同款占位
+        assert_eq!(metas[0].name, "未命名项目");
+        cleanup_temp(&projects);
+    }
+
+    #[test]
+    fn validate_save_assets_requires_canonical_utc_timestamps() {
+        let entry = |ts: &str| {
+            json!({ "byId": { "a-1": { "id": "a-1", "relPath": "assets/a1.png",
+                "mime": "image/png", "source": "upload", "createdAt": ts } } })
+        };
+        // 偏移/缺毫秒的合法 ISO 加载会规范化重写触发修复回写，保存只收规范形
+        for bad in ["2026-08-01T08:00:00+08:00", "2026-08-01T08:00:00Z"] {
+            let err = validate_save_assets(&entry(bad)).unwrap_err();
+            assert!(err.contains("createdAt"), "{bad} 意外诊断：{err}");
+        }
+        assert!(validate_save_assets(&entry("2026-08-01T00:00:00.000Z")).is_ok());
+    }
+
+    #[test]
+    fn list_projects_falls_back_to_placeholder_for_blank_name() {
+        let projects = temp_projects_dir();
+        // project.name 空白：列表回退占位，修复留待 §11.1 加载归一化
+        fs::write(
+            projects.join("p-1.json"),
+            r#"{"schemaVersion":1,"project":{"id":"p-1","name":""},"graph":{"nodes":[],"edges":[]}}"#,
+        )
+        .expect("写项目文件");
+        let metas = list_project_metas(&cap(&projects)).expect("列出项目");
+        assert_eq!(metas[0].name, "未命名项目");
+        cleanup_temp(&projects);
     }
 }

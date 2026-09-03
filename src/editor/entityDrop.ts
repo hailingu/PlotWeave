@@ -5,11 +5,13 @@
  */
 import type { EntityDragPayload } from './dragDrop'
 import { uid } from '../uid'
-import type { CanvasNode } from './nodes/types'
+import type { CanvasNode, ShotRef } from './nodes/types'
 
-/** 分镜引用补丁：同名引用已存在则返回 null（去重）。 */
+/** 分镜引用补丁（§4.2 自由位）：引用位（assetId）只绑项目资产，设定集实体
+ * 不是合法目标——实体尚无媒体资产时落自由位手填文案（实体名），待资产导入后
+ * 由用户改绑；同名自由位已存在则返回 null（去重）。 */
 function refPatch(
-  refs: Array<{ label: string }>,
+  refs: ShotRef[],
   kind: 'character' | 'location',
   label: string,
 ): Record<string, unknown> | null {
@@ -35,7 +37,7 @@ function characterDropPatch(
       ],
     }
   }
-  if (node.type === 'shot') return refPatch(node.data.refs, 'character', `${entity.name}垫图`)
+  if (node.type === 'shot') return refPatch(node.data.refs, 'character', entity.name)
   return null
 }
 
@@ -45,7 +47,7 @@ function locationDropPatch(
   entity: EntityDragPayload,
 ): Record<string, unknown> | null {
   if (node.type === 'scene') return { locationId: entity.id }
-  if (node.type === 'shot') return refPatch(node.data.refs, 'location', `${entity.name}底图`)
+  if (node.type === 'shot') return refPatch(node.data.refs, 'location', entity.name)
   return null
 }
 

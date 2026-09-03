@@ -31,6 +31,12 @@ function setup(node: PanelNode) {
     shotCountOf: () => 0,
     beatFulfillmentOf: () => null,
     settings: structuredClone(SETTINGS),
+    assets: {
+      byId: {
+        'a-1': { id: 'a-1', relPath: 'assets/a-1.png', mime: 'image/png', source: 'upload', createdAt: '2026-01-01T00:00:00.000Z' },
+        'a-aud': { id: 'a-aud', relPath: 'assets/a-aud.mp3', mime: 'audio/mpeg', source: 'upload', createdAt: '2026-01-01T00:00:00.000Z' },
+      },
+    },
   }
   const { container } = render(
     <NodeEditContext.Provider value={api}>
@@ -66,6 +72,27 @@ describe('SceneForm', () => {
 
     fireEvent.change(screen.getByRole('combobox'), { target: { value: '' } })
     expect(patchOf(api, 1)).toEqual({ locationId: undefined })
+  })
+
+  it('场次可改：正整数入 patch；清空不产生非法值（§4.3 场次编辑）', () => {
+    const { api } = setup(sceneNode)
+    const noInput = screen.getByDisplayValue('1')
+    expect((noInput as HTMLInputElement).type).toBe('number')
+    fireEvent.change(noInput, { target: { value: '5' } })
+    expect(patchOf(api)).toEqual({ sceneNo: 5 })
+    // 小数向下取整
+    fireEvent.change(noInput, { target: { value: '7.9' } })
+    expect(patchOf(api, 1)).toEqual({ sceneNo: 7 })
+    // 清空：场景号必填，非法输入不产生 patch
+    fireEvent.change(noInput, { target: { value: '' } })
+    expect(api.patchNode).toHaveBeenCalledTimes(2)
+  })
+
+  it('场次/集归属拒绝非安全整数（§4.1 正安全整数域：有限但越界如 1e20 落载后会被顺位重发，输入边界同域拒收、保留原值）', () => {
+    const { api } = setup(sceneNode)
+    fireEvent.change(screen.getByDisplayValue('1'), { target: { value: '100000000000000000000' } })
+    fireEvent.change(screen.getByPlaceholderText('未分集'), { target: { value: '100000000000000000000' } })
+    expect(api.patchNode).not.toHaveBeenCalled()
   })
 
   it('内外景分段与角色 chip 切换（引用设定集 id 增删）', () => {
@@ -215,25 +242,93 @@ describe('ShotForm', () => {
     fireEvent.change(screen.getByDisplayValue('3'), { target: { value: 'abc' } })
     expect(patchOf(api)).toEqual({ shotNo: 1 })
 
+    // 非安全整数同属非法（§4.1 正安全整数域，落载后会被顺位重发）：同款回退 1
+    fireEvent.change(screen.getByDisplayValue('3'), { target: { value: '100000000000000000000' } })
+    expect(patchOf(api, 1)).toEqual({ shotNo: 1 })
+
     fireEvent.change(screen.getByRole('combobox', { name: '引用类型' }), {
       target: { value: 'audio' },
     })
-    const refs = patchOf(api, 1).refs as Array<{ kind: string }>
+    const refs = patchOf(api, 2).refs as Array<{ kind: string }>
     expect(refs[0].kind).toBe('audio')
 
     fireEvent.click(screen.getByRole('button', { name: '＋ 添加引用' }))
-    const added = patchOf(api, 2).refs as Array<{ id: string; kind: string; label: string }>
+    const added = patchOf(api, 3).refs as Array<{ id: string; kind: string; label: string }>
     expect(added).toHaveLength(2)
     expect(added[1]).toMatchObject({ kind: 'character', label: '' })
     expect(added[1].id).toMatch(/^ref-/)
 
     fireEvent.click(screen.getAllByRole('button', { name: '删除此引用' })[0])
-    expect(patchOf(api, 3).refs).toEqual([])
+    expect(patchOf(api, 4).refs).toEqual([])
   })
 
   it('分镜卡不出集归属字段（随宿主场景派生）', () => {
     setup(shotNode)
     expect(screen.queryByPlaceholderText('未分集')).toBeNull()
+  })
+
+  it('资产引用位输入文字即转自由位：剥离 assetId，不产出双字段禁写形态', () => {
+    const assetShot: PanelNode = {
+      id: 's2',
+      type: 'shot',
+      data: {
+        shotNo: 1,
+        size: '中景',
+        picture: '',
+        prompt: '',
+        refs: [{ id: 'r1', kind: 'character', assetId: 'a-1' }],
+      },
+    }
+    const { api } = setup(assetShot)
+    // 引用位显示资产 id 占位；输入文字即切换为自由位（§4.2 assetId/label 互斥——
+    // 双字段形态保存成功但下次加载被归一化静默删除）
+    fireEvent.change(screen.getByPlaceholderText(/a-1/), { target: { value: '人物垫图' } })
+    expect(patchOf(api).refs).toEqual([{ id: 'r1', kind: 'character', label: '人物垫图' }])
+  })
+
+  it('资产引用位的 kind 切换受 MIME 家族约束：音频资产不可改为垫图/底图用途', () => {
+    const assetShot: PanelNode = {
+      id: 's3',
+      type: 'shot',
+      data: {
+        shotNo: 1,
+        size: '中景',
+        picture: '',
+        prompt: '',
+        refs: [{ id: 'r1', kind: 'audio', assetId: 'a-aud' }],
+      },
+    }
+    setup(assetShot)
+    const optionOf = (value: string) =>
+      screen.getByRole('combobox', { name: '引用类型' }).querySelector(
+        `option[value="${value}"]`,
+      ) as HTMLOptionElement | null
+    // 错配 kind（§4.2：audio 限 audio/*）保存后重开只是"不可用引用"警告——
+    // 编辑边界直接禁用；本 kind 与同家族切换保持可用
+    expect(optionOf('audio')?.disabled).toBe(false)
+    expect(optionOf('character')?.disabled).toBe(true)
+    expect(optionOf('location')?.disabled).toBe(true)
+
+    // 自由位（label）无资产绑定：全部 kind 可用
+    const freeShot: PanelNode = {
+      id: 's4',
+      type: 'shot',
+      data: {
+        shotNo: 1,
+        size: '中景',
+        picture: '',
+        prompt: '',
+        refs: [{ id: 'r1', kind: 'character', label: '自由文案' }],
+      },
+    }
+    setup(freeShot)
+    const selects = screen.getAllByRole('combobox', { name: '引用类型' })
+    const lastSelect = selects[selects.length - 1]
+    const freeOptionOf = (value: string) =>
+      lastSelect.querySelector(`option[value="${value}"]`) as HTMLOptionElement | null
+    expect(freeOptionOf('audio')?.disabled).toBe(false)
+    expect(freeOptionOf('character')?.disabled).toBe(false)
+    expect(freeOptionOf('location')?.disabled).toBe(false)
   })
 })
 

@@ -10,7 +10,7 @@
  */
 import type { Edge } from '@xyflow/react'
 import { SCENE_SHOT_HANDLE } from './nodes/SceneNode'
-import { BRANCH_OPTION_HANDLE_PREFIX } from './nodes/BranchNode'
+import { branchOptionHandle } from './graphRules'
 import { LIN_WAN_ID, CHEN_MO_ID, LOC_ROOFTOP_ID, LOC_APARTMENT_ID, LOC_STATION_ID } from './sampleData'
 import type { CanvasNode } from './nodes/types'
 
@@ -227,11 +227,11 @@ export const SAMPLE_EDGES: Edge[] = [
   },
   { id: 'e-scene3-dialogue1', source: 'scene-3', target: 'dialogue-1', className: 'pw-edge-sequence' },
   { id: 'e-dialogue1-branch1', source: 'dialogue-1', target: 'branch-1', className: 'pw-edge-sequence' },
-  // 支线：坦白 / 隐瞒
+  // 支线：坦白 / 隐瞒（端口绑稳定选项 id）
   {
     id: 'e-branch1-confess',
     source: 'branch-1',
-    sourceHandle: `${BRANCH_OPTION_HANDLE_PREFIX}0`,
+    sourceHandle: branchOptionHandle('opt-sg-1'),
     target: 'scene-4',
     type: 'branch',
     data: { optionLabel: '坦白' },
@@ -239,7 +239,7 @@ export const SAMPLE_EDGES: Edge[] = [
   {
     id: 'e-branch1-hide',
     source: 'branch-1',
-    sourceHandle: `${BRANCH_OPTION_HANDLE_PREFIX}1`,
+    sourceHandle: branchOptionHandle('opt-sg-2'),
     target: 'scene-5',
     type: 'branch',
     data: { optionLabel: '隐瞒' },
@@ -261,7 +261,7 @@ export const SAMPLE_EDGES: Edge[] = [
   {
     id: 'e-branch2-forgive',
     source: 'branch-2',
-    sourceHandle: `${BRANCH_OPTION_HANDLE_PREFIX}0`,
+    sourceHandle: branchOptionHandle('opt-sg-3'),
     target: 'scene-7',
     type: 'branch',
     data: { optionLabel: '原谅' },
@@ -269,7 +269,7 @@ export const SAMPLE_EDGES: Edge[] = [
   {
     id: 'e-branch2-leave',
     source: 'branch-2',
-    sourceHandle: `${BRANCH_OPTION_HANDLE_PREFIX}1`,
+    sourceHandle: branchOptionHandle('opt-sg-4'),
     target: 'scene-8',
     type: 'branch',
     data: { optionLabel: '不原谅' },

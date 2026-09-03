@@ -1,7 +1,8 @@
 import type { Edge } from '@xyflow/react'
 import { SCENE_SHOT_HANDLE } from './nodes/SceneNode'
 import { resolveCharacterName, resolveLocationName, type ProjectSettings } from './settings'
-import type { CanvasNode, DialogueFlowNode, DialogueLine, SceneFlowNode, ShotFlowNode } from './nodes/types'
+import type { ProjectContent } from '../model/content'
+import type { CanvasNode, DialogueFlowNode, DialogueLine, SceneFlowNode, ShotFlowNode, ShotRef } from './nodes/types'
 
 /**
  * 剧本导出生成器（docs/ui-design.md §3.5/§5）。
@@ -21,8 +22,26 @@ function locationLabel(settings: ProjectSettings, locationId: string | undefined
   return resolveLocationName(settings, locationId) ?? '（地点已删除）'
 }
 
+/** 引用位显示名（§8.1，与卡片渲染同口径）：自由位出手填文案；引用位出
+ * 资产 id 供生产端按稳定标识取材（资产实体暂无名称字段），悬空引用（资产
+ * 已删，§8.2.3 保留引用本身）标注缺失——导出不得静默丢掉引用资产。
+ * 存在性按 own 属性判定：普通对象括号取值会被 'constructor' 等原型链键
+ * 误判为存在（库内键控桶同款防原型链误命中口径）。 */
+function refText(assets: ProjectContent['assets'], ref: ShotRef): string {
+  if (ref.label !== undefined) return ref.label
+  const byId = assets?.byId
+  const exists =
+    byId !== undefined && Object.prototype.hasOwnProperty.call(byId, ref.assetId)
+  return exists ? ref.assetId : `${ref.assetId}（资产缺失）`
+}
+
 /** 单场分镜附录：按 attach 边归组、镜号排序。 */
-function shotAppendixLines(scene: SceneFlowNode, nodes: CanvasNode[], edges: Edge[]): string[] {
+function shotAppendixLines(
+  scene: SceneFlowNode,
+  nodes: CanvasNode[],
+  edges: Edge[],
+  assets: ProjectContent['assets'],
+): string[] {
   const shots = edges
     .filter((e) => e.source === scene.id && e.sourceHandle === SCENE_SHOT_HANDLE)
     .map((e) => nodes.find((n) => n.id === e.target))
@@ -38,7 +57,7 @@ function shotAppendixLines(scene: SceneFlowNode, nodes: CanvasNode[], edges: Edg
     lines.push(`- **SHOT ${String(shot.data.shotNo).padStart(2, '0')} · ${shot.data.size}** — ${shot.data.picture}`)
     if (shot.data.prompt) lines.push(`  - Prompt：${shot.data.prompt}`)
     if (shot.data.refs.length > 0) {
-      lines.push(`  - 引用：${shot.data.refs.map((r) => r.label).join(' / ')}`)
+      lines.push(`  - 引用：${shot.data.refs.map((r) => refText(assets, r)).join(' / ')}`)
     }
   }
   lines.push('')
@@ -76,12 +95,14 @@ function dialogueBlockLines(node: DialogueFlowNode, settings: ProjectSettings): 
   return lines
 }
 
-/** 生成整部剧本的 Markdown 文本。 */
+/** 生成整部剧本的 Markdown 文本。assets 为项目资产索引（缺省视为无资产，
+ * 引用位全部按悬空标注）。 */
 export function buildScriptMarkdown(
   projectName: string,
   nodes: CanvasNode[],
   edges: Edge[],
   settings: ProjectSettings,
+  assets?: ProjectContent['assets'],
 ): string {
   const ordered = [...nodes].sort((a, b) => a.position.x - b.position.x)
   const lines: string[] = [`# ${projectName}`, '']
@@ -94,7 +115,7 @@ export function buildScriptMarkdown(
 
   const appendix = ordered
     .filter((n): n is SceneFlowNode => n.type === 'scene')
-    .flatMap((scene) => shotAppendixLines(scene, nodes, edges))
+    .flatMap((scene) => shotAppendixLines(scene, nodes, edges, assets))
   if (appendix.length > 0) {
     lines.push('---', '', '## 附录 · 分镜卡', '', ...appendix)
   }

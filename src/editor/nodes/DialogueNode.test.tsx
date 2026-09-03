@@ -47,6 +47,7 @@ function setup(data: { name?: string; lines?: DialogueLine[] } = {}, openSetting
     shotCountOf: () => 0,
     beatFulfillmentOf: () => null,
     settings: structuredClone(SETTINGS),
+    assets: undefined,
   }
   const props = {
     id: 'd1',

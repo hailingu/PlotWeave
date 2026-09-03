@@ -2,6 +2,8 @@ import { useState, type ReactNode } from 'react'
 import { useNodeEdit } from '../../nodeEdit'
 import type { ProjectSettings } from '../../settings'
 import { uid } from '../../../uid'
+import { shotRefMimeMatches } from '../../../model/convert'
+import type { ProjectContent } from '../../../model/content'
 import type {
   BeatNodeData,
   BranchNodeData,
@@ -52,8 +54,14 @@ function EpisodeField({ nodeId, episodeNo }: { readonly nodeId: string; readonly
           placeholder="未分集"
           onChange={(e) => {
             const raw = e.target.value
-            const n = raw === '' ? Number.NaN : Math.max(1, Math.floor(Number(raw)))
-            patchNode(nodeId, { episodeNo: Number.isFinite(n) ? n : undefined })
+            if (raw === '') {
+              patchNode(nodeId, { episodeNo: undefined })
+              return
+            }
+            const n = Math.max(1, Math.floor(Number(raw)))
+            // §4.1 正安全整数域：有限但越界（如 1e20）落载后会被顺位重发，
+            // 输入边界同域拒收——不 patch，保留原值等用户输入完成
+            if (Number.isSafeInteger(n)) patchNode(nodeId, { episodeNo: n })
           }}
         />
         {episodeNo !== undefined && (
@@ -91,6 +99,24 @@ function SceneForm({ node, settings }: { readonly node: Extract<PanelNode, { typ
           className="pw-set-input"
           value={d.name}
           onChange={(e) => patchNode(node.id, { name: e.target.value })}
+        />
+      </Field>
+      <Field label="场次">
+        <input
+          className="pw-set-input"
+          type="number"
+          min={1}
+          value={d.sceneNo}
+          aria-label="场次"
+          onChange={(e) => {
+            // 场次必填（导出/卡片头消费）：清空/非法输入不产生 patch，
+            // 保留原值等用户输入完成
+            const raw = e.target.value
+            if (raw === '') return
+            const n = Math.max(1, Math.floor(Number(raw)))
+            // §4.1 正安全整数域：有限但越界（如 1e20）落载后会被顺位重发，同域拒收
+            if (Number.isSafeInteger(n) && n !== d.sceneNo) patchNode(node.id, { sceneNo: n })
+          }}
         />
       </Field>
       <div className="pw-set-cols">
@@ -360,9 +386,21 @@ const REF_KIND_LABELS: Record<ShotRef['kind'], string> = {
   audio: '音频',
 }
 
-/** 分镜卡表单：镜号/景别/画面描述/镜头 Prompt/引用位（增删改）。 */
+/** 资产 MIME 解析（§7.1）：own 属性判定防原型链键误命中（库内键控桶
+ * 同款口径）；悬空引用（资产已删）返回 undefined——kind 切换不设限。 */
+function assetMimeOf(assets: ProjectContent['assets'], id: string): string | undefined {
+  const byId = assets?.byId
+  if (byId === undefined || !Object.prototype.hasOwnProperty.call(byId, id)) return undefined
+  const mime = byId[id].mime
+  return typeof mime === 'string' ? mime : undefined
+}
+
+/** 分镜卡表单：镜号/景别/画面描述/镜头 Prompt/引用位（增删改）。
+ * 资产引用位的 kind 切换受资产 MIME 家族约束（§4.2，与归一化
+ * shotRefMimeMatches 同域）：错配 kind 保存后重开只是「不可用引用」
+ * 警告——在编辑边界直接禁用，不产出注定不可用的引用。 */
 function ShotForm({ node }: { readonly node: Extract<PanelNode, { type: 'shot' }> }) {
-  const { patchNode } = useNodeEdit()
+  const { patchNode, assets } = useNodeEdit()
   const d = node.data
   return (
     <>
@@ -373,7 +411,11 @@ function ShotForm({ node }: { readonly node: Extract<PanelNode, { type: 'shot' }
             type="number"
             min={1}
             value={d.shotNo}
-            onChange={(e) => patchNode(node.id, { shotNo: Number(e.target.value) || 1 })}
+            onChange={(e) => {
+              // 非法输入回退 1；§4.1 正安全整数域：有限但越界（如 1e20）同属非法
+              const n = Math.max(1, Math.floor(Number(e.target.value)))
+              patchNode(node.id, { shotNo: Number.isSafeInteger(n) ? n : 1 })
+            }}
           />
         </Field>
         <Field label="景别">
@@ -416,11 +458,19 @@ function ShotForm({ node }: { readonly node: Extract<PanelNode, { type: 'shot' }
                 })
               }
             >
-              {Object.entries(REF_KIND_LABELS).map(([kind, label]) => (
-                <option key={kind} value={kind}>
-                  {label}
-                </option>
-              ))}
+              {Object.entries(REF_KIND_LABELS).map(([kind, label]) => {
+                const mime =
+                  ref.assetId !== undefined ? assetMimeOf(assets, ref.assetId) : undefined
+                return (
+                  <option
+                    key={kind}
+                    value={kind}
+                    disabled={mime !== undefined && !shotRefMimeMatches(kind, mime)}
+                  >
+                    {label}
+                  </option>
+                )
+              })}
             </select>
             <span className="pw-sp" />
             <button
@@ -434,10 +484,20 @@ function ShotForm({ node }: { readonly node: Extract<PanelNode, { type: 'shot' }
           </div>
           <input
             className="pw-set-input"
-            value={ref.label}
+            value={ref.label ?? ''}
+            placeholder={
+              ref.assetId !== undefined
+                ? `资产引用 ${ref.assetId}——输入文字将转为自由文案`
+                : undefined
+            }
             onChange={(e) =>
               patchNode(node.id, {
-                refs: d.refs.map((r, idx) => (idx === i ? { ...r, label: e.target.value } : r)),
+                // 输入文字即切换为自由位（§4.2 assetId/label 互斥）：剥离
+                // assetId 而非并存——双字段形态保存成功但下次加载被归一化
+                // 静默删除，用户输入凭空丢失
+                refs: d.refs.map((r, idx) =>
+                  idx === i ? { id: r.id, kind: r.kind, label: e.target.value } : r,
+                ),
               })
             }
           />

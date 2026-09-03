@@ -6,6 +6,7 @@
 //! - `seal`：API key 加密封装（AES-256-GCM，绑定本机）。
 //! - `library`：个人资产库（应用级 library/ 目录，索引 + 媒体文件，§8.1）。
 
+mod isotime;
 mod library;
 mod prefs;
 mod seal;
@@ -21,6 +22,8 @@ pub fn run() {
             store::load_project,
             store::save_project,
             store::delete_project,
+            store::copy_project_assets,
+            store::verify_project_assets,
             prefs::load_prefs,
             prefs::save_prefs,
             prefs::set_provider_key,

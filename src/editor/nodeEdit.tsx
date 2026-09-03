@@ -1,6 +1,7 @@
 import { createContext, useContext } from 'react'
 import type { BeatFulfillment } from './outline'
 import type { ProjectSettings } from './settings'
+import type { ProjectContent } from '../model/content'
 
 /**
  * 节点编辑上下文（docs/ui-design.md §4.3 ⚙️ 设置面板 = 节点编辑器）。
@@ -26,6 +27,9 @@ export interface NodeEditApi {
   beatFulfillmentOf: (id: string) => BeatFulfillment | null
   /** 项目设定集：节点渲染实体引用（角色头像/地点名）的解析源（§5）。 */
   settings: ProjectSettings
+  /** 项目资产索引（透传桶，会话内不编辑）：分镜引用位的资产解析源
+   * （§7.1/§8.1——引用位 kind 与资产 MIME 家族的编辑边界校验）。 */
+  assets: ProjectContent['assets']
 }
 
 export const NodeEditContext = createContext<NodeEditApi | null>(null)

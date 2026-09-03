@@ -1,0 +1,7 @@
+#!/bin/sh
+# 每次创建提交前执行仓库统一的 SonarQube 零问题门禁。
+
+set -eu
+
+hook_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+exec "$hook_directory/../scripts/sonar-quality-gate.sh"

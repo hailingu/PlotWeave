@@ -64,12 +64,12 @@ describe('entityDropPatch（§5 设定集实体拖上节点 = 建立引用）', 
     expect(patch.lines[1].id).toMatch(/^line-/)
   })
 
-  it('角色 → 分镜卡：追加垫图引用（带稳定 id）；同名引用去重返回 null', () => {
+  it('角色 → 分镜卡：无资产时落自由位引用（label = 实体名，§4.2）；同名去重返回 null', () => {
     const patch = entityDropPatch(shotNode(), char) as { refs: ShotRef[] }
     expect(patch.refs).toHaveLength(1)
-    expect(patch.refs[0]).toMatchObject({ kind: 'character', label: '阿黎垫图' })
+    expect(patch.refs[0]).toMatchObject({ kind: 'character', label: '阿黎' })
     expect(patch.refs[0].id).toMatch(/^ref-/)
-    const dup = shotNode([{ id: 'r0', kind: 'character', label: '阿黎垫图' }])
+    const dup = shotNode([{ id: 'r0', kind: 'character', label: '阿黎' }])
     expect(entityDropPatch(dup, char)).toBeNull()
   })
 
@@ -90,12 +90,12 @@ describe('entityDropPatch（§5 设定集实体拖上节点 = 建立引用）', 
     expect(entityDropPatch(branch as CanvasNode, char)).toBeNull()
   })
 
-  it('地点 → 索引卡：写入 locationId；→ 分镜卡：追加底图引用并去重', () => {
+  it('地点 → 索引卡：写入 locationId；→ 分镜卡：落自由位引用（label = 实体名）并去重', () => {
     expect(entityDropPatch(sceneNode(), loc)).toEqual({ locationId: 'l1' })
     const patch = entityDropPatch(shotNode(), loc) as { refs: ShotRef[] }
     expect(patch.refs).toHaveLength(1)
-    expect(patch.refs[0]).toMatchObject({ kind: 'location', label: '咖啡馆底图' })
-    const dup = shotNode([{ id: 'r0', kind: 'location', label: '咖啡馆底图' }])
+    expect(patch.refs[0]).toMatchObject({ kind: 'location', label: '咖啡馆' })
+    const dup = shotNode([{ id: 'r0', kind: 'location', label: '咖啡馆' }])
     expect(entityDropPatch(dup, loc)).toBeNull()
   })
 

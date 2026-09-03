@@ -1,198 +1,20 @@
 /**
- * 项目持久化前端门面（docs/ui-design.md §3.2、数据模型 §11）。
+ * 项目持久化前端门面（docs/ui-design.md §3.2、数据模型 v1 §10–§11）。
  * Tauri 环境走 Rust 命令（JSON 文件落盘于应用数据目录）；
  * 纯浏览器预览无 IPC，回退为同接口的内存实现（刷新即失，仅保交互可验）。
- * 统一约定：updatedAt 对外为 ISO 字符串（Rust 存 epoch 毫秒，在此转换）。
+ * 落盘格式为 ProjectDocument（src/model/document.ts）；序列化/归一化/迁移
+ * 在 src/model/convert.ts。统一约定：updatedAt 对外为 ISO 字符串。
  */
-import type { Edge } from '@xyflow/react'
-import type { CanvasNode } from './editor/nodes/types'
+import { parseProject, serializeProject } from './model/convert'
+import type { ProjectContent } from './model/content'
 import { SAMPLE_NODES, SAMPLE_EDGES } from './editor/sampleGraph'
 import { SAMPLE_SETTINGS } from './editor/sampleData'
-import {
-  newEntityId,
-  normalizeSettings,
-  type ProjectSettings,
-} from './editor/settings'
-import { uid } from './uid'
 import type { ProjectSummary } from './home/projects'
 
-/** 项目完整内容：名称 + 画布两数组 + 设定集 + 大纲集标题。 */
-export interface ProjectDocument {
-  name: string
-  nodes: CanvasNode[]
-  edges: Edge[]
-  settings: ProjectSettings
-  /** 集 = 编号 + 大纲行内标题（§3.5，不建集实体表）；缺省视为无命名集。 */
-  episodeTitles?: Record<number, string>
-}
-
-/** 集标题表归一化：JSON 键是字符串，只保留「数字键 → 非空标题」映射。 */
-function normalizeEpisodeTitles(v: unknown): Record<number, string> {
-  const out: Record<number, string> = {}
-  if (typeof v !== 'object' || v === null) return out
-  for (const [k, title] of Object.entries(v as Record<string, unknown>)) {
-    const ep = Number(k)
-    if (Number.isInteger(ep) && ep > 0 && typeof title === 'string' && title.trim() !== '') {
-      out[ep] = title.trim()
-    }
-  }
-  return out
-}
-
-/**
- * 旧 schema 判定（引用 id 化之前落盘的文档）：
- * scene 的 characters 是头像对象数组 / location 是字符串 / 对白 speaker 是对象。
- */
-function needsMigration(file: { nodes?: CanvasNode[]; settings?: unknown }): boolean {
-  const nodes = file.nodes ?? []
-  if (Array.isArray(file.settings) || (file.settings && typeof file.settings === 'object' && file.settings !== null && !('characters' in file.settings))) {
-    // settings 缺失视作旧文件，由迁移补全
-  }
-  return nodes.some((n) => {
-    const d = n.data as Record<string, unknown>
-    if (n.type === 'scene') {
-      return Array.isArray(d.characters) || typeof d.location === 'string' || !Array.isArray(d.characterIds)
-    }
-    if (n.type === 'dialogue') {
-      const lines = d.lines as Array<{ id?: unknown; speaker?: unknown }> | undefined
-      return (
-        Array.isArray(lines) &&
-        (lines.some((l) => l.speaker && typeof l.speaker === 'object') ||
-          lines.some((l) => typeof l.id !== 'string'))
-      )
-    }
-    if (n.type === 'branch') {
-      // 选项为字符串（id 化之前）或缺 id 的对象
-      const opts = d.options as Array<string | { id?: unknown }> | undefined
-      return (
-        Array.isArray(opts) &&
-        opts.some((o) => typeof o === 'string' || typeof (o as { id?: unknown }).id !== 'string')
-      )
-    }
-    if (n.type === 'shot') {
-      const refs = d.refs as Array<{ id?: unknown }> | undefined
-      return Array.isArray(refs) && refs.some((r) => typeof r.id !== 'string')
-    }
-    return false
-  }) || file.settings === undefined
-}
-
-/**
- * 旧 schema → 新 schema 迁移（保用户数据）：
- * - scene.characters（头像对象）→ characterIds；scene.location（字符串）→ locationId；
- *   dialogue 台词 speaker（对象）→ 实体 id。
- * - 列表项稳定 id 回填（S6479）：dialogue.lines / branch.options / shot.refs；
- *   branch 选项字符串形态升级为 {id, label} 对象。
- * - 缺失的设定集实体就地补建：角色按「名字首字 + 渐变」匹配，地点按名字匹配；
- *   匹配不到建新实体（角色名回退头像单字，用户可改名）。
- */
-export function migrateProjectDocument(doc: ProjectDocument): {
-  doc: ProjectDocument
-  migrated: boolean
-} {
-  const settings: ProjectSettings = normalizeSettings(doc.settings)
-  let migrated = false
-
-  const ensureCharacter = (label: string, gradient?: string): string => {
-    const hit =
-      settings.characters.find((c) => c.gradient === gradient && c.name.startsWith(label)) ??
-      settings.characters.find((c) => c.name.startsWith(label))
-    if (hit) return hit.id
-    const entity = {
-      id: newEntityId('ch'),
-      name: label,
-      gradient: gradient ?? 'linear-gradient(135deg,#8e8e93,#636366)',
-    }
-    settings.characters.push(entity)
-    migrated = true
-    return entity.id
-  }
-
-  const ensureLocation = (name: string): string => {
-    const hit = settings.locations.find((l) => l.name === name)
-    if (hit) return hit.id
-    const entity = { id: newEntityId('loc'), name }
-    settings.locations.push(entity)
-    migrated = true
-    return entity.id
-  }
-
-  const nodes = doc.nodes.map((node) => {
-    if (node.type === 'scene') {
-      const d = { ...(node.data as Record<string, unknown>) }
-      const avatars = d.characters
-      let characterIds: string[]
-      if (Array.isArray(avatars)) {
-        characterIds = (avatars as { label: string; gradient?: string }[]).map((av) =>
-          ensureCharacter(av.label, av.gradient),
-        )
-        delete d.characters
-        migrated = true
-      } else if (Array.isArray(d.characterIds)) {
-        characterIds = d.characterIds as string[]
-      } else {
-        characterIds = []
-        migrated = true
-      }
-      let locationId = d.locationId as string | undefined
-      if (typeof d.location === 'string') {
-        locationId = ensureLocation(d.location)
-        delete d.location
-        migrated = true
-      }
-      return { ...node, data: { ...d, characterIds, locationId } } as CanvasNode
-    }
-    if (node.type === 'dialogue') {
-      const d = node.data
-      const lines = d.lines.map((line) => {
-        let next = line
-        if (next.kind === 'line' && next.speaker && typeof next.speaker === 'object') {
-          const av = next.speaker as { label: string; gradient?: string }
-          migrated = true
-          next = { ...next, speaker: ensureCharacter(av.label, av.gradient) }
-        }
-        if (typeof next.id !== 'string') {
-          migrated = true
-          next = { ...next, id: uid('line') }
-        }
-        return next
-      })
-      return { ...node, data: { ...d, lines } } as CanvasNode
-    }
-    if (node.type === 'branch') {
-      const d = node.data
-      const options = d.options.map((o) => {
-        if (typeof o === 'string') {
-          migrated = true
-          return { id: uid('opt'), label: o }
-        }
-        if (typeof (o as { id?: unknown }).id !== 'string') {
-          migrated = true
-          return { ...(o as { label: string }), id: uid('opt') }
-        }
-        return o
-      })
-      return { ...node, data: { ...d, options } } as CanvasNode
-    }
-    if (node.type === 'shot') {
-      const d = node.data
-      const refs = d.refs.map((r) => {
-        if (typeof (r as { id?: unknown }).id !== 'string') {
-          migrated = true
-          return { ...r, id: uid('ref') }
-        }
-        return r
-      })
-      return { ...node, data: { ...d, refs } } as CanvasNode
-    }
-    return node
-  })
-
-  return { doc: { ...doc, nodes, edges: doc.edges, settings }, migrated }
-}
+export type { ProjectContent }
 
 /** 首次启动的种子项目：沿用演示画布，让首页与编辑器开箱即有内容。 */
-function seedProjects(): { meta: ProjectSummary; doc: ProjectDocument }[] {
+function seedProjects(): { meta: ProjectSummary; doc: ProjectContent }[] {
   const hoursAgo = (h: number) =>
     new Date(Date.now() - h * 3_600_000).toISOString()
   const sceneCount = SAMPLE_NODES.filter((n) => n.type === 'scene').length
@@ -221,41 +43,74 @@ function seedProjects(): { meta: ProjectSummary; doc: ProjectDocument }[] {
   ]
 }
 
+/** 复制命名（§7.3）：新名 = `{源名} 副本`，与现存项目名冲突则递增序号
+ * （` 副本 2`、` 副本 3`…）；拼接结果按字符数超 64（§9.3 校验口径）时先
+ * 截断源名至可容纳后缀再拼接——复制必须总能成功，不得因上限被持久化层拒绝。 */
+function duplicateName(source: string, taken: ReadonlySet<string>): string {
+  const build = (suffix: string): string => {
+    const room = Math.max(1, 64 - [...suffix].length)
+    const head = [...source.trim()].slice(0, room).join('').trimEnd() || '未命名'
+    return head + suffix
+  }
+  const first = build(' 副本')
+  if (!taken.has(first)) return first
+  for (let n = 2; ; n++) {
+    const candidate = build(` 副本 ${n}`)
+    if (!taken.has(candidate)) return candidate
+  }
+}
+
 const isTauri =
   typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
-/** Rust ProjectMeta（epoch 毫秒）→ 首页 ProjectSummary（ISO）。 */
+/** Rust ProjectMeta → 首页 ProjectSummary；updated_at 为 ISO 字符串。
+ * 非法时间戳（空串/坏格式）回退 epoch，绝不让 new Date 抛错清空首页列表。 */
 function toSummary(m: {
   id: string
   name: string
-  updated_at: number
+  updated_at: string
   scene_count: number
   ending_count: number
 }): ProjectSummary {
+  const t = Date.parse(m.updated_at)
   return {
     id: m.id,
     name: m.name,
     sceneCount: m.scene_count,
     ...(m.ending_count > 1 ? { endingCount: m.ending_count } : {}),
-    updatedAt: new Date(m.updated_at).toISOString(),
+    updatedAt: new Date(Number.isFinite(t) ? t : 0).toISOString(),
   }
 }
 
-/** 内存回退实现：模块级 Map，会话内持久。 */
-const memoryStore = new Map<string, { doc: ProjectDocument; updatedAt: number }>()
+/** 内存回退实现：模块级 Map，会话内持久。存归一化后的会话文档——
+ * 与桌面路径同规则（保存即序列化剥离会话态 + 归一化），行为不因环境分叉。 */
+const memoryStore = new Map<string, { doc: ProjectContent; updatedAt: number }>()
 let memorySeeded = false
+
+/** 会话文档 → 归一化后的会话文档（serialize 剥离运行态 + parse 重置选中态）；
+ * invalidAssetKeys 为 Rust 实路径复验未通过的资产键，归一化据此隔离索引。 */
+function memoryNormalize(
+  doc: ProjectContent,
+  id: string,
+  invalidAssetKeys?: readonly string[],
+): ProjectContent {
+  return parseProject(serializeProject(doc, id), {
+    projectId: id,
+    ...(invalidAssetKeys !== undefined ? { invalidAssetKeys } : {}),
+  }).content
+}
 
 function memoryList(): ProjectSummary[] {
   if (!memorySeeded) {
     for (const seed of seedProjects()) {
       memoryStore.set(seed.meta.id, {
-        doc: seed.doc,
+        doc: memoryNormalize(seed.doc, seed.meta.id),
         updatedAt: Date.parse(seed.meta.updatedAt),
       })
     }
     memorySeeded = true
   }
-  const countScenes = (nodes: CanvasNode[]) =>
+  const countScenes = (nodes: ProjectContent['nodes']) =>
     nodes.filter((n) => n.type === 'scene').length
   return [...memoryStore.entries()]
     .map(([id, { doc, updatedAt }]) => {
@@ -276,72 +131,297 @@ function memoryList(): ProjectSummary[] {
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
 }
 
-async function tauriList(): Promise<ProjectSummary[]> {
+/** 首次启动（无任何项目文件）时写入种子示例。metas 为空不证明目录为空：
+ * list_project_metas 会跳过损坏/不可读文件——唯一项目若是 JSON 损坏的已
+ * 编辑示例，无条件播种会用硬编码种子原子覆盖可能可恢复的用户文件。
+ * 播种为 no-replace 语义：仅当 load_project 确证「项目不存在」才写种子，
+ * 文件存在（含不可读）一律跳过并留痕。返回是否写入了任一种子。 */
+async function seedFirstRun(): Promise<boolean> {
   const { invoke } = await import('@tauri-apps/api/core')
-  const metas = await invoke<
-    { id: string; name: string; updated_at: number; scene_count: number; ending_count: number }[]
-  >('list_projects')
-  // 首次启动（无任何项目文件）时写入种子示例，保证开箱即有内容
-  if (metas.length === 0) {
-    for (const seed of seedProjects()) {
+  const notFound = (e: unknown) =>
+    (typeof e === 'string' || e instanceof Error) && String(e).includes('项目不存在')
+  let seeded = false
+  for (const seed of seedProjects()) {
+    try {
+      await invoke<unknown>('load_project', { id: seed.meta.id })
+      console.warn('[projectStore] 播种跳过：项目已存在', seed.meta.id)
+    } catch (err) {
+      if (!notFound(err)) {
+        console.warn('[projectStore] 播种跳过：项目文件不可读，不覆盖可能可恢复的内容', seed.meta.id, err)
+        continue
+      }
       await tauriSave(seed.meta.id, seed.doc)
+      seeded = true
     }
-    return tauriList()
   }
-  // 种子文件升级：示例项目仍是旧 schema（引用 id 化之前落盘）时直接覆盖新种子
+  return seeded
+}
+
+/** 已知示例的旧格式（schemaVersion 0）迁移与 v1 修复型归一化回写：写回
+ * **迁移/修复后的用户内容**——示例可能已被编辑（改名/加场景/资产），用
+ * 硬编码种子覆盖会在升级后首次打开首页时静默摧毁这些编辑；演示内容刷新
+ * 只经由空库播种路径发生。与 tauriLoad 同款加载侧资产复验（§7.1/§10.5）：
+ * 索引资产文件缺失/被换链接时先隔离再回写，回写不被保存边界拒收。
+ * 单例隔离：该示例升级检查失败（如未来版本 schemaVersion——Rust 列表与
+ * 信封仍返回、parseProject 才拒绝）只跳过该例并留痕，摘要原样保留，版本
+ * 错误延迟到该项目被打开时呈现。返回是否发生回写。 */
+async function upgradeKnownSamples(metas: { id: string }[]): Promise<boolean> {
+  const { invoke } = await import('@tauri-apps/api/core')
+  let repairedAny = false
   for (const meta of metas) {
     if (!meta.id.startsWith('sample-')) continue
-    const seed = seedProjects().find((s) => s.meta.id === meta.id)
-    if (!seed) continue
-    const file = await invoke<{ nodes: CanvasNode[]; settings?: unknown }>('load_project', {
-      id: meta.id,
-    })
-    if (needsMigration(file)) {
-      await tauriSave(meta.id, seed.doc)
+    if (!seedProjects().some((s) => s.meta.id === meta.id)) continue
+    try {
+      const file = await invoke<unknown>('load_project', { id: meta.id })
+      const invalidAssetKeys = await invoke<string[]>('verify_project_assets', {
+        id: meta.id,
+        assets: (file as { assets?: unknown }).assets ?? {},
+      })
+      const { content, migrated, repaired } = parseProject(file, { projectId: meta.id, invalidAssetKeys })
+      if (migrated || repaired) {
+        await tauriSave(meta.id, content)
+        repairedAny = true
+      }
+    } catch (err) {
+      console.warn('[projectStore] 示例升级检查失败，保留该示例现状', meta.id, err)
     }
   }
-  return metas.map(toSummary)
+  return repairedAny
+}
+
+async function tauriList(): Promise<ProjectSummary[]> {
+  const { invoke } = await import('@tauri-apps/api/core')
+  // 回写改写了名称/统计并盖戳 updatedAt：metas 是写前快照，直接返回会让
+  // 首页滞留旧名旧序——重列直到无回写（回写后的净本不再触发写，循环有界）
+  for (;;) {
+    const metas = await invoke<
+      { id: string; name: string; updated_at: string; scene_count: number; ending_count: number }[]
+    >('list_projects')
+    if (metas.length === 0) {
+      if (!(await seedFirstRun())) return metas.map(toSummary)
+      continue
+    }
+    if (await upgradeKnownSamples(metas)) continue
+    return metas.map(toSummary)
+  }
 }
 
 async function tauriCreate(name: string): Promise<ProjectSummary> {
   const { invoke } = await import('@tauri-apps/api/core')
-  return toSummary(await invoke('create_project', { name }))
+  return toSummary(
+    await invoke<{ id: string; name: string; updated_at: string; scene_count: number; ending_count: number }>(
+      'create_project',
+      { name },
+    ),
+  )
 }
 
-async function tauriLoad(id: string): Promise<ProjectDocument> {
-  const { invoke } = await import('@tauri-apps/api/core')
-  const file = await invoke<{
-    name: string
-    nodes: CanvasNode[]
-    edges: Edge[]
-    settings?: unknown
-    episodeTitles?: unknown
-  }>('load_project', { id })
-  const doc = migrateProjectDocument({
-    name: file.name,
-    nodes: file.nodes,
-    edges: file.edges,
-    settings: normalizeSettings(file.settings),
-    episodeTitles: normalizeEpisodeTitles(file.episodeTitles),
-  })
-  // 迁移发生则写回磁盘，下次打开不再迁移
-  if (doc.migrated) void tauriSave(id, doc.doc)
-  return doc.doc
+/** 等待该项目的保存链静止（§3.1，tauriLoad 内核）：await 后仍是同一
+ * Promise 即静止。编辑器卸载后的冲刷可能在途/排队，旧编辑器的防抖还
+ * 可能在 A 在途时又补交 B——单次等待只等 A，读盘落在 B 之前会让重开
+ * 后的编辑把旧内容重新落盘、反向覆盖 B。 */
+async function waitForSaveChainIdle(id: string): Promise<void> {
+  for (;;) {
+    const chain = saveChains.get(id)
+    if (chain === undefined) return
+    await chain.catch(() => undefined)
+    if (saveChains.get(id) === chain) return
+  }
 }
 
-async function tauriSave(id: string, doc: ProjectDocument): Promise<void> {
+async function tauriLoad(id: string): Promise<ProjectContent> {
   const { invoke } = await import('@tauri-apps/api/core')
-  await invoke('save_project', {
+  // 单循环三段：链静止 → 失败登记复验（优先）→ 磁盘读取（链身份守卫）。
+  // 任何段的重启都回到循环顶——尤其磁盘段读取期间排队的保存若失败，其
+  // 失败登记（比磁盘新）必须在下一轮的登记复验段被优先交付，不得只在
+  // 磁盘段内重读旧盘。
+  //
+  // 登记段：链静止后优先交付链上失败登记的最新文档（冲刷失败待重试，比
+  // 磁盘新）：经保存同款归一化（剥离运行态）交付，否则用户看到丢编辑的
+  // 旧版本，且随后编辑与重试登记竞态。登记文档同样过加载侧资产实路径
+  // 复验——保存失败的常见原因正是资产文件缺失/被换符号链接，不复验就把
+  // 带坏资产的文档交付会话、重试登记也原样持有，此后每次重试与后续编辑
+  // 都注定失败；隔离后的修复内容同时替换重试登记（后台重试改持净载荷）。
+  // 复验的 await 期间登记可能被更新保存清除/替换（重试成功、新失败）：
+  // 只有仍是观察到的那份才替换——无条件写回会把已被取代的旧文档复活
+  // 进登记与交付，编辑即覆盖新保存；否则按当前保存状态整体重来。
+  //
+  // 磁盘段：load_project/复验的 await 期间可能又有保存排队（如编辑器卸载
+  // 冲刷）——读到的会是写前旧文件；不重验就继续会把旧内容交付会话，且
+  // 随后的修复回写若晚于新保存落盘，会把新内容反向覆盖。链身份变化即
+  // 重启到循环顶（等待新链落定；失败登记由登记段接管），保证「读到即最新」
+  for (;;) {
+    await waitForSaveChainIdle(id)
+    const pending = pendingRetryDocs.get(id)
+    if (pending !== undefined) {
+      const invalid = await invoke<string[]>('verify_project_assets', {
+        id,
+        assets: pending.assets ?? {},
+      })
+      if (pendingRetryDocs.get(id) !== pending) continue
+      const verified = memoryNormalize(pending, id, invalid)
+      pendingRetryDocs.set(id, verified)
+      return verified
+    }
+    const chainBefore = saveChains.get(id)
+    const file = await invoke<unknown>('load_project', { id })
+    // §7.1/§10.5 加载侧资产实路径复验：Rust 以受信资产根 no-follow 验证
+    // （前端无法访问文件系统），不可验证键交归一化层隔离、引用位标记悬空
+    // ——否则下一次保存会被保存边界拒收而防抖吞错，用户编辑永不落盘
+    const invalidAssetKeys = await invoke<string[]>('verify_project_assets', {
+      id,
+      assets: (file as { assets?: unknown }).assets ?? {},
+    })
+    if (saveChains.get(id) !== chainBefore) continue
+    // §11 归一化管线：迁移 + 孤儿边隔离 + 悬空引用标记；
+    // projectId 为路径给定的受信 id，供 §11.1 元数据修复覆盖 project.id
+    const { content, migrated, repaired, warnings } = parseProject(file, { projectId: id, invalidAssetKeys })
+    for (const w of warnings) console.warn(`[projectStore] ${w}`)
+    // 迁移或修复发生则写回磁盘（下次打开不再迁移/重复修复）。v1 的可修复
+    // 脏数据（空白/重复 id 等）只修在内存时，用户只开不编辑（防抖保存跳过
+    // 首帧）会让脏文件长留磁盘，每次打开都重新生成不同的"稳定" id——修复
+    // 必须落定。回写走保存链且完成前不返回（此刻链静止、身份未变，同步段
+    // 内入队不会被插队）：与读取后排队的新保存保持全序，迟到的旧内容不得
+    // 覆盖新保存；失败只诊断不阻断（显式 catch，不留未处理拒绝），由链的
+    // 重试登记接管——内存已交付修复结果，磁盘保持旧内容，下次打开会重新修复
+    if (migrated || repaired) {
+      await enqueueSave(id, content).catch((err: unknown) => {
+        console.error('[projectStore] 迁移/修复回写失败，已登记后台重试（下次打开将重新修复）', err)
+      })
+    }
+    return content
+  }
+}
+
+async function tauriSave(id: string, doc: ProjectContent): Promise<void> {
+  const { invoke } = await import('@tauri-apps/api/core')
+  await invoke('save_project', { id, doc: serializeProject(doc, id) })
+}
+
+/** §3.1 项目级持久化所有者：保存按项目串行（后保存者的内容永不早于先
+ * 保存者落盘）；失败把最新文档登记为待重试并按固定节律后台重试——编辑
+ * 器卸载/导航后组件不复存在，最新文档只存在于这里，瞬时故障（磁盘满/
+ * 权限）不得永久丢编辑。重试绑定**保存代次**：每次入队自增，新保存一
+ * 排队旧代次重试即作废——陈旧文档的重试不得后完成覆盖新内容。删除同样
+ * 排进链：在途保存落定后才删，且先取消全部重试登记，已删项目不得被
+ * 迟到的完成/重试复活。 */
+const SAVE_RETRY_DELAY_MS = 5000
+const saveChains = new Map<string, Promise<unknown>>()
+const pendingRetryDocs = new Map<string, ProjectContent>()
+const retryTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const saveGenerations = new Map<string, number>()
+/** 删除墓碑：删除开始即立——之后为该项目排队的任何保存被吸收，迟到的
+ * 合并冲刷/重试不得重建 JSON 复活用户刚删的项目；删除落定（成功或失败）
+ * 后清除，失败时项目仍在、可继续保存。 */
+const deletingIds = new Set<string>()
+/** 删除期间被吸收的迟到保存：留存最新文档——删除失败（项目仍在磁盘）时
+ * 回吐重存，否则该次冲刷已被上游视为成功，最新编辑既没落盘也无重试
+ * 登记；删除成功即随项目一并丢弃，绝不复活已删项目。 */
+const absorbedSaveDocs = new Map<string, ProjectContent>()
+
+/** 取消后台重试定时器（不触碰登记文档）：删除开场只需停摆定时器——墓碑
+ * 期定时器即使触发也只会被 enqueueSave 吸收（不会复活已删项目），但停摆
+ * 更干净；登记文档留待链落定处的全量清除与回吐判定。 */
+function clearSaveRetryTimer(id: string): void {
+  const timer = retryTimers.get(id)
+  if (timer !== undefined) {
+    clearTimeout(timer)
+    retryTimers.delete(id)
+  }
+}
+
+function clearSaveRetry(id: string): void {
+  clearSaveRetryTimer(id)
+  pendingRetryDocs.delete(id)
+}
+
+function scheduleSaveRetry(id: string, generation: number): void {
+  retryTimers.set(
     id,
-    doc: {
-      name: doc.name,
-      updated_at: 0, // 由 Rust 端盖服务端时间
-      nodes: doc.nodes,
-      edges: doc.edges,
-      settings: doc.settings,
-      episodeTitles: doc.episodeTitles ?? {},
-    },
+    setTimeout(() => {
+      retryTimers.delete(id)
+      // 代次已前进（有更新的保存排队/完成）：本次登记作废，由新代次自洽
+      if (saveGenerations.get(id) !== generation) return
+      const doc = pendingRetryDocs.get(id)
+      if (doc !== undefined) void enqueueSave(id, doc).catch(() => undefined)
+    }, SAVE_RETRY_DELAY_MS),
+  )
+}
+
+function enqueueSave(id: string, doc: ProjectContent): Promise<void> {
+  if (deletingIds.has(id)) {
+    // 吸收但不丢弃：留存最新文档，删除失败时回吐（见 enqueueDelete）
+    absorbedSaveDocs.set(id, doc)
+    console.warn('[projectStore] 项目删除中，吸收本次保存排队', id)
+    return Promise.resolve()
+  }
+  const generation = (saveGenerations.get(id) ?? 0) + 1
+  saveGenerations.set(id, generation)
+  const run = (saveChains.get(id) ?? Promise.resolve()).catch(() => undefined)
+  const next = run.then(async () => {
+    try {
+      await tauriSave(id, doc)
+      pendingRetryDocs.delete(id)
+    } catch (err) {
+      pendingRetryDocs.set(id, doc)
+      // 新代次失败接管定时器：旧代次定时器留着会在触发时因代次不符自灭，
+      // 最新登记将无人重试（编辑器已卸载时即永久丢编辑）
+      const stale = retryTimers.get(id)
+      if (stale !== undefined) {
+        clearTimeout(stale)
+        retryTimers.delete(id)
+      }
+      scheduleSaveRetry(id, generation)
+      console.error('[projectStore] 保存失败，已登记后台重试', err)
+      throw err
+    }
   })
+  saveChains.set(id, next)
+  return next
+}
+
+/** 删除排进同项目保存链：在途保存落定后才发出删除（迟到的保存完成不得
+ * 重建 JSON 复活项目）；开场只停摆重试定时器、保留登记文档——登记反映
+ * 「最新未落盘的失败保存」，后续保存成功会自行清除它；墓碑先行，删除排队
+ * 期间及之后的保存一律吸收。链落定时读取登记（在途保存失败后新登记的、
+ * 或开场留存仍未被取代的）并全量清除，随后删除。删除失败（项目仍在磁盘）
+ * 时按入队序回吐：先链落定时留存的登记文档、再墓碑期间吸收的最新文档
+ * 重新排队保存——不回吐则最新编辑既没落盘也无重试登记；登记为空即最新
+ * 保存已成功（或从未失败），不得回放更早的旧登记（陈旧文档的重试不得
+ * 覆盖新内容）；删除成功则登记与吸收的文档随项目一并丢弃。 */
+function enqueueDelete(id: string): Promise<void> {
+  deletingIds.add(id)
+  clearSaveRetryTimer(id)
+  const run = (saveChains.get(id) ?? Promise.resolve()).catch(() => undefined)
+  let retainedRetryDoc: ProjectContent | undefined
+  const next = run.then(async () => {
+    // 只认此刻的登记：后续保存成功已把它清除（旧代次作废），回退到开场
+    // 捕获值会把被取代的旧文档重放覆盖已落盘的新内容
+    retainedRetryDoc = pendingRetryDocs.get(id)
+    clearSaveRetry(id)
+    const { invoke } = await import('@tauri-apps/api/core')
+    await invoke('delete_project', { id })
+  })
+  next
+    .finally(() => {
+      deletingIds.delete(id)
+    })
+    .then(
+      () => {
+        absorbedSaveDocs.delete(id)
+      },
+      () => {
+        // 墓碑已解除（finally 先行）：回吐的保存走正常排队，不再被吸收
+        const retained = retainedRetryDoc
+        const absorbed = absorbedSaveDocs.get(id)
+        absorbedSaveDocs.delete(id)
+        if (retained !== undefined) void enqueueSave(id, retained).catch(() => undefined)
+        if (absorbed !== undefined) void enqueueSave(id, absorbed).catch(() => undefined)
+      },
+    )
+    .catch(() => undefined)
+  saveChains.set(id, next.catch(() => undefined))
+  return next
 }
 
 /** 统一门面：两种环境同签名。 */
@@ -354,29 +434,53 @@ export const projectStore = {
       ? tauriCreate(name)
       : Promise.resolve(memoryCreate(name)),
 
-  load: (id: string): Promise<ProjectDocument> =>
+  load: (id: string): Promise<ProjectContent> =>
     isTauri ? tauriLoad(id) : memoryLoad(id),
 
-  save: (id: string, doc: ProjectDocument): Promise<void> =>
-    isTauri ? tauriSave(id, doc) : memorySave(id, doc),
+  save: (id: string, doc: ProjectContent): Promise<void> =>
+    isTauri ? enqueueSave(id, doc) : memorySave(id, doc),
 
-  /** 删除项目（首页卡片菜单，§3.2；确认框由界面层负责）。 */
+  /** 删除项目（首页卡片菜单，§3.2；确认框由界面层负责）。排进保存链，
+   * 迟到的保存/重试不得复活已删项目。 */
   delete: (id: string): Promise<void> =>
-    isTauri
-      ? import('@tauri-apps/api/core').then(({ invoke }) => invoke('delete_project', { id }))
-      : memoryDelete(id),
+    isTauri ? enqueueDelete(id) : memoryDelete(id),
 
-  /** 复制项目：读原文档 → 新建「副本」项目 → 写入画布（§3.2）。 */
+  /** 复制项目：读原文档 → 新建「副本」项目 → 整目录拷贝项目资产 → 写入
+   * 画布（§3.2）。副本创建时间取复制时刻。资产索引随文档原样带走——与
+   * avatarAssetId 等引用字段保持一致解析（§8.1）；媒体文件由 Rust 侧
+   * no-follow 拷贝 `projects/{fromId}/assets` → `projects/{toId}/assets`
+   * （§7.1/§7.3），先拷贝后保存，保存边界 §10.5 的实路径复验才能通过。
+   * 任一步失败：清理刚建的空副本项目后向前抛出，绝不静默吞错返回空项目。 */
   duplicate: async (id: string): Promise<ProjectSummary> => {
     const doc = await projectStore.load(id)
-    const name = `${doc.name} 副本`
+    // 命名先于创建（§7.3）：截断保上限 + 冲突递增序号，create 永不因名校验拒绝
+    const taken = new Set((await projectStore.list()).map((p) => p.name))
+    const name = duplicateName(doc.name, taken)
     const meta = await projectStore.create(name)
-    await projectStore.saveQuiet(meta.id, { ...doc, name })
+    try {
+      if (isTauri) {
+        const { invoke } = await import('@tauri-apps/api/core')
+        await invoke('copy_project_assets', { fromId: id, toId: meta.id })
+      }
+      await projectStore.save(meta.id, { ...doc, name, createdAt: undefined })
+    } catch (err) {
+      console.warn('[projectStore] 复制项目失败，清理已建副本', err)
+      // 清理完成后再抛：调用方看到失败时首页不会遗留空「副本」卡片；
+      // 清理自身也失败时合并双错向前抛出并报告可能遗留的副本 id，
+      // 绝不静默吞掉（否则空/半拷贝副本永留首页且无人知晓）
+      await projectStore.delete(meta.id).catch((cleanupErr: unknown) => {
+        console.error('[projectStore] 副本清理失败，首页可能遗留空副本，可手动删除', meta.id, cleanupErr)
+        throw new Error(
+          `复制项目失败（${String(err)}），且副本 ${meta.id} 清理失败（${String(cleanupErr)}）——首页可能遗留空副本，可手动删除`,
+        )
+      })
+      throw err
+    }
     return { ...meta, sceneCount: meta.sceneCount }
   },
 
   /** 静默吞掉持久化错误：画布交互不因落盘失败中断，仅控制台留痕。 */
-  saveQuiet: async (id: string, doc: ProjectDocument): Promise<void> => {
+  saveQuiet: async (id: string, doc: ProjectContent): Promise<void> => {
     try {
       await projectStore.save(id, doc)
     } catch (err) {
@@ -389,19 +493,28 @@ function memoryCreate(name: string): ProjectSummary {
   // 随机尾防同毫秒碰撞（如「复制」紧跟「新建」）：时间戳 id 撞 key 会静默覆盖项目
   const id = `local-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`
   const now = Date.now()
-  memoryStore.set(id, { doc: { name, nodes: [], edges: [], settings: { characters: [], locations: [] } }, updatedAt: now })
+  memoryStore.set(id, {
+    doc: {
+      name,
+      createdAt: new Date(now).toISOString(),
+      nodes: [],
+      edges: [],
+      settings: { characters: [], locations: [] },
+    },
+    updatedAt: now,
+  })
   return { id, name, sceneCount: 0, updatedAt: new Date(now).toISOString() }
 }
 
-async function memoryLoad(id: string): Promise<ProjectDocument> {
+async function memoryLoad(id: string): Promise<ProjectContent> {
   const entry = memoryStore.get(id)
   if (!entry) throw new Error(`项目不存在：${id}`)
-  const raw = JSON.parse(JSON.stringify(entry.doc)) as ProjectDocument
-  return migrateProjectDocument(raw).doc
+  // 内存实现只存当前格式，深拷贝即完整文档
+  return JSON.parse(JSON.stringify(entry.doc)) as ProjectContent
 }
 
-async function memorySave(id: string, doc: ProjectDocument): Promise<void> {
-  memoryStore.set(id, { doc, updatedAt: Date.now() })
+async function memorySave(id: string, doc: ProjectContent): Promise<void> {
+  memoryStore.set(id, { doc: memoryNormalize(doc, id), updatedAt: Date.now() })
 }
 
 async function memoryDelete(id: string): Promise<void> {
