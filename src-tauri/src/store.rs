@@ -480,9 +480,9 @@ fn validate_save_assets(assets: &serde_json::Value) -> Result<(), String> {
     Ok(())
 }
 
-/// 资产路径组件的 no-follow 元数据，缺失映射为「资产文件不存在」。
-fn asset_lstat(path: &std::path::Path, rel_path: &str) -> Result<fs::Metadata, String> {
-    fs::symlink_metadata(path).map_err(|e| {
+/// 资产路径组件的 no-follow 元数据（相对锚定句柄），缺失映射为「资产文件不存在」。
+fn asset_stat(dir: &CapDir, comp: &str, rel_path: &str) -> Result<cap_std::fs::Metadata, String> {
+    dir.symlink_metadata(comp).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             format!("资产文件不存在：{rel_path}")
         } else {
@@ -491,81 +491,33 @@ fn asset_lstat(path: &std::path::Path, rel_path: &str) -> Result<fs::Metadata, S
     })
 }
 
-/// Unix 组件身份 (dev, ino)。
+/// Unix 组件身份 (dev, ino)：读取与资产校验全程句柄相对后，身份比对只在
+/// cap-std 元数据之间进行（归类元数据与打开句柄元数据同源）。
 #[cfg(unix)]
-/// (dev, ino) 身份提取：std 与 cap-std 的 Metadata 分属两个同方法的
-/// MetadataExt trait，以本地 trait 归一供 asset_identity 同时接受。
-#[cfg(unix)]
-trait IdentityExt {
-    fn dev_ino(&self) -> (u64, u64);
-}
-#[cfg(unix)]
-impl IdentityExt for fs::Metadata {
-    fn dev_ino(&self) -> (u64, u64) {
-        use std::os::unix::fs::MetadataExt;
-        (self.dev(), self.ino())
-    }
-}
-#[cfg(unix)]
-impl IdentityExt for cap_std::fs::Metadata {
-    fn dev_ino(&self) -> (u64, u64) {
-        use cap_std::fs::MetadataExt;
-        (self.dev(), self.ino())
-    }
-}
-#[cfg(unix)]
-fn asset_identity(md: &impl IdentityExt) -> (u64, u64) {
-    md.dev_ino()
-}
-
-/// 打开句柄后的三方一致性复核（Unix）：重新逐组件 no-follow 并与第一遍
-/// 记录的 (dev, ino) 比对，句柄元数据须与终点组件一致——校验期间终点或
-/// 任一中间组件被替换（含换成符号链接或另一实体）即拒绝。
-#[cfg(unix)]
-fn bind_asset_handle_identity(
-    root: &std::path::Path,
-    comps: &[&str],
-    comp_ids: &[(u64, u64)],
-    file: &fs::File,
-    rel_path: &str,
-) -> Result<(), String> {
-    let mut recheck = root.to_path_buf();
-    for (i, comp) in comps.iter().enumerate() {
-        recheck.push(comp);
-        let md = asset_lstat(&recheck, rel_path)?;
-        if md.file_type().is_symlink() {
-            return Err(format!("资产路径在复验期间被替换为符号链接：{rel_path}"));
-        }
-        if asset_identity(&md) != comp_ids[i] {
-            return Err(format!("资产路径在复验期间被替换：{rel_path}"));
-        }
-    }
-    let fm = file
-        .metadata()
-        .map_err(|e| format!("读取资产句柄元数据失败（{rel_path}）：{e}"))?;
-    if asset_identity(&fm) != comp_ids[comps.len() - 1] {
-        return Err(format!("资产文件在复验期间被替换：{rel_path}"));
-    }
-    Ok(())
+fn asset_identity(md: &cap_std::fs::Metadata) -> (u64, u64) {
+    use cap_std::fs::MetadataExt;
+    (md.dev(), md.ino())
 }
 
 /// §10.5 保存边界——资产实路径复验（relPath 词法校验之外的文件系统事实）。
 /// 当前扁平布局下项目资产根为 `projects/{id}/`（§10.1 目录化布局随 §7.1 落地
-/// 后由同一函数承接）：根现存时必须是非符号链接的实际目录，随后对 relPath
-/// 逐组件 `symlink_metadata` 拒绝符号链接（no-follow，§10.2 信任链），终点
-/// 必须是普通文件，并以 canonical 包含关系复核未逃逸项目资产根。
-/// 复验与实体绑定：打开终点文件取得句柄，句柄、逐组件 no-follow 元数据与
-/// canonical 路径三方按 (dev, ino) 比对一致才通过（Unix），并把句柄返回给
-/// 调用方持有至保存完成后释放。校验与落盘之间被替换的残余窗口由加载侧
-/// 复验（verify_project_assets）在下次打开时隔离兜底；§10.2 的目录句柄
-/// openat 解析器落地前，这是 std 能力内的最强绑定。
+/// 后由同一函数承接）：全程相对 projects_dir 返回的**受信根锚定句柄**解析
+/// （§10.2 openat 语义，cap-std 沙箱保证不逃出 projects/，canonical 路径比对
+/// 不再需要——路径名比对在校验期间被整体替换的 projects/ 上会验到替换树）。
+/// 项目资产根现存时必须是非符号链接的实际目录（open_dir_bound 身份绑定），
+/// 随后对 relPath 逐组件 `symlink_metadata` 拒绝符号链接（no-follow）、中间
+/// 组件须为目录（逐级 open_dir_bound 绑定身份），终点必须是普通文件且打开
+/// 句柄按 (dev, ino) 与归类实体一致（Unix）——校验与打开之间被替换（含换成
+/// 符号链接或另一实体）即拒绝，句柄返回给调用方持有至保存完成后释放。
+/// 校验与落盘之间被替换的残余窗口由加载侧复验（verify_project_assets）在
+/// 下次打开时隔离兜底。
 fn verify_asset_real_path(
-    projects: &std::path::Path,
+    root: &CapDir,
     id: &str,
     rel_path: &str,
-) -> Result<fs::File, String> {
-    let root = projects.join(id);
-    let root_md = fs::symlink_metadata(&root)
+) -> Result<cap_std::fs::File, String> {
+    let root_md = root
+        .symlink_metadata(id)
         .map_err(|_| format!("项目资产根不存在，资产文件不存在：{rel_path}"))?;
     if root_md.file_type().is_symlink() {
         return Err(format!("项目资产根是符号链接，拒绝校验资产：{rel_path}"));
@@ -573,48 +525,39 @@ fn verify_asset_real_path(
     if !root_md.is_dir() {
         return Err(format!("项目资产根不是目录，资产文件不存在：{rel_path}"));
     }
-    let canonical_root = root
-        .canonicalize()
-        .map_err(|e| format!("解析项目资产根真实路径失败：{e}"))?;
-
-    // 第一遍逐组件 no-follow：拒绝符号链接，中间组件须为目录，记录组件身份
-    #[cfg(unix)]
-    let mut comp_ids: Vec<(u64, u64)> = Vec::new();
+    let mut dir = open_dir_bound(root, id, &root_md, "项目资产根")?;
     let comps: Vec<&str> = rel_path.split('/').collect();
-    let mut cur = root.clone();
-    for (i, comp) in comps.iter().enumerate() {
-        cur.push(comp);
-        let md = asset_lstat(&cur, rel_path)?;
+    let Some((last, parents)) = comps.split_last() else {
+        return Err(format!("资产路径为空：{rel_path}"));
+    };
+    for comp in parents {
+        let md = asset_stat(&dir, comp, rel_path)?;
         if md.file_type().is_symlink() {
             return Err(format!("资产路径含符号链接：{rel_path}"));
         }
-        if i + 1 < comps.len() && !md.is_dir() {
+        if !md.is_dir() {
             return Err(format!("资产路径的中间组件不是目录：{rel_path}"));
         }
-        #[cfg(unix)]
-        comp_ids.push(asset_identity(&md));
+        dir = open_dir_bound(&dir, comp, &md, "资产中间目录")?;
     }
-
-    // 打开终点取得句柄，现场 lstat 复核非符号链接的普通文件，再与第一遍
-    // 的组件身份三方绑定（Unix）
-    let file = fs::File::open(&cur).map_err(|e| format!("打开资产文件失败（{rel_path}）：{e}"))?;
-    let fresh = asset_lstat(&cur, rel_path)?;
-    if fresh.file_type().is_symlink() {
+    let md = asset_stat(&dir, last, rel_path)?;
+    if md.file_type().is_symlink() {
         return Err(format!("资产路径含符号链接：{rel_path}"));
     }
-    if !fresh.is_file() {
+    if !md.is_file() {
         return Err(format!("资产路径不是普通文件：{rel_path}"));
     }
+    let file = dir
+        .open(last)
+        .map_err(|e| format!("打开资产文件失败（{rel_path}）：{e}"))?;
     #[cfg(unix)]
-    bind_asset_handle_identity(&root, &comps, &comp_ids, &file, rel_path)?;
-    #[cfg(not(unix))]
-    let _ = &file;
-
-    let real = cur
-        .canonicalize()
-        .map_err(|e| format!("解析资产真实路径失败（{rel_path}）：{e}"))?;
-    if !real.starts_with(&canonical_root) {
-        return Err(format!("资产路径逃逸项目资产根：{rel_path}"));
+    {
+        let fm = file
+            .metadata()
+            .map_err(|e| format!("读取资产句柄元数据失败（{rel_path}）：{e}"))?;
+        if asset_identity(&fm) != asset_identity(&md) {
+            return Err(format!("资产文件在校验期间被替换：{rel_path}"));
+        }
     }
     Ok(file)
 }
@@ -624,10 +567,10 @@ fn verify_asset_real_path(
 /// 返回已验证资产的打开句柄——调用方持有至保存完成后释放，期间实体不可
 /// 被替换为未验证目标（句柄绑定见 verify_asset_real_path）。
 fn verify_save_asset_files(
-    projects: &std::path::Path,
+    root: &CapDir,
     id: &str,
     assets: &serde_json::Value,
-) -> Result<Vec<fs::File>, String> {
+) -> Result<Vec<cap_std::fs::File>, String> {
     let mut handles = Vec::new();
     let Some(by_id) = assets.get("byId").and_then(|v| v.as_object()) else {
         return Ok(handles);
@@ -640,7 +583,7 @@ fn verify_save_asset_files(
             continue;
         }
         let handle =
-            verify_asset_real_path(projects, id, rel).map_err(|e| format!("资产 {key}：{e}"))?;
+            verify_asset_real_path(root, id, rel).map_err(|e| format!("资产 {key}：{e}"))?;
         handles.push(handle);
     }
     Ok(handles)
@@ -649,11 +592,7 @@ fn verify_save_asset_files(
 /// §7.1/§10.5 加载侧资产实路径复验内核：返回文档 assets.byId 中词法合法、
 /// 但以受信资产根 no-follow 验证失败（缺失/符号链接/非普通文件/逃逸）的
 /// 记录键。词法非法或形状缺失的条目不在此报告——前端形状归一化负责隔离。
-fn unverifiable_asset_keys(
-    dir: &std::path::Path,
-    id: &str,
-    assets: &serde_json::Value,
-) -> Vec<String> {
+fn unverifiable_asset_keys(root: &CapDir, id: &str, assets: &serde_json::Value) -> Vec<String> {
     let mut bad = Vec::new();
     let Some(by_id) = assets.get("byId").and_then(|v| v.as_object()) else {
         return bad;
@@ -665,7 +604,7 @@ fn unverifiable_asset_keys(
         if !is_valid_asset_rel_path(rel) {
             continue;
         }
-        if verify_asset_real_path(dir, id, rel).is_err() {
+        if verify_asset_real_path(root, id, rel).is_err() {
             bad.push(key.clone());
         }
     }
@@ -674,7 +613,8 @@ fn unverifiable_asset_keys(
 
 /// 加载侧资产复验命令：调用方回传刚加载文档的资产索引（避免二次读盘），
 /// 返回不可验证键，交前端归一化层隔离——否则下一次保存会被保存边界
-/// 拒收，防抖静默吞错后用户编辑永不落盘。加载本身保持只读。
+/// 拒收，防抖静默吞错后用户编辑永不落盘。加载本身保持只读；复验相对
+/// projects_dir 的受信根锚定句柄执行。
 #[tauri::command]
 pub fn verify_project_assets(
     app: AppHandle,
@@ -682,8 +622,8 @@ pub fn verify_project_assets(
     assets: serde_json::Value,
 ) -> Result<Vec<String>, String> {
     validate_id(&id)?;
-    let (dir, _) = projects_dir(&app)?;
-    Ok(unverifiable_asset_keys(&dir, &id, &assets))
+    let (_, root) = projects_dir(&app)?;
+    Ok(unverifiable_asset_keys(&root, &id, &assets))
 }
 
 /// save_project 的信封校验与规范化（§10.5）：在创建临时文件、生成保存时间
@@ -950,69 +890,62 @@ fn sort_metas_by_recency(metas: &mut [ProjectMeta]) {
     metas.sort_by_key(|m| std::cmp::Reverse(iso8601_to_epoch_millis(&m.updated_at)));
 }
 
-/// §10.2 控制文件信任链——现存 `projects/{id}.json` 的读取前置校验：
-/// symlink_metadata 拒绝符号链接（无论指向根内或根外），要求普通文件，
-/// canonical 真实路径须仍位于已验证的项目目录内。任一不满足即拒绝读取，
-/// 防止把读取重定向到应用数据根之外。返回最终组件身份（Unix 为
-/// (dev, ino)）供调用方在打开后绑定同一实体——校验与打开之间被替换
-/// （换成符号链接或另一文件）即拒绝且不读取。
-fn verify_control_file(
-    dir: &std::path::Path,
-    path: &std::path::Path,
-) -> Result<Option<(u64, u64)>, String> {
-    let md = fs::symlink_metadata(path).map_err(|e| format!("读取项目文件元数据失败：{e}"))?;
+/// §10.2 控制文件信任链——读取前置校验（句柄相对，no-follow）：拒绝符号
+/// 链接（无论指向根内或根外）、要求普通文件。相对 projects_dir 的**受信
+/// 根锚定句柄**解析使包含关系由 cap-std 沙箱保证，无需 canonical 路径
+/// 比对——路径名比对在 projects/ 校验后被并发整体替换时会验到替换树、
+/// 相互包含照样通过。返回目录项身份（Unix 为 (dev, ino)）供调用方在打开
+/// 后绑定同一实体——校验与打开之间被替换（换成符号链接或另一文件）即
+/// 拒绝且不读取。
+fn verify_control_file(root: &CapDir, name: &str) -> Result<Option<(u64, u64)>, String> {
+    let md = root
+        .symlink_metadata(name)
+        .map_err(|e| format!("读取项目文件元数据失败：{e}"))?;
     if md.file_type().is_symlink() {
         return Err("项目文件是符号链接，拒绝读取".into());
     }
     if !md.is_file() {
         return Err("项目文件不是普通文件".into());
     }
-    // 双方都取 canonical 再比对包含（dir 已 canonical 时幂等；平台差异如
-    // macOS 的 /var → /private/var 不影响判定）
-    let dir = dir
-        .canonicalize()
-        .map_err(|e| format!("解析项目目录真实路径失败：{e}"))?;
-    let real = path
-        .canonicalize()
-        .map_err(|e| format!("解析项目文件真实路径失败：{e}"))?;
-    if !real.starts_with(&dir) {
-        return Err("项目文件真实路径逃逸项目目录".into());
-    }
     #[cfg(unix)]
     {
-        use std::os::unix::fs::MetadataExt;
-        Ok(Some((md.dev(), md.ino())))
+        Ok(Some(asset_identity(&md)))
     }
     #[cfg(not(unix))]
     Ok(None)
 }
 
-/// 列出全部项目，按更新时间新→旧排序。
+/// 列出全部项目，按更新时间新→旧排序。扫描相对受信根锚定句柄执行。
 #[tauri::command]
 pub fn list_projects(app: AppHandle) -> Result<Vec<ProjectMeta>, String> {
-    let (dir, _) = projects_dir(&app)?;
-    list_project_metas(&dir)
+    let (_, root) = projects_dir(&app)?;
+    list_project_metas(&root)
 }
 
-/// list_projects 的可测内核（给定已验证的 projects 目录）。目录扫描逐条
-/// 跳过符号链接/异型项/坏文件（单条坏数据不阻断列表），读取走
-/// read_verified_file 的已验证句柄绑定——校验通过后路径被并发替换为
-/// 符号链接或另一文件时，读到的仍是校验时的同一实体，否则跳过该条目。
-fn list_project_metas(dir: &std::path::Path) -> Result<Vec<ProjectMeta>, String> {
+/// list_projects 的可测内核（给定已验证的 projects 根句柄）。目录扫描逐条
+/// 跳过符号链接/异型项/坏文件（单条坏数据不阻断列表），扫描与读取全程
+/// 句柄相对——projects/ 路径名被并发整体替换也不会列出替换树的条目；
+/// 读取走 read_verified_file 的身份绑定，校验通过后被并发替换为符号链接
+/// 或另一文件时读到的仍是校验时的同一实体，否则跳过该条目。
+fn list_project_metas(root: &CapDir) -> Result<Vec<ProjectMeta>, String> {
     let mut metas: Vec<ProjectMeta> = Vec::new();
-    for entry in fs::read_dir(dir).map_err(|e| format!("读取项目目录失败：{e}"))? {
-        let path = entry.map_err(|e| format!("遍历项目目录失败：{e}"))?.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+    for entry in root
+        .entries()
+        .map_err(|e| format!("读取项目目录失败：{e}"))?
+    {
+        let entry = entry.map_err(|e| format!("遍历项目目录失败：{e}"))?;
+        let file_name = entry.file_name();
+        let Some(name) = file_name.to_str() else {
             continue;
-        }
-        let Some(id) = path.file_stem().and_then(|s| s.to_str()) else {
+        };
+        let Some(id) = name.strip_suffix(".json") else {
             continue;
         };
         if validate_id(id).is_err() {
             continue;
         }
         // §10.2 目录扫描：校验 + 打开 + 读取绑定同一实体，绝不跟随替换
-        let Ok(text) = read_verified_file(dir, &path) else {
+        let Ok(text) = read_verified_file(root, name) else {
             continue;
         };
         if let Ok(file) = parse_file(id, &text) {
@@ -1183,44 +1116,50 @@ pub fn create_project(app: AppHandle, name: String) -> Result<ProjectMeta, Strin
     Ok(read_meta(&id, &file))
 }
 
-/// 读取项目完整内容（含画布）；旧扁平格式包装为 v0 信封返回。
+/// 读取项目完整内容（含画布）；旧扁平格式包装为 v0 信封返回。读取相对
+/// projects_dir 的受信根锚定句柄解析（§10.2），不按路径名重开。
 #[tauri::command]
 pub fn load_project(app: AppHandle, id: String) -> Result<ProjectFile, String> {
-    let (dir, _) = projects_dir(&app)?;
-    load_project_file(&dir, &id)
+    let (_, root) = projects_dir(&app)?;
+    load_project_file(&root, &id)
 }
 
 /// load_project 的可测内核：id 是 IPC 调用方传入的不可信参数，词法校验
 /// 先于任何路径拼接——嵌套路径形态的 id（如 `p-1/assets/x`）不得把
-/// projects/ 内的任意 JSON 经项目通道读出（verify_control_file 只验包含
-/// 关系，拦不住深度嵌套的常规文件）。读取走 read_verified_file 的已验证
-/// 句柄绑定。
-fn load_project_file(dir: &std::path::Path, id: &str) -> Result<ProjectFile, String> {
+/// projects/ 内的任意 JSON 经项目通道读出（句柄相对解析被沙箱限定在
+/// projects/ 树内）。读取走 read_verified_file 的锚定句柄绑定。
+fn load_project_file(root: &CapDir, id: &str) -> Result<ProjectFile, String> {
     validate_id(id)?;
-    let path = dir.join(format!("{id}.json"));
-    if !path.exists() {
-        return Err(format!("项目不存在：{id}"));
+    let name = format!("{id}.json");
+    match root.symlink_metadata(&name) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(format!("项目不存在：{id}"))
+        }
+        Err(e) => return Err(format!("读取项目文件元数据失败：{e}")),
+        Ok(_) => {}
     }
-    let text = read_verified_file(dir, &path).map_err(|e| format!("拒绝读取项目文件：{e}"))?;
+    let text = read_verified_file(root, &name).map_err(|e| format!("拒绝读取项目文件：{e}"))?;
     parse_file(id, &text).map_err(|e| format!("项目文件损坏：{e}"))
 }
 
-/// 经已验证句柄读取项目文件文本（load/list 共用内核）：verify_control_file
-/// 校验后打开句柄并按 (dev, ino) 与校验时身份比对一致后才从**同一句柄**
-/// 读取——校验与打开之间路径被换成符号链接/另一文件时拒绝且不读取，打开
-/// 之后的路径替换不影响所读内容。目录扫描（list）与按 id 读取（load）
-/// 共用此绑定，杜绝「验一个路径、读另一个实体」的 TOCTOU 窗口。
-fn read_verified_file(dir: &std::path::Path, path: &std::path::Path) -> Result<String, String> {
-    let verified_identity = verify_control_file(dir, path)?;
+/// 经已验证句柄读取项目文件文本（load/list 共用内核）：校验、打开与读取
+/// 全程相对 projects_dir 返回的**受信根锚定句柄**——归类（no-follow 元数据，
+/// 拒符号链接、要求普通文件）、打开与 (dev, ino) 身份比对均不按路径名重新
+/// 解析，projects/ 路径名在校验后被并发整体替换（rename 换目录树）也无法
+/// 把读取引到替换树；cap-std 沙箱保证解析不逃出锚定根，校验与打开之间的
+/// 目录项替换（换成符号链接或另一文件）由身份比对拒绝且不读取。
+fn read_verified_file(root: &CapDir, name: &str) -> Result<String, String> {
+    let verified_identity = verify_control_file(root, name)?;
     use std::io::Read;
-    let mut file = fs::File::open(path).map_err(|e| format!("打开项目文件失败：{e}"))?;
+    let mut file = root
+        .open(name)
+        .map_err(|e| format!("打开项目文件失败：{e}"))?;
     #[cfg(unix)]
-    if let Some((dev, ino)) = verified_identity {
-        use std::os::unix::fs::MetadataExt;
+    if let Some(id) = verified_identity {
         let fm = file
             .metadata()
             .map_err(|e| format!("读取项目文件句柄元数据失败：{e}"))?;
-        if (fm.dev(), fm.ino()) != (dev, ino) {
+        if asset_identity(&fm) != id {
             return Err("项目文件在读取前被替换，拒绝读取".into());
         }
     }
@@ -1253,11 +1192,11 @@ fn persist_project(
 ) -> Result<ProjectMeta, String> {
     validate_id(id)?;
     // 句柄持有至函数结束——复验过的实体覆盖整个保存决策
-    let _verified_assets = verify_save_asset_files(dir, id, &doc.assets)?;
+    let _verified_assets = verify_save_asset_files(root, id, &doc.assets)?;
     let file = prepare_save(id, &doc)?;
     let text = serde_json::to_string_pretty(&file).map_err(|e| format!("序列化失败：{e}"))?;
     atomic_write(root, dir, &format!("{id}.json"), &text)?;
-    if let Err(e) = verify_save_asset_files(dir, id, &doc.assets) {
+    if let Err(e) = verify_save_asset_files(root, id, &doc.assets) {
         eprintln!("[store] 保存后资产复验失败，路径可能在保存期间被替换：{e}");
         return Err(format!(
             "保存后资产复验失败（路径可能在保存期间被替换）：{e}"
@@ -2138,7 +2077,7 @@ mod tests {
         let assets = projects.join("p-1").join("assets");
         fs::create_dir_all(&assets).expect("创建资产目录");
         fs::write(assets.join("a1.png"), b"png").expect("写入资产文件");
-        assert!(verify_asset_real_path(&projects, "p-1", "assets/a1.png").is_ok());
+        assert!(verify_asset_real_path(&cap(&projects), "p-1", "assets/a1.png").is_ok());
         cleanup_temp(&projects);
     }
 
@@ -2146,10 +2085,10 @@ mod tests {
     fn verify_asset_real_path_rejects_missing_file_and_missing_root() {
         let projects = temp_projects_dir();
         fs::create_dir_all(projects.join("p-1").join("assets")).expect("创建资产目录");
-        let err = verify_asset_real_path(&projects, "p-1", "assets/gone.png").unwrap_err();
+        let err = verify_asset_real_path(&cap(&projects), "p-1", "assets/gone.png").unwrap_err();
         assert!(err.contains("资产文件不存在"), "意外诊断：{err}");
         // 项目资产根本身缺失同样拒存（该项目从未落过资产文件）
-        assert!(verify_asset_real_path(&projects, "p-2", "assets/a1.png").is_err());
+        assert!(verify_asset_real_path(&cap(&projects), "p-2", "assets/a1.png").is_err());
         cleanup_temp(&projects);
     }
 
@@ -2162,7 +2101,7 @@ mod tests {
         let outside = projects.parent().expect("临时根").join("secret.png");
         fs::write(&outside, b"secret").expect("写入根外文件");
         std::os::unix::fs::symlink(&outside, assets.join("link.png")).expect("建立符号链接");
-        let err = verify_asset_real_path(&projects, "p-1", "assets/link.png").unwrap_err();
+        let err = verify_asset_real_path(&cap(&projects), "p-1", "assets/link.png").unwrap_err();
         assert!(err.contains("符号链接"), "意外诊断：{err}");
         cleanup_temp(&projects);
     }
@@ -2172,10 +2111,10 @@ mod tests {
         let projects = temp_projects_dir();
         // relPath 词法非法的条目交给 prepare_save 的形状诊断，实路径复验跳过不误报
         let doc_assets = json!({ "byId": { "a-bad": { "relPath": "../evil.png" } } });
-        assert!(verify_save_asset_files(&projects, "p-1", &doc_assets).is_ok());
+        assert!(verify_save_asset_files(&cap(&projects), "p-1", &doc_assets).is_ok());
 
         let doc_assets = json!({ "byId": { "a1": { "relPath": "assets/a1.png" } } });
-        let err = verify_save_asset_files(&projects, "p-1", &doc_assets).unwrap_err();
+        let err = verify_save_asset_files(&cap(&projects), "p-1", &doc_assets).unwrap_err();
         assert!(err.contains("资产 a1"), "诊断缺资产键：{err}");
         cleanup_temp(&projects);
     }
@@ -2272,7 +2211,7 @@ mod tests {
             "a-bad": { "relPath": "../evil.png" },
             "a-noshape": {},
         }});
-        let keys = unverifiable_asset_keys(&projects, "p-1", &assets);
+        let keys = unverifiable_asset_keys(&cap(&projects), "p-1", &assets);
         assert_eq!(keys, vec!["a-miss".to_string()]);
         cleanup_temp(&projects);
     }
@@ -2287,7 +2226,7 @@ mod tests {
         fs::write(&outside, b"s").expect("写根外文件");
         std::os::unix::fs::symlink(&outside, assets_dir.join("link.png")).expect("建符号链接");
         let assets = json!({ "byId": { "a-link": { "relPath": "assets/link.png" } } });
-        let keys = unverifiable_asset_keys(&projects, "p-1", &assets);
+        let keys = unverifiable_asset_keys(&cap(&projects), "p-1", &assets);
         assert_eq!(keys, vec!["a-link".to_string()]);
         cleanup_temp(&projects);
     }
@@ -2296,14 +2235,14 @@ mod tests {
         let projects = temp_projects_dir();
         let file = projects.join("p-1.json");
         fs::write(&file, b"{}").expect("写项目文件");
-        assert!(verify_control_file(&projects, &file).is_ok());
+        assert!(verify_control_file(&cap(&projects), "p-1.json").is_ok());
         // 目录占位：不是普通文件
         let dir_as_file = projects.join("p-2.json");
         fs::create_dir(&dir_as_file).expect("建目录占位");
-        let err = verify_control_file(&projects, &dir_as_file).unwrap_err();
+        let err = verify_control_file(&cap(&projects), "p-2.json").unwrap_err();
         assert!(err.contains("普通文件"), "意外诊断：{err}");
         // 缺失文件拒绝（读取前置）
-        assert!(verify_control_file(&projects, &projects.join("p-3.json")).is_err());
+        assert!(verify_control_file(&cap(&projects), "p-3.json").is_err());
         cleanup_temp(&projects);
     }
 
@@ -2314,7 +2253,7 @@ mod tests {
         let outside = projects.parent().expect("临时根").join("evil.json");
         fs::write(&outside, b"{}").expect("写根外文件");
         std::os::unix::fs::symlink(&outside, projects.join("p-1.json")).expect("建符号链接");
-        let err = verify_control_file(&projects, &projects.join("p-1.json")).unwrap_err();
+        let err = verify_control_file(&cap(&projects), "p-1.json").unwrap_err();
         assert!(err.contains("符号链接"), "意外诊断：{err}");
         cleanup_temp(&projects);
     }
@@ -2325,7 +2264,7 @@ mod tests {
         fs::create_dir_all(&assets).expect("建资产目录");
         fs::write(assets.join("a1.png"), b"png").expect("写资产文件");
         // 复验绑定打开句柄：调用方（save_project）持有至保存完成才释放
-        let handle = verify_asset_real_path(&projects, "p-1", "assets/a1.png")
+        let handle = verify_asset_real_path(&cap(&projects), "p-1", "assets/a1.png")
             .expect("复验通过应返回已打开的句柄");
         let md = handle.metadata().expect("句柄元数据可读");
         assert!(md.is_file());
@@ -2388,7 +2327,7 @@ mod tests {
         let second = new_project_file("p-1", "二版".into(), now_iso());
         persist_project(&cap(&projects), &projects, "p-1", second)
             .expect("覆盖保存（rename 替换已存在目标）");
-        let loaded = load_project_file(&projects, "p-1").expect("重读");
+        let loaded = load_project_file(&cap(&projects), "p-1").expect("重读");
         assert_eq!(loaded.project.name, "二版");
         let leftovers: Vec<String> = fs::read_dir(&projects)
             .expect("扫描项目目录")
@@ -2445,7 +2384,7 @@ mod tests {
     fn load_project_file_rejects_path_like_id_before_any_join() {
         let projects = temp_projects_dir();
         // 嵌套路径形态的 id：projects/ 内的资产/私有 JSON 不得经 load_project 读出
-        let err = load_project_file(&projects, "p-1/assets/private").unwrap_err();
+        let err = load_project_file(&cap(&projects), "p-1/assets/private").unwrap_err();
         assert!(
             err.contains("非法") || err.contains("不存在"),
             "意外诊断：{err}"
@@ -2457,9 +2396,35 @@ mod tests {
         let projects = temp_projects_dir();
         let doc = new_project_file("p-1", "午夜出租车".into(), now_iso());
         persist_project(&cap(&projects), &projects, "p-1", doc).expect("先保存");
-        let loaded = load_project_file(&projects, "p-1").expect("从已验证句柄读取");
+        let loaded = load_project_file(&cap(&projects), "p-1").expect("从已验证句柄读取");
         assert_eq!(loaded.project.name, "午夜出租车");
         assert_eq!(loaded.schema_version, 1);
+        cleanup_temp(&projects);
+    }
+
+    #[test]
+    fn load_and_list_read_anchored_tree_after_dir_replacement() {
+        let projects = temp_projects_dir();
+        let doc = new_project_file("p-1", "正版".into(), now_iso());
+        persist_project(&cap(&projects), &projects, "p-1", doc).expect("先保存");
+        // 受信根锚定后，另一本地进程把 projects/ 路径名整体换成外部目录树
+        let root = cap(&projects);
+        let tmp_root = projects.parent().expect("临时根").to_path_buf();
+        let rogue = tmp_root.join("rogue");
+        fs::create_dir_all(&rogue).expect("建替换目录");
+        fs::write(
+            rogue.join("p-1.json"),
+            r#"{"schemaVersion":1,"project":{"id":"p-1","name":"外部内容","createdAt":"","updatedAt":""}}"#,
+        )
+        .expect("写替换内容");
+        fs::rename(&projects, tmp_root.join("stolen")).expect("移走锚定目录");
+        fs::rename(&rogue, &projects).expect("占用原路径名");
+        // 读取/列表只认锚定句柄：不得从替换树读出外部内容
+        let loaded = load_project_file(&root, "p-1").expect("读取");
+        assert_eq!(loaded.project.name, "正版");
+        let metas = list_project_metas(&root).expect("列表");
+        assert_eq!(metas.len(), 1);
+        assert_eq!(metas[0].name, "正版");
         cleanup_temp(&projects);
     }
 
@@ -2477,7 +2442,7 @@ mod tests {
         )
         .expect("写根外文件");
         std::os::unix::fs::symlink(&outside, projects.join("p-2.json")).expect("建符号链接");
-        let metas = list_project_metas(&projects).expect("列出项目");
+        let metas = list_project_metas(&cap(&projects)).expect("列出项目");
         assert_eq!(metas.len(), 1);
         assert_eq!(metas[0].id, "p-1");
         cleanup_temp(&projects);

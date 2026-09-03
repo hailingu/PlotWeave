@@ -91,6 +91,9 @@ export interface ShotRefBase {
   kind: 'character' | 'location' | 'audio'
 }
 
+/** 分镜引用位的判别联合：assetId 引用位（按 assets.byId 解析的唯一真相）
+ * 与 label 自由位（手填文案）互斥——`?: never` 使运行时判别与序列化校验
+ * 共用同一穷尽形状，二者并存或皆无在归一化层按异型成员隔离。 */
 export type ShotRef =
   | (ShotRefBase & { assetId: string; label?: never })
   | (ShotRefBase & { label: string; assetId?: never })

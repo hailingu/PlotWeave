@@ -152,7 +152,14 @@ async function tauriList(): Promise<ProjectSummary[]> {
     if (!meta.id.startsWith('sample-')) continue
     if (!seedProjects().some((s) => s.meta.id === meta.id)) continue
     const file = await invoke<unknown>('load_project', { id: meta.id })
-    const { content, migrated, repaired } = parseProject(file, { projectId: meta.id })
+    // 与 tauriLoad 同款加载侧资产复验（§7.1/§10.5）：示例可能带已损坏（文件
+    // 缺失/被换符号链接）的索引资产——不复验直接回写会被保存边界整次拒收，
+    // list 因此中止、首页被清成空列表；不可验证键交归一化隔离后再回写
+    const invalidAssetKeys = await invoke<string[]>('verify_project_assets', {
+      id: meta.id,
+      assets: (file as { assets?: unknown }).assets ?? {},
+    })
+    const { content, migrated, repaired } = parseProject(file, { projectId: meta.id, invalidAssetKeys })
     if (migrated || repaired) {
       await tauriSave(meta.id, content)
       repairedAny = true

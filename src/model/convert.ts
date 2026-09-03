@@ -2191,8 +2191,8 @@ export function parseProject(raw: unknown, env: NormalizeEnv = {}): ParseResult 
     throw new TypeError('项目文件损坏：不是有效的文档对象')
   }
   const version = (raw as { schemaVersion?: unknown }).schemaVersion
-  if (typeof version !== 'number') {
-    throw new TypeError('项目文件损坏：缺少 schemaVersion')
+  if (typeof version !== 'number' || !Number.isSafeInteger(version) || version < 0) {
+    throw new TypeError('项目文件损坏：schemaVersion 缺失或非法（须为非负安全整数，§11.1 第 0 步）')
   }
   if (version > CURRENT_SCHEMA_VERSION) {
     throw new Error(`文档版本过新（schemaVersion ${version}），请升级应用`)

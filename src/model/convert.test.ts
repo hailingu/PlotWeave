@@ -284,6 +284,13 @@ describe('parseProject（ProjectDocument → 会话文档，§11 归一化）', 
     ).toThrow(/升级应用/)
   })
 
+  it('schemaVersion 负数/小数/NaN/非有限值：按损坏拒绝，不得按形状降级当 v1 归一化（§11.1 第 0 步）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    for (const bad of [-1, 0.5, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => parseProject({ ...doc, schemaVersion: bad }), `schemaVersion ${String(bad)}`).toThrow(TypeError)
+    }
+  })
+
   it('孤儿边隔离并记录警告，不阻断加载（§11.3）', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW)
     doc.graph.edges.push({ id: 'e-ghost', source: 's1', target: 'ghost', data: { kind: 'sequence' } })

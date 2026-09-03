@@ -506,6 +506,55 @@ describe('tauriList：空库播种与示例升级', () => {
     // 重列返回的首页列表就绪（不再抛未处理拒绝）
     expect(list.map((x) => x.id)).toContain('sample-wu-ye-chu-zu-che')
   })
+
+  it('示例迁移/修复回写前先过加载侧资产复验：不可验证键隔离后再回写，坏资产不再让 list 中止、首页清空', async () => {
+    handlers.set('list_projects', () => [meta('sample-wu-ye-chu-zu-che'), meta('user-p1')])
+    let loadCalls = 0
+    handlers.set('load_project', (args) => {
+      const { id } = args as { id: string }
+      if (id !== 'sample-wu-ye-chu-zu-che') throw new Error('不应读取用户项目')
+      loadCalls += 1
+      if (loadCalls === 1) {
+        // 脏 v1 示例（空白边 id 触发修复），索引带一个 Rust 实路径复验
+        // 不过（文件缺失）的资产
+        return {
+          ...modernFile(),
+          project: { ...modernFile().project, id, name: '我的修改版' },
+          graph: { ...modernFile().graph, edges: [{ id: '   ', source: 's1', target: 's1', data: { kind: 'sequence' } }] },
+          assets: {
+            byId: {
+              'a-1': { id: 'a-1', relPath: 'assets/lost.png', mime: 'image/png', source: 'upload', createdAt: '2026-01-01T00:00:00.000Z' },
+            },
+          },
+        }
+      }
+      // 回写后的净本：坏资产已隔离，重列复检不再触发写
+      return { ...modernFile(), project: { ...modernFile().project, id, name: '我的修改版' } }
+    })
+    handlers.set('verify_project_assets', (args) => {
+      const sent = (args as { assets: { byId?: Record<string, unknown> } }).assets
+      return sent.byId?.['a-1'] !== undefined ? ['a-1'] : []
+    })
+    // 保存边界（§10.5）对不可验证资产整次拒收：mock 复刻该契约
+    handlers.set('save_project', (args) => {
+      const doc = (args as { doc: { assets?: { byId?: Record<string, unknown> } } }).doc
+      if (doc.assets?.byId?.['a-1'] !== undefined) {
+        throw new Error('资产 a-1：资产文件不存在：assets/lost.png')
+      }
+      return undefined
+    })
+    const { projectStore } = await load()
+    const list = await projectStore.list()
+    // 红（修复前）：tauriList 不做资产复验，回写被保存边界拒收 → list 整体抛错
+    expect(list.map((x) => x.id)).toContain('sample-wu-ye-chu-zu-che')
+    // 复验以示例 id 与其资产索引调用，回写文档已隔离坏资产
+    const verify = calls.find((c) => c.cmd === 'verify_project_assets')
+    expect((verify?.args as { id: string }).id).toBe('sample-wu-ye-chu-zu-che')
+    const saves = calls.filter((c) => c.cmd === 'save_project')
+    expect(saves).toHaveLength(1)
+    const saved = (saves[0].args as { doc: { assets: { byId: Record<string, unknown> } } }).doc
+    expect(saved.assets.byId['a-1']).toBeUndefined()
+  })
 })
 
 describe('tauriCreate / delete / duplicate', () => {
