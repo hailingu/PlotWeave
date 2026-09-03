@@ -1518,6 +1518,29 @@ describe('归一化：assets.byId 完整 AssetRef 形状校验（§11.3，Rust �
     expect(again.project.createdAt).toBe(round.content.createdAt)
   })
 
+  it('对白文本 @ 提及扫描（§11.1 第 5 步）：悬空 token 警告失效、畸形/未闭合片段警告并保留原文', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
+      graph: { nodes: Array<{ type?: string; data: { spec: { lines?: Array<Record<string, unknown>> } } }> }
+    }
+    const dialogue = doc.graph.nodes.find((n) => n.type === 'dialogue')!
+    const lines = dialogue.data.spec.lines!
+    const line = lines.find((l) => l.kind === 'line') ?? lines[0]
+    const original =
+      '呼唤 @[character:ghost] 与畸形 @[character:bad id] 以及 @[character:未闭合 的混合'
+    line.text = original
+    const round = parseProject(doc)
+    // 红：提及扫描缺失——悬空 token 与畸形片段无声进入活动文档
+    expect(round.warnings.some((w) => w.includes('ghost') && w.includes('失效'))).toBe(true)
+    expect(round.warnings.some((w) => w.includes('非法') && w.includes('片段'))).toBe(true)
+    expect(round.warnings.some((w) => w.includes('未闭合'))).toBe(true)
+    // token 与片段一律保留原文（不改写、不删除）；有效 token（目标存在）不警告
+    const out = round.content.nodes.find((n) => n.type === 'dialogue')!.data as unknown as {
+      lines: Array<Record<string, unknown>>
+    }
+    expect(out.lines.some((l) => l.text === original)).toBe(true)
+    expect(round.warnings.some((w) => w.includes('ch-1'))).toBe(false)
+  })
+
   it('对白行 speaker 空白且无映射：移除并警告——与场景/分镜路径同口径收口', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
       graph: { nodes: Array<{ type?: string; data: { spec: { lines?: Array<Record<string, unknown>> } } }> }

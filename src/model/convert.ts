@@ -1626,6 +1626,47 @@ function shotRefWarnings(n: StoryNode, doc: ProjectDocument, warnings: string[])
   }
 }
 
+/** 对白文本的 @ 提及 token 扫描（§11.1 第 5 步）：按 §8.1.2 固定语法
+ * 判定 token 形片段——`@[character:<安全 id>]` 为合法 token，目标不存在时
+ * 警告失效（token 本身保留，悬空展示与恢复由 UI 消费）；近似但非法的
+ * 片段（id 不满足安全字符集、未闭合）保留原文并警告。文本一律不改写。 */
+function dialogueMentionWarnings(n: StoryNode, doc: ProjectDocument, warnings: string[]): void {
+  const lines = (n.data.spec as { lines?: Array<{ text?: unknown }> }).lines ?? []
+  for (const [i, line] of lines.entries()) {
+    if (typeof line.text !== 'string') continue
+    for (const issue of mentionIssuesOfLine(line.text, doc.settings.characters ?? {})) {
+      warnings.push(`节点 ${n.id} 的对白行 ${i} ${issue}`)
+    }
+  }
+}
+
+/** 单行文本的 @ 提及 token 判定（dialogueMentionWarnings 内核，S3776 拆解）：
+ * 逐片段返回问题文案（空数组 = 无问题），不改写文本。 */
+function mentionIssuesOfLine(
+  text: string,
+  characters: Record<string, unknown>,
+): string[] {
+  const issues: string[] = []
+  const prefix = '@[character:'
+  let from = 0
+  for (;;) {
+    const start = text.indexOf(prefix, from)
+    if (start === -1) return issues
+    const close = text.indexOf(']', start + prefix.length)
+    if (close === -1) {
+      issues.push('含未闭合的提及 token 片段，已保留原文')
+      return issues
+    }
+    const id = text.slice(start + prefix.length, close)
+    if (!SAFE_CHARACTER_ID.test(id)) {
+      issues.push('含非法的提及 token 形片段，已保留原文')
+    } else if (characters[id] === undefined) {
+      issues.push(`的提及 token @[character:${id}] 目标不存在，已标记失效（token 保留）`)
+    }
+    from = close + 1
+  }
+}
+
 /** 按节点类型分发悬空设定/资产引用检查（§11.4）。 */
 function collectDanglingRefWarnings(
   n: StoryNode,
@@ -1633,7 +1674,10 @@ function collectDanglingRefWarnings(
   warnings: string[],
 ): void {
   if (n.type === 'scene') sceneRefWarnings(n, doc, warnings)
-  if (n.type === 'dialogue') dialogueRefWarnings(n, doc, warnings)
+  if (n.type === 'dialogue') {
+    dialogueRefWarnings(n, doc, warnings)
+    dialogueMentionWarnings(n, doc, warnings)
+  }
   if (n.type === 'shot') shotRefWarnings(n, doc, warnings)
 }
 

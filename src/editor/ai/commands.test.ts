@@ -594,6 +594,45 @@ describe('AI 批量命令的逐类型载荷形状校验（信任边界：字段�
     expect(noAssets.issues[0].message).toContain('不存在')
   })
 
+  it('update_node 的无 id 对象简写同款按位复用既有稳定 id（孪生路径）', () => {
+    // 红：id-less 对象被 normalizeIds 整体发新 id——全部既有 option- 句柄
+    // 被视为已删选项，引出连线被静默清除
+    const v = validateAiBatch(
+      [
+        {
+          op: 'update_node',
+          nodeId: 'b1',
+          patch: { options: [{ label: '追！' }, { label: '不追' }] },
+        },
+      ],
+      richSnap(),
+    )
+    expect(v.ok).toBe(true)
+    const patch = (v.commands[0] as unknown as {
+      patch: { options: Array<{ id: string; label: string }> }
+    }).patch
+    expect(patch.options).toEqual([
+      { id: 'ob-a', label: '追！' },
+      { id: 'ob-b', label: '不追' },
+    ])
+
+    // 混合形态：字符串与无 id 对象都按位绑定，显式合法 id 的对象保留自报 id
+    const mixed = validateAiBatch(
+      [
+        {
+          op: 'update_node',
+          nodeId: 'b1',
+          patch: { options: ['追！', { label: '不追' }, { id: 'ob-x', label: '新选项' }] },
+        },
+      ],
+      richSnap(),
+    )
+    const mixedOptions = (mixed.commands[0] as unknown as {
+      patch: { options: Array<{ id: string }> }
+    }).patch.options
+    expect(mixedOptions.map((o) => o.id)).toEqual(['ob-a', 'ob-b', 'ob-x'])
+  })
+
   it('update_node 的字符串选项按位置复用既有稳定 id：重命名不清空引出连线', () => {
     // 红：字符串形态整体重发新 id——全部既有 option- 句柄被视为已删选项，
     // 折叠/模拟静默清除每条引出线，而预览只显示一次普通选项更新

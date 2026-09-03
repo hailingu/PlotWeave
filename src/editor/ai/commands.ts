@@ -265,9 +265,17 @@ function normalizeNodeFields(
     const existing = existingOptions ?? []
     out.options = normalizeIds(
       (out.options as unknown[]).map((o, i) => {
-        if (typeof o !== 'string') return o
-        const prev = existing[i]
-        return prev !== undefined ? { id: prev.id, label: o } : { label: o }
+        // 字符串与无 id 的对象简写都按位置对位复用（重命名语义）；显式
+        // 合法 id 的对象保留自报 id（用户显式定向到具体选项）
+        if (typeof o === 'string') {
+          const prev = existing[i]
+          return prev !== undefined ? { id: prev.id, label: o } : { label: o }
+        }
+        if (plainObject(o) && (typeof o.id !== 'string' || o.id.trim() === '')) {
+          const prev = existing[i]
+          if (prev !== undefined) return { ...o, id: prev.id }
+        }
+        return o
       }),
       'opt',
     )
