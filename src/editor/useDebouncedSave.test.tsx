@@ -149,6 +149,30 @@ describe('useDebouncedSave（防抖落盘 + 脏态卸载冲刷）', () => {
     expect(onSave).not.toHaveBeenCalled()
   })
 
+  it('className 运行态样式变化不置脏（集聚焦 pw-node-dim 等纯 UI 变化不刷新 updatedAt）', () => {
+    const onSave = vi.fn()
+    const { rerender, unmount } = renderHook(({ doc }) => useDebouncedSave(doc, onSave), {
+      initialProps: { doc: mkDoc() },
+    })
+    // 运行态样式类注入/剥离（displayNodes 投影、fromStoryEdge 派生重建等
+    // 带来的 className 差异）不是持久化内容——签名须与序列化同口径剥离
+    const base = mkDoc()
+    const styleOnly: ProjectContent = {
+      ...base,
+      nodes: [{ ...base.nodes[0], className: 'pw-node-dim' } as unknown as CanvasNode],
+      edges: [{ id: 'e1', source: 'a', target: 'b', className: 'pw-edge-sequence' }],
+    }
+    act(() => {
+      rerender({ doc: styleOnly })
+    })
+    act(() => {
+      vi.advanceTimersByTime(1000)
+    })
+    expect(onSave).not.toHaveBeenCalled()
+    unmount()
+    expect(onSave).not.toHaveBeenCalled()
+  })
+
   it('会话态变化之后的真实内容变化仍正常落盘', () => {
     const onSave = vi.fn()
     const { rerender } = renderHook(({ doc }) => useDebouncedSave(doc, onSave), {
