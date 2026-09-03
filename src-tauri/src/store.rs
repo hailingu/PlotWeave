@@ -13,7 +13,6 @@
 
 use std::collections::HashSet;
 use std::fs;
-use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use cap_std::{ambient_authority, fs::Dir as CapDir};
@@ -629,7 +628,7 @@ pub fn verify_project_assets(
     assets: serde_json::Value,
 ) -> Result<Vec<String>, String> {
     validate_id(&id)?;
-    let (_, root) = projects_dir(&app)?;
+    let root = projects_dir(&app)?;
     Ok(unverifiable_asset_keys(&root, &id, &assets))
 }
 
@@ -672,27 +671,6 @@ fn prepare_save(id: &str, doc: &ProjectFile) -> Result<ProjectFile, String> {
     })
 }
 
-/// rename 的父目录持久性屏障（§10.2）。Unix：打开目录句柄并 sync_all。
-/// Windows：std 的 `File::open` 不带目录句柄所需的 FILE_FLAG_BACKUP_
-/// SEMANTICS，打开必然失败——且发生在 rename 已提交之后，会把每次成功的
-/// 写落盘误报为失败（自动保存无限重试）。该平台跳过屏障而非误报。
-fn sync_directory(dir: &std::path::Path) -> Result<(), String> {
-    #[cfg(unix)]
-    {
-        let d =
-            fs::File::open(dir).map_err(|e| format!("打开项目目录失败（持久性屏障缺失）：{e}"))?;
-        d.sync_all()
-            .map_err(|e| format!("同步项目目录失败（持久性屏障缺失）：{e}"))?;
-    }
-    #[cfg(not(unix))]
-    {
-        // std 无法以目录语义打开句柄；「打开/同步失败不粉饰成功」的契约
-        // 只对可实现该屏障的平台生效
-        let _ = dir;
-    }
-    Ok(())
-}
-
 /// 原子写控制文件（§10.2）：全程相对已验证父目录的打开句柄执行（cap-std
 /// openat 语义）——目标归类与 rename 前复核（现存目标为符号链接或非普通
 /// 文件即拒绝，不跟随）、随机同目录名临时文件以 O_CREAT|O_EXCL 排他创建
@@ -702,12 +680,7 @@ fn sync_directory(dir: &std::path::Path) -> Result<(), String> {
 /// fsync（持久性屏障，打开/同步失败向上传播、不粉饰成功）；失败尽力清理
 /// 临时文件。file_name 须为单段文件名（不含路径分量）：归类、创建与
 /// rename 之外的越界形态在此拒绝，不得相对句柄逃出 projects/。
-fn atomic_write(
-    root: &CapDir,
-    dir: &std::path::Path,
-    file_name: &str,
-    text: &str,
-) -> Result<(), String> {
+fn atomic_write(root: &CapDir, file_name: &str, text: &str) -> Result<(), String> {
     use std::io::Write;
     if std::path::Path::new(file_name).components().count() != 1 {
         return Err(format!("项目文件名含路径分量，拒绝：{file_name}"));
@@ -744,7 +717,15 @@ fn atomic_write(
         check_target()?;
         root.rename(&tmp_name, root, file_name)
             .map_err(|e| format!("落盘项目失败：{e}"))?;
-        sync_directory(dir)?;
+        // 持久性屏障同步锚定句柄本身（经其重新绑定自身再 fsync，不按路径名
+        // 重开——否则屏障加到并发替换后的目录上，保存成功而加载另一棵树）
+        #[cfg(unix)]
+        root.open_dir(".")
+            .and_then(|d| d.into_std_file().sync_all())
+            .map_err(|e| format!("同步项目目录失败（持久性屏障缺失）：{e}"))?;
+        // Windows 无法对目录句柄 fsync：跳过屏障而非误报成功写失败
+        #[cfg(not(unix))]
+        let _ = root;
         Ok(())
     })();
     if result.is_err() {
@@ -769,12 +750,11 @@ fn empty_assets() -> serde_json::Value {
 
 /// 项目根目录（§10.2 信任链）：canonicalize 应用数据根并以**受信根句柄**
 /// 锚定——`projects/` 的创建、非符号链接校验与打开全部相对该句柄执行，
-/// 打开经 (dev, ino) 身份绑定。返回 (canonical 路径, projects 句柄)：
-/// 句柄供写/删/拷贝内核复用（不再按路径名重开——`open_ambient_dir` 会
-/// 跟随验证后被替换的符号链接，让根外目录成为表面根）；路径仅供持久性
-/// 屏障与诊断。验证后路径名被换时：越界目标被 cap-std 沙箱拒绝，界内
+/// 打开经 (dev, ino) 身份绑定。返回的 projects 句柄供读/写/删/拷与持久性
+/// 屏障内核复用，不按路径名重开（`open_ambient_dir` 与 fsync 重开都会把
+/// 并发替换后的目录变成表面根）。路径名被换时：越界被沙箱拒绝，界内
 /// 替换被身份绑定拒绝。
-fn projects_dir(app: &AppHandle) -> Result<(PathBuf, CapDir), String> {
+fn projects_dir(app: &AppHandle) -> Result<CapDir, String> {
     let root_path = app
         .path()
         .app_data_dir()
@@ -801,8 +781,7 @@ fn projects_dir(app: &AppHandle) -> Result<(PathBuf, CapDir), String> {
     if !md.is_dir() {
         return Err("项目目录路径不是目录".into());
     }
-    let projects = open_dir_bound(&root, "projects", &md, "项目目录")?;
-    Ok((root_path.join("projects"), projects))
+    open_dir_bound(&root, "projects", &md, "项目目录")
 }
 
 /// 从画布 graph 派生统计：场数 = scene 节点数；结局数 = 无剧情流出边的
@@ -846,11 +825,23 @@ pub fn graph_stats(graph: &serde_json::Value) -> (u64, u64) {
     (scene_ids.len() as u64, endings)
 }
 
+/// 列表侧名称回退（§10.2）：空白/异型名不得交给首页（非示例项目不经前端
+/// 归一化），回退「未命名项目」占位，修复留待 §11.1 加载归一化。
+fn legal_display_name(name: &str) -> String {
+    let trimmed = name.trim();
+    (if trimmed.is_empty() {
+        "未命名项目"
+    } else {
+        trimmed
+    })
+    .to_string()
+}
+
 fn read_meta(id: &str, file: &ProjectFile) -> ProjectMeta {
     let (scene_count, ending_count) = graph_stats(&file.graph);
     ProjectMeta {
         id: id.to_string(),
-        name: file.project.name.clone(),
+        name: legal_display_name(&file.project.name),
         updated_at: file.project.updated_at.clone(),
         scene_count,
         ending_count,
@@ -925,7 +916,7 @@ fn verify_control_file(root: &CapDir, name: &str) -> Result<Option<(u64, u64)>, 
 /// 列出全部项目，按更新时间新→旧排序。扫描相对受信根锚定句柄执行。
 #[tauri::command]
 pub fn list_projects(app: AppHandle) -> Result<Vec<ProjectMeta>, String> {
-    let (_, root) = projects_dir(&app)?;
+    let root = projects_dir(&app)?;
     list_project_metas(&root)
 }
 
@@ -1117,9 +1108,9 @@ pub fn create_project(app: AppHandle, name: String) -> Result<ProjectMeta, Strin
     // 生成，仍以同一口径复核后才参与路径构造
     validate_id(&id)?;
     let file = new_project_file(&id, name, now_iso());
-    let (dir, root) = projects_dir(&app)?;
+    let root = projects_dir(&app)?;
     let text = serde_json::to_string_pretty(&file).map_err(|e| format!("序列化失败：{e}"))?;
-    atomic_write(&root, &dir, &format!("{id}.json"), &text)?;
+    atomic_write(&root, &format!("{id}.json"), &text)?;
     Ok(read_meta(&id, &file))
 }
 
@@ -1127,7 +1118,7 @@ pub fn create_project(app: AppHandle, name: String) -> Result<ProjectMeta, Strin
 /// projects_dir 的受信根锚定句柄解析（§10.2），不按路径名重开。
 #[tauri::command]
 pub fn load_project(app: AppHandle, id: String) -> Result<ProjectFile, String> {
-    let (_, root) = projects_dir(&app)?;
+    let root = projects_dir(&app)?;
     load_project_file(&root, &id)
 }
 
@@ -1170,6 +1161,16 @@ fn read_verified_file(root: &CapDir, name: &str) -> Result<String, String> {
             return Err("项目文件在读取前被替换，拒绝读取".into());
         }
     }
+    // 非 Unix 无 (dev, ino) 可比：打开后重走 no-follow 归类，换成符号链接/
+    // 异型即拒绝（换成另一普通文件的残余窗口仍在，由 cap-std 沙箱限界内）
+    #[cfg(not(unix))]
+    {
+        verify_control_file(root, name)?;
+        match file.metadata() {
+            Ok(fm) if fm.is_file() => {}
+            _ => return Err("项目文件在读取前被替换，拒绝读取".into()),
+        }
+    }
     let mut text = String::new();
     file.read_to_string(&mut text)
         .map_err(|e| format!("读取项目文件失败：{e}"))?;
@@ -1184,25 +1185,20 @@ fn read_verified_file(root: &CapDir, name: &str) -> Result<String, String> {
 /// 显式失败（文档虽已提交，篡改不得静默；下次加载复验会隔离条目兜底）。
 #[tauri::command]
 pub fn save_project(app: AppHandle, id: String, doc: ProjectFile) -> Result<ProjectMeta, String> {
-    let (dir, root) = projects_dir(&app)?;
-    persist_project(&root, &dir, &id, doc)
+    let root = projects_dir(&app)?;
+    persist_project(&root, &id, doc)
 }
 
 /// save_project 的可测内核（给定已验证的 projects 目录）。id 是 IPC 调用方
 /// 传入的不可信参数：词法校验先于任何路径拼接——否则 `../prefs` 式 id 可把
 /// 空资产索引（复验不设防）的整份文档写到 projects/ 之外。
-fn persist_project(
-    root: &CapDir,
-    dir: &std::path::Path,
-    id: &str,
-    doc: ProjectFile,
-) -> Result<ProjectMeta, String> {
+fn persist_project(root: &CapDir, id: &str, doc: ProjectFile) -> Result<ProjectMeta, String> {
     validate_id(id)?;
     // 句柄持有至函数结束——复验过的实体覆盖整个保存决策
     let _verified_assets = verify_save_asset_files(root, id, &doc.assets)?;
     let file = prepare_save(id, &doc)?;
     let text = serde_json::to_string_pretty(&file).map_err(|e| format!("序列化失败：{e}"))?;
-    atomic_write(root, dir, &format!("{id}.json"), &text)?;
+    atomic_write(root, &format!("{id}.json"), &text)?;
     if let Err(e) = verify_save_asset_files(root, id, &doc.assets) {
         eprintln!("[store] 保存后资产复验失败，路径可能在保存期间被替换：{e}");
         return Err(format!(
@@ -1219,7 +1215,7 @@ fn persist_project(
 /// 不静默遗留媒体文件。
 #[tauri::command]
 pub fn delete_project(app: AppHandle, id: String) -> Result<(), String> {
-    let (_, root) = projects_dir(&app)?;
+    let root = projects_dir(&app)?;
     delete_project_files(&root, &id)
 }
 
@@ -1259,7 +1255,7 @@ fn delete_project_files(root: &CapDir, id: &str) -> Result<(), String> {
 /// 并回滚已拷贝的目标子树，不遗留半拷贝。
 #[tauri::command]
 pub fn copy_project_assets(app: AppHandle, from_id: String, to_id: String) -> Result<(), String> {
-    let (_, root) = projects_dir(&app)?;
+    let root = projects_dir(&app)?;
     copy_assets_tree(&root, &from_id, &to_id)
 }
 
@@ -1415,6 +1411,7 @@ fn copy_file_bound(
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::path::PathBuf;
 
     #[test]
     fn name_rules() {
@@ -2306,7 +2303,7 @@ mod tests {
     fn persist_project_writes_envelope_and_passes_post_verify() {
         let projects = temp_projects_dir();
         let doc = new_project_file("p-1", "剧".into(), now_iso());
-        let meta = persist_project(&cap(&projects), &projects, "p-1", doc).expect("保存");
+        let meta = persist_project(&cap(&projects), "p-1", doc).expect("保存");
         assert_eq!(meta.name, "剧");
         assert!(projects.join("p-1.json").exists(), "项目文件应落盘");
         cleanup_temp(&projects);
@@ -2316,7 +2313,7 @@ mod tests {
         let projects = temp_projects_dir();
         let doc = new_project_file("p-1", "剧".into(), now_iso());
         // 空资产索引下复验不设防：id 词法校验必须在任何路径拼接前拒绝
-        let err = persist_project(&cap(&projects), &projects, "../evil", doc).unwrap_err();
+        let err = persist_project(&cap(&projects), "../evil", doc).unwrap_err();
         assert!(err.contains("非法"), "意外诊断：{err}");
         // 不得在 projects/ 之外创建任何文件
         assert!(
@@ -2330,10 +2327,9 @@ mod tests {
     fn persist_project_replaces_existing_file_and_leaves_no_temp() {
         let projects = temp_projects_dir();
         let first = new_project_file("p-1", "一版".into(), now_iso());
-        persist_project(&cap(&projects), &projects, "p-1", first).expect("首存");
+        persist_project(&cap(&projects), "p-1", first).expect("首存");
         let second = new_project_file("p-1", "二版".into(), now_iso());
-        persist_project(&cap(&projects), &projects, "p-1", second)
-            .expect("覆盖保存（rename 替换已存在目标）");
+        persist_project(&cap(&projects), "p-1", second).expect("覆盖保存（rename 替换已存在目标）");
         let loaded = load_project_file(&cap(&projects), "p-1").expect("重读");
         assert_eq!(loaded.project.name, "二版");
         let leftovers: Vec<String> = fs::read_dir(&projects)
@@ -2354,7 +2350,7 @@ mod tests {
         fs::write(&outside, b"{}").expect("写根外文件");
         std::os::unix::fs::symlink(&outside, projects.join("p-1.json")).expect("建符号链接");
         let doc = new_project_file("p-1", "剧".into(), now_iso());
-        let err = persist_project(&cap(&projects), &projects, "p-1", doc).unwrap_err();
+        let err = persist_project(&cap(&projects), "p-1", doc).unwrap_err();
         assert!(err.contains("符号链接"), "意外诊断：{err}");
         // 链接未被跟随或覆盖：根外文件原样保留，链接本身仍在
         assert_eq!(fs::read(&outside).expect("读根外文件"), b"{}".to_vec());
@@ -2369,7 +2365,7 @@ mod tests {
     fn atomic_write_rejects_path_like_file_name() {
         let projects = temp_projects_dir();
         // 句柄相对写入的最后边界：嵌套形态的文件名不得相对句柄逃出 projects/
-        let err = atomic_write(&cap(&projects), &projects, "../evil.json", "{}").unwrap_err();
+        let err = atomic_write(&cap(&projects), "../evil.json", "{}").unwrap_err();
         assert!(err.contains("路径分量"), "意外诊断：{err}");
         assert!(
             fs::symlink_metadata(projects.parent().expect("临时根").join("evil.json")).is_err(),
@@ -2378,15 +2374,6 @@ mod tests {
         cleanup_temp(&projects);
     }
 
-    #[test]
-    fn sync_directory_syncs_openable_directory_on_unix_like_targets() {
-        let projects = temp_projects_dir();
-        #[cfg(unix)]
-        assert!(sync_directory(&projects).is_ok());
-        #[cfg(not(unix))]
-        assert!(sync_directory(&projects).is_ok());
-        cleanup_temp(&projects);
-    }
     #[test]
     fn load_project_file_rejects_path_like_id_before_any_join() {
         let projects = temp_projects_dir();
@@ -2402,7 +2389,7 @@ mod tests {
     fn load_project_file_reads_envelope_from_verified_handle() {
         let projects = temp_projects_dir();
         let doc = new_project_file("p-1", "午夜出租车".into(), now_iso());
-        persist_project(&cap(&projects), &projects, "p-1", doc).expect("先保存");
+        persist_project(&cap(&projects), "p-1", doc).expect("先保存");
         let loaded = load_project_file(&cap(&projects), "p-1").expect("从已验证句柄读取");
         assert_eq!(loaded.project.name, "午夜出租车");
         assert_eq!(loaded.schema_version, 1);
@@ -2413,7 +2400,7 @@ mod tests {
     fn load_and_list_read_anchored_tree_after_dir_replacement() {
         let projects = temp_projects_dir();
         let doc = new_project_file("p-1", "正版".into(), now_iso());
-        persist_project(&cap(&projects), &projects, "p-1", doc).expect("先保存");
+        persist_project(&cap(&projects), "p-1", doc).expect("先保存");
         // 受信根锚定后，另一本地进程把 projects/ 路径名整体换成外部目录树
         let root = cap(&projects);
         let tmp_root = projects.parent().expect("临时根").to_path_buf();
@@ -2440,7 +2427,7 @@ mod tests {
     fn list_project_metas_reads_only_verified_entries() {
         let projects = temp_projects_dir();
         let doc = new_project_file("p-1", "午夜出租车".into(), now_iso());
-        persist_project(&cap(&projects), &projects, "p-1", doc).expect("先保存");
+        persist_project(&cap(&projects), "p-1", doc).expect("先保存");
         // 指向根外文件的符号链接条目不得经列表路径读出（§10.2 信任链）
         let outside = projects.parent().expect("临时根").join("outside.json");
         fs::write(
@@ -2480,5 +2467,19 @@ mod tests {
             assert!(err.contains("createdAt"), "{bad} 意外诊断：{err}");
         }
         assert!(validate_save_assets(&entry("2026-08-01T00:00:00.000Z")).is_ok());
+    }
+
+    #[test]
+    fn list_projects_falls_back_to_placeholder_for_blank_name() {
+        let projects = temp_projects_dir();
+        // project.name 空白：列表回退占位，修复留待 §11.1 加载归一化
+        fs::write(
+            projects.join("p-1.json"),
+            r#"{"schemaVersion":1,"project":{"id":"p-1","name":""},"graph":{"nodes":[],"edges":[]}}"#,
+        )
+        .expect("写项目文件");
+        let metas = list_project_metas(&cap(&projects)).expect("列出项目");
+        assert_eq!(metas[0].name, "未命名项目");
+        cleanup_temp(&projects);
     }
 }
