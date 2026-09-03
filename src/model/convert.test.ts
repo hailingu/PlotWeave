@@ -277,6 +277,16 @@ describe('parseProject（ProjectDocument → 会话文档，§11 归一化）', 
     expect(again.graph.edges[1].data.order).toBe(2)
   })
 
+  it('IPC 载荷缺桶以 null 透传：容器修复标记 repaired——缺桶信封随回写收敛', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as Record<string, unknown>
+    doc.episodeTitles = null
+    doc.assets = null
+    const round = parseProject(doc)
+    expect(round.repaired).toBe(true)
+    expect(round.content.episodeTitles).toEqual({})
+    expect(round.content.assets).toEqual({ byId: {} })
+  })
+
   it('schemaVersion 高于当前版本：拒绝并提示升级应用', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW)
     expect(() =>

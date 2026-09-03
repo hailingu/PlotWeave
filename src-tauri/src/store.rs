@@ -542,11 +542,6 @@ fn is_false(v: &bool) -> bool {
     !*v
 }
 
-/// settings 等对象字段缺省值：空对象（而非 Null），前端归一化兜底。
-fn empty_object() -> serde_json::Value {
-    json!({})
-}
-
 fn empty_assets() -> serde_json::Value {
     json!({ "byId": {} })
 }
@@ -628,16 +623,13 @@ pub fn graph_stats(graph: &serde_json::Value) -> (u64, u64) {
     (scene_ids.len() as u64, endings)
 }
 
-/// 列表侧名称回退（§10.2）：空白/异型名不得交给首页（非示例项目不经前端
-/// 归一化），回退「未命名项目」占位，修复留待 §11.1 加载归一化。
+/// 列表侧名称回退（§10.2）：空白/异型/超 64 字符（§9.3 名称域外，打开时
+/// 会被前端归一化替换）的名不得交给首页——非示例项目不经前端归一化，
+/// 空名直留空白卡片、超长名破坏排版；回退「未命名项目」占位。
 fn legal_display_name(name: &str) -> String {
     let trimmed = name.trim();
-    (if trimmed.is_empty() {
-        "未命名项目"
-    } else {
-        trimmed
-    })
-    .to_string()
+    let legal = !trimmed.is_empty() && trimmed.chars().count() <= 64;
+    (if legal { trimmed } else { "未命名项目" }).to_string()
 }
 
 fn read_meta(id: &str, file: &ProjectFile) -> ProjectMeta {
@@ -773,9 +765,11 @@ fn parse_project_info(v: Option<&serde_json::Value>) -> ProjectInfo {
 }
 
 /// v1 信封的宽容解析（§11 第 0 步）：project 元信息经 parse_project_info
-/// 逐字段提取；graph/settings/episodeTitles/assets 以 untyped 值原样透传
-/// （缺省补空容器），容器级与逐项校验都归前端归一化层——持久化层只拒绝
-/// 两族矛盾或不可判型的信封，不因字段形状损坏阻断加载。
+/// 逐字段提取；graph/settings/episodeTitles/assets 以 untyped 值原样透传，
+/// **缺失以 Null 透传**（与 project 元信息空串同款原则）：预补空容器会让
+/// 前端 repaired 检测看不见缺陷——载荷比对已是完整信封，缺桶永不回写
+/// 收敛；Null 由前端 §11.1 第 2 步补齐（视为异型容器，修复并标记
+/// repaired）。持久化层只拒绝两族矛盾或不可判型的信封。
 fn parse_v1_envelope(value: &serde_json::Value) -> ProjectFile {
     let schema_version = value
         .get("schemaVersion")
@@ -786,13 +780,22 @@ fn parse_v1_envelope(value: &serde_json::Value) -> ProjectFile {
         schema_version,
         versionless: false,
         project: parse_project_info(value.get("project")),
-        graph: value.get("graph").cloned().unwrap_or_else(|| json!({})),
-        settings: value.get("settings").cloned().unwrap_or_else(empty_object),
+        graph: value
+            .get("graph")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+        settings: value
+            .get("settings")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
         episode_titles: value
             .get("episodeTitles")
             .cloned()
-            .unwrap_or_else(empty_object),
-        assets: value.get("assets").cloned().unwrap_or_else(empty_assets),
+            .unwrap_or(serde_json::Value::Null),
+        assets: value
+            .get("assets")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
     }
 }
 
@@ -1596,8 +1599,10 @@ mod tests {
         assert_eq!(file.schema_version, 1);
         // 缺省 id 透传空串：前端以受信路径 id 覆盖并随 repaired 回写落定
         assert_eq!(file.project.id, "");
-        assert_eq!(file.settings, json!({}));
-        assert_eq!(file.assets, json!({ "byId": {} }));
+        // 缺省桶以 Null 透传（同款原则）：前端 §11.1 第 2 步补齐并标记
+        // repaired，缺桶信封随回写收敛
+        assert_eq!(file.settings, serde_json::Value::Null);
+        assert_eq!(file.assets, serde_json::Value::Null);
     }
 
     /// 合法 v1 信封（保存边界校验的基线载荷）。
@@ -2221,6 +2226,35 @@ mod tests {
         perms.set_mode(0o755);
         let _ = fs::set_permissions(&projects, perms);
         assert!(err.contains("元数据"), "意外诊断：{err}");
+        cleanup_temp(&projects);
+    }
+
+    #[test]
+    fn v1_missing_buckets_pass_through_null_for_frontend_repair() {
+        // 缺桶以 Null 透传：前端 §11.1 第 2 步补齐并标记 repaired 回写——
+        // 预补空容器会让 repaired 检测看不见缺陷，缺桶信封永不收敛
+        let text = r#"{"schemaVersion":1,"project":{"id":"p-1","name":"剧","createdAt":"","updatedAt":""}}"#;
+        let file = parse_file("p-1", text).expect("解析 v1");
+        assert_eq!(file.graph, serde_json::Value::Null);
+        assert_eq!(file.settings, serde_json::Value::Null);
+        assert_eq!(file.episode_titles, serde_json::Value::Null);
+        assert_eq!(file.assets, serde_json::Value::Null);
+    }
+
+    #[test]
+    fn list_projects_falls_back_to_placeholder_for_overlong_name() {
+        let projects = temp_projects_dir();
+        let long = "剧".repeat(65);
+        fs::write(
+            projects.join("p-1.json"),
+            format!(
+                r#"{{"schemaVersion":1,"project":{{"id":"p-1","name":"{long}","createdAt":"","updatedAt":""}},"graph":{{"nodes":[],"edges":[]}}}}"#
+            ),
+        )
+        .expect("写项目文件");
+        let metas = list_project_metas(&cap(&projects)).expect("列出项目");
+        // 超 64 字符在 §9.3 名称域外（打开时会被前端归一化替换）：列表同款占位
+        assert_eq!(metas[0].name, "未命名项目");
         cleanup_temp(&projects);
     }
 
