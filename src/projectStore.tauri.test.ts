@@ -133,6 +133,32 @@ describe('tauriLoad：归一化与迁移回写', () => {
     expect(doc.name).toBe('现代剧')
   })
 
+  it('读取期间排队的保存失败登记：链守卫重启须回到登记复验段——交付登记文档而非更旧的磁盘内容', async () => {
+    let loadCalls = 0
+    let store: typeof import('./projectStore') | undefined
+    handlers.set('load_project', () => {
+      loadCalls += 1
+      if (loadCalls === 1) {
+        // load_project 在途：卸载冲刷排队保存，且该保存落盘失败（登记为
+        // 待重试——比磁盘新）
+        void store
+          ?.projectStore.save('p1', { name: '登记的最新', nodes: [], edges: [], settings: { characters: [], locations: [] } })
+          .catch(() => undefined)
+        return modernFile()
+      }
+      return { ...modernFile(), project: { ...modernFile().project, name: '重读的磁盘' } }
+    })
+    handlers.set('save_project', () => {
+      throw new Error('磁盘满')
+    })
+    const mod = await load()
+    store = mod
+    const doc = await mod.projectStore.load('p1')
+    // 红：守卫只在磁盘读取段内 continue，不再回到登记复验段——重读磁盘
+    // 并交付更旧内容，随后编辑会覆盖登记中的新改动
+    expect(doc.name).toBe('登记的最新')
+  })
+
   it('读取期间新保存排队：链身份守卫整体重来，修复回写不得晚于新保存覆盖新内容', async () => {
     let loadCalls = 0
     let store: typeof import('./projectStore') | undefined

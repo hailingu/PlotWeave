@@ -231,34 +231,38 @@ async function waitForSaveChainIdle(id: string): Promise<void> {
 
 async function tauriLoad(id: string): Promise<ProjectContent> {
   const { invoke } = await import('@tauri-apps/api/core')
-  // 链静止后优先交付链上失败登记的最新文档（冲刷失败待重试，比磁盘新）：
-  // 经保存同款归一化（剥离运行态）交付，否则用户看到丢编辑的旧版本，
-  // 且随后编辑与重试登记竞态。登记文档同样过加载侧资产实路径复验——
-  // 保存失败的常见原因正是资产文件缺失/被换符号链接，不复验就把带
-  // 坏资产的文档交付会话、重试登记也原样持有，此后每次重试与后续编辑
+  // 单循环三段：链静止 → 失败登记复验（优先）→ 磁盘读取（链身份守卫）。
+  // 任何段的重启都回到循环顶——尤其磁盘段读取期间排队的保存若失败，其
+  // 失败登记（比磁盘新）必须在下一轮的登记复验段被优先交付，不得只在
+  // 磁盘段内重读旧盘。
+  //
+  // 登记段：链静止后优先交付链上失败登记的最新文档（冲刷失败待重试，比
+  // 磁盘新）：经保存同款归一化（剥离运行态）交付，否则用户看到丢编辑的
+  // 旧版本，且随后编辑与重试登记竞态。登记文档同样过加载侧资产实路径
+  // 复验——保存失败的常见原因正是资产文件缺失/被换符号链接，不复验就把
+  // 带坏资产的文档交付会话、重试登记也原样持有，此后每次重试与后续编辑
   // 都注定失败；隔离后的修复内容同时替换重试登记（后台重试改持净载荷）。
   // 复验的 await 期间登记可能被更新保存清除/替换（重试成功、新失败）：
   // 只有仍是观察到的那份才替换——无条件写回会把已被取代的旧文档复活
-  // 进登记与交付，编辑即覆盖新保存；否则按当前保存状态整体重来
+  // 进登记与交付，编辑即覆盖新保存；否则按当前保存状态整体重来。
+  //
+  // 磁盘段：load_project/复验的 await 期间可能又有保存排队（如编辑器卸载
+  // 冲刷）——读到的会是写前旧文件；不重验就继续会把旧内容交付会话，且
+  // 随后的修复回写若晚于新保存落盘，会把新内容反向覆盖。链身份变化即
+  // 重启到循环顶（等待新链落定；失败登记由登记段接管），保证「读到即最新」
   for (;;) {
     await waitForSaveChainIdle(id)
     const pending = pendingRetryDocs.get(id)
-    if (pending === undefined) break
-    const invalid = await invoke<string[]>('verify_project_assets', {
-      id,
-      assets: pending.assets ?? {},
-    })
-    if (pendingRetryDocs.get(id) !== pending) continue
-    const verified = memoryNormalize(pending, id, invalid)
-    pendingRetryDocs.set(id, verified)
-    return verified
-  }
-  // 磁盘读取段按链身份守卫：load_project/复验的 await 期间可能又有保存
-  // 排队（如编辑器卸载冲刷）——读到的会是写前旧文件；不重验就继续会把
-  // 旧内容交付会话，且随后的修复回写若晚于新保存落盘，会把新内容反向
-  // 覆盖。链身份变化即整体重来（等待新链落定后重读），保证「读到即最新」
-  for (;;) {
-    await waitForSaveChainIdle(id)
+    if (pending !== undefined) {
+      const invalid = await invoke<string[]>('verify_project_assets', {
+        id,
+        assets: pending.assets ?? {},
+      })
+      if (pendingRetryDocs.get(id) !== pending) continue
+      const verified = memoryNormalize(pending, id, invalid)
+      pendingRetryDocs.set(id, verified)
+      return verified
+    }
     const chainBefore = saveChains.get(id)
     const file = await invoke<unknown>('load_project', { id })
     // §7.1/§10.5 加载侧资产实路径复验：Rust 以受信资产根 no-follow 验证

@@ -111,6 +111,8 @@ export interface ShotNodeData extends Record<string, unknown> {
   refs: ShotRef[]
 }
 
+/** 各节点形态的 React Flow 别名：为 useNodesState 等泛型上下文钉住
+ * Node<Data, Type> 的精确组合，避免在各消费点重复展开联合。 */
 export type SceneFlowNode = Node<SceneNodeData, 'scene'>
 export type DialogueFlowNode = Node<DialogueNodeData, 'dialogue'>
 export type BeatFlowNode = Node<BeatNodeData, 'beat'>
