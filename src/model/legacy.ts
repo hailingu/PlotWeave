@@ -217,9 +217,10 @@ export function migrateProjectDocument(
    * 去重（§11 v0 兼容子步骤：两来源并存不得互斥覆盖——空头像列也不清空
    * 结构化引用），成功转换后才删除 characters；只有两种来源都不存在时才
    * 补空数组。地点镜像按 trim 规范化（§11 v0 兼容子步骤）：规范化后为空
-   * 删除并警告、不建实体（否则建出的空白名实体必被 v1 归一化隔离，场景
-   * 徒留悬空 locationId）；结构化 locationId 有效时胜过过时的字符串镜像
-   * （合法 id 优先、废弃镜像删除——字符串可能指向已被改名的旧地点）。 */
+   * 或非字符串（null/数字/对象）均删除并警告、不建实体（否则建出的空白名
+   * 实体必被 v1 归一化隔离，场景徒留悬空 locationId；非字符串镜像残留会被
+   * toStoryNode 摊进 v1 spec 且归一化不删未知键）；结构化 locationId 有效
+   * 时胜过过时的字符串镜像（合法 id 优先、废弃镜像删除）。 */
   const migrateSceneNode = (node: CanvasNode): CanvasNode => {
     const d = { ...(node.data as Record<string, unknown>) }
     const avatars = d.characters
@@ -255,6 +256,12 @@ export function migrateProjectDocument(
       } else if (!(typeof locationId === 'string' && locationId.trim())) {
         locationId = ensureLocation(locationName)
       }
+      delete d.location
+      migrated = true
+    } else if ('location' in d) {
+      // 非字符串镜像（null/数字/对象等）同样删除并警告：留着会被 toStoryNode
+      // 摊进 v1 spec 且归一化不删未知键——迁移成功却把异型镜像永久写回
+      warnings?.push(`节点 ${String(node.id)} 的旧地点镜像非字符串，已删除`)
       delete d.location
       migrated = true
     }

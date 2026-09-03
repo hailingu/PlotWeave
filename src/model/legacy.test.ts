@@ -58,6 +58,26 @@ describe('migrateProjectDocument（旧 schema → 引用 id 化）', () => {
     expect(scene.characterIds).toEqual(doc.settings.characters.map((c) => c.id))
   })
 
+  it('非字符串旧地点镜像：删除并警告，不残留进 v1 spec（v0 兼容契约）', () => {
+    const warnings: string[] = []
+    const scene = node({
+      id: 's9',
+      type: 'scene',
+      position: { x: 0, y: 0 },
+      selected: false,
+      data: { name: '码头', sceneNo: 2, interior: false, time: '☀️ 日', synopsis: '', location: 42 },
+    } as unknown as CanvasNode)
+    const { doc, migrated } = migrateProjectDocument(
+      { name: 'x', nodes: [scene], edges: [], settings: { characters: [], locations: [] } },
+      warnings,
+    )
+    expect(migrated).toBe(true)
+    const data = doc.nodes[0].data as { location?: unknown; locationId?: unknown }
+    expect('location' in data).toBe(false)
+    expect(data.locationId).toBeUndefined()
+    expect(warnings.some((w) => w.includes('s9') && w.includes('地点'))).toBe(true)
+  })
+
   it('对白 speaker 对象 → 实体 id；同名/同渐变头像复用既有实体不重复建', () => {
     const existing = { id: 'ch-lin', name: '林晚', gradient: 'g-lin' }
     const { doc } = migrateProjectDocument({

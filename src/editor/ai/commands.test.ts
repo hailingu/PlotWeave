@@ -510,6 +510,15 @@ describe('AI 批量命令的逐类型载荷形状校验（信任边界：字段�
     expect(badUpdate.issues.map((i) => i.message).join('\n')).toContain('synopsis')
   })
 
+  it('action 台词行携带 speaker：拒绝（隐藏引用不得进活动文档并持久化）', () => {
+    const bad = validateAiBatch(
+      [{ op: 'create_node', nodeType: 'dialogue', data: { name: '对白', lines: [{ id: 'l1', kind: 'action', speaker: 'ch1', text: '雨声渐大' }] } }],
+      snap(),
+    )
+    expect(bad.ok).toBe(false)
+    expect(bad.issues.map((i) => i.message).join('\n')).toContain('lines')
+  })
+
   it('shot refs 成员违反引用位联合（kind 未知 / assetId 与 label 并存）：拒绝', () => {
     const bad = validateAiBatch(
       [

@@ -413,10 +413,13 @@ function listShapeIssues(
       // 移除——接受过的 AI 改动不得重开即变样
       ('speaker' in l && (typeof l.speaker !== 'string' || l.speaker.trim() === '')) ||
       (l.kind !== undefined && l.kind !== 'line' && l.kind !== 'action') ||
+      // action 行不得携带 speaker：对白契约只允许 line 行有说话人，放行的
+      // 隐藏引用会进活动文档并被持久化
+      (l.kind === 'action' && 'speaker' in l) ||
       (l.side !== undefined && l.side !== 'left' && l.side !== 'right') ||
       (l.vo !== undefined && typeof l.vo !== 'boolean')
     if (!Array.isArray(arr) || arr.some(lineIssue)) {
-      issues.push('lines 须为对象数组（text 字符串必填；kind ∈ line/action、speaker 非空白字符串、side ∈ left/right、vo 布尔可选）')
+      issues.push('lines 须为对象数组（text 字符串必填；kind ∈ line/action、speaker 仅 line 行可带且非空白字符串、side ∈ left/right、vo 布尔可选）')
     }
   }
   if (nodeType === 'shot' && fields.refs !== undefined) {
