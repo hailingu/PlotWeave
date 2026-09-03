@@ -44,6 +44,12 @@ pub struct ProjectInfo {
 pub struct ProjectFile {
     #[serde(default, rename = "schemaVersion")]
     pub schema_version: u32,
+    /// 信封判型发现文件缺 schemaVersion（按形状判为 v1，§11 第 0 步）：
+    /// IPC 标记由前端 repaired 检测消费（载荷额外键使规范化比较必然不等，
+    /// 触发回写补盖版本号）——否则文件永久无版本，违反 §10.5/§11.1 收敛
+    /// 契约；持久化输出恒为 false（保存必盖显式版本）。
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub versionless: bool,
     #[serde(default)]
     pub project: ProjectInfo,
     #[serde(default)]
@@ -704,6 +710,7 @@ fn prepare_save(id: &str, doc: &ProjectFile) -> Result<ProjectFile, String> {
     validate_save_assets(&doc.assets)?;
     Ok(ProjectFile {
         schema_version: doc.schema_version,
+        versionless: false,
         project: ProjectInfo {
             id: id.to_string(),
             name,
@@ -794,6 +801,11 @@ fn atomic_write(dir: &std::path::Path, file_name: &str, text: &str) -> Result<()
         let _ = root.remove_file(&tmp_name);
     }
     result
+}
+
+/// serde 谓词：false 时省略键（versionless 标记仅真值跨 IPC）。
+fn is_false(v: &bool) -> bool {
+    !*v
 }
 
 /// settings 等对象字段缺省值：空对象（而非 Null），前端归一化兜底。
@@ -903,6 +915,7 @@ fn wrap_legacy(id: &str, v: &serde_json::Value) -> ProjectFile {
         .unwrap_or_default();
     ProjectFile {
         schema_version: 0,
+        versionless: false,
         project: ProjectInfo {
             id: id.to_string(),
             name,
@@ -1027,6 +1040,7 @@ fn parse_v1_envelope(value: &serde_json::Value) -> ProjectFile {
         .unwrap_or(1);
     ProjectFile {
         schema_version,
+        versionless: false,
         project: parse_project_info(value.get("project")),
         graph: value.get("graph").cloned().unwrap_or_else(|| json!({})),
         settings: value.get("settings").cloned().unwrap_or_else(empty_object),
@@ -1084,7 +1098,9 @@ fn classify_versionless(
     has_legacy_list: bool,
 ) -> Result<ProjectFile, String> {
     if v1_keys > 0 && legacy_keys == 0 {
-        return Ok(parse_v1_envelope(&value));
+        let mut file = parse_v1_envelope(&value);
+        file.versionless = true;
+        return Ok(file);
     }
     if v1_keys == 0 && legacy_keys >= 2 && has_legacy_list {
         return Ok(wrap_legacy(id, &value));
@@ -1124,6 +1140,7 @@ fn parse_file(id: &str, text: &str) -> Result<ProjectFile, String> {
 fn new_project_file(id: &str, name: String, now: String) -> ProjectFile {
     ProjectFile {
         schema_version: 1,
+        versionless: false,
         project: ProjectInfo {
             id: id.to_string(),
             name,
@@ -1596,6 +1613,27 @@ mod tests {
         let file = parse_file("p-1", &v1.to_string()).unwrap();
         assert_eq!(file.schema_version, 1);
         assert_eq!(file.graph["nodes"][0]["id"], json!("s1"));
+        // 判型打 versionless IPC 标记：载荷额外键让前端 repaired 比较必然
+        // 不等，回写补盖显式版本号——文件不再永久无版本（§10.5/§11.1 收敛）
+        assert!(file.versionless);
+        let ipc = serde_json::to_value(&file).unwrap();
+        assert_eq!(ipc["versionless"], json!(true));
+        // 显式版本与 v0 包装不打标记（v0 迁移本身即回写）
+        let explicit = json!({
+            "schemaVersion": 1,
+            "project": { "id": "p-1", "name": "显式" },
+            "graph": { "nodes": [], "edges": [] },
+        });
+        assert!(
+            !parse_file("p-1", &explicit.to_string())
+                .unwrap()
+                .versionless
+        );
+        let v0 = json!({
+            "name": "旧项目", "updated_at": 1_700_000_000_000u64,
+            "nodes": [], "edges": [],
+        });
+        assert!(!parse_file("p-1", &v0.to_string()).unwrap().versionless);
     }
 
     #[test]
@@ -1771,6 +1809,7 @@ mod tests {
     fn project_file_round_trip() {
         let file = ProjectFile {
             schema_version: 1,
+            versionless: false,
             project: ProjectInfo {
                 id: "p-1".into(),
                 name: "午夜出租车".into(),
@@ -1820,6 +1859,7 @@ mod tests {
     fn valid_save_doc() -> ProjectFile {
         ProjectFile {
             schema_version: 1,
+            versionless: false,
             project: ProjectInfo {
                 id: "p-self-reported".into(),
                 name: "午夜出租车".into(),

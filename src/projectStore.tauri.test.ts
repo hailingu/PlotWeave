@@ -222,6 +222,21 @@ describe('tauriLoad：归一化与迁移回写', () => {
     }
   })
 
+  it('versionless IPC 标记触发回写补盖版本号：无版本文件不再永久无版本', async () => {
+    // Rust 判型给缺 schemaVersion 的 v1 形状载荷打 versionless: true——
+    // 额外键使前端 repaired 比较必然不等，回写落定显式版本（§10.5/§11.1）
+    handlers.set('load_project', () => ({ ...modernFile(), versionless: true }))
+    handlers.set('save_project', () => undefined)
+    const { projectStore } = await load()
+    await projectStore.load('p1')
+    const save = calls.find((c) => c.cmd === 'save_project')
+    expect(save).toBeDefined()
+    // 回写载荷带显式 schemaVersion 且不再携带标记（持久化输出恒 false）
+    const saved = (save?.args as { doc: { schemaVersion: number; versionless?: boolean } }).doc
+    expect(saved.schemaVersion).toBe(1)
+    expect(saved.versionless).toBeUndefined()
+  })
+
   it('v1 修复型归一化回写 save_project（下次打开不再重复修复）；干净 v1 不回写', async () => {
     handlers.set('load_project', () => ({
       ...modernFile(),

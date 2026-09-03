@@ -628,6 +628,13 @@ function rewriteBlankKeyReferences(
   for (const [key, ch] of Object.entries(settings.characters) as [string, Record<string, unknown>][]) {
     if (!('avatarAssetId' in ch)) continue
     ch.avatarAssetId = rewriteRef(remaps.assets, ch.avatarAssetId, `角色 ${key} 的 avatarAssetId`, warnings)
+    // 空键重发改写后仍空白且无映射（§8.1 共同值域之外、不可恢复）直接
+    // 移除——与场景/对白/分镜路径同口径：原样保留只会每次加载警告悬空、
+    // 原样落盘，恢复不了非空白 id 不变量
+    if (typeof ch.avatarAssetId === 'string' && !ch.avatarAssetId.trim()) {
+      warnings.push(`角色 ${key} 的 avatarAssetId 为无映射可改写的空白引用，已移除`)
+      delete ch.avatarAssetId
+    }
   }
   rewriteDocumentBlankRefs(settings, remaps, warnings)
 }

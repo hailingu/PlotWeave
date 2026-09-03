@@ -1541,6 +1541,17 @@ describe('归一化：assets.byId 完整 AssetRef 形状校验（§11.3，Rust �
     expect(round.warnings.some((w) => w.includes('ch-1'))).toBe(false)
   })
 
+  it('角色 avatarAssetId 空白且无映射：移除并警告——不留每次加载都悬空警告的空白引用', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
+      settings: Record<string, Record<string, Record<string, unknown>>>
+    }
+    ;(doc.settings.characters['ch-1'] as Record<string, unknown>).avatarAssetId = '   '
+    const round = parseProject(doc)
+    // 红：字段只过字符串类型检查——空白引用原样保留并落盘，每次加载仅警告悬空
+    expect((round.content.settings.characters[0] as unknown as Record<string, unknown>).avatarAssetId).toBeUndefined()
+    expect(round.warnings.some((w) => w.includes('avatarAssetId'))).toBe(true)
+  })
+
   it('对白行 speaker 空白且无映射：移除并警告——与场景/分镜路径同口径收口', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
       graph: { nodes: Array<{ type?: string; data: { spec: { lines?: Array<Record<string, unknown>> } } }> }
