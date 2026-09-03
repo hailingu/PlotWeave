@@ -594,6 +594,38 @@ describe('AI 批量命令的逐类型载荷形状校验（信任边界：字段�
     expect(noAssets.issues[0].message).toContain('不存在')
   })
 
+  it('对白行 speaker 空白域拒收：加载侧会移除该值——接受的 AI 改动不得重开即变样', () => {
+    const snapWithDialogue = (): AiGraphSnapshot => ({
+      ...snap(),
+      nodes: [...snap().nodes, { id: 'd9', type: 'dialogue', label: '对白 · 夜谈' }],
+    })
+    // 红：只查值类型——空白 speaker 进画布落盘，下次加载被归一化移除
+    const bad = validateAiBatch(
+      [
+        {
+          op: 'update_node',
+          nodeId: 'd9',
+          patch: { lines: [{ kind: 'line', text: '别走', speaker: '   ' }] },
+        },
+      ],
+      snapWithDialogue(),
+    )
+    expect(bad.ok).toBe(false)
+    expect(bad.issues[0].message).toContain('speaker')
+
+    const good = validateAiBatch(
+      [
+        {
+          op: 'update_node',
+          nodeId: 'd9',
+          patch: { lines: [{ kind: 'line', text: '别走', speaker: 'ch-1' }] },
+        },
+      ],
+      snapWithDialogue(),
+    )
+    expect(good.ok).toBe(true)
+  })
+
   it('scene 引用字段空白域拒收：characterIds 成员与 locationId 须 trim 后非空（§8.1 同域）', () => {
     const sceneWith = (patch: Record<string, unknown>) => [
       { op: 'update_node', nodeId: 's1', patch },
