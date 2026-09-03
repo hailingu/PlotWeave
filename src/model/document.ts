@@ -76,6 +76,8 @@ export interface ShotRefBase {
   kind: 'character' | 'location' | 'audio'
 }
 
+/** 分镜引用位判别联合（§4.2）：引用位（assetId）与自由位（label）
+ * 恰居其一，互斥字段以可选 never 禁写——静态类型即阻止镜像形态。 */
 export type ShotRef =
   | (ShotRefBase & { assetId: string; label?: never })
   | (ShotRefBase & { label: string; assetId?: never })
@@ -171,6 +173,8 @@ export interface ShotDocNode extends StoryNodeBase {
   data: { spec: ShotSpec; meta: ShotMeta }
 }
 
+/** 落盘节点判别联合（§4.1）：按 type 收窄到对应 spec/meta 形态，
+ * 上面五个变体接口是联合的全部成员。 */
 export type StoryNode = SceneDocNode | BeatDocNode | DialogueDocNode | BranchDocNode | ShotDocNode
 
 /** 剧情连线：按 data.kind 判别的三种变体（§5）。
@@ -185,24 +189,32 @@ interface EdgeBase {
   targetHandle?: never
 }
 
+/** 剧情流边（§5）：横向叙事连线，匿名端口（sourceHandle/targetHandle 均
+ * 禁写），可选 order 影响同端点展示排序。 */
 export interface SequenceEdge extends EdgeBase {
   /** 匿名端口唯一（§5）：sequence 的 sourceHandle 同为禁写。 */
   sourceHandle?: never
   data: { kind: 'sequence'; order?: number }
 }
 
+/** 分支出口边（§5）：从分支选项引出，sourceHandle 绑定 option-<选项 id>——
+ * 边上不落 label 镜像，胶囊文案按句柄解析。 */
 export interface BranchEdge extends EdgeBase {
   /** 必填：option-<选项 id>。 */
   sourceHandle: string
   data: { kind: 'branch'; order?: number }
 }
 
+/** 分镜下挂边（§5）：垂直派生从属（索引卡 → 分镜卡），sourceHandle 恒为
+ * 字面量 shots；不参与剧情流环检测。 */
 export interface AttachEdge extends EdgeBase {
   /** 必填字面量：索引卡底部端口 shots（§4.3，attach 仅从该端口发起）。 */
   sourceHandle: 'shots'
   data: { kind: 'attach'; order?: number }
 }
 
+/** 落盘边判别联合（§5）：按 data.kind 收窄到对应句柄契约，三个变体接口
+ * 是联合的全部成员。 */
 export type StoryEdge = SequenceEdge | BranchEdge | AttachEdge
 
 /** 设定集实体：节点只存 id 引用，改一处全部引用同时生效。 */
