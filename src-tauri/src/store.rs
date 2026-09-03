@@ -28,7 +28,9 @@ pub struct ProjectInfo {
     pub id: String,
     #[serde(default)]
     pub name: String,
-    #[serde(default)]
+    // None 省略键而非写 null：前端归一化把 null 当异型剥离（repaired=true），
+    // 回写再写回 null 会让示例项目的列表升级循环永不收敛（P1）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(default, rename = "createdAt")]
     pub created_at: String,
@@ -1744,6 +1746,25 @@ mod tests {
             );
         }
         assert!(prepare_save("p-x", &file).is_ok());
+    }
+
+    #[test]
+    fn project_info_none_description_is_omitted_not_null() {
+        // description 缺省若序列化为 null：前端归一化把 null 当异型剥离
+        // （repaired=true）→ 回写 → Rust 又写回 null——示例项目的列表升级
+        // 循环永不收敛（全新启动首页加载不完、示例文件被反复重写）；
+        // 缺省必须省略键，往返才收敛
+        let file = new_project_file("p-1", "剧".into(), now_iso());
+        let text = serde_json::to_string(&file).unwrap();
+        assert!(!text.contains("\"description\""), "None 应省略键：{text}");
+        let mut file = file;
+        file.project.description = Some("简介".into());
+        let text = serde_json::to_string(&file).unwrap();
+        assert!(text.contains("\"description\":\"简介\""));
+        // 省略键的解析往返：回到 None
+        let bare = serde_json::to_string(&new_project_file("p-1", "剧".into(), now_iso())).unwrap();
+        let back: ProjectFile = serde_json::from_str(&bare).unwrap();
+        assert_eq!(back.project.description, None);
     }
 
     #[test]

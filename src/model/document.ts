@@ -137,26 +137,35 @@ interface StoryNodeBase {
   }
 }
 
+/** 场景节点（索引卡，§4.1）：spec 承载场次/内外景/地点与在场角色引用，
+ * 名称型 meta.label 必填。 */
 export interface SceneDocNode extends StoryNodeBase {
   type: 'scene'
   data: { spec: SceneSpec; meta: LabeledMeta }
 }
 
+/** 节奏卡节点（§4.1）：spec 承载情绪基调，名称型 meta.label 必填。 */
 export interface BeatDocNode extends StoryNodeBase {
   type: 'beat'
   data: { spec: BeatSpec; meta: LabeledMeta }
 }
 
+/** 对白节点（气泡流，§4.1）：spec 承载台词行列表（键控 id），名称型
+ * meta.label 必填。 */
 export interface DialogueDocNode extends StoryNodeBase {
   type: 'dialogue'
   data: { spec: DialogueSpec; meta: LabeledMeta }
 }
 
+/** 分支节点（岔路路标，§4.1）：spec 承载问句与选项（键控 id），派生
+ * meta 不落 label 镜像。 */
 export interface BranchDocNode extends StoryNodeBase {
   type: 'branch'
   data: { spec: BranchSpec; meta: DerivedMeta }
 }
 
+/** 分镜卡节点（监视器卡，§4.1/§3.5）：spec 承载镜号/景别/画面/Prompt/
+ * AI 燃料引用位，分集随宿主场景派生（无独立 episodeNo）。 */
 export interface ShotDocNode extends StoryNodeBase {
   type: 'shot'
   data: { spec: ShotSpec; meta: ShotMeta }
