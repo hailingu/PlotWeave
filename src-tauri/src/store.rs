@@ -1038,12 +1038,56 @@ pub fn delete_project(app: AppHandle, id: String) -> Result<(), String> {
 /// （cap-std remove_dir_all 内部同样是逐组件 no-follow 的句柄相对实现），
 /// 归类后 `projects/{id}` 被并发换成符号链接也无法把删除引到根外——链接
 /// 自身按 remove_file 移除，不进入其指向的外部树。
+/// 句柄相对递归删除（§10.2）：目录条目先 open_dir_bound 绑定身份再删
+/// 内容——remove_dir_all 按名字重解析，归类后被换名的子目录会被误删；
+/// 符号链接与非目录条目只移除目录项自身（remove_file 不跟随），目录清空
+/// 后由调用方在复核身份下移除名字。
+fn remove_dir_contents_bound(dir: &CapDir) -> Result<(), String> {
+    for entry in dir
+        .entries()
+        .map_err(|e| format!("扫描待删目录失败：{e}"))?
+    {
+        let entry = entry.map_err(|e| format!("扫描待删目录失败：{e}"))?;
+        // DirEntry::metadata 取 lstat 语义，不跟随符号链接
+        let md = entry
+            .metadata()
+            .map_err(|e| format!("读取待删条目元数据失败：{e}"))?;
+        let name = entry.file_name();
+        if md.is_dir() {
+            let child = open_dir_bound(dir, &name, &md, "待删子目录")?;
+            remove_dir_contents_bound(&child)?;
+            dir.remove_dir(&name)
+                .map_err(|e| format!("删除子目录失败（{name:?}）：{e}"))?;
+        } else {
+            dir.remove_file(&name)
+                .map_err(|e| format!("移除条目失败（{name:?}）：{e}"))?;
+        }
+    }
+    Ok(())
+}
+
 fn delete_project_files(root: &CapDir, id: &str) -> Result<(), String> {
     validate_id(id)?;
     match root.symlink_metadata(id) {
-        Ok(md) if md.is_dir() => root
-            .remove_dir_all(id)
-            .map_err(|e| format!("删除项目资产目录失败（{id}）：{e}"))?,
+        Ok(md) if md.is_dir() => {
+            // 先绑定被归类目录的身份再删内容（§10.2）：remove_dir_all(id)
+            // 按名字重解析——归类后 {id} 被并发换成根内另一真实项目目录时，
+            // 被递归删除的是替换目录，无辜项目的资产被清光而本项目 JSON
+            // 照删；绑定句柄后内容相对句柄删除，删空前再复核目录项身份，
+            // 名字被换即显式失败（不误删也不静默遗留）
+            let dir = open_dir_bound(root, id, &md, "待删项目目录")?;
+            remove_dir_contents_bound(&dir)?;
+            #[cfg(unix)]
+            if let Ok(recheck) = root.symlink_metadata(id) {
+                if asset_identity(&recheck) != asset_identity(&md) {
+                    return Err(format!(
+                        "项目资产目录在删除期间被替换，拒绝移除目录项：{id}"
+                    ));
+                }
+            }
+            root.remove_dir(id)
+                .map_err(|e| format!("删除项目资产目录失败（{id}）：{e}"))?;
+        }
         // 符号链接与普通文件同款：remove_file 只移除该目录项自身
         Ok(_) => root
             .remove_file(id)
@@ -1942,6 +1986,21 @@ mod tests {
         assert!(err.contains("符号链接"), "意外诊断：{err}");
         // 失败回滚：不遗留半拷贝的目标目录
         assert!(fs::symlink_metadata(projects.join("p-2")).is_err());
+        cleanup_temp(&projects);
+    }
+
+    #[test]
+    fn delete_project_files_removes_nested_asset_subtrees() {
+        let projects = temp_projects_dir();
+        let assets = projects.join("p-1").join("assets");
+        fs::create_dir_all(assets.join("sub").join("deep")).expect("建嵌套目录");
+        fs::write(assets.join("a.png"), b"A").expect("写资产");
+        fs::write(assets.join("sub").join("b.png"), b"B").expect("写子目录资产");
+        fs::write(assets.join("sub").join("deep").join("c.png"), b"C").expect("写深层资产");
+        fs::write(projects.join("p-1.json"), b"{}").expect("写项目文件");
+        delete_project_files(&cap(&projects), "p-1").expect("删除项目");
+        assert!(fs::symlink_metadata(projects.join("p-1")).is_err());
+        assert!(fs::symlink_metadata(projects.join("p-1.json")).is_err());
         cleanup_temp(&projects);
     }
 
