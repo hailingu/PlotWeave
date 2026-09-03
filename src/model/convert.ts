@@ -781,9 +781,16 @@ function normalizeAssetRecords(
     }
     // createdAt 统一落为 UTC toISOString()（§7.1）：带显式时区的合法表示
     // 确定性规范化并警告——同一瞬间只保留一种持久化表示；规范化越出
-    // 四位年份域（极端偏移换算）时保留原值（其本身可过保存边界）
+    // 四位年份域（极端偏移换算出扩张年表示）时无规范形可落，而保存边界
+    // 只收 24 字符规范 UTC——该条目按不可恢复隔离并警告，留存即令此后
+    // 每次保存/修复回写都注定失败、重试永久排队
     const canon = new Date(entry.createdAt as string).toISOString()
-    if (isStrictIso8601(canon) && canon !== entry.createdAt) {
+    if (!isStrictIso8601(canon)) {
+      warnings.push(`资产 ${key} 的 createdAt 规范化越出四位年份域（无规范 UTC 形可落），已隔离`)
+      delete byId[key]
+      continue
+    }
+    if (canon !== entry.createdAt) {
       warnings.push(`资产 ${key} 的 createdAt 已规范化为 UTC ISO 8601`)
       entry.createdAt = canon
     }

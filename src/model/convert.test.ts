@@ -1506,6 +1506,20 @@ describe('归一化：assets.byId 完整 AssetRef 形状校验（§11.3，Rust �
     expect(round.warnings.some((w) => w.includes('createdAt'))).toBe(true)
   })
 
+  it('资产 createdAt 规范化越出四位年份域：隔离并警告——规范形不可落，留存即令此后每次保存注定失败', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
+      assets: { byId: Record<string, Record<string, unknown>> }
+    }
+    // 合法的 -23:59 偏移使 UTC 换算越过 9999 年：toISOString 产出
+    // +010000-… 无规范形可落，Rust 保存边界只收 24 字符规范 UTC
+    doc.assets.byId['a-ext'] = {
+      ...goodAsset, id: 'a-ext', createdAt: '9999-12-31T23:59:59-23:59',
+    }
+    const round = parseProject(doc)
+    expect(round.content.assets?.byId['a-ext']).toBeUndefined()
+    expect(round.warnings.some((w) => w.includes('a-ext') && w.includes('四位年份'))).toBe(true)
+  })
+
   it('时间戳规范化结果须仍在可保存域：越出四位年份（+010000）的合法输入按回退链修复，项目不得永久不可保存', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
       project: Record<string, unknown>
