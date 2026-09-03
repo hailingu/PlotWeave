@@ -30,10 +30,11 @@ pub struct ProjectInfo {
     pub id: String,
     #[serde(default)]
     pub name: String,
-    // None 省略键而非写 null：前端归一化把 null 当异型剥离（repaired=true），
-    // 回写再写回 null 会让示例项目的列表升级循环永不收敛（P1）
+    // None 省略键；字符串原样透传；非字符串（含 null）也原样透传——前端
+    // §11.1 剥离并警告、repaired 回写落定（折叠为 None 会让 repaired 检测
+    // 看不见缺陷，脏文件永不收敛）；保存边界（prepare_save）只收字符串
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
+    pub description: Option<serde_json::Value>,
     #[serde(default, rename = "createdAt")]
     pub created_at: String,
     #[serde(default, rename = "updatedAt")]
@@ -449,6 +450,11 @@ fn prepare_save(id: &str, doc: &ProjectFile) -> Result<ProjectFile, String> {
         ));
     }
     let name = sanitize_name(&doc.project.name)?;
+    if let Some(d) = &doc.project.description {
+        if !d.is_string() {
+            return Err("project.description 非字符串，拒绝保存".into());
+        }
+    }
     if !is_valid_iso8601(&doc.project.created_at) {
         return Err("project.createdAt 不是可解析的 ISO 8601 时间戳".into());
     }
@@ -758,7 +764,7 @@ fn parse_project_info(v: Option<&serde_json::Value>) -> ProjectInfo {
     ProjectInfo {
         id: get("id").unwrap_or_default().to_string(),
         name: get("name").unwrap_or_default().to_string(),
-        description: get("description").map(str::to_string),
+        description: v.and_then(|x| x.get("description")).cloned(),
         created_at: get("createdAt").unwrap_or_default().to_string(),
         updated_at: get("updatedAt").unwrap_or_default().to_string(),
     }
@@ -1072,8 +1078,23 @@ pub fn copy_project_assets(app: AppHandle, from_id: String, to_id: String) -> Re
 fn copy_assets_tree(root: &CapDir, from_id: &str, to_id: &str) -> Result<(), String> {
     validate_id(from_id)?;
     validate_id(to_id)?;
-    let src_rel = format!("{from_id}/assets");
-    let md = match root.symlink_metadata(&src_rel) {
+    // 源项目目录先归类绑定（§10.2）：组合路径 `{from_id}/assets` 的
+    // symlink_metadata 会跟随中间的 {from_id} 符号链接——projects/{from}
+    // 被换成指向根内其他项目的链接时，归类与身份绑定都落在错误项目的
+    // 真实目录上，复制会把无关媒体拷进新项目
+    let proj_md = match root.symlink_metadata(from_id) {
+        Ok(md) => md,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(format!("读取源项目目录元数据失败：{e}")),
+    };
+    if proj_md.file_type().is_symlink() {
+        return Err("源项目目录是符号链接，拒绝复制".into());
+    }
+    if !proj_md.is_dir() {
+        return Err("源项目路径不是目录，拒绝复制".into());
+    }
+    let src_proj = open_dir_bound(root, from_id, &proj_md, "源项目目录")?;
+    let md = match src_proj.symlink_metadata("assets") {
         Ok(md) => md,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(e) => return Err(format!("读取源资产目录元数据失败：{e}")),
@@ -1090,7 +1111,7 @@ fn copy_assets_tree(root: &CapDir, from_id: &str, to_id: &str) -> Result<(), Str
         Err(e) => return Err(format!("读取目标资产目录元数据失败：{e}")),
     }
     // 拷贝目标是 {to}/assets：与 relPath 首段（§7.1）及实路径复验的资产根一致
-    let src_dir = open_dir_bound(root, &src_rel, &md, "源资产目录")?;
+    let src_dir = open_dir_bound(&src_proj, "assets", &md, "源资产目录")?;
     root.create_dir_all(to_id)
         .map_err(|e| format!("创建目标项目目录失败：{e}"))?;
     let dst_root = root
@@ -1475,7 +1496,7 @@ mod tests {
         let file = parse_file("p-1", &doc.to_string()).unwrap();
         assert!(file.project.id.is_empty());
         assert!(file.project.name.is_empty());
-        assert_eq!(file.project.description, None);
+        assert_eq!(file.project.description, Some(json!(42)));
         assert!(file.project.created_at.is_empty());
         assert!(file.project.updated_at.is_empty());
         // graph 原样透传，内容不丢
@@ -2227,6 +2248,39 @@ mod tests {
         let _ = fs::set_permissions(&projects, perms);
         assert!(err.contains("元数据"), "意外诊断：{err}");
         cleanup_temp(&projects);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_assets_tree_rejects_symlinked_source_project() {
+        let projects = temp_projects_dir();
+        // p-1 被换成指向根内其他项目 p-2 的符号链接：组合路径 {p-1}/assets
+        // 的 no-follow 只看终点组件，归类与身份绑定都落在 p-2 的真实目录上
+        let victim = projects.join("p-2").join("assets");
+        fs::create_dir_all(&victim).expect("建资产目录");
+        fs::write(victim.join("secret.png"), b"s").expect("写资产");
+        std::os::unix::fs::symlink(projects.join("p-2"), projects.join("p-1"))
+            .expect("建项目符号链接");
+        let err = copy_assets_tree(&cap(&projects), "p-1", "p-3").unwrap_err();
+        assert!(err.contains("符号链接"), "意外诊断：{err}");
+        cleanup_temp(&projects);
+    }
+
+    #[test]
+    fn v1_invalid_description_passes_through_for_frontend_repair() {
+        // 非字符串 description 原样透传：折叠为 None 会让前端 repaired 检测
+        // 看不见缺陷（§11.1「存在但非字符串时剥离并警告」永不触发）
+        let text = r#"{"schemaVersion":1,"project":{"id":"p-1","name":"剧","createdAt":"","updatedAt":"","description":42},"graph":{"nodes":[],"edges":[]}}"#;
+        let file = parse_file("p-1", text).expect("解析 v1");
+        assert_eq!(file.project.description, Some(json!(42)));
+    }
+
+    #[test]
+    fn prepare_save_rejects_non_string_description() {
+        let mut doc = valid_save_doc();
+        doc.project.description = Some(json!(42));
+        let err = prepare_save("p-1", &doc).unwrap_err();
+        assert!(err.contains("description"), "意外诊断：{err}");
     }
 
     #[test]

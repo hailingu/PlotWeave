@@ -277,6 +277,15 @@ describe('parseProject（ProjectDocument → 会话文档，§11 归一化）', 
     expect(again.graph.edges[1].data.order).toBe(2)
   })
 
+  it('IPC 载荷 description 非字符串：剥离并警告、repaired 落定（原始值透传自 Rust）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as { project: Record<string, unknown> }
+    doc.project.description = 42
+    const round = parseProject(doc)
+    expect(round.content.description).toBeUndefined()
+    expect(round.warnings.some((w) => w.includes('description'))).toBe(true)
+    expect(round.repaired).toBe(true)
+  })
+
   it('IPC 载荷缺桶以 null 透传：容器修复标记 repaired——缺桶信封随回写收敛', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as Record<string, unknown>
     doc.episodeTitles = null
