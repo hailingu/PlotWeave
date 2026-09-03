@@ -23,6 +23,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::{AppHandle, Manager};
 
+/// description 字段的在场保留反序列化：显式 null 映射为 Some(Null) 而非
+/// None——serde 对 Option 的默认行为会把 null 与缺场折叠，保存边界因此
+/// 看不见非字符串值（键被静默省略，既有描述被无声抹掉）。
+fn raw_description<'de, D>(d: D) -> Result<Option<serde_json::Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    serde_json::Value::deserialize(d).map(Some)
+}
+
 /// 项目元信息：id/name + ISO 8601 创建与更新时间（§3）。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProjectInfo {
@@ -30,10 +40,15 @@ pub struct ProjectInfo {
     pub id: String,
     #[serde(default)]
     pub name: String,
-    // None 省略键；字符串原样透传；非字符串（含 null）也原样透传——前端
-    // §11.1 剥离并警告、repaired 回写落定（折叠为 None 会让 repaired 检测
-    // 看不见缺陷，脏文件永不收敛）；保存边界（prepare_save）只收字符串
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    // None 省略键；字符串原样透传；非字符串（含显式 null，经 raw_description
+    // 保留在场）也原样透传——前端 §11.1 剥离并警告、repaired 回写落定（折叠
+    // 为 None 会让 repaired 检测看不见缺陷、保存边界看不见非法值而静默
+    // 省略键抹掉既有描述）；保存边界（prepare_save）只收字符串
+    #[serde(
+        default,
+        deserialize_with = "raw_description",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub description: Option<serde_json::Value>,
     #[serde(default, rename = "createdAt")]
     pub created_at: String,
@@ -1178,8 +1193,9 @@ fn copy_assets_tree(root: &CapDir, from_id: &str, to_id: &str) -> Result<(), Str
 
 /// 打开已归类为实际目录的子目录并绑定身份（§10.2）：cap-std 的 open_dir
 /// 在沙箱内跟随符号链接，Unix 上以打开句柄的 (dev, ino) 与归类时身份比对
-/// ——归类后被换成符号链接/另一实体即拒绝，不从被替换的目标读出；
-/// 非 Unix 平台仅靠 cap-std 沙箱界。
+/// ——归类后被换成符号链接/另一实体即拒绝，不从被替换的目标读出；非
+/// Unix 无身份可比，改为打开后重走 no-follow 归类复核（换名残余窗口由
+/// cap-std 沙箱限定在 projects/ 树内）。
 #[allow(unused_variables)]
 fn open_dir_bound<P: AsRef<std::path::Path>>(
     parent: &CapDir,
@@ -1196,7 +1212,26 @@ fn open_dir_bound<P: AsRef<std::path::Path>>(
             .dir_metadata()
             .map_err(|e| format!("读取{label}句柄元数据失败：{e}"))?;
         if asset_identity(&fm) != asset_identity(classified) {
-            return Err(format!("{label}在归类后被替换，拒绝复制"));
+            return Err(format!("{label}在归类后被替换，拒绝操作"));
+        }
+    }
+    // 非 Unix 无 (dev, ino) 可比（该助手已服务破坏性删除递归——不绑定的
+    // 话，归类后被换名的目录会被按名重开、无辜项目被清空）：打开后重走
+    // no-follow 归类，换成符号链接/异型即拒绝（换成另一真实目录的残余
+    // 窗口仍在，由 cap-std 沙箱限定在 projects/ 树内）
+    #[cfg(not(unix))]
+    {
+        let recheck = parent
+            .symlink_metadata(&rel)
+            .map_err(|e| format!("复核{label}元数据失败：{e}"))?;
+        if recheck.file_type().is_symlink()
+            || !recheck.is_dir()
+            || !opened
+                .dir_metadata()
+                .map_err(|e| format!("读取{label}句柄元数据失败：{e}"))?
+                .is_dir()
+        {
+            return Err(format!("{label}在归类后被替换，拒绝操作"));
         }
     }
     #[cfg(not(unix))]
@@ -2332,6 +2367,18 @@ mod tests {
         let text = r#"{"schemaVersion":1,"project":{"id":"p-1","name":"剧","createdAt":"","updatedAt":"","description":42},"graph":{"nodes":[],"edges":[]}}"#;
         let file = parse_file("p-1", text).expect("解析 v1");
         assert_eq!(file.project.description, Some(json!(42)));
+    }
+
+    #[test]
+    fn save_ipc_explicit_null_description_preserved_and_rejected() {
+        // 显式 null 不得被 serde 折叠为 None：那会让保存边界看不见非字符串
+        // 值而静默省略键——既有描述被无声抹掉
+        let mut payload = serde_json::to_value(valid_save_doc()).unwrap();
+        payload["project"]["description"] = serde_json::Value::Null;
+        let file: ProjectFile = serde_json::from_value(payload).expect("反序列化");
+        assert_eq!(file.project.description, Some(serde_json::Value::Null));
+        let err = prepare_save("p-1", &file).unwrap_err();
+        assert!(err.contains("description"), "意外诊断：{err}");
     }
 
     #[test]
