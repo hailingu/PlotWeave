@@ -174,30 +174,39 @@ async function tauriCreate(name: string): Promise<ProjectSummary> {
   )
 }
 
-async function tauriLoad(id: string): Promise<ProjectContent> {
-  const { invoke } = await import('@tauri-apps/api/core')
-  // §3.1 保存链静止先于读取：编辑器卸载后的冲刷可能在途/排队，且旧
-  // 编辑器的防抖可能在 A 在途时又补交 B——单次等待只等 A，读盘会落在
-  // B 之前，重开后的编辑把旧内容重新落盘、反向覆盖 B。循环等到观察的
-  // 链不再变化（await 后仍是同一 Promise 即静止）为止
+/** 等待该项目的保存链静止（§3.1，tauriLoad 内核）：await 后仍是同一
+ * Promise 即静止。编辑器卸载后的冲刷可能在途/排队，旧编辑器的防抖还
+ * 可能在 A 在途时又补交 B——单次等待只等 A，读盘落在 B 之前会让重开
+ * 后的编辑把旧内容重新落盘、反向覆盖 B。 */
+async function waitForSaveChainIdle(id: string): Promise<void> {
   for (;;) {
     const chain = saveChains.get(id)
-    if (chain === undefined) break
+    if (chain === undefined) return
     await chain.catch(() => undefined)
-    if (saveChains.get(id) === chain) break
+    if (saveChains.get(id) === chain) return
   }
-  // 链上失败登记的最新文档比磁盘新（冲刷失败待重试）：以它交付会话
-  // （经保存同款归一化，剥离运行态），否则用户看到丢编辑的旧版本，
-  // 且随后编辑与重试登记竞态。登记文档同样过加载侧资产实路径复验：
-  // 保存失败的常见原因正是资产文件缺失/被换符号链接——不复验就把带
+}
+
+async function tauriLoad(id: string): Promise<ProjectContent> {
+  const { invoke } = await import('@tauri-apps/api/core')
+  // 链静止后优先交付链上失败登记的最新文档（冲刷失败待重试，比磁盘新）：
+  // 经保存同款归一化（剥离运行态）交付，否则用户看到丢编辑的旧版本，
+  // 且随后编辑与重试登记竞态。登记文档同样过加载侧资产实路径复验——
+  // 保存失败的常见原因正是资产文件缺失/被换符号链接，不复验就把带
   // 坏资产的文档交付会话、重试登记也原样持有，此后每次重试与后续编辑
-  // 都注定失败；隔离后的修复内容同时替换重试登记（后台重试改持净载荷）
-  const pending = pendingRetryDocs.get(id)
-  if (pending !== undefined) {
+  // 都注定失败；隔离后的修复内容同时替换重试登记（后台重试改持净载荷）。
+  // 复验的 await 期间登记可能被更新保存清除/替换（重试成功、新失败）：
+  // 只有仍是观察到的那份才替换——无条件写回会把已被取代的旧文档复活
+  // 进登记与交付，编辑即覆盖新保存；否则按当前保存状态整体重来
+  for (;;) {
+    await waitForSaveChainIdle(id)
+    const pending = pendingRetryDocs.get(id)
+    if (pending === undefined) break
     const invalid = await invoke<string[]>('verify_project_assets', {
       id,
       assets: pending.assets ?? {},
     })
+    if (pendingRetryDocs.get(id) !== pending) continue
     const verified = memoryNormalize(pending, id, invalid)
     pendingRetryDocs.set(id, verified)
     return verified

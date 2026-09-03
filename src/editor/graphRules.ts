@@ -17,6 +17,8 @@ export const SCENE_SHOT_HANDLE = 'shots'
  * 删除任一选项不会位移其余出口的连线归属（docs/data-model.md §4.2/§5）。 */
 export const BRANCH_OPTION_HANDLE_PREFIX = 'option-'
 
+/** 选项 id → 出口端口名（option-<id>）：连线与句柄改写的统一构造器，
+ * 消费方不得手拼前缀（口径与 BRANCH_OPTION_HANDLE_PREFIX 单点维护）。 */
 export function branchOptionHandle(optionId: string): string {
   return `${BRANCH_OPTION_HANDLE_PREFIX}${optionId}`
 }

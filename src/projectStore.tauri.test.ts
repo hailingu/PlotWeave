@@ -222,6 +222,47 @@ describe('tauriLoad：归一化与迁移回写', () => {
     }
   })
 
+  it('复验等待期间登记被更新保存清除/替换：不得回写旧捕获文档，按当前保存状态重来', async () => {
+    let releaseVerify: ((v: string[]) => void) | null = null
+    let saveCalls = 0
+    handlers.set('load_project', () => modernFile())
+    let verifyCalls = 0
+    handlers.set('verify_project_assets', () => {
+      verifyCalls += 1
+      // 首次（登记复验）挂起制造竞态窗口；磁盘路径的复验即答
+      if (verifyCalls === 1) {
+        return new Promise<string[]>((resolve) => {
+          releaseVerify = resolve
+        })
+      }
+      return Promise.resolve([])
+    })
+    handlers.set('save_project', () => {
+      saveCalls += 1
+      if (saveCalls === 1) throw new Error('磁盘满')
+      return undefined
+    })
+    vi.useFakeTimers()
+    try {
+      const { projectStore } = await load()
+      const docOf = (name: string) => ({ name, nodes: [], edges: [], settings: { characters: [], locations: [] } })
+      await expect(projectStore.save('p1', docOf('旧登记'))).rejects.toThrow('磁盘满')
+      // load 捕获旧登记后进入复验等待
+      const loading = projectStore.load('p1')
+      await vi.waitFor(() => expect(releaseVerify).not.toBeNull())
+      // 复验在途期间重试定时器触发且成功：登记被清除（磁盘已是最新）
+      await vi.advanceTimersByTimeAsync(5000)
+      ;(releaseVerify as unknown as (v: string[]) => void)([])
+      const doc = await loading
+      // 红：无条件 set 把旧捕获文档写回登记并交付——陈旧内容被编辑即覆盖
+      // 新保存；须确认仍是观察到的那份才替换，否则按当前状态（磁盘）重来
+      expect(doc.name).toBe('现代剧')
+      expect(calls.some((c) => c.cmd === 'load_project')).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('versionless IPC 标记触发回写补盖版本号：无版本文件不再永久无版本', async () => {
     // Rust 判型给缺 schemaVersion 的 v1 形状载荷打 versionless: true——
     // 额外键使前端 repaired 比较必然不等，回写落定显式版本（§10.5/§11.1）
