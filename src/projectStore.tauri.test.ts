@@ -133,6 +133,35 @@ describe('tauriLoad：归一化与迁移回写', () => {
     expect(doc.name).toBe('现代剧')
   })
 
+  it('读取期间新保存排队：链身份守卫整体重来，修复回写不得晚于新保存覆盖新内容', async () => {
+    let loadCalls = 0
+    let store: typeof import('./projectStore') | undefined
+    handlers.set('load_project', () => {
+      loadCalls += 1
+      if (loadCalls === 1) {
+        // load_project 在途：编辑器卸载冲刷把新保存排进链（此前链本静止）
+        void store
+          ?.projectStore.save('p1', { name: '冲刷的新编辑', nodes: [], edges: [], settings: { characters: [], locations: [] } })
+          .catch(() => undefined)
+        // 返回写前旧文件（脏 v1：空白边 id 触发修复回写）
+        return {
+          ...modernFile(),
+          graph: { ...modernFile().graph, edges: [{ id: '   ', source: 's1', target: 's1', data: { kind: 'sequence' } }] },
+        }
+      }
+      // 守卫触发重来的读取：写后净本，不再触发回写
+      return { ...modernFile(), project: { ...modernFile().project, name: '写后净本' } }
+    })
+    handlers.set('save_project', () => undefined)
+    const mod = await load()
+    store = mod
+    const doc = await mod.projectStore.load('p1')
+    // 旧内容的修复回写不得在冲刷之后落盘——重来后读到净本即无需回写
+    const saves = calls.filter((c) => c.cmd === 'save_project')
+    expect(saves.map((s) => (s.args as { doc: { project: { name: string } } }).doc.project.name)).toEqual(['冲刷的新编辑'])
+    expect(doc.name).toBe('写后净本')
+  })
+
   it('加载等到保存链静止：A 在途期间 B 入队，读盘不得早于 B 落定', async () => {
     let releaseA: (() => void) | null = null
     let saveCalls = 0

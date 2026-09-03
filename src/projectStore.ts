@@ -218,33 +218,40 @@ async function tauriLoad(id: string): Promise<ProjectContent> {
     pendingRetryDocs.set(id, verified)
     return verified
   }
-  const file = await invoke<unknown>('load_project', { id })
-  // §7.1/§10.5 加载侧资产实路径复验：Rust 以受信资产根 no-follow 验证
-  // （前端无法访问文件系统），不可验证键交归一化层隔离、引用位标记悬空
-  // ——否则下一次保存会被保存边界拒收而防抖吞错，用户编辑永不落盘
-  const invalidAssetKeys = await invoke<string[]>('verify_project_assets', {
-    id,
-    assets: (file as { assets?: unknown }).assets ?? {},
-  })
-  // §11 归一化管线：迁移 + 孤儿边隔离 + 悬空引用标记；
-  // projectId 为路径给定的受信 id，供 §11.1 元数据修复覆盖 project.id
-  const { content, migrated, repaired, warnings } = parseProject(file, { projectId: id, invalidAssetKeys })
-  for (const w of warnings) console.warn(`[projectStore] ${w}`)
-  // 迁移或修复发生则写回磁盘（下次打开不再迁移/重复修复）。v1 的可修复
-  // 脏数据（空白/重复 id 等）只修在内存时，用户只开不编辑（防抖保存跳过
-  // 首帧）会让脏文件长留磁盘，每次打开都重新生成不同的"稳定" id——修复
-  // 必须落定。回写完成前不返回：load 后紧随的保存（如首页改名）不得与慢
-  // 回写竞态——先返回再让旧内容后完成落盘会反向覆盖新保存。失败只诊断
-  // 不阻断（显式 catch，不留未处理拒绝）：内存已交付修复结果，磁盘保持
-  // 旧内容，下次打开会重新修复
-  if (migrated || repaired) {
-    try {
-      await tauriSave(id, content)
-    } catch (err) {
-      console.error('[projectStore] 迁移/修复回写失败，磁盘仍为旧内容（下次打开将重新修复）', err)
+  // 磁盘读取段按链身份守卫：load_project/复验的 await 期间可能又有保存
+  // 排队（如编辑器卸载冲刷）——读到的会是写前旧文件；不重验就继续会把
+  // 旧内容交付会话，且随后的修复回写若晚于新保存落盘，会把新内容反向
+  // 覆盖。链身份变化即整体重来（等待新链落定后重读），保证「读到即最新」
+  for (;;) {
+    await waitForSaveChainIdle(id)
+    const chainBefore = saveChains.get(id)
+    const file = await invoke<unknown>('load_project', { id })
+    // §7.1/§10.5 加载侧资产实路径复验：Rust 以受信资产根 no-follow 验证
+    // （前端无法访问文件系统），不可验证键交归一化层隔离、引用位标记悬空
+    // ——否则下一次保存会被保存边界拒收而防抖吞错，用户编辑永不落盘
+    const invalidAssetKeys = await invoke<string[]>('verify_project_assets', {
+      id,
+      assets: (file as { assets?: unknown }).assets ?? {},
+    })
+    if (saveChains.get(id) !== chainBefore) continue
+    // §11 归一化管线：迁移 + 孤儿边隔离 + 悬空引用标记；
+    // projectId 为路径给定的受信 id，供 §11.1 元数据修复覆盖 project.id
+    const { content, migrated, repaired, warnings } = parseProject(file, { projectId: id, invalidAssetKeys })
+    for (const w of warnings) console.warn(`[projectStore] ${w}`)
+    // 迁移或修复发生则写回磁盘（下次打开不再迁移/重复修复）。v1 的可修复
+    // 脏数据（空白/重复 id 等）只修在内存时，用户只开不编辑（防抖保存跳过
+    // 首帧）会让脏文件长留磁盘，每次打开都重新生成不同的"稳定" id——修复
+    // 必须落定。回写走保存链且完成前不返回（此刻链静止、身份未变，同步段
+    // 内入队不会被插队）：与读取后排队的新保存保持全序，迟到的旧内容不得
+    // 覆盖新保存；失败只诊断不阻断（显式 catch，不留未处理拒绝），由链的
+    // 重试登记接管——内存已交付修复结果，磁盘保持旧内容，下次打开会重新修复
+    if (migrated || repaired) {
+      await enqueueSave(id, content).catch((err: unknown) => {
+        console.error('[projectStore] 迁移/修复回写失败，已登记后台重试（下次打开将重新修复）', err)
+      })
     }
+    return content
   }
-  return content
 }
 
 async function tauriSave(id: string, doc: ProjectContent): Promise<void> {
