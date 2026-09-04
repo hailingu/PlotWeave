@@ -28,7 +28,7 @@
       "devCsp": "default-src 'self'; connect-src ipc: http://ipc.localhost ws://localhost:5173 http://localhost:5173; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost data:",
       "assetProtocol": {
         "enable": true,
-        "scope": ["$APPDATA/library/**", "$APPDATA/projects/**"]
+        "scope": ["$APPDATA/library/assets/**", "$APPDATA/projects/*/assets/**"]
       }
     }
   },
