@@ -5,7 +5,8 @@
  * refs 快照会互相覆盖（丢一次绑定且两份资产都滞留索引）；导入成功后以
  * Rust 返回的权威 MIME 复核 kind（载荷可能过期/伪造），再绑定并入栈。
  * 文件落盘是拷贝语义，撤销只回滚索引条目与引用位（§7.3 延迟回收：
- * 文件不随撤销删除）。
+ * 文件不随撤销删除）；重做经 redoGuard 复验落盘状态后才恢复（issue #10：
+ * 撤销窗口内文件被外部删改则拒绝重做入脏）。
  */
 import { useCallback, useRef, type DragEvent as ReactDragEvent, type RefObject } from 'react'
 import { hitDropNode, readLibraryAssetPayload } from './dragDrop'
@@ -74,6 +75,9 @@ export function useLibraryAssetDrop(deps: LibraryAssetDropDeps) {
               removeAsset(asset.id)
               applyDataPatch(nodeId, { refs: before })
             },
+            // 重做防线（issue #10）：撤销窗口内文件可能被外部删改，
+            // redoGuard 复验通过才应用；拒绝则本次重做放弃（文件恢复后可重试）
+            redoGuard: () => projectAssets.revalidate(projectId, asset),
             redo: () => {
               addAsset(asset)
               applyDataPatch(nodeId, { refs: next })

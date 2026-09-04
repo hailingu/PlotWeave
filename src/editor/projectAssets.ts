@@ -136,4 +136,17 @@ export const projectAssets = {
     }
     return Promise.resolve(url)
   },
+
+  /** 复验既有项目资产的落盘状态（§9.3 实路径复验同域）：撤销后重做的
+   * 防线（issue #10）——撤销窗口内文件被外部删改则拒绝，避免失效条目
+   * 重做入脏、save_project 全量拒绝卡死自动保存。Tauri 走 Rust
+   * validate_project_asset；浏览器预览内存态无盘上文件，恒通过。 */
+  revalidate: (projectId: string, asset: AssetRef): Promise<void> => {
+    if (!isTauri) return Promise.resolve()
+    return tauriInvoke<RawAssetRef>('validate_project_asset', { id: projectId, asset }).then(
+      (raw) => {
+        normalizeAssetRef(raw)
+      },
+    )
+  },
 }

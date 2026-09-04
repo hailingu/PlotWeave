@@ -213,6 +213,21 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
     canRedo,
   } = useCommandHistory()
 
+  /** 重做可能在资产复验失败后放弃（issue #10）：拒绝原因上浮横幅，
+   * 成功的重做清除旧横幅。无 redoGuard 的命令是同步路径（无 Promise）。 */
+  const [historyError, setHistoryError] = useState<string | null>(null)
+  const redoWithDiagnostics = useCallback(() => {
+    const pending = redoHistory()
+    if (pending === undefined) return
+    pending
+      .then(() => setHistoryError(null))
+      .catch((err: unknown) => {
+        setHistoryError(
+          `重做失败：${err instanceof Error ? err.message : String(err)}（资产文件可能已被外部删改，可恢复后重试）`,
+        )
+      })
+  }, [redoHistory])
+
   // 三栏面板状态（§3.4：220–320pt 可调，显隐会话内记忆——组件态即会话态）
   const [leftOpen, setLeftOpen] = useState(true)
   const [leftWidth, setLeftWidth] = useState(248)
@@ -549,7 +564,7 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
       setCtxMenu(null)
     }, [closeSettings]),
     onUndo: undoHistory,
-    onRedo: redoHistory,
+    onRedo: redoWithDiagnostics,
     selectedNodeIds: useCallback(
       () => nodesRef.current.filter((n) => n.selected).map((n) => n.id),
       [],
@@ -658,7 +673,7 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
         canUndo={canUndo}
         canRedo={canRedo}
         onUndo={undoHistory}
-        onRedo={redoHistory}
+        onRedo={redoWithDiagnostics}
         onBackHome={onBackHome}
         plusOpen={plusOpen}
         onTogglePlus={() => setPlusOpen((v) => !v)}
@@ -674,6 +689,7 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
         />
       )}
       {dropError !== null && <ErrorBanner message={dropError} />}
+      {historyError !== null && <ErrorBanner message={historyError} />}
       <div className="editor-body">
         <LeftPanel
           open={leftOpen}

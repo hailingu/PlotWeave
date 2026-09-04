@@ -148,6 +148,66 @@ describe('CommandStack：栈深上限', () => {
   })
 })
 
+describe('CommandStack：redoGuard（资产重回索引前的异步复验，issue #10）', () => {
+  it('无 redoGuard 的命令保持同步语义：redo() 返回 undefined 且立即应用', () => {
+    const { s } = stack()
+    const c = cmd(undefined)
+    s.push(c)
+    s.undo()
+    const ret = s.redo()
+    expect(ret).toBeUndefined()
+    expect(c.redo).toHaveBeenCalledTimes(1)
+  })
+
+  it('带 redoGuard 的命令：校验通过后应用，返回 Promise', async () => {
+    const { s } = stack()
+    const guard = vi.fn(() => Promise.resolve())
+    const c: HistoryCommand = { undo: vi.fn(), redo: vi.fn(), redoGuard: guard }
+    s.push(c)
+    s.undo()
+    await s.redo()
+    expect(guard).toHaveBeenCalledTimes(1)
+    expect(c.redo).toHaveBeenCalledTimes(1)
+    expect(s.canUndo).toBe(true)
+  })
+
+  it('校验拒绝：本次重做放弃、不应用、命令留在重做栈可重试，拒绝原因传播', async () => {
+    const { s } = stack()
+    const c: HistoryCommand = {
+      undo: vi.fn(),
+      redo: vi.fn(),
+      redoGuard: () => Promise.reject(new Error('资产文件已失效')),
+    }
+    s.push(c)
+    s.undo()
+    await expect(s.redo()).rejects.toThrow('资产文件已失效')
+    expect(c.redo).not.toHaveBeenCalled()
+    expect(s.canRedo).toBe(true)
+    expect(s.canUndo).toBe(false)
+  })
+
+  it('校验在途期间栈顶被新编辑取代：静默放弃，不应用被取代的命令', async () => {
+    const { s } = stack()
+    let release: () => void = () => {}
+    const c: HistoryCommand = {
+      undo: vi.fn(),
+      redo: vi.fn(),
+      redoGuard: () =>
+        new Promise<void>((resolve) => {
+          release = resolve
+        }),
+    }
+    s.push(c)
+    s.undo()
+    const pending = s.redo()
+    s.push(cmd('new')) // 校验在途时新编辑清空重做分支：c 已被取代
+    release()
+    await pending
+    expect(c.redo).not.toHaveBeenCalled()
+    expect(s.canRedo).toBe(false)
+  })
+})
+
 describe('useCommandHistory（命令栈 hook：惰性构建 + version 驱动重渲染）', () => {
   it('push/undo/redo/clear 委托栈实现；canUndo/canRedo 随 version 重算', () => {
     const { result } = renderHook(() => useCommandHistory())

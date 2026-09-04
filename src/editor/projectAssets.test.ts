@@ -55,3 +55,17 @@ describe('projectAssets 内存回退：mediaUrl', () => {
     await expect(projectAssets.mediaUrl('p-1', asset)).resolves.toMatch(/^blob:/)
   })
 })
+
+describe('projectAssets 内存回退：revalidate', () => {
+  it('无盘上文件可校验：恒通过（重做防线在预览态直通，issue #10）', async () => {
+    const { projectAssets } = await load()
+    const asset = {
+      id: 'pa-1',
+      relPath: 'assets/pa-1.png',
+      mime: 'image/png',
+      source: 'upload',
+      createdAt: '2026-09-04T08:00:00.000Z',
+    } as const
+    await expect(projectAssets.revalidate('p-1', asset)).resolves.toBeUndefined()
+  })
+})

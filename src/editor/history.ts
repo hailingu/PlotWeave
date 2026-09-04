@@ -14,6 +14,11 @@ export interface HistoryCommand {
   /** 调试与合并标识；patch 命令填 `patch:<id>:<keys>` 形式。 */
   coalesceKey?: string
   undo: () => void
+  /** 重做前的异步复验（issue #10）：只读不改状态——校验通过后才执行
+   * redo 应用。资产重回索引的命令（库导入/生成产物）挂载它复验文件
+   * 落盘状态，撤销窗口内被外部删改则拒绝重做入脏；拒绝时本次重做
+   * 放弃、命令留在重做栈（外部条件恢复后可重试）。 */
+  redoGuard?: () => Promise<void>
   redo: () => void
   /** 入栈时间戳，补丁合并窗口判断用。 */
   timestamp?: number
@@ -73,9 +78,31 @@ export class CommandStack {
     this.onChange?.()
   }
 
-  redo(): void {
-    const cmd = this.redoStack.pop()
+  /**
+   * 重做栈顶命令。无 redoGuard 的命令走同步快路径（返回 undefined，
+   * 与既有契约逐字一致）；带 redoGuard 的命令先等待校验：拒绝则本次
+   * 重做放弃、命令留在重做栈、拒绝原因经返回的 Promise 传播；校验
+   * 在途期间栈顶被其他操作取代（并发撤销/新编辑清空重做分支）则
+   * 静默放弃——最新操作优先，绝不应用已被取代的命令。校验只读不改
+   * 状态，应用本身保持同步原子。
+   */
+  redo(): void | Promise<void> {
+    const cmd = this.redoStack[this.redoStack.length - 1]
     if (!cmd) return
+    const guard = cmd.redoGuard
+    if (guard === undefined) {
+      this.applyRedo(cmd)
+      return
+    }
+    return guard().then(() => {
+      if (this.redoStack[this.redoStack.length - 1] !== cmd) return
+      this.applyRedo(cmd)
+    })
+  }
+
+  /** 弹出并应用重做命令、移入撤销栈（redo 快慢路径共用的原子收尾）。 */
+  private applyRedo(cmd: HistoryCommand): void {
+    this.redoStack.pop()
     cmd.redo()
     this.undoStack.push(cmd)
     this.onChange?.()
