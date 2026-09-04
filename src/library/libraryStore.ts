@@ -153,7 +153,8 @@ export const libraryStore = {
   },
 
   /** 媒体 URL：Tauri 走 asset 协议懒加载；内存回退为 object URL。
-   * 入参放宽到 id/relPath 子集：项目资产预览回退按来源库资产 id 委托解析。 */
+   * 入参放宽到 id/relPath 子集：项目资产导入拷贝（projectAssets）按
+   * 来源库资产 id 取源媒体建独立 URL（§7.3 拷贝语义）。 */
   mediaUrl: (asset: Pick<LibraryAsset, 'id' | 'relPath'>): Promise<string> => {
     if (isTauri) return tauriMediaUrl(asset)
     const hit = memoryAssets.get(asset.id)

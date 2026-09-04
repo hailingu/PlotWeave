@@ -1,7 +1,8 @@
 /**
  * 项目资产门面浏览器内存回退路径（无 __TAURI_INTERNALS__）：
- * 导入生成合法 AssetRef（假规范 relPath，能过归一化往返），媒体 URL
- * 委托库内 blob 的 object URL（预览语义，不落盘）。
+ * 导入生成合法 AssetRef（假规范 relPath，能过归一化往返），并经源
+ * blob 建独立 object URL——拷贝语义：源库资产删除不影响项目缩略图
+ * （issue #8），重载即失效（预览语义，不落盘）。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -35,7 +36,7 @@ describe('projectAssets 内存回退：importFromLibrary', () => {
 })
 
 describe('projectAssets 内存回退：mediaUrl', () => {
-  it('本会话导入的资产经库内 blob 解析出 object URL；未知资产拒绝', async () => {
+  it('本会话导入的资产解析出 object URL；未知资产拒绝', async () => {
     const { libraryStore, projectAssets } = await load()
     const lib = await libraryStore.put(new File(['x'], 'a.png', { type: 'image/png' }), 'reference')
     const asset = await projectAssets.importFromLibrary('p-1', lib.id)
@@ -44,5 +45,13 @@ describe('projectAssets 内存回退：mediaUrl', () => {
     await expect(
       projectAssets.mediaUrl('p-1', { ...asset, id: 'pa-gone' }),
     ).rejects.toThrow(/不在本会话内存/)
+  })
+
+  it('源库资产删除后项目媒体 URL 仍解析（拷贝语义 §7.3，issue #8）', async () => {
+    const { libraryStore, projectAssets } = await load()
+    const lib = await libraryStore.put(new File(['y'], 'b.png', { type: 'image/png' }), 'character')
+    const asset = await projectAssets.importFromLibrary('p-1', lib.id)
+    await libraryStore.remove(lib.id)
+    await expect(projectAssets.mediaUrl('p-1', asset)).resolves.toMatch(/^blob:/)
   })
 })
