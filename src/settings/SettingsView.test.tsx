@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 /**
  * 设置页组件测试：Provider 卡片编辑（启用/Base URL/模型清单）、
- * API key 提交与清除、默认模型三层过滤下拉与防抖落盘。
+ * API key 提交与清除、默认模型三层过滤下拉与防抖落盘、
+ * 关闭冲刷（防抖窗口内 / 在途 save / 失败保留重试）。
  * happy-dom 无 __TAURI_INTERNALS__，settingsStore 走内存回退路径。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -77,6 +78,17 @@ describe('SettingsView 默认模型分段', () => {
     expect(await screen.findByText('当前对话走 OpenAI 兼容 · gpt-4o。')).toBeTruthy()
   })
 
+  it('禁用所有 provider 后提示暂无可用模型', async () => {
+    render(<SettingsView onClose={vi.fn()} />)
+    await screen.findByText('OpenAI 兼容')
+    for (const toggle of screen.getAllByRole('checkbox')) fireEvent.click(toggle)
+    expect(
+      await screen.findByText('暂无可用模型：请启用 provider、配置 API key 并添加模型 id。'),
+    ).toBeTruthy()
+  })
+})
+
+describe('SettingsView 关闭冲刷：防抖窗口内', () => {
   it('500ms 防抖窗口内关闭设置：卸载冲刷未落盘的最后一次编辑', async () => {
     const saveSpy = vi.spyOn(settingsStore, 'save')
     const view = render(<SettingsView onClose={vi.fn()} />)
@@ -117,7 +129,9 @@ describe('SettingsView 默认模型分段', () => {
     })
     expect(onClose).toHaveBeenCalledTimes(1)
   })
+})
 
+describe('SettingsView 关闭冲刷：在途 save', () => {
   it('防抖已触发、save 在途时点「完成」：等在途 save 完成才切换界面', async () => {
     let resolveSave!: (v: void) => void
     const saveSpy = vi.spyOn(settingsStore, 'save').mockImplementation(
@@ -147,6 +161,47 @@ describe('SettingsView 默认模型分段', () => {
     expect(saveSpy.mock.calls[0][0].defaultImage).toBe('openai:gpt-4o')
   })
 
+  it('冲刷落盘在途时的新编辑也被 await：close 不早于最后一次落盘', async () => {
+    let resolveFirst!: (v: void) => void
+    let resolveSecond!: (v: void) => void
+    const saveSpy = vi
+      .spyOn(settingsStore, 'save')
+      .mockImplementationOnce(() => new Promise<void>((res) => (resolveFirst = res)))
+      .mockImplementationOnce(() => new Promise<void>((res) => (resolveSecond = res)))
+    const onClose = vi.fn()
+    render(<SettingsView onClose={onClose} />)
+    await screen.findByText('OpenAI 兼容')
+    fireEvent.change(screen.getByRole('combobox', { name: /图像生成模型/ }), {
+      target: { value: 'openai:gpt-4o' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '关闭设置' }))
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(saveSpy).toHaveBeenCalledTimes(1) // 第一次冲刷落盘在途
+    // 冲刷期间用户又编辑（编辑 B）：不得只留给卸载 fire-and-forget 兜底
+    fireEvent.change(screen.getByRole('combobox', { name: /图像生成模型/ }), {
+      target: { value: 'openai:gpt-4o-mini' },
+    })
+    resolveFirst()
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(onClose).not.toHaveBeenCalled() // 编辑 B 尚未落盘：不切换界面
+    resolveSecond()
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect(saveSpy.mock.calls[1][0].defaultImage).toBe('openai:gpt-4o-mini')
+  })
+})
+
+describe('SettingsView 关闭冲刷：失败', () => {
   it('在途 save 迟到失败不覆盖更新的快照：关闭冲刷落盘的是最新编辑', async () => {
     let rejectA!: () => void
     const saveSpy = vi
@@ -204,15 +259,6 @@ describe('SettingsView 默认模型分段', () => {
       await Promise.resolve()
     })
     expect(onClose).toHaveBeenCalledTimes(1)
-  })
-
-  it('禁用所有 provider 后提示暂无可用模型', async () => {
-    render(<SettingsView onClose={vi.fn()} />)
-    await screen.findByText('OpenAI 兼容')
-    for (const toggle of screen.getAllByRole('checkbox')) fireEvent.click(toggle)
-    expect(
-      await screen.findByText('暂无可用模型：请启用 provider、配置 API key 并添加模型 id。'),
-    ).toBeTruthy()
   })
 })
 
