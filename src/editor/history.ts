@@ -127,10 +127,14 @@ export class CommandStack {
 }
 
 /**
- * 撤销/重做栈 hook。canUndo/canRedo 随 version 重算；
- * 命令执行（undo/redo 内的 setState）驱动画布重渲染。
+ * 撤销/重做栈 hook。canUndo/canRedo 随 version 重算；命令执行
+ * （undo/onRedo 内的 setState）驱动画布重渲染。
+ *
+ * onRedo 带诊断（issue #10）：带 redoGuard 的重做拒绝时经 onRedoError
+ * 上浮横幅文案、成功时以 null 清除；无 guard 命令是同步路径（无
+ * Promise），不触横幅。出口回调必填——拒绝原因不得被静默吞掉。
  */
-export function useCommandHistory() {
+export function useCommandHistory(onRedoError: (message: string | null) => void) {
   const [version, setVersion] = useState(0)
   const stackRef = useRef<CommandStack | null>(null)
   // 惰性构建：setVersion 只在变更回调里触发，构造期不产生渲染副作用
@@ -142,10 +146,23 @@ export function useCommandHistory() {
   )
   const stack = stackRef.current
 
+  /** 重做入口：先走栈（可能因 redoGuard 拒绝放弃），拒绝/成功回投横幅槽。 */
+  const onRedo = useCallback(() => {
+    const pending = stack.redo()
+    if (pending === undefined) return
+    pending
+      .then(() => onRedoError(null))
+      .catch((err: unknown) => {
+        onRedoError(
+          `重做失败：${err instanceof Error ? err.message : String(err)}（资产文件可能已被外部删改，可恢复后重试）`,
+        )
+      })
+  }, [stack, onRedoError])
+
   return {
     push: useCallback((cmd: HistoryCommand) => stack.push(cmd), [stack]),
     undo: useCallback(() => stack.undo(), [stack]),
-    redo: useCallback(() => stack.redo(), [stack]),
+    onRedo,
     clear: useCallback(() => stack.clear(), [stack]),
     canUndo: stack.canUndo,
     canRedo: stack.canRedo,
