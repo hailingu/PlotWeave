@@ -5,7 +5,9 @@
  * validate_project_asset 预检（§9.3 set_asset 强制）；媒体 URL 经
  * project_asset_path 实路径复验后 convertFileSrc 拼接。
  * 浏览器预览无 IPC，回退为内存实现：导入生成假规范 relPath 的 AssetRef
- *（归一化往返可存活），媒体直读来源库资产的 object URL，不落盘。
+ *（归一化往返可存活），同时经源 blob 建独立 object URL 挂到项目资产 id
+ *（拷贝语义：源库资产删除不影响项目缩略图；重载后映射丢失即拒绝，
+ * 预览不落盘，属预期）。
  */
 import type { AssetRef } from '../model/document'
 import { libraryStore } from '../library/libraryStore'
@@ -13,8 +15,9 @@ import { uid } from '../uid'
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
-/** 内存回退：项目资产 id → 来源库资产 id（媒体委托库内 blob）。 */
-const memorySource = new Map<string, string>()
+/** 内存回退：项目资产 id → 导入时建立的独立 object URL（URL store 钉住
+ * 源 blob，脱离库内条目存活；会话内有效，重载即失效）。 */
+const memoryUrls = new Map<string, string>()
 
 interface RawAssetRef {
   id?: unknown
@@ -96,7 +99,8 @@ async function memoryImport(_projectId: string, libraryAssetId: string): Promise
     source: 'upload',
     createdAt: new Date().toISOString(),
   }
-  memorySource.set(id, lib.id)
+  // 拷贝语义（§7.3）：导入即经源 blob 建独立 object URL，源取不到则导入失败
+  memoryUrls.set(id, await libraryStore.mediaUrl({ id: lib.id, relPath: '' }))
   return asset
 }
 
@@ -121,14 +125,15 @@ export const projectAssets = {
   importFromLibrary: (projectId: string, libraryAssetId: string): Promise<AssetRef> =>
     isTauri ? tauriImport(projectId, libraryAssetId) : memoryImport(projectId, libraryAssetId),
 
-  /** 媒体 URL：Tauri 走 asset 协议（实路径复验后拼接）；内存回退委托来源
-   * 库资产的 object URL——重载后映射丢失即拒绝（预览不落盘，属预期）。 */
+  /** 媒体 URL：Tauri 走 asset 协议（实路径复验后拼接）；内存回退返回
+   * 导入时建立的独立 object URL（源库删除不影响）——重载后映射丢失即
+   * 拒绝（预览不落盘，属预期）。 */
   mediaUrl: (projectId: string, asset: AssetRef): Promise<string> => {
     if (isTauri) return tauriMediaUrl(projectId, asset)
-    const src = memorySource.get(asset.id)
-    if (!src) {
+    const url = memoryUrls.get(asset.id)
+    if (!url) {
       return Promise.reject(new Error(`资产 ${asset.id} 的媒体不在本会话内存中（浏览器预览不落盘）`))
     }
-    return libraryStore.mediaUrl({ id: src, relPath: '' })
+    return Promise.resolve(url)
   },
 }
