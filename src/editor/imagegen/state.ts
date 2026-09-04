@@ -12,6 +12,7 @@ import type { AssetRef } from '../../model/document'
 import { settingsStore } from '../../settings/settingsStore'
 import { uid } from '../../uid'
 import { normalizeAssetRef, tauriInvoke } from '../projectAssets'
+import type { ProjectSettings } from '../settings'
 import type { HistoryCommand } from '../history'
 import type { CanvasNode } from '../nodes/types'
 import type { ImageGenApi, ImageJobView } from './context'
@@ -27,6 +28,8 @@ export interface ImageJobsDeps {
   nodesRef: { current: CanvasNode[] }
   /** 资产索引镜像：替换产物时查旧产物记录（决定能否随命令移出索引）。 */
   assetsRef: { current: { byId: Record<string, AssetRef> } | undefined }
+  /** 设定集镜像：旧产物回收判定需扫角色头像引用（avatarAssetId）。 */
+  settingsRef: { current: Pick<ProjectSettings, 'characters'> }
   /** 纯状态写入（复合命令的初始应用与 undo/redo 共用，不单独入栈）。 */
   applyDataPatch: (id: string, patch: Record<string, unknown>) => void
   addAsset: (asset: AssetRef) => void
@@ -69,9 +72,19 @@ async function runGeneration(
   return normalizeAssetRef(checked as never)
 }
 
-/** 资产是否仍被任意节点引用（图片 outputs.primary / 分镜 refs）——
- * 替换产物时判断旧产物能否安全移出索引（§7.3 索引删除、媒体留存回收）。 */
-function assetReferencedBy(nodes: CanvasNode[], assetId: string): boolean {
+/** 资产是否仍被引用（角色头像 avatarAssetId、图片 outputs.primary、分镜
+ * refs）——替换产物时判断旧产物能否安全移出索引（§7.3 索引删除、媒体
+ * 留存回收）。avatarAssetId 是落盘模型的演进字段（CharacterEntity 未
+ * 声明，但 serialize 整对象透传、运行时可携带）——按 `in` 收窄读取。 */
+function assetReferencedBy(
+  nodes: CanvasNode[],
+  characters: ProjectSettings['characters'],
+  assetId: string,
+): boolean {
+  const avatarHit = characters.some(
+    (c) => 'avatarAssetId' in c && c.avatarAssetId === assetId,
+  )
+  if (avatarHit) return true
   return nodes.some((n) => {
     if (n.type === 'image') return n.data.outputs.primary?.assetId === assetId
     if (n.type === 'shot') return n.data.refs.some((r) => r.assetId === assetId)
@@ -89,6 +102,7 @@ function applyGenerationResult(
   deps: {
     nodesRef: ImageJobsDeps['nodesRef']
     assetsRef: ImageJobsDeps['assetsRef']
+    settingsRef: ImageJobsDeps['settingsRef']
     applyDataPatch: ImageJobsDeps['applyDataPatch']
     addAsset: ImageJobsDeps['addAsset']
     removeAsset: ImageJobsDeps['removeAsset']
@@ -108,13 +122,14 @@ function applyGenerationResult(
   }
   const before = node.data.outputs
   const next = { ...before, primary: { assetId: asset.id } }
-  // 旧产物回收判定：换下了旧 primary 且其余节点不再引用且记录仍在索引
+  // 旧产物回收判定：换下了旧 primary 且无人再引用（头像/其他节点）且记录仍在索引
   const prevId = before.primary?.assetId
   const superseded =
     prevId !== undefined &&
     prevId !== asset.id &&
     !assetReferencedBy(
       deps.nodesRef.current.filter((n) => n.id !== nodeId),
+      deps.settingsRef.current.characters,
       prevId,
     )
       ? deps.assetsRef.current?.byId[prevId]
@@ -213,7 +228,7 @@ export function useImageJobsState(deps: ImageJobsDeps): {
   api: ImageGenApi
   notice: string | null
 } {
-  const { projectId, nodesRef, assetsRef, applyDataPatch, addAsset, removeAsset, pushHistory } =
+  const { projectId, nodesRef, assetsRef, settingsRef, applyDataPatch, addAsset, removeAsset, pushHistory } =
     deps
   const [jobs, setJobs] = useState<Record<string, ImageJobView>>({})
   /** 异步完成时读取最新作业表（setState 闭包会拿到过期快照）；start 的
@@ -247,6 +262,7 @@ export function useImageJobsState(deps: ImageJobsDeps): {
         {
           nodesRef,
           assetsRef,
+          settingsRef,
           applyDataPatch,
           addAsset,
           removeAsset,
@@ -258,7 +274,17 @@ export function useImageJobsState(deps: ImageJobsDeps): {
         input,
         asset,
       ),
-    [addAsset, applyDataPatch, assetsRef, clearJob, dropResult, nodesRef, pushHistory, removeAsset],
+    [
+      addAsset,
+      applyDataPatch,
+      assetsRef,
+      clearJob,
+      dropResult,
+      nodesRef,
+      pushHistory,
+      removeAsset,
+      settingsRef,
+    ],
   )
 
   /** 发起：同步验型 + running 守卫并**同步占位**（直接写 jobsRef，绕过

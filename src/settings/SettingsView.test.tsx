@@ -77,6 +77,23 @@ describe('SettingsView 默认模型分段', () => {
     expect(await screen.findByText('当前对话走 OpenAI 兼容 · gpt-4o。')).toBeTruthy()
   })
 
+  it('500ms 防抖窗口内关闭设置：卸载冲刷未落盘的最后一次编辑', async () => {
+    const saveSpy = vi.spyOn(settingsStore, 'save')
+    const view = render(<SettingsView onClose={vi.fn()} />)
+    await screen.findByText('OpenAI 兼容')
+    vi.useFakeTimers()
+    fireEvent.change(screen.getByRole('combobox', { name: /图像生成模型/ }), {
+      target: { value: 'openai:gpt-4o' },
+    })
+    expect(saveSpy).not.toHaveBeenCalled() // 防抖窗口内不落盘
+    view.unmount() // 点「完成」关闭设置 = 卸载
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(saveSpy).toHaveBeenCalledTimes(1)
+    expect(saveSpy.mock.calls[0][0].defaultImage).toBe('openai:gpt-4o')
+  })
+
   it('禁用所有 provider 后提示暂无可用模型', async () => {
     render(<SettingsView onClose={vi.fn()} />)
     await screen.findByText('OpenAI 兼容')

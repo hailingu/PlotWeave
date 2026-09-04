@@ -15,6 +15,7 @@ import { settingsStore } from '../../settings/settingsStore'
 import { normalizeAssetRef, tauriInvoke } from '../projectAssets'
 import { useImageJobsState } from './state'
 import type { ImageGenApi } from './context'
+import type { CharacterEntity, ProjectSettings } from '../settings'
 import type { HistoryCommand } from '../history'
 import type { AssetRef } from '../../model/document'
 import type { CanvasNode, ImageFlowNode } from '../nodes/types'
@@ -59,6 +60,7 @@ function imageNodeData(): ImageFlowNode['data'] {
 function Harness(props: {
   readonly nodesRef: { current: CanvasNode[] }
   readonly assetsRef: { current: { byId: Record<string, AssetRef> } | undefined }
+  readonly settingsRef: { current: Pick<ProjectSettings, 'characters'> }
   readonly applyDataPatch: (id: string, patch: Record<string, unknown>) => void
   readonly addAsset: (asset: AssetRef) => void
   readonly removeAsset: (assetId: string) => void
@@ -68,6 +70,7 @@ function Harness(props: {
     projectId: 'p-1',
     nodesRef: props.nodesRef,
     assetsRef: props.assetsRef,
+    settingsRef: props.settingsRef,
     applyDataPatch: props.applyDataPatch,
     addAsset: props.addAsset,
     removeAsset: props.removeAsset,
@@ -118,6 +121,7 @@ function setupHarness(
     resolveSettings?: Promise<AppSettings>
     nodes?: CanvasNode[]
     assets?: { byId: Record<string, AssetRef> }
+    characters?: ProjectSettings['characters']
   } = {},
 ) {
   vi.mocked(settingsStore.load).mockImplementation(() => opts.resolveSettings ?? Promise.resolve(validSettings))
@@ -132,7 +136,8 @@ function setupHarness(
       opts.nodes ?? ([{ id: 'img1', type: 'image', data: imageNodeData() } as unknown as CanvasNode]),
   }
   const assetsRef = { current: opts.assets }
-  render(<Harness nodesRef={nodesRef} assetsRef={assetsRef} {...cmds} />)
+  const settingsRef = { current: { characters: opts.characters ?? [], locations: [] } }
+  render(<Harness nodesRef={nodesRef} assetsRef={assetsRef} settingsRef={settingsRef} {...cmds} />)
   return cmds
 }
 
@@ -274,5 +279,27 @@ describe('生成调度状态机（§13）', () => {
     void apiRef!.start('img1')
     await waitFor(() => expect(dangling.pushHistory).toHaveBeenCalledTimes(1))
     expect(dangling.removeAsset).not.toHaveBeenCalledWith('pa-gone')
+  })
+
+  it('旧产物同时是角色头像（avatarAssetId）：不移出索引', async () => {
+    ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
+    mockSuccessfulGeneration()
+    const { removeAsset, pushHistory } = setupHarness({
+      nodes: [
+        {
+          id: 'img1',
+          type: 'image',
+          data: { ...imageNodeData(), outputs: { primary: { assetId: 'pa-old' } } },
+        } as unknown as CanvasNode,
+      ],
+      assets: { byId: { 'pa-old': {} as AssetRef } },
+      // 落盘模型可携带 avatarAssetId（CharacterEntity 未声明、serialize 整对象透传）
+      characters: [
+        { id: 'ch1', name: '林晚', gradient: 'g', avatarAssetId: 'pa-old' } as CharacterEntity,
+      ],
+    })
+    void apiRef!.start('img1')
+    await waitFor(() => expect(pushHistory).toHaveBeenCalledTimes(1))
+    expect(removeAsset).not.toHaveBeenCalledWith('pa-old')
   })
 })

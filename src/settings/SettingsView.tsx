@@ -77,7 +77,8 @@ function DefaultModelsSection({ settings, update, chatOptions, chatModel }: Defa
  * 设置页（docs/ui-design.md §8.2 修订）：⌘, 打开，左侧分段列表。
  * Provider 分段：Base URL / 启用 / API key（加密后存本机设置，
  * 不回显明文）/ 模型清单；默认模型分段：三层过滤后的可用组合下拉。
- * 编辑即保存（防抖 500ms）；无外观设置（跟随系统，原则 1）。
+ * 编辑即保存（防抖 500ms，关闭时冲刷未落盘编辑）；无外观设置（跟随
+ * 系统，原则 1）。
  */
 export default function SettingsView({ onClose }: SettingsViewProps) {
   const [settings, setSettings] = useState<AppSettings>(defaultSettings)
@@ -91,15 +92,23 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
     })
   }, [])
 
-  // 编辑即保存：防抖 500ms 全量落盘
+  // 编辑即保存：防抖 500ms 全量落盘；pendingSaveRef 记录未落盘快照，
+  // 卸载（点「完成」关闭）时冲刷——防抖窗口内关闭不丢最后一次编辑
+  const pendingSaveRef = useRef<AppSettings | null>(null)
   const update = (next: AppSettings) => {
     setSettings(next)
+    pendingSaveRef.current = next
     if (saveTimer.current) clearTimeout(saveTimer.current)
-    saveTimer.current = setTimeout(() => void settingsStore.save(next), 500)
+    saveTimer.current = setTimeout(() => {
+      pendingSaveRef.current = null
+      void settingsStore.save(next)
+    }, 500)
   }
   useEffect(() => {
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current)
+      const pending = pendingSaveRef.current
+      if (pending !== null) void settingsStore.save(pending)
     }
   }, [])
 
