@@ -6,8 +6,10 @@
 //! - `seal`：API key 加密封装（AES-256-GCM，绑定本机）。
 //! - `library`：个人资产库（应用级 library/ 目录，索引 + 媒体文件，§8.1）。
 //! - `assets`：项目资产管线（库资产拷贝导入、set_asset 预检、媒体路径，§7.1/§7.3/§9.3）。
+//! - `imagegen`：画布内 AI 图像生成代理（文生图，docs/data-model.md §13 首片）。
 
 mod assets;
+mod imagegen;
 mod isotime;
 mod library;
 mod prefs;
@@ -42,6 +44,8 @@ pub fn run() {
             assets::import_project_asset_from_library,
             assets::validate_project_asset,
             assets::project_asset_path,
+            imagegen::llm_image_generate,
+            imagegen::llm_image_cancel,
         ])
         .run(tauri::generate_context!())
         .expect("启动 PlotWeave 应用失败");

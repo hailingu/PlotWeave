@@ -32,6 +32,7 @@ export function nodeLabelOf(n: CanvasNode): string {
     case 'beat': return `节拍·${n.data.name}`
     case 'branch': return `分支·${n.data.prompt}`
     case 'shot': return `SHOT${n.data.shotNo}·${n.data.size}`
+    case 'image': return `图片·${n.data.prompt.slice(0, 12)}`
   }
 }
 

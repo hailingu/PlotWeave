@@ -27,6 +27,8 @@ export interface AppSettings {
   providers: ProviderConfig[]
   /** 默认对话模型："providerId:modelId"。 */
   defaultChat: string | null
+  /** 默认图像生成模型（§8.2 三段默认模型的图像段，§13）："providerId:modelId"。 */
+  defaultImage: string | null
 }
 
 /** 内置 provider 目录（§8.2：内置适配器列表）。 */
@@ -52,6 +54,7 @@ export function defaultSettings(): AppSettings {
   return {
     providers: BUILTIN_PROVIDERS.map((p) => ({ ...p, models: [...p.models] })),
     defaultChat: null,
+    defaultImage: null,
   }
 }
 
@@ -119,6 +122,7 @@ export function normalizeSettings(raw: unknown): AppSettings {
   return {
     providers,
     defaultChat: typeof obj.defaultChat === 'string' ? obj.defaultChat : null,
+    defaultImage: typeof obj.defaultImage === 'string' ? obj.defaultImage : null,
   }
 }
 
@@ -127,11 +131,28 @@ export function resolveChatModel(settings: AppSettings): {
   provider: ProviderConfig
   model: string
 } | null {
-  if (!settings.defaultChat) return null
-  const sep = settings.defaultChat.indexOf(':')
+  return resolveDefaultModel(settings, settings.defaultChat)
+}
+
+/** 解析默认图像生成模型（§13）；解析域与对话模型同构，无效返回 null。 */
+export function resolveImageModel(settings: AppSettings): {
+  provider: ProviderConfig
+  model: string
+} | null {
+  return resolveDefaultModel(settings, settings.defaultImage)
+}
+
+/** "providerId:modelId" 的共同解析内核：provider 存在、启用、Base URL
+ * 就绪且模型在其清单内才有效（三层过滤的静态两层，key 状态异步叠加）。 */
+function resolveDefaultModel(
+  settings: AppSettings,
+  value: string | null,
+): { provider: ProviderConfig; model: string } | null {
+  if (!value) return null
+  const sep = value.indexOf(':')
   if (sep <= 0) return null
-  const providerId = settings.defaultChat.slice(0, sep)
-  const model = settings.defaultChat.slice(sep + 1)
+  const providerId = value.slice(0, sep)
+  const model = value.slice(sep + 1)
   const provider = settings.providers.find((p) => p.id === providerId)
   if (!provider || !provider.enabled || !provider.baseUrl || !provider.models.includes(model)) {
     return null

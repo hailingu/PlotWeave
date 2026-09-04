@@ -72,11 +72,11 @@ describe('EditorTitlebar（§3.3 顶部工具栏）', () => {
     expect(p.onRenameProject).toHaveBeenCalledWith('改名后')
   })
 
-  it('＋节点下拉：plusOpen 时列出五类创建项，点击回调类型', () => {
+  it('＋节点下拉：plusOpen 时列出六类创建项（含图片节点），点击回调类型', () => {
     const p = setup({ plusOpen: true })
     const menu = screen.getByRole('menu', { name: '节点类型' })
     const items = menu.querySelectorAll('[role="menuitem"]')
-    expect(items).toHaveLength(5)
+    expect(items).toHaveLength(6)
     fireEvent.click(items[2])
     expect(p.onCreateNode).toHaveBeenCalledWith('dialogue')
     fireEvent.click(screen.getByLabelText('新增节点'))

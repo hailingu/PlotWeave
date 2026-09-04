@@ -2847,6 +2847,7 @@ name = "plotweave"
 version = "0.2.0"
 dependencies = [
  "aes-gcm",
+ "base64 0.22.1",
  "cap-std",
  "keyring",
  "reqwest 0.12.28",

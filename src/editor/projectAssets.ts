@@ -24,8 +24,9 @@ interface RawAssetRef {
   createdAt?: unknown
 }
 
-/** IPC 返回条目的边界校验 + 规范化（mime trim/小写）：坏数据不进会话索引。 */
-function normalizeAssetRef(raw: RawAssetRef | null): AssetRef {
+/** IPC 返回条目的边界校验 + 规范化（mime trim/小写）：坏数据不进会话索引。
+ * 导出供生成产物并入索引时共用（llm_image_generate 返回值同域，§9.3）。 */
+export function normalizeAssetRef(raw: RawAssetRef | null): AssetRef {
   if (
     raw === null ||
     typeof raw !== 'object' ||
@@ -103,6 +104,15 @@ async function tauriMediaUrl(projectId: string, asset: AssetRef): Promise<string
   const { invoke, convertFileSrc } = await import('@tauri-apps/api/core')
   const abs = await invoke<string>('project_asset_path', { id: projectId, relPath: asset.relPath })
   return convertFileSrc(abs)
+}
+
+/** IPC 直调助手（仅桌面端；动态导入避免浏览器预览加载 Tauri 模块）：
+ * 生成命令等新增 Rust 管线的复用入口。 */
+export function tauriInvoke<T>(cmd: string, args: Record<string, unknown>): Promise<T> {
+  return (async () => {
+    const { invoke } = await import('@tauri-apps/api/core')
+    return invoke<T>(cmd, args)
+  })()
 }
 
 /** 统一门面：两种环境同签名。 */

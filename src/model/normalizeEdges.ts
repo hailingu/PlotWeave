@@ -21,8 +21,11 @@ export function isOrphanEdge(e: StoryEdge, nodesById: Map<string, StoryNode>): b
     if (e.sourceHandle !== SCENE_SHOT_HANDLE) return true
     return src.type !== 'scene' || dst.type !== 'shot'
   }
-  // 剧情流端点约束：分镜卡不参与横向剧情流（§4.2）
-  if (src.type === 'shot' || dst.type === 'shot') return true
+  // 剧情流端点约束：分镜卡与图片节点不参与横向剧情流（§4.2/§13——
+  // 图片节点是自由摆放的生成产物，不经边挂接）
+  if (src.type === 'shot' || dst.type === 'shot' || src.type === 'image' || dst.type === 'image') {
+    return true
+  }
   // §5 端口归属反向约束：branch 无匿名输出端口，不能引出 sequence 边
   if (e.data.kind === 'sequence' && src.type === 'branch') return true
   if (e.data.kind !== 'branch') return false

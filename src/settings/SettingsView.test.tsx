@@ -60,7 +60,7 @@ describe('SettingsView Provider 分段', () => {
       (el) => el.tagName === 'TEXTAREA' && el.closest('.settings-card')?.textContent?.includes('火山'),
     ) as HTMLTextAreaElement
     fireEvent.change(arkModels, { target: { value: 'doubao-pro\n\n  doubao-lite  \n' } })
-    const select = screen.getByRole('combobox') as HTMLSelectElement
+    const select = screen.getByRole('combobox', { name: /AI 对话模型/ }) as HTMLSelectElement
     const options = Array.from(select.options).map((o) => o.value)
     expect(options).toContain('volcengine-ark:doubao-pro')
     expect(options).toContain('volcengine-ark:doubao-lite')
@@ -71,7 +71,7 @@ describe('SettingsView 默认模型分段', () => {
   it('未选择时显示引导；选择后提示当前对话走向', async () => {
     render(<SettingsView onClose={vi.fn()} />)
     expect(await screen.findByText('尚未选择默认模型，AI 面板将显示引导。')).toBeTruthy()
-    fireEvent.change(screen.getByRole('combobox'), {
+    fireEvent.change(screen.getByRole('combobox', { name: /AI 对话模型/ }), {
       target: { value: 'openai:gpt-4o' },
     })
     expect(await screen.findByText('当前对话走 OpenAI 兼容 · gpt-4o。')).toBeTruthy()

@@ -197,6 +197,21 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
                 ))}
               </select>
             </label>
+            <label className="pw-set-field">
+              <span className="pw-set-label">图像生成模型（图片节点默认，§13）</span>
+              <select
+                className="pw-set-input"
+                value={settings.defaultImage ?? ''}
+                onChange={(e) => update({ ...settings, defaultImage: e.target.value || null })}
+              >
+                <option value="">未选择</option>
+                {chatOptions.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </label>
             <p className="settings-hint">{defaultModelHint(chatOptions.length, chatModel)}</p>
           </div>
           <p className="settings-hint">

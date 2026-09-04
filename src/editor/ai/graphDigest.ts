@@ -63,6 +63,8 @@ function nodeLine(n: CanvasNode, r: DigestResolvers): string {
       return `- ${n.id} ${epTag(n.data)}分支·${cut(n.data.prompt)}（选项:${n.data.options.map((o) => cut(o.label, 16)).join('/')}）`
     case 'shot':
       return `- ${n.id} SHOT${pad2(n.data.shotNo)}·${n.data.size}（画面:${cut(n.data.picture, 24)} · Prompt:${cut(n.data.prompt, 24)}）`
+    case 'image':
+      return `- ${n.id} 图片·${cut(n.data.prompt, 24)}（${n.data.size}）`
   }
 }
 
@@ -82,7 +84,9 @@ function spineNodeLabel(n: CanvasNode): string {
       return `节拍·${n.data.name}`
     case 'branch':
       return `分支·${cut(n.data.prompt, 24)}`
-    default:
+    case 'image':
+      return `图片·${cut(n.data.prompt, 24)}`
+    case 'shot':
       return `SHOT${pad2(n.data.shotNo)}·${n.data.size}`
   }
 }
@@ -127,6 +131,7 @@ export function buildGraphDigest(nodes: CanvasNode[], edges: Edge[], r: DigestRe
       if (n.type === 'dialogue') return `对白·${n.data.name}`
       if (n.type === 'beat') return `节拍·${n.data.name}`
       if (n.type === 'branch') return `分支·${cut(n.data.prompt, 24)}`
+      if (n.type === 'image') return `图片·${cut(n.data.prompt, 24)}`
       return `SHOT${pad2(n.data.shotNo)}·${n.data.size}`
     }
     if (kind === 'branch') {

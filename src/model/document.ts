@@ -19,8 +19,8 @@ export interface Viewport {
   zoom: number
 }
 
-/** 节点类型：编剧侧（节奏卡/索引卡/对白/分支）+ 生成侧（分镜卡）。 */
-export type NodeType = 'scene' | 'beat' | 'dialogue' | 'branch' | 'shot'
+/** 节点类型：编剧侧（节奏卡/索引卡/对白/分支）+ 生成侧（分镜卡/图片）。 */
+export type NodeType = 'scene' | 'beat' | 'dialogue' | 'branch' | 'shot' | 'image'
 
 /** 场景（索引卡）：一个时空单元的叙事容器。 */
 export interface SceneSpec {
@@ -91,8 +91,32 @@ export interface ShotSpec {
   refs: ShotRef[]
 }
 
+/** 生成产物引用（§13 outputs 槽位）：只存项目资产 id（assets.byId 是唯一
+ * 真相，§8.1 禁止镜像媒体字段）；宽高等 metadata 为演进占位。 */
+export interface GeneratedOutput {
+  assetId: string
+  width?: number
+  height?: number
+}
+
+/** 图片节点（生成侧媒体节点，§13 文生图首版）：prompt/model/size 为生成
+ * 输入，outputs.primary 承载生成产物；model 为 "providerId:modelId"
+ * （与 AppSettings 默认模型同构）。 */
+export interface ImageSpec {
+  prompt: string
+  model: string
+  size: string
+  outputs: { primary?: GeneratedOutput }
+}
+
 /** 节点 spec 的判别联合：形状由 StoryNode.type 决定。 */
-export type NodeSpec = SceneSpec | BeatSpec | DialogueSpec | BranchSpec | ShotSpec
+export type NodeSpec =
+  | SceneSpec
+  | BeatSpec
+  | DialogueSpec
+  | BranchSpec
+  | ShotSpec
+  | ImageSpec
 
 /** 名称型节点 meta：label 必填（scene/beat/dialogue 显示并编辑名称）。 */
 export interface LabeledMeta {
@@ -114,6 +138,14 @@ export interface DerivedMeta {
 
 /** 分镜卡 meta：无 episodeNo（分镜卡随宿主场景分集，§3.5）、无 label，均 never 禁写。 */
 export interface ShotMeta {
+  label?: never
+  episodeNo?: never
+  createdAt?: string
+  updatedAt?: string
+}
+
+/** 图片节点 meta：无 label/episodeNo（生成产物非叙事单元，不进大纲分组），均 never 禁写。 */
+export interface ImageMeta {
   label?: never
   episodeNo?: never
   createdAt?: string
@@ -173,9 +205,21 @@ export interface ShotDocNode extends StoryNodeBase {
   data: { spec: ShotSpec; meta: ShotMeta }
 }
 
+/** 图片节点（生成侧媒体节点，§13）：spec 承载文生图输入与产物引用。 */
+export interface ImageDocNode extends StoryNodeBase {
+  type: 'image'
+  data: { spec: ImageSpec; meta: ImageMeta }
+}
+
 /** 落盘节点判别联合（§4.1）：按 type 收窄到对应 spec/meta 形态，
- * 上面五个变体接口是联合的全部成员。 */
-export type StoryNode = SceneDocNode | BeatDocNode | DialogueDocNode | BranchDocNode | ShotDocNode
+ * 上面六个变体接口是联合的全部成员。 */
+export type StoryNode =
+  | SceneDocNode
+  | BeatDocNode
+  | DialogueDocNode
+  | BranchDocNode
+  | ShotDocNode
+  | ImageDocNode
 
 /** 剧情连线：按 data.kind 判别的三种变体（§5）。
  * branch 变体必须携带 sourceHandle（option-<选项 id>）——边上无镜像 label 后

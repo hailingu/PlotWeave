@@ -58,6 +58,7 @@ describe('settingsStore Tauri 路径', () => {
         { id: 'volcengine-ark', label: 'B', baseUrl: 'u2', enabled: true, models: [] },
       ],
       defaultChat: null,
+      defaultImage: null,
     }
     const updated = await settingsStore.setProviderKey(base, 'openai', 'sk-secret')
     expect(invoke.mock.calls[0]).toEqual([

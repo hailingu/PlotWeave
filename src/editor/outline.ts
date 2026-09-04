@@ -70,7 +70,8 @@ export type OutlineDropTarget =
   | { kind: 'row'; anchorId: string; position: 'before' | 'after' }
   | { kind: 'groupEnd'; episode: number | null }
 
-/** 行标签按类型派生（与旧大纲视图一致）。 */
+/** 行标签按类型派生（与旧大纲视图一致）。图片节点不进大纲（生成产物非
+ * 叙事单元，buildOutlineGroups 已先行跳过；case 仅为联合穷尽性兜底）。 */
 function rowOf(n: CanvasNode): OutlineRow {
   switch (n.type) {
     case 'beat':
@@ -83,6 +84,8 @@ function rowOf(n: CanvasNode): OutlineRow {
       return { id: n.id, level: 2, label: `分支 · ${n.data.prompt}` }
     case 'shot':
       return { id: n.id, level: 3, label: `SHOT ${pad2(n.data.shotNo)} · ${n.data.size}` }
+    case 'image':
+      return { id: n.id, level: 0, label: '图片节点' }
   }
 }
 
@@ -113,6 +116,22 @@ export function episodeOfNode(
   return null
 }
 
+/** 集聚焦的画布投影（§3.5）：成员保持原样，非成员加降透明度类（~30%）。
+ * className 是运行态样式（落盘时由模型层序列化剥离），不入持久化。 */
+export function applyEpisodeFocus(
+  nodes: CanvasNode[],
+  edges: Edge[],
+  focused: number | null,
+): CanvasNode[] {
+  if (focused === null) return nodes
+  const sceneByShot = hostSceneMap(nodes, edges)
+  return nodes.map((n) =>
+    episodeOfNode(n, (id) => sceneByShot.get(id)) === focused
+      ? n
+      : ({ ...n, className: 'pw-node-dim' } as CanvasNode),
+  )
+}
+
 /**
  * 派生大纲分组：按集号升序，未分集殿底；组内保持原有 x 序与缩进层级。
  * 完全没有 episodeNo 时退化为单个未分集组（与旧大纲视图等价）。
@@ -126,6 +145,8 @@ export function buildOutlineGroups(
   const fulfillment = beatFulfillmentMap(nodes, edges)
   const byEpisode = new Map<number | null, OutlineRow[]>()
   for (const n of [...nodes].sort((a, b) => a.position.x - b.position.x)) {
+    // 图片节点不进大纲（生成产物非叙事单元，§13）
+    if (n.type === 'image') continue
     const row = rowOf(n)
     if (n.type === 'beat') {
       const f = fulfillment.get(n.id)

@@ -1,4 +1,6 @@
-import { useState, type ReactNode } from 'react'
+import { useState } from 'react'
+import Field from './Field'
+import ImageNodeForm from './ImageNodeForm'
 import { useNodeEdit } from '../../nodeEdit'
 import type { ProjectSettings } from '../../settings'
 import { uid } from '../../../uid'
@@ -8,6 +10,7 @@ import type {
   BeatNodeData,
   BranchNodeData,
   DialogueNodeData,
+  ImageNodeData,
   SceneNodeData,
   ShotNodeData,
   ShotRef,
@@ -28,16 +31,7 @@ export type PanelNode =
   | { id: string; type: 'dialogue'; data: DialogueNodeData }
   | { id: string; type: 'branch'; data: BranchNodeData }
   | { id: string; type: 'shot'; data: ShotNodeData }
-
-/** 表单字段行：小标签 + 控件。 */
-function Field({ label, children }: { readonly label: string; readonly children: ReactNode }) {
-  return (
-    <label className="pw-set-field">
-      <span className="pw-set-label">{label}</span>
-      {children}
-    </label>
-  )
-}
+  | { id: string; type: 'image'; data: ImageNodeData }
 
 /** 集归属（§3.5：集 = 编号 + 行内标题，节点以 episodeNo 归属集）。
  * 清空 = 移出所有集；分镜卡随宿主场景（attach 派生），不出此字段。 */
@@ -538,6 +532,7 @@ export default function NodeSettingsPanel({ node }: { readonly node: PanelNode }
         {node.type === 'dialogue' && <DialogueForm node={node} settings={settings} />}
         {node.type === 'branch' && <BranchForm node={node} />}
         {node.type === 'shot' && <ShotForm node={node} />}
+        {node.type === 'image' && <ImageNodeForm node={node} />}
       </div>
       <div className="pw-settings-actions">
         <button

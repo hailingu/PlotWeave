@@ -28,6 +28,8 @@ import DialogueNode from './nodes/DialogueNode'
 import BeatNode from './nodes/BeatNode'
 import BranchNode from './nodes/BranchNode'
 import ShotNode from './nodes/ShotNode'
+import ImageNode from './nodes/ImageNode'
+import { ImageGenProvider } from './imagegen/ImageGenProvider'
 import BranchEdge from './edges/BranchEdge'
 import LeftPanel from './panels/LeftPanel'
 import RightPanel, { type RightTab } from './panels/RightPanel'
@@ -53,9 +55,8 @@ import {
 } from './graphRules'
 import { compareCodeUnits } from '../compare'
 import {
+  applyEpisodeFocus,
   beatFulfillmentMap,
-  episodeOfNode,
-  hostSceneMap,
   type BeatFulfillment,
 } from './outline'
 import { useOutlineDrop } from './useOutlineDrop'
@@ -74,13 +75,14 @@ import type { CanvasNode } from './nodes/types'
 import type { AssetRef } from '../model/document'
 import type { ProjectContent } from '../model/content'
 
-/** 画布节点类型注册：索引卡 / 对白 / 节奏卡 / 分支 / 分镜卡（docs/ui-design.md §4.2）。 */
+/** 画布节点类型注册：索引卡 / 对白 / 节奏卡 / 分支 / 分镜卡 / 图片节点（docs/ui-design.md §4.2/§13）。 */
 const nodeTypes: NodeTypes = {
   scene: SceneNode,
   dialogue: DialogueNode,
   beat: BeatNode,
   branch: BranchNode,
   shot: ShotNode,
+  image: ImageNode,
 }
 
 /** 连线类型注册：branch = 品牌渐变 + 选项胶囊；sequence 用默认贝塞尔加样式类。 */
@@ -386,17 +388,11 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
     setFocusedEpisode((cur) => (cur === no ? null : no))
   }, [])
 
-  /** 集聚焦的画布投影：成员保持原样，非成员加降透明度类（§3.5 ~30%）。
-   * className 是运行态样式（落盘时由模型层序列化剥离），不入持久化。 */
-  const displayNodes = useMemo(() => {
-    if (focusedEpisode === null) return nodes
-    const sceneByShot = hostSceneMap(nodes, edges)
-    return nodes.map((n) =>
-      episodeOfNode(n, (id) => sceneByShot.get(id)) === focusedEpisode
-        ? n
-        : ({ ...n, className: 'pw-node-dim' } as CanvasNode),
-    )
-  }, [nodes, edges, focusedEpisode])
+  /** 集聚焦的画布投影（§3.5 ~30% 降透明度退后）；纯派生见 outline。 */
+  const displayNodes = useMemo(
+    () => applyEpisodeFocus(nodes, edges, focusedEpisode),
+    [nodes, edges, focusedEpisode],
+  )
 
   /** 大纲拖拽落点（§3.5）：计划由 outlineDrop/spine 纯函数产出，
    * useOutlineDrop 翻译为一条可撤销命令。 */
@@ -663,6 +659,8 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
 
   return (
     <NodeEditContext.Provider value={nodeEditApi}>
+    {/* 图片节点生成调度（§13）：依赖本组件的命令回调与资产索引写入 */}
+    <ImageGenProvider projectId={project.id} nodesRef={nodesRef} patchNode={patchNode} addAsset={addAsset}>
     <div className="editor-root">
       {/* Overlay 标题栏下整行作为窗口拖拽区；按钮可点击（§3.3）。 */}
       <EditorTitlebar
@@ -782,6 +780,7 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
         />
       )}
     </div>
+    </ImageGenProvider>
     </NodeEditContext.Provider>
   )
 }

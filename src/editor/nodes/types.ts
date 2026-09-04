@@ -111,6 +111,23 @@ export interface ShotNodeData extends Record<string, unknown> {
   refs: ShotRef[]
 }
 
+/** 生成产物引用（§13 outputs 槽位）：只存项目资产 id（assets.byId 唯一
+ * 真相）；宽高为演进占位。与落盘形态 document.GeneratedOutput 同构。 */
+export interface GeneratedOutput {
+  assetId: string
+  width?: number
+  height?: number
+}
+
+/** 图片节点（生成侧媒体节点，§13 文生图首版）：承载生成输入与产物。
+ * model 为 "providerId:modelId"（未选择时为空串，生成入口引导配置）。 */
+export interface ImageNodeData extends Record<string, unknown> {
+  prompt: string
+  model: string
+  size: string
+  outputs: { primary?: GeneratedOutput }
+}
+
 /** 各节点形态的 React Flow 别名：为 useNodesState 等泛型上下文钉住
  * Node<Data, Type> 的精确组合，避免在各消费点重复展开联合。 */
 export type SceneFlowNode = Node<SceneNodeData, 'scene'>
@@ -118,6 +135,7 @@ export type DialogueFlowNode = Node<DialogueNodeData, 'dialogue'>
 export type BeatFlowNode = Node<BeatNodeData, 'beat'>
 export type BranchFlowNode = Node<BranchNodeData, 'branch'>
 export type ShotFlowNode = Node<ShotNodeData, 'shot'>
+export type ImageFlowNode = Node<ImageNodeData, 'image'>
 
 /** 落盘 meta 时间戳透传（§4.1 演进占位字段）：编辑器不维护也不展示，
  * 加载时带上、序列化原样写回——打开→保存不得静默删除既有溯源元数据。 */
@@ -132,5 +150,6 @@ export type CanvasNode = (
   | BeatFlowNode
   | BranchFlowNode
   | ShotFlowNode
+  | ImageFlowNode
 ) &
   NodeMetaPassthrough
