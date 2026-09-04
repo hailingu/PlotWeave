@@ -127,8 +127,11 @@ function applyGenerationResult(
   }
   const before = node.data.outputs
   const next = { ...before, primary: { assetId: asset.id } }
-  // 旧产物回收判定：换下了旧 primary 且无人再引用（头像/其他节点）且记录仍在索引
+  // 旧产物回收判定：换下了旧 primary 且无人再引用（头像/其他节点）且
+  // 记录仍在索引。查桶用自有属性检查——悬空 assetId 可能是 '__proto__'
+  // 等原型链键名，普通对象桶的继承值不得被当成 AssetRef 回收。
   const prevId = before.primary?.assetId
+  const byId = deps.assetsRef.current?.byId
   const superseded =
     prevId !== undefined &&
     prevId !== asset.id &&
@@ -136,8 +139,10 @@ function applyGenerationResult(
       deps.nodesRef.current.filter((n) => n.id !== nodeId),
       deps.settingsRef.current.characters,
       prevId,
-    )
-      ? deps.assetsRef.current?.byId[prevId]
+    ) &&
+    byId !== undefined &&
+    Object.prototype.hasOwnProperty.call(byId, prevId)
+      ? byId[prevId]
       : undefined
   deps.addAsset(asset)
   if (superseded !== undefined) deps.removeAsset(superseded.id)

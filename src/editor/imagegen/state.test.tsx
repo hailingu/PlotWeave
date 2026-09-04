@@ -289,7 +289,9 @@ describe('生成调度：旧产物回收（§7.3）', () => {
     cmd.redo()
     expect(removeAsset).toHaveBeenLastCalledWith('pa-old')
   })
+})
 
+describe('生成调度：旧产物被引用或悬空不回收（§7.3）', () => {
   it('旧产物仍被分镜卡引用（或已不在索引）：不移出索引', async () => {
     ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
     mockSuccessfulGeneration()
@@ -346,5 +348,24 @@ describe('生成调度：旧产物回收（§7.3）', () => {
     void apiRef!.start('img1')
     await waitFor(() => expect(pushHistory).toHaveBeenCalledTimes(1))
     expect(removeAsset).not.toHaveBeenCalledWith('pa-old')
+  })
+
+  it('悬空 primary 的 assetId 为原型链键名（__proto__）：不把继承值当旧产物', async () => {
+    ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
+    mockSuccessfulGeneration()
+    const { removeAsset, pushHistory } = setupHarness({
+      nodes: [
+        {
+          id: 'img1',
+          type: 'image',
+          data: { ...imageNodeData(), outputs: { primary: { assetId: '__proto__' } } },
+        } as unknown as CanvasNode,
+      ],
+      assets: { byId: {} },
+    })
+    void apiRef!.start('img1')
+    await waitFor(() => expect(pushHistory).toHaveBeenCalledTimes(1))
+    // byId 无自有 '__proto__' 键：不得命中 Object.prototype 当 AssetRef 回收
+    expect(removeAsset).not.toHaveBeenCalled()
   })
 })
