@@ -10,6 +10,8 @@ import type { ProjectContent } from '../model/content'
  * 字段补丁与复制/删除，并读取设定集解析实体引用（§5）。
  */
 export interface NodeEditApi {
+  /** 当前项目 id：节点渲染解析项目资产媒体（分镜引用位缩略图，§7.1）。 */
+  projectId: string
   /** 当前展开设置面板的节点 id；null = 全部收起。 */
   openSettingsId: string | null
   /** ⚙️ 点击：开 ↔ 关（同一节点再点收起）。 */
@@ -27,8 +29,9 @@ export interface NodeEditApi {
   beatFulfillmentOf: (id: string) => BeatFulfillment | null
   /** 项目设定集：节点渲染实体引用（角色头像/地点名）的解析源（§5）。 */
   settings: ProjectSettings
-  /** 项目资产索引（透传桶，会话内不编辑）：分镜引用位的资产解析源
-   * （§7.1/§8.1——引用位 kind 与资产 MIME 家族的编辑边界校验）。 */
+  /** 项目资产索引（会话态：§7.3 库资产导入在会话内新增）：分镜引用位的
+   * 资产解析源（§7.1/§8.1——引用位 kind 与资产 MIME 家族的编辑边界校验、
+   * 缩略图渲染）。 */
   assets: ProjectContent['assets']
 }
 

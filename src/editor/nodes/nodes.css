@@ -399,6 +399,17 @@
   border-radius: 99px;
   padding: 2px 9px;
   color: rgba(245, 245, 247, 0.85);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* 引用位缩略图（§8.1）：image/* 资产的小圆角封面图 */
+.pw-shot-ref-thumb {
+  width: 28px;
+  height: 20px;
+  object-fit: cover;
+  border-radius: 4px;
 }
 
 .pw-shot-ref-add {

@@ -11,6 +11,13 @@ import { NodeEditContext, type NodeEditApi } from '../nodeEdit'
 import ShotNode from './ShotNode'
 import type { ShotFlowNode } from './types'
 
+vi.mock('../projectAssets', () => ({
+  projectAssets: {
+    importFromLibrary: vi.fn(),
+    mediaUrl: vi.fn(),
+  },
+}))
+
 vi.mock('@xyflow/react', async (importOriginal) => {
   const orig = await importOriginal<typeof import('@xyflow/react')>()
   return {
@@ -24,8 +31,9 @@ vi.mock('@xyflow/react', async (importOriginal) => {
 
 afterEach(cleanup)
 
-function setup(openSettingsId: string | null = null) {
+function setup(openSettingsId: string | null = null, refs?: ShotFlowNode['data']['refs']) {
   const api: NodeEditApi = {
+    projectId: 'p-1',
     openSettingsId,
     toggleSettings: vi.fn(),
     closeSettings: vi.fn(),
@@ -35,7 +43,17 @@ function setup(openSettingsId: string | null = null) {
     shotCountOf: () => 0,
     beatFulfillmentOf: () => null,
     settings: { characters: [], locations: [] },
-    assets: undefined,
+    assets: {
+      byId: {
+        'pa-1': {
+          id: 'pa-1',
+          relPath: 'assets/pa-1.png',
+          mime: 'image/png',
+          source: 'upload',
+          createdAt: '2026-09-04T08:00:00.000Z',
+        },
+      },
+    },
   }
   const props = {
     id: 'sh1',
@@ -44,7 +62,7 @@ function setup(openSettingsId: string | null = null) {
       size: '特写',
       picture: '档案袋里的旧照片特写。',
       prompt: 'extreme close-up, raindrops',
-      refs: [
+      refs: refs ?? [
         { id: 'r1', kind: 'character' as const, label: '林晚垫图' },
         { id: 'r2', kind: 'location' as const, label: '天台底图' },
         { id: 'r3', kind: 'audio' as const, label: '雨声' },
@@ -91,5 +109,17 @@ describe('ShotNode（监视器卡）', () => {
     setup()
     expect(screen.getByTestId('handle-target')).toBeTruthy()
     expect(screen.getByTestId('handle-source')).toBeTruthy()
+  })
+
+  it('资产引用位：image/* 资产经 mediaUrl 解析渲染缩略图；解析失败回退纯文本', async () => {
+    const { projectAssets } = await import('../projectAssets')
+    vi.mocked(projectAssets.mediaUrl).mockResolvedValue('asset://media/pa-1')
+    const { container } = setup(null, [{ id: 'r4', kind: 'character', assetId: 'pa-1' }])
+    const img = (await screen.findAllByRole('img'))[0]
+    expect(img.getAttribute('src')).toBe('asset://media/pa-1')
+    expect(vi.mocked(projectAssets.mediaUrl).mock.calls[0][0]).toBe('p-1')
+    // chip 仍带 kind 图标与可辨认文本
+    expect(container.textContent).toContain('👤')
+    expect(container.textContent).toContain('pa-1')
   })
 })

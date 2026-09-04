@@ -38,6 +38,7 @@ const LINES: DialogueLine[] = [
 
 function setup(data: { name?: string; lines?: DialogueLine[] } = {}, openSettingsId: string | null = null) {
   const api: NodeEditApi = {
+    projectId: 'p-1',
     openSettingsId,
     toggleSettings: vi.fn(),
     closeSettings: vi.fn(),

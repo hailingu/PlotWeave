@@ -1,10 +1,33 @@
+import { useEffect, useState } from 'react'
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { useNodeEdit } from '../nodeEdit'
+import { projectAssets } from '../projectAssets'
 import NodeSettingsPanel from './settings/NodeSettingsPanel'
+import type { AssetRef } from '../../model/document'
 import type { ShotFlowNode } from './types'
 
 /** 引用位 chip 的图标：角色垫图 / 场景底图 / 音频。 */
 const REF_ICONS = { character: '👤', location: '🏞', audio: '🎵' } as const
+
+/** 引用位缩略图（§8.1）：image/* 资产经项目资产门面解析媒体 URL 懒渲染；
+ * 解析失败/非图片不渲染图，chip 回退纯文本。 */
+function RefThumb({ projectId, asset }: { readonly projectId: string; readonly asset: AssetRef }) {
+  const [url, setUrl] = useState<string | null>(null)
+  useEffect(() => {
+    let alive = true
+    projectAssets
+      .mediaUrl(projectId, asset)
+      .then((u) => {
+        if (alive) setUrl(u)
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [projectId, asset])
+  if (!url) return null
+  return <img className="pw-shot-ref-thumb" src={url} alt={asset.relPath} />
+}
 
 /**
  * 分镜卡 = 监视器卡（docs/ui-design.md §4.2，生成侧深色石板，双外观恒定）。
@@ -14,11 +37,11 @@ const REF_ICONS = { character: '👤', location: '🏞', audio: '🎵' } as cons
  * ⚙️ 打开设置面板（§4.3，编辑即命令）；镜号标题行不设内联改名。
  */
 export default function ShotNode({ id, data, selected }: NodeProps<ShotFlowNode>) {
-  const { openSettingsId, toggleSettings } = useNodeEdit()
+  const { projectId, openSettingsId, toggleSettings, assets } = useNodeEdit()
   const settingsOpen = openSettingsId === id
 
-  /** 引用位显示名（§8.1）：自由位显示手填文案；引用位的缩略图/媒体内容
-   * 按 assets.byId 实时解析（随资产 UI 演进），当前回退 assetId 供辨认。 */
+  /** 引用位显示名（§8.1）：自由位显示手填文案；引用位回退 assetId 供辨认
+   *（image/* 资产另渲染缩略图）。 */
   const refText = (ref: ShotFlowNode['data']['refs'][number]): string =>
     ref.label ?? ref.assetId ?? ''
 
@@ -48,11 +71,17 @@ export default function ShotNode({ id, data, selected }: NodeProps<ShotFlowNode>
         {data.prompt}
       </div>
       <div className="pw-shot-refs">
-        {data.refs.map((ref) => (
-          <span key={ref.id} className="pw-shot-ref">
-            {REF_ICONS[ref.kind]} {refText(ref)}
-          </span>
-        ))}
+        {data.refs.map((ref) => {
+          const asset = ref.assetId !== undefined ? assets?.byId?.[ref.assetId] : undefined
+          return (
+            <span key={ref.id} className="pw-shot-ref">
+              {asset !== undefined && asset.mime.startsWith('image/') && (
+                <RefThumb projectId={projectId} asset={asset} />
+              )}
+              {REF_ICONS[ref.kind]} {refText(ref)}
+            </span>
+          )
+        })}
         <span className="pw-shot-ref pw-shot-ref-add" aria-hidden>
           ＋ 引用
         </span>

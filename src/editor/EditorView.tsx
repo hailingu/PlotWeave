@@ -3,7 +3,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type DragEvent as ReactDragEvent,
   type MouseEvent as ReactMouseEvent,
 } from 'react'
 import {
@@ -36,7 +35,8 @@ import EditorTitlebar from './EditorTitlebar'
 import CanvasContextMenu from './CanvasContextMenu'
 import { NodeEditContext, type NodeEditApi } from './nodeEdit'
 import { useCommandHistory } from './history'
-import { readEntityPayload, PW_ENTITY_MIME } from './dragDrop'
+import ErrorBanner from './ErrorBanner'
+import { errorBannerMessage } from './errorBannerMessage'
 import ExportDialog from './ExportDialog'
 import { buildScriptMarkdown } from './exportScript'
 import {
@@ -57,10 +57,10 @@ import {
   episodeOfNode,
   hostSceneMap,
   type BeatFulfillment,
-  type OutlineDropTarget,
 } from './outline'
-import { outlineSplicePlan, spliceEdgesWith } from './outlineDrop'
-import { entityDropPatch } from './entityDrop'
+import { useOutlineDrop } from './useOutlineDrop'
+import { useCanvasDrop } from './useCanvasDrop'
+import { useNodeDragHistory } from './useNodeDragHistory'
 import { applyEpisodeTitle } from './episodeTitle'
 import { useDebouncedSave } from './useDebouncedSave'
 import { sessionDoc } from './sessionDoc'
@@ -71,6 +71,7 @@ import { buildCanvasNode } from './nodeFactory'
 import type { CreatableType } from './creatable'
 import type { ProjectSettings } from './settings'
 import type { CanvasNode } from './nodes/types'
+import type { AssetRef } from '../model/document'
 import type { ProjectContent } from '../model/content'
 
 /** 画布节点类型注册：索引卡 / 对白 / 节奏卡 / 分支 / 分镜卡（docs/ui-design.md §4.2）。 */
@@ -115,25 +116,15 @@ export default function EditorView(props: EditorViewProps) {
   )
 }
 
-/** 防抖保存失败的横幅文案：Error 取 message，其余类型安全字符串化
- * （String(对象) 只会得到 '[object Object]'）。 */
-function saveErrorMessage(err: unknown): string {
-  if (err instanceof Error) return err.message
-  if (typeof err === 'string') return err
-  try {
-    return JSON.stringify(err) ?? '未知错误'
-  } catch {
-    return '未知错误'
-  }
-}
-
 /**
  * 编辑器主体：节点创建（＋节点下拉）、⚙️ 设置面板（编辑即命令）、
  * 复制/删除，以及三栏面板开关。全部写操作经命令栈可撤销/重做
  * （§3.3 撤销重做、§4.3 删除可撤销）；画布变化防抖落盘（持久化）。
  * 纯逻辑已拆至邻近模块：落盘调度 useDebouncedSave、全局快捷键
  * useEditorHotkeys、设定集动作 useSettingsActions、✦AI 桥 useAiBridge、
- * 大纲拖拽 outlineDrop、实体拖放 entityDrop、AI 批量模拟 ai/batchSim。
+ * 大纲拖拽 useOutlineDrop、画布拖放 useCanvasDrop（实体引用 + 库资产
+ * 导入绑定，§5/§7.3）、节点拖拽历史 useNodeDragHistory、AI 批量模拟
+ * ai/batchSim。
  */
 function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, onSave }: EditorViewProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNode>(project.nodes)
@@ -143,6 +134,9 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
   const [episodeTitles, setEpisodeTitles] = useState<Record<number, string>>(
     project.episodeTitles ?? {},
   )
+  /** 项目资产索引（§7.1/§7.3）：会话内可新增（库资产拖上画布拷贝导入），
+   * 入 SessionDocPart 随防抖落盘；assetsRef 镜像供 AI 快照/剧本导出消费。 */
+  const [assets, setAssets] = useState(project.assets)
   const [focusedEpisode, setFocusedEpisode] = useState<number | null>(null)
   const { screenToFlowPosition, fitView } = useReactFlow()
   const canvasRef = useRef<HTMLDivElement>(null)
@@ -153,9 +147,8 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
   const edgesRef = useRef(edges)
   nodesRef.current = nodes
   edgesRef.current = edges
-  /** 资产索引镜像（会话内不编辑资产，透传桶的稳定引用）：
-   * AI 快照与剧本导出的引用位解析按当前资产索引消费。 */
-  const assetsRef = useRef(project.assets)
+  const assetsRef = useRef(assets)
+  assetsRef.current = assets
   const episodeTitlesRef = useRef(episodeTitles)
   episodeTitlesRef.current = episodeTitles
 
@@ -172,8 +165,10 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
       setSaveError(null)
       return
     }
-    setSaveError(saveErrorMessage(err))
+    setSaveError(errorBannerMessage(err))
   }, [])
+  // 拖放导入失败的用户可见诊断（库资产类型不支持 / 落盘失败，§7.3）
+  const [dropError, setDropError] = useState<string | null>(null)
 
   const markDirty = useDebouncedSave(
     sessionDoc(project, {
@@ -182,6 +177,7 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
       settings,
       episodeTitles,
       viewport: viewportRef.current,
+      assets,
     }),
     onSave,
     600,
@@ -198,10 +194,11 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
           settings,
           episodeTitles,
           viewport: vp,
+          assets,
         }),
       )
     },
-    [markDirty, project, nodes, edges, settings, episodeTitles],
+    [markDirty, project, nodes, edges, settings, episodeTitles, assets],
   )
 
   // 命令栈（§3.3/§4.3）：全部写操作入栈，undo 始终兜底
@@ -401,65 +398,33 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
     )
   }, [nodes, edges, focusedEpisode])
 
-  /** 大纲拖拽落点（§3.5）：重排 sequence 边 + 跨组改集归属，
-   * 计划由 outlineDrop/spine 纯函数产出，这里整体翻译为**一条**可撤销命令。 */
-  const onOutlineDrop = useCallback(
-    (draggedId: string, target: OutlineDropTarget) => {
-      const dragged = nodesRef.current.find((n) => n.id === draggedId)
-      if (!dragged) return
+  /** 大纲拖拽落点（§3.5）：计划由 outlineDrop/spine 纯函数产出，
+   * useOutlineDrop 翻译为一条可撤销命令。 */
+  const onOutlineDrop = useOutlineDrop({
+    nodesRef,
+    edgesRef,
+    episodeTitlesRef,
+    applyDataPatch,
+    setEdges,
+    pushHistory,
+  })
 
-      // 1) 接缝计划（groupEnd 锚到该组最后一个剧情流行）
-      const planned = outlineSplicePlan(
-        nodesRef.current,
-        edgesRef.current,
-        episodeTitlesRef.current,
-        draggedId,
-        target,
-      )
-      if (!planned) return
-      const { plan, anchorId } = planned
-
-      // 2) 落点集归属：行落点随锚点所在组，组尾落点即目标组
-      const sceneByShot = hostSceneMap(nodesRef.current, edgesRef.current)
-      const anchorNode = nodesRef.current.find((n) => n.id === anchorId)
-      const targetEpisode =
-        target.kind === 'groupEnd' ? target.episode : episodeOfNode(anchorNode!, (id) => sceneByShot.get(id))
-      const oldEpisodeRaw = (dragged.data as { episodeNo?: unknown }).episodeNo
-      const oldEpisode = typeof oldEpisodeRaw === 'number' ? oldEpisodeRaw : null
-      const episodeChanged = targetEpisode !== oldEpisode
-
-      const noSplice = plan.removes.length === 0 && plan.adds.length === 0
-      if (noSplice && !episodeChanged) return
-
-      // 3) 单命令执行：边手术 + episodeNo 补丁，一步撤销整批回滚
-      const stamp = Date.now().toString(36)
-      const removedEdges = edgesRef.current.filter((e) => plan.removes.includes(e.id))
-      const addedEdges: Edge[] = plan.adds.map(({ source, target: t }, i) => ({
-        id: `e-${source}-out-${t}-mv-${stamp}-${i}`,
-        source,
-        target: t,
-        className: 'pw-edge-sequence',
-      }))
-      const applyEdges = (redo: boolean) => {
-        if (addedEdges.length === 0 && removedEdges.length === 0) return
-        setEdges((eds) => spliceEdgesWith(eds, removedEdges, addedEdges, redo))
-      }
-      const patchEp = (ep: number | null) =>
-        applyDataPatch(draggedId, { episodeNo: ep ?? undefined })
-      applyEdges(true)
-      if (episodeChanged) patchEp(targetEpisode)
-      pushHistory({
-        undo: () => {
-          applyEdges(false)
-          if (episodeChanged) patchEp(oldEpisode)
-        },
-        redo: () => {
-          applyEdges(true)
-          if (episodeChanged) patchEp(targetEpisode)
-        },
-      })
-    },
-    [applyDataPatch, pushHistory, setEdges],
+  /** 资产索引写入（§7.3 导入命令的 apply/undo/redo 共用）：新增条目按 id
+   * 键控并入；移除只删索引条目，媒体文件留存待延迟回收（§7.3）。 */
+  const addAsset = useCallback(
+    (asset: AssetRef) =>
+      setAssets((cur) => ({ byId: { ...cur?.byId, [asset.id]: asset } })),
+    [],
+  )
+  const removeAsset = useCallback(
+    (assetId: string) =>
+      setAssets((cur) => {
+        if (!cur) return cur
+        const byId = { ...cur.byId }
+        delete byId[assetId]
+        return { byId }
+      }),
+    [],
   )
 
   /** 索引卡的 🎞 镜数：派生自该场 attach 下挂边数量（§7.2，不落镜像字段）。 */
@@ -572,6 +537,7 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
 
   const nodeEditApi = useMemo<NodeEditApi>(
     () => ({
+      projectId: project.id,
       openSettingsId,
       toggleSettings,
       closeSettings,
@@ -581,9 +547,9 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
       shotCountOf,
       beatFulfillmentOf,
       settings,
-      assets: assetsRef.current,
+      assets,
     }),
-    [openSettingsId, toggleSettings, closeSettings, patchNode, duplicateNode, deleteNode, shotCountOf, beatFulfillmentOf, settings, assetsRef],
+    [project.id, openSettingsId, toggleSettings, closeSettings, patchNode, duplicateNode, deleteNode, shotCountOf, beatFulfillmentOf, settings, assets],
   )
 
   // 失焦收起（§4.3）＋ 全局快捷键：⌘Z/⌘⇧Z 撤销重做、Delete 删除选中。
@@ -632,71 +598,25 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
     setCtxMenu({ x: e.clientX, y: e.clientY })
   }, [])
 
-  // 设定集 → 画布拖放（§5 建立引用 = 拖拽）：
-  // 拖上节点建引用（角色→索引卡出场角色/对白台词/分镜垫图；地点→索引卡地点/分镜底图），
-  // 拖上空白按实体预填生成场景节点。全部走 patch/create 命令，可撤销。
-  const onCanvasDragOver = useCallback((e: ReactDragEvent) => {
-    if (e.dataTransfer.types.includes(PW_ENTITY_MIME)) {
-      e.preventDefault()
-      e.dataTransfer.dropEffect = 'copy'
-    }
-  }, [])
-  const onCanvasDrop = useCallback(
-    (e: ReactDragEvent) => {
-      const entity = readEntityPayload(e.dataTransfer)
-      if (!entity) return
-      e.preventDefault()
-      const hit = (e.target as HTMLElement).closest?.('.react-flow__node') as HTMLElement | null
-      const nodeId = hit?.dataset.id
-      const node = nodeId ? nodesRef.current.find((n) => n.id === nodeId) : undefined
-
-      if (node) {
-        const patch = entityDropPatch(node, entity)
-        if (patch) patchNode(node.id, patch)
-        return
-      }
-
-      // 空白处：按实体预填生成场景（§5 拖上空画布直接生成预填节点）
-      const at = screenToFlowPosition({ x: e.clientX, y: e.clientY })
-      if (entity.kind === 'character') {
-        createNode('scene', { at, data: { characterIds: [entity.id] } })
-      } else {
-        createNode('scene', { at, data: { locationId: entity.id } })
-      }
-    },
-    [createNode, patchNode, screenToFlowPosition],
-  )
+  // 设定集 → 画布拖放（§5 建立引用 = 拖拽）：拖上节点建引用（角色→索引卡
+  // 出场角色/对白台词/分镜垫图；地点→索引卡地点/分镜底图），拖上空白按实体
+  // 预填生成场景节点；资产库条目拖上分镜卡 = 拷贝进项目并绑定引用位（§7.3）。
+  // 全部走 patch/create/导入命令，可撤销。
+  const { onCanvasDragOver, onCanvasDrop } = useCanvasDrop({
+    projectId: project.id,
+    nodesRef,
+    patchNode,
+    applyDataPatch,
+    createNode,
+    screenToFlowPosition,
+    addAsset,
+    removeAsset,
+    pushHistory,
+    onError: setDropError,
+  })
 
   // 节点拖拽整段记为一步撤销：起点位置在 dragStart 记录、落点入栈。
-  const dragStartPos = useRef<Map<string, XYPosition> | null>(null)
-  const onNodeDragStart = useCallback(
-    (_e: MouseEvent | TouchEvent, _node: CanvasNode, dragged: CanvasNode[]) => {
-      dragStartPos.current = new Map(dragged.map((n) => [n.id, { ...n.position }]))
-    },
-    [],
-  )
-  const onNodeDragStop = useCallback(
-    (_e: MouseEvent | TouchEvent, _node: CanvasNode, dragged: CanvasNode[]) => {
-      const before = dragStartPos.current
-      dragStartPos.current = null
-      if (!before) return
-      const moved = dragged.filter((n) => {
-        const b = before.get(n.id)
-        return b && (b.x !== n.position.x || b.y !== n.position.y)
-      })
-      if (moved.length === 0) return
-      const after = new Map(moved.map((n) => [n.id, { ...n.position }]))
-      const apply = (positions: Map<string, XYPosition>) =>
-        setNodes((nds) =>
-          nds.map((n) => {
-            const p = positions.get(n.id)
-            return p ? { ...n, position: { ...p } } : n
-          }),
-        )
-      pushHistory({ undo: () => apply(before), redo: () => apply(after) })
-    },
-    [pushHistory, setNodes],
-  )
+  const { onNodeDragStart, onNodeDragStop } = useNodeDragHistory({ setNodes, pushHistory })
 
   // 从分支选项端口拉出的连线建成 branch 边（胶囊文案取自该选项，与节点
   // 选项同源）；从索引卡底部端口拉出的建成 attach 派生边（垂直下挂分镜卡）；
@@ -764,18 +684,11 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
         onToggleRight={toggleRight}
       />
       {saveError !== null && (
-        <div
-          role="alert"
-          style={{
-            padding: '6px 16px',
-            background: '#5c1d1d',
-            color: '#ffe3e3',
-            fontSize: 13,
-          }}
-        >
-          自动保存失败：{saveError}（修改已保留，正在自动重试；可检查磁盘后继续编辑）
-        </div>
+        <ErrorBanner
+          message={`自动保存失败：${saveError}（修改已保留，正在自动重试；可检查磁盘后继续编辑）`}
+        />
       )}
+      {dropError !== null && <ErrorBanner message={dropError} />}
       <div className="editor-body">
         <LeftPanel
           open={leftOpen}

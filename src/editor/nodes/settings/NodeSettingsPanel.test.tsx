@@ -23,6 +23,7 @@ const SETTINGS: ProjectSettings = {
 function setup(node: PanelNode) {
   const api: NodeEditApi = {
     openSettingsId: null,
+    projectId: 'p-1',
     toggleSettings: vi.fn(),
     closeSettings: vi.fn(),
     patchNode: vi.fn(),

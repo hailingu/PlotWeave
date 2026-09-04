@@ -131,7 +131,7 @@ fn normalize_tags(raw: Option<&serde_json::Value>) -> Vec<String> {
 }
 
 /// mime → 扩展名（未知类型回退 bin，文件名扩展优先）。
-fn ext_for(name: &str, mime: &str) -> String {
+pub(crate) fn ext_for(name: &str, mime: &str) -> String {
     if let Some(dot) = name.rfind('.') {
         let ext = &name[dot + 1..];
         let ok =
