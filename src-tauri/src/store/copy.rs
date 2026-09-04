@@ -5,7 +5,9 @@
 use cap_std::fs::Dir as CapDir;
 use tauri::AppHandle;
 
-use crate::store::persist::{asset_identity, open_dir_bound, projects_dir};
+#[cfg(unix)]
+use crate::store::persist::asset_identity;
+use crate::store::persist::{open_dir_bound, projects_dir};
 use crate::store::types::validate_id;
 /// §7.3 复制项目：整目录拷贝项目资产（当前扁平布局下 `projects/{fromId}/
 /// assets` → `projects/{toId}/assets`），供 §10.5 保存边界的实路径复验在

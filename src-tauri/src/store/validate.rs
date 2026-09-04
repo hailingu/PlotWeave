@@ -7,7 +7,9 @@ use cap_std::fs::Dir as CapDir;
 use tauri::AppHandle;
 
 use crate::isotime::{is_canonical_utc_timestamp, is_valid_iso8601, now_iso};
-use crate::store::persist::{asset_identity, asset_stat, open_dir_bound, projects_dir};
+#[cfg(unix)]
+use crate::store::persist::asset_identity;
+use crate::store::persist::{asset_stat, open_dir_bound, projects_dir};
 use crate::store::types::{sanitize_name, validate_id, ProjectFile, ProjectInfo};
 /// 当前支持的文档版本（§3）。
 const CURRENT_SCHEMA_VERSION: u32 = 1;

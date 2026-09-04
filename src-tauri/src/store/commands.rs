@@ -7,9 +7,9 @@ use tauri::AppHandle;
 
 use crate::isotime::now_iso;
 use crate::store::list::{parse_file, read_meta};
-use crate::store::persist::{
-    asset_identity, atomic_write, open_dir_bound, projects_dir, read_verified_file,
-};
+#[cfg(unix)]
+use crate::store::persist::asset_identity;
+use crate::store::persist::{atomic_write, open_dir_bound, projects_dir, read_verified_file};
 use crate::store::types::{
     new_id, new_project_file, sanitize_name, validate_id, ProjectFile, ProjectMeta,
 };
