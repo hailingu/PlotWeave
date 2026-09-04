@@ -181,11 +181,23 @@ exported symbols are always P3.
   verification evidence; a one-line pull-request or issue note alone does
   not close them.
 
+### Issue Reporting
+
+Issues in the GitHub tracker MUST follow
+[docs/development/issue-standard.md](docs/development/issue-standard.md):
+the title uses the format `P<1|2|3>(<scope>): <summary>` — the severity
+calibration above, applied to the tracker, with the scope token of the
+affected area; Conventional-Commit type words (`fix`, `refactor`, …) do
+not belong in issue titles. The standard also fixes the required severity
+label, the `known-boundary` label for recorded dispositions, and the body
+structure per issue kind.
+
 ## Sources Of Truth
 
 | Concern | Authoritative path or discovery command |
 | --- | --- |
 | Product vision, stack overview, and branch model | `README.md` |
 | Engineering standards: size/complexity, boundaries, patterns, testing | `docs/development/software-engineering-standard.md` (+ language standards alongside) |
+| Issue tracker conventions: severity, titles, labels, body structure | `docs/development/issue-standard.md` |
 | Versioned source, configuration, and implementation evidence | Git commit and pull-request revisions |
 | Project structure, dependencies, and executable commands | Discover from root and service manifests/build files as they are added |
