@@ -37,10 +37,11 @@ export class CommandStack {
   private undoStack: HistoryCommand[] = []
   private redoStack: HistoryCommand[] = []
   /** 栈操作版本号：push、撤销请求（含空栈撤销——撤销意向即操作）、
+   * 带 guard 的重做**发起**（重复请求时只有最新一次在途校验有效）、
    * redo 应用与 clear 递增。带 redoGuard 的在途重做以「校验前后版本
    * 未变」为应用前提——任何穿插操作（含撤销-重做往返使栈顶 identity
-   * 恰好复原的 ABA 场景、空栈撤销请求）都使本次重做失效；单比栈顶
-   * identity 防不住这两类。 */
+   * 恰好复原的 ABA 场景、空栈撤销请求、对同一命令的重复重做发起）
+   * 都使本次重做失效；单比栈顶 identity 防不住这些场景。 */
   private revision = 0
 
   constructor(
@@ -110,6 +111,10 @@ export class CommandStack {
       this.applyRedo(cmd)
       return
     }
+    // 发起即计一次操作（无栈变更，不触发 onChange）：使更早的在途重做
+    // 全部失效——重复请求同一 guarded 命令时，迟到的旧履约不得越过
+    // 最新校验的结论（新校验拒绝后旧履约仍应用 = 失效资产入文档）
+    this.revision += 1
     const revision = this.revision
     return guard().then(
       () => {

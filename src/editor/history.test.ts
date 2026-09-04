@@ -272,6 +272,37 @@ describe('CommandStack：redoGuard（资产重回索引前的异步复验，issu
     await expect(pending).resolves.toBeUndefined()
     expect(guarded.redo).not.toHaveBeenCalled()
   })
+
+  it('重复发起同一 guarded 重做：发起即取代更早在途校验（迟到履约不应用）', async () => {
+    const { s } = stack()
+    let calls = 0
+    let resolveOlder!: () => void
+    let rejectNewer!: (err: Error) => void
+    const guarded: HistoryCommand = {
+      undo: vi.fn(),
+      redo: vi.fn(),
+      redoGuard: () => {
+        calls += 1
+        return calls === 1
+          ? new Promise<void>((resolve) => {
+              resolveOlder = resolve
+            })
+          : new Promise<void>((_, reject) => {
+              rejectNewer = reject
+            })
+      },
+    }
+    s.push(guarded)
+    s.undo()
+    const older = s.redo() // 第一次发起：在途
+    const newer = s.redo() // 第二次发起：同一命令的新一次校验
+    rejectNewer(new Error('资产文件已失效')) // 新校验先拒绝（最新结论：文件已失效）
+    await expect(newer).rejects.toThrow('资产文件已失效')
+    resolveOlder() // 旧校验迟到履约：不得把最新校验判失效的资产应用回文档
+    await older
+    expect(guarded.redo).not.toHaveBeenCalled()
+    expect(s.canRedo).toBe(true)
+  })
 })
 
 describe('useCommandHistory（命令栈 hook：惰性构建 + version 驱动重渲染）', () => {
