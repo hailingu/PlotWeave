@@ -7,8 +7,10 @@
 //! - `library`：个人资产库（应用级 library/ 目录，索引 + 媒体文件，§8.1）。
 //! - `assets`：项目资产管线（库资产拷贝导入、set_asset 预检、媒体路径，§7.1/§7.3/§9.3）。
 //! - `imagegen`：画布内 AI 图像生成代理（文生图，docs/data-model.md §13 首片）。
+//! - `http_util`：出站 HTTP 代理共享助手（响应体流式限读内核）。
 
 mod assets;
+mod http_util;
 mod imagegen;
 mod isotime;
 mod library;

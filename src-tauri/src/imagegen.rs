@@ -20,6 +20,8 @@ use reqwest::Url;
 use serde_json::{json, Value};
 use tauri::AppHandle;
 
+use crate::http_util::{append_capped, read_text_capped};
+
 /// 生成产物大小上限（32 MiB）：防异常响应把内存/磁盘撑爆。
 const GENERATED_IMAGE_MAX_BYTES: usize = 32 * 1024 * 1024;
 
@@ -27,29 +29,6 @@ const GENERATED_IMAGE_MAX_BYTES: usize = 32 * 1024 * 1024;
 /// JSON 开销，按产物上限放宽一倍封顶——流式聚合、超限即中止，恶意/
 /// 异常 provider 的超大响应在物化前被拒，上限真正护住内存。
 const RESPONSE_BODY_MAX_BYTES: usize = GENERATED_IMAGE_MAX_BYTES * 2;
-
-/// 分块累加内核：超限立即中止且不落半截（可单测的纯函数）。
-fn append_capped(buf: &mut Vec<u8>, chunk: &[u8], cap: usize) -> Result<(), String> {
-    if buf.len() + chunk.len() > cap {
-        return Err(format!("响应体超过 {cap} 字节上限"));
-    }
-    buf.extend_from_slice(chunk);
-    Ok(())
-}
-
-/// 有上限地流式读取响应体为 UTF-8 文本（主响应）。
-async fn read_text_capped(response: reqwest::Response, cap: usize) -> Result<String, String> {
-    let mut resp = response;
-    let mut buf = Vec::new();
-    while let Some(chunk) = resp
-        .chunk()
-        .await
-        .map_err(|e| format!("读取响应失败：{e}"))?
-    {
-        append_capped(&mut buf, &chunk, cap)?;
-    }
-    String::from_utf8(buf).map_err(|e| format!("响应不是有效 UTF-8：{e}"))
-}
 
 /// 有上限地流式读取响应体为字节（url 回退下载，cap = 产物上限）。
 async fn read_bytes_capped(response: reqwest::Response, cap: usize) -> Result<Vec<u8>, String> {
@@ -435,16 +414,6 @@ mod tests {
             json!({ "model": "gpt-image-1", "prompt": "雨夜霓虹", "size": "1024x1024" })
         );
         assert!(body.get("response_format").is_none());
-    }
-
-    #[test]
-    fn append_capped_rejects_oversize_without_partial_write() {
-        let mut buf = vec![1u8, 2, 3];
-        assert!(append_capped(&mut buf, &[4, 5], 10).is_ok());
-        assert_eq!(buf, vec![1, 2, 3, 4, 5]);
-        // 超限即拒：缓冲保持原状，不落半截
-        assert!(append_capped(&mut buf, &[6, 7, 8, 9, 10, 11], 10).is_err());
-        assert_eq!(buf, vec![1, 2, 3, 4, 5]);
     }
 
     #[test]
