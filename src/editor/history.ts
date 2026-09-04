@@ -36,6 +36,11 @@ const STACK_LIMIT = 200
 export class CommandStack {
   private undoStack: HistoryCommand[] = []
   private redoStack: HistoryCommand[] = []
+  /** 栈变更版本号：push/undo/redo 应用/clear 递增。带 redoGuard 的在途
+   * 重做以「校验前后版本未变」为应用前提——任何穿插操作（含撤销-重做
+   * 往返使栈顶 identity 恰好复原的 ABA 场景）都使本次重做失效；
+   * 单比栈顶 identity 防不住复原往返。 */
+  private revision = 0
 
   constructor(
     private readonly coalesceMs: number = COALESCE_MS,
@@ -67,6 +72,7 @@ export class CommandStack {
       if (this.undoStack.length > this.limit) this.undoStack.shift()
     }
     this.redoStack = []
+    this.revision += 1
     this.onChange?.()
   }
 
@@ -75,6 +81,7 @@ export class CommandStack {
     if (!cmd) return
     cmd.undo()
     this.redoStack.push(cmd)
+    this.revision += 1
     this.onChange?.()
   }
 
@@ -82,9 +89,10 @@ export class CommandStack {
    * 重做栈顶命令。无 redoGuard 的命令走同步快路径（返回 undefined，
    * 与既有契约逐字一致）；带 redoGuard 的命令先等待校验：拒绝则本次
    * 重做放弃、命令留在重做栈、拒绝原因经返回的 Promise 传播；校验
-   * 在途期间栈顶被其他操作取代（并发撤销/新编辑清空重做分支）则
-   * 静默放弃——最新操作优先，绝不应用已被取代的命令。校验只读不改
-   * 状态，应用本身保持同步原子。
+   * 在途期间发生**任何**栈变更（并发撤销/重做/新编辑——含撤销-重做
+   * 往返使栈顶 identity 恰好复原）则静默放弃：最新操作优先，绝不
+   * 应用穿插操作之前的在途重做。校验只读不改状态，应用本身保持
+   * 同步原子。
    */
   redo(): void | Promise<void> {
     const cmd = this.redoStack[this.redoStack.length - 1]
@@ -94,8 +102,9 @@ export class CommandStack {
       this.applyRedo(cmd)
       return
     }
+    const revision = this.revision
     return guard().then(() => {
-      if (this.redoStack[this.redoStack.length - 1] !== cmd) return
+      if (this.revision !== revision) return
       this.applyRedo(cmd)
     })
   }
@@ -105,12 +114,14 @@ export class CommandStack {
     this.redoStack.pop()
     cmd.redo()
     this.undoStack.push(cmd)
+    this.revision += 1
     this.onChange?.()
   }
 
   clear(): void {
     this.undoStack = []
     this.redoStack = []
+    this.revision += 1
     this.onChange?.()
   }
 }

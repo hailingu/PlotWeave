@@ -206,6 +206,31 @@ describe('CommandStack：redoGuard（资产重回索引前的异步复验，issu
     expect(c.redo).not.toHaveBeenCalled()
     expect(s.canRedo).toBe(false)
   })
+
+  it('校验在途期间撤销-重做往返（栈顶 identity 复原）：仍视为被取代，静默放弃', async () => {
+    const { s } = stack()
+    let release: () => void = () => {}
+    const guarded: HistoryCommand = {
+      undo: vi.fn(),
+      redo: vi.fn(),
+      redoGuard: () =>
+        new Promise<void>((resolve) => {
+          release = resolve
+        }),
+    }
+    const older = cmd('older')
+    s.push(older)
+    s.push(guarded)
+    s.undo() // guarded → 重做栈；older 仍可撤销
+    const pending = s.redo() // guarded 校验在途
+    s.undo() // older 上到重做栈顶，取代 guarded
+    s.redo() // older 同步重做回撤销栈——栈顶 identity 复原为 guarded
+    release()
+    await pending
+    expect(guarded.redo).not.toHaveBeenCalled()
+    expect(s.canRedo).toBe(true) // guarded 留在重做栈：可再次显式重做
+    expect(older.redo).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('useCommandHistory（命令栈 hook：惰性构建 + version 驱动重渲染）', () => {
