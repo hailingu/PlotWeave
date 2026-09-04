@@ -252,6 +252,26 @@ describe('CommandStack：redoGuard（资产重回索引前的异步复验，issu
     expect(guarded.redo).not.toHaveBeenCalled()
     expect(s.canRedo).toBe(true) // 留在重做栈：可再次显式重做
   })
+
+  it('已被取代的重做其校验拒绝同样静默放弃：不传播拒绝（不覆盖新诊断）', async () => {
+    const { s } = stack()
+    let rejectGuard: (err: Error) => void = () => {}
+    const guarded: HistoryCommand = {
+      undo: vi.fn(),
+      redo: vi.fn(),
+      redoGuard: () =>
+        new Promise<void>((_, reject) => {
+          rejectGuard = reject
+        }),
+    }
+    s.push(guarded)
+    s.undo()
+    const pending = s.redo()
+    s.push(cmd('new')) // 取代：重做分支被清空
+    rejectGuard(new Error('资产文件已失效'))
+    await expect(pending).resolves.toBeUndefined()
+    expect(guarded.redo).not.toHaveBeenCalled()
+  })
 })
 
 describe('useCommandHistory（命令栈 hook：惰性构建 + version 驱动重渲染）', () => {

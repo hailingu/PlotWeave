@@ -96,9 +96,11 @@ export class CommandStack {
    * 与既有契约逐字一致）；带 redoGuard 的命令先等待校验：拒绝则本次
    * 重做放弃、命令留在重做栈、拒绝原因经返回的 Promise 传播；校验
    * 在途期间发生**任何**栈变更（并发撤销/重做/新编辑——含撤销-重做
-   * 往返使栈顶 identity 恰好复原）则静默放弃：最新操作优先，绝不
-   * 应用穿插操作之前的在途重做。校验只读不改状态，应用本身保持
-   * 同步原子。
+   * 往返使栈顶 identity 恰好复原、空栈撤销请求）则静默放弃：最新
+   * 操作优先，绝不应用穿插操作之前的在途重做。**履约与拒绝两侧都以
+   * 版本未变为前提**——已被取代的重做连迟到拒绝也不传播（操作已
+   * 静默放弃，迟到的失败横幅只会覆盖更新的动作诊断）。校验只读不改
+   * 状态，应用本身保持同步原子。
    */
   redo(): void | Promise<void> {
     const cmd = this.redoStack[this.redoStack.length - 1]
@@ -109,10 +111,16 @@ export class CommandStack {
       return
     }
     const revision = this.revision
-    return guard().then(() => {
-      if (this.revision !== revision) return
-      this.applyRedo(cmd)
-    })
+    return guard().then(
+      () => {
+        if (this.revision !== revision) return
+        this.applyRedo(cmd)
+      },
+      (err: unknown) => {
+        if (this.revision !== revision) return
+        throw err
+      },
+    )
   }
 
   /** 弹出并应用重做命令、移入撤销栈（redo 快慢路径共用的原子收尾）。 */
