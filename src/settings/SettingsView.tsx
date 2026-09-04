@@ -67,6 +67,10 @@ function DefaultModelsSection({ settings, update, chatOptions, chatModel }: Defa
             ))}
           </select>
         </label>
+        <p className="settings-hint">
+          图像模型需支持 /images/generations（如 gpt-image-1）；对话模型不能生图——清单是跨用途共享的模型
+          id，请按用途选用。
+        </p>
         <p className="settings-hint">{defaultModelHint(chatOptions.length, chatModel)}</p>
       </div>
     </>

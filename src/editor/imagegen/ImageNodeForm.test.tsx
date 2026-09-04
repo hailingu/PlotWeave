@@ -39,7 +39,7 @@ function setup(data: ImageFlowNode['data']) {
       projectId="p-1"
       nodesRef={nodesRef}
       assetsRef={{ current: undefined }}
-      settingsRef={{ current: { characters: [] } }}
+      settings={{ characters: [] }}
       applyDataPatch={vi.fn()}
       addAsset={vi.fn()}
       removeAsset={vi.fn()}

@@ -60,7 +60,7 @@ function imageNodeData(): ImageFlowNode['data'] {
 function Harness(props: {
   readonly nodesRef: { current: CanvasNode[] }
   readonly assetsRef: { current: { byId: Record<string, AssetRef> } | undefined }
-  readonly settingsRef: { current: Pick<ProjectSettings, 'characters'> }
+  readonly settings: Pick<ProjectSettings, 'characters'> & { locations?: unknown }
   readonly applyDataPatch: (id: string, patch: Record<string, unknown>) => void
   readonly addAsset: (asset: AssetRef) => void
   readonly removeAsset: (assetId: string) => void
@@ -70,7 +70,7 @@ function Harness(props: {
     projectId: 'p-1',
     nodesRef: props.nodesRef,
     assetsRef: props.assetsRef,
-    settingsRef: props.settingsRef,
+    settingsRef: { current: props.settings },
     applyDataPatch: props.applyDataPatch,
     addAsset: props.addAsset,
     removeAsset: props.removeAsset,
@@ -96,9 +96,9 @@ function generatedJobId(): string {
   return (call?.[1] as { request: { jobId: string } } | undefined)?.request.jobId ?? ''
 }
 
-/** 生成成功路径的公共脚手架：gen 返回 pa-9，validate 原样回显。 */
+/** 生成成功路径的公共脚手架：gen 返回 pa-9（§9.3 预检已在命令内，单 IPC）。 */
 function mockSuccessfulGeneration(): void {
-  vi.mocked(tauriInvoke).mockImplementation((cmd: string, args: unknown) => {
+  vi.mocked(tauriInvoke).mockImplementation((cmd: string) => {
     if (cmd === 'llm_image_generate') {
       return Promise.resolve({
         id: 'pa-9',
@@ -107,9 +107,6 @@ function mockSuccessfulGeneration(): void {
         source: 'generated',
         createdAt: '2026-09-04T00:00:00.000Z',
       })
-    }
-    if (cmd === 'validate_project_asset') {
-      return Promise.resolve((args as { asset?: unknown } | undefined)?.asset ?? {})
     }
     return Promise.resolve({})
   })
@@ -136,12 +133,12 @@ function setupHarness(
       opts.nodes ?? ([{ id: 'img1', type: 'image', data: imageNodeData() } as unknown as CanvasNode]),
   }
   const assetsRef = { current: opts.assets }
-  const settingsRef = { current: { characters: opts.characters ?? [], locations: [] } }
-  render(<Harness nodesRef={nodesRef} assetsRef={assetsRef} settingsRef={settingsRef} {...cmds} />)
+  const settings = { characters: opts.characters ?? [], locations: [] as never[] }
+  render(<Harness nodesRef={nodesRef} assetsRef={assetsRef} settings={settings} {...cmds} />)
   return cmds
 }
 
-describe('生成调度状态机（§13）', () => {
+describe('生成调度：发起与双击占位（§13）', () => {
   it('设置加载的异步间隙内双击只发起一次生成（防重复计费与结果孤儿化）', async () => {
     ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
     let resolveSettings!: (s: AppSettings) => void
@@ -162,7 +159,9 @@ describe('生成调度状态机（§13）', () => {
     await new Promise((r) => setTimeout(r, 0))
     expect(generateCount()).toBe(1)
   })
+})
 
+describe('生成调度：卸载协作式取消（§13 作业生命周期）', () => {
   it('卸载时对 running 作业发协作式取消，完成结果不写回已卸载组件', async () => {
     ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
     let resolveGen!: (v: unknown) => void
@@ -187,7 +186,9 @@ describe('生成调度状态机（§13）', () => {
     expect(addAsset).not.toHaveBeenCalled()
     expect(pushHistory).not.toHaveBeenCalled()
   })
+})
 
+describe('生成调度：结果落位复合命令（§7.3 同构）', () => {
   it('生成成功以复合命令入栈：undo 同步移除资产索引，redo 恢复（§7.3 同构）', async () => {
     ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
     mockSuccessfulGeneration()
@@ -211,7 +212,9 @@ describe('生成调度状态机（§13）', () => {
       outputs: { primary: { assetId: 'pa-9' } },
     })
   })
+})
 
+describe('生成调度：旧产物回收（§7.3）', () => {
   it('重新生成：旧产物不再被任何节点引用时随命令移出索引，undo 恢复（§7.3）', async () => {
     ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
     mockSuccessfulGeneration()

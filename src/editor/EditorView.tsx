@@ -151,9 +151,6 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
   edgesRef.current = edges
   const assetsRef = useRef(assets)
   assetsRef.current = assets
-  // 设定集镜像：图片生成旧产物回收判定扫角色头像引用（§7.3）
-  const settingsMirrorRef = useRef(settings)
-  settingsMirrorRef.current = settings
   const episodeTitlesRef = useRef(episodeTitles)
   episodeTitlesRef.current = episodeTitles
 
@@ -663,16 +660,7 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
   return (
     <NodeEditContext.Provider value={nodeEditApi}>
     {/* 图片节点生成调度（§13）：依赖本组件的命令回调与资产索引写入 */}
-    <ImageGenProvider
-      projectId={project.id}
-      nodesRef={nodesRef}
-      assetsRef={assetsRef}
-      settingsRef={settingsMirrorRef}
-      applyDataPatch={applyDataPatch}
-      addAsset={addAsset}
-      removeAsset={removeAsset}
-      pushHistory={pushHistory}
-    >
+    <ImageGenProvider projectId={project.id} nodesRef={nodesRef} assetsRef={assetsRef} settings={settings} applyDataPatch={applyDataPatch} addAsset={addAsset} removeAsset={removeAsset} pushHistory={pushHistory}>
     <div className="editor-root">
       {/* Overlay 标题栏下整行作为窗口拖拽区；按钮可点击（§3.3）。 */}
       <EditorTitlebar

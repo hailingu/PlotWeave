@@ -115,8 +115,10 @@ fn generation_request_body(model: &str, prompt: &str, size: &str) -> Value {
 }
 
 /// 文生图命令（§13）：成功返回 `source=generated` 的项目级 AssetRef，
-/// 前端经 `validate_project_asset` 预检后并入会话资产索引（§9.3 同域）。
-/// 请求返回后与落盘前各检查一次取消标志：协作式取消即放弃结果。
+/// 前端直接并入会话资产索引。请求返回后与落盘前各检查一次取消标志：
+/// 协作式取消即放弃结果；落盘后在**命令内**完成 §9.3 预检（形状 +
+/// 实路径复验）——生成后到返回前不再跨命令边界，消除前端二次 IPC 的
+/// 卸载丢结果窗口。
 #[tauri::command]
 pub async fn llm_image_generate(app: AppHandle, request: ImageGenRequest) -> Result<Value, String> {
     let ImageGenRequest {
@@ -186,7 +188,9 @@ pub async fn llm_image_generate(app: AppHandle, request: ImageGenRequest) -> Res
         return Err("已取消".into());
     }
     let projects = crate::store::projects_dir(&app)?;
-    let asset = crate::assets::write_generated_asset(&projects, &project_id, &bytes, mime)?;
+    let written = crate::assets::write_generated_asset(&projects, &project_id, &bytes, mime)?;
+    // §9.3 预检并入命令内（同一根句柄）：返回的产物已完成形状+实路径校验
+    let asset = crate::assets::validate_project_asset_with(&projects, &project_id, &written)?;
     clear_cancel(&job_id);
     Ok(asset)
 }

@@ -124,6 +124,31 @@ describe('图片节点：归一化（§11.1 第 3 步）', () => {
     expect(round.warnings.some((w) => w.includes('img1') && w.includes('pa-1'))).toBe(true)
   })
 
+  it('必填标量异型（prompt 为对象）：节点隔离并警告', () => {
+    const doc = serializeProject(contentWithImage(), 'p-1', NOW) as unknown as {
+      graph: { nodes: Record<string, unknown>[] }
+    }
+    ;(imageDocNode(doc).data as { spec: Record<string, unknown> }).spec.prompt = { no: true }
+    const round = parseProject(doc)
+    expect(round.content.nodes.map((n) => n.id)).not.toContain('img1')
+    expect(round.warnings.some((w) => w.includes('img1') && w.includes('prompt'))).toBe(true)
+  })
+
+  it('sequence/branch 边端点为图片节点：孤儿边隔离（图片节点不参与剧情流）', () => {
+    const content = contentWithImage()
+    content.edges = [
+      { id: 'e-img', source: 's1', target: 'img1', className: 'pw-edge-sequence' } as never,
+    ]
+    const doc = serializeProject(content, 'p-1', NOW)
+    const round = parseProject(doc)
+    expect(round.content.edges).toEqual([])
+    expect(round.warnings.some((w) => w.includes('e-img') || w.includes('孤儿边'))).toBe(true)
+    // 节点本体保留
+    expect(round.content.nodes.map((n) => n.id)).toContain('img1')
+  })
+})
+
+describe('图片节点：空键改写域（§8.1/§11.1 第 3 步）', () => {
   it('primary.assetId 空白且指向空键资产：随空键重发改写为新 id，而非剥离（§8.1）', () => {
     const doc = serializeProject(contentWithImage(), 'p-1', NOW) as unknown as {
       assets: { byId: Record<string, Record<string, unknown>> }
@@ -160,28 +185,5 @@ describe('图片节点：归一化（§11.1 第 3 步）', () => {
     expect(
       round.warnings.some((w) => w.includes('img1') && w.includes('无空键资产映射')),
     ).toBe(true)
-  })
-
-  it('必填标量异型（prompt 为对象）：节点隔离并警告', () => {
-    const doc = serializeProject(contentWithImage(), 'p-1', NOW) as unknown as {
-      graph: { nodes: Record<string, unknown>[] }
-    }
-    ;(imageDocNode(doc).data as { spec: Record<string, unknown> }).spec.prompt = { no: true }
-    const round = parseProject(doc)
-    expect(round.content.nodes.map((n) => n.id)).not.toContain('img1')
-    expect(round.warnings.some((w) => w.includes('img1') && w.includes('prompt'))).toBe(true)
-  })
-
-  it('sequence/branch 边端点为图片节点：孤儿边隔离（图片节点不参与剧情流）', () => {
-    const content = contentWithImage()
-    content.edges = [
-      { id: 'e-img', source: 's1', target: 'img1', className: 'pw-edge-sequence' } as never,
-    ]
-    const doc = serializeProject(content, 'p-1', NOW)
-    const round = parseProject(doc)
-    expect(round.content.edges).toEqual([])
-    expect(round.warnings.some((w) => w.includes('e-img') || w.includes('孤儿边'))).toBe(true)
-    // 节点本体保留
-    expect(round.content.nodes.map((n) => n.id)).toContain('img1')
   })
 })

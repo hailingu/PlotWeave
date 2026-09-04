@@ -46,7 +46,8 @@ function isDesktopTauri(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 }
 
-/** Rust 生成命令的执行与 §9.3 预检（媒体已落盘，前端只收条目）。 */
+/** Rust 生成命令的执行（§9.3 预检已在命令内完成，前端单次 IPC 直收
+ * 已校验的资产条目）。 */
 async function runGeneration(
   projectId: string,
   jobId: string,
@@ -63,13 +64,7 @@ async function runGeneration(
       size: plan.size,
     },
   })
-  const generated = normalizeAssetRef(raw as never)
-  // 入索引前过 Rust 预检（与库导入同域，§9.3 set_asset 强制预检）
-  const checked = await tauriInvoke<unknown>('validate_project_asset', {
-    id: projectId,
-    asset: generated,
-  })
-  return normalizeAssetRef(checked as never)
+  return normalizeAssetRef(raw as never)
 }
 
 /** 资产是否仍被引用（角色头像 avatarAssetId、图片 outputs.primary、分镜

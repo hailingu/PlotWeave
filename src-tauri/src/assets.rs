@@ -366,7 +366,11 @@ fn validate_asset_ref(asset: &Value) -> Result<Value, String> {
 
 /// set_asset 预检内核（§9.3，给定已验证的 projects 根句柄）：形状规范化
 /// 之后做实路径复验——形状合法但媒体文件缺失/符号链接/逃逸的条目同样拒绝。
-fn validate_project_asset_with(root: &CapDir, id: &str, asset: &Value) -> Result<Value, String> {
+pub(crate) fn validate_project_asset_with(
+    root: &CapDir,
+    id: &str,
+    asset: &Value,
+) -> Result<Value, String> {
     let normalized = validate_asset_ref(asset)?;
     let rel_path = normalized
         .get("relPath")
