@@ -32,6 +32,7 @@ const TYPE_LABELS: Record<CanvasNode['type'], string> = {
   beat: '节奏卡 · 节拍胶囊',
   branch: '分支 · 岔路路标',
   shot: '分镜卡 · 监视器卡',
+  image: '图片节点 · 生成产物',
 }
 
 /** 检查器字段行：按节点类型派生只读视图（编辑随后续 ⚙️ 设置面板任务落地）。 */
@@ -94,6 +95,12 @@ function inspectorRows(
         { label: '画面描述', value: node.data.picture },
         { label: '镜头 PROMPT', value: node.data.prompt },
         { label: '引用', value: node.data.refs.map((r) => r.label).join(' / ') || '—' },
+      ]
+    case 'image':
+      return [
+        { label: 'PROMPT', value: node.data.prompt },
+        { label: '模型', value: node.data.model || '未选择' },
+        { label: '尺寸', value: node.data.size },
       ]
   }
 }

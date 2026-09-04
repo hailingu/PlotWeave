@@ -119,6 +119,18 @@ function mentionIssuesOfLine(
   }
 }
 
+/** 图片节点产物引用的悬空警告（§11.4/§13）：primary.assetId 只按本项目
+ * assets.byId 解析——目标缺失保留为悬空引用并警告（§8.2.3 不删除用户
+ * 选择），UI 按缺失占位展示。 */
+function imageOutputWarnings(n: StoryNode, doc: ProjectDocument, warnings: string[]): void {
+  const primary = (n.data.spec as { outputs?: { primary?: { assetId?: unknown } } }).outputs
+    ?.primary
+  const assetId = primary?.assetId
+  if (typeof assetId === 'string' && !doc.assets?.byId[assetId]) {
+    warnings.push(`节点 ${n.id} 的生成产物引用指向不存在的资产 ${assetId}`)
+  }
+}
+
 /** 按节点类型分发悬空设定/资产引用检查（§11.4）。 */
 export function collectDanglingRefWarnings(
   n: StoryNode,
@@ -131,4 +143,5 @@ export function collectDanglingRefWarnings(
     dialogueMentionWarnings(n, doc, warnings)
   }
   if (n.type === 'shot') shotRefWarnings(n, doc, warnings)
+  if (n.type === 'image') imageOutputWarnings(n, doc, warnings)
 }

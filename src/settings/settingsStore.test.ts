@@ -15,6 +15,7 @@ describe('settingsStore 内存回退', () => {
     const next: AppSettings = {
       providers: [{ id: 'openai', label: 'OpenAI 兼容', baseUrl: 'https://x/v1', enabled: false, models: ['m1'] }],
       defaultChat: 'openai:m1',
+      defaultImage: null,
     }
     await settingsStore.save(next)
     await expect(settingsStore.load()).resolves.toEqual(next)
@@ -27,6 +28,7 @@ describe('settingsStore 内存回退', () => {
         { id: 'volcengine-ark', label: 'B', baseUrl: 'u2', enabled: true, models: [] },
       ],
       defaultChat: null,
+      defaultImage: null,
     }
     const updated = await settingsStore.setProviderKey(base, 'volcengine-ark', 'sk-预览密钥')
     expect(updated.providers[0]).toBe(base.providers[0]) // 未命中原引用不动
@@ -39,7 +41,7 @@ describe('settingsStore 内存回退', () => {
   })
 
   it('setProviderKey 不修改传入的旧对象（返回新 settings）', async () => {
-    const base: AppSettings = { providers: [{ id: 'p', label: 'P', baseUrl: 'u', enabled: true, models: [] }], defaultChat: null }
+    const base: AppSettings = { providers: [{ id: 'p', label: 'P', baseUrl: 'u', enabled: true, models: [] }], defaultChat: null, defaultImage: null }
     await settingsStore.setProviderKey(base, 'p', 'k')
     expect(base.providers[0].keyEnc).toBeUndefined()
   })

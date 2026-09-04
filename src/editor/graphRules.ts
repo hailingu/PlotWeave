@@ -45,10 +45,11 @@ export function removedOptionHandles(
 /** 连线语义（§4.4）：横向剧情流 / 分支选项出口 / 分镜下挂。 */
 export type EdgeKind = 'sequence' | 'branch' | 'attach'
 
-/** 连线端点类型约束（§5 端口归属）：与加载归一化的孤儿边规则对等——
- * 交互/AI 侧放行一条「保存后下次加载即被静默删除」的连线是坏体验。
- * 剧情流（sequence/branch）端点不得为分镜卡；sequence/attach 不得以
- * 分支为 source（分支只经选项出口）；attach 必须场景 → 分镜卡。
+/** 连线端点类型约束（§5 端口归属，§13 图片节点）：与加载归一化的孤儿边
+ * 规则对等——交互/AI 侧放行一条「保存后下次加载即被静默删除」的连线是
+ * 坏体验。剧情流（sequence/branch）端点不得为分镜卡或图片节点（图片节点
+ * 是自由摆放的生成产物，不经边挂接）；sequence/attach 不得以分支为
+ * source（分支只经选项出口）；attach 必须场景 → 分镜卡。
  * 返回拒绝原因，null 表示通过；端点类型未知不在此判定（存在性另行校验）。 */
 export function connectionEndpointIssue(
   sourceType: string | undefined,
@@ -64,6 +65,9 @@ export function connectionEndpointIssue(
   }
   if (sourceType === 'shot' || targetType === 'shot') {
     return '分镜卡不参与剧情流（attach 之外的端点不得为分镜卡）'
+  }
+  if (sourceType === 'image' || targetType === 'image') {
+    return '图片节点不参与剧情流（生成产物自由摆放，无连线端口）'
   }
   if (kind === 'sequence' && sourceType === 'branch') {
     return '分支只经选项出口连出（sequence 不得以分支为 source）'

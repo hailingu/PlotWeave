@@ -28,6 +28,9 @@ import DialogueNode from './nodes/DialogueNode'
 import BeatNode from './nodes/BeatNode'
 import BranchNode from './nodes/BranchNode'
 import ShotNode from './nodes/ShotNode'
+import ImageNode from './nodes/ImageNode'
+import { ImageGenProvider } from './imagegen/ImageGenProvider'
+import { useNodeDeletion } from './useNodeDeletion'
 import BranchEdge from './edges/BranchEdge'
 import LeftPanel from './panels/LeftPanel'
 import RightPanel, { type RightTab } from './panels/RightPanel'
@@ -53,9 +56,8 @@ import {
 } from './graphRules'
 import { compareCodeUnits } from '../compare'
 import {
+  applyEpisodeFocus,
   beatFulfillmentMap,
-  episodeOfNode,
-  hostSceneMap,
   type BeatFulfillment,
 } from './outline'
 import { useOutlineDrop } from './useOutlineDrop'
@@ -74,13 +76,14 @@ import type { CanvasNode } from './nodes/types'
 import type { AssetRef } from '../model/document'
 import type { ProjectContent } from '../model/content'
 
-/** 画布节点类型注册：索引卡 / 对白 / 节奏卡 / 分支 / 分镜卡（docs/ui-design.md §4.2）。 */
+/** 画布节点类型注册：索引卡 / 对白 / 节奏卡 / 分支 / 分镜卡 / 图片节点（docs/ui-design.md §4.2/§13）。 */
 const nodeTypes: NodeTypes = {
   scene: SceneNode,
   dialogue: DialogueNode,
   beat: BeatNode,
   branch: BranchNode,
   shot: ShotNode,
+  image: ImageNode,
 }
 
 /** 连线类型注册：branch = 品牌渐变 + 选项胶囊；sequence 用默认贝塞尔加样式类。 */
@@ -295,6 +298,24 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
     [applyDataPatch, pushHistory, setEdges],
   )
 
+  /** 资产索引写入（§7.3 导入/生成命令的 apply/undo/redo 共用）：新增条目
+   * 按 id 键控并入；移除只删索引条目，媒体文件留存待延迟回收（§7.3）。 */
+  const addAsset = useCallback(
+    (asset: AssetRef) =>
+      setAssets((cur) => ({ byId: { ...cur?.byId, [asset.id]: asset } })),
+    [],
+  )
+  const removeAsset = useCallback(
+    (assetId: string) =>
+      setAssets((cur) => {
+        if (!cur) return cur
+        const byId = { ...cur.byId }
+        delete byId[assetId]
+        return { byId }
+      }),
+    [],
+  )
+
   /** ⧉ 复制：同 data 新 id，右下偏移并只选中新副本；入栈可撤销。 */
   const duplicateNode = useCallback(
     (id: string) => {
@@ -317,33 +338,19 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
     [pushHistory, setNodes],
   )
 
-  /** 🗑 删除一组节点及其全部连线：入栈可撤销（§4.3 删除可撤销，无需确认）。 */
-  const deleteNodesByIds = useCallback(
-    (ids: string[]) => {
-      const idSet = new Set(ids)
-      const removedNodes = nodesRef.current.filter((n) => idSet.has(n.id))
-      if (removedNodes.length === 0) return
-      const removedEdges = edgesRef.current.filter(
-        (e) => idSet.has(e.source) || idSet.has(e.target),
-      )
-      const apply = (remove: boolean) => {
-        setNodes((nds) =>
-          remove
-            ? nds.filter((n) => !idSet.has(n.id))
-            : [...nds, ...removedNodes],
-        )
-        setEdges((eds) =>
-          remove
-            ? eds.filter((e) => !idSet.has(e.source) && !idSet.has(e.target))
-            : [...eds, ...removedEdges],
-        )
-      }
-      apply(true)
-      pushHistory({ undo: () => apply(false), redo: () => apply(true) })
-      setOpenSettingsId(null)
-    },
-    [pushHistory, setEdges, setNodes],
-  )
+  /** 🗑 节点删除（§4.3 可撤销 + §7.3 产物回收）拆至 useNodeDeletion。 */
+  const deleteNodesByIds = useNodeDeletion({
+    nodesRef,
+    edgesRef,
+    settings,
+    assetsRef,
+    addAsset,
+    removeAsset,
+    setNodes,
+    setEdges,
+    pushHistory,
+    closeSettings,
+  })
 
   /** 删除一组连线（选中边 + Delete）：入栈可撤销。 */
   const deleteEdgesByIds = useCallback(
@@ -386,17 +393,11 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
     setFocusedEpisode((cur) => (cur === no ? null : no))
   }, [])
 
-  /** 集聚焦的画布投影：成员保持原样，非成员加降透明度类（§3.5 ~30%）。
-   * className 是运行态样式（落盘时由模型层序列化剥离），不入持久化。 */
-  const displayNodes = useMemo(() => {
-    if (focusedEpisode === null) return nodes
-    const sceneByShot = hostSceneMap(nodes, edges)
-    return nodes.map((n) =>
-      episodeOfNode(n, (id) => sceneByShot.get(id)) === focusedEpisode
-        ? n
-        : ({ ...n, className: 'pw-node-dim' } as CanvasNode),
-    )
-  }, [nodes, edges, focusedEpisode])
+  /** 集聚焦的画布投影（§3.5 ~30% 降透明度退后）；纯派生见 outline。 */
+  const displayNodes = useMemo(
+    () => applyEpisodeFocus(nodes, edges, focusedEpisode),
+    [nodes, edges, focusedEpisode],
+  )
 
   /** 大纲拖拽落点（§3.5）：计划由 outlineDrop/spine 纯函数产出，
    * useOutlineDrop 翻译为一条可撤销命令。 */
@@ -408,24 +409,6 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
     setEdges,
     pushHistory,
   })
-
-  /** 资产索引写入（§7.3 导入命令的 apply/undo/redo 共用）：新增条目按 id
-   * 键控并入；移除只删索引条目，媒体文件留存待延迟回收（§7.3）。 */
-  const addAsset = useCallback(
-    (asset: AssetRef) =>
-      setAssets((cur) => ({ byId: { ...cur?.byId, [asset.id]: asset } })),
-    [],
-  )
-  const removeAsset = useCallback(
-    (assetId: string) =>
-      setAssets((cur) => {
-        if (!cur) return cur
-        const byId = { ...cur.byId }
-        delete byId[assetId]
-        return { byId }
-      }),
-    [],
-  )
 
   /** 索引卡的 🎞 镜数：派生自该场 attach 下挂边数量（§7.2，不落镜像字段）。 */
   const shotCountOf = useCallback(
@@ -663,6 +646,8 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
 
   return (
     <NodeEditContext.Provider value={nodeEditApi}>
+    {/* 图片节点生成调度（§13）：依赖本组件的命令回调与资产索引写入 */}
+    <ImageGenProvider projectId={project.id} nodes={nodes} nodesRef={nodesRef} assetsRef={assetsRef} settings={settings} applyDataPatch={applyDataPatch} addAsset={addAsset} removeAsset={removeAsset} pushHistory={pushHistory}>
     <div className="editor-root">
       {/* Overlay 标题栏下整行作为窗口拖拽区；按钮可点击（§3.3）。 */}
       <EditorTitlebar
@@ -782,6 +767,7 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
         />
       )}
     </div>
+    </ImageGenProvider>
     </NodeEditContext.Provider>
   )
 }

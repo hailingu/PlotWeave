@@ -8,6 +8,7 @@
 //!   拼接），交出前完成 relPath 词法校验与实路径复验。
 
 use std::fs;
+use std::io::Write;
 
 use cap_std::ambient_authority;
 use cap_std::fs::Dir as CapDir;
@@ -162,12 +163,13 @@ fn open_library_asset(library: &CapDir, rel_path: &str) -> Result<cap_std::fs::F
 /// 确保子目录存在并返回身份绑定的打开句柄：缺失即创建（排他语义由后续
 /// 归类 + open_dir_bound 保证），现存必须是非符号链接的真实目录。
 fn ensure_child_dir(parent: &CapDir, name: &str, label: &str) -> Result<CapDir, String> {
-    match parent.symlink_metadata(name) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => parent
-            .create_dir(name)
-            .map_err(|e| format!("创建{label}失败：{e}"))?,
-        Err(e) => return Err(format!("读取{label}元数据失败：{e}")),
-        Ok(_) => {}
+    // 总是尝试创建、容忍 AlreadyExists：先查再建留有竞态窗口——两个并发
+    // 首次落盘同时观察到目录缺失时，其一的 create_dir 会撞上另一者刚建的
+    // 目录；该作业的付费生成结果不应因此丢弃。归类校验照常兜底。
+    if let Err(e) = parent.create_dir(name) {
+        if e.kind() != std::io::ErrorKind::AlreadyExists {
+            return Err(format!("创建{label}失败：{e}"));
+        }
     }
     let md = parent
         .symlink_metadata(name)
@@ -181,14 +183,13 @@ fn ensure_child_dir(parent: &CapDir, name: &str, label: &str) -> Result<CapDir, 
     open_dir_bound(parent, name, &md, label)
 }
 
-/// 流式拷贝进目标目录（原子落盘，与 store::atomic_write 同构）：排他临时
-/// 文件 + sync_all + 同目录 rename + 父目录 fsync 持久性屏障（Unix）；
-/// rename 前复核目标仍未被占（fail closed），失败尽力清理临时文件。
-fn copy_into_dir(
-    src: &mut cap_std::fs::File,
-    dir: &CapDir,
-    final_name: &str,
-) -> Result<(), String> {
+/// 同目录原子落盘内核（排他临时文件 + sync + rename + 父目录 fsync 持久性
+/// 屏障，Unix）：rename 前复核目标仍未被占（fail closed），失败尽力清理
+/// 临时文件。写入动作由 write 闭包提供（拷贝源文件 / 写生成字节共用）。
+fn atomic_write_with<F>(dir: &CapDir, final_name: &str, write: F) -> Result<(), String>
+where
+    F: FnOnce(&mut cap_std::fs::File) -> std::io::Result<()>,
+{
     match dir.symlink_metadata(final_name) {
         Ok(_) => return Err(format!("目标资产文件已存在：{final_name}")),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -202,7 +203,7 @@ fn copy_into_dir(
                 cap_std::fs::OpenOptions::new().write(true).create_new(true),
             )
             .map_err(|e| format!("创建临时资产文件失败：{e}"))?;
-        std::io::copy(src, &mut dst).map_err(|e| format!("拷贝资产文件失败：{e}"))?;
+        write(&mut dst).map_err(|e| format!("写入资产文件失败：{e}"))?;
         dst.sync_all()
             .map_err(|e| format!("同步资产文件失败：{e}"))?;
         drop(dst);
@@ -225,6 +226,40 @@ fn copy_into_dir(
     result
 }
 
+/// 流式拷贝进目标目录（原子落盘，与 store::atomic_write 同构）。
+fn copy_into_dir(
+    src: &mut cap_std::fs::File,
+    dir: &CapDir,
+    final_name: &str,
+) -> Result<(), String> {
+    let mut src = src;
+    atomic_write_with(dir, final_name, |dst| {
+        std::io::copy(&mut src, dst).map(|_| ())
+    })
+}
+
+/// 项目控制文件存在性归类校验：不存在/符号链接/非普通文件均拒绝——
+/// 不替不存在的项目建资产目录（导入与生成媒体落盘共用）。
+fn ensure_project_control(projects: &CapDir, id: &str) -> Result<(), String> {
+    validate_id(id)?;
+    let control = format!("{id}.json");
+    match projects.symlink_metadata(&control) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(format!("项目不存在：{id}"))
+        }
+        Err(e) => return Err(format!("读取项目文件元数据失败：{e}")),
+        Ok(md) => {
+            if md.file_type().is_symlink() {
+                return Err("项目文件是符号链接，拒绝写入资产".into());
+            }
+            if !md.is_file() {
+                return Err("项目文件不是普通文件，拒绝写入资产".into());
+            }
+        }
+    }
+    Ok(())
+}
+
 /// 库资产 → 项目资产的导入内核（给定已验证的 projects 与 library 根句柄）：
 /// 项目控制文件必须存在且通过归类校验（不替不存在的项目建资产目录）；
 /// 库条目形状校验 → 源文件身份绑定打开 → 目标目录确保 → 原子拷贝落盘 →
@@ -235,22 +270,7 @@ fn import_asset_from_library(
     id: &str,
     library_asset_id: &str,
 ) -> Result<Value, String> {
-    validate_id(id)?;
-    let control = format!("{id}.json");
-    match projects.symlink_metadata(&control) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err(format!("项目不存在：{id}"))
-        }
-        Err(e) => return Err(format!("读取项目文件元数据失败：{e}")),
-        Ok(md) => {
-            if md.file_type().is_symlink() {
-                return Err("项目文件是符号链接，拒绝导入资产".into());
-            }
-            if !md.is_file() {
-                return Err("项目文件不是普通文件，拒绝导入资产".into());
-            }
-        }
-    }
+    ensure_project_control(projects, id)?;
     let (rel_path, mime, name) = find_library_entry(library, library_asset_id)?;
     let mut src = open_library_asset(library, &rel_path)?;
     let project_dir = ensure_child_dir(projects, id, "项目资产根")?;
@@ -263,6 +283,43 @@ fn import_asset_from_library(
         "relPath": format!("assets/{final_name}"),
         "mime": mime,
         "source": "upload",
+        "createdAt": now_iso(),
+    }))
+}
+
+/// 生成媒体 MIME → 文件名扩展（生成产物没有源文件名，只按 MIME 映射；
+/// 调用方已按字节魔数定型 MIME，未知值兜底 bin）。
+fn ext_for_mime(mime: &str) -> &'static str {
+    match mime {
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        "image/webp" => "webp",
+        "image/gif" => "gif",
+        _ => "bin",
+    }
+}
+
+/// 生成媒体落盘内核（docs/data-model.md §13 outputs 槽位的媒体侧）：
+/// 字节经原子写入进项目 `assets/`，返回 `source=generated` 的项目级
+/// AssetRef（新 id、规范 UTC createdAt）。项目控制文件必须存在且通过
+/// 归类校验（不替不存在的项目建资产目录）。
+pub(crate) fn write_generated_asset(
+    projects: &CapDir,
+    id: &str,
+    bytes: &[u8],
+    mime: &str,
+) -> Result<Value, String> {
+    ensure_project_control(projects, id)?;
+    let project_dir = ensure_child_dir(projects, id, "项目资产根")?;
+    let assets_dir = ensure_child_dir(&project_dir, "assets", "项目资产目录")?;
+    let asset_id = new_asset_id();
+    let final_name = format!("{asset_id}.{}", ext_for_mime(mime));
+    atomic_write_with(&assets_dir, &final_name, |dst| dst.write_all(bytes))?;
+    Ok(json!({
+        "id": asset_id,
+        "relPath": format!("assets/{final_name}"),
+        "mime": mime,
+        "source": "generated",
         "createdAt": now_iso(),
     }))
 }
@@ -310,7 +367,11 @@ fn validate_asset_ref(asset: &Value) -> Result<Value, String> {
 
 /// set_asset 预检内核（§9.3，给定已验证的 projects 根句柄）：形状规范化
 /// 之后做实路径复验——形状合法但媒体文件缺失/符号链接/逃逸的条目同样拒绝。
-fn validate_project_asset_with(root: &CapDir, id: &str, asset: &Value) -> Result<Value, String> {
+pub(crate) fn validate_project_asset_with(
+    root: &CapDir,
+    id: &str,
+    asset: &Value,
+) -> Result<Value, String> {
     let normalized = validate_asset_ref(asset)?;
     let rel_path = normalized
         .get("relPath")
@@ -609,6 +670,83 @@ mod tests {
         let err = validate_project_asset_with(&cap(&projects), "p-1", &asset)
             .expect_err("媒体缺失应拒绝");
         assert!(err.contains("资产文件不存在"), "意外诊断：{err}");
+        cleanup(&root);
+    }
+
+    #[test]
+    fn write_generated_asset_lands_bytes_and_generated_ref() {
+        let (projects, _library, root) = temp_fixture();
+        seed_project(&projects, "p-1");
+        let bytes: &[u8] = &[0x89, b'P', b'N', b'G', 1, 2, 3];
+        let asset = write_generated_asset(&cap(&projects), "p-1", bytes, "image/png")
+            .expect("生成媒体落盘应成功");
+        let asset_id = asset.get("id").and_then(Value::as_str).expect("id 缺失");
+        assert!(asset_id.starts_with("pa-"), "意外 id 前缀：{asset_id}");
+        assert_eq!(
+            asset.get("relPath").and_then(Value::as_str),
+            Some(format!("assets/{asset_id}.png").as_str())
+        );
+        assert_eq!(
+            asset.get("source").and_then(Value::as_str),
+            Some("generated")
+        );
+        assert_eq!(asset.get("mime").and_then(Value::as_str), Some("image/png"));
+        let created = asset
+            .get("createdAt")
+            .and_then(Value::as_str)
+            .expect("createdAt 缺失");
+        assert!(
+            is_canonical_utc_timestamp(created),
+            "createdAt 非规范 UTC：{created}"
+        );
+        // 字节一致且通过项目侧实路径复验
+        let landed = projects
+            .join("p-1")
+            .join("assets")
+            .join(format!("{asset_id}.png"));
+        assert_eq!(fs::read(&landed).expect("落盘文件缺失"), bytes);
+        assert!(
+            verify_asset_real_path(&cap(&projects), "p-1", &format!("assets/{asset_id}.png"))
+                .is_ok()
+        );
+        cleanup(&root);
+    }
+
+    #[test]
+    fn write_generated_asset_rejects_missing_project() {
+        let (projects, _library, root) = temp_fixture();
+        seed_project(&projects, "p-1");
+        let err = write_generated_asset(&cap(&projects), "p-9", b"PNG", "image/png")
+            .expect_err("不存在的项目应拒绝");
+        assert!(err.contains("项目不存在"), "意外诊断：{err}");
+        cleanup(&root);
+    }
+
+    #[test]
+    fn write_generated_asset_ext_follows_mime() {
+        let (projects, _library, root) = temp_fixture();
+        seed_project(&projects, "p-1");
+        let asset = write_generated_asset(&cap(&projects), "p-1", b"JPEGBYTES", "image/jpeg")
+            .expect("jpeg 落盘应成功");
+        let rel = asset
+            .get("relPath")
+            .and_then(Value::as_str)
+            .expect("relPath");
+        assert!(rel.ends_with(".jpg"), "jpeg 扩展应映射为 .jpg：{rel}");
+        assert_eq!(ext_for_mime("image/webp"), "webp");
+        assert_eq!(ext_for_mime("application/octet-stream"), "bin");
+        cleanup(&root);
+    }
+    #[test]
+    fn ensure_child_dir_tolerates_already_exists() {
+        // 并发首次落盘的竞态窗口由「总是创建 + 容忍 AlreadyExists」消除：
+        // 目录已存在（等价于另一并发创建者刚建好）同样成功返回绑定句柄
+        let (projects, _lib, root) = temp_fixture();
+        let parent = cap(&projects);
+        let first = ensure_child_dir(&parent, "p-conc", "项目资产根").expect("首次创建");
+        drop(first);
+        let second = ensure_child_dir(&parent, "p-conc", "项目资产根").expect("已存在复用");
+        drop(second);
         cleanup(&root);
     }
 }

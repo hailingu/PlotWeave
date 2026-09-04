@@ -80,6 +80,16 @@ export function buildCanvasNode(
         ...opts?.data,
       },
     }
+  } else if (type === 'image') {
+    node = {
+      id: uid('image'),
+      type: 'image',
+      position: { x: 0, y: 0 },
+      selected: select,
+      // model 空串 = 未选择：生成入口回退 AppSettings.defaultImage 并引导配置；
+      // size 默认竖版短剧画幅（plan.ts IMAGE_SIZES 声明的默认推荐档）
+      data: { prompt: '', model: '', size: '1024x1536', outputs: {}, ...opts?.data },
+    }
   } else {
     node = {
       id: uid('shot'),

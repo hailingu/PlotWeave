@@ -43,13 +43,15 @@ describe('CanvasContextMenu（§4.3 右键菜单三形态）', () => {
     expect(p.onClose).toHaveBeenCalledTimes(1)
   })
 
-  it('空白菜单：五类新增，点击回调类型并收起', () => {
+  it('空白菜单：六类新增（含图片节点），点击回调类型并收起', () => {
     const p = setup()
     const items = screen.getAllByRole('menuitem')
-    expect(items).toHaveLength(5)
+    expect(items).toHaveLength(6)
     fireEvent.click(screen.getByText('＋ 分镜卡'))
     expect(p.onCreate).toHaveBeenCalledWith('shot')
-    expect(p.onClose).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByText('＋ 图片节点'))
+    expect(p.onCreate).toHaveBeenCalledWith('image')
+    expect(p.onClose).toHaveBeenCalledTimes(2)
   })
 
   it('定位：左缘收敛在窗口内（window.innerWidth - 150）', () => {

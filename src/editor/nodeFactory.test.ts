@@ -101,3 +101,16 @@ describe('buildCanvasNode（节点工厂：默认字段 + 落点）', () => {
     expect(second.data.sceneNo).toBe(3)
   })
 })
+
+describe('图片节点工厂（§13 文生图首版默认字段）', () => {
+  it('默认 prompt 空、model 未选、size 竖版短剧画幅（plan.ts 声明的默认档）、outputs 空容器', () => {
+    const node = buildCanvasNode('image', undefined, ctx())
+    expect(node.type).toBe('image')
+    expect(node.data).toEqual({ prompt: '', model: '', size: '1024x1536', outputs: {} })
+  })
+  it('opts.data 覆盖默认字段（如从画布拖入预填 prompt）', () => {
+    const node = buildCanvasNode('image', { data: { prompt: '雨夜霓虹' } }, ctx())
+    expect(node.data.prompt).toBe('雨夜霓虹')
+    expect(node.data.size).toBe('1024x1536')
+  })
+})

@@ -180,3 +180,15 @@ describe('hasAttachHost（§5 attach 宿主唯一：加载侧 isolateExtraAttach
     expect(hasAttachHost([{ source: 'sh1', target: 'a', sourceHandle: 'shots' }], 'sh1')).toBe(false)
   })
 })
+
+describe('图片节点端点约束（§13：图片节点不参与任何剧情流连线）', () => {
+  it('sequence/branch 端点为图片节点：拒绝', () => {
+    expect(connectionEndpointIssue('scene', 'image', 'sequence')).toContain('图片节点')
+    expect(connectionEndpointIssue('image', 'scene', 'sequence')).toContain('图片节点')
+    expect(connectionEndpointIssue('image', 'scene', 'branch')).toContain('图片节点')
+  })
+  it('attach 端点为图片节点：拒绝（attach 仅场景 → 分镜卡）', () => {
+    expect(connectionEndpointIssue('scene', 'image', 'attach')).toContain('attach')
+    expect(connectionEndpointIssue('image', 'shot', 'attach')).toContain('attach')
+  })
+})

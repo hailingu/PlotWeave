@@ -71,7 +71,7 @@ function normalizeDialogueLineOptionals(
   }
 }
 
-const NODE_TYPES = new Set(['scene', 'beat', 'dialogue', 'branch', 'shot'])
+const NODE_TYPES = new Set(['scene', 'beat', 'dialogue', 'branch', 'shot', 'image'])
 
 /** 名称型节点（§4.1 LabeledMeta）：meta.label 必填。 */
 const LABELED_TYPES = new Set(['scene', 'beat', 'dialogue'])
@@ -83,22 +83,24 @@ const REQUIRED_SCALARS: Record<string, Record<string, 'string' | 'boolean'>> = {
   beat: { tone: 'string' },
   branch: { prompt: 'string' },
   shot: { size: 'string', picture: 'string', prompt: 'string' },
+  image: { prompt: 'string', model: 'string', size: 'string' },
 }
 
-/** never 禁写 meta 字段剥离（§4.1 DerivedMeta/ShotMeta）：branch/shot 不落
- * label 镜像；分镜卡随宿主场景分集，无独立 episodeNo。 */
+/** never 禁写 meta 字段剥离（§4.1 DerivedMeta/ShotMeta/ImageMeta）：
+ * branch/shot/image 不落 label 镜像；分镜卡随宿主场景分集、图片节点非
+ * 叙事单元，均无独立 episodeNo。 */
 function stripForbiddenMeta(
   type: string,
   meta: Record<string, unknown>,
   nid: string,
   warnings: string[],
 ): void {
-  if ((type === 'branch' || type === 'shot') && 'label' in meta) {
+  if ((type === 'branch' || type === 'shot' || type === 'image') && 'label' in meta) {
     warnings.push(`节点 ${nid} 携带 never 禁写的 meta.label，已剥离`)
     delete meta.label
   }
-  if (type === 'shot' && 'episodeNo' in meta) {
-    warnings.push(`分镜卡 ${nid} 携带 never 禁写的 meta.episodeNo（随宿主场景分集），已剥离`)
+  if ((type === 'shot' || type === 'image') && 'episodeNo' in meta) {
+    warnings.push(`节点 ${nid} 携带 never 禁写的 meta.episodeNo（不参与大纲分组），已剥离`)
     delete meta.episodeNo
   }
 }
@@ -138,6 +140,40 @@ function normalizeSceneTextFields(
   return null
 }
 
+/** 图片节点 outputs 槽位的就地修复（§13 ImageSpec，nodeDiscriminantError
+ * 调用）：容器缺失/非普通对象重置为空对象并警告（未生成产物是合法状态
+ * `outputs: {}`，缺失即脏写）；primary 异型（非普通对象、assetId 非字符
+ * 串）剥离整个 primary 并警告（半损坏的产物引用没有消费价值）；空白
+ * assetId 不在此剥离——它可能指向空键资产，交由空键重发改写域处理
+ * （rewriteImageBlankRefs，§8.1），无映射的悬空空白才在该域剥离。宽高
+ * 存在但非正有限数时剥离该字段（演进占位字段的值域收口）。 */
+function normalizeImageOutputs(
+  spec: Record<string, unknown>,
+  nid: string,
+  warnings: string[],
+): void {
+  if (!isPlainObject(spec.outputs)) {
+    warnings.push(`节点 ${nid} 的 spec.outputs 缺失或非对象，已重置为空对象`)
+    spec.outputs = {}
+    return
+  }
+  const primary = spec.outputs.primary
+  if (primary !== undefined) {
+    if (!isPlainObject(primary) || typeof primary.assetId !== 'string') {
+      warnings.push(`节点 ${nid} 的 outputs.primary 异型，已剥离`)
+      delete spec.outputs.primary
+    } else {
+      for (const dim of ['width', 'height'] as const) {
+        const v = primary[dim]
+        if (v !== undefined && (typeof v !== 'number' || !Number.isFinite(v) || v <= 0)) {
+          warnings.push(`节点 ${nid} 的 outputs.primary.${dim} 非法，已剥离`)
+          delete primary[dim]
+        }
+      }
+    }
+  }
+}
+
 /** 节点判别联合形状校验（§11.1 第 3 步节点校验细则——§4.1 联合在加载路径的
  * 对等兜底，JSON 边界已擦除 TS 类型）：never 禁写字段剥离、episodeNo 非法
  * 删除为就地修复；未知类型、spec 必填标量缺失/异型（形态错位，如 beat 的
@@ -168,6 +204,7 @@ function nodeDiscriminantError(
     const textIssue = normalizeSceneTextFields(data.spec, nid, warnings)
     if (textIssue) return textIssue
   }
+  if (type === 'image') normalizeImageOutputs(data.spec, nid, warnings)
   for (const [field, kind] of Object.entries(REQUIRED_SCALARS[type] ?? {})) {
     if (typeof data.spec[field] !== kind) return `spec.${field} 缺失或类型错误（spec 形态错位）`
   }

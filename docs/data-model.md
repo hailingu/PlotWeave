@@ -106,6 +106,18 @@
 > 六十七轮评审修订（2026-08-31）：§10.5 `save_project` 补完整项目信封校验——`project.id` 无条件以受信路径参数覆盖，`project.name` 按 §9.3 项目名校验口径拒绝非法值、采用规范化值，原始 IPC 调用方不得绕过 rename_project/create_project 的名称规则持久化分裂身份；§7.2 库删除恢复协议补冲突期条目隔离——身份冲突未解决前对应 assetId 在规范化索引与内存投影中标为冲突不可用，媒体协议与 relPath 打开拒绝为其服务，不再把占用原路径的后来文件当作原资产展示。
 > 六十八轮评审修订（2026-08-31）：§9.1/§9.2/§9.4 区分「不进撤销栈」与「不持久化」两个维度——`transient` 收敛为手势过程帧语义，update_viewport 交互结束帧置脏随防抖落盘（§3 视口持久化契约）；§9.3/§9.4 补拖拽手势 inverse 捕获——正式 move_node 的逆操作取自手势开始时的原坐标，而非已被 transient 帧推进的 docBefore（否则 undo 只回到最后一个拖拽帧）；§10.5 `save_project` 信封校验扩为完整顶层形状——schemaVersion 严格等于当前支持版本，graph/settings 及其必需容器逐一判型，异型整次拒绝，杜绝落盘后由加载归一化清成空图的内容丢失。
 > 六十九轮评审修订（2026-08-31）：§9.4/§10.2 更正 update_node_ui 的持久化语义——`ui.selected`/`expanded` 是 §3 明确不持久化的会话态，update_node_ui 不置脏不落盘（纯选择操作不再触发保存、不刷新 updatedAt 改变首页排序），serializeProject 输出统一重置会话态初值；§10.5 `save_project` 信封校验补全 ProjectDocument 完整顶层契约——episodeTitles 普通对象及键值域、project.createdAt/updatedAt 可解析 ISO 8601、可选 description 字符串、graph.viewport 形状，异型整次拒绝。
+> 七十轮评审修订（2026-09-04）：§11.1 第 3 步空键改写域补 `ImageSpec.outputs.primary.assetId`（资产桶）——节点判别校验不再剥离空白 assetId（可能指向空键资产），交由空键重发改写：有映射改写到新 id、无映射的悬空空白剥离并警告（与 avatarAssetId/ShotRef.assetId 同口径）；§13 落地状态补生成结果写回为复合命令——资产入索引与 `outputs` 写回同栈撤销/重做（§7.3 库资产导入同构，撤销不留不可达索引条目）。
+> 七十一轮评审修订（2026-09-04）：§10.5 `llm_image_generate` 请求体不携带 `response_format`——GPT Image 系（gpt-image-1 等）不接受该参数（携带即 400 unsupported parameter，主路径在生成前失败）且总是返回 base64，DALL·E 系默认 url 响应由既有 url 成员回退下载兜住；§13 重新生成时旧产物若不再被任何其他节点引用（图片 `outputs.primary` / 分镜 `refs` 扫描）则随同一复合命令移出索引（undo 恢复、媒体文件留存待延迟回收），仍被引用或已不在索引则不动。
+> 七十二轮评审修订（2026-09-04）：§13 旧产物回收的引用扫描补第三个引用位——角色 `avatarAssetId`（`settings.characters`）：上一轮扫描只覆盖图片 `outputs.primary` 与分镜 `refs`，会误删仍作角色头像的旧产物致悬空；三处引用位齐备后方可移出索引。
+> 七十三轮评审修订（2026-09-04）：§13/§10.5 `llm_image_generate` 把 §9.3 预检（形状 + 实路径复验）并入命令内、落盘后返回前完成——前端不再二次 `validate_project_asset` IPC，生成后到返回前的校验窗口不再跨命令边界；落盘后无取消检查点（放弃只制造孤儿），该窗口卸载丢结果登记为已知边界，跨卸载保留随 job 落盘恢复演进；设置页图像默认模型候选沿用共享模型清单（无能力维度），加用途引导文案，按用途过滤随 §10.3 目录化模型清单演进。
+> 七十四轮评审修订（2026-09-04）：§12/§13 AI 命令通道对图片节点显式拒绝——`checkFieldKeys` 对无字段白名单条目的类型由「放行」改为「整批拒绝」（`暂不支持 AI 命令修改`）：此前 update_node 目标为 image 时任意 patch 畅通（`{"patch":{"prompt":{}}}` 直抵画布，快照 `prompt.slice` 崩溃、畸形 outputs 落盘重开被静默修复）。图片节点维持首版边界：AI 快照只读可见、不创建/不修改。
+> 七十五轮评审修订（2026-09-04）：§13 作业生命周期补「宿主节点删除」维度——running 作业的宿主图片节点被删即协作式取消（Rust 未过检查点即放弃）并清作业表；`runStart` 在设置加载返回后、提交生成前复核宿主仍在，不为已删节点发起计费请求；删除可撤销，undo 复活节点后作业已清、需重新生成。
+> 七十六轮评审修订（2026-09-04）：§13 旧产物回收的索引查找改自有属性检查（`hasOwnProperty`）——悬空 `primary.assetId` 按 §8.2.3 保留，其值可能是 `__proto__`/`constructor` 等原型链键名，普通对象桶的继承值不得被当成 AssetRef 回收（误回收会在 undo 注入畸形条目阻塞保存）；与图片节点渲染侧的按 id 解析同口径。
+> 七十七轮评审修订（2026-09-04）：§13 三处收口——① `runStart` 在设置加载返回后先过 `jobAlive` 身份复核再写状态/提交：被取消作业的迟到分支不得覆盖接替作业的 running（否则接替作业的已付费结果被误判丢弃），`clearJob` 改同步镜像清理（同一事件循环内「取消→重启」不被 running 守卫误挡）；② `llm_image_generate` 响应体流式限读（主响应 64 MiB 文本上限、url 回退 32 MiB 字节上限，超限即中止不落半截）——大小上限在物化前生效，恶意/异常 provider 的超大响应不再能耗尽内存；③ 删除图片节点时其产物若不再被幸存节点/角色头像引用则随同一删除命令移出索引（`doomedImageAssets` 判定与重新生成回收同口径，undo 恢复）。
+> 七十八轮评审修订（2026-09-04）：§13 图片节点工厂的默认尺寸对齐声明契约——`1024x1536` 竖版短剧画幅（`IMAGE_SIZES` 的默认推荐档），此前工厂误发 `1024x1024` 方图，用户不动尺寸直接生成会产出付费方图；§10.5 `llm_image_generate` 命令行同步第七十三轮后的实现事实（§9.3 预检在命令内、前端单次 IPC、响应体流式限读），消除与 §13 正文的矛盾。
+> 七十九轮评审修订（2026-09-04）：§8.2 设置页关闭语义收口——「完成」按钮 await 冲刷（清防抖 + 落盘未保存快照）完成后再回调 onClose，界面切换不早于落盘（编辑器重挂读到的必是已落盘设置）；卸载路径保留 fire-and-forget 兜底冲刷（非常规关闭不丢编辑）。产物媒体失败态补 `<img>` onError——URL 解析成功但浏览器解码失败（如过魔数检查的截断 PNG）同样转入「产物媒体无法读取」占位。
+> 八十轮评审修订（2026-09-04）：§8.2 关闭语义再收口——关闭冲刷在 await 未保存快照之外**同时 await 在途的 save promise**（防抖已触发、IPC 未返回的窗口同样不得早切换/丢编辑）；冲刷失败时保留快照、页面保持打开并显示可重试错误（不再静默关页丢编辑）。实现拆分：设置页「编辑即保存」状态族抽为 `useSettingsSaver`，节点删除（连线 + 产物回收复合命令）抽为 `useNodeDeletion`——两处宿主组件回到函数祖父基线内。
+> 八十一轮评审修订（2026-09-04）：三处收口——① §8.2 在途 save 迟到失败只在无更新快照时回填（不覆盖用户随后的新编辑），关闭冲刷对在途 save 的迟到失败不阻断（其快照已按序回填，由 pending 落盘统一收口）；② §9.3 资产目录创建改「总是尝试 + 容忍 AlreadyExists + 归类校验兜底」——并发首次落盘的 create_dir 竞态不再丢弃已付费结果；③ §12/§13 AI `delete_node` 对图片节点整批拒绝（与 create/update 同口径：批量模拟删除路径不走 deleteNodesByIds、会绕过产物回收留下永久索引的不可达资产）。
 > 适用范围：画布文档模型、设定与资产模型、命令与撤销、本地存储体系、AI Agent 交互。
 > 明确不在范围内：用户体系、租户、余额/计费。PlotWeave 是单用户 BYOK 桌面工具；若未来出现此类需求，另起《服务端领域模型》文档。
 
@@ -183,8 +195,8 @@ interface ProjectDocument {
 ```ts
 /** 画布节点：叙事单元，四分区（layout/ui/spec/meta）。
  * type 与 data.spec/meta 判别相关：scene/beat/dialogue 显示并编辑名称
- * → meta.label 必填；branch/shot 标题由 spec.prompt / spec.shotNo 派生
- * → 不落 label（§8.1.1 禁止镜像字段）。 */
+ * → meta.label 必填；branch/shot/image 标题由 spec.prompt / spec.shotNo
+ * 派生或无标题（图片节点）→ 不落 label（§8.1.1 禁止镜像字段）。 */
 interface StoryNodeBase {
   id: string
   layout: {                          // 渲染布局
@@ -224,6 +236,15 @@ interface ShotMeta {
   updatedAt?: string
 }
 
+/** 图片节点 meta（§13）：生成产物非叙事单元，无 label、无 episodeNo
+ * （不进大纲分组）——两者均 never 禁写。 */
+interface ImageMeta {
+  label?: never
+  episodeNo?: never
+  createdAt?: string
+  updatedAt?: string
+}
+
 interface SceneDocNode extends StoryNodeBase {
   type: 'scene'
   data: { spec: SceneSpec; meta: LabeledMeta }
@@ -244,8 +265,18 @@ interface ShotDocNode extends StoryNodeBase {
   type: 'shot'
   data: { spec: ShotSpec; meta: ShotMeta }
 }
+interface ImageDocNode extends StoryNodeBase {
+  type: 'image'
+  data: { spec: ImageSpec; meta: ImageMeta }
+}
 
-type StoryNode = SceneDocNode | BeatDocNode | DialogueDocNode | BranchDocNode | ShotDocNode
+type StoryNode =
+  | SceneDocNode
+  | BeatDocNode
+  | DialogueDocNode
+  | BranchDocNode
+  | ShotDocNode
+  | ImageDocNode
 ```
 
 节点数据只保留四个分区：渲染布局（`layout`）、会话状态（`ui`）、用户意图（`data.spec`）、元信息（`data.meta`）。画布没有执行引擎，因此不设输入缓存、产物、运行状态等分区——没有写者的字段不进模型（原则 5）。
@@ -257,7 +288,7 @@ type StoryNode = SceneDocNode | BeatDocNode | DialogueDocNode | BranchDocNode | 
 节点里写的一切内容——梗概、台词、以及将来 AI 生成的 prompt——都是 `spec` 的字段，随 `project.json` 持久化，无需额外存储。
 
 ```ts
-type NodeSpec = SceneSpec | BeatSpec | DialogueSpec | BranchSpec | ShotSpec
+type NodeSpec = SceneSpec | BeatSpec | DialogueSpec | BranchSpec | ShotSpec | ImageSpec
 
 /** 场景：一个时空单元的叙事容器（UI 形态 = 索引卡，字段对齐 ui-design §4.2）。 */
 interface SceneSpec {
@@ -321,6 +352,33 @@ type ShotRef =
   | { id: string; kind: 'character' | 'location' | 'audio'; assetId: string; label?: never }  // 项目资产引用位
   | { id: string; kind: 'character' | 'location' | 'audio'; label: string; assetId?: never }  // 自由位：手填文案
 ```
+
+**图片节点（§13 文生图首版，生成侧媒体节点）**：自由摆放在画布上，不参与任何连线（sequence/branch/attach 端点均不得为 image——§5 端口归属与 §11.3 孤儿边规则同域拒绝）；生成操作由 `spec` 携带，产物落 `outputs` 槽位：
+
+```ts
+/** 图片节点 spec：文生图输入 + 产物槽位。
+ * model 为 "providerId:modelId"（与 AppSettings 默认模型同构，空串 = 未选择，
+ * 生成入口回退默认图像模型）；operation 不落字段——首版无引用输入、恒为
+ * 文生图，图生图随 §13 引用边演进再评审。 */
+interface ImageSpec {
+  prompt: string               // 画面描述（生成输入）
+  model: string
+  size: string                 // 如 '1024x1536'（竖版贴短剧画幅）
+  outputs: {
+    primary?: GeneratedOutput  // 产物槽位：缺失 = 尚未生成
+  }
+}
+
+/** 生成产物引用：只存项目资产 id（assets.byId 是唯一真相，§8.1 禁止镜像
+ * 媒体字段）；宽高为演进占位（存在时须为正有限数，归一化剥离非法值）。 */
+interface GeneratedOutput {
+  assetId: string
+  width?: number
+  height?: number
+}
+```
+
+产物媒体经 Rust `llm_image_generate` 原子落盘进项目 `assets/`（`source: 'generated'`），§9.3 预检（形状 + 实路径复验）在命令内、返回前完成——前端单次 IPC 直收已校验条目并入会话索引，再以 `update_node_spec` 写回 `outputs.primary`（走命令栈，可撤销）。生成完成写回前比对**输入签名**（prompt/model/size 规范化元组）：输入已前进即丢弃结果并横幅提示，媒体文件留存待延迟回收（§7.3）——旧输入的产物不得覆盖新编辑。落盘之后到命令返回之间不存在取消检查点（文件已写、放弃只会制造孤儿）：该窗口内编辑器卸载的结果丢失登记为已知边界，跨卸载保留随 job 落盘与启动恢复演进一并解决。
 
 ### 4.3 端口与连接
 
@@ -859,6 +917,8 @@ interface ProviderSettings {
 
 **模型可见性 = 三层过滤**：在内置目录或自定义条目里 → 所属 provider 已配置（key + baseUrl 齐备）→ 未被用户禁用。过滤结果是计算属性，不持久化。
 
+> 落地状态（2026-09-04）：已发布的实现收敛为扁平 `AppSettings { providers: ProviderConfig[]; defaultChat: string | null; defaultImage: string | null }`（"providerId:modelId"，§13 图像生成首版随 `defaultImage` 落地）；`ProviderDef`/`ModelDef` 的能力目录与 `selectedModels` 三段结构为目录化演进预留，引入时按下表 §10.5 命令边界对齐。
+
 ### 10.4 密钥管理
 
 provider 的 API key 以**密文 `keyEnc`** 存于 provider 配置：Rust `seal` 模块 AES-256-GCM 加密（密钥 = 应用常数 + IOPlatformUUID + 随机盐，封装于 envelope），明文只在加密/请求的进程内存中出现；历史钥匙串数据保留只读回退，不再写入。
@@ -885,6 +945,8 @@ provider 的 API key 以**密文 `keyEnc`** 存于 provider 配置：Rust `seal`
 | `get_settings()` / `update_settings(patch)` | 非敏感配置读写 |
 | `set_provider_key(provider, key)` | 加密并返回 envelope 密文（由前端随 settings 落盘；解密走 `seal::open`，无独立读命令） |
 | `llm_chat(messages, tools)` | LLM 请求代理：key 由 settings 密文在 Rust 内存解密，绕开 webview CORS（见 12.2） |
+| `llm_image_generate(request)` | 文生图代理（§13 首版）：单对象载荷（projectId/jobId/provider 配置/model/prompt/size），key 解密同 `llm_chat`；请求 OpenAI 兼容 `/images/generations`（b64_json 优先，url 成员回退下载），响应体流式限读（主响应 64 MiB 文本 / url 回退 32 MiB 字节，超限即中止）；产物按字节魔数定型 MIME（PNG/JPEG/WebP/GIF，provider 声称的 content-type 不作为依据）、过 32 MiB 上限后经原子写内核落盘进项目 `assets/`，§9.3 预检（形状 + 实路径复验）在命令内、返回前完成，前端单次 IPC 直收已校验的 `source=generated` AssetRef 并入索引。请求返回后与落盘前各查一次取消标志：协作式取消即放弃结果 |
+| `llm_image_cancel(jobId)` | 协作式取消：登记取消标志；进行中的 `llm_image_generate` 会在检查点放弃结果（HTTP 请求本身不中断，由超时约束兜底） |
 
 ## 十一、加载与归一化
 
@@ -914,6 +976,8 @@ provider 的 API key 以**密文 `keyEnc`** 存于 provider 配置：Rust `seal`
    **角色 id/token 专项修复（第 1 步 ⑤ 的 v0 数组键化与本步 Record 修复共用，先于第 5 步文本扫描）**：两条路径都必须同时应用 §6 的 `[A-Za-z0-9_-]{1,64}` 子值域。v0 数组以实体原 `id` 为迁移身份：非空字符串 id 若只违反该子值域，确定性重发本桶未占用的安全 id；先按既有重复规则决定首见实体的归属，再以修复前完整字符串建立明确映射。v1 Record 则以记录键为权威身份：键违反子值域时重发未占用的安全键并把值内 `id` 同步为新键；键已安全时，即使值内 `id` 不安全或不一致，也按上文共同规则以键覆盖值内 `id`，不得据值内字段另行重键。随后按权威旧身份 → 新身份映射同步改写 `characterIds`、dialogue `speaker`、`kind === 'character'` 的 `SettingsDocument.relatedIds` 等所有结构化角色引用。文本改写不能先用新 token 正则扫描——旧 id 可能含 `]` 或换行；迁移器须按已知旧身份构造完整字面量 `@[character:<旧 id>]`，以不插值正则的字面量匹配替换为新 token。某旧值归属首见实体时 token 同步指向该实体的新 id；无法唯一归属时原文保留并警告，不猜测目标。全部改写完成后活动角色 id 与新写 token 才统一满足固定语法。
 
    **非法 id 与 Record 键的统一解释（优先于本步上文仅写“缺失”“空串”或“空白”的旧例）**：§8.1 的共同值域是 `typeof id === 'string' && id.trim().length > 0`。对节点、边、键控列表项与 v0 设定数组实体，缺失或任意非字符串 id（number/boolean/null/对象/数组）均为非法，须在通用重复 id 去重前为每个实体独立重发本域未占用的字符串 id 并警告，**不得**用 `String(value)` 强转（否则数字 `7` 会与合法字符串 `"7"` 碰撞）。合法引用的值域本就只允许字符串，因此不为非字符串旧 id 建映射：边的非字符串 source/target 或其他非字符串引用按各自形状规则隔离/剥离/标记悬空；字符串句柄也不得猜测为某个非字符串选项 id，无法解析时按孤儿边隔离。字符串型空白 id 则以修复前的**完整原字符串**分组并建立「原 id → 新 id」映射；同一原值只对应一个实体时同步改写精确等于该原值的边端点、句柄或同域引用，同一原值对应多个实体时视为歧义并隔离相关连接或保留悬空警告。键控实体桶的 Record 键在 JSON 中天然是字符串，先执行 `key.trim().length > 0` 校验：空串或纯空白键均重发一个本桶未占用的新键，值内 id 同步为新键，并把精确等于旧键的同桶引用同步到新键；记录键合法时，内嵌 id 缺失、非字符串或 `trim()` 后为空均以记录键补齐，不一致时仍以记录键为准。不得把空白键直接采用为权威 id，也不得仅 `trim()` 后原地改键——后者可能与既有键碰撞且漏改引用。
+
+   **图片节点归一化（§13 首版，第 3 步节点校验细则的 image 分支）**：`meta.label`/`meta.episodeNo` 按 never 禁写剥离（同 shot，§4.1 ImageMeta）；`spec.prompt`/`spec.model`/`spec.size` 为必填字符串（异型即形态错位、隔离节点）；`spec.outputs` 缺失或非普通对象时重置为空对象并警告（未生成产物是合法状态 `outputs: {}`，字段缺失属脏写）；`outputs.primary` 存在但非普通对象、`assetId` 非非空字符串时剥离整个 primary 并警告；可选 `width`/`height` 存在但非正有限数时剥离该字段。`primary.assetId` 只按本项目 `assets.byId` 解析，目标缺失保留为悬空引用并警告（§8.2.3 不删除用户选择，UI 按缺失占位展示）。剧情流边（sequence/branch）端点为 image 的按孤儿边隔离——图片节点不参与任何连线（§4.2）。
 
 4. 标记（而非清除）悬空的设定引用与资产引用。
 5. 仅按 §8.1.2 的固定正则扫描文本中的 @ 提及 token；近似但非法的 token 形片段保留为普通文本并警告，合法 token 的目标已不存在时标记为失效（token 本身保留）。
@@ -954,5 +1018,6 @@ Agent 不直接触碰文档状态，只产出 `GraphCommand`（`actor: 'agent'`�
 以下方向发生时需要修订本文档或另起文档：
 
 - **画布内 AI 生成**（文生图/AI 编剧）：新增媒体节点类型（图片节点、视频节点，如角色立绘、场景概念图），建模遵循三分原则——**引用类输入走边**（如图生视频的立绘引用），**参数类配置走 `spec.params`**（尺寸/时长/seed），**操作类型由 `spec.operation` + 输入证据推断**（有参考图 → 图生图，无需用户显式选择）；产物是 `outputs` 里的 AssetRef 槽位（`primary` / `poster` / `preview`，附宽高、时长等 metadata）。节点的 prompt、模型选择作为 `data.spec` 字段随 `project.json` 持久化，无需额外存储；需要新增的是 job 状态机（落盘 + 启动恢复）与输入签名（防旧结果覆盖新编辑），进程内以 tokio task + 取消令牌实现。
+  - **落地状态（2026-09-04，首片）**：文生图已上线——图片节点 `image`（§4.2 ImageSpec：prompt/model/size + `outputs.primary`）经 `llm_image_generate` 代理产出 `source=generated` 项目资产，以**复合命令**写回（资产入索引与 `outputs` 同栈撤销/重做，§7.3 库资产导入同构）；输入签名守护（prompt/model/size 规范化元组）与协作式取消（`llm_image_cancel` 取消标志 + 检查点放弃）为进程内实现，发起端同步占位作业表（设置加载的异步间隙内双击不重复发起计费请求）。作业生命周期 = **编辑器挂载期**：不跨重启持久化（重启即丢失进行中作业，产物本身已落盘），亦不跨编辑器卸载——打开设置页 / 返回首页卸载编辑器时即对全部进行中作业发协作式取消（检查点放弃，防孤儿媒体与卸载后写回）；跨界面保留随「job 落盘与启动恢复」演进一并解决。**仍属演进**：图生图（引用输入走边与 `spec.operation` 推断）、视频节点、job 落盘与启动恢复、宽高/时长 metadata 回填、§10.3 目录化模型清单。
 - **多端同步/协作/官方代付**：另起《服务端领域模型》文档；`schemaVersion` 迁移机制届时成为前后端契约的一部分。
 - **跨项目搜索、资产去重**：评估 SQLite 索引层。

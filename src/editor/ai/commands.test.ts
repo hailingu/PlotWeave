@@ -872,3 +872,45 @@ describe('AI 数值域（§9.3 命令边界：正安全整数，加载不静默�
     expect(bad3.issues.map((i) => i.message).join('\n')).toContain('episodeNo')
   })
 })
+
+describe('图片节点的 AI 命令边界（§13 首版：快照只读可见、不创建/不修改）', () => {
+  it('update_node 目标为图片节点：整批拒绝', () => {
+    const s: AiGraphSnapshot = {
+      nodes: [
+        { id: 'n1', type: 'scene', label: '场 01 · 天台' },
+        { id: 'img1', type: 'image', label: '图片 · 雨夜霓虹' },
+      ],
+      edges: [],
+      assets: new Map(),
+    }
+    const bad = validateAiBatch(
+      [{ op: 'update_node', nodeId: 'img1', patch: { prompt: {} } }],
+      s,
+    )
+    expect(bad.ok).toBe(false)
+    expect(bad.issues.map((i) => i.message).join('\n')).toContain('暂不支持 AI 命令修改')
+  })
+
+  it('create_node 声明 image 类型：按未知节点类型拒绝（类型标签表未含）', () => {
+    const bad = validateAiBatch(
+      [{ op: 'create_node', nodeType: 'image', data: { prompt: 'x' } }],
+      snap(),
+    )
+    expect(bad.ok).toBe(false)
+    expect(bad.issues.map((i) => i.message).join('\n')).toContain('未知节点类型')
+  })
+
+  it('delete_node 目标为图片节点：整批拒绝（与 create/update 同口径）', () => {
+    const s: AiGraphSnapshot = {
+      nodes: [
+        { id: 'n1', type: 'scene', label: '场 01 · 天台' },
+        { id: 'img1', type: 'image', label: '图片 · 雨夜霓虹' },
+      ],
+      edges: [],
+      assets: new Map(),
+    }
+    const bad = validateAiBatch([{ op: 'delete_node', nodeId: 'img1' }], s)
+    expect(bad.ok).toBe(false)
+    expect(bad.issues.map((i) => i.message).join('\n')).toContain('暂不支持 AI 命令删除')
+  })
+})

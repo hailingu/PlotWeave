@@ -83,7 +83,8 @@ pub fn set_provider_key(provider_id: String, key: String) -> Result<String, Stri
 
 /// 解析 provider 当前可用的 key：优先 settings.json 的 `keyEnc` 密文；
 /// 密文缺失时只读回退历史钥匙串数据（不再写入钥匙串）。
-fn provider_secret(app: &AppHandle, provider_id: &str) -> Result<String, String> {
+/// crate 内共享：图像生成代理（imagegen）与对话代理（llm_chat）同域。
+pub(crate) fn provider_secret(app: &AppHandle, provider_id: &str) -> Result<String, String> {
     validate_provider_id(provider_id)?;
     let path = prefs_path(app)?;
     if let Ok(text) = fs::read_to_string(&path) {

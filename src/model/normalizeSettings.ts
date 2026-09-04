@@ -327,9 +327,9 @@ function rewrittenDocumentRelations(
 }
 
 /** 空键重发后的同桶引用改写（§11.1 第 3 步，六十六轮）：指向空串的引用
- * 字段（场景 characterIds/locationId、对白 speaker、分镜 assetId、角色
- * avatarAssetId、设定文档 relatedIds 按 kind 对应桶）随重发改写到新 id
- * 而非变悬空——脏写引用侧同样可出现空串。 */
+ * 字段（场景 characterIds/locationId、对白 speaker、分镜 assetId、图片
+ * outputs.primary.assetId、角色 avatarAssetId、设定文档 relatedIds 按
+ * kind 对应桶）随重发改写到新 id 而非变悬空——脏写引用侧同样可出现空串。 */
 export function rewriteBlankKeyReferences(
   nodes: StoryNode[],
   settings: Record<string, Record<string, unknown>>,
@@ -341,6 +341,7 @@ export function rewriteBlankKeyReferences(
     if (n.type === 'scene') rewriteSceneBlankRefs(n.id, spec, remaps, warnings)
     if (n.type === 'dialogue') rewriteDialogueBlankRefs(n.id, spec, remaps.characters, warnings)
     if (n.type === 'shot') rewriteShotBlankRefs(n.id, spec, remaps, warnings)
+    if (n.type === 'image') rewriteImageBlankRefs(n.id, spec, remaps.assets, warnings)
   }
   for (const [key, ch] of Object.entries(settings.characters) as [string, Record<string, unknown>][]) {
     if (!('avatarAssetId' in ch)) continue
@@ -354,6 +355,28 @@ export function rewriteBlankKeyReferences(
     }
   }
   rewriteDocumentBlankRefs(settings, remaps, warnings)
+}
+
+/** 图片节点产物引用的空键改写（§8.1/§13）：outputs.primary.assetId 指向
+ * 空白键资产时随重发改写到新 id；改写后仍空白且无映射（真悬空的空引用）
+ * 剥离 primary——与角色 avatarAssetId、分镜引用同口径。 */
+function rewriteImageBlankRefs(
+  nid: string,
+  spec: Record<string, unknown>,
+  assetRemap: Map<string, string>,
+  warnings: string[],
+): void {
+  const outputs = spec.outputs
+  if (!isPlainObject(outputs)) return
+  const primary = outputs.primary
+  if (!isPlainObject(primary) || typeof primary.assetId !== 'string') return
+  const next = rewriteRef(assetRemap, primary.assetId, `节点 ${nid} 的图片产物引用`, warnings)
+  if (typeof next === 'string' && !next.trim()) {
+    warnings.push(`节点 ${nid} 的图片产物引用空白且无空键资产映射，已剥离`)
+    delete outputs.primary
+    return
+  }
+  primary.assetId = next
 }
 
 /** 设定集实体形状校验（§11.3）：必填字段无法机械修复的条目从桶中隔离并警告

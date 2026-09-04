@@ -17,6 +17,7 @@ import {
   type BeatSpec,
   type BranchSpec,
   type DialogueSpec,
+  type ImageSpec,
   type LabeledMeta,
   type ProjectDocument,
   type SceneSpec,
@@ -54,14 +55,15 @@ export function toStoryNode(n: CanvasNode): StoryNode {
     ...(typeof ts?.createdAt === 'string' ? { createdAt: ts.createdAt } : {}),
     ...(typeof ts?.updatedAt === 'string' ? { updatedAt: ts.updatedAt } : {}),
   }
-  if (n.type === 'branch' || n.type === 'shot') {
-    // 派生标题节点：不落 meta.label 镜像；分镜卡随宿主场景分集，
-    // 不落独立 episodeNo（§3.5）
-    const meta = n.type === 'shot' ? { ...passthroughTs } : { ...optionalMeta, ...passthroughTs }
+  if (n.type === 'branch' || n.type === 'shot' || n.type === 'image') {
+    // 派生标题节点：不落 meta.label 镜像；分镜卡随宿主场景分集、图片节点
+    // 非叙事单元不进大纲分组，均不落独立 episodeNo（§3.5/§13）
+    const meta =
+      n.type === 'branch' ? { ...optionalMeta, ...passthroughTs } : { ...passthroughTs }
     return {
       ...base,
       type: n.type,
-      data: { spec: spec as unknown as BranchSpec & ShotSpec, meta },
+      data: { spec: spec as unknown as BranchSpec & ShotSpec & ImageSpec, meta },
     } as unknown as StoryNode
   }
   const labeled: LabeledMeta = { label: name ?? '', ...optionalMeta, ...passthroughTs }

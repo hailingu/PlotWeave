@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   defaultSettings,
   resolveChatModel,
@@ -6,7 +6,9 @@ import {
   type ProviderConfig,
 } from './types'
 import { settingsStore } from './settingsStore'
+import { useSettingsSaver } from './useSettingsSaver'
 
+/** SettingsViewProps。 */
 interface SettingsViewProps {
   /** 关闭设置返回上一界面（编辑器或首页）。 */
   readonly onClose: () => void
@@ -22,34 +24,79 @@ function defaultModelHint(
   return '尚未选择默认模型，AI 面板将显示引导。'
 }
 
+/** 默认模型分段卡片（§8.2）的依赖：设置快照、写回与可用组合派生。 */
+interface DefaultModelsSectionProps {
+  readonly settings: AppSettings
+  readonly update: (next: AppSettings) => void
+  readonly chatOptions: Array<{ value: string; label: string }>
+  readonly chatModel: { provider: ProviderConfig; model: string } | null
+}
+
+/** 默认模型分段（§8.2）：AI 对话与图像生成（图片节点默认，§13）的默认
+ * 模型下拉，候选为三层过滤后的可用组合；未选时 AI 面板显示引导。 */
+function DefaultModelsSection({ settings, update, chatOptions, chatModel }: DefaultModelsSectionProps) {
+  return (
+    <>
+      <h3 className="settings-sec">默认模型</h3>
+      <div className="settings-card">
+        <label className="pw-set-field">
+          <span className="pw-set-label">AI 对话模型（三层过滤后的可用组合）</span>
+          <select
+            className="pw-set-input"
+            value={settings.defaultChat ?? ''}
+            onChange={(e) => update({ ...settings, defaultChat: e.target.value || null })}
+          >
+            <option value="">未选择</option>
+            {chatOptions.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="pw-set-field">
+          <span className="pw-set-label">图像生成模型（图片节点默认，§13）</span>
+          <select
+            className="pw-set-input"
+            value={settings.defaultImage ?? ''}
+            onChange={(e) => update({ ...settings, defaultImage: e.target.value || null })}
+          >
+            <option value="">未选择</option>
+            {chatOptions.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <p className="settings-hint">
+          图像模型需支持 /images/generations（如 gpt-image-1）；对话模型不能生图——清单是跨用途共享的模型
+          id，请按用途选用。
+        </p>
+        <p className="settings-hint">{defaultModelHint(chatOptions.length, chatModel)}</p>
+      </div>
+    </>
+  )
+}
+
 /**
  * 设置页（docs/ui-design.md §8.2 修订）：⌘, 打开，左侧分段列表。
  * Provider 分段：Base URL / 启用 / API key（加密后存本机设置，
  * 不回显明文）/ 模型清单；默认模型分段：三层过滤后的可用组合下拉。
- * 编辑即保存（防抖 500ms）；无外观设置（跟随系统，原则 1）。
+ * 编辑即保存（防抖 500ms，关闭时冲刷未落盘编辑）；无外观设置（跟随
+ * 系统，原则 1）。
  */
 export default function SettingsView({ onClose }: SettingsViewProps) {
   const [settings, setSettings] = useState<AppSettings>(defaultSettings)
   const [keyDraft, setKeyDraft] = useState<Record<string, string>>({})
   const [keyError, setKeyError] = useState<Record<string, string>>({})
-  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** 「编辑即保存」状态族（防抖/关闭冲刷/失败重试）拆至 useSettingsSaver。 */
+  const { update, handleClose, closeError, closing } = useSettingsSaver(setSettings, onClose)
 
   useEffect(() => {
     void settingsStore.load().then((s) => {
       setSettings(s)
     })
-  }, [])
-
-  // 编辑即保存：防抖 500ms 全量落盘
-  const update = (next: AppSettings) => {
-    setSettings(next)
-    if (saveTimer.current) clearTimeout(saveTimer.current)
-    saveTimer.current = setTimeout(() => void settingsStore.save(next), 500)
-  }
-  useEffect(() => {
-    return () => {
-      if (saveTimer.current) clearTimeout(saveTimer.current)
-    }
   }, [])
 
   const patchProvider = (id: string, patch: Partial<ProviderConfig>) => {
@@ -92,10 +139,21 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
         <span className="editor-title" data-tauri-drag-region>
           设置
         </span>
-        <button type="button" className="editor-tbtn io" onClick={onClose} aria-label="关闭设置">
-          完成
+        <button
+          type="button"
+          className="editor-tbtn io"
+          onClick={handleClose}
+          disabled={closing}
+          aria-label="关闭设置"
+        >
+          {closing ? '保存中…' : '完成'}
         </button>
       </header>
+      {closeError !== null && (
+        <p className="settings-key-error" role="alert" style={{ margin: '8px 16px 0' }}>
+          {closeError}
+        </p>
+      )}
       <main className="settings-body">
         <nav className="settings-nav" aria-label="设置分段">
           <div className="pw-settings-group" style={{ paddingLeft: 0 }}>
@@ -180,25 +238,12 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
           ))}
 
           {/* 默认模型分段 */}
-          <h3 className="settings-sec">默认模型</h3>
-          <div className="settings-card">
-            <label className="pw-set-field">
-              <span className="pw-set-label">AI 对话模型（三层过滤后的可用组合）</span>
-              <select
-                className="pw-set-input"
-                value={settings.defaultChat ?? ''}
-                onChange={(e) => update({ ...settings, defaultChat: e.target.value || null })}
-              >
-                <option value="">未选择</option>
-                {chatOptions.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <p className="settings-hint">{defaultModelHint(chatOptions.length, chatModel)}</p>
-          </div>
+          <DefaultModelsSection
+            settings={settings}
+            update={update}
+            chatOptions={chatOptions}
+            chatModel={chatModel}
+          />
           <p className="settings-hint">
             API key 经 AES-256-GCM 加密后保存在本机设置文件（绑定此电脑），不回显明文；
             外观跟随系统，不设主题开关。

@@ -575,6 +575,7 @@
   .pw-dlg,
   .pw-beat,
   .pw-shot,
+  .pw-image,
   .pw-branch,
   .pw-gear {
     transition: none;
@@ -584,6 +585,7 @@
   .pw-dlg:hover,
   .pw-beat:hover,
   .pw-shot:hover,
+  .pw-image:hover,
   .pw-branch:hover {
     transform: none;
   }
@@ -643,4 +645,94 @@
 .pw-beat-state.ok {
   color: #fff;
   background: var(--accent-alt);
+}
+
+/* ---- 图片节点 = 生成侧媒体节点（§13 文生图，深色石板监视器卡同族） ---- */
+.pw-image {
+  width: 300px;
+  position: relative;
+  background: #232326;
+  color: #f5f5f7;
+  border-radius: 14px;
+  padding: 12px 14px 14px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  transition: transform 0.15s;
+}
+
+.pw-image:hover {
+  transform: translateY(-1px);
+}
+
+.pw-image.pw-on {
+  border: 2px solid transparent;
+  background: linear-gradient(#232326, #232326) padding-box, var(--brand-gradient) border-box;
+}
+
+.pw-image-tb {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.pw-image-badge {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+}
+
+.pw-image-size {
+  font-size: 11px;
+  color: rgba(235, 235, 245, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 99px;
+  padding: 1px 8px;
+}
+
+.pw-image-status {
+  font-size: 11px;
+  color: rgba(235, 235, 245, 0.65);
+}
+
+.pw-image-status-err {
+  color: #ff9f9a;
+}
+
+.pw-image-prompt {
+  margin: 10px 0 0;
+  background: rgba(0, 0, 0, 0.35);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: rgba(235, 235, 245, 0.75);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* 产物区：生成图像封面 / 空态占位（§13 outputs.primary 的展示位）。 */
+.pw-image-out {
+  margin-top: 10px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.45);
+  min-height: 96px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.pw-image-out-img {
+  width: 100%;
+  max-height: 320px;
+  object-fit: contain;
+  display: block;
+}
+
+.pw-image-empty {
+  font-size: 11.5px;
+  color: rgba(235, 235, 245, 0.45);
+  padding: 12px;
+  text-align: center;
 }
