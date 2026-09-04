@@ -3,17 +3,20 @@
 //! - `llm_image_generate`：前端只传 provider 配置、prompt、尺寸与 job id；
 //!   API key 密文在本进程解密（与 `llm_chat` 同域，明文不出后端），请求
 //!   OpenAI 兼容 `/images/generations`（GPT Image 系恒回 base64；部分兼容
-//!   实现只回 `url`，则回退下载），响应体流式限读、产物按字节魔数定型
-//!   MIME、过大小上限后原子落盘进项目 `assets/`（`source=generated`），
-//!   返回项目级 AssetRef。
+//!   实现只回 `url`，则回退下载——目标与每跳重定向均过公网边界校验，
+//!   恶意/被入侵 provider 不得驱使桌面端探入用户本机/内网），响应体
+//!   流式限读、产物按字节魔数定型 MIME、过大小上限后原子落盘进项目
+//!   `assets/`（`source=generated`），返回项目级 AssetRef。
 //! - `llm_image_cancel`：协作式取消——登记取消标志，进行中的生成在请求
 //!   返回后与落盘前检查并放弃结果。
 
 use std::collections::HashSet;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use base64::Engine as _;
+use reqwest::Url;
 use serde_json::{json, Value};
 use tauri::AppHandle;
 
@@ -114,23 +117,139 @@ fn clear_cancel(job_id: &str) {
     }
 }
 
-/// url 成员回退下载：仅接受 http(s)——data:/file: 等协议不经网络边界；
-/// 字节仍按魔数定型 MIME，重定向由客户端默认策略约束。
-async fn fetch_image_url(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, String> {
-    if !url.starts_with("http://") && !url.starts_with("https://") {
-        return Err("图像 url 协议非法（仅支持 http/https）".into());
+/// url 回退下载的重定向上限：禁用客户端自动跟随、逐跳显式复验目标，
+/// 防重定向链绕过首跳校验。
+const DOWNLOAD_REDIRECT_LIMIT: usize = 5;
+
+/// url 回退下载超时：只拉一帧 ≤32MiB 的图像，远小于生成超时。
+const IMAGE_DOWNLOAD_TIMEOUT_SECS: u64 = 120;
+
+/// IPv4 公网判定：环回（127/8）、RFC1918 私有（10/8、172.16/12、
+/// 192.168/16）、链路本地（169.254/16，含云元数据端点）、CGNAT
+/// （100.64/10）、0/8、未指定、多播、广播均非公网。
+fn is_public_ipv4(ip: Ipv4Addr) -> bool {
+    let o = ip.octets();
+    !(ip.is_loopback()
+        || ip.is_private()
+        || ip.is_link_local()
+        || ip.is_unspecified()
+        || ip.is_multicast()
+        || ip.is_broadcast()
+        || o[0] == 0
+        || (o[0] == 100 && (o[1] & 0xC0) == 0x40))
+}
+
+/// IPv6 公网判定：环回、唯一本地（fc00::/7）、链路本地（fe80::/10）、
+/// 未指定、多播均非公网；IPv4 映射/兼容地址按内嵌 IPv4 复验。
+fn is_public_ipv6(ip: Ipv6Addr) -> bool {
+    let s = ip.segments();
+    !(ip.is_loopback()
+        || ip.is_unspecified()
+        || ip.is_multicast()
+        || ip.is_unique_local()
+        || (s[0] & 0xFFC0) == 0xFE80
+        || ip.to_ipv4().is_some_and(|v4| !is_public_ipv4(v4)))
+}
+
+fn is_public_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => is_public_ipv4(v4),
+        IpAddr::V6(v6) => is_public_ipv6(v6),
     }
-    let response = client
-        .get(url)
-        .send()
+}
+
+/// 下载目标的静态校验（可单测的纯部分）：scheme 仅 http(s)——data:/file:
+/// 等协议不经网络边界；主机为 IP 字面量时立即按公网分类。返回
+/// Some(原因) 即拒绝；域名主机交由解析复验（见 ensure_public_download_target）。
+fn static_target_violation(url: &Url) -> Option<String> {
+    if !matches!(url.scheme(), "http" | "https") {
+        return Some("图像 url 协议非法（仅支持 http/https）".into());
+    }
+    let host = url.host_str()?;
+    // IPv6 主机串带方括号（如 "[::1]"），IpAddr 解析不接受——剥后判字面量
+    let literal = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
+    if let Ok(ip) = literal.parse::<IpAddr>() {
+        if !is_public_ip(ip) {
+            return Some(format!("图像 url 主机 {host} 非公网地址，已拒绝下载"));
+        }
+    }
+    None
+}
+
+/// 下载目标公网边界（首跳与每跳重定向共用）：IP 字面量即时分类；域名
+/// 主机解析后要求全部地址为公网——`localhost` 等 DNS 名同样可能指向
+/// 环回/内网。注：本校验的解析与客户端连接各自解析存在固有的 DNS
+/// 再绑定窗口，此层为纵深防御而非绝对边界（威胁模型见 AGENTS.md）。
+async fn ensure_public_download_target(url: &Url) -> Result<(), String> {
+    if let Some(reason) = static_target_violation(url) {
+        return Err(reason);
+    }
+    let host = url.host_str().ok_or("图像 url 缺少主机")?;
+    let literal = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
+    if literal.parse::<IpAddr>().is_ok() {
+        return Ok(());
+    }
+    let port = url.port_or_known_default().ok_or("图像 url 端口未知")?;
+    let target = format!("{host}:{port}");
+    // std 解析是阻塞调用：挪到阻塞线程池，不占异步工作线程
+    let addrs = tauri::async_runtime::spawn_blocking(move || target.to_socket_addrs())
         .await
-        .map_err(|e| format!("下载图像失败：{e}"))?;
-    let status = response.status();
-    let bytes = read_bytes_capped(response, GENERATED_IMAGE_MAX_BYTES).await?;
-    if !status.is_success() {
-        return Err(format!("下载图像返回 {status}"));
+        .map_err(|e| format!("解析图像主机失败：{e}"))?
+        .map_err(|e| format!("解析图像主机 {host} 失败：{e}"))?;
+    let list: Vec<std::net::SocketAddr> = addrs.collect();
+    if list.is_empty() {
+        return Err(format!("图像主机 {host} 未解析到地址"));
     }
-    Ok(bytes.to_vec())
+    if list.iter().any(|a| !is_public_ip(a.ip())) {
+        return Err(format!("图像主机 {host} 解析到非公网地址，已拒绝下载"));
+    }
+    Ok(())
+}
+
+/// url 成员回退下载：目标与每跳重定向均过公网边界校验（仅 http(s)、
+/// 环回/私网/链路本地/CGNAT 等一律拒绝）；禁用自动重定向、逐跳显式
+/// 复验（上限 DOWNLOAD_REDIRECT_LIMIT 跳）；字节仍按魔数定型 MIME。
+async fn fetch_image_url(url: &str) -> Result<Vec<u8>, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(IMAGE_DOWNLOAD_TIMEOUT_SECS))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| format!("构造下载客户端失败：{e}"))?;
+    let mut current: Url = url.parse().map_err(|_| "图像 url 非法".to_string())?;
+    for _ in 0..=DOWNLOAD_REDIRECT_LIMIT {
+        ensure_public_download_target(&current).await?;
+        let response = client
+            .get(current.clone())
+            .send()
+            .await
+            .map_err(|e| format!("下载图像失败：{e}"))?;
+        if response.status().is_redirection() {
+            let location = response
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|v| v.to_str().ok())
+                .ok_or("图像重定向缺少 Location")?;
+            current = current
+                .join(location)
+                .map_err(|_| "图像重定向 Location 非法".to_string())?;
+            continue;
+        }
+        let status = response.status();
+        let bytes = read_bytes_capped(response, GENERATED_IMAGE_MAX_BYTES).await?;
+        if !status.is_success() {
+            return Err(format!("下载图像返回 {status}"));
+        }
+        return Ok(bytes.to_vec());
+    }
+    Err(format!(
+        "图像下载重定向超过 {DOWNLOAD_REDIRECT_LIMIT} 跳上限"
+    ))
 }
 
 /// 生成请求参数（前端单对象传入：provider 配置 + 生成输入 + job 标识）。
@@ -211,7 +330,7 @@ pub async fn llm_image_generate(app: AppHandle, request: ImageGenRequest) -> Res
         Some(b) => b,
         None => {
             let url = image_url_of(&parsed).ok_or("服务未返回图像内容")?;
-            fetch_image_url(&client, &url).await?
+            fetch_image_url(&url).await?
         }
     };
     if bytes.len() > GENERATED_IMAGE_MAX_BYTES {
@@ -326,5 +445,68 @@ mod tests {
         // 超限即拒：缓冲保持原状，不落半截
         assert!(append_capped(&mut buf, &[6, 7, 8, 9, 10, 11], 10).is_err());
         assert_eq!(buf, vec![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn public_ip_allows_global_addresses() {
+        for s in [
+            "8.8.8.8",
+            "1.1.1.1",
+            "172.32.0.1",
+            "100.128.0.1",
+            "2606:4700::1111",
+            "2400:cb00::1",
+        ] {
+            let ip: std::net::IpAddr = s.parse().expect(s);
+            assert!(is_public_ip(ip), "{s} 应判定为公网");
+        }
+    }
+
+    #[test]
+    fn public_ip_rejects_private_and_special_ranges() {
+        for s in [
+            "127.0.0.1",
+            "10.0.0.1",
+            "172.16.0.1",
+            "172.31.255.255",
+            "192.168.1.1",
+            "169.254.169.254",
+            "0.0.0.0",
+            "0.1.2.3",
+            "100.64.0.1",
+            "100.127.255.255",
+            "224.0.0.1",
+            "255.255.255.255",
+            "::1",
+            "fe80::1",
+            "fd00::1",
+            "fc00::1",
+            "ff02::1",
+            "::ffff:127.0.0.1",
+            "::ffff:192.168.0.1",
+        ] {
+            let ip: std::net::IpAddr = s.parse().expect(s);
+            assert!(!is_public_ip(ip), "{s} 应判定为非公网");
+        }
+    }
+
+    #[test]
+    fn download_target_static_checks_reject_nonpublic_literals() {
+        for s in [
+            "http://127.0.0.1/a.png",
+            "http://[::1]/a.png",
+            "http://169.254.169.254/meta",
+            "https://10.0.0.5/a.png",
+            "ftp://8.8.8.8/a.png",
+            "file:///etc/passwd",
+        ] {
+            let url: Url = s.parse().expect(s);
+            assert!(static_target_violation(&url).is_some(), "{s} 应被静态拒绝");
+        }
+        // 公网 IP 字面量与域名（域名走解析复验，不在静态层拒绝）
+        assert!(static_target_violation(&"https://8.8.8.8/a.png".parse().unwrap()).is_none());
+        assert!(
+            static_target_violation(&"http://cdn.example.test/a.png".parse().unwrap()).is_none()
+        );
     }
 }

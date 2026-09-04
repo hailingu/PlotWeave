@@ -166,6 +166,28 @@ describe('生成调度：发起与双击占位（§13）', () => {
   })
 })
 
+describe('生成调度：设置加载失败（§13）', () => {
+  it('设置 load 拒绝：作业转入错误态并显示诊断，再次生成不被 running 守卫挡死', async () => {
+    ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
+    vi.mocked(tauriInvoke).mockImplementation((cmd: string) => {
+      if (cmd === 'llm_image_generate') return new Promise(() => {})
+      return Promise.resolve({})
+    })
+    setupHarness({ resolveSettings: Promise.reject(new Error('prefs IPC 失败')) })
+
+    void apiRef!.start('img1')
+    // start 丢弃 runStart 的 promise：load 拒绝若逃出未处理，占位永远停在
+    // running、无诊断，后续生成被 running 守卫挡死
+    await waitFor(() => expect(apiRef!.jobOf('img1')?.status).toBe('error'))
+    expect((apiRef!.jobOf('img1') as { message: string }).message).toContain('加载设置失败')
+
+    // 错误态可重试：第二次发起进入生成（设置恢复后正常计费一次）
+    vi.mocked(settingsStore.load).mockImplementation(() => Promise.resolve(validSettings))
+    void apiRef!.start('img1')
+    await waitFor(() => expect(generateCount()).toBe(1))
+  })
+})
+
 describe('生成调度：卸载协作式取消（§13 作业生命周期）', () => {
   it('卸载时对 running 作业发协作式取消，完成结果不写回已卸载组件', async () => {
     ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}

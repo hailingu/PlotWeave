@@ -18,6 +18,7 @@ import {
 } from 'react'
 import type { AssetRef } from '../../model/document'
 import { settingsStore } from '../../settings/settingsStore'
+import type { AppSettings } from '../../settings/types'
 import { uid } from '../../uid'
 import { normalizeAssetRef, tauriInvoke } from '../projectAssets'
 import type { ProjectSettings } from '../settings'
@@ -163,7 +164,9 @@ function applyGenerationResult(
 
 /** 发起内核：解析计划 → 执行作业（结果经 applyResult 落位）。作业占位由
  * start 同步完成（双击窗口内不重复发起计费请求），此处只消费 jobId；
- * 设置加载间隙中宿主节点可能被删——提交前复核，不为已删节点付账。 */
+ * 设置加载间隙中宿主节点可能被删——提交前复核，不为已删节点付账；
+ * 设置加载失败转入作业错误态（start 丢弃本 promise，逃出的拒绝会让
+ * 占位永远停在 running、无诊断且挡死后续生成）。 */
 async function runStart(
   deps: {
     projectId: string
@@ -186,7 +189,16 @@ async function runStart(
     deps.setJobError(nodeId, '节点已不是图片节点，作业未执行')
     return
   }
-  const plan = resolveImageGenPlan(node.data, await settingsStore.load())
+  let settings: AppSettings
+  try {
+    settings = await settingsStore.load()
+  } catch (err) {
+    if (deps.jobAlive(nodeId, jobId)) {
+      deps.setJobError(nodeId, `加载设置失败：${errorText(err)}`)
+    }
+    return
+  }
+  const plan = resolveImageGenPlan(node.data, settings)
   // 设置加载在途期间本作业可能已被取消/替换：迟到返回的分支（含计划
   // 失败）不得再写状态或提交——否则会覆盖接替作业的 running，致其
   // 已付费结果被 jobAlive 误判丢弃
