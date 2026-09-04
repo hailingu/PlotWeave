@@ -14,7 +14,7 @@ import { useRef } from 'react'
 import type { AppSettings } from '../../settings/types'
 import { settingsStore } from '../../settings/settingsStore'
 import { normalizeAssetRef, tauriInvoke } from '../projectAssets'
-import { useImageJobsState } from './state'
+import { useImageJobsState, doomedImageAssets } from './state'
 import type { ImageGenApi } from './context'
 import type { CharacterEntity, ProjectSettings } from '../settings'
 import type { HistoryCommand } from '../history'
@@ -256,6 +256,47 @@ describe('生成调度：宿主节点删除（§13 作业生命周期）', () =>
   })
 })
 
+describe('生成调度：作业身份复核（§13）', () => {
+  it('被取消作业的设置加载迟到返回：不覆盖接替作业，接替作业结果正常落位', async () => {
+    ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
+    let gateA!: (s: AppSettings) => void
+    const settingsOfA = new Promise<AppSettings>((res) => {
+      gateA = res
+    })
+    vi.mocked(tauriInvoke).mockImplementation((cmd: string) => {
+      if (cmd === 'llm_image_generate') {
+        return Promise.resolve({
+          id: 'pa-b',
+          relPath: 'assets/pa-b.png',
+          mime: 'image/png',
+          source: 'generated',
+          createdAt: '2026-09-04T00:00:00.000Z',
+        })
+      }
+      return Promise.resolve({})
+    })
+    vi.mocked(normalizeAssetRef).mockImplementation((raw) => raw as unknown as AssetRef)
+    const { pushHistory } = setupHarness()
+    // 计数型 load mock（覆盖 setupHarness 的默认）：首次挂起给 A，此后
+    // 立即给 B 有效设置——两个作业不得共享同一个挂起的 Promise
+    let loadCall = 0
+    vi.mocked(settingsStore.load).mockImplementation(() => {
+      loadCall += 1
+      return loadCall === 1 ? settingsOfA : Promise.resolve(validSettings)
+    })
+
+    void apiRef!.start('img1') // 作业 A：设置加载在途
+    apiRef!.cancel('img1') // 取消 A（清表）；用户改好输入后立即重启
+    void apiRef!.start('img1') // 作业 B：接替
+    gateA({ ...validSettings, defaultImage: null }) // A 的设置迟到返回且计划不可解析
+
+    await waitFor(() => expect(pushHistory).toHaveBeenCalledTimes(1))
+    await new Promise((r) => setTimeout(r, 0))
+    // B 的结果必须落位：A 的迟到分支不得以 error 覆盖 B 的 running
+    expect(pushHistory).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('生成调度：旧产物回收（§7.3）', () => {
   it('重新生成：旧产物不再被任何节点引用时随命令移出索引，undo 恢复（§7.3）', async () => {
     ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
@@ -367,5 +408,47 @@ describe('生成调度：旧产物被引用或悬空不回收（§7.3）', () =>
     await waitFor(() => expect(pushHistory).toHaveBeenCalledTimes(1))
     // byId 无自有 '__proto__' 键：不得命中 Object.prototype 当 AssetRef 回收
     expect(removeAsset).not.toHaveBeenCalled()
+  })
+})
+
+describe('doomedImageAssets：删除图片节点的产物回收判定（§7.3）', () => {
+  const imgWith = (assetId: string) =>
+    ({
+      id: 'img1',
+      type: 'image',
+      data: { ...imageNodeData(), outputs: { primary: { assetId } } },
+    }) as unknown as CanvasNode
+  const paOld: AssetRef = {
+    id: 'pa-old',
+    relPath: 'assets/pa-old.png',
+    mime: 'image/png',
+    source: 'generated',
+    createdAt: '2026-09-01T00:00:00.000Z',
+  }
+
+  it('产物不再被幸存节点/头像引用且仍在索引：回收（含去重）', () => {
+    const doomed = doomedImageAssets([imgWith('pa-old'), imgWith('pa-old')], [], [], {
+      'pa-old': paOld,
+    })
+    expect(doomed).toEqual([paOld])
+  })
+
+  it('仍被幸存节点引用 / 头像引用 / 索引外悬空 / 原型链键名：不回收', () => {
+    const survivorShot = {
+      id: 'sh1',
+      type: 'shot',
+      data: { refs: [{ id: 'r1', kind: 'image', assetId: 'pa-old' }] },
+    } as unknown as CanvasNode
+    expect(doomedImageAssets([imgWith('pa-old')], [survivorShot], [], { 'pa-old': paOld })).toEqual([])
+    expect(
+      doomedImageAssets(
+        [imgWith('pa-old')],
+        [],
+        [{ id: 'ch1', name: '林晚', gradient: 'g', avatarAssetId: 'pa-old' } as CharacterEntity],
+        { 'pa-old': paOld },
+      ),
+    ).toEqual([])
+    expect(doomedImageAssets([imgWith('pa-gone')], [], [], { 'pa-old': paOld })).toEqual([])
+    expect(doomedImageAssets([imgWith('__proto__')], [], [], {})).toEqual([])
   })
 })

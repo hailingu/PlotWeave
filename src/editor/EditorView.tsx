@@ -30,6 +30,7 @@ import BranchNode from './nodes/BranchNode'
 import ShotNode from './nodes/ShotNode'
 import ImageNode from './nodes/ImageNode'
 import { ImageGenProvider } from './imagegen/ImageGenProvider'
+import { doomedImageAssets } from './imagegen/state'
 import BranchEdge from './edges/BranchEdge'
 import LeftPanel from './panels/LeftPanel'
 import RightPanel, { type RightTab } from './panels/RightPanel'
@@ -297,6 +298,24 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
     [applyDataPatch, pushHistory, setEdges],
   )
 
+  /** 资产索引写入（§7.3 导入/生成命令的 apply/undo/redo 共用）：新增条目
+   * 按 id 键控并入；移除只删索引条目，媒体文件留存待延迟回收（§7.3）。 */
+  const addAsset = useCallback(
+    (asset: AssetRef) =>
+      setAssets((cur) => ({ byId: { ...cur?.byId, [asset.id]: asset } })),
+    [],
+  )
+  const removeAsset = useCallback(
+    (assetId: string) =>
+      setAssets((cur) => {
+        if (!cur) return cur
+        const byId = { ...cur.byId }
+        delete byId[assetId]
+        return { byId }
+      }),
+    [],
+  )
+
   /** ⧉ 复制：同 data 新 id，右下偏移并只选中新副本；入栈可撤销。 */
   const duplicateNode = useCallback(
     (id: string) => {
@@ -319,7 +338,8 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
     [pushHistory, setNodes],
   )
 
-  /** 🗑 删除一组节点及其全部连线：入栈可撤销（§4.3 删除可撤销，无需确认）。 */
+  /** 🗑 删除一组节点及其全部连线：入栈可撤销（§4.3 删除可撤销，无需确认）。
+   * 被删图片节点的产物若不再被引用，随同一命令移出索引（§7.3，undo 恢复）。 */
   const deleteNodesByIds = useCallback(
     (ids: string[]) => {
       const idSet = new Set(ids)
@@ -327,6 +347,12 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
       if (removedNodes.length === 0) return
       const removedEdges = edgesRef.current.filter(
         (e) => idSet.has(e.source) || idSet.has(e.target),
+      )
+      const doomed = doomedImageAssets(
+        removedNodes,
+        nodesRef.current.filter((n) => !idSet.has(n.id)),
+        settings.characters,
+        assetsRef.current?.byId,
       )
       const apply = (remove: boolean) => {
         setNodes((nds) =>
@@ -339,12 +365,13 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
             ? eds.filter((e) => !idSet.has(e.source) && !idSet.has(e.target))
             : [...eds, ...removedEdges],
         )
+        doomed.forEach((a) => (remove ? removeAsset(a.id) : addAsset(a)))
       }
       apply(true)
       pushHistory({ undo: () => apply(false), redo: () => apply(true) })
       setOpenSettingsId(null)
     },
-    [pushHistory, setEdges, setNodes],
+    [addAsset, pushHistory, removeAsset, setEdges, setNodes, settings.characters],
   )
 
   /** 删除一组连线（选中边 + Delete）：入栈可撤销。 */
@@ -404,24 +431,6 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
     setEdges,
     pushHistory,
   })
-
-  /** 资产索引写入（§7.3 导入命令的 apply/undo/redo 共用）：新增条目按 id
-   * 键控并入；移除只删索引条目，媒体文件留存待延迟回收（§7.3）。 */
-  const addAsset = useCallback(
-    (asset: AssetRef) =>
-      setAssets((cur) => ({ byId: { ...cur?.byId, [asset.id]: asset } })),
-    [],
-  )
-  const removeAsset = useCallback(
-    (assetId: string) =>
-      setAssets((cur) => {
-        if (!cur) return cur
-        const byId = { ...cur.byId }
-        delete byId[assetId]
-        return { byId }
-      }),
-    [],
-  )
 
   /** 索引卡的 🎞 镜数：派生自该场 attach 下挂边数量（§7.2，不落镜像字段）。 */
   const shotCountOf = useCallback(

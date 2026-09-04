@@ -187,6 +187,10 @@ async function runStart(
     return
   }
   const plan = resolveImageGenPlan(node.data, await settingsStore.load())
+  // 设置加载在途期间本作业可能已被取消/替换：迟到返回的分支（含计划
+  // 失败）不得再写状态或提交——否则会覆盖接替作业的 running，致其
+  // 已付费结果被 jobAlive 误判丢弃
+  if (!deps.jobAlive(nodeId, jobId)) return
   if (!plan.ok) {
     deps.setJobError(nodeId, plan.message)
     return
@@ -206,6 +210,35 @@ async function runStart(
   } catch (err) {
     if (deps.jobAlive(nodeId, jobId)) deps.setJobError(nodeId, errorText(err))
   }
+}
+
+/** 删除图片节点时的产物回收判定（§7.3，deleteNodesByIds 复用）：被删
+ * 节点的 `outputs.primary` 指向的资产若不再被幸存节点（图片产物/分镜
+ * 引用）或角色头像引用、且仍是索引自有条目，则随删除命令一并移出
+ * （undo 恢复；媒体文件留存待延迟回收）。判定与 applyGenerationResult
+ * 的旧产物回收同口径（含原型链键名防御与去重）。 */
+export function doomedImageAssets(
+  removed: CanvasNode[],
+  survivors: CanvasNode[],
+  characters: ProjectSettings['characters'],
+  byId: Record<string, AssetRef> | undefined,
+): AssetRef[] {
+  if (byId === undefined) return []
+  const doomed: AssetRef[] = []
+  for (const n of removed) {
+    if (n.type !== 'image') continue
+    const id = n.data.outputs.primary?.assetId
+    if (
+      id === undefined ||
+      assetReferencedBy(survivors, characters, id) ||
+      !Object.prototype.hasOwnProperty.call(byId, id)
+    ) {
+      continue
+    }
+    const asset = byId[id]
+    if (!doomed.some((a) => a.id === id)) doomed.push(asset)
+  }
+  return doomed
 }
 
 /** 作业写回守卫（Provider 生命周期，§13 作业生命周期 = 编辑器挂载期）：
@@ -283,6 +316,13 @@ function useJobTable(): {
       if (!(nodeId in cur)) return cur
       return Object.fromEntries(Object.entries(cur).filter(([k]) => k !== nodeId))
     })
+    // 同步镜像清理（与 start 的同步占位对偶）：同一事件循环内「取消→重启」
+    // 读到已清状态，不被 running 守卫误挡（状态提交前 ref 是真源）
+    if (nodeId in jobsRef.current) {
+      jobsRef.current = Object.fromEntries(
+        Object.entries(jobsRef.current).filter(([k]) => k !== nodeId),
+      )
+    }
   }, [])
   const dropResult = useCallback((nodeId: string) => {
     setNotice(

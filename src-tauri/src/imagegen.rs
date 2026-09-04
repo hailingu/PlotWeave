@@ -2,9 +2,10 @@
 //!
 //! - `llm_image_generate`：前端只传 provider 配置、prompt、尺寸与 job id；
 //!   API key 密文在本进程解密（与 `llm_chat` 同域，明文不出后端），请求
-//!   OpenAI 兼容 `/images/generations`（`response_format=b64_json`；部分兼容
-//!   实现只回 `url`，则回退下载），产物按字节魔数定型 MIME、过大小上限后
-//!   原子落盘进项目 `assets/`（`source=generated`），返回项目级 AssetRef。
+//!   OpenAI 兼容 `/images/generations`（GPT Image 系恒回 base64；部分兼容
+//!   实现只回 `url`，则回退下载），响应体流式限读、产物按字节魔数定型
+//!   MIME、过大小上限后原子落盘进项目 `assets/`（`source=generated`），
+//!   返回项目级 AssetRef。
 //! - `llm_image_cancel`：协作式取消——登记取消标志，进行中的生成在请求
 //!   返回后与落盘前检查并放弃结果。
 
@@ -18,6 +19,48 @@ use tauri::AppHandle;
 
 /// 生成产物大小上限（32 MiB）：防异常响应把内存/磁盘撑爆。
 const GENERATED_IMAGE_MAX_BYTES: usize = 32 * 1024 * 1024;
+
+/// 响应体读取上限（64 MiB）：主响应是 JSON 文本，base64 膨胀约 4/3 加
+/// JSON 开销，按产物上限放宽一倍封顶——流式聚合、超限即中止，恶意/
+/// 异常 provider 的超大响应在物化前被拒，上限真正护住内存。
+const RESPONSE_BODY_MAX_BYTES: usize = GENERATED_IMAGE_MAX_BYTES * 2;
+
+/// 分块累加内核：超限立即中止且不落半截（可单测的纯函数）。
+fn append_capped(buf: &mut Vec<u8>, chunk: &[u8], cap: usize) -> Result<(), String> {
+    if buf.len() + chunk.len() > cap {
+        return Err(format!("响应体超过 {cap} 字节上限"));
+    }
+    buf.extend_from_slice(chunk);
+    Ok(())
+}
+
+/// 有上限地流式读取响应体为 UTF-8 文本（主响应）。
+async fn read_text_capped(response: reqwest::Response, cap: usize) -> Result<String, String> {
+    let mut resp = response;
+    let mut buf = Vec::new();
+    while let Some(chunk) = resp
+        .chunk()
+        .await
+        .map_err(|e| format!("读取响应失败：{e}"))?
+    {
+        append_capped(&mut buf, &chunk, cap)?;
+    }
+    String::from_utf8(buf).map_err(|e| format!("响应不是有效 UTF-8：{e}"))
+}
+
+/// 有上限地流式读取响应体为字节（url 回退下载，cap = 产物上限）。
+async fn read_bytes_capped(response: reqwest::Response, cap: usize) -> Result<Vec<u8>, String> {
+    let mut resp = response;
+    let mut buf = Vec::new();
+    while let Some(chunk) = resp
+        .chunk()
+        .await
+        .map_err(|e| format!("读取图像失败：{e}"))?
+    {
+        append_capped(&mut buf, &chunk, cap)?;
+    }
+    Ok(buf)
+}
 
 /// 生成请求超时：图像模型普遍慢于对话，放宽到 5 分钟。
 const IMAGE_REQUEST_TIMEOUT_SECS: u64 = 300;
@@ -83,10 +126,7 @@ async fn fetch_image_url(client: &reqwest::Client, url: &str) -> Result<Vec<u8>,
         .await
         .map_err(|e| format!("下载图像失败：{e}"))?;
     let status = response.status();
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| format!("读取图像失败：{e}"))?;
+    let bytes = read_bytes_capped(response, GENERATED_IMAGE_MAX_BYTES).await?;
     if !status.is_success() {
         return Err(format!("下载图像返回 {status}"));
     }
@@ -156,10 +196,7 @@ pub async fn llm_image_generate(app: AppHandle, request: ImageGenRequest) -> Res
         .await
         .map_err(|e| format!("请求失败：{e}"))?;
     let status = response.status();
-    let text = response
-        .text()
-        .await
-        .map_err(|e| format!("读取响应失败：{e}"))?;
+    let text = read_text_capped(response, RESPONSE_BODY_MAX_BYTES).await?;
     if is_cancelled(&job_id) {
         clear_cancel(&job_id);
         return Err("已取消".into());
@@ -279,5 +316,15 @@ mod tests {
             json!({ "model": "gpt-image-1", "prompt": "雨夜霓虹", "size": "1024x1024" })
         );
         assert!(body.get("response_format").is_none());
+    }
+
+    #[test]
+    fn append_capped_rejects_oversize_without_partial_write() {
+        let mut buf = vec![1u8, 2, 3];
+        assert!(append_capped(&mut buf, &[4, 5], 10).is_ok());
+        assert_eq!(buf, vec![1, 2, 3, 4, 5]);
+        // 超限即拒：缓冲保持原状，不落半截
+        assert!(append_capped(&mut buf, &[6, 7, 8, 9, 10, 11], 10).is_err());
+        assert_eq!(buf, vec![1, 2, 3, 4, 5]);
     }
 }
