@@ -94,6 +94,30 @@ describe('SettingsView 默认模型分段', () => {
     expect(saveSpy.mock.calls[0][0].defaultImage).toBe('openai:gpt-4o')
   })
 
+  it('点「完成」：先 await 冲刷落盘，再回调 onClose（界面切换不早于落盘）', async () => {
+    let resolveSave!: (v: void) => void
+    const saveSpy = vi.spyOn(settingsStore, 'save').mockImplementation(
+      () => new Promise<void>((res) => (resolveSave = res)),
+    )
+    const onClose = vi.fn()
+    render(<SettingsView onClose={onClose} />)
+    await screen.findByText('OpenAI 兼容')
+    fireEvent.change(screen.getByRole('combobox', { name: /图像生成模型/ }), {
+      target: { value: 'openai:gpt-4o' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '关闭设置' }))
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(saveSpy).toHaveBeenCalledTimes(1) // 防抖被撤、立即冲刷
+    expect(onClose).not.toHaveBeenCalled() // 落盘完成前不切换界面
+    await act(async () => {
+      resolveSave()
+      await Promise.resolve()
+    })
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
   it('禁用所有 provider 后提示暂无可用模型', async () => {
     render(<SettingsView onClose={vi.fn()} />)
     await screen.findByText('OpenAI 兼容')
@@ -135,11 +159,14 @@ describe('SettingsView API key', () => {
 })
 
 describe('SettingsView 关闭', () => {
-  it('「完成」按钮触发 onClose', async () => {
+  it('「完成」按钮触发 onClose（无 pending 编辑，冲刷 no-op 后即关）', async () => {
     const onClose = vi.fn()
     render(<SettingsView onClose={onClose} />)
     await screen.findByText('OpenAI 兼容')
     fireEvent.click(screen.getByRole('button', { name: '关闭设置' }))
+    await act(async () => {
+      await Promise.resolve()
+    })
     expect(onClose).toHaveBeenCalledTimes(1)
   })
 })

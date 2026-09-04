@@ -12,6 +12,17 @@ interface SettingsViewProps {
   readonly onClose: () => void
 }
 
+/** 关闭冲刷内核：清防抖计时器并落盘未保存快照（无 pending 时为 no-op）。 */
+async function flushPendingSave(
+  saveTimer: { current: ReturnType<typeof setTimeout> | null },
+  pendingSaveRef: { current: AppSettings | null },
+): Promise<void> {
+  if (saveTimer.current) clearTimeout(saveTimer.current)
+  const pending = pendingSaveRef.current
+  pendingSaveRef.current = null
+  if (pending !== null) await settingsStore.save(pending)
+}
+
 /** 默认模型分段的提示文案：无可用模型 / 已选 / 未选（S3358 独立成函数）。 */
 function defaultModelHint(
   optionCount: number,
@@ -96,9 +107,11 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
     })
   }, [])
 
-  // 编辑即保存：防抖 500ms 全量落盘；pendingSaveRef 记录未落盘快照，
-  // 卸载（点「完成」关闭）时冲刷——防抖窗口内关闭不丢最后一次编辑
+  // 编辑即保存：防抖 500ms 全量落盘；pendingSaveRef 记录未落盘快照。
+  // 「完成」按钮 await 冲刷完成后再回调 onClose——编辑器重挂读到的必是
+  // 已落盘设置；卸载兜底（非常规关闭路径）仍冲刷但只能 fire-and-forget。
   const pendingSaveRef = useRef<AppSettings | null>(null)
+  const [closing, setClosing] = useState(false)
   const update = (next: AppSettings) => {
     setSettings(next)
     pendingSaveRef.current = next
@@ -108,11 +121,18 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
       void settingsStore.save(next)
     }, 500)
   }
+  const handleClose = () => {
+    if (closing) return
+    setClosing(true)
+    flushPendingSave(saveTimer, pendingSaveRef)
+      .catch((err) => console.warn('[SettingsView] 关闭冲刷保存失败', err))
+      .finally(() => onClose())
+  }
   useEffect(() => {
     return () => {
-      if (saveTimer.current) clearTimeout(saveTimer.current)
-      const pending = pendingSaveRef.current
-      if (pending !== null) void settingsStore.save(pending)
+      void flushPendingSave(saveTimer, pendingSaveRef).catch((err) =>
+        console.warn('[SettingsView] 卸载冲刷保存失败', err),
+      )
     }
   }, [])
 
@@ -156,8 +176,14 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
         <span className="editor-title" data-tauri-drag-region>
           设置
         </span>
-        <button type="button" className="editor-tbtn io" onClick={onClose} aria-label="关闭设置">
-          完成
+        <button
+          type="button"
+          className="editor-tbtn io"
+          onClick={handleClose}
+          disabled={closing}
+          aria-label="关闭设置"
+        >
+          {closing ? '保存中…' : '完成'}
         </button>
       </header>
       <main className="settings-body">

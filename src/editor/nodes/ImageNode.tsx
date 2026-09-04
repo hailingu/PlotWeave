@@ -35,7 +35,14 @@ function OutputImage({
   }, [projectId, asset])
   if (failed) return <span className="pw-image-empty">产物媒体无法读取（{asset.relPath}）</span>
   if (!url) return null
-  return <img className="pw-image-out-img" src={url} alt={asset.relPath} />
+  return (
+    <img
+      className="pw-image-out-img"
+      src={url}
+      alt={asset.relPath}
+      onError={() => setFailed(true)}
+    />
+  )
 }
 
 /** 产物区占位文案：悬空引用 / 运行中 / 空态（S3358 独立成函数）。 */

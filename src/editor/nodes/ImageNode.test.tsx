@@ -105,6 +105,14 @@ describe('图片节点渲染（§13）', () => {
     expect(await screen.findByText(/产物媒体无法读取/)).toBeTruthy()
   })
 
+  it('URL 解析成功但图像解码失败（截断 PNG 等）：onError 转入失败占位', async () => {
+    setup({ ...baseData(), outputs: { primary: { assetId: 'pa-1' } } })
+    const img = await screen.findByRole('img')
+    img.dispatchEvent(new window.Event('error'))
+    expect(await screen.findByText(/产物媒体无法读取/)).toBeTruthy()
+    expect(screen.queryByRole('img')).toBeNull()
+  })
+
   it('primary 悬空（资产已删）显示缺失占位，不清除引用', () => {
     setup({ ...baseData(), outputs: { primary: { assetId: 'pa-1' } } }, { withAsset: false })
     expect(screen.getByText(/产物资产缺失/)).toBeTruthy()
