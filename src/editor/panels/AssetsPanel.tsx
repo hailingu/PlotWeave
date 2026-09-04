@@ -7,11 +7,14 @@ import {
 } from '../../library/libraryStore'
 import { PW_LIBRARY_ASSET_MIME } from '../dragDrop'
 import { EditableName } from '../nodes/settings/NodeSettingsPanel'
+import { ConfirmDeleteDialog } from '../../home/Dialogs'
 
 /**
  * 左栏「资产」分段的真实实现（docs/ui-design.md §8.1）：
  * 应用级资产库跨项目复用，按影视美术部门分类——分类列表带计数，
- * 类别内导入（多选图片）/缩略懒加载/行内改名/标签编辑/删除（不可逆需确认）。
+ * 类别内导入（多选图片）/缩略懒加载/行内改名/标签编辑/删除（不可逆，
+ * 应用内确认框：原生 window.confirm 在 WKWebView 无 UI 代理、静默
+ * 返回 false，打包后点击 ✕ 会毫无反应）。
  * 与项目的流转（§7.3）：缩略图即拖拽把手，拖上画布分镜卡拷贝进项目
  * 并绑定引用位（dragDrop 协议 + useCanvasDrop 承接）。
  */
@@ -24,6 +27,8 @@ export default function AssetsPanel() {
   const importKind = useRef<LibraryKind>('other')
   /** 缩略图 URL 缓存（懒加载：进入类别才取）。 */
   const [urls, setUrls] = useState<Record<string, string>>({})
+  /** 待删除资产（非 null 时弹应用内确认框）。 */
+  const [pendingRemove, setPendingRemove] = useState<LibraryAsset | null>(null)
 
   useEffect(() => {
     let alive = true
@@ -78,9 +83,9 @@ export default function AssetsPanel() {
       .catch((err) => setError(String(err)))
   }
 
+  /** 确认后执行：移除列表项并回收缩略 URL；落盘删除交给库门面。
+   * 仅在 ConfirmDeleteDialog 确认后调用（删除不可恢复）。 */
   const remove = (asset: LibraryAsset) => {
-    // 删除不可恢复：确认对话框（HIG 仅真正不可逆操作使用确认）
-    if (!window.confirm(`删除资产「${asset.name}」？此操作不可撤销。`)) return
     setAssets((list) => list.filter((a) => a.id !== asset.id))
     // 回收缩略图 object URL（浏览器预览态），防长会话内存泄漏
     const url = urls[asset.id]
@@ -162,42 +167,80 @@ export default function AssetsPanel() {
           {assets
             .filter((a) => a.kind === selectedKind)
             .map((asset) => (
-              <div key={asset.id} className="pw-asset">
-                <AssetThumb asset={asset} url={urls[asset.id]} onVisible={refreshUrl} />
-                <div className="pw-asset-body">
-                  <EditableName
-                    value={asset.name}
-                    ariaLabel={`资产名 ${asset.name}`}
-                    onChange={(name) => {
-                      setAssets((list) =>
-                        list.map((a) => (a.id === asset.id ? { ...a, name } : a)),
-                      )
-                      void libraryStore.updateMeta(asset.id, { name })
-                    }}
-                  />
-                  <input
-                    className="pw-asset-tags"
-                    defaultValue={asset.tags.join('，')}
-                    placeholder="标签（逗号分隔，可选）"
-                    aria-label={`资产标签 ${asset.name}`}
-                    onBlur={(e) => commitTags(asset, e.target.value)}
-                  />
-                </div>
-                <button
-                  type="button"
-                  className="pw-settings-x"
-                  aria-label={`删除资产 ${asset.name}`}
-                  title="删除（不可恢复）"
-                  onClick={() => remove(asset)}
-                >
-                  ✕
-                </button>
-              </div>
+              <AssetRow
+                key={asset.id}
+                asset={asset}
+                url={urls[asset.id]}
+                onVisible={refreshUrl}
+                onRename={(name) => {
+                  setAssets((list) =>
+                    list.map((a) => (a.id === asset.id ? { ...a, name } : a)),
+                  )
+                  void libraryStore.updateMeta(asset.id, { name })
+                }}
+                onTagsBlur={(raw) => commitTags(asset, raw)}
+                onRequestRemove={() => setPendingRemove(asset)}
+              />
             ))}
         </>
       )}
       {busy && <div className="pw-assets-hint">导入中…</div>}
       {error && <div className="pw-assets-hint pw-assets-error">{error}</div>}
+      {pendingRemove !== null && (
+        <ConfirmDeleteDialog
+          title="删除资产"
+          message={`删除「${pendingRemove.name}」？媒体文件将从资产库移除，此操作不可撤销。`}
+          onCancel={() => setPendingRemove(null)}
+          onConfirm={() => {
+            const target = pendingRemove
+            setPendingRemove(null)
+            remove(target)
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
+/** 类别内一行资产：缩略（懒加载 + 拖拽把手）+ 行内改名/标签 + 删除入口。
+ * 删除不可逆，✕ 只发起请求，由父级弹 ConfirmDeleteDialog 确认后执行。 */
+function AssetRow({
+  asset,
+  url,
+  onVisible,
+  onRename,
+  onTagsBlur,
+  onRequestRemove,
+}: {
+  readonly asset: LibraryAsset
+  readonly url?: string
+  readonly onVisible: (asset: LibraryAsset) => void
+  readonly onRename: (name: string) => void
+  readonly onTagsBlur: (raw: string) => void
+  readonly onRequestRemove: () => void
+}) {
+  return (
+    <div className="pw-asset">
+      <AssetThumb asset={asset} url={url} onVisible={onVisible} />
+      <div className="pw-asset-body">
+        <EditableName value={asset.name} ariaLabel={`资产名 ${asset.name}`} onChange={onRename} />
+        <input
+          className="pw-asset-tags"
+          defaultValue={asset.tags.join('，')}
+          placeholder="标签（逗号分隔，可选）"
+          aria-label={`资产标签 ${asset.name}`}
+          onBlur={(e) => onTagsBlur(e.target.value)}
+        />
+      </div>
+      <button
+        type="button"
+        className="pw-settings-x"
+        aria-label={`删除资产 ${asset.name}`}
+        title="删除（不可恢复）"
+        onClick={onRequestRemove}
+      >
+        ✕
+      </button>
     </div>
   )
 }

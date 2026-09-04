@@ -110,18 +110,19 @@ describe('AssetsPanel 类别内操作', () => {
 
   it('删除需确认：取消保留、确认移除并回收 blob URL', async () => {
     const spies = mockStore([asset()])
-    const confirmSpy = vi.fn(() => false)
-    vi.stubGlobal('confirm', confirmSpy)
     await enterCharacter()
     await screen.findByAltText('女主正面') // 等懒加载给 urls 赋值
 
+    // 应用内确认框（原生 window.confirm 在 WKWebView 无 UI 代理、静默 false）
     fireEvent.click(screen.getByRole('button', { name: '删除资产 女主正面' }))
+    expect(await screen.findByText(/删除「女主正面」？/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '取消' }))
     expect(screen.getByText('女主正面')).toBeTruthy() // 取消：仍在
     expect(spies.remove).not.toHaveBeenCalled()
 
-    confirmSpy.mockReturnValue(true)
-    const revokeSpy = vi.spyOn(URL, 'revokeObjectURL')
     fireEvent.click(screen.getByRole('button', { name: '删除资产 女主正面' }))
+    const revokeSpy = vi.spyOn(URL, 'revokeObjectURL')
+    fireEvent.click(await screen.findByRole('button', { name: '删除' }))
     expect(screen.queryByText('女主正面')).toBeNull()
     expect(spies.remove).toHaveBeenCalledWith('a1')
     expect(revokeSpy).toHaveBeenCalledWith('blob:mock-url')

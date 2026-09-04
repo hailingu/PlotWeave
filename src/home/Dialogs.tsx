@@ -5,6 +5,9 @@ import { useEffect, useRef, useState } from 'react'
  * 重命名（输入框，Enter 提交 / Esc 取消）与删除确认
  * （HIG：仅真正不可逆操作使用确认对话框）。
  * 复用编辑器的 pw-overlay / pw-dialog 材质样式。
+ * ConfirmDeleteDialog 泛化为 title/message 承载：首页删项目与资产库
+ * 删资产共用——原生 window.confirm 在 Tauri WKWebView 无 UI 代理实现、
+ * 静默返回 false，不可逆确认一律走应用内对话框。
  */
 
 interface RenameDialogProps {
@@ -75,13 +78,17 @@ export function RenameDialog({ currentName, onCancel, onConfirm }: RenameDialogP
 }
 
 interface ConfirmDeleteDialogProps {
-  readonly projectName: string
+  /** 对话框标题（如「删除项目」「删除资产」），同时作 aria-label。 */
+  readonly title: string
+  /** 正文：指名被删对象与不可撤销后果。 */
+  readonly message: string
   readonly onCancel: () => void
   readonly onConfirm: () => void
 }
 
 export function ConfirmDeleteDialog({
-  projectName,
+  title,
+  message,
   onCancel,
   onConfirm,
 }: ConfirmDeleteDialogProps) {
@@ -98,16 +105,14 @@ export function ConfirmDeleteDialog({
       <dialog
         open
         className="pw-dialog pw-dialog-sm"
-        aria-label="删除项目"
+        aria-label={title}
         onPointerDown={(e) => e.stopPropagation()}
       >
         <div className="pw-dialog-head">
-          <b>删除项目</b>
+          <b>{title}</b>
         </div>
         <div className="pw-dialog-body">
-          <p className="pw-dialog-text">
-            删除「{projectName}」？项目文件将从磁盘移除，此操作不可撤销。
-          </p>
+          <p className="pw-dialog-text">{message}</p>
         </div>
         <div className="pw-dialog-foot">
           <span className="pw-sp" />
