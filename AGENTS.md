@@ -155,15 +155,31 @@ exported symbols are always P3.
 
 ### Review Rounds And Convergence
 
-- Each pushed commit accepts at most one follow-up review round: iterative
-  "fresh evidence beyond the earlier finding" comments on the same code
-  location are resolved-without-change unless they meet the P1 standard.
-- When findings arrive in bulk, classify them under this section first,
-  summarize, and let the repository owner choose the response set; do not
-  default to fixing everything.
-- Record every "record, do not fix" decision as one line (location + reason)
-  in the pull request or an issue, so the decision stays traceable; no
-  exemption markers go into code.
+- **Round budget.** Each pushed commit accepts at most one follow-up review
+  round. A repeated finding without new evidence is resolved-without-change
+  by citing the existing disposition. A follow-up finding counts as new only
+  when it states at least one of: a new trigger condition, a newly violated
+  contract, or a regression introduced by the fix. Non-P1 findings beyond
+  the budget are closed without modification. Once the budget is spent,
+  automatic rework pauses and any further findings go to the repository
+  owner for adjudication; exhausting the budget never by itself approves,
+  merges, or passes any gate.
+- **Bulk triage.** When findings arrive in bulk, deduplicate first, then
+  classify each as a genuine defect, a pre-existing issue, an out-of-scope
+  suggestion, or a false positive, and summarize the classification. Fixes
+  that are necessary and already inside the authorized task scope MAY
+  proceed without waiting. Present the summary and let the repository owner
+  choose the response set only when a response would expand scope, accept a
+  risk, or change a contract. Do not force a human decision for every
+  batch, and do not default to fixing everything.
+- **Recording dispositions.** No exemption markers (`NOSONAR`, rule
+  suppressions) go into code. Ordinary suggestions resolved without change
+  MAY be recorded briefly — one line (location + reason) in the pull
+  request or an issue, so the decision stays traceable. Blocking or
+  disputed findings MUST be answered in the original review thread with the
+  resolving commit (or the decision not to change), the rationale, and the
+  verification evidence; a one-line pull-request or issue note alone does
+  not close them.
 
 ## Sources Of Truth
 
