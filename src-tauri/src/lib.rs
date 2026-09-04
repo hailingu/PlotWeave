@@ -14,6 +14,10 @@ mod prefs;
 mod seal;
 mod store;
 
+/// tauri.conf.json 窗口契约守卫（仅测试构建参与编译）。
+#[cfg(test)]
+mod conf;
+
 /// 启动 Tauri 应用；移动端通过 `mobile_entry_point` 复用同一入口。
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
