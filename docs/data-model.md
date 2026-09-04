@@ -107,6 +107,7 @@
 > 六十八轮评审修订（2026-08-31）：§9.1/§9.2/§9.4 区分「不进撤销栈」与「不持久化」两个维度——`transient` 收敛为手势过程帧语义，update_viewport 交互结束帧置脏随防抖落盘（§3 视口持久化契约）；§9.3/§9.4 补拖拽手势 inverse 捕获——正式 move_node 的逆操作取自手势开始时的原坐标，而非已被 transient 帧推进的 docBefore（否则 undo 只回到最后一个拖拽帧）；§10.5 `save_project` 信封校验扩为完整顶层形状——schemaVersion 严格等于当前支持版本，graph/settings 及其必需容器逐一判型，异型整次拒绝，杜绝落盘后由加载归一化清成空图的内容丢失。
 > 六十九轮评审修订（2026-08-31）：§9.4/§10.2 更正 update_node_ui 的持久化语义——`ui.selected`/`expanded` 是 §3 明确不持久化的会话态，update_node_ui 不置脏不落盘（纯选择操作不再触发保存、不刷新 updatedAt 改变首页排序），serializeProject 输出统一重置会话态初值；§10.5 `save_project` 信封校验补全 ProjectDocument 完整顶层契约——episodeTitles 普通对象及键值域、project.createdAt/updatedAt 可解析 ISO 8601、可选 description 字符串、graph.viewport 形状，异型整次拒绝。
 > 七十轮评审修订（2026-09-04）：§11.1 第 3 步空键改写域补 `ImageSpec.outputs.primary.assetId`（资产桶）——节点判别校验不再剥离空白 assetId（可能指向空键资产），交由空键重发改写：有映射改写到新 id、无映射的悬空空白剥离并警告（与 avatarAssetId/ShotRef.assetId 同口径）；§13 落地状态补生成结果写回为复合命令——资产入索引与 `outputs` 写回同栈撤销/重做（§7.3 库资产导入同构，撤销不留不可达索引条目）。
+> 七十一轮评审修订（2026-09-04）：§10.5 `llm_image_generate` 请求体不携带 `response_format`——GPT Image 系（gpt-image-1 等）不接受该参数（携带即 400 unsupported parameter，主路径在生成前失败）且总是返回 base64，DALL·E 系默认 url 响应由既有 url 成员回退下载兜住；§13 重新生成时旧产物若不再被任何其他节点引用（图片 `outputs.primary` / 分镜 `refs` 扫描）则随同一复合命令移出索引（undo 恢复、媒体文件留存待延迟回收），仍被引用或已不在索引则不动。
 > 适用范围：画布文档模型、设定与资产模型、命令与撤销、本地存储体系、AI Agent 交互。
 > 明确不在范围内：用户体系、租户、余额/计费。PlotWeave 是单用户 BYOK 桌面工具；若未来出现此类需求，另起《服务端领域模型》文档。
 

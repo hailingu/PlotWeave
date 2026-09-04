@@ -58,6 +58,7 @@ function imageNodeData(): ImageFlowNode['data'] {
 /** 最小 Harness：挂 useImageJobsState 并把 api 暴露给测试。 */
 function Harness(props: {
   readonly nodesRef: { current: CanvasNode[] }
+  readonly assetsRef: { current: { byId: Record<string, AssetRef> } | undefined }
   readonly applyDataPatch: (id: string, patch: Record<string, unknown>) => void
   readonly addAsset: (asset: AssetRef) => void
   readonly removeAsset: (assetId: string) => void
@@ -66,6 +67,7 @@ function Harness(props: {
   const { api } = useImageJobsState({
     projectId: 'p-1',
     nodesRef: props.nodesRef,
+    assetsRef: props.assetsRef,
     applyDataPatch: props.applyDataPatch,
     addAsset: props.addAsset,
     removeAsset: props.removeAsset,
@@ -91,7 +93,33 @@ function generatedJobId(): string {
   return (call?.[1] as { request: { jobId: string } } | undefined)?.request.jobId ?? ''
 }
 
-function setupHarness(opts: { resolveSettings?: Promise<AppSettings> } = {}) {
+/** 生成成功路径的公共脚手架：gen 返回 pa-9，validate 原样回显。 */
+function mockSuccessfulGeneration(): void {
+  vi.mocked(tauriInvoke).mockImplementation((cmd: string, args: unknown) => {
+    if (cmd === 'llm_image_generate') {
+      return Promise.resolve({
+        id: 'pa-9',
+        relPath: 'assets/pa-9.png',
+        mime: 'image/png',
+        source: 'generated',
+        createdAt: '2026-09-04T00:00:00.000Z',
+      })
+    }
+    if (cmd === 'validate_project_asset') {
+      return Promise.resolve((args as { asset?: unknown } | undefined)?.asset ?? {})
+    }
+    return Promise.resolve({})
+  })
+  vi.mocked(normalizeAssetRef).mockImplementation((raw) => raw as unknown as AssetRef)
+}
+
+function setupHarness(
+  opts: {
+    resolveSettings?: Promise<AppSettings>
+    nodes?: CanvasNode[]
+    assets?: { byId: Record<string, AssetRef> }
+  } = {},
+) {
   vi.mocked(settingsStore.load).mockImplementation(() => opts.resolveSettings ?? Promise.resolve(validSettings))
   const cmds = {
     applyDataPatch: vi.fn(),
@@ -100,9 +128,11 @@ function setupHarness(opts: { resolveSettings?: Promise<AppSettings> } = {}) {
     pushHistory: vi.fn(),
   }
   const nodesRef = {
-    current: [{ id: 'img1', type: 'image', data: imageNodeData() } as unknown as CanvasNode],
+    current:
+      opts.nodes ?? ([{ id: 'img1', type: 'image', data: imageNodeData() } as unknown as CanvasNode]),
   }
-  render(<Harness nodesRef={nodesRef} {...cmds} />)
+  const assetsRef = { current: opts.assets }
+  render(<Harness nodesRef={nodesRef} assetsRef={assetsRef} {...cmds} />)
   return cmds
 }
 
@@ -155,22 +185,7 @@ describe('生成调度状态机（§13）', () => {
 
   it('生成成功以复合命令入栈：undo 同步移除资产索引，redo 恢复（§7.3 同构）', async () => {
     ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
-    vi.mocked(tauriInvoke).mockImplementation((cmd: string, args: unknown) => {
-      if (cmd === 'llm_image_generate') {
-        return Promise.resolve({
-          id: 'pa-9',
-          relPath: 'assets/pa-9.png',
-          mime: 'image/png',
-          source: 'generated',
-          createdAt: '2026-09-04T00:00:00.000Z',
-        })
-      }
-      if (cmd === 'validate_project_asset') {
-        return Promise.resolve((args as { asset?: unknown } | undefined)?.asset ?? {})
-      }
-      return Promise.resolve({})
-    })
-    vi.mocked(normalizeAssetRef).mockImplementation((raw) => raw as unknown as AssetRef)
+    mockSuccessfulGeneration()
     const { applyDataPatch, addAsset, removeAsset, pushHistory } = setupHarness()
 
     void apiRef!.start('img1')
@@ -190,5 +205,74 @@ describe('生成调度状态机（§13）', () => {
     expect(applyDataPatch).toHaveBeenLastCalledWith('img1', {
       outputs: { primary: { assetId: 'pa-9' } },
     })
+  })
+
+  it('重新生成：旧产物不再被任何节点引用时随命令移出索引，undo 恢复（§7.3）', async () => {
+    ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
+    mockSuccessfulGeneration()
+    const oldAsset: AssetRef = {
+      id: 'pa-old',
+      relPath: 'assets/pa-old.png',
+      mime: 'image/png',
+      source: 'generated',
+      createdAt: '2026-09-01T00:00:00.000Z',
+    }
+    const { addAsset, removeAsset, pushHistory } = setupHarness({
+      nodes: [
+        {
+          id: 'img1',
+          type: 'image',
+          data: { ...imageNodeData(), outputs: { primary: { assetId: 'pa-old' } } },
+        } as unknown as CanvasNode,
+      ],
+      assets: { byId: { 'pa-old': oldAsset } },
+    })
+
+    void apiRef!.start('img1')
+    await waitFor(() => expect(pushHistory).toHaveBeenCalledTimes(1))
+    // 替换即回收：旧产物移出索引（媒体文件留存待延迟回收，§7.3）
+    expect(removeAsset).toHaveBeenCalledWith('pa-old')
+
+    const cmd = vi.mocked(pushHistory).mock.calls[0][0] as HistoryCommand
+    cmd.undo()
+    expect(addAsset).toHaveBeenCalledWith(oldAsset)
+    cmd.redo()
+    expect(removeAsset).toHaveBeenLastCalledWith('pa-old')
+  })
+
+  it('旧产物仍被分镜卡引用（或已不在索引）：不移出索引', async () => {
+    ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
+    mockSuccessfulGeneration()
+    const referenced = setupHarness({
+      nodes: [
+        {
+          id: 'img1',
+          type: 'image',
+          data: { ...imageNodeData(), outputs: { primary: { assetId: 'pa-old' } } },
+        } as unknown as CanvasNode,
+        {
+          id: 'shot1',
+          type: 'shot',
+          data: { refs: [{ id: 'r1', kind: 'image', assetId: 'pa-old' }] },
+        } as unknown as CanvasNode,
+      ],
+      assets: { byId: { 'pa-old': {} as AssetRef } },
+    })
+    void apiRef!.start('img1')
+    await waitFor(() => expect(referenced.pushHistory).toHaveBeenCalledTimes(1))
+    expect(referenced.removeAsset).not.toHaveBeenCalledWith('pa-old')
+
+    const dangling = setupHarness({
+      nodes: [
+        {
+          id: 'img1',
+          type: 'image',
+          data: { ...imageNodeData(), outputs: { primary: { assetId: 'pa-gone' } } },
+        } as unknown as CanvasNode,
+      ],
+    })
+    void apiRef!.start('img1')
+    await waitFor(() => expect(dangling.pushHistory).toHaveBeenCalledTimes(1))
+    expect(dangling.removeAsset).not.toHaveBeenCalledWith('pa-gone')
   })
 })

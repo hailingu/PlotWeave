@@ -663,6 +663,7 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
     <ImageGenProvider
       projectId={project.id}
       nodesRef={nodesRef}
+      assetsRef={assetsRef}
       applyDataPatch={applyDataPatch}
       addAsset={addAsset}
       removeAsset={removeAsset}

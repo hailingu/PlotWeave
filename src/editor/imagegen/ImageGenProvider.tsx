@@ -16,6 +16,7 @@ import { useImageJobsState } from './state'
 interface ImageGenProviderProps {
   readonly projectId: string
   readonly nodesRef: { current: CanvasNode[] }
+  readonly assetsRef: { current: { byId: Record<string, AssetRef> } | undefined }
   readonly applyDataPatch: (id: string, patch: Record<string, unknown>) => void
   readonly addAsset: (asset: AssetRef) => void
   readonly removeAsset: (assetId: string) => void
@@ -26,6 +27,7 @@ interface ImageGenProviderProps {
 export function ImageGenProvider({
   projectId,
   nodesRef,
+  assetsRef,
   applyDataPatch,
   addAsset,
   removeAsset,
@@ -35,6 +37,7 @@ export function ImageGenProvider({
   const { api, notice } = useImageJobsState({
     projectId,
     nodesRef,
+    assetsRef,
     applyDataPatch,
     addAsset,
     removeAsset,

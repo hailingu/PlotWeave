@@ -56,6 +56,7 @@ function setup(
     <ImageGenProvider
       projectId="p-1"
       nodesRef={nodesRef}
+      assetsRef={{ current: undefined }}
       applyDataPatch={vi.fn()}
       addAsset={vi.fn()}
       removeAsset={vi.fn()}

@@ -25,6 +25,8 @@ const PREVIEW_UNSUPPORTED = '浏览器预览不支持图像生成（媒体落盘
 export interface ImageJobsDeps {
   projectId: string
   nodesRef: { current: CanvasNode[] }
+  /** 资产索引镜像：替换产物时查旧产物记录（决定能否随命令移出索引）。 */
+  assetsRef: { current: { byId: Record<string, AssetRef> } | undefined }
   /** 纯状态写入（复合命令的初始应用与 undo/redo 共用，不单独入栈）。 */
   applyDataPatch: (id: string, patch: Record<string, unknown>) => void
   addAsset: (asset: AssetRef) => void
@@ -67,13 +69,26 @@ async function runGeneration(
   return normalizeAssetRef(checked as never)
 }
 
+/** 资产是否仍被任意节点引用（图片 outputs.primary / 分镜 refs）——
+ * 替换产物时判断旧产物能否安全移出索引（§7.3 索引删除、媒体留存回收）。 */
+function assetReferencedBy(nodes: CanvasNode[], assetId: string): boolean {
+  return nodes.some((n) => {
+    if (n.type === 'image') return n.data.outputs.primary?.assetId === assetId
+    if (n.type === 'shot') return n.data.refs.some((r) => r.assetId === assetId)
+    return false
+  })
+}
+
 /** 结果落位内核（成功路径）：签名守护 → 复合命令写回（资产入索引 +
  * outputs 纯状态写入同栈撤销/重做，§7.3 库资产导入同构——撤销不留
- * 不可达索引条目，媒体文件留存待回收）；输入已前进时经 dropResult
- * 丢弃并横幅提示（媒体文件留存待回收，§7.3）。 */
+ * 不可达索引条目，媒体文件留存待回收）；重新生成时旧产物若不再被
+ * 任何其他节点引用则随同一命令移出索引（undo 恢复），被引用或已不在
+ * 索引则保持不动；输入已前进时经 dropResult 丢弃并横幅提示（媒体
+ * 文件留存待回收，§7.3）。 */
 function applyGenerationResult(
   deps: {
     nodesRef: ImageJobsDeps['nodesRef']
+    assetsRef: ImageJobsDeps['assetsRef']
     applyDataPatch: ImageJobsDeps['applyDataPatch']
     addAsset: ImageJobsDeps['addAsset']
     removeAsset: ImageJobsDeps['removeAsset']
@@ -93,15 +108,29 @@ function applyGenerationResult(
   }
   const before = node.data.outputs
   const next = { ...before, primary: { assetId: asset.id } }
+  // 旧产物回收判定：换下了旧 primary 且其余节点不再引用且记录仍在索引
+  const prevId = before.primary?.assetId
+  const superseded =
+    prevId !== undefined &&
+    prevId !== asset.id &&
+    !assetReferencedBy(
+      deps.nodesRef.current.filter((n) => n.id !== nodeId),
+      prevId,
+    )
+      ? deps.assetsRef.current?.byId[prevId]
+      : undefined
   deps.addAsset(asset)
+  if (superseded !== undefined) deps.removeAsset(superseded.id)
   deps.applyDataPatch(nodeId, { outputs: next })
   deps.pushHistory({
     undo: () => {
       deps.removeAsset(asset.id)
+      if (superseded !== undefined) deps.addAsset(superseded)
       deps.applyDataPatch(nodeId, { outputs: before })
     },
     redo: () => {
       deps.addAsset(asset)
+      if (superseded !== undefined) deps.removeAsset(superseded.id)
       deps.applyDataPatch(nodeId, { outputs: next })
     },
   })
@@ -184,7 +213,8 @@ export function useImageJobsState(deps: ImageJobsDeps): {
   api: ImageGenApi
   notice: string | null
 } {
-  const { projectId, nodesRef, applyDataPatch, addAsset, removeAsset, pushHistory } = deps
+  const { projectId, nodesRef, assetsRef, applyDataPatch, addAsset, removeAsset, pushHistory } =
+    deps
   const [jobs, setJobs] = useState<Record<string, ImageJobView>>({})
   /** 异步完成时读取最新作业表（setState 闭包会拿到过期快照）；start 的
    * 同步占位也直接写此处（绕过 React 批处理窗口挡双击）。 */
@@ -214,12 +244,21 @@ export function useImageJobsState(deps: ImageJobsDeps): {
   const applyResult = useCallback(
     (nodeId: string, input: ImageGenInput, asset: AssetRef) =>
       applyGenerationResult(
-        { nodesRef, applyDataPatch, addAsset, removeAsset, pushHistory, clearJob, dropResult },
+        {
+          nodesRef,
+          assetsRef,
+          applyDataPatch,
+          addAsset,
+          removeAsset,
+          pushHistory,
+          clearJob,
+          dropResult,
+        },
         nodeId,
         input,
         asset,
       ),
-    [addAsset, applyDataPatch, clearJob, dropResult, nodesRef, pushHistory, removeAsset],
+    [addAsset, applyDataPatch, assetsRef, clearJob, dropResult, nodesRef, pushHistory, removeAsset],
   )
 
   /** 发起：同步验型 + running 守卫并**同步占位**（直接写 jobsRef，绕过

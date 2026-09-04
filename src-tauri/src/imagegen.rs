@@ -106,6 +106,14 @@ pub struct ImageGenRequest {
     size: String,
 }
 
+/// 生成请求体（§13）：只含 model/prompt/size——**不携带 `response_format`**：
+/// GPT Image 系（gpt-image-1 等）不接受该参数（携带即 400 unsupported
+/// parameter，主路径在生成前失败），且总是返回 base64；DALL·E 系默认 url
+/// 响应由响应侧 url 成员回退下载兜住。
+fn generation_request_body(model: &str, prompt: &str, size: &str) -> Value {
+    json!({ "model": model, "prompt": prompt, "size": size })
+}
+
 /// 文生图命令（§13）：成功返回 `source=generated` 的项目级 AssetRef，
 /// 前端经 `validate_project_asset` 预检后并入会话资产索引（§9.3 同域）。
 /// 请求返回后与落盘前各检查一次取消标志：协作式取消即放弃结果。
@@ -133,12 +141,7 @@ pub async fn llm_image_generate(app: AppHandle, request: ImageGenRequest) -> Res
     }
     let key = crate::prefs::provider_secret(&app, &provider_id)?;
     let url = format!("{}/images/generations", base_url.trim_end_matches('/'));
-    let body = json!({
-        "model": model,
-        "prompt": prompt,
-        "size": size,
-        "response_format": "b64_json",
-    });
+    let body = generation_request_body(&model, prompt, &size);
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(IMAGE_REQUEST_TIMEOUT_SECS))
         .build()
@@ -260,5 +263,17 @@ mod tests {
         assert!(is_cancelled(&job));
         clear_cancel(&job);
         assert!(!is_cancelled(&job));
+    }
+
+    #[test]
+    fn request_body_omits_response_format() {
+        // GPT Image 系（gpt-image-1 等）不接受 response_format（携带即
+        // 400 unsupported parameter，生成前的主路径直接失败）
+        let body = generation_request_body("gpt-image-1", "雨夜霓虹", "1024x1024");
+        assert_eq!(
+            body,
+            json!({ "model": "gpt-image-1", "prompt": "雨夜霓虹", "size": "1024x1024" })
+        );
+        assert!(body.get("response_format").is_none());
     }
 }
