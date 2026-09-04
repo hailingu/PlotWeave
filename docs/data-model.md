@@ -114,6 +114,7 @@
 > 七十五轮评审修订（2026-09-04）：§13 作业生命周期补「宿主节点删除」维度——running 作业的宿主图片节点被删即协作式取消（Rust 未过检查点即放弃）并清作业表；`runStart` 在设置加载返回后、提交生成前复核宿主仍在，不为已删节点发起计费请求；删除可撤销，undo 复活节点后作业已清、需重新生成。
 > 七十六轮评审修订（2026-09-04）：§13 旧产物回收的索引查找改自有属性检查（`hasOwnProperty`）——悬空 `primary.assetId` 按 §8.2.3 保留，其值可能是 `__proto__`/`constructor` 等原型链键名，普通对象桶的继承值不得被当成 AssetRef 回收（误回收会在 undo 注入畸形条目阻塞保存）；与图片节点渲染侧的按 id 解析同口径。
 > 七十七轮评审修订（2026-09-04）：§13 三处收口——① `runStart` 在设置加载返回后先过 `jobAlive` 身份复核再写状态/提交：被取消作业的迟到分支不得覆盖接替作业的 running（否则接替作业的已付费结果被误判丢弃），`clearJob` 改同步镜像清理（同一事件循环内「取消→重启」不被 running 守卫误挡）；② `llm_image_generate` 响应体流式限读（主响应 64 MiB 文本上限、url 回退 32 MiB 字节上限，超限即中止不落半截）——大小上限在物化前生效，恶意/异常 provider 的超大响应不再能耗尽内存；③ 删除图片节点时其产物若不再被幸存节点/角色头像引用则随同一删除命令移出索引（`doomedImageAssets` 判定与重新生成回收同口径，undo 恢复）。
+> 七十八轮评审修订（2026-09-04）：§13 图片节点工厂的默认尺寸对齐声明契约——`1024x1536` 竖版短剧画幅（`IMAGE_SIZES` 的默认推荐档），此前工厂误发 `1024x1024` 方图，用户不动尺寸直接生成会产出付费方图；§10.5 `llm_image_generate` 命令行同步第七十三轮后的实现事实（§9.3 预检在命令内、前端单次 IPC、响应体流式限读），消除与 §13 正文的矛盾。
 > 适用范围：画布文档模型、设定与资产模型、命令与撤销、本地存储体系、AI Agent 交互。
 > 明确不在范围内：用户体系、租户、余额/计费。PlotWeave 是单用户 BYOK 桌面工具；若未来出现此类需求，另起《服务端领域模型》文档。
 
@@ -941,7 +942,7 @@ provider 的 API key 以**密文 `keyEnc`** 存于 provider 配置：Rust `seal`
 | `get_settings()` / `update_settings(patch)` | 非敏感配置读写 |
 | `set_provider_key(provider, key)` | 加密并返回 envelope 密文（由前端随 settings 落盘；解密走 `seal::open`，无独立读命令） |
 | `llm_chat(messages, tools)` | LLM 请求代理：key 由 settings 密文在 Rust 内存解密，绕开 webview CORS（见 12.2） |
-| `llm_image_generate(request)` | 文生图代理（§13 首版）：单对象载荷（projectId/jobId/provider 配置/model/prompt/size），key 解密同 `llm_chat`；请求 OpenAI 兼容 `/images/generations`（b64_json 优先，url 成员回退下载），产物按字节魔数定型 MIME（PNG/JPEG/WebP/GIF，provider 声称的 content-type 不作为依据）、过 32 MiB 上限后经原子写内核落盘进项目 `assets/`，返回 `source=generated` 的 AssetRef（前端经 `validate_project_asset` 预检后并入索引）。请求返回后与落盘前各查一次取消标志：协作式取消即放弃结果 |
+| `llm_image_generate(request)` | 文生图代理（§13 首版）：单对象载荷（projectId/jobId/provider 配置/model/prompt/size），key 解密同 `llm_chat`；请求 OpenAI 兼容 `/images/generations`（b64_json 优先，url 成员回退下载），响应体流式限读（主响应 64 MiB 文本 / url 回退 32 MiB 字节，超限即中止）；产物按字节魔数定型 MIME（PNG/JPEG/WebP/GIF，provider 声称的 content-type 不作为依据）、过 32 MiB 上限后经原子写内核落盘进项目 `assets/`，§9.3 预检（形状 + 实路径复验）在命令内、返回前完成，前端单次 IPC 直收已校验的 `source=generated` AssetRef 并入索引。请求返回后与落盘前各查一次取消标志：协作式取消即放弃结果 |
 | `llm_image_cancel(jobId)` | 协作式取消：登记取消标志；进行中的 `llm_image_generate` 会在检查点放弃结果（HTTP 请求本身不中断，由超时约束兜底） |
 
 ## 十一、加载与归一化
