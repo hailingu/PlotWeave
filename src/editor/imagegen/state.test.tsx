@@ -10,6 +10,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, waitFor } from '@testing-library/react'
+import { useRef } from 'react'
 import type { AppSettings } from '../../settings/types'
 import { settingsStore } from '../../settings/settingsStore'
 import { normalizeAssetRef, tauriInvoke } from '../projectAssets'
@@ -56,9 +57,10 @@ function imageNodeData(): ImageFlowNode['data'] {
   return { prompt: '雨夜霓虹', model: '', size: '1024x1024', outputs: {} }
 }
 
-/** 最小 Harness：挂 useImageJobsState 并把 api 暴露给测试。 */
+/** 最小 Harness：挂 useImageJobsState 并把 api 暴露给测试；nodesRef 镜像
+ * nodes 属性（复刻 EditorView 的「状态 + ref 镜像」模式）。 */
 function Harness(props: {
-  readonly nodesRef: { current: CanvasNode[] }
+  readonly nodes: CanvasNode[]
   readonly assetsRef: { current: { byId: Record<string, AssetRef> } | undefined }
   readonly settings: Pick<ProjectSettings, 'characters'> & { locations?: unknown }
   readonly applyDataPatch: (id: string, patch: Record<string, unknown>) => void
@@ -66,9 +68,12 @@ function Harness(props: {
   readonly removeAsset: (assetId: string) => void
   readonly pushHistory: (cmd: HistoryCommand) => void
 }) {
+  const nodesRef = useRef(props.nodes)
+  nodesRef.current = props.nodes
   const { api } = useImageJobsState({
     projectId: 'p-1',
-    nodesRef: props.nodesRef,
+    nodes: props.nodes,
+    nodesRef,
     assetsRef: props.assetsRef,
     settingsRef: { current: props.settings },
     applyDataPatch: props.applyDataPatch,
@@ -128,14 +133,14 @@ function setupHarness(
     removeAsset: vi.fn(),
     pushHistory: vi.fn(),
   }
-  const nodesRef = {
-    current:
-      opts.nodes ?? ([{ id: 'img1', type: 'image', data: imageNodeData() } as unknown as CanvasNode]),
-  }
+  const nodes = opts.nodes ?? [{ id: 'img1', type: 'image', data: imageNodeData() } as unknown as CanvasNode]
   const assetsRef = { current: opts.assets }
   const settings = { characters: opts.characters ?? [], locations: [] as never[] }
-  render(<Harness nodesRef={nodesRef} assetsRef={assetsRef} settings={settings} {...cmds} />)
-  return cmds
+  const view = render(<Harness nodes={nodes} assetsRef={assetsRef} settings={settings} {...cmds} />)
+  /** 模拟节点表变化（删除/复活）——重挂同一 Harness 换 nodes。 */
+  const setNodes = (next: CanvasNode[]) =>
+    view.rerender(<Harness nodes={next} assetsRef={assetsRef} settings={settings} {...cmds} />)
+  return { ...cmds, setNodes }
 }
 
 describe('生成调度：发起与双击占位（§13）', () => {
@@ -211,6 +216,43 @@ describe('生成调度：结果落位复合命令（§7.3 同构）', () => {
     expect(applyDataPatch).toHaveBeenLastCalledWith('img1', {
       outputs: { primary: { assetId: 'pa-9' } },
     })
+  })
+})
+
+describe('生成调度：宿主节点删除（§13 作业生命周期）', () => {
+  it('running 作业的宿主节点被删：协作式取消并清作业表（undo 复活后重新生成）', async () => {
+    ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
+    vi.mocked(tauriInvoke).mockImplementation((cmd: string) => {
+      if (cmd === 'llm_image_generate') return new Promise(() => {})
+      return Promise.resolve({})
+    })
+    const { setNodes } = setupHarness()
+
+    void apiRef!.start('img1')
+    await waitFor(() => expect(generateCount()).toBe(1))
+    const jobId = generatedJobId()
+
+    setNodes([]) // 删除 img1：Provider 仍挂载，靠节点观察取消
+    await waitFor(() => expect(tauriInvoke).toHaveBeenCalledWith('llm_image_cancel', { jobId }))
+  })
+
+  it('设置加载间隙中宿主节点被删：提交前复核，不发起计费请求', async () => {
+    ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
+    let resolveSettings!: (s: AppSettings) => void
+    const gate = new Promise<AppSettings>((res) => {
+      resolveSettings = res
+    })
+    vi.mocked(tauriInvoke).mockImplementation((cmd: string) => {
+      if (cmd === 'llm_image_generate') return new Promise(() => {})
+      return Promise.resolve({})
+    })
+    const { setNodes } = setupHarness({ resolveSettings: gate })
+
+    void apiRef!.start('img1')
+    setNodes([]) // 设置 IPC 未返回时删除节点
+    resolveSettings(validSettings)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(generateCount()).toBe(0)
   })
 })
 

@@ -37,6 +37,7 @@ function setup(data: ImageFlowNode['data']) {
   render(
     <ImageGenProvider
       projectId="p-1"
+      nodes={nodesRef.current}
       nodesRef={nodesRef}
       assetsRef={{ current: undefined }}
       settings={{ characters: [] }}

@@ -14,9 +14,11 @@ import { ImageGenContext } from './context'
 import { useImageJobsState } from './state'
 
 /** Provider 依赖：均取 EditorView 的稳定引用（ref/命令栈与状态写入回调）；
- * settings 为会话状态（内部建镜像供调度内核读最新引用位）。 */
+ * nodes 为反应式节点表（宿主删除观察）、settings 为会话状态（内部建
+ * 镜像供调度内核读最新引用位）。 */
 interface ImageGenProviderProps {
   readonly projectId: string
+  readonly nodes: CanvasNode[]
   readonly nodesRef: { current: CanvasNode[] }
   readonly assetsRef: { current: { byId: Record<string, AssetRef> } | undefined }
   readonly settings: Pick<ProjectSettings, 'characters'>
@@ -29,6 +31,7 @@ interface ImageGenProviderProps {
 
 export function ImageGenProvider({
   projectId,
+  nodes,
   nodesRef,
   assetsRef,
   settings,
@@ -43,6 +46,7 @@ export function ImageGenProvider({
   settingsMirrorRef.current = settings
   const { api, notice } = useImageJobsState({
     projectId,
+    nodes,
     nodesRef,
     assetsRef,
     settingsRef: settingsMirrorRef,

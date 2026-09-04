@@ -7,7 +7,15 @@
  * 取消全部 running 作业（§13 作业生命周期 = 编辑器挂载期）。无状态的
  * 过程内核（runStart/applyGenerationResult）为模块级纯函数。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from 'react'
 import type { AssetRef } from '../../model/document'
 import { settingsStore } from '../../settings/settingsStore'
 import { uid } from '../../uid'
@@ -25,6 +33,8 @@ const PREVIEW_UNSUPPORTED = '浏览器预览不支持图像生成（媒体落盘
 /** 调度内核的依赖：EditorView 的稳定引用（ref/命令栈与状态写入回调）。 */
 export interface ImageJobsDeps {
   projectId: string
+  /** 反应式节点表：宿主节点删除观察（nodesRef 只读镜像不触发重渲染）。 */
+  nodes: CanvasNode[]
   nodesRef: { current: CanvasNode[] }
   /** 资产索引镜像：替换产物时查旧产物记录（决定能否随命令移出索引）。 */
   assetsRef: { current: { byId: Record<string, AssetRef> } | undefined }
@@ -147,13 +157,15 @@ function applyGenerationResult(
 }
 
 /** 发起内核：解析计划 → 执行作业（结果经 applyResult 落位）。作业占位由
- * start 同步完成（双击窗口内不重复发起计费请求），此处只消费 jobId。 */
+ * start 同步完成（双击窗口内不重复发起计费请求），此处只消费 jobId；
+ * 设置加载间隙中宿主节点可能被删——提交前复核，不为已删节点付账。 */
 async function runStart(
   deps: {
     projectId: string
     nodesRef: ImageJobsDeps['nodesRef']
     jobAlive: (nodeId: string, jobId: string) => boolean
     setJobError: (nodeId: string, message: string) => void
+    clearJob: (nodeId: string) => void
     applyResult: (nodeId: string, input: ImageGenInput, asset: AssetRef) => void
   },
   nodeId: string,
@@ -172,6 +184,10 @@ async function runStart(
   const plan = resolveImageGenPlan(node.data, await settingsStore.load())
   if (!plan.ok) {
     deps.setJobError(nodeId, plan.message)
+    return
+  }
+  if (!deps.nodesRef.current.some((n) => n.id === nodeId)) {
+    deps.clearJob(nodeId)
     return
   }
   const input: ImageGenInput = {
@@ -218,38 +234,71 @@ function useJobWriteGuard(
   )
 }
 
-/** 生成作业的状态机与调度回调（ImageGenProvider 挂载一次）。 */
-export function useImageJobsState(deps: ImageJobsDeps): {
-  api: ImageGenApi
+/** 宿主节点删除观察（§13 作业生命周期）：running 作业的宿主节点被删即
+ * 协作式取消（Rust 未过检查点即放弃结果）并清作业表——不为已删节点
+ * 白白支付、不留孤儿媒体；结果若已过检查点返回，jobAlive 已清即静默
+ * 丢弃。删除可撤销：undo 复活节点后作业已清，重新生成即可。 */
+function useNodeDeletionWatch(
+  nodes: CanvasNode[],
+  jobsRef: { current: Record<string, ImageJobView> },
+  clearJob: (nodeId: string) => void,
+): void {
+  useEffect(() => {
+    const alive = new Set(nodes.map((n) => n.id))
+    for (const [nodeId, job] of Object.entries(jobsRef.current)) {
+      if (job?.status !== 'running' || alive.has(nodeId)) continue
+      void tauriInvoke('llm_image_cancel', { jobId: job.jobId }).catch(() => {})
+      clearJob(nodeId)
+    }
+  }, [nodes, jobsRef, clearJob])
+}
+
+/** 作业表状态族（useImageJobsState 的状态层）：jobs 表与 ref 镜像、
+ * 错误写入、清表与签名丢弃横幅。 */
+function useJobTable(): {
+  jobs: Record<string, ImageJobView>
+  setJobs: Dispatch<SetStateAction<Record<string, ImageJobView>>>
+  jobsRef: { current: Record<string, ImageJobView> }
   notice: string | null
+  setJobError: (nodeId: string, message: string) => void
+  clearJob: (nodeId: string) => void
+  dropResult: (nodeId: string) => void
 } {
-  const { projectId, nodesRef, assetsRef, settingsRef, applyDataPatch, addAsset, removeAsset, pushHistory } =
-    deps
   const [jobs, setJobs] = useState<Record<string, ImageJobView>>({})
   /** 异步完成时读取最新作业表（setState 闭包会拿到过期快照）；start 的
    * 同步占位也直接写此处（绕过 React 批处理窗口挡双击）。 */
   const jobsRef = useRef(jobs)
   jobsRef.current = jobs
   const [notice, setNotice] = useState<string | null>(null)
-  /** 作业写回守卫：卸载协作式取消 + 存活/身份判定（useJobWriteGuard）。 */
-  const jobAlive = useJobWriteGuard(jobsRef)
-
   const setJobError = useCallback((nodeId: string, message: string) => {
     setJobs((cur) => ({ ...cur, [nodeId]: { status: 'error', message } }))
   }, [])
-
   const clearJob = useCallback((nodeId: string) => {
     setJobs((cur) => {
       if (!(nodeId in cur)) return cur
       return Object.fromEntries(Object.entries(cur).filter(([k]) => k !== nodeId))
     })
   }, [])
-
   const dropResult = useCallback((nodeId: string) => {
     setNotice(
       `图片节点 ${nodeId} 的输入已修改，本次生成结果已丢弃（媒体文件留存待回收，可重新生成）`,
     )
   }, [])
+  return { jobs, setJobs, jobsRef, notice, setJobError, clearJob, dropResult }
+}
+
+/** 生成作业的状态机与调度回调（ImageGenProvider 挂载一次）。 */
+export function useImageJobsState(deps: ImageJobsDeps): {
+  api: ImageGenApi
+  notice: string | null
+} {
+  const { projectId, nodes, nodesRef, assetsRef, settingsRef, applyDataPatch, addAsset, removeAsset, pushHistory } =
+    deps
+  const { jobs, setJobs, jobsRef, notice, setJobError, clearJob, dropResult } = useJobTable()
+  /** 作业写回守卫：卸载协作式取消 + 存活/身份判定（useJobWriteGuard）。 */
+  const jobAlive = useJobWriteGuard(jobsRef)
+  /** 宿主节点删除观察：running 作业随宿主删除协作式取消并清表。 */
+  useNodeDeletionWatch(nodes, jobsRef, clearJob)
 
   const applyResult = useCallback(
     (nodeId: string, input: ImageGenInput, asset: AssetRef) =>
@@ -293,9 +342,9 @@ export function useImageJobsState(deps: ImageJobsDeps): {
       const jobId = uid('imgjob')
       jobsRef.current = { ...jobsRef.current, [nodeId]: { status: 'running', jobId } }
       setJobs(jobsRef.current)
-      void runStart({ projectId, nodesRef, jobAlive, setJobError, applyResult }, nodeId, jobId)
+      void runStart({ projectId, nodesRef, jobAlive, setJobError, clearJob, applyResult }, nodeId, jobId)
     },
-    [applyResult, jobAlive, nodesRef, projectId, setJobError],
+    [applyResult, clearJob, jobAlive, jobsRef, nodesRef, projectId, setJobError, setJobs],
   )
 
   const cancel = useCallback(
@@ -306,7 +355,7 @@ export function useImageJobsState(deps: ImageJobsDeps): {
       clearJob(nodeId)
       void tauriInvoke('llm_image_cancel', { jobId }).catch(() => {})
     },
-    [clearJob],
+    [clearJob, jobsRef],
   )
 
   const api = useMemo<ImageGenApi>(
