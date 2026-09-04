@@ -128,25 +128,19 @@ pub(crate) fn provider_secret(app: &AppHandle, provider_id: &str) -> Result<Stri
     }
 }
 
-/// LLM 对话代理（§6/数据模型 §12.2）：key 的密文存 settings.json，
-/// 请求前在 Rust 内存中解密——明文不出后端；前端只传 provider 配置、
-/// 消息列表与可选工具表。OpenAI 兼容 chat completions，非流式；
-/// 返回 choices[0].message 原文（content 字符串 + 可选 tool_calls 数组）。
-#[tauri::command]
-pub async fn llm_chat(
-    app: AppHandle,
-    provider_id: String,
-    base_url: String,
-    model: String,
+/// 对话补全传输内核（不含 AppHandle 与密文解析，便于对接本地 HTTP
+/// 夹具做行为测试）：构造带超时的客户端、发送 OpenAI 兼容补全请求、
+/// 响应体流式限读后提取 choices[0].message。`timeout_secs` 由调用方
+/// 注入——生产为 CHAT_REQUEST_TIMEOUT_SECS；测试注入短超时以驱动
+/// 慢速/挂起响应路径，不必等待真实上限。
+async fn chat_completion(
+    base_url: &str,
+    model: &str,
     messages: serde_json::Value,
     tools: Option<serde_json::Value>,
+    key: &str,
+    timeout_secs: u64,
 ) -> Result<serde_json::Value, String> {
-    validate_provider_id(&provider_id)?;
-    if model.trim().is_empty() {
-        return Err("未选择模型".into());
-    }
-    let key = provider_secret(&app, &provider_id)?;
-
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     let mut body = serde_json::json!({ "model": model, "messages": messages, "stream": false });
     if let Some(tools) = tools {
@@ -156,7 +150,7 @@ pub async fn llm_chat(
         }
     }
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(CHAT_REQUEST_TIMEOUT_SECS))
+        .timeout(Duration::from_secs(timeout_secs))
         .build()
         .map_err(|e| format!("构造 HTTP 客户端失败：{e}"))?;
     let response = client
@@ -167,7 +161,7 @@ pub async fn llm_chat(
         .await
         .map_err(|e| {
             if e.is_timeout() {
-                format!("请求超时（{CHAT_REQUEST_TIMEOUT_SECS}s）：{e}")
+                format!("请求超时（{timeout_secs}s）：{e}")
             } else {
                 format!("请求失败：{e}")
             }
@@ -187,9 +181,40 @@ pub async fn llm_chat(
         .ok_or_else(|| "服务未返回回复内容".to_string())
 }
 
+/// LLM 对话代理（§6/数据模型 §12.2）：key 的密文存 settings.json，
+/// 请求前在 Rust 内存中解密——明文不出后端；前端只传 provider 配置、
+/// 消息列表与可选工具表。OpenAI 兼容 chat completions，非流式；
+/// 返回 choices[0].message 原文（content 字符串 + 可选 tool_calls 数组）。
+#[tauri::command]
+pub async fn llm_chat(
+    app: AppHandle,
+    provider_id: String,
+    base_url: String,
+    model: String,
+    messages: serde_json::Value,
+    tools: Option<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    validate_provider_id(&provider_id)?;
+    if model.trim().is_empty() {
+        return Err("未选择模型".into());
+    }
+    let key = provider_secret(&app, &provider_id)?;
+    chat_completion(
+        &base_url,
+        &model,
+        messages,
+        tools,
+        &key,
+        CHAT_REQUEST_TIMEOUT_SECS,
+    )
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
 
     #[test]
     fn provider_id_rules() {
@@ -208,5 +233,132 @@ mod tests {
         assert!(CHAT_REQUEST_TIMEOUT_SECS >= 120);
         assert!(CHAT_RESPONSE_BODY_MAX_BYTES >= 1024 * 1024);
         assert!(CHAT_RESPONSE_BODY_MAX_BYTES <= 16 * 1024 * 1024);
+    }
+
+    /// 本地 HTTP 夹具：环回一次性 TCP 服务器，接受一次连接后按给定脚本
+    /// 处理（丢弃请求、写出响应、可保持连接模拟慢速/挂起）。返回基址。
+    /// 强制 NO_PROXY 环回直连，防环境代理劫持夹具流量。
+    fn spawn_local_http(handler: impl FnOnce(TcpStream) + Send + 'static) -> String {
+        std::env::set_var("NO_PROXY", "127.0.0.1,localhost");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("绑定环回端口");
+        let port = listener.local_addr().expect("读取端口").port();
+        std::thread::spawn(move || {
+            if let Ok((stream, _)) = listener.accept() {
+                handler(stream);
+            }
+        });
+        format!("http://127.0.0.1:{port}")
+    }
+
+    /// 请求体积小于缓冲：尽力读一次即丢弃，防客户端写端阻塞。
+    fn drain_request(stream: &mut TcpStream) {
+        let mut buf = [0u8; 8192];
+        let _ = stream.read(&mut buf);
+    }
+
+    #[test]
+    fn chat_completion_returns_choices0_message_over_local_http() {
+        let payload = serde_json::json!({
+            "choices": [{ "message": { "role": "assistant", "content": "你好" } }]
+        })
+        .to_string();
+        let base_url = spawn_local_http(move |mut stream| {
+            drain_request(&mut stream);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{payload}",
+                payload.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+        });
+        let result = tauri::async_runtime::block_on(chat_completion(
+            &base_url,
+            "test-model",
+            serde_json::json!([{ "role": "user", "content": "hi" }]),
+            None,
+            "sk-test",
+            30,
+        ));
+        assert_eq!(result.expect("应返回 message 对象")["content"], "你好");
+    }
+
+    #[test]
+    fn chat_completion_rejects_oversize_body_from_local_http() {
+        // 超 16 MiB 上限一字节：流式限读须在物化前拒绝（评审第 2 条行为
+        // 回归测试——常量必须真实作用于传输路径）
+        let total = CHAT_RESPONSE_BODY_MAX_BYTES + 1;
+        let base_url = spawn_local_http(move |mut stream| {
+            drain_request(&mut stream);
+            let header = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {total}\r\n\r\n"
+            );
+            let _ = stream.write_all(header.as_bytes());
+            let chunk = vec![b'a'; 65536];
+            let mut sent = 0usize;
+            while sent < total {
+                let n = total.saturating_sub(sent).min(chunk.len());
+                // 客户端在超限处断开：写端报错即终止，不阻塞线程
+                if stream.write_all(&chunk[..n]).is_err() {
+                    break;
+                }
+                sent += n;
+            }
+        });
+        let result = tauri::async_runtime::block_on(chat_completion(
+            &base_url,
+            "test-model",
+            serde_json::json!([{ "role": "user", "content": "hi" }]),
+            None,
+            "sk-test",
+            30,
+        ));
+        let err = result.expect_err("超限响应应被拒绝");
+        assert!(err.contains("响应体超过"), "实际错误：{err}");
+        assert!(
+            err.contains(&CHAT_RESPONSE_BODY_MAX_BYTES.to_string()),
+            "实际错误：{err}"
+        );
+    }
+
+    #[test]
+    fn chat_completion_classifies_body_read_timeout() {
+        // 只写响应头并保持连接：模拟 provider 回完 headers 后慢速滴流/
+        // 挂起——总超时在响应体读取阶段触发，错误必须保留超时分类
+        // （评审第 1 条）
+        let base_url = spawn_local_http(move |mut stream| {
+            drain_request(&mut stream);
+            let _ = stream.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 64\r\n\r\n",
+            );
+            std::thread::sleep(std::time::Duration::from_secs(10));
+        });
+        let result = tauri::async_runtime::block_on(chat_completion(
+            &base_url,
+            "test-model",
+            serde_json::json!([{ "role": "user", "content": "hi" }]),
+            None,
+            "sk-test",
+            1,
+        ));
+        let err = result.expect_err("挂起的响应体应超时");
+        assert!(err.contains("读取响应超时"), "实际错误：{err}");
+    }
+
+    #[test]
+    fn chat_completion_classifies_send_phase_timeout() {
+        // 收到请求后不回任何字节：总超时在 send 阶段触发
+        let base_url = spawn_local_http(move |mut stream| {
+            drain_request(&mut stream);
+            std::thread::sleep(std::time::Duration::from_secs(10));
+        });
+        let result = tauri::async_runtime::block_on(chat_completion(
+            &base_url,
+            "test-model",
+            serde_json::json!([{ "role": "user", "content": "hi" }]),
+            None,
+            "sk-test",
+            1,
+        ));
+        let err = result.expect_err("不回包应超时");
+        assert!(err.contains("请求超时"), "实际错误：{err}");
     }
 }

@@ -14,18 +14,22 @@ pub(crate) fn append_capped(buf: &mut Vec<u8>, chunk: &[u8], cap: usize) -> Resu
     Ok(())
 }
 
-/// 有上限地流式读取响应体为 UTF-8 文本（非流式 JSON 主响应）。
+/// 有上限地流式读取响应体为 UTF-8 文本（非流式 JSON 主响应）。读取
+/// 阶段的超时（总超时在 send 成功后才触发，如 provider 回完 headers
+/// 后慢速滴流/挂起）单独分类，与一般读取失败可区分（issue #15）。
 pub(crate) async fn read_text_capped(
     response: reqwest::Response,
     cap: usize,
 ) -> Result<String, String> {
     let mut resp = response;
     let mut buf = Vec::new();
-    while let Some(chunk) = resp
-        .chunk()
-        .await
-        .map_err(|e| format!("读取响应失败：{e}"))?
-    {
+    while let Some(chunk) = resp.chunk().await.map_err(|e| {
+        if e.is_timeout() {
+            format!("读取响应超时：{e}")
+        } else {
+            format!("读取响应失败：{e}")
+        }
+    })? {
         append_capped(&mut buf, &chunk, cap)?;
     }
     String::from_utf8(buf).map_err(|e| format!("响应不是有效 UTF-8：{e}"))
