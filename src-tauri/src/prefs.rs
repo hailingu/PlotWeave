@@ -10,8 +10,20 @@
 
 use std::fs;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use tauri::{AppHandle, Manager};
+
+/// 对话请求超时（120s）：非流式补全耗时可能长于普通 API（长回复、慢
+/// 模型），但不长于图像生成（imagegen 取 300s）——落 issue #15 验收
+/// 基线"不低于 120s"，防 provider 网关不回包/慢速滴流时命令无限挂起。
+const CHAT_REQUEST_TIMEOUT_SECS: u64 = 120;
+
+/// 对话响应体读取上限（16 MiB）：chat completions 主响应为纯 JSON 文本
+/// （无 base64 图像膨胀），约为 imagegen 上限（64 MiB）的 1/4——容纳
+/// 超长回复与工具调用数组的 JSON 开销仍有余量，超大响应经流式限读在
+/// 物化前被拒（issue #15）。
+const CHAT_RESPONSE_BODY_MAX_BYTES: usize = 16 * 1024 * 1024;
 
 /// 钥匙串服务名（应用标识）。
 const KEYCHAIN_SERVICE: &str = "com.plotweave.app";
@@ -143,19 +155,25 @@ pub async fn llm_chat(
             body["tool_choice"] = serde_json::json!("auto");
         }
     }
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(CHAT_REQUEST_TIMEOUT_SECS))
+        .build()
+        .map_err(|e| format!("构造 HTTP 客户端失败：{e}"))?;
     let response = client
         .post(&url)
         .bearer_auth(key)
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("请求失败：{e}"))?;
+        .map_err(|e| {
+            if e.is_timeout() {
+                format!("请求超时（{CHAT_REQUEST_TIMEOUT_SECS}s）：{e}")
+            } else {
+                format!("请求失败：{e}")
+            }
+        })?;
     let status = response.status();
-    let text = response
-        .text()
-        .await
-        .map_err(|e| format!("读取响应失败：{e}"))?;
+    let text = crate::http_util::read_text_capped(response, CHAT_RESPONSE_BODY_MAX_BYTES).await?;
     if !status.is_success() {
         let head: String = text.chars().take(200).collect();
         return Err(format!("服务返回 {status}：{head}"));
@@ -180,5 +198,15 @@ mod tests {
         assert!(validate_provider_id("").is_err());
         assert!(validate_provider_id("a/b").is_err());
         assert!(validate_provider_id(&"x".repeat(65)).is_err());
+    }
+
+    #[test]
+    fn chat_defense_limits_meet_issue_baseline() {
+        // issue #15 验收基线：对话为非流式补全（长回复、慢模型），超时
+        // 不低于 120s；主响应是纯 JSON 文本（无 base64 图像膨胀），上限
+        // 无需 64 MiB，按对话 JSON 合理放宽（16 MiB 量级）。
+        assert!(CHAT_REQUEST_TIMEOUT_SECS >= 120);
+        assert!(CHAT_RESPONSE_BODY_MAX_BYTES >= 1024 * 1024);
+        assert!(CHAT_RESPONSE_BODY_MAX_BYTES <= 16 * 1024 * 1024);
     }
 }
