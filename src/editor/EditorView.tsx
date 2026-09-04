@@ -30,7 +30,7 @@ import BranchNode from './nodes/BranchNode'
 import ShotNode from './nodes/ShotNode'
 import ImageNode from './nodes/ImageNode'
 import { ImageGenProvider } from './imagegen/ImageGenProvider'
-import { doomedImageAssets } from './imagegen/state'
+import { useNodeDeletion } from './useNodeDeletion'
 import BranchEdge from './edges/BranchEdge'
 import LeftPanel from './panels/LeftPanel'
 import RightPanel, { type RightTab } from './panels/RightPanel'
@@ -338,41 +338,19 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
     [pushHistory, setNodes],
   )
 
-  /** 🗑 删除一组节点及其全部连线：入栈可撤销（§4.3 删除可撤销，无需确认）。
-   * 被删图片节点的产物若不再被引用，随同一命令移出索引（§7.3，undo 恢复）。 */
-  const deleteNodesByIds = useCallback(
-    (ids: string[]) => {
-      const idSet = new Set(ids)
-      const removedNodes = nodesRef.current.filter((n) => idSet.has(n.id))
-      if (removedNodes.length === 0) return
-      const removedEdges = edgesRef.current.filter(
-        (e) => idSet.has(e.source) || idSet.has(e.target),
-      )
-      const doomed = doomedImageAssets(
-        removedNodes,
-        nodesRef.current.filter((n) => !idSet.has(n.id)),
-        settings.characters,
-        assetsRef.current?.byId,
-      )
-      const apply = (remove: boolean) => {
-        setNodes((nds) =>
-          remove
-            ? nds.filter((n) => !idSet.has(n.id))
-            : [...nds, ...removedNodes],
-        )
-        setEdges((eds) =>
-          remove
-            ? eds.filter((e) => !idSet.has(e.source) && !idSet.has(e.target))
-            : [...eds, ...removedEdges],
-        )
-        doomed.forEach((a) => (remove ? removeAsset(a.id) : addAsset(a)))
-      }
-      apply(true)
-      pushHistory({ undo: () => apply(false), redo: () => apply(true) })
-      setOpenSettingsId(null)
-    },
-    [addAsset, pushHistory, removeAsset, setEdges, setNodes, settings.characters],
-  )
+  /** 🗑 节点删除（§4.3 可撤销 + §7.3 产物回收）拆至 useNodeDeletion。 */
+  const deleteNodesByIds = useNodeDeletion({
+    nodesRef,
+    edgesRef,
+    settings,
+    assetsRef,
+    addAsset,
+    removeAsset,
+    setNodes,
+    setEdges,
+    pushHistory,
+    closeSettings,
+  })
 
   /** 删除一组连线（选中边 + Delete）：入栈可撤销。 */
   const deleteEdgesByIds = useCallback(

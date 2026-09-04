@@ -118,6 +118,62 @@ describe('SettingsView 默认模型分段', () => {
     expect(onClose).toHaveBeenCalledTimes(1)
   })
 
+  it('防抖已触发、save 在途时点「完成」：等在途 save 完成才切换界面', async () => {
+    let resolveSave!: (v: void) => void
+    const saveSpy = vi.spyOn(settingsStore, 'save').mockImplementation(
+      () => new Promise<void>((res) => (resolveSave = res)),
+    )
+    const onClose = vi.fn()
+    render(<SettingsView onClose={onClose} />)
+    await screen.findByText('OpenAI 兼容')
+    vi.useFakeTimers()
+    fireEvent.change(screen.getByRole('combobox', { name: /图像生成模型/ }), {
+      target: { value: 'openai:gpt-4o' },
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600)
+    })
+    expect(saveSpy).toHaveBeenCalledTimes(1) // 防抖已触发、save 在途
+    fireEvent.click(screen.getByRole('button', { name: '关闭设置' }))
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(onClose).not.toHaveBeenCalled() // 在途 save 未完成：不切换界面
+    await act(async () => {
+      resolveSave()
+      await Promise.resolve()
+    })
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect(saveSpy.mock.calls[0][0].defaultImage).toBe('openai:gpt-4o')
+  })
+
+  it('关闭冲刷 save 失败：页面保持打开、错误可见，快照保留可重试', async () => {
+    let fail = true
+    vi.spyOn(settingsStore, 'save').mockImplementation(() =>
+      fail ? Promise.reject(new Error('IPC 失败')) : Promise.resolve(),
+    )
+    const onClose = vi.fn()
+    render(<SettingsView onClose={onClose} />)
+    await screen.findByText('OpenAI 兼容')
+    fireEvent.change(screen.getByRole('combobox', { name: /图像生成模型/ }), {
+      target: { value: 'openai:gpt-4o' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '关闭设置' }))
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(onClose).not.toHaveBeenCalled() // 失败不关闭
+    expect(await screen.findByText(/保存设置失败/)).toBeTruthy()
+    fail = false
+    fireEvent.click(screen.getByRole('button', { name: '关闭设置' })) // 重试
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
   it('禁用所有 provider 后提示暂无可用模型', async () => {
     render(<SettingsView onClose={vi.fn()} />)
     await screen.findByText('OpenAI 兼容')
