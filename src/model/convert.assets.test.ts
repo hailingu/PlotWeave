@@ -7,15 +7,42 @@ import { describe, expect, it } from 'vitest'
 import { parseProject, serializeProject } from './convert'
 import { NOW, mkContent } from './convertFixtures'
 
-describe('归一化：assets.byId 完整 AssetRef 形状校验（§11.3，Rust 保存边界的加载侧对等）', () => {
-  const goodAsset = {
-    id: 'a-1',
-    relPath: 'assets/lin.png',
-    mime: 'image/png',
-    source: 'upload',
-    createdAt: '2026-08-01T00:00:00.000Z',
-  }
+/** 形状合法的样例资产条目（用例只经展开拷贝改写，不就地变更）。 */
+const goodAsset = {
+  id: 'a-1',
+  relPath: 'assets/lin.png',
+  mime: 'image/png',
+  source: 'upload',
+  createdAt: '2026-08-01T00:00:00.000Z',
+}
 
+/** 可改写的脏 v1 文档视图（资产索引 + 节点，targetId 用例共用）。 */
+type RefDoc = {
+  graph: { nodes: Record<string, unknown>[] }
+  settings: Record<string, Record<string, Record<string, unknown>>>
+  assets: { byId: Record<string, Record<string, unknown>> }
+}
+
+/** 构造指定 id/relPath/mime 的合法资产条目。 */
+const mkAsset = (id: string, relPath: string, mime: string) => ({
+  id,
+  relPath,
+  mime,
+  source: 'upload',
+  createdAt: '2026-08-01T00:00:00.000Z',
+})
+
+/** 就地改写 sh1 分镜节点的引用位列表。 */
+const setRefs = (doc: RefDoc, refs: unknown[]) => {
+  const shot = doc.graph.nodes.find((n) => n.id === 'sh1')!
+  ;(shot.data as { spec: { refs: unknown[] } }).spec.refs = refs
+}
+
+/** 取解析结果中 sh1 分镜节点的引用位列表。 */
+const refsOf = (round: ReturnType<typeof parseProject>) =>
+  (round.content.nodes.find((n) => n.id === 'sh1')!.data as unknown as { refs: Record<string, unknown>[] }).refs
+
+describe('归一化：assets.byId 完整 AssetRef 形状校验（§11.3，Rust 保存边界的加载侧对等）——条目形状与规范化', () => {
   it('内嵌 id 缺失或与记录键漂移：以记录键为准改写并警告（条目保留）', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
       assets: { byId: Record<string, Record<string, unknown>> }
@@ -90,7 +117,9 @@ describe('归一化：assets.byId 完整 AssetRef 形状校验（§11.3，Rust �
     expect(round.content.assets?.byId['a-ext']).toBeUndefined()
     expect(round.warnings.some((w) => w.includes('a-ext') && w.includes('四位年份'))).toBe(true)
   })
+})
 
+describe('归一化：时间戳可保存域与对白 @ 提及扫描（§11.1，年份域回退链）', () => {
   it('时间戳规范化结果须仍在可保存域：越出四位年份（+010000）的合法输入按回退链修复，项目不得永久不可保存', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
       project: Record<string, unknown>
@@ -132,7 +161,9 @@ describe('归一化：assets.byId 完整 AssetRef 形状校验（§11.3，Rust �
     expect(out.lines.some((l) => l.text === original)).toBe(true)
     expect(round.warnings.some((w) => w.includes('ch-1'))).toBe(false)
   })
+})
 
+describe('归一化：空白/异型引用值的加载侧收口（§8.1 共同值域之外不可恢复）', () => {
   it('角色 avatarAssetId 空白且无映射：移除并警告——不留每次加载都悬空警告的空白引用', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
       settings: Record<string, Record<string, Record<string, unknown>>>
@@ -203,27 +234,7 @@ describe('归一化：assets.byId 完整 AssetRef 形状校验（§11.3，Rust �
   })
 })
 
-describe('归一化：ShotRef 旧草案 targetId 的无歧义兼容与资产命名空间（§4.2/§8.1/§11.1 六十四轮）', () => {
-  /** 可改写的脏 v1 文档视图（资产索引 + 节点）。 */
-  type RefDoc = {
-    graph: { nodes: Record<string, unknown>[] }
-    settings: Record<string, Record<string, Record<string, unknown>>>
-    assets: { byId: Record<string, Record<string, unknown>> }
-  }
-  const mkAsset = (id: string, relPath: string, mime: string) => ({
-    id,
-    relPath,
-    mime,
-    source: 'upload',
-    createdAt: '2026-08-01T00:00:00.000Z',
-  })
-  const setRefs = (doc: RefDoc, refs: unknown[]) => {
-    const shot = doc.graph.nodes.find((n) => n.id === 'sh1')!
-    ;(shot.data as { spec: { refs: unknown[] } }).spec.refs = refs
-  }
-  const refsOf = (round: ReturnType<typeof parseProject>) =>
-    (round.content.nodes.find((n) => n.id === 'sh1')!.data as unknown as { refs: Record<string, unknown>[] }).refs
-
+describe('归一化：ShotRef 旧草案 targetId 的无歧义兼容（§4.2/§8.1/§11.1 六十四轮）——旧值改名与歧义/异型隔离', () => {
   it('audio 旧 targetId 视为项目资产 id：改名 assetId；目标缺失保留为悬空引用并警告', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as RefDoc
     doc.assets.byId['a-wav'] = mkAsset('a-wav', 'assets/rain.wav', 'audio/wav')
@@ -268,7 +279,9 @@ describe('归一化：ShotRef 旧草案 targetId 的无歧义兼容与资产命�
     expect(refsOf(round)).toEqual([{ id: 'r5', kind: 'audio', assetId: 'a-wav' }])
     expect(round.warnings.filter((w) => w.includes('targetId'))).toHaveLength(4)
   })
+})
 
+describe('归一化：ShotRef 旧草案 targetId 的无歧义兼容（§4.2/§8.1/§11.1 六十四轮）——修复前身份快照与 MIME 用途匹配', () => {
   it('角色键被安全子值域重发：旧 targetId 仍按修复前身份命中角色，歧义引用隔离而非误转同名资产（§11.1）', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as RefDoc
     // 角色原始键/内嵌 id 均为 bad]id（不满足安全字符集 [A-Za-z0-9_-]，将被重发）；

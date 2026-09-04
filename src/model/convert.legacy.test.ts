@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest'
 import { parseProject } from './convert'
 
-describe('schemaVersion 0 迁移：键控身份的数组语义保全（§11.1 迁移链，重复/空白 id 先于键控与句柄改写修复）', () => {
+describe('schemaVersion 0 迁移：分支选项键控身份的数组语义保全（§11.1 迁移链，重复/空白 id 先于句柄改写修复）', () => {
   it('分支选项重复/空白 id 在迁移期重发，下标句柄仍绑定原数组位的选项', () => {
     const v0 = {
       schemaVersion: 0,
@@ -57,7 +57,9 @@ describe('schemaVersion 0 迁移：键控身份的数组语义保全（§11.1 �
     expect(e2.data).toEqual({ optionLabel: '右' })
     expect(e3.data).toEqual({ optionLabel: '中' })
   })
+})
 
+describe('schemaVersion 0 迁移：设定集数组键控身份的语义保全（§11.1 迁移链，重复/空白 id 保首见）', () => {
   it('设定集数组重复/空白 id 在迁移期重发（保首见）：实体不丢，引用仍指首见实体', () => {
     const v0 = {
       schemaVersion: 0,

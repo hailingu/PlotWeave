@@ -9,6 +9,21 @@ import { parseProject, serializeProject } from './convert'
 import type { ProjectDocument } from './document'
 import { NOW, mkContent } from './convertFixtures'
 
+/** 可改写的 branch 选项文档视图（键控列表 id 用例共用）。 */
+type RawOptionsDoc = {
+  graph: {
+    nodes: {
+      id: string
+      data: { spec: { options?: { id: string; label: string }[] } }
+    }[]
+    edges: Record<string, unknown>[]
+  }
+}
+
+/** 取指定 branch 节点的选项数组（用例内的就地改写入口）。 */
+const optionsOf = (doc: RawOptionsDoc, id: string) =>
+  doc.graph.nodes.find((n) => n.id === id)!.data.spec.options!
+
 describe('归一化：对白行判别与必填字段（§4.2 DialogueLine，§11.3）', () => {
   it('kind 非法或 text 非字符串的行隔离并警告，合法行保留——坏行不阻挡画布打开', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
@@ -137,19 +152,7 @@ describe('归一化：节点判别联合形状校验（§4.1/§11.1 第 3 步，
   })
 })
 
-describe('归一化：键控列表 id 非空且数组内唯一（§4.2/§11.1 第 3 步）', () => {
-  type RawOptionsDoc = {
-    graph: {
-      nodes: {
-        id: string
-        data: { spec: { options?: { id: string; label: string }[] } }
-      }[]
-      edges: Record<string, unknown>[]
-    }
-  }
-  const optionsOf = (doc: RawOptionsDoc, id: string) =>
-    doc.graph.nodes.find((n) => n.id === id)!.data.spec.options!
-
+describe('归一化：键控列表 id 非空且数组内唯一（§4.2/§11.1 第 3 步）——branch 选项', () => {
   it('branch 选项重复 id：保留首见项、后续重发新 id；绑定既有选项的连线不改接', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as RawOptionsDoc
     optionsOf(doc, 'br1').push({ id: 'opt-1', label: '重复项' })
@@ -222,7 +225,9 @@ describe('归一化：键控列表 id 非空且数组内唯一（§4.2/§11.1 �
     expect(new Set(options.map((o) => o.id)).size).toBe(2)
     expect(options.every((o) => o.id !== '')).toBe(true)
   })
+})
 
+describe('归一化：键控列表 id 非空且数组内唯一（§4.2/§11.1 第 3 步）——dialogue lines / shot refs', () => {
   it('dialogue lines / shot refs 的重复与空 id：重发去歧（不被边引用，纯列表 key）', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
       graph: {

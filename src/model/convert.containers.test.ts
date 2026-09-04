@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 import { parseProject, serializeProject } from './convert'
 import { NOW, mkContent } from './convertFixtures'
 
-describe('归一化一期：容器级形状校验（§11.1 第 2 步）', () => {
+describe('归一化一期：容器级形状校验（§11.1 第 2 步）——容器与嵌套形状异型', () => {
   it('顶层容器异型：重置为可遍历空容器并记录警告，项目照常打开', () => {
     const round = parseProject({
       schemaVersion: 1,
@@ -82,7 +82,9 @@ describe('归一化一期：容器级形状校验（§11.1 第 2 步）', () => 
     expect(round.content.nodes.map((n) => n.id)).not.toContain('b1')
     expect(round.warnings.some((w) => w.includes('b1'))).toBe(true)
   })
+})
 
+describe('归一化一期：容器级形状校验（§11.1 第 2 步）——必填列表与节点 ui', () => {
   it('按类型的必填列表缺失/非数组：重置为空数组并警告，节点保留', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
       graph: { nodes: { id: string; data: { spec: Record<string, unknown> } }[] }

@@ -76,7 +76,7 @@ describe('边句柄规范（§5：匿名端口句柄必须省略）', () => {
   })
 })
 
-describe('归一化：§11.1 第 3 步 id 重发 / 成环 / attach 宿主唯一', () => {
+describe('归一化：§11.1 第 3 步 id 重发与成环隔离——重复节点 id / 自环 / 剧情流成环', () => {
   it('重复节点 id：保留文档序首个，后续重发本域未占用新 id（按 id 的引用仍解析到首见节点）', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW)
     const dup = structuredClone(doc.graph.nodes.find((n) => n.id === 'd1')!)
@@ -141,7 +141,9 @@ describe('归一化：§11.1 第 3 步 id 重发 / 成环 / attach 宿主唯一'
     expect(edgeIds).not.toContain('e-cycle')
     expect(round.warnings.some((w) => w.includes('e-cycle') && w.includes('环'))).toBe(true)
   })
+})
 
+describe('归一化：§11.1 第 3 步——attach 宿主唯一、端口归属与逻辑重复边', () => {
   it('attach 边不参与环检测：scene↔shot 垂直从属照常保留', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW)
     const round = parseProject(doc)
@@ -197,7 +199,9 @@ describe('归一化：§11.1 第 3 步 id 重发 / 成环 / attach 宿主唯一'
     expect(round.warnings.some((w) => w.includes('e-dup-seq') && w.includes('重复'))).toBe(true)
     expect(round.warnings.some((w) => w.includes('e-dup-opt') && w.includes('重复'))).toBe(true)
   })
+})
 
+describe('归一化：§11.1 第 3 步——重复/空白边 id 与 repaired 回写标志', () => {
   it('重复边 id：保留文档序首条原 id，后续同 id 边重发新 id 并警告（§11.1 第 3 步）', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW)
     doc.graph.edges.push({
