@@ -196,7 +196,8 @@ export default function HomePage({
       )}
       {deleting && (
         <ConfirmDeleteDialog
-          projectName={deleting.name}
+          title="删除项目"
+          message={`删除「${deleting.name}」？项目文件将从磁盘移除，此操作不可撤销。`}
           onCancel={() => setDeleting(null)}
           onConfirm={() => {
             onDeleteProject(deleting.id)
