@@ -1,16 +1,18 @@
 /**
  * 生成作业状态与调度内核（docs/data-model.md §13 首片）：ImageGenProvider
  * 的无 UI 部分。作业表按节点 id 键控；start 同步占位（异步间隙内双击不
- * 重复发起）；完成结果先过输入签名守护再以命令写回（可撤销）；签名丢弃
- * 与失败路径经 notice 横幅外显；Provider 卸载即协作式取消全部 running
- * 作业（§13 作业生命周期 = 编辑器挂载期）。无状态的过程内核
- * （runStart/applyGenerationResult/executeJob）为模块级纯函数。
+ * 重复发起）；完成结果先过输入签名守护，再以**复合命令**写回——资产入
+ * 索引与 outputs 同栈撤销/重做（§7.3 库资产导入同构，撤销不留不可达索引
+ * 条目）；签名丢弃与失败路径经 notice 横幅外显；Provider 卸载即协作式
+ * 取消全部 running 作业（§13 作业生命周期 = 编辑器挂载期）。无状态的
+ * 过程内核（runStart/applyGenerationResult）为模块级纯函数。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AssetRef } from '../../model/document'
 import { settingsStore } from '../../settings/settingsStore'
 import { uid } from '../../uid'
 import { normalizeAssetRef, tauriInvoke } from '../projectAssets'
+import type { HistoryCommand } from '../history'
 import type { CanvasNode } from '../nodes/types'
 import type { ImageGenApi, ImageJobView } from './context'
 import { resolveImageGenPlan } from './plan'
@@ -19,12 +21,15 @@ import { signatureMatches, type ImageGenInput } from './signature'
 /** 非桌面环境的统一文案（浏览器预览无 IPC，无法代理生成）。 */
 const PREVIEW_UNSUPPORTED = '浏览器预览不支持图像生成（媒体落盘需桌面端 Rust 侧执行）'
 
-/** 调度内核的依赖：EditorView 的稳定引用（ref/命令回调）。 */
+/** 调度内核的依赖：EditorView 的稳定引用（ref/命令栈与状态写入回调）。 */
 export interface ImageJobsDeps {
   projectId: string
   nodesRef: { current: CanvasNode[] }
-  patchNode: (id: string, patch: Record<string, unknown>) => void
+  /** 纯状态写入（复合命令的初始应用与 undo/redo 共用，不单独入栈）。 */
+  applyDataPatch: (id: string, patch: Record<string, unknown>) => void
   addAsset: (asset: AssetRef) => void
+  removeAsset: (assetId: string) => void
+  pushHistory: (cmd: HistoryCommand) => void
 }
 
 /** 错误对象的用户可见文案：字符串原样、其余 toString 兜底。 */
@@ -62,13 +67,17 @@ async function runGeneration(
   return normalizeAssetRef(checked as never)
 }
 
-/** 结果落位内核（成功路径）：签名守护 → 并入资产索引 → 命令写回；
- * 输入已前进时经 dropResult 丢弃并横幅提示（媒体文件留存待回收，§7.3）。 */
+/** 结果落位内核（成功路径）：签名守护 → 复合命令写回（资产入索引 +
+ * outputs 纯状态写入同栈撤销/重做，§7.3 库资产导入同构——撤销不留
+ * 不可达索引条目，媒体文件留存待回收）；输入已前进时经 dropResult
+ * 丢弃并横幅提示（媒体文件留存待回收，§7.3）。 */
 function applyGenerationResult(
   deps: {
     nodesRef: ImageJobsDeps['nodesRef']
-    patchNode: ImageJobsDeps['patchNode']
+    applyDataPatch: ImageJobsDeps['applyDataPatch']
     addAsset: ImageJobsDeps['addAsset']
+    removeAsset: ImageJobsDeps['removeAsset']
+    pushHistory: ImageJobsDeps['pushHistory']
     clearJob: (nodeId: string) => void
     dropResult: (nodeId: string) => void
   },
@@ -82,9 +91,19 @@ function applyGenerationResult(
     deps.dropResult(nodeId)
     return
   }
+  const before = node.data.outputs
+  const next = { ...before, primary: { assetId: asset.id } }
   deps.addAsset(asset)
-  deps.patchNode(nodeId, {
-    outputs: { ...node.data.outputs, primary: { assetId: asset.id } },
+  deps.applyDataPatch(nodeId, { outputs: next })
+  deps.pushHistory({
+    undo: () => {
+      deps.removeAsset(asset.id)
+      deps.applyDataPatch(nodeId, { outputs: before })
+    },
+    redo: () => {
+      deps.addAsset(asset)
+      deps.applyDataPatch(nodeId, { outputs: next })
+    },
   })
 }
 
@@ -129,42 +148,51 @@ async function runStart(
   }
 }
 
-/** 生成作业的状态机与调度回调（ImageGenProvider 挂载一次）。 */
-export function useImageJobsState(deps: ImageJobsDeps): {
-  api: ImageGenApi
-  notice: string | null
-} {
-  const { projectId, nodesRef, patchNode, addAsset } = deps
-  const [jobs, setJobs] = useState<Record<string, ImageJobView>>({})
-  /** 异步完成时读取最新作业表（setState 闭包会拿到过期快照）。 */
-  const jobsRef = useRef(jobs)
-  jobsRef.current = jobs
-  const [notice, setNotice] = useState<string | null>(null)
-  /** Provider 存活标志：卸载后完成回调不得再写任何状态（写也是 no-op，
-   * 显式跳过以保持语义清晰）。 */
+/** 作业写回守卫（Provider 生命周期，§13 作业生命周期 = 编辑器挂载期）：
+ * aliveRef 标记挂载状态，卸载清理对全部 running 作业发协作式取消——
+ * Rust 侧在检查点放弃结果（落盘前），防孤儿媒体文件与卸载后写回；
+ * jobAlive 供完成回调判定「仍是该作业且组件存活」。 */
+function useJobWriteGuard(
+  jobsRef: { current: Record<string, ImageJobView> },
+): (nodeId: string, jobId: string) => boolean {
   const aliveRef = useRef(true)
-
-  /** 卸载清理（§13 作业生命周期 = 编辑器挂载期）：EditorView 卸载
-   * （⌘, 设置页 / 返回首页）即对全部 running 作业发协作式取消——Rust 侧
-   * 在检查点放弃结果（落盘前），防孤儿媒体文件与卸载后写回。 */
+  // 稳定读取器：清理时经函数调用取最新作业表（直接在 cleanup 读 ref.current
+  // 会触发 exhaustive-deps 的两难告警——参数化 ref 无法被插件豁免）
+  const readJobs = useCallback(() => jobsRef.current, [jobsRef])
   useEffect(() => {
     aliveRef.current = true
     return () => {
       aliveRef.current = false
-      for (const job of Object.values(jobsRef.current)) {
+      for (const job of Object.values(readJobs())) {
         if (job?.status === 'running') {
           void tauriInvoke('llm_image_cancel', { jobId: job.jobId }).catch(() => {})
         }
       }
     }
-  }, [])
+  }, [readJobs])
+  return useCallback(
+    (nodeId: string, jobId: string): boolean => {
+      const cur = jobsRef.current[nodeId]
+      return aliveRef.current && cur?.status === 'running' && cur.jobId === jobId
+    },
+    [jobsRef],
+  )
+}
 
-  /** 作业仍是对应 jobId 的 running 态且组件存活才允许写状态（被取消/
-   * 替换/卸载即过期）；只读 jobsRef，行为稳定（空依赖）。 */
-  const jobAlive = useCallback((nodeId: string, jobId: string): boolean => {
-    const cur = jobsRef.current[nodeId]
-    return aliveRef.current && cur?.status === 'running' && cur.jobId === jobId
-  }, [])
+/** 生成作业的状态机与调度回调（ImageGenProvider 挂载一次）。 */
+export function useImageJobsState(deps: ImageJobsDeps): {
+  api: ImageGenApi
+  notice: string | null
+} {
+  const { projectId, nodesRef, applyDataPatch, addAsset, removeAsset, pushHistory } = deps
+  const [jobs, setJobs] = useState<Record<string, ImageJobView>>({})
+  /** 异步完成时读取最新作业表（setState 闭包会拿到过期快照）；start 的
+   * 同步占位也直接写此处（绕过 React 批处理窗口挡双击）。 */
+  const jobsRef = useRef(jobs)
+  jobsRef.current = jobs
+  const [notice, setNotice] = useState<string | null>(null)
+  /** 作业写回守卫：卸载协作式取消 + 存活/身份判定（useJobWriteGuard）。 */
+  const jobAlive = useJobWriteGuard(jobsRef)
 
   const setJobError = useCallback((nodeId: string, message: string) => {
     setJobs((cur) => ({ ...cur, [nodeId]: { status: 'error', message } }))
@@ -186,12 +214,12 @@ export function useImageJobsState(deps: ImageJobsDeps): {
   const applyResult = useCallback(
     (nodeId: string, input: ImageGenInput, asset: AssetRef) =>
       applyGenerationResult(
-        { nodesRef, patchNode, addAsset, clearJob, dropResult },
+        { nodesRef, applyDataPatch, addAsset, removeAsset, pushHistory, clearJob, dropResult },
         nodeId,
         input,
         asset,
       ),
-    [addAsset, clearJob, dropResult, nodesRef, patchNode],
+    [addAsset, applyDataPatch, clearJob, dropResult, nodesRef, pushHistory, removeAsset],
   )
 
   /** 发起：同步验型 + running 守卫并**同步占位**（直接写 jobsRef，绕过

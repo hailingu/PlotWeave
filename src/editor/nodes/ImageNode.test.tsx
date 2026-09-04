@@ -53,7 +53,14 @@ function setup(
   const nodesRef = { current: [] as CanvasNode[] }
   const props = { id: 'img1', data, selected: false } as unknown as NodeProps<ImageFlowNode>
   const view = render(
-    <ImageGenProvider projectId="p-1" nodesRef={nodesRef} patchNode={vi.fn()} addAsset={vi.fn()}>
+    <ImageGenProvider
+      projectId="p-1"
+      nodesRef={nodesRef}
+      applyDataPatch={vi.fn()}
+      addAsset={vi.fn()}
+      removeAsset={vi.fn()}
+      pushHistory={vi.fn()}
+    >
       <NodeEditContext.Provider value={api}>
         <ImageNode {...props} />
       </NodeEditContext.Provider>

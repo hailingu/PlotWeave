@@ -3,7 +3,9 @@
  * 生成调度状态机（state.ts）的行为测试（§13 文生图，评审修复）：
  * ① 设置加载的异步间隙内重复发起（双击）只允许一个作业进入 Rust 生成——
  *    防重复计费请求与结果孤儿化；② EditorView 卸载（⌘, 设置页 / 返回
- * 首页）时对 running 作业发协作式取消，且完成回调不再写回已卸载组件。
+ * 首页）时对 running 作业发协作式取消，且完成回调不再写回已卸载组件；
+ * ③ 生成成功以复合命令入栈——资产入索引与 outputs 写回同栈撤销/重做
+ *    （§7.3 库资产导入同构）。
  * 经最小 Harness 组件直挂 useImageJobsState，桌面态以 __TAURI_INTERNALS__ 模拟。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -13,6 +15,7 @@ import { settingsStore } from '../../settings/settingsStore'
 import { normalizeAssetRef, tauriInvoke } from '../projectAssets'
 import { useImageJobsState } from './state'
 import type { ImageGenApi } from './context'
+import type { HistoryCommand } from '../history'
 import type { AssetRef } from '../../model/document'
 import type { CanvasNode, ImageFlowNode } from '../nodes/types'
 
@@ -55,14 +58,18 @@ function imageNodeData(): ImageFlowNode['data'] {
 /** 最小 Harness：挂 useImageJobsState 并把 api 暴露给测试。 */
 function Harness(props: {
   readonly nodesRef: { current: CanvasNode[] }
-  readonly patchNode: (id: string, patch: Record<string, unknown>) => void
+  readonly applyDataPatch: (id: string, patch: Record<string, unknown>) => void
   readonly addAsset: (asset: AssetRef) => void
+  readonly removeAsset: (assetId: string) => void
+  readonly pushHistory: (cmd: HistoryCommand) => void
 }) {
   const { api } = useImageJobsState({
     projectId: 'p-1',
     nodesRef: props.nodesRef,
-    patchNode: props.patchNode,
+    applyDataPatch: props.applyDataPatch,
     addAsset: props.addAsset,
+    removeAsset: props.removeAsset,
+    pushHistory: props.pushHistory,
   })
   apiRef = api
   return null
@@ -86,13 +93,17 @@ function generatedJobId(): string {
 
 function setupHarness(opts: { resolveSettings?: Promise<AppSettings> } = {}) {
   vi.mocked(settingsStore.load).mockImplementation(() => opts.resolveSettings ?? Promise.resolve(validSettings))
-  const patchNode = vi.fn()
-  const addAsset = vi.fn()
+  const cmds = {
+    applyDataPatch: vi.fn(),
+    addAsset: vi.fn(),
+    removeAsset: vi.fn(),
+    pushHistory: vi.fn(),
+  }
   const nodesRef = {
     current: [{ id: 'img1', type: 'image', data: imageNodeData() } as unknown as CanvasNode],
   }
-  render(<Harness nodesRef={nodesRef} patchNode={patchNode} addAsset={addAsset} />)
-  return { patchNode, addAsset }
+  render(<Harness nodesRef={nodesRef} {...cmds} />)
+  return cmds
 }
 
 describe('生成调度状态机（§13）', () => {
@@ -125,7 +136,7 @@ describe('生成调度状态机（§13）', () => {
       return Promise.resolve({})
     })
     vi.mocked(normalizeAssetRef).mockImplementation((raw) => raw as unknown as AssetRef)
-    const { patchNode, addAsset } = setupHarness()
+    const { applyDataPatch, addAsset, pushHistory } = setupHarness()
 
     void apiRef!.start('img1')
     await waitFor(() => expect(generateCount()).toBe(1))
@@ -137,7 +148,47 @@ describe('生成调度状态机（§13）', () => {
 
     resolveGen({ id: 'pa-1' })
     await new Promise((r) => setTimeout(r, 0))
-    expect(patchNode).not.toHaveBeenCalled()
+    expect(applyDataPatch).not.toHaveBeenCalled()
     expect(addAsset).not.toHaveBeenCalled()
+    expect(pushHistory).not.toHaveBeenCalled()
+  })
+
+  it('生成成功以复合命令入栈：undo 同步移除资产索引，redo 恢复（§7.3 同构）', async () => {
+    ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
+    vi.mocked(tauriInvoke).mockImplementation((cmd: string, args: unknown) => {
+      if (cmd === 'llm_image_generate') {
+        return Promise.resolve({
+          id: 'pa-9',
+          relPath: 'assets/pa-9.png',
+          mime: 'image/png',
+          source: 'generated',
+          createdAt: '2026-09-04T00:00:00.000Z',
+        })
+      }
+      if (cmd === 'validate_project_asset') {
+        return Promise.resolve((args as { asset?: unknown } | undefined)?.asset ?? {})
+      }
+      return Promise.resolve({})
+    })
+    vi.mocked(normalizeAssetRef).mockImplementation((raw) => raw as unknown as AssetRef)
+    const { applyDataPatch, addAsset, removeAsset, pushHistory } = setupHarness()
+
+    void apiRef!.start('img1')
+    await waitFor(() => expect(pushHistory).toHaveBeenCalledTimes(1))
+    // 初始应用：资产入索引 + outputs 写回（纯状态写入，非 patchNode 命令）
+    expect(addAsset).toHaveBeenCalledTimes(1)
+    expect(applyDataPatch).toHaveBeenCalledWith('img1', {
+      outputs: { primary: { assetId: 'pa-9' } },
+    })
+
+    const cmd = vi.mocked(pushHistory).mock.calls[0][0] as HistoryCommand
+    cmd.undo()
+    expect(removeAsset).toHaveBeenCalledWith('pa-9')
+    expect(applyDataPatch).toHaveBeenLastCalledWith('img1', { outputs: {} })
+    cmd.redo()
+    expect(addAsset).toHaveBeenCalledTimes(2)
+    expect(applyDataPatch).toHaveBeenLastCalledWith('img1', {
+      outputs: { primary: { assetId: 'pa-9' } },
+    })
   })
 })

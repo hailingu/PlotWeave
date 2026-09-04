@@ -12,23 +12,34 @@ import type { CanvasNode } from '../nodes/types'
 import { ImageGenContext } from './context'
 import { useImageJobsState } from './state'
 
-/** Provider 依赖：均取 EditorView 的稳定引用（ref/命令回调）。 */
+/** Provider 依赖：均取 EditorView 的稳定引用（ref/命令栈与状态写入回调）。 */
 interface ImageGenProviderProps {
   readonly projectId: string
   readonly nodesRef: { current: CanvasNode[] }
-  readonly patchNode: (id: string, patch: Record<string, unknown>) => void
+  readonly applyDataPatch: (id: string, patch: Record<string, unknown>) => void
   readonly addAsset: (asset: AssetRef) => void
+  readonly removeAsset: (assetId: string) => void
+  readonly pushHistory: (cmd: import('../history').HistoryCommand) => void
   readonly children: ReactNode
 }
 
 export function ImageGenProvider({
   projectId,
   nodesRef,
-  patchNode,
+  applyDataPatch,
   addAsset,
+  removeAsset,
+  pushHistory,
   children,
 }: ImageGenProviderProps) {
-  const { api, notice } = useImageJobsState({ projectId, nodesRef, patchNode, addAsset })
+  const { api, notice } = useImageJobsState({
+    projectId,
+    nodesRef,
+    applyDataPatch,
+    addAsset,
+    removeAsset,
+    pushHistory,
+  })
   return (
     <ImageGenContext.Provider value={api}>
       {notice !== null && <ErrorBanner message={notice} />}

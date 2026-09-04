@@ -142,8 +142,10 @@ function normalizeSceneTextFields(
 
 /** 图片节点 outputs 槽位的就地修复（§13 ImageSpec，nodeDiscriminantError
  * 调用）：容器缺失/非普通对象重置为空对象并警告（未生成产物是合法状态
- * `outputs: {}`，缺失即脏写）；primary 异型（非普通对象、assetId 非非空
- * 字符串）剥离整个 primary 并警告（半损坏的产物引用没有消费价值）；宽高
+ * `outputs: {}`，缺失即脏写）；primary 异型（非普通对象、assetId 非字符
+ * 串）剥离整个 primary 并警告（半损坏的产物引用没有消费价值）；空白
+ * assetId 不在此剥离——它可能指向空键资产，交由空键重发改写域处理
+ * （rewriteImageBlankRefs，§8.1），无映射的悬空空白才在该域剥离。宽高
  * 存在但非正有限数时剥离该字段（演进占位字段的值域收口）。 */
 function normalizeImageOutputs(
   spec: Record<string, unknown>,
@@ -157,11 +159,7 @@ function normalizeImageOutputs(
   }
   const primary = spec.outputs.primary
   if (primary !== undefined) {
-    if (
-      !isPlainObject(primary) ||
-      typeof primary.assetId !== 'string' ||
-      primary.assetId.trim() === ''
-    ) {
+    if (!isPlainObject(primary) || typeof primary.assetId !== 'string') {
       warnings.push(`节点 ${nid} 的 outputs.primary 异型，已剥离`)
       delete spec.outputs.primary
     } else {

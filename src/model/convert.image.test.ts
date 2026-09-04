@@ -124,6 +124,44 @@ describe('图片节点：归一化（§11.1 第 3 步）', () => {
     expect(round.warnings.some((w) => w.includes('img1') && w.includes('pa-1'))).toBe(true)
   })
 
+  it('primary.assetId 空白且指向空键资产：随空键重发改写为新 id，而非剥离（§8.1）', () => {
+    const doc = serializeProject(contentWithImage(), 'p-1', NOW) as unknown as {
+      assets: { byId: Record<string, Record<string, unknown>> }
+      graph: { nodes: Record<string, unknown>[] }
+    }
+    doc.assets.byId[''] = {
+      id: '',
+      relPath: 'assets/blank.png',
+      mime: 'image/png',
+      source: 'generated',
+      createdAt: '2026-08-28T12:00:00.000Z',
+    }
+    const spec = (imageDocNode(doc).data as { spec: Record<string, unknown> }).spec
+    ;(spec.outputs as { primary: { assetId: string } }).primary.assetId = ''
+    const round = parseProject(doc)
+    const node = round.content.nodes.find((n) => n.id === 'img1')!
+    const primary = (node.data as { outputs: { primary?: { assetId: string } } }).outputs.primary
+    expect(primary).toBeDefined()
+    expect(primary?.assetId.trim()).not.toBe('')
+    // 改写后仍指向重发回来的同一资产（新键）
+    expect(round.content.assets?.byId[primary?.assetId ?? '']).toBeDefined()
+    expect(round.warnings.some((w) => w.includes('img1') && w.includes('改写为新 id'))).toBe(true)
+  })
+
+  it('primary.assetId 空白且无空键资产映射：剥离并警告（同 avatarAssetId 口径）', () => {
+    const doc = serializeProject(contentWithImage(), 'p-1', NOW) as unknown as {
+      graph: { nodes: Record<string, unknown>[] }
+    }
+    const spec = (imageDocNode(doc).data as { spec: Record<string, unknown> }).spec
+    ;(spec.outputs as { primary: { assetId: string } }).primary.assetId = '   '
+    const round = parseProject(doc)
+    const node = round.content.nodes.find((n) => n.id === 'img1')!
+    expect((node.data as { outputs: { primary?: unknown } }).outputs.primary).toBeUndefined()
+    expect(
+      round.warnings.some((w) => w.includes('img1') && w.includes('无空键资产映射')),
+    ).toBe(true)
+  })
+
   it('必填标量异型（prompt 为对象）：节点隔离并警告', () => {
     const doc = serializeProject(contentWithImage(), 'p-1', NOW) as unknown as {
       graph: { nodes: Record<string, unknown>[] }

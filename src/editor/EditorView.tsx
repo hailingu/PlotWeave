@@ -660,7 +660,14 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
   return (
     <NodeEditContext.Provider value={nodeEditApi}>
     {/* 图片节点生成调度（§13）：依赖本组件的命令回调与资产索引写入 */}
-    <ImageGenProvider projectId={project.id} nodesRef={nodesRef} patchNode={patchNode} addAsset={addAsset}>
+    <ImageGenProvider
+      projectId={project.id}
+      nodesRef={nodesRef}
+      applyDataPatch={applyDataPatch}
+      addAsset={addAsset}
+      removeAsset={removeAsset}
+      pushHistory={pushHistory}
+    >
     <div className="editor-root">
       {/* Overlay 标题栏下整行作为窗口拖拽区；按钮可点击（§3.3）。 */}
       <EditorTitlebar

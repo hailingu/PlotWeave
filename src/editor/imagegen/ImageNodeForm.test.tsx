@@ -35,7 +35,14 @@ function setup(data: ImageFlowNode['data']) {
   }
   const nodesRef = { current: [{ id: 'img1', type: 'image', data } as unknown as CanvasNode] }
   render(
-    <ImageGenProvider projectId="p-1" nodesRef={nodesRef} patchNode={patchNode} addAsset={vi.fn()}>
+    <ImageGenProvider
+      projectId="p-1"
+      nodesRef={nodesRef}
+      applyDataPatch={vi.fn()}
+      addAsset={vi.fn()}
+      removeAsset={vi.fn()}
+      pushHistory={vi.fn()}
+    >
       <NodeEditContext.Provider value={api}>
         <ImageNodeForm node={{ id: 'img1', data }} />
       </NodeEditContext.Provider>
