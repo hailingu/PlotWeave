@@ -1,7 +1,9 @@
 /**
  * 画布内 AI 图像生成的调度 Provider（docs/data-model.md §13 首片：文生图）。
  * EditorView 挂载一次；状态机与调度内核在 state.ts（useImageJobsState），
- * 本组件只负责上下文分发与失败/丢弃横幅的外显。
+ * 本组件只负责上下文分发与失败/丢弃横幅的外显。作业生命周期 = 编辑器
+ * 挂载期：本 Provider 卸载（⌘, 设置页 / 返回首页）即协作式取消全部
+ * running 作业（Rust 侧检查点放弃结果）。
  */
 import type { ReactNode } from 'react'
 import type { AssetRef } from '../../model/document'

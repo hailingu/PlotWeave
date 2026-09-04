@@ -14,8 +14,9 @@ export type ImageJobView =
 export interface ImageGenApi {
   /** 节点当前作业；null = 空闲。 */
   jobOf: (nodeId: string) => ImageJobView | null
-  /** 发起生成（按 nodesRef 中的最新节点数据解析计划）。 */
-  start: (nodeId: string) => Promise<void>
+  /** 发起生成（按 nodesRef 中的最新节点数据解析计划）；同步占位作业表，
+   * 设置加载的异步间隙内重复调用不会重复发起。 */
+  start: (nodeId: string) => void
   /** 协作式取消进行中的作业（Rust 侧放弃结果）。 */
   cancel: (nodeId: string) => void
 }

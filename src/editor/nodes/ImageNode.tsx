@@ -7,7 +7,8 @@ import NodeSettingsPanel from './settings/NodeSettingsPanel'
 import type { AssetRef } from '../../model/document'
 import type { ImageFlowNode } from './types'
 
-/** 产物图像：项目资产门面解析媒体 URL 懒渲染；解析失败回退占位文案。 */
+/** 产物图像：项目资产门面解析媒体 URL 懒渲染；解析失败显示可读占位
+ * （资产条目在而媒体不可读属异常态——不静默空白，保留可诊断线索）。 */
 function OutputImage({
   projectId,
   asset,
@@ -16,18 +17,23 @@ function OutputImage({
   readonly asset: AssetRef
 }) {
   const [url, setUrl] = useState<string | null>(null)
+  const [failed, setFailed] = useState(false)
   useEffect(() => {
     let alive = true
+    setFailed(false)
     projectAssets
       .mediaUrl(projectId, asset)
       .then((u) => {
         if (alive) setUrl(u)
       })
-      .catch(() => {})
+      .catch(() => {
+        if (alive) setFailed(true)
+      })
     return () => {
       alive = false
     }
   }, [projectId, asset])
+  if (failed) return <span className="pw-image-empty">产物媒体无法读取（{asset.relPath}）</span>
   if (!url) return null
   return <img className="pw-image-out-img" src={url} alt={asset.relPath} />
 }

@@ -74,7 +74,7 @@ export default function ImageNodeForm({ node }: { readonly node: { readonly id: 
           ■ 取消生成
         </button>
       ) : (
-        <button type="button" className="pw-set-add" onClick={() => void start(node.id)}>
+        <button type="button" className="pw-set-add" onClick={() => start(node.id)}>
           ✦ 生成图片
         </button>
       )}

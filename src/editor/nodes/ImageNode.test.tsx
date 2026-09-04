@@ -9,6 +9,7 @@ import { cleanup, render, screen } from '@testing-library/react'
 import type { NodeProps } from '@xyflow/react'
 import { NodeEditContext, type NodeEditApi } from '../nodeEdit'
 import { ImageGenProvider } from '../imagegen/ImageGenProvider'
+import { projectAssets } from '../projectAssets'
 import ImageNode from './ImageNode'
 import type { AssetRef } from '../../model/document'
 import type { CanvasNode, ImageFlowNode } from './types'
@@ -86,6 +87,12 @@ describe('图片节点渲染（§13）', () => {
     setup({ ...baseData(), outputs: { primary: { assetId: 'pa-1' } } })
     const img = await screen.findByRole('img')
     expect(img.getAttribute('src')).toBe('asset://pa-1')
+  })
+
+  it('产物资产在而媒体 URL 解析失败：显示可读失败占位，不静默空白', async () => {
+    vi.mocked(projectAssets.mediaUrl).mockRejectedValueOnce(new Error('boom'))
+    setup({ ...baseData(), outputs: { primary: { assetId: 'pa-1' } } })
+    expect(await screen.findByText(/产物媒体无法读取/)).toBeTruthy()
   })
 
   it('primary 悬空（资产已删）显示缺失占位，不清除引用', () => {

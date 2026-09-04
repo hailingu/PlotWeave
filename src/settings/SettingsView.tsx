@@ -22,6 +22,57 @@ function defaultModelHint(
   return '尚未选择默认模型，AI 面板将显示引导。'
 }
 
+/** 默认模型分段卡片（§8.2）的依赖：设置快照、写回与可用组合派生。 */
+interface DefaultModelsSectionProps {
+  readonly settings: AppSettings
+  readonly update: (next: AppSettings) => void
+  readonly chatOptions: Array<{ value: string; label: string }>
+  readonly chatModel: { provider: ProviderConfig; model: string } | null
+}
+
+/** 默认模型分段（§8.2）：AI 对话与图像生成（图片节点默认，§13）的默认
+ * 模型下拉，候选为三层过滤后的可用组合；未选时 AI 面板显示引导。 */
+function DefaultModelsSection({ settings, update, chatOptions, chatModel }: DefaultModelsSectionProps) {
+  return (
+    <>
+      <h3 className="settings-sec">默认模型</h3>
+      <div className="settings-card">
+        <label className="pw-set-field">
+          <span className="pw-set-label">AI 对话模型（三层过滤后的可用组合）</span>
+          <select
+            className="pw-set-input"
+            value={settings.defaultChat ?? ''}
+            onChange={(e) => update({ ...settings, defaultChat: e.target.value || null })}
+          >
+            <option value="">未选择</option>
+            {chatOptions.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="pw-set-field">
+          <span className="pw-set-label">图像生成模型（图片节点默认，§13）</span>
+          <select
+            className="pw-set-input"
+            value={settings.defaultImage ?? ''}
+            onChange={(e) => update({ ...settings, defaultImage: e.target.value || null })}
+          >
+            <option value="">未选择</option>
+            {chatOptions.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <p className="settings-hint">{defaultModelHint(chatOptions.length, chatModel)}</p>
+      </div>
+    </>
+  )
+}
+
 /**
  * 设置页（docs/ui-design.md §8.2 修订）：⌘, 打开，左侧分段列表。
  * Provider 分段：Base URL / 启用 / API key（加密后存本机设置，
@@ -180,40 +231,12 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
           ))}
 
           {/* 默认模型分段 */}
-          <h3 className="settings-sec">默认模型</h3>
-          <div className="settings-card">
-            <label className="pw-set-field">
-              <span className="pw-set-label">AI 对话模型（三层过滤后的可用组合）</span>
-              <select
-                className="pw-set-input"
-                value={settings.defaultChat ?? ''}
-                onChange={(e) => update({ ...settings, defaultChat: e.target.value || null })}
-              >
-                <option value="">未选择</option>
-                {chatOptions.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="pw-set-field">
-              <span className="pw-set-label">图像生成模型（图片节点默认，§13）</span>
-              <select
-                className="pw-set-input"
-                value={settings.defaultImage ?? ''}
-                onChange={(e) => update({ ...settings, defaultImage: e.target.value || null })}
-              >
-                <option value="">未选择</option>
-                {chatOptions.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <p className="settings-hint">{defaultModelHint(chatOptions.length, chatModel)}</p>
-          </div>
+          <DefaultModelsSection
+            settings={settings}
+            update={update}
+            chatOptions={chatOptions}
+            chatModel={chatModel}
+          />
           <p className="settings-hint">
             API key 经 AES-256-GCM 加密后保存在本机设置文件（绑定此电脑），不回显明文；
             外观跟随系统，不设主题开关。
