@@ -172,10 +172,15 @@ function reasonOf(cmd: Record<string, unknown>): string {
   return r ? `：${r}` : ''
 }
 
-/** data/patch 字段白名单校验；返回错误文案或 null。 */
+/** data/patch 字段白名单校验；返回错误文案或 null。无白名单条目的类型
+ * 一律整批拒绝——如 §13 首版的图片节点（AI 命令暂不创建/修改，快照
+ * 只读可见）：白名单缺失若放行，update_node 可携任意字段直抵画布
+ * （prompt 注入对象后快照/生成即崩，畸形 outputs 落盘重开被静默修复）。 */
 function checkFieldKeys(nodeType: string, fields: Record<string, unknown>): string | null {
   const allowed = NODE_FIELD_KEYS[nodeType]
-  if (!allowed) return null
+  if (!allowed) {
+    return `${NODE_TYPE_LABELS[nodeType] ?? (nodeType || '未知类型')} 暂不支持 AI 命令修改`
+  }
   const unknownKeys = Object.keys(fields).filter((k) => !allowed.includes(k))
   if (unknownKeys.length === 0) return null
   return `未知字段：${unknownKeys.join('、')}（${NODE_TYPE_LABELS[nodeType]} 允许：${allowed.join('、')}）`
