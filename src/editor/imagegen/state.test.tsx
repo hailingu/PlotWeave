@@ -13,7 +13,7 @@ import { cleanup, render, waitFor } from '@testing-library/react'
 import { useRef } from 'react'
 import type { AppSettings } from '../../settings/types'
 import { settingsStore } from '../../settings/settingsStore'
-import { normalizeAssetRef, tauriInvoke } from '../projectAssets'
+import { normalizeAssetRef, projectAssets, tauriInvoke } from '../projectAssets'
 import { useImageJobsState, doomedImageAssets } from './state'
 import type { ImageGenApi } from './context'
 import type { CharacterEntity, ProjectSettings } from '../settings'
@@ -22,7 +22,7 @@ import type { AssetRef } from '../../model/document'
 import type { CanvasNode, ImageFlowNode } from '../nodes/types'
 
 vi.mock('../projectAssets', () => ({
-  projectAssets: { importFromLibrary: vi.fn(), mediaUrl: vi.fn() },
+  projectAssets: { importFromLibrary: vi.fn(), mediaUrl: vi.fn(), revalidate: vi.fn() },
   tauriInvoke: vi.fn(),
   normalizeAssetRef: vi.fn(),
 }))
@@ -238,6 +238,12 @@ describe('生成调度：结果落位复合命令（§7.3 同构）', () => {
     expect(applyDataPatch).toHaveBeenLastCalledWith('img1', {
       outputs: { primary: { assetId: 'pa-9' } },
     })
+
+    // 重做防线（issue #10）：redoGuard 经 projectAssets.revalidate 复验生成产物
+    expect(cmd.redoGuard).toBeTypeOf('function')
+    vi.mocked(projectAssets.revalidate).mockResolvedValue(undefined)
+    await cmd.redoGuard?.()
+    expect(projectAssets.revalidate).toHaveBeenCalledWith('p-1', expect.objectContaining({ id: 'pa-9' }))
   })
 })
 

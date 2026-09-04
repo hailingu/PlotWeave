@@ -20,7 +20,7 @@ import type { AssetRef } from '../../model/document'
 import { settingsStore } from '../../settings/settingsStore'
 import type { AppSettings } from '../../settings/types'
 import { uid } from '../../uid'
-import { normalizeAssetRef, tauriInvoke } from '../projectAssets'
+import { normalizeAssetRef, projectAssets, tauriInvoke } from '../projectAssets'
 import type { ProjectSettings } from '../settings'
 import type { HistoryCommand } from '../history'
 import type { CanvasNode } from '../nodes/types'
@@ -106,6 +106,7 @@ function assetReferencedBy(
  * 文件留存待回收，§7.3）。 */
 function applyGenerationResult(
   deps: {
+    projectId: string
     nodesRef: ImageJobsDeps['nodesRef']
     assetsRef: ImageJobsDeps['assetsRef']
     settingsRef: ImageJobsDeps['settingsRef']
@@ -154,6 +155,9 @@ function applyGenerationResult(
       if (superseded !== undefined) deps.addAsset(superseded)
       deps.applyDataPatch(nodeId, { outputs: before })
     },
+    // 重做防线（issue #10，§7.3 库资产导入同构）：产物文件在撤销窗口
+    // 内被外部删改则拒绝重做入脏
+    redoGuard: () => projectAssets.revalidate(deps.projectId, asset),
     redo: () => {
       deps.addAsset(asset)
       if (superseded !== undefined) deps.removeAsset(superseded.id)
@@ -361,6 +365,7 @@ export function useImageJobsState(deps: ImageJobsDeps): {
     (nodeId: string, input: ImageGenInput, asset: AssetRef) =>
       applyGenerationResult(
         {
+          projectId,
           nodesRef,
           assetsRef,
           settingsRef,
@@ -382,6 +387,7 @@ export function useImageJobsState(deps: ImageJobsDeps): {
       clearJob,
       dropResult,
       nodesRef,
+      projectId,
       pushHistory,
       removeAsset,
       settingsRef,

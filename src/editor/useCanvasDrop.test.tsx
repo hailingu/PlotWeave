@@ -16,10 +16,12 @@ vi.mock('./projectAssets', () => ({
   projectAssets: {
     importFromLibrary: vi.fn(),
     mediaUrl: vi.fn(),
+    revalidate: vi.fn(),
   },
 }))
 
 const importMock = vi.mocked(projectAssets.importFromLibrary)
+const revalidateMock = vi.mocked(projectAssets.revalidate)
 
 afterEach(() => vi.clearAllMocks())
 
@@ -119,6 +121,24 @@ describe('useCanvasDrop：库资产拖上分镜卡（§7.3 拷贝进项目）', 
     act(() => cmd.redo())
     expect(vi.mocked(deps.addAsset).mock.calls).toHaveLength(2)
     expect(vi.mocked(deps.applyDataPatch).mock.calls[2][1]).toEqual(patch)
+  })
+
+  it('重做防线（issue #10）：命令携带 redoGuard，重做前经 projectAssets.revalidate 复验', async () => {
+    importMock.mockResolvedValue(importedAsset)
+    const { deps, handlers } = setup()
+    await act(async () => {
+      handlers.onCanvasDrop(
+        fakeEvent('sh1', [PW_LIBRARY_ASSET_MIME], { [PW_LIBRARY_ASSET_MIME]: libPayload() }),
+      )
+      await Promise.resolve()
+    })
+    const cmd = vi.mocked(deps.pushHistory).mock.calls[0][0]
+    expect(cmd.redoGuard).toBeTypeOf('function')
+    revalidateMock.mockResolvedValue(undefined)
+    await act(async () => {
+      await cmd.redoGuard?.()
+    })
+    expect(revalidateMock).toHaveBeenCalledWith('p-1', importedAsset)
   })
 
   it('非分镜卡目标与空白处不导入；kind/MIME 不支持经 onError 上浮且不导入', async () => {

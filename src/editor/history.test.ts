@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, expect, it, vi } from 'vitest'
-import { act, renderHook } from '@testing-library/react'
+import { act, renderHook, waitFor } from '@testing-library/react'
 import { CommandStack, useCommandHistory, type HistoryCommand } from './history'
 
 /** 可注入时钟的命令栈：t 递增受控推进。 */
@@ -148,9 +148,169 @@ describe('CommandStack：栈深上限', () => {
   })
 })
 
+describe('CommandStack：redoGuard（资产重回索引前的异步复验，issue #10）', () => {
+  it('无 redoGuard 的命令保持同步语义：redo() 返回 undefined 且立即应用', () => {
+    const { s } = stack()
+    const c = cmd(undefined)
+    s.push(c)
+    s.undo()
+    const ret = s.redo()
+    expect(ret).toBeUndefined()
+    expect(c.redo).toHaveBeenCalledTimes(1)
+  })
+
+  it('带 redoGuard 的命令：校验通过后应用，返回 Promise', async () => {
+    const { s } = stack()
+    const guard = vi.fn(() => Promise.resolve())
+    const c: HistoryCommand = { undo: vi.fn(), redo: vi.fn(), redoGuard: guard }
+    s.push(c)
+    s.undo()
+    await s.redo()
+    expect(guard).toHaveBeenCalledTimes(1)
+    expect(c.redo).toHaveBeenCalledTimes(1)
+    expect(s.canUndo).toBe(true)
+  })
+
+  it('校验拒绝：本次重做放弃、不应用、命令留在重做栈可重试，拒绝原因传播', async () => {
+    const { s } = stack()
+    const c: HistoryCommand = {
+      undo: vi.fn(),
+      redo: vi.fn(),
+      redoGuard: () => Promise.reject(new Error('资产文件已失效')),
+    }
+    s.push(c)
+    s.undo()
+    await expect(s.redo()).rejects.toThrow('资产文件已失效')
+    expect(c.redo).not.toHaveBeenCalled()
+    expect(s.canRedo).toBe(true)
+    expect(s.canUndo).toBe(false)
+  })
+
+  it('校验在途期间栈顶被新编辑取代：静默放弃，不应用被取代的命令', async () => {
+    const { s } = stack()
+    let release: () => void = () => {}
+    const c: HistoryCommand = {
+      undo: vi.fn(),
+      redo: vi.fn(),
+      redoGuard: () =>
+        new Promise<void>((resolve) => {
+          release = resolve
+        }),
+    }
+    s.push(c)
+    s.undo()
+    const pending = s.redo()
+    s.push(cmd('new')) // 校验在途时新编辑清空重做分支：c 已被取代
+    release()
+    await pending
+    expect(c.redo).not.toHaveBeenCalled()
+    expect(s.canRedo).toBe(false)
+  })
+
+  it('校验在途期间撤销-重做往返（栈顶 identity 复原）：仍视为被取代，静默放弃', async () => {
+    const { s } = stack()
+    let release: () => void = () => {}
+    const guarded: HistoryCommand = {
+      undo: vi.fn(),
+      redo: vi.fn(),
+      redoGuard: () =>
+        new Promise<void>((resolve) => {
+          release = resolve
+        }),
+    }
+    const older = cmd('older')
+    s.push(older)
+    s.push(guarded)
+    s.undo() // guarded → 重做栈；older 仍可撤销
+    const pending = s.redo() // guarded 校验在途
+    s.undo() // older 上到重做栈顶，取代 guarded
+    s.redo() // older 同步重做回撤销栈——栈顶 identity 复原为 guarded
+    release()
+    await pending
+    expect(guarded.redo).not.toHaveBeenCalled()
+    expect(s.canRedo).toBe(true) // guarded 留在重做栈：可再次显式重做
+    expect(older.redo).toHaveBeenCalledTimes(1)
+  })
+
+  it('校验在途期间的空栈撤销请求同样取消在途重做（撤销意向优先，无栈变更也计操作）', async () => {
+    const { s } = stack()
+    let release: () => void = () => {}
+    const guarded: HistoryCommand = {
+      undo: vi.fn(),
+      redo: vi.fn(),
+      redoGuard: () =>
+        new Promise<void>((resolve) => {
+          release = resolve
+        }),
+    }
+    s.push(guarded)
+    s.undo() // guarded 为唯一历史条目：撤销栈已空
+    const pending = s.redo() // guarded 校验在途
+    s.undo() // 空栈撤销：无可撤销，但用户撤销意向应取消在途重做
+    release()
+    await pending
+    expect(guarded.redo).not.toHaveBeenCalled()
+    expect(s.canRedo).toBe(true) // 留在重做栈：可再次显式重做
+  })
+
+  it('已被取代的重做其校验拒绝同样静默放弃：不传播拒绝（不覆盖新诊断）', async () => {
+    const { s } = stack()
+    let rejectGuard: (err: Error) => void = () => {}
+    const guarded: HistoryCommand = {
+      undo: vi.fn(),
+      redo: vi.fn(),
+      redoGuard: () =>
+        new Promise<void>((_, reject) => {
+          rejectGuard = reject
+        }),
+    }
+    s.push(guarded)
+    s.undo()
+    const pending = s.redo()
+    s.push(cmd('new')) // 取代：重做分支被清空
+    rejectGuard(new Error('资产文件已失效'))
+    await expect(pending).resolves.toBeUndefined()
+    expect(guarded.redo).not.toHaveBeenCalled()
+  })
+
+  it('重复发起同一 guarded 重做：发起即取代更早在途校验（迟到履约不应用）', async () => {
+    const { s } = stack()
+    let calls = 0
+    let resolveOlder!: () => void
+    let rejectNewer!: (err: Error) => void
+    const guarded: HistoryCommand = {
+      undo: vi.fn(),
+      redo: vi.fn(),
+      redoGuard: () => {
+        calls += 1
+        return calls === 1
+          ? new Promise<void>((resolve) => {
+              resolveOlder = resolve
+            })
+          : new Promise<void>((_, reject) => {
+              rejectNewer = reject
+            })
+      },
+    }
+    s.push(guarded)
+    s.undo()
+    const older = s.redo() // 第一次发起：在途
+    const newer = s.redo() // 第二次发起：同一命令的新一次校验
+    rejectNewer(new Error('资产文件已失效')) // 新校验先拒绝（最新结论：文件已失效）
+    await expect(newer).rejects.toThrow('资产文件已失效')
+    resolveOlder() // 旧校验迟到履约：不得把最新校验判失效的资产应用回文档
+    await older
+    expect(guarded.redo).not.toHaveBeenCalled()
+    expect(s.canRedo).toBe(true)
+  })
+})
+
 describe('useCommandHistory（命令栈 hook：惰性构建 + version 驱动重渲染）', () => {
-  it('push/undo/redo/clear 委托栈实现；canUndo/canRedo 随 version 重算', () => {
-    const { result } = renderHook(() => useCommandHistory())
+  /** 横幅槽替身：捕获 onRedoError 收到的文案。 */
+  const sink = () => vi.fn<(message: string) => void>()
+
+  it('push/undo/onRedo/clear 委托栈实现；canUndo/canRedo 随 version 重算', () => {
+    const { result } = renderHook(() => useCommandHistory(sink()))
     expect(result.current.canUndo).toBe(false)
     expect(result.current.canRedo).toBe(false)
     const v0 = result.current.version
@@ -165,7 +325,7 @@ describe('useCommandHistory（命令栈 hook：惰性构建 + version 驱动重�
     expect(result.current.canUndo).toBe(false)
     expect(result.current.canRedo).toBe(true)
 
-    act(() => result.current.redo())
+    act(() => result.current.onRedo())
     expect(c.redo).toHaveBeenCalledTimes(1)
     expect(result.current.canUndo).toBe(true)
 
@@ -175,11 +335,41 @@ describe('useCommandHistory（命令栈 hook：惰性构建 + version 驱动重�
   })
 
   it('重渲染复用同一栈实例（回调引用稳定）', () => {
-    const { result, rerender } = renderHook(() => useCommandHistory())
+    const onRedoError = sink()
+    const { result, rerender } = renderHook(() => useCommandHistory(onRedoError))
     const pushRef = result.current.push
     act(() => result.current.push(cmd('k')))
     rerender()
     expect(result.current.push).toBe(pushRef)
     expect(result.current.canUndo).toBe(true) // 栈未随重渲染重建
+  })
+
+  it('onRedo 诊断（issue #10）：同步路径不触横幅；拒绝上浮文案；完成不清除横幅', async () => {
+    const onRedoError = sink()
+    const { result } = renderHook(() => useCommandHistory(onRedoError))
+
+    const sync: HistoryCommand = { undo: vi.fn(), redo: vi.fn() }
+    act(() => result.current.push(sync))
+    act(() => result.current.undo())
+    act(() => result.current.onRedo()) // 无 guard：同步应用，无横幅回调
+    expect(sync.redo).toHaveBeenCalledTimes(1)
+    expect(onRedoError).not.toHaveBeenCalled()
+
+    const guardMock = vi.fn((): Promise<void> => Promise.reject(new Error('资产文件已失效')))
+    const guarded: HistoryCommand = { undo: vi.fn(), redo: vi.fn(), redoGuard: guardMock }
+    act(() => result.current.push(guarded))
+    act(() => result.current.undo())
+    act(() => result.current.onRedo())
+    await waitFor(() => expect(onRedoError).toHaveBeenCalledWith(expect.stringContaining('资产文件已失效')))
+    expect(onRedoError).toHaveBeenLastCalledWith(expect.stringContaining('重做失败'))
+    expect(guarded.redo).not.toHaveBeenCalled()
+
+    // 慢校验成功应用后不得回投 null 清横幅：共享槽内可能有更新的其他
+    // 动作错误（评审：旧重做完成吞新错误）；横幅由后续诊断替换
+    onRedoError.mockClear()
+    guardMock.mockResolvedValue(undefined)
+    act(() => result.current.onRedo())
+    await waitFor(() => expect(guarded.redo).toHaveBeenCalledTimes(1))
+    expect(onRedoError).not.toHaveBeenCalled()
   })
 })

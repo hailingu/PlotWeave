@@ -57,6 +57,24 @@ describe('projectAssets Tauri 路径：importFromLibrary', () => {
   })
 })
 
+describe('projectAssets Tauri 路径：revalidate（撤销后重做防线，issue #10）', () => {
+  it('经 validate_project_asset 复验：通过则兑现；返回无效条目拒绝', async () => {
+    invoke.mockResolvedValueOnce(assetRef())
+    const { projectAssets } = await load()
+    await expect(projectAssets.revalidate('p-1', assetRef() as never)).resolves.toBeUndefined()
+    expect(invoke.mock.calls[0]).toEqual([
+      'validate_project_asset',
+      { id: 'p-1', asset: assetRef() },
+    ])
+
+    invoke.mockReset()
+    invoke.mockResolvedValueOnce({ id: '' })
+    await expect(projectAssets.revalidate('p-1', assetRef() as never)).rejects.toThrow(
+      /无效资产条目/,
+    )
+  })
+})
+
 describe('projectAssets Tauri 路径：mediaUrl', () => {
   it('project_asset_path 返回的绝对路径经 convertFileSrc 合成', async () => {
     invoke.mockResolvedValue('/Users/x/Library/PlotWeave/projects/p-1/assets/pa-1.png')

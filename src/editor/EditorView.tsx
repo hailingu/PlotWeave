@@ -171,7 +171,7 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
     setSaveError(errorBannerMessage(err))
   }, [])
   // 拖放导入失败的用户可见诊断（库资产类型不支持 / 落盘失败，§7.3）
-  const [dropError, setDropError] = useState<string | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
 
   const markDirty = useDebouncedSave(
     sessionDoc(project, {
@@ -204,14 +204,14 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
     [markDirty, project, nodes, edges, settings, episodeTitles, assets],
   )
 
-  // 命令栈（§3.3/§4.3）：全部写操作入栈，undo 始终兜底
+  // 命令栈（§3.3/§4.3）：全部写操作入栈，undo 兜底；重做拒绝上浮横幅（issue #10）
   const {
     push: pushHistory,
     undo: undoHistory,
-    redo: redoHistory,
+    onRedo: redoWithDiagnostics,
     canUndo,
     canRedo,
-  } = useCommandHistory()
+  } = useCommandHistory(setActionError)
 
   // 三栏面板状态（§3.4：220–320pt 可调，显隐会话内记忆——组件态即会话态）
   const [leftOpen, setLeftOpen] = useState(true)
@@ -549,7 +549,7 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
       setCtxMenu(null)
     }, [closeSettings]),
     onUndo: undoHistory,
-    onRedo: redoHistory,
+    onRedo: redoWithDiagnostics,
     selectedNodeIds: useCallback(
       () => nodesRef.current.filter((n) => n.selected).map((n) => n.id),
       [],
@@ -595,7 +595,7 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
     addAsset,
     removeAsset,
     pushHistory,
-    onError: setDropError,
+    onError: setActionError,
   })
 
   // 节点拖拽整段记为一步撤销：起点位置在 dragStart 记录、落点入栈。
@@ -658,7 +658,7 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
         canUndo={canUndo}
         canRedo={canRedo}
         onUndo={undoHistory}
-        onRedo={redoHistory}
+        onRedo={redoWithDiagnostics}
         onBackHome={onBackHome}
         plusOpen={plusOpen}
         onTogglePlus={() => setPlusOpen((v) => !v)}
@@ -673,7 +673,7 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
           message={`自动保存失败：${saveError}（修改已保留，正在自动重试；可检查磁盘后继续编辑）`}
         />
       )}
-      {dropError !== null && <ErrorBanner message={dropError} />}
+      {actionError !== null && <ErrorBanner message={actionError} />}
       <div className="editor-body">
         <LeftPanel
           open={leftOpen}
