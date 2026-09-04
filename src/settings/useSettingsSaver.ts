@@ -1,8 +1,9 @@
 /**
  * 设置页的「编辑即保存」状态族（SettingsView 拆出，§8.2）：防抖 500ms
- * 全量落盘 + 关闭冲刷。在途的 save promise 与未保存快照都会被关闭路径
- * 循环 await，直至没有更新的快照（冲刷期间的新编辑也不例外——编辑器
- * 重挂读到的必是已落盘设置）；落盘失败保留快照并置可见错误、页面保持
+ * 全量落盘 + 关闭冲刷。所有 save 经单一串行队列按提交顺序执行——杜绝
+ * 乱序完成或迟到失败把磁盘回退到旧快照；关闭路径循环等待「队列排空且
+ * 无待存快照」（冲刷期间的新编辑也不例外——编辑器重挂读到的必是已落盘
+ * 设置）。落盘失败仅当无更新快照提交时回填待存并置可见错误、页面保持
  * 打开可重试——不静默丢失编辑。卸载路径为 fire-and-forget 兜底（非常规
  * 关闭不丢编辑）。
  */
@@ -22,40 +23,57 @@ export interface SettingsSaver {
   closing: boolean
 }
 
-/** 冲刷所需的在途状态（ref 族）：防抖计时器、未落盘快照、在途 save。 */
+/** 冲刷/落盘所需的在途状态（ref 族）。 */
 interface SaverRefs {
   /** 500ms 防抖计时器：冲刷每轮先清，防止计时器路径绕过 await 落盘。 */
   readonly saveTimer: { current: ReturnType<typeof setTimeout> | null }
   /** 未落盘的最新快照（null = 无待存编辑）。 */
   readonly pendingSaveRef: { current: AppSettings | null }
-  /** 防抖已触发、IPC 在途的 save：关闭路径必须等它，不能只看快照。 */
-  readonly activeSaveRef: { current: Promise<void> | null }
+  /** 串行落盘队列队尾（永不 reject；null = 空闲）：所有 save 按提交
+   * 顺序执行，杜绝「新快照已落盘、旧 save 乱序迟到」把磁盘回退。 */
+  readonly saveChainRef: { current: Promise<void> | null }
+  /** 已提交 save 的最新序号：失败回填只对最新提交的快照生效。 */
+  readonly revRef: { current: number }
 }
 
-/** 冲刷落盘（S3358 模块级实现）：清防抖 → 循环「await 在途 save → 落盘
- * 未存快照」直至两者皆空。冲刷期间的新编辑同样被 await 后才允许关闭，
- * 不留给 fire-and-forget 兜底——否则编辑器重挂可能读到旧设置、应用退出
- * 可能丢编辑；防抖计时器若在慢 save 期间触发并绕行 persist，下一轮的
- * active await 也会把它收口。 */
+/** 提交一次全量落盘到串行队列（S3358 模块级实现）：空闲时立即发起，
+ * 否则排在队尾之后。失败仅当「无更新快照已提交（rev 最新）且无待存
+ * 编辑」时回填重试——更新快照已入队（将落盘）或已落盘时回填旧值，
+ * 会让后续冲刷把磁盘回退到旧设置。 */
+function enqueueSave(refs: SaverRefs, next: AppSettings): Promise<void> {
+  const rev = ++refs.revRef.current
+  const prev = refs.saveChainRef.current
+  const run =
+    prev === null ? settingsStore.save(next) : prev.then(() => settingsStore.save(next))
+  const tail = run.catch(() => {})
+  refs.saveChainRef.current = tail
+  void tail.finally(() => {
+    if (refs.saveChainRef.current === tail) refs.saveChainRef.current = null
+  })
+  void run.catch(() => {
+    if (rev === refs.revRef.current) refs.pendingSaveRef.current ??= next
+  })
+  return run
+}
+
+/** 冲刷落盘（S3358 模块级实现）：清防抖 → 循环「等队尾 → 落盘未存快照」
+ * 直至队列空闲且无待存快照；等待期间新提交的 save（如防抖计时器触发的
+ * 落盘）会移动队尾，下一轮继续收口——close 不得早于任何一次已提交的
+ * 落盘完成。失败回填由 enqueueSave 的 rev 守卫统一处理，此处仅上抛。 */
 async function flushPendingSaves(refs: SaverRefs): Promise<void> {
-  const { saveTimer, pendingSaveRef, activeSaveRef } = refs
+  const { saveTimer, pendingSaveRef, saveChainRef } = refs
   if (saveTimer.current) clearTimeout(saveTimer.current)
   for (;;) {
-    // 在途 save 的迟到失败不阻断冲刷：失败时其快照已回填 pending（或被
-    // 更新的快照取代），由本轮 pending 落盘统一收口重试
-    const active = activeSaveRef.current
-    if (active !== null) await active.catch(() => {})
+    const tail = saveChainRef.current
+    if (tail !== null) {
+      await tail.catch(() => {})
+      if (saveChainRef.current !== null) continue // 等待期间有新提交：再收口
+    }
     const pending = pendingSaveRef.current
     if (pending === null) return
     if (saveTimer.current) clearTimeout(saveTimer.current)
     pendingSaveRef.current = null
-    try {
-      await settingsStore.save(pending)
-    } catch (err) {
-      // 冲刷期间用户又编辑过（快照已是更新值）时不回填旧快照
-      pendingSaveRef.current ??= pending
-      throw err
-    }
+    await enqueueSave(refs, pending)
   }
 }
 
@@ -65,23 +83,10 @@ export function useSettingsSaver(
 ): SettingsSaver {
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingSaveRef = useRef<AppSettings | null>(null)
-  const activeSaveRef = useRef<Promise<void> | null>(null)
+  const saveChainRef = useRef<Promise<void> | null>(null)
+  const revRef = useRef(0)
   const [closing, setClosing] = useState(false)
   const [closeError, setCloseError] = useState<string | null>(null)
-
-  const persist = useCallback((next: AppSettings): Promise<void> => {
-    const p = settingsStore.save(next).catch((err) => {
-      // 落盘失败：仅在无更新快照时回填（迟到的旧失败不得覆盖用户随后的
-      // 新编辑——否则关闭冲刷会落盘旧快照、静默回退新编辑）
-      pendingSaveRef.current ??= next
-      throw err
-    })
-    activeSaveRef.current = p
-    void p.catch(() => {}).finally(() => {
-      if (activeSaveRef.current === p) activeSaveRef.current = null
-    })
-    return p
-  }, [])
 
   const update = useCallback(
     (next: AppSettings) => {
@@ -90,15 +95,17 @@ export function useSettingsSaver(
       if (saveTimer.current) clearTimeout(saveTimer.current)
       saveTimer.current = setTimeout(() => {
         pendingSaveRef.current = null
-        void persist(next).catch((err) => console.warn('[SettingsView] 防抖落盘失败', err))
+        enqueueSave({ saveTimer, pendingSaveRef, saveChainRef, revRef }, next).catch(
+          (err) => console.warn('[SettingsView] 防抖落盘失败', err),
+        )
       }, 500)
     },
-    [persist, setSettings],
+    [setSettings],
   )
 
   /** 关闭冲刷：委托 flushPendingSaves（S3358），失败保留现场上抛。 */
   const flush = useCallback(
-    (): Promise<void> => flushPendingSaves({ saveTimer, pendingSaveRef, activeSaveRef }),
+    (): Promise<void> => flushPendingSaves({ saveTimer, pendingSaveRef, saveChainRef, revRef }),
     [],
   )
 
