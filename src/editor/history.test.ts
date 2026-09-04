@@ -255,8 +255,8 @@ describe('CommandStack：redoGuard（资产重回索引前的异步复验，issu
 })
 
 describe('useCommandHistory（命令栈 hook：惰性构建 + version 驱动重渲染）', () => {
-  /** 横幅槽替身：捕获 onRedoError 收到的文案（null = 清除）。 */
-  const sink = () => vi.fn<(message: string | null) => void>()
+  /** 横幅槽替身：捕获 onRedoError 收到的文案。 */
+  const sink = () => vi.fn<(message: string) => void>()
 
   it('push/undo/onRedo/clear 委托栈实现；canUndo/canRedo 随 version 重算', () => {
     const { result } = renderHook(() => useCommandHistory(sink()))
@@ -293,7 +293,7 @@ describe('useCommandHistory（命令栈 hook：惰性构建 + version 驱动重�
     expect(result.current.canUndo).toBe(true) // 栈未随重渲染重建
   })
 
-  it('onRedo 诊断（issue #10）：同步路径不触横幅；拒绝上浮文案；成功清除', async () => {
+  it('onRedo 诊断（issue #10）：同步路径不触横幅；拒绝上浮文案；完成不清除横幅', async () => {
     const onRedoError = sink()
     const { result } = renderHook(() => useCommandHistory(onRedoError))
 
@@ -313,10 +313,12 @@ describe('useCommandHistory（命令栈 hook：惰性构建 + version 驱动重�
     expect(onRedoError).toHaveBeenLastCalledWith(expect.stringContaining('重做失败'))
     expect(guarded.redo).not.toHaveBeenCalled()
 
+    // 慢校验成功应用后不得回投 null 清横幅：共享槽内可能有更新的其他
+    // 动作错误（评审：旧重做完成吞新错误）；横幅由后续诊断替换
     onRedoError.mockClear()
     guardMock.mockResolvedValue(undefined)
     act(() => result.current.onRedo())
     await waitFor(() => expect(guarded.redo).toHaveBeenCalledTimes(1))
-    expect(onRedoError).toHaveBeenCalledWith(null)
+    expect(onRedoError).not.toHaveBeenCalled()
   })
 })
