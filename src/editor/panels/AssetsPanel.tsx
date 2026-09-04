@@ -5,13 +5,15 @@ import {
   type LibraryAsset,
   type LibraryKind,
 } from '../../library/libraryStore'
+import { PW_LIBRARY_ASSET_MIME } from '../dragDrop'
 import { EditableName } from '../nodes/settings/NodeSettingsPanel'
 
 /**
  * 左栏「资产」分段的真实实现（docs/ui-design.md §8.1）：
  * 应用级资产库跨项目复用，按影视美术部门分类——分类列表带计数，
  * 类别内导入（多选图片）/缩略懒加载/行内改名/标签编辑/删除（不可逆需确认）。
- * 与项目的流转（拖上画布拷贝进项目）随项目资产管线另行落地。
+ * 与项目的流转（§7.3）：缩略图即拖拽把手，拖上画布分镜卡拷贝进项目
+ * 并绑定引用位（dragDrop 协议 + useCanvasDrop 承接）。
  */
 export default function AssetsPanel() {
   const [assets, setAssets] = useState<LibraryAsset[]>([])
@@ -200,7 +202,9 @@ export default function AssetsPanel() {
   )
 }
 
-/** 缩略图：懒加载（进入视口/进入类别才解析媒体 URL）。 */
+/** 缩略图：懒加载（进入视口/进入类别才解析媒体 URL）。同时是拖上画布
+ * 的把手（§7.3 库资产拖上画布 = 拷贝进项目）——只在缩略图上开拖拽，
+ * 避免容器拖拽与行内输入框（改名/标签）的文本选择冲突。 */
 function AssetThumb({
   asset,
   url,
@@ -228,7 +232,19 @@ function AssetThumb({
     return () => io.disconnect()
   }, [asset, onVisible, url])
   return (
-    <div ref={ref} className="pw-asset-thumb">
+    <div
+      ref={ref}
+      className="pw-asset-thumb"
+      draggable
+      title="拖上画布分镜卡：拷贝进项目并绑定引用位"
+      onDragStart={(e) => {
+        e.dataTransfer.setData(
+          PW_LIBRARY_ASSET_MIME,
+          JSON.stringify({ id: asset.id, name: asset.name, kind: asset.kind, mime: asset.mime }),
+        )
+        e.dataTransfer.effectAllowed = 'copy'
+      }}
+    >
       {url ? <img src={url} alt={asset.name} loading="lazy" /> : <span aria-hidden>🖼</span>}
     </div>
   )

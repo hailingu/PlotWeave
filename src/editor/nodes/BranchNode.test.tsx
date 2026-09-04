@@ -27,6 +27,7 @@ afterEach(cleanup)
 
 function setup(openSettingsId: string | null = null) {
   const api: NodeEditApi = {
+    projectId: 'p-1',
     openSettingsId,
     toggleSettings: vi.fn(),
     closeSettings: vi.fn(),

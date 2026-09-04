@@ -1,8 +1,8 @@
 /** 个人资产库前端门面（docs/ui-design.md §8.1 / 数据模型 §7）。
  * Tauri 环境走 Rust 命令（应用级 library/ 目录，媒体经 asset 协议懒加载）；
  * 浏览器预览无 IPC，回退为同接口的内存实现（Blob object URL）。
- * 跨项目复用：库是应用级作用域，与项目内资产互不引用（§7.3 流转规则
- * 「拖上画布 = 拷贝进项目」随项目资产管线另行落地）。
+ * 跨项目复用：库是应用级作用域，与项目内资产互不引用（§7.3 流转
+ * 「拖上画布 = 拷贝进项目」由 src/editor/projectAssets.ts 承接）。
  */
 
 import { uid } from '../uid'
@@ -99,7 +99,7 @@ async function tauriPut(file: File, kind: LibraryKind): Promise<LibraryAsset> {
   return normalized
 }
 
-async function tauriMediaUrl(asset: LibraryAsset): Promise<string> {
+async function tauriMediaUrl(asset: Pick<LibraryAsset, 'id' | 'relPath'>): Promise<string> {
   const { invoke, convertFileSrc } = await import('@tauri-apps/api/core')
   const base = await invoke<string>('library_dir_path')
   return convertFileSrc(`${base}/${asset.relPath}`)
@@ -152,8 +152,9 @@ export const libraryStore = {
     return Promise.resolve()
   },
 
-  /** 媒体 URL：Tauri 走 asset 协议懒加载；内存回退为 object URL。 */
-  mediaUrl: (asset: LibraryAsset): Promise<string> => {
+  /** 媒体 URL：Tauri 走 asset 协议懒加载；内存回退为 object URL。
+   * 入参放宽到 id/relPath 子集：项目资产预览回退按来源库资产 id 委托解析。 */
+  mediaUrl: (asset: Pick<LibraryAsset, 'id' | 'relPath'>): Promise<string> => {
     if (isTauri) return tauriMediaUrl(asset)
     const hit = memoryAssets.get(asset.id)
     if (!hit) return Promise.reject(new Error(`资产不存在：${asset.id}`))

@@ -154,7 +154,7 @@ fn is_mime_token(s: &str) -> bool {
 }
 
 /// 规范 MIME 形式（§7.1）：已去首尾空白、已小写、恰好两个具体 token 以 `/` 分隔。
-fn is_canonical_mime(s: &str) -> bool {
+pub(crate) fn is_canonical_mime(s: &str) -> bool {
     if s != s.trim() || s != s.to_ascii_lowercase() {
         return false;
     }
@@ -167,7 +167,7 @@ fn is_canonical_mime(s: &str) -> bool {
 
 /// 词法 relPath（§7.1）：纯相对路径（正斜杠分隔，拒绝绝对路径/盘符/反斜杠），
 /// 解析目标必须位于项目资产子目录内——首段固定 `assets`，组件不含空段/`.`/`..`。
-fn is_valid_asset_rel_path(p: &str) -> bool {
+pub(crate) fn is_valid_asset_rel_path(p: &str) -> bool {
     if p.is_empty() || p != p.trim() {
         return false;
     }
@@ -308,7 +308,11 @@ fn validate_save_assets(assets: &serde_json::Value) -> Result<(), String> {
 }
 
 /// 资产路径组件的 no-follow 元数据（相对锚定句柄），缺失映射为「资产文件不存在」。
-fn asset_stat(dir: &CapDir, comp: &str, rel_path: &str) -> Result<cap_std::fs::Metadata, String> {
+pub(crate) fn asset_stat(
+    dir: &CapDir,
+    comp: &str,
+    rel_path: &str,
+) -> Result<cap_std::fs::Metadata, String> {
     dir.symlink_metadata(comp).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             format!("资产文件不存在：{rel_path}")
@@ -321,7 +325,7 @@ fn asset_stat(dir: &CapDir, comp: &str, rel_path: &str) -> Result<cap_std::fs::M
 /// Unix 组件身份 (dev, ino)：读取与资产校验全程句柄相对后，身份比对只在
 /// cap-std 元数据之间进行（归类元数据与打开句柄元数据同源）。
 #[cfg(unix)]
-fn asset_identity(md: &cap_std::fs::Metadata) -> (u64, u64) {
+pub(crate) fn asset_identity(md: &cap_std::fs::Metadata) -> (u64, u64) {
     use cap_std::fs::MetadataExt;
     (md.dev(), md.ino())
 }
@@ -338,7 +342,7 @@ fn asset_identity(md: &cap_std::fs::Metadata) -> (u64, u64) {
 /// 符号链接或另一实体）即拒绝，句柄返回给调用方持有至保存完成后释放。
 /// 校验与落盘之间被替换的残余窗口由加载侧复验（verify_project_assets）在
 /// 下次打开时隔离兜底。
-fn verify_asset_real_path(
+pub(crate) fn verify_asset_real_path(
     root: &CapDir,
     id: &str,
     rel_path: &str,
@@ -573,7 +577,7 @@ fn empty_assets() -> serde_json::Value {
 /// 屏障内核复用，不按路径名重开（`open_ambient_dir` 与 fsync 重开都会把
 /// 并发替换后的目录变成表面根）。路径名被换时：越界被沙箱拒绝，界内
 /// 替换被身份绑定拒绝。
-fn projects_dir(app: &AppHandle) -> Result<CapDir, String> {
+pub(crate) fn projects_dir(app: &AppHandle) -> Result<CapDir, String> {
     let root_path = app
         .path()
         .app_data_dir()
@@ -1197,7 +1201,7 @@ fn copy_assets_tree(root: &CapDir, from_id: &str, to_id: &str) -> Result<(), Str
 /// Unix 无身份可比，改为打开后重走 no-follow 归类复核（换名残余窗口由
 /// cap-std 沙箱限定在 projects/ 树内）。
 #[allow(unused_variables)]
-fn open_dir_bound<P: AsRef<std::path::Path>>(
+pub(crate) fn open_dir_bound<P: AsRef<std::path::Path>>(
     parent: &CapDir,
     rel: P,
     classified: &cap_std::fs::Metadata,

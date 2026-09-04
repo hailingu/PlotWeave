@@ -28,6 +28,7 @@ afterEach(cleanup)
 function setup(fulfillment: BeatFulfillment | null = null) {
   const api: NodeEditApi = {
     openSettingsId: null,
+    projectId: 'p-1',
     toggleSettings: vi.fn(),
     closeSettings: vi.fn(),
     patchNode: vi.fn(),

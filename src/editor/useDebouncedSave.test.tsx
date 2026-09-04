@@ -196,6 +196,35 @@ describe('useDebouncedSave（防抖落盘 + 脏态卸载冲刷）', () => {
     expect((onSave.mock.calls[0][0] as ProjectContent).name).toBe('真改动')
   })
 
+  it('资产索引变化（§7.3 会话内导入新增条目）也置脏落盘', async () => {
+    const onSave = vi.fn()
+    const { rerender } = renderHook(({ doc }) => useDebouncedSave(doc, onSave), {
+      initialProps: { doc: mkDoc() },
+    })
+    const withAsset: ProjectContent = {
+      ...mkDoc(),
+      assets: {
+        byId: {
+          'pa-1': {
+            id: 'pa-1',
+            relPath: 'assets/pa-1.png',
+            mime: 'image/png',
+            source: 'upload',
+            createdAt: '2026-09-04T08:00:00.000Z',
+          },
+        },
+      },
+    }
+    act(() => {
+      rerender({ doc: withAsset })
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600)
+    })
+    expect(onSave).toHaveBeenCalledTimes(1)
+    expect((onSave.mock.calls[0][0] as ProjectContent).assets?.byId['pa-1']).toBeDefined()
+  })
+
   it('仅集标题变化（renameEpisode 的改名/清空）也置脏落盘，不静默丢失', async () => {
     const onSave = vi.fn()
     const { rerender } = renderHook(({ doc }) => useDebouncedSave(doc, onSave), {
