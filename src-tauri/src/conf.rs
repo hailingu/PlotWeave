@@ -49,48 +49,25 @@ mod tests {
         );
     }
 
-    /// projects 树的 scope 只能授权专用资产子目录 `projects/*/assets/`
-    ///（issue #9：媒体 URL 仅由 projectAssets 经 project_asset_path 校验
-    /// 后合成，宽 glob 会让 project.json 等非资产文件也协议可达）。
+    /// assetProtocol scope 恰为两个专用资产子目录授权（issue #9 低成本
+    /// 硬化，数据模型 §7.1 资产根）：媒体 URL 仅由 projectAssets/
+    /// libraryStore 两条管线合成，取值范围固定为 projects/<id>/assets/
+    /// 与 library/assets/。全量白名单断言——任何更宽的条目（如
+    /// $APPDATA/**）都会让 project.json/library.json 等控制文件重新
+    /// 协议可达，必须整体拒绝；两项授权缺一不可（缩略图媒体不可用）。
     #[test]
-    fn asset_protocol_scope_limits_projects_to_asset_subtrees() {
-        let scope = asset_protocol_scope(&load_conf());
-        let projects: Vec<&str> = scope
-            .iter()
-            .map(String::as_str)
-            .filter(|s| s.starts_with("$APPDATA/projects"))
-            .collect();
-        assert!(
-            !projects.is_empty(),
-            "assetProtocol.scope 缺少 projects 资产子目录授权：缩略图媒体协议不可用"
-        );
-        assert!(
-            projects
-                .iter()
-                .all(|s| s.starts_with("$APPDATA/projects/*/assets/")),
-            "projects 相关 scope 只能授权 $APPDATA/projects/*/assets/ 下的专用资产子目录（数据模型 §7.1，issue #9）：{projects:?}"
-        );
-    }
-
-    /// library 树的 scope 只能授权专用资产子目录 `library/assets/`
-    ///（与 projects 同根因：library.json 与删除日志不得协议可达）。
-    #[test]
-    fn asset_protocol_scope_limits_library_to_asset_subtrees() {
-        let scope = asset_protocol_scope(&load_conf());
-        let library: Vec<&str> = scope
-            .iter()
-            .map(String::as_str)
-            .filter(|s| s.starts_with("$APPDATA/library"))
-            .collect();
-        assert!(
-            !library.is_empty(),
-            "assetProtocol.scope 缺少 library 资产子目录授权：库媒体协议不可用"
-        );
-        assert!(
-            library
-                .iter()
-                .all(|s| s.starts_with("$APPDATA/library/assets/")),
-            "library 相关 scope 只能授权 $APPDATA/library/assets/ 下的专用资产子目录（数据模型 §7.1，issue #9）：{library:?}"
+    fn asset_protocol_scope_exactly_authorizes_dedicated_asset_subtrees() {
+        const APPROVED: [&str; 2] = [
+            "$APPDATA/library/assets/**",
+            "$APPDATA/projects/*/assets/**",
+        ];
+        let mut scope = asset_protocol_scope(&load_conf());
+        scope.sort();
+        let mut approved = APPROVED;
+        approved.sort();
+        assert_eq!(
+            scope, approved,
+            "assetProtocol.scope 必须恰为专用资产子目录白名单 {approved:?}：更宽的条目会使控制文件协议可达（数据模型 §7.1，issue #9）"
         );
     }
 }
