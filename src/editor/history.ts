@@ -36,10 +36,11 @@ const STACK_LIMIT = 200
 export class CommandStack {
   private undoStack: HistoryCommand[] = []
   private redoStack: HistoryCommand[] = []
-  /** 栈变更版本号：push/undo/redo 应用/clear 递增。带 redoGuard 的在途
-   * 重做以「校验前后版本未变」为应用前提——任何穿插操作（含撤销-重做
-   * 往返使栈顶 identity 恰好复原的 ABA 场景）都使本次重做失效；
-   * 单比栈顶 identity 防不住复原往返。 */
+  /** 栈操作版本号：push、撤销请求（含空栈撤销——撤销意向即操作）、
+   * redo 应用与 clear 递增。带 redoGuard 的在途重做以「校验前后版本
+   * 未变」为应用前提——任何穿插操作（含撤销-重做往返使栈顶 identity
+   * 恰好复原的 ABA 场景、空栈撤销请求）都使本次重做失效；单比栈顶
+   * identity 防不住这两类。 */
   private revision = 0
 
   constructor(
@@ -78,7 +79,12 @@ export class CommandStack {
 
   undo(): void {
     const cmd = this.undoStack.pop()
-    if (!cmd) return
+    if (cmd === undefined) {
+      // 空栈撤销仍是用户操作请求：按「最新操作优先」取消在途重做
+      //（无栈变更，不触发 onChange）
+      this.revision += 1
+      return
+    }
     cmd.undo()
     this.redoStack.push(cmd)
     this.revision += 1

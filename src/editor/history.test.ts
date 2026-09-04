@@ -231,6 +231,27 @@ describe('CommandStack：redoGuard（资产重回索引前的异步复验，issu
     expect(s.canRedo).toBe(true) // guarded 留在重做栈：可再次显式重做
     expect(older.redo).toHaveBeenCalledTimes(1)
   })
+
+  it('校验在途期间的空栈撤销请求同样取消在途重做（撤销意向优先，无栈变更也计操作）', async () => {
+    const { s } = stack()
+    let release: () => void = () => {}
+    const guarded: HistoryCommand = {
+      undo: vi.fn(),
+      redo: vi.fn(),
+      redoGuard: () =>
+        new Promise<void>((resolve) => {
+          release = resolve
+        }),
+    }
+    s.push(guarded)
+    s.undo() // guarded 为唯一历史条目：撤销栈已空
+    const pending = s.redo() // guarded 校验在途
+    s.undo() // 空栈撤销：无可撤销，但用户撤销意向应取消在途重做
+    release()
+    await pending
+    expect(guarded.redo).not.toHaveBeenCalled()
+    expect(s.canRedo).toBe(true) // 留在重做栈：可再次显式重做
+  })
 })
 
 describe('useCommandHistory（命令栈 hook：惰性构建 + version 驱动重渲染）', () => {
