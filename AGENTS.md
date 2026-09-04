@@ -128,8 +128,9 @@ wrong target.
 
 Out of scope: time-of-check/time-of-use swaps of the `projects/` tree by a
 concurrent local attacker under the same user identity. The anchored-handle +
-no-follow classification + identity binding already implemented in
-`src-tauri/src/store.rs` constitutes sufficient defense-in-depth; residual
+no-follow classification + identity binding already implemented in the
+`src-tauri/src/store/` persistence modules (`persist.rs` and siblings)
+constitutes sufficient defense-in-depth; residual
 windows beyond it (and the absence of comparable identities on non-Unix
 platforms, which have no build or test coverage in this repository) are
 documented, not fixed.
