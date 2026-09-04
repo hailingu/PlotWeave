@@ -552,6 +552,12 @@ function foldBranchCascade(
 function foldDelete(st: FoldState, cmd: Record<string, unknown>, index: number): void {
   const id = resolveRef(st, cmd, 'nodeId')
   if (!id) return st.fail(index, `节点不存在：${asText(cmd.nodeId)}`)
+  if (st.types.get(id) === 'image') {
+    // §13 首版边界（与 create/update 同口径）：AI 对图片节点只读——
+    // 批量模拟的删除路径不走 deleteNodesByIds，会绕过产物回收留下
+    // 永久索引的不可达资产，故整批拒绝
+    return st.fail(index, '图片节点暂不支持 AI 命令删除（首版边界）')
+  }
   st.exists.delete(id)
   for (const [ref, owner] of st.refOwner) if (owner === id) st.refOwner.delete(ref)
   st.virtualEdges.forEach((e) => {

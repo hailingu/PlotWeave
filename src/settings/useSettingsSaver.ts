@@ -34,8 +34,9 @@ export function useSettingsSaver(
 
   const persist = useCallback((next: AppSettings): Promise<void> => {
     const p = settingsStore.save(next).catch((err) => {
-      // 落盘失败：快照保留供关闭冲刷重试；上抛供在途等待方感知
-      pendingSaveRef.current = next
+      // 落盘失败：仅在无更新快照时回填（迟到的旧失败不得覆盖用户随后的
+      // 新编辑——否则关闭冲刷会落盘旧快照、静默回退新编辑）
+      if (pendingSaveRef.current === null) pendingSaveRef.current = next
       throw err
     })
     activeSaveRef.current = p
@@ -61,14 +62,18 @@ export function useSettingsSaver(
   /** 关闭冲刷：清防抖 → await 在途 save → 落盘未保存快照；失败保留现场上抛。 */
   const flush = useCallback(async (): Promise<void> => {
     if (saveTimer.current) clearTimeout(saveTimer.current)
-    await activeSaveRef.current
+    // 在途 save 的迟到失败不阻断冲刷：失败时其快照已回填 pending（或被
+    // 更新的快照取代），由下方 pending 落盘统一收口重试
+    const active = activeSaveRef.current
+    if (active !== null) await active.catch(() => {})
     const pending = pendingSaveRef.current
     if (pending !== null) {
       pendingSaveRef.current = null
       try {
         await settingsStore.save(pending)
       } catch (err) {
-        pendingSaveRef.current = pending
+        // 冲刷期间用户又编辑过（快照已是更新值）时不回填旧快照
+        if (pendingSaveRef.current === null) pendingSaveRef.current = pending
         throw err
       }
     }

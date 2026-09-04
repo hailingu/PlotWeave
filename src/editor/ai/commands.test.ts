@@ -899,4 +899,18 @@ describe('图片节点的 AI 命令边界（§13 首版：快照只读可见、�
     expect(bad.ok).toBe(false)
     expect(bad.issues.map((i) => i.message).join('\n')).toContain('未知节点类型')
   })
+
+  it('delete_node 目标为图片节点：整批拒绝（与 create/update 同口径）', () => {
+    const s: AiGraphSnapshot = {
+      nodes: [
+        { id: 'n1', type: 'scene', label: '场 01 · 天台' },
+        { id: 'img1', type: 'image', label: '图片 · 雨夜霓虹' },
+      ],
+      edges: [],
+      assets: new Map(),
+    }
+    const bad = validateAiBatch([{ op: 'delete_node', nodeId: 'img1' }], s)
+    expect(bad.ok).toBe(false)
+    expect(bad.issues.map((i) => i.message).join('\n')).toContain('暂不支持 AI 命令删除')
+  })
 })

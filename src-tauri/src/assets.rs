@@ -163,12 +163,13 @@ fn open_library_asset(library: &CapDir, rel_path: &str) -> Result<cap_std::fs::F
 /// 确保子目录存在并返回身份绑定的打开句柄：缺失即创建（排他语义由后续
 /// 归类 + open_dir_bound 保证），现存必须是非符号链接的真实目录。
 fn ensure_child_dir(parent: &CapDir, name: &str, label: &str) -> Result<CapDir, String> {
-    match parent.symlink_metadata(name) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => parent
-            .create_dir(name)
-            .map_err(|e| format!("创建{label}失败：{e}"))?,
-        Err(e) => return Err(format!("读取{label}元数据失败：{e}")),
-        Ok(_) => {}
+    // 总是尝试创建、容忍 AlreadyExists：先查再建留有竞态窗口——两个并发
+    // 首次落盘同时观察到目录缺失时，其一的 create_dir 会撞上另一者刚建的
+    // 目录；该作业的付费生成结果不应因此丢弃。归类校验照常兜底。
+    if let Err(e) = parent.create_dir(name) {
+        if e.kind() != std::io::ErrorKind::AlreadyExists {
+            return Err(format!("创建{label}失败：{e}"));
+        }
     }
     let md = parent
         .symlink_metadata(name)
@@ -734,6 +735,18 @@ mod tests {
         assert!(rel.ends_with(".jpg"), "jpeg 扩展应映射为 .jpg：{rel}");
         assert_eq!(ext_for_mime("image/webp"), "webp");
         assert_eq!(ext_for_mime("application/octet-stream"), "bin");
+        cleanup(&root);
+    }
+    #[test]
+    fn ensure_child_dir_tolerates_already_exists() {
+        // 并发首次落盘的竞态窗口由「总是创建 + 容忍 AlreadyExists」消除：
+        // 目录已存在（等价于另一并发创建者刚建好）同样成功返回绑定句柄
+        let (projects, _lib, root) = temp_fixture();
+        let parent = cap(&projects);
+        let first = ensure_child_dir(&parent, "p-conc", "项目资产根").expect("首次创建");
+        drop(first);
+        let second = ensure_child_dir(&parent, "p-conc", "项目资产根").expect("已存在复用");
+        drop(second);
         cleanup(&root);
     }
 }

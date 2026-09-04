@@ -147,6 +147,38 @@ describe('SettingsView 默认模型分段', () => {
     expect(saveSpy.mock.calls[0][0].defaultImage).toBe('openai:gpt-4o')
   })
 
+  it('在途 save 迟到失败不覆盖更新的快照：关闭冲刷落盘的是最新编辑', async () => {
+    let rejectA!: () => void
+    const saveSpy = vi
+      .spyOn(settingsStore, 'save')
+      .mockImplementationOnce(() => new Promise<void>((_res, rej) => (rejectA = rej)))
+      .mockImplementation(() => Promise.resolve())
+    const onClose = vi.fn()
+    render(<SettingsView onClose={onClose} />)
+    await screen.findByText('OpenAI 兼容')
+    vi.useFakeTimers()
+    // 编辑 A：防抖触发、save A 在途（将迟到失败）
+    fireEvent.change(screen.getByRole('combobox', { name: /图像生成模型/ }), {
+      target: { value: 'openai:gpt-4o' },
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600)
+    })
+    // 编辑 B：快照更新为 B（防抖计时中；用清单内另一真实选项）
+    fireEvent.change(screen.getByRole('combobox', { name: /图像生成模型/ }), {
+      target: { value: 'openai:gpt-4o-mini' },
+    })
+    rejectA() // A 的失败不得把快照回退成 A
+    fireEvent.click(screen.getByRole('button', { name: '关闭设置' }))
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect(saveSpy.mock.calls[1][0].defaultImage).toBe('openai:gpt-4o-mini')
+  })
+
   it('关闭冲刷 save 失败：页面保持打开、错误可见，快照保留可重试', async () => {
     let fail = true
     vi.spyOn(settingsStore, 'save').mockImplementation(() =>
