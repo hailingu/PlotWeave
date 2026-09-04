@@ -42,6 +42,17 @@ export interface LibraryAssetDragPayload {
   mime: string
 }
 
+/** drop 命中的节点：事件目标向上找 .react-flow__node 容器取 data-id，
+ * 再在候选节点列表中按 id 反查；未命中节点容器返回 undefined。 */
+export function hitDropNode<T extends { id: string }>(
+  e: { target: unknown },
+  nodes: readonly T[] | null | undefined,
+): T | undefined {
+  const hit = (e.target as HTMLElement).closest?.('.react-flow__node') as HTMLElement | null
+  const nodeId = hit?.dataset.id
+  return nodeId ? nodes?.find((n) => n.id === nodeId) : undefined
+}
+
 /** 从 dataTransfer 解析库资产载荷；非本协议或非法 JSON 返回 null。 */
 export function readLibraryAssetPayload(e: {
   getData: (type: string) => string

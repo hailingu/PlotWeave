@@ -146,6 +146,46 @@ describe('useCanvasDrop：库资产拖上分镜卡（§7.3 拷贝进项目）', 
     expect(importMock).not.toHaveBeenCalled()
   })
 
+  it('同一分镜卡导入在途期间的再次拖入被拒绝：不重复导入（无孤儿文件）、给出诊断', async () => {
+    let resolveImport: (a: AssetRef) => void = () => {}
+    importMock.mockImplementation(
+      () =>
+        new Promise<AssetRef>((r) => {
+          resolveImport = r
+        }),
+    )
+    const { deps, handlers } = setup()
+    handlers.onCanvasDrop(
+      fakeEvent('sh1', [PW_LIBRARY_ASSET_MIME], { [PW_LIBRARY_ASSET_MIME]: libPayload() }),
+    )
+    handlers.onCanvasDrop(
+      fakeEvent('sh1', [PW_LIBRARY_ASSET_MIME], { [PW_LIBRARY_ASSET_MIME]: libPayload() }),
+    )
+    expect(importMock).toHaveBeenCalledTimes(1)
+    expect(deps.onError).toHaveBeenCalledWith(expect.stringContaining('正在导入'))
+    await act(async () => {
+      resolveImport(importedAsset)
+      await Promise.resolve()
+    })
+    expect(deps.addAsset).toHaveBeenCalledTimes(1)
+    expect(deps.pushHistory).toHaveBeenCalledTimes(1)
+  })
+
+  it('导入返回的权威 MIME 与载荷推导的引用位不符时不绑定、不入索引', async () => {
+    importMock.mockResolvedValue({ ...importedAsset, mime: 'audio/mpeg' })
+    const { deps, handlers } = setup()
+    await act(async () => {
+      handlers.onCanvasDrop(
+        fakeEvent('sh1', [PW_LIBRARY_ASSET_MIME], { [PW_LIBRARY_ASSET_MIME]: libPayload() }),
+      )
+      await Promise.resolve()
+    })
+    expect(deps.onError).toHaveBeenCalledWith(expect.stringContaining('不符'))
+    expect(deps.addAsset).not.toHaveBeenCalled()
+    expect(deps.applyDataPatch).not.toHaveBeenCalled()
+    expect(deps.pushHistory).not.toHaveBeenCalled()
+  })
+
   it('导入失败经 onError 上浮，不落绑定', async () => {
     importMock.mockRejectedValue(new Error('磁盘满'))
     const { deps, handlers } = setup()
