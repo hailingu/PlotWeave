@@ -40,7 +40,8 @@ root `AGENTS.md`, this file is written in English for agent interoperability.
   Model validated domain identifiers and invariants with enums and newtypes
   instead of passing primitive strings through the core.
 - File-system trust boundaries follow the root `AGENTS.md` and the anchored
-  handle semantics established in `store.rs` (`projects_dir` capability
+  handle semantics established in the `store` persistence modules
+  (`store/persist.rs`; `projects_dir` capability
   handles, no-follow classification, identity binding): new persistence paths
   MUST NOT regress to name-based re-resolution.
 - Prefer explicit ownership and message passing over shared mutable state.
