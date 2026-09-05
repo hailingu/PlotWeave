@@ -12,9 +12,7 @@ use cap_std::fs::Dir as CapDir;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
 
-use crate::store::{
-    asset_stat, is_canonical_mime, is_valid_asset_rel_path, new_id, open_dir_bound,
-};
+use crate::store::{is_canonical_mime, is_valid_asset_rel_path, new_id, open_dir_bound};
 
 /// 库索引大小上限（1 MiB，对齐 prefs.rs 设置文件上限）：异常膨胀的索引在
 /// 物化进内存前显式拒绝，防脏数据/篡改文件拖垮解析与 IPC。
@@ -117,10 +115,15 @@ pub(crate) fn assets_root(library: &CapDir) -> Result<CapDir, String> {
 }
 
 /// 逐组件 no-follow 走到 rel_path 的父目录：中间组件必须是非符号链接的
-/// 真实目录（open_dir_bound 身份绑定），返回 (绑定父目录句柄, 终点名)——
-/// 终点的归类与动作（打开/删除）由调用方决定。rel_path 须为已过词法
-/// 白名单的纯相对路径（不含 `..`/空段）。
-pub(crate) fn open_parent_dir(root: &CapDir, rel_path: &str) -> Result<(CapDir, String), String> {
+/// 真实目录（open_dir_bound 身份绑定），返回 (绑定父目录句柄, 终点名)；
+/// 某个中间目录缺失时返回 None——终点必然也不存在，由调用方按语义分野
+/// 处置（删除入口按"已删除"幂等，读取/导入入口映射为显式错误，评审修复）；
+/// 符号链接与非目录中间组件一律拒绝。rel_path 须为已过词法白名单的纯
+/// 相对路径（不含 `..`/空段）。
+pub(crate) fn open_parent_dir(
+    root: &CapDir,
+    rel_path: &str,
+) -> Result<Option<(CapDir, String)>, String> {
     let comps: Vec<&str> = rel_path.split('/').collect();
     let Some((last, parents)) = comps.split_last() else {
         return Err(format!("资产路径为空：{rel_path}"));
@@ -132,7 +135,11 @@ pub(crate) fn open_parent_dir(root: &CapDir, rel_path: &str) -> Result<(CapDir, 
         .try_clone()
         .map_err(|e| format!("复制锚定句柄失败：{e}"))?;
     for comp in parents {
-        let md = asset_stat(&dir, comp, rel_path)?;
+        let md = match dir.symlink_metadata(comp) {
+            Ok(md) => md,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(format!("读取资产路径元数据失败（{rel_path}）：{e}")),
+        };
         if md.file_type().is_symlink() {
             return Err(format!("资产路径含符号链接：{rel_path}"));
         }
@@ -141,7 +148,7 @@ pub(crate) fn open_parent_dir(root: &CapDir, rel_path: &str) -> Result<(CapDir, 
         }
         dir = open_dir_bound(&dir, comp, &md, "资产路径中间目录")?;
     }
-    Ok((dir, (*last).to_string()))
+    Ok(Some((dir, (*last).to_string())))
 }
 
 /// 删除库媒体文件（删除路径信任链，issue #17 场景 1-3 的闭环）：relPath
@@ -153,7 +160,11 @@ pub(crate) fn remove_asset_file(library: &CapDir, rel_path: &str) -> Result<(), 
         .strip_prefix("assets/")
         .ok_or_else(|| format!("资产 relPath 越出 assets/，拒绝删除：{rel_path}"))?;
     let assets = assets_root(library)?;
-    let (parent, last) = open_parent_dir(&assets, suffix)?;
+    let Some((parent, last)) = open_parent_dir(&assets, suffix)? else {
+        // 中间目录已丢失：终点必然不存在，按已删除幂等成功（评审修复）——
+        // 悬挂父目录不得卡死删除入口，索引条目必须可收敛
+        return Ok(());
+    };
     match parent.symlink_metadata(&last) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(format!("读取资产文件元数据失败（{rel_path}）：{e}")),

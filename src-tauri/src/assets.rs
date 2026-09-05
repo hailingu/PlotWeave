@@ -76,7 +76,11 @@ fn open_library_asset(library: &CapDir, rel_path: &str) -> Result<cap_std::fs::F
         .strip_prefix("assets/")
         .ok_or_else(|| format!("库资产 relPath 越出 assets/：{rel_path}"))?;
     let assets = assets_root(library)?;
-    let (parent, last) = open_parent_dir(&assets, suffix)?;
+    let Some((parent, last)) = open_parent_dir(&assets, suffix)? else {
+        // 中间目录缺失：终点媒体必然不存在，导入侧为显式错误（坏数据绝不
+        // 进入拷贝流程；删除侧才按幂等处理，语义分野见 library_fs）
+        return Err(format!("资产文件不存在：{rel_path}"));
+    };
     let md = asset_stat(&parent, &last, rel_path)?;
     if md.file_type().is_symlink() {
         return Err(format!("库资产路径含符号链接：{rel_path}"));
@@ -556,7 +560,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejects_missing_or_swapped_media_file() {
+    fn import_rejects_missing_or_swapped_media_file() {
         let (projects, _library, root) = temp_fixture();
         seed_project(&projects, "p-1");
         fs::create_dir_all(projects.join("p-1").join("assets")).expect("建资产目录");
@@ -569,6 +573,27 @@ mod tests {
         });
         let err = validate_project_asset_with(&cap(&projects), "p-1", &asset)
             .expect_err("媒体缺失应拒绝");
+        assert!(err.contains("资产文件不存在"), "意外诊断：{err}");
+        cleanup(&root);
+    }
+
+    /// 嵌套 relPath 的父目录缺失在导入侧仍是显式错误（删除侧才幂等，
+    /// 与 library_fs::remove_asset_file 的语义分野）。
+    #[test]
+    fn import_rejects_missing_nested_parent_dir() {
+        let (projects, library, root) = temp_fixture();
+        seed_project(&projects, "p-1");
+        let index = json!({
+            "assets": [{ "id": "la-1", "name": "a.png", "mime": "image/png", "relPath": "assets/gone/a.png" }],
+            "groups": [],
+        });
+        fs::write(
+            library.join("library.json"),
+            serde_json::to_string(&index).expect("序列化"),
+        )
+        .expect("写库索引");
+        let err = import_asset_from_library(&cap(&projects), &cap(&library), "p-1", "la-1")
+            .expect_err("父目录缺失应拒绝导入");
         assert!(err.contains("资产文件不存在"), "意外诊断：{err}");
         cleanup(&root);
     }

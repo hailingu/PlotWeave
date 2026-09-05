@@ -473,6 +473,21 @@ mod tests {
         cleanup(&root);
     }
 
+    /// 中间目录已丢失的合法嵌套条目按已删除幂等处理（评审修复）：删除
+    /// 入口不得被悬挂父目录卡死，索引条目必须可收敛。
+    #[test]
+    fn delete_treats_missing_parent_dir_as_already_deleted() {
+        let (library, root) = temp_fixture();
+        write_index_raw(
+            &library,
+            &json!({ "assets": [entry("la-1", "assets/characters/a.png")], "groups": [] }),
+        );
+        delete_asset_with(&cap(&library), "la-1").expect("缺失父目录应按已删除幂等成功");
+        let raw = fs::read_to_string(library.join("library.json")).expect("读回索引");
+        assert!(!raw.contains("la-1"), "索引条目应被移除：{raw}");
+        cleanup(&root);
+    }
+
     /// 绿路径：合法条目删除媒体文件并原子更新索引；文件缺失幂等成功。
     #[test]
     fn delete_removes_media_updates_index_and_is_idempotent_on_missing_file() {
