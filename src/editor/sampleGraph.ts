@@ -234,7 +234,6 @@ export const SAMPLE_EDGES: Edge[] = [
     sourceHandle: branchOptionHandle('opt-sg-1'),
     target: 'scene-4',
     type: 'branch',
-    data: { optionLabel: '坦白' },
   },
   {
     id: 'e-branch1-hide',
@@ -242,7 +241,6 @@ export const SAMPLE_EDGES: Edge[] = [
     sourceHandle: branchOptionHandle('opt-sg-2'),
     target: 'scene-5',
     type: 'branch',
-    data: { optionLabel: '隐瞒' },
   },
   { id: 'e-scene4-dialogue2', source: 'scene-4', target: 'dialogue-2', className: 'pw-edge-sequence' },
   // 第二幕：节奏卡 → 两线汇合于旧公寓
@@ -264,7 +262,6 @@ export const SAMPLE_EDGES: Edge[] = [
     sourceHandle: branchOptionHandle('opt-sg-3'),
     target: 'scene-7',
     type: 'branch',
-    data: { optionLabel: '原谅' },
   },
   {
     id: 'e-branch2-leave',
@@ -272,7 +269,6 @@ export const SAMPLE_EDGES: Edge[] = [
     sourceHandle: branchOptionHandle('opt-sg-4'),
     target: 'scene-8',
     type: 'branch',
-    data: { optionLabel: '不原谅' },
   },
 ]
 

@@ -85,7 +85,6 @@ function mkSampleEdges(): Edge[] {
       sourceHandle: 'option-opt-2',
       target: 'd1',
       type: 'branch',
-      data: { optionLabel: '隐瞒' },
     } as Edge,
     { id: 'e3', source: 's1', sourceHandle: 'shots', target: 'sh1', className: 'pw-edge-attach' } as Edge,
   ]

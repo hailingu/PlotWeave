@@ -179,7 +179,7 @@ describe('simulateBatch · connect_edge（§4.4 三态边形态）', () => {
     expect(state.edges[0].target).toBe(state.nodes[1].id)
   })
 
-  it('branch：选项出口边带 type=branch，胶囊文案取自分支选项（同源）', () => {
+  it('branch：选项出口边带 type=branch；胶囊文案由 BranchEdge 实时派生，不落 data 镜像', () => {
     const { state, ops } = mkOps([branchNode('b1'), sceneNode('s1')])
     const { forward } = simulateBatch(
       [{ op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 1 }],
@@ -191,11 +191,11 @@ describe('simulateBatch · connect_edge（§4.4 三态边形态）', () => {
     expect(state.edges[0]).toMatchObject({
       sourceHandle: 'option-o-r',
       type: 'branch',
-      data: { optionLabel: '右' },
     })
+    expect(state.edges[0].data).toBeUndefined()
   })
 
-  it('branch 未给 optionIndex 时默认 0；非分支源节点回退空文案', () => {
+  it('branch 未给 optionIndex 时默认 0；非分支源节点回退首选项端口', () => {
     const { state, ops } = mkOps([branchNode('b1'), sceneNode('s1'), sceneNode('s2')])
     const { forward } = simulateBatch(
       [
@@ -207,8 +207,11 @@ describe('simulateBatch · connect_edge（§4.4 三态边形态）', () => {
       state.edges,
     )
     forward.forEach((f) => f())
-    expect(state.edges[0]).toMatchObject({ sourceHandle: 'option-o-l', data: { optionLabel: '左' } })
-    expect(state.edges[1]).toMatchObject({ data: { optionLabel: '' } })
+    expect(state.edges[0]).toMatchObject({ sourceHandle: 'option-o-l', type: 'branch' })
+    expect(state.edges[0].data).toBeUndefined()
+    // 非分支源：端口回退下标句柄，仍不落镜像
+    expect(state.edges[1]).toMatchObject({ sourceHandle: 'option-0', type: 'branch' })
+    expect(state.edges[1].data).toBeUndefined()
   })
 
   it('update_node 替换分支选项删掉已连线选项：连带删边，undo 一并恢复（§8.2.2）', () => {
