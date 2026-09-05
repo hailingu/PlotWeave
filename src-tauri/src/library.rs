@@ -13,7 +13,7 @@ use tauri::{AppHandle, Manager};
 
 use crate::library_fs::{
     assets_root, atomic_write_with, ensure_index_size, library_root, read_index_capped,
-    remove_asset_file, validate_asset_id, INDEX_FILE_NAME,
+    validate_asset_id, write_index,
 };
 use crate::store::is_canonical_mime;
 
@@ -55,20 +55,35 @@ pub fn library_dir_path(app: AppHandle) -> Result<String, String> {
         .ok_or_else(|| "资产库路径含非法字符".to_string())
 }
 
-/// 列出全量索引（启动时一次载入，前端内存过滤，§8.1）：脏索引条目已由
-/// 共享内核隔离，非法条目以 `warnings` 清单随索引返回。
+/// 列出全量索引（启动时一次载入，前端内存过滤，§8.1）：先按 §7.2 恢复
+/// 删除日志中的未完成事务，脏索引条目由共享内核隔离，`warnings` 与
+/// `cleanupPending` 随索引返回，冲突期条目标记 `conflicted` 不可用。
 #[tauri::command]
 pub fn library_list(app: AppHandle) -> Result<Value, String> {
     let library = library_root(&app)?;
-    let (mut index, warnings) = read_index_capped(&library)?;
+    let mut recovery = crate::library_journal::recover(&library)?;
+    let (mut index, mut warnings) = read_index_capped(&library)?;
+    warnings.append(&mut recovery.warnings);
+    for id in &recovery.conflicted {
+        if let Some(arr) = index["assets"].as_array_mut() {
+            if let Some(e) = arr
+                .iter_mut()
+                .find(|a| a.get("id").and_then(Value::as_str) == Some(id.as_str()))
+            {
+                e["conflicted"] = json!(true);
+            }
+        }
+        warnings.push(format!("资产 {id} 处于删除事务冲突期，暂不可用"));
+    }
     index["warnings"] = json!(warnings);
+    index["cleanupPending"] = json!(recovery.cleanup_pending);
     Ok(index)
 }
 
 /// 导入资产内核（句柄域）：mime 信任边界（trim + 小写后必须规范形）、媒体
 /// 经 `library/assets/` 专用根句柄原子落盘（新 id，库自包含），索引净化
 /// 读取后追加并落盘，返回新条目。
-fn put_asset_with(
+pub(crate) fn put_asset_with(
     library: &cap_std::fs::Dir,
     name: &str,
     mime: &str,
@@ -87,8 +102,14 @@ fn put_asset_with(
     if bytes.len() > ASSET_MAX_BYTES {
         return Err("文件超过 20 MiB 上限".into());
     }
+    let recovery = crate::library_journal::recover(library)?;
+    if recovery.read_only {
+        return Err("删除日志异常，库写入/删除已暂停：须人工修复 asset-delete-journal.json".into());
+    }
     let assets = assets_root(library)?;
-    let (mut index, warnings) = read_index_capped(library)?;
+    let (mut index, mut warnings) = read_index_capped(library)?;
+    warnings.extend(recovery.warnings);
+    let cleanup_pending = recovery.cleanup_pending;
     let id = format!("la-{:x}-{}", now_ms(), bytes.len());
     let file_name = format!("{}.{}", id, ext_for(name, &mime));
     let mut entry = json!({
@@ -119,6 +140,7 @@ fn put_asset_with(
     if !warnings.is_empty() {
         entry["warnings"] = json!(warnings);
     }
+    entry["cleanupPending"] = json!(cleanup_pending);
     Ok(entry)
 }
 
@@ -232,55 +254,25 @@ fn apply_group_id(entry: &mut Value, g: &Value) -> Result<(), String> {
     Ok(())
 }
 
-/// 索引原子落盘：全程相对库根锚定句柄，复用 store 的 §10.2 替换语义原子
-/// 写内核（排他临时文件 + rename 前复核 + 持久性屏障），不按路径名重解析。
-/// 序列化使用紧凑形式并校验读取侧同款大小上限（评审修复）：读侧量磁盘
-/// 原始字节、写侧量即将写出的同一紧凑表示，两侧同一编码闭环——超限索引
-/// 拒绝落盘，可读的索引永远可写回。调用方传入的索引应为净化后视图。
-fn write_index(library: &cap_std::fs::Dir, index: &Value) -> Result<(), String> {
-    ensure_index_size(index)?;
-    let text = serde_json::to_string(index).map_err(|e| format!("序列化索引失败：{e}"))?;
-    crate::store::atomic_write(library, INDEX_FILE_NAME, &text)
-}
-
-/// 删除资产内核（句柄域）：先在净化后索引中定位条目（隔离条目不可达）→
-/// 候选索引先过写入侧上限（评审修复：写盘失败不得发生在媒体已删之后）→
-/// 媒体文件经 `library/assets/` 专用根句柄逐组件 no-follow 删除（越界/
-/// 符号链接拒绝、缺失幂等）→ 原子更新索引。返回随写回携带的净化诊断——
-/// 脏索引下"落盘即净化"不得静默（评审修复）。先删文件后改索引：索引落盘
-/// 失败只留下一次可重试的悬挂条目，不会留下索引已删而文件仍在的孤儿。
-fn delete_asset_with(library: &cap_std::fs::Dir, id: &str) -> Result<Value, String> {
-    let (mut index, warnings) = read_index_capped(library)?;
-    let assets = index["assets"].as_array_mut().ok_or("资产索引结构损坏")?;
-    let pos = assets
-        .iter()
-        .position(|a| a.get("id").and_then(Value::as_str) == Some(id))
-        .ok_or_else(|| format!("资产不存在：{id}"))?;
-    let rel = assets[pos]
-        .get("relPath")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    assets.remove(pos);
-    ensure_index_size(&index)?;
-    remove_asset_file(library, &rel)?;
-    write_index(library, &index)?;
-    Ok(json!({ "warnings": warnings }))
-}
-
-/// 删除资产命令：移除索引项并删除媒体文件；响应携带净化诊断。
+/// 删除资产命令：日志驱动的身份绑定隔离事务（§7.2）——响应携带净化
+/// 诊断与 cleanupPending。移除索引项并把媒体隔离进 .trash/。
 #[tauri::command]
 pub fn library_delete(app: AppHandle, id: String) -> Result<Value, String> {
     validate_asset_id(&id)?;
     let library = library_root(&app)?;
-    delete_asset_with(&library, &id)
+    crate::library_journal::delete_asset_transacted(&library, &id)
 }
 
 /// 更新元信息内核（句柄域）：净化读取 → 定位条目 → 应用补丁 → 原子写回；
 /// 返回条目随写回携带净化诊断（评审修复，仅在非空时附加）。
 fn update_meta_with(library: &cap_std::fs::Dir, id: &str, patch: &Value) -> Result<Value, String> {
     let tags = normalize_tags(patch.get("tags"));
-    let (mut index, warnings) = read_index_capped(library)?;
+    let recovery = crate::library_journal::recover(library)?;
+    if recovery.read_only {
+        return Err("删除日志异常，库写入/删除已暂停：须人工修复 asset-delete-journal.json".into());
+    }
+    let (mut index, mut warnings) = read_index_capped(library)?;
+    warnings.extend(recovery.warnings);
     let assets = index["assets"].as_array_mut().ok_or("资产索引结构损坏")?;
     let entry = assets
         .iter_mut()
@@ -306,6 +298,7 @@ fn update_meta_with(library: &cap_std::fs::Dir, id: &str, patch: &Value) -> Resu
     if !warnings.is_empty() {
         updated["warnings"] = json!(warnings);
     }
+    updated["cleanupPending"] = json!(recovery.cleanup_pending);
     Ok(updated)
 }
 

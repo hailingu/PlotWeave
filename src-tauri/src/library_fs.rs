@@ -151,33 +151,6 @@ pub(crate) fn open_parent_dir(
     Ok(Some((dir, (*last).to_string())))
 }
 
-/// 删除库媒体文件（删除路径信任链，issue #17 场景 1-3 的闭环）：relPath
-/// 必须已过 [`is_valid_asset_rel_path`] 白名单且以 `assets/` 开头；父目录
-/// 逐组件 no-follow 绑定打开，终点归类为普通文件后句柄相对删除——索引
-/// 自身与 assets/ 之外的路径不可达；终点缺失按已删除幂等成功。
-pub(crate) fn remove_asset_file(library: &CapDir, rel_path: &str) -> Result<(), String> {
-    let suffix = rel_path
-        .strip_prefix("assets/")
-        .ok_or_else(|| format!("资产 relPath 越出 assets/，拒绝删除：{rel_path}"))?;
-    let assets = assets_root(library)?;
-    let Some((parent, last)) = open_parent_dir(&assets, suffix)? else {
-        // 中间目录已丢失：终点必然不存在，按已删除幂等成功（评审修复）——
-        // 悬挂父目录不得卡死删除入口，索引条目必须可收敛
-        return Ok(());
-    };
-    match parent.symlink_metadata(&last) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(format!("读取资产文件元数据失败（{rel_path}）：{e}")),
-        Ok(md) if md.file_type().is_symlink() => {
-            Err(format!("资产路径含符号链接，拒绝删除：{rel_path}"))
-        }
-        Ok(md) if !md.is_file() => Err(format!("资产路径不是普通文件，拒绝删除：{rel_path}")),
-        Ok(_) => parent
-            .remove_file(&last)
-            .map_err(|e| format!("删除资产文件失败（{rel_path}）：{e}")),
-    }
-}
-
 /// 索引受限读取（library.rs 命令面与 assets.rs 导入路径的**唯一**索引读
 /// 实现）：no-follow 归类 → 大小上限内读取 → JSON 解析 → 逐条目白名单
 /// 校验——非法条目隔离出内存索引并逐条返回警告（§7.2 非法条目不进内存
@@ -324,6 +297,17 @@ pub(crate) fn ensure_index_size(index: &Value) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// 索引原子落盘：全程相对库根锚定句柄，复用 store 的 §10.2 替换语义原子
+/// 写内核（排他临时文件 + rename 前复核 + 持久性屏障），不按路径名重解析。
+/// 序列化使用紧凑形式并校验读取侧同款大小上限（评审修复）：读侧量磁盘
+/// 原始字节、写侧量即将写出的同一紧凑表示，两侧同一编码闭环——超限索引
+/// 拒绝落盘，可读的索引永远可写回。调用方传入的索引应为净化后视图。
+pub(crate) fn write_index(library: &CapDir, index: &Value) -> Result<(), String> {
+    ensure_index_size(index)?;
+    let text = serde_json::to_string(index).map_err(|e| format!("序列化索引失败：{e}"))?;
+    crate::store::atomic_write(library, INDEX_FILE_NAME, &text)
 }
 
 /// 同目录原子落盘内核（排他临时文件 + sync + rename + 父目录 fsync 持久性

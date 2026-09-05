@@ -164,13 +164,15 @@ fn ensure_project_control(projects: &CapDir, id: &str) -> Result<(), String> {
 /// 项目控制文件必须存在且通过归类校验（不替不存在的项目建资产目录）；
 /// 库条目形状校验 → 源文件身份绑定打开 → 目标目录确保 → 原子拷贝落盘 →
 /// 返回项目级 AssetRef（新 id、source=upload、规范 UTC createdAt）。
-fn import_asset_from_library(
+pub(crate) fn import_asset_from_library(
     projects: &CapDir,
     library: &CapDir,
     id: &str,
     library_asset_id: &str,
 ) -> Result<Value, String> {
     ensure_project_control(projects, id)?;
+    // §7.2：冲突期条目不得为导入/收藏提供复制源
+    crate::library_journal::ensure_importable(library, library_asset_id)?;
     let (rel_path, mime, name) = find_library_entry(library, library_asset_id)?;
     let mut src = open_library_asset(library, &rel_path)?;
     let project_dir = ensure_child_dir(projects, id, "项目资产根")?;
