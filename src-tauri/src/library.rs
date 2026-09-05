@@ -12,8 +12,8 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
 
 use crate::library_fs::{
-    assets_root, atomic_write_with, library_root, read_index_capped, remove_asset_file,
-    validate_asset_id, INDEX_FILE_NAME,
+    assets_root, atomic_write_with, ensure_index_size, library_root, read_index_capped,
+    remove_asset_file, validate_asset_id, INDEX_FILE_NAME,
 };
 use crate::store::is_canonical_mime;
 
@@ -91,9 +91,6 @@ fn put_asset_with(
     let (mut index, _) = read_index_capped(library)?;
     let id = format!("la-{:x}-{}", now_ms(), bytes.len());
     let file_name = format!("{}.{}", id, ext_for(name, &mime));
-    atomic_write_with(&assets, &file_name, |dst| {
-        std::io::Write::write_all(dst, bytes).map(|_| ())
-    })?;
     let entry = json!({
         "id": id,
         "name": name.trim(),
@@ -109,6 +106,12 @@ fn put_asset_with(
         .as_array_mut()
         .ok_or("资产索引结构损坏")?
         .push(entry.clone());
+    // 媒体落盘前先校验候选索引大小（评审修复）：超限在物化前拒绝，
+    // 不留下索引写不回去的孤儿媒体文件
+    ensure_index_size(&index)?;
+    atomic_write_with(&assets, &file_name, |dst| {
+        std::io::Write::write_all(dst, bytes).map(|_| ())
+    })?;
     write_index(library, &index)?;
     Ok(entry)
 }
@@ -225,8 +228,10 @@ fn apply_group_id(entry: &mut Value, g: &Value) -> Result<(), String> {
 
 /// 索引原子落盘：全程相对库根锚定句柄，复用 store 的 §10.2 替换语义原子
 /// 写内核（排他临时文件 + rename 前复核 + 持久性屏障），不按路径名重解析；
-/// 调用方传入的索引应为净化后视图。
+/// 序列化后校验读取侧同款大小上限（评审修复：超限索引一旦落盘，全部读取
+/// 入口被卡死且 UI 无法通过删除条目自愈）。调用方传入的索引应为净化后视图。
 fn write_index(library: &cap_std::fs::Dir, index: &Value) -> Result<(), String> {
+    ensure_index_size(index)?;
     let text = serde_json::to_string_pretty(index).map_err(|e| format!("序列化索引失败：{e}"))?;
     crate::store::atomic_write(library, INDEX_FILE_NAME, &text)
 }
@@ -539,6 +544,69 @@ mod tests {
             crate::library_fs::read_index_capped(&cap(&library)).expect("缺失索引应回退默认");
         assert_eq!(index["assets"].as_array().map(Vec::len), Some(0));
         assert!(warnings.is_empty());
+        cleanup(&root);
+    }
+
+    /// 非对象根（标量/数组）显式拒绝而非 panic（评审修复：serde_json 字符串
+    /// 索引在非对象根上 panic 会让全部库命令不可用）。
+    #[test]
+    fn read_index_rejects_non_object_root() {
+        let (library, root) = temp_fixture();
+        for raw in ["[1,2,3]", "42", "\"text\""] {
+            fs::write(library.join("library.json"), raw).expect("写非对象根索引");
+            let err = crate::library_fs::read_index_capped(&cap(&library))
+                .expect_err("非对象根应显式拒绝");
+            assert!(err.contains("对象"), "意外诊断：{err}");
+        }
+        cleanup(&root);
+    }
+
+    /// mime 仅空白/大小写差异的存量条目就地修复，且修复必须可见（逐条警告，
+    /// 评审修复：静默修复会让前端与后续写回都无法感知）。
+    #[test]
+    fn read_index_reports_mime_repair_warning() {
+        let (library, root) = temp_fixture();
+        write_index_raw(
+            &library,
+            &json!({
+                "assets": [{
+                    "id": "la-1", "name": "x", "kind": "other",
+                    "mime": " Image/PNG ", "relPath": "assets/la-1.png",
+                }],
+                "groups": [],
+            }),
+        );
+        let (index, warnings) =
+            crate::library_fs::read_index_capped(&cap(&library)).expect("可修复条目应保留");
+        assert_eq!(index["assets"][0]["mime"].as_str(), Some("image/png"));
+        assert!(
+            warnings.iter().any(|w| w.contains("规范化")),
+            "修复应可见：{warnings:?}"
+        );
+        cleanup(&root);
+    }
+
+    /// 写入侧同上限（评审修复）：接近上限的索引 + 导入扩容在物化前拒绝，
+    /// 不落媒体文件——否则超限索引落盘后全部读取入口卡死且 UI 无法自愈。
+    #[test]
+    fn put_rejects_when_serialized_index_would_exceed_cap() {
+        let (library, root) = temp_fixture();
+        let pad = "a".repeat(crate::library_fs::INDEX_MAX_BYTES - 64);
+        write_index_raw(&library, &json!({ "assets": [], "groups": [], "pad": pad }));
+        let raw_len = fs::metadata(library.join("library.json"))
+            .expect("读种子索引元数据")
+            .len() as usize;
+        assert!(
+            raw_len <= crate::library_fs::INDEX_MAX_BYTES,
+            "种子索引应可通过读取上限：{raw_len}"
+        );
+        let err = put_asset_with(&cap(&library), "x.png", "image/png", "other", b"A")
+            .expect_err("超限候选索引应拒绝写入");
+        assert!(err.contains("上限"), "意外诊断：{err}");
+        let files = fs::read_dir(library.join("assets"))
+            .expect("读资产目录")
+            .count();
+        assert_eq!(files, 0, "拒绝导入不得留下媒体文件");
         cleanup(&root);
     }
 

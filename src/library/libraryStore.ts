@@ -79,7 +79,14 @@ const memoryAssets = new Map<string, { asset: LibraryAsset; blob: Blob }>()
 
 async function tauriList(): Promise<LibraryAsset[]> {
   const { invoke } = await import('@tauri-apps/api/core')
-  const index = await invoke<{ assets?: unknown[] }>('library_list')
+  const index = await invoke<{ assets?: unknown[]; warnings?: unknown[] }>('library_list')
+  // 脏条目隔离的可见性契约（issue #17）：后端逐条返回的隔离/修复警告
+  // 进入前端既有 console.warn 诊断路径，被隔离资产不得静默消失
+  if (Array.isArray(index.warnings)) {
+    for (const w of index.warnings) {
+      if (typeof w === 'string' && w !== '') console.warn('[Library] 索引条目隔离：', w)
+    }
+  }
   return (Array.isArray(index.assets) ? index.assets : [])
     .map((a) => normalizeAsset(a as RawAsset))
     .filter((a): a is LibraryAsset => a !== null)

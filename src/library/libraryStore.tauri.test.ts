@@ -65,6 +65,28 @@ describe('libraryStore Tauri 路径：list（normalizeAsset 归一化）', () =>
     const { libraryStore } = await load()
     await expect(libraryStore.list()).resolves.toEqual([])
   })
+
+  it('后端隔离警告逐条进 console.warn 诊断路径', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    invoke.mockResolvedValue({
+      assets: [entry()],
+      warnings: ['已隔离非法索引条目 #1：…', '已隔离非法索引条目 #2：…'],
+    })
+    const { libraryStore } = await load()
+    await expect(libraryStore.list()).resolves.toHaveLength(1)
+    expect(warn).toHaveBeenCalledTimes(2)
+    expect(warn.mock.calls[0]).toContain('已隔离非法索引条目 #1：…')
+    warn.mockRestore()
+  })
+
+  it('warnings 缺失/非字符串/空串项不产生告警', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    invoke.mockResolvedValue({ assets: [entry()], warnings: [42, '', null] })
+    const { libraryStore } = await load()
+    await libraryStore.list()
+    expect(warn).not.toHaveBeenCalled()
+    warn.mockRestore()
+  })
 })
 
 describe('libraryStore Tauri 路径：put', () => {

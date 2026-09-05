@@ -160,6 +160,11 @@ pub(crate) fn read_index_capped(library: &CapDir) -> Result<(Value, Vec<String>)
         Some(text) => {
             let index: Value =
                 serde_json::from_str(&text).map_err(|e| format!("资产索引损坏：{e}"))?;
+            // 非对象根（标量/数组）显式拒绝：字符串索引在非对象根上 panic
+            // 会把脏数据放大成全部库命令不可用（评审修复）
+            if !index.is_object() {
+                return Err("资产索引根必须是对象".into());
+            }
             Ok(sanitize_index(index))
         }
     }
@@ -198,8 +203,10 @@ fn read_index_text_capped(library: &CapDir) -> Result<Option<String>, String> {
 }
 
 /// 索引条目白名单（§7.2）：id/relPath/mime 形状校验，mime 在内存中规范化
-/// （trim + 小写）；任一项非法即整条拒绝。非法条目不进入内存索引。
-fn sanitize_entry(entry: &Value) -> Result<Value, String> {
+/// （trim + 小写）；任一项非法即整条拒绝。非法条目不进入内存索引；mime
+/// 发生就地修复时追加警告（评审修复：修复必须可见，静默修复会让前端与
+/// 后续写回都无法感知）。
+fn sanitize_entry(entry: &Value, warnings: &mut Vec<String>) -> Result<Value, String> {
     let id = entry
         .get("id")
         .and_then(Value::as_str)
@@ -220,6 +227,9 @@ fn sanitize_entry(entry: &Value) -> Result<Value, String> {
     if !is_canonical_mime(&mime) {
         return Err(format!("条目 {id} 的 mime 非规范形式：{mime_raw}"));
     }
+    if mime != mime_raw {
+        warnings.push(format!("条目 {id} 的 mime 已规范化：{mime_raw} → {mime}"));
+    }
     let mut normalized = entry.clone();
     normalized["mime"] = json!(mime);
     Ok(normalized)
@@ -235,7 +245,7 @@ fn sanitize_index(mut index: Value) -> (Value, Vec<String>) {
         .iter()
         .enumerate()
         .filter_map(|(i, e)| {
-            sanitize_entry(e)
+            sanitize_entry(e, &mut warnings)
                 .map_err(|reason| warnings.push(format!("已隔离非法索引条目 #{i}：{reason}")))
                 .ok()
         })
@@ -256,6 +266,22 @@ fn take_array(index: &mut Value, key: &str, warnings: &mut Vec<String>) -> Vec<V
         }
         None => Vec::new(),
     }
+}
+
+/// 写入侧同上限（与 read_index_capped 对偶，评审修复）：候选索引序列化后
+/// 超过 INDEX_MAX_BYTES 即拒绝——否则超限索引落盘后所有读取入口被卡死，
+/// UI 无法通过删除条目自愈。
+pub(crate) fn ensure_index_size(index: &Value) -> Result<(), String> {
+    let len = serde_json::to_string_pretty(index)
+        .map_err(|e| format!("序列化索引失败：{e}"))?
+        .len();
+    if len > INDEX_MAX_BYTES {
+        return Err(format!(
+            "资产库索引超过 {} MiB 上限，拒绝写入",
+            INDEX_MAX_BYTES / (1024 * 1024)
+        ));
+    }
+    Ok(())
 }
 
 /// 同目录原子落盘内核（排他临时文件 + sync + rename + 父目录 fsync 持久性
