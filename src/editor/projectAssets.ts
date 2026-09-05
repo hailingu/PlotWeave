@@ -100,7 +100,7 @@ async function memoryImport(_projectId: string, libraryAssetId: string): Promise
     createdAt: new Date().toISOString(),
   }
   // 拷贝语义（§7.3）：导入即经源 blob 建独立 object URL，源取不到则导入失败
-  memoryUrls.set(id, await libraryStore.mediaUrl({ id: lib.id, relPath: '' }))
+  memoryUrls.set(id, await libraryStore.mediaUrl({ id: lib.id, relPath: '', conflicted: lib.conflicted }))
   return asset
 }
 

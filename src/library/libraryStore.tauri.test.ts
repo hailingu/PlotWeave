@@ -183,3 +183,28 @@ describe('libraryStore Tauri 路径：mediaUrl', () => {
     )
   })
 })
+
+describe('libraryStore Tauri 路径：冲突期条目（issue #25）', () => {
+  it('normalizeAsset 保留 conflicted 标记；未标记不引入字段', async () => {
+    invoke.mockResolvedValue({
+      assets: [entry({ conflicted: true }), entry({ id: 'la-2' })],
+    })
+    const { libraryStore } = await load()
+    const list = await libraryStore.list()
+    expect(list[0].conflicted).toBe(true)
+    expect(list[1].conflicted).toBeUndefined()
+  })
+
+  it('冲突期条目的媒体 URL 拒绝服务，不拼接 relPath', async () => {
+    invoke.mockResolvedValue('/Users/x/Library/PlotWeave/library')
+    const { libraryStore } = await load()
+    await expect(
+      libraryStore.mediaUrl({
+        id: 'la-1',
+        relPath: 'assets/la-1.png',
+        conflicted: true,
+      }),
+    ).rejects.toThrow(/冲突期/)
+    expect(invoke.mock.calls).toHaveLength(0)
+  })
+})

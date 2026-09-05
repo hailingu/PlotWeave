@@ -2,13 +2,12 @@
 //! 持久化日志驱动的身份绑定隔离事务——①捕获媒体文件身份并把事务耐久写入
 //! `library/asset-delete-journal.json`；②原目录项原子 rename 进保留的
 //! `library/assets/.trash/` 隔离区并复核身份；③原子提交去项索引；④仅以
-//! 绑定①身份的操作系统原语清理隔离项（Linux `/proc/self/fd`，其余平台无
-//! 等价原语→保留隔离项并报告 `cleanupPending`，绝不按名删除）。
+//! 绑定①身份的操作系统原语清理隔离项（受支持平台均无该原语——Linux
+//! `/proc/self/fd` 是 procfs 符号链接，unlink 不解引用最终符号链接返回
+//! EPERM——故保留隔离项并报告 `cleanupPending`，绝不按名删除）。
 //! 启动及每次库列表/写入前按日志恢复未完成事务；冲突期条目标为不可用；
 //! 日志异型时整份恢复进入只读告警态，所有库写入/删除暂停。
 
-#[cfg(target_os = "linux")]
-use std::fs;
 use std::io::Read;
 
 use cap_std::fs::Dir as CapDir;
@@ -16,8 +15,9 @@ use serde_json::{json, Value};
 
 use crate::library_fs::{
     assets_root, ensure_index_size, open_parent_dir, read_index_capped, write_index,
+    INDEX_MAX_BYTES,
 };
-use crate::store::{asset_stat, atomic_write, new_id, open_dir_bound};
+use crate::store::{asset_stat, atomic_write, is_valid_asset_rel_path, new_id, open_dir_bound};
 
 pub(crate) const JOURNAL_FILE_NAME: &str = "asset-delete-journal.json";
 const TRASH_DIR: &str = "assets/.trash";
@@ -45,16 +45,11 @@ pub(crate) struct Recovery {
     pub read_only: bool,
 }
 
-/// 身份绑定删除原语（§7.2 步骤④）：Linux 经 `/proc/self/fd/<fd>` 解析到
-/// 已打开 inode 删除（不按名）；其余平台无等价原语，按契约保留隔离项。
-#[cfg(target_os = "linux")]
-fn identity_bound_unlink(file: &cap_std::fs::File) -> Result<(), String> {
-    use std::os::fd::AsRawFd;
-    fs::remove_file(format!("/proc/self/fd/{}", file.as_raw_fd()))
-        .map_err(|e| format!("身份绑定删除失败：{e}"))
-}
-
-#[cfg(not(target_os = "linux"))]
+/// 身份绑定删除原语（§7.2 步骤④）：当前受支持平台均未提供不经名字解析、
+/// 直接绑定已打开 inode 的删除系统调用——Linux 的 `/proc/self/fd/<fd>` 是
+/// procfs 符号链接，unlink 不解引用最终符号链接（EPERM），不得伪装修复。
+/// 按契约统一报告能力缺失：保留隔离项与日志并记录 cleanupPending，索引
+/// 不回滚；未来接入等价原语（如内核提供的 funlink）时在此收口。
 fn identity_bound_unlink(_file: &cap_std::fs::File) -> Result<(), String> {
     Err("平台缺少身份绑定删除原语".into())
 }
@@ -85,9 +80,11 @@ fn valid_str(v: Option<&Value>) -> Option<&str> {
     v?.as_str().filter(|s| !s.trim().is_empty())
 }
 
-/// 严格校验单条日志：任一字段异型/重复 id/路径越界（relPath 须以 assets/
-/// 开头且不含保留隔离目录，trashName 须位于 assets/.trash/ 随机单项）即
-/// None，调用方整份进入只读态。
+/// 严格校验单条日志：任一字段异型/重复 id/路径越界即 None，调用方整份
+/// 进入只读态。relPath 复用资产路径全量词法校验（首段 assets、无空段/
+/// `.`/`..`/反斜杠/绝对路径）并额外排除保留隔离目录；trashName 必须是
+/// `assets/.trash/` 的单一子项（评审修复：`assets/../…` 类词法不得进入
+/// 恢复的句柄遍历，否则恢复整体失败而非进入只读态）。
 fn parse_entry(v: &Value, seen: &mut Vec<String>) -> Option<JournalEntry> {
     let o = v.as_object()?;
     let id = valid_str(o.get("id"))?.trim().to_string();
@@ -96,11 +93,13 @@ fn parse_entry(v: &Value, seen: &mut Vec<String>) -> Option<JournalEntry> {
     }
     let asset_id = valid_str(o.get("assetId"))?.trim().to_string();
     let rel_path = valid_str(o.get("relPath"))?;
-    if !rel_path.starts_with("assets/") || rel_path.contains(".trash") {
+    if !is_valid_asset_rel_path(rel_path) || rel_path.contains(".trash") {
         return None;
     }
     let trash_name = valid_str(o.get("trashName"))?;
-    if !trash_name.starts_with(TRASH_DIR) || trash_name.len() <= TRASH_DIR.len() + 1 {
+    let trash_leaf = trash_name.strip_prefix("assets/.trash/")?;
+    if trash_leaf.is_empty() || trash_leaf.contains('/') || trash_leaf == "." || trash_leaf == ".."
+    {
         return None;
     }
     let (dev, ino) = parse_identity(o.get("identity"))?;
@@ -115,22 +114,38 @@ fn parse_entry(v: &Value, seen: &mut Vec<String>) -> Option<JournalEntry> {
     })
 }
 
-/// 读取日志：缺失回退空表；根非数组/条目异型/重复 id/越界路径 → 只读态。
+/// 读取日志：缺失回退空表。no-follow 归类（拒符号链接，要求普通文件——
+/// FIFO/目录等异型在打开前拒绝，不阻塞命令）+ 大小上限内受限读取；根非
+/// 数组/条目异型/重复 id/越界路径 → 只读态（评审修复）。
 fn read_journal(library: &CapDir, warnings: &mut Vec<String>) -> (Vec<JournalEntry>, bool) {
-    let text = match library.open(JOURNAL_FILE_NAME) {
-        Ok(mut f) => {
-            let mut buf = Vec::new();
-            if f.read_to_end(&mut buf).is_err() {
-                warnings.push("删除日志读取失败，库写入已暂停（只读告警态）".into());
-                return (Vec::new(), true);
-            }
-            String::from_utf8_lossy(&buf).into_owned()
-        }
+    let blocked = |warnings: &mut Vec<String>, why: &str| {
+        warnings.push(format!("删除日志{why}，库写入已暂停（只读告警态）"));
+        (Vec::new(), true)
+    };
+    let md = match library.symlink_metadata(JOURNAL_FILE_NAME) {
+        Ok(md) => md,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return (Vec::new(), false),
-        Err(_) => {
-            warnings.push("删除日志读取失败，库写入已暂停（只读告警态）".into());
-            return (Vec::new(), true);
+        Err(_) => return blocked(warnings, "读取失败"),
+    };
+    if md.file_type().is_symlink() || !md.is_file() {
+        return blocked(warnings, "是符号链接或非普通文件");
+    }
+    let text = {
+        let f = match library.open(JOURNAL_FILE_NAME) {
+            Ok(f) => f,
+            Err(_) => return blocked(warnings, "读取失败"),
+        };
+        let mut buf = Vec::new();
+        if f.take((INDEX_MAX_BYTES + 1) as u64)
+            .read_to_end(&mut buf)
+            .is_err()
+        {
+            return blocked(warnings, "读取失败");
         }
+        if buf.len() > INDEX_MAX_BYTES {
+            return blocked(warnings, "超过大小上限");
+        }
+        String::from_utf8_lossy(&buf).into_owned()
     };
     match serde_json::from_str::<Value>(&text) {
         Ok(Value::Array(arr)) => {
@@ -192,22 +207,32 @@ fn path_identity(parent: &CapDir, name: &str) -> PathIdentity {
     }
 }
 
-/// no-follow 打开 .trash 隔离项并复核身份：与日志预期身份一致时返回打开
-/// 句柄（步骤②复核与步骤④清理共用，句柄元数据同源比对）；缺失/异型/
-/// 身份不符返回 None。
+/// no-follow 打开 .trash 隔离项并复核身份的三态判别（评审修复：缺失与
+/// 身份不符必须区分——清理分支只允许在确认缺失时清除日志，身份不符/
+/// 被占用保留现场与日志，不得丢失证据）。
 #[cfg(unix)]
-fn verify_trash_identity(
-    trash: &CapDir,
-    entry: &JournalEntry,
-) -> Result<Option<cap_std::fs::File>, String> {
+enum TrashVerdict {
+    IdentityOk(cap_std::fs::File),
+    Missing,
+    Mismatch,
+}
+
+#[cfg(unix)]
+fn verify_trash_identity(trash: &CapDir, entry: &JournalEntry) -> Result<TrashVerdict, String> {
     let file_name = entry.trash_name.rsplit('/').next().unwrap_or_default();
-    let md = asset_stat(trash, file_name, &entry.trash_name)?;
+    let md = match trash.symlink_metadata(file_name) {
+        Ok(md) => md,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(TrashVerdict::Missing),
+        Err(e) => {
+            return Err(format!("读取隔离项元数据失败（{}）：{e}", entry.trash_name));
+        }
+    };
     if md.file_type().is_symlink() || !md.is_file() {
-        return Ok(None);
+        return Ok(TrashVerdict::Mismatch);
     }
     use cap_std::fs::MetadataExt;
     if (md.dev(), md.ino()) != (entry.dev, entry.ino) {
-        return Ok(None);
+        return Ok(TrashVerdict::Mismatch);
     }
     let f = trash
         .open(file_name)
@@ -216,9 +241,9 @@ fn verify_trash_identity(
         .metadata()
         .map_err(|e| format!("读取隔离项句柄元数据失败：{e}"))?;
     if (fm.dev(), fm.ino()) != (entry.dev, entry.ino) {
-        return Ok(None);
+        return Ok(TrashVerdict::Mismatch);
     }
-    Ok(Some(f))
+    Ok(TrashVerdict::IdentityOk(f))
 }
 
 /// 打开 .trash 隔离区目录句柄（缺失返回 None；不在此创建——创建只发生在
@@ -293,7 +318,7 @@ fn try_bound_cleanup(
     recovery: &mut Recovery,
 ) -> Result<bool, String> {
     match verify_trash_identity(trash, entry)? {
-        Some(f) => match identity_bound_unlink(&f) {
+        TrashVerdict::IdentityOk(f) => match identity_bound_unlink(&f) {
             Ok(()) => {
                 fsync_dir(trash)?;
                 Ok(true)
@@ -306,7 +331,15 @@ fn try_bound_cleanup(
                 Ok(false)
             }
         },
-        None => Ok(true), // 隔离项不存在：日志条目可清除
+        TrashVerdict::Missing => Ok(true), // 隔离项不存在：日志条目可清除
+        TrashVerdict::Mismatch => {
+            // 身份不符/被占用：保留现场与日志（评审修复：不得静默清除证据）
+            recovery.cleanup_pending.push(format!(
+                "隔离项保留（身份不符或被占用）：{} / {}",
+                entry.asset_id, entry.trash_name
+            ));
+            Ok(false)
+        }
     }
 }
 
@@ -422,7 +455,7 @@ fn recover_index_still_references(
     };
     match trash {
         Some(trash) => match verify_trash_identity(&trash, entry)? {
-            Some(_) => {
+            TrashVerdict::IdentityOk(_) => {
                 let (parent, last) = match original_parent(assets, &entry.rel_path)? {
                     Some(p) => p,
                     None => {
@@ -437,7 +470,8 @@ fn recover_index_still_references(
                     mark_conflict(recovery, "原路径已被后来文件占用", retained);
                 }
             }
-            None => mark_conflict(recovery, "隔离项缺失或身份不符", retained),
+            TrashVerdict::Missing => mark_conflict(recovery, "隔离项缺失", retained),
+            TrashVerdict::Mismatch => mark_conflict(recovery, "隔离项身份不符", retained),
         },
         None => {
             let started = match original_parent(assets, &entry.rel_path)? {
@@ -651,20 +685,31 @@ fn commit_quarantined_delete(
         .map_err(|e| format!("隔离媒体失败（{rel}）：{e}"))?;
     fsync_dir(&parent)?;
     fsync_dir(&trash)?;
-    if verify_trash_identity(&trash, &entry)?.is_none() {
+    if matches!(
+        verify_trash_identity(&trash, &entry)?,
+        TrashVerdict::Missing | TrashVerdict::Mismatch
+    ) {
         return resolve_quarantine_conflict(library, &trash, &entry, &parent, &last, entries);
     }
     // ③ 原子提交去项索引（保持已打开身份句柄直至本函数结束）
     write_index(library, &index)?;
-    // ④ 身份绑定清理；能力不足保留隔离项与日志，索引不回滚
+    // ④ 身份绑定清理；能力不足/隔离项身份变化均保留隔离项与日志（评审
+    // 修复：不得静默清除证据），索引不回滚。日志条目已在步骤①落盘——
+    // 仅在清理成功时重写移除，失败分支保持原样即可。
     let mut cleanup_pending = recovery.cleanup_pending;
-    let quarantined = verify_trash_identity(&trash, &entry)?.ok_or("隔离项身份复核失败")?;
-    if identity_bound_unlink(&quarantined).is_ok() {
-        fsync_dir(&trash)?;
-        entries.retain(|e| e.id != txn);
-        write_journal(library, &entries)?;
-    } else {
-        cleanup_pending.push(format!("媒体已隔离待清理：{rel}"));
+    match verify_trash_identity(&trash, &entry)? {
+        TrashVerdict::IdentityOk(f) => {
+            if identity_bound_unlink(&f).is_ok() {
+                fsync_dir(&trash)?;
+                entries.retain(|e| e.id != txn);
+                write_journal(library, &entries)?;
+            } else {
+                cleanup_pending.push(format!("媒体已隔离待清理：{rel}"));
+            }
+        }
+        TrashVerdict::Missing | TrashVerdict::Mismatch => {
+            cleanup_pending.push(format!("隔离项身份异常，保留现场待恢复：{rel}"));
+        }
     }
     Ok(json!({ "warnings": warnings, "cleanupPending": cleanup_pending }))
 }

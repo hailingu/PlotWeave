@@ -1,7 +1,7 @@
 //! 删除事务与恢复内核回归测试（issue #25 验收：任一步骤中断按日志恢复
 //! 一致、冲突期条目隔离、cleanupPending 可见、日志异型只读态）。
-//! 平台注记：身份绑定清理原语仅 Linux 提供——macOS 等平台按契约保留
-//! 隔离项 + cleanupPending，用例按 cfg 断言相应行为。
+//! 平台注记：受支持平台均无身份绑定删除原语（评审修复：/proc/self/fd
+//! unlink 返回 EPERM）——统一按契约保留隔离项 + cleanupPending。
 
 use super::*;
 use crate::library::put_asset_with;
@@ -432,10 +432,96 @@ fn recover_shared_reference_keeps_current_entry() {
         fs::metadata(library.join("assets").join("la-1.png")).is_ok(),
         "共享媒体不得被动"
     );
-    let journal = read_journal_raw(&library);
-    if cfg!(target_os = "linux") {
-        assert_eq!(journal, json!([]), "无隔离项（未生成）→ 日志清除");
-    }
-    let _ = journal;
+    // 无隔离目录（隔离项未生成）→ 日志清除
+    assert_eq!(read_journal_raw(&library), json!([]));
+    cleanup(&root);
+}
+
+/// 清理分支三态判别（评审修复）：隔离项身份不符时保留现场与日志——
+/// 不得静默清除证据（此前 Missing/Mismatch 混同导致日志丢失）。
+#[test]
+fn recover_retains_journal_on_trash_identity_mismatch() {
+    let (library, root) = temp_fixture();
+    fs::create_dir_all(library.join("assets").join(".trash")).expect("建隔离目录");
+    fs::write(
+        library.join("assets").join(".trash").join("t-x"),
+        b"SWAPPED",
+    )
+    .expect("写占用者");
+    write_index_raw(&library, &json!({ "assets": [], "groups": [] }));
+    // 预期身份 ≠ 隔离区内实际占用者
+    write_journal_raw(
+        &library,
+        json!([journal_entry_json(
+            "t-1",
+            "la-1",
+            "assets/la-1.png",
+            "assets/.trash/t-x",
+            1,
+            1
+        )]),
+    );
+    let recovery = recover(&cap(&library)).expect("恢复应成功");
+    assert_eq!(
+        read_journal_raw(&library).as_array().expect("日志").len(),
+        1,
+        "身份不符应保留日志"
+    );
+    assert!(
+        recovery
+            .cleanup_pending
+            .iter()
+            .any(|p| p.contains("身份不符")),
+        "应报告 cleanupPending：{:?}",
+        recovery.cleanup_pending
+    );
+    assert!(
+        fs::metadata(library.join("assets").join(".trash").join("t-x")).is_ok(),
+        "占用者文件应保留现场"
+    );
+    cleanup(&root);
+}
+
+/// 日志 relPath 含 `..` 词法（评审修复）：进入只读态而非恢复整体失败。
+#[test]
+fn journal_entry_with_traversal_lexeme_blocks_writes() {
+    let (library, root) = temp_fixture();
+    write_journal_raw(
+        &library,
+        json!([{
+            "id": "t-1", "assetId": "la-1", "relPath": "assets/../library.json",
+            "identity": { "dev": 1, "ino": 1 }, "trashName": "assets/.trash/t-x",
+        }]),
+    );
+    let recovery = recover(&cap(&library)).expect("恢复入口不失败");
+    assert!(recovery.read_only, "越界词法应只读告警态");
+    cleanup(&root);
+}
+
+/// trashName 含嵌套子段（评审修复）：必须是 assets/.trash/ 单一子项。
+#[test]
+fn journal_entry_with_nested_trash_name_blocks_writes() {
+    let (library, root) = temp_fixture();
+    write_journal_raw(
+        &library,
+        json!([{
+            "id": "t-1", "assetId": "la-1", "relPath": "assets/la-1.png",
+            "identity": { "dev": 1, "ino": 1 }, "trashName": "assets/.trash/sub/t-x",
+        }]),
+    );
+    let recovery = recover(&cap(&library)).expect("恢复入口不失败");
+    assert!(recovery.read_only, "嵌套 trash 名应只读告警态");
+    cleanup(&root);
+}
+
+/// 超限日志（评审修复）：受限读取在上限处截断后解析失败 → 只读态，
+/// 不物化超大文件。
+#[test]
+fn oversized_journal_blocks_writes() {
+    let (library, root) = temp_fixture();
+    let pad = "a".repeat(crate::library_fs::INDEX_MAX_BYTES + 1);
+    fs::write(library.join(JOURNAL_FILE_NAME), format!("[\"{pad}\"]")).expect("写超限日志");
+    let recovery = recover(&cap(&library)).expect("恢复入口不失败");
+    assert!(recovery.read_only, "超限日志应只读告警态");
     cleanup(&root);
 }
