@@ -34,7 +34,7 @@ export default function SceneNode({ id, data, selected }: NodeProps<SceneFlowNod
           <EditableName
             value={data.name}
             ariaLabel="场景名称"
-            onChange={(name) => patchNode(id, { name })}
+            onChange={(name) => patchNode(id, { nodeType: 'scene', patch: { name } })}
           />
           <span className="pw-index-no">
             SCENE {String(data.sceneNo).padStart(2, '0')}

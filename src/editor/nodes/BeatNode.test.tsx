@@ -81,6 +81,6 @@ describe('BeatNode（节拍胶囊）', () => {
     const input = screen.getByRole('textbox', { name: '节奏卡内容' })
     fireEvent.change(input, { target: { value: '雨夜反转' } })
     fireEvent.blur(input)
-    expect(api.patchNode).toHaveBeenCalledWith('b1', { name: '雨夜反转' })
+    expect(api.patchNode).toHaveBeenCalledWith('b1', { nodeType: 'beat', patch: { name: '雨夜反转' } })
   })
 })

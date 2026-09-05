@@ -3,7 +3,7 @@ import { renderHook } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { Edge } from '@xyflow/react'
 import { nodeLabelOf, useAiBridge, type AiBridgeDeps } from './useAiBridge'
-import type { AiCommand } from './ai/commands'
+import type { ValidatedCommand } from './ai/commands'
 import type { HistoryCommand } from './history'
 import { EMPTY_SETTINGS } from './settings'
 import type { BranchFlowNode, CanvasNode, SceneFlowNode } from './nodes/types'
@@ -84,9 +84,9 @@ function setup(initialNodes: CanvasNode[] = [sceneNode('s1')], initialEdges: Edg
         position: { x: 0, y: 0 },
         data: { ...(opts?.data ?? {}) },
       }) as CanvasNode,
-    applyDataPatch: (id, patch) => {
+    applyDataPatch: (id, cmd) => {
       state.nodes = state.nodes.map((n) =>
-        n.id === id ? ({ ...n, data: { ...n.data, ...patch } } as CanvasNode) : n,
+        n.id === id ? ({ ...n, data: { ...n.data, ...cmd.patch } } as CanvasNode) : n,
       )
     },
     setNodes: (up) => {
@@ -168,7 +168,10 @@ describe('useAiBridge（§6/§12 AI 桥回调族）', () => {
   it('applyAiBatch：空批次直接 null；非法批次返回错误文案且不改画布', () => {
     const { result, state, commands } = setup()
     expect(result.current.applyAiBatch([])).toBeNull()
-    const err = result.current.applyAiBatch([{ op: 'update_node', nodeId: 's1', patch: { hack: 1 } }])
+    // 判别化执行通道在编译期已拒绝宽补丁；此处的敌意输入只能经 cast 伪造，
+    // 用于锁定运行时重校验仍整批拒绝（纵深防御，issue 16）
+    const hostile = { op: 'update_node', nodeId: 's1', patch: { hack: 1 } } as unknown as ValidatedCommand
+    const err = result.current.applyAiBatch([hostile])
     expect(err).toContain('改动无法安全执行')
     expect(state.nodes).toHaveLength(1)
     expect(commands).toHaveLength(0)
@@ -176,10 +179,10 @@ describe('useAiBridge（§6/§12 AI 桥回调族）', () => {
 
   it('applyAiBatch：合法批次整批落地为一条复合命令，undo 一步回滚', () => {
     const { result, state, commands, closeSettings } = setup([sceneNode('s1'), branchNode('b1')])
-    const batch: AiCommand[] = [
+    const batch: ValidatedCommand[] = [
       { op: 'create_node', nodeType: 'scene', ref: 'ns', data: { name: '新场' } },
       { op: 'connect_edge', sourceId: 's1', targetId: 'ns' },
-      { op: 'update_node', nodeId: 'b1', patch: { prompt: '走哪边？' } },
+      { op: 'update_node', nodeId: 'b1', patch: { nodeType: 'branch', patch: { prompt: '走哪边？' } } },
     ]
     expect(result.current.applyAiBatch(batch)).toBeNull()
     expect(state.nodes).toHaveLength(3)

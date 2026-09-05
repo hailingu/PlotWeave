@@ -1,6 +1,7 @@
 import { createContext, useContext } from 'react'
 import type { BeatFulfillment } from './outline'
 import type { ProjectSettings } from './settings'
+import type { NodeDataPatch } from './nodes/patch'
 import type { ProjectContent } from '../model/content'
 
 /**
@@ -17,8 +18,8 @@ export interface NodeEditApi {
   /** ⚙️ 点击：开 ↔ 关（同一节点再点收起）。 */
   toggleSettings: (id: string) => void
   closeSettings: () => void
-  /** 编辑即命令：实时合并字段补丁。 */
-  patchNode: (id: string, patch: Record<string, unknown>) => void
+  /** 编辑即命令：实时合并字段补丁（按节点类型判别绑定，issue 16）。 */
+  patchNode: (id: string, cmd: NodeDataPatch) => void
   /** ⧉ 复制：同 data 新 id，右下偏移并只选中新副本。 */
   duplicateNode: (id: string) => void
   /** 🗑 删除：移除节点及其全部连线（撤销能力随命令栈任务补齐）。 */

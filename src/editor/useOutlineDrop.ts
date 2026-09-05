@@ -7,6 +7,7 @@ import { useCallback, type RefObject } from 'react'
 import type { Edge } from '@xyflow/react'
 import { episodeOfNode, hostSceneMap, type OutlineDropTarget } from './outline'
 import { outlineSplicePlan, spliceEdgesWith } from './outlineDrop'
+import { episodeNoPatch } from './nodes/patch'
 import type { HistoryCommand } from './history'
 import type { CanvasNode } from './nodes/types'
 
@@ -15,7 +16,8 @@ export interface OutlineDropDeps {
   nodesRef: RefObject<CanvasNode[]>
   edgesRef: RefObject<Edge[]>
   episodeTitlesRef: RefObject<Record<number, string>>
-  applyDataPatch: (id: string, patch: Record<string, unknown>) => void
+  /** 纯状态写入（episodeNo 补丁，按节点类型判别绑定，issue 16）。 */
+  applyDataPatch: (id: string, cmd: ReturnType<typeof episodeNoPatch>) => void
   setEdges: (fn: (eds: Edge[]) => Edge[]) => void
   pushHistory: (cmd: HistoryCommand) => void
 }
@@ -27,6 +29,12 @@ export function useOutlineDrop(deps: OutlineDropDeps) {
     (draggedId: string, target: OutlineDropTarget) => {
       const dragged = nodesRef.current?.find((n) => n.id === draggedId)
       if (!dragged) return
+      // 大纲行可拖拽的只有编剧侧四类（LeftPanel level < 3）；分镜卡随宿主
+      // 场景分集（§3.5，运行态不落独立 episodeNo），图片节点不进大纲——
+      // 非四类直接放弃，不产出注定被序列化剥离的分集补丁
+      if (dragged.type !== 'scene' && dragged.type !== 'beat' && dragged.type !== 'dialogue' && dragged.type !== 'branch') {
+        return
+      }
 
       // 1) 接缝计划（groupEnd 锚到该组最后一个剧情流行）
       const planned = outlineSplicePlan(
@@ -44,8 +52,7 @@ export function useOutlineDrop(deps: OutlineDropDeps) {
       const anchorNode = nodesRef.current?.find((n) => n.id === anchorId)
       const targetEpisode =
         target.kind === 'groupEnd' ? target.episode : episodeOfNode(anchorNode!, (id) => sceneByShot.get(id))
-      const oldEpisodeRaw = (dragged.data as { episodeNo?: unknown }).episodeNo
-      const oldEpisode = typeof oldEpisodeRaw === 'number' ? oldEpisodeRaw : null
+      const oldEpisode = typeof dragged.data.episodeNo === 'number' ? dragged.data.episodeNo : null
       const episodeChanged = targetEpisode !== oldEpisode
 
       const noSplice = plan.removes.length === 0 && plan.adds.length === 0
@@ -65,7 +72,7 @@ export function useOutlineDrop(deps: OutlineDropDeps) {
         setEdges((eds) => spliceEdgesWith(eds, removedEdges, addedEdges, redo))
       }
       const patchEp = (ep: number | null) =>
-        applyDataPatch(draggedId, { episodeNo: ep ?? undefined })
+        applyDataPatch(draggedId, episodeNoPatch(dragged.type, ep ?? undefined))
       applyEdges(true)
       if (episodeChanged) patchEp(targetEpisode)
       pushHistory({

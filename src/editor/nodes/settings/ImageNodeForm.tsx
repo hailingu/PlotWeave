@@ -39,14 +39,14 @@ export default function ImageNodeForm({ node }: { readonly node: { readonly id: 
           rows={4}
           value={d.prompt}
           placeholder="要生成的画面：角色定妆、场景概念、分镜关键帧…"
-          onChange={(e) => patchNode(node.id, { prompt: e.target.value })}
+          onChange={(e) => patchNode(node.id, { nodeType: 'image', patch: { prompt: e.target.value } })}
         />
       </Field>
       <Field label="模型（空 = 跟随默认图像模型）">
         <select
           className="pw-set-input"
           value={d.model}
-          onChange={(e) => patchNode(node.id, { model: e.target.value })}
+          onChange={(e) => patchNode(node.id, { nodeType: 'image', patch: { model: e.target.value } })}
         >
           <option value="">跟随默认</option>
           {options.map((o) => (
@@ -60,7 +60,7 @@ export default function ImageNodeForm({ node }: { readonly node: { readonly id: 
         <select
           className="pw-set-input"
           value={d.size}
-          onChange={(e) => patchNode(node.id, { size: e.target.value })}
+          onChange={(e) => patchNode(node.id, { nodeType: 'image', patch: { size: e.target.value } })}
         >
           {IMAGE_SIZES.map((s) => (
             <option key={s} value={s}>

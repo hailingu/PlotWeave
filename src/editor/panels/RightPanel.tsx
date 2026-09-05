@@ -3,7 +3,7 @@ import SegmentedControl from './SegmentedControl'
 import PanelResizer from './PanelResizer'
 import { llmChat, type AssistantMessage, type ChatMessage } from '../ai/chat'
 import { AI_TOOLS, toolCallsToCommands, type ToolCall } from '../ai/tools'
-import { type AiCommand, type BatchValidation } from '../ai/commands'
+import { type AiCommand, type BatchValidation, type ValidatedCommand } from '../ai/commands'
 import { settingsStore } from '../../settings/settingsStore'
 import {
   listChatModels,
@@ -128,7 +128,7 @@ interface RightPanelProps {
   /** 读工具 get_node：返回节点 JSON 文本，节点不存在返回 null。 */
   readonly onReadNode?: (nodeId: string) => string | null
   /** 执行已确认的批次：整批为一条复合命令入栈，返回错误文案或 null。 */
-  readonly onApplyAiBatch?: (commands: AiCommand[]) => string | null
+  readonly onApplyAiBatch?: (commands: ValidatedCommand[]) => string | null
 }
 
 /**
@@ -306,7 +306,7 @@ function AiThread({
   readonly onValidateAi?: (text: string) => BatchValidation | null
   readonly onValidateCommands?: (commands: AiCommand[]) => BatchValidation | null
   readonly onReadNode?: (nodeId: string) => string | null
-  readonly onApplyAiBatch?: (commands: AiCommand[]) => string | null
+  readonly onApplyAiBatch?: (commands: ValidatedCommand[]) => string | null
 }) {
   const [appSettings, setAppSettings] = useState<AppSettings | null>(null)
   /** 面板内选中的模型 key；null = 跟随设置页默认。 */

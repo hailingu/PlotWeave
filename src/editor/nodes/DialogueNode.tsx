@@ -24,7 +24,7 @@ export default function DialogueNode({ id, data, selected }: NodeProps<DialogueF
         <EditableName
           value={data.name}
           ariaLabel="对白名称"
-          onChange={(name) => patchNode(id, { name })}
+          onChange={(name) => patchNode(id, { nodeType: 'dialogue', patch: { name } })}
         />
         <span className="pw-dlg-stat">
           {speakers.size} 人 · {lineCount} 句

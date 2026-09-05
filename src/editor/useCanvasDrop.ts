@@ -17,11 +17,13 @@ import {
 import { entityDropPatch } from './entityDrop'
 import { useLibraryAssetDrop, type LibraryAssetDropDeps } from './useLibraryAssetDrop'
 import type { CreatableType } from './creatable'
+import type { NodeDataPatch } from './nodes/patch'
 
 /** useCanvasDrop 的依赖注入：库资产拖放子 hook 依赖 + 实体路径所需的状态读写。 */
 export interface CanvasDropDeps extends LibraryAssetDropDeps {
-  /** 编辑即命令通道（实体引用补丁走这里，含合并撤销）。 */
-  patchNode: (id: string, patch: Record<string, unknown>) => void
+  /** 编辑即命令通道（实体引用补丁走这里，含合并撤销）；补丁按节点类型
+   * 判别绑定（issue 16）。 */
+  patchNode: (id: string, cmd: NodeDataPatch) => void
   createNode: (
     type: CreatableType,
     opts?: { at?: XYPosition; data?: Record<string, unknown> },
@@ -53,8 +55,8 @@ export function useCanvasDrop(deps: CanvasDropDeps) {
       e.preventDefault()
       const node = hitDropNode(e, nodesRef.current)
       if (node) {
-        const patch = entityDropPatch(node, entity)
-        if (patch) patchNode(node.id, patch)
+        const cmd = entityDropPatch(node, entity)
+        if (cmd) patchNode(node.id, cmd)
         return
       }
       // 空白处：按实体预填生成场景（§5 拖上空画布直接生成预填节点）

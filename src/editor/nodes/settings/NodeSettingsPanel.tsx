@@ -9,12 +9,14 @@ import type { ProjectContent } from '../../../model/content'
 import type {
   BeatNodeData,
   BranchNodeData,
+  DialogueLine,
   DialogueNodeData,
   ImageNodeData,
   SceneNodeData,
   ShotNodeData,
   ShotRef,
 } from '../types'
+import type { PatchShape } from '../patch'
 
 /**
  * ⚙️ 设置面板 = 节点编辑器（docs/ui-design.md §4.3）。
@@ -35,7 +37,15 @@ export type PanelNode =
 
 /** 集归属（§3.5：集 = 编号 + 行内标题，节点以 episodeNo 归属集）。
  * 清空 = 移出所有集；分镜卡随宿主场景（attach 派生），不出此字段。 */
-function EpisodeField({ nodeId, episodeNo }: { readonly nodeId: string; readonly episodeNo?: number }) {
+function EpisodeField({
+  nodeType,
+  nodeId,
+  episodeNo,
+}: {
+  readonly nodeType: 'scene' | 'beat' | 'dialogue' | 'branch'
+  readonly nodeId: string
+  readonly episodeNo?: number
+}) {
   const { patchNode } = useNodeEdit()
   return (
     <Field label="集">
@@ -49,13 +59,13 @@ function EpisodeField({ nodeId, episodeNo }: { readonly nodeId: string; readonly
           onChange={(e) => {
             const raw = e.target.value
             if (raw === '') {
-              patchNode(nodeId, { episodeNo: undefined })
+              patchNode(nodeId, { nodeType, patch: { episodeNo: undefined } })
               return
             }
             const n = Math.max(1, Math.floor(Number(raw)))
             // §4.1 正安全整数域：有限但越界（如 1e20）落载后会被顺位重发，
             // 输入边界同域拒收——不 patch，保留原值等用户输入完成
-            if (Number.isSafeInteger(n)) patchNode(nodeId, { episodeNo: n })
+            if (Number.isSafeInteger(n)) patchNode(nodeId, { nodeType, patch: { episodeNo: n } })
           }}
         />
         {episodeNo !== undefined && (
@@ -64,7 +74,7 @@ function EpisodeField({ nodeId, episodeNo }: { readonly nodeId: string; readonly
             className="pw-set-x"
             aria-label="移出集"
             title="移出集（未分集）"
-            onClick={() => patchNode(nodeId, { episodeNo: undefined })}
+            onClick={() => patchNode(nodeId, { nodeType, patch: { episodeNo: undefined } })}
           >
             ✕
           </button>
@@ -74,26 +84,84 @@ function EpisodeField({ nodeId, episodeNo }: { readonly nodeId: string; readonly
   )
 }
 
-/** 场景表单：名称/地点/时间/天气/内外景/梗概/出场角色（设定集引用切换）。 */
+/** 内外景分段（§4.2 索引卡徽标）：SceneForm 拆出的同族分区。 */
+function SceneInteriorSegment({
+  interior,
+  onPick,
+}: {
+  readonly interior: boolean
+  readonly onPick: (value: boolean) => void
+}) {
+  return (
+    <Field label="内外景">
+      <div className="pw-set-seg">
+        <button type="button" className={interior ? 'on' : ''} onClick={() => onPick(true)}>
+          内
+        </button>
+        <button type="button" className={!interior ? 'on' : ''} onClick={() => onPick(false)}>
+          外
+        </button>
+      </div>
+    </Field>
+  )
+}
+
+/** 出场角色 chips（§4.2 引用设定集实体 id；§4.3 失效引用展示）：SceneForm 拆出的分区。 */
+function SceneCastChips({
+  characterIds,
+  characters,
+  onToggle,
+}: {
+  readonly characterIds: string[]
+  readonly characters: ProjectSettings['characters']
+  readonly onToggle: (id: string) => void
+}) {
+  return (
+    <Field label="出场角色">
+      <div className="pw-set-chips">
+        {characters.map((c) => {
+          const on = characterIds.includes(c.id)
+          return (
+            <button
+              key={c.id}
+              type="button"
+              className={`pw-set-chip${on ? ' on' : ''}`}
+              onClick={() => onToggle(c.id)}
+              aria-pressed={on}
+            >
+              <span className="pw-av pw-av-sm" style={{ background: c.gradient }}>
+                {c.name.charAt(0)}
+              </span>
+              {c.name}
+            </button>
+          )
+        })}
+        {characters.length === 0 && (
+          <span className="pw-set-empty">设定集暂无角色，请在左栏新增</span>
+        )}
+      </div>
+    </Field>
+  )
+}
+
+/** 场景表单：名称/地点/时间/天气/内外景/梗概/出场角色（设定集引用切换）。
+ * patch 回调在表单内收口 nodeType 判别字段，字段更新保持单行表达。 */
 function SceneForm({ node, settings }: { readonly node: Extract<PanelNode, { type: 'scene' }>; readonly settings: ProjectSettings }) {
   const { patchNode } = useNodeEdit()
   const d = node.data
+  // PatchShape 已剥离索引签名（issue 16）：本地回调与判别命令同严——
+  // 宽键（如 scene 表单混入对白的 lines）在此即编译失败
+  const patch = (p: PatchShape<SceneNodeData>) => patchNode(node.id, { nodeType: 'scene', patch: p })
   const toggleCharacter = (id: string) => {
     const on = d.characterIds.includes(id)
-    patchNode(node.id, {
-      characterIds: on
-        ? d.characterIds.filter((cid) => cid !== id)
-        : [...d.characterIds, id],
+    patch({
+      characterIds: on ? d.characterIds.filter((cid) => cid !== id) : [...d.characterIds, id],
     })
   }
   return (
     <>
       <Field label="名称">
-        <input
-          className="pw-set-input"
-          value={d.name}
-          onChange={(e) => patchNode(node.id, { name: e.target.value })}
-        />
+        <input className="pw-set-input" value={d.name} onChange={(e) => patch({ name: e.target.value })} />
       </Field>
       <Field label="场次">
         <input
@@ -109,7 +177,7 @@ function SceneForm({ node, settings }: { readonly node: Extract<PanelNode, { typ
             if (raw === '') return
             const n = Math.max(1, Math.floor(Number(raw)))
             // §4.1 正安全整数域：有限但越界（如 1e20）落载后会被顺位重发，同域拒收
-            if (Number.isSafeInteger(n) && n !== d.sceneNo) patchNode(node.id, { sceneNo: n })
+            if (Number.isSafeInteger(n) && n !== d.sceneNo) patch({ sceneNo: n })
           }}
         />
       </Field>
@@ -118,7 +186,7 @@ function SceneForm({ node, settings }: { readonly node: Extract<PanelNode, { typ
           <select
             className="pw-set-input"
             value={d.locationId ?? ''}
-            onChange={(e) => patchNode(node.id, { locationId: e.target.value || undefined })}
+            onChange={(e) => patch({ locationId: e.target.value || undefined })}
           >
             <option value="">未指定</option>
             {settings.locations.map((l) => (
@@ -129,11 +197,7 @@ function SceneForm({ node, settings }: { readonly node: Extract<PanelNode, { typ
           </select>
         </Field>
         <Field label="时间">
-          <input
-            className="pw-set-input"
-            value={d.time}
-            onChange={(e) => patchNode(node.id, { time: e.target.value })}
-          />
+          <input className="pw-set-input" value={d.time} onChange={(e) => patch({ time: e.target.value })} />
         </Field>
       </div>
       <Field label="天气">
@@ -141,60 +205,20 @@ function SceneForm({ node, settings }: { readonly node: Extract<PanelNode, { typ
           className="pw-set-input"
           value={d.weather ?? ''}
           placeholder="可选"
-          onChange={(e) => patchNode(node.id, { weather: e.target.value })}
+          onChange={(e) => patch({ weather: e.target.value })}
         />
       </Field>
-      <Field label="内外景">
-        <div className="pw-set-seg">
-          <button
-            type="button"
-            className={d.interior ? 'on' : ''}
-            onClick={() => patchNode(node.id, { interior: true })}
-          >
-            内
-          </button>
-          <button
-            type="button"
-            className={!d.interior ? 'on' : ''}
-            onClick={() => patchNode(node.id, { interior: false })}
-          >
-            外
-          </button>
-        </div>
-      </Field>
+      <SceneInteriorSegment interior={d.interior} onPick={(value) => patch({ interior: value })} />
       <Field label="梗概">
         <textarea
           className="pw-set-input"
           rows={3}
           value={d.synopsis}
-          onChange={(e) => patchNode(node.id, { synopsis: e.target.value })}
+          onChange={(e) => patch({ synopsis: e.target.value })}
         />
       </Field>
-      <Field label="出场角色">
-        <div className="pw-set-chips">
-          {settings.characters.map((c) => {
-            const on = d.characterIds.includes(c.id)
-            return (
-              <button
-                key={c.id}
-                type="button"
-                className={`pw-set-chip${on ? ' on' : ''}`}
-                onClick={() => toggleCharacter(c.id)}
-                aria-pressed={on}
-              >
-                <span className="pw-av pw-av-sm" style={{ background: c.gradient }}>
-                  {c.name.charAt(0)}
-                </span>
-                {c.name}
-              </button>
-            )
-          })}
-          {settings.characters.length === 0 && (
-            <span className="pw-set-empty">设定集暂无角色，请在左栏新增</span>
-          )}
-        </div>
-      </Field>
-      <EpisodeField nodeId={node.id} episodeNo={d.episodeNo} />
+      <SceneCastChips characterIds={d.characterIds} characters={settings.characters} onToggle={toggleCharacter} />
+      <EpisodeField nodeType="scene" nodeId={node.id} episodeNo={d.episodeNo} />
     </>
   )
 }
@@ -208,22 +232,85 @@ function BeatForm({ node }: { readonly node: Extract<PanelNode, { type: 'beat' }
         <input
           className="pw-set-input"
           value={node.data.name}
-          onChange={(e) => patchNode(node.id, { name: e.target.value })}
+          onChange={(e) => patchNode(node.id, { nodeType: 'beat', patch: { name: e.target.value } })}
         />
       </Field>
       <Field label="基调">
         <input
           className="pw-set-input"
           value={node.data.tone}
-          onChange={(e) => patchNode(node.id, { tone: e.target.value })}
+          onChange={(e) => patchNode(node.id, { nodeType: 'beat', patch: { tone: e.target.value } })}
         />
       </Field>
-      <EpisodeField nodeId={node.id} episodeNo={node.data.episodeNo} />
+      <EpisodeField nodeType="beat" nodeId={node.id} episodeNo={node.data.episodeNo} />
     </>
   )
 }
 
-/** 对白表单：名称 + 台词列表（台词/动作、说话人、增删）。@ 提及与排序随后续任务。 */
+/** 单行台词行（行类型切换、说话人、删除、文本）：DialogueForm 拆出的分区。
+ * 行级补丁以 Partial<DialogueLine> 上报，列表装配留在表单内。 */
+function DialogueLineRow({
+  line,
+  defaultSpeaker,
+  characters,
+  onPatch,
+  onRemove,
+}: {
+  readonly line: DialogueLine
+  readonly defaultSpeaker?: string
+  readonly characters: ProjectSettings['characters']
+  readonly onPatch: (patch: Partial<DialogueLine>) => void
+  readonly onRemove: () => void
+}) {
+  return (
+    <div className="pw-set-line">
+      <div className="pw-set-line-bar">
+        <select
+          className="pw-set-input pw-set-kind"
+          value={line.kind}
+          aria-label="行类型"
+          onChange={(e) => {
+            if (e.target.value === 'action') {
+              onPatch({ kind: 'action', speaker: undefined, side: undefined })
+            } else {
+              onPatch({ kind: 'line', speaker: defaultSpeaker, side: 'left' })
+            }
+          }}
+        >
+          <option value="line">台词</option>
+          <option value="action">动作</option>
+        </select>
+        {line.kind === 'line' && (
+          <select
+            className="pw-set-input pw-set-speaker"
+            value={line.speaker ?? ''}
+            aria-label="说话人"
+            onChange={(e) => onPatch({ speaker: e.target.value || undefined })}
+          >
+            {characters.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        )}
+        <span className="pw-sp" />
+        <button type="button" className="pw-set-x" aria-label="删除此行" onClick={onRemove}>
+          ✕
+        </button>
+      </div>
+      <input
+        className="pw-set-input"
+        value={line.text}
+        placeholder={line.kind === 'action' ? '动作描述…' : '台词内容…'}
+        onChange={(e) => onPatch({ text: e.target.value })}
+      />
+    </div>
+  )
+}
+
+/** 对白表单：名称 + 台词列表（台词/动作、说话人、增删）。@ 提及与排序随后续任务。
+ * patch 回调在表单内收口 nodeType 判别字段。 */
 function DialogueForm({
   node,
   settings,
@@ -234,85 +321,37 @@ function DialogueForm({
   const { patchNode } = useNodeEdit()
   const defaultSpeaker = settings.characters[0]?.id
   const d = node.data
-  const patchLine = (i: number, patch: Record<string, unknown>) => {
-    patchNode(node.id, {
-      lines: d.lines.map((l, idx) => (idx === i ? { ...l, ...patch } : l)),
-    })
-  }
+  const patch = (p: PatchShape<DialogueNodeData>) => patchNode(node.id, { nodeType: 'dialogue', patch: p })
+  const patchLine = (i: number, linePatch: Partial<DialogueLine>) =>
+    patch({ lines: d.lines.map((l, idx) => (idx === i ? { ...l, ...linePatch } : l)) })
   return (
     <>
       <Field label="名称">
-        <input
-          className="pw-set-input"
-          value={d.name}
-          onChange={(e) => patchNode(node.id, { name: e.target.value })}
-        />
+        <input className="pw-set-input" value={d.name} onChange={(e) => patch({ name: e.target.value })} />
       </Field>
       <div className="pw-set-label">台词</div>
       {d.lines.map((line, i) => (
-        <div key={line.id} className="pw-set-line">
-          <div className="pw-set-line-bar">
-            <select
-              className="pw-set-input pw-set-kind"
-              value={line.kind}
-              aria-label="行类型"
-              onChange={(e) => {
-                if (e.target.value === 'action') {
-                  patchLine(i, { kind: 'action', speaker: undefined, side: undefined })
-                } else {
-                  patchLine(i, { kind: 'line', speaker: defaultSpeaker, side: 'left' })
-                }
-              }}
-            >
-              <option value="line">台词</option>
-              <option value="action">动作</option>
-            </select>
-            {line.kind === 'line' && (
-              <select
-                className="pw-set-input pw-set-speaker"
-                value={line.speaker ?? ''}
-                aria-label="说话人"
-                onChange={(e) => patchLine(i, { speaker: e.target.value || undefined })}
-              >
-                {settings.characters.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-            )}
-            <span className="pw-sp" />
-            <button
-              type="button"
-              className="pw-set-x"
-              aria-label="删除此行"
-              onClick={() =>
-                patchNode(node.id, { lines: d.lines.filter((_, idx) => idx !== i) })
-              }
-            >
-              ✕
-            </button>
-          </div>
-          <input
-            className="pw-set-input"
-            value={line.text}
-            placeholder={line.kind === 'action' ? '动作描述…' : '台词内容…'}
-            onChange={(e) => patchLine(i, { text: e.target.value })}
-          />
-        </div>
+        <DialogueLineRow
+          key={line.id}
+          line={line}
+          defaultSpeaker={defaultSpeaker}
+          characters={settings.characters}
+          onPatch={(linePatch) => patchLine(i, linePatch)}
+          onRemove={() => patch({ lines: d.lines.filter((_, idx) => idx !== i) })}
+        />
       ))}
       <button
         type="button"
         className="pw-set-add"
         onClick={() =>
-          patchNode(node.id, {
+          patch({
             lines: [...d.lines, { id: uid('line'), kind: 'line', speaker: defaultSpeaker, side: 'left', text: '' }],
           })
         }
       >
         ＋ 添加台词
       </button>
-      <EpisodeField nodeId={node.id} episodeNo={d.episodeNo} />
+      <EpisodeField nodeType="dialogue" nodeId={node.id} episodeNo={d.episodeNo} />
     </>
   )
 }
@@ -327,7 +366,7 @@ function BranchForm({ node }: { readonly node: Extract<PanelNode, { type: 'branc
         <input
           className="pw-set-input"
           value={d.prompt}
-          onChange={(e) => patchNode(node.id, { prompt: e.target.value })}
+          onChange={(e) => patchNode(node.id, { nodeType: 'branch', patch: { prompt: e.target.value } })}
         />
       </Field>
       <div className="pw-set-label">选项</div>
@@ -341,7 +380,10 @@ function BranchForm({ node }: { readonly node: Extract<PanelNode, { type: 'branc
               className="pw-set-x"
               aria-label="删除此选项"
               onClick={() =>
-                patchNode(node.id, { options: d.options.filter((_, idx) => idx !== i) })
+                patchNode(node.id, {
+                  nodeType: 'branch',
+                  patch: { options: d.options.filter((_, idx) => idx !== i) },
+                })
               }
             >
               ✕
@@ -352,7 +394,8 @@ function BranchForm({ node }: { readonly node: Extract<PanelNode, { type: 'branc
             value={option.label}
             onChange={(e) =>
               patchNode(node.id, {
-                options: d.options.map((o, idx) => (idx === i ? { ...o, label: e.target.value } : o)),
+                nodeType: 'branch',
+                patch: { options: d.options.map((o, idx) => (idx === i ? { ...o, label: e.target.value } : o)) },
               })
             }
           />
@@ -363,13 +406,14 @@ function BranchForm({ node }: { readonly node: Extract<PanelNode, { type: 'branc
         className="pw-set-add"
         onClick={() =>
           patchNode(node.id, {
-            options: [...d.options, { id: uid('opt'), label: `选项 ${String.fromCodePoint(65 + d.options.length)}` }],
+            nodeType: 'branch',
+            patch: { options: [...d.options, { id: uid('opt'), label: `选项 ${String.fromCodePoint(65 + d.options.length)}` }] },
           })
         }
       >
         ＋ 添加选项
       </button>
-      <EpisodeField nodeId={node.id} episodeNo={d.episodeNo} />
+      <EpisodeField nodeType="branch" nodeId={node.id} episodeNo={d.episodeNo} />
     </>
   )
 }
@@ -389,13 +433,71 @@ function assetMimeOf(assets: ProjectContent['assets'], id: string): string | und
   return typeof mime === 'string' ? mime : undefined
 }
 
-/** 分镜卡表单：镜号/景别/画面描述/镜头 Prompt/引用位（增删改）。
+/** 单个引用位行（kind 切换、删除、文案/绑定输入）：ShotForm 拆出的分区。
  * 资产引用位的 kind 切换受资产 MIME 家族约束（§4.2，与归一化
  * shotRefMimeMatches 同域）：错配 kind 保存后重开只是「不可用引用」
  * 警告——在编辑边界直接禁用，不产出注定不可用的引用。 */
+function ShotRefRow({
+  shotRef,
+  assets,
+  onKind,
+  onRemove,
+  onLabel,
+}: {
+  readonly shotRef: ShotRef
+  readonly assets: ProjectContent['assets']
+  readonly onKind: (kind: ShotRef['kind']) => void
+  readonly onRemove: () => void
+  readonly onLabel: (text: string) => void
+}) {
+  return (
+    <div className="pw-set-line">
+      <div className="pw-set-line-bar">
+        <select
+          className="pw-set-input pw-set-kind"
+          value={shotRef.kind}
+          aria-label="引用类型"
+          onChange={(e) => onKind(e.target.value as ShotRef['kind'])}
+        >
+          {Object.entries(REF_KIND_LABELS).map(([kind, label]) => {
+            const mime =
+              shotRef.assetId !== undefined ? assetMimeOf(assets, shotRef.assetId) : undefined
+            return (
+              <option
+                key={kind}
+                value={kind}
+                disabled={mime !== undefined && !shotRefMimeMatches(kind, mime)}
+              >
+                {label}
+              </option>
+            )
+          })}
+        </select>
+        <span className="pw-sp" />
+        <button type="button" className="pw-set-x" aria-label="删除此引用" onClick={onRemove}>
+          ✕
+        </button>
+      </div>
+      <input
+        className="pw-set-input"
+        value={shotRef.label ?? ''}
+        placeholder={
+          shotRef.assetId !== undefined
+            ? `资产引用 ${shotRef.assetId}——输入文字将转为自由文案`
+            : undefined
+        }
+        onChange={(e) => onLabel(e.target.value)}
+      />
+    </div>
+  )
+}
+
+/** 分镜卡表单：镜号/景别/画面描述/镜头 Prompt/引用位（增删改）。
+ * patch 回调在表单内收口 nodeType 判别字段；引用位行为见 ShotRefRow。 */
 function ShotForm({ node }: { readonly node: Extract<PanelNode, { type: 'shot' }> }) {
   const { patchNode, assets } = useNodeEdit()
   const d = node.data
+  const patch = (p: PatchShape<ShotNodeData>) => patchNode(node.id, { nodeType: 'shot', patch: p })
   return (
     <>
       <div className="pw-set-cols">
@@ -408,16 +510,12 @@ function ShotForm({ node }: { readonly node: Extract<PanelNode, { type: 'shot' }
             onChange={(e) => {
               // 非法输入回退 1；§4.1 正安全整数域：有限但越界（如 1e20）同属非法
               const n = Math.max(1, Math.floor(Number(e.target.value)))
-              patchNode(node.id, { shotNo: Number.isSafeInteger(n) ? n : 1 })
+              patch({ shotNo: Number.isSafeInteger(n) ? n : 1 })
             }}
           />
         </Field>
         <Field label="景别">
-          <input
-            className="pw-set-input"
-            value={d.size}
-            onChange={(e) => patchNode(node.id, { size: e.target.value })}
-          />
+          <input className="pw-set-input" value={d.size} onChange={(e) => patch({ size: e.target.value })} />
         </Field>
       </div>
       <Field label="画面描述">
@@ -425,7 +523,7 @@ function ShotForm({ node }: { readonly node: Extract<PanelNode, { type: 'shot' }
           className="pw-set-input"
           rows={2}
           value={d.picture}
-          onChange={(e) => patchNode(node.id, { picture: e.target.value })}
+          onChange={(e) => patch({ picture: e.target.value })}
         />
       </Field>
       <Field label="镜头 PROMPT">
@@ -433,76 +531,33 @@ function ShotForm({ node }: { readonly node: Extract<PanelNode, { type: 'shot' }
           className="pw-set-input"
           rows={3}
           value={d.prompt}
-          onChange={(e) => patchNode(node.id, { prompt: e.target.value })}
+          onChange={(e) => patch({ prompt: e.target.value })}
         />
       </Field>
       <div className="pw-set-label">引用位</div>
       {d.refs.map((ref, i) => (
-        <div key={ref.id} className="pw-set-line">
-          <div className="pw-set-line-bar">
-            <select
-              className="pw-set-input pw-set-kind"
-              value={ref.kind}
-              aria-label="引用类型"
-              onChange={(e) =>
-                patchNode(node.id, {
-                  refs: d.refs.map((r, idx) =>
-                    idx === i ? { ...r, kind: e.target.value as ShotRef['kind'] } : r,
-                  ),
-                })
-              }
-            >
-              {Object.entries(REF_KIND_LABELS).map(([kind, label]) => {
-                const mime =
-                  ref.assetId !== undefined ? assetMimeOf(assets, ref.assetId) : undefined
-                return (
-                  <option
-                    key={kind}
-                    value={kind}
-                    disabled={mime !== undefined && !shotRefMimeMatches(kind, mime)}
-                  >
-                    {label}
-                  </option>
-                )
-              })}
-            </select>
-            <span className="pw-sp" />
-            <button
-              type="button"
-              className="pw-set-x"
-              aria-label="删除此引用"
-              onClick={() => patchNode(node.id, { refs: d.refs.filter((_, idx) => idx !== i) })}
-            >
-              ✕
-            </button>
-          </div>
-          <input
-            className="pw-set-input"
-            value={ref.label ?? ''}
-            placeholder={
-              ref.assetId !== undefined
-                ? `资产引用 ${ref.assetId}——输入文字将转为自由文案`
-                : undefined
-            }
-            onChange={(e) =>
-              patchNode(node.id, {
-                // 输入文字即切换为自由位（§4.2 assetId/label 互斥）：剥离
-                // assetId 而非并存——双字段形态保存成功但下次加载被归一化
-                // 静默删除，用户输入凭空丢失
-                refs: d.refs.map((r, idx) =>
-                  idx === i ? { id: r.id, kind: r.kind, label: e.target.value } : r,
-                ),
-              })
-            }
-          />
-        </div>
+        <ShotRefRow
+          key={ref.id}
+          shotRef={ref}
+          assets={assets}
+          onKind={(kind) =>
+            patch({ refs: d.refs.map((r, idx) => (idx === i ? { ...r, kind } : r)) })
+          }
+          onRemove={() => patch({ refs: d.refs.filter((_, idx) => idx !== i) })}
+          onLabel={(text) =>
+            patch({
+              // 输入文字即切换为自由位（§4.2 assetId/label 互斥）：剥离
+              // assetId 而非并存——双字段形态保存成功但下次加载被归一化
+              // 静默删除，用户输入凭空丢失
+              refs: d.refs.map((r, idx) => (idx === i ? { id: r.id, kind: r.kind, label: text } : r)),
+            })
+          }
+        />
       ))}
       <button
         type="button"
         className="pw-set-add"
-        onClick={() =>
-          patchNode(node.id, { refs: [...d.refs, { id: uid('ref'), kind: 'character', label: '' }] })
-        }
+        onClick={() => patch({ refs: [...d.refs, { id: uid('ref'), kind: 'character', label: '' }] })}
       >
         ＋ 添加引用
       </button>

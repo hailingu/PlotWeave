@@ -4,7 +4,7 @@
  * 在此剥离；fromDocument 在归一化完成后把落盘文档还原进会话。
  */
 import type { Edge } from '@xyflow/react'
-import type { CanvasNode } from '../editor/nodes/types'
+import type { CanvasNode, NodeMetaPassthrough } from '../editor/nodes/types'
 import {
   branchOptionIdOf,
   edgeKindOf,
@@ -14,90 +14,215 @@ import type { ProjectSettings } from '../editor/settings'
 import type { ProjectContent } from './content'
 import {
   CURRENT_SCHEMA_VERSION,
-  type BeatSpec,
   type BranchSpec,
-  type DialogueSpec,
-  type ImageSpec,
-  type LabeledMeta,
+  type Point,
   type ProjectDocument,
-  type SceneSpec,
-  type ShotSpec,
   type StoryEdge,
   type StoryNode,
 } from './document'
 import { normalizeEpisodeTitles } from './legacy'
 
-/** 节点 → 落盘形态：四分区拆分；name/episodeNo 上移 meta，其余字段进 spec。
- * meta 按 type 判别（§4.1）：名称型节点 label 必填（运行态保证有 name，
- * 缺失时兜底空串），branch/shot 不落 label 镜像。可选布局字段 size/zIndex
- * 与 React Flow 的 width/height/zIndex 互转，携带即落盘（§4.1）。 */
-export function toStoryNode(n: CanvasNode): StoryNode {
-  const { name, episodeNo, ...spec } = n.data as Record<string, unknown> & {
-    name?: string
-    episodeNo?: number
+/** meta 时间戳透传（§4.1 演进占位）：会话带上才写回，缺失即省略；非字符串
+ * 值不带（下游不落盘即剥离）。 */
+function metaTsOf(m: NodeMetaPassthrough['meta']): { createdAt?: string; updatedAt?: string } {
+  return {
+    ...(typeof m?.createdAt === 'string' ? { createdAt: m.createdAt } : {}),
+    ...(typeof m?.updatedAt === 'string' ? { updatedAt: m.updatedAt } : {}),
   }
-  const optionalMeta =
-    episodeNo !== undefined ? { episodeNo } : {}
-  const optionalLayout = {
+}
+
+/** episodeNo 携带才写（缺省 = 未分集回退），与可选字段缺省不伪造一致。 */
+function episodeNoOf(ep: number | undefined): { episodeNo?: number } {
+  return ep !== undefined ? { episodeNo: ep } : {}
+}
+
+/** 运行态 → 落盘 layout（§4.1）：位置必填；size/zIndex 携带才写（React Flow
+ * 的 width/height/zIndex 合法才搬运，缺省不伪造）。 */
+function layoutOf(n: CanvasNode): StoryNode['layout'] {
+  return {
+    position: { x: n.position.x, y: n.position.y },
     ...(typeof n.width === 'number' && typeof n.height === 'number'
       ? { size: { width: n.width, height: n.height } }
       : {}),
     ...(n.zIndex !== undefined ? { zIndex: n.zIndex } : {}),
   }
-  const base = {
-    id: n.id,
-    layout: { position: { x: n.position.x, y: n.position.y }, ...optionalLayout },
-    ui: { selected: false, expanded: true },
-  }
-  // meta 时间戳透传（§4.1 演进占位）：会话带上才写回，缺失即省略
-  const ts = n.meta as { createdAt?: unknown; updatedAt?: unknown } | undefined
-  const passthroughTs = {
-    ...(typeof ts?.createdAt === 'string' ? { createdAt: ts.createdAt } : {}),
-    ...(typeof ts?.updatedAt === 'string' ? { updatedAt: ts.updatedAt } : {}),
-  }
-  if (n.type === 'branch' || n.type === 'shot' || n.type === 'image') {
-    // 派生标题节点：不落 meta.label 镜像；分镜卡随宿主场景分集、图片节点
-    // 非叙事单元不进大纲分组，均不落独立 episodeNo（§3.5/§13）
-    const meta =
-      n.type === 'branch' ? { ...optionalMeta, ...passthroughTs } : { ...passthroughTs }
-    return {
-      ...base,
-      type: n.type,
-      data: { spec: spec as unknown as BranchSpec & ShotSpec & ImageSpec, meta },
-    } as unknown as StoryNode
-  }
-  const labeled: LabeledMeta = { label: name ?? '', ...optionalMeta, ...passthroughTs }
-  return {
-    ...base,
-    type: n.type,
-    data: { spec: spec as unknown as SceneSpec & BeatSpec & DialogueSpec, meta: labeled },
-  } as unknown as StoryNode
 }
 
-/** 落盘节点 → 运行态：meta/spec 拍平回 data，ui.selected 恒为 false；
- * 可选 layout.size/zIndex 恢复为 React Flow 的 width/height/zIndex；
- * meta.createdAt/updatedAt（§4.1 演进占位）经顶层 meta 透传，非字符串
- * 值不带（下游不落盘即剥离）。 */
-export function fromStoryNode(n: StoryNode): CanvasNode {
-  const { spec, meta } = n.data
-  const data: Record<string, unknown> = { ...(spec as unknown as Record<string, unknown>) }
-  if ('label' in meta) data.name = meta.label
-  if ('episodeNo' in meta && meta.episodeNo !== undefined) data.episodeNo = meta.episodeNo
-  const metaTs: { createdAt?: string; updatedAt?: string } = {}
-  if (typeof meta.createdAt === 'string') metaTs.createdAt = meta.createdAt
-  if (typeof meta.updatedAt === 'string') metaTs.updatedAt = meta.updatedAt
-  const passthrough =
-    metaTs.createdAt !== undefined || metaTs.updatedAt !== undefined ? { meta: metaTs } : {}
+/** 落盘 layout → 运行态位置/尺寸/层级（size 还原为 React Flow 的
+ * width/height，§4.1 双向互转）。 */
+function flowLayoutOf(n: StoryNode): {
+  position: Point
+  width?: number
+  height?: number
+  zIndex?: number
+} {
   return {
-    id: n.id,
-    type: n.type,
     position: { x: n.layout.position.x, y: n.layout.position.y },
-    ...(n.layout.size ? { width: n.layout.size.width, height: n.layout.size.height } : {}),
+    ...(n.layout.size
+      ? { width: n.layout.size.width, height: n.layout.size.height }
+      : {}),
     ...(n.layout.zIndex !== undefined ? { zIndex: n.layout.zIndex } : {}),
-    selected: false,
-    ...passthrough,
-    data,
-  } as CanvasNode
+  }
+}
+
+/** 落盘 meta 时间戳 → 运行态顶层 meta 透传（均缺省即无 meta 键）。 */
+function flowMetaOf(m: NodeMetaPassthrough['meta']): NodeMetaPassthrough {
+  const ts = metaTsOf(m)
+  return ts.createdAt !== undefined || ts.updatedAt !== undefined ? { meta: ts } : {}
+}
+
+/** 节点 → 落盘形态：按 n.type switch 逐分支构造精确的 StoryNode 联合成员
+ * （issue 16，穷尽 switch 由返回类型背书）。四分区拆分：名称型节点
+ * （scene/beat/dialogue）name/episodeNo 上移 meta.label/episodeNo，其余字段
+ * 进 spec；branch 派生标题不落 meta.label 镜像；分镜卡随宿主场景分集、
+ * 图片节点非叙事单元不进大纲分组，均不落独立 episodeNo（§3.5/§13）。 */
+export function toStoryNode(n: CanvasNode): StoryNode {
+  const base = { id: n.id, layout: layoutOf(n), ui: { selected: false, expanded: true } }
+  switch (n.type) {
+    case 'scene': {
+      const { name, episodeNo, ...spec } = n.data
+      return {
+        ...base,
+        type: 'scene',
+        data: {
+          spec,
+          meta: { label: name ?? '', ...episodeNoOf(episodeNo), ...metaTsOf(n.meta) },
+        },
+      }
+    }
+    case 'beat': {
+      const { name, episodeNo, ...spec } = n.data
+      return {
+        ...base,
+        type: 'beat',
+        data: {
+          spec,
+          meta: { label: name ?? '', ...episodeNoOf(episodeNo), ...metaTsOf(n.meta) },
+        },
+      }
+    }
+    case 'dialogue': {
+      const { name, episodeNo, ...spec } = n.data
+      return {
+        ...base,
+        type: 'dialogue',
+        data: {
+          spec,
+          meta: { label: name ?? '', ...episodeNoOf(episodeNo), ...metaTsOf(n.meta) },
+        },
+      }
+    }
+    case 'branch': {
+      // 剥离 name：v1 残留的 spec.name 经归一化透传、fromStoryNode 拍平后可
+      // 混入运行态 data（Record 索引签名）；BranchSpec 无 name（派生标题不落
+      // 镜像），须剥离避免禁写字段被无限写回——与分镜卡 episodeNo 同域
+      const { episodeNo, ...rest } = n.data
+      const spec = { ...rest }
+      delete spec.name
+      return {
+        ...base,
+        type: 'branch',
+        data: { spec, meta: { ...episodeNoOf(episodeNo), ...metaTsOf(n.meta) } },
+      }
+    }
+    case 'shot': {
+      // 分镜卡 data 与落盘 spec 同构，整体搬运；不落独立 episodeNo（§3.5）。
+      // 剥离 episodeNo/name：v1 残留的 spec.episodeNo 经归一化透传、
+      // fromStoryNode 拍平后可混入运行态 data（Record 索引签名），整体展开
+      // 会把它无限写回 spec——剥离后保存即修复错集归属。
+      // 展开构造：文档侧 spec 接口无索引签名，运行态 *NodeData 因框架约束
+      // 继承 Record——展开对象取得隐式签名后方可赋回
+      const spec = { ...n.data }
+      delete spec.episodeNo
+      delete spec.name
+      return { ...base, type: 'shot', data: { spec, meta: metaTsOf(n.meta) } }
+    }
+    case 'image': {
+      // 图片节点同构搬运（§13）；同为非叙事单元，剥离同名保留字段防写回
+      const spec = { ...n.data }
+      delete spec.episodeNo
+      delete spec.name
+      return { ...base, type: 'image', data: { spec, meta: metaTsOf(n.meta) } }
+    }
+  }
+}
+
+/** 落盘节点 → 运行态：按 n.type switch 逐分支拍平 spec/meta 为精确的
+ * *NodeData（issue 16）；ui.selected 恒为 false（§11.2）；可选 layout.size/
+ * zIndex 恢复为 React Flow 的 width/height/zIndex；meta.createdAt/updatedAt
+ * （§4.1 演进占位）经顶层 meta 透传，非字符串值不带（下游不落盘即剥离）。 */
+export function fromStoryNode(n: StoryNode): CanvasNode {
+  switch (n.type) {
+    case 'scene': {
+      const { spec, meta } = n.data
+      return {
+        id: n.id,
+        type: 'scene',
+        ...flowLayoutOf(n),
+        selected: false,
+        ...flowMetaOf(meta),
+        data: {
+          ...spec,
+          name: meta.label,
+          // 存储契约可选、运行态必填（§4.2 渲染安全）：归一化已保证字符串，
+          // 缺省兜底空串与 normalizeSceneTextFields 同域
+          time: spec.time ?? '',
+          ...episodeNoOf(meta.episodeNo),
+        },
+      }
+    }
+    case 'beat': {
+      const { spec, meta } = n.data
+      return {
+        id: n.id,
+        type: 'beat',
+        ...flowLayoutOf(n),
+        selected: false,
+        ...flowMetaOf(meta),
+        data: { ...spec, name: meta.label, ...episodeNoOf(meta.episodeNo) },
+      }
+    }
+    case 'dialogue': {
+      const { spec, meta } = n.data
+      return {
+        id: n.id,
+        type: 'dialogue',
+        ...flowLayoutOf(n),
+        selected: false,
+        ...flowMetaOf(meta),
+        data: { ...spec, name: meta.label, ...episodeNoOf(meta.episodeNo) },
+      }
+    }
+    case 'branch': {
+      const { spec, meta } = n.data
+      return {
+        id: n.id,
+        type: 'branch',
+        ...flowLayoutOf(n),
+        selected: false,
+        ...flowMetaOf(meta),
+        data: { ...spec, ...episodeNoOf(meta.episodeNo) },
+      }
+    }
+    case 'shot':
+      return {
+        id: n.id,
+        type: 'shot',
+        ...flowLayoutOf(n),
+        selected: false,
+        ...flowMetaOf(n.data.meta),
+        data: { ...n.data.spec },
+      }
+    case 'image':
+      return {
+        id: n.id,
+        type: 'image',
+        ...flowLayoutOf(n),
+        selected: false,
+        ...flowMetaOf(n.data.meta),
+        data: { ...n.data.spec },
+      }
+  }
 }
 
 /** 边 → 落盘形态：kind 显式化；branch 胶囊文案是分支选项的派生物，不落拷贝。

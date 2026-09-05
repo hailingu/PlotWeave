@@ -337,6 +337,8 @@ export function rewriteBlankKeyReferences(
   warnings: string[],
 ): void {
   for (const n of nodes) {
+    // 边界（issue 16）：加载管线内 spec 仍是被 JSON 擦除类型的联合，此处
+    // 只做引用字段的重发改写，字段域由各 rewrite*BlankRefs 谓词背书
     const spec = n.data.spec as unknown as Record<string, unknown>
     if (n.type === 'scene') rewriteSceneBlankRefs(n.id, spec, remaps, warnings)
     if (n.type === 'dialogue') rewriteDialogueBlankRefs(n.id, spec, remaps.characters, warnings)

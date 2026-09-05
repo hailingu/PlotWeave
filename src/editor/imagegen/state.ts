@@ -23,6 +23,7 @@ import { uid } from '../../uid'
 import { normalizeAssetRef, projectAssets, tauriInvoke } from '../projectAssets'
 import type { ProjectSettings } from '../settings'
 import type { HistoryCommand } from '../history'
+import type { NodeDataPatch } from '../nodes/patch'
 import type { CanvasNode } from '../nodes/types'
 import type { ImageGenApi, ImageJobView } from './context'
 import { resolveImageGenPlan } from './plan'
@@ -41,8 +42,9 @@ export interface ImageJobsDeps {
   assetsRef: { current: { byId: Record<string, AssetRef> } | undefined }
   /** 设定集镜像：旧产物回收判定需扫角色头像引用（avatarAssetId）。 */
   settingsRef: { current: Pick<ProjectSettings, 'characters'> }
-  /** 纯状态写入（复合命令的初始应用与 undo/redo 共用，不单独入栈）。 */
-  applyDataPatch: (id: string, patch: Record<string, unknown>) => void
+  /** 纯状态写入（复合命令的初始应用与 undo/redo 共用，不单独入栈）；
+   * 补丁按节点类型判别绑定（issue 16，图片节点 outputs 域）。 */
+  applyDataPatch: (id: string, cmd: NodeDataPatch) => void
   addAsset: (asset: AssetRef) => void
   removeAsset: (assetId: string) => void
   pushHistory: (cmd: HistoryCommand) => void
@@ -148,12 +150,13 @@ function applyGenerationResult(
       : undefined
   deps.addAsset(asset)
   if (superseded !== undefined) deps.removeAsset(superseded.id)
-  deps.applyDataPatch(nodeId, { outputs: next })
+  const outputsPatch: NodeDataPatch = { nodeType: 'image', patch: { outputs: next } }
+  deps.applyDataPatch(nodeId, outputsPatch)
   deps.pushHistory({
     undo: () => {
       deps.removeAsset(asset.id)
       if (superseded !== undefined) deps.addAsset(superseded)
-      deps.applyDataPatch(nodeId, { outputs: before })
+      deps.applyDataPatch(nodeId, { nodeType: 'image', patch: { outputs: before } })
     },
     // 重做防线（issue #10，§7.3 库资产导入同构）：产物文件在撤销窗口
     // 内被外部删改则拒绝重做入脏
@@ -161,7 +164,7 @@ function applyGenerationResult(
     redo: () => {
       deps.addAsset(asset)
       if (superseded !== undefined) deps.removeAsset(superseded.id)
-      deps.applyDataPatch(nodeId, { outputs: next })
+      deps.applyDataPatch(nodeId, outputsPatch)
     },
   })
 }

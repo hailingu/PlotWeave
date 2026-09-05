@@ -269,6 +269,10 @@ function assembleDocument(
   byId: Record<string, unknown>,
   episodeTitles: ProjectDocument['episodeTitles'],
 ): ProjectDocument {
+  // 边界（issue 16）：settings/assetIndex 在此之前一直是 Record 形态（JSON
+  // 擦除类型），桶内容已由 normalizeSettingsBuckets/sanitizeBucketEntries
+  // 按契约实体完成校验、键控重发与同桶引用改写（§11.1），装配点把它们
+  // 绑定为 ProjectDocument 的契约桶——契约实体不得在会话内静默降级
   return {
     schemaVersion: CURRENT_SCHEMA_VERSION,
     project: {
@@ -354,6 +358,8 @@ export function normalizeContainers(
     viewport,
     settings,
     assetIndex,
+    // 边界（issue 16）：normalizeEpisodeTitles 返回「正整数键 → 非空标题」
+    // 的普通 Record（键值域已按 §11.1 收口），绑定回文档契约字段
     normalizeEpisodeTitles(titlesRaw, warnings) as unknown as ProjectDocument['episodeTitles'],
   )
   return { doc, optionIdRemap, nodeIdRemap }

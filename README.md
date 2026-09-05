@@ -81,11 +81,11 @@ npm run tauri dev  # 启动 Tauri 开发调试（Vite 前端 + Rust 壳）
 
 1. 运行 `npm run test:coverage`，生成最新的 `coverage/lcov.info`，并确认报告非空、包含源文件和实际命中行。
 2. 运行 `sonar-scanner` 并等待 SonarQube Quality Gate 完成。
-3. 确认 Quality Gate 为 `OK`，且项目未解决问题总数为 `0`。
+3. 确认 Quality Gate 为 `OK`，且**新增代码**的未解决问题为 `0`（增量清零：按 SonarQube New Code 周期过滤，即 `sinceLeakPeriod`；存量历史问题另行治理，不阻塞提交）。
 
 本机需安装 `sonar-scanner`，并在执行 Git 操作的终端环境中显式设置 `SONAR_HOST_URL`；这样可以避免新版扫描器在地址缺失时误连 SonarQube Cloud。服务需要认证时，通过本机环境变量 `SONAR_TOKEN` 提供令牌；未设置 `SONAR_TOKEN` 时回退读取 `PLOTWEAVE_SONAR_TOKEN`（可导出在 `~/.zshrc` 中，Git 钩子继承调用方终端的环境）。地址按本机环境配置，令牌禁止写入仓库。也可以用 `npm run sonar:gate` 手动执行完整门禁。
 
-测试失败、覆盖率报告无效、扫描失败、Quality Gate 未通过、服务不可用或仍有任何未解决问题时，Git 操作会被阻止。同一工作树只允许一个门禁运行，以免并发扫描覆盖共享产物。应逐项修复并重复执行门禁，直到问题数归零；不得使用 `--no-verify` 绕过。
+测试失败、覆盖率报告无效、扫描失败、Quality Gate 未通过、服务不可用或新增代码仍有未解决问题时，Git 操作会被阻止。同一工作树只允许一个门禁运行，以免并发扫描覆盖共享产物。应逐项修复新增问题并重复执行门禁，直到新增问题数归零；不得使用 `--no-verify` 绕过。
 
 ## 文档与协作
 

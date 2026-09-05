@@ -88,7 +88,7 @@ describe('useCanvasDrop：设定集实体路径（既有行为）', () => {
     const { deps, handlers } = setup([shotNode, sceneNode])
     const entity = JSON.stringify({ kind: 'character', id: 'ch1', name: '林晚' })
     handlers.onCanvasDrop(fakeEvent('sc1', [PW_ENTITY_MIME], { [PW_ENTITY_MIME]: entity }))
-    expect(deps.patchNode).toHaveBeenCalledWith('sc1', { characterIds: ['ch1'] })
+    expect(deps.patchNode).toHaveBeenCalledWith('sc1', { nodeType: 'scene', patch: { characterIds: ['ch1'] } })
 
     handlers.onCanvasDrop(fakeEvent(null, [PW_ENTITY_MIME], { [PW_ENTITY_MIME]: entity }))
     expect(deps.createNode).toHaveBeenCalledWith('scene', {
@@ -110,17 +110,21 @@ describe('useCanvasDrop：库资产拖上分镜卡（§7.3 拷贝进项目）', 
     })
     expect(importMock).toHaveBeenCalledWith('p-1', 'la-1')
     expect(deps.addAsset).toHaveBeenCalledWith(importedAsset)
-    const patch = vi.mocked(deps.applyDataPatch).mock.calls[0][1] as { refs: Array<{ assetId?: string; kind: string }> }
-    expect(patch.refs).toHaveLength(1)
-    expect(patch.refs[0]).toMatchObject({ kind: 'character', assetId: 'pa-1' })
+    const bind = vi.mocked(deps.applyDataPatch).mock.calls[0][1]
+    const refs = bind.nodeType === 'shot' ? (bind.patch.refs ?? []) : []
+    expect(refs).toHaveLength(1)
+    expect(refs[0]).toMatchObject({ kind: 'character', assetId: 'pa-1' })
     // 撤销单元：移除索引条目 + 还原引用位；重做恢复
     const cmd = vi.mocked(deps.pushHistory).mock.calls[0][0]
     act(() => cmd.undo())
     expect(deps.removeAsset).toHaveBeenCalledWith('pa-1')
-    expect(vi.mocked(deps.applyDataPatch).mock.calls[1][1]).toEqual({ refs: [] })
+    expect(vi.mocked(deps.applyDataPatch).mock.calls[1][1]).toEqual({
+      nodeType: 'shot',
+      patch: { refs: [] },
+    })
     act(() => cmd.redo())
     expect(vi.mocked(deps.addAsset).mock.calls).toHaveLength(2)
-    expect(vi.mocked(deps.applyDataPatch).mock.calls[2][1]).toEqual(patch)
+    expect(vi.mocked(deps.applyDataPatch).mock.calls[2][1]).toEqual(bind)
   })
 
   it('重做防线（issue #10）：命令携带 redoGuard，重做前经 projectAssets.revalidate 复验', async () => {

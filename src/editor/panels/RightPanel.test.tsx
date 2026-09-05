@@ -10,7 +10,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import RightPanel from './RightPanel'
 import { llmChat, type AssistantMessage } from '../ai/chat'
 import type { ChatMessage } from '../ai/chat'
-import type { AiCommand, BatchValidation } from '../ai/commands'
+import type { BatchValidation, ValidatedCommand } from '../ai/commands'
 import { settingsStore } from '../../settings/settingsStore'
 import type { AppSettings } from '../../settings/types'
 import type { ProjectSettings } from '../settings'
@@ -261,7 +261,7 @@ describe('RightPanel ✦AI 对话', () => {
 })
 
 /** 一条合法 create 命令与对应校验结果的桩。 */
-const CREATE_CMD = { op: 'create_node', nodeType: 'scene', ref: 'a', data: { name: '场二' } } as unknown as AiCommand
+const CREATE_CMD: ValidatedCommand = { op: 'create_node', nodeType: 'scene', ref: 'a', data: { name: '场二' } }
 
 const validationOf = (over: Partial<BatchValidation> = {}): BatchValidation => ({
   ok: true,

@@ -392,6 +392,21 @@ function normalizeLayoutOptionals(layout: Record<string, unknown>, nid: string, 
   }
 }
 
+/** 校验通过的落盘成员 → StoryNode 判别联合的唯一构造出口（§4.1，issue 16）：
+ * JSON 边界已擦除 TS 类型，形状契约由 normalizeNode 全量背书——嵌套容器、
+ * 判别联合形状（nodeDiscriminantError）、键控列表修复、never 禁写剥离、
+ * ui 补齐全部通过后，此处才把 Record 绑定为联合成员；cast 收口于此，
+ * 调用点不得再散布裸转换。 */
+function validatedStoryNode(member: Record<string, unknown>): StoryNode {
+  return member as unknown as StoryNode
+}
+
+/** 校验通过的落盘成员 → StoryEdge 判别联合的唯一构造出口（§5，issue 16）：
+ * kind 句柄契约与 order 值域由 normalizeEdge 背书，绑定收口于此。 */
+function validatedStoryEdge(member: Record<string, unknown>): StoryEdge {
+  return member as unknown as StoryEdge
+}
+
 /** 单个节点的成员形状校验与机械修复；嵌套容器（data/spec/meta/layout +
  * position 坐标）或判别联合形状（§4.1/§4.2）无法机械修复时隔离该节点
  * （返回 null）。 */
@@ -437,7 +452,7 @@ export function normalizeNode(
     warnings.push(`节点 ${nid} 的 ui 缺失或异型，已重置为默认值`)
     member.ui = { selected: false, expanded: true }
   }
-  return member as unknown as StoryNode
+  return validatedStoryNode(member)
 }
 
 /** 单个边的成员形状校验：非普通对象或判别依据 data 缺失即无法机械修复，隔离（返回 null）。
@@ -460,7 +475,7 @@ export function normalizeEdge(member: unknown, warnings: string[]): StoryEdge | 
     )
     delete member.data.order
   }
-  return member as unknown as StoryEdge
+  return validatedStoryEdge(member)
 }
 
 /** 场景/分镜编号顺位重发（§4.2 sceneNo/shotNo 值域：正的安全整数）：编号
@@ -471,6 +486,8 @@ export function renumberSeqFields(nodes: StoryNode[], warnings: string[]): void 
   for (const n of nodes) {
     if (n.type !== 'scene' && n.type !== 'shot') continue
     const key = n.type === 'scene' ? 'sceneNo' : 'shotNo'
+    // 边界（issue 16）：加载管线内 spec 仍是被 JSON 擦除类型的联合，此处
+    // 只做编号值域的读改写，字段域由 REQUIRED_SCALARS/renumber 规则背书
     const spec = n.data.spec as unknown as Record<string, unknown>
     const cur = spec[key]
     if (typeof cur === 'number' && Number.isSafeInteger(cur) && cur > 0) {

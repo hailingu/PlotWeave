@@ -20,6 +20,7 @@ import type { CharacterEntity, ProjectSettings } from '../settings'
 import type { HistoryCommand } from '../history'
 import type { AssetRef } from '../../model/document'
 import type { CanvasNode, ImageFlowNode } from '../nodes/types'
+import type { NodeDataPatch } from '../nodes/patch'
 
 vi.mock('../projectAssets', () => ({
   projectAssets: { importFromLibrary: vi.fn(), mediaUrl: vi.fn(), revalidate: vi.fn() },
@@ -63,7 +64,7 @@ function Harness(props: {
   readonly nodes: CanvasNode[]
   readonly assetsRef: { current: { byId: Record<string, AssetRef> } | undefined }
   readonly settings: Pick<ProjectSettings, 'characters'> & { locations?: unknown }
-  readonly applyDataPatch: (id: string, patch: Record<string, unknown>) => void
+  readonly applyDataPatch: (id: string, cmd: NodeDataPatch) => void
   readonly addAsset: (asset: AssetRef) => void
   readonly removeAsset: (assetId: string) => void
   readonly pushHistory: (cmd: HistoryCommand) => void
@@ -226,17 +227,22 @@ describe('生成调度：结果落位复合命令（§7.3 同构）', () => {
     // 初始应用：资产入索引 + outputs 写回（纯状态写入，非 patchNode 命令）
     expect(addAsset).toHaveBeenCalledTimes(1)
     expect(applyDataPatch).toHaveBeenCalledWith('img1', {
-      outputs: { primary: { assetId: 'pa-9' } },
+      nodeType: 'image',
+      patch: { outputs: { primary: { assetId: 'pa-9' } } },
     })
 
     const cmd = vi.mocked(pushHistory).mock.calls[0][0] as HistoryCommand
     cmd.undo()
     expect(removeAsset).toHaveBeenCalledWith('pa-9')
-    expect(applyDataPatch).toHaveBeenLastCalledWith('img1', { outputs: {} })
+    expect(applyDataPatch).toHaveBeenLastCalledWith('img1', {
+      nodeType: 'image',
+      patch: { outputs: {} },
+    })
     cmd.redo()
     expect(addAsset).toHaveBeenCalledTimes(2)
     expect(applyDataPatch).toHaveBeenLastCalledWith('img1', {
-      outputs: { primary: { assetId: 'pa-9' } },
+      nodeType: 'image',
+      patch: { outputs: { primary: { assetId: 'pa-9' } } },
     })
 
     // 重做防线（issue #10）：redoGuard 经 projectAssets.revalidate 复验生成产物

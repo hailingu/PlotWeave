@@ -215,8 +215,12 @@ describe('列表项稳定 id 归一化（S6479 信任边界：AI 可送旧形态
       s,
     )
     expect(v.ok).toBe(true)
-    const cmd = v.commands[0] as unknown as { patch: { lines: Array<{ id: string }> } }
-    expect(cmd.patch.lines[0].id).toMatch(/^line-/)
+    const upd = v.commands[0]
+    const lines =
+      upd.op === 'update_node' && upd.patch.nodeType === 'dialogue'
+        ? (upd.patch.patch.lines ?? [])
+        : []
+    expect(lines[0].id).toMatch(/^line-/)
   })
 
   it('重复或空串 id 不信任：列表内冲突/空白 id 重生成（React key 唯一性）', () => {
@@ -647,10 +651,11 @@ describe('AI 批量命令的逐类型载荷形状校验（信任边界：字段�
       richSnap(),
     )
     expect(v.ok).toBe(true)
-    const patch = (v.commands[0] as unknown as {
-      patch: { options: Array<{ id: string; label: string }> }
-    }).patch
-    expect(patch.options).toEqual([
+    const options =
+      v.commands[0].op === 'update_node' && v.commands[0].patch.nodeType === 'branch'
+        ? (v.commands[0].patch.patch.options ?? [])
+        : []
+    expect(options).toEqual([
       { id: 'ob-a', label: '追！' },
       { id: 'ob-b', label: '不追' },
     ])
@@ -666,9 +671,10 @@ describe('AI 批量命令的逐类型载荷形状校验（信任边界：字段�
       ],
       richSnap(),
     )
-    const mixedOptions = (mixed.commands[0] as unknown as {
-      patch: { options: Array<{ id: string }> }
-    }).patch.options
+    const mixedOptions =
+      mixed.commands[0].op === 'update_node' && mixed.commands[0].patch.nodeType === 'branch'
+        ? (mixed.commands[0].patch.patch.options ?? [])
+        : []
     expect(mixedOptions.map((o) => o.id)).toEqual(['ob-a', 'ob-b', 'ob-x'])
   })
 
@@ -680,10 +686,11 @@ describe('AI 批量命令的逐类型载荷形状校验（信任边界：字段�
       richSnap(),
     )
     expect(v.ok).toBe(true)
-    const patch = (v.commands[0] as unknown as {
-      patch: { options: Array<{ id: string; label: string }> }
-    }).patch
-    expect(patch.options).toEqual([
+    const options =
+      v.commands[0].op === 'update_node' && v.commands[0].patch.nodeType === 'branch'
+        ? (v.commands[0].patch.patch.options ?? [])
+        : []
+    expect(options).toEqual([
       { id: 'ob-a', label: '追！' },
       { id: 'ob-b', label: '不追' },
     ])
@@ -692,9 +699,10 @@ describe('AI 批量命令的逐类型载荷形状校验（信任边界：字段�
       [{ op: 'update_node', nodeId: 'b1', patch: { options: ['追！', '不追', '再想想'] } }],
       richSnap(),
     )
-    const grownOptions = (grown.commands[0] as unknown as {
-      patch: { options: Array<{ id: string }> }
-    }).patch.options
+    const grownOptions =
+      grown.commands[0].op === 'update_node' && grown.commands[0].patch.nodeType === 'branch'
+        ? (grown.commands[0].patch.patch.options ?? [])
+        : []
     expect(grownOptions[0].id).toBe('ob-a')
     expect(grownOptions[2].id).toMatch(/^opt-/)
   })

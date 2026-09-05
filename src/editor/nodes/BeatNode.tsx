@@ -21,7 +21,7 @@ export default function BeatNode({ id, data, selected }: NodeProps<BeatFlowNode>
       <EditableName
         value={data.name}
         ariaLabel="节奏卡内容"
-        onChange={(name) => patchNode(id, { name })}
+        onChange={(name) => patchNode(id, { nodeType: 'beat', patch: { name } })}
       />
       <span className="pw-beat-tone">基调：{data.tone}</span>
       {pending ? (

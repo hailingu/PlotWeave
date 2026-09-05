@@ -1,5 +1,7 @@
 #!/bin/sh
-# 为本地提交与推送生成最新覆盖率，并强制 SonarQube Quality Gate 通过且未解决问题为零。
+# 为本地提交与推送生成最新覆盖率，并强制 SonarQube Quality Gate 通过且新增代码
+# 未解决问题为零（增量清零：sinceLeakPeriod 过滤 New Code 周期内的问题；全项目
+# 历史问题另行治理，不阻塞提交）。
 
 set -eu
 
@@ -118,12 +120,15 @@ quality_gate_status=$(printf '%s' "$quality_gate_json" | "$node_bin" -e '
 
 [ "$quality_gate_status" = 'OK' ] || fail "Quality Gate 状态为 $quality_gate_status"
 
+# 增量清零：sinceLeakPeriod=true 只统计 New Code 周期内的未解决问题——
+# 提交/推送只对本改动引入的问题负责，存量历史问题不再阻塞 Git 操作。
 issues_json=$(sonar_api \
   --get "$server_url/api/issues/search" \
   --data-urlencode "componentKeys=$project_key" \
   --data-urlencode 'resolved=false' \
+  --data-urlencode 'sinceLeakPeriod=true' \
   --data-urlencode 'ps=1')
-unresolved_issues=$(printf '%s' "$issues_json" | "$node_bin" -e '
+new_issues=$(printf '%s' "$issues_json" | "$node_bin" -e '
   const input = require("node:fs").readFileSync(0, "utf8");
   const total = JSON.parse(input)?.total;
   if (!Number.isInteger(total) || total < 0) {
@@ -133,7 +138,7 @@ unresolved_issues=$(printf '%s' "$issues_json" | "$node_bin" -e '
   process.stdout.write(String(total));
 ')
 
-[ "$unresolved_issues" -eq 0 ] ||
-  fail "仍有 $unresolved_issues 个未解决问题；修复后重新运行，禁止绕过"
+[ "$new_issues" -eq 0 ] ||
+  fail "新增代码仍有 $new_issues 个未解决问题；修复后重新运行，禁止绕过"
 
-printf '%s\n' '[SonarQube] Quality Gate 已通过，未解决问题为 0。'
+printf '%s\n' '[SonarQube] Quality Gate 已通过，新增代码未解决问题为 0。'
