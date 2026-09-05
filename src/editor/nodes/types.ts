@@ -6,7 +6,15 @@ import type { Node } from '@xyflow/react'
  * 编剧侧（纸面浅色）= 节奏卡 / 索引卡 / 对白 / 分支；
  * 生成侧（深色石板）= 分镜卡，未来的渲染节点同族。
  * 首版为画布内存态结构，字段名对齐《数据模型设计》的 spec/meta 拆分；
- * 落盘时经 src/model/convert.ts 转换为 ProjectDocument（四分区信封）。
+ * 落盘时经 src/model/serialize.ts 转换为 ProjectDocument（四分区信封），
+ * 载入侧的归一化管线门面在 src/model/convert.ts。
+ *
+ * 约束来源（issue 16）：各 *NodeData `extends Record<string, unknown>` 是
+ * @xyflow/react v12 `Node<Data extends Record<string, unknown>>` 泛型约束
+ * 的硬要求，非本域选择；它带来的字符串索引签名会把任意键的宽补丁放进
+ * data 类型——因此补丁路径使用 nodes/patch.ts 的 PatchShape（剥离索引
+ * 签名）判别化收口，data↔文档 spec 的互转按类型构造于 src/model/
+ * serialize.ts，宽 cast 只允许出现在 serialize/normalize 边界模块。
  */
 
 /** 角色头像的派生视图：label 为单字名，gradient 为设定集头像配色的占位渐变。 */

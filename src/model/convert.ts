@@ -266,6 +266,9 @@ function parseLegacyProject(raw: Record<string, unknown>, env: NormalizeEnv): Pa
   const legacy: ProjectContent = {
     name: env0.project?.name ?? '',
     createdAt: env0.project?.createdAt || undefined,
+    // 边界（issue 16，v0 兼容入站）：旧档节点是未类型化的历史扁平 JSON，
+    // 预归一化只做容器/成员修复；迁移器按 node.type 分派消费，迁移产物
+    // 会以 v1 信封重走完整归一化管线后才进入会话——宽化只存在于迁移入站
     nodes: v0Nodes as unknown as CanvasNode[],
     edges: v0Members(v0Array(graphRaw.edges, 'graph.edges'), 'graph.edges') as Edge[],
     settings: (env0.settings ?? {}) as ProjectContent['settings'],
@@ -283,6 +286,8 @@ function parseLegacyProject(raw: Record<string, unknown>, env: NormalizeEnv): Pa
     legacyNow,
   )
   const { doc: normalized, warnings } = normalizeDocument(
+    // 边界（issue 16）：刚构造的 ProjectDocument 以原始 JSON 形态进入归一化
+    // 容器校验（§11.1 第 2 步从 Record 起步），方向是「收窄到可遍历形态」
     doc as unknown as Record<string, unknown>,
     env,
   )
