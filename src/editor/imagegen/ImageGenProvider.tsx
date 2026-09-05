@@ -9,6 +9,7 @@ import { useRef, type ReactNode } from 'react'
 import type { AssetRef } from '../../model/document'
 import ErrorBanner from '../ErrorBanner'
 import type { ProjectSettings } from '../settings'
+import type { NodeDataPatch } from '../nodes/patch'
 import type { CanvasNode } from '../nodes/types'
 import { ImageGenContext } from './context'
 import { useImageJobsState } from './state'
@@ -22,7 +23,7 @@ interface ImageGenProviderProps {
   readonly nodesRef: { current: CanvasNode[] }
   readonly assetsRef: { current: { byId: Record<string, AssetRef> } | undefined }
   readonly settings: Pick<ProjectSettings, 'characters'>
-  readonly applyDataPatch: (id: string, patch: Record<string, unknown>) => void
+  readonly applyDataPatch: (id: string, cmd: NodeDataPatch) => void
   readonly addAsset: (asset: AssetRef) => void
   readonly removeAsset: (assetId: string) => void
   readonly pushHistory: (cmd: import('../history').HistoryCommand) => void

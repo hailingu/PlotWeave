@@ -103,7 +103,7 @@ describe('DialogueNode（气泡流卡）', () => {
     const input = screen.getByRole('textbox', { name: '对白名称' })
     fireEvent.change(input, { target: { value: '雨夜摊牌' } })
     fireEvent.blur(input)
-    expect(api.patchNode).toHaveBeenCalledWith('d1', { name: '雨夜摊牌' })
+    expect(api.patchNode).toHaveBeenCalledWith('d1', { nodeType: 'dialogue', patch: { name: '雨夜摊牌' } })
   })
 
   it('端口：左入右出', () => {

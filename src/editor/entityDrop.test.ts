@@ -53,22 +53,27 @@ function shotNode(refs: ShotRef[] = []): ShotFlowNode {
 
 describe('entityDropPatch（§5 设定集实体拖上节点 = 建立引用）', () => {
   it('角色 → 索引卡：追加出场角色 id；已在场则去重返回 null', () => {
-    expect(entityDropPatch(sceneNode(), char)).toEqual({ characterIds: ['c1'] })
+    expect(entityDropPatch(sceneNode(), char)).toEqual({
+      nodeType: 'scene',
+      patch: { characterIds: ['c1'] },
+    })
     expect(entityDropPatch(sceneNode(['c1']), char)).toBeNull()
   })
 
   it('角色 → 对白：追加一条以该角色为说话人的新台词（带稳定 id），原有行保留', () => {
-    const patch = entityDropPatch(dialogueNode(), char) as { lines: { id: string }[] }
-    expect(patch.lines).toHaveLength(2)
-    expect(patch.lines[1]).toMatchObject({ kind: 'line', speaker: 'c1', side: 'left', text: '新台词…' })
-    expect(patch.lines[1].id).toMatch(/^line-/)
+    const cmd = entityDropPatch(dialogueNode(), char)
+    const lines = cmd?.nodeType === 'dialogue' ? (cmd.patch.lines ?? []) : []
+    expect(lines).toHaveLength(2)
+    expect(lines[1]).toMatchObject({ kind: 'line', speaker: 'c1', side: 'left', text: '新台词…' })
+    expect(lines[1].id).toMatch(/^line-/)
   })
 
   it('角色 → 分镜卡：无资产时落自由位引用（label = 实体名，§4.2）；同名去重返回 null', () => {
-    const patch = entityDropPatch(shotNode(), char) as { refs: ShotRef[] }
-    expect(patch.refs).toHaveLength(1)
-    expect(patch.refs[0]).toMatchObject({ kind: 'character', label: '阿黎' })
-    expect(patch.refs[0].id).toMatch(/^ref-/)
+    const cmd = entityDropPatch(shotNode(), char)
+    const refs = cmd?.nodeType === 'shot' ? (cmd.patch.refs ?? []) : []
+    expect(refs).toHaveLength(1)
+    expect(refs[0]).toMatchObject({ kind: 'character', label: '阿黎' })
+    expect(refs[0].id).toMatch(/^ref-/)
     const dup = shotNode([{ id: 'r0', kind: 'character', label: '阿黎' }])
     expect(entityDropPatch(dup, char)).toBeNull()
   })
@@ -91,10 +96,11 @@ describe('entityDropPatch（§5 设定集实体拖上节点 = 建立引用）', 
   })
 
   it('地点 → 索引卡：写入 locationId；→ 分镜卡：落自由位引用（label = 实体名）并去重', () => {
-    expect(entityDropPatch(sceneNode(), loc)).toEqual({ locationId: 'l1' })
-    const patch = entityDropPatch(shotNode(), loc) as { refs: ShotRef[] }
-    expect(patch.refs).toHaveLength(1)
-    expect(patch.refs[0]).toMatchObject({ kind: 'location', label: '咖啡馆' })
+    expect(entityDropPatch(sceneNode(), loc)).toEqual({ nodeType: 'scene', patch: { locationId: 'l1' } })
+    const cmd = entityDropPatch(shotNode(), loc)
+    const refs = cmd?.nodeType === 'shot' ? (cmd.patch.refs ?? []) : []
+    expect(refs).toHaveLength(1)
+    expect(refs[0]).toMatchObject({ kind: 'location', label: '咖啡馆' })
     const dup = shotNode([{ id: 'r0', kind: 'location', label: '咖啡馆' }])
     expect(entityDropPatch(dup, loc)).toBeNull()
   })

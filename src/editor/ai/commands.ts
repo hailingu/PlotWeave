@@ -7,6 +7,7 @@ import {
   SCENE_SHOT_HANDLE,
   wouldCreateCycle,
 } from '../graphRules'
+import { dataPatchOf, type NodeDataPatch } from '../nodes/patch'
 import { uid } from '../../uid'
 
 /**
@@ -18,7 +19,10 @@ import { uid } from '../../uid'
  * 不触碰任何 React 状态。
  */
 
-/** 模型可产出的五类命令（对齐数据模型 §12.2 写工具集的首版子集）。 */
+/** 模型可产出的五类命令（对齐数据模型 §12.2 写工具集的首版子集）。
+ * 这是**入站**信任边界的形态：update_node 的 patch 是模型自报的
+ * Record，合法性与目标节点类型的绑定由 validateAiBatch 校验（§9.3），
+ * 校验通过后以 ValidatedCommand 进入执行通道（issue 16）。 */
 export type AiCommand =
   | { op: 'create_node'; nodeType: string; ref?: unknown; data?: unknown; reason?: unknown }
   | { op: 'update_node'; nodeId: string; patch: Record<string, unknown>; reason?: unknown }
@@ -34,6 +38,31 @@ export type AiCommand =
       reason?: unknown
     }
   | { op: 'disconnect_edge'; sourceId: string; targetId: string; reason?: unknown }
+
+/** 校验通过的执行命令（BatchValidation.commands → applyAiBatch →
+ * simulateBatch 的形态）：与入站 AiCommand 同构，唯一差别是 update_node
+ * 的 patch 已按目标节点类型完成键白名单与值形状校验并判别化绑定
+ * NodeDataPatch（issue 16）——执行与撤销路径不再接受宽 Record 补丁。 */
+export type ValidatedCommand =
+  | Extract<AiCommand, { op: 'create_node' | 'delete_node' | 'connect_edge' | 'disconnect_edge' }>
+  | (Omit<Extract<AiCommand, { op: 'update_node' }>, 'patch'> & { patch: NodeDataPatch })
+
+/** 执行命令 → 入站形态（applyAiBatch 重校验用）：判别补丁剥回模型侧的
+ * 宽 Record——validateAiBatch 的契约是入站信任边界，目标节点类型必须
+ * 对当前画布快照重推导（预览与确认之间画布可能变化），wrapper 的
+ * nodeType 只是编译期绑定，重校验不消费。剥壳无信息丢失（patch 本体
+ * 原样回交）。 */
+export function toInboundCommands(batch: ValidatedCommand[]): AiCommand[] {
+  return batch.map((cmd) => {
+    if (cmd.op !== 'update_node') return cmd
+    return {
+      op: 'update_node',
+      nodeId: cmd.nodeId,
+      patch: cmd.patch.patch as Record<string, unknown>,
+      ...(cmd.reason !== undefined ? { reason: cmd.reason } : {}),
+    }
+  })
+}
 
 /** 校验所需的压缩图快照：节点 id/类型/人读标签、现有边端点与端口。 */
 export interface AiGraphSnapshot {
@@ -70,7 +99,7 @@ export interface BatchValidation {
   /** 展示顺序：删除类置顶（§6 危险操作置顶），其余保持命令顺序。 */
   items: PreviewItem[]
   /** 待执行命令：已校验的合法子集，原始顺序（执行语义必须按序折叠）。 */
-  commands: AiCommand[]
+  commands: ValidatedCommand[]
   issues: BatchIssue[]
   /** 删除类或级联断线（danger）在预览中：置顶展示并要求二次确认（§6）。 */
   hasDeletes: boolean
@@ -211,9 +240,16 @@ interface FoldState {
   assets: ReadonlyMap<string, string>
   items: PreviewItem[]
   issues: BatchIssue[]
-  commands: AiCommand[]
+  commands: ValidatedCommand[]
   fail: (index: number, message: string) => void
 }
+
+/** AI 可补丁的节点类型（NODE_FIELD_KEYS 的键域）：图片节点不在此域
+ * （§13 首版 AI 只读）。foldUpdate 经 checkFieldKeys 拒绝白名单外类型后，
+ * 由此谓词收口为字面量联合，供补丁命令的判别化构造（issue 16）。 */
+type AiPatchableType = 'scene' | 'dialogue' | 'beat' | 'branch' | 'shot'
+const isAiPatchableType = (t: string | undefined): t is AiPatchableType =>
+  t !== undefined && t in NODE_FIELD_KEYS
 
 /** nodeId/sourceId/targetId 解析：允许既有 id 或本批新建的 ref；
  * 已被本批删除的节点（含按 ref 引用的）一律视为不存在。 */
@@ -485,13 +521,14 @@ function foldCreate(st: FoldState, cmd: Record<string, unknown>, index: number):
 function foldUpdate(st: FoldState, cmd: Record<string, unknown>, index: number): void {
   const id = resolveRef(st, cmd, 'nodeId')
   if (!id) return st.fail(index, `节点不存在：${asText(cmd.nodeId)}`)
+  const nodeType = st.types.get(id)
   const patch = cmd.patch
   if (!plainObject(patch) || Object.keys(patch).length === 0) return st.fail(index, 'patch 为空')
-  const keyError = checkFieldKeys(st.types.get(id) ?? '', patch)
+  const keyError = checkFieldKeys(nodeType ?? '', patch)
   if (keyError) return st.fail(index, keyError)
-  const patchShapeError = nodeValueShapeError(st.types.get(id) ?? '', patch, st.assets)
+  const patchShapeError = nodeValueShapeError(nodeType ?? '', patch, st.assets)
   if (patchShapeError) return st.fail(index, patchShapeError)
-  if (st.types.get(id) === 'branch' && Array.isArray(patch.options)) {
+  if (nodeType === 'branch' && Array.isArray(patch.options)) {
     const optError = branchOptionsError(patch.options as unknown[])
     if (optError) return st.fail(index, optError)
   }
@@ -501,14 +538,17 @@ function foldUpdate(st: FoldState, cmd: Record<string, unknown>, index: number):
     key: `u${index}`,
     label: `${OP_LABELS.update} ${st.labels.get(id) ?? '未知节点'}（${Object.keys(patch).join('、')}）${reasonOf(cmd)}`,
   })
-  const normalized = normalizeNodeFields(st.types.get(id) ?? '', patch, st.branchOptions.get(id))
-  if (st.types.get(id) === 'branch' && Array.isArray(normalized.options)) {
+  const normalized = normalizeNodeFields(nodeType ?? '', patch, st.branchOptions.get(id))
+  if (nodeType === 'branch' && Array.isArray(normalized.options)) {
     foldBranchCascade(st, id, cmd, index, normalized)
   }
+  // 键白名单已拒白名单外类型（isAiPatchableType 恒真）：运行态类型字串
+  // 收口为字面量后判别化绑定补丁（issue 16），执行通道不再见宽 Record
+  if (!isAiPatchableType(nodeType)) return st.fail(index, '节点类型不支持 AI 命令修改')
   st.commands.push({
     op: 'update_node',
     nodeId: asText(cmd.nodeId),
-    patch: normalized,
+    patch: dataPatchOf(nodeType, normalized),
     reason: asText(cmd.reason),
   })
 }

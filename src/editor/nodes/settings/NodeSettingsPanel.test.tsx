@@ -7,6 +7,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { NodeEditContext, type NodeEditApi } from '../../nodeEdit'
+import type { NodeDataPatch } from '../patch'
 import type { ProjectSettings } from '../../settings'
 import NodeSettingsPanel, { EditableName, type PanelNode } from './NodeSettingsPanel'
 
@@ -47,9 +48,10 @@ function setup(node: PanelNode) {
   return { api, container }
 }
 
-/** 取 patchNode 的第 n 次调用补丁。 */
-const patchOf = (api: NodeEditApi, n = 0) =>
-  (api.patchNode as ReturnType<typeof vi.fn>).mock.calls[n][1] as Record<string, unknown>
+/** 取 patchNode 第 n 次调用的补丁本体（判别命令剥去 nodeType 外壳）。 */
+const patchOf = (api: NodeEditApi, n = 0): Record<string, unknown> =>
+  ((api.patchNode as ReturnType<typeof vi.fn>).mock.calls[n][1] as NodeDataPatch)
+    .patch as Record<string, unknown>
 
 const sceneNode: PanelNode = {
   id: 'n1',
@@ -102,14 +104,14 @@ describe('SceneForm', () => {
     // 断言目标补丁出现过即可，不依赖调用次序
     const segButtons = container.querySelectorAll('.pw-set-seg button')
     fireEvent.click(segButtons[1])
-    expect(api.patchNode).toHaveBeenCalledWith('n1', { interior: false })
+    expect(api.patchNode).toHaveBeenCalledWith('n1', { nodeType: 'scene', patch: { interior: false } })
 
     // happy-dom 中 label 包裹的 chip 可访问名串扰，用结构选择器：chips[1] = 苏珩
     const chips = container.querySelectorAll('.pw-set-chip')
     fireEvent.click(chips[1])
-    expect(api.patchNode).toHaveBeenCalledWith('n1', { characterIds: ['c1', 'c2'] })
+    expect(api.patchNode).toHaveBeenCalledWith('n1', { nodeType: 'scene', patch: { characterIds: ['c1', 'c2'] } })
     fireEvent.click(chips[0])
-    expect(api.patchNode).toHaveBeenCalledWith('n1', { characterIds: [] })
+    expect(api.patchNode).toHaveBeenCalledWith('n1', { nodeType: 'scene', patch: { characterIds: [] } })
   })
 
   it('集归属：输入归一为正整数；清空/✕ 移出集传 undefined', () => {

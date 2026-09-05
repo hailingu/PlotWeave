@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { Edge } from '@xyflow/react'
 import { simulateBatch, type BatchOps } from './batchSim'
-import type { AiCommand } from './commands'
+import type { ValidatedCommand } from './commands'
+import { mergeNodeData } from '../nodes/patch'
 import type { CanvasNode, SceneFlowNode, BranchFlowNode } from '../nodes/types'
 
 function sceneNode(id: string, sceneNo = 1): SceneFlowNode {
@@ -42,10 +43,8 @@ function mkOps(initialNodes: CanvasNode[], initialEdges: Edge[] = []) {
         selected: opts?.selected,
         data: { ...(opts?.data ?? {}) },
       }) as CanvasNode,
-    applyDataPatch: (id, patch) => {
-      state.nodes = state.nodes.map((n) =>
-        n.id === id ? ({ ...n, data: { ...n.data, ...patch } } as CanvasNode) : n,
-      )
+    applyDataPatch: (id, cmd) => {
+      state.nodes = state.nodes.map((n) => (n.id === id ? mergeNodeData(n, cmd.patch) : n))
     },
     setNodes: (up) => {
       state.nodes = up(state.nodes)
@@ -63,7 +62,7 @@ describe('simulateBatch · create_node（虚拟终态建链 + 前进/回退闭�
     const { forward, backward } = simulateBatch(
       [
         { op: 'create_node', nodeType: 'scene', ref: 'new-scene', data: { name: '新场景' } },
-        { op: 'update_node', nodeId: 'new-scene', patch: { synopsis: '改写' } },
+        { op: 'update_node', nodeId: 'new-scene', patch: { nodeType: 'scene', patch: { synopsis: '改写' } } },
       ],
       ops,
       state.nodes,
@@ -82,7 +81,7 @@ describe('simulateBatch · create_node（虚拟终态建链 + 前进/回退闭�
   it('update_node 捕获变更前字段值，undo 精确还原（未写字段不受影响）', () => {
     const { state, ops } = mkOps([sceneNode('s1', 3)])
     const { forward, backward } = simulateBatch(
-      [{ op: 'update_node', nodeId: 's1', patch: { name: '改名', interior: false } }],
+      [{ op: 'update_node', nodeId: 's1', patch: { nodeType: 'scene', patch: { name: '改名', interior: false } } }],
       ops,
       state.nodes,
       state.edges,
@@ -99,7 +98,7 @@ describe('simulateBatch · create_node（虚拟终态建链 + 前进/回退闭�
   it('update_node 目标不存在时不产生任何闭包', () => {
     const { state, ops } = mkOps([])
     const { forward, backward } = simulateBatch(
-      [{ op: 'update_node', nodeId: 'ghost', patch: { name: 'x' } }],
+      [{ op: 'update_node', nodeId: 'ghost', patch: { nodeType: 'scene', patch: { name: 'x' } } }],
       ops,
       state.nodes,
       state.edges,
@@ -224,7 +223,7 @@ describe('simulateBatch · connect_edge（§4.4 三态边形态）', () => {
       },
     ])
     const { forward, backward } = simulateBatch(
-      [{ op: 'update_node', nodeId: 'b1', patch: { options: [{ id: 'o-r', label: '右' }] } }],
+      [{ op: 'update_node', nodeId: 'b1', patch: { nodeType: 'branch', patch: { options: [{ id: 'o-r', label: '右' }] } } }],
       ops,
       state.nodes,
       state.edges,
@@ -284,9 +283,9 @@ describe('simulateBatch · disconnect_edge', () => {
 describe('simulateBatch · 混合批次', () => {
   it('backward 反序回放 = 整批回滚到初始态', () => {
     const { state, ops } = mkOps([sceneNode('s1'), branchNode('b1')])
-    const batch: AiCommand[] = [
+    const batch: ValidatedCommand[] = [
       { op: 'create_node', nodeType: 'scene', ref: 'ns', data: { name: '新场' } },
-      { op: 'update_node', nodeId: 's1', patch: { synopsis: '改了' } },
+      { op: 'update_node', nodeId: 's1', patch: { nodeType: 'scene', patch: { synopsis: '改了' } } },
       { op: 'connect_edge', sourceId: 's1', targetId: 'ns' },
       { op: 'delete_node', nodeId: 'b1' },
     ]

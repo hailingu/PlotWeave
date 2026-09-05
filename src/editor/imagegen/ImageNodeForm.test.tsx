@@ -63,9 +63,9 @@ describe('图片节点 ⚙️ 表单（§13 文生图）', () => {
       outputs: {},
     })
     fireEvent.change(screen.getByPlaceholderText(/画面/), { target: { value: '新描述' } })
-    expect(patchNode).toHaveBeenCalledWith('img1', { prompt: '新描述' })
+    expect(patchNode).toHaveBeenCalledWith('img1', { nodeType: 'image', patch: { prompt: '新描述' } })
     fireEvent.change(screen.getByLabelText(/尺寸/), { target: { value: '1536x1024' } })
-    expect(patchNode).toHaveBeenCalledWith('img1', { size: '1536x1024' })
+    expect(patchNode).toHaveBeenCalledWith('img1', { nodeType: 'image', patch: { size: '1536x1024' } })
   })
 
   it('浏览器预览（无 IPC）下点生成：给出明确失败文案，不静默', async () => {

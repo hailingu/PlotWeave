@@ -85,6 +85,6 @@ describe('BranchNode（岔路路标）', () => {
     const input = screen.getByRole('textbox', { name: '分支问句' })
     fireEvent.change(input, { target: { value: '追或不追？' } })
     fireEvent.blur(input)
-    expect(api.patchNode).toHaveBeenCalledWith('br1', { prompt: '追或不追？' })
+    expect(api.patchNode).toHaveBeenCalledWith('br1', { nodeType: 'branch', patch: { prompt: '追或不追？' } })
   })
 })

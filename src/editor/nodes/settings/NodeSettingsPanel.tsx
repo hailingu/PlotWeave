@@ -9,6 +9,7 @@ import type { ProjectContent } from '../../../model/content'
 import type {
   BeatNodeData,
   BranchNodeData,
+  DialogueLine,
   DialogueNodeData,
   ImageNodeData,
   SceneNodeData,
@@ -35,7 +36,15 @@ export type PanelNode =
 
 /** 集归属（§3.5：集 = 编号 + 行内标题，节点以 episodeNo 归属集）。
  * 清空 = 移出所有集；分镜卡随宿主场景（attach 派生），不出此字段。 */
-function EpisodeField({ nodeId, episodeNo }: { readonly nodeId: string; readonly episodeNo?: number }) {
+function EpisodeField({
+  nodeType,
+  nodeId,
+  episodeNo,
+}: {
+  readonly nodeType: 'scene' | 'beat' | 'dialogue' | 'branch'
+  readonly nodeId: string
+  readonly episodeNo?: number
+}) {
   const { patchNode } = useNodeEdit()
   return (
     <Field label="集">
@@ -49,13 +58,13 @@ function EpisodeField({ nodeId, episodeNo }: { readonly nodeId: string; readonly
           onChange={(e) => {
             const raw = e.target.value
             if (raw === '') {
-              patchNode(nodeId, { episodeNo: undefined })
+              patchNode(nodeId, { nodeType, patch: { episodeNo: undefined } })
               return
             }
             const n = Math.max(1, Math.floor(Number(raw)))
             // §4.1 正安全整数域：有限但越界（如 1e20）落载后会被顺位重发，
             // 输入边界同域拒收——不 patch，保留原值等用户输入完成
-            if (Number.isSafeInteger(n)) patchNode(nodeId, { episodeNo: n })
+            if (Number.isSafeInteger(n)) patchNode(nodeId, { nodeType, patch: { episodeNo: n } })
           }}
         />
         {episodeNo !== undefined && (
@@ -64,7 +73,7 @@ function EpisodeField({ nodeId, episodeNo }: { readonly nodeId: string; readonly
             className="pw-set-x"
             aria-label="移出集"
             title="移出集（未分集）"
-            onClick={() => patchNode(nodeId, { episodeNo: undefined })}
+            onClick={() => patchNode(nodeId, { nodeType, patch: { episodeNo: undefined } })}
           >
             ✕
           </button>
@@ -81,9 +90,12 @@ function SceneForm({ node, settings }: { readonly node: Extract<PanelNode, { typ
   const toggleCharacter = (id: string) => {
     const on = d.characterIds.includes(id)
     patchNode(node.id, {
-      characterIds: on
-        ? d.characterIds.filter((cid) => cid !== id)
-        : [...d.characterIds, id],
+      nodeType: 'scene',
+      patch: {
+        characterIds: on
+          ? d.characterIds.filter((cid) => cid !== id)
+          : [...d.characterIds, id],
+      },
     })
   }
   return (
@@ -92,7 +104,7 @@ function SceneForm({ node, settings }: { readonly node: Extract<PanelNode, { typ
         <input
           className="pw-set-input"
           value={d.name}
-          onChange={(e) => patchNode(node.id, { name: e.target.value })}
+          onChange={(e) => patchNode(node.id, { nodeType: 'scene', patch: { name: e.target.value } })}
         />
       </Field>
       <Field label="场次">
@@ -109,7 +121,8 @@ function SceneForm({ node, settings }: { readonly node: Extract<PanelNode, { typ
             if (raw === '') return
             const n = Math.max(1, Math.floor(Number(raw)))
             // §4.1 正安全整数域：有限但越界（如 1e20）落载后会被顺位重发，同域拒收
-            if (Number.isSafeInteger(n) && n !== d.sceneNo) patchNode(node.id, { sceneNo: n })
+            if (Number.isSafeInteger(n) && n !== d.sceneNo)
+              patchNode(node.id, { nodeType: 'scene', patch: { sceneNo: n } })
           }}
         />
       </Field>
@@ -118,7 +131,9 @@ function SceneForm({ node, settings }: { readonly node: Extract<PanelNode, { typ
           <select
             className="pw-set-input"
             value={d.locationId ?? ''}
-            onChange={(e) => patchNode(node.id, { locationId: e.target.value || undefined })}
+            onChange={(e) =>
+              patchNode(node.id, { nodeType: 'scene', patch: { locationId: e.target.value || undefined } })
+            }
           >
             <option value="">未指定</option>
             {settings.locations.map((l) => (
@@ -132,7 +147,7 @@ function SceneForm({ node, settings }: { readonly node: Extract<PanelNode, { typ
           <input
             className="pw-set-input"
             value={d.time}
-            onChange={(e) => patchNode(node.id, { time: e.target.value })}
+            onChange={(e) => patchNode(node.id, { nodeType: 'scene', patch: { time: e.target.value } })}
           />
         </Field>
       </div>
@@ -141,7 +156,7 @@ function SceneForm({ node, settings }: { readonly node: Extract<PanelNode, { typ
           className="pw-set-input"
           value={d.weather ?? ''}
           placeholder="可选"
-          onChange={(e) => patchNode(node.id, { weather: e.target.value })}
+          onChange={(e) => patchNode(node.id, { nodeType: 'scene', patch: { weather: e.target.value } })}
         />
       </Field>
       <Field label="内外景">
@@ -149,14 +164,14 @@ function SceneForm({ node, settings }: { readonly node: Extract<PanelNode, { typ
           <button
             type="button"
             className={d.interior ? 'on' : ''}
-            onClick={() => patchNode(node.id, { interior: true })}
+            onClick={() => patchNode(node.id, { nodeType: 'scene', patch: { interior: true } })}
           >
             内
           </button>
           <button
             type="button"
             className={!d.interior ? 'on' : ''}
-            onClick={() => patchNode(node.id, { interior: false })}
+            onClick={() => patchNode(node.id, { nodeType: 'scene', patch: { interior: false } })}
           >
             外
           </button>
@@ -167,7 +182,7 @@ function SceneForm({ node, settings }: { readonly node: Extract<PanelNode, { typ
           className="pw-set-input"
           rows={3}
           value={d.synopsis}
-          onChange={(e) => patchNode(node.id, { synopsis: e.target.value })}
+          onChange={(e) => patchNode(node.id, { nodeType: 'scene', patch: { synopsis: e.target.value } })}
         />
       </Field>
       <Field label="出场角色">
@@ -194,7 +209,7 @@ function SceneForm({ node, settings }: { readonly node: Extract<PanelNode, { typ
           )}
         </div>
       </Field>
-      <EpisodeField nodeId={node.id} episodeNo={d.episodeNo} />
+      <EpisodeField nodeType="scene" nodeId={node.id} episodeNo={d.episodeNo} />
     </>
   )
 }
@@ -208,17 +223,17 @@ function BeatForm({ node }: { readonly node: Extract<PanelNode, { type: 'beat' }
         <input
           className="pw-set-input"
           value={node.data.name}
-          onChange={(e) => patchNode(node.id, { name: e.target.value })}
+          onChange={(e) => patchNode(node.id, { nodeType: 'beat', patch: { name: e.target.value } })}
         />
       </Field>
       <Field label="基调">
         <input
           className="pw-set-input"
           value={node.data.tone}
-          onChange={(e) => patchNode(node.id, { tone: e.target.value })}
+          onChange={(e) => patchNode(node.id, { nodeType: 'beat', patch: { tone: e.target.value } })}
         />
       </Field>
-      <EpisodeField nodeId={node.id} episodeNo={node.data.episodeNo} />
+      <EpisodeField nodeType="beat" nodeId={node.id} episodeNo={node.data.episodeNo} />
     </>
   )
 }
@@ -234,9 +249,10 @@ function DialogueForm({
   const { patchNode } = useNodeEdit()
   const defaultSpeaker = settings.characters[0]?.id
   const d = node.data
-  const patchLine = (i: number, patch: Record<string, unknown>) => {
+  const patchLine = (i: number, patch: Partial<DialogueLine>) => {
     patchNode(node.id, {
-      lines: d.lines.map((l, idx) => (idx === i ? { ...l, ...patch } : l)),
+      nodeType: 'dialogue',
+      patch: { lines: d.lines.map((l, idx) => (idx === i ? { ...l, ...patch } : l)) },
     })
   }
   return (
@@ -245,7 +261,7 @@ function DialogueForm({
         <input
           className="pw-set-input"
           value={d.name}
-          onChange={(e) => patchNode(node.id, { name: e.target.value })}
+          onChange={(e) => patchNode(node.id, { nodeType: 'dialogue', patch: { name: e.target.value } })}
         />
       </Field>
       <div className="pw-set-label">台词</div>
@@ -287,7 +303,10 @@ function DialogueForm({
               className="pw-set-x"
               aria-label="删除此行"
               onClick={() =>
-                patchNode(node.id, { lines: d.lines.filter((_, idx) => idx !== i) })
+                patchNode(node.id, {
+                  nodeType: 'dialogue',
+                  patch: { lines: d.lines.filter((_, idx) => idx !== i) },
+                })
               }
             >
               ✕
@@ -306,13 +325,16 @@ function DialogueForm({
         className="pw-set-add"
         onClick={() =>
           patchNode(node.id, {
-            lines: [...d.lines, { id: uid('line'), kind: 'line', speaker: defaultSpeaker, side: 'left', text: '' }],
+            nodeType: 'dialogue',
+            patch: {
+              lines: [...d.lines, { id: uid('line'), kind: 'line', speaker: defaultSpeaker, side: 'left', text: '' }],
+            },
           })
         }
       >
         ＋ 添加台词
       </button>
-      <EpisodeField nodeId={node.id} episodeNo={d.episodeNo} />
+      <EpisodeField nodeType="dialogue" nodeId={node.id} episodeNo={d.episodeNo} />
     </>
   )
 }
@@ -327,7 +349,7 @@ function BranchForm({ node }: { readonly node: Extract<PanelNode, { type: 'branc
         <input
           className="pw-set-input"
           value={d.prompt}
-          onChange={(e) => patchNode(node.id, { prompt: e.target.value })}
+          onChange={(e) => patchNode(node.id, { nodeType: 'branch', patch: { prompt: e.target.value } })}
         />
       </Field>
       <div className="pw-set-label">选项</div>
@@ -341,7 +363,10 @@ function BranchForm({ node }: { readonly node: Extract<PanelNode, { type: 'branc
               className="pw-set-x"
               aria-label="删除此选项"
               onClick={() =>
-                patchNode(node.id, { options: d.options.filter((_, idx) => idx !== i) })
+                patchNode(node.id, {
+                  nodeType: 'branch',
+                  patch: { options: d.options.filter((_, idx) => idx !== i) },
+                })
               }
             >
               ✕
@@ -352,7 +377,8 @@ function BranchForm({ node }: { readonly node: Extract<PanelNode, { type: 'branc
             value={option.label}
             onChange={(e) =>
               patchNode(node.id, {
-                options: d.options.map((o, idx) => (idx === i ? { ...o, label: e.target.value } : o)),
+                nodeType: 'branch',
+                patch: { options: d.options.map((o, idx) => (idx === i ? { ...o, label: e.target.value } : o)) },
               })
             }
           />
@@ -363,13 +389,14 @@ function BranchForm({ node }: { readonly node: Extract<PanelNode, { type: 'branc
         className="pw-set-add"
         onClick={() =>
           patchNode(node.id, {
-            options: [...d.options, { id: uid('opt'), label: `选项 ${String.fromCodePoint(65 + d.options.length)}` }],
+            nodeType: 'branch',
+            patch: { options: [...d.options, { id: uid('opt'), label: `选项 ${String.fromCodePoint(65 + d.options.length)}` }] },
           })
         }
       >
         ＋ 添加选项
       </button>
-      <EpisodeField nodeId={node.id} episodeNo={d.episodeNo} />
+      <EpisodeField nodeType="branch" nodeId={node.id} episodeNo={d.episodeNo} />
     </>
   )
 }
@@ -408,7 +435,7 @@ function ShotForm({ node }: { readonly node: Extract<PanelNode, { type: 'shot' }
             onChange={(e) => {
               // 非法输入回退 1；§4.1 正安全整数域：有限但越界（如 1e20）同属非法
               const n = Math.max(1, Math.floor(Number(e.target.value)))
-              patchNode(node.id, { shotNo: Number.isSafeInteger(n) ? n : 1 })
+              patchNode(node.id, { nodeType: 'shot', patch: { shotNo: Number.isSafeInteger(n) ? n : 1 } })
             }}
           />
         </Field>
@@ -416,7 +443,7 @@ function ShotForm({ node }: { readonly node: Extract<PanelNode, { type: 'shot' }
           <input
             className="pw-set-input"
             value={d.size}
-            onChange={(e) => patchNode(node.id, { size: e.target.value })}
+            onChange={(e) => patchNode(node.id, { nodeType: 'shot', patch: { size: e.target.value } })}
           />
         </Field>
       </div>
@@ -425,7 +452,7 @@ function ShotForm({ node }: { readonly node: Extract<PanelNode, { type: 'shot' }
           className="pw-set-input"
           rows={2}
           value={d.picture}
-          onChange={(e) => patchNode(node.id, { picture: e.target.value })}
+          onChange={(e) => patchNode(node.id, { nodeType: 'shot', patch: { picture: e.target.value } })}
         />
       </Field>
       <Field label="镜头 PROMPT">
@@ -433,7 +460,7 @@ function ShotForm({ node }: { readonly node: Extract<PanelNode, { type: 'shot' }
           className="pw-set-input"
           rows={3}
           value={d.prompt}
-          onChange={(e) => patchNode(node.id, { prompt: e.target.value })}
+          onChange={(e) => patchNode(node.id, { nodeType: 'shot', patch: { prompt: e.target.value } })}
         />
       </Field>
       <div className="pw-set-label">引用位</div>
@@ -446,9 +473,12 @@ function ShotForm({ node }: { readonly node: Extract<PanelNode, { type: 'shot' }
               aria-label="引用类型"
               onChange={(e) =>
                 patchNode(node.id, {
-                  refs: d.refs.map((r, idx) =>
-                    idx === i ? { ...r, kind: e.target.value as ShotRef['kind'] } : r,
-                  ),
+                  nodeType: 'shot',
+                  patch: {
+                    refs: d.refs.map((r, idx) =>
+                      idx === i ? { ...r, kind: e.target.value as ShotRef['kind'] } : r,
+                    ),
+                  },
                 })
               }
             >
@@ -471,7 +501,12 @@ function ShotForm({ node }: { readonly node: Extract<PanelNode, { type: 'shot' }
               type="button"
               className="pw-set-x"
               aria-label="删除此引用"
-              onClick={() => patchNode(node.id, { refs: d.refs.filter((_, idx) => idx !== i) })}
+              onClick={() =>
+                patchNode(node.id, {
+                  nodeType: 'shot',
+                  patch: { refs: d.refs.filter((_, idx) => idx !== i) },
+                })
+              }
             >
               ✕
             </button>
@@ -486,12 +521,15 @@ function ShotForm({ node }: { readonly node: Extract<PanelNode, { type: 'shot' }
             }
             onChange={(e) =>
               patchNode(node.id, {
-                // 输入文字即切换为自由位（§4.2 assetId/label 互斥）：剥离
-                // assetId 而非并存——双字段形态保存成功但下次加载被归一化
-                // 静默删除，用户输入凭空丢失
-                refs: d.refs.map((r, idx) =>
-                  idx === i ? { id: r.id, kind: r.kind, label: e.target.value } : r,
-                ),
+                nodeType: 'shot',
+                patch: {
+                  // 输入文字即切换为自由位（§4.2 assetId/label 互斥）：剥离
+                  // assetId 而非并存——双字段形态保存成功但下次加载被归一化
+                  // 静默删除，用户输入凭空丢失
+                  refs: d.refs.map((r, idx) =>
+                    idx === i ? { id: r.id, kind: r.kind, label: e.target.value } : r,
+                  ),
+                },
               })
             }
           />
@@ -501,7 +539,10 @@ function ShotForm({ node }: { readonly node: Extract<PanelNode, { type: 'shot' }
         type="button"
         className="pw-set-add"
         onClick={() =>
-          patchNode(node.id, { refs: [...d.refs, { id: uid('ref'), kind: 'character', label: '' }] })
+          patchNode(node.id, {
+            nodeType: 'shot',
+            patch: { refs: [...d.refs, { id: uid('ref'), kind: 'character', label: '' }] },
+          })
         }
       >
         ＋ 添加引用

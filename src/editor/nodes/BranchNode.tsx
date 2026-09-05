@@ -22,7 +22,7 @@ export default function BranchNode({ id, data, selected }: NodeProps<BranchFlowN
         <EditableName
           value={data.prompt}
           ariaLabel="分支问句"
-          onChange={(prompt) => patchNode(id, { prompt })}
+          onChange={(prompt) => patchNode(id, { nodeType: 'branch', patch: { prompt } })}
         />
         <span className="pw-sp" />
         <button

@@ -14,14 +14,16 @@ import { bindAssetRefPatch, shotRefKindForAsset } from './assetDrop'
 import { projectAssets } from './projectAssets'
 import type { HistoryCommand } from './history'
 import type { AssetRef } from '../model/document'
+import type { NodeDataPatch } from './nodes/patch'
 import type { CanvasNode } from './nodes/types'
 
 /** useLibraryAssetDrop 的依赖注入：状态读写与命令栈全部来自 EditorView。 */
 export interface LibraryAssetDropDeps {
   projectId: string
   nodesRef: RefObject<CanvasNode[]>
-  /** 纯状态写入（资产绑定命令的 redo/undo 与初次应用共用）。 */
-  applyDataPatch: (id: string, patch: Record<string, unknown>) => void
+  /** 纯状态写入（资产绑定命令的 redo/undo 与初次应用共用）；补丁按节点
+   * 类型判别绑定（issue 16）。 */
+  applyDataPatch: (id: string, cmd: NodeDataPatch) => void
   addAsset: (asset: AssetRef) => void
   removeAsset: (assetId: string) => void
   pushHistory: (cmd: HistoryCommand) => void
@@ -68,19 +70,20 @@ export function useLibraryAssetDrop(deps: LibraryAssetDropDeps) {
           const patch = bindAssetRefPatch(before, kind, asset.id)
           if (!patch) return
           const next = patch.refs
+          const bindPatch: NodeDataPatch = { nodeType: 'shot', patch: { refs: next } }
           addAsset(asset)
-          applyDataPatch(nodeId, { refs: next })
+          applyDataPatch(nodeId, bindPatch)
           pushHistory({
             undo: () => {
               removeAsset(asset.id)
-              applyDataPatch(nodeId, { refs: before })
+              applyDataPatch(nodeId, { nodeType: 'shot', patch: { refs: before } })
             },
             // 重做防线（issue #10）：撤销窗口内文件可能被外部删改，
             // redoGuard 复验通过才应用；拒绝则本次重做放弃（文件恢复后可重试）
             redoGuard: () => projectAssets.revalidate(projectId, asset),
             redo: () => {
               addAsset(asset)
-              applyDataPatch(nodeId, { refs: next })
+              applyDataPatch(nodeId, bindPatch)
             },
           })
         } catch (err) {

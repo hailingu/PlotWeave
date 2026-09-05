@@ -70,6 +70,7 @@ import { useEditorHotkeys } from './useEditorHotkeys'
 import { useSettingsActions } from './useSettingsActions'
 import { useAiBridge } from './useAiBridge'
 import { buildCanvasNode } from './nodeFactory'
+import { dataPatchOf, mergeNodeData, type NodeDataPatch } from './nodes/patch'
 import type { CreatableType } from './creatable'
 import type { ProjectSettings } from './settings'
 import type { CanvasNode } from './nodes/types'
@@ -237,14 +238,11 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
   }, [])
   const closeSettings = useCallback(() => setOpenSettingsId(null), [])
 
-  /** 字段补丁的纯状态写入，patch 命令的 undo/redo 共用。 */
+  /** 字段补丁的纯状态写入，patch 命令的 undo/redo 共用。补丁按节点类型
+   * 判别绑定（NodeDataPatch，issue 16），合并语义收口在 mergeNodeData。 */
   const applyDataPatch = useCallback(
-    (id: string, patch: Record<string, unknown>) => {
-      setNodes((nds) =>
-        nds.map((n) =>
-          n.id === id ? ({ ...n, data: { ...n.data, ...patch } } as CanvasNode) : n,
-        ),
-      )
+    (id: string, cmd: NodeDataPatch) => {
+      setNodes((nds) => nds.map((n) => (n.id === id ? mergeNodeData(n, cmd.patch) : n)))
     },
     [setNodes],
   )
@@ -253,20 +251,17 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
    * 分支节点的 options 补丁若删除了选项，其出口 branch 边一并删除且
    * 与选项进同一撤销单元（§8.2.2——不留悬空连线，不静默改接）。 */
   const patchNode = useCallback(
-    (id: string, patch: Record<string, unknown>) => {
+    (id: string, cmd: NodeDataPatch) => {
       const cur = nodesRef.current.find((n) => n.id === id)
       if (!cur) return
-      const keys = Object.keys(patch)
+      const keys = Object.keys(cmd.patch)
       const before: Record<string, unknown> = {}
       for (const k of keys) before[k] = (cur.data as Record<string, unknown>)[k]
-      applyDataPatch(id, patch)
+      applyDataPatch(id, cmd)
       // 级联：新态缺失的选项句柄 → 删其出口边（branch 节点限定）
       const removedHandles =
-        cur.type === 'branch' && Array.isArray(patch.options)
-          ? removedOptionHandles(
-              (cur.data as { options: Array<{ id: string }> }).options,
-              patch.options as Array<{ id: string }>,
-            )
+        cur.type === 'branch' && cmd.nodeType === 'branch' && Array.isArray(cmd.patch.options)
+          ? removedOptionHandles(cur.data.options, cmd.patch.options)
           : []
       const beforeEdges = edgesRef.current
       if (removedHandles.length > 0) {
@@ -274,11 +269,11 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
         setEdges((eds) => eds.filter((e) => !(e.source === id && e.sourceHandle && gone.has(e.sourceHandle))))
       }
       const undo = () => {
-        applyDataPatch(id, before)
+        applyDataPatch(id, dataPatchOf(cmd.nodeType, before))
         if (removedHandles.length > 0) setEdges(beforeEdges)
       }
       const redo = () => {
-        applyDataPatch(id, patch)
+        applyDataPatch(id, cmd)
         if (removedHandles.length > 0) {
           const gone = new Set(removedHandles)
           setEdges((eds) => eds.filter((e) => !(e.source === id && e.sourceHandle && gone.has(e.sourceHandle))))

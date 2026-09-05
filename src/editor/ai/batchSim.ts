@@ -8,8 +8,9 @@
 import { addEdge, type Edge, type XYPosition } from '@xyflow/react'
 import { SCENE_SHOT_HANDLE, branchOptionHandle, removedOptionHandles } from '../graphRules'
 import type { CreatableType } from '../creatable'
+import { dataPatchOf, mergeNodeData, type NodeDataPatch } from '../nodes/patch'
 import type { CanvasNode } from '../nodes/types'
-import type { AiCommand } from './commands'
+import type { ValidatedCommand } from './commands'
 
 /** 模拟器的虚拟终态与闭包收集。 */
 interface BatchSim {
@@ -31,10 +32,11 @@ export type BuildNewNode = (
   },
 ) => CanvasNode
 
-/** 模拟器所需的画布写入动作（由 EditorView 注入真实 setState）。 */
+/** 模拟器所需的画布写入动作（由 EditorView 注入真实 setState）。
+ * applyDataPatch 与 EditorView 共用同一判别化补丁命令（issue 16）。 */
 export interface BatchOps {
   buildNewNode: BuildNewNode
-  applyDataPatch: (id: string, patch: Record<string, unknown>) => void
+  applyDataPatch: (id: string, cmd: NodeDataPatch) => void
   setNodes: (updater: (all: CanvasNode[]) => CanvasNode[]) => void
   setEdges: (updater: (eds: Edge[]) => Edge[]) => void
 }
@@ -42,7 +44,7 @@ export interface BatchOps {
 const simCreate = (
   sim: BatchSim,
   ops: BatchOps,
-  cmd: Extract<AiCommand, { op: 'create_node' }>,
+  cmd: Extract<ValidatedCommand, { op: 'create_node' }>,
 ): void => {
   const node = ops.buildNewNode(cmd.nodeType as CreatableType, {
     selected: false,
@@ -58,24 +60,20 @@ const simCreate = (
 const simUpdate = (
   sim: BatchSim,
   ops: BatchOps,
-  cmd: Extract<AiCommand, { op: 'update_node' }>,
+  cmd: Extract<ValidatedCommand, { op: 'update_node' }>,
 ): void => {
   const id = sim.refToId.get(cmd.nodeId) ?? cmd.nodeId
   const target = sim.nodes.find((n) => n.id === id)
   if (!target) return
+  const { nodeType, patch } = cmd.patch
   const before: Record<string, unknown> = {}
-  for (const k of Object.keys(cmd.patch)) before[k] = (target.data as Record<string, unknown>)[k]
-  sim.nodes = sim.nodes.map((n) =>
-    n.id === id ? ({ ...n, data: { ...n.data, ...cmd.patch } } as CanvasNode) : n,
-  )
+  for (const k of Object.keys(patch)) before[k] = (target.data as Record<string, unknown>)[k]
+  sim.nodes = sim.nodes.map((n) => (n.id === id ? mergeNodeData(n, patch) : n))
   // 分支选项级联（§8.2.2，与 EditorView.patchNode 同规则）：替换 options
   // 删掉的选项，其出口 branch 边一并移除——模拟态与真实画布同一撤销单元
   const removedHandles =
-    target.type === 'branch' && Array.isArray(cmd.patch.options)
-      ? removedOptionHandles(
-          (target.data as { options: Array<{ id: string }> }).options,
-          cmd.patch.options as Array<{ id: string }>,
-        )
+    target.type === 'branch' && nodeType === 'branch' && Array.isArray(patch.options)
+      ? removedOptionHandles(target.data.options, patch.options)
       : []
   const removedEdges =
     removedHandles.length > 0
@@ -93,7 +91,8 @@ const simUpdate = (
     }
   })
   sim.backward.push(() => {
-    ops.applyDataPatch(id, before)
+    // before 与原补丁同键集（值即被替换键的原值），受控构造回收判别形态
+    ops.applyDataPatch(id, dataPatchOf(nodeType, before))
     if (removedEdges.length > 0) {
       ops.setEdges((eds) => [...eds, ...removedEdges])
     }
@@ -103,7 +102,7 @@ const simUpdate = (
 const simDelete = (
   sim: BatchSim,
   ops: BatchOps,
-  cmd: Extract<AiCommand, { op: 'delete_node' }>,
+  cmd: Extract<ValidatedCommand, { op: 'delete_node' }>,
 ): void => {
   const removedId = sim.refToId.get(cmd.nodeId) ?? cmd.nodeId
   const idSet = new Set([removedId])
@@ -126,7 +125,7 @@ const simDelete = (
 /** connect_edge 的目标边：attach / branch / sequence 三态（§4.4）。 */
 const connectEdgeOf = (
   sim: BatchSim,
-  cmd: Extract<AiCommand, { op: 'connect_edge' }>,
+  cmd: Extract<ValidatedCommand, { op: 'connect_edge' }>,
   srcId: string,
   dstId: string,
 ): Edge => {
@@ -167,7 +166,7 @@ const connectEdgeOf = (
 const simConnect = (
   sim: BatchSim,
   ops: BatchOps,
-  cmd: Extract<AiCommand, { op: 'connect_edge' }>,
+  cmd: Extract<ValidatedCommand, { op: 'connect_edge' }>,
 ): void => {
   const srcId = sim.refToId.get(cmd.sourceId) ?? cmd.sourceId
   const dstId = sim.refToId.get(cmd.targetId) ?? cmd.targetId
@@ -180,7 +179,7 @@ const simConnect = (
 const simDisconnect = (
   sim: BatchSim,
   ops: BatchOps,
-  cmd: Extract<AiCommand, { op: 'disconnect_edge' }>,
+  cmd: Extract<ValidatedCommand, { op: 'disconnect_edge' }>,
 ): void => {
   const srcId = sim.refToId.get(cmd.sourceId) ?? cmd.sourceId
   const dstId = sim.refToId.get(cmd.targetId) ?? cmd.targetId
@@ -200,9 +199,10 @@ export interface BatchSimResult {
   backward: Array<() => void>
 }
 
-/** 把一批 AI 命令在虚拟终态上折叠，产出前进/回退闭包列表。 */
+/** 把一批 AI 命令在虚拟终态上折叠，产出前进/回退闭包列表。入参为整批
+ * 校验通过的执行命令（ValidatedCommand，issue 16）。 */
 export function simulateBatch(
-  batch: AiCommand[],
+  batch: ValidatedCommand[],
   ops: BatchOps,
   nodes: CanvasNode[],
   edges: Edge[],

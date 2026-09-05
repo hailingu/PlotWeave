@@ -9,10 +9,12 @@ import type { Edge } from '@xyflow/react'
 import { buildGraphDigest } from './ai/graphDigest'
 import {
   extractBatchJson,
+  toInboundCommands,
   validateAiBatch,
   type AiCommand,
   type AiGraphSnapshot,
   type BatchValidation,
+  type ValidatedCommand,
 } from './ai/commands'
 import { simulateBatch, type BuildNewNode } from './ai/batchSim'
 import type { HistoryCommand } from './history'
@@ -21,6 +23,7 @@ import {
   resolveLocationName,
   type ProjectSettings,
 } from './settings'
+import type { NodeDataPatch } from './nodes/patch'
 import type { CanvasNode } from './nodes/types'
 import type { ProjectContent } from '../model/content'
 
@@ -47,7 +50,8 @@ export interface AiBridgeDeps {
    * shot.refs 引用位的资产存在性/用途校验在快照里消费。 */
   assetsRef: { current: ProjectContent['assets'] }
   buildNewNode: BuildNewNode
-  applyDataPatch: (id: string, patch: Record<string, unknown>) => void
+  /** 纯状态写入（AI 更新命令的落地通道）：补丁按节点类型判别绑定（issue 16）。 */
+  applyDataPatch: (id: string, cmd: NodeDataPatch) => void
   setNodes: (updater: (all: CanvasNode[]) => CanvasNode[]) => void
   setEdges: (updater: (eds: Edge[]) => Edge[]) => void
   pushHistory: (cmd: HistoryCommand) => void
@@ -64,8 +68,9 @@ export interface AiBridge {
   validateCommands: (commands: AiCommand[]) => BatchValidation | null
   /** 读工具 get_node：返回节点完整字段 JSON；不存在返回 null。 */
   readNode: (nodeId: string) => string | null
-  /** ✦AI 改动落地：整批作为一条复合命令入栈；返回错误文案或 null。 */
-  applyAiBatch: (batch: AiCommand[]) => string | null
+  /** ✦AI 改动落地：整批作为一条复合命令入栈；返回错误文案或 null。
+   * 入参为整批校验通过的执行命令（预览卡的合法子集，issue 16）。 */
+  applyAiBatch: (batch: ValidatedCommand[]) => string | null
 }
 
 export function useAiBridge(deps: AiBridgeDeps): AiBridge {
@@ -143,11 +148,12 @@ export function useAiBridge(deps: AiBridgeDeps): AiBridge {
 
   /** 改动落地：先按当前图重新整批校验（防预览后用户又改了画布），
    * 折叠模拟产出前进/回退闭包，整体作为一条复合命令入栈——
-   * 执行整批生效，⌘Z 一步撤销即整批回滚。 */
+   * 执行整批生效，⌘Z 一步撤销即整批回滚。重校验按入站形态折叠
+   * （toInboundCommands，issue 16）。 */
   const applyAiBatch = useCallback(
-    (batch: AiCommand[]): string | null => {
+    (batch: ValidatedCommand[]): string | null => {
       if (batch.length === 0) return null
-      const fresh = validateAiBatch(batch, aiSnapshot())
+      const fresh = validateAiBatch(toInboundCommands(batch), aiSnapshot())
       if (!fresh.ok) {
         return `改动无法安全执行：${fresh.issues[0]?.message ?? '批次校验未通过'}`
       }
