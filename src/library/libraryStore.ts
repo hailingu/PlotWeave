@@ -74,19 +74,24 @@ function normalizeAsset(raw: RawAsset | null): LibraryAsset | null {
 const isTauri =
   typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
+/** 后端隔离/修复诊断统一进既有 console.warn 路径（issue #17）：list 与
+ * 各变更命令的 warnings 清单逐条上报，被隔离条目不得静默消失或被
+ * "落盘即净化"静默改写。 */
+function reportLibraryWarnings(warnings: unknown): void {
+  if (Array.isArray(warnings)) {
+    for (const w of warnings) {
+      if (typeof w === 'string' && w !== '') console.warn('[Library] 索引条目隔离：', w)
+    }
+  }
+}
+
 /** 内存回退：blob + object URL，会话内有效。 */
 const memoryAssets = new Map<string, { asset: LibraryAsset; blob: Blob }>()
 
 async function tauriList(): Promise<LibraryAsset[]> {
   const { invoke } = await import('@tauri-apps/api/core')
   const index = await invoke<{ assets?: unknown[]; warnings?: unknown[] }>('library_list')
-  // 脏条目隔离的可见性契约（issue #17）：后端逐条返回的隔离/修复警告
-  // 进入前端既有 console.warn 诊断路径，被隔离资产不得静默消失
-  if (Array.isArray(index.warnings)) {
-    for (const w of index.warnings) {
-      if (typeof w === 'string' && w !== '') console.warn('[Library] 索引条目隔离：', w)
-    }
-  }
+  reportLibraryWarnings(index.warnings)
   return (Array.isArray(index.assets) ? index.assets : [])
     .map((a) => normalizeAsset(a as RawAsset))
     .filter((a): a is LibraryAsset => a !== null)
@@ -101,6 +106,7 @@ async function tauriPut(file: File, kind: LibraryKind): Promise<LibraryAsset> {
     kind,
     bytes: Array.from(bytes),
   })
+  reportLibraryWarnings((entry as { warnings?: unknown } | null)?.warnings)
   const normalized = normalizeAsset(entry)
   if (!normalized) throw new Error('导入返回了无效条目')
   return normalized
@@ -139,6 +145,7 @@ export const libraryStore = {
     if (isTauri) {
       return import('@tauri-apps/api/core').then(async ({ invoke }) => {
         const entry = await invoke<RawAsset>('library_update_meta', { id, patch })
+        reportLibraryWarnings((entry as { warnings?: unknown } | null)?.warnings)
         const normalized = normalizeAsset(entry)
         if (!normalized) throw new Error('更新返回了无效条目')
         return normalized
@@ -153,7 +160,10 @@ export const libraryStore = {
 
   remove: (id: string): Promise<void> => {
     if (isTauri) {
-      return import('@tauri-apps/api/core').then(({ invoke }) => invoke('library_delete', { id }))
+      return import('@tauri-apps/api/core').then(async ({ invoke }) => {
+        const result = await invoke<{ warnings?: unknown }>('library_delete', { id })
+        reportLibraryWarnings(result?.warnings)
+      })
     }
     memoryAssets.delete(id)
     return Promise.resolve()

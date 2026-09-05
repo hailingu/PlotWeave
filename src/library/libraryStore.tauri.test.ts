@@ -87,6 +87,39 @@ describe('libraryStore Tauri 路径：list（normalizeAsset 归一化）', () =>
     expect(warn).not.toHaveBeenCalled()
     warn.mockRestore()
   })
+
+  it('put 返回条目携带 warnings 时同样上报诊断', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    invoke.mockResolvedValue(entry({ id: 'la-9', warnings: ['已隔离非法索引条目 #1：…'] }))
+    const { libraryStore } = await load()
+    await libraryStore.put(new File(['x'], 'a.png', { type: 'image/png' }), 'other')
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0]).toContain('已隔离非法索引条目 #1：…')
+    warn.mockRestore()
+  })
+
+  it('updateMeta 返回条目携带 warnings 时同样上报诊断', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    invoke.mockResolvedValue(entry({ warnings: ['条目 la-1 的 mime 已规范化： Image/PNG → image/png'] }))
+    const { libraryStore } = await load()
+    await libraryStore.updateMeta('la-1', { name: '改名' })
+    expect(warn).toHaveBeenCalledTimes(1)
+    warn.mockRestore()
+  })
+
+  it('remove 响应携带 warnings 时上报诊断；缺省不产生告警', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { libraryStore } = await load()
+    invoke.mockResolvedValue({ warnings: ['已隔离非法索引条目 #2：…'] })
+    await libraryStore.remove('la-1')
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0]).toContain('已隔离非法索引条目 #2：…')
+
+    invoke.mockResolvedValue(null)
+    await libraryStore.remove('la-1')
+    expect(warn).toHaveBeenCalledTimes(1)
+    warn.mockRestore()
+  })
 })
 
 describe('libraryStore Tauri 路径：put', () => {

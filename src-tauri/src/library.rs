@@ -88,10 +88,10 @@ fn put_asset_with(
         return Err("文件超过 20 MiB 上限".into());
     }
     let assets = assets_root(library)?;
-    let (mut index, _) = read_index_capped(library)?;
+    let (mut index, warnings) = read_index_capped(library)?;
     let id = format!("la-{:x}-{}", now_ms(), bytes.len());
     let file_name = format!("{}.{}", id, ext_for(name, &mime));
-    let entry = json!({
+    let mut entry = json!({
         "id": id,
         "name": name.trim(),
         "kind": kind,
@@ -113,6 +113,12 @@ fn put_asset_with(
         std::io::Write::write_all(dst, bytes).map(|_| ())
     })?;
     write_index(library, &index)?;
+    // 净化诊断随响应可见（评审修复）：脏索引变脏后直接导入时，被隔离
+    // 条目/规范化修复不得随"落盘即净化"静默发生；仅在非空时附加，保持
+    // 常态响应形状纯净
+    if !warnings.is_empty() {
+        entry["warnings"] = json!(warnings);
+    }
     Ok(entry)
 }
 
@@ -240,10 +246,11 @@ fn write_index(library: &cap_std::fs::Dir, index: &Value) -> Result<(), String> 
 /// 删除资产内核（句柄域）：先在净化后索引中定位条目（隔离条目不可达）→
 /// 候选索引先过写入侧上限（评审修复：写盘失败不得发生在媒体已删之后）→
 /// 媒体文件经 `library/assets/` 专用根句柄逐组件 no-follow 删除（越界/
-/// 符号链接拒绝、缺失幂等）→ 原子更新索引。先删文件后改索引：索引落盘
+/// 符号链接拒绝、缺失幂等）→ 原子更新索引。返回随写回携带的净化诊断——
+/// 脏索引下"落盘即净化"不得静默（评审修复）。先删文件后改索引：索引落盘
 /// 失败只留下一次可重试的悬挂条目，不会留下索引已删而文件仍在的孤儿。
-fn delete_asset_with(library: &cap_std::fs::Dir, id: &str) -> Result<(), String> {
-    let (mut index, _) = read_index_capped(library)?;
+fn delete_asset_with(library: &cap_std::fs::Dir, id: &str) -> Result<Value, String> {
+    let (mut index, warnings) = read_index_capped(library)?;
     let assets = index["assets"].as_array_mut().ok_or("资产索引结构损坏")?;
     let pos = assets
         .iter()
@@ -257,30 +264,27 @@ fn delete_asset_with(library: &cap_std::fs::Dir, id: &str) -> Result<(), String>
     assets.remove(pos);
     ensure_index_size(&index)?;
     remove_asset_file(library, &rel)?;
-    write_index(library, &index)
+    write_index(library, &index)?;
+    Ok(json!({ "warnings": warnings }))
 }
 
-/// 删除资产命令：移除索引项并删除媒体文件。
+/// 删除资产命令：移除索引项并删除媒体文件；响应携带净化诊断。
 #[tauri::command]
-pub fn library_delete(app: AppHandle, id: String) -> Result<(), String> {
+pub fn library_delete(app: AppHandle, id: String) -> Result<Value, String> {
     validate_asset_id(&id)?;
     let library = library_root(&app)?;
     delete_asset_with(&library, &id)
 }
 
-/// 更新条目元信息（改名/分类/视角/标签/编组）；id 与媒体文件不变。
-#[tauri::command]
-pub fn library_update_meta(app: AppHandle, id: String, patch: Value) -> Result<Value, String> {
-    validate_asset_id(&id)?;
-    validate_meta_patch(&patch)?;
+/// 更新元信息内核（句柄域）：净化读取 → 定位条目 → 应用补丁 → 原子写回；
+/// 返回条目随写回携带净化诊断（评审修复，仅在非空时附加）。
+fn update_meta_with(library: &cap_std::fs::Dir, id: &str, patch: &Value) -> Result<Value, String> {
     let tags = normalize_tags(patch.get("tags"));
-
-    let library = library_root(&app)?;
-    let (mut index, _) = read_index_capped(&library)?;
+    let (mut index, warnings) = read_index_capped(library)?;
     let assets = index["assets"].as_array_mut().ok_or("资产索引结构损坏")?;
     let entry = assets
         .iter_mut()
-        .find(|a| a.get("id").and_then(Value::as_str) == Some(id.as_str()))
+        .find(|a| a.get("id").and_then(Value::as_str) == Some(id))
         .ok_or_else(|| format!("资产不存在：{id}"))?;
     if let Some(n) = patch.get("name").and_then(|v| v.as_str()) {
         entry["name"] = json!(n.trim());
@@ -297,9 +301,21 @@ pub fn library_update_meta(app: AppHandle, id: String, patch: Value) -> Result<V
     if let Some(g) = patch.get("groupId") {
         apply_group_id(entry, g)?;
     }
-    let updated = entry.clone();
-    write_index(&library, &index)?;
+    let mut updated = entry.clone();
+    write_index(library, &index)?;
+    if !warnings.is_empty() {
+        updated["warnings"] = json!(warnings);
+    }
     Ok(updated)
+}
+
+/// 更新条目元信息（改名/分类/视角/标签/编组）；id 与媒体文件不变。
+#[tauri::command]
+pub fn library_update_meta(app: AppHandle, id: String, patch: Value) -> Result<Value, String> {
+    validate_asset_id(&id)?;
+    validate_meta_patch(&patch)?;
+    let library = library_root(&app)?;
+    update_meta_with(&library, &id, &patch)
 }
 
 #[cfg(test)]
@@ -751,6 +767,97 @@ mod tests {
             .expect("读资产目录")
             .count();
         assert_eq!(files, 0, "拒绝导入不得留下媒体文件");
+        cleanup(&root);
+    }
+
+    // ---- 变更命令的净化诊断可见性（评审修复）----
+
+    /// 脏索引下导入：返回条目携带 warnings（落盘即净化不得静默）。
+    #[test]
+    fn put_on_dirty_index_returns_warnings() {
+        let (library, root) = temp_fixture();
+        write_index_raw(
+            &library,
+            &json!({ "assets": [entry("la-bad", "../escape.png")], "groups": [] }),
+        );
+        let e = put_asset_with(&cap(&library), "a.png", "image/png", "other", b"A")
+            .expect("导入应成功");
+        let warnings = e["warnings"].as_array().expect("warnings 应随响应返回");
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.as_str().unwrap_or_default().contains("隔离")),
+            "诊断应含隔离说明：{warnings:?}"
+        );
+        cleanup(&root);
+    }
+
+    /// 常态导入（索引干净）：响应不含 warnings 键，形状纯净。
+    #[test]
+    fn put_on_clean_index_omits_warnings() {
+        let (library, root) = temp_fixture();
+        let e = put_asset_with(&cap(&library), "a.png", "image/png", "other", b"A")
+            .expect("导入应成功");
+        assert!(
+            e.get("warnings").is_none(),
+            "干净索引不得附加 warnings：{e}"
+        );
+        cleanup(&root);
+    }
+
+    /// 脏索引下更新元信息：返回条目携带 warnings。
+    #[test]
+    fn update_meta_on_dirty_index_returns_warnings() {
+        let (library, root) = temp_fixture();
+        write_index_raw(
+            &library,
+            &json!({
+                "assets": [
+                    entry("la-1", "assets/la-1.png"),
+                    entry("la-bad", "/etc/passwd"),
+                ],
+                "groups": [],
+            }),
+        );
+        let library_dir = cap(&library);
+        let updated =
+            update_meta_with(&library_dir, "la-1", &json!({ "name": "改名" })).expect("更新应成功");
+        let warnings = updated["warnings"]
+            .as_array()
+            .expect("warnings 应随响应返回");
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.as_str().unwrap_or_default().contains("隔离")),
+            "诊断应含隔离说明：{warnings:?}"
+        );
+        cleanup(&root);
+    }
+
+    /// 脏索引下删除：响应携带 warnings；删除自身成功。
+    #[test]
+    fn delete_on_dirty_index_returns_warnings() {
+        let (library, root) = temp_fixture();
+        write_index_raw(
+            &library,
+            &json!({
+                "assets": [
+                    entry("la-1", "assets/la-1.png"),
+                    entry("la-bad", "library.json"),
+                ],
+                "groups": [],
+            }),
+        );
+        let result = delete_asset_with(&cap(&library), "la-1").expect("删除应成功");
+        let warnings = result["warnings"].as_array().expect("warnings 应在响应中");
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.as_str().unwrap_or_default().contains("隔离")),
+            "诊断应含隔离说明：{warnings:?}"
+        );
+        let raw = fs::read_to_string(library.join("library.json")).expect("读回索引");
+        assert!(!raw.contains("\"la-1\""), "目标条目应被移除：{raw}");
         cleanup(&root);
     }
 }
