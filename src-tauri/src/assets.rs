@@ -7,16 +7,17 @@
 //! - `project_asset_path`：缩略图等媒体展示的绝对路径（前端 convertFileSrc
 //!   拼接），交出前完成 relPath 词法校验与实路径复验。
 
-use std::fs;
 use std::io::Write;
 
-use cap_std::ambient_authority;
 use cap_std::fs::Dir as CapDir;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
 
 use crate::isotime::{is_canonical_utc_timestamp, now_iso};
 use crate::library::ext_for;
+use crate::library_fs::{
+    assets_root, atomic_write_with, library_root, open_parent_dir, read_index_capped,
+};
 #[cfg(unix)]
 use crate::store::asset_identity;
 use crate::store::{
@@ -30,65 +31,14 @@ fn new_asset_id() -> String {
     format!("pa-{}", &nid[2..])
 }
 
-/// 资产库根目录的受信锚定句柄（§10.2 信任链，与 store::projects_dir 同构）：
-/// canonicalize 应用数据根 → 锚定 → `library/` 缺失即创建、现存必须是非符号
-/// 链接的真实目录并经身份绑定打开——不按路径名重开。
-fn library_root(app: &AppHandle) -> Result<CapDir, String> {
-    let root_path = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("无法定位应用数据目录：{e}"))?;
-    fs::create_dir_all(&root_path).map_err(|e| format!("创建应用数据目录失败：{e}"))?;
-    let root_path = root_path
-        .canonicalize()
-        .map_err(|e| format!("解析应用数据目录真实路径失败：{e}"))?;
-    let root = CapDir::open_ambient_dir(&root_path, ambient_authority())
-        .map_err(|e| format!("打开应用数据根目录失败：{e}"))?;
-    match root.symlink_metadata("library") {
-        Ok(_) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => root
-            .create_dir("library")
-            .map_err(|e| format!("创建资产库目录失败：{e}"))?,
-        Err(e) => return Err(format!("读取资产库目录元数据失败：{e}")),
-    }
-    let md = root
-        .symlink_metadata("library")
-        .map_err(|e| format!("读取资产库目录元数据失败：{e}"))?;
-    if md.file_type().is_symlink() {
-        return Err("拒绝符号链接形式的资产库目录".into());
-    }
-    if !md.is_dir() {
-        return Err("资产库路径不是目录".into());
-    }
-    open_dir_bound(&root, "library", &md, "资产库目录")
-}
-
-/// 读取库索引并定位条目（相对受信库根句柄，no-follow）：返回
-/// (relPath, 规范化 mime, 文件名组件)。索引缺失/损坏/条目缺失/条目形状非法
-/// 均为显式错误——坏数据绝不进入拷贝流程。
+/// 读取库索引并定位条目（索引读取走 library_fs 共享内核：no-follow 归类 +
+/// 大小上限 + 脏条目隔离，坏数据绝不进入拷贝流程）：返回 (relPath, 规范化
+/// mime, 文件名组件)。条目缺失/条目形状非法均为显式错误。
 fn find_library_entry(
     library: &CapDir,
     library_asset_id: &str,
 ) -> Result<(String, String, String), String> {
-    match library.symlink_metadata("library.json") {
-        Ok(md) if md.file_type().is_symlink() => {
-            return Err("资产库索引是符号链接，拒绝读取".into())
-        }
-        Ok(md) if !md.is_file() => return Err("资产库索引不是普通文件".into()),
-        Ok(_) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err(format!("库资产不存在：{library_asset_id}"))
-        }
-        Err(e) => return Err(format!("读取资产库索引元数据失败：{e}")),
-    }
-    use std::io::Read;
-    let mut text = String::new();
-    library
-        .open("library.json")
-        .map_err(|e| format!("打开资产库索引失败：{e}"))?
-        .read_to_string(&mut text)
-        .map_err(|e| format!("读取资产库索引失败：{e}"))?;
-    let index: Value = serde_json::from_str(&text).map_err(|e| format!("资产库索引损坏：{e}"))?;
+    let (index, _) = read_index_capped(library)?;
     let entry = index
         .get("assets")
         .and_then(Value::as_array)
@@ -117,36 +67,25 @@ fn find_library_entry(
     Ok((rel_path.to_string(), mime, name.to_string()))
 }
 
-/// 打开库媒体文件（相对受信库根句柄逐组件 no-follow 解析）：中间组件必须是
-/// 非符号链接目录（open_dir_bound 身份绑定），终点必须是普通文件且打开句柄
-/// 按 (dev, ino) 与归类实体一致（Unix）——校验与打开之间被替换即拒绝。
+/// 打开库媒体文件（经 `library/assets/` 专用根句柄逐组件 no-follow 解析，
+/// 父目录链走 library_fs::open_parent_dir 共享内核）：终点必须是普通文件
+/// 且打开句柄按 (dev, ino) 与归类实体一致（Unix）——校验与打开之间被替换
+/// 即拒绝。
 fn open_library_asset(library: &CapDir, rel_path: &str) -> Result<cap_std::fs::File, String> {
-    let comps: Vec<&str> = rel_path.split('/').collect();
-    let Some((last, parents)) = comps.split_last() else {
-        return Err(format!("库资产路径为空：{rel_path}"));
-    };
-    let mut dir = library
-        .try_clone()
-        .map_err(|e| format!("复制资产库根句柄失败：{e}"))?;
-    for comp in parents {
-        let md = asset_stat(&dir, comp, rel_path)?;
-        if md.file_type().is_symlink() {
-            return Err(format!("库资产路径含符号链接：{rel_path}"));
-        }
-        if !md.is_dir() {
-            return Err(format!("库资产路径的中间组件不是目录：{rel_path}"));
-        }
-        dir = open_dir_bound(&dir, comp, &md, "资产库中间目录")?;
-    }
-    let md = asset_stat(&dir, last, rel_path)?;
+    let suffix = rel_path
+        .strip_prefix("assets/")
+        .ok_or_else(|| format!("库资产 relPath 越出 assets/：{rel_path}"))?;
+    let assets = assets_root(library)?;
+    let (parent, last) = open_parent_dir(&assets, suffix)?;
+    let md = asset_stat(&parent, &last, rel_path)?;
     if md.file_type().is_symlink() {
         return Err(format!("库资产路径含符号链接：{rel_path}"));
     }
     if !md.is_file() {
         return Err(format!("库资产路径不是普通文件：{rel_path}"));
     }
-    let file = dir
-        .open(last)
+    let file = parent
+        .open(&last)
         .map_err(|e| format!("打开库资产文件失败（{rel_path}）：{e}"))?;
     #[cfg(unix)]
     {
@@ -181,49 +120,6 @@ fn ensure_child_dir(parent: &CapDir, name: &str, label: &str) -> Result<CapDir, 
         return Err(format!("{label}不是目录，拒绝写入"));
     }
     open_dir_bound(parent, name, &md, label)
-}
-
-/// 同目录原子落盘内核（排他临时文件 + sync + rename + 父目录 fsync 持久性
-/// 屏障，Unix）：rename 前复核目标仍未被占（fail closed），失败尽力清理
-/// 临时文件。写入动作由 write 闭包提供（拷贝源文件 / 写生成字节共用）。
-fn atomic_write_with<F>(dir: &CapDir, final_name: &str, write: F) -> Result<(), String>
-where
-    F: FnOnce(&mut cap_std::fs::File) -> std::io::Result<()>,
-{
-    match dir.symlink_metadata(final_name) {
-        Ok(_) => return Err(format!("目标资产文件已存在：{final_name}")),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(format!("读取目标资产元数据失败：{e}")),
-    }
-    let tmp_name = format!(".{final_name}.{}.tmp", new_id());
-    let result = (|| -> Result<(), String> {
-        let mut dst = dir
-            .open_with(
-                &tmp_name,
-                cap_std::fs::OpenOptions::new().write(true).create_new(true),
-            )
-            .map_err(|e| format!("创建临时资产文件失败：{e}"))?;
-        write(&mut dst).map_err(|e| format!("写入资产文件失败：{e}"))?;
-        dst.sync_all()
-            .map_err(|e| format!("同步资产文件失败：{e}"))?;
-        drop(dst);
-        match dir.symlink_metadata(final_name) {
-            Ok(_) => return Err(format!("目标资产文件已存在：{final_name}")),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(format!("读取目标资产元数据失败：{e}")),
-        }
-        dir.rename(&tmp_name, dir, final_name)
-            .map_err(|e| format!("落盘资产文件失败：{e}"))?;
-        #[cfg(unix)]
-        dir.open_dir(".")
-            .and_then(|d| d.into_std_file().sync_all())
-            .map_err(|e| format!("同步资产目录失败（持久性屏障缺失）：{e}"))?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = dir.remove_file(&tmp_name);
-    }
-    result
 }
 
 /// 流式拷贝进目标目录（原子落盘，与 store::atomic_write 同构）。
@@ -435,7 +331,9 @@ pub fn project_asset_path(app: AppHandle, id: String, rel_path: String) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cap_std::ambient_authority;
     use serde_json::json;
+    use std::fs;
     use std::path::{Path, PathBuf};
 
     /// 测试内核的受信句柄：对临时目录做环境打开（等价生产端锚定句柄）。
@@ -566,9 +464,11 @@ mod tests {
             serde_json::to_string(&index).expect("序列化"),
         )
         .expect("写库索引");
+        // 脏条目在共享索引读取处即被隔离（issue #17）：导入侧以"不存在"拒绝，
+        // relPath 永不进入拷贝流程
         let err = import_asset_from_library(&cap(&projects), &cap(&library), "p-1", "la-1")
             .expect_err("越界 relPath 应拒绝");
-        assert!(err.contains("relPath 非法"), "意外诊断：{err}");
+        assert!(err.contains("库资产不存在"), "意外诊断：{err}");
         cleanup(&root);
     }
 
