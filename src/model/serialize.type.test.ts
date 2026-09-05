@@ -99,6 +99,23 @@ describe('toStoryNode（issue 16：按节点类型精确构造落盘联合成员
     expectTypeOf(doc.data.meta).toEqualTypeOf<ShotMeta>()
     expect(doc.data.spec).toEqual({ shotNo: 2, size: '中景', picture: '…', prompt: '', refs: [] })
   })
+
+  it('分镜卡落盘剥离运行态混入的过期 episodeNo/name（随宿主场景分集，§3.5）', () => {
+    // v1 文档残留的 spec.episodeNo 经归一化透传、fromStoryNode 拍平后可混入
+    // 运行态 shot data（Record 索引签名允许）；落盘必须剥离——否则写回 spec
+    // 后 episodeOfNode 优先读它而非宿主场景，错集归属永远无法被保存修复
+    const shot: ShotFlowNode = {
+      id: 'sh1',
+      type: 'shot',
+      position: { x: 0, y: 0 },
+      data: { shotNo: 2, size: '中景', picture: '…', prompt: '', refs: [], episodeNo: 7, name: 'x' },
+    }
+    const doc = toStoryNode(shot)
+    if (doc.type !== 'shot') throw new Error('判别失败')
+    expect(doc.data.spec).toEqual({ shotNo: 2, size: '中景', picture: '…', prompt: '', refs: [] })
+    expect('episodeNo' in doc.data.spec).toBe(false)
+    expect('name' in doc.data.spec).toBe(false)
+  })
 })
 
 describe('fromStoryNode（issue 16：落盘 → 运行态按类型构造）', () => {

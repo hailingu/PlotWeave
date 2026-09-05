@@ -120,14 +120,25 @@ export function toStoryNode(n: CanvasNode): StoryNode {
         data: { spec, meta: { ...episodeNoOf(episodeNo), ...metaTsOf(n.meta) } },
       }
     }
-    case 'shot':
+    case 'shot': {
       // 分镜卡 data 与落盘 spec 同构，整体搬运；不落独立 episodeNo（§3.5）。
+      // 剥离 episodeNo/name：v1 残留的 spec.episodeNo 经归一化透传、
+      // fromStoryNode 拍平后可混入运行态 data（Record 索引签名），整体展开
+      // 会把它无限写回 spec——剥离后保存即修复错集归属。
       // 展开构造：文档侧 spec 接口无索引签名，运行态 *NodeData 因框架约束
       // 继承 Record——展开对象取得隐式签名后方可赋回
-      return { ...base, type: 'shot', data: { spec: { ...n.data }, meta: metaTsOf(n.meta) } }
-    case 'image':
-      // 图片节点同构搬运（§13）
-      return { ...base, type: 'image', data: { spec: { ...n.data }, meta: metaTsOf(n.meta) } }
+      const spec = { ...n.data }
+      delete spec.episodeNo
+      delete spec.name
+      return { ...base, type: 'shot', data: { spec, meta: metaTsOf(n.meta) } }
+    }
+    case 'image': {
+      // 图片节点同构搬运（§13）；同为非叙事单元，剥离同名保留字段防写回
+      const spec = { ...n.data }
+      delete spec.episodeNo
+      delete spec.name
+      return { ...base, type: 'image', data: { spec, meta: metaTsOf(n.meta) } }
+    }
   }
 }
 
