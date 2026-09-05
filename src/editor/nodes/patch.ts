@@ -52,30 +52,20 @@ export function mergeNodeData(n: CanvasNode, patch: Record<string, unknown>): Ca
 
 /** 受控构造出口：已校验的运行态补丁 → 判别命令。两个使用方的 patch 都
  * 先于本调用完成形状背书——undo 快照的键集与原补丁一致（值即被替换键
- * 的原值）、AI 校验器已完成键白名单与值形状校验（§9.3）；泛型 T 与联合
- * 成员的关联无法被 TS 证明，cast 收口于此，调用点不得散布裸转换。 */
-export function dataPatchOf<T extends keyof NodeDataOf>(
-  nodeType: T,
-  patch: Record<string, unknown>,
-): NodeDataPatch {
+ * 的原值）、AI 校验器已完成键白名单与值形状校验（§9.3）、episodeNo
+ * 补丁的字段即为全量内容；泛型关联无法被 TS 证明，cast 收口于此，
+ * 调用点不得散布裸转换。 */
+export function dataPatchOf(nodeType: keyof NodeDataOf, patch: Record<string, unknown>): NodeDataPatch {
   return { nodeType, patch } as NodeDataPatch
 }
 
 /** episodeNo 补丁（§3.5 分集）：可分集的编剧侧四类按节点类型分派——
  * 大纲拖拽跨组改集归属的唯一补丁形态；分镜卡随宿主场景分集、图片节点
- * 非叙事单元，均不出此补丁（调用方先行排除）。 */
+ * 非叙事单元，均不出此补丁（调用方先行排除）。四类 data 均含可选
+ * episodeNo，同构构造经受控出口完成绑定。 */
 export function episodeNoPatch(
   nodeType: 'scene' | 'beat' | 'dialogue' | 'branch',
   episodeNo: number | undefined,
 ): NodeDataPatch {
-  switch (nodeType) {
-    case 'scene':
-      return { nodeType, patch: { episodeNo } }
-    case 'beat':
-      return { nodeType, patch: { episodeNo } }
-    case 'dialogue':
-      return { nodeType, patch: { episodeNo } }
-    case 'branch':
-      return { nodeType, patch: { episodeNo } }
-  }
+  return dataPatchOf(nodeType, { episodeNo })
 }
