@@ -10,7 +10,7 @@ import type {
   ShotMeta,
   ShotSpec,
 } from './document'
-import type { SceneFlowNode, SceneNodeData, ShotFlowNode } from '../editor/nodes/types'
+import type { BranchFlowNode, SceneFlowNode, SceneNodeData, ShotFlowNode } from '../editor/nodes/types'
 
 /** 场景运行态节点（§4.2 字段）。 */
 function sceneFlowNode(): SceneFlowNode {
@@ -114,6 +114,22 @@ describe('toStoryNode（issue 16：按节点类型精确构造落盘联合成员
     if (doc.type !== 'shot') throw new Error('判别失败')
     expect(doc.data.spec).toEqual({ shotNo: 2, size: '中景', picture: '…', prompt: '', refs: [] })
     expect('episodeNo' in doc.data.spec).toBe(false)
+    expect('name' in doc.data.spec).toBe(false)
+  })
+
+  it('分支节点落盘剥离运行态混入的过期 name（派生标题不落镜像，§4.1）', () => {
+    // v1 残留的 spec.name 经归一化透传、fromStoryNode 拍平后可混入运行态
+    // branch data；BranchSpec 无 name（标题从 options 派生），落盘须剥离，
+    // 否则禁写镜像被无限写回（与分镜卡 episodeNo 同域）
+    const branch: BranchFlowNode = {
+      id: 'b1',
+      type: 'branch',
+      position: { x: 0, y: 0 },
+      data: { prompt: '去哪？', options: [{ id: 'o1', label: 'A' }], name: 'x' },
+    }
+    const doc = toStoryNode(branch)
+    if (doc.type !== 'branch') throw new Error('判别失败')
+    expect(doc.data.spec).toEqual({ prompt: '去哪？', options: [{ id: 'o1', label: 'A' }] })
     expect('name' in doc.data.spec).toBe(false)
   })
 })

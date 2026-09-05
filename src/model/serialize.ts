@@ -113,7 +113,12 @@ export function toStoryNode(n: CanvasNode): StoryNode {
       }
     }
     case 'branch': {
-      const { episodeNo, ...spec } = n.data
+      // 剥离 name：v1 残留的 spec.name 经归一化透传、fromStoryNode 拍平后可
+      // 混入运行态 data（Record 索引签名）；BranchSpec 无 name（派生标题不落
+      // 镜像），须剥离避免禁写字段被无限写回——与分镜卡 episodeNo 同域
+      const { episodeNo, ...rest } = n.data
+      const spec = { ...rest }
+      delete spec.name
       return {
         ...base,
         type: 'branch',
