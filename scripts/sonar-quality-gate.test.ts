@@ -168,7 +168,7 @@ afterEach(() => {
 // 单用例常超 vitest 默认 5s（实测 3.4–4.9s 贴边抖动，钩子内必超）——放宽
 // describe 级超时上限，不放宽断言。
 describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
-  it('先生成最新覆盖率，再等待 Quality Gate，并确认未解决问题为零', () => {
+  it('先生成最新覆盖率，再等待 Quality Gate，并确认新增代码未解决问题为零', () => {
     const result = runGate('scripts/sonar-quality-gate.sh')
 
     expect(result.status).toBe(0)
@@ -183,6 +183,8 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
     expect(result.log).toContain('-Dsonar.host.url=http://sonar.test')
     expect(result.log).toContain('-Dsonar.javascript.lcov.reportPaths=')
     expect(result.log).toContain('/coverage/lcov.info')
+    // 增量清零：issues 查询按 sinceLeakPeriod（New Code 周期）过滤
+    expect(result.log).toContain('sinceLeakPeriod=true')
   })
 
   it('未显式配置 SonarQube 地址时阻止操作，避免误扫 SonarQube Cloud', () => {
@@ -233,7 +235,7 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
     expect(`${result.stdout}${result.stderr}`).toContain('Quality Gate')
   })
 
-  it('仍有任何未解决问题时阻止提交', () => {
+  it('新增代码仍有未解决问题时阻止提交', () => {
     const result = runGate('scripts/sonar-quality-gate.sh', { unresolvedIssues: 3 })
 
     expect(result.status).not.toBe(0)
@@ -286,7 +288,7 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
 })
 
 describe.each(['.githooks/pre-commit', '.githooks/pre-push'])('%s', (hookPath) => {
-  it('执行同一个零问题门禁并透传失败状态', () => {
+  it('执行同一个增量清零门禁并透传失败状态', () => {
     const result = runGate(hookPath, { unresolvedIssues: 1 })
 
     expect(result.status).not.toBe(0)
