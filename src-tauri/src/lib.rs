@@ -5,6 +5,8 @@
 //!   加密后随配置落盘，LLM 代理在 Rust 内存中解密，§6/§8.2）。
 //! - `seal`：API key 加密封装（AES-256-GCM，绑定本机）。
 //! - `library`：个人资产库（应用级 library/ 目录，索引 + 媒体文件，§8.1）。
+//! - `library_fs`：资产库文件系统共享内核（受信锚定句柄、索引受限读取与
+//!   脏条目隔离——library 与 assets 共用，§7.1/§7.2 信任链）。
 //! - `assets`：项目资产管线（库资产拷贝导入、set_asset 预检、媒体路径，§7.1/§7.3/§9.3）。
 //! - `imagegen`：画布内 AI 图像生成代理（文生图，docs/data-model.md §13 首片）。
 //! - `http_util`：出站 HTTP 代理共享助手（响应体流式限读内核）。
@@ -14,6 +16,7 @@ mod http_util;
 mod imagegen;
 mod isotime;
 mod library;
+mod library_fs;
 mod prefs;
 mod seal;
 mod store;
