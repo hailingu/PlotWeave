@@ -62,6 +62,19 @@ describe('NodeDataPatch（issue 16：补丁命令按节点类型判别绑定）'
     expect(bad).toBeDefined()
   })
 
+  it('PatchShape 剥离索引签名：局部补丁回调与判别命令同严（评审修复回归护栏）', () => {
+    // 表单级 helper 以 PatchShape<X>（而非 Partial<X>）收口——*NodeData 因
+    // 框架约束继承的字符串索引签名会让宽键补丁绕过检查（issue 16 评审）
+    const ok: PatchShape<SceneNodeData> = { synopsis: '雨夜' }
+    // @ts-expect-error —— lines 是对白字段：索引签名剥离后不得混入 scene 补丁
+    const cross: PatchShape<SceneNodeData> = { lines: [] }
+    // @ts-expect-error —— sceneNo 须为 number
+    const badValue: PatchShape<SceneNodeData> = { sceneNo: '4' }
+    expect(ok).toEqual({ synopsis: '雨夜' })
+    expect(cross).toBeDefined()
+    expect(badValue).toBeDefined()
+  })
+
   it('AI 执行通道（ValidatedCommand）的 update_node 补丁为判别化形态', () => {
     type ValidatedUpdate = Extract<ValidatedCommand, { op: 'update_node' }>
     expectTypeOf<ValidatedUpdate['patch']>().toEqualTypeOf<NodeDataPatch>()

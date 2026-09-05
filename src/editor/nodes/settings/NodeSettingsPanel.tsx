@@ -16,6 +16,7 @@ import type {
   ShotNodeData,
   ShotRef,
 } from '../types'
+import type { PatchShape } from '../patch'
 
 /**
  * ⚙️ 设置面板 = 节点编辑器（docs/ui-design.md §4.3）。
@@ -148,7 +149,9 @@ function SceneCastChips({
 function SceneForm({ node, settings }: { readonly node: Extract<PanelNode, { type: 'scene' }>; readonly settings: ProjectSettings }) {
   const { patchNode } = useNodeEdit()
   const d = node.data
-  const patch = (p: Partial<SceneNodeData>) => patchNode(node.id, { nodeType: 'scene', patch: p })
+  // PatchShape 已剥离索引签名（issue 16）：本地回调与判别命令同严——
+  // 宽键（如 scene 表单混入对白的 lines）在此即编译失败
+  const patch = (p: PatchShape<SceneNodeData>) => patchNode(node.id, { nodeType: 'scene', patch: p })
   const toggleCharacter = (id: string) => {
     const on = d.characterIds.includes(id)
     patch({
@@ -318,7 +321,7 @@ function DialogueForm({
   const { patchNode } = useNodeEdit()
   const defaultSpeaker = settings.characters[0]?.id
   const d = node.data
-  const patch = (p: Partial<DialogueNodeData>) => patchNode(node.id, { nodeType: 'dialogue', patch: p })
+  const patch = (p: PatchShape<DialogueNodeData>) => patchNode(node.id, { nodeType: 'dialogue', patch: p })
   const patchLine = (i: number, linePatch: Partial<DialogueLine>) =>
     patch({ lines: d.lines.map((l, idx) => (idx === i ? { ...l, ...linePatch } : l)) })
   return (
@@ -494,7 +497,7 @@ function ShotRefRow({
 function ShotForm({ node }: { readonly node: Extract<PanelNode, { type: 'shot' }> }) {
   const { patchNode, assets } = useNodeEdit()
   const d = node.data
-  const patch = (p: Partial<ShotNodeData>) => patchNode(node.id, { nodeType: 'shot', patch: p })
+  const patch = (p: PatchShape<ShotNodeData>) => patchNode(node.id, { nodeType: 'shot', patch: p })
   return (
     <>
       <div className="pw-set-cols">
