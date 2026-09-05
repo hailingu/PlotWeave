@@ -43,6 +43,34 @@ pub(crate) fn default_index() -> Value {
     json!({ "assets": [], "groups": [] })
 }
 
+/// 库目录确保内核：缺失即创建（并发首用容忍 AlreadyExists，评审修复——
+/// 与 assets.rs 的 ensure_child_dir 同语义：总是尝试创建、失败方在另一
+/// 命令刚建好时照常继续，归类校验与身份绑定兜底），现存必须是非符号链接
+/// 的真实目录并经身份绑定打开。
+pub(crate) fn ensure_library_dir(root: &CapDir) -> Result<CapDir, String> {
+    match root.symlink_metadata("library") {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            if let Err(e) = root.create_dir("library") {
+                if e.kind() != std::io::ErrorKind::AlreadyExists {
+                    return Err(format!("创建资产库目录失败：{e}"));
+                }
+            }
+        }
+        Err(e) => return Err(format!("读取资产库目录元数据失败：{e}")),
+    }
+    let md = root
+        .symlink_metadata("library")
+        .map_err(|e| format!("读取资产库目录元数据失败：{e}"))?;
+    if md.file_type().is_symlink() {
+        return Err("拒绝符号链接形式的资产库目录".into());
+    }
+    if !md.is_dir() {
+        return Err("资产库路径不是目录".into());
+    }
+    open_dir_bound(root, "library", &md, "资产库目录")
+}
+
 /// 资产库根目录的受信锚定句柄（§10.2 信任链，与 store::projects_dir 同构）：
 /// canonicalize 应用数据根 → 锚定 → `library/` 缺失即创建、现存必须是非符号
 /// 链接的真实目录并经身份绑定打开——不按路径名重开。
@@ -57,34 +85,23 @@ pub(crate) fn library_root(app: &AppHandle) -> Result<CapDir, String> {
         .map_err(|e| format!("解析应用数据目录真实路径失败：{e}"))?;
     let root = CapDir::open_ambient_dir(&root_path, ambient_authority())
         .map_err(|e| format!("打开应用数据根目录失败：{e}"))?;
-    match root.symlink_metadata("library") {
-        Ok(_) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => root
-            .create_dir("library")
-            .map_err(|e| format!("创建资产库目录失败：{e}"))?,
-        Err(e) => return Err(format!("读取资产库目录元数据失败：{e}")),
-    }
-    let md = root
-        .symlink_metadata("library")
-        .map_err(|e| format!("读取资产库目录元数据失败：{e}"))?;
-    if md.file_type().is_symlink() {
-        return Err("拒绝符号链接形式的资产库目录".into());
-    }
-    if !md.is_dir() {
-        return Err("资产库路径不是目录".into());
-    }
-    open_dir_bound(&root, "library", &md, "资产库目录")
+    ensure_library_dir(&root)
 }
 
 /// `library/assets/` 专用根句柄（§7.1：凡按 relPath 触达媒体文件的入口均
-/// 由该句柄出发）：缺失即创建，现存必须是非符号链接的真实目录并经身份
-/// 绑定打开——媒体删除与读取从此不可达 assets/ 之外的任何路径。
+/// 由该句柄出发）：缺失即创建（并发首用容忍 AlreadyExists），现存必须是
+/// 非符号链接的真实目录并经身份绑定打开——媒体删除与读取从此不可达
+/// assets/ 之外的任何路径。
 pub(crate) fn assets_root(library: &CapDir) -> Result<CapDir, String> {
     match library.symlink_metadata("assets") {
         Ok(_) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => library
-            .create_dir("assets")
-            .map_err(|e| format!("创建资产目录失败：{e}"))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            if let Err(e) = library.create_dir("assets") {
+                if e.kind() != std::io::ErrorKind::AlreadyExists {
+                    return Err(format!("创建资产目录失败：{e}"));
+                }
+            }
+        }
         Err(e) => return Err(format!("读取资产目录元数据失败：{e}")),
     }
     let md = library

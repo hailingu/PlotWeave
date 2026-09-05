@@ -649,6 +649,57 @@ mod tests {
         cleanup(&root);
     }
 
+    /// 并发首用（评审修复）：多个命令同时首次确保库目录，create_dir 的
+    /// AlreadyExists 不得使失败方误报——与 ensure_child_dir 同语义。
+    #[test]
+    fn ensure_library_dir_tolerates_concurrent_first_use() {
+        let root_path = std::env::temp_dir().join(format!("pw-library-race-{}", new_id()));
+        fs::create_dir_all(&root_path).expect("建临时根");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let barrier = barrier.clone();
+                let root_path = root_path.clone();
+                std::thread::spawn(move || {
+                    let root = cap(&root_path);
+                    barrier.wait();
+                    crate::library_fs::ensure_library_dir(&root)
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join()
+                .expect("线程不得 panic")
+                .expect("并发首用应全部成功");
+        }
+        cleanup(&root_path);
+    }
+
+    /// 并发首用 assets/ 子目录：同上容忍语义。
+    #[test]
+    fn assets_root_tolerates_concurrent_first_use() {
+        let (library, root) = temp_fixture();
+        let _ = fs::remove_dir(library.join("assets"));
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let barrier = barrier.clone();
+                let library = library.clone();
+                std::thread::spawn(move || {
+                    let dir = cap(&library);
+                    barrier.wait();
+                    crate::library_fs::assets_root(&dir)
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join()
+                .expect("线程不得 panic")
+                .expect("并发首用应全部成功");
+        }
+        cleanup(&root);
+    }
+
     /// 导入绿路径：媒体原子落盘 assets/、索引追加新条目、mime 规范化。
     #[test]
     fn put_writes_media_and_appends_entry() {
