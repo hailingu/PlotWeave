@@ -127,34 +127,21 @@ fn delete_commits_index_and_quarantines_media() {
         b"PNG",
         "隔离内容应与原媒体一致"
     );
-    let raw_index = read_index_capped(&cap(&library)).expect("索引仍可读").0;
-    // 平台能力差异：Linux 身份绑定清理完成移除日志项；其他平台保留现场
-    if cfg!(target_os = "linux") {
-        assert_eq!(
-            read_journal_raw(&library),
-            json!([]),
-            "清理完成后日志应清空"
-        );
-        assert!(out["cleanupPending"]
+    // 受支持平台均无身份绑定删除原语：按契约保留隔离项与日志并报告
+    // cleanupPending（评审修复：Linux 分支伪装修复路径的断言残留）
+    let journal = read_journal_raw(&library);
+    assert_eq!(
+        journal.as_array().expect("日志数组").len(),
+        1,
+        "清理不可用应保留日志"
+    );
+    assert!(
+        !out["cleanupPending"]
             .as_array()
             .expect("pending")
-            .is_empty());
-    } else {
-        let journal = read_journal_raw(&library);
-        assert_eq!(
-            journal.as_array().expect("日志数组").len(),
-            1,
-            "清理不可用应保留日志"
-        );
-        assert!(
-            !out["cleanupPending"]
-                .as_array()
-                .expect("pending")
-                .is_empty(),
-            "保留现场应报告 cleanupPending"
-        );
-    }
-    let _ = raw_index;
+            .is_empty(),
+        "保留现场应报告 cleanupPending"
+    );
     cleanup(&root);
 }
 
@@ -523,5 +510,157 @@ fn oversized_journal_blocks_writes() {
     fs::write(library.join(JOURNAL_FILE_NAME), format!("[\"{pad}\"]")).expect("写超限日志");
     let recovery = recover(&cap(&library)).expect("恢复入口不失败");
     assert!(recovery.read_only, "超限日志应只读告警态");
+    cleanup(&root);
+}
+
+/// 隔离项缺失但媒体回到原位（脏数据）：复查原路径身份后重新隔离
+/// （评审修复：此前 Missing 直接清日志，遗漏该状态）。
+#[test]
+fn recover_requarantines_media_returned_to_original_path() {
+    let (library, root) = temp_fixture();
+    fs::write(library.join("assets").join("la-1.png"), b"PNG").expect("写媒体");
+    fs::create_dir_all(library.join("assets").join(".trash")).expect("建空隔离目录");
+    write_index_raw(&library, &json!({ "assets": [], "groups": [] }));
+    let (dev, ino) = file_identity(&library.join("assets").join("la-1.png"));
+    write_journal_raw(
+        &library,
+        json!([journal_entry_json(
+            "t-1",
+            "la-1",
+            "assets/la-1.png",
+            "assets/.trash/t-x",
+            dev,
+            ino
+        )]),
+    );
+    let recovery = recover(&cap(&library)).expect("恢复应成功");
+    assert!(
+        fs::metadata(library.join("assets").join("la-1.png")).is_err(),
+        "媒体应重新隔离"
+    );
+    let quarantined: Vec<_> = fs::read_dir(library.join("assets").join(".trash"))
+        .expect("读隔离目录")
+        .map(|e| e.expect("目录项"))
+        .collect();
+    assert_eq!(quarantined.len(), 1);
+    assert_eq!(fs::read(quarantined[0].path()).expect("内容"), b"PNG");
+    if cfg!(target_os = "linux") {
+        assert_eq!(read_journal_raw(&library), json!([]));
+    } else {
+        assert_eq!(
+            read_journal_raw(&library).as_array().expect("日志").len(),
+            1,
+            "清理不可用平台保留日志与 cleanupPending"
+        );
+        assert!(!recovery.cleanup_pending.is_empty());
+    }
+    cleanup(&root);
+}
+
+/// relPath 含 trash 后缀的普通文件名（如 cover.trash）按组件匹配后合法
+/// （评审修复：contains 误判会让自产生的合法删除日志锁死整库）。
+#[test]
+fn journal_entry_with_trash_suffix_filename_is_valid() {
+    let (library, root) = temp_fixture();
+    write_journal_raw(
+        &library,
+        json!([{
+            "id": "t-1", "assetId": "la-1", "relPath": "assets/la-1.trash",
+            "identity": { "dev": 1, "ino": 1 }, "trashName": "assets/.trash/t-x",
+        }]),
+    );
+    let recovery = recover(&cap(&library)).expect("恢复入口不失败");
+    assert!(!recovery.read_only, "trash 后缀文件名不应误判越界");
+    // 索引无该条目、无隔离目录、原路径缺失 → 清理完成清除日志
+    assert_eq!(read_journal_raw(&library), json!([]));
+    cleanup(&root);
+}
+
+/// 恢复侧保证：隔离项身份不符时绝不回迁（仅身份确认的条目可回迁），
+/// 冲突标记 + 保留现场。
+#[test]
+fn recover_never_installs_mismatched_trash_entry() {
+    let (library, root) = temp_fixture();
+    fs::create_dir_all(library.join("assets").join(".trash")).expect("建隔离目录");
+    fs::write(
+        library.join("assets").join(".trash").join("t-x"),
+        b"SWAPPED",
+    )
+    .expect("写替换文件");
+    write_index_raw(
+        &library,
+        &json!({ "assets": [entry("la-1", "assets/la-1.png")], "groups": [] }),
+    );
+    write_journal_raw(
+        &library,
+        json!([journal_entry_json(
+            "t-1",
+            "la-1",
+            "assets/la-1.png",
+            "assets/.trash/t-x",
+            1,
+            1
+        )]),
+    );
+    let recovery = recover(&cap(&library)).expect("恢复应成功");
+    assert_eq!(recovery.conflicted, vec!["la-1".to_string()]);
+    assert!(
+        fs::metadata(library.join("assets").join("la-1.png")).is_err(),
+        "身份不符的隔离项不得被装到活动资产路径"
+    );
+    assert!(
+        fs::metadata(library.join("assets").join(".trash").join("t-x")).is_ok(),
+        "替换文件保留现场（证据不丢失）"
+    );
+    cleanup(&root);
+}
+
+/// 媒体路径内核（评审修复）：每次请求复核冲突与 relPath 一致性。
+#[test]
+fn media_path_rechecks_conflict_and_rel_consistency() {
+    use crate::library::media_path_with;
+    let (library, root) = temp_fixture();
+    let projects = root.join("projects");
+    fs::create_dir_all(&projects).expect("建项目目录");
+    fs::write(projects.join("p-1.json"), b"{}").expect("写项目控制文件");
+    fs::create_dir_all(library.join("assets").join(".trash")).expect("建隔离目录");
+    fs::write(
+        library.join("assets").join(".trash").join("t-x"),
+        b"ORIGINAL",
+    )
+    .expect("写隔离项");
+    fs::write(library.join("assets").join("la-1.png"), b"OCCUPIER").expect("后来文件");
+    write_index_raw(
+        &library,
+        &json!({ "assets": [entry("la-1", "assets/la-1.png")], "groups": [] }),
+    );
+    let (dev, ino) = file_identity(&library.join("assets").join(".trash").join("t-x"));
+    write_journal_raw(
+        &library,
+        json!([journal_entry_json(
+            "t-1",
+            "la-1",
+            "assets/la-1.png",
+            "assets/.trash/t-x",
+            dev,
+            ino
+        )]),
+    );
+    // 冲突期：拒绝服务
+    let err = media_path_with(&cap(&library), &root, "la-1", "assets/la-1.png")
+        .expect_err("冲突期应拒绝");
+    assert!(err.contains("冲突期"), "意外诊断：{err}");
+    // 冲突解决后（移除日志）：合法 relPath 返回库内路径
+    fs::remove_file(library.join(JOURNAL_FILE_NAME)).expect("移除日志");
+    let path =
+        media_path_with(&cap(&library), &root, "la-1", "assets/la-1.png").expect("合法请求应成功");
+    assert!(
+        path.ends_with("library/assets/la-1.png"),
+        "应指向库内媒体：{path}"
+    );
+    // relPath 与索引不符：拒绝
+    let err = media_path_with(&cap(&library), &root, "la-1", "assets/other.png")
+        .expect_err("relPath 不符应拒绝");
+    assert!(err.contains("不符"), "意外诊断：{err}");
     cleanup(&root);
 }

@@ -16,6 +16,7 @@ use crate::library_fs::{
     validate_asset_id, write_index,
 };
 use crate::store::is_canonical_mime;
+use crate::store::is_valid_asset_rel_path;
 
 /// 单文件上限 20 MiB：资产库放参考图/氛围图，防异常输入撑爆磁盘与 IPC。
 const ASSET_MAX_BYTES: usize = 20 * 1024 * 1024;
@@ -252,6 +253,63 @@ fn apply_group_id(entry: &mut Value, g: &Value) -> Result<(), String> {
         _ => return Err("groupId 必须是 ≤64 字符的字符串或 null".into()),
     }
     Ok(())
+}
+
+/// 冲突期感知的媒体绝对路径内核（每次请求经恢复流程复核当前日志/索引
+/// 状态）：只读态/冲突期/未知 id/relPath 与索引不符均拒绝服务；返回
+/// canonical 应用数据根下的库媒体绝对路径供前端 convertFileSrc 拼接。
+pub(crate) fn media_path_with(
+    library: &cap_std::fs::Dir,
+    base: &std::path::Path,
+    id: &str,
+    rel_path: &str,
+) -> Result<String, String> {
+    if !is_valid_asset_rel_path(rel_path) {
+        return Err(format!("资产 relPath 非法：{rel_path}"));
+    }
+    let recovery = crate::library_journal::recover(library)?;
+    if recovery.read_only {
+        return Err("删除日志异常，库写入/删除已暂停：须人工修复 asset-delete-journal.json".into());
+    }
+    if recovery.conflicted.iter().any(|c| c == id) {
+        return Err(format!("资产 {id} 处于删除事务冲突期，媒体不可用"));
+    }
+    let (index, _) = read_index_capped(library)?;
+    let entry = index["assets"]
+        .as_array()
+        .and_then(|arr| {
+            arr.iter()
+                .find(|a| a.get("id").and_then(Value::as_str) == Some(id))
+        })
+        .ok_or_else(|| format!("资产不存在：{id}"))?;
+    if entry.get("relPath").and_then(Value::as_str) != Some(rel_path) {
+        return Err(format!("资产 {id} 的 relPath 与当前索引不符，拒绝解析"));
+    }
+    base.join("library")
+        .join(rel_path)
+        .to_str()
+        .map(str::to_string)
+        .ok_or_else(|| "资产路径含非法字符".to_string())
+}
+
+/// 冲突期感知的媒体绝对路径命令（issue #25 评审修复）：relPath 不再由
+/// 前端缓存直拼——每次请求按 assetId 复核当前日志/索引状态。完整 opaque
+/// asset URL 收敛见 issue #26。
+#[tauri::command]
+pub fn library_asset_media_path(
+    app: AppHandle,
+    id: String,
+    rel_path: String,
+) -> Result<String, String> {
+    validate_asset_id(&id)?;
+    let library = library_root(&app)?;
+    let base = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("无法定位应用数据目录：{e}"))?
+        .canonicalize()
+        .map_err(|e| format!("解析应用数据目录真实路径失败：{e}"))?;
+    media_path_with(&library, &base, &id, &rel_path)
 }
 
 /// 删除资产命令：日志驱动的身份绑定隔离事务（§7.2）——响应携带净化

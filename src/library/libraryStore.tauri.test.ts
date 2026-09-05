@@ -174,13 +174,15 @@ describe('libraryStore Tauri 路径：updateMeta / remove', () => {
 })
 
 describe('libraryStore Tauri 路径：mediaUrl', () => {
-  it('library_dir_path + 相对路径经 convertFileSrc 合成', async () => {
-    invoke.mockResolvedValue('/Users/x/Library/PlotWeave/library')
+  it('经 library_asset_media_path 逐请求复核后合成（issue #25）', async () => {
+    invoke.mockResolvedValue('/Users/x/Library/PlotWeave/library/assets/la-1.png')
     const { libraryStore } = await load()
     const url = await libraryStore.mediaUrl(entry() as unknown as LibraryAsset)
-    expect(url).toBe(
-      'asset://cvt//Users/x/Library/PlotWeave/library/assets/la-1.png',
-    )
+    expect(url).toBe('asset://cvt//Users/x/Library/PlotWeave/library/assets/la-1.png')
+    expect(invoke.mock.calls[0]).toEqual([
+      'library_asset_media_path',
+      { id: 'la-1', relPath: 'assets/la-1.png' },
+    ])
   })
 })
 

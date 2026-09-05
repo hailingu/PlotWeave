@@ -121,11 +121,15 @@ async function tauriMediaUrl(
   asset: Pick<LibraryAsset, 'id' | 'relPath' | 'conflicted'>,
 ): Promise<string> {
   // 冲突期条目：原 relPath 可能已绑定后来文件，解析展示会把占用者当作
-  // 原资产（issue #25 评审修复）
+  // 原资产（issue #25 评审修复）——本地快路径先行拦截
   if (asset.conflicted) throw new Error('资产处于删除事务冲突期，媒体不可用')
+  // 后端逐请求复核：冲突期/只读态/relPath 与当前索引不符均拒绝服务
   const { invoke, convertFileSrc } = await import('@tauri-apps/api/core')
-  const base = await invoke<string>('library_dir_path')
-  return convertFileSrc(`${base}/${asset.relPath}`)
+  const abs = await invoke<string>('library_asset_media_path', {
+    id: asset.id,
+    relPath: asset.relPath,
+  })
+  return convertFileSrc(abs)
 }
 
 /** 统一门面：两种环境同签名。 */
