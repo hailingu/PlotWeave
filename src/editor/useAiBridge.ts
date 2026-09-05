@@ -16,7 +16,7 @@ import {
   type BatchValidation,
   type ValidatedCommand,
 } from './ai/commands'
-import { simulateBatch, type BuildNewNode } from './ai/batchSim'
+import { simulateBatch, type BatchOps, type BuildNewNode } from './ai/batchSim'
 import type { HistoryCommand } from './history'
 import {
   resolveCharacterName,
@@ -73,6 +73,63 @@ export interface AiBridge {
   applyAiBatch: (batch: ValidatedCommand[]) => string | null
 }
 
+/** AI 校验用的图快照装配（§12.2）：类型 + 分支选项（id）供分类型校验与
+ * 端口解析；资产索引（id → MIME）供 shot.refs 引用位的存在性/用途校验。 */
+function graphSnapshotOf(
+  nodesRef: { current: CanvasNode[] },
+  edgesRef: { current: Edge[] },
+  assetsRef: { current: ProjectContent['assets'] },
+): AiGraphSnapshot {
+  return {
+    nodes: nodesRef.current.map((n) => ({
+      id: n.id,
+      type: n.type,
+      label: nodeLabelOf(n),
+      ...(n.type === 'branch' ? { options: n.data.options.map((o) => ({ id: o.id, label: o.label })) } : {}),
+    })),
+    edges: edgesRef.current.map((e) => ({
+      source: e.source,
+      target: e.target,
+      sourceHandle: e.sourceHandle,
+      type: e.type,
+    })),
+    // Map 精确匹配避免普通对象键的原型链误命中（如 assetId "constructor"）
+    assets: new Map(
+      Object.entries(assetsRef.current?.byId ?? {}).map(([id, a]) => [id, a.mime]),
+    ),
+  }
+}
+
+/** ✦AI 改动落地的编排内核（useAiBridge 拆出，issue 16）：先按当前图重新
+ * 整批校验（防预览后用户又改了画布；入站形态重校验见 toInboundCommands），
+ * 折叠模拟产出前进/回退闭包，整体作为一条复合命令入栈——执行整批生效，
+ * ⌘Z 一步撤销即整批回滚。返回错误文案或 null。 */
+function applyValidatedBatch(
+  batch: ValidatedCommand[],
+  ctx: {
+    snapshot: () => AiGraphSnapshot
+    ops: BatchOps
+    nodesRef: { current: CanvasNode[] }
+    edgesRef: { current: Edge[] }
+    pushHistory: (cmd: HistoryCommand) => void
+    closeSettings: () => void
+  },
+): string | null {
+  if (batch.length === 0) return null
+  const fresh = validateAiBatch(toInboundCommands(batch), ctx.snapshot())
+  if (!fresh.ok) {
+    return `改动无法安全执行：${fresh.issues[0]?.message ?? '批次校验未通过'}`
+  }
+  const sim = simulateBatch(batch, ctx.ops, ctx.nodesRef.current, ctx.edgesRef.current)
+  sim.forward.forEach((f) => f())
+  ctx.pushHistory({
+    undo: () => [...sim.backward].reverse().forEach((f) => f()),
+    redo: () => sim.forward.forEach((f) => f()),
+  })
+  ctx.closeSettings()
+  return null
+}
+
 export function useAiBridge(deps: AiBridgeDeps): AiBridge {
   const {
     nodes,
@@ -100,27 +157,9 @@ export function useAiBridge(deps: AiBridgeDeps): AiBridge {
     [nodes, edges, settings],
   )
 
-  /** AI 校验用的图快照（§12.2）：类型 + 分支选项（id）供分类型校验与端口解析；
-   * 资产索引（id → MIME）供 shot.refs 引用位的存在性/用途校验。 */
+  /** AI 校验用的图快照（§12.2）：装配见 graphSnapshotOf。 */
   const aiSnapshot = useCallback(
-    (): AiGraphSnapshot => ({
-      nodes: nodesRef.current.map((n) => ({
-        id: n.id,
-        type: n.type,
-        label: nodeLabelOf(n),
-        ...(n.type === 'branch' ? { options: n.data.options.map((o) => ({ id: o.id, label: o.label })) } : {}),
-      })),
-      edges: edgesRef.current.map((e) => ({
-        source: e.source,
-        target: e.target,
-        sourceHandle: e.sourceHandle,
-        type: e.type,
-      })),
-      // Map 精确匹配避免普通对象键的原型链误命中（如 assetId "constructor"）
-      assets: new Map(
-        Object.entries(assetsRef.current?.byId ?? {}).map(([id, a]) => [id, a.mime]),
-      ),
-    }),
+    () => graphSnapshotOf(nodesRef, edgesRef, assetsRef),
     [nodesRef, edgesRef, assetsRef],
   )
 
@@ -146,31 +185,19 @@ export function useAiBridge(deps: AiBridgeDeps): AiBridge {
     [nodesRef],
   )
 
-  /** 改动落地：先按当前图重新整批校验（防预览后用户又改了画布），
-   * 折叠模拟产出前进/回退闭包，整体作为一条复合命令入栈——
-   * 执行整批生效，⌘Z 一步撤销即整批回滚。重校验按入站形态折叠
-   * （toInboundCommands，issue 16）。 */
+  /** ✦AI 改动落地：整批作为一条复合命令入栈；返回错误文案或 null。
+   * 入参为整批校验通过的执行命令（预览卡的合法子集，issue 16）；
+   * 重校验与入栈编排见 applyValidatedBatch。 */
   const applyAiBatch = useCallback(
-    (batch: ValidatedCommand[]): string | null => {
-      if (batch.length === 0) return null
-      const fresh = validateAiBatch(toInboundCommands(batch), aiSnapshot())
-      if (!fresh.ok) {
-        return `改动无法安全执行：${fresh.issues[0]?.message ?? '批次校验未通过'}`
-      }
-      const sim = simulateBatch(
-        batch,
-        { buildNewNode, applyDataPatch, setNodes, setEdges },
-        nodesRef.current,
-        edgesRef.current,
-      )
-      sim.forward.forEach((f) => f())
-      pushHistory({
-        undo: () => [...sim.backward].reverse().forEach((f) => f()),
-        redo: () => sim.forward.forEach((f) => f()),
-      })
-      closeSettings()
-      return null
-    },
+    (batch: ValidatedCommand[]): string | null =>
+      applyValidatedBatch(batch, {
+        snapshot: aiSnapshot,
+        ops: { buildNewNode, applyDataPatch, setNodes, setEdges },
+        nodesRef,
+        edgesRef,
+        pushHistory,
+        closeSettings,
+      }),
     [aiSnapshot, applyDataPatch, buildNewNode, closeSettings, edgesRef, nodesRef, pushHistory, setEdges, setNodes],
   )
 
