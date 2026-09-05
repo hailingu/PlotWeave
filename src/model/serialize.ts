@@ -5,22 +5,18 @@
  */
 import type { Edge } from '@xyflow/react'
 import type { CanvasNode, NodeMetaPassthrough } from '../editor/nodes/types'
-import {
-  branchOptionIdOf,
-  edgeKindOf,
-  SCENE_SHOT_HANDLE,
-} from '../editor/graphRules'
+import { edgeKindOf, SCENE_SHOT_HANDLE } from '../editor/graphRules'
 import type { ProjectSettings } from '../editor/settings'
 import type { ProjectContent } from './content'
 import {
   CURRENT_SCHEMA_VERSION,
-  type BranchSpec,
   type Point,
   type ProjectDocument,
   type StoryEdge,
   type StoryNode,
 } from './document'
 import { normalizeEpisodeTitles } from './legacy'
+
 
 /** meta 时间戳透传（§4.1 演进占位）：会话带上才写回，缺失即省略；非字符串
  * 值不带（下游不落盘即剥离）。 */
@@ -245,22 +241,17 @@ export function toStoryEdge(e: Edge): StoryEdge {
   return { ...base, data: { kind: 'sequence', ...optionalOrder } }
 }
 
-/** 落盘边 → 运行态：恢复 type/className；branch 胶囊文案按 sourceHandle 绑定的选项 id 从分支节点派生；
- * data.order 原样保留。 */
-export function fromStoryEdge(e: StoryEdge, nodesById: Map<string, StoryNode>): Edge {
+/** 落盘边 → 运行态：恢复 type/className；branch 边运行态 data 仅保留
+ * 可选 order——胶囊文案由 BranchEdge 按 sourceHandle 从源节点实时派生，
+ * 不落镜像（issue #18）。 */
+export function fromStoryEdge(e: StoryEdge): Edge {
   const out: Edge = { id: e.id, source: e.source, target: e.target }
   if (e.sourceHandle) out.sourceHandle = e.sourceHandle
   if (e.targetHandle) out.targetHandle = e.targetHandle
   const order = e.data.order
   if (e.data.kind === 'branch') {
     out.type = 'branch'
-    const optionId = branchOptionIdOf(e.sourceHandle)
-    const src = nodesById.get(e.source)
-    const options = src?.type === 'branch' ? (src.data.spec as BranchSpec).options : undefined
-    out.data = {
-      optionLabel: options?.find((o) => o.id === optionId)?.label ?? '',
-      ...(order !== undefined ? { order } : {}),
-    }
+    if (order !== undefined) out.data = { order }
   } else {
     out.className = e.data.kind === 'attach' ? 'pw-edge-attach' : 'pw-edge-sequence'
     if (order !== undefined) out.data = { order }
@@ -324,13 +315,12 @@ export function serializeProject(
  * 视口缺省 = 打开时 fitView；资产缺省 = 无资产（透传桶，见 content.ts）。
  * episodeTitles 键值域严格化在此收口（§11.1，对所有版本统一执行）。 */
 export function fromDocument(doc: ProjectDocument, warnings: string[]): ProjectContent {
-  const nodesById = new Map(doc.graph.nodes.map((n) => [n.id, n]))
   return {
     name: doc.project.name,
     description: doc.project.description,
     createdAt: doc.project.createdAt || undefined,
     nodes: doc.graph.nodes.map(fromStoryNode),
-    edges: doc.graph.edges.map((e) => fromStoryEdge(e, nodesById)),
+    edges: doc.graph.edges.map(fromStoryEdge),
     settings: fromDocSettings(doc.settings),
     episodeTitles: normalizeEpisodeTitles(doc.episodeTitles, warnings),
     viewport: doc.graph.viewport,

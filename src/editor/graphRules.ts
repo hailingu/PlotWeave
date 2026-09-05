@@ -145,13 +145,13 @@ export function wouldCreateCycle(
 }
 
 /** 新连线的差异化字段（§4.4，EditorView.onConnect 用）：
- * branch 选项出口 / attach 下挂 / 默认 sequence。 */
+ * branch 选项出口 / attach 下挂 / 默认 sequence。胶囊文案由 BranchEdge
+ * 按 sourceHandle 从源节点实时派生，运行态不落 data 镜像（issue #18）。 */
 export function connectEdgeExtras(
   fromBranchOption: boolean,
-  branchData: { optionLabel: string } | undefined,
   fromShotHandle: boolean,
-): { type?: 'branch'; data?: { optionLabel: string }; className?: string } {
-  if (fromBranchOption) return { type: 'branch' as const, data: branchData }
+): { type?: 'branch'; className?: string } {
+  if (fromBranchOption) return { type: 'branch' as const }
   if (fromShotHandle) return { className: 'pw-edge-attach' }
   return { className: 'pw-edge-sequence' }
 }

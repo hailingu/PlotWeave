@@ -54,8 +54,10 @@ describe('schemaVersion 0 迁移：分支选项键控身份的数组语义保全
     expect(e1.sourceHandle).toBe(`option-${options[0].id}`)
     expect(e2.sourceHandle).toBe(`option-${options[1].id}`)
     expect(e3.sourceHandle).toBe(`option-${options[2].id}`)
-    expect(e2.data).toEqual({ optionLabel: '右' })
-    expect(e3.data).toEqual({ optionLabel: '中' })
+    // 运行态 branch 边不落 optionLabel 镜像（issue #18）：胶囊文案由
+    // BranchEdge 按 sourceHandle 实时派生，data 仅剩可选 order
+    expect(e2.data).toBeUndefined()
+    expect(e3.data).toBeUndefined()
   })
 })
 

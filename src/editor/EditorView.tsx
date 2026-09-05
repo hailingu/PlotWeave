@@ -45,7 +45,6 @@ import { buildScriptMarkdown } from './exportScript'
 import {
   BRANCH_OPTION_HANDLE_PREFIX,
   SCENE_SHOT_HANDLE,
-  branchOptionIdOf,
   connectEdgeExtras,
   connectionEndpointIssue,
   connectionKindOf,
@@ -596,30 +595,19 @@ function EditorWindow({ project, onBackHome, onRenameProject, onOpenSettings, on
   // 节点拖拽整段记为一步撤销：起点位置在 dragStart 记录、落点入栈。
   const { onNodeDragStart, onNodeDragStop } = useNodeDragHistory({ setNodes, pushHistory })
 
-  // 从分支选项端口拉出的连线建成 branch 边（胶囊文案取自该选项，与节点
-  // 选项同源）；从索引卡底部端口拉出的建成 attach 派生边（垂直下挂分镜卡）；
-  // 其余为 sequence（§4.4）。入栈可撤销。
+  // 从分支选项端口拉出的连线建成 branch 边（胶囊文案由 BranchEdge 按
+  // sourceHandle 从源节点实时派生，运行态不落镜像）；从索引卡底部端口
+  // 拉出的建成 attach 派生边（垂直下挂分镜卡）；其余为 sequence（§4.4）。
+  // 入栈可撤销。
   const onConnect = useCallback(
     (connection: Connection) => {
-      const fromBranchOption = connection.sourceHandle?.startsWith(
-        BRANCH_OPTION_HANDLE_PREFIX,
-      )
+      const fromBranchOption =
+        connection.sourceHandle?.startsWith(BRANCH_OPTION_HANDLE_PREFIX) ?? false
       const fromShotHandle = connection.sourceHandle === SCENE_SHOT_HANDLE
-      let branchData: { optionLabel: string } | undefined
-      if (fromBranchOption) {
-        const optionId = branchOptionIdOf(connection.sourceHandle)
-        const srcNode = nodesRef.current.find((n) => n.id === connection.source)
-        branchData = {
-          optionLabel:
-            srcNode?.type === 'branch'
-              ? (srcNode.data.options.find((o) => o.id === optionId)?.label ?? '')
-              : '',
-        }
-      }
       const edge: Edge = {
         ...connection,
         id: `e-${connection.source}-${connection.sourceHandle ?? 'out'}-${connection.target}`,
-        ...connectEdgeExtras(fromBranchOption ?? false, branchData, fromShotHandle),
+        ...connectEdgeExtras(fromBranchOption, fromShotHandle),
       }
       setEdges((eds) => addEdge(edge, eds))
       pushHistory({

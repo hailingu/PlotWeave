@@ -162,10 +162,11 @@ describe('parseProject（ProjectDocument → 会话文档，§11 归一化）', 
       characterIds: ['ch-1'],
       episodeNo: 2,
     })
-    // branch 边恢复 type/胶囊文案（由分支节点中 id = opt-2 的选项派生）
+    // branch 边恢复 type；胶囊文案由 BranchEdge 按 sourceHandle 实时派生，
+    // 运行态不落 optionLabel 镜像（issue #18）
     const branchEdge = round.content.edges.find((e) => e.id === 'e2')!
     expect(branchEdge.type).toBe('branch')
-    expect(branchEdge.data).toEqual({ optionLabel: '隐瞒' })
+    expect(branchEdge.data).toBeUndefined()
     expect(branchEdge.sourceHandle).toBe('option-opt-2')
     // sequence/attach 恢复 className
     expect(round.content.edges.find((e) => e.id === 'e1')!.className).toBe('pw-edge-sequence')
@@ -187,7 +188,7 @@ describe('parseProject（ProjectDocument → 会话文档，§11 归一化）', 
     expect(round.content.description).toBe('午夜出租车故事板')
     expect(round.content.settings.props?.map((p) => p.id)).toEqual(['pr-1'])
     expect(round.content.edges[0].data).toMatchObject({ order: 1 })
-    expect(round.content.edges[1].data).toMatchObject({ optionLabel: '隐瞒', order: 2 })
+    expect(round.content.edges[1].data).toEqual({ order: 2 })
     // 再次落盘不丢
     const again = serializeProject(round.content, 'p-1', NOW)
     expect(again.project.description).toBe('午夜出租车故事板')
@@ -393,7 +394,7 @@ describe('parseProject（ProjectDocument → 会话文档，§11 归一化）', 
       { id: 'e-x', source: 'br1', target: 'd1', sourceHandle: 'option-opt-1', data: { kind: 'branch' } },
     ]
     const round = parseProject(doc)
-    expect(round.content.edges[0].data).toEqual({ optionLabel: '乙' })
+    expect(round.content.edges[0].data).toBeUndefined()
   })
 
   it('branch 边指向已删除的选项：按孤儿边隔离并记录警告（§11.3）', () => {
@@ -572,7 +573,7 @@ describe('parseProject（ProjectDocument → 会话文档，§11 归一化）', 
     expect(round.migrated).toBe(true)
     const e1 = round.content.edges.find((e) => e.id === 'e1')!
     expect(e1.sourceHandle).toBe('option-opt-b')
-    expect(e1.data).toEqual({ optionLabel: '右' })
+    expect(e1.data).toBeUndefined()
     // 越界下标无法改写，归一化按孤儿边隔离（§11.3）
     expect(round.content.edges.map((e) => e.id)).not.toContain('e2')
     expect(round.warnings.some((w) => w.includes('e2'))).toBe(true)

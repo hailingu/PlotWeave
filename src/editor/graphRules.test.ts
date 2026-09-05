@@ -128,26 +128,20 @@ describe('isDuplicateEdge（同端点同端口视为重复）', () => {
 })
 
 describe('connectEdgeExtras（§4.4 新连线差异化字段）', () => {
-  it('分支选项出口 → type=branch + 选项胶囊文案', () => {
-    expect(connectEdgeExtras(true, { optionLabel: '左' }, false)).toEqual({
-      type: 'branch',
-      data: { optionLabel: '左' },
-    })
+  it('分支选项出口 → type=branch（胶囊文案由 BranchEdge 实时派生，不落 data）', () => {
+    expect(connectEdgeExtras(true, false)).toEqual({ type: 'branch' })
   })
 
   it('索引卡底端口 → attach 下挂样式类', () => {
-    expect(connectEdgeExtras(false, undefined, true)).toEqual({ className: 'pw-edge-attach' })
+    expect(connectEdgeExtras(false, true)).toEqual({ className: 'pw-edge-attach' })
   })
 
   it('默认 → sequence 剧情流样式类', () => {
-    expect(connectEdgeExtras(false, undefined, false)).toEqual({ className: 'pw-edge-sequence' })
+    expect(connectEdgeExtras(false, false)).toEqual({ className: 'pw-edge-sequence' })
   })
 
   it('分支优先于 attach（同一连接只取一种形态）', () => {
-    expect(connectEdgeExtras(true, { optionLabel: 'A' }, true)).toEqual({
-      type: 'branch',
-      data: { optionLabel: 'A' },
-    })
+    expect(connectEdgeExtras(true, true)).toEqual({ type: 'branch' })
   })
 })
 
