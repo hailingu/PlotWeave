@@ -193,6 +193,15 @@ pub(crate) fn read_index_capped(library: &CapDir) -> Result<(Value, Vec<String>)
             if !index.is_object() {
                 return Err("资产索引根必须是对象".into());
             }
+            // 规范化表示同上限（评审修复）：原始字节达标但解析后规范化表示
+            // 膨胀（如 1e10 → 10000000000.0）的索引同样拒绝——可读 ⇒ 可写回
+            // 的编码闭环不因词法差异破洞
+            if normalized_len(&index)? > INDEX_MAX_BYTES {
+                return Err(format!(
+                    "资产索引规范化表示超过 {} MiB 上限，拒绝读取",
+                    INDEX_MAX_BYTES / (1024 * 1024)
+                ));
+            }
             Ok(sanitize_index(index))
         }
     }
@@ -296,15 +305,19 @@ fn take_array(index: &mut Value, key: &str, warnings: &mut Vec<String>) -> Vec<V
     }
 }
 
+/// 索引规范化（紧凑）表示的字节长度：读取侧与写入侧的统一度量。
+fn normalized_len(index: &Value) -> Result<usize, String> {
+    serde_json::to_string(index)
+        .map(|text| text.len())
+        .map_err(|e| format!("序列化索引失败：{e}"))
+}
+
 /// 写入侧同上限（与 read_index_capped 同一编码度量，评审修复）：候选索引
-/// 按落盘使用的**紧凑**序列化计长，超过 INDEX_MAX_BYTES 即拒绝——读侧量
-/// 的是磁盘原始字节、写侧量的是即将写出的同一表示，两侧闭环（可读即可
-/// 写回，删除永不因写盘编码膨胀而卡死）。
+/// 按落盘使用的**紧凑**序列化计长，超过 INDEX_MAX_BYTES 即拒绝——读侧在
+/// 规范化表示上同检（见 read_index_capped），两侧闭环（可读即可写回，
+/// 删除永不因写盘编码膨胀而卡死）。
 pub(crate) fn ensure_index_size(index: &Value) -> Result<(), String> {
-    let len = serde_json::to_string(index)
-        .map_err(|e| format!("序列化索引失败：{e}"))?
-        .len();
-    if len > INDEX_MAX_BYTES {
+    if normalized_len(index)? > INDEX_MAX_BYTES {
         return Err(format!(
             "资产库索引超过 {} MiB 上限，拒绝写入",
             INDEX_MAX_BYTES / (1024 * 1024)
