@@ -227,16 +227,18 @@ fn apply_group_id(entry: &mut Value, g: &Value) -> Result<(), String> {
 }
 
 /// 索引原子落盘：全程相对库根锚定句柄，复用 store 的 §10.2 替换语义原子
-/// 写内核（排他临时文件 + rename 前复核 + 持久性屏障），不按路径名重解析；
-/// 序列化后校验读取侧同款大小上限（评审修复：超限索引一旦落盘，全部读取
-/// 入口被卡死且 UI 无法通过删除条目自愈）。调用方传入的索引应为净化后视图。
+/// 写内核（排他临时文件 + rename 前复核 + 持久性屏障），不按路径名重解析。
+/// 序列化使用紧凑形式并校验读取侧同款大小上限（评审修复）：读侧量磁盘
+/// 原始字节、写侧量即将写出的同一紧凑表示，两侧同一编码闭环——超限索引
+/// 拒绝落盘，可读的索引永远可写回。调用方传入的索引应为净化后视图。
 fn write_index(library: &cap_std::fs::Dir, index: &Value) -> Result<(), String> {
     ensure_index_size(index)?;
-    let text = serde_json::to_string_pretty(index).map_err(|e| format!("序列化索引失败：{e}"))?;
+    let text = serde_json::to_string(index).map_err(|e| format!("序列化索引失败：{e}"))?;
     crate::store::atomic_write(library, INDEX_FILE_NAME, &text)
 }
 
 /// 删除资产内核（句柄域）：先在净化后索引中定位条目（隔离条目不可达）→
+/// 候选索引先过写入侧上限（评审修复：写盘失败不得发生在媒体已删之后）→
 /// 媒体文件经 `library/assets/` 专用根句柄逐组件 no-follow 删除（越界/
 /// 符号链接拒绝、缺失幂等）→ 原子更新索引。先删文件后改索引：索引落盘
 /// 失败只留下一次可重试的悬挂条目，不会留下索引已删而文件仍在的孤儿。
@@ -252,8 +254,9 @@ fn delete_asset_with(library: &cap_std::fs::Dir, id: &str) -> Result<(), String>
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
-    remove_asset_file(library, &rel)?;
     assets.remove(pos);
+    ensure_index_size(&index)?;
+    remove_asset_file(library, &rel)?;
     write_index(library, &index)
 }
 
@@ -607,6 +610,42 @@ mod tests {
             .expect("读资产目录")
             .count();
         assert_eq!(files, 0, "拒绝导入不得留下媒体文件");
+        cleanup(&root);
+    }
+
+    /// 大索引删除全程同一编码（评审修复）：紧凑落盘的索引可读就必须可写回
+    /// ——写盘若换用膨胀编码（pretty），删除会命中"媒体已删、索引卡死"，
+    /// 且每次重试同样失败。
+    #[test]
+    fn delete_round_trips_large_compact_index_within_cap() {
+        let (library, root) = temp_fixture();
+        fs::write(library.join("assets").join("la-0.png"), b"PNG").expect("写媒体文件");
+        let entries: Vec<Value> = (0..=9000)
+            .map(|i| entry(&format!("la-{i}"), &format!("assets/la-{i}.png")))
+            .collect();
+        write_index_raw(&library, &json!({ "assets": entries, "groups": [] }));
+        let raw_len = fs::metadata(library.join("library.json"))
+            .expect("读种子索引元数据")
+            .len() as usize;
+        assert!(
+            raw_len <= crate::library_fs::INDEX_MAX_BYTES,
+            "种子索引应可通过读取上限：{raw_len}"
+        );
+        delete_asset_with(&cap(&library), "la-0").expect("删除应成功（写回不得因编码膨胀被卡死）");
+        assert!(
+            fs::metadata(library.join("assets").join("la-0.png")).is_err(),
+            "媒体应被删除"
+        );
+        let (index, _) =
+            crate::library_fs::read_index_capped(&cap(&library)).expect("写回后的索引必须仍可读");
+        let ids: Vec<&str> = index["assets"]
+            .as_array()
+            .expect("assets 数组")
+            .iter()
+            .filter_map(|a| a.get("id").and_then(Value::as_str))
+            .collect();
+        assert_eq!(ids.len(), 9000, "应恰好移除 la-0 一个条目");
+        assert!(!ids.contains(&"la-0"));
         cleanup(&root);
     }
 

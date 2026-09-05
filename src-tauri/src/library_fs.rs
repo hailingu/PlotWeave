@@ -268,11 +268,12 @@ fn take_array(index: &mut Value, key: &str, warnings: &mut Vec<String>) -> Vec<V
     }
 }
 
-/// 写入侧同上限（与 read_index_capped 对偶，评审修复）：候选索引序列化后
-/// 超过 INDEX_MAX_BYTES 即拒绝——否则超限索引落盘后所有读取入口被卡死，
-/// UI 无法通过删除条目自愈。
+/// 写入侧同上限（与 read_index_capped 同一编码度量，评审修复）：候选索引
+/// 按落盘使用的**紧凑**序列化计长，超过 INDEX_MAX_BYTES 即拒绝——读侧量
+/// 的是磁盘原始字节、写侧量的是即将写出的同一表示，两侧闭环（可读即可
+/// 写回，删除永不因写盘编码膨胀而卡死）。
 pub(crate) fn ensure_index_size(index: &Value) -> Result<(), String> {
-    let len = serde_json::to_string_pretty(index)
+    let len = serde_json::to_string(index)
         .map_err(|e| format!("序列化索引失败：{e}"))?
         .len();
     if len > INDEX_MAX_BYTES {
