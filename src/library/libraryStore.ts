@@ -39,6 +39,8 @@ export interface LibraryAsset {
   tags: string[]
   groupId: string | null
   createdAt: number
+  /** 删除事务冲突期标记（§7.2）：媒体打开/导入拒绝服务（issue #25）。 */
+  conflicted?: boolean
 }
 
 interface RawAsset {
@@ -51,6 +53,7 @@ interface RawAsset {
   tags?: unknown
   groupId?: unknown
   createdAt?: unknown
+  conflicted?: unknown
 }
 
 function normalizeAsset(raw: RawAsset | null): LibraryAsset | null {
@@ -68,6 +71,8 @@ function normalizeAsset(raw: RawAsset | null): LibraryAsset | null {
     tags: Array.isArray(raw.tags) ? raw.tags.filter((t): t is string => typeof t === 'string') : [],
     groupId: typeof raw.groupId === 'string' ? raw.groupId : null,
     createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : 0,
+    // 冲突期标记原样保留（原 relPath 可能已绑定后来文件，媒体/导入拒服务）
+    conflicted: raw.conflicted === true ? true : undefined,
   }
 }
 
@@ -112,10 +117,19 @@ async function tauriPut(file: File, kind: LibraryKind): Promise<LibraryAsset> {
   return normalized
 }
 
-async function tauriMediaUrl(asset: Pick<LibraryAsset, 'id' | 'relPath'>): Promise<string> {
+async function tauriMediaUrl(
+  asset: Pick<LibraryAsset, 'id' | 'relPath' | 'conflicted'>,
+): Promise<string> {
+  // 冲突期条目：原 relPath 可能已绑定后来文件，解析展示会把占用者当作
+  // 原资产（issue #25 评审修复）——本地快路径先行拦截
+  if (asset.conflicted) throw new Error('资产处于删除事务冲突期，媒体不可用')
+  // 后端逐请求复核：冲突期/只读态/relPath 与当前索引不符均拒绝服务
   const { invoke, convertFileSrc } = await import('@tauri-apps/api/core')
-  const base = await invoke<string>('library_dir_path')
-  return convertFileSrc(`${base}/${asset.relPath}`)
+  const abs = await invoke<string>('library_asset_media_path', {
+    id: asset.id,
+    relPath: asset.relPath,
+  })
+  return convertFileSrc(abs)
 }
 
 /** 统一门面：两种环境同签名。 */
@@ -170,10 +184,12 @@ export const libraryStore = {
   },
 
   /** 媒体 URL：Tauri 走 asset 协议懒加载；内存回退为 object URL。
-   * 入参放宽到 id/relPath 子集：项目资产导入拷贝（projectAssets）按
-   * 来源库资产 id 取源媒体建独立 URL（§7.3 拷贝语义）。 */
-  mediaUrl: (asset: Pick<LibraryAsset, 'id' | 'relPath'>): Promise<string> => {
+   * 入参放宽到 id/relPath/conflicted 子集：项目资产导入拷贝（projectAssets）
+   * 按来源库资产 id 取源媒体建独立 URL（§7.3 拷贝语义）；冲突期条目
+   * 拒绝服务（issue #25）。 */
+  mediaUrl: (asset: Pick<LibraryAsset, 'id' | 'relPath' | 'conflicted'>): Promise<string> => {
     if (isTauri) return tauriMediaUrl(asset)
+    if (asset.conflicted) return Promise.reject(new Error('资产处于删除事务冲突期，媒体不可用'))
     const hit = memoryAssets.get(asset.id)
     if (!hit) return Promise.reject(new Error(`资产不存在：${asset.id}`))
     return Promise.resolve(URL.createObjectURL(hit.blob))
