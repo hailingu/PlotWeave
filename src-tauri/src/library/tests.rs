@@ -575,3 +575,157 @@ fn read_index_rejects_when_normalized_form_exceeds_cap() {
     assert!(err.contains("上限"), "意外诊断：{err}");
     cleanup(&root);
 }
+
+// ---- opaque asset URL 媒体协议（issue #26：relPath/本机绝对路径不出 Rust）----
+
+/// 按字符串解析 http::Uri 的测试助手。
+fn media_uri(s: &str) -> tauri::http::Uri {
+    s.parse().expect("测试 URI 应可解析")
+}
+
+/// 直接按字节写删除日志（模拟中断的删除事务）。
+fn write_journal_raw(library: &Path, entries: Value) {
+    fs::write(
+        library.join(crate::library_journal::JOURNAL_FILE_NAME),
+        serde_json::to_string(&entries).expect("序列化日志"),
+    )
+    .expect("写入日志");
+}
+
+/// opaque URL 只含逻辑 scope + assetId：不携带 relPath 与本机绝对路径。
+#[test]
+fn opaque_media_url_carries_scope_and_id_only() {
+    let url = opaque_media_url("la-1");
+    assert!(url.ends_with("/library/la-1"), "意外 URL：{url}");
+    assert!(url.starts_with("pwmedia"), "意外 scheme：{url}");
+    assert!(!url.contains("/assets/"), "URL 不得携带 relPath：{url}");
+    assert!(
+        !url.contains("/Users/") && !url.contains("AppData"),
+        "URL 不得携带本机路径：{url}"
+    );
+}
+
+/// 协议请求解析：仅接受 `/library/{assetId}` 单段形式；id 字符集白名单
+/// 天然拒绝百分号编码与其他 scope。
+#[test]
+fn parse_media_uri_accepts_only_library_scope() {
+    assert_eq!(
+        parse_media_uri(&media_uri("pwmedia://localhost/library/la-1")).as_deref(),
+        Ok("la-1")
+    );
+    // Windows/Android 的 http 网关形状解析出同一资产 id
+    assert_eq!(
+        parse_media_uri(&media_uri("http://pwmedia.localhost/library/la-2")).as_deref(),
+        Ok("la-2")
+    );
+    assert!(parse_media_uri(&media_uri("pwmedia://localhost/project/la-1")).is_err());
+    assert!(parse_media_uri(&media_uri("pwmedia://localhost/library/")).is_err());
+    assert!(parse_media_uri(&media_uri("pwmedia://localhost/library/a/b")).is_err());
+    assert!(parse_media_uri(&media_uri("pwmedia://localhost/library/..%2Fevil")).is_err());
+    assert!(parse_media_uri(&media_uri("pwmedia://localhost/library/assets/la-1.png")).is_err());
+}
+
+/// scope 白名单：命令面只接受 `{"kind":"library"}` 精确形状；目录/路径
+/// 字符串与项目 scope 一律拒绝（项目 opaque 协议迁移另行落地）。
+#[test]
+fn media_scope_accepts_only_exact_library_shape() {
+    assert!(validate_media_scope(&json!({ "kind": "library" })).is_ok());
+    assert!(
+        validate_media_scope(&json!({ "kind": "project", "projectId": "p-1" })).is_err(),
+        "项目 scope 尚未迁移，须显式拒绝"
+    );
+    assert!(validate_media_scope(&json!({ "kind": "library", "dir": "/etc" })).is_err());
+    assert!(validate_media_scope(&json!("/library")).is_err());
+}
+
+/// 绿路径：media_bytes_with 按当前净化索引解析 id，经句柄链读到字节。
+#[test]
+fn media_bytes_serves_indexed_asset() {
+    let (library, root) = temp_fixture();
+    let e = put_asset_with(
+        &cap(&library),
+        "立绘.png",
+        "image/png",
+        "character",
+        b"PNGDATA",
+    )
+    .expect("导入应成功");
+    let id = e["id"].as_str().expect("id 缺失");
+    let (mime, bytes) = media_bytes_with(&cap(&library), id).expect("媒体读取应成功");
+    assert_eq!(mime, "image/png");
+    assert_eq!(bytes, b"PNGDATA");
+    cleanup(&root);
+}
+
+/// 未知 id 与被隔离的投毒条目（脏 relPath）都拒绝服务。
+#[test]
+fn media_bytes_refuses_unknown_or_poisoned_entries() {
+    let (library, root) = temp_fixture();
+    put_asset_with(&cap(&library), "a.png", "image/png", "other", b"A").expect("导入应成功");
+    assert!(media_bytes_with(&cap(&library), "la-missing").is_err());
+    // relPath 指向索引自身的投毒条目在净化读取时被隔离 → 按不存在拒绝
+    write_index_raw(
+        &library,
+        &json!({
+            "assets": [
+                entry("la-1", "assets/la-1.png"),
+                entry("la-evil", "library.json"),
+            ],
+            "groups": [],
+        }),
+    );
+    fs::write(library.join("assets").join("la-1.png"), b"PNG").expect("写媒体");
+    assert!(media_bytes_with(&cap(&library), "la-evil").is_err());
+    cleanup(&root);
+}
+
+/// 冲突期条目（隔离项身份不符）拒绝媒体服务——issue #25 语义在 opaque
+/// 协议下延续，且不再依赖前端传入 relPath 复核。
+#[test]
+fn media_bytes_refuses_conflicted_asset() {
+    let (library, root) = temp_fixture();
+    fs::create_dir_all(library.join("assets").join(".trash")).expect("建隔离目录");
+    fs::write(
+        library.join("assets").join(".trash").join("t-x"),
+        b"SWAPPED",
+    )
+    .expect("写身份不符的隔离项");
+    write_index_raw(
+        &library,
+        &json!({ "assets": [entry("la-1", "assets/la-1.png")], "groups": [] }),
+    );
+    write_journal_raw(
+        &library,
+        json!([{
+            "id": "t-1",
+            "assetId": "la-1",
+            "relPath": "assets/la-1.png",
+            "identity": { "dev": 1, "ino": 1 },
+            "trashName": "assets/.trash/t-x",
+        }]),
+    );
+    let err = media_bytes_with(&cap(&library), "la-1").expect_err("冲突期应拒绝");
+    assert!(err.contains("冲突期"), "意外诊断：{err}");
+    cleanup(&root);
+}
+
+/// 响应映射：命中 → 200 + 索引 mime；任何失败 → 404（不向 webview 泄露
+/// 错误种类）。
+#[test]
+fn media_response_maps_hit_and_miss() {
+    let (library, root) = temp_fixture();
+    let e =
+        put_asset_with(&cap(&library), "a.png", "image/png", "other", b"A").expect("导入应成功");
+    let id = e["id"].as_str().expect("id 缺失");
+    let hit = media_http_response(media_bytes_with(&cap(&library), id));
+    assert_eq!(hit.status(), tauri::http::StatusCode::OK);
+    assert_eq!(
+        hit.headers()
+            .get(tauri::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok()),
+        Some("image/png")
+    );
+    let miss = media_http_response(media_bytes_with(&cap(&library), "la-missing"));
+    assert_eq!(miss.status(), tauri::http::StatusCode::NOT_FOUND);
+    cleanup(&root);
+}

@@ -1,5 +1,7 @@
 /** 个人资产库前端门面（docs/ui-design.md §8.1 / 数据模型 §7）。
- * Tauri 环境走 Rust 命令（应用级 library/ 目录，媒体经 asset 协议懒加载）；
+ * Tauri 环境走 Rust 命令（应用级 library/ 目录，媒体经 pwmedia 自定义
+ * 协议按 assetId 懒加载——§7.1 opaque asset URL，relPath 与本机绝对路径
+ * 不进入前端媒体链路，issue #26）；
  * 浏览器预览无 IPC，回退为同接口的内存实现（Blob object URL）。
  * 跨项目复用：库是应用级作用域，与项目内资产互不引用（§7.3 流转
  * 「拖上画布 = 拷贝进项目」由 src/editor/projectAssets.ts 承接）。
@@ -125,19 +127,16 @@ async function tauriPut(file: File, kind: LibraryKind): Promise<LibraryAsset> {
   return normalized
 }
 
-async function tauriMediaUrl(
-  asset: Pick<LibraryAsset, 'id' | 'relPath' | 'conflicted'>,
-): Promise<string> {
-  // 冲突期条目：原 relPath 可能已绑定后来文件，解析展示会把占用者当作
-  // 原资产（issue #25 评审修复）——本地快路径先行拦截
+/** 媒体 opaque URL（§7.1，issue #26）：只传逻辑 scope + assetId，由 Rust
+ * 按当前索引解析并返回 `pwmedia://` URL——relPath 与本机绝对路径不出
+ * Rust，前端不再拼接。冲突期条目本地快路径先行拦截（issue #25）。 */
+async function tauriMediaUrl(asset: Pick<LibraryAsset, 'id' | 'conflicted'>): Promise<string> {
   if (asset.conflicted) throw new Error('资产处于删除事务冲突期，媒体不可用')
-  // 后端逐请求复核：冲突期/只读态/relPath 与当前索引不符均拒绝服务
-  const { invoke, convertFileSrc } = await import('@tauri-apps/api/core')
-  const abs = await invoke<string>('library_asset_media_path', {
-    id: asset.id,
-    relPath: asset.relPath,
+  const { invoke } = await import('@tauri-apps/api/core')
+  return invoke<string>('get_asset_media_url', {
+    scope: { kind: 'library' },
+    assetId: asset.id,
   })
-  return convertFileSrc(abs)
 }
 
 /** 统一门面：两种环境同签名。 */
@@ -195,11 +194,12 @@ export const libraryStore = {
     return Promise.resolve()
   },
 
-  /** 媒体 URL：Tauri 走 asset 协议懒加载；内存回退为 object URL。
-   * 入参放宽到 id/relPath/conflicted 子集：项目资产导入拷贝（projectAssets）
-   * 按来源库资产 id 取源媒体建独立 URL（§7.3 拷贝语义）；冲突期条目
-   * 拒绝服务（issue #25）。 */
-  mediaUrl: (asset: Pick<LibraryAsset, 'id' | 'relPath' | 'conflicted'>): Promise<string> => {
+  /** 媒体 URL：Tauri 走 pwmedia 自定义协议（opaque URL，Rust 侧逐请求
+   * 解析 id）；内存回退为 object URL。
+   * 入参只需 id/conflicted 子集：项目资产导入拷贝（projectAssets）按来源
+   * 库资产 id 取源媒体建独立 URL（§7.3 拷贝语义）；冲突期条目拒绝服务
+   * （issue #25）。 */
+  mediaUrl: (asset: Pick<LibraryAsset, 'id' | 'conflicted'>): Promise<string> => {
     if (isTauri) return tauriMediaUrl(asset)
     if (asset.conflicted) return Promise.reject(new Error('资产处于删除事务冲突期，媒体不可用'))
     const hit = memoryAssets.get(asset.id)

@@ -556,14 +556,11 @@ fn recover_never_installs_mismatched_trash_entry() {
     cleanup(&root);
 }
 
-/// 媒体路径内核（评审修复）：每次请求复核冲突与 relPath 一致性。
+/// 媒体字节内核（issue #26：opaque 协议按 id 解析，迁移自 media_path_with
+/// 用例）：每次请求复核冲突状态，冲突解决后按当前索引读取媒体。
 #[test]
-fn media_path_rechecks_conflict_and_rel_consistency() {
-    use crate::library::media_path_with;
+fn media_bytes_rechecks_conflict_state_per_request() {
     let (library, root) = temp_fixture();
-    let projects = root.join("projects");
-    fs::create_dir_all(&projects).expect("建项目目录");
-    fs::write(projects.join("p-1.json"), b"{}").expect("写项目控制文件");
     fs::create_dir_all(library.join("assets").join(".trash")).expect("建隔离目录");
     fs::write(
         library.join("assets").join(".trash").join("t-x"),
@@ -587,22 +584,15 @@ fn media_path_rechecks_conflict_and_rel_consistency() {
             ino
         )]),
     );
-    // 冲突期：拒绝服务
-    let err = media_path_with(&cap(&library), &root, "la-1", "assets/la-1.png")
-        .expect_err("冲突期应拒绝");
+    // 冲突期：拒绝服务（relPath 不再由前端传入，按 id 复核）
+    let err = crate::library::media_bytes_with(&cap(&library), "la-1").expect_err("冲突期应拒绝");
     assert!(err.contains("冲突期"), "意外诊断：{err}");
-    // 冲突解决后（移除日志）：合法 relPath 返回库内路径
+    // 冲突解决后（移除日志）：按当前索引解析 id 读取媒体字节
     fs::remove_file(library.join(JOURNAL_FILE_NAME)).expect("移除日志");
-    let path =
-        media_path_with(&cap(&library), &root, "la-1", "assets/la-1.png").expect("合法请求应成功");
-    assert!(
-        path.ends_with("library/assets/la-1.png"),
-        "应指向库内媒体：{path}"
-    );
-    // relPath 与索引不符：拒绝
-    let err = media_path_with(&cap(&library), &root, "la-1", "assets/other.png")
-        .expect_err("relPath 不符应拒绝");
-    assert!(err.contains("不符"), "意外诊断：{err}");
+    let (mime, bytes) =
+        crate::library::media_bytes_with(&cap(&library), "la-1").expect("合法请求应成功");
+    assert_eq!(mime, "image/png");
+    assert_eq!(bytes, b"OCCUPIER");
     cleanup(&root);
 }
 
@@ -624,10 +614,10 @@ fn index_entry_pointing_into_trash_is_quarantined() {
         "应被隔离"
     );
     assert!(!warnings.is_empty(), "应携带隔离警告：{warnings:?}");
-    // 媒体路径同样拒绝 .trash 词法
-    let err = crate::library::media_path_with(&cap(&library), &root, "la-1", "assets/.trash/t-x")
-        .expect_err("保留目录词法应拒绝");
-    assert!(err.contains("非法"), "意外诊断：{err}");
+    // 媒体读取同样拒绝：投毒条目在净化索引中不存在
+    let err =
+        crate::library::media_bytes_with(&cap(&library), "la-1").expect_err("保留目录词法应拒绝");
+    assert!(err.contains("不存在"), "意外诊断：{err}");
     cleanup(&root);
 }
 

@@ -1,6 +1,7 @@
 //! 个人资产库（docs/ui-design.md §8.1 / 数据模型 §7）：
 //! 应用级 `library/` 目录跨项目复用——`library.json` 全量索引（内存过滤），
-//! 媒体文件落 `library/assets/`，懒加载经 asset 协议直读。
+//! 媒体文件落 `library/assets/`，展示经 `pwmedia` 自定义协议按 id 懒加载
+//! （§7.1 opaque asset URL，issue #26）。
 //! 索引结构对前端自有（serde_json::Value 透传）。
 //! 全部文件操作经 [`crate::library_fs`] 共享内核的受信锚定句柄执行（§7.1/§7.2
 //! 信任链）：脏索引条目在读取时白名单隔离，删除经 `library/assets/` 专用根
@@ -9,11 +10,11 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 use crate::library_fs::{
-    assets_root, atomic_write_with, ensure_index_size, library_root, read_index_capped,
-    validate_asset_id, write_index,
+    assets_root, atomic_write_with, ensure_index_size, library_root, open_parent_dir,
+    read_index_capped, validate_asset_id, write_index,
 };
 use crate::library_journal::{library_file_lock, library_op_lock};
 use crate::store::is_canonical_mime;
@@ -42,20 +43,6 @@ const VIEWS: [&str; 8] = [
     "turnout",
     "other",
 ];
-
-/// 供前端 convertFileSrc 拼接媒体绝对路径（阶段 2 收敛进 opaque asset URL）。
-#[tauri::command]
-pub fn library_dir_path(app: AppHandle) -> Result<String, String> {
-    // 先经信任链确保库目录存在并校验（符号链接/异型拒绝）
-    library_root(&app)?;
-    app.path()
-        .app_data_dir()
-        .map_err(|e| format!("无法定位应用数据目录：{e}"))?
-        .join("library")
-        .to_str()
-        .map(str::to_string)
-        .ok_or_else(|| "资产库路径含非法字符".to_string())
-}
 
 /// 列出全量索引（启动时一次载入，前端内存过滤，§8.1）：先按 §7.2 恢复
 /// 删除日志中的未完成事务，脏索引条目由共享内核隔离，`warnings` 与
@@ -260,20 +247,64 @@ fn apply_group_id(entry: &mut Value, g: &Value) -> Result<(), String> {
     Ok(())
 }
 
-/// 冲突期感知的媒体绝对路径内核（每次请求经恢复流程复核当前日志/索引
-/// 状态）：只读态/冲突期/未知 id/relPath 与索引不符均拒绝服务；返回
-/// canonical 应用数据根下的库媒体绝对路径供前端 convertFileSrc 拼接。
-pub(crate) fn media_path_with(
-    library: &cap_std::fs::Dir,
-    base: &std::path::Path,
-    id: &str,
-    rel_path: &str,
-) -> Result<String, String> {
-    if !is_valid_active_asset_rel_path(rel_path) {
-        return Err(format!("资产 relPath 非法：{rel_path}"));
+// ---- opaque asset URL 媒体协议（§7.1/§10.2，issue #26）：relPath 与本机
+// 绝对路径仅留在 Rust 侧，前端只获得含 scope + assetId 的 opaque URL，
+// `pwmedia` 自定义协议处理器在每次请求时按当前净化索引重新解析 id 并经
+// 句柄链读取字节（lib.rs 注册同名协议）。
+
+/// opaque asset URL 的自定义协议名（lib.rs 注册同名协议处理器）。
+pub(crate) const MEDIA_SCHEME: &str = "pwmedia";
+
+/// scope 白名单（§7.1 命令表）：仅接受 `{"kind":"library"}` 精确形状——
+/// 目录/路径字符串永远不可作为 scope 进入媒体管线；项目 scope 的 opaque
+/// 协议迁移另行落地（仍走 project_asset_path 实路径复验），显式拒绝。
+fn validate_media_scope(scope: &Value) -> Result<(), String> {
+    let exact = scope
+        .as_object()
+        .is_some_and(|o| o.len() == 1 && o.get("kind").and_then(Value::as_str) == Some("library"));
+    if exact {
+        Ok(())
+    } else {
+        Err("媒体 URL scope 仅支持 {{ kind: 'library' }}".into())
     }
+}
+
+/// opaque asset URL（前端可直接挂到 img/src 的完整 URL）：Windows/Android
+/// 走 `http://{scheme}.localhost`，其余平台走原生自定义 scheme（与 Tauri
+/// convertFileSrc 的平台分野一致）。URL 只由逻辑段与 assetId 构成，不含
+/// 任何本机路径。
+pub(crate) fn opaque_media_url(asset_id: &str) -> String {
+    #[cfg(any(target_os = "windows", target_os = "android"))]
+    let url = format!("http://{MEDIA_SCHEME}.localhost/library/{asset_id}");
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
+    let url = format!("{MEDIA_SCHEME}://localhost/library/{asset_id}");
+    url
+}
+
+/// 协议请求解析：仅接受 `/library/{assetId}` 单段形式。assetId 不做百分号
+/// 解码——合法 id 字符集（[`crate::library_fs::validate_asset_id`]）不含
+/// `%`，编码/双段/异 scope 形式天然拒绝。
+fn parse_media_uri(uri: &tauri::http::Uri) -> Result<String, String> {
+    let path = uri.path();
+    let rest = path
+        .strip_prefix("/library/")
+        .ok_or_else(|| format!("媒体请求路径非法：{path}"))?;
+    if rest.is_empty() || rest.contains('/') {
+        return Err(format!("媒体请求路径非法：{path}"));
+    }
+    validate_asset_id(rest)?;
+    Ok(rest.to_string())
+}
+
+/// id → (relPath, mime) 解析内核（句柄域，锁由调用方持有；每次请求重新
+/// 执行）：恢复流程复核冲突期 → 净化索引按 id 定位 → relPath 词法复核。
+/// 媒体字节读取与 URL 早反馈共用。
+fn resolve_media_entry_with(
+    library: &cap_std::fs::Dir,
+    id: &str,
+) -> Result<(String, String), String> {
+    validate_asset_id(id)?;
     let recovery = crate::library_journal::recover(library)?;
-    // 只读态只暂停写入/删除（§7.2），媒体读取仍可服务
     if recovery.conflicted.iter().any(|c| c == id) {
         return Err(format!("资产 {id} 处于删除事务冲突期，媒体不可用"));
     }
@@ -285,36 +316,113 @@ pub(crate) fn media_path_with(
                 .find(|a| a.get("id").and_then(Value::as_str) == Some(id))
         })
         .ok_or_else(|| format!("资产不存在：{id}"))?;
-    if entry.get("relPath").and_then(Value::as_str) != Some(rel_path) {
-        return Err(format!("资产 {id} 的 relPath 与当前索引不符，拒绝解析"));
+    let rel = entry
+        .get("relPath")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("资产 {id} 的 relPath 缺失"))?;
+    if !is_valid_active_asset_rel_path(rel) {
+        return Err(format!("资产 {id} 的 relPath 非法：{rel}"));
     }
-    base.join("library")
-        .join(rel_path)
-        .to_str()
-        .map(str::to_string)
-        .ok_or_else(|| "资产路径含非法字符".to_string())
+    let mime = entry
+        .get("mime")
+        .and_then(Value::as_str)
+        .filter(|m| is_canonical_mime(m))
+        .unwrap_or("application/octet-stream")
+        .to_string();
+    Ok((rel.to_string(), mime))
 }
 
-/// 冲突期感知的媒体绝对路径命令（issue #25 评审修复）：relPath 不再由
-/// 前端缓存直拼——每次请求按 assetId 复核当前日志/索引状态。完整 opaque
-/// asset URL 收敛见 issue #26。
+/// 媒体字节读取内核（句柄域，锁由调用方持有）：[`resolve_media_entry_with`]
+/// 解析后从 `library/assets/` 专用根句柄逐组件 no-follow 定位，在已打开
+/// 句柄上确认普通文件并受限读取（≤ ASSET_MAX_BYTES）。
+pub(crate) fn media_bytes_with(
+    library: &cap_std::fs::Dir,
+    id: &str,
+) -> Result<(String, Vec<u8>), String> {
+    let (rel, mime) = resolve_media_entry_with(library, id)?;
+    let assets = assets_root(library)?;
+    let rel_in_assets = rel
+        .strip_prefix("assets/")
+        .ok_or_else(|| format!("资产 {id} 的 relPath 非法：{rel}"))?;
+    let Some((parent, name)) = open_parent_dir(&assets, rel_in_assets)? else {
+        return Err(format!("资产 {id} 的媒体文件不存在"));
+    };
+    let file = parent
+        .open(&name)
+        .map_err(|e| format!("打开资产 {id} 媒体失败：{e}"))?;
+    if !file
+        .metadata()
+        .map_err(|e| format!("读取资产 {id} 媒体元数据失败：{e}"))?
+        .is_file()
+    {
+        return Err(format!("资产 {id} 的媒体不是普通文件"));
+    }
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    file.take((ASSET_MAX_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("读取资产 {id} 媒体失败：{e}"))?;
+    if bytes.len() > ASSET_MAX_BYTES {
+        return Err(format!("资产 {id} 的媒体超过 20 MiB 上限"));
+    }
+    Ok((mime, bytes))
+}
+
+/// 响应映射（句柄域测试与协议处理器共用）：命中 → 200 + 索引 mime；
+/// 任何失败 → 404 纯文本——不区分错误种类，避免向 webview 泄露盘面细节。
+fn media_http_response(
+    result: Result<(String, Vec<u8>), String>,
+) -> tauri::http::Response<Vec<u8>> {
+    const NOT_FOUND: &str = "媒体不可用";
+    match result {
+        Ok((mime, bytes)) => tauri::http::Response::builder()
+            .status(tauri::http::StatusCode::OK)
+            .header(tauri::http::header::CONTENT_TYPE, mime)
+            .body(bytes)
+            .expect("固定形状的媒体响应构造不可能失败"),
+        Err(_) => tauri::http::Response::builder()
+            .status(tauri::http::StatusCode::NOT_FOUND)
+            .header(
+                tauri::http::header::CONTENT_TYPE,
+                "text/plain; charset=utf-8",
+            )
+            .body(NOT_FOUND.as_bytes().to_vec())
+            .expect("固定形状的错误响应构造不可能失败"),
+    }
+}
+
+/// `pwmedia` 协议处理器（lib.rs 注册；在 spawn_blocking 线程执行）：解析
+/// 请求 → 锁内按当前日志/索引解析 id → 句柄链读字节 → 响应。§7.1 每次
+/// 请求重新解析，目录项在列表后被替换也无法越出资产根。
+pub(crate) fn handle_media_request(
+    app: &AppHandle,
+    uri: &tauri::http::Uri,
+) -> tauri::http::Response<Vec<u8>> {
+    let result = parse_media_uri(uri).and_then(|id| {
+        let library = library_root(app)?;
+        let _op = library_op_lock();
+        let _file_lock = library_file_lock(&library)?;
+        media_bytes_with(&library, &id)
+    });
+    media_http_response(result)
+}
+
+/// opaque asset URL 解析命令（§7.1 命令表 get_asset_media_url）：scope +
+/// assetId 入参，返回前端可直接使用的 opaque URL；本机路径与 relPath 不出
+/// Rust。此处仅做锁内早反馈（冲突期/存在性复核），权威校验在协议处理器的
+/// 每次媒体请求内（issue #26）。
 #[tauri::command]
-pub fn library_asset_media_path(
+pub fn get_asset_media_url(
     app: AppHandle,
-    id: String,
-    rel_path: String,
+    scope: Value,
+    asset_id: String,
 ) -> Result<String, String> {
-    validate_asset_id(&id)?;
+    validate_media_scope(&scope)?;
     let library = library_root(&app)?;
     let _op = library_op_lock();
     let _file_lock = library_file_lock(&library)?;
-    let base = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("无法定位应用数据目录：{e}"))?
-        .canonicalize()
-        .map_err(|e| format!("解析应用数据目录真实路径失败：{e}"))?;
-    media_path_with(&library, &base, &id, &rel_path)
+    resolve_media_entry_with(&library, &asset_id)?;
+    Ok(opaque_media_url(&asset_id))
 }
 
 /// 删除资产命令：日志驱动的身份绑定隔离事务（§7.2）——响应携带净化
