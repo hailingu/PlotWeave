@@ -44,18 +44,37 @@ pub fn run() {
             prefs::save_prefs,
             prefs::set_provider_key,
             prefs::llm_chat,
-            library::library_dir_path,
             library::library_list,
             library::library_put,
             library::library_update_meta,
             library::library_delete,
-            library::library_asset_media_path,
+            library::get_asset_media_url,
             assets::import_project_asset_from_library,
             assets::validate_project_asset,
             assets::project_asset_path,
             imagegen::llm_image_generate,
             imagegen::llm_image_cancel,
         ])
+        // opaque asset URL 媒体协议（§7.1，issue #26）：每次请求按当前净化
+        // 索引重新解析 id，经句柄链读取后返回字节——本机路径与 relPath 不
+        // 进入前端媒体链路。读盘放 spawn_blocking，避免占用主线程。
+        .register_asynchronous_uri_scheme_protocol(
+            library::MEDIA_SCHEME,
+            |ctx, request, responder| {
+                let app = ctx.app_handle().clone();
+                let uri = request.uri().clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    // 许可生命周期覆盖交付（评审修复，PR #32 第五轮）：
+                    // respond 返回后才出界释放——等待中的读者不得在先前
+                    // 响应体仍待交付/消费时分配新缓冲（4×20 MiB 峰值契约）
+                    let library::MediaDelivery {
+                        response,
+                        permit: _permit,
+                    } = library::handle_media_request(&app, &uri);
+                    responder.respond(response);
+                });
+            },
+        )
         .run(tauri::generate_context!())
         .expect("启动 PlotWeave 应用失败");
 }

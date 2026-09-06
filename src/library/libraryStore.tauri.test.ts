@@ -12,7 +12,6 @@ beforeEach(() => {
   vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
   vi.doMock('@tauri-apps/api/core', () => ({
     invoke: (...args: unknown[]) => invoke(...args),
-    convertFileSrc: (p: string) => `asset://cvt/${p}`,
   }))
   invoke.mockReset()
 })
@@ -174,14 +173,14 @@ describe('libraryStore Tauri 路径：updateMeta / remove', () => {
 })
 
 describe('libraryStore Tauri 路径：mediaUrl', () => {
-  it('经 library_asset_media_path 逐请求复核后合成（issue #25）', async () => {
-    invoke.mockResolvedValue('/Users/x/Library/PlotWeave/library/assets/la-1.png')
+  it('经 get_asset_media_url 取 opaque URL：只传 scope + assetId，relPath 不进媒体链路（issue #26）', async () => {
+    invoke.mockResolvedValue('pwmedia://localhost/library/la-1')
     const { libraryStore } = await load()
-    const url = await libraryStore.mediaUrl(entry() as unknown as LibraryAsset)
-    expect(url).toBe('asset://cvt//Users/x/Library/PlotWeave/library/assets/la-1.png')
+    const url = await libraryStore.mediaUrl({ id: 'la-1' })
+    expect(url).toBe('pwmedia://localhost/library/la-1')
     expect(invoke.mock.calls[0]).toEqual([
-      'library_asset_media_path',
-      { id: 'la-1', relPath: 'assets/la-1.png' },
+      'get_asset_media_url',
+      { scope: { kind: 'library' }, assetId: 'la-1' },
     ])
   })
 })
@@ -197,13 +196,11 @@ describe('libraryStore Tauri 路径：冲突期条目（issue #25）', () => {
     expect(list[1].conflicted).toBeUndefined()
   })
 
-  it('冲突期条目的媒体 URL 拒绝服务，不拼接 relPath', async () => {
-    invoke.mockResolvedValue('/Users/x/Library/PlotWeave/library')
+  it('冲突期条目的媒体 URL 拒绝服务，不发起 IPC', async () => {
     const { libraryStore } = await load()
     await expect(
       libraryStore.mediaUrl({
         id: 'la-1',
-        relPath: 'assets/la-1.png',
         conflicted: true,
       }),
     ).rejects.toThrow(/冲突期/)

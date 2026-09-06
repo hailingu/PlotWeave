@@ -70,8 +70,12 @@ fn find_library_entry(
 /// 打开库媒体文件（经 `library/assets/` 专用根句柄逐组件 no-follow 解析，
 /// 父目录链走 library_fs::open_parent_dir 共享内核）：终点必须是普通文件
 /// 且打开句柄按 (dev, ino) 与归类实体一致（Unix）——校验与打开之间被替换
-/// 即拒绝。
-fn open_library_asset(library: &CapDir, rel_path: &str) -> Result<cap_std::fs::File, String> {
+/// 即拒绝。导入拷贝与 pwmedia 媒体读取共用（issue #26 评审修复：媒体
+/// 读取侧同样不得跟随最终组件符号链接）。
+pub(crate) fn open_library_asset(
+    library: &CapDir,
+    rel_path: &str,
+) -> Result<cap_std::fs::File, String> {
     let suffix = rel_path
         .strip_prefix("assets/")
         .ok_or_else(|| format!("库资产 relPath 越出 assets/：{rel_path}"))?;

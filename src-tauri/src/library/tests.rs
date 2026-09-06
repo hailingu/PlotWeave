@@ -1,6 +1,8 @@
 //! library.rs 命令面与句柄域内核的回归测试（issue #17 及其评审轮次）：
 //! 投毒索引条目隔离、锚定句柄删除信任链、大小上限编码闭环、并发首用
-//! 与净化诊断可见性。
+//! 与净化诊断可见性。pwmedia 媒体协议测试见同目录 media_protocol_tests.rs
+//! （issue #26；自本文件拆出以符合源文件 800 行上限，评审修复，PR #32
+//! 第六轮）。
 
 use super::*;
 use crate::store::new_id;

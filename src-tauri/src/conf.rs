@@ -49,25 +49,23 @@ mod tests {
         );
     }
 
-    /// assetProtocol scope 恰为两个专用资产子目录授权（issue #9 低成本
-    /// 硬化，数据模型 §7.1 资产根）：媒体 URL 仅由 projectAssets/
-    /// libraryStore 两条管线合成，取值范围固定为 projects/<id>/assets/
-    /// 与 library/assets/。全量白名单断言——任何更宽的条目（如
-    /// $APPDATA/**）都会让 project.json/library.json 等控制文件重新
-    /// 协议可达，必须整体拒绝；两项授权缺一不可（缩略图媒体不可用）。
+    /// assetProtocol scope 恰为专用资产子目录授权（issue #9 低成本硬化，
+    /// 数据模型 §7.1 资产根；issue #26 收敛为仅项目侧）：库媒体自 issue #26
+    /// 起改走 `pwmedia` 自定义协议按 id 逐请求解析，asset 协议不再授权
+    /// `library/assets/`——本机路径媒体直读面进一步收窄。媒体 URL 仅由
+    /// projectAssets/libraryStore 两条管线合成。全量白名单断言——任何更宽
+    /// 的条目（如 $APPDATA/**）都会让 project.json/library.json 等控制文件
+    /// 重新协议可达，必须整体拒绝。
     #[test]
     fn asset_protocol_scope_exactly_authorizes_dedicated_asset_subtrees() {
-        const APPROVED: [&str; 2] = [
-            "$APPDATA/library/assets/**",
-            "$APPDATA/projects/*/assets/**",
-        ];
+        const APPROVED: [&str; 1] = ["$APPDATA/projects/*/assets/**"];
         let mut scope = asset_protocol_scope(&load_conf());
         scope.sort();
         let mut approved = APPROVED;
         approved.sort();
         assert_eq!(
             scope, approved,
-            "assetProtocol.scope 必须恰为专用资产子目录白名单 {approved:?}：更宽的条目会使控制文件协议可达（数据模型 §7.1，issue #9）"
+            "assetProtocol.scope 必须恰为专用资产子目录白名单 {approved:?}：更宽的条目会使控制文件协议可达（数据模型 §7.1，issue #9/#26）"
         );
     }
 }
