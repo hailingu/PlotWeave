@@ -338,8 +338,8 @@ fn index_refs(index: &Value, entry: &JournalEntry) -> IndexRefs {
         index_has: false,
         other_same_rel: false,
     };
-    if let Some(arr) = index["assets"].as_array() {
-        for a in arr {
+    if let Some(by_id) = index["assets"]["byId"].as_object() {
+        for a in by_id.values() {
             let id = a.get("id").and_then(Value::as_str).unwrap_or_default();
             let rel = a.get("relPath").and_then(Value::as_str).unwrap_or_default();
             if id == entry.asset_id {

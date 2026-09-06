@@ -41,11 +41,9 @@ fn find_library_entry(
     let (index, _) = read_index_capped(library)?;
     let entry = index
         .get("assets")
-        .and_then(Value::as_array)
-        .and_then(|arr| {
-            arr.iter()
-                .find(|a| a.get("id").and_then(Value::as_str) == Some(library_asset_id))
-        })
+        .and_then(|a| a.get("byId"))
+        .and_then(Value::as_object)
+        .and_then(|m| m.get(library_asset_id))
         .ok_or_else(|| format!("库资产不存在：{library_asset_id}"))?;
     let rel_path = entry
         .get("relPath")
@@ -149,7 +147,7 @@ fn ensure_project_control(projects: &CapDir, id: &str) -> Result<(), String> {
     let control = format!("{id}.json");
     match projects.symlink_metadata(&control) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err(format!("项目不存在：{id}"))
+            return Err(format!("项目不存在：{id}"));
         }
         Err(e) => return Err(format!("读取项目文件元数据失败：{e}")),
         Ok(md) => {
@@ -373,18 +371,36 @@ mod tests {
         fs::write(projects.join(format!("{id}.json")), b"{}").expect("写入项目控制文件");
     }
 
-    /// 库索引 + 媒体文件的最小合法 fixture（索引条目按 library.rs 现有形状）。
+    /// 库索引条目的完整合法形状（目标 Record 形状，含 §7.2 必填
+    /// source/ISO createdAt；relPath 按需投毒）。
+    fn library_entry(id: &str, name: &str, kind: &str, mime: &str, rel: &str) -> Value {
+        json!({
+            "id": id,
+            "name": name,
+            "kind": kind,
+            "mime": mime,
+            "relPath": rel,
+            "source": "upload",
+            "createdAt": "2026-01-01T00:00:00.000Z",
+            "tags": [],
+        })
+    }
+
+    /// 把库索引条目数组包装为目标 Record 形状（`{"byId": {id: entry}}`）。
+    fn library_by_id(entries: impl IntoIterator<Item = Value>) -> Value {
+        let mut m = serde_json::Map::new();
+        for e in entries {
+            m.insert(e["id"].as_str().unwrap().to_string(), e);
+        }
+        json!({ "byId": m })
+    }
+
+    /// 库索引 + 媒体文件的最小合法 fixture（索引条目按 §7.2 Record 形状）。
     fn seed_library(library: &Path, id: &str, file: &str, bytes: &[u8], mime: &str) {
         fs::write(library.join("assets").join(file), bytes).expect("写入库媒体文件");
         let index = json!({
-            "assets": [{
-                "id": id,
-                "name": file,
-                "kind": "character",
-                "mime": mime,
-                "relPath": format!("assets/{file}"),
-            }],
-            "groups": [],
+            "assets": library_by_id([library_entry(id, file, "character", mime, &format!("assets/{file}"))]),
+            "groups": library_by_id([]),
         });
         fs::write(
             library.join("library.json"),
@@ -471,8 +487,8 @@ mod tests {
         seed_project(&projects, "p-1");
         fs::write(library.join("assets").join("a.png"), b"A").expect("写库媒体");
         let index = json!({
-            "assets": [{ "id": "la-1", "name": "a.png", "mime": "image/png", "relPath": "../a.png" }],
-            "groups": [],
+            "assets": library_by_id([library_entry("la-1", "a.png", "other", "image/png", "../a.png")]),
+            "groups": library_by_id([]),
         });
         fs::write(
             library.join("library.json"),
@@ -499,8 +515,8 @@ mod tests {
         )
         .expect("建符号链接");
         let index = json!({
-            "assets": [{ "id": "la-1", "name": "la-1.png", "mime": "image/png", "relPath": "assets/la-1.png" }],
-            "groups": [],
+            "assets": library_by_id([library_entry("la-1", "la-1.png", "other", "image/png", "assets/la-1.png")]),
+            "groups": library_by_id([]),
         });
         fs::write(
             library.join("library.json"),
@@ -595,8 +611,8 @@ mod tests {
         let (projects, library, root) = temp_fixture();
         seed_project(&projects, "p-1");
         let index = json!({
-            "assets": [{ "id": "la-1", "name": "a.png", "mime": "image/png", "relPath": "assets/gone/a.png" }],
-            "groups": [],
+            "assets": library_by_id([library_entry("la-1", "a.png", "other", "image/png", "assets/gone/a.png")]),
+            "groups": library_by_id([]),
         });
         fs::write(
             library.join("library.json"),

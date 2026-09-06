@@ -45,17 +45,16 @@ fn delete_asset_transacted_unix(library: &CapDir, id: &str) -> Result<Value, Str
     let (mut index, mut warnings) = read_index_capped(library)?;
     warnings.append(&mut recovery.warnings);
     let assets = assets_root(library)?;
-    let assets_arr = index["assets"].as_array_mut().ok_or("资产索引结构损坏")?;
-    let pos = assets_arr
-        .iter()
-        .position(|a| a.get("id").and_then(Value::as_str) == Some(id))
-        .ok_or_else(|| format!("资产不存在：{id}"))?;
-    let rel = assets_arr[pos]
-        .get("relPath")
+    let by_id = index["assets"]["byId"]
+        .as_object_mut()
+        .ok_or("资产索引结构损坏")?;
+    let rel = by_id
+        .get(id)
+        .and_then(|a| a.get("relPath"))
         .and_then(Value::as_str)
-        .unwrap_or_default()
+        .ok_or_else(|| format!("资产不存在：{id}"))?
         .to_string();
-    assets_arr.remove(pos);
+    by_id.remove(id);
     ensure_index_size(&index)?;
     if needs_no_quarantine(&assets, &index, &rel)? {
         write_index(library, &index)?;
@@ -67,8 +66,8 @@ fn delete_asset_transacted_unix(library: &CapDir, id: &str) -> Result<Value, Str
 /// 无需隔离的情形：其他条目仍引用同一文件位置（同 relPath = 同一物理
 /// 文件，只提交去项索引），或媒体/父目录已缺失（幂等收敛）。
 fn needs_no_quarantine(assets: &CapDir, index: &Value, rel: &str) -> Result<bool, String> {
-    let shared = index["assets"].as_array().is_some_and(|arr| {
-        arr.iter()
+    let shared = index["assets"]["byId"].as_object().is_some_and(|m| {
+        m.values()
             .any(|e| e.get("relPath").and_then(Value::as_str) == Some(rel))
     });
     if shared {

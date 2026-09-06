@@ -5,7 +5,7 @@ use super::*;
 use crate::library::put_asset_with;
 use cap_std::ambient_authority;
 use cap_std::fs::Dir as CapDir;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -23,6 +23,8 @@ pub(crate) fn cleanup(root: &Path) {
     let _ = fs::remove_dir_all(root);
 }
 
+/// 最小合法索引条目（目标 Record 形状，含 §7.2 必填 source/ISO createdAt；
+/// relPath 按需投毒）。
 pub(crate) fn entry(id: &str, rel: &str) -> Value {
     json!({
         "id": id,
@@ -30,7 +32,19 @@ pub(crate) fn entry(id: &str, rel: &str) -> Value {
         "kind": "other",
         "mime": "image/png",
         "relPath": rel,
+        "source": "upload",
+        "createdAt": "2026-01-01T00:00:00.000Z",
+        "tags": [],
     })
+}
+
+/// 把最小条目数组包装为目标 Record 形状（`{"byId": {id: entry}}`）。
+pub(crate) fn by_id(entries: impl IntoIterator<Item = Value>) -> Value {
+    let mut m = serde_json::Map::new();
+    for e in entries {
+        m.insert(e["id"].as_str().unwrap().to_string(), e);
+    }
+    json!({ "byId": m })
 }
 
 pub(crate) fn write_index_raw(library: &Path, index: &Value) {
@@ -93,7 +107,7 @@ fn recover_clears_unstarted_transaction() {
     fs::write(library.join("assets").join("la-1.png"), b"PNG").expect("写媒体");
     write_index_raw(
         &library,
-        &json!({ "assets": [entry("la-1", "assets/la-1.png")], "groups": [] }),
+        &json!({ "assets": by_id([entry("la-1", "assets/la-1.png")]), "groups": by_id([]) }),
     );
     let (dev, ino) = file_identity(&library.join("assets").join("la-1.png"));
     write_journal_raw(
@@ -128,7 +142,7 @@ fn recover_restores_quarantined_media_when_index_uncommitted() {
     fs::write(library.join("assets").join(".trash").join("t-x"), b"PNG").expect("写隔离项");
     write_index_raw(
         &library,
-        &json!({ "assets": [entry("la-1", "assets/la-1.png")], "groups": [] }),
+        &json!({ "assets": by_id([entry("la-1", "assets/la-1.png")]), "groups": by_id([]) }),
     );
     let (dev, ino) = file_identity(&library.join("assets").join(".trash").join("t-x"));
     write_journal_raw(
@@ -171,7 +185,7 @@ fn recover_marks_conflict_when_original_occupied() {
     fs::write(library.join("assets").join("la-1.png"), b"OCCUPIER").expect("后来文件占用原路径");
     write_index_raw(
         &library,
-        &json!({ "assets": [entry("la-1", "assets/la-1.png")], "groups": [] }),
+        &json!({ "assets": by_id([entry("la-1", "assets/la-1.png")]), "groups": by_id([]) }),
     );
     let (dev, ino) = file_identity(&library.join("assets").join(".trash").join("t-x"));
     write_journal_raw(
@@ -217,7 +231,10 @@ fn recover_marks_conflict_when_original_occupied() {
 fn recover_clears_when_cleanup_already_complete() {
     let (library, root) = temp_fixture();
     fs::write(library.join("assets").join("la-1.png"), b"OCCUPIER").expect("后来文件占用原路径");
-    write_index_raw(&library, &json!({ "assets": [], "groups": [] }));
+    write_index_raw(
+        &library,
+        &json!({ "assets": by_id([]), "groups": by_id([]) }),
+    );
     let (dev, ino) = file_identity(&library.join("assets").join("la-1.png"));
     // 预期身份 ≠ 占用者身份：原路径绑定的是后来文件，清理已完成
     write_journal_raw(
@@ -257,7 +274,7 @@ fn import_refuses_conflicted_asset() {
     fs::write(library.join("assets").join("la-1.png"), b"OCCUPIER").expect("后来文件");
     write_index_raw(
         &library,
-        &json!({ "assets": [entry("la-1", "assets/la-1.png")], "groups": [] }),
+        &json!({ "assets": by_id([entry("la-1", "assets/la-1.png")]), "groups": by_id([]) }),
     );
     let (dev, ino) = file_identity(&library.join("assets").join(".trash").join("t-x"));
     write_journal_raw(
@@ -285,7 +302,7 @@ fn malformed_journal_blocks_library_writes() {
     fs::write(library.join(JOURNAL_FILE_NAME), b"{not json").expect("写异型日志");
     write_index_raw(
         &library,
-        &json!({ "assets": [entry("la-1", "assets/la-1.png")], "groups": [] }),
+        &json!({ "assets": by_id([entry("la-1", "assets/la-1.png")]), "groups": by_id([]) }),
     );
     let recovery = recover(&cap(&library)).expect("恢复入口不失败");
     assert!(recovery.read_only, "异型日志应进入只读告警态");
@@ -338,7 +355,7 @@ fn recover_shared_reference_keeps_current_entry() {
     fs::write(library.join("assets").join("la-1.png"), b"PNG").expect("写共享媒体");
     write_index_raw(
         &library,
-        &json!({ "assets": [entry("la-2", "assets/la-1.png")], "groups": [] }),
+        &json!({ "assets": by_id([entry("la-2", "assets/la-1.png")]), "groups": by_id([]) }),
     );
     let (dev, ino) = file_identity(&library.join("assets").join("la-1.png"));
     write_journal_raw(
@@ -375,7 +392,10 @@ fn recover_retains_journal_on_trash_identity_mismatch() {
         b"SWAPPED",
     )
     .expect("写占用者");
-    write_index_raw(&library, &json!({ "assets": [], "groups": [] }));
+    write_index_raw(
+        &library,
+        &json!({ "assets": by_id([]), "groups": by_id([]) }),
+    );
     // 预期身份 ≠ 隔离区内实际占用者
     write_journal_raw(
         &library,
@@ -460,7 +480,10 @@ fn recover_requarantines_media_returned_to_original_path() {
     let (library, root) = temp_fixture();
     fs::write(library.join("assets").join("la-1.png"), b"PNG").expect("写媒体");
     fs::create_dir_all(library.join("assets").join(".trash")).expect("建空隔离目录");
-    write_index_raw(&library, &json!({ "assets": [], "groups": [] }));
+    write_index_raw(
+        &library,
+        &json!({ "assets": by_id([]), "groups": by_id([]) }),
+    );
     let (dev, ino) = file_identity(&library.join("assets").join("la-1.png"));
     write_journal_raw(
         &library,
@@ -530,7 +553,7 @@ fn recover_never_installs_mismatched_trash_entry() {
     .expect("写替换文件");
     write_index_raw(
         &library,
-        &json!({ "assets": [entry("la-1", "assets/la-1.png")], "groups": [] }),
+        &json!({ "assets": by_id([entry("la-1", "assets/la-1.png")]), "groups": by_id([]) }),
     );
     write_journal_raw(
         &library,
@@ -570,7 +593,7 @@ fn media_bytes_rechecks_conflict_state_per_request() {
     fs::write(library.join("assets").join("la-1.png"), b"OCCUPIER").expect("后来文件");
     write_index_raw(
         &library,
-        &json!({ "assets": [entry("la-1", "assets/la-1.png")], "groups": [] }),
+        &json!({ "assets": by_id([entry("la-1", "assets/la-1.png")]), "groups": by_id([]) }),
     );
     let (dev, ino) = file_identity(&library.join("assets").join(".trash").join("t-x"));
     write_journal_raw(
@@ -607,11 +630,11 @@ fn index_entry_pointing_into_trash_is_quarantined() {
     fs::write(library.join("assets").join(".trash").join("t-x"), b"Q").expect("写隔离项");
     write_index_raw(
         &library,
-        &json!({ "assets": [entry("la-1", "assets/.trash/t-x")], "groups": [] }),
+        &json!({ "assets": by_id([entry("la-1", "assets/.trash/t-x")]), "groups": by_id([]) }),
     );
     let (index, warnings) = read_index_capped(&cap(&library)).expect("索引可读");
     assert_eq!(
-        index["assets"].as_array().map(Vec::len),
+        index["assets"]["byId"].as_object().map(Map::len),
         Some(0),
         "应被隔离"
     );
@@ -631,7 +654,7 @@ fn delete_rejected_when_journal_near_cap() {
     fs::write(library.join("assets").join("la-1.png"), b"PNG").expect("写媒体");
     write_index_raw(
         &library,
-        &json!({ "assets": [entry("la-1", "assets/la-1.png")], "groups": [] }),
+        &json!({ "assets": by_id([entry("la-1", "assets/la-1.png")]), "groups": by_id([]) }),
     );
     // 预填越过守卫阈值的合法日志条目：索引去项、每个条目带真实隔离文件
     // （身份与磁盘一致）→ recover_index_committed 的 IdentityOk 分支触发
@@ -668,7 +691,10 @@ fn recover_requarantine_persists_mapping_before_rename() {
     let (library, root) = temp_fixture();
     fs::write(library.join("assets").join("la-1.png"), b"PNG").expect("写媒体");
     fs::create_dir_all(library.join("assets").join(".trash")).expect("建空隔离目录");
-    write_index_raw(&library, &json!({ "assets": [], "groups": [] }));
+    write_index_raw(
+        &library,
+        &json!({ "assets": by_id([]), "groups": by_id([]) }),
+    );
     let (dev, ino) = file_identity(&library.join("assets").join("la-1.png"));
     write_journal_raw(
         &library,
@@ -706,7 +732,7 @@ fn recover_does_not_treat_occupier_as_shared_reference() {
     fs::write(library.join("assets").join("la-1.png"), b"OCCUPIER").expect("写占用者");
     write_index_raw(
         &library,
-        &json!({ "assets": [entry("la-2", "assets/la-1.png")], "groups": [] }),
+        &json!({ "assets": by_id([entry("la-2", "assets/la-1.png")]), "groups": by_id([]) }),
     );
     write_journal_raw(
         &library,
@@ -739,7 +765,7 @@ fn recover_cleans_hard_link_residue_same_identity() {
     fs::write(library.join("assets").join(".trash").join("t-x"), b"PNG").expect("写隔离项");
     write_index_raw(
         &library,
-        &json!({ "assets": [entry("la-1", "assets/la-1.png")], "groups": [] }),
+        &json!({ "assets": by_id([entry("la-1", "assets/la-1.png")]), "groups": by_id([]) }),
     );
     // 硬链接窗口残留：原名也绑定同一 inode（hard_link 成功、remove_file 失败）
     fs::hard_link(

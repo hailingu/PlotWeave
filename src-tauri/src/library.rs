@@ -57,13 +57,8 @@ pub fn library_list(app: AppHandle) -> Result<Value, String> {
     let (mut index, mut warnings) = read_index_capped(&library)?;
     warnings.append(&mut recovery.warnings);
     for id in &recovery.conflicted {
-        if let Some(arr) = index["assets"].as_array_mut() {
-            if let Some(e) = arr
-                .iter_mut()
-                .find(|a| a.get("id").and_then(Value::as_str) == Some(id.as_str()))
-            {
-                e["conflicted"] = json!(true);
-            }
+        if let Some(e) = index["assets"]["byId"].get_mut(id) {
+            e["conflicted"] = json!(true);
         }
         warnings.push(format!("资产 {id} 处于删除事务冲突期，暂不可用"));
     }
@@ -108,17 +103,16 @@ pub(crate) fn put_asset_with(
         "id": id,
         "name": name.trim(),
         "kind": kind,
-        "view": null,
         "mime": mime,
         "relPath": format!("assets/{file_name}"),
+        "source": "upload",
+        "createdAt": crate::isotime::now_iso(),
         "tags": [],
-        "groupId": null,
-        "createdAt": now_ms(),
     });
-    index["assets"]
-        .as_array_mut()
+    index["assets"]["byId"]
+        .as_object_mut()
         .ok_or("资产索引结构损坏")?
-        .push(entry.clone());
+        .insert(id.clone(), entry.clone());
     // 媒体落盘前先校验候选索引大小（评审修复）：超限在物化前拒绝，
     // 不留下索引写不回去的孤儿媒体文件
     ensure_index_size(&index)?;
@@ -237,11 +231,16 @@ fn validate_meta_patch(patch: &Value) -> Result<(), String> {
     Ok(())
 }
 
-/// 应用 groupId 补丁：null/空白归 null；≤64 字符 trim 后写入。
+/// 应用 groupId 补丁（§7.2）：null/空白是唯一清除标记，落盘删除可选字段；
+/// ≤64 字符 trim 后写入；其他异型值拒绝。
 fn apply_group_id(entry: &mut Value, g: &Value) -> Result<(), String> {
     match g {
-        Value::Null => entry["groupId"] = json!(null),
-        Value::String(s) if s.trim().is_empty() => entry["groupId"] = json!(null),
+        Value::Null => {
+            entry.as_object_mut().unwrap().remove("groupId");
+        }
+        Value::String(s) if s.trim().is_empty() => {
+            entry.as_object_mut().unwrap().remove("groupId");
+        }
         Value::String(s) if s.len() <= 64 => entry["groupId"] = json!(s.trim()),
         _ => return Err("groupId 必须是 ≤64 字符的字符串或 null".into()),
     }
@@ -310,12 +309,8 @@ fn resolve_media_entry_with(
         return Err(format!("资产 {id} 处于删除事务冲突期，媒体不可用"));
     }
     let (index, _) = read_index_capped(library)?;
-    let entry = index["assets"]
-        .as_array()
-        .and_then(|arr| {
-            arr.iter()
-                .find(|a| a.get("id").and_then(Value::as_str) == Some(id))
-        })
+    let entry = index["assets"]["byId"]
+        .get(id)
         .ok_or_else(|| format!("资产不存在：{id}"))?;
     let rel = entry
         .get("relPath")
@@ -563,10 +558,11 @@ fn update_meta_with(library: &cap_std::fs::Dir, id: &str, patch: &Value) -> Resu
     }
     let (mut index, mut warnings) = read_index_capped(library)?;
     warnings.extend(recovery.warnings);
-    let assets = index["assets"].as_array_mut().ok_or("资产索引结构损坏")?;
+    let assets = index["assets"]["byId"]
+        .as_object_mut()
+        .ok_or("资产索引结构损坏")?;
     let entry = assets
-        .iter_mut()
-        .find(|a| a.get("id").and_then(Value::as_str) == Some(id))
+        .get_mut(id)
         .ok_or_else(|| format!("资产不存在：{id}"))?;
     if let Some(n) = patch.get("name").and_then(|v| v.as_str()) {
         entry["name"] = json!(n.trim());
@@ -575,7 +571,12 @@ fn update_meta_with(library: &cap_std::fs::Dir, id: &str, patch: &Value) -> Resu
         entry["kind"] = json!(k);
     }
     if let Some(v) = patch.get("view") {
-        entry["view"] = v.clone();
+        // §7.2：view: null 是唯一清除标记，落盘删除可选字段
+        if v.is_null() {
+            entry.as_object_mut().unwrap().remove("view");
+        } else {
+            entry["view"] = v.clone();
+        }
     }
     if patch.get("tags").is_some() {
         entry["tags"] = json!(tags);

@@ -45,7 +45,8 @@ fn write_index_raw(library: &Path, index: &Value) {
         .expect("写入索引");
 }
 
-/// 最小索引条目（relPath 按需投毒）。
+/// 最小合法索引条目（目标 Record 形状，含 §7.2 必填 source/ISO createdAt；
+/// relPath 按需投毒）。
 fn entry(id: &str, rel: &str) -> Value {
     json!({
         "id": id,
@@ -53,7 +54,20 @@ fn entry(id: &str, rel: &str) -> Value {
         "kind": "other",
         "mime": "image/png",
         "relPath": rel,
+        "source": "upload",
+        "createdAt": "2026-01-01T00:00:00.000Z",
+        "tags": [],
     })
+}
+
+/// 把最小条目数组包装为目标 Record 形状（`{"byId": {id: entry}}`）。
+/// 接受数组字面量或 Vec（与 tests.rs 的 Vec 版语义同款，形状兼容现有调用点）。
+fn by_id(entries: impl IntoIterator<Item = Value>) -> Value {
+    let mut m = serde_json::Map::new();
+    for e in entries {
+        m.insert(e["id"].as_str().unwrap().to_string(), e);
+    }
+    json!({ "byId": m })
 }
 
 /// 按字符串解析 http::Uri 的测试助手。
@@ -145,11 +159,11 @@ fn media_bytes_refuses_unknown_or_poisoned_entries() {
     write_index_raw(
         &library,
         &json!({
-            "assets": [
+            "assets": by_id([
                 entry("la-1", "assets/la-1.png"),
                 entry("la-evil", "library.json"),
-            ],
-            "groups": [],
+            ]),
+            "groups": by_id([]),
         }),
     );
     fs::write(library.join("assets").join("la-1.png"), b"PNG").expect("写媒体");
@@ -170,7 +184,7 @@ fn media_bytes_refuses_conflicted_asset() {
     .expect("写身份不符的隔离项");
     write_index_raw(
         &library,
-        &json!({ "assets": [entry("la-1", "assets/la-1.png")], "groups": [] }),
+        &json!({ "assets": by_id([entry("la-1", "assets/la-1.png")]), "groups": by_id([]) }),
     );
     write_journal_raw(
         &library,
@@ -197,13 +211,13 @@ fn media_bytes_refuses_symlinked_final_component() {
     fs::create_dir_all(&outside).expect("建链外目录");
     fs::write(outside.join("victim.png"), b"VICTIM").expect("写链外目标文件");
     std::os::unix::fs::symlink(
-        &outside.join("victim.png"),
+        outside.join("victim.png"),
         library.join("assets").join("la-1.png"),
     )
     .expect("建指向链外的符号链接");
     write_index_raw(
         &library,
-        &json!({ "assets": [entry("la-1", "assets/la-1.png")], "groups": [] }),
+        &json!({ "assets": by_id([entry("la-1", "assets/la-1.png")]), "groups": by_id([]) }),
     );
     let err = media_read(&cap(&library), "la-1").expect_err("符号链接终点应拒绝");
     assert!(err.contains("符号链接"), "意外诊断：{err}");

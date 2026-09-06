@@ -12,7 +12,7 @@ use cap_std::fs::Dir as CapDir;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
 
-use crate::store::{is_canonical_mime, is_valid_active_asset_rel_path, new_id, open_dir_bound};
+use crate::store::{new_id, open_dir_bound};
 
 /// 库索引大小上限（1 MiB，对齐 prefs.rs 设置文件上限）：异常膨胀的索引在
 /// 物化进内存前显式拒绝，防脏数据/篡改文件拖垮解析与 IPC。
@@ -36,9 +36,9 @@ pub(crate) fn validate_asset_id(id: &str) -> Result<(), String> {
     }
 }
 
-/// 空索引（首启或索引缺失时回退）。
+/// 空索引（首启或索引缺失时回退；目标 Record 形状，§7.2）。
 pub(crate) fn default_index() -> Value {
-    json!({ "assets": [], "groups": [] })
+    json!({ "assets": { "byId": {} }, "groups": { "byId": {} } })
 }
 
 /// 库目录确保内核：缺失即创建（并发首用容忍 AlreadyExists，评审修复——
@@ -152,9 +152,9 @@ pub(crate) fn open_parent_dir(
 }
 
 /// 索引受限读取（library.rs 命令面与 assets.rs 导入路径的**唯一**索引读
-/// 实现）：no-follow 归类 → 大小上限内读取 → JSON 解析 → 逐条目白名单
-/// 校验——非法条目隔离出内存索引并逐条返回警告（§7.2 非法条目不进内存
-/// 索引），索引缺失回退默认空索引。
+/// 实现）：no-follow 归类 → 大小上限内读取 → JSON 解析 → 兼容迁移 + 完整
+/// 归一化（[`crate::library_index`]，§7.2）——旧数组形状迁移为 Record、
+/// 非法条目隔离出内存索引并逐条返回警告，索引缺失回退默认空索引。
 pub(crate) fn read_index_capped(library: &CapDir) -> Result<(Value, Vec<String>), String> {
     match read_index_text_capped(library)? {
         None => Ok((default_index(), Vec::new())),
@@ -175,7 +175,7 @@ pub(crate) fn read_index_capped(library: &CapDir) -> Result<(Value, Vec<String>)
                     INDEX_MAX_BYTES / (1024 * 1024)
                 ));
             }
-            Ok(sanitize_index(index))
+            Ok(crate::library_index::migrate_and_normalize(index))
         }
     }
 }
@@ -210,72 +210,6 @@ fn read_index_text_capped(library: &CapDir) -> Result<Option<String>, String> {
     String::from_utf8(bytes)
         .map(Some)
         .map_err(|_| "资产库索引不是合法 UTF-8".to_string())
-}
-
-/// 索引条目白名单（§7.2）：id/relPath/mime 形状校验，mime 在内存中规范化
-/// （trim + 小写）；任一项非法即整条拒绝。非法条目不进入内存索引；mime
-/// 发生就地修复时追加警告（评审修复：修复必须可见，静默修复会让前端与
-/// 后续写回都无法感知）。
-fn sanitize_entry(entry: &Value, warnings: &mut Vec<String>) -> Result<Value, String> {
-    let id = entry
-        .get("id")
-        .and_then(Value::as_str)
-        .ok_or("id 缺失或非字符串")?;
-    validate_asset_id(id)?;
-    let rel = entry
-        .get("relPath")
-        .and_then(Value::as_str)
-        .ok_or_else(|| format!("条目 {id} 的 relPath 缺失或非字符串"))?;
-    if !is_valid_active_asset_rel_path(rel) {
-        return Err(format!("条目 {id} 的 relPath 越出 assets/：{rel}"));
-    }
-    let mime_raw = entry
-        .get("mime")
-        .and_then(Value::as_str)
-        .ok_or_else(|| format!("条目 {id} 的 mime 缺失或非字符串"))?;
-    let mime = mime_raw.trim().to_ascii_lowercase();
-    if !is_canonical_mime(&mime) {
-        return Err(format!("条目 {id} 的 mime 非规范形式：{mime_raw}"));
-    }
-    if mime != mime_raw {
-        warnings.push(format!("条目 {id} 的 mime 已规范化：{mime_raw} → {mime}"));
-    }
-    let mut normalized = entry.clone();
-    normalized["mime"] = json!(mime);
-    Ok(normalized)
-}
-
-/// 索引净化：逐条目过白名单，非法条目隔离并生成警告；assets/groups 非数组
-/// 按空处理并告警。只影响内存视图，不回写磁盘（写入路径的落盘即净化由
-/// 各命令的写回自然完成）。
-fn sanitize_index(mut index: Value) -> (Value, Vec<String>) {
-    let mut warnings = Vec::new();
-    let assets = take_array(&mut index, "assets", &mut warnings);
-    let kept: Vec<Value> = assets
-        .iter()
-        .enumerate()
-        .filter_map(|(i, e)| {
-            sanitize_entry(e, &mut warnings)
-                .map_err(|reason| warnings.push(format!("已隔离非法索引条目 #{i}：{reason}")))
-                .ok()
-        })
-        .collect();
-    index["assets"] = json!(kept);
-    let groups = take_array(&mut index, "groups", &mut warnings);
-    index["groups"] = json!(groups);
-    (index, warnings)
-}
-
-/// 取出数组字段（非数组/缺失按空处理并告警）。
-fn take_array(index: &mut Value, key: &str, warnings: &mut Vec<String>) -> Vec<Value> {
-    match index.get_mut(key).map(Value::take) {
-        Some(Value::Array(arr)) => arr,
-        Some(_) => {
-            warnings.push(format!("资产索引的 {key} 不是数组，已按空处理"));
-            Vec::new()
-        }
-        None => Vec::new(),
-    }
 }
 
 /// 索引规范化（紧凑）表示的字节长度：读取侧与写入侧的统一度量。
