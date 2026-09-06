@@ -31,21 +31,35 @@ const VIEWS: [&str; 8] = [
 ];
 
 /// 把任意读出的库索引（旧数组形状或目标 Record 形状）迁移并完整归一化为
-/// 目标 Record 形状 `{assets:{byId},groups:{byId}}`，返回 (归一化索引, 警告)。
-/// 纯函数；异型根按空库收敛并告警（调用方 read_index_capped 已先拒绝非标量根）。
-pub(crate) fn migrate_and_normalize(index: Value) -> (Value, Vec<String>) {
+/// 目标 Record 形状 `{assets:{byId},groups:{byId}}`，返回 (归一化索引, 警告,
+/// 是否发生迁移/修复)。`migrated` 为 true 表示输入是旧数组形状或含被修复/
+/// 重发的条目——调用方据此把迁移结果落盘，保证重发 id 跨读取稳定（评审
+/// 修复，PR #33 第二轮：迁移只在内存不落盘会让 list 显示的 id 与后续媒体/
+/// 删除命令读到的不一致）。纯函数；异型根按空库收敛并告警。
+pub(crate) fn migrate_and_normalize(index: Value) -> (Value, Vec<String>, bool) {
     let mut warnings = Vec::new();
     if !index.is_object() {
         warnings.push("资产索引根不是对象，已按空库收敛".into());
-        return (empty_index(), warnings);
+        return (empty_index(), warnings, true);
     }
+    // 旧数组形状即迁移信号（目标形状是 Record）；键/id 修复、字段改写、条目
+    // 剥离等经 warnings 非空体现（归一化只对脏数据告警，干净 Record 无警告）。
+    let is_legacy = index.get("assets").is_some_and(Value::is_array)
+        || index.get("groups").is_some_and(Value::is_array);
     let raw_assets = index.get("assets").cloned().unwrap_or(Value::Null);
     let raw_groups = index.get("groups").cloned().unwrap_or(Value::Null);
-    let groups = normalize_groups(raw_groups, &mut warnings);
-    let assets = normalize_assets(raw_assets, &groups, &mut warnings);
+    let (groups, blank_group_map) = normalize_groups(raw_groups, &mut warnings);
+    let assets = normalize_assets(
+        raw_assets,
+        &groups,
+        blank_group_map.as_deref(),
+        &mut warnings,
+    );
+    let migrated = is_legacy || !warnings.is_empty();
     (
         json!({ "assets": { "byId": assets }, "groups": { "byId": groups } }),
         warnings,
+        migrated,
     )
 }
 
@@ -53,13 +67,18 @@ fn empty_index() -> Value {
     json!({ "assets": { "byId": {} }, "groups": { "byId": {} } })
 }
 
-/// 取出待迁移的条目列表：数组原样返回（每项带原始顺序），Record 取 byId 值。
-/// 非数组/非对象/缺失按空处理并告警。
-fn take_entries(raw: Value, bucket: &str, warnings: &mut Vec<String>) -> Vec<Value> {
+/// 取出待迁移条目：数组每项键为 None（无权威键，按内嵌 id 键化）；Record
+/// 的 byId 成员带权威键——§7.2/§11.1 共同规则要求键/id 不一致时以记录键为
+/// 准。非数组/非对象/缺失按空处理并告警。
+fn take_entries(
+    raw: Value,
+    bucket: &str,
+    warnings: &mut Vec<String>,
+) -> Vec<(Option<String>, Value)> {
     match raw {
-        Value::Array(arr) => arr,
+        Value::Array(arr) => arr.into_iter().map(|e| (None, e)).collect(),
         Value::Object(mut o) => match o.remove("byId") {
-            Some(Value::Object(by_id)) => by_id.into_values().collect(),
+            Some(Value::Object(by_id)) => by_id.into_iter().map(|(k, v)| (Some(k), v)).collect(),
             Some(_) => {
                 warnings.push(format!("资产索引 {bucket}.byId 不是对象，已按空处理"));
                 Vec::new()
@@ -78,10 +97,9 @@ fn take_entries(raw: Value, bucket: &str, warnings: &mut Vec<String>) -> Vec<Val
 }
 
 /// 第①②步：预检普通对象成员 + id 校验/重发 + 键化。返回 (键化后 map, 空白
-/// 原 id→新 id 的可选映射)。重复 id 保留文档序首项、后续重发；空白/缺失/非
-/// 第①②步：预检普通对象成员 + id 校验/重发 + 键化。返回 (键化后 map, 空白
-/// 原 id→新 id 的可选映射)。重复 id 保留文档序首项、后续重发；空白/缺失/非
-/// 字符串 id 重发。
+/// 原 id→新 id 的可选映射)。Record 权威键优先：键合法且未占用即以键为准、
+/// 内嵌 id 改写为键（保住指向该键的既有引用）；数组或 Record 键不可用时按
+/// 内嵌 id 键化——重复 id 保留文档序首项、后续重发；空白/缺失/非法 id 重发。
 fn keyify(
     raw: Value,
     bucket: &str,
@@ -91,15 +109,14 @@ fn keyify(
     let mut map = Map::new();
     let mut blank_new_id: Option<String> = None;
     let mut blank_count = 0usize;
-    for entry in entries {
+    for (key, entry) in entries {
         let Some(mut e) = entry.as_object().cloned() else {
             warnings.push(format!("资产索引 {bucket} 含非对象成员，已隔离"));
             continue;
         };
-        let id = e.get("id").and_then(Value::as_str).unwrap_or("").trim();
-        let valid_id = !id.is_empty() && validate_asset_id(id).is_ok();
-        let final_id = resolve_key(id, valid_id, &map, bucket, warnings);
-        if !valid_id {
+        let embedded = e.get("id").and_then(Value::as_str).unwrap_or("").trim();
+        let (final_id, was_blank) = assign_key(key, embedded, &map, bucket, warnings);
+        if was_blank {
             blank_count += 1;
             if blank_count == 1 {
                 blank_new_id = Some(final_id.clone());
@@ -112,24 +129,38 @@ fn keyify(
     (map, blank_map)
 }
 
-/// 决定条目的最终 Record 键：合法且未占用的 id 原样保留；重复/空白/非法
-/// id 重发本域未占用 id 并告警（§7.2 重复保留首项、后续重发）。
-fn resolve_key(
-    id: &str,
-    valid_id: bool,
+/// 决定条目的最终 Record 键与是否为空白重发。返回 (最终键, 原内嵌 id 是否
+/// 空白/非法而重发)。
+fn assign_key(
+    key: Option<String>,
+    embedded: &str,
     map: &Map<String, Value>,
     bucket: &str,
     warnings: &mut Vec<String>,
-) -> String {
-    if valid_id && !map.contains_key(id) {
-        return id.to_string();
+) -> (String, bool) {
+    // Record 权威键优先：键合法且未占用即以键为准
+    if let Some(k) = key.as_deref().map(str::trim) {
+        if !k.is_empty() && validate_asset_id(k).is_ok() && !map.contains_key(k) {
+            if k != embedded {
+                warnings.push(format!(
+                    "资产索引 {bucket} 键 {k} 与内嵌 id 不一致，以键为准改写"
+                ));
+            }
+            return (k.to_string(), false);
+        }
+    }
+    let valid_id = !embedded.is_empty() && validate_asset_id(embedded).is_ok();
+    if valid_id && !map.contains_key(embedded) {
+        return (embedded.to_string(), false);
     }
     if valid_id {
-        warnings.push(format!("资产索引 {bucket} 含重复 id {id}，后续项重发"));
+        warnings.push(format!(
+            "资产索引 {bucket} 含重复 id {embedded}，后续项重发"
+        ));
     } else {
         warnings.push(format!("资产索引 {bucket} 含空白/非法 id，已重发"));
     }
-    fresh_id(map)
+    (fresh_id(map), !valid_id)
 }
 
 /// 生成桶内未占用的重发 id（用连字符替换前缀，保证 validate_asset_id 通过）。
@@ -142,9 +173,14 @@ fn fresh_id(map: &Map<String, Value>) -> String {
     }
 }
 
-/// 组桶归一化：键化 → 逐组完整校验（id/name/kind），非法组隔离。
-fn normalize_groups(raw: Value, warnings: &mut Vec<String>) -> Map<String, Value> {
-    let (map, _blank) = keyify(raw, "groups", warnings);
+/// 组桶归一化：键化 → 逐组完整校验（id/name/kind），非法组隔离。返回
+/// (归一化组 map, 单一空白组的重发 id 映射)——映射供资产侧改写精确匹配的
+/// 空白 groupId（§7.2 仅一个空白原 id 组时建立映射）。
+fn normalize_groups(
+    raw: Value,
+    warnings: &mut Vec<String>,
+) -> (Map<String, Value>, Option<String>) {
+    let (map, blank_map) = keyify(raw, "groups", warnings);
     let mut out = Map::new();
     for (key, g) in map {
         match normalize_group(&g, warnings) {
@@ -154,26 +190,29 @@ fn normalize_groups(raw: Value, warnings: &mut Vec<String>) -> Map<String, Value
             None => warnings.push(format!("已隔离非法组 {key}")),
         }
     }
-    out
+    (out, blank_map)
 }
 
 fn normalize_group(g: &Value, warnings: &mut Vec<String>) -> Option<Value> {
     let id = g.get("id").and_then(Value::as_str)?.to_string();
     let name = normalize_name(g.get("name"), &id, warnings)?;
-    let kind = g.get("kind").and_then(Value::as_str)?;
-    if !KINDS.contains(&kind) {
-        return None;
-    }
+    // 组与资产同款 prop→wardrobe 兼容改写（§7.2 迁移链③对组同样生效），
+    // 否则组被隔离导致其 wardrobe 成员丢失 groupId（语义保全破洞）。
+    let kind = normalize_kind(g.get("kind"), &id, warnings)?;
     Some(json!({ "id": id, "name": name, "kind": kind }))
 }
 
-/// 资产桶归一化：键化 → 逐条完整校验 → 跨条目 groupId/kind 一致性。
+/// 资产桶归一化：键化 → 空白组映射改写原始条目的 groupId → 逐条完整校验 →
+/// 跨条目 groupId/kind 一致性。空白映射必须在归一化之前作用——归一化会把
+/// 空白 groupId 剥离成缺失，改写就无处可施。
 fn normalize_assets(
     raw: Value,
     groups: &Map<String, Value>,
+    blank_group_map: Option<&str>,
     warnings: &mut Vec<String>,
 ) -> Map<String, Value> {
-    let (map, _blank) = keyify(raw, "assets", warnings);
+    let (mut map, _blank) = keyify(raw, "assets", warnings);
+    apply_blank_group_map(&mut map, blank_group_map, warnings);
     let mut out = Map::new();
     for (key, a) in map {
         match normalize_asset(&a, warnings) {
@@ -185,6 +224,31 @@ fn normalize_assets(
     }
     resolve_group_ids(&mut out, groups, warnings);
     out
+}
+
+/// 单一空白组映射改写（§7.2）：资产 groupId 为空白且组桶恰有一个空白组被
+/// 重发时，把该空白 groupId 改写为重发组 id——可确定修复的编组不丢。
+fn apply_blank_group_map(
+    assets: &mut Map<String, Value>,
+    blank_group_map: Option<&str>,
+    warnings: &mut Vec<String>,
+) {
+    let Some(new_gid) = blank_group_map else {
+        return;
+    };
+    for (key, a) in assets.iter_mut() {
+        let is_blank = a
+            .get("groupId")
+            .and_then(Value::as_str)
+            .map(|s| s.trim().is_empty())
+            .unwrap_or(false);
+        if is_blank {
+            a.as_object_mut().unwrap()["groupId"] = json!(new_gid);
+            warnings.push(format!(
+                "条目 {key} 的空白 groupId 已改写为重发组 id {new_gid}"
+            ));
+        }
+    }
 }
 
 /// 逐条 LibraryAsset 归一化：AssetRef 共享字段 + name/kind/tags/view/groupId。

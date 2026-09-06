@@ -42,7 +42,7 @@ fn record_shape_passes_through_unchanged() {
         "assets": by_id(vec![asset("la-1")]),
         "groups": by_id(vec![group("g-1", "character")]),
     });
-    let (out, warnings) = migrate_and_normalize(index);
+    let (out, warnings, _migrated) = migrate_and_normalize(index);
     assert_eq!(out["assets"]["byId"]["la-1"]["name"], "x");
     assert_eq!(out["groups"]["byId"]["g-1"]["kind"], "character");
     assert!(warnings.is_empty(), "干净索引不应有警告：{warnings:?}");
@@ -51,7 +51,7 @@ fn record_shape_passes_through_unchanged() {
 #[test]
 fn non_object_root_is_rejected_shape() {
     // 调用方（read_index_capped）已拒绝非标量根；此处内核按空库收敛并告警
-    let (out, warnings) = migrate_and_normalize(json!([]));
+    let (out, warnings, _migrated) = migrate_and_normalize(json!([]));
     assert_eq!(out["assets"], json!({ "byId": {} }));
     assert_eq!(out["groups"], json!({ "byId": {} }));
     assert!(!warnings.is_empty());
@@ -65,7 +65,7 @@ fn legacy_array_migrates_to_record_keyed_by_id() {
         "assets": [asset("la-1"), asset("la-2")],
         "groups": [group("g-1", "character")],
     });
-    let (out, _) = migrate_and_normalize(index);
+    let (out, _warnings, _migrated) = migrate_and_normalize(index);
     assert_eq!(out["assets"]["byId"]["la-1"]["id"], "la-1");
     assert_eq!(out["assets"]["byId"]["la-2"]["id"], "la-2");
     assert_eq!(out["groups"]["byId"]["g-1"]["id"], "g-1");
@@ -76,7 +76,7 @@ fn duplicate_asset_id_keeps_first_reissues_later() {
     let mut b = asset("la-1");
     b["name"] = json!("second");
     let index = json!({ "assets": [asset("la-1"), b], "groups": [] });
-    let (out, warnings) = migrate_and_normalize(index);
+    let (out, warnings, _migrated) = migrate_and_normalize(index);
     // 首项保留原 id
     assert_eq!(out["assets"]["byId"]["la-1"]["name"], "x");
     // 后续项重发本域未占用 id
@@ -115,7 +115,7 @@ fn blank_or_missing_asset_id_is_reissued() {
     let mut blank = asset("la-2");
     blank["id"] = json!("   ");
     let index = json!({ "assets": [no_id, blank], "groups": [] });
-    let (out, warnings) = migrate_and_normalize(index);
+    let (out, warnings, _migrated) = migrate_and_normalize(index);
     let by_id = out["assets"]["byId"].as_object().unwrap();
     assert_eq!(by_id.len(), 2, "两项都应保留：{by_id:?}");
     for (k, v) in by_id {
@@ -131,7 +131,7 @@ fn blank_or_missing_asset_id_is_reissued() {
 fn legacy_missing_source_defaults_to_upload() {
     let mut a = asset("la-1");
     a.as_object_mut().unwrap().remove("source");
-    let (out, warnings) = migrate_and_normalize(json!({ "assets": [a], "groups": [] }));
+    let (out, warnings, _migrated) = migrate_and_normalize(json!({ "assets": [a], "groups": [] }));
     assert_eq!(out["assets"]["byId"]["la-1"]["source"], "upload");
     assert!(warnings.iter().any(|w| w.contains("source")));
 }
@@ -140,7 +140,7 @@ fn legacy_missing_source_defaults_to_upload() {
 fn legacy_epoch_millis_created_at_converts_to_utc_iso() {
     let mut a = asset("la-1");
     a["createdAt"] = json!(1_700_000_000_000u64);
-    let (out, _) = migrate_and_normalize(json!({ "assets": [a], "groups": [] }));
+    let (out, _warnings, _migrated) = migrate_and_normalize(json!({ "assets": [a], "groups": [] }));
     assert_eq!(
         out["assets"]["byId"]["la-1"]["createdAt"],
         "2023-11-14T22:13:20.000Z"
@@ -151,7 +151,7 @@ fn legacy_epoch_millis_created_at_converts_to_utc_iso() {
 fn unconvertible_created_at_isolates_entry_without_guessing() {
     let mut a = asset("la-1");
     a["createdAt"] = json!("not-a-date");
-    let (out, warnings) = migrate_and_normalize(json!({ "assets": [a], "groups": [] }));
+    let (out, warnings, _migrated) = migrate_and_normalize(json!({ "assets": [a], "groups": [] }));
     assert!(
         out["assets"]["byId"].as_object().unwrap().is_empty(),
         "缺失/异型时间戳不得猜测，应隔离"
@@ -166,7 +166,7 @@ fn legacy_null_optional_fields_are_removed() {
     let mut a = asset("la-1");
     a["view"] = json!(null);
     a["groupId"] = json!(null);
-    let (out, _) = migrate_and_normalize(json!({ "assets": [a], "groups": [] }));
+    let (out, _warnings, _migrated) = migrate_and_normalize(json!({ "assets": [a], "groups": [] }));
     let e = &out["assets"]["byId"]["la-1"];
     assert!(e.get("view").is_none(), "null view 应删除");
     assert!(e.get("groupId").is_none(), "null groupId 应删除");
@@ -176,7 +176,7 @@ fn legacy_null_optional_fields_are_removed() {
 fn legacy_prop_kind_rewritten_to_wardrobe() {
     let mut a = asset("la-1");
     a["kind"] = json!("prop");
-    let (out, warnings) = migrate_and_normalize(json!({ "assets": [a], "groups": [] }));
+    let (out, warnings, _migrated) = migrate_and_normalize(json!({ "assets": [a], "groups": [] }));
     assert_eq!(out["assets"]["byId"]["la-1"]["kind"], "wardrobe");
     assert!(warnings
         .iter()
@@ -189,7 +189,7 @@ fn legacy_prop_kind_rewritten_to_wardrobe() {
 fn name_is_trimmed_and_saved_normalized() {
     let mut a = asset("la-1");
     a["name"] = json!("  林晚  ");
-    let (out, warnings) = migrate_and_normalize(json!({ "assets": [a], "groups": [] }));
+    let (out, warnings, _migrated) = migrate_and_normalize(json!({ "assets": [a], "groups": [] }));
     assert_eq!(out["assets"]["byId"]["la-1"]["name"], "林晚");
     assert!(warnings.iter().any(|w| w.contains("name")));
 }
@@ -198,7 +198,7 @@ fn name_is_trimmed_and_saved_normalized() {
 fn entry_with_invalid_required_name_is_isolated() {
     let mut a = asset("la-1");
     a["name"] = json!("   ");
-    let (out, warnings) = migrate_and_normalize(json!({ "assets": [a], "groups": [] }));
+    let (out, warnings, _migrated) = migrate_and_normalize(json!({ "assets": [a], "groups": [] }));
     assert!(out["assets"]["byId"].as_object().unwrap().is_empty());
     assert!(warnings.iter().any(|w| w.contains("隔离")));
 }
@@ -207,7 +207,7 @@ fn entry_with_invalid_required_name_is_isolated() {
 fn unknown_kind_isolates_entry() {
     let mut a = asset("la-1");
     a["kind"] = json!("robot");
-    let (out, _) = migrate_and_normalize(json!({ "assets": [a], "groups": [] }));
+    let (out, _warnings, _migrated) = migrate_and_normalize(json!({ "assets": [a], "groups": [] }));
     assert!(out["assets"]["byId"].as_object().unwrap().is_empty());
 }
 
@@ -219,7 +219,7 @@ fn tags_normalized_deduped_capped_at_16() {
     tags.push(json!("  ")); // 空白
     tags.push(json!(123)); // 异型
     a["tags"] = json!(tags);
-    let (out, warnings) = migrate_and_normalize(json!({ "assets": [a], "groups": [] }));
+    let (out, warnings, _migrated) = migrate_and_normalize(json!({ "assets": [a], "groups": [] }));
     let out_tags = out["assets"]["byId"]["la-1"]["tags"].as_array().unwrap();
     assert_eq!(out_tags.len(), 16, "超过 16 项只留前 16：{out_tags:?}");
     assert_eq!(out_tags[0], "t0");
@@ -230,7 +230,7 @@ fn tags_normalized_deduped_capped_at_16() {
 fn non_array_tags_reset_to_empty() {
     let mut a = asset("la-1");
     a["tags"] = json!("cyberpunk");
-    let (out, warnings) = migrate_and_normalize(json!({ "assets": [a], "groups": [] }));
+    let (out, warnings, _migrated) = migrate_and_normalize(json!({ "assets": [a], "groups": [] }));
     assert_eq!(out["assets"]["byId"]["la-1"]["tags"], json!([]));
     assert!(warnings.iter().any(|w| w.contains("tags")));
 }
@@ -239,7 +239,7 @@ fn non_array_tags_reset_to_empty() {
 fn invalid_view_is_stripped_with_warning() {
     let mut a = asset("la-1");
     a["view"] = json!("aerial");
-    let (out, warnings) = migrate_and_normalize(json!({ "assets": [a], "groups": [] }));
+    let (out, warnings, _migrated) = migrate_and_normalize(json!({ "assets": [a], "groups": [] }));
     assert!(out["assets"]["byId"]["la-1"].get("view").is_none());
     assert!(warnings.iter().any(|w| w.contains("view")));
 }
@@ -248,7 +248,7 @@ fn invalid_view_is_stripped_with_warning() {
 fn valid_view_is_kept() {
     let mut a = asset("la-1");
     a["view"] = json!("front");
-    let (out, _) = migrate_and_normalize(json!({ "assets": [a], "groups": [] }));
+    let (out, _warnings, _migrated) = migrate_and_normalize(json!({ "assets": [a], "groups": [] }));
     assert_eq!(out["assets"]["byId"]["la-1"]["view"], "front");
 }
 
@@ -258,7 +258,7 @@ fn valid_view_is_kept() {
 fn group_id_pointing_to_missing_group_is_stripped() {
     let mut a = asset("la-1");
     a["groupId"] = json!("g-ghost");
-    let (out, warnings) = migrate_and_normalize(json!({ "assets": [a], "groups": [] }));
+    let (out, warnings, _migrated) = migrate_and_normalize(json!({ "assets": [a], "groups": [] }));
     assert!(out["assets"]["byId"]["la-1"].get("groupId").is_none());
     assert!(warnings.iter().any(|w| w.contains("groupId")));
 }
@@ -271,7 +271,7 @@ fn group_id_with_kind_mismatch_is_stripped() {
         "assets": [a],
         "groups": [group("g-1", "location")], // kind 不一致
     });
-    let (out, warnings) = migrate_and_normalize(index);
+    let (out, warnings, _migrated) = migrate_and_normalize(index);
     assert!(out["assets"]["byId"]["la-1"].get("groupId").is_none());
     assert!(warnings
         .iter()
@@ -286,7 +286,7 @@ fn group_id_with_matching_kind_is_kept() {
         "assets": [a],
         "groups": [group("g-1", "character")],
     });
-    let (out, warnings) = migrate_and_normalize(index);
+    let (out, warnings, _migrated) = migrate_and_normalize(index);
     assert_eq!(out["assets"]["byId"]["la-1"]["groupId"], "g-1");
     assert!(warnings.is_empty(), "合法编组不应警告：{warnings:?}");
 }
@@ -298,7 +298,7 @@ fn invalid_group_entry_is_isolated_then_member_group_id_stripped() {
     let mut a = asset("la-1");
     a["groupId"] = json!("g-1");
     let index = json!({ "assets": [a], "groups": [bad_group] });
-    let (out, warnings) = migrate_and_normalize(index);
+    let (out, warnings, _migrated) = migrate_and_normalize(index);
     assert!(
         out["groups"]["byId"].as_object().unwrap().is_empty(),
         "组应被隔离"
@@ -308,4 +308,112 @@ fn invalid_group_entry_is_isolated_then_member_group_id_stripped() {
         "组隔离后 groupId 悬空应剥离"
     );
     assert!(!warnings.is_empty());
+}
+
+// ---- 评审修复（PR #33 第二轮）：Record 键权威、空白组映射、组 prop kind ----
+
+/// Record 键权威（§7.2 / §11.1 共同规则）：已迁移 Record 的键与内嵌 id 不
+/// 一致时以记录键为准改写值内 id——键是引用解析的权威，改写保住既有引用。
+#[test]
+fn record_key_wins_over_mismatched_embedded_id() {
+    let mut a = asset("la-2"); // 内嵌 id 与键不一致
+    a["name"] = json!("kept");
+    let index = json!({
+        "assets": { "byId": { "la-1": a } }, // 键 la-1，内嵌 id la-2
+        "groups": { "byId": {} },
+    });
+    let (out, warnings, _migrated) = migrate_and_normalize(index);
+    let by_id = out["assets"]["byId"].as_object().unwrap();
+    assert!(by_id.contains_key("la-1"), "权威键 la-1 应保留：{by_id:?}");
+    assert_eq!(by_id["la-1"]["id"], "la-1", "内嵌 id 应以键为准改写");
+    assert!(!by_id.contains_key("la-2"), "不得按内嵌 id 重新键化");
+    assert!(
+        warnings.iter().any(|w| w.contains("id")),
+        "应警告键/id 不一致"
+    );
+}
+
+/// 组 Record 键/id 不一致同样以键为准，引用原键的资产 groupId 不丢。
+#[test]
+fn group_record_key_wins_and_member_reference_survives() {
+    let mut g = group("g-2", "character"); // 内嵌 id 与键不一致
+    g["name"] = json!("林晚");
+    let mut a = asset("la-1");
+    a["groupId"] = json!("g-1"); // 引用权威键 g-1
+    let index = json!({
+        "assets": { "byId": { "la-1": a } },
+        "groups": { "byId": { "g-1": g } }, // 键 g-1，内嵌 id g-2
+    });
+    let (out, _warnings, _migrated) = migrate_and_normalize(index);
+    assert_eq!(
+        out["groups"]["byId"]["g-1"]["id"], "g-1",
+        "组内嵌 id 以键为准"
+    );
+    assert_eq!(
+        out["assets"]["byId"]["la-1"]["groupId"], "g-1",
+        "引用权威键的 groupId 应保留"
+    );
+}
+
+/// 单一空白 id 组的映射传入资产侧（§7.2）：资产 groupId 精确匹配该空白值
+/// 时改写为重发后的组 id，编组不丢。
+#[test]
+fn single_blank_group_mapping_rewrites_matching_group_id() {
+    let mut g = group("g-x", "character");
+    g["id"] = json!("   "); // 空白组 id
+    let mut a = asset("la-1");
+    a["groupId"] = json!("   "); // 精确匹配该空白值
+    let index = json!({ "assets": [a], "groups": [g] });
+    let (out, warnings, _migrated) = migrate_and_normalize(index);
+    let groups = out["groups"]["byId"].as_object().unwrap();
+    assert_eq!(groups.len(), 1, "空白组应重发保留");
+    let new_gid = groups.keys().next().unwrap();
+    assert_eq!(
+        out["assets"]["byId"]["la-1"]["groupId"].as_str().unwrap(),
+        new_gid.as_str(),
+        "空白 groupId 应改写为重发组 id"
+    );
+    assert!(warnings.iter().any(|w| w.contains("id")));
+}
+
+/// 多个同值空白组映射歧义（§7.2）：删除相关 groupId 并警告，不猜测。
+#[test]
+fn multiple_blank_groups_drop_ambiguous_group_id() {
+    let mut g1 = group("g-x", "character");
+    g1["id"] = json!("  ");
+    let mut g2 = group("g-y", "character");
+    g2["id"] = json!("  ");
+    let mut a = asset("la-1");
+    a["groupId"] = json!("  "); // 同值空白，映射歧义
+    let index = json!({ "assets": [a], "groups": [g1, g2] });
+    let (out, warnings, _migrated) = migrate_and_normalize(index);
+    assert_eq!(out["groups"]["byId"].as_object().unwrap().len(), 2);
+    assert!(
+        out["assets"]["byId"]["la-1"].get("groupId").is_none(),
+        "歧义空白 groupId 应删除"
+    );
+    assert!(warnings
+        .iter()
+        .any(|w| w.contains("歧义") || w.contains("groupId")));
+}
+
+/// 组的 prop kind 与资产同款迁移为 wardrobe（§7.2 prop→wardrobe）：组不被
+/// 隔离，其 wardrobe 成员的 groupId 保留。
+#[test]
+fn legacy_prop_group_migrates_to_wardrobe_keeping_members() {
+    let mut a = asset("la-1");
+    a["kind"] = json!("prop"); // 资产 prop → wardrobe
+    a["groupId"] = json!("g-1");
+    let mut g = group("g-1", "prop"); // 组 prop → wardrobe
+    let index = json!({ "assets": [a], "groups": [g] });
+    let (out, warnings, _migrated) = migrate_and_normalize(index);
+    assert_eq!(
+        out["groups"]["byId"]["g-1"]["kind"], "wardrobe",
+        "组 prop 应迁为 wardrobe"
+    );
+    assert_eq!(
+        out["assets"]["byId"]["la-1"]["groupId"], "g-1",
+        "成员 groupId 应保留（kind 已同步一致）"
+    );
+    assert!(warnings.iter().any(|w| w.contains("prop")));
 }

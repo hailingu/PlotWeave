@@ -98,7 +98,7 @@ const memoryAssets = new Map<string, { asset: LibraryAsset; blob: Blob }>()
 async function tauriList(): Promise<LibraryAsset[]> {
   const { invoke } = await import('@tauri-apps/api/core')
   const index = await invoke<{
-    assets?: unknown[]
+    assets?: { byId?: Record<string, unknown> }
     warnings?: unknown[]
     cleanupPending?: unknown[]
   }>('library_list')
@@ -107,7 +107,11 @@ async function tauriList(): Promise<LibraryAsset[]> {
   if (Array.isArray(index.cleanupPending) && index.cleanupPending.length > 0) {
     console.warn('[Library] 删除隔离区待清理：', index.cleanupPending)
   }
-  return (Array.isArray(index.assets) ? index.assets : [])
+  // §7.2 Record 形状：assets.byId 的值即条目（issue #29 PR 1，评审修复——
+  // 旧数组形状已迁移，前端必须按 byId 读取，否则全部资产被隐藏）
+  const byId = index.assets?.byId
+  const entries = byId && typeof byId === 'object' ? Object.values(byId) : []
+  return entries
     .map((a) => normalizeAsset(a as RawAsset))
     .filter((a): a is LibraryAsset => a !== null)
 }

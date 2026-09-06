@@ -418,8 +418,12 @@ pub(super) fn restore_from_trash(
 /// 不改 library.json——索引的权威状态不受恢复影响。
 pub(crate) fn recover(library: &CapDir) -> Result<Recovery, String> {
     // 锁由调用方在操作边界持有（library_op_lock）——recover 不再自持
-    let (index, _) = read_index_capped(library)?;
+    // 迁移/归一化警告并入 recovery.warnings（评审修复，PR #33 第二轮）：迁移
+    // 检出即落盘，脏索引在 recover 触发的首次读取即被净化，其隔离/修复诊断
+    // 必须随命令响应可见，不得因落盘而静默吞掉
+    let (index, index_warnings) = read_index_capped(library)?;
     let mut recovery = Recovery::default();
+    recovery.warnings.extend(index_warnings);
     let (entries, malformed) = read_journal(library, &mut recovery.warnings);
     if malformed {
         recovery.read_only = true;

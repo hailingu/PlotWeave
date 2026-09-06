@@ -155,6 +155,11 @@ pub(crate) fn open_parent_dir(
 /// 实现）：no-follow 归类 → 大小上限内读取 → JSON 解析 → 兼容迁移 + 完整
 /// 归一化（[`crate::library_index`]，§7.2）——旧数组形状迁移为 Record、
 /// 非法条目隔离出内存索引并逐条返回警告，索引缺失回退默认空索引。
+/// 迁移/修复发生时把归一化结果原子落盘（评审修复，PR #33 第二轮）：重发的
+/// id 与翻转的 Record 形状随读持久化，后续媒体/删除/更新命令读到同一身份，
+/// 不会出现「list 显示的 id 在下一次读取时已变化」的跨读漂移。本函数总在
+/// 持有 `library_op_lock`/`library_file_lock` 的命令上下文内被调用，落盘
+/// 与读取同锁域。
 pub(crate) fn read_index_capped(library: &CapDir) -> Result<(Value, Vec<String>), String> {
     match read_index_text_capped(library)? {
         None => Ok((default_index(), Vec::new())),
@@ -175,7 +180,12 @@ pub(crate) fn read_index_capped(library: &CapDir) -> Result<(Value, Vec<String>)
                     INDEX_MAX_BYTES / (1024 * 1024)
                 ));
             }
-            Ok(crate::library_index::migrate_and_normalize(index))
+            let (normalized, warnings, migrated) =
+                crate::library_index::migrate_and_normalize(index);
+            if migrated {
+                write_index(library, &normalized)?;
+            }
+            Ok((normalized, warnings))
         }
     }
 }
