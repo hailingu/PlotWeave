@@ -7,6 +7,7 @@
 //! 信任链）：脏索引条目在读取时白名单隔离，删除经 `library/assets/` 专用根
 //! 句柄逐组件 no-follow 定位——索引自身与库外路径不可达（issue #17）。
 
+use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
@@ -347,15 +348,81 @@ pub(crate) fn open_media_with(
     Ok((mime, file))
 }
 
+/// 并发媒体读取上限（评审修复，PR #32 第四轮）：多个近 20 MiB 大图同时
+/// 进入视口时，每个并发读取各自分配缓冲，N×20 MiB 的瞬时峰值可能拖垮
+/// 进程——读取并发数收敛到 4，峰值 ≤ 4×20 MiB；库写入/删除/元信息不受
+/// 影响（闸门只作用于媒体字节读取）。
+const MEDIA_READ_CONCURRENCY: usize = 4;
+
+/// 并发媒体读取闸门：Mutex + Condvar 的计数信号量（同步 spawn_blocking
+/// 上下文，不用 tokio::sync::Semaphore）。许可随 [`MediaReadPermit`] drop
+/// 释放。
+pub(crate) struct MediaReadGate {
+    max: usize,
+    held: Mutex<usize>,
+    available: Condvar,
+}
+
+static MEDIA_READ_GATE: OnceLock<MediaReadGate> = OnceLock::new();
+
+/// 释放许可：归还计数并唤醒一个等待者。
+impl Drop for MediaReadPermit<'_> {
+    fn drop(&mut self) {
+        let mut held = self.0.held.lock().expect("媒体读取闸门被污染");
+        *held -= 1;
+        self.0.available.notify_one();
+    }
+}
+
+/// 一个并发媒体读取许可；drop 时归还。
+pub(crate) struct MediaReadPermit<'a>(&'a MediaReadGate);
+
+impl MediaReadGate {
+    fn new(max: usize) -> Self {
+        Self {
+            max,
+            held: Mutex::new(0),
+            available: Condvar::new(),
+        }
+    }
+
+    fn gate() -> &'static MediaReadGate {
+        MEDIA_READ_GATE.get_or_init(|| MediaReadGate::new(MEDIA_READ_CONCURRENCY))
+    }
+
+    /// 尝试获取许可：满额即返回 None（仅测试：确定性验证上限语义）。
+    #[cfg(test)]
+    fn try_acquire(&self) -> Option<MediaReadPermit<'_>> {
+        let mut held = self.held.lock().expect("媒体读取闸门被污染");
+        if *held >= self.max {
+            return None;
+        }
+        *held += 1;
+        Some(MediaReadPermit(self))
+    }
+
+    /// 阻塞获取许可：满额时等待释放。
+    fn acquire(&self) -> MediaReadPermit<'_> {
+        let mut held = self.held.lock().expect("媒体读取闸门被污染");
+        while *held >= self.max {
+            held = self.available.wait(held).expect("媒体读取闸门被污染");
+        }
+        *held += 1;
+        MediaReadPermit(self)
+    }
+}
+
 /// 锁外的受限字节读取（≤ ASSET_MAX_BYTES）：消费 [`open_media_with`] 返回
-/// 的已身份绑定句柄。POSIX 语义下已打开句柄的内容读取稳定——删除事务的
-/// 隔离 rename 不影响该句柄，故无需持锁。
+/// 的已身份绑定句柄，读取并发经全局闸门收敛（见
+/// [`MEDIA_READ_CONCURRENCY`]）。POSIX 语义下已打开句柄的内容读取稳定——
+/// 删除事务的隔离 rename 不影响该句柄，故无需持锁。
 pub(crate) fn read_media_capped(
     id: &str,
     mime: String,
     file: cap_std::fs::File,
 ) -> Result<(String, Vec<u8>), String> {
     use std::io::Read;
+    let _permit = MediaReadGate::gate().acquire();
     let mut bytes = Vec::new();
     file.take((ASSET_MAX_BYTES + 1) as u64)
         .read_to_end(&mut bytes)

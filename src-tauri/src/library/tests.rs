@@ -741,6 +741,21 @@ fn media_bytes_refuses_symlinked_final_component() {
     cleanup(&root);
 }
 
+/// 并发媒体读取闸门（评审修复）：并发读取数受上限约束，释放后可复用——
+/// 防多数近 20 MiB 大图同时进视口时的 N×20 MiB 瞬时缓冲峰值。
+#[test]
+fn media_read_gate_bounds_concurrent_reads() {
+    let gate = MediaReadGate::new(2);
+    let a = gate.try_acquire().expect("第一个许可应可获取");
+    let b = gate.try_acquire().expect("第二个许可应可获取");
+    assert!(gate.try_acquire().is_none(), "超出并发上限应拒绝");
+    drop(b);
+    let c = gate.try_acquire().expect("释放后应可再获取");
+    drop(a);
+    drop(c);
+    assert!(gate.try_acquire().is_some(), "全部释放后应可获取");
+}
+
 /// 锁外消费已绑定句柄（评审修复，锁作用域收窄）：open_media_with 在锁内
 /// 返回身份绑定句柄后，即便媒体随即被删除事务移走，read_media_capped 仍
 /// 从已打开句柄读到内容——字节读取不依赖也不需要库锁。
