@@ -736,6 +736,20 @@ fn media_bytes_refuses_symlinked_final_component() {
     cleanup(&root);
 }
 
+/// 404 折叠不得隐匿失败（评审修复）：后端诊断文本带 `[library]` 标签并
+/// 携带原始原因，脏数据与普通缺失可区分；webview 侧仍只收非敏感 404。
+#[test]
+fn media_failure_diagnostic_carries_cause_with_label() {
+    let text = media_failure_diagnostic("资产 la-1 的媒体文件不存在");
+    assert!(text.starts_with("[library]"), "诊断须带模块标签：{text}");
+    assert!(text.contains("la-1"), "诊断须携带原始原因：{text}");
+    // 响应映射保持非敏感：404 正文仍为固定文案
+    let miss = media_http_response(Err("资产 la-1 处于删除事务冲突期，媒体不可用".into()));
+    assert_eq!(miss.status(), tauri::http::StatusCode::NOT_FOUND);
+    let body = String::from_utf8(miss.into_body()).expect("404 正文是 UTF-8");
+    assert_eq!(body, "媒体不可用", "404 正文不得携带原因");
+}
+
 /// 响应映射：命中 → 200 + 索引 mime；任何失败 → 404（不向 webview 泄露
 /// 错误种类）。
 #[test]

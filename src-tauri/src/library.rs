@@ -353,6 +353,14 @@ pub(crate) fn media_bytes_with(
     Ok((mime, bytes))
 }
 
+/// 404 的后端诊断文本（评审修复，复用 store 的 eprintln 结构化诊断约定，
+/// 见 store/commands.rs）：webview 只收非敏感 404 固定文案，原始原因带
+/// `[library]` 标签进本机诊断日志——脏数据/文件缺失与普通失败可区分，
+/// 失败不得隐匿（AGENTS.md 不得隐匿失败硬性规则）。
+fn media_failure_diagnostic(err: &str) -> String {
+    format!("[library] 库媒体请求失败：{err}")
+}
+
 /// 响应映射（句柄域测试与协议处理器共用）：命中 → 200 + 索引 mime；
 /// 任何失败 → 404 纯文本——不区分错误种类，避免向 webview 泄露盘面细节。
 fn media_http_response(
@@ -378,7 +386,8 @@ fn media_http_response(
 
 /// `pwmedia` 协议处理器（lib.rs 注册；在 spawn_blocking 线程执行）：解析
 /// 请求 → 锁内按当前日志/索引解析 id → 句柄链读字节 → 响应。§7.1 每次
-/// 请求重新解析，目录项在列表后被替换也无法越出资产根。
+/// 请求重新解析，目录项在列表后被替换也无法越出资产根。失败向 webview
+/// 折叠为非敏感 404，原始原因经 [`media_failure_diagnostic`] 进本机日志。
 pub(crate) fn handle_media_request(
     app: &AppHandle,
     uri: &tauri::http::Uri,
@@ -389,6 +398,9 @@ pub(crate) fn handle_media_request(
         let _file_lock = library_file_lock(&library)?;
         media_bytes_with(&library, &id)
     });
+    if let Err(e) = &result {
+        eprintln!("{}", media_failure_diagnostic(e));
+    }
     media_http_response(result)
 }
 
