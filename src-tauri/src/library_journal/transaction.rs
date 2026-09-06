@@ -281,9 +281,7 @@ fn quarantine_conflict_error(entry: &JournalEntry, verdict: &TrashVerdict) -> St
 /// 导入前的冲突期隔离检查（§7.2）：日志只读态与冲突 assetId 均拒绝服务。
 pub(crate) fn ensure_importable(library: &CapDir, library_asset_id: &str) -> Result<(), String> {
     let recovery = recover(library)?;
-    if recovery.read_only {
-        return Err("删除日志异常，库写入/删除已暂停：须人工修复 asset-delete-journal.json".into());
-    }
+    // 只读态只暂停写入/删除（§7.2），导入是读取路径——不阻断
     if recovery.conflicted.iter().any(|c| c == library_asset_id) {
         return Err(format!(
             "库资产 {library_asset_id} 处于删除事务冲突期，拒绝导入"
