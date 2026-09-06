@@ -570,3 +570,56 @@ fn genuinely_missing_source_still_defaults_to_upload() {
     assert_eq!(out["assets"]["byId"]["la-1"]["source"], "upload");
     assert!(warnings.iter().any(|w| w.contains("source")));
 }
+
+// ---- 评审修复（PR #33 第五轮）：键预留、逐拼写空白映射、只读态 ----
+
+/// 权威键先于回退 id 预留（评审修复）：无效键条目的内嵌 id 不得抢占后面才
+/// 出现的合法权威键——否则真实资产被重新键化，媒体/删除按 id 会作用到错误
+/// 资产。
+#[test]
+fn fallback_embedded_id_cannot_claim_reserved_authoritative_key() {
+    let mut imposter = asset("la-1");
+    imposter["name"] = json!("imposter"); // 无效键 "!"，内嵌 id la-1
+    let mut real = asset("la-1");
+    real["name"] = json!("real"); // 权威键 la-1
+    let index = json!({
+        "assets": { "byId": { "!": imposter, "la-1": real } },
+        "groups": { "byId": {} },
+    });
+    let (out, warnings, _) = migrate_and_normalize(index);
+    let by_id = out["assets"]["byId"].as_object().unwrap();
+    assert_eq!(
+        by_id["la-1"]["name"], "real",
+        "权威键 la-1 必须归真实资产：{by_id:?}"
+    );
+    assert_eq!(by_id.len(), 2, "imposter 条目应重发保留：{by_id:?}");
+    assert!(
+        warnings.iter().any(|w| w.contains("重发")),
+        "抢占失败应告警重发：{warnings:?}"
+    );
+}
+
+/// 空白映射逐拼写追踪（评审修复）：不同空白拼写（"" 与 " "）各自唯一确定，
+/// 不得因「存在多个空白组」而全局丢弃——§7.2 歧义仅指「多个同值空白组」。
+#[test]
+fn distinct_blank_spellings_each_keep_their_mapping() {
+    let mut g_empty = group("g-a", "character");
+    g_empty["id"] = json!(""); // 空串组
+    let mut g_space = group("g-b", "character");
+    g_space["id"] = json!(" "); // 单空格组
+    let mut a1 = asset("la-1");
+    a1["groupId"] = json!(""); // 引用空串组
+    let mut a2 = asset("la-2");
+    a2["groupId"] = json!(" "); // 引用单空格组
+    let index = json!({ "assets": [a1, a2], "groups": [g_empty, g_space] });
+    let (out, _w, _m) = migrate_and_normalize(index);
+    let groups = out["groups"]["byId"].as_object().unwrap();
+    assert_eq!(groups.len(), 2, "两组都应重发保留");
+    let gid1 = out["assets"]["byId"]["la-1"]["groupId"].as_str().unwrap();
+    let gid2 = out["assets"]["byId"]["la-2"]["groupId"].as_str().unwrap();
+    assert!(
+        groups.contains_key(gid1) && groups.contains_key(gid2),
+        "两个确定性映射都应改写成功：{gid1} / {gid2}"
+    );
+    assert_ne!(gid1, gid2, "不同拼写各自映射到自己的组，不得混同");
+}

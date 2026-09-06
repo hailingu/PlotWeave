@@ -53,8 +53,23 @@ pub fn library_list(app: AppHandle) -> Result<Value, String> {
     let library = library_root(&app)?;
     let _op = library_op_lock();
     let _file_lock = library_file_lock(&library)?;
-    let mut recovery = crate::library_journal::recover(&library)?;
-    let (mut index, mut warnings) = read_index_capped(&library)?;
+    let (mut index, warnings) = list_assets_with(&library)?;
+    index["warnings"] = json!(warnings);
+    Ok(index)
+}
+
+/// 列表读取内核（句柄域，`library_list` 与测试共用）：先恢复删除日志，
+/// 再按只读态分流读取——日志异型（只读告警态）用不落盘读取，索引保持
+/// 原始字节（评审修复，PR #33 第五轮：只读态下迁移落盘会改写索引）；迁移
+/// 警告与冲突期标记随结果返回。
+pub(crate) fn list_assets_with(library: &cap_std::fs::Dir) -> Result<(Value, Vec<String>), String> {
+    let mut recovery = crate::library_journal::recover(library)?;
+    let (mut index, mut warnings) = if recovery.read_only {
+        let (idx, w, _) = crate::library_fs::read_index_normalized(library)?;
+        (idx, w)
+    } else {
+        read_index_capped(library)?
+    };
     warnings.append(&mut recovery.warnings);
     for id in &recovery.conflicted {
         if let Some(e) = index["assets"]["byId"].get_mut(id) {
@@ -62,9 +77,8 @@ pub fn library_list(app: AppHandle) -> Result<Value, String> {
         }
         warnings.push(format!("资产 {id} 处于删除事务冲突期，暂不可用"));
     }
-    index["warnings"] = json!(warnings);
     index["cleanupPending"] = json!(recovery.cleanup_pending);
-    Ok(index)
+    Ok((index, warnings))
 }
 
 /// 导入资产内核（句柄域）：mime 信任边界（trim + 小写后必须规范形）、媒体
@@ -308,7 +322,14 @@ fn resolve_media_entry_with(
     if recovery.conflicted.iter().any(|c| c == id) {
         return Err(format!("资产 {id} 处于删除事务冲突期，媒体不可用"));
     }
-    let (index, _) = read_index_capped(library)?;
+    // 只读告警态用不落盘读取（评审修复，PR #33 第五轮）：媒体读取本身不受限，
+    // 但不得在只读态把迁移结果写回 library.json
+    let (index, _) = if recovery.read_only {
+        let (idx, w, _) = crate::library_fs::read_index_normalized(library)?;
+        (idx, w)
+    } else {
+        read_index_capped(library)?
+    };
     let entry = index["assets"]["byId"]
         .get(id)
         .ok_or_else(|| format!("资产不存在：{id}"))?;

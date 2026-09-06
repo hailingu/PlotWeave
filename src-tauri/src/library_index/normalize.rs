@@ -50,7 +50,7 @@ pub(crate) fn migrate_and_normalize(index: Value) -> (Value, Vec<String>, bool) 
     let assets = normalize_assets(
         index.get("assets").cloned(),
         &groups,
-        blank_group_map.as_ref(),
+        &blank_group_map,
         &mut warnings,
     );
     let migrated = is_legacy || !warnings.is_empty();
@@ -105,18 +105,33 @@ fn take_entries(
 /// **verbatim**（不 trim——`"g"` 与 `" g "` 是不同 opaque id，trim 会把
 /// 二者坍缩、迫使一组重发并把引用错接）；键合法且未占用即以键为准、内嵌 id
 /// 改写为键。数组或 Record 键不可用时按内嵌 id 键化——重复 id 保留文档序
-/// 首项、后续重发；空白/缺失/非法 id 重发。多个空白条目映射歧义（§7.2 删除
-/// 相关引用），返回 None。
+/// 首项、后续重发；空白/缺失/非法 id 重发。空白映射逐拼写追踪：仅**同一
+/// 拼写**出现多个空白条目时该拼写映射歧义（§7.2「多个同值空白组」），不同
+/// 拼写各自确定（评审修复，PR #33 第五轮）。
 fn keyify(
     raw: Option<Value>,
     bucket: &str,
     warnings: &mut Vec<String>,
-) -> (Map<String, Value>, Option<(String, String)>) {
+) -> (
+    Map<String, Value>,
+    std::collections::HashMap<String, String>,
+) {
     let entries = take_entries(raw, bucket, warnings);
+    // 第一遍：预留全部合法权威键（评审修复，PR #33 第五轮）——否则无效键
+    // 条目的内嵌 id 可抢占后面才出现的权威键，真实资产被重新键化、媒体/删除
+    // 按 id 操作时会作用到错误资产
+    let mut reserved: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for (key, _) in &entries {
+        if let Some(k) = key.as_deref() {
+            if !k.is_empty() && validate_asset_id(k).is_ok() {
+                reserved.insert(k.to_string());
+            }
+        }
+    }
     let mut map = Map::new();
-    // 单一空白条目的 (原始拼写, 重发 id)；多于一个则映射歧义置 None
-    let mut blank: Option<(String, String)> = None;
-    let mut blank_count = 0usize;
+    // 空白拼写 → (重发 id, 同拼写出现次数)；仅出现一次的拼写映射确定
+    let mut blank_spells: std::collections::HashMap<String, (String, usize)> =
+        std::collections::HashMap::new();
     for (key, entry) in entries {
         let Some(mut e) = entry.as_object().cloned() else {
             warnings.push(format!("资产索引 {bucket} 含非对象成员，已隔离"));
@@ -126,32 +141,41 @@ fn keyify(
         // 「真实空白字符串 id」（Some——其精确拼写可被引用，评审修复，PR #33
         // 第四轮）
         let embedded_id = e.get("id").and_then(Value::as_str);
-        let (final_id, blank_spelling) = assign_key(key, embedded_id, &map, bucket, warnings);
+        let (final_id, blank_spelling) =
+            assign_key(key, embedded_id, &map, &reserved, bucket, warnings);
         if let Some(spelling) = blank_spelling {
-            blank_count += 1;
-            if blank_count == 1 {
-                blank = Some((spelling, final_id.clone()));
+            match blank_spells.get_mut(&spelling) {
+                Some((_, n)) => *n += 1,
+                None => {
+                    blank_spells.insert(spelling, (final_id.clone(), 1));
+                }
             }
         }
         e.insert("id".into(), json!(final_id));
         map.insert(final_id, Value::Object(e));
     }
-    let blank_map = if blank_count == 1 { blank } else { None };
+    let blank_map: std::collections::HashMap<String, String> = blank_spells
+        .into_iter()
+        .filter(|(_, (_, n))| *n == 1)
+        .map(|(spelling, (id, _))| (spelling, id))
+        .collect();
     (map, blank_map)
 }
 
 /// 决定条目的最终 Record 键与空白重发信息。`embedded_id` 为 None 表示缺失/
 /// 非字符串 id（不产生空白映射）；Some 为真实字符串 id。返回 (最终键, 若因
 /// 空白字符串 id 重发则携带其原始拼写——供组桶精确匹配引用)。键 verbatim
-/// 不 trim。
+/// 不 trim；回退 id 不得占用预留权威键。
 fn assign_key(
     key: Option<String>,
     embedded_id: Option<&str>,
     map: &Map<String, Value>,
+    reserved: &std::collections::HashSet<String>,
     bucket: &str,
     warnings: &mut Vec<String>,
 ) -> (String, Option<String>) {
-    // Record 权威键优先且原样保留（不 trim）：键合法且未占用即以键为准
+    // Record 权威键优先且原样保留（不 trim）：键合法且未被先前条目占用即
+    // 以键为准——合法权威键彼此唯一（JSON 对象键去重），预留集只约束回退
     if let Some(k) = key.as_deref() {
         if !k.is_empty() && validate_asset_id(k).is_ok() && !map.contains_key(k) {
             if Some(k) != embedded_id {
@@ -165,41 +189,52 @@ fn assign_key(
     // 缺失/非字符串 id：从未可被 groupId 引用，重发但不产生空白映射
     let Some(embedded_raw) = embedded_id else {
         warnings.push(format!("资产索引 {bucket} 缺失/非字符串 id，已重发"));
-        return (fresh_id(map), None);
+        return (fresh_id(map, reserved), None);
     };
     let embedded = embedded_raw.trim();
     let valid_id = !embedded.is_empty() && validate_asset_id(embedded).is_ok();
     if valid_id && !map.contains_key(embedded) {
+        if reserved.contains(embedded) {
+            // 内嵌 id 与（本条目之后才出现的）权威键冲突：不得抢占，重发
+            warnings.push(format!(
+                "资产索引 {bucket} 内嵌 id {embedded} 与权威键冲突，已重发"
+            ));
+            return (fresh_id(map, reserved), None);
+        }
         return (embedded.to_string(), None);
     }
     if valid_id {
         warnings.push(format!(
             "资产索引 {bucket} 含重复 id {embedded}，后续项重发"
         ));
-        return (fresh_id(map), None);
+        return (fresh_id(map, reserved), None);
     }
     // 空白/非法字符串 id 重发：携带原始拼写（未 trim）供组引用精确匹配
     warnings.push(format!("资产索引 {bucket} 含空白/非法 id，已重发"));
-    (fresh_id(map), Some(embedded_raw.to_string()))
+    (fresh_id(map, reserved), Some(embedded_raw.to_string()))
 }
 
-/// 生成桶内未占用的重发 id（用连字符替换前缀，保证 validate_asset_id 通过）。
-fn fresh_id(map: &Map<String, Value>) -> String {
+/// 生成桶内未占用的重发 id（用连字符替换前缀，保证 validate_asset_id 通过；
+/// 同时避开已占用键与预留权威键）。
+fn fresh_id(map: &Map<String, Value>, reserved: &std::collections::HashSet<String>) -> String {
     loop {
         let cand = new_id().replace('-', "_");
-        if !map.contains_key(&cand) {
+        if !map.contains_key(&cand) && !reserved.contains(&cand) {
             return cand;
         }
     }
 }
 
 /// 组桶归一化：键化 → 逐组完整校验（id/name/kind），非法组隔离。返回
-/// (归一化组 map, 单一空白组的 (原始空白拼写, 重发 id) 映射)——映射供资产
-/// 侧改写精确匹配该拼写的 groupId（§7.2 仅一个空白原 id 组时建立映射）。
+/// (归一化组 map, 空白拼写→重发 id 映射)——映射供资产侧改写精确匹配该拼写
+/// 的 groupId（§7.2：仅同一拼写的空白组唯一时映射确定，同值重复即歧义）。
 fn normalize_groups(
     raw: Option<Value>,
     warnings: &mut Vec<String>,
-) -> (Map<String, Value>, Option<(String, String)>) {
+) -> (
+    Map<String, Value>,
+    std::collections::HashMap<String, String>,
+) {
     let (map, blank_map) = keyify(raw, "groups", warnings);
     let mut out = Map::new();
     for (key, g) in map {
@@ -228,7 +263,7 @@ fn normalize_group(g: &Value, warnings: &mut Vec<String>) -> Option<Value> {
 fn normalize_assets(
     raw: Option<Value>,
     groups: &Map<String, Value>,
-    blank_group_map: Option<&(String, String)>,
+    blank_group_map: &std::collections::HashMap<String, String>,
     warnings: &mut Vec<String>,
 ) -> Map<String, Value> {
     let (mut map, _blank) = keyify(raw, "assets", warnings);
@@ -246,24 +281,25 @@ fn normalize_assets(
     out
 }
 
-/// 单一空白组映射改写（§7.2）：仅当资产 groupId **精确等于**被重发组的原
-/// 空白拼写时改写为重发组 id——不同的空白拼写（如 `""` vs `" "`）是不同的
-/// 值，不得错接（评审修复，PR #33 第三轮）；可确定修复的编组不丢。
+/// 空白组映射改写（§7.2）：仅当资产 groupId **精确等于**某被重发组的原空白
+/// 拼写时改写为该组的重发 id——不同空白拼写（如 `""` vs `" "`）是不同的值，
+/// 不得错接（评审修复，PR #33 第三/五轮）；歧义拼写不在映射中，相关
+/// groupId 由归一化剥离并警告；可确定修复的编组不丢。
 fn apply_blank_group_map(
     assets: &mut Map<String, Value>,
-    blank_group_map: Option<&(String, String)>,
+    blank_group_map: &std::collections::HashMap<String, String>,
     warnings: &mut Vec<String>,
 ) {
-    let Some((old_blank, new_gid)) = blank_group_map else {
+    if blank_group_map.is_empty() {
         return;
-    };
+    }
     for (key, a) in assets.iter_mut() {
-        let exact_match = a
+        let matched = a
             .get("groupId")
             .and_then(Value::as_str)
-            .map(|s| s == old_blank)
-            .unwrap_or(false);
-        if exact_match {
+            .and_then(|s| blank_group_map.get(s))
+            .cloned();
+        if let Some(new_gid) = matched {
             a.as_object_mut().unwrap()["groupId"] = json!(new_gid);
             warnings.push(format!(
                 "条目 {key} 的空白 groupId 已改写为重发组 id {new_gid}"
