@@ -35,7 +35,10 @@ pub use validate::verify_project_assets;
 #[cfg(unix)]
 pub(crate) use persist::asset_identity;
 pub(crate) use persist::{asset_stat, atomic_write, open_dir_bound, projects_dir};
-pub(crate) use validate::{is_canonical_mime, is_valid_asset_rel_path, verify_asset_real_path};
+pub(crate) use validate::{
+    is_canonical_mime, is_valid_active_asset_rel_path, is_valid_asset_rel_path,
+    verify_asset_real_path,
+};
 
 // #[tauri::command] 的隐藏包装项（__cmd__* / __tauri_command_name_*）留在
 // 定义模块：一并 re-export，lib.rs 的 generate_handler!(store::…) 注册

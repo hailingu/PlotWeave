@@ -80,7 +80,8 @@ fn delete_refuses_poisoned_index_self_target() {
         &library,
         &json!({ "assets": [entry("la-1", "library.json")], "groups": [] }),
     );
-    let err = delete_asset_with(&cap(&library), "la-1").expect_err("脏条目应拒绝删除");
+    let err = crate::library_journal::delete_asset_transacted(&cap(&library), "la-1")
+        .expect_err("脏条目应拒绝删除");
     assert!(err.contains("资产不存在"), "隔离条目应不可达：{err}");
     assert!(
         fs::metadata(library.join("library.json")).is_ok(),
@@ -100,7 +101,8 @@ fn delete_refuses_absolute_rel_path_outside_library() {
         &library,
         &json!({ "assets": [entry("la-1", victim.to_str().unwrap())], "groups": [] }),
     );
-    let err = delete_asset_with(&cap(&library), "la-1").expect_err("绝对路径应拒绝");
+    let err = crate::library_journal::delete_asset_transacted(&cap(&library), "la-1")
+        .expect_err("绝对路径应拒绝");
     assert!(err.contains("资产不存在"), "隔离条目应不可达：{err}");
     assert_eq!(fs::read(&victim).expect("受害者文件必须幸存"), b"VICTIM");
     cleanup(&root);
@@ -116,7 +118,8 @@ fn delete_refuses_relative_name_outside_assets() {
         &library,
         &json!({ "assets": [entry("la-1", "settings.json")], "groups": [] }),
     );
-    let err = delete_asset_with(&cap(&library), "la-1").expect_err("assets/ 外相对名应拒绝");
+    let err = crate::library_journal::delete_asset_transacted(&cap(&library), "la-1")
+        .expect_err("assets/ 外相对名应拒绝");
     assert!(err.contains("资产不存在"), "隔离条目应不可达：{err}");
     assert_eq!(
         fs::read(library.join("settings.json")).expect("库内非资产文件必须幸存"),
@@ -144,7 +147,8 @@ fn delete_refuses_symlinked_parent_component() {
         &library,
         &json!({ "assets": [entry("la-1", "assets/sub/g.png")], "groups": [] }),
     );
-    let err = delete_asset_with(&cap(&library), "la-1").expect_err("符号链接中间组件应拒绝");
+    let err = crate::library_journal::delete_asset_transacted(&cap(&library), "la-1")
+        .expect_err("符号链接中间组件应拒绝");
     assert!(err.contains("符号链接"), "意外诊断：{err}");
     assert_eq!(
         fs::read(outside.join("g.png")).expect("链外目标文件必须幸存"),
@@ -162,7 +166,8 @@ fn delete_refuses_non_file_target() {
         &library,
         &json!({ "assets": [entry("la-1", "assets/la-1.png")], "groups": [] }),
     );
-    let err = delete_asset_with(&cap(&library), "la-1").expect_err("非普通文件目标应拒绝");
+    let err = crate::library_journal::delete_asset_transacted(&cap(&library), "la-1")
+        .expect_err("非普通文件目标应拒绝");
     assert!(err.contains("不是普通文件"), "意外诊断：{err}");
     assert!(
         fs::metadata(library.join("assets").join("la-1.png")).is_ok(),
@@ -180,7 +185,8 @@ fn delete_treats_missing_parent_dir_as_already_deleted() {
         &library,
         &json!({ "assets": [entry("la-1", "assets/characters/a.png")], "groups": [] }),
     );
-    delete_asset_with(&cap(&library), "la-1").expect("缺失父目录应按已删除幂等成功");
+    crate::library_journal::delete_asset_transacted(&cap(&library), "la-1")
+        .expect("缺失父目录应按已删除幂等成功");
     let raw = fs::read_to_string(library.join("library.json")).expect("读回索引");
     assert!(!raw.contains("la-1"), "索引条目应被移除：{raw}");
     cleanup(&root);
@@ -195,7 +201,7 @@ fn delete_removes_media_updates_index_and_is_idempotent_on_missing_file() {
         &library,
         &json!({ "assets": [entry("la-1", "assets/la-1.png")], "groups": [] }),
     );
-    delete_asset_with(&cap(&library), "la-1").expect("删除应成功");
+    crate::library_journal::delete_asset_transacted(&cap(&library), "la-1").expect("删除应成功");
     assert!(
         fs::metadata(library.join("assets").join("la-1.png")).is_err(),
         "媒体文件应被删除"
@@ -207,7 +213,8 @@ fn delete_removes_media_updates_index_and_is_idempotent_on_missing_file() {
         &library,
         &json!({ "assets": [entry("la-1", "assets/la-1.png")], "groups": [] }),
     );
-    delete_asset_with(&cap(&library), "la-1").expect("缺失媒体应幂等成功");
+    crate::library_journal::delete_asset_transacted(&cap(&library), "la-1")
+        .expect("缺失媒体应幂等成功");
     cleanup(&root);
 }
 
@@ -344,7 +351,8 @@ fn delete_round_trips_large_compact_index_within_cap() {
         raw_len <= crate::library_fs::INDEX_MAX_BYTES,
         "种子索引应可通过读取上限：{raw_len}"
     );
-    delete_asset_with(&cap(&library), "la-0").expect("删除应成功（写回不得因编码膨胀被卡死）");
+    crate::library_journal::delete_asset_transacted(&cap(&library), "la-0")
+        .expect("删除应成功（写回不得因编码膨胀被卡死）");
     assert!(
         fs::metadata(library.join("assets").join("la-0.png")).is_err(),
         "媒体应被删除"
@@ -530,7 +538,8 @@ fn delete_on_dirty_index_returns_warnings() {
             "groups": [],
         }),
     );
-    let result = delete_asset_with(&cap(&library), "la-1").expect("删除应成功");
+    let result = crate::library_journal::delete_asset_transacted(&cap(&library), "la-1")
+        .expect("删除应成功");
     let warnings = result["warnings"].as_array().expect("warnings 应在响应中");
     assert!(
         warnings

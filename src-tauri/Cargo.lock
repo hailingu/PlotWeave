@@ -2850,6 +2850,7 @@ dependencies = [
  "base64 0.22.1",
  "cap-std",
  "keyring",
+ "libc",
  "reqwest 0.12.28",
  "serde",
  "serde_json",

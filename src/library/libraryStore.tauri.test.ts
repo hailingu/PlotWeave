@@ -174,12 +174,64 @@ describe('libraryStore Tauri 路径：updateMeta / remove', () => {
 })
 
 describe('libraryStore Tauri 路径：mediaUrl', () => {
-  it('library_dir_path + 相对路径经 convertFileSrc 合成', async () => {
-    invoke.mockResolvedValue('/Users/x/Library/PlotWeave/library')
+  it('经 library_asset_media_path 逐请求复核后合成（issue #25）', async () => {
+    invoke.mockResolvedValue('/Users/x/Library/PlotWeave/library/assets/la-1.png')
     const { libraryStore } = await load()
     const url = await libraryStore.mediaUrl(entry() as unknown as LibraryAsset)
-    expect(url).toBe(
-      'asset://cvt//Users/x/Library/PlotWeave/library/assets/la-1.png',
-    )
+    expect(url).toBe('asset://cvt//Users/x/Library/PlotWeave/library/assets/la-1.png')
+    expect(invoke.mock.calls[0]).toEqual([
+      'library_asset_media_path',
+      { id: 'la-1', relPath: 'assets/la-1.png' },
+    ])
+  })
+})
+
+describe('libraryStore Tauri 路径：冲突期条目（issue #25）', () => {
+  it('normalizeAsset 保留 conflicted 标记；未标记不引入字段', async () => {
+    invoke.mockResolvedValue({
+      assets: [entry({ conflicted: true }), entry({ id: 'la-2' })],
+    })
+    const { libraryStore } = await load()
+    const list = await libraryStore.list()
+    expect(list[0].conflicted).toBe(true)
+    expect(list[1].conflicted).toBeUndefined()
+  })
+
+  it('冲突期条目的媒体 URL 拒绝服务，不拼接 relPath', async () => {
+    invoke.mockResolvedValue('/Users/x/Library/PlotWeave/library')
+    const { libraryStore } = await load()
+    await expect(
+      libraryStore.mediaUrl({
+        id: 'la-1',
+        relPath: 'assets/la-1.png',
+        conflicted: true,
+      }),
+    ).rejects.toThrow(/冲突期/)
+    expect(invoke.mock.calls).toHaveLength(0)
+  })
+})
+
+describe('libraryStore Tauri 路径：隔离区积压可见性（issue #25 评审）', () => {
+  it('cleanupPending 非空时上报诊断', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    invoke.mockResolvedValue({
+      assets: [entry()],
+      cleanupPending: ['媒体已隔离待清理：assets/la-9.png'],
+    })
+    const { libraryStore } = await load()
+    await libraryStore.list()
+    expect(warn).toHaveBeenCalledWith('[Library] 删除隔离区待清理：', [
+      '媒体已隔离待清理：assets/la-9.png',
+    ])
+    warn.mockRestore()
+  })
+
+  it('cleanupPending 缺失或为空数组不产生额外告警', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    invoke.mockResolvedValue({ assets: [entry()], cleanupPending: [] })
+    const { libraryStore } = await load()
+    await libraryStore.list()
+    expect(warn).not.toHaveBeenCalled()
+    warn.mockRestore()
   })
 })
