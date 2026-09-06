@@ -15,7 +15,7 @@ use crate::library_fs::{
     assets_root, atomic_write_with, ensure_index_size, library_root, read_index_capped,
     validate_asset_id, write_index,
 };
-use crate::library_journal::library_op_lock;
+use crate::library_journal::{library_file_lock, library_op_lock};
 use crate::store::is_canonical_mime;
 use crate::store::is_valid_active_asset_rel_path;
 
@@ -64,6 +64,11 @@ pub fn library_dir_path(app: AppHandle) -> Result<String, String> {
 pub fn library_list(app: AppHandle) -> Result<Value, String> {
     let library = library_root(&app)?;
     let _op = library_op_lock();
+    let _file_lock = library_file_lock(&library)?;
+    let _file_lock = library_file_lock(&library)?;
+    let _file_lock = library_file_lock(&library)?;
+    let _file_lock = library_file_lock(&library)?;
+    let _file_lock = library_file_lock(&library)?;
     let mut recovery = crate::library_journal::recover(&library)?;
     let (mut index, mut warnings) = read_index_capped(&library)?;
     warnings.append(&mut recovery.warnings);
@@ -158,6 +163,11 @@ pub fn library_put(
 ) -> Result<Value, String> {
     let library = library_root(&app)?;
     let _op = library_op_lock();
+    let _file_lock = library_file_lock(&library)?;
+    let _file_lock = library_file_lock(&library)?;
+    let _file_lock = library_file_lock(&library)?;
+    let _file_lock = library_file_lock(&library)?;
+    let _file_lock = library_file_lock(&library)?;
     put_asset_with(&library, &name, &mime, &kind, &bytes)
 }
 
@@ -305,6 +315,11 @@ pub fn library_asset_media_path(
     validate_asset_id(&id)?;
     let library = library_root(&app)?;
     let _op = library_op_lock();
+    let _file_lock = library_file_lock(&library)?;
+    let _file_lock = library_file_lock(&library)?;
+    let _file_lock = library_file_lock(&library)?;
+    let _file_lock = library_file_lock(&library)?;
+    let _file_lock = library_file_lock(&library)?;
     let base = app
         .path()
         .app_data_dir()
@@ -321,6 +336,11 @@ pub fn library_delete(app: AppHandle, id: String) -> Result<Value, String> {
     validate_asset_id(&id)?;
     let library = library_root(&app)?;
     let _op = library_op_lock();
+    let _file_lock = library_file_lock(&library)?;
+    let _file_lock = library_file_lock(&library)?;
+    let _file_lock = library_file_lock(&library)?;
+    let _file_lock = library_file_lock(&library)?;
+    let _file_lock = library_file_lock(&library)?;
     crate::library_journal::delete_asset_transacted(&library, &id)
 }
 
@@ -370,6 +390,11 @@ pub fn library_update_meta(app: AppHandle, id: String, patch: Value) -> Result<V
     validate_meta_patch(&patch)?;
     let library = library_root(&app)?;
     let _op = library_op_lock();
+    let _file_lock = library_file_lock(&library)?;
+    let _file_lock = library_file_lock(&library)?;
+    let _file_lock = library_file_lock(&library)?;
+    let _file_lock = library_file_lock(&library)?;
+    let _file_lock = library_file_lock(&library)?;
     update_meta_with(&library, &id, &patch)
 }
 

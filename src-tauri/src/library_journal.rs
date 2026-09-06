@@ -19,10 +19,10 @@ use crate::store::{atomic_write, is_valid_asset_rel_path, new_id, open_dir_bound
 
 pub(crate) const JOURNAL_FILE_NAME: &str = "asset-delete-journal.json";
 
-/// 库操作互斥锁（issue #25 评审修复）：锁覆盖完整 read/recover/mutate/commit
-/// 边界——删除、导入、更新、媒体解析与列表共用，任一时刻至多一个库操作
-/// 持有索引/日志/媒体的写侧。recover 不再自持锁（否则删除等调用方在
-/// 操作边界持锁后进入 recover 会死锁）。
+/// 库操作互斥锁（issue #25 评审修复）：进程内 Mutex（同进程并发删除/导入/
+/// 更新的串行）+ 跨进程文件锁（flock on journal 文件——两个 Tauri 进程各自
+/// 持有独立内存锁，文件系统层串行化完整事务）。锁覆盖完整 read/recover/
+/// mutate/commit 边界，任一时刻至多一个库操作持有索引/日志/媒体的写侧。
 static LIBRARY_OP_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 pub(crate) fn library_op_lock() -> MutexGuard<'static, ()> {
@@ -30,6 +30,31 @@ pub(crate) fn library_op_lock() -> MutexGuard<'static, ()> {
         .get_or_init(|| Mutex::new(()))
         .lock()
         .expect("库操作锁被污染")
+}
+
+/// 跨进程文件锁：对 asset-delete-journal.json 持有排他 flock——两个并发
+/// Tauri 进程的库写入在同一日志文件上串行（flock 语义：内核保证、不依赖
+/// 进程内内存）。返回的句柄句柄用于解锁（drop 时释放）。
+pub(crate) fn library_file_lock(library: &CapDir) -> Result<cap_std::fs::File, String> {
+    let file = library
+        .open_with(
+            JOURNAL_FILE_NAME,
+            cap_std::fs::OpenOptions::new().write(true).create(true),
+        )
+        .map_err(|e| format!("打开删除日志失败：{e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+        // flock 排他锁：同一文件上两个并发进程串行
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+            return Err("获取库操作文件锁失败".into());
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        // 非 Unix 无 flock：回退到进程内 Mutex（文档已记录威胁模型边界）
+    }
+    Ok(file)
 }
 pub(super) const TRASH_DIR: &str = "assets/.trash";
 
