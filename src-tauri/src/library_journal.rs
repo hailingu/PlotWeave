@@ -409,7 +409,9 @@ fn recover_entry(
 ) -> Result<(), String> {
     let refs = index_refs(index, entry);
     let trash = open_trash_dir(assets)?;
-    if refs.other_same_rel {
+    // 共享引用须以身份复核为准（评审修复）：relPath 字符串相等但占用者
+    // 身份不符时，替换文件不得被当作共享引用方放行——继续走证据分支
+    if refs.other_same_rel && original_binds_expected(assets, entry)? {
         return recover_shared_file(trash, entry, recovery, current, changed);
     }
     if refs.index_has {

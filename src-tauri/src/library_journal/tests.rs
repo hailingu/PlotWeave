@@ -761,4 +761,37 @@ fn recover_requarantine_persists_mapping_before_rename() {
         "日志记录的隔离名应指向实际文件：{recorded}"
     );
     cleanup(&root);
+
+    /// 共享 relPath 但占用者身份不符（评审修复）：不得走共享文件分支，
+    /// 按证据分支判定（索引已去项 → 原路径不绑定预期身份 → 视为清理
+    /// 完成并清除日志；替换文件不被当作共享引用方放行）。
+    #[test]
+    fn recover_does_not_treat_occupier_as_shared_reference() {
+        let (library, root) = temp_fixture();
+        fs::create_dir_all(library.join("assets").join(".trash")).expect("建隔离目录");
+        fs::write(library.join("assets").join("la-1.png"), b"OCCUPIER").expect("写占用者");
+        write_index_raw(
+            &library,
+            &json!({ "assets": [entry("la-2", "assets/la-1.png")], "groups": [] }),
+        );
+        write_journal_raw(
+            &library,
+            json!([journal_entry_json(
+                "t-1",
+                "la-1",
+                "assets/la-1.png",
+                "assets/.trash/t-x",
+                1,
+                1
+            )]),
+        );
+        let recovery = recover(&cap(&library)).expect("恢复应成功");
+        assert_eq!(
+            read_journal_raw(&library),
+            json!([]),
+            "应判定清理完成并清除日志"
+        );
+        assert!(recovery.conflicted.is_empty(), "不进入共享分支即不冲突");
+        cleanup(&root);
+    }
 }
