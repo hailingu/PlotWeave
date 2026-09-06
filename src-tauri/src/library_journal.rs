@@ -341,7 +341,11 @@ fn try_bound_cleanup(
     }
 }
 
-/// 隔离项回迁原位（仅原名空缺时调用）：句柄相对 rename + 双侧目录 fsync。
+/// 隔离项回迁原位（§7.2：仅原名空缺时调用）：硬链接原子占位 + 隔离名
+/// unlink 的 no-replace 语义——`link()` 在目标已存在时返回 EEXIST 不覆盖
+/// 后来文件，窗口内被占用即失败并保留现场；成功则隔离名释放、双侧目录
+/// fsync。cap-std 的 rename 在 Unix 为替换语义、不携带 no-replace 标志，
+/// 故用硬链接对偶表达同一原子语义。
 #[cfg(unix)]
 pub(super) fn restore_from_trash(
     trash: &CapDir,
@@ -350,9 +354,14 @@ pub(super) fn restore_from_trash(
     last: &str,
 ) -> Result<(), String> {
     let file_name = entry.trash_name.rsplit('/').next().unwrap_or_default();
+    // linkat 语义：目标存在即失败（no-replace），句柄相对解析——
+    // 源为隔离名（.trash），目标为原路径（原名）
     trash
-        .rename(file_name, parent, last)
+        .hard_link(file_name, parent, last)
         .map_err(|e| format!("回迁隔离项失败（{}）：{e}", entry.asset_id))?;
+    trash
+        .remove_file(file_name)
+        .map_err(|e| format!("释放隔离名失败（{}）：{e}", entry.asset_id))?;
     fsync_dir(trash)?;
     fsync_dir(parent)
 }
