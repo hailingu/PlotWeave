@@ -15,6 +15,7 @@ use crate::library_fs::{
     assets_root, atomic_write_with, ensure_index_size, library_root, read_index_capped,
     validate_asset_id, write_index,
 };
+use crate::library_journal::library_op_lock;
 use crate::store::is_canonical_mime;
 use crate::store::is_valid_active_asset_rel_path;
 
@@ -62,6 +63,7 @@ pub fn library_dir_path(app: AppHandle) -> Result<String, String> {
 #[tauri::command]
 pub fn library_list(app: AppHandle) -> Result<Value, String> {
     let library = library_root(&app)?;
+    let _op = library_op_lock();
     let mut recovery = crate::library_journal::recover(&library)?;
     let (mut index, mut warnings) = read_index_capped(&library)?;
     warnings.append(&mut recovery.warnings);
@@ -155,6 +157,7 @@ pub fn library_put(
     bytes: Vec<u8>,
 ) -> Result<Value, String> {
     let library = library_root(&app)?;
+    let _op = library_op_lock();
     put_asset_with(&library, &name, &mime, &kind, &bytes)
 }
 
@@ -268,9 +271,7 @@ pub(crate) fn media_path_with(
         return Err(format!("资产 relPath 非法：{rel_path}"));
     }
     let recovery = crate::library_journal::recover(library)?;
-    if recovery.read_only {
-        return Err("删除日志异常，库写入/删除已暂停：须人工修复 asset-delete-journal.json".into());
-    }
+    // 只读态只暂停写入/删除（§7.2），媒体读取仍可服务
     if recovery.conflicted.iter().any(|c| c == id) {
         return Err(format!("资产 {id} 处于删除事务冲突期，媒体不可用"));
     }
@@ -303,6 +304,7 @@ pub fn library_asset_media_path(
 ) -> Result<String, String> {
     validate_asset_id(&id)?;
     let library = library_root(&app)?;
+    let _op = library_op_lock();
     let base = app
         .path()
         .app_data_dir()
@@ -318,6 +320,7 @@ pub fn library_asset_media_path(
 pub fn library_delete(app: AppHandle, id: String) -> Result<Value, String> {
     validate_asset_id(&id)?;
     let library = library_root(&app)?;
+    let _op = library_op_lock();
     crate::library_journal::delete_asset_transacted(&library, &id)
 }
 
@@ -366,6 +369,7 @@ pub fn library_update_meta(app: AppHandle, id: String, patch: Value) -> Result<V
     validate_asset_id(&id)?;
     validate_meta_patch(&patch)?;
     let library = library_root(&app)?;
+    let _op = library_op_lock();
     update_meta_with(&library, &id, &patch)
 }
 

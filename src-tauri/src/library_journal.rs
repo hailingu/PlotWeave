@@ -19,16 +19,17 @@ use crate::store::{atomic_write, is_valid_asset_rel_path, new_id, open_dir_bound
 
 pub(crate) const JOURNAL_FILE_NAME: &str = "asset-delete-journal.json";
 
-/// 库恢复互斥锁（issue #25 评审修复）：recover 是每次库列表/写入前的共享
-/// 入口——删除事务已在其内串行，但媒体路径解析、导入、元信息更新同样
-/// 会触发恢复；锁必须覆盖所有参与者，任一时刻至多一个库操作持有恢复。
-static LIBRARY_RECOVERY_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+/// 库操作互斥锁（issue #25 评审修复）：锁覆盖完整 read/recover/mutate/commit
+/// 边界——删除、导入、更新、媒体解析与列表共用，任一时刻至多一个库操作
+/// 持有索引/日志/媒体的写侧。recover 不再自持锁（否则删除等调用方在
+/// 操作边界持锁后进入 recover 会死锁）。
+static LIBRARY_OP_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
-fn recovery_lock() -> MutexGuard<'static, ()> {
-    LIBRARY_RECOVERY_LOCK
+pub(crate) fn library_op_lock() -> MutexGuard<'static, ()> {
+    LIBRARY_OP_LOCK
         .get_or_init(|| Mutex::new(()))
         .lock()
-        .expect("库恢复锁被污染")
+        .expect("库操作锁被污染")
 }
 pub(super) const TRASH_DIR: &str = "assets/.trash";
 
@@ -375,11 +376,13 @@ pub(super) fn restore_from_trash(
     trash
         .hard_link(file_name, parent, last)
         .map_err(|e| format!("回迁隔离项失败（{}）：{e}", entry.asset_id))?;
+    // 耐久顺序（评审修复）：先让目标目录的硬链接持久化，再释放隔离名并
+    // 持久化隔离目录——中断在中间不致于隔离名已删而目标未持久
+    fsync_dir(parent)?;
     trash
         .remove_file(file_name)
         .map_err(|e| format!("释放隔离名失败（{}）：{e}", entry.asset_id))?;
-    fsync_dir(trash)?;
-    fsync_dir(parent)
+    fsync_dir(trash)
 }
 
 /// 恢复入口（§7.2：启动及每次库列表/写入前调用）：重读规范化索引并逐条
@@ -387,7 +390,7 @@ pub(super) fn restore_from_trash(
 /// 新映射在 rename 前耐久记录，评审修复）。只动日志与文件（回迁/清理），
 /// 不改 library.json——索引的权威状态不受恢复影响。
 pub(crate) fn recover(library: &CapDir) -> Result<Recovery, String> {
-    let _guard = recovery_lock();
+    // 锁由调用方在操作边界持有（library_op_lock）——recover 不再自持
     let (index, _) = read_index_capped(library)?;
     let mut recovery = Recovery::default();
     let (entries, malformed) = read_journal(library, &mut recovery.warnings);
