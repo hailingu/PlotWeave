@@ -301,6 +301,7 @@ pub fn import_project_asset_from_library(
     // 与删除串行——import 在删除写入索引前恢复并把媒体移回原位，删除随后
     // 提交去项索引会把已恢复的媒体孤儿化
     let _op = crate::library_journal::library_op_lock();
+    let _file_lock = crate::library_journal::library_file_lock(&library)?;
     import_asset_from_library(&projects, &library, &id, &library_asset_id)
 }
 

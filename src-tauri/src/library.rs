@@ -65,10 +65,6 @@ pub fn library_list(app: AppHandle) -> Result<Value, String> {
     let library = library_root(&app)?;
     let _op = library_op_lock();
     let _file_lock = library_file_lock(&library)?;
-    let _file_lock = library_file_lock(&library)?;
-    let _file_lock = library_file_lock(&library)?;
-    let _file_lock = library_file_lock(&library)?;
-    let _file_lock = library_file_lock(&library)?;
     let mut recovery = crate::library_journal::recover(&library)?;
     let (mut index, mut warnings) = read_index_capped(&library)?;
     warnings.append(&mut recovery.warnings);
@@ -163,10 +159,6 @@ pub fn library_put(
 ) -> Result<Value, String> {
     let library = library_root(&app)?;
     let _op = library_op_lock();
-    let _file_lock = library_file_lock(&library)?;
-    let _file_lock = library_file_lock(&library)?;
-    let _file_lock = library_file_lock(&library)?;
-    let _file_lock = library_file_lock(&library)?;
     let _file_lock = library_file_lock(&library)?;
     put_asset_with(&library, &name, &mime, &kind, &bytes)
 }
@@ -316,10 +308,6 @@ pub fn library_asset_media_path(
     let library = library_root(&app)?;
     let _op = library_op_lock();
     let _file_lock = library_file_lock(&library)?;
-    let _file_lock = library_file_lock(&library)?;
-    let _file_lock = library_file_lock(&library)?;
-    let _file_lock = library_file_lock(&library)?;
-    let _file_lock = library_file_lock(&library)?;
     let base = app
         .path()
         .app_data_dir()
@@ -336,10 +324,6 @@ pub fn library_delete(app: AppHandle, id: String) -> Result<Value, String> {
     validate_asset_id(&id)?;
     let library = library_root(&app)?;
     let _op = library_op_lock();
-    let _file_lock = library_file_lock(&library)?;
-    let _file_lock = library_file_lock(&library)?;
-    let _file_lock = library_file_lock(&library)?;
-    let _file_lock = library_file_lock(&library)?;
     let _file_lock = library_file_lock(&library)?;
     crate::library_journal::delete_asset_transacted(&library, &id)
 }
@@ -390,10 +374,6 @@ pub fn library_update_meta(app: AppHandle, id: String, patch: Value) -> Result<V
     validate_meta_patch(&patch)?;
     let library = library_root(&app)?;
     let _op = library_op_lock();
-    let _file_lock = library_file_lock(&library)?;
-    let _file_lock = library_file_lock(&library)?;
-    let _file_lock = library_file_lock(&library)?;
-    let _file_lock = library_file_lock(&library)?;
     let _file_lock = library_file_lock(&library)?;
     update_meta_with(&library, &id, &patch)
 }

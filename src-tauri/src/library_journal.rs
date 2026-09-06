@@ -36,12 +36,14 @@ pub(crate) fn library_op_lock() -> MutexGuard<'static, ()> {
 /// Tauri 进程的库写入在同一日志文件上串行（flock 语义：内核保证、不依赖
 /// 进程内内存）。返回的句柄句柄用于解锁（drop 时释放）。
 pub(crate) fn library_file_lock(library: &CapDir) -> Result<cap_std::fs::File, String> {
+    // 独立持久锁文件（评审修复）：journal 会被 write_journal 原子替换，
+    // flock 随旧 inode 失效；锁文件永不被替换
     let file = library
         .open_with(
-            JOURNAL_FILE_NAME,
+            ".library-op.lock",
             cap_std::fs::OpenOptions::new().write(true).create(true),
         )
-        .map_err(|e| format!("打开删除日志失败：{e}"))?;
+        .map_err(|e| format!("打开库操作锁文件失败：{e}"))?;
     #[cfg(unix)]
     {
         use std::os::fd::AsRawFd;
