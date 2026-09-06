@@ -14,7 +14,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use cap_std::fs::Dir as CapDir;
 use serde_json::{json, Value};
 
-use crate::library_fs::{assets_root, open_parent_dir, read_index_capped, INDEX_MAX_BYTES};
+use crate::library_fs::{assets_root, open_parent_dir, INDEX_MAX_BYTES};
 use crate::store::{atomic_write, is_valid_asset_rel_path, new_id, open_dir_bound};
 
 pub(crate) const JOURNAL_FILE_NAME: &str = "asset-delete-journal.json";
@@ -417,17 +417,22 @@ pub(super) fn restore_from_trash(
 /// 新映射在 rename 前耐久记录，评审修复）。只动日志与文件（回迁/清理），
 /// 不改 library.json——索引的权威状态不受恢复影响。
 pub(crate) fn recover(library: &CapDir) -> Result<Recovery, String> {
-    // 锁由调用方在操作边界持有（library_op_lock）——recover 不再自持
-    // 迁移/归一化警告并入 recovery.warnings（评审修复，PR #33 第二轮）：迁移
-    // 检出即落盘，脏索引在 recover 触发的首次读取即被净化，其隔离/修复诊断
-    // 必须随命令响应可见，不得因落盘而静默吞掉
-    let (index, index_warnings) = read_index_capped(library)?;
+    // 锁由调用方在操作边界持有（library_op_lock）——recover 不再自持。
+    // 先读索引（不落盘）+ 读日志，日志异型判定优先于索引迁移落盘（评审修复，
+    // PR #33 第三轮）：journal 异型须进入只读告警态，不得先把 library.json
+    // 迁移改写；迁移落盘推迟到日志确认非异型之后。迁移/归一化警告并入
+    // recovery.warnings 随命令响应可见。
+    let (index, index_warnings, migrated) = crate::library_fs::read_index_normalized(library)?;
     let mut recovery = Recovery::default();
     recovery.warnings.extend(index_warnings);
     let (entries, malformed) = read_journal(library, &mut recovery.warnings);
     if malformed {
         recovery.read_only = true;
         return Ok(recovery);
+    }
+    // 日志非异型：此刻才允许把索引迁移/修复原子落盘（重发 id 跨读稳定）
+    if migrated {
+        crate::library_fs::write_index(library, &index)?;
     }
     if entries.is_empty() {
         return Ok(recovery);

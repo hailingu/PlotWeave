@@ -219,7 +219,7 @@ fn recover_marks_conflict_when_original_occupied() {
         "隔离项应保留"
     );
     // 列表侧：冲突条目标记 + 警告随索引返回
-    let (index, warnings) = read_index_capped(&cap(&library)).expect("索引可读");
+    let (index, warnings) = crate::library_fs::read_index_capped(&cap(&library)).expect("索引可读");
     assert!(warnings.is_empty());
     let _ = index;
     cleanup(&root);
@@ -632,7 +632,7 @@ fn index_entry_pointing_into_trash_is_quarantined() {
         &library,
         &json!({ "assets": by_id([entry("la-1", "assets/.trash/t-x")]), "groups": by_id([]) }),
     );
-    let (index, warnings) = read_index_capped(&cap(&library)).expect("索引可读");
+    let (index, warnings) = crate::library_fs::read_index_capped(&cap(&library)).expect("索引可读");
     assert_eq!(
         index["assets"]["byId"].as_object().map(Map::len),
         Some(0),

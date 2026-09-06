@@ -404,7 +404,7 @@ fn legacy_prop_group_migrates_to_wardrobe_keeping_members() {
     let mut a = asset("la-1");
     a["kind"] = json!("prop"); // 资产 prop → wardrobe
     a["groupId"] = json!("g-1");
-    let mut g = group("g-1", "prop"); // 组 prop → wardrobe
+    let g = group("g-1", "prop"); // 组 prop → wardrobe
     let index = json!({ "assets": [a], "groups": [g] });
     let (out, warnings, _migrated) = migrate_and_normalize(index);
     assert_eq!(
@@ -416,4 +416,104 @@ fn legacy_prop_group_migrates_to_wardrobe_keeping_members() {
         "成员 groupId 应保留（kind 已同步一致）"
     );
     assert!(warnings.iter().any(|w| w.contains("prop")));
+}
+
+// ---- 评审修复（PR #33 第三轮）：键 verbatim、空白精确匹配、null 桶/标签 ----
+
+/// Record 键 verbatim 不 trim（评审修复）：键合法即原样保留为权威键，不做
+/// 任何规范化改写；含空格等非法字符的键按非法 id 重发（含空格本就不满足
+/// validate_asset_id 的 alnum/-/_ 值域）。合法但易混淆的键保持 distinct——
+/// 不坍缩、不互相改接。
+#[test]
+fn record_keys_kept_verbatim_and_distinct() {
+    let mut g1 = group("g1", "character");
+    g1["id"] = json!("g1");
+    let mut g2 = group("G1", "location");
+    g2["id"] = json!("G1");
+    let index = json!({
+        "assets": { "byId": {} },
+        "groups": { "byId": { "g1": g1, "G1": g2 } },
+    });
+    let (out, _, _migrated) = migrate_and_normalize(index);
+    let groups = out["groups"]["byId"].as_object().unwrap();
+    // 两个合法键原样保留、互不坍缩；内嵌 id 以键为准
+    assert_eq!(groups["g1"]["kind"], "character", "键 g1 原样保留");
+    assert_eq!(groups["G1"]["kind"], "location", "键 G1 不被改写到 g1");
+}
+
+/// 含空白等非法字符的 Record 键不可作权威键：键非法时回退按合法内嵌 id
+/// 归位（verbatim 不等于放行非法键，也不丢弃合法内嵌 id）。
+#[test]
+fn record_key_with_illegal_chars_falls_back_to_embedded_id() {
+    let mut g = group("g", "character");
+    g["id"] = json!("g");
+    let index = json!({
+        "assets": { "byId": {} },
+        "groups": { "byId": { " g ": g } }, // 键含空格，非法
+    });
+    let (out, _, _migrated) = migrate_and_normalize(index);
+    let groups = out["groups"]["byId"].as_object().unwrap();
+    assert!(!groups.contains_key(" g "), "非法键不得 verbatim 保留");
+    assert_eq!(groups["g"]["id"], "g", "回退按合法内嵌 id 归位");
+}
+
+/// 空白组映射只改写精确匹配原空白拼写的 groupId（评审修复）：一个旧 id 为
+/// `" "` 的组被重发时，不相关资产的 `groupId: ""`（不同的空白拼写）不得被
+/// 错接到该组。
+#[test]
+fn blank_group_mapping_matches_exact_spelling_only() {
+    let mut g = group("g-x", "character");
+    g["id"] = json!(" "); // 原空白拼写是单个空格
+    let mut a_match = asset("la-1");
+    a_match["groupId"] = json!(" "); // 精确匹配 → 改写
+    let mut a_other = asset("la-2");
+    a_other["groupId"] = json!(""); // 不同空白拼写（空串）→ 不得改写
+    let index = json!({ "assets": [a_match, a_other], "groups": [g] });
+    let (out, _, _migrated) = migrate_and_normalize(index);
+    let new_gid = out["groups"]["byId"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .next()
+        .unwrap()
+        .clone();
+    assert_eq!(
+        out["assets"]["byId"]["la-1"]["groupId"].as_str().unwrap(),
+        new_gid,
+        "精确匹配的空白 groupId 应改写"
+    );
+    assert!(
+        out["assets"]["byId"]["la-2"].get("groupId").is_none()
+            || out["assets"]["byId"]["la-2"]["groupId"] != json!(new_gid),
+        "不同空白拼写的 groupId 不得错接到重发组"
+    );
+}
+
+/// null 桶视为需修复的脏数据（评审修复）：`assets: null` 不得静默按空——应
+/// 警告并置 migrated，让修复落盘、诊断可见，而非每次读取重复丢失。
+#[test]
+fn null_bucket_warns_and_marks_migrated() {
+    let index = json!({ "assets": null, "groups": { "byId": {} } });
+    let (_out, warnings, migrated) = migrate_and_normalize(index);
+    assert!(
+        warnings.iter().any(|w| w.contains("assets")),
+        "null 桶应警告：{warnings:?}"
+    );
+    assert!(migrated, "null 桶修复应置 migrated 以落盘");
+}
+
+/// null tags 视为非数组修复（评审修复）：目标 Record 条目 `tags: null` 重置
+/// 为 [] 时应警告并置 migrated（与其他非数组 tags 同口径），不静默重复修复。
+#[test]
+fn null_tags_warn_and_mark_migrated() {
+    let mut a = asset("la-1");
+    a["tags"] = json!(null);
+    let index = json!({ "assets": { "byId": { "la-1": a } }, "groups": { "byId": {} } });
+    let (out, warnings, migrated) = migrate_and_normalize(index);
+    assert_eq!(out["assets"]["byId"]["la-1"]["tags"], json!([]));
+    assert!(
+        warnings.iter().any(|w| w.contains("tags")),
+        "null tags 应警告：{warnings:?}"
+    );
+    assert!(migrated, "null tags 修复应置 migrated");
 }

@@ -156,13 +156,25 @@ pub(crate) fn open_parent_dir(
 /// 归一化（[`crate::library_index`]，§7.2）——旧数组形状迁移为 Record、
 /// 非法条目隔离出内存索引并逐条返回警告，索引缺失回退默认空索引。
 /// 迁移/修复发生时把归一化结果原子落盘（评审修复，PR #33 第二轮）：重发的
-/// id 与翻转的 Record 形状随读持久化，后续媒体/删除/更新命令读到同一身份，
-/// 不会出现「list 显示的 id 在下一次读取时已变化」的跨读漂移。本函数总在
-/// 持有 `library_op_lock`/`library_file_lock` 的命令上下文内被调用，落盘
-/// 与读取同锁域。
+/// id 与翻转的 Record 形状随读持久化，后续媒体/删除/更新命令读到同一身份。
+/// 本函数总在持有 `library_op_lock`/`library_file_lock` 的命令上下文内被调用。
 pub(crate) fn read_index_capped(library: &CapDir) -> Result<(Value, Vec<String>), String> {
+    let (normalized, warnings, migrated) = read_index_normalized(library)?;
+    if migrated {
+        write_index(library, &normalized)?;
+    }
+    Ok((normalized, warnings))
+}
+
+/// 读取并归一化索引但**不落盘**（评审修复，PR #33 第三轮）：返回
+/// (归一化索引, 警告, 是否发生迁移/修复)。供 `library_journal::recover`
+/// 在确认删除日志非异型之前使用——journal 异型须先进入只读告警态，不得
+/// 先迁移改写 library.json；落盘决策由调用方在 journal 校验通过后执行。
+pub(crate) fn read_index_normalized(
+    library: &CapDir,
+) -> Result<(Value, Vec<String>, bool), String> {
     match read_index_text_capped(library)? {
-        None => Ok((default_index(), Vec::new())),
+        None => Ok((default_index(), Vec::new(), false)),
         Some(text) => {
             let index: Value =
                 serde_json::from_str(&text).map_err(|e| format!("资产索引损坏：{e}"))?;
@@ -180,12 +192,7 @@ pub(crate) fn read_index_capped(library: &CapDir) -> Result<(Value, Vec<String>)
                     INDEX_MAX_BYTES / (1024 * 1024)
                 ));
             }
-            let (normalized, warnings, migrated) =
-                crate::library_index::migrate_and_normalize(index);
-            if migrated {
-                write_index(library, &normalized)?;
-            }
-            Ok((normalized, warnings))
+            Ok(crate::library_index::migrate_and_normalize(index))
         }
     }
 }
