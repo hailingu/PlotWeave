@@ -11,6 +11,11 @@ use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
+/// 测试组合助手：等价协议处理器的两阶段（锁内打开 + 锁外读取）。
+fn media_read(library: &CapDir, id: &str) -> Result<(String, Vec<u8>), String> {
+    open_media_with(library, id).and_then(|(mime, file)| read_media_capped(id, mime, file))
+}
+
 /// 测试内核的受信句柄：对临时目录做环境打开（等价生产端锚定句柄）。
 fn cap(p: &Path) -> CapDir {
     CapDir::open_ambient_dir(p, ambient_authority()).expect("打开测试根句柄")
@@ -638,7 +643,7 @@ fn media_scope_accepts_only_exact_library_shape() {
     assert!(validate_media_scope(&json!("/library")).is_err());
 }
 
-/// 绿路径：media_bytes_with 按当前净化索引解析 id，经句柄链读到字节。
+/// 绿路径：open_media_with 按当前净化索引解析 id，经句柄链读到字节。
 #[test]
 fn media_bytes_serves_indexed_asset() {
     let (library, root) = temp_fixture();
@@ -651,7 +656,7 @@ fn media_bytes_serves_indexed_asset() {
     )
     .expect("导入应成功");
     let id = e["id"].as_str().expect("id 缺失");
-    let (mime, bytes) = media_bytes_with(&cap(&library), id).expect("媒体读取应成功");
+    let (mime, bytes) = media_read(&cap(&library), id).expect("媒体读取应成功");
     assert_eq!(mime, "image/png");
     assert_eq!(bytes, b"PNGDATA");
     cleanup(&root);
@@ -662,7 +667,7 @@ fn media_bytes_serves_indexed_asset() {
 fn media_bytes_refuses_unknown_or_poisoned_entries() {
     let (library, root) = temp_fixture();
     put_asset_with(&cap(&library), "a.png", "image/png", "other", b"A").expect("导入应成功");
-    assert!(media_bytes_with(&cap(&library), "la-missing").is_err());
+    assert!(media_read(&cap(&library), "la-missing").is_err());
     // relPath 指向索引自身的投毒条目在净化读取时被隔离 → 按不存在拒绝
     write_index_raw(
         &library,
@@ -675,7 +680,7 @@ fn media_bytes_refuses_unknown_or_poisoned_entries() {
         }),
     );
     fs::write(library.join("assets").join("la-1.png"), b"PNG").expect("写媒体");
-    assert!(media_bytes_with(&cap(&library), "la-evil").is_err());
+    assert!(media_read(&cap(&library), "la-evil").is_err());
     cleanup(&root);
 }
 
@@ -704,7 +709,7 @@ fn media_bytes_refuses_conflicted_asset() {
             "trashName": "assets/.trash/t-x",
         }]),
     );
-    let err = media_bytes_with(&cap(&library), "la-1").expect_err("冲突期应拒绝");
+    let err = media_read(&cap(&library), "la-1").expect_err("冲突期应拒绝");
     assert!(err.contains("冲突期"), "意外诊断：{err}");
     cleanup(&root);
 }
@@ -727,12 +732,32 @@ fn media_bytes_refuses_symlinked_final_component() {
         &library,
         &json!({ "assets": [entry("la-1", "assets/la-1.png")], "groups": [] }),
     );
-    let err = media_bytes_with(&cap(&library), "la-1").expect_err("符号链接终点应拒绝");
+    let err = media_read(&cap(&library), "la-1").expect_err("符号链接终点应拒绝");
     assert!(err.contains("符号链接"), "意外诊断：{err}");
     assert_eq!(
         fs::read(outside.join("victim.png")).expect("链外目标文件必须幸存"),
         b"VICTIM"
     );
+    cleanup(&root);
+}
+
+/// 锁外消费已绑定句柄（评审修复，锁作用域收窄）：open_media_with 在锁内
+/// 返回身份绑定句柄后，即便媒体随即被删除事务移走，read_media_capped 仍
+/// 从已打开句柄读到内容——字节读取不依赖也不需要库锁。
+#[cfg(unix)]
+#[test]
+fn media_read_consumes_identity_bound_handle_outside_locks() {
+    let (library, root) = temp_fixture();
+    let e =
+        put_asset_with(&cap(&library), "a.png", "image/png", "other", b"A").expect("导入应成功");
+    let id = e["id"].as_str().expect("id 缺失").to_string();
+    let (mime, file) = open_media_with(&cap(&library), &id).expect("锁内打开应成功");
+    assert_eq!(mime, "image/png");
+    let rel = e["relPath"].as_str().expect("relPath 缺失");
+    fs::remove_file(library.join(rel)).expect("模拟删除事务已提交");
+    let (mime, bytes) = read_media_capped(&id, mime, file).expect("锁外读取应成功");
+    assert_eq!(mime, "image/png");
+    assert_eq!(bytes, b"A");
     cleanup(&root);
 }
 
@@ -758,7 +783,7 @@ fn media_response_maps_hit_and_miss() {
     let e =
         put_asset_with(&cap(&library), "a.png", "image/png", "other", b"A").expect("导入应成功");
     let id = e["id"].as_str().expect("id 缺失");
-    let hit = media_http_response(media_bytes_with(&cap(&library), id));
+    let hit = media_http_response(media_read(&cap(&library), id));
     assert_eq!(hit.status(), tauri::http::StatusCode::OK);
     assert_eq!(
         hit.headers()
@@ -766,7 +791,7 @@ fn media_response_maps_hit_and_miss() {
             .and_then(|v| v.to_str().ok()),
         Some("image/png")
     );
-    let miss = media_http_response(media_bytes_with(&cap(&library), "la-missing"));
+    let miss = media_http_response(media_read(&cap(&library), "la-missing"));
     assert_eq!(miss.status(), tauri::http::StatusCode::NOT_FOUND);
     cleanup(&root);
 }

@@ -332,16 +332,29 @@ fn resolve_media_entry_with(
     Ok((rel.to_string(), mime))
 }
 
-/// 媒体字节读取内核（句柄域，锁由调用方持有）：[`resolve_media_entry_with`]
+/// 锁内打开媒体句柄（句柄域，锁由调用方持有）：[`resolve_media_entry_with`]
 /// 解析后复用 [`crate::assets::open_library_asset`] 的句柄链定位——最终
-/// 组件 no-follow 拒绝符号链接、确认普通文件并按 (dev, ino) 身份绑定后
-/// 受限读取（≤ ASSET_MAX_BYTES）。
-pub(crate) fn media_bytes_with(
+/// 组件 no-follow 拒绝符号链接、确认普通文件并按 (dev, ino) 身份绑定。
+/// 锁的作用域到打开即结束：字节读取在锁外消费已绑定句柄（评审修复，PR
+/// #32 第三轮——最多 20 MiB 的 I/O 不得串行化并发缩略图请求、不得把
+/// 导入/元信息/删除排在读取全程之后）。
+pub(crate) fn open_media_with(
     library: &cap_std::fs::Dir,
     id: &str,
-) -> Result<(String, Vec<u8>), String> {
+) -> Result<(String, cap_std::fs::File), String> {
     let (rel, mime) = resolve_media_entry_with(library, id)?;
     let file = crate::assets::open_library_asset(library, &rel)?;
+    Ok((mime, file))
+}
+
+/// 锁外的受限字节读取（≤ ASSET_MAX_BYTES）：消费 [`open_media_with`] 返回
+/// 的已身份绑定句柄。POSIX 语义下已打开句柄的内容读取稳定——删除事务的
+/// 隔离 rename 不影响该句柄，故无需持锁。
+pub(crate) fn read_media_capped(
+    id: &str,
+    mime: String,
+    file: cap_std::fs::File,
+) -> Result<(String, Vec<u8>), String> {
     use std::io::Read;
     let mut bytes = Vec::new();
     file.take((ASSET_MAX_BYTES + 1) as u64)
@@ -394,9 +407,14 @@ pub(crate) fn handle_media_request(
 ) -> tauri::http::Response<Vec<u8>> {
     let result = parse_media_uri(uri).and_then(|id| {
         let library = library_root(app)?;
-        let _op = library_op_lock();
-        let _file_lock = library_file_lock(&library)?;
-        media_bytes_with(&library, &id)
+        // 锁内：恢复复核 + 净化索引解析 + 身份绑定打开；锁随打开结束
+        let opened = {
+            let _op = library_op_lock();
+            let _file_lock = library_file_lock(&library)?;
+            open_media_with(&library, &id)
+        };
+        // 锁外：消费已绑定句柄读取字节（评审修复，PR #32 第三轮）
+        opened.and_then(|(mime, file)| read_media_capped(&id, mime, file))
     });
     if let Err(e) = &result {
         eprintln!("{}", media_failure_diagnostic(e));
