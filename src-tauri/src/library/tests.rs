@@ -709,6 +709,33 @@ fn media_bytes_refuses_conflicted_asset() {
     cleanup(&root);
 }
 
+/// 终点为符号链接（评审修复）：读取侧最终组件必须 no-follow 拒绝，不得
+/// 把链外目标当作媒体返回——复用 open_library_asset 的拒绝 + 身份绑定。
+#[cfg(unix)]
+#[test]
+fn media_bytes_refuses_symlinked_final_component() {
+    let (library, root) = temp_fixture();
+    let outside = root.join("outside");
+    fs::create_dir_all(&outside).expect("建链外目录");
+    fs::write(outside.join("victim.png"), b"VICTIM").expect("写链外目标文件");
+    std::os::unix::fs::symlink(
+        &outside.join("victim.png"),
+        library.join("assets").join("la-1.png"),
+    )
+    .expect("建指向链外的符号链接");
+    write_index_raw(
+        &library,
+        &json!({ "assets": [entry("la-1", "assets/la-1.png")], "groups": [] }),
+    );
+    let err = media_bytes_with(&cap(&library), "la-1").expect_err("符号链接终点应拒绝");
+    assert!(err.contains("符号链接"), "意外诊断：{err}");
+    assert_eq!(
+        fs::read(outside.join("victim.png")).expect("链外目标文件必须幸存"),
+        b"VICTIM"
+    );
+    cleanup(&root);
+}
+
 /// 响应映射：命中 → 200 + 索引 mime；任何失败 → 404（不向 webview 泄露
 /// 错误种类）。
 #[test]

@@ -13,8 +13,8 @@ use serde_json::{json, Value};
 use tauri::AppHandle;
 
 use crate::library_fs::{
-    assets_root, atomic_write_with, ensure_index_size, library_root, open_parent_dir,
-    read_index_capped, validate_asset_id, write_index,
+    assets_root, atomic_write_with, ensure_index_size, library_root, read_index_capped,
+    validate_asset_id, write_index,
 };
 use crate::library_journal::{library_file_lock, library_op_lock};
 use crate::store::is_canonical_mime;
@@ -333,30 +333,15 @@ fn resolve_media_entry_with(
 }
 
 /// 媒体字节读取内核（句柄域，锁由调用方持有）：[`resolve_media_entry_with`]
-/// 解析后从 `library/assets/` 专用根句柄逐组件 no-follow 定位，在已打开
-/// 句柄上确认普通文件并受限读取（≤ ASSET_MAX_BYTES）。
+/// 解析后复用 [`crate::assets::open_library_asset`] 的句柄链定位——最终
+/// 组件 no-follow 拒绝符号链接、确认普通文件并按 (dev, ino) 身份绑定后
+/// 受限读取（≤ ASSET_MAX_BYTES）。
 pub(crate) fn media_bytes_with(
     library: &cap_std::fs::Dir,
     id: &str,
 ) -> Result<(String, Vec<u8>), String> {
     let (rel, mime) = resolve_media_entry_with(library, id)?;
-    let assets = assets_root(library)?;
-    let rel_in_assets = rel
-        .strip_prefix("assets/")
-        .ok_or_else(|| format!("资产 {id} 的 relPath 非法：{rel}"))?;
-    let Some((parent, name)) = open_parent_dir(&assets, rel_in_assets)? else {
-        return Err(format!("资产 {id} 的媒体文件不存在"));
-    };
-    let file = parent
-        .open(&name)
-        .map_err(|e| format!("打开资产 {id} 媒体失败：{e}"))?;
-    if !file
-        .metadata()
-        .map_err(|e| format!("读取资产 {id} 媒体元数据失败：{e}"))?
-        .is_file()
-    {
-        return Err(format!("资产 {id} 的媒体不是普通文件"));
-    }
+    let file = crate::assets::open_library_asset(library, &rel)?;
     use std::io::Read;
     let mut bytes = Vec::new();
     file.take((ASSET_MAX_BYTES + 1) as u64)
