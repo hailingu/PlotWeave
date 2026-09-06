@@ -350,8 +350,11 @@ pub(crate) fn open_media_with(
 
 /// 并发媒体读取上限（评审修复，PR #32 第四轮）：多个近 20 MiB 大图同时
 /// 进入视口时，每个并发读取各自分配缓冲，N×20 MiB 的瞬时峰值可能拖垮
-/// 进程——读取并发数收敛到 4，峰值 ≤ 4×20 MiB；库写入/删除/元信息不受
-/// 影响（闸门只作用于媒体字节读取）。
+/// 进程——读取并发数收敛到 4；许可随响应体存活到交付（见
+/// [`MediaDelivery`]），故在交付完成前峰值 ≤ 4×20 MiB。交付后字节归
+/// webview 所有，其消费内存不在 Rust 侧观测范围（Tauri 同步协议 API 无
+/// 交付完成信号，此为文档化边界）；库写入/删除/元信息不受影响（闸门只
+/// 作用于媒体字节读取）。
 const MEDIA_READ_CONCURRENCY: usize = 4;
 
 /// 并发媒体读取闸门：Mutex + Condvar 的计数信号量（同步 spawn_blocking
@@ -413,16 +416,19 @@ impl MediaReadGate {
 }
 
 /// 锁外的受限字节读取（≤ ASSET_MAX_BYTES）：消费 [`open_media_with`] 返回
-/// 的已身份绑定句柄，读取并发经全局闸门收敛（见
-/// [`MEDIA_READ_CONCURRENCY`]）。POSIX 语义下已打开句柄的内容读取稳定——
-/// 删除事务的隔离 rename 不影响该句柄，故无需持锁。
-pub(crate) fn read_media_capped(
+/// 的已身份绑定句柄，读取并发经 `gate` 收敛（见 [`MEDIA_READ_CONCURRENCY`]）。
+/// 成功时把并发许可随结果交还调用方：许可必须存活到响应交付之后（见
+/// [`MediaDelivery`]），否则等待中的读者会在先前响应体仍待交付时分配新
+/// 缓冲，峰值契约不成立；失败时许可就地释放。POSIX 语义下已打开句柄的
+/// 内容读取稳定——删除事务的隔离 rename 不影响该句柄，故无需持锁。
+pub(crate) fn read_media_capped_in<'g>(
+    gate: &'g MediaReadGate,
     id: &str,
     mime: String,
     file: cap_std::fs::File,
-) -> Result<(String, Vec<u8>), String> {
+) -> Result<(String, Vec<u8>, MediaReadPermit<'g>), String> {
     use std::io::Read;
-    let _permit = MediaReadGate::gate().acquire();
+    let permit = gate.acquire();
     let mut bytes = Vec::new();
     file.take((ASSET_MAX_BYTES + 1) as u64)
         .read_to_end(&mut bytes)
@@ -430,7 +436,17 @@ pub(crate) fn read_media_capped(
     if bytes.len() > ASSET_MAX_BYTES {
         return Err(format!("资产 {id} 的媒体超过 20 MiB 上限"));
     }
-    Ok((mime, bytes))
+    Ok((mime, bytes, permit))
+}
+
+/// [`read_media_capped_in`] 的全局闸门入口：许可存活到调用方交付（见
+/// [`MediaDelivery`]），成功时随结果返回。
+pub(crate) fn read_media_capped(
+    id: &str,
+    mime: String,
+    file: cap_std::fs::File,
+) -> Result<(String, Vec<u8>, MediaReadPermit<'static>), String> {
+    read_media_capped_in(MediaReadGate::gate(), id, mime, file)
 }
 
 /// 404 的后端诊断文本（评审修复，复用 store 的 eprintln 结构化诊断约定，
@@ -464,14 +480,23 @@ fn media_http_response(
     }
 }
 
+/// 待交付的媒体响应（评审修复，PR #32 第五轮）：响应体与并发许可绑定，
+/// 调用方（lib.rs 的 `pwmedia` 协议闭包）必须先解构出二者、调用
+/// `responder.respond(response)` 后再让 `permit` 出界释放——许可持有到
+/// 交付完成，等待中的读者才不会在先前响应体仍待交付/消费时分配新缓冲，
+/// 4×20 MiB 峰值契约才成立。404 路径无许可（`permit: None`）。
+pub(crate) struct MediaDelivery {
+    pub(crate) response: tauri::http::Response<Vec<u8>>,
+    pub(crate) permit: Option<MediaReadPermit<'static>>,
+}
+
 /// `pwmedia` 协议处理器（lib.rs 注册；在 spawn_blocking 线程执行）：解析
 /// 请求 → 锁内按当前日志/索引解析 id → 句柄链读字节 → 响应。§7.1 每次
 /// 请求重新解析，目录项在列表后被替换也无法越出资产根。失败向 webview
 /// 折叠为非敏感 404，原始原因经 [`media_failure_diagnostic`] 进本机日志。
-pub(crate) fn handle_media_request(
-    app: &AppHandle,
-    uri: &tauri::http::Uri,
-) -> tauri::http::Response<Vec<u8>> {
+/// 返回 [`MediaDelivery`]：调用方在 `responder.respond` 之后再释放许可
+/// （评审修复，PR #32 第五轮——许可生命周期覆盖到响应交付）。
+pub(crate) fn handle_media_request(app: &AppHandle, uri: &tauri::http::Uri) -> MediaDelivery {
     let result = parse_media_uri(uri).and_then(|id| {
         let library = library_root(app)?;
         // 锁内：恢复复核 + 净化索引解析 + 身份绑定打开；锁随打开结束
@@ -480,13 +505,23 @@ pub(crate) fn handle_media_request(
             let _file_lock = library_file_lock(&library)?;
             open_media_with(&library, &id)
         };
-        // 锁外：消费已绑定句柄读取字节（评审修复，PR #32 第三轮）
+        // 锁外：消费已绑定句柄读取字节（评审修复，PR #32 第三轮）；成功
+        // 时许可随结果返回，交由 MediaDelivery 持有到交付之后
         opened.and_then(|(mime, file)| read_media_capped(&id, mime, file))
     });
     if let Err(e) = &result {
         eprintln!("{}", media_failure_diagnostic(e));
     }
-    media_http_response(result)
+    match result {
+        Ok((mime, bytes, permit)) => MediaDelivery {
+            response: media_http_response(Ok((mime, bytes))),
+            permit: Some(permit),
+        },
+        Err(e) => MediaDelivery {
+            response: media_http_response(Err(e)),
+            permit: None,
+        },
+    }
 }
 
 /// opaque asset URL 解析命令（§7.1 命令表 get_asset_media_url）：scope +

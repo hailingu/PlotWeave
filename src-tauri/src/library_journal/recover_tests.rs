@@ -591,7 +591,7 @@ fn media_bytes_rechecks_conflict_state_per_request() {
     fs::remove_file(library.join(JOURNAL_FILE_NAME)).expect("移除日志");
     let (mime, file) =
         crate::library::open_media_with(&cap(&library), "la-1").expect("合法请求应成功");
-    let (mime, bytes) =
+    let (mime, bytes, _permit) =
         crate::library::read_media_capped("la-1", mime, file).expect("锁外读取应成功");
     assert_eq!(mime, "image/png");
     assert_eq!(bytes, b"OCCUPIER");

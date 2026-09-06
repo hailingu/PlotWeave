@@ -11,9 +11,12 @@ use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-/// 测试组合助手：等价协议处理器的两阶段（锁内打开 + 锁外读取）。
+/// 测试组合助手：等价协议处理器的两阶段（锁内打开 + 锁外读取）；许可
+/// 随元组返回后立即丢弃（测试不持有交付）。
 fn media_read(library: &CapDir, id: &str) -> Result<(String, Vec<u8>), String> {
-    open_media_with(library, id).and_then(|(mime, file)| read_media_capped(id, mime, file))
+    open_media_with(library, id)
+        .and_then(|(mime, file)| read_media_capped(id, mime, file))
+        .map(|(mime, bytes, _permit)| (mime, bytes))
 }
 
 /// 测试内核的受信句柄：对临时目录做环境打开（等价生产端锚定句柄）。
@@ -756,6 +759,32 @@ fn media_read_gate_bounds_concurrent_reads() {
     assert!(gate.try_acquire().is_some(), "全部释放后应可获取");
 }
 
+/// 许可生命周期覆盖交付（评审修复，PR #32 第五轮）：read_media_capped
+/// 返回时许可不得释放，而是随响应体交还调用方、由调用方在响应交付
+/// （responder.respond）后才丢弃——否则等待中的读者会在先前响应体仍待
+/// 交付/消费时分配新缓冲，4×20 MiB 峰值契约不成立。
+#[test]
+fn media_read_permit_survives_until_caller_releases() {
+    let gate = MediaReadGate::new(1);
+    let (library, root) = temp_fixture();
+    let e =
+        put_asset_with(&cap(&library), "a.png", "image/png", "other", b"A").expect("导入应成功");
+    let id = e["id"].as_str().expect("id 缺失").to_string();
+    let (mime, file) = open_media_with(&cap(&library), &id).expect("锁内打开应成功");
+    let (mime, bytes, permit) = read_media_capped_in(&gate, &id, mime, file).expect("读取应成功");
+    assert_eq!(mime, "image/png");
+    assert_eq!(bytes, b"A");
+    // 读取函数已返回，但许可仍由调用方持有：上限 1 时其余读者不得进入
+    assert!(
+        gate.try_acquire().is_none(),
+        "响应交付前许可不得随读取函数返回而释放"
+    );
+    // 调用方在交付后释放，等待中的读者方可复用
+    drop(permit);
+    assert!(gate.try_acquire().is_some(), "调用方释放后许可应可复用");
+    cleanup(&root);
+}
+
 /// 锁外消费已绑定句柄（评审修复，锁作用域收窄）：open_media_with 在锁内
 /// 返回身份绑定句柄后，即便媒体随即被删除事务移走，read_media_capped 仍
 /// 从已打开句柄读到内容——字节读取不依赖也不需要库锁。
@@ -770,7 +799,7 @@ fn media_read_consumes_identity_bound_handle_outside_locks() {
     assert_eq!(mime, "image/png");
     let rel = e["relPath"].as_str().expect("relPath 缺失");
     fs::remove_file(library.join(rel)).expect("模拟删除事务已提交");
-    let (mime, bytes) = read_media_capped(&id, mime, file).expect("锁外读取应成功");
+    let (mime, bytes, _permit) = read_media_capped(&id, mime, file).expect("锁外读取应成功");
     assert_eq!(mime, "image/png");
     assert_eq!(bytes, b"A");
     cleanup(&root);

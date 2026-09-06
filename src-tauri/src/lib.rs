@@ -64,7 +64,14 @@ pub fn run() {
                 let app = ctx.app_handle().clone();
                 let uri = request.uri().clone();
                 tauri::async_runtime::spawn_blocking(move || {
-                    responder.respond(library::handle_media_request(&app, &uri));
+                    // 许可生命周期覆盖交付（评审修复，PR #32 第五轮）：
+                    // respond 返回后才出界释放——等待中的读者不得在先前
+                    // 响应体仍待交付/消费时分配新缓冲（4×20 MiB 峰值契约）
+                    let library::MediaDelivery {
+                        response,
+                        permit: _permit,
+                    } = library::handle_media_request(&app, &uri);
+                    responder.respond(response);
                 });
             },
         )
