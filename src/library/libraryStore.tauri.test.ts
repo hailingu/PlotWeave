@@ -28,7 +28,7 @@ const entry = (over: Record<string, unknown> = {}): Record<string, unknown> => (
   relPath: 'assets/la-1.png',
   tags: ['夜景'],
   groupId: null,
-  createdAt: 1700000000000,
+  createdAt: '2026-01-01T00:00:00.000Z',
   ...over,
 })
 
@@ -61,7 +61,9 @@ describe('libraryStore Tauri 路径：list（normalizeAsset 归一化）', () =>
       relPath: '',
       tags: [],
       groupId: null,
-      createdAt: 0,
+      // createdAt 现为字符串（§7.2 ISO）：'t' 是合法字符串类型原样保留，
+      // 前端不做 ISO 校验（那是后端落盘契约）；非字符串才回退空串
+      createdAt: 't',
     })
   })
 

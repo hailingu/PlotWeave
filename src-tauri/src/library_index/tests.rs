@@ -517,3 +517,56 @@ fn null_tags_warn_and_mark_migrated() {
     );
     assert!(migrated, "null tags 修复应置 migrated");
 }
+
+// ---- 评审修复（PR #33 第四轮）：缺 id 组不入映射、source null 拒绝 ----
+
+/// 缺失/非字符串 id 的组不进空白映射（评审修复）：缺失 id 的组从未被任何
+/// `groupId` 引用过，其重发不应建立空白映射改写无关资产。仅真实存在的空白
+/// 字符串 id 才建立映射。
+#[test]
+fn missing_id_group_does_not_create_blank_mapping() {
+    let mut g = group("g-x", "character");
+    g.as_object_mut().unwrap().remove("id"); // 缺失 id（非空白字符串）
+    let mut a = asset("la-1");
+    a["groupId"] = json!(""); // 无关资产的空白 groupId
+    let index = json!({ "assets": [a], "groups": [g] });
+    let (out, _w, _m) = migrate_and_normalize(index);
+    let groups = out["groups"]["byId"].as_object().unwrap();
+    assert_eq!(groups.len(), 1, "缺 id 组仍应重发保留");
+    // 缺 id 组不建立映射：无关资产的空白 groupId 不得被改接到该组
+    let gid = out["assets"]["byId"]["la-1"].get("groupId");
+    assert!(
+        gid.is_none() || !groups.contains_key(gid.unwrap().as_str().unwrap_or("")),
+        "缺 id 组不得建立空白映射错接无关资产"
+    );
+}
+
+/// 显式 `source: null` 拒绝隔离而非补 upload（评审修复）：仅真正缺失的
+/// source 有已知 upload 来源可补；显式非枚举值（含 null）属未知来源，不得
+/// 猜测，按 §7.2 隔离并警告。
+#[test]
+fn explicit_null_source_is_isolated_not_defaulted() {
+    let mut a = asset("la-1");
+    a["source"] = json!(null); // 显式 null，非缺失
+    let index = json!({ "assets": { "byId": { "la-1": a } }, "groups": { "byId": {} } });
+    let (out, warnings, _) = migrate_and_normalize(index);
+    assert!(
+        out["assets"]["byId"].as_object().unwrap().is_empty(),
+        "显式 null source 应隔离不补 upload"
+    );
+    assert!(
+        warnings.iter().any(|w| w.contains("source")),
+        "应警告 source 未知：{warnings:?}"
+    );
+}
+
+/// 对照：真正缺失 source 字段仍确定性补 upload（不回归既有迁移语义）。
+#[test]
+fn genuinely_missing_source_still_defaults_to_upload() {
+    let mut a = asset("la-1");
+    a.as_object_mut().unwrap().remove("source"); // 字段缺失
+    let index = json!({ "assets": { "byId": { "la-1": a } }, "groups": { "byId": {} } });
+    let (out, warnings, _) = migrate_and_normalize(index);
+    assert_eq!(out["assets"]["byId"]["la-1"]["source"], "upload");
+    assert!(warnings.iter().any(|w| w.contains("source")));
+}

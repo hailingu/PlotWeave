@@ -42,7 +42,7 @@ const asset = (over: Partial<LibraryAsset> = {}): LibraryAsset => ({
   relPath: 'character/a1.png',
   tags: ['主角'],
   groupId: null,
-  createdAt: 1,
+  createdAt: '2026-01-01T00:00:00.000Z',
   ...over,
 })
 

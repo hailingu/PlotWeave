@@ -40,7 +40,8 @@ export interface LibraryAsset {
   relPath: string
   tags: string[]
   groupId: string | null
-  createdAt: number
+  /** 创建时间（§7.2 UTC ISO 8601 字符串，issue #29）。 */
+  createdAt: string
   /** 删除事务冲突期标记（§7.2）：媒体打开/导入拒绝服务（issue #25）。 */
   conflicted?: boolean
 }
@@ -72,7 +73,9 @@ function normalizeAsset(raw: RawAsset | null): LibraryAsset | null {
     relPath: typeof raw.relPath === 'string' ? raw.relPath : '',
     tags: Array.isArray(raw.tags) ? raw.tags.filter((t): t is string => typeof t === 'string') : [],
     groupId: typeof raw.groupId === 'string' ? raw.groupId : null,
-    createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : 0,
+    // createdAt 是 §7.2 UTC ISO 字符串：原样保留，非法/缺失回退空串（评审
+    // 修复，PR #33 第四轮——只认 number 会把真实创建时间静默归 0 丢失）
+    createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : '',
     // 冲突期标记原样保留（原 relPath 可能已绑定后来文件，媒体/导入拒服务）
     conflicted: raw.conflicted === true ? true : undefined,
   }
@@ -160,7 +163,7 @@ export const libraryStore = {
       relPath: '',
       tags: [],
       groupId: null,
-      createdAt: Date.now(),
+      createdAt: new Date().toISOString(),
     }
     memoryAssets.set(id, { asset, blob: file })
     return Promise.resolve(asset)

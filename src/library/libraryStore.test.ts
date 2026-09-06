@@ -23,7 +23,9 @@ describe('libraryStore 内存回退：put/list', () => {
       tags: [],
       groupId: null,
     })
-    expect(asset.createdAt).toBeGreaterThan(0)
+    // createdAt 为 §7.2 UTC ISO 字符串（内存回退用 toISOString 生成）
+    expect(typeof asset.createdAt).toBe('string')
+    expect(Number.isNaN(Date.parse(asset.createdAt))).toBe(false)
     const all = await libraryStore.list()
     expect(all.some((a) => a.id === asset.id)).toBe(true)
   })

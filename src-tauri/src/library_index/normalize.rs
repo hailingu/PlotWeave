@@ -122,12 +122,11 @@ fn keyify(
             warnings.push(format!("资产索引 {bucket} 含非对象成员，已隔离"));
             continue;
         };
-        let embedded_raw = e
-            .get("id")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        let (final_id, blank_spelling) = assign_key(key, &embedded_raw, &map, bucket, warnings);
+        // 区分「缺失/非字符串 id」（None——从未可被引用，不进空白映射）与
+        // 「真实空白字符串 id」（Some——其精确拼写可被引用，评审修复，PR #33
+        // 第四轮）
+        let embedded_id = e.get("id").and_then(Value::as_str);
+        let (final_id, blank_spelling) = assign_key(key, embedded_id, &map, bucket, warnings);
         if let Some(spelling) = blank_spelling {
             blank_count += 1;
             if blank_count == 1 {
@@ -141,11 +140,13 @@ fn keyify(
     (map, blank_map)
 }
 
-/// 决定条目的最终 Record 键与空白重发信息。返回 (最终键, 若因空白/非法而
-/// 重发则携带原始空白拼写——供组桶精确匹配引用)。键 verbatim 不 trim。
+/// 决定条目的最终 Record 键与空白重发信息。`embedded_id` 为 None 表示缺失/
+/// 非字符串 id（不产生空白映射）；Some 为真实字符串 id。返回 (最终键, 若因
+/// 空白字符串 id 重发则携带其原始拼写——供组桶精确匹配引用)。键 verbatim
+/// 不 trim。
 fn assign_key(
     key: Option<String>,
-    embedded_raw: &str,
+    embedded_id: Option<&str>,
     map: &Map<String, Value>,
     bucket: &str,
     warnings: &mut Vec<String>,
@@ -153,7 +154,7 @@ fn assign_key(
     // Record 权威键优先且原样保留（不 trim）：键合法且未占用即以键为准
     if let Some(k) = key.as_deref() {
         if !k.is_empty() && validate_asset_id(k).is_ok() && !map.contains_key(k) {
-            if k != embedded_raw {
+            if Some(k) != embedded_id {
                 warnings.push(format!(
                     "资产索引 {bucket} 键 {k} 与内嵌 id 不一致，以键为准改写"
                 ));
@@ -161,6 +162,11 @@ fn assign_key(
             return (k.to_string(), None);
         }
     }
+    // 缺失/非字符串 id：从未可被 groupId 引用，重发但不产生空白映射
+    let Some(embedded_raw) = embedded_id else {
+        warnings.push(format!("资产索引 {bucket} 缺失/非字符串 id，已重发"));
+        return (fresh_id(map), None);
+    };
     let embedded = embedded_raw.trim();
     let valid_id = !embedded.is_empty() && validate_asset_id(embedded).is_ok();
     if valid_id && !map.contains_key(embedded) {
@@ -172,7 +178,7 @@ fn assign_key(
         ));
         return (fresh_id(map), None);
     }
-    // 空白/非法 id 重发：携带原始拼写（未 trim）供组引用精确匹配
+    // 空白/非法字符串 id 重发：携带原始拼写（未 trim）供组引用精确匹配
     warnings.push(format!("资产索引 {bucket} 含空白/非法 id，已重发"));
     (fresh_id(map), Some(embedded_raw.to_string()))
 }
@@ -332,16 +338,18 @@ fn normalize_mime(raw: Option<&Value>, id: &str, warnings: &mut Vec<String>) -> 
     Some(norm)
 }
 
-/// source：缺失确定性补 upload；显式未知值不猜测、隔离。
+/// source：仅字段**缺失**（旧数组条目）确定性补 upload——已知其均为本地导入
+/// 产生；显式 null/非枚举值属未知来源，不得猜测，按 §7.2 隔离并警告（评审
+/// 修复，PR #33 第四轮：显式 null 不等于缺失）。
 fn normalize_source(raw: Option<&Value>, id: &str, warnings: &mut Vec<String>) -> Option<String> {
     match raw {
-        None | Some(Value::Null) => {
+        None => {
             warnings.push(format!("条目 {id} 缺失 source，确定性补为 upload"));
             Some("upload".into())
         }
         Some(Value::String(s)) if s == "upload" || s == "generated" => Some(s.clone()),
-        _ => {
-            warnings.push(format!("条目 {id} 的 source 未知，不猜测，隔离"));
+        Some(_) => {
+            warnings.push(format!("条目 {id} 的 source 显式非法/未知，不猜测，隔离"));
             None
         }
     }
