@@ -604,4 +604,6 @@ pub fn library_update_meta(app: AppHandle, id: String, patch: Value) -> Result<V
 }
 
 #[cfg(test)]
+mod media_protocol_tests;
+#[cfg(test)]
 mod tests;
