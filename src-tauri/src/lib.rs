@@ -49,6 +49,7 @@ pub fn run() {
             library::library_put,
             library::library_update_meta,
             library::library_delete,
+            library::library_asset_media_path,
             assets::import_project_asset_from_library,
             assets::validate_project_asset,
             assets::project_asset_path,
