@@ -484,16 +484,17 @@ fn recover_requarantines_media_returned_to_original_path() {
         .collect();
     assert_eq!(quarantined.len(), 1);
     assert_eq!(fs::read(quarantined[0].path()).expect("内容"), b"PNG");
-    if cfg!(target_os = "linux") {
-        assert_eq!(read_journal_raw(&library), json!([]));
-    } else {
-        assert_eq!(
-            read_journal_raw(&library).as_array().expect("日志").len(),
-            1,
-            "清理不可用平台保留日志与 cleanupPending"
-        );
-        assert!(!recovery.cleanup_pending.is_empty());
-    }
+    // 受支持平台均无身份绑定删除原语：按契约保留隔离项与日志并报告
+    // cleanupPending（评审修复：Linux 分支伪装修复路径的断言残留）
+    assert_eq!(
+        read_journal_raw(&library).as_array().expect("日志").len(),
+        1,
+        "清理不可用应保留日志"
+    );
+    assert!(
+        !recovery.cleanup_pending.is_empty(),
+        "应报告 cleanupPending"
+    );
     cleanup(&root);
 }
 
