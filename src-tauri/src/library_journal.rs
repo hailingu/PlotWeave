@@ -147,7 +147,10 @@ pub(super) fn read_journal(
         if buf.len() > INDEX_MAX_BYTES {
             return blocked(warnings, "超过大小上限");
         }
-        String::from_utf8_lossy(&buf).into_owned()
+        match String::from_utf8(buf) {
+            Ok(t) => t,
+            Err(_) => return blocked(warnings, "不是合法 UTF-8"),
+        }
     };
     match serde_json::from_str::<Value>(&text) {
         Ok(Value::Array(arr)) => {
@@ -490,12 +493,25 @@ fn recover_restore_if_vacant(
             return Ok(());
         }
     };
-    if matches!(path_identity(&parent, &last)?, PathIdentity::Missing) {
-        restore_from_trash(trash, entry, &parent, &last)?;
-        retire_entry(current, entry);
-        *changed = true; // 回到一致态：事务视为未开始
-    } else {
-        mark_conflict(entry, recovery, "原路径已被后来文件占用");
+    match path_identity(&parent, &last)? {
+        PathIdentity::Missing => {
+            restore_from_trash(trash, entry, &parent, &last)?;
+            retire_entry(current, entry);
+            *changed = true; // 回到一致态：事务视为未开始
+        }
+        // 硬链接窗口恢复（评审修复）：hard_link 成功但 remove_file 失败或进程
+        // 中断后，原名与隔离名同时绑定预期身份——原子移动失败残留。
+        // 识别同一身份即清理隔离名并收敛，不标记冲突。
+        PathIdentity::Regular(d, i) if (d, i) == (entry.dev, entry.ino) => {
+            let file_name = entry.trash_name.rsplit('/').next().unwrap_or_default();
+            trash
+                .remove_file(file_name)
+                .map_err(|e| format!("清理硬链接残留失败（{}）：{e}", entry.asset_id))?;
+            fsync_dir(trash)?;
+            retire_entry(current, entry);
+            *changed = true;
+        }
+        _ => mark_conflict(entry, recovery, "原路径已被后来文件占用"),
     }
     Ok(())
 }

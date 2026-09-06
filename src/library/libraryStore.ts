@@ -95,8 +95,16 @@ const memoryAssets = new Map<string, { asset: LibraryAsset; blob: Blob }>()
 
 async function tauriList(): Promise<LibraryAsset[]> {
   const { invoke } = await import('@tauri-apps/api/core')
-  const index = await invoke<{ assets?: unknown[]; warnings?: unknown[] }>('library_list')
+  const index = await invoke<{
+    assets?: unknown[]
+    warnings?: unknown[]
+    cleanupPending?: unknown[]
+  }>('library_list')
   reportLibraryWarnings(index.warnings)
+  // 隔离区积压（身份绑定清理不可用）：随列表上报为诊断，不再静默累积
+  if (Array.isArray(index.cleanupPending) && index.cleanupPending.length > 0) {
+    console.warn('[Library] 删除隔离区待清理：', index.cleanupPending)
+  }
   return (Array.isArray(index.assets) ? index.assets : [])
     .map((a) => normalizeAsset(a as RawAsset))
     .filter((a): a is LibraryAsset => a !== null)

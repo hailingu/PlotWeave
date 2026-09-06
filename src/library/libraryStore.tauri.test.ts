@@ -210,3 +210,28 @@ describe('libraryStore Tauri 路径：冲突期条目（issue #25）', () => {
     expect(invoke.mock.calls).toHaveLength(0)
   })
 })
+
+describe('libraryStore Tauri 路径：隔离区积压可见性（issue #25 评审）', () => {
+  it('cleanupPending 非空时上报诊断', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    invoke.mockResolvedValue({
+      assets: [entry()],
+      cleanupPending: ['媒体已隔离待清理：assets/la-9.png'],
+    })
+    const { libraryStore } = await load()
+    await libraryStore.list()
+    expect(warn).toHaveBeenCalledWith('[Library] 删除隔离区待清理：', [
+      '媒体已隔离待清理：assets/la-9.png',
+    ])
+    warn.mockRestore()
+  })
+
+  it('cleanupPending 缺失或为空数组不产生额外告警', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    invoke.mockResolvedValue({ assets: [entry()], cleanupPending: [] })
+    const { libraryStore } = await load()
+    await libraryStore.list()
+    expect(warn).not.toHaveBeenCalled()
+    warn.mockRestore()
+  })
+})
