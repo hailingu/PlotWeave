@@ -700,4 +700,7 @@ mod transaction;
 pub(crate) use transaction::{delete_asset_transacted, ensure_importable};
 
 #[cfg(test)]
+#[cfg(test)]
+mod recover_tests;
+#[cfg(test)]
 mod tests;
