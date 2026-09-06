@@ -548,6 +548,9 @@ fn recover_restore_if_vacant(
         // 识别同一身份即清理隔离名并收敛，不标记冲突。
         PathIdentity::Regular(d, i) if (d, i) == (entry.dev, entry.ino) => {
             let file_name = entry.trash_name.rsplit('/').next().unwrap_or_default();
+            // 耐久顺序（评审修复）：先让原名持久化，再释放隔离名——
+            // 中断不致于隔离名已删而原名未持久
+            fsync_dir(&parent)?;
             trash
                 .remove_file(file_name)
                 .map_err(|e| format!("清理硬链接残留失败（{}）：{e}", entry.asset_id))?;
@@ -683,8 +686,8 @@ fn re_quarantine(
     parent
         .rename(&last, &trash, &txn)
         .map_err(|e| format!("重隔离失败（{}）：{e}", entry.asset_id))?;
-    fsync_dir(&parent)?;
     fsync_dir(&trash)?;
+    fsync_dir(&parent)?;
     if !try_bound_cleanup(&trash, &updated, recovery)? {
         recovery
             .cleanup_pending

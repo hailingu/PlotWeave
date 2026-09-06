@@ -228,8 +228,10 @@ fn commit_quarantined_delete(
     parent
         .rename(&last, &trash, &txn)
         .map_err(|e| format!("隔离媒体失败（{rel}）：{e}"))?;
-    fsync_dir(&parent)?;
+    // 耐久顺序（评审修复）：先让隔离目录持久化（新目录项），再持久化原
+    // 目录的移除——中断不致于原名已删而隔离名未持久
     fsync_dir(&trash)?;
+    fsync_dir(&parent)?;
     let verdict = verify_trash_identity(&trash, &entry)?;
     if !matches!(verdict, TrashVerdict::IdentityOk(_)) {
         // 身份未确认一律不得回迁（评审修复：Mismatch 回迁会把 .trash 中的
