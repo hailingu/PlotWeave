@@ -2,8 +2,6 @@
 //! 身份捕获与日志耐久记录 → 原子隔离 + 身份复核 → 原子提交去项索引 →
 //! 身份绑定清理（能力不足保留隔离项）；冲突期条目的删除/导入拒绝。
 
-use std::sync::{Mutex, MutexGuard, OnceLock};
-
 use cap_std::fs::Dir as CapDir;
 use serde_json::{json, Value};
 
@@ -16,18 +14,6 @@ use crate::library_fs::{
     INDEX_MAX_BYTES,
 };
 use crate::store::{asset_stat, new_id};
-
-/// 删除事务互斥锁（issue #25 评审修复）：recover + journal + index 全链路
-/// 串行——两个并发删除若各自独立读日志并写回，后者会覆盖前者的追加；
-/// 串行化确保任一时刻至多一个删除事务持有日志与索引的写侧。
-static LIBRARY_DELETE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-
-fn delete_lock() -> MutexGuard<'static, ()> {
-    LIBRARY_DELETE_LOCK
-        .get_or_init(|| Mutex::new(()))
-        .lock()
-        .expect("删除事务锁被污染")
-}
 
 /// 删除事务（§7.2 四步）：返回携带 warnings 与 cleanupPending 的响应负载。
 pub(crate) fn delete_asset_transacted(library: &CapDir, id: &str) -> Result<Value, String> {
@@ -44,7 +30,6 @@ pub(crate) fn delete_asset_transacted(library: &CapDir, id: &str) -> Result<Valu
 
 #[cfg(unix)]
 fn delete_asset_transacted_unix(library: &CapDir, id: &str) -> Result<Value, String> {
-    let _guard = delete_lock();
     guard_journal_headroom(library)?;
     let mut recovery = recover(library)?;
     if recovery.read_only {

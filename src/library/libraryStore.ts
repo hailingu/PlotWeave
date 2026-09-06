@@ -183,8 +183,12 @@ export const libraryStore = {
   remove: (id: string): Promise<void> => {
     if (isTauri) {
       return import('@tauri-apps/api/core').then(async ({ invoke }) => {
-        const result = await invoke<{ warnings?: unknown }>('library_delete', { id })
+        const result = await invoke<{ warnings?: unknown; cleanupPending?: unknown[] }>('library_delete', { id })
         reportLibraryWarnings(result?.warnings)
+        // 隔离区积压随删除响应上报（评审修复：删除成功后不再静默累积）
+        if (result?.cleanupPending?.length) {
+          console.warn('[Library] 删除隔离区待清理：', result.cleanupPending)
+        }
       })
     }
     memoryAssets.delete(id)

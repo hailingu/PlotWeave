@@ -9,6 +9,7 @@
 //! 日志异型时整份恢复进入只读告警态，所有库写入/删除暂停。
 
 use std::io::Read;
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use cap_std::fs::Dir as CapDir;
 use serde_json::{json, Value};
@@ -17,6 +18,18 @@ use crate::library_fs::{assets_root, open_parent_dir, read_index_capped, INDEX_M
 use crate::store::{atomic_write, is_valid_asset_rel_path, new_id, open_dir_bound};
 
 pub(crate) const JOURNAL_FILE_NAME: &str = "asset-delete-journal.json";
+
+/// 库恢复互斥锁（issue #25 评审修复）：recover 是每次库列表/写入前的共享
+/// 入口——删除事务已在其内串行，但媒体路径解析、导入、元信息更新同样
+/// 会触发恢复；锁必须覆盖所有参与者，任一时刻至多一个库操作持有恢复。
+static LIBRARY_RECOVERY_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn recovery_lock() -> MutexGuard<'static, ()> {
+    LIBRARY_RECOVERY_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("库恢复锁被污染")
+}
 pub(super) const TRASH_DIR: &str = "assets/.trash";
 
 /// 单条删除事务：assetId、原 relPath（固定 assets/ 基准）、预期文件身份
@@ -374,6 +387,7 @@ pub(super) fn restore_from_trash(
 /// 新映射在 rename 前耐久记录，评审修复）。只动日志与文件（回迁/清理），
 /// 不改 library.json——索引的权威状态不受恢复影响。
 pub(crate) fn recover(library: &CapDir) -> Result<Recovery, String> {
+    let _guard = recovery_lock();
     let (index, _) = read_index_capped(library)?;
     let mut recovery = Recovery::default();
     let (entries, malformed) = read_journal(library, &mut recovery.warnings);
