@@ -623,3 +623,62 @@ fn distinct_blank_spellings_each_keep_their_mapping() {
     );
     assert_ne!(gid1, gid2, "不同拼写各自映射到自己的组，不得混同");
 }
+
+// ---- 评审修复（PR #33 第六轮）：跨年溢出隔离、空白键引用改写 ----
+
+/// 合法偏移时间戳规范化后越出四位数年域（评审修复）：`9999-12-31T23:59:59
+/// -23:59` 的 UTC 瞬间落在 10000 年，规范化表示为 5 位年、非规范形——不得
+/// 落盘为下次读取必拒的不可读中间表示，应隔离原条目。
+#[test]
+fn offset_timestamp_crossing_year_boundary_is_isolated() {
+    let mut a = asset("la-1");
+    a["createdAt"] = json!("9999-12-31T23:59:59-23:59");
+    let index = json!({ "assets": { "byId": { "la-1": a } }, "groups": { "byId": {} } });
+    let (out, warnings, _) = migrate_and_normalize(index);
+    assert!(
+        out["assets"]["byId"].as_object().unwrap().is_empty(),
+        "溢出年域的时间戳应隔离条目"
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("createdAt") || w.contains("时间戳")),
+        "应警告时间戳无法规范化：{warnings:?}"
+    );
+}
+
+/// 毫秒时间戳超规范年域同样隔离（评审修复）：大毫秒值经 iso_from_ms 产生
+/// 5 位年表示，落盘即不可读。
+#[test]
+fn epoch_millis_beyond_year_9999_is_isolated() {
+    let mut a = asset("la-1");
+    a["createdAt"] = json!(253_402_300_800_000u64); // 10000-03-01T00:00:00Z
+    let index = json!({ "assets": { "byId": { "la-1": a } }, "groups": { "byId": {} } });
+    let (out, _, _) = migrate_and_normalize(index);
+    assert!(
+        out["assets"]["byId"].as_object().unwrap().is_empty(),
+        "超年域毫秒时间戳应隔离条目"
+    );
+}
+
+/// 空白 Record 键的引用改写（评审修复）：`groups.byId[" "] = { id: "g-old" }`
+/// 的权威键非法被拒、条目按内嵌 id 归位，但引用空白键的 groupId 需按
+/// 「旧键拼写 → 归位 id」映射改写——键是 Record 的引用权威，不得剥离。
+#[test]
+fn blank_record_key_creates_remap_for_referencing_assets() {
+    let g = group("g-old", "character");
+    let mut a = asset("la-1");
+    a["groupId"] = json!(" "); // 引用空白键
+    let index = json!({
+        "assets": [a],
+        "groups": { "byId": { " ": g } },
+    });
+    let (out, _w, _m) = migrate_and_normalize(index);
+    let groups = out["groups"]["byId"].as_object().unwrap();
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups["g-old"]["id"], "g-old", "组按内嵌 id 归位");
+    assert_eq!(
+        out["assets"]["byId"]["la-1"]["groupId"], "g-old",
+        "引用空白键的 groupId 应改写为归位组 id，不得剥离"
+    );
+}

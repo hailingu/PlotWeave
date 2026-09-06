@@ -165,7 +165,9 @@ fn keyify(
 /// 决定条目的最终 Record 键与空白重发信息。`embedded_id` 为 None 表示缺失/
 /// 非字符串 id（不产生空白映射）；Some 为真实字符串 id。返回 (最终键, 若因
 /// 空白字符串 id 重发则携带其原始拼写——供组桶精确匹配引用)。键 verbatim
-/// 不 trim；回退 id 不得占用预留权威键。
+/// 不 trim；回退 id 不得占用预留权威键。返回的旧拼写映射候选：非法权威键
+/// 携带其原始拼写（键是 Record 的引用权威，条目归位后引用按旧键改写，评审
+/// 修复 PR #33 第六轮）；数组条目（无键）仅在空白内嵌 id 重发时携带该拼写。
 fn assign_key(
     key: Option<String>,
     embedded_id: Option<&str>,
@@ -186,10 +188,13 @@ fn assign_key(
             return (k.to_string(), None);
         }
     }
-    // 缺失/非字符串 id：从未可被 groupId 引用，重发但不产生空白映射
+    // 非法权威键的原始拼写是引用解析权威：映射到条目最终归位 id；数组条目
+    // （键缺失）此候选为 None
+    let key_spelling = key.filter(|k| !k.is_empty() && validate_asset_id(k).is_err());
+    // 缺失/非字符串 id：从未可被 groupId 引用，重发；映射只随非法键拼写走
     let Some(embedded_raw) = embedded_id else {
         warnings.push(format!("资产索引 {bucket} 缺失/非字符串 id，已重发"));
-        return (fresh_id(map, reserved), None);
+        return (fresh_id(map, reserved), key_spelling);
     };
     let embedded = embedded_raw.trim();
     let valid_id = !embedded.is_empty() && validate_asset_id(embedded).is_ok();
@@ -199,19 +204,21 @@ fn assign_key(
             warnings.push(format!(
                 "资产索引 {bucket} 内嵌 id {embedded} 与权威键冲突，已重发"
             ));
-            return (fresh_id(map, reserved), None);
+            return (fresh_id(map, reserved), key_spelling);
         }
-        return (embedded.to_string(), None);
+        return (embedded.to_string(), key_spelling);
     }
     if valid_id {
         warnings.push(format!(
             "资产索引 {bucket} 含重复 id {embedded}，后续项重发"
         ));
-        return (fresh_id(map, reserved), None);
+        return (fresh_id(map, reserved), key_spelling);
     }
-    // 空白/非法字符串 id 重发：携带原始拼写（未 trim）供组引用精确匹配
+    // 空白/非法字符串 id 重发：数组条目携带内嵌原始拼写（未 trim）供组引用
+    // 精确匹配；有非法键时键拼写优先（引用按键解析）
     warnings.push(format!("资产索引 {bucket} 含空白/非法 id，已重发"));
-    (fresh_id(map, reserved), Some(embedded_raw.to_string()))
+    let spelling = key_spelling.or_else(|| Some(embedded_raw.to_string()));
+    (fresh_id(map, reserved), spelling)
 }
 
 /// 生成桶内未占用的重发 id（用连字符替换前缀，保证 validate_asset_id 通过；
@@ -392,7 +399,9 @@ fn normalize_source(raw: Option<&Value>, id: &str, warnings: &mut Vec<String>) -
 }
 
 /// createdAt：规范 UTC ISO 原样保留；合法但非规范形转规范形；epoch 毫秒
-/// （非负安全整数且表有效日期）转 UTC ISO；其余不猜测、隔离。
+/// （非负安全整数且表有效日期）转 UTC ISO；其余不猜测、隔离。规范化结果
+/// 复验规范形——偏移/大毫秒可跨出四位数年域（如 9999 年末带 -23:59 偏移），
+/// 产生 5 位年的表示落盘即不可读，必须隔离原条目（评审修复，PR #33 第六轮）。
 fn normalize_created_at(
     raw: Option<&Value>,
     id: &str,
@@ -403,9 +412,21 @@ fn normalize_created_at(
             if isotime::is_canonical_utc_timestamp(s) {
                 Some(s.clone())
             } else if isotime::is_valid_iso8601(s) {
-                let ms = isotime::iso8601_to_epoch_millis(s)?;
-                let ms = u64::try_from(ms).ok()?;
+                let ms = isotime::iso8601_to_epoch_millis(s);
+                let ms = match ms.and_then(|v| u64::try_from(v).ok()) {
+                    Some(v) => v,
+                    None => {
+                        warnings.push(format!("条目 {id} 的 createdAt 无法转 UTC 瞬间，隔离"));
+                        return None;
+                    }
+                };
                 let norm = isotime::iso_from_ms(ms);
+                if !isotime::is_canonical_utc_timestamp(&norm) {
+                    warnings.push(format!(
+                        "条目 {id} 的 createdAt 规范化后越出四位数年域（{norm}），隔离"
+                    ));
+                    return None;
+                }
                 warnings.push(format!("条目 {id} 的 createdAt 已规范化为 UTC：{norm}"));
                 Some(norm)
             } else {
@@ -420,6 +441,12 @@ fn normalize_created_at(
                 return None;
             }
             let iso = isotime::iso_from_ms(ms);
+            if !isotime::is_canonical_utc_timestamp(&iso) {
+                warnings.push(format!(
+                    "条目 {id} 的 createdAt 越出四位数年域（{iso}），隔离"
+                ));
+                return None;
+            }
             warnings.push(format!("条目 {id} 的毫秒时间戳已转 UTC ISO：{iso}"));
             Some(iso)
         }
