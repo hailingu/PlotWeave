@@ -297,6 +297,10 @@ pub fn import_project_asset_from_library(
 ) -> Result<Value, String> {
     let projects = projects_dir(&app)?;
     let library = library_root(&app)?;
+    // 库操作互斥锁（issue #25 评审修复）：导入的恢复 + 读取 + 拷贝全链路
+    // 与删除串行——import 在删除写入索引前恢复并把媒体移回原位，删除随后
+    // 提交去项索引会把已恢复的媒体孤儿化
+    let _op = crate::library_journal::library_op_lock();
     import_asset_from_library(&projects, &library, &id, &library_asset_id)
 }
 
