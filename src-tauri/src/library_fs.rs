@@ -12,7 +12,7 @@ use cap_std::fs::Dir as CapDir;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
 
-use crate::store::{is_canonical_mime, is_valid_asset_rel_path, new_id, open_dir_bound};
+use crate::store::{is_canonical_mime, is_valid_active_asset_rel_path, new_id, open_dir_bound};
 
 /// 库索引大小上限（1 MiB，对齐 prefs.rs 设置文件上限）：异常膨胀的索引在
 /// 物化进内存前显式拒绝，防脏数据/篡改文件拖垮解析与 IPC。
@@ -226,7 +226,7 @@ fn sanitize_entry(entry: &Value, warnings: &mut Vec<String>) -> Result<Value, St
         .get("relPath")
         .and_then(Value::as_str)
         .ok_or_else(|| format!("条目 {id} 的 relPath 缺失或非字符串"))?;
-    if !is_valid_asset_rel_path(rel) {
+    if !is_valid_active_asset_rel_path(rel) {
         return Err(format!("条目 {id} 的 relPath 越出 assets/：{rel}"));
     }
     let mime_raw = entry

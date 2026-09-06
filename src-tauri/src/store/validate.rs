@@ -72,6 +72,13 @@ pub(crate) fn is_valid_asset_rel_path(p: &str) -> bool {
     }
     rest > 0
 }
+/// 活动索引 relPath 词法（§7.1/§7.2）：在基础词法之上排除保留隔离目录
+/// `assets/.trash/` 组件——隔离区是删除事务的私有命名空间，永不进入
+/// AssetRef、媒体 URL 或活动索引（issue #25）。
+pub(crate) fn is_valid_active_asset_rel_path(p: &str) -> bool {
+    is_valid_asset_rel_path(p) && !p.split('/').any(|c| c == ".trash")
+}
+
 /// 规范集号键（§11.1 第 3 步同域）：无前导零的十进制正整数，且在安全整数范围。
 fn is_canonical_episode_key(k: &str) -> bool {
     if k.is_empty() || !k.bytes().all(|c| c.is_ascii_digit()) {

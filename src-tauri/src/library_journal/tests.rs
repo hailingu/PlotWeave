@@ -663,4 +663,98 @@ fn media_path_rechecks_conflict_and_rel_consistency() {
         .expect_err("relPath 不符应拒绝");
     assert!(err.contains("不符"), "意外诊断：{err}");
     cleanup(&root);
+
+    /// 活动索引边界拒保留隔离目录（评审修复）：relPath 指向 .trash 的条目
+    /// 在读取时隔离，不暴露为可用媒体、删除入口也不会把它当另一资产。
+    #[test]
+    fn index_entry_pointing_into_trash_is_quarantined() {
+        let (library, root) = temp_fixture();
+        fs::create_dir_all(library.join("assets").join(".trash")).expect("建隔离目录");
+        fs::write(library.join("assets").join(".trash").join("t-x"), b"Q").expect("写隔离项");
+        write_index_raw(
+            &library,
+            &json!({ "assets": [entry("la-1", "assets/.trash/t-x")], "groups": [] }),
+        );
+        let (index, warnings) = read_index_capped(&cap(&library)).expect("索引可读");
+        assert_eq!(
+            index["assets"].as_array().map(Vec::len),
+            Some(0),
+            "应被隔离"
+        );
+        assert!(!warnings.is_empty(), "应携带隔离警告：{warnings:?}");
+        // 媒体路径同样拒绝 .trash 词法
+        let err =
+            crate::library::media_path_with(&cap(&library), &root, "la-1", "assets/.trash/t-x")
+                .expect_err("保留目录词法应拒绝");
+        assert!(err.contains("非法"), "意外诊断：{err}");
+        cleanup(&root);
+    }
+
+    /// 追加上限守卫（评审修复）：日志接近半上限时拒绝新删除事务——无界
+    /// 追加会越过读取上限、把全部库写入推入不可收缩的只读态。
+    #[test]
+    fn delete_rejected_when_journal_near_cap() {
+        let (library, root) = temp_fixture();
+        fs::write(library.join("assets").join("la-1.png"), b"PNG").expect("写媒体");
+        write_index_raw(
+            &library,
+            &json!({ "assets": [entry("la-1", "assets/la-1.png")], "groups": [] }),
+        );
+        // 预填接近半上限的合法日志条目（资产 id 各异、身份任意——恢复对
+        // 索引无该条目且无隔离项者会清除，但删除路径先检查投影大小）
+        let pad: Vec<Value> = (0..2400)
+            .map(|i| {
+                journal_entry_json(
+                    &format!("t-{i}"),
+                    &format!("la-gone-{i}"),
+                    "assets/gone.png",
+                    "assets/.trash/t-gone",
+                    1,
+                    (i + 1) as u64,
+                )
+            })
+            .collect();
+        write_journal_raw(&library, json!(pad));
+        let err =
+            delete_asset_transacted(&cap(&library), "la-1").expect_err("接近上限应拒绝新事务");
+        assert!(err.contains("接近上限"), "意外诊断：{err}");
+        // 索引未动：删除被拒绝且媒体原样
+        assert!(fs::metadata(library.join("assets").join("la-1.png")).is_ok());
+        cleanup(&root);
+    }
+
+    /// 重隔离的新映射先于 rename 落盘（评审修复）：恢复后日志 trashName 与
+    /// 隔离区实际文件一致，中断不会孤儿化新隔离项。
+    #[test]
+    fn recover_requarantine_persists_mapping_before_rename() {
+        let (library, root) = temp_fixture();
+        fs::write(library.join("assets").join("la-1.png"), b"PNG").expect("写媒体");
+        fs::create_dir_all(library.join("assets").join(".trash")).expect("建空隔离目录");
+        write_index_raw(&library, &json!({ "assets": [], "groups": [] }));
+        let (dev, ino) = file_identity(&library.join("assets").join("la-1.png"));
+        write_journal_raw(
+            &library,
+            json!([journal_entry_json(
+                "t-1",
+                "la-1",
+                "assets/la-1.png",
+                "assets/.trash/t-x",
+                dev,
+                ino
+            )]),
+        );
+        let recovery = recover(&cap(&library)).expect("恢复应成功");
+        let _ = recovery;
+        // 日志 trashName 与隔离区实际文件一致
+        let journal = read_journal_raw(&library);
+        let arr = journal.as_array().expect("日志数组");
+        assert_eq!(arr.len(), 1, "非清理平台保留一条日志");
+        let recorded = arr[0]["trashName"].as_str().expect("trashName").to_string();
+        let leaf = recorded.rsplit('/').next().expect("隔离名");
+        assert!(
+            fs::metadata(library.join("assets").join(".trash").join(leaf)).is_ok(),
+            "日志记录的隔离名应指向实际文件：{recorded}"
+        );
+        cleanup(&root);
+    }
 }

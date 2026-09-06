@@ -11,6 +11,7 @@ use super::{
 };
 use crate::library_fs::{
     assets_root, ensure_index_size, open_parent_dir, read_index_capped, write_index,
+    INDEX_MAX_BYTES,
 };
 use crate::store::{asset_stat, new_id};
 
@@ -127,6 +128,17 @@ fn check_same_fs(trash: &CapDir, identity: (u64, u64)) -> Result<(), String> {
     Ok(())
 }
 
+/// 单条事务 → journal JSON 形状（write_journal 与上限投影共用）。
+pub(super) fn journal_entry_value(e: &JournalEntry) -> Value {
+    json!({
+        "id": e.id,
+        "assetId": e.asset_id,
+        "relPath": e.rel_path,
+        "identity": { "dev": e.dev, "ino": e.ino },
+        "trashName": e.trash_name,
+    })
+}
+
 /// 步骤①日志耐久记录（先于任何移动）：追加事务并原子落盘 + 目录 fsync。
 #[cfg(unix)]
 fn record_delete_journal(
@@ -150,6 +162,21 @@ fn record_delete_journal(
         return Err("删除日志异常，库写入/删除已暂停".into());
     }
     entries.push(entry.clone());
+    // 追加上限守卫（评审修复）：身份绑定清理原语不可用使每笔删除都保留
+    // 日志条目，无界追加会越过读取上限、把全部库写入/删除推入不可自动
+    // 收缩的只读态——在半上限处显式拒绝新事务，隔离区须人工清理
+    let projected = serde_json::to_string(&json!(entries
+        .iter()
+        .map(journal_entry_value)
+        .collect::<Vec<_>>()))
+    .map_err(|e| format!("序列化日志失败：{e}"))?
+    .len();
+    if projected > INDEX_MAX_BYTES / 2 {
+        return Err(
+            "删除日志接近上限（隔离项待清理累积）：请人工清理 assets/.trash 并同步编辑 asset-delete-journal.json 后重试"
+                .into(),
+        );
+    }
     write_journal(library, &entries)?;
     Ok((entry, entries))
 }

@@ -16,7 +16,7 @@ use crate::library_fs::{
     validate_asset_id, write_index,
 };
 use crate::store::is_canonical_mime;
-use crate::store::is_valid_asset_rel_path;
+use crate::store::is_valid_active_asset_rel_path;
 
 /// 单文件上限 20 MiB：资产库放参考图/氛围图，防异常输入撑爆磁盘与 IPC。
 const ASSET_MAX_BYTES: usize = 20 * 1024 * 1024;
@@ -264,7 +264,7 @@ pub(crate) fn media_path_with(
     id: &str,
     rel_path: &str,
 ) -> Result<String, String> {
-    if !is_valid_asset_rel_path(rel_path) {
+    if !is_valid_active_asset_rel_path(rel_path) {
         return Err(format!("资产 relPath 非法：{rel_path}"));
     }
     let recovery = crate::library_journal::recover(library)?;

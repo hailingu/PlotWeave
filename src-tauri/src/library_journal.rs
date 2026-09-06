@@ -175,15 +175,7 @@ pub(super) fn read_journal(
 pub(super) fn write_journal(library: &CapDir, entries: &[JournalEntry]) -> Result<(), String> {
     let items: Vec<Value> = entries
         .iter()
-        .map(|e| {
-            json!({
-                "id": e.id,
-                "assetId": e.asset_id,
-                "relPath": e.rel_path,
-                "identity": { "dev": e.dev, "ino": e.ino },
-                "trashName": e.trash_name,
-            })
-        })
+        .map(transaction::journal_entry_value)
         .collect();
     let text = serde_json::to_string(&json!(items)).map_err(|e| format!("序列化日志失败：{e}"))?;
     atomic_write(library, JOURNAL_FILE_NAME, &text)?;
@@ -255,7 +247,10 @@ fn open_trash_dir(assets: &CapDir) -> Result<Option<CapDir>, String> {
         Ok(md) if md.file_type().is_symlink() => Err("隔离目录是符号链接，拒绝操作".into()),
         Ok(md) if md.is_dir() => open_dir_bound(assets, ".trash", &md, "隔离目录").map(Some),
         Ok(_) => Err("隔离目录路径不是目录，拒绝操作".into()),
-        Err(_) => Ok(None),
+        // 仅 NotFound 视为缺失（评审修复：权限/瞬态 I/O 误当缺失会在未检查
+        // 隔离项的情况下清除日志，丢失唯一清理记录）；其余错误中止恢复
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("读取隔离目录元数据失败：{e}")),
     }
 }
 
@@ -362,8 +357,9 @@ pub(super) fn restore_from_trash(
 }
 
 /// 恢复入口（§7.2：启动及每次库列表/写入前调用）：重读规范化索引并逐条
-/// 消费日志，重写发生变化的日志文件。只动日志与文件（回迁/清理），不改
-/// library.json——索引的权威状态不受恢复影响。
+/// 消费日志。日志当前状态以 `current` 持有，分支变更即时可落盘（重隔离的
+/// 新映射在 rename 前耐久记录，评审修复）。只动日志与文件（回迁/清理），
+/// 不改 library.json——索引的权威状态不受恢复影响。
 pub(crate) fn recover(library: &CapDir) -> Result<Recovery, String> {
     let (index, _) = read_index_capped(library)?;
     let mut recovery = Recovery::default();
@@ -376,42 +372,49 @@ pub(crate) fn recover(library: &CapDir) -> Result<Recovery, String> {
         return Ok(recovery);
     }
     let assets = assets_root(library)?;
-    let mut retained = Vec::new();
+    let mut current = entries.clone();
     let mut changed = false;
     for entry in &entries {
         recover_entry(
+            library,
             &assets,
             &index,
             entry,
             &mut recovery,
-            &mut retained,
+            &mut current,
             &mut changed,
         )?;
     }
     if changed {
-        write_journal(library, &retained)?;
+        write_journal(library, &current)?;
     }
     Ok(recovery)
 }
 
+/// 从当前日志状态移除事务条目（清理完成/未开始/回迁一致）。
+fn retire_entry(current: &mut Vec<JournalEntry>, entry: &JournalEntry) {
+    current.retain(|e| e.id != entry.id);
+}
+
 /// 单条日志恢复。分支次序对齐 §7.2：共享引用 → 索引仍引用 → 索引已去项。
 fn recover_entry(
+    library: &CapDir,
     assets: &CapDir,
     index: &Value,
     entry: &JournalEntry,
     recovery: &mut Recovery,
-    retained: &mut Vec<JournalEntry>,
+    current: &mut Vec<JournalEntry>,
     changed: &mut bool,
 ) -> Result<(), String> {
     let refs = index_refs(index, entry);
     let trash = open_trash_dir(assets)?;
     if refs.other_same_rel {
-        return recover_shared_file(trash, entry, recovery, retained, changed);
+        return recover_shared_file(trash, entry, recovery, current, changed);
     }
     if refs.index_has {
-        return recover_index_still_references(assets, entry, trash, recovery, retained, changed);
+        return recover_index_still_references(assets, entry, trash, recovery, current, changed);
     }
-    recover_index_committed(assets, entry, trash, recovery, retained, changed)
+    recover_index_committed(library, assets, entry, trash, recovery, current, changed)
 }
 
 /// 其他条目引用同一文件位置：不得移动/删除其当前目录项；隔离项存在时仅
@@ -420,35 +423,32 @@ fn recover_shared_file(
     trash: Option<CapDir>,
     entry: &JournalEntry,
     recovery: &mut Recovery,
-    retained: &mut Vec<JournalEntry>,
+    current: &mut Vec<JournalEntry>,
     changed: &mut bool,
 ) -> Result<(), String> {
     match trash {
         Some(trash) => {
             if try_bound_cleanup(&trash, entry, recovery)? {
+                retire_entry(current, entry);
                 *changed = true;
-            } else {
-                retained.push(entry.clone());
             }
+            // 清理失败：条目保留在 current（已在步骤①落盘，无需改动）
         }
-        None => *changed = true,
+        None => {
+            retire_entry(current, entry);
+            *changed = true;
+        }
     }
     Ok(())
 }
 
-/// 标记冲突期不可用（§7.2）：保留日志条目并随列表返回警告。
-fn mark_conflict(
-    entry: &JournalEntry,
-    recovery: &mut Recovery,
-    retained: &mut Vec<JournalEntry>,
-    why: &str,
-) {
+/// 标记冲突期不可用（§7.2）：日志条目保留在 current 并随列表返回警告。
+fn mark_conflict(entry: &JournalEntry, recovery: &mut Recovery, why: &str) {
     recovery.conflicted.push(entry.asset_id.clone());
     recovery.warnings.push(format!(
         "资产 {} 删除事务冲突（{why}），标记为不可用",
         entry.asset_id
     ));
-    retained.push(entry.clone());
 }
 
 /// 原路径是否仍绑定事务预期身份（恢复分支共用判定）。
@@ -468,21 +468,22 @@ fn recover_restore_if_vacant(
     entry: &JournalEntry,
     trash: &CapDir,
     recovery: &mut Recovery,
-    retained: &mut Vec<JournalEntry>,
+    current: &mut Vec<JournalEntry>,
     changed: &mut bool,
 ) -> Result<(), String> {
     let (parent, last) = match original_parent(assets, &entry.rel_path)? {
         Some(p) => p,
         None => {
-            mark_conflict(entry, recovery, retained, "原父目录缺失");
+            mark_conflict(entry, recovery, "原父目录缺失");
             return Ok(());
         }
     };
     if matches!(path_identity(&parent, &last), PathIdentity::Missing) {
         restore_from_trash(trash, entry, &parent, &last)?;
+        retire_entry(current, entry);
         *changed = true; // 回到一致态：事务视为未开始
     } else {
-        mark_conflict(entry, recovery, retained, "原路径已被后来文件占用");
+        mark_conflict(entry, recovery, "原路径已被后来文件占用");
     }
     Ok(())
 }
@@ -495,7 +496,7 @@ fn recover_index_still_references(
     entry: &JournalEntry,
     trash: Option<CapDir>,
     recovery: &mut Recovery,
-    retained: &mut Vec<JournalEntry>,
+    current: &mut Vec<JournalEntry>,
     changed: &mut bool,
 ) -> Result<(), String> {
     // 隔离项 Missing（目录缺失/条目缺失/rename 失败未生成）与无隔离目录
@@ -508,18 +509,19 @@ fn recover_index_still_references(
     match verdict {
         TrashVerdict::IdentityOk(_) => {
             let trash = trash.expect("IdentityOk 必有隔离目录");
-            recover_restore_if_vacant(assets, entry, &trash, recovery, retained, changed)
+            recover_restore_if_vacant(assets, entry, &trash, recovery, current, changed)
         }
         TrashVerdict::Missing => {
             if original_binds_expected(assets, entry)? {
+                retire_entry(current, entry);
                 *changed = true; // rename 失败的未开始事务：媒体原位且身份一致
             } else {
-                mark_conflict(entry, recovery, retained, "媒体缺失或身份不符");
+                mark_conflict(entry, recovery, "媒体缺失或身份不符");
             }
             Ok(())
         }
         TrashVerdict::Mismatch => {
-            mark_conflict(entry, recovery, retained, "隔离项身份不符");
+            mark_conflict(entry, recovery, "隔离项身份不符");
             Ok(())
         }
     }
@@ -529,11 +531,12 @@ fn recover_index_still_references(
 /// cleanupPending）；隔离项已不存在且原路径不再绑定预期身份 → 清理完成；
 /// 原路径仍绑定预期身份 → 重新执行身份核验隔离，绝不按原名删除。
 fn recover_index_committed(
+    library: &CapDir,
     assets: &CapDir,
     entry: &JournalEntry,
     trash: Option<CapDir>,
     recovery: &mut Recovery,
-    retained: &mut Vec<JournalEntry>,
+    current: &mut Vec<JournalEntry>,
     changed: &mut bool,
 ) -> Result<(), String> {
     let verdict = match &trash {
@@ -544,6 +547,7 @@ fn recover_index_committed(
         Some(TrashVerdict::IdentityOk(f)) => match identity_bound_unlink(&f) {
             Ok(()) => {
                 fsync_dir(trash.as_ref().expect("trash"))?;
+                retire_entry(current, entry);
                 *changed = true;
             }
             Err(_) => {
@@ -551,7 +555,6 @@ fn recover_index_committed(
                     "隔离项保留（身份绑定清理不可用）：{} / {}",
                     entry.asset_id, entry.trash_name
                 ));
-                retained.push(entry.clone());
             }
         },
         // 身份不符/被占用：保留现场与日志（不得静默清除证据）
@@ -560,7 +563,6 @@ fn recover_index_committed(
                 "隔离项保留（身份不符或被占用）：{} / {}",
                 entry.asset_id, entry.trash_name
             ));
-            retained.push(entry.clone());
         }
         // 隔离项缺失（无隔离目录或该条目不存在）：复查原路径——仍绑定预期
         // 身份则重新隔离，否则清理完成（评审修复：此前 Missing 直接清日志，
@@ -574,7 +576,9 @@ fn recover_index_committed(
                 None => false,
             };
             if original_bound {
-                re_quarantine(assets, entry, recovery, retained)?;
+                re_quarantine(library, assets, entry, recovery, current)?;
+            } else {
+                retire_entry(current, entry);
             }
             *changed = true;
         }
@@ -582,14 +586,16 @@ fn recover_index_committed(
     Ok(())
 }
 
-/// 重新执行身份核验隔离（索引已去项但媒体仍在原位）：rename 进新建隔离
-/// 区后按能力清理，能力不足保留隔离项与日志并报告 cleanupPending。
+/// 重新执行身份核验隔离（索引已去项但媒体仍在原位）：新映射先于 rename
+/// 耐久记录进日志（评审修复：先改后记的窗口会让中断后的恢复按旧名收敛、
+/// 永久孤儿化新隔离项），再 rename 并按能力清理。
 #[cfg(unix)]
 fn re_quarantine(
+    library: &CapDir,
     assets: &CapDir,
     entry: &JournalEntry,
     recovery: &mut Recovery,
-    retained: &mut Vec<JournalEntry>,
+    current: &mut Vec<JournalEntry>,
 ) -> Result<(), String> {
     let (parent, last) = match original_parent(assets, &entry.rel_path)? {
         Some(p) => p,
@@ -597,17 +603,24 @@ fn re_quarantine(
     };
     let trash = ensure_trash_dir(assets)?;
     let txn = format!("t-{}", new_id());
+    let mut updated = entry.clone();
+    updated.trash_name = format!("{TRASH_DIR}/{txn}");
+    retire_entry(current, entry);
+    current.push(updated.clone());
+    write_journal(library, current)?;
     parent
         .rename(&last, &trash, &txn)
         .map_err(|e| format!("重隔离失败（{}）：{e}", entry.asset_id))?;
     fsync_dir(&parent)?;
     fsync_dir(&trash)?;
-    let mut updated = entry.clone();
-    updated.trash_name = format!("{TRASH_DIR}/{txn}");
-    if try_bound_cleanup(&trash, &updated, recovery)? {
-        return Ok(()); // 已清理：日志不再保留该条
+    if !try_bound_cleanup(&trash, &updated, recovery)? {
+        recovery
+            .cleanup_pending
+            .push(format!("重隔离项保留待清理：{}", entry.asset_id));
+    } else {
+        retire_entry(current, &updated);
+        write_journal(library, current)?;
     }
-    retained.push(updated);
     Ok(())
 }
 
