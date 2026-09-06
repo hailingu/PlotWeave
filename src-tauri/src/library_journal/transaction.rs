@@ -30,6 +30,7 @@ pub(crate) fn delete_asset_transacted(library: &CapDir, id: &str) -> Result<Valu
 
 #[cfg(unix)]
 fn delete_asset_transacted_unix(library: &CapDir, id: &str) -> Result<Value, String> {
+    guard_journal_headroom(library)?;
     let mut recovery = recover(library)?;
     if recovery.read_only {
         return Err("删除日志异常，库写入/删除已暂停：须人工修复 asset-delete-journal.json".into());
@@ -137,6 +138,29 @@ pub(super) fn journal_entry_value(e: &JournalEntry) -> Value {
         "identity": { "dev": e.dev, "ino": e.ino },
         "trashName": e.trash_name,
     })
+}
+
+/// 删除入口守卫：读取磁盘日志并检查追加投影大小（先于 recover，避免
+/// 积压条目随恢复重复推入响应）。在半上限处拒绝新事务，隔离区须人工清理。
+fn guard_journal_headroom(library: &CapDir) -> Result<(), String> {
+    let mut warnings = Vec::new();
+    let (entries, malformed) = read_journal(library, &mut warnings);
+    if malformed {
+        return Err("删除日志异常，库写入/删除已暂停".into());
+    }
+    let projected = serde_json::to_string(&json!(entries
+        .iter()
+        .map(journal_entry_value)
+        .collect::<Vec<_>>()))
+    .map_err(|e| format!("序列化日志失败：{e}"))?
+    .len();
+    if projected > INDEX_MAX_BYTES / 2 {
+        return Err(
+            "删除日志接近上限（隔离项待清理累积）：请人工清理 assets/.trash 并同步编辑 asset-delete-journal.json 后重试"
+                .into(),
+        );
+    }
+    Ok(())
 }
 
 /// 步骤①日志耐久记录（先于任何移动）：追加事务并原子落盘 + 目录 fsync。

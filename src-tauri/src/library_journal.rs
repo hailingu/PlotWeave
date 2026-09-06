@@ -191,13 +191,14 @@ pub(super) enum PathIdentity {
 }
 
 #[cfg(unix)]
-pub(super) fn path_identity(parent: &CapDir, name: &str) -> PathIdentity {
+pub(super) fn path_identity(parent: &CapDir, name: &str) -> Result<PathIdentity, String> {
     use cap_std::fs::MetadataExt;
     match parent.symlink_metadata(name) {
-        Ok(md) if md.file_type().is_symlink() => PathIdentity::Other,
-        Ok(md) if md.is_file() => PathIdentity::Regular(md.dev(), md.ino()),
-        Ok(_) => PathIdentity::Other,
-        Err(_) => PathIdentity::Missing,
+        Ok(md) if md.file_type().is_symlink() => Ok(PathIdentity::Other),
+        Ok(md) if md.is_file() => Ok(PathIdentity::Regular(md.dev(), md.ino())),
+        Ok(_) => Ok(PathIdentity::Other),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(PathIdentity::Missing),
+        Err(e) => Err(format!("读取路径元数据失败（{name}）：{e}")),
     }
 }
 
@@ -455,7 +456,7 @@ fn mark_conflict(entry: &JournalEntry, recovery: &mut Recovery, why: &str) {
 fn original_binds_expected(assets: &CapDir, entry: &JournalEntry) -> Result<bool, String> {
     Ok(match original_parent(assets, &entry.rel_path)? {
         Some((parent, last)) => matches!(
-            path_identity(&parent, &last),
+            path_identity(&parent, &last)?,
             PathIdentity::Regular(d, i) if (d, i) == (entry.dev, entry.ino)
         ),
         None => false,
@@ -478,7 +479,7 @@ fn recover_restore_if_vacant(
             return Ok(());
         }
     };
-    if matches!(path_identity(&parent, &last), PathIdentity::Missing) {
+    if matches!(path_identity(&parent, &last)?, PathIdentity::Missing) {
         restore_from_trash(trash, entry, &parent, &last)?;
         retire_entry(current, entry);
         *changed = true; // 回到一致态：事务视为未开始
@@ -570,7 +571,7 @@ fn recover_index_committed(
         Some(TrashVerdict::Missing) | None => {
             let original_bound = match original_parent(assets, &entry.rel_path)? {
                 Some((parent, last)) => matches!(
-                    path_identity(&parent, &last),
+                    path_identity(&parent, &last)?,
                     PathIdentity::Regular(d, i) if (d, i) == (entry.dev, entry.ino)
                 ),
                 None => false,
