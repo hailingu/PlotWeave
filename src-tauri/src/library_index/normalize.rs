@@ -389,7 +389,7 @@ fn normalize_asset(a: &Value, legacy_entry: bool, warnings: &mut Vec<String>) ->
     }
     let mime = normalize_mime(a.get("mime"), &id, warnings)?;
     let source = normalize_source(a.get("source"), legacy_entry, &id, warnings)?;
-    let created = normalize_created_at(a.get("createdAt"), &id, warnings)?;
+    let created = normalize_created_at(a.get("createdAt"), legacy_entry, &id, warnings)?;
     let name = normalize_name(a.get("name"), &id, warnings)?;
     let kind = normalize_kind(a.get("kind"), &id, warnings)?;
     let tags = normalize_tags_field(a.get("tags"), &id, warnings);
@@ -475,11 +475,13 @@ fn normalize_source(
 }
 
 /// createdAt：规范 UTC ISO 原样保留；合法但非规范形转规范形；epoch 毫秒
-/// （非负安全整数且表有效日期）转 UTC ISO；其余不猜测、隔离。规范化结果
-/// 复验规范形——偏移/大毫秒可跨出四位数年域（如 9999 年末带 -23:59 偏移），
-/// 产生 5 位年的表示落盘即不可读，必须隔离原条目（评审修复，PR #33 第六轮）。
+/// （非负安全整数且表有效日期）转 UTC ISO——**仅限旧数组条目**（兼容迁移
+/// 条款；目标形状下数字是必填字段异型，与 source/view/groupId 同口径隔离，
+/// 评审修复，PR #33 第十二轮）；其余不猜测、隔离。规范化结果复验规范形——
+/// 偏移/大毫秒可跨出四位数年域，产生 5 位年的表示落盘即不可读（第六轮）。
 fn normalize_created_at(
     raw: Option<&Value>,
+    legacy_entry: bool,
     id: &str,
     warnings: &mut Vec<String>,
 ) -> Option<String> {
@@ -509,7 +511,7 @@ fn normalize_created_at(
                 None
             }
         }
-        Some(Value::Number(n)) => {
+        Some(Value::Number(n)) if legacy_entry => {
             let ms = n.as_u64()?;
             if ms > i64::MAX as u64 {
                 warnings.push(format!("条目 {id} 的 createdAt 超出可表示范围，隔离"));
@@ -524,6 +526,12 @@ fn normalize_created_at(
             }
             warnings.push(format!("条目 {id} 的毫秒时间戳已转 UTC ISO：{iso}"));
             Some(iso)
+        }
+        Some(Value::Number(_)) => {
+            warnings.push(format!(
+                "条目 {id} 的 createdAt 为数字（目标形状），不猜测，隔离"
+            ));
+            None
         }
         _ => {
             warnings.push(format!("条目 {id} 缺失/异型 createdAt，不猜测，隔离"));

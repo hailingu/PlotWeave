@@ -92,6 +92,12 @@ pub fn validate_id(id: &str) -> Result<(), String> {
 }
 /// 新 id：时间戳毫秒 + 进程内计数，保证同毫秒不碰撞。
 pub fn new_id() -> String {
+    new_id_with_prefix("p")
+}
+
+/// 带前缀的防碰撞 id 生成器（库资产等新域复用同内核，评审修复 PR #33
+/// 第十二轮）：时间戳毫秒 + 进程内计数，保证同毫秒不碰撞。
+pub(crate) fn new_id_with_prefix(prefix: &str) -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let ms = SystemTime::now()
@@ -99,7 +105,7 @@ pub fn new_id() -> String {
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
     let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("p-{ms:x}-{seq:x}")
+    format!("{prefix}-{ms:x}-{seq:x}")
 }
 /// serde 谓词：false 时省略键（versionless 标记仅真值跨 IPC）。
 fn is_false(v: &bool) -> bool {

@@ -8,7 +8,6 @@
 //! 句柄逐组件 no-follow 定位——索引自身与库外路径不可达（issue #17）。
 
 use std::sync::{Condvar, Mutex, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 use tauri::AppHandle;
@@ -109,11 +108,17 @@ pub(crate) fn put_asset_with(
     if recovery.read_only {
         return Err("删除日志异常，库写入/删除已暂停：须人工修复 asset-delete-journal.json".into());
     }
+    // 迁移落盘已发生而导入可能因业务失败早退——诊断兜底进日志（评审修复，
+    // PR #33 第十二轮）
+    crate::library_fs::report_recovery_diagnostics("导入", &recovery.warnings);
     let assets = assets_root(library)?;
     let (mut index, mut warnings) = read_index_capped(library)?;
     warnings.extend(recovery.warnings);
     let cleanup_pending = recovery.cleanup_pending;
-    let id = format!("la-{:x}-{}", now_ms(), bytes.len());
+    // id 用防碰撞生成器（毫秒+进程内计数，评审修复，PR #33 第十二轮）：旧
+    // la-{毫秒}-{大小} 方案同毫秒同大小即碰撞，Record insert 会覆盖首个条目、
+    // 孤儿化其媒体
+    let id = crate::store::new_id_with_prefix("la").replace('-', "_");
     let file_name = format!("{}.{}", id, ext_for(name, &mime));
     let mut entry = json!({
         "id": id,
@@ -213,13 +218,6 @@ pub(crate) fn ext_for(name: &str, mime: &str) -> String {
         _ => "bin",
     }
     .to_string()
-}
-
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 /// 校验元信息补丁（§7.2）：字段白名单；字段**一旦出现**即做运行时类型和
@@ -636,6 +634,9 @@ fn update_meta_with(library: &cap_std::fs::Dir, id: &str, patch: &Value) -> Resu
     if recovery.read_only {
         return Err("删除日志异常，库写入/删除已暂停：须人工修复 asset-delete-journal.json".into());
     }
+    // 迁移落盘已发生而命令可能因业务失败早退（资产不存在/合并结果冲突）——
+    // 诊断兜底进日志，修复可见性不随 Err 丢失（评审修复，PR #33 第十二轮）
+    crate::library_fs::report_recovery_diagnostics("元信息更新", &recovery.warnings);
     let (mut index, mut warnings) = read_index_capped(library)?;
     warnings.extend(recovery.warnings);
     let assets = index["assets"]["byId"]

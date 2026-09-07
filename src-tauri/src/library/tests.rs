@@ -482,10 +482,16 @@ fn put_writes_media_and_appends_entry() {
     let (library, root) = temp_fixture();
     let e = put_asset_with(&cap(&library), "立绘.png", "image/png", "character", b"PNG")
         .expect("导入应成功");
-    assert!(e["id"].as_str().unwrap_or_default().starts_with("la-"));
+    // id 为防碰撞生成器产物（la 前缀，毫秒+进程内计数；评审修复 PR #33 第
+    // 十二轮——旧 {毫秒}-{大小} 方案同毫秒同大小即碰撞）
+    let id = e["id"].as_str().unwrap_or_default();
+    assert!(
+        id.starts_with("la_") && validate_asset_id(id).is_ok(),
+        "id：{id}"
+    );
     let rel = e["relPath"].as_str().unwrap_or_default();
     assert!(
-        rel.starts_with("assets/la-") && rel.ends_with(".png"),
+        rel.starts_with(&format!("assets/{id}.")) && rel.ends_with(".png"),
         "relPath：{rel}"
     );
     assert_eq!(e["mime"].as_str(), Some("image/png"));
@@ -770,5 +776,27 @@ fn update_meta_rejects_padded_group_id_patch() {
     assert!(err.contains("groupId"), "意外诊断：{err}");
     let after = fs::read(library.join("library.json")).expect("读落盘索引字节");
     assert_eq!(before, after, "拒绝更新不得写盘");
+    cleanup(&root);
+}
+
+/// 导入 id 防碰撞（评审修复，PR #33 第十二轮）：两次导入产出的条目 id 与
+/// 媒体文件名必须唯一——旧 `la-{毫秒:x}-{大小}` 方案同毫秒同大小即碰撞，
+/// Record insert 会覆盖首个条目、孤儿化其媒体。
+#[test]
+fn put_twice_produces_distinct_ids_and_filenames() {
+    let (library, root) = temp_fixture();
+    let e1 = put_asset_with(&cap(&library), "a.png", "image/png", "other", b"AA")
+        .expect("第一次导入应成功");
+    let e2 = put_asset_with(&cap(&library), "a.png", "image/png", "other", b"AA")
+        .expect("第二次导入应成功");
+    let id1 = e1["id"].as_str().expect("id 缺失");
+    let id2 = e2["id"].as_str().expect("id 缺失");
+    assert_ne!(id1, id2, "同毫秒同大小导入不得产生重复 id");
+    assert_ne!(e1["relPath"], e2["relPath"], "媒体文件名不得碰撞");
+    let (index, _) = crate::library_fs::read_index_capped(&cap(&library)).expect("索引可读");
+    let by_id = index["assets"]["byId"]
+        .as_object()
+        .expect("assets.byId 对象");
+    assert_eq!(by_id.len(), 2, "两条目都应保留：{by_id:?}");
     cleanup(&root);
 }

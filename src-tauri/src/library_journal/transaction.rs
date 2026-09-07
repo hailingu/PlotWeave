@@ -35,6 +35,9 @@ fn delete_asset_transacted_unix(library: &CapDir, id: &str) -> Result<Value, Str
     if recovery.read_only {
         return Err("删除日志异常，库写入/删除已暂停：须人工修复 asset-delete-journal.json".into());
     }
+    // 迁移落盘已发生而删除可能因业务失败早退（资产不存在/冲突期）——诊断
+    // 兜底进日志，修复可见性不随 Err 丢失（评审修复，PR #33 第十二轮）
+    crate::library_fs::report_recovery_diagnostics("删除", &recovery.warnings);
     // 冲突期条目拒绝删除（评审修复）：重试会打开并隔离原 relPath 上的
     // 后来占用文件——标记只随日志事务解决而解除
     if recovery.conflicted.iter().any(|c| c == id) {

@@ -151,6 +151,18 @@ pub(crate) fn open_parent_dir(
     Ok(Some((dir, (*last).to_string())))
 }
 
+/// 迁移/恢复诊断逐条进结构化本机日志（评审修复，PR #33 第十一/十二轮）：
+/// 警告本应随响应返回，但命令在迁移落盘后因业务失败（资产不存在、补丁非法）
+/// 提前返回 Err 时 warnings 不附加——修复已提交、诊断却永久丢失（下次 list
+/// 读到的是已干净文件）。凡「recover 已可能落盘迁移」的命令内核在业务校验
+/// 之前调用本函数兜底；成功路径随响应返回的 warnings 与日志重复可接受（重复
+/// 优于丢失）。
+pub(crate) fn report_recovery_diagnostics(context: &str, warnings: &[String]) {
+    for w in warnings {
+        eprintln!("[library] {context}伴随迁移/恢复诊断：{w}");
+    }
+}
+
 /// 索引受限读取（library.rs 命令面与 assets.rs 导入路径的**唯一**索引读
 /// 实现）：no-follow 归类 → 大小上限内读取 → JSON 解析 → 兼容迁移 + 完整
 /// 归一化（[`crate::library_index`]，§7.2）——旧数组形状迁移为 Record、

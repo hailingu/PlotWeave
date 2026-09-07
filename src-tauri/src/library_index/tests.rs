@@ -906,3 +906,26 @@ fn omitted_bucket_in_existing_file_warns_and_marks_migrated() {
     );
     assert!(migrated, "缺失桶修复应落盘");
 }
+
+// ---- 评审修复（PR #33 第十二轮）：数字时间戳限定 legacy ----
+
+/// 目标 Record 条目数字 createdAt 隔离（评审修复）：epoch 毫秒转换是兼容
+/// 迁移条款、只对旧数组条目成立；目标形状下数字是必填字段异型，与 source
+/// 缺失、view null、groupId null 同口径——隔离不猜测。
+#[test]
+fn record_numeric_created_at_is_isolated_not_converted() {
+    let mut a = asset("la-1");
+    a["createdAt"] = json!(1_700_000_000_000u64);
+    let index = json!({ "assets": { "byId": { "la-1": a } }, "groups": { "byId": {} } });
+    let (out, warnings, _) = migrate_and_normalize(index);
+    assert!(
+        out["assets"]["byId"].as_object().unwrap().is_empty(),
+        "目标形状数字时间戳应隔离"
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("createdAt") || w.contains("时间戳")),
+        "应警告异型时间戳：{warnings:?}"
+    );
+}
