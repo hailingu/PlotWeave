@@ -363,3 +363,41 @@ fn explicit_null_source_is_isolated_not_defaulted() {
         "应警告 source 未知：{warnings:?}"
     );
 }
+
+// ---- 评审修复（PR #33 第十九轮）：legacy 数字时间戳接受一切合法 JSON 拼写 ----
+
+/// legacy 数字时间戳按值域而非内部表示校验（评审修复）：`1700000000000.0`
+/// 与 `17e11` 是同一合法值的浮点/指数 JSON 拼写，serde_json 存为浮点导致
+/// `as_u64()` 返回 None、条目被静默隔离——应接受有限/整数/非负/范围内的一切
+/// 拼写并转为规范 UTC ISO。
+#[test]
+fn legacy_float_spelled_epoch_millis_converts_to_utc_iso() {
+    let mut a = asset("la-1");
+    a["createdAt"] = json!(1_700_000_000_000.0); // 浮点拼写，同值
+    let legacy = json!({ "assets": [a], "groups": [] });
+    let (out, warnings, _) = migrate_and_normalize(legacy);
+    assert_eq!(
+        out["assets"]["byId"]["la-1"]["createdAt"], "2023-11-14T22:13:20.000Z",
+        "浮点拼写的合法毫秒应转换"
+    );
+    // 转换本身是修复（毫秒→ISO），诊断可见；不要求特定文案——值域非法的
+    // 拼写（非整数/负数/超范围）才须隔离警告
+    let mut b = asset("la-2");
+    b["createdAt"] = json!(1.7e12);
+    let legacy = json!({ "assets": [b], "groups": [] });
+    let (out, _, _) = migrate_and_normalize(legacy);
+    assert_eq!(
+        out["assets"]["byId"]["la-2"]["createdAt"],
+        "2023-11-14T22:13:20.000Z"
+    );
+    // 非整数拼写隔离
+    let mut c = asset("la-3");
+    c["createdAt"] = json!(1_700_000_000_000.5);
+    let legacy = json!({ "assets": [c], "groups": [] });
+    let (out, warnings, _) = migrate_and_normalize(legacy);
+    assert!(
+        out["assets"]["byId"].as_object().unwrap().is_empty(),
+        "非整数毫秒应隔离"
+    );
+    assert!(warnings.iter().any(|w| w.contains("createdAt")));
+}

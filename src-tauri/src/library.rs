@@ -418,6 +418,9 @@ fn resolve_media_entry_with(
     // 但不得在只读态把迁移结果写回 library.json
     let (index, _) = if recovery.read_only {
         let (idx, w) = crate::library_fs::read_index_normalized_readonly(library)?;
+        // 只读归一化诊断进日志（评审修复，PR #33 第十九轮）：媒体响应只回
+        // 200/404 无法携带 warnings，隔离/修复诊断丢弃会让脏数据不可见
+        crate::library_fs::report_recovery_diagnostics("库媒体请求", &w);
         (idx, w)
     } else {
         // 挂起态读路径照常服务只读视图

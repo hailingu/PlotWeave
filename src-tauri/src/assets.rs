@@ -46,7 +46,11 @@ fn find_library_entry(
         eprintln!("[library] 项目导入伴随迁移/恢复诊断：{w}");
     }
     let (index, _) = if read_only {
-        crate::library_fs::read_index_normalized_readonly(library)?
+        let (idx, w) = crate::library_fs::read_index_normalized_readonly(library)?;
+        // 只读归一化诊断进日志（评审修复，PR #33 第十九轮）：导入响应无法
+        // 携带 warnings，隔离/修复诊断丢弃会让脏数据不可见
+        crate::library_fs::report_recovery_diagnostics("项目导入", &w);
+        (idx, w)
     } else {
         // 挂起态读路径照常服务只读视图
         let (idx, _w, _suspended) = crate::library_fs::read_index_capped(library)?;

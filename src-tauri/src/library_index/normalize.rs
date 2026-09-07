@@ -541,12 +541,22 @@ fn normalize_created_at(
             }
         }
         Some(Value::Number(n)) if legacy_entry => {
-            let ms = n.as_u64()?;
-            if ms > i64::MAX as u64 {
-                warnings.push(format!("条目 {id} 的 createdAt 超出可表示范围，隔离"));
+            // 按值域而非内部表示校验（评审修复，PR #33 第十九轮）：
+            // `1700000000000.0`/`17e11` 是同一合法值的浮点/指数 JSON 拼写，
+            // serde_json 存为浮点导致 as_u64() 返回 None——接受有限、整数、
+            // 非负、范围内的一切拼写，不得因拼写差异静默隔离
+            let Some(f) = n.as_f64() else {
+                warnings.push(format!("条目 {id} 的 createdAt 非数值，不猜测，隔离"));
+                return None;
+            };
+            if !f.is_finite() || f.fract() != 0.0 || f < 0.0 || f > i64::MAX as f64 {
+                warnings.push(format!(
+                    "条目 {id} 的 createdAt 数字越出可表示范围或非整数，不猜测，隔离"
+                ));
                 return None;
             }
-            let iso = isotime::iso_from_ms(ms as i64);
+            let ms = f as i64;
+            let iso = isotime::iso_from_ms(ms);
             if !isotime::is_canonical_utc_timestamp(&iso) {
                 warnings.push(format!(
                     "条目 {id} 的 createdAt 越出四位数年域（{iso}），隔离"
