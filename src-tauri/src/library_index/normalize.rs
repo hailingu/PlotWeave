@@ -395,7 +395,7 @@ fn normalize_asset(a: &Value, legacy_entry: bool, warnings: &mut Vec<String>) ->
     let created = normalize_created_at(a.get("createdAt"), legacy_entry, &id, warnings)?;
     let name = normalize_name(a.get("name"), &id, warnings)?;
     let kind = normalize_kind(a.get("kind"), &id, warnings)?;
-    let tags = normalize_tags_field(a.get("tags"), &id, warnings);
+    let tags = normalize_tags_field(a.get("tags"), legacy_entry, &id, warnings);
     let view = normalize_view(a.get("view"), legacy_entry, &id, warnings);
     let group_id = normalize_group_id(a.get("groupId"), legacy_entry, &id, warnings);
     let mut e = json!({
@@ -543,14 +543,22 @@ fn normalize_created_at(
     }
 }
 
-/// tags：非数组重置 []；成员去空白、异型/空白/超长/重复删除；超 16 项留前 16。
-fn normalize_tags_field(raw: Option<&Value>, id: &str, warnings: &mut Vec<String>) -> Vec<String> {
+/// tags：非数组重置 []；成员去空白、异型/空白/超长/重复删除；超 16 项留
+/// 前 16。目标 Record 形状缺失 tags（必填字段）同为待修复脏数据——告警并
+/// 经 migrated 落盘（评审修复，PR #33 第十五轮）；legacy 数组条目缺失保持
+/// 兼容语境静默按空。
+fn normalize_tags_field(
+    raw: Option<&Value>,
+    legacy_entry: bool,
+    id: &str,
+    warnings: &mut Vec<String>,
+) -> Vec<String> {
     let Some(arr) = raw.and_then(Value::as_array) else {
-        // 字段缺失（None）正常按空；显式 null/非数组同为待修复脏数据，告警
-        // 并经 migrated 落盘（评审修复，PR #33 第三轮）——null 不另立静默口径
         if let Some(v) = raw {
             let what = if v.is_null() { "null" } else { "非数组" };
             warnings.push(format!("条目 {id} 的 tags 为{what}，已重置为空"));
+        } else if !legacy_entry {
+            warnings.push(format!("条目 {id} 缺失 tags（目标形状），已重置为空"));
         }
         return Vec::new();
     };

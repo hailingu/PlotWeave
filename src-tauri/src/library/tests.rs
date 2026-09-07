@@ -553,7 +553,7 @@ fn read_index_rejects_when_normalized_form_exceeds_cap() {
 fn oversized_migrated_index_degrades_to_in_memory_without_write() {
     let (library, root) = temp_fixture();
     let long_name = "n".repeat(120);
-    let entries: Vec<Value> = (0..3766)
+    let entries: Vec<Value> = (0..3700)
         .map(|i| {
             let mut e = entry(&format!("la-{i}"), &format!("assets/la-{i}.png"));
             e["name"] = json!(long_name);
@@ -574,7 +574,7 @@ fn oversized_migrated_index_degrades_to_in_memory_without_write() {
         index["assets"]["byId"]
             .as_object()
             .map(serde_json::Map::len),
-        Some(3766),
+        Some(3700),
         "归一化视图照常返回"
     );
     assert!(
@@ -583,5 +583,49 @@ fn oversized_migrated_index_degrades_to_in_memory_without_write() {
     );
     let after = fs::read(library.join("library.json")).expect("读落盘索引字节");
     assert_eq!(before, after, "超限迁移结果不得写盘（避免升级死锁）");
+    cleanup(&root);
+}
+
+/// 超限降级不暴露未持久化的重发 id（评审修复，PR #33 第十五轮）：迁移产物
+/// 超上限降级为不落盘时，与只读态同性质——需重发的条目必须隔离而非暴露
+/// 跨读漂移的新身份。
+#[test]
+fn oversized_migration_isolates_reissue_entries_instead_of_exposing() {
+    let (library, root) = temp_fixture();
+    let long_name = "n".repeat(120);
+    // 一个空白 id 条目 + 足量合法条目把迁移产物撑过上限
+    let mut blank = {
+        let mut e = entry("la-blank-src", "assets/la-blank.png");
+        e["id"] = json!("  ");
+        e["name"] = json!(long_name);
+        e
+    };
+    blank["id"] = json!("  ");
+    let mut entries: Vec<Value> = vec![blank];
+    entries.extend((0..3700).map(|i| {
+        let mut e = entry(&format!("la-{i}"), &format!("assets/la-{i}.png"));
+        e["name"] = json!(long_name);
+        e
+    }));
+    write_index_raw(&library, &json!({ "assets": entries, "groups": [] }));
+    let (index, warnings) =
+        crate::library_fs::read_index_capped(&cap(&library)).expect("超限降级仍可读");
+    let by_id = index["assets"]["byId"].as_object().expect("byId 对象");
+    assert_eq!(
+        by_id.len(),
+        3700,
+        "合法条目照常归一化保留，空白 id 条目应隔离：{}",
+        by_id.len()
+    );
+    assert!(
+        warnings.iter().any(|w| w.contains("上限")),
+        "超限降级应警告：{warnings:?}"
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("只读") || w.contains("隔离")),
+        "需重发条目应隔离并告警：{warnings:?}"
+    );
     cleanup(&root);
 }

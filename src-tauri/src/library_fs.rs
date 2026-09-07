@@ -210,15 +210,21 @@ pub(crate) fn read_index_normalized(
                     INDEX_MAX_BYTES / (1024 * 1024)
                 ));
             }
+            // 超限降级（评审修复，PR #33 第十四/十五轮）：迁移产物越过写上限
+            // 时本次不落盘——无法持久化重发身份，与只读态同性质，改用只读
+            // 归一化隔离需重发的条目，不向 list 暴露跨读漂移的 id
+            let original = index.clone();
             let (normalized, mut warnings, migrated) =
                 crate::library_index::migrate_and_normalize(index);
-            let mut migrated = migrated;
             if migrated && normalized_len(&normalized)? > INDEX_MAX_BYTES {
                 warnings.push(format!(
                     "资产索引迁移结果超过 {} MiB 上限，本次仅内存归一化不落盘（删除条目后可恢复落盘）",
                     INDEX_MAX_BYTES / (1024 * 1024)
                 ));
-                migrated = false;
+                let (ro_normalized, ro_warnings, _) =
+                    crate::library_index::migrate_and_normalize_readonly(original);
+                warnings.extend(ro_warnings);
+                return Ok((ro_normalized, warnings, false));
             }
             Ok((normalized, warnings, migrated))
         }

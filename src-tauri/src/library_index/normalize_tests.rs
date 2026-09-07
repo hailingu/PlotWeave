@@ -721,3 +721,33 @@ fn record_numeric_created_at_is_isolated_not_converted() {
         "应警告异型时间戳：{warnings:?}"
     );
 }
+
+// ---- 评审修复（PR #33 第十五轮）：目标形状缺失 tags 为可见修复 ----
+
+/// 目标 Record 条目缺失 tags（必填字段）为待修复脏数据（评审修复）：确定性
+/// 重置为 [] 须告警并经 migrated 落盘——静默合成会让修复每次读取重复，且
+/// 后续无关写入会把合成值当原始值提交；legacy 数组条目保持静默按空。
+#[test]
+fn record_missing_tags_warns_while_legacy_missing_is_silent() {
+    // 目标形状：缺失 tags → 警告 + migrated
+    let mut a = asset("la-1");
+    a.as_object_mut().unwrap().remove("tags");
+    let index = json!({ "assets": { "byId": { "la-1": a } }, "groups": { "byId": {} } });
+    let (out, warnings, migrated) = migrate_and_normalize(index);
+    assert_eq!(out["assets"]["byId"]["la-1"]["tags"], json!([]));
+    assert!(
+        warnings.iter().any(|w| w.contains("tags")),
+        "目标形状缺失 tags 应警告：{warnings:?}"
+    );
+    assert!(migrated, "缺失 tags 修复应落盘");
+    // 对照：legacy 数组缺失 tags → 静默按空（兼容迁移语境）
+    let mut b = asset("la-1");
+    b.as_object_mut().unwrap().remove("tags");
+    let legacy = json!({ "assets": [b], "groups": [] });
+    let (out, warnings, _) = migrate_and_normalize(legacy);
+    assert_eq!(out["assets"]["byId"]["la-1"]["tags"], json!([]));
+    assert!(
+        !warnings.iter().any(|w| w.contains("tags")),
+        "legacy 缺失 tags 是兼容语境静默按空：{warnings:?}"
+    );
+}
