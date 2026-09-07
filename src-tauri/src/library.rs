@@ -757,6 +757,7 @@ pub fn library_update_meta(app: AppHandle, id: String, patch: Value) -> Result<V
     update_meta_with(&library, &id, &patch)
 }
 
+pub(crate) mod group_commands;
 #[cfg(test)]
 mod media_protocol_tests;
 #[cfg(test)]

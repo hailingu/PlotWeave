@@ -46,6 +46,14 @@ export interface LibraryAsset {
   conflicted?: boolean
 }
 
+/** 资产组：同一主体（如某角色）的多张视图/变体的集合（§7.2）。 */
+export interface AssetGroup {
+  id: string
+  /** 组名（如「女主·林晚」）。 */
+  name: string
+  kind: LibraryKind
+}
+
 interface RawAsset {
   id?: unknown
   name?: unknown
@@ -97,6 +105,8 @@ function reportLibraryWarnings(warnings: unknown): void {
 
 /** 内存回退：blob + object URL，会话内有效。 */
 const memoryAssets = new Map<string, { asset: LibraryAsset; blob: Blob }>()
+/** 内存回退的组存储（§7.2）。 */
+const memoryGroups = new Map<string, AssetGroup>()
 
 async function tauriList(): Promise<LibraryAsset[]> {
   const { invoke } = await import('@tauri-apps/api/core')
@@ -212,5 +222,63 @@ export const libraryStore = {
     const hit = memoryAssets.get(asset.id)
     if (!hit) return Promise.reject(new Error(`资产不存在：${asset.id}`))
     return Promise.resolve(URL.createObjectURL(hit.blob))
+  },
+
+  /** 组列表：Tauri 读 library.json 的 groups.byId；内存回退读内存组。 */
+  listGroups: (): Promise<AssetGroup[]> => {
+    if (isTauri) {
+      return import('@tauri-apps/api/core').then(async ({ invoke }) => {
+        const index = await invoke<{
+          groups?: { byId?: Record<string, unknown> }
+        }>('library_list')
+        const byId = index.groups?.byId
+        const entries = byId && typeof byId === 'object' ? Object.values(byId) : []
+        return entries
+          .map((g) => g as { id?: unknown; name?: unknown; kind?: unknown })
+          .filter(
+            (g): g is AssetGroup =>
+              typeof g.id === 'string' &&
+              typeof g.name === 'string' &&
+              typeof g.kind === 'string' &&
+              KIND_SET.has(g.kind),
+          )
+      })
+    }
+    return Promise.resolve([...memoryGroups.values()])
+  },
+
+  /** 组写入：新建/更新编组；改 kind 与成员冲突即拒绝（§7.2）。 */
+  upsertGroup: (group: AssetGroup): Promise<AssetGroup> => {
+    if (isTauri) {
+      return import('@tauri-apps/api/core').then(async ({ invoke }) => {
+        const result = await invoke<AssetGroup>('upsert_library_group', { group })
+        reportLibraryWarnings((result as { warnings?: unknown } | null)?.warnings)
+        return result
+      })
+    }
+    memoryGroups.set(group.id, group)
+    return Promise.resolve(group)
+  },
+
+  /** 组删除：原子删除组并剥离成员资产的 groupId（§7.2）。 */
+  deleteGroup: (id: string): Promise<void> => {
+    if (isTauri) {
+      return import('@tauri-apps/api/core').then(async ({ invoke }) => {
+        const result = await invoke<{ warnings?: unknown; cleanupPending?: unknown[] }>(
+          'delete_library_group',
+          { id },
+        )
+        reportLibraryWarnings(result?.warnings)
+        if (result?.cleanupPending?.length) {
+          console.warn('[Library] 删除隔离区待清理：', result.cleanupPending)
+        }
+      })
+    }
+    memoryGroups.delete(id)
+    // 内存回退同款语义（§7.2）：删组剥离成员 groupId
+    for (const v of memoryAssets.values()) {
+      if (v.asset.groupId === id) v.asset = { ...v.asset, groupId: null }
+    }
+    return Promise.resolve()
   },
 }

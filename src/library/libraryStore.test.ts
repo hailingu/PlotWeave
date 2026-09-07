@@ -96,3 +96,32 @@ describe('libraryStore 内存回退：mediaUrl', () => {
     await expect(libraryStore.mediaUrl(asset)).rejects.toThrow(/不存在/)
   })
 })
+
+// ---- 组命令门面（issue #29 PR 2，§7.2）----
+
+describe('组命令门面', () => {
+  it('upsertGroup 新建/更新组', async () => {
+    const g = await libraryStore.upsertGroup({ id: 'g-1', name: '女主', kind: 'character' })
+    expect(g).toEqual({ id: 'g-1', name: '女主', kind: 'character' })
+    const groups = await libraryStore.listGroups()
+    expect(groups).toContainEqual(g)
+  })
+
+  it('deleteGroup 删除组并剥离成员 groupId', async () => {
+    const asset = await libraryStore.put(
+      new File([new Uint8Array([1])], 'a.png', { type: 'image/png' }),
+      'character',
+    )
+    await libraryStore.updateMeta(asset.id, { groupId: 'g-1' })
+    await libraryStore.upsertGroup({ id: 'g-1', name: '女主', kind: 'character' })
+    await libraryStore.deleteGroup('g-1')
+    const groups = await libraryStore.listGroups()
+    expect(groups).toHaveLength(0)
+    const after = await libraryStore.list()
+    expect(after.find((a) => a.id === asset.id)?.groupId).toBeNull()
+  })
+
+  it('listGroups 在空库返回空数组', async () => {
+    await expect(libraryStore.listGroups()).resolves.toEqual([])
+  })
+})
