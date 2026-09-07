@@ -682,3 +682,42 @@ fn blank_record_key_creates_remap_for_referencing_assets() {
         "引用空白键的 groupId 应改写为归位组 id，不得剥离"
     );
 }
+
+// ---- 评审修复（PR #33 第七轮）：只读态不产生新身份 ----
+
+/// 只读态重发退化为隔离（评审修复）：journal 异型（只读告警态）下读取不
+/// 落盘，`new_id()` 重发的 id 跨读漂移——只读模式凡需重发 id 的条目一律
+/// 隔离并警告，不暴露不稳定身份；字段级确定性修复不受影响。
+#[test]
+fn readonly_mode_isolates_instead_of_reissuing_ids() {
+    let mut blank = asset("la-1");
+    blank["id"] = json!("  "); // 空白 id，可落盘路径会重发保留
+    let index = json!({ "assets": [blank], "groups": [] });
+    // 对照：可落盘路径重发保留
+    let (out, _, _) = migrate_and_normalize(index.clone());
+    assert_eq!(out["assets"]["byId"].as_object().unwrap().len(), 1);
+    // 只读模式：隔离不重发
+    let (out, warnings, _) = migrate_and_normalize_readonly(index);
+    assert!(
+        out["assets"]["byId"].as_object().unwrap().is_empty(),
+        "只读态不得产生重发身份：{}",
+        out["assets"]
+    );
+    assert!(warnings.iter().any(|w| w.contains("只读")));
+}
+
+/// 只读模式下确定性修复照常（对照）：合法 id 条目的 mime 规范化保留——
+/// 跨读结果一致，无漂移。
+#[test]
+fn readonly_mode_keeps_deterministic_field_repairs() {
+    let mut a = asset("la-1");
+    a["mime"] = json!(" Image/PNG ");
+    let index = json!({ "assets": { "byId": { "la-1": a } }, "groups": { "byId": {} } });
+    let (out, warnings, _) = migrate_and_normalize_readonly(index);
+    assert_eq!(
+        out["assets"]["byId"]["la-1"]["mime"].as_str(),
+        Some("image/png"),
+        "确定性 mime 修复应保留"
+    );
+    assert!(warnings.iter().any(|w| w.contains("mime")));
+}

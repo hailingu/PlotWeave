@@ -33,12 +33,19 @@ fn new_asset_id() -> String {
 
 /// 读取库索引并定位条目（索引读取走 library_fs 共享内核：no-follow 归类 +
 /// 大小上限 + 脏条目隔离，坏数据绝不进入拷贝流程）：返回 (relPath, 规范化
-/// mime, 文件名组件)。条目缺失/条目形状非法均为显式错误。
+/// mime, 文件名组件)。条目缺失/条目形状非法均为显式错误。删除日志只读
+/// 告警态用不落盘读取（评审修复，PR #33 第七轮：导入是读取路径照常服务，
+/// 但不得把迁移结果写回 library.json）。
 fn find_library_entry(
     library: &CapDir,
     library_asset_id: &str,
 ) -> Result<(String, String, String), String> {
-    let (index, _) = read_index_capped(library)?;
+    let read_only = crate::library_journal::recover(library)?.read_only;
+    let (index, _) = if read_only {
+        crate::library_fs::read_index_normalized_readonly(library)?
+    } else {
+        read_index_capped(library)?
+    };
     let entry = index
         .get("assets")
         .and_then(|a| a.get("byId"))
@@ -689,6 +696,40 @@ mod tests {
         assert_eq!(ext_for_mime("application/octet-stream"), "bin");
         cleanup(&root);
     }
+
+    /// 只读告警态不得改写库索引（评审修复，PR #33 第七轮）：删除日志异型时
+    /// 项目导入的读取路径走不落盘归一化——library.json 保持原始字节，导入
+    /// 本身照常服务（读取不受只读限制）。
+    #[test]
+    fn import_read_does_not_persist_index_in_journal_read_only_mode() {
+        let (projects, library, root) = temp_fixture();
+        seed_project(&projects, "p-1");
+        // 旧数组形状索引：正常路径下读取即迁移落盘
+        let index = json!({
+            "assets": [library_entry("la-1", "la-1.png", "character", "image/png", "assets/la-1.png")],
+            "groups": [],
+        });
+        fs::write(
+            library.join("library.json"),
+            serde_json::to_string(&index).expect("序列化库索引"),
+        )
+        .expect("写入库索引");
+        fs::write(library.join("assets").join("la-1.png"), b"PNGDATA").expect("写入库媒体");
+        let before = fs::read(library.join("library.json")).expect("读原始索引字节");
+        // 异型删除日志根 → 整份恢复进入只读告警态
+        fs::write(
+            library.join(crate::library_journal::JOURNAL_FILE_NAME),
+            b"{\"not\":\"array\"}",
+        )
+        .expect("写异型日志");
+        let asset = import_asset_from_library(&cap(&projects), &cap(&library), "p-1", "la-1")
+            .expect("只读态导入（读取路径）仍应服务");
+        assert!(asset.get("id").is_some(), "导入应返回项目资产");
+        let after = fs::read(library.join("library.json")).expect("读落盘索引字节");
+        assert_eq!(before, after, "只读态不得改写 library.json");
+        cleanup(&root);
+    }
+
     #[test]
     fn ensure_child_dir_tolerates_already_exists() {
         // 并发首次落盘的竞态窗口由「总是创建 + 容忍 AlreadyExists」消除：

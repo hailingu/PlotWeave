@@ -197,6 +197,34 @@ pub(crate) fn read_index_normalized(
     }
 }
 
+/// 只读告警态的归一化读取（评审修复，PR #33 第七轮）：不落盘且**不重发
+/// id**——journal 异型时写入被暂停，`new_id()` 重发的新身份无法持久化、
+/// 跨读漂移；需重发的条目隔离并警告（不暴露不稳定身份）。供 list/媒体/
+/// 导入三个读取路径在 `recovery.read_only` 时使用。
+pub(crate) fn read_index_normalized_readonly(
+    library: &CapDir,
+) -> Result<(Value, Vec<String>), String> {
+    match read_index_text_capped(library)? {
+        None => Ok((default_index(), Vec::new())),
+        Some(text) => {
+            let index: Value =
+                serde_json::from_str(&text).map_err(|e| format!("资产索引损坏：{e}"))?;
+            if !index.is_object() {
+                return Err("资产索引根必须是对象".into());
+            }
+            if normalized_len(&index)? > INDEX_MAX_BYTES {
+                return Err(format!(
+                    "资产索引规范化表示超过 {} MiB 上限，拒绝读取",
+                    INDEX_MAX_BYTES / (1024 * 1024)
+                ));
+            }
+            let (normalized, warnings, _) =
+                crate::library_index::migrate_and_normalize_readonly(index);
+            Ok((normalized, warnings))
+        }
+    }
+}
+
 /// 索引文本受限读取：no-follow 归类（拒符号链接/异型）、总量上限内读取、
 /// 缺失返回 None（回退默认索引）。
 fn read_index_text_capped(library: &CapDir) -> Result<Option<String>, String> {

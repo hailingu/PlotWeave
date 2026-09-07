@@ -13,7 +13,7 @@
 
 mod normalize;
 
-pub(crate) use normalize::migrate_and_normalize;
+pub(crate) use normalize::{migrate_and_normalize, migrate_and_normalize_readonly};
 
 #[cfg(test)]
 mod tests;

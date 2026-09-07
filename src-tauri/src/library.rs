@@ -65,7 +65,7 @@ pub fn library_list(app: AppHandle) -> Result<Value, String> {
 pub(crate) fn list_assets_with(library: &cap_std::fs::Dir) -> Result<(Value, Vec<String>), String> {
     let mut recovery = crate::library_journal::recover(library)?;
     let (mut index, mut warnings) = if recovery.read_only {
-        let (idx, w, _) = crate::library_fs::read_index_normalized(library)?;
+        let (idx, w) = crate::library_fs::read_index_normalized_readonly(library)?;
         (idx, w)
     } else {
         read_index_capped(library)?
@@ -325,7 +325,7 @@ fn resolve_media_entry_with(
     // 只读告警态用不落盘读取（评审修复，PR #33 第五轮）：媒体读取本身不受限，
     // 但不得在只读态把迁移结果写回 library.json
     let (index, _) = if recovery.read_only {
-        let (idx, w, _) = crate::library_fs::read_index_normalized(library)?;
+        let (idx, w) = crate::library_fs::read_index_normalized_readonly(library)?;
         (idx, w)
     } else {
         read_index_capped(library)?

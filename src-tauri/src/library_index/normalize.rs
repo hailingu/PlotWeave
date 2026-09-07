@@ -34,9 +34,20 @@ const VIEWS: [&str; 8] = [
 /// 目标 Record 形状 `{assets:{byId},groups:{byId}}`，返回 (归一化索引, 警告,
 /// 是否发生迁移/修复)。`migrated` 为 true 表示输入是旧数组形状或含被修复/
 /// 重发的条目——调用方据此把迁移结果落盘，保证重发 id 跨读取稳定（评审
-/// 修复，PR #33 第二轮：迁移只在内存不落盘会让 list 显示的 id 与后续媒体/
-/// 删除命令读到的不一致）。纯函数；异型根按空库收敛并告警。
+/// 修复，PR #33 第二轮）。纯函数；异型根按空库收敛并告警。
 pub(crate) fn migrate_and_normalize(index: Value) -> (Value, Vec<String>, bool) {
+    migrate_inner(index, true)
+}
+
+/// 只读告警态变体（评审修复，PR #33 第七轮）：journal 异型时读取不落盘，
+/// `new_id()` 重发的 id 会跨读漂移——`allow_reissue=false` 凡需重发 id 的
+/// 条目一律隔离并警告（不暴露不稳定身份）；mime/createdAt 等字段级确定性
+/// 修复跨读一致，照常生效。
+pub(crate) fn migrate_and_normalize_readonly(index: Value) -> (Value, Vec<String>, bool) {
+    migrate_inner(index, false)
+}
+
+fn migrate_inner(index: Value, allow_reissue: bool) -> (Value, Vec<String>, bool) {
     let mut warnings = Vec::new();
     if !index.is_object() {
         warnings.push("资产索引根不是对象，已按空库收敛".into());
@@ -46,11 +57,13 @@ pub(crate) fn migrate_and_normalize(index: Value) -> (Value, Vec<String>, bool) 
     // 剥离等经 warnings 非空体现（归一化只对脏数据告警，干净 Record 无警告）。
     let is_legacy = index.get("assets").is_some_and(Value::is_array)
         || index.get("groups").is_some_and(Value::is_array);
-    let (groups, blank_group_map) = normalize_groups(index.get("groups").cloned(), &mut warnings);
+    let (groups, blank_group_map) =
+        normalize_groups(index.get("groups").cloned(), allow_reissue, &mut warnings);
     let assets = normalize_assets(
         index.get("assets").cloned(),
         &groups,
         &blank_group_map,
+        allow_reissue,
         &mut warnings,
     );
     let migrated = is_legacy || !warnings.is_empty();
@@ -107,10 +120,12 @@ fn take_entries(
 /// 改写为键。数组或 Record 键不可用时按内嵌 id 键化——重复 id 保留文档序
 /// 首项、后续重发；空白/缺失/非法 id 重发。空白映射逐拼写追踪：仅**同一
 /// 拼写**出现多个空白条目时该拼写映射歧义（§7.2「多个同值空白组」），不同
-/// 拼写各自确定（评审修复，PR #33 第五轮）。
+/// 拼写各自确定（评审修复，PR #33 第五轮）。`allow_reissue=false`（只读
+/// 告警态）时重发路径退化为隔离——只读态不落盘，随机重发 id 会跨读漂移。
 fn keyify(
     raw: Option<Value>,
     bucket: &str,
+    allow_reissue: bool,
     warnings: &mut Vec<String>,
 ) -> (
     Map<String, Value>,
@@ -141,8 +156,19 @@ fn keyify(
         // 「真实空白字符串 id」（Some——其精确拼写可被引用，评审修复，PR #33
         // 第四轮）
         let embedded_id = e.get("id").and_then(Value::as_str);
-        let (final_id, blank_spelling) =
-            assign_key(key, embedded_id, &map, &reserved, bucket, warnings);
+        let assigned = assign_key(
+            key,
+            embedded_id,
+            &map,
+            &reserved,
+            bucket,
+            allow_reissue,
+            warnings,
+        );
+        let Some((final_id, blank_spelling)) = assigned else {
+            // 只读态重发退化：条目隔离，不暴露跨读漂移的新身份
+            continue;
+        };
         if let Some(spelling) = blank_spelling {
             match blank_spells.get_mut(&spelling) {
                 Some((_, n)) => *n += 1,
@@ -168,14 +194,17 @@ fn keyify(
 /// 不 trim；回退 id 不得占用预留权威键。返回的旧拼写映射候选：非法权威键
 /// 携带其原始拼写（键是 Record 的引用权威，条目归位后引用按旧键改写，评审
 /// 修复 PR #33 第六轮）；数组条目（无键）仅在空白内嵌 id 重发时携带该拼写。
+/// `allow_reissue=false`（只读告警态）时凡需重发 id 的路径返回 None——调用
+/// 方隔离该条目，不产生跨读漂移的新身份。
 fn assign_key(
     key: Option<String>,
     embedded_id: Option<&str>,
     map: &Map<String, Value>,
     reserved: &std::collections::HashSet<String>,
     bucket: &str,
+    allow_reissue: bool,
     warnings: &mut Vec<String>,
-) -> (String, Option<String>) {
+) -> Option<(String, Option<String>)> {
     // Record 权威键优先且原样保留（不 trim）：键合法且未被先前条目占用即
     // 以键为准——合法权威键彼此唯一（JSON 对象键去重），预留集只约束回退
     if let Some(k) = key.as_deref() {
@@ -185,7 +214,7 @@ fn assign_key(
                     "资产索引 {bucket} 键 {k} 与内嵌 id 不一致，以键为准改写"
                 ));
             }
-            return (k.to_string(), None);
+            return Some((k.to_string(), None));
         }
     }
     // 非法权威键的原始拼写是引用解析权威：映射到条目最终归位 id；数组条目
@@ -194,7 +223,8 @@ fn assign_key(
     // 缺失/非字符串 id：从未可被 groupId 引用，重发；映射只随非法键拼写走
     let Some(embedded_raw) = embedded_id else {
         warnings.push(format!("资产索引 {bucket} 缺失/非字符串 id，已重发"));
-        return (fresh_id(map, reserved), key_spelling);
+        return reissue_or_isolate(map, reserved, allow_reissue, bucket, warnings)
+            .map(|id| (id, key_spelling.clone()));
     };
     let embedded = embedded_raw.trim();
     let valid_id = !embedded.is_empty() && validate_asset_id(embedded).is_ok();
@@ -204,21 +234,41 @@ fn assign_key(
             warnings.push(format!(
                 "资产索引 {bucket} 内嵌 id {embedded} 与权威键冲突，已重发"
             ));
-            return (fresh_id(map, reserved), key_spelling);
+            return reissue_or_isolate(map, reserved, allow_reissue, bucket, warnings)
+                .map(|id| (id, key_spelling.clone()));
         }
-        return (embedded.to_string(), key_spelling);
+        return Some((embedded.to_string(), key_spelling));
     }
     if valid_id {
         warnings.push(format!(
             "资产索引 {bucket} 含重复 id {embedded}，后续项重发"
         ));
-        return (fresh_id(map, reserved), key_spelling);
+        return reissue_or_isolate(map, reserved, allow_reissue, bucket, warnings)
+            .map(|id| (id, key_spelling.clone()));
     }
     // 空白/非法字符串 id 重发：数组条目携带内嵌原始拼写（未 trim）供组引用
     // 精确匹配；有非法键时键拼写优先（引用按键解析）
     warnings.push(format!("资产索引 {bucket} 含空白/非法 id，已重发"));
     let spelling = key_spelling.or_else(|| Some(embedded_raw.to_string()));
-    (fresh_id(map, reserved), spelling)
+    reissue_or_isolate(map, reserved, allow_reissue, bucket, warnings).map(|id| (id, spelling))
+}
+
+/// 重发辅助（评审修复，PR #33 第七轮）：只读告警态禁止产生新身份——返回
+/// None（条目隔离）并告警；可落盘路径生成未占用重发 id。
+fn reissue_or_isolate(
+    map: &Map<String, Value>,
+    reserved: &std::collections::HashSet<String>,
+    allow_reissue: bool,
+    bucket: &str,
+    warnings: &mut Vec<String>,
+) -> Option<String> {
+    if !allow_reissue {
+        warnings.push(format!(
+            "资产索引 {bucket} 需重发 id，只读态不产生新身份，条目已隔离"
+        ));
+        return None;
+    }
+    Some(fresh_id(map, reserved))
 }
 
 /// 生成桶内未占用的重发 id（用连字符替换前缀，保证 validate_asset_id 通过；
@@ -237,12 +287,13 @@ fn fresh_id(map: &Map<String, Value>, reserved: &std::collections::HashSet<Strin
 /// 的 groupId（§7.2：仅同一拼写的空白组唯一时映射确定，同值重复即歧义）。
 fn normalize_groups(
     raw: Option<Value>,
+    allow_reissue: bool,
     warnings: &mut Vec<String>,
 ) -> (
     Map<String, Value>,
     std::collections::HashMap<String, String>,
 ) {
-    let (map, blank_map) = keyify(raw, "groups", warnings);
+    let (map, blank_map) = keyify(raw, "groups", allow_reissue, warnings);
     let mut out = Map::new();
     for (key, g) in map {
         match normalize_group(&g, warnings) {
@@ -271,9 +322,10 @@ fn normalize_assets(
     raw: Option<Value>,
     groups: &Map<String, Value>,
     blank_group_map: &std::collections::HashMap<String, String>,
+    allow_reissue: bool,
     warnings: &mut Vec<String>,
 ) -> Map<String, Value> {
-    let (mut map, _blank) = keyify(raw, "assets", warnings);
+    let (mut map, _blank) = keyify(raw, "assets", allow_reissue, warnings);
     apply_blank_group_map(&mut map, blank_group_map, warnings);
     let mut out = Map::new();
     for (key, a) in map {
