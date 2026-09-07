@@ -123,10 +123,17 @@ pub(crate) fn put_asset_with(
     }
     warnings.extend(recovery.warnings);
     let cleanup_pending = recovery.cleanup_pending;
-    // id 用防碰撞生成器（毫秒+进程内计数，评审修复，PR #33 第十二轮）：旧
-    // la-{毫秒}-{大小} 方案同毫秒同大小即碰撞，Record insert 会覆盖首个条目、
-    // 孤儿化其媒体
-    let id = crate::store::new_id_with_prefix("la").replace('-', "_");
+    // id 用防碰撞生成器（毫秒+进程内计数+随机段，评审修复，PR #33 第十二/
+    // 十七轮）：旧 la-{毫秒}-{大小} 方案同毫秒同大小即碰撞；进程内计数器跨
+    // 进程不唯一（Windows 库锁为进程本地互斥），故生成后按当前 byId 查重
+    // 重试——随机段提升跨进程区分度，查重闭合跨进程锁正确平台的碰撞窗口
+    let id = {
+        let taken = index["assets"]["byId"]
+            .as_object()
+            .ok_or("资产索引结构损坏")?
+            .clone();
+        unique_library_id(&taken)
+    };
     let file_name = format!("{}.{}", id, ext_for(name, &mime));
     let mut entry = json!({
         "id": id,
@@ -205,6 +212,35 @@ fn normalize_tags(raw: Option<&Value>) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// 库资产 id（评审修复，PR #33 第十七轮）：生成器产出与当前 byId 冲突时
+/// 重试——进程内计数器跨进程不唯一（Windows 的库锁为进程本地互斥，同毫秒
+/// 两进程可能生成同 id 且 last-writer-wins 覆盖），随机段提升跨进程区分度、
+/// 按当前索引查重重试在跨进程锁正确平台（Unix flock）闭合碰撞窗口。
+fn unique_library_id(taken: &serde_json::Map<String, Value>) -> String {
+    unique_library_id_with(taken, || {
+        crate::store::new_id_with_prefix("la").replace('-', "_")
+    })
+}
+
+/// [`unique_library_id`] 的可注入变体（测试用）：生成器由调用方提供。
+fn unique_library_id_with<G: FnMut() -> String>(
+    taken: &serde_json::Map<String, Value>,
+    mut gen: G,
+) -> String {
+    for _ in 0..8 {
+        let cand = gen();
+        if !taken.contains_key(&cand) {
+            return cand;
+        }
+    }
+    // 兜底（理论不可达：随机段 2^32 + 计数器）：拼时间戳保证唯一形态
+    let mut fallback = crate::store::new_id_with_prefix("la").replace('-', "_");
+    while taken.contains_key(&fallback) {
+        fallback = format!("{fallback}x");
+    }
+    fallback
 }
 
 /// mime → 扩展名（未知类型回退 bin，文件名扩展优先）。

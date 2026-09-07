@@ -666,3 +666,23 @@ fn migration_suspended_blocks_mutations_preserving_disk() {
     assert_eq!(before, after, "挂起态变更不得写盘（防隔离条目被抹）");
     cleanup(&root);
 }
+
+/// 库 id 查重重试（评审修复，PR #33 第十七轮）：生成器产出与当前 byId 冲突
+/// 时重试——进程内计数器跨进程不唯一（Windows 的库锁为进程本地互斥），按
+/// 当前索引查重 + 随机段在跨进程锁正确平台闭合碰撞窗口。
+#[test]
+fn unique_library_id_retries_on_collision_with_current_by_id() {
+    let mut taken = serde_json::Map::new();
+    taken.insert("dup".into(), json!({}));
+    let mut calls = 0;
+    let id = unique_library_id_with(&taken, || {
+        calls += 1;
+        if calls <= 2 {
+            "dup".to_string() // 模拟跨进程同毫秒同计数碰撞
+        } else {
+            "fresh".to_string()
+        }
+    });
+    assert_eq!(id, "fresh", "碰撞应重试直到未占用");
+    assert_eq!(calls, 3);
+}
