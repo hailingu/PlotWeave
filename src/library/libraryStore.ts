@@ -272,11 +272,18 @@ export const libraryStore = {
         return result
       })
     }
-    // 内存回退同款形状校验（评审修复，PR #36 第三轮）：id 非空、name 去空白
-    // 1–128（合法 name 存 trim 后的值）、kind 在声明联合内——与生产路径的
-    // validate_group_for_write 同语义
-    if (group.id === '' || typeof group.id !== 'string') {
-      return Promise.reject(new Error('组 id 非法'))
+    // 内存回退同款形状校验（评审修复，PR #36 第三/四轮）：id 镜像 Rust
+    // validate_asset_id（1–64 ASCII 字母数字/_/-）、name 去空白 1–128（合法
+    // name 存 trim 后的值）、kind 在声明联合内——与生产路径同语义
+    const id =
+      typeof group.id === 'string' &&
+      group.id.length > 0 &&
+      group.id.length <= 64 &&
+      [...group.id].every((c) => /^[a-zA-Z0-9_-]$/.test(c))
+        ? group.id
+        : null
+    if (id === null) {
+      return Promise.reject(new Error(`组 id 非法：${String(group.id)}`))
     }
     const name = typeof group.name === 'string' ? group.name.trim() : ''
     if (name === '' || name.length > 128) {

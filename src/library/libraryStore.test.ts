@@ -184,3 +184,20 @@ describe('内存回退组形状校验', () => {
     ).rejects.toThrow(/kind/)
   })
 })
+
+/// 内存回退 id 校验与生产同款（评审修复，PR #36 第四轮）：镜像 Rust
+/// validate_asset_id——1–64 ASCII 字母数字/_/-；空白填充、路径段、超长
+/// 一律拒绝。
+describe('内存回退组 id 校验', () => {
+  it('upsertGroup 拒绝不在生产 id 值域内的 id', async () => {
+    for (const id of [' g ', '../g', 'g'.repeat(65), 'g/1', 'g.1']) {
+      await expect(libraryStore.upsertGroup({ id, name: 'x', kind: 'character' })).rejects.toThrow(
+        /id/,
+      )
+    }
+    // 合法形态仍通过
+    await expect(
+      libraryStore.upsertGroup({ id: 'g_1-A', name: 'x', kind: 'character' }),
+    ).resolves.toMatchObject({ id: 'g_1-A' })
+  })
+})
