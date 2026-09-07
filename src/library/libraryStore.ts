@@ -263,7 +263,8 @@ export const libraryStore = {
           )
       })
     }
-    return Promise.resolve([...memoryGroups.values()])
+    // 克隆返回（评审修复，PR #36 第六轮）：调用方 mutate 返回值不得改存储
+    return Promise.resolve([...memoryGroups.values()].map((g) => ({ ...g })))
   },
 
   /** 组写入：新建/更新编组；改 kind 与成员冲突即拒绝（§7.2）。 */
@@ -314,8 +315,10 @@ export const libraryStore = {
         )
       }
     }
-    memoryGroups.set(normalized.id, normalized)
-    return Promise.resolve(normalized)
+    // 克隆存储与返回（评审修复，PR #36 第六轮）：调用方 mutate 传入/返回
+    // 的对象不得绕过校验直接改 memoryGroups
+    memoryGroups.set(normalized.id, { ...normalized })
+    return Promise.resolve({ ...normalized })
   },
 
   /** 组删除：原子删除组并剥离成员资产的 groupId（§7.2）。 */

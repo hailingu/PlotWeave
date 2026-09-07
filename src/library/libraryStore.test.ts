@@ -234,3 +234,28 @@ describe('内存回退 updateMeta 的 groupId 校验', () => {
     expect((await fresh.list()).find((a) => a.id === loc.id)?.groupId).toBeNull()
   })
 })
+
+/// 内存回退组与调用方对象隔离（评审修复，PR #36 第六轮）：存储与返回克隆
+/// ——调用方 mutate 传入/返回的对象不得绕过校验直接改 memoryGroups。
+describe('内存回退组对象隔离', () => {
+  it('mutate 传入/返回/listGroups 的对象不影响存储', async () => {
+    const g = await libraryStore.upsertGroup({ id: 'g-iso', name: '女主', kind: 'character' })
+    const member = await libraryStore.put(
+      new File([new Uint8Array([1])], 'a.png', { type: 'image/png' }),
+      'character',
+    )
+    await libraryStore.updateMeta(member.id, { groupId: 'g-iso' })
+    // mutate 传入的引用
+    g.name = '被改'
+    // mutate upsert 返回的引用
+    const again = await libraryStore.upsertGroup({ id: 'g-iso', name: '女主', kind: 'character' })
+    again.kind = 'location'
+    // mutate listGroups 返回的引用
+    const listed = await libraryStore.listGroups()
+    const listedG = listed.find((x) => x.id === 'g-iso')
+    listedG!.kind = 'location'
+    // 存储中的组不受影响：成员仍同 kind 一致
+    const after = (await libraryStore.listGroups()).find((x) => x.id === 'g-iso')
+    expect(after).toEqual({ id: 'g-iso', name: '女主', kind: 'character' })
+  })
+})
