@@ -218,8 +218,9 @@ fn assign_key(
         }
     }
     // 非法权威键的原始拼写是引用解析权威：映射到条目最终归位 id；数组条目
-    // （键缺失）此候选为 None
-    let key_spelling = key.filter(|k| !k.is_empty() && validate_asset_id(k).is_err());
+    // （键缺失）此候选为 None。空串键同为非法键、其拼写可被 groupId 精确
+    // 引用，一并入映射（评审修复，PR #33 第八轮：非空过滤会漏掉 "" 键）
+    let key_spelling = key.filter(|k| validate_asset_id(k).is_err());
     // 缺失/非字符串 id：从未可被 groupId 引用，重发；映射只随非法键拼写走
     let Some(embedded_raw) = embedded_id else {
         warnings.push(format!("资产索引 {bucket} 缺失/非字符串 id，已重发"));
@@ -317,7 +318,9 @@ fn normalize_group(g: &Value, warnings: &mut Vec<String>) -> Option<Value> {
 
 /// 资产桶归一化：键化 → 空白组映射改写原始条目的 groupId → 逐条完整校验 →
 /// 跨条目 groupId/kind 一致性。空白映射必须在归一化之前作用——归一化会把
-/// 空白 groupId 剥离成缺失，改写就无处可施。
+/// 空白 groupId 剥离成缺失，改写就无处可施。桶形状（旧数组 = 兼容迁移语境）
+/// 传到条目级——`source` 缺失补 upload 仅对旧数组条目成立（评审修复，PR #33
+/// 第八轮）。
 fn normalize_assets(
     raw: Option<Value>,
     groups: &Map<String, Value>,
@@ -325,11 +328,12 @@ fn normalize_assets(
     allow_reissue: bool,
     warnings: &mut Vec<String>,
 ) -> Map<String, Value> {
+    let legacy_bucket = raw.as_ref().is_some_and(Value::is_array);
     let (mut map, _blank) = keyify(raw, "assets", allow_reissue, warnings);
     apply_blank_group_map(&mut map, blank_group_map, warnings);
     let mut out = Map::new();
     for (key, a) in map {
-        match normalize_asset(&a, warnings) {
+        match normalize_asset(&a, legacy_bucket, warnings) {
             Some(norm) => {
                 out.insert(key, norm);
             }
@@ -368,7 +372,9 @@ fn apply_blank_group_map(
 }
 
 /// 逐条 LibraryAsset 归一化：AssetRef 共享字段 + name/kind/tags/view/groupId。
-fn normalize_asset(a: &Value, warnings: &mut Vec<String>) -> Option<Value> {
+/// `legacy_entry` 表示条目来自旧数组桶（兼容迁移语境）——仅此语境下缺失
+/// source 可确定性补 upload。
+fn normalize_asset(a: &Value, legacy_entry: bool, warnings: &mut Vec<String>) -> Option<Value> {
     let id = a.get("id").and_then(Value::as_str)?.to_string();
     let rel = a.get("relPath").and_then(Value::as_str)?;
     if !is_valid_active_asset_rel_path(rel) {
@@ -376,7 +382,7 @@ fn normalize_asset(a: &Value, warnings: &mut Vec<String>) -> Option<Value> {
         return None;
     }
     let mime = normalize_mime(a.get("mime"), &id, warnings)?;
-    let source = normalize_source(a.get("source"), &id, warnings)?;
+    let source = normalize_source(a.get("source"), legacy_entry, &id, warnings)?;
     let created = normalize_created_at(a.get("createdAt"), &id, warnings)?;
     let name = normalize_name(a.get("name"), &id, warnings)?;
     let kind = normalize_kind(a.get("kind"), &id, warnings)?;
@@ -433,14 +439,26 @@ fn normalize_mime(raw: Option<&Value>, id: &str, warnings: &mut Vec<String>) -> 
     Some(norm)
 }
 
-/// source：仅字段**缺失**（旧数组条目）确定性补 upload——已知其均为本地导入
-/// 产生；显式 null/非枚举值属未知来源，不得猜测，按 §7.2 隔离并警告（评审
-/// 修复，PR #33 第四轮：显式 null 不等于缺失）。
-fn normalize_source(raw: Option<&Value>, id: &str, warnings: &mut Vec<String>) -> Option<String> {
+/// source：仅**旧数组条目**字段缺失时确定性补 upload——「当前库资产均由
+/// 本地导入产生」是 §7.2 兼容迁移条款，只对已发布的数组格式成立；目标
+/// Record 形状缺 source 是必填 AssetRef 字段缺失，隔离不猜测；显式 null/
+/// 非枚举值属未知来源，同样隔离（评审修复，PR #33 第四/八轮）。
+fn normalize_source(
+    raw: Option<&Value>,
+    legacy_entry: bool,
+    id: &str,
+    warnings: &mut Vec<String>,
+) -> Option<String> {
     match raw {
-        None => {
+        None if legacy_entry => {
             warnings.push(format!("条目 {id} 缺失 source，确定性补为 upload"));
             Some("upload".into())
+        }
+        None => {
+            warnings.push(format!(
+                "条目 {id} 缺失必填 source（目标形状），不猜测，隔离"
+            ));
+            None
         }
         Some(Value::String(s)) if s == "upload" || s == "generated" => Some(s.clone()),
         Some(_) => {
@@ -464,13 +482,12 @@ fn normalize_created_at(
             if isotime::is_canonical_utc_timestamp(s) {
                 Some(s.clone())
             } else if isotime::is_valid_iso8601(s) {
-                let ms = isotime::iso8601_to_epoch_millis(s);
-                let ms = match ms.and_then(|v| u64::try_from(v).ok()) {
-                    Some(v) => v,
-                    None => {
-                        warnings.push(format!("条目 {id} 的 createdAt 无法转 UTC 瞬间，隔离"));
-                        return None;
-                    }
+                // 合法但非规范形：经毫秒往返规范化为规范 UTC 形——负瞬间
+                // （1970 前）同样规范化保留，不得因符号被隔离（评审修复，
+                // PR #33 第八轮）
+                let Some(ms) = isotime::iso8601_to_epoch_millis(s) else {
+                    warnings.push(format!("条目 {id} 的 createdAt 无法转 UTC 瞬间，隔离"));
+                    return None;
                 };
                 let norm = isotime::iso_from_ms(ms);
                 if !isotime::is_canonical_utc_timestamp(&norm) {
@@ -492,7 +509,7 @@ fn normalize_created_at(
                 warnings.push(format!("条目 {id} 的 createdAt 超出可表示范围，隔离"));
                 return None;
             }
-            let iso = isotime::iso_from_ms(ms);
+            let iso = isotime::iso_from_ms(ms as i64);
             if !isotime::is_canonical_utc_timestamp(&iso) {
                 warnings.push(format!(
                     "条目 {id} 的 createdAt 越出四位数年域（{iso}），隔离"

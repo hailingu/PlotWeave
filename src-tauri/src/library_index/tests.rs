@@ -560,12 +560,13 @@ fn explicit_null_source_is_isolated_not_defaulted() {
     );
 }
 
-/// 对照：真正缺失 source 字段仍确定性补 upload（不回归既有迁移语义）。
+/// 对照：旧数组条目缺失 source 字段仍确定性补 upload（不回归迁移语义；
+/// 「均由本地导入产生」的已知来源仅对已发布的数组格式成立）。
 #[test]
 fn genuinely_missing_source_still_defaults_to_upload() {
     let mut a = asset("la-1");
     a.as_object_mut().unwrap().remove("source"); // 字段缺失
-    let index = json!({ "assets": { "byId": { "la-1": a } }, "groups": { "byId": {} } });
+    let index = json!({ "assets": [a], "groups": [] }); // 旧数组形状（legacy 语境）
     let (out, warnings, _) = migrate_and_normalize(index);
     assert_eq!(out["assets"]["byId"]["la-1"]["source"], "upload");
     assert!(warnings.iter().any(|w| w.contains("source")));
@@ -720,4 +721,56 @@ fn readonly_mode_keeps_deterministic_field_repairs() {
         "确定性 mime 修复应保留"
     );
     assert!(warnings.iter().any(|w| w.contains("mime")));
+}
+
+// ---- 评审修复（PR #33 第八轮）：空串键映射、source 形状限定、pre-epoch ----
+
+/// 空串 Record 键同样进映射（评审修复）：`groups.byId[""] = { id: "g-old" }`
+/// 的空串键非法被拒、组按内嵌 id 归位，引用空串键的 groupId 需按「"" →
+/// 归位 id」映射改写——空串是可精确匹配的拼写，不得被非空过滤排除。
+#[test]
+fn empty_string_record_key_creates_remap_for_referencing_assets() {
+    let g = group("g-old", "character");
+    let mut a = asset("la-1");
+    a["groupId"] = json!(""); // 引用空串键
+    let index = json!({
+        "assets": [a],
+        "groups": { "byId": { "": g } },
+    });
+    let (out, _w, _m) = migrate_and_normalize(index);
+    assert_eq!(
+        out["assets"]["byId"]["la-1"]["groupId"], "g-old",
+        "引用空串键的 groupId 应改写为归位组 id，不得剥离"
+    );
+}
+
+/// source 补 upload 仅限旧数组条目（评审修复）：「当前库资产均由本地导入
+/// 产生」是兼容迁移条款、只对已发布的数组格式成立；已是目标 Record 形状的
+/// 条目缺 source 是必填 AssetRef 字段缺失，必须隔离而非猜测补 upload。
+#[test]
+fn record_entry_missing_source_is_isolated_not_defaulted() {
+    let mut a = asset("la-1");
+    a.as_object_mut().unwrap().remove("source");
+    let index = json!({ "assets": { "byId": { "la-1": a } }, "groups": { "byId": {} } });
+    let (out, warnings, _) = migrate_and_normalize(index);
+    assert!(
+        out["assets"]["byId"].as_object().unwrap().is_empty(),
+        "目标形状缺 source 应隔离"
+    );
+    assert!(warnings.iter().any(|w| w.contains("source")));
+}
+
+/// pre-epoch 合法时间戳规范化而非隔离（评审修复）：`1960-01-01T00:00:00Z`
+/// 是合法非规范形（负瞬间），不得因负毫秒转 u64 失败被隔离——等价规范形
+/// `.000Z` 被直接接受，同值不同格式不得不同命运。
+#[test]
+fn pre_epoch_timestamp_normalizes_instead_of_isolating() {
+    let mut a = asset("la-1");
+    a["createdAt"] = json!("1960-01-01T00:00:00Z");
+    let index = json!({ "assets": { "byId": { "la-1": a } }, "groups": { "byId": {} } });
+    let (out, _, _) = migrate_and_normalize(index);
+    assert_eq!(
+        out["assets"]["byId"]["la-1"]["createdAt"], "1960-01-01T00:00:00.000Z",
+        "pre-epoch 合法时间戳应规范化保留"
+    );
 }

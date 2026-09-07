@@ -7,12 +7,14 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// epoch 毫秒 → ISO 8601（UTC，civil-from-days 算法，无外部依赖）。
-pub(crate) fn iso_from_ms(ms: u64) -> String {
-    let secs = ms / 1000;
-    let millis = ms % 1000;
-    let days = (secs / 86400) as i64;
-    let rem = secs % 86400;
+/// epoch 毫秒 → ISO 8601（UTC，civil-from-days 算法，无外部依赖）。接受
+/// 负毫秒（1970 前瞬间）——加载归一化需把合法 pre-epoch 时间戳规范化为
+/// 规范 UTC 形，不得因符号被隔离（评审修复，PR #33 第八轮）。
+pub(crate) fn iso_from_ms(ms: i64) -> String {
+    let secs = ms.div_euclid(1000);
+    let millis = ms.rem_euclid(1000) as u64;
+    let days = secs.div_euclid(86400);
+    let rem = secs.rem_euclid(86400);
     let (h, m, s) = (rem / 3600, rem % 3600 / 60, rem % 60);
     let z = days + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
@@ -30,7 +32,7 @@ pub(crate) fn iso_from_ms(ms: u64) -> String {
 pub(crate) fn now_iso() -> String {
     let ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
+        .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
     iso_from_ms(ms)
 }
@@ -215,6 +217,10 @@ mod tests {
         assert_eq!(iso_from_ms(1_700_000_000_000), "2023-11-14T22:13:20.000Z");
         // 闰日边界：2024-02-29T00:00:00Z = 1_709_164_800_000
         assert_eq!(iso_from_ms(1_709_164_800_000), "2024-02-29T00:00:00.000Z");
+        // 负毫秒（1970 前瞬间，评审修复 PR #33 第八轮）：合法 pre-epoch
+        // 时间戳规范化不得因符号被隔离
+        assert_eq!(iso_from_ms(-1), "1969-12-31T23:59:59.999Z");
+        assert_eq!(iso_from_ms(-31_536_000_000), "1960-01-01T00:00:00.000Z");
     }
 
     #[test]

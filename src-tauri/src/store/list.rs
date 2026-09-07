@@ -80,7 +80,7 @@ fn wrap_legacy(id: &str, v: &serde_json::Value) -> ProjectFile {
     let updated_at = v
         .get("updated_at")
         .and_then(|x| x.as_u64())
-        .map(iso_from_ms)
+        .map(|ms| iso_from_ms(ms as i64))
         .unwrap_or_default();
     ProjectFile {
         schema_version: 0,
