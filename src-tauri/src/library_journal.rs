@@ -424,12 +424,16 @@ pub(crate) fn recover(library: &CapDir) -> Result<Recovery, String> {
     // recovery.warnings 随命令响应可见。
     let (index, index_warnings, migrated) = crate::library_fs::read_index_normalized(library)?;
     let mut recovery = Recovery::default();
-    recovery.warnings.extend(index_warnings);
     let (entries, malformed) = read_journal(library, &mut recovery.warnings);
     if malformed {
         recovery.read_only = true;
+        // 只读态诊断与实际行为一致（评审修复，PR #33 第十三轮）：journal 异型
+        // 判定后即返回，只读归一化由 list/媒体/导入的只读分流各自执行——其
+        // 诊断声称隔离（真实行为），本路径不再掺入上面可重发版本的「已重发」
+        // 声明
         return Ok(recovery);
     }
+    recovery.warnings.extend(index_warnings);
     // 日志非异型：此刻才允许把索引迁移/修复原子落盘（重发 id 跨读稳定）
     if migrated {
         crate::library_fs::write_index(library, &index)?;

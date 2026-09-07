@@ -225,57 +225,60 @@ fn assign_key(
     // （键缺失）此候选为 None。空串键同为非法键、其拼写可被 groupId 精确
     // 引用，一并入映射（评审修复，PR #33 第八轮：非空过滤会漏掉 "" 键）
     let key_spelling = key.filter(|k| validate_asset_id(k).is_err());
-    // 缺失/非字符串 id：从未可被 groupId 引用，重发；映射只随非法键拼写走
     let Some(embedded_raw) = embedded_id else {
-        warnings.push(format!("资产索引 {bucket} 缺失/非字符串 id，已重发"));
-        return reissue_or_isolate(map, reserved, allow_reissue, bucket, warnings)
-            .map(|id| (id, key_spelling.clone()));
-    };
-    // 内嵌 id verbatim（评审修复，PR #33 第十一轮）：ID 不透明——带空白填充
-    // 的非空字符串（" la-1 "）不得 trim 成合法 id 抢占真实条目，verbatim 不过
-    // 值域即按非法 id 重发；trim 规范化只用于契约明确允许的字段
-    let valid_id = !embedded_raw.is_empty() && validate_asset_id(embedded_raw).is_ok();
-    if valid_id && !map.contains_key(embedded_raw) {
-        if reserved.contains(embedded_raw) {
-            // 内嵌 id 与（本条目之后才出现的）权威键冲突：不得抢占，重发
+        if !allow_reissue {
             warnings.push(format!(
-                "资产索引 {bucket} 内嵌 id {embedded_raw} 与权威键冲突，已重发"
+                "资产索引 {bucket} 缺失/非字符串 id，只读态不产生新身份，条目已隔离"
             ));
-            return reissue_or_isolate(map, reserved, allow_reissue, bucket, warnings)
-                .map(|id| (id, key_spelling.clone()));
+            return None;
         }
-        return Some((embedded_raw.to_string(), key_spelling));
-    }
-    if valid_id {
-        warnings.push(format!(
-            "资产索引 {bucket} 含重复 id {embedded_raw}，后续项重发"
-        ));
-        return reissue_or_isolate(map, reserved, allow_reissue, bucket, warnings)
-            .map(|id| (id, key_spelling.clone()));
-    }
-    // 空白/非法字符串 id 重发：数组条目携带内嵌原始拼写（未 trim）供组引用
-    // 精确匹配；有非法键时键拼写优先（引用按键解析）
-    warnings.push(format!("资产索引 {bucket} 含空白/非法 id，已重发"));
-    let spelling = key_spelling.or_else(|| Some(embedded_raw.to_string()));
-    reissue_or_isolate(map, reserved, allow_reissue, bucket, warnings).map(|id| (id, spelling))
+        warnings.push(format!("资产索引 {bucket} 缺失/非字符串 id，已重发"));
+        return Some((fresh_id(map, reserved), key_spelling));
+    };
+    assign_from_embedded(
+        embedded_raw,
+        key_spelling,
+        map,
+        reserved,
+        bucket,
+        allow_reissue,
+        warnings,
+    )
 }
 
-/// 重发辅助（评审修复，PR #33 第七轮）：只读告警态禁止产生新身份——返回
-/// None（条目隔离）并告警；可落盘路径生成未占用重发 id。
-fn reissue_or_isolate(
+/// 内嵌 id 分支（评审修复，PR #33 第十三轮拆出降复杂度）：verbatim 不
+/// trim——带空白填充的非空字符串（" la-1 "）不得 trim 成合法 id 抢占真实
+/// 条目；与预留权威键冲突或重复即重发；空白/非法 id 重发并携带原始拼写。
+/// 只读态凡需重发一律隔离（诊断与实际行为一致，不先声称「已重发」）。
+fn assign_from_embedded(
+    embedded_raw: &str,
+    key_spelling: Option<String>,
     map: &Map<String, Value>,
     reserved: &std::collections::HashSet<String>,
-    allow_reissue: bool,
     bucket: &str,
+    allow_reissue: bool,
     warnings: &mut Vec<String>,
-) -> Option<String> {
+) -> Option<(String, Option<String>)> {
+    let valid_id = !embedded_raw.is_empty() && validate_asset_id(embedded_raw).is_ok();
+    if valid_id && !map.contains_key(embedded_raw) && !reserved.contains(embedded_raw) {
+        return Some((embedded_raw.to_string(), key_spelling));
+    }
+    let why = if !valid_id {
+        "含空白/非法 id"
+    } else if reserved.contains(embedded_raw) {
+        "内嵌 id 与权威键冲突"
+    } else {
+        "含重复 id"
+    };
     if !allow_reissue {
         warnings.push(format!(
-            "资产索引 {bucket} 需重发 id，只读态不产生新身份，条目已隔离"
+            "资产索引 {bucket} {why}（{embedded_raw}），只读态不产生新身份，条目已隔离"
         ));
         return None;
     }
-    Some(fresh_id(map, reserved))
+    warnings.push(format!("资产索引 {bucket} {why}（{embedded_raw}），已重发"));
+    let spelling = key_spelling.or_else(|| (!valid_id).then(|| embedded_raw.to_string()));
+    Some((fresh_id(map, reserved), spelling))
 }
 
 /// 生成桶内未占用的重发 id（用连字符替换前缀，保证 validate_asset_id 通过；

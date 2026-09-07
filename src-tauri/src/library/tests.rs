@@ -800,3 +800,35 @@ fn put_twice_produces_distinct_ids_and_filenames() {
     assert_eq!(by_id.len(), 2, "两条目都应保留：{by_id:?}");
     cleanup(&root);
 }
+
+/// 只读态诊断与实际行为一致（评审修复，PR #33 第十三轮）：journal 异型时
+/// recover 不得报告「已重发」——只读态身份无法持久化，条目将被只读归一化
+/// 隔离；诊断必须反映隔离而非声称重发。
+#[test]
+fn readonly_recovery_reports_isolation_not_false_reissue() {
+    let (library, root) = temp_fixture();
+    // 旧数组索引 + 空白 id 条目：可落盘路径会重发，只读态应隔离
+    let mut blank = entry("la-1", "assets/la-1.png");
+    blank["id"] = json!("  ");
+    write_index_raw(&library, &json!({ "assets": [blank], "groups": [] }));
+    fs::write(
+        library.join(crate::library_journal::JOURNAL_FILE_NAME),
+        b"{\"not\":\"array\"}",
+    )
+    .expect("写异型日志");
+    let (index, warnings) = list_assets_with(&cap(&library)).expect("只读态列表仍可读");
+    assert!(
+        index["assets"]["byId"].as_object().unwrap().is_empty(),
+        "只读态空白 id 条目应隔离：{}",
+        index["assets"]
+    );
+    assert!(
+        warnings.iter().any(|w| w.contains("只读")),
+        "诊断应声称只读隔离：{warnings:?}"
+    );
+    assert!(
+        !warnings.iter().any(|w| w.contains("已重发")),
+        "只读态不得报告已重发：{warnings:?}"
+    );
+    cleanup(&root);
+}
