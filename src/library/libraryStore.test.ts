@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { libraryStore, LIBRARY_KINDS, type LibraryAsset } from './libraryStore'
 
 /** 浏览器预览的内存回退实现（无 IPC）：put/list/updateMeta/remove/mediaUrl。
@@ -144,5 +144,25 @@ describe('内存回退组语义与生产路径一致', () => {
 
   it('deleteGroup 不存在的组拒绝', async () => {
     await expect(libraryStore.deleteGroup('g-ghost')).rejects.toThrow(/不存在/)
+  })
+})
+
+/// 内存回退首次创建也做冲突扫描（评审修复，PR #36 第二轮）：updateMeta 先
+/// 挂悬空 groupId，再 upsert 新建组时 kind 不一致不得被放行——首次创建
+/// （existing 为 undefined）也要扫描成员。需独立模块实例隔离内存状态（模块
+/// 级 Map 跨用例共享，否则前面用例的组残留会让 existing 非空、测试假阳性）。
+describe('内存回退首次创建组语义', () => {
+  it('upsertGroup 首次创建时 kind 与既有成员冲突即拒绝', async () => {
+    vi.resetModules()
+    const { libraryStore: fresh } = await import('./libraryStore')
+    const asset = await fresh.put(
+      new File([new Uint8Array([1])], 'a.png', { type: 'image/png' }),
+      'character',
+    )
+    await fresh.updateMeta(asset.id, { groupId: 'g-1' }) // 悬空 groupId
+    // 首次创建组，kind 与既有成员不一致
+    await expect(
+      fresh.upsertGroup({ id: 'g-1', name: '女主', kind: 'location' }),
+    ).rejects.toThrow(/冲突|kind/)
   })
 })

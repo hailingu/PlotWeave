@@ -445,3 +445,33 @@ fn delete_library_group_rejects_missing_group() {
     delete_group_with(&cap(&library), "g-ghost").expect_err("不存在的组应拒绝");
     cleanup(&root);
 }
+
+/// upsert 成功响应携带 cleanupPending（评审修复，PR #36 第二轮）：删除隔离区
+/// 积压（身份绑定清理不可用的常态）不得因 upsert 响应只附 warnings 而丢失
+/// ——list/delete 有、upsert 同款。
+#[test]
+fn upsert_group_response_carries_cleanup_pending() {
+    let (library, root) = temp_fixture();
+    // 造一个 identity-bound 清理积压：journal 有一条已完成事务的清理项
+    fs::write(
+        library.join(crate::library_journal::JOURNAL_FILE_NAME),
+        serde_json::to_string(&json!([{
+            "id": "t-1",
+            "assetId": "la-gone",
+            "relPath": "assets/la-gone.png",
+            "identity": { "dev": 1, "ino": 1 },
+            "trashName": "assets/.trash/t-1",
+        }]))
+        .expect("序列化日志"),
+    )
+    .expect("写日志");
+    fs::create_dir_all(library.join("assets").join(".trash")).expect("建隔离目录");
+    fs::write(library.join("assets").join(".trash").join("t-1"), b"X").expect("写隔离项");
+    let g = upsert_group_with(&cap(&library), &group_entry("g-1", "女主", "character"))
+        .expect("新建组应成功");
+    assert!(
+        g.get("cleanupPending").is_some(),
+        "upsert 响应应携带 cleanupPending：{g}"
+    );
+    cleanup(&root);
+}

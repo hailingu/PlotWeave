@@ -61,12 +61,15 @@ pub(crate) fn upsert_group_with(
         .ok_or("资产索引结构损坏")?
         .insert(gid.clone(), normalized_group.clone());
     write_index(library, &index)?;
+    // 响应携带 cleanupPending（评审修复，PR #36 第二轮）：删除隔离区积压
+    // （身份绑定清理不可用的常态）不得因 upsert 响应只附 warnings 而丢失——
+    // 与 list/delete 同款上报路径
+    let mut g = normalized_group.clone();
     if !warnings.is_empty() {
-        let mut g = normalized_group.clone();
         g["warnings"] = json!(warnings);
-        return Ok(g);
     }
-    Ok(normalized_group)
+    g["cleanupPending"] = json!(recovery.cleanup_pending);
+    Ok(g)
 }
 
 /// 组删除内核（句柄域，§7.2）：组存在 → 同次原子写删组并剥离成员资产的

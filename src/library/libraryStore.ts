@@ -264,16 +264,14 @@ export const libraryStore = {
         return result
       })
     }
-    // 内存回退同款冲突校验（评审修复，PR #36 第一轮）：改 kind 与成员冲突
-    // 即拒绝——浏览器预览不得批准生产路径拒绝的状态
-    const existing = memoryGroups.get(group.id)
-    if (existing && existing.kind !== group.kind) {
-      for (const v of memoryAssets.values()) {
-        if (v.asset.groupId === group.id && v.asset.kind !== group.kind) {
-          return Promise.reject(
-            new Error(`组 ${group.id} 改 kind 与成员资产冲突：存在 kind 不一致的成员`),
-          )
-        }
+    // 内存回退同款冲突校验（评审修复，PR #36 第一/二轮）：改 kind 与成员
+    // 冲突即拒绝——浏览器预览不得批准生产路径拒绝的状态；**首次创建也扫描**
+    // （updateMeta 可先挂悬空 groupId，新建组时 kind 不一致不得放行）
+    for (const v of memoryAssets.values()) {
+      if (v.asset.groupId === group.id && v.asset.kind !== group.kind) {
+        return Promise.reject(
+          new Error(`组 ${group.id} 的 kind 与成员资产冲突：存在 kind 不一致的成员`),
+        )
       }
     }
     memoryGroups.set(group.id, group)
