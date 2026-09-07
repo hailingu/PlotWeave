@@ -310,10 +310,13 @@ fn normalize_groups(
     Map<String, Value>,
     std::collections::HashMap<String, String>,
 ) {
-    let (map, blank_map) = keyify(raw, "groups", allow_reissue, warnings);
+    let (map, blank_map) = keyify(raw.clone(), "groups", allow_reissue, warnings);
+    // 桶形状（旧数组 = 兼容迁移语境）传到条目级——prop→wardrobe 迁移仅对旧
+    // 数组条目成立（评审修复，PR #33 第十八轮）
+    let legacy_bucket = raw.as_ref().is_some_and(Value::is_array);
     let mut out = Map::new();
     for (key, g) in map {
-        match normalize_group(&g, warnings) {
+        match normalize_group(&g, legacy_bucket, warnings) {
             Some(norm) => {
                 out.insert(key, norm);
             }
@@ -323,12 +326,13 @@ fn normalize_groups(
     (out, blank_map)
 }
 
-fn normalize_group(g: &Value, warnings: &mut Vec<String>) -> Option<Value> {
+fn normalize_group(g: &Value, legacy_entry: bool, warnings: &mut Vec<String>) -> Option<Value> {
     let id = g.get("id").and_then(Value::as_str)?.to_string();
     let name = normalize_name(g.get("name"), &id, warnings)?;
-    // 组与资产同款 prop→wardrobe 兼容改写（§7.2 迁移链③对组同样生效），
-    // 否则组被隔离导致其 wardrobe 成员丢失 groupId（语义保全破洞）。
-    let kind = normalize_kind(g.get("kind"), &id, warnings)?;
+    // 组与资产同款 prop→wardrobe 兼容改写（§7.2 迁移链③对组同样生效，
+    // 仅限旧数组桶），否则组被隔离导致其 wardrobe 成员丢失 groupId（语义
+    // 保全破洞）。
+    let kind = normalize_kind(g.get("kind"), legacy_entry, &id, warnings)?;
     Some(json!({ "id": id, "name": name, "kind": kind }))
 }
 
@@ -401,7 +405,7 @@ fn normalize_asset(a: &Value, legacy_entry: bool, warnings: &mut Vec<String>) ->
     let source = normalize_source(a.get("source"), legacy_entry, &id, warnings)?;
     let created = normalize_created_at(a.get("createdAt"), legacy_entry, &id, warnings)?;
     let name = normalize_name(a.get("name"), &id, warnings)?;
-    let kind = normalize_kind(a.get("kind"), &id, warnings)?;
+    let kind = normalize_kind(a.get("kind"), legacy_entry, &id, warnings)?;
     let tags = normalize_tags_field(a.get("tags"), legacy_entry, &id, warnings);
     let view = normalize_view(a.get("view"), legacy_entry, &id, warnings);
     let group_id = normalize_group_id(a.get("groupId"), legacy_entry, &id, warnings);
@@ -430,11 +434,26 @@ fn normalize_name(raw: Option<&Value>, id: &str, warnings: &mut Vec<String>) -> 
     Some(t.to_string())
 }
 
-fn normalize_kind(raw: Option<&Value>, id: &str, warnings: &mut Vec<String>) -> Option<String> {
+/// kind：prop → wardrobe 是 §7.2 兼容迁移条款——**仅限旧数组条目**（「现实
+/// 剧组服化道同属一个部门」仅对历史存量成立）；目标 Record 形状下 prop 不
+/// 在声明 kind 联合内，与其他非法 kind 同款隔离（评审修复，PR #33 第十八轮：
+/// 与 source/view/groupId/createdAt 的形状限定同口径）。
+fn normalize_kind(
+    raw: Option<&Value>,
+    legacy_entry: bool,
+    id: &str,
+    warnings: &mut Vec<String>,
+) -> Option<String> {
     let kind = raw.and_then(Value::as_str)?;
     if kind == "prop" {
-        warnings.push(format!("条目 {id} 的 kind 由 prop 改写为 wardrobe"));
-        return Some("wardrobe".into());
+        if legacy_entry {
+            warnings.push(format!("条目 {id} 的 kind 由 prop 改写为 wardrobe"));
+            return Some("wardrobe".into());
+        }
+        warnings.push(format!(
+            "条目 {id} 的 kind 为 prop（目标形状，不在声明联合内），隔离"
+        ));
+        return None;
     }
     if KINDS.contains(&kind) {
         Some(kind.to_string())
