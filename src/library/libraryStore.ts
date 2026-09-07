@@ -259,23 +259,45 @@ export const libraryStore = {
   upsertGroup: (group: AssetGroup): Promise<AssetGroup> => {
     if (isTauri) {
       return import('@tauri-apps/api/core').then(async ({ invoke }) => {
-        const result = await invoke<AssetGroup>('upsert_library_group', { group })
+        const result = await invoke<AssetGroup & { cleanupPending?: unknown[] }>(
+          'upsert_library_group',
+          { group },
+        )
         reportLibraryWarnings((result as { warnings?: unknown } | null)?.warnings)
+        // cleanupPending 随 upsert 响应上报（评审修复，PR #36 第三轮）——
+        // 与 list/delete 同款，删除隔离区积压不得静默
+        if (result?.cleanupPending?.length) {
+          console.warn('[Library] 删除隔离区待清理：', result.cleanupPending)
+        }
         return result
       })
+    }
+    // 内存回退同款形状校验（评审修复，PR #36 第三轮）：id 非空、name 去空白
+    // 1–128（合法 name 存 trim 后的值）、kind 在声明联合内——与生产路径的
+    // validate_group_for_write 同语义
+    if (group.id === '' || typeof group.id !== 'string') {
+      return Promise.reject(new Error('组 id 非法'))
+    }
+    const name = typeof group.name === 'string' ? group.name.trim() : ''
+    if (name === '' || name.length > 128) {
+      return Promise.reject(new Error('组名去空白后须为 1–128 字符'))
+    }
+    if (!KIND_SET.has(group.kind)) {
+      return Promise.reject(new Error(`未知组 kind：${String(group.kind)}`))
     }
     // 内存回退同款冲突校验（评审修复，PR #36 第一/二轮）：改 kind 与成员
     // 冲突即拒绝——浏览器预览不得批准生产路径拒绝的状态；**首次创建也扫描**
     // （updateMeta 可先挂悬空 groupId，新建组时 kind 不一致不得放行）
+    const normalized: AssetGroup = { ...group, name }
     for (const v of memoryAssets.values()) {
-      if (v.asset.groupId === group.id && v.asset.kind !== group.kind) {
+      if (v.asset.groupId === normalized.id && v.asset.kind !== normalized.kind) {
         return Promise.reject(
-          new Error(`组 ${group.id} 的 kind 与成员资产冲突：存在 kind 不一致的成员`),
+          new Error(`组 ${normalized.id} 的 kind 与成员资产冲突：存在 kind 不一致的成员`),
         )
       }
     }
-    memoryGroups.set(group.id, group)
-    return Promise.resolve(group)
+    memoryGroups.set(normalized.id, normalized)
+    return Promise.resolve(normalized)
   },
 
   /** 组删除：原子删除组并剥离成员资产的 groupId（§7.2）。 */

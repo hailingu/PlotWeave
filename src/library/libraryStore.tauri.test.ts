@@ -273,3 +273,23 @@ describe('libraryStore Tauri 路径：listGroups', () => {
     )
   })
 })
+
+/// upsertGroup 响应携带 cleanupPending 时经诊断路径上报（评审修复，PR #36
+/// 第三轮）：与 list/delete 同款。
+describe('libraryStore Tauri 路径：upsertGroup', () => {
+  it('upsertGroup 响应携带 cleanupPending 时上报诊断', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    warn.mockClear() // 同文件先前用例可能以相同参数调用过 warn——清掉累积记录
+    invoke.mockResolvedValueOnce({
+      id: 'g-1',
+      name: '女主',
+      kind: 'character',
+      cleanupPending: ['assets/.trash/t-1'],
+    })
+    const { libraryStore } = await load()
+    await libraryStore.upsertGroup({ id: 'g-1', name: '女主', kind: 'character' })
+    expect(warn).toHaveBeenCalledWith('[Library] 删除隔离区待清理：', [
+      'assets/.trash/t-1',
+    ])
+  })
+})

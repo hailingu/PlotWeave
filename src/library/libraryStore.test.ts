@@ -166,3 +166,21 @@ describe('内存回退首次创建组语义', () => {
     ).rejects.toThrow(/冲突|kind/)
   })
 })
+
+/// 内存回退组形状校验与生产同款（评审修复，PR #36 第三轮）：name 去空白
+/// 1–128、kind 在声明联合内、id 非空——合法 name 存 trim 后的值，非法拒绝。
+describe('内存回退组形状校验', () => {
+  it('upsertGroup trim 合法 name 并拒绝非法形状', async () => {
+    const g = await libraryStore.upsertGroup({ id: 'g-t', name: '  女主  ', kind: 'character' })
+    expect(g.name).toBe('女主')
+    await expect(
+      libraryStore.upsertGroup({ id: 'g-x', name: '   ', kind: 'character' }),
+    ).rejects.toThrow(/name|空白/)
+    await expect(
+      libraryStore.upsertGroup({ id: 'g-x', name: 'x'.repeat(129), kind: 'character' }),
+    ).rejects.toThrow(/name|128/)
+    await expect(
+      libraryStore.upsertGroup({ id: 'g-x', name: 'x', kind: 'robot' as never }),
+    ).rejects.toThrow(/kind/)
+  })
+})
