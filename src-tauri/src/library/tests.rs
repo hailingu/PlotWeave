@@ -1,8 +1,8 @@
 //! library.rs 命令面与句柄域内核的回归测试（issue #17 及其评审轮次）：
-//! 投毒索引条目隔离、锚定句柄删除信任链、大小上限编码闭环、并发首用
-//! 与净化诊断可见性。pwmedia 媒体协议测试见同目录 media_protocol_tests.rs
-//! （issue #26；自本文件拆出以符合源文件 800 行上限，评审修复，PR #32
-//! 第六轮）。
+//! 投毒索引条目隔离、锚定句柄删除信任链、读侧与大小上限编码闭环、并发
+//! 首用。pwmedia 媒体协议测试见同目录 media_protocol_tests.rs（issue #26）；
+//! 只读态与元信息评审修复测试见同目录 read_only_tests.rs（均自本文件拆出
+//! 以符合源文件 800 行上限，评审修复）。
 
 use super::*;
 use crate::store::new_id;
@@ -521,98 +521,6 @@ fn put_rejects_non_canonical_mime() {
     cleanup(&root);
 }
 
-// ---- 变更命令的净化诊断可见性（评审修复）----
-
-/// 脏索引下导入：返回条目携带 warnings（落盘即净化不得静默）。
-#[test]
-fn put_on_dirty_index_returns_warnings() {
-    let (library, root) = temp_fixture();
-    write_index_raw(
-        &library,
-        &json!({ "assets": by_id([entry("la-bad", "../escape.png")]), "groups": by_id([]) }),
-    );
-    let e =
-        put_asset_with(&cap(&library), "a.png", "image/png", "other", b"A").expect("导入应成功");
-    let warnings = e["warnings"].as_array().expect("warnings 应随响应返回");
-    assert!(
-        warnings
-            .iter()
-            .any(|w| w.as_str().unwrap_or_default().contains("隔离")),
-        "诊断应含隔离说明：{warnings:?}"
-    );
-    cleanup(&root);
-}
-
-/// 常态导入（索引干净）：响应不含 warnings 键，形状纯净。
-#[test]
-fn put_on_clean_index_omits_warnings() {
-    let (library, root) = temp_fixture();
-    let e =
-        put_asset_with(&cap(&library), "a.png", "image/png", "other", b"A").expect("导入应成功");
-    assert!(
-        e.get("warnings").is_none(),
-        "干净索引不得附加 warnings：{e}"
-    );
-    cleanup(&root);
-}
-
-/// 脏索引下更新元信息：返回条目携带 warnings。
-#[test]
-fn update_meta_on_dirty_index_returns_warnings() {
-    let (library, root) = temp_fixture();
-    write_index_raw(
-        &library,
-        &json!({
-            "assets": [
-                entry("la-1", "assets/la-1.png"),
-                entry("la-bad", "/etc/passwd"),
-            ],
-            "groups": [],
-        }),
-    );
-    let library_dir = cap(&library);
-    let updated =
-        update_meta_with(&library_dir, "la-1", &json!({ "name": "改名" })).expect("更新应成功");
-    let warnings = updated["warnings"]
-        .as_array()
-        .expect("warnings 应随响应返回");
-    assert!(
-        warnings
-            .iter()
-            .any(|w| w.as_str().unwrap_or_default().contains("隔离")),
-        "诊断应含隔离说明：{warnings:?}"
-    );
-    cleanup(&root);
-}
-
-/// 脏索引下删除：响应携带 warnings；删除自身成功。
-#[test]
-fn delete_on_dirty_index_returns_warnings() {
-    let (library, root) = temp_fixture();
-    write_index_raw(
-        &library,
-        &json!({
-            "assets": [
-                entry("la-1", "assets/la-1.png"),
-                entry("la-bad", "library.json"),
-            ],
-            "groups": [],
-        }),
-    );
-    let result = crate::library_journal::delete_asset_transacted(&cap(&library), "la-1")
-        .expect("删除应成功");
-    let warnings = result["warnings"].as_array().expect("warnings 应在响应中");
-    assert!(
-        warnings
-            .iter()
-            .any(|w| w.as_str().unwrap_or_default().contains("隔离")),
-        "诊断应含隔离说明：{warnings:?}"
-    );
-    let raw = fs::read_to_string(library.join("library.json")).expect("读回索引");
-    assert!(!raw.contains("\"la-1\""), "目标条目应被移除：{raw}");
-    cleanup(&root);
-}
-
 /// 规范化表示同上限（评审修复）：原始字节 ≤ 上限但解析后规范化表示
 /// 膨胀超限的索引拒绝读取——可读 ⇒ 可写回的编码闭环不因数字词法
 /// 差异破洞（1e10 原始 4 字节，规范化 13 字节）。
@@ -637,198 +545,43 @@ fn read_index_rejects_when_normalized_form_exceeds_cap() {
     cleanup(&root);
 }
 
-/// 只读告警态不得改写索引（评审修复，PR #33 第五轮）：删除日志异型时 list
-/// 的读取走不落盘路径——library.json 保持原始字节（迁移待日志修复后再落），
-/// 归一化视图与迁移警告照常返回（读不受限，写被暂停）。
+/// 迁移产物超大小上限的降级（评审修复，PR #33 第十四轮）：旧数组索引紧凑、
+/// 迁移后（byId 键 + source + ISO）膨胀可越过 1 MiB 写上限——此时不得让
+/// 迁移落盘失败拖垮全部库命令（升级死锁），降级为「内存归一化照常 + 不落
+/// 盘 + 警告」，磁盘保持原始字节，条目删除后自然回落可写。
 #[test]
-fn list_read_does_not_persist_index_in_journal_read_only_mode() {
+fn oversized_migrated_index_degrades_to_in_memory_without_write() {
     let (library, root) = temp_fixture();
-    // 旧数组形状索引：正常路径下读取即迁移落盘
-    write_index_raw(
-        &library,
-        &json!({ "assets": [entry("la-1", "assets/la-1.png")], "groups": [] }),
+    let long_name = "n".repeat(120);
+    let entries: Vec<Value> = (0..3766)
+        .map(|i| {
+            let mut e = entry(&format!("la-{i}"), &format!("assets/la-{i}.png"));
+            e["name"] = json!(long_name);
+            e
+        })
+        .collect();
+    let seed = json!({ "assets": entries, "groups": [] });
+    let seed_len = serde_json::to_string(&seed).unwrap().len();
+    assert!(
+        seed_len <= crate::library_fs::INDEX_MAX_BYTES,
+        "种子（旧数组）应可通过读取上限：{seed_len}"
     );
+    write_index_raw(&library, &seed);
     let before = fs::read(library.join("library.json")).expect("读原始索引字节");
-    // 异型删除日志根 → 整份恢复进入只读告警态
-    fs::write(
-        library.join(crate::library_journal::JOURNAL_FILE_NAME),
-        b"{\"not\":\"array\"}",
-    )
-    .expect("写异型日志");
-    let (index, warnings) = list_assets_with(&cap(&library)).expect("只读态列表仍可读");
-    assert!(
-        index["assets"]["byId"]["la-1"].is_object(),
-        "条目应迁移进内存视图：{}",
-        index["assets"]
+    let (index, warnings) =
+        crate::library_fs::read_index_capped(&cap(&library)).expect("迁移超限不得拒绝读取");
+    assert_eq!(
+        index["assets"]["byId"]
+            .as_object()
+            .map(serde_json::Map::len),
+        Some(3766),
+        "归一化视图照常返回"
     );
     assert!(
-        warnings.iter().any(|w| w.contains("只读")),
-        "只读告警应可见：{warnings:?}"
+        warnings.iter().any(|w| w.contains("上限")),
+        "降级应警告迁移结果超上限：{warnings:?}"
     );
     let after = fs::read(library.join("library.json")).expect("读落盘索引字节");
-    assert_eq!(before, after, "只读态不得改写 library.json");
-    cleanup(&root);
-}
-
-/// 改 kind 与成员编组冲突须拒绝（评审修复，PR #33 第九轮，§7.2「复验完整
-/// 合并结果」）：资产带 groupId 时改 kind 若与组 kind 不一致，整次命令
-/// 拒绝且不写盘——不得让一次成功的元信息编辑在下次读取时静默抹掉编组。
-#[test]
-fn update_meta_rejects_kind_change_conflicting_with_group() {
-    let (library, root) = temp_fixture();
-    let member = json!({
-        "id": "la-1", "name": "x", "kind": "character",
-        "mime": "image/png", "relPath": "assets/la-1.png",
-        "source": "upload", "createdAt": "2026-01-01T00:00:00.000Z",
-        "tags": [], "groupId": "g-1",
-    });
-    let group = json!({ "id": "g-1", "name": "女主", "kind": "character" });
-    let index = json!({
-        "assets": by_id([member]),
-        "groups": by_id([group]),
-    });
-    write_index_raw(&library, &index);
-    let before = fs::read(library.join("library.json")).expect("读原始索引字节");
-    let err = update_meta_with(&cap(&library), "la-1", &json!({ "kind": "location" }))
-        .expect_err("与组 kind 冲突的更新应拒绝");
-    assert!(
-        err.contains("groupId") || err.contains("kind"),
-        "意外诊断：{err}"
-    );
-    let after = fs::read(library.join("library.json")).expect("读落盘索引字节");
-    assert_eq!(before, after, "拒绝更新不得写盘");
-    cleanup(&root);
-}
-
-/// 对照：不带 groupId 的条目改 kind 正常成功（复验不误伤无编组条目）。
-#[test]
-fn update_meta_kind_change_without_group_succeeds() {
-    let (library, root) = temp_fixture();
-    write_index_raw(
-        &library,
-        &json!({ "assets": by_id([entry("la-1", "assets/la-1.png")]), "groups": by_id([]) }),
-    );
-    let updated = update_meta_with(&cap(&library), "la-1", &json!({ "kind": "location" }))
-        .expect("无编组条目改 kind 应成功");
-    assert_eq!(updated["kind"], "location");
-    cleanup(&root);
-}
-
-/// update patch 值域运行时校验（评审修复，PR #33 第十轮，§7.2「字段一旦
-/// 出现就先做运行时类型和值域校验」）：非字符串 view/name、非法 tags
-/// （非数组/成员异型/空白/超长/重复/超 16 项）一律拒绝整次命令，不得
-/// 静默截断或写盘后由读取归一化剥离。
-#[test]
-fn update_meta_rejects_patch_fields_outside_value_domain() {
-    let (library, root) = temp_fixture();
-    write_index_raw(
-        &library,
-        &json!({ "assets": by_id([entry("la-1", "assets/la-1.png")]), "groups": by_id([]) }),
-    );
-    let lib = cap(&library);
-    for (patch, why) in [
-        (json!({ "view": 1 }), "非字符串 view"),
-        (json!({ "name": 42 }), "非字符串 name"),
-        (json!({ "tags": "x" }), "非数组 tags"),
-        (json!({ "tags": [1] }), "异型 tags 成员"),
-        (json!({ "tags": ["  "] }), "空白 tags 成员"),
-        (json!({ "tags": ["a", "a"] }), "重复 tags 成员"),
-        (
-            json!({ "tags": ["0123456789012345678901234567890123456789012345678901234567890123456789"] }),
-            "超长 tags 成员",
-        ),
-    ] {
-        let err = update_meta_with(&lib, "la-1", &patch).expect_err(&format!("{why} 应拒绝"));
-        assert!(!err.is_empty(), "{why} 应携带诊断");
-    }
-    // 超过 16 项拒绝（不得静默截断）
-    let many = json!({ "tags": (0..17).map(|i| format!("t{i}")).collect::<Vec<_>>() });
-    update_meta_with(&lib, "la-1", &many).expect_err("超过 16 项 tags 应拒绝");
-    // 对照：合法 tags 更新成功
-    let ok = update_meta_with(&lib, "la-1", &json!({ "tags": [" hero ", "hero"] }))
-        .expect_err("规范化后重复（hero）应拒绝");
-    assert!(ok.contains("重复"), "规范化后重复应拒绝：{ok}");
-    let updated = update_meta_with(&lib, "la-1", &json!({ "tags": [" hero "] }))
-        .expect("带空白的合法 tags 应成功");
-    assert_eq!(updated["tags"], json!(["hero"]));
-    cleanup(&root);
-}
-
-/// groupId 补丁 verbatim（评审修复，PR #33 第十一轮）：非空补丁值必须原样
-/// 过 id 值域——`" g "` 不得 trim 成 `g` 错接进组 g；仅 null/空白是清除
-/// 标记。
-#[test]
-fn update_meta_rejects_padded_group_id_patch() {
-    let (library, root) = temp_fixture();
-    let member = {
-        let mut e = entry("la-1", "assets/la-1.png");
-        e["groupId"] = json!("g-1");
-        e
-    };
-    let group = json!({ "id": "g-1", "name": "女主", "kind": "other" });
-    write_index_raw(
-        &library,
-        &json!({ "assets": by_id([member]), "groups": by_id([group]) }),
-    );
-    let before = fs::read(library.join("library.json")).expect("读原始索引字节");
-    let err = update_meta_with(&cap(&library), "la-1", &json!({ "groupId": " g-1 " }))
-        .expect_err("带空白 groupId 补丁应拒绝");
-    assert!(err.contains("groupId"), "意外诊断：{err}");
-    let after = fs::read(library.join("library.json")).expect("读落盘索引字节");
-    assert_eq!(before, after, "拒绝更新不得写盘");
-    cleanup(&root);
-}
-
-/// 导入 id 防碰撞（评审修复，PR #33 第十二轮）：两次导入产出的条目 id 与
-/// 媒体文件名必须唯一——旧 `la-{毫秒:x}-{大小}` 方案同毫秒同大小即碰撞，
-/// Record insert 会覆盖首个条目、孤儿化其媒体。
-#[test]
-fn put_twice_produces_distinct_ids_and_filenames() {
-    let (library, root) = temp_fixture();
-    let e1 = put_asset_with(&cap(&library), "a.png", "image/png", "other", b"AA")
-        .expect("第一次导入应成功");
-    let e2 = put_asset_with(&cap(&library), "a.png", "image/png", "other", b"AA")
-        .expect("第二次导入应成功");
-    let id1 = e1["id"].as_str().expect("id 缺失");
-    let id2 = e2["id"].as_str().expect("id 缺失");
-    assert_ne!(id1, id2, "同毫秒同大小导入不得产生重复 id");
-    assert_ne!(e1["relPath"], e2["relPath"], "媒体文件名不得碰撞");
-    let (index, _) = crate::library_fs::read_index_capped(&cap(&library)).expect("索引可读");
-    let by_id = index["assets"]["byId"]
-        .as_object()
-        .expect("assets.byId 对象");
-    assert_eq!(by_id.len(), 2, "两条目都应保留：{by_id:?}");
-    cleanup(&root);
-}
-
-/// 只读态诊断与实际行为一致（评审修复，PR #33 第十三轮）：journal 异型时
-/// recover 不得报告「已重发」——只读态身份无法持久化，条目将被只读归一化
-/// 隔离；诊断必须反映隔离而非声称重发。
-#[test]
-fn readonly_recovery_reports_isolation_not_false_reissue() {
-    let (library, root) = temp_fixture();
-    // 旧数组索引 + 空白 id 条目：可落盘路径会重发，只读态应隔离
-    let mut blank = entry("la-1", "assets/la-1.png");
-    blank["id"] = json!("  ");
-    write_index_raw(&library, &json!({ "assets": [blank], "groups": [] }));
-    fs::write(
-        library.join(crate::library_journal::JOURNAL_FILE_NAME),
-        b"{\"not\":\"array\"}",
-    )
-    .expect("写异型日志");
-    let (index, warnings) = list_assets_with(&cap(&library)).expect("只读态列表仍可读");
-    assert!(
-        index["assets"]["byId"].as_object().unwrap().is_empty(),
-        "只读态空白 id 条目应隔离：{}",
-        index["assets"]
-    );
-    assert!(
-        warnings.iter().any(|w| w.contains("只读")),
-        "诊断应声称只读隔离：{warnings:?}"
-    );
-    assert!(
-        !warnings.iter().any(|w| w.contains("已重发")),
-        "只读态不得报告已重发：{warnings:?}"
-    );
+    assert_eq!(before, after, "超限迁移结果不得写盘（避免升级死锁）");
     cleanup(&root);
 }

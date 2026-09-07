@@ -16,4 +16,8 @@ mod normalize;
 pub(crate) use normalize::{migrate_and_normalize, migrate_and_normalize_readonly};
 
 #[cfg(test)]
+mod normalize_tests;
+#[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod testutil;

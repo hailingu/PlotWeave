@@ -172,6 +172,8 @@ pub(crate) fn report_recovery_diagnostics(context: &str, warnings: &[String]) {
 /// 本函数总在持有 `library_op_lock`/`library_file_lock` 的命令上下文内被调用。
 pub(crate) fn read_index_capped(library: &CapDir) -> Result<(Value, Vec<String>), String> {
     let (normalized, warnings, migrated) = read_index_normalized(library)?;
+    // migrated 已在 read_index_normalized 内复检过迁移产物大小（超限折回
+    // false 并警告）——此处为真即写盘安全（评审修复，PR #33 第十四轮）
     if migrated {
         write_index(library, &normalized)?;
     }
@@ -182,6 +184,10 @@ pub(crate) fn read_index_capped(library: &CapDir) -> Result<(Value, Vec<String>)
 /// (归一化索引, 警告, 是否发生迁移/修复)。供 `library_journal::recover`
 /// 在确认删除日志非异型之前使用——journal 异型须先进入只读告警态，不得
 /// 先迁移改写 library.json；落盘决策由调用方在 journal 校验通过后执行。
+/// 迁移产物复检大小上限（评审修复，PR #33 第十四轮）：旧数组紧凑、迁移后
+/// （byId 键 + source + ISO）膨胀可越过写上限——超限则**不落盘**（折回
+/// migrated=false 并警告），归一化视图照常返回；否则迁移落盘失败会把「可读
+/// 的旧索引」升级成全库命令死锁。
 pub(crate) fn read_index_normalized(
     library: &CapDir,
 ) -> Result<(Value, Vec<String>, bool), String> {
@@ -204,7 +210,17 @@ pub(crate) fn read_index_normalized(
                     INDEX_MAX_BYTES / (1024 * 1024)
                 ));
             }
-            Ok(crate::library_index::migrate_and_normalize(index))
+            let (normalized, mut warnings, migrated) =
+                crate::library_index::migrate_and_normalize(index);
+            let mut migrated = migrated;
+            if migrated && normalized_len(&normalized)? > INDEX_MAX_BYTES {
+                warnings.push(format!(
+                    "资产索引迁移结果超过 {} MiB 上限，本次仅内存归一化不落盘（删除条目后可恢复落盘）",
+                    INDEX_MAX_BYTES / (1024 * 1024)
+                ));
+                migrated = false;
+            }
+            Ok((normalized, warnings, migrated))
         }
     }
 }
