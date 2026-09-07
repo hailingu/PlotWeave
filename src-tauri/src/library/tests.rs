@@ -630,3 +630,80 @@ fn read_index_rejects_when_normalized_form_exceeds_cap() {
     assert!(err.contains("上限"), "意外诊断：{err}");
     cleanup(&root);
 }
+
+/// 只读告警态不得改写索引（评审修复，PR #33 第五轮）：删除日志异型时 list
+/// 的读取走不落盘路径——library.json 保持原始字节（迁移待日志修复后再落），
+/// 归一化视图与迁移警告照常返回（读不受限，写被暂停）。
+#[test]
+fn list_read_does_not_persist_index_in_journal_read_only_mode() {
+    let (library, root) = temp_fixture();
+    // 旧数组形状索引：正常路径下读取即迁移落盘
+    write_index_raw(
+        &library,
+        &json!({ "assets": [entry("la-1", "assets/la-1.png")], "groups": [] }),
+    );
+    let before = fs::read(library.join("library.json")).expect("读原始索引字节");
+    // 异型删除日志根 → 整份恢复进入只读告警态
+    fs::write(
+        library.join(crate::library_journal::JOURNAL_FILE_NAME),
+        b"{\"not\":\"array\"}",
+    )
+    .expect("写异型日志");
+    let (index, warnings) = list_assets_with(&cap(&library)).expect("只读态列表仍可读");
+    assert!(
+        index["assets"]["byId"]["la-1"].is_object(),
+        "条目应迁移进内存视图：{}",
+        index["assets"]
+    );
+    assert!(
+        warnings.iter().any(|w| w.contains("只读")),
+        "只读告警应可见：{warnings:?}"
+    );
+    let after = fs::read(library.join("library.json")).expect("读落盘索引字节");
+    assert_eq!(before, after, "只读态不得改写 library.json");
+    cleanup(&root);
+}
+
+/// 改 kind 与成员编组冲突须拒绝（评审修复，PR #33 第九轮，§7.2「复验完整
+/// 合并结果」）：资产带 groupId 时改 kind 若与组 kind 不一致，整次命令
+/// 拒绝且不写盘——不得让一次成功的元信息编辑在下次读取时静默抹掉编组。
+#[test]
+fn update_meta_rejects_kind_change_conflicting_with_group() {
+    let (library, root) = temp_fixture();
+    let member = json!({
+        "id": "la-1", "name": "x", "kind": "character",
+        "mime": "image/png", "relPath": "assets/la-1.png",
+        "source": "upload", "createdAt": "2026-01-01T00:00:00.000Z",
+        "tags": [], "groupId": "g-1",
+    });
+    let group = json!({ "id": "g-1", "name": "女主", "kind": "character" });
+    let index = json!({
+        "assets": by_id([member]),
+        "groups": by_id([group]),
+    });
+    write_index_raw(&library, &index);
+    let before = fs::read(library.join("library.json")).expect("读原始索引字节");
+    let err = update_meta_with(&cap(&library), "la-1", &json!({ "kind": "location" }))
+        .expect_err("与组 kind 冲突的更新应拒绝");
+    assert!(
+        err.contains("groupId") || err.contains("kind"),
+        "意外诊断：{err}"
+    );
+    let after = fs::read(library.join("library.json")).expect("读落盘索引字节");
+    assert_eq!(before, after, "拒绝更新不得写盘");
+    cleanup(&root);
+}
+
+/// 对照：不带 groupId 的条目改 kind 正常成功（复验不误伤无编组条目）。
+#[test]
+fn update_meta_kind_change_without_group_succeeds() {
+    let (library, root) = temp_fixture();
+    write_index_raw(
+        &library,
+        &json!({ "assets": by_id([entry("la-1", "assets/la-1.png")]), "groups": by_id([]) }),
+    );
+    let updated = update_meta_with(&cap(&library), "la-1", &json!({ "kind": "location" }))
+        .expect("无编组条目改 kind 应成功");
+    assert_eq!(updated["kind"], "location");
+    cleanup(&root);
+}

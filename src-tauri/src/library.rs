@@ -605,7 +605,24 @@ fn update_meta_with(library: &cap_std::fs::Dir, id: &str, patch: &Value) -> Resu
     if let Some(g) = patch.get("groupId") {
         apply_group_id(entry, g)?;
     }
-    let mut updated = entry.clone();
+    // 复验完整合并结果（§7.2）：groupId 存在性与「资产和组 kind 一致」——
+    // 改 kind 或换编组后的条目若与当前组冲突，整次命令拒绝且不写盘，不得
+    // 让成功的元信息编辑在下次读取时被归一化静默抹掉编组（评审修复，PR #33
+    // 第九轮）
+    let merged = entry.clone();
+    if let Some(gid) = merged.get("groupId").and_then(Value::as_str) {
+        let group_kind = index["groups"]["byId"]
+            .get(gid)
+            .and_then(|g| g.get("kind"))
+            .and_then(Value::as_str);
+        let entry_kind = merged.get("kind").and_then(Value::as_str);
+        if group_kind.is_none() || group_kind != entry_kind {
+            return Err(format!(
+                "资产 {id} 的编组 {gid} 不存在或与资产 kind 不一致，拒绝更新"
+            ));
+        }
+    }
+    let mut updated = merged;
     write_index(library, &index)?;
     if !warnings.is_empty() {
         updated["warnings"] = json!(warnings);

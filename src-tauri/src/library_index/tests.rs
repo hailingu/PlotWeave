@@ -774,3 +774,52 @@ fn pre_epoch_timestamp_normalizes_instead_of_isolating() {
         "pre-epoch 合法时间戳应规范化保留"
     );
 }
+
+// ---- 评审修复（PR #33 第九轮）：引用不 trim、null view 形状限定、写前复验 ----
+
+/// 非空 groupId 不得 trim 规范化（评审修复）：ID 不透明，`groupId: " g "`
+/// 与组键 `g` 是不同的值——trim 后接入是把资产静默错接进组；非法引用应
+/// 剥离，或仅经精确旧键映射改写。
+#[test]
+fn nonblank_group_id_is_not_trimmed_into_a_group() {
+    let g = group("g", "character");
+    let mut a = asset("la-1");
+    a["groupId"] = json!(" g "); // 脏引用，与组键 g 不同值
+    let index = json!({ "assets": [a], "groups": { "byId": { "g": g } } });
+    let (out, warnings, _m) = migrate_and_normalize(index);
+    let a = &out["assets"]["byId"]["la-1"];
+    assert!(
+        a.get("groupId").is_none() || a["groupId"] != json!("g"),
+        "脏引用不得 trim 错接进组 g：{}",
+        a
+    );
+    assert!(warnings.iter().any(|w| w.contains("groupId")));
+}
+
+/// 目标 Record 条目的显式 `view: null` 是非法值（评审修复）：null 删除是
+/// 旧数组兼容迁移语义——目标形状下走非法 view 警告路径，修复可见且经
+/// migrated 落盘；对照 legacy 数组 null 静默删除。
+#[test]
+fn record_null_view_warns_while_legacy_null_is_silent_removal() {
+    // 目标形状：null → 警告剥离
+    let mut a = asset("la-1");
+    a["view"] = json!(null);
+    let index = json!({ "assets": { "byId": { "la-1": a } }, "groups": { "byId": {} } });
+    let (out, warnings, migrated) = migrate_and_normalize(index);
+    assert!(out["assets"]["byId"]["la-1"].get("view").is_none());
+    assert!(
+        warnings.iter().any(|w| w.contains("view")),
+        "目标形状显式 null view 应警告：{warnings:?}"
+    );
+    assert!(migrated);
+    // 对照：legacy 数组 null → 兼容迁移静默删除
+    let mut b = asset("la-1");
+    b["view"] = json!(null);
+    let legacy = json!({ "assets": [b], "groups": [] });
+    let (out, warnings, _) = migrate_and_normalize(legacy);
+    assert!(out["assets"]["byId"]["la-1"].get("view").is_none());
+    assert!(
+        !warnings.iter().any(|w| w.contains("view")),
+        "legacy null 删除是确定性兼容改写，不告警：{warnings:?}"
+    );
+}

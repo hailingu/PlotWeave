@@ -387,7 +387,7 @@ fn normalize_asset(a: &Value, legacy_entry: bool, warnings: &mut Vec<String>) ->
     let name = normalize_name(a.get("name"), &id, warnings)?;
     let kind = normalize_kind(a.get("kind"), &id, warnings)?;
     let tags = normalize_tags_field(a.get("tags"), &id, warnings);
-    let view = normalize_view(a.get("view"), &id, warnings);
+    let view = normalize_view(a.get("view"), legacy_entry, &id, warnings);
     let group_id = normalize_group_id(a.get("groupId"), &id, warnings);
     let mut e = json!({
         "id": id, "name": name, "kind": kind, "mime": mime, "relPath": rel,
@@ -561,9 +561,21 @@ fn normalize_tags_field(raw: Option<&Value>, id: &str, warnings: &mut Vec<String
     out
 }
 
-fn normalize_view(raw: Option<&Value>, id: &str, warnings: &mut Vec<String>) -> Option<String> {
+fn normalize_view(
+    raw: Option<&Value>,
+    legacy_entry: bool,
+    id: &str,
+    warnings: &mut Vec<String>,
+) -> Option<String> {
     match raw {
-        None | Some(Value::Null) => None,
+        None => None,
+        // null 是旧数组可选字段的「未标注」表示法——兼容迁移静默删除；目标
+        // Record 形状下 null 是非法值，走警告路径（评审修复，PR #33 第九轮）
+        Some(Value::Null) if legacy_entry => None,
+        Some(Value::Null) => {
+            warnings.push(format!("条目 {id} 的 view 为显式 null（目标形状），已剥离"));
+            None
+        }
         Some(Value::String(s)) if VIEWS.contains(&s.as_str()) => Some(s.clone()),
         Some(_) => {
             warnings.push(format!("条目 {id} 的 view 非法，已剥离"));
@@ -572,16 +584,22 @@ fn normalize_view(raw: Option<&Value>, id: &str, warnings: &mut Vec<String>) -> 
     }
 }
 
+/// groupId 引用（评审修复，PR #33 第九轮）：ID 不透明——**不 trim**，非空
+/// 值必须 verbatim 过 id 值域（`" g "` 不得 trim 成 `"g"` 错接进组）；空白
+/// 引用若被空白映射改写早在条目级归一化之前完成，此处剩余的空白/非法引用
+/// 一律剥离并警告。
 fn normalize_group_id(raw: Option<&Value>, id: &str, warnings: &mut Vec<String>) -> Option<String> {
     match raw {
         None | Some(Value::Null) => None,
         Some(Value::String(s)) => {
-            let t = s.trim();
-            if t.is_empty() || validate_asset_id(t).is_err() {
-                warnings.push(format!("条目 {id} 的 groupId 非法，已剥离"));
+            if validate_asset_id(s).is_ok() {
+                Some(s.clone())
+            } else if s.trim().is_empty() {
+                warnings.push(format!("条目 {id} 的空白 groupId 无映射，已剥离"));
                 None
             } else {
-                Some(t.to_string())
+                warnings.push(format!("条目 {id} 的 groupId 非法，已剥离"));
+                None
             }
         }
         Some(_) => {
