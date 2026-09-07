@@ -36,6 +36,9 @@ pub(crate) fn upsert_group_with(
         );
     }
     warnings.extend(recovery.warnings);
+    // 迁移落盘已发生而命令可能因业务失败早退（改 kind 冲突/组不存在）——
+    // 归一化诊断兜底进日志，修复可见性不随 Err 丢失（评审修复，PR #36 第七轮）
+    crate::library_fs::report_recovery_diagnostics("组写入", &warnings);
     // 改 kind 冲突复核（§7.2）：组已存在且新 kind 与任一成员资产不一致即拒绝
     if let Some(existing) = index["groups"]["byId"].get(&gid) {
         let old_kind = existing.get("kind").and_then(Value::as_str);
@@ -89,6 +92,9 @@ pub(crate) fn delete_group_with(library: &cap_std::fs::Dir, id: &str) -> Result<
         );
     }
     warnings.extend(recovery.warnings);
+    // 迁移落盘已发生而删除可能因「组不存在」早退——归一化诊断兜底进日志
+    // （评审修复，PR #36 第七轮）
+    crate::library_fs::report_recovery_diagnostics("组删除", &warnings);
     let groups = index["groups"]["byId"]
         .as_object_mut()
         .ok_or("资产索引结构损坏")?;
