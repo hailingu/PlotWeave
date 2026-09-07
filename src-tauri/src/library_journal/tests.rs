@@ -12,7 +12,7 @@ fn delete_commits_index_and_quarantines_media() {
     fs::write(library.join("assets").join("la-1.png"), b"PNG").expect("写媒体");
     write_index_raw(
         &library,
-        &json!({ "assets": [entry("la-1", "assets/la-1.png")], "groups": [] }),
+        &json!({ "assets": by_id([entry("la-1", "assets/la-1.png")]), "groups": by_id([]) }),
     );
     let out = delete_asset_transacted(&cap(&library), "la-1").expect("删除应成功");
     assert!(

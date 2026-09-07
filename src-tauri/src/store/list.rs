@@ -80,6 +80,10 @@ fn wrap_legacy(id: &str, v: &serde_json::Value) -> ProjectFile {
     let updated_at = v
         .get("updated_at")
         .and_then(|x| x.as_u64())
+        // 检查转换（评审修复，PR #33 第十三轮）：u64 > i64::MAX 经 as 强转会
+        // 溢出成负数，把脏时间戳静默替换成貌似合法的 1969 规范值；溢出即放弃
+        // 迁移该字段（回退默认），不伪造瞬间
+        .and_then(|ms| i64::try_from(ms).ok())
         .map(iso_from_ms)
         .unwrap_or_default();
     ProjectFile {
@@ -671,5 +675,25 @@ mod tests {
         assert_eq!(metas.len(), 1);
         assert_eq!(metas[0].name, "正版");
         cleanup_temp(&projects);
+    }
+
+    /// 旧格式时间戳溢出保护（评审修复，PR #33 第十三轮）：u64 毫秒超 i64::MAX
+    /// 时不得经 as 强转成负数、把脏时间戳静默替换成貌似合法的 1969 值——
+    /// 检查转换失败即放弃迁移该字段（回退默认，由前端/后续归一化处置）。
+    #[test]
+    fn wrap_legacy_rejects_overflowing_numeric_timestamp() {
+        let legacy = json!({
+            "name": "旧项目",
+            "updated_at": u64::MAX, // 溢出 i64 的脏时间戳
+        });
+        let wrapped = wrap_legacy("p-1", &legacy);
+        assert_ne!(
+            wrapped.project.updated_at, "1969-12-31T23:59:59.999Z",
+            "溢出时间戳不得静默替换为负瞬间的规范值"
+        );
+        assert!(
+            wrapped.project.updated_at.is_empty(),
+            "溢出时间戳应回退默认而非伪造"
+        );
     }
 }

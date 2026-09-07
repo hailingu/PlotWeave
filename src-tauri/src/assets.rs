@@ -15,9 +15,7 @@ use tauri::{AppHandle, Manager};
 
 use crate::isotime::{is_canonical_utc_timestamp, now_iso};
 use crate::library::ext_for;
-use crate::library_fs::{
-    assets_root, atomic_write_with, library_root, open_parent_dir, read_index_capped,
-};
+use crate::library_fs::{assets_root, atomic_write_with, library_root, open_parent_dir};
 #[cfg(unix)]
 use crate::store::asset_identity;
 use crate::store::{
@@ -33,19 +31,36 @@ fn new_asset_id() -> String {
 
 /// 读取库索引并定位条目（索引读取走 library_fs 共享内核：no-follow 归类 +
 /// 大小上限 + 脏条目隔离，坏数据绝不进入拷贝流程）：返回 (relPath, 规范化
-/// mime, 文件名组件)。条目缺失/条目形状非法均为显式错误。
+/// mime, 文件名组件)。条目缺失/条目形状非法均为显式错误。删除日志只读
+/// 告警态用不落盘读取（评审修复，PR #33 第七轮：导入是读取路径照常服务，
+/// 但不得把迁移结果写回 library.json）。
 fn find_library_entry(
     library: &CapDir,
     library_asset_id: &str,
 ) -> Result<(String, String, String), String> {
-    let (index, _) = read_index_capped(library)?;
+    let recovery = crate::library_journal::recover(library)?;
+    let read_only = recovery.read_only;
+    // 迁移/恢复诊断进结构化本机日志（评审修复，PR #33 第十一轮）：导入响应
+    // 无法携带 warnings，丢弃会让迁移落盘后的诊断永久丢失
+    for w in &recovery.warnings {
+        eprintln!("[library] 项目导入伴随迁移/恢复诊断：{w}");
+    }
+    let (index, _) = if read_only {
+        let (idx, w) = crate::library_fs::read_index_normalized_readonly(library)?;
+        // 只读归一化诊断进日志（评审修复，PR #33 第十九轮）：导入响应无法
+        // 携带 warnings，隔离/修复诊断丢弃会让脏数据不可见
+        crate::library_fs::report_recovery_diagnostics("项目导入", &w);
+        (idx, w)
+    } else {
+        // 挂起态读路径照常服务只读视图
+        let (idx, _w, _suspended) = crate::library_fs::read_index_capped(library)?;
+        (idx, _w)
+    };
     let entry = index
         .get("assets")
-        .and_then(Value::as_array)
-        .and_then(|arr| {
-            arr.iter()
-                .find(|a| a.get("id").and_then(Value::as_str) == Some(library_asset_id))
-        })
+        .and_then(|a| a.get("byId"))
+        .and_then(Value::as_object)
+        .and_then(|m| m.get(library_asset_id))
         .ok_or_else(|| format!("库资产不存在：{library_asset_id}"))?;
     let rel_path = entry
         .get("relPath")
@@ -149,7 +164,7 @@ fn ensure_project_control(projects: &CapDir, id: &str) -> Result<(), String> {
     let control = format!("{id}.json");
     match projects.symlink_metadata(&control) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err(format!("项目不存在：{id}"))
+            return Err(format!("项目不存在：{id}"));
         }
         Err(e) => return Err(format!("读取项目文件元数据失败：{e}")),
         Ok(md) => {
@@ -373,18 +388,36 @@ mod tests {
         fs::write(projects.join(format!("{id}.json")), b"{}").expect("写入项目控制文件");
     }
 
-    /// 库索引 + 媒体文件的最小合法 fixture（索引条目按 library.rs 现有形状）。
+    /// 库索引条目的完整合法形状（目标 Record 形状，含 §7.2 必填
+    /// source/ISO createdAt；relPath 按需投毒）。
+    fn library_entry(id: &str, name: &str, kind: &str, mime: &str, rel: &str) -> Value {
+        json!({
+            "id": id,
+            "name": name,
+            "kind": kind,
+            "mime": mime,
+            "relPath": rel,
+            "source": "upload",
+            "createdAt": "2026-01-01T00:00:00.000Z",
+            "tags": [],
+        })
+    }
+
+    /// 把库索引条目数组包装为目标 Record 形状（`{"byId": {id: entry}}`）。
+    fn library_by_id(entries: impl IntoIterator<Item = Value>) -> Value {
+        let mut m = serde_json::Map::new();
+        for e in entries {
+            m.insert(e["id"].as_str().unwrap().to_string(), e);
+        }
+        json!({ "byId": m })
+    }
+
+    /// 库索引 + 媒体文件的最小合法 fixture（索引条目按 §7.2 Record 形状）。
     fn seed_library(library: &Path, id: &str, file: &str, bytes: &[u8], mime: &str) {
         fs::write(library.join("assets").join(file), bytes).expect("写入库媒体文件");
         let index = json!({
-            "assets": [{
-                "id": id,
-                "name": file,
-                "kind": "character",
-                "mime": mime,
-                "relPath": format!("assets/{file}"),
-            }],
-            "groups": [],
+            "assets": library_by_id([library_entry(id, file, "character", mime, &format!("assets/{file}"))]),
+            "groups": library_by_id([]),
         });
         fs::write(
             library.join("library.json"),
@@ -471,8 +504,8 @@ mod tests {
         seed_project(&projects, "p-1");
         fs::write(library.join("assets").join("a.png"), b"A").expect("写库媒体");
         let index = json!({
-            "assets": [{ "id": "la-1", "name": "a.png", "mime": "image/png", "relPath": "../a.png" }],
-            "groups": [],
+            "assets": library_by_id([library_entry("la-1", "a.png", "other", "image/png", "../a.png")]),
+            "groups": library_by_id([]),
         });
         fs::write(
             library.join("library.json"),
@@ -499,8 +532,8 @@ mod tests {
         )
         .expect("建符号链接");
         let index = json!({
-            "assets": [{ "id": "la-1", "name": "la-1.png", "mime": "image/png", "relPath": "assets/la-1.png" }],
-            "groups": [],
+            "assets": library_by_id([library_entry("la-1", "la-1.png", "other", "image/png", "assets/la-1.png")]),
+            "groups": library_by_id([]),
         });
         fs::write(
             library.join("library.json"),
@@ -595,8 +628,8 @@ mod tests {
         let (projects, library, root) = temp_fixture();
         seed_project(&projects, "p-1");
         let index = json!({
-            "assets": [{ "id": "la-1", "name": "a.png", "mime": "image/png", "relPath": "assets/gone/a.png" }],
-            "groups": [],
+            "assets": library_by_id([library_entry("la-1", "a.png", "other", "image/png", "assets/gone/a.png")]),
+            "groups": library_by_id([]),
         });
         fs::write(
             library.join("library.json"),
@@ -673,6 +706,40 @@ mod tests {
         assert_eq!(ext_for_mime("application/octet-stream"), "bin");
         cleanup(&root);
     }
+
+    /// 只读告警态不得改写库索引（评审修复，PR #33 第七轮）：删除日志异型时
+    /// 项目导入的读取路径走不落盘归一化——library.json 保持原始字节，导入
+    /// 本身照常服务（读取不受只读限制）。
+    #[test]
+    fn import_read_does_not_persist_index_in_journal_read_only_mode() {
+        let (projects, library, root) = temp_fixture();
+        seed_project(&projects, "p-1");
+        // 旧数组形状索引：正常路径下读取即迁移落盘
+        let index = json!({
+            "assets": [library_entry("la-1", "la-1.png", "character", "image/png", "assets/la-1.png")],
+            "groups": [],
+        });
+        fs::write(
+            library.join("library.json"),
+            serde_json::to_string(&index).expect("序列化库索引"),
+        )
+        .expect("写入库索引");
+        fs::write(library.join("assets").join("la-1.png"), b"PNGDATA").expect("写入库媒体");
+        let before = fs::read(library.join("library.json")).expect("读原始索引字节");
+        // 异型删除日志根 → 整份恢复进入只读告警态
+        fs::write(
+            library.join(crate::library_journal::JOURNAL_FILE_NAME),
+            b"{\"not\":\"array\"}",
+        )
+        .expect("写异型日志");
+        let asset = import_asset_from_library(&cap(&projects), &cap(&library), "p-1", "la-1")
+            .expect("只读态导入（读取路径）仍应服务");
+        assert!(asset.get("id").is_some(), "导入应返回项目资产");
+        let after = fs::read(library.join("library.json")).expect("读落盘索引字节");
+        assert_eq!(before, after, "只读态不得改写 library.json");
+        cleanup(&root);
+    }
+
     #[test]
     fn ensure_child_dir_tolerates_already_exists() {
         // 并发首次落盘的竞态窗口由「总是创建 + 容忍 AlreadyExists」消除：

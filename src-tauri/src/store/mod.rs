@@ -29,6 +29,7 @@ mod testutil;
 pub use commands::{create_project, delete_project, load_project, save_project};
 pub use copy::copy_project_assets;
 pub use list::list_projects;
+pub(crate) use types::new_id_with_prefix;
 pub use types::{new_id, validate_id};
 pub use validate::verify_project_assets;
 

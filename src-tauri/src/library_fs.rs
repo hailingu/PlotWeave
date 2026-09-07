@@ -12,7 +12,7 @@ use cap_std::fs::Dir as CapDir;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
 
-use crate::store::{is_canonical_mime, is_valid_active_asset_rel_path, new_id, open_dir_bound};
+use crate::store::{new_id, open_dir_bound};
 
 /// 库索引大小上限（1 MiB，对齐 prefs.rs 设置文件上限）：异常膨胀的索引在
 /// 物化进内存前显式拒绝，防脏数据/篡改文件拖垮解析与 IPC。
@@ -36,9 +36,9 @@ pub(crate) fn validate_asset_id(id: &str) -> Result<(), String> {
     }
 }
 
-/// 空索引（首启或索引缺失时回退）。
+/// 空索引（首启或索引缺失时回退；目标 Record 形状，§7.2）。
 pub(crate) fn default_index() -> Value {
-    json!({ "assets": [], "groups": [] })
+    json!({ "assets": { "byId": {} }, "groups": { "byId": {} } })
 }
 
 /// 库目录确保内核：缺失即创建（并发首用容忍 AlreadyExists，评审修复——
@@ -151,13 +151,66 @@ pub(crate) fn open_parent_dir(
     Ok(Some((dir, (*last).to_string())))
 }
 
+/// 迁移/恢复诊断逐条进结构化本机日志（评审修复，PR #33 第十一/十二轮）：
+/// 警告本应随响应返回，但命令在迁移落盘后因业务失败（资产不存在、补丁非法）
+/// 提前返回 Err 时 warnings 不附加——修复已提交、诊断却永久丢失（下次 list
+/// 读到的是已干净文件）。凡「recover 已可能落盘迁移」的命令内核在业务校验
+/// 之前调用本函数兜底；成功路径随响应返回的 warnings 与日志重复可接受（重复
+/// 优于丢失）。
+pub(crate) fn report_recovery_diagnostics(context: &str, warnings: &[String]) {
+    for w in warnings {
+        eprintln!("[library] {context}伴随迁移/恢复诊断：{w}");
+    }
+}
+
+/// 归一化读取结果：迁移挂起（suspended）表示迁移产物超限无法持久化——
+/// 读路径照常服务只读视图，**写路径必须拒绝**，否则无关变更写回会永久抹掉
+/// 被隔离的需重发条目（评审修复，PR #33 第十六轮）。
+pub(crate) struct NormalizedIndex {
+    pub(crate) index: Value,
+    pub(crate) warnings: Vec<String>,
+    /// 迁移/修复已发生且可以落盘。
+    pub(crate) migrated: bool,
+    /// 迁移挂起：迁移产物超限，本次仅内存只读视图（写路径拒绝）。
+    pub(crate) suspended: bool,
+}
+
 /// 索引受限读取（library.rs 命令面与 assets.rs 导入路径的**唯一**索引读
-/// 实现）：no-follow 归类 → 大小上限内读取 → JSON 解析 → 逐条目白名单
-/// 校验——非法条目隔离出内存索引并逐条返回警告（§7.2 非法条目不进内存
-/// 索引），索引缺失回退默认空索引。
-pub(crate) fn read_index_capped(library: &CapDir) -> Result<(Value, Vec<String>), String> {
+/// 实现）：no-follow 归类 → 大小上限内读取 → JSON 解析 → 兼容迁移 + 完整
+/// 归一化（[`crate::library_index`]，§7.2）——旧数组形状迁移为 Record、
+/// 非法条目隔离出内存索引并逐条返回警告，索引缺失回退默认空索引。
+/// 迁移/修复发生时把归一化结果原子落盘（评审修复，PR #33 第二轮）：重发的
+/// id 与翻转的 Record 形状随读持久化，后续媒体/删除/更新命令读到同一身份。
+/// 返回挂起标志：写路径（put/update/delete）检测到即拒绝（评审修复，PR #33
+/// 第十六轮）。本函数总在持有 `library_op_lock`/`library_file_lock` 的命令
+/// 上下文内被调用。
+pub(crate) fn read_index_capped(library: &CapDir) -> Result<(Value, Vec<String>, bool), String> {
+    let normalized = read_index_normalized(library)?;
+    let suspended = normalized.suspended;
+    if normalized.migrated {
+        write_index(library, &normalized.index)?;
+    }
+    Ok((normalized.index, normalized.warnings, suspended))
+}
+
+/// 读取并归一化索引但**不落盘**（评审修复，PR #33 第三轮）：返回
+/// [`NormalizedIndex`]。供 `library_journal::recover` 在确认删除日志非异型
+/// 之前使用——journal 异型须先进入只读告警态，不得先迁移改写 library.json；
+/// 落盘决策由调用方在 journal 校验通过后执行。迁移产物复检大小上限（评审
+/// 修复，PR #33 第十四/十五/十六轮）：旧数组紧凑、迁移后（byId 键 + source +
+/// ISO）膨胀可越过写上限——超限则**不落盘**并进入挂起态：改用只读归一化
+/// 隔离需重发的条目（不暴露跨读漂移的 id）、丢弃可写遍的「已重发」谎报
+/// （实际行为是隔离）、置 suspended 供写路径拒绝；否则迁移落盘失败会把
+/// 「可读的旧索引」升级成全库命令死锁，放行写回又会让无关变更永久抹掉
+/// 被隔离条目。
+pub(crate) fn read_index_normalized(library: &CapDir) -> Result<NormalizedIndex, String> {
     match read_index_text_capped(library)? {
-        None => Ok((default_index(), Vec::new())),
+        None => Ok(NormalizedIndex {
+            index: default_index(),
+            warnings: Vec::new(),
+            migrated: false,
+            suspended: false,
+        }),
         Some(text) => {
             let index: Value =
                 serde_json::from_str(&text).map_err(|e| format!("资产索引损坏：{e}"))?;
@@ -175,7 +228,62 @@ pub(crate) fn read_index_capped(library: &CapDir) -> Result<(Value, Vec<String>)
                     INDEX_MAX_BYTES / (1024 * 1024)
                 ));
             }
-            Ok(sanitize_index(index))
+            // 超限降级（评审修复，PR #33 第十四/十五/十六轮）：迁移产物越过
+            // 写上限时进入挂起态——只读归一化隔离需重发的条目；诊断只保留
+            // 超限警告与只读遍声明，可写遍的「已重发」谎报（实际是隔离）
+            // 不得外泄
+            let original = index.clone();
+            let (normalized, writable_warnings, migrated) =
+                crate::library_index::migrate_and_normalize(index);
+            if migrated && normalized_len(&normalized)? > INDEX_MAX_BYTES {
+                let mut warnings = vec![format!(
+                    "资产索引迁移结果超过 {} MiB 上限，迁移挂起：库读取照常、写入暂停，须人工修整 library.json 条目使迁移结果可落盘",
+                    INDEX_MAX_BYTES / (1024 * 1024)
+                )];
+                let (ro_normalized, ro_warnings, _) =
+                    crate::library_index::migrate_and_normalize_readonly(original);
+                warnings.extend(ro_warnings);
+                return Ok(NormalizedIndex {
+                    index: ro_normalized,
+                    warnings,
+                    migrated: false,
+                    suspended: true,
+                });
+            }
+            Ok(NormalizedIndex {
+                index: normalized,
+                warnings: writable_warnings,
+                migrated,
+                suspended: false,
+            })
+        }
+    }
+}
+
+/// 只读告警态的归一化读取（评审修复，PR #33 第七轮）：不落盘且**不重发
+/// id**——journal 异型时写入被暂停，`new_id()` 重发的新身份无法持久化、
+/// 跨读漂移；需重发的条目隔离并警告（不暴露不稳定身份）。供 list/媒体/
+/// 导入三个读取路径在 `recovery.read_only` 时使用。
+pub(crate) fn read_index_normalized_readonly(
+    library: &CapDir,
+) -> Result<(Value, Vec<String>), String> {
+    match read_index_text_capped(library)? {
+        None => Ok((default_index(), Vec::new())),
+        Some(text) => {
+            let index: Value =
+                serde_json::from_str(&text).map_err(|e| format!("资产索引损坏：{e}"))?;
+            if !index.is_object() {
+                return Err("资产索引根必须是对象".into());
+            }
+            if normalized_len(&index)? > INDEX_MAX_BYTES {
+                return Err(format!(
+                    "资产索引规范化表示超过 {} MiB 上限，拒绝读取",
+                    INDEX_MAX_BYTES / (1024 * 1024)
+                ));
+            }
+            let (normalized, warnings, _) =
+                crate::library_index::migrate_and_normalize_readonly(index);
+            Ok((normalized, warnings))
         }
     }
 }
@@ -210,72 +318,6 @@ fn read_index_text_capped(library: &CapDir) -> Result<Option<String>, String> {
     String::from_utf8(bytes)
         .map(Some)
         .map_err(|_| "资产库索引不是合法 UTF-8".to_string())
-}
-
-/// 索引条目白名单（§7.2）：id/relPath/mime 形状校验，mime 在内存中规范化
-/// （trim + 小写）；任一项非法即整条拒绝。非法条目不进入内存索引；mime
-/// 发生就地修复时追加警告（评审修复：修复必须可见，静默修复会让前端与
-/// 后续写回都无法感知）。
-fn sanitize_entry(entry: &Value, warnings: &mut Vec<String>) -> Result<Value, String> {
-    let id = entry
-        .get("id")
-        .and_then(Value::as_str)
-        .ok_or("id 缺失或非字符串")?;
-    validate_asset_id(id)?;
-    let rel = entry
-        .get("relPath")
-        .and_then(Value::as_str)
-        .ok_or_else(|| format!("条目 {id} 的 relPath 缺失或非字符串"))?;
-    if !is_valid_active_asset_rel_path(rel) {
-        return Err(format!("条目 {id} 的 relPath 越出 assets/：{rel}"));
-    }
-    let mime_raw = entry
-        .get("mime")
-        .and_then(Value::as_str)
-        .ok_or_else(|| format!("条目 {id} 的 mime 缺失或非字符串"))?;
-    let mime = mime_raw.trim().to_ascii_lowercase();
-    if !is_canonical_mime(&mime) {
-        return Err(format!("条目 {id} 的 mime 非规范形式：{mime_raw}"));
-    }
-    if mime != mime_raw {
-        warnings.push(format!("条目 {id} 的 mime 已规范化：{mime_raw} → {mime}"));
-    }
-    let mut normalized = entry.clone();
-    normalized["mime"] = json!(mime);
-    Ok(normalized)
-}
-
-/// 索引净化：逐条目过白名单，非法条目隔离并生成警告；assets/groups 非数组
-/// 按空处理并告警。只影响内存视图，不回写磁盘（写入路径的落盘即净化由
-/// 各命令的写回自然完成）。
-fn sanitize_index(mut index: Value) -> (Value, Vec<String>) {
-    let mut warnings = Vec::new();
-    let assets = take_array(&mut index, "assets", &mut warnings);
-    let kept: Vec<Value> = assets
-        .iter()
-        .enumerate()
-        .filter_map(|(i, e)| {
-            sanitize_entry(e, &mut warnings)
-                .map_err(|reason| warnings.push(format!("已隔离非法索引条目 #{i}：{reason}")))
-                .ok()
-        })
-        .collect();
-    index["assets"] = json!(kept);
-    let groups = take_array(&mut index, "groups", &mut warnings);
-    index["groups"] = json!(groups);
-    (index, warnings)
-}
-
-/// 取出数组字段（非数组/缺失按空处理并告警）。
-fn take_array(index: &mut Value, key: &str, warnings: &mut Vec<String>) -> Vec<Value> {
-    match index.get_mut(key).map(Value::take) {
-        Some(Value::Array(arr)) => arr,
-        Some(_) => {
-            warnings.push(format!("资产索引的 {key} 不是数组，已按空处理"));
-            Vec::new()
-        }
-        None => Vec::new(),
-    }
 }
 
 /// 索引规范化（紧凑）表示的字节长度：读取侧与写入侧的统一度量。

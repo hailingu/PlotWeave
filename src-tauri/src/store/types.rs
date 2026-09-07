@@ -92,6 +92,15 @@ pub fn validate_id(id: &str) -> Result<(), String> {
 }
 /// 新 id：时间戳毫秒 + 进程内计数，保证同毫秒不碰撞。
 pub fn new_id() -> String {
+    new_id_with_prefix("p")
+}
+
+/// 带前缀的防碰撞 id 生成器（库资产等新域复用同内核，评审修复 PR #33
+/// 第十二/十七轮）：时间戳毫秒 + 随机段 + 进程内计数。随机段（RandomState
+/// 每进程随机种子）使跨进程同毫秒不再必然同 id——进程内计数器在多进程
+/// （如 Windows 进程本地库锁）下各自从零起算，仅靠计数跨进程可碰撞。
+pub(crate) fn new_id_with_prefix(prefix: &str) -> String {
+    use std::collections::hash_map::RandomState;
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let ms = SystemTime::now()
@@ -99,7 +108,10 @@ pub fn new_id() -> String {
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
     let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("p-{ms:x}-{seq:x}")
+    // 随机段：RandomState 每进程随机种子，hash_one 常数得进程随机 u64
+    use std::hash::BuildHasher;
+    let rnd = RandomState::new().hash_one(0u8);
+    format!("{prefix}-{ms:x}{rnd:x}-{seq:x}")
 }
 /// serde 谓词：false 时省略键（versionless 标记仅真值跨 IPC）。
 fn is_false(v: &bool) -> bool {

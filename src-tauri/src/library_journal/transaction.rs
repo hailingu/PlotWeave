@@ -35,6 +35,9 @@ fn delete_asset_transacted_unix(library: &CapDir, id: &str) -> Result<Value, Str
     if recovery.read_only {
         return Err("删除日志异常，库写入/删除已暂停：须人工修复 asset-delete-journal.json".into());
     }
+    // 迁移落盘已发生而删除可能因业务失败早退（资产不存在/冲突期）——诊断
+    // 兜底进日志，修复可见性不随 Err 丢失（评审修复，PR #33 第十二轮）
+    crate::library_fs::report_recovery_diagnostics("删除", &recovery.warnings);
     // 冲突期条目拒绝删除（评审修复）：重试会打开并隔离原 relPath 上的
     // 后来占用文件——标记只随日志事务解决而解除
     if recovery.conflicted.iter().any(|c| c == id) {
@@ -42,20 +45,25 @@ fn delete_asset_transacted_unix(library: &CapDir, id: &str) -> Result<Value, Str
             "资产 {id} 处于删除事务冲突期，拒绝删除：须先按日志恢复"
         ));
     }
-    let (mut index, mut warnings) = read_index_capped(library)?;
+    let (mut index, mut warnings, migration_suspended) = read_index_capped(library)?;
+    if migration_suspended {
+        return Err(
+            "资产索引迁移挂起（迁移结果超大小上限），删除已暂停：须人工修整 library.json 条目"
+                .into(),
+        );
+    }
     warnings.append(&mut recovery.warnings);
     let assets = assets_root(library)?;
-    let assets_arr = index["assets"].as_array_mut().ok_or("资产索引结构损坏")?;
-    let pos = assets_arr
-        .iter()
-        .position(|a| a.get("id").and_then(Value::as_str) == Some(id))
-        .ok_or_else(|| format!("资产不存在：{id}"))?;
-    let rel = assets_arr[pos]
-        .get("relPath")
+    let by_id = index["assets"]["byId"]
+        .as_object_mut()
+        .ok_or("资产索引结构损坏")?;
+    let rel = by_id
+        .get(id)
+        .and_then(|a| a.get("relPath"))
         .and_then(Value::as_str)
-        .unwrap_or_default()
+        .ok_or_else(|| format!("资产不存在：{id}"))?
         .to_string();
-    assets_arr.remove(pos);
+    by_id.remove(id);
     ensure_index_size(&index)?;
     if needs_no_quarantine(&assets, &index, &rel)? {
         write_index(library, &index)?;
@@ -67,8 +75,8 @@ fn delete_asset_transacted_unix(library: &CapDir, id: &str) -> Result<Value, Str
 /// 无需隔离的情形：其他条目仍引用同一文件位置（同 relPath = 同一物理
 /// 文件，只提交去项索引），或媒体/父目录已缺失（幂等收敛）。
 fn needs_no_quarantine(assets: &CapDir, index: &Value, rel: &str) -> Result<bool, String> {
-    let shared = index["assets"].as_array().is_some_and(|arr| {
-        arr.iter()
+    let shared = index["assets"]["byId"].as_object().is_some_and(|m| {
+        m.values()
             .any(|e| e.get("relPath").and_then(Value::as_str) == Some(rel))
     });
     if shared {
@@ -281,6 +289,8 @@ fn quarantine_conflict_error(entry: &JournalEntry, verdict: &TrashVerdict) -> St
 }
 
 /// 导入前的冲突期隔离检查（§7.2）：日志只读态与冲突 assetId 均拒绝服务。
+/// 恢复/迁移诊断进结构化本机日志（评审修复，PR #33 第十一轮）：导入响应
+/// 无法携带 warnings，丢弃会让迁移落盘后的诊断永久丢失。
 pub(crate) fn ensure_importable(library: &CapDir, library_asset_id: &str) -> Result<(), String> {
     let recovery = recover(library)?;
     // 只读态只暂停写入/删除（§7.2），导入是读取路径——不阻断
@@ -288,6 +298,9 @@ pub(crate) fn ensure_importable(library: &CapDir, library_asset_id: &str) -> Res
         return Err(format!(
             "库资产 {library_asset_id} 处于删除事务冲突期，拒绝导入"
         ));
+    }
+    for w in &recovery.warnings {
+        eprintln!("[library] 项目导入伴随迁移/恢复诊断：{w}");
     }
     Ok(())
 }

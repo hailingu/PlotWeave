@@ -28,19 +28,25 @@ const entry = (over: Record<string, unknown> = {}): Record<string, unknown> => (
   relPath: 'assets/la-1.png',
   tags: ['夜景'],
   groupId: null,
-  createdAt: 1700000000000,
+  createdAt: '2026-01-01T00:00:00.000Z',
   ...over,
+})
+
+/** §7.2 Record 形状（issue #29）：library_list 的 assets 为
+ * { byId: { [id]: entry } }，键自动取条目 id。 */
+const byId = (...entries: Array<Record<string, unknown>>): Record<string, unknown> => ({
+  byId: Object.fromEntries(entries.map((e) => [e.id, e])),
 })
 
 describe('libraryStore Tauri 路径：list（normalizeAsset 归一化）', () => {
   it('字段缺失/类型异常时逐字段兜底，kind 未知归 other', async () => {
     invoke.mockResolvedValue({
-      assets: [
+      assets: byId(
         entry(),
         // 缺 id → 整条丢弃；其余坏字段按兜底规则归一
         entry({ id: '' }),
         entry({ id: 'la-2', name: '', kind: 'mystery', view: 3, mime: null, relPath: 7, tags: 'x', groupId: 42, createdAt: 't' }),
-      ],
+      ),
     })
     const { libraryStore } = await load()
     const list = await libraryStore.list()
@@ -55,20 +61,31 @@ describe('libraryStore Tauri 路径：list（normalizeAsset 归一化）', () =>
       relPath: '',
       tags: [],
       groupId: null,
-      createdAt: 0,
+      // createdAt 现为字符串（§7.2 ISO）：'t' 是合法字符串类型原样保留，
+      // 前端不做 ISO 校验（那是后端落盘契约）；非字符串才回退空串
+      createdAt: 't',
     })
   })
 
-  it('assets 字段缺失/非数组时按空库处理', async () => {
+  it('assets 字段缺失/非 Record 形状时按空库处理', async () => {
+    // assets 字段缺失
     invoke.mockResolvedValue({})
     const { libraryStore } = await load()
+    await expect(libraryStore.list()).resolves.toEqual([])
+
+    // assets 非 Record 形状（旧数组形状已废弃，按空库处理）
+    invoke.mockResolvedValue({ assets: [entry()] })
+    await expect(libraryStore.list()).resolves.toEqual([])
+
+    // byId 非对象
+    invoke.mockResolvedValue({ assets: { byId: 'x' } })
     await expect(libraryStore.list()).resolves.toEqual([])
   })
 
   it('后端隔离警告逐条进 console.warn 诊断路径', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     invoke.mockResolvedValue({
-      assets: [entry()],
+      assets: byId(entry()),
       warnings: ['已隔离非法索引条目 #1：…', '已隔离非法索引条目 #2：…'],
     })
     const { libraryStore } = await load()
@@ -80,7 +97,7 @@ describe('libraryStore Tauri 路径：list（normalizeAsset 归一化）', () =>
 
   it('warnings 缺失/非字符串/空串项不产生告警', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    invoke.mockResolvedValue({ assets: [entry()], warnings: [42, '', null] })
+    invoke.mockResolvedValue({ assets: byId(entry()), warnings: [42, '', null] })
     const { libraryStore } = await load()
     await libraryStore.list()
     expect(warn).not.toHaveBeenCalled()
@@ -188,7 +205,7 @@ describe('libraryStore Tauri 路径：mediaUrl', () => {
 describe('libraryStore Tauri 路径：冲突期条目（issue #25）', () => {
   it('normalizeAsset 保留 conflicted 标记；未标记不引入字段', async () => {
     invoke.mockResolvedValue({
-      assets: [entry({ conflicted: true }), entry({ id: 'la-2' })],
+      assets: byId(entry({ conflicted: true }), entry({ id: 'la-2' })),
     })
     const { libraryStore } = await load()
     const list = await libraryStore.list()
@@ -212,7 +229,7 @@ describe('libraryStore Tauri 路径：隔离区积压可见性（issue #25 评�
   it('cleanupPending 非空时上报诊断', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     invoke.mockResolvedValue({
-      assets: [entry()],
+      assets: byId(entry()),
       cleanupPending: ['媒体已隔离待清理：assets/la-9.png'],
     })
     const { libraryStore } = await load()
@@ -225,7 +242,7 @@ describe('libraryStore Tauri 路径：隔离区积压可见性（issue #25 评�
 
   it('cleanupPending 缺失或为空数组不产生额外告警', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    invoke.mockResolvedValue({ assets: [entry()], cleanupPending: [] })
+    invoke.mockResolvedValue({ assets: byId(entry()), cleanupPending: [] })
     const { libraryStore } = await load()
     await libraryStore.list()
     expect(warn).not.toHaveBeenCalled()

@@ -19,6 +19,7 @@ mod imagegen;
 mod isotime;
 mod library;
 mod library_fs;
+mod library_index;
 mod library_journal;
 mod prefs;
 mod seal;

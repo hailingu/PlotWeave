@@ -14,7 +14,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use cap_std::fs::Dir as CapDir;
 use serde_json::{json, Value};
 
-use crate::library_fs::{assets_root, open_parent_dir, read_index_capped, INDEX_MAX_BYTES};
+use crate::library_fs::{assets_root, open_parent_dir, INDEX_MAX_BYTES};
 use crate::store::{atomic_write, is_valid_asset_rel_path, new_id, open_dir_bound};
 
 pub(crate) const JOURNAL_FILE_NAME: &str = "asset-delete-journal.json";
@@ -338,8 +338,8 @@ fn index_refs(index: &Value, entry: &JournalEntry) -> IndexRefs {
         index_has: false,
         other_same_rel: false,
     };
-    if let Some(arr) = index["assets"].as_array() {
-        for a in arr {
+    if let Some(by_id) = index["assets"]["byId"].as_object() {
+        for a in by_id.values() {
             let id = a.get("id").and_then(Value::as_str).unwrap_or_default();
             let rel = a.get("relPath").and_then(Value::as_str).unwrap_or_default();
             if id == entry.asset_id {
@@ -417,13 +417,29 @@ pub(super) fn restore_from_trash(
 /// 新映射在 rename 前耐久记录，评审修复）。只动日志与文件（回迁/清理），
 /// 不改 library.json——索引的权威状态不受恢复影响。
 pub(crate) fn recover(library: &CapDir) -> Result<Recovery, String> {
-    // 锁由调用方在操作边界持有（library_op_lock）——recover 不再自持
-    let (index, _) = read_index_capped(library)?;
+    // 锁由调用方在操作边界持有（library_op_lock）——recover 不再自持。
+    // 先读索引（不落盘）+ 读日志，日志异型判定优先于索引迁移落盘（评审修复，
+    // PR #33 第三轮）：journal 异型须进入只读告警态，不得先把 library.json
+    // 迁移改写；迁移落盘推迟到日志确认非异型之后。迁移/归一化警告并入
+    // recovery.warnings 随命令响应可见。
+    let normalized = crate::library_fs::read_index_normalized(library)?;
+    let index = normalized.index;
+    let index_warnings = normalized.warnings;
+    let migrated = normalized.migrated;
     let mut recovery = Recovery::default();
     let (entries, malformed) = read_journal(library, &mut recovery.warnings);
     if malformed {
         recovery.read_only = true;
+        // 只读态诊断与实际行为一致（评审修复，PR #33 第十三轮）：journal 异型
+        // 判定后即返回，只读归一化由 list/媒体/导入的只读分流各自执行——其
+        // 诊断声称隔离（真实行为），本路径不再掺入上面可重发版本的「已重发」
+        // 声明
         return Ok(recovery);
+    }
+    recovery.warnings.extend(index_warnings);
+    // 日志非异型：此刻才允许把索引迁移/修复原子落盘（重发 id 跨读稳定）
+    if migrated {
+        crate::library_fs::write_index(library, &index)?;
     }
     if entries.is_empty() {
         return Ok(recovery);
@@ -703,6 +719,8 @@ mod transaction;
 pub(crate) use transaction::{delete_asset_transacted, ensure_importable};
 
 #[cfg(test)]
+#[cfg(test)]
+mod recover_index_tests;
 #[cfg(test)]
 mod recover_tests;
 #[cfg(test)]
