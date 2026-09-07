@@ -125,3 +125,24 @@ describe('组命令门面', () => {
     await expect(libraryStore.listGroups()).resolves.toEqual([])
   })
 })
+
+// ---- 内存回退与生产路径同语义（评审修复，PR #36 第一轮）----
+
+describe('内存回退组语义与生产路径一致', () => {
+  it('upsertGroup 改 kind 与成员冲突即拒绝', async () => {
+    const asset = await libraryStore.put(
+      new File([new Uint8Array([1])], 'a.png', { type: 'image/png' }),
+      'character',
+    )
+    await libraryStore.updateMeta(asset.id, { groupId: 'g-1' })
+    await libraryStore.upsertGroup({ id: 'g-1', name: '女主', kind: 'character' })
+    // 改 kind 与成员冲突
+    await expect(
+      libraryStore.upsertGroup({ id: 'g-1', name: '女主', kind: 'location' }),
+    ).rejects.toThrow(/冲突|kind/)
+  })
+
+  it('deleteGroup 不存在的组拒绝', async () => {
+    await expect(libraryStore.deleteGroup('g-ghost')).rejects.toThrow(/不存在/)
+  })
+})

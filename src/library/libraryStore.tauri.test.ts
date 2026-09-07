@@ -249,3 +249,27 @@ describe('libraryStore Tauri 路径：隔离区积压可见性（issue #25 评�
     warn.mockRestore()
   })
 })
+
+// ---- 组列表诊断可见性（评审修复，PR #36 第一轮）----
+
+describe('libraryStore Tauri 路径：listGroups', () => {
+  it('listGroups 携带 library_list 的 warnings 与 cleanupPending 诊断', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    invoke.mockResolvedValue({
+      groups: byId(entry()),
+      warnings: ['条目 la-1 已隔离'],
+      cleanupPending: ['assets/.trash/t-1'],
+    })
+    const { libraryStore } = await load()
+    const groups = await libraryStore.listGroups()
+    expect(groups).toHaveLength(1)
+    expect(warn).toHaveBeenCalledWith(
+      '[Library] 索引条目隔离：',
+      '条目 la-1 已隔离',
+    )
+    expect(warn).toHaveBeenCalledWith(
+      '[Library] 删除隔离区待清理：',
+      ['assets/.trash/t-1'],
+    )
+  })
+})

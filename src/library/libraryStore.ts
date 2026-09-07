@@ -228,9 +228,17 @@ export const libraryStore = {
   listGroups: (): Promise<AssetGroup[]> => {
     if (isTauri) {
       return import('@tauri-apps/api/core').then(async ({ invoke }) => {
+        // 完整响应信封（评审修复，PR #36 第一轮）：warnings/cleanupPending
+        // 与 tauriList 同款上报——只读组视图不得隐藏修复/隔离诊断
         const index = await invoke<{
           groups?: { byId?: Record<string, unknown> }
+          warnings?: unknown[]
+          cleanupPending?: unknown[]
         }>('library_list')
+        reportLibraryWarnings(index.warnings)
+        if (Array.isArray(index.cleanupPending) && index.cleanupPending.length > 0) {
+          console.warn('[Library] 删除隔离区待清理：', index.cleanupPending)
+        }
         const byId = index.groups?.byId
         const entries = byId && typeof byId === 'object' ? Object.values(byId) : []
         return entries
@@ -256,6 +264,18 @@ export const libraryStore = {
         return result
       })
     }
+    // 内存回退同款冲突校验（评审修复，PR #36 第一轮）：改 kind 与成员冲突
+    // 即拒绝——浏览器预览不得批准生产路径拒绝的状态
+    const existing = memoryGroups.get(group.id)
+    if (existing && existing.kind !== group.kind) {
+      for (const v of memoryAssets.values()) {
+        if (v.asset.groupId === group.id && v.asset.kind !== group.kind) {
+          return Promise.reject(
+            new Error(`组 ${group.id} 改 kind 与成员资产冲突：存在 kind 不一致的成员`),
+          )
+        }
+      }
+    }
     memoryGroups.set(group.id, group)
     return Promise.resolve(group)
   },
@@ -274,7 +294,11 @@ export const libraryStore = {
         }
       })
     }
-    memoryGroups.delete(id)
+    // 内存回退同款存在性校验（评审修复，PR #36 第一轮）：stale/重复删除
+    // 不得静默成功
+    if (!memoryGroups.delete(id)) {
+      return Promise.reject(new Error(`组不存在：${id}`))
+    }
     // 内存回退同款语义（§7.2）：删组剥离成员 groupId
     for (const v of memoryAssets.values()) {
       if (v.asset.groupId === id) v.asset = { ...v.asset, groupId: null }
