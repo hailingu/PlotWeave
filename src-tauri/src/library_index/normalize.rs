@@ -80,9 +80,10 @@ fn empty_index() -> Value {
 
 /// 取出待迁移条目：数组每项键为 None（无权威键，按内嵌 id 键化）；Record
 /// 的 byId 成员带权威键——§7.2/§11.1 共同规则要求键/id 不一致时以记录键为
-/// 准。缺失桶按空处理（首启正常）；显式 null/异型桶视为脏数据，按空处理并
-/// 告警——修复须可见且经 migrated 落盘，不得每次读取重复丢失（评审修复，
-/// PR #33 第三轮）。
+/// 准。真实空库由「索引文件缺失」覆盖（read_index_normalized 的 None 分支
+/// 直接回退默认空索引、不经本函数）；文件**存在**但桶缺失属异型——按空处理
+/// 并告警、经 migrated 落盘，不得每次读取重复（评审修复，PR #33 第十一轮）；
+/// 显式 null/异型桶同口径（第三轮）。
 fn take_entries(
     raw: Option<Value>,
     bucket: &str,
@@ -109,7 +110,10 @@ fn take_entries(
             warnings.push(format!("资产索引的 {bucket} 形状非法，已按空处理"));
             Vec::new()
         }
-        None => Vec::new(),
+        None => {
+            warnings.push(format!("资产索引缺失 {bucket} 桶，已按空处理"));
+            Vec::new()
+        }
     }
 }
 
@@ -227,22 +231,24 @@ fn assign_key(
         return reissue_or_isolate(map, reserved, allow_reissue, bucket, warnings)
             .map(|id| (id, key_spelling.clone()));
     };
-    let embedded = embedded_raw.trim();
-    let valid_id = !embedded.is_empty() && validate_asset_id(embedded).is_ok();
-    if valid_id && !map.contains_key(embedded) {
-        if reserved.contains(embedded) {
+    // 内嵌 id verbatim（评审修复，PR #33 第十一轮）：ID 不透明——带空白填充
+    // 的非空字符串（" la-1 "）不得 trim 成合法 id 抢占真实条目，verbatim 不过
+    // 值域即按非法 id 重发；trim 规范化只用于契约明确允许的字段
+    let valid_id = !embedded_raw.is_empty() && validate_asset_id(embedded_raw).is_ok();
+    if valid_id && !map.contains_key(embedded_raw) {
+        if reserved.contains(embedded_raw) {
             // 内嵌 id 与（本条目之后才出现的）权威键冲突：不得抢占，重发
             warnings.push(format!(
-                "资产索引 {bucket} 内嵌 id {embedded} 与权威键冲突，已重发"
+                "资产索引 {bucket} 内嵌 id {embedded_raw} 与权威键冲突，已重发"
             ));
             return reissue_or_isolate(map, reserved, allow_reissue, bucket, warnings)
                 .map(|id| (id, key_spelling.clone()));
         }
-        return Some((embedded.to_string(), key_spelling));
+        return Some((embedded_raw.to_string(), key_spelling));
     }
     if valid_id {
         warnings.push(format!(
-            "资产索引 {bucket} 含重复 id {embedded}，后续项重发"
+            "资产索引 {bucket} 含重复 id {embedded_raw}，后续项重发"
         ));
         return reissue_or_isolate(map, reserved, allow_reissue, bucket, warnings)
             .map(|id| (id, key_spelling.clone()));

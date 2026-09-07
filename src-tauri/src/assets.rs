@@ -40,7 +40,13 @@ fn find_library_entry(
     library: &CapDir,
     library_asset_id: &str,
 ) -> Result<(String, String, String), String> {
-    let read_only = crate::library_journal::recover(library)?.read_only;
+    let recovery = crate::library_journal::recover(library)?;
+    let read_only = recovery.read_only;
+    // 迁移/恢复诊断进结构化本机日志（评审修复，PR #33 第十一轮）：导入响应
+    // 无法携带 warnings，丢弃会让迁移落盘后的诊断永久丢失
+    for w in &recovery.warnings {
+        eprintln!("[library] 项目导入伴随迁移/恢复诊断：{w}");
+    }
     let (index, _) = if read_only {
         crate::library_fs::read_index_normalized_readonly(library)?
     } else {

@@ -747,3 +747,28 @@ fn update_meta_rejects_patch_fields_outside_value_domain() {
     assert_eq!(updated["tags"], json!(["hero"]));
     cleanup(&root);
 }
+
+/// groupId 补丁 verbatim（评审修复，PR #33 第十一轮）：非空补丁值必须原样
+/// 过 id 值域——`" g "` 不得 trim 成 `g` 错接进组 g；仅 null/空白是清除
+/// 标记。
+#[test]
+fn update_meta_rejects_padded_group_id_patch() {
+    let (library, root) = temp_fixture();
+    let member = {
+        let mut e = entry("la-1", "assets/la-1.png");
+        e["groupId"] = json!("g-1");
+        e
+    };
+    let group = json!({ "id": "g-1", "name": "女主", "kind": "other" });
+    write_index_raw(
+        &library,
+        &json!({ "assets": by_id([member]), "groups": by_id([group]) }),
+    );
+    let before = fs::read(library.join("library.json")).expect("读原始索引字节");
+    let err = update_meta_with(&cap(&library), "la-1", &json!({ "groupId": " g-1 " }))
+        .expect_err("带空白 groupId 补丁应拒绝");
+    assert!(err.contains("groupId"), "意外诊断：{err}");
+    let after = fs::read(library.join("library.json")).expect("读落盘索引字节");
+    assert_eq!(before, after, "拒绝更新不得写盘");
+    cleanup(&root);
+}

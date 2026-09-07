@@ -294,7 +294,9 @@ fn validate_tags_patch(v: &Value) -> Result<(), String> {
 }
 
 /// 应用 groupId 补丁（§7.2）：null/空白是唯一清除标记，落盘删除可选字段；
-/// ≤64 字符 trim 后写入；其他异型值拒绝。
+/// 非空值必须 **verbatim** 过 id 值域——`" g "` 不得 trim 成 `"g"` 错接进组
+/// g（评审修复，PR #33 第十一轮：ID 不透明，trim 只适用于契约允许的字段）；
+/// 其他异型值拒绝。
 fn apply_group_id(entry: &mut Value, g: &Value) -> Result<(), String> {
     match g {
         Value::Null => {
@@ -303,8 +305,8 @@ fn apply_group_id(entry: &mut Value, g: &Value) -> Result<(), String> {
         Value::String(s) if s.trim().is_empty() => {
             entry.as_object_mut().unwrap().remove("groupId");
         }
-        Value::String(s) if s.len() <= 64 => entry["groupId"] = json!(s.trim()),
-        _ => return Err("groupId 必须是 ≤64 字符的字符串或 null".into()),
+        Value::String(s) if validate_asset_id(s).is_ok() => entry["groupId"] = json!(s),
+        _ => return Err("groupId 必须是合法 id 字符串或 null".into()),
     }
     Ok(())
 }
@@ -378,6 +380,13 @@ fn resolve_media_entry_with(
     } else {
         read_index_capped(library)?
     };
+    // 迁移/恢复诊断进结构化本机日志（评审修复，PR #33 第十一轮）：媒体请求
+    // 只回 200/404、响应无法携带 warnings；迁移落盘后这些隔离/改写诊断若被
+    // 丢弃，后续 list 读到的是已干净文件，诊断永久丢失——不落盘规则「失败
+    // 不得隐匿」同样适用于修复可见性
+    for w in &recovery.warnings {
+        eprintln!("[library] 库媒体请求伴随迁移/恢复诊断：{w}");
+    }
     let entry = index["assets"]["byId"]
         .get(id)
         .ok_or_else(|| format!("资产不存在：{id}"))?;

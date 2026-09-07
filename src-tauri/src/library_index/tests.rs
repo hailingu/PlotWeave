@@ -868,3 +868,41 @@ fn record_null_group_id_warns_while_legacy_null_is_silent_removal() {
         "legacy null 删除是确定性兼容改写，不告警：{warnings:?}"
     );
 }
+
+// ---- 评审修复（PR #33 第十一轮）：embedded id verbatim、缺失桶告警 ----
+
+/// 内嵌 id verbatim（评审修复）：旧数组条目 `" la-1 "` 带空白即非法重发，
+/// 不得 trim 成 `la-1` 抢占真实条目——ID 不透明，trim 规范化只适用于契约
+/// 明确允许的字段。
+#[test]
+fn padded_embedded_id_is_reissued_not_trimmed() {
+    let mut padded = asset(" la-1 ");
+    padded["name"] = json!("padded");
+    let real = asset("la-1");
+    let index = json!({ "assets": [padded, real], "groups": [] });
+    let (out, warnings, _m) = migrate_and_normalize(index);
+    let by_id = out["assets"]["byId"].as_object().unwrap();
+    assert_eq!(
+        by_id["la-1"]["name"], "x",
+        "真实 la-1 不得被抢占：{by_id:?}"
+    );
+    assert_eq!(by_id.len(), 2, "带空白条目应重发保留：{by_id:?}");
+    assert!(
+        by_id.values().any(|e| e["name"] == "padded"),
+        "带空白条目应重发保留"
+    );
+    assert!(warnings.iter().any(|w| w.contains("id")));
+}
+
+/// 已有索引文件缺失 assets/groups 桶须告警并落盘（评审修复）：真实空库由
+/// 「索引文件缺失」覆盖；文件存在但桶缺失是异型，静默合成会每次读取重复。
+#[test]
+fn omitted_bucket_in_existing_file_warns_and_marks_migrated() {
+    let index = json!({ "assets": { "byId": { "la-1": asset("la-1") } } }); // 缺 groups
+    let (_out, warnings, migrated) = migrate_and_normalize(index);
+    assert!(
+        warnings.iter().any(|w| w.contains("groups")),
+        "缺失桶应告警：{warnings:?}"
+    );
+    assert!(migrated, "缺失桶修复应落盘");
+}
