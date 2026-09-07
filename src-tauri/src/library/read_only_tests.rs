@@ -308,7 +308,7 @@ fn put_twice_produces_distinct_ids_and_filenames() {
     let id2 = e2["id"].as_str().expect("id 缺失");
     assert_ne!(id1, id2, "同毫秒同大小导入不得产生重复 id");
     assert_ne!(e1["relPath"], e2["relPath"], "媒体文件名不得碰撞");
-    let (index, _) = crate::library_fs::read_index_capped(&cap(&library)).expect("索引可读");
+    let (index, _w, _s) = crate::library_fs::read_index_capped(&cap(&library)).expect("索引可读");
     let by_id = index["assets"]["byId"]
         .as_object()
         .expect("assets.byId 对象");
