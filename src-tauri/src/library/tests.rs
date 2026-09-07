@@ -707,3 +707,43 @@ fn update_meta_kind_change_without_group_succeeds() {
     assert_eq!(updated["kind"], "location");
     cleanup(&root);
 }
+
+/// update patch 值域运行时校验（评审修复，PR #33 第十轮，§7.2「字段一旦
+/// 出现就先做运行时类型和值域校验」）：非字符串 view/name、非法 tags
+/// （非数组/成员异型/空白/超长/重复/超 16 项）一律拒绝整次命令，不得
+/// 静默截断或写盘后由读取归一化剥离。
+#[test]
+fn update_meta_rejects_patch_fields_outside_value_domain() {
+    let (library, root) = temp_fixture();
+    write_index_raw(
+        &library,
+        &json!({ "assets": by_id([entry("la-1", "assets/la-1.png")]), "groups": by_id([]) }),
+    );
+    let lib = cap(&library);
+    for (patch, why) in [
+        (json!({ "view": 1 }), "非字符串 view"),
+        (json!({ "name": 42 }), "非字符串 name"),
+        (json!({ "tags": "x" }), "非数组 tags"),
+        (json!({ "tags": [1] }), "异型 tags 成员"),
+        (json!({ "tags": ["  "] }), "空白 tags 成员"),
+        (json!({ "tags": ["a", "a"] }), "重复 tags 成员"),
+        (
+            json!({ "tags": ["0123456789012345678901234567890123456789012345678901234567890123456789"] }),
+            "超长 tags 成员",
+        ),
+    ] {
+        let err = update_meta_with(&lib, "la-1", &patch).expect_err(&format!("{why} 应拒绝"));
+        assert!(!err.is_empty(), "{why} 应携带诊断");
+    }
+    // 超过 16 项拒绝（不得静默截断）
+    let many = json!({ "tags": (0..17).map(|i| format!("t{i}")).collect::<Vec<_>>() });
+    update_meta_with(&lib, "la-1", &many).expect_err("超过 16 项 tags 应拒绝");
+    // 对照：合法 tags 更新成功
+    let ok = update_meta_with(&lib, "la-1", &json!({ "tags": [" hero ", "hero"] }))
+        .expect_err("规范化后重复（hero）应拒绝");
+    assert!(ok.contains("重复"), "规范化后重复应拒绝：{ok}");
+    let updated = update_meta_with(&lib, "la-1", &json!({ "tags": [" hero "] }))
+        .expect("带空白的合法 tags 应成功");
+    assert_eq!(updated["tags"], json!(["hero"]));
+    cleanup(&root);
+}

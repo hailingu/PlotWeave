@@ -25,6 +25,8 @@ use crate::store::is_valid_active_asset_rel_path;
 const ASSET_MAX_BYTES: usize = 20 * 1024 * 1024;
 const NAME_MAX_CHARS: usize = 128;
 const TAGS_MAX: usize = 16;
+/// 单个 tag 去空白后的字符上限（与 §7.2 归一化内核同域）。
+const TAG_MAX_CHARS: usize = 64;
 
 const KINDS: [&str; 6] = [
     "character",
@@ -220,7 +222,10 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// 校验元信息补丁：字段白名单 + name/kind/view 取值合法性（S3776 拆分）。
+/// 校验元信息补丁（§7.2）：字段白名单；字段**一旦出现**即做运行时类型和
+/// 值域校验——非字符串的 name/kind/view、tags 的异型/空白/超长/重复成员与
+/// 超 16 项一律拒绝整次命令，不得静默跳过校验、截断或留待读取归一化剥离
+/// （评审修复，PR #33 第十轮）。
 fn validate_meta_patch(patch: &Value) -> Result<(), String> {
     if !patch.is_object() {
         return Err("patch 必须是对象".into());
@@ -231,16 +236,59 @@ fn validate_meta_patch(patch: &Value) -> Result<(), String> {
             return Err(format!("不可修改的字段：{key}"));
         }
     }
-    if let Some(n) = patch.get("name").and_then(|v| v.as_str()) {
+    if let Some(v) = patch.get("name") {
+        let Some(n) = v.as_str() else {
+            return Err("name 必须是字符串".into());
+        };
         validate_name(n)?;
     }
-    if let Some(k) = patch.get("kind").and_then(|v| v.as_str()) {
+    if let Some(v) = patch.get("kind") {
+        let Some(k) = v.as_str() else {
+            return Err("kind 必须是字符串".into());
+        };
         validate_kind(k)?;
     }
-    if let Some(s) = patch.get("view").and_then(|v| v.as_str()) {
-        if !VIEWS.contains(&s) {
-            return Err(format!("未知视角：{s}"));
+    if let Some(v) = patch.get("view") {
+        if !v.is_null() {
+            let Some(s) = v.as_str() else {
+                return Err("view 必须是字符串或 null".into());
+            };
+            if !VIEWS.contains(&s) {
+                return Err(format!("未知视角：{s}"));
+            }
         }
+    }
+    if let Some(v) = patch.get("tags") {
+        validate_tags_patch(v)?;
+    }
+    Ok(())
+}
+
+/// tags 补丁值域（§7.2「tags 须在输入时满足数组、成员和值域规则」）：数组、
+/// 成员去空白后 1–64 字符且规范化后唯一、至多 16 项。
+fn validate_tags_patch(v: &Value) -> Result<(), String> {
+    let Some(arr) = v.as_array() else {
+        return Err("tags 必须是数组".into());
+    };
+    let mut seen: Vec<String> = Vec::new();
+    for t in arr {
+        let Some(s) = t.as_str() else {
+            return Err("tags 成员必须是字符串".into());
+        };
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            return Err("tags 成员去空白后不能为空".into());
+        }
+        if trimmed.chars().count() > TAG_MAX_CHARS {
+            return Err(format!("tags 成员超长（>{} 字符）", TAG_MAX_CHARS));
+        }
+        if seen.iter().any(|x| x == trimmed) {
+            return Err(format!("tags 成员重复：{trimmed}"));
+        }
+        seen.push(trimmed.to_string());
+    }
+    if seen.len() > TAGS_MAX {
+        return Err(format!("tags 最多 {} 项", TAGS_MAX));
     }
     Ok(())
 }
@@ -569,9 +617,11 @@ pub fn library_delete(app: AppHandle, id: String) -> Result<Value, String> {
     crate::library_journal::delete_asset_transacted(&library, &id)
 }
 
-/// 更新元信息内核（句柄域）：净化读取 → 定位条目 → 应用补丁 → 原子写回；
-/// 返回条目随写回携带净化诊断（评审修复，仅在非空时附加）。
+/// 更新元信息内核（句柄域）：补丁值域校验（§7.2 在内核强制——绕过命令
+/// 层的原始 IPC 同样不得绕过）→ 净化读取 → 定位条目 → 应用补丁 → 复验
+/// 合并结果 → 原子写回；返回条目随写回携带净化诊断（仅在非空时附加）。
 fn update_meta_with(library: &cap_std::fs::Dir, id: &str, patch: &Value) -> Result<Value, String> {
+    validate_meta_patch(patch)?;
     let tags = normalize_tags(patch.get("tags"));
     let recovery = crate::library_journal::recover(library)?;
     if recovery.read_only {
@@ -631,11 +681,11 @@ fn update_meta_with(library: &cap_std::fs::Dir, id: &str, patch: &Value) -> Resu
     Ok(updated)
 }
 
-/// 更新条目元信息（改名/分类/视角/标签/编组）；id 与媒体文件不变。
+/// 更新条目元信息（改名/分类/视角/标签/编组）；id 与媒体文件不变。补丁
+/// 值域校验在内核 update_meta_with 内强制（命令层与原始 IPC 同一口径）。
 #[tauri::command]
 pub fn library_update_meta(app: AppHandle, id: String, patch: Value) -> Result<Value, String> {
     validate_asset_id(&id)?;
-    validate_meta_patch(&patch)?;
     let library = library_root(&app)?;
     let _op = library_op_lock();
     let _file_lock = library_file_lock(&library)?;

@@ -823,3 +823,48 @@ fn record_null_view_warns_while_legacy_null_is_silent_removal() {
         "legacy null 删除是确定性兼容改写，不告警：{warnings:?}"
     );
 }
+
+// ---- 评审修复（PR #33 第十轮）：tags trim 修复可见、null groupId 形状限定 ----
+
+/// tags 成员 trim 产生的修复须可见（评审修复）：`[" hero "]` → `["hero"]`
+/// 是确定性修复——警告并经 migrated 落盘，不得静默改写后每次读取重复。
+#[test]
+fn trimmed_tag_marks_repair_dirty() {
+    let mut a = asset("la-1");
+    a["tags"] = json!([" hero "]);
+    let index = json!({ "assets": { "byId": { "la-1": a } }, "groups": { "byId": {} } });
+    let (out, warnings, migrated) = migrate_and_normalize(index);
+    assert_eq!(out["assets"]["byId"]["la-1"]["tags"], json!(["hero"]));
+    assert!(
+        warnings.iter().any(|w| w.contains("tags")),
+        "trim 修复应告警：{warnings:?}"
+    );
+    assert!(migrated, "trim 修复应置 migrated 落盘");
+}
+
+/// 目标 Record 条目显式 `groupId: null` 走警告路径（评审修复）：与 view null
+/// 同口径——null 删除是旧数组兼容迁移语义；目标形状下警告剥离并落盘。
+#[test]
+fn record_null_group_id_warns_while_legacy_null_is_silent_removal() {
+    // 目标形状：null → 警告剥离
+    let mut a = asset("la-1");
+    a["groupId"] = json!(null);
+    let index = json!({ "assets": { "byId": { "la-1": a } }, "groups": { "byId": {} } });
+    let (out, warnings, migrated) = migrate_and_normalize(index);
+    assert!(out["assets"]["byId"]["la-1"].get("groupId").is_none());
+    assert!(
+        warnings.iter().any(|w| w.contains("groupId")),
+        "目标形状显式 null groupId 应警告：{warnings:?}"
+    );
+    assert!(migrated);
+    // 对照：legacy 数组 null → 兼容迁移静默删除
+    let mut b = asset("la-1");
+    b["groupId"] = json!(null);
+    let legacy = json!({ "assets": [b], "groups": [] });
+    let (out, warnings, _) = migrate_and_normalize(legacy);
+    assert!(out["assets"]["byId"]["la-1"].get("groupId").is_none());
+    assert!(
+        !warnings.iter().any(|w| w.contains("groupId")),
+        "legacy null 删除是确定性兼容改写，不告警：{warnings:?}"
+    );
+}

@@ -388,7 +388,7 @@ fn normalize_asset(a: &Value, legacy_entry: bool, warnings: &mut Vec<String>) ->
     let kind = normalize_kind(a.get("kind"), &id, warnings)?;
     let tags = normalize_tags_field(a.get("tags"), &id, warnings);
     let view = normalize_view(a.get("view"), legacy_entry, &id, warnings);
-    let group_id = normalize_group_id(a.get("groupId"), &id, warnings);
+    let group_id = normalize_group_id(a.get("groupId"), legacy_entry, &id, warnings);
     let mut e = json!({
         "id": id, "name": name, "kind": kind, "mime": mime, "relPath": rel,
         "source": source, "createdAt": created, "tags": tags,
@@ -549,6 +549,11 @@ fn normalize_tags_field(raw: Option<&Value>, id: &str, warnings: &mut Vec<String
             dirty = true;
             continue;
         }
+        // 去空白本身也是修复——差异必须可见并经 migrated 落盘（评审修复，
+        // PR #33 第十轮：静默 trim 会让修复每次读取重复发生）
+        if s != t {
+            dirty = true;
+        }
         if out.len() < TAGS_MAX {
             out.push(s.to_string());
         } else {
@@ -588,9 +593,23 @@ fn normalize_view(
 /// 值必须 verbatim 过 id 值域（`" g "` 不得 trim 成 `"g"` 错接进组）；空白
 /// 引用若被空白映射改写早在条目级归一化之前完成，此处剩余的空白/非法引用
 /// 一律剥离并警告。
-fn normalize_group_id(raw: Option<&Value>, id: &str, warnings: &mut Vec<String>) -> Option<String> {
+fn normalize_group_id(
+    raw: Option<&Value>,
+    legacy_entry: bool,
+    id: &str,
+    warnings: &mut Vec<String>,
+) -> Option<String> {
     match raw {
-        None | Some(Value::Null) => None,
+        None => None,
+        // null 是旧数组可选字段的「未编组」表示法——兼容迁移静默删除；目标
+        // Record 形状下 null 是非法值，走警告路径（评审修复，PR #33 第十轮）
+        Some(Value::Null) if legacy_entry => None,
+        Some(Value::Null) => {
+            warnings.push(format!(
+                "条目 {id} 的 groupId 为显式 null（目标形状），已剥离"
+            ));
+            None
+        }
         Some(Value::String(s)) => {
             if validate_asset_id(s).is_ok() {
                 Some(s.clone())
