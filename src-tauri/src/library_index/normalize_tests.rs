@@ -751,3 +751,38 @@ fn record_missing_tags_warns_while_legacy_missing_is_silent() {
         "legacy 缺失 tags 是兼容语境静默按空：{warnings:?}"
     );
 }
+
+/// 降级路径不保留被弃可写遍的「已重发」谎报（评审修复）：只读归一化实际
+/// 隔离了条目，输出诊断只应有超限警告 + 只读遍声明。
+#[test]
+fn oversized_fallback_discards_writable_pass_reissue_claims() {
+    // 通过 read_index 层验证——此处直接验证内核对的组合行为不可行，
+    // 降级组合断言在 library/tests.rs；本测试锚定内核接口：
+    // readonly 版从不产生「已重发」
+    let mut blank = asset("la-1");
+    blank["id"] = json!("  ");
+    let index = json!({ "assets": [blank], "groups": [] });
+    let (_, warnings, _) = migrate_and_normalize_readonly(index);
+    assert!(
+        !warnings.iter().any(|w| w.contains("已重发")),
+        "只读归一化不得产生已重发声明：{warnings:?}"
+    );
+}
+
+/// 非法键归位为内嵌 id 是确定性修复（评审修复）：须警告并经 migrated 落盘，
+/// 不得静默重复归键。
+#[test]
+fn fallback_rekey_of_invalid_record_key_warns_and_marks_migrated() {
+    let g = group("g-old", "character"); // 键 " " 非法，归位 g-old
+    let index = json!({
+        "assets": { "byId": {} },
+        "groups": { "byId": { " ": g } },
+    });
+    let (out, warnings, migrated) = migrate_and_normalize(index);
+    assert_eq!(out["groups"]["byId"]["g-old"]["id"], "g-old");
+    assert!(
+        warnings.iter().any(|w| w.contains("归位")),
+        "键归位修复应告警：{warnings:?}"
+    );
+    assert!(migrated, "键归位修复应置 migrated 落盘");
+}

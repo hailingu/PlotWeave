@@ -251,7 +251,7 @@ fn read_index_quarantines_illegal_entries_with_warnings() {
             "groups": [],
         }),
     );
-    let (index, warnings) = crate::library_fs::read_index_capped(&cap(&library))
+    let (index, warnings, _s) = crate::library_fs::read_index_capped(&cap(&library))
         .expect("含非法条目的索引应可读（条目级隔离，不整册拒绝）");
     let by_id = index["assets"]["byId"]
         .as_object()
@@ -302,7 +302,7 @@ fn read_index_enforces_size_cap() {
 #[test]
 fn read_index_missing_falls_back_to_default() {
     let (library, root) = temp_fixture();
-    let (index, warnings) =
+    let (index, warnings, _s) =
         crate::library_fs::read_index_capped(&cap(&library)).expect("缺失索引应回退默认");
     assert_eq!(
         index["assets"]["byId"]
@@ -339,7 +339,7 @@ fn read_index_reports_mime_repair_warning() {
         &library,
         &json!({ "assets": by_id([e]), "groups": by_id([]) }),
     );
-    let (index, warnings) =
+    let (index, warnings, _s) =
         crate::library_fs::read_index_capped(&cap(&library)).expect("可修复条目应保留");
     assert_eq!(
         index["assets"]["byId"]["la-1"]["mime"].as_str(),
@@ -415,7 +415,7 @@ fn delete_round_trips_large_compact_index_within_cap() {
         fs::metadata(library.join("assets").join("la-0.png")).is_err(),
         "媒体应被删除"
     );
-    let (index, _) =
+    let (index, _w, _s) =
         crate::library_fs::read_index_capped(&cap(&library)).expect("写回后的索引必须仍可读");
     let by_id = index["assets"]["byId"]
         .as_object()
@@ -568,7 +568,7 @@ fn oversized_migrated_index_degrades_to_in_memory_without_write() {
     );
     write_index_raw(&library, &seed);
     let before = fs::read(library.join("library.json")).expect("读原始索引字节");
-    let (index, warnings) =
+    let (index, warnings, _s) =
         crate::library_fs::read_index_capped(&cap(&library)).expect("迁移超限不得拒绝读取");
     assert_eq!(
         index["assets"]["byId"]
@@ -608,7 +608,7 @@ fn oversized_migration_isolates_reissue_entries_instead_of_exposing() {
         e
     }));
     write_index_raw(&library, &json!({ "assets": entries, "groups": [] }));
-    let (index, warnings) =
+    let (index, warnings, _s) =
         crate::library_fs::read_index_capped(&cap(&library)).expect("超限降级仍可读");
     let by_id = index["assets"]["byId"].as_object().expect("byId 对象");
     assert_eq!(
@@ -627,5 +627,42 @@ fn oversized_migration_isolates_reissue_entries_instead_of_exposing() {
             .any(|w| w.contains("只读") || w.contains("隔离")),
         "需重发条目应隔离并告警：{warnings:?}"
     );
+    cleanup(&root);
+}
+
+/// 降级挂起态阻断变更（评审修复，PR #33 第十六轮）：迁移产物超限的降级
+/// 视图（需重发条目已隔离）不得作为写基线落盘——否则无关变更会永久抹掉
+/// 被隔离条目。变更命令须拒绝并保留磁盘原始字节；解除途径与 journal 只读
+/// 态同先例：人工修整 library.json。
+#[test]
+fn migration_suspended_blocks_mutations_preserving_disk() {
+    let (library, root) = temp_fixture();
+    let long_name = "n".repeat(120);
+    // 夹具经精确校准：旧数组 ≤1MiB 可读、可写遍迁移产物 >1MiB（触发降级）、
+    // 只读遍（隔离全部空白条目）≤1MiB——正是「若无挂起语义则无关变更写回
+    // 会成功并抹掉隔离条目」的窗口
+    let mut entries: Vec<Value> = (0..60)
+        .map(|k| {
+            let mut e = entry("la-blank-src", "assets/la-blank.png");
+            e["id"] = json!(" ".repeat(k)); // 60 个不同长度的空白拼写（含空串）
+            e["name"] = json!(long_name);
+            e
+        })
+        .collect();
+    entries.extend((0..3580).map(|i| {
+        let mut e = entry(&format!("la-{i}"), &format!("assets/la-{i}.png"));
+        e["name"] = json!(long_name);
+        e
+    }));
+    write_index_raw(&library, &json!({ "assets": entries, "groups": [] }));
+    let before = fs::read(library.join("library.json")).expect("读原始索引字节");
+    let err = update_meta_with(&cap(&library), "la-0", &json!({ "name": "改名" }))
+        .expect_err("迁移挂起态应阻断变更");
+    assert!(
+        err.contains("上限") || err.contains("迁移"),
+        "意外诊断：{err}"
+    );
+    let after = fs::read(library.join("library.json")).expect("读落盘索引字节");
+    assert_eq!(before, after, "挂起态变更不得写盘（防隔离条目被抹）");
     cleanup(&root);
 }

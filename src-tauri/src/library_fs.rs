@@ -163,36 +163,54 @@ pub(crate) fn report_recovery_diagnostics(context: &str, warnings: &[String]) {
     }
 }
 
+/// 归一化读取结果：迁移挂起（suspended）表示迁移产物超限无法持久化——
+/// 读路径照常服务只读视图，**写路径必须拒绝**，否则无关变更写回会永久抹掉
+/// 被隔离的需重发条目（评审修复，PR #33 第十六轮）。
+pub(crate) struct NormalizedIndex {
+    pub(crate) index: Value,
+    pub(crate) warnings: Vec<String>,
+    /// 迁移/修复已发生且可以落盘。
+    pub(crate) migrated: bool,
+    /// 迁移挂起：迁移产物超限，本次仅内存只读视图（写路径拒绝）。
+    pub(crate) suspended: bool,
+}
+
 /// 索引受限读取（library.rs 命令面与 assets.rs 导入路径的**唯一**索引读
 /// 实现）：no-follow 归类 → 大小上限内读取 → JSON 解析 → 兼容迁移 + 完整
 /// 归一化（[`crate::library_index`]，§7.2）——旧数组形状迁移为 Record、
 /// 非法条目隔离出内存索引并逐条返回警告，索引缺失回退默认空索引。
 /// 迁移/修复发生时把归一化结果原子落盘（评审修复，PR #33 第二轮）：重发的
 /// id 与翻转的 Record 形状随读持久化，后续媒体/删除/更新命令读到同一身份。
-/// 本函数总在持有 `library_op_lock`/`library_file_lock` 的命令上下文内被调用。
-pub(crate) fn read_index_capped(library: &CapDir) -> Result<(Value, Vec<String>), String> {
-    let (normalized, warnings, migrated) = read_index_normalized(library)?;
-    // migrated 已在 read_index_normalized 内复检过迁移产物大小（超限折回
-    // false 并警告）——此处为真即写盘安全（评审修复，PR #33 第十四轮）
-    if migrated {
-        write_index(library, &normalized)?;
+/// 返回挂起标志：写路径（put/update/delete）检测到即拒绝（评审修复，PR #33
+/// 第十六轮）。本函数总在持有 `library_op_lock`/`library_file_lock` 的命令
+/// 上下文内被调用。
+pub(crate) fn read_index_capped(library: &CapDir) -> Result<(Value, Vec<String>, bool), String> {
+    let normalized = read_index_normalized(library)?;
+    let suspended = normalized.suspended;
+    if normalized.migrated {
+        write_index(library, &normalized.index)?;
     }
-    Ok((normalized, warnings))
+    Ok((normalized.index, normalized.warnings, suspended))
 }
 
 /// 读取并归一化索引但**不落盘**（评审修复，PR #33 第三轮）：返回
-/// (归一化索引, 警告, 是否发生迁移/修复)。供 `library_journal::recover`
-/// 在确认删除日志非异型之前使用——journal 异型须先进入只读告警态，不得
-/// 先迁移改写 library.json；落盘决策由调用方在 journal 校验通过后执行。
-/// 迁移产物复检大小上限（评审修复，PR #33 第十四轮）：旧数组紧凑、迁移后
-/// （byId 键 + source + ISO）膨胀可越过写上限——超限则**不落盘**（折回
-/// migrated=false 并警告），归一化视图照常返回；否则迁移落盘失败会把「可读
-/// 的旧索引」升级成全库命令死锁。
-pub(crate) fn read_index_normalized(
-    library: &CapDir,
-) -> Result<(Value, Vec<String>, bool), String> {
+/// [`NormalizedIndex`]。供 `library_journal::recover` 在确认删除日志非异型
+/// 之前使用——journal 异型须先进入只读告警态，不得先迁移改写 library.json；
+/// 落盘决策由调用方在 journal 校验通过后执行。迁移产物复检大小上限（评审
+/// 修复，PR #33 第十四/十五/十六轮）：旧数组紧凑、迁移后（byId 键 + source +
+/// ISO）膨胀可越过写上限——超限则**不落盘**并进入挂起态：改用只读归一化
+/// 隔离需重发的条目（不暴露跨读漂移的 id）、丢弃可写遍的「已重发」谎报
+/// （实际行为是隔离）、置 suspended 供写路径拒绝；否则迁移落盘失败会把
+/// 「可读的旧索引」升级成全库命令死锁，放行写回又会让无关变更永久抹掉
+/// 被隔离条目。
+pub(crate) fn read_index_normalized(library: &CapDir) -> Result<NormalizedIndex, String> {
     match read_index_text_capped(library)? {
-        None => Ok((default_index(), Vec::new(), false)),
+        None => Ok(NormalizedIndex {
+            index: default_index(),
+            warnings: Vec::new(),
+            migrated: false,
+            suspended: false,
+        }),
         Some(text) => {
             let index: Value =
                 serde_json::from_str(&text).map_err(|e| format!("资产索引损坏：{e}"))?;
@@ -210,23 +228,34 @@ pub(crate) fn read_index_normalized(
                     INDEX_MAX_BYTES / (1024 * 1024)
                 ));
             }
-            // 超限降级（评审修复，PR #33 第十四/十五轮）：迁移产物越过写上限
-            // 时本次不落盘——无法持久化重发身份，与只读态同性质，改用只读
-            // 归一化隔离需重发的条目，不向 list 暴露跨读漂移的 id
+            // 超限降级（评审修复，PR #33 第十四/十五/十六轮）：迁移产物越过
+            // 写上限时进入挂起态——只读归一化隔离需重发的条目；诊断只保留
+            // 超限警告与只读遍声明，可写遍的「已重发」谎报（实际是隔离）
+            // 不得外泄
             let original = index.clone();
-            let (normalized, mut warnings, migrated) =
+            let (normalized, writable_warnings, migrated) =
                 crate::library_index::migrate_and_normalize(index);
             if migrated && normalized_len(&normalized)? > INDEX_MAX_BYTES {
-                warnings.push(format!(
-                    "资产索引迁移结果超过 {} MiB 上限，本次仅内存归一化不落盘（删除条目后可恢复落盘）",
+                let mut warnings = vec![format!(
+                    "资产索引迁移结果超过 {} MiB 上限，迁移挂起：库读取照常、写入暂停，须人工修整 library.json 条目使迁移结果可落盘",
                     INDEX_MAX_BYTES / (1024 * 1024)
-                ));
+                )];
                 let (ro_normalized, ro_warnings, _) =
                     crate::library_index::migrate_and_normalize_readonly(original);
                 warnings.extend(ro_warnings);
-                return Ok((ro_normalized, warnings, false));
+                return Ok(NormalizedIndex {
+                    index: ro_normalized,
+                    warnings,
+                    migrated: false,
+                    suspended: true,
+                });
             }
-            Ok((normalized, warnings, migrated))
+            Ok(NormalizedIndex {
+                index: normalized,
+                warnings: writable_warnings,
+                migrated,
+                suspended: false,
+            })
         }
     }
 }

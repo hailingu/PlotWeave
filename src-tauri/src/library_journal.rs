@@ -422,7 +422,10 @@ pub(crate) fn recover(library: &CapDir) -> Result<Recovery, String> {
     // PR #33 第三轮）：journal 异型须进入只读告警态，不得先把 library.json
     // 迁移改写；迁移落盘推迟到日志确认非异型之后。迁移/归一化警告并入
     // recovery.warnings 随命令响应可见。
-    let (index, index_warnings, migrated) = crate::library_fs::read_index_normalized(library)?;
+    let normalized = crate::library_fs::read_index_normalized(library)?;
+    let index = normalized.index;
+    let index_warnings = normalized.warnings;
+    let migrated = normalized.migrated;
     let mut recovery = Recovery::default();
     let (entries, malformed) = read_journal(library, &mut recovery.warnings);
     if malformed {

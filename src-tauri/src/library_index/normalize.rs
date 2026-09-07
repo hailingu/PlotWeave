@@ -261,6 +261,13 @@ fn assign_from_embedded(
 ) -> Option<(String, Option<String>)> {
     let valid_id = !embedded_raw.is_empty() && validate_asset_id(embedded_raw).is_ok();
     if valid_id && !map.contains_key(embedded_raw) && !reserved.contains(embedded_raw) {
+        // 非法键归位为内嵌 id 是确定性修复（评审修复，PR #33 第十六轮）：
+        // 须警告并经 migrated 落盘——静默归键会让修复每次读取重复发生
+        if let Some(spelling) = &key_spelling {
+            warnings.push(format!(
+                "资产索引 {bucket} 非法键 {spelling} 已归位为内嵌 id {embedded_raw}"
+            ));
+        }
         return Some((embedded_raw.to_string(), key_spelling));
     }
     let why = if !valid_id {

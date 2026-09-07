@@ -15,9 +15,7 @@ use tauri::{AppHandle, Manager};
 
 use crate::isotime::{is_canonical_utc_timestamp, now_iso};
 use crate::library::ext_for;
-use crate::library_fs::{
-    assets_root, atomic_write_with, library_root, open_parent_dir, read_index_capped,
-};
+use crate::library_fs::{assets_root, atomic_write_with, library_root, open_parent_dir};
 #[cfg(unix)]
 use crate::store::asset_identity;
 use crate::store::{
@@ -50,7 +48,9 @@ fn find_library_entry(
     let (index, _) = if read_only {
         crate::library_fs::read_index_normalized_readonly(library)?
     } else {
-        read_index_capped(library)?
+        // 挂起态读路径照常服务只读视图
+        let (idx, _w, _suspended) = crate::library_fs::read_index_capped(library)?;
+        (idx, _w)
     };
     let entry = index
         .get("assets")

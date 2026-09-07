@@ -45,7 +45,13 @@ fn delete_asset_transacted_unix(library: &CapDir, id: &str) -> Result<Value, Str
             "资产 {id} 处于删除事务冲突期，拒绝删除：须先按日志恢复"
         ));
     }
-    let (mut index, mut warnings) = read_index_capped(library)?;
+    let (mut index, mut warnings, migration_suspended) = read_index_capped(library)?;
+    if migration_suspended {
+        return Err(
+            "资产索引迁移挂起（迁移结果超大小上限），删除已暂停：须人工修整 library.json 条目"
+                .into(),
+        );
+    }
     warnings.append(&mut recovery.warnings);
     let assets = assets_root(library)?;
     let by_id = index["assets"]["byId"]

@@ -69,7 +69,9 @@ pub(crate) fn list_assets_with(library: &cap_std::fs::Dir) -> Result<(Value, Vec
         let (idx, w) = crate::library_fs::read_index_normalized_readonly(library)?;
         (idx, w)
     } else {
-        read_index_capped(library)?
+        // 挂起态（迁移产物超限）读路径照常服务只读视图
+        let (idx, w, _suspended) = read_index_capped(library)?;
+        (idx, w)
     };
     warnings.append(&mut recovery.warnings);
     for id in &recovery.conflicted {
@@ -112,7 +114,13 @@ pub(crate) fn put_asset_with(
     // PR #33 第十二轮）
     crate::library_fs::report_recovery_diagnostics("导入", &recovery.warnings);
     let assets = assets_root(library)?;
-    let (mut index, mut warnings) = read_index_capped(library)?;
+    let (mut index, mut warnings, migration_suspended) = read_index_capped(library)?;
+    if migration_suspended {
+        return Err(
+            "资产索引迁移挂起（迁移结果超大小上限），写入已暂停：须人工修整 library.json 条目"
+                .into(),
+        );
+    }
     warnings.extend(recovery.warnings);
     let cleanup_pending = recovery.cleanup_pending;
     // id 用防碰撞生成器（毫秒+进程内计数，评审修复，PR #33 第十二轮）：旧
@@ -376,7 +384,9 @@ fn resolve_media_entry_with(
         let (idx, w) = crate::library_fs::read_index_normalized_readonly(library)?;
         (idx, w)
     } else {
-        read_index_capped(library)?
+        // 挂起态读路径照常服务只读视图
+        let (idx, w, _suspended) = read_index_capped(library)?;
+        (idx, w)
     };
     // 迁移/恢复诊断进结构化本机日志（评审修复，PR #33 第十一轮）：媒体请求
     // 只回 200/404、响应无法携带 warnings；迁移落盘后这些隔离/改写诊断若被
@@ -637,7 +647,13 @@ fn update_meta_with(library: &cap_std::fs::Dir, id: &str, patch: &Value) -> Resu
     // 迁移落盘已发生而命令可能因业务失败早退（资产不存在/合并结果冲突）——
     // 诊断兜底进日志，修复可见性不随 Err 丢失（评审修复，PR #33 第十二轮）
     crate::library_fs::report_recovery_diagnostics("元信息更新", &recovery.warnings);
-    let (mut index, mut warnings) = read_index_capped(library)?;
+    let (mut index, mut warnings, migration_suspended) = read_index_capped(library)?;
+    if migration_suspended {
+        return Err(
+            "资产索引迁移挂起（迁移结果超大小上限），写入已暂停：须人工修整 library.json 条目"
+                .into(),
+        );
+    }
     warnings.extend(recovery.warnings);
     let assets = index["assets"]["byId"]
         .as_object_mut()
