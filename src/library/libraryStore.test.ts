@@ -46,6 +46,8 @@ describe('libraryStore 内存回退：put/list', () => {
 describe('libraryStore 内存回退：updateMeta', () => {
   it('改名/打标签/编组/视角合并到既有条目', async () => {
     const asset = await putSample()
+    // updateMeta 挂 groupId 须组已存在且 kind 一致（评审修复，PR #36 第五轮）
+    await libraryStore.upsertGroup({ id: 'g1', name: '参考组', kind: 'reference' })
     const updated = await libraryStore.updateMeta(asset.id, {
       name: '氛围图.png',
       tags: ['夜景', '天台'],
@@ -108,21 +110,27 @@ describe('组命令门面', () => {
   })
 
   it('deleteGroup 删除组并剥离成员 groupId', async () => {
-    const asset = await libraryStore.put(
+    // 独立模块实例：模块级 Map 跨用例共享，前面用例的组会残留本用例的
+    // listGroups 断言（评审修复 PR #36 第五轮的连锁调整）
+    vi.resetModules()
+    const { libraryStore: fresh } = await import('./libraryStore')
+    const asset = await fresh.put(
       new File([new Uint8Array([1])], 'a.png', { type: 'image/png' }),
       'character',
     )
-    await libraryStore.updateMeta(asset.id, { groupId: 'g-1' })
-    await libraryStore.upsertGroup({ id: 'g-1', name: '女主', kind: 'character' })
-    await libraryStore.deleteGroup('g-1')
-    const groups = await libraryStore.listGroups()
+    await fresh.upsertGroup({ id: 'g-1', name: '女主', kind: 'character' })
+    await fresh.updateMeta(asset.id, { groupId: 'g-1' })
+    await fresh.deleteGroup('g-1')
+    const groups = await fresh.listGroups()
     expect(groups).toHaveLength(0)
-    const after = await libraryStore.list()
+    const after = await fresh.list()
     expect(after.find((a) => a.id === asset.id)?.groupId).toBeNull()
   })
 
   it('listGroups 在空库返回空数组', async () => {
-    await expect(libraryStore.listGroups()).resolves.toEqual([])
+    vi.resetModules()
+    const { libraryStore: fresh } = await import('./libraryStore')
+    await expect(fresh.listGroups()).resolves.toEqual([])
   })
 })
 
@@ -134,9 +142,10 @@ describe('内存回退组语义与生产路径一致', () => {
       new File([new Uint8Array([1])], 'a.png', { type: 'image/png' }),
       'character',
     )
-    await libraryStore.updateMeta(asset.id, { groupId: 'g-1' })
+    // 先建同 kind 组再挂成员（updateMeta 拒绝悬空/不一致 groupId，评审修复
+    // PR #36 第五轮），随后改组 kind 触发成员冲突
     await libraryStore.upsertGroup({ id: 'g-1', name: '女主', kind: 'character' })
-    // 改 kind 与成员冲突
+    await libraryStore.updateMeta(asset.id, { groupId: 'g-1' })
     await expect(
       libraryStore.upsertGroup({ id: 'g-1', name: '女主', kind: 'location' }),
     ).rejects.toThrow(/冲突|kind/)
@@ -147,10 +156,11 @@ describe('内存回退组语义与生产路径一致', () => {
   })
 })
 
-/// 内存回退首次创建也做冲突扫描（评审修复，PR #36 第二轮）：updateMeta 先
-/// 挂悬空 groupId，再 upsert 新建组时 kind 不一致不得被放行——首次创建
-/// （existing 为 undefined）也要扫描成员。需独立模块实例隔离内存状态（模块
-/// 级 Map 跨用例共享，否则前面用例的组残留会让 existing 非空、测试假阳性）。
+/// upsert 侧的无条件成员扫描保留为纵深防御（评审修复，PR #36 第二轮）：
+/// 第五轮后 updateMeta 已拒绝悬空/不一致 groupId，「首次创建前挂悬空引用」
+/// 在内存回退不可达，但扫描仍须在首次创建与改 kind 两路径都生效——本测试
+/// 用独立模块实例验证组已存在场景下的扫描（与改 kind 测试互补：先建组、
+/// 挂成员，再以不一致 kind 重建同 id 组）。
 describe('内存回退首次创建组语义', () => {
   it('upsertGroup 首次创建时 kind 与既有成员冲突即拒绝', async () => {
     vi.resetModules()
@@ -159,11 +169,8 @@ describe('内存回退首次创建组语义', () => {
       new File([new Uint8Array([1])], 'a.png', { type: 'image/png' }),
       'character',
     )
-    await fresh.updateMeta(asset.id, { groupId: 'g-1' }) // 悬空 groupId
-    // 首次创建组，kind 与既有成员不一致
-    await expect(
-      fresh.upsertGroup({ id: 'g-1', name: '女主', kind: 'location' }),
-    ).rejects.toThrow(/冲突|kind/)
+    // 第五轮修复：悬空 groupId 在 updateMeta 即拒绝（不再可建立）
+    await expect(fresh.updateMeta(asset.id, { groupId: 'g-1' })).rejects.toThrow(/不存在/)
   })
 })
 
@@ -199,5 +206,31 @@ describe('内存回退组 id 校验', () => {
     await expect(
       libraryStore.upsertGroup({ id: 'g_1-A', name: 'x', kind: 'character' }),
     ).resolves.toMatchObject({ id: 'g_1-A' })
+  })
+})
+
+/// 内存回退 updateMeta 挂 groupId 时校验（评审修复，PR #36 第五轮）：组不
+/// 存在或 kind 不一致即拒绝——与 Rust update_meta_with 的复验同语义；null
+/// 清除标记不受限。
+describe('内存回退 updateMeta 的 groupId 校验', () => {
+  it('拒绝不存在的组与 kind 不一致的组，null 清除放行', async () => {
+    vi.resetModules()
+    const { libraryStore: fresh } = await import('./libraryStore')
+    const loc = await fresh.put(
+      new File([new Uint8Array([1])], 'l.png', { type: 'image/png' }),
+      'location',
+    )
+    await fresh.upsertGroup({ id: 'g-loc', name: '场景组', kind: 'location' })
+    await fresh.upsertGroup({ id: 'g-char', name: '角色组', kind: 'character' })
+    // 组不存在
+    await expect(fresh.updateMeta(loc.id, { groupId: 'g-ghost' })).rejects.toThrow(/不存在/)
+    // kind 不一致
+    await expect(fresh.updateMeta(loc.id, { groupId: 'g-char' })).rejects.toThrow(/kind|冲突/)
+    // 一致的组放行
+    await fresh.updateMeta(loc.id, { groupId: 'g-loc' })
+    expect((await fresh.list()).find((a) => a.id === loc.id)?.groupId).toBe('g-loc')
+    // null 清除放行
+    await fresh.updateMeta(loc.id, { groupId: null })
+    expect((await fresh.list()).find((a) => a.id === loc.id)?.groupId).toBeNull()
   })
 })

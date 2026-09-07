@@ -191,6 +191,17 @@ export const libraryStore = {
     }
     const hit = memoryAssets.get(id)
     if (!hit) return Promise.reject(new Error(`资产不存在：${id}`))
+    // groupId 校验（评审修复，PR #36 第五轮）：与 Rust update_meta_with 的
+    // 复验同语义——组不存在或 kind 不一致即拒绝；null 清除标记不受限
+    if (typeof patch.groupId === 'string' && patch.groupId !== '') {
+      const group = memoryGroups.get(patch.groupId)
+      if (!group) return Promise.reject(new Error(`组不存在：${patch.groupId}`))
+      if (group.kind !== hit.asset.kind) {
+        return Promise.reject(
+          new Error(`组 ${patch.groupId} 的 kind 与资产不一致，拒绝编组`),
+        )
+      }
+    }
     hit.asset = { ...hit.asset, ...patch }
     memoryAssets.set(id, hit)
     return Promise.resolve(hit.asset)
