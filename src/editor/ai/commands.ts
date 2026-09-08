@@ -8,6 +8,7 @@ import {
   wouldCreateCycle,
 } from '../graphRules'
 import { dataPatchOf, type NodeDataPatch } from '../nodes/patch'
+import { AI_FIELD_KEYS } from './nodeFields'
 import { uid } from '../../uid'
 
 /**
@@ -114,18 +115,12 @@ const NODE_TYPE_LABELS: Record<string, string> = {
 }
 
 /**
- * 各类型节点的合法字段（与 nodes/types.ts 的 *NodeData 一一对应，
- * 即 ⚙️ 设置面板可编辑的字段）。AI 的 data/patch 出现白名单之外的字段
- * 一律整批拒绝——宁可拒绝也不静默写错字段。
- * episodeNo（§3.5 分集）：编剧侧四类可写；分镜卡随宿主场景，不可单独分集。
+ * 各类型节点的合法字段白名单（issue 41 起引用 nodeFields.ts 的协议表）：
+ * 与 nodes/types.ts 的 *NodeData 一一对应（⚙️ 设置面板可编辑的字段），
+ * 工具描述与系统提示由同一来源生成。AI 的 data/patch 出现白名单之外的
+ * 字段一律整批拒绝——宁可拒绝也不静默写错字段。
  */
-const NODE_FIELD_KEYS: Record<string, readonly string[]> = {
-  scene: ['name', 'sceneNo', 'interior', 'locationId', 'time', 'weather', 'synopsis', 'characterIds', 'episodeNo'],
-  dialogue: ['name', 'lines', 'episodeNo'],
-  beat: ['name', 'tone', 'episodeNo'],
-  branch: ['prompt', 'options', 'episodeNo'],
-  shot: ['shotNo', 'size', 'picture', 'prompt', 'refs'],
-}
+const NODE_FIELD_KEYS = AI_FIELD_KEYS
 const OP_LABELS = { create: '创建', update: '修改', delete: '删除', connect: '连线', disconnect: '断开' }
 const EDGE_KIND_LABELS: Record<string, string> = {
   sequence: '剧情流',

@@ -1,10 +1,17 @@
 import type { AiCommand } from './commands'
+import { nodeFieldTableText } from './nodeFields'
 
 /**
  * Agent 工具表（数据模型 §12.2：工具集 = 命令清单的封装）。
  * 读工具由前端就地执行回喂；写工具调用映射为 AiCommand——
  * 仍走「整批预览 → 用户确认 → 复合命令入栈」通道，绝不自动执行。
  */
+
+/** data/patch 的协议描述：嵌入共享节点字段表（issue 41）——此前只写
+ * 「键见节点字段表」却无处可查，模型只能自造字段（label/summary/stakes）
+ * 被校验整批拒绝。字段协议的单一真相在 nodeFields.ts。 */
+const DATA_FIELDS_DESC =
+  `字段对象（只写要定制的字段，其余用默认）。各类型合法字段（表外字段整批拒绝）：\n${nodeFieldTableText()}`
 
 export interface ToolSpec {
   type: 'function'
@@ -56,7 +63,7 @@ export const AI_TOOLS: ToolSpec[] = [
         {
           nodeType: { type: 'string', description: 'scene|beat|dialogue|branch|shot' },
           ref: { type: 'string', description: '临时别名，供本批后续命令引用' },
-          data: { type: 'object', description: '字段补丁（键见节点字段表）' },
+          data: { type: 'object', description: DATA_FIELDS_DESC },
           reason: str('改动理由'),
         },
         ['nodeType'],
@@ -79,7 +86,7 @@ export const AI_TOOLS: ToolSpec[] = [
       parameters: obj(
         {
           nodeId: str('节点 id 或 ref'),
-          patch: { type: 'object', description: '字段补丁（键见节点字段表）' },
+          patch: { type: 'object', description: DATA_FIELDS_DESC },
           reason: str('改动理由'),
         },
         ['nodeId', 'patch'],
@@ -132,7 +139,8 @@ export const AI_TOOLS: ToolSpec[] = [
               '{"op":"update_node","nodeId":"…","patch":{…}} | ' +
               '{"op":"delete_node","nodeId":"…"} | ' +
               '{"op":"connect_edge","sourceId":"…","targetId":"…"} | ' +
-              '{"op":"disconnect_edge","sourceId":"…","targetId":"…"}',
+              '{"op":"disconnect_edge","sourceId":"…","targetId":"…"}。' +
+              'data/patch 只写对应节点类型的合法字段（表外字段整批拒绝）：\n' + nodeFieldTableText(),
             items: { type: 'object' },
           },
         },

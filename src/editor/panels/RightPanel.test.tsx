@@ -11,6 +11,7 @@ import RightPanel from './RightPanel'
 import { llmChat, type AssistantMessage } from '../ai/chat'
 import type { ChatMessage } from '../ai/chat'
 import type { BatchValidation, ValidatedCommand } from '../ai/commands'
+import { nodeFieldTableText } from '../ai/nodeFields'
 import { settingsStore } from '../../settings/settingsStore'
 import type { AppSettings } from '../../settings/types'
 import type { ProjectSettings } from '../settings'
@@ -356,5 +357,91 @@ describe('RightPanel ✦AI 改动预览卡', () => {
     expect(screen.getByText('我建议加一场。')).toBeTruthy()
     expect(screen.queryByText(/```json/)).toBeNull()
     expect(spies.onValidateAi).toHaveBeenCalled()
+  })
+})
+
+describe('RightPanel ✦AI 字段协议与校验闭环（issue 41）', () => {
+  it('系统提示嵌入共享节点字段表，模型拿得到 beat 的合法字段', async () => {
+    await toAiTab(APP_WITH_KEY)
+    llmChatMock.mockResolvedValue(reply({ content: '好的。' }))
+    send('这一幕怎么写？')
+    await screen.findByText('好的。')
+    const messages = llmChatMock.mock.calls[0][2] as ChatMessage[]
+    expect(messages[0].role).toBe('system')
+    expect(messages[0].content).toContain(nodeFieldTableText())
+    expect(messages[0].content).toContain('episodeNo')
+  })
+
+  it('校验失败回喂模型重试：纠正批次出预览卡，确认前画布不变', async () => {
+    const spies = await toAiTab(APP_WITH_KEY)
+    spies.onValidateCommands
+      .mockReturnValueOnce(
+        validationOf({
+          ok: false,
+          items: [],
+          commands: [],
+          issues: [{ index: 0, message: '未知字段：label（节奏卡 允许：name、tone、episodeNo）' }],
+        }),
+      )
+      .mockReturnValueOnce(validationOf())
+    const badBatch = () =>
+      reply({
+        content: '',
+        tool_calls: [
+          {
+            id: 'w1',
+            type: 'function',
+            function: {
+              name: 'batch',
+              arguments: JSON.stringify({
+                commands: [{ op: 'create_node', nodeType: 'beat', data: { label: '立足' } }],
+              }),
+            },
+          },
+        ],
+      })
+    llmChatMock.mockResolvedValueOnce(badBatch()).mockResolvedValueOnce(batchReply())
+    send('创建一组街口餐饮商战主题的节奏卡')
+
+    expect(await screen.findByText('✦ 改动预览 · 1 项')).toBeTruthy()
+    expect(llmChatMock).toHaveBeenCalledTimes(2)
+    // 错误清单按 tool 协议回喂进第二次请求
+    const second = llmChatMock.mock.calls[1][2] as ChatMessage[]
+    const toolMsg = second.find((m) => m.role === 'tool')
+    expect(toolMsg?.tool_call_id).toBe('w1')
+    expect(toolMsg?.content).toContain('未知字段：label')
+    // 闭环结束画布仍零副作用，用户确认才落地
+    expect(spies.onApplyAiBatch).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: '✓ 执行改动' }))
+    expect(spies.onApplyAiBatch).toHaveBeenCalled()
+  })
+
+  it('重试耗尽：错误卡片保留，画布未变提示在场', async () => {
+    const spies = await toAiTab(APP_WITH_KEY)
+    spies.onValidateCommands.mockReturnValue(
+      validationOf({ ok: false, items: [], commands: [], issues: [{ index: 0, message: '未知字段：label' }] }),
+    )
+    llmChatMock.mockResolvedValue(
+      reply({
+        content: '',
+        tool_calls: [
+          {
+            id: 'w1',
+            type: 'function',
+            function: {
+              name: 'batch',
+              arguments: JSON.stringify({
+                commands: [{ op: 'create_node', nodeType: 'beat', data: { label: '立足' } }],
+              }),
+            },
+          },
+        ],
+      }),
+    )
+    send('创建节奏卡')
+    expect(await screen.findByText('第 1 条：未知字段：label')).toBeTruthy()
+    expect(screen.getByText('批次未通过校验，画布未发生任何变化。')).toBeTruthy()
+    expect((screen.getByRole('button', { name: '✓ 执行改动' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(spies.onApplyAiBatch).not.toHaveBeenCalled()
   })
 })

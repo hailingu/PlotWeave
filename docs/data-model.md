@@ -1005,6 +1005,7 @@ Agent 不直接触碰文档状态，只产出 `GraphCommand`（`actor: 'agent'`�
 ```
 
 - **工具集 = 命令清单的封装**：读工具 `get_graph_snapshot` / `get_node`；写工具 `create_node` / `delete_node` / `update_node_spec` / `connect_edge` / `disconnect_edge` / `batch`。
+- **节点字段协议单一来源（issue 41）**：各类型 `data`/`patch` 的合法字段表由前端 `ai/nodeFields.ts` 生成并三处共用——系统提示、写工具描述（create_node / update_node_spec / batch 通道）与整批校验白名单，字段语义对齐 §4.2 节点 `spec`（如节奏卡只允许 `name`/`tone`/`episodeNo`）。模型输出表外字段时整批拒绝，具体校验错误按 tool 协议或 user 消息回喂模型做有限次纠错重试（≤3 次产出）；耗尽后保留错误预览卡、画布不变，不静默丢弃或映射语义不匹配的字段。
 - **快照摘要而非全量**：大项目全量 JSON 会超出上下文，默认只给压缩视图（节点 id/type/label/连接关系），详情由模型用读工具按需拉取。
 - **调用路径**：前端驱动循环；LLM 请求经 Rust command `llm_chat` 代理发出——API key 以密文随 settings 落盘、在 Rust 内存解密，前端不持有明文，同时绕开 webview 的 CORS 限制。
 - **可控性**：Agent 的写操作执行前弹批量预览（涉及哪些节点、什么变更），用户确认后才进命令通道；undo 始终兜底。
