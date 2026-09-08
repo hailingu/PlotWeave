@@ -619,11 +619,13 @@ fn project_media_refuses_symlinked_final_component() {
     cleanup(&root);
 }
 
-/// 项目 scope 读取上限与生成产物写入契约同源（评审修复 P2-2）：20–32 MiB
-/// 的合法生成产物可照常服务（旧 asset 协议无此限制，迁移不得引入永久
-/// 404）；库 scope 维持 20 MiB 上限拒绝。
+/// 项目 scope 读取上限覆盖持久化契约（评审修复 P2-2/P2-4）：项目资产
+/// 保存边界与实路径复验不设大小上限，>20 MiB 的合法生成产物与 >32 MiB
+/// 的既有资产（手工放置/历史数据）都必须照常服务（旧 asset 协议无此
+/// 限制，迁移不得引入永久 404）；库 scope 维持 20 MiB 写入契约上限。
 #[test]
-fn project_media_serves_generated_size_between_caps() {
+fn project_media_serves_assets_across_persisted_contract_sizes() {
+    // 20–32 MiB：生成产物写入上限内
     let big = vec![0x50u8; 20 * 1024 * 1024 + 1];
     let (projects, root) = temp_projects();
     fs::create_dir_all(projects.join("p-1").join("assets")).expect("建项目资产目录");
@@ -638,7 +640,23 @@ fn project_media_serves_generated_size_between_caps() {
     assert_eq!(mime, "image/png");
     assert_eq!(bytes.len(), big.len());
     cleanup(&root);
-    // 库 scope：20 MiB 上限保持不变
+    // >32 MiB：既有资产持久化契约无大小上限（评审修复 P2-4），防御性
+    // 协议上限（256 MiB）必须远超生成产物契约
+    let bigger = vec![0x51u8; 32 * 1024 * 1024 + 1];
+    let (projects, root) = temp_projects();
+    fs::create_dir_all(projects.join("p-1").join("assets")).expect("建项目资产目录");
+    fs::write(projects.join("p-1").join("assets").join("big.png"), &bigger).expect("写大媒体");
+    write_project_doc_raw(
+        &projects,
+        "p-1",
+        json!({ "pa-big": project_asset_entry("pa-big", "assets/big.png", "image/png") }),
+    );
+    let (mime, bytes) =
+        project_media_read(&cap(&projects), "p-1", "pa-big").expect(">32 MiB 既有资产应可服务");
+    assert_eq!(mime, "image/png");
+    assert_eq!(bytes.len(), bigger.len());
+    cleanup(&root);
+    // 库 scope：20 MiB 写入契约上限保持不变
     let (library, root) = temp_fixture();
     fs::write(library.join("assets").join("la-big.png"), &big).expect("写大媒体");
     write_index_raw(

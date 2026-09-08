@@ -21,10 +21,16 @@ use crate::store::{is_canonical_mime, is_valid_active_asset_rel_path, projects_d
 /// opaque asset URL 的自定义协议名（lib.rs 注册同名协议处理器）。
 pub(crate) const MEDIA_SCHEME: &str = "pwmedia";
 
-/// 项目 scope 媒体单文件上限（issue #31 评审修复 P2-2）：与生成产物写入
-/// 上限 [`crate::imagegen::GENERATED_IMAGE_MAX_BYTES`] 同源——写入侧允许
-/// 落盘的合法产物必须在读取侧可服务，读写契约不得分叉。
-pub(crate) const PROJECT_MEDIA_MAX_BYTES: usize = crate::imagegen::GENERATED_IMAGE_MAX_BYTES;
+/// 项目 scope 媒体读取的防御性上限（256 MiB，评审修复 P2-4）：项目资产
+/// 持久化契约（保存边界 validate_save_assets + 实路径复验）不设大小上限
+/// ——>32 MiB 的既有资产（手工放置/历史数据）是可加载、可保存的合法条目，
+/// 旧 asset 协议也不按大小拒绝，读取侧按生成产物 32 MiB 截断会让它们
+/// 永久 404。项目 media 经整包缓冲交付（Tauri 同步协议 API 无流式 body），
+/// 协议面必须有界防异常输入撑爆进程：256 MiB 远超合法媒体域（生成产物
+/// ≤32 MiB、库导入 ≤20 MiB），超限资产属理论截断、登记为已知边界。
+/// 库 scope 维持 20 MiB（写入契约同源）；并发闸门峰值契约相应为
+/// 4×单文件上限（库 20 MiB / 项目 256 MiB）。
+pub(crate) const PROJECT_MEDIA_MAX_BYTES: usize = 256 * 1024 * 1024;
 
 /// 项目资产 id 的不透明契约（评审修复）：保存边界只要求非空白字符串 +
 /// Record 键/id 一致，normalizeAssetRecords 仅重发空白键——任意不透明 id
@@ -229,7 +235,7 @@ pub(crate) fn open_media_with(
 /// 并发媒体读取上限（评审修复，PR #32 第四轮）：多个大图同时进入视口时，
 /// 每个并发读取各自分配缓冲，N×单文件上限的瞬时峰值可能拖垮进程——读取
 /// 并发数收敛到 4；许可随响应体存活到交付（见 [`MediaDelivery`]），故在
-/// 交付完成前峰值 ≤ 4×单文件上限（库 20 MiB / 项目 32 MiB，见
+/// 交付完成前峰值 ≤ 4×单文件上限（库 20 MiB / 项目 256 MiB 防御界，见
 /// [`PROJECT_MEDIA_MAX_BYTES`]）。交付后字节归 webview 所有，其消费内存
 /// 不在 Rust 侧观测范围（Tauri 同步协议 API 无交付完成信号，此为文档化
 /// 边界）；库写入/删除/元信息不受影响（闸门只作用于媒体字节读取）。
@@ -332,10 +338,10 @@ pub(crate) fn read_media_capped(
     read_media_capped_in(MediaReadGate::gate(), id, mime, file, ASSET_MAX_BYTES)
 }
 
-/// [`read_media_capped_in`] 的项目 scope 全局闸门入口（32 MiB 上限，评审
-/// 修复 P2-2）：与生成产物写入上限 [`PROJECT_MEDIA_MAX_BYTES`] 同源——
-/// 写入侧允许落盘的合法产物必须在读取侧可服务，旧 asset 协议无 20 MiB
-/// 限制，迁移不得让已持久化产物永久 404。
+/// [`read_media_capped_in`] 的项目 scope 全局闸门入口（256 MiB 防御性
+/// 上限，评审修复 P2-4）：项目资产持久化契约无大小上限，>32 MiB 的既有
+/// 资产（手工放置/历史数据）同样必须可服务——防御界远超合法媒体域
+/// （生成产物 ≤32 MiB、库导入 ≤20 MiB），超限属理论截断、登记为已知边界。
 pub(crate) fn read_project_media_capped(
     id: &str,
     mime: String,
@@ -385,7 +391,7 @@ fn media_http_response(
 /// 调用方（lib.rs 的 `pwmedia` 协议闭包）必须先解构出二者、调用
 /// `responder.respond(response)` 后再让 `permit` 出界释放——许可持有到
 /// 交付完成，等待中的读者才不会在先前响应体仍待交付/消费时分配新缓冲，
-/// 4×20 MiB 峰值契约才成立。404 路径无许可（`permit: None`）。
+/// 4×单文件上限峰值契约才成立。404 路径无许可（`permit: None`）。
 pub(crate) struct MediaDelivery {
     pub(crate) response: tauri::http::Response<Vec<u8>>,
     pub(crate) permit: Option<MediaReadPermit<'static>>,
@@ -423,8 +429,8 @@ pub(crate) fn handle_media_request(app: &AppHandle, uri: &tauri::http::Uri) -> M
         }
         MediaScope::Project { project_id } => {
             // 项目 scope（issue #31）：按项目文档逐请求解析后经
-            // verify_asset_real_path 句柄链打开身份绑定句柄；读取上限与
-            // 生成产物写入契约同源（评审修复 P2-2）
+            // verify_asset_real_path 句柄链打开身份绑定句柄；读取上限为
+            // 覆盖持久化契约的防御界（评审修复 P2-4）
             let projects = projects_dir(app)?;
             let pending = app.state::<PendingProjectAssets>();
             let opened = open_project_media_with(&projects, &project_id, &id, &pending);

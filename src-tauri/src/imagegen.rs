@@ -22,11 +22,10 @@ use tauri::{AppHandle, Manager};
 
 use crate::http_util::{append_capped, read_text_capped};
 
-/// 生成产物大小上限（32 MiB）：防异常响应把内存/磁盘撑爆。pub(crate) 供
-/// pwmedia 项目 scope 读取上限引用（issue #31 评审修复）：写入侧允许落盘
-/// 的合法产物必须在读取侧可服务，读写契约同源，已持久化产物不得因读取
-/// 上限错配而永久 404。
-pub(crate) const GENERATED_IMAGE_MAX_BYTES: usize = 32 * 1024 * 1024;
+/// 生成产物大小上限（32 MiB）：防异常响应把内存/磁盘撑爆。pwmedia 项目
+/// scope 的读取上限（256 MiB 防御界）远超本值——生成产物契约是项目资产
+/// 持久化契约的真子集（评审修复 P2-2/P2-4）。
+const GENERATED_IMAGE_MAX_BYTES: usize = 32 * 1024 * 1024;
 
 /// 响应体读取上限（64 MiB）：主响应是 JSON 文本，base64 膨胀约 4/3 加
 /// JSON 开销，按产物上限放宽一倍封顶——流式聚合、超限即中止，恶意/
