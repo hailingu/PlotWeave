@@ -294,8 +294,68 @@ fn media_bytes_refuses_symlinked_final_component() {
     cleanup(&root);
 }
 
+/// 项目资产 id 是不透明字符串（评审修复：保存边界只要求非空白 + 键/id
+/// 一致，normalizeAssetRecords 仅重发空白键）：pwmedia 项目 scope 以
+/// percent 编码承载契约允许的异字符 id（`[`/`]`/Unicode/超长），不再套用
+/// 库 id 的 ASCII 白名单；此类资产在旧管线（project_asset_path）下可显示，
+/// 迁移后不得被永久拒绝。
+#[test]
+fn project_media_serves_opaque_asset_ids_via_percent_encoding() {
+    let (projects, root) = temp_projects();
+    fs::create_dir_all(projects.join("p-1").join("assets")).expect("建项目资产目录");
+    fs::write(projects.join("p-1").join("assets").join("a.png"), b"PNG").expect("写项目媒体");
+    for opaque in ["bad]id", "资产-深", &"x".repeat(200)] {
+        write_project_doc_raw(
+            &projects,
+            "p-1",
+            json!({ opaque: project_asset_entry(opaque, "assets/a.png", "image/png") }),
+        );
+        let (mime, bytes) =
+            project_media_read(&cap(&projects), "p-1", opaque).expect("不透明 id 应可服务");
+        assert_eq!(mime, "image/png");
+        assert_eq!(bytes, b"PNG");
+    }
+    cleanup(&root);
+}
+
+/// URL 解析侧同域：编码后的不透明 id 经 URI 解析还原；不可分段的 `/`
+/// （编码即改变段结构）与非法百分号序列在命令/解析入口拒绝——路径穿越
+/// 在解析层闭环。
+#[test]
+fn project_media_uri_round_trips_opaque_ids_and_rejects_unencodable() {
+    let url = opaque_media_url(
+        &MediaScope::Project {
+            project_id: "p-1".into(),
+        },
+        "bad]id",
+    );
+    let (scope, id) = parse_media_uri(&media_uri(&url)).expect("编码 URL 应可解析");
+    assert_eq!(
+        scope,
+        MediaScope::Project {
+            project_id: "p-1".into()
+        }
+    );
+    assert_eq!(id, "bad]id");
+    // 百分号编码的 Unicode id 往返
+    let url = opaque_media_url(
+        &MediaScope::Project {
+            project_id: "p-1".into(),
+        },
+        "资产-深",
+    );
+    assert!(!url.contains("资产"), "URL 不得携带原始 Unicode：{url}");
+    let (_scope, id) = parse_media_uri(&media_uri(&url)).expect("Unicode id 应往返");
+    assert_eq!(id, "资产-深");
+    // 库 scope 保持 ASCII 白名单：编码形式依旧拒绝
+    assert!(parse_media_uri(&media_uri("pwmedia://localhost/library/bad%5Did")).is_err());
+    // 项目 scope 的非法百分号序列/不可分段斜杠（编码后破坏段结构）拒绝
+    assert!(parse_media_uri(&media_uri("pwmedia://localhost/project/p-1/bad%GGid")).is_err());
+    assert!(parse_media_uri(&media_uri("pwmedia://localhost/project/p-1/a%2Fb")).is_err());
+}
+
 /// 并发媒体读取闸门（评审修复）：并发读取数受上限约束，释放后可复用——
-/// 防多数近 20 MiB 大图同时进视口时的 N×20 MiB 瞬时缓冲峰值。
+/// 防多数大图同时进视口时的 N×单文件上限瞬时缓冲峰值。
 #[test]
 fn media_read_gate_bounds_concurrent_reads() {
     let gate = MediaReadGate::new(2);

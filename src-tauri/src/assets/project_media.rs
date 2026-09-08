@@ -11,13 +11,23 @@ use std::sync::{Mutex, OnceLock};
 use cap_std::fs::Dir as CapDir;
 use serde_json::Value;
 
-use crate::library_fs::validate_asset_id;
 use crate::store::{
     is_canonical_mime, is_valid_active_asset_rel_path, load_project_file, validate_id,
     verify_asset_real_path,
 };
 
 use super::ensure_project_control;
+
+/// 项目资产 id 的持久化契约（与保存边界 `validate_save_assets` 同域，
+/// 评审修复）：非空白不透明字符串——`bad]`/Unicode/超长 id 是合法持久化
+/// 资产，此前经 project_asset_path 可显示，迁移后不得被库 id 白名单
+/// 永久拒绝。协议侧 URL 分段与编码细节归 library/media.rs。
+fn validate_project_asset_id(id: &str) -> Result<(), String> {
+    if id.trim().is_empty() {
+        return Err(format!("非法项目资产 id：{id}"));
+    }
+    Ok(())
+}
 
 /// 会话新增项目资产登记表：key = (projectId, assetId)，value =
 /// (relPath, mime)。导入/生成内核落盘媒体成功后登记；文档收录（权威命中）
@@ -105,7 +115,7 @@ pub(crate) fn resolve_project_media_entry(
     asset_id: &str,
 ) -> Result<(String, String), String> {
     validate_id(project_id)?;
-    validate_asset_id(asset_id)?;
+    validate_project_asset_id(asset_id)?;
     if let Err(err) = ensure_project_control(projects, project_id) {
         drain_pending_project(project_id);
         return Err(err);

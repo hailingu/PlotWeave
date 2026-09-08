@@ -21,6 +21,10 @@ aes-gcm = "0.10"
 base64 = "0.22"
 sha2 = "0.10"
 serde_json = "1.0.151"
+# 项目资产 id 是保存边界的非空白不透明字符串契约（非库 id 的 ASCII 白名单）：
+# pwmedia URL 以 percent 编码承载异字符/Unicode id（issue #31 评审修复）。
+# percent-encoding 本已在依赖树（url crate），此处声明直接依赖以便显式引用。
+percent-encoding = "2.3"
 # protocol-asset feature 已随 issue #31 停用 assetProtocol 一并移除：
 # 库/项目媒体均走 pwmedia 自定义协议（数据模型 §7.1）
 tauri = { version = "2", features = [] }
