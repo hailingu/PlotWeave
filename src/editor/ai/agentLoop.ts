@@ -54,8 +54,11 @@ function pushValidationFeedback(
   readTool: ReadToolExecutor,
   reads: ReadRequest[],
 ): void {
+  // 主指令必须跟随错误清单逐条修正；字段限定语只能作条件提示——回喂
+  // 同样覆盖连线/引用等非字段错误，无条件的「只改字段、其余保持不变」
+  // 会与错误清单冲突，模型照做即原样保留非法命令耗尽重试
   const errorText = `你给出的改动批次未通过校验：\n${issueListText(v)}\n` +
-    '请只使用各节点类型的合法字段（见字段表）重新输出完整批次；其余内容保持不变。'
+    '请逐条修正上述错误后重新输出完整批次（涉及字段时只使用字段表中该类型的合法字段），未被点名的命令保持原样。'
   if (calls.length > 0) {
     messages.push({ role: 'assistant', content: prose, tool_calls: calls })
     const readById = new Map(reads.map((r) => [r.id, readTool(r.name, r.args)]))

@@ -130,6 +130,30 @@ describe('runAgentLoop 写批次校验闭环（issue 41）', () => {
     const feedback = users[users.length - 1]
     expect(feedback?.content).toContain('未知字段：label')
     expect(feedback?.content).toContain('允许：name、tone、episodeNo')
+    expect(feedback?.content).toContain('逐条修正')
+  })
+
+  it('非字段类校验失败：要求按错误清单逐条修正，不附带「保持不变」限定', async () => {
+    const prose = vi
+      .fn<NonNullable<BatchValidators['prose']>>()
+      .mockReturnValueOnce(failOf('端点不存在：a → b'))
+      .mockReturnValueOnce(okOf())
+    llmChatMock
+      .mockResolvedValueOnce(fenceReply(BAD_BEAT_BATCH))
+      .mockResolvedValueOnce(fenceReply(GOOD_BEAT_BATCH))
+
+    const messages: ChatMessage[] = [{ role: 'user', content: '连一下' }]
+    const result = await run(messages, validators({ prose }))
+
+    expect(llmChatMock).toHaveBeenCalledTimes(2)
+    expect(result.validation?.ok).toBe(true)
+    const second = llmChatMock.mock.calls[1][2]
+    const users = second.filter((m) => m.role === 'user')
+    const feedback = users[users.length - 1]
+    expect(feedback?.content).toContain('端点不存在：a → b')
+    // 字段限定语不得无条件出现：非字段错误（连线/引用类）若被要求
+    // 「其余内容保持不变」，模型会原样保留非法命令直到耗尽重试
+    expect(feedback?.content).not.toContain('其余内容保持不变')
   })
 
   it('纯讨论回复（无批次）立即终止，validation 为 null', async () => {
