@@ -139,7 +139,7 @@ export default function App() {
 
   let view: ReactNode
   if (settingsOpen) {
-    view = <SettingsView onClose={() => setSettingsOpen(false)} />
+    view = <SettingsView onClose={() => startTransition(() => setSettingsOpen(false))} />
   } else if (openProject) {
     view = <EditorView
       key={openProject.id}

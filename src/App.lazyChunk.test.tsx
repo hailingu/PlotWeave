@@ -6,7 +6,7 @@
  * 停在 pending，以观察加载中的中间态。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { ComponentType, ReactNode } from 'react'
 import App from './App'
 import { projectStore } from './projectStore'
@@ -39,6 +39,14 @@ vi.mock('./home/HomePage', () => ({
   },
 }))
 
+vi.mock('./settings/SettingsView', () => ({
+  default: (props: { onClose: () => void }): ReactNode => (
+    <button type="button" data-testid="settings" onClick={props.onClose}>
+      设置
+    </button>
+  ),
+}))
+
 const homeProps: { current: Record<string, unknown> } = { current: {} }
 
 const store = projectStore as unknown as {
@@ -68,7 +76,7 @@ beforeEach(() => {
 })
 
 describe('App（惰性 chunk 加载保留当前界面）', () => {
-  it('编辑器 chunk 未就绪时首页保持可见；就绪后完成切换', async () => {
+  it('编辑器 chunk 未就绪期间保持当前界面：直接打开、开设置再关闭均不空白', async () => {
     render(<App />)
     await screen.findByTestId('home')
 
@@ -83,10 +91,23 @@ describe('App（惰性 chunk 加载保留当前界面）', () => {
     expect(screen.getByTestId('home')).toBeTruthy()
     expect(screen.queryByTestId('editor')).toBeNull()
 
-    // chunk 就绪：放行动态导入，编辑器视图替换首页
+    // ⌘, 打开设置（设置 mock 即时就绪），视图切到设置
+    fireEvent.keyDown(document, { key: ',', metaKey: true })
+    expect(await screen.findByTestId('settings')).toBeTruthy()
+
+    // 关闭设置：编辑器 chunk 就绪前保留设置界面，不得整窗空白
+    fireEvent.click(screen.getByTestId('settings'))
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 700))
+    })
+    expect(screen.getByTestId('settings')).toBeTruthy()
+    expect(screen.queryByTestId('editor')).toBeNull()
+
+    // chunk 就绪：放行动态导入，关闭生效并切换到编辑器
     await act(async () => {
       editorGate.resolve?.({ default: EditorStub as ComponentType })
     })
     expect(await screen.findByTestId('editor')).toBeTruthy()
+    expect(screen.queryByTestId('settings')).toBeNull()
   })
 })
