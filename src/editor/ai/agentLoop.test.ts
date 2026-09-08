@@ -111,6 +111,35 @@ describe('runAgentLoop 写批次校验闭环（issue 41）', () => {
     expect(result.validation?.issues[0]?.message).toBe('未知字段：label')
   })
 
+  it('回喂完整问题清单：多错误批次一轮点名全部待修命令', async () => {
+    const commands = vi
+      .fn<NonNullable<BatchValidators['commands']>>()
+      .mockReturnValueOnce({
+        ok: false,
+        items: [],
+        commands: [],
+        issues: [
+          { index: 0, message: '未知字段：label' },
+          { index: 1, message: '节点不存在：n9' },
+          { index: 2, message: '端点不存在：a → b' },
+        ],
+        hasDeletes: false,
+      })
+      .mockReturnValueOnce(okOf())
+    llmChatMock
+      .mockResolvedValueOnce(reply({ tool_calls: [batchCall(BAD_BEAT_BATCH)] }))
+      .mockResolvedValueOnce(reply({ content: '已全部修正', tool_calls: [batchCall(GOOD_BEAT_BATCH)] }))
+
+    const result = await run([{ role: 'user', content: '改画布' }], validators({ commands }))
+
+    expect(llmChatMock).toHaveBeenCalledTimes(2) // 清单完整 → 单轮修正即可通过
+    expect(result.validation?.ok).toBe(true)
+    const toolMsg = llmChatMock.mock.calls[1][2].find((m) => m.role === 'tool')
+    expect(toolMsg?.content).toContain('未知字段：label')
+    expect(toolMsg?.content).toContain('节点不存在：n9')
+    expect(toolMsg?.content).toContain('端点不存在：a → b')
+  })
+
   it('围栏通道：校验错误以 user 消息回喂并重试，纠正后通过', async () => {
     const prose = vi
       .fn<NonNullable<BatchValidators['prose']>>()

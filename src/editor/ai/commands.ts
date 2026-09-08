@@ -213,7 +213,11 @@ function checkFieldKeys(nodeType: string, fields: Record<string, unknown>): stri
 /**
  * 逐条折叠校验：维护「当前图 + 本批已建未删」的虚拟状态，
  * 让批次内引用（ref 建链）与成环/重复判定都按最终态计算。
- * 任一问题 → ok=false（整批拒绝），commands 为空。
+ * 任一问题 → ok=false（整批拒绝），commands 为空；issues 收集全部命令
+ * 的完整问题清单，不因首错短路——纠错回喂与预览卡都依赖完整清单，
+ * 模型单轮即可修完所有被点名命令，否则多错误批次会在重试预算内逐个
+ * 暴露、必然耗尽。失败的折叠在任何状态变更前返回，后续命令继续折叠
+ * 不受污染（对已失败命令的引用作为独立问题点名）。
  *
  * 复杂度拆解（S3776）：每个 op 的折叠逻辑是独立的顶层函数
  * （foldCreate/foldUpdate/foldDelete/foldEdge），共享的虚拟图状态
@@ -755,7 +759,6 @@ export function validateAiBatch(rawCommands: unknown, graph: AiGraphSnapshot): B
   }
 
   rawCommands.forEach((raw, index) => {
-    if (st.issues.length > 0) return // 已坏，仅统计首个问题即可
     if (!plainObject(raw)) return st.fail(index, '条目不是对象')
     const folder = FOLDERS[raw.op as string]
     if (folder) folder(st, raw, index)

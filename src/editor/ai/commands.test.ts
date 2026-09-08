@@ -922,3 +922,37 @@ describe('图片节点的 AI 命令边界（§13 首版：快照只读可见、�
     expect(bad.issues.map((i) => i.message).join('\n')).toContain('暂不支持 AI 命令删除')
   })
 })
+
+describe('validateAiBatch：完整问题收集（评审 5138829847：纠错回喂依赖全量清单）', () => {
+  it('多个独立非法命令逐条收集问题，不再首错短路；原子性保持', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'create_node', nodeType: 'beat', data: { label: '立足' } },
+        { op: 'create_node', nodeType: 'beat', data: { summary: '小店开张' } },
+        { op: 'no_such_op', nodeId: 'x' },
+      ],
+      snap(),
+    )
+    expect(v.ok).toBe(false)
+    expect(v.commands).toEqual([])
+    expect(v.issues).toHaveLength(3)
+    expect(v.issues.map((i) => i.index)).toEqual([0, 1, 2])
+    expect(v.issues[0]?.message).toContain('label')
+    expect(v.issues[1]?.message).toContain('summary')
+    expect(v.issues[2]?.message).toContain('未知操作')
+  })
+
+  it('失败命令不污染虚拟状态：后续合法命令的问题独立收集（级联引用点名）', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'create_node', nodeType: 'beat', data: { label: '立足' }, ref: 'b' },
+        { op: 'connect_edge', sourceId: 'b', targetId: 'n1' },
+      ],
+      snap(),
+    )
+    expect(v.ok).toBe(false)
+    expect(v.issues).toHaveLength(2)
+    expect(v.issues[0]?.message).toContain('label')
+    expect(v.issues[1]?.message).toContain('端点不存在')
+  })
+})
