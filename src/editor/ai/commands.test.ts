@@ -955,3 +955,46 @@ describe('validateAiBatch：完整问题收集（评审 5138829847：纠错回�
     expect(v.items.map((i) => i.kind)).toEqual(['delete', 'update'])
   })
 })
+
+describe('contingent：依赖失败 branch options 更新的出口连线（评审 5139209906）', () => {
+  it('该分支的越界 optionIndex 随前序修复自愈，不点名；仅报 options 异型', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'update_node', nodeId: 'b1', patch: { options: [{ id: 'ob-a', label: '追' }, { label: 5 }] } },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 2 },
+      ],
+      richSnap(),
+    )
+    expect(v.ok).toBe(false)
+    expect(v.commands).toEqual([])
+    expect(v.issues).toHaveLength(1)
+    expect(v.issues[0]?.message).toContain('异型')
+    expect(v.issues.map((i) => i.message).join('\n')).not.toContain('optionIndex')
+  })
+
+  it('豁免只限失败更新的分支：其他分支的越界连线仍独立点名', () => {
+    const s: AiGraphSnapshot = {
+      nodes: [
+        { id: 's1', type: 'scene', label: '场' },
+        { id: 'b1', type: 'branch', label: '分支一', options: [{ id: 'o1', label: 'A' }] },
+        { id: 'b2', type: 'branch', label: '分支二', options: [{ id: 'o2', label: 'B' }] },
+      ],
+      edges: [],
+      assets: new Map(),
+    }
+    const v = validateAiBatch(
+      [
+        { op: 'update_node', nodeId: 'b1', patch: { options: ['A', { label: 5 }] } },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 1 },
+        { op: 'connect_edge', sourceId: 'b2', targetId: 's1', edgeKind: 'branch', optionIndex: 5 },
+      ],
+      s,
+    )
+    expect(v.ok).toBe(false)
+    expect(v.issues).toHaveLength(2)
+    expect(v.issues[0]?.index).toBe(0)
+    expect(v.issues[0]?.message).toContain('异型')
+    expect(v.issues[1]?.index).toBe(2)
+    expect(v.issues[1]?.message).toContain('optionIndex')
+  })
+})

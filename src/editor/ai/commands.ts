@@ -190,6 +190,9 @@ interface FoldState {
   exists: Set<string>
   /** ref 别名 → 所属节点 id。 */
   refOwner: Map<string, string>
+  /** 本批 options 更新失败的分支节点 id：其出口连线的 optionIndex 校验
+   * 随前序修复自愈，按 contingent 跳过（同 ref 依赖，见 isContingentRef）。 */
+  failedBranchOptionUpdates: Set<string>
   /** 项目资产索引（id → MIME）：shot.refs 引用位校验用。 */
   assets: ReadonlyMap<string, string>
   items: PreviewItem[]
@@ -638,35 +641,21 @@ function resolveEndpoints(
   return { src, dst }
 }
 
-/** connect_edge / disconnect_edge 的折叠校验。 */
-function foldEdge(st: FoldState, cmd: Record<string, unknown>, index: number, op: string): void {
-  const ends = resolveEndpoints(st, cmd, index)
-  if (ends === 'contingent' || ends === 'missing') return
-  const { src, dst } = ends
-  const pairLabel = `${st.labels.get(src) ?? '未知节点'} → ${st.labels.get(dst) ?? '未知节点'}`
-
-  if (op === 'disconnect_edge') {
-    const hitIdx = st.virtualEdges.findIndex((e) => e.source === src && e.target === dst)
-    if (hitIdx < 0) return st.fail(index, `没有这条连线：${pairLabel}`)
-    st.virtualEdges.splice(hitIdx, 1)
-    st.items.push({
-      kind: 'disconnect',
-      danger: false,
-      key: `x${index}`,
-      label: `${OP_LABELS.disconnect} ${pairLabel}${reasonOf(cmd)}`,
-    })
-    st.commands.push({
-      op,
-      sourceId: asText(cmd.sourceId),
-      targetId: asText(cmd.targetId),
-      reason: asText(cmd.reason),
-    })
-    return
-  }
-
-  // connect_edge：按连线语义分端口校验（§4.4）
+/** connect_edge 的折叠校验（foldEdge 拆出，S3776）：按连线语义分端口
+ * 校验（§4.4），经端点规则、宿主唯一、重复与成环检查后入虚拟图。 */
+function foldConnectEdge(
+  st: FoldState,
+  cmd: Record<string, unknown>,
+  index: number,
+  src: string,
+  dst: string,
+  pairLabel: string,
+): void {
   const kind = asText(cmd.edgeKind) || 'sequence'
   if (!(kind in EDGE_KIND_LABELS)) return st.fail(index, `未知连线类型：${kind}`)
+  // optionIndex 的合法范围取决于 source 分支的选项表：本批对该分支的
+  // options 更新失败时，新下标随前序修复自愈 → contingent 跳过
+  if (kind === 'branch' && st.failedBranchOptionUpdates.has(src)) return
   const port = edgePortOf(st, kind, cmd, src, dst)
   if (typeof port === 'string') return st.fail(index, port)
   const { handle, optionIndex } = port
@@ -714,6 +703,34 @@ function foldEdge(st: FoldState, cmd: Record<string, unknown>, index: number, op
   })
 }
 
+/** connect_edge / disconnect_edge 的折叠校验。 */
+function foldEdge(st: FoldState, cmd: Record<string, unknown>, index: number, op: string): void {
+  const ends = resolveEndpoints(st, cmd, index)
+  if (ends === 'contingent' || ends === 'missing') return
+  const { src, dst } = ends
+  const pairLabel = `${st.labels.get(src) ?? '未知节点'} → ${st.labels.get(dst) ?? '未知节点'}`
+
+  if (op === 'disconnect_edge') {
+    const hitIdx = st.virtualEdges.findIndex((e) => e.source === src && e.target === dst)
+    if (hitIdx < 0) return st.fail(index, `没有这条连线：${pairLabel}`)
+    st.virtualEdges.splice(hitIdx, 1)
+    st.items.push({
+      kind: 'disconnect',
+      danger: false,
+      key: `x${index}`,
+      label: `${OP_LABELS.disconnect} ${pairLabel}${reasonOf(cmd)}`,
+    })
+    st.commands.push({
+      op,
+      sourceId: asText(cmd.sourceId),
+      targetId: asText(cmd.targetId),
+      reason: asText(cmd.reason),
+    })
+    return
+  }
+  foldConnectEdge(st, cmd, index, src, dst, pairLabel)
+}
+
 /** 折叠器分发表：op → 处理函数。 */
 const FOLDERS: Record<string, (st: FoldState, cmd: Record<string, unknown>, index: number) => void> = {
   create_node: foldCreate,
@@ -733,6 +750,7 @@ export function validateAiBatch(rawCommands: unknown, graph: AiGraphSnapshot): B
     virtualEdges: graph.edges.map((e) => ({ ...e })),
     exists: new Set(graph.nodes.map((n) => n.id)),
     refOwner: new Map(),
+    failedBranchOptionUpdates: new Set(),
     assets: graph.assets,
     items: [],
     issues: [],
@@ -751,10 +769,24 @@ export function validateAiBatch(rawCommands: unknown, graph: AiGraphSnapshot): B
     const issueCountBefore = st.issues.length
     folder(st, raw, index)
     // create 失败同样登记其 ref（指向未入图的虚拟 id）：依赖命令据此按
-    // contingent 跳过、随前序修复自愈，而非被误报「节点不存在」
+    // contingent 跳过、随前序修复自愈，而非被误报「节点不存在」；
+    // branch 的 options 更新失败同理——其出口连线的 optionIndex 校验
+    // 依赖更新后的选项表，登记后随前序修复自愈
     if (raw.op === 'create_node' && st.issues.length > issueCountBefore) {
       const refName = typeof raw.ref === 'string' ? raw.ref.trim() : ''
       if (refName !== '') st.refOwner.set(refName, virtualIdOf(index))
+    }
+    if (raw.op === 'update_node' && st.issues.length > issueCountBefore) {
+      const target = resolveRef(st, raw, 'nodeId')
+      const patch = plainObject(raw.patch) ? raw.patch : undefined
+      if (
+        target !== null &&
+        patch !== undefined &&
+        Array.isArray(patch.options) &&
+        st.types.get(target) === 'branch'
+      ) {
+        st.failedBranchOptionUpdates.add(target)
+      }
     }
   })
 
