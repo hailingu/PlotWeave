@@ -13,7 +13,7 @@ use std::io::Write;
 
 use cap_std::fs::Dir as CapDir;
 use serde_json::{json, Value};
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 use crate::isotime::{is_canonical_utc_timestamp, now_iso};
 use crate::library::ext_for;
@@ -192,6 +192,7 @@ pub(crate) fn import_asset_from_library(
     library: &CapDir,
     id: &str,
     library_asset_id: &str,
+    pending: &project_media::PendingProjectAssets,
 ) -> Result<Value, String> {
     ensure_project_control(projects, id)?;
     // §7.2：冲突期条目不得为导入/收藏提供复制源
@@ -206,6 +207,7 @@ pub(crate) fn import_asset_from_library(
     // 防抖落盘窗口内协议解析可见（issue #31 评审修复）：文档尚未收录该
     // 条目前，pwmedia 项目 scope 经会话登记项解析
     project_media::register_pending_project_asset(
+        pending,
         id,
         &asset_id,
         format!("assets/{final_name}"),
@@ -241,6 +243,7 @@ pub(crate) fn write_generated_asset(
     id: &str,
     bytes: &[u8],
     mime: &str,
+    pending: &project_media::PendingProjectAssets,
 ) -> Result<Value, String> {
     ensure_project_control(projects, id)?;
     let project_dir = ensure_child_dir(projects, id, "项目资产根")?;
@@ -250,6 +253,7 @@ pub(crate) fn write_generated_asset(
     atomic_write_with(&assets_dir, &final_name, |dst| dst.write_all(bytes))?;
     // 防抖落盘窗口内协议解析可见（issue #31 评审修复）
     project_media::register_pending_project_asset(
+        pending,
         id,
         &asset_id,
         format!("assets/{final_name}"),
@@ -340,7 +344,8 @@ pub fn import_project_asset_from_library(
     // 提交去项索引会把已恢复的媒体孤儿化
     let _op = crate::library_journal::library_op_lock();
     let _file_lock = crate::library_journal::library_file_lock(&library)?;
-    import_asset_from_library(&projects, &library, &id, &library_asset_id)
+    let pending = app.state::<project_media::PendingProjectAssets>();
+    import_asset_from_library(&projects, &library, &id, &library_asset_id, &pending)
 }
 
 /// set_asset 调度前的强制预检命令（§9.3）：形状 + 实路径复验，返回规范化
@@ -363,6 +368,11 @@ mod tests {
     /// 测试内核的受信句柄：对临时目录做环境打开（等价生产端锚定句柄）。
     fn cap(p: &Path) -> CapDir {
         CapDir::open_ambient_dir(p, ambient_authority()).expect("打开测试根句柄")
+    }
+
+    /// 本测试专用的登记表实例（应用状态语义，非共享全局）。
+    fn pending() -> project_media::PendingProjectAssets {
+        project_media::PendingProjectAssets::new()
     }
 
     /// 唯一临时根：`{tmp}/pw-assets-test-{new_id}/` 下含 `projects/` 与
@@ -425,8 +435,9 @@ mod tests {
         let (projects, library, root) = temp_fixture();
         seed_project(&projects, "p-1");
         seed_library(&library, "la-1", "la-1.png", b"PNGDATA", "image/png");
-        let asset = import_asset_from_library(&cap(&projects), &cap(&library), "p-1", "la-1")
-            .expect("导入应成功");
+        let asset =
+            import_asset_from_library(&cap(&projects), &cap(&library), "p-1", "la-1", &pending())
+                .expect("导入应成功");
         let asset_id = asset.get("id").and_then(Value::as_str).expect("id 缺失");
         assert!(asset_id.starts_with("pa-"), "意外 id 前缀：{asset_id}");
         assert_eq!(
@@ -466,10 +477,11 @@ mod tests {
         let (projects, library, root) = temp_fixture();
         seed_project(&projects, "p-1");
         seed_library(&library, "la-1", "la-1.png", b"A", "image/png");
-        import_asset_from_library(&cap(&projects), &cap(&library), "p-1", "la-1")
+        import_asset_from_library(&cap(&projects), &cap(&library), "p-1", "la-1", &pending())
             .expect("首次导入");
-        let second = import_asset_from_library(&cap(&projects), &cap(&library), "p-1", "la-1")
-            .expect("现存资产目录下二次导入");
+        let second =
+            import_asset_from_library(&cap(&projects), &cap(&library), "p-1", "la-1", &pending())
+                .expect("现存资产目录下二次导入");
         let file_count = fs::read_dir(projects.join("p-1").join("assets"))
             .expect("读取资产目录")
             .count();
@@ -483,11 +495,13 @@ mod tests {
         let (projects, library, root) = temp_fixture();
         seed_project(&projects, "p-1");
         seed_library(&library, "la-1", "la-1.png", b"A", "image/png");
-        let err = import_asset_from_library(&cap(&projects), &cap(&library), "p-9", "la-1")
-            .expect_err("不存在的项目应拒绝");
+        let err =
+            import_asset_from_library(&cap(&projects), &cap(&library), "p-9", "la-1", &pending())
+                .expect_err("不存在的项目应拒绝");
         assert!(err.contains("项目不存在"), "意外诊断：{err}");
-        let err = import_asset_from_library(&cap(&projects), &cap(&library), "p-1", "la-9")
-            .expect_err("未知库资产应拒绝");
+        let err =
+            import_asset_from_library(&cap(&projects), &cap(&library), "p-1", "la-9", &pending())
+                .expect_err("未知库资产应拒绝");
         assert!(err.contains("库资产不存在"), "意外诊断：{err}");
         cleanup(&root);
     }
@@ -508,8 +522,9 @@ mod tests {
         .expect("写库索引");
         // 脏条目在共享索引读取处即被隔离（issue #17）：导入侧以"不存在"拒绝，
         // relPath 永不进入拷贝流程
-        let err = import_asset_from_library(&cap(&projects), &cap(&library), "p-1", "la-1")
-            .expect_err("越界 relPath 应拒绝");
+        let err =
+            import_asset_from_library(&cap(&projects), &cap(&library), "p-1", "la-1", &pending())
+                .expect_err("越界 relPath 应拒绝");
         assert!(err.contains("库资产不存在"), "意外诊断：{err}");
         cleanup(&root);
     }
@@ -534,8 +549,9 @@ mod tests {
             serde_json::to_string(&index).expect("序列化"),
         )
         .expect("写库索引");
-        let err = import_asset_from_library(&cap(&projects), &cap(&library), "p-1", "la-1")
-            .expect_err("符号链接源应拒绝");
+        let err =
+            import_asset_from_library(&cap(&projects), &cap(&library), "p-1", "la-1", &pending())
+                .expect_err("符号链接源应拒绝");
         assert!(err.contains("符号链接"), "意外诊断：{err}");
         assert!(
             fs::symlink_metadata(projects.join("p-1").join("assets")).is_err()
@@ -630,8 +646,9 @@ mod tests {
             serde_json::to_string(&index).expect("序列化"),
         )
         .expect("写库索引");
-        let err = import_asset_from_library(&cap(&projects), &cap(&library), "p-1", "la-1")
-            .expect_err("父目录缺失应拒绝导入");
+        let err =
+            import_asset_from_library(&cap(&projects), &cap(&library), "p-1", "la-1", &pending())
+                .expect_err("父目录缺失应拒绝导入");
         assert!(err.contains("资产文件不存在"), "意外诊断：{err}");
         cleanup(&root);
     }
@@ -641,7 +658,7 @@ mod tests {
         let (projects, _library, root) = temp_fixture();
         seed_project(&projects, "p-1");
         let bytes: &[u8] = &[0x89, b'P', b'N', b'G', 1, 2, 3];
-        let asset = write_generated_asset(&cap(&projects), "p-1", bytes, "image/png")
+        let asset = write_generated_asset(&cap(&projects), "p-1", bytes, "image/png", &pending())
             .expect("生成媒体落盘应成功");
         let asset_id = asset.get("id").and_then(Value::as_str).expect("id 缺失");
         assert!(asset_id.starts_with("pa-"), "意外 id 前缀：{asset_id}");
@@ -679,7 +696,7 @@ mod tests {
     fn write_generated_asset_rejects_missing_project() {
         let (projects, _library, root) = temp_fixture();
         seed_project(&projects, "p-1");
-        let err = write_generated_asset(&cap(&projects), "p-9", b"PNG", "image/png")
+        let err = write_generated_asset(&cap(&projects), "p-9", b"PNG", "image/png", &pending())
             .expect_err("不存在的项目应拒绝");
         assert!(err.contains("项目不存在"), "意外诊断：{err}");
         cleanup(&root);
@@ -689,8 +706,14 @@ mod tests {
     fn write_generated_asset_ext_follows_mime() {
         let (projects, _library, root) = temp_fixture();
         seed_project(&projects, "p-1");
-        let asset = write_generated_asset(&cap(&projects), "p-1", b"JPEGBYTES", "image/jpeg")
-            .expect("jpeg 落盘应成功");
+        let asset = write_generated_asset(
+            &cap(&projects),
+            "p-1",
+            b"JPEGBYTES",
+            "image/jpeg",
+            &pending(),
+        )
+        .expect("jpeg 落盘应成功");
         let rel = asset
             .get("relPath")
             .and_then(Value::as_str)
@@ -726,8 +749,9 @@ mod tests {
             b"{\"not\":\"array\"}",
         )
         .expect("写异型日志");
-        let asset = import_asset_from_library(&cap(&projects), &cap(&library), "p-1", "la-1")
-            .expect("只读态导入（读取路径）仍应服务");
+        let asset =
+            import_asset_from_library(&cap(&projects), &cap(&library), "p-1", "la-1", &pending())
+                .expect("只读态导入（读取路径）仍应服务");
         assert!(asset.get("id").is_some(), "导入应返回项目资产");
         let after = fs::read(library.join("library.json")).expect("读落盘索引字节");
         assert_eq!(before, after, "只读态不得改写 library.json");

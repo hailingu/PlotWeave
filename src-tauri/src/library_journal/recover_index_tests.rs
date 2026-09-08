@@ -184,9 +184,14 @@ fn import_refuses_conflicted_asset() {
             ino
         )]),
     );
-    let err =
-        crate::assets::import_asset_from_library(&cap(&projects), &cap(&library), "p-1", "la-1")
-            .expect_err("冲突期条目应拒绝导入");
+    let err = crate::assets::import_asset_from_library(
+        &cap(&projects),
+        &cap(&library),
+        "p-1",
+        "la-1",
+        &crate::assets::project_media::PendingProjectAssets::new(),
+    )
+    .expect_err("冲突期条目应拒绝导入");
     assert!(err.contains("冲突期"), "意外诊断：{err}");
     cleanup(&root);
 }

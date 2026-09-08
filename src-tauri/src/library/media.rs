@@ -7,11 +7,12 @@
 
 use std::sync::{Condvar, Mutex, OnceLock};
 
-use percent_encoding::{percent_decode_str, utf8_percent_encode, AsciiSet, CONTROLS};
 use serde_json::Value;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
-use crate::assets::project_media::{open_project_media_with, resolve_project_media_entry};
+use crate::assets::project_media::{
+    open_project_media_with, resolve_project_media_entry, PendingProjectAssets,
+};
 use crate::library::ASSET_MAX_BYTES;
 use crate::library_fs::{library_root, read_index_capped, validate_asset_id};
 use crate::library_journal::{library_file_lock, library_op_lock};
@@ -26,34 +27,46 @@ pub(crate) const MEDIA_SCHEME: &str = "pwmedia";
 pub(crate) const PROJECT_MEDIA_MAX_BYTES: usize = crate::imagegen::GENERATED_IMAGE_MAX_BYTES;
 
 /// 项目资产 id 的不透明契约（评审修复）：保存边界只要求非空白字符串 +
-/// Record 键/id 一致，normalizeAssetRecords 仅重发空白键——`bad]`/Unicode/
-/// 超长 id 此前经 project_asset_path 可显示，迁移后不得被库 id 白名单
-/// 永久拒绝。URL 段以 percent 编码承载（片段白名单之外的字符全部编码）；
-/// `/` 与 `%` 不可进 id（编码即改变段结构/与编码歧义），与空白 id 同拒。
-const PROJECT_ASSET_ID_ENCODE_SET: &AsciiSet = &CONTROLS
-    .add(b' ')
-    .add(b'"')
-    .add(b'%')
-    .add(b'/')
-    .add(b'<')
-    .add(b'>')
-    .add(b'?')
-    .add(b'`')
-    .add(b'{')
-    .add(b'}')
-    .add(b'[')
-    .add(b']')
-    .add(b'^')
-    .add(b'|')
-    .add(b'#');
+/// Record 键/id 一致，normalizeAssetRecords 仅重发空白键——任意不透明 id
+/// （`bad]`/Unicode/超长/`%`/`..`/反斜杠）此前经 project_asset_path 可显示，
+/// 迁移后不得被库 id 白名单或百分号边界拒绝。URL 段以 hex 编码承载：输出
+/// 恒为 `[0-9a-f]`，URI 解析器无路径段歧义，任意字节序列无损往返。
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for &b in bytes {
+        out.push(HEX[(b >> 4) as usize] as char);
+        out.push(HEX[(b & 0x0f) as usize] as char);
+    }
+    out
+}
 
-/// 项目资产 id 值域（命令面与协议解析同域）：非空白、不含 `/` 与 `%`。
-/// 长度不另设限——文档 id 长度归索引大小上限治理。
+/// hex 解码（[`hex_encode`] 的逆）：非法十六进制序列返回 None（调用方
+/// 按路径非法拒绝）。
+fn hex_decode(s: &str) -> Option<Vec<u8>> {
+    if !s.len().is_multiple_of(2) {
+        return None;
+    }
+    let nibbles: Vec<u8> = s
+        .bytes()
+        .map(|b| match b {
+            b'0'..=b'9' => Some(b - b'0'),
+            b'a'..=b'f' => Some(b - b'a' + 10),
+            _ => None,
+        })
+        .collect::<Option<Vec<u8>>>()?;
+    Some(
+        nibbles
+            .chunks_exact(2)
+            .map(|pair| (pair[0] << 4) | pair[1])
+            .collect(),
+    )
+}
+
+/// 项目资产 id 值域（命令面与协议解析同域）：非空白不透明字符串。长度
+/// 不另设限——文档 id 长度归索引大小上限治理。
 fn validate_project_media_id(id: &str) -> Result<(), String> {
     if id.trim().is_empty() {
-        return Err(format!("非法项目资产 id：{id}"));
-    }
-    if id.contains('/') || id.contains('%') {
         return Err(format!("非法项目资产 id：{id}"));
     }
     Ok(())
@@ -94,15 +107,14 @@ pub(crate) fn parse_media_scope(scope: &Value) -> Result<MediaScope, String> {
 /// opaque asset URL（前端可直接挂到 img/src 的完整 URL）：Windows/Android
 /// 走 `http://{scheme}.localhost`，其余平台走原生自定义 scheme（与 Tauri
 /// convertFileSrc 的平台分野一致）。URL 只由逻辑段与 id 构成，不含任何
-/// 本机路径与 relPath；项目 assetId 是不透明契约（评审修复），非 ASCII
-/// 安全字符经 percent 编码承载。
+/// 本机路径与 relPath；项目 assetId 是不透明契约（评审修复），任意字节
+/// 序列经 hex 编码承载（输出恒为 `[0-9a-f]`，无路径段歧义）。
 pub(crate) fn opaque_media_url(scope: &MediaScope, asset_id: &str) -> String {
     let path = match scope {
         MediaScope::Library => format!("/library/{asset_id}"),
-        MediaScope::Project { project_id } => format!(
-            "/project/{project_id}/{}",
-            utf8_percent_encode(asset_id, PROJECT_ASSET_ID_ENCODE_SET)
-        ),
+        MediaScope::Project { project_id } => {
+            format!("/project/{project_id}/{}", hex_encode(asset_id.as_bytes()))
+        }
     };
     #[cfg(any(target_os = "windows", target_os = "android"))]
     let url = format!("http://{MEDIA_SCHEME}.localhost{path}");
@@ -112,11 +124,11 @@ pub(crate) fn opaque_media_url(scope: &MediaScope, asset_id: &str) -> String {
 }
 
 /// 协议请求解析（issue #31 并入项目 scope）：接受 `/library/{assetId}` 单段
-/// 与 `/project/{projectId}/{assetId}` 两段形式。库 assetId 不做百分号解码
-/// ——合法 id 字符集（[`validate_asset_id`]）不含 `%`，编码/异段数/异 scope
-/// 形式天然拒绝；项目 assetId 是不透明契约（评审修复），percent 解码后过
-/// [`validate_project_media_id`]，原始段中的 `/` 与非法编码序列在分段处即
-/// 拒绝，路径穿越在解析层闭环。
+/// 与 `/project/{projectId}/{hex(assetId)}` 两段形式。库 assetId 不做百分号
+/// 解码——合法 id 字符集（[`validate_asset_id`]）不含 `%`，编码/异段数/异
+/// scope 形式天然拒绝；项目 assetId 是不透明契约（评审修复），hex 解码后
+/// 按 UTF-8 还原并按 [`validate_project_media_id`] 校验，原始段中的 `/` 在
+/// 分段处即拒绝，路径穿越在解析层闭环。
 pub(crate) fn parse_media_uri(uri: &tauri::http::Uri) -> Result<(MediaScope, String), String> {
     let path = uri.path();
     let invalid = || format!("媒体请求路径非法：{path}");
@@ -135,10 +147,8 @@ pub(crate) fn parse_media_uri(uri: &tauri::http::Uri) -> Result<(MediaScope, Str
             return Err(invalid());
         }
         validate_id(project_id)?;
-        let asset_id = percent_decode_str(encoded_asset_id)
-            .decode_utf8()
-            .map_err(|_| invalid())?
-            .into_owned();
+        let asset_id = String::from_utf8(hex_decode(encoded_asset_id).ok_or_else(invalid)?)
+            .map_err(|_| invalid())?;
         validate_project_media_id(&asset_id)?;
         return Ok((
             MediaScope::Project {
@@ -388,6 +398,15 @@ pub(crate) struct MediaDelivery {
 /// 折叠为非敏感 404，原始原因经 [`media_failure_diagnostic`] 进本机日志。
 /// 返回 [`MediaDelivery`]：调用方在 `responder.respond` 之后再释放许可
 /// （评审修复，PR #32 第五轮——许可生命周期覆盖到响应交付）。
+/// `pwmedia` 协议处理器（lib.rs 注册；在 spawn_blocking 线程执行）：解析
+/// 请求 → 按 scope 逐请求解析 id（库走锁内净化索引；项目走项目文档索引，
+/// §10.2 单写者 + 原子写语义无需互斥锁）→ 句柄链读字节 → 响应。§7.1 每次
+/// 请求重新解析，目录项在列表后被替换也无法越出资产根。失败向 webview
+/// 折叠为非敏感 404，原始原因经 [`media_failure_diagnostic`] 进本机日志。
+/// 返回 [`MediaDelivery`]：调用方在 `responder.respond` 之后再释放许可
+/// （评审修复，PR #32 第五轮——许可生命周期覆盖到响应交付）。
+/// 会话登记表经 `tauri::State` 显式获取（评审修复：可变全局单例由应用
+/// 拥有的状态替代）。
 pub(crate) fn handle_media_request(app: &AppHandle, uri: &tauri::http::Uri) -> MediaDelivery {
     let result = parse_media_uri(uri).and_then(|(scope, id)| match scope {
         MediaScope::Library => {
@@ -407,7 +426,8 @@ pub(crate) fn handle_media_request(app: &AppHandle, uri: &tauri::http::Uri) -> M
             // verify_asset_real_path 句柄链打开身份绑定句柄；读取上限与
             // 生成产物写入契约同源（评审修复 P2-2）
             let projects = projects_dir(app)?;
-            let opened = open_project_media_with(&projects, &project_id, &id);
+            let pending = app.state::<PendingProjectAssets>();
+            let opened = open_project_media_with(&projects, &project_id, &id, &pending);
             opened.and_then(|(mime, file)| read_project_media_capped(&id, mime, file))
         }
     });
@@ -449,7 +469,8 @@ pub fn get_asset_media_url(
             // 先行校验，非法 id 在触达文件系统前拒绝
             validate_project_media_id(&asset_id)?;
             let projects = projects_dir(&app)?;
-            resolve_project_media_entry(&projects, project_id, &asset_id)?;
+            let pending = app.state::<PendingProjectAssets>();
+            resolve_project_media_entry(&projects, project_id, &asset_id, &pending)?;
         }
     }
     Ok(opaque_media_url(&parsed, &asset_id))

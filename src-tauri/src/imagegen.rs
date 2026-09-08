@@ -18,7 +18,7 @@ use std::time::Duration;
 use base64::Engine as _;
 use reqwest::Url;
 use serde_json::{json, Value};
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 use crate::http_util::{append_capped, read_text_capped};
 
@@ -326,7 +326,9 @@ pub async fn llm_image_generate(app: AppHandle, request: ImageGenRequest) -> Res
         return Err("已取消".into());
     }
     let projects = crate::store::projects_dir(&app)?;
-    let written = crate::assets::write_generated_asset(&projects, &project_id, &bytes, mime)?;
+    let pending = app.state::<crate::assets::project_media::PendingProjectAssets>();
+    let written =
+        crate::assets::write_generated_asset(&projects, &project_id, &bytes, mime, &pending)?;
     // §9.3 预检并入命令内（同一根句柄）：返回的产物已完成形状+实路径校验
     let asset = crate::assets::validate_project_asset_with(&projects, &project_id, &written)?;
     clear_cancel(&job_id);

@@ -27,7 +27,10 @@ fn project_media_read(
     project_id: &str,
     id: &str,
 ) -> Result<(String, Vec<u8>), String> {
-    crate::assets::project_media::open_project_media_with(projects, project_id, id)
+    // 登记表为应用拥有状态（评审修复）：协议组合助手使用独立实例——
+    // 协议路径的 pending 可见性归 assets::project_media 用例覆盖
+    let pending = crate::assets::project_media::PendingProjectAssets::new();
+    crate::assets::project_media::open_project_media_with(projects, project_id, id, &pending)
         .and_then(|(mime, file)| read_project_media_capped(id, mime, file))
         .map(|(mime, bytes, _permit)| (mime, bytes))
 }
@@ -114,7 +117,8 @@ fn opaque_media_url_carries_scope_and_id_only() {
         },
         "pa-1",
     );
-    assert!(proj.ends_with("/project/p-1/pa-1"), "意外 URL：{proj}");
+    // 项目 assetId 是不透明契约（评审修复）：URL 以 hex 承载
+    assert!(proj.ends_with("/project/p-1/70612d31"), "意外 URL：{proj}");
     assert!(proj.starts_with("pwmedia"), "意外 scheme：{proj}");
     assert!(!proj.contains("/assets/"), "URL 不得携带 relPath：{proj}");
     assert!(
@@ -124,8 +128,8 @@ fn opaque_media_url_carries_scope_and_id_only() {
 }
 
 /// 协议请求解析：接受 `/library/{assetId}` 单段与 `/project/{projectId}/
-/// {assetId}` 两段形式（issue #31）；段数/字符集白名单天然拒绝百分号编码、
-/// 越界段与其他 scope。
+/// {hex(assetId)}` 两段形式（issue #31）；段数/字符集白名单天然拒绝百分号
+/// 编码、越界段与其他 scope；项目 assetId 以 hex 编码往返（评审修复）。
 #[test]
 fn parse_media_uri_accepts_library_and_project_scope() {
     assert_eq!(
@@ -139,7 +143,7 @@ fn parse_media_uri_accepts_library_and_project_scope() {
         (MediaScope::Library, "la-2".to_string())
     );
     assert_eq!(
-        parse_media_uri(&media_uri("pwmedia://localhost/project/p-1/pa-1"))
+        parse_media_uri(&media_uri("pwmedia://localhost/project/p-1/70612d31"))
             .expect("项目 scope 应解析"),
         (
             MediaScope::Project {
@@ -149,7 +153,7 @@ fn parse_media_uri_accepts_library_and_project_scope() {
         )
     );
     assert_eq!(
-        parse_media_uri(&media_uri("http://pwmedia.localhost/project/p-2/pa-2"))
+        parse_media_uri(&media_uri("http://pwmedia.localhost/project/p-2/70612d32"))
             .expect("项目 scope 网关形状应解析"),
         (
             MediaScope::Project {
@@ -163,7 +167,7 @@ fn parse_media_uri_accepts_library_and_project_scope() {
         "pwmedia://localhost/project/p-1/",
         "pwmedia://localhost/project/p-1/a/b",
         "pwmedia://localhost/project/../evil/pa-1",
-        "pwmedia://localhost/project/p-1/..%2Fevil",
+        "pwmedia://localhost/project/p-1/zz",
         "pwmedia://localhost/other/la-1",
         "pwmedia://localhost/library/",
         "pwmedia://localhost/library/a/b",
@@ -295,16 +299,25 @@ fn media_bytes_refuses_symlinked_final_component() {
 }
 
 /// 项目资产 id 是不透明字符串（评审修复：保存边界只要求非空白 + 键/id
-/// 一致，normalizeAssetRecords 仅重发空白键）：pwmedia 项目 scope 以
-/// percent 编码承载契约允许的异字符 id（`[`/`]`/Unicode/超长），不再套用
-/// 库 id 的 ASCII 白名单；此类资产在旧管线（project_asset_path）下可显示，
-/// 迁移后不得被永久拒绝。
+/// 一致，normalizeAssetRecords 仅重发空白键）：pwmedia 项目 scope 以 hex
+/// 编码承载契约允许的任意不透明 id（`[`/`]`/Unicode/超长/`%`/`..`/反斜杠），
+/// 不再套用库 id 的 ASCII 白名单；此类资产在旧管线（project_asset_path）下
+/// 可显示，迁移后不得被永久拒绝。hex 输出仅 `[0-9a-f]`，URI 解析器无路径
+/// 段歧义。
 #[test]
-fn project_media_serves_opaque_asset_ids_via_percent_encoding() {
+fn project_media_serves_opaque_asset_ids_via_hex_encoding() {
     let (projects, root) = temp_projects();
     fs::create_dir_all(projects.join("p-1").join("assets")).expect("建项目资产目录");
     fs::write(projects.join("p-1").join("assets").join("a.png"), b"PNG").expect("写项目媒体");
-    for opaque in ["bad]id", "资产-深", &"x".repeat(200)] {
+    for opaque in [
+        "bad]id",
+        "资产-深",
+        &"x".repeat(200),
+        "100%",
+        "..",
+        ".",
+        r"back\slash",
+    ] {
         write_project_doc_raw(
             &projects,
             "p-1",
@@ -318,40 +331,38 @@ fn project_media_serves_opaque_asset_ids_via_percent_encoding() {
     cleanup(&root);
 }
 
-/// URL 解析侧同域：编码后的不透明 id 经 URI 解析还原；不可分段的 `/`
-/// （编码即改变段结构）与非法百分号序列在命令/解析入口拒绝——路径穿越
-/// 在解析层闭环。
+/// URL 解析侧同域：hex 编码后的不透明 id 经 URI 解析无损还原；仅空白 id
+/// 拒绝（§8.1 trim 口径）。hex 输出恒为 `[0-9a-f]`，URL 不得携带原始
+/// Unicode/百分号/路径分隔符。
 #[test]
-fn project_media_uri_round_trips_opaque_ids_and_rejects_unencodable() {
-    let url = opaque_media_url(
-        &MediaScope::Project {
-            project_id: "p-1".into(),
-        },
-        "bad]id",
-    );
-    let (scope, id) = parse_media_uri(&media_uri(&url)).expect("编码 URL 应可解析");
-    assert_eq!(
-        scope,
-        MediaScope::Project {
-            project_id: "p-1".into()
-        }
-    );
-    assert_eq!(id, "bad]id");
-    // 百分号编码的 Unicode id 往返
-    let url = opaque_media_url(
-        &MediaScope::Project {
-            project_id: "p-1".into(),
-        },
-        "资产-深",
-    );
-    assert!(!url.contains("资产"), "URL 不得携带原始 Unicode：{url}");
-    let (_scope, id) = parse_media_uri(&media_uri(&url)).expect("Unicode id 应往返");
-    assert_eq!(id, "资产-深");
-    // 库 scope 保持 ASCII 白名单：编码形式依旧拒绝
+fn project_media_uri_round_trips_opaque_ids_hex_and_rejects_blank() {
+    for opaque in ["bad]id", "资产-深", "100%", "..", r"back\slash"] {
+        let url = opaque_media_url(
+            &MediaScope::Project {
+                project_id: "p-1".into(),
+            },
+            opaque,
+        );
+        assert!(
+            url.ends_with(&format!("/project/p-1/{}", hex_encode(opaque.as_bytes()))),
+            "URL 未按 hex 承载：{url}"
+        );
+        assert!(
+            !url.contains("资产") && !url.contains('%') && !url.contains(".."),
+            "URL 不得携带原始字符：{url}"
+        );
+        let (scope, id) = parse_media_uri(&media_uri(&url)).expect("编码 URL 应可解析");
+        assert_eq!(
+            scope,
+            MediaScope::Project {
+                project_id: "p-1".into()
+            }
+        );
+        assert_eq!(id, opaque);
+    }
+    // 空白 id 在解析入口拒绝；库 scope 保持 ASCII 白名单
+    assert!(parse_media_uri(&media_uri("pwmedia://localhost/project/p-1/20")).is_err());
     assert!(parse_media_uri(&media_uri("pwmedia://localhost/library/bad%5Did")).is_err());
-    // 项目 scope 的非法百分号序列/不可分段斜杠（编码后破坏段结构）拒绝
-    assert!(parse_media_uri(&media_uri("pwmedia://localhost/project/p-1/bad%GGid")).is_err());
-    assert!(parse_media_uri(&media_uri("pwmedia://localhost/project/p-1/a%2Fb")).is_err());
 }
 
 /// 并发媒体读取闸门（评审修复）：并发读取数受上限约束，释放后可复用——
