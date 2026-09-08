@@ -278,6 +278,11 @@ async function tauriLoad(id: string): Promise<ProjectContent> {
     const { content, migrated, repaired, warnings, reissuedAssetAliases } = parseProject(file, { projectId: id, invalidAssetKeys })
     for (const w of warnings) console.warn(`[projectStore] ${w}`)
     await registerAssetAliases(id, reissuedAssetAliases)
+    // 别名登记的异步 IPC 期间可能又有新保存排队（如编辑器卸载冲刷）：
+    // 顶部链身份检查已失效，此刻修复回写会把旧内容排在较新保存之后反向
+    // 覆盖用户编辑——链身份变化即重启到循环顶（评审修复 P2-6，与读盘
+    // 段守卫同款语义；别名登记幂等，重来无副作用）
+    if (saveChains.get(id) !== chainBefore) continue
     // 迁移或修复发生则写回磁盘（下次打开不再迁移/重复修复）。v1 的可修复
     // 脏数据（空白/重复 id 等）只修在内存时，用户只开不编辑（防抖保存跳过
     // 首帧）会让脏文件长留磁盘，每次打开都重新生成不同的"稳定" id——修复
