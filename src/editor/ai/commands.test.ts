@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { extractBatchJson, validateAiBatch, type AiGraphSnapshot } from './commands'
+import { validateAiBatch, type AiGraphSnapshot } from './commands'
 import { wouldCreateCycle } from '../graphRules'
 
 /** 测试用快照：节拍 n2 → 场景 n1 的两节点剧情流（无资产）。 */
@@ -37,39 +37,6 @@ function richSnap(): AiGraphSnapshot {
     ]),
   }
 }
-
-describe('extractBatchJson', () => {
-  it('从散文与 json 围栏中取最后一个批次', () => {
-    const text = '先解释……\n```json\n{"commands":[{"op":"create_node","nodeType":"beat"}]}\n```\n再补充一句。'
-    const parsed = extractBatchJson(text)
-    expect(parsed).toEqual({ commands: [{ op: 'create_node', nodeType: 'beat' }] })
-  })
-  it('无围栏时直接识别裸批次对象', () => {
-    expect(extractBatchJson('{"commands":[]}')).toEqual({ commands: [] })
-  })
-  it('没有可解析的批次返回 undefined', () => {
-    expect(extractBatchJson('纯文本回复，不改动画布')).toBeUndefined()
-    expect(extractBatchJson('```json\nnot-json\n```')).toBeUndefined()
-  })
-  it('多个围栏只取最后一个；最后一个非法时不回退到前面的合法围栏', () => {
-    expect(extractBatchJson('```json\nnot-json\n```\n```json\n{"commands":[]}\n```')).toEqual({
-      commands: [],
-    })
-    expect(extractBatchJson('```json\n{"commands":[]}\n```\n```json\nnot-json\n```')).toBeUndefined()
-  })
-  it('围栏标记大小写不敏感（```JSON 亦可）', () => {
-    expect(extractBatchJson('```JSON\n{"commands":[]}\n```')).toEqual({ commands: [] })
-  })
-  it('非 json 围栏（如 ```ts）不参与提取', () => {
-    expect(extractBatchJson('```ts\nconst x = 1\n```\n```json\n{"commands":[]}\n```')).toEqual({
-      commands: [],
-    })
-  })
-  it('未闭合的围栏不产出候选；裸批次须为完整文本，混入围栏杂讯则拒绝', () => {
-    expect(extractBatchJson('```json\n{"commands":[]}')).toBeUndefined()
-    expect(extractBatchJson('{"commands":[]}\n```json\nnot-closed')).toBeUndefined()
-  })
-})
 
 describe('validateAiBatch：校验折叠（数据模型 §12，执行前批量预览）', () => {
   it('合法混合批次逐项折叠；commands 保持原始执行顺序', () => {
@@ -942,7 +909,7 @@ describe('validateAiBatch：完整问题收集（评审 5138829847：纠错回�
     expect(v.issues[2]?.message).toContain('未知操作')
   })
 
-  it('失败命令不污染虚拟状态：后续合法命令的问题独立收集（级联引用点名）', () => {
+  it('依赖失败 create 的引用命令按 contingent 跳过，不产生级联假阳性', () => {
     const v = validateAiBatch(
       [
         { op: 'create_node', nodeType: 'beat', data: { label: '立足' }, ref: 'b' },
@@ -951,8 +918,40 @@ describe('validateAiBatch：完整问题收集（评审 5138829847：纠错回�
       snap(),
     )
     expect(v.ok).toBe(false)
+    expect(v.commands).toEqual([])
+    // 只点名 create 自身的字段错误；修复后依赖命令自愈，不诱导模型改写
+    expect(v.issues).toHaveLength(1)
+    expect(v.issues[0]?.message).toContain('label')
+    expect(v.issues.map((i) => i.message).join('\n')).not.toContain('端点不存在')
+  })
+
+  it('与失败前序无关的真实缺失仍独立点名（不过度抑制）', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'create_node', nodeType: 'beat', data: { label: '立足' }, ref: 'b' },
+        { op: 'connect_edge', sourceId: 'zz', targetId: 'n1' },
+      ],
+      snap(),
+    )
     expect(v.issues).toHaveLength(2)
     expect(v.issues[0]?.message).toContain('label')
     expect(v.issues[1]?.message).toContain('端点不存在')
+  })
+
+  it('update_node / delete_node 混合批次： contingent 引用跳过，独立命令照常校验', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'create_node', nodeType: 'beat', data: { summary: '小店开张' }, ref: 'b' },
+        { op: 'update_node', nodeId: 'b', patch: { tone: '紧凑' } },
+        { op: 'update_node', nodeId: 'n1', patch: { time: '🌅 晨' } },
+        { op: 'delete_node', nodeId: 'n2' },
+      ],
+      snap(),
+    )
+    expect(v.ok).toBe(false)
+    // 仅 create 的字段错误；update(b) contingent 跳过，n1 的合法修改与删除正常折叠
+    expect(v.issues).toHaveLength(1)
+    expect(v.issues[0]?.message).toContain('summary')
+    expect(v.items.map((i) => i.kind)).toEqual(['delete', 'update'])
   })
 })

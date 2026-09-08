@@ -122,6 +122,9 @@ const NODE_TYPE_LABELS: Record<string, string> = {
  */
 const NODE_FIELD_KEYS = AI_FIELD_KEYS
 const OP_LABELS = { create: '创建', update: '修改', delete: '删除', connect: '连线', disconnect: '断开' }
+
+/** 折叠期新建节点的虚拟 id（不进画布，仅同批 ref 解析与 contingent 判定用）。 */
+const virtualIdOf = (index: number): string => `__new__:${index}`
 const EDGE_KIND_LABELS: Record<string, string> = {
   sequence: '剧情流',
   branch: '分支出口',
@@ -129,58 +132,9 @@ const EDGE_KIND_LABELS: Record<string, string> = {
 }
 
 /**
- * 从助手回复中提取批次对象：优先取最后一个 ```json 围栏，
- * 其次裸 `{"commands":[...]}` 前缀。无法解析返回 undefined（纯讨论回复）。
+ * 从助手回复文本提取批次对象的解析在 batchText.ts（围栏回退通道）；
+ * 本模块消费已解析的 commands 数组，负责折叠校验与执行形态。
  */
-
-/** 取最后一个 ```json 围栏的正文；无闭合围栏返回 null。
- * 用 indexOf 线性扫描等价替代 /```json\s*([\s\S]*?)```/gi 的惰性匹配，
- * 消除超线性回溯（SonarQube S8786）；大小写不敏感与「取最后一个」
- * 语义由 extractBatchJson 测试钉住。标记大小写不敏感按码元逐段比较，
- * 避免 toLowerCase 改变字符串长度导致下标漂移（如 İ）。 */
-function lastFenceBody(text: string): string | null {
-  let last: string | null = null
-  let from = 0
-  for (;;) {
-    const open = text.indexOf('```', from)
-    if (open === -1) break
-    const afterTicks = open + 3
-    if (text.slice(afterTicks, afterTicks + 4).toLowerCase() !== 'json') {
-      from = afterTicks
-      continue
-    }
-    let bodyStart = afterTicks + 4
-    while (bodyStart < text.length && /\s/.test(text[bodyStart])) bodyStart++
-    const close = text.indexOf('```', bodyStart)
-    if (close === -1) break // 之后不再有 ```，自然也不再有可闭合的围栏
-    last = text.slice(bodyStart, close)
-    from = close + 3
-  }
-  return last
-}
-
-export function extractBatchJson(text: string): { commands: unknown[] } | undefined {
-  const last = lastFenceBody(text)
-  const candidates: string[] = []
-  if (last !== null) candidates.push(last)
-  const trimmed = text.trim()
-  if (trimmed.startsWith('{"commands"')) candidates.push(trimmed)
-  for (const raw of candidates) {
-    try {
-      const parsed: unknown = JSON.parse(raw)
-      if (isBatchShape(parsed)) return parsed
-    } catch {
-      // 继续尝试下一个候选
-    }
-  }
-  return undefined
-}
-
-function isBatchShape(v: unknown): v is { commands: unknown[] } {
-  return (
-    typeof v === 'object' && v !== null && Array.isArray((v as { commands?: unknown }).commands)
-  )
-}
 
 function plainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -217,7 +171,8 @@ function checkFieldKeys(nodeType: string, fields: Record<string, unknown>): stri
  * 的完整问题清单，不因首错短路——纠错回喂与预览卡都依赖完整清单，
  * 模型单轮即可修完所有被点名命令，否则多错误批次会在重试预算内逐个
  * 暴露、必然耗尽。失败的折叠在任何状态变更前返回，后续命令继续折叠
- * 不受污染（对已失败命令的引用作为独立问题点名）。
+ * 不受污染；引用已失败 create 的依赖命令按 contingent 跳过本轮校验
+ * （合法性随前序修复自愈），不进问题清单以免诱导模型改写本正确的命令。
  *
  * 复杂度拆解（S3776）：每个 op 的折叠逻辑是独立的顶层函数
  * （foldCreate/foldUpdate/foldDelete/foldEdge），共享的虚拟图状态
@@ -258,6 +213,17 @@ function resolveRef(st: FoldState, cmd: Record<string, unknown>, key: string): s
   if (st.exists.has(s)) return s
   const owner = st.refOwner.get(s)
   return owner !== undefined && st.exists.has(owner) ? owner : null
+}
+
+/** 引用是否指向本批校验失败的 create（ref 已登记但未进虚拟图）。此类
+ * 命令的合法性随前序修复自动恢复，调用方应跳过校验且不点名——完整
+ * 清单只收集可独立判断的问题，否则「端点不存在」级联假阳性会诱导
+ * 模型删除或改写本来正确的依赖命令。 */
+function isContingentRef(st: FoldState, cmd: Record<string, unknown>, key: string): boolean {
+  const s = asText(cmd[key])
+  if (s === '' || st.exists.has(s)) return false
+  const owner = st.refOwner.get(s)
+  return owner !== undefined && !st.exists.has(owner)
 }
 
 /** 入站归一化（信任边界）：列表项稳定 id 补齐（S6479）。
@@ -497,7 +463,7 @@ function foldCreate(st: FoldState, cmd: Record<string, unknown>, index: number):
   }
   const typeLabel = NODE_TYPE_LABELS[nodeType]
   const name = asText(data.name) || asText(data.prompt) || '未命名'
-  const virtualId = `__new__:${index}`
+  const virtualId = virtualIdOf(index)
   const refName = typeof cmd.ref === 'string' ? cmd.ref.trim() : ''
   st.exists.add(virtualId)
   st.labels.set(virtualId, `${typeLabel} · ${name}（新建）`)
@@ -518,6 +484,7 @@ function foldCreate(st: FoldState, cmd: Record<string, unknown>, index: number):
 }
 
 function foldUpdate(st: FoldState, cmd: Record<string, unknown>, index: number): void {
+  if (isContingentRef(st, cmd, 'nodeId')) return
   const id = resolveRef(st, cmd, 'nodeId')
   if (!id) return st.fail(index, `节点不存在：${asText(cmd.nodeId)}`)
   const nodeType = st.types.get(id)
@@ -589,6 +556,7 @@ function foldBranchCascade(
 }
 
 function foldDelete(st: FoldState, cmd: Record<string, unknown>, index: number): void {
+  if (isContingentRef(st, cmd, 'nodeId')) return
   const id = resolveRef(st, cmd, 'nodeId')
   if (!id) return st.fail(index, `节点不存在：${asText(cmd.nodeId)}`)
   if (st.types.get(id) === 'image') {
@@ -650,13 +618,31 @@ function edgePortOf(
   return { handle: null, optionIndex: undefined }
 }
 
-/** connect_edge / disconnect_edge 的折叠校验。 */
-function foldEdge(st: FoldState, cmd: Record<string, unknown>, index: number, op: string): void {
+/** 端点解析与守卫（foldEdge 拆出，S3776）：引用依赖失败前序时静默
+ * 跳过（返回 'contingent'）；真实缺失记入问题清单（返回 'missing'）；
+ * 合法时返回解析出的端点对。 */
+function resolveEndpoints(
+  st: FoldState,
+  cmd: Record<string, unknown>,
+  index: number,
+): { src: string; dst: string } | 'contingent' | 'missing' {
+  if (isContingentRef(st, cmd, 'sourceId') || isContingentRef(st, cmd, 'targetId')) {
+    return 'contingent'
+  }
   const src = resolveRef(st, cmd, 'sourceId')
   const dst = resolveRef(st, cmd, 'targetId')
   if (!src || !dst) {
-    return st.fail(index, `端点不存在：${asText(cmd.sourceId)} → ${asText(cmd.targetId)}`)
+    st.fail(index, `端点不存在：${asText(cmd.sourceId)} → ${asText(cmd.targetId)}`)
+    return 'missing'
   }
+  return { src, dst }
+}
+
+/** connect_edge / disconnect_edge 的折叠校验。 */
+function foldEdge(st: FoldState, cmd: Record<string, unknown>, index: number, op: string): void {
+  const ends = resolveEndpoints(st, cmd, index)
+  if (ends === 'contingent' || ends === 'missing') return
+  const { src, dst } = ends
   const pairLabel = `${st.labels.get(src) ?? '未知节点'} → ${st.labels.get(dst) ?? '未知节点'}`
 
   if (op === 'disconnect_edge') {
@@ -761,8 +747,15 @@ export function validateAiBatch(rawCommands: unknown, graph: AiGraphSnapshot): B
   rawCommands.forEach((raw, index) => {
     if (!plainObject(raw)) return st.fail(index, '条目不是对象')
     const folder = FOLDERS[raw.op as string]
-    if (folder) folder(st, raw, index)
-    else st.fail(index, `未知操作：${String(raw.op)}`)
+    if (!folder) return st.fail(index, `未知操作：${String(raw.op)}`)
+    const issueCountBefore = st.issues.length
+    folder(st, raw, index)
+    // create 失败同样登记其 ref（指向未入图的虚拟 id）：依赖命令据此按
+    // contingent 跳过、随前序修复自愈，而非被误报「节点不存在」
+    if (raw.op === 'create_node' && st.issues.length > issueCountBefore) {
+      const refName = typeof raw.ref === 'string' ? raw.ref.trim() : ''
+      if (refName !== '') st.refOwner.set(refName, virtualIdOf(index))
+    }
   })
 
   const ok = st.issues.length === 0
