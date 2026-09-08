@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import Field from './Field'
+import { useCompositionSafeValue } from './compositionValue'
 import { useNodeEdit } from '../../nodeEdit'
 import { useImageJobs } from '../../imagegen/context'
 import { IMAGE_SIZES } from '../../imagegen/plan'
@@ -30,6 +31,9 @@ export default function ImageNodeForm({ node }: { readonly node: { readonly id: 
   const options = appSettings !== null ? listChatModels(appSettings) : []
   const job = jobOf(node.id)
   const d = node.data
+  const prompt = useCompositionSafeValue(d.prompt, (next) =>
+    patchNode(node.id, { nodeType: 'image', patch: { prompt: next } }),
+  )
 
   return (
     <>
@@ -37,9 +41,8 @@ export default function ImageNodeForm({ node }: { readonly node: { readonly id: 
         <textarea
           className="pw-set-input"
           rows={4}
-          value={d.prompt}
           placeholder="要生成的画面：角色定妆、场景概念、分镜关键帧…"
-          onChange={(e) => patchNode(node.id, { nodeType: 'image', patch: { prompt: e.target.value } })}
+          {...prompt}
         />
       </Field>
       <Field label="模型（空 = 跟随默认图像模型）">

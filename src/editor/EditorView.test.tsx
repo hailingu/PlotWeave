@@ -84,3 +84,77 @@ describe('EditorView 装配（issue #35）', () => {
     expect(panelOf()?.className).toContain('pw-panel-closed')
   })
 })
+
+/**
+ * 记录 React 对受控 input 的 DOM 回写：包装实例上的 value 描述符
+ * （React value tracker）。testing-library 的 fireEvent 走原型 setter，
+ * 因此这里只捕获框架回写，不混入模拟按键本身。
+ */
+function trackControlledWrites(input: HTMLInputElement): string[] {
+  const writes: string[] = []
+  let descriptor: PropertyDescriptor | undefined
+  for (let node: object | null = input; node !== null; node = Object.getPrototypeOf(node)) {
+    descriptor = Object.getOwnPropertyDescriptor(node, 'value')
+    if (descriptor) break
+  }
+  const read = descriptor?.get
+  const write = descriptor?.set
+  if (!read || !write) throw new Error('input 缺少 value 访问器，无法观测受控回写')
+  Object.defineProperty(input, 'value', {
+    configurable: true,
+    get: () => read.call(input) as string,
+    set: (next: string) => {
+      writes.push(String(next))
+      write.call(input, next)
+    },
+  })
+  return writes
+}
+
+const beatNode = {
+  id: 'bt1',
+  type: 'beat',
+  position: { x: 0, y: 0 },
+  data: { name: '真相逼近', tone: '' },
+} as unknown as CanvasNode
+
+describe('IME 组合输入（issue #42 真实更新链路）', () => {
+  const IME_PROJECT: EditorProjectContent = {
+    id: 'p-ime',
+    name: '组合输入',
+    nodes: [beatNode],
+    edges: [],
+    settings: { characters: [], locations: [] },
+  }
+
+  it('组合期间不回写受控值；上屏后中文保留且输入框未重挂载', () => {
+    render(
+      <EditorView
+        project={IME_PROJECT}
+        onBackHome={vi.fn()}
+        onRenameProject={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    )
+    // happy-dom 画布无尺寸，React Flow 给节点挂 visibility:hidden——
+    // getByRole 会把节点子树判为不可访问，按标签取（节点仍在 DOM 中）
+    fireEvent.click(screen.getByLabelText('节奏卡设置'))
+    const tone = screen.getByLabelText('基调') as HTMLInputElement
+    const writes = trackControlledWrites(tone)
+
+    fireEvent.compositionStart(tone)
+    for (const pinyin of ['q', 'qi', 'qin', 'qing']) {
+      fireEvent.input(tone, { target: { value: pinyin }, isComposing: true })
+    }
+    // 节点补丁经 React Flow 内部仓库在 effect 中同步，受控值天然滞后一帧；
+    // 组合期间任何回写（哪怕写回旧值）都会在 WebKit 打断组合、残留拼音
+    expect(writes).toEqual([])
+
+    fireEvent.input(tone, { target: { value: '清冷' } })
+    fireEvent.compositionEnd(tone, { data: '清冷' })
+
+    expect(screen.getByLabelText('基调')).toBe(tone)
+    expect(tone.value).toBe('清冷')
+    expect(screen.getByText('基调：清冷')).toBeTruthy()
+  })
+})

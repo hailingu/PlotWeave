@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import Field from './Field'
 import ImageNodeForm from './ImageNodeForm'
+import { useCompositionSafeValue } from './compositionValue'
 import { useNodeEdit } from '../../nodeEdit'
 import type { ProjectSettings } from '../../settings'
 import { uid } from '../../../uid'
@@ -9,6 +10,7 @@ import type { ProjectContent } from '../../../model/content'
 import type {
   BeatNodeData,
   BranchNodeData,
+  BranchOption,
   DialogueLine,
   DialogueNodeData,
   ImageNodeData,
@@ -145,13 +147,18 @@ function SceneCastChips({
 }
 
 /** 场景表单：名称/地点/时间/天气/内外景/梗概/出场角色（设定集引用切换）。
- * patch 回调在表单内收口 nodeType 判别字段，字段更新保持单行表达。 */
+ * patch 回调在表单内收口 nodeType 判别字段，字段更新保持单行表达；
+ * 自由文本字段经 useCompositionSafeValue 缓冲中文组合输入（issue #42）。 */
 function SceneForm({ node, settings }: { readonly node: Extract<PanelNode, { type: 'scene' }>; readonly settings: ProjectSettings }) {
   const { patchNode } = useNodeEdit()
   const d = node.data
   // PatchShape 已剥离索引签名（issue 16）：本地回调与判别命令同严——
   // 宽键（如 scene 表单混入对白的 lines）在此即编译失败
   const patch = (p: PatchShape<SceneNodeData>) => patchNode(node.id, { nodeType: 'scene', patch: p })
+  const name = useCompositionSafeValue(d.name, (next) => patch({ name: next }))
+  const time = useCompositionSafeValue(d.time, (next) => patch({ time: next }))
+  const weather = useCompositionSafeValue(d.weather ?? '', (next) => patch({ weather: next }))
+  const synopsis = useCompositionSafeValue(d.synopsis, (next) => patch({ synopsis: next }))
   const toggleCharacter = (id: string) => {
     const on = d.characterIds.includes(id)
     patch({
@@ -161,7 +168,7 @@ function SceneForm({ node, settings }: { readonly node: Extract<PanelNode, { typ
   return (
     <>
       <Field label="名称">
-        <input className="pw-set-input" value={d.name} onChange={(e) => patch({ name: e.target.value })} />
+        <input className="pw-set-input" {...name} />
       </Field>
       <Field label="场次">
         <input
@@ -197,25 +204,15 @@ function SceneForm({ node, settings }: { readonly node: Extract<PanelNode, { typ
           </select>
         </Field>
         <Field label="时间">
-          <input className="pw-set-input" value={d.time} onChange={(e) => patch({ time: e.target.value })} />
+          <input className="pw-set-input" {...time} />
         </Field>
       </div>
       <Field label="天气">
-        <input
-          className="pw-set-input"
-          value={d.weather ?? ''}
-          placeholder="可选"
-          onChange={(e) => patch({ weather: e.target.value })}
-        />
+        <input className="pw-set-input" placeholder="可选" {...weather} />
       </Field>
       <SceneInteriorSegment interior={d.interior} onPick={(value) => patch({ interior: value })} />
       <Field label="梗概">
-        <textarea
-          className="pw-set-input"
-          rows={3}
-          value={d.synopsis}
-          onChange={(e) => patch({ synopsis: e.target.value })}
-        />
+        <textarea className="pw-set-input" rows={3} {...synopsis} />
       </Field>
       <SceneCastChips characterIds={d.characterIds} characters={settings.characters} onToggle={toggleCharacter} />
       <EpisodeField nodeType="scene" nodeId={node.id} episodeNo={d.episodeNo} />
@@ -223,26 +220,22 @@ function SceneForm({ node, settings }: { readonly node: Extract<PanelNode, { typ
   )
 }
 
-/** 节奏卡表单：内容 + 基调。 */
+/** 节奏卡表单：内容 + 基调（自由文本缓冲中文组合输入，issue #42）。 */
 function BeatForm({ node }: { readonly node: Extract<PanelNode, { type: 'beat' }> }) {
   const { patchNode } = useNodeEdit()
+  const d = node.data
+  const patch = (p: PatchShape<BeatNodeData>) => patchNode(node.id, { nodeType: 'beat', patch: p })
+  const name = useCompositionSafeValue(d.name, (next) => patch({ name: next }))
+  const tone = useCompositionSafeValue(d.tone, (next) => patch({ tone: next }))
   return (
     <>
       <Field label="内容">
-        <input
-          className="pw-set-input"
-          value={node.data.name}
-          onChange={(e) => patchNode(node.id, { nodeType: 'beat', patch: { name: e.target.value } })}
-        />
+        <input className="pw-set-input" {...name} />
       </Field>
       <Field label="基调">
-        <input
-          className="pw-set-input"
-          value={node.data.tone}
-          onChange={(e) => patchNode(node.id, { nodeType: 'beat', patch: { tone: e.target.value } })}
-        />
+        <input className="pw-set-input" {...tone} />
       </Field>
-      <EpisodeField nodeType="beat" nodeId={node.id} episodeNo={node.data.episodeNo} />
+      <EpisodeField nodeType="beat" nodeId={node.id} episodeNo={d.episodeNo} />
     </>
   )
 }
@@ -262,6 +255,7 @@ function DialogueLineRow({
   readonly onPatch: (patch: Partial<DialogueLine>) => void
   readonly onRemove: () => void
 }) {
+  const text = useCompositionSafeValue(line.text, (next) => onPatch({ text: next }))
   return (
     <div className="pw-set-line">
       <div className="pw-set-line-bar">
@@ -301,9 +295,8 @@ function DialogueLineRow({
       </div>
       <input
         className="pw-set-input"
-        value={line.text}
         placeholder={line.kind === 'action' ? '动作描述…' : '台词内容…'}
-        onChange={(e) => onPatch({ text: e.target.value })}
+        {...text}
       />
     </div>
   )
@@ -322,12 +315,13 @@ function DialogueForm({
   const defaultSpeaker = settings.characters[0]?.id
   const d = node.data
   const patch = (p: PatchShape<DialogueNodeData>) => patchNode(node.id, { nodeType: 'dialogue', patch: p })
+  const name = useCompositionSafeValue(d.name, (next) => patch({ name: next }))
   const patchLine = (i: number, linePatch: Partial<DialogueLine>) =>
     patch({ lines: d.lines.map((l, idx) => (idx === i ? { ...l, ...linePatch } : l)) })
   return (
     <>
       <Field label="名称">
-        <input className="pw-set-input" value={d.name} onChange={(e) => patch({ name: e.target.value })} />
+        <input className="pw-set-input" {...name} />
       </Field>
       <div className="pw-set-label">台词</div>
       {d.lines.map((line, i) => (
@@ -356,50 +350,65 @@ function DialogueForm({
   )
 }
 
+/** 单个分支选项行（编号、删除、文案输入）：BranchForm 拆出的分区，
+ * 文案输入经 useCompositionSafeValue 缓冲中文组合输入（issue #42）。 */
+function BranchOptionRow({
+  option,
+  index,
+  onLabel,
+  onRemove,
+}: {
+  readonly option: BranchOption
+  readonly index: number
+  readonly onLabel: (label: string) => void
+  readonly onRemove: () => void
+}) {
+  const label = useCompositionSafeValue(option.label, onLabel)
+  return (
+    <div className="pw-set-line">
+      <div className="pw-set-line-bar">
+        <span className="pw-set-optno">{String.fromCodePoint(65 + index)}</span>
+        <span className="pw-sp" />
+        <button type="button" className="pw-set-x" aria-label="删除此选项" onClick={onRemove}>
+          ✕
+        </button>
+      </div>
+      <input className="pw-set-input" {...label} />
+    </div>
+  )
+}
+
 /** 分支表单：问句 + 选项增删（排序随后续任务）。 */
 function BranchForm({ node }: { readonly node: Extract<PanelNode, { type: 'branch' }> }) {
   const { patchNode } = useNodeEdit()
   const d = node.data
+  const prompt = useCompositionSafeValue(d.prompt, (next) =>
+    patchNode(node.id, { nodeType: 'branch', patch: { prompt: next } }),
+  )
   return (
     <>
       <Field label="问句">
-        <input
-          className="pw-set-input"
-          value={d.prompt}
-          onChange={(e) => patchNode(node.id, { nodeType: 'branch', patch: { prompt: e.target.value } })}
-        />
+        <input className="pw-set-input" {...prompt} />
       </Field>
       <div className="pw-set-label">选项</div>
       {d.options.map((option, i) => (
-        <div key={option.id} className="pw-set-line">
-          <div className="pw-set-line-bar">
-            <span className="pw-set-optno">{String.fromCodePoint(65 + i)}</span>
-            <span className="pw-sp" />
-            <button
-              type="button"
-              className="pw-set-x"
-              aria-label="删除此选项"
-              onClick={() =>
-                patchNode(node.id, {
-                  nodeType: 'branch',
-                  patch: { options: d.options.filter((_, idx) => idx !== i) },
-                })
-              }
-            >
-              ✕
-            </button>
-          </div>
-          <input
-            className="pw-set-input"
-            value={option.label}
-            onChange={(e) =>
-              patchNode(node.id, {
-                nodeType: 'branch',
-                patch: { options: d.options.map((o, idx) => (idx === i ? { ...o, label: e.target.value } : o)) },
-              })
-            }
-          />
-        </div>
+        <BranchOptionRow
+          key={option.id}
+          option={option}
+          index={i}
+          onLabel={(label) =>
+            patchNode(node.id, {
+              nodeType: 'branch',
+              patch: { options: d.options.map((o, idx) => (idx === i ? { ...o, label } : o)) },
+            })
+          }
+          onRemove={() =>
+            patchNode(node.id, {
+              nodeType: 'branch',
+              patch: { options: d.options.filter((_, idx) => idx !== i) },
+            })
+          }
+        />
       ))}
       <button
         type="button"
@@ -450,6 +459,7 @@ function ShotRefRow({
   readonly onRemove: () => void
   readonly onLabel: (text: string) => void
 }) {
+  const label = useCompositionSafeValue(shotRef.label ?? '', onLabel)
   return (
     <div className="pw-set-line">
       <div className="pw-set-line-bar">
@@ -480,13 +490,12 @@ function ShotRefRow({
       </div>
       <input
         className="pw-set-input"
-        value={shotRef.label ?? ''}
         placeholder={
           shotRef.assetId !== undefined
             ? `资产引用 ${shotRef.assetId}——输入文字将转为自由文案`
             : undefined
         }
-        onChange={(e) => onLabel(e.target.value)}
+        {...label}
       />
     </div>
   )
@@ -498,6 +507,9 @@ function ShotForm({ node }: { readonly node: Extract<PanelNode, { type: 'shot' }
   const { patchNode, assets } = useNodeEdit()
   const d = node.data
   const patch = (p: PatchShape<ShotNodeData>) => patchNode(node.id, { nodeType: 'shot', patch: p })
+  const size = useCompositionSafeValue(d.size, (next) => patch({ size: next }))
+  const picture = useCompositionSafeValue(d.picture, (next) => patch({ picture: next }))
+  const prompt = useCompositionSafeValue(d.prompt, (next) => patch({ prompt: next }))
   return (
     <>
       <div className="pw-set-cols">
@@ -515,24 +527,14 @@ function ShotForm({ node }: { readonly node: Extract<PanelNode, { type: 'shot' }
           />
         </Field>
         <Field label="景别">
-          <input className="pw-set-input" value={d.size} onChange={(e) => patch({ size: e.target.value })} />
+          <input className="pw-set-input" {...size} />
         </Field>
       </div>
       <Field label="画面描述">
-        <textarea
-          className="pw-set-input"
-          rows={2}
-          value={d.picture}
-          onChange={(e) => patch({ picture: e.target.value })}
-        />
+        <textarea className="pw-set-input" rows={2} {...picture} />
       </Field>
       <Field label="镜头 PROMPT">
-        <textarea
-          className="pw-set-input"
-          rows={3}
-          value={d.prompt}
-          onChange={(e) => patch({ prompt: e.target.value })}
-        />
+        <textarea className="pw-set-input" rows={3} {...prompt} />
       </Field>
       <div className="pw-set-label">引用位</div>
       {d.refs.map((ref, i) => (
@@ -615,6 +617,7 @@ export default function NodeSettingsPanel({ node }: { readonly node: PanelNode }
  * 双击进入编辑（节点名称），或单击进入（工具栏项目名，singleClick）；
  * Enter/失焦提交、Esc 取消；空值不提交。非编辑态是原生 button：
  * Tab 可聚焦，Enter/Space 进入编辑（S1082/S6848）。
+ * 组合输入天然安全：编辑值只落本地 draft，提交在失焦/Enter（issue #42）。
  */
 export function EditableName({
   value,
