@@ -1,9 +1,14 @@
-import { useCallback, useEffect, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useState, type ReactNode } from 'react'
 import HomePage from './home/HomePage'
 import { projectStore, type ProjectContent } from './projectStore'
-import EditorView from './editor/EditorView'
-import SettingsView from './settings/SettingsView'
 import type { ProjectSummary } from './home/projects'
+
+/** 编辑器视图按域惰性加载：React Flow 的运行时引用全部封闭在编辑器域内，
+ * 拆出入口 chunk 后冷启动只解析首页所需代码（issue #34）。 */
+const EditorView = lazy(() => import('./editor/EditorView'))
+
+/** 设置视图低频使用（⌘, 叠加打开），同样惰性加载不占入口 chunk。 */
+const SettingsView = lazy(() => import('./settings/SettingsView'))
 
 /** 编辑器态：已加载的项目（id + 名称 + 画布文档）。 */
 interface OpenProject {
@@ -130,24 +135,20 @@ export default function App() {
     [refreshProjects],
   )
 
+  let view: ReactNode
   if (settingsOpen) {
-    return <SettingsView onClose={() => setSettingsOpen(false)} />
-  }
-
-  if (openProject) {
-    return (
-      <EditorView
-        key={openProject.id}
-        project={{ id: openProject.id, ...openProject.doc }}
-        onBackHome={handleBackHome}
-        onRenameProject={handleEditorRename}
-        onOpenSettings={() => setSettingsOpen(true)}
-        onSave={handleSave(openProject.id)}
-      />
-    )
-  }
-  return (
-    <HomePage
+    view = <SettingsView onClose={() => setSettingsOpen(false)} />
+  } else if (openProject) {
+    view = <EditorView
+      key={openProject.id}
+      project={{ id: openProject.id, ...openProject.doc }}
+      onBackHome={handleBackHome}
+      onRenameProject={handleEditorRename}
+      onOpenSettings={() => setSettingsOpen(true)}
+      onSave={handleSave(openProject.id)}
+    />
+  } else {
+    view = <HomePage
       projects={projects}
       loading={loading}
       onOpenProject={handleOpenProject}
@@ -156,5 +157,6 @@ export default function App() {
       onDuplicateProject={(id) => void handleDuplicateProject(id)}
       onDeleteProject={(id) => void handleDeleteProject(id)}
     />
-  )
+  }
+  return <Suspense fallback={null}>{view}</Suspense>
 }
