@@ -1294,3 +1294,35 @@ describe('contingent 出口连线入暂定拓扑（评审 5143607106）', () => 
     expect(v.issues[1]?.message).toContain('会造成循环剧情')
   })
 })
+
+describe('暂定出口边随选项表变化重算（评审 5143770306）', () => {
+  it('后续 options 覆盖清空选项后，暂定出口边失效，反向连线不再误报成环', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'update_node', nodeId: 'b1', patch: { options: [{ label: 5 }] } },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
+        { op: 'update_node', nodeId: 'b1', patch: { options: [] } },
+        { op: 'connect_edge', sourceId: 's1', targetId: 'b1' },
+      ],
+      richSnap(),
+    )
+    // 空数组覆盖级联删除全部出口：暂定边随选项表失效，s1 → b1 实际合法
+    expect(v.issues).toHaveLength(1)
+    expect(v.issues[0]?.message).toContain('异型')
+  })
+
+  it('后续覆盖仍保留该选项位时，暂定出口边继续参与成环判定', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'update_node', nodeId: 'b1', patch: { options: [{ label: 5 }] } },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
+        { op: 'update_node', nodeId: 'b1', patch: { options: ['保留首项'] } },
+        { op: 'connect_edge', sourceId: 's1', targetId: 'b1' },
+      ],
+      richSnap(),
+    )
+    expect(v.issues).toHaveLength(2)
+    expect(v.issues[0]?.message).toContain('异型')
+    expect(v.issues[1]?.message).toContain('会造成循环剧情')
+  })
+})

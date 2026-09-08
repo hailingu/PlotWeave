@@ -192,6 +192,9 @@ interface FoldState {
   /** branch 节点 id → 选项列表（校验 optionIndex 并解析稳定选项 id 端口）。 */
   branchOptions: Map<string, Array<{ id: string; label: string }>>
   virtualEdges: VirtualEdge[]
+  /** 依赖失败 options 更新的暂定出口边（端点与选项下标已确定、句柄待解析；
+   * 生效与否按当前选项表派生，见 activeTentativeEdges）。 */
+  tentativeEdges: Array<{ source: string; target: string; optionIndex: number }>
   /** 本批尚未删除的节点 id（含 __new__ 虚拟 id）。 */
   exists: Set<string>
   /** ref 别名 → 所属节点 id。 */
@@ -522,13 +525,9 @@ function foldConnectEdge(
   // 剧情流环检测——环只可能出现在横向剧情流上
   if (kind !== 'attach' && cycleContingent(st, cmd, index, src, dst, pairLabel)) return
   // 独立约束全部通过：剩余校验随前序修复自愈，本轮不折叠不点名。端点已
-  // 确定时仍以无句柄暂定边入拓扑（选项句柄待前序修复后解析）：后续连线的
-  // 成环/重复/宿主判定按「该连线生效」评估，不因本轮省略而漏报独立可判定
-  // 的错误
-  if (optionContingent) {
-    st.virtualEdges.push({ source: src, target: dst, sourceHandle: null, type: 'branch' })
-    return
-  }
+  // 确定时登记暂定出口边（选项句柄待前序修复后解析）：后续连线的成环判定
+  // 按「该连线生效」评估，不因本轮省略而漏报独立可判定的错误
+  if (optionContingent) return registerTentativeEdge(st, cmd, src, dst)
   st.virtualEdges.push({
     source: src,
     target: dst,
@@ -551,6 +550,15 @@ function foldConnectEdge(
   })
 }
 
+/** contingent 出口连线登记（foldConnectEdge 拆出，S3776）：optionIndex
+ * 非非负整数时不入暂定拓扑，避免制造成环假阳性。 */
+function registerTentativeEdge(st: FoldState, cmd: Record<string, unknown>, src: string, dst: string): void {
+  const idx = cmd.optionIndex
+  if (typeof idx === 'number' && Number.isInteger(idx) && idx >= 0) {
+    st.tentativeEdges.push({ source: src, target: dst, optionIndex: idx })
+  }
+}
+
 /** 成环守卫（foldConnectEdge 拆出，S3776）：非 attach 连线加环检查。
  * 经更长路径成环仍独立点名；同对断线在本批失败且其残留边确实参与这条环
  * （端点写反场景）时 contingent 跳过——残留边随断线修正移除，反转连线
@@ -564,7 +572,9 @@ function cycleContingent(
   dst: string,
   pairLabel: string,
 ): boolean {
-  const flow = st.virtualEdges.filter((e) => e.sourceHandle !== SCENE_SHOT_HANDLE)
+  const flow = [...st.virtualEdges, ...activeTentativeEdges(st)].filter(
+    (e) => e.sourceHandle !== SCENE_SHOT_HANDLE,
+  )
   if (!wouldCreateCycle(flow, src, dst)) {
     return false
   }
@@ -572,6 +582,20 @@ function cycleContingent(
   if (src !== dst && residualBreaksCycle(st, cmd, flow, src, dst)) return true
   st.fail(index, `会造成循环剧情：${pairLabel}`)
   return true
+}
+
+/** 当前生效的暂定出口边：端点仍在、且 optionIndex 落在该分支当前选项表内。
+ * 按需派生而非固化进 virtualEdges——后续 options 覆盖（成功或暂定生效）
+ * 清空/缩短选项表时自动失效，与级联删边同语义，不会残留成环假阳性。 */
+function activeTentativeEdges(st: FoldState): VirtualEdge[] {
+  return st.tentativeEdges
+    .filter(
+      (e) =>
+        st.exists.has(e.source) &&
+        st.exists.has(e.target) &&
+        e.optionIndex < (st.branchOptions.get(e.source)?.length ?? 0),
+    )
+    .map((e) => ({ source: e.source, target: e.target, sourceHandle: null, type: 'branch' }))
 }
 
 /** 虚拟边身份键（端点 + 源端口）：失败断线的残留快照与当前边按此比对。 */
@@ -737,6 +761,7 @@ export function validateAiBatch(rawCommands: unknown, graph: AiGraphSnapshot): B
       graph.nodes.filter((n) => Array.isArray(n.options)).map((n) => [n.id, n.options!]),
     ),
     virtualEdges: graph.edges.map((e) => ({ ...e })),
+    tentativeEdges: [],
     exists: new Set(graph.nodes.map((n) => n.id)),
     refOwner: new Map(),
     failedBranchOptionUpdates: new Set(),
