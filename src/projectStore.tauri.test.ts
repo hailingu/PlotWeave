@@ -333,6 +333,38 @@ describe('tauriLoad：归一化与迁移回写', () => {
     expect(saved.versionless).toBeUndefined()
   })
 
+  it('assets 空白键重发：加载归一化把映射经 register_project_asset_alias 登记到 Rust（issue #31 评审修复 P2-3）', async () => {
+    handlers.set('load_project', () => ({
+      ...modernFile(),
+      assets: {
+        byId: {
+          '': {
+            id: '',
+            relPath: 'assets/pa-1.png',
+            mime: 'image/png',
+            source: 'upload',
+            createdAt: '2026-01-01T00:00:00.000Z',
+          },
+        },
+      },
+    }))
+    handlers.set('save_project', () => undefined)
+    handlers.set('register_project_asset_alias', () => undefined)
+    const { projectStore } = await load()
+    await projectStore.load('p1')
+    const alias = calls.find((c) => c.cmd === 'register_project_asset_alias')
+    expect(alias).toBeDefined()
+    const args = alias?.args as { id: string; blankKey: string; freshId: string }
+    expect(args.id).toBe('p1')
+    expect(args.blankKey).toBe('')
+    expect(args.freshId.trim().length).toBeGreaterThan(0)
+    // 干净 v1 无空白键：不发起登记调用
+    handlers.set('load_project', () => modernFile())
+    calls.length = 0
+    await projectStore.load('p1')
+    expect(calls.some((c) => c.cmd === 'register_project_asset_alias')).toBe(false)
+  })
+
   it('v1 修复型归一化回写 save_project（下次打开不再重复修复）；干净 v1 不回写', async () => {
     handlers.set('load_project', () => ({
       ...modernFile(),

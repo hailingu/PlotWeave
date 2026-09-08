@@ -275,8 +275,9 @@ async function tauriLoad(id: string): Promise<ProjectContent> {
     if (saveChains.get(id) !== chainBefore) continue
     // §11 归一化管线：迁移 + 孤儿边隔离 + 悬空引用标记；
     // projectId 为路径给定的受信 id，供 §11.1 元数据修复覆盖 project.id
-    const { content, migrated, repaired, warnings } = parseProject(file, { projectId: id, invalidAssetKeys })
+    const { content, migrated, repaired, warnings, reissuedAssetAliases } = parseProject(file, { projectId: id, invalidAssetKeys })
     for (const w of warnings) console.warn(`[projectStore] ${w}`)
+    await registerAssetAliases(id, reissuedAssetAliases)
     // 迁移或修复发生则写回磁盘（下次打开不再迁移/重复修复）。v1 的可修复
     // 脏数据（空白/重复 id 等）只修在内存时，用户只开不编辑（防抖保存跳过
     // 首帧）会让脏文件长留磁盘，每次打开都重新生成不同的"稳定" id——修复
@@ -296,6 +297,21 @@ async function tauriLoad(id: string): Promise<ProjectContent> {
 async function tauriSave(id: string, doc: ProjectContent): Promise<void> {
   const { invoke } = await import('@tauri-apps/api/core')
   await invoke('save_project', { id, doc: serializeProject(doc, id) })
+}
+
+/** 登记加载归一化的资产空白键重发别名（issue #31 评审修复 P2-3）：修复
+ * 回写按防抖节律才落盘，期间重发 id 的媒体经盘上条目解析；单条登记失败
+ * 只诊断不阻断加载（下次打开重新归一化重新登记）。 */
+async function registerAssetAliases(id: string, aliases: [string, string][]): Promise<void> {
+  if (aliases.length === 0) return
+  const { invoke } = await import('@tauri-apps/api/core')
+  for (const [blankKey, freshId] of aliases) {
+    try {
+      await invoke('register_project_asset_alias', { id, blankKey, freshId })
+    } catch (err) {
+      console.warn('[projectStore] 资产别名登记失败（媒体在修复回写落盘前暂不可见）', freshId, err)
+    }
+  }
 }
 
 /** §3.1 项目级持久化所有者：保存按项目串行（后保存者的内容永不早于先

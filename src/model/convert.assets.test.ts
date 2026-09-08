@@ -119,6 +119,26 @@ describe('归一化：assets.byId 完整 AssetRef 形状校验（§11.3，Rust �
   })
 })
 
+describe('归一化：assets 空白键重发映射带出（issue #31 评审修复 P2-3）', () => {
+  it('空白键资产重发新 id：映射随解析结果带出，供 Tauri 登记别名（修复回写落盘前媒体可解析）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
+      assets: { byId: Record<string, Record<string, unknown>> }
+    }
+    doc.assets.byId[''] = { ...goodAsset, id: '' }
+    const round = parseProject(doc)
+    const entries = Object.values(round.content.assets?.byId ?? {})
+    expect(entries).toHaveLength(1)
+    const freshId = entries[0].id
+    expect(freshId.trim().length).toBeGreaterThan(0)
+    // 映射形式：[[空白键, 新 id]]——Rust 命令面只收空白键（重发契约）
+    expect(round.reissuedAssetAliases).toEqual([['', freshId]])
+    expect(round.repaired).toBe(true)
+    // 无空白键时映射为空（不带出）
+    const clean = parseProject(serializeProject(mkContent(), 'p-1', NOW))
+    expect(clean.reissuedAssetAliases).toEqual([])
+  })
+})
+
 describe('归一化：时间戳可保存域与对白 @ 提及扫描（§11.1，年份域回退链）', () => {
   it('时间戳规范化结果须仍在可保存域：越出四位年份（+010000）的合法输入按回退链修复，项目不得永久不可保存', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {

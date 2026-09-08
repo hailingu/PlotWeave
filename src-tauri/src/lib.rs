@@ -36,6 +36,9 @@ mod conf;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // 会话新增项目资产登记表（pwmedia 项目 scope 的防抖落盘窗口，
+        // issue #31 评审修复）：应用显式拥有的状态，非进程级可变全局单例
+        .manage(assets::project_media::PendingProjectAssets::new())
         .invoke_handler(tauri::generate_handler![
             store::list_projects,
             store::create_project,
@@ -57,6 +60,7 @@ pub fn run() {
             library::media::get_asset_media_url,
             assets::import_project_asset_from_library,
             assets::validate_project_asset,
+            assets::project_media::register_project_asset_alias,
             imagegen::llm_image_generate,
             imagegen::llm_image_cancel,
         ])

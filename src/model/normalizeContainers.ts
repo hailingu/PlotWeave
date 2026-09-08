@@ -307,6 +307,9 @@ export function normalizeContainers(
   doc: ProjectDocument
   optionIdRemap: Map<string, Map<string, string>>
   nodeIdRemap: Map<string, string>
+  /** 资产空白键重发映射（[空白键, 新 id]，issue #31 评审修复 P2-3）：
+   * 供 Tauri 侧登记别名——修复回写落盘前，重发 id 的媒体经盘上条目解析。 */
+  reissuedAssetAliases: [string, string][]
 } {
   // 父/子容器（异型重置为可遍历空容器；缺失视为空，不警告）
   const containerOf = (v: unknown, warning: string): Record<string, unknown> => {
@@ -362,5 +365,10 @@ export function normalizeContainers(
     // 的普通 Record（键值域已按 §11.1 收口），绑定回文档契约字段
     normalizeEpisodeTitles(titlesRaw, warnings) as unknown as ProjectDocument['episodeTitles'],
   )
-  return { doc, optionIdRemap, nodeIdRemap }
+  return {
+    doc,
+    optionIdRemap,
+    nodeIdRemap,
+    reissuedAssetAliases: [...repairs.blankRemaps.assets],
+  }
 }

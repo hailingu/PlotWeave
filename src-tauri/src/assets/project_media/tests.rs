@@ -15,6 +15,9 @@ fn cap(p: &Path) -> CapDir {
     CapDir::open_ambient_dir(p, ambient_authority()).expect("打开测试根句柄")
 }
 
+/// 本测试专用的登记表实例：唯一项目 id（见各用例）+ 独立实例双保险，
+/// 并行执行不串扰（评审修复）。
+
 /// 唯一临时根：`{tmp}/pw-pmedia-test-{new_id}/` 下含 `projects/` 与
 /// `library/assets/`；返回 (projects, library, root)——root 供清理。
 fn temp_fixture() -> (PathBuf, PathBuf, PathBuf) {
@@ -78,15 +81,24 @@ fn pending_registry_serves_import_before_doc_persists_it() {
     let (projects, library, root) = temp_fixture();
     // 进程级登记表跨测试共享：唯一项目 id 防并行串扰（评审修复）
     let pid = "p-import";
+    let pending = PendingProjectAssets::new();
     write_project_doc_raw(&projects, pid, json!({}));
     seed_library(&library, "la-1", "la-1.png", b"PNGDATA", "image/png");
-    let asset =
-        crate::assets::import_asset_from_library(&cap(&projects), &cap(&library), pid, "la-1")
-            .expect("导入应成功");
+    let asset = crate::assets::import_asset_from_library(
+        &cap(&projects),
+        &cap(&library),
+        pid,
+        "la-1",
+        &pending,
+    )
+    .expect("导入应成功");
     let asset_id = asset.get("id").and_then(Value::as_str).expect("id 缺失");
-    // 文档 byId 仍为空：解析必须走登记表而非文档
-    let (rel, mime) = resolve_project_media_entry(&cap(&projects), pid, asset_id)
-        .expect("防抖窗口内解析应命中登记项");
+    // 防抖落盘窗口内解析必须可重复（URL 早反馈与协议媒体请求是两次独立
+    // 解析，登记项命中不得取出即消费）
+    let _ = resolve_project_media_entry(&cap(&projects), pid, asset_id, &pending)
+        .expect("首次解析应命中登记项");
+    let (rel, mime) = resolve_project_media_entry(&cap(&projects), pid, asset_id, &pending)
+        .expect("重复解析应再次命中登记项");
     assert_eq!(mime, "image/png");
     assert_eq!(
         rel,
@@ -95,8 +107,8 @@ fn pending_registry_serves_import_before_doc_persists_it() {
             .and_then(Value::as_str)
             .expect("relPath 缺失")
     );
-    let (mime, mut file) =
-        open_project_media_with(&cap(&projects), pid, asset_id).expect("应打开登记项媒体");
+    let (mime, mut file) = open_project_media_with(&cap(&projects), pid, asset_id, &pending)
+        .expect("应打开登记项媒体");
     let mut bytes = Vec::new();
     use std::io::Read;
     file.read_to_end(&mut bytes).expect("读取登记项媒体");
@@ -112,11 +124,17 @@ fn doc_hit_drains_pending_entry() {
     let (projects, library, root) = temp_fixture();
     // 并行隔离同上
     let pid = "p-doc-hit";
+    let pending = PendingProjectAssets::new();
     write_project_doc_raw(&projects, pid, json!({}));
     seed_library(&library, "la-1", "la-1.png", b"A", "image/png");
-    let asset =
-        crate::assets::import_asset_from_library(&cap(&projects), &cap(&library), pid, "la-1")
-            .expect("导入应成功");
+    let asset = crate::assets::import_asset_from_library(
+        &cap(&projects),
+        &cap(&library),
+        pid,
+        "la-1",
+        &pending,
+    )
+    .expect("导入应成功");
     let asset_id = asset
         .get("id")
         .and_then(Value::as_str)
@@ -138,11 +156,11 @@ fn doc_hit_drains_pending_entry() {
             "createdAt": "2026-01-01T00:00:00.000Z",
         }}),
     );
-    resolve_project_media_entry(&cap(&projects), pid, &asset_id)
+    resolve_project_media_entry(&cap(&projects), pid, &asset_id, &pending)
         .expect("文档命中应成功并清除登记项");
     // 模拟撤销后重存：文档移除条目，登记项已被清除 → 按不存在拒绝
     write_project_doc_raw(&projects, pid, json!({}));
-    let err = resolve_project_media_entry(&cap(&projects), pid, &asset_id)
+    let err = resolve_project_media_entry(&cap(&projects), pid, &asset_id, &pending)
         .expect_err("登记项清除后应按不存在拒绝");
     assert!(err.contains("不存在"), "意外诊断：{err}");
     cleanup(&root);
@@ -155,17 +173,76 @@ fn pending_media_is_not_served_after_project_deletion() {
     let (projects, library, root) = temp_fixture();
     // 并行隔离同上
     let pid = "p-deleted";
+    let pending = PendingProjectAssets::new();
     write_project_doc_raw(&projects, pid, json!({}));
     seed_library(&library, "la-1", "la-1.png", b"A", "image/png");
-    let asset =
-        crate::assets::import_asset_from_library(&cap(&projects), &cap(&library), pid, "la-1")
-            .expect("导入应成功");
+    let asset = crate::assets::import_asset_from_library(
+        &cap(&projects),
+        &cap(&library),
+        pid,
+        "la-1",
+        &pending,
+    )
+    .expect("导入应成功");
     let asset_id = asset.get("id").and_then(Value::as_str).expect("id 缺失");
     fs::remove_file(projects.join(format!("{pid}.json"))).expect("删除项目控制文件");
     fs::remove_dir_all(projects.join(pid)).expect("删除项目资产目录");
-    let err = resolve_project_media_entry(&cap(&projects), pid, asset_id)
+    let err = resolve_project_media_entry(&cap(&projects), pid, asset_id, &pending)
         .expect_err("已删项目的登记项不得复活媒体");
     assert!(err.contains("项目不存在"), "意外诊断：{err}");
+    cleanup(&root);
+}
+
+/// 加载归一化的空白键重发（评审修复 P2-3）：盘上文档条目键为空白、
+/// 前端 reKeyBlankEntries 重发新 id 后，协议解析经别名映射命中盘上条目
+/// （relPath/mime 以盘上文档为权威）——重发 id 在修复回写落盘前即可见。
+#[test]
+fn reissued_blank_key_alias_resolves_to_disk_entry() {
+    let (projects, _library, root) = temp_fixture();
+    // 并行隔离同上
+    let pid = "p-rekey";
+    let pending = PendingProjectAssets::new();
+    fs::create_dir_all(projects.join(pid).join("assets")).expect("建项目资产目录");
+    fs::write(projects.join(pid).join("assets").join("a.png"), b"PNG").expect("写项目媒体");
+    write_project_doc_raw(
+        &projects,
+        pid,
+        json!({ "": {
+            "id": "",
+            "relPath": "assets/a.png",
+            "mime": "image/png",
+            "source": "upload",
+            "createdAt": "2026-01-01T00:00:00.000Z",
+        }}),
+    );
+    register_reissued_asset_alias(&pending, pid, "", "pa-fresh");
+    let (rel, mime) = resolve_project_media_entry(&cap(&projects), pid, "pa-fresh", &pending)
+        .expect("重发 id 应经别名命中盘上条目");
+    assert_eq!(rel, "assets/a.png");
+    assert_eq!(mime, "image/png");
+    let (mime, mut file) = open_project_media_with(&cap(&projects), pid, "pa-fresh", &pending)
+        .expect("重发 id 应可打开媒体");
+    let mut bytes = Vec::new();
+    use std::io::Read;
+    file.read_to_end(&mut bytes).expect("读取别名媒体");
+    assert_eq!(mime, "image/png");
+    assert_eq!(bytes, b"PNG");
+    cleanup(&root);
+}
+
+/// 别名映射不携带媒体关系（评审修复 P2-3 安全边界）：盘上空白键条目被
+/// 移除（如撤销删除已重存）后，重发 id 按「不存在」拒绝——别名是解析
+/// 辅助而非内容权威，永不复活盘上已消失的资产。
+#[test]
+fn alias_never_overrides_absent_disk_entry() {
+    let (projects, _library, root) = temp_fixture();
+    let pid = "p-alias-gone";
+    let pending = PendingProjectAssets::new();
+    write_project_doc_raw(&projects, pid, json!({}));
+    register_reissued_asset_alias(&pending, pid, "", "pa-fresh");
+    let err = resolve_project_media_entry(&cap(&projects), pid, "pa-fresh", &pending)
+        .expect_err("盘上无对应条目时别名不得复活媒体");
+    assert!(err.contains("不存在"), "意外诊断：{err}");
     cleanup(&root);
 }
 
@@ -176,11 +253,13 @@ fn write_generated_asset_registers_pending_media() {
     let (projects, _library, root) = temp_fixture();
     // 并行隔离同上
     let pid = "p-gen";
+    let pending = PendingProjectAssets::new();
     write_project_doc_raw(&projects, pid, json!({}));
-    let asset = crate::assets::write_generated_asset(&cap(&projects), pid, b"GEN", "image/png")
-        .expect("生成落盘应成功");
+    let asset =
+        crate::assets::write_generated_asset(&cap(&projects), pid, b"GEN", "image/png", &pending)
+            .expect("生成落盘应成功");
     let asset_id = asset.get("id").and_then(Value::as_str).expect("id 缺失");
-    let (rel, mime) = resolve_project_media_entry(&cap(&projects), pid, asset_id)
+    let (rel, mime) = resolve_project_media_entry(&cap(&projects), pid, asset_id, &pending)
         .expect("生成产物应经登记项可解析");
     assert_eq!(mime, "image/png");
     assert_eq!(rel, format!("assets/{asset_id}.png"));
