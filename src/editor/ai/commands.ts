@@ -10,11 +10,8 @@ import {
 } from '../graphRules'
 import { dataPatchOf, type NodeDataPatch } from '../nodes/patch'
 import { AI_FIELD_KEYS } from './nodeFields'
-import { branchOptionsError, nodeValueShapeError, normalizeNodeFields, plainObject } from './patchShape'
-
-/** 全部可写节点类型字段的并集：update 载荷的全局键校验（contingent 路径
- * 也适用的独立判定）与白名单分类型校验的分界。 */
-const ANY_NODE_FIELD_KEYS = new Set<string>(Object.values(AI_FIELD_KEYS).flat())
+import { contingentUpdateIssue, NODE_TYPE_LABELS, payloadIssue } from './payloadCheck'
+import { branchOptionsError, normalizeNodeFields, plainObject } from './patchShape'
 
 /**
  * AI 批量命令的解析与校验（docs/ui-design.md §6 改动预览卡、数据模型 §12）。
@@ -111,20 +108,9 @@ export interface BatchValidation {
   hasDeletes: boolean
 }
 
-const NODE_TYPE_LABELS: Record<string, string> = {
-  scene: '场景',
-  beat: '节奏卡',
-  dialogue: '对白',
-  branch: '分支',
-  shot: '分镜卡',
-}
-
-/**
- * 各类型节点的合法字段白名单（issue 41 起引用 nodeFields.ts 的协议表）：
- * 与 nodes/types.ts 的 *NodeData 一一对应（⚙️ 设置面板可编辑的字段），
- * 工具描述与系统提示由同一来源生成。AI 的 data/patch 出现白名单之外的
- * 字段一律整批拒绝——宁可拒绝也不静默写错字段。
- */
+/** 各类型节点的合法字段白名单（issue 41 起引用 nodeFields.ts 的协议表）：
+ * 与 nodes/types.ts 的 *NodeData 一一对应，工具描述与系统提示同源生成；
+ * 白名单外字段一律整批拒绝——宁可拒绝也不静默写错字段。 */
 const NODE_FIELD_KEYS = AI_FIELD_KEYS
 const OP_LABELS = { create: '创建', update: '修改', delete: '删除', connect: '连线', disconnect: '断开' }
 
@@ -149,20 +135,6 @@ function asText(v: unknown): string {
 function reasonOf(cmd: Record<string, unknown>): string {
   const r = asText(cmd.reason)
   return r ? `：${r}` : ''
-}
-
-/** data/patch 字段白名单校验；返回错误文案或 null。无白名单条目的类型
- * 一律整批拒绝——如 §13 首版的图片节点（AI 命令暂不创建/修改，快照
- * 只读可见）：白名单缺失若放行，update_node 可携任意字段直抵画布
- * （prompt 注入对象后快照/生成即崩，畸形 outputs 落盘重开被静默修复）。 */
-function checkFieldKeys(nodeType: string, fields: Record<string, unknown>): string | null {
-  const allowed = NODE_FIELD_KEYS[nodeType]
-  if (!allowed) {
-    return `${NODE_TYPE_LABELS[nodeType] ?? (nodeType || '未知类型')} 暂不支持 AI 命令修改`
-  }
-  const unknownKeys = Object.keys(fields).filter((k) => !allowed.includes(k))
-  if (unknownKeys.length === 0) return null
-  return `未知字段：${unknownKeys.join('、')}（${NODE_TYPE_LABELS[nodeType]} 允许：${allowed.join('、')}）`
 }
 
 /**
@@ -192,9 +164,9 @@ interface FoldState {
   /** branch 节点 id → 选项列表（校验 optionIndex 并解析稳定选项 id 端口）。 */
   branchOptions: Map<string, Array<{ id: string; label: string }>>
   virtualEdges: VirtualEdge[]
-  /** 依赖失败 options 更新的暂定出口边（端点与选项下标已确定、句柄待解析；
-   * 生效与否按当前选项表派生，见 activeTentativeEdges）。 */
-  tentativeEdges: Array<{ source: string; target: string; optionIndex: number }>
+  /** 依赖失败 options 更新的暂定出口边（端点与稳定选项 id 已确定、句柄待
+   * 解析；生效与否按当前选项表派生，见 activeTentativeEdges）。 */
+  tentativeEdges: Array<{ source: string; target: string; optionId: string }>
   /** 本批尚未删除的节点 id（含 __new__ 虚拟 id）。 */
   exists: Set<string>
   /** ref 别名 → 所属节点 id。 */
@@ -216,7 +188,7 @@ interface FoldState {
 }
 
 /** AI 可补丁的节点类型（NODE_FIELD_KEYS 的键域）：图片节点不在此域
- * （§13 首版 AI 只读）。foldUpdate 经 checkFieldKeys 拒绝白名单外类型后，
+ * （§13 首版 AI 只读）。foldUpdate 经 payloadCheck 拒绝白名单外类型后，
  * 由此谓词收口为字面量联合，供补丁命令的判别化构造（issue 16）。 */
 type AiPatchableType = 'scene' | 'dialogue' | 'beat' | 'branch' | 'shot'
 const isAiPatchableType = (t: string | undefined): t is AiPatchableType =>
@@ -241,43 +213,6 @@ function isContingentRef(st: FoldState, cmd: Record<string, unknown>, key: strin
   if (s === '' || st.exists.has(s)) return false
   const owner = st.refOwner.get(s)
   return owner !== undefined && !st.exists.has(owner)
-}
-
-/** 分类型写载荷校验（create 的 data 与 update 的 patch 共用同一序列）：
- * 字段键白名单 → 值形状 → 分支选项成员。返回错误文案或 null。 */
-function payloadIssue(
-  nodeType: string,
-  fields: Record<string, unknown>,
-  assets: ReadonlyMap<string, string>,
-): string | null {
-  const keyError = checkFieldKeys(nodeType, fields)
-  if (keyError) return keyError
-  const shapeError = nodeValueShapeError(nodeType, fields, assets)
-  if (shapeError) return shapeError
-  if (nodeType === 'branch' && Array.isArray(fields.options)) {
-    return branchOptionsError(fields.options as unknown[])
-  }
-  return null
-}
-
-/** contingent update 的载荷独立判定（目标尚未入虚拟图）：任何节点类型都
- * 不支持的字段恒非法；失败 create 已登记暂定类型时再按该类型的完整写载荷
- * 序列校验——修正 data 不改变已声明的类型语义，这些错误即使 create 修复后
- * 仍然存在。返回错误文案或 null。 */
-function contingentUpdateIssue(
-  st: FoldState,
-  cmd: Record<string, unknown>,
-  patch: Record<string, unknown>,
-): string | null {
-  const owner = st.refOwner.get(asText(cmd.nodeId))
-  const nodeType = owner === undefined ? undefined : st.types.get(owner)
-  if (nodeType === undefined) {
-    const globalUnknown = Object.keys(patch).filter((k) => !ANY_NODE_FIELD_KEYS.has(k))
-    return globalUnknown.length > 0
-      ? `未知字段：${globalUnknown.join('、')}（不是任何可写节点类型的字段）`
-      : null
-  }
-  return payloadIssue(nodeType, patch, st.assets)
 }
 
 function foldCreate(st: FoldState, cmd: Record<string, unknown>, index: number): void {
@@ -317,7 +252,8 @@ function foldUpdate(st: FoldState, cmd: Record<string, unknown>, index: number):
     // 失败 create 的 nodeType 已独立通过校验时，暂定类型可判——修正 data
     // 不改变已声明的类型语义，按该类型的完整写载荷错误即使 create 修复后
     // 仍存在，首轮即点名，不额外消耗纠错轮次
-    const issue = contingentUpdateIssue(st, cmd, patch)
+    const owner = st.refOwner.get(asText(cmd.nodeId))
+    const issue = contingentUpdateIssue(owner === undefined ? undefined : st.types.get(owner), patch, st.assets)
     if (issue !== null) st.fail(index, issue)
     return
   }
@@ -550,13 +486,15 @@ function foldConnectEdge(
   })
 }
 
-/** contingent 出口连线登记（foldConnectEdge 拆出，S3776）：optionIndex
- * 非非负整数时不入暂定拓扑，避免制造成环假阳性。 */
+/** contingent 出口连线登记（foldConnectEdge 拆出，S3776）：记录当前选项表
+ * 中该下标的稳定选项 id——后续 options 覆盖按 id 级联替换时，暂定边随之
+ * 失效（与 removedOptionHandles 同口径）。下标非法或无对应选项时不登记，
+ * 避免制造成环假阳性。 */
 function registerTentativeEdge(st: FoldState, cmd: Record<string, unknown>, src: string, dst: string): void {
   const idx = cmd.optionIndex
-  if (typeof idx === 'number' && Number.isInteger(idx) && idx >= 0) {
-    st.tentativeEdges.push({ source: src, target: dst, optionIndex: idx })
-  }
+  if (typeof idx !== 'number' || !Number.isInteger(idx) || idx < 0) return
+  const option = (st.branchOptions.get(src) ?? [])[idx]
+  if (option !== undefined) st.tentativeEdges.push({ source: src, target: dst, optionId: option.id })
 }
 
 /** 成环守卫（foldConnectEdge 拆出，S3776）：非 attach 连线加环检查。
@@ -572,7 +510,7 @@ function cycleContingent(
   dst: string,
   pairLabel: string,
 ): boolean {
-  const flow = [...st.virtualEdges, ...activeTentativeEdges(st)].filter(
+  const flow = [...st.virtualEdges, ...tentativeTopology(st)].filter(
     (e) => e.sourceHandle !== SCENE_SHOT_HANDLE,
   )
   if (!wouldCreateCycle(flow, src, dst)) {
@@ -584,18 +522,36 @@ function cycleContingent(
   return true
 }
 
-/** 当前生效的暂定出口边：端点仍在、且 optionIndex 落在该分支当前选项表内。
+/** 生效的暂定出口边登记：端点仍在、且登记的稳定选项 id 仍在当前选项表内。
  * 按需派生而非固化进 virtualEdges——后续 options 覆盖（成功或暂定生效）
- * 清空/缩短选项表时自动失效，与级联删边同语义，不会残留成环假阳性。 */
-function activeTentativeEdges(st: FoldState): VirtualEdge[] {
-  return st.tentativeEdges
-    .filter(
-      (e) =>
-        st.exists.has(e.source) &&
-        st.exists.has(e.target) &&
-        e.optionIndex < (st.branchOptions.get(e.source)?.length ?? 0),
-    )
-    .map((e) => ({ source: e.source, target: e.target, sourceHandle: null, type: 'branch' }))
+ * 按稳定 id 级联替换/删除选项时自动失效，与 removedOptionHandles 同语义。 */
+function activeTentativeEdges(st: FoldState): FoldState['tentativeEdges'] {
+  return st.tentativeEdges.filter(
+    (e) =>
+      st.exists.has(e.source) &&
+      st.exists.has(e.target) &&
+      (st.branchOptions.get(e.source) ?? []).some((o) => o.id === e.optionId),
+  )
+}
+
+/** 暂定出口边的拓扑形态（无句柄 branch 边，仅参与成环判定）。 */
+function tentativeTopology(st: FoldState): VirtualEdge[] {
+  return activeTentativeEdges(st).map((e) => ({
+    source: e.source,
+    target: e.target,
+    sourceHandle: null,
+    type: 'branch',
+  }))
+}
+
+/** 断线命中前序暂定出口边（投影态已生效、未入虚拟图）：移除其登记并返回
+ * true——该断线同样依赖前序修复，按 contingent 静默跳过（与同对 connect
+ * 失败同口径），后续命令按「已断开」的投影态判定。 */
+function dropTentativeEdge(st: FoldState, src: string, dst: string): boolean {
+  const hit = activeTentativeEdges(st).find((e) => e.source === src && e.target === dst)
+  if (hit === undefined) return false
+  st.tentativeEdges.splice(st.tentativeEdges.indexOf(hit), 1)
+  return true
 }
 
 /** 虚拟边身份键（端点 + 源端口）：失败断线的残留快照与当前边按此比对。 */
@@ -645,6 +601,8 @@ function foldEdge(st: FoldState, cmd: Record<string, unknown>, index: number, op
   if (op === 'disconnect_edge') {
     const hitIdx = st.virtualEdges.findIndex((e) => e.source === src && e.target === dst)
     if (hitIdx < 0) {
+      // 前序暂定出口边在投影态已生效：移除登记并按 contingent 静默跳过
+      if (dropTentativeEdge(st, src, dst)) return
       // 目标边不存在可能因本批同对的 connect 失败： contingent 跳过，
       // 随连线修正自愈，不误报「没有这条连线」
       if (st.failedEdgePairs.has(edgePairKey('connect_edge', cmd))) return

@@ -1326,3 +1326,47 @@ describe('暂定出口边随选项表变化重算（评审 5143770306）', () =>
     expect(v.issues[1]?.message).toContain('会造成循环剧情')
   })
 })
+
+describe('暂定出口边的稳定身份与断线可见性（评审 5143929155）', () => {
+  it('同长度但换新显式选项 id 的覆盖使暂定出口边失效', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'update_node', nodeId: 'b1', patch: { options: [{ label: 5 }] } },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
+        { op: 'update_node', nodeId: 'b1', patch: { options: [{ id: 'opt-new', label: '换' }] } },
+        { op: 'connect_edge', sourceId: 's1', targetId: 'b1' },
+      ],
+      richSnap(),
+    )
+    // 显式新 id 覆盖后旧选项被级联替换：暂定边随稳定 id 消失，反向连线合法
+    expect(v.issues).toHaveLength(1)
+    expect(v.issues[0]?.message).toContain('异型')
+  })
+
+  it('断线命中前序暂定出口边时不误报「没有这条连线」', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'update_node', nodeId: 'b1', patch: { options: [{ label: 5 }] } },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
+        { op: 'disconnect_edge', sourceId: 'b1', targetId: 's1' },
+      ],
+      richSnap(),
+    )
+    expect(v.issues).toHaveLength(1)
+    expect(v.issues[0]?.message).toContain('异型')
+  })
+
+  it('暂定出口边被断线移除后，反向连线不再误报成环', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'update_node', nodeId: 'b1', patch: { options: [{ label: 5 }] } },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
+        { op: 'disconnect_edge', sourceId: 'b1', targetId: 's1' },
+        { op: 'connect_edge', sourceId: 's1', targetId: 'b1' },
+      ],
+      richSnap(),
+    )
+    expect(v.issues).toHaveLength(1)
+    expect(v.issues[0]?.message).toContain('异型')
+  })
+})
