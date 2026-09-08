@@ -11,6 +11,10 @@ import { dataPatchOf, type NodeDataPatch } from '../nodes/patch'
 import { AI_FIELD_KEYS } from './nodeFields'
 import { branchOptionsError, nodeValueShapeError, normalizeNodeFields, plainObject } from './patchShape'
 
+/** 全部可写节点类型字段的并集：update 载荷的全局键校验（contingent 路径
+ * 也适用的独立判定）与白名单分类型校验的分界。 */
+const ANY_NODE_FIELD_KEYS = new Set<string>(Object.values(AI_FIELD_KEYS).flat())
+
 /**
  * AI 批量命令的解析与校验（docs/ui-design.md §6 改动预览卡、数据模型 §12）。
  *
@@ -266,12 +270,20 @@ function foldCreate(st: FoldState, cmd: Record<string, unknown>, index: number):
 }
 
 function foldUpdate(st: FoldState, cmd: Record<string, unknown>, index: number): void {
-  if (isContingentRef(st, cmd, 'nodeId')) return
+  const patch = cmd.patch
+  if (!plainObject(patch) || Object.keys(patch).length === 0) return st.fail(index, 'patch 为空')
+  if (isContingentRef(st, cmd, 'nodeId')) {
+    // contingent：目标类型不可知，只保留不依赖类型的全局判定——任何节点
+    // 类型都不支持的字段必然非法，即使 create 修复后更新仍不可能合法
+    const globalUnknown = Object.keys(patch).filter((k) => !ANY_NODE_FIELD_KEYS.has(k))
+    if (globalUnknown.length > 0) {
+      return st.fail(index, `未知字段：${globalUnknown.join('、')}（不是任何可写节点类型的字段）`)
+    }
+    return
+  }
   const id = resolveRef(st, cmd, 'nodeId')
   if (!id) return st.fail(index, `节点不存在：${asText(cmd.nodeId)}`)
   const nodeType = st.types.get(id)
-  const patch = cmd.patch
-  if (!plainObject(patch) || Object.keys(patch).length === 0) return st.fail(index, 'patch 为空')
   const keyError = checkFieldKeys(nodeType ?? '', patch)
   if (keyError) return st.fail(index, keyError)
   const patchShapeError = nodeValueShapeError(nodeType ?? '', patch, st.assets)
@@ -595,6 +607,19 @@ function registerFailedOptionsUpdate(
     return
   }
   const normalized = normalizeNodeFields('branch', patch, st.branchOptions.get(target))
+  // 暂定生效同步应用级联删边（§8.2.2 的删边语义）：被替换选项的出口边从
+  // 虚拟图移除，后续连线按「更新修复后」的状态判定成环/重复，不再误报；
+  // 仅删边不登记级联预览项——该更新本身尚未被接受
+  const removed = removedOptionHandles(
+    st.branchOptions.get(target) ?? [],
+    normalized.options as Array<{ id: string }>,
+  )
+  if (removed.length > 0) {
+    const gone = new Set(removed)
+    st.virtualEdges = st.virtualEdges.filter(
+      (e) => !(e.source === target && e.sourceHandle && gone.has(e.sourceHandle)),
+    )
+  }
   st.branchOptions.set(target, normalized.options as Array<{ id: string; label: string }>)
 }
 

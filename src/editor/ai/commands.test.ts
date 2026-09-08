@@ -1117,3 +1117,44 @@ describe('contingent 不屏蔽独立可判定的约束（评审 5140147147）', 
     expect(v.issues[1]?.message).toContain('会造成循环剧情')
   })
 })
+
+describe('暂定选项表级联与 contingent update 的独立形状（评审 5140344314）', () => {
+  it('暂定 options 同步级联删边：依赖旧出口消失的反向连线不再误报成环', () => {
+    const s: AiGraphSnapshot = {
+      nodes: [
+        { id: 's1', type: 'scene', label: '场' },
+        { id: 'b1', type: 'branch', label: '分支', options: [{ id: 'o1', label: 'A' }, { id: 'o2', label: 'B' }] },
+        { id: 'c1', type: 'beat', label: '节拍' },
+      ],
+      // o2 出口 B→C：options 更新修复后该出口被级联删除，C→B 随之合法
+      edges: [{ source: 'b1', target: 'c1', sourceHandle: 'option-o2' }],
+      assets: new Map(),
+    }
+    const v = validateAiBatch(
+      [
+        { op: 'update_node', nodeId: 'b1', patch: { options: ['保留首项'], episodeNo: 0 } },
+        { op: 'connect_edge', sourceId: 'c1', targetId: 'b1', edgeKind: 'sequence' },
+      ],
+      s,
+    )
+    expect(v.ok).toBe(false)
+    expect(v.issues).toHaveLength(1)
+    expect(v.issues[0]?.message).toContain('episodeNo')
+    expect(v.issues.map((i) => i.message).join('\n')).not.toContain('会造成循环剧情')
+  })
+
+  it('contingent ref 的 update 载荷自身错误仍独立点名', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'create_node', nodeType: 'beat', data: { label: '立足' }, ref: 'b' },
+        { op: 'update_node', nodeId: 'b', patch: {} },
+        { op: 'update_node', nodeId: 'b', patch: { not_any_field: 1, tone: '紧凑' } },
+      ],
+      snap(),
+    )
+    expect(v.issues).toHaveLength(3)
+    expect(v.issues[0]?.message).toContain('label')
+    expect(v.issues[1]?.message).toContain('patch 为空')
+    expect(v.issues[2]?.message).toContain('not_any_field')
+  })
+})
