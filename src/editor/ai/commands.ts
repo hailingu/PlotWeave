@@ -167,8 +167,10 @@ function checkFieldKeys(nodeType: string, fields: Record<string, unknown>): stri
  * 的完整问题清单，不因首错短路——纠错回喂与预览卡都依赖完整清单，
  * 模型单轮即可修完所有被点名命令，否则多错误批次会在重试预算内逐个
  * 暴露、必然耗尽。失败的折叠在任何状态变更前返回，后续命令继续折叠
- * 不受污染；引用已失败 create 的依赖命令按 contingent 跳过本轮校验
- * （合法性随前序修复自愈），不进问题清单以免诱导模型改写本正确的命令。
+ * 不受污染；依赖失败前序变更结果的命令按 contingent 跳过本轮校验
+ * （失败 create 的 ref 引用、失败 branch options 更新的出口连线、失败
+ * 连线变更的后续连线，见 registerFailedMutation），合法性随前序修复
+ * 自愈，不进问题清单以免诱导模型改写本正确的命令。
  *
  * 复杂度拆解（S3776）：每个 op 的折叠逻辑是独立的顶层函数
  * （foldCreate/foldUpdate/foldDelete/foldEdge），共享的虚拟图状态
@@ -189,6 +191,9 @@ interface FoldState {
   /** 本批 options 更新失败的分支节点 id：其出口连线的 optionIndex 校验
    * 随前序修复自愈，按 contingent 跳过（同 ref 依赖，见 isContingentRef）。 */
   failedBranchOptionUpdates: Set<string>
+  /** 本批失败的连线变更（op + 原始端点 token 对）：依赖其变更结果的后续
+   * 连线命令按 contingent 跳过（见 isContingentEdgePair）。 */
+  failedEdgePairs: Set<string>
   /** 项目资产索引（id → MIME）：shot.refs 引用位校验用。 */
   assets: ReadonlyMap<string, string>
   items: PreviewItem[]
@@ -449,12 +454,7 @@ function foldConnectEdge(
   }
   // attach 是派生从属边（§4.4 垂直语义）：自身不查环，也不参与
   // 剧情流环检测——环只可能出现在横向剧情流上
-  if (kind !== 'attach') {
-    const flowEdges = st.virtualEdges.filter((e) => e.sourceHandle !== SCENE_SHOT_HANDLE)
-    if (wouldCreateCycle(flowEdges, src, dst)) {
-      return st.fail(index, `会造成循环剧情：${pairLabel}`)
-    }
-  }
+  if (kind !== 'attach' && cycleContingent(st, cmd, index, src, dst, pairLabel)) return
   st.virtualEdges.push({
     source: src,
     target: dst,
@@ -477,6 +477,27 @@ function foldConnectEdge(
   })
 }
 
+/** 成环守卫（foldConnectEdge 拆出，S3776）：非 attach 连线加环检查。
+ * 经更长路径成环仍独立点名；同对断线在本批失败（如端点写反报「没有
+ * 这条连线」）时 contingent 跳过——残留边随断线修正移除，反转连线
+ * 自愈，报「成环」会诱导模型改写正确的反向连线。返回 true = 已处理
+ * （contingent 或已点名），调用方直接返回。 */
+function cycleContingent(
+  st: FoldState,
+  cmd: Record<string, unknown>,
+  index: number,
+  src: string,
+  dst: string,
+  pairLabel: string,
+): boolean {
+  if (!wouldCreateCycle(st.virtualEdges.filter((e) => e.sourceHandle !== SCENE_SHOT_HANDLE), src, dst)) {
+    return false
+  }
+  if (st.failedEdgePairs.has(edgePairKey('disconnect_edge', cmd))) return true
+  st.fail(index, `会造成循环剧情：${pairLabel}`)
+  return true
+}
+
 /** connect_edge / disconnect_edge 的折叠校验。 */
 function foldEdge(st: FoldState, cmd: Record<string, unknown>, index: number, op: string): void {
   const ends = resolveEndpoints(st, cmd, index)
@@ -486,7 +507,12 @@ function foldEdge(st: FoldState, cmd: Record<string, unknown>, index: number, op
 
   if (op === 'disconnect_edge') {
     const hitIdx = st.virtualEdges.findIndex((e) => e.source === src && e.target === dst)
-    if (hitIdx < 0) return st.fail(index, `没有这条连线：${pairLabel}`)
+    if (hitIdx < 0) {
+      // 目标边不存在可能因本批同对的 connect 失败： contingent 跳过，
+      // 随连线修正自愈，不误报「没有这条连线」
+      if (st.failedEdgePairs.has(edgePairKey('connect_edge', cmd))) return
+      return st.fail(index, `没有这条连线：${pairLabel}`)
+    }
     st.virtualEdges.splice(hitIdx, 1)
     st.items.push({
       kind: 'disconnect',
@@ -514,6 +540,39 @@ const FOLDERS: Record<string, (st: FoldState, cmd: Record<string, unknown>, inde
   disconnect_edge: (st, cmd, index) => foldEdge(st, cmd, index, 'disconnect_edge'),
 }
 
+/** 失败连线变更的原始端点对键（op + 模型自报 token，含拼错的端点）。 */
+function edgePairKey(op: string, cmd: Record<string, unknown>): string {
+  return `${op}\u0000${asText(cmd.sourceId)}\u0000${asText(cmd.targetId)}`
+}
+
+/** 折叠失败后的依赖登记（分发循环调用）：create 失败登记其 ref（指向
+ * 未入图的虚拟 id）、branch 的 options 更新失败登记目标、连线变更失败
+ * 登记原始端点对——后续依赖这些变更结果的命令按 contingent 跳过、
+ * 随前序修复自愈，而非被误报「节点不存在 / 下标越界 / 成环」。 */
+function registerFailedMutation(st: FoldState, raw: Record<string, unknown>, index: number): void {
+  if (raw.op === 'create_node') {
+    const refName = typeof raw.ref === 'string' ? raw.ref.trim() : ''
+    if (refName !== '') st.refOwner.set(refName, virtualIdOf(index))
+    return
+  }
+  if (raw.op === 'update_node') {
+    const target = resolveRef(st, raw, 'nodeId')
+    const patch = plainObject(raw.patch) ? raw.patch : undefined
+    if (
+      target !== null &&
+      patch !== undefined &&
+      Array.isArray(patch.options) &&
+      st.types.get(target) === 'branch'
+    ) {
+      st.failedBranchOptionUpdates.add(target)
+    }
+    return
+  }
+  if (raw.op === 'connect_edge' || raw.op === 'disconnect_edge') {
+    st.failedEdgePairs.add(edgePairKey(raw.op as string, raw))
+  }
+}
+
 export function validateAiBatch(rawCommands: unknown, graph: AiGraphSnapshot): BatchValidation {
   const st: FoldState = {
     labels: new Map(graph.nodes.map((n) => [n.id, n.label])),
@@ -525,6 +584,7 @@ export function validateAiBatch(rawCommands: unknown, graph: AiGraphSnapshot): B
     exists: new Set(graph.nodes.map((n) => n.id)),
     refOwner: new Map(),
     failedBranchOptionUpdates: new Set(),
+    failedEdgePairs: new Set(),
     assets: graph.assets,
     items: [],
     issues: [],
@@ -542,26 +602,7 @@ export function validateAiBatch(rawCommands: unknown, graph: AiGraphSnapshot): B
     if (!folder) return st.fail(index, `未知操作：${String(raw.op)}`)
     const issueCountBefore = st.issues.length
     folder(st, raw, index)
-    // create 失败同样登记其 ref（指向未入图的虚拟 id）：依赖命令据此按
-    // contingent 跳过、随前序修复自愈，而非被误报「节点不存在」；
-    // branch 的 options 更新失败同理——其出口连线的 optionIndex 校验
-    // 依赖更新后的选项表，登记后随前序修复自愈
-    if (raw.op === 'create_node' && st.issues.length > issueCountBefore) {
-      const refName = typeof raw.ref === 'string' ? raw.ref.trim() : ''
-      if (refName !== '') st.refOwner.set(refName, virtualIdOf(index))
-    }
-    if (raw.op === 'update_node' && st.issues.length > issueCountBefore) {
-      const target = resolveRef(st, raw, 'nodeId')
-      const patch = plainObject(raw.patch) ? raw.patch : undefined
-      if (
-        target !== null &&
-        patch !== undefined &&
-        Array.isArray(patch.options) &&
-        st.types.get(target) === 'branch'
-      ) {
-        st.failedBranchOptionUpdates.add(target)
-      }
-    }
+    if (st.issues.length > issueCountBefore) registerFailedMutation(st, raw, index)
   })
 
   const ok = st.issues.length === 0

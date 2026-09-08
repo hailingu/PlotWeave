@@ -998,3 +998,40 @@ describe('contingent：依赖失败 branch options 更新的出口连线（评�
     expect(v.issues[1]?.message).toContain('optionIndex')
   })
 })
+
+describe('contingent：依赖失败连线变更的后续连线（评审 5139616254）', () => {
+  it('依赖失败断线的反向连线按 contingent 跳过，不误报成环', () => {
+    // 既有 n2 → n1；模型想反转：断线写反（n1→n2 不存在）失败，反向连线
+    // n1 → n2 在残留边上被误报成环——修复断线后本会合法
+    const v = validateAiBatch(
+      [
+        { op: 'disconnect_edge', sourceId: 'n1', targetId: 'n2' },
+        { op: 'connect_edge', sourceId: 'n1', targetId: 'n2' },
+      ],
+      snap(),
+    )
+    expect(v.ok).toBe(false)
+    expect(v.commands).toEqual([])
+    expect(v.issues).toHaveLength(1)
+    expect(v.issues[0]?.message).toContain('没有这条连线')
+    expect(v.issues.map((i) => i.message).join('\n')).not.toContain('会造成循环剧情')
+  })
+
+  it('依赖失败连线的断线按 contingent 跳过，不误报「没有这条连线」', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'connect_edge', sourceId: 'n1', targetId: 'n2' },
+        { op: 'disconnect_edge', sourceId: 'n1', targetId: 'n2' },
+      ],
+      snap(),
+    )
+    expect(v.issues).toHaveLength(1)
+    expect(v.issues[0]?.message).toContain('会造成循环剧情')
+  })
+
+  it('无失败断线依托的真实成环仍独立点名（不过度抑制）', () => {
+    const v = validateAiBatch([{ op: 'connect_edge', sourceId: 'n1', targetId: 'n2' }], snap())
+    expect(v.issues).toHaveLength(1)
+    expect(v.issues[0]?.message).toContain('会造成循环剧情')
+  })
+})
