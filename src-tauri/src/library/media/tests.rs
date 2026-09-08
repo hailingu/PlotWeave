@@ -27,8 +27,8 @@ fn project_media_read(
     project_id: &str,
     id: &str,
 ) -> Result<(String, Vec<u8>), String> {
-    crate::assets::open_project_media_with(projects, project_id, id)
-        .and_then(|(mime, file)| read_media_capped(id, mime, file))
+    crate::assets::project_media::open_project_media_with(projects, project_id, id)
+        .and_then(|(mime, file)| read_project_media_capped(id, mime, file))
         .map(|(mime, bytes, _permit)| (mime, bytes))
 }
 
@@ -321,7 +321,8 @@ fn media_read_permit_survives_until_caller_releases() {
         put_asset_with(&cap(&library), "a.png", "image/png", "other", b"A").expect("导入应成功");
     let id = e["id"].as_str().expect("id 缺失").to_string();
     let (mime, file) = open_media_with(&cap(&library), &id).expect("锁内打开应成功");
-    let (mime, bytes, permit) = read_media_capped_in(&gate, &id, mime, file).expect("读取应成功");
+    let (mime, bytes, permit) =
+        read_media_capped_in(&gate, &id, mime, file, ASSET_MAX_BYTES).expect("读取应成功");
     assert_eq!(mime, "image/png");
     assert_eq!(bytes, b"A");
     // 读取函数已返回，但许可仍由调用方持有：上限 1 时其余读者不得进入
@@ -544,5 +545,36 @@ fn project_media_refuses_symlinked_final_component() {
         fs::read(outside.join("victim.png")).expect("链外目标文件必须幸存"),
         b"VICTIM"
     );
+    cleanup(&root);
+}
+
+/// 项目 scope 读取上限与生成产物写入契约同源（评审修复 P2-2）：20–32 MiB
+/// 的合法生成产物可照常服务（旧 asset 协议无此限制，迁移不得引入永久
+/// 404）；库 scope 维持 20 MiB 上限拒绝。
+#[test]
+fn project_media_serves_generated_size_between_caps() {
+    let big = vec![0x50u8; 20 * 1024 * 1024 + 1];
+    let (projects, root) = temp_projects();
+    fs::create_dir_all(projects.join("p-1").join("assets")).expect("建项目资产目录");
+    fs::write(projects.join("p-1").join("assets").join("big.png"), &big).expect("写大媒体");
+    write_project_doc_raw(
+        &projects,
+        "p-1",
+        json!({ "pa-big": project_asset_entry("pa-big", "assets/big.png", "image/png") }),
+    );
+    let (mime, bytes) =
+        project_media_read(&cap(&projects), "p-1", "pa-big").expect("20–32 MiB 项目媒体应可服务");
+    assert_eq!(mime, "image/png");
+    assert_eq!(bytes.len(), big.len());
+    cleanup(&root);
+    // 库 scope：20 MiB 上限保持不变
+    let (library, root) = temp_fixture();
+    fs::write(library.join("assets").join("la-big.png"), &big).expect("写大媒体");
+    write_index_raw(
+        &library,
+        &json!({ "assets": by_id([entry("la-big", "assets/la-big.png")]), "groups": by_id([]) }),
+    );
+    let err = media_read(&cap(&library), "la-big").expect_err("库媒体超 20 MiB 应拒绝");
+    assert!(err.contains("20 MiB"), "意外诊断：{err}");
     cleanup(&root);
 }

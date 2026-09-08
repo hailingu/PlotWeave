@@ -4,10 +4,10 @@
 //!   受信锚定句柄 + no-follow（§10.2 信任链，与 store 内核同域）；
 //! - `validate_project_asset`：前端 `set_asset` 调度前的强制预检（§9.3）——
 //!   单条 AssetRef 形状校验 + 实路径复验，返回规范化后的条目；
-//! - 项目媒体解析/打开内核（`resolve_project_media_entry`/
-//!   `open_project_media_with`）：`pwmedia` 协议的项目 scope（issue #31）按
-//!   项目文档 `assets.byId` 逐请求解析 assetId → relPath，经实路径复验
-//!   句柄链打开——本机路径与 relPath 不出 Rust。
+//! - 项目媒体解析/打开内核与会话新增资产登记在 [`project_media`] 子模块：
+//!   `pwmedia` 协议的项目 scope（issue #31）按项目文档 `assets.byId` 逐请求
+//!   解析 assetId → relPath，经实路径复验句柄链打开——本机路径与 relPath
+//!   不出 Rust。
 
 use std::io::Write;
 
@@ -17,15 +17,15 @@ use tauri::AppHandle;
 
 use crate::isotime::{is_canonical_utc_timestamp, now_iso};
 use crate::library::ext_for;
-use crate::library_fs::{
-    assets_root, atomic_write_with, library_root, open_parent_dir, validate_asset_id,
-};
+use crate::library_fs::{assets_root, atomic_write_with, library_root, open_parent_dir};
 #[cfg(unix)]
 use crate::store::asset_identity;
 use crate::store::{
-    asset_stat, is_canonical_mime, is_valid_active_asset_rel_path, is_valid_asset_rel_path,
-    load_project_file, new_id, open_dir_bound, projects_dir, validate_id, verify_asset_real_path,
+    asset_stat, is_canonical_mime, is_valid_asset_rel_path, new_id, open_dir_bound, projects_dir,
+    validate_id, verify_asset_real_path,
 };
+
+pub(crate) mod project_media;
 
 /// 新资产 id：`pa-{ms:x}-{seq:x}`（复用 store 的毫秒 + 进程内计数不碰撞内核）。
 fn new_asset_id() -> String {
@@ -203,6 +203,14 @@ pub(crate) fn import_asset_from_library(
     let asset_id = new_asset_id();
     let final_name = format!("{asset_id}.{}", ext_for(&name, &mime));
     copy_into_dir(&mut src, &assets_dir, &final_name)?;
+    // 防抖落盘窗口内协议解析可见（issue #31 评审修复）：文档尚未收录该
+    // 条目前，pwmedia 项目 scope 经会话登记项解析
+    project_media::register_pending_project_asset(
+        id,
+        &asset_id,
+        format!("assets/{final_name}"),
+        mime.clone(),
+    );
     Ok(json!({
         "id": asset_id,
         "relPath": format!("assets/{final_name}"),
@@ -240,6 +248,13 @@ pub(crate) fn write_generated_asset(
     let asset_id = new_asset_id();
     let final_name = format!("{asset_id}.{}", ext_for_mime(mime));
     atomic_write_with(&assets_dir, &final_name, |dst| dst.write_all(bytes))?;
+    // 防抖落盘窗口内协议解析可见（issue #31 评审修复）
+    project_media::register_pending_project_asset(
+        id,
+        &asset_id,
+        format!("assets/{final_name}"),
+        mime.to_string(),
+    );
     Ok(json!({
         "id": asset_id,
         "relPath": format!("assets/{final_name}"),
@@ -326,56 +341,6 @@ pub fn import_project_asset_from_library(
     let _op = crate::library_journal::library_op_lock();
     let _file_lock = crate::library_journal::library_file_lock(&library)?;
     import_asset_from_library(&projects, &library, &id, &library_asset_id)
-}
-
-/// 项目媒体解析内核（pwmedia 项目 scope，issue #31；给定已验证的 projects
-/// 根句柄）：读项目文档 `assets.byId` 按当前内容逐请求解析 assetId →
-/// (relPath, mime)。relPath 过活动索引词法（排除 `.trash` 隔离区），mime
-/// 非规范时兜底 application/octet-stream（与库解析内核同域）——脏文档
-/// 条目在触达文件系统前即拒绝；文档读取走 [`load_project_file`] 的锚定
-/// 句柄绑定与 §11 第 0 步信封判型。
-pub(crate) fn resolve_project_media_entry(
-    projects: &CapDir,
-    project_id: &str,
-    asset_id: &str,
-) -> Result<(String, String), String> {
-    validate_id(project_id)?;
-    validate_asset_id(asset_id)?;
-    let doc = load_project_file(projects, project_id)?;
-    let entry = doc
-        .assets
-        .get("byId")
-        .and_then(|by_id| by_id.get(asset_id))
-        .ok_or_else(|| format!("资产不存在：{asset_id}"))?;
-    let rel = entry
-        .get("relPath")
-        .and_then(Value::as_str)
-        .ok_or_else(|| format!("资产 {asset_id} 的 relPath 缺失"))?;
-    if !is_valid_active_asset_rel_path(rel) {
-        return Err(format!("资产 {asset_id} 的 relPath 非法：{rel}"));
-    }
-    let mime = entry
-        .get("mime")
-        .and_then(Value::as_str)
-        .filter(|m| is_canonical_mime(m))
-        .unwrap_or("application/octet-stream")
-        .to_string();
-    Ok((rel.to_string(), mime))
-}
-
-/// 项目媒体句柄打开（pwmedia 项目 scope，issue #31）：[`resolve_project_media_entry`]
-/// 解析后经 [`verify_asset_real_path`] 的受信句柄链定位——最终组件 no-follow
-/// 拒绝符号链接、确认普通文件并按 (dev, ino) 身份绑定；打开的句柄交协议
-/// 处理器在无锁状态下读取（§10.2 单写者 + 原子写语义，项目侧无删除日志，
-/// 无需互斥锁）。
-pub(crate) fn open_project_media_with(
-    projects: &CapDir,
-    project_id: &str,
-    asset_id: &str,
-) -> Result<(String, cap_std::fs::File), String> {
-    let (rel, mime) = resolve_project_media_entry(projects, project_id, asset_id)?;
-    let file = verify_asset_real_path(projects, project_id, &rel)?;
-    Ok((mime, file))
 }
 
 /// set_asset 调度前的强制预检命令（§9.3）：形状 + 实路径复验，返回规范化

@@ -10,7 +10,7 @@ use std::sync::{Condvar, Mutex, OnceLock};
 use serde_json::Value;
 use tauri::AppHandle;
 
-use crate::assets::{open_project_media_with, resolve_project_media_entry};
+use crate::assets::project_media::{open_project_media_with, resolve_project_media_entry};
 use crate::library::ASSET_MAX_BYTES;
 use crate::library_fs::{library_root, read_index_capped, validate_asset_id};
 use crate::library_journal::{library_file_lock, library_op_lock};
@@ -18,6 +18,11 @@ use crate::store::{is_canonical_mime, is_valid_active_asset_rel_path, projects_d
 
 /// opaque asset URL 的自定义协议名（lib.rs 注册同名协议处理器）。
 pub(crate) const MEDIA_SCHEME: &str = "pwmedia";
+
+/// 项目 scope 媒体单文件上限（issue #31 评审修复 P2-2）：与生成产物写入
+/// 上限 [`crate::imagegen::GENERATED_IMAGE_MAX_BYTES`] 同源——写入侧允许
+/// 落盘的合法产物必须在读取侧可服务，读写契约不得分叉。
+pub(crate) const PROJECT_MEDIA_MAX_BYTES: usize = crate::imagegen::GENERATED_IMAGE_MAX_BYTES;
 
 /// 媒体请求的逻辑 scope（§10.5 命令表）：库按净化索引解析，项目按项目
 /// 文档索引解析。
@@ -166,13 +171,13 @@ pub(crate) fn open_media_with(
     Ok((mime, file))
 }
 
-/// 并发媒体读取上限（评审修复，PR #32 第四轮）：多个近 20 MiB 大图同时
-/// 进入视口时，每个并发读取各自分配缓冲，N×20 MiB 的瞬时峰值可能拖垮
-/// 进程——读取并发数收敛到 4；许可随响应体存活到交付（见
-/// [`MediaDelivery`]），故在交付完成前峰值 ≤ 4×20 MiB。交付后字节归
-/// webview 所有，其消费内存不在 Rust 侧观测范围（Tauri 同步协议 API 无
-/// 交付完成信号，此为文档化边界）；库写入/删除/元信息不受影响（闸门只
-/// 作用于媒体字节读取）。
+/// 并发媒体读取上限（评审修复，PR #32 第四轮）：多个大图同时进入视口时，
+/// 每个并发读取各自分配缓冲，N×单文件上限的瞬时峰值可能拖垮进程——读取
+/// 并发数收敛到 4；许可随响应体存活到交付（见 [`MediaDelivery`]），故在
+/// 交付完成前峰值 ≤ 4×单文件上限（库 20 MiB / 项目 32 MiB，见
+/// [`PROJECT_MEDIA_MAX_BYTES`]）。交付后字节归 webview 所有，其消费内存
+/// 不在 Rust 侧观测范围（Tauri 同步协议 API 无交付完成信号，此为文档化
+/// 边界）；库写入/删除/元信息不受影响（闸门只作用于媒体字节读取）。
 const MEDIA_READ_CONCURRENCY: usize = 4;
 
 /// 并发媒体读取闸门：Mutex + Condvar 的计数信号量（同步 spawn_blocking
@@ -233,38 +238,61 @@ impl MediaReadGate {
     }
 }
 
-/// 锁外的受限字节读取（≤ ASSET_MAX_BYTES）：消费已身份绑定的句柄，读取
-/// 并发经 `gate` 收敛（见 [`MEDIA_READ_CONCURRENCY`]）。成功时把并发许可
-/// 随结果交还调用方：许可必须存活到响应交付之后（见 [`MediaDelivery`]），
-/// 否则等待中的读者会在先前响应体仍待交付时分配新缓冲，峰值契约不成立；
-/// 失败时许可就地释放。POSIX 语义下已打开句柄的内容读取稳定——删除事务
-/// 的隔离 rename 不影响该句柄，故无需持锁。
+/// 锁外的受限字节读取（≤ `max_bytes`，库/项目 scope 各自的上限见
+/// [`read_media_capped`]/[`read_project_media_capped`]）：消费已身份绑定的
+/// 句柄，读取并发经 `gate` 收敛（见 [`MEDIA_READ_CONCURRENCY`]）。成功时把
+/// 并发许可随结果交还调用方：许可必须存活到响应交付之后（见
+/// [`MediaDelivery`]），否则等待中的读者会在先前响应体仍待交付时分配新
+/// 缓冲，峰值契约不成立；失败时许可就地释放。POSIX 语义下已打开句柄的
+/// 内容读取稳定——删除事务的隔离 rename 不影响该句柄，故无需持锁。
 pub(crate) fn read_media_capped_in<'g>(
     gate: &'g MediaReadGate,
     id: &str,
     mime: String,
     file: cap_std::fs::File,
+    max_bytes: usize,
 ) -> Result<(String, Vec<u8>, MediaReadPermit<'g>), String> {
     use std::io::Read;
     let permit = gate.acquire();
     let mut bytes = Vec::new();
-    file.take((ASSET_MAX_BYTES + 1) as u64)
+    file.take((max_bytes + 1) as u64)
         .read_to_end(&mut bytes)
         .map_err(|e| format!("读取资产 {id} 媒体失败：{e}"))?;
-    if bytes.len() > ASSET_MAX_BYTES {
-        return Err(format!("资产 {id} 的媒体超过 20 MiB 上限"));
+    if bytes.len() > max_bytes {
+        return Err(format!(
+            "资产 {id} 的媒体超过 {} MiB 上限",
+            max_bytes / (1024 * 1024)
+        ));
     }
     Ok((mime, bytes, permit))
 }
 
-/// [`read_media_capped_in`] 的全局闸门入口：许可存活到调用方交付（见
-/// [`MediaDelivery`]），成功时随结果返回。
+/// [`read_media_capped_in`] 的库 scope 全局闸门入口（20 MiB 上限）：许可
+/// 存活到调用方交付（见 [`MediaDelivery`]），成功时随结果返回。
 pub(crate) fn read_media_capped(
     id: &str,
     mime: String,
     file: cap_std::fs::File,
 ) -> Result<(String, Vec<u8>, MediaReadPermit<'static>), String> {
-    read_media_capped_in(MediaReadGate::gate(), id, mime, file)
+    read_media_capped_in(MediaReadGate::gate(), id, mime, file, ASSET_MAX_BYTES)
+}
+
+/// [`read_media_capped_in`] 的项目 scope 全局闸门入口（32 MiB 上限，评审
+/// 修复 P2-2）：与生成产物写入上限 [`PROJECT_MEDIA_MAX_BYTES`] 同源——
+/// 写入侧允许落盘的合法产物必须在读取侧可服务，旧 asset 协议无 20 MiB
+/// 限制，迁移不得让已持久化产物永久 404。
+pub(crate) fn read_project_media_capped(
+    id: &str,
+    mime: String,
+    file: cap_std::fs::File,
+) -> Result<(String, Vec<u8>, MediaReadPermit<'static>), String> {
+    read_media_capped_in(
+        MediaReadGate::gate(),
+        id,
+        mime,
+        file,
+        PROJECT_MEDIA_MAX_BYTES,
+    )
 }
 
 /// 404 的后端诊断文本（评审修复，复用 store 的 eprintln 结构化诊断约定，
@@ -331,10 +359,11 @@ pub(crate) fn handle_media_request(app: &AppHandle, uri: &tauri::http::Uri) -> M
         }
         MediaScope::Project { project_id } => {
             // 项目 scope（issue #31）：按项目文档逐请求解析后经
-            // verify_asset_real_path 句柄链打开身份绑定句柄
+            // verify_asset_real_path 句柄链打开身份绑定句柄；读取上限与
+            // 生成产物写入契约同源（评审修复 P2-2）
             let projects = projects_dir(app)?;
             let opened = open_project_media_with(&projects, &project_id, &id);
-            opened.and_then(|(mime, file)| read_media_capped(&id, mime, file))
+            opened.and_then(|(mime, file)| read_project_media_capped(&id, mime, file))
         }
     });
     if let Err(e) = &result {
