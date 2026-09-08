@@ -3,6 +3,7 @@
 //! id 防碰撞、变更命令的净化诊断可见性。自 `library/tests.rs` 拆出以符合
 //! 源文件 800 行上限（评审修复，PR #33 第五至十三轮）。
 
+use super::group_commands::{delete_group_with, upsert_group_with};
 use super::*;
 use crate::store::new_id;
 use cap_std::ambient_authority;
@@ -344,6 +345,133 @@ fn readonly_recovery_reports_isolation_not_false_reissue() {
     assert!(
         !warnings.iter().any(|w| w.contains("已重发")),
         "只读态不得报告已重发：{warnings:?}"
+    );
+    cleanup(&root);
+}
+
+// ---- 组写命令（issue #29 PR 2，§7.2 库写边界）----
+
+/// 组条目最小合法形状。
+fn group_entry(id: &str, name: &str, kind: &str) -> Value {
+    json!({ "id": id, "name": name, "kind": kind })
+}
+
+/// upsert_library_group：新建组成功并返回条目；重复 upsert 同 id 更新。
+#[test]
+fn upsert_library_group_creates_and_updates() {
+    let (library, root) = temp_fixture();
+    let g = upsert_group_with(&cap(&library), &group_entry("g-1", "女主", "character"))
+        .expect("新建组应成功");
+    assert_eq!(g["id"], "g-1");
+    assert_eq!(g["name"], "女主");
+    // 同 id 改名
+    let g2 = upsert_group_with(
+        &cap(&library),
+        &group_entry("g-1", "女主·林晚", "character"),
+    )
+    .expect("更新组应成功");
+    assert_eq!(g2["name"], "女主·林晚");
+    let (index, _w, _s) = crate::library_fs::read_index_capped(&cap(&library)).expect("索引可读");
+    assert_eq!(
+        index["groups"]["byId"]["g-1"]["name"], "女主·林晚",
+        "更新应落盘"
+    );
+    cleanup(&root);
+}
+
+/// upsert 形状校验：非对象/缺字段/非法 kind 一律拒绝（§7.2 完整形状校验）。
+#[test]
+fn upsert_library_group_rejects_invalid_shape() {
+    let (library, root) = temp_fixture();
+    let lib = cap(&library);
+    upsert_group_with(&lib, &json!("not an object")).expect_err("非对象应拒绝");
+    upsert_group_with(&lib, &json!({ "id": "g-1", "name": "x" })).expect_err("缺 kind 应拒绝");
+    upsert_group_with(&lib, &group_entry("g-1", "  ", "character")).expect_err("空白 name 应拒绝");
+    upsert_group_with(&lib, &group_entry("g-1", "x", "robot")).expect_err("非法 kind 应拒绝");
+    cleanup(&root);
+}
+
+/// 改组 kind 与成员冲突即拒绝（§7.2）：成员资产 groupId 指向该组且 kind 不
+/// 一致时整次命令不写盘。
+#[test]
+fn upsert_library_group_rejects_kind_change_conflicting_with_members() {
+    let (library, root) = temp_fixture();
+    let mut member = entry("la-1", "assets/la-1.png");
+    member["kind"] = json!("character"); // 成员 kind 与组一致（读侧归一化不剥离）
+    member["groupId"] = json!("g-1");
+    write_index_raw(
+        &library,
+        &json!({ "assets": by_id([member]), "groups": by_id([group_entry("g-1", "女主", "character")]) }),
+    );
+    let before = fs::read(library.join("library.json")).expect("读原始索引");
+    let err = upsert_group_with(&cap(&library), &group_entry("g-1", "女主", "location"))
+        .expect_err("改 kind 与成员冲突应拒绝");
+    assert!(
+        err.contains("kind") || err.contains("冲突"),
+        "意外诊断：{err}"
+    );
+    let after = fs::read(library.join("library.json")).expect("读落盘索引");
+    assert_eq!(before, after, "冲突拒绝不得写盘");
+    cleanup(&root);
+}
+
+/// delete_library_group：同次原子写删组并剥离成员 groupId（§7.2）。
+#[test]
+fn delete_library_group_removes_group_and_strips_members() {
+    let (library, root) = temp_fixture();
+    let mut member = entry("la-1", "assets/la-1.png");
+    member["groupId"] = json!("g-1");
+    write_index_raw(
+        &library,
+        &json!({ "assets": by_id([member]), "groups": by_id([group_entry("g-1", "女主", "character")]) }),
+    );
+    delete_group_with(&cap(&library), "g-1").expect("删除组应成功");
+    let (index, _w, _s) = crate::library_fs::read_index_capped(&cap(&library)).expect("索引可读");
+    assert!(
+        index["groups"]["byId"].as_object().unwrap().is_empty(),
+        "组应被删除"
+    );
+    assert!(
+        index["assets"]["byId"]["la-1"].get("groupId").is_none(),
+        "成员 groupId 应剥离"
+    );
+    cleanup(&root);
+}
+
+/// delete_library_group 要求组存在（§7.2）。
+#[test]
+fn delete_library_group_rejects_missing_group() {
+    let (library, root) = temp_fixture();
+    delete_group_with(&cap(&library), "g-ghost").expect_err("不存在的组应拒绝");
+    cleanup(&root);
+}
+
+/// upsert 成功响应携带 cleanupPending（评审修复，PR #36 第二轮）：删除隔离区
+/// 积压（身份绑定清理不可用的常态）不得因 upsert 响应只附 warnings 而丢失
+/// ——list/delete 有、upsert 同款。
+#[test]
+fn upsert_group_response_carries_cleanup_pending() {
+    let (library, root) = temp_fixture();
+    // 造一个 identity-bound 清理积压：journal 有一条已完成事务的清理项
+    fs::write(
+        library.join(crate::library_journal::JOURNAL_FILE_NAME),
+        serde_json::to_string(&json!([{
+            "id": "t-1",
+            "assetId": "la-gone",
+            "relPath": "assets/la-gone.png",
+            "identity": { "dev": 1, "ino": 1 },
+            "trashName": "assets/.trash/t-1",
+        }]))
+        .expect("序列化日志"),
+    )
+    .expect("写日志");
+    fs::create_dir_all(library.join("assets").join(".trash")).expect("建隔离目录");
+    fs::write(library.join("assets").join(".trash").join("t-1"), b"X").expect("写隔离项");
+    let g = upsert_group_with(&cap(&library), &group_entry("g-1", "女主", "character"))
+        .expect("新建组应成功");
+    assert!(
+        g.get("cleanupPending").is_some(),
+        "upsert 响应应携带 cleanupPending：{g}"
     );
     cleanup(&root);
 }

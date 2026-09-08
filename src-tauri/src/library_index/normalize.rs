@@ -299,6 +299,36 @@ fn fresh_id(map: &Map<String, Value>, reserved: &std::collections::HashSet<Strin
     }
 }
 
+/// 组写命令的完整形状校验（§7.2 库写边界）：非 legacy 语境（目标 Record
+/// 形状），id 合法 + name 去空白 1–128 + kind 严格属于声明联合；非法即
+/// 整条拒绝（不猜测、不修复）。供 `upsert_library_group` 使用。
+pub(crate) fn validate_group_for_write(g: &Value) -> Result<Value, String> {
+    let Some(obj) = g.as_object() else {
+        return Err("组必须是对象".into());
+    };
+    let id = obj
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or("组缺 id 字段")?;
+    validate_asset_id(id).map_err(|_| format!("组 id 非法：{id}"))?;
+    let name = obj
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or("组缺 name 字段")?;
+    let name_trimmed = name.trim();
+    if name_trimmed.is_empty() || name_trimmed.chars().count() > NAME_MAX_CHARS {
+        return Err(format!("组名去空白后须为 1–{NAME_MAX_CHARS} 字符"));
+    }
+    let kind = obj
+        .get("kind")
+        .and_then(Value::as_str)
+        .ok_or("组缺 kind 字段")?;
+    if !KINDS.contains(&kind) {
+        return Err(format!("未知组 kind：{kind}"));
+    }
+    Ok(json!({ "id": id, "name": name_trimmed, "kind": kind }))
+}
+
 /// 组桶归一化：键化 → 逐组完整校验（id/name/kind），非法组隔离。返回
 /// (归一化组 map, 空白拼写→重发 id 映射)——映射供资产侧改写精确匹配该拼写
 /// 的 groupId（§7.2：仅同一拼写的空白组唯一时映射确定，同值重复即歧义）。

@@ -249,3 +249,47 @@ describe('libraryStore Tauri 路径：隔离区积压可见性（issue #25 评�
     warn.mockRestore()
   })
 })
+
+// ---- 组列表诊断可见性（评审修复，PR #36 第一轮）----
+
+describe('libraryStore Tauri 路径：listGroups', () => {
+  it('listGroups 携带 library_list 的 warnings 与 cleanupPending 诊断', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    invoke.mockResolvedValue({
+      groups: byId(entry()),
+      warnings: ['条目 la-1 已隔离'],
+      cleanupPending: ['assets/.trash/t-1'],
+    })
+    const { libraryStore } = await load()
+    const groups = await libraryStore.listGroups()
+    expect(groups).toHaveLength(1)
+    expect(warn).toHaveBeenCalledWith(
+      '[Library] 索引条目隔离：',
+      '条目 la-1 已隔离',
+    )
+    expect(warn).toHaveBeenCalledWith(
+      '[Library] 删除隔离区待清理：',
+      ['assets/.trash/t-1'],
+    )
+  })
+})
+
+/// upsertGroup 响应携带 cleanupPending 时经诊断路径上报（评审修复，PR #36
+/// 第三轮）：与 list/delete 同款。
+describe('libraryStore Tauri 路径：upsertGroup', () => {
+  it('upsertGroup 响应携带 cleanupPending 时上报诊断', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    warn.mockClear() // 同文件先前用例可能以相同参数调用过 warn——清掉累积记录
+    invoke.mockResolvedValueOnce({
+      id: 'g-1',
+      name: '女主',
+      kind: 'character',
+      cleanupPending: ['assets/.trash/t-1'],
+    })
+    const { libraryStore } = await load()
+    await libraryStore.upsertGroup({ id: 'g-1', name: '女主', kind: 'character' })
+    expect(warn).toHaveBeenCalledWith('[Library] 删除隔离区待清理：', [
+      'assets/.trash/t-1',
+    ])
+  })
+})

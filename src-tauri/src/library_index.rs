@@ -13,7 +13,9 @@
 
 mod normalize;
 
-pub(crate) use normalize::{migrate_and_normalize, migrate_and_normalize_readonly};
+pub(crate) use normalize::{
+    migrate_and_normalize, migrate_and_normalize_readonly, validate_group_for_write,
+};
 
 #[cfg(test)]
 mod fixup_tests;
