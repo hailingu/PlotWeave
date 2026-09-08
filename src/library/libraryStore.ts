@@ -159,7 +159,11 @@ async function tauriMediaUrl(asset: Pick<LibraryAsset, 'id' | 'conflicted'>): Pr
 /** 统一门面：两种环境同签名。 */
 export const libraryStore = {
   list: (): Promise<LibraryAsset[]> =>
-    isTauri ? tauriList() : Promise.resolve([...memoryAssets.values()].map((v) => v.asset)),
+    isTauri
+      ? tauriList()
+      : // 克隆返回（评审修复，PR #36 第九轮）：调用方 mutate 列表资产不得
+        // 绕过组校验直接改 memoryAssets
+        Promise.resolve([...memoryAssets.values()].map((v) => ({ ...v.asset }))),
 
   put: (file: File, kind: LibraryKind): Promise<LibraryAsset> => {
     if (isTauri) return tauriPut(file, kind)
@@ -176,7 +180,7 @@ export const libraryStore = {
       createdAt: new Date().toISOString(),
     }
     memoryAssets.set(id, { asset, blob: file })
-    return Promise.resolve(asset)
+    return Promise.resolve({ ...asset })
   },
 
   updateMeta: (id: string, patch: Partial<Pick<LibraryAsset, 'name' | 'tags' | 'groupId' | 'view'>>): Promise<LibraryAsset> => {
@@ -211,7 +215,8 @@ export const libraryStore = {
       patch.groupId !== undefined ? { ...patch, groupId } : patch
     hit.asset = { ...hit.asset, ...patchNorm }
     memoryAssets.set(id, hit)
-    return Promise.resolve(hit.asset)
+    // 克隆返回（评审修复，PR #36 第九轮）：与 list/put 同款
+    return Promise.resolve({ ...hit.asset })
   },
 
   remove: (id: string): Promise<void> => {

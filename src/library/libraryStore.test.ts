@@ -289,3 +289,32 @@ describe('内存回退清除标记与字符计数', () => {
     ).rejects.toThrow(/128/)
   })
 })
+
+/// 内存回退资产与调用方对象隔离（评审修复，PR #36 第九轮）：存储与返回
+/// 克隆——调用方 mutate list/updateMeta 返回的资产不得绕过组校验直接改
+/// memoryAssets；mutate Tauri 响应不影响持久化状态，预览同款。
+describe('内存回退资产对象隔离', () => {
+  it('mutate list/updateMeta 返回的资产不影响存储', async () => {
+    vi.resetModules()
+    const { libraryStore: fresh } = await import('./libraryStore')
+    const asset = await fresh.put(
+      new File([new Uint8Array([1])], 'a.png', { type: 'image/png' }),
+      'character',
+    )
+    await fresh.upsertGroup({ id: 'g-1', name: '女主', kind: 'character' })
+    await fresh.updateMeta(asset.id, { groupId: 'g-1' })
+    // mutate list 返回的引用
+    const listed = (await fresh.list()).find((a) => a.id === asset.id)!
+    listed.kind = 'location' as never
+    listed.groupId = 'g-ghost'
+    // mutate updateMeta 返回的引用
+    const updated = await fresh.updateMeta(asset.id, { name: 'x' })
+    updated.kind = 'location' as never
+    // 存储不受影响
+    const after = (await fresh.list()).find((a) => a.id === asset.id)!
+    expect(after.kind).toBe('character')
+    expect(after.groupId).toBe('g-1')
+    // 组校验仍对存储生效：mutate 后挂不一致组仍被拒
+    await expect(fresh.updateMeta(asset.id, { groupId: 'g-ghost' })).rejects.toThrow(/不存在/)
+  })
+})
