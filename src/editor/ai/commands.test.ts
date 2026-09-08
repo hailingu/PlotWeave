@@ -1158,3 +1158,76 @@ describe('暂定选项表级联与 contingent update 的独立形状（评审 51
     expect(v.issues[2]?.message).toContain('not_any_field')
   })
 })
+
+describe('失败标记与残留边快照的覆盖语义（评审 5140501690）', () => {
+  it('暂定选项表覆盖旧失败标记：越界 optionIndex 仍进首轮清单', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'update_node', nodeId: 'b1', patch: { options: [{ id: 'ob-a', label: '追' }, { label: 5 }] } },
+        { op: 'update_node', nodeId: 'b1', patch: { options: ['只留一个'], episodeNo: 0 } },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 2 },
+      ],
+      richSnap(),
+    )
+    expect(v.ok).toBe(false)
+    // 第二次更新虽因 episodeNo 失败，但 options 结果已可判定（暂定表生效）
+    // 并清除第一次异型失败留下的 contingent 标记：越界按单选项表独立点名
+    expect(v.issues).toHaveLength(3)
+    expect(v.issues[0]?.message).toContain('异型')
+    expect(v.issues[1]?.message).toContain('episodeNo')
+    expect(v.issues[2]?.index).toBe(2)
+    expect(v.issues[2]?.message).toContain('optionIndex')
+  })
+
+  it('失败断线后新增的反向边造成的环仍独立点名', () => {
+    const s: AiGraphSnapshot = {
+      nodes: [
+        { id: 'a', type: 'beat', label: '节拍 A' },
+        { id: 'b', type: 'beat', label: '节拍 B' },
+      ],
+      edges: [],
+      assets: new Map(),
+    }
+    const v = validateAiBatch(
+      [
+        { op: 'disconnect_edge', sourceId: 'a', targetId: 'b' },
+        { op: 'connect_edge', sourceId: 'b', targetId: 'a' },
+        { op: 'connect_edge', sourceId: 'a', targetId: 'b' },
+      ],
+      s,
+    )
+    // 空图上的失败断线无可修正的残留边：b → a 由本批中间命令新增，
+    // 修正/删除首条断线都不会移除它，第三条环错误独立进首轮清单
+    expect(v.issues).toHaveLength(2)
+    expect(v.issues[0]?.message).toContain('没有这条连线')
+    expect(v.issues[1]?.index).toBe(2)
+    expect(v.issues[1]?.message).toContain('会造成循环剧情')
+  })
+
+  it('残留同对边之外仍成环时独立点名（快照边移除后环仍在）', () => {
+    const s: AiGraphSnapshot = {
+      nodes: [
+        { id: 'a', type: 'beat', label: '节拍 A' },
+        { id: 'b', type: 'beat', label: '节拍 B' },
+        { id: 'c', type: 'beat', label: '节拍 C' },
+      ],
+      // b → a 是失败断线的同对残留边；b → c → a 是与之无关的既有路径
+      edges: [
+        { source: 'b', target: 'a' },
+        { source: 'b', target: 'c' },
+        { source: 'c', target: 'a' },
+      ],
+      assets: new Map(),
+    }
+    const v = validateAiBatch(
+      [
+        { op: 'disconnect_edge', sourceId: 'a', targetId: 'b' },
+        { op: 'connect_edge', sourceId: 'a', targetId: 'b' },
+      ],
+      s,
+    )
+    expect(v.issues).toHaveLength(2)
+    expect(v.issues[0]?.message).toContain('没有这条连线')
+    expect(v.issues[1]?.message).toContain('会造成循环剧情')
+  })
+})

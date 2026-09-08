@@ -2,6 +2,7 @@ import {
   branchOptionHandle,
   connectionEndpointIssue,
   type EdgeKind,
+  type EndpointPair,
   hasAttachHost,
   removedOptionHandles,
   SCENE_SHOT_HANDLE,
@@ -181,13 +182,16 @@ function checkFieldKeys(nodeType: string, fields: Record<string, unknown>): stri
  * 收敛在 FoldState；本函数只负责建状态与分发。
  */
 
+/** 折叠校验的虚拟边：端点 + 源端口/连线类型（与 AiGraphSnapshot.edges 同形）。 */
+type VirtualEdge = EndpointPair & { sourceHandle?: string | null; type?: string }
+
 /** 折叠校验的虚拟图状态：随每条命令演进的最终态投影。 */
 interface FoldState {
   labels: Map<string, string>
   types: Map<string, string>
   /** branch 节点 id → 选项列表（校验 optionIndex 并解析稳定选项 id 端口）。 */
   branchOptions: Map<string, Array<{ id: string; label: string }>>
-  virtualEdges: Array<{ source: string; target: string; sourceHandle?: string | null; type?: string }>
+  virtualEdges: VirtualEdge[]
   /** 本批尚未删除的节点 id（含 __new__ 虚拟 id）。 */
   exists: Set<string>
   /** ref 别名 → 所属节点 id。 */
@@ -195,9 +199,11 @@ interface FoldState {
   /** 本批 options 更新失败的分支节点 id：其出口连线的 optionIndex 校验
    * 随前序修复自愈，按 contingent 跳过（同 ref 依赖，见 isContingentRef）。 */
   failedBranchOptionUpdates: Set<string>
-  /** 本批失败的连线变更（op + 原始端点 token 对）：依赖其变更结果的后续
-   * 连线命令按 contingent 跳过（见 isContingentEdgePair）。 */
-  failedEdgePairs: Set<string>
+  /** 本批失败的连线变更（op + 原始端点 token 对）→ 失败断线登记时同对
+   * 残留边的身份快照（失败连线命令为空集）：依赖其变更结果的后续连线
+   * 命令按 contingent 跳过（见 isContingentEdgePair）。快照用于判定
+   * 「修正这条断线能否消除环」——本批后加的边不在快照内，不随之自愈。 */
+  failedEdgePairs: Map<string, ReadonlySet<string>>
   /** 项目资产索引（id → MIME）：shot.refs 引用位校验用。 */
   assets: ReadonlyMap<string, string>
   items: PreviewItem[]
@@ -515,8 +521,8 @@ function foldConnectEdge(
 }
 
 /** 成环守卫（foldConnectEdge 拆出，S3776）：非 attach 连线加环检查。
- * 经更长路径成环仍独立点名；同对断线在本批失败（如端点写反报「没有
- * 这条连线」）时 contingent 跳过——残留边随断线修正移除，反转连线
+ * 经更长路径成环仍独立点名；同对断线在本批失败且其残留边确实参与这条环
+ * （端点写反场景）时 contingent 跳过——残留边随断线修正移除，反转连线
  * 自愈，报「成环」会诱导模型改写正确的反向连线。返回 true = 已处理
  * （contingent 或已点名），调用方直接返回。 */
 function cycleContingent(
@@ -527,13 +533,47 @@ function cycleContingent(
   dst: string,
   pairLabel: string,
 ): boolean {
-  if (!wouldCreateCycle(st.virtualEdges.filter((e) => e.sourceHandle !== SCENE_SHOT_HANDLE), src, dst)) {
+  const flow = st.virtualEdges.filter((e) => e.sourceHandle !== SCENE_SHOT_HANDLE)
+  if (!wouldCreateCycle(flow, src, dst)) {
     return false
   }
   // 自环独立于任何前序断线结果，不适用 contingent 豁免
-  if (src !== dst && st.failedEdgePairs.has(edgePairKey('disconnect_edge', cmd))) return true
+  if (src !== dst && residualBreaksCycle(st, cmd, flow, src, dst)) return true
   st.fail(index, `会造成循环剧情：${pairLabel}`)
   return true
+}
+
+/** 虚拟边身份键（端点 + 源端口）：失败断线的残留快照与当前边按此比对。 */
+function edgeIdentityOf(e: VirtualEdge): string {
+  return `${e.source}\u0000${e.target}\u0000${e.sourceHandle ?? ''}`
+}
+
+/** 失败断线登记时的同对残留边快照（含端点写反：两方向都算同一对）：
+ * 修正断线只可能移除这些边；快照外的边由本批后续命令新增，修正后仍在。 */
+function residualEdgesAt(st: FoldState, cmd: Record<string, unknown>): ReadonlySet<string> {
+  if (cmd.op !== 'disconnect_edge') return new Set<string>()
+  const s = asText(cmd.sourceId)
+  const t = asText(cmd.targetId)
+  return new Set(
+    st.virtualEdges
+      .filter((e) => (e.source === s && e.target === t) || (e.source === t && e.target === s))
+      .map(edgeIdentityOf),
+  )
+}
+
+/** 残留边快照全部移除后即不成环 → 这条环随断线修正自愈，按 contingent
+ * 跳过；环依赖快照外（本批新增）的边时独立点名，不被早先断线失败豁免。 */
+function residualBreaksCycle(
+  st: FoldState,
+  cmd: Record<string, unknown>,
+  flow: readonly VirtualEdge[],
+  src: string,
+  dst: string,
+): boolean {
+  const residual = st.failedEdgePairs.get(edgePairKey('disconnect_edge', cmd))
+  if (residual === undefined || residual.size === 0) return false
+  const remaining = flow.filter((e) => !residual.has(edgeIdentityOf(e)))
+  return !wouldCreateCycle(remaining, src, dst)
 }
 
 /** connect_edge / disconnect_edge 的折叠校验。 */
@@ -593,8 +633,8 @@ function edgePairKey(op: string, cmd: Record<string, unknown>): string {
  * 随前序修复自愈，而非被误报「节点不存在 / 下标越界 / 成环」。 */
 /** 失败的 branch options 更新分类登记（registerFailedMutation 拆出，
  * S3776）：选项自身异型、结果无从折叠时登记 contingent 标记；选项合法、
- * 结果已确定时以归一化后的暂定选项表供下游连线独立校验（级联断线簿记
- * 随前序修复后再折叠，为已记录边界）。 */
+ * 结果已确定时以归一化后的暂定选项表供下游连线独立校验，并清除早前标记
+ * （级联断线簿记随前序修复后再折叠，为已记录边界）。 */
 function registerFailedOptionsUpdate(
   st: FoldState,
   raw: Record<string, unknown>,
@@ -620,6 +660,9 @@ function registerFailedOptionsUpdate(
       (e) => !(e.source === target && e.sourceHandle && gone.has(e.sourceHandle)),
     )
   }
+  // 暂定表已确定：清除早前失败留下的 contingent 标记（与成功覆盖同口径），
+  // 后续出口连线恢复按最新选项表独立校验 optionIndex/重复
+  st.failedBranchOptionUpdates.delete(target)
   st.branchOptions.set(target, normalized.options as Array<{ id: string; label: string }>)
 }
 
@@ -642,7 +685,7 @@ function registerFailedMutation(st: FoldState, raw: Record<string, unknown>, ind
     return
   }
   if (raw.op === 'connect_edge' || raw.op === 'disconnect_edge') {
-    st.failedEdgePairs.add(edgePairKey(raw.op as string, raw))
+    st.failedEdgePairs.set(edgePairKey(raw.op as string, raw), residualEdgesAt(st, raw))
   }
 }
 
@@ -657,7 +700,7 @@ export function validateAiBatch(rawCommands: unknown, graph: AiGraphSnapshot): B
     exists: new Set(graph.nodes.map((n) => n.id)),
     refOwner: new Map(),
     failedBranchOptionUpdates: new Set(),
-    failedEdgePairs: new Set(),
+    failedEdgePairs: new Map(),
     assets: graph.assets,
     items: [],
     issues: [],
