@@ -146,6 +146,46 @@ describe('SceneForm', () => {
   })
 })
 
+describe('BeatForm（IME 组合输入，issue #42）', () => {
+  const beatNode: PanelNode = {
+    id: 'bt1',
+    type: 'beat',
+    data: { name: '真相逼近', tone: '紧张' },
+  }
+
+  it('基调中文拼音组合：组合期间逐键不 patch，选字上屏才提交最终文本', () => {
+    const { api } = setup(beatNode)
+    const tone = screen.getByLabelText('基调')
+    fireEvent.compositionStart(tone)
+    for (const pinyin of ['q', 'qi', 'qin', 'qing']) {
+      fireEvent.input(tone, { target: { value: pinyin }, isComposing: true })
+    }
+    expect(api.patchNode).not.toHaveBeenCalled()
+    fireEvent.input(tone, { target: { value: '清冷' } })
+    fireEvent.compositionEnd(tone, { data: '清冷' })
+    expect(api.patchNode).toHaveBeenCalledTimes(1)
+    expect(patchOf(api)).toEqual({ tone: '清冷' })
+    expect((tone as HTMLInputElement).value).toBe('清冷')
+  })
+
+  it('非组合态直接输入仍即时 patch（英文输入与既有基调编辑不受影响）', () => {
+    const { api } = setup(beatNode)
+    fireEvent.change(screen.getByLabelText('基调'), { target: { value: 'tension' } })
+    expect(patchOf(api)).toEqual({ tone: 'tension' })
+  })
+
+  it('textarea 同享组合保护（场景梗概）', () => {
+    const { api } = setup(sceneNode)
+    const synopsis = screen.getByLabelText('梗概')
+    fireEvent.compositionStart(synopsis)
+    fireEvent.input(synopsis, { target: { value: 'kai' }, isComposing: true })
+    expect(api.patchNode).not.toHaveBeenCalled()
+    fireEvent.input(synopsis, { target: { value: '开场' } })
+    fireEvent.compositionEnd(synopsis, { data: '开场' })
+    expect(patchOf(api)).toEqual({ synopsis: '开场' })
+  })
+})
+
 describe('DialogueForm', () => {
   const dialogueNode: PanelNode = {
     id: 'd1',
