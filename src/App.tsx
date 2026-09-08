@@ -1,9 +1,16 @@
-import { useCallback, useEffect, useState } from 'react'
+import { lazy, startTransition, Suspense, useCallback, useEffect, useState, type ReactNode } from 'react'
 import HomePage from './home/HomePage'
 import { projectStore, type ProjectContent } from './projectStore'
-import EditorView from './editor/EditorView'
-import SettingsView from './settings/SettingsView'
 import type { ProjectSummary } from './home/projects'
+
+/** 编辑器视图按域惰性加载：React Flow 的运行时引用全部封闭在编辑器域内，
+ * 拆出入口 chunk 后冷启动只解析首页所需代码（issue #34）。
+ * 切换经 startTransition 包裹：chunk 未就绪前保留当前界面而非整窗空白
+ * （评审 P2，pullrequestreview-5138102539）。 */
+const EditorView = lazy(() => import('./editor/EditorView'))
+
+/** 设置视图低频使用（⌘, 叠加打开），同样惰性加载不占入口 chunk。 */
+const SettingsView = lazy(() => import('./settings/SettingsView'))
 
 /** 编辑器态：已加载的项目（id + 名称 + 画布文档）。 */
 interface OpenProject {
@@ -43,7 +50,7 @@ export default function App() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === ',' && (e.metaKey || e.ctrlKey)) {
         e.preventDefault()
-        setSettingsOpen(true)
+        startTransition(() => setSettingsOpen(true))
       }
     }
     document.addEventListener('keydown', onKey)
@@ -56,7 +63,7 @@ export default function App() {
       // create 只回摘要：按落盘文档载入会话，保留 create_project 盖的 createdAt——
       // 手工拼空文档会丢创建时间，首次保存把保存时刻误盖为创建时间（§3 溯源字段）
       const doc = await projectStore.load(meta.id)
-      setOpenProject({ id: meta.id, doc })
+      startTransition(() => setOpenProject({ id: meta.id, doc }))
     } catch (err) {
       console.warn('[App] 新建项目失败', err)
     }
@@ -67,7 +74,7 @@ export default function App() {
     async (id: string) => {
       try {
         const doc = await projectStore.load(id)
-        setOpenProject({ id, doc })
+        startTransition(() => setOpenProject({ id, doc }))
       } catch (err) {
         console.warn('[App] 打开项目失败', err)
       }
@@ -130,24 +137,20 @@ export default function App() {
     [refreshProjects],
   )
 
+  let view: ReactNode
   if (settingsOpen) {
-    return <SettingsView onClose={() => setSettingsOpen(false)} />
-  }
-
-  if (openProject) {
-    return (
-      <EditorView
-        key={openProject.id}
-        project={{ id: openProject.id, ...openProject.doc }}
-        onBackHome={handleBackHome}
-        onRenameProject={handleEditorRename}
-        onOpenSettings={() => setSettingsOpen(true)}
-        onSave={handleSave(openProject.id)}
-      />
-    )
-  }
-  return (
-    <HomePage
+    view = <SettingsView onClose={() => startTransition(() => setSettingsOpen(false))} />
+  } else if (openProject) {
+    view = <EditorView
+      key={openProject.id}
+      project={{ id: openProject.id, ...openProject.doc }}
+      onBackHome={handleBackHome}
+      onRenameProject={handleEditorRename}
+        onOpenSettings={() => startTransition(() => setSettingsOpen(true))}
+      onSave={handleSave(openProject.id)}
+    />
+  } else {
+    view = <HomePage
       projects={projects}
       loading={loading}
       onOpenProject={handleOpenProject}
@@ -156,5 +159,6 @@ export default function App() {
       onDuplicateProject={(id) => void handleDuplicateProject(id)}
       onDeleteProject={(id) => void handleDeleteProject(id)}
     />
-  )
+  }
+  return <Suspense fallback={null}>{view}</Suspense>
 }
