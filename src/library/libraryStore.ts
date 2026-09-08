@@ -114,7 +114,7 @@ async function tauriList(): Promise<LibraryAsset[]> {
     assets?: { byId?: Record<string, unknown> }
     warnings?: unknown[]
     cleanupPending?: unknown[]
-  }>('library_list')
+  }>('list_library_assets')
   reportLibraryWarnings(index.warnings)
   // 隔离区积压（身份绑定清理不可用）：随列表上报为诊断，不再静默累积
   if (Array.isArray(index.cleanupPending) && index.cleanupPending.length > 0) {
@@ -132,7 +132,7 @@ async function tauriList(): Promise<LibraryAsset[]> {
 async function tauriPut(file: File, kind: LibraryKind): Promise<LibraryAsset> {
   const { invoke } = await import('@tauri-apps/api/core')
   const bytes = new Uint8Array(await file.arrayBuffer())
-  const entry = await invoke<RawAsset>('library_put', {
+  const entry = await invoke<RawAsset>('import_library_asset', {
     name: file.name,
     mime: file.type || 'application/octet-stream',
     kind,
@@ -186,7 +186,7 @@ export const libraryStore = {
   updateMeta: (id: string, patch: Partial<Pick<LibraryAsset, 'name' | 'tags' | 'groupId' | 'view'>>): Promise<LibraryAsset> => {
     if (isTauri) {
       return import('@tauri-apps/api/core').then(async ({ invoke }) => {
-        const entry = await invoke<RawAsset>('library_update_meta', { id, patch })
+        const entry = await invoke<RawAsset>('update_library_asset', { id, patch })
         reportLibraryWarnings((entry as { warnings?: unknown } | null)?.warnings)
         const normalized = normalizeAsset(entry)
         if (!normalized) throw new Error('更新返回了无效条目')
@@ -222,7 +222,7 @@ export const libraryStore = {
   remove: (id: string): Promise<void> => {
     if (isTauri) {
       return import('@tauri-apps/api/core').then(async ({ invoke }) => {
-        const result = await invoke<{ warnings?: unknown; cleanupPending?: unknown[] }>('library_delete', { id })
+        const result = await invoke<{ warnings?: unknown; cleanupPending?: unknown[] }>('delete_library_asset', { id })
         reportLibraryWarnings(result?.warnings)
         // 隔离区积压随删除响应上报（评审修复：删除成功后不再静默累积）
         if (result?.cleanupPending?.length) {
@@ -257,7 +257,7 @@ export const libraryStore = {
           groups?: { byId?: Record<string, unknown> }
           warnings?: unknown[]
           cleanupPending?: unknown[]
-        }>('library_list')
+        }>('list_library_assets')
         reportLibraryWarnings(index.warnings)
         if (Array.isArray(index.cleanupPending) && index.cleanupPending.length > 0) {
           console.warn('[Library] 删除隔离区待清理：', index.cleanupPending)
