@@ -54,6 +54,10 @@ export interface ParseResult {
   repaired: boolean
   /** 归一化警告：孤儿边隔离、悬空引用标记（§11.3/§11.4）。 */
   warnings: string[]
+  /** 资产空白键重发映射（[空白键, 新 id]，issue #31 评审修复 P2-3）：
+   * 供 Tauri 侧经 register_project_asset_alias 登记别名——修复回写落盘前，
+   * 重发 id 的媒体经盘上条目解析。 */
+  reissuedAssetAliases: [string, string][]
 }
 
 /** 归一化（§11.1 第 2 步容器校验 → 第 3 步非法/重复节点与边 id 重发 →
@@ -62,9 +66,14 @@ export interface ParseResult {
 function normalizeDocument(
   raw: Record<string, unknown>,
   env: NormalizeEnv,
-): { doc: ProjectDocument; warnings: string[] } {
+): { doc: ProjectDocument; warnings: string[]; reissuedAssetAliases: [string, string][] } {
   const warnings: string[] = []
-  const { doc: shaped, optionIdRemap, nodeIdRemap } = normalizeContainers(raw, env, warnings)
+  const {
+    doc: shaped,
+    optionIdRemap,
+    nodeIdRemap,
+    reissuedAssetAliases,
+  } = normalizeContainers(raw, env, warnings)
   const activeNodes = shaped.graph.nodes
   // 空节点 id 重发后，branch 空选项句柄映射表的键同步迁移到新节点 id
   for (const [oldId, newId] of nodeIdRemap) {
@@ -99,7 +108,7 @@ function normalizeDocument(
     return { ...n, ui: { ...n.ui, selected: false } }
   })
   characterAvatarWarnings(shaped, warnings)
-  return { doc: { ...shaped, graph: { ...shaped.graph, nodes, edges } }, warnings }
+  return { doc: { ...shaped, graph: { ...shaped.graph, nodes, edges } }, warnings, reissuedAssetAliases }
 }
 
 /** v0 键控列表的单字段预归一化：非数组重置为空并警告、异型成员按 keep
@@ -285,7 +294,7 @@ function parseLegacyProject(raw: Record<string, unknown>, env: NormalizeEnv): Pa
     env0.project?.id ?? '',
     legacyNow,
   )
-  const { doc: normalized, warnings } = normalizeDocument(
+  const { doc: normalized, warnings, reissuedAssetAliases } = normalizeDocument(
     // 边界（issue 16）：刚构造的 ProjectDocument 以原始 JSON 形态进入归一化
     // 容器校验（§11.1 第 2 步从 Record 起步），方向是「收窄到可遍历形态」
     doc as unknown as Record<string, unknown>,
@@ -296,6 +305,7 @@ function parseLegacyProject(raw: Record<string, unknown>, env: NormalizeEnv): Pa
     migrated: true,
     repaired: true,
     warnings: [...v0Warnings, ...warnings],
+    reissuedAssetAliases,
   }
 }
 
@@ -323,11 +333,12 @@ export function parseProject(raw: unknown, env: NormalizeEnv = {}): ParseResult 
   // 原始文档先克隆：归一化就地改写（id 重发/字段剥离/隔离），事后与改写
   // 产物比较须以未改动的原始为基准——repaired 决定调用方是否回写落定修复
   const pristine = structuredClone(raw)
-  const { doc: normalized, warnings } = normalizeDocument(raw as Record<string, unknown>, env)
+  const { doc: normalized, warnings, reissuedAssetAliases } = normalizeDocument(raw as Record<string, unknown>, env)
   return {
     content: fromDocument(normalized, warnings),
     migrated: false,
     repaired: !sameCanonicalJson(pristine, normalized),
     warnings,
+    reissuedAssetAliases,
   }
 }

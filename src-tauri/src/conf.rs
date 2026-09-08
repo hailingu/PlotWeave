@@ -21,15 +21,6 @@ mod tests {
         serde_json::from_str(&raw).expect("tauri.conf.json 不是合法 JSON")
     }
 
-    fn asset_protocol_scope(conf: &Value) -> Vec<String> {
-        conf.pointer("/app/security/assetProtocol/scope")
-            .and_then(Value::as_array)
-            .expect("app.security.assetProtocol.scope 缺失")
-            .iter()
-            .filter_map(|v| v.as_str().map(str::to_string))
-            .collect()
-    }
-
     /// 主窗口（label=main）必须显式 dragDropEnabled=false，否则页面内
     /// 拖放事件在到达 JS 前被 Tauri 原生拖放处理器吞掉。
     #[test]
@@ -49,23 +40,31 @@ mod tests {
         );
     }
 
-    /// assetProtocol scope 恰为专用资产子目录授权（issue #9 低成本硬化，
-    /// 数据模型 §7.1 资产根；issue #26 收敛为仅项目侧）：库媒体自 issue #26
-    /// 起改走 `pwmedia` 自定义协议按 id 逐请求解析，asset 协议不再授权
-    /// `library/assets/`——本机路径媒体直读面进一步收窄。媒体 URL 仅由
-    /// projectAssets/libraryStore 两条管线合成。全量白名单断言——任何更宽
-    /// 的条目（如 $APPDATA/**）都会让 project.json/library.json 等控制文件
-    /// 重新协议可达，必须整体拒绝。
+    /// assetProtocol 整体停用契约（issue #9 低成本硬化 → issue #31 收敛）：
+    /// 库媒体自 issue #26、项目媒体自 issue #31 起均走 `pwmedia` 自定义协议
+    /// 按 scope + id 逐请求解析——asset 协议失去全部消费者，必须停用且授权
+    /// 面为空，控制文件（project.json/library.json）与其余本机路径不可经
+    /// 协议触达（数据模型 §7.1）。媒体 URL 仅由 projectAssets/libraryStore
+    /// 两条管线合成。
     #[test]
-    fn asset_protocol_scope_exactly_authorizes_dedicated_asset_subtrees() {
-        const APPROVED: [&str; 1] = ["$APPDATA/projects/*/assets/**"];
-        let mut scope = asset_protocol_scope(&load_conf());
-        scope.sort();
-        let mut approved = APPROVED;
-        approved.sort();
+    fn asset_protocol_is_disabled_with_empty_scope() {
+        let conf = load_conf();
+        let protocol = conf
+            .pointer("/app/security/assetProtocol")
+            .and_then(Value::as_object)
+            .expect("app.security.assetProtocol 缺失");
         assert_eq!(
-            scope, approved,
-            "assetProtocol.scope 必须恰为专用资产子目录白名单 {approved:?}：更宽的条目会使控制文件协议可达（数据模型 §7.1，issue #9/#26）"
+            protocol.get("enable").and_then(Value::as_bool),
+            Some(false),
+            "assetProtocol 必须停用：项目/库媒体已全部收敛至 pwmedia 协议（issue #26/#31），保留开启只会扩大本机路径直读面"
+        );
+        let scope = protocol
+            .get("scope")
+            .and_then(Value::as_array)
+            .expect("app.security.assetProtocol.scope 缺失");
+        assert!(
+            scope.is_empty(),
+            "assetProtocol.scope 必须为空：任何残留条目都会让对应子树协议可达（数据模型 §7.1，issue #9/#26/#31）"
         );
     }
 }

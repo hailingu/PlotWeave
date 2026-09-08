@@ -3,7 +3,9 @@
  * Tauri 环境走 Rust 命令：导入 = 库文件拷贝进项目 assets/（句柄链
  * no-follow 落盘）并生成项目级 AssetRef，入会话索引前再过
  * validate_project_asset 预检（§9.3 set_asset 强制）；媒体 URL 经
- * project_asset_path 实路径复验后 convertFileSrc 拼接。
+ * get_asset_media_url 以 scope + assetId 换取 pwmedia opaque URL
+ * （issue #31，与库媒体 issue #26 同构）——relPath 与本机绝对路径不出
+ * Rust，前端不再拼接。
  * 浏览器预览无 IPC，回退为内存实现：导入生成假规范 relPath 的 AssetRef
  *（归一化往返可存活），同时经源 blob 建独立 object URL 挂到项目资产 id
  *（拷贝语义：源库资产删除不影响项目缩略图；重载后映射丢失即拒绝，
@@ -104,10 +106,15 @@ async function memoryImport(_projectId: string, libraryAssetId: string): Promise
   return asset
 }
 
+/** 媒体 opaque URL（§7.1，issue #31）：只传逻辑 scope + assetId，由 Rust
+ * 按项目文档 assets.byId 逐请求解析并返回 pwmedia URL——relPath 与本机
+ * 绝对路径不出 Rust，前端不再拼接。 */
 async function tauriMediaUrl(projectId: string, asset: AssetRef): Promise<string> {
-  const { invoke, convertFileSrc } = await import('@tauri-apps/api/core')
-  const abs = await invoke<string>('project_asset_path', { id: projectId, relPath: asset.relPath })
-  return convertFileSrc(abs)
+  const { invoke } = await import('@tauri-apps/api/core')
+  return invoke<string>('get_asset_media_url', {
+    scope: { kind: 'project', projectId },
+    assetId: asset.id,
+  })
 }
 
 /** IPC 直调助手（仅桌面端；动态导入避免浏览器预览加载 Tauri 模块）：
@@ -125,9 +132,9 @@ export const projectAssets = {
   importFromLibrary: (projectId: string, libraryAssetId: string): Promise<AssetRef> =>
     isTauri ? tauriImport(projectId, libraryAssetId) : memoryImport(projectId, libraryAssetId),
 
-  /** 媒体 URL：Tauri 走 asset 协议（实路径复验后拼接）；内存回退返回
-   * 导入时建立的独立 object URL（源库删除不影响）——重载后映射丢失即
-   * 拒绝（预览不落盘，属预期）。 */
+  /** 媒体 URL：Tauri 走 pwmedia opaque URL（scope + assetId，issue #31）；
+   * 内存回退返回导入时建立的独立 object URL（源库删除不影响）——重载后
+   * 映射丢失即拒绝（预览不落盘，属预期）。 */
   mediaUrl: (projectId: string, asset: AssetRef): Promise<string> => {
     if (isTauri) return tauriMediaUrl(projectId, asset)
     const url = memoryUrls.get(asset.id)

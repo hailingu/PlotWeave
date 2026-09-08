@@ -333,6 +333,83 @@ describe('tauriLoad：归一化与迁移回写', () => {
     expect(saved.versionless).toBeUndefined()
   })
 
+  it('assets 空白键重发：加载归一化把映射经 register_project_asset_alias 登记到 Rust（issue #31 评审修复 P2-3）', async () => {
+    handlers.set('load_project', () => ({
+      ...modernFile(),
+      assets: {
+        byId: {
+          '': {
+            id: '',
+            relPath: 'assets/pa-1.png',
+            mime: 'image/png',
+            source: 'upload',
+            createdAt: '2026-01-01T00:00:00.000Z',
+          },
+        },
+      },
+    }))
+    handlers.set('save_project', () => undefined)
+    handlers.set('register_project_asset_alias', () => undefined)
+    const { projectStore } = await load()
+    await projectStore.load('p1')
+    const alias = calls.find((c) => c.cmd === 'register_project_asset_alias')
+    expect(alias).toBeDefined()
+    const args = alias?.args as { id: string; blankKey: string; freshId: string }
+    expect(args.id).toBe('p1')
+    expect(args.blankKey).toBe('')
+    expect(args.freshId.trim().length).toBeGreaterThan(0)
+    // 干净 v1 无空白键：不发起登记调用
+    handlers.set('load_project', () => modernFile())
+    calls.length = 0
+    await projectStore.load('p1')
+    expect(calls.some((c) => c.cmd === 'register_project_asset_alias')).toBe(false)
+  })
+
+  it('别名登记 IPC 期间新保存入队：链身份守卫重来，修复回写不得晚于新保存覆盖新内容（issue #31 评审修复 P2-6）', async () => {
+    let loadCalls = 0
+    const storeBox: { current?: typeof import('./projectStore') } = {}
+    // 脏 v1：空白资产键（触发别名登记）+ 空白边 id（触发修复回写）
+    const dirtyFile = () => ({
+      ...modernFile(),
+      assets: {
+        byId: {
+          '': {
+            id: '',
+            relPath: 'assets/a.png',
+            mime: 'image/png',
+            source: 'upload',
+            createdAt: '2026-01-01T00:00:00.000Z',
+          },
+        },
+      },
+      graph: {
+        ...modernFile().graph,
+        edges: [{ id: '   ', source: 's1', target: 's1', data: { kind: 'sequence' } }],
+      },
+    })
+    handlers.set('load_project', () => {
+      loadCalls += 1
+      if (loadCalls === 1) return dirtyFile()
+      // 守卫触发重来的读取：写后净本，不再触发回写与登记
+      return { ...modernFile(), project: { ...modernFile().project, name: '写后净本' } }
+    })
+    handlers.set('save_project', () => undefined)
+    handlers.set('register_project_asset_alias', () => {
+      // 首次别名 IPC 在途：编辑器卸载冲刷把新保存排进链（此前链本静止）
+      void storeBox.current
+        ?.projectStore.save('p1', { name: '冲刷的新编辑', nodes: [], edges: [], settings: { characters: [], locations: [] } })
+        .catch(() => undefined)
+      return undefined
+    })
+    const mod = await load()
+    storeBox.current = mod
+    const doc = await mod.projectStore.load('p1')
+    // 旧内容的修复回写不得在冲刷之后落盘——登记后须复查链身份整体重来
+    const saves = calls.filter((c) => c.cmd === 'save_project')
+    expect(saves.map((s) => (s.args as { doc: { project: { name: string } } }).doc.project.name)).toEqual(['冲刷的新编辑'])
+    expect(doc.name).toBe('写后净本')
+  })
+
   it('v1 修复型归一化回写 save_project（下次打开不再重复修复）；干净 v1 不回写', async () => {
     handlers.set('load_project', () => ({
       ...modernFile(),

@@ -18,11 +18,13 @@ use std::time::Duration;
 use base64::Engine as _;
 use reqwest::Url;
 use serde_json::{json, Value};
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 use crate::http_util::{append_capped, read_text_capped};
 
-/// 生成产物大小上限（32 MiB）：防异常响应把内存/磁盘撑爆。
+/// 生成产物大小上限（32 MiB）：防异常响应把内存/磁盘撑爆。pwmedia 项目
+/// scope 的读取上限（256 MiB 防御界）远超本值——生成产物契约是项目资产
+/// 持久化契约的真子集（评审修复 P2-2/P2-4）。
 const GENERATED_IMAGE_MAX_BYTES: usize = 32 * 1024 * 1024;
 
 /// 响应体读取上限（64 MiB）：主响应是 JSON 文本，base64 膨胀约 4/3 加
@@ -323,7 +325,9 @@ pub async fn llm_image_generate(app: AppHandle, request: ImageGenRequest) -> Res
         return Err("已取消".into());
     }
     let projects = crate::store::projects_dir(&app)?;
-    let written = crate::assets::write_generated_asset(&projects, &project_id, &bytes, mime)?;
+    let pending = app.state::<crate::assets::project_media::PendingProjectAssets>();
+    let written =
+        crate::assets::write_generated_asset(&projects, &project_id, &bytes, mime, &pending)?;
     // §9.3 预检并入命令内（同一根句柄）：返回的产物已完成形状+实路径校验
     let asset = crate::assets::validate_project_asset_with(&projects, &project_id, &written)?;
     clear_cancel(&job_id);
