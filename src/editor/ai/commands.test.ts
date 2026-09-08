@@ -1035,3 +1035,23 @@ describe('contingent：依赖失败连线变更的后续连线（评审 51396162
     expect(v.issues[0]?.message).toContain('会造成循环剧情')
   })
 })
+
+describe('contingent 连线的独立约束仍进首轮清单（评审 5139865818）', () => {
+  it('contingent 出口连线仍独立校验端点类型，与 options 异型并列收集', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'update_node', nodeId: 'b1', patch: { options: [{ id: 'ob-a', label: '追' }, { label: 5 }] } },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 'sh1', edgeKind: 'branch', optionIndex: 2 },
+      ],
+      richSnap(),
+    )
+    expect(v.ok).toBe(false)
+    expect(v.commands).toEqual([])
+    // options 异型 + 端点类型（分支连线不得指向分镜卡）均独立于选项表，
+    // 首轮即进完整清单；仅 optionIndex 越界延后
+    expect(v.issues).toHaveLength(2)
+    expect(v.issues[0]?.message).toContain('异型')
+    expect(v.issues[1]?.message).toContain('分镜卡不参与剧情流')
+    expect(v.issues.map((i) => i.message).join('\n')).not.toContain('optionIndex')
+  })
+})

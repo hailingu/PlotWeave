@@ -420,6 +420,24 @@ function resolveEndpoints(
   return { src, dst }
 }
 
+/** 与选项表无关的连线放置约束（§5 端口归属、§4.4 宿主唯一）：独立于
+ * optionIndex/handle，contingent 路径也必须校验并进完整清单。返回错误
+ * 文案或 null。 */
+function connectPlacementIssue(
+  st: FoldState,
+  kind: string,
+  src: string,
+  dst: string,
+  pairLabel: string,
+): string | null {
+  const endpointIssue = connectionEndpointIssue(st.types.get(src), st.types.get(dst), kind as EdgeKind)
+  if (endpointIssue) return `${endpointIssue}：${pairLabel}`
+  if (kind === 'attach' && hasAttachHost(st.virtualEdges, dst)) {
+    return `分镜卡已有宿主，换宿主须先断开：${pairLabel}`
+  }
+  return null
+}
+
 /** connect_edge 的折叠校验（foldEdge 拆出，S3776）：按连线语义分端口
  * 校验（§4.4），经端点规则、宿主唯一、重复与成环检查后入虚拟图。 */
 function foldConnectEdge(
@@ -432,29 +450,28 @@ function foldConnectEdge(
 ): void {
   const kind = asText(cmd.edgeKind) || 'sequence'
   if (!(kind in EDGE_KIND_LABELS)) return st.fail(index, `未知连线类型：${kind}`)
-  // optionIndex 的合法范围取决于 source 分支的选项表：本批对该分支的
-  // options 更新失败时，新下标随前序修复自愈 → contingent 跳过
-  if (kind === 'branch' && st.failedBranchOptionUpdates.has(src)) return
-  const port = edgePortOf(st, kind, cmd, src, dst)
-  if (typeof port === 'string') return st.fail(index, port)
-  const { handle, optionIndex } = port
-  // 端点类型约束（§5 端口归属）：与加载归一化的孤儿边规则对等——放行
-  // 「保存后下次加载即被静默删除」的连线（分镜卡参与剧情流等）是坏体验
-  const endpointIssue = connectionEndpointIssue(
-    st.types.get(src),
-    st.types.get(dst),
-    kind as EdgeKind,
-  )
-  if (endpointIssue) return st.fail(index, `${endpointIssue}：${pairLabel}`)
-  if (kind === 'attach' && hasAttachHost(st.virtualEdges, dst)) {
-    return st.fail(index, `分镜卡已有宿主，换宿主须先断开：${pairLabel}`)
+  // 选项表相关检查（optionIndex 范围、handle 解析、重复连线比句柄）依赖
+  // source 分支的 options 状态：本批对该分支的 options 更新失败时延后
+  // （随前序修复自愈）；端点类型、宿主唯一、成环等独立约束仍照常校验
+  const optionContingent = kind === 'branch' && st.failedBranchOptionUpdates.has(src)
+  let handle: string | null = null
+  let optionIndex: number | undefined
+  if (!optionContingent) {
+    const port = edgePortOf(st, kind, cmd, src, dst)
+    if (typeof port === 'string') return st.fail(index, port)
+    handle = port.handle
+    optionIndex = port.optionIndex
   }
-  if (st.virtualEdges.some((e) => e.source === src && e.target === dst && (e.sourceHandle ?? null) === handle)) {
+  const placementIssue = connectPlacementIssue(st, kind, src, dst, pairLabel)
+  if (placementIssue) return st.fail(index, placementIssue)
+  if (!optionContingent && st.virtualEdges.some((e) => e.source === src && e.target === dst && (e.sourceHandle ?? null) === handle)) {
     return st.fail(index, `重复连线：${pairLabel}`)
   }
   // attach 是派生从属边（§4.4 垂直语义）：自身不查环，也不参与
   // 剧情流环检测——环只可能出现在横向剧情流上
   if (kind !== 'attach' && cycleContingent(st, cmd, index, src, dst, pairLabel)) return
+  // 独立约束全部通过：剩余校验随前序修复自愈，本轮不折叠不点名
+  if (optionContingent) return
   st.virtualEdges.push({
     source: src,
     target: dst,
