@@ -405,12 +405,17 @@ function edgePortOf(
 
 /** 端点解析与守卫（foldEdge 拆出，S3776）：引用依赖失败前序时静默
  * 跳过（返回 'contingent'）；真实缺失记入问题清单（返回 'missing'）；
- * 合法时返回解析出的端点对。 */
+ * 同一失败 ref 兼作两端为必然自环，独立于该 create 的修复结果，返回
+ * 'selfloop' 交由 foldEdge 点名（不得被 contingent 屏蔽）；合法时返回
+ * 解析出的端点对。 */
 function resolveEndpoints(
   st: FoldState,
   cmd: Record<string, unknown>,
   index: number,
-): { src: string; dst: string } | 'contingent' | 'missing' {
+): { src: string; dst: string } | 'contingent' | 'missing' | 'selfloop' {
+  const s = asText(cmd.sourceId)
+  const t = asText(cmd.targetId)
+  if (s !== '' && s === t && isContingentRef(st, cmd, 'sourceId')) return 'selfloop'
   if (isContingentRef(st, cmd, 'sourceId') || isContingentRef(st, cmd, 'targetId')) {
     return 'contingent'
   }
@@ -513,7 +518,8 @@ function cycleContingent(
   if (!wouldCreateCycle(st.virtualEdges.filter((e) => e.sourceHandle !== SCENE_SHOT_HANDLE), src, dst)) {
     return false
   }
-  if (st.failedEdgePairs.has(edgePairKey('disconnect_edge', cmd))) return true
+  // 自环独立于任何前序断线结果，不适用 contingent 豁免
+  if (src !== dst && st.failedEdgePairs.has(edgePairKey('disconnect_edge', cmd))) return true
   st.fail(index, `会造成循环剧情：${pairLabel}`)
   return true
 }
@@ -522,6 +528,10 @@ function cycleContingent(
 function foldEdge(st: FoldState, cmd: Record<string, unknown>, index: number, op: string): void {
   const ends = resolveEndpoints(st, cmd, index)
   if (ends === 'contingent' || ends === 'missing') return
+  if (ends === 'selfloop') {
+    // 必然自环独立于任何失败前序（create 修复后仍非法），首轮即点名
+    return st.fail(index, `会造成循环剧情：${asText(cmd.sourceId)} → ${asText(cmd.targetId)}`)
+  }
   const { src, dst } = ends
   const pairLabel = `${st.labels.get(src) ?? '未知节点'} → ${st.labels.get(dst) ?? '未知节点'}`
 
@@ -569,6 +579,25 @@ function edgePairKey(op: string, cmd: Record<string, unknown>): string {
  * 未入图的虚拟 id）、branch 的 options 更新失败登记目标、连线变更失败
  * 登记原始端点对——后续依赖这些变更结果的命令按 contingent 跳过、
  * 随前序修复自愈，而非被误报「节点不存在 / 下标越界 / 成环」。 */
+/** 失败的 branch options 更新分类登记（registerFailedMutation 拆出，
+ * S3776）：选项自身异型、结果无从折叠时登记 contingent 标记；选项合法、
+ * 结果已确定时以归一化后的暂定选项表供下游连线独立校验（级联断线簿记
+ * 随前序修复后再折叠，为已记录边界）。 */
+function registerFailedOptionsUpdate(
+  st: FoldState,
+  raw: Record<string, unknown>,
+  target: string,
+): void {
+  const patch = plainObject(raw.patch) ? raw.patch : undefined
+  if (patch === undefined || !Array.isArray(patch.options)) return
+  if (branchOptionsError(patch.options as unknown[]) !== null) {
+    st.failedBranchOptionUpdates.add(target)
+    return
+  }
+  const normalized = normalizeNodeFields('branch', patch, st.branchOptions.get(target))
+  st.branchOptions.set(target, normalized.options as Array<{ id: string; label: string }>)
+}
+
 function registerFailedMutation(st: FoldState, raw: Record<string, unknown>, index: number): void {
   if (raw.op === 'create_node') {
     const refName = typeof raw.ref === 'string' ? raw.ref.trim() : ''
@@ -577,14 +606,13 @@ function registerFailedMutation(st: FoldState, raw: Record<string, unknown>, ind
   }
   if (raw.op === 'update_node') {
     const target = resolveRef(st, raw, 'nodeId')
-    const patch = plainObject(raw.patch) ? raw.patch : undefined
     if (
       target !== null &&
-      patch !== undefined &&
-      Array.isArray(patch.options) &&
-      st.types.get(target) === 'branch'
+      st.types.get(target) === 'branch' &&
+      plainObject(raw.patch) &&
+      Array.isArray((raw.patch as Record<string, unknown>).options)
     ) {
-      st.failedBranchOptionUpdates.add(target)
+      registerFailedOptionsUpdate(st, raw, target)
     }
     return
   }

@@ -1075,3 +1075,45 @@ describe('失败标记的生命周期：成功覆盖 options 后清除（评审 
     expect(v.issues[1]?.message).toContain('optionIndex')
   })
 })
+
+describe('contingent 不屏蔽独立可判定的约束（评审 5140147147）', () => {
+  it('同一失败 ref 兼作两端的必然自环不被 contingent 屏蔽', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'create_node', nodeType: 'beat', data: { label: '立足' }, ref: 'b' },
+        { op: 'connect_edge', sourceId: 'b', targetId: 'b' },
+      ],
+      snap(),
+    )
+    expect(v.issues).toHaveLength(2)
+    expect(v.issues[0]?.message).toContain('label')
+    expect(v.issues[1]?.message).toContain('会造成循环剧情')
+  })
+
+  it('options 合法但更新因无关标量失败：连线按暂定选项表独立校验', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'update_node', nodeId: 'b1', patch: { options: ['只留一个'], episodeNo: 0 } },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 2 },
+      ],
+      richSnap(),
+    )
+    expect(v.issues).toHaveLength(2)
+    expect(v.issues[0]?.message).toContain('episodeNo')
+    expect(v.issues[1]?.index).toBe(1)
+    expect(v.issues[1]?.message).toContain('optionIndex')
+  })
+
+  it('失败断线不豁免必然自环', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'disconnect_edge', sourceId: 'n1', targetId: 'n1' },
+        { op: 'connect_edge', sourceId: 'n1', targetId: 'n1' },
+      ],
+      snap(),
+    )
+    expect(v.issues).toHaveLength(2)
+    expect(v.issues[0]?.message).toContain('没有这条连线')
+    expect(v.issues[1]?.message).toContain('会造成循环剧情')
+  })
+})
