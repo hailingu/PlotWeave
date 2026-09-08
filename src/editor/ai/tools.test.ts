@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { AI_TOOLS, WRITE_TOOL_NAMES, toolCallsToCommands, type ToolCall } from './tools'
+import { nodeFieldTableText } from './nodeFields'
 
 const call = (name: string, args: unknown): ToolCall => ({
   id: `call-${name}`,
@@ -114,5 +115,17 @@ describe('工具表定义', () => {
     }
     expect(WRITE_TOOL_NAMES.has('batch')).toBe(true)
     expect(WRITE_TOOL_NAMES.has('get_node')).toBe(false)
+  })
+
+  it('data/patch/批次通道嵌入共享字段表（issue 41：协议与校验器同源）', () => {
+    const paramOf = (tool: string, key: string): unknown => {
+      const props = AI_TOOLS.find((t) => t.function.name === tool)!.function.parameters
+        .properties as Record<string, { description?: unknown }>
+      return props[key]?.description
+    }
+    // 模型产 data/patch 的三个入口都拿到同一份字段协议文本
+    expect(paramOf('create_node', 'data')).toContain(nodeFieldTableText())
+    expect(paramOf('update_node_spec', 'patch')).toContain(nodeFieldTableText())
+    expect(paramOf('batch', 'commands')).toContain(nodeFieldTableText())
   })
 })

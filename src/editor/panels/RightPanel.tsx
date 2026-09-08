@@ -1,15 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
 import SegmentedControl from './SegmentedControl'
 import PanelResizer from './PanelResizer'
-import { llmChat, type AssistantMessage, type ChatMessage } from '../ai/chat'
-import { AI_TOOLS, toolCallsToCommands, type ToolCall } from '../ai/tools'
+import { type ChatMessage } from '../ai/chat'
+import { runAgentLoop } from '../ai/agentLoop'
 import { type AiCommand, type BatchValidation, type ValidatedCommand } from '../ai/commands'
+import { nodeFieldTableText } from '../ai/nodeFields'
 import { settingsStore } from '../../settings/settingsStore'
 import {
   listChatModels,
   type AppSettings,
   type ChatModelOption,
-  type ProviderConfig,
 } from '../../settings/types'
 import {
   resolveCharacterName,
@@ -212,13 +212,17 @@ interface ThreadEntry {
   }
 }
 
-/** 助手人格与命令协议说明（§6/数据模型 §12.2）。 */
+/** 助手人格与命令协议说明（§6/数据模型 §12.2）。节点字段表由
+ * nodeFields.ts 生成（issue 41）：提示词、工具描述与校验白名单同源，
+ * 模型不再因协议缺失自造字段（如 beat 的 label/summary/stakes）。 */
 const SYSTEM_PROMPT =
   '你是短剧创作助手，帮助编剧讨论剧情结构、人物动机与台词。\n' +
   '需要改动画布时，只产出命令：执行前界面会向用户展示改动预览并等待确认，' +
   '所以你不要声称已经完成修改。优先调用工具（推荐把一次改动的全部命令放进' +
   '一个 batch）；服务不支持工具时退回 ```json 围栏批次（格式 {"commands":[…]}）。\n' +
   '需要画布信息时先调用读工具 get_graph_snapshot / get_node。\n' +
+  '各节点类型 data/patch 的合法字段（表外字段会被整批拒绝）：\n' +
+  `${nodeFieldTableText()}\n` +
   '命令要点：create_node 的 data 只写要定制的字段，ref 供本批后续命令引用' +
   '新节点；update_node_spec 的 patch 只写要改的字段；connect_edge 缺省为剧情流，' +
   'branch 需 optionIndex（0 基），attach 仅 场景→分镜卡；episodeNo 仅' +
@@ -226,7 +230,8 @@ const SYSTEM_PROMPT =
   '画布快照的「剧情流顺序」即大纲投影：重排剧情 = 同一批次内先 disconnect 旧边' +
   '再 connect 新边；设定集段落给出角色/地点实体 id，写 characterIds/locationId 时引用它们。\n' +
   '规则：只使用快照里出现过的 id（新节点用 ref）；连线不得自环或成环；' +
-  '每条命令可用 reason 说明理由。'
+  '每条命令可用 reason 说明理由。批次被校验拒绝时，按回喂的错误清单修正后' +
+  '重新输出完整批次。'
 
 /** 组装本次请求的消息序列：系统提示 + 画布快照（可选）+ 会话历史 + 新输入。
  * 历史里的批次文本不再重复喂回（已渲染为预览卡，防止上下文膨胀）。 */
@@ -247,42 +252,6 @@ function buildMessages(
   }
   messages.push({ role: 'user', content: text })
   return messages
-}
-
-/** 朴素 tool-calling 循环（数据模型 §12.2）：读工具就地执行回喂后重问，
- * 最多三轮；产出写命令/错误或纯文本即终止。messages 原地追加。 */
-async function runAgentLoop(
-  provider: ProviderConfig,
-  model: string,
-  messages: ChatMessage[],
-  readTool: (name: string, args: Record<string, unknown>) => string,
-): Promise<{ prose: string; toolCommands: AiCommand[] | null; toolErrors: string[] }> {
-  let prose = ''
-  let toolCommands: AiCommand[] | null = null
-  let toolErrors: string[] = []
-  for (let round = 0; round < 3; round++) {
-    const reply: AssistantMessage = await llmChat(provider, model, messages, AI_TOOLS)
-    const calls: ToolCall[] = reply.tool_calls ?? []
-    const { commands: cmds, readRequests, errors } = toolCallsToCommands(calls)
-    const hasWrites = cmds.length > 0 || errors.length > 0
-    if (hasWrites) {
-      prose = (reply.content ?? '').trim()
-      toolCommands = cmds
-      toolErrors = errors
-      break
-    }
-    if (readRequests.length > 0) {
-      messages.push({ role: 'assistant', content: reply.content ?? '', tool_calls: calls })
-      for (const r of readRequests) {
-        messages.push({ role: 'tool', tool_call_id: r.id, content: readTool(r.name, r.args) })
-      }
-      continue
-    }
-    prose = (reply.content ?? '').trim()
-    toolErrors = errors
-    break
-  }
-  return { prose, toolCommands, toolErrors }
 }
 
 /**
@@ -361,18 +330,15 @@ function AiThread({
     setArmedIdx(null)
     try {
       const messages = buildMessages(thread, text, knowsCanvas, canvasDigest)
-      const { prose, toolCommands, toolErrors } = await runAgentLoop(
+      // 校验在循环内进行（issue 41）：未通过的批次回喂错误清单让模型有限次
+      // 纠错，最终校验结果（通过/耗尽/纯讨论）随循环产出返回
+      const { prose, toolErrors, validation } = await runAgentLoop(
         provider,
         activeOption.model,
         messages,
         executeReadTool,
+        { commands: onValidateCommands, prose: onValidateAi },
       )
-
-      // 验证与展示：工具命令直接校验；纯文本走围栏解析（兼容无工具的服务）
-      const validation =
-        toolCommands && toolCommands.length > 0
-          ? (onValidateCommands?.(toolCommands) ?? null)
-          : (onValidateAi?.(prose) ?? null)
       let displayText = validation
         ? prose.replace(/```json[\s\S]*?```/gi, '').trim()
         : prose

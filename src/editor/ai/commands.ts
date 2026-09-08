@@ -2,13 +2,16 @@ import {
   branchOptionHandle,
   connectionEndpointIssue,
   type EdgeKind,
+  type EndpointPair,
   hasAttachHost,
   removedOptionHandles,
   SCENE_SHOT_HANDLE,
   wouldCreateCycle,
 } from '../graphRules'
 import { dataPatchOf, type NodeDataPatch } from '../nodes/patch'
-import { uid } from '../../uid'
+import { AI_FIELD_KEYS } from './nodeFields'
+import { contingentUpdateIssue, NODE_TYPE_LABELS, payloadIssue } from './payloadCheck'
+import { branchOptionsError, normalizeNodeFields, plainObject } from './patchShape'
 
 /**
  * AI 批量命令的解析与校验（docs/ui-design.md §6 改动预览卡、数据模型 §12）。
@@ -105,28 +108,14 @@ export interface BatchValidation {
   hasDeletes: boolean
 }
 
-const NODE_TYPE_LABELS: Record<string, string> = {
-  scene: '场景',
-  beat: '节奏卡',
-  dialogue: '对白',
-  branch: '分支',
-  shot: '分镜卡',
-}
-
-/**
- * 各类型节点的合法字段（与 nodes/types.ts 的 *NodeData 一一对应，
- * 即 ⚙️ 设置面板可编辑的字段）。AI 的 data/patch 出现白名单之外的字段
- * 一律整批拒绝——宁可拒绝也不静默写错字段。
- * episodeNo（§3.5 分集）：编剧侧四类可写；分镜卡随宿主场景，不可单独分集。
- */
-const NODE_FIELD_KEYS: Record<string, readonly string[]> = {
-  scene: ['name', 'sceneNo', 'interior', 'locationId', 'time', 'weather', 'synopsis', 'characterIds', 'episodeNo'],
-  dialogue: ['name', 'lines', 'episodeNo'],
-  beat: ['name', 'tone', 'episodeNo'],
-  branch: ['prompt', 'options', 'episodeNo'],
-  shot: ['shotNo', 'size', 'picture', 'prompt', 'refs'],
-}
+/** 各类型节点的合法字段白名单（issue 41 起引用 nodeFields.ts 的协议表）：
+ * 与 nodes/types.ts 的 *NodeData 一一对应，工具描述与系统提示同源生成；
+ * 白名单外字段一律整批拒绝——宁可拒绝也不静默写错字段。 */
+const NODE_FIELD_KEYS = AI_FIELD_KEYS
 const OP_LABELS = { create: '创建', update: '修改', delete: '删除', connect: '连线', disconnect: '断开' }
+
+/** 折叠期新建节点的虚拟 id（不进画布，仅同批 ref 解析与 contingent 判定用）。 */
+const virtualIdOf = (index: number): string => `__new__:${index}`
 const EDGE_KIND_LABELS: Record<string, string> = {
   sequence: '剧情流',
   branch: '分支出口',
@@ -134,62 +123,9 @@ const EDGE_KIND_LABELS: Record<string, string> = {
 }
 
 /**
- * 从助手回复中提取批次对象：优先取最后一个 ```json 围栏，
- * 其次裸 `{"commands":[...]}` 前缀。无法解析返回 undefined（纯讨论回复）。
+ * 从助手回复文本提取批次对象的解析在 batchText.ts（围栏回退通道）；
+ * 本模块消费已解析的 commands 数组，负责折叠校验与执行形态。
  */
-
-/** 取最后一个 ```json 围栏的正文；无闭合围栏返回 null。
- * 用 indexOf 线性扫描等价替代 /```json\s*([\s\S]*?)```/gi 的惰性匹配，
- * 消除超线性回溯（SonarQube S8786）；大小写不敏感与「取最后一个」
- * 语义由 extractBatchJson 测试钉住。标记大小写不敏感按码元逐段比较，
- * 避免 toLowerCase 改变字符串长度导致下标漂移（如 İ）。 */
-function lastFenceBody(text: string): string | null {
-  let last: string | null = null
-  let from = 0
-  for (;;) {
-    const open = text.indexOf('```', from)
-    if (open === -1) break
-    const afterTicks = open + 3
-    if (text.slice(afterTicks, afterTicks + 4).toLowerCase() !== 'json') {
-      from = afterTicks
-      continue
-    }
-    let bodyStart = afterTicks + 4
-    while (bodyStart < text.length && /\s/.test(text[bodyStart])) bodyStart++
-    const close = text.indexOf('```', bodyStart)
-    if (close === -1) break // 之后不再有 ```，自然也不再有可闭合的围栏
-    last = text.slice(bodyStart, close)
-    from = close + 3
-  }
-  return last
-}
-
-export function extractBatchJson(text: string): { commands: unknown[] } | undefined {
-  const last = lastFenceBody(text)
-  const candidates: string[] = []
-  if (last !== null) candidates.push(last)
-  const trimmed = text.trim()
-  if (trimmed.startsWith('{"commands"')) candidates.push(trimmed)
-  for (const raw of candidates) {
-    try {
-      const parsed: unknown = JSON.parse(raw)
-      if (isBatchShape(parsed)) return parsed
-    } catch {
-      // 继续尝试下一个候选
-    }
-  }
-  return undefined
-}
-
-function isBatchShape(v: unknown): v is { commands: unknown[] } {
-  return (
-    typeof v === 'object' && v !== null && Array.isArray((v as { commands?: unknown }).commands)
-  )
-}
-
-function plainObject(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v)
-}
 
 function asText(v: unknown): string {
   return typeof v === 'string' ? v.trim() : ''
@@ -201,29 +137,25 @@ function reasonOf(cmd: Record<string, unknown>): string {
   return r ? `：${r}` : ''
 }
 
-/** data/patch 字段白名单校验；返回错误文案或 null。无白名单条目的类型
- * 一律整批拒绝——如 §13 首版的图片节点（AI 命令暂不创建/修改，快照
- * 只读可见）：白名单缺失若放行，update_node 可携任意字段直抵画布
- * （prompt 注入对象后快照/生成即崩，畸形 outputs 落盘重开被静默修复）。 */
-function checkFieldKeys(nodeType: string, fields: Record<string, unknown>): string | null {
-  const allowed = NODE_FIELD_KEYS[nodeType]
-  if (!allowed) {
-    return `${NODE_TYPE_LABELS[nodeType] ?? (nodeType || '未知类型')} 暂不支持 AI 命令修改`
-  }
-  const unknownKeys = Object.keys(fields).filter((k) => !allowed.includes(k))
-  if (unknownKeys.length === 0) return null
-  return `未知字段：${unknownKeys.join('、')}（${NODE_TYPE_LABELS[nodeType]} 允许：${allowed.join('、')}）`
-}
-
 /**
  * 逐条折叠校验：维护「当前图 + 本批已建未删」的虚拟状态，
  * 让批次内引用（ref 建链）与成环/重复判定都按最终态计算。
- * 任一问题 → ok=false（整批拒绝），commands 为空。
+ * 任一问题 → ok=false（整批拒绝），commands 为空；issues 收集全部命令
+ * 的完整问题清单，不因首错短路——纠错回喂与预览卡都依赖完整清单，
+ * 模型单轮即可修完所有被点名命令，否则多错误批次会在重试预算内逐个
+ * 暴露、必然耗尽。失败的折叠在任何状态变更前返回，后续命令继续折叠
+ * 不受污染；依赖失败前序变更结果的命令按 contingent 跳过本轮校验
+ * （失败 create 的 ref 引用、失败 branch options 更新的出口连线、失败
+ * 连线变更的后续连线，见 registerFailedMutation），合法性随前序修复
+ * 自愈，不进问题清单以免诱导模型改写本正确的命令。
  *
  * 复杂度拆解（S3776）：每个 op 的折叠逻辑是独立的顶层函数
  * （foldCreate/foldUpdate/foldDelete/foldEdge），共享的虚拟图状态
  * 收敛在 FoldState；本函数只负责建状态与分发。
  */
+
+/** 折叠校验的虚拟边：端点 + 源端口/连线类型（与 AiGraphSnapshot.edges 同形）。 */
+type VirtualEdge = EndpointPair & { sourceHandle?: string | null; type?: string }
 
 /** 折叠校验的虚拟图状态：随每条命令演进的最终态投影。 */
 interface FoldState {
@@ -231,11 +163,22 @@ interface FoldState {
   types: Map<string, string>
   /** branch 节点 id → 选项列表（校验 optionIndex 并解析稳定选项 id 端口）。 */
   branchOptions: Map<string, Array<{ id: string; label: string }>>
-  virtualEdges: Array<{ source: string; target: string; sourceHandle?: string | null; type?: string }>
+  virtualEdges: VirtualEdge[]
+  /** 依赖失败 options 更新的暂定出口边（端点与稳定选项 id 已确定、句柄待
+   * 解析；生效与否按当前选项表派生，见 activeTentativeEdges）。 */
+  tentativeEdges: Array<{ source: string; target: string; optionId: string }>
   /** 本批尚未删除的节点 id（含 __new__ 虚拟 id）。 */
   exists: Set<string>
   /** ref 别名 → 所属节点 id。 */
   refOwner: Map<string, string>
+  /** 本批 options 更新失败的分支节点 id：其出口连线的 optionIndex 校验
+   * 随前序修复自愈，按 contingent 跳过（同 ref 依赖，见 isContingentRef）。 */
+  failedBranchOptionUpdates: Set<string>
+  /** 本批失败的连线变更（op + 原始端点 token 对）→ 失败断线登记时同对
+   * 残留边的身份快照（失败连线命令为空集）：依赖其变更结果的后续连线
+   * 命令按 contingent 跳过（见 isContingentEdgePair）。快照用于判定
+   * 「修正这条断线能否消除环」——本批后加的边不在快照内，不随之自愈。 */
+  failedEdgePairs: Map<string, ReadonlySet<string>>
   /** 项目资产索引（id → MIME）：shot.refs 引用位校验用。 */
   assets: ReadonlyMap<string, string>
   items: PreviewItem[]
@@ -245,7 +188,7 @@ interface FoldState {
 }
 
 /** AI 可补丁的节点类型（NODE_FIELD_KEYS 的键域）：图片节点不在此域
- * （§13 首版 AI 只读）。foldUpdate 经 checkFieldKeys 拒绝白名单外类型后，
+ * （§13 首版 AI 只读）。foldUpdate 经 payloadCheck 拒绝白名单外类型后，
  * 由此谓词收口为字面量联合，供补丁命令的判别化构造（issue 16）。 */
 type AiPatchableType = 'scene' | 'dialogue' | 'beat' | 'branch' | 'shot'
 const isAiPatchableType = (t: string | undefined): t is AiPatchableType =>
@@ -261,226 +204,15 @@ function resolveRef(st: FoldState, cmd: Record<string, unknown>, key: string): s
   return owner !== undefined && st.exists.has(owner) ? owner : null
 }
 
-/** 入站归一化（信任边界）：列表项稳定 id 补齐（S6479）。
- * AI 可按旧契约发送无 id 的台词行/引用位、或纯字符串选项；
- * 进画布前统一升级为带 id 结构。已有 id 仅在「非空白（§8.1 共同值域
- * trim 口径，与加载边界同款）且列表内唯一」时保留（幂等）；空白/空串/
- * 重复 id 就地重生成——空白 id 直接作 React key 不可靠，且加载侧会按
- * 空白 id 重发改写身份，被接受的命令不得自带重开即变的“稳定”身份；
- * 冲突会导致行复用/误编辑。非对象条目原样放行（形状校验不在本层）。 */
-function normalizeNodeFields(
-  nodeType: string,
-  fields: Record<string, unknown>,
-  existingOptions?: Array<{ id: string; label: string }>,
-): Record<string, unknown> {
-  /** 列表项 id 归一化：非空白唯一保留，否则重生成。 */
-  const normalizeIds = (items: unknown[], prefix: string): unknown[] => {
-    const seen = new Set<string>()
-    return items.map((item) => {
-      if (!plainObject(item)) return item
-      const id = item.id
-      if (typeof id === 'string' && id.trim() !== '' && !seen.has(id)) {
-        seen.add(id)
-        return item
-      }
-      const fresh = uid(prefix)
-      seen.add(fresh)
-      return { ...item, id: fresh }
-    })
-  }
-  const out = { ...fields }
-  if (nodeType === 'dialogue' && Array.isArray(out.lines)) {
-    // 缺省 kind 归一为 'line'（保存内容不被下次加载的判别联合静默删除），
-    // 再补稳定 id
-    out.lines = normalizeIds(
-      (out.lines as unknown[]).map((l) =>
-        plainObject(l) && l.kind === undefined ? { ...l, kind: 'line' as const } : l,
-      ),
-      'line',
-    )
-  }
-  if (nodeType === 'branch' && Array.isArray(out.options)) {
-    // 字符串选项（旧契约紧凑形态）在更新路径按位置对位复用既有选项的
-    // 稳定 id——整体重发新 id 会让全部既有 option- 句柄被折叠/模拟当作
-    // 已删选项，引出连线被静默清除而预览只显示一次普通选项更新；
-    // create 无既有选项，超出现有数的字符串仍是新增（normalizeIds 补 id）
-    const existing = existingOptions ?? []
-    out.options = normalizeIds(
-      (out.options as unknown[]).map((o, i) => {
-        // 字符串与无 id 的对象简写都按位置对位复用（重命名语义）；显式
-        // 合法 id 的对象保留自报 id（用户显式定向到具体选项）
-        if (typeof o === 'string') {
-          const prev = existing[i]
-          return prev !== undefined ? { id: prev.id, label: o } : { label: o }
-        }
-        if (plainObject(o) && (typeof o.id !== 'string' || o.id.trim() === '')) {
-          const prev = existing[i]
-          if (prev !== undefined) return { ...o, id: prev.id }
-        }
-        return o
-      }),
-      'opt',
-    )
-  }
-  if (nodeType === 'shot' && Array.isArray(out.refs)) {
-    out.refs = normalizeIds(out.refs as unknown[], 'ref')
-  }
-  return out
-}
-
-/** 分支 options 入站成员校验（信任边界）：字符串选项（随后由归一化升级为
- * {label} 对象）或带字符串 label 的普通对象才合法。异型成员（null/数字/
- * 缺 label/对象形态 label）若放行，级联簿记的 removedOptionHandles 会对
- * o.id 解引用直接抛异常，对象形态 label 进画布后还会被 BranchNode 当
- * React 子节点渲染而崩溃——返回拒绝原因，null 表示通过。 */
-function branchOptionsError(options: unknown[]): string | null {
-  const bad = options.some((o) => typeof o !== 'string' && (!plainObject(o) || typeof o.label !== 'string'))
-  return bad ? '分支 options 含异型成员（须为字符串或带字符串 label 的对象）' : null
-}
-
-/** shot.refs 成员的引用位联合 + 资产目标校验（§4.2 ShotRef 的信任边界对等，
- * §7.1/§11.3）：与加载侧 isShotRefShape 同口径——双字段**键在场**即非法
- * （值类型 XOR 不足以判定 `{assetId, label: 5}` 这类成员），assetId 须非空白
- * ——空串是 string 但不可解析，装上即永久悬空引用。引用位还须命中快照资产
- * 且 MIME 家族匹配用途（character/location → image/*，audio → audio/*，
- * 与加载侧归一化同域）——不存在的资产或用途错配的引用进画布即悬空/不可用，
- * 保存虽成功、加载侧只会标记问题，AI 边界须前置拒绝。返回拒绝原因；
- * null 表示通过。 */
-function shotRefMemberIssue(r: unknown, assets: ReadonlyMap<string, string>): string | null {
-  if (!plainObject(r)) return '不是普通对象'
-  if (r.kind !== 'character' && r.kind !== 'location' && r.kind !== 'audio') {
-    return `kind 未知（${String(r.kind)}）`
-  }
-  if ('assetId' in r && 'label' in r) return 'assetId 与 label 并存（引用位与自由位互斥）'
-  const hasAsset = typeof r.assetId === 'string' && r.assetId.trim() !== ''
-  const hasLabel = typeof r.label === 'string'
-  if (hasAsset === hasLabel) return 'assetId 非空白字符串 / label 字符串须恰居其一'
-  if (!hasAsset) return null
-  const mime = assets.get(r.assetId as string)
-  if (mime === undefined) {
-    return `资产 ${r.assetId as string} 不存在（引用位只按本项目资产索引解析）`
-  }
-  const family = r.kind === 'audio' ? 'audio/' : 'image/'
-  if (!mime.startsWith(family)) {
-    return `资产 ${r.assetId as string}（${mime}）与 ${r.kind} 引用用途不匹配（须 ${family}*）`
-  }
-  return null
-}
-
-/** 各类型的标量字段值形状（nodeValueShapeError 的分类型明细）。 */
-function scalarShapeIssues(nodeType: string, fields: Record<string, unknown>): string[] {
-  const issues: string[] = []
-  const str = (f: string) => {
-    if (fields[f] !== undefined && typeof fields[f] !== 'string') issues.push(`${f} 须为字符串`)
-  }
-  // 数值编号域（§9.3 命令边界）：正安全整数——放行 1.5/0/-2 这类值会被
-  // 下次加载的归一化静默重编号/删除分集，接受的 AI 输出重开即变样
-  const positiveSafeInt = (f: string) => {
-    const v = fields[f]
-    if (v !== undefined && !(typeof v === 'number' && Number.isSafeInteger(v) && v > 0)) {
-      issues.push(`${f} 须为正整数`)
-    }
-  }
-  switch (nodeType) {
-    case 'scene':
-      ;['name', 'time', 'weather', 'synopsis'].forEach(str)
-      // 引用 id 须 trim 后非空（§8.1 共同值域）：空白引用进画布落盘后会被
-      // 加载侧归一化移除——接受过的 AI 改动不得重开即变样
-      if (
-        fields.locationId !== undefined &&
-        (typeof fields.locationId !== 'string' || fields.locationId.trim() === '')
-      ) {
-        issues.push('locationId 须为非空白字符串')
-      }
-      positiveSafeInt('sceneNo')
-      positiveSafeInt('episodeNo')
-      if (fields.interior !== undefined && typeof fields.interior !== 'boolean') {
-        issues.push('interior 须为布尔')
-      }
-      break
-    case 'dialogue':
-      str('name')
-      positiveSafeInt('episodeNo')
-      break
-    case 'beat':
-      str('name')
-      str('tone')
-      positiveSafeInt('episodeNo')
-      break
-    case 'branch':
-      str('prompt')
-      positiveSafeInt('episodeNo')
-      break
-    case 'shot':
-      ;['size', 'picture', 'prompt'].forEach(str)
-      positiveSafeInt('shotNo')
-      break
-    default:
-      break
-  }
-  return issues
-}
-
-/** shot.refs 列表的成员校验（S3776 拆解）：返回首见成员问题文案或 null。 */
-function shotRefsIssue(refs: unknown, assets: ReadonlyMap<string, string>): string | null {
-  if (!Array.isArray(refs)) return 'refs 须为对象数组'
-  for (const [i, r] of refs.entries()) {
-    const issue = shotRefMemberIssue(r, assets)
-    if (issue !== null) return `refs[${i}] ${issue}`
-  }
-  return null
-}
-
-/** 各类型的列表成员值形状（nodeValueShapeError 的分类型明细）。 */
-function listShapeIssues(
-  nodeType: string,
-  fields: Record<string, unknown>,
-  assets: ReadonlyMap<string, string>,
-): string[] {
-  const issues: string[] = []
-  if (nodeType === 'scene' && fields.characterIds !== undefined) {
-    const arr = fields.characterIds
-    // 成员 trim 后非空（§8.1）：空白成员会被加载侧移除，接受的批次重开即变
-    if (!Array.isArray(arr) || arr.some((c) => typeof c !== 'string' || c.trim() === '')) {
-      issues.push('characterIds 须为非空白字符串数组')
-    }
-  }
-  if (nodeType === 'dialogue' && fields.lines !== undefined) {
-    const arr = fields.lines
-    const lineIssue = (l: unknown): boolean =>
-      !plainObject(l) ||
-      typeof l.text !== 'string' ||
-      // speaker 须 trim 后非空（§8.1 共同值域）：空白值会被加载侧归一化
-      // 移除——接受过的 AI 改动不得重开即变样
-      ('speaker' in l && (typeof l.speaker !== 'string' || l.speaker.trim() === '')) ||
-      (l.kind !== undefined && l.kind !== 'line' && l.kind !== 'action') ||
-      // action 行不得携带 speaker：对白契约只允许 line 行有说话人，放行的
-      // 隐藏引用会进活动文档并被持久化
-      (l.kind === 'action' && 'speaker' in l) ||
-      (l.side !== undefined && l.side !== 'left' && l.side !== 'right') ||
-      (l.vo !== undefined && typeof l.vo !== 'boolean')
-    if (!Array.isArray(arr) || arr.some(lineIssue)) {
-      issues.push('lines 须为对象数组（text 字符串必填；kind ∈ line/action、speaker 仅 line 行可带且非空白字符串、side ∈ left/right、vo 布尔可选）')
-    }
-  }
-  if (nodeType === 'shot' && fields.refs !== undefined) {
-    const issue = shotRefsIssue(fields.refs, assets)
-    if (issue !== null) issues.push(issue)
-  }
-  return issues
-}
-
-/** 逐类型载荷值形状校验（信任边界，§9.3/§11.3 的批命令对等）：字段键
- * 白名单只拦未知字段，异型**值**若放行会经 buildCanvasNode 摊进活动节点，
- * 渲染层（ShotNode 的 picture/refs、DialogueNode 的 lines）解引用即崩，
- * 加载归一化来不及兜底。字段存在才校验（patch 局部更新）；null 表示通过。 */
-function nodeValueShapeError(
-  nodeType: string,
-  fields: Record<string, unknown>,
-  assets: ReadonlyMap<string, string>,
-): string | null {
-  const issues = [...scalarShapeIssues(nodeType, fields), ...listShapeIssues(nodeType, fields, assets)]
-  return issues.length > 0 ? `载荷形状错误：${issues.join('；')}` : null
+/** 引用是否指向本批校验失败的 create（ref 已登记但未进虚拟图）。此类
+ * 命令的合法性随前序修复自动恢复，调用方应跳过校验且不点名——完整
+ * 清单只收集可独立判断的问题，否则「端点不存在」级联假阳性会诱导
+ * 模型删除或改写本来正确的依赖命令。 */
+function isContingentRef(st: FoldState, cmd: Record<string, unknown>, key: string): boolean {
+  const s = asText(cmd[key])
+  if (s === '' || st.exists.has(s)) return false
+  const owner = st.refOwner.get(s)
+  return owner !== undefined && !st.exists.has(owner)
 }
 
 function foldCreate(st: FoldState, cmd: Record<string, unknown>, index: number): void {
@@ -488,17 +220,11 @@ function foldCreate(st: FoldState, cmd: Record<string, unknown>, index: number):
   if (!(nodeType in NODE_TYPE_LABELS)) return st.fail(index, `未知节点类型：${nodeType || '（空）'}`)
   const data = cmd.data ?? {}
   if (!plainObject(data)) return st.fail(index, 'data 必须是字段对象')
-  const keyError = checkFieldKeys(nodeType, data)
-  if (keyError) return st.fail(index, keyError)
-  const shapeError = nodeValueShapeError(nodeType, data, st.assets)
-  if (shapeError) return st.fail(index, shapeError)
-  if (nodeType === 'branch' && Array.isArray(data.options)) {
-    const optError = branchOptionsError(data.options as unknown[])
-    if (optError) return st.fail(index, optError)
-  }
+  const dataIssue = payloadIssue(nodeType, data, st.assets)
+  if (dataIssue) return st.fail(index, dataIssue)
   const typeLabel = NODE_TYPE_LABELS[nodeType]
   const name = asText(data.name) || asText(data.prompt) || '未命名'
-  const virtualId = `__new__:${index}`
+  const virtualId = virtualIdOf(index)
   const refName = typeof cmd.ref === 'string' ? cmd.ref.trim() : ''
   st.exists.add(virtualId)
   st.labels.set(virtualId, `${typeLabel} · ${name}（新建）`)
@@ -519,19 +245,23 @@ function foldCreate(st: FoldState, cmd: Record<string, unknown>, index: number):
 }
 
 function foldUpdate(st: FoldState, cmd: Record<string, unknown>, index: number): void {
+  const patch = cmd.patch
+  if (!plainObject(patch) || Object.keys(patch).length === 0) return st.fail(index, 'patch 为空')
+  if (isContingentRef(st, cmd, 'nodeId')) {
+    // contingent：目标节点尚未入虚拟图。任何节点类型都不支持的字段恒非法；
+    // 失败 create 的 nodeType 已独立通过校验时，暂定类型可判——修正 data
+    // 不改变已声明的类型语义，按该类型的完整写载荷错误即使 create 修复后
+    // 仍存在，首轮即点名，不额外消耗纠错轮次
+    const owner = st.refOwner.get(asText(cmd.nodeId))
+    const issue = contingentUpdateIssue(owner === undefined ? undefined : st.types.get(owner), patch, st.assets)
+    if (issue !== null) st.fail(index, issue)
+    return
+  }
   const id = resolveRef(st, cmd, 'nodeId')
   if (!id) return st.fail(index, `节点不存在：${asText(cmd.nodeId)}`)
   const nodeType = st.types.get(id)
-  const patch = cmd.patch
-  if (!plainObject(patch) || Object.keys(patch).length === 0) return st.fail(index, 'patch 为空')
-  const keyError = checkFieldKeys(nodeType ?? '', patch)
-  if (keyError) return st.fail(index, keyError)
-  const patchShapeError = nodeValueShapeError(nodeType ?? '', patch, st.assets)
-  if (patchShapeError) return st.fail(index, patchShapeError)
-  if (nodeType === 'branch' && Array.isArray(patch.options)) {
-    const optError = branchOptionsError(patch.options as unknown[])
-    if (optError) return st.fail(index, optError)
-  }
+  const payloadErr = payloadIssue(nodeType ?? '', patch, st.assets)
+  if (payloadErr) return st.fail(index, payloadErr)
   st.items.push({
     kind: 'update',
     danger: false,
@@ -586,10 +316,14 @@ function foldBranchCascade(
       (e) => !(e.source === id && e.sourceHandle && gone.has(e.sourceHandle)),
     )
   }
+  // 成功替换选项即刷新选项表：清除早前失败更新留下的 contingent 标记，
+  // 后续出口连线的 optionIndex/重复检查恢复按最新选项表独立判断
+  st.failedBranchOptionUpdates.delete(id)
   st.branchOptions.set(id, normalized.options as Array<{ id: string; label: string }>)
 }
 
 function foldDelete(st: FoldState, cmd: Record<string, unknown>, index: number): void {
+  if (isContingentRef(st, cmd, 'nodeId')) return
   const id = resolveRef(st, cmd, 'nodeId')
   if (!id) return st.fail(index, `节点不存在：${asText(cmd.nodeId)}`)
   if (st.types.get(id) === 'image') {
@@ -651,62 +385,85 @@ function edgePortOf(
   return { handle: null, optionIndex: undefined }
 }
 
-/** connect_edge / disconnect_edge 的折叠校验。 */
-function foldEdge(st: FoldState, cmd: Record<string, unknown>, index: number, op: string): void {
+/** 端点解析与守卫（foldEdge 拆出，S3776）：引用依赖失败前序时静默
+ * 跳过（返回 'contingent'）；真实缺失记入问题清单（返回 'missing'）；
+ * 同一失败 ref 兼作两端为必然自环，独立于该 create 的修复结果，返回
+ * 'selfloop' 交由 foldEdge 点名（不得被 contingent 屏蔽）；合法时返回
+ * 解析出的端点对。 */
+function resolveEndpoints(
+  st: FoldState,
+  cmd: Record<string, unknown>,
+  index: number,
+): { src: string; dst: string } | 'contingent' | 'missing' | 'selfloop' {
+  const s = asText(cmd.sourceId)
+  const t = asText(cmd.targetId)
+  if (s !== '' && s === t && isContingentRef(st, cmd, 'sourceId')) return 'selfloop'
+  if (isContingentRef(st, cmd, 'sourceId') || isContingentRef(st, cmd, 'targetId')) {
+    return 'contingent'
+  }
   const src = resolveRef(st, cmd, 'sourceId')
   const dst = resolveRef(st, cmd, 'targetId')
   if (!src || !dst) {
-    return st.fail(index, `端点不存在：${asText(cmd.sourceId)} → ${asText(cmd.targetId)}`)
+    st.fail(index, `端点不存在：${asText(cmd.sourceId)} → ${asText(cmd.targetId)}`)
+    return 'missing'
   }
-  const pairLabel = `${st.labels.get(src) ?? '未知节点'} → ${st.labels.get(dst) ?? '未知节点'}`
+  return { src, dst }
+}
 
-  if (op === 'disconnect_edge') {
-    const hitIdx = st.virtualEdges.findIndex((e) => e.source === src && e.target === dst)
-    if (hitIdx < 0) return st.fail(index, `没有这条连线：${pairLabel}`)
-    st.virtualEdges.splice(hitIdx, 1)
-    st.items.push({
-      kind: 'disconnect',
-      danger: false,
-      key: `x${index}`,
-      label: `${OP_LABELS.disconnect} ${pairLabel}${reasonOf(cmd)}`,
-    })
-    st.commands.push({
-      op,
-      sourceId: asText(cmd.sourceId),
-      targetId: asText(cmd.targetId),
-      reason: asText(cmd.reason),
-    })
-    return
+/** 与选项表无关的连线放置约束（§5 端口归属、§4.4 宿主唯一）：独立于
+ * optionIndex/handle，contingent 路径也必须校验并进完整清单。返回错误
+ * 文案或 null。 */
+function connectPlacementIssue(
+  st: FoldState,
+  kind: string,
+  src: string,
+  dst: string,
+  pairLabel: string,
+): string | null {
+  const endpointIssue = connectionEndpointIssue(st.types.get(src), st.types.get(dst), kind as EdgeKind)
+  if (endpointIssue) return `${endpointIssue}：${pairLabel}`
+  if (kind === 'attach' && hasAttachHost(st.virtualEdges, dst)) {
+    return `分镜卡已有宿主，换宿主须先断开：${pairLabel}`
   }
+  return null
+}
 
-  // connect_edge：按连线语义分端口校验（§4.4）
+/** connect_edge 的折叠校验（foldEdge 拆出，S3776）：按连线语义分端口
+ * 校验（§4.4），经端点规则、宿主唯一、重复与成环检查后入虚拟图。 */
+function foldConnectEdge(
+  st: FoldState,
+  cmd: Record<string, unknown>,
+  index: number,
+  src: string,
+  dst: string,
+  pairLabel: string,
+): void {
   const kind = asText(cmd.edgeKind) || 'sequence'
   if (!(kind in EDGE_KIND_LABELS)) return st.fail(index, `未知连线类型：${kind}`)
-  const port = edgePortOf(st, kind, cmd, src, dst)
-  if (typeof port === 'string') return st.fail(index, port)
-  const { handle, optionIndex } = port
-  // 端点类型约束（§5 端口归属）：与加载归一化的孤儿边规则对等——放行
-  // 「保存后下次加载即被静默删除」的连线（分镜卡参与剧情流等）是坏体验
-  const endpointIssue = connectionEndpointIssue(
-    st.types.get(src),
-    st.types.get(dst),
-    kind as EdgeKind,
-  )
-  if (endpointIssue) return st.fail(index, `${endpointIssue}：${pairLabel}`)
-  if (kind === 'attach' && hasAttachHost(st.virtualEdges, dst)) {
-    return st.fail(index, `分镜卡已有宿主，换宿主须先断开：${pairLabel}`)
+  // 选项表相关检查（optionIndex 范围、handle 解析、重复连线比句柄）依赖
+  // source 分支的 options 状态：本批对该分支的 options 更新失败时延后
+  // （随前序修复自愈）；端点类型、宿主唯一、成环等独立约束仍照常校验
+  const optionContingent = kind === 'branch' && st.failedBranchOptionUpdates.has(src)
+  let handle: string | null = null
+  let optionIndex: number | undefined
+  if (!optionContingent) {
+    const port = edgePortOf(st, kind, cmd, src, dst)
+    if (typeof port === 'string') return st.fail(index, port)
+    handle = port.handle
+    optionIndex = port.optionIndex
   }
-  if (st.virtualEdges.some((e) => e.source === src && e.target === dst && (e.sourceHandle ?? null) === handle)) {
+  const placementIssue = connectPlacementIssue(st, kind, src, dst, pairLabel)
+  if (placementIssue) return st.fail(index, placementIssue)
+  if (!optionContingent && st.virtualEdges.some((e) => e.source === src && e.target === dst && (e.sourceHandle ?? null) === handle)) {
     return st.fail(index, `重复连线：${pairLabel}`)
   }
   // attach 是派生从属边（§4.4 垂直语义）：自身不查环，也不参与
   // 剧情流环检测——环只可能出现在横向剧情流上
-  if (kind !== 'attach') {
-    const flowEdges = st.virtualEdges.filter((e) => e.sourceHandle !== SCENE_SHOT_HANDLE)
-    if (wouldCreateCycle(flowEdges, src, dst)) {
-      return st.fail(index, `会造成循环剧情：${pairLabel}`)
-    }
-  }
+  if (kind !== 'attach' && cycleContingent(st, cmd, index, src, dst, pairLabel)) return
+  // 独立约束全部通过：剩余校验随前序修复自愈，本轮不折叠不点名。端点已
+  // 确定时登记暂定出口边（选项句柄待前序修复后解析）：后续连线的成环判定
+  // 按「该连线生效」评估，不因本轮省略而漏报独立可判定的错误
+  if (optionContingent) return registerTentativeEdge(st, cmd, src, dst)
   st.virtualEdges.push({
     source: src,
     target: dst,
@@ -729,6 +486,146 @@ function foldEdge(st: FoldState, cmd: Record<string, unknown>, index: number, op
   })
 }
 
+/** contingent 出口连线登记（foldConnectEdge 拆出，S3776）：记录当前选项表
+ * 中该下标的稳定选项 id——后续 options 覆盖按 id 级联替换时，暂定边随之
+ * 失效（与 removedOptionHandles 同口径）。下标非法或无对应选项时不登记，
+ * 避免制造成环假阳性。 */
+function registerTentativeEdge(st: FoldState, cmd: Record<string, unknown>, src: string, dst: string): void {
+  const idx = cmd.optionIndex
+  if (typeof idx !== 'number' || !Number.isInteger(idx) || idx < 0) return
+  const option = (st.branchOptions.get(src) ?? [])[idx]
+  if (option !== undefined) st.tentativeEdges.push({ source: src, target: dst, optionId: option.id })
+}
+
+/** 成环守卫（foldConnectEdge 拆出，S3776）：非 attach 连线加环检查。
+ * 经更长路径成环仍独立点名；同对断线在本批失败且其残留边确实参与这条环
+ * （端点写反场景）时 contingent 跳过——残留边随断线修正移除，反转连线
+ * 自愈，报「成环」会诱导模型改写正确的反向连线。返回 true = 已处理
+ * （contingent 或已点名），调用方直接返回。 */
+function cycleContingent(
+  st: FoldState,
+  cmd: Record<string, unknown>,
+  index: number,
+  src: string,
+  dst: string,
+  pairLabel: string,
+): boolean {
+  const flow = [...st.virtualEdges, ...tentativeTopology(st)].filter(
+    (e) => e.sourceHandle !== SCENE_SHOT_HANDLE,
+  )
+  if (!wouldCreateCycle(flow, src, dst)) {
+    return false
+  }
+  // 自环独立于任何前序断线结果，不适用 contingent 豁免
+  if (src !== dst && residualBreaksCycle(st, cmd, flow, src, dst)) return true
+  st.fail(index, `会造成循环剧情：${pairLabel}`)
+  return true
+}
+
+/** 生效的暂定出口边登记：端点仍在、且登记的稳定选项 id 仍在当前选项表内。
+ * 按需派生而非固化进 virtualEdges——后续 options 覆盖（成功或暂定生效）
+ * 按稳定 id 级联替换/删除选项时自动失效，与 removedOptionHandles 同语义。 */
+function activeTentativeEdges(st: FoldState): FoldState['tentativeEdges'] {
+  return st.tentativeEdges.filter(
+    (e) =>
+      st.exists.has(e.source) &&
+      st.exists.has(e.target) &&
+      (st.branchOptions.get(e.source) ?? []).some((o) => o.id === e.optionId),
+  )
+}
+
+/** 暂定出口边的拓扑形态（无句柄 branch 边，仅参与成环判定）。 */
+function tentativeTopology(st: FoldState): VirtualEdge[] {
+  return activeTentativeEdges(st).map((e) => ({
+    source: e.source,
+    target: e.target,
+    sourceHandle: null,
+    type: 'branch',
+  }))
+}
+
+/** 断线命中前序暂定出口边（投影态已生效、未入虚拟图）：移除其登记并返回
+ * true——该断线同样依赖前序修复，按 contingent 静默跳过（与同对 connect
+ * 失败同口径），后续命令按「已断开」的投影态判定。 */
+function dropTentativeEdge(st: FoldState, src: string, dst: string): boolean {
+  const hit = activeTentativeEdges(st).find((e) => e.source === src && e.target === dst)
+  if (hit === undefined) return false
+  st.tentativeEdges.splice(st.tentativeEdges.indexOf(hit), 1)
+  return true
+}
+
+/** 虚拟边身份键（端点 + 源端口）：失败断线的残留快照与当前边按此比对。 */
+function edgeIdentityOf(e: VirtualEdge): string {
+  return `${e.source}\u0000${e.target}\u0000${e.sourceHandle ?? ''}`
+}
+
+/** 失败断线登记时的同对残留边快照（含端点写反：两方向都算同一对）：
+ * 修正断线只可能移除这些边；快照外的边由本批后续命令新增，修正后仍在。 */
+function residualEdgesAt(st: FoldState, cmd: Record<string, unknown>): ReadonlySet<string> {
+  if (cmd.op !== 'disconnect_edge') return new Set<string>()
+  const s = asText(cmd.sourceId)
+  const t = asText(cmd.targetId)
+  return new Set(
+    st.virtualEdges
+      .filter((e) => (e.source === s && e.target === t) || (e.source === t && e.target === s))
+      .map(edgeIdentityOf),
+  )
+}
+
+/** 残留边快照全部移除后即不成环 → 这条环随断线修正自愈，按 contingent
+ * 跳过；环依赖快照外（本批新增）的边时独立点名，不被早先断线失败豁免。 */
+function residualBreaksCycle(
+  st: FoldState,
+  cmd: Record<string, unknown>,
+  flow: readonly VirtualEdge[],
+  src: string,
+  dst: string,
+): boolean {
+  const residual = st.failedEdgePairs.get(edgePairKey('disconnect_edge', cmd))
+  if (residual === undefined || residual.size === 0) return false
+  const remaining = flow.filter((e) => !residual.has(edgeIdentityOf(e)))
+  return !wouldCreateCycle(remaining, src, dst)
+}
+
+/** connect_edge / disconnect_edge 的折叠校验。 */
+function foldEdge(st: FoldState, cmd: Record<string, unknown>, index: number, op: string): void {
+  const ends = resolveEndpoints(st, cmd, index)
+  if (ends === 'contingent' || ends === 'missing') return
+  if (ends === 'selfloop') {
+    // 必然自环独立于任何失败前序（create 修复后仍非法），首轮即点名
+    return st.fail(index, `会造成循环剧情：${asText(cmd.sourceId)} → ${asText(cmd.targetId)}`)
+  }
+  const { src, dst } = ends
+  const pairLabel = `${st.labels.get(src) ?? '未知节点'} → ${st.labels.get(dst) ?? '未知节点'}`
+
+  if (op === 'disconnect_edge') {
+    const hitIdx = st.virtualEdges.findIndex((e) => e.source === src && e.target === dst)
+    if (hitIdx < 0) {
+      // 前序暂定出口边在投影态已生效：移除登记并按 contingent 静默跳过
+      if (dropTentativeEdge(st, src, dst)) return
+      // 目标边不存在可能因本批同对的 connect 失败： contingent 跳过，
+      // 随连线修正自愈，不误报「没有这条连线」
+      if (st.failedEdgePairs.has(edgePairKey('connect_edge', cmd))) return
+      return st.fail(index, `没有这条连线：${pairLabel}`)
+    }
+    st.virtualEdges.splice(hitIdx, 1)
+    st.items.push({
+      kind: 'disconnect',
+      danger: false,
+      key: `x${index}`,
+      label: `${OP_LABELS.disconnect} ${pairLabel}${reasonOf(cmd)}`,
+    })
+    st.commands.push({
+      op,
+      sourceId: asText(cmd.sourceId),
+      targetId: asText(cmd.targetId),
+      reason: asText(cmd.reason),
+    })
+    return
+  }
+  foldConnectEdge(st, cmd, index, src, dst, pairLabel)
+}
+
 /** 折叠器分发表：op → 处理函数。 */
 const FOLDERS: Record<string, (st: FoldState, cmd: Record<string, unknown>, index: number) => void> = {
   create_node: foldCreate,
@@ -736,6 +633,82 @@ const FOLDERS: Record<string, (st: FoldState, cmd: Record<string, unknown>, inde
   delete_node: foldDelete,
   connect_edge: (st, cmd, index) => foldEdge(st, cmd, index, 'connect_edge'),
   disconnect_edge: (st, cmd, index) => foldEdge(st, cmd, index, 'disconnect_edge'),
+}
+
+/** 失败连线变更的原始端点对键（op + 模型自报 token，含拼错的端点）。 */
+function edgePairKey(op: string, cmd: Record<string, unknown>): string {
+  return `${op}\u0000${asText(cmd.sourceId)}\u0000${asText(cmd.targetId)}`
+}
+
+/** 折叠失败后的依赖登记（分发循环调用）：create 失败登记其 ref（指向
+ * 未入图的虚拟 id）、branch 的 options 更新失败登记目标、连线变更失败
+ * 登记原始端点对——后续依赖这些变更结果的命令按 contingent 跳过、
+ * 随前序修复自愈，而非被误报「节点不存在 / 下标越界 / 成环」。 */
+/** 失败的 branch options 更新分类登记（registerFailedMutation 拆出，
+ * S3776）：选项自身异型、结果无从折叠时登记 contingent 标记；选项合法、
+ * 结果已确定时以归一化后的暂定选项表供下游连线独立校验，并清除早前标记
+ * （级联断线簿记随前序修复后再折叠，为已记录边界）。 */
+function registerFailedOptionsUpdate(
+  st: FoldState,
+  raw: Record<string, unknown>,
+  target: string,
+): void {
+  const patch = plainObject(raw.patch) ? raw.patch : undefined
+  if (patch === undefined || !Array.isArray(patch.options)) return
+  if (branchOptionsError(patch.options as unknown[]) !== null) {
+    st.failedBranchOptionUpdates.add(target)
+    return
+  }
+  const normalized = normalizeNodeFields('branch', patch, st.branchOptions.get(target))
+  // 暂定生效同步应用级联删边（§8.2.2 的删边语义）：被替换选项的出口边从
+  // 虚拟图移除，后续连线按「更新修复后」的状态判定成环/重复，不再误报；
+  // 仅删边不登记级联预览项——该更新本身尚未被接受
+  const removed = removedOptionHandles(
+    st.branchOptions.get(target) ?? [],
+    normalized.options as Array<{ id: string }>,
+  )
+  if (removed.length > 0) {
+    const gone = new Set(removed)
+    st.virtualEdges = st.virtualEdges.filter(
+      (e) => !(e.source === target && e.sourceHandle && gone.has(e.sourceHandle)),
+    )
+  }
+  // 暂定表已确定：清除早前失败留下的 contingent 标记（与成功覆盖同口径），
+  // 后续出口连线恢复按最新选项表独立校验 optionIndex/重复
+  st.failedBranchOptionUpdates.delete(target)
+  st.branchOptions.set(target, normalized.options as Array<{ id: string; label: string }>)
+}
+
+function registerFailedMutation(st: FoldState, raw: Record<string, unknown>, index: number): void {
+  if (raw.op === 'create_node') {
+    const refName = typeof raw.ref === 'string' ? raw.ref.trim() : ''
+    if (refName === '') return
+    const virtualId = virtualIdOf(index)
+    st.refOwner.set(refName, virtualId)
+    // nodeType 字段已独立通过校验：登记为暂定类型，供后续 contingent 命令
+    // 按该类型独立校验（修正 data 不改变已声明的类型语义）。自有键判定：
+    // 协议表继承 Object.prototype，`in` 会命中 toString 等同名键
+    const nodeType = asText(raw.nodeType)
+    if (Object.prototype.hasOwnProperty.call(NODE_FIELD_KEYS, nodeType)) {
+      st.types.set(virtualId, nodeType)
+    }
+    return
+  }
+  if (raw.op === 'update_node') {
+    const target = resolveRef(st, raw, 'nodeId')
+    if (
+      target !== null &&
+      st.types.get(target) === 'branch' &&
+      plainObject(raw.patch) &&
+      Array.isArray((raw.patch as Record<string, unknown>).options)
+    ) {
+      registerFailedOptionsUpdate(st, raw, target)
+    }
+    return
+  }
+  if (raw.op === 'connect_edge' || raw.op === 'disconnect_edge') {
+    st.failedEdgePairs.set(edgePairKey(raw.op as string, raw), residualEdgesAt(st, raw))
+  }
 }
 
 export function validateAiBatch(rawCommands: unknown, graph: AiGraphSnapshot): BatchValidation {
@@ -746,8 +719,11 @@ export function validateAiBatch(rawCommands: unknown, graph: AiGraphSnapshot): B
       graph.nodes.filter((n) => Array.isArray(n.options)).map((n) => [n.id, n.options!]),
     ),
     virtualEdges: graph.edges.map((e) => ({ ...e })),
+    tentativeEdges: [],
     exists: new Set(graph.nodes.map((n) => n.id)),
     refOwner: new Map(),
+    failedBranchOptionUpdates: new Set(),
+    failedEdgePairs: new Map(),
     assets: graph.assets,
     items: [],
     issues: [],
@@ -760,11 +736,12 @@ export function validateAiBatch(rawCommands: unknown, graph: AiGraphSnapshot): B
   }
 
   rawCommands.forEach((raw, index) => {
-    if (st.issues.length > 0) return // 已坏，仅统计首个问题即可
     if (!plainObject(raw)) return st.fail(index, '条目不是对象')
     const folder = FOLDERS[raw.op as string]
-    if (folder) folder(st, raw, index)
-    else st.fail(index, `未知操作：${String(raw.op)}`)
+    if (!folder) return st.fail(index, `未知操作：${String(raw.op)}`)
+    const issueCountBefore = st.issues.length
+    folder(st, raw, index)
+    if (st.issues.length > issueCountBefore) registerFailedMutation(st, raw, index)
   })
 
   const ok = st.issues.length === 0

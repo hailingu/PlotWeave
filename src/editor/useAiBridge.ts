@@ -7,8 +7,8 @@
 import { useCallback, useMemo } from 'react'
 import type { Edge } from '@xyflow/react'
 import { buildGraphDigest } from './ai/graphDigest'
+import { extractBatchJson } from './ai/batchText'
 import {
-  extractBatchJson,
   toInboundCommands,
   validateAiBatch,
   type AiCommand,
