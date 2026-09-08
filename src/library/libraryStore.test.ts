@@ -259,3 +259,33 @@ describe('内存回退组对象隔离', () => {
     expect(after).toEqual({ id: 'g-iso', name: '女主', kind: 'character' })
   })
 })
+
+/// 内存回退空串 groupId 与 name 字符计数（评审修复，PR #36 第八轮）：
+/// 空串与空白同归清除（Rust apply_group_id 同款）；name 按 Unicode 码点
+/// 计数（Rust chars().count() 同款），补充字符不超 128 应放行。
+describe('内存回退清除标记与字符计数', () => {
+  it('updateMeta 空串 groupId 归清除不留空串', async () => {
+    const asset = await libraryStore.put(
+      new File([new Uint8Array([1])], 'a.png', { type: 'image/png' }),
+      'character',
+    )
+    await libraryStore.upsertGroup({ id: 'g-1', name: '女主', kind: 'character' })
+    await libraryStore.updateMeta(asset.id, { groupId: 'g-1' })
+    // 空串同 null：清除
+    await libraryStore.updateMeta(asset.id, { groupId: '' })
+    const after = (await libraryStore.list()).find((a) => a.id === asset.id)
+    expect(after?.groupId).toBeNull()
+  })
+
+  it('upsertGroup name 按 Unicode 码点计数', async () => {
+    vi.resetModules()
+    const { libraryStore: fresh } = await import('./libraryStore')
+    const name = '🙂'.repeat(100) // 100 码点（200 UTF-16 单元）
+    const g = await fresh.upsertGroup({ id: 'g-emoji', name, kind: 'character' })
+    expect(g.name).toBe(name)
+    // 129 码点应拒绝
+    await expect(
+      fresh.upsertGroup({ id: 'g-over', name: '🙂'.repeat(129), kind: 'character' }),
+    ).rejects.toThrow(/128/)
+  })
+})

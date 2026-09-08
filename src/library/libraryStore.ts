@@ -192,17 +192,24 @@ export const libraryStore = {
     const hit = memoryAssets.get(id)
     if (!hit) return Promise.reject(new Error(`资产不存在：${id}`))
     // groupId 校验（评审修复，PR #36 第五轮）：与 Rust update_meta_with 的
-    // 复验同语义——组不存在或 kind 不一致即拒绝；null 清除标记不受限
-    if (typeof patch.groupId === 'string' && patch.groupId !== '') {
-      const group = memoryGroups.get(patch.groupId)
-      if (!group) return Promise.reject(new Error(`组不存在：${patch.groupId}`))
+    // 复验同语义——组不存在或 kind 不一致即拒绝；null/空串/空白同归清除
+    // （第八轮：Rust apply_group_id 把空白归清除，空串不得落入存储）
+    const groupIdRaw = patch.groupId
+    const groupId =
+      typeof groupIdRaw === 'string' && groupIdRaw.trim() !== '' ? groupIdRaw : null
+    if (groupId !== null) {
+      const group = memoryGroups.get(groupId)
+      if (!group) return Promise.reject(new Error(`组不存在：${groupId}`))
       if (group.kind !== hit.asset.kind) {
         return Promise.reject(
-          new Error(`组 ${patch.groupId} 的 kind 与资产不一致，拒绝编组`),
+          new Error(`组 ${groupId} 的 kind 与资产不一致，拒绝编组`),
         )
       }
     }
-    hit.asset = { ...hit.asset, ...patch }
+    // 归一化后的 groupId 入存储：空串/空白不留（与 Rust 落盘删字段同语义）
+    const patchNorm =
+      patch.groupId !== undefined ? { ...patch, groupId } : patch
+    hit.asset = { ...hit.asset, ...patchNorm }
     memoryAssets.set(id, hit)
     return Promise.resolve(hit.asset)
   },
@@ -298,7 +305,10 @@ export const libraryStore = {
       return Promise.reject(new Error(`组 id 非法：${String(group.id)}`))
     }
     const name = typeof group.name === 'string' ? group.name.trim() : ''
-    if (name === '' || name.length > 128) {
+    // 码点计数（评审修复，PR #36 第八轮）：Rust validate_group_for_write 用
+    // chars().count()（Unicode 码点），前端 length 是 UTF-16 单元——补充字符
+    // （emoji 等）在两侧必须同判，否则预览拒绝生产接受的合法名
+    if (name === '' || [...name].length > 128) {
       return Promise.reject(new Error('组名去空白后须为 1–128 字符'))
     }
     if (!KIND_SET.has(group.kind)) {
