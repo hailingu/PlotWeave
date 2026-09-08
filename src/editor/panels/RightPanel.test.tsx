@@ -360,7 +360,7 @@ describe('RightPanel ✦AI 改动预览卡', () => {
   })
 })
 
-describe('RightPanel ✦AI 字段协议与校验闭环（issue 41）', () => {
+describe('RightPanel ✦AI 字段协议（issue 41）', () => {
   it('系统提示嵌入共享节点字段表，模型拿得到 beat 的合法字段', async () => {
     await toAiTab(APP_WITH_KEY)
     llmChatMock.mockResolvedValue(reply({ content: '好的。' }))
@@ -372,6 +372,9 @@ describe('RightPanel ✦AI 字段协议与校验闭环（issue 41）', () => {
     expect(messages[0].content).toContain('episodeNo')
   })
 
+})
+
+describe('RightPanel ✦AI 校验失败纠错重试（issue 41）', () => {
   it('校验失败回喂模型重试：纠正批次出预览卡，确认前画布不变', async () => {
     const spies = await toAiTab(APP_WITH_KEY)
     spies.onValidateCommands
@@ -416,6 +419,9 @@ describe('RightPanel ✦AI 字段协议与校验闭环（issue 41）', () => {
     expect(spies.onApplyAiBatch).toHaveBeenCalled()
   })
 
+})
+
+describe('RightPanel ✦AI 重试耗尽（issue 41）', () => {
   it('重试耗尽：错误卡片保留，画布未变提示在场', async () => {
     const spies = await toAiTab(APP_WITH_KEY)
     spies.onValidateCommands.mockReturnValue(

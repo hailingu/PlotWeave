@@ -1055,3 +1055,23 @@ describe('contingent 连线的独立约束仍进首轮清单（评审 5139865818
     expect(v.issues.map((i) => i.message).join('\n')).not.toContain('optionIndex')
   })
 })
+
+describe('失败标记的生命周期：成功覆盖 options 后清除（评审 5139995027）', () => {
+  it('后续成功更新后，连线按最新选项表独立校验 optionIndex', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'update_node', nodeId: 'b1', patch: { options: [{ id: 'ob-a', label: '追' }, { label: 5 }] } },
+        { op: 'update_node', nodeId: 'b1', patch: { options: ['只留一个'] } },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 2 },
+      ],
+      richSnap(),
+    )
+    expect(v.ok).toBe(false)
+    // 失败标记已被成功的 options 覆盖清除：越界按最新单选项表独立点名
+    expect(v.issues).toHaveLength(2)
+    expect(v.issues[0]?.index).toBe(0)
+    expect(v.issues[0]?.message).toContain('异型')
+    expect(v.issues[1]?.index).toBe(2)
+    expect(v.issues[1]?.message).toContain('optionIndex')
+  })
+})

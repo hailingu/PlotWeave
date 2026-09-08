@@ -334,6 +334,9 @@ function foldBranchCascade(
       (e) => !(e.source === id && e.sourceHandle && gone.has(e.sourceHandle)),
     )
   }
+  // 成功替换选项即刷新选项表：清除早前失败更新留下的 contingent 标记，
+  // 后续出口连线的 optionIndex/重复检查恢复按最新选项表独立判断
+  st.failedBranchOptionUpdates.delete(id)
   st.branchOptions.set(id, normalized.options as Array<{ id: string; label: string }>)
 }
 

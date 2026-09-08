@@ -61,7 +61,7 @@ const validators = (over: Partial<BatchValidators>): BatchValidators => ({ ...ov
 const run = (messages: ChatMessage[], v: BatchValidators) =>
   runAgentLoop(PROVIDER, 'm', messages, () => 'SNAP', v)
 
-describe('runAgentLoop 写批次校验闭环（issue 41）', () => {
+describe('runAgentLoop 写批次纠错回喂：tool 通道（issue 41）', () => {
   it('tool 通道：校验错误按 tool 协议回喂，纠正批次获得通过', async () => {
     const commands = vi
       .fn<NonNullable<BatchValidators['commands']>>()
@@ -89,6 +89,9 @@ describe('runAgentLoop 写批次校验闭环（issue 41）', () => {
     expect(toolMsg?.content).toContain('允许：name、tone、episodeNo')
   })
 
+})
+
+describe('runAgentLoop 写批次重试预算与终止（issue 41）', () => {
   it('校验通过即终止，不额外重问', async () => {
     const commands = vi.fn<NonNullable<BatchValidators['commands']>>().mockReturnValue(okOf())
     llmChatMock.mockResolvedValue(reply({ tool_calls: [batchCall(GOOD_BEAT_BATCH)] }))
@@ -140,6 +143,9 @@ describe('runAgentLoop 写批次校验闭环（issue 41）', () => {
     expect(toolMsg?.content).toContain('端点不存在：a → b')
   })
 
+})
+
+describe('runAgentLoop 围栏通道与修正指令（issue 41）', () => {
   it('围栏通道：校验错误以 user 消息回喂并重试，纠正后通过', async () => {
     const prose = vi
       .fn<NonNullable<BatchValidators['prose']>>()
