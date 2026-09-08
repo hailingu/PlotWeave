@@ -255,14 +255,15 @@ fn media_bytes_rechecks_conflict_state_per_request() {
         )]),
     );
     // 冲突期：拒绝服务（relPath 不再由前端传入，按 id 复核）
-    let err = crate::library::open_media_with(&cap(&library), "la-1").expect_err("冲突期应拒绝");
+    let err =
+        crate::library::media::open_media_with(&cap(&library), "la-1").expect_err("冲突期应拒绝");
     assert!(err.contains("冲突期"), "意外诊断：{err}");
     // 冲突解决后（移除日志）：按当前索引解析 id 读取媒体字节
     fs::remove_file(library.join(JOURNAL_FILE_NAME)).expect("移除日志");
     let (mime, file) =
-        crate::library::open_media_with(&cap(&library), "la-1").expect("合法请求应成功");
+        crate::library::media::open_media_with(&cap(&library), "la-1").expect("合法请求应成功");
     let (mime, bytes, _permit) =
-        crate::library::read_media_capped("la-1", mime, file).expect("锁外读取应成功");
+        crate::library::media::read_media_capped("la-1", mime, file).expect("锁外读取应成功");
     assert_eq!(mime, "image/png");
     assert_eq!(bytes, b"OCCUPIER");
     cleanup(&root);
@@ -288,8 +289,8 @@ fn index_entry_pointing_into_trash_is_quarantined() {
     );
     assert!(!warnings.is_empty(), "应携带隔离警告：{warnings:?}");
     // 媒体读取同样拒绝：投毒条目在净化索引中不存在
-    let err =
-        crate::library::open_media_with(&cap(&library), "la-1").expect_err("保留目录词法应拒绝");
+    let err = crate::library::media::open_media_with(&cap(&library), "la-1")
+        .expect_err("保留目录词法应拒绝");
     assert!(err.contains("不存在"), "意外诊断：{err}");
     cleanup(&root);
 }

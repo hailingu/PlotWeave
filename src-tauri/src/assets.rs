@@ -1,26 +1,30 @@
-//! 项目资产导入与预检命令（数据模型 §7.1/§7.3/§9.3）：
+//! 项目资产管线（数据模型 §7.1/§7.3/§9.3）：
 //! - `import_project_asset_from_library`：库资产拖上画布 = 文件**拷贝**进项目
 //!   `assets/` 并生成项目级 AssetRef（新 id）——源读取与目标写入全程相对
 //!   受信锚定句柄 + no-follow（§10.2 信任链，与 store 内核同域）；
 //! - `validate_project_asset`：前端 `set_asset` 调度前的强制预检（§9.3）——
 //!   单条 AssetRef 形状校验 + 实路径复验，返回规范化后的条目；
-//! - `project_asset_path`：缩略图等媒体展示的绝对路径（前端 convertFileSrc
-//!   拼接），交出前完成 relPath 词法校验与实路径复验。
+//! - 项目媒体解析/打开内核（`resolve_project_media_entry`/
+//!   `open_project_media_with`）：`pwmedia` 协议的项目 scope（issue #31）按
+//!   项目文档 `assets.byId` 逐请求解析 assetId → relPath，经实路径复验
+//!   句柄链打开——本机路径与 relPath 不出 Rust。
 
 use std::io::Write;
 
 use cap_std::fs::Dir as CapDir;
 use serde_json::{json, Value};
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 use crate::isotime::{is_canonical_utc_timestamp, now_iso};
 use crate::library::ext_for;
-use crate::library_fs::{assets_root, atomic_write_with, library_root, open_parent_dir};
+use crate::library_fs::{
+    assets_root, atomic_write_with, library_root, open_parent_dir, validate_asset_id,
+};
 #[cfg(unix)]
 use crate::store::asset_identity;
 use crate::store::{
-    asset_stat, is_canonical_mime, is_valid_asset_rel_path, new_id, open_dir_bound, projects_dir,
-    validate_id, verify_asset_real_path,
+    asset_stat, is_canonical_mime, is_valid_active_asset_rel_path, is_valid_asset_rel_path,
+    load_project_file, new_id, open_dir_bound, projects_dir, validate_id, verify_asset_real_path,
 };
 
 /// 新资产 id：`pa-{ms:x}-{seq:x}`（复用 store 的毫秒 + 进程内计数不碰撞内核）。
@@ -324,6 +328,56 @@ pub fn import_project_asset_from_library(
     import_asset_from_library(&projects, &library, &id, &library_asset_id)
 }
 
+/// 项目媒体解析内核（pwmedia 项目 scope，issue #31；给定已验证的 projects
+/// 根句柄）：读项目文档 `assets.byId` 按当前内容逐请求解析 assetId →
+/// (relPath, mime)。relPath 过活动索引词法（排除 `.trash` 隔离区），mime
+/// 非规范时兜底 application/octet-stream（与库解析内核同域）——脏文档
+/// 条目在触达文件系统前即拒绝；文档读取走 [`load_project_file`] 的锚定
+/// 句柄绑定与 §11 第 0 步信封判型。
+pub(crate) fn resolve_project_media_entry(
+    projects: &CapDir,
+    project_id: &str,
+    asset_id: &str,
+) -> Result<(String, String), String> {
+    validate_id(project_id)?;
+    validate_asset_id(asset_id)?;
+    let doc = load_project_file(projects, project_id)?;
+    let entry = doc
+        .assets
+        .get("byId")
+        .and_then(|by_id| by_id.get(asset_id))
+        .ok_or_else(|| format!("资产不存在：{asset_id}"))?;
+    let rel = entry
+        .get("relPath")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("资产 {asset_id} 的 relPath 缺失"))?;
+    if !is_valid_active_asset_rel_path(rel) {
+        return Err(format!("资产 {asset_id} 的 relPath 非法：{rel}"));
+    }
+    let mime = entry
+        .get("mime")
+        .and_then(Value::as_str)
+        .filter(|m| is_canonical_mime(m))
+        .unwrap_or("application/octet-stream")
+        .to_string();
+    Ok((rel.to_string(), mime))
+}
+
+/// 项目媒体句柄打开（pwmedia 项目 scope，issue #31）：[`resolve_project_media_entry`]
+/// 解析后经 [`verify_asset_real_path`] 的受信句柄链定位——最终组件 no-follow
+/// 拒绝符号链接、确认普通文件并按 (dev, ino) 身份绑定；打开的句柄交协议
+/// 处理器在无锁状态下读取（§10.2 单写者 + 原子写语义，项目侧无删除日志，
+/// 无需互斥锁）。
+pub(crate) fn open_project_media_with(
+    projects: &CapDir,
+    project_id: &str,
+    asset_id: &str,
+) -> Result<(String, cap_std::fs::File), String> {
+    let (rel, mime) = resolve_project_media_entry(projects, project_id, asset_id)?;
+    let file = verify_asset_real_path(projects, project_id, &rel)?;
+    Ok((mime, file))
+}
+
 /// set_asset 调度前的强制预检命令（§9.3）：形状 + 实路径复验，返回规范化
 /// AssetRef（分发器必须使用返回值而非调用方原值）。
 #[tauri::command]
@@ -331,31 +385,6 @@ pub fn validate_project_asset(app: AppHandle, id: String, asset: Value) -> Resul
     validate_id(&id)?;
     let root = projects_dir(&app)?;
     validate_project_asset_with(&root, &id, &asset)
-}
-
-/// 媒体展示的资产绝对路径（前端 convertFileSrc 拼接缩略图）：relPath 词法
-/// 校验 + 实路径复验通过后才交出路径——未验证的路径不进入媒体管线。
-#[tauri::command]
-pub fn project_asset_path(app: AppHandle, id: String, rel_path: String) -> Result<String, String> {
-    validate_id(&id)?;
-    if !is_valid_asset_rel_path(&rel_path) {
-        return Err(format!("资产 relPath 非法：{rel_path}"));
-    }
-    let root = projects_dir(&app)?;
-    verify_asset_real_path(&root, &id, &rel_path)?;
-    let base = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("无法定位应用数据目录：{e}"))?
-        .canonicalize()
-        .map_err(|e| format!("解析应用数据目录真实路径失败：{e}"))?;
-    let mut path = base.join("projects").join(&id);
-    for comp in rel_path.split('/') {
-        path = path.join(comp);
-    }
-    path.to_str()
-        .map(str::to_string)
-        .ok_or_else(|| "资产路径含非法字符".to_string())
 }
 
 #[cfg(test)]

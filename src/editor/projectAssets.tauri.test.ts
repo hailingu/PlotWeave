@@ -10,7 +10,6 @@ beforeEach(() => {
   vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
   vi.doMock('@tauri-apps/api/core', () => ({
     invoke: (...args: unknown[]) => invoke(...args),
-    convertFileSrc: (p: string) => `asset://cvt/${p}`,
   }))
   invoke.mockReset()
 })
@@ -76,14 +75,14 @@ describe('projectAssets Tauri 路径：revalidate（撤销后重做防线，issu
 })
 
 describe('projectAssets Tauri 路径：mediaUrl', () => {
-  it('project_asset_path 返回的绝对路径经 convertFileSrc 合成', async () => {
-    invoke.mockResolvedValue('/Users/x/Library/PlotWeave/projects/p-1/assets/pa-1.png')
+  it('get_asset_media_url 携带项目 scope + assetId，返回 opaque URL 透传（issue #31）', async () => {
+    invoke.mockResolvedValue('pwmedia://localhost/project/p-1/pa-1')
     const { projectAssets } = await load()
     const url = await projectAssets.mediaUrl('p-1', assetRef() as never)
-    expect(url).toBe('asset://cvt//Users/x/Library/PlotWeave/projects/p-1/assets/pa-1.png')
+    expect(url).toBe('pwmedia://localhost/project/p-1/pa-1')
     expect(invoke.mock.calls[0]).toEqual([
-      'project_asset_path',
-      { id: 'p-1', relPath: 'assets/pa-1.png' },
+      'get_asset_media_url',
+      { scope: { kind: 'project', projectId: 'p-1' }, assetId: 'pa-1' },
     ])
   })
 })

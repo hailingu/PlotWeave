@@ -1,6 +1,6 @@
 //! library.rs 命令面与句柄域内核的回归测试（issue #17 及其评审轮次）：
 //! 投毒索引条目隔离、锚定句柄删除信任链、读侧与大小上限编码闭环、并发
-//! 首用。pwmedia 媒体协议测试见同目录 media_protocol_tests.rs（issue #26）；
+//! 首用。pwmedia 媒体协议测试见 media/tests.rs（issue #26/#31）；
 //! 只读态与元信息评审修复测试见同目录 read_only_tests.rs（均自本文件拆出
 //! 以符合源文件 800 行上限，评审修复）。
 

@@ -29,6 +29,9 @@ mod testutil;
 pub use commands::{create_project, delete_project, load_project, save_project};
 pub use copy::copy_project_assets;
 pub use list::list_projects;
+// 项目文档读取内核供 pwmedia 项目 scope 媒体解析复用（issue #31，store 外
+// 唯一消费方为 assets::resolve_project_media_entry）
+pub(crate) use commands::load_project_file;
 pub(crate) use types::new_id_with_prefix;
 pub use types::{new_id, validate_id};
 pub use validate::verify_project_assets;
