@@ -1231,3 +1231,66 @@ describe('失败标记与残留边快照的覆盖语义（评审 5140501690）',
     expect(v.issues[1]?.message).toContain('会造成循环剧情')
   })
 })
+
+describe('失败 create 的暂定类型参与后续校验（评审 5143607106）', () => {
+  it('已声明类型对 contingent update 的字段白名单独立点名', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'create_node', nodeType: 'beat', data: { label: '立足' }, ref: 'b' },
+        { op: 'update_node', nodeId: 'b', patch: { prompt: '追或不追？' } },
+      ],
+      snap(),
+    )
+    // create 的 nodeType 已独立通过校验：修正 data 不改变节奏卡语义，
+    // prompt 即使 create 修复后仍非法，首轮即按暂定类型点名
+    expect(v.issues).toHaveLength(2)
+    expect(v.issues[0]?.message).toContain('label')
+    expect(v.issues[1]?.message).toContain('prompt')
+    expect(v.issues[1]?.message).toContain('节奏卡')
+  })
+
+  it('已声明类型的值形状错误同样进首轮清单', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'create_node', nodeType: 'scene', data: { name: 5 }, ref: 's' },
+        { op: 'update_node', nodeId: 's', patch: { episodeNo: 0 } },
+      ],
+      snap(),
+    )
+    expect(v.issues).toHaveLength(2)
+    expect(v.issues[0]?.message).toContain('name')
+    expect(v.issues[1]?.message).toContain('episodeNo')
+  })
+
+  it('暂定 branch 类型的 options 成员异型同样点名', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'create_node', nodeType: 'branch', data: { prompt: 5 }, ref: 'b' },
+        { op: 'update_node', nodeId: 'b', patch: { options: [null] } },
+      ],
+      snap(),
+    )
+    expect(v.issues).toHaveLength(2)
+    expect(v.issues[0]?.message).toContain('prompt')
+    expect(v.issues[1]?.message).toContain('异型')
+  })
+})
+
+describe('contingent 出口连线入暂定拓扑（评审 5143607106）', () => {
+  it('端点已确定的 contingent 出口边参与后续成环判定', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'update_node', nodeId: 'b1', patch: { options: [{ label: 5 }] } },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
+        { op: 'connect_edge', sourceId: 's1', targetId: 'b1' },
+      ],
+      richSnap(),
+    )
+    // options 修复后 b1 → s1 生效，反向边 s1 → b1 仍必然成环：后续连线
+    // 按含暂定边的拓扑独立判定，不因本轮省略而漏报
+    expect(v.issues).toHaveLength(2)
+    expect(v.issues[0]?.message).toContain('异型')
+    expect(v.issues[1]?.index).toBe(2)
+    expect(v.issues[1]?.message).toContain('会造成循环剧情')
+  })
+})

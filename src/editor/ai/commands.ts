@@ -240,19 +240,50 @@ function isContingentRef(st: FoldState, cmd: Record<string, unknown>, key: strin
   return owner !== undefined && !st.exists.has(owner)
 }
 
+/** 分类型写载荷校验（create 的 data 与 update 的 patch 共用同一序列）：
+ * 字段键白名单 → 值形状 → 分支选项成员。返回错误文案或 null。 */
+function payloadIssue(
+  nodeType: string,
+  fields: Record<string, unknown>,
+  assets: ReadonlyMap<string, string>,
+): string | null {
+  const keyError = checkFieldKeys(nodeType, fields)
+  if (keyError) return keyError
+  const shapeError = nodeValueShapeError(nodeType, fields, assets)
+  if (shapeError) return shapeError
+  if (nodeType === 'branch' && Array.isArray(fields.options)) {
+    return branchOptionsError(fields.options as unknown[])
+  }
+  return null
+}
+
+/** contingent update 的载荷独立判定（目标尚未入虚拟图）：任何节点类型都
+ * 不支持的字段恒非法；失败 create 已登记暂定类型时再按该类型的完整写载荷
+ * 序列校验——修正 data 不改变已声明的类型语义，这些错误即使 create 修复后
+ * 仍然存在。返回错误文案或 null。 */
+function contingentUpdateIssue(
+  st: FoldState,
+  cmd: Record<string, unknown>,
+  patch: Record<string, unknown>,
+): string | null {
+  const owner = st.refOwner.get(asText(cmd.nodeId))
+  const nodeType = owner === undefined ? undefined : st.types.get(owner)
+  if (nodeType === undefined) {
+    const globalUnknown = Object.keys(patch).filter((k) => !ANY_NODE_FIELD_KEYS.has(k))
+    return globalUnknown.length > 0
+      ? `未知字段：${globalUnknown.join('、')}（不是任何可写节点类型的字段）`
+      : null
+  }
+  return payloadIssue(nodeType, patch, st.assets)
+}
+
 function foldCreate(st: FoldState, cmd: Record<string, unknown>, index: number): void {
   const nodeType = asText(cmd.nodeType)
   if (!(nodeType in NODE_TYPE_LABELS)) return st.fail(index, `未知节点类型：${nodeType || '（空）'}`)
   const data = cmd.data ?? {}
   if (!plainObject(data)) return st.fail(index, 'data 必须是字段对象')
-  const keyError = checkFieldKeys(nodeType, data)
-  if (keyError) return st.fail(index, keyError)
-  const shapeError = nodeValueShapeError(nodeType, data, st.assets)
-  if (shapeError) return st.fail(index, shapeError)
-  if (nodeType === 'branch' && Array.isArray(data.options)) {
-    const optError = branchOptionsError(data.options as unknown[])
-    if (optError) return st.fail(index, optError)
-  }
+  const dataIssue = payloadIssue(nodeType, data, st.assets)
+  if (dataIssue) return st.fail(index, dataIssue)
   const typeLabel = NODE_TYPE_LABELS[nodeType]
   const name = asText(data.name) || asText(data.prompt) || '未命名'
   const virtualId = virtualIdOf(index)
@@ -279,25 +310,19 @@ function foldUpdate(st: FoldState, cmd: Record<string, unknown>, index: number):
   const patch = cmd.patch
   if (!plainObject(patch) || Object.keys(patch).length === 0) return st.fail(index, 'patch 为空')
   if (isContingentRef(st, cmd, 'nodeId')) {
-    // contingent：目标类型不可知，只保留不依赖类型的全局判定——任何节点
-    // 类型都不支持的字段必然非法，即使 create 修复后更新仍不可能合法
-    const globalUnknown = Object.keys(patch).filter((k) => !ANY_NODE_FIELD_KEYS.has(k))
-    if (globalUnknown.length > 0) {
-      return st.fail(index, `未知字段：${globalUnknown.join('、')}（不是任何可写节点类型的字段）`)
-    }
+    // contingent：目标节点尚未入虚拟图。任何节点类型都不支持的字段恒非法；
+    // 失败 create 的 nodeType 已独立通过校验时，暂定类型可判——修正 data
+    // 不改变已声明的类型语义，按该类型的完整写载荷错误即使 create 修复后
+    // 仍存在，首轮即点名，不额外消耗纠错轮次
+    const issue = contingentUpdateIssue(st, cmd, patch)
+    if (issue !== null) st.fail(index, issue)
     return
   }
   const id = resolveRef(st, cmd, 'nodeId')
   if (!id) return st.fail(index, `节点不存在：${asText(cmd.nodeId)}`)
   const nodeType = st.types.get(id)
-  const keyError = checkFieldKeys(nodeType ?? '', patch)
-  if (keyError) return st.fail(index, keyError)
-  const patchShapeError = nodeValueShapeError(nodeType ?? '', patch, st.assets)
-  if (patchShapeError) return st.fail(index, patchShapeError)
-  if (nodeType === 'branch' && Array.isArray(patch.options)) {
-    const optError = branchOptionsError(patch.options as unknown[])
-    if (optError) return st.fail(index, optError)
-  }
+  const payloadErr = payloadIssue(nodeType ?? '', patch, st.assets)
+  if (payloadErr) return st.fail(index, payloadErr)
   st.items.push({
     kind: 'update',
     danger: false,
@@ -496,8 +521,14 @@ function foldConnectEdge(
   // attach 是派生从属边（§4.4 垂直语义）：自身不查环，也不参与
   // 剧情流环检测——环只可能出现在横向剧情流上
   if (kind !== 'attach' && cycleContingent(st, cmd, index, src, dst, pairLabel)) return
-  // 独立约束全部通过：剩余校验随前序修复自愈，本轮不折叠不点名
-  if (optionContingent) return
+  // 独立约束全部通过：剩余校验随前序修复自愈，本轮不折叠不点名。端点已
+  // 确定时仍以无句柄暂定边入拓扑（选项句柄待前序修复后解析）：后续连线的
+  // 成环/重复/宿主判定按「该连线生效」评估，不因本轮省略而漏报独立可判定
+  // 的错误
+  if (optionContingent) {
+    st.virtualEdges.push({ source: src, target: dst, sourceHandle: null, type: 'branch' })
+    return
+  }
   st.virtualEdges.push({
     source: src,
     target: dst,
@@ -669,7 +700,16 @@ function registerFailedOptionsUpdate(
 function registerFailedMutation(st: FoldState, raw: Record<string, unknown>, index: number): void {
   if (raw.op === 'create_node') {
     const refName = typeof raw.ref === 'string' ? raw.ref.trim() : ''
-    if (refName !== '') st.refOwner.set(refName, virtualIdOf(index))
+    if (refName === '') return
+    const virtualId = virtualIdOf(index)
+    st.refOwner.set(refName, virtualId)
+    // nodeType 字段已独立通过校验：登记为暂定类型，供后续 contingent 命令
+    // 按该类型独立校验（修正 data 不改变已声明的类型语义）。自有键判定：
+    // 协议表继承 Object.prototype，`in` 会命中 toString 等同名键
+    const nodeType = asText(raw.nodeType)
+    if (Object.prototype.hasOwnProperty.call(NODE_FIELD_KEYS, nodeType)) {
+      st.types.set(virtualId, nodeType)
+    }
     return
   }
   if (raw.op === 'update_node') {
