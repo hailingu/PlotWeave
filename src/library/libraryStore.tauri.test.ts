@@ -32,7 +32,7 @@ const entry = (over: Record<string, unknown> = {}): Record<string, unknown> => (
   ...over,
 })
 
-/** §7.2 Record 形状（issue #29）：library_list 的 assets 为
+/** §7.2 Record 形状（issue #29）：list_library_assets 的 assets 为
  * { byId: { [id]: entry } }，键自动取条目 id。 */
 const byId = (...entries: Array<Record<string, unknown>>): Record<string, unknown> => ({
   byId: Object.fromEntries(entries.map((e) => [e.id, e])),
@@ -148,7 +148,7 @@ describe('libraryStore Tauri 路径：put', () => {
     )
     expect(asset.id).toBe('la-9')
     const [cmd, args] = invoke.mock.calls[0] as [string, Record<string, unknown>]
-    expect(cmd).toBe('library_put')
+    expect(cmd).toBe('import_library_asset')
     expect(args).toMatchObject({ name: '新图.png', mime: 'image/png', kind: 'reference' })
     expect(args.bytes).toEqual([1, 2, 255])
   })
@@ -167,13 +167,13 @@ describe('libraryStore Tauri 路径：put', () => {
 })
 
 describe('libraryStore Tauri 路径：updateMeta / remove', () => {
-  it('补丁透传给 library_update_meta；无效返回抛错', async () => {
+  it('补丁透传给 update_library_asset；无效返回抛错', async () => {
     invoke.mockResolvedValueOnce(entry({ id: 'la-1', name: '改名.png' }))
     const { libraryStore } = await load()
     const updated = await libraryStore.updateMeta('la-1', { name: '改名.png' })
     expect(updated.name).toBe('改名.png')
     expect(invoke.mock.calls[0]).toEqual([
-      'library_update_meta',
+      'update_library_asset',
       { id: 'la-1', patch: { name: '改名.png' } },
     ])
 
@@ -181,11 +181,11 @@ describe('libraryStore Tauri 路径：updateMeta / remove', () => {
     await expect(libraryStore.updateMeta('la-1', {})).rejects.toThrow(/无效条目/)
   })
 
-  it('remove 透传 id 给 library_delete', async () => {
+  it('remove 透传 id 给 delete_library_asset', async () => {
     invoke.mockResolvedValue(undefined)
     const { libraryStore } = await load()
     await libraryStore.remove('la-1')
-    expect(invoke.mock.calls[0]).toEqual(['library_delete', { id: 'la-1' }])
+    expect(invoke.mock.calls[0]).toEqual(['delete_library_asset', { id: 'la-1' }])
   })
 })
 
@@ -253,7 +253,7 @@ describe('libraryStore Tauri 路径：隔离区积压可见性（issue #25 评�
 // ---- 组列表诊断可见性（评审修复，PR #36 第一轮）----
 
 describe('libraryStore Tauri 路径：listGroups', () => {
-  it('listGroups 携带 library_list 的 warnings 与 cleanupPending 诊断', async () => {
+  it('listGroups 携带 list_library_assets 的 warnings 与 cleanupPending 诊断', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     invoke.mockResolvedValue({
       groups: byId(entry()),

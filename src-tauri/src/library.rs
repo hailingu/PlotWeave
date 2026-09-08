@@ -50,7 +50,7 @@ const VIEWS: [&str; 8] = [
 /// 删除日志中的未完成事务，脏索引条目由共享内核隔离，`warnings` 与
 /// `cleanupPending` 随索引返回，冲突期条目标记 `conflicted` 不可用。
 #[tauri::command]
-pub fn library_list(app: AppHandle) -> Result<Value, String> {
+pub fn list_library_assets(app: AppHandle) -> Result<Value, String> {
     let library = library_root(&app)?;
     let _op = library_op_lock();
     let _file_lock = library_file_lock(&library)?;
@@ -59,7 +59,7 @@ pub fn library_list(app: AppHandle) -> Result<Value, String> {
     Ok(index)
 }
 
-/// 列表读取内核（句柄域，`library_list` 与测试共用）：先恢复删除日志，
+/// 列表读取内核（句柄域，`list_library_assets` 与测试共用）：先恢复删除日志，
 /// 再按只读态分流读取——日志异型（只读告警态）用不落盘读取，索引保持
 /// 原始字节（评审修复，PR #33 第五轮：只读态下迁移落盘会改写索引）；迁移
 /// 警告与冲突期标记随结果返回。
@@ -168,7 +168,7 @@ pub(crate) fn put_asset_with(
 
 /// 导入资产命令：媒体拷入 assets/（新 id，库自包含），索引追加并返回新条目。
 #[tauri::command]
-pub fn library_put(
+pub fn import_library_asset(
     app: AppHandle,
     name: String,
     mime: String,
@@ -665,7 +665,7 @@ pub fn get_asset_media_url(
 /// 删除资产命令：日志驱动的身份绑定隔离事务（§7.2）——响应携带净化
 /// 诊断与 cleanupPending。移除索引项并把媒体隔离进 .trash/。
 #[tauri::command]
-pub fn library_delete(app: AppHandle, id: String) -> Result<Value, String> {
+pub fn delete_library_asset(app: AppHandle, id: String) -> Result<Value, String> {
     validate_asset_id(&id)?;
     let library = library_root(&app)?;
     let _op = library_op_lock();
@@ -749,7 +749,7 @@ fn update_meta_with(library: &cap_std::fs::Dir, id: &str, patch: &Value) -> Resu
 /// 更新条目元信息（改名/分类/视角/标签/编组）；id 与媒体文件不变。补丁
 /// 值域校验在内核 update_meta_with 内强制（命令层与原始 IPC 同一口径）。
 #[tauri::command]
-pub fn library_update_meta(app: AppHandle, id: String, patch: Value) -> Result<Value, String> {
+pub fn update_library_asset(app: AppHandle, id: String, patch: Value) -> Result<Value, String> {
     validate_asset_id(&id)?;
     let library = library_root(&app)?;
     let _op = library_op_lock();
