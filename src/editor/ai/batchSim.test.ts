@@ -435,4 +435,41 @@ describe('simulateBatch · 设定实体命令（issue 44：实体 + 绑定复合
     const s1 = state.nodes[0]
     expect(s1.type === 'scene' && s1.data.characterIds).toEqual(['ch-1'])
   })
+
+  it('create_node 载荷里的实体 ref 同样解析为真实 id（与 update patch 同一口径）', () => {
+    const { state, ops } = mkOps([])
+    const batch: ValidatedCommand[] = [
+      { op: 'upsert_character', ref: 'hero', fields: { name: '林一', bio: '侦探' } } as ValidatedCommand,
+      { op: 'upsert_location', ref: 'home', fields: { name: '公寓' } } as ValidatedCommand,
+      {
+        op: 'create_node',
+        nodeType: 'scene',
+        data: { name: '新场', characterIds: ['hero'], locationId: 'home' },
+      },
+      {
+        op: 'create_node',
+        nodeType: 'dialogue',
+        data: {
+          name: '新对白',
+          lines: [{ id: 'line-9', kind: 'line', speaker: 'hero', text: '在。' }],
+        },
+      },
+    ]
+    const { forward, backward } = simulateBatch(batch, ops, state.nodes, state.edges, state.settings)
+    forward.forEach((f) => f())
+
+    const hero = state.settings.characters.find((c) => c.name === '林一')!
+    expect(hero.id).toMatch(/^ch-/)
+    const home = state.settings.locations[0]
+    const ns = state.nodes.find((n) => n.type === 'scene')!
+    expect(ns.type === 'scene' && ns.data.characterIds).toEqual([hero.id])
+    expect(ns.type === 'scene' && ns.data.locationId).toBe(home.id)
+    const nd = state.nodes.find((n) => n.type === 'dialogue')!
+    expect(nd.type === 'dialogue' && nd.data.lines[0].speaker).toBe(hero.id)
+
+    // 整批撤销后临时 ref 不残留在任何新建节点里（节点整体移除，设定集回滚）
+    ;[...backward].reverse().forEach((f) => f())
+    expect(state.nodes).toEqual([])
+    expect(state.settings.characters).toEqual([])
+  })
 })

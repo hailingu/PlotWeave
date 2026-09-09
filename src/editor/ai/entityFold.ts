@@ -128,6 +128,17 @@ export function normalizeEntityFields(
 /** entityId 解析结果：命中实体 id / 跨种类 / 未知 / 依赖失败前序（contingent）。 */
 type EntityTarget = { id: string } | 'missing' | 'cross' | 'contingent'
 
+/** ref 别名登记守卫（新建/修改两分支共用）：别名与既有实体 id 冲突时返回
+ * 错误文案。校验期 token 解析以既有实体优先（entityScopeOf.kindOf 先查投影
+ * 桶），执行期以别名表优先（batchSim 的 entityRefToId），冲突别名会让同一
+ * token 在预览校验与执行解析到不同实体，产生跨种类误绑。 */
+function entityRefCollisionIssue(st: EntityFoldHost, refName: string): string | null {
+  if (st.characters.has(refName) || st.locations.has(refName)) {
+    return `ref 别名不得与既有实体 id 相同（预览按既有实体解析、执行按别名解析，会产生不一致绑定）：${refName}`
+  }
+  return null
+}
+
 function resolveEntityTarget(st: EntityFoldHost, kind: EntityKind, token: string): EntityTarget {
   if (bucketOf(st, kind).has(token)) return { id: token }
   const ref = st.entityRefs.get(token)
@@ -152,6 +163,8 @@ function foldCreateEntity(
 ): void {
   const issue = entityFieldsIssue(kind, fields, 'create')
   if (issue !== null) return st.fail(index, issue)
+  const collision = refName !== '' ? entityRefCollisionIssue(st, refName) : null
+  if (collision !== null) return st.fail(index, collision)
   const normalized = normalizeEntityFields(kind, fields)
   const label = ENTITY_KIND_LABELS[kind]
   const virtualId = virtualEntityIdOf(index)
@@ -195,6 +208,8 @@ function foldUpdateEntity(
   if (resolved === 'missing') {
     return st.fail(index, `${label}实体不存在：${target}（修改须用设定集快照里的精确 id）`)
   }
+  const collision = refName !== '' ? entityRefCollisionIssue(st, refName) : null
+  if (collision !== null) return st.fail(index, collision)
   const normalized = normalizeEntityFields(kind, fields)
   const currentName = bucketOf(st, kind).get(resolved.id) ?? target
   if (normalized.name !== undefined) bucketOf(st, kind).set(resolved.id, normalized.name)

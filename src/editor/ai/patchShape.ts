@@ -251,7 +251,11 @@ function listShapeIssues(
       issues.push('lines 须为对象数组（text 字符串必填；kind ∈ line/action、speaker 仅 line 行可带且非空白字符串、side ∈ left/right、vo 布尔可选）')
     } else {
       arr.forEach((l, i) => {
-        if (!plainObject(l) || l.kind !== 'line' || typeof l.speaker !== 'string') return
+        if (!plainObject(l) || typeof l.speaker !== 'string') return
+        // 缺省 kind 与 normalizeNodeFields 的判别缺省同口径视为 line：
+        // 否则无 kind 的台词行绕过 speaker 引用校验，跨种类/悬空说话人
+        // 照单进活动文档并被持久化
+        if (l.kind !== undefined && l.kind !== 'line') return
         const refIssue = entityRefIssue(l.speaker, 'character', `lines[${i}].speaker`, entities)
         if (refIssue !== null) issues.push(refIssue)
       })

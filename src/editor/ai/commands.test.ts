@@ -309,6 +309,54 @@ describe('validateAiBatch · 设定实体命令（issue 44：upsert_character / 
     expect(v.ok).toBe(true)
     expect(v.items[1]).toMatchObject({ kind: 'update_entity' })
   })
+
+  it('缺省 kind 的台词行按 line 校验 speaker 引用（与归一化判别缺省同口径）', () => {
+    const cross = validateAiBatch(
+      [
+        {
+          op: 'create_node',
+          nodeType: 'dialogue',
+          data: { name: '对质', lines: [{ speaker: 'loc-1', text: '你来了。' }] },
+        },
+      ],
+      entSnap(),
+    )
+    expect(cross.ok).toBe(false)
+    expect(cross.issues.some((i) => i.message.includes('lines[0].speaker'))).toBe(true)
+
+    const unknown = validateAiBatch(
+      [
+        {
+          op: 'update_node',
+          nodeId: 'd1',
+          patch: { lines: [{ id: 'line-1', speaker: 'ghost-ch', text: '在。' }] },
+        },
+      ],
+      entSnap(),
+    )
+    expect(unknown.ok).toBe(false)
+    expect(unknown.issues.some((i) => i.message.includes('lines[0].speaker'))).toBe(true)
+  })
+
+  it('ref 别名与既有实体 id 冲突时整批拒绝（校验按既有实体解析、执行按别名解析）', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'upsert_character', ref: 'loc-1', fields: { name: '假名' } },
+        { op: 'update_node', nodeId: 's1', patch: { locationId: 'loc-1' } },
+      ],
+      entSnap(),
+    )
+    expect(v.ok).toBe(false)
+    expect(v.issues.some((i) => i.message.includes('ref 别名'))).toBe(true)
+
+    // 修改既有实体挂冲突别名同样拒绝
+    const onUpdate = validateAiBatch(
+      [{ op: 'upsert_character', entityId: 'ch-1', ref: 'loc-1', fields: { bio: '补' } }],
+      entSnap(),
+    )
+    expect(onUpdate.ok).toBe(false)
+    expect(onUpdate.issues.some((i) => i.message.includes('ref 别名'))).toBe(true)
+  })
 })
 
 describe('列表项稳定 id 归一化（S6479 信任边界：AI 可送旧形态，落画布前补 id）', () => {

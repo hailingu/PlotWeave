@@ -60,9 +60,16 @@ const simCreate = (
   ops: BatchOps,
   cmd: Extract<ValidatedCommand, { op: 'create_node' }>,
 ): void => {
+  // create 载荷与 update 补丁同一 ref 解析口径（issue 44）：新建场景/对白
+  // 的绑定引用在落画布前解析为真实 id，临时 ref 不进画布、不落盘
+  const data = resolveEntityRefs(
+    cmd.nodeType,
+    (cmd.data as Record<string, unknown>) ?? {},
+    sim.entityRefToId,
+  )
   const node = ops.buildNewNode(cmd.nodeType as CreatableType, {
     selected: false,
-    data: (cmd.data as Record<string, unknown>) ?? undefined,
+    data,
     against: sim.nodes,
   })
   if (typeof cmd.ref === 'string' && cmd.ref !== '') sim.refToId.set(cmd.ref, node.id)
@@ -71,18 +78,22 @@ const simCreate = (
   sim.backward.push(() => ops.setNodes((all) => all.filter((n) => n.id !== node.id)))
 }
 
-/** 场景/对白补丁里的实体 ref → 真实 id（issue 44）：执行期一次性解析，
- * 临时 ref 不进画布、不落盘（验收标准：无临时 ref 残留）。非 ref 值原样
- * 保留；克隆只发生在确有替换的成员上。 */
-function resolveEntityRefs(patch: NodeDataPatch, refs: Map<string, string>): NodeDataPatch {
-  const raw: Record<string, unknown> = { ...patch.patch }
+/** 场景/对白载荷里的实体 ref → 真实 id（issue 44）：create 载荷与 update
+ * 补丁共用同一解析（执行期一次性解析，临时 ref 不落盘——验收标准：无临时
+ * ref 残留）。非 ref 值原样保留；克隆只发生在确有替换的成员上。 */
+function resolveEntityRefs(
+  nodeType: string,
+  fields: Record<string, unknown>,
+  refs: Map<string, string>,
+): Record<string, unknown> {
+  const raw: Record<string, unknown> = { ...fields }
   const token = (v: unknown): unknown =>
     typeof v === 'string' ? (refs.get(v) ?? v) : v
-  if (patch.nodeType === 'scene') {
+  if (nodeType === 'scene') {
     if (raw.locationId !== undefined) raw.locationId = token(raw.locationId)
     if (Array.isArray(raw.characterIds)) raw.characterIds = raw.characterIds.map(token)
   }
-  if (patch.nodeType === 'dialogue' && Array.isArray(raw.lines)) {
+  if (nodeType === 'dialogue' && Array.isArray(raw.lines)) {
     raw.lines = raw.lines.map((l) => {
       if (
         typeof l === 'object' &&
@@ -96,7 +107,7 @@ function resolveEntityRefs(patch: NodeDataPatch, refs: Map<string, string>): Nod
       return l
     })
   }
-  return dataPatchOf(patch.nodeType, raw)
+  return raw
 }
 
 const simUpdate = (
@@ -110,7 +121,7 @@ const simUpdate = (
   // 判别联合解构（nodeType 与原 patch 相关，分支级联的 options 收窄依赖它）；
   // patch 为实体 ref 解析后的记录（issue 44）——不触碰 options，级联语义不变
   const { nodeType, patch: originalPatch } = cmd.patch
-  const patch = resolveEntityRefs(cmd.patch, sim.entityRefToId).patch
+  const patch = resolveEntityRefs(nodeType, cmd.patch.patch, sim.entityRefToId)
   const before: Record<string, unknown> = {}
   for (const k of Object.keys(patch)) before[k] = (target.data as Record<string, unknown>)[k]
   sim.nodes = sim.nodes.map((n) => (n.id === id ? mergeNodeData(n, patch) : n))
