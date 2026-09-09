@@ -14,6 +14,10 @@ import {
 } from './aiThreadModel'
 import PreviewCard from './PreviewCard'
 import type { AiSession, ThreadEntry } from '../ai/session'
+import {
+  stripExecutionRuntime,
+  useAiSessionPersistence,
+} from '../ai/useAiSessionPersistence'
 
 /** 模型选择域（逻辑 hook，issue #39 拆分）：应用设置加载、面板内模型
  * 选择与三层派生（可用模型 → 生效模型 → provider key 就绪）。 */
@@ -186,51 +190,6 @@ function useAiThreadMessages(opts: {
   return { thread, armedIdx, setArmedIdx, threadRef, nextId, append, executeCard, markDismissed }
 }
 
-/** 去掉执行确认的运行时标注（落盘确认与持久化映射共用）：uncommitted 与
- * aiRevisionAfter 都只在等待画布落盘期间有意义。 */
-function stripExecutionRuntime(card: NonNullable<ThreadEntry['card']>): NonNullable<ThreadEntry['card']> {
-  const next = { ...card }
-  delete next.uncommitted
-  delete next.aiRevisionAfter
-  return next
-}
-
-/** 去掉回执与卡片的运行时关联标注（不落盘）。 */
-function stripReceiptLink(entry: ThreadEntry): ThreadEntry {
-  if (entry.cardReceiptFor === undefined) return entry
-  const next = { ...entry }
-  delete next.cardReceiptFor
-  return next
-}
-
-/** 落盘映射：未确认画布落盘的执行卡降级为 pending 并剔除其回执（按关联
- * 而非位置——回执总是追加在会话尾部）——画布若尚未持久化，重开后该卡应
- * 重新可执行，而不是同时声称已执行；保留 aiRevisionAfter 供重开时与画布
- * 批次计数对账。其余条目原样落盘（剥掉运行时关联标注）。 */
-function persistedEntries(thread: ThreadEntry[]): ThreadEntry[] {
-  const uncommitted = new Set(
-    thread.filter((entry) => entry.card?.uncommitted).map((entry) => entry.id),
-  )
-  const entries: ThreadEntry[] = []
-  for (const entry of thread) {
-    if (
-      entry.kind === 'note' &&
-      entry.cardReceiptFor !== undefined &&
-      uncommitted.has(entry.cardReceiptFor)
-    ) {
-      continue
-    }
-    if (entry.card?.uncommitted) {
-      const card = { ...stripExecutionRuntime(entry.card), status: 'pending' as const }
-      if (entry.card.aiRevisionAfter !== undefined) card.aiRevisionAfter = entry.card.aiRevisionAfter
-      entries.push({ ...stripReceiptLink(entry), card })
-      continue
-    }
-    entries.push(stripReceiptLink(entry))
-  }
-  return entries
-}
-
 /** 单轮发送域（逻辑 hook，issue #39 拆分）：输入草稿、画布感知开关与
  * send 动作（用户条目入列 → Agent 循环 → 助手条目/回执入列）。 */
 function useAiTurn(opts: {
@@ -278,40 +237,6 @@ function useAiTurn(opts: {
     }
   }
   return { draft, setDraft, busy, error, knowsCanvas, setKnowsCanvas, send }
-}
-
-function useAiSessionPersistence(
-  thread: ThreadEntry[],
-  initialSessionError: string | null | undefined,
-  onSaveSession: ((session: AiSession) => Promise<void>) | undefined,
-  initialSessionRetryable: boolean | undefined,
-): string | null {
-  const [saveError, setSaveError] = useState<string | null>(initialSessionError ?? null)
-  const hasMounted = useRef(false)
-  /** 带错误进入面板时首帧是否重试落盘：修复回写失败/保存失败（内存是
-   * 恢复或最新的会话）可重试；读取失败的空回退会话不可——落盘会覆盖
-   * 可能可恢复的原文件，须等用户实际变更对话后才随变更保存。 */
-  const retryOnMount = useRef(initialSessionError != null && initialSessionRetryable !== false)
-  const saveSessionRef = useRef(onSaveSession)
-  useEffect(() => {
-    saveSessionRef.current = onSaveSession
-  }, [onSaveSession])
-  // 项目级错误在挂载后到达（重挂载期保存仍在途、拒绝晚到）时同步展示；
-  // 只同步非空值，本地保存结果的清除不被过期 prop 覆盖
-  useEffect(() => {
-    if (initialSessionError != null) setSaveError(initialSessionError)
-  }, [initialSessionError])
-  useEffect(() => {
-    const first = !hasMounted.current
-    hasMounted.current = true
-    if (first && !retryOnMount.current) return
-    const save = saveSessionRef.current
-    if (!save) return
-    void save({ schemaVersion: 1, entries: persistedEntries(thread) })
-      .then(() => setSaveError(null))
-      .catch((err: unknown) => setSaveError(String(err)))
-  }, [thread])
-  return saveError
 }
 
 function AiThreadTimeline({

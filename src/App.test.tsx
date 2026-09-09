@@ -27,8 +27,18 @@ vi.mock('./projectStore', () => ({
     saveQuiet: vi.fn(),
     duplicate: vi.fn(),
     delete: vi.fn(),
+    onAiSessionSaved: (listener: (id: string) => void) => {
+      retrySavedListeners.push(listener)
+      return () => {
+        const index = retrySavedListeners.indexOf(listener)
+        if (index >= 0) retrySavedListeners.splice(index, 1)
+      }
+    },
   },
 }))
+
+/** projectStore.onAiSessionSaved 已登记的监听器（测试经此模拟后台重试成功）。 */
+const retrySavedListeners: Array<(id: string) => void> = []
 
 vi.mock('./home/HomePage', () => ({
   default: (props: Record<string, unknown>) => {
@@ -75,6 +85,7 @@ afterEach(cleanup)
 
 beforeEach(() => {
   vi.clearAllMocks()
+  retrySavedListeners.length = 0
   store.list.mockResolvedValue([{ id: 'p1', name: '雨夜' }])
   store.create.mockResolvedValue({ id: 'new-1', name: '未命名短剧' })
   store.load.mockResolvedValue(structuredClone(DOC))
@@ -354,6 +365,57 @@ describe('App ✦AI 会话保存失败', () => {
     expect(editorProps.current.aiSession).toEqual(changed)
     expect(editorProps.current.aiSessionError).toContain('磁盘已满')
     expect(editorProps.current.aiSessionRetryable).toBe(true)
+  })
+})
+
+describe('App ✦AI 会话重试成功通知', () => {
+  it('后台重试补写成功：清除项目级错误与保留快照，重开不再以内存会话胜出', async () => {
+    store.saveAiSession.mockRejectedValueOnce(new Error('磁盘已满'))
+    await openEditor()
+    const changed = {
+      schemaVersion: 1 as const,
+      entries: [{ id: 1, kind: 'note' as const, text: '未落盘' }],
+    }
+    await act(async () => {
+      await expect(
+        (editorProps.current.onSaveAiSession as (value: typeof changed) => Promise<void>)(changed),
+      ).rejects.toThrow('磁盘已满')
+    })
+    expect(editorProps.current.aiSessionError).toContain('磁盘已满')
+
+    await act(async () => {
+      retrySavedListeners.forEach((notify) => notify('p1'))
+    })
+    expect(editorProps.current.aiSessionError).toBeNull()
+
+    // 保留快照已清：回首页重开走磁盘载入，不再以内存保留会话胜出
+    await act(async () => {
+      ;(editorProps.current.onBackHome as () => void)()
+    })
+    expect(await screen.findByTestId('home')).toBeTruthy()
+    store.loadAiSession.mockClear()
+    await act(async () => {
+      await (homeProps.current.onOpenProject as (id: string) => Promise<void>)('p1')
+    })
+    await screen.findByTestId('editor')
+    expect(store.loadAiSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('通知只清除对应项目：别的项目错误不受影响', async () => {
+    await openEditor()
+    // 经项目级状态注入另一项目的错误（onSaveAiSession 只作用于打开项目）
+    const changed = { schemaVersion: 1 as const, entries: [] }
+    // 打开项目的错误由保存失败产生
+    store.saveAiSession.mockRejectedValueOnce(new Error('磁盘已满'))
+    await act(async () => {
+      await expect(
+        (editorProps.current.onSaveAiSession as (value: typeof changed) => Promise<void>)(changed),
+      ).rejects.toThrow('磁盘已满')
+    })
+    await act(async () => {
+      retrySavedListeners.forEach((notify) => notify('other-project'))
+    })
+    expect(editorProps.current.aiSessionError).toContain('磁盘已满')
   })
 })
 

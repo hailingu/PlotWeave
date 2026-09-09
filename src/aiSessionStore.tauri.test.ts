@@ -302,6 +302,23 @@ describe('saveAiSession 失败重试与退出冲刷', () => {
     expect(commandsOf()).toEqual([])
   })
 
+  it('后台重试补写成功通知订阅者（UI 层据此清错误与保留快照）', async () => {
+    vi.useFakeTimers()
+    const store = await import('./aiSessionStore')
+    await failOnce(store)
+    const notified: string[] = []
+    const unsubscribe = store.onAiSessionSaved((id) => notified.push(id))
+
+    invoke.mockReset()
+    invoke.mockResolvedValue(undefined)
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(notified).toEqual(['p1'])
+
+    unsubscribe()
+    await store.saveAiSession('p1', payload)
+    expect(notified).toEqual(['p1'])
+  })
+
 })
 
 describe('saveAiSession 冲刷固定点排空', () => {
@@ -363,6 +380,43 @@ describe('saveAiSession 冲刷固定点排空', () => {
 
 describe('saveAiSession 在途保存与定时器代次', () => {
   afterEach(() => vi.useRealTimers())
+
+  it('乱序返回的并发载入不得回拨写入序号', async () => {
+    const store = await import('./aiSessionStore')
+    const releaseRef: { current: (() => void) | null } = { current: null }
+    invoke.mockImplementation((cmd: unknown) => {
+      if (cmd === 'load_ai_session') {
+        // 第一次载入挂起（旧快照 seq 5），第二次立即返回（seq 5）
+        if (releaseRef.current === null) {
+          return new Promise((resolve) => {
+            releaseRef.current = () => resolve(session('权威', 5))
+          })
+        }
+        return Promise.resolve(session('权威', 5))
+      }
+      if (cmd === 'load_ai_session_recovery') return Promise.resolve(null)
+      return Promise.resolve(undefined)
+    })
+
+    const older = store.loadAiSession('p1')
+    // 被测竞态是 IPC 乱序完成（首读挂起、后发载入先完成）；模块导入本身
+    // 顺序等待（测试环境的模块 mock 不覆盖并发动态导入）
+    await vi.waitFor(() => { expect(invoke).toHaveBeenCalledTimes(1) })
+    await store.loadAiSession('p1')
+    invoke.mockReset()
+    invoke.mockResolvedValue(undefined)
+    await store.saveAiSession('p1', payload)
+    releaseRef.current?.()
+    await older
+    // 旧载入带着 seq 5 快照迟到：不得把内存序号拨回 5——回拨后的下一次
+    // 保存与权威文件同号，主保存失败时副本以相同序号落盘，重开时副本
+    // 不严格大于主文件而被忽略，新历史丢失
+    await store.saveAiSession('p1', payload)
+    const seqs = invoke.mock.calls
+      .filter((call) => call[0] === 'save_ai_session')
+      .map((call) => (call[1] as { session: { writeSeq: number } }).session.writeSeq)
+    expect(seqs).toEqual([6, 7])
+  })
 
   it('新代次失败替换旧定时器：重试的是最新会话', async () => {
     vi.useFakeTimers()

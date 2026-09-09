@@ -34,6 +34,16 @@ const SESSION_RETRY_DELAY_MS = 5000
 const pendingRetrySessions = new Map<string, AiSession>()
 const retryTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const sessionGenerations = new Map<string, number>()
+/** 会话权威落盘成功的订阅者：后台重试补写成功（不经过 UI 层保存通道）
+ * 时，面板错误与保留快照只有靠此通知才能清除；用户通道的保存成功同样
+ * 通知——清理动作幂等，与 UI 层自己的成功尾巴重复执行无害。 */
+const savedListeners = new Set<(id: string) => void>()
+
+/** 订阅会话权威落盘成功（最新代次），返回退订函数。 */
+export function onAiSessionSaved(listener: (id: string) => void): () => void {
+  savedListeners.add(listener)
+  return () => savedListeners.delete(listener)
+}
 /** 尚未落定（排队/在途）的保存：关闭屏障必须等它落定后再判断，否则
  * 刚变更的会话在主文件与副本写入之前就被放行退出。 */
 const inFlightSaves = new Map<string, Promise<void>>()
@@ -81,15 +91,23 @@ function seqOf(raw: unknown): number {
 
 type Invoke = (cmd: string, args: Record<string, unknown>) => Promise<unknown>
 
-/** 从磁盘两副本续起写入序号（进程内首次写入早于任何 load 时的兜底）。 */
+/** 从磁盘两副本续起写入序号（进程内首次写入早于任何 load 时的兜底）。
+ * 等待 IPC 期间内存序号可能已被并发保存推进：取大合并，不回拨。 */
 async function seedWriteSeq(id: string, invoke: Invoke): Promise<number> {
   const [main, recovery] = await Promise.all([
     invoke('load_ai_session', { id }).catch(() => null),
     invoke('load_ai_session_recovery', { id }).catch(() => null),
   ])
-  const seq = Math.max(seqOf(main), seqOf(recovery))
-  writeSeqs.set(id, seq)
-  return seq
+  return mergeWriteSeq(id, Math.max(seqOf(main), seqOf(recovery)))
+}
+
+/** 磁盘快照序号与内存序号取大合并，返回合并值：乱序返回的并发载入不得
+ * 把序号回拨——回拨后的下一次保存会与权威文件同号，主保存失败时副本以
+ * 相同序号落盘，重开时副本因不严格大于主文件而被忽略，新历史丢失。 */
+function mergeWriteSeq(id: string, disk: number): number {
+  const merged = Math.max(writeSeqs.get(id) ?? 0, disk)
+  writeSeqs.set(id, merged)
+  return merged
 }
 
 /** 下一写入序号：单调递增，同进程内并发写入由项目写链串行化。 */
@@ -100,24 +118,21 @@ async function nextWriteSeq(id: string, invoke: Invoke): Promise<number> {
   return next
 }
 
-/** 读取项目独立 AI 历史。主文件与恢复副本都读，取写入序号较大者——恢复
- * 副本只在主文件保存失败后写入，正常情况下序号更大；但权威保存成功后
- * 副本清除/改写失败时，副本是陈旧的，必须让较新的权威会话胜出。载入后
- * （主文件可读时）立即尝试提升为权威副本，失败则把恢复副本继续留在原位
- * 并如实上报；主文件不可读时只展示恢复历史，不发起任何写回。 */
-export async function loadAiSession(id: string): Promise<AiSessionLoadResult> {
-  if (!isTauri) {
-    return {
-      session: memorySessions.get(id) ?? { schemaVersion: 1, entries: [] },
-      repairError: null,
-      recovered: false,
-      recoveryUnreadable: false,
-      authoritativeUnreadable: false,
-    }
-  }
-  const { invoke } = await import('@tauri-apps/api/core')
+/** 磁盘两副本的读取与选源判定（loadAiSession 前半）：主文件与恢复副本
+ * 各自捕获读取错误；写入序号与内存取大合并（乱序载入不得回拨，见
+ * mergeWriteSeq）；主文件不可读且无可用副本时上浮原始错误。 */
+interface SessionCopies {
+  raw: unknown
+  mainError: unknown
+  mainUnreadable: boolean
+  recovered: boolean
+  recoveryUnreadable: boolean
+  recoveryError: unknown
+}
+
+async function readSessionCopies(id: string, invoke: Invoke): Promise<SessionCopies> {
   let mainError: unknown
-  const mainRaw = await invoke<unknown>('load_ai_session', { id }).catch((err: unknown) => {
+  const mainRaw = await invoke('load_ai_session', { id }).catch((err: unknown) => {
     mainError = err
     return undefined
   })
@@ -125,33 +140,37 @@ export async function loadAiSession(id: string): Promise<AiSessionLoadResult> {
   // 「无副本」继续——权威回写会清掉可能是唯一新副本的历史
   let recoveryError: unknown
   let recoveryFailed = false
-  const recoveryRaw = await invoke<unknown>('load_ai_session_recovery', { id }).catch(
+  const recoveryRaw = await invoke('load_ai_session_recovery', { id }).catch(
     (err: unknown) => {
       recoveryError = err
       recoveryFailed = true
       return null
     },
   )
-  writeSeqs.set(id, Math.max(seqOf(mainRaw), seqOf(recoveryRaw)))
+  mergeWriteSeq(id, Math.max(seqOf(mainRaw), seqOf(recoveryRaw)))
   const mainUnreadable = mainRaw === undefined
   const recovered =
     recoveryRaw != null && (mainUnreadable || seqOf(recoveryRaw) > seqOf(mainRaw))
   // 权威文件读取失败且无可用恢复副本：显式上浮，不把损坏静默当成空历史
   if (!recovered && mainUnreadable) throw mainError
-  if (recoveryFailed) {
-    // 展示权威历史但明确告知并暂缓回写：提升/修复写回都不发起（写入边界
-    // 的顺序守卫也会拒绝覆盖不可读副本）
-    console.warn('[aiSession] 恢复副本读取失败，暂缓保存以免覆盖更新历史', recoveryError)
-    const { session } = normalizeAiSession(mainRaw)
-    return {
-      session,
-      repairError: `AI 会话恢复副本读取失败，已暂缓保存以免覆盖更新的历史：${String(recoveryError)}`,
-      recovered: false,
-      recoveryUnreadable: true,
-      authoritativeUnreadable: false,
-    }
+  return {
+    raw: recovered ? recoveryRaw : mainRaw,
+    mainError,
+    mainUnreadable,
+    recovered,
+    recoveryUnreadable: recoveryFailed,
+    recoveryError,
   }
-  const raw = recovered ? recoveryRaw : mainRaw
+}
+
+/** 归一化与提升/修复写回（loadAiSession 后半）：干净会话直接返回；主文件
+ * 不可读时暂缓一切写回（见 loadAiSession 的整体契约）；其余尝试写回，
+ * 失败如实上报且陈旧覆盖由写入边界的顺序守卫拦截。 */
+async function promoteLoadedSession(
+  id: string,
+  copies: SessionCopies,
+): Promise<AiSessionLoadResult> {
+  const { raw, mainError, mainUnreadable, recovered } = copies
   const { session, repaired } = normalizeAiSession(raw)
   if (!recovered && !repaired) {
     return {
@@ -199,6 +218,39 @@ export async function loadAiSession(id: string): Promise<AiSessionLoadResult> {
   }
 }
 
+/** 读取项目独立 AI 历史。主文件与恢复副本都读，取写入序号较大者——恢复
+ * 副本只在主文件保存失败后写入，正常情况下序号更大；但权威保存成功后
+ * 副本清除/改写失败时，副本是陈旧的，必须让较新的权威会话胜出。载入后
+ * （主文件可读时）立即尝试提升为权威副本，失败则把恢复副本继续留在原位
+ * 并如实上报；主文件不可读时只展示恢复历史，不发起任何写回。 */
+export async function loadAiSession(id: string): Promise<AiSessionLoadResult> {
+  if (!isTauri) {
+    return {
+      session: memorySessions.get(id) ?? { schemaVersion: 1, entries: [] },
+      repairError: null,
+      recovered: false,
+      recoveryUnreadable: false,
+      authoritativeUnreadable: false,
+    }
+  }
+  const { invoke } = await import('@tauri-apps/api/core')
+  const copies = await readSessionCopies(id, invoke as Invoke)
+  if (copies.recoveryUnreadable) {
+    // 展示权威历史但明确告知并暂缓回写：提升/修复写回都不发起（写入边界
+    // 的顺序守卫也会拒绝覆盖不可读副本）
+    console.warn('[aiSession] 恢复副本读取失败，暂缓保存以免覆盖更新历史', copies.recoveryError)
+    const { session } = normalizeAiSession(copies.raw)
+    return {
+      session,
+      repairError: `AI 会话恢复副本读取失败，已暂缓保存以免覆盖更新的历史：${String(copies.recoveryError)}`,
+      recovered: false,
+      recoveryUnreadable: true,
+      authoritativeUnreadable: false,
+    }
+  }
+  return promoteLoadedSession(id, copies)
+}
+
 /** 主文件保存失败时尽力写入恢复副本（跨进程保留的唯一拷贝），返回副本
  * 是否落盘成功——副本成功即该历史已跨进程可恢复，关闭屏障无须再阻止
  * 退出；副本写入同样失败时仍上抛原始保存错误，内存副本由调用方保留。
@@ -235,7 +287,13 @@ export async function saveAiSession(id: string, session: AiSession): Promise<voi
     const writeSeq = await nextWriteSeq(id, invoke as Invoke)
     try {
       await invoke('save_ai_session', { id, session: { ...session, writeSeq } })
-      if (sessionGenerations.get(id) === generation) clearSessionRetry(id)
+      if (sessionGenerations.get(id) === generation) {
+        clearSessionRetry(id)
+        // 最新代次已权威落盘：通知 UI 层清除保存失败错误与保留快照（后台
+        // 重试补写不经 UI 通道，只有这里能告知）；代次已前进则本次成功
+        // 属于旧会话，不得误清新失败的错误
+        savedListeners.forEach((listener) => listener(id))
+      }
     } catch (err) {
       const stashed = await stashRecovery(id, session, writeSeq, invoke as Invoke)
       // 按节律重试直到成功（副本成功时用于补写权威文件，两者都失败时是

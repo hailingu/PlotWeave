@@ -292,6 +292,20 @@ export default function App() {
     return () => document.removeEventListener('keydown', onKey)
   }, [])
 
+  // 后台重试补写成功（不经 UI 保存通道）时清除项目级错误与保留快照：
+  // 否则面板持续宣称「保存失败」而会话实际已跨进程落盘。清理与
+  // handleSaveAiSession 的成功尾巴幂等重复，无害。
+  useEffect(
+    () =>
+      projectStore.onAiSessionSaved((id) => {
+        unsavedAiSessionsRef.current?.delete(id)
+        setOpenProject((project) =>
+          project?.id === id ? { ...project, aiSessionError: null } : project,
+        )
+      }),
+    [],
+  )
+
   const open = useOpenProjectActions(setOpenProject, refreshProjects, unsavedAiSessionsRef)
   const home = useHomeProjectActions(refreshProjects, unsavedAiSessionsRef)
   /** 退出冲刷屏障：未落盘会话仍在时阻止关闭窗口（见 useExitFlush）。 */
