@@ -80,6 +80,7 @@ export default function EditorLayout(props: EditorLayoutProps) {
           onApplyAiBatch={ai.applyAiBatch}
           aiSession={props.aiSession}
           aiSessionError={props.aiSessionError}
+          aiSessionRetryable={props.aiSessionRetryable}
           onSaveAiSession={props.onSaveAiSession}
         />
       </div>

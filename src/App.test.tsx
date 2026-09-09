@@ -130,6 +130,8 @@ describe('App（双界面路由壳）', () => {
 
     expect(await screen.findByTestId('editor')).toBeTruthy()
     expect(editorProps.current.aiSessionError).toContain('AI 会话文件损坏')
+    // 读取失败的空回退会话不可作为挂载重试的落盘内容
+    expect(editorProps.current.aiSessionRetryable).toBe(false)
   })
 
   it('AI 会话修复回写失败时保留已恢复历史，并将错误交给编辑器提示', async () => {
@@ -144,6 +146,8 @@ describe('App（双界面路由壳）', () => {
     expect(await screen.findByTestId('editor')).toBeTruthy()
     expect(editorProps.current.aiSession).toEqual(recovered)
     expect(editorProps.current.aiSessionError).toBe('Error: 只读目录')
+    // 内存中是恢复出的会话：重挂载重试落盘是安全的
+    expect(editorProps.current.aiSessionRetryable).toBe(true)
   })
 
   it('修复回写失败后再次保存成功：项目级错误清除，重挂载不再报保存失败', async () => {

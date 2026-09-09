@@ -33,6 +33,8 @@ interface EditorViewProps {
   readonly aiSession?: AiSession
   /** 会话读取失败的可见诊断；画布仍可正常打开。 */
   readonly aiSessionError?: string | null
+  /** 内存会话可否作为挂载重试的落盘内容；读取失败（空回退）时为 false。 */
+  readonly aiSessionRetryable?: boolean
   readonly onSaveAiSession?: (session: AiSession) => Promise<void>
 }
 
@@ -54,6 +56,7 @@ function EditorWindow({
   onSave,
   aiSession = { schemaVersion: 1, entries: [] },
   aiSessionError = null,
+  aiSessionRetryable = true,
   onSaveAiSession = async () => undefined,
 }: EditorViewProps) {
   const { screenToFlowPosition, fitView } = useReactFlow()
@@ -78,6 +81,7 @@ function EditorWindow({
           actionError={actionError}
           aiSession={aiSession}
           aiSessionError={aiSessionError}
+          aiSessionRetryable={aiSessionRetryable}
           onSaveAiSession={onSaveAiSession}
         />
       </ImageGenProvider>

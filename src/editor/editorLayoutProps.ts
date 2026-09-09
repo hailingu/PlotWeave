@@ -37,5 +37,7 @@ export interface EditorLayoutProps {
   /** 独立于画布文档的项目 AI 会话。 */
   readonly aiSession: AiSession
   readonly aiSessionError: string | null
+  /** 内存会话可否作为挂载重试的落盘内容；读取失败（空回退）时为 false。 */
+  readonly aiSessionRetryable: boolean
   readonly onSaveAiSession: (session: AiSession) => Promise<void>
 }

@@ -29,6 +29,9 @@ interface OpenProject {
   doc: ProjectContent
   aiSession: AiSession
   aiSessionError: string | null
+  /** 内存会话是否可作为挂载重试的落盘内容：读取失败时为 false——
+   * 空回退会话落盘会覆盖可能可恢复的原文件。 */
+  aiSessionRetryable: boolean
 }
 
 /** 分开读取画布与会话：会话局部损坏不能阻止用户打开可用的项目文档。 */
@@ -36,7 +39,7 @@ async function loadOpenProject(id: string): Promise<OpenProject> {
   const doc = await projectStore.load(id)
   try {
     const ai = await projectStore.loadAiSession(id)
-    return { id, doc, aiSession: ai.session, aiSessionError: ai.repairError }
+    return { id, doc, aiSession: ai.session, aiSessionError: ai.repairError, aiSessionRetryable: true }
   } catch (err) {
     console.warn('[App] AI 会话恢复失败，已以空历史打开项目', err)
     return {
@@ -44,6 +47,7 @@ async function loadOpenProject(id: string): Promise<OpenProject> {
       doc,
       aiSession: { schemaVersion: 1, entries: [] },
       aiSessionError: String(err),
+      aiSessionRetryable: false,
     }
   }
 }
@@ -162,6 +166,7 @@ function AppView({
       project={{ id: openProject.id, ...openProject.doc }}
       aiSession={openProject.aiSession}
       aiSessionError={openProject.aiSessionError}
+      aiSessionRetryable={openProject.aiSessionRetryable}
       onBackHome={open.handleBackHome}
       onRenameProject={open.handleEditorRename}
       onOpenSettings={onOpenSettings}

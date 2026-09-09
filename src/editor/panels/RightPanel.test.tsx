@@ -457,6 +457,18 @@ describe('RightPanel ✦AI 会话保存错误', () => {
     })
     expect(onSaveSession).not.toHaveBeenCalled()
   })
+
+  it('读取失败的空回退会话禁止挂载落盘（原文件可能可恢复）', async () => {
+    const onSaveSession = vi.fn().mockResolvedValue(undefined)
+    await toAiTab(APP_WITH_KEY, {
+      aiSession: { schemaVersion: 1, entries: [] },
+      aiSessionError: 'Error: 会话文件损坏',
+      aiSessionRetryable: false,
+      onSaveAiSession: onSaveSession,
+    })
+    expect(onSaveSession).not.toHaveBeenCalled()
+    expect(screen.getByText(/聊天记录保存失败/)).toBeTruthy()
+  })
 })
 
 describe('RightPanel ✦AI 字段协议（issue 41）', () => {

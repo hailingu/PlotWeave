@@ -126,6 +126,8 @@ interface RightPanelProps {
   /** 当前项目恢复的 AI 会话与其独立保存通道。 */
   readonly aiSession?: AiSession
   readonly aiSessionError?: string | null
+  /** 内存会话可否作为挂载重试的落盘内容；读取失败（空回退）时为 false。 */
+  readonly aiSessionRetryable?: boolean
   readonly onSaveAiSession?: (session: AiSession) => Promise<void>
 }
 
@@ -155,6 +157,7 @@ export default function RightPanel({
   onApplyAiBatch,
   aiSession,
   aiSessionError,
+  aiSessionRetryable,
   onSaveAiSession,
 }: RightPanelProps) {
   const rows = selectedNode ? inspectorRows(selectedNode, attachedShotCount, settings) : []
@@ -198,6 +201,7 @@ export default function RightPanel({
               onApplyAiBatch={onApplyAiBatch}
               initialSession={aiSession}
               initialSessionError={aiSessionError}
+              initialSessionRetryable={aiSessionRetryable}
               onSaveSession={onSaveAiSession}
             />
           </div>

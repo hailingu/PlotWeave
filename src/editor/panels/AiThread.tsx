@@ -164,11 +164,14 @@ function useAiSessionPersistence(
   thread: ThreadEntry[],
   initialSessionError: string | null | undefined,
   onSaveSession: ((session: AiSession) => Promise<void>) | undefined,
+  initialSessionRetryable: boolean | undefined,
 ): string | null {
   const [saveError, setSaveError] = useState<string | null>(initialSessionError ?? null)
   const hasMounted = useRef(false)
-  /** 带恢复/保存错误进入面板时，首帧即重试落盘而非跳过初始保存。 */
-  const retryOnMount = useRef(initialSessionError != null)
+  /** 带错误进入面板时首帧是否重试落盘：修复回写失败/保存失败（内存是
+   * 恢复或最新的会话）可重试；读取失败的空回退会话不可——落盘会覆盖
+   * 可能可恢复的原文件，须等用户实际变更对话后才随变更保存。 */
+  const retryOnMount = useRef(initialSessionError != null && initialSessionRetryable !== false)
   const saveSessionRef = useRef(onSaveSession)
   useEffect(() => {
     saveSessionRef.current = onSaveSession
@@ -393,6 +396,7 @@ export default function AiThread({
   onApplyAiBatch,
   initialSession,
   initialSessionError,
+  initialSessionRetryable,
   onSaveSession,
 }: {
   readonly onOpenSettings?: () => void
@@ -405,12 +409,14 @@ export default function AiThread({
   /** 打开项目时恢复的独立会话快照。 */
   readonly initialSession?: AiSession
   readonly initialSessionError?: string | null
+  /** 内存会话可否作为挂载重试的落盘内容；读取失败（空回退）时为 false。 */
+  readonly initialSessionRetryable?: boolean
   /** 会话变更的独立持久化通道；失败不清空当前内存历史。 */
   readonly onSaveSession?: (session: AiSession) => Promise<void>
 }) {
   const m = useAiModels()
   const msg = useAiThreadMessages({ onApplyAiBatch, initialSession, onValidateCommands })
-  const saveError = useAiSessionPersistence(msg.thread, initialSessionError, onSaveSession)
+  const saveError = useAiSessionPersistence(msg.thread, initialSessionError, onSaveSession, initialSessionRetryable)
   const turn = useAiTurn({
     activeOption: m.activeOption,
     activeProvider: m.activeProvider,
