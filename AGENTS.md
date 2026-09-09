@@ -52,7 +52,7 @@ Tests MUST NOT read repository-versioned source or documentation as opaque text 
 4. Search for existing internal capabilities and choose the smallest coherent change that meets the request.
 5. Implement only the approved scope and preserve unrelated worktree changes.
 6. Run the narrowest relevant non-interactive checks, then the broader checks required by the affected Scope Routing rows. Delete disposable verification output before task completion and report the result.
-7. Update every document, index, or cross-reference the change makes stale.
+7. Update every document, index, or cross-reference the change makes stale. When an issue's resolution differs from the existing design, the same change MUST update the affected design documents (including `docs/data-model.md` and `docs/ui-design.md` where applicable) to reflect the accepted outcome. Update the relevant design sections, distinguish implemented behavior from planned work and retained boundaries, and link the issue or resolving PR; an issue comment or change log alone does not replace updating the design itself. This synchronization MUST be complete before declaring the issue resolved or closing it.
 8. Report changed files, verification results, known limitations, and stable evidence. Do not claim completion while required work remains.
 
 ## Scope Routing

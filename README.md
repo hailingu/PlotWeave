@@ -91,6 +91,7 @@ npm run tauri dev  # 启动 Tauri 开发调试（Vite 前端 + Rust 壳）
 
 - AI 代理（ZCode / Codex 等）开始任何工作前，先阅读 [AGENTS.md](AGENTS.md)。
 - 项目文档使用中文。
+- 设计文档：[数据模型](docs/data-model.md)、[UI 规格](docs/ui-design.md)；已关闭 issue 的落地结论与保留边界见[设计同步记录](docs/design-sync.md)。
 
 ## 许可证
 
