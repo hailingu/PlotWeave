@@ -262,18 +262,18 @@ const WRITE_MAPPERS: Record<string, (args: Record<string, unknown>) => AiCommand
     targetId: asId(a.targetId),
     reason: a.reason,
   }),
-  // 设定实体（issue 44）：fields 归对象交由校验器把关；entityId 非字符串
-  // 归空——空值在折叠层按「新建」处理，不产生静默改错实体的通道
+  // 设定实体（issue 44）：fields 归对象、entityId 原样透传，畸形值由折叠层
+  // 整批拒绝——缺省 entityId = 新建；在场但非字符串/空白不是新建通道
   upsert_character: (a) => ({
     op: 'upsert_character' as const,
-    ...(a.entityId !== undefined ? { entityId: asId(a.entityId) } : {}),
+    ...(a.entityId !== undefined ? { entityId: a.entityId } : {}),
     ref: a.ref,
     fields: asPatch(a.fields),
     reason: a.reason,
   }),
   upsert_location: (a) => ({
     op: 'upsert_location' as const,
-    ...(a.entityId !== undefined ? { entityId: asId(a.entityId) } : {}),
+    ...(a.entityId !== undefined ? { entityId: a.entityId } : {}),
     ref: a.ref,
     fields: asPatch(a.fields),
     reason: a.reason,

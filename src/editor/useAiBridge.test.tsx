@@ -274,6 +274,22 @@ describe('useAiBridge · 设定实体通道（issue 44）', () => {
     expect(state.settings.characters).toEqual([])
   })
 
+  it('applyAiBatch：修改实体只写 bio 时 name 保持不变（归一化不注入空名）', () => {
+    const { result, state } = setup([sceneNode('s1')], [], {
+      characters: [{ id: 'ch-1', name: '陈默', gradient: 'g', bio: '旧' }],
+      locations: [],
+    })
+    // 走真实链路：validateCommands 折叠产出的执行命令（非手工构造）再落地
+    const preview = result.current.validateCommands([
+      { op: 'upsert_character', entityId: 'ch-1', fields: { bio: '新小传' } },
+    ])
+    expect(preview?.ok).toBe(true)
+    expect(result.current.applyAiBatch(preview!.commands)).toBeNull()
+    const ch = state.settings.characters[0]
+    expect(ch.name).toBe('陈默')
+    expect(ch.bio).toBe('新小传')
+  })
+
   it('readSettings：返回设定集 JSON 摘要（读工具回喂用）', () => {
     const { result } = setup([], [], {
       characters: [{ id: 'ch-1', name: '陈默', gradient: 'g', bio: '侦探' }],

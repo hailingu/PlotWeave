@@ -72,11 +72,11 @@ describe('toolCallsToCommands（§12.2 tool_calls → 预览卡命令）', () =>
     expect(readRequests[0].id).toBe('call-get_graph_snapshot')
   })
 
-  it('upsert_character / upsert_location 映射为对应命令（issue 44）：fields 归对象、entityId 安全串化', () => {
+  it('upsert_character / upsert_location 映射为对应命令（issue 44）：fields 归对象、entityId 原样透传', () => {
     const { commands, errors } = toolCallsToCommands([
       call('upsert_character', { ref: 'hero', fields: { name: '林一', bio: '侦探' }, reason: '主角' }),
       call('upsert_location', { entityId: 'loc-1', fields: { note: '雨夜' } }),
-      call('upsert_character', { fields: { name: ['坏'] } }),
+      call('upsert_character', { entityId: 9, fields: { name: ['坏'] } }),
     ])
     expect(errors).toEqual([])
     expect(commands[0]).toEqual({
@@ -90,8 +90,9 @@ describe('toolCallsToCommands（§12.2 tool_calls → 预览卡命令）', () =>
       entityId: 'loc-1',
       fields: { note: '雨夜' },
     })
-    // 非字符串 entityId 归空（按 create 处理）、非对象 fields 回退空对象由校验器点名
-    expect(commands[2]).toMatchObject({ op: 'upsert_character', fields: {} })
+    // 非字符串 entityId 原样透传（映射层不吞不转），由折叠层整批拒绝——
+    // 畸形的修改意图不得在映射层被重释；非对象 fields 回退空对象由校验器点名
+    expect(commands[2]).toMatchObject({ op: 'upsert_character', entityId: 9, fields: {} })
   })
 
   it('坏参数与未知工具进 errors，不中断其余解析', () => {

@@ -110,8 +110,12 @@ export function entityFieldsIssue(
   return issues.length > 0 ? `实体字段错误：${issues.join('；')}` : null
 }
 
-/** 白名单键序归一：name 去空白，可选字符串键保留。前置校验（entityFieldsIssue）
- * 通过后调用，值域可信。 */
+/** fields 白名单键序归一：只保留输入中出现过的键（未提及字段不进执行命令，
+ * 修改语义「未提及字段保持不变」由此在执行与重校验两侧同时成立——若给未
+ * 提及的 name 注入空串，apply 期重校验会误判「name 不能为空白」整批确认
+ * 失败，绕过重校验直执行则会把实体名清空）。name 去空白；可选字符串键保留。
+ * 前置校验（entityFieldsIssue）通过后调用，值域可信；创建的 name 必填已在
+ * 原始 fields 上把关，归一必得非空 name。 */
 export function normalizeEntityFields(
   kind: EntityKind,
   fields: Record<string, unknown>,
@@ -119,6 +123,7 @@ export function normalizeEntityFields(
   const out: ValidatedEntityFields = {}
   for (const spec of AI_ENTITY_FIELDS[kind]) {
     const v = fields[spec.key]
+    if (v === undefined) continue
     if (spec.key === 'name') out.name = typeof v === 'string' ? v.trim() : ''
     else if (typeof v === 'string') out[spec.key] = v
   }
@@ -228,9 +233,11 @@ function foldUpdateEntity(
   } as ValidatedCommand)
 }
 
-/** upsert_character / upsert_location 的折叠校验：不带 entityId = 新建（虚拟
+/** upsert_character / upsert_location 的折叠校验：缺省 entityId = 新建（虚拟
  * id 进投影、应用在执行期分配真实 id 与默认样式）；带 entityId = 修改既有
- * 实体（未提及字段保持不变），本批新建的实体可经 ref 引用。 */
+ * 实体（未提及字段保持不变），本批新建的实体可经 ref 引用。entityId 在场
+ * 但非字符串/空白 = 整批拒绝——畸形的修改意图不得重释为新建通道（否则
+ * 改错实体的请求会静默变成重复实体），与设计「新建不带 entityId」同口径。 */
 export function foldUpsert(
   st: EntityFoldHost,
   raw: Record<string, unknown>,
@@ -240,8 +247,18 @@ export function foldUpsert(
   const fields = raw.fields
   if (!plainObject(fields)) return st.fail(index, 'fields 必须是字段对象')
   const refName = typeof raw.ref === 'string' ? raw.ref.trim() : ''
+  if (raw.entityId === undefined) {
+    return foldCreateEntity(st, raw, index, kind, fields, refName)
+  }
   const target = typeof raw.entityId === 'string' ? raw.entityId.trim() : ''
-  if (target === '') return foldCreateEntity(st, raw, index, kind, fields, refName)
+  if (target === '') {
+    // 诊断值经 JSON 序列化：Object 默认串化只会得到 "[object Object]"，
+    // 模型无从得知自己发了什么；JSON 形态对五种原始/复合值都可读
+    return st.fail(
+      index,
+      `entityId 在场时须为非空白字符串（缺省才是新建）：${JSON.stringify(raw.entityId)}`,
+    )
+  }
   foldUpdateEntity(st, raw, index, kind, fields, refName, target)
 }
 

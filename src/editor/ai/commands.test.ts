@@ -176,6 +176,19 @@ describe('validateAiBatch · 设定实体命令（issue 44：upsert_character / 
     expect(v.commands[0]).toMatchObject({ op: 'upsert_character', entityId: 'ch-1' })
   })
 
+  it('修改未提及 name：执行命令 fields 只含写入键（归一化不注入空名，预览→执行同口径）', () => {
+    const v = validateAiBatch(
+      [{ op: 'upsert_character', entityId: 'ch-1', fields: { bio: '新小传' } }],
+      entSnap(),
+    )
+    expect(v.ok).toBe(true)
+    expect((v.commands[0] as { fields: Record<string, unknown> }).fields).toEqual({
+      bio: '新小传',
+    })
+    // 预览标签只列实际写入的字段，不把未提及的 name 列为变更
+    expect(v.items[0].label).toContain('（bio）')
+  })
+
   it('创建缺 name、未知字段、非字符串值、update 空 fields 均整批拒绝', () => {
     for (const bad of [
       { op: 'upsert_character', fields: { bio: '没有名字' } },
@@ -308,6 +321,20 @@ describe('validateAiBatch · 设定实体命令（issue 44：upsert_character / 
     )
     expect(v.ok).toBe(true)
     expect(v.items[1]).toMatchObject({ kind: 'update_entity' })
+  })
+
+  it('entityId 在场但畸形（非字符串/空白）整批拒绝，不重释为新建（与设计「新建不带 entityId」同口径）', () => {
+    for (const bad of [
+      { op: 'upsert_character', entityId: 123, fields: { name: '新名' } },
+      { op: 'upsert_character', entityId: '', fields: { name: '新名' } },
+      { op: 'upsert_character', entityId: '   ', fields: { name: '新名' } },
+      { op: 'upsert_location', entityId: null, fields: { name: '公寓' } },
+    ]) {
+      const v = validateAiBatch([bad], entSnap())
+      expect(v.ok, JSON.stringify(bad)).toBe(false)
+      expect(v.issues[0].message).toContain('entityId')
+      expect(v.commands).toEqual([])
+    }
   })
 
   it('缺省 kind 的台词行按 line 校验 speaker 引用（与归一化判别缺省同口径）', () => {
