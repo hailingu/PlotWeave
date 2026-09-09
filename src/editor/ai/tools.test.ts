@@ -41,18 +41,19 @@ describe('toolCallsToCommands（§12.2 tool_calls → 预览卡命令）', () =>
     expect(commands).toEqual(inner)
   })
 
-  it('batch 内的工具名 op 归一为命令词表（update_node_spec → update_node）；upsert op 原样保留', () => {
-    const inner = [
-      { op: 'upsert_character', ref: 'hero', fields: { name: '林一' } },
-      { op: 'connect_edge', sourceId: 'b', targetId: 's1' },
-    ]
+  it('batch 内的工具名 op 归一为命令词表（update_node_spec → update_node）', () => {
     const { commands, errors } = toolCallsToCommands([
-      call('batch', { commands: [{ op: 'update_node_spec', nodeId: 'n1', patch: { tone: '爆发' } }, ...inner] }),
+      call('batch', {
+        commands: [
+          { op: 'update_node_spec', nodeId: 'n1', patch: { options: ['坦白', '隐瞒', '沉默'] } },
+          { op: 'update_node', nodeId: 'n2', patch: { tone: '爆发' } },
+        ],
+      }),
     ])
     expect(errors).toEqual([])
     expect(commands).toEqual([
-      { op: 'update_node', nodeId: 'n1', patch: { tone: '爆发' } },
-      ...inner,
+      { op: 'update_node', nodeId: 'n1', patch: { options: ['坦白', '隐瞒', '沉默'] } },
+      { op: 'update_node', nodeId: 'n2', patch: { tone: '爆发' } },
     ])
   })
 
@@ -60,39 +61,11 @@ describe('toolCallsToCommands（§12.2 tool_calls → 预览卡命令）', () =>
     const { commands, readRequests } = toolCallsToCommands([
       call('get_graph_snapshot', {}),
       call('get_node', { nodeId: 'n1' }),
-      call('get_settings_snapshot', {}),
     ])
     expect(commands).toEqual([])
-    expect(readRequests.map((r) => r.name)).toEqual([
-      'get_graph_snapshot',
-      'get_node',
-      'get_settings_snapshot',
-    ])
+    expect(readRequests.map((r) => r.name)).toEqual(['get_graph_snapshot', 'get_node'])
     expect(readRequests[1].args).toEqual({ nodeId: 'n1' })
     expect(readRequests[0].id).toBe('call-get_graph_snapshot')
-  })
-
-  it('upsert_character / upsert_location 映射为对应命令（issue 44）：fields 归对象、entityId 原样透传', () => {
-    const { commands, errors } = toolCallsToCommands([
-      call('upsert_character', { ref: 'hero', fields: { name: '林一', bio: '侦探' }, reason: '主角' }),
-      call('upsert_location', { entityId: 'loc-1', fields: { note: '雨夜' } }),
-      call('upsert_character', { entityId: 9, fields: { name: ['坏'] } }),
-    ])
-    expect(errors).toEqual([])
-    expect(commands[0]).toEqual({
-      op: 'upsert_character',
-      ref: 'hero',
-      fields: { name: '林一', bio: '侦探' },
-      reason: '主角',
-    })
-    expect(commands[1]).toEqual({
-      op: 'upsert_location',
-      entityId: 'loc-1',
-      fields: { note: '雨夜' },
-    })
-    // 非字符串 entityId 原样透传（映射层不吞不转），由折叠层整批拒绝——
-    // 畸形的修改意图不得在映射层被重释；非对象 fields 回退空对象由校验器点名
-    expect(commands[2]).toMatchObject({ op: 'upsert_character', entityId: 9, fields: {} })
   })
 
   it('坏参数与未知工具进 errors，不中断其余解析', () => {
@@ -119,6 +92,53 @@ describe('toolCallsToCommands（§12.2 tool_calls → 预览卡命令）', () =>
     expect(errors).toEqual([])
     expect(commands[0]).toMatchObject({ op: 'create_node', nodeType: '' })
     expect(commands[1]).toMatchObject({ op: 'delete_node', nodeId: '' })
+  })
+})
+
+describe('issue 44 通道映射：upsert_* 写工具与 get_settings_snapshot 读工具', () => {
+  it('batch 内的 upsert op 原样保留（不在映射层重释为命令词表）', () => {
+    const inner = [
+      { op: 'upsert_character', ref: 'hero', fields: { name: '林一' } },
+      { op: 'connect_edge', sourceId: 'b', targetId: 's1' },
+    ]
+    const { commands, errors } = toolCallsToCommands([
+      call('batch', { commands: [{ op: 'update_node_spec', nodeId: 'n1', patch: { tone: '爆发' } }, ...inner] }),
+    ])
+    expect(errors).toEqual([])
+    expect(commands).toEqual([
+      { op: 'update_node', nodeId: 'n1', patch: { tone: '爆发' } },
+      ...inner,
+    ])
+  })
+
+  it('get_settings_snapshot 进入 readRequests（读工具，不产生命令）', () => {
+    const { commands, readRequests } = toolCallsToCommands([call('get_settings_snapshot', {})])
+    expect(commands).toEqual([])
+    expect(readRequests.map((r) => r.name)).toEqual(['get_settings_snapshot'])
+    expect(readRequests[0].id).toBe('call-get_settings_snapshot')
+  })
+
+  it('upsert_character / upsert_location 映射为对应命令（issue 44）：fields 归对象、entityId 原样透传', () => {
+    const { commands, errors } = toolCallsToCommands([
+      call('upsert_character', { ref: 'hero', fields: { name: '林一', bio: '侦探' }, reason: '主角' }),
+      call('upsert_location', { entityId: 'loc-1', fields: { note: '雨夜' } }),
+      call('upsert_character', { entityId: 9, fields: { name: ['坏'] } }),
+    ])
+    expect(errors).toEqual([])
+    expect(commands[0]).toEqual({
+      op: 'upsert_character',
+      ref: 'hero',
+      fields: { name: '林一', bio: '侦探' },
+      reason: '主角',
+    })
+    expect(commands[1]).toEqual({
+      op: 'upsert_location',
+      entityId: 'loc-1',
+      fields: { note: '雨夜' },
+    })
+    // 非字符串 entityId 原样透传（映射层不吞不转），由折叠层整批拒绝——
+    // 畸形的修改意图不得在映射层被重释；非对象 fields 回退空对象由校验器点名
+    expect(commands[2]).toMatchObject({ op: 'upsert_character', entityId: 9, fields: {} })
   })
 })
 

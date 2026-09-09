@@ -211,7 +211,7 @@ describe('useAiBridge（§6/§12 AI 桥回调族）', () => {
   })
 })
 
-describe('useAiBridge · 设定实体通道（issue 44）', () => {
+describe('useAiBridge · 实体校验与实体+绑定复合执行（issue 44）', () => {
   it('validateCommands：快照带设定集时校验实体存在性与引用类型', () => {
     const { result } = setup(
       [sceneNode('s1')],
@@ -257,7 +257,9 @@ describe('useAiBridge · 设定实体通道（issue 44）', () => {
     const s1rr = state.nodes.find((n) => n.id === 's1')!
     expect(s1rr.type === 'scene' && s1rr.data.characterIds).toEqual([hero.id])
   })
+})
 
+describe('useAiBridge · 执行期重校验与读工具（issue 44）', () => {
   it('applyAiBatch：预览后实体被用户删除，执行重校验整体拒绝、无部分写入', () => {
     const { result, state, commands, deps } = setup(
       [sceneNode('s1')],
