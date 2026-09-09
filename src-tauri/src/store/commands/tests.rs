@@ -337,7 +337,9 @@ fn delete_project_clears_recovery_copy() {
     stash_ai_session_recovery_file(&cap(&projects), &cap(&recovery), "p-1", &session)
         .expect("写恢复副本");
 
-    delete_project_with_recovery(&cap(&projects), &cap(&recovery), "p-1").expect("删除项目");
+    let report =
+        delete_project_with_recovery(&cap(&projects), &cap(&recovery), "p-1").expect("删除项目");
+    assert!(report.cleanup_error.is_none(), "干净删除不得带清理诊断");
     assert_eq!(
         load_ai_session_recovery_file(&cap(&recovery), "p-1").expect("读恢复副本"),
         None,
@@ -398,15 +400,20 @@ fn delete_project_reports_recovery_cleanup_failure() {
     perms.set_mode(0o755);
     let _ = fs::set_permissions(&recovery, perms);
 
-    let err = result.expect_err("副本清除失败必须上浮，不得静默遗留孤儿会话");
-    assert!(err.contains("重试删除"), "意外诊断：{err}");
+    // 删除已提交：回执带清理诊断而非删除失败——前端不得回吐画布保存
+    let report = result.expect("删除本身已提交，副本清理失败只是诊断");
+    let cleanup_error = report.cleanup_error.expect("副本清除失败必须带诊断");
+    assert!(
+        cleanup_error.contains("恢复副本"),
+        "意外诊断：{cleanup_error}"
+    );
     assert!(
         fs::symlink_metadata(projects.join("p-1.json")).is_err(),
         "项目文件应已删除"
     );
     assert!(
         recovery.join("ai-session-p-1.json").exists(),
-        "残留副本仍在，重试删除可清理"
+        "残留副本仍在，由列表孤儿清扫兜底"
     );
     cleanup_temp(&projects);
 }

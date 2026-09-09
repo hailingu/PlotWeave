@@ -192,19 +192,29 @@ pub(crate) fn save_ai_session_authoritative(
     Ok(())
 }
 
-/// 删除项目 + 清除恢复副本：项目删除失败（项目仍在）时保留恢复副本；
-/// 项目已删除但副本清除失败时上浮错误——项目记录已不存在，残留副本再也
-/// 无法经项目入口发现或清理，必须让调用方看到并可重试删除（删除文件与
-/// 清除副本都幂等）。
+/// 删除项目回执：删除本身已提交（项目记录与资产目录已移除）。恢复副本
+/// 清除失败时带上诊断——此情形**不是**删除失败：前端若按失败回吐在途/
+/// 吸收的画布保存，`save_project` 会重建已删除的项目记录，项目在用户删除
+/// 后复活（资产目录却已移除）。残留副本由 `list_projects` 的孤儿清扫兜底。
+#[derive(serde::Serialize)]
+pub struct DeleteProjectReport {
+    /// 已提交的删除但恢复副本清除失败时的诊断；None = 完全干净。
+    pub cleanup_error: Option<String>,
+}
+
+/// 删除项目 + 清除恢复副本：项目删除失败（项目仍在）时保留恢复副本并上浮
+/// 错误；项目已删除但副本清除失败时返回已提交回执 + 清理诊断——删除不可
+/// 回滚，不得让调用方回放画布保存。
 pub(crate) fn delete_project_with_recovery(
     projects: &CapDir,
     recovery: &CapDir,
     id: &str,
-) -> Result<(), String> {
+) -> Result<DeleteProjectReport, String> {
     delete_project_files(projects, id)?;
-    clear_ai_session_recovery_file(recovery, id).map_err(|e| {
-        format!("项目已删除，但清除 AI 会话恢复副本失败（请重试删除以清理残留会话）：{e}")
-    })
+    let cleanup_error = clear_ai_session_recovery_file(recovery, id)
+        .err()
+        .map(|e| format!("项目已删除，但清除 AI 会话恢复副本失败（列表时清扫残留副本）：{e}"));
+    Ok(DeleteProjectReport { cleanup_error })
 }
 
 fn empty_ai_session() -> serde_json::Value {
@@ -363,7 +373,7 @@ pub(crate) fn persist_project(
 /// cap-std）——符号链接条目只移除链接本身，绝不跟随；任一失败显式报错，
 /// 不静默遗留媒体文件。
 #[tauri::command]
-pub fn delete_project(app: AppHandle, id: String) -> Result<(), String> {
+pub fn delete_project(app: AppHandle, id: String) -> Result<DeleteProjectReport, String> {
     let root = projects_dir(&app)?;
     let recovery = recovery_dir(&app)?;
     delete_project_with_recovery(&root, &recovery, &id)
