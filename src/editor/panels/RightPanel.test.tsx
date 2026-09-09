@@ -12,6 +12,7 @@ import { llmChat, type AssistantMessage } from '../ai/chat'
 import type { ChatMessage } from '../ai/chat'
 import type { BatchValidation, ValidatedCommand } from '../ai/commands'
 import { nodeFieldTableText } from '../ai/nodeFields'
+import { normalizeAiSession } from '../ai/session'
 import { settingsStore } from '../../settings/settingsStore'
 import type { AppSettings } from '../../settings/types'
 import type { ProjectSettings } from '../settings'
@@ -468,6 +469,50 @@ describe('RightPanel ✦AI 会话保存错误', () => {
     })
     expect(onSaveSession).not.toHaveBeenCalled()
     expect(screen.getByText(/聊天记录保存失败/)).toBeTruthy()
+  })
+
+  it('项目级保存错误在挂载后到达时同步进面板（重挂载期保存在途）', async () => {
+    vi.spyOn(settingsStore, 'load').mockResolvedValue(APP_WITH_KEY)
+    const props = {
+      open: true,
+      width: 320,
+      tab: 'ai' as const,
+      settings: SETTINGS,
+      onResize: vi.fn(),
+      onTabChange: vi.fn(),
+      canvasDigest: 'SNAPSHOT',
+    }
+    const view = render(<RightPanel {...props} />)
+    await screen.findByLabelText('AI 对话输入')
+
+    view.rerender(<RightPanel {...props} aiSessionError="Error: 磁盘已满" />)
+
+    expect(await screen.findByText(/聊天记录保存失败/)).toBeTruthy()
+    expect(screen.getByText(/磁盘已满/)).toBeTruthy()
+  })
+
+  it('恢复条目 id 达到安全整数上限时重定基，新增条目落盘 id 仍可归一化', async () => {
+    const onSaveSession = vi.fn((_session: unknown) => Promise.resolve())
+    llmChatMock.mockResolvedValue(reply({ content: '收到。' }))
+    await toAiTab(APP_WITH_KEY, {
+      aiSession: {
+        schemaVersion: 1,
+        entries: [
+          { id: Number.MAX_SAFE_INTEGER, kind: 'msg' as const, role: 'user' as const, text: '旧消息' },
+        ],
+      },
+      onSaveAiSession: onSaveSession,
+    })
+    send('新消息')
+    expect(await screen.findByText('收到。')).toBeTruthy()
+
+    const calls = onSaveSession.mock.calls
+    const saved = calls[calls.length - 1][0] as {
+      schemaVersion: 1
+      entries: { id: number }[]
+    }
+    expect(saved.entries.map((entry) => entry.id)).toEqual([1, 2, 3])
+    expect(normalizeAiSession(saved).repaired).toBe(false)
   })
 })
 

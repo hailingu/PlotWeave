@@ -47,18 +47,21 @@ function useAiModels() {
 }
 
 /** 用当前画布重建恢复卡片的完整预览，拒绝信任落盘的确认元数据；
- * 历史执行卡标注 historical——撤销栈不跨会话存活，不得宣称可撤销。 */
+ * 历史执行卡标注 historical——撤销栈不跨会话存活，不得宣称可撤销。
+ * 条目 id 重定基为 1..n 有界序列：落盘 id 不受信，防止自增越过
+ * MAX_SAFE_INTEGER 产生重复 key 与下次加载被归一化丢弃的条目。 */
 function restoreThreadEntries(
   initialSession: AiSession | undefined,
   validateCommands: ((commands: AiCommand[]) => BatchValidation | null) | undefined,
 ): ThreadEntry[] {
-  return (initialSession?.entries ?? []).map((entry) => {
-    if (entry.card?.status === 'executed') {
-      return { ...entry, card: { ...entry.card, historical: true } }
+  return (initialSession?.entries ?? []).map((entry, index) => {
+    const based = { ...entry, id: index + 1 }
+    if (based.card?.status === 'executed') {
+      return { ...based, card: { ...based.card, historical: true } }
     }
-    if (entry.card?.status !== 'pending' || !validateCommands) return entry
-    const validation = validateCommands(entry.card.v.commands)
-    return validation ? { ...entry, card: { ...entry.card, v: validation } } : entry
+    if (based.card?.status !== 'pending' || !validateCommands) return based
+    const validation = validateCommands(based.card.v.commands)
+    return validation ? { ...based, card: { ...based.card, v: validation } } : based
   })
 }
 
@@ -74,8 +77,8 @@ function useAiThreadMessages(opts: {
   )
   /** 危险批次的两步确认：处于武装态的会话条目下标，null = 无。 */
   const [armedIdx, setArmedIdx] = useState<number | null>(null)
-  /** 会话条目自增 id（组件内稳定 key）。 */
-  const entryIdRef = useRef(Math.max(0, ...(opts.initialSession?.entries.map((entry) => entry.id) ?? [])))
+  /** 会话条目自增 id（组件内稳定 key）：恢复条目已重定基为 1..n，从这里继续。 */
+  const entryIdRef = useRef(opts.initialSession?.entries.length ?? 0)
   const nextId = () => ++entryIdRef.current
   const threadRef = useRef<HTMLDivElement>(null)
 
@@ -176,6 +179,11 @@ function useAiSessionPersistence(
   useEffect(() => {
     saveSessionRef.current = onSaveSession
   }, [onSaveSession])
+  // 项目级错误在挂载后到达（重挂载期保存仍在途、拒绝晚到）时同步展示；
+  // 只同步非空值，本地保存结果的清除不被过期 prop 覆盖
+  useEffect(() => {
+    if (initialSessionError != null) setSaveError(initialSessionError)
+  }, [initialSessionError])
   useEffect(() => {
     const first = !hasMounted.current
     hasMounted.current = true
@@ -386,19 +394,8 @@ function AiEntryBody({
  * - 服务不支持工具时退回 ```json 围栏批次文本协议。
  * 逻辑在 useAiModels/useAiThreadMessages/useAiTurn，纯函数在 aiThreadModel.ts。
  */
-export default function AiThread({
-  onOpenSettings,
-  canvasDigest,
-  onValidateAi,
-  onValidateCommands,
-  onReadNode,
-  onReadSettings,
-  onApplyAiBatch,
-  initialSession,
-  initialSessionError,
-  initialSessionRetryable,
-  onSaveSession,
-}: {
+/** ✦AI 会话面板的对外契约：校验/读工具/执行回调、恢复会话及其持久化通道。 */
+interface AiThreadProps {
   readonly onOpenSettings?: () => void
   readonly canvasDigest?: string
   readonly onValidateAi?: (text: string) => BatchValidation | null
@@ -413,7 +410,21 @@ export default function AiThread({
   readonly initialSessionRetryable?: boolean
   /** 会话变更的独立持久化通道；失败不清空当前内存历史。 */
   readonly onSaveSession?: (session: AiSession) => Promise<void>
-}) {
+}
+
+export default function AiThread({
+  onOpenSettings,
+  canvasDigest,
+  onValidateAi,
+  onValidateCommands,
+  onReadNode,
+  onReadSettings,
+  onApplyAiBatch,
+  initialSession,
+  initialSessionError,
+  initialSessionRetryable,
+  onSaveSession,
+}: AiThreadProps) {
   const m = useAiModels()
   const msg = useAiThreadMessages({ onApplyAiBatch, initialSession, onValidateCommands })
   const saveError = useAiSessionPersistence(msg.thread, initialSessionError, onSaveSession, initialSessionRetryable)
