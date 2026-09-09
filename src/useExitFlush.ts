@@ -24,7 +24,7 @@ export function useExitFlush(): string | null {
         const failed = await flushPendingAiSessionSaves()
         if (failed.length > 0) {
           setBlocked(
-            `有未保存的 AI 会话（${failed.length} 个项目），已阻止退出：请检查磁盘后重试退出`,
+            `有 ${failed.length} 个项目的 AI 会话既未写入权威文件也未能写入恢复副本，已阻止退出：请检查磁盘后重试退出`,
           )
           return
         }

@@ -14,8 +14,8 @@ beforeEach(() => {
 
 const commandsOf = () => invoke.mock.calls.map((call) => call[0])
 const session = (text: string, writeSeq?: number) => ({
-  schemaVersion: 1,
-  entries: [{ id: 1, kind: 'note', text }],
+  schemaVersion: 1 as const,
+  entries: [{ id: 1, kind: 'note' as const, text }],
   ...(writeSeq !== undefined ? { writeSeq } : {}),
 })
 const payload = { schemaVersion: 1 as const, entries: [] }
@@ -247,32 +247,34 @@ describe('saveAiSession Tauri 路径 · 写链内副本', () => {
 describe('saveAiSession 失败重试与退出冲刷', () => {
   afterEach(() => vi.useRealTimers())
 
-  /** 先 load 播种写入序号，再让一次保存失败（主文件失败、副本成功）。 */
-  async function failOnce(store: typeof import('./aiSessionStore')) {
+  /** 先 load 播种写入序号，再让一次保存失败（stashOk 决定副本是否成功）。 */
+  async function failOnce(store: typeof import('./aiSessionStore'), stashOk = true) {
     invoke.mockResolvedValueOnce(session('权威', 5)).mockResolvedValueOnce(null)
     await store.loadAiSession('p1')
     invoke.mockReset()
-    invoke.mockRejectedValueOnce(new Error('磁盘已满')).mockResolvedValueOnce(undefined)
+    invoke.mockRejectedValueOnce(new Error('磁盘已满'))
+    if (stashOk) invoke.mockResolvedValueOnce(undefined)
+    else invoke.mockRejectedValueOnce(new Error('恢复目录只读'))
     await expect(store.saveAiSession('p1', payload)).rejects.toThrow('磁盘已满')
     invoke.mockReset()
   }
 
-  it('保存失败后按节律重试，成功即清出登记', async () => {
+  it('副本写入成功即跨进程可恢复：不阻止退出，并按节律重试补写权威文件', async () => {
     vi.useFakeTimers()
     const store = await import('./aiSessionStore')
     await failOnce(store)
-    expect(store.hasPendingAiSessionSaves()).toBe(true)
+    expect(store.hasPendingAiSessionSaves()).toBe(false)
 
     invoke.mockResolvedValue(undefined)
     await vi.advanceTimersByTimeAsync(5000)
-    expect(store.hasPendingAiSessionSaves()).toBe(false)
     expect(commandsOf()).toEqual(['save_ai_session'])
   })
 
-  it('冲刷待重试会话：仍失败的 id 上浮，存储恢复后清出', async () => {
+  it('两者都失败才阻止退出：冲刷上浮不可恢复 id，存储恢复后清出', async () => {
     vi.useFakeTimers()
     const store = await import('./aiSessionStore')
-    await failOnce(store)
+    await failOnce(store, false)
+    expect(store.hasPendingAiSessionSaves()).toBe(true)
 
     invoke.mockRejectedValue(new Error('磁盘已满'))
     await expect(store.flushPendingAiSessionSaves()).resolves.toEqual(['p1'])
@@ -283,10 +285,10 @@ describe('saveAiSession 失败重试与退出冲刷', () => {
     expect(store.hasPendingAiSessionSaves()).toBe(false)
   })
 
-  it('删除项目清出重试登记与定时器', async () => {
+  it('删除项目清出重试登记与不可恢复标记', async () => {
     vi.useFakeTimers()
     const store = await import('./aiSessionStore')
-    await failOnce(store)
+    await failOnce(store, false)
     expect(store.hasPendingAiSessionSaves()).toBe(true)
 
     store.deleteAiSession('p1')
@@ -294,5 +296,56 @@ describe('saveAiSession 失败重试与退出冲刷', () => {
     invoke.mockReset()
     await vi.advanceTimersByTimeAsync(10_000)
     expect(commandsOf()).toEqual([])
+  })
+
+})
+
+describe('saveAiSession 在途保存与定时器代次', () => {
+  afterEach(() => vi.useRealTimers())
+
+  it('在途保存未落定前视为待处理，冲刷先等它落定', async () => {
+    const store = await import('./aiSessionStore')
+    let release!: () => void
+    invoke.mockImplementation((cmd: unknown) => {
+      if (cmd === 'save_ai_session') {
+        return new Promise<void>((resolve) => {
+          release = () => resolve()
+        })
+      }
+      return Promise.resolve(undefined)
+    })
+
+    const saving = store.saveAiSession('p1', payload).catch(() => undefined)
+    expect(store.hasPendingAiSessionSaves()).toBe(true)
+    // 播种序号与 IPC 发起需数个节拍
+    await vi.waitFor(() => { expect(typeof release).toBe('function') })
+    const flushing = store.flushPendingAiSessionSaves()
+    release()
+    await saving
+    await expect(flushing).resolves.toEqual([])
+    expect(store.hasPendingAiSessionSaves()).toBe(false)
+  })
+
+  it('新代次失败替换旧定时器：重试的是最新会话', async () => {
+    vi.useFakeTimers()
+    invoke.mockResolvedValueOnce(session('权威', 5)).mockResolvedValueOnce(null)
+    const store = await import('./aiSessionStore')
+    await store.loadAiSession('p1')
+    invoke.mockReset()
+    invoke
+      .mockRejectedValueOnce(new Error('磁盘已满'))
+      .mockRejectedValueOnce(new Error('恢复目录只读'))
+    await expect(store.saveAiSession('p1', session('旧会话', 6))).rejects.toThrow('磁盘已满')
+    invoke.mockReset()
+    invoke
+      .mockRejectedValueOnce(new Error('磁盘已满'))
+      .mockRejectedValueOnce(new Error('恢复目录只读'))
+    await expect(store.saveAiSession('p1', session('新会话', 7))).rejects.toThrow('磁盘已满')
+
+    invoke.mockReset()
+    invoke.mockResolvedValue(undefined)
+    await vi.advanceTimersByTimeAsync(5000)
+    const retried = invoke.mock.calls[0][1] as { session: { entries: { text: string }[] } }
+    expect(retried.session.entries[0].text).toBe('新会话')
   })
 })
