@@ -104,6 +104,7 @@ function useAiTurn(opts: {
   readonly onValidateAi?: (text: string) => BatchValidation | null
   readonly onValidateCommands?: (commands: AiCommand[]) => BatchValidation | null
   readonly onReadNode?: (nodeId: string) => string | null
+  readonly onReadSettings?: () => string
 }) {
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
@@ -125,7 +126,7 @@ function useAiTurn(opts: {
         opts.activeProvider,
         opts.activeOption.model,
         buildMessages(opts.thread, text, knowsCanvas, opts.canvasDigest),
-        readToolOf(opts.canvasDigest, opts.onReadNode),
+        readToolOf(opts.canvasDigest, opts.onReadNode, opts.onReadSettings),
         { commands: opts.onValidateCommands, prose: opts.onValidateAi },
         opts.nextId,
       )
@@ -297,6 +298,7 @@ export default function AiThread({
   onValidateAi,
   onValidateCommands,
   onReadNode,
+  onReadSettings,
   onApplyAiBatch,
 }: {
   readonly onOpenSettings?: () => void
@@ -304,6 +306,7 @@ export default function AiThread({
   readonly onValidateAi?: (text: string) => BatchValidation | null
   readonly onValidateCommands?: (commands: AiCommand[]) => BatchValidation | null
   readonly onReadNode?: (nodeId: string) => string | null
+  readonly onReadSettings?: () => string
   readonly onApplyAiBatch?: (commands: ValidatedCommand[]) => string | null
 }) {
   const m = useAiModels()
@@ -319,6 +322,7 @@ export default function AiThread({
     onValidateAi,
     onValidateCommands,
     onReadNode,
+    onReadSettings,
   })
   // 新条目/思考态/错误出现时滚动到底（跟随原内联实现）
   useEffect(() => {

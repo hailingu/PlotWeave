@@ -8,6 +8,7 @@ import { useCallback, useMemo } from 'react'
 import type { Edge } from '@xyflow/react'
 import { buildGraphDigest } from './ai/graphDigest'
 import { extractBatchJson } from './ai/batchText'
+import { settingsSnapshotText } from './ai/entityFields'
 import {
   toInboundCommands,
   validateAiBatch,
@@ -46,6 +47,8 @@ export interface AiBridgeDeps {
   settings: ProjectSettings
   nodesRef: { current: CanvasNode[] }
   edgesRef: { current: Edge[] }
+  /** 设定集镜像（issue 44）：实体校验快照与落地重校验消费「当前」设定集。 */
+  settingsRef: { current: ProjectSettings }
   /** 项目资产索引镜像（会话内不编辑资产，透传桶的稳定引用）：
    * shot.refs 引用位的资产存在性/用途校验在快照里消费。 */
   assetsRef: { current: ProjectContent['assets'] }
@@ -54,6 +57,8 @@ export interface AiBridgeDeps {
   applyDataPatch: (id: string, cmd: NodeDataPatch) => void
   setNodes: (updater: (all: CanvasNode[]) => CanvasNode[]) => void
   setEdges: (updater: (eds: Edge[]) => Edge[]) => void
+  /** 设定集功能式写入（issue 44）：实体改动的落地通道，与节点绑定同一复合命令。 */
+  setSettings: (updater: (prev: ProjectSettings) => ProjectSettings) => void
   pushHistory: (cmd: HistoryCommand) => void
   closeSettings: () => void
 }
@@ -68,16 +73,20 @@ export interface AiBridge {
   validateCommands: (commands: AiCommand[]) => BatchValidation | null
   /** 读工具 get_node：返回节点完整字段 JSON；不存在返回 null。 */
   readNode: (nodeId: string) => string | null
+  /** 读工具 get_settings_snapshot（issue 44）：返回设定集清单 JSON。 */
+  readSettings: () => string
   /** ✦AI 改动落地：整批作为一条复合命令入栈；返回错误文案或 null。
    * 入参为整批校验通过的执行命令（预览卡的合法子集，issue 16）。 */
   applyAiBatch: (batch: ValidatedCommand[]) => string | null
 }
 
 /** AI 校验用的图快照装配（§12.2）：类型 + 分支选项（id）供分类型校验与
- * 端口解析；资产索引（id → MIME）供 shot.refs 引用位的存在性/用途校验。 */
+ * 端口解析；资产索引（id → MIME）供 shot.refs 引用位的存在性/用途校验；
+ * 设定集压缩视图（issue 44）供实体存在性与引用类型校验。 */
 function graphSnapshotOf(
   nodesRef: { current: CanvasNode[] },
   edgesRef: { current: Edge[] },
+  settingsRef: { current: ProjectSettings },
   assetsRef: { current: ProjectContent['assets'] },
 ): AiGraphSnapshot {
   return {
@@ -97,13 +106,18 @@ function graphSnapshotOf(
     assets: new Map(
       Object.entries(assetsRef.current?.byId ?? {}).map(([id, a]) => [id, a.mime]),
     ),
+    settings: {
+      characters: settingsRef.current.characters.map(({ id, name }) => ({ id, name })),
+      locations: settingsRef.current.locations.map(({ id, name }) => ({ id, name })),
+    },
   }
 }
 
 /** ✦AI 改动落地的编排内核（useAiBridge 拆出，issue 16）：先按当前图重新
- * 整批校验（防预览后用户又改了画布；入站形态重校验见 toInboundCommands），
- * 折叠模拟产出前进/回退闭包，整体作为一条复合命令入栈——执行整批生效，
- * ⌘Z 一步撤销即整批回滚。返回错误文案或 null。 */
+ * 整批校验（防预览后用户又改了画布/设定集；入站形态重校验见
+ * toInboundCommands），折叠模拟产出前进/回退闭包，整体作为一条复合命令
+ * 入栈——执行整批生效，⌘Z 一步撤销即整批回滚（实体与绑定两侧同时恢复，
+ * issue 44）。返回错误文案或 null。 */
 function applyValidatedBatch(
   batch: ValidatedCommand[],
   ctx: {
@@ -111,6 +125,7 @@ function applyValidatedBatch(
     ops: BatchOps
     nodesRef: { current: CanvasNode[] }
     edgesRef: { current: Edge[] }
+    settingsRef: { current: ProjectSettings }
     pushHistory: (cmd: HistoryCommand) => void
     closeSettings: () => void
   },
@@ -120,7 +135,13 @@ function applyValidatedBatch(
   if (!fresh.ok) {
     return `改动无法安全执行：${fresh.issues[0]?.message ?? '批次校验未通过'}`
   }
-  const sim = simulateBatch(batch, ctx.ops, ctx.nodesRef.current, ctx.edgesRef.current)
+  const sim = simulateBatch(
+    batch,
+    ctx.ops,
+    ctx.nodesRef.current,
+    ctx.edgesRef.current,
+    ctx.settingsRef.current,
+  )
   sim.forward.forEach((f) => f())
   ctx.pushHistory({
     undo: () => [...sim.backward].reverse().forEach((f) => f()),
@@ -130,21 +151,19 @@ function applyValidatedBatch(
   return null
 }
 
-export function useAiBridge(deps: AiBridgeDeps): AiBridge {
-  const {
-    nodes,
-    edges,
-    settings,
-    nodesRef,
-    edgesRef,
-    assetsRef,
-    buildNewNode,
-    applyDataPatch,
-    setNodes,
-    setEdges,
-    pushHistory,
-    closeSettings,
-  } = deps
+/** 校验与读工具族（useAiBridge 拆出的回调子域）：反应式画布 → 快照 digest；
+ * ref 镜像 → 整批校验快照与 get_node / get_settings_snapshot 读工具。
+ * aiSnapshot 一并回传供落地重校验复用。 */
+function useAiReadTools(deps: {
+  nodes: CanvasNode[]
+  edges: Edge[]
+  settings: ProjectSettings
+  nodesRef: { current: CanvasNode[] }
+  edgesRef: { current: Edge[] }
+  settingsRef: { current: ProjectSettings }
+  assetsRef: { current: ProjectContent['assets'] }
+}) {
+  const { nodes, edges, settings, nodesRef, edgesRef, settingsRef, assetsRef } = deps
 
   const canvasDigest = useMemo(
     () =>
@@ -159,8 +178,8 @@ export function useAiBridge(deps: AiBridgeDeps): AiBridge {
 
   /** AI 校验用的图快照（§12.2）：装配见 graphSnapshotOf。 */
   const aiSnapshot = useCallback(
-    () => graphSnapshotOf(nodesRef, edgesRef, assetsRef),
-    [nodesRef, edgesRef, assetsRef],
+    () => graphSnapshotOf(nodesRef, edgesRef, settingsRef, assetsRef),
+    [nodesRef, edgesRef, settingsRef, assetsRef],
   )
 
   const validateAiReply = useCallback(
@@ -185,6 +204,31 @@ export function useAiBridge(deps: AiBridgeDeps): AiBridge {
     [nodesRef],
   )
 
+  /** 读工具 get_settings_snapshot（issue 44）：清单文本由 entityFields 单点生成。 */
+  const readSettings = useCallback(
+    (): string => settingsSnapshotText(settingsRef.current),
+    [settingsRef],
+  )
+
+  return { canvasDigest, aiSnapshot, validateAiReply, validateCommands, readNode, readSettings }
+}
+
+export function useAiBridge(deps: AiBridgeDeps): AiBridge {
+  const {
+    nodesRef,
+    edgesRef,
+    settingsRef,
+    buildNewNode,
+    applyDataPatch,
+    setNodes,
+    setEdges,
+    setSettings,
+    pushHistory,
+    closeSettings,
+  } = deps
+  const { canvasDigest, aiSnapshot, validateAiReply, validateCommands, readNode, readSettings } =
+    useAiReadTools(deps)
+
   /** ✦AI 改动落地：整批作为一条复合命令入栈；返回错误文案或 null。
    * 入参为整批校验通过的执行命令（预览卡的合法子集，issue 16）；
    * 重校验与入栈编排见 applyValidatedBatch。 */
@@ -192,14 +236,15 @@ export function useAiBridge(deps: AiBridgeDeps): AiBridge {
     (batch: ValidatedCommand[]): string | null =>
       applyValidatedBatch(batch, {
         snapshot: aiSnapshot,
-        ops: { buildNewNode, applyDataPatch, setNodes, setEdges },
+        ops: { buildNewNode, applyDataPatch, setNodes, setEdges, setSettings },
         nodesRef,
         edgesRef,
+        settingsRef,
         pushHistory,
         closeSettings,
       }),
-    [aiSnapshot, applyDataPatch, buildNewNode, closeSettings, edgesRef, nodesRef, pushHistory, setEdges, setNodes],
+    [aiSnapshot, applyDataPatch, buildNewNode, closeSettings, edgesRef, nodesRef, pushHistory, setEdges, setNodes, setSettings, settingsRef],
   )
 
-  return { canvasDigest, validateAiReply, validateCommands, readNode, applyAiBatch }
+  return { canvasDigest, validateAiReply, validateCommands, readNode, readSettings, applyAiBatch }
 }

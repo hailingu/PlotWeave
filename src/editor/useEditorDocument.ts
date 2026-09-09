@@ -39,6 +39,9 @@ export interface EditorDocument {
   setFocusedEpisode: Dispatch<SetStateAction<number | null>>
   nodesRef: MutableRefObject<CanvasNode[]>
   edgesRef: MutableRefObject<Edge[]>
+  /** 设定集镜像（issue 44）：AI 校验/落地读取「当前」实体注册表——
+   * 预览到确认之间用户的设定集编辑经此被重校验发现。 */
+  settingsRef: MutableRefObject<ProjectSettings>
   assetsRef: MutableRefObject<ProjectContent['assets']>
   episodeTitlesRef: MutableRefObject<Record<number, string>>
   viewportRef: MutableRefObject<Viewport | undefined>
@@ -64,6 +67,8 @@ export function useEditorDocument(project: EditorProjectContent): EditorDocument
   nodesRef.current = nodes
   const edgesRef = useRef(edges)
   edgesRef.current = edges
+  const settingsRef = useRef(settings)
+  settingsRef.current = settings
   const assetsRef = useRef(assets)
   assetsRef.current = assets
   const episodeTitlesRef = useRef(episodeTitles)
@@ -90,12 +95,13 @@ export function useEditorDocument(project: EditorProjectContent): EditorDocument
       setAssets,
       focusedEpisode,
       setFocusedEpisode,
-      nodesRef,
-      edgesRef,
-      assetsRef,
-      episodeTitlesRef,
-      viewportRef,
-    }),
+    nodesRef,
+    edgesRef,
+    settingsRef,
+    assetsRef,
+    episodeTitlesRef,
+    viewportRef,
+  }),
     [
       nodes,
       setNodes,

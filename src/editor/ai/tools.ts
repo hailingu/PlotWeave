@@ -1,10 +1,13 @@
 import type { AiCommand } from './commands'
+import { entityFieldTableText } from './entityFields'
 import { nodeFieldTableText } from './nodeFields'
 
 /**
  * Agent 工具表（数据模型 §12.2：工具集 = 命令清单的封装）。
  * 读工具由前端就地执行回喂；写工具调用映射为 AiCommand——
  * 仍走「整批预览 → 用户确认 → 复合命令入栈」通道，绝不自动执行。
+ * issue 44 起含设定实体通道：get_settings_snapshot 读 + upsert_character /
+ * upsert_location 写（实体字段协议单一真相在 entityFields.ts）。
  */
 
 /** data/patch 的协议描述：嵌入共享节点字段表（issue 41）——此前只写
@@ -12,6 +15,10 @@ import { nodeFieldTableText } from './nodeFields'
  * 被校验整批拒绝。字段协议的单一真相在 nodeFields.ts。 */
 const DATA_FIELDS_DESC =
   `字段对象（只写要定制的字段，其余用默认）。各类型合法字段（表外字段整批拒绝）：\n${nodeFieldTableText()}`
+
+/** upsert fields 的协议描述（issue 44）：与校验白名单同源（entityFields.ts）。 */
+const ENTITY_FIELDS_DESC =
+  `字段对象（只写要定制/修改的字段）。合法字段（表外字段整批拒绝）：\n${entityFieldTableText()}`
 
 export interface ToolSpec {
   type: 'function'
@@ -52,6 +59,16 @@ export const AI_TOOLS: ToolSpec[] = [
       name: 'get_node',
       description: '读取单个节点的完整字段（id/type/data）',
       parameters: obj({ nodeId: str('节点 id') }, ['nodeId']),
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_settings_snapshot',
+      description:
+        '读取设定集清单：全部角色/地点的 id、名称与小传/备注（props/documents 只读，' +
+        '首期不可写）。写 characterIds/locationId/speaker 或修改实体前先读取以复用已有实体',
+      parameters: obj({}),
     },
   },
   {
@@ -124,12 +141,52 @@ export const AI_TOOLS: ToolSpec[] = [
   {
     type: 'function',
     function: {
+      name: 'upsert_character',
+      description:
+        '新建或修改角色实体（issue 44）：新建不带 entityId（fields.name 必填，可带 ref ' +
+        '供本批后续命令在 scene.characterIds / lines[].speaker 引用）；修改必须带 entityId' +
+        '（设定集快照里的精确 id，不要按名字猜），fields 只写要改的字段，未提及字段保持不变；' +
+        '不支持删除或合并实体',
+      parameters: obj(
+        {
+          entityId: str('修改目标角色 id（新建时不带）'),
+          ref: { type: 'string', description: '临时别名：新建时声明（或修改时给既有实体挂别名），供本批绑定引用' },
+          fields: { type: 'object', description: ENTITY_FIELDS_DESC },
+          reason: str('改动理由'),
+        },
+      ),
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'upsert_location',
+      description:
+        '新建或修改地点实体：新建不带 entityId（fields.name 必填，可带 ref 供本批 ' +
+        'scene.locationId 引用）；修改必须带 entityId（精确 id，不要按名字猜），' +
+        'fields 只写要改的字段，未提及字段保持不变',
+      parameters: obj(
+        {
+          entityId: str('修改目标地点 id（新建时不带）'),
+          ref: { type: 'string', description: '临时别名：新建时声明（或修改时给既有实体挂别名），供本批绑定引用' },
+          fields: { type: 'object', description: ENTITY_FIELDS_DESC },
+          reason: str('改动理由'),
+        },
+      ),
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'batch',
       description:
         '把一次改动的全部命令放进同一个批次（推荐：用户只确认一次）。' +
         'commands 元素形如 {"op":"…",…}，op 只能取：' +
-        'create_node / update_node / delete_node / connect_edge / disconnect_edge' +
-        '（注意是 update_node，不是 update_node_spec），其余字段与上述写工具参数一致',
+        'create_node / update_node / delete_node / connect_edge / disconnect_edge / ' +
+        'upsert_character / upsert_location' +
+        '（注意是 update_node，不是 update_node_spec），其余字段与上述写工具参数一致。' +
+        '同批可先 upsert 实体再绑定：创建实体的 ref 可直接写进 scene.characterIds / ' +
+        'scene.locationId / lines[].speaker，应用解析为真实 id 后落地',
       parameters: obj(
         {
           commands: {
@@ -139,8 +196,11 @@ export const AI_TOOLS: ToolSpec[] = [
               '{"op":"update_node","nodeId":"…","patch":{…}} | ' +
               '{"op":"delete_node","nodeId":"…"} | ' +
               '{"op":"connect_edge","sourceId":"…","targetId":"…"} | ' +
-              '{"op":"disconnect_edge","sourceId":"…","targetId":"…"}。' +
-              'data/patch 只写对应节点类型的合法字段（表外字段整批拒绝）：\n' + nodeFieldTableText(),
+              '{"op":"disconnect_edge","sourceId":"…","targetId":"…"} | ' +
+              '{"op":"upsert_character","ref":"…","fields":{…}} | ' +
+              '{"op":"upsert_location","entityId":"…","fields":{…}}。' +
+              'data/patch 只写对应节点类型的合法字段（表外字段整批拒绝）：\n' + nodeFieldTableText() +
+              '\nupsert fields 只写对应实体的合法字段（表外字段整批拒绝）：\n' + entityFieldTableText(),
             items: { type: 'object' },
           },
         },
@@ -150,13 +210,15 @@ export const AI_TOOLS: ToolSpec[] = [
   },
 ]
 
-export const READ_TOOL_NAMES = new Set(['get_graph_snapshot', 'get_node'])
+export const READ_TOOL_NAMES = new Set(['get_graph_snapshot', 'get_node', 'get_settings_snapshot'])
 export const WRITE_TOOL_NAMES = new Set([
   'create_node',
   'delete_node',
   'update_node_spec',
   'connect_edge',
   'disconnect_edge',
+  'upsert_character',
+  'upsert_location',
   'batch',
 ])
 
@@ -198,6 +260,22 @@ const WRITE_MAPPERS: Record<string, (args: Record<string, unknown>) => AiCommand
     op: 'disconnect_edge',
     sourceId: asId(a.sourceId),
     targetId: asId(a.targetId),
+    reason: a.reason,
+  }),
+  // 设定实体（issue 44）：fields 归对象、entityId 原样透传，畸形值由折叠层
+  // 整批拒绝——缺省 entityId = 新建；在场但非字符串/空白不是新建通道
+  upsert_character: (a) => ({
+    op: 'upsert_character' as const,
+    ...(a.entityId !== undefined ? { entityId: a.entityId } : {}),
+    ref: a.ref,
+    fields: asPatch(a.fields),
+    reason: a.reason,
+  }),
+  upsert_location: (a) => ({
+    op: 'upsert_location' as const,
+    ...(a.entityId !== undefined ? { entityId: a.entityId } : {}),
+    ref: a.ref,
+    fields: asPatch(a.fields),
     reason: a.reason,
   }),
 }

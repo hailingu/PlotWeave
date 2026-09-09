@@ -112,6 +112,380 @@ describe('validateAiBatch：校验折叠（数据模型 §12，执行前批量�
   })
 })
 
+/** 测试用快照：场景 s1 + 对白 d1；设定集含角色 ch-1（陈默）与地点 loc-1（茶馆）。 */
+function entSnap(): AiGraphSnapshot {
+  return {
+    nodes: [
+      { id: 's1', type: 'scene', label: '场 01 · 茶馆' },
+      { id: 'd1', type: 'dialogue', label: '对白 · 对质' },
+    ],
+    edges: [],
+    assets: new Map(),
+    settings: {
+      characters: [{ id: 'ch-1', name: '陈默' }],
+      locations: [{ id: 'loc-1', name: '茶馆' }],
+    },
+  }
+}
+
+describe('validateAiBatch · 实体折叠与预览产出（新建 / 修改 / 同批绑定 ref，issue 44）', () => {
+  it('同批「新建角色/地点 → 场景与对白绑定 ref」逐项折叠；实体改动进预览', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'upsert_character', ref: 'hero', fields: { name: '林一', bio: '落魄侦探' }, reason: '主角' },
+        { op: 'upsert_location', ref: 'home', fields: { name: '公寓' } },
+        {
+          op: 'create_node',
+          nodeType: 'scene',
+          ref: 'sc',
+          data: { name: '开场', characterIds: ['hero'], locationId: 'home' },
+        },
+        { op: 'update_node', nodeId: 's1', patch: { characterIds: ['ch-1', 'hero'] } },
+        {
+          op: 'update_node',
+          nodeId: 'd1',
+          patch: { lines: [{ kind: 'line', speaker: 'hero', text: '你来了。' }] },
+        },
+      ],
+      entSnap(),
+    )
+    expect(v.ok).toBe(true)
+    expect(v.issues).toEqual([])
+    expect(v.commands.map((c) => c.op)).toEqual([
+      'upsert_character',
+      'upsert_location',
+      'create_node',
+      'update_node',
+      'update_node',
+    ])
+    const itemKinds = v.items.map((i) => i.kind)
+    expect(itemKinds).toContain('create_entity')
+    expect(itemKinds).toContain('update')
+    expect(v.items.find((i) => i.kind === 'create_entity')?.label).toContain('林一')
+  })
+
+  it('已有实体补充 bio：entityId 精确指向，预览标 update_entity 且只列变更字段', () => {
+    const v = validateAiBatch(
+      [{ op: 'upsert_character', entityId: 'ch-1', fields: { bio: '戒了三年又复吸' } }],
+      entSnap(),
+    )
+    expect(v.ok).toBe(true)
+    expect(v.items[0]).toMatchObject({ kind: 'update_entity' })
+    expect(v.items[0].label).toContain('陈默')
+    expect(v.items[0].label).toContain('bio')
+    expect(v.commands[0]).toMatchObject({ op: 'upsert_character', entityId: 'ch-1' })
+  })
+
+  it('修改未提及 name：执行命令 fields 只含写入键（归一化不注入空名，预览→执行同口径）', () => {
+    const v = validateAiBatch(
+      [{ op: 'upsert_character', entityId: 'ch-1', fields: { bio: '新小传' } }],
+      entSnap(),
+    )
+    expect(v.ok).toBe(true)
+    expect((v.commands[0] as { fields: Record<string, unknown> }).fields).toEqual({
+      bio: '新小传',
+    })
+    // 预览标签只列实际写入的字段，不把未提及的 name 列为变更
+    expect(v.items[0].label).toContain('（bio）')
+  })
+})
+
+describe('validateAiBatch · 实体 fields 校验（白名单 / 值形状 / name 约束，issue 44）', () => {
+  it('创建缺 name、未知字段、非字符串值、update 空 fields 均整批拒绝', () => {
+    for (const bad of [
+      { op: 'upsert_character', fields: { bio: '没有名字' } },
+      { op: 'upsert_character', fields: {} },
+      { op: 'upsert_location', fields: { name: '公寓', zone: '城西' } },
+      { op: 'upsert_character', fields: { name: 42 } },
+      { op: 'upsert_character', fields: '林一' },
+      { op: 'upsert_character', entityId: 'ch-1', fields: {} },
+    ]) {
+      const v = validateAiBatch([bad], entSnap())
+      expect(v.ok, JSON.stringify(bad)).toBe(false)
+      expect(v.issues.length).toBeGreaterThanOrEqual(1)
+      expect(v.commands).toEqual([])
+    }
+  })
+
+  it('update 的 name 不能为空白；创建 name 去空白后进命令', () => {
+    const blank = validateAiBatch(
+      [{ op: 'upsert_character', entityId: 'ch-1', fields: { name: '   ' } }],
+      entSnap(),
+    )
+    expect(blank.ok).toBe(false)
+
+    const v = validateAiBatch(
+      [{ op: 'upsert_character', fields: { name: '  林一  ' } }],
+      entSnap(),
+    )
+    expect(v.ok).toBe(true)
+    expect(v.commands[0]).toMatchObject({ fields: { name: '林一' } })
+  })
+})
+
+describe('validateAiBatch · entityId 解析与结构化引用校验（issue 44）', () => {
+  it('entityId 指向不存在实体或跨种类实体均拒绝', () => {
+    const ghost = validateAiBatch(
+      [{ op: 'upsert_character', entityId: 'ch-404', fields: { bio: 'x' } }],
+      entSnap(),
+    )
+    expect(ghost.ok).toBe(false)
+    expect(ghost.issues[0].message).toContain('不存在')
+
+    const cross = validateAiBatch(
+      [{ op: 'upsert_character', entityId: 'loc-1', fields: { bio: 'x' } }],
+      entSnap(),
+    )
+    expect(cross.ok).toBe(false)
+    expect(cross.issues[0].message).toContain('地点')
+  })
+
+  it('场景/对白引用：跨类型误绑与未知实体整批拒绝（引用类型校验）', () => {
+    const crossType = validateAiBatch(
+      [{ op: 'update_node', nodeId: 's1', patch: { characterIds: ['loc-1'] } }],
+      entSnap(),
+    )
+    expect(crossType.ok).toBe(false)
+    expect(crossType.issues[0].message).toContain('地点')
+
+    const crossLocation = validateAiBatch(
+      [{ op: 'update_node', nodeId: 's1', patch: { locationId: 'ch-1' } }],
+      entSnap(),
+    )
+    expect(crossLocation.ok).toBe(false)
+    expect(crossLocation.issues[0].message).toContain('指向的是角色实体')
+
+    const ghost = validateAiBatch(
+      [{ op: 'update_node', nodeId: 's1', patch: { locationId: 'loc-404' } }],
+      entSnap(),
+    )
+    expect(ghost.ok).toBe(false)
+    expect(ghost.issues[0].message).toContain('地点实体不存在')
+
+    const ghostSpeaker = validateAiBatch(
+      [{
+        op: 'update_node',
+        nodeId: 'd1',
+        patch: { lines: [{ kind: 'line', speaker: 'who', text: '？' }] },
+      }],
+      entSnap(),
+    )
+    expect(ghostSpeaker.ok).toBe(false)
+    expect(ghostSpeaker.issues[0].message).toContain('角色实体不存在')
+
+    const okExisting = validateAiBatch(
+      [{ op: 'update_node', nodeId: 's1', patch: { characterIds: ['ch-1'], locationId: 'loc-1' } }],
+      entSnap(),
+    )
+    expect(okExisting.ok).toBe(true)
+  })
+})
+
+describe('validateAiBatch · ref 别名与同批先建后改（contingent 自愈，issue 44）', () => {
+  it('失败 upsert 的 ref 依赖按 contingent 跳过：不产级联假阳性，修复后自愈', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'upsert_character', ref: 'hero', fields: { bio: '缺 name，失败' } },
+        { op: 'update_node', nodeId: 's1', patch: { characterIds: ['hero'] } },
+      ],
+      entSnap(),
+    )
+    expect(v.ok).toBe(false)
+    // 只有 upsert 自身被点名；依赖它的场景更新本轮跳过
+    expect(v.issues).toHaveLength(1)
+    expect(v.issues[0].index).toBe(0)
+
+    const fixed = validateAiBatch(
+      [
+        { op: 'upsert_character', ref: 'hero', fields: { name: '林一' } },
+        { op: 'update_node', nodeId: 's1', patch: { characterIds: ['hero'] } },
+      ],
+      entSnap(),
+    )
+    expect(fixed.ok).toBe(true)
+  })
+
+  it('同批 ref 别名既有实体：update 挂 ref 后，后续绑定可用 ref 引用', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'upsert_character', entityId: 'ch-1', ref: 'hero', fields: { bio: '补小传' } },
+        { op: 'update_node', nodeId: 's1', patch: { characterIds: ['hero'] } },
+      ],
+      entSnap(),
+    )
+    expect(v.ok).toBe(true)
+    expect(v.commands[0]).toMatchObject({ entityId: 'ch-1', ref: 'hero' })
+  })
+
+  it('修改本批新建实体（entityId 用 ref）：同批先建后改合法', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'upsert_character', ref: 'hero', fields: { name: '林一' } },
+        { op: 'upsert_character', entityId: 'hero', fields: { bio: '侦探' } },
+      ],
+      entSnap(),
+    )
+    expect(v.ok).toBe(true)
+    expect(v.items[1]).toMatchObject({ kind: 'update_entity' })
+  })
+})
+
+describe('validateAiBatch · id 口径严格化（畸形 entityId / 独立 id 空间 / 虚拟 id 同形，issue 44）', () => {
+  it('entityId 在场但畸形（非字符串/空白）整批拒绝，不重释为新建（与设计「新建不带 entityId」同口径）', () => {
+    for (const bad of [
+      { op: 'upsert_character', entityId: 123, fields: { name: '新名' } },
+      { op: 'upsert_character', entityId: '', fields: { name: '新名' } },
+      { op: 'upsert_character', entityId: '   ', fields: { name: '新名' } },
+      { op: 'upsert_location', entityId: null, fields: { name: '公寓' } },
+    ]) {
+      const v = validateAiBatch([bad], entSnap())
+      expect(v.ok, JSON.stringify(bad)).toBe(false)
+      expect(v.issues[0].message).toContain('entityId')
+      expect(v.commands).toEqual([])
+    }
+  })
+
+  it('角色/地点同 id 共存（独立 id 空间）：引用按期望种类解析，不误判跨种类', () => {
+    // §8.1：角色与地点是两个独立 id 空间，同 id 共存是合法状态
+    const shared = 'dup-1'
+    const sharedSnap: AiGraphSnapshot = {
+      nodes: [{ id: 's1', type: 'scene', label: '场 01 · 茶馆' }],
+      edges: [],
+      assets: new Map(),
+      settings: {
+        characters: [{ id: shared, name: '陈默' }],
+        locations: [{ id: shared, name: '茶馆' }],
+      },
+    }
+    // locationId 指向共享 id：期望种类是 location，不得因角色桶先命中被误拒
+    const asLocation = validateAiBatch(
+      [{ op: 'update_node', nodeId: 's1', patch: { locationId: shared } }],
+      sharedSnap,
+    )
+    expect(asLocation.ok).toBe(true)
+    // characterIds 指向共享 id：同理按 character 解析
+    const asCharacter = validateAiBatch(
+      [{ op: 'update_node', nodeId: 's1', patch: { characterIds: [shared] } }],
+      sharedSnap,
+    )
+    expect(asCharacter.ok).toBe(true)
+  })
+
+  it('持久化 id 与折叠虚拟 id 基形同形（__ent__:N）：投影 id 避开既有 id，引用不误判', () => {
+    // 角色/地点 id 无保留前缀约束：持久化地点 id 可以恰好是 __ent__:0
+    const snap: AiGraphSnapshot = {
+      nodes: [{ id: 's1', type: 'scene', label: '场 01' }],
+      edges: [],
+      assets: new Map(),
+      settings: {
+        characters: [{ id: 'ch-1', name: '陈默' }],
+        locations: [{ id: '__ent__:0', name: '奇怪地点' }],
+      },
+    }
+    // 命令 0 新建角色后，__ent__:0 仍是持久化「地点」：写进 characterIds
+    // 是跨种类误绑，不得因虚拟角色抢占桶位被放行（执行期会落盘悬空绑定）
+    const asCharacter = validateAiBatch(
+      [
+        { op: 'upsert_character', ref: 'hero', fields: { name: '林一' } },
+        { op: 'update_node', nodeId: 's1', patch: { characterIds: ['__ent__:0'] } },
+      ],
+      snap,
+    )
+    expect(asCharacter.ok).toBe(false)
+    expect(asCharacter.issues[0].message).toContain('地点')
+    // 同一 token 用在 locationId：指向持久化地点，合法
+    const asLocation = validateAiBatch(
+      [
+        { op: 'upsert_character', ref: 'hero', fields: { name: '林一' } },
+        { op: 'update_node', nodeId: 's1', patch: { locationId: '__ent__:0' } },
+      ],
+      snap,
+    )
+    expect(asLocation.ok).toBe(true)
+  })
+})
+
+describe('validateAiBatch · 虚拟投影 id 不可直接引用（仅声明的 ref 可解析，issue 44）', () => {
+  it('未经 ref 声明的 __ent__:N 写进引用位/entityId 均拒绝（执行层只解析别名表）', () => {
+    const snap: AiGraphSnapshot = {
+      nodes: [{ id: 's1', type: 'scene', label: '场 01' }],
+      edges: [],
+      assets: new Map(),
+      settings: { characters: [], locations: [] },
+    }
+    // 命令 0 新建角色（无 ref，虚拟 id 为 __ent__:0）：该投影 id 不经 ref
+    // 声明不可作为引用 token——放行会在执行期落盘悬空绑定
+    const viaCharacterIds = validateAiBatch(
+      [
+        { op: 'upsert_character', fields: { name: '林一' } },
+        { op: 'update_node', nodeId: 's1', patch: { characterIds: ['__ent__:0'] } },
+      ],
+      snap,
+    )
+    expect(viaCharacterIds.ok).toBe(false)
+    expect(viaCharacterIds.issues[0].message).toContain('不存在')
+    // entityId 直接指向投影 id 同样拒绝
+    const viaEntityId = validateAiBatch(
+      [
+        { op: 'upsert_character', fields: { name: '林一' } },
+        { op: 'upsert_character', entityId: '__ent__:0', fields: { bio: 'x' } },
+      ],
+      snap,
+    )
+    expect(viaEntityId.ok).toBe(false)
+  })
+})
+
+describe('validateAiBatch · 台词行 speaker 引用与 ref 别名冲突（issue 44）', () => {
+  it('缺省 kind 的台词行按 line 校验 speaker 引用（与归一化判别缺省同口径）', () => {
+    const cross = validateAiBatch(
+      [
+        {
+          op: 'create_node',
+          nodeType: 'dialogue',
+          data: { name: '对质', lines: [{ speaker: 'loc-1', text: '你来了。' }] },
+        },
+      ],
+      entSnap(),
+    )
+    expect(cross.ok).toBe(false)
+    expect(cross.issues.some((i) => i.message.includes('lines[0].speaker'))).toBe(true)
+
+    const unknown = validateAiBatch(
+      [
+        {
+          op: 'update_node',
+          nodeId: 'd1',
+          patch: { lines: [{ id: 'line-1', speaker: 'ghost-ch', text: '在。' }] },
+        },
+      ],
+      entSnap(),
+    )
+    expect(unknown.ok).toBe(false)
+    expect(unknown.issues.some((i) => i.message.includes('lines[0].speaker'))).toBe(true)
+  })
+
+  it('ref 别名与既有实体 id 冲突时整批拒绝（校验按既有实体解析、执行按别名解析）', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'upsert_character', ref: 'loc-1', fields: { name: '假名' } },
+        { op: 'update_node', nodeId: 's1', patch: { locationId: 'loc-1' } },
+      ],
+      entSnap(),
+    )
+    expect(v.ok).toBe(false)
+    expect(v.issues.some((i) => i.message.includes('ref 别名'))).toBe(true)
+
+    // 修改既有实体挂冲突别名同样拒绝
+    const onUpdate = validateAiBatch(
+      [{ op: 'upsert_character', entityId: 'ch-1', ref: 'loc-1', fields: { bio: '补' } }],
+      entSnap(),
+    )
+    expect(onUpdate.ok).toBe(false)
+    expect(onUpdate.issues.some((i) => i.message.includes('ref 别名'))).toBe(true)
+  })
+})
+
 describe('列表项稳定 id 归一化（S6479 信任边界：AI 可送旧形态，落画布前补 id）', () => {
   it('create_node 对白：无 id 的 lines 回填 line- 前缀 id；已有 id 原样保留（幂等）', () => {
     const v = validateAiBatch(

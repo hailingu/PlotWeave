@@ -6,6 +6,9 @@ const ITEM_ICONS: Record<BatchValidation['items'][number]['kind'], string> = {
   connect: '⟶',
   disconnect: '⤫',
   delete: '🗑',
+  // 设定实体条目（issue 44）：与节点创建/修改同列，标签自明种类
+  create_entity: '＋',
+  update_entity: '✎',
 }
 
 /** 执行按钮文案：含删除时按武装态分两步（S3358 独立成函数）。 */

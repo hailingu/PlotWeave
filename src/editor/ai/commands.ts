@@ -14,10 +14,12 @@ import type { NodeDataPatch } from '../nodes/patch'
  * re-export，引用方保持单一入口；模拟执行在 batchSim.ts。
  */
 
-/** 模型可产出的五类命令（对齐数据模型 §12.2 写工具集的首版子集）。
- * 这是**入站**信任边界的形态：update_node 的 patch 是模型自报的
- * Record，合法性与目标节点类型的绑定由 validateAiBatch 校验（§9.3），
- * 校验通过后以 ValidatedCommand 进入执行通道（issue 16）。 */
+/** 模型可产出的命令（对齐数据模型 §12.2 写工具集；issue 44 起含设定实体）。
+ * 这是**入站**信任边界的形态：update_node 的 patch 与 upsert 的 fields 是
+ * 模型自报的宽 Record，合法性与目标类型/种类的绑定由 validateAiBatch 校验
+ * （§9.3），校验通过后以 ValidatedCommand 进入执行通道（issue 16）。
+ * upsert：不带 entityId = 新建（应用分配真实 id）；带 entityId = 修改既有
+ * 实体（fields 只写要改的字段，未提及字段保持不变）。 */
 export type AiCommand =
   | { op: 'create_node'; nodeType: string; ref?: unknown; data?: unknown; reason?: unknown }
   | { op: 'update_node'; nodeId: string; patch: Record<string, unknown>; reason?: unknown }
@@ -33,14 +35,39 @@ export type AiCommand =
       reason?: unknown
     }
   | { op: 'disconnect_edge'; sourceId: string; targetId: string; reason?: unknown }
+  | {
+      op: 'upsert_character'
+      /** 修改目标实体 id（或本批 ref 别名）；缺省 = 新建。 */
+      entityId?: unknown
+      /** 新建的临时别名 / 修改时挂的引用别名，供本批后续命令绑定。 */
+      ref?: unknown
+      /** 只写要定制的字段（character: name/bio）。 */
+      fields?: unknown
+      reason?: unknown
+    }
+  | {
+      op: 'upsert_location'
+      entityId?: unknown
+      ref?: unknown
+      /** 只写要定制的字段（location: name/note）。 */
+      fields?: unknown
+      reason?: unknown
+    }
+
+/** 校验后的实体字段：白名单键 + 全字符串值（entityFold 归一产出）。 */
+export type ValidatedEntityFields = Record<string, string>
 
 /** 校验通过的执行命令（BatchValidation.commands → applyAiBatch →
  * simulateBatch 的形态）：与入站 AiCommand 同构，唯一差别是 update_node
  * 的 patch 已按目标节点类型完成键白名单与值形状校验并判别化绑定
- * NodeDataPatch（issue 16）——执行与撤销路径不再接受宽 Record 补丁。 */
+ * NodeDataPatch（issue 16），upsert 的 fields 已按实体种类完成白名单与
+ * 值形状校验（issue 44）——执行与撤销路径不再接受宽 Record 补丁。 */
 export type ValidatedCommand =
   | Extract<AiCommand, { op: 'create_node' | 'delete_node' | 'connect_edge' | 'disconnect_edge' }>
   | (Omit<Extract<AiCommand, { op: 'update_node' }>, 'patch'> & { patch: NodeDataPatch })
+  | (Omit<Extract<AiCommand, { op: 'upsert_character' | 'upsert_location' }>, 'fields'> & {
+      fields: ValidatedEntityFields
+    })
 
 /** 执行命令 → 入站形态（applyAiBatch 重校验用）：判别补丁剥回模型侧的
  * 宽 Record——validateAiBatch 的契约是入站信任边界，目标节点类型必须
@@ -72,11 +99,28 @@ export interface AiGraphSnapshot {
   /** 项目资产索引（id → MIME）：shot.refs 引用位的资产存在性与用途匹配校验
    * （§7.1/§11.3 的批命令对等）。空索引 = 无资产，引用位一律拒绝。 */
   assets: ReadonlyMap<string, string>
+  /** 设定集压缩视图（issue 44）：upsert 的 entityId 解析与场景/对白引用的
+   * 实体存在性/引用类型校验消费。缺省（旧测试夹具）= 不做实体校验；
+   * 运行时快照恒携带（graphSnapshotOf）。 */
+  settings?: AiEntitySnapshot
 }
 
-/** 预览卡的单行条目（§6：逐项列出受影响节点与变更类型）。 */
+/** 设定集实体快照：只携带引用校验需要的 id 与名称（issue 44）。 */
+export interface AiEntitySnapshot {
+  characters: ReadonlyArray<{ id: string; name: string }>
+  locations: ReadonlyArray<{ id: string; name: string }>
+}
+
+/** 预览卡的单行条目（§6：逐项列出受影响节点与变更类型；issue 44 增实体条目）。 */
 export interface PreviewItem {
-  kind: 'delete' | 'disconnect' | 'create' | 'update' | 'connect'
+  kind:
+    | 'delete'
+    | 'disconnect'
+    | 'create'
+    | 'update'
+    | 'connect'
+    | 'create_entity'
+    | 'update_entity'
   danger: boolean
   label: string
   /** 渲染 key = 来源命令序号（折叠时注入，排序后仍唯一稳定）。 */

@@ -1,7 +1,7 @@
 # PlotWeave 数据模型设计
 
 > 状态：v1（2026-08-28 定稿）
-> 实施状态：本文是 v1 **目标契约**，不表示当前旧运行态已经完成切换。`ProjectDocument` v1 类型、`settings.documents`（连同 characters/locations/props）的无损归一化与序列化、§11 加载管线及回归测试全部落地前，现有运行态仍按 v0 处理，**不得写入或保存 `schemaVersion: 1`**；否则会把未被旧模型承载的字段静默丢弃后再错误盖章为已迁移。
+> 实施状态（2026-09-09 核对）：`ProjectDocument` v1、加载归一化与序列化管线已落地；磁盘保存使用 `schemaVersion: 1`，旧 v0 文档经迁移后进入会话。本文同时保留目标架构与后续演进，不能据此认定每个示意接口均已实现；当前模块与命令映射见 §2、§10.5。已关闭 issue 的逐项结论和合并依据见[设计同步记录](design-sync.md)。以下历轮评审是历史记录，当前状态以正文的落地说明为准。
 > 本版相对草案的修订：ProjectDocument 补 `episodeTitles` 字段；§4.2 各 spec 字段对齐 UI 设计已实现的节点形态（场景卡 sceneNo/interior/weather、对白行 kind/side/vo、分支 options 入 spec）；§5 分支边不再持久化 label 拷贝；§6 Character/Location 字段对齐运行态实体（gradient/bio/note，长篇自由文本由 SettingsDocument 承载）；§11 明确归一化管线位于前端模型层，并登记 schemaVersion 0（旧扁平存储格式）→ 1 的迁移。
 >
 > 定稿评审修订（2026-08-29）：§9 补 `set_episode_title` 命令（集标题变更走命令通道）；`settings.documents` 补为 SettingsDocument 的持久化位置；§10.5 `load_project` 职责更正为信封级兼容（与 §11 分层一致）；分支边 `sourceHandle` 由数组下标（option-N）改为稳定选项 id（option-\<id\>），删除选项连带其连线进同一 `batch`，杜绝下标位移导致的静默改接。
@@ -135,6 +135,8 @@ PlotWeave 是 Tauri + React Flow + Rust 的单用户桌面工具：创作者在�
 
 ## 二、总体分层
 
+下图是目标架构的职责划分，`GraphStore` / `useGraphStore` 为设计名称，不是当前可导入的实现符号。
+
 ```
 React 组件层（节点组件、设定面板、资产库面板）
    ↓ 交互意图
@@ -150,6 +152,8 @@ Rust 持久化层（Tauri commands：文件读写、资产导入、设置与密�
 
 - 模型层是纯 TS：不可变更新，对外暴露只读快照。便于单测，也便于未来需要时平移到 Rust。
 - 画布状态的唯一真源是 GraphStore；React Flow 只作渲染与交互层，不持有业务状态。
+
+**当前实现映射（#6、#14、#16、#35、#39）**：`EditorView` 负责装配，`useEditorDocument` 持有会话文档，`useEditorController` 汇集按域 hooks，`EditorLayout`/`EditorCanvasRegion`/`EditorOverlays` 承载布局；撤销重做由 `history.ts` 的 `CommandStack` 承载。会话 `ProjectContent` 与磁盘 `ProjectDocument` 通过 `model/convert.ts` 门面转换，归一化阶段位于 `normalize*.ts`，序列化位于 `serialize.ts`。UI 补丁经 `nodes/patch.ts` 的 `NodeDataPatch` 按节点类型判别，`PatchShape` 去掉索引签名，序列化按节点联合穷尽分派；JSON 输入仍须运行时校验。`projectStore.ts` 是持久化门面，内部按 `memory`/`tauri`/`saveChain`/`seeds` 分域；Rust 项目存储位于 `store/`，库索引与删除恢复分别位于 `library_index/`、`library_journal/`。这些拆分不改变文档格式或产品行为。
 
 下文顺序：先定义数据本身（三~七）与引用规则（八），再定义变更机制（九：命令与撤销），然后是落地（十：存储；十一：加载归一化），最后是建立在命令通道之上的 AI 能力（十二）与演进方向（十三）。
 
@@ -488,7 +492,13 @@ interface AssetRef {
 
 控制文件不适用“只拒绝对应资产区”的降级：项目目录或库目录的任一级信任链失败时，必须按 §10.2 在任何控制文件 I/O 前拒绝整个项目或库操作；不能先读取 `project.json`/`library.json`，再仅把资产标为不可用。
 
+**媒体访问落地（#9、#26、#31）**：项目与库媒体均已接入 `pwmedia`，`get_asset_media_url` 只接收逻辑 scope 与 assetId；`library_dir_path`、`project_asset_path` 已移除，通用 `assetProtocol` 已停用且 scope 为空。#9 曾采用的资产子目录白名单是历史过渡方案。项目资产 id 在 URL 段中以 UTF-8 字节的十六进制编码保留完整值域；这只是编码，不是加密。
+
+项目媒体以磁盘 `assets.byId` 为权威；导入/生成后尚未防抖保存的资产由 Rust 在落盘管线登记到应用持有的 `PendingProjectAssets`，在索引空窗期供解析。加载时空白键重发通过 `register_project_asset_alias` 登记“新 id → 原磁盘键”别名，别名不携带路径，不复活已删除条目；项目控制文件缺失时拒绝服务并清理该项目登记。每次媒体请求仍重新打开并复验文件。当前 Tauri 响应采用有界缓冲交付，而非流式 body：库媒体上限 20 MiB、项目媒体上限 256 MiB，并发闸门为 4，许可持有至响应交付。超过 256 MiB 的项目文件可能可保存但无法预览，这是已登记的读取边界；不能把生成结果的 32 MiB 上限套在所有历史项目媒体上。
+
 ### 7.2 库资产的分类与编组
+
+**落地状态（#17、#25、#29）**：锚定句柄访问、1 MiB 库索引限读、脏条目隔离、日志驱动删除与恢复、Record 迁移、完整归一化、组命令及库命令重命名均已合入 `dev`。库操作由进程内互斥锁与跨进程文件锁串行化；列表及写入前先恢复未完成事务，返回 `warnings`/`cleanupPending`，只读告警态暂停写入。平台缺少身份绑定清理能力时仍保留隔离文件，不把“事务已实现”解释为“必定立即物理删除”。
 
 资产库要回答"我有哪些人物/场景/道具的哪些视图"，扁平标签不足以表达（"三视图"是结构而非标签），因此采用结构化分类 + 编组 + 自由标签三层：
 
@@ -518,20 +528,19 @@ interface AssetGroup {
 - **库文件/索引的可恢复提交协议**：`library/assets/` 文件与 `library.json` 的两个独立操作不构成事务，失败只能留下可诊断、不可被活动索引引用的隔离项/孤儿文件，不能留下“索引仍引用但媒体本体已不可恢复”的状态；下述 fsync 均包含目标平台的等价耐久屏障，无法提供时不得进入下一阶段。导入/收藏仍先通过 §7.1 完成临时文件写入、文件 flush/fsync、原子落位与资产父目录 fsync，确认可读后才耐久提交新增索引；索引失败只留下孤儿文件。删除若新索引中仍有其他条目引用同一已打开文件身份，则只提交去项索引，不移动或删除物理文件。否则采用身份绑定的隔离事务：① 通过受信句柄读取并归一化当前索引，逐组件 no-follow 打开待删普通文件、捕获平台稳定文件身份并保持文件/原父目录句柄；`.trash/` 缺失时只能在已验证资产根句柄下创建为应用私有目录并 fsync，且须确认与源文件同一文件系统（否则原子 rename 无法成立并在写日志前失败）；在 `library/asset-delete-journal.json` 以随机 transaction id 耐久记录 assetId、原 relPath、预期身份和未公开的 `assets/.trash/<随机名>`，日志原子提交与父目录 fsync 成功前不得移动文件。② 通过已持有的资产根、原父目录与 `.trash/` 目录句柄，把原目录项原子 rename 到隔离名并 fsync 两侧目录；随后 no-follow 打开隔离项并与步骤①身份比较。若 rename 窗口中目录项已被替换、身份不一致，则不得提交索引或删除隔离项；仅在原名仍空缺时用 no-replace rename 恢复，原名已被占用则保留隔离项与日志并报冲突，绝不覆盖后来文件。**身份冲突未解决期间的条目隔离**：凡因身份不符、路径占用或平台能力不足而保留日志的未完成事务，其对应 assetId 不得继续作为可用资产暴露——恢复/列表流程在规范化索引与内存投影中把该条目标为冲突不可用并随列表返回警告；标记期间媒体协议处理器与任何按 relPath 的打开拒绝为该 assetId 服务（原 relPath 可能已绑定后来文件，解析它会把占用者的替换文件当作原资产展示），也不得以该条目为源复制入项目或收藏；标记只随日志事务解决而解除——原名重新 no-replace 绑定预期身份、索引耐久提交去项或日志按恢复规则清除，不得靠重新列表静默消失。③ 隔离身份一致且耐久后才原子提交不含该条目的 `library.json` 并 fsync `library/`；提交失败时索引仍含该资产，恢复流程按日志把同一身份 no-replace 移回原位。④ 索引提交成功后，只能用绑定步骤①已打开身份的操作系统删除原语清理隔离项并 fsync `.trash/`；普通 `unlinkat(隔离名)`、再次 stat 后按名称 unlink 或任何 check-then-use 退化均禁止。平台没有身份绑定删除能力、删除/fsync 失败或进程中断时，保留隔离项并返回/记录 `cleanupPending`，索引不得回滚。启动及每次库列表/写入前先恢复日志：每条事务先重读规范化索引并按已打开身份复核其他活动条目；若其他条目已引用预期身份，不得移动或删除其当前目录项，隔离项存在时只按身份绑定能力清理该额外目录项、能力不足则保留 `cleanupPending`，隔离项不存在时可清除日志。没有其他活动引用且索引仍含 assetId 时：若隔离项尚未生成且原路径仍绑定预期身份，清除这条未开始事务；若隔离项身份一致，则只在原目标名空缺时 no-replace 回迁；其余缺失、身份不符或路径占用均保留日志、按上述冲突期隔离规则将条目标为冲突不可用并警告。索引已无 assetId 时，隔离项存在则只尝试身份绑定清理；隔离项已不存在且原路径不再绑定预期身份，视为清理已完成并清除日志；原路径仍绑定预期身份则重新执行身份核验隔离，不得按原名删除；能力不足均保留现场与 `cleanupPending`。日志根/条目异型、重复 transaction id、路径越出固定原资产位置或 `.trash/` 随机名单项时整份恢复进入只读告警态，所有库写入/删除暂停，不猜测路径、不移动或删除任何文件。事务完成且相关目录已 fsync 后才原子移除日志项；`.trash/` 永不参与 AssetRef 解析、媒体服务或普通孤儿扫描，显式清理也必须消费日志并遵守同一身份绑定规则。
 - **分工**：`kind` 回答"是什么"，`view` 回答"哪个角度"，`groupId` 把同一主体的三视图绑成一组；`tags` 只用于前两者覆盖不了的自由维度（如「赛博朋克」「雨夜」）。能用结构化字段表达的不写成标签，避免同义标签发散。
 - **迁移规则（`prop` → `wardrobe`）**：现实剧组服化道同属一个部门，旧 `prop`（道具）条目并入 `wardrobe`（服装/妆发/道具）；新增 `colorlight` 承载色彩脚本（color script）与光影氛围参考。
-- **现行库索引兼容迁移**：当前已发布的 `library.json` 使用 `assets: LibraryAsset[]`/`groups: AssetGroup[]`，条目 `createdAt` 是 epoch 毫秒、`source` 缺失，且可选 `view`/`groupId` 用 `null` 表示。升级目标索引前先安全预检两个数组及普通对象成员，再复用 §11.1 的 v0 数组键化规则校验 id：重复 id 保留文档序首项、后续项重发本域未占用 id，缺失/非字符串/空白 id 同样重发，最后才键化为 `assets.byId`/`groups.byId`。组 id 重复时既有 `groupId` 引用本就解析到首项，不随后续项重发而改接；仅一个空白原 id 组时建立映射并同步改写精确匹配的 `groupId`，多个同值空白组则映射歧义，删除相关 `groupId` 并警告。当前库资产均由本地导入产生，缺失 `source` 确定性补为 `upload`，非负安全整数且能表示有效日期的毫秒时间戳转为 UTC ISO 8601，`null` 可选字段删除，旧 `prop` kind 按上条改写。完成这些兼容改写及 Record 键/id 引用同步后才按上一条顺序执行完整 `AssetGroup`、`LibraryAsset` 与跨条目 groupId/kind 校验；缺失/异型时间戳或显式未知 source 不得猜测，隔离条目并警告。不得把目标校验直接套在旧数组成员上，否则所有缺 source、数字时间戳的现有库资产都会被误删。
+- **旧库索引兼容迁移（已实现）**：当前 `library.json` 使用 `assets.byId`/`groups.byId` Record；旧格式使用 `assets: LibraryAsset[]`/`groups: AssetGroup[]`，条目 `createdAt` 是 epoch 毫秒、`source` 缺失，且可选 `view`/`groupId` 用 `null` 表示。读取旧格式时先安全预检两个数组及普通对象成员，再复用 §11.1 的 v0 数组键化规则校验 id：重复 id 保留文档序首项、后续项重发本域未占用 id，缺失/非字符串/空白 id 同样重发，最后才键化为 `assets.byId`/`groups.byId`。组 id 重复时既有 `groupId` 引用本就解析到首项，不随后续项重发而改接；仅一个空白原 id 组时建立映射并同步改写精确匹配的 `groupId`，多个同值空白组则映射歧义，删除相关 `groupId` 并警告。当前库资产均由本地导入产生，缺失 `source` 确定性补为 `upload`，非负安全整数且能表示有效日期的毫秒时间戳转为 UTC ISO 8601，`null` 可选字段删除，旧 `prop` kind 按上条改写。完成这些兼容改写及 Record 键/id 引用同步后才按上一条顺序执行完整 `AssetGroup`、`LibraryAsset` 与跨条目 groupId/kind 校验；缺失/异型时间戳或显式未知 source 不得猜测，隔离条目并警告。不得把目标校验直接套在旧数组成员上，否则所有缺 source、数字时间戳的现有库资产都会被误删。
+- **迁移身份稳定性**：检测到迁移/修复即耐久回写，保证重发 id 跨读取稳定。只读告警态或迁移挂起态不暴露未落定的新身份；不能在每次列表时再次产生漂移 id。
 - **绑定方式**：分类信息写在 `library.json` 索引项里、以资产 id 为键；改标签、换组、改视角只更新索引，不动媒体文件。
 - **快速读取**：`library.json` 启动时全量载入内存（桌面量级，数千条索引项仅数百 KB），列表页筛选/搜索全走内存过滤，媒体文件懒加载。规模失控时再迁 SQLite（见十三）。
 
 ### 7.3 流转规则
 
 - **库资产进入项目 = 拷贝**：把库素材放上画布或设为角色头像时，文件拷入项目 `assets/` 并生成项目级 AssetRef（新 id）。项目不持有对库文件的引用，因此库侧可随时清理而不产生项目内的悬空引用。
-- **AI 生成结果（未来接入）必须落盘后再引用**：厂商临时 URL 不得出现在文档里——临时链接会过期，直接引用会导致画布内容日后无法打开。生成结果默认落项目资产，用户可显式「收藏到资产库」。
+- **AI 生成结果必须落盘后再引用（文生图已实现）**：厂商临时 URL 不得出现在文档里——临时链接会过期，直接引用会导致画布内容日后无法打开。生成结果默认落项目资产；「收藏到资产库」及 `collect_library_asset` 仍待实现，#29 关闭不包含该链路。
+- **浏览器预览拷贝语义（#8）**：导入时基于源 blob 创建独立 object URL，绑定项目资产 id；删除源库条目不影响已导入缩略图。此映射仅在会话内有效，浏览器重载后丢失；预览回退不提供桌面端的文件持久化。
 - **延迟回收**：删除引用资产的节点/设定时不立即删文件，由后续「清理未引用资产」命令统一回收（首版可只做手动触发）。
 - **项目复制 = 文档级复制**：复制件的 `project.id` 必须替换为目标项目的新 id（持久化层强制 id = 目标路径 id，禁止沿用源 id），创建时间取复制时刻；资产索引随文档原样带走（与 `avatarAssetId` 等
-  引用字段保持一致解析，§8.1）；媒体文件的整目录拷贝（project.json + assets/）
-  随 §7.1 项目资产落地时升级为 Rust 侧原子复制——届时复制件的 relPath 指向
-  自己目录内的新文件。§7.1 落地前应用不管理媒体文件，不存在「索引在而文件不在
-  自己目录」的中间态。**复制命名策略保证不超上限**：新名 = `{源名} 副本`（已存在
+  引用字段保持一致解析，§8.1）。当前桌面实现先创建副本，再经 Rust `copy_project_assets` 将媒体拷入副本 `assets/`，最后保存文档；失败时清理副本并报告错误，清理也失败则报告残留副本。整个流程是分步操作，不宣称跨文件原子事务。**复制命名策略保证不超上限**：新名 = `{源名} 副本`（已存在
   则 ` 副本 2`、` 副本 3`…），拼接结果按字符数超过 64（§9.3 项目名校验口径）时先
   截断源名至可容纳后缀再拼接——直接追加后缀会让接近上限的合法源名复制即被
   持久化层拒绝，复制操作必须总能成功。
@@ -822,7 +831,8 @@ type GraphCommandOf<K extends CommandType> = Extract<GraphCommand, { type: K }>
 
 ### 9.4 撤销规则
 
-- 撤销/重做栈仅存于会话，不持久化；上限 50 条。
+- 撤销/重做栈仅存于会话，不持久化；目标 `GraphStore` 规格的 50 条与当前 `CommandStack` 默认 200 条存在差异，当前实现还在 800ms 内合并同键补丁。本次仅记录实现差异，不调整容量。
+- **资产重做前复验（#10，已实现）**：库导入与生成产物命令通过可选 `redoGuard` 调用 `projectAssets.revalidate`，在资产重新进入索引前异步复验；失败时画布不变、命令保留在重做栈并显示错误，文件恢复后可重试。校验期间新编辑、撤销（含空栈意向）或再次重做都会推进栈版本，使旧校验的成功或迟到失败失效；普通无 guard 命令保持同步重做。删除撤销恢复资产的同构路径仍未增加复验，是 #10 明确保留的边界。
 - 拖拽中发 `move_node { transient: true }`（过程帧只更新内存文档，不置脏不落盘、不进栈），松手时补发一条正式命令进撤销栈。**正式命令的 inverse 不得按默认规则从 docBefore 捕获**——transient 帧已把文档推进到最后一帧拖拽位置，从 docBefore 捕获会让 undo 只回到最后一个拖拽帧（常与终点相同）而非拖拽起点；dispatcher 必须在手势开始时捕获并持有各被拖节点的原坐标，松手提交正式 `move_node`/`resize_node` 时以该原坐标显式填充 inverse，或把整个手势（transient 帧 + 正式命令）作为同一手势事务合并捕获一次 inverse。缩放（resize）手势同款。
 - `update_node_ui`（选中、展开折叠）与 `update_viewport` 不进撤销栈，但二者语义不同：`update_node_ui` 只改 §4.1 的 `ui` 会话态（`selected`/`expanded`，§3 明确不持久化、加载时重置），**不置脏、不落盘**——纯选择操作不得触发防抖保存，否则会让 Rust 重新生成 `updatedAt`、错误改变首页最近项目排序；若未来出现真正需要持久化的 UI 字段，须为其定义独立命令，不得搭 update_node_ui 的便车。`update_viewport` 则必须最终落盘——`graph.viewport` 随项目持久化（§3），平移/缩放的过程帧发 `update_viewport { transient: true }`（只更新内存、不置脏不落盘），交互结束时补发一条非 transient 的 `update_viewport` 终帧：置脏并随 §10.5 防抖保存落盘，但按本条仍不进撤销栈。若全部视口变更都停留在 transient 帧，关闭项目时视口修改不会产生可保存的脏状态，重开只能得到旧视口或 fitView。
 
@@ -925,6 +935,8 @@ provider 的 API key 以**密文 `keyEnc`** 存于 provider 配置：Rust `seal`
 
 ### 10.5 Rust 持久化命令（Tauri commands）
 
+下表按领域职责描述参数；实际 IPC 注册与参数名以 `src-tauri/src/lib.rs` 和相应函数签名为准。库的 `list_library_assets` / `import_library_asset` / `update_library_asset` / `delete_library_asset` 与两个组命令已在 #29 对齐。尚未对齐的目标接口显式标注如下，不能直接作为当前 invoke 名称。
+
 | 命令 | 职责 |
 | --- | --- |
 | `list_projects()` | 按 §10.2 先验证应用根、项目目录与每个候选控制文件，再扫描项目文档真源并与 `index.json` 缓存校正后返回内存投影；索引缺失、损坏或与文档的 id/name/updatedAt 不一致时重建并原子回写，不直接返回陈旧缓存 |
@@ -933,22 +945,26 @@ provider 的 API key 以**密文 `keyEnc`** 存于 provider 配置：Rust `seal`
 | `save_project(projectId, doc)` | 按 §10.2 验证完整目录、目标与临时文件信任链后，先校验完整项目信封：确认 `doc.project` 是普通对象；`project.id` **无条件以受信路径参数 `projectId` 覆盖**——调用方自报的 id 不构成授权，不得把与路径参数不一致的 id 落盘（否则内存会话、项目真源与首页索引出现分裂身份）；`project.name` 按 §9.3 项目名校验口径校验（与 rename_project/create_project 同规则）——先验 typeof string，去首尾空白后非空且按字符数 ≤ 64，非法值整次拒绝（保存边界不替调用方修复，普通命令无法产生的名称不得经原始 IPC 持久化），合法时采用规范化后的值。信封其余必需顶层成员同款前置校验：`schemaVersion` 必须严格等于当前支持版本（1）——缺失、异型或未来版本号整次拒绝（缺失/异型版本落盘后下次加载按 §11.1 第 0 步标记待修复，未来版本则直接拒绝，均不得由保存产生）；`graph` 是普通对象且其 `nodes`/`edges` 均为数组，`settings` 是普通对象且其 `characters`/`locations`/`props`/`documents` 各桶均为普通对象——任一异型即整次拒绝，不得把 `graph: null`、异型 `settings` 之类的载荷落盘后靠 §11.1 归一化重置为空容器，把无法判型的损坏静默变成内容丢失。`episodeTitles` 必须是普通对象（非数组、非 `null`）且键值满足 §11.1 第 3 步的键值域（规范十进制正整数安全整数键、字符串值）——数组型标题表等异型落盘后下次加载会被重置为 `{}`，载荷中的标题静默丢失，保存边界同样直接拒绝。`project` 其余元数据同域校验：`createdAt` 与 `updatedAt` 均须为可解析的 ISO 8601 字符串（`updatedAt` 虽被本命令无条件覆盖，异型值仍整次拒绝——保存边界不接受形状不完整的信封）；可选 `description` 存在时须为字符串；`graph.viewport` 存在时须为普通对象且 `x`/`y` 为有限数值、`zoom` 为正有限数（§3 缺省语义只允许字段缺省，不允许异型值落盘）。再确认 `doc.assets`/`doc.assets.byId` 均为普通对象，再把每个键和值当作不可信输入执行 §7.1 完整形状、Record 键/id 一致性及 MIME/时间戳规范形式校验（保存边界不替调用方修复，非规范值直接拒绝，避免内存与落盘分叉），并逐项以受信项目资产根句柄 no-follow 打开当前 relPath、确认普通文件和真实路径包含关系；任一校验失败即在创建临时文件、生成保存时间或更新索引前拒绝整次保存，返回具体字段或 assetId 诊断，不得静默剥离。全部通过后，Rust 为本次尝试只取一次系统时间，**无条件覆盖**调用方携带的 `doc.project.updatedAt`（不信任旧值、未来值或前端时钟），再以排他创建的同目录临时文件 + flush + rename 原子替换 `project.json`；随后以规范化后的 name 与同一 updatedAt 更新可重建的 `index.json` 缓存，跨文件中断由 §10.2 的启动/列表校正恢复。成功回执返回权威 updatedAt，供前端刷新内存元数据而不触发新一轮脏写；失败重试重新执行信封与资产复验并取新时间，`serializeProject` 只负责结构序列化、不负责保存时刻盖戳 |
 | `delete_project(projectId)` | 按 §10.2 验证完整目录/文件信任链后只删除受信项目控制文件/目录；目标缺失为幂等成功，符号链接或越界目标拒绝且不跟随 |
 | `validate_project_asset(projectId, asset)` | `set_asset` 的只读 Rust 前置命令：projectId 只接受 dispatcher 当前受信活动会话值，不接受命令负载自报；先按 §7.1 校验完整 AssetRef 与词法 relPath，再从受信项目目录/资产根句柄逐组件 no-follow 打开目标，确认它是资产根内普通文件；返回本次规范化后的完整 AssetRef。不得缓存结果或把它视为保存授权；公开 dispatcher 只把本次返回值立即交给模块私有 reducer，失败时活动文档、历史栈与脏标记零变更 |
-| `import_asset(projectId, file)` | 按 §7.1 从受信项目目录句柄打开 `assets/` 根，在其下排他创建临时文件并以句柄相对 rename 落位，返回 `AssetRef`；不得按拼接后的绝对目标路径写入 |
-| `get_asset_media_url(scope, assetId)` | scope 只允许 `{ kind: 'project'; projectId: string }` 或 `{ kind: 'library' }`，不得接受目录/路径字符串；命令只返回含逻辑 scope + assetId 的 opaque URL，不返回本机路径。Rust 协议处理器在每次媒体请求时按 §7.1 验证 projectId、从当前规范化索引解析 relPath，并以受信资产根句柄逐组件 no-follow 打开、确认普通文件后流式响应 |
+| `import_asset(projectId, file)`（目标接口） | 当前已注册的是 `import_project_asset_from_library(id, libraryAssetId)`，用于库 → 项目；通用文件导入接口尚未注册。按 §7.1 从受信项目目录句柄打开 `assets/` 根，在其下排他创建临时文件并以句柄相对 rename 落位，返回 `AssetRef`；不得按拼接后的绝对目标路径写入 |
+| `get_asset_media_url(scope, assetId)` | scope 只允许 `{ kind: 'project'; projectId: string }` 或 `{ kind: 'library' }`，不得接受目录/路径字符串；命令只返回含逻辑 scope + assetId 的 opaque URL，不返回本机路径。Rust 协议处理器在每次媒体请求时按 §7.1 验证 projectId、从当前规范化索引解析 relPath，并以受信资产根句柄逐组件 no-follow 打开、确认普通文件后按 §7.1 的有界缓冲策略响应 |
+| `register_project_asset_alias(id, blankKey, freshId)` | 当前已实现：登记加载归一化的空白键重发别名，供修复落盘前解析媒体；不接受 relPath，规则见 §7.1 |
+| `copy_project_assets(fromId, toId)` / `verify_project_assets(id, assets)` | 当前已实现：前者经受信句柄复制项目媒体，后者提供加载侧资产实路径复验，供 §7.3 复制与 §11 归一化调用 |
 | `list_library_assets()` | 先按 §7.2 通过受信控制文件与资产目录句柄恢复 `asset-delete-journal.json` 中的未完成事务；存在无法安全自动恢复的身份冲突时保留现场并返回警告。随后读 `library.json`，迁移并完整归一化 LibraryAsset/AssetGroup 后返回资产库列表（含编组、`cleanupPending` 与其他警告） |
 | `import_library_asset(file, meta)` | 按 §7.2 校验 meta 与完整构造结果后，按 §7.1 通过受信库资产根句柄安全拷贝，完成文件 flush/fsync、原子落位与资产父目录 fsync 后确认可读，再耐久提交新增索引；索引失败时只留下可诊断孤儿文件。meta 含 name/kind/view/groupId/tags |
 | `update_library_asset(assetId, patch)` | 按 §7.2 校验白名单 patch 并复验完整合并结果后修改索引项：改名、改标签、改视角、换编组（只动索引不动文件） |
 | `upsert_library_group(group)` | 按 §7.2 校验完整 AssetGroup 后新增/更新编组；kind 变更不得与成员资产冲突 |
 | `delete_library_group(groupId)` | 要求组存在；原子删除组并剥离成员资产的 groupId，不留下悬空编组引用 |
 | `delete_library_asset(assetId)` | 按 §7.2 从本次受信规范化索引解析 id：若新索引仍有其他条目引用同一已打开文件身份，仅耐久提交去项索引；否则先耐久写 `asset-delete-journal.json`，再把身份核验后的原目录项通过受信句柄原子移入 `assets/.trash/` 随机名并复核移动后身份，隔离与目录 fsync 成功后才提交去项索引。提交后只用绑定已打开身份的平台原语清理隔离项；普通按名称 unlink 禁止。身份冲突、平台能力不足、清理或 fsync 失败均按阶段回迁或返回 `cleanupPending`，由启动/列表/后续写入按日志恢复；不得回滚已提交索引，也不得覆盖原名处后来出现的文件 |
-| `collect_library_asset(projectId, projectAssetId, meta)` | 按 §7.1 分别以受信项目/库资产根句柄 no-follow 读取与写入，把项目资产完成文件 flush/fsync、原子落位与资产父目录 fsync 后才耐久提交新增库索引（「收藏」）；索引失败只留下可诊断孤儿文件 |
-| `get_settings()` / `update_settings(patch)` | 非敏感配置读写 |
+| `collect_library_asset(projectId, projectAssetId, meta)`（待实现） | #29 明确保留项目 → 库收藏链路；以下为目标职责。按 §7.1 分别以受信项目/库资产根句柄 no-follow 读取与写入，把项目资产完成文件 flush/fsync、原子落位与资产父目录 fsync 后才耐久提交新增库索引（「收藏」）；索引失败只留下可诊断孤儿文件 |
+| `get_settings()` / `update_settings(patch)`（目标名称） | 当前 IPC 为 `load_prefs()` / `save_prefs(prefs)`，读取/保存整份设置；不可把目标 patch 接口当作现有协议 |
 | `set_provider_key(provider, key)` | 加密并返回 envelope 密文（由前端随 settings 落盘；解密走 `seal::open`，无独立读命令） |
-| `llm_chat(messages, tools)` | LLM 请求代理：key 由 settings 密文在 Rust 内存解密，绕开 webview CORS（见 12.2） |
+| `llm_chat(messages, tools)` | LLM 请求代理：key 由 settings 密文在 Rust 内存解密，绕开 webview CORS（见 12.2）；#15 已补 120 秒请求超时、16 MiB 响应体流式限读，与图像代理共用 `http_util`，发送/读取超时有明确诊断 |
 | `llm_image_generate(request)` | 文生图代理（§13 首版）：单对象载荷（projectId/jobId/provider 配置/model/prompt/size），key 解密同 `llm_chat`；请求 OpenAI 兼容 `/images/generations`（b64_json 优先，url 成员回退下载），响应体流式限读（主响应 64 MiB 文本 / url 回退 32 MiB 字节，超限即中止）；产物按字节魔数定型 MIME（PNG/JPEG/WebP/GIF，provider 声称的 content-type 不作为依据）、过 32 MiB 上限后经原子写内核落盘进项目 `assets/`，§9.3 预检（形状 + 实路径复验）在命令内、返回前完成，前端单次 IPC 直收已校验的 `source=generated` AssetRef 并入索引。请求返回后与落盘前各查一次取消标志：协作式取消即放弃结果 |
 | `llm_image_cancel(jobId)` | 协作式取消：登记取消标志；进行中的 `llm_image_generate` 会在检查点放弃结果（HTTP 请求本身不中断，由超时约束兜底） |
 
 ## 十一、加载与归一化
+
+**实现入口（#6、#39）**：`model/convert.ts` 的 `parseProject` 负责信封判型与阶段编排；容器、节点、键控列表、边、资产、设定、引用分别由 `normalizeContainers`、`normalizeNodes`、`normalizeKeyedLists`、`normalizeEdges`、`normalizeAssets`、`normalizeSettings`、`normalizeRefs` 等模块处理，输出由 `serialize.ts` 统一序列化。原 `convert.ts`/`convert.test.ts` 与 `normalizeContainers` 的历史规模豁免已随拆分失效；阶段顺序和修复语义保持不变。
 
 **v0 内嵌设定引用兼容子步骤（逻辑上属于第 0 步预检与第 1 步迁移 ④，优先于下文通用列表补缺）**：当前已发布的旧项目不只使用 `data.characterIds`/`locationId`/字符串 speaker；还可能把场景出场角色写成 `data.characters: Array<{ label, gradient? }>`、地点写成 `data.location: string`，把对白行 speaker 写成 `{ label, gradient? }`。迁移器必须在把缺失的 `characterIds` 补成空数组、校验新形态 speaker 或拆分节点四分区之前识别并保留这些字段：
 
@@ -1001,11 +1017,13 @@ Agent 不直接触碰文档状态，只产出 `GraphCommand`（`actor: 'agent'`�
 
 ```
 用户对话 → [系统提示 + 画布快照摘要 + 工具 schema] → LLM（BYOK，OpenAI 兼容 tool calling）
-        → 解析 tool_calls → 映射为 GraphCommand 批量执行 → 结果摘要回喂 →（需要时再一轮）
+        → 解析 tool_calls / JSON 命令 → 整批校验（失败反馈并有限纠错）
+        → 合法改动预览 → 用户确认 → 命令通道执行（整批一步撤销）
 ```
 
-- **工具集 = 命令清单的封装**：读工具 `get_graph_snapshot` / `get_node`；写工具 `create_node` / `delete_node` / `update_node_spec` / `connect_edge` / `disconnect_edge` / `batch`。
+- **工具集 = 命令清单的封装**：读工具 `get_graph_snapshot` / `get_node` / `get_settings_snapshot`；写工具 `create_node` / `delete_node` / `update_node_spec` / `connect_edge` / `disconnect_edge` / `upsert_character` / `upsert_location` / `batch`。
 - **节点字段协议单一来源（issue 41）**：各类型 `data`/`patch` 的合法字段表由前端 `ai/nodeFields.ts` 生成并三处共用——系统提示、写工具描述（create_node / update_node_spec / batch 通道）与整批校验白名单，字段语义对齐 §4.2 节点 `spec`（如节奏卡只允许 `name`/`tone`/`episodeNo`）。模型输出表外字段时整批拒绝，具体校验错误按 tool 协议或 user 消息回喂模型做有限次纠错重试（≤3 次产出）；耗尽后保留错误预览卡、画布不变，不静默丢弃或映射语义不匹配的字段。
+- **设定实体写通道（issue 44，首期已落地）**：`upsert_character` / `upsert_location` 落地 §9.2 的设定命令语义，实体字段协议由 `ai/entityFields.ts` 单一来源生成（机制同节点字段表，系统提示/工具描述/校验白名单三处共用）。`get_settings_snapshot` 读工具给出全部角色/地点的 id、名称与小传/备注（props/documents 仅只读清单，正文不进上下文）。批次内规则：新建不带 entityId、由应用分配真实 id 与默认头像样式，`ref` 临时别名供同批 `characterIds` / `locationId` / `lines[].speaker` 引用（执行期解析为真实 id 落地，临时 ref 不落盘）；修改必须以 entityId 精确指向既有实体、fields 只写要改的字段（未提及字段保持不变），名称只作展示、不作为定位或覆盖依据——同名候选歧义由模型说明澄清，不做静默覆盖或合并。整批校验随之扩展：实体字段白名单与值形状、场景/对白结构化引用的实体存在性与引用类型（跨类型误绑拒绝），无效整批拒绝，依赖失败 upsert 的引用按 contingent 跳过（随前序修复自愈）；预览确认后按当前项目状态重校验再执行，用户在预览后的实体改动由此被发现。实体改动与节点绑定折叠为**一个复合命令**：一步撤销/重做同时恢复设定集与画布两侧，未参与编辑的 props/documents 透传保真。**首期边界**：不开放 AI 删除/合并实体，不开放道具编辑与设定文档（长篇小传/世界观/术语表）写入——模型应说明边界并可提供文本草稿由用户手动录入，不得创建分镜卡/场景卡冒充设定档案；文档查看/编辑 UI、按需全文读取与 `upsert_document` 另行分阶段实施（后续任务）。
 - **快照摘要而非全量**：大项目全量 JSON 会超出上下文，默认只给压缩视图（节点 id/type/label/连接关系），详情由模型用读工具按需拉取。
 - **调用路径**：前端驱动循环；LLM 请求经 Rust command `llm_chat` 代理发出——API key 以密文随 settings 落盘、在 Rust 内存解密，前端不持有明文，同时绕开 webview 的 CORS 限制。
 - **可控性**：Agent 的写操作执行前弹批量预览（涉及哪些节点、什么变更），用户确认后才进命令通道；undo 始终兜底。

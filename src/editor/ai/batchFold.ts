@@ -10,15 +10,15 @@ import {
 } from '../graphRules'
 import { dataPatchOf } from '../nodes/patch'
 import { AI_FIELD_KEYS } from './nodeFields'
+import {
+  entityScopeOf,
+  foldUpsert,
+  registerFailedEntityUpsert,
+  type EntityFoldHost,
+} from './entityFold'
 import { contingentUpdateIssue, NODE_TYPE_LABELS, payloadIssue } from './payloadCheck'
 import { branchOptionsError, normalizeNodeFields, plainObject } from './patchShape'
-import type {
-  AiGraphSnapshot,
-  BatchIssue,
-  BatchValidation,
-  PreviewItem,
-  ValidatedCommand,
-} from './commands'
+import type { AiGraphSnapshot, BatchValidation } from './commands'
 
 /**
  * AI 批命令的逐条折叠校验实现域（commands.ts 拆分，issue 39）：在
@@ -72,8 +72,10 @@ function reasonOf(cmd: Record<string, unknown>): string {
 /** 折叠校验的虚拟边：端点 + 源端口/连线类型（与 AiGraphSnapshot.edges 同形）。 */
 type VirtualEdge = EndpointPair & { sourceHandle?: string | null; type?: string }
 
-/** 折叠校验的虚拟图状态：随每条命令演进的最终态投影。 */
-interface FoldState {
+/** 折叠校验的虚拟图状态：随每条命令演进的最终态投影。
+ * 实体域（issue 44）经 EntityFoldHost 接口并入：既有 + 本批投影的实体
+ * 注册表、ref 别名、失败 upsert 的 ghost 登记由 entityFold.ts 消费。 */
+interface FoldState extends EntityFoldHost {
   labels: Map<string, string>
   types: Map<string, string>
   /** branch 节点 id → 选项列表（校验 optionIndex 并解析稳定选项 id 端口）。 */
@@ -96,10 +98,6 @@ interface FoldState {
   failedEdgePairs: Map<string, ReadonlySet<string>>
   /** 项目资产索引（id → MIME）：shot.refs 引用位校验用。 */
   assets: ReadonlyMap<string, string>
-  items: PreviewItem[]
-  issues: BatchIssue[]
-  commands: ValidatedCommand[]
-  fail: (index: number, message: string) => void
 }
 
 /** AI 可补丁的节点类型（NODE_FIELD_KEYS 的键域）：图片节点不在此域
@@ -135,7 +133,7 @@ function foldCreate(st: FoldState, cmd: Record<string, unknown>, index: number):
   if (!(nodeType in NODE_TYPE_LABELS)) return st.fail(index, `未知节点类型：${nodeType || '（空）'}`)
   const data = cmd.data ?? {}
   if (!plainObject(data)) return st.fail(index, 'data 必须是字段对象')
-  const dataIssue = payloadIssue(nodeType, data, st.assets)
+  const dataIssue = payloadIssue(nodeType, data, st.assets, st.entityScope)
   if (dataIssue) return st.fail(index, dataIssue)
   const typeLabel = NODE_TYPE_LABELS[nodeType]
   const name = asText(data.name) || asText(data.prompt) || '未命名'
@@ -168,14 +166,19 @@ function foldUpdate(st: FoldState, cmd: Record<string, unknown>, index: number):
     // 不改变已声明的类型语义，按该类型的完整写载荷错误即使 create 修复后
     // 仍存在，首轮即点名，不额外消耗纠错轮次
     const owner = st.refOwner.get(asText(cmd.nodeId))
-    const issue = contingentUpdateIssue(owner === undefined ? undefined : st.types.get(owner), patch, st.assets)
+    const issue = contingentUpdateIssue(
+      owner === undefined ? undefined : st.types.get(owner),
+      patch,
+      st.assets,
+      st.entityScope,
+    )
     if (issue !== null) st.fail(index, issue)
     return
   }
   const id = resolveRef(st, cmd, 'nodeId')
   if (!id) return st.fail(index, `节点不存在：${asText(cmd.nodeId)}`)
   const nodeType = st.types.get(id)
-  const payloadErr = payloadIssue(nodeType ?? '', patch, st.assets)
+  const payloadErr = payloadIssue(nodeType ?? '', patch, st.assets, st.entityScope)
   if (payloadErr) return st.fail(index, payloadErr)
   st.items.push({
     kind: 'update',
@@ -541,13 +544,16 @@ function foldEdge(st: FoldState, cmd: Record<string, unknown>, index: number, op
   foldConnectEdge(st, cmd, index, src, dst, pairLabel)
 }
 
-/** 折叠器分发表：op → 处理函数。 */
+/** 折叠器分发表：op → 处理函数。设定实体命令（issue 44）复用实体域的
+ * 折叠内核（entityFold.ts），共享同一虚拟投影与问题收集。 */
 const FOLDERS: Record<string, (st: FoldState, cmd: Record<string, unknown>, index: number) => void> = {
   create_node: foldCreate,
   update_node: foldUpdate,
   delete_node: foldDelete,
   connect_edge: (st, cmd, index) => foldEdge(st, cmd, index, 'connect_edge'),
   disconnect_edge: (st, cmd, index) => foldEdge(st, cmd, index, 'disconnect_edge'),
+  upsert_character: (st, cmd, index) => foldUpsert(st, cmd, index, 'character'),
+  upsert_location: (st, cmd, index) => foldUpsert(st, cmd, index, 'location'),
 }
 
 /** 失败连线变更的原始端点对键（op + 模型自报 token，含拼错的端点）。 */
@@ -623,6 +629,10 @@ function registerFailedMutation(st: FoldState, raw: Record<string, unknown>, ind
   }
   if (raw.op === 'connect_edge' || raw.op === 'disconnect_edge') {
     st.failedEdgePairs.set(edgePairKey(raw.op as string, raw), residualEdgesAt(st, raw))
+    return
+  }
+  if (raw.op === 'upsert_character' || raw.op === 'upsert_location') {
+    registerFailedEntityUpsert(st, raw, index)
   }
 }
 
@@ -640,11 +650,21 @@ export function validateAiBatch(rawCommands: unknown, graph: AiGraphSnapshot): B
     failedBranchOptionUpdates: new Set(),
     failedEdgePairs: new Map(),
     assets: graph.assets,
+    // 设定集投影（issue 44）：快照未携带时不做实体校验（旧夹具兼容），
+    // 运行时快照恒携带（graphSnapshotOf）
+    characters: new Map((graph.settings?.characters ?? []).map((c) => [c.id, c.name])),
+    locations: new Map((graph.settings?.locations ?? []).map((l) => [l.id, l.name])),
+    virtualEntityIds: new Set(),
+    entityRefs: new Map(),
+    ghostEntities: new Set(),
     items: [],
     issues: [],
     commands: [],
     fail: (index, message) => st.issues.push({ index, message }),
   }
+  // 实体解析口径（issue 44）：快照未携带设定集时不做实体校验（旧夹具兼容），
+  // 运行时快照恒携带（graphSnapshotOf）
+  if (graph.settings !== undefined) st.entityScope = entityScopeOf(st)
 
   if (!Array.isArray(rawCommands)) {
     return { ok: false, items: [], commands: [], issues: [{ index: -1, message: '批次不是命令数组' }], hasDeletes: false }
