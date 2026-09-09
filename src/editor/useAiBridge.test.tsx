@@ -186,6 +186,20 @@ describe('useAiBridge（§6/§12 AI 桥回调族）', () => {
     expect(commands).toHaveLength(0)
   })
 
+  it('applyAiBatch：恢复的待执行卡使用重校验后的规范化命令', () => {
+    const { result, state } = setup()
+    // 会话文件是本地 JSON；恢复层可遇到带空格的旧/损坏 nodeType。执行边界
+    // 必须采用重校验产物，不能把原始载荷交给节点工厂。
+    const restored = {
+      op: 'create_node',
+      nodeType: ' scene ',
+      data: { name: '恢复场景' },
+    } as unknown as ValidatedCommand
+
+    expect(result.current.applyAiBatch([restored])).toBeNull()
+    expect(state.nodes[state.nodes.length - 1]?.type).toBe('scene')
+  })
+
   it('applyAiBatch：合法批次整批落地为一条复合命令，undo 一步回滚', () => {
     const { result, state, commands, closeSettings } = setup([sceneNode('s1'), branchNode('b1')])
     const batch: ValidatedCommand[] = [

@@ -136,7 +136,7 @@ function applyValidatedBatch(
     return `改动无法安全执行：${fresh.issues[0]?.message ?? '批次校验未通过'}`
   }
   const sim = simulateBatch(
-    batch,
+    fresh.commands,
     ctx.ops,
     ctx.nodesRef.current,
     ctx.edgesRef.current,
