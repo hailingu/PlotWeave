@@ -310,4 +310,43 @@ describe('App ✦AI 会话保存失败', () => {
     expect(editorProps.current.aiSessionError).toContain('磁盘已满')
     expect(editorProps.current.aiSessionRetryable).toBe(true)
   })
+
+  it('保存在途时重开项目：保留区在加载屏障之后读取，拒绝晚到仍命中', async () => {
+    await openEditor()
+    let rejectSave!: (err: Error) => void
+    store.saveAiSession.mockImplementation(
+      () => new Promise((_resolve, reject) => { rejectSave = reject }),
+    )
+    const changed = {
+      schemaVersion: 1 as const,
+      entries: [{ id: 1, kind: 'note' as const, text: '在途未落盘' }],
+    }
+    await act(async () => {
+      ;(editorProps.current.onSaveAiSession as (value: typeof changed) => Promise<void>)(changed).catch(
+        () => undefined,
+      )
+    })
+    await act(async () => {
+      ;(editorProps.current.onBackHome as () => void)()
+    })
+    expect(await screen.findByTestId('home')).toBeTruthy()
+
+    // 重开：load 挂起期间保存拒绝落定（保留区在屏障内被写入）
+    let releaseLoad!: (doc: ProjectContent) => void
+    store.load.mockImplementation(
+      () => new Promise((resolve) => { releaseLoad = resolve }),
+    )
+    await act(async () => {
+      ;(homeProps.current.onOpenProject as (id: string) => Promise<void>)('p1')
+      rejectSave(new Error('磁盘已满'))
+    })
+    await act(async () => {
+      releaseLoad(structuredClone(DOC))
+    })
+
+    await screen.findByTestId('editor')
+    expect(editorProps.current.aiSession).toEqual(changed)
+    expect(editorProps.current.aiSessionError).toContain('磁盘已满')
+    expect(editorProps.current.aiSessionRetryable).toBe(true)
+  })
 })

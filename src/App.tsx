@@ -43,9 +43,15 @@ interface OpenProject {
 }
 
 /** 分开读取画布与会话：会话局部损坏不能阻止用户打开可用的项目文档。
- * 存在未落盘保留会话时以其胜出——它是权威用户内容，重试标记打开。 */
-async function loadOpenProject(id: string, unsaved?: UnsavedAiSession): Promise<OpenProject> {
+ * 保留区在加载屏障之后读取——保存在途时重开，拒绝处理器会在 load 等待
+ * 共享保存链期间写入保留区，屏障前先取会拿到过期的 undefined。存在未
+ * 落盘保留会话时以其胜出：它是权威用户内容，重试标记打开。 */
+async function loadOpenProject(
+  id: string,
+  unsavedAiSessions?: ReadonlyMap<string, UnsavedAiSession>,
+): Promise<OpenProject> {
   const doc = await projectStore.load(id)
+  const unsaved = unsavedAiSessions?.get(id)
   if (unsaved) {
     return {
       id,
@@ -92,7 +98,7 @@ function useOpenProjectActions(
 
   const handleOpenProject = useCallback(async (id: string) => {
     try {
-      const open = await loadOpenProject(id, unsavedAiSessions.current?.get(id))
+      const open = await loadOpenProject(id, unsavedAiSessions.current ?? undefined)
       startTransition(() => setOpenProject(open))
     } catch (err) {
       console.warn('[App] 打开项目失败', err)
