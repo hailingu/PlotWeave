@@ -82,9 +82,11 @@ function useOpenProjectActions(setOpenProject: OpenProjectSetter, refreshProject
   }, [setOpenProject])
 
   const handleSaveAiSession = useCallback(
-    (id: string) => (session: AiSession) => {
+    (id: string) => async (session: AiSession) => {
       setOpenProject((project) => (project?.id === id ? { ...project, aiSession: session } : project))
-      return projectStore.saveAiSession(id, session)
+      await projectStore.saveAiSession(id, session)
+      // 保存成功才清除项目级恢复错误：重挂载编辑器不得再宣称会话未落盘
+      setOpenProject((project) => (project?.id === id ? { ...project, aiSessionError: null } : project))
     },
     [setOpenProject],
   )

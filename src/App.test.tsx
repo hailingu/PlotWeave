@@ -146,6 +146,33 @@ describe('App（双界面路由壳）', () => {
     expect(editorProps.current.aiSessionError).toBe('Error: 只读目录')
   })
 
+  it('修复回写失败后再次保存成功：项目级错误清除，重挂载不再报保存失败', async () => {
+    const recovered = { schemaVersion: 1 as const, entries: [{ id: 1, kind: 'note' as const, text: '已恢复' }] }
+    store.loadAiSession.mockResolvedValue({ session: recovered, repairError: 'Error: 只读目录' })
+    store.saveAiSession.mockResolvedValue(undefined)
+    render(<App />)
+    await screen.findByTestId('home')
+    await act(async () => {
+      await (homeProps.current.onOpenProject as (id: string) => Promise<void>)('p1')
+    })
+    await screen.findByTestId('editor')
+    expect(editorProps.current.aiSessionError).toBe('Error: 只读目录')
+
+    const session = {
+      schemaVersion: 1 as const,
+      entries: [...recovered.entries, { id: 2, kind: 'note' as const, text: '新历史' }],
+    }
+    await (editorProps.current.onSaveAiSession as (value: typeof session) => Promise<void>)(session)
+
+    fireEvent.keyDown(document, { key: ',', metaKey: true })
+    await screen.findByTestId('settings')
+    fireEvent.click(screen.getByTestId('settings'))
+
+    expect(await screen.findByTestId('editor')).toBeTruthy()
+    expect(editorProps.current.aiSession).toEqual(session)
+    expect(editorProps.current.aiSessionError).toBeNull()
+  })
+
   it('新建项目：create 后按落盘文档载入会话（保留 createdAt 溯源），并刷新列表', async () => {
     const createdDoc: ProjectContent = { ...DOC, name: '未命名短剧', createdAt: '2026-08-31T00:00:00.000Z' }
     store.load.mockResolvedValue(structuredClone(createdDoc))

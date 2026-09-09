@@ -49,8 +49,29 @@ export const SYSTEM_PROMPT =
   '每条命令可用 reason 说明理由。批次被校验拒绝时，按回喂的错误清单修正后' +
   '重新输出完整批次。'
 
-/** 组装本次请求的消息序列：系统提示 + 画布快照（可选）+ 会话历史 + 新输入。
- * 历史里的批次文本不再重复喂回（已渲染为预览卡，防止上下文膨胀）。 */
+/** 喂给模型的历史上界：条数与字符双界。持久化会话跨重启增长，无界
+ * 历史会顶穿供应商上下文上限并使后续轮次持续失败；完整线程仅用于
+ * 界面展示，此处只截取喂给模型的子集。 */
+const HISTORY_MAX_MESSAGES = 40
+const HISTORY_MAX_CHARS = 48_000
+
+/** 自新向旧保留会话消息，条数与累计字符双界截断；最新一条即使单独
+ * 超界也保留（保证模型至少看得到上一轮语境，本轮输入另计）。 */
+function boundedHistory(thread: ThreadEntry[]): ThreadEntry[] {
+  const msgs = thread.filter((e) => e.kind === 'msg')
+  const kept: ThreadEntry[] = []
+  let chars = 0
+  for (let i = msgs.length - 1; i >= 0 && kept.length < HISTORY_MAX_MESSAGES; i -= 1) {
+    chars += msgs[i].text.length
+    if (chars > HISTORY_MAX_CHARS && kept.length > 0) break
+    kept.unshift(msgs[i])
+  }
+  return kept
+}
+
+/** 组装本次请求的消息序列：系统提示 + 画布快照（可选）+ 会话历史
+ * （双界截断，见 boundedHistory）+ 新输入。历史里的批次文本不再重复
+ * 喂回（已渲染为预览卡，防止上下文膨胀）。 */
 export function buildMessages(
   thread: ThreadEntry[],
   text: string,
@@ -63,7 +84,7 @@ export function buildMessages(
       ? [{ role: 'system' as const, content: `当前画布快照：\n${canvasDigest}` }]
       : []),
   ]
-  for (const e of thread) {
+  for (const e of boundedHistory(thread)) {
     if (e.kind === 'msg') messages.push({ role: e.role ?? 'assistant', content: e.text })
   }
   messages.push({ role: 'user', content: text })
@@ -128,7 +149,8 @@ export function readToolOf(
 }
 
 /** 预览卡执行回执条目（executeCard 拆出）：失败 → 错误回执（批次未动，
- * 保持 pending）；成功 → 已执行回执（⌘Z 整批撤销）。 */
+ * 保持 pending）；成功 → 已执行回执。回执随会话持久化，不携带 ⌘Z
+ * 撤销宣称——撤销栈不跨会话存活，该提示只在当前会话的卡片上呈现。 */
 export function cardResultEntry(
   err: string | null,
   count: number,
@@ -136,5 +158,5 @@ export function cardResultEntry(
 ): ThreadEntry {
   return err
     ? { id: nextId(), kind: 'note', text: `执行失败：${err}` }
-    : { id: nextId(), kind: 'note', text: `✓ 已执行 ${count} 项改动，⌘Z 可整批撤销。` }
+    : { id: nextId(), kind: 'note', text: `✓ 已执行 ${count} 项改动。` }
 }

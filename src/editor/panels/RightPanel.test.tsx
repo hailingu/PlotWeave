@@ -322,7 +322,25 @@ describe('RightPanel ✦AI 改动预览卡', () => {
     fireEvent.click(screen.getByRole('button', { name: '✓ 执行改动' }))
     expect(spies.onApplyAiBatch).toHaveBeenCalledWith([expect.objectContaining({ op: 'create_node' })])
     expect(await screen.findByText(/✓ 已执行 1 项改动/)).toBeTruthy()
-    expect(screen.getByText(/✓ 已执行，⌘Z 可整批撤销/)).toBeTruthy()
+    // 当前会话内执行的卡才宣称 ⌘Z 整批撤销；回执作为持久历史不携带该宣称
+    expect(screen.getAllByText(/⌘Z 可整批撤销/)).toHaveLength(1)
+  })
+
+  it('恢复的已执行卡标注为历史改动，不宣称当前撤销栈可整批撤销', async () => {
+    await toAiTab(APP_WITH_KEY, {
+      aiSession: {
+        schemaVersion: 1,
+        entries: [{
+          id: 1,
+          kind: 'msg',
+          role: 'assistant',
+          text: '先前的改动。',
+          card: { v: validationOf(), status: 'executed' },
+        }],
+      },
+    })
+    expect(screen.getByText(/已执行/)).toBeTruthy()
+    expect(screen.queryByText(/⌘Z 可整批撤销/)).toBeNull()
   })
 
   it('含删除批次：执行按钮两步武装确认', async () => {

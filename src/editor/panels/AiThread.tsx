@@ -46,12 +46,16 @@ function useAiModels() {
   return { options, activeKey, setModelKey, activeOption, activeProvider, keyOkByProvider, ready }
 }
 
-/** 用当前画布重建恢复卡片的完整预览，拒绝信任落盘的确认元数据。 */
+/** 用当前画布重建恢复卡片的完整预览，拒绝信任落盘的确认元数据；
+ * 历史执行卡标注 historical——撤销栈不跨会话存活，不得宣称可撤销。 */
 function restoreThreadEntries(
   initialSession: AiSession | undefined,
   validateCommands: ((commands: AiCommand[]) => BatchValidation | null) | undefined,
 ): ThreadEntry[] {
   return (initialSession?.entries ?? []).map((entry) => {
+    if (entry.card?.status === 'executed') {
+      return { ...entry, card: { ...entry.card, historical: true } }
+    }
     if (entry.card?.status !== 'pending' || !validateCommands) return entry
     const validation = validateCommands(entry.card.v.commands)
     return validation ? { ...entry, card: { ...entry.card, v: validation } } : entry
@@ -357,6 +361,7 @@ function AiEntryBody({
         <PreviewCard
           v={entry.card.v}
           status={entry.card.status}
+          historical={entry.card.historical}
           armed={armed}
           busy={busy}
           onArm={onArm}

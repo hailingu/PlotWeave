@@ -15,6 +15,10 @@ export interface ThreadEntry {
   card?: {
     v: BatchValidation
     status: 'pending' | 'executed' | 'dismissed'
+    /** 运行时标注（落盘无权威语义，归一化丢弃、恢复时重derive）：
+     * 跨会话恢复的历史执行卡。撤销栈不随会话持久化，历史卡不得
+     * 宣称当前 ⌘Z 可整批撤销。 */
+    historical?: true
   }
 }
 
