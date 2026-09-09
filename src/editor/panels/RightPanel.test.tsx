@@ -398,7 +398,7 @@ describe('RightPanel ✦AI 执行回执落盘时序', () => {
     const onSaveSession = vi.fn(async (session: AiSession) => { saved.push(session) })
     const spies = await toAiTab(APP_WITH_KEY, {
       whenCanvasCommitted,
-      canvasSignature: 'sig-before',
+      aiRevision: 4,
       onSaveAiSession: onSaveSession,
     })
     spies.onValidateCommands.mockReturnValue(validationOf())
@@ -408,13 +408,13 @@ describe('RightPanel ✦AI 执行回执落盘时序', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '✓ 执行改动' }))
     expect(await screen.findByText(/✓ 已执行 1 项改动/)).toBeTruthy()
-    // 画布尚未确认：落盘的是可重新执行的 pending 卡（带执行前签名供对账），
+    // 画布尚未确认：落盘的是可重新执行的 pending 卡（带执行后计数供对账），
     // 回执不得先于画布落盘
     await waitFor(() => expect(saved.length).toBeGreaterThan(0))
     const before = saved[saved.length - 1]
     expect(before.entries.find((e) => e.card)?.card).toMatchObject({
       status: 'pending',
-      preSignature: 'sig-before',
+      aiRevisionAfter: 5,
     })
     expect(before.entries.some((e) => e.kind === 'note' && e.text.includes('已执行'))).toBe(false)
 
@@ -436,16 +436,16 @@ describe('RightPanel ✦AI 执行卡落盘对账', () => {
         kind: 'msg' as const,
         role: 'assistant' as const,
         text: '未确认落盘的批次。',
-        card: { v: validationOf(), status: 'pending' as const, preSignature: 'sig-before' },
+        card: { v: validationOf(), status: 'pending' as const, aiRevisionAfter: 5 },
       },
     ],
   })
 
-  it('画布签名与执行前一致：批次未落盘，恢复为可再次执行的待执行卡', async () => {
+  it('画布计数未达执行后计数：批次未落盘，恢复为可再次执行的待执行卡', async () => {
     const validate = vi.fn(() => validationOf())
     await toAiTab(APP_WITH_KEY, {
       aiSession: uncommittedSession(),
-      canvasSignature: 'sig-before',
+      aiRevision: 4,
       onValidateCommands: validate,
     })
     expect(validate).toHaveBeenCalled()
@@ -453,10 +453,10 @@ describe('RightPanel ✦AI 执行卡落盘对账', () => {
     expect(screen.queryByText(/历史改动/)).toBeNull()
   })
 
-  it('画布签名已变化：批次已随画布落盘，恢复为不可再执行的历史卡', async () => {
+  it('画布计数已达执行后计数：批次已随画布落盘，恢复为不可再执行的历史卡', async () => {
     await toAiTab(APP_WITH_KEY, {
       aiSession: uncommittedSession(),
-      canvasSignature: 'sig-after',
+      aiRevision: 5,
     })
     expect(screen.getByText(/历史改动/)).toBeTruthy()
     expect(screen.queryByRole('button', { name: '✓ 执行改动' })).toBeNull()

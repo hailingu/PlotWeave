@@ -22,10 +22,11 @@ export interface ThreadEntry {
     /** 运行时标注（不落盘：持久化映射把未确认卡降级为 pending）：
      * 批次已在内存执行，但承载它的画布文档尚未确认落盘。 */
     uncommitted?: true
-    /** 执行前画布语义签名（仅未确认卡随 pending 落盘）：重开时与当前画布
-     * 比对判定批次是否已随画布落盘——不一致即已应用，恢复为历史执行卡；
-     * 一致即未落盘，恢复为可再次执行的待执行卡。确认落盘后即剥离。 */
-    preSignature?: string
+    /** 执行后的画布批次计数（仅未确认卡随 pending 落盘）：重开时与画布
+     * 内的计数比对判定批次是否已随画布落盘——画布计数已达该值即已应用，
+     * 恢复为历史执行卡；未达即未落盘，恢复为可再次执行的待执行卡。
+     * 确认落盘后即剥离。 */
+    aiRevisionAfter?: number
   }
 }
 
@@ -112,8 +113,10 @@ function entryOf(value: unknown): ThreadEntry | null {
     card: {
       v: value.card.v,
       status: value.card.status,
-      ...(typeof value.card.preSignature === 'string'
-        ? { preSignature: value.card.preSignature }
+      ...(typeof value.card.aiRevisionAfter === 'number' &&
+      Number.isSafeInteger(value.card.aiRevisionAfter) &&
+      value.card.aiRevisionAfter >= 0
+        ? { aiRevisionAfter: value.card.aiRevisionAfter }
         : {}),
     },
   }

@@ -41,6 +41,7 @@ function buildSessionDoc(
     settings: doc.settings,
     episodeTitles: doc.episodeTitles,
     viewport,
+    aiRevision: doc.aiRevision,
     assets: doc.assets,
   })
 }

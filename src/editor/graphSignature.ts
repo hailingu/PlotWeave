@@ -1,13 +1,11 @@
 /**
  * 画布语义内容签名（纯函数）：节点/连线/设定集中可持久化字段的稳定
  * 序列化，剥离 React Flow 会话态（selected/dragging/measured/className）
- * 与纯样式类——与 useDebouncedSave 的置脏判定同口径。
+ * 与纯样式类——与序列化层（convert.ts 只存语义字段）同口径。
  *
- * 用途：AI 执行卡的恢复对账。批次在内存执行后，若承载它的画布文档尚未
- * 确认落盘，会话里保存的卡片是待执行状态 + 执行前的画布签名；重开时把
- * 该签名与当前画布比对即可判定批次是否已随画布落盘——一致 = 未落盘，
- * 恢复为可再次执行的待执行卡；不一致 = 画布已含该批改动，恢复为历史
- * 执行卡，避免在已应用的画布上重复执行同一批次。
+ * 用途：useDebouncedSave 的置脏判定——纯选择/拖拽过程帧与纯样式类注入
+ * 不改变签名，不触发防抖保存。AI 执行卡的恢复对账改用画布文档内的
+ * `graph.aiRevision` 提交计数（§12.2），不再依赖签名比较。
  */
 import type { Edge } from '@xyflow/react'
 import type { ProjectSettings } from './settings'

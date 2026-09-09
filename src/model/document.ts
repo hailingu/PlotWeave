@@ -322,6 +322,10 @@ export interface ProjectDocument {
     edges: StoryEdge[]
     /** 视口随文档持久化；缺省 = 从未保存过视口（打开时 fitView），字段可省略。 */
     viewport?: Viewport
+    /** 已应用 AI 批次的单调计数（§12.2 提交身份）：AI 执行卡以执行后的
+     * 计数落盘，重开时与画布内的计数比对即可判定批次是否已随画布落盘。
+     * 缺省 = 0（旧文档未应用过 AI 批次）。 */
+    aiRevision?: number
   }
   settings: {
     characters: Record<string, Character>

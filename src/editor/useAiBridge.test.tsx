@@ -65,7 +65,7 @@ function setup(
   initialEdges: Edge[] = [],
   initialSettings: ProjectSettings = EMPTY_SETTINGS,
 ) {
-  const state = { nodes: [...initialNodes], edges: [...initialEdges], settings: initialSettings }
+  const state = { nodes: [...initialNodes], edges: [...initialEdges], settings: initialSettings, aiRevision: 0 }
   const commands: HistoryCommand[] = []
   const closeSettings = vi.fn()
   const deps: AiBridgeDeps = {
@@ -105,6 +105,9 @@ function setup(
     setSettings: (up) => {
       state.settings = up(state.settings)
       deps.settingsRef.current = state.settings
+    },
+    setAiRevision: (up) => {
+      state.aiRevision = up(state.aiRevision)
     },
     pushHistory: (cmd) => commands.push(cmd),
     closeSettings,
@@ -184,6 +187,8 @@ describe('useAiBridge（§6/§12 AI 桥回调族）', () => {
     expect(result.current.applyAiBatch(batch)).toBeNull()
     expect(state.nodes).toHaveLength(3)
     expect(state.edges).toHaveLength(1)
+    // 提交身份（§12.2）：成功落地一批即自增一次
+    expect(state.aiRevision).toBe(1)
     const b1 = state.nodes.find((n) => n.id === 'b1')!
     expect(b1.type === 'branch' && b1.data.prompt).toBe('走哪边？')
     expect(closeSettings).toHaveBeenCalledTimes(1)
@@ -196,6 +201,8 @@ describe('useAiBridge（§6/§12 AI 桥回调族）', () => {
     expect(b1r.type === 'branch' && b1r.data.prompt).toBe('去哪？')
     commands[0].redo()
     expect(state.nodes).toHaveLength(3)
+    // 撤销不回退提交身份：它是提交计数，不是可撤销的文档内容
+    expect(state.aiRevision).toBe(1)
   })
 })
 
@@ -210,6 +217,8 @@ describe('useAiBridge · applyAiBatch 执行边界', () => {
     expect(err).toContain('改动无法安全执行')
     expect(state.nodes).toHaveLength(1)
     expect(commands).toHaveLength(0)
+    // 未落地的批次不消耗提交身份
+    expect(state.aiRevision).toBe(0)
   })
 
   it('applyAiBatch：恢复的待执行卡使用重校验后的规范化命令', () => {

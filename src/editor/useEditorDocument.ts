@@ -33,6 +33,11 @@ export interface EditorDocument {
   setSettings: Dispatch<SetStateAction<ProjectSettings>>
   episodeTitles: Record<number, string>
   setEpisodeTitles: Dispatch<SetStateAction<Record<number, string>>>
+  /** 已应用 AI 批次计数（§12.2 提交身份）：AI 执行卡以执行后计数落盘，
+   * 重开时与画布内的计数比对判定批次是否已随画布落盘。单调递增，撤销
+   * 不回退（它是提交身份，不是可撤销的文档内容）。 */
+  aiRevision: number
+  setAiRevision: Dispatch<SetStateAction<number>>
   assets: ProjectContent['assets']
   setAssets: Dispatch<SetStateAction<ProjectContent['assets']>>
   focusedEpisode: number | null
@@ -56,6 +61,8 @@ export function useEditorDocument(project: EditorProjectContent): EditorDocument
   const [episodeTitles, setEpisodeTitles] = useState<Record<number, string>>(
     project.episodeTitles ?? {},
   )
+  /** AI 批次计数（§12.2）：缺省 0 = 该文档未应用过 AI 批次。 */
+  const [aiRevision, setAiRevision] = useState(project.aiRevision ?? 0)
   /** 项目资产索引（§7.1/§7.3）：会话内可新增（库资产拖上画布拷贝导入），
    * 入 SessionDocPart 随防抖落盘；assetsRef 镜像供 AI 快照/剧本导出消费。 */
   const [assets, setAssets] = useState(project.assets)
@@ -91,6 +98,8 @@ export function useEditorDocument(project: EditorProjectContent): EditorDocument
       setSettings,
       episodeTitles,
       setEpisodeTitles,
+      aiRevision,
+      setAiRevision,
       assets,
       setAssets,
       focusedEpisode,
@@ -113,6 +122,7 @@ export function useEditorDocument(project: EditorProjectContent): EditorDocument
       setSettings,
       episodeTitles,
       setEpisodeTitles,
+      aiRevision,
       assets,
       setAssets,
       focusedEpisode,

@@ -8,7 +8,6 @@ import { useCallback, useMemo } from 'react'
 import type { Edge } from '@xyflow/react'
 import { buildGraphDigest } from './ai/graphDigest'
 import { extractBatchJson } from './ai/batchText'
-import { graphSignature } from './graphSignature'
 import { settingsSnapshotText } from './ai/entityFields'
 import {
   toInboundCommands,
@@ -60,6 +59,8 @@ export interface AiBridgeDeps {
   setEdges: (updater: (eds: Edge[]) => Edge[]) => void
   /** 设定集功能式写入（issue 44）：实体改动的落地通道，与节点绑定同一复合命令。 */
   setSettings: (updater: (prev: ProjectSettings) => ProjectSettings) => void
+  /** AI 批次计数递增（§12.2 提交身份）：每次成功落地一批命令自增一次。 */
+  setAiRevision: (updater: (prev: number) => number) => void
   pushHistory: (cmd: HistoryCommand) => void
   closeSettings: () => void
 }
@@ -68,8 +69,6 @@ export interface AiBridgeDeps {
 export interface AiBridge {
   /** 画布上下文快照（§6「了解当前画布」+ §12.2 压缩视图）。 */
   canvasDigest: string
-  /** 画布语义内容签名（graphSignature）：AI 执行卡恢复对账判定批次是否已随画布落盘。 */
-  canvasSignature: string
   /** 解析并整批校验助手回复里的命令；无批次（纯讨论）返回 null。 */
   validateAiReply: (text: string) => BatchValidation | null
   /** tool-calling 通道：工具调用映射出的命令数组走同一整批校验。 */
@@ -129,6 +128,7 @@ function applyValidatedBatch(
     nodesRef: { current: CanvasNode[] }
     edgesRef: { current: Edge[] }
     settingsRef: { current: ProjectSettings }
+    setAiRevision: (updater: (prev: number) => number) => void
     pushHistory: (cmd: HistoryCommand) => void
     closeSettings: () => void
   },
@@ -146,6 +146,8 @@ function applyValidatedBatch(
     ctx.settingsRef.current,
   )
   sim.forward.forEach((f) => f())
+  // 提交身份（§12.2）：批次计数随画布文档落盘，撤销不回退
+  ctx.setAiRevision((n) => n + 1)
   ctx.pushHistory({
     undo: () => [...sim.backward].reverse().forEach((f) => f()),
     redo: () => sim.forward.forEach((f) => f()),
@@ -178,9 +180,6 @@ function useAiReadTools(deps: {
       }),
     [nodes, edges, settings],
   )
-
-  /** 语义签名与 digest 同源（同一渲染的画布状态）：执行卡恢复对账消费。 */
-  const canvasSignature = useMemo(() => graphSignature(nodes, edges, settings), [nodes, edges, settings])
 
   /** AI 校验用的图快照（§12.2）：装配见 graphSnapshotOf。 */
   const aiSnapshot = useCallback(
@@ -216,7 +215,7 @@ function useAiReadTools(deps: {
     [settingsRef],
   )
 
-  return { canvasDigest, canvasSignature, aiSnapshot, validateAiReply, validateCommands, readNode, readSettings }
+  return { canvasDigest, aiSnapshot, validateAiReply, validateCommands, readNode, readSettings }
 }
 
 export function useAiBridge(deps: AiBridgeDeps): AiBridge {
@@ -229,10 +228,11 @@ export function useAiBridge(deps: AiBridgeDeps): AiBridge {
     setNodes,
     setEdges,
     setSettings,
+    setAiRevision,
     pushHistory,
     closeSettings,
   } = deps
-  const { canvasDigest, canvasSignature, aiSnapshot, validateAiReply, validateCommands, readNode, readSettings } =
+  const { canvasDigest, aiSnapshot, validateAiReply, validateCommands, readNode, readSettings } =
     useAiReadTools(deps)
 
   /** ✦AI 改动落地：整批作为一条复合命令入栈；返回错误文案或 null。
@@ -246,11 +246,12 @@ export function useAiBridge(deps: AiBridgeDeps): AiBridge {
         nodesRef,
         edgesRef,
         settingsRef,
+        setAiRevision,
         pushHistory,
         closeSettings,
       }),
-    [aiSnapshot, applyDataPatch, buildNewNode, closeSettings, edgesRef, nodesRef, pushHistory, setEdges, setNodes, setSettings, settingsRef],
+    [aiSnapshot, applyDataPatch, buildNewNode, closeSettings, edgesRef, nodesRef, pushHistory, setAiRevision, setEdges, setNodes, setSettings, settingsRef],
   )
 
-  return { canvasDigest, canvasSignature, validateAiReply, validateCommands, readNode, readSettings, applyAiBatch }
+  return { canvasDigest, validateAiReply, validateCommands, readNode, readSettings, applyAiBatch }
 }

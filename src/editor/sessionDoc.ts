@@ -25,6 +25,8 @@ export interface SessionDocPart {
   settings: ProjectSettings
   episodeTitles?: Record<number, string>
   viewport?: Viewport
+  /** 已应用 AI 批次计数（§12.2 提交身份）；0/缺省不落盘。 */
+  aiRevision?: number
   /** 会话内资产索引（含本会话导入的条目）；undefined = 无资产桶。 */
   assets: EditorProject['assets']
 }
@@ -40,6 +42,7 @@ export function sessionDoc(project: EditorProject, part: SessionDocPart) {
     settings: part.settings,
     episodeTitles: part.episodeTitles,
     viewport: part.viewport,
+    ...(part.aiRevision ? { aiRevision: part.aiRevision } : {}),
     assets: part.assets,
   }
 }

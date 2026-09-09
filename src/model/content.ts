@@ -24,6 +24,8 @@ export interface ProjectContent {
   episodeTitles?: Record<number, string>
   /** 视口随文档持久化（§3）；缺省时打开后 fitView。 */
   viewport?: Viewport
+  /** 已应用 AI 批次的单调计数（§12.2 提交身份）；缺省 = 0。 */
+  aiRevision?: number
   /** 项目资产索引透传（缺省 = 无资产）。 */
   assets?: { byId: Record<string, AssetRef> }
 }

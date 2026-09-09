@@ -76,7 +76,7 @@ describe('normalizeAiSession', () => {
     })
   })
 
-  it('保留执行前画布签名供恢复对账，剥离运行时未确认标注', () => {
+  it('保留执行后批次计数供恢复对账，剥离运行时未确认标注', () => {
     const result = normalizeAiSession({
       schemaVersion: 1,
       entries: [
@@ -88,7 +88,7 @@ describe('normalizeAiSession', () => {
           card: {
             v: { ok: true, items: [], commands: [], issues: [], hasDeletes: false },
             status: 'pending',
-            preSignature: 'sig-before',
+            aiRevisionAfter: 5,
             uncommitted: true,
             historical: true,
           },
@@ -99,7 +99,7 @@ describe('normalizeAiSession', () => {
     expect(result.session.entries[0].card).toEqual({
       v: { ok: true, items: [], commands: [], issues: [], hasDeletes: false },
       status: 'pending',
-      preSignature: 'sig-before',
+      aiRevisionAfter: 5,
     })
   })
 })

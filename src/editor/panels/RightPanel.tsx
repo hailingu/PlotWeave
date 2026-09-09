@@ -113,8 +113,8 @@ interface RightPanelProps {
   readonly onOpenSettings?: () => void
   /** 画布上下文快照（§6「了解当前画布」）：附到 system prompt，并作为读工具返回。 */
   readonly canvasDigest?: string
-  /** 画布语义签名：执行时捕获为执行前快照，恢复时对账批次是否已落盘。 */
-  readonly canvasSignature?: string
+  /** 画布批次计数（§12.2 提交身份）：执行后 +1 记录到卡片，恢复时对账。 */
+  readonly aiRevision?: number
   /** 校验助手回复中的命令批次（§6/数据模型 §12）；纯讨论回复返回 null。 */
   readonly onValidateAi?: (text: string) => BatchValidation | null
   /** 校验工具调用映射出的命令数组（tool-calling 通道）。 */
@@ -154,7 +154,7 @@ export default function RightPanel({
   settings,
   onOpenSettings,
   canvasDigest,
-  canvasSignature,
+  aiRevision,
   onValidateAi,
   onValidateCommands,
   onReadNode,
@@ -200,7 +200,7 @@ export default function RightPanel({
             <AiThread
               onOpenSettings={onOpenSettings}
               canvasDigest={canvasDigest}
-              canvasSignature={canvasSignature}
+              aiRevision={aiRevision}
               onValidateAi={onValidateAi}
               onValidateCommands={onValidateCommands}
               onReadNode={onReadNode}

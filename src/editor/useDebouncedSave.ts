@@ -23,6 +23,8 @@ function persistSignature(doc: ProjectContent): string {
   return JSON.stringify({
     name: doc.name,
     graph: graphSignature(doc.nodes, doc.edges, doc.settings),
+    // AI 批次计数是文档内容（§12.2 提交身份）：只增不减，单独变化也必须置脏
+    aiRevision: doc.aiRevision ?? 0,
     episodeTitles: doc.episodeTitles ?? {},
     // 资产索引（§7.3 会话内导入新增条目）纳入签名：漏签即导入不落盘
     assets: doc.assets ?? null,

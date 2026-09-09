@@ -139,6 +139,15 @@ function normalizeViewportShape(v: unknown, warnings: string[]): Viewport | unde
   return undefined
 }
 
+/** AI 批次计数形状校验（§12.2 提交身份）：只接受非负安全整数；非法即删除
+ * （回退 0，等同未应用过 AI 批次，执行卡恢复时按未落盘处理）。 */
+function normalizeAiRevision(v: unknown, warnings: string[]): number | undefined {
+  if (v === undefined) return undefined
+  if (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0) return v
+  warnings.push('graph.aiRevision 形状非法，已删除（按未应用 AI 批次处理）')
+  return undefined
+}
+
 /** 键控桶身份修复产物（§11.1 第 3 步）：空键/不安全键重发映射与修复
  * 前后身份快照——targetId 兼容判定与同桶引用改写的共同输入。 */
 interface BucketIdentityRepairs {
@@ -259,12 +268,13 @@ function normalizeActiveNodes(
 /** 修复产物装配为 ProjectDocument（episodeTitles 已在调用侧完成键值域
  * 修复——§11.1 第 3 步对所有版本执行，修复是否改写内容以装配产物为准：
  * 只留在 fromDocument 会让回写判定（repaired）看不见标题去空白/非法键
- * 删除；fromDocument 的二次归一化幂等）。 */
+ * 删除；fromDocument 的二次归一化幂等）。graphExtras 收拢可选图字段
+ * （viewport/aiRevision），避免装配签名参数继续膨胀。 */
 function assembleDocument(
   meta: ReturnType<typeof normalizeProjectMeta>,
   nodes: StoryNode[],
   edges: StoryEdge[],
-  viewport: Viewport | undefined,
+  graphExtras: { viewport?: Viewport; aiRevision?: number },
   settings: Record<string, Record<string, unknown>>,
   byId: Record<string, unknown>,
   episodeTitles: ProjectDocument['episodeTitles'],
@@ -282,7 +292,12 @@ function assembleDocument(
       createdAt: meta.createdAt,
       updatedAt: meta.updatedAt,
     },
-    graph: { nodes, edges, ...(viewport ? { viewport } : {}) },
+    graph: {
+      nodes,
+      edges,
+      ...(graphExtras.viewport ? { viewport: graphExtras.viewport } : {}),
+      ...(graphExtras.aiRevision !== undefined ? { aiRevision: graphExtras.aiRevision } : {}),
+    },
     settings: settings as unknown as ProjectDocument['settings'],
     episodeTitles,
     assets: { byId: byId as unknown as Record<string, ProjectDocument['assets']['byId'][string]> },
@@ -354,11 +369,12 @@ export function normalizeContainers(
   // 项目必填元数据（容器就位后、逐项规则前补齐）
   const meta = normalizeProjectMeta(projectRaw, env, warnings)
   const viewport = normalizeViewportShape(graphRaw.viewport, warnings)
+  const aiRevision = normalizeAiRevision(graphRaw.aiRevision, warnings)
   const doc = assembleDocument(
     meta,
     nodes,
     edges,
-    viewport,
+    { viewport, aiRevision },
     settings,
     assetIndex,
     // 边界（issue 16）：normalizeEpisodeTitles 返回「正整数键 → 非空标题」
