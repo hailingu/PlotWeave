@@ -1,4 +1,5 @@
 import { AI_FIELD_KEYS } from './nodeFields'
+import type { EntityTokenScope } from './entityFields'
 import { branchOptionsError, nodeValueShapeError } from './patchShape'
 
 /**
@@ -36,15 +37,17 @@ function checkFieldKeys(nodeType: string, fields: Record<string, unknown>): stri
 }
 
 /** 分类型写载荷校验（create 的 data 与 update 的 patch 共用同一序列）：
- * 字段键白名单 → 值形状 → 分支选项成员。返回错误文案或 null。 */
+ * 字段键白名单 → 值形状 → 分支选项成员。entities（issue 44）：场景/对白
+ * 的设定集结构化引用按实体快照解析。返回错误文案或 null。 */
 export function payloadIssue(
   nodeType: string,
   fields: Record<string, unknown>,
   assets: ReadonlyMap<string, string>,
+  entities?: EntityTokenScope,
 ): string | null {
   const keyError = checkFieldKeys(nodeType, fields)
   if (keyError) return keyError
-  const shapeError = nodeValueShapeError(nodeType, fields, assets)
+  const shapeError = nodeValueShapeError(nodeType, fields, assets, entities)
   if (shapeError) return shapeError
   if (nodeType === 'branch' && Array.isArray(fields.options)) {
     return branchOptionsError(fields.options as unknown[])
@@ -60,6 +63,7 @@ export function contingentUpdateIssue(
   nodeType: string | undefined,
   patch: Record<string, unknown>,
   assets: ReadonlyMap<string, string>,
+  entities?: EntityTokenScope,
 ): string | null {
   if (nodeType === undefined) {
     const globalUnknown = Object.keys(patch).filter((k) => !ANY_NODE_FIELD_KEYS.has(k))
@@ -67,5 +71,5 @@ export function contingentUpdateIssue(
       ? `未知字段：${globalUnknown.join('、')}（不是任何可写节点类型的字段）`
       : null
   }
-  return payloadIssue(nodeType, patch, assets)
+  return payloadIssue(nodeType, patch, assets, entities)
 }

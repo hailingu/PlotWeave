@@ -1,4 +1,9 @@
 import { uid } from '../../uid'
+import {
+  ENTITY_KIND_LABELS,
+  type EntityKind,
+  type EntityTokenScope,
+} from './entityFields'
 
 /**
  * AI 入站 data/patch 的值形状校验与列表项归一化（信任边界，§9.3/§11.3
@@ -10,6 +15,25 @@ import { uid } from '../../uid'
 
 export function plainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
+/** 结构化引用的实体解析（issue 44）：快照未携带设定集时不校验（旧夹具兼容）；
+ * contingent = 引用指向本批失败的 upsert，随前序修复自愈，本轮跳过；
+ * 跨种类（如地点 id 写进 characterIds）与未知实体都整批拒绝——放行即产生
+ * 跨类型误绑或悬空引用，保存后加载侧只会静默剥离。 */
+function entityRefIssue(
+  token: string,
+  expect: EntityKind,
+  field: string,
+  entities?: EntityTokenScope,
+): string | null {
+  if (entities === undefined) return null
+  const kind = entities.kindOf(token)
+  if (kind === 'contingent' || kind === expect) return null
+  if (kind === null) {
+    return `${field} 的${ENTITY_KIND_LABELS[expect]}实体不存在：${token}（新实体须先在本批 upsert_${expect} 声明 ref）`
+  }
+  return `${field} 指向的是${ENTITY_KIND_LABELS[kind]}实体（须为${ENTITY_KIND_LABELS[expect]}实体 id 或 ref）：${token}`
 }
 
 /** 入站归一化（信任边界）：列表项稳定 id 补齐（S6479）。
@@ -119,7 +143,11 @@ function shotRefMemberIssue(r: unknown, assets: ReadonlyMap<string, string>): st
 }
 
 /** 各类型的标量字段值形状（nodeValueShapeError 的分类型明细）。 */
-function scalarShapeIssues(nodeType: string, fields: Record<string, unknown>): string[] {
+function scalarShapeIssues(
+  nodeType: string,
+  fields: Record<string, unknown>,
+  entities?: EntityTokenScope,
+): string[] {
   const issues: string[] = []
   const str = (f: string) => {
     if (fields[f] !== undefined && typeof fields[f] !== 'string') issues.push(`${f} 须为字符串`)
@@ -136,12 +164,15 @@ function scalarShapeIssues(nodeType: string, fields: Record<string, unknown>): s
     case 'scene':
       ;['name', 'time', 'weather', 'synopsis'].forEach(str)
       // 引用 id 须 trim 后非空（§8.1 共同值域）：空白引用进画布落盘后会被
-      // 加载侧归一化移除——接受过的 AI 改动不得重开即变样
+      // 加载侧归一化移除——接受的 AI 改动不得重开即变样
       if (
         fields.locationId !== undefined &&
         (typeof fields.locationId !== 'string' || fields.locationId.trim() === '')
       ) {
         issues.push('locationId 须为非空白字符串')
+      } else if (typeof fields.locationId === 'string') {
+        const refIssue = entityRefIssue(fields.locationId, 'location', 'locationId', entities)
+        if (refIssue) issues.push(refIssue)
       }
       positiveSafeInt('sceneNo')
       positiveSafeInt('episodeNo')
@@ -187,6 +218,7 @@ function listShapeIssues(
   nodeType: string,
   fields: Record<string, unknown>,
   assets: ReadonlyMap<string, string>,
+  entities?: EntityTokenScope,
 ): string[] {
   const issues: string[] = []
   if (nodeType === 'scene' && fields.characterIds !== undefined) {
@@ -194,6 +226,11 @@ function listShapeIssues(
     // 成员 trim 后非空（§8.1）：空白成员会被加载侧移除，接受的批次重开即变
     if (!Array.isArray(arr) || arr.some((c) => typeof c !== 'string' || c.trim() === '')) {
       issues.push('characterIds 须为非空白字符串数组')
+    } else {
+      arr.forEach((c, i) => {
+        const refIssue = entityRefIssue(c as string, 'character', `characterIds[${i}]`, entities)
+        if (refIssue !== null) issues.push(refIssue)
+      })
     }
   }
   if (nodeType === 'dialogue' && fields.lines !== undefined) {
@@ -212,6 +249,12 @@ function listShapeIssues(
       (l.vo !== undefined && typeof l.vo !== 'boolean')
     if (!Array.isArray(arr) || arr.some(lineIssue)) {
       issues.push('lines 须为对象数组（text 字符串必填；kind ∈ line/action、speaker 仅 line 行可带且非空白字符串、side ∈ left/right、vo 布尔可选）')
+    } else {
+      arr.forEach((l, i) => {
+        if (!plainObject(l) || l.kind !== 'line' || typeof l.speaker !== 'string') return
+        const refIssue = entityRefIssue(l.speaker, 'character', `lines[${i}].speaker`, entities)
+        if (refIssue !== null) issues.push(refIssue)
+      })
     }
   }
   if (nodeType === 'shot' && fields.refs !== undefined) {
@@ -224,12 +267,18 @@ function listShapeIssues(
 /** 逐类型载荷值形状校验（信任边界，§9.3/§11.3 的批命令对等）：字段键
  * 白名单只拦未知字段，异型**值**若放行会经 buildCanvasNode 摊进活动节点，
  * 渲染层（ShotNode 的 picture/refs、DialogueNode 的 lines）解引用即崩，
- * 加载归一化来不及兜底。字段存在才校验（patch 局部更新）；null 表示通过。 */
+ * 加载归一化来不及兜底。字段存在才校验（patch 局部更新）；null 表示通过。
+ * entities（issue 44）：场景/对白对设定集的结构化引用按实体快照解析，
+ * 校验存在性与引用类型。 */
 export function nodeValueShapeError(
   nodeType: string,
   fields: Record<string, unknown>,
   assets: ReadonlyMap<string, string>,
+  entities?: EntityTokenScope,
 ): string | null {
-  const issues = [...scalarShapeIssues(nodeType, fields), ...listShapeIssues(nodeType, fields, assets)]
+  const issues = [
+    ...scalarShapeIssues(nodeType, fields, entities),
+    ...listShapeIssues(nodeType, fields, assets, entities),
+  ]
   return issues.length > 0 ? `载荷形状错误：${issues.join('；')}` : null
 }

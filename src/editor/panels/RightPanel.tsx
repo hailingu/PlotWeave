@@ -118,6 +118,8 @@ interface RightPanelProps {
   readonly onValidateCommands?: (commands: AiCommand[]) => BatchValidation | null
   /** 读工具 get_node：返回节点 JSON 文本，节点不存在返回 null。 */
   readonly onReadNode?: (nodeId: string) => string | null
+  /** 读工具 get_settings_snapshot（issue 44）：返回设定集清单 JSON 文本。 */
+  readonly onReadSettings?: () => string
   /** 执行已确认的批次：整批为一条复合命令入栈，返回错误文案或 null。 */
   readonly onApplyAiBatch?: (commands: ValidatedCommand[]) => string | null
 }
@@ -144,6 +146,7 @@ export default function RightPanel({
   onValidateAi,
   onValidateCommands,
   onReadNode,
+  onReadSettings,
   onApplyAiBatch,
 }: RightPanelProps) {
   const rows = selectedNode ? inspectorRows(selectedNode, attachedShotCount, settings) : []
@@ -183,6 +186,7 @@ export default function RightPanel({
               onValidateAi={onValidateAi}
               onValidateCommands={onValidateCommands}
               onReadNode={onReadNode}
+              onReadSettings={onReadSettings}
               onApplyAiBatch={onApplyAiBatch}
             />
           )}

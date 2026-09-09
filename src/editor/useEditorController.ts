@@ -89,11 +89,13 @@ export function useEditorController(deps: EditorControllerDeps): EditorControlle
     settings: doc.settings,
     nodesRef: doc.nodesRef,
     edgesRef: doc.edgesRef,
+    settingsRef: doc.settingsRef,
     assetsRef: doc.assetsRef,
     buildNewNode: graph.creation.buildNewNode,
     applyDataPatch: graph.patch.applyDataPatch,
     setNodes: doc.setNodes,
     setEdges: doc.setEdges,
+    setSettings: doc.setSettings,
     pushHistory: history.push,
     closeSettings: panels.closeSettings,
   })

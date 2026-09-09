@@ -1,6 +1,7 @@
 import { runAgentLoop, type ReadToolExecutor } from '../ai/agentLoop'
 import { type ChatMessage } from '../ai/chat'
 import { type BatchValidation } from '../ai/commands'
+import { entityFieldTableText } from '../ai/entityFields'
 import { nodeFieldTableText } from '../ai/nodeFields'
 import type { ProviderConfig } from '../../settings/types'
 
@@ -24,23 +25,35 @@ export interface ThreadEntry {
 }
 
 /** 助手人格与命令协议说明（§6/数据模型 §12.2）。节点字段表由
- * nodeFields.ts 生成（issue 41）：提示词、工具描述与校验白名单同源，
- * 模型不再因协议缺失自造字段（如 beat 的 label/summary/stakes）。 */
+ * nodeFields.ts 生成（issue 41）、实体字段表由 entityFields.ts 生成
+ * （issue 44）：提示词、工具描述与校验白名单同源，模型不再因协议缺失
+ * 自造字段。 */
 export const SYSTEM_PROMPT =
   '你是短剧创作助手，帮助编剧讨论剧情结构、人物动机与台词。\n' +
-  '需要改动画布时，只产出命令：执行前界面会向用户展示改动预览并等待确认，' +
+  '需要改动画布或设定集时，只产出命令：执行前界面会向用户展示改动预览并等待确认，' +
   '所以你不要声称已经完成修改。优先调用工具（推荐把一次改动的全部命令放进' +
   '一个 batch）；服务不支持工具时退回 ```json 围栏批次（格式 {"commands":[…]}）。\n' +
-  '需要画布信息时先调用读工具 get_graph_snapshot / get_node。\n' +
+  '需要画布或设定集信息时先调用读工具 get_graph_snapshot / get_node / ' +
+  'get_settings_snapshot。\n' +
   '各节点类型 data/patch 的合法字段（表外字段会被整批拒绝）：\n' +
   `${nodeFieldTableText()}\n` +
+  '设定实体 fields 的合法字段（表外字段会被整批拒绝）：\n' +
+  `${entityFieldTableText()}\n` +
   '命令要点：create_node 的 data 只写要定制的字段，ref 供本批后续命令引用' +
   '新节点；update_node_spec 的 patch 只写要改的字段；connect_edge 缺省为剧情流，' +
   'branch 需 optionIndex（0 基），attach 仅 场景→分镜卡；episodeNo 仅' +
   'scene/beat/dialogue/branch 可写（分镜随宿主场景）。\n' +
+  '设定实体（issue 44）：upsert_character / upsert_location 新建或修改角色、' +
+  '地点——新建不带 entityId（fields.name 必填，可带 ref）；修改必须带 entityId ' +
+  '（设定集快照里的精确 id，同名实体也不要按名字猜 id），fields 只写要改的字段，' +
+  '未提及字段保持不变；不支持删除或合并实体。同批可先 upsert 实体再绑定：' +
+  'scene.characterIds / scene.locationId / lines[].speaker 可填实体 id 或本批 ref。\n' +
+  '长篇设定文档（人物小传、世界观、术语表）与道具暂不支持 AI 写入：' +
+  '可给出文本草稿由用户手动录入，不要创建分镜卡或场景卡冒充设定档案，' +
+  '也不要声称已写入设定集。\n' +
   '画布快照的「剧情流顺序」即大纲投影：重排剧情 = 同一批次内先 disconnect 旧边' +
   '再 connect 新边；设定集段落给出角色/地点实体 id，写 characterIds/locationId 时引用它们。\n' +
-  '规则：只使用快照里出现过的 id（新节点用 ref）；连线不得自环或成环；' +
+  '规则：只使用快照里出现过的 id（新节点/新实体用 ref）；连线不得自环或成环；' +
   '每条命令可用 reason 说明理由。批次被校验拒绝时，按回喂的错误清单修正后' +
   '重新输出完整批次。'
 
@@ -102,16 +115,21 @@ export async function runModelTurn(
   return assistantEntries(result, nextId)
 }
 
-/** 读工具就地执行（send 拆出）：快照来自常驻快照 prop，节点详情按 id 现查。 */
+/** 读工具就地执行（send 拆出）：快照来自常驻快照 prop，节点详情按 id 现查，
+ * 设定集清单（issue 44）来自常驻读取器。 */
 export function readToolOf(
   canvasDigest: string | undefined,
   onReadNode: ((nodeId: string) => string | null) | undefined,
+  onReadSettings?: () => string,
 ): ReadToolExecutor {
   return (name, args) => {
     if (name === 'get_graph_snapshot') return canvasDigest ?? '（画布为空）'
     if (name === 'get_node') {
       const id = typeof args.nodeId === 'string' ? args.nodeId : ''
       return onReadNode?.(id) ?? `node not found: ${id}`
+    }
+    if (name === 'get_settings_snapshot') {
+      return onReadSettings?.() ?? '{"characters":[],"locations":[]}'
     }
     return `unknown read tool: ${name}`
   }

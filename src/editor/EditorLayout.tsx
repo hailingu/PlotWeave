@@ -76,6 +76,7 @@ export default function EditorLayout(props: EditorLayoutProps) {
           onValidateAi={ai.validateAiReply}
           onValidateCommands={ai.validateCommands}
           onReadNode={ai.readNode}
+          onReadSettings={ai.readSettings}
           onApplyAiBatch={ai.applyAiBatch}
         />
       </div>

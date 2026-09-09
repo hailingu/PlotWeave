@@ -4,6 +4,7 @@ import { simulateBatch, type BatchOps } from './batchSim'
 import type { ValidatedCommand } from './commands'
 import { mergeNodeData } from '../nodes/patch'
 import type { CanvasNode, SceneFlowNode, BranchFlowNode } from '../nodes/types'
+import { EMPTY_SETTINGS, type ProjectSettings } from '../settings'
 
 function sceneNode(id: string, sceneNo = 1): SceneFlowNode {
   return {
@@ -21,6 +22,15 @@ function sceneNode(id: string, sceneNo = 1): SceneFlowNode {
   }
 }
 
+function dialogueNode(id: string): CanvasNode {
+  return {
+    id,
+    type: 'dialogue',
+    position: { x: 0, y: 0 },
+    data: { name: '对质', lines: [{ id: 'line-1', kind: 'line', speaker: 'ch-1', text: '你来了。' }] },
+  } as CanvasNode
+}
+
 function branchNode(id: string): BranchFlowNode {
   return {
     id,
@@ -31,8 +41,12 @@ function branchNode(id: string): BranchFlowNode {
 }
 
 /** 可变状态 + 注入 ops：模拟 EditorView 的真实 setState 行为。 */
-function mkOps(initialNodes: CanvasNode[], initialEdges: Edge[] = []) {
-  const state = { nodes: [...initialNodes], edges: [...initialEdges] }
+function mkOps(initialNodes: CanvasNode[], initialEdges: Edge[] = [], initialSettings: ProjectSettings = EMPTY_SETTINGS) {
+  const state = {
+    nodes: [...initialNodes],
+    edges: [...initialEdges],
+    settings: initialSettings,
+  }
   let seq = 0
   const ops: BatchOps = {
     buildNewNode: (type, opts) =>
@@ -51,6 +65,9 @@ function mkOps(initialNodes: CanvasNode[], initialEdges: Edge[] = []) {
     },
     setEdges: (up) => {
       state.edges = up(state.edges)
+    },
+    setSettings: (up) => {
+      state.settings = up(state.settings)
     },
   }
   return { state, ops }
@@ -302,5 +319,120 @@ describe('simulateBatch · 混合批次', () => {
     expect(state.nodes.map((n) => n.id)).toEqual(['s1', 'b1'])
     expect(state.nodes[0].data.synopsis).toBe('…')
     expect(state.edges).toEqual([])
+  })
+})
+
+describe('simulateBatch · 设定实体命令（issue 44：实体 + 绑定复合执行）', () => {
+  it('新建角色/地点并按 ref 绑定场景与对白：落地真实 id，无临时 ref 残留；undo 整体回滚', () => {
+    const ch = { id: 'ch-keep', name: '陈默', gradient: 'g0' }
+    const { state, ops } = mkOps(
+      [sceneNode('s1'), dialogueNode('d1')],
+      [],
+      { characters: [ch], locations: [] },
+    )
+    const batch: ValidatedCommand[] = [
+      { op: 'upsert_character', ref: 'hero', fields: { name: '林一', bio: '侦探' } } as ValidatedCommand,
+      { op: 'upsert_location', ref: 'home', fields: { name: '公寓' } } as ValidatedCommand,
+      {
+        op: 'update_node',
+        nodeId: 's1',
+        patch: { nodeType: 'scene', patch: { characterIds: ['hero', 'ch-keep'], locationId: 'home' } },
+      },
+      {
+        op: 'update_node',
+        nodeId: 'd1',
+        patch: {
+          nodeType: 'dialogue',
+          patch: { lines: [{ id: 'line-1', kind: 'line', speaker: 'hero', text: '你来了。' }] },
+        },
+      },
+    ]
+    const { forward, backward } = simulateBatch(batch, ops, state.nodes, state.edges, state.settings)
+    forward.forEach((f) => f())
+
+    // 实体以应用分配的真实 id 落地（ch-/loc- 前缀），绑定处已解析、无 ref 残留
+    expect(state.settings.characters).toHaveLength(2)
+    const hero = state.settings.characters.find((c) => c.name === '林一')!
+    expect(hero.id).toMatch(/^ch-/)
+    expect(hero.bio).toBe('侦探')
+    expect(state.settings.locations[0].id).toMatch(/^loc-/)
+    expect(state.settings.locations[0].name).toBe('公寓')
+    const s1 = state.nodes.find((n) => n.id === 's1')!
+    expect(s1.type === 'scene' && s1.data.characterIds).toEqual([hero.id, 'ch-keep'])
+    expect(s1.type === 'scene' && s1.data.locationId).toBe(state.settings.locations[0].id)
+    const d1 = state.nodes.find((n) => n.id === 'd1')!
+    expect(d1.type === 'dialogue' && d1.data.lines[0].speaker).toBe(hero.id)
+
+    ;[...backward].reverse().forEach((f) => f())
+    expect(state.settings.characters).toEqual([ch])
+    expect(state.settings.locations).toEqual([])
+    const s1r = state.nodes.find((n) => n.id === 's1')!
+    expect(s1r.type === 'scene' && s1r.data.characterIds).toEqual([])
+    const d1r = state.nodes.find((n) => n.id === 'd1')!
+    expect(d1r.type === 'dialogue' && d1r.data.lines[0].speaker).toBe('ch-1')
+
+    // redo 复用同一实体对象：撤销-重做往返不改变实体 id
+    forward.forEach((f) => f())
+    expect(state.settings.characters.find((c) => c.name === '林一')?.id).toBe(hero.id)
+  })
+
+  it('修改既有实体只覆盖写到的字段；undo 恢复原值；props/documents 透传保真', () => {
+    const ch = { id: 'ch-1', name: '陈默', gradient: 'g1', bio: '旧小传' }
+    const loc = { id: 'loc-1', name: '茶馆', note: '老城区' }
+    const props = [{ id: 'prop-1', name: '怀表' }]
+    const documents = [{ id: 'doc-1', title: '小传', body: '……', relatedIds: [] }]
+    const { state, ops } = mkOps(
+      [],
+      [],
+      { characters: [ch], locations: [loc], props, documents },
+    )
+    const batch: ValidatedCommand[] = [
+      { op: 'upsert_character', entityId: 'ch-1', fields: { bio: '新小传' } } as ValidatedCommand,
+      { op: 'upsert_location', entityId: 'loc-1', fields: { note: '拆迁前' } } as ValidatedCommand,
+    ]
+    const { forward, backward } = simulateBatch(batch, ops, state.nodes, state.edges, state.settings)
+    forward.forEach((f) => f())
+    const chAfter = state.settings.characters[0]
+    expect(chAfter.id).toBe('ch-1')
+    expect(chAfter.name).toBe('陈默')
+    expect(chAfter.gradient).toBe('g1')
+    expect(chAfter.bio).toBe('新小传')
+    expect(state.settings.locations[0].note).toBe('拆迁前')
+    // 未参与编辑的透传桶原样保真
+    expect(state.settings.props).toEqual(props)
+    expect(state.settings.documents).toEqual(documents)
+
+    backward.forEach((f) => f())
+    expect(state.settings.characters[0]).toEqual(ch)
+    expect(state.settings.locations[0]).toEqual(loc)
+  })
+
+  it('同批先建后改（entityId 用 ref）：第二次修改不覆盖第一次的结果', () => {
+    const { state, ops } = mkOps([], [])
+    const batch: ValidatedCommand[] = [
+      { op: 'upsert_character', ref: 'hero', fields: { name: '林一' } } as ValidatedCommand,
+      { op: 'upsert_character', entityId: 'hero', fields: { bio: '侦探' } } as ValidatedCommand,
+    ]
+    const { forward, backward } = simulateBatch(batch, ops, state.nodes, state.edges, state.settings)
+    forward.forEach((f) => f())
+    const hero = state.settings.characters[0]
+    expect(hero.name).toBe('林一')
+    expect(hero.bio).toBe('侦探')
+
+    backward.forEach((f) => f())
+    expect(state.settings.characters).toEqual([])
+  })
+
+  it('update 挂 ref 别名既有实体后，绑定命令经别名解析', () => {
+    const ch = { id: 'ch-1', name: '陈默', gradient: 'g1' }
+    const { state, ops } = mkOps([sceneNode('s1')], [], { characters: [ch], locations: [] })
+    const batch: ValidatedCommand[] = [
+      { op: 'upsert_character', entityId: 'ch-1', ref: 'hero', fields: { bio: '补' } } as ValidatedCommand,
+      { op: 'update_node', nodeId: 's1', patch: { nodeType: 'scene', patch: { characterIds: ['hero'] } } },
+    ]
+    const { forward } = simulateBatch(batch, ops, state.nodes, state.edges, state.settings)
+    forward.forEach((f) => f())
+    const s1 = state.nodes[0]
+    expect(s1.type === 'scene' && s1.data.characterIds).toEqual(['ch-1'])
   })
 })

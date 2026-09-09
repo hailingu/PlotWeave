@@ -5,7 +5,7 @@ import type { Edge } from '@xyflow/react'
 import { nodeLabelOf, useAiBridge, type AiBridgeDeps } from './useAiBridge'
 import type { ValidatedCommand } from './ai/commands'
 import type { HistoryCommand } from './history'
-import { EMPTY_SETTINGS } from './settings'
+import { EMPTY_SETTINGS, type ProjectSettings } from './settings'
 import type { BranchFlowNode, CanvasNode, SceneFlowNode } from './nodes/types'
 
 function sceneNode(id: string, sceneNo = 1): SceneFlowNode {
@@ -59,17 +59,22 @@ describe('nodeLabelOf（节点人读标签）', () => {
   })
 })
 
-/** 可变画布状态 + AI 桥依赖（模拟 EditorView 注入）。 */
-function setup(initialNodes: CanvasNode[] = [sceneNode('s1')], initialEdges: Edge[] = []) {
-  const state = { nodes: [...initialNodes], edges: [...initialEdges] }
+/** 可变画布/设定集状态 + AI 桥依赖（模拟 EditorView 注入）。 */
+function setup(
+  initialNodes: CanvasNode[] = [sceneNode('s1')],
+  initialEdges: Edge[] = [],
+  initialSettings: ProjectSettings = EMPTY_SETTINGS,
+) {
+  const state = { nodes: [...initialNodes], edges: [...initialEdges], settings: initialSettings }
   const commands: HistoryCommand[] = []
   const closeSettings = vi.fn()
   const deps: AiBridgeDeps = {
     nodes: state.nodes,
     edges: state.edges,
-    settings: EMPTY_SETTINGS,
+    settings: state.settings,
     nodesRef: { current: state.nodes },
     edgesRef: { current: state.edges },
+    settingsRef: { current: state.settings },
     assetsRef: {
       current: {
         byId: {
@@ -97,11 +102,15 @@ function setup(initialNodes: CanvasNode[] = [sceneNode('s1')], initialEdges: Edg
       state.edges = up(state.edges)
       deps.edgesRef.current = state.edges
     },
+    setSettings: (up) => {
+      state.settings = up(state.settings)
+      deps.settingsRef.current = state.settings
+    },
     pushHistory: (cmd) => commands.push(cmd),
     closeSettings,
   }
   const { result } = renderHook(() => useAiBridge(deps))
-  return { result, state, commands, closeSettings }
+  return { result, state, commands, closeSettings, deps }
 }
 
 describe('useAiBridge（§6/§12 AI 桥回调族）', () => {
@@ -199,5 +208,79 @@ describe('useAiBridge（§6/§12 AI 桥回调族）', () => {
     expect(b1r.type === 'branch' && b1r.data.prompt).toBe('去哪？')
     commands[0].redo()
     expect(state.nodes).toHaveLength(3)
+  })
+})
+
+describe('useAiBridge · 设定实体通道（issue 44）', () => {
+  it('validateCommands：快照带设定集时校验实体存在性与引用类型', () => {
+    const { result } = setup(
+      [sceneNode('s1')],
+      [],
+      { characters: [{ id: 'ch-1', name: '陈默', gradient: 'g' }], locations: [] },
+    )
+    const ok = result.current.validateCommands([
+      { op: 'update_node', nodeId: 's1', patch: { characterIds: ['ch-1'] } },
+    ])
+    expect(ok?.ok).toBe(true)
+
+    const bad = result.current.validateCommands([
+      { op: 'update_node', nodeId: 's1', patch: { characterIds: ['loc-404'] } },
+    ])
+    expect(bad?.ok).toBe(false)
+    expect(bad?.issues[0].message).toContain('角色实体不存在')
+  })
+
+  it('applyAiBatch：新建实体 + 场景绑定为一条复合命令，undo/redo 同时恢复两侧', () => {
+    const { result, state, commands } = setup([sceneNode('s1')])
+    const batch: ValidatedCommand[] = [
+      { op: 'upsert_character', ref: 'hero', fields: { name: '林一', bio: '侦探' } },
+      {
+        op: 'update_node',
+        nodeId: 's1',
+        patch: { nodeType: 'scene', patch: { characterIds: ['hero'] } },
+      },
+    ]
+    expect(result.current.applyAiBatch(batch)).toBeNull()
+
+    const hero = state.settings.characters.find((c) => c.name === '林一')!
+    expect(hero.id).toMatch(/^ch-/)
+    const s1 = state.nodes.find((n) => n.id === 's1')!
+    expect(s1.type === 'scene' && s1.data.characterIds).toEqual([hero.id])
+
+    commands[0].undo()
+    expect(state.settings.characters).toEqual([])
+    const s1r = state.nodes.find((n) => n.id === 's1')!
+    expect(s1r.type === 'scene' && s1r.data.characterIds).toEqual([])
+
+    commands[0].redo()
+    expect(state.settings.characters[0]?.id).toBe(hero.id)
+    const s1rr = state.nodes.find((n) => n.id === 's1')!
+    expect(s1rr.type === 'scene' && s1rr.data.characterIds).toEqual([hero.id])
+  })
+
+  it('applyAiBatch：预览后实体被用户删除，执行重校验整体拒绝、无部分写入', () => {
+    const { result, state, commands, deps } = setup(
+      [sceneNode('s1')],
+      [],
+      { characters: [{ id: 'ch-1', name: '陈默', gradient: 'g' }], locations: [] },
+    )
+    const staleBatch = [
+      { op: 'upsert_character', entityId: 'ch-1', fields: { bio: 'x' } },
+    ] as ValidatedCommand[]
+    // 预览后用户删除了该实体（经真实 setSettings 通道，settingsRef 同步变化）
+    deps.setSettings(() => ({ characters: [], locations: [] }))
+    expect(result.current.applyAiBatch(staleBatch)).toContain('无法安全执行')
+    expect(commands).toHaveLength(0)
+    expect(state.settings.characters).toEqual([])
+  })
+
+  it('readSettings：返回设定集 JSON 摘要（读工具回喂用）', () => {
+    const { result } = setup([], [], {
+      characters: [{ id: 'ch-1', name: '陈默', gradient: 'g', bio: '侦探' }],
+      locations: [],
+    })
+    const text = result.current.readSettings()
+    const parsed = JSON.parse(text) as { characters: Array<{ id: string; name: string; bio?: string }> }
+    expect(parsed.characters[0]).toEqual({ id: 'ch-1', name: '陈默', bio: '侦探' })
   })
 })

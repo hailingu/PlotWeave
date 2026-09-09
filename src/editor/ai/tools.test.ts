@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { AI_TOOLS, WRITE_TOOL_NAMES, toolCallsToCommands, type ToolCall } from './tools'
 import { nodeFieldTableText } from './nodeFields'
+import { entityFieldTableText } from './entityFields'
 
 const call = (name: string, args: unknown): ToolCall => ({
   id: `call-${name}`,
@@ -40,19 +41,18 @@ describe('toolCallsToCommands（§12.2 tool_calls → 预览卡命令）', () =>
     expect(commands).toEqual(inner)
   })
 
-  it('batch 内的工具名 op 归一为命令词表（update_node_spec → update_node）', () => {
+  it('batch 内的工具名 op 归一为命令词表（update_node_spec → update_node）；upsert op 原样保留', () => {
+    const inner = [
+      { op: 'upsert_character', ref: 'hero', fields: { name: '林一' } },
+      { op: 'connect_edge', sourceId: 'b', targetId: 's1' },
+    ]
     const { commands, errors } = toolCallsToCommands([
-      call('batch', {
-        commands: [
-          { op: 'update_node_spec', nodeId: 'n1', patch: { options: ['坦白', '隐瞒', '沉默'] } },
-          { op: 'update_node', nodeId: 'n2', patch: { tone: '爆发' } },
-        ],
-      }),
+      call('batch', { commands: [{ op: 'update_node_spec', nodeId: 'n1', patch: { tone: '爆发' } }, ...inner] }),
     ])
     expect(errors).toEqual([])
     expect(commands).toEqual([
-      { op: 'update_node', nodeId: 'n1', patch: { options: ['坦白', '隐瞒', '沉默'] } },
-      { op: 'update_node', nodeId: 'n2', patch: { tone: '爆发' } },
+      { op: 'update_node', nodeId: 'n1', patch: { tone: '爆发' } },
+      ...inner,
     ])
   })
 
@@ -60,11 +60,38 @@ describe('toolCallsToCommands（§12.2 tool_calls → 预览卡命令）', () =>
     const { commands, readRequests } = toolCallsToCommands([
       call('get_graph_snapshot', {}),
       call('get_node', { nodeId: 'n1' }),
+      call('get_settings_snapshot', {}),
     ])
     expect(commands).toEqual([])
-    expect(readRequests.map((r) => r.name)).toEqual(['get_graph_snapshot', 'get_node'])
+    expect(readRequests.map((r) => r.name)).toEqual([
+      'get_graph_snapshot',
+      'get_node',
+      'get_settings_snapshot',
+    ])
     expect(readRequests[1].args).toEqual({ nodeId: 'n1' })
     expect(readRequests[0].id).toBe('call-get_graph_snapshot')
+  })
+
+  it('upsert_character / upsert_location 映射为对应命令（issue 44）：fields 归对象、entityId 安全串化', () => {
+    const { commands, errors } = toolCallsToCommands([
+      call('upsert_character', { ref: 'hero', fields: { name: '林一', bio: '侦探' }, reason: '主角' }),
+      call('upsert_location', { entityId: 'loc-1', fields: { note: '雨夜' } }),
+      call('upsert_character', { fields: { name: ['坏'] } }),
+    ])
+    expect(errors).toEqual([])
+    expect(commands[0]).toEqual({
+      op: 'upsert_character',
+      ref: 'hero',
+      fields: { name: '林一', bio: '侦探' },
+      reason: '主角',
+    })
+    expect(commands[1]).toEqual({
+      op: 'upsert_location',
+      entityId: 'loc-1',
+      fields: { note: '雨夜' },
+    })
+    // 非字符串 entityId 归空（按 create 处理）、非对象 fields 回退空对象由校验器点名
+    expect(commands[2]).toMatchObject({ op: 'upsert_character', fields: {} })
   })
 
   it('坏参数与未知工具进 errors，不中断其余解析', () => {
@@ -95,16 +122,19 @@ describe('toolCallsToCommands（§12.2 tool_calls → 预览卡命令）', () =>
 })
 
 describe('工具表定义', () => {
-  it('包含数据模型 §12.2 的读三写五工具，参数均为对象 schema', () => {
+  it('包含数据模型 §12.2 的读三写八工具（issue 44 增设定集通道），参数均为对象 schema', () => {
     const names = AI_TOOLS.map((t) => t.function.name)
     for (const expected of [
       'get_graph_snapshot',
       'get_node',
+      'get_settings_snapshot',
       'create_node',
       'delete_node',
       'update_node_spec',
       'connect_edge',
       'disconnect_edge',
+      'upsert_character',
+      'upsert_location',
       'batch',
     ]) {
       expect(names).toContain(expected)
@@ -114,7 +144,9 @@ describe('工具表定义', () => {
       expect(t.function.parameters.type).toBe('object')
     }
     expect(WRITE_TOOL_NAMES.has('batch')).toBe(true)
+    expect(WRITE_TOOL_NAMES.has('upsert_character')).toBe(true)
     expect(WRITE_TOOL_NAMES.has('get_node')).toBe(false)
+    expect(WRITE_TOOL_NAMES.has('get_settings_snapshot')).toBe(false)
   })
 
   it('data/patch/批次通道嵌入共享字段表（issue 41：协议与校验器同源）', () => {
@@ -127,5 +159,16 @@ describe('工具表定义', () => {
     expect(paramOf('create_node', 'data')).toContain(nodeFieldTableText())
     expect(paramOf('update_node_spec', 'patch')).toContain(nodeFieldTableText())
     expect(paramOf('batch', 'commands')).toContain(nodeFieldTableText())
+  })
+
+  it('upsert 工具 fields 嵌入实体字段表（issue 44：与校验白名单同源）', () => {
+    const paramOf = (tool: string, key: string): unknown => {
+      const props = AI_TOOLS.find((t) => t.function.name === tool)!.function.parameters
+        .properties as Record<string, { description?: unknown }>
+      return props[key]?.description
+    }
+    expect(paramOf('upsert_character', 'fields')).toContain(entityFieldTableText())
+    expect(paramOf('upsert_location', 'fields')).toContain(entityFieldTableText())
+    expect(paramOf('batch', 'commands')).toContain(entityFieldTableText())
   })
 })
