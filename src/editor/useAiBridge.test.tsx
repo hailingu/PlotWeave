@@ -174,6 +174,32 @@ describe('useAiBridge（§6/§12 AI 桥回调族）', () => {
     expect(result.current.readNode('ghost')).toBeNull()
   })
 
+  it('applyAiBatch：合法批次整批落地为一条复合命令，undo 一步回滚', () => {
+    const { result, state, commands, closeSettings } = setup([sceneNode('s1'), branchNode('b1')])
+    const batch: ValidatedCommand[] = [
+      { op: 'create_node', nodeType: 'scene', ref: 'ns', data: { name: '新场' } },
+      { op: 'connect_edge', sourceId: 's1', targetId: 'ns' },
+      { op: 'update_node', nodeId: 'b1', patch: { nodeType: 'branch', patch: { prompt: '走哪边？' } } },
+    ]
+    expect(result.current.applyAiBatch(batch)).toBeNull()
+    expect(state.nodes).toHaveLength(3)
+    expect(state.edges).toHaveLength(1)
+    const b1 = state.nodes.find((n) => n.id === 'b1')!
+    expect(b1.type === 'branch' && b1.data.prompt).toBe('走哪边？')
+    expect(closeSettings).toHaveBeenCalledTimes(1)
+
+    expect(commands).toHaveLength(1)
+    commands[0].undo()
+    expect(state.nodes).toHaveLength(2)
+    expect(state.edges).toEqual([])
+    const b1r = state.nodes.find((n) => n.id === 'b1')!
+    expect(b1r.type === 'branch' && b1r.data.prompt).toBe('去哪？')
+    commands[0].redo()
+    expect(state.nodes).toHaveLength(3)
+  })
+})
+
+describe('useAiBridge · applyAiBatch 执行边界', () => {
   it('applyAiBatch：空批次直接 null；非法批次返回错误文案且不改画布', () => {
     const { result, state, commands } = setup()
     expect(result.current.applyAiBatch([])).toBeNull()
@@ -198,30 +224,6 @@ describe('useAiBridge（§6/§12 AI 桥回调族）', () => {
 
     expect(result.current.applyAiBatch([restored])).toBeNull()
     expect(state.nodes[state.nodes.length - 1]?.type).toBe('scene')
-  })
-
-  it('applyAiBatch：合法批次整批落地为一条复合命令，undo 一步回滚', () => {
-    const { result, state, commands, closeSettings } = setup([sceneNode('s1'), branchNode('b1')])
-    const batch: ValidatedCommand[] = [
-      { op: 'create_node', nodeType: 'scene', ref: 'ns', data: { name: '新场' } },
-      { op: 'connect_edge', sourceId: 's1', targetId: 'ns' },
-      { op: 'update_node', nodeId: 'b1', patch: { nodeType: 'branch', patch: { prompt: '走哪边？' } } },
-    ]
-    expect(result.current.applyAiBatch(batch)).toBeNull()
-    expect(state.nodes).toHaveLength(3)
-    expect(state.edges).toHaveLength(1)
-    const b1 = state.nodes.find((n) => n.id === 'b1')!
-    expect(b1.type === 'branch' && b1.data.prompt).toBe('走哪边？')
-    expect(closeSettings).toHaveBeenCalledTimes(1)
-
-    expect(commands).toHaveLength(1)
-    commands[0].undo()
-    expect(state.nodes).toHaveLength(2)
-    expect(state.edges).toEqual([])
-    const b1r = state.nodes.find((n) => n.id === 'b1')!
-    expect(b1r.type === 'branch' && b1r.data.prompt).toBe('去哪？')
-    commands[0].redo()
-    expect(state.nodes).toHaveLength(3)
   })
 })
 

@@ -205,30 +205,6 @@ describe('RightPanel ✦AI 引导与模型', () => {
 })
 
 describe('RightPanel ✦AI 对话', () => {
-  it('切到检查器再返回时保留同一项目的会话历史', async () => {
-    vi.spyOn(settingsStore, 'load').mockResolvedValue(APP_WITH_KEY)
-    llmChatMock.mockResolvedValue(reply({ content: '先让人物目标相撞。' }))
-    const props = {
-      open: true,
-      width: 320,
-      tab: 'ai' as const,
-      settings: SETTINGS,
-      onResize: vi.fn(),
-      onTabChange: vi.fn(),
-      canvasDigest: 'SNAPSHOT',
-    }
-    const view = render(<RightPanel {...props} />)
-    await screen.findByLabelText('AI 对话输入')
-    send('怎么增强冲突？')
-    expect(await screen.findByText('先让人物目标相撞。')).toBeTruthy()
-
-    view.rerender(<RightPanel {...props} tab="inspector" />)
-    view.rerender(<RightPanel {...props} tab="ai" />)
-
-    expect(await screen.findByText('怎么增强冲突？')).toBeTruthy()
-    expect(screen.getByText('先让人物目标相撞。')).toBeTruthy()
-  })
-
   it('纯文本问答：消息序列含系统提示与画布快照，回复上屏', async () => {
     const spies = await toAiTab(APP_WITH_KEY)
     llmChatMock.mockResolvedValue(reply({ content: '建议先立冲突。' }))
@@ -286,6 +262,32 @@ describe('RightPanel ✦AI 对话', () => {
   })
 })
 
+describe('RightPanel ✦AI 会话历史保持', () => {
+  it('切到检查器再返回时保留同一项目的会话历史', async () => {
+    vi.spyOn(settingsStore, 'load').mockResolvedValue(APP_WITH_KEY)
+    llmChatMock.mockResolvedValue(reply({ content: '先让人物目标相撞。' }))
+    const props = {
+      open: true,
+      width: 320,
+      tab: 'ai' as const,
+      settings: SETTINGS,
+      onResize: vi.fn(),
+      onTabChange: vi.fn(),
+      canvasDigest: 'SNAPSHOT',
+    }
+    const view = render(<RightPanel {...props} />)
+    await screen.findByLabelText('AI 对话输入')
+    send('怎么增强冲突？')
+    expect(await screen.findByText('先让人物目标相撞。')).toBeTruthy()
+
+    view.rerender(<RightPanel {...props} tab="inspector" />)
+    view.rerender(<RightPanel {...props} tab="ai" />)
+
+    expect(await screen.findByText('怎么增强冲突？')).toBeTruthy()
+    expect(screen.getByText('先让人物目标相撞。')).toBeTruthy()
+  })
+})
+
 /** 一条合法 create 命令与对应校验结果的桩。 */
 const CREATE_CMD: ValidatedCommand = { op: 'create_node', nodeType: 'scene', ref: 'a', data: { name: '场二' } }
 
@@ -327,23 +329,6 @@ describe('RightPanel ✦AI 改动预览卡', () => {
     expect(screen.getAllByText(/⌘Z 可整批撤销/)).toHaveLength(1)
   })
 
-  it('恢复的已执行卡标注为历史改动，不宣称当前撤销栈可整批撤销', async () => {
-    await toAiTab(APP_WITH_KEY, {
-      aiSession: {
-        schemaVersion: 1,
-        entries: [{
-          id: 1,
-          kind: 'msg',
-          role: 'assistant',
-          text: '先前的改动。',
-          card: { v: validationOf(), status: 'executed' },
-        }],
-      },
-    })
-    expect(screen.getByText(/已执行/)).toBeTruthy()
-    expect(screen.queryByText(/⌘Z 可整批撤销/)).toBeNull()
-  })
-
   it('含删除批次：执行按钮两步武装确认', async () => {
     const spies = await toAiTab(APP_WITH_KEY)
     spies.onValidateCommands.mockReturnValue(
@@ -359,33 +344,6 @@ describe('RightPanel ✦AI 改动预览卡', () => {
     expect(spies.onApplyAiBatch).not.toHaveBeenCalled()
     fireEvent.click(await screen.findByRole('button', { name: '再点一次确认执行删除' }))
     expect(spies.onApplyAiBatch).toHaveBeenCalled()
-  })
-
-  it('恢复待执行卡时按当前画布重建删除风险，仍要求两步确认', async () => {
-    const deleteCommand: ValidatedCommand = { op: 'delete_node', nodeId: 's1' }
-    const stalePreview = validationOf({ commands: [deleteCommand] })
-    const currentPreview = validationOf({
-      commands: [deleteCommand],
-      items: [{ kind: 'delete', danger: true, label: '删除 场景 · 场一', key: 'd0' }],
-      hasDeletes: true,
-    })
-    const validate = vi.fn(() => currentPreview)
-    await toAiTab(APP_WITH_KEY, {
-      aiSession: {
-        schemaVersion: 1,
-        entries: [{
-          id: 1,
-          kind: 'msg',
-          role: 'assistant',
-          text: '已恢复的改动。',
-          card: { v: stalePreview, status: 'pending' },
-        }],
-      },
-      onValidateCommands: validate,
-    })
-
-    expect(validate).toHaveBeenCalledWith([deleteCommand])
-    expect(screen.getByRole('button', { name: /执行（含 1 项删除）/ })).toBeTruthy()
   })
 
   it('忽略：预览卡消失且不执行；执行失败出错误回执', async () => {
@@ -427,6 +385,52 @@ describe('RightPanel ✦AI 改动预览卡', () => {
     expect(screen.getByText('我建议加一场。')).toBeTruthy()
     expect(screen.queryByText(/```json/)).toBeNull()
     expect(spies.onValidateAi).toHaveBeenCalled()
+  })
+})
+
+describe('RightPanel ✦AI 恢复卡重校验', () => {
+  it('恢复的已执行卡标注为历史改动，不宣称当前撤销栈可整批撤销', async () => {
+    await toAiTab(APP_WITH_KEY, {
+      aiSession: {
+        schemaVersion: 1,
+        entries: [{
+          id: 1,
+          kind: 'msg',
+          role: 'assistant',
+          text: '先前的改动。',
+          card: { v: validationOf(), status: 'executed' },
+        }],
+      },
+    })
+    expect(screen.getByText(/已执行/)).toBeTruthy()
+    expect(screen.queryByText(/⌘Z 可整批撤销/)).toBeNull()
+  })
+
+  it('恢复待执行卡时按当前画布重建删除风险，仍要求两步确认', async () => {
+    const deleteCommand: ValidatedCommand = { op: 'delete_node', nodeId: 's1' }
+    const stalePreview = validationOf({ commands: [deleteCommand] })
+    const currentPreview = validationOf({
+      commands: [deleteCommand],
+      items: [{ kind: 'delete', danger: true, label: '删除 场景 · 场一', key: 'd0' }],
+      hasDeletes: true,
+    })
+    const validate = vi.fn(() => currentPreview)
+    await toAiTab(APP_WITH_KEY, {
+      aiSession: {
+        schemaVersion: 1,
+        entries: [{
+          id: 1,
+          kind: 'msg',
+          role: 'assistant',
+          text: '已恢复的改动。',
+          card: { v: stalePreview, status: 'pending' },
+        }],
+      },
+      onValidateCommands: validate,
+    })
+
+    expect(validate).toHaveBeenCalledWith([deleteCommand])
+    expect(screen.getByRole('button', { name: /执行（含 1 项删除）/ })).toBeTruthy()
   })
 })
 
@@ -490,7 +494,9 @@ describe('RightPanel ✦AI 会话保存错误', () => {
     expect(await screen.findByText(/聊天记录保存失败/)).toBeTruthy()
     expect(screen.getByText(/磁盘已满/)).toBeTruthy()
   })
+})
 
+describe('RightPanel ✦AI 恢复条目重定基', () => {
   it('恢复条目 id 达到安全整数上限时重定基，新增条目落盘 id 仍可归一化', async () => {
     const onSaveSession = vi.fn((_session: unknown) => Promise.resolve())
     llmChatMock.mockResolvedValue(reply({ content: '收到。' }))

@@ -310,7 +310,9 @@ describe('App ✦AI 会话保存失败', () => {
     expect(editorProps.current.aiSessionError).toContain('磁盘已满')
     expect(editorProps.current.aiSessionRetryable).toBe(true)
   })
+})
 
+describe('App ✦AI 会话保存失败（在途）', () => {
   it('保存在途时重开项目：保留区在加载屏障之后读取，拒绝晚到仍命中', async () => {
     await openEditor()
     let rejectSave!: (err: Error) => void
