@@ -12,6 +12,7 @@ import {
   type SetStateAction,
 } from 'react'
 import HomePage from './home/HomePage'
+import { useExitFlush } from './useExitFlush'
 import { projectStore, type ProjectContent } from './projectStore'
 import type { ProjectSummary } from './home/projects'
 import type { AiSession } from './editor/ai/session'
@@ -293,14 +294,26 @@ export default function App() {
 
   const open = useOpenProjectActions(setOpenProject, refreshProjects, unsavedAiSessionsRef)
   const home = useHomeProjectActions(refreshProjects, unsavedAiSessionsRef)
-  return <AppView
-    projects={projects}
-    loading={loading}
-    openProject={openProject}
-    settingsOpen={settingsOpen}
-    open={open}
-    home={home}
-    onOpenSettings={() => startTransition(() => setSettingsOpen(true))}
-    onCloseSettings={() => startTransition(() => setSettingsOpen(false))}
-  />
+  /** 退出冲刷屏障：未落盘会话仍在时阻止关闭窗口（见 useExitFlush）。 */
+  const exitBlocked = useExitFlush()
+  return <>
+    {exitBlocked !== null && (
+      <div
+        role="alert"
+        style={{ padding: '6px 16px', background: '#5c1d1d', color: '#ffe3e3', fontSize: 13 }}
+      >
+        {exitBlocked}
+      </div>
+    )}
+    <AppView
+      projects={projects}
+      loading={loading}
+      openProject={openProject}
+      settingsOpen={settingsOpen}
+      open={open}
+      home={home}
+      onOpenSettings={() => startTransition(() => setSettingsOpen(true))}
+      onCloseSettings={() => startTransition(() => setSettingsOpen(false))}
+    />
+  </>
 }

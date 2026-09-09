@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 /** Tauri 会话路径：主/副本按写入时刻取新、修复写回失败上报、保存失败在链内写副本。 */
 const invoke = vi.fn<(...args: unknown[]) => Promise<unknown>>()
@@ -241,5 +241,58 @@ describe('saveAiSession Tauri 路径 · 写链内副本', () => {
     await save
     await second
     expect(secondStarted).toBe(true)
+  })
+})
+
+describe('saveAiSession 失败重试与退出冲刷', () => {
+  afterEach(() => vi.useRealTimers())
+
+  /** 先 load 播种写入序号，再让一次保存失败（主文件失败、副本成功）。 */
+  async function failOnce(store: typeof import('./aiSessionStore')) {
+    invoke.mockResolvedValueOnce(session('权威', 5)).mockResolvedValueOnce(null)
+    await store.loadAiSession('p1')
+    invoke.mockReset()
+    invoke.mockRejectedValueOnce(new Error('磁盘已满')).mockResolvedValueOnce(undefined)
+    await expect(store.saveAiSession('p1', payload)).rejects.toThrow('磁盘已满')
+    invoke.mockReset()
+  }
+
+  it('保存失败后按节律重试，成功即清出登记', async () => {
+    vi.useFakeTimers()
+    const store = await import('./aiSessionStore')
+    await failOnce(store)
+    expect(store.hasPendingAiSessionSaves()).toBe(true)
+
+    invoke.mockResolvedValue(undefined)
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(store.hasPendingAiSessionSaves()).toBe(false)
+    expect(commandsOf()).toEqual(['save_ai_session'])
+  })
+
+  it('冲刷待重试会话：仍失败的 id 上浮，存储恢复后清出', async () => {
+    vi.useFakeTimers()
+    const store = await import('./aiSessionStore')
+    await failOnce(store)
+
+    invoke.mockRejectedValue(new Error('磁盘已满'))
+    await expect(store.flushPendingAiSessionSaves()).resolves.toEqual(['p1'])
+
+    invoke.mockReset()
+    invoke.mockResolvedValue(undefined)
+    await expect(store.flushPendingAiSessionSaves()).resolves.toEqual([])
+    expect(store.hasPendingAiSessionSaves()).toBe(false)
+  })
+
+  it('删除项目清出重试登记与定时器', async () => {
+    vi.useFakeTimers()
+    const store = await import('./aiSessionStore')
+    await failOnce(store)
+    expect(store.hasPendingAiSessionSaves()).toBe(true)
+
+    store.deleteAiSession('p1')
+    expect(store.hasPendingAiSessionSaves()).toBe(false)
+    invoke.mockReset()
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(commandsOf()).toEqual([])
   })
 })

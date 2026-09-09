@@ -27,6 +27,39 @@ export interface AiSessionLoadResult {
  * 无关——时钟回拨或同毫秒写入都不会错序。跨进程从磁盘两副本的最大值续起。 */
 const writeSeqs = new Map<string, number>()
 
+/** 未落盘会话的进程内重试（与画布保存链同款节律）：保存失败后按固定节律
+ * 重试直到成功或登记被更新/清出——不依赖下一次会话变更或编辑器重挂载。
+ * 进程退出仍会丢失；退出前的冲刷由窗口关闭屏障（useExitFlush）负责。 */
+const SESSION_RETRY_DELAY_MS = 5000
+const pendingRetrySessions = new Map<string, AiSession>()
+const retryTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const sessionGenerations = new Map<string, number>()
+
+/** 清出重试登记与定时器（保存成功、删除项目时调用）。 */
+function clearSessionRetry(id: string): void {
+  const timer = retryTimers.get(id)
+  if (timer !== undefined) {
+    clearTimeout(timer)
+    retryTimers.delete(id)
+  }
+  pendingRetrySessions.delete(id)
+}
+
+/** 按固定节律重试登记会话；代次已前进（有更新的保存排队/完成）则本次作废。 */
+function scheduleSessionRetry(id: string, generation: number): void {
+  if (retryTimers.has(id)) return
+  retryTimers.set(
+    id,
+    setTimeout(() => {
+      retryTimers.delete(id)
+      if (sessionGenerations.get(id) !== generation) return
+      const session = pendingRetrySessions.get(id)
+      if (session === undefined) return
+      void saveAiSession(id, session).catch(() => undefined)
+    }, SESSION_RETRY_DELAY_MS),
+  )
+}
+
 /** 载荷写入序号：非负安全整数之外（含旧版本文件）一律视作 0。 */
 function seqOf(raw: unknown): number {
   if (typeof raw !== 'object' || raw === null) return 0
@@ -165,20 +198,51 @@ export async function saveAiSession(id: string, session: AiSession): Promise<voi
     memorySessions.set(id, session)
     return
   }
+  const generation = (sessionGenerations.get(id) ?? 0) + 1
+  sessionGenerations.set(id, generation)
   await enqueueProjectWrite(id, async () => {
     const { invoke } = await import('@tauri-apps/api/core')
     const writeSeq = await nextWriteSeq(id, invoke as Invoke)
     try {
       await invoke('save_ai_session', { id, session: { ...session, writeSeq } })
+      if (sessionGenerations.get(id) === generation) clearSessionRetry(id)
     } catch (err) {
       await stashRecovery(id, session, writeSeq, invoke as Invoke)
+      // 主文件与恢复副本都可能未落盘：登记按节律重试，存储恢复后自愈；
+      // 失败仍上抛，调用方保留内存副本并展示诊断
+      if (sessionGenerations.get(id) === generation) {
+        pendingRetrySessions.set(id, session)
+        scheduleSessionRetry(id, generation)
+      }
       throw err
     }
   })
+}
+
+/** 是否有等待重试的未落盘会话（窗口关闭屏障据此决定是否阻止退出）。 */
+export function hasPendingAiSessionSaves(): boolean {
+  return pendingRetrySessions.size > 0
+}
+
+/** 冲刷全部待重试会话（窗口关闭屏障在允许退出前调用）；返回仍失败的
+ * 项目 id——非空即不得放行退出。失败项由 saveAiSession 重新登记重试。 */
+export async function flushPendingAiSessionSaves(): Promise<string[]> {
+  const failed: string[] = []
+  // 快照后遍历：失败项会在 saveAiSession 内重新登记，直接遍历可能重复访问
+  const pending = Array.from(pendingRetrySessions)
+  for (const [id, session] of pending) {
+    try {
+      await saveAiSession(id, session)
+    } catch {
+      failed.push(id)
+    }
+  }
+  return failed
 }
 
 /** 删除内存回退的项目会话；Tauri 路径由 delete_project 删除整个项目目录
  * 与恢复副本。 */
 export function deleteAiSession(id: string): void {
   memorySessions.delete(id)
+  clearSessionRetry(id)
 }
