@@ -9,8 +9,41 @@ use serde_json::json;
 use tauri::AppHandle;
 
 use crate::isotime::{iso8601_to_epoch_millis, iso_from_ms};
-use crate::store::persist::{projects_dir, read_verified_file};
+use crate::store::persist::{projects_dir, read_verified_file, recovery_dir, recovery_file_id};
 use crate::store::types::{empty_assets, validate_id, ProjectFile, ProjectInfo, ProjectMeta};
+
+/// 孤儿会话恢复副本清扫（§10.1/§12.2，历轮评审修复）：恢复目录中对应项目
+/// 记录已不存在的副本（项目删除成功但副本清除失败、或外部删除）在列表时
+/// 清理——项目记录是权威存在性来源，记录缺失即副本永不可达，不得无限期
+/// 留存不可发现的聊天数据。跨进程生效：启动后的首次列表即执行。扫描/删除
+/// 全程相对已绑定句柄；单条失败只记录并留待下次列表重试，不阻断列表。
+pub(crate) fn sweep_orphan_recovery(projects: &CapDir, recovery: &CapDir) {
+    let Ok(entries) = recovery.entries() else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let Some(name) = file_name.to_str() else {
+            continue;
+        };
+        let Some(id) = recovery_file_id(name) else {
+            continue;
+        };
+        if validate_id(id).is_err() {
+            continue;
+        }
+        // 仅确证记录缺失才清理：元数据读取失败（权限/瞬态 I/O）保守保留
+        match projects.symlink_metadata(format!("{id}.json")) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                if let Err(remove_err) = recovery.remove_file(name) {
+                    eprintln!("[store] 清理孤儿会话恢复副本失败（{name}）：{remove_err}");
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// 从画布 graph 派生统计：场数 = scene 节点数；结局数 = 无剧情流出边的
 /// 场景数（分支剧情的叶子场景即结局）。attach 下挂边（索引卡 → 分镜卡，
 /// 垂直派生从属）不算出边——挂了分镜的场景仍是叶子结局。
@@ -115,6 +148,11 @@ fn sort_metas_by_recency(metas: &mut [ProjectMeta]) {
 #[tauri::command]
 pub fn list_projects(app: AppHandle) -> Result<Vec<ProjectMeta>, String> {
     let root = projects_dir(&app)?;
+    // 启动/刷新时顺带清扫孤儿会话恢复副本（§10.1/§12.2）：跨进程兜底，
+    // 恢复目录不可用只跳过清扫，不影响列表
+    if let Ok(recovery) = recovery_dir(&app) {
+        sweep_orphan_recovery(&root, &recovery);
+    }
     list_project_metas(&root)
 }
 /// list_projects 的可测内核（给定已验证的 projects 根句柄）。目录扫描逐条

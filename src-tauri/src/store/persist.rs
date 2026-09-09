@@ -46,6 +46,21 @@ pub(crate) fn recovery_dir(app: &AppHandle) -> Result<CapDir, String> {
     let root = app_root_dir(app)?;
     bound_subdir(&root, "recovery", "会话恢复目录")
 }
+/// 恢复副本命名约定（§10.1）：`ai-session-{id}.json`，前缀隔离恢复目录内
+/// 的命名空间。构造与解析共用同一约定，孤儿清扫按解析结果匹配。
+const RECOVERY_PREFIX: &str = "ai-session-";
+const RECOVERY_SUFFIX: &str = ".json";
+
+/// 恢复副本文件名（id 词法由调用方先行校验）。
+pub(crate) fn recovery_file_name(id: &str) -> String {
+    format!("{RECOVERY_PREFIX}{id}{RECOVERY_SUFFIX}")
+}
+
+/// 从恢复副本文件名解析项目 id；不符合命名约定返回 None。
+pub(crate) fn recovery_file_id(name: &str) -> Option<&str> {
+    name.strip_prefix(RECOVERY_PREFIX)?
+        .strip_suffix(RECOVERY_SUFFIX)
+}
 /// 应用数据根目录（§10.2 信任链）：canonicalize 后以受信根句柄锚定，
 /// 各受管子目录的创建、非符号链接校验与打开都相对它执行。
 fn app_root_dir(app: &AppHandle) -> Result<CapDir, String> {

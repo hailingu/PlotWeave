@@ -11,6 +11,7 @@ use crate::store::list::{parse_file, read_meta};
 use crate::store::persist::asset_identity;
 use crate::store::persist::{
     atomic_write, open_dir_bound, projects_dir, read_verified_file, recovery_dir,
+    recovery_file_name,
 };
 use crate::store::types::{
     new_id, new_project_file, sanitize_name, validate_id, ProjectFile, ProjectMeta,
@@ -82,11 +83,6 @@ pub fn load_ai_session_recovery(
 ) -> Result<Option<serde_json::Value>, String> {
     let recovery = recovery_dir(&app)?;
     load_ai_session_recovery_file(&recovery, &id)
-}
-
-/// 恢复副本文件名：id 词法已校验，前缀隔离恢复目录内的命名空间。
-fn recovery_file_name(id: &str) -> String {
-    format!("ai-session-{id}.json")
 }
 
 /// 写恢复副本内核（不可信 id 与信封校验先于路径拼接）。
