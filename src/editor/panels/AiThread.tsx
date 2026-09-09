@@ -138,8 +138,77 @@ function useAiTurn(opts: {
       setBusy(false)
     }
   }
-
   return { draft, setDraft, busy, error, knowsCanvas, setKnowsCanvas, send }
+}
+
+function useAiSessionPersistence(
+  thread: ThreadEntry[],
+  initialSessionError: string | null | undefined,
+  onSaveSession: ((session: AiSession) => Promise<void>) | undefined,
+): string | null {
+  const [saveError, setSaveError] = useState<string | null>(initialSessionError ?? null)
+  const hasMounted = useRef(false)
+  const saveSessionRef = useRef(onSaveSession)
+  useEffect(() => {
+    saveSessionRef.current = onSaveSession
+  }, [onSaveSession])
+  useEffect(() => {
+    if (!hasMounted.current) {
+      hasMounted.current = true
+      return
+    }
+    const save = saveSessionRef.current
+    if (!save) return
+    void save({ schemaVersion: 1, entries: thread })
+      .then(() => setSaveError(null))
+      .catch((err: unknown) => setSaveError(String(err)))
+  }, [thread])
+  return saveError
+}
+
+function AiThreadTimeline({
+  thread,
+  threadRef,
+  armedIdx,
+  ready,
+  busy,
+  error,
+  saveError,
+  onArm,
+  onExecute,
+  onDismiss,
+}: {
+  readonly thread: ThreadEntry[]
+  readonly threadRef: { current: HTMLDivElement | null }
+  readonly armedIdx: number | null
+  readonly ready: boolean
+  readonly busy: boolean
+  readonly error: string | null
+  readonly saveError: string | null
+  readonly onArm: (index: number) => void
+  readonly onExecute: (index: number) => void
+  readonly onDismiss: (index: number) => void
+}) {
+  return <div className="pw-ai-thread" ref={threadRef}>
+    {saveError && <div className="pw-ai-msg pw-ai-msg-error">聊天记录保存失败：{saveError}</div>}
+    {thread.length === 0 && ready && (
+      <div className="pw-empty">和 AI 聊聊这一幕怎么写，或让它直接调整画布（会先出改动预览）。</div>
+    )}
+    {thread.map((entry, index) => (
+      <div key={entry.id} className="pw-ai-entry">
+        <AiEntryBody
+          entry={entry}
+          armed={armedIdx === index}
+          busy={busy}
+          onArm={() => onArm(index)}
+          onExecute={() => onExecute(index)}
+          onDismiss={() => onDismiss(index)}
+        />
+      </div>
+    ))}
+    {busy && <div className="pw-ai-thinking">✦ 正在思考…</div>}
+    {error && <div className="pw-ai-msg pw-ai-msg-error">{error}</div>}
+  </div>
 }
 
 /** 未接入引导：无可用模型或所选 provider 缺 key 时的空态与设置入口。 */
@@ -320,9 +389,7 @@ export default function AiThread({
 }) {
   const m = useAiModels()
   const msg = useAiThreadMessages({ onApplyAiBatch, initialSession })
-  const [saveError, setSaveError] = useState<string | null>(initialSessionError ?? null)
-  const hasMounted = useRef(false)
-  const saveSessionRef = useRef(onSaveSession)
+  const saveError = useAiSessionPersistence(msg.thread, initialSessionError, onSaveSession)
   const turn = useAiTurn({
     activeOption: m.activeOption,
     activeProvider: m.activeProvider,
@@ -340,21 +407,6 @@ export default function AiThread({
   useEffect(() => {
     msg.threadRef.current?.scrollTo({ top: msg.threadRef.current.scrollHeight })
   }, [msg.thread, msg.threadRef, turn.busy, turn.error])
-  useEffect(() => {
-    saveSessionRef.current = onSaveSession
-  }, [onSaveSession])
-  useEffect(() => {
-    if (!hasMounted.current) {
-      hasMounted.current = true
-      return
-    }
-    const save = saveSessionRef.current
-    if (!save) return
-    void save({ schemaVersion: 1, entries: msg.thread })
-      .then(() => setSaveError(null))
-      .catch((err: unknown) => setSaveError(String(err)))
-  }, [msg.thread])
-
   return (
     <div className="pw-ai">
       {!m.ready && <AiGuide hasModels={m.options.length > 0} onOpenSettings={onOpenSettings} />}
@@ -366,26 +418,18 @@ export default function AiThread({
           onSelect={m.setModelKey}
         />
       )}
-      <div className="pw-ai-thread" ref={msg.threadRef}>
-        {saveError && <div className="pw-ai-msg pw-ai-msg-error">聊天记录保存失败：{saveError}</div>}
-        {msg.thread.length === 0 && m.ready && (
-          <div className="pw-empty">和 AI 聊聊这一幕怎么写，或让它直接调整画布（会先出改动预览）。</div>
-        )}
-        {msg.thread.map((entry, i) => (
-          <div key={entry.id} className="pw-ai-entry">
-            <AiEntryBody
-              entry={entry}
-              armed={msg.armedIdx === i}
-              busy={turn.busy}
-              onArm={() => msg.setArmedIdx(msg.armedIdx === i ? null : i)}
-              onExecute={() => msg.executeCard(i)}
-              onDismiss={() => msg.markDismissed(i)}
-            />
-          </div>
-        ))}
-        {turn.busy && <div className="pw-ai-thinking">✦ 正在思考…</div>}
-        {turn.error && <div className="pw-ai-msg pw-ai-msg-error">{turn.error}</div>}
-      </div>
+      <AiThreadTimeline
+        thread={msg.thread}
+        threadRef={msg.threadRef}
+        armedIdx={msg.armedIdx}
+        ready={m.ready}
+        busy={turn.busy}
+        error={turn.error}
+        saveError={saveError}
+        onArm={(index) => msg.setArmedIdx(msg.armedIdx === index ? null : index)}
+        onExecute={msg.executeCard}
+        onDismiss={msg.markDismissed}
+      />
       <AiComposer
         draft={turn.draft}
         setDraft={turn.setDraft}

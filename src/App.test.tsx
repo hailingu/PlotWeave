@@ -175,6 +175,23 @@ describe('App（双界面路由壳）', () => {
     expect(store.list).toHaveBeenCalledTimes(2)
   })
 
+  it('从设置返回时保留本次打开后新增的 AI 会话历史', async () => {
+    render(<App />)
+    await screen.findByTestId('home')
+    await act(async () => {
+      await (homeProps.current.onOpenProject as (id: string) => Promise<void>)('p1')
+    })
+    const session = { schemaVersion: 1 as const, entries: [{ id: 1, kind: 'note' as const, text: '新的历史' }] }
+    await (editorProps.current.onSaveAiSession as (value: typeof session) => Promise<void>)(session)
+
+    fireEvent.keyDown(document, { key: ',', metaKey: true })
+    await screen.findByTestId('settings')
+    fireEvent.click(screen.getByTestId('settings'))
+
+    expect(await screen.findByTestId('editor')).toBeTruthy()
+    expect(editorProps.current.aiSession).toEqual(session)
+  })
+
   it('首页卡片菜单：重命名读档改名后保存；复制/删除委托 store 并刷新', async () => {
     render(<App />)
     await screen.findByTestId('home')
