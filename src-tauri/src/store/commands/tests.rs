@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::isotime::now_iso;
+use crate::store::persist::bound_subdir;
 use crate::store::testutil::{cap, cleanup_temp, temp_projects_dir, temp_recovery_dir};
 use std::fs;
 
@@ -379,8 +380,8 @@ fn delete_project_clears_recovery_copy() {
     stash_ai_session_recovery_file(&cap(&projects), &cap(&recovery), "p-1", &session)
         .expect("写恢复副本");
 
-    let report =
-        delete_project_with_recovery(&cap(&projects), &cap(&recovery), "p-1").expect("删除项目");
+    let report = delete_project_with_recovery(&cap(&projects), || Ok(cap(&recovery)), "p-1")
+        .expect("删除项目");
     assert!(report.cleanup_error.is_none(), "干净删除不得带清理诊断");
     assert_eq!(
         load_ai_session_recovery_file(&cap(&recovery), "p-1").expect("读恢复副本"),
@@ -407,7 +408,7 @@ fn delete_project_failure_keeps_recovery_copy() {
     let mut perms = fs::metadata(&assets).unwrap().permissions();
     perms.set_mode(0o555);
     fs::set_permissions(&assets, perms).expect("只读化");
-    let result = delete_project_with_recovery(&cap(&projects), &cap(&recovery), "p-1");
+    let result = delete_project_with_recovery(&cap(&projects), || Ok(cap(&recovery)), "p-1");
     let mut perms = fs::metadata(&assets).unwrap().permissions();
     perms.set_mode(0o755);
     let _ = fs::set_permissions(&assets, perms);
@@ -418,6 +419,32 @@ fn delete_project_failure_keeps_recovery_copy() {
             .expect("读恢复副本")
             .is_some(),
         "项目仍在磁盘时删除失败不得清除恢复副本"
+    );
+    cleanup_temp(&projects);
+}
+
+#[test]
+fn delete_project_commits_when_recovery_dir_unavailable() {
+    let projects = temp_projects_dir();
+    fs::write(projects.join("p-1.json"), b"{}").expect("写项目文件");
+    // recovery 被普通文件占位：真实打开路径（bound_subdir）归类失败
+    let root = projects.parent().expect("临时根").to_path_buf();
+    fs::write(root.join("recovery"), "占位").expect("占位恢复目录");
+
+    let report = delete_project_with_recovery(
+        &cap(&projects),
+        || bound_subdir(&cap(&root), "recovery", "会话恢复目录"),
+        "p-1",
+    )
+    .expect("恢复目录不可用不得阻断删除");
+    let cleanup_error = report.cleanup_error.expect("不可用的清理位置必须带诊断");
+    assert!(
+        cleanup_error.contains("恢复目录"),
+        "意外诊断：{cleanup_error}"
+    );
+    assert!(
+        fs::symlink_metadata(projects.join("p-1.json")).is_err(),
+        "项目文件应已删除"
     );
     cleanup_temp(&projects);
 }
@@ -437,7 +464,7 @@ fn delete_project_reports_recovery_cleanup_failure() {
     let mut perms = fs::metadata(&recovery).unwrap().permissions();
     perms.set_mode(0o555);
     fs::set_permissions(&recovery, perms).expect("只读化");
-    let result = delete_project_with_recovery(&cap(&projects), &cap(&recovery), "p-1");
+    let result = delete_project_with_recovery(&cap(&projects), || Ok(cap(&recovery)), "p-1");
     let mut perms = fs::metadata(&recovery).unwrap().permissions();
     perms.set_mode(0o755);
     let _ = fs::set_permissions(&recovery, perms);

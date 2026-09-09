@@ -77,8 +77,9 @@ fn app_root_dir(app: &AppHandle) -> Result<CapDir, String> {
 }
 /// 受信根下的受管子目录（projects/recovery 共用）：缺失即创建，拒符号
 /// 链接，打开后经 (dev, ino) 身份绑定——路径名在归类后被并发替换的目录
-/// 不得成为操作对象。
-fn bound_subdir(root: &CapDir, name: &str, label: &str) -> Result<CapDir, String> {
+/// 不得成为操作对象。删除路径把它作为延迟打开的清理位置传入测试（见
+/// delete_project_with_recovery）。
+pub(crate) fn bound_subdir(root: &CapDir, name: &str, label: &str) -> Result<CapDir, String> {
     match root.symlink_metadata(name) {
         Ok(_) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => root

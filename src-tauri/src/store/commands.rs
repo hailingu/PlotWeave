@@ -198,22 +198,30 @@ pub(crate) fn save_ai_session_authoritative(
 /// 后复活（资产目录却已移除）。残留副本由 `list_projects` 的孤儿清扫兜底。
 #[derive(serde::Serialize)]
 pub struct DeleteProjectReport {
-    /// 已提交的删除但恢复副本清除失败时的诊断；None = 完全干净。
+    /// 已提交的删除但恢复副本清除失败（或恢复目录暂不可用）时的诊断；
+    /// None = 完全干净。
     pub cleanup_error: Option<String>,
 }
 
 /// 删除项目 + 清除恢复副本：项目删除失败（项目仍在）时保留恢复副本并上浮
 /// 错误；项目已删除但副本清除失败时返回已提交回执 + 清理诊断——删除不可
-/// 回滚，不得让调用方回放画布保存。
+/// 回滚，不得让调用方回放画布保存。恢复目录在删除提交后才打开：它是可选
+/// 的清理位置，暂不可用（不可读/被非目录占位）不得反过来阻断任何项目的
+/// 删除，只作为清理诊断上报，残留副本由列表孤儿清扫兜底。
 pub(crate) fn delete_project_with_recovery(
     projects: &CapDir,
-    recovery: &CapDir,
+    open_recovery: impl FnOnce() -> Result<CapDir, String>,
     id: &str,
 ) -> Result<DeleteProjectReport, String> {
     delete_project_files(projects, id)?;
-    let cleanup_error = clear_ai_session_recovery_file(recovery, id)
-        .err()
-        .map(|e| format!("项目已删除，但清除 AI 会话恢复副本失败（列表时清扫残留副本）：{e}"));
+    let cleanup_error = match open_recovery() {
+        Ok(recovery) => clear_ai_session_recovery_file(&recovery, id)
+            .err()
+            .map(|e| format!("项目已删除，但清除 AI 会话恢复副本失败（列表时清扫残留副本）：{e}")),
+        Err(e) => Some(format!(
+            "项目已删除，但会话恢复目录暂不可用，未清除其恢复副本（列表时清扫残留副本）：{e}"
+        )),
+    };
     Ok(DeleteProjectReport { cleanup_error })
 }
 
@@ -402,8 +410,9 @@ pub(crate) fn persist_project(
 #[tauri::command]
 pub fn delete_project(app: AppHandle, id: String) -> Result<DeleteProjectReport, String> {
     let root = projects_dir(&app)?;
-    let recovery = recovery_dir(&app)?;
-    delete_project_with_recovery(&root, &recovery, &id)
+    // 恢复目录在项目删除提交后才打开：它不可用只能降级为清理诊断，不得
+    // 阻断删除本身（见 delete_project_with_recovery 的顺序契约）
+    delete_project_with_recovery(&root, || recovery_dir(&app), &id)
 }
 /// delete_project 的可测内核：资产目录与项目 JSON 的成对移除，幂等。
 /// 顺序契约：先删资产树再删权威项目文件——树删除失败时项目仍在列表中
