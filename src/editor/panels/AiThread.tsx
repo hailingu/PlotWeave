@@ -242,6 +242,46 @@ function AiComposer({
   )
 }
 
+/** 会话条目正文：回执 / 用户消息 / 助手消息（可附预览卡）（S3358 拆分；
+ * issue #39 评审修复：自 AiThread 抽出为文件级组件，使容器回到 80 行内）。 */
+function AiEntryBody({
+  entry,
+  armed,
+  busy,
+  onArm,
+  onExecute,
+  onDismiss,
+}: {
+  readonly entry: ThreadEntry
+  readonly armed: boolean
+  readonly busy: boolean
+  readonly onArm: () => void
+  readonly onExecute: () => void
+  readonly onDismiss: () => void
+}) {
+  if (entry.kind === 'note') return <div className="pw-ai-note">{entry.text}</div>
+  if (entry.role === 'user') return <div className="pw-ai-msg pw-ai-msg-user">{entry.text}</div>
+  return (
+    <>
+      <div className="pw-ai-msg pw-ai-msg-agent">
+        <span className="pw-ai-agent-flag">✦ ASSISTANT</span>
+        {entry.text}
+      </div>
+      {entry.card && (
+        <PreviewCard
+          v={entry.card.v}
+          status={entry.card.status}
+          armed={armed}
+          busy={busy}
+          onArm={onArm}
+          onExecute={onExecute}
+          onDismiss={onDismiss}
+        />
+      )}
+    </>
+  )
+}
+
 /**
  * ✦AI 会话（§6、数据模型 §12.2 朴素 tool-calling 循环）：
  * - 模型选择器：三层过滤后的可用模型（key 未配置的置灰）；
@@ -285,31 +325,6 @@ export default function AiThread({
     msg.threadRef.current?.scrollTo({ top: msg.threadRef.current.scrollHeight })
   }, [msg.thread, msg.threadRef, turn.busy, turn.error])
 
-  /** 会话条目正文：回执 / 用户消息 / 助手消息（可附预览卡）（S3358 拆分）。 */
-  const entryBody = (entry: ThreadEntry, i: number) => {
-    if (entry.kind === 'note') return <div className="pw-ai-note">{entry.text}</div>
-    if (entry.role === 'user') return <div className="pw-ai-msg pw-ai-msg-user">{entry.text}</div>
-    return (
-      <>
-        <div className="pw-ai-msg pw-ai-msg-agent">
-          <span className="pw-ai-agent-flag">✦ ASSISTANT</span>
-          {entry.text}
-        </div>
-        {entry.card && (
-          <PreviewCard
-            v={entry.card.v}
-            status={entry.card.status}
-            armed={msg.armedIdx === i}
-            busy={turn.busy}
-            onArm={() => msg.setArmedIdx(msg.armedIdx === i ? null : i)}
-            onExecute={() => msg.executeCard(i)}
-            onDismiss={() => msg.markDismissed(i)}
-          />
-        )}
-      </>
-    )
-  }
-
   return (
     <div className="pw-ai">
       {!m.ready && <AiGuide hasModels={m.options.length > 0} onOpenSettings={onOpenSettings} />}
@@ -327,7 +342,14 @@ export default function AiThread({
         )}
         {msg.thread.map((entry, i) => (
           <div key={entry.id} className="pw-ai-entry">
-            {entryBody(entry, i)}
+            <AiEntryBody
+              entry={entry}
+              armed={msg.armedIdx === i}
+              busy={turn.busy}
+              onArm={() => msg.setArmedIdx(msg.armedIdx === i ? null : i)}
+              onExecute={() => msg.executeCard(i)}
+              onDismiss={() => msg.markDismissed(i)}
+            />
           </div>
         ))}
         {turn.busy && <div className="pw-ai-thinking">✦ 正在思考…</div>}
