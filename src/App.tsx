@@ -35,7 +35,8 @@ interface OpenProject {
 async function loadOpenProject(id: string): Promise<OpenProject> {
   const doc = await projectStore.load(id)
   try {
-    return { id, doc, aiSession: await projectStore.loadAiSession(id), aiSessionError: null }
+    const ai = await projectStore.loadAiSession(id)
+    return { id, doc, aiSession: ai.session, aiSessionError: ai.repairError }
   } catch (err) {
     console.warn('[App] AI 会话恢复失败，已以空历史打开项目', err)
     return {

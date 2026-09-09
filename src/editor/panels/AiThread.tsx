@@ -46,13 +46,28 @@ function useAiModels() {
   return { options, activeKey, setModelKey, activeOption, activeProvider, keyOkByProvider, ready }
 }
 
+/** 用当前画布重建恢复卡片的完整预览，拒绝信任落盘的确认元数据。 */
+function restoreThreadEntries(
+  initialSession: AiSession | undefined,
+  validateCommands: ((commands: AiCommand[]) => BatchValidation | null) | undefined,
+): ThreadEntry[] {
+  return (initialSession?.entries ?? []).map((entry) => {
+    if (entry.card?.status !== 'pending' || !validateCommands) return entry
+    const validation = validateCommands(entry.card.v.commands)
+    return validation ? { ...entry, card: { ...entry.card, v: validation } } : entry
+  })
+}
+
 /** 会话线程域（逻辑 hook，issue #39 拆分）：条目追加、预览卡执行/忽略
  * 与危险批次的两步确认武装态；threadRef 供容器做滚动跟随。 */
 function useAiThreadMessages(opts: {
   readonly onApplyAiBatch?: (commands: ValidatedCommand[]) => string | null
   readonly initialSession?: AiSession
+  readonly onValidateCommands?: (commands: AiCommand[]) => BatchValidation | null
 }) {
-  const [thread, setThread] = useState<ThreadEntry[]>(() => opts.initialSession?.entries ?? [])
+  const [thread, setThread] = useState<ThreadEntry[]>(() =>
+    restoreThreadEntries(opts.initialSession, opts.onValidateCommands),
+  )
   /** 危险批次的两步确认：处于武装态的会话条目下标，null = 无。 */
   const [armedIdx, setArmedIdx] = useState<number | null>(null)
   /** 会话条目自增 id（组件内稳定 key）。 */
@@ -388,7 +403,7 @@ export default function AiThread({
   readonly onSaveSession?: (session: AiSession) => Promise<void>
 }) {
   const m = useAiModels()
-  const msg = useAiThreadMessages({ onApplyAiBatch, initialSession })
+  const msg = useAiThreadMessages({ onApplyAiBatch, initialSession, onValidateCommands })
   const saveError = useAiSessionPersistence(msg.thread, initialSessionError, onSaveSession)
   const turn = useAiTurn({
     activeOption: m.activeOption,

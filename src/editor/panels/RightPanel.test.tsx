@@ -162,9 +162,9 @@ describe('RightPanel 检查器', () => {
 })
 
 /** 切到 AI 分段并等配置加载完。 */
-async function toAiTab(app: AppSettings) {
+async function toAiTab(app: AppSettings, over: Partial<Parameters<typeof RightPanel>[0]> = {}) {
   vi.spyOn(settingsStore, 'load').mockResolvedValue(app)
-  const spies = setup({ tab: 'ai' })
+  const spies = setup({ tab: 'ai', ...over })
   await screen.findByLabelText('AI 对话输入')
   return spies
 }
@@ -340,6 +340,33 @@ describe('RightPanel ✦AI 改动预览卡', () => {
     expect(spies.onApplyAiBatch).not.toHaveBeenCalled()
     fireEvent.click(await screen.findByRole('button', { name: '再点一次确认执行删除' }))
     expect(spies.onApplyAiBatch).toHaveBeenCalled()
+  })
+
+  it('恢复待执行卡时按当前画布重建删除风险，仍要求两步确认', async () => {
+    const deleteCommand: ValidatedCommand = { op: 'delete_node', nodeId: 's1' }
+    const stalePreview = validationOf({ commands: [deleteCommand] })
+    const currentPreview = validationOf({
+      commands: [deleteCommand],
+      items: [{ kind: 'delete', danger: true, label: '删除 场景 · 场一', key: 'd0' }],
+      hasDeletes: true,
+    })
+    const validate = vi.fn(() => currentPreview)
+    await toAiTab(APP_WITH_KEY, {
+      aiSession: {
+        schemaVersion: 1,
+        entries: [{
+          id: 1,
+          kind: 'msg',
+          role: 'assistant',
+          text: '已恢复的改动。',
+          card: { v: stalePreview, status: 'pending' },
+        }],
+      },
+      onValidateCommands: validate,
+    })
+
+    expect(validate).toHaveBeenCalledWith([deleteCommand])
+    expect(screen.getByRole('button', { name: /执行（含 1 项删除）/ })).toBeTruthy()
   })
 
   it('忽略：预览卡消失且不执行；执行失败出错误回执', async () => {

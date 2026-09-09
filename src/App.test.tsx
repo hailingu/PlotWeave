@@ -77,7 +77,10 @@ beforeEach(() => {
   store.list.mockResolvedValue([{ id: 'p1', name: '雨夜' }])
   store.create.mockResolvedValue({ id: 'new-1', name: '未命名短剧' })
   store.load.mockResolvedValue(structuredClone(DOC))
-  store.loadAiSession.mockResolvedValue({ schemaVersion: 1, entries: [] })
+  store.loadAiSession.mockResolvedValue({
+    session: { schemaVersion: 1, entries: [] },
+    repairError: null,
+  })
 })
 
 describe('App（双界面路由壳）', () => {
@@ -127,6 +130,20 @@ describe('App（双界面路由壳）', () => {
 
     expect(await screen.findByTestId('editor')).toBeTruthy()
     expect(editorProps.current.aiSessionError).toContain('AI 会话文件损坏')
+  })
+
+  it('AI 会话修复回写失败时保留已恢复历史，并将错误交给编辑器提示', async () => {
+    const recovered = { schemaVersion: 1 as const, entries: [{ id: 1, kind: 'note' as const, text: '已恢复' }] }
+    store.loadAiSession.mockResolvedValue({ session: recovered, repairError: 'Error: 只读目录' })
+    render(<App />)
+    await screen.findByTestId('home')
+    await act(async () => {
+      await (homeProps.current.onOpenProject as (id: string) => Promise<void>)('p1')
+    })
+
+    expect(await screen.findByTestId('editor')).toBeTruthy()
+    expect(editorProps.current.aiSession).toEqual(recovered)
+    expect(editorProps.current.aiSessionError).toBe('Error: 只读目录')
   })
 
   it('新建项目：create 后按落盘文档载入会话（保留 createdAt 溯源），并刷新列表', async () => {

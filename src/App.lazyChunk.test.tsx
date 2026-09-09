@@ -76,7 +76,10 @@ beforeEach(() => {
   editorGate.resolve = null
   store.list.mockResolvedValue([{ id: 'p1', name: '雨夜' }])
   store.load.mockResolvedValue(structuredClone(DOC))
-  store.loadAiSession.mockResolvedValue({ schemaVersion: 1, entries: [] })
+  store.loadAiSession.mockResolvedValue({
+    session: { schemaVersion: 1, entries: [] },
+    repairError: null,
+  })
 })
 
 describe('App（惰性 chunk 加载保留当前界面）', () => {
