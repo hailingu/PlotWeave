@@ -222,6 +222,20 @@ describe('App ✦AI 会话恢复', () => {
     // 内存中是恢复出的会话：重挂载重试落盘是安全的
     expect(editorProps.current.aiSessionRetryable).toBe(true)
   })
+
+  it('会话只存在于恢复副本时如实告知来源并保持可重试', async () => {
+    const recovered = { schemaVersion: 1 as const, entries: [{ id: 1, kind: 'note' as const, text: '恢复副本' }] }
+    store.loadAiSession.mockResolvedValue({
+      session: recovered,
+      repairError: 'Error: 磁盘已满',
+      recovered: true,
+    })
+    await openEditor()
+    expect(editorProps.current.aiSession).toEqual(recovered)
+    expect(editorProps.current.aiSessionError).toContain('恢复副本')
+    expect(editorProps.current.aiSessionError).toContain('磁盘已满')
+    expect(editorProps.current.aiSessionRetryable).toBe(true)
+  })
 })
 
 describe('App ✦AI 会话保存', () => {

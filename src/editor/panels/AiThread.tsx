@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import { type AiCommand, type BatchValidation, type ValidatedCommand } from '../ai/commands'
 import { settingsStore } from '../../settings/settingsStore'
 import {
@@ -46,6 +46,23 @@ function useAiModels() {
   return { options, activeKey, setModelKey, activeOption, activeProvider, keyOkByProvider, ready }
 }
 
+/** 未确认画布落盘的执行卡与当前画布核对（见 graphSignature）：执行前签名
+ * 与当前画布不一致 = 批次已随画布落盘，恢复为历史执行卡（不可再执行）；
+ * 一致 = 未落盘，恢复为待执行卡。核对后剥离 preSignature（运行时标注），
+ * 再次执行时会重新捕获。 */
+function reconcilePendingCard(
+  card: NonNullable<ThreadEntry['card']>,
+  canvasSignature: string | undefined,
+): NonNullable<ThreadEntry['card']> {
+  if (card.preSignature === undefined) return card
+  const next = { ...card }
+  delete next.preSignature
+  if (canvasSignature !== undefined && canvasSignature !== card.preSignature) {
+    return { ...next, status: 'executed', historical: true }
+  }
+  return { ...next, status: 'pending' }
+}
+
 /** 用当前画布重建恢复卡片的完整预览，拒绝信任落盘的确认元数据；
  * 历史执行卡标注 historical——撤销栈不跨会话存活，不得宣称可撤销。
  * 条目 id 重定基为 1..n 有界序列：落盘 id 不受信，防止自增越过
@@ -53,16 +70,47 @@ function useAiModels() {
 function restoreThreadEntries(
   initialSession: AiSession | undefined,
   validateCommands: ((commands: AiCommand[]) => BatchValidation | null) | undefined,
+  canvasSignature: string | undefined,
 ): ThreadEntry[] {
   return (initialSession?.entries ?? []).map((entry, index) => {
     const based = { ...entry, id: index + 1 }
     if (based.card?.status === 'executed') {
       return { ...based, card: { ...based.card, historical: true } }
     }
-    if (based.card?.status !== 'pending' || !validateCommands) return based
-    const validation = validateCommands(based.card.v.commands)
-    return validation ? { ...based, card: { ...based.card, v: validation } } : based
+    if (based.card?.status !== 'pending') return based
+    const card = reconcilePendingCard(based.card, canvasSignature)
+    if (card.status === 'executed') return { ...based, card }
+    if (!validateCommands) return { ...based, card }
+    const validation = validateCommands(card.v.commands)
+    return validation ? { ...based, card: { ...card, v: validation } } : { ...based, card }
   })
+}
+
+/** 画布落盘确认域（useAiThreadMessages 拆出）：uncommitted 执行卡在承载
+ * 批次的画布文档确认落盘后转为已确认 executed。effect 在渲染提交之后运行：
+ * 此时登记等待者一定晚于承载批次的文档渲染，在途的旧保存不会被误兑现
+ * （见 useEditorPersistence 的 whenCanvasCommitted）。 */
+function useCanvasCommitConfirmation(
+  thread: ThreadEntry[],
+  setThread: Dispatch<SetStateAction<ThreadEntry[]>>,
+  whenCanvasCommitted: (() => Promise<void>) | undefined,
+): void {
+  /** 已登记等待的条目 id：重复渲染不得重复登记等待者。 */
+  const awaitingRef = useRef(new Set<number>())
+  useEffect(() => {
+    if (!whenCanvasCommitted) return
+    for (const entry of thread) {
+      if (entry.card?.status !== 'executed' || !entry.card.uncommitted) continue
+      if (awaitingRef.current.has(entry.id)) continue
+      awaitingRef.current.add(entry.id)
+      void whenCanvasCommitted().then(() => {
+        awaitingRef.current.delete(entry.id)
+        setThread((t) =>
+          t.map((e) => (e.id === entry.id && e.card?.uncommitted ? { ...e, card: stripExecutionRuntime(e.card) } : e)),
+        )
+      })
+    }
+  }, [thread, whenCanvasCommitted, setThread])
 }
 
 /** 会话线程域（逻辑 hook，issue #39 拆分）：条目追加、预览卡执行/忽略
@@ -71,9 +119,13 @@ function useAiThreadMessages(opts: {
   readonly onApplyAiBatch?: (commands: ValidatedCommand[]) => string | null
   readonly initialSession?: AiSession
   readonly onValidateCommands?: (commands: AiCommand[]) => BatchValidation | null
+  /** 承载批次的画布文档确认落盘后兑现（见 useAiSessionPersistence 的落盘映射）。 */
+  readonly whenCanvasCommitted?: () => Promise<void>
+  /** 画布语义签名：执行时捕获为执行前快照，恢复时用于判定批次是否已落盘。 */
+  readonly canvasSignature?: string
 }) {
   const [thread, setThread] = useState<ThreadEntry[]>(() =>
-    restoreThreadEntries(opts.initialSession, opts.onValidateCommands),
+    restoreThreadEntries(opts.initialSession, opts.onValidateCommands, opts.canvasSignature),
   )
   /** 危险批次的两步确认：处于武装态的会话条目下标，null = 无。 */
   const [armedIdx, setArmedIdx] = useState<number | null>(null)
@@ -85,16 +137,30 @@ function useAiThreadMessages(opts: {
   /** 会话尾部追加（send 与预览卡回执共用）。 */
   const append = (entries: ThreadEntry[]) => setThread((t) => [...t, ...entries])
 
-  /** 执行预览卡：成功 → 置状态并追加回执；失败 → 错误回执（批次未动）。 */
+  /** 执行预览卡：成功 → 置状态并追加回执；失败 → 错误回执（批次未动）。
+   * 成功但画布尚未确认落盘时标注 uncommitted 并记录执行前画布签名——
+   * 持久化层据此降级为 pending，画布落盘确认后再写 executed。 */
   const executeCard = (idx: number) => {
     const entry = thread[idx]
     if (entry.card?.status !== 'pending' || !opts.onApplyAiBatch) return
+    const preSignature = opts.canvasSignature
     const err = opts.onApplyAiBatch(entry.card.v.commands)
     const receipt = cardResultEntry(err, entry.card.v.commands.length, nextId)
+    const awaiting = !err && opts.whenCanvasCommitted !== undefined
     setThread((t) => [
       ...t.map((e, i) =>
         i === idx && e.card
-          ? { ...e, card: { ...e.card, status: err ? ('pending' as const) : ('executed' as const) } }
+          ? {
+              ...e,
+              card: awaiting
+                ? {
+                    ...e.card,
+                    status: 'executed' as const,
+                    uncommitted: true as const,
+                    ...(preSignature !== undefined ? { preSignature } : {}),
+                  }
+                : { ...e.card, status: err ? ('pending' as const) : ('executed' as const) },
+            }
           : e,
       ),
       receipt,
@@ -111,7 +177,41 @@ function useAiThreadMessages(opts: {
     setArmedIdx(null)
   }
 
+  useCanvasCommitConfirmation(thread, setThread, opts.whenCanvasCommitted)
+
   return { thread, armedIdx, setArmedIdx, threadRef, nextId, append, executeCard, markDismissed }
+}
+
+/** 去掉执行确认的运行时标注（落盘确认与持久化映射共用）：uncommitted 与
+ * preSignature 都只在等待画布落盘期间有意义。 */
+function stripExecutionRuntime(card: NonNullable<ThreadEntry['card']>): NonNullable<ThreadEntry['card']> {
+  const next = { ...card }
+  delete next.uncommitted
+  delete next.preSignature
+  return next
+}
+
+/** 落盘映射：未确认画布落盘的执行卡降级为 pending 并压掉其回执——画布若
+ * 尚未持久化，重开后该卡应重新可执行，而不是声称已执行（历史卡不可再
+ * 执行）；保留 preSignature 供重开时与画布对账。其余条目原样落盘。 */
+function persistedEntries(thread: ThreadEntry[]): ThreadEntry[] {
+  const entries: ThreadEntry[] = []
+  let skipReceipt = false
+  for (const entry of thread) {
+    if (skipReceipt) {
+      skipReceipt = false
+      if (entry.kind === 'note') continue
+    }
+    if (entry.card?.uncommitted) {
+      const card = { ...stripExecutionRuntime(entry.card), status: 'pending' as const }
+      if (entry.card.preSignature !== undefined) card.preSignature = entry.card.preSignature
+      entries.push({ ...entry, card })
+      skipReceipt = true
+      continue
+    }
+    entries.push(entry)
+  }
+  return entries
 }
 
 /** 单轮发送域（逻辑 hook，issue #39 拆分）：输入草稿、画布感知开关与
@@ -190,7 +290,7 @@ function useAiSessionPersistence(
     if (first && !retryOnMount.current) return
     const save = saveSessionRef.current
     if (!save) return
-    void save({ schemaVersion: 1, entries: thread })
+    void save({ schemaVersion: 1, entries: persistedEntries(thread) })
       .then(() => setSaveError(null))
       .catch((err: unknown) => setSaveError(String(err)))
   }, [thread])
@@ -403,6 +503,10 @@ interface AiThreadProps {
   readonly onReadNode?: (nodeId: string) => string | null
   readonly onReadSettings?: () => string
   readonly onApplyAiBatch?: (commands: ValidatedCommand[]) => string | null
+  /** 承载批次的画布文档确认落盘后兑现；执行卡据此推迟 executed 落盘。 */
+  readonly whenCanvasCommitted?: () => Promise<void>
+  /** 画布语义签名：执行时捕获为执行前快照，恢复时对账批次是否已落盘。 */
+  readonly canvasSignature?: string
   /** 打开项目时恢复的独立会话快照。 */
   readonly initialSession?: AiSession
   readonly initialSessionError?: string | null
@@ -420,13 +524,21 @@ export default function AiThread({
   onReadNode,
   onReadSettings,
   onApplyAiBatch,
+  whenCanvasCommitted,
+  canvasSignature,
   initialSession,
   initialSessionError,
   initialSessionRetryable,
   onSaveSession,
 }: AiThreadProps) {
   const m = useAiModels()
-  const msg = useAiThreadMessages({ onApplyAiBatch, initialSession, onValidateCommands })
+  const msg = useAiThreadMessages({
+    onApplyAiBatch,
+    initialSession,
+    onValidateCommands,
+    whenCanvasCommitted,
+    canvasSignature,
+  })
   const saveError = useAiSessionPersistence(msg.thread, initialSessionError, onSaveSession, initialSessionRetryable)
   const turn = useAiTurn({
     activeOption: m.activeOption,

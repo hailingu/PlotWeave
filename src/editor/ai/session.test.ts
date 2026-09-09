@@ -75,4 +75,31 @@ describe('normalizeAiSession', () => {
       repaired: true,
     })
   })
+
+  it('保留执行前画布签名供恢复对账，剥离运行时未确认标注', () => {
+    const result = normalizeAiSession({
+      schemaVersion: 1,
+      entries: [
+        {
+          id: 1,
+          kind: 'msg',
+          role: 'assistant',
+          text: '待对账的批次。',
+          card: {
+            v: { ok: true, items: [], commands: [], issues: [], hasDeletes: false },
+            status: 'pending',
+            preSignature: 'sig-before',
+            uncommitted: true,
+            historical: true,
+          },
+        },
+      ],
+    })
+
+    expect(result.session.entries[0].card).toEqual({
+      v: { ok: true, items: [], commands: [], issues: [], hasDeletes: false },
+      status: 'pending',
+      preSignature: 'sig-before',
+    })
+  })
 })

@@ -73,11 +73,13 @@ export default function EditorLayout(props: EditorLayoutProps) {
           settings={doc.settings}
           onOpenSettings={props.onOpenSettings}
           canvasDigest={ai.canvasDigest}
+          canvasSignature={ai.canvasSignature}
           onValidateAi={ai.validateAiReply}
           onValidateCommands={ai.validateCommands}
           onReadNode={ai.readNode}
           onReadSettings={ai.readSettings}
           onApplyAiBatch={ai.applyAiBatch}
+          whenCanvasCommitted={persistence.whenCanvasCommitted}
           aiSession={props.aiSession}
           aiSessionError={props.aiSessionError}
           aiSessionRetryable={props.aiSessionRetryable}

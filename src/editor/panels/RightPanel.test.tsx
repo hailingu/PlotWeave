@@ -6,13 +6,13 @@
  * llmChat 打桩（不触 IPC），settingsStore.load 打桩喂配置。
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import RightPanel from './RightPanel'
 import { llmChat, type AssistantMessage } from '../ai/chat'
 import type { ChatMessage } from '../ai/chat'
 import type { BatchValidation, ValidatedCommand } from '../ai/commands'
 import { nodeFieldTableText } from '../ai/nodeFields'
-import { normalizeAiSession } from '../ai/session'
+import { normalizeAiSession, type AiSession } from '../ai/session'
 import { settingsStore } from '../../settings/settingsStore'
 import type { AppSettings } from '../../settings/types'
 import type { ProjectSettings } from '../settings'
@@ -388,6 +388,82 @@ describe('RightPanel ✦AI 改动预览卡', () => {
   })
 })
 
+describe('RightPanel ✦AI 执行回执落盘时序', () => {
+  it('画布未确认落盘时按 pending 落盘且不落回执，确认后才写 executed', async () => {
+    let confirmCanvas!: () => void
+    const whenCanvasCommitted = vi.fn(
+      () => new Promise<void>((resolve) => { confirmCanvas = resolve }),
+    )
+    const saved: AiSession[] = []
+    const onSaveSession = vi.fn(async (session: AiSession) => { saved.push(session) })
+    const spies = await toAiTab(APP_WITH_KEY, {
+      whenCanvasCommitted,
+      canvasSignature: 'sig-before',
+      onSaveAiSession: onSaveSession,
+    })
+    spies.onValidateCommands.mockReturnValue(validationOf())
+    llmChatMock.mockResolvedValue(batchReply())
+    send('加一场戏')
+    await screen.findByText('✦ 改动预览 · 1 项')
+
+    fireEvent.click(screen.getByRole('button', { name: '✓ 执行改动' }))
+    expect(await screen.findByText(/✓ 已执行 1 项改动/)).toBeTruthy()
+    // 画布尚未确认：落盘的是可重新执行的 pending 卡（带执行前签名供对账），
+    // 回执不得先于画布落盘
+    await waitFor(() => expect(saved.length).toBeGreaterThan(0))
+    const before = saved[saved.length - 1]
+    expect(before.entries.find((e) => e.card)?.card).toMatchObject({
+      status: 'pending',
+      preSignature: 'sig-before',
+    })
+    expect(before.entries.some((e) => e.kind === 'note' && e.text.includes('已执行'))).toBe(false)
+
+    await act(async () => { confirmCanvas() })
+    await waitFor(() => {
+      const after = saved[saved.length - 1]
+      expect(after.entries.find((e) => e.card)?.card?.status).toBe('executed')
+      expect(after.entries.some((e) => e.kind === 'note' && e.text.includes('已执行'))).toBe(true)
+    })
+  })
+})
+
+describe('RightPanel ✦AI 执行卡落盘对账', () => {
+  const uncommittedSession = () => ({
+    schemaVersion: 1 as const,
+    entries: [
+      {
+        id: 1,
+        kind: 'msg' as const,
+        role: 'assistant' as const,
+        text: '未确认落盘的批次。',
+        card: { v: validationOf(), status: 'pending' as const, preSignature: 'sig-before' },
+      },
+    ],
+  })
+
+  it('画布签名与执行前一致：批次未落盘，恢复为可再次执行的待执行卡', async () => {
+    const validate = vi.fn(() => validationOf())
+    await toAiTab(APP_WITH_KEY, {
+      aiSession: uncommittedSession(),
+      canvasSignature: 'sig-before',
+      onValidateCommands: validate,
+    })
+    expect(validate).toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: '✓ 执行改动' })).toBeTruthy()
+    expect(screen.queryByText(/历史改动/)).toBeNull()
+  })
+
+  it('画布签名已变化：批次已随画布落盘，恢复为不可再执行的历史卡', async () => {
+    await toAiTab(APP_WITH_KEY, {
+      aiSession: uncommittedSession(),
+      canvasSignature: 'sig-after',
+    })
+    expect(screen.getByText(/历史改动/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '✓ 执行改动' })).toBeNull()
+    expect(screen.queryByText(/⌘Z 可整批撤销/)).toBeNull()
+  })
+})
+
 describe('RightPanel ✦AI 恢复卡重校验', () => {
   it('恢复的已执行卡标注为历史改动，不宣称当前撤销栈可整批撤销', async () => {
     await toAiTab(APP_WITH_KEY, {
@@ -498,7 +574,11 @@ describe('RightPanel ✦AI 会话保存错误', () => {
 
 describe('RightPanel ✦AI 恢复条目重定基', () => {
   it('恢复条目 id 达到安全整数上限时重定基，新增条目落盘 id 仍可归一化', async () => {
-    const onSaveSession = vi.fn((_session: unknown) => Promise.resolve())
+    let saved: unknown
+    const onSaveSession = vi.fn((session: unknown) => {
+      saved = session
+      return Promise.resolve()
+    })
     llmChatMock.mockResolvedValue(reply({ content: '收到。' }))
     await toAiTab(APP_WITH_KEY, {
       aiSession: {
@@ -512,12 +592,8 @@ describe('RightPanel ✦AI 恢复条目重定基', () => {
     send('新消息')
     expect(await screen.findByText('收到。')).toBeTruthy()
 
-    const calls = onSaveSession.mock.calls
-    const saved = calls[calls.length - 1][0] as {
-      schemaVersion: 1
-      entries: { id: number }[]
-    }
-    expect(saved.entries.map((entry) => entry.id)).toEqual([1, 2, 3])
+    const entries = (saved as { entries: { id: number }[] }).entries
+    expect(entries.map((entry) => entry.id)).toEqual([1, 2, 3])
     expect(normalizeAiSession(saved).repaired).toBe(false)
   })
 })

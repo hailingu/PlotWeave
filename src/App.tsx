@@ -42,6 +42,14 @@ interface OpenProject {
   aiSessionRetryable: boolean
 }
 
+/** 会话恢复诊断文案：只存在于恢复副本的会话与修复回写失败都要如实呈现。 */
+function aiSessionDiagnostic(ai: { repairError: string | null; recovered: boolean }): string | null {
+  if (ai.recovered) {
+    return `上次会话保存失败，已从恢复副本载入，正在重试落盘：${ai.repairError ?? '未知原因'}`
+  }
+  return ai.repairError
+}
+
 /** 分开读取画布与会话：会话局部损坏不能阻止用户打开可用的项目文档。
  * 保留区在加载屏障之后读取——保存在途时重开，拒绝处理器会在 load 等待
  * 共享保存链期间写入保留区，屏障前先取会拿到过期的 undefined。存在未
@@ -63,7 +71,13 @@ async function loadOpenProject(
   }
   try {
     const ai = await projectStore.loadAiSession(id)
-    return { id, doc, aiSession: ai.session, aiSessionError: ai.repairError, aiSessionRetryable: true }
+    return {
+      id,
+      doc,
+      aiSession: ai.session,
+      aiSessionError: aiSessionDiagnostic(ai),
+      aiSessionRetryable: true,
+    }
   } catch (err) {
     console.warn('[App] AI 会话恢复失败，已以空历史打开项目', err)
     return {

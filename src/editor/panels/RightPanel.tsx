@@ -113,6 +113,8 @@ interface RightPanelProps {
   readonly onOpenSettings?: () => void
   /** 画布上下文快照（§6「了解当前画布」）：附到 system prompt，并作为读工具返回。 */
   readonly canvasDigest?: string
+  /** 画布语义签名：执行时捕获为执行前快照，恢复时对账批次是否已落盘。 */
+  readonly canvasSignature?: string
   /** 校验助手回复中的命令批次（§6/数据模型 §12）；纯讨论回复返回 null。 */
   readonly onValidateAi?: (text: string) => BatchValidation | null
   /** 校验工具调用映射出的命令数组（tool-calling 通道）。 */
@@ -123,6 +125,8 @@ interface RightPanelProps {
   readonly onReadSettings?: () => string
   /** 执行已确认的批次：整批为一条复合命令入栈，返回错误文案或 null。 */
   readonly onApplyAiBatch?: (commands: ValidatedCommand[]) => string | null
+  /** 承载批次的画布文档确认落盘后兑现；执行卡据此推迟 executed 落盘。 */
+  readonly whenCanvasCommitted?: () => Promise<void>
   /** 当前项目恢复的 AI 会话与其独立保存通道。 */
   readonly aiSession?: AiSession
   readonly aiSessionError?: string | null
@@ -150,11 +154,13 @@ export default function RightPanel({
   settings,
   onOpenSettings,
   canvasDigest,
+  canvasSignature,
   onValidateAi,
   onValidateCommands,
   onReadNode,
   onReadSettings,
   onApplyAiBatch,
+  whenCanvasCommitted,
   aiSession,
   aiSessionError,
   aiSessionRetryable,
@@ -194,11 +200,13 @@ export default function RightPanel({
             <AiThread
               onOpenSettings={onOpenSettings}
               canvasDigest={canvasDigest}
+              canvasSignature={canvasSignature}
               onValidateAi={onValidateAi}
               onValidateCommands={onValidateCommands}
               onReadNode={onReadNode}
               onReadSettings={onReadSettings}
               onApplyAiBatch={onApplyAiBatch}
+              whenCanvasCommitted={whenCanvasCommitted}
               initialSession={aiSession}
               initialSessionError={aiSessionError}
               initialSessionRetryable={aiSessionRetryable}

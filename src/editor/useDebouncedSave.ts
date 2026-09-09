@@ -8,6 +8,7 @@
  * 上浮给调用方做用户可见诊断（磁盘满/只读/保存边界拒收等）。
  */
 import { useCallback, useEffect, useRef } from 'react'
+import { graphSignature } from './graphSignature'
 import type { ProjectContent } from '../model/content'
 
 /** 持久化签名（§9.4）：剥离 React Flow 会话态（selected/dragging/measured/
@@ -16,18 +17,12 @@ import type { ProjectContent } from '../model/content'
  * 注入/剥离（集聚焦 pw-node-dim、fromStoryEdge 派生重建带来的 className
  * 差异）只改这些字段，签名不变即不置脏——update_node_ui 语义：不落盘、
  * 不刷新 updatedAt 改变首页排序。集标题（§3.5 renameEpisode）无独立
- * 脏标记通道，纳入签名随 effect 置脏。 */
+ * 脏标记通道，纳入签名随 effect 置脏。画布部分复用 graphSignature：
+ * AI 执行卡恢复对账消费同一语义签名。 */
 function persistSignature(doc: ProjectContent): string {
-  const strip = (item: object, keys: string[]) => {
-    const rest = { ...item } as Record<string, unknown>
-    for (const k of keys) delete rest[k]
-    return rest
-  }
   return JSON.stringify({
     name: doc.name,
-    nodes: doc.nodes.map((n) => strip(n, ['selected', 'dragging', 'measured', 'className'])),
-    edges: doc.edges.map((e) => strip(e, ['selected', 'className'])),
-    settings: doc.settings,
+    graph: graphSignature(doc.nodes, doc.edges, doc.settings),
     episodeTitles: doc.episodeTitles ?? {},
     // 资产索引（§7.3 会话内导入新增条目）纳入签名：漏签即导入不落盘
     assets: doc.assets ?? null,

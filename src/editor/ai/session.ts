@@ -19,6 +19,13 @@ export interface ThreadEntry {
      * 跨会话恢复的历史执行卡。撤销栈不随会话持久化，历史卡不得
      * 宣称当前 ⌘Z 可整批撤销。 */
     historical?: true
+    /** 运行时标注（不落盘：持久化映射把未确认卡降级为 pending）：
+     * 批次已在内存执行，但承载它的画布文档尚未确认落盘。 */
+    uncommitted?: true
+    /** 执行前画布语义签名（仅未确认卡随 pending 落盘）：重开时与当前画布
+     * 比对判定批次是否已随画布落盘——不一致即已应用，恢复为历史执行卡；
+     * 一致即未落盘，恢复为可再次执行的待执行卡。确认落盘后即剥离。 */
+    preSignature?: string
   }
 }
 
@@ -102,7 +109,13 @@ function entryOf(value: unknown): ThreadEntry | null {
     kind: 'msg',
     role: value.role,
     text: value.text,
-    card: { v: value.card.v, status: value.card.status },
+    card: {
+      v: value.card.v,
+      status: value.card.status,
+      ...(typeof value.card.preSignature === 'string'
+        ? { preSignature: value.card.preSignature }
+        : {}),
+    },
   }
 }
 
