@@ -305,6 +305,32 @@ pub(crate) fn load_ai_session_file(root: &CapDir, id: &str) -> Result<serde_json
     }
 }
 
+/// 权威会话文件替换前的顺序守卫（§12.2，历轮评审修复）：现存主文件缺失、
+/// 内容不可解析（损坏内容无法再被载入，可安全替换）或写入序号不大于本次
+/// 写入序号时才允许覆盖。主文件不可读（权限/瞬态 I/O）或序号更新时拒绝
+/// ——绝不在无法确定新旧的情况下销毁可能是更新权威副本的历史。
+fn ensure_authoritative_replaceable(
+    dir: &CapDir,
+    incoming: &serde_json::Value,
+) -> Result<(), String> {
+    match dir.symlink_metadata("ai-session.json") {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(format!("读取 AI 会话文件元数据失败，已拒绝覆盖：{e}")),
+        Ok(_) => {}
+    }
+    let text = read_verified_file(dir, "ai-session.json")
+        .map_err(|e| format!("AI 会话文件不可读，无法确定新旧，已拒绝覆盖：{e}"))?;
+    let existing = serde_json::from_str::<serde_json::Value>(&text)
+        .ok()
+        .filter(|v| validate_ai_session(v).is_ok());
+    match existing {
+        Some(existing) if session_write_seq(&existing) > session_write_seq(incoming) => {
+            Err("AI 会话文件比本次保存更新，已拒绝覆盖（请重新打开项目载入更新的历史）".into())
+        }
+        _ => Ok(()),
+    }
+}
+
 pub(crate) fn save_ai_session_file(
     root: &CapDir,
     id: &str,
@@ -313,6 +339,7 @@ pub(crate) fn save_ai_session_file(
     validate_ai_session(session)?;
     require_project_record(root, id)?;
     let dir = ai_session_dir(root, id)?;
+    ensure_authoritative_replaceable(&dir, session)?;
     let text =
         serde_json::to_string_pretty(session).map_err(|e| format!("序列化 AI 会话失败：{e}"))?;
     atomic_write(&dir, "ai-session.json", &text).map_err(|e| format!("保存 AI 会话失败：{e}"))

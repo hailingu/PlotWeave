@@ -15,6 +15,10 @@ export interface AiSessionLoadResult {
   /** 恢复副本存在但本次读取失败：新旧无法确定，已暂缓保存以免覆盖更新
    * 历史（写入边界另有顺序守卫），界面须如实告知且不得自动重试落盘。 */
   recoveryUnreadable: boolean
+  /** 权威会话文件存在但读取失败（缺失会返回空会话）：其写入序号未知，
+   * 不得用恢复副本提升覆盖——展示恢复历史并暂缓写回，写入边界同样拒绝
+   * 覆盖不可读主文件。 */
+  authoritativeUnreadable: boolean
 }
 
 /** 每项目会话写入序号（单调计数）：主文件与恢复副本各自携带，载入取序号
@@ -62,6 +66,7 @@ export async function loadAiSession(id: string): Promise<AiSessionLoadResult> {
       repairError: null,
       recovered: false,
       recoveryUnreadable: false,
+      authoritativeUnreadable: false,
     }
   }
   const { invoke } = await import('@tauri-apps/api/core')
@@ -82,10 +87,11 @@ export async function loadAiSession(id: string): Promise<AiSessionLoadResult> {
     },
   )
   writeSeqs.set(id, Math.max(seqOf(mainRaw), seqOf(recoveryRaw)))
+  const mainUnreadable = mainRaw === undefined
   const recovered =
-    recoveryRaw != null && (mainRaw === undefined || seqOf(recoveryRaw) > seqOf(mainRaw))
+    recoveryRaw != null && (mainUnreadable || seqOf(recoveryRaw) > seqOf(mainRaw))
   // 权威文件读取失败且无可用恢复副本：显式上浮，不把损坏静默当成空历史
-  if (!recovered && mainRaw === undefined) throw mainError
+  if (!recovered && mainUnreadable) throw mainError
   if (recoveryFailed) {
     // 展示权威历史但明确告知并暂缓回写：提升/修复写回都不发起（写入边界
     // 的顺序守卫也会拒绝覆盖不可读副本）
@@ -96,19 +102,40 @@ export async function loadAiSession(id: string): Promise<AiSessionLoadResult> {
       repairError: `AI 会话恢复副本读取失败，已暂缓保存以免覆盖更新的历史：${String(recoveryError)}`,
       recovered: false,
       recoveryUnreadable: true,
+      authoritativeUnreadable: false,
     }
   }
   const raw = recovered ? recoveryRaw : mainRaw
   const { session, repaired } = normalizeAiSession(raw)
   if (!recovered && !repaired) {
-    return { session, repairError: null, recovered: false, recoveryUnreadable: false }
+    return {
+      session,
+      repairError: null,
+      recovered: false,
+      recoveryUnreadable: false,
+      authoritativeUnreadable: false,
+    }
   }
   try {
     await saveAiSession(id, session)
-    return { session, repairError: null, recovered: false, recoveryUnreadable: false }
+    return {
+      session,
+      repairError: null,
+      recovered: false,
+      recoveryUnreadable: false,
+      authoritativeUnreadable: false,
+    }
   } catch (err) {
+    // 权威文件不可读时提升会被写入边界的顺序守卫拒绝：序号未知，不得用
+    // 恢复副本覆盖可能更新的权威历史；展示恢复历史并禁止自动重试
     console.warn('[aiSession] 会话回写失败', err)
-    return { session, repairError: String(err), recovered, recoveryUnreadable: false }
+    return {
+      session,
+      repairError: String(err),
+      recovered,
+      recoveryUnreadable: false,
+      authoritativeUnreadable: mainUnreadable,
+    }
   }
 }
 

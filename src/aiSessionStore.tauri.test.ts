@@ -43,6 +43,7 @@ describe('loadAiSession Tauri 路径 · 副本取新与提升', () => {
       repairError: 'Error: 只读目录',
       recovered: false,
       recoveryUnreadable: false,
+      authoritativeUnreadable: false,
     })
     expect(commandsOf()).toEqual([
       'load_ai_session',
@@ -65,6 +66,7 @@ describe('loadAiSession Tauri 路径 · 副本取新与提升', () => {
       repairError: 'Error: 磁盘已满',
       recovered: true,
       recoveryUnreadable: false,
+      authoritativeUnreadable: false,
     })
   })
 
@@ -80,6 +82,7 @@ describe('loadAiSession Tauri 路径 · 副本取新与提升', () => {
       repairError: null,
       recovered: false,
       recoveryUnreadable: false,
+      authoritativeUnreadable: false,
     })
   })
 
@@ -92,13 +95,30 @@ describe('loadAiSession Tauri 路径 · 副本取新与提升', () => {
       repairError: null,
       recovered: false,
       recoveryUnreadable: false,
+      authoritativeUnreadable: false,
     })
     expect(commandsOf()).toEqual(['load_ai_session', 'load_ai_session_recovery'])
   })
-
 })
 
 describe('loadAiSession Tauri 路径 · 读取失败回退', () => {
+  it('权威文件不可读时展示恢复副本、暂缓提升并标记 authoritativeUnreadable', async () => {
+    invoke
+      .mockRejectedValueOnce(new Error('权限拒绝'))
+      .mockResolvedValueOnce(session('恢复副本', 200))
+      .mockRejectedValueOnce(new Error('AI 会话文件不可读，无法确定新旧，已拒绝覆盖'))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { loadAiSession } = await import('./aiSessionStore')
+
+    const result = await loadAiSession('p1')
+    expect(result.session.entries[0].text).toBe('恢复副本')
+    expect(result.recovered).toBe(true)
+    expect(result.recoveryUnreadable).toBe(false)
+    expect(result.authoritativeUnreadable).toBe(true)
+    expect(result.repairError).toContain('不可读')
+    warn.mockRestore()
+  })
+
   it('权威文件损坏时回退恢复副本；两者都不可用时上浮原始错误', async () => {
     invoke
       .mockRejectedValueOnce(new Error('AI 会话文件损坏'))
@@ -110,6 +130,7 @@ describe('loadAiSession Tauri 路径 · 读取失败回退', () => {
       repairError: null,
       recovered: false,
       recoveryUnreadable: false,
+      authoritativeUnreadable: false,
     })
 
     invoke.mockReset()

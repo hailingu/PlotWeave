@@ -42,8 +42,16 @@ interface OpenProject {
   aiSessionRetryable: boolean
 }
 
-/** 会话恢复诊断文案：只存在于恢复副本的会话与修复回写失败都要如实呈现。 */
-function aiSessionDiagnostic(ai: { repairError: string | null; recovered: boolean }): string | null {
+/** 会话恢复诊断文案：权威文件不可读、只存在于恢复副本的会话与修复写回
+ * 失败都要如实呈现。 */
+function aiSessionDiagnostic(ai: {
+  repairError: string | null
+  recovered: boolean
+  authoritativeUnreadable: boolean
+}): string | null {
+  if (ai.authoritativeUnreadable) {
+    return `权威会话文件不可读，已从恢复副本载入并暂缓写回（请检查磁盘后重开项目）：${ai.repairError ?? '未知原因'}`
+  }
   if (ai.recovered) {
     return `上次会话保存失败，已从恢复副本载入，正在重试落盘：${ai.repairError ?? '未知原因'}`
   }
@@ -76,9 +84,9 @@ async function loadOpenProject(
       doc,
       aiSession: ai.session,
       aiSessionError: aiSessionDiagnostic(ai),
-      // 恢复副本不可读时禁止挂载重试落盘：新旧无法确定，写入边界会拒绝，
-      // 自动重试只会反复报错
-      aiSessionRetryable: !ai.recoveryUnreadable,
+      // 副本或权威文件不可读时禁止挂载重试落盘：新旧无法确定，写入边界
+      // 会拒绝，自动重试只会反复报错
+      aiSessionRetryable: !ai.recoveryUnreadable && !ai.authoritativeUnreadable,
     }
   } catch (err) {
     console.warn('[App] AI 会话恢复失败，已以空历史打开项目', err)

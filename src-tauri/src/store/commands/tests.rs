@@ -280,6 +280,48 @@ fn setup_recovery_with_seq(
 }
 
 #[test]
+fn save_refuses_unreadable_or_newer_authoritative_session() {
+    let projects = temp_projects_dir();
+    let recovery = temp_recovery_dir(&projects);
+    fs::write(projects.join("p-1.json"), b"{}").expect("写项目文件");
+    let session = |seq: u64| {
+        serde_json::json!({
+            "schemaVersion": 1,
+            "entries": [{ "id": 1, "kind": "note", "text": "历史" }],
+            "writeSeq": seq
+        })
+    };
+    // 首次写入建立主文件（序号 10）
+    save_ai_session_file(&cap(&projects), "p-1", &session(10)).expect("首次保存");
+    // 序号更小的保存拒绝覆盖，主文件原样保留
+    let err = save_ai_session_file(&cap(&projects), "p-1", &session(5))
+        .expect_err("更新主文件不得被旧序号覆盖");
+    assert!(err.contains("更新"), "意外诊断：{err}");
+    assert_eq!(
+        load_ai_session_file(&cap(&projects), "p-1").expect("读主会话"),
+        session(10)
+    );
+
+    // 主文件不可读（目录占位）：新旧无法确定，拒绝覆盖
+    fs::remove_file(projects.join("p-1").join("ai-session.json")).expect("移除主文件");
+    fs::create_dir(projects.join("p-1").join("ai-session.json")).expect("建目录占位");
+    let err = save_ai_session_file(&cap(&projects), "p-1", &session(20))
+        .expect_err("不可读主文件不得被覆盖");
+    assert!(err.contains("不可读"), "意外诊断：{err}");
+
+    // 主文件可读但内容损坏：内容不可用，允许覆盖修复
+    fs::remove_dir(projects.join("p-1").join("ai-session.json")).expect("移除目录占位");
+    atomic_write(&cap(&projects.join("p-1")), "ai-session.json", "{not json")
+        .expect("写损坏主文件");
+    save_ai_session_file(&cap(&projects), "p-1", &session(20)).expect("损坏内容允许覆盖修复");
+    assert_eq!(
+        load_ai_session_file(&cap(&projects), "p-1").expect("读主会话"),
+        session(20)
+    );
+    cleanup_temp(&projects);
+}
+
+#[test]
 fn save_and_stash_refuse_to_replace_newer_recovery_copy() {
     let (projects, recovery, existing) = setup_recovery_with_seq(10);
     let incoming = serde_json::json!({

@@ -251,6 +251,22 @@ describe('App ✦AI 会话恢复', () => {
     // 新旧无法确定：写入边界的顺序守卫会拒绝覆盖，自动重试只会反复报错
     expect(editorProps.current.aiSessionRetryable).toBe(false)
   })
+
+  it('权威文件不可读时展示恢复副本、如实告知并禁止挂载重试落盘', async () => {
+    const recovered = { schemaVersion: 1 as const, entries: [{ id: 1, kind: 'note' as const, text: '恢复副本' }] }
+    store.loadAiSession.mockResolvedValue({
+      session: recovered,
+      repairError: 'Error: AI 会话文件不可读，无法确定新旧，已拒绝覆盖',
+      recovered: true,
+      recoveryUnreadable: false,
+      authoritativeUnreadable: true,
+    })
+    await openEditor()
+    expect(editorProps.current.aiSession).toEqual(recovered)
+    expect(editorProps.current.aiSessionError).toContain('权威会话文件不可读')
+    // 权威序号未知：不得自动重试提升覆盖
+    expect(editorProps.current.aiSessionRetryable).toBe(false)
+  })
 })
 
 describe('App ✦AI 会话保存', () => {
