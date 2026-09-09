@@ -322,7 +322,7 @@ describe('simulateBatch · 混合批次', () => {
   })
 })
 
-describe('simulateBatch · 设定实体命令（issue 44：实体 + 绑定复合执行）', () => {
+describe('simulateBatch · 新建实体并按 ref 绑定（执行期解析真实 id，undo/redo 往返，issue 44）', () => {
   it('新建角色/地点并按 ref 绑定场景与对白：落地真实 id，无临时 ref 残留；undo 整体回滚', () => {
     const ch = { id: 'ch-keep', name: '陈默', gradient: 'g0' }
     const { state, ops } = mkOps(
@@ -375,7 +375,9 @@ describe('simulateBatch · 设定实体命令（issue 44：实体 + 绑定复合
     forward.forEach((f) => f())
     expect(state.settings.characters.find((c) => c.name === '林一')?.id).toBe(hero.id)
   })
+})
 
+describe('simulateBatch · 修改既有实体与同批先建后改（issue 44）', () => {
   it('修改既有实体只覆盖写到的字段；undo 恢复原值；props/documents 透传保真', () => {
     const ch = { id: 'ch-1', name: '陈默', gradient: 'g1', bio: '旧小传' }
     const loc = { id: 'loc-1', name: '茶馆', note: '老城区' }
@@ -422,7 +424,9 @@ describe('simulateBatch · 设定实体命令（issue 44：实体 + 绑定复合
     backward.forEach((f) => f())
     expect(state.settings.characters).toEqual([])
   })
+})
 
+describe('simulateBatch · 实体 ref 别名的绑定解析（update patch 与 create 载荷同口径，issue 44）', () => {
   it('update 挂 ref 别名既有实体后，绑定命令经别名解析', () => {
     const ch = { id: 'ch-1', name: '陈默', gradient: 'g1' }
     const { state, ops } = mkOps([sceneNode('s1')], [], { characters: [ch], locations: [] })

@@ -128,7 +128,7 @@ function entSnap(): AiGraphSnapshot {
   }
 }
 
-describe('validateAiBatch · 设定实体命令（issue 44：upsert_character / upsert_location）', () => {
+describe('validateAiBatch · 实体折叠与预览产出（新建 / 修改 / 同批绑定 ref，issue 44）', () => {
   it('同批「新建角色/地点 → 场景与对白绑定 ref」逐项折叠；实体改动进预览', () => {
     const v = validateAiBatch(
       [
@@ -188,7 +188,9 @@ describe('validateAiBatch · 设定实体命令（issue 44：upsert_character / 
     // 预览标签只列实际写入的字段，不把未提及的 name 列为变更
     expect(v.items[0].label).toContain('（bio）')
   })
+})
 
+describe('validateAiBatch · 实体 fields 校验（白名单 / 值形状 / name 约束，issue 44）', () => {
   it('创建缺 name、未知字段、非字符串值、update 空 fields 均整批拒绝', () => {
     for (const bad of [
       { op: 'upsert_character', fields: { bio: '没有名字' } },
@@ -219,7 +221,9 @@ describe('validateAiBatch · 设定实体命令（issue 44：upsert_character / 
     expect(v.ok).toBe(true)
     expect(v.commands[0]).toMatchObject({ fields: { name: '林一' } })
   })
+})
 
+describe('validateAiBatch · entityId 解析与结构化引用校验（issue 44）', () => {
   it('entityId 指向不存在实体或跨种类实体均拒绝', () => {
     const ghost = validateAiBatch(
       [{ op: 'upsert_character', entityId: 'ch-404', fields: { bio: 'x' } }],
@@ -275,7 +279,9 @@ describe('validateAiBatch · 设定实体命令（issue 44：upsert_character / 
     )
     expect(okExisting.ok).toBe(true)
   })
+})
 
+describe('validateAiBatch · ref 别名与同批先建后改（contingent 自愈，issue 44）', () => {
   it('失败 upsert 的 ref 依赖按 contingent 跳过：不产级联假阳性，修复后自愈', () => {
     const v = validateAiBatch(
       [
@@ -322,7 +328,9 @@ describe('validateAiBatch · 设定实体命令（issue 44：upsert_character / 
     expect(v.ok).toBe(true)
     expect(v.items[1]).toMatchObject({ kind: 'update_entity' })
   })
+})
 
+describe('validateAiBatch · id 口径严格化（畸形 entityId / 独立 id 空间 / 虚拟 id 同形，issue 44）', () => {
   it('entityId 在场但畸形（非字符串/空白）整批拒绝，不重释为新建（与设计「新建不带 entityId」同口径）', () => {
     for (const bad of [
       { op: 'upsert_character', entityId: 123, fields: { name: '新名' } },
@@ -395,7 +403,9 @@ describe('validateAiBatch · 设定实体命令（issue 44：upsert_character / 
     )
     expect(asLocation.ok).toBe(true)
   })
+})
 
+describe('validateAiBatch · 台词行 speaker 引用与 ref 别名冲突（issue 44）', () => {
   it('缺省 kind 的台词行按 line 校验 speaker 引用（与归一化判别缺省同口径）', () => {
     const cross = validateAiBatch(
       [
