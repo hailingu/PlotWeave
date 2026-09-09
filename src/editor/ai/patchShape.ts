@@ -28,7 +28,7 @@ function entityRefIssue(
   entities?: EntityTokenScope,
 ): string | null {
   if (entities === undefined) return null
-  const kind = entities.kindOf(token)
+  const kind = entities.kindOf(token, expect)
   if (kind === 'contingent' || kind === expect) return null
   if (kind === null) {
     return `${field} 的${ENTITY_KIND_LABELS[expect]}实体不存在：${token}（新实体须先在本批 upsert_${expect} 声明 ref）`

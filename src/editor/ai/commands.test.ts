@@ -337,6 +337,32 @@ describe('validateAiBatch · 设定实体命令（issue 44：upsert_character / 
     }
   })
 
+  it('角色/地点同 id 共存（独立 id 空间）：引用按期望种类解析，不误判跨种类', () => {
+    // §8.1：角色与地点是两个独立 id 空间，同 id 共存是合法状态
+    const shared = 'dup-1'
+    const sharedSnap: AiGraphSnapshot = {
+      nodes: [{ id: 's1', type: 'scene', label: '场 01 · 茶馆' }],
+      edges: [],
+      assets: new Map(),
+      settings: {
+        characters: [{ id: shared, name: '陈默' }],
+        locations: [{ id: shared, name: '茶馆' }],
+      },
+    }
+    // locationId 指向共享 id：期望种类是 location，不得因角色桶先命中被误拒
+    const asLocation = validateAiBatch(
+      [{ op: 'update_node', nodeId: 's1', patch: { locationId: shared } }],
+      sharedSnap,
+    )
+    expect(asLocation.ok).toBe(true)
+    // characterIds 指向共享 id：同理按 character 解析
+    const asCharacter = validateAiBatch(
+      [{ op: 'update_node', nodeId: 's1', patch: { characterIds: [shared] } }],
+      sharedSnap,
+    )
+    expect(asCharacter.ok).toBe(true)
+  })
+
   it('缺省 kind 的台词行按 line 校验 speaker 引用（与归一化判别缺省同口径）', () => {
     const cross = validateAiBatch(
       [

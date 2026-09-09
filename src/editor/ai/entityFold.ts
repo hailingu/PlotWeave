@@ -42,16 +42,21 @@ const bucketOf = (st: EntityFoldHost, kind: EntityKind): Map<string, string> =>
 
 const otherKind = (kind: EntityKind): EntityKind => (kind === 'character' ? 'location' : 'character')
 
-/** 实体 token 解析口径：快照给批次校验消费（patchShape 的引用存在性/类型检查）。 */
+/** 实体 token 解析口径：快照给批次校验消费（patchShape 的引用存在性/类型检查）。
+ * 按引用位期望的种类解析：角色/地点是独立 id 空间，同 id 可在两桶共存，
+ * 期望桶优先命中，不得因固定桶序误判种类；别名表随后（冲突别名已在校验期
+ * 拒绝，不会与桶内 id 竞争），幽灵实体按 contingent 报告。 */
 export function entityScopeOf(st: EntityFoldHost): EntityTokenScope {
   return {
-    kindOf: (token) => {
-      if (st.characters.has(token)) return 'character'
-      if (st.locations.has(token)) return 'location'
+    kindOf: (token, expect) => {
+      if (bucketOf(st, expect).has(token)) return expect
       const ref = st.entityRefs.get(token)
-      if (ref === undefined) return null
-      if (st.ghostEntities.has(ref.id)) return 'contingent'
-      return ref.kind
+      if (ref !== undefined) {
+        if (st.ghostEntities.has(ref.id)) return 'contingent'
+        return ref.kind
+      }
+      const other = otherKind(expect)
+      return bucketOf(st, other).has(token) ? other : null
     },
   }
 }
