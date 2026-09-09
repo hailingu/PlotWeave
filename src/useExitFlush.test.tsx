@@ -61,6 +61,8 @@ describe('useExitFlush（窗口关闭冲刷屏障）', () => {
   })
 
   it('有待重试会话：阻止关闭并冲刷，成功后销毁窗口放行', async () => {
+    // 首查有待保存；冲刷排空后重查应转false（恒真mock会让重查循环永不退出）
+    hasPending.mockReturnValue(false).mockReturnValueOnce(true)
     const { result } = await mountBarrier()
     const event = { preventDefault: vi.fn() }
     await act(async () => { await closeHandlers[0](event) })
@@ -68,6 +70,14 @@ describe('useExitFlush（窗口关闭冲刷屏障）', () => {
     expect(flushPending).toHaveBeenCalled()
     expect(destroy).toHaveBeenCalled()
     expect(result.current).toBeNull()
+  })
+
+  it('冲刷落定后又进入新保存：重查未排空前不得销毁窗口', async () => {
+    hasPending.mockReturnValue(false).mockReturnValueOnce(true).mockReturnValueOnce(true)
+    await mountBarrier()
+    await act(async () => { await closeHandlers[0]({ preventDefault: vi.fn() }) })
+    expect(flushPending).toHaveBeenCalledTimes(2)
+    expect(destroy).toHaveBeenCalledTimes(1)
   })
 
   it('冲刷仍失败：保留窗口并给出可见诊断', async () => {

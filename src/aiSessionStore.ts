@@ -249,18 +249,27 @@ export function hasPendingAiSessionSaves(): boolean {
   return inFlightSaves.size > 0 || unrecoverableSessions.size > 0
 }
 
-/** 冲刷：先等在途保存落定（失败项在其内登记），再重试全部待重试会话；
- * 返回仍不可恢复的项目 id——非空即不得放行退出。 */
+/** 冲刷到固定点：等在途保存落定（失败项在其内登记）并重试待重试会话。
+ * 等待与重试期间用户仍可能新增保存（窗口未销毁、面板可交互），同项目的
+ * 后来者会替换 Map 项而不加入先前捕获的数组——只等一次快照会在新保存
+ * 仍在途时误判已排空而放行退出，故循环重查到静止（同 waitForSaveChainIdle
+ * 的等静止语义）。每个登记项每次冲刷只重试一次：持续失败者交还固定节律
+ * 定时器，避免冲刷自旋。返回仍不可恢复的项目 id——非空即不得放行退出。 */
 export async function flushPendingAiSessionSaves(): Promise<string[]> {
-  await Promise.allSettled(Array.from(inFlightSaves.values()))
-  // 快照后遍历：失败项会在 saveAiSession 内重新登记，直接遍历可能重复访问
-  const pending = Array.from(pendingRetrySessions)
-  for (const [id, session] of pending) {
-    try {
-      await saveAiSession(id, session)
-    } catch {
-      // 状态（不可恢复标记）已在 saveAiSession 内更新
+  const retried = new Set<string>()
+  for (;;) {
+    await Promise.allSettled(Array.from(inFlightSaves.values()))
+    // 快照后遍历：失败项会在 saveAiSession 内重新登记，直接遍历可能重复访问
+    for (const [id, session] of Array.from(pendingRetrySessions)) {
+      if (retried.has(id)) continue
+      retried.add(id)
+      try {
+        await saveAiSession(id, session)
+      } catch {
+        // 状态（不可恢复标记）已在 saveAiSession 内更新
+      }
     }
+    if (inFlightSaves.size === 0) break
   }
   return Array.from(unrecoverableSessions)
 }

@@ -326,6 +326,38 @@ describe('saveAiSession 在途保存与定时器代次', () => {
     expect(store.hasPendingAiSessionSaves()).toBe(false)
   })
 
+  it('冲刷期间新增的保存替换同项目在途项：排空到固定点才返回', async () => {
+    const store = await import('./aiSessionStore')
+    const gates: Array<() => void> = []
+    invoke.mockImplementation((cmd: unknown) => {
+      if (cmd === 'save_ai_session') {
+        return new Promise<void>((resolve) => { gates.push(() => resolve()) })
+      }
+      return Promise.resolve(undefined)
+    })
+
+    const first = store.saveAiSession('p1', payload).catch(() => undefined)
+    await vi.waitFor(() => { expect(gates).toHaveLength(1) })
+    // 关闭已被拦截、冲刷正在等第一笔慢保存时用户又改了会话：新保存替换
+    // 同项目的在途项（不加入先前捕获的数组），且按写链排在第一笔之后
+    const flushing = store.flushPendingAiSessionSaves()
+    const second = store.saveAiSession('p1', session('关闭期间的新变更')).catch(() => undefined)
+    gates[0]()
+    await first
+    await vi.waitFor(() => { expect(gates).toHaveLength(2) })
+
+    let flushed = false
+    void flushing.then(() => { flushed = true })
+    // 第一笔已落定、第二笔仍在途：只等一次快照的冲刷会在此误判已排空
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(flushed).toBe(false)
+
+    gates[1]()
+    await second
+    await expect(flushing).resolves.toEqual([])
+    expect(store.hasPendingAiSessionSaves()).toBe(false)
+  })
+
   it('新代次失败替换旧定时器：重试的是最新会话', async () => {
     vi.useFakeTimers()
     invoke.mockResolvedValueOnce(session('权威', 5)).mockResolvedValueOnce(null)
