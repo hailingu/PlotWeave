@@ -155,17 +155,19 @@ pub(crate) fn save_ai_session_authoritative(
     Ok(())
 }
 
-/// 删除项目 + 清除恢复副本：项目删除失败（项目仍在）时保留恢复副本。
+/// 删除项目 + 清除恢复副本：项目删除失败（项目仍在）时保留恢复副本；
+/// 项目已删除但副本清除失败时上浮错误——项目记录已不存在，残留副本再也
+/// 无法经项目入口发现或清理，必须让调用方看到并可重试删除（删除文件与
+/// 清除副本都幂等）。
 pub(crate) fn delete_project_with_recovery(
     projects: &CapDir,
     recovery: &CapDir,
     id: &str,
 ) -> Result<(), String> {
     delete_project_files(projects, id)?;
-    if let Err(e) = clear_ai_session_recovery_file(recovery, id) {
-        eprintln!("[store] 清除 AI 会话恢复副本失败：{e}");
-    }
-    Ok(())
+    clear_ai_session_recovery_file(recovery, id).map_err(|e| {
+        format!("项目已删除，但清除 AI 会话恢复副本失败（请重试删除以清理残留会话）：{e}")
+    })
 }
 
 fn empty_ai_session() -> serde_json::Value {
@@ -705,6 +707,39 @@ mod tests {
                 .expect("读恢复副本")
                 .is_some(),
             "项目仍在磁盘时删除失败不得清除恢复副本"
+        );
+        cleanup_temp(&projects);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn delete_project_reports_recovery_cleanup_failure() {
+        let projects = temp_projects_dir();
+        let recovery = temp_recovery_dir(&projects);
+        fs::write(projects.join("p-1.json"), b"{}").expect("写项目文件");
+        let session = serde_json::json!({ "schemaVersion": 1, "entries": [] });
+        stash_ai_session_recovery_file(&cap(&projects), &cap(&recovery), "p-1", &session)
+            .expect("写恢复副本");
+
+        // 只读化恢复目录：项目删除成功，但副本清除失败
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&recovery).unwrap().permissions();
+        perms.set_mode(0o555);
+        fs::set_permissions(&recovery, perms).expect("只读化");
+        let result = delete_project_with_recovery(&cap(&projects), &cap(&recovery), "p-1");
+        let mut perms = fs::metadata(&recovery).unwrap().permissions();
+        perms.set_mode(0o755);
+        let _ = fs::set_permissions(&recovery, perms);
+
+        let err = result.expect_err("副本清除失败必须上浮，不得静默遗留孤儿会话");
+        assert!(err.contains("重试删除"), "意外诊断：{err}");
+        assert!(
+            fs::symlink_metadata(projects.join("p-1.json")).is_err(),
+            "项目文件应已删除"
+        );
+        assert!(
+            recovery.join("ai-session-p-1.json").exists(),
+            "残留副本仍在，重试删除可清理"
         );
         cleanup_temp(&projects);
     }

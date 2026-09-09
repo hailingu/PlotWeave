@@ -427,6 +427,47 @@ describe('RightPanel ✦AI 执行回执落盘时序', () => {
   })
 })
 
+describe('RightPanel ✦AI 回执关联剔除', () => {
+  it('执行非末尾的待执行卡：回执按关联剔除，画布确认后才随卡片落盘', async () => {
+    let confirmCanvas!: () => void
+    const whenCanvasCommitted = vi.fn(
+      () => new Promise<void>((resolve) => { confirmCanvas = resolve }),
+    )
+    const saved: AiSession[] = []
+    const onSaveSession = vi.fn(async (session: AiSession) => { saved.push(session) })
+    const spies = await toAiTab(APP_WITH_KEY, {
+      whenCanvasCommitted,
+      aiRevision: 2,
+      onSaveAiSession: onSaveSession,
+    })
+    spies.onValidateCommands.mockReturnValue(validationOf())
+    llmChatMock.mockResolvedValue(batchReply())
+    send('加一场戏')
+    await screen.findByText('✦ 改动预览 · 1 项')
+    // 卡片不再是会话末尾：其后追加一轮普通问答
+    llmChatMock.mockResolvedValue(reply({ content: '继续讨论。' }))
+    send('继续讨论')
+    await screen.findByText('继续讨论。')
+    await waitFor(() => expect(saved.length).toBeGreaterThan(0))
+    const beforeClick = saved.length
+
+    fireEvent.click(screen.getByRole('button', { name: '✓ 执行改动' }))
+    expect(await screen.findByText(/✓ 已执行 1 项改动/)).toBeTruthy()
+    await waitFor(() => expect(saved.length).toBeGreaterThan(beforeClick))
+    // 回执追加在会话尾部而非卡片紧邻位置，但必须按关联剔除
+    const before = saved[saved.length - 1]
+    expect(before.entries.find((e) => e.card)?.card?.status).toBe('pending')
+    expect(before.entries.some((e) => e.kind === 'note' && e.text.includes('已执行'))).toBe(false)
+
+    await act(async () => { confirmCanvas() })
+    await waitFor(() => {
+      const after = saved[saved.length - 1]
+      expect(after.entries.find((e) => e.card)?.card?.status).toBe('executed')
+      expect(after.entries.some((e) => e.kind === 'note' && e.text.includes('已执行'))).toBe(true)
+    })
+  })
+})
+
 describe('RightPanel ✦AI 执行卡落盘对账', () => {
   const uncommittedSession = () => ({
     schemaVersion: 1 as const,

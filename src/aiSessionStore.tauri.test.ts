@@ -13,10 +13,10 @@ beforeEach(() => {
 })
 
 const commandsOf = () => invoke.mock.calls.map((call) => call[0])
-const session = (text: string, savedAt?: number) => ({
+const session = (text: string, writeSeq?: number) => ({
   schemaVersion: 1,
   entries: [{ id: 1, kind: 'note', text }],
-  ...(savedAt !== undefined ? { savedAt } : {}),
+  ...(writeSeq !== undefined ? { writeSeq } : {}),
 })
 
 describe('loadAiSession Tauri 路径', () => {
@@ -50,7 +50,7 @@ describe('loadAiSession Tauri 路径', () => {
     ])
   })
 
-  it('恢复副本写入时刻更新时优先，并尝试提升；提升失败如实标记 recovered', async () => {
+  it('恢复副本写入序号更大时优先，并尝试提升；提升失败如实标记 recovered', async () => {
     invoke
       .mockResolvedValueOnce(session('旧权威', 100))
       .mockResolvedValueOnce(session('恢复副本', 200))
@@ -79,7 +79,7 @@ describe('loadAiSession Tauri 路径', () => {
     })
   })
 
-  it('陈旧恢复副本不得压过较新的权威文件（清除失败后的回退保护）', async () => {
+  it('陈旧恢复副本不得压过序号更大的权威文件（清除失败后的回退保护）', async () => {
     invoke.mockResolvedValueOnce(session('新权威', 200)).mockResolvedValueOnce(session('陈旧副本', 100))
     const { loadAiSession } = await import('./aiSessionStore')
 
@@ -130,21 +130,55 @@ describe('loadAiSession Tauri 路径', () => {
 describe('saveAiSession Tauri 路径', () => {
   const payload = { schemaVersion: 1 as const, entries: [] }
 
-  it('保存失败在写链内先尽力写恢复副本再上抛（副本带写入时刻）', async () => {
+  it('保存失败在写链内先尽力写恢复副本再上抛（副本沿用本次写入序号）', async () => {
+    invoke.mockResolvedValueOnce(session('权威', 5)).mockResolvedValueOnce(null)
+    const { loadAiSession, saveAiSession } = await import('./aiSessionStore')
+    await loadAiSession('p1')
+    invoke.mockReset()
     invoke.mockRejectedValueOnce(new Error('磁盘已满')).mockResolvedValueOnce(undefined)
-    const { saveAiSession } = await import('./aiSessionStore')
 
     await expect(saveAiSession('p1', payload)).rejects.toThrow('磁盘已满')
     expect(commandsOf()).toEqual(['save_ai_session', 'stash_ai_session_recovery'])
-    const stash = invoke.mock.calls[1][1] as { session: { savedAt: number } }
-    expect(typeof stash.session.savedAt).toBe('number')
+    const saved = invoke.mock.calls[0][1] as { session: { writeSeq: number } }
+    const stash = invoke.mock.calls[1][1] as { session: { writeSeq: number } }
+    expect(saved.session.writeSeq).toBe(6)
+    expect(stash.session.writeSeq).toBe(6)
+  })
+
+  it('写入序号单调递增：同毫秒或时钟回拨都不会错序', async () => {
+    invoke.mockResolvedValueOnce(session('权威', 5)).mockResolvedValueOnce(null)
+    const { loadAiSession, saveAiSession } = await import('./aiSessionStore')
+    await loadAiSession('p1')
+    invoke.mockReset()
+    invoke.mockResolvedValue(undefined)
+
+    await saveAiSession('p1', payload)
+    await saveAiSession('p1', payload)
+    const seqs = invoke.mock.calls.map(
+      (call) => (call[1] as { session: { writeSeq: number } }).session.writeSeq,
+    )
+    expect(seqs).toEqual([6, 7])
+  })
+
+  it('未先 load 的首次保存也从磁盘两副本的最大序号续起', async () => {
+    invoke
+      .mockResolvedValueOnce(session('权威', 5))
+      .mockResolvedValueOnce(session('副本', 3))
+      .mockResolvedValueOnce(undefined)
+    const { saveAiSession } = await import('./aiSessionStore')
+
+    await saveAiSession('p1', payload)
+    const saved = invoke.mock.calls[2][1] as { session: { writeSeq: number } }
+    expect(saved.session.writeSeq).toBe(6)
   })
 
   it('恢复副本也写失败时仍上抛原始错误（内存副本保留待重试）', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     invoke
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
       .mockRejectedValueOnce(new Error('磁盘已满'))
       .mockRejectedValueOnce(new Error('恢复目录只读'))
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { saveAiSession } = await import('./aiSessionStore')
 
     await expect(saveAiSession('p1', payload)).rejects.toThrow('磁盘已满')

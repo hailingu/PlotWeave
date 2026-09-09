@@ -14,17 +14,42 @@ export interface AiSessionLoadResult {
   recovered: boolean
 }
 
-/** 载荷写入时刻（毫秒）：主文件与恢复副本各自记录，载入时以较新者为准。
- * 权威保存成功但恢复副本清除/改写失败时，陈旧副本的写入时刻一定更早，
- * 因此不会在下次载入时压过权威会话。 */
-function savedAtOf(raw: unknown): number {
+/** 每项目会话写入序号（单调计数）：主文件与恢复副本各自携带，载入取序号
+ * 较大者。副本只在主文件保存失败后写入，序号必然更大；权威保存成功而
+ * 副本清除/改写失败时副本序号更小，较新的权威会话胜出。序号与墙上时钟
+ * 无关——时钟回拨或同毫秒写入都不会错序。跨进程从磁盘两副本的最大值续起。 */
+const writeSeqs = new Map<string, number>()
+
+/** 载荷写入序号：非负安全整数之外（含旧版本文件）一律视作 0。 */
+function seqOf(raw: unknown): number {
   if (typeof raw !== 'object' || raw === null) return 0
-  const at = (raw as { savedAt?: unknown }).savedAt
-  return typeof at === 'number' && Number.isFinite(at) ? at : 0
+  const seq = (raw as { writeSeq?: unknown }).writeSeq
+  return typeof seq === 'number' && Number.isSafeInteger(seq) && seq >= 0 ? seq : 0
 }
 
-/** 读取项目独立 AI 历史。主文件与恢复副本都读，取写入时刻较新者——恢复
- * 副本只在主文件保存失败后写入，正常情况下必然更新；但权威保存成功后
+type Invoke = (cmd: string, args: Record<string, unknown>) => Promise<unknown>
+
+/** 从磁盘两副本续起写入序号（进程内首次写入早于任何 load 时的兜底）。 */
+async function seedWriteSeq(id: string, invoke: Invoke): Promise<number> {
+  const [main, recovery] = await Promise.all([
+    invoke('load_ai_session', { id }).catch(() => null),
+    invoke('load_ai_session_recovery', { id }).catch(() => null),
+  ])
+  const seq = Math.max(seqOf(main), seqOf(recovery))
+  writeSeqs.set(id, seq)
+  return seq
+}
+
+/** 下一写入序号：单调递增，同进程内并发写入由项目写链串行化。 */
+async function nextWriteSeq(id: string, invoke: Invoke): Promise<number> {
+  const current = writeSeqs.has(id) ? (writeSeqs.get(id) as number) : await seedWriteSeq(id, invoke)
+  const next = current + 1
+  writeSeqs.set(id, next)
+  return next
+}
+
+/** 读取项目独立 AI 历史。主文件与恢复副本都读，取写入序号较大者——恢复
+ * 副本只在主文件保存失败后写入，正常情况下序号更大；但权威保存成功后
  * 副本清除/改写失败时，副本是陈旧的，必须让较新的权威会话胜出。载入后
  * 立即尝试提升为权威副本，失败则把恢复副本继续留在原位并如实上报。 */
 export async function loadAiSession(id: string): Promise<AiSessionLoadResult> {
@@ -48,8 +73,9 @@ export async function loadAiSession(id: string): Promise<AiSessionLoadResult> {
       return null
     },
   )
+  writeSeqs.set(id, Math.max(seqOf(mainRaw), seqOf(recoveryRaw)))
   const recovered =
-    recoveryRaw != null && (mainRaw === undefined || savedAtOf(recoveryRaw) > savedAtOf(mainRaw))
+    recoveryRaw != null && (mainRaw === undefined || seqOf(recoveryRaw) > seqOf(mainRaw))
   // 权威文件读取失败且无可用恢复副本：显式上浮，不把损坏静默当成空历史
   if (!recovered && mainRaw === undefined) throw mainError
   const raw = recovered ? recoveryRaw : mainRaw
@@ -65,11 +91,16 @@ export async function loadAiSession(id: string): Promise<AiSessionLoadResult> {
 }
 
 /** 主文件保存失败时尽力写入恢复副本（跨进程保留的唯一拷贝）；副本写入
- * 同样失败时仍上抛原始保存错误，内存副本由调用方保留。 */
-async function stashRecovery(id: string, session: AiSession): Promise<void> {
+ * 同样失败时仍上抛原始保存错误，内存副本由调用方保留。副本沿用本次
+ * 写入序号：它的序号大于主文件内的序号，载入时胜出。 */
+async function stashRecovery(
+  id: string,
+  session: AiSession,
+  writeSeq: number,
+  invoke: Invoke,
+): Promise<void> {
   try {
-    const { invoke } = await import('@tauri-apps/api/core')
-    await invoke('stash_ai_session_recovery', { id, session: { ...session, savedAt: Date.now() } })
+    await invoke('stash_ai_session_recovery', { id, session: { ...session, writeSeq } })
   } catch (err) {
     console.warn('[aiSession] 恢复副本写入失败，内存副本仍待重试', err)
   }
@@ -87,10 +118,11 @@ export async function saveAiSession(id: string, session: AiSession): Promise<voi
   }
   await enqueueProjectWrite(id, async () => {
     const { invoke } = await import('@tauri-apps/api/core')
+    const writeSeq = await nextWriteSeq(id, invoke as Invoke)
     try {
-      await invoke('save_ai_session', { id, session: { ...session, savedAt: Date.now() } })
+      await invoke('save_ai_session', { id, session: { ...session, writeSeq } })
     } catch (err) {
-      await stashRecovery(id, session)
+      await stashRecovery(id, session, writeSeq, invoke as Invoke)
       throw err
     }
   })

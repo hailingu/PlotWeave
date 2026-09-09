@@ -145,7 +145,11 @@ function useAiThreadMessages(opts: {
     if (entry.card?.status !== 'pending' || !opts.onApplyAiBatch) return
     const aiRevisionAfter = opts.aiRevision === undefined ? undefined : opts.aiRevision + 1
     const err = opts.onApplyAiBatch(entry.card.v.commands)
-    const receipt = cardResultEntry(err, entry.card.v.commands.length, nextId)
+    // 回执关联卡片 id（可能追加在会话尾部）：未确认落盘的执行按关联剔除回执
+    const receipt = {
+      ...cardResultEntry(err, entry.card.v.commands.length, nextId),
+      cardReceiptFor: entry.id,
+    }
     const awaiting = !err && opts.whenCanvasCommitted !== undefined
     setThread((t) => [
       ...t.map((e, i) =>
@@ -191,25 +195,38 @@ function stripExecutionRuntime(card: NonNullable<ThreadEntry['card']>): NonNulla
   return next
 }
 
-/** 落盘映射：未确认画布落盘的执行卡降级为 pending 并压掉其回执——画布若
- * 尚未持久化，重开后该卡应重新可执行，而不是声称已执行（历史卡不可再
- * 执行）；保留 aiRevisionAfter 供重开时与画布批次计数对账。其余条目原样落盘。 */
+/** 去掉回执与卡片的运行时关联标注（不落盘）。 */
+function stripReceiptLink(entry: ThreadEntry): ThreadEntry {
+  if (entry.cardReceiptFor === undefined) return entry
+  const next = { ...entry }
+  delete next.cardReceiptFor
+  return next
+}
+
+/** 落盘映射：未确认画布落盘的执行卡降级为 pending 并剔除其回执（按关联
+ * 而非位置——回执总是追加在会话尾部）——画布若尚未持久化，重开后该卡应
+ * 重新可执行，而不是同时声称已执行；保留 aiRevisionAfter 供重开时与画布
+ * 批次计数对账。其余条目原样落盘（剥掉运行时关联标注）。 */
 function persistedEntries(thread: ThreadEntry[]): ThreadEntry[] {
+  const uncommitted = new Set(
+    thread.filter((entry) => entry.card?.uncommitted).map((entry) => entry.id),
+  )
   const entries: ThreadEntry[] = []
-  let skipReceipt = false
   for (const entry of thread) {
-    if (skipReceipt) {
-      skipReceipt = false
-      if (entry.kind === 'note') continue
+    if (
+      entry.kind === 'note' &&
+      entry.cardReceiptFor !== undefined &&
+      uncommitted.has(entry.cardReceiptFor)
+    ) {
+      continue
     }
     if (entry.card?.uncommitted) {
       const card = { ...stripExecutionRuntime(entry.card), status: 'pending' as const }
       if (entry.card.aiRevisionAfter !== undefined) card.aiRevisionAfter = entry.card.aiRevisionAfter
-      entries.push({ ...entry, card })
-      skipReceipt = true
+      entries.push({ ...stripReceiptLink(entry), card })
       continue
     }
-    entries.push(entry)
+    entries.push(stripReceiptLink(entry))
   }
   return entries
 }

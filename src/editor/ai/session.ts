@@ -12,6 +12,10 @@ export interface ThreadEntry {
   kind: 'msg' | 'note'
   role?: 'user' | 'assistant'
   text: string
+  /** 运行时标注（不落盘，归一化丢弃）：回执对应的预览卡条目 id。
+   * 未确认画布落盘的执行不落回执——回执可能被追加在会话尾部而非卡片
+   * 紧邻位置，必须按关联而非位置识别。 */
+  cardReceiptFor?: number
   card?: {
     v: BatchValidation
     status: 'pending' | 'executed' | 'dismissed'
