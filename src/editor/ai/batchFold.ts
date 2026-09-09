@@ -654,6 +654,7 @@ export function validateAiBatch(rawCommands: unknown, graph: AiGraphSnapshot): B
     // 运行时快照恒携带（graphSnapshotOf）
     characters: new Map((graph.settings?.characters ?? []).map((c) => [c.id, c.name])),
     locations: new Map((graph.settings?.locations ?? []).map((l) => [l.id, l.name])),
+    virtualEntityIds: new Set(),
     entityRefs: new Map(),
     ghostEntities: new Set(),
     items: [],

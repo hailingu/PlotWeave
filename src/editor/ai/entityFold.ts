@@ -33,6 +33,10 @@ export interface EntityFoldHost {
   /** 既有 + 本批投影的实体 id → 名称（新建为虚拟 id，执行期才分配真实 id）。 */
   characters: Map<string, string>
   locations: Map<string, string>
+  /** 本批新建/失败 upsert 的虚拟投影 id：仅可经声明的 ref 别名解析，不得
+   * 作为引用 token 直接命中桶位（执行层只解析别名表，直接放行会落盘
+   * 悬空绑定）。显式集合而非前缀判断——持久化 id 可能与虚拟 id 同形。 */
+  virtualEntityIds: Set<string>
   /** ref 别名 → 所属实体（kind + id；新建指向虚拟 id）。 */
   entityRefs: Map<string, { kind: EntityKind; id: string }>
   /** 本批失败的 upsert 虚拟实体 id：依赖其 ref 的引用按 contingent 跳过。 */
@@ -51,20 +55,22 @@ const bucketOf = (st: EntityFoldHost, kind: EntityKind): Map<string, string> =>
 const otherKind = (kind: EntityKind): EntityKind => (kind === 'character' ? 'location' : 'character')
 
 /** 实体 token 解析口径：快照给批次校验消费（patchShape 的引用存在性/类型检查）。
- * 按引用位期望的种类解析：角色/地点是独立 id 空间，同 id 可在两桶共存，
- * 期望桶优先命中，不得因固定桶序误判种类；别名表随后（冲突别名已在校验期
- * 拒绝，不会与桶内 id 竞争），幽灵实体按 contingent 报告。 */
+ * 按引用位期望的种类解析持久化 id：角色/地点是两个独立 id 空间，同 id 可在
+ * 两桶共存，期望桶优先命中，不得因固定桶序误判种类。虚拟投影 id 不参与桶位
+ * 命中（仅可经声明的 ref 别名解析——执行层只认别名表，直接放行投影 id 会
+ * 落盘悬空绑定），别名命中时幽灵实体按 contingent 报告。 */
 export function entityScopeOf(st: EntityFoldHost): EntityTokenScope {
   return {
     kindOf: (token, expect) => {
-      if (bucketOf(st, expect).has(token)) return expect
-      const ref = st.entityRefs.get(token)
-      if (ref !== undefined) {
-        if (st.ghostEntities.has(ref.id)) return 'contingent'
-        return ref.kind
+      if (!st.virtualEntityIds.has(token)) {
+        if (bucketOf(st, expect).has(token)) return expect
+        const other = otherKind(expect)
+        if (bucketOf(st, other).has(token)) return other
       }
-      const other = otherKind(expect)
-      return bucketOf(st, other).has(token) ? other : null
+      const ref = st.entityRefs.get(token)
+      if (ref === undefined) return null
+      if (st.ghostEntities.has(ref.id)) return 'contingent'
+      return ref.kind
     },
   }
 }
@@ -157,15 +163,17 @@ function entityRefCollisionIssue(st: EntityFoldHost, refName: string): string | 
   return null
 }
 
+/** 修改目标解析：虚拟投影 id 不参与桶位命中（仅声明的 ref 别名可解析，
+ * 同 entityScopeOf 口径——直接放行投影 id 会在执行期静默跳过）。 */
 function resolveEntityTarget(st: EntityFoldHost, kind: EntityKind, token: string): EntityTarget {
-  if (bucketOf(st, kind).has(token)) return { id: token }
+  if (!st.virtualEntityIds.has(token) && bucketOf(st, kind).has(token)) return { id: token }
   const ref = st.entityRefs.get(token)
   if (ref !== undefined) {
     if (ref.kind !== kind) return 'cross'
     if (st.ghostEntities.has(ref.id)) return 'contingent'
     return { id: ref.id }
   }
-  if (bucketOf(st, otherKind(kind)).has(token)) return 'cross'
+  if (!st.virtualEntityIds.has(token) && bucketOf(st, otherKind(kind)).has(token)) return 'cross'
   return 'missing'
 }
 
@@ -187,6 +195,7 @@ function foldCreateEntity(
   const label = ENTITY_KIND_LABELS[kind]
   const virtualId = virtualEntityIdOf(st, index)
   bucketOf(st, kind).set(virtualId, normalized.name)
+  st.virtualEntityIds.add(virtualId)
   if (refName !== '') st.entityRefs.set(refName, { kind, id: virtualId })
   st.items.push({
     kind: 'create_entity',
@@ -287,5 +296,6 @@ export function registerFailedEntityUpsert(
   const kind: EntityKind = raw.op === 'upsert_character' ? 'character' : 'location'
   const virtualId = virtualEntityIdOf(st, index)
   st.entityRefs.set(refName, { kind, id: virtualId })
+  st.virtualEntityIds.add(virtualId)
   st.ghostEntities.add(virtualId)
 }

@@ -405,6 +405,37 @@ describe('validateAiBatch · id 口径严格化（畸形 entityId / 独立 id �
   })
 })
 
+describe('validateAiBatch · 虚拟投影 id 不可直接引用（仅声明的 ref 可解析，issue 44）', () => {
+  it('未经 ref 声明的 __ent__:N 写进引用位/entityId 均拒绝（执行层只解析别名表）', () => {
+    const snap: AiGraphSnapshot = {
+      nodes: [{ id: 's1', type: 'scene', label: '场 01' }],
+      edges: [],
+      assets: new Map(),
+      settings: { characters: [], locations: [] },
+    }
+    // 命令 0 新建角色（无 ref，虚拟 id 为 __ent__:0）：该投影 id 不经 ref
+    // 声明不可作为引用 token——放行会在执行期落盘悬空绑定
+    const viaCharacterIds = validateAiBatch(
+      [
+        { op: 'upsert_character', fields: { name: '林一' } },
+        { op: 'update_node', nodeId: 's1', patch: { characterIds: ['__ent__:0'] } },
+      ],
+      snap,
+    )
+    expect(viaCharacterIds.ok).toBe(false)
+    expect(viaCharacterIds.issues[0].message).toContain('不存在')
+    // entityId 直接指向投影 id 同样拒绝
+    const viaEntityId = validateAiBatch(
+      [
+        { op: 'upsert_character', fields: { name: '林一' } },
+        { op: 'upsert_character', entityId: '__ent__:0', fields: { bio: 'x' } },
+      ],
+      snap,
+    )
+    expect(viaEntityId.ok).toBe(false)
+  })
+})
+
 describe('validateAiBatch · 台词行 speaker 引用与 ref 别名冲突（issue 44）', () => {
   it('缺省 kind 的台词行按 line 校验 speaker 引用（与归一化判别缺省同口径）', () => {
     const cross = validateAiBatch(
