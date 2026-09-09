@@ -87,7 +87,11 @@ function useOpenProjectActions(setOpenProject: OpenProjectSetter, refreshProject
 
   const handleSaveAiSession = useCallback(
     (id: string) => async (session: AiSession) => {
-      setOpenProject((project) => (project?.id === id ? { ...project, aiSession: session } : project))
+      // 接受实际变更即标记可重试：变更后的会话是权威用户内容，不再是
+      // 读取失败时的空回退，重挂载重试落盘安全
+      setOpenProject((project) =>
+        project?.id === id ? { ...project, aiSession: session, aiSessionRetryable: true } : project,
+      )
       try {
         await projectStore.saveAiSession(id, session)
       } catch (err) {
