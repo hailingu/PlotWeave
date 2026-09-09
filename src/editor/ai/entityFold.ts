@@ -17,8 +17,16 @@ import { plainObject } from './patchShape'
  * ref 依赖，见 batchFold.registerFailedMutation）。
  */
 
-/** 折叠期新建实体的虚拟 id（不进设定集，仅同批 ref 解析与 contingent 判定用）。 */
-const virtualEntityIdOf = (index: number): string => `__ent__:${index}`
+/** 折叠期新建实体的虚拟 id（不进设定集，仅同批 ref 解析与 contingent 判定用）。
+ * 基形 __ent__:<index>，与两桶任一既有 id 重合时追加 '#' 直至避开：角色/地点
+ * id 无保留前缀约束，持久化 id 可与基形同形——虚拟 id 抢占桶位会把既有实体
+ * 误当本批新建（引用校验放行、执行期不解析，落盘悬空绑定）。桶状态在失败
+ * 命令的折叠与登记两处调用间不变，同 index 产出同一虚拟 id。 */
+const virtualEntityIdOf = (st: EntityFoldHost, index: number): string => {
+  let id = `__ent__:${index}`
+  while (st.characters.has(id) || st.locations.has(id)) id += '#'
+  return id
+}
 
 /** 折叠器共享的实体状态与收集器（batchFold.FoldState 经此接口消费）。 */
 export interface EntityFoldHost {
@@ -177,7 +185,7 @@ function foldCreateEntity(
   if (collision !== null) return st.fail(index, collision)
   const normalized = normalizeEntityFields(kind, fields)
   const label = ENTITY_KIND_LABELS[kind]
-  const virtualId = virtualEntityIdOf(index)
+  const virtualId = virtualEntityIdOf(st, index)
   bucketOf(st, kind).set(virtualId, normalized.name)
   if (refName !== '') st.entityRefs.set(refName, { kind, id: virtualId })
   st.items.push({
@@ -277,7 +285,7 @@ export function registerFailedEntityUpsert(
   const refName = typeof raw.ref === 'string' ? raw.ref.trim() : ''
   if (refName === '') return
   const kind: EntityKind = raw.op === 'upsert_character' ? 'character' : 'location'
-  const virtualId = virtualEntityIdOf(index)
+  const virtualId = virtualEntityIdOf(st, index)
   st.entityRefs.set(refName, { kind, id: virtualId })
   st.ghostEntities.add(virtualId)
 }

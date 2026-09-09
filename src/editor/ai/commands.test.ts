@@ -363,6 +363,39 @@ describe('validateAiBatch · 设定实体命令（issue 44：upsert_character / 
     expect(asCharacter.ok).toBe(true)
   })
 
+  it('持久化 id 与折叠虚拟 id 基形同形（__ent__:N）：投影 id 避开既有 id，引用不误判', () => {
+    // 角色/地点 id 无保留前缀约束：持久化地点 id 可以恰好是 __ent__:0
+    const snap: AiGraphSnapshot = {
+      nodes: [{ id: 's1', type: 'scene', label: '场 01' }],
+      edges: [],
+      assets: new Map(),
+      settings: {
+        characters: [{ id: 'ch-1', name: '陈默' }],
+        locations: [{ id: '__ent__:0', name: '奇怪地点' }],
+      },
+    }
+    // 命令 0 新建角色后，__ent__:0 仍是持久化「地点」：写进 characterIds
+    // 是跨种类误绑，不得因虚拟角色抢占桶位被放行（执行期会落盘悬空绑定）
+    const asCharacter = validateAiBatch(
+      [
+        { op: 'upsert_character', ref: 'hero', fields: { name: '林一' } },
+        { op: 'update_node', nodeId: 's1', patch: { characterIds: ['__ent__:0'] } },
+      ],
+      snap,
+    )
+    expect(asCharacter.ok).toBe(false)
+    expect(asCharacter.issues[0].message).toContain('地点')
+    // 同一 token 用在 locationId：指向持久化地点，合法
+    const asLocation = validateAiBatch(
+      [
+        { op: 'upsert_character', ref: 'hero', fields: { name: '林一' } },
+        { op: 'update_node', nodeId: 's1', patch: { locationId: '__ent__:0' } },
+      ],
+      snap,
+    )
+    expect(asLocation.ok).toBe(true)
+  })
+
   it('缺省 kind 的台词行按 line 校验 speaker 引用（与归一化判别缺省同口径）', () => {
     const cross = validateAiBatch(
       [
