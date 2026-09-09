@@ -281,6 +281,67 @@ fn setup_recovery_with_seq(
 }
 
 #[test]
+fn save_rejects_write_seq_outside_safe_integer_range() {
+    let projects = temp_projects_dir();
+    let recovery = temp_recovery_dir(&projects);
+    fs::write(projects.join("p-1.json"), b"{}").expect("写项目文件");
+    // u64 可表示而 JS Number 不能精确表示（负数/小数同斥）：一旦落盘，前端
+    // seqOf 会把同一值归一为 0，下一次合法保存从 1 续起却被序号守卫当作
+    // 更旧而永久拒绝，权威持久化从此无法恢复
+    for bad in [
+        serde_json::json!(9_007_199_254_740_992u64),
+        serde_json::json!(u64::MAX),
+        serde_json::json!(-1i64),
+        serde_json::json!(1.5f64),
+    ] {
+        let session = serde_json::json!({ "schemaVersion": 1, "entries": [], "writeSeq": bad });
+        let err = save_ai_session_authoritative(&cap(&projects), &cap(&recovery), "p-1", &session)
+            .expect_err("超出安全整数范围的 writeSeq 不得落盘");
+        assert!(err.contains("writeSeq"), "意外诊断：{err}");
+        let err = stash_ai_session_recovery_file(&cap(&projects), &cap(&recovery), "p-1", &session)
+            .expect_err("副本写入同样拒绝超范围 writeSeq");
+        assert!(err.contains("writeSeq"), "意外诊断：{err}");
+        assert!(
+            fs::symlink_metadata(projects.join("p-1").join("ai-session.json")).is_err(),
+            "拒绝保存不得写入主会话文件"
+        );
+    }
+    // 缺失（旧文件兼容）与非负安全整数合法
+    for good in [
+        serde_json::json!({ "schemaVersion": 1, "entries": [] }),
+        serde_json::json!({ "schemaVersion": 1, "entries": [], "writeSeq": 0u64 }),
+        serde_json::json!({ "schemaVersion": 1, "entries": [], "writeSeq": 9_007_199_254_740_991u64 }),
+    ] {
+        save_ai_session_authoritative(&cap(&projects), &cap(&recovery), "p-1", &good)
+            .expect("合法 writeSeq 必须可保存");
+    }
+    cleanup_temp(&projects);
+}
+
+#[test]
+fn session_file_with_unsafe_write_seq_is_replaceable() {
+    let projects = temp_projects_dir();
+    let recovery = temp_recovery_dir(&projects);
+    fs::write(projects.join("p-1.json"), b"{}").expect("写项目文件");
+    // 旧缺陷落盘的超范围序号文件按损坏归类：序号守卫不得用它的序号卡死
+    // 后续合法保存（前端 seqOf 同样把它归一为 0，视作损坏一致）
+    fs::create_dir_all(projects.join("p-1")).expect("建会话目录");
+    fs::write(
+        projects.join("p-1").join("ai-session.json"),
+        r#"{ "schemaVersion": 1, "entries": [], "writeSeq": 9007199254740992 }"#,
+    )
+    .expect("写带毒会话文件");
+
+    let session = serde_json::json!({ "schemaVersion": 1, "entries": [], "writeSeq": 1u64 });
+    save_ai_session_authoritative(&cap(&projects), &cap(&recovery), "p-1", &session)
+        .expect("带毒序号文件必须可被合法保存替换");
+    let text = fs::read_to_string(projects.join("p-1").join("ai-session.json")).expect("读回");
+    let saved: serde_json::Value = serde_json::from_str(&text).expect("解析读回内容");
+    assert_eq!(session_write_seq(&saved), 1, "应已替换为合法序号内容");
+    cleanup_temp(&projects);
+}
+
+#[test]
 fn save_refuses_unreadable_or_newer_authoritative_session() {
     let projects = temp_projects_dir();
     let recovery = temp_recovery_dir(&projects);

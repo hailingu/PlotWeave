@@ -85,6 +85,12 @@ pub fn load_ai_session_recovery(
     load_ai_session_recovery_file(&recovery, &id)
 }
 
+/// JS `Number.MAX_SAFE_INTEGER`（2^53-1）：会话写入序号的可接受上界。u64
+/// 能表示更大的值，但前端 `seqOf` 会把超出安全整数范围的序号归一为 0
+/// ——保存边界必须先拒绝，否则超范围序号一旦落盘，下一次合法保存（从 1
+/// 续起）被序号守卫当作更旧而永久拒绝，权威持久化无法恢复。
+const MAX_SAFE_WRITE_SEQ: u64 = (1u64 << 53) - 1;
+
 /// 会话载荷的写入序号（非负整数；缺失/异型视作 0）。
 fn session_write_seq(session: &serde_json::Value) -> u64 {
     session
@@ -241,6 +247,13 @@ fn validate_ai_session(session: &serde_json::Value) -> Result<(), String> {
         .is_some_and(serde_json::Value::is_array)
     {
         return Err("AI 会话 entries 必须是数组".into());
+    }
+    // 存在的 writeSeq 必须是非负安全整数（缺失视作 0，兼容旧文件）：见
+    // MAX_SAFE_WRITE_SEQ 的边界说明
+    if let Some(seq) = object.get("writeSeq") {
+        if seq.as_u64().is_none_or(|seq| seq > MAX_SAFE_WRITE_SEQ) {
+            return Err("AI 会话 writeSeq 必须是非负安全整数".into());
+        }
     }
     Ok(())
 }
