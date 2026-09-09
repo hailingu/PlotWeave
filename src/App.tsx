@@ -2,6 +2,7 @@ import { lazy, startTransition, Suspense, useCallback, useEffect, useState, type
 import HomePage from './home/HomePage'
 import { projectStore, type ProjectContent } from './projectStore'
 import type { ProjectSummary } from './home/projects'
+import type { AiSession } from './editor/ai/session'
 
 /** 编辑器视图按域惰性加载：React Flow 的运行时引用全部封闭在编辑器域内，
  * 拆出入口 chunk 后冷启动只解析首页所需代码（issue #34）。
@@ -16,6 +17,24 @@ const SettingsView = lazy(() => import('./settings/SettingsView'))
 interface OpenProject {
   id: string
   doc: ProjectContent
+  aiSession: AiSession
+  aiSessionError: string | null
+}
+
+/** 分开读取画布与会话：会话局部损坏不能阻止用户打开可用的项目文档。 */
+async function loadOpenProject(id: string): Promise<OpenProject> {
+  const doc = await projectStore.load(id)
+  try {
+    return { id, doc, aiSession: await projectStore.loadAiSession(id), aiSessionError: null }
+  } catch (err) {
+    console.warn('[App] AI 会话恢复失败，已以空历史打开项目', err)
+    return {
+      id,
+      doc,
+      aiSession: { schemaVersion: 1, entries: [] },
+      aiSessionError: String(err),
+    }
+  }
 }
 
 /**
@@ -62,8 +81,8 @@ export default function App() {
       const meta = await projectStore.create('未命名短剧')
       // create 只回摘要：按落盘文档载入会话，保留 create_project 盖的 createdAt——
       // 手工拼空文档会丢创建时间，首次保存把保存时刻误盖为创建时间（§3 溯源字段）
-      const doc = await projectStore.load(meta.id)
-      startTransition(() => setOpenProject({ id: meta.id, doc }))
+      const open = await loadOpenProject(meta.id)
+      startTransition(() => setOpenProject(open))
     } catch (err) {
       console.warn('[App] 新建项目失败', err)
     }
@@ -73,8 +92,8 @@ export default function App() {
   const handleOpenProject = useCallback(
     async (id: string) => {
       try {
-        const doc = await projectStore.load(id)
-        startTransition(() => setOpenProject({ id, doc }))
+        const open = await loadOpenProject(id)
+        startTransition(() => setOpenProject(open))
       } catch (err) {
         console.warn('[App] 打开项目失败', err)
       }
@@ -144,10 +163,13 @@ export default function App() {
     view = <EditorView
       key={openProject.id}
       project={{ id: openProject.id, ...openProject.doc }}
+      aiSession={openProject.aiSession}
+      aiSessionError={openProject.aiSessionError}
       onBackHome={handleBackHome}
       onRenameProject={handleEditorRename}
         onOpenSettings={() => startTransition(() => setSettingsOpen(true))}
       onSave={handleSave(openProject.id)}
+      onSaveAiSession={(session) => projectStore.saveAiSession(openProject.id, session)}
     />
   } else {
     view = <HomePage

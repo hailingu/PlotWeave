@@ -1,0 +1,123 @@
+import type { BatchValidation } from './commands'
+
+/** 项目级 AI 会话的独立落盘格式；不进入画布 ProjectDocument。 */
+export interface AiSession {
+  schemaVersion: 1
+  entries: ThreadEntry[]
+}
+
+/** 可恢复会话条目：消息、改动预览及其执行回执均只作为历史记录保存。 */
+export interface ThreadEntry {
+  id: number
+  kind: 'msg' | 'note'
+  role?: 'user' | 'assistant'
+  text: string
+  card?: {
+    v: BatchValidation
+    status: 'pending' | 'executed' | 'dismissed'
+  }
+}
+
+/** 会话加载归一化结果；损坏条目隔离而不影响项目画布。 */
+export interface AiSessionNormalizeResult {
+  session: AiSession
+  repaired: boolean
+}
+
+const EMPTY_SESSION: AiSession = { schemaVersion: 1, entries: [] }
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isPreviewItem(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    ['delete', 'disconnect', 'create', 'update', 'connect', 'create_entity', 'update_entity'].includes(
+      value.kind as string,
+    ) &&
+    typeof value.danger === 'boolean' &&
+    typeof value.label === 'string' &&
+    typeof value.key === 'string'
+  )
+}
+
+function isBatchIssue(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.index === 'number' &&
+    Number.isSafeInteger(value.index) &&
+    typeof value.message === 'string'
+  )
+}
+
+function isPersistedCommand(value: unknown): boolean {
+  if (!isRecord(value) || typeof value.op !== 'string') return false
+  if (value.op === 'update_node') {
+    return (
+      typeof value.nodeId === 'string' &&
+      isRecord(value.patch) &&
+      typeof value.patch.nodeType === 'string' &&
+      isRecord(value.patch.patch)
+    )
+  }
+  if (value.op === 'upsert_character' || value.op === 'upsert_location') return isRecord(value.fields)
+  return ['create_node', 'delete_node', 'connect_edge', 'disconnect_edge'].includes(value.op)
+}
+
+function isValidation(value: unknown): value is BatchValidation {
+  return (
+    isRecord(value) &&
+    typeof value.ok === 'boolean' &&
+    Array.isArray(value.items) && value.items.every(isPreviewItem) &&
+    Array.isArray(value.commands) && value.commands.every(isPersistedCommand) &&
+    Array.isArray(value.issues) && value.issues.every(isBatchIssue) &&
+    typeof value.hasDeletes === 'boolean'
+  )
+}
+
+function entryOf(value: unknown): ThreadEntry | null {
+  if (
+    !isRecord(value) ||
+    typeof value.id !== 'number' ||
+    !Number.isSafeInteger(value.id) ||
+    value.id < 1 ||
+    typeof value.text !== 'string'
+  ) {
+    return null
+  }
+  if (value.kind === 'note') return { id: value.id, kind: 'note', text: value.text }
+  if (value.kind !== 'msg' || (value.role !== 'user' && value.role !== 'assistant')) return null
+  if (value.card === undefined) return { id: value.id, kind: 'msg', role: value.role, text: value.text }
+  if (!isRecord(value.card) || !isValidation(value.card.v)) return null
+  if (value.card.status !== 'pending' && value.card.status !== 'executed' && value.card.status !== 'dismissed') {
+    return null
+  }
+  return {
+    id: value.id,
+    kind: 'msg',
+    role: value.role,
+    text: value.text,
+    card: { v: value.card.v, status: value.card.status },
+  }
+}
+
+/** 从不可信的本地 JSON 恢复历史；旧项目无文件时返回空会话。 */
+export function normalizeAiSession(raw: unknown): AiSessionNormalizeResult {
+  if (raw === undefined || raw === null) return { session: EMPTY_SESSION, repaired: false }
+  if (!isRecord(raw) || raw.schemaVersion !== 1 || !Array.isArray(raw.entries)) {
+    return { session: EMPTY_SESSION, repaired: true }
+  }
+  let repaired = false
+  const seen = new Set<number>()
+  const entries = raw.entries.flatMap((value) => {
+    const entry = entryOf(value)
+    if (entry === null || seen.has(entry?.id)) {
+      repaired = true
+      return []
+    }
+    seen.add(entry.id)
+    return [entry]
+  })
+  return { session: { schemaVersion: 1, entries }, repaired }
+}

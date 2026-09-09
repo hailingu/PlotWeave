@@ -4,6 +4,9 @@ import { type BatchValidation } from '../ai/commands'
 import { entityFieldTableText } from '../ai/entityFields'
 import { nodeFieldTableText } from '../ai/nodeFields'
 import type { ProviderConfig } from '../../settings/types'
+import type { ThreadEntry } from '../ai/session'
+
+export type { ThreadEntry } from '../ai/session'
 
 /**
  * ✦AI 会话的模型域（RightPanel.tsx 拆分，issue #39）：系统提示、请求
@@ -13,17 +16,6 @@ import type { ProviderConfig } from '../../settings/types'
 
 /** 会话条目：对话消息（助手消息可携带改动预览卡状态）或系统回执。
  * id 为面板内自增序号——条目只追加不删除，作稳定渲染 key（S6479）。 */
-export interface ThreadEntry {
-  id: number
-  kind: 'msg' | 'note'
-  role?: 'user' | 'assistant'
-  text: string
-  card?: {
-    v: BatchValidation
-    status: 'pending' | 'executed' | 'dismissed'
-  }
-}
-
 /** 助手人格与命令协议说明（§6/数据模型 §12.2）。节点字段表由
  * nodeFields.ts 生成（issue 41）、实体字段表由 entityFields.ts 生成
  * （issue 44）：提示词、工具描述与校验白名单同源，模型不再因协议缺失

@@ -24,6 +24,19 @@ const deletingIds = new Set<string>()
  * 登记；删除成功即随项目一并丢弃，绝不复活已删项目。 */
 const absorbedSaveDocs = new Map<string, ProjectContent>()
 
+/** 将项目附属数据的写入纳入与画布相同的保存/删除链。删除墓碑期的写入
+ * 被吸收，保证已删除项目不会因迟到的独立持久化操作重建目录。 */
+export function enqueueProjectWrite(id: string, write: () => Promise<void>): Promise<void> {
+  if (deletingIds.has(id)) {
+    console.warn('[projectStore] 项目删除中，吸收附属数据写入', id)
+    return Promise.resolve()
+  }
+  const run = (saveChains.get(id) ?? Promise.resolve()).catch(() => undefined)
+  const next = run.then(write)
+  saveChains.set(id, next)
+  return next
+}
+
 /** 取消后台重试定时器（不触碰登记文档）：删除开场只需停摆定时器——墓碑
  * 期定时器即使触发也只会被 enqueueSave 吸收（不会复活已删项目），但停摆
  * 更干净；登记文档留待链落定处的全量清除与回吐判定。 */

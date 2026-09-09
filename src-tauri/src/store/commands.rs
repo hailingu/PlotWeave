@@ -34,6 +34,127 @@ pub fn load_project(app: AppHandle, id: String) -> Result<ProjectFile, String> {
     let root = projects_dir(&app)?;
     load_project_file(&root, &id)
 }
+
+/// 读取项目独立 AI 会话：旧项目缺文件时返回空历史；会话损坏只阻断会话恢复，
+/// 不影响同项目的画布文档读取。
+#[tauri::command]
+pub fn load_ai_session(app: AppHandle, id: String) -> Result<serde_json::Value, String> {
+    let root = projects_dir(&app)?;
+    load_ai_session_file(&root, &id)
+}
+
+/// 保存项目独立 AI 会话。会话文件位于 `projects/{id}/ai-session.json`，与
+/// `project.json` 分离，避免每条对话触发整份画布文档序列化。
+#[tauri::command]
+pub fn save_ai_session(
+    app: AppHandle,
+    id: String,
+    session: serde_json::Value,
+) -> Result<(), String> {
+    let root = projects_dir(&app)?;
+    save_ai_session_file(&root, &id, &session)
+}
+
+fn empty_ai_session() -> serde_json::Value {
+    serde_json::json!({ "schemaVersion": 1, "entries": [] })
+}
+
+fn validate_ai_session(session: &serde_json::Value) -> Result<(), String> {
+    let Some(object) = session.as_object() else {
+        return Err("AI 会话必须是对象".into());
+    };
+    if object.get("schemaVersion") != Some(&serde_json::Value::from(1)) {
+        return Err("AI 会话版本不受支持".into());
+    }
+    if !object
+        .get("entries")
+        .is_some_and(serde_json::Value::is_array)
+    {
+        return Err("AI 会话 entries 必须是数组".into());
+    }
+    Ok(())
+}
+
+/// AI 会话只能附着在权威项目记录上。删除先移除该记录；迟到的会话保存
+/// 因而无法重新创建 `projects/{id}/`，留下不可见的聊天数据。
+fn require_project_record(root: &CapDir, id: &str) -> Result<(), String> {
+    validate_id(id)?;
+    let name = format!("{id}.json");
+    match root.symlink_metadata(&name) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Err("项目不存在，拒绝保存 AI 会话".into())
+        }
+        Ok(md) if md.file_type().is_symlink() => Err("项目记录是符号链接，拒绝保存 AI 会话".into()),
+        Ok(md) if !md.is_file() => Err("项目记录不是普通文件，拒绝保存 AI 会话".into()),
+        Ok(_) => read_verified_file(root, &name)
+            .map(|_| ())
+            .map_err(|e| format!("拒绝读取项目记录：{e}")),
+        Err(e) => Err(format!("读取项目记录元数据失败：{e}")),
+    }
+}
+
+/// 打开或创建会话目录。目录经 no-follow 分类与绑定后再打开，避免会话 I/O
+/// 退化为未验证的路径拼接。
+fn ai_session_dir(root: &CapDir, id: &str) -> Result<CapDir, String> {
+    validate_id(id)?;
+    for _ in 0..2 {
+        match root.symlink_metadata(id) {
+            Ok(md) if md.file_type().is_symlink() => {
+                return Err("项目会话目录是符号链接，拒绝访问".into())
+            }
+            Ok(md) if !md.is_dir() => return Err("项目会话路径不是目录，拒绝访问".into()),
+            Ok(md) => return open_dir_bound(root, id, &md, "项目会话目录"),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => match root.create_dir(id) {
+                Ok(()) => continue,
+                Err(create_err) if create_err.kind() == std::io::ErrorKind::AlreadyExists => {
+                    continue
+                }
+                Err(create_err) => return Err(format!("创建项目会话目录失败：{create_err}")),
+            },
+            Err(e) => return Err(format!("读取项目会话目录元数据失败：{e}")),
+        }
+    }
+    Err("项目会话目录在创建期间持续变化，拒绝访问".into())
+}
+
+/// 会话读写内核：缺文件是旧项目的合法状态；损坏 JSON 明确上浮给前端展示。
+pub(crate) fn load_ai_session_file(root: &CapDir, id: &str) -> Result<serde_json::Value, String> {
+    validate_id(id)?;
+    let dir = match root.symlink_metadata(id) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(empty_ai_session()),
+        Ok(md) if md.file_type().is_symlink() => {
+            return Err("项目会话目录是符号链接，拒绝读取".into())
+        }
+        Ok(md) if !md.is_dir() => return Err("项目会话路径不是目录，拒绝读取".into()),
+        Ok(md) => open_dir_bound(root, id, &md, "项目会话目录")?,
+        Err(e) => return Err(format!("读取项目会话目录元数据失败：{e}")),
+    };
+    match dir.symlink_metadata("ai-session.json") {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(empty_ai_session()),
+        Ok(_) => {
+            let text = read_verified_file(&dir, "ai-session.json")
+                .map_err(|e| format!("拒绝读取 AI 会话：{e}"))?;
+            let session =
+                serde_json::from_str(&text).map_err(|e| format!("AI 会话文件损坏：{e}"))?;
+            validate_ai_session(&session)?;
+            Ok(session)
+        }
+        Err(e) => Err(format!("读取 AI 会话文件元数据失败：{e}")),
+    }
+}
+
+pub(crate) fn save_ai_session_file(
+    root: &CapDir,
+    id: &str,
+    session: &serde_json::Value,
+) -> Result<(), String> {
+    validate_ai_session(session)?;
+    require_project_record(root, id)?;
+    let dir = ai_session_dir(root, id)?;
+    let text =
+        serde_json::to_string_pretty(session).map_err(|e| format!("序列化 AI 会话失败：{e}"))?;
+    atomic_write(&dir, "ai-session.json", &text).map_err(|e| format!("保存 AI 会话失败：{e}"))
+}
 /// load_project 的可测内核：id 是 IPC 调用方传入的不可信参数，词法校验
 /// 先于任何路径拼接——嵌套路径形态的 id（如 `p-1/assets/x`）不得把
 /// projects/ 内的任意 JSON 经项目通道读出（句柄相对解析被沙箱限定在
@@ -285,6 +406,41 @@ mod tests {
         assert!(fs::symlink_metadata(projects.join("p-1")).is_err());
         // 幂等：文件与目录均已缺失时再删不报错
         assert!(delete_project_files(&cap(&projects), "p-1").is_ok());
+        cleanup_temp(&projects);
+    }
+
+    #[test]
+    fn ai_session_round_trips_in_its_own_project_file() {
+        let projects = temp_projects_dir();
+        fs::write(projects.join("p-1.json"), b"{}").expect("写项目文件");
+        let session = serde_json::json!({
+            "schemaVersion": 1,
+            "entries": [{ "id": 1, "kind": "msg", "role": "user", "text": "保留讨论" }]
+        });
+        save_ai_session_file(&cap(&projects), "p-1", &session).expect("保存会话");
+        assert_eq!(
+            load_ai_session_file(&cap(&projects), "p-1").expect("读取会话"),
+            session
+        );
+        assert!(projects.join("p-1").join("ai-session.json").exists());
+        assert!(
+            projects.join("p-1.json").exists(),
+            "会话不得混入画布项目文件"
+        );
+        cleanup_temp(&projects);
+    }
+
+    #[test]
+    fn ai_session_save_requires_existing_project_record() {
+        let projects = temp_projects_dir();
+        let session = serde_json::json!({ "schemaVersion": 1, "entries": [] });
+        let err = save_ai_session_file(&cap(&projects), "p-1", &session)
+            .expect_err("已删除项目不得被迟到会话保存重建");
+        assert!(err.contains("项目不存在"), "意外诊断：{err}");
+        assert!(
+            fs::symlink_metadata(projects.join("p-1")).is_err(),
+            "拒绝保存不得创建项目会话目录"
+        );
         cleanup_temp(&projects);
     }
 

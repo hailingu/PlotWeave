@@ -20,6 +20,8 @@ vi.mock('./projectStore', () => ({
     list: vi.fn(),
     create: vi.fn(),
     load: vi.fn(),
+    loadAiSession: vi.fn(),
+    saveAiSession: vi.fn(),
     save: vi.fn(),
     saveQuiet: vi.fn(),
     duplicate: vi.fn(),
@@ -53,6 +55,8 @@ const store = projectStore as unknown as {
   list: ReturnType<typeof vi.fn>
   create: ReturnType<typeof vi.fn>
   load: ReturnType<typeof vi.fn>
+  loadAiSession: ReturnType<typeof vi.fn>
+  saveAiSession: ReturnType<typeof vi.fn>
   save: ReturnType<typeof vi.fn>
   saveQuiet: ReturnType<typeof vi.fn>
   duplicate: ReturnType<typeof vi.fn>
@@ -73,6 +77,7 @@ beforeEach(() => {
   store.list.mockResolvedValue([{ id: 'p1', name: '雨夜' }])
   store.create.mockResolvedValue({ id: 'new-1', name: '未命名短剧' })
   store.load.mockResolvedValue(structuredClone(DOC))
+  store.loadAiSession.mockResolvedValue({ schemaVersion: 1, entries: [] })
 })
 
 describe('App（双界面路由壳）', () => {
@@ -97,6 +102,7 @@ describe('App（双界面路由壳）', () => {
       await (homeProps.current.onOpenProject as (id: string) => Promise<void>)('p1')
     })
     expect(store.load).toHaveBeenCalledWith('p1')
+    expect(store.loadAiSession).toHaveBeenCalledWith('p1')
     expect(await screen.findByTestId('editor')).toBeTruthy()
     cleanup()
 
@@ -109,6 +115,18 @@ describe('App（双界面路由壳）', () => {
     })
     expect(screen.queryByTestId('editor')).toBeNull()
     warn.mockRestore()
+  })
+
+  it('AI 会话文件损坏时仍打开画布，并将恢复错误交给编辑器提示', async () => {
+    store.loadAiSession.mockRejectedValue(new Error('AI 会话文件损坏'))
+    render(<App />)
+    await screen.findByTestId('home')
+    await act(async () => {
+      await (homeProps.current.onOpenProject as (id: string) => Promise<void>)('p1')
+    })
+
+    expect(await screen.findByTestId('editor')).toBeTruthy()
+    expect(editorProps.current.aiSessionError).toContain('AI 会话文件损坏')
   })
 
   it('新建项目：create 后按落盘文档载入会话（保留 createdAt 溯源），并刷新列表', async () => {
@@ -145,6 +163,10 @@ describe('App（双界面路由壳）', () => {
     const savedDoc = { ...DOC, name: '雨夜·修订' }
     ;(editorProps.current.onSave as (doc: ProjectContent) => void)(savedDoc)
     expect(store.save).toHaveBeenCalledWith('p1', savedDoc)
+
+    const aiSession = { schemaVersion: 1 as const, entries: [{ id: 1, kind: 'note' as const, text: '已保存' }] }
+    await (editorProps.current.onSaveAiSession as (session: typeof aiSession) => Promise<void>)(aiSession)
+    expect(store.saveAiSession).toHaveBeenCalledWith('p1', aiSession)
 
     await act(async () => {
       ;(editorProps.current.onBackHome as () => void)()

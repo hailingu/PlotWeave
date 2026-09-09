@@ -11,9 +11,9 @@ import {
   cardResultEntry,
   readToolOf,
   runModelTurn,
-  type ThreadEntry,
 } from './aiThreadModel'
 import PreviewCard from './PreviewCard'
+import type { AiSession, ThreadEntry } from '../ai/session'
 
 /** 模型选择域（逻辑 hook，issue #39 拆分）：应用设置加载、面板内模型
  * 选择与三层派生（可用模型 → 生效模型 → provider key 就绪）。 */
@@ -50,12 +50,13 @@ function useAiModels() {
  * 与危险批次的两步确认武装态；threadRef 供容器做滚动跟随。 */
 function useAiThreadMessages(opts: {
   readonly onApplyAiBatch?: (commands: ValidatedCommand[]) => string | null
+  readonly initialSession?: AiSession
 }) {
-  const [thread, setThread] = useState<ThreadEntry[]>([])
+  const [thread, setThread] = useState<ThreadEntry[]>(() => opts.initialSession?.entries ?? [])
   /** 危险批次的两步确认：处于武装态的会话条目下标，null = 无。 */
   const [armedIdx, setArmedIdx] = useState<number | null>(null)
   /** 会话条目自增 id（组件内稳定 key）。 */
-  const entryIdRef = useRef(0)
+  const entryIdRef = useRef(Math.max(0, ...(opts.initialSession?.entries.map((entry) => entry.id) ?? [])))
   const nextId = () => ++entryIdRef.current
   const threadRef = useRef<HTMLDivElement>(null)
 
@@ -300,6 +301,9 @@ export default function AiThread({
   onReadNode,
   onReadSettings,
   onApplyAiBatch,
+  initialSession,
+  initialSessionError,
+  onSaveSession,
 }: {
   readonly onOpenSettings?: () => void
   readonly canvasDigest?: string
@@ -308,9 +312,17 @@ export default function AiThread({
   readonly onReadNode?: (nodeId: string) => string | null
   readonly onReadSettings?: () => string
   readonly onApplyAiBatch?: (commands: ValidatedCommand[]) => string | null
+  /** 打开项目时恢复的独立会话快照。 */
+  readonly initialSession?: AiSession
+  readonly initialSessionError?: string | null
+  /** 会话变更的独立持久化通道；失败不清空当前内存历史。 */
+  readonly onSaveSession?: (session: AiSession) => Promise<void>
 }) {
   const m = useAiModels()
-  const msg = useAiThreadMessages({ onApplyAiBatch })
+  const msg = useAiThreadMessages({ onApplyAiBatch, initialSession })
+  const [saveError, setSaveError] = useState<string | null>(initialSessionError ?? null)
+  const hasMounted = useRef(false)
+  const saveSessionRef = useRef(onSaveSession)
   const turn = useAiTurn({
     activeOption: m.activeOption,
     activeProvider: m.activeProvider,
@@ -328,6 +340,20 @@ export default function AiThread({
   useEffect(() => {
     msg.threadRef.current?.scrollTo({ top: msg.threadRef.current.scrollHeight })
   }, [msg.thread, msg.threadRef, turn.busy, turn.error])
+  useEffect(() => {
+    saveSessionRef.current = onSaveSession
+  }, [onSaveSession])
+  useEffect(() => {
+    if (!hasMounted.current) {
+      hasMounted.current = true
+      return
+    }
+    const save = saveSessionRef.current
+    if (!save) return
+    void save({ schemaVersion: 1, entries: msg.thread })
+      .then(() => setSaveError(null))
+      .catch((err: unknown) => setSaveError(String(err)))
+  }, [msg.thread])
 
   return (
     <div className="pw-ai">
@@ -341,6 +367,7 @@ export default function AiThread({
         />
       )}
       <div className="pw-ai-thread" ref={msg.threadRef}>
+        {saveError && <div className="pw-ai-msg pw-ai-msg-error">聊天记录保存失败：{saveError}</div>}
         {msg.thread.length === 0 && m.ready && (
           <div className="pw-empty">和 AI 聊聊这一幕怎么写，或让它直接调整画布（会先出改动预览）。</div>
         )}

@@ -78,6 +78,9 @@ export default function EditorLayout(props: EditorLayoutProps) {
           onReadNode={ai.readNode}
           onReadSettings={ai.readSettings}
           onApplyAiBatch={ai.applyAiBatch}
+          aiSession={props.aiSession}
+          aiSessionError={props.aiSessionError}
+          onSaveAiSession={props.onSaveAiSession}
         />
       </div>
       <EditorOverlays {...props} />

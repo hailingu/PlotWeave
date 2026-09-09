@@ -190,7 +190,7 @@ interface ProjectDocument {
 }
 ```
 
-文档**不**持久化会话态：撤销/重做栈、选中态（`ui.selected` 加载时重置）、拖拽中的临时位置。这些留在内存，随会话结束消失。
+文档**不**持久化画布会话态：撤销/重做栈、选中态（`ui.selected` 加载时重置）、拖拽中的临时位置。这些留在内存，随会话结束消失。创作型 AI 对话是例外：它不进入 `ProjectDocument`，而是按 §10.1 的独立 `ai-session.json` 保存，以免频繁消息写入重序列化整份画布。
 
 ## 四、节点模型
 
@@ -847,6 +847,7 @@ type GraphCommandOf<K extends CommandType> = Extract<GraphCommand, { type: K }>
 ├── projects/
 │   └── {projectId}/
 │       ├── project.json               # ProjectDocument
+│       ├── ai-session.json             # AI 创作历史（独立 schemaVersion）
 │       └── assets/                    # 项目资产（自包含）
 │           ├── {assetId}.png
 │           └── {assetId}.mp4
@@ -867,6 +868,8 @@ type GraphCommandOf<K extends CommandType> = Extract<GraphCommand, { type: K }>
 - 或两者结合（推荐：启动迁移 + 兜底回退）。
 
 布局迁移未实现前，§10.1 的 `index.json`/每项目目录不应成为 `list_projects` 的唯一数据源。
+
+**AI 会话存储（issue #47，已实现）**：`ai-session.json` 的 `schemaVersion: 1` 保存消息 id、角色、顺序、正文与预览卡/执行回执状态；它只记录历史，不恢复撤销栈，也绝不自动重放命令。读取旧项目或缺文件返回空历史；前端逐条归一化，局部损坏条目隔离并回写可修复部分，完整文件损坏则仅报告会话恢复失败，不阻断 `project.json`。同一项目的会话保存串行化并用同目录临时文件、flush、原子 rename 与父目录同步提交；失败必须上浮给面板，内存历史保留，后续变更可重试。删除项目删除整个项目目录，因此同时删除会话；复制项目仅复制画布和项目资产，**不**复制原项目对话；现有剧本导出只导出画布内容，也不包含会话。
 
 ### 10.2 写入安全
 
@@ -942,6 +945,7 @@ provider 的 API key 以**密文 `keyEnc`** 存于 provider 配置：Rust `seal`
 | `list_projects()` | 按 §10.2 先验证应用根、项目目录与每个候选控制文件，再扫描项目文档真源并与 `index.json` 缓存校正后返回内存投影；索引缺失、损坏或与文档的 id/name/updatedAt 不一致时重建并原子回写，不直接返回陈旧缓存 |
 | `create_project(name)` | 按 §10.2 验证/创建项目目录及控制文件目标后，先原子写初始 `project.json`，再更新可重建索引；name 按 §9.3 项目名校验口径校验（与 rename_project 同规则），跨文件中断由 §10.2 校正恢复 |
 | `load_project(projectId)` | 按 §10.2 验证完整目录/文件信任链后才读 `project.json`；项目基准目录或文件逃逸即拒绝整个加载。随后按 §11.1 第 0 步只做信封判型：旧扁平形状包装为 v0，缺失/异型版本号的 v1 形状标记为待修复 v1，混合/无法判定的信封或显式版本与形状冲突时拒绝且不改写；并随原始文档返回受信 `projectId` 与可用的索引元数据。v1 的 `project` 父容器或成员异型不得在 Rust 层整份拒绝，交由前端归一化修复；节点级 schemaVersion 迁移与归一化同样在前端模型层（见十一），Rust 不参与 |
+| `load_ai_session(projectId)` / `save_ai_session(projectId, session)` | 当前已实现：经项目目录受信句柄读取/原子写 `ai-session.json`；缺文件返回空会话，JSON 或信封损坏显式报错而不影响画布加载。保存只接受会话 v1 信封与数组 entries；逐条恢复归一化在前端会话模型完成。 |
 | `save_project(projectId, doc)` | 按 §10.2 验证完整目录、目标与临时文件信任链后，先校验完整项目信封：确认 `doc.project` 是普通对象；`project.id` **无条件以受信路径参数 `projectId` 覆盖**——调用方自报的 id 不构成授权，不得把与路径参数不一致的 id 落盘（否则内存会话、项目真源与首页索引出现分裂身份）；`project.name` 按 §9.3 项目名校验口径校验（与 rename_project/create_project 同规则）——先验 typeof string，去首尾空白后非空且按字符数 ≤ 64，非法值整次拒绝（保存边界不替调用方修复，普通命令无法产生的名称不得经原始 IPC 持久化），合法时采用规范化后的值。信封其余必需顶层成员同款前置校验：`schemaVersion` 必须严格等于当前支持版本（1）——缺失、异型或未来版本号整次拒绝（缺失/异型版本落盘后下次加载按 §11.1 第 0 步标记待修复，未来版本则直接拒绝，均不得由保存产生）；`graph` 是普通对象且其 `nodes`/`edges` 均为数组，`settings` 是普通对象且其 `characters`/`locations`/`props`/`documents` 各桶均为普通对象——任一异型即整次拒绝，不得把 `graph: null`、异型 `settings` 之类的载荷落盘后靠 §11.1 归一化重置为空容器，把无法判型的损坏静默变成内容丢失。`episodeTitles` 必须是普通对象（非数组、非 `null`）且键值满足 §11.1 第 3 步的键值域（规范十进制正整数安全整数键、字符串值）——数组型标题表等异型落盘后下次加载会被重置为 `{}`，载荷中的标题静默丢失，保存边界同样直接拒绝。`project` 其余元数据同域校验：`createdAt` 与 `updatedAt` 均须为可解析的 ISO 8601 字符串（`updatedAt` 虽被本命令无条件覆盖，异型值仍整次拒绝——保存边界不接受形状不完整的信封）；可选 `description` 存在时须为字符串；`graph.viewport` 存在时须为普通对象且 `x`/`y` 为有限数值、`zoom` 为正有限数（§3 缺省语义只允许字段缺省，不允许异型值落盘）。再确认 `doc.assets`/`doc.assets.byId` 均为普通对象，再把每个键和值当作不可信输入执行 §7.1 完整形状、Record 键/id 一致性及 MIME/时间戳规范形式校验（保存边界不替调用方修复，非规范值直接拒绝，避免内存与落盘分叉），并逐项以受信项目资产根句柄 no-follow 打开当前 relPath、确认普通文件和真实路径包含关系；任一校验失败即在创建临时文件、生成保存时间或更新索引前拒绝整次保存，返回具体字段或 assetId 诊断，不得静默剥离。全部通过后，Rust 为本次尝试只取一次系统时间，**无条件覆盖**调用方携带的 `doc.project.updatedAt`（不信任旧值、未来值或前端时钟），再以排他创建的同目录临时文件 + flush + rename 原子替换 `project.json`；随后以规范化后的 name 与同一 updatedAt 更新可重建的 `index.json` 缓存，跨文件中断由 §10.2 的启动/列表校正恢复。成功回执返回权威 updatedAt，供前端刷新内存元数据而不触发新一轮脏写；失败重试重新执行信封与资产复验并取新时间，`serializeProject` 只负责结构序列化、不负责保存时刻盖戳 |
 | `delete_project(projectId)` | 按 §10.2 验证完整目录/文件信任链后只删除受信项目控制文件/目录；目标缺失为幂等成功，符号链接或越界目标拒绝且不跟随 |
 | `validate_project_asset(projectId, asset)` | `set_asset` 的只读 Rust 前置命令：projectId 只接受 dispatcher 当前受信活动会话值，不接受命令负载自报；先按 §7.1 校验完整 AssetRef 与词法 relPath，再从受信项目目录/资产根句柄逐组件 no-follow 打开目标，确认它是资产根内普通文件；返回本次规范化后的完整 AssetRef。不得缓存结果或把它视为保存授权；公开 dispatcher 只把本次返回值立即交给模块私有 reducer，失败时活动文档、历史栈与脏标记零变更 |
@@ -1027,6 +1031,7 @@ Agent 不直接触碰文档状态，只产出 `GraphCommand`（`actor: 'agent'`�
 - **快照摘要而非全量**：大项目全量 JSON 会超出上下文，默认只给压缩视图（节点 id/type/label/连接关系），详情由模型用读工具按需拉取。
 - **调用路径**：前端驱动循环；LLM 请求经 Rust command `llm_chat` 代理发出——API key 以密文随 settings 落盘、在 Rust 内存解密，前端不持有明文，同时绕开 webview 的 CORS 限制。
 - **可控性**：Agent 的写操作执行前弹批量预览（涉及哪些节点、什么变更），用户确认后才进命令通道；undo 始终兜底。
+- **会话生命周期（issue #47）**：会话状态属于项目而非可卸载的 AI 面板；切换检查器、折叠右栏时不重置。历史恢复只展示内容与回执，`executed` 预览卡不会再次执行；`pending` 卡即使由历史显示，执行入口仍按当前画布重校验并再次要求用户确认。正在进行的网络请求不在重启后恢复为 busy 或自动重发；项目切换/关闭后的迟到结果不写入新项目。
 
 ### 12.3 MCP 暴露（可选，后置）
 

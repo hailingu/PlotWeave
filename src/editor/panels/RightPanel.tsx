@@ -8,6 +8,7 @@ import {
 } from '../settings'
 import AiThread from './AiThread'
 import type { CanvasNode } from '../nodes/types'
+import type { AiSession } from '../ai/session'
 
 /** 右栏分段（docs/ui-design.md §3.4）：检查器 = 选中节点的字段视图；✦AI = 对话面板。 */
 export type RightTab = 'inspector' | 'ai'
@@ -122,6 +123,10 @@ interface RightPanelProps {
   readonly onReadSettings?: () => string
   /** 执行已确认的批次：整批为一条复合命令入栈，返回错误文案或 null。 */
   readonly onApplyAiBatch?: (commands: ValidatedCommand[]) => string | null
+  /** 当前项目恢复的 AI 会话与其独立保存通道。 */
+  readonly aiSession?: AiSession
+  readonly aiSessionError?: string | null
+  readonly onSaveAiSession?: (session: AiSession) => Promise<void>
 }
 
 /**
@@ -148,6 +153,9 @@ export default function RightPanel({
   onReadNode,
   onReadSettings,
   onApplyAiBatch,
+  aiSession,
+  aiSessionError,
+  onSaveAiSession,
 }: RightPanelProps) {
   const rows = selectedNode ? inspectorRows(selectedNode, attachedShotCount, settings) : []
 
@@ -179,7 +187,7 @@ export default function RightPanel({
             ) : (
               <div className="pw-empty">在画布中选择一个节点，查看它的字段。</div>
             ))}
-          {tab === 'ai' && (
+          <div hidden={tab !== 'ai'}>
             <AiThread
               onOpenSettings={onOpenSettings}
               canvasDigest={canvasDigest}
@@ -188,8 +196,11 @@ export default function RightPanel({
               onReadNode={onReadNode}
               onReadSettings={onReadSettings}
               onApplyAiBatch={onApplyAiBatch}
+              initialSession={aiSession}
+              initialSessionError={aiSessionError}
+              onSaveSession={onSaveAiSession}
             />
-          )}
+          </div>
         </div>
       </div>
     </aside>

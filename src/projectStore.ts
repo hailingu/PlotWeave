@@ -20,6 +20,8 @@ import {
 import { enqueueDelete, enqueueSave } from './projectStore/saveChain'
 import { tauriCreate, tauriList, tauriLoad } from './projectStore/tauri'
 import type { ProjectSummary } from './home/projects'
+import { deleteAiSession, loadAiSession, saveAiSession } from './aiSessionStore'
+import type { AiSession } from './editor/ai/session'
 
 export type { ProjectContent }
 
@@ -59,10 +61,19 @@ export const projectStore = {
   save: (id: string, doc: ProjectContent): Promise<void> =>
     isTauri ? enqueueSave(id, doc) : memorySave(id, doc),
 
+  /** 项目 AI 会话独立于画布文档保存，旧项目无文件时返回空历史。 */
+  loadAiSession,
+
+  /** AI 会话保存失败上浮给面板展示；内存历史不随失败清空。 */
+  saveAiSession: (id: string, session: AiSession): Promise<void> => saveAiSession(id, session),
+
   /** 删除项目（首页卡片菜单，§3.2；确认框由界面层负责）。排进保存链，
    * 迟到的保存/重试不得复活已删项目。 */
-  delete: (id: string): Promise<void> =>
-    isTauri ? enqueueDelete(id) : memoryDelete(id),
+  delete: async (id: string): Promise<void> => {
+    if (isTauri) await enqueueDelete(id)
+    else await memoryDelete(id)
+    deleteAiSession(id)
+  },
 
   /** 复制项目：读原文档 → 新建「副本」项目 → 整目录拷贝项目资产 → 写入
    * 画布（§3.2）。副本创建时间取复制时刻。资产索引随文档原样带走——与

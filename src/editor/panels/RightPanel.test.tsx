@@ -204,6 +204,30 @@ describe('RightPanel ✦AI 引导与模型', () => {
 })
 
 describe('RightPanel ✦AI 对话', () => {
+  it('切到检查器再返回时保留同一项目的会话历史', async () => {
+    vi.spyOn(settingsStore, 'load').mockResolvedValue(APP_WITH_KEY)
+    llmChatMock.mockResolvedValue(reply({ content: '先让人物目标相撞。' }))
+    const props = {
+      open: true,
+      width: 320,
+      tab: 'ai' as const,
+      settings: SETTINGS,
+      onResize: vi.fn(),
+      onTabChange: vi.fn(),
+      canvasDigest: 'SNAPSHOT',
+    }
+    const view = render(<RightPanel {...props} />)
+    await screen.findByLabelText('AI 对话输入')
+    send('怎么增强冲突？')
+    expect(await screen.findByText('先让人物目标相撞。')).toBeTruthy()
+
+    view.rerender(<RightPanel {...props} tab="inspector" />)
+    view.rerender(<RightPanel {...props} tab="ai" />)
+
+    expect(await screen.findByText('怎么增强冲突？')).toBeTruthy()
+    expect(screen.getByText('先让人物目标相撞。')).toBeTruthy()
+  })
+
   it('纯文本问答：消息序列含系统提示与画布快照，回复上屏', async () => {
     const spies = await toAiTab(APP_WITH_KEY)
     llmChatMock.mockResolvedValue(reply({ content: '建议先立冲突。' }))
