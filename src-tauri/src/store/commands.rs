@@ -85,7 +85,44 @@ pub fn load_ai_session_recovery(
     load_ai_session_recovery_file(&recovery, &id)
 }
 
-/// 写恢复副本内核（不可信 id 与信封校验先于路径拼接）。
+/// 会话载荷的写入序号（非负整数；缺失/异型视作 0）。
+fn session_write_seq(session: &serde_json::Value) -> u64 {
+    session
+        .get("writeSeq")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0)
+}
+
+/// 恢复副本替换/清除前的顺序守卫（§12.2，历轮评审修复）：仅当现存副本
+/// 缺失、内容不可解析（损坏副本无法再被载入，可安全替换）或写入序号不
+/// 大于本次写入序号时才允许替换。副本不可读（权限/瞬态 I/O）或序号更新
+/// 时拒绝——绝不在无法确定新旧的情况下销毁可能是唯一新副本的历史。
+fn ensure_recovery_replaceable(
+    recovery: &CapDir,
+    id: &str,
+    incoming: &serde_json::Value,
+) -> Result<(), String> {
+    let name = recovery_file_name(id);
+    match recovery.symlink_metadata(&name) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(format!("读取 AI 会话恢复副本元数据失败，已拒绝覆盖：{e}")),
+        Ok(_) => {}
+    }
+    let text = read_verified_file(recovery, &name)
+        .map_err(|e| format!("AI 会话恢复副本不可读，无法确定新旧，已拒绝覆盖：{e}"))?;
+    let existing = serde_json::from_str::<serde_json::Value>(&text)
+        .ok()
+        .filter(|v| validate_ai_session(v).is_ok());
+    match existing {
+        Some(existing) if session_write_seq(&existing) > session_write_seq(incoming) => {
+            Err("AI 会话恢复副本比本次保存更新，已拒绝覆盖（请重新打开项目载入更新的历史）".into())
+        }
+        _ => Ok(()),
+    }
+}
+
+/// 写恢复副本内核（不可信 id 与信封校验先于路径拼接；现存副本更新或
+/// 不可读时拒绝覆盖）。
 pub(crate) fn stash_ai_session_recovery_file(
     projects: &CapDir,
     recovery: &CapDir,
@@ -94,6 +131,7 @@ pub(crate) fn stash_ai_session_recovery_file(
 ) -> Result<(), String> {
     validate_ai_session(session)?;
     require_project_record(projects, id)?;
+    ensure_recovery_replaceable(recovery, id, session)?;
     let text =
         serde_json::to_string_pretty(session).map_err(|e| format!("序列化 AI 会话失败：{e}"))?;
     atomic_write(recovery, &recovery_file_name(id), &text)
@@ -133,14 +171,17 @@ pub(crate) fn clear_ai_session_recovery_file(recovery: &CapDir, id: &str) -> Res
 }
 
 /// 权威保存 + 清除恢复副本：主文件失败时不触碰恢复副本（它是当前唯一可
-/// 跨进程恢复的拷贝）；清除失败时改写为刚落盘的权威内容——陈旧副本若在
-/// 下次载入时仍优先于权威文件，会把新会话回退成旧内容。
+/// 跨进程恢复的拷贝）；现存副本更新或不可读时整次拒绝——写入主文件后再
+/// 拒绝清除会让更新副本在下次载入时压过刚保存的内容。清除失败时改写为
+/// 刚落盘的权威内容——陈旧副本若在下次载入时仍优先于权威文件，会把新
+/// 会话回退成旧内容。
 pub(crate) fn save_ai_session_authoritative(
     projects: &CapDir,
     recovery: &CapDir,
     id: &str,
     session: &serde_json::Value,
 ) -> Result<(), String> {
+    ensure_recovery_replaceable(recovery, id, session)?;
     save_ai_session_file(projects, id, session)?;
     if let Err(e) = clear_ai_session_recovery_file(recovery, id) {
         eprintln!("[store] 清除 AI 会话恢复副本失败，改写为最新内容：{e}");
@@ -399,344 +440,4 @@ fn delete_project_files(root: &CapDir, id: &str) -> Result<(), String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::isotime::now_iso;
-    use crate::store::testutil::{cap, cleanup_temp, temp_projects_dir, temp_recovery_dir};
-    use std::fs;
-
-    #[test]
-    fn persist_project_writes_envelope_and_passes_post_verify() {
-        let projects = temp_projects_dir();
-        let doc = new_project_file("p-1", "剧".into(), now_iso());
-        let meta = persist_project(&cap(&projects), "p-1", doc).expect("保存");
-        assert_eq!(meta.name, "剧");
-        assert!(projects.join("p-1.json").exists(), "项目文件应落盘");
-        cleanup_temp(&projects);
-    }
-
-    #[test]
-    fn persist_project_rejects_untrusted_id_before_any_join() {
-        let projects = temp_projects_dir();
-        let doc = new_project_file("p-1", "剧".into(), now_iso());
-        // 空资产索引下复验不设防：id 词法校验必须在任何路径拼接前拒绝
-        let err = persist_project(&cap(&projects), "../evil", doc).unwrap_err();
-        assert!(err.contains("非法"), "意外诊断：{err}");
-        // 不得在 projects/ 之外创建任何文件
-        assert!(
-            fs::symlink_metadata(projects.parent().expect("临时根").join("evil.json")).is_err(),
-            "越界 id 不应写出 projects/"
-        );
-        cleanup_temp(&projects);
-    }
-
-    #[test]
-    fn persist_project_replaces_existing_file_and_leaves_no_temp() {
-        let projects = temp_projects_dir();
-        let first = new_project_file("p-1", "一版".into(), now_iso());
-        persist_project(&cap(&projects), "p-1", first).expect("首存");
-        let second = new_project_file("p-1", "二版".into(), now_iso());
-        persist_project(&cap(&projects), "p-1", second).expect("覆盖保存（rename 替换已存在目标）");
-        let loaded = load_project_file(&cap(&projects), "p-1").expect("重读");
-        assert_eq!(loaded.project.name, "二版");
-        let leftovers: Vec<String> = fs::read_dir(&projects)
-            .expect("扫描项目目录")
-            .filter_map(|e| e.ok())
-            .map(|e| e.file_name().to_string_lossy().into_owned())
-            .filter(|n| n.contains(".tmp"))
-            .collect();
-        assert!(leftovers.is_empty(), "遗留临时文件：{leftovers:?}");
-        cleanup_temp(&projects);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn persist_project_rejects_symlinked_target_without_following() {
-        let projects = temp_projects_dir();
-        let outside = projects.parent().expect("临时根").join("evil-target.json");
-        fs::write(&outside, b"{}").expect("写根外文件");
-        std::os::unix::fs::symlink(&outside, projects.join("p-1.json")).expect("建符号链接");
-        let doc = new_project_file("p-1", "剧".into(), now_iso());
-        let err = persist_project(&cap(&projects), "p-1", doc).unwrap_err();
-        assert!(err.contains("符号链接"), "意外诊断：{err}");
-        // 链接未被跟随或覆盖：根外文件原样保留，链接本身仍在
-        assert_eq!(fs::read(&outside).expect("读根外文件"), b"{}".to_vec());
-        assert!(fs::symlink_metadata(projects.join("p-1.json"))
-            .expect("链接仍在")
-            .file_type()
-            .is_symlink());
-        cleanup_temp(&projects);
-    }
-
-    #[test]
-    fn load_project_file_rejects_path_like_id_before_any_join() {
-        let projects = temp_projects_dir();
-        // 嵌套路径形态的 id：projects/ 内的资产/私有 JSON 不得经 load_project 读出
-        let err = load_project_file(&cap(&projects), "p-1/assets/private").unwrap_err();
-        assert!(
-            err.contains("非法") || err.contains("不存在"),
-            "意外诊断：{err}"
-        );
-        cleanup_temp(&projects);
-    }
-
-    #[test]
-    fn load_project_file_reads_envelope_from_verified_handle() {
-        let projects = temp_projects_dir();
-        let doc = new_project_file("p-1", "午夜出租车".into(), now_iso());
-        persist_project(&cap(&projects), "p-1", doc).expect("先保存");
-        let loaded = load_project_file(&cap(&projects), "p-1").expect("从已验证句柄读取");
-        assert_eq!(loaded.project.name, "午夜出租车");
-        assert_eq!(loaded.schema_version, 1);
-        cleanup_temp(&projects);
-    }
-
-    #[test]
-    fn delete_project_files_removes_nested_asset_subtrees() {
-        let projects = temp_projects_dir();
-        let assets = projects.join("p-1").join("assets");
-        fs::create_dir_all(assets.join("sub").join("deep")).expect("建嵌套目录");
-        fs::write(assets.join("a.png"), b"A").expect("写资产");
-        fs::write(assets.join("sub").join("b.png"), b"B").expect("写子目录资产");
-        fs::write(assets.join("sub").join("deep").join("c.png"), b"C").expect("写深层资产");
-        fs::write(projects.join("p-1.json"), b"{}").expect("写项目文件");
-        delete_project_files(&cap(&projects), "p-1").expect("删除项目");
-        assert!(fs::symlink_metadata(projects.join("p-1")).is_err());
-        assert!(fs::symlink_metadata(projects.join("p-1.json")).is_err());
-        cleanup_temp(&projects);
-    }
-
-    #[test]
-    fn delete_project_files_removes_json_and_asset_tree_idempotently() {
-        let projects = temp_projects_dir();
-        let assets = projects.join("p-1").join("assets");
-        fs::create_dir_all(&assets).expect("建资产目录");
-        fs::write(assets.join("a.png"), b"A").expect("写资产");
-        fs::write(projects.join("p-1.json"), b"{}").expect("写项目文件");
-        delete_project_files(&cap(&projects), "p-1").expect("删除项目");
-        assert!(fs::symlink_metadata(projects.join("p-1.json")).is_err());
-        assert!(fs::symlink_metadata(projects.join("p-1")).is_err());
-        // 幂等：文件与目录均已缺失时再删不报错
-        assert!(delete_project_files(&cap(&projects), "p-1").is_ok());
-        cleanup_temp(&projects);
-    }
-
-    #[test]
-    fn ai_session_round_trips_in_its_own_project_file() {
-        let projects = temp_projects_dir();
-        fs::write(projects.join("p-1.json"), b"{}").expect("写项目文件");
-        let session = serde_json::json!({
-            "schemaVersion": 1,
-            "entries": [{ "id": 1, "kind": "msg", "role": "user", "text": "保留讨论" }]
-        });
-        save_ai_session_file(&cap(&projects), "p-1", &session).expect("保存会话");
-        assert_eq!(
-            load_ai_session_file(&cap(&projects), "p-1").expect("读取会话"),
-            session
-        );
-        assert!(projects.join("p-1").join("ai-session.json").exists());
-        assert!(
-            projects.join("p-1.json").exists(),
-            "会话不得混入画布项目文件"
-        );
-        cleanup_temp(&projects);
-    }
-
-    #[test]
-    fn ai_session_save_requires_existing_project_record() {
-        let projects = temp_projects_dir();
-        let session = serde_json::json!({ "schemaVersion": 1, "entries": [] });
-        let err = save_ai_session_file(&cap(&projects), "p-1", &session)
-            .expect_err("已删除项目不得被迟到会话保存重建");
-        assert!(err.contains("项目不存在"), "意外诊断：{err}");
-        assert!(
-            fs::symlink_metadata(projects.join("p-1")).is_err(),
-            "拒绝保存不得创建项目会话目录"
-        );
-        cleanup_temp(&projects);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn delete_project_files_unlinks_symlinks_without_following() {
-        let projects = temp_projects_dir();
-        let assets = projects.join("p-1").join("assets");
-        fs::create_dir_all(&assets).expect("建资产目录");
-        let outside_dir = projects.parent().expect("临时根").join("keep");
-        fs::create_dir_all(&outside_dir).expect("建根外目录");
-        fs::write(outside_dir.join("secret.png"), b"s").expect("写根外文件");
-        std::os::unix::fs::symlink(&outside_dir, assets.join("link")).expect("建目录符号链接");
-        fs::write(projects.join("p-1.json"), b"{}").expect("写项目文件");
-        delete_project_files(&cap(&projects), "p-1").expect("删除项目");
-        // 链接被移除但未跟随：根外目录与文件原样保留
-        assert!(fs::symlink_metadata(outside_dir.join("secret.png")).is_ok());
-        assert!(fs::symlink_metadata(&outside_dir).is_ok());
-        assert!(fs::symlink_metadata(projects.join("p-1")).is_err());
-        cleanup_temp(&projects);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn delete_project_files_keeps_record_when_asset_tree_removal_fails() {
-        let projects = temp_projects_dir();
-        let assets = projects.join("p-1").join("assets");
-        fs::create_dir_all(&assets).expect("建资产目录");
-        fs::write(assets.join("a.png"), b"A").expect("写资产");
-        fs::write(projects.join("p-1.json"), b"{}").expect("写项目文件");
-        // 只读化资产目录：子项删除失败（非 root 用户无法 unlink）
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&assets).unwrap().permissions();
-        perms.set_mode(0o555);
-        fs::set_permissions(&assets, perms).expect("只读化");
-        let result = delete_project_files(&cap(&projects), "p-1");
-        let mut perms = fs::metadata(&assets).unwrap().permissions();
-        perms.set_mode(0o755);
-        let _ = fs::set_permissions(&assets, perms);
-        assert!(result.is_err(), "资产目录删除失败应显式报错");
-        // 权威项目文件必须仍在：项目可发现、删除可重试，不留孤儿媒体树
-        assert!(
-            projects.join("p-1.json").exists(),
-            "项目记录先于资产目录被删，失败后媒体成不可发现孤儿"
-        );
-        cleanup_temp(&projects);
-    }
-
-    #[test]
-    fn ai_session_recovery_round_trips_and_requires_project_record() {
-        let projects = temp_projects_dir();
-        let recovery = temp_recovery_dir(&projects);
-        let session = serde_json::json!({
-            "schemaVersion": 1,
-            "entries": [{ "id": 1, "kind": "msg", "role": "user", "text": "未落盘的讨论" }]
-        });
-        // 项目记录缺失：拒绝写恢复副本（已删除项目不得留下不可见聊天数据）
-        let err = stash_ai_session_recovery_file(&cap(&projects), &cap(&recovery), "p-1", &session)
-            .expect_err("无项目记录时不得写恢复副本");
-        assert!(err.contains("项目不存在"), "意外诊断：{err}");
-
-        fs::write(projects.join("p-1.json"), b"{}").expect("写项目文件");
-        stash_ai_session_recovery_file(&cap(&projects), &cap(&recovery), "p-1", &session)
-            .expect("写恢复副本");
-        assert_eq!(
-            load_ai_session_recovery_file(&cap(&recovery), "p-1").expect("读恢复副本"),
-            Some(session.clone())
-        );
-        // 主文件此时仍缺失（保存失败）：恢复副本是唯一可跨进程恢复的拷贝
-        assert!(
-            fs::symlink_metadata(projects.join("p-1").join("ai-session.json")).is_err(),
-            "恢复副本不得冒充主会话文件"
-        );
-        cleanup_temp(&projects);
-    }
-
-    #[test]
-    fn ai_session_authoritative_save_clears_recovery_copy() {
-        let projects = temp_projects_dir();
-        let recovery = temp_recovery_dir(&projects);
-        fs::write(projects.join("p-1.json"), b"{}").expect("写项目文件");
-        let session = serde_json::json!({
-            "schemaVersion": 1,
-            "entries": [{ "id": 1, "kind": "note", "text": "重试成功" }]
-        });
-        stash_ai_session_recovery_file(&cap(&projects), &cap(&recovery), "p-1", &session)
-            .expect("写恢复副本");
-
-        save_ai_session_authoritative(&cap(&projects), &cap(&recovery), "p-1", &session)
-            .expect("权威保存");
-        assert_eq!(
-            load_ai_session_recovery_file(&cap(&recovery), "p-1").expect("读恢复副本"),
-            None,
-            "权威副本落盘后恢复副本应被清除"
-        );
-        assert_eq!(
-            load_ai_session_file(&cap(&projects), "p-1").expect("读主会话"),
-            session
-        );
-        // 清除幂等：缺失时再清不报错
-        assert!(clear_ai_session_recovery_file(&cap(&recovery), "p-1").is_ok());
-        cleanup_temp(&projects);
-    }
-
-    #[test]
-    fn delete_project_clears_recovery_copy() {
-        let projects = temp_projects_dir();
-        let recovery = temp_recovery_dir(&projects);
-        fs::write(projects.join("p-1.json"), b"{}").expect("写项目文件");
-        let session = serde_json::json!({ "schemaVersion": 1, "entries": [] });
-        stash_ai_session_recovery_file(&cap(&projects), &cap(&recovery), "p-1", &session)
-            .expect("写恢复副本");
-
-        delete_project_with_recovery(&cap(&projects), &cap(&recovery), "p-1").expect("删除项目");
-        assert_eq!(
-            load_ai_session_recovery_file(&cap(&recovery), "p-1").expect("读恢复副本"),
-            None,
-            "删除项目应同时清除恢复副本"
-        );
-        cleanup_temp(&projects);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn delete_project_failure_keeps_recovery_copy() {
-        let projects = temp_projects_dir();
-        let recovery = temp_recovery_dir(&projects);
-        let assets = projects.join("p-1").join("assets");
-        fs::create_dir_all(&assets).expect("建资产目录");
-        fs::write(assets.join("a.png"), b"A").expect("写资产");
-        fs::write(projects.join("p-1.json"), b"{}").expect("写项目文件");
-        let session = serde_json::json!({ "schemaVersion": 1, "entries": [] });
-        stash_ai_session_recovery_file(&cap(&projects), &cap(&recovery), "p-1", &session)
-            .expect("写恢复副本");
-
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&assets).unwrap().permissions();
-        perms.set_mode(0o555);
-        fs::set_permissions(&assets, perms).expect("只读化");
-        let result = delete_project_with_recovery(&cap(&projects), &cap(&recovery), "p-1");
-        let mut perms = fs::metadata(&assets).unwrap().permissions();
-        perms.set_mode(0o755);
-        let _ = fs::set_permissions(&assets, perms);
-
-        assert!(result.is_err(), "资产目录删除失败应显式报错");
-        assert!(
-            load_ai_session_recovery_file(&cap(&recovery), "p-1")
-                .expect("读恢复副本")
-                .is_some(),
-            "项目仍在磁盘时删除失败不得清除恢复副本"
-        );
-        cleanup_temp(&projects);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn delete_project_reports_recovery_cleanup_failure() {
-        let projects = temp_projects_dir();
-        let recovery = temp_recovery_dir(&projects);
-        fs::write(projects.join("p-1.json"), b"{}").expect("写项目文件");
-        let session = serde_json::json!({ "schemaVersion": 1, "entries": [] });
-        stash_ai_session_recovery_file(&cap(&projects), &cap(&recovery), "p-1", &session)
-            .expect("写恢复副本");
-
-        // 只读化恢复目录：项目删除成功，但副本清除失败
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&recovery).unwrap().permissions();
-        perms.set_mode(0o555);
-        fs::set_permissions(&recovery, perms).expect("只读化");
-        let result = delete_project_with_recovery(&cap(&projects), &cap(&recovery), "p-1");
-        let mut perms = fs::metadata(&recovery).unwrap().permissions();
-        perms.set_mode(0o755);
-        let _ = fs::set_permissions(&recovery, perms);
-
-        let err = result.expect_err("副本清除失败必须上浮，不得静默遗留孤儿会话");
-        assert!(err.contains("重试删除"), "意外诊断：{err}");
-        assert!(
-            fs::symlink_metadata(projects.join("p-1.json")).is_err(),
-            "项目文件应已删除"
-        );
-        assert!(
-            recovery.join("ai-session-p-1.json").exists(),
-            "残留副本仍在，重试删除可清理"
-        );
-        cleanup_temp(&projects);
-    }
-}
+mod tests;

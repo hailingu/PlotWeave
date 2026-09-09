@@ -12,6 +12,9 @@ export interface AiSessionLoadResult {
   session: AiSession
   repairError: string | null
   recovered: boolean
+  /** 恢复副本存在但本次读取失败：新旧无法确定，已暂缓保存以免覆盖更新
+   * 历史（写入边界另有顺序守卫），界面须如实告知且不得自动重试落盘。 */
+  recoveryUnreadable: boolean
 }
 
 /** 每项目会话写入序号（单调计数）：主文件与恢复副本各自携带，载入取序号
@@ -58,6 +61,7 @@ export async function loadAiSession(id: string): Promise<AiSessionLoadResult> {
       session: memorySessions.get(id) ?? { schemaVersion: 1, entries: [] },
       repairError: null,
       recovered: false,
+      recoveryUnreadable: false,
     }
   }
   const { invoke } = await import('@tauri-apps/api/core')
@@ -66,10 +70,14 @@ export async function loadAiSession(id: string): Promise<AiSessionLoadResult> {
     mainError = err
     return undefined
   })
-  // 恢复副本读取失败（损坏/被替换）不得阻断权威会话文件回退
+  // 恢复副本读取失败（权限/瞬态 I/O/损坏）时新旧无法确定：不得当作
+  // 「无副本」继续——权威回写会清掉可能是唯一新副本的历史
+  let recoveryError: unknown
+  let recoveryFailed = false
   const recoveryRaw = await invoke<unknown>('load_ai_session_recovery', { id }).catch(
     (err: unknown) => {
-      console.warn('[aiSession] 恢复副本读取失败，回退权威会话文件', err)
+      recoveryError = err
+      recoveryFailed = true
       return null
     },
   )
@@ -78,15 +86,29 @@ export async function loadAiSession(id: string): Promise<AiSessionLoadResult> {
     recoveryRaw != null && (mainRaw === undefined || seqOf(recoveryRaw) > seqOf(mainRaw))
   // 权威文件读取失败且无可用恢复副本：显式上浮，不把损坏静默当成空历史
   if (!recovered && mainRaw === undefined) throw mainError
+  if (recoveryFailed) {
+    // 展示权威历史但明确告知并暂缓回写：提升/修复写回都不发起（写入边界
+    // 的顺序守卫也会拒绝覆盖不可读副本）
+    console.warn('[aiSession] 恢复副本读取失败，暂缓保存以免覆盖更新历史', recoveryError)
+    const { session } = normalizeAiSession(mainRaw)
+    return {
+      session,
+      repairError: `AI 会话恢复副本读取失败，已暂缓保存以免覆盖更新的历史：${String(recoveryError)}`,
+      recovered: false,
+      recoveryUnreadable: true,
+    }
+  }
   const raw = recovered ? recoveryRaw : mainRaw
   const { session, repaired } = normalizeAiSession(raw)
-  if (!recovered && !repaired) return { session, repairError: null, recovered: false }
+  if (!recovered && !repaired) {
+    return { session, repairError: null, recovered: false, recoveryUnreadable: false }
+  }
   try {
     await saveAiSession(id, session)
-    return { session, repairError: null, recovered: false }
+    return { session, repairError: null, recovered: false, recoveryUnreadable: false }
   } catch (err) {
     console.warn('[aiSession] 会话回写失败', err)
-    return { session, repairError: String(err), recovered }
+    return { session, repairError: String(err), recovered, recoveryUnreadable: false }
   }
 }
 

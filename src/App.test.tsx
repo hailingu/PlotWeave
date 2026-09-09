@@ -236,6 +236,21 @@ describe('App ✦AI 会话恢复', () => {
     expect(editorProps.current.aiSessionError).toContain('磁盘已满')
     expect(editorProps.current.aiSessionRetryable).toBe(true)
   })
+
+  it('恢复副本不可读时保留权威历史、如实告知并禁止挂载重试落盘', async () => {
+    const main = { schemaVersion: 1 as const, entries: [{ id: 1, kind: 'note' as const, text: '权威历史' }] }
+    store.loadAiSession.mockResolvedValue({
+      session: main,
+      repairError: 'AI 会话恢复副本读取失败，已暂缓保存以免覆盖更新的历史：Error: 权限拒绝',
+      recovered: false,
+      recoveryUnreadable: true,
+    })
+    await openEditor()
+    expect(editorProps.current.aiSession).toEqual(main)
+    expect(editorProps.current.aiSessionError).toContain('恢复副本读取失败')
+    // 新旧无法确定：写入边界的顺序守卫会拒绝覆盖，自动重试只会反复报错
+    expect(editorProps.current.aiSessionRetryable).toBe(false)
+  })
 })
 
 describe('App ✦AI 会话保存', () => {

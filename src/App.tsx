@@ -76,7 +76,9 @@ async function loadOpenProject(
       doc,
       aiSession: ai.session,
       aiSessionError: aiSessionDiagnostic(ai),
-      aiSessionRetryable: true,
+      // 恢复副本不可读时禁止挂载重试落盘：新旧无法确定，写入边界会拒绝，
+      // 自动重试只会反复报错
+      aiSessionRetryable: !ai.recoveryUnreadable,
     }
   } catch (err) {
     console.warn('[App] AI 会话恢复失败，已以空历史打开项目', err)

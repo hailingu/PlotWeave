@@ -41,6 +41,7 @@ describe('loadAiSession Tauri 路径', () => {
       },
       repairError: 'Error: 只读目录',
       recovered: false,
+      recoveryUnreadable: false,
     })
     expect(commandsOf()).toEqual([
       'load_ai_session',
@@ -62,6 +63,7 @@ describe('loadAiSession Tauri 路径', () => {
       session: session('恢复副本'),
       repairError: 'Error: 磁盘已满',
       recovered: true,
+      recoveryUnreadable: false,
     })
   })
 
@@ -76,6 +78,7 @@ describe('loadAiSession Tauri 路径', () => {
       session: session('恢复副本'),
       repairError: null,
       recovered: false,
+      recoveryUnreadable: false,
     })
   })
 
@@ -87,6 +90,7 @@ describe('loadAiSession Tauri 路径', () => {
       session: session('新权威'),
       repairError: null,
       recovered: false,
+      recoveryUnreadable: false,
     })
     expect(commandsOf()).toEqual(['load_ai_session', 'load_ai_session_recovery'])
   })
@@ -101,6 +105,7 @@ describe('loadAiSession Tauri 路径', () => {
       session: session('恢复副本'),
       repairError: null,
       recovered: false,
+      recoveryUnreadable: false,
     })
 
     invoke.mockReset()
@@ -110,19 +115,20 @@ describe('loadAiSession Tauri 路径', () => {
     await expect(loadAiSession('p1')).rejects.toThrow('AI 会话文件损坏')
   })
 
-  it('恢复副本读取失败时回退权威会话文件，不阻断会话加载', async () => {
+  it('恢复副本不可读时展示权威历史并标记暂缓保存（不发起提升）', async () => {
     invoke
-      .mockResolvedValueOnce(session('权威文件', 200))
-      .mockRejectedValueOnce(new Error('恢复副本损坏'))
+      .mockResolvedValueOnce(session('权威历史', 5))
+      .mockRejectedValueOnce(new Error('权限拒绝'))
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { loadAiSession } = await import('./aiSessionStore')
 
-    await expect(loadAiSession('p1')).resolves.toEqual({
-      session: session('权威文件'),
-      repairError: null,
-      recovered: false,
-    })
-    expect(warn).toHaveBeenCalled()
+    const result = await loadAiSession('p1')
+    expect(result.session.entries[0].text).toBe('权威历史')
+    expect(result.recovered).toBe(false)
+    expect(result.recoveryUnreadable).toBe(true)
+    expect(result.repairError).toContain('恢复副本读取失败')
+    // 不尝试提升/修复写回：写入边界的顺序守卫会拒绝覆盖不可读副本
+    expect(commandsOf()).toEqual(['load_ai_session', 'load_ai_session_recovery'])
     warn.mockRestore()
   })
 })
