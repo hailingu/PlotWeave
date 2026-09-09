@@ -3,6 +3,8 @@
 //! helper 为 recover_tests.rs 的本地副本（Rust 测试模块惯例）。
 
 use super::*;
+
+use crate::store::new_id;
 use cap_std::ambient_authority;
 use cap_std::fs::Dir as CapDir;
 use serde_json::{json, Map, Value};

@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::library::put_asset_with;
+use crate::store::new_id;
 use cap_std::ambient_authority;
 use cap_std::fs::Dir as CapDir;
 use serde_json::{json, Value};

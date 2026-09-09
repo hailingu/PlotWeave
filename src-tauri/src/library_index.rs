@@ -11,6 +11,7 @@
 //! AssetGroup/LibraryAsset/跨条目校验。缺失/异型时间戳或显式未知 source 不
 //! 猜测，隔离并警告；不得把目标校验直接套在旧数组成员上。
 
+mod keys;
 mod normalize;
 
 pub(crate) use normalize::{
