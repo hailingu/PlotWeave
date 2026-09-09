@@ -102,36 +102,40 @@ describe('loadAiSession Tauri 路径 · 副本取新与提升', () => {
 })
 
 describe('loadAiSession Tauri 路径 · 读取失败回退', () => {
-  it('权威文件不可读时展示恢复副本、暂缓提升并标记 authoritativeUnreadable', async () => {
+  it('权威文件不可读时展示恢复副本并暂缓写回（不发起保存/登记重试）', async () => {
     invoke
       .mockRejectedValueOnce(new Error('权限拒绝'))
       .mockResolvedValueOnce(session('恢复副本', 200))
-      .mockRejectedValueOnce(new Error('AI 会话文件不可读，无法确定新旧，已拒绝覆盖'))
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const { loadAiSession } = await import('./aiSessionStore')
+    const { loadAiSession, hasPendingAiSessionSaves } = await import('./aiSessionStore')
 
     const result = await loadAiSession('p1')
     expect(result.session.entries[0].text).toBe('恢复副本')
     expect(result.recovered).toBe(true)
     expect(result.recoveryUnreadable).toBe(false)
     expect(result.authoritativeUnreadable).toBe(true)
-    expect(result.repairError).toContain('不可读')
-    warn.mockRestore()
+    expect(result.repairError).toContain('权限拒绝')
+    // 不发起提升/修复写回：保存失败路径会把（可能陈旧的）恢复内容带递增
+    // 序号写回副本并登记重试，权威文件恢复可读后陈旧历史将覆盖更新的
+    // 权威会话；也不得有重试登记残留
+    expect(commandsOf()).toEqual(['load_ai_session', 'load_ai_session_recovery'])
+    expect(hasPendingAiSessionSaves()).toBe(false)
   })
 
   it('权威文件损坏时回退恢复副本；两者都不可用时上浮原始错误', async () => {
     invoke
       .mockRejectedValueOnce(new Error('AI 会话文件损坏'))
       .mockResolvedValueOnce(session('恢复副本', 200))
-      .mockResolvedValueOnce(undefined)
     const { loadAiSession } = await import('./aiSessionStore')
+    // 主文件不可读/不可解析（序号未知）：展示恢复历史，不发起任何写回；
+    // 待用户实际变更会话或修复磁盘后，下一次保存经写入边界修复主文件
     await expect(loadAiSession('p1')).resolves.toEqual({
       session: session('恢复副本'),
-      repairError: null,
-      recovered: false,
+      repairError: 'Error: AI 会话文件损坏',
+      recovered: true,
       recoveryUnreadable: false,
-      authoritativeUnreadable: false,
+      authoritativeUnreadable: true,
     })
+    expect(commandsOf()).toEqual(['load_ai_session', 'load_ai_session_recovery'])
 
     invoke.mockReset()
     invoke
@@ -300,9 +304,7 @@ describe('saveAiSession 失败重试与退出冲刷', () => {
 
 })
 
-describe('saveAiSession 在途保存与定时器代次', () => {
-  afterEach(() => vi.useRealTimers())
-
+describe('saveAiSession 冲刷固定点排空', () => {
   it('在途保存未落定前视为待处理，冲刷先等它落定', async () => {
     const store = await import('./aiSessionStore')
     let release!: () => void
@@ -357,6 +359,10 @@ describe('saveAiSession 在途保存与定时器代次', () => {
     await expect(flushing).resolves.toEqual([])
     expect(store.hasPendingAiSessionSaves()).toBe(false)
   })
+})
+
+describe('saveAiSession 在途保存与定时器代次', () => {
+  afterEach(() => vi.useRealTimers())
 
   it('新代次失败替换旧定时器：重试的是最新会话', async () => {
     vi.useFakeTimers()

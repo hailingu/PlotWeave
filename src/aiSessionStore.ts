@@ -103,7 +103,8 @@ async function nextWriteSeq(id: string, invoke: Invoke): Promise<number> {
 /** 读取项目独立 AI 历史。主文件与恢复副本都读，取写入序号较大者——恢复
  * 副本只在主文件保存失败后写入，正常情况下序号更大；但权威保存成功后
  * 副本清除/改写失败时，副本是陈旧的，必须让较新的权威会话胜出。载入后
- * 立即尝试提升为权威副本，失败则把恢复副本继续留在原位并如实上报。 */
+ * （主文件可读时）立即尝试提升为权威副本，失败则把恢复副本继续留在原位
+ * 并如实上报；主文件不可读时只展示恢复历史，不发起任何写回。 */
 export async function loadAiSession(id: string): Promise<AiSessionLoadResult> {
   if (!isTauri) {
     return {
@@ -161,6 +162,20 @@ export async function loadAiSession(id: string): Promise<AiSessionLoadResult> {
       authoritativeUnreadable: false,
     }
   }
+  // 权威文件不可读时不得发起提升/修复写回：写入边界会拒绝（序号未知），
+  // 而保存失败路径会把当前恢复内容（可能是权威更新前的陈旧副本）带递增
+  // 序号写回恢复副本并登记重试——权威文件恢复可读后，重试终将携带不小于
+  // 其序号的写入，用陈旧历史覆盖更新的权威会话。展示恢复历史、暂缓一切
+  // 写回，待用户检查磁盘后重开项目重新判定新旧。
+  if (recovered && mainUnreadable) {
+    return {
+      session,
+      repairError: String(mainError),
+      recovered: true,
+      recoveryUnreadable: false,
+      authoritativeUnreadable: true,
+    }
+  }
   try {
     await saveAiSession(id, session)
     return {
@@ -171,15 +186,15 @@ export async function loadAiSession(id: string): Promise<AiSessionLoadResult> {
       authoritativeUnreadable: false,
     }
   } catch (err) {
-    // 权威文件不可读时提升会被写入边界的顺序守卫拒绝：序号未知，不得用
-    // 恢复副本覆盖可能更新的权威历史；展示恢复历史并禁止自动重试
+    // 主文件可读（否则上方已提前返回）：提升/修复写回失败如实上报，
+    // 陈旧副本的覆盖风险由写入边界的顺序守卫拦截
     console.warn('[aiSession] 会话回写失败', err)
     return {
       session,
       repairError: String(err),
       recovered,
       recoveryUnreadable: false,
-      authoritativeUnreadable: mainUnreadable,
+      authoritativeUnreadable: false,
     }
   }
 }
