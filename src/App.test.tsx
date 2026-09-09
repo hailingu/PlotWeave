@@ -173,6 +173,33 @@ describe('App（双界面路由壳）', () => {
     expect(editorProps.current.aiSessionError).toBeNull()
   })
 
+  it('会话保存失败时拒绝上浮，错误写入项目级：重挂载不丢警告', async () => {
+    store.saveAiSession.mockRejectedValueOnce(new Error('磁盘已满'))
+    render(<App />)
+    await screen.findByTestId('home')
+    await act(async () => {
+      await (homeProps.current.onOpenProject as (id: string) => Promise<void>)('p1')
+    })
+    await screen.findByTestId('editor')
+
+    const session = { schemaVersion: 1 as const, entries: [{ id: 1, kind: 'note' as const, text: '未落盘' }] }
+    await act(async () => {
+      await expect(
+        (editorProps.current.onSaveAiSession as (value: typeof session) => Promise<void>)(session),
+      ).rejects.toThrow('磁盘已满')
+    })
+
+    expect(editorProps.current.aiSession).toEqual(session)
+    expect(editorProps.current.aiSessionError).toContain('磁盘已满')
+
+    fireEvent.keyDown(document, { key: ',', metaKey: true })
+    await screen.findByTestId('settings')
+    fireEvent.click(screen.getByTestId('settings'))
+
+    expect(await screen.findByTestId('editor')).toBeTruthy()
+    expect(editorProps.current.aiSessionError).toContain('磁盘已满')
+  })
+
   it('新建项目：create 后按落盘文档载入会话（保留 createdAt 溯源），并刷新列表', async () => {
     const createdDoc: ProjectContent = { ...DOC, name: '未命名短剧', createdAt: '2026-08-31T00:00:00.000Z' }
     store.load.mockResolvedValue(structuredClone(createdDoc))

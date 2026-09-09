@@ -167,15 +167,16 @@ function useAiSessionPersistence(
 ): string | null {
   const [saveError, setSaveError] = useState<string | null>(initialSessionError ?? null)
   const hasMounted = useRef(false)
+  /** 带恢复/保存错误进入面板时，首帧即重试落盘而非跳过初始保存。 */
+  const retryOnMount = useRef(initialSessionError != null)
   const saveSessionRef = useRef(onSaveSession)
   useEffect(() => {
     saveSessionRef.current = onSaveSession
   }, [onSaveSession])
   useEffect(() => {
-    if (!hasMounted.current) {
-      hasMounted.current = true
-      return
-    }
+    const first = !hasMounted.current
+    hasMounted.current = true
+    if (first && !retryOnMount.current) return
     const save = saveSessionRef.current
     if (!save) return
     void save({ schemaVersion: 1, entries: thread })

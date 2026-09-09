@@ -84,7 +84,15 @@ function useOpenProjectActions(setOpenProject: OpenProjectSetter, refreshProject
   const handleSaveAiSession = useCallback(
     (id: string) => async (session: AiSession) => {
       setOpenProject((project) => (project?.id === id ? { ...project, aiSession: session } : project))
-      await projectStore.saveAiSession(id, session)
+      try {
+        await projectStore.saveAiSession(id, session)
+      } catch (err) {
+        // 失败写入项目级：警告跨重挂载保留，避免内存态成为唯一副本后被静默丢弃
+        setOpenProject((project) =>
+          project?.id === id ? { ...project, aiSessionError: String(err) } : project,
+        )
+        throw err
+      }
       // 保存成功才清除项目级恢复错误：重挂载编辑器不得再宣称会话未落盘
       setOpenProject((project) => (project?.id === id ? { ...project, aiSessionError: null } : project))
     },

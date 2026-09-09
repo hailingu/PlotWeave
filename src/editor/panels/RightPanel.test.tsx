@@ -6,7 +6,7 @@
  * llmChat 打桩（不触 IPC），settingsStore.load 打桩喂配置。
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import RightPanel from './RightPanel'
 import { llmChat, type AssistantMessage } from '../ai/chat'
 import type { ChatMessage } from '../ai/chat'
@@ -426,6 +426,36 @@ describe('RightPanel ✦AI 改动预览卡', () => {
     expect(screen.getByText('我建议加一场。')).toBeTruthy()
     expect(screen.queryByText(/```json/)).toBeNull()
     expect(spies.onValidateAi).toHaveBeenCalled()
+  })
+})
+
+describe('RightPanel ✦AI 会话保存错误', () => {
+  const sessionOf = (text: string) => ({
+    schemaVersion: 1 as const,
+    entries: [{ id: 1, kind: 'msg' as const, role: 'assistant' as const, text }],
+  })
+
+  it('带保存错误进入面板时首帧即重试落盘，成功后提示消除', async () => {
+    const onSaveSession = vi.fn(() => Promise.resolve())
+    await toAiTab(APP_WITH_KEY, {
+      aiSession: sessionOf('已恢复的历史'),
+      aiSessionError: 'Error: 磁盘已满',
+      onSaveAiSession: onSaveSession,
+    })
+
+    expect(onSaveSession).toHaveBeenCalledWith(sessionOf('已恢复的历史'))
+    await waitFor(() =>
+      expect(screen.queryByText(/聊天记录保存失败/)).toBeNull(),
+    )
+  })
+
+  it('无错误时挂载不重复保存初始会话', async () => {
+    const onSaveSession = vi.fn().mockResolvedValue(undefined)
+    await toAiTab(APP_WITH_KEY, {
+      aiSession: sessionOf('已恢复的历史'),
+      onSaveAiSession: onSaveSession,
+    })
+    expect(onSaveSession).not.toHaveBeenCalled()
   })
 })
 
