@@ -76,6 +76,9 @@ describe('normalizeAiSession', () => {
     })
   })
 
+})
+
+describe('normalizeAiSession · 卡片运行时标注', () => {
   it('保留执行后批次计数供恢复对账，剥离运行时未确认标注', () => {
     const result = normalizeAiSession({
       schemaVersion: 1,

@@ -110,6 +110,14 @@ fn validate_save_graph(graph: &serde_json::Value) -> Result<(), String> {
             return Err("graph.viewport.zoom 必须是正有限数".into());
         }
     }
+    // AI 批次计数（§12.2 提交身份）：只接受非负安全整数——异型/负数/超安全
+    // 整数落盘后会被加载归一化清零，已应用的批次计数丢失，恢复对账把已落盘
+    // 的执行卡误判为待执行
+    if let Some(revision) = g.get("aiRevision") {
+        if revision.as_u64().is_none_or(|v| v > 9_007_199_254_740_991) {
+            return Err("graph.aiRevision 必须是非负安全整数".into());
+        }
+    }
     Ok(())
 }
 fn validate_save_settings(settings: &serde_json::Value) -> Result<(), String> {

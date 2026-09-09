@@ -18,8 +18,9 @@ const session = (text: string, writeSeq?: number) => ({
   entries: [{ id: 1, kind: 'note', text }],
   ...(writeSeq !== undefined ? { writeSeq } : {}),
 })
+const payload = { schemaVersion: 1 as const, entries: [] }
 
-describe('loadAiSession Tauri 路径', () => {
+describe('loadAiSession Tauri 路径 · 副本取新与提升', () => {
   it('修复后的会话回写失败时保留历史并返回面板可展示的错误', async () => {
     invoke
       .mockResolvedValueOnce({
@@ -95,6 +96,9 @@ describe('loadAiSession Tauri 路径', () => {
     expect(commandsOf()).toEqual(['load_ai_session', 'load_ai_session_recovery'])
   })
 
+})
+
+describe('loadAiSession Tauri 路径 · 读取失败回退', () => {
   it('权威文件损坏时回退恢复副本；两者都不可用时上浮原始错误', async () => {
     invoke
       .mockRejectedValueOnce(new Error('AI 会话文件损坏'))
@@ -134,8 +138,6 @@ describe('loadAiSession Tauri 路径', () => {
 })
 
 describe('saveAiSession Tauri 路径', () => {
-  const payload = { schemaVersion: 1 as const, entries: [] }
-
   it('保存失败在写链内先尽力写恢复副本再上抛（副本沿用本次写入序号）', async () => {
     invoke.mockResolvedValueOnce(session('权威', 5)).mockResolvedValueOnce(null)
     const { loadAiSession, saveAiSession } = await import('./aiSessionStore')
@@ -192,6 +194,9 @@ describe('saveAiSession Tauri 路径', () => {
     warn.mockRestore()
   })
 
+})
+
+describe('saveAiSession Tauri 路径 · 写链内副本', () => {
   it('恢复副本写入属于同一项目写链：链上后续动作必须等副本写完', async () => {
     let releaseStash!: () => void
     invoke.mockImplementation((cmd: unknown) => {
