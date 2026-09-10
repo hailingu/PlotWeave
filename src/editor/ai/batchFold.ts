@@ -19,6 +19,13 @@ import {
 import { contingentUpdateIssue, NODE_TYPE_LABELS, payloadIssue } from './payloadCheck'
 import { branchOptionsError, normalizeNodeFields, plainObject } from './patchShape'
 import type { AiGraphSnapshot, BatchValidation } from './commands'
+import {
+  activeTentativeEdges,
+  dropTentativeEdge,
+  registerTentativeEdge,
+  reresolveTentativeEdges,
+  type TentativeEdgeHost,
+} from './tentativeEdges'
 
 /**
  * AI 批命令的逐条折叠校验实现域（commands.ts 拆分，issue 39）：在
@@ -74,33 +81,15 @@ type VirtualEdge = EndpointPair & { sourceHandle?: string | null; type?: string 
 
 /** 折叠校验的虚拟图状态：随每条命令演进的最终态投影。
  * 实体域（issue 44）经 EntityFoldHost 接口并入：既有 + 本批投影的实体
- * 注册表、ref 别名、失败 upsert 的 ghost 登记由 entityFold.ts 消费。 */
-interface FoldState extends EntityFoldHost {
+ * 注册表、ref 别名、失败 upsert 的 ghost 登记由 entityFold.ts 消费；
+ * contingent 出口连线的暂定投影簿记（branchOptions/exists 等共享状态）
+ * 经 TentativeEdgeHost 接口由 tentativeEdges.ts 消费。 */
+interface FoldState extends EntityFoldHost, TentativeEdgeHost {
   labels: Map<string, string>
   types: Map<string, string>
-  /** branch 节点 id → 选项列表（校验 optionIndex 并解析稳定选项 id 端口）。 */
-  branchOptions: Map<string, Array<{ id: string; label: string }>>
   virtualEdges: VirtualEdge[]
-  /** 依赖失败 options 更新的暂定出口边（端点与稳定选项 id 已确定、句柄待
-   * 解析；生效与否按当前选项表派生，见 activeTentativeEdges）。 */
-  /** contingent 出口边的暂定投影：解析到稳定选项 id 的常规投影，或下标
-   * 越出当前表长的未解析投影（optionId 为 raw: 哨兵、unresolvedIndex 记
-   * 原始下标，评审 5164170010）。 */
-  tentativeEdges: Array<{ source: string; target: string; optionId: string; unresolvedIndex?: number }>
-  /** 本批尚未删除的节点 id（含 __new__ 虚拟 id）。 */
-  exists: Set<string>
   /** ref 别名 → 所属节点 id。 */
   refOwner: Map<string, string>
-  /** 本批 options 更新失败的分支节点 id：其出口连线的 optionIndex 校验
-   * 随前序修复自愈，按 contingent 跳过（同 ref 依赖，见 isContingentRef）。 */
-  failedBranchOptionUpdates: Set<string>
-  /** contingent 出口连线的判重键（端点 + 登记时解析的稳定选项 id；不可
-   * 解析退回 #原始下标）：同键的后续连线无论修复后选项表如何都必然与前条
-   * 同端口（重复或一同失效），首轮点名；换位/改名保留 id 时重连仍同键
-   * （真阳性，评审 5163729170），绑定选项被成功或投影覆盖移除时随投影
-   * 级联退役（见 reresolveTentativeEdges，评审 5164450788）；断线撤销
-   * 登记时按键释放（见 dropTentativeEdge）。 */
-  contingentConnectKeys: Set<string>
   /** 本批失败的连线变更（op + 原始端点 token 对）→ 失败断线登记时同对
    * 残留边的身份快照（失败连线命令为空集）：依赖其变更结果的后续连线
    * 命令按 contingent 跳过（见 isContingentEdgePair）。快照用于判定
@@ -413,7 +402,8 @@ function foldConnectEdge(
   }
   const placementIssue = connectPlacementIssue(st, kind, src, dst, pairLabel)
   if (placementIssue) return st.fail(index, placementIssue)
-  if (!optionContingent && st.virtualEdges.some((e) => e.source === src && e.target === dst && (e.sourceHandle ?? null) === handle)) {
+  // 虚拟图与已落定的暂定投影同端口都判重复（评审 5164943585）
+  if (!optionContingent && duplicateConnectHit(st, kind, src, dst, handle)) {
     return st.fail(index, `重复连线：${pairLabel}`)
   }
   // attach 是派生从属边（§4.4 垂直语义）：自身不查环，也不参与
@@ -447,34 +437,28 @@ function foldConnectEdge(
   })
 }
 
-/** contingent 出口连线登记（foldConnectEdge 拆出，S3776）：记录暂定投影
- * ——常规投影绑定当前表该下标的稳定选项 id，下标越出当前表长时登记未解
- * 析投影（optionId 为 raw: 哨兵、记原始下标，评审 5164170010），使后续
- * 同端点断线与成环判定按「该连线生效」评估。同端点的重复连线返回 false：
- * 判重键分域编码——id 域绑定登记时解析的稳定选项 id，越界回退域带 raw:
- * 前缀，选项 id 字面量再巧也不与回退键相撞（评审 5164170010）；换位/
- * 改名保留 id 时重连仍同键（真阳性，评审 5163729170），覆盖移除的选项
- * 随投影级联退役（见 reresolveTentativeEdges，评审 5164450788）。 */
-function registerTentativeEdge(
+/** 非 contingent 连线的判重（foldConnectEdge 拆出，S3776）：虚拟图同端点
+ * 同端口之外，已落定的暂定投影同端口也判重复——其 contingent 前序修复后
+ * 必然折入虚拟图，无论修复时序都是必然重复，首轮点名，不多耗纠错轮次
+ * （评审 5164943585）。未解析投影只在 contingent 期生效，此处不可达。 */
+function duplicateConnectHit(
   st: FoldState,
-  cmd: Record<string, unknown>,
+  kind: string,
   src: string,
   dst: string,
+  handle: string | null,
 ): boolean {
-  const idx = cmd.optionIndex
-  if (typeof idx !== 'number' || !Number.isInteger(idx) || idx < 0) return true
-  const option = (st.branchOptions.get(src) ?? [])[idx]
-  const key = option !== undefined
-    ? `${src}\u0000${dst}\u0000id:${option.id}`
-    : `${src}\u0000${dst}\u0000raw:${idx}`
-  if (st.contingentConnectKeys.has(key)) return false
-  st.contingentConnectKeys.add(key)
-  st.tentativeEdges.push(
-    option !== undefined
-      ? { source: src, target: dst, optionId: option.id }
-      : { source: src, target: dst, optionId: `raw:${idx}`, unresolvedIndex: idx },
+  if (st.virtualEdges.some((e) => e.source === src && e.target === dst && (e.sourceHandle ?? null) === handle)) {
+    return true
+  }
+  if (kind !== 'branch') return false
+  return activeTentativeEdges(st).some(
+    (e) =>
+      e.unresolvedIndex === undefined &&
+      branchOptionHandle(e.optionId) === handle &&
+      e.source === src &&
+      e.target === dst,
   )
-  return true
 }
 
 /** 成环守卫（foldConnectEdge 拆出，S3776）：非 attach 连线加环检查。
@@ -502,47 +486,6 @@ function cycleContingent(
   return true
 }
 
-/** 生效的暂定出口边登记（评审 5164170010）：端点仍在、解析投影的稳定
- * 选项 id 仍在当前选项表内（表覆盖移除时已级联退役，见
- * reresolveTentativeEdges）；未解析投影（下标越出登记时的表长）在其
- * contingent 期（失败更新未修复）生效，表覆盖时重解析（同上）。 */
-function activeTentativeEdges(st: FoldState): FoldState['tentativeEdges'] {
-  return st.tentativeEdges.filter(
-    (e) =>
-      st.exists.has(e.source) &&
-      st.exists.has(e.target) &&
-      (e.unresolvedIndex !== undefined
-        ? st.failedBranchOptionUpdates.has(e.source)
-        : (st.branchOptions.get(e.source) ?? []).some((o) => o.id === e.optionId)),
-  )
-}
-
-/** 选项表覆盖后重解析该分支的暂定投影（评审 5164170010）：未解析投影按
- * 新表落定——原下标落进新表则转为绑定该稳定选项 id 的常规投影并补登记
- * id 判重键，仍越界则撤销投影与回退键（该连线随本轮覆盖确定无法生效，
- * 其后同端点断线按真实缺失处理）；已解析投影绑定的选项 id 被本次覆盖
- * 移除时级联退役，投影与 id 判重键一并永久移除（§8.2.2 删边语义）——
- * 同 id 重新引入时旧边不复活、同端口重连不误判重复（评审 5164450788）。 */
-function reresolveTentativeEdges(
-  st: FoldState,
-  target: string,
-  newTable: ReadonlyArray<{ id: string; label: string }>,
-): void {
-  st.tentativeEdges = st.tentativeEdges.flatMap((e) => {
-    if (e.source !== target) return [e]
-    if (e.unresolvedIndex !== undefined) {
-      const option = newTable[e.unresolvedIndex]
-      st.contingentConnectKeys.delete(`${e.source}\u0000${e.target}\u0000raw:${e.unresolvedIndex}`)
-      if (option === undefined) return []
-      st.contingentConnectKeys.add(`${e.source}\u0000${e.target}\u0000id:${option.id}`)
-      return [{ source: e.source, target: e.target, optionId: option.id }]
-    }
-    if (newTable.some((o) => o.id === e.optionId)) return [e]
-    st.contingentConnectKeys.delete(`${e.source}\u0000${e.target}\u0000id:${e.optionId}`)
-    return []
-  })
-}
-
 /** 暂定出口边的拓扑形态（无句柄 branch 边，仅参与成环判定）。 */
 function tentativeTopology(st: FoldState): VirtualEdge[] {
   return activeTentativeEdges(st).map((e) => ({
@@ -551,20 +494,6 @@ function tentativeTopology(st: FoldState): VirtualEdge[] {
     sourceHandle: null,
     type: 'branch',
   }))
-}
-
-/** 断线命中前序暂定出口边（投影态已生效、未入虚拟图）：移除其登记并返回
- * true——该断线同样依赖前序修复，按 contingent 静默跳过（与同对 connect
- * 失败同口径），后续命令按「已断开」的投影态判定。同步释放该出口的判重
- * 键（键绑定同一稳定选项 id）：同端点同下标的后续 contingent 连线重新
- * 合法（评审 5163489093，与撤销前断线的非 contingent 语义一致）。 */
-function dropTentativeEdge(st: FoldState, src: string, dst: string): boolean {
-  const hit = activeTentativeEdges(st).find((e) => e.source === src && e.target === dst)
-  if (hit === undefined) return false
-  st.tentativeEdges.splice(st.tentativeEdges.indexOf(hit), 1)
-  const keyTail = hit.unresolvedIndex !== undefined ? hit.optionId : `id:${hit.optionId}`
-  st.contingentConnectKeys.delete(`${src}\u0000${dst}\u0000${keyTail}`)
-  return true
 }
 
 /** 虚拟边身份键（端点 + 源端口）：失败断线的残留快照与当前边按此比对。 */
@@ -612,16 +541,20 @@ function foldEdge(st: FoldState, cmd: Record<string, unknown>, index: number, op
   const pairLabel = `${st.labels.get(src) ?? '未知节点'} → ${st.labels.get(dst) ?? '未知节点'}`
 
   if (op === 'disconnect_edge') {
-    const hitIdx = st.virtualEdges.findIndex((e) => e.source === src && e.target === dst)
-    if (hitIdx < 0) {
-      // 前序暂定出口边在投影态已生效：移除登记并按 contingent 静默跳过
-      if (dropTentativeEdge(st, src, dst)) return
+    // 断线命令无端口参数，按端点对生效：执行通道移除全部同端点边
+    // （simDisconnect 的 forward 过滤同语义），虚拟边与暂定投影一并清除，
+    // 残留登记会使反向连线误报成环（评审 5164943585）
+    const hadEdge = st.virtualEdges.some((e) => e.source === src && e.target === dst)
+    st.virtualEdges = st.virtualEdges.filter((e) => !(e.source === src && e.target === dst))
+    const droppedTentative = dropTentativeEdge(st, src, dst)
+    if (!hadEdge && !droppedTentative) {
       // 目标边不存在可能因本批同对的 connect 失败： contingent 跳过，
       // 随连线修正自愈，不误报「没有这条连线」
       if (st.failedEdgePairs.has(edgePairKey('connect_edge', cmd))) return
       return st.fail(index, `没有这条连线：${pairLabel}`)
     }
-    st.virtualEdges.splice(hitIdx, 1)
+    // 仅命中前序暂定投影：该断线依赖前序修复，按 contingent 静默跳过
+    if (!hadEdge) return
     st.items.push({
       kind: 'disconnect',
       danger: false,

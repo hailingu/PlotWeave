@@ -729,6 +729,23 @@ describe('分类型连线校验（剧情流 / 分支选项出口 / 分镜下挂�
     expect(ok.ok).toBe(true)
   })
 
+  it('端点断线移除全部同端点虚拟边：反向连线不因残留边误报成环（评审 5164943585）', () => {
+    // 断线命令无端口参数，执行通道按端点对移除全部同端点边（batchSim 的
+    // forward 过滤同语义）：两条不同选项出口边一并清除，校验态须同口径，
+    // 否则反向剧情流连线被残留边误判成环
+    const v = validateAiBatch(
+      [
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 1 },
+        { op: 'disconnect_edge', sourceId: 'b1', targetId: 's1' },
+        { op: 'connect_edge', sourceId: 's1', targetId: 'b1' },
+      ],
+      richSnap(),
+    )
+    expect(v.ok, JSON.stringify(v.issues)).toBe(true)
+    expect(v.commands).toHaveLength(4)
+  })
+
   it('同对节点的 sequence 涉及分镜卡：拒绝——attach 才是场景↔分镜的唯一连线', () => {
     const v = validateAiBatch(
       [{ op: 'connect_edge', sourceId: 's1', targetId: 'sh1', edgeKind: 'sequence' }],

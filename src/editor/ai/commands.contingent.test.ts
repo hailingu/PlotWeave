@@ -699,3 +699,60 @@ describe('contingent 键与投影随选项移除级联退役（评审 5164450788
     expect(v.issues.every((i) => i.index !== 5)).toBe(true)
   })
 })
+
+// 暂定投影的判重与端点断线（评审 5164943585）：越界投影被合法更新落定为
+// 已解析投影后，其端口已确定——同端点同选项的后续连线无论投影何时折入
+// 虚拟图都必然同端口，首轮点名重复；端点级断线按执行通道语义移除全部
+// 同端点投影，残留投影不得使反向连线误报成环。
+describe('暂定投影的判重与端点断线（评审 5164943585）', () => {
+  it('越界投影被合法更新落定后，同端口重连首轮点名重复', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'update_node', nodeId: 'b1', patch: { options: 'foo' } },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 2 },
+        { op: 'update_node', nodeId: 'b1', patch: { options: ['甲', '乙', '丙'] } },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 2 },
+      ],
+      richSnap(),
+    )
+    // 首条 update 报 options 错误；idx2 投影随落定转为绑定丙，重连同端口
+    // 必然重复，首轮点名（拒绝语义按命令定位断言）
+    expect(v.issues).toHaveLength(2)
+    expect(v.issues[0]?.message).toContain('options')
+    expect(v.issues[1]?.index).toBe(3)
+  })
+
+  it('端点断线移除全部暂定投影，反向连线不因残留投影误报成环', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'update_node', nodeId: 'b1', patch: { options: 'foo' } },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 2 },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 3 },
+        { op: 'disconnect_edge', sourceId: 'b1', targetId: 's1' },
+        { op: 'connect_edge', sourceId: 's1', targetId: 'b1' },
+      ],
+      richSnap(),
+    )
+    // 断线按端点对移除全部投影（raw:2 与 raw:3）：反向剧情流连线不成环，
+    // 仅报首条 options 错误
+    expect(v.issues).toHaveLength(1)
+    expect(v.issues[0]?.message).toContain('options')
+  })
+
+  it('端点断线连带清除同对虚拟边与暂定投影的并存登记', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
+        { op: 'update_node', nodeId: 'b1', patch: { options: 'foo' } },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 1 },
+        { op: 'disconnect_edge', sourceId: 'b1', targetId: 's1' },
+        { op: 'connect_edge', sourceId: 's1', targetId: 'b1' },
+      ],
+      richSnap(),
+    )
+    // 虚拟边与暂定投影同对并存：断线折叠为真实命令并一并清除两者，
+    // 反向连线不成环，仅报 options 错误
+    expect(v.issues).toHaveLength(1)
+    expect(v.issues[0]?.message).toContain('options')
+  })
+})
