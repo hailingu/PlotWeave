@@ -529,47 +529,100 @@ function residualBreaksCycle(
   return !wouldCreateCycle(remaining, src, dst)
 }
 
+/** contingent 端点的可判类型（评审 5165573246）：token 指向本批失败
+ * create 的 ref 时取其登记的暂定类型（nodeType 已独立过检），指向既有
+ * 节点时取实际类型；悬空 token 或未登记暂定类型返回 undefined，对应
+ * 检查维持 contingent 跳过。 */
+function contingentTypeOf(st: FoldState, token: string): string | undefined {
+  if (st.exists.has(token)) return st.types.get(token)
+  const owner = st.refOwner.get(token)
+  return owner !== undefined ? st.types.get(owner) : undefined
+}
+
+/** contingent 连线（端点依赖失败 create）的内在约束（评审 5165573246）：
+ * 与 contingent options 更新同口径——只豁免依赖修复后状态的检查（端点
+ * 解析、选项表上界与句柄），内在非法的连线类型/optionIndex、按暂定类型
+ * 可判的端点约束与已占宿主首轮点名，完整清单不缺项；成环不可能经未入
+ * 图的虚拟端点，无需拓扑判定。返回错误文案或 null。 */
+function contingentConnectIntrinsicIssue(st: FoldState, cmd: Record<string, unknown>): string | null {
+  const kind = asText(cmd.edgeKind) || 'sequence'
+  const pair = `${asText(cmd.sourceId)} → ${asText(cmd.targetId)}`
+  if (!(kind in EDGE_KIND_LABELS)) return `未知连线类型：${kind}`
+  const srcType = contingentTypeOf(st, asText(cmd.sourceId))
+  const dstType = contingentTypeOf(st, asText(cmd.targetId))
+  if (srcType !== undefined && dstType !== undefined) {
+    const endpointIssue = connectionEndpointIssue(srcType, dstType, kind as EdgeKind)
+    if (endpointIssue) return `${endpointIssue}：${pair}`
+  }
+  const dst = asText(cmd.targetId)
+  if (kind === 'attach' && st.exists.has(dst) && hasAttachHost(st.virtualEdges, dst)) {
+    return `分镜卡已有宿主，换宿主须先断开：${pair}`
+  }
+  if (kind === 'branch' && srcType === 'branch' && !isIntrinsicOptionIndex(cmd.optionIndex)) {
+    return `optionIndex 须为非负整数：${pair}`
+  }
+  return null
+}
+
 /** connect_edge / disconnect_edge 的折叠校验。 */
 function foldEdge(st: FoldState, cmd: Record<string, unknown>, index: number, op: string): void {
   const ends = resolveEndpoints(st, cmd, index)
-  if (ends === 'contingent' || ends === 'missing') return
+  if (ends === 'contingent') {
+    // 端点依赖失败 create（非数组 options 等新拒绝类使该路径常态化）：
+    // 内在约束不随 create 修复自愈，首轮点名（评审 5165573246）；断线无
+    // 内在约束，维持静默跳过
+    if (op === 'connect_edge') {
+      const issue = contingentConnectIntrinsicIssue(st, cmd)
+      if (issue !== null) st.fail(index, issue)
+    }
+    return
+  }
+  if (ends === 'missing') return
   if (ends === 'selfloop') {
     // 必然自环独立于任何失败前序（create 修复后仍非法），首轮即点名
     return st.fail(index, `会造成循环剧情：${asText(cmd.sourceId)} → ${asText(cmd.targetId)}`)
   }
   const { src, dst } = ends
   const pairLabel = `${st.labels.get(src) ?? '未知节点'} → ${st.labels.get(dst) ?? '未知节点'}`
-
-  if (op === 'disconnect_edge') {
-    // 断线命令无端口参数，按端点对生效：执行通道移除全部同端点边
-    // （simDisconnect 的 forward 过滤同语义），虚拟边与暂定投影一并清除，
-    // 残留登记会使反向连线误报成环（评审 5164943585）
-    const hadEdge = st.virtualEdges.some((e) => e.source === src && e.target === dst)
-    st.virtualEdges = st.virtualEdges.filter((e) => !(e.source === src && e.target === dst))
-    const droppedTentative = dropTentativeEdge(st, src, dst)
-    if (!hadEdge && !droppedTentative) {
-      // 目标边不存在可能因本批同对的 connect 失败： contingent 跳过，
-      // 随连线修正自愈，不误报「没有这条连线」
-      if (st.failedEdgePairs.has(edgePairKey('connect_edge', cmd))) return
-      return st.fail(index, `没有这条连线：${pairLabel}`)
-    }
-    // 仅命中前序暂定投影：该断线依赖前序修复，按 contingent 静默跳过
-    if (!hadEdge) return
-    st.items.push({
-      kind: 'disconnect',
-      danger: false,
-      key: `x${index}`,
-      label: `${OP_LABELS.disconnect} ${pairLabel}${reasonOf(cmd)}`,
-    })
-    st.commands.push({
-      op,
-      sourceId: asText(cmd.sourceId),
-      targetId: asText(cmd.targetId),
-      reason: asText(cmd.reason),
-    })
-    return
-  }
+  if (op === 'disconnect_edge') return foldDisconnectEdge(st, cmd, index, src, dst, pairLabel)
   foldConnectEdge(st, cmd, index, src, dst, pairLabel)
+}
+
+/** 断线的折叠校验（foldEdge 拆出，S3776）：断线命令无端口参数，按端点对
+ * 生效——执行通道移除全部同端点边（simDisconnect 的 forward 过滤同语义），
+ * 虚拟边与暂定投影一并清除，残留登记会使反向连线误报成环（评审
+ * 5164943585）；仅投影命中时按 contingent 静默跳过（依赖前序修复）。 */
+function foldDisconnectEdge(
+  st: FoldState,
+  cmd: Record<string, unknown>,
+  index: number,
+  src: string,
+  dst: string,
+  pairLabel: string,
+): void {
+  const hadEdge = st.virtualEdges.some((e) => e.source === src && e.target === dst)
+  st.virtualEdges = st.virtualEdges.filter((e) => !(e.source === src && e.target === dst))
+  const droppedTentative = dropTentativeEdge(st, src, dst)
+  if (!hadEdge && !droppedTentative) {
+    // 目标边不存在可能因本批同对的 connect 失败： contingent 跳过，
+    // 随连线修正自愈，不误报「没有这条连线」
+    if (st.failedEdgePairs.has(edgePairKey('connect_edge', cmd))) return
+    return st.fail(index, `没有这条连线：${pairLabel}`)
+  }
+  // 仅命中前序暂定投影：该断线依赖前序修复，按 contingent 静默跳过
+  if (!hadEdge) return
+  st.items.push({
+    kind: 'disconnect',
+    danger: false,
+    key: `x${index}`,
+    label: `${OP_LABELS.disconnect} ${pairLabel}${reasonOf(cmd)}`,
+  })
+  st.commands.push({
+    op: 'disconnect_edge',
+    sourceId: asText(cmd.sourceId),
+    targetId: asText(cmd.targetId),
+    reason: asText(cmd.reason),
+  })
 }
 
 /** 折叠器分发表：op → 处理函数。设定实体命令（issue 44）复用实体域的

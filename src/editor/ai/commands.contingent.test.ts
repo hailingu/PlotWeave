@@ -756,3 +756,90 @@ describe('暂定投影的判重与端点断线（评审 5164943585）', () => {
     expect(v.issues[0]?.message).toContain('options')
   })
 })
+
+// 失败 create 的 contingent 连线内在约束（评审 5165573246）：非数组
+// options 等新拒绝类使「连向失败 create」常态化，resolveEndpoints 的
+// contingent 短路不得吞掉独立可判的错误——连线类型、内在 optionIndex、
+// 按登记暂定类型可判的端点约束与已占宿主首轮点名；类型不可判（nodeType
+// 未过检、无暂定类型）时维持跳过（与 contingentUpdateIssue 未知类型语义
+// 一致）；断线无内在约束，维持静默跳过。
+describe('失败 create 的 contingent 连线仍独立点名内在约束（评审 5165573246）', () => {
+  it('非数组 options 的 branch create 失败后，内在非法 optionIndex 的连线首轮点名', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'create_node', nodeType: 'branch', ref: 'nb', data: { prompt: '？', options: 42 } },
+        { op: 'connect_edge', sourceId: 'nb', targetId: 's1', edgeKind: 'branch', optionIndex: -1 },
+      ],
+      richSnap(),
+    )
+    expect(v.issues).toHaveLength(2)
+    expect(v.issues[0]?.message).toContain('options')
+    expect(v.issues[1]?.index).toBe(1)
+    expect(v.issues[1]?.message).toContain('optionIndex')
+  })
+
+  it('按登记暂定类型可判的端点约束首轮点名（branch 不能作 attach 源）', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'create_node', nodeType: 'branch', ref: 'nb', data: { prompt: '？', options: 42 } },
+        { op: 'connect_edge', sourceId: 'nb', targetId: 'sh1', edgeKind: 'attach' },
+      ],
+      richSnap(),
+    )
+    expect(v.issues).toHaveLength(2)
+    expect(v.issues[1]?.index).toBe(1)
+    expect(v.issues[1]?.message).toContain('attach')
+  })
+
+  it('目标分镜已占宿主的 contingent attach 首轮点名（同不变量的相邻入口）', () => {
+    const snapWithHost: AiGraphSnapshot = {
+      ...richSnap(),
+      nodes: [...richSnap().nodes, { id: 's9', type: 'scene', label: '场 09' }],
+      edges: [{ source: 's9', target: 'sh1', sourceHandle: 'shots' }],
+    }
+    const v = validateAiBatch(
+      [
+        { op: 'create_node', nodeType: 'scene', ref: 'ns', data: { name: 5 } },
+        { op: 'connect_edge', sourceId: 'ns', targetId: 'sh1', edgeKind: 'attach' },
+      ],
+      snapWithHost,
+    )
+    expect(v.issues).toHaveLength(2)
+    expect(v.issues[1]?.index).toBe(1)
+    expect(v.issues[1]?.message).toContain('宿主')
+  })
+
+  it('内在合法的连线维持 contingent 跳过；未知连线类型仍点名；暂定类型未知不点名（对照）', () => {
+    const deferred = validateAiBatch(
+      [
+        { op: 'create_node', nodeType: 'branch', ref: 'nb', data: { prompt: '？', options: 42 } },
+        { op: 'connect_edge', sourceId: 'nb', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
+      ],
+      richSnap(),
+    )
+    // optionIndex 0 内在合法、branch→scene 端点合法：维持 contingent 跳过
+    expect(deferred.issues).toHaveLength(1)
+    expect(deferred.issues[0]?.message).toContain('options')
+
+    const badKind = validateAiBatch(
+      [
+        { op: 'create_node', nodeType: 'beat', ref: 'bt', data: { label: 5 } },
+        { op: 'connect_edge', sourceId: 'bt', targetId: 's1', edgeKind: 'weird' },
+      ],
+      richSnap(),
+    )
+    expect(badKind.issues.some((i) => i.index === 1 && i.message.includes('未知连线类型'))).toBe(true)
+
+    const unknownType = validateAiBatch(
+      [
+        { op: 'create_node', nodeType: 'mystery', ref: 'm', data: {} },
+        { op: 'connect_edge', sourceId: 'm', targetId: 's1', edgeKind: 'branch', optionIndex: -1 },
+      ],
+      richSnap(),
+    )
+    // nodeType 未过检、无暂定类型可判：内在约束维持 contingent 跳过（与
+    // contingentUpdateIssue 未知类型语义一致）
+    expect(unknownType.issues).toHaveLength(1)
+    expect(unknownType.issues[0]?.message).toContain('未知节点类型')
+  })
+})
