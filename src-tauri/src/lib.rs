@@ -24,6 +24,8 @@ mod library;
 mod library_fs;
 mod library_index;
 mod library_journal;
+#[cfg(target_os = "macos")]
+mod native_quit;
 mod prefs;
 mod seal;
 mod store;
@@ -32,69 +34,7 @@ mod store;
 #[cfg(test)]
 mod conf;
 
-/// ⌘Q 退出接管的自定义菜单项 id（事件路由见 install_quit_barrier_menu）。
-#[cfg(target_os = "macos")]
-const QUIT_ITEM_ID: &str = "plotweave-quit";
-
-/// macOS ⌘Q 退出接管（issue #47 评审）：tao 不提供可拦截的退出事件
-/// （`applicationWillTerminate` 为时已晚），而 ⌘Q 是应用菜单加速键——以
-/// 自带菜单替换默认菜单，把「退出」换成自定义项：按下 ⌘Q 只发出
-/// `app-quit-requested` 交给前端冲刷屏障（useExitFlush），未落盘会话
-/// 排空后前端调用 app_exit 受控退出；仍有不可恢复项则不退出并显示诊断。
-/// 其余子菜单（编辑/窗口）沿用预定义项，保留 ⌘C/⌘V 等标准加速键；
-/// 系统级强制终止（kill 等）仍不可拦截，属既有文档边界。
-#[cfg(target_os = "macos")]
-fn install_quit_barrier_menu(app: &tauri::App) -> Result<(), tauri::Error> {
-    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
-    let quit = MenuItem::with_id(
-        app,
-        QUIT_ITEM_ID,
-        "退出 PlotWeave",
-        true,
-        Some("CmdOrControl+Q"),
-    )?;
-    let app_submenu = Submenu::new(app, "PlotWeave", true)?;
-    app_submenu.append(&PredefinedMenuItem::about(app, None, None)?)?;
-    app_submenu.append(&PredefinedMenuItem::separator(app)?)?;
-    app_submenu.append(&PredefinedMenuItem::services(app, None)?)?;
-    app_submenu.append(&PredefinedMenuItem::separator(app)?)?;
-    app_submenu.append(&PredefinedMenuItem::hide(app, None)?)?;
-    app_submenu.append(&PredefinedMenuItem::hide_others(app, None)?)?;
-    app_submenu.append(&PredefinedMenuItem::show_all(app, None)?)?;
-    app_submenu.append(&PredefinedMenuItem::separator(app)?)?;
-    app_submenu.append(&quit)?;
-
-    let edit = Submenu::new(app, "编辑", true)?;
-    edit.append(&PredefinedMenuItem::undo(app, None)?)?;
-    edit.append(&PredefinedMenuItem::redo(app, None)?)?;
-    edit.append(&PredefinedMenuItem::separator(app)?)?;
-    edit.append(&PredefinedMenuItem::cut(app, None)?)?;
-    edit.append(&PredefinedMenuItem::copy(app, None)?)?;
-    edit.append(&PredefinedMenuItem::paste(app, None)?)?;
-    edit.append(&PredefinedMenuItem::select_all(app, None)?)?;
-
-    let window = Submenu::new(app, "窗口", true)?;
-    window.append(&PredefinedMenuItem::minimize(app, None)?)?;
-    window.append(&PredefinedMenuItem::fullscreen(app, None)?)?;
-
-    let menu = Menu::new(app)?;
-    menu.append(&app_submenu)?;
-    menu.append(&edit)?;
-    menu.append(&window)?;
-    app.set_menu(menu)?;
-    app.on_menu_event(|app, event| {
-        if event.id() == QUIT_ITEM_ID {
-            use tauri::Emitter;
-            if let Err(err) = app.emit("app-quit-requested", ()) {
-                eprintln!("发出退出请求事件失败：{err}");
-            }
-        }
-    });
-    Ok(())
-}
-
-/// ⌘Q 冲刷屏障的受控退出：前端确认未落盘会话已排空后调用（与
-/// install_quit_barrier_menu 的菜单接管配套，issue #47 评审）。
+/// 保存屏障的受控退出：前端确认会话已排空后调用，直接退出 Tauri 事件循环。
 #[tauri::command]
 fn app_exit(app: tauri::AppHandle) {
     app.exit(0);
@@ -103,18 +43,10 @@ fn app_exit(app: tauri::AppHandle) {
 /// 启动 Tauri 应用；移动端通过 `mobile_entry_point` 复用同一入口。
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         // 会话新增项目资产登记表（pwmedia 项目 scope 的防抖落盘窗口，
         // issue #31 评审修复）：应用显式拥有的状态，非进程级可变全局单例
         .manage(assets::project_media::PendingProjectAssets::new())
-        // macOS ⌘Q 退出接管（issue #47 评审）：原生 terminate 不可拦截
-        // （tao 只在 applicationWillTerminate 通知），以自带应用菜单把 ⌘Q
-        // 路由到前端冲刷屏障，未落盘会话排空后才受控退出
-        .setup(|app| {
-            #[cfg(target_os = "macos")]
-            install_quit_barrier_menu(app)?;
-            Ok(())
-        })
         .invoke_handler(tauri::generate_handler![
             store::list_projects,
             store::create_project,
@@ -164,6 +96,18 @@ pub fn run() {
                 });
             },
         )
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .expect("启动 PlotWeave 应用失败");
+    #[cfg(target_os = "macos")]
+    let _quit_barrier = {
+        use tauri::Emitter;
+        let handle = app.handle().clone();
+        native_quit::install(move || {
+            if let Err(error) = handle.emit("app-quit-requested", ()) {
+                eprintln!("发出退出请求事件失败：{error}");
+            }
+        })
+        .expect("安装原生退出保存屏障失败")
+    };
+    app.run(|_, _| {});
 }

@@ -25,3 +25,7 @@ serde_json = "1.0.151"
 # 库/项目媒体均走 pwmedia 自定义协议（数据模型 §7.1）
 tauri = { version = "2", features = [] }
 cap-std = "4.0.3"
+
+[[test]]
+name = "native_quit"
+harness = false

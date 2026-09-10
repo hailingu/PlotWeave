@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 /**
  * 退出冲刷屏障：有未落盘会话时阻止窗口关闭并冲刷；冲刷仍失败保留窗口
- * 并给出可见诊断（issue #47 历轮评审修复）。macOS ⌘Q（Rust 侧菜单接管
+ * 并给出可见诊断（issue #47 历轮评审修复）。macOS ⌘Q/Dock 退出（Rust 侧原生接管
  * 后经 app-quit-requested 事件到达）共用同一道屏障，干净后走受控
  * app_exit 退出（issue #47 评审）。
  */
