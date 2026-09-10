@@ -133,8 +133,10 @@ fn ai_session_round_trips_in_its_own_project_file() {
     });
     save_ai_session_file(&cap(&projects), "p-1", &session).expect("保存会话");
     assert_eq!(
-        load_ai_session_file(&cap(&projects), "p-1").expect("读取会话"),
-        session
+        load_ai_session_file(&cap(&projects), "p-1")
+            .expect("读取会话")
+            .session,
+        Some(session)
     );
     assert!(projects.join("p-1").join("ai-session.json").exists());
     assert!(
@@ -255,8 +257,10 @@ fn ai_session_authoritative_save_clears_recovery_copy() {
         "权威副本落盘后恢复副本应被清除"
     );
     assert_eq!(
-        load_ai_session_file(&cap(&projects), "p-1").expect("读主会话"),
-        session
+        load_ai_session_file(&cap(&projects), "p-1")
+            .expect("读主会话")
+            .session,
+        Some(session)
     );
     // 清除幂等：缺失时再清不报错
     assert!(clear_ai_session_recovery_file(&cap(&recovery), "p-1").is_ok());
@@ -364,8 +368,10 @@ fn save_refuses_unreadable_or_newer_authoritative_session() {
         .expect_err("更新主文件不得被旧序号覆盖");
     assert!(err.contains("更新"), "意外诊断：{err}");
     assert_eq!(
-        load_ai_session_file(&cap(&projects), "p-1").expect("读主会话"),
-        session(10)
+        load_ai_session_file(&cap(&projects), "p-1")
+            .expect("读主会话")
+            .session,
+        Some(session(10))
     );
 
     // 主文件不可读（目录占位）：新旧无法确定，拒绝覆盖
@@ -381,8 +387,10 @@ fn save_refuses_unreadable_or_newer_authoritative_session() {
         .expect("写损坏主文件");
     save_ai_session_file(&cap(&projects), "p-1", &session(20)).expect("损坏内容允许覆盖修复");
     assert_eq!(
-        load_ai_session_file(&cap(&projects), "p-1").expect("读主会话"),
-        session(20)
+        load_ai_session_file(&cap(&projects), "p-1")
+            .expect("读主会话")
+            .session,
+        Some(session(20))
     );
     cleanup_temp(&projects);
 }
@@ -458,8 +466,10 @@ fn equal_write_seq_conflicting_content_is_rejected() {
         .expect_err("同序号的不同会话不得覆盖权威文件");
     assert!(err.contains("序号"), "意外诊断：{err}");
     assert_eq!(
-        load_ai_session_file(&cap(&projects), "p-1").expect("读主会话"),
-        process("进程 A", 10),
+        load_ai_session_file(&cap(&projects), "p-1")
+            .expect("读主会话")
+            .session,
+        Some(process("进程 A", 10)),
         "先落盘的会话必须原样保留"
     );
 
@@ -573,6 +583,78 @@ fn corrupt_recovery_copy_is_cleared_by_authoritative_save() {
         None,
         "权威保存成功后损坏副本应被清除"
     );
+    cleanup_temp(&projects);
+}
+
+/// 损坏的权威主文件同样按可安全替换归类（评审 pullrequestreview-5161978174，
+/// 与 ensure_authoritative_replaceable 同口径）：读取返回 corrupt 标记而非
+/// 与不可读 I/O 同款错误——前端不得据此进入「新旧未知」门禁永久暂缓保存。
+#[test]
+fn corrupt_authoritative_session_loads_as_replaceable_not_unreadable() {
+    let projects = temp_projects_dir();
+    fs::write(projects.join("p-1.json"), b"{}").expect("写项目文件");
+    fs::create_dir_all(projects.join("p-1")).expect("建会话目录");
+
+    // JSON 损坏：corrupt 标记，不是 Err
+    atomic_write(&cap(&projects.join("p-1")), "ai-session.json", "{not json")
+        .expect("写损坏主文件");
+    let copy = load_ai_session_file(&cap(&projects), "p-1").expect("损坏主文件不得按读取失败上浮");
+    assert!(copy.corrupt, "损坏主文件必须带 corrupt 标记");
+    assert_eq!(copy.session, None);
+
+    // 合法 JSON 但信封非法：同样按损坏归类
+    atomic_write(
+        &cap(&projects.join("p-1")),
+        "ai-session.json",
+        r#"{ "schemaVersion": 9 }"#,
+    )
+    .expect("写非法信封主文件");
+    let copy = load_ai_session_file(&cap(&projects), "p-1").expect("信封非法同样按损坏归类");
+    assert!(copy.corrupt);
+    assert_eq!(copy.session, None);
+
+    // 缺失（旧项目无会话）：合法状态，无损坏
+    let projects2 = temp_projects_dir();
+    fs::write(projects2.join("p-2.json"), b"{}").expect("写项目文件");
+    let copy = load_ai_session_file(&cap(&projects2), "p-2").expect("缺失是合法状态");
+    assert!(!copy.corrupt);
+    assert_eq!(copy.session, None);
+    cleanup_temp(&projects2);
+
+    // 不可读（目录占位）：新旧未知，仍是 Err
+    fs::remove_file(projects.join("p-1").join("ai-session.json")).expect("移除主文件");
+    fs::create_dir(projects.join("p-1").join("ai-session.json")).expect("建目录占位");
+    assert!(
+        load_ai_session_file(&cap(&projects), "p-1").is_err(),
+        "不可读主文件必须保持 Err（写入边界将拒绝覆盖）"
+    );
+    cleanup_temp(&projects);
+}
+
+/// 会话写入跨进程互斥（评审 pullrequestreview-5161978174）：顺序守卫是
+/// 「检查后写入」，必须与权威落盘、副本清理同锁串行——锁被持有期间第二
+/// 个句柄不得进入，守卫释放后可重新获取。
+#[test]
+fn session_write_lock_excludes_concurrent_holders() {
+    let projects = temp_projects_dir();
+    let recovery = temp_recovery_dir(&projects);
+    let guard = acquire_session_write_lock(&cap(&recovery)).expect("首次获取写入锁");
+
+    let mut options = cap_std::fs::OpenOptions::new();
+    options.read(true).write(true).create(true);
+    let contender = cap(&recovery)
+        .open_with(SESSION_WRITE_LOCK_FILE, &options)
+        .expect("打开第二个锁句柄");
+    let std_contender = contender.into_std();
+    assert!(
+        std_contender.try_lock().is_err(),
+        "锁被持有时第二个写入者不得进入临界区"
+    );
+    drop(std_contender);
+
+    drop(guard);
+    let reacquired = acquire_session_write_lock(&cap(&recovery));
+    assert!(reacquired.is_ok(), "守卫释放后必须可重新获取");
     cleanup_temp(&projects);
 }
 

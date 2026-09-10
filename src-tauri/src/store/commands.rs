@@ -38,17 +38,21 @@ pub fn load_project(app: AppHandle, id: String) -> Result<ProjectFile, String> {
     load_project_file(&root, &id)
 }
 
-/// 读取项目独立 AI 会话：旧项目缺文件时返回空历史；会话损坏只阻断会话恢复，
-/// 不影响同项目的画布文档读取。
+/// 读取项目独立 AI 会话：`session` 为 None 表示缺失（旧项目，前端视作空
+/// 历史）或损坏（`corrupt` 置位，按可安全替换归类）；会话损坏只阻断会话
+/// 恢复，不影响同项目的画布文档读取。
 #[tauri::command]
-pub fn load_ai_session(app: AppHandle, id: String) -> Result<serde_json::Value, String> {
+pub fn load_ai_session(app: AppHandle, id: String) -> Result<SessionCopy, String> {
     let root = projects_dir(&app)?;
     load_ai_session_file(&root, &id)
 }
 
 /// 保存项目独立 AI 会话。会话文件位于 `projects/{id}/ai-session.json`，与
 /// `project.json` 分离，避免每条对话触发整份画布文档序列化。主文件成功
-/// 落盘后清除可能存在的恢复副本（权威副本已取代它）。
+/// 落盘后清除可能存在的恢复副本（权威副本已取代它）。顺序守卫的检查、
+/// 权威落盘与副本清理全程持有跨进程写入锁（评审 pullrequestreview-5161978174：
+/// 守卫是「检查后写入」，不锁则两进程可同时通过旧序号检查、再先后原子
+/// 改名，后者静默替换前者）。
 #[tauri::command]
 pub fn save_ai_session(
     app: AppHandle,
@@ -57,12 +61,14 @@ pub fn save_ai_session(
 ) -> Result<(), String> {
     let root = projects_dir(&app)?;
     let recovery = recovery_dir(&app)?;
+    let _guard = acquire_session_write_lock(&recovery)?;
     save_ai_session_authoritative(&root, &recovery, &id, &session)
 }
 
 /// 写入会话恢复副本（主文件保存失败后的跨进程保留）：与项目目录分离，
 /// 项目目录不可写或记录暂不可读时仍可能写入成功。项目记录必须存在——
-/// 已删除项目不得因恢复副本留下不可见聊天数据。
+/// 已删除项目不得因恢复副本留下不可见聊天数据。副本顺序守卫同样在
+/// 跨进程写入锁内执行（见 save_ai_session）。
 #[tauri::command]
 pub fn stash_ai_session_recovery(
     app: AppHandle,
@@ -71,6 +77,7 @@ pub fn stash_ai_session_recovery(
 ) -> Result<(), String> {
     let projects = projects_dir(&app)?;
     let recovery = recovery_dir(&app)?;
+    let _guard = acquire_session_write_lock(&recovery)?;
     stash_ai_session_recovery_file(&projects, &recovery, &id, &session)
 }
 
@@ -78,20 +85,47 @@ pub fn stash_ai_session_recovery(
 /// `corrupt` 置位）。前端在主文件读取之外单独消费，以便向用户标明
 /// 「已从恢复副本载入」。
 #[tauri::command]
-pub fn load_ai_session_recovery(app: AppHandle, id: String) -> Result<RecoveryCopy, String> {
+pub fn load_ai_session_recovery(app: AppHandle, id: String) -> Result<SessionCopy, String> {
     let recovery = recovery_dir(&app)?;
     load_ai_session_recovery_file(&recovery, &id)
 }
 
-/// 恢复副本读取结果：损坏（不可解析或信封非法）的内容无法被任何进程
-/// 载入，与 `ensure_recovery_replaceable` 同口径按「可安全替换」归类，
-/// 以 `corrupt` 标记返回而不是 Err——前端不得据此进入「新旧未知」门禁
-/// 永久暂缓保存。Err 仅保留给真实 I/O 失败（权限/瞬态 I/O、元数据失败），
-/// 那才是新旧无法确定、写入边界必须拒绝覆盖的情形。
+/// 会话副本读取结果（主文件与恢复副本共用契约）：损坏（不可解析或信封
+/// 非法）的内容无法被任何进程载入，与两个顺序守卫同口径按「可安全替换」
+/// 归类，以 `corrupt` 标记返回而不是 Err——前端不得据此进入「新旧未知」
+/// 门禁永久暂缓保存。Err 仅保留给真实 I/O 失败（权限/瞬态 I/O、元数据
+/// 失败），那才是新旧无法确定、写入边界必须拒绝覆盖的情形。
 #[derive(serde::Serialize)]
-pub struct RecoveryCopy {
+pub struct SessionCopy {
     pub session: Option<serde_json::Value>,
     pub corrupt: bool,
+}
+
+/// 会话写入锁文件名（位于 recovery/ 内）：永不被替换——锁住的是稳定的
+/// 目录项而非会话文件本身（rename 会换掉后者，锁会失联）。
+const SESSION_WRITE_LOCK_FILE: &str = "session-write.lock";
+
+/// 会话写入的跨进程互斥守卫：持有期间其他 PlotWeave 进程的顺序守卫检查、
+/// 权威落盘与副本清理被串行化；drop 即解锁。文件锁随进程退出由内核
+/// 释放，无陈锁可留。咨询锁——只约束协作的写入方；读取不经锁（原子
+/// rename 保证读到的是某个一致的副本快照）。内核函数不自行加锁：由
+/// 命令层统一获取，避免权威保存内部的副本改写路径重入死锁。
+pub(crate) struct SessionWriteGuard {
+    _lock: std::fs::File,
+}
+
+/// 打开（不存在则创建）锁文件并阻塞获取排他锁。句柄经锚定的 recovery
+/// 目录解析；锁文件名不匹配副本模式，列表孤儿清扫不触碰它。
+fn acquire_session_write_lock(recovery: &CapDir) -> Result<SessionWriteGuard, String> {
+    let mut options = cap_std::fs::OpenOptions::new();
+    options.read(true).write(true).create(true);
+    let file = recovery
+        .open_with(SESSION_WRITE_LOCK_FILE, &options)
+        .map_err(|e| format!("打开 AI 会话写入锁失败：{e}"))?;
+    let lock = file.into_std();
+    lock.lock()
+        .map_err(|e| format!("获取 AI 会话写入锁失败：{e}"))?;
+    Ok(SessionWriteGuard { _lock: lock })
 }
 
 /// JS `Number.MAX_SAFE_INTEGER`（2^53-1）：会话写入序号的可接受上界。u64
@@ -179,11 +213,11 @@ pub(crate) fn stash_ai_session_recovery_file(
 pub(crate) fn load_ai_session_recovery_file(
     recovery: &CapDir,
     id: &str,
-) -> Result<RecoveryCopy, String> {
+) -> Result<SessionCopy, String> {
     validate_id(id)?;
     let name = recovery_file_name(id);
     match recovery.symlink_metadata(&name) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(RecoveryCopy {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(SessionCopy {
             session: None,
             corrupt: false,
         }),
@@ -194,11 +228,11 @@ pub(crate) fn load_ai_session_recovery_file(
                 .ok()
                 .filter(|v| validate_ai_session(v).is_ok());
             Ok(match session {
-                Some(session) => RecoveryCopy {
+                Some(session) => SessionCopy {
                     session: Some(session),
                     corrupt: false,
                 },
-                None => RecoveryCopy {
+                None => SessionCopy {
                     session: None,
                     corrupt: true,
                 },
@@ -274,10 +308,6 @@ pub(crate) fn delete_project_with_recovery(
     Ok(DeleteProjectReport { cleanup_error })
 }
 
-fn empty_ai_session() -> serde_json::Value {
-    serde_json::json!({ "schemaVersion": 1, "entries": [] })
-}
-
 fn validate_ai_session(session: &serde_json::Value) -> Result<(), String> {
     let Some(object) = session.as_object() else {
         return Err("AI 会话必须是对象".into());
@@ -343,11 +373,18 @@ fn ai_session_dir(root: &CapDir, id: &str) -> Result<CapDir, String> {
     Err("项目会话目录在创建期间持续变化，拒绝访问".into())
 }
 
-/// 会话读写内核：缺文件是旧项目的合法状态；损坏 JSON 明确上浮给前端展示。
-pub(crate) fn load_ai_session_file(root: &CapDir, id: &str) -> Result<serde_json::Value, String> {
+/// 会话读写内核：缺文件是旧项目的合法状态（None，前端视作空历史）；
+/// 损坏（不可解析/信封非法）按可安全替换归类（`SessionCopy::corrupt`，
+/// 评审 pullrequestreview-5161978174），不可读才 Err。
+pub(crate) fn load_ai_session_file(root: &CapDir, id: &str) -> Result<SessionCopy, String> {
     validate_id(id)?;
     let dir = match root.symlink_metadata(id) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(empty_ai_session()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(SessionCopy {
+                session: None,
+                corrupt: false,
+            })
+        }
         Ok(md) if md.file_type().is_symlink() => {
             return Err("项目会话目录是符号链接，拒绝读取".into())
         }
@@ -356,14 +393,26 @@ pub(crate) fn load_ai_session_file(root: &CapDir, id: &str) -> Result<serde_json
         Err(e) => return Err(format!("读取项目会话目录元数据失败：{e}")),
     };
     match dir.symlink_metadata("ai-session.json") {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(empty_ai_session()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(SessionCopy {
+            session: None,
+            corrupt: false,
+        }),
         Ok(_) => {
             let text = read_verified_file(&dir, "ai-session.json")
                 .map_err(|e| format!("拒绝读取 AI 会话：{e}"))?;
-            let session =
-                serde_json::from_str(&text).map_err(|e| format!("AI 会话文件损坏：{e}"))?;
-            validate_ai_session(&session)?;
-            Ok(session)
+            let session = serde_json::from_str::<serde_json::Value>(&text)
+                .ok()
+                .filter(|v| validate_ai_session(v).is_ok());
+            Ok(match session {
+                Some(session) => SessionCopy {
+                    session: Some(session),
+                    corrupt: false,
+                },
+                None => SessionCopy {
+                    session: None,
+                    corrupt: true,
+                },
+            })
         }
         Err(e) => Err(format!("读取 AI 会话文件元数据失败：{e}")),
     }

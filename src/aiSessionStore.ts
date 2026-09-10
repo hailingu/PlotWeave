@@ -103,15 +103,15 @@ function seqOf(raw: unknown): number {
   return typeof seq === 'number' && Number.isSafeInteger(seq) && seq >= 0 ? seq : 0
 }
 
-/** `load_ai_session_recovery` 的 RecoveryCopy 契约（Rust 侧同名单义）：
- * `session` 为 null 表示缺失或损坏（损坏时 `corrupt` 置位，按可安全
- * 替换归类——无法被任何进程载入的内容没有可丢失的历史）。 */
-function recoverySessionOf(result: unknown): unknown {
+/** `load_ai_session` / `load_ai_session_recovery` 的 SessionCopy 契约
+ * （Rust 侧同名单义）：`session` 为 null 表示缺失或损坏（损坏时 `corrupt`
+ * 置位，按可安全替换归类——无法被任何进程载入的内容没有可丢失的历史）。 */
+function copySessionOf(result: unknown): unknown {
   if (typeof result !== 'object' || result === null) return null
   return (result as { session?: unknown }).session ?? null
 }
 
-function recoveryCorruptOf(result: unknown): boolean {
+function copyCorruptOf(result: unknown): boolean {
   return (
     typeof result === 'object' && result !== null && (result as { corrupt?: unknown }).corrupt === true
   )
@@ -126,7 +126,7 @@ async function seedWriteSeq(id: string, invoke: Invoke): Promise<number> {
     invoke('load_ai_session', { id }).catch(() => null),
     invoke('load_ai_session_recovery', { id }).catch(() => null),
   ])
-  return mergeWriteSeq(id, Math.max(seqOf(main), seqOf(recoverySessionOf(recovery))))
+  return mergeWriteSeq(id, Math.max(seqOf(copySessionOf(main)), seqOf(copySessionOf(recovery))))
 }
 
 /** 磁盘快照序号与内存序号取大合并，返回合并值：乱序返回的并发载入不得
@@ -148,13 +148,15 @@ async function nextWriteSeq(id: string, invoke: Invoke): Promise<number> {
 
 /** 磁盘两副本的读取与选源判定（loadAiSession 前半）：主文件与恢复副本
  * 各自捕获读取错误；写入序号与内存取大合并（乱序载入不得回拨，见
- * mergeWriteSeq）；主文件不可读且无可用副本时上浮原始错误。恢复副本的
- * 损坏（corrupt）与不可读（Err）分开判定：损坏按可安全替换归类，不进
- * 新旧未知门禁。 */
+ * mergeWriteSeq）；主文件不可读且无可用副本时上浮原始错误。两副本的
+ * 损坏（corrupt）与不可读（Err）都分开判定：损坏按可安全替换归类，
+ * 不进新旧未知门禁（评审 pullrequestreview-5161978174 把主文件补齐到
+ * 与恢复副本同口径）。 */
 interface SessionCopies {
   raw: unknown
   mainError: unknown
   mainUnreadable: boolean
+  mainCorrupt: boolean
   recovered: boolean
   recoveryUnreadable: boolean
   recoveryCorrupt: boolean
@@ -163,13 +165,20 @@ interface SessionCopies {
 
 async function readSessionCopies(id: string, invoke: Invoke): Promise<SessionCopies> {
   let mainError: unknown
-  const mainRaw = await invoke('load_ai_session', { id }).catch((err: unknown) => {
+  let mainFailed = false
+  const mainResult = await invoke('load_ai_session', { id }).catch((err: unknown) => {
     mainError = err
-    return undefined
+    mainFailed = true
+    return null
   })
+  const mainRaw = copySessionOf(mainResult)
+  const mainCorrupt = !mainFailed && copyCorruptOf(mainResult)
+  if (mainCorrupt) {
+    console.warn('[aiSession] 权威会话文件损坏（不可解析），按可替换处理：保存成功时将被覆盖修复')
+  }
   // 恢复副本读取失败（权限/瞬态 I/O）时新旧无法确定：不得当作「无副本」
   // 继续——权威回写会清掉可能是唯一新副本的历史；损坏（corrupt）则按
-  // 可安全替换归类（RecoveryCopy 契约），照常以权威历史继续
+  // 可安全替换归类（SessionCopy 契约），照常以权威历史继续
   let recoveryError: unknown
   let recoveryFailed = false
   const recoveryResult = await invoke('load_ai_session_recovery', { id }).catch(
@@ -179,23 +188,26 @@ async function readSessionCopies(id: string, invoke: Invoke): Promise<SessionCop
       return null
     },
   )
-  const recoveryRaw = recoverySessionOf(recoveryResult)
-  const recoveryCorrupt = !recoveryFailed && recoveryCorruptOf(recoveryResult)
+  const recoveryRaw = copySessionOf(recoveryResult)
+  const recoveryCorrupt = !recoveryFailed && copyCorruptOf(recoveryResult)
   if (recoveryCorrupt) {
     console.warn('[aiSession] 恢复副本损坏（不可解析），按可替换处理：保存成功后将被清除或替换')
   }
   mergeWriteSeq(id, Math.max(seqOf(mainRaw), seqOf(recoveryRaw)))
-  const mainUnreadable = mainRaw === undefined
+  const mainUnreadable = mainFailed
+  // 损坏主文件无法提供内容与序号：任何可用恢复副本胜出（提升写回按可
+  // 替换覆盖修复主文件）；主文件可读时仍取序号较大者
   const recovered =
-    recoveryRaw != null && (mainUnreadable || seqOf(recoveryRaw) > seqOf(mainRaw))
-  // 任一副本不可读即新旧未知：登记保存门禁（两副本可读的载入会解除，
-  // 同时清出退出阻断登记）；损坏副本不登记
+    recoveryRaw != null &&
+    (mainUnreadable || mainCorrupt || seqOf(recoveryRaw) > seqOf(mainRaw))
+  // 任一副本不可读（真实 I/O 失败）即新旧未知：登记保存门禁（两副本可读
+  // 的载入会解除，同时清出退出阻断登记）；损坏（可替换）不登记
   if (recoveryFailed || (recovered && mainUnreadable)) orderingUnknownSessions.add(id)
   else {
     orderingUnknownSessions.delete(id)
     orderingBlockedSessions.delete(id)
   }
-  // 权威文件读取失败且无可用恢复副本：显式上浮，不把损坏静默当成空历史
+  // 权威文件读取失败（真实 I/O）且无可用恢复副本：显式上浮，不静默当空历史
   if (!recovered && mainUnreadable) {
     orderingUnknownSessions.add(id)
     throw mainError
@@ -204,6 +216,7 @@ async function readSessionCopies(id: string, invoke: Invoke): Promise<SessionCop
     raw: recovered ? recoveryRaw : mainRaw,
     mainError,
     mainUnreadable,
+    mainCorrupt,
     recovered,
     recoveryUnreadable: recoveryFailed,
     recoveryCorrupt,
@@ -212,22 +225,29 @@ async function readSessionCopies(id: string, invoke: Invoke): Promise<SessionCop
 }
 
 /** 归一化与提升/修复写回（loadAiSession 后半）：干净会话直接返回；主文件
- * 不可读时暂缓一切写回（见 loadAiSession 的整体契约）；其余尝试写回，
- * 失败如实上报且陈旧覆盖由写入边界的顺序守卫拦截。 */
+ * 真实 I/O 不可读时暂缓一切写回（见 loadAiSession 的整体契约）；其余
+ * （含损坏主文件——可安全替换）尝试写回，失败如实上报且陈旧覆盖由写入
+ * 边界的顺序守卫拦截。 */
 async function promoteLoadedSession(
   id: string,
   copies: SessionCopies,
 ): Promise<AiSessionLoadResult> {
-  const { raw, mainError, mainUnreadable, recovered, recoveryCorrupt } = copies
+  const { raw, mainError, mainUnreadable, mainCorrupt, recovered, recoveryCorrupt } = copies
   const { session, repaired } = normalizeAiSession(raw)
   if (!recovered && !repaired) {
+    // 损坏副本仍在磁盘上但无任何可丢失的历史：如实提示，下次保存成功
+    // 时由 Rust 侧覆盖/清除（自愈）；走写回路径时无须提示（已被替换/清除）
+    const notes = [
+      ...(mainCorrupt
+        ? ['权威会话文件损坏（不可解析），已按空历史打开：下次保存成功时将自动修复该文件']
+        : []),
+      ...(recoveryCorrupt
+        ? ['AI 会话恢复副本损坏（不可解析），已忽略：下次保存成功时将自动清除该副本']
+        : []),
+    ]
     return {
       session,
-      // 损坏副本仍在磁盘上但无任何可丢失的历史：如实提示，下次保存成功
-      // 时由 Rust 侧清除/替换（自愈）；走写回路径时无须提示（副本已被清除）
-      repairError: recoveryCorrupt
-        ? 'AI 会话恢复副本损坏（不可解析），已忽略：下次保存成功时将自动清除该副本'
-        : null,
+      repairError: notes.length > 0 ? notes.join('；') : null,
       recovered: false,
       recoveryUnreadable: false,
       authoritativeUnreadable: false,
@@ -310,7 +330,7 @@ async function diskWriteSeqMax(id: string, invoke: Invoke): Promise<number> {
     invoke('load_ai_session', { id }).catch(() => null),
     invoke('load_ai_session_recovery', { id }).catch(() => null),
   ])
-  return Math.max(seqOf(main), seqOf(recoverySessionOf(recovery)))
+  return Math.max(seqOf(copySessionOf(main)), seqOf(copySessionOf(recovery)))
 }
 
 /** 主文件保存失败时尽力写入恢复副本（跨进程保留的唯一拷贝），返回副本
