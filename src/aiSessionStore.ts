@@ -50,6 +50,12 @@ const inFlightSaves = new Map<string, Promise<void>>()
 /** 主文件与恢复副本都写失败的会话：唯一副本只在内存，关闭屏障据此阻止
  * 退出；副本写入成功（跨进程可恢复）则不阻止，避免永远关不掉窗口。 */
 const unrecoverableSessions = new Set<string>()
+/** 新旧未知门禁（历轮评审修复）：载入时任一副本不可读即登记——此后该
+ * 项目的一切会话保存整次暂缓，不写盘、不定序、不登记重试。否则保存
+ * 失败路径把序号定在未知基线之上（副本改写 + 重试逐次自增），不可读
+ * 副本恢复可读后，迟到写入终将压过其未知序号、用旧基线历史覆盖更新
+ * 副本。两副本可读的重新载入即解除；编辑保留在会话与 App 保留区。 */
+const orderingUnknownSessions = new Set<string>()
 
 /** 清出重试登记、定时器与不可恢复标记（保存成功、删除项目时调用）。 */
 function clearSessionRetry(id: string): void {
@@ -151,8 +157,14 @@ async function readSessionCopies(id: string, invoke: Invoke): Promise<SessionCop
   const mainUnreadable = mainRaw === undefined
   const recovered =
     recoveryRaw != null && (mainUnreadable || seqOf(recoveryRaw) > seqOf(mainRaw))
+  // 任一副本不可读即新旧未知：登记保存门禁（两副本可读的载入会解除）
+  if (recoveryFailed || (recovered && mainUnreadable)) orderingUnknownSessions.add(id)
+  else orderingUnknownSessions.delete(id)
   // 权威文件读取失败且无可用恢复副本：显式上浮，不把损坏静默当成空历史
-  if (!recovered && mainUnreadable) throw mainError
+  if (!recovered && mainUnreadable) {
+    orderingUnknownSessions.add(id)
+    throw mainError
+  }
   return {
     raw: recovered ? recoveryRaw : mainRaw,
     mainError,
@@ -280,6 +292,11 @@ export async function saveAiSession(id: string, session: AiSession): Promise<voi
     memorySessions.set(id, session)
     return
   }
+  // 新旧未知门禁（见 orderingUnknownSessions）：变更与重试一律整次暂缓——
+  // 序号不得定在未知基线之上；编辑保留在会话与 App 保留区，待重开定序
+  if (orderingUnknownSessions.has(id)) {
+    throw new Error('AI 会话新旧未知（权威文件或恢复副本不可读），已暂缓保存：请检查磁盘后重开项目')
+  }
   const generation = (sessionGenerations.get(id) ?? 0) + 1
   sessionGenerations.set(id, generation)
   const write = enqueueProjectWrite(id, async () => {
@@ -352,4 +369,5 @@ export async function flushPendingAiSessionSaves(): Promise<string[]> {
 export function deleteAiSession(id: string): void {
   memorySessions.delete(id)
   clearSessionRetry(id)
+  orderingUnknownSessions.delete(id)
 }

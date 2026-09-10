@@ -321,6 +321,56 @@ describe('saveAiSession 失败重试与退出冲刷', () => {
 
 })
 
+describe('saveAiSession 新旧未知门禁', () => {
+  it('恢复副本不可读期间：变更保存整次暂缓，不写盘不登记重试；重开确立定序后恢复保存', async () => {
+    const store = await import('./aiSessionStore')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    invoke.mockResolvedValueOnce(session('权威', 5)).mockRejectedValueOnce(new Error('权限拒绝'))
+    await store.loadAiSession('p1')
+    warn.mockRestore()
+    invoke.mockReset()
+
+    // 用户变更：保存必须整次拒绝——主文件可写也不得在副本新旧未知时定序
+    // （失败路径的副本改写与重试自增会把序号压过恢复可读的更新副本）
+    await expect(store.saveAiSession('p1', session('用户编辑', 6))).rejects.toThrow('暂缓')
+    expect(commandsOf()).toEqual([])
+    expect(store.hasPendingAiSessionSaves()).toBe(false)
+
+    // 重开（两副本可读）：定序恢复，保存以磁盘最大序号续起
+    invoke.mockResolvedValueOnce(session('权威', 5)).mockResolvedValueOnce(null)
+    await store.loadAiSession('p1')
+    invoke.mockReset()
+    invoke.mockResolvedValue(undefined)
+    await store.saveAiSession('p1', session('用户编辑', 6))
+    const saved = invoke.mock.calls[0][1] as { session: { writeSeq: number } }
+    expect(saved.session.writeSeq).toBe(6)
+  })
+
+  it('权威文件不可读期间同样暂缓：不写副本、不定序、无重试放大', async () => {
+    const store = await import('./aiSessionStore')
+    invoke.mockRejectedValueOnce(new Error('权限拒绝')).mockResolvedValueOnce(session('恢复副本', 3))
+    await store.loadAiSession('p1')
+    invoke.mockReset()
+
+    await expect(store.saveAiSession('p1', payload)).rejects.toThrow('暂缓')
+    expect(commandsOf()).toEqual([])
+  })
+
+  it('两副本都不可读（载入上浮）同样登记门禁；删除项目清出', async () => {
+    const store = await import('./aiSessionStore')
+    invoke.mockRejectedValueOnce(new Error('权限拒绝')).mockRejectedValueOnce(new Error('权限拒绝'))
+    await expect(store.loadAiSession('p1')).rejects.toThrow('权限拒绝')
+    invoke.mockReset()
+
+    await expect(store.saveAiSession('p1', payload)).rejects.toThrow('暂缓')
+    expect(commandsOf()).toEqual([])
+    store.deleteAiSession('p1')
+    invoke.mockResolvedValue(undefined)
+    await store.saveAiSession('p1', payload)
+    expect(commandsOf()).toEqual(['save_ai_session'])
+  })
+})
+
 describe('saveAiSession 冲刷固定点排空', () => {
   it('在途保存未落定前视为待处理，冲刷先等它落定', async () => {
     const store = await import('./aiSessionStore')

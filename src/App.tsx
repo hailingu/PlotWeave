@@ -70,6 +70,14 @@ async function loadOpenProject(
   const doc = await projectStore.load(id)
   const unsaved = unsavedAiSessions?.get(id)
   if (unsaved) {
+    // 保留会话胜出展示，但仍读一次磁盘刷新「新旧未知」门禁与写入序号：
+    // 不读则门禁永不解除，保留会话的重试落盘被永远暂缓（死锁）；仍不可
+    // 读时门禁保持、重试继续被暂缓，如实进入错误文案
+    try {
+      await projectStore.loadAiSession(id)
+    } catch {
+      // 载入失败保持门禁；展示仍以保留会话为准
+    }
     return {
       id,
       doc,

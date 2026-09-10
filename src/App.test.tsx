@@ -369,6 +369,36 @@ describe('App ✦AI 会话保存失败', () => {
 })
 
 describe('App ✦AI 会话重试成功通知', () => {
+  it('新旧未知期间的保留会话：重开时重新读取磁盘（确立定序）后再展示重试', async () => {
+    // 变更保存被门禁拒绝（模拟新旧未知）→ 会话进保留区
+    store.saveAiSession.mockRejectedValueOnce(new Error('AI 会话新旧未知，已暂缓保存'))
+    await openEditor()
+    const changed = {
+      schemaVersion: 1 as const,
+      entries: [{ id: 1, kind: 'note' as const, text: '编辑' }],
+    }
+    await act(async () => {
+      await expect(
+        (editorProps.current.onSaveAiSession as (value: typeof changed) => Promise<void>)(changed),
+      ).rejects.toThrow('暂缓')
+    })
+    await act(async () => {
+      ;(editorProps.current.onBackHome as () => void)()
+    })
+    expect(await screen.findByTestId('home')).toBeTruthy()
+
+    // 重开：保留会话胜出展示，但必须重新读盘刷新定序——否则门禁永不解除，
+    // 保留会话的重试永远被暂缓（死锁）
+    store.loadAiSession.mockClear()
+    await act(async () => {
+      await (homeProps.current.onOpenProject as (id: string) => Promise<void>)('p1')
+    })
+    await screen.findByTestId('editor')
+    expect(store.loadAiSession).toHaveBeenCalledTimes(1)
+    expect(editorProps.current.aiSession).toEqual(changed)
+    expect(editorProps.current.aiSessionRetryable).toBe(true)
+  })
+
   it('后台重试补写成功：清除项目级错误与保留快照，重开不再以内存会话胜出', async () => {
     store.saveAiSession.mockRejectedValueOnce(new Error('磁盘已满'))
     await openEditor()
