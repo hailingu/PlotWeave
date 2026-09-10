@@ -263,6 +263,16 @@ export async function loadAiSession(id: string): Promise<AiSessionLoadResult> {
   return promoteLoadedSession(id, copies)
 }
 
+/** 重读磁盘两副本的最大写入序号（保存被拒后的冲突检测）：读失败按 0——
+ * 不可读副本由写入边界的既有守卫另行拒绝，不误判为冲突。 */
+async function diskWriteSeqMax(id: string, invoke: Invoke): Promise<number> {
+  const [main, recovery] = await Promise.all([
+    invoke('load_ai_session', { id }).catch(() => null),
+    invoke('load_ai_session_recovery', { id }).catch(() => null),
+  ])
+  return Math.max(seqOf(main), seqOf(recovery))
+}
+
 /** 主文件保存失败时尽力写入恢复副本（跨进程保留的唯一拷贝），返回副本
  * 是否落盘成功——副本成功即该历史已跨进程可恢复，关闭屏障无须再阻止
  * 退出；副本写入同样失败时仍上抛原始保存错误，内存副本由调用方保留。
@@ -312,6 +322,15 @@ export async function saveAiSession(id: string, session: AiSession): Promise<voi
         savedListeners.forEach((listener) => listener(id))
       }
     } catch (err) {
+      // 被拒可能只是序号陈旧（另一进程已写更新历史——无单实例约束）：
+      // 重读两副本序号，磁盘已不小于本次写入即冲突。不得写副本、不得登记
+      // 重试——逐次自增的重试终将压过磁盘序号，把旧历史写回新会话，绕过
+      // 顺序守卫；清出登记并上浮原错误，让用户重开项目载入更新的历史
+      const diskMax = await diskWriteSeqMax(id, invoke as Invoke)
+      if (diskMax >= writeSeq) {
+        if (sessionGenerations.get(id) === generation) clearSessionRetry(id)
+        throw err
+      }
       const stashed = await stashRecovery(id, session, writeSeq, invoke as Invoke)
       // 按节律重试直到成功（副本成功时用于补写权威文件，两者都失败时是
       // 唯一兜底）；不可恢复标记只在两者都失败时置位，供关闭屏障阻止退出

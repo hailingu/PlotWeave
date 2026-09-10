@@ -32,6 +32,9 @@ describe('loadAiSession Tauri 路径 · 副本取新与提升', () => {
       })
       .mockResolvedValueOnce(null)
       .mockRejectedValueOnce(new Error('只读目录'))
+      // 冲突检测重读（序号 0 → 真实失败）
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
       .mockResolvedValueOnce(undefined)
     const { loadAiSession } = await import('./aiSessionStore')
 
@@ -49,6 +52,8 @@ describe('loadAiSession Tauri 路径 · 副本取新与提升', () => {
       'load_ai_session',
       'load_ai_session_recovery',
       'save_ai_session',
+      'load_ai_session',
+      'load_ai_session_recovery',
       'stash_ai_session_recovery',
     ])
   })
@@ -58,6 +63,9 @@ describe('loadAiSession Tauri 路径 · 副本取新与提升', () => {
       .mockResolvedValueOnce(session('旧权威', 100))
       .mockResolvedValueOnce(session('恢复副本', 200))
       .mockRejectedValueOnce(new Error('磁盘已满'))
+      // 冲突检测重读（磁盘最大序号 200 < 本次写入 201 → 真实失败）
+      .mockResolvedValueOnce(session('旧权威', 100))
+      .mockResolvedValueOnce(session('恢复副本', 200))
       .mockResolvedValueOnce(undefined)
     const { loadAiSession } = await import('./aiSessionStore')
 
@@ -168,12 +176,22 @@ describe('saveAiSession Tauri 路径', () => {
     const { loadAiSession, saveAiSession } = await import('./aiSessionStore')
     await loadAiSession('p1')
     invoke.mockReset()
-    invoke.mockRejectedValueOnce(new Error('磁盘已满')).mockResolvedValueOnce(undefined)
+    invoke
+      .mockRejectedValueOnce(new Error('磁盘已满'))
+      // 冲突检测重读（磁盘序号 5 仍小于本次写入 6 → 真实 I/O 失败）
+      .mockResolvedValueOnce(session('权威', 5))
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(undefined)
 
     await expect(saveAiSession('p1', payload)).rejects.toThrow('磁盘已满')
-    expect(commandsOf()).toEqual(['save_ai_session', 'stash_ai_session_recovery'])
+    expect(commandsOf()).toEqual([
+      'save_ai_session',
+      'load_ai_session',
+      'load_ai_session_recovery',
+      'stash_ai_session_recovery',
+    ])
     const saved = invoke.mock.calls[0][1] as { session: { writeSeq: number } }
-    const stash = invoke.mock.calls[1][1] as { session: { writeSeq: number } }
+    const stash = invoke.mock.calls[3][1] as { session: { writeSeq: number } }
     expect(saved.session.writeSeq).toBe(6)
     expect(stash.session.writeSeq).toBe(6)
   })
@@ -211,6 +229,9 @@ describe('saveAiSession Tauri 路径', () => {
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce(null)
       .mockRejectedValueOnce(new Error('磁盘已满'))
+      // 冲突检测重读（序号 0 → 真实失败）
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
       .mockRejectedValueOnce(new Error('恢复目录只读'))
     const { saveAiSession } = await import('./aiSessionStore')
 
@@ -256,7 +277,11 @@ describe('saveAiSession 失败重试与退出冲刷', () => {
     invoke.mockResolvedValueOnce(session('权威', 5)).mockResolvedValueOnce(null)
     await store.loadAiSession('p1')
     invoke.mockReset()
-    invoke.mockRejectedValueOnce(new Error('磁盘已满'))
+    invoke
+      .mockRejectedValueOnce(new Error('磁盘已满'))
+      // 冲突检测重读（磁盘序号 5 < 本次写入 6 → 真实 I/O 失败）
+      .mockResolvedValueOnce(session('权威', 5))
+      .mockResolvedValueOnce(null)
     if (stashOk) invoke.mockResolvedValueOnce(undefined)
     else invoke.mockRejectedValueOnce(new Error('恢复目录只读'))
     await expect(store.saveAiSession('p1', payload)).rejects.toThrow('磁盘已满')
@@ -322,6 +347,8 @@ describe('saveAiSession 失败重试与退出冲刷', () => {
 })
 
 describe('saveAiSession 新旧未知门禁', () => {
+  afterEach(() => vi.useRealTimers())
+
   it('恢复副本不可读期间：变更保存整次暂缓，不写盘不登记重试；重开确立定序后恢复保存', async () => {
     const store = await import('./aiSessionStore')
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -354,6 +381,33 @@ describe('saveAiSession 新旧未知门禁', () => {
 
     await expect(store.saveAiSession('p1', payload)).rejects.toThrow('暂缓')
     expect(commandsOf()).toEqual([])
+  })
+
+  it('序号陈旧冲突（他进程已写更新历史）不写副本不登记重试：上浮重载提示', async () => {
+    vi.useFakeTimers()
+    const store = await import('./aiSessionStore')
+    invoke.mockResolvedValueOnce(session('权威', 5)).mockResolvedValueOnce(null)
+    await store.loadAiSession('p1')
+    invoke.mockReset()
+    // 主保存被顺序守卫拒绝；重读发现磁盘序号（9）已不小于本次写入（6）
+    invoke
+      .mockRejectedValueOnce(
+        new Error('AI 会话文件比本次保存更新，已拒绝覆盖（请重新打开项目载入更新的历史）'),
+      )
+      .mockResolvedValueOnce(session('他进程权威', 9))
+      .mockResolvedValueOnce(null)
+
+    await expect(store.saveAiSession('p1', payload)).rejects.toThrow('更新')
+    expect(commandsOf()).toEqual([
+      'save_ai_session',
+      'load_ai_session',
+      'load_ai_session_recovery',
+    ])
+    // 冲突快照不得进入重试循环：重试逐次自增序号终将压过磁盘序号、以旧
+    // 历史覆盖新会话，绕过顺序守卫
+    expect(store.hasPendingAiSessionSaves()).toBe(false)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(invoke).toHaveBeenCalledTimes(3)
   })
 
   it('两副本都不可读（载入上浮）同样登记门禁；删除项目清出', async () => {
@@ -474,13 +528,18 @@ describe('saveAiSession 在途保存与定时器代次', () => {
     const store = await import('./aiSessionStore')
     await store.loadAiSession('p1')
     invoke.mockReset()
+    // 每次失败：save 拒绝 → 冲突重读 ×2（序号 5 → 真实失败）→ 副本拒绝
     invoke
       .mockRejectedValueOnce(new Error('磁盘已满'))
+      .mockResolvedValueOnce(session('权威', 5))
+      .mockResolvedValueOnce(null)
       .mockRejectedValueOnce(new Error('恢复目录只读'))
     await expect(store.saveAiSession('p1', session('旧会话', 6))).rejects.toThrow('磁盘已满')
     invoke.mockReset()
     invoke
       .mockRejectedValueOnce(new Error('磁盘已满'))
+      .mockResolvedValueOnce(session('权威', 5))
+      .mockResolvedValueOnce(null)
       .mockRejectedValueOnce(new Error('恢复目录只读'))
     await expect(store.saveAiSession('p1', session('新会话', 7))).rejects.toThrow('磁盘已满')
 
