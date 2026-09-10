@@ -2,7 +2,6 @@ import {
   branchOptionHandle,
   connectionEndpointIssue,
   type EdgeKind,
-  type EndpointPair,
   hasAttachHost,
   removedOptionHandles,
   SCENE_SHOT_HANDLE,
@@ -26,6 +25,13 @@ import {
   reresolveTentativeEdges,
   type TentativeEdgeHost,
 } from './tentativeEdges'
+import {
+  edgePairKey,
+  residualBreaksCycle,
+  residualEdgesAt,
+  type FailedEdgeHost,
+  type VirtualEdge,
+} from './failedEdges'
 
 /**
  * AI 批命令的逐条折叠校验实现域（commands.ts 拆分，issue 39）：在
@@ -76,25 +82,17 @@ function reasonOf(cmd: Record<string, unknown>): string {
  * 收敛在 FoldState；validateAiBatch 只负责建状态与分发。
  */
 
-/** 折叠校验的虚拟边：端点 + 源端口/连线类型（与 AiGraphSnapshot.edges 同形）。 */
-type VirtualEdge = EndpointPair & { sourceHandle?: string | null; type?: string }
-
 /** 折叠校验的虚拟图状态：随每条命令演进的最终态投影。
  * 实体域（issue 44）经 EntityFoldHost 接口并入：既有 + 本批投影的实体
  * 注册表、ref 别名、失败 upsert 的 ghost 登记由 entityFold.ts 消费；
  * contingent 出口连线的暂定投影簿记（branchOptions/exists 等共享状态）
- * 经 TentativeEdgeHost 接口由 tentativeEdges.ts 消费。 */
-interface FoldState extends EntityFoldHost, TentativeEdgeHost {
+ * 经 TentativeEdgeHost 接口由 tentativeEdges.ts 消费；失败连线变更的
+ * 登记与残留边快照经 FailedEdgeHost 接口由 failedEdges.ts 消费。 */
+interface FoldState extends EntityFoldHost, TentativeEdgeHost, FailedEdgeHost {
   labels: Map<string, string>
   types: Map<string, string>
-  virtualEdges: VirtualEdge[]
   /** ref 别名 → 所属节点 id。 */
   refOwner: Map<string, string>
-  /** 本批失败的连线变更（op + 原始端点 token 对）→ 失败断线登记时同对
-   * 残留边的身份快照（失败连线命令为空集）：依赖其变更结果的后续连线
-   * 命令按 contingent 跳过（见 isContingentEdgePair）。快照用于判定
-   * 「修正这条断线能否消除环」——本批后加的边不在快照内，不随之自愈。 */
-  failedEdgePairs: Map<string, ReadonlySet<string>>
   /** 项目资产索引（id → MIME）：shot.refs 引用位校验用。 */
   assets: ReadonlyMap<string, string>
 }
@@ -481,9 +479,15 @@ function cycleContingent(
     return false
   }
   // 自环独立于任何前序断线结果，不适用 contingent 豁免
-  if (src !== dst && residualBreaksCycle(st, cmd, flow, src, dst)) return true
+  if (src !== dst && residualBreaksCycle(st, disconnectPairKeyOf(cmd), flow, src, dst)) return true
   st.fail(index, `会造成循环剧情：${pairLabel}`)
   return true
+}
+
+/** 失败断线登记键的现算（cycleContingent 拆出，S3776）：按模型自报的
+ * 原始端点 token 组键，与 registerFailedMutation 的登记键同形。 */
+function disconnectPairKeyOf(cmd: Record<string, unknown>): string {
+  return edgePairKey('disconnect_edge', asText(cmd.sourceId), asText(cmd.targetId))
 }
 
 /** 暂定出口边的拓扑形态（无句柄 branch 边，仅参与成环判定）。 */
@@ -496,39 +500,6 @@ function tentativeTopology(st: FoldState): VirtualEdge[] {
   }))
 }
 
-/** 虚拟边身份键（端点 + 源端口）：失败断线的残留快照与当前边按此比对。 */
-function edgeIdentityOf(e: VirtualEdge): string {
-  return `${e.source}\u0000${e.target}\u0000${e.sourceHandle ?? ''}`
-}
-
-/** 失败断线登记时的同对残留边快照（含端点写反：两方向都算同一对）：
- * 修正断线只可能移除这些边；快照外的边由本批后续命令新增，修正后仍在。 */
-function residualEdgesAt(st: FoldState, cmd: Record<string, unknown>): ReadonlySet<string> {
-  if (cmd.op !== 'disconnect_edge') return new Set<string>()
-  const s = asText(cmd.sourceId)
-  const t = asText(cmd.targetId)
-  return new Set(
-    st.virtualEdges
-      .filter((e) => (e.source === s && e.target === t) || (e.source === t && e.target === s))
-      .map(edgeIdentityOf),
-  )
-}
-
-/** 残留边快照全部移除后即不成环 → 这条环随断线修正自愈，按 contingent
- * 跳过；环依赖快照外（本批新增）的边时独立点名，不被早先断线失败豁免。 */
-function residualBreaksCycle(
-  st: FoldState,
-  cmd: Record<string, unknown>,
-  flow: readonly VirtualEdge[],
-  src: string,
-  dst: string,
-): boolean {
-  const residual = st.failedEdgePairs.get(edgePairKey('disconnect_edge', cmd))
-  if (residual === undefined || residual.size === 0) return false
-  const remaining = flow.filter((e) => !residual.has(edgeIdentityOf(e)))
-  return !wouldCreateCycle(remaining, src, dst)
-}
-
 /** contingent 端点的可判类型（评审 5165573246）：token 指向本批失败
  * create 的 ref 时取其登记的暂定类型（nodeType 已独立过检），指向既有
  * 节点时取实际类型；悬空 token 或未登记暂定类型返回 undefined，对应
@@ -539,24 +510,49 @@ function contingentTypeOf(st: FoldState, token: string): string | undefined {
   return owner !== undefined ? st.types.get(owner) : undefined
 }
 
-/** contingent 连线（端点依赖失败 create）的内在约束（评审 5165573246）：
- * 与 contingent options 更新同口径——只豁免依赖修复后状态的检查（端点
- * 解析、选项表上界与句柄），内在非法的连线类型/optionIndex、按暂定类型
- * 可判的端点约束与已占宿主首轮点名，完整清单不缺项；成环不可能经未入
- * 图的虚拟端点，无需拓扑判定。返回错误文案或 null。 */
+/** contingent 连线（端点依赖失败 create）的逐端独立校验（评审
+ * 5165573246、5168865025）：先检内在的连线类型与端点存在性，再按两端
+ * 可判状态检端口约束——非 contingent 端点立即应用可观测检查，contingent
+ * 端点以登记暂定类型参与；成环不可能经未入图的虚拟端点，无需拓扑判定。
+ * 返回错误文案或 null。 */
 function contingentConnectIntrinsicIssue(st: FoldState, cmd: Record<string, unknown>): string | null {
   const kind = asText(cmd.edgeKind) || 'sequence'
   const pair = `${asText(cmd.sourceId)} → ${asText(cmd.targetId)}`
   if (!(kind in EDGE_KIND_LABELS)) return `未知连线类型：${kind}`
-  const srcType = contingentTypeOf(st, asText(cmd.sourceId))
-  const dstType = contingentTypeOf(st, asText(cmd.targetId))
+  const srcContingent = isContingentRef(st, cmd, 'sourceId')
+  const dstContingent = isContingentRef(st, cmd, 'targetId')
+  const src = srcContingent ? null : resolveRef(st, cmd, 'sourceId')
+  const dst = dstContingent ? null : resolveRef(st, cmd, 'targetId')
+  // 非 contingent 且缺失：修复 create 也不会使其存在，独立点名
+  if ((!srcContingent && src === null) || (!dstContingent && dst === null)) return `端点不存在：${pair}`
+  return contingentPortIssue(st, cmd, kind, pair, src, dst)
+}
+
+/** contingent 连线的端口约束（contingentConnectIntrinsicIssue 拆出，
+ * S3776）：src/dst 为已解析端点 id 或 null（contingent）。两端类型可判
+ * （contingent 取暂定类型）时报端点约束；attach 目标已解析时查宿主
+ * 唯一；branch 源已解析且选项表未被失败更新触及时查上界与句柄；内在
+ * 非法 optionIndex 不随任何修复生效。 */
+function contingentPortIssue(
+  st: FoldState,
+  cmd: Record<string, unknown>,
+  kind: string,
+  pair: string,
+  src: string | null,
+  dst: string | null,
+): string | null {
+  const srcType = src !== null ? st.types.get(src) : contingentTypeOf(st, asText(cmd.sourceId))
+  const dstType = dst !== null ? st.types.get(dst) : contingentTypeOf(st, asText(cmd.targetId))
   if (srcType !== undefined && dstType !== undefined) {
     const endpointIssue = connectionEndpointIssue(srcType, dstType, kind as EdgeKind)
     if (endpointIssue) return `${endpointIssue}：${pair}`
   }
-  const dst = asText(cmd.targetId)
-  if (kind === 'attach' && st.exists.has(dst) && hasAttachHost(st.virtualEdges, dst)) {
+  if (kind === 'attach' && dst !== null && hasAttachHost(st.virtualEdges, dst)) {
     return `分镜卡已有宿主，换宿主须先断开：${pair}`
+  }
+  if (kind === 'branch' && src !== null && !st.failedBranchOptionUpdates.has(src)) {
+    const port = edgePortOf(st, kind, cmd, src, dst ?? asText(cmd.targetId))
+    if (typeof port === 'string') return port
   }
   if (kind === 'branch' && srcType === 'branch' && !isIntrinsicOptionIndex(cmd.optionIndex)) {
     return `optionIndex 须为非负整数：${pair}`
@@ -606,7 +602,7 @@ function foldDisconnectEdge(
   if (!hadEdge && !droppedTentative) {
     // 目标边不存在可能因本批同对的 connect 失败： contingent 跳过，
     // 随连线修正自愈，不误报「没有这条连线」
-    if (st.failedEdgePairs.has(edgePairKey('connect_edge', cmd))) return
+    if (st.failedEdgePairs.has(edgePairKey('connect_edge', asText(cmd.sourceId), asText(cmd.targetId)))) return
     return st.fail(index, `没有这条连线：${pairLabel}`)
   }
   // 仅命中前序暂定投影：该断线依赖前序修复，按 contingent 静默跳过
@@ -635,11 +631,6 @@ const FOLDERS: Record<string, (st: FoldState, cmd: Record<string, unknown>, inde
   disconnect_edge: (st, cmd, index) => foldEdge(st, cmd, index, 'disconnect_edge'),
   upsert_character: (st, cmd, index) => foldUpsert(st, cmd, index, 'character'),
   upsert_location: (st, cmd, index) => foldUpsert(st, cmd, index, 'location'),
-}
-
-/** 失败连线变更的原始端点对键（op + 模型自报 token，含拼错的端点）。 */
-function edgePairKey(op: string, cmd: Record<string, unknown>): string {
-  return `${op}\u0000${asText(cmd.sourceId)}\u0000${asText(cmd.targetId)}`
 }
 
 /** 失败的 branch options 更新分类登记（registerFailedMutation 拆出，
@@ -716,7 +707,12 @@ function registerFailedMutation(st: FoldState, raw: Record<string, unknown>, ind
     return
   }
   if (raw.op === 'connect_edge' || raw.op === 'disconnect_edge') {
-    st.failedEdgePairs.set(edgePairKey(raw.op as string, raw), residualEdgesAt(st, raw))
+    const source = asText(raw.sourceId)
+    const target = asText(raw.targetId)
+    st.failedEdgePairs.set(
+      edgePairKey(raw.op as string, source, target),
+      residualEdgesAt(st, source, target),
+    )
     return
   }
   if (raw.op === 'upsert_character' || raw.op === 'upsert_location') {

@@ -786,9 +786,9 @@ describe('失败 create 的 contingent 连线仍独立点名内在约束（评�
       ],
       richSnap(),
     )
+    // 拒绝语义按命令定位断言（评审 5163320408 处置：诊断措辞不作契约）
     expect(v.issues).toHaveLength(2)
     expect(v.issues[1]?.index).toBe(1)
-    expect(v.issues[1]?.message).toContain('attach')
   })
 
   it('目标分镜已占宿主的 contingent attach 首轮点名（同不变量的相邻入口）', () => {
@@ -804,9 +804,9 @@ describe('失败 create 的 contingent 连线仍独立点名内在约束（评�
       ],
       snapWithHost,
     )
+    // 拒绝语义按命令定位断言（评审 5163320408 处置：诊断措辞不作契约）
     expect(v.issues).toHaveLength(2)
     expect(v.issues[1]?.index).toBe(1)
-    expect(v.issues[1]?.message).toContain('宿主')
   })
 
   it('内在合法的连线维持 contingent 跳过；未知连线类型仍点名；暂定类型未知不点名（对照）', () => {
@@ -828,7 +828,9 @@ describe('失败 create 的 contingent 连线仍独立点名内在约束（评�
       ],
       richSnap(),
     )
-    expect(badKind.issues.some((i) => i.index === 1 && i.message.includes('未知连线类型'))).toBe(true)
+    // 拒绝语义按命令定位断言（评审 5168865025：诊断措辞不作契约）
+    expect(badKind.issues).toHaveLength(2)
+    expect(badKind.issues[1]?.index).toBe(1)
 
     const unknownType = validateAiBatch(
       [
@@ -838,8 +840,53 @@ describe('失败 create 的 contingent 连线仍独立点名内在约束（评�
       richSnap(),
     )
     // nodeType 未过检、无暂定类型可判：内在约束维持 contingent 跳过（与
-    // contingentUpdateIssue 未知类型语义一致）
+    // contingentUpdateIssue 未知类型语义一致）；仅 create 被点名
     expect(unknownType.issues).toHaveLength(1)
-    expect(unknownType.issues[0]?.message).toContain('未知节点类型')
+    expect(unknownType.issues[0]?.index).toBe(0)
+  })
+})
+
+// contingent 连线的逐端独立解析（评审 5168865025）：一端 contingent 时
+// 另一端的可观测状态首轮校验——branch 源已解析且选项表未被失败更新触及
+// 时上界与句柄立即可判；attach 目标经成功 create ref 解析到虚拟 id 后
+// 宿主可判（原始 ref token 不可判）；非 contingent 且真实缺失的端点独立
+// 点名（修复 create 也不会使其存在）。
+describe('contingent 连线的逐端独立解析（评审 5168865025）', () => {
+  it('源为既有分支、目标 contingent：越界 optionIndex 按已知选项表首轮点名', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'create_node', nodeType: 'scene', ref: 'ns', data: { name: 5 } },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 'ns', edgeKind: 'branch', optionIndex: 2 },
+      ],
+      richSnap(),
+    )
+    expect(v.issues).toHaveLength(2)
+    expect(v.issues[1]?.index).toBe(1)
+  })
+
+  it('目标经成功 create ref 已有宿主：contingent attach 首轮点名', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'create_node', nodeType: 'scene', ref: 'ns', data: { name: 5 } },
+        { op: 'create_node', nodeType: 'shot', ref: 'nsh', data: {} },
+        { op: 'connect_edge', sourceId: 's1', targetId: 'nsh', edgeKind: 'attach' },
+        { op: 'connect_edge', sourceId: 'ns', targetId: 'nsh', edgeKind: 'attach' },
+      ],
+      richSnap(),
+    )
+    expect(v.issues).toHaveLength(2)
+    expect(v.issues[1]?.index).toBe(3)
+  })
+
+  it('非 contingent 端点真实缺失：独立点名，不随 create 修复自愈', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'create_node', nodeType: 'beat', ref: 'bt', data: { label: 5 } },
+        { op: 'connect_edge', sourceId: 'bt', targetId: 'ghost', edgeKind: 'branch', optionIndex: 0 },
+      ],
+      richSnap(),
+    )
+    expect(v.issues).toHaveLength(2)
+    expect(v.issues[1]?.index).toBe(1)
   })
 })
