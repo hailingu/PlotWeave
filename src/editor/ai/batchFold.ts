@@ -20,8 +20,13 @@ import { branchOptionsError, normalizeNodeFields, plainObject } from './patchSha
 import type { AiGraphSnapshot, BatchValidation } from './commands'
 import {
   activeTentativeEdges,
+  contingentTypeOf,
+  createGhostConnectIssue,
   dropTentativeEdge,
+  isIntrinsicOptionIndex,
   registerTentativeEdge,
+  releaseCreateGhostConnect,
+  retireCreateGhostConnects,
   reresolveTentativeEdges,
   type TentativeEdgeHost,
 } from './tentativeEdges'
@@ -158,6 +163,9 @@ function foldUpdate(st: FoldState, cmd: Record<string, unknown>, index: number):
   const patch = cmd.patch
   if (!plainObject(patch) || Object.keys(patch).length === 0) return st.fail(index, 'patch 为空')
   if (isContingentRef(st, cmd, 'nodeId')) {
+    // 触及 options 的 contingent 更新退役该分支的 ghost 判重键（评审
+    // 5169363253）：表替换后同下标连线不再必然同端口
+    retireCreateGhostConnects(st, cmd)
     // contingent：目标节点尚未入虚拟图。任何节点类型都不支持的字段恒非法；
     // 失败 create 的 nodeType 已独立通过校验时，暂定类型可判——修正 data
     // 不改变已声明的类型语义，按该类型的完整写载荷错误即使 create 修复后
@@ -288,12 +296,6 @@ function connectKindTag(kind: string, optionIndex: number | undefined): string {
   if (kind === 'branch') return `（${EDGE_KIND_LABELS[kind]} ${(optionIndex ?? 0) + 1}）`
   return `（${EDGE_KIND_LABELS[kind]}）`
 }
-
-/** optionIndex 的内在合法性（foldConnectEdge 拆出，S3776）：非负整数，
- * 不依赖选项表——contingent 只豁免依赖修复后选项表的上界与句柄检查，
- * 内在非法值不随任何修复生效（评审 5163320408）。 */
-const isIntrinsicOptionIndex = (idx: unknown): boolean =>
-  typeof idx === 'number' && Number.isInteger(idx) && idx >= 0
 
 /** 连线端口的分端口校验（§4.4）：产出目标 handle 与选项序号；
  * 返回 string = 错误文案。 */
@@ -479,35 +481,24 @@ function cycleContingent(
     return false
   }
   // 自环独立于任何前序断线结果，不适用 contingent 豁免
-  if (src !== dst && residualBreaksCycle(st, disconnectPairKeyOf(cmd), flow, src, dst)) return true
+  if (src !== dst && residualBreaksCycle(st, edgePairKey('disconnect_edge', asText(cmd.sourceId), asText(cmd.targetId)), flow, src, dst)) return true
   st.fail(index, `会造成循环剧情：${pairLabel}`)
   return true
 }
 
-/** 失败断线登记键的现算（cycleContingent 拆出，S3776）：按模型自报的
- * 原始端点 token 组键，与 registerFailedMutation 的登记键同形。 */
-function disconnectPairKeyOf(cmd: Record<string, unknown>): string {
-  return edgePairKey('disconnect_edge', asText(cmd.sourceId), asText(cmd.targetId))
-}
-
-/** 暂定出口边的拓扑形态（无句柄 branch 边，仅参与成环判定）。 */
+/** 暂定出口边的拓扑形态（无句柄 branch 边，仅参与成环判定）：只含未解析
+ * 投影——表落定后转换的已绑定投影，其存活跨越表替换事件是修复条件性的
+ * （修复为不同选项时被级联删除），成环不必然成立、不参与判定（评审
+ * 5169363253）；已绑定投影仍参与断线命中与已落定判重（activeTentativeEdges）。 */
 function tentativeTopology(st: FoldState): VirtualEdge[] {
-  return activeTentativeEdges(st).map((e) => ({
-    source: e.source,
-    target: e.target,
-    sourceHandle: null,
-    type: 'branch',
-  }))
-}
-
-/** contingent 端点的可判类型（评审 5165573246）：token 指向本批失败
- * create 的 ref 时取其登记的暂定类型（nodeType 已独立过检），指向既有
- * 节点时取实际类型；悬空 token 或未登记暂定类型返回 undefined，对应
- * 检查维持 contingent 跳过。 */
-function contingentTypeOf(st: FoldState, token: string): string | undefined {
-  if (st.exists.has(token)) return st.types.get(token)
-  const owner = st.refOwner.get(token)
-  return owner !== undefined ? st.types.get(owner) : undefined
+  return activeTentativeEdges(st)
+    .filter((e) => e.unresolvedIndex !== undefined)
+    .map((e) => ({
+      source: e.source,
+      target: e.target,
+      sourceHandle: null,
+      type: 'branch',
+    }))
 }
 
 /** contingent 连线（端点依赖失败 create）的逐端独立校验（评审
@@ -565,11 +556,13 @@ function foldEdge(st: FoldState, cmd: Record<string, unknown>, index: number, op
   const ends = resolveEndpoints(st, cmd, index)
   if (ends === 'contingent') {
     // 端点依赖失败 create（非数组 options 等新拒绝类使该路径常态化）：
-    // 内在约束不随 create 修复自愈，首轮点名（评审 5165573246）；断线无
-    // 内在约束，维持静默跳过
+    // 内在约束与 ghost 判重不随 create 修复自愈，首轮点名（评审
+    // 5165573246、5169363253）；断线释放 ghost 登记后静默跳过
     if (op === 'connect_edge') {
-      const issue = contingentConnectIntrinsicIssue(st, cmd)
-      if (issue !== null) st.fail(index, issue)
+      const issue = contingentConnectIntrinsicIssue(st, cmd) ?? createGhostConnectIssue(st, cmd)
+      if (issue !== null) return st.fail(index, issue)
+    } else {
+      releaseCreateGhostConnect(st, asText(cmd.sourceId), asText(cmd.targetId))
     }
     return
   }

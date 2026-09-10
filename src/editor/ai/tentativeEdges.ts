@@ -1,16 +1,24 @@
 /**
- * contingent 出口连线的暂定投影簿记（batchFold.ts 拆分，评审迭代域）：
- * 依赖失败 branch options 更新的出口连线不进虚拟图，以「端点 + 稳定选项
- * id」的投影登记于此——生效与否按当前选项表派生（activeTentativeEdges），
- * 选项表覆盖时重解析/级联退役（reresolveTentativeEdges），端点断线按执行
- * 通道语义移除全部匹配投影（dropTentativeEdge）。折叠状态由
+ * contingent 出口连线的暂定投影与判重键簿记（batchFold.ts 拆分，评审
+ * 迭代域）：依赖失败 branch options 更新的出口连线不进虚拟图，以「端点
+ * + 原始下标」的未解析投影登记（raw:N 身份不绑定失败更新前的旧表，评审
+ * 5169363253）——生效与否按当前选项表派生（activeTentativeEdges），表
+ * 覆盖时重解析/级联退役（reresolveTentativeEdges），端点断线按执行通道
+ * 语义移除全部匹配投影（dropTentativeEdge）；依赖失败 create 的连线以
+ * ghost 判重键登记（createGhostConnectIssue 及释放/退役）。折叠状态由
  * batchFold.FoldState 经 TentativeEdgeHost 接口供给（同 EntityFoldHost
  * 模式，issue 44）。
  */
 
-/** contingent 出口边的暂定投影：解析到稳定选项 id 的常规投影，或下标越出
- * 登记时表长的未解析投影（optionId 为 raw: 哨兵、unresolvedIndex 记原始
- * 下标，评审 5164170010）。 */
+import { plainObject } from './patchShape'
+
+/** 模块内文本 token 提取（batchFold.asText 同形；避免反向依赖）。 */
+const textOf = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
+
+/** contingent 出口边的暂定投影：登记时只保留原始下标（optionId 为 raw:
+ * 哨兵、unresolvedIndex 记原始下标，评审 5169363253——失败更新前的旧表
+ * id 不是绑定额）；表落定（成功或暂定生效）时经 reresolveTentativeEdges
+ * 转为绑定稳定选项 id 的已解析投影（unresolvedIndex 缺省）。 */
 export interface TentativeEdge {
   source: string
   target: string
@@ -22,31 +30,42 @@ export interface TentativeEdge {
 export interface TentativeEdgeHost {
   /** branch 节点 id → 选项列表（校验 optionIndex 并解析稳定选项 id 端口）。 */
   branchOptions: Map<string, Array<{ id: string; label: string }>>
-  /** 依赖失败 options 更新的暂定出口边（端点与稳定选项 id 已确定、句柄待
-   * 解析；生效与否按当前选项表派生，见 activeTentativeEdges）。 */
+  /** 依赖失败 options 更新的暂定出口边（端点与原始下标已确定、句柄与
+   * 稳定 id 待表落定后解析；生效与否按当前选项表派生，见
+   * activeTentativeEdges）。 */
   tentativeEdges: TentativeEdge[]
   /** 本批尚未删除的节点 id（含 __new__ 虚拟 id）。 */
   exists: Set<string>
+  /** 节点 id → 类型（失败 create 的暂定类型由 registerFailedMutation 登记，
+   * 供 contingent 端点的类型可判约束使用）。 */
+  types: Map<string, string>
+  /** ref 别名 → 所属节点 id（失败 create 指向未入图的虚拟 id，ghost
+   * 判重键的端点身份经此解析）。 */
+  refOwner: Map<string, string>
   /** 本批 options 更新失败的分支节点 id：其出口连线的 optionIndex 校验
    * 随前序修复自愈，按 contingent 跳过（同 ref 依赖，见 isContingentRef）。 */
   failedBranchOptionUpdates: Set<string>
-  /** contingent 出口连线的判重键（端点 + 登记时解析的稳定选项 id；不可
-   * 解析退回 #原始下标）：同键的后续连线无论修复后选项表如何都必然与前条
-   * 同端口（重复或一同失效），首轮点名；换位/改名保留 id 时重连仍同键
-   * （真阳性，评审 5163729170），绑定选项被成功或投影覆盖移除时随投影
-   * 级联退役（见 reresolveTentativeEdges，评审 5164450788）；断线撤销
-   * 登记时按键释放（见 dropTentativeEdge）。 */
+  /** contingent 出口连线的判重键（端点 + 原始下标，raw: 域；表落定后经
+   * 重解析转入 id: 域）：同键的后续连线无论修复后选项表如何都必然与前条
+   * 同端口（重复或一同失效），首轮点名；绑定 id 被覆盖移除时随投影级联
+   * 退役（见 reresolveTentativeEdges，评审 5164450788）；断线撤销登记与
+   * 触及 options 的 contingent 更新按端点/源释放（ghost 域，评审
+   * 5169363253）。 */
   contingentConnectKeys: Set<string>
 }
 
-/** contingent 出口连线登记（foldConnectEdge 拆出，S3776）：记录暂定投影
- * ——常规投影绑定当前表该下标的稳定选项 id，下标越出当前表长时登记未解
- * 析投影（optionId 为 raw: 哨兵、记原始下标，评审 5164170010），使后续
- * 同端点断线与成环判定按「该连线生效」评估。同端点的重复连线返回 false：
- * 判重键分域编码——id 域绑定登记时解析的稳定选项 id，越界回退域带 raw:
- * 前缀，选项 id 字面量再巧也不与回退键相撞（评审 5164170010）；换位/
- * 改名保留 id 时重连仍同键（真阳性，评审 5163729170），覆盖移除的选项
- * 随投影级联退役（见 reresolveTentativeEdges，评审 5164450788）。 */
+/** optionIndex 的内在合法性（非负整数；不依赖选项表）：contingent 只豁免
+ * 依赖修复后选项表的上界与句柄检查，内在非法值不随任何修复生效（评审
+ * 5163320408）。类型谓词：通过即收窄为 number。 */
+export const isIntrinsicOptionIndex = (idx: unknown): idx is number =>
+  typeof idx === 'number' && Number.isInteger(idx) && idx >= 0
+
+/** contingent 出口连线登记（foldConnectEdge 拆出，S3776）：身份只保留
+ * 原始下标（raw:N 哨兵 + unresolvedIndex，评审 5169363253）——失败更新
+ * 前的旧表 id 不是模型意图的代理（修复后的表才是绑定额），表落定（成功
+ * 或暂定生效）时经 reresolveTentativeEdges 重解析才绑定稳定 id。同端点
+ * 同下标的重复连线返回 false：无论修复后表如何，两条必然同端口（重复或
+ * 一同失效），首轮点名；断线撤销登记时按键释放（dropTentativeEdge）。 */
 export function registerTentativeEdge(
   st: TentativeEdgeHost,
   cmd: Record<string, unknown>,
@@ -54,18 +73,11 @@ export function registerTentativeEdge(
   dst: string,
 ): boolean {
   const idx = cmd.optionIndex
-  if (typeof idx !== 'number' || !Number.isInteger(idx) || idx < 0) return true
-  const option = (st.branchOptions.get(src) ?? [])[idx]
-  const key = option !== undefined
-    ? `${src}\u0000${dst}\u0000id:${option.id}`
-    : `${src}\u0000${dst}\u0000raw:${idx}`
+  if (!isIntrinsicOptionIndex(idx)) return true
+  const key = `${src}\u0000${dst}\u0000raw:${idx}`
   if (st.contingentConnectKeys.has(key)) return false
   st.contingentConnectKeys.add(key)
-  st.tentativeEdges.push(
-    option !== undefined
-      ? { source: src, target: dst, optionId: option.id }
-      : { source: src, target: dst, optionId: `raw:${idx}`, unresolvedIndex: idx },
-  )
+  st.tentativeEdges.push({ source: src, target: dst, optionId: `raw:${idx}`, unresolvedIndex: idx })
   return true
 }
 
@@ -126,4 +138,68 @@ export function dropTentativeEdge(st: TentativeEdgeHost, src: string, dst: strin
     st.contingentConnectKeys.delete(`${src}\u0000${dst}\u0000${tail}`)
   }
   return true
+}
+
+/** contingent 端点的可判类型（评审 5165573246）：token 指向本批失败
+ * create 的 ref 时取其登记的暂定类型（nodeType 已独立过检），指向既有
+ * 节点时取实际类型；悬空 token 或未登记暂定类型返回 undefined，对应
+ * 检查维持 contingent 跳过。 */
+export function contingentTypeOf(st: TentativeEdgeHost, token: string): string | undefined {
+  if (st.exists.has(token)) return st.types.get(token)
+  const owner = st.refOwner.get(token)
+  return owner !== undefined ? st.types.get(owner) : undefined
+}
+
+/** contingent 连线的端点身份（评审 5169363253）：非 contingent 端点取
+ * 解析 id，contingent 端点取失败 create 的 owner 虚拟 id（同一 ref 的
+ * 后续命令得到同一身份），悬空 token 原样返回。 */
+export function contingentEndpointId(st: TentativeEdgeHost, token: string): string {
+  if (st.exists.has(token)) return token
+  return st.refOwner.get(token) ?? token
+}
+
+/** 失败 create 端点的 contingent 连线 ghost 登记（评审 5169363253）：
+ * 内在约束全部通过后按「端点身份 + 原始下标」登记判重键——同端点同下标
+ * 的后续连线在修复后必然同端口（都绑定修复后表的同下标），重复首轮
+ * 点名。非 branch 连线无下标身份，不登记（attach 重复即宿主冲突，属
+ * 已知边界）；branchOptions 域键的 src/dst 与本域不相交（虚拟 id 不在
+ * exists，注册表键的端点恒为已解析 id）。返回错误文案或 null。 */
+export function createGhostConnectIssue(
+  st: TentativeEdgeHost,
+  cmd: Record<string, unknown>,
+): string | null {
+  if (textOf(cmd.edgeKind) !== 'branch' || !isIntrinsicOptionIndex(cmd.optionIndex)) return null
+  const src = contingentEndpointId(st, textOf(cmd.sourceId))
+  const dst = contingentEndpointId(st, textOf(cmd.targetId))
+  const key = `${src}\u0000${dst}\u0000raw:${cmd.optionIndex}`
+  if (st.contingentConnectKeys.has(key)) {
+    return `重复连线：${textOf(cmd.sourceId)} → ${textOf(cmd.targetId)}`
+  }
+  st.contingentConnectKeys.add(key)
+  return null
+}
+
+/** 端点断线释放 ghost 登记（评审 5169363253）：修复后该断线移除连线，
+ * 其后同端点同下标重连不再必然重复。 */
+export function releaseCreateGhostConnect(st: TentativeEdgeHost, source: string, target: string): void {
+  dropGhostConnectKeys(st, contingentEndpointId(st, source), contingentEndpointId(st, target))
+}
+
+/** 触及 options 的 contingent 更新退役该分支的 ghost 键（评审
+ * 5169363253）：更新替换选项表后，首条连线绑定 create 修复后的表、
+ * 重连绑定更新后的表，同下标不再必然同端口。 */
+export function retireCreateGhostConnects(st: TentativeEdgeHost, cmd: Record<string, unknown>): void {
+  const owner = st.refOwner.get(textOf(cmd.nodeId))
+  const patch = plainObject(cmd.patch) ? (cmd.patch as Record<string, unknown>) : undefined
+  if (owner !== undefined && patch !== undefined && 'options' in patch) {
+    dropGhostConnectKeys(st, owner)
+  }
+}
+
+/** ghost 判重键的成对/按源删除：dst 缺省时清除该源的全部 raw 域键。 */
+function dropGhostConnectKeys(st: TentativeEdgeHost, src: string, dst?: string): void {
+  const prefix = dst === undefined ? `${src}\u0000` : `${src}\u0000${dst}\u0000raw:`
+  for (const key of st.contingentConnectKeys) {
+    if (key.startsWith(prefix)) st.contingentConnectKeys.delete(key)
+  }
 }

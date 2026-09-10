@@ -365,7 +365,7 @@ describe('暂定出口边随选项表变化重算（评审 5143770306）', () =>
     expect(v.issues[0]?.message).toContain('异型')
   })
 
-  it('后续覆盖仍保留该选项位时，暂定出口边继续参与成环判定', () => {
+  it('后续覆盖仍保留该选项位时，反向连线维持 contingent（评审 5169363253 修订）', () => {
     const v = validateAiBatch(
       [
         { op: 'update_node', nodeId: 'b1', patch: { options: [{ label: 5 }] } },
@@ -375,9 +375,12 @@ describe('暂定出口边随选项表变化重算（评审 5143770306）', () =>
       ],
       richSnap(),
     )
-    expect(v.issues).toHaveLength(2)
+    // 覆盖形式（按位保留 vs 显式同 id）在折叠期不可区分：显式同 id 的
+    // 修复世界（首条更新修为选项 X）会级联删除该边、反向连线合法——成环
+    // 非必然，不再首轮点名（避免诱导改写正确的反向连线）；修复轮重折叠
+    // 时按落定表现全量判定（评审 5169363253，修订 5143770306 处置）
+    expect(v.issues).toHaveLength(1)
     expect(v.issues[0]?.message).toContain('异型')
-    expect(v.issues[1]?.message).toContain('会造成循环剧情')
   })
 })
 
@@ -555,7 +558,11 @@ describe('contingent 出口连线的同键重复判定（评审 5163489093）', 
     expect(v.issues.every((i) => i.index !== 4)).toBe(true)
   })
 
-  it('成功覆盖按位置改名保留原选项 id 时，同键重连仍判重复（对照）', () => {
+  // 评审 5163729170 + 5169363253 修订：登记按下标保留（不绑旧表 id），
+  // 覆盖后经重解析才绑定新表 idx0 的稳定 id；其后再次失败的更新使表回到
+  // 不确定态，同下标重连绑定的是修复后表的下标 0——修复为不同选项时两
+  // 条连线不同端口，重连不再必然重复（对照语义随评审 5169363253 修订）。
+  it('成功覆盖按位置改名保留原选项 id 后，同下标 contingent 重连不再必然重复', () => {
     const v = validateAiBatch(
       [
         { op: 'update_node', nodeId: 'b1', patch: { options: 'foo' } },
@@ -566,8 +573,10 @@ describe('contingent 出口连线的同键重复判定（评审 5163489093）', 
       ],
       richSnap(),
     )
-    // 字符串更新按位置对位保留 ob-a：两条连线同端口，重复是真阳性
-    expect(v.issues.some((i) => i.index === 4)).toBe(true)
+    // 重连登记 raw:0（表不确定），与覆盖时转换的 id:ob-a 键不同域不冲突
+    expect(v.issues).toHaveLength(2)
+    expect(v.issues.every((i) => i.message.includes('options'))).toBe(true)
+    expect(v.issues.every((i) => i.index !== 4)).toBe(true)
   })
 })
 
@@ -888,5 +897,117 @@ describe('contingent 连线的逐端独立解析（评审 5168865025）', () => 
     )
     expect(v.issues).toHaveLength(2)
     expect(v.issues[1]?.index).toBe(1)
+  })
+})
+
+// contingent 登记与旧表解绑（评审 5169363253）：contingent 连线的身份
+// 只保留原始下标（raw:N）——失败更新前的旧表 id 不是模型意图的代理，
+// 表落定（成功或暂定生效）时才经重解析绑定稳定 id；已绑定投影的存活
+// 跨越其后的表替换事件是修复条件性的，不参与成环判定（反向连线仅在
+// 环对所有修复世界都成立时点名）。
+describe('contingent 登记与旧表解绑（评审 5169363253）', () => {
+  it('失败更新后登记的投影经保留 id 的覆盖后，反向连线不误报成环', () => {
+    // 评审场景：connect idx0 绑定旧表 ob-a 是误报来源——修复为选项 X 时
+    // 真实边绑定 X，被保留 ob-a 的覆盖级联删除，反向连线本应合法
+    const v = validateAiBatch(
+      [
+        { op: 'update_node', nodeId: 'b1', patch: { options: 'foo' } },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
+        { op: 'update_node', nodeId: 'b1', patch: { options: [{ id: 'ob-a', label: '追' }] } },
+        { op: 'connect_edge', sourceId: 's1', targetId: 'b1' },
+      ],
+      richSnap(),
+    )
+    expect(v.issues).toHaveLength(1)
+    expect(v.issues[0]?.message).toContain('options')
+  })
+
+  it('未经表替换的 raw 投影维持成环判定（既有语义回归）', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'update_node', nodeId: 'b1', patch: { options: 'foo' } },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
+        { op: 'connect_edge', sourceId: 's1', targetId: 'b1' },
+      ],
+      richSnap(),
+    )
+    // 无中间表事件：任何修复下该边都存在，反向连线必然成环，首轮点名
+    expect(v.issues).toHaveLength(2)
+    expect(v.issues[1]?.index).toBe(2)
+  })
+})
+
+// 失败 create 的 contingent 连线 ghost 判重（评审 5169363253）：branch
+// create 被拒后，同端点同下标的两条 contingent 连线在修复后必然同端口
+// （都绑定修复后表的同下标），首轮点名重复；断线与触及 options 的
+// contingent 更新使端口绑定不再必然相同时，ghost 键随之释放/退役。
+describe('失败 create 的 contingent 连线 ghost 判重（评审 5169363253）', () => {
+  it('两条同端点同下标的 contingent 连线首轮点名重复', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'create_node', nodeType: 'branch', ref: 'nb', data: { prompt: '？', options: 42 } },
+        { op: 'connect_edge', sourceId: 'nb', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
+        { op: 'connect_edge', sourceId: 'nb', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
+      ],
+      richSnap(),
+    )
+    expect(v.issues).toHaveLength(2)
+    expect(v.issues[1]?.index).toBe(2)
+  })
+
+  it('断线撤销 ghost 登记后，同端点同下标重连合法', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'create_node', nodeType: 'branch', ref: 'nb', data: { prompt: '？', options: 42 } },
+        { op: 'connect_edge', sourceId: 'nb', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
+        { op: 'disconnect_edge', sourceId: 'nb', targetId: 's1' },
+        { op: 'connect_edge', sourceId: 'nb', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
+      ],
+      richSnap(),
+    )
+    expect(v.issues).toHaveLength(1)
+    expect(v.issues[0]?.message).toContain('options')
+  })
+
+  it('触及 options 的 contingent 更新退役 ghost 键，同下标重连不误报', () => {
+    const silent = validateAiBatch(
+      [
+        { op: 'create_node', nodeType: 'branch', ref: 'nb', data: { prompt: '？', options: 42 } },
+        { op: 'connect_edge', sourceId: 'nb', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
+        { op: 'update_node', nodeId: 'nb', patch: { options: [{ label: '修' }] } },
+        { op: 'connect_edge', sourceId: 'nb', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
+      ],
+      richSnap(),
+    )
+    // 静默 contingent 更新（载荷合法）同样替换选项表：首条连线绑定
+    // create 修复后的表，重连绑定更新后的表，不再必然同端口
+    expect(silent.issues).toHaveLength(1)
+    expect(silent.issues[0]?.message).toContain('options')
+
+    const flagged = validateAiBatch(
+      [
+        { op: 'create_node', nodeType: 'branch', ref: 'nb', data: { prompt: '？', options: 42 } },
+        { op: 'connect_edge', sourceId: 'nb', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
+        { op: 'update_node', nodeId: 'nb', patch: { options: [{ label: '修' }], nope: 1 } },
+        { op: 'connect_edge', sourceId: 'nb', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
+      ],
+      richSnap(),
+    )
+    // 独立失败的 contingent 更新（未知字段）同口径退役
+    expect(flagged.issues).toHaveLength(2)
+    expect(flagged.issues.every((i) => i.index !== 3)).toBe(true)
+  })
+
+  it('不同下标的 contingent 连线不误报重复（对照）', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'create_node', nodeType: 'branch', ref: 'nb', data: { prompt: '？', options: 42 } },
+        { op: 'connect_edge', sourceId: 'nb', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
+        { op: 'connect_edge', sourceId: 'nb', targetId: 's1', edgeKind: 'branch', optionIndex: 1 },
+      ],
+      richSnap(),
+    )
+    expect(v.issues).toHaveLength(1)
+    expect(v.issues[0]?.message).toContain('options')
   })
 })
