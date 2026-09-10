@@ -806,6 +806,36 @@ describe('validateAiBatch：分支 options 级联簿记前的成员形状校验�
     )
     expect(good.ok).toBe(true)
   })
+
+  it('options 非数组（issue 46）：update 与 create 整批拒绝并点名 options，不得直抵画布', () => {
+    const update = validateAiBatch(
+      [{ op: 'update_node', nodeId: 'b1', patch: { options: 'foo' } }],
+      richSnap(),
+    )
+    expect(update.ok).toBe(false)
+    expect(update.commands).toEqual([])
+    expect(update.issues[0]?.message).toContain('options 须为数组')
+
+    const create = validateAiBatch(
+      [{ op: 'create_node', nodeType: 'branch', data: { prompt: '？', options: 42 } }],
+      richSnap(),
+    )
+    expect(create.ok).toBe(false)
+    expect(create.commands).toEqual([])
+    expect(create.issues[0]?.message).toContain('options 须为数组')
+  })
+
+  it('contingent 路径同域（issue 46）：暂定类型为 branch 的 update 携非数组 options 独立点名', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'create_node', nodeType: 'branch', ref: 'nb', data: { prompt: '？', options: [{ label: 5 }] } },
+        { op: 'update_node', nodeId: 'nb', patch: { options: {} } },
+      ],
+      richSnap(),
+    )
+    expect(v.ok).toBe(false)
+    expect(v.issues.some((i) => i.index === 1 && i.message.includes('options 须为数组'))).toBe(true)
+  })
 })
 
 describe('AI 批量命令的逐类型载荷形状校验（信任边界：字段键白名单之外的值形状）', () => {
