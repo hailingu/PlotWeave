@@ -362,6 +362,15 @@ function foldConnectEdge(
   // source 分支的 options 状态：本批对该分支的 options 更新失败时延后
   // （随前序修复自愈）；端点类型、宿主唯一、成环等独立约束仍照常校验
   const optionContingent = kind === 'branch' && st.failedBranchOptionUpdates.has(src)
+  // contingent 只豁免依赖修复后选项表的检查（上界与句柄解析）：内在非法的
+  // optionIndex（缺省/非数值/负数/非整数）不随任何修复生效，首轮即点名，
+  // 完整清单不缺项（评审 5163320408）
+  if (optionContingent) {
+    const idx = cmd.optionIndex
+    if (typeof idx !== 'number' || !Number.isInteger(idx) || idx < 0) {
+      return st.fail(index, `optionIndex 须为非负整数：${pairLabel}`)
+    }
+  }
   let handle: string | null = null
   let optionIndex: number | undefined
   if (!optionContingent) {
