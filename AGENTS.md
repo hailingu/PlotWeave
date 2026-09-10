@@ -186,13 +186,43 @@ exported symbols are always P3.
   risk, or change a contract. Do not force a human decision for every
   batch, and do not default to fixing everything.
 - **Recording dispositions.** No exemption markers (`NOSONAR`, rule
-  suppressions) go into code. Ordinary suggestions resolved without change
-  MAY be recorded briefly — one line (location + reason) in the pull
-  request or an issue, so the decision stays traceable. Blocking or
-  disputed findings MUST be answered in the original review thread with the
-  resolving commit (or the decision not to change), the rationale, and the
-  verification evidence; a one-line pull-request or issue note alone does
-  not close them.
+  suppressions) go into code. Every review thread containing a finding,
+  suggestion, or question MUST receive a substantive reply in that original
+  thread, including automated reviews, duplicates, and findings resolved
+  without change. A pull-request summary, issue note, reaction, or resolved
+  flag alone does not satisfy this requirement. Pure acknowledgments and
+  informational notifications require no reply. Duplicate findings MAY
+  link to a canonical disposition, but each thread still needs a brief
+  explanation of why that disposition applies. Existing replies need only
+  be updated when new evidence or a changed disposition warrants it.
+
+### Review Thread Reply Structure
+
+Replies MUST use the following ordered, labeled fields; concise entries are
+sufficient, and the labels MAY be translated to match the conversation:
+
+1. **Disposition** — state whether the finding is fixed, resolved without
+   change, deferred, or awaiting an owner decision. Include its triage
+   classification and severity where applicable; answer any reviewer question
+   directly.
+2. **Rationale and change** — explain the relevant trigger, contract, or
+   policy and what changed, or why no change is appropriate. For fixes, cite
+   the resolving commit and relevant symbols or documentation sections.
+   If a fix is only local, say so explicitly and add the commit reference
+   once available; do not imply it has been pushed.
+3. **Verification** — provide relevant commands and results, or stable
+   evidence supporting a no-change decision. Disclose checks not run and
+   their reasons; do not claim verification that has not occurred.
+4. **Follow-up** — state remaining work, limitations, and any required owner
+   decision, linking a tracking issue or prior disposition when applicable.
+   Explicitly say when no follow-up remains.
+
+A substantive reply MUST precede marking a thread resolved. Deferred work
+or a pending owner decision MUST NOT be described as fixed. These reply
+requirements do not expand fix scope, override the review-round budget or
+severity policy, or authorize external posting beyond the user's granted
+scope. If posting is not authorized or is blocked, prepare the reply and
+report the pending thread and reason; do not claim the thread was answered.
 
 ### Issue Reporting
 
