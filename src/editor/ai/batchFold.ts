@@ -562,17 +562,20 @@ function edgePairKey(op: string, cmd: Record<string, unknown>): string {
 }
 
 /** 失败的 branch options 更新分类登记（registerFailedMutation 拆出，
- * S3776）：选项自身异型、结果无从折叠时登记 contingent 标记；选项合法、
- * 结果已确定时以归一化后的暂定选项表供下游连线独立校验，并清除早前标记
- * （级联断线簿记随前序修复后再折叠，为已记录边界）。 */
+ * S3776）：选项容器非数组或成员异型、无从折叠时登记 contingent 标记；
+ * 选项合法、结果已确定时以归一化后的暂定选项表供下游连线独立校验，并
+ * 清除早前标记（级联断线簿记随前序修复后再折叠，为已记录边界）。 */
 function registerFailedOptionsUpdate(
   st: FoldState,
   raw: Record<string, unknown>,
   target: string,
 ): void {
   const patch = plainObject(raw.patch) ? raw.patch : undefined
-  if (patch === undefined || !Array.isArray(patch.options)) return
-  if (branchOptionsError(patch.options as unknown[]) !== null) {
+  if (patch === undefined) return
+  // 非数组容器（issue 46 的拒绝形态）与成员异型同口径：无暂定表可派生，
+  // 仅登记 contingent——出口连线随前序修复自愈，不按未变更的旧表误报
+  // optionIndex 越界（评审 5163172679）
+  if (!Array.isArray(patch.options) || branchOptionsError(patch.options as unknown[]) !== null) {
     st.failedBranchOptionUpdates.add(target)
     return
   }
@@ -617,11 +620,13 @@ function registerFailedMutation(st: FoldState, raw: Record<string, unknown>, ind
   }
   if (raw.op === 'update_node') {
     const target = resolveRef(st, raw, 'nodeId')
+    // 失败更新只要触及 options 键（数组或非数组）都需分类登记：数组成员
+    // 异型/非数组容器 → contingent 标记，数组合法 → 暂定表（评审 5163172679）
     if (
       target !== null &&
       st.types.get(target) === 'branch' &&
       plainObject(raw.patch) &&
-      Array.isArray((raw.patch as Record<string, unknown>).options)
+      'options' in (raw.patch as Record<string, unknown>)
     ) {
       registerFailedOptionsUpdate(st, raw, target)
     }

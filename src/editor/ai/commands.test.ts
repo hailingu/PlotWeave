@@ -836,6 +836,20 @@ describe('validateAiBatch：分支 options 级联簿记前的成员形状校验�
     expect(v.ok).toBe(false)
     expect(v.issues.some((i) => i.index === 1 && i.message.includes('options 须为数组'))).toBe(true)
   })
+
+  it('非数组 options 更新失败同样登记 contingent（评审 5163172679）：越界连线不点名', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'update_node', nodeId: 'b1', patch: { options: 'foo' } },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 2 },
+      ],
+      richSnap(),
+    )
+    expect(v.ok).toBe(false)
+    expect(v.issues).toHaveLength(1)
+    expect(v.issues[0]?.message).toContain('options 须为数组')
+    expect(v.issues.map((i) => i.message).join('\n')).not.toContain('optionIndex')
+  })
 })
 
 describe('AI 批量命令的逐类型载荷形状校验（信任边界：字段键白名单之外的值形状）', () => {
