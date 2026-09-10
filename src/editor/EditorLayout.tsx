@@ -83,6 +83,7 @@ export default function EditorLayout(props: EditorLayoutProps) {
           aiSession={props.aiSession}
           aiSessionError={props.aiSessionError}
           aiSessionRetryable={props.aiSessionRetryable}
+          aiSessionLoadFailed={props.aiSessionLoadFailed}
           onSaveAiSession={props.onSaveAiSession}
         />
       </div>

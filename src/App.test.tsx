@@ -264,8 +264,7 @@ describe('App ✦AI 会话保存', () => {
     expect(editorProps.current.aiSession).toEqual(session)
   })
 
-  it('读取失败后用户实际变更会话：内存成为权威内容，重试标记恢复为 true', async () => {
-    store.loadAiSession.mockRejectedValue(new Error('AI 会话文件损坏'))
+  it('正常加载后用户变更会话：保存失败仍保留内容并允许重试', async () => {
     store.saveAiSession.mockRejectedValueOnce(new Error('磁盘已满'))
     await openEditor()
     expect(editorProps.current.aiSessionRetryable).toBe(false)
@@ -279,7 +278,7 @@ describe('App ✦AI 会话保存', () => {
       ).rejects.toThrow('磁盘已满')
     })
     expect(editorProps.current.aiSession).toEqual(changed)
-    // 已变更的会话是用户内容而非空回退：重挂载重试落盘是安全的
+    // 成功加载后的会话变更保留在内存，可重试保存。
     expect(editorProps.current.aiSessionRetryable).toBe(true)
   })
 })
@@ -416,5 +415,27 @@ describe('App ✦AI 会话保存失败（在途）', () => {
     expect(editorProps.current.aiSession).toEqual(changed)
     expect(editorProps.current.aiSessionError).toContain('磁盘已满')
     expect(editorProps.current.aiSessionRetryable).toBe(true)
+  })
+})
+
+describe('App 会话读取失败边界', () => {
+  it('读取失败禁用 AI，画布继续打开；重开读取成功后解除', async () => {
+    const history = { schemaVersion: 1, entries: [{ id: 1, kind: 'note', text: '原有历史' }] }
+    store.loadAiSession.mockResolvedValue({ session: history, repairError: null })
+    store.loadAiSession.mockRejectedValueOnce(new Error('临时读取失败'))
+    await openEditor()
+    expect(editorProps.current.aiSessionLoadFailed).toBe(true)
+    expect(editorProps.current.project).toBeTruthy()
+    await settingsRoundtrip()
+    expect(editorProps.current.aiSessionLoadFailed).toBe(true)
+    await act(async () => { (editorProps.current.onBackHome as () => void)() })
+    await screen.findByTestId('home')
+    await act(async () => {
+      await (homeProps.current.onOpenProject as (id: string) => Promise<void>)('p1')
+    })
+    await screen.findByTestId('editor')
+    expect(editorProps.current.aiSessionLoadFailed).toBe(false)
+    expect(editorProps.current.aiSession).toEqual(history)
+    expect(store.saveAiSession).not.toHaveBeenCalled()
   })
 })

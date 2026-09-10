@@ -1,3 +1,4 @@
+import type { ComponentProps } from 'react'
 import SegmentedControl from './SegmentedControl'
 import PanelResizer from './PanelResizer'
 import { type BatchValidation, type AiCommand, type ValidatedCommand } from '../ai/commands'
@@ -97,6 +98,20 @@ function inspectorRows(
   }
 }
 
+/** 加载失败时只显示诊断，聊天操作区不挂载，避免空回退产生写入。 */
+function AiSessionContent({
+  loadFailed,
+  ...props
+}: ComponentProps<typeof AiThread> & { readonly loadFailed?: boolean }) {
+  if (loadFailed) {
+    return <p className="pw-ai-error" role="alert">
+      聊天记录读取失败，AI 发送和执行已停用。请检查磁盘后重新打开项目。
+      {props.initialSessionError}
+    </p>
+  }
+  return <AiThread {...props} />
+}
+
 interface RightPanelProps {
   readonly open: boolean
   readonly width: number
@@ -130,6 +145,8 @@ interface RightPanelProps {
   /** 当前项目恢复的 AI 会话与其独立保存通道。 */
   readonly aiSession?: AiSession
   readonly aiSessionError?: string | null
+  /** 会话读取失败时阻止 AI 发送和执行，画布仍可使用。 */
+  readonly aiSessionLoadFailed?: boolean
   /** 内存会话可否作为挂载重试的落盘内容；读取失败（空回退）时为 false。 */
   readonly aiSessionRetryable?: boolean
   readonly onSaveAiSession?: (session: AiSession) => Promise<void>
@@ -164,6 +181,7 @@ export default function RightPanel({
   aiSession,
   aiSessionError,
   aiSessionRetryable,
+  aiSessionLoadFailed,
   onSaveAiSession,
 }: RightPanelProps) {
   const rows = selectedNode ? inspectorRows(selectedNode, attachedShotCount, settings) : []
@@ -197,7 +215,8 @@ export default function RightPanel({
               <div className="pw-empty">在画布中选择一个节点，查看它的字段。</div>
             ))}
           <div hidden={tab !== 'ai'}>
-            <AiThread
+            <AiSessionContent
+              loadFailed={aiSessionLoadFailed}
               onOpenSettings={onOpenSettings}
               canvasDigest={canvasDigest}
               aiRevision={aiRevision}

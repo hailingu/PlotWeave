@@ -730,3 +730,25 @@ describe('RightPanel ✦AI 重试耗尽（issue 41）', () => {
     expect(spies.onApplyAiBatch).not.toHaveBeenCalled()
   })
 })
+
+describe('RightPanel 会话读取失败', () => {
+  it('读取失败时没有发送和执行入口，不调用模型或保存，检查器仍可用', async () => {
+    vi.spyOn(settingsStore, 'load').mockResolvedValue(APP_WITH_KEY)
+    const onSaveAiSession = vi.fn().mockResolvedValue(undefined)
+    const spies = setup({
+      tab: 'ai', aiSessionLoadFailed: true,
+      aiSession: { schemaVersion: 1, entries: [{
+        id: 1, kind: 'msg', role: 'assistant', text: '待执行',
+        card: { v: validationOf(), status: 'pending' },
+      }] },
+      aiSessionError: '读取文件失败', onSaveAiSession,
+    })
+    expect(screen.queryByLabelText('AI 对话输入')).toBeNull()
+    expect(screen.queryByRole('button', { name: /执行/ })).toBeNull()
+    expect(screen.getByRole('alert').textContent).toContain('重新打开项目')
+    fireEvent.click(screen.getByRole('button', { name: '检查器' }))
+    expect(spies.onTabChange).toHaveBeenCalledWith('inspector')
+    expect(llmChatMock).not.toHaveBeenCalled()
+    expect(onSaveAiSession).not.toHaveBeenCalled()
+  })
+})

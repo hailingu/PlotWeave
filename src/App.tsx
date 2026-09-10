@@ -38,6 +38,8 @@ interface OpenProject {
   doc: ProjectContent
   aiSession: AiSession
   aiSessionError: string | null
+  /** 读取失败时关闭 AI 操作入口，直到重开成功；不影响画布。 */
+  aiSessionLoadFailed: boolean
   /** 内存会话是否可作为挂载重试的落盘内容：读取失败时为 false——
    * 空回退会话落盘会覆盖可能可恢复的原文件。 */
   aiSessionRetryable: boolean
@@ -57,6 +59,7 @@ async function loadOpenProject(
       doc,
       aiSession: unsaved.session,
       aiSessionError: `上次会话保存失败，已保留待重试：${unsaved.error}`,
+      aiSessionLoadFailed: false,
       aiSessionRetryable: true,
     }
   }
@@ -67,6 +70,7 @@ async function loadOpenProject(
       doc,
       aiSession: ai.session,
       aiSessionError: ai.repairError,
+      aiSessionLoadFailed: false,
       // 读取不自动写回；损坏诊断保留到用户实际编辑后的保存成功。
       aiSessionRetryable: false,
     }
@@ -77,6 +81,7 @@ async function loadOpenProject(
       doc,
       aiSession: { schemaVersion: 1, entries: [] },
       aiSessionError: String(err),
+      aiSessionLoadFailed: true,
       aiSessionRetryable: false,
     }
   }
@@ -122,8 +127,7 @@ function useOpenProjectActions(
 
   const handleSaveAiSession = useCallback(
     (id: string) => async (session: AiSession) => {
-      // 接受实际变更即标记可重试：变更后的会话是权威用户内容，不再是
-      // 读取失败时的空回退，重挂载重试落盘安全
+      // AI 操作区只在加载成功后开放；实际变更后的会话可在重挂载时重试。
       setOpenProject((project) =>
         project?.id === id ? { ...project, aiSession: session, aiSessionRetryable: true } : project,
       )
@@ -212,6 +216,7 @@ function AppView({
       aiSession={openProject.aiSession}
       aiSessionError={openProject.aiSessionError}
       aiSessionRetryable={openProject.aiSessionRetryable}
+      aiSessionLoadFailed={openProject.aiSessionLoadFailed}
       onBackHome={open.handleBackHome}
       onRenameProject={open.handleEditorRename}
       onOpenSettings={onOpenSettings}
