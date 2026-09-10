@@ -74,15 +74,24 @@ pub fn stash_ai_session_recovery(
     stash_ai_session_recovery_file(&projects, &recovery, &id, &session)
 }
 
-/// 读取会话恢复副本；不存在返回 null。前端在主文件读取之外单独消费，
-/// 以便向用户标明「已从恢复副本载入」。
+/// 读取会话恢复副本；`session` 为 None 表示副本缺失或损坏（损坏时
+/// `corrupt` 置位）。前端在主文件读取之外单独消费，以便向用户标明
+/// 「已从恢复副本载入」。
 #[tauri::command]
-pub fn load_ai_session_recovery(
-    app: AppHandle,
-    id: String,
-) -> Result<Option<serde_json::Value>, String> {
+pub fn load_ai_session_recovery(app: AppHandle, id: String) -> Result<RecoveryCopy, String> {
     let recovery = recovery_dir(&app)?;
     load_ai_session_recovery_file(&recovery, &id)
+}
+
+/// 恢复副本读取结果：损坏（不可解析或信封非法）的内容无法被任何进程
+/// 载入，与 `ensure_recovery_replaceable` 同口径按「可安全替换」归类，
+/// 以 `corrupt` 标记返回而不是 Err——前端不得据此进入「新旧未知」门禁
+/// 永久暂缓保存。Err 仅保留给真实 I/O 失败（权限/瞬态 I/O、元数据失败），
+/// 那才是新旧无法确定、写入边界必须拒绝覆盖的情形。
+#[derive(serde::Serialize)]
+pub struct RecoveryCopy {
+    pub session: Option<serde_json::Value>,
+    pub corrupt: bool,
 }
 
 /// JS `Number.MAX_SAFE_INTEGER`（2^53-1）：会话写入序号的可接受上界。u64
@@ -99,10 +108,25 @@ fn session_write_seq(session: &serde_json::Value) -> u64 {
         .unwrap_or(0)
 }
 
+/// 会话载荷去除 `writeSeq` 后的对话内容：相等序号下的写入身份。内容一致
+/// = 同一逻辑写入的幂等重放（如权威保存后清除副本失败时的同序号改写、
+/// 旧无序号文件补显式 0 的升级），替换不丢失任何历史，必须放行；内容
+/// 不同 = 无单实例约束下两进程各自续起撞号的并发冲突，后写替换先写会
+/// 静默丢失一侧会话，必须拒绝（评审 pullrequestreview-5161801056）。
+fn session_body(session: &serde_json::Value) -> serde_json::Value {
+    let mut body = session.clone();
+    if let Some(object) = body.as_object_mut() {
+        object.remove("writeSeq");
+    }
+    body
+}
+
 /// 恢复副本替换/清除前的顺序守卫（§12.2，历轮评审修复）：仅当现存副本
-/// 缺失、内容不可解析（损坏副本无法再被载入，可安全替换）或写入序号不
-/// 大于本次写入序号时才允许替换。副本不可读（权限/瞬态 I/O）或序号更新
-/// 时拒绝——绝不在无法确定新旧的情况下销毁可能是唯一新副本的历史。
+/// 缺失、内容不可解析（损坏副本无法再被载入，可安全替换）、写入序号
+/// 小于本次写入序号，或序号相等且对话内容一致（幂等重放）时才允许
+/// 替换。副本不可读（权限/瞬态 I/O）或序号更新时拒绝——绝不在无法确定
+/// 新旧的情况下销毁可能是唯一新副本的历史；相等序号的不同内容是两进程
+/// 撞号的并发冲突，同样拒绝。
 fn ensure_recovery_replaceable(
     recovery: &CapDir,
     id: &str,
@@ -123,12 +147,18 @@ fn ensure_recovery_replaceable(
         Some(existing) if session_write_seq(&existing) > session_write_seq(incoming) => {
             Err("AI 会话恢复副本比本次保存更新，已拒绝覆盖（请重新打开项目载入更新的历史）".into())
         }
+        Some(existing)
+            if session_write_seq(&existing) == session_write_seq(incoming)
+                && session_body(&existing) != session_body(incoming) =>
+        {
+            Err("AI 会话恢复副本已存在同一写入序号的不同会话（另一进程可能已写入），已拒绝覆盖（请重新打开项目载入最新历史）".into())
+        }
         _ => Ok(()),
     }
 }
 
-/// 写恢复副本内核（不可信 id 与信封校验先于路径拼接；现存副本更新或
-/// 不可读时拒绝覆盖）。
+/// 写恢复副本内核（不可信 id 与信封校验先于路径拼接；现存副本更新、
+/// 不可读，或相等序号的不同内容（并发冲突）时拒绝覆盖）。
 pub(crate) fn stash_ai_session_recovery_file(
     projects: &CapDir,
     recovery: &CapDir,
@@ -144,22 +174,35 @@ pub(crate) fn stash_ai_session_recovery_file(
         .map_err(|e| format!("保存 AI 会话恢复副本失败：{e}"))
 }
 
-/// 读恢复副本内核：缺失是合法状态（无失败保存）。
+/// 读恢复副本内核：缺失是合法状态（无失败保存）；损坏按可替换归类
+/// （见 `RecoveryCopy` 的契约说明），不可读才是 Err。
 pub(crate) fn load_ai_session_recovery_file(
     recovery: &CapDir,
     id: &str,
-) -> Result<Option<serde_json::Value>, String> {
+) -> Result<RecoveryCopy, String> {
     validate_id(id)?;
     let name = recovery_file_name(id);
     match recovery.symlink_metadata(&name) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(RecoveryCopy {
+            session: None,
+            corrupt: false,
+        }),
         Ok(_) => {
             let text = read_verified_file(recovery, &name)
                 .map_err(|e| format!("拒绝读取 AI 会话恢复副本：{e}"))?;
-            let session =
-                serde_json::from_str(&text).map_err(|e| format!("AI 会话恢复副本损坏：{e}"))?;
-            validate_ai_session(&session)?;
-            Ok(Some(session))
+            let session = serde_json::from_str::<serde_json::Value>(&text)
+                .ok()
+                .filter(|v| validate_ai_session(v).is_ok());
+            Ok(match session {
+                Some(session) => RecoveryCopy {
+                    session: Some(session),
+                    corrupt: false,
+                },
+                None => RecoveryCopy {
+                    session: None,
+                    corrupt: true,
+                },
+            })
         }
         Err(e) => Err(format!("读取 AI 会话恢复副本元数据失败：{e}")),
     }
@@ -177,10 +220,10 @@ pub(crate) fn clear_ai_session_recovery_file(recovery: &CapDir, id: &str) -> Res
 }
 
 /// 权威保存 + 清除恢复副本：主文件失败时不触碰恢复副本（它是当前唯一可
-/// 跨进程恢复的拷贝）；现存副本更新或不可读时整次拒绝——写入主文件后再
-/// 拒绝清除会让更新副本在下次载入时压过刚保存的内容。清除失败时改写为
-/// 刚落盘的权威内容——陈旧副本若在下次载入时仍优先于权威文件，会把新
-/// 会话回退成旧内容。
+/// 跨进程恢复的拷贝）；现存副本更新、不可读，或相等序号的不同内容时
+/// 整次拒绝——写入主文件后再拒绝清除会让更新副本在下次载入时压过刚保存
+/// 的内容。清除失败时改写为刚落盘的权威内容——陈旧副本若在下次载入时仍
+/// 优先于权威文件，会把新会话回退成旧内容。
 pub(crate) fn save_ai_session_authoritative(
     projects: &CapDir,
     recovery: &CapDir,
@@ -327,9 +370,12 @@ pub(crate) fn load_ai_session_file(root: &CapDir, id: &str) -> Result<serde_json
 }
 
 /// 权威会话文件替换前的顺序守卫（§12.2，历轮评审修复）：现存主文件缺失、
-/// 内容不可解析（损坏内容无法再被载入，可安全替换）或写入序号不大于本次
-/// 写入序号时才允许覆盖。主文件不可读（权限/瞬态 I/O）或序号更新时拒绝
-/// ——绝不在无法确定新旧的情况下销毁可能是更新权威副本的历史。
+/// 内容不可解析（损坏内容无法再被载入，可安全替换）、写入序号小于本次
+/// 写入序号，或序号相等且对话内容一致（幂等重放）时才允许覆盖。主文件
+/// 不可读（权限/瞬态 I/O）或序号更新时拒绝——绝不在无法确定新旧的
+/// 情况下销毁可能是更新权威副本的历史；相等序号的不同内容是两进程
+/// 各自续起撞号的并发冲突（后写替换先写会把一侧会话静默丢失且写入
+/// 边界还报告成功），同样拒绝（评审 pullrequestreview-5161801056）。
 fn ensure_authoritative_replaceable(
     dir: &CapDir,
     incoming: &serde_json::Value,
@@ -347,6 +393,12 @@ fn ensure_authoritative_replaceable(
     match existing {
         Some(existing) if session_write_seq(&existing) > session_write_seq(incoming) => {
             Err("AI 会话文件比本次保存更新，已拒绝覆盖（请重新打开项目载入更新的历史）".into())
+        }
+        Some(existing)
+            if session_write_seq(&existing) == session_write_seq(incoming)
+                && session_body(&existing) != session_body(incoming) =>
+        {
+            Err("AI 会话文件已存在同一写入序号的不同会话（另一进程可能已写入），已拒绝覆盖（请重新打开项目载入最新历史）".into())
         }
         _ => Ok(()),
     }

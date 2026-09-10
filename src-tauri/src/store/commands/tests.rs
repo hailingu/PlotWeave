@@ -220,7 +220,9 @@ fn ai_session_recovery_round_trips_and_requires_project_record() {
     stash_ai_session_recovery_file(&cap(&projects), &cap(&recovery), "p-1", &session)
         .expect("写恢复副本");
     assert_eq!(
-        load_ai_session_recovery_file(&cap(&recovery), "p-1").expect("读恢复副本"),
+        load_ai_session_recovery_file(&cap(&recovery), "p-1")
+            .expect("读恢复副本")
+            .session,
         Some(session.clone())
     );
     // 主文件此时仍缺失（保存失败）：恢复副本是唯一可跨进程恢复的拷贝
@@ -245,9 +247,11 @@ fn ai_session_authoritative_save_clears_recovery_copy() {
 
     save_ai_session_authoritative(&cap(&projects), &cap(&recovery), "p-1", &session)
         .expect("权威保存");
-    assert_eq!(
-        load_ai_session_recovery_file(&cap(&recovery), "p-1").expect("读恢复副本"),
-        None,
+    assert!(
+        !load_ai_session_recovery_file(&cap(&recovery), "p-1")
+            .expect("读恢复副本")
+            .session
+            .is_some(),
         "权威副本落盘后恢复副本应被清除"
     );
     assert_eq!(
@@ -406,7 +410,9 @@ fn save_and_stash_refuse_to_replace_newer_recovery_copy() {
             .expect_err("更新副本不得被陈旧副本覆盖");
     assert!(stash_err.contains("更新"), "意外诊断：{stash_err}");
     assert_eq!(
-        load_ai_session_recovery_file(&cap(&recovery), "p-1").expect("读恢复副本"),
+        load_ai_session_recovery_file(&cap(&recovery), "p-1")
+            .expect("读恢复副本")
+            .session,
         Some(existing),
         "更新副本必须原样保留"
     );
@@ -432,6 +438,144 @@ fn save_refuses_when_recovery_copy_is_unreadable() {
     cleanup_temp(&projects);
 }
 
+/// 无单实例约束下两进程各自从同一磁盘序号续起会撞号：相等序号的不同
+/// 会话是并发冲突，后写不得悄悄替换先写（先落盘者胜），否则一侧对话被
+/// 静默丢失而写入边界还报告成功（评审 pullrequestreview-5161801056）。
+#[test]
+fn equal_write_seq_conflicting_content_is_rejected() {
+    let projects = temp_projects_dir();
+    let recovery = temp_recovery_dir(&projects);
+    fs::write(projects.join("p-1.json"), b"{}").expect("写项目文件");
+    let process = |text: &str, seq: u64| {
+        serde_json::json!({
+            "schemaVersion": 1,
+            "entries": [{ "id": 1, "kind": "note", "text": text }],
+            "writeSeq": seq
+        })
+    };
+    save_ai_session_file(&cap(&projects), "p-1", &process("进程 A", 10)).expect("先写建立权威会话");
+    let err = save_ai_session_file(&cap(&projects), "p-1", &process("进程 B", 10))
+        .expect_err("同序号的不同会话不得覆盖权威文件");
+    assert!(err.contains("序号"), "意外诊断：{err}");
+    assert_eq!(
+        load_ai_session_file(&cap(&projects), "p-1").expect("读主会话"),
+        process("进程 A", 10),
+        "先落盘的会话必须原样保留"
+    );
+
+    stash_ai_session_recovery_file(
+        &cap(&projects),
+        &cap(&recovery),
+        "p-1",
+        &process("进程 A", 10),
+    )
+    .expect("先写恢复副本");
+    let err = stash_ai_session_recovery_file(
+        &cap(&projects),
+        &cap(&recovery),
+        "p-1",
+        &process("进程 B", 10),
+    )
+    .expect_err("同序号的不同会话不得替换恢复副本");
+    assert!(err.contains("序号"), "意外诊断：{err}");
+    assert_eq!(
+        load_ai_session_recovery_file(&cap(&recovery), "p-1")
+            .expect("读恢复副本")
+            .session,
+        Some(process("进程 A", 10)),
+        "先落盘的恢复副本必须原样保留"
+    );
+    cleanup_temp(&projects);
+}
+
+/// 相等序号且对话内容一致 = 同一逻辑写入的幂等重放（权威保存后清除副本
+/// 失败时的同序号改写；旧无序号文件补显式 writeSeq 0 的升级）：替换不
+/// 丢失任何历史，必须放行。
+#[test]
+fn equal_write_seq_identical_retry_is_allowed() {
+    let projects = temp_projects_dir();
+    let recovery = temp_recovery_dir(&projects);
+    fs::write(projects.join("p-1.json"), b"{}").expect("写项目文件");
+    fs::write(projects.join("p-2.json"), b"{}").expect("写项目文件");
+    let session = serde_json::json!({
+        "schemaVersion": 1,
+        "entries": [{ "id": 1, "kind": "note", "text": "同一保存" }],
+        "writeSeq": 10
+    });
+    save_ai_session_file(&cap(&projects), "p-1", &session).expect("首次写");
+    save_ai_session_file(&cap(&projects), "p-1", &session).expect("同序号同内容的重试必须放行");
+    stash_ai_session_recovery_file(&cap(&projects), &cap(&recovery), "p-1", &session)
+        .expect("先写恢复副本");
+    stash_ai_session_recovery_file(&cap(&projects), &cap(&recovery), "p-1", &session)
+        .expect("同序号同内容的副本改写必须放行");
+
+    let legacy = serde_json::json!({ "schemaVersion": 1, "entries": [] });
+    save_ai_session_file(&cap(&projects), "p-2", &legacy).expect("写旧格式会话");
+    let upgraded = serde_json::json!({ "schemaVersion": 1, "entries": [], "writeSeq": 0u64 });
+    save_ai_session_file(&cap(&projects), "p-2", &upgraded)
+        .expect("补显式序号 0（对话内容一致）按同一写入放行");
+    cleanup_temp(&projects);
+}
+
+/// 损坏（不可解析/信封非法）的恢复副本无法被任何进程载入，按可安全替换
+/// 归类：读取返回 corrupt 标记而非错误——前端不得据此进入「新旧未知」
+/// 门禁永久暂缓保存；Err 仅保留给真实 I/O 失败（权限/瞬态 I/O）。
+#[test]
+fn corrupt_recovery_copy_loads_as_replaceable_not_unreadable() {
+    let projects = temp_projects_dir();
+    let recovery = temp_recovery_dir(&projects);
+    atomic_write(&cap(&recovery), "ai-session-p-1.json", "{not json").expect("写损坏副本");
+    let copy =
+        load_ai_session_recovery_file(&cap(&recovery), "p-1").expect("损坏副本不得按读取失败上浮");
+    assert!(copy.corrupt, "损坏副本必须带 corrupt 标记");
+    assert_eq!(copy.session, None);
+
+    atomic_write(
+        &cap(&recovery),
+        "ai-session-p-2.json",
+        r#"{ "schemaVersion": 9 }"#,
+    )
+    .expect("写非法信封副本");
+    let copy =
+        load_ai_session_recovery_file(&cap(&recovery), "p-2").expect("信封非法同样按损坏归类");
+    assert!(copy.corrupt, "非法信封必须带 corrupt 标记");
+    assert_eq!(copy.session, None);
+
+    let copy = load_ai_session_recovery_file(&cap(&recovery), "p-3")
+        .expect("缺失是合法状态（无失败保存）");
+    assert!(!copy.corrupt);
+    assert_eq!(copy.session, None);
+
+    // 不可读（目录占位）：新旧未知，仍是 Err
+    fs::create_dir(recovery.join("ai-session-p-4.json")).expect("建目录占位");
+    assert!(
+        load_ai_session_recovery_file(&cap(&recovery), "p-4").is_err(),
+        "不可读副本必须保持 Err（写入边界将拒绝覆盖）"
+    );
+    cleanup_temp(&projects);
+}
+
+/// 损坏副本不得阻断权威保存：ensure_recovery_replaceable 同口径把它当可
+/// 替换内容，主文件落盘后副本照常清除（自愈，无须手工清理磁盘）。
+#[test]
+fn corrupt_recovery_copy_is_cleared_by_authoritative_save() {
+    let projects = temp_projects_dir();
+    let recovery = temp_recovery_dir(&projects);
+    fs::write(projects.join("p-1.json"), b"{}").expect("写项目文件");
+    atomic_write(&cap(&recovery), "ai-session-p-1.json", "{not json").expect("写损坏副本");
+    let session = serde_json::json!({ "schemaVersion": 1, "entries": [], "writeSeq": 1u64 });
+    save_ai_session_authoritative(&cap(&projects), &cap(&recovery), "p-1", &session)
+        .expect("损坏副本不得阻断权威保存");
+    assert_eq!(
+        load_ai_session_recovery_file(&cap(&recovery), "p-1")
+            .expect("读恢复副本")
+            .session,
+        None,
+        "权威保存成功后损坏副本应被清除"
+    );
+    cleanup_temp(&projects);
+}
+
 #[test]
 fn delete_project_clears_recovery_copy() {
     let projects = temp_projects_dir();
@@ -444,9 +588,11 @@ fn delete_project_clears_recovery_copy() {
     let report = delete_project_with_recovery(&cap(&projects), || Ok(cap(&recovery)), "p-1")
         .expect("删除项目");
     assert!(report.cleanup_error.is_none(), "干净删除不得带清理诊断");
-    assert_eq!(
-        load_ai_session_recovery_file(&cap(&recovery), "p-1").expect("读恢复副本"),
-        None,
+    assert!(
+        !load_ai_session_recovery_file(&cap(&recovery), "p-1")
+            .expect("读恢复副本")
+            .session
+            .is_some(),
         "删除项目应同时清除恢复副本"
     );
     cleanup_temp(&projects);
@@ -478,6 +624,7 @@ fn delete_project_failure_keeps_recovery_copy() {
     assert!(
         load_ai_session_recovery_file(&cap(&recovery), "p-1")
             .expect("读恢复副本")
+            .session
             .is_some(),
         "项目仍在磁盘时删除失败不得清除恢复副本"
     );

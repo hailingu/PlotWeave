@@ -13,9 +13,13 @@ type CloseHandler = (event: { preventDefault: () => void }) => Promise<void>
 type QuitHandler = () => Promise<void>
 
 const hasPending = vi.fn(() => true)
-const flushPending = vi.fn(async (): Promise<string[]> => [])
+const flushPending = vi.fn(async (): Promise<{ unrecoverable: string[]; orderingBlocked: string[] }> => ({
+  unrecoverable: [],
+  orderingBlocked: [],
+}))
 const destroy = vi.fn(async () => undefined)
-const invoke = vi.fn(async (_cmd: string): Promise<unknown> => undefined)
+const invoke = vi.fn(async (cmd: string): Promise<unknown> => cmd)
+
 const closeHandlers: CloseHandler[] = []
 const quitHandlers: QuitHandler[] = []
 
@@ -47,7 +51,7 @@ beforeEach(() => {
   closeHandlers.length = 0
   quitHandlers.length = 0
   hasPending.mockReturnValue(true)
-  flushPending.mockResolvedValue([])
+  flushPending.mockResolvedValue({ unrecoverable: [], orderingBlocked: [] })
   destroy.mockClear()
   invoke.mockClear()
 })
@@ -98,11 +102,21 @@ describe('useExitFlush（窗口关闭冲刷屏障）', () => {
   })
 
   it('冲刷仍失败：保留窗口并给出可见诊断', async () => {
-    flushPending.mockResolvedValue(['p1'])
+    flushPending.mockResolvedValue({ unrecoverable: ['p1'], orderingBlocked: [] })
     const { result } = await mountBarrier()
     await act(async () => { await closeHandlers[0]({ preventDefault: vi.fn() }) })
     expect(destroy).not.toHaveBeenCalled()
     expect(result.current).toContain('已阻止退出')
+    expect(result.current).toContain('既未写入权威文件也未能写入恢复副本')
+  })
+
+  it('暂缓保存（新旧未知）的编辑也阻断退出：不写盘、给出专门诊断', async () => {
+    flushPending.mockResolvedValue({ unrecoverable: [], orderingBlocked: ['p1'] })
+    const { result } = await mountBarrier()
+    await act(async () => { await closeHandlers[0]({ preventDefault: vi.fn() }) })
+    expect(destroy).not.toHaveBeenCalled()
+    expect(result.current).toContain('已阻止退出')
+    expect(result.current).toContain('新旧未知')
   })
 })
 
@@ -126,7 +140,7 @@ describe('useExitFlush（⌘Q 应用级退出冲刷屏障）', () => {
   })
 
   it('冲刷仍有不可恢复项：不退出并显示可见诊断', async () => {
-    flushPending.mockResolvedValue(['p1'])
+    flushPending.mockResolvedValue({ unrecoverable: ['p1'], orderingBlocked: [] })
     const { result } = await mountBarrier()
     await act(async () => { await quitHandlers[0]() })
     expect(invoke).not.toHaveBeenCalled()

@@ -54,8 +54,16 @@ const unrecoverableSessions = new Set<string>()
  * 项目的一切会话保存整次暂缓，不写盘、不定序、不登记重试。否则保存
  * 失败路径把序号定在未知基线之上（副本改写 + 重试逐次自增），不可读
  * 副本恢复可读后，迟到写入终将压过其未知序号、用旧基线历史覆盖更新
- * 副本。两副本可读的重新载入即解除；编辑保留在会话与 App 保留区。 */
+ * 副本。两副本可读的重新载入即解除；编辑保留在会话与 App 保留区。
+ * 损坏（不可解析/信封非法）的恢复副本不进门禁——它与 Rust 侧顺序守卫
+ * 同口径按可安全替换归类（RecoveryCopy 契约）。 */
 const orderingUnknownSessions = new Set<string>()
+/** 新旧未知期间被整次暂缓的会话快照（评审 pullrequestreview-5161801056）：
+ * 编辑只存在于内存——不得写盘（序号不得定在未知基线上），但退出屏障
+ * 必须知道它们的存在，否则窗口关闭/应用退出会静默丢弃用户编辑。暂缓
+ * 保存的重试落定后同项目的既有登记可能仍在（宁过分阻断也不丢编辑）；
+ * 两副本可读的重新载入或删除项目时清出。 */
+const orderingBlockedSessions = new Map<string, AiSession>()
 
 /** 清出重试登记、定时器与不可恢复标记（保存成功、删除项目时调用）。 */
 function clearSessionRetry(id: string): void {
@@ -95,6 +103,20 @@ function seqOf(raw: unknown): number {
   return typeof seq === 'number' && Number.isSafeInteger(seq) && seq >= 0 ? seq : 0
 }
 
+/** `load_ai_session_recovery` 的 RecoveryCopy 契约（Rust 侧同名单义）：
+ * `session` 为 null 表示缺失或损坏（损坏时 `corrupt` 置位，按可安全
+ * 替换归类——无法被任何进程载入的内容没有可丢失的历史）。 */
+function recoverySessionOf(result: unknown): unknown {
+  if (typeof result !== 'object' || result === null) return null
+  return (result as { session?: unknown }).session ?? null
+}
+
+function recoveryCorruptOf(result: unknown): boolean {
+  return (
+    typeof result === 'object' && result !== null && (result as { corrupt?: unknown }).corrupt === true
+  )
+}
+
 type Invoke = (cmd: string, args: Record<string, unknown>) => Promise<unknown>
 
 /** 从磁盘两副本续起写入序号（进程内首次写入早于任何 load 时的兜底）。
@@ -104,7 +126,7 @@ async function seedWriteSeq(id: string, invoke: Invoke): Promise<number> {
     invoke('load_ai_session', { id }).catch(() => null),
     invoke('load_ai_session_recovery', { id }).catch(() => null),
   ])
-  return mergeWriteSeq(id, Math.max(seqOf(main), seqOf(recovery)))
+  return mergeWriteSeq(id, Math.max(seqOf(main), seqOf(recoverySessionOf(recovery))))
 }
 
 /** 磁盘快照序号与内存序号取大合并，返回合并值：乱序返回的并发载入不得
@@ -126,13 +148,16 @@ async function nextWriteSeq(id: string, invoke: Invoke): Promise<number> {
 
 /** 磁盘两副本的读取与选源判定（loadAiSession 前半）：主文件与恢复副本
  * 各自捕获读取错误；写入序号与内存取大合并（乱序载入不得回拨，见
- * mergeWriteSeq）；主文件不可读且无可用副本时上浮原始错误。 */
+ * mergeWriteSeq）；主文件不可读且无可用副本时上浮原始错误。恢复副本的
+ * 损坏（corrupt）与不可读（Err）分开判定：损坏按可安全替换归类，不进
+ * 新旧未知门禁。 */
 interface SessionCopies {
   raw: unknown
   mainError: unknown
   mainUnreadable: boolean
   recovered: boolean
   recoveryUnreadable: boolean
+  recoveryCorrupt: boolean
   recoveryError: unknown
 }
 
@@ -142,24 +167,34 @@ async function readSessionCopies(id: string, invoke: Invoke): Promise<SessionCop
     mainError = err
     return undefined
   })
-  // 恢复副本读取失败（权限/瞬态 I/O/损坏）时新旧无法确定：不得当作
-  // 「无副本」继续——权威回写会清掉可能是唯一新副本的历史
+  // 恢复副本读取失败（权限/瞬态 I/O）时新旧无法确定：不得当作「无副本」
+  // 继续——权威回写会清掉可能是唯一新副本的历史；损坏（corrupt）则按
+  // 可安全替换归类（RecoveryCopy 契约），照常以权威历史继续
   let recoveryError: unknown
   let recoveryFailed = false
-  const recoveryRaw = await invoke('load_ai_session_recovery', { id }).catch(
+  const recoveryResult = await invoke('load_ai_session_recovery', { id }).catch(
     (err: unknown) => {
       recoveryError = err
       recoveryFailed = true
       return null
     },
   )
+  const recoveryRaw = recoverySessionOf(recoveryResult)
+  const recoveryCorrupt = !recoveryFailed && recoveryCorruptOf(recoveryResult)
+  if (recoveryCorrupt) {
+    console.warn('[aiSession] 恢复副本损坏（不可解析），按可替换处理：保存成功后将被清除或替换')
+  }
   mergeWriteSeq(id, Math.max(seqOf(mainRaw), seqOf(recoveryRaw)))
   const mainUnreadable = mainRaw === undefined
   const recovered =
     recoveryRaw != null && (mainUnreadable || seqOf(recoveryRaw) > seqOf(mainRaw))
-  // 任一副本不可读即新旧未知：登记保存门禁（两副本可读的载入会解除）
+  // 任一副本不可读即新旧未知：登记保存门禁（两副本可读的载入会解除，
+  // 同时清出退出阻断登记）；损坏副本不登记
   if (recoveryFailed || (recovered && mainUnreadable)) orderingUnknownSessions.add(id)
-  else orderingUnknownSessions.delete(id)
+  else {
+    orderingUnknownSessions.delete(id)
+    orderingBlockedSessions.delete(id)
+  }
   // 权威文件读取失败且无可用恢复副本：显式上浮，不把损坏静默当成空历史
   if (!recovered && mainUnreadable) {
     orderingUnknownSessions.add(id)
@@ -171,6 +206,7 @@ async function readSessionCopies(id: string, invoke: Invoke): Promise<SessionCop
     mainUnreadable,
     recovered,
     recoveryUnreadable: recoveryFailed,
+    recoveryCorrupt,
     recoveryError,
   }
 }
@@ -182,12 +218,16 @@ async function promoteLoadedSession(
   id: string,
   copies: SessionCopies,
 ): Promise<AiSessionLoadResult> {
-  const { raw, mainError, mainUnreadable, recovered } = copies
+  const { raw, mainError, mainUnreadable, recovered, recoveryCorrupt } = copies
   const { session, repaired } = normalizeAiSession(raw)
   if (!recovered && !repaired) {
     return {
       session,
-      repairError: null,
+      // 损坏副本仍在磁盘上但无任何可丢失的历史：如实提示，下次保存成功
+      // 时由 Rust 侧清除/替换（自愈）；走写回路径时无须提示（副本已被清除）
+      repairError: recoveryCorrupt
+        ? 'AI 会话恢复副本损坏（不可解析），已忽略：下次保存成功时将自动清除该副本'
+        : null,
       recovered: false,
       recoveryUnreadable: false,
       authoritativeUnreadable: false,
@@ -270,7 +310,7 @@ async function diskWriteSeqMax(id: string, invoke: Invoke): Promise<number> {
     invoke('load_ai_session', { id }).catch(() => null),
     invoke('load_ai_session_recovery', { id }).catch(() => null),
   ])
-  return Math.max(seqOf(main), seqOf(recovery))
+  return Math.max(seqOf(main), seqOf(recoverySessionOf(recovery)))
 }
 
 /** 主文件保存失败时尽力写入恢复副本（跨进程保留的唯一拷贝），返回副本
@@ -303,8 +343,11 @@ export async function saveAiSession(id: string, session: AiSession): Promise<voi
     return
   }
   // 新旧未知门禁（见 orderingUnknownSessions）：变更与重试一律整次暂缓——
-  // 序号不得定在未知基线之上；编辑保留在会话与 App 保留区，待重开定序
+  // 序号不得定在未知基线之上；编辑保留在会话与 App 保留区，待重开定序。
+  // 暂缓的快照同时登记进退出屏障（orderingBlockedSessions）：它只存在于
+  // 内存，窗口关闭/应用退出若不知情会静默丢弃用户编辑
   if (orderingUnknownSessions.has(id)) {
+    orderingBlockedSessions.set(id, session)
     throw new Error('AI 会话新旧未知（权威文件或恢复副本不可读），已暂缓保存：请检查磁盘后重开项目')
   }
   const generation = (sessionGenerations.get(id) ?? 0) + 1
@@ -351,11 +394,24 @@ export async function saveAiSession(id: string, session: AiSession): Promise<voi
   await write
 }
 
-/** 关闭屏障是否需要介入：有排队/在途的保存，或存在既未写入权威文件也
- * 未写入恢复副本的会话（唯一副本只在内存）。副本已落盘的待重试会话不
- * 阻止退出——它跨进程可恢复。 */
+/** 关闭屏障是否需要介入：有排队/在途的保存，存在既未写入权威文件也
+ * 未写入恢复副本的会话（唯一副本只在内存），或存在新旧未知期间被整次
+ * 暂缓的编辑（同样只在内存）。副本已落盘的待重试会话不阻止退出——它
+ * 跨进程可恢复。 */
 export function hasPendingAiSessionSaves(): boolean {
-  return inFlightSaves.size > 0 || unrecoverableSessions.size > 0
+  return (
+    inFlightSaves.size > 0 ||
+    unrecoverableSessions.size > 0 ||
+    orderingBlockedSessions.size > 0
+  )
+}
+
+/** 冲刷落定后的退出阻断项：`unrecoverable` = 主文件与副本都写失败且重试
+ * 仍失败；`orderingBlocked` = 新旧未知期间被暂缓的编辑（不得写盘，重开
+ * 项目确立定序后才可落盘）。任一非空都不得放行退出。 */
+export interface AiSessionFlushBlock {
+  unrecoverable: string[]
+  orderingBlocked: string[]
 }
 
 /** 冲刷到固定点：等在途保存落定（失败项在其内登记）并重试待重试会话。
@@ -363,8 +419,9 @@ export function hasPendingAiSessionSaves(): boolean {
  * 后来者会替换 Map 项而不加入先前捕获的数组——只等一次快照会在新保存
  * 仍在途时误判已排空而放行退出，故循环重查到静止（同 waitForSaveChainIdle
  * 的等静止语义）。每个登记项每次冲刷只重试一次：持续失败者交还固定节律
- * 定时器，避免冲刷自旋。返回仍不可恢复的项目 id——非空即不得放行退出。 */
-export async function flushPendingAiSessionSaves(): Promise<string[]> {
+ * 定时器，避免冲刷自旋。暂缓（新旧未知）的编辑不重试写盘，只作为阻断项
+ * 上浮。返回仍阻断退出的项目 id——非空即不得放行退出。 */
+export async function flushPendingAiSessionSaves(): Promise<AiSessionFlushBlock> {
   const retried = new Set<string>()
   for (;;) {
     await Promise.allSettled(Array.from(inFlightSaves.values()))
@@ -375,12 +432,15 @@ export async function flushPendingAiSessionSaves(): Promise<string[]> {
       try {
         await saveAiSession(id, session)
       } catch {
-        // 状态（不可恢复标记）已在 saveAiSession 内更新
+        // 状态（不可恢复标记/暂缓阻断登记）已在 saveAiSession 内更新
       }
     }
     if (inFlightSaves.size === 0) break
   }
-  return Array.from(unrecoverableSessions)
+  return {
+    unrecoverable: Array.from(unrecoverableSessions),
+    orderingBlocked: Array.from(orderingBlockedSessions.keys()),
+  }
 }
 
 /** 删除内存回退的项目会话；Tauri 路径由 delete_project 删除整个项目目录
@@ -389,4 +449,5 @@ export function deleteAiSession(id: string): void {
   memorySessions.delete(id)
   clearSessionRetry(id)
   orderingUnknownSessions.delete(id)
+  orderingBlockedSessions.delete(id)
 }
