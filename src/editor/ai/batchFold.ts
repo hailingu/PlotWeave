@@ -16,18 +16,21 @@ import {
   type EntityFoldHost,
 } from './entityFold'
 import { contingentUpdateIssue, NODE_TYPE_LABELS, payloadIssue } from './payloadCheck'
-import { branchOptionsError, normalizeNodeFields, plainObject } from './patchShape'
+import { branchOptionsError, isPositionalOptions, normalizeNodeFields, plainObject } from './patchShape'
 import type { AiGraphSnapshot, BatchValidation } from './commands'
 import {
   activeTentativeEdges,
+  contingentEndpointId,
   contingentTypeOf,
   createGhostConnectIssue,
   dropTentativeEdge,
   isIntrinsicOptionIndex,
   registerTentativeEdge,
   releaseCreateGhostConnect,
+  releaseDeletedCreateRef,
   retireCreateGhostConnects,
   reresolveTentativeEdges,
+  tentativeTopology,
   type TentativeEdgeHost,
 } from './tentativeEdges'
 import {
@@ -261,12 +264,25 @@ function foldBranchCascade(
   // 后续出口连线的 optionIndex/重复检查恢复按最新选项表独立判断；未解析
   // 投影按新表重解析（评审 5164170010）
   st.failedBranchOptionUpdates.delete(id)
-  st.branchOptions.set(id, normalized.options as Array<{ id: string; label: string }>)
-  reresolveTentativeEdges(st, id, normalized.options as Array<{ id: string; label: string }>)
+  // reresolve 须在表覆盖前调用（按位继承的旧表长度取自当前表，评审 5169767128）
+  const newOptions = normalized.options as Array<{ id: string; label: string }>
+  reresolveTentativeEdges(
+    st,
+    id,
+    newOptions,
+    isPositionalOptions(plainObject(cmd.patch) ? (cmd.patch as Record<string, unknown>).options : undefined),
+  )
+  st.branchOptions.set(id, newOptions)
 }
 
 function foldDelete(st: FoldState, cmd: Record<string, unknown>, index: number): void {
-  if (isContingentRef(st, cmd, 'nodeId')) return
+  if (isContingentRef(st, cmd, 'nodeId')) {
+    // contingent 删除（评审 5169767128）：修复后该 create 被删除，其
+    // ghost 判重键与投影边一并退役——后续同端点连线面对缺失端点而非
+    // 重复/成环
+    releaseDeletedCreateRef(st, asText(cmd.nodeId))
+    return
+  }
   const id = resolveRef(st, cmd, 'nodeId')
   if (!id) return st.fail(index, `节点不存在：${asText(cmd.nodeId)}`)
   if (st.types.get(id) === 'image') {
@@ -474,9 +490,7 @@ function cycleContingent(
   dst: string,
   pairLabel: string,
 ): boolean {
-  const flow = [...st.virtualEdges, ...tentativeTopology(st)].filter(
-    (e) => e.sourceHandle !== SCENE_SHOT_HANDLE,
-  )
+  const flow = cycleFlowOf(st)
   if (!wouldCreateCycle(flow, src, dst)) {
     return false
   }
@@ -486,19 +500,15 @@ function cycleContingent(
   return true
 }
 
-/** 暂定出口边的拓扑形态（无句柄 branch 边，仅参与成环判定）：只含未解析
- * 投影——表落定后转换的已绑定投影，其存活跨越表替换事件是修复条件性的
- * （修复为不同选项时被级联删除），成环不必然成立、不参与判定（评审
- * 5169363253）；已绑定投影仍参与断线命中与已落定判重（activeTentativeEdges）。 */
-function tentativeTopology(st: FoldState): VirtualEdge[] {
-  return activeTentativeEdges(st)
-    .filter((e) => e.unresolvedIndex !== undefined)
-    .map((e) => ({
-      source: e.source,
-      target: e.target,
-      sourceHandle: null,
-      type: 'branch',
-    }))
+/** 成环判定的边集合（cycleContingent/contingentConnectIssue 共用）：虚拟图
+ * + 暂定拓扑 + ghost 投影边（attach 派生边除外）——ghost 边按「该连线
+ * 生效」参与（评审 5169767128），普通连线经 ghost 边成环同属必然。 */
+function cycleFlowOf(st: FoldState): VirtualEdge[] {
+  return [
+    ...st.virtualEdges,
+    ...tentativeTopology(st),
+    ...st.ghostEdges.map((e) => ({ ...e, sourceHandle: null })),
+  ].filter((e) => e.sourceHandle !== SCENE_SHOT_HANDLE)
 }
 
 /** contingent 连线（端点依赖失败 create）的逐端独立校验（评审
@@ -551,15 +561,32 @@ function contingentPortIssue(
   return null
 }
 
+/** contingent 连线（端点依赖失败 create）的完整守卫（foldEdge 拆出，
+ * S3776）：内在约束（评审 5165573246）→ ghost 判重（5169363253）→ ghost
+ * 成环（5169767128，按「该连线生效」的拓扑评估），全过则登记 ghost 投影
+ * 边供后续连线判定。返回错误文案或 null。 */
+function contingentConnectIssue(st: FoldState, cmd: Record<string, unknown>): string | null {
+  const issue = contingentConnectIntrinsicIssue(st, cmd) ?? createGhostConnectIssue(st, cmd)
+  if (issue !== null) return issue
+  const src = contingentEndpointId(st, asText(cmd.sourceId))
+  const dst = contingentEndpointId(st, asText(cmd.targetId))
+  if (asText(cmd.edgeKind) !== 'attach' && wouldCreateCycle(cycleFlowOf(st), src, dst)) {
+    return `会造成循环剧情：${asText(cmd.sourceId)} → ${asText(cmd.targetId)}`
+  }
+  st.ghostEdges.push({ source: src, target: dst })
+  return null
+}
+
 /** connect_edge / disconnect_edge 的折叠校验。 */
 function foldEdge(st: FoldState, cmd: Record<string, unknown>, index: number, op: string): void {
   const ends = resolveEndpoints(st, cmd, index)
   if (ends === 'contingent') {
     // 端点依赖失败 create（非数组 options 等新拒绝类使该路径常态化）：
-    // 内在约束与 ghost 判重不随 create 修复自愈，首轮点名（评审
-    // 5165573246、5169363253）；断线释放 ghost 登记后静默跳过
+    // 内在约束、ghost 判重与 ghost 成环不随 create 修复自愈，首轮点名
+    // （评审 5165573246、5169363253、5169767128）；断线释放 ghost 登记后
+    // 静默跳过
     if (op === 'connect_edge') {
-      const issue = contingentConnectIntrinsicIssue(st, cmd) ?? createGhostConnectIssue(st, cmd)
+      const issue = contingentConnectIssue(st, cmd)
       if (issue !== null) return st.fail(index, issue)
     } else {
       releaseCreateGhostConnect(st, asText(cmd.sourceId), asText(cmd.targetId))
@@ -660,10 +687,11 @@ function registerFailedOptionsUpdate(
   }
   // 暂定表已确定：清除早前失败留下的 contingent 标记（与成功覆盖同口径），
   // 后续出口连线恢复按最新选项表独立校验 optionIndex/重复；未解析投影
-  // 按暂定表重解析（评审 5164170010）
+  // 按暂定表重解析（评审 5164170010；先重解析再覆盖表，评审 5169767128）
   st.failedBranchOptionUpdates.delete(target)
-  st.branchOptions.set(target, normalized.options as Array<{ id: string; label: string }>)
-  reresolveTentativeEdges(st, target, normalized.options as Array<{ id: string; label: string }>)
+  const newOptions = normalized.options as Array<{ id: string; label: string }>
+  reresolveTentativeEdges(st, target, newOptions, isPositionalOptions(patch.options))
+  st.branchOptions.set(target, newOptions)
 }
 
 /** 折叠失败后的依赖登记（分发循环调用）：create 失败登记其 ref（指向
@@ -726,6 +754,7 @@ export function validateAiBatch(rawCommands: unknown, graph: AiGraphSnapshot): B
     refOwner: new Map(),
     failedBranchOptionUpdates: new Set(),
     contingentConnectKeys: new Set(),
+    ghostEdges: [],
     failedEdgePairs: new Map(),
     assets: graph.assets,
     // 设定集投影（issue 44）：快照未携带时不做实体校验（旧夹具兼容），

@@ -10,6 +10,7 @@
  * 模式，issue 44）。
  */
 
+import type { VirtualEdge } from './failedEdges'
 import { plainObject } from './patchShape'
 
 /** 模块内文本 token 提取（batchFold.asText 同形；避免反向依赖）。 */
@@ -18,12 +19,15 @@ const textOf = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
 /** contingent 出口边的暂定投影：登记时只保留原始下标（optionId 为 raw:
  * 哨兵、unresolvedIndex 记原始下标，评审 5169363253——失败更新前的旧表
  * id 不是绑定额）；表落定（成功或暂定生效）时经 reresolveTentativeEdges
- * 转为绑定稳定选项 id 的已解析投影（unresolvedIndex 缺省）。 */
+ * 转为绑定稳定选项 id 的已解析投影（unresolvedIndex 缺省）。positional
+ * 标记该绑定仅经「按位简写覆盖」派生（评审 5169767128）——按位继承在
+ * 所有修复世界同构，投影存活是必然的，参与成环判定。 */
 export interface TentativeEdge {
   source: string
   target: string
   optionId: string
   unresolvedIndex?: number
+  positional?: true
 }
 
 /** 暂定投影簿记共享的折叠状态（batchFold.FoldState 经此接口供给）。 */
@@ -52,6 +56,10 @@ export interface TentativeEdgeHost {
    * 触及 options 的 contingent 更新按端点/源释放（ghost 域，评审
    * 5169363253）。 */
   contingentConnectKeys: Set<string>
+  /** 失败 create 端点连线的「该连线生效」投影边（端点为解析 id 或 owner
+   * 虚拟 id）：成环判定按含这些边的拓扑评估（评审 5169767128）；端点断线
+   * 移除对应边、contingent 删除退役该 create 的全部边。 */
+  ghostEdges: Array<{ source: string; target: string }>
 }
 
 /** optionIndex 的内在合法性（非负整数；不依赖选项表）：contingent 只豁免
@@ -101,12 +109,19 @@ export function activeTentativeEdges(st: TentativeEdgeHost): TentativeEdge[] {
  * id 判重键，仍越界则撤销投影与回退键（该连线随本轮覆盖确定无法生效，
  * 其后同端点断线按真实缺失处理）；已解析投影绑定的选项 id 被本次覆盖
  * 移除时级联退役，投影与 id 判重键一并永久移除（§8.2.2 删边语义）——
- * 同 id 重新引入时旧边不复活、同端口重连不误判重复（评审 5164450788）。 */
+ * 同 id 重新引入时旧边不复活、同端口重连不误判重复（评审 5164450788）。
+ * positionalCover = 覆盖为按位简写形态（字符串/无 id 成员，评审
+ * 5169767128）：落在旧表长度内的下标经按位继承绑定（修复世界同构），
+ * 转换出的投影标记 positional、参与成环判定；已标记投影经显式 id 覆盖
+ * 存活后降级（存活重新变为修复条件性）。须在 branchOptions 覆盖前调用
+ * （按位继承的旧表长度取自当前表）。 */
 export function reresolveTentativeEdges(
   st: TentativeEdgeHost,
   target: string,
   newTable: ReadonlyArray<{ id: string; label: string }>,
+  positionalCover: boolean,
 ): void {
+  const oldLength = (st.branchOptions.get(target) ?? []).length
   st.tentativeEdges = st.tentativeEdges.flatMap((e) => {
     if (e.source !== target) return [e]
     if (e.unresolvedIndex !== undefined) {
@@ -114,12 +129,37 @@ export function reresolveTentativeEdges(
       st.contingentConnectKeys.delete(`${e.source}\u0000${e.target}\u0000raw:${e.unresolvedIndex}`)
       if (option === undefined) return []
       st.contingentConnectKeys.add(`${e.source}\u0000${e.target}\u0000id:${option.id}`)
-      return [{ source: e.source, target: e.target, optionId: option.id }]
+      const relative = positionalCover && e.unresolvedIndex < oldLength
+      return [{ source: e.source, target: e.target, optionId: option.id, ...(relative ? { positional: true as const } : {}) }]
     }
-    if (newTable.some((o) => o.id === e.optionId)) return [e]
+    if (newTable.some((o) => o.id === e.optionId)) {
+      if (e.positional === true && !positionalCover) {
+        const demoted = { ...e }
+        delete demoted.positional
+        return [demoted]
+      }
+      return [e]
+    }
     st.contingentConnectKeys.delete(`${e.source}\u0000${e.target}\u0000id:${e.optionId}`)
     return []
   })
+}
+
+/** 暂定出口边的拓扑形态（无句柄 branch 边，仅参与成环判定）：只含未解析
+ * 投影与按位溯源（positional）的已解析投影——前者的边身份即端点（表事件
+ * 之前登记），后者的绑定经按位继承派生、所有修复世界同构；显式 id 覆盖
+ * 解析的投影存活是修复条件性的（修复为不同选项时被级联删除），成环不必
+ * 然成立、不参与判定（评审 5169363253、5169767128）；两类投影仍参与断线
+ * 命中与已落定判重（activeTentativeEdges）。 */
+export function tentativeTopology(st: TentativeEdgeHost): VirtualEdge[] {
+  return activeTentativeEdges(st)
+    .filter((e) => e.unresolvedIndex !== undefined || e.positional === true)
+    .map((e) => ({
+      source: e.source,
+      target: e.target,
+      sourceHandle: null,
+      type: 'branch',
+    }))
 }
 
 /** 断线命中前序暂定出口边（投影态已生效、未入虚拟图）：按端点对移除其
@@ -179,10 +219,23 @@ export function createGhostConnectIssue(
   return null
 }
 
-/** 端点断线释放 ghost 登记（评审 5169363253）：修复后该断线移除连线，
- * 其后同端点同下标重连不再必然重复。 */
+/** 端点断线释放 ghost 登记（评审 5169363253、5169767128）：修复后该断线
+ * 移除连线，其后同端点同下标重连不再必然重复，反向连线亦不再经残留的
+ * ghost 投影边误报成环。 */
 export function releaseCreateGhostConnect(st: TentativeEdgeHost, source: string, target: string): void {
-  dropGhostConnectKeys(st, contingentEndpointId(st, source), contingentEndpointId(st, target))
+  const src = contingentEndpointId(st, source)
+  const dst = contingentEndpointId(st, target)
+  dropGhostConnectKeys(st, src, dst)
+  st.ghostEdges = st.ghostEdges.filter((e) => !(e.source === src && e.target === dst))
+}
+
+/** contingent 删除退役失败 create 的全部 ghost 登记（评审 5169767128）：
+ * 修复后该节点被删除，后续同端点连线面对的是缺失端点而非重复/成环。 */
+export function releaseDeletedCreateRef(st: TentativeEdgeHost, ref: string): void {
+  const owner = st.refOwner.get(ref)
+  if (owner === undefined) return
+  dropGhostConnectKeys(st, owner)
+  st.ghostEdges = st.ghostEdges.filter((e) => e.source !== owner && e.target !== owner)
 }
 
 /** 触及 options 的 contingent 更新退役该分支的 ghost 键（评审

@@ -113,6 +113,13 @@ export function branchOptionsError(options: unknown[]): string | null {
   return bad ? '分支 options 含异型成员（须为字符串或带字符串 label 的对象）' : null
 }
 
+/** options 覆盖的按位简写形态判定（评审 5169767128）：成员全为字符串或
+ * 无 id 对象时，normalizeNodeFields 按位继承旧表 id（重命名语义，修复
+ * 世界同构）——经此覆盖解析的投影存活是必然的；显式 id 成员是绝对绑定。 */
+export const isPositionalOptions = (raw: unknown): boolean =>
+  Array.isArray(raw) &&
+  raw.every((m) => typeof m === 'string' || (plainObject(m) && !('id' in m)))
+
 /** shot.refs 成员的引用位联合 + 资产目标校验（§4.2 ShotRef 的信任边界对等，
  * §7.1/§11.3）：与加载侧 isShotRefShape 同口径——双字段**键在场**即非法
  * （值类型 XOR 不足以判定 `{assetId, label: 5}` 这类成员），assetId 须非空白

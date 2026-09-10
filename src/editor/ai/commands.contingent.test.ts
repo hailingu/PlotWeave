@@ -365,7 +365,7 @@ describe('暂定出口边随选项表变化重算（评审 5143770306）', () =>
     expect(v.issues[0]?.message).toContain('异型')
   })
 
-  it('后续覆盖仍保留该选项位时，反向连线维持 contingent（评审 5169363253 修订）', () => {
+  it('后续按位简写覆盖保留选项位时，暂定出口边继续参与成环判定（评审 5169767128 恢复）', () => {
     const v = validateAiBatch(
       [
         { op: 'update_node', nodeId: 'b1', patch: { options: [{ label: 5 }] } },
@@ -375,12 +375,13 @@ describe('暂定出口边随选项表变化重算（评审 5143770306）', () =>
       ],
       richSnap(),
     )
-    // 覆盖形式（按位保留 vs 显式同 id）在折叠期不可区分：显式同 id 的
-    // 修复世界（首条更新修为选项 X）会级联删除该边、反向连线合法——成环
-    // 非必然，不再首轮点名（避免诱导改写正确的反向连线）；修复轮重折叠
-    // 时按落定表现全量判定（评审 5169363253，修订 5143770306 处置）
-    expect(v.issues).toHaveLength(1)
+    // 按位简写（字符串/无 id 成员）按位继承旧表 id——修复世界同构：任何
+    // 使首条连线有效的修复（表 [X…]）都被简写按位保留，反向连线必然成环
+    // （provenance 跟踪恢复 5143770306 处置；显式 id 覆盖仍不点名，见
+    // 评审 5169363253 用例）
+    expect(v.issues).toHaveLength(2)
     expect(v.issues[0]?.message).toContain('异型')
+    expect(v.issues[1]?.index).toBe(3)
   })
 })
 
@@ -1007,6 +1008,59 @@ describe('失败 create 的 contingent 连线 ghost 判重（评审 5169363253�
       ],
       richSnap(),
     )
+    expect(v.issues).toHaveLength(1)
+    expect(v.issues[0]?.message).toContain('options')
+  })
+})
+
+// ghost 拓扑与删除退役（评审 5169767128）：失败 create 端点的 contingent
+// 连线在内在约束与判重通过后登记「该连线生效」的 ghost 投影边——后续
+// contingent 或普通连线的成环判定按含 ghost 边的拓扑评估（s1 → nb 与
+// nb → s1 修复后必然成环，首轮点名）；端点断线移除对应 ghost 边；
+// contingent 删除（delete_node 经 ref）把该 create 建模为已删除，其
+// ghost 键与投影边一并退役——后续重连面对的是缺失端点而非重复。
+describe('ghost 拓扑与删除退役（评审 5169767128）', () => {
+  it('失败 create 的两条对向 contingent 连线修复后必然成环，首轮点名', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'create_node', nodeType: 'branch', ref: 'nb', data: { prompt: '？', options: 42 } },
+        { op: 'connect_edge', sourceId: 's1', targetId: 'nb' },
+        { op: 'connect_edge', sourceId: 'nb', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
+      ],
+      richSnap(),
+    )
+    // s1 → nb 登记为 ghost 投影边；nb → s1 按含该边的拓扑判定：任何使
+    // 两条连线有效的修复都构成 s1 → nb → s1 环
+    expect(v.issues).toHaveLength(2)
+    expect(v.issues[1]?.index).toBe(2)
+  })
+
+  it('断线移除 ghost 投影边后，反向连线不再误报成环', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'create_node', nodeType: 'branch', ref: 'nb', data: { prompt: '？', options: 42 } },
+        { op: 'connect_edge', sourceId: 's1', targetId: 'nb' },
+        { op: 'disconnect_edge', sourceId: 's1', targetId: 'nb' },
+        { op: 'connect_edge', sourceId: 'nb', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
+      ],
+      richSnap(),
+    )
+    // 断线修复后移除 s1 → nb：反向连线合法，仅报 create 错误
+    expect(v.issues).toHaveLength(1)
+    expect(v.issues[0]?.message).toContain('options')
+  })
+
+  it('contingent 删除退役 ghost 登记，其后的同端点重连不误报重复', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'create_node', nodeType: 'branch', ref: 'nb', data: { prompt: '？', options: 42 } },
+        { op: 'connect_edge', sourceId: 'nb', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
+        { op: 'delete_node', nodeId: 'nb' },
+        { op: 'connect_edge', sourceId: 'nb', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
+      ],
+      richSnap(),
+    )
+    // 修复后删除先执行：重连面对的是缺失端点而非重复边，首轮不点名
     expect(v.issues).toHaveLength(1)
     expect(v.issues[0]?.message).toContain('options')
   })
