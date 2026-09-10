@@ -535,4 +535,38 @@ describe('contingent 出口连线的同键重复判定（评审 5163489093）', 
     expect(v.issues).toHaveLength(1)
     expect(v.issues[0]?.message).toContain('options')
   })
+
+  // 评审 5163729170：键绑定登记时解析的稳定选项 id——成功覆盖移除该选项
+  // 后，同下标重连解析到的是新选项，不与旧键匹配，不误报重复。
+  it('成功覆盖移除原选项后，同下标 contingent 重连不误报重复', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'update_node', nodeId: 'b1', patch: { options: 'foo' } },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
+        { op: 'update_node', nodeId: 'b1', patch: { options: [{ id: 'opt-new', label: '换' }] } },
+        { op: 'update_node', nodeId: 'b1', patch: { options: 'bar' } },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
+      ],
+      richSnap(),
+    )
+    // 首尾两条 update 各报一个 options 错误；idx0 重连指向新选项 opt-new
+    expect(v.issues).toHaveLength(2)
+    expect(v.issues.every((i) => i.message.includes('options'))).toBe(true)
+    expect(v.issues.map((i) => i.message).join('\n')).not.toContain('重复连线')
+  })
+
+  it('成功覆盖按位置改名保留原选项 id 时，同键重连仍判重复（对照）', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'update_node', nodeId: 'b1', patch: { options: 'foo' } },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
+        { op: 'update_node', nodeId: 'b1', patch: { options: ['追（改名）'] } },
+        { op: 'update_node', nodeId: 'b1', patch: { options: 'bar' } },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
+      ],
+      richSnap(),
+    )
+    // 字符串更新按位置对位保留 ob-a：两条连线同端口，重复是真阳性
+    expect(v.issues.some((i) => i.index === 4 && i.message.includes('重复连线'))).toBe(true)
+  })
 })

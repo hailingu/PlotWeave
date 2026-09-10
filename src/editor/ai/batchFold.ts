@@ -91,9 +91,11 @@ interface FoldState extends EntityFoldHost {
   /** 本批 options 更新失败的分支节点 id：其出口连线的 optionIndex 校验
    * 随前序修复自愈，按 contingent 跳过（同 ref 依赖，见 isContingentRef）。 */
   failedBranchOptionUpdates: Set<string>
-  /** contingent 出口连线的原始身份键（端点 + 原始下标）：同键的后续连线
-   * 无论修复后选项表如何都必然与前条同端口（重复或一同失效），首轮点名；
-   * 断线撤销登记时随 optionId 映射释放（见 dropTentativeEdge）。 */
+  /** contingent 出口连线的判重键（端点 + 登记时解析的稳定选项 id；不可
+   * 解析退回 #原始下标）：同键的后续连线无论修复后选项表如何都必然与前条
+   * 同端口（重复或一同失效），首轮点名；选项被后续成功覆盖移除/换位后新
+   * 连线解析到不同选项，自然不与旧键匹配（键不退役，评审 5163729170）；
+   * 断线撤销登记时按键释放（见 dropTentativeEdge）。 */
   contingentConnectKeys: Set<string>
   /** 本批失败的连线变更（op + 原始端点 token 对）→ 失败断线登记时同对
    * 残留边的身份快照（失败连线命令为空集）：依赖其变更结果的后续连线
@@ -441,22 +443,25 @@ function foldConnectEdge(
 
 /** contingent 出口连线登记（foldConnectEdge 拆出，S3776）：记录当前选项表
  * 中该下标的稳定选项 id——后续 options 覆盖按 id 级联替换时，暂定边随之
- * 失效（与 removedOptionHandles 同口径）。同端点同原始下标的重复连线返回
+ * 失效（与 removedOptionHandles 同口径）。同端点同解析选项的重复连线返回
  * false：无论修复后选项表如何，第二条必然与前条同端口，首轮即点名，不让
- * 成对重复各占登记、多耗纠错轮次（评审 5163489093）。下标非法或无对应
- * 选项时不登记暂定边（键仍登记，供同键重复比对），避免制造成环假阳性。 */
+ * 成对重复各占登记、多耗纠错轮次（评审 5163489093）。键绑定登记时解析的
+ * 稳定选项 id（不可解析时退回原始下标）：该选项被后续成功覆盖移除/换位
+ * 后，同端点同下标的新连线解析到不同选项，自然不与旧键匹配，键无需退役
+ * 也不产生假阳性（评审 5163729170）。 */
 function registerTentativeEdge(
   st: FoldState,
   cmd: Record<string, unknown>,
   src: string,
   dst: string,
 ): boolean {
-  const key = `${src}\u0000${dst}\u0000${String(cmd.optionIndex)}`
-  if (st.contingentConnectKeys.has(key)) return false
-  st.contingentConnectKeys.add(key)
   const idx = cmd.optionIndex
   if (typeof idx !== 'number' || !Number.isInteger(idx) || idx < 0) return true
   const option = (st.branchOptions.get(src) ?? [])[idx]
+  const optionToken = option !== undefined ? option.id : `#${idx}`
+  const key = `${src}\u0000${dst}\u0000${optionToken}`
+  if (st.contingentConnectKeys.has(key)) return false
+  st.contingentConnectKeys.add(key)
   if (option !== undefined) st.tentativeEdges.push({ source: src, target: dst, optionId: option.id })
   return true
 }
@@ -510,16 +515,14 @@ function tentativeTopology(st: FoldState): VirtualEdge[] {
 
 /** 断线命中前序暂定出口边（投影态已生效、未入虚拟图）：移除其登记并返回
  * true——该断线同样依赖前序修复，按 contingent 静默跳过（与同对 connect
- * 失败同口径），后续命令按「已断开」的投影态判定。同步按 optionId 释放
- * 该出口的原始键：同端点同下标的后续 contingent 连线重新合法（评审
- * 5163489093，与撤销前断线的非 contingent 语义一致）。 */
+ * 失败同口径），后续命令按「已断开」的投影态判定。同步释放该出口的判重
+ * 键（键绑定同一稳定选项 id）：同端点同下标的后续 contingent 连线重新
+ * 合法（评审 5163489093，与撤销前断线的非 contingent 语义一致）。 */
 function dropTentativeEdge(st: FoldState, src: string, dst: string): boolean {
   const hit = activeTentativeEdges(st).find((e) => e.source === src && e.target === dst)
   if (hit === undefined) return false
   st.tentativeEdges.splice(st.tentativeEdges.indexOf(hit), 1)
-  ;(st.branchOptions.get(src) ?? []).forEach((o, i) => {
-    if (o.id === hit.optionId) st.contingentConnectKeys.delete(`${src}\u0000${dst}\u0000${i}`)
-  })
+  st.contingentConnectKeys.delete(`${src}\u0000${dst}\u0000${hit.optionId}`)
   return true
 }
 
