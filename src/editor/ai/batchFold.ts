@@ -272,6 +272,12 @@ function connectKindTag(kind: string, optionIndex: number | undefined): string {
   return `（${EDGE_KIND_LABELS[kind]}）`
 }
 
+/** optionIndex 的内在合法性（foldConnectEdge 拆出，S3776）：非负整数，
+ * 不依赖选项表——contingent 只豁免依赖修复后选项表的上界与句柄检查，
+ * 内在非法值不随任何修复生效（评审 5163320408）。 */
+const isIntrinsicOptionIndex = (idx: unknown): boolean =>
+  typeof idx === 'number' && Number.isInteger(idx) && idx >= 0
+
 /** 连线端口的分端口校验（§4.4）：产出目标 handle 与选项序号；
  * 返回 string = 错误文案。 */
 function edgePortOf(
@@ -362,14 +368,10 @@ function foldConnectEdge(
   // source 分支的 options 状态：本批对该分支的 options 更新失败时延后
   // （随前序修复自愈）；端点类型、宿主唯一、成环等独立约束仍照常校验
   const optionContingent = kind === 'branch' && st.failedBranchOptionUpdates.has(src)
-  // contingent 只豁免依赖修复后选项表的检查（上界与句柄解析）：内在非法的
-  // optionIndex（缺省/非数值/负数/非整数）不随任何修复生效，首轮即点名，
-  // 完整清单不缺项（评审 5163320408）
-  if (optionContingent) {
-    const idx = cmd.optionIndex
-    if (typeof idx !== 'number' || !Number.isInteger(idx) || idx < 0) {
-      return st.fail(index, `optionIndex 须为非负整数：${pairLabel}`)
-    }
+  // contingent 只豁免依赖修复后选项表的检查：内在非法的 optionIndex
+  // 首轮即点名，完整清单不缺项（评审 5163320408）
+  if (optionContingent && !isIntrinsicOptionIndex(cmd.optionIndex)) {
+    return st.fail(index, `optionIndex 须为非负整数：${pairLabel}`)
   }
   let handle: string | null = null
   let optionIndex: number | undefined
