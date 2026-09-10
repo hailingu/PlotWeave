@@ -640,3 +640,62 @@ describe('contingent 越界出口边的投影与键域（评审 5164170010）', 
     expect(v.issues[0]?.message).toContain('options')
   })
 })
+
+// contingent 键与投影随选项移除级联退役（评审 5164450788）：成功或投影的
+// options 覆盖移除已绑定选项时，已解析投影与其 id 判重键一并永久移除
+// （§8.2.2 的级联删边语义）——同 id 其后被重新引入时旧边不复活（不参与
+// 成环判定），同端点同下标重连不与已退役键相撞、不误判重复。
+describe('contingent 键与投影随选项移除级联退役（评审 5164450788）', () => {
+  it('选项移除后又重新引入同 id，同端点重连不误报重复', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'update_node', nodeId: 'b1', patch: { options: 'foo' } },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
+        { op: 'update_node', nodeId: 'b1', patch: { options: [{ id: 'opt-new', label: '换' }] } },
+        { op: 'update_node', nodeId: 'b1', patch: { options: [{ id: 'ob-a', label: '回归' }] } },
+        { op: 'update_node', nodeId: 'b1', patch: { options: 'bar' } },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
+      ],
+      richSnap(),
+    )
+    // 两条非数组 update 各报一个 options 错误；重连指向重新引入的 ob-a，
+    // 旧键已随移除退役，不被点名（拒绝语义按命令定位断言）
+    expect(v.issues).toHaveLength(2)
+    expect(v.issues.every((i) => i.message.includes('options'))).toBe(true)
+    expect(v.issues.every((i) => i.index !== 5)).toBe(true)
+  })
+
+  it('选项移除后旧投影不再参与成环判定，同 id 重新引入也不复活', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'update_node', nodeId: 'b1', patch: { options: 'foo' } },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
+        { op: 'update_node', nodeId: 'b1', patch: { options: [{ id: 'opt-new', label: '换' }] } },
+        { op: 'update_node', nodeId: 'b1', patch: { options: [{ id: 'ob-a', label: '回归' }] } },
+        { op: 'connect_edge', sourceId: 's1', targetId: 'b1' },
+      ],
+      richSnap(),
+    )
+    // 旧投影已随选项移除退役：反向剧情流连线不构成环（本批尚无重连）
+    expect(v.issues).toHaveLength(1)
+    expect(v.issues[0]?.message).toContain('options')
+  })
+
+  it('投影更新（合法选项数组携未知字段失败）同样级联退役', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'update_node', nodeId: 'b1', patch: { options: 'foo' } },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
+        { op: 'update_node', nodeId: 'b1', patch: { options: [{ id: 'opt-new', label: '换' }], nope: 1 } },
+        { op: 'update_node', nodeId: 'b1', patch: { options: [{ id: 'ob-a', label: '回归' }], nope: 1 } },
+        { op: 'update_node', nodeId: 'b1', patch: { options: 'bar' } },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
+      ],
+      richSnap(),
+    )
+    // 未知字段的两条 update 各报一个白名单错误 + 两条非数组 options 错误；
+    // 投影移除同样退役旧键，重连不被点名
+    expect(v.issues).toHaveLength(4)
+    expect(v.issues.every((i) => i.index !== 5)).toBe(true)
+  })
+})

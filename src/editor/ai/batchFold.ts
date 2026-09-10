@@ -96,9 +96,10 @@ interface FoldState extends EntityFoldHost {
   failedBranchOptionUpdates: Set<string>
   /** contingent 出口连线的判重键（端点 + 登记时解析的稳定选项 id；不可
    * 解析退回 #原始下标）：同键的后续连线无论修复后选项表如何都必然与前条
-   * 同端口（重复或一同失效），首轮点名；选项被后续成功覆盖移除/换位后新
-   * 连线解析到不同选项，自然不与旧键匹配（键不退役，评审 5163729170）；
-   * 断线撤销登记时按键释放（见 dropTentativeEdge）。 */
+   * 同端口（重复或一同失效），首轮点名；换位/改名保留 id 时重连仍同键
+   * （真阳性，评审 5163729170），绑定选项被成功或投影覆盖移除时随投影
+   * 级联退役（见 reresolveTentativeEdges，评审 5164450788）；断线撤销
+   * 登记时按键释放（见 dropTentativeEdge）。 */
   contingentConnectKeys: Set<string>
   /** 本批失败的连线变更（op + 原始端点 token 对）→ 失败断线登记时同对
    * 残留边的身份快照（失败连线命令为空集）：依赖其变更结果的后续连线
@@ -451,9 +452,9 @@ function foldConnectEdge(
  * 析投影（optionId 为 raw: 哨兵、记原始下标，评审 5164170010），使后续
  * 同端点断线与成环判定按「该连线生效」评估。同端点的重复连线返回 false：
  * 判重键分域编码——id 域绑定登记时解析的稳定选项 id，越界回退域带 raw:
- * 前缀，选项 id 字面量再巧也不与回退键相撞（评审 5164170010）；被后续
- * 成功覆盖移除/换位的选项使旧 id 键自然失配，键不退役也不产生假阳性
- * （评审 5163729170）。 */
+ * 前缀，选项 id 字面量再巧也不与回退键相撞（评审 5164170010）；换位/
+ * 改名保留 id 时重连仍同键（真阳性，评审 5163729170），覆盖移除的选项
+ * 随投影级联退役（见 reresolveTentativeEdges，评审 5164450788）。 */
 function registerTentativeEdge(
   st: FoldState,
   cmd: Record<string, unknown>,
@@ -501,13 +502,10 @@ function cycleContingent(
   return true
 }
 
-/** 生效的暂定出口边登记：端点仍在、且登记的稳定选项 id 仍在当前选项表内。
- * 按需派生而非固化进 virtualEdges——后续 options 覆盖（成功或暂定生效）
- * 按稳定 id 级联替换/删除选项时自动失效，与 removedOptionHandles 同语义。 */
 /** 生效的暂定出口边登记（评审 5164170010）：端点仍在、解析投影的稳定
- * 选项 id 仍在当前选项表内；未解析投影（下标越出登记时的表长）在其
- * contingent 期（失败更新未修复）生效，表覆盖时重解析（见
- * reresolveTentativeEdges）。 */
+ * 选项 id 仍在当前选项表内（表覆盖移除时已级联退役，见
+ * reresolveTentativeEdges）；未解析投影（下标越出登记时的表长）在其
+ * contingent 期（失败更新未修复）生效，表覆盖时重解析（同上）。 */
 function activeTentativeEdges(st: FoldState): FoldState['tentativeEdges'] {
   return st.tentativeEdges.filter(
     (e) =>
@@ -519,22 +517,29 @@ function activeTentativeEdges(st: FoldState): FoldState['tentativeEdges'] {
   )
 }
 
-/** 选项表覆盖后重解析该分支的未解析投影（评审 5164170010）：原下标落进
- * 新表则转为绑定该稳定选项 id 的常规投影并补登记 id 判重键；仍越界则
- * 撤销投影与回退键——该连线随本轮覆盖确定无法生效，其后同端点断线按
- * 真实缺失处理。 */
+/** 选项表覆盖后重解析该分支的暂定投影（评审 5164170010）：未解析投影按
+ * 新表落定——原下标落进新表则转为绑定该稳定选项 id 的常规投影并补登记
+ * id 判重键，仍越界则撤销投影与回退键（该连线随本轮覆盖确定无法生效，
+ * 其后同端点断线按真实缺失处理）；已解析投影绑定的选项 id 被本次覆盖
+ * 移除时级联退役，投影与 id 判重键一并永久移除（§8.2.2 删边语义）——
+ * 同 id 重新引入时旧边不复活、同端口重连不误判重复（评审 5164450788）。 */
 function reresolveTentativeEdges(
   st: FoldState,
   target: string,
   newTable: ReadonlyArray<{ id: string; label: string }>,
 ): void {
   st.tentativeEdges = st.tentativeEdges.flatMap((e) => {
-    if (e.source !== target || e.unresolvedIndex === undefined) return [e]
-    const option = newTable[e.unresolvedIndex]
-    st.contingentConnectKeys.delete(`${e.source}\u0000${e.target}\u0000raw:${e.unresolvedIndex}`)
-    if (option === undefined) return []
-    st.contingentConnectKeys.add(`${e.source}\u0000${e.target}\u0000id:${option.id}`)
-    return [{ source: e.source, target: e.target, optionId: option.id }]
+    if (e.source !== target) return [e]
+    if (e.unresolvedIndex !== undefined) {
+      const option = newTable[e.unresolvedIndex]
+      st.contingentConnectKeys.delete(`${e.source}\u0000${e.target}\u0000raw:${e.unresolvedIndex}`)
+      if (option === undefined) return []
+      st.contingentConnectKeys.add(`${e.source}\u0000${e.target}\u0000id:${option.id}`)
+      return [{ source: e.source, target: e.target, optionId: option.id }]
+    }
+    if (newTable.some((o) => o.id === e.optionId)) return [e]
+    st.contingentConnectKeys.delete(`${e.source}\u0000${e.target}\u0000id:${e.optionId}`)
+    return []
   })
 }
 
