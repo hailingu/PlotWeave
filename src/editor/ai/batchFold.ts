@@ -91,6 +91,10 @@ interface FoldState extends EntityFoldHost {
   /** 本批 options 更新失败的分支节点 id：其出口连线的 optionIndex 校验
    * 随前序修复自愈，按 contingent 跳过（同 ref 依赖，见 isContingentRef）。 */
   failedBranchOptionUpdates: Set<string>
+  /** contingent 出口连线的原始身份键（端点 + 原始下标）：同键的后续连线
+   * 无论修复后选项表如何都必然与前条同端口（重复或一同失效），首轮点名；
+   * 断线撤销登记时随 optionId 映射释放（见 dropTentativeEdge）。 */
+  contingentConnectKeys: Set<string>
   /** 本批失败的连线变更（op + 原始端点 token 对）→ 失败断线登记时同对
    * 残留边的身份快照（失败连线命令为空集）：依赖其变更结果的后续连线
    * 命令按 contingent 跳过（见 isContingentEdgePair）。快照用于判定
@@ -199,6 +203,24 @@ function foldUpdate(st: FoldState, cmd: Record<string, unknown>, index: number):
     patch: dataPatchOf(nodeType, normalized),
     reason: asText(cmd.reason),
   })
+}
+
+/** contingent 出口连线的折叠（foldConnectEdge 拆出，S3776）：仅在该出口
+ * contingent 时介入——同端点同原始下标的重复连线无论修复后选项表如何都
+ * 必然同端口，首轮点名（评审 5163489093）；否则登记暂定边（生效与否随
+ * 修复后的选项表派生），不进虚拟图、不折叠命令。返回 true = 已介入
+ * （点名或登记），调用方直接返回；false = 非 contingent，继续正常折叠。 */
+function foldContingentConnect(
+  st: FoldState,
+  cmd: Record<string, unknown>,
+  index: number,
+  src: string,
+  dst: string,
+  pairLabel: string,
+): boolean {
+  if (!st.failedBranchOptionUpdates.has(src)) return false
+  if (!registerTentativeEdge(st, cmd, src, dst)) st.fail(index, `重复连线：${pairLabel}`)
+  return true
 }
 
 /** 分支选项替换的级联断线簿记（foldUpdate 内核）：登记刷新 + 被替换/
@@ -392,7 +414,9 @@ function foldConnectEdge(
   // 独立约束全部通过：剩余校验随前序修复自愈，本轮不折叠不点名。端点已
   // 确定时登记暂定出口边（选项句柄待前序修复后解析）：后续连线的成环判定
   // 按「该连线生效」评估，不因本轮省略而漏报独立可判定的错误
-  if (optionContingent) return registerTentativeEdge(st, cmd, src, dst)
+  // contingent：出口连线只登记暂定边（生效与否随修复后的选项表派生），
+  // 不进虚拟图、不折叠命令；同键重复首轮点名（评审 5163489093）
+  if (foldContingentConnect(st, cmd, index, src, dst, pairLabel)) return
   st.virtualEdges.push({
     source: src,
     target: dst,
@@ -417,13 +441,24 @@ function foldConnectEdge(
 
 /** contingent 出口连线登记（foldConnectEdge 拆出，S3776）：记录当前选项表
  * 中该下标的稳定选项 id——后续 options 覆盖按 id 级联替换时，暂定边随之
- * 失效（与 removedOptionHandles 同口径）。下标非法或无对应选项时不登记，
- * 避免制造成环假阳性。 */
-function registerTentativeEdge(st: FoldState, cmd: Record<string, unknown>, src: string, dst: string): void {
+ * 失效（与 removedOptionHandles 同口径）。同端点同原始下标的重复连线返回
+ * false：无论修复后选项表如何，第二条必然与前条同端口，首轮即点名，不让
+ * 成对重复各占登记、多耗纠错轮次（评审 5163489093）。下标非法或无对应
+ * 选项时不登记暂定边（键仍登记，供同键重复比对），避免制造成环假阳性。 */
+function registerTentativeEdge(
+  st: FoldState,
+  cmd: Record<string, unknown>,
+  src: string,
+  dst: string,
+): boolean {
+  const key = `${src}\u0000${dst}\u0000${String(cmd.optionIndex)}`
+  if (st.contingentConnectKeys.has(key)) return false
+  st.contingentConnectKeys.add(key)
   const idx = cmd.optionIndex
-  if (typeof idx !== 'number' || !Number.isInteger(idx) || idx < 0) return
+  if (typeof idx !== 'number' || !Number.isInteger(idx) || idx < 0) return true
   const option = (st.branchOptions.get(src) ?? [])[idx]
   if (option !== undefined) st.tentativeEdges.push({ source: src, target: dst, optionId: option.id })
+  return true
 }
 
 /** 成环守卫（foldConnectEdge 拆出，S3776）：非 attach 连线加环检查。
@@ -475,11 +510,16 @@ function tentativeTopology(st: FoldState): VirtualEdge[] {
 
 /** 断线命中前序暂定出口边（投影态已生效、未入虚拟图）：移除其登记并返回
  * true——该断线同样依赖前序修复，按 contingent 静默跳过（与同对 connect
- * 失败同口径），后续命令按「已断开」的投影态判定。 */
+ * 失败同口径），后续命令按「已断开」的投影态判定。同步按 optionId 释放
+ * 该出口的原始键：同端点同下标的后续 contingent 连线重新合法（评审
+ * 5163489093，与撤销前断线的非 contingent 语义一致）。 */
 function dropTentativeEdge(st: FoldState, src: string, dst: string): boolean {
   const hit = activeTentativeEdges(st).find((e) => e.source === src && e.target === dst)
   if (hit === undefined) return false
   st.tentativeEdges.splice(st.tentativeEdges.indexOf(hit), 1)
+  ;(st.branchOptions.get(src) ?? []).forEach((o, i) => {
+    if (o.id === hit.optionId) st.contingentConnectKeys.delete(`${src}\u0000${dst}\u0000${i}`)
+  })
   return true
 }
 
@@ -664,6 +704,7 @@ export function validateAiBatch(rawCommands: unknown, graph: AiGraphSnapshot): B
     exists: new Set(graph.nodes.map((n) => n.id)),
     refOwner: new Map(),
     failedBranchOptionUpdates: new Set(),
+    contingentConnectKeys: new Set(),
     failedEdgePairs: new Map(),
     assets: graph.assets,
     // 设定集投影（issue 44）：快照未携带时不做实体校验（旧夹具兼容），

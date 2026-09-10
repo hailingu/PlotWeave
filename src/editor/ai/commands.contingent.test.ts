@@ -471,3 +471,68 @@ describe('contingent 出口连线的内在非法 optionIndex 仍独立点名（�
     expect(deferred.issues.map((i) => i.message).join('\n')).not.toContain('optionIndex')
   })
 })
+
+// contingent 出口连线的同键重复判定（评审 5163489093）：失败 options
+// 更新后，同端点同原始下标的两条连线无论修复后选项表如何都必然同端口，
+// 首轮即点名重复，不让成对重复各占暂定登记、多耗纠错轮次；断线撤销
+// 登记后同键重新合法（与撤销前断线的非 contingent 语义一致）。
+describe('contingent 出口连线的同键重复判定（评审 5163489093）', () => {
+  it('失败 options 更新后，两条同端点同下标的连线首轮点名重复', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'update_node', nodeId: 'b1', patch: { options: 'foo' } },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
+      ],
+      richSnap(),
+    )
+    expect(v.ok).toBe(false)
+    expect(v.commands).toEqual([])
+    expect(v.issues).toHaveLength(2)
+    expect(v.issues[0]?.index).toBe(0)
+    expect(v.issues[0]?.message).toContain('options')
+    expect(v.issues[1]?.index).toBe(2)
+    expect(v.issues[1]?.message).toContain('重复连线')
+  })
+
+  it('下标越出当前表长的同键重复同样点名（暂定边未登记仍比对原始键）', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'update_node', nodeId: 'b1', patch: { options: 'foo' } },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 2 },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 2 },
+      ],
+      richSnap(),
+    )
+    expect(v.issues).toHaveLength(2)
+    expect(v.issues[1]?.index).toBe(2)
+    expect(v.issues[1]?.message).toContain('重复连线')
+  })
+
+  it('断线撤销登记后，同端点同下标的后续 contingent 连线重新合法', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'update_node', nodeId: 'b1', patch: { options: 'foo' } },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
+        { op: 'disconnect_edge', sourceId: 'b1', targetId: 's1' },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
+      ],
+      richSnap(),
+    )
+    expect(v.issues).toHaveLength(1)
+    expect(v.issues[0]?.message).toContain('options')
+  })
+
+  it('不同下标的 contingent 连线不误报重复', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'update_node', nodeId: 'b1', patch: { options: 'foo' } },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 1 },
+      ],
+      richSnap(),
+    )
+    expect(v.issues).toHaveLength(1)
+    expect(v.issues[0]?.message).toContain('options')
+  })
+})
