@@ -3,8 +3,10 @@
  * 会话（主文件与恢复副本都写失败、正在按节律重试），阻止关闭并立即冲刷；
  * 冲刷仍失败则保留窗口并给出可见诊断，绝不让唯一内存副本随进程消失。
  * 冲刷与销毁的间隙用户仍可能新增保存：排空到固定点后才销毁窗口。
- * macOS ⌘Q 不经过窗口关闭事件（tao 在 applicationWillTerminate 才通知，
- * 无法拦截），该路径由后台重试与恢复副本尽力兜底。
+ * macOS ⌘Q 由 Rust 侧接管应用菜单后经 `app-quit-requested` 事件到达
+ * （tao 的原生 terminate 不可拦截）：共用同一道冲刷屏障，排空后走受控
+ * app_exit 退出，仍有不可恢复项则不退出。系统级强制终止（kill 等）仍
+ * 不可拦截，属既有文档边界。
  */
 import { useEffect, useState } from 'react'
 import { flushPendingAiSessionSaves, hasPendingAiSessionSaves } from './aiSessionStore'
@@ -15,15 +17,17 @@ export function useExitFlush(): string | null {
   useEffect(() => {
     if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return
     let disposed = false
-    let unlisten: (() => void) | null = null
-    void import('@tauri-apps/api/window').then(async ({ getCurrentWindow }) => {
+    const unlistens: Array<() => void> = []
+    void (async () => {
+      const [{ getCurrentWindow }, { listen }, { invoke }] = await Promise.all([
+        import('@tauri-apps/api/window'),
+        import('@tauri-apps/api/event'),
+        import('@tauri-apps/api/core'),
+      ])
       if (disposed) return
       const appWindow = getCurrentWindow()
-      unlisten = await appWindow.onCloseRequested(async (event) => {
-        if (!hasPendingAiSessionSaves()) return
-        event.preventDefault()
-        // 冲刷落定到销毁的间隙仍可能进入新保存（拦截后的窗口仍可交互）：
-        // 重查未排空就再冲一轮，直到排空或失败上浮
+      /** 排空到固定点后执行 onClean；仍有不可恢复项则不执行并显示诊断。 */
+      const drainAndThen = async (onClean: () => Promise<void>): Promise<void> => {
         for (;;) {
           const failed = await flushPendingAiSessionSaves()
           if (failed.length > 0) {
@@ -35,12 +39,29 @@ export function useExitFlush(): string | null {
           if (!hasPendingAiSessionSaves()) break
         }
         setBlocked(null)
-        await appWindow.destroy()
-      })
-    })
+        await onClean()
+      }
+      const [unlistenClose, unlistenQuit] = await Promise.all([
+        appWindow.onCloseRequested(async (event) => {
+          if (!hasPendingAiSessionSaves()) return
+          event.preventDefault()
+          await drainAndThen(() => appWindow.destroy())
+        }),
+        // ⌘Q（Rust 侧菜单接管，lib.rs install_quit_barrier_menu）：同一道
+        // 冲刷屏障；无待保存直接受控退出
+        listen('app-quit-requested', async () => {
+          if (!hasPendingAiSessionSaves()) {
+            await invoke('app_exit')
+            return
+          }
+          await drainAndThen(() => invoke('app_exit'))
+        }),
+      ])
+      unlistens.push(unlistenClose, unlistenQuit)
+    })()
     return () => {
       disposed = true
-      unlisten?.()
+      unlistens.forEach((unlisten) => unlisten())
     }
   }, [])
   return blocked
