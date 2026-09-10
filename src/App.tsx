@@ -16,8 +16,6 @@ import { useExitFlush } from './useExitFlush'
 import { projectStore, type ProjectContent } from './projectStore'
 import type { ProjectSummary } from './home/projects'
 import type { AiSession } from './editor/ai/session'
-import { isSessionPrefix } from './editor/ai/session'
-import type { AiSessionLoadResult } from './aiSessionStore'
 
 /** 编辑器视图按域惰性加载：React Flow 的运行时引用全部封闭在编辑器域内，
  * 拆出入口 chunk 后冷启动只解析首页所需代码（issue #34）。
@@ -45,57 +43,8 @@ interface OpenProject {
   aiSessionRetryable: boolean
 }
 
-/** 会话恢复诊断文案：权威文件不可读、只存在于恢复副本的会话与修复写回
- * 失败都要如实呈现。 */
-function aiSessionDiagnostic(ai: {
-  repairError: string | null
-  recovered: boolean
-  authoritativeUnreadable: boolean
-}): string | null {
-  if (ai.authoritativeUnreadable) {
-    return `权威会话文件不可读，已从恢复副本载入并暂缓写回（请检查磁盘后重开项目）：${ai.repairError ?? '未知原因'}`
-  }
-  if (ai.recovered) {
-    return `上次会话保存失败，已从恢复副本载入，正在重试落盘：${ai.repairError ?? '未知原因'}`
-  }
-  return ai.repairError
-}
-
-/** 保留区与磁盘历史的调和（评审 pullrequestreview-5161978174）：门禁期间
- * 磁盘可能已恢复可读且携带更新/分叉历史——只有当磁盘历史完全包含于保留
- * 快照（保留快照是其超集）时，保留快照才可无丢失地重试落盘；分叉或磁盘
- * 更长时载入磁盘版本并如实告知，绝不以保留快照直接覆盖未调和的历史。
- * 磁盘仍不可读（载入拒绝、门禁保持）时保留快照照旧胜出等待重开。 */
-function reconcileRetainedSession(
-  id: string,
-  doc: ProjectContent,
-  unsaved: UnsavedAiSession,
-  disk: AiSessionLoadResult | null,
-): OpenProject {
-  if (disk !== null && !isSessionPrefix(disk.session, unsaved.session)) {
-    return {
-      id,
-      doc,
-      aiSession: disk.session,
-      aiSessionError: `磁盘上有与被暂缓编辑不同的历史，已载入磁盘版本：被暂缓的编辑（${unsaved.error}）未能与之合并`,
-      aiSessionRetryable: true,
-    }
-  }
-  return {
-    id,
-    doc,
-    aiSession: unsaved.session,
-    aiSessionError: `上次会话保存失败，已保留待重试：${unsaved.error}`,
-    aiSessionRetryable: true,
-  }
-}
-
-/** 分开读取画布与会话：会话局部损坏不能阻止用户打开可用的项目文档。
- * 保留区在加载屏障之后读取——保存在途时重开，拒绝处理器会在 load 等待
- * 共享保存链期间写入保留区，屏障前先取会拿到过期的 undefined。存在未
- * 落盘保留会话时先重读磁盘刷新门禁与写入序号，再与保留快照调和：磁盘
- * 历史完全包含于保留快照时保留快照胜出（重试无丢失），分叉时载入磁盘
- * 版本并告知。 */
+/** 分开读取画布与会话；等待共享保存链后优先恢复进程内未保存内容。
+ * 单实例下该快照是最新编辑，无须与其他写入者的磁盘历史合并。 */
 async function loadOpenProject(
   id: string,
   unsavedAiSessions?: ReadonlyMap<string, UnsavedAiSession>,
@@ -103,16 +52,13 @@ async function loadOpenProject(
   const doc = await projectStore.load(id)
   const unsaved = unsavedAiSessions?.get(id)
   if (unsaved) {
-    // 保留会话胜出展示，但仍读一次磁盘刷新「新旧未知」门禁与写入序号：
-    // 不读则门禁永不解除，保留会话的重试落盘被永远暂缓（死锁）；仍不可读
-    // 时门禁保持、重试继续被暂缓，如实进入错误文案
-    let disk: AiSessionLoadResult | null = null
-    try {
-      disk = await projectStore.loadAiSession(id)
-    } catch {
-      // 载入失败保持门禁；展示调和交由 reconcileRetainedSession（disk 为 null）
+    return {
+      id,
+      doc,
+      aiSession: unsaved.session,
+      aiSessionError: `上次会话保存失败，已保留待重试：${unsaved.error}`,
+      aiSessionRetryable: true,
     }
-    return reconcileRetainedSession(id, doc, unsaved, disk)
   }
   try {
     const ai = await projectStore.loadAiSession(id)
@@ -120,10 +66,9 @@ async function loadOpenProject(
       id,
       doc,
       aiSession: ai.session,
-      aiSessionError: aiSessionDiagnostic(ai),
-      // 副本或权威文件不可读时禁止挂载重试落盘：新旧无法确定，写入边界
-      // 会拒绝，自动重试只会反复报错
-      aiSessionRetryable: !ai.recoveryUnreadable && !ai.authoritativeUnreadable,
+      aiSessionError: ai.repairError,
+      // 读取不自动写回；损坏诊断保留到用户实际编辑后的保存成功。
+      aiSessionRetryable: false,
     }
   } catch (err) {
     console.warn('[App] AI 会话恢复失败，已以空历史打开项目', err)
@@ -328,8 +273,8 @@ export default function App() {
     return () => document.removeEventListener('keydown', onKey)
   }, [])
 
-  // 后台重试补写成功（不经 UI 保存通道）时清除项目级错误与保留快照：
-  // 否则面板持续宣称「保存失败」而会话实际已跨进程落盘。清理与
+  // 退出重试保存成功（不经 UI 保存通道）时清除项目级错误与保留快照：
+  // 否则面板持续宣称「保存失败」而会话实际已保存到主文件。清理与
   // handleSaveAiSession 的成功尾巴幂等重复，无害。
   useEffect(
     () =>

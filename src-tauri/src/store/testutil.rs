@@ -57,13 +57,6 @@ pub(crate) fn temp_projects_dir() -> PathBuf {
     dir
 }
 
-/// 与临时 projects 同级的恢复副本目录（生产端为 `app_data/recovery/`）。
-pub(crate) fn temp_recovery_dir(projects: &std::path::Path) -> PathBuf {
-    let dir = projects.parent().expect("临时根").join("recovery");
-    fs::create_dir_all(&dir).expect("创建临时 recovery 目录");
-    dir
-}
-
 pub(crate) fn cleanup_temp(projects: &std::path::Path) {
     if let Some(parent) = projects.parent() {
         let _ = fs::remove_dir_all(parent);

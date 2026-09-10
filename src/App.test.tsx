@@ -37,7 +37,7 @@ vi.mock('./projectStore', () => ({
   },
 }))
 
-/** projectStore.onAiSessionSaved 已登记的监听器（测试经此模拟后台重试成功）。 */
+/** projectStore.onAiSessionSaved 已登记的监听器（测试经此模拟退出重试成功）。 */
 const retrySavedListeners: Array<(id: string) => void> = []
 
 vi.mock('./home/HomePage', () => ({
@@ -166,6 +166,9 @@ describe('App（双界面路由壳）', () => {
     expect(store.list).toHaveBeenCalledTimes(2)
   })
 
+})
+
+describe('App（导航与编辑器回调）', () => {
   it('编辑器回调：改名更新打开态文档名；保存委托 save（失败上浮给编辑器重试/横幅）；返回首页刷新', async () => {
     await openEditor()
     act(() => {
@@ -224,64 +227,20 @@ describe('App ✦AI 会话恢复', () => {
     expect(editorProps.current.aiSessionRetryable).toBe(false)
   })
 
-  it('AI 会话修复回写失败时保留已恢复历史，并将错误交给编辑器提示', async () => {
+  it('AI 会话坏条目隔离后保留可用历史，提示且不自动写回', async () => {
     const recovered = { schemaVersion: 1 as const, entries: [{ id: 1, kind: 'note' as const, text: '已恢复' }] }
     store.loadAiSession.mockResolvedValue({ session: recovered, repairError: 'Error: 只读目录' })
     await openEditor()
     expect(editorProps.current.aiSession).toEqual(recovered)
     expect(editorProps.current.aiSessionError).toBe('Error: 只读目录')
-    // 内存中是恢复出的会话：重挂载重试落盘是安全的
-    expect(editorProps.current.aiSessionRetryable).toBe(true)
-  })
-
-  it('会话只存在于恢复副本时如实告知来源并保持可重试', async () => {
-    const recovered = { schemaVersion: 1 as const, entries: [{ id: 1, kind: 'note' as const, text: '恢复副本' }] }
-    store.loadAiSession.mockResolvedValue({
-      session: recovered,
-      repairError: 'Error: 磁盘已满',
-      recovered: true,
-    })
-    await openEditor()
-    expect(editorProps.current.aiSession).toEqual(recovered)
-    expect(editorProps.current.aiSessionError).toContain('恢复副本')
-    expect(editorProps.current.aiSessionError).toContain('磁盘已满')
-    expect(editorProps.current.aiSessionRetryable).toBe(true)
-  })
-
-  it('恢复副本不可读时保留权威历史、如实告知并禁止挂载重试落盘', async () => {
-    const main = { schemaVersion: 1 as const, entries: [{ id: 1, kind: 'note' as const, text: '权威历史' }] }
-    store.loadAiSession.mockResolvedValue({
-      session: main,
-      repairError: 'AI 会话恢复副本读取失败，已暂缓保存以免覆盖更新的历史：Error: 权限拒绝',
-      recovered: false,
-      recoveryUnreadable: true,
-    })
-    await openEditor()
-    expect(editorProps.current.aiSession).toEqual(main)
-    expect(editorProps.current.aiSessionError).toContain('恢复副本读取失败')
-    // 新旧无法确定：写入边界的顺序守卫会拒绝覆盖，自动重试只会反复报错
+    // 读取仅展示损坏诊断，不触发挂载保存。
     expect(editorProps.current.aiSessionRetryable).toBe(false)
   })
 
-  it('权威文件不可读时展示恢复副本、如实告知并禁止挂载重试落盘', async () => {
-    const recovered = { schemaVersion: 1 as const, entries: [{ id: 1, kind: 'note' as const, text: '恢复副本' }] }
-    store.loadAiSession.mockResolvedValue({
-      session: recovered,
-      repairError: 'Error: AI 会话文件不可读，无法确定新旧，已拒绝覆盖',
-      recovered: true,
-      recoveryUnreadable: false,
-      authoritativeUnreadable: true,
-    })
-    await openEditor()
-    expect(editorProps.current.aiSession).toEqual(recovered)
-    expect(editorProps.current.aiSessionError).toContain('权威会话文件不可读')
-    // 权威序号未知：不得自动重试提升覆盖
-    expect(editorProps.current.aiSessionRetryable).toBe(false)
-  })
 })
 
 describe('App ✦AI 会话保存', () => {
-  it('修复回写失败后再次保存成功：项目级错误清除，重挂载不再报保存失败', async () => {
+  it('有加载诊断后实际编辑并保存成功：项目级错误清除，重挂载不再报保存失败', async () => {
     const recovered = { schemaVersion: 1 as const, entries: [{ id: 1, kind: 'note' as const, text: '已恢复' }] }
     store.loadAiSession.mockResolvedValue({ session: recovered, repairError: 'Error: 只读目录' })
     store.saveAiSession.mockResolvedValue(undefined)
@@ -369,105 +328,7 @@ describe('App ✦AI 会话保存失败', () => {
 })
 
 describe('App ✦AI 会话重试成功通知', () => {
-  it('新旧未知期间的保留会话：重开时重新读取磁盘（确立定序）后再展示重试', async () => {
-    // 变更保存被门禁拒绝（模拟新旧未知）→ 会话进保留区
-    store.saveAiSession.mockRejectedValueOnce(new Error('AI 会话新旧未知，已暂缓保存'))
-    await openEditor()
-    const changed = {
-      schemaVersion: 1 as const,
-      entries: [{ id: 1, kind: 'note' as const, text: '编辑' }],
-    }
-    await act(async () => {
-      await expect(
-        (editorProps.current.onSaveAiSession as (value: typeof changed) => Promise<void>)(changed),
-      ).rejects.toThrow('暂缓')
-    })
-    await act(async () => {
-      ;(editorProps.current.onBackHome as () => void)()
-    })
-    expect(await screen.findByTestId('home')).toBeTruthy()
-
-    // 重开：保留会话胜出展示，但必须重新读盘刷新定序——否则门禁永不解除，
-    // 保留会话的重试永远被暂缓（死锁）
-    store.loadAiSession.mockClear()
-    await act(async () => {
-      await (homeProps.current.onOpenProject as (id: string) => Promise<void>)('p1')
-    })
-    await screen.findByTestId('editor')
-    expect(store.loadAiSession).toHaveBeenCalledTimes(1)
-    expect(editorProps.current.aiSession).toEqual(changed)
-    expect(editorProps.current.aiSessionRetryable).toBe(true)
-  })
-
-  it('保留会话重开与磁盘历史调和：磁盘分叉时载入磁盘版本并告知，不以保留快照覆盖', async () => {
-    // 变更保存被门禁拒绝（模拟新旧未知）→ 会话进保留区
-    store.saveAiSession.mockRejectedValueOnce(new Error('AI 会话新旧未知，已暂缓保存'))
-    await openEditor()
-    const changed = {
-      schemaVersion: 1 as const,
-      entries: [{ id: 1, kind: 'note' as const, text: '被暂缓的编辑' }],
-    }
-    await act(async () => {
-      await expect(
-        (editorProps.current.onSaveAiSession as (value: typeof changed) => Promise<void>)(changed),
-      ).rejects.toThrow('暂缓')
-    })
-    await act(async () => {
-      ;(editorProps.current.onBackHome as () => void)()
-    })
-    expect(await screen.findByTestId('home')).toBeTruthy()
-
-    // 门禁期间恢复可读的副本携带分叉历史：重开调和后载入磁盘版本——
-    // 保留快照不得带更高序号直接覆盖它（评审 pullrequestreview-5161978174）
-    const diskHistory = {
-      schemaVersion: 1 as const,
-      entries: [{ id: 1, kind: 'note' as const, text: '磁盘上的另一条历史' }],
-    }
-    store.loadAiSession.mockResolvedValueOnce({ session: diskHistory, repairError: null })
-    await act(async () => {
-      await (homeProps.current.onOpenProject as (id: string) => Promise<void>)('p1')
-    })
-    await screen.findByTestId('editor')
-    expect(editorProps.current.aiSession).toEqual(diskHistory)
-    expect(editorProps.current.aiSessionError).toContain('未能与之合并')
-    expect(editorProps.current.aiSessionRetryable).toBe(true)
-  })
-
-  it('保留会话重开与磁盘历史调和：磁盘历史是保留快照前缀时保留快照仍胜出', async () => {
-    store.saveAiSession.mockRejectedValueOnce(new Error('磁盘已满'))
-    await openEditor()
-    const changed = {
-      schemaVersion: 1 as const,
-      entries: [
-        { id: 1, kind: 'note' as const, text: '共同历史' },
-        { id: 2, kind: 'note' as const, text: '保留区新增' },
-      ],
-    }
-    await act(async () => {
-      await expect(
-        (editorProps.current.onSaveAiSession as (value: typeof changed) => Promise<void>)(changed),
-      ).rejects.toThrow('磁盘已满')
-    })
-    await act(async () => {
-      ;(editorProps.current.onBackHome as () => void)()
-    })
-    expect(await screen.findByTestId('home')).toBeTruthy()
-
-    // 磁盘历史是保留快照的逐条前缀：保留快照是其超集，重试覆盖无丢失
-    store.loadAiSession.mockResolvedValueOnce({
-      session: { schemaVersion: 1, entries: [{ id: 1, kind: 'note', text: '共同历史' }] },
-      repairError: null,
-    })
-    await act(async () => {
-      await (homeProps.current.onOpenProject as (id: string) => Promise<void>)('p1')
-    })
-    await screen.findByTestId('editor')
-    expect(editorProps.current.aiSession).toEqual(changed)
-    expect(editorProps.current.aiSessionError).toContain('磁盘已满')
-    expect(editorProps.current.aiSessionRetryable).toBe(true)
-  })
-
-  it('后台重试补写成功：清除项目级错误与保留快照，重开不再以内存会话胜出', async () => {
+  it('退出重试补写成功：清除项目级错误与保留快照，重开不再以内存会话胜出', async () => {
     store.saveAiSession.mockRejectedValueOnce(new Error('磁盘已满'))
     await openEditor()
     const changed = {

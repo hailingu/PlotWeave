@@ -67,7 +67,7 @@ export const projectStore = {
   /** AI 会话保存失败上浮给面板展示；内存历史不随失败清空。 */
   saveAiSession: (id: string, session: AiSession): Promise<void> => saveAiSession(id, session),
 
-  /** 订阅会话权威落盘成功（含不经 UI 通道的后台重试补写）：App 据此清除
+  /** 订阅会话落盘成功（含不经面板通道的退出重试）：App 据此清除
    * 项目级保存错误与保留快照。 */
   onAiSessionSaved,
 

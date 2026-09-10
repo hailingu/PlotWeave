@@ -58,8 +58,8 @@ export function persistedEntries(thread: ThreadEntry[]): ThreadEntry[] {
  * 错误且不清空内存历史。带错误挂载时按 initialSessionRetryable 决定是否
  * 首帧重试——读取失败的空回退会话不可重试（落盘会覆盖可能可恢复的原
  * 文件），须等用户实际变更对话后才随变更保存。项目级错误（App 的
- * aiSessionError）双向同步：非空到达即展示，转空也随之清除——后台重试
- * 补写成功不经面板保存通道，只有项目级清除能把横幅撤下；面板每次保存
+ * aiSessionError）双向同步：非空到达即展示，转空也随之清除——退出重试
+ * 保存成功不经面板保存通道，只有项目级清除能把横幅撤下；面板每次保存
  * 都经 App 通道更新项目级状态，双向同步最终一致。 */
 export function useAiSessionPersistence(
   thread: ThreadEntry[],

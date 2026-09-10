@@ -3,7 +3,7 @@
 use super::*;
 use crate::isotime::now_iso;
 use crate::store::commands::{load_project_file, persist_project};
-use crate::store::testutil::{cap, cleanup_temp, meta, temp_projects_dir, temp_recovery_dir};
+use crate::store::testutil::{cap, cleanup_temp, meta, temp_projects_dir};
 use crate::store::types::new_project_file;
 use serde_json::json;
 use std::fs;
@@ -416,27 +416,4 @@ fn wrap_legacy_rejects_overflowing_numeric_timestamp() {
         wrapped.project.updated_at.is_empty(),
         "溢出时间戳应回退默认而非伪造"
     );
-}
-
-#[test]
-fn sweep_orphan_recovery_removes_copies_without_project_record() {
-    let projects = temp_projects_dir();
-    let recovery = temp_recovery_dir(&projects);
-    fs::write(projects.join("p-live.json"), b"{}").expect("写项目文件");
-    let live = recovery.join("ai-session-p-live.json");
-    let orphan = recovery.join("ai-session-p-gone.json");
-    let invalid = recovery.join("ai-session-bad id.json");
-    let alien = recovery.join("notes.txt");
-    fs::write(&live, b"{}").expect("写在用副本");
-    fs::write(&orphan, b"{}").expect("写孤儿副本");
-    fs::write(&invalid, b"{}").expect("写非法 id 命名副本");
-    fs::write(&alien, b"x").expect("写非副本文件");
-
-    sweep_orphan_recovery(&cap(&projects), &cap(&recovery));
-
-    assert!(live.exists(), "项目记录仍在：副本必须保留");
-    assert!(!orphan.exists(), "项目记录缺失：孤儿副本必须清理");
-    assert!(invalid.exists(), "非法 id 命名的文件不触碰");
-    assert!(alien.exists(), "非副本命名文件不触碰");
-    cleanup_temp(&projects);
 }

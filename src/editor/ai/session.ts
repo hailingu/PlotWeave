@@ -145,33 +145,3 @@ export function normalizeAiSession(raw: unknown): AiSessionNormalizeResult {
   })
   return { session: { schemaVersion: 1, entries }, repaired }
 }
-
-/** JSON 形状的深度相等（会话条目为纯数据；运行时标注字段同样参与比较，
- * 分叉判定宁严勿松）。 */
-function deepEquals(a: unknown, b: unknown): boolean {
-  if (a === b) return true
-  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) {
-    return false
-  }
-  if (Array.isArray(a) || Array.isArray(b)) {
-    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false
-    return a.every((item, index) => deepEquals(item, b[index]))
-  }
-  const keysA = Object.keys(a)
-  const keysB = Object.keys(b)
-  if (keysA.length !== keysB.length) return false
-  return keysA.every((key) =>
-    deepEquals((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key]),
-  )
-}
-
-/** 判断 base 的历史是否为 superset 的逐条前缀（深度相等）：保留区与磁盘
- * 历史的调和判定（评审 pullrequestreview-5161978174）——只有当磁盘历史
- * 完全包含于保留快照（保留快照是其超集）时，保留快照才可无丢失地覆盖
- * 落盘；分叉或磁盘更长时必须载入磁盘版本，不得以保留快照直接覆盖。 */
-export function isSessionPrefix(base: AiSession, superset: AiSession): boolean {
-  return (
-    base.entries.length <= superset.entries.length &&
-    base.entries.every((entry, index) => deepEquals(entry, superset.entries[index]))
-  )
-}

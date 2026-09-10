@@ -113,9 +113,7 @@ export function enqueueSave(id: string, doc: ProjectContent): Promise<void> {
  * 时按入队序回吐：先链落定时留存的登记文档、再墓碑期间吸收的最新文档
  * 重新排队保存——不回吐则最新编辑既没落盘也无重试登记；登记为空即最新
  * 保存已成功（或从未失败），不得回放更早的旧登记（陈旧文档的重试不得
- * 覆盖新内容）；删除成功则登记与吸收的文档随项目一并丢弃。删除命令返回
- * 「已提交 + 副本清理诊断」时同样按成功处理：项目记录已移除，回吐保存会
- * 经 save_project 重建记录让已删项目复活（资产目录却已删除）。 */
+ * 覆盖新内容）；删除成功则登记与吸收的文档随项目一并丢弃。 */
 export function enqueueDelete(id: string): Promise<void> {
   deletingIds.add(id)
   clearSaveRetryTimer(id)
@@ -127,11 +125,7 @@ export function enqueueDelete(id: string): Promise<void> {
     retainedRetryDoc = pendingRetryDocs.get(id)
     clearSaveRetry(id)
     const { invoke } = await import('@tauri-apps/api/core')
-    const report = await invoke<{ cleanup_error?: string | null }>('delete_project', { id })
-    if (report?.cleanup_error) {
-      // 删除已提交：残留副本由 list_projects 的孤儿清扫兜底，这里只留痕
-      console.warn('[projectStore] 项目已删除，但恢复副本清除失败（列表时清扫）', report.cleanup_error)
-    }
+    await invoke('delete_project', { id })
   })
   next
     .finally(() => {

@@ -50,15 +50,14 @@ describe('项目附属数据保存链', () => {
   })
 })
 
-describe('项目删除回执（已提交 + 副本清理诊断）', () => {
+describe('项目删除与保存协调', () => {
   afterEach(() => vi.clearAllMocks())
 
-  it('删除已提交但副本清理失败：不回吐画布保存（已删项目不得复活）', async () => {
+  it('删除成功：不回吐画布保存（已删项目不得复活）', async () => {
     const id = 'delete-cleanup-error-test'
     const commands: string[] = []
     invoke.mockImplementation(async (command: string) => {
       commands.push(command)
-      if (command === 'delete_project') return { cleanup_error: '恢复副本清除失败' }
       return undefined
     })
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})

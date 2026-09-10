@@ -9,10 +9,7 @@ use crate::isotime::now_iso;
 use crate::store::list::{parse_file, read_meta};
 #[cfg(unix)]
 use crate::store::persist::asset_identity;
-use crate::store::persist::{
-    atomic_write, open_dir_bound, projects_dir, read_verified_file, recovery_dir,
-    recovery_file_name,
-};
+use crate::store::persist::{atomic_write, open_dir_bound, projects_dir, read_verified_file};
 use crate::store::types::{
     new_id, new_project_file, sanitize_name, validate_id, ProjectFile, ProjectMeta,
 };
@@ -47,12 +44,7 @@ pub fn load_ai_session(app: AppHandle, id: String) -> Result<SessionCopy, String
     load_ai_session_file(&root, &id)
 }
 
-/// 保存项目独立 AI 会话。会话文件位于 `projects/{id}/ai-session.json`，与
-/// `project.json` 分离，避免每条对话触发整份画布文档序列化。主文件成功
-/// 落盘后清除可能存在的恢复副本（权威副本已取代它）。顺序守卫的检查、
-/// 权威落盘与副本清理全程持有跨进程写入锁（评审 pullrequestreview-5161978174：
-/// 守卫是「检查后写入」，不锁则两进程可同时通过旧序号检查、再先后原子
-/// 改名，后者静默替换前者）。
+/// 单实例会话保存：仅原子写入主文件，失败直接上浮，不写恢复副本。
 #[tauri::command]
 pub fn save_ai_session(
     app: AppHandle,
@@ -60,252 +52,14 @@ pub fn save_ai_session(
     session: serde_json::Value,
 ) -> Result<(), String> {
     let root = projects_dir(&app)?;
-    let recovery = recovery_dir(&app)?;
-    let _guard = acquire_session_write_lock(&recovery)?;
-    save_ai_session_authoritative(&root, &recovery, &id, &session)
+    save_ai_session_file(&root, &id, &session)
 }
 
-/// 写入会话恢复副本（主文件保存失败后的跨进程保留）：与项目目录分离，
-/// 项目目录不可写或记录暂不可读时仍可能写入成功。项目记录必须存在——
-/// 已删除项目不得因恢复副本留下不可见聊天数据。副本顺序守卫同样在
-/// 跨进程写入锁内执行（见 save_ai_session）。
-#[tauri::command]
-pub fn stash_ai_session_recovery(
-    app: AppHandle,
-    id: String,
-    session: serde_json::Value,
-) -> Result<(), String> {
-    let projects = projects_dir(&app)?;
-    let recovery = recovery_dir(&app)?;
-    let _guard = acquire_session_write_lock(&recovery)?;
-    stash_ai_session_recovery_file(&projects, &recovery, &id, &session)
-}
-
-/// 读取会话恢复副本；`session` 为 None 表示副本缺失或损坏（损坏时
-/// `corrupt` 置位）。前端在主文件读取之外单独消费，以便向用户标明
-/// 「已从恢复副本载入」。
-#[tauri::command]
-pub fn load_ai_session_recovery(app: AppHandle, id: String) -> Result<SessionCopy, String> {
-    let recovery = recovery_dir(&app)?;
-    load_ai_session_recovery_file(&recovery, &id)
-}
-
-/// 会话副本读取结果（主文件与恢复副本共用契约）：损坏（不可解析或信封
-/// 非法）的内容无法被任何进程载入，与两个顺序守卫同口径按「可安全替换」
-/// 归类，以 `corrupt` 标记返回而不是 Err——前端不得据此进入「新旧未知」
-/// 门禁永久暂缓保存。Err 仅保留给真实 I/O 失败（权限/瞬态 I/O、元数据
-/// 失败），那才是新旧无法确定、写入边界必须拒绝覆盖的情形。
+/// 主文件加载结果；缺失为空历史，损坏由前端提示，真实 I/O 错误仍返回 Err。
 #[derive(serde::Serialize)]
 pub struct SessionCopy {
     pub session: Option<serde_json::Value>,
     pub corrupt: bool,
-}
-
-/// 会话写入锁文件名（位于 recovery/ 内）：永不被替换——锁住的是稳定的
-/// 目录项而非会话文件本身（rename 会换掉后者，锁会失联）。
-const SESSION_WRITE_LOCK_FILE: &str = "session-write.lock";
-
-/// 会话写入的跨进程互斥守卫：持有期间其他 PlotWeave 进程的顺序守卫检查、
-/// 权威落盘与副本清理被串行化；drop 即解锁。文件锁随进程退出由内核
-/// 释放，无陈锁可留。咨询锁——只约束协作的写入方；读取不经锁（原子
-/// rename 保证读到的是某个一致的副本快照）。内核函数不自行加锁：由
-/// 命令层统一获取，避免权威保存内部的副本改写路径重入死锁。
-pub(crate) struct SessionWriteGuard {
-    _lock: std::fs::File,
-}
-
-/// 打开（不存在则创建）锁文件并阻塞获取排他锁。句柄经锚定的 recovery
-/// 目录解析；锁文件名不匹配副本模式，列表孤儿清扫不触碰它。
-fn acquire_session_write_lock(recovery: &CapDir) -> Result<SessionWriteGuard, String> {
-    let mut options = cap_std::fs::OpenOptions::new();
-    options.read(true).write(true).create(true);
-    let file = recovery
-        .open_with(SESSION_WRITE_LOCK_FILE, &options)
-        .map_err(|e| format!("打开 AI 会话写入锁失败：{e}"))?;
-    let lock = file.into_std();
-    lock.lock()
-        .map_err(|e| format!("获取 AI 会话写入锁失败：{e}"))?;
-    Ok(SessionWriteGuard { _lock: lock })
-}
-
-/// JS `Number.MAX_SAFE_INTEGER`（2^53-1）：会话写入序号的可接受上界。u64
-/// 能表示更大的值，但前端 `seqOf` 会把超出安全整数范围的序号归一为 0
-/// ——保存边界必须先拒绝，否则超范围序号一旦落盘，下一次合法保存（从 1
-/// 续起）被序号守卫当作更旧而永久拒绝，权威持久化无法恢复。
-const MAX_SAFE_WRITE_SEQ: u64 = (1u64 << 53) - 1;
-
-/// 会话载荷的写入序号（非负整数；缺失/异型视作 0）。
-fn session_write_seq(session: &serde_json::Value) -> u64 {
-    session
-        .get("writeSeq")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(0)
-}
-
-/// 会话载荷去除 `writeSeq` 后的对话内容：相等序号下的写入身份。内容一致
-/// = 同一逻辑写入的幂等重放（如权威保存后清除副本失败时的同序号改写、
-/// 旧无序号文件补显式 0 的升级），替换不丢失任何历史，必须放行；内容
-/// 不同 = 无单实例约束下两进程各自续起撞号的并发冲突，后写替换先写会
-/// 静默丢失一侧会话，必须拒绝（评审 pullrequestreview-5161801056）。
-fn session_body(session: &serde_json::Value) -> serde_json::Value {
-    let mut body = session.clone();
-    if let Some(object) = body.as_object_mut() {
-        object.remove("writeSeq");
-    }
-    body
-}
-
-/// 恢复副本替换/清除前的顺序守卫（§12.2，历轮评审修复）：仅当现存副本
-/// 缺失、内容不可解析（损坏副本无法再被载入，可安全替换）、写入序号
-/// 小于本次写入序号，或序号相等且对话内容一致（幂等重放）时才允许
-/// 替换。副本不可读（权限/瞬态 I/O）或序号更新时拒绝——绝不在无法确定
-/// 新旧的情况下销毁可能是唯一新副本的历史；相等序号的不同内容是两进程
-/// 撞号的并发冲突，同样拒绝。
-fn ensure_recovery_replaceable(
-    recovery: &CapDir,
-    id: &str,
-    incoming: &serde_json::Value,
-) -> Result<(), String> {
-    let name = recovery_file_name(id);
-    match recovery.symlink_metadata(&name) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(format!("读取 AI 会话恢复副本元数据失败，已拒绝覆盖：{e}")),
-        Ok(_) => {}
-    }
-    let text = read_verified_file(recovery, &name)
-        .map_err(|e| format!("AI 会话恢复副本不可读，无法确定新旧，已拒绝覆盖：{e}"))?;
-    let existing = serde_json::from_str::<serde_json::Value>(&text)
-        .ok()
-        .filter(|v| validate_ai_session(v).is_ok());
-    match existing {
-        Some(existing) if session_write_seq(&existing) > session_write_seq(incoming) => {
-            Err("AI 会话恢复副本比本次保存更新，已拒绝覆盖（请重新打开项目载入更新的历史）".into())
-        }
-        Some(existing)
-            if session_write_seq(&existing) == session_write_seq(incoming)
-                && session_body(&existing) != session_body(incoming) =>
-        {
-            Err("AI 会话恢复副本已存在同一写入序号的不同会话（另一进程可能已写入），已拒绝覆盖（请重新打开项目载入最新历史）".into())
-        }
-        _ => Ok(()),
-    }
-}
-
-/// 写恢复副本内核（不可信 id 与信封校验先于路径拼接；现存副本更新、
-/// 不可读，或相等序号的不同内容（并发冲突）时拒绝覆盖）。
-pub(crate) fn stash_ai_session_recovery_file(
-    projects: &CapDir,
-    recovery: &CapDir,
-    id: &str,
-    session: &serde_json::Value,
-) -> Result<(), String> {
-    validate_ai_session(session)?;
-    require_project_record(projects, id)?;
-    ensure_recovery_replaceable(recovery, id, session)?;
-    let text =
-        serde_json::to_string_pretty(session).map_err(|e| format!("序列化 AI 会话失败：{e}"))?;
-    atomic_write(recovery, &recovery_file_name(id), &text)
-        .map_err(|e| format!("保存 AI 会话恢复副本失败：{e}"))
-}
-
-/// 读恢复副本内核：缺失是合法状态（无失败保存）；损坏按可替换归类
-/// （见 `RecoveryCopy` 的契约说明），不可读才是 Err。
-pub(crate) fn load_ai_session_recovery_file(
-    recovery: &CapDir,
-    id: &str,
-) -> Result<SessionCopy, String> {
-    validate_id(id)?;
-    let name = recovery_file_name(id);
-    match recovery.symlink_metadata(&name) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(SessionCopy {
-            session: None,
-            corrupt: false,
-        }),
-        Ok(_) => {
-            let text = read_verified_file(recovery, &name)
-                .map_err(|e| format!("拒绝读取 AI 会话恢复副本：{e}"))?;
-            let session = serde_json::from_str::<serde_json::Value>(&text)
-                .ok()
-                .filter(|v| validate_ai_session(v).is_ok());
-            Ok(match session {
-                Some(session) => SessionCopy {
-                    session: Some(session),
-                    corrupt: false,
-                },
-                None => SessionCopy {
-                    session: None,
-                    corrupt: true,
-                },
-            })
-        }
-        Err(e) => Err(format!("读取 AI 会话恢复副本元数据失败：{e}")),
-    }
-}
-
-/// 清除恢复副本内核：幂等（缺失即成功）；remove_file 只移除目录项本身，
-/// 不跟随符号链接。
-pub(crate) fn clear_ai_session_recovery_file(recovery: &CapDir, id: &str) -> Result<(), String> {
-    validate_id(id)?;
-    match recovery.remove_file(recovery_file_name(id)) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(format!("清除 AI 会话恢复副本失败：{e}")),
-    }
-}
-
-/// 权威保存 + 清除恢复副本：主文件失败时不触碰恢复副本（它是当前唯一可
-/// 跨进程恢复的拷贝）；现存副本更新、不可读，或相等序号的不同内容时
-/// 整次拒绝——写入主文件后再拒绝清除会让更新副本在下次载入时压过刚保存
-/// 的内容。清除失败时改写为刚落盘的权威内容——陈旧副本若在下次载入时仍
-/// 优先于权威文件，会把新会话回退成旧内容。
-pub(crate) fn save_ai_session_authoritative(
-    projects: &CapDir,
-    recovery: &CapDir,
-    id: &str,
-    session: &serde_json::Value,
-) -> Result<(), String> {
-    ensure_recovery_replaceable(recovery, id, session)?;
-    save_ai_session_file(projects, id, session)?;
-    if let Err(e) = clear_ai_session_recovery_file(recovery, id) {
-        eprintln!("[store] 清除 AI 会话恢复副本失败，改写为最新内容：{e}");
-        if let Err(write_err) = stash_ai_session_recovery_file(projects, recovery, id, session) {
-            eprintln!("[store] 恢复副本改写失败：{write_err}");
-        }
-    }
-    Ok(())
-}
-
-/// 删除项目回执：删除本身已提交（项目记录与资产目录已移除）。恢复副本
-/// 清除失败时带上诊断——此情形**不是**删除失败：前端若按失败回吐在途/
-/// 吸收的画布保存，`save_project` 会重建已删除的项目记录，项目在用户删除
-/// 后复活（资产目录却已移除）。残留副本由 `list_projects` 的孤儿清扫兜底。
-#[derive(serde::Serialize)]
-pub struct DeleteProjectReport {
-    /// 已提交的删除但恢复副本清除失败（或恢复目录暂不可用）时的诊断；
-    /// None = 完全干净。
-    pub cleanup_error: Option<String>,
-}
-
-/// 删除项目 + 清除恢复副本：项目删除失败（项目仍在）时保留恢复副本并上浮
-/// 错误；项目已删除但副本清除失败时返回已提交回执 + 清理诊断——删除不可
-/// 回滚，不得让调用方回放画布保存。恢复目录在删除提交后才打开：它是可选
-/// 的清理位置，暂不可用（不可读/被非目录占位）不得反过来阻断任何项目的
-/// 删除，只作为清理诊断上报，残留副本由列表孤儿清扫兜底。
-pub(crate) fn delete_project_with_recovery(
-    projects: &CapDir,
-    open_recovery: impl FnOnce() -> Result<CapDir, String>,
-    id: &str,
-) -> Result<DeleteProjectReport, String> {
-    delete_project_files(projects, id)?;
-    let cleanup_error = match open_recovery() {
-        Ok(recovery) => clear_ai_session_recovery_file(&recovery, id)
-            .err()
-            .map(|e| format!("项目已删除，但清除 AI 会话恢复副本失败（列表时清扫残留副本）：{e}")),
-        Err(e) => Some(format!(
-            "项目已删除，但会话恢复目录暂不可用，未清除其恢复副本（列表时清扫残留副本）：{e}"
-        )),
-    };
-    Ok(DeleteProjectReport { cleanup_error })
 }
 
 fn validate_ai_session(session: &serde_json::Value) -> Result<(), String> {
@@ -320,13 +74,6 @@ fn validate_ai_session(session: &serde_json::Value) -> Result<(), String> {
         .is_some_and(serde_json::Value::is_array)
     {
         return Err("AI 会话 entries 必须是数组".into());
-    }
-    // 存在的 writeSeq 必须是非负安全整数（缺失视作 0，兼容旧文件）：见
-    // MAX_SAFE_WRITE_SEQ 的边界说明
-    if let Some(seq) = object.get("writeSeq") {
-        if seq.as_u64().is_none_or(|seq| seq > MAX_SAFE_WRITE_SEQ) {
-            return Err("AI 会话 writeSeq 必须是非负安全整数".into());
-        }
     }
     Ok(())
 }
@@ -374,8 +121,7 @@ fn ai_session_dir(root: &CapDir, id: &str) -> Result<CapDir, String> {
 }
 
 /// 会话读写内核：缺文件是旧项目的合法状态（None，前端视作空历史）；
-/// 损坏（不可解析/信封非法）按可安全替换归类（`SessionCopy::corrupt`，
-/// 评审 pullrequestreview-5161978174），不可读才 Err。
+/// 损坏（不可解析/信封非法）以 corrupt 提示，不可读则返回 Err。
 pub(crate) fn load_ai_session_file(root: &CapDir, id: &str) -> Result<SessionCopy, String> {
     validate_id(id)?;
     let dir = match root.symlink_metadata(id) {
@@ -418,41 +164,7 @@ pub(crate) fn load_ai_session_file(root: &CapDir, id: &str) -> Result<SessionCop
     }
 }
 
-/// 权威会话文件替换前的顺序守卫（§12.2，历轮评审修复）：现存主文件缺失、
-/// 内容不可解析（损坏内容无法再被载入，可安全替换）、写入序号小于本次
-/// 写入序号，或序号相等且对话内容一致（幂等重放）时才允许覆盖。主文件
-/// 不可读（权限/瞬态 I/O）或序号更新时拒绝——绝不在无法确定新旧的
-/// 情况下销毁可能是更新权威副本的历史；相等序号的不同内容是两进程
-/// 各自续起撞号的并发冲突（后写替换先写会把一侧会话静默丢失且写入
-/// 边界还报告成功），同样拒绝（评审 pullrequestreview-5161801056）。
-fn ensure_authoritative_replaceable(
-    dir: &CapDir,
-    incoming: &serde_json::Value,
-) -> Result<(), String> {
-    match dir.symlink_metadata("ai-session.json") {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(format!("读取 AI 会话文件元数据失败，已拒绝覆盖：{e}")),
-        Ok(_) => {}
-    }
-    let text = read_verified_file(dir, "ai-session.json")
-        .map_err(|e| format!("AI 会话文件不可读，无法确定新旧，已拒绝覆盖：{e}"))?;
-    let existing = serde_json::from_str::<serde_json::Value>(&text)
-        .ok()
-        .filter(|v| validate_ai_session(v).is_ok());
-    match existing {
-        Some(existing) if session_write_seq(&existing) > session_write_seq(incoming) => {
-            Err("AI 会话文件比本次保存更新，已拒绝覆盖（请重新打开项目载入更新的历史）".into())
-        }
-        Some(existing)
-            if session_write_seq(&existing) == session_write_seq(incoming)
-                && session_body(&existing) != session_body(incoming) =>
-        {
-            Err("AI 会话文件已存在同一写入序号的不同会话（另一进程可能已写入），已拒绝覆盖（请重新打开项目载入最新历史）".into())
-        }
-        _ => Ok(()),
-    }
-}
-
+/// 复用项目记录校验和原子落盘；单进程的调用顺序由前端共享保存链拥有。
 pub(crate) fn save_ai_session_file(
     root: &CapDir,
     id: &str,
@@ -461,7 +173,6 @@ pub(crate) fn save_ai_session_file(
     validate_ai_session(session)?;
     require_project_record(root, id)?;
     let dir = ai_session_dir(root, id)?;
-    ensure_authoritative_replaceable(&dir, session)?;
     let text =
         serde_json::to_string_pretty(session).map_err(|e| format!("序列化 AI 会话失败：{e}"))?;
     atomic_write(&dir, "ai-session.json", &text).map_err(|e| format!("保存 AI 会话失败：{e}"))
@@ -522,11 +233,9 @@ pub(crate) fn persist_project(
 /// cap-std）——符号链接条目只移除链接本身，绝不跟随；任一失败显式报错，
 /// 不静默遗留媒体文件。
 #[tauri::command]
-pub fn delete_project(app: AppHandle, id: String) -> Result<DeleteProjectReport, String> {
+pub fn delete_project(app: AppHandle, id: String) -> Result<(), String> {
     let root = projects_dir(&app)?;
-    // 恢复目录在项目删除提交后才打开：它不可用只能降级为清理诊断，不得
-    // 阻断删除本身（见 delete_project_with_recovery 的顺序契约）
-    delete_project_with_recovery(&root, || recovery_dir(&app), &id)
+    delete_project_files(&root, &id)
 }
 /// delete_project 的可测内核：资产目录与项目 JSON 的成对移除，幂等。
 /// 顺序契约：先删资产树再删权威项目文件——树删除失败时项目仍在列表中

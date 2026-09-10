@@ -36,34 +36,6 @@ pub(crate) fn asset_identity(md: &cap_std::fs::Metadata) -> (u64, u64) {
 /// 并发替换后的目录变成表面根）。路径名被换时：越界被沙箱拒绝，界内
 /// 替换被身份绑定拒绝。
 pub(crate) fn projects_dir(app: &AppHandle) -> Result<CapDir, String> {
-    let root = app_root_dir(app)?;
-    bound_subdir(&root, "projects", "项目目录")
-}
-/// 会话恢复副本目录（§10.1，issue #47 评审）：与 `projects/` 同级的独立
-/// 目录，保存主文件失败时把会话副本写到这里——项目目录不可写或记录暂不
-/// 可读时它仍可能写入成功，使内存中的唯一拷贝跨进程存活。
-pub(crate) fn recovery_dir(app: &AppHandle) -> Result<CapDir, String> {
-    let root = app_root_dir(app)?;
-    bound_subdir(&root, "recovery", "会话恢复目录")
-}
-/// 恢复副本命名约定（§10.1）：`ai-session-{id}.json`，前缀隔离恢复目录内
-/// 的命名空间。构造与解析共用同一约定，孤儿清扫按解析结果匹配。
-const RECOVERY_PREFIX: &str = "ai-session-";
-const RECOVERY_SUFFIX: &str = ".json";
-
-/// 恢复副本文件名（id 词法由调用方先行校验）。
-pub(crate) fn recovery_file_name(id: &str) -> String {
-    format!("{RECOVERY_PREFIX}{id}{RECOVERY_SUFFIX}")
-}
-
-/// 从恢复副本文件名解析项目 id；不符合命名约定返回 None。
-pub(crate) fn recovery_file_id(name: &str) -> Option<&str> {
-    name.strip_prefix(RECOVERY_PREFIX)?
-        .strip_suffix(RECOVERY_SUFFIX)
-}
-/// 应用数据根目录（§10.2 信任链）：canonicalize 后以受信根句柄锚定，
-/// 各受管子目录的创建、非符号链接校验与打开都相对它执行。
-fn app_root_dir(app: &AppHandle) -> Result<CapDir, String> {
     let root_path = app
         .path()
         .app_data_dir()
@@ -72,31 +44,25 @@ fn app_root_dir(app: &AppHandle) -> Result<CapDir, String> {
     let root_path = root_path
         .canonicalize()
         .map_err(|e| format!("解析应用数据目录真实路径失败：{e}"))?;
-    CapDir::open_ambient_dir(&root_path, ambient_authority())
-        .map_err(|e| format!("打开应用数据根目录失败：{e}"))
-}
-/// 受信根下的受管子目录（projects/recovery 共用）：缺失即创建，拒符号
-/// 链接，打开后经 (dev, ino) 身份绑定——路径名在归类后被并发替换的目录
-/// 不得成为操作对象。删除路径把它作为延迟打开的清理位置传入测试（见
-/// delete_project_with_recovery）。
-pub(crate) fn bound_subdir(root: &CapDir, name: &str, label: &str) -> Result<CapDir, String> {
-    match root.symlink_metadata(name) {
+    let root = CapDir::open_ambient_dir(&root_path, ambient_authority())
+        .map_err(|e| format!("打开应用数据根目录失败：{e}"))?;
+    match root.symlink_metadata("projects") {
         Ok(_) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => root
-            .create_dir(name)
-            .map_err(|e| format!("创建{label}失败：{e}"))?,
-        Err(e) => return Err(format!("读取{label}元数据失败：{e}")),
+            .create_dir("projects")
+            .map_err(|e| format!("创建项目目录失败：{e}"))?,
+        Err(e) => return Err(format!("读取项目目录元数据失败：{e}")),
     }
     let md = root
-        .symlink_metadata(name)
-        .map_err(|e| format!("读取{label}元数据失败：{e}"))?;
+        .symlink_metadata("projects")
+        .map_err(|e| format!("读取项目目录元数据失败：{e}"))?;
     if md.file_type().is_symlink() {
-        return Err(format!("拒绝符号链接形式的{label}"));
+        return Err("拒绝符号链接形式的项目目录".into());
     }
     if !md.is_dir() {
-        return Err(format!("{label}路径不是目录"));
+        return Err("项目目录路径不是目录".into());
     }
-    open_dir_bound(root, name, &md, label)
+    open_dir_bound(&root, "projects", &md, "项目目录")
 }
 /// 打开已归类为实际目录的子目录并绑定身份（§10.2）：cap-std 的 open_dir
 /// 在沙箱内跟随符号链接，Unix 上以打开句柄的 (dev, ino) 与归类时身份比对
