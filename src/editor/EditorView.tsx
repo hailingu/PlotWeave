@@ -15,6 +15,7 @@ import EditorLayout from './EditorLayout'
 import { useEditorController } from './useEditorController'
 import type { EditorProjectContent } from './useEditorDocument'
 import type { ProjectContent } from '../model/content'
+import type { AiSession } from './ai/session'
 
 interface EditorViewProps {
   /** 打开的项目：id 用于持久化，doc 为已加载的会话文档（含名称/画布/设定集/集标题/视口）。 */
@@ -28,6 +29,15 @@ interface EditorViewProps {
   /** 持久化写入（防抖节流由本组件负责；浏览器预览下为内存回退实现）。
    * 返回 Promise 时失败会上浮：重置脏标记自动重试并横幅提示。 */
   readonly onSave: (doc: ProjectContent) => void | Promise<void>
+  /** 独立的项目 AI 会话，不能混入画布文档保存。 */
+  readonly aiSession?: AiSession
+  /** 会话读取失败的可见诊断；画布仍可正常打开。 */
+  readonly aiSessionError?: string | null
+  /** 会话读取失败时阻止 AI 发送和执行，画布仍可使用。 */
+  readonly aiSessionLoadFailed?: boolean
+  /** 内存会话可否作为挂载重试的落盘内容；读取失败（空回退）时为 false。 */
+  readonly aiSessionRetryable?: boolean
+  readonly onSaveAiSession?: (session: AiSession) => Promise<void>
 }
 
 /** Provider 薄壳：把 ReactFlow 上下文交给内部装配层。 */
@@ -46,6 +56,11 @@ function EditorWindow({
   onRenameProject,
   onOpenSettings,
   onSave,
+  aiSession = { schemaVersion: 1, entries: [] },
+  aiSessionError = null,
+  aiSessionRetryable = true,
+  aiSessionLoadFailed = false,
+  onSaveAiSession = async () => undefined,
 }: EditorViewProps) {
   const { screenToFlowPosition, fitView } = useReactFlow()
   const { canvasRef, doc, panels, persistence, history, view, graph, ai, actionError, nodeEditApi, imageGen } =
@@ -67,6 +82,11 @@ function EditorWindow({
           graph={graph}
           ai={ai}
           actionError={actionError}
+          aiSession={aiSession}
+          aiSessionError={aiSessionError}
+          aiSessionRetryable={aiSessionRetryable}
+          aiSessionLoadFailed={aiSessionLoadFailed}
+          onSaveAiSession={onSaveAiSession}
         />
       </ImageGenProvider>
     </NodeEditContext.Provider>

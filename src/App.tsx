@@ -1,7 +1,21 @@
-import { lazy, startTransition, Suspense, useCallback, useEffect, useState, type ReactNode } from 'react'
+import {
+  lazy,
+  startTransition,
+  Suspense,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type Dispatch,
+  type ReactNode,
+  type RefObject,
+  type SetStateAction,
+} from 'react'
 import HomePage from './home/HomePage'
+import { useExitFlush } from './useExitFlush'
 import { projectStore, type ProjectContent } from './projectStore'
 import type { ProjectSummary } from './home/projects'
+import type { AiSession } from './editor/ai/session'
 
 /** 编辑器视图按域惰性加载：React Flow 的运行时引用全部封闭在编辑器域内，
  * 拆出入口 chunk 后冷启动只解析首页所需代码（issue #34）。
@@ -12,10 +26,215 @@ const EditorView = lazy(() => import('./editor/EditorView'))
 /** 设置视图低频使用（⌘, 叠加打开），同样惰性加载不占入口 chunk。 */
 const SettingsView = lazy(() => import('./settings/SettingsView'))
 
+/** 未落盘会话的保留条目：保存失败后跨首页保留，重开项目时恢复并自动重试。 */
+interface UnsavedAiSession {
+  session: AiSession
+  error: string
+}
+
 /** 编辑器态：已加载的项目（id + 名称 + 画布文档）。 */
 interface OpenProject {
   id: string
   doc: ProjectContent
+  aiSession: AiSession
+  aiSessionError: string | null
+  /** 读取失败时关闭 AI 操作入口，直到重开成功；不影响画布。 */
+  aiSessionLoadFailed: boolean
+  /** 内存会话是否可作为挂载重试的落盘内容：读取失败时为 false——
+   * 空回退会话落盘会覆盖可能可恢复的原文件。 */
+  aiSessionRetryable: boolean
+}
+
+/** 分开读取画布与会话；等待共享保存链后优先恢复进程内未保存内容。
+ * 单实例下该快照是最新编辑，无须与其他写入者的磁盘历史合并。 */
+async function loadOpenProject(
+  id: string,
+  unsavedAiSessions?: ReadonlyMap<string, UnsavedAiSession>,
+): Promise<OpenProject> {
+  const doc = await projectStore.load(id)
+  const unsaved = unsavedAiSessions?.get(id)
+  if (unsaved) {
+    return {
+      id,
+      doc,
+      aiSession: unsaved.session,
+      aiSessionError: `上次会话保存失败，已保留待重试：${unsaved.error}`,
+      aiSessionLoadFailed: false,
+      aiSessionRetryable: true,
+    }
+  }
+  try {
+    const ai = await projectStore.loadAiSession(id)
+    return {
+      id,
+      doc,
+      aiSession: ai.session,
+      aiSessionError: ai.repairError,
+      aiSessionLoadFailed: false,
+      // 读取不自动写回；损坏诊断保留到用户实际编辑后的保存成功。
+      aiSessionRetryable: false,
+    }
+  } catch (err) {
+    console.warn('[App] AI 会话恢复失败，已以空历史打开项目', err)
+    return {
+      id,
+      doc,
+      aiSession: { schemaVersion: 1, entries: [] },
+      aiSessionError: String(err),
+      aiSessionLoadFailed: true,
+      aiSessionRetryable: false,
+    }
+  }
+}
+
+type OpenProjectSetter = Dispatch<SetStateAction<OpenProject | null>>
+type RefreshProjects = () => Promise<void>
+type UnsavedAiSessionsRef = RefObject<Map<string, UnsavedAiSession>>
+
+function useOpenProjectActions(
+  setOpenProject: OpenProjectSetter,
+  refreshProjects: RefreshProjects,
+  unsavedAiSessions: UnsavedAiSessionsRef,
+) {
+  const handleCreateProject = useCallback(async () => {
+    try {
+      const meta = await projectStore.create('未命名短剧')
+      const open = await loadOpenProject(meta.id)
+      startTransition(() => setOpenProject(open))
+    } catch (err) {
+      console.warn('[App] 新建项目失败', err)
+    }
+    void refreshProjects()
+  }, [refreshProjects, setOpenProject])
+
+  const handleOpenProject = useCallback(async (id: string) => {
+    try {
+      const open = await loadOpenProject(id, unsavedAiSessions.current ?? undefined)
+      startTransition(() => setOpenProject(open))
+    } catch (err) {
+      console.warn('[App] 打开项目失败', err)
+    }
+  }, [setOpenProject, unsavedAiSessions])
+
+  const handleBackHome = useCallback(() => {
+    setOpenProject(null)
+    void refreshProjects()
+  }, [refreshProjects, setOpenProject])
+
+  const handleEditorRename = useCallback((name: string) => {
+    setOpenProject((project) => (project ? { ...project, doc: { ...project.doc, name } } : project))
+  }, [setOpenProject])
+
+  const handleSaveAiSession = useCallback(
+    (id: string) => async (session: AiSession) => {
+      // AI 操作区只在加载成功后开放；实际变更后的会话可在重挂载时重试。
+      setOpenProject((project) =>
+        project?.id === id ? { ...project, aiSession: session, aiSessionRetryable: true } : project,
+      )
+      try {
+        await projectStore.saveAiSession(id, session)
+      } catch (err) {
+        // 失败保留在打开项目视图之外：回首页再重开不丢内存副本
+        unsavedAiSessions.current?.set(id, { session, error: String(err) })
+        setOpenProject((project) =>
+          project?.id === id ? { ...project, aiSessionError: String(err) } : project,
+        )
+        throw err
+      }
+      unsavedAiSessions.current?.delete(id)
+      // 保存成功才清除项目级恢复错误：重挂载编辑器不得再宣称会话未落盘
+      setOpenProject((project) => (project?.id === id ? { ...project, aiSessionError: null } : project))
+    },
+    [setOpenProject, unsavedAiSessions],
+  )
+
+  return { handleCreateProject, handleOpenProject, handleBackHome, handleEditorRename, handleSaveAiSession }
+}
+
+function useHomeProjectActions(
+  refreshProjects: RefreshProjects,
+  unsavedAiSessions: UnsavedAiSessionsRef,
+) {
+  const handleRenameProject = useCallback(async (id: string, name: string) => {
+    try {
+      const doc = await projectStore.load(id)
+      await projectStore.saveQuiet(id, { ...doc, name })
+      await refreshProjects()
+    } catch (err) {
+      console.warn('[App] 重命名失败', err)
+    }
+  }, [refreshProjects])
+
+  const handleDuplicateProject = useCallback(async (id: string) => {
+    try {
+      await projectStore.duplicate(id)
+      await refreshProjects()
+    } catch (err) {
+      console.warn('[App] 复制项目失败', err)
+    }
+  }, [refreshProjects])
+
+  const handleDeleteProject = useCallback(async (id: string) => {
+    try {
+      await projectStore.delete(id)
+      unsavedAiSessions.current?.delete(id)
+      await refreshProjects()
+    } catch (err) {
+      console.warn('[App] 删除项目失败', err)
+    }
+  }, [refreshProjects, unsavedAiSessions])
+
+  return { handleRenameProject, handleDuplicateProject, handleDeleteProject }
+}
+
+function AppView({
+  projects,
+  loading,
+  openProject,
+  settingsOpen,
+  open,
+  home,
+  onOpenSettings,
+  onCloseSettings,
+}: {
+  readonly projects: ProjectSummary[]
+  readonly loading: boolean
+  readonly openProject: OpenProject | null
+  readonly settingsOpen: boolean
+  readonly open: ReturnType<typeof useOpenProjectActions>
+  readonly home: ReturnType<typeof useHomeProjectActions>
+  readonly onOpenSettings: () => void
+  readonly onCloseSettings: () => void
+}) {
+  let view: ReactNode
+  if (settingsOpen) {
+    view = <SettingsView onClose={onCloseSettings} />
+  } else if (openProject) {
+    view = <EditorView
+      key={openProject.id}
+      project={{ id: openProject.id, ...openProject.doc }}
+      aiSession={openProject.aiSession}
+      aiSessionError={openProject.aiSessionError}
+      aiSessionRetryable={openProject.aiSessionRetryable}
+      aiSessionLoadFailed={openProject.aiSessionLoadFailed}
+      onBackHome={open.handleBackHome}
+      onRenameProject={open.handleEditorRename}
+      onOpenSettings={onOpenSettings}
+      onSave={(doc) => projectStore.save(openProject.id, doc)}
+      onSaveAiSession={open.handleSaveAiSession(openProject.id)}
+    />
+  } else {
+    view = <HomePage
+      projects={projects}
+      loading={loading}
+      onOpenProject={open.handleOpenProject}
+      onCreateProject={() => void open.handleCreateProject()}
+      onRenameProject={(id, name) => void home.handleRenameProject(id, name)}
+      onDuplicateProject={(id) => void home.handleDuplicateProject(id)}
+      onDeleteProject={(id) => void home.handleDeleteProject(id)}
+    />
+  }
+  return <Suspense fallback={null}>{view}</Suspense>
 }
 
 /**
@@ -29,6 +248,8 @@ export default function App() {
   const [openProject, setOpenProject] = useState<OpenProject | null>(null)
   const [loading, setLoading] = useState(true)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  /** 保存失败会话的保留区：不属于任何一次打开会话的瞬态视图，跨首页存活。 */
+  const unsavedAiSessionsRef = useRef(new Map<string, UnsavedAiSession>())
 
   const refreshProjects = useCallback(async () => {
     try {
@@ -57,108 +278,42 @@ export default function App() {
     return () => document.removeEventListener('keydown', onKey)
   }, [])
 
-  const handleCreateProject = useCallback(async () => {
-    try {
-      const meta = await projectStore.create('未命名短剧')
-      // create 只回摘要：按落盘文档载入会话，保留 create_project 盖的 createdAt——
-      // 手工拼空文档会丢创建时间，首次保存把保存时刻误盖为创建时间（§3 溯源字段）
-      const doc = await projectStore.load(meta.id)
-      startTransition(() => setOpenProject({ id: meta.id, doc }))
-    } catch (err) {
-      console.warn('[App] 新建项目失败', err)
-    }
-    void refreshProjects()
-  }, [refreshProjects])
-
-  const handleOpenProject = useCallback(
-    async (id: string) => {
-      try {
-        const doc = await projectStore.load(id)
-        startTransition(() => setOpenProject({ id, doc }))
-      } catch (err) {
-        console.warn('[App] 打开项目失败', err)
-      }
-    },
+  // 退出重试保存成功（不经 UI 保存通道）时清除项目级错误与保留快照：
+  // 否则面板持续宣称「保存失败」而会话实际已保存到主文件。清理与
+  // handleSaveAiSession 的成功尾巴幂等重复，无害。
+  useEffect(
+    () =>
+      projectStore.onAiSessionSaved((id) => {
+        unsavedAiSessionsRef.current?.delete(id)
+        setOpenProject((project) =>
+          project?.id === id ? { ...project, aiSessionError: null } : project,
+        )
+      }),
     [],
   )
 
-  const handleBackHome = useCallback(() => {
-    setOpenProject(null)
-    void refreshProjects()
-  }, [refreshProjects])
-
-  /** 画布防抖保存（§10.2）：失败 Promise 上浮给编辑器——重置脏标记自动
-   * 重试并横幅提示，不再经 saveQuiet 静默吞错丢编辑。 */
-  const handleSave = useCallback(
-    (id: string) => (doc: ProjectContent) => projectStore.save(id, doc),
-    [],
-  )
-
-  /** 编辑器工具栏项目名内联改名（§3.3）：更新打开态，随防抖落盘。 */
-  const handleEditorRename = useCallback((name: string) => {
-    setOpenProject((p) => (p ? { ...p, doc: { ...p.doc, name } } : p))
-  }, [])
-
-  /** 首页卡片菜单 · 重命名（§3.2）：读原文档改 name 后保存。 */
-  const handleRenameProject = useCallback(
-    async (id: string, name: string) => {
-      try {
-        const doc = await projectStore.load(id)
-        await projectStore.saveQuiet(id, { ...doc, name })
-        await refreshProjects()
-      } catch (err) {
-        console.warn('[App] 重命名失败', err)
-      }
-    },
-    [refreshProjects],
-  )
-
-  const handleDuplicateProject = useCallback(
-    async (id: string) => {
-      try {
-        await projectStore.duplicate(id)
-        await refreshProjects()
-      } catch (err) {
-        console.warn('[App] 复制项目失败', err)
-      }
-    },
-    [refreshProjects],
-  )
-
-  const handleDeleteProject = useCallback(
-    async (id: string) => {
-      try {
-        await projectStore.delete(id)
-        await refreshProjects()
-      } catch (err) {
-        console.warn('[App] 删除项目失败', err)
-      }
-    },
-    [refreshProjects],
-  )
-
-  let view: ReactNode
-  if (settingsOpen) {
-    view = <SettingsView onClose={() => startTransition(() => setSettingsOpen(false))} />
-  } else if (openProject) {
-    view = <EditorView
-      key={openProject.id}
-      project={{ id: openProject.id, ...openProject.doc }}
-      onBackHome={handleBackHome}
-      onRenameProject={handleEditorRename}
-        onOpenSettings={() => startTransition(() => setSettingsOpen(true))}
-      onSave={handleSave(openProject.id)}
-    />
-  } else {
-    view = <HomePage
+  const open = useOpenProjectActions(setOpenProject, refreshProjects, unsavedAiSessionsRef)
+  const home = useHomeProjectActions(refreshProjects, unsavedAiSessionsRef)
+  /** 退出冲刷屏障：未落盘会话仍在时阻止关闭窗口（见 useExitFlush）。 */
+  const exitBlocked = useExitFlush()
+  return <>
+    {exitBlocked !== null && (
+      <div
+        role="alert"
+        style={{ padding: '6px 16px', background: '#5c1d1d', color: '#ffe3e3', fontSize: 13 }}
+      >
+        {exitBlocked}
+      </div>
+    )}
+    <AppView
       projects={projects}
       loading={loading}
-      onOpenProject={handleOpenProject}
-      onCreateProject={() => void handleCreateProject()}
-      onRenameProject={(id, name) => void handleRenameProject(id, name)}
-      onDuplicateProject={(id) => void handleDuplicateProject(id)}
-      onDeleteProject={(id) => void handleDeleteProject(id)}
+      openProject={openProject}
+      settingsOpen={settingsOpen}
+      open={open}
+      home={home}
+      onOpenSettings={() => startTransition(() => setSettingsOpen(true))}
+      onCloseSettings={() => startTransition(() => setSettingsOpen(false))}
     />
-  }
-  return <Suspense fallback={null}>{view}</Suspense>
+  </>
 }

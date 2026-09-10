@@ -65,7 +65,7 @@ function setup(
   initialEdges: Edge[] = [],
   initialSettings: ProjectSettings = EMPTY_SETTINGS,
 ) {
-  const state = { nodes: [...initialNodes], edges: [...initialEdges], settings: initialSettings }
+  const state = { nodes: [...initialNodes], edges: [...initialEdges], settings: initialSettings, aiRevision: 0 }
   const commands: HistoryCommand[] = []
   const closeSettings = vi.fn()
   const deps: AiBridgeDeps = {
@@ -105,6 +105,9 @@ function setup(
     setSettings: (up) => {
       state.settings = up(state.settings)
       deps.settingsRef.current = state.settings
+    },
+    setAiRevision: (up) => {
+      state.aiRevision = up(state.aiRevision)
     },
     pushHistory: (cmd) => commands.push(cmd),
     closeSettings,
@@ -174,18 +177,6 @@ describe('useAiBridge（§6/§12 AI 桥回调族）', () => {
     expect(result.current.readNode('ghost')).toBeNull()
   })
 
-  it('applyAiBatch：空批次直接 null；非法批次返回错误文案且不改画布', () => {
-    const { result, state, commands } = setup()
-    expect(result.current.applyAiBatch([])).toBeNull()
-    // 判别化执行通道在编译期已拒绝宽补丁；此处的敌意输入只能经 cast 伪造，
-    // 用于锁定运行时重校验仍整批拒绝（纵深防御，issue 16）
-    const hostile = { op: 'update_node', nodeId: 's1', patch: { hack: 1 } } as unknown as ValidatedCommand
-    const err = result.current.applyAiBatch([hostile])
-    expect(err).toContain('改动无法安全执行')
-    expect(state.nodes).toHaveLength(1)
-    expect(commands).toHaveLength(0)
-  })
-
   it('applyAiBatch：合法批次整批落地为一条复合命令，undo 一步回滚', () => {
     const { result, state, commands, closeSettings } = setup([sceneNode('s1'), branchNode('b1')])
     const batch: ValidatedCommand[] = [
@@ -196,6 +187,8 @@ describe('useAiBridge（§6/§12 AI 桥回调族）', () => {
     expect(result.current.applyAiBatch(batch)).toBeNull()
     expect(state.nodes).toHaveLength(3)
     expect(state.edges).toHaveLength(1)
+    // 提交身份（§12.2）：成功落地一批即自增一次
+    expect(state.aiRevision).toBe(1)
     const b1 = state.nodes.find((n) => n.id === 'b1')!
     expect(b1.type === 'branch' && b1.data.prompt).toBe('走哪边？')
     expect(closeSettings).toHaveBeenCalledTimes(1)
@@ -208,6 +201,38 @@ describe('useAiBridge（§6/§12 AI 桥回调族）', () => {
     expect(b1r.type === 'branch' && b1r.data.prompt).toBe('去哪？')
     commands[0].redo()
     expect(state.nodes).toHaveLength(3)
+    // 撤销不回退提交身份：它是提交计数，不是可撤销的文档内容
+    expect(state.aiRevision).toBe(1)
+  })
+})
+
+describe('useAiBridge · applyAiBatch 执行边界', () => {
+  it('applyAiBatch：空批次直接 null；非法批次返回错误文案且不改画布', () => {
+    const { result, state, commands } = setup()
+    expect(result.current.applyAiBatch([])).toBeNull()
+    // 判别化执行通道在编译期已拒绝宽补丁；此处的敌意输入只能经 cast 伪造，
+    // 用于锁定运行时重校验仍整批拒绝（纵深防御，issue 16）
+    const hostile = { op: 'update_node', nodeId: 's1', patch: { hack: 1 } } as unknown as ValidatedCommand
+    const err = result.current.applyAiBatch([hostile])
+    expect(err).toContain('改动无法安全执行')
+    expect(state.nodes).toHaveLength(1)
+    expect(commands).toHaveLength(0)
+    // 未落地的批次不消耗提交身份
+    expect(state.aiRevision).toBe(0)
+  })
+
+  it('applyAiBatch：恢复的待执行卡使用重校验后的规范化命令', () => {
+    const { result, state } = setup()
+    // 会话文件是本地 JSON；恢复层可遇到带空格的旧/损坏 nodeType。执行边界
+    // 必须采用重校验产物，不能把原始载荷交给节点工厂。
+    const restored = {
+      op: 'create_node',
+      nodeType: ' scene ',
+      data: { name: '恢复场景' },
+    } as unknown as ValidatedCommand
+
+    expect(result.current.applyAiBatch([restored])).toBeNull()
+    expect(state.nodes[state.nodes.length - 1]?.type).toBe('scene')
   })
 })
 

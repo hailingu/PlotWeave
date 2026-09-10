@@ -26,6 +26,7 @@ function executeLabel(v: BatchValidation, armed: boolean): string {
 export default function PreviewCard({
   v,
   status,
+  historical,
   armed,
   busy,
   onArm,
@@ -34,6 +35,8 @@ export default function PreviewCard({
 }: {
   readonly v: BatchValidation
   readonly status: 'pending' | 'executed' | 'dismissed'
+  /** 跨会话恢复的历史执行卡：撤销栈已重建，不宣称 ⌘Z 可整批撤销。 */
+  readonly historical?: boolean
   readonly armed: boolean
   readonly busy: boolean
   readonly onArm: () => void
@@ -64,7 +67,7 @@ export default function PreviewCard({
       )}
       <div className="pw-ai-actions">
         {status === 'executed' ? (
-          <span className="pw-ai-note">✓ 已执行，⌘Z 可整批撤销</span>
+          <span className="pw-ai-note">{historical ? '✓ 已执行（历史改动）' : '✓ 已执行，⌘Z 可整批撤销'}</span>
         ) : (
           <>
             <button

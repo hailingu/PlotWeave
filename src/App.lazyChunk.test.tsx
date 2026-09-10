@@ -25,10 +25,13 @@ vi.mock('./projectStore', () => ({
     list: vi.fn(),
     create: vi.fn(),
     load: vi.fn(),
+    loadAiSession: vi.fn(),
+    saveAiSession: vi.fn(),
     save: vi.fn(),
     saveQuiet: vi.fn(),
     duplicate: vi.fn(),
     delete: vi.fn(),
+    onAiSessionSaved: () => () => undefined,
   },
 }))
 
@@ -52,6 +55,7 @@ const homeProps: { current: Record<string, unknown> } = { current: {} }
 const store = projectStore as unknown as {
   list: ReturnType<typeof vi.fn>
   load: ReturnType<typeof vi.fn>
+  loadAiSession: ReturnType<typeof vi.fn>
 }
 
 const DOC: ProjectContent = {
@@ -73,6 +77,10 @@ beforeEach(() => {
   editorGate.resolve = null
   store.list.mockResolvedValue([{ id: 'p1', name: '雨夜' }])
   store.load.mockResolvedValue(structuredClone(DOC))
+  store.loadAiSession.mockResolvedValue({
+    session: { schemaVersion: 1, entries: [] },
+    repairError: null,
+  })
 })
 
 describe('App（惰性 chunk 加载保留当前界面）', () => {

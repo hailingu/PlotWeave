@@ -304,6 +304,8 @@ export function serializeProject(
       nodes: content.nodes.map(toStoryNode),
       edges: content.edges.map(toStoryEdge),
       ...(content.viewport ? { viewport: content.viewport } : {}),
+      // AI 批次计数缺省 0 不落盘：旧文档与未用过 AI 的项目保持原信封形状
+      ...(content.aiRevision ? { aiRevision: content.aiRevision } : {}),
     },
     settings: toDocSettings(content.settings),
     episodeTitles: content.episodeTitles ?? {},
@@ -324,6 +326,7 @@ export function fromDocument(doc: ProjectDocument, warnings: string[]): ProjectC
     settings: fromDocSettings(doc.settings),
     episodeTitles: normalizeEpisodeTitles(doc.episodeTitles, warnings),
     viewport: doc.graph.viewport,
+    ...(doc.graph.aiRevision !== undefined ? { aiRevision: doc.graph.aiRevision } : {}),
     assets: doc.assets,
   }
 }

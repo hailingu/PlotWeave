@@ -1,3 +1,4 @@
+import type { ComponentProps } from 'react'
 import SegmentedControl from './SegmentedControl'
 import PanelResizer from './PanelResizer'
 import { type BatchValidation, type AiCommand, type ValidatedCommand } from '../ai/commands'
@@ -8,6 +9,7 @@ import {
 } from '../settings'
 import AiThread from './AiThread'
 import type { CanvasNode } from '../nodes/types'
+import type { AiSession } from '../ai/session'
 
 /** 右栏分段（docs/ui-design.md §3.4）：检查器 = 选中节点的字段视图；✦AI = 对话面板。 */
 export type RightTab = 'inspector' | 'ai'
@@ -96,6 +98,20 @@ function inspectorRows(
   }
 }
 
+/** 加载失败时只显示诊断，聊天操作区不挂载，避免空回退产生写入。 */
+function AiSessionContent({
+  loadFailed,
+  ...props
+}: ComponentProps<typeof AiThread> & { readonly loadFailed?: boolean }) {
+  if (loadFailed) {
+    return <p className="pw-ai-error" role="alert">
+      聊天记录读取失败，AI 发送和执行已停用。请检查磁盘后重新打开项目。
+      {props.initialSessionError}
+    </p>
+  }
+  return <AiThread {...props} />
+}
+
 interface RightPanelProps {
   readonly open: boolean
   readonly width: number
@@ -112,6 +128,8 @@ interface RightPanelProps {
   readonly onOpenSettings?: () => void
   /** 画布上下文快照（§6「了解当前画布」）：附到 system prompt，并作为读工具返回。 */
   readonly canvasDigest?: string
+  /** 画布批次计数（§12.2 提交身份）：执行后 +1 记录到卡片，恢复时对账。 */
+  readonly aiRevision?: number
   /** 校验助手回复中的命令批次（§6/数据模型 §12）；纯讨论回复返回 null。 */
   readonly onValidateAi?: (text: string) => BatchValidation | null
   /** 校验工具调用映射出的命令数组（tool-calling 通道）。 */
@@ -122,6 +140,16 @@ interface RightPanelProps {
   readonly onReadSettings?: () => string
   /** 执行已确认的批次：整批为一条复合命令入栈，返回错误文案或 null。 */
   readonly onApplyAiBatch?: (commands: ValidatedCommand[]) => string | null
+  /** 承载批次的画布文档确认落盘后兑现；执行卡据此推迟 executed 落盘。 */
+  readonly whenCanvasCommitted?: () => Promise<void>
+  /** 当前项目恢复的 AI 会话与其独立保存通道。 */
+  readonly aiSession?: AiSession
+  readonly aiSessionError?: string | null
+  /** 会话读取失败时阻止 AI 发送和执行，画布仍可使用。 */
+  readonly aiSessionLoadFailed?: boolean
+  /** 内存会话可否作为挂载重试的落盘内容；读取失败（空回退）时为 false。 */
+  readonly aiSessionRetryable?: boolean
+  readonly onSaveAiSession?: (session: AiSession) => Promise<void>
 }
 
 /**
@@ -143,11 +171,18 @@ export default function RightPanel({
   settings,
   onOpenSettings,
   canvasDigest,
+  aiRevision,
   onValidateAi,
   onValidateCommands,
   onReadNode,
   onReadSettings,
   onApplyAiBatch,
+  whenCanvasCommitted,
+  aiSession,
+  aiSessionError,
+  aiSessionRetryable,
+  aiSessionLoadFailed,
+  onSaveAiSession,
 }: RightPanelProps) {
   const rows = selectedNode ? inspectorRows(selectedNode, attachedShotCount, settings) : []
 
@@ -179,17 +214,24 @@ export default function RightPanel({
             ) : (
               <div className="pw-empty">在画布中选择一个节点，查看它的字段。</div>
             ))}
-          {tab === 'ai' && (
-            <AiThread
+          <div hidden={tab !== 'ai'}>
+            <AiSessionContent
+              loadFailed={aiSessionLoadFailed}
               onOpenSettings={onOpenSettings}
               canvasDigest={canvasDigest}
+              aiRevision={aiRevision}
               onValidateAi={onValidateAi}
               onValidateCommands={onValidateCommands}
               onReadNode={onReadNode}
               onReadSettings={onReadSettings}
               onApplyAiBatch={onApplyAiBatch}
+              whenCanvasCommitted={whenCanvasCommitted}
+              initialSession={aiSession}
+              initialSessionError={aiSessionError}
+              initialSessionRetryable={aiSessionRetryable}
+              onSaveSession={onSaveAiSession}
             />
-          )}
+          </div>
         </div>
       </div>
     </aside>

@@ -11,6 +11,7 @@ import type { EditorDocument, EditorProjectContent } from './useEditorDocument'
 import type { EditorGraphActions } from './useEditorGraphActions'
 import type { EditorPanels } from './useEditorPanels'
 import type { EditorPersistence } from './useEditorPersistence'
+import type { AiSession } from './ai/session'
 
 /** 命令栈 hook 的返回值（撤销/重做可用态与入口）。 */
 export type CommandHistory = ReturnType<typeof useCommandHistory>
@@ -33,4 +34,12 @@ export interface EditorLayoutProps {
   readonly ai: AiBridge
   /** 拖放导入失败等瞬态动作诊断；null = 无。 */
   readonly actionError: string | null
+  /** 独立于画布文档的项目 AI 会话。 */
+  readonly aiSession: AiSession
+  readonly aiSessionError: string | null
+  /** 会话读取失败时阻止 AI 发送和执行，画布仍可使用。 */
+  readonly aiSessionLoadFailed?: boolean
+  /** 内存会话可否作为挂载重试的落盘内容；读取失败（空回退）时为 false。 */
+  readonly aiSessionRetryable: boolean
+  readonly onSaveAiSession: (session: AiSession) => Promise<void>
 }

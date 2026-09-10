@@ -24,6 +24,8 @@ mod library;
 mod library_fs;
 mod library_index;
 mod library_journal;
+#[cfg(target_os = "macos")]
+mod native_quit;
 mod prefs;
 mod seal;
 mod store;
@@ -32,10 +34,16 @@ mod store;
 #[cfg(test)]
 mod conf;
 
+/// 保存屏障的受控退出：前端确认会话已排空后调用，直接退出 Tauri 事件循环。
+#[tauri::command]
+fn app_exit(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
 /// 启动 Tauri 应用；移动端通过 `mobile_entry_point` 复用同一入口。
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         // 会话新增项目资产登记表（pwmedia 项目 scope 的防抖落盘窗口，
         // issue #31 评审修复）：应用显式拥有的状态，非进程级可变全局单例
         .manage(assets::project_media::PendingProjectAssets::new())
@@ -43,7 +51,9 @@ pub fn run() {
             store::list_projects,
             store::create_project,
             store::load_project,
+            store::load_ai_session,
             store::save_project,
+            store::save_ai_session,
             store::delete_project,
             store::copy_project_assets,
             store::verify_project_assets,
@@ -63,6 +73,7 @@ pub fn run() {
             assets::project_media::register_project_asset_alias,
             imagegen::llm_image_generate,
             imagegen::llm_image_cancel,
+            app_exit,
         ])
         // opaque asset URL 媒体协议（§7.1/§10.5，issue #26/#31）：每次请求按
         // 当前净化索引（库）/项目文档索引（项目）重新解析 id，经句柄链读取
@@ -85,6 +96,18 @@ pub fn run() {
                 });
             },
         )
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .expect("启动 PlotWeave 应用失败");
+    #[cfg(target_os = "macos")]
+    let _quit_barrier = {
+        use tauri::Emitter;
+        let handle = app.handle().clone();
+        native_quit::install(move || {
+            if let Err(error) = handle.emit("app-quit-requested", ()) {
+                eprintln!("发出退出请求事件失败：{error}");
+            }
+        })
+        .expect("安装原生退出保存屏障失败")
+    };
+    app.run(|_, _| {});
 }

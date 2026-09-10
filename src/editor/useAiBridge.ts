@@ -59,6 +59,8 @@ export interface AiBridgeDeps {
   setEdges: (updater: (eds: Edge[]) => Edge[]) => void
   /** 设定集功能式写入（issue 44）：实体改动的落地通道，与节点绑定同一复合命令。 */
   setSettings: (updater: (prev: ProjectSettings) => ProjectSettings) => void
+  /** AI 批次计数递增（§12.2 提交身份）：每次成功落地一批命令自增一次。 */
+  setAiRevision: (updater: (prev: number) => number) => void
   pushHistory: (cmd: HistoryCommand) => void
   closeSettings: () => void
 }
@@ -126,6 +128,7 @@ function applyValidatedBatch(
     nodesRef: { current: CanvasNode[] }
     edgesRef: { current: Edge[] }
     settingsRef: { current: ProjectSettings }
+    setAiRevision: (updater: (prev: number) => number) => void
     pushHistory: (cmd: HistoryCommand) => void
     closeSettings: () => void
   },
@@ -136,13 +139,15 @@ function applyValidatedBatch(
     return `改动无法安全执行：${fresh.issues[0]?.message ?? '批次校验未通过'}`
   }
   const sim = simulateBatch(
-    batch,
+    fresh.commands,
     ctx.ops,
     ctx.nodesRef.current,
     ctx.edgesRef.current,
     ctx.settingsRef.current,
   )
   sim.forward.forEach((f) => f())
+  // 提交身份（§12.2）：批次计数随画布文档落盘，撤销不回退
+  ctx.setAiRevision((n) => n + 1)
   ctx.pushHistory({
     undo: () => [...sim.backward].reverse().forEach((f) => f()),
     redo: () => sim.forward.forEach((f) => f()),
@@ -223,6 +228,7 @@ export function useAiBridge(deps: AiBridgeDeps): AiBridge {
     setNodes,
     setEdges,
     setSettings,
+    setAiRevision,
     pushHistory,
     closeSettings,
   } = deps
@@ -240,10 +246,11 @@ export function useAiBridge(deps: AiBridgeDeps): AiBridge {
         nodesRef,
         edgesRef,
         settingsRef,
+        setAiRevision,
         pushHistory,
         closeSettings,
       }),
-    [aiSnapshot, applyDataPatch, buildNewNode, closeSettings, edgesRef, nodesRef, pushHistory, setEdges, setNodes, setSettings, settingsRef],
+    [aiSnapshot, applyDataPatch, buildNewNode, closeSettings, edgesRef, nodesRef, pushHistory, setAiRevision, setEdges, setNodes, setSettings, settingsRef],
   )
 
   return { canvasDigest, validateAiReply, validateCommands, readNode, readSettings, applyAiBatch }

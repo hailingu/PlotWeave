@@ -26,7 +26,9 @@ mod validate;
 #[cfg(test)]
 mod testutil;
 
-pub use commands::{create_project, delete_project, load_project, save_project};
+pub use commands::{
+    create_project, delete_project, load_ai_session, load_project, save_ai_session, save_project,
+};
 pub use copy::copy_project_assets;
 pub use list::list_projects;
 // 项目文档读取内核供 pwmedia 项目 scope 媒体解析复用（issue #31，store 外
@@ -52,7 +54,11 @@ pub use commands::__cmd__create_project;
 #[doc(hidden)]
 pub use commands::__cmd__delete_project;
 #[doc(hidden)]
+pub use commands::__cmd__load_ai_session;
+#[doc(hidden)]
 pub use commands::__cmd__load_project;
+#[doc(hidden)]
+pub use commands::__cmd__save_ai_session;
 #[doc(hidden)]
 pub use commands::__cmd__save_project;
 #[doc(hidden)]
@@ -60,7 +66,11 @@ pub use commands::__tauri_command_name_create_project;
 #[doc(hidden)]
 pub use commands::__tauri_command_name_delete_project;
 #[doc(hidden)]
+pub use commands::__tauri_command_name_load_ai_session;
+#[doc(hidden)]
 pub use commands::__tauri_command_name_load_project;
+#[doc(hidden)]
+pub use commands::__tauri_command_name_save_ai_session;
 #[doc(hidden)]
 pub use commands::__tauri_command_name_save_project;
 #[doc(hidden)]

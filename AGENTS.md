@@ -44,13 +44,24 @@ Test-driven development applies to source-code features and reproducible defect 
 
 Tests MUST NOT read repository-versioned source or documentation as opaque text and assert ordinary prose, exact phrasing, substring presence or occurrence counts, physical line counts, formatting, section placement, or implementation layout. Verify semantics through the language/compiler or the configured parser or validator. An exact-text assertion is permitted only when that textual form is itself an authoritative contract, such as a stable clause ID, required heading, wire or golden fixture, schema token, command contract, or machine-readable diagnostic code; the test MUST cite that contract. A fixture created solely to exercise a parser or validator MAY contain the exact text needed to represent its grammar, but its assertions SHOULD target semantic outcomes or stable diagnostic codes instead of ordinary wording.
 
+### Key State And Invariant Matrix
+
+Before changing production code for a feature or reproducible defect fix, agents MUST record a concise, risk-based matrix of the affected behavior in the task plan, an existing relevant design/test document, or the pull-request description. Reuse and update an existing matrix when available; a new standalone document is not required. Pure documentation changes do not require this matrix.
+
+- Each row MUST identify the precondition/state, action or transition (including relevant event ordering), expected observable outcome, invariant that must remain true, and corresponding test or explicit verification gap. An invariant is a property that must hold across the relevant transitions, not merely an expected result for one example.
+- Select dimensions relevant to the change: lifecycle transitions, success and failure states, input and contract boundaries, retries and recovery, concurrent or out-of-order completion, and consistency across components or persistence boundaries. Record why a material dimension is not applicable or an identified case remains unverified. Prioritize by user impact and realistic triggers within the repository's threat model; exhaustive Cartesian-product coverage is not required.
+- Cover both the normal path and applicable failure or recovery transitions. Identify the owner of each invariant and the entry points that can affect it, so a guard or assertion on one path does not leave another path unchecked.
+- Use the matrix to select the smallest failing behavior or regression test before implementation, then extend tests for the other selected cases as needed. Assert observable behavior and contract semantics at the layer that owns the invariant; a mocked call assertion alone does not establish an outcome across component or storage boundaries.
+- When a fix adds or changes a state, retry, guard, or recovery path, agents MUST update the matrix and assess adjacent transitions and alternative entry points governed by the same invariant. Add regression coverage for newly affected behavior within the authorized scope, rather than testing only the reported example.
+- Before declaring completion, map the selected cases to verification results and disclose remaining gaps and their rationale. Test counts, line coverage, and a passing static-analysis gate do not substitute for this evidence. The matrix does not expand task authorization or override the existing severity, known-boundary, or review-convergence policies.
+
 ## Execution Workflow
 
 1. Read this guide and every more-specific instruction that applies to the requested scope.
 2. Inspect the relevant code, documentation, build files, and current worktree before proposing or making changes.
 3. Classify the change. Read-only work needs no task branch. Keep an existing authorized task branch or worktree. When files will change and no authorized task branch exists, follow the version-control policy below.
 4. Search for existing internal capabilities and choose the smallest coherent change that meets the request.
-5. Implement only the approved scope and preserve unrelated worktree changes.
+5. For source-code features and reproducible defect fixes, record the Key State And Invariant Matrix before production-code changes. Implement only the approved scope and preserve unrelated worktree changes.
 6. Run the narrowest relevant non-interactive checks, then the broader checks required by the affected Scope Routing rows. Delete disposable verification output before task completion and report the result.
 7. Update every document, index, or cross-reference the change makes stale. When an issue's resolution differs from the existing design, the same change MUST update the affected design documents (including `docs/data-model.md` and `docs/ui-design.md` where applicable) to reflect the accepted outcome. Update the relevant design sections, distinguish implemented behavior from planned work and retained boundaries, and link the issue or resolving PR; an issue comment or change log alone does not replace updating the design itself. This synchronization MUST be complete before declaring the issue resolved or closing it.
 8. Report changed files, verification results, known limitations, and stable evidence. Do not claim completion while required work remains.
@@ -105,6 +116,7 @@ This policy uses protected `dev` as the task pull-request target and sole task-b
 
 - For a source-code feature or reproducible defect fix, use Red-Green-Refactor: first add the smallest focused test, observe it fail for the expected missing behavior, then implement and observe focused and routed checks pass. Pure documentation changes do not manufacture a failing source test; they undergo a structured review instead.
 - Run focused checks first and broader checks when shared behavior is affected.
+- For changes requiring a Key State And Invariant Matrix, include its location, verification results, and remaining gaps in the completion evidence.
 - Use the exact commands and working directories from Scope Routing.
 - Report skipped, blocked, or failing checks with their full reason.
 - Prefer stable evidence such as commit identifiers, immutable links, symbols, headings, and command-result summaries. Treat mutable line numbers as supplementary evidence only.

@@ -221,6 +221,28 @@ describe('归一化一期：视口形状校验（§11.1）', () => {
   })
 })
 
+describe('归一化：AI 批次计数形状校验（§11.1/§12.2 提交身份）', () => {
+  it('非负安全整数原样保留；异型/负数/非整数/非安全整数删除（回退未应用）', () => {
+    const doc = serializeProject({ ...mkContent(), aiRevision: 3 }, 'p-1', NOW) as unknown as {
+      graph: { aiRevision: unknown }
+    }
+    expect(doc.graph.aiRevision).toBe(3)
+    expect(parseProject(doc).content.aiRevision).toBe(3)
+    for (const bad of [-1, 1.5, '3', Number.MAX_SAFE_INTEGER + 1, null]) {
+      doc.graph.aiRevision = bad
+      const round = parseProject(doc)
+      expect(round.content.aiRevision).toBeUndefined()
+      expect(round.warnings.some((w) => w.includes('aiRevision'))).toBe(true)
+    }
+  })
+
+  it('缺省/0 不落盘：旧信封形状不变，缺省读回 undefined（会话层回退 0）', () => {
+    expect('aiRevision' in serializeProject(mkContent(), 'p-1', NOW).graph).toBe(false)
+    expect('aiRevision' in serializeProject({ ...mkContent(), aiRevision: 0 }, 'p-1', NOW).graph).toBe(false)
+    expect(parseProject(serializeProject(mkContent(), 'p-1', NOW)).content.aiRevision).toBeUndefined()
+  })
+})
+
 describe('归一化：project 时间戳严格校验与规范化（§11.1，与 Rust 保存边界 is_valid_iso8601 同域）', () => {
   it('严格且已规范的 UTC 时间戳原样保留，无警告', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW)

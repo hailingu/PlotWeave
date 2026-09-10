@@ -76,6 +76,32 @@ fn save_rejects_bad_project_metadata_and_viewport() {
 }
 
 #[test]
+fn save_rejects_malformed_ai_revision() {
+    // 异型/负数/非整数/超安全整数：落盘后加载归一化会清零，已应用批次的
+    // 提交身份丢失（§12.2），保存边界整次拒绝
+    for bad in [
+        json!("3"),
+        json!(-1),
+        json!(1.5),
+        json!(9007199254740992u64),
+    ] {
+        let mut doc = valid_save_doc();
+        doc.graph = json!({ "nodes": [], "edges": [], "aiRevision": bad });
+        assert!(
+            prepare_save("p-1", &doc).is_err(),
+            "应拒绝 aiRevision {bad:?}"
+        );
+    }
+    // 缺省与合法非负安全整数放行
+    let mut doc = valid_save_doc();
+    doc.graph = json!({ "nodes": [], "edges": [] });
+    assert!(prepare_save("p-1", &doc).is_ok());
+    let mut doc = valid_save_doc();
+    doc.graph = json!({ "nodes": [], "edges": [], "aiRevision": 7 });
+    assert!(prepare_save("p-1", &doc).is_ok());
+}
+
+#[test]
 fn save_rejects_non_canonical_episode_title_keys() {
     // "01"/"1e0" 与规范键折叠到同一集号，转换时按遍历序静默覆盖（§11.1 第 3 步）
     for bad in ["01", "1e0", " 1", "0", "-1", "9007199254740992"] {

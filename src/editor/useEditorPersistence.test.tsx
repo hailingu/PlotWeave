@@ -61,4 +61,43 @@ describe('useEditorPersistence（§3/§10.2）', () => {
     await flush()
     expect(result.current.persistence.saveError).toBeNull()
   })
+
+  it('whenCanvasCommitted 只由注册之后开始的保存兑现：在途旧保存不算数', async () => {
+    const { result, onSave } = setup()
+    let releaseFirst!: () => void
+    onSave.mockImplementationOnce(
+      () => new Promise<void>((resolve) => { releaseFirst = resolve }),
+    )
+    act(() => result.current.persistence.onMoveEnd(null, { x: 1, y: 1, zoom: 1 }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(700) })
+    expect(onSave).toHaveBeenCalledTimes(1)
+
+    // 保存仍在途时登记等待者：旧文档落定不得兑现（它早于本次改动）
+    let committed = false
+    const waiter = result.current.persistence.whenCanvasCommitted().then(() => { committed = true })
+    await act(async () => { releaseFirst(); await Promise.resolve() })
+    expect(committed).toBe(false)
+
+    // 注册之后开始的保存成功落定才兑现
+    act(() => result.current.persistence.onMoveEnd(null, { x: 2, y: 2, zoom: 1 }))
+    await flush()
+    await act(async () => { await waiter })
+    expect(committed).toBe(true)
+  })
+
+  it('whenCanvasCommitted 在保存失败时保持等待，由防抖重试成功兑现', async () => {
+    const { result, onSave } = setup()
+    onSave.mockRejectedValueOnce(new Error('磁盘已满'))
+    let committed = false
+    const waiter = result.current.persistence.whenCanvasCommitted().then(() => { committed = true })
+    act(() => result.current.persistence.onMoveEnd(null, { x: 1, y: 1, zoom: 1 }))
+
+    await flush()
+    expect(result.current.persistence.saveError).toBe('磁盘已满')
+    expect(committed).toBe(false)
+
+    await flush()
+    await act(async () => { await waiter })
+    expect(committed).toBe(true)
+  })
 })

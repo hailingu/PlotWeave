@@ -34,6 +34,149 @@ pub fn load_project(app: AppHandle, id: String) -> Result<ProjectFile, String> {
     let root = projects_dir(&app)?;
     load_project_file(&root, &id)
 }
+
+/// 读取项目独立 AI 会话：`session` 为 None 表示缺失（旧项目，前端视作空
+/// 历史）或损坏（`corrupt` 置位，按可安全替换归类）；会话损坏只阻断会话
+/// 恢复，不影响同项目的画布文档读取。
+#[tauri::command]
+pub fn load_ai_session(app: AppHandle, id: String) -> Result<SessionCopy, String> {
+    let root = projects_dir(&app)?;
+    load_ai_session_file(&root, &id)
+}
+
+/// 单实例会话保存：仅原子写入主文件，失败直接上浮，不写恢复副本。
+#[tauri::command]
+pub fn save_ai_session(
+    app: AppHandle,
+    id: String,
+    session: serde_json::Value,
+) -> Result<(), String> {
+    let root = projects_dir(&app)?;
+    save_ai_session_file(&root, &id, &session)
+}
+
+/// 主文件加载结果；缺失为空历史，损坏由前端提示，真实 I/O 错误仍返回 Err。
+#[derive(serde::Serialize)]
+pub struct SessionCopy {
+    pub session: Option<serde_json::Value>,
+    pub corrupt: bool,
+}
+
+fn validate_ai_session(session: &serde_json::Value) -> Result<(), String> {
+    let Some(object) = session.as_object() else {
+        return Err("AI 会话必须是对象".into());
+    };
+    if object.get("schemaVersion") != Some(&serde_json::Value::from(1)) {
+        return Err("AI 会话版本不受支持".into());
+    }
+    if !object
+        .get("entries")
+        .is_some_and(serde_json::Value::is_array)
+    {
+        return Err("AI 会话 entries 必须是数组".into());
+    }
+    Ok(())
+}
+
+/// AI 会话只能附着在权威项目记录上。删除先移除该记录；迟到的会话保存
+/// 因而无法重新创建 `projects/{id}/`，留下不可见的聊天数据。
+fn require_project_record(root: &CapDir, id: &str) -> Result<(), String> {
+    validate_id(id)?;
+    let name = format!("{id}.json");
+    match root.symlink_metadata(&name) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Err("项目不存在，拒绝保存 AI 会话".into())
+        }
+        Ok(md) if md.file_type().is_symlink() => Err("项目记录是符号链接，拒绝保存 AI 会话".into()),
+        Ok(md) if !md.is_file() => Err("项目记录不是普通文件，拒绝保存 AI 会话".into()),
+        Ok(_) => read_verified_file(root, &name)
+            .map(|_| ())
+            .map_err(|e| format!("拒绝读取项目记录：{e}")),
+        Err(e) => Err(format!("读取项目记录元数据失败：{e}")),
+    }
+}
+
+/// 打开或创建会话目录。目录经 no-follow 分类与绑定后再打开，避免会话 I/O
+/// 退化为未验证的路径拼接。
+fn ai_session_dir(root: &CapDir, id: &str) -> Result<CapDir, String> {
+    validate_id(id)?;
+    for _ in 0..2 {
+        match root.symlink_metadata(id) {
+            Ok(md) if md.file_type().is_symlink() => {
+                return Err("项目会话目录是符号链接，拒绝访问".into())
+            }
+            Ok(md) if !md.is_dir() => return Err("项目会话路径不是目录，拒绝访问".into()),
+            Ok(md) => return open_dir_bound(root, id, &md, "项目会话目录"),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => match root.create_dir(id) {
+                Ok(()) => continue,
+                Err(create_err) if create_err.kind() == std::io::ErrorKind::AlreadyExists => {
+                    continue
+                }
+                Err(create_err) => return Err(format!("创建项目会话目录失败：{create_err}")),
+            },
+            Err(e) => return Err(format!("读取项目会话目录元数据失败：{e}")),
+        }
+    }
+    Err("项目会话目录在创建期间持续变化，拒绝访问".into())
+}
+
+/// 会话读写内核：缺文件是旧项目的合法状态（None，前端视作空历史）；
+/// 损坏（不可解析/信封非法）以 corrupt 提示，不可读则返回 Err。
+pub(crate) fn load_ai_session_file(root: &CapDir, id: &str) -> Result<SessionCopy, String> {
+    validate_id(id)?;
+    let dir = match root.symlink_metadata(id) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(SessionCopy {
+                session: None,
+                corrupt: false,
+            })
+        }
+        Ok(md) if md.file_type().is_symlink() => {
+            return Err("项目会话目录是符号链接，拒绝读取".into())
+        }
+        Ok(md) if !md.is_dir() => return Err("项目会话路径不是目录，拒绝读取".into()),
+        Ok(md) => open_dir_bound(root, id, &md, "项目会话目录")?,
+        Err(e) => return Err(format!("读取项目会话目录元数据失败：{e}")),
+    };
+    match dir.symlink_metadata("ai-session.json") {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(SessionCopy {
+            session: None,
+            corrupt: false,
+        }),
+        Ok(_) => {
+            let text = read_verified_file(&dir, "ai-session.json")
+                .map_err(|e| format!("拒绝读取 AI 会话：{e}"))?;
+            let session = serde_json::from_str::<serde_json::Value>(&text)
+                .ok()
+                .filter(|v| validate_ai_session(v).is_ok());
+            Ok(match session {
+                Some(session) => SessionCopy {
+                    session: Some(session),
+                    corrupt: false,
+                },
+                None => SessionCopy {
+                    session: None,
+                    corrupt: true,
+                },
+            })
+        }
+        Err(e) => Err(format!("读取 AI 会话文件元数据失败：{e}")),
+    }
+}
+
+/// 复用项目记录校验和原子落盘；单进程的调用顺序由前端共享保存链拥有。
+pub(crate) fn save_ai_session_file(
+    root: &CapDir,
+    id: &str,
+    session: &serde_json::Value,
+) -> Result<(), String> {
+    validate_ai_session(session)?;
+    require_project_record(root, id)?;
+    let dir = ai_session_dir(root, id)?;
+    let text =
+        serde_json::to_string_pretty(session).map_err(|e| format!("序列化 AI 会话失败：{e}"))?;
+    atomic_write(&dir, "ai-session.json", &text).map_err(|e| format!("保存 AI 会话失败：{e}"))
+}
 /// load_project 的可测内核：id 是 IPC 调用方传入的不可信参数，词法校验
 /// 先于任何路径拼接——嵌套路径形态的 id（如 `p-1/assets/x`）不得把
 /// projects/ 内的任意 JSON 经项目通道读出（句柄相对解析被沙箱限定在
@@ -166,170 +309,4 @@ fn delete_project_files(root: &CapDir, id: &str) -> Result<(), String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::isotime::now_iso;
-    use crate::store::testutil::{cap, cleanup_temp, temp_projects_dir};
-    use std::fs;
-
-    #[test]
-    fn persist_project_writes_envelope_and_passes_post_verify() {
-        let projects = temp_projects_dir();
-        let doc = new_project_file("p-1", "剧".into(), now_iso());
-        let meta = persist_project(&cap(&projects), "p-1", doc).expect("保存");
-        assert_eq!(meta.name, "剧");
-        assert!(projects.join("p-1.json").exists(), "项目文件应落盘");
-        cleanup_temp(&projects);
-    }
-
-    #[test]
-    fn persist_project_rejects_untrusted_id_before_any_join() {
-        let projects = temp_projects_dir();
-        let doc = new_project_file("p-1", "剧".into(), now_iso());
-        // 空资产索引下复验不设防：id 词法校验必须在任何路径拼接前拒绝
-        let err = persist_project(&cap(&projects), "../evil", doc).unwrap_err();
-        assert!(err.contains("非法"), "意外诊断：{err}");
-        // 不得在 projects/ 之外创建任何文件
-        assert!(
-            fs::symlink_metadata(projects.parent().expect("临时根").join("evil.json")).is_err(),
-            "越界 id 不应写出 projects/"
-        );
-        cleanup_temp(&projects);
-    }
-
-    #[test]
-    fn persist_project_replaces_existing_file_and_leaves_no_temp() {
-        let projects = temp_projects_dir();
-        let first = new_project_file("p-1", "一版".into(), now_iso());
-        persist_project(&cap(&projects), "p-1", first).expect("首存");
-        let second = new_project_file("p-1", "二版".into(), now_iso());
-        persist_project(&cap(&projects), "p-1", second).expect("覆盖保存（rename 替换已存在目标）");
-        let loaded = load_project_file(&cap(&projects), "p-1").expect("重读");
-        assert_eq!(loaded.project.name, "二版");
-        let leftovers: Vec<String> = fs::read_dir(&projects)
-            .expect("扫描项目目录")
-            .filter_map(|e| e.ok())
-            .map(|e| e.file_name().to_string_lossy().into_owned())
-            .filter(|n| n.contains(".tmp"))
-            .collect();
-        assert!(leftovers.is_empty(), "遗留临时文件：{leftovers:?}");
-        cleanup_temp(&projects);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn persist_project_rejects_symlinked_target_without_following() {
-        let projects = temp_projects_dir();
-        let outside = projects.parent().expect("临时根").join("evil-target.json");
-        fs::write(&outside, b"{}").expect("写根外文件");
-        std::os::unix::fs::symlink(&outside, projects.join("p-1.json")).expect("建符号链接");
-        let doc = new_project_file("p-1", "剧".into(), now_iso());
-        let err = persist_project(&cap(&projects), "p-1", doc).unwrap_err();
-        assert!(err.contains("符号链接"), "意外诊断：{err}");
-        // 链接未被跟随或覆盖：根外文件原样保留，链接本身仍在
-        assert_eq!(fs::read(&outside).expect("读根外文件"), b"{}".to_vec());
-        assert!(fs::symlink_metadata(projects.join("p-1.json"))
-            .expect("链接仍在")
-            .file_type()
-            .is_symlink());
-        cleanup_temp(&projects);
-    }
-
-    #[test]
-    fn load_project_file_rejects_path_like_id_before_any_join() {
-        let projects = temp_projects_dir();
-        // 嵌套路径形态的 id：projects/ 内的资产/私有 JSON 不得经 load_project 读出
-        let err = load_project_file(&cap(&projects), "p-1/assets/private").unwrap_err();
-        assert!(
-            err.contains("非法") || err.contains("不存在"),
-            "意外诊断：{err}"
-        );
-        cleanup_temp(&projects);
-    }
-
-    #[test]
-    fn load_project_file_reads_envelope_from_verified_handle() {
-        let projects = temp_projects_dir();
-        let doc = new_project_file("p-1", "午夜出租车".into(), now_iso());
-        persist_project(&cap(&projects), "p-1", doc).expect("先保存");
-        let loaded = load_project_file(&cap(&projects), "p-1").expect("从已验证句柄读取");
-        assert_eq!(loaded.project.name, "午夜出租车");
-        assert_eq!(loaded.schema_version, 1);
-        cleanup_temp(&projects);
-    }
-
-    #[test]
-    fn delete_project_files_removes_nested_asset_subtrees() {
-        let projects = temp_projects_dir();
-        let assets = projects.join("p-1").join("assets");
-        fs::create_dir_all(assets.join("sub").join("deep")).expect("建嵌套目录");
-        fs::write(assets.join("a.png"), b"A").expect("写资产");
-        fs::write(assets.join("sub").join("b.png"), b"B").expect("写子目录资产");
-        fs::write(assets.join("sub").join("deep").join("c.png"), b"C").expect("写深层资产");
-        fs::write(projects.join("p-1.json"), b"{}").expect("写项目文件");
-        delete_project_files(&cap(&projects), "p-1").expect("删除项目");
-        assert!(fs::symlink_metadata(projects.join("p-1")).is_err());
-        assert!(fs::symlink_metadata(projects.join("p-1.json")).is_err());
-        cleanup_temp(&projects);
-    }
-
-    #[test]
-    fn delete_project_files_removes_json_and_asset_tree_idempotently() {
-        let projects = temp_projects_dir();
-        let assets = projects.join("p-1").join("assets");
-        fs::create_dir_all(&assets).expect("建资产目录");
-        fs::write(assets.join("a.png"), b"A").expect("写资产");
-        fs::write(projects.join("p-1.json"), b"{}").expect("写项目文件");
-        delete_project_files(&cap(&projects), "p-1").expect("删除项目");
-        assert!(fs::symlink_metadata(projects.join("p-1.json")).is_err());
-        assert!(fs::symlink_metadata(projects.join("p-1")).is_err());
-        // 幂等：文件与目录均已缺失时再删不报错
-        assert!(delete_project_files(&cap(&projects), "p-1").is_ok());
-        cleanup_temp(&projects);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn delete_project_files_unlinks_symlinks_without_following() {
-        let projects = temp_projects_dir();
-        let assets = projects.join("p-1").join("assets");
-        fs::create_dir_all(&assets).expect("建资产目录");
-        let outside_dir = projects.parent().expect("临时根").join("keep");
-        fs::create_dir_all(&outside_dir).expect("建根外目录");
-        fs::write(outside_dir.join("secret.png"), b"s").expect("写根外文件");
-        std::os::unix::fs::symlink(&outside_dir, assets.join("link")).expect("建目录符号链接");
-        fs::write(projects.join("p-1.json"), b"{}").expect("写项目文件");
-        delete_project_files(&cap(&projects), "p-1").expect("删除项目");
-        // 链接被移除但未跟随：根外目录与文件原样保留
-        assert!(fs::symlink_metadata(outside_dir.join("secret.png")).is_ok());
-        assert!(fs::symlink_metadata(&outside_dir).is_ok());
-        assert!(fs::symlink_metadata(projects.join("p-1")).is_err());
-        cleanup_temp(&projects);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn delete_project_files_keeps_record_when_asset_tree_removal_fails() {
-        let projects = temp_projects_dir();
-        let assets = projects.join("p-1").join("assets");
-        fs::create_dir_all(&assets).expect("建资产目录");
-        fs::write(assets.join("a.png"), b"A").expect("写资产");
-        fs::write(projects.join("p-1.json"), b"{}").expect("写项目文件");
-        // 只读化资产目录：子项删除失败（非 root 用户无法 unlink）
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&assets).unwrap().permissions();
-        perms.set_mode(0o555);
-        fs::set_permissions(&assets, perms).expect("只读化");
-        let result = delete_project_files(&cap(&projects), "p-1");
-        let mut perms = fs::metadata(&assets).unwrap().permissions();
-        perms.set_mode(0o755);
-        let _ = fs::set_permissions(&assets, perms);
-        assert!(result.is_err(), "资产目录删除失败应显式报错");
-        // 权威项目文件必须仍在：项目可发现、删除可重试，不留孤儿媒体树
-        assert!(
-            projects.join("p-1.json").exists(),
-            "项目记录先于资产目录被删，失败后媒体成不可发现孤儿"
-        );
-        cleanup_temp(&projects);
-    }
-}
+mod tests;

@@ -96,6 +96,7 @@ export function useEditorController(deps: EditorControllerDeps): EditorControlle
     setNodes: doc.setNodes,
     setEdges: doc.setEdges,
     setSettings: doc.setSettings,
+    setAiRevision: doc.setAiRevision,
     pushHistory: history.push,
     closeSettings: panels.closeSettings,
   })
