@@ -491,8 +491,8 @@ describe('contingent 出口连线的同键重复判定（评审 5163489093）', 
     expect(v.issues).toHaveLength(2)
     expect(v.issues[0]?.index).toBe(0)
     expect(v.issues[0]?.message).toContain('options')
+    // 拒绝语义按命令定位断言（评审 5163320408 处置：诊断措辞不作契约）
     expect(v.issues[1]?.index).toBe(2)
-    expect(v.issues[1]?.message).toContain('重复连线')
   })
 
   it('下标越出当前表长的同键重复同样点名（暂定边未登记仍比对原始键）', () => {
@@ -506,7 +506,6 @@ describe('contingent 出口连线的同键重复判定（评审 5163489093）', 
     )
     expect(v.issues).toHaveLength(2)
     expect(v.issues[1]?.index).toBe(2)
-    expect(v.issues[1]?.message).toContain('重复连线')
   })
 
   it('断线撤销登记后，同端点同下标的后续 contingent 连线重新合法', () => {
@@ -549,10 +548,11 @@ describe('contingent 出口连线的同键重复判定（评审 5163489093）', 
       ],
       richSnap(),
     )
-    // 首尾两条 update 各报一个 options 错误；idx0 重连指向新选项 opt-new
+    // 首尾两条 update 各报一个 options 错误；idx0 重连指向新选项 opt-new，
+    // 未被点名（拒绝语义按命令定位断言，评审 5163320408 处置）
     expect(v.issues).toHaveLength(2)
     expect(v.issues.every((i) => i.message.includes('options'))).toBe(true)
-    expect(v.issues.map((i) => i.message).join('\n')).not.toContain('重复连线')
+    expect(v.issues.every((i) => i.index !== 4)).toBe(true)
   })
 
   it('成功覆盖按位置改名保留原选项 id 时，同键重连仍判重复（对照）', () => {
@@ -567,6 +567,76 @@ describe('contingent 出口连线的同键重复判定（评审 5163489093）', 
       richSnap(),
     )
     // 字符串更新按位置对位保留 ob-a：两条连线同端口，重复是真阳性
-    expect(v.issues.some((i) => i.index === 4 && i.message.includes('重复连线'))).toBe(true)
+    expect(v.issues.some((i) => i.index === 4)).toBe(true)
+  })
+})
+
+// contingent 越界出口边的投影与判重键域（评审 5164170010）：越界下标的
+// contingent 连线同样登记暂定投影——后续同端点断线按 contingent 跳过、
+// 反向连线参与成环判定；判重键的 id 域与越界回退域分域编码，选项 id
+// 字面量再巧也不与回退键相撞。
+describe('contingent 越界出口边的投影与键域（评审 5164170010）', () => {
+  it('越界下标的 contingent 连线投影参与断线与成环判定', () => {
+    const disconnect = validateAiBatch(
+      [
+        { op: 'update_node', nodeId: 'b1', patch: { options: 'foo' } },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 2 },
+        { op: 'disconnect_edge', sourceId: 'b1', targetId: 's1' },
+      ],
+      richSnap(),
+    )
+    // 断线命中等价的暂定出口边，随前序修复自愈，不误报「没有这条连线」
+    expect(disconnect.issues).toHaveLength(1)
+    expect(disconnect.issues[0]?.message).toContain('options')
+
+    const cycle = validateAiBatch(
+      [
+        { op: 'update_node', nodeId: 'b1', patch: { options: 'foo' } },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 2 },
+        { op: 'connect_edge', sourceId: 's1', targetId: 'b1' },
+      ],
+      richSnap(),
+    )
+    // 投影按「该连线生效」参与成环判定：反向连线独立点名，不漏报
+    expect(cycle.issues).toHaveLength(2)
+    expect(cycle.issues.some((i) => i.index === 2)).toBe(true)
+  })
+
+  it('成功覆盖落定新表后，越界投影按下标重解析；断线随投影生效判定', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'update_node', nodeId: 'b1', patch: { options: 'foo' } },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 2 },
+        { op: 'update_node', nodeId: 'b1', patch: { options: ['甲', '乙', '丙'] } },
+        { op: 'update_node', nodeId: 'b1', patch: { options: 'bar' } },
+        { op: 'disconnect_edge', sourceId: 'b1', targetId: 's1' },
+      ],
+      richSnap(),
+    )
+    // idx2 落进新表：投影转为绑定新选项；其后断线命中投影，contingent 跳过
+    expect(v.issues).toHaveLength(2)
+    expect(v.issues.every((i) => i.message.includes('options'))).toBe(true)
+  })
+
+  it('选项 id 字面量与越界回退键分域编码，不互撞', () => {
+    const s: AiGraphSnapshot = {
+      nodes: [
+        { id: 's1', type: 'scene', label: '场' },
+        { id: 'b1', type: 'branch', label: '分支', options: [{ id: '#2', label: 'A' }] },
+      ],
+      edges: [],
+      assets: new Map(),
+    }
+    const v = validateAiBatch(
+      [
+        { op: 'update_node', nodeId: 'b1', patch: { options: 'foo' } },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 2 },
+      ],
+      s,
+    )
+    // 两条连线分别指向选项 #2 与修复后表的下标 2，端口不同，非重复
+    expect(v.issues).toHaveLength(1)
+    expect(v.issues[0]?.message).toContain('options')
   })
 })

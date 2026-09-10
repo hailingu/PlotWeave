@@ -83,7 +83,10 @@ interface FoldState extends EntityFoldHost {
   virtualEdges: VirtualEdge[]
   /** 依赖失败 options 更新的暂定出口边（端点与稳定选项 id 已确定、句柄待
    * 解析；生效与否按当前选项表派生，见 activeTentativeEdges）。 */
-  tentativeEdges: Array<{ source: string; target: string; optionId: string }>
+  /** contingent 出口边的暂定投影：解析到稳定选项 id 的常规投影，或下标
+   * 越出当前表长的未解析投影（optionId 为 raw: 哨兵、unresolvedIndex 记
+   * 原始下标，评审 5164170010）。 */
+  tentativeEdges: Array<{ source: string; target: string; optionId: string; unresolvedIndex?: number }>
   /** 本批尚未删除的节点 id（含 __new__ 虚拟 id）。 */
   exists: Set<string>
   /** ref 别名 → 所属节点 id。 */
@@ -259,9 +262,11 @@ function foldBranchCascade(
     )
   }
   // 成功替换选项即刷新选项表：清除早前失败更新留下的 contingent 标记，
-  // 后续出口连线的 optionIndex/重复检查恢复按最新选项表独立判断
+  // 后续出口连线的 optionIndex/重复检查恢复按最新选项表独立判断；未解析
+  // 投影按新表重解析（评审 5164170010）
   st.failedBranchOptionUpdates.delete(id)
   st.branchOptions.set(id, normalized.options as Array<{ id: string; label: string }>)
+  reresolveTentativeEdges(st, id, normalized.options as Array<{ id: string; label: string }>)
 }
 
 function foldDelete(st: FoldState, cmd: Record<string, unknown>, index: number): void {
@@ -441,14 +446,14 @@ function foldConnectEdge(
   })
 }
 
-/** contingent 出口连线登记（foldConnectEdge 拆出，S3776）：记录当前选项表
- * 中该下标的稳定选项 id——后续 options 覆盖按 id 级联替换时，暂定边随之
- * 失效（与 removedOptionHandles 同口径）。同端点同解析选项的重复连线返回
- * false：无论修复后选项表如何，第二条必然与前条同端口，首轮即点名，不让
- * 成对重复各占登记、多耗纠错轮次（评审 5163489093）。键绑定登记时解析的
- * 稳定选项 id（不可解析时退回原始下标）：该选项被后续成功覆盖移除/换位
- * 后，同端点同下标的新连线解析到不同选项，自然不与旧键匹配，键无需退役
- * 也不产生假阳性（评审 5163729170）。 */
+/** contingent 出口连线登记（foldConnectEdge 拆出，S3776）：记录暂定投影
+ * ——常规投影绑定当前表该下标的稳定选项 id，下标越出当前表长时登记未解
+ * 析投影（optionId 为 raw: 哨兵、记原始下标，评审 5164170010），使后续
+ * 同端点断线与成环判定按「该连线生效」评估。同端点的重复连线返回 false：
+ * 判重键分域编码——id 域绑定登记时解析的稳定选项 id，越界回退域带 raw:
+ * 前缀，选项 id 字面量再巧也不与回退键相撞（评审 5164170010）；被后续
+ * 成功覆盖移除/换位的选项使旧 id 键自然失配，键不退役也不产生假阳性
+ * （评审 5163729170）。 */
 function registerTentativeEdge(
   st: FoldState,
   cmd: Record<string, unknown>,
@@ -458,11 +463,16 @@ function registerTentativeEdge(
   const idx = cmd.optionIndex
   if (typeof idx !== 'number' || !Number.isInteger(idx) || idx < 0) return true
   const option = (st.branchOptions.get(src) ?? [])[idx]
-  const optionToken = option !== undefined ? option.id : `#${idx}`
-  const key = `${src}\u0000${dst}\u0000${optionToken}`
+  const key = option !== undefined
+    ? `${src}\u0000${dst}\u0000id:${option.id}`
+    : `${src}\u0000${dst}\u0000raw:${idx}`
   if (st.contingentConnectKeys.has(key)) return false
   st.contingentConnectKeys.add(key)
-  if (option !== undefined) st.tentativeEdges.push({ source: src, target: dst, optionId: option.id })
+  st.tentativeEdges.push(
+    option !== undefined
+      ? { source: src, target: dst, optionId: option.id }
+      : { source: src, target: dst, optionId: `raw:${idx}`, unresolvedIndex: idx },
+  )
   return true
 }
 
@@ -494,13 +504,38 @@ function cycleContingent(
 /** 生效的暂定出口边登记：端点仍在、且登记的稳定选项 id 仍在当前选项表内。
  * 按需派生而非固化进 virtualEdges——后续 options 覆盖（成功或暂定生效）
  * 按稳定 id 级联替换/删除选项时自动失效，与 removedOptionHandles 同语义。 */
+/** 生效的暂定出口边登记（评审 5164170010）：端点仍在、解析投影的稳定
+ * 选项 id 仍在当前选项表内；未解析投影（下标越出登记时的表长）在其
+ * contingent 期（失败更新未修复）生效，表覆盖时重解析（见
+ * reresolveTentativeEdges）。 */
 function activeTentativeEdges(st: FoldState): FoldState['tentativeEdges'] {
   return st.tentativeEdges.filter(
     (e) =>
       st.exists.has(e.source) &&
       st.exists.has(e.target) &&
-      (st.branchOptions.get(e.source) ?? []).some((o) => o.id === e.optionId),
+      (e.unresolvedIndex !== undefined
+        ? st.failedBranchOptionUpdates.has(e.source)
+        : (st.branchOptions.get(e.source) ?? []).some((o) => o.id === e.optionId)),
   )
+}
+
+/** 选项表覆盖后重解析该分支的未解析投影（评审 5164170010）：原下标落进
+ * 新表则转为绑定该稳定选项 id 的常规投影并补登记 id 判重键；仍越界则
+ * 撤销投影与回退键——该连线随本轮覆盖确定无法生效，其后同端点断线按
+ * 真实缺失处理。 */
+function reresolveTentativeEdges(
+  st: FoldState,
+  target: string,
+  newTable: ReadonlyArray<{ id: string; label: string }>,
+): void {
+  st.tentativeEdges = st.tentativeEdges.flatMap((e) => {
+    if (e.source !== target || e.unresolvedIndex === undefined) return [e]
+    const option = newTable[e.unresolvedIndex]
+    st.contingentConnectKeys.delete(`${e.source}\u0000${e.target}\u0000raw:${e.unresolvedIndex}`)
+    if (option === undefined) return []
+    st.contingentConnectKeys.add(`${e.source}\u0000${e.target}\u0000id:${option.id}`)
+    return [{ source: e.source, target: e.target, optionId: option.id }]
+  })
 }
 
 /** 暂定出口边的拓扑形态（无句柄 branch 边，仅参与成环判定）。 */
@@ -522,7 +557,8 @@ function dropTentativeEdge(st: FoldState, src: string, dst: string): boolean {
   const hit = activeTentativeEdges(st).find((e) => e.source === src && e.target === dst)
   if (hit === undefined) return false
   st.tentativeEdges.splice(st.tentativeEdges.indexOf(hit), 1)
-  st.contingentConnectKeys.delete(`${src}\u0000${dst}\u0000${hit.optionId}`)
+  const keyTail = hit.unresolvedIndex !== undefined ? hit.optionId : `id:${hit.optionId}`
+  st.contingentConnectKeys.delete(`${src}\u0000${dst}\u0000${keyTail}`)
   return true
 }
 
@@ -648,9 +684,11 @@ function registerFailedOptionsUpdate(
     )
   }
   // 暂定表已确定：清除早前失败留下的 contingent 标记（与成功覆盖同口径），
-  // 后续出口连线恢复按最新选项表独立校验 optionIndex/重复
+  // 后续出口连线恢复按最新选项表独立校验 optionIndex/重复；未解析投影
+  // 按暂定表重解析（评审 5164170010）
   st.failedBranchOptionUpdates.delete(target)
   st.branchOptions.set(target, normalized.options as Array<{ id: string; label: string }>)
+  reresolveTentativeEdges(st, target, normalized.options as Array<{ id: string; label: string }>)
 }
 
 /** 折叠失败后的依赖登记（分发循环调用）：create 失败登记其 ref（指向
