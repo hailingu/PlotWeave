@@ -104,18 +104,29 @@ function resolveRef(st: FoldState, cmd: Record<string, unknown>, key: string): s
  * （依赖批次内 ref 登记，entities 传缺省跳过，阶段 B 按真实投影校验）；
  * update 经批次内 ref 时目标类型未知，只做「任何可写类型都不支持的字段」
  * 独立判定，类型专属错误随修复重放在阶段 B 点名（分层暴露）。 */
-function shapeIssuesOf(st: FoldState, raw: Record<string, unknown>, index: number, ownershipUnstable: boolean): void {
-  const issue = shapeIssueOf(st, raw, ownershipUnstable)
+function shapeIssuesOf(
+  st: FoldState,
+  raw: Record<string, unknown>,
+  index: number,
+  deletedTokens: ReadonlySet<string>,
+): void {
+  const issue = shapeIssueOf(st, raw, deletedTokens)
   if (issue !== null) st.fail(index, issue)
 }
 
 /** 阶段 A 的单命令形状判定分发（shapeIssuesOf 拆出，S3358/S3776）。
- * ownershipUnstable = 此前存在 delete_node：token 归属可被「删除 + 同名
- * ref 重建」换主，快照类型过期，update 的类型专属检查让位阶段 B（评审
- * 5174231991）。 */
-function shapeIssueOf(st: FoldState, raw: Record<string, unknown>, ownershipUnstable: boolean): string | null {
+ * deletedTokens = 此前 delete_node 的 nodeId token 集：这些 token 的归属
+ * 可经「删除 + 同名 ref 重建」换主（快照类型过期），对应 update 的类型
+ * 专属检查让位阶段 B；无关 token 不受牵连，仍进阶段 A 聚合（评审
+ * 5174367120——快照节点只能被同名 token 删除，ref 删除只达批内虚拟
+ * 节点，本就走全局键路径）。 */
+function shapeIssueOf(
+  st: FoldState,
+  raw: Record<string, unknown>,
+  deletedTokens: ReadonlySet<string>,
+): string | null {
   if (raw.op === 'create_node') return createShapeIssue(st, raw)
-  if (raw.op === 'update_node') return updateShapeIssue(st, raw, ownershipUnstable)
+  if (raw.op === 'update_node') return updateShapeIssue(st, raw, deletedTokens)
   if (raw.op === 'connect_edge') return connectShapeIssue(raw)
   if (raw.op === 'upsert_character' || raw.op === 'upsert_location') {
     return entityUpsertShapeIssue(raw)
@@ -133,14 +144,18 @@ function createShapeIssue(st: FoldState, raw: Record<string, unknown>): string |
 }
 
 /** update 的形状校验（shapeIssuesOf 拆出，S3776）：既有节点按其类型全量
- * 校验；批次内 ref 目标类型未知或 token 归属不稳定（前序有 delete_node，
- * 可经「删除 + 同名 ref 重建」换主），只做全局键判定（类型专属错误分层
- * 延后到阶段 B 的顺序解析）。 */
-function updateShapeIssue(st: FoldState, raw: Record<string, unknown>, ownershipUnstable: boolean): string | null {
+ * 校验；token 被更早的 delete_node 点名过（可经「删除 + 同名 ref 重建」
+ * 换主，快照类型过期）或属批次内 ref（类型未知）时，只做全局键判定
+ * （类型专属错误分层延后到阶段 B 的顺序解析）。 */
+function updateShapeIssue(
+  st: FoldState,
+  raw: Record<string, unknown>,
+  deletedTokens: ReadonlySet<string>,
+): string | null {
   const patch = raw.patch
   if (!plainObject(patch) || Object.keys(patch).length === 0) return 'patch 为空'
-  if (ownershipUnstable) return unknownTargetFieldIssue(patch)
   const nodeId = asText(raw.nodeId)
+  if (deletedTokens.has(nodeId)) return unknownTargetFieldIssue(patch)
   const knownType = st.exists.has(nodeId) ? st.types.get(nodeId) : undefined
   return knownType !== undefined
     ? payloadIssue(knownType, patch, st.assets)
@@ -444,11 +459,11 @@ const FOLDERS: Record<string, (st: FoldState, cmd: Record<string, unknown>, inde
 }
 
 /** 阶段 A：全量形状校验（validateAiBatch 拆出，S3776）——一次收集、一次
- * 回喂。token 归属可被更早的 delete_node + 同名 ref 重建改变（快照类型
- * 过期）：其后的 update 只做全局键判定，类型专属检查让位阶段 B（评审
- * 5174231991）。 */
+ * 回喂。被 delete_node 点名过的 token 归属可变（快照类型过期）：仅这些
+ * token 的 update 降级为全局键判定，类型专属检查让位阶段 B；无关 update
+ * 保持阶段 A 聚合（评审 5174231991、5174367120）。 */
 function collectShapeIssues(st: FoldState, commands: unknown[]): void {
-  let ownershipUnstable = false
+  const deletedTokens = new Set<string>()
   for (const [index, raw] of commands.entries()) {
     if (!plainObject(raw)) {
       st.fail(index, '条目不是对象')
@@ -460,8 +475,8 @@ function collectShapeIssues(st: FoldState, commands: unknown[]): void {
       st.fail(index, `未知操作：${String(cmd.op)}`)
       continue
     }
-    shapeIssuesOf(st, cmd, index, ownershipUnstable)
-    if (cmd.op === 'delete_node') ownershipUnstable = true
+    shapeIssuesOf(st, cmd, index, deletedTokens)
+    if (cmd.op === 'delete_node') deletedTokens.add(asText(cmd.nodeId))
   }
 }
 

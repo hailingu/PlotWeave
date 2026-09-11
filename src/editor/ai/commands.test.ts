@@ -1488,4 +1488,20 @@ describe('validateAiBatch：两阶段校验（阶段 A 全量形状 + 阶段 B �
     expect(v.ok).toBe(false)
     expect(v.issues.map((i) => i.index)).toEqual([0])
   })
+
+  it('删除只按 token 降级：无关 update 的类型错误仍进阶段 A 聚合（评审 5174367120）', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'delete_node', nodeId: 'sh1' },
+        { op: 'update_node', nodeId: 'b1', patch: { tone: '紧凑' } },
+        { op: 'update_node', nodeId: 's1', patch: { prompt: '？' } },
+      ],
+      richSnap(),
+    )
+    // tone/prompt 各自不是目标类型的字段：与被删 sh1 无关的 update 不随
+    // 全局降级——阶段 A 一次点名两条（全局开关会把它们变成每轮一条的
+    // 串行发现，配额可在第四条错误前耗尽）
+    expect(v.ok).toBe(false)
+    expect(v.issues.map((i) => i.index)).toEqual([1, 2])
+  })
 })
