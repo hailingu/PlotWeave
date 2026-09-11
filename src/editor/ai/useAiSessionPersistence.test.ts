@@ -3,7 +3,7 @@
  * 面板会话持久化 hook（issue #47）：编辑即保存、失败上浮与本地清除、
  * 挂载重试门槛（读取失败的空回退不可重试），以及项目级错误的双向同步
  * ——转空（后台重试补写成功的通知清除）也必须撤下横幅。
- * 落盘映射的条数上限（issue #64）：会话文件体积随历史有界。
+ * 落盘映射的条数上限（issue #64）：待执行卡与普通历史共享 200 条容量。
  */
 import { describe, expect, it, vi } from 'vitest'
 import { renderHook } from '@testing-library/react'
@@ -144,12 +144,12 @@ describe('persistedEntries 条数上限（issue #64）', () => {
       ...longThread(200).map((e) => ({ ...e, id: 5 + e.id, text: `第${5 + e.id}句` })),
     ]
     const persisted = persistedEntries(thread)
-    // 最新 200 条（id 6..205）+ 钉住的窗口外待执行卡（id 3）
-    expect(persisted).toHaveLength(201)
+    // 待执行卡 id 3 占一条容量，其余保留最新 199 条（id 7..205）
+    expect(persisted).toHaveLength(200)
     expect(persisted[0]).toMatchObject({ id: 3 })
     expect(persisted[0].card).toMatchObject({ status: 'pending' })
-    expect(persisted[1]).toMatchObject({ id: 6 })
-    expect(persisted[200]).toMatchObject({ id: 205 })
+    expect(persisted[1]).toMatchObject({ id: 7 })
+    expect(persisted[199]).toMatchObject({ id: 205 })
   })
 
   it('窗口外未确认执行卡同样钉住：降级 pending 且保留对账计数', () => {
@@ -171,8 +171,8 @@ describe('persistedEntries 条数上限（issue #64）', () => {
       { id: 204, kind: 'note' as const, text: '✓ 已执行 0 项', cardReceiptFor: 2 },
     ]
     const persisted = persistedEntries(thread)
-    // 回执剔除（关联未确认卡）后 202 条；窗口为最新 200 条（id 4..203），钉住 id 2
-    expect(persisted).toHaveLength(201)
+    // 回执剔除后，未确认卡 id 2 占容量，其余为最新 199 条（id 5..203）
+    expect(persisted).toHaveLength(200)
     expect(persisted[0]).toMatchObject({ id: 2 })
     expect(persisted[0].card).toMatchObject({ status: 'pending', aiRevisionAfter: 9 })
     expect(persisted[0].card).not.toHaveProperty('uncommitted')
