@@ -44,10 +44,11 @@ const UNIQUE_ARRAY_FIELD_KEYS: ReadonlySet<string> = new Set(
  * 只读可见）：白名单缺失若放行，update_node 可携任意字段直抵画布
  * （prompt 注入对象后快照/生成即崩，畸形 outputs 落盘重开被静默修复）。 */
 function checkFieldKeys(nodeType: string, fields: Record<string, unknown>): string | null {
-  const allowed = AI_FIELD_KEYS[nodeType]
-  if (!allowed) {
-    return `${NODE_TYPE_LABELS[nodeType] ?? (nodeType || '未知类型')} 暂不支持 AI 命令修改`
+  // issue 49：类型是外部字符串；继承属性既不是字段白名单，也不是人读标签。
+  if (!Object.prototype.hasOwnProperty.call(AI_FIELD_KEYS, nodeType)) {
+    return `${nodeType || '未知类型'} 暂不支持 AI 命令修改`
   }
+  const allowed = AI_FIELD_KEYS[nodeType]
   const unknownKeys = Object.keys(fields).filter((k) => !allowed.includes(k))
   if (unknownKeys.length === 0) return null
   return `未知字段：${unknownKeys.join('、')}（${NODE_TYPE_LABELS[nodeType]} 允许：${allowed.join('、')}）`

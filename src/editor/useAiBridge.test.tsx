@@ -3,7 +3,7 @@ import { renderHook } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { Edge } from '@xyflow/react'
 import { nodeLabelOf, useAiBridge, type AiBridgeDeps } from './useAiBridge'
-import type { ValidatedCommand } from './ai/commands'
+import type { AiCommand, ValidatedCommand } from './ai/commands'
 import type { HistoryCommand } from './history'
 import { EMPTY_SETTINGS, type ProjectSettings } from './settings'
 import type { BranchFlowNode, CanvasNode, SceneFlowNode } from './nodes/types'
@@ -233,6 +233,48 @@ describe('useAiBridge · applyAiBatch 执行边界', () => {
 
     expect(result.current.applyAiBatch([restored])).toBeNull()
     expect(state.nodes[state.nodes.length - 1]?.type).toBe('scene')
+  })
+})
+
+describe('useAiBridge · 原型属性类型的入站与执行边界（issue 49）', () => {
+  it('tool 与 JSON 围栏入口均返回可读类型问题，不抛异常', () => {
+    const { result } = setup([sceneNode('s1'), sceneNode('s2')])
+    const batch: AiCommand[] = [
+      { op: 'create_node', nodeType: 'toString', data: { name: 'x' } },
+      { op: 'connect_edge', sourceId: 's1', targetId: 's2', edgeKind: 'constructor' },
+    ]
+    const fenced = ['```json', JSON.stringify({ commands: batch }), '```'].join('\n')
+    for (const validation of [result.current.validateCommands(batch), result.current.validateAiReply(fenced)]) {
+      expect(validation?.ok).toBe(false)
+      expect(validation?.commands).toEqual([])
+      expect(validation?.issues).toEqual([
+        { index: 0, message: expect.stringContaining('未知节点类型') },
+        { index: 1, message: expect.stringContaining('未知连线类型') },
+      ])
+    }
+  })
+
+  it.each<ValidatedCommand>([
+    { op: 'create_node', nodeType: 'toString', data: {} },
+    { op: 'create_node', nodeType: '__proto__', data: { name: 'x' } },
+    { op: 'connect_edge', sourceId: 's1', targetId: 's2', edgeKind: 'constructor' },
+  ])('历史卡 $op 重校验拒绝非法类型，整批无写入且允许纠正重试', (invalid) => {
+    const { result, state, commands } = setup([sceneNode('s1'), sceneNode('s2')])
+    const before = structuredClone(state)
+    const valid: ValidatedCommand = { op: 'create_node', nodeType: 'beat', data: { name: '新节拍' } }
+    expect(result.current.applyAiBatch([valid, invalid])).toContain('改动无法安全执行')
+    expect(state).toEqual(before)
+    expect(commands).toHaveLength(0)
+
+    expect(result.current.applyAiBatch([valid])).toBeNull()
+    expect(state.nodes).toHaveLength(3)
+    expect(state.nodes[2]).toMatchObject({ type: 'beat', data: { name: '新节拍' } })
+    expect(state.aiRevision).toBe(1)
+    expect(commands).toHaveLength(1)
+    commands[0].undo()
+    expect(state.nodes).toEqual(before.nodes)
+    expect(state.edges).toEqual(before.edges)
+    expect(state.settings).toEqual(before.settings)
   })
 })
 
