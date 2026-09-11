@@ -67,6 +67,21 @@ mod quit_gate_tests {
             "就绪后的退出请求由已注册监听直接接收，不得再次缓冲重放"
         );
     }
+
+    #[test]
+    fn buffered_request_suppresses_direct_emission() {
+        let gate = QuitGate::default();
+        assert!(
+            gate.mark_request(),
+            "间隙首请求进入缓冲：调用方跳过直发，由确认重放投递"
+        );
+        assert!(
+            gate.mark_request(),
+            "暂存未被确认消费前，后续请求并入缓冲：同样跳过直发"
+        );
+        assert!(gate.acknowledge());
+        assert!(!gate.mark_request(), "就绪后到达的请求直发：不进入缓冲");
+    }
 }
 
 /// 保存屏障的受控退出：前端确认会话已排空后调用，直接退出 Tauri 事件循环。
@@ -84,7 +99,9 @@ fn app_exit(app: tauri::AppHandle) {
 ///
 /// 就绪/暂存迁移用单字三态 CAS 状态机原子完成：标记与确认任意交错下不存在
 /// 「已就绪却残留暂存」的搁浅状态（PR #82 评审修复），正确性不依赖
-/// mark_request 与事件发送在回调体内相邻的调用方约定。
+/// mark_request 与事件发送在回调体内相邻的调用方约定。暂存与直发互斥
+/// （mark_request 返回值指示）：同一退出请求至多投递一次，不产生并发
+/// 双派发重复冲刷（PR #82 第二轮评审修复）。
 #[derive(Default)]
 struct QuitGate {
     /// 0 = 未就绪无暂存；1 = 未就绪有暂存；2 = 已就绪（终态，不再暂存）。
@@ -92,18 +109,22 @@ struct QuitGate {
 }
 
 impl QuitGate {
-    /// 原生退出请求到达：未就绪时原子落入暂存（0→1），已就绪不暂存。
-    fn mark_request(&self) {
+    /// 原生退出请求到达：未就绪时原子落入暂存（0→1）并返回 true——调用方
+    /// 跳过直发，由确认重放投递，同一请求至多投递一次；已就绪（终态 2）
+    /// 返回 false，事件直发给已注册监听。
+    fn mark_request(&self) -> bool {
         let mut current = self.state.load(Ordering::SeqCst);
         while current == 0 {
             match self
                 .state
                 .compare_exchange(current, 1, Ordering::SeqCst, Ordering::SeqCst)
             {
-                Ok(_) => return,
+                Ok(_) => return true,
                 Err(actual) => current = actual,
             }
         }
+        // 1 = 已有暂存待确认重放：后续请求并入缓冲，同样跳过直发。
+        current != 2
     }
 
     /// 前端退出监听就绪确认（任意状态→终态 2）：返回此前是否有暂存需重放。
@@ -204,9 +225,12 @@ pub fn run() {
         use tauri::Emitter;
         let handle = app.handle().clone();
         native_quit::install(move || {
-            // 就绪确认前的请求可能没有接收者（issue #65）：先缓冲再发事件，
-            // 由 acknowledge_quit_listener 在监听注册后重放
-            handle.state::<QuitGate>().mark_request();
+            // 就绪确认前的请求进入缓冲并跳过直发（issue #65）：由
+            // acknowledge_quit_listener 在监听注册后重放——暂存与直发互斥，
+            // 同一请求至多投递一次，不与直发形成并发双派发（PR #82 评审修复）
+            if handle.state::<QuitGate>().mark_request() {
+                return;
+            }
             if let Err(error) = handle.emit("app-quit-requested", ()) {
                 eprintln!("发出退出请求事件失败：{error}");
             }
