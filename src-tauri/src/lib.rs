@@ -16,6 +16,9 @@
 //! - `imagegen`：画布内 AI 图像生成代理（文生图，docs/data-model.md §13 首片）。
 //! - `http_util`：出站 HTTP 代理共享助手（响应体流式限读内核）。
 
+use std::sync::atomic::{AtomicU8, Ordering};
+use tauri::Manager;
+
 mod assets;
 mod http_util;
 mod imagegen;
@@ -34,10 +37,125 @@ mod store;
 #[cfg(test)]
 mod conf;
 
+/// 启动间隙退出缓冲（issue #65）语义：间隙内到达的退出请求恰好重放
+/// 一次；就绪确认后到达的请求由已注册监听直接接收，不再缓冲重放。
+#[cfg(test)]
+mod quit_gate_tests {
+    use super::QuitGate;
+
+    #[test]
+    fn buffers_startup_gap_request_and_replays_once() {
+        let gate = QuitGate::default();
+        gate.mark_request();
+        assert!(
+            gate.acknowledge(),
+            "就绪确认应消费间隙内缓冲的退出请求并要求重放一次"
+        );
+        assert!(
+            !gate.acknowledge(),
+            "缓冲的退出请求只重放一次：StrictMode 重复确认不得二次重放"
+        );
+    }
+
+    #[test]
+    fn ignores_requests_after_acknowledge() {
+        let gate = QuitGate::default();
+        assert!(!gate.acknowledge(), "无缓冲请求时确认不应触发重放");
+        gate.mark_request();
+        assert!(
+            !gate.acknowledge(),
+            "就绪后的退出请求由已注册监听直接接收，不得再次缓冲重放"
+        );
+    }
+
+    #[test]
+    fn buffered_request_suppresses_direct_emission() {
+        let gate = QuitGate::default();
+        assert!(
+            gate.mark_request(),
+            "间隙首请求进入缓冲：调用方跳过直发，由确认重放投递"
+        );
+        assert!(
+            gate.mark_request(),
+            "暂存未被确认消费前，后续请求并入缓冲：同样跳过直发"
+        );
+        assert!(gate.acknowledge());
+        assert!(!gate.mark_request(), "就绪后到达的请求直发：不进入缓冲");
+    }
+}
+
 /// 保存屏障的受控退出：前端确认会话已排空后调用，直接退出 Tauri 事件循环。
 #[tauri::command]
 fn app_exit(app: tauri::AppHandle) {
     app.exit(0);
+}
+
+/// 启动间隙退出请求缓冲（issue #65）：原生退出屏障先于前端退出监听注册时，
+/// AppKit 已返回 `NSTerminateCancel` 的退出请求暂存于本门闸；前端监听注册
+/// 完成后经 `acknowledge_quit_listener` 确认就绪，确认消费暂存并重放一次
+/// `app-quit-requested`，使其进入与直发完全相同的保存冲刷屏障。确认后到达
+/// 的退出请求由已注册监听直接接收，不再缓冲。应用显式拥有的托管状态
+/// （Tauri manage），非进程级可变全局单例；仅主线程回调写入、命令线程读取。
+///
+/// 就绪/暂存迁移用单字三态 CAS 状态机原子完成：标记与确认任意交错下不存在
+/// 「已就绪却残留暂存」的搁浅状态（PR #82 评审修复），正确性不依赖
+/// mark_request 与事件发送在回调体内相邻的调用方约定。暂存与直发互斥
+/// （mark_request 返回值指示）：同一退出请求至多投递一次，不产生并发
+/// 双派发重复冲刷（PR #82 第二轮评审修复）。
+#[derive(Default)]
+struct QuitGate {
+    /// 0 = 未就绪无暂存；1 = 未就绪有暂存；2 = 已就绪（终态，不再暂存）。
+    state: AtomicU8,
+}
+
+impl QuitGate {
+    /// 原生退出请求到达：未就绪时原子落入暂存（0→1）并返回 true——调用方
+    /// 跳过直发，由确认重放投递，同一请求至多投递一次；已就绪（终态 2）
+    /// 返回 false，事件直发给已注册监听。
+    fn mark_request(&self) -> bool {
+        let mut current = self.state.load(Ordering::SeqCst);
+        while current == 0 {
+            match self
+                .state
+                .compare_exchange(current, 1, Ordering::SeqCst, Ordering::SeqCst)
+            {
+                Ok(_) => return true,
+                Err(actual) => current = actual,
+            }
+        }
+        // 1 = 已有暂存待确认重放：后续请求并入缓冲，同样跳过直发。
+        current != 2
+    }
+
+    /// 前端退出监听就绪确认（任意状态→终态 2）：返回此前是否有暂存需重放。
+    /// 多次确认（如 React StrictMode 双挂载）只在首次自暂存态迁移时返回
+    /// true；确认后再无暂存可被遗留或消费。
+    fn acknowledge(&self) -> bool {
+        let mut current = self.state.load(Ordering::SeqCst);
+        loop {
+            match self
+                .state
+                .compare_exchange(current, 2, Ordering::SeqCst, Ordering::SeqCst)
+            {
+                Ok(_) => return current == 1,
+                Err(actual) => current = actual,
+            }
+        }
+    }
+}
+
+/// 前端退出监听就绪确认（issue #65）：消费启动间隙缓冲的退出请求并重放
+/// 一次 `app-quit-requested`——监听注册完成后才允许确认，保证重放必有
+/// 接收者且走既有冲刷屏障；无暂存时为空操作。
+#[tauri::command]
+fn acknowledge_quit_listener(app: tauri::AppHandle) {
+    if !app.state::<QuitGate>().acknowledge() {
+        return;
+    }
+    use tauri::Emitter;
+    if let Err(error) = app.emit("app-quit-requested", ()) {
+        eprintln!("重放退出请求事件失败：{error}");
+    }
 }
 
 /// 启动 Tauri 应用；移动端通过 `mobile_entry_point` 复用同一入口。
@@ -47,6 +165,9 @@ pub fn run() {
         // 会话新增项目资产登记表（pwmedia 项目 scope 的防抖落盘窗口，
         // issue #31 评审修复）：应用显式拥有的状态，非进程级可变全局单例
         .manage(assets::project_media::PendingProjectAssets::new())
+        // 启动间隙退出请求缓冲（issue #65）：原生屏障先于前端监听注册的
+        // 窗口内暂存退出请求，确认就绪时重放
+        .manage(QuitGate::default())
         .invoke_handler(tauri::generate_handler![
             store::list_projects,
             store::create_project,
@@ -74,6 +195,7 @@ pub fn run() {
             imagegen::llm_image_generate,
             imagegen::llm_image_cancel,
             app_exit,
+            acknowledge_quit_listener,
         ])
         // opaque asset URL 媒体协议（§7.1/§10.5，issue #26/#31）：每次请求按
         // 当前净化索引（库）/项目文档索引（项目）重新解析 id，经句柄链读取
@@ -103,6 +225,12 @@ pub fn run() {
         use tauri::Emitter;
         let handle = app.handle().clone();
         native_quit::install(move || {
+            // 就绪确认前的请求进入缓冲并跳过直发（issue #65）：由
+            // acknowledge_quit_listener 在监听注册后重放——暂存与直发互斥，
+            // 同一请求至多投递一次，不与直发形成并发双派发（PR #82 评审修复）
+            if handle.state::<QuitGate>().mark_request() {
+                return;
+            }
             if let Err(error) = handle.emit("app-quit-requested", ()) {
                 eprintln!("发出退出请求事件失败：{error}");
             }

@@ -51,6 +51,10 @@ export function useExitFlush(): string | null {
         }),
       ])
       unlistens.push(unlistenClose, unlistenQuit)
+      // 监听注册完成后确认就绪（issue #65）：后端消费启动间隙（原生屏障
+      // 已装、本监听未注册）缓冲的退出请求并重放 app-quit-requested——
+      // 确认必须晚于注册，保证重放必有接收者且走同一冲刷屏障
+      await invoke('acknowledge_quit_listener')
     })()
     return () => {
       disposed = true
