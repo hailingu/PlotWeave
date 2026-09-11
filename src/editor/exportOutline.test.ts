@@ -198,6 +198,66 @@ describe('buildExportOutline（叙事依赖与并列入口，review #81）', () 
   })
 })
 
+describe('buildExportOutline（跨集端点与本集剧情流，review #81）', () => {
+  it.each(['branch', 'sequence'] as const)('跨集 %s 的两端作为各自组内入口，不因本集另有剧情流而标为孤立', (kind) => {
+    const source = kind === 'branch'
+      ? branch('cross', -300, '回到前集？', [{ id: 'a', label: '回想' }], 2)
+      : scene('cross', -300, 4, '跨集来源', 2)
+    const nodes = [
+      source, scene('target', -300, 1, '往事', 1),
+      scene('s1', 0, 2, '一集主线', 1), dialogue('d1', 100, '一集对白', 1),
+      scene('s2', 0, 3, '二集主线', 2), dialogue('d2', 100, '二集对白', 2),
+    ]
+    const cross = kind === 'branch' ? branchEdge('cross', 'cross', 'a', 'target') : seq('cross', 'cross', 'target')
+    const edges = [cross, seq('local1', 's1', 'd1'), seq('local2', 's2', 'd2')]
+    const groups = buildExportOutline(nodes, edges, {})
+    expect(groups.map((group) => group.episode)).toEqual([1, 2])
+    expect(groups[0].rows.map((row) => row.text)).toEqual([
+      '场 01 · 往事 · 入口', '场 02 · 一集主线 · 入口', '对白 · 一集对白',
+    ])
+    const sourceRows = kind === 'branch'
+      ? ['分支 · 回到前集？ · 入口', '回想 → 场 01 · 往事']
+      : ['场 04 · 跨集来源 · 入口']
+    expect(groups[1].rows.map((row) => row.text)).toEqual([
+      ...sourceRows, '场 03 · 二集主线 · 入口', '对白 · 二集对白',
+    ])
+  })
+})
+
+describe('buildExportOutline（跨组连通性恢复与边界，review #81）', () => {
+  it('只有跨组连线时也区分未分集端点与孤立节点，断开后重算并可恢复', () => {
+    const nodes = [
+      branch('b1', 0, '继续？', [{ id: 'a', label: '继续' }], 1),
+      scene('target', 100, 1, '未分集目标'), scene('isolated', -300, 2, '孤立场'),
+    ]
+    const edges = [branchEdge('cross', 'b1', 'a', 'target')]
+    const connected = buildExportOutline(nodes, edges, {})
+    expect(connected.map((group) => group.episode)).toEqual([1, null])
+    expect(connected[1].rows.map((row) => row.text)).toEqual([
+      '场 01 · 未分集目标', '（未接入剧情流）', '场 02 · 孤立场',
+    ])
+    expect(buildExportOutline(nodes, [], {})[1].rows.map((row) => row.text))
+      .toEqual(['场 02 · 孤立场', '场 01 · 未分集目标'])
+    expect(buildExportOutline(nodes, edges, {})).toEqual(connected)
+  })
+
+  it('悬空、非叙事端点及 attach 不会把孤立节点伪装成跨组剧情流端点', () => {
+    const nodes = [
+      scene('external', 0, 1, '外集场', 2), shot('shot1', 0), image('img1', 0),
+      scene('s1', 0, 2, '主线', 1), dialogue('d1', 100, '对白', 1),
+      scene('isolated', -300, 3, '孤立场', 1),
+    ]
+    const edges = [
+      seq('local', 's1', 'd1'), seq('missing-in', 'ghost', 'isolated'),
+      seq('missing-out', 'isolated', 'ghost'), seq('shot', 'shot1', 'isolated'),
+      seq('image', 'isolated', 'img1'), attach('attachment', 'external', 'isolated'),
+    ]
+    expect(buildExportOutline(nodes, edges, {})[0].rows.map((row) => row.text)).toEqual([
+      '场 02 · 主线 · 入口', '对白 · 对白', '（未接入剧情流）', '场 03 · 孤立场',
+    ])
+  })
+})
+
 describe('buildExportOutline（剧情流汇合与入口）', () => {
   it('多路径汇合：汇合节点只出现一次并标注汇入路径数，不重复平铺', () => {
     const nodes = [

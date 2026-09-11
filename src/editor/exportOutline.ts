@@ -135,8 +135,8 @@ function destinationLabel(
   return node.type === 'scene' ? sceneLabel(node) : rowText(node, fulfillment.get(node.id))
 }
 
-/** 组内叙事边：sequence 与 branch 均约束先后；跨集、悬空与 attach 不参与。 */
-function groupFlowEdges(edges: Edge[], member: ReadonlySet<string>): Edge[] {
+/** 指定节点范围内的叙事边：只接纳两端均在范围内的 sequence / branch，排除 attach。 */
+function narrativeEdgesWithin(edges: Edge[], member: ReadonlySet<string>): Edge[] {
   return edges.filter(
     (e) =>
       edgeKindOf(e) !== 'attach' &&
@@ -211,21 +211,19 @@ function nodeRows(
   return rows
 }
 
-/** 单组的行集合：叙事主线行 + 未接入剧情流节点的显式分段。 */
+/** 单组的行集合：以全图叙事端点区分连通/孤立，排序与汇合计数仅使用组内边。 */
 function groupRows(
   memberNodes: OutlineNode[],
   edges: Edge[],
   byId: ReadonlyMap<string, CanvasNode>,
   fulfillment: ReadonlyMap<string, BeatFulfillment>,
+  inFlow: ReadonlySet<string>,
 ): ExportOutlineRow[] {
   const member = new Set(memberNodes.map((n) => n.id))
-  const flow = groupFlowEdges(edges, member)
+  const flow = narrativeEdgesWithin(edges, member)
   const incomingPaths = new Map<string, number>()
-  const inFlow = new Set<string>()
   const inbound = new Set<string>()
   for (const e of flow) {
-    inFlow.add(e.source)
-    inFlow.add(e.target)
     inbound.add(e.target)
     // 汇合按叙事入边逐条计数，保留同一分支的不同选项；自环不算路径。
     if (e.source !== e.target) {
@@ -239,7 +237,7 @@ function groupRows(
     rows.push(...nodeRows(node, edges, byId, fulfillment, nodeSuffix(node, inbound, merge)))
   }
   const detached = byCanvasX(memberNodes.filter((n) => !inFlow.has(n.id)))
-  // 全组无剧情流连线时按 x 序列出即可：没有主线可对照，不贴分段标题
+  // 全组没有任何叙事边端点时按 x 序列出即可，不贴分段标题。
   if (routes.length > 0 && detached.length > 0) {
     rows.push({ kind: 'marker', level: 1, text: '（未接入剧情流）' })
   }
@@ -255,6 +253,8 @@ export function buildExportOutline(
 ): ExportOutlineGroup[] {
   const narrative = nodes.filter(isOutlineNode)
   const byId = new Map(narrative.map((n) => [n.id, n as CanvasNode]))
+  const narrativeEdges = narrativeEdgesWithin(edges, new Set(byId.keys()))
+  const inFlow = new Set(narrativeEdges.flatMap((e) => [e.source, e.target]))
   const sceneByShot = hostSceneMap(nodes, edges)
   const fulfillment = beatFulfillmentMap(nodes, edges)
   const byEpisode = new Map<number | null, OutlineNode[]>()
@@ -270,14 +270,14 @@ export function buildExportOutline(
   const groups: ExportOutlineGroup[] = ordered.map((ep) => ({
     episode: ep,
     title: text(episodeTitles[ep]),
-    rows: groupRows(byCanvasX(byEpisode.get(ep)!), edges, byId, fulfillment),
+    rows: groupRows(byCanvasX(byEpisode.get(ep)!), edges, byId, fulfillment, inFlow),
   }))
   const ungrouped = byEpisode.get(null)
   if (ungrouped) {
     groups.push({
       episode: null,
       title: '',
-      rows: groupRows(byCanvasX(ungrouped), edges, byId, fulfillment),
+      rows: groupRows(byCanvasX(ungrouped), edges, byId, fulfillment, inFlow),
     })
   }
   return groups
