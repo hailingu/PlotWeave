@@ -82,17 +82,21 @@ function canvasHarness(initialNodes: CanvasNode[] = [dialogueNode()], aiRevision
   return { state, history, deps, hook }
 }
 
-/** 装配真实右栏和 AI 桥；refresh 对应画布更新后 EditorView 的重渲染。 */
+/** 装配真实右栏和 AI 桥；refresh 对应画布更新后 EditorView 的重渲染。
+ * projectId 用于在途回合的项目归属（issue #63）——跨用例模块级注册表
+ * 共享，需要隔离的用例显式传入独立 id。 */
 async function setup(options: {
   session?: AiSession
   aiRevision?: number
   nodes?: CanvasNode[]
   whenCanvasCommitted?: () => Promise<void>
+  projectId?: string
 } = {}) {
   const canvas = canvasHarness(options.nodes, options.aiRevision)
   const saved: AiSession[] = []
   const props = () => ({
     open: true, width: 320, tab: 'ai' as const, settings: EMPTY_SETTINGS,
+    projectId: options.projectId ?? 'p-context',
     onResize: () => undefined, onTabChange: () => undefined,
     canvasDigest: canvas.hook.result.current.canvasDigest,
     onValidateCommands: canvas.hook.result.current.validateCommands,
@@ -324,3 +328,96 @@ async function readCurrentNode() {
   }] })
   await send('读取现在的旁白')
 }
+
+describe('AiThread 在途回合跨卸载按项目认领（issue #63）', () => {
+  /** 发送后仅等到 llm_chat 已发出：在途回合留在按项目登记的注册表
+   * （见 pendingTurns），不等待模型落定。 */
+  async function sendInFlight(text = '丰富开场') {
+    const input = screen.getByLabelText('AI 对话输入')
+    fireEvent.change(input, { target: { value: text } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() =>
+      expect(invokeMock.mock.calls.some(([cmd]) => cmd === 'llm_chat')).toBe(true))
+  }
+
+  /** 首个 llm_chat 调用挂起至手动落定，模拟回合跨设置页/首页往返。 */
+  function deferredReply() {
+    let resolve!: (message: AssistantMessage) => void
+    invokeMock.mockImplementationOnce(
+      () => new Promise<AssistantMessage>((settle) => { resolve = settle }),
+    )
+    return (message: AssistantMessage) => resolve(message)
+  }
+
+  /** 同上，但落定为失败：拒绝须发生在卸载之后，故不能直接用已拒绝值。 */
+  function deferredFailure() {
+    let reject!: (err: Error) => void
+    invokeMock.mockImplementationOnce(
+      () => new Promise<AssistantMessage>((_, fail) => { reject = fail }),
+    )
+    return (err: Error) => reject(err)
+  }
+
+  /** 宏任务边界冲刷全部在途微任务：卸载后的落定/失败在无 DOM 可观察时完成。 */
+  async function flushAfterUnmount() {
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+  }
+
+  it('迟到完成的回复经重挂载认领：重定 id 入列并经保存通道落盘', async () => {
+    const reply = deferredReply()
+    const h = await setup({ projectId: 'p63-claim' })
+    await sendInFlight()
+    expect(screen.getByText('✦ 正在思考…')).toBeTruthy()
+    const session = normalizeAiSession(h.saved[h.saved.length - 1]).session
+    h.unmount() // ⌘, 进入设置：编辑器整体卸载，回合仍在途
+    await act(async () => { reply({ role: 'assistant', content: '迟到回复。' }) })
+    const reopened = await setup({ projectId: 'p63-claim', session })
+    expect(await screen.findByText('迟到回复。')).toBeTruthy()
+    expect(screen.queryByText('✦ 正在思考…')).toBeNull()
+    const last = reopened.saved[reopened.saved.length - 1]
+    expect(last.entries.map((e) => e.role ?? e.kind)).toEqual(['user', 'assistant'])
+    expect(new Set(last.entries.map((e) => e.id)).size).toBe(2)
+  })
+
+  it('重挂载时回合仍在途：忙碌态恢复，落定后上屏', async () => {
+    const reply = deferredReply()
+    const h = await setup({ projectId: 'p63-wait' })
+    await sendInFlight()
+    const session = normalizeAiSession(h.saved[h.saved.length - 1]).session
+    h.unmount()
+    await setup({ projectId: 'p63-wait', session })
+    expect(screen.getByText('✦ 正在思考…')).toBeTruthy()
+    await act(async () => { reply({ role: 'assistant', content: '等待后到达。' }) })
+    expect(await screen.findByText('等待后到达。')).toBeTruthy()
+    expect(screen.queryByText('✦ 正在思考…')).toBeNull()
+  })
+
+  it('卸载期间请求失败：重挂载显示错误，不追加条目不触发保存', async () => {
+    const fail = deferredFailure()
+    const h = await setup({ projectId: 'p63-fail' })
+    await sendInFlight()
+    const session = normalizeAiSession(h.saved[h.saved.length - 1]).session
+    h.unmount()
+    await act(async () => { fail(new Error('网络中断')) }) // 失败在卸载后落定
+    await flushAfterUnmount()
+    const reopened = await setup({ projectId: 'p63-fail', session })
+    expect(await screen.findByText(/网络中断/)).toBeTruthy()
+    expect(screen.queryByText('✦ 正在思考…')).toBeNull()
+    expect(reopened.saved).toHaveLength(0)
+  })
+
+  it('认领后再次卸载：回合归还注册表，下次挂载继续认领', async () => {
+    const reply = deferredReply()
+    const h = await setup({ projectId: 'p63-return' })
+    await sendInFlight()
+    const session = normalizeAiSession(h.saved[h.saved.length - 1]).session
+    h.unmount()
+    const middle = await setup({ projectId: 'p63-return', session })
+    expect(screen.getByText('✦ 正在思考…')).toBeTruthy()
+    middle.unmount() // 等待期间再次进入设置
+    await setup({ projectId: 'p63-return', session })
+    expect(screen.getByText('✦ 正在思考…')).toBeTruthy()
+    await act(async () => { reply({ role: 'assistant', content: '辗转到达。' }) })
+    expect(await screen.findByText('辗转到达。')).toBeTruthy()
+  })
+})

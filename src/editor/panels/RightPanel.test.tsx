@@ -89,6 +89,7 @@ function setup(over: Partial<Parameters<typeof RightPanel>[0]> = {}) {
       width={320}
       tab="inspector"
       settings={SETTINGS}
+      projectId="p-right-panel"
       canvasDigest="SNAPSHOT"
       {...spies}
       {...over}
@@ -128,7 +129,8 @@ describe('RightPanel 检查器', () => {
       ({ id: 'x', type, position: { x: 0, y: 0 }, data }) as CanvasNode
 
     const { unmount } = render(
-      <RightPanel open width={320} tab="inspector" settings={SETTINGS} onResize={vi.fn()}
+      <RightPanel open width={320} tab="inspector" settings={SETTINGS} projectId="p-right-panel"
+        onResize={vi.fn()}
         onTabChange={vi.fn()}
         selectedNode={mk('dialogue', {
           name: '对白一',
@@ -277,6 +279,7 @@ describe('RightPanel ✦AI 会话历史保持', () => {
       width: 320,
       tab: 'ai' as const,
       settings: SETTINGS,
+      projectId: 'p-right-panel',
       onResize: vi.fn(),
       onTabChange: vi.fn(),
       canvasDigest: 'SNAPSHOT',
@@ -310,6 +313,7 @@ describe('RightPanel ✦AI 面板高度链（issue 58）', () => {
         width: 320,
         tab: 'ai' as const,
         settings: SETTINGS,
+        projectId: 'p-right-panel',
         onResize: vi.fn(),
         onTabChange: vi.fn(),
         canvasDigest: 'SNAPSHOT',
@@ -646,6 +650,7 @@ describe('RightPanel ✦AI 会话保存错误', () => {
       width: 320,
       tab: 'ai' as const,
       settings: SETTINGS,
+      projectId: 'p-right-panel',
       onResize: vi.fn(),
       onTabChange: vi.fn(),
       canvasDigest: 'SNAPSHOT',

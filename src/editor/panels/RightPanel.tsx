@@ -118,6 +118,8 @@ interface RightPanelProps {
   readonly onResize: (width: number) => void
   readonly tab: RightTab
   readonly onTabChange: (tab: RightTab) => void
+  /** 项目 id：AI 在途回合跨卸载归属的键（issue #63，见 ai/pendingTurns）。 */
+  readonly projectId: string
   /** 画布当前选中节点；无选中时检查器显示空态。 */
   readonly selectedNode?: CanvasNode
   /** 选中索引卡的 attach 下挂分镜数（§7.2 派生，检查器展示用）。 */
@@ -166,6 +168,7 @@ export default function RightPanel({
   onResize,
   tab,
   onTabChange,
+  projectId,
   selectedNode,
   attachedShotCount = 0,
   settings,
@@ -219,6 +222,7 @@ export default function RightPanel({
           <div className="pw-ai-pane" hidden={tab !== 'ai'}>
             <AiSessionContent
               loadFailed={aiSessionLoadFailed}
+              projectId={projectId}
               onOpenSettings={onOpenSettings}
               canvasDigest={canvasDigest}
               aiRevision={aiRevision}
