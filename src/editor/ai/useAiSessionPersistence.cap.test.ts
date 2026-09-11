@@ -1,12 +1,24 @@
 // @vitest-environment happy-dom
 /** PR #85 总量回归：待执行卡占用历史容量，超额时保留最新提案；
- * 经真实落盘映射、JSON 与加载归一化验证顺序、对账及输入不变。 */
+ * 经真实落盘管线（persistedEntries 形态映射 + diskSessionOf 落盘边界
+ * 容量，即 aiSessionStore 写入时的同一组合）、JSON 与加载归一化验证
+ * 顺序、对账及输入不变。 */
 import { afterEach, expect, it } from 'vitest'
 import { cleanup, renderHook, waitFor } from '@testing-library/react'
-import { normalizeAiSession, type AiSession, type ThreadEntry } from './session'
-import { persistedEntries, useAiSessionPersistence } from './useAiSessionPersistence'
+import {
+  diskSessionOf,
+  normalizeAiSession,
+  persistedEntries,
+  type AiSession,
+  type ThreadEntry,
+} from './session'
+import { useAiSessionPersistence } from './useAiSessionPersistence'
 
 afterEach(cleanup)
+
+/** 生产管线的纯函数组合：面板全量形态 → 落盘边界容量。 */
+const save = (thread: ThreadEntry[]): ThreadEntry[] =>
+  diskSessionOf({ schemaVersion: 1, entries: persistedEntries(thread) }).entries
 
 /** 生成带可恢复命令载荷的合法待执行卡，避免只验证空卡的条目数。 */
 function proposal(id: number): ThreadEntry {
@@ -33,7 +45,7 @@ function notes(start: number, count = 200): ThreadEntry[] {
 it('多张窗口外待执行卡占用 200 条总容量，并保留最新普通历史', () => {
   const thread = [proposal(1), proposal(2), ...notes(3)]
   const original = structuredClone(thread)
-  const saved = persistedEntries(thread)
+  const saved = save(thread)
   expect(saved).toHaveLength(200)
   expect(saved.slice(0, 3).map((entry) => entry.id)).toEqual([1, 2, 5])
   expect(saved[199].id).toBe(202)
@@ -50,7 +62,7 @@ it.each([
     ...Array.from({ length: testCase.count }, (_, i) => proposal(i + 1)),
     ...notes(testCase.count + 1),
   ]
-  const saved = persistedEntries(thread)
+  const saved = save(thread)
   expect(saved).toHaveLength(200)
   expect(saved[0].id).toBe(testCase.first)
   expect(saved[199].id).toBe(testCase.last)
@@ -60,7 +72,7 @@ it.each([
 })
 
 it('较新待执行卡与较旧卡共享容量，输出按原顺序且不重复', () => {
-  const saved = persistedEntries([proposal(900), ...notes(1000), proposal(7)])
+  const saved = save([proposal(900), ...notes(1000), proposal(7)])
   expect(saved).toHaveLength(200)
   expect(saved.slice(0, 3).map((entry) => entry.id)).toEqual([900, 1002, 1003])
   expect(saved[199].id).toBe(7)
@@ -70,10 +82,10 @@ it('较新待执行卡与较旧卡共享容量，输出按原顺序且不重复'
 
 it.each(['dismissed', 'executed'] as const)('旧卡转为 %s 后释放优先容量', (status) => {
   const thread = [proposal(1), proposal(2), ...notes(3)]
-  expect(persistedEntries(thread)).toHaveLength(200)
+  expect(save(thread)).toHaveLength(200)
   const changed = thread.map((entry) => entry.id === 1 && entry.card
     ? { ...entry, card: { ...entry.card, status } } : entry)
-  const saved = persistedEntries(changed)
+  const saved = save(changed)
   expect(saved).toHaveLength(200)
   expect(saved.slice(0, 3).map((entry) => entry.id)).toEqual([2, 4, 5])
   expect(saved[199].id).toBe(202)
@@ -91,7 +103,7 @@ it('多张未确认执行卡先剔除回执再分配容量，重载保留命令�
     { id: 203, kind: 'note', text: '执行回执一', cardReceiptFor: 1 },
     { id: 204, kind: 'note', text: '执行回执二', cardReceiptFor: 2 })
   const original = structuredClone(thread)
-  const saved = persistedEntries(thread)
+  const saved = save(thread)
   const restored = normalizeAiSession(JSON.parse(JSON.stringify({ schemaVersion: 1, entries: saved })))
   expect(restored.repaired).toBe(false)
   expect(restored.session.entries).toHaveLength(200)
@@ -99,8 +111,23 @@ it('多张未确认执行卡先剔除回执再分配容量，重载保留命令�
   expect(restored.session.entries[0].card).toEqual({ ...proposal(1).card, aiRevisionAfter: 8 })
   expect(restored.session.entries[1].card).toEqual({ ...proposal(2).card, aiRevisionAfter: 9 })
   expect(restored.session.entries[199].id).toBe(202)
-  expect(persistedEntries(restored.session.entries)).toEqual(saved)
+  expect(save(restored.session.entries)).toEqual(saved)
   expect(thread).toEqual(original)
+})
+
+it('校验拒绝卡不可执行：不占优先容量，按普通历史分配', () => {
+  const rejected: ThreadEntry = {
+    ...proposal(1),
+    card: {
+      ...proposal(1).card!,
+      v: { ...proposal(1).card!.v, ok: false, issues: [{ index: 0, message: '未知字段' }] },
+    },
+  }
+  const saved = save([rejected, ...notes(2)])
+  expect(saved).toHaveLength(200)
+  expect(saved.some((entry) => entry.card !== undefined)).toBe(false)
+  expect(saved[0].id).toBe(2)
+  expect(saved[199].id).toBe(201)
 })
 
 it('旧超额会话加载不写回，后续编辑保存并重载后总量收敛', async () => {
@@ -108,11 +135,12 @@ it('旧超额会话加载不写回，后续编辑保存并重载后总量收敛'
     schemaVersion: 1, entries: [proposal(1), proposal(2), ...notes(3)],
   }).session
   let disk: AiSession = structuredClone(loaded)
-  const save = async (session: AiSession): Promise<void> => {
-    disk = normalizeAiSession(JSON.parse(JSON.stringify(session))).session
+  // 模拟 aiSessionStore 落盘边界：对全量形态施加容量裁剪
+  const writeToDisk = async (session: AiSession): Promise<void> => {
+    disk = normalizeAiSession(JSON.parse(JSON.stringify(diskSessionOf(session)))).session
   }
   const { rerender } = renderHook(
-    ({ entries }) => useAiSessionPersistence(entries, null, save, undefined),
+    ({ entries }) => useAiSessionPersistence(entries, null, writeToDisk, undefined),
     { initialProps: { entries: loaded.entries } },
   )
   expect(disk.entries).toHaveLength(202)

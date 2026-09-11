@@ -3,12 +3,14 @@
  * 面板会话持久化 hook（issue #47）：编辑即保存、失败上浮与本地清除、
  * 挂载重试门槛（读取失败的空回退不可重试），以及项目级错误的双向同步
  * ——转空（后台重试补写成功的通知清除）也必须撤下横幅。
- * 落盘映射的条数上限（issue #64）：待执行卡与普通历史共享 200 条容量。
+ * 落盘形态映射（issue #64）：保存通道携带全量形态，容量裁剪在
+ * aiSessionStore 落盘边界（容量选择回归见 useAiSessionPersistence.cap.test.ts
+ * 与 aiSessionStore.tauri.test.ts）。
  */
 import { describe, expect, it, vi } from 'vitest'
 import { renderHook } from '@testing-library/react'
-import { persistedEntries, useAiSessionPersistence } from './useAiSessionPersistence'
-import type { AiSession, ThreadEntry } from './session'
+import { useAiSessionPersistence } from './useAiSessionPersistence'
+import { persistedEntries, type AiSession, type ThreadEntry } from './session'
 
 const entry = (id: number, text: string): ThreadEntry => ({ id, kind: 'note', text })
 const thread = [entry(1, '第一句')]
@@ -65,7 +67,7 @@ describe('useAiSessionPersistence', () => {
     expect(result.current).toBeNull()
   })
 
-  it('条目超过落盘上限时，保存会话只携带最新 200 条（issue #64）', async () => {
+  it('条目变更保存携带全量落盘形态：容量裁剪发生在落盘边界（issue #64）', async () => {
     const onSave = saveFn()
     const long = Array.from({ length: 202 }, (_, i) => entry(i + 1, `第${i + 1}句`))
     const { rerender } = renderHook(
@@ -74,34 +76,23 @@ describe('useAiSessionPersistence', () => {
     )
     rerender({ t: long })
     await vi.waitFor(() => { expect(onSave).toHaveBeenCalledTimes(1) })
+    // 快照通道（设置页重挂载种子、保存失败保留）持全量形态；
+    // 200 条容量由 aiSessionStore 写入主文件时施加
     const saved = onSave.mock.calls[0][0]
-    expect(saved.entries).toHaveLength(200)
-    expect(saved.entries[0]).toMatchObject({ id: 3, text: '第3句' })
-    expect(saved.entries[199]).toMatchObject({ id: 202, text: '第202句' })
+    expect(saved.entries).toHaveLength(202)
+    expect(saved.entries[0]).toMatchObject({ id: 1, text: '第1句' })
+    expect(saved.entries[201]).toMatchObject({ id: 202, text: '第202句' })
   })
 })
 
-describe('persistedEntries 条数上限（issue #64）', () => {
-  const longThread = (count: number): ThreadEntry[] =>
-    Array.from({ length: count }, (_, i) => entry(i + 1, `第${i + 1}句`))
+describe('persistedEntries 落盘形态映射（issue #64）', () => {
+  const entry = (id: number, text: string): ThreadEntry => ({ id, kind: 'note', text })
 
-  it('超过上限只落盘最新 200 条，顺序保留', () => {
-    const persisted = persistedEntries(longThread(202))
-    expect(persisted).toHaveLength(200)
-    expect(persisted[0]).toMatchObject({ id: 3, text: '第3句' })
-    expect(persisted[199]).toMatchObject({ id: 202, text: '第202句' })
-  })
-
-  it('恰在上限或以下不裁剪', () => {
-    expect(persistedEntries(longThread(200))).toHaveLength(200)
-    expect(persistedEntries(longThread(3)).map((e) => e.id)).toEqual([1, 2, 3])
-  })
-
-  it('上限裁剪不影响未确认执行卡的降级映射：尾部卡保留对账计数，回执剔除', () => {
+  it('未确认执行卡降级 pending 并保留对账计数，关联回执剔除', () => {
     const thread = [
-      ...longThread(200),
+      entry(1, '第一句'),
       {
-        id: 201,
+        id: 2,
         kind: 'msg' as const,
         role: 'assistant' as const,
         text: '带卡回复',
@@ -112,90 +103,30 @@ describe('persistedEntries 条数上限（issue #64）', () => {
           aiRevisionAfter: 7,
         },
       },
-      { id: 202, kind: 'note' as const, text: '✓ 已执行 0 项', cardReceiptFor: 201 },
+      { id: 3, kind: 'note' as const, text: '✓ 已执行 0 项', cardReceiptFor: 2 },
     ]
     const persisted = persistedEntries(thread)
-    expect(persisted).toHaveLength(200)
-    // 回执剔除后剩 201 条，裁剪自最旧一条起：id 2..201
-    expect(persisted[0]).toMatchObject({ id: 2 })
-    const cardEntry = persisted[199]
-    expect(cardEntry).toMatchObject({ id: 201 })
-    expect(cardEntry.card).toMatchObject({ status: 'pending', aiRevisionAfter: 7 })
-    expect(cardEntry.card).not.toHaveProperty('uncommitted')
+    expect(persisted).toHaveLength(2)
+    expect(persisted[0]).toMatchObject({ id: 1 })
+    expect(persisted[1]).toMatchObject({ id: 2 })
+    expect(persisted[1].card).toMatchObject({ status: 'pending', aiRevisionAfter: 7 })
+    expect(persisted[1].card).not.toHaveProperty('uncommitted')
     expect(persisted.every((e) => e.cardReceiptFor === undefined)).toBe(true)
   })
 
-  it('窗口外仍可执行的待执行卡钉住保留：继续对话不丢跨重开可执行性', () => {
+  it('已确认卡的回执保留为普通 note，仅剥运行时关联标注', () => {
     const thread = [
-      entry(1, '第1句'),
-      entry(2, '第2句'),
       {
-        id: 3,
+        id: 1,
         kind: 'msg' as const,
         role: 'assistant' as const,
-        text: '早前待执行预览',
-        card: {
-          v: { ok: true, items: [], commands: [], issues: [], hasDeletes: false },
-          status: 'pending' as const,
-        },
+        text: '已确认执行',
+        card: { v: { ok: true, items: [], commands: [], issues: [], hasDeletes: false }, status: 'executed' as const },
       },
-      entry(4, '第4句'),
-      entry(5, '第5句'),
-      ...longThread(200).map((e) => ({ ...e, id: 5 + e.id, text: `第${5 + e.id}句` })),
+      { id: 2, kind: 'note' as const, text: '✓ 已执行 0 项', cardReceiptFor: 1 },
     ]
     const persisted = persistedEntries(thread)
-    // 待执行卡 id 3 占一条容量，其余保留最新 199 条（id 7..205）
-    expect(persisted).toHaveLength(200)
-    expect(persisted[0]).toMatchObject({ id: 3 })
-    expect(persisted[0].card).toMatchObject({ status: 'pending' })
-    expect(persisted[1]).toMatchObject({ id: 7 })
-    expect(persisted[199]).toMatchObject({ id: 205 })
-  })
-
-  it('窗口外未确认执行卡同样钉住：降级 pending 且保留对账计数', () => {
-    const thread = [
-      entry(1, '第1句'),
-      {
-        id: 2,
-        kind: 'msg' as const,
-        role: 'assistant' as const,
-        text: '窗口外未确认执行',
-        card: {
-          v: { ok: true, items: [], commands: [], issues: [], hasDeletes: false },
-          status: 'executed' as const,
-          uncommitted: true as const,
-          aiRevisionAfter: 9,
-        },
-      },
-      ...longThread(200).map((e) => ({ ...e, id: 3 + e.id, text: `第${3 + e.id}句` })),
-      { id: 204, kind: 'note' as const, text: '✓ 已执行 0 项', cardReceiptFor: 2 },
-    ]
-    const persisted = persistedEntries(thread)
-    // 回执剔除后，未确认卡 id 2 占容量，其余为最新 199 条（id 5..203）
-    expect(persisted).toHaveLength(200)
-    expect(persisted[0]).toMatchObject({ id: 2 })
-    expect(persisted[0].card).toMatchObject({ status: 'pending', aiRevisionAfter: 9 })
-    expect(persisted[0].card).not.toHaveProperty('uncommitted')
-  })
-
-  it('窗口外校验拒绝卡不钉住：不可执行的错误历史随窗口裁剪', () => {
-    const thread = [
-      entry(1, '第1句'),
-      {
-        id: 2,
-        kind: 'msg' as const,
-        role: 'assistant' as const,
-        text: '被拒绝的批次',
-        card: {
-          v: { ok: false, items: [], commands: [], issues: [{ index: 0, message: 'x' }], hasDeletes: false },
-          status: 'pending' as const,
-        },
-      },
-      ...longThread(200).map((e) => ({ ...e, id: 2 + e.id, text: `第${2 + e.id}句` })),
-    ]
-    const persisted = persistedEntries(thread)
-    expect(persisted).toHaveLength(200)
-    expect(persisted.some((e) => e.card !== undefined)).toBe(false)
-    expect(persisted[0]).toMatchObject({ id: 3 })
+    expect(persisted).toHaveLength(2)
+    expect(persisted[1]).toEqual({ id: 2, kind: 'note', text: '✓ 已执行 0 项' })
   })
 })

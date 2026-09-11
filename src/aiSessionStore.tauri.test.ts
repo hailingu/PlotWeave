@@ -173,6 +173,31 @@ describe('loadAiSession 主文件归一化', () => {
 })
 
 describe('saveAiSession 按需重试', () => {
+  it('落盘边界施加容量：invoke 载荷 ≤200 且不修改调用方快照（issue #64）', async () => {
+    const store = await import('./aiSessionStore')
+    const full = {
+      schemaVersion: 1 as const,
+      entries: Array.from({ length: 203 }, (_, i) => ({
+        id: i + 1, kind: 'note' as const, text: `第${i + 1}句`,
+      })),
+    }
+    const payloads: Array<Array<{ id: number }>> = []
+    invoke.mockImplementation(async (_cmd: unknown, args: unknown) => {
+      payloads.push((args as { session: { entries: Array<{ id: number }> } }).session.entries)
+      throw new Error('磁盘已满')
+    })
+    await expect(store.saveAiSession('p1', full)).rejects.toThrow('磁盘已满')
+    // 退出冲刷重试（保留快照全量）再次经同一落盘边界
+    await expect(store.flushPendingAiSessionSaves()).resolves.toEqual(['p1'])
+    expect(payloads).toHaveLength(2)
+    expect(payloads[0]).toHaveLength(200)
+    expect(payloads[1]).toHaveLength(200)
+    expect(payloads[0][0]).toMatchObject({ id: 4 })
+    expect(payloads[0][199]).toMatchObject({ id: 203 })
+    // 裁剪产出新数组，进程内保留快照仍是全量
+    expect(full.entries).toHaveLength(203)
+  })
+
   it('失败后退出仅重试一次，仍失败则保留阻断，后续成功清除', async () => {
     const store = await import('./aiSessionStore')
     invoke.mockRejectedValue(new Error('只读目录'))

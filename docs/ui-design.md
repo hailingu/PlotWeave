@@ -212,7 +212,7 @@ gray-900 #131316  →  surface.canvas        →  canvas.background
 - **上下文摘要**：输入区常驻「了解当前画布」标识——默认给 LLM 压缩快照（id/type/label/连接关系），对白分别显示台词句数与旁白/动作条数，详情由读工具按需拉取（§12.2）；设定集清单（角色/地点 id、名称、小传/备注）由 `get_settings_snapshot` 按需读取（issue 44）。
 - **后续对话识别执行状态（[issue #73](https://github.com/hailingu/PlotWeave/issues/73)，已实现）**：每次发送都将历史预览卡的待确认、校验拒绝、执行失败、已忽略或曾执行成功状态随对应助手消息传给模型，包括较早卡片在后续轮次才被确认的情况；关闭画布摘要不删除这些对话状态。执行失败记录可随会话恢复，重试成功或忽略后清除旧失败。模型能区分「已产出命令」与「只给文本建议」，并区分历史执行和当前效果：曾执行不代表已保存或当前内容未被撤销、修改，续写前按需读取当前节点，不凭历史记录重复执行。历史摘要有界裁剪，完整预览、确认与撤销流程保持原有交互。
 - **模型选择器**：只列三层过滤后的可用模型（在内置目录或自定义条目 → provider 已配置 → 未被禁用，§10.3）；未配置任何 provider 时显示引导卡片，一键去设置页。
-- **历史与失败提示**（[issue #47](https://github.com/hailingu/PlotWeave/issues/47)、[PR #57](https://github.com/hailingu/PlotWeave/pull/57)）：按单应用实例使用，重开项目读取唯一会话主文件，项目 A/B 隔离。主文件落盘总量最多 200 条（[issue #64](https://github.com/hailingu/PlotWeave/issues/64)、[PR #85](https://github.com/hailingu/PlotWeave/pull/85)）：可执行待确认卡优先占容量，其余额度保留最新历史，按原时间线展示。待确认卡自身超出 200 张时只保留最新 200 张；被裁掉的旧提案重开后不再恢复，项目打开期间的内存会话与滚动不受影响。保留下来的待确认卡重开后按当前画布重校验，仍需再次确认执行；状态矩阵及边界见 §6.2。保存失败在消息区提示，内存历史与错误跨设置页、首页导航保留；后续变更或重开保留会话可重试，成功清除提示。不写恢复副本、不做定时重试，也不显示副本选源、序号冲突或分叉调和状态。正常关闭窗口/⌘Q/Dock「退出」等待保存，每项目最多重试一次；失败保留窗口并提示检查磁盘后重试退出。强制终止可能丢失未保存内容。坏条目隔离并提示。读取失败时显示原因和“请检查磁盘后重新打开项目”，AI 发送与执行停用，检查器及画布继续可用；进出设置页不解除限制，重开成功读取后恢复。文件不存在仍按空历史正常聊天。卡片执行回执仍以画布提交计数核对：未确认落盘不虚报已保存的执行，已落盘批次恢复为历史改动，不重复执行、不承诺跨重启撤销；重启不自动重发模型请求。
+- **历史与失败提示**（[issue #47](https://github.com/hailingu/PlotWeave/issues/47)、[PR #57](https://github.com/hailingu/PlotWeave/pull/57)）：按单应用实例使用，重开项目读取唯一会话主文件，项目 A/B 隔离。主文件落盘总量最多 200 条（[issue #64](https://github.com/hailingu/PlotWeave/issues/64)、[PR #85](https://github.com/hailingu/PlotWeave/pull/85)）：可执行待确认卡优先占容量，其余额度保留最新历史，按原时间线展示。待确认卡自身超出 200 张时只保留最新 200 张；被裁掉的旧提案重开后不再恢复，项目打开期间的内存会话与滚动不受影响。容量裁剪只发生在写入主文件的落盘边界——设置页往返的重挂载与保存失败后的首页重开都恢复完整内存会话，不受裁剪影响。保留下来的待确认卡重开后按当前画布重校验，仍需再次确认执行；状态矩阵及边界见 §6.2。保存失败在消息区提示，内存历史与错误跨设置页、首页导航保留；后续变更或重开保留会话可重试，成功清除提示。不写恢复副本、不做定时重试，也不显示副本选源、序号冲突或分叉调和状态。正常关闭窗口/⌘Q/Dock「退出」等待保存，每项目最多重试一次；失败保留窗口并提示检查磁盘后重试退出。强制终止可能丢失未保存内容。坏条目隔离并提示。读取失败时显示原因和“请检查磁盘后重新打开项目”，AI 发送与执行停用，检查器及画布继续可用；进出设置页不解除限制，重开成功读取后恢复。文件不存在仍按空历史正常聊天。卡片执行回执仍以画布提交计数核对：未确认落盘不虚报已保存的执行，已落盘批次恢复为历史改动，不重复执行、不承诺跨重启撤销；重启不自动重发模型请求。
 
 ### 6.1 明确修改请求的交付回归矩阵（issue #75）
 
@@ -237,21 +237,26 @@ gray-900 #131316  →  surface.canvas        →  canvas.background
 
 ### 6.2 会话落盘总量回归矩阵（issue #64）
 
-关联 [issue #64](https://github.com/hailingu/PlotWeave/issues/64) 与 [PR #85 评审](https://github.com/hailingu/PlotWeave/pull/85#pullrequestreview-5181315757)。保存映射 `persistedEntries` 拥有容量与顺序不变量：总量最多 200 条，优先保留最新的可执行待执行卡，再用最新普通历史补齐容量，最终按原时间线输出。待执行卡也占用容量；其自身超过 200 张时，最旧提案随落盘裁剪，重开不再恢复。内存会话与加载归一化不裁剪；旧文件仍全量加载，实际变更保存时才收敛。下列用例在生产代码变更前选定。
+关联 [issue #64](https://github.com/hailingu/PlotWeave/issues/64) 与 [PR #85 评审](https://github.com/hailingu/PlotWeave/pull/85#pullrequestreview-5181315757)。保存管线分两层：`persistedEntries`（session.ts）做落盘形态映射（运行时标注剥离、未确认执行卡降级、关联回执剔除），`diskSessionOf` 在 `aiSessionStore` 写入主文件（或浏览器内存回退等价物）的落盘边界施加总量容量并拥有顺序不变量——总量最多 200 条，优先保留最新的可执行待执行卡，再用最新普通历史补齐容量，最终按原时间线输出。待执行卡也占用容量；其自身超过 200 张时，最旧提案随落盘裁剪，重开不再恢复。面板保存通道与进程内快照（设置页重挂载种子、保存失败保留、退出冲刷待写重试）持全量形态；内存会话与加载归一化不裁剪；旧文件仍全量加载，实际变更保存时才收敛。下列用例在生产代码变更前选定。
 
 | 前置状态 | 动作／事件顺序 | 预期可见结果 | 跨转换不变量及所有者 | 对应验证 |
 | --- | --- | --- | --- | --- |
-| 无优先卡，条目数小于、等于或超过 200 | 保存 | 界内完整保留，超额保留最新 200 条 | `persistedEntries`：总量 ≤200、输入不变 | `useAiSessionPersistence.test.ts` |
-| 多张较旧或较新的合法 pending 卡与普通历史混合 | 保存 → JSON → 加载 | 待执行卡优先占容量，剩余为最新历史，顺序不变且不重复 | `persistedEntries`：最多 200 张待执行卡不因普通聊天被淘汰；加载保留命令载荷 | `useAiSessionPersistence.cap.test.ts` |
-| 待执行卡为 199／200／201 张，后续另有 200 条历史 | 保存 | 分别保留 199 卡+1 历史、200 卡、最新 200 卡 | `persistedEntries`：优先条目也受总上限约束；超过容量从最旧提案裁剪 | `useAiSessionPersistence.cap.test.ts` |
-| 两张未确认执行卡与尾部关联回执 | 降级 pending → 剔除回执 → 分配容量 → 重载 | 两卡占用两条容量，回执消失，命令与 `aiRevisionAfter` 保留 | 映射拥有对账身份；既有恢复逻辑按画布计数决定 pending／历史 executed，不自动重放 | 新增 cap 测试；既有 `AiThread.context.test.tsx` |
-| 旧卡变为 dismissed、已确认 executed 或校验拒绝 | 保存 | 卡不再占优先容量，普通历史可补入 | 映射按当前卡状态选择；内存卡状态不被保存改写 | cap 测试的状态转换；既有持久化拒绝卡测试 |
+| 无优先卡，条目数小于、等于或超过 200 | 保存 | 界内完整保留，超额保留最新 200 条 | 落盘边界 `diskSessionOf`：总量 ≤200、输入不变 | `useAiSessionPersistence.test.ts`；`aiSessionStore.tauri.test.ts` |
+| 多张较旧或较新的合法 pending 卡与普通历史混合 | 保存 → JSON → 加载 | 待执行卡优先占容量，剩余为最新历史，顺序不变且不重复 | 落盘边界：最多 200 张待执行卡不因普通聊天被淘汰；加载保留命令载荷 | `useAiSessionPersistence.cap.test.ts` |
+| 待执行卡为 199／200／201 张，后续另有 200 条历史 | 保存 | 分别保留 199 卡+1 历史、200 卡、最新 200 卡 | 落盘边界：优先条目也受总上限约束；超过容量从最旧提案裁剪 | `useAiSessionPersistence.cap.test.ts` |
+| 两张未确认执行卡与尾部关联回执 | 降级 pending → 剔除回执 → 分配容量 → 重载 | 两卡占用两条容量，回执消失，命令与 `aiRevisionAfter` 保留 | 形态映射拥有对账身份；既有恢复逻辑按画布计数决定 pending／历史 executed，不自动重放 | 新增 cap 测试；既有 `AiThread.context.test.tsx` |
+| 旧卡变为 dismissed、已确认 executed 或校验拒绝 | 保存 | 卡不再占优先容量，普通历史可补入 | 落盘边界按当前卡状态选择；内存卡状态不被保存改写 | cap 测试的状态转换与拒绝卡用例 |
 | 旧文件超过 200 条 | 加载 → 首次挂载 → 用户编辑 → 保存 → 重载 | 加载和挂载不改文件，编辑保存后最多 200 条 | `normalizeAiSession` 不裁剪；hook 挂载不自动破坏旧文件 | `useAiSessionPersistence.cap.test.ts` |
 | 保存 I/O 失败 | 变更保存失败 → 后续变更重试成功 | 错误可见，成功后清除 | hook 不清空内存历史，容量选择不修改输入 | 既有持久化失败测试与 cap 输入不变断言 |
+| 会话超过 200 条并成功保存 | 保存 → 打开并关闭设置页（重挂载种子） | 重挂载会话仍为全量形态，较旧进程内历史不消失 | 快照持全量；容量只在写入主文件时施加（所有者：aiSessionStore 落盘边界） | `useAiSessionPersistence.test.ts` 全量形态用例；既有 `App.test.tsx` 设置页往返用例 |
+| 会话超过 200 条且保存失败 | 失败 → 回首页 → 重开项目 | 恢复完整内存会话并标记可重试 | 失败保留快照持全量；重试写主文件时再裁剪 | 既有 `App.test.tsx` 失败重开用例；`aiSessionStore.tauri.test.ts` 落盘边界容量 |
+| 保存失败后退出冲刷重试 | 失败 → 退出冲刷重试一次 | 每次写主文件的载荷都在容量内；保留快照不被裁剪修改 | invoke 载荷 ≤200 且调用方快照不变（所有者：aiSessionStore） | `aiSessionStore.tauri.test.ts` 落盘边界容量 |
 
 边界：本轮限定条目数量，不承诺文件字节上限；单条内容仍可能很大。待执行卡占满容量时普通消息可能全部不落盘，超过 200 张时最旧提案仅在本次打开期间保留；不新增归档或自动失效操作。没有新增异步步骤、保存入口或后端信封契约，复用现有保存失败、重试及执行对账回归；不新增并发机制测试，也不以本轮测试证明真实磁盘故障或桌面视觉效果。
 
 验证记录（2026-09-12）：仓库根目录使用 Node 24.18.0；新增 9 个用例与更新的 2 个用例先因落盘超过 200 条失败。`npx vitest run src/editor/ai/useAiSessionPersistence.test.ts src/editor/ai/useAiSessionPersistence.cap.test.ts src/editor/panels/AiThread.context.test.tsx` 修复后 38 项通过；`npm run lint && npm run build && npm test` 通过（100 个文件、1181 项测试）。矩阵中选定程序行为均由上述用例及既有回归验证；真实磁盘故障与桌面视觉未测试，理由见边界。两个设计文档无配置的自动检查，已结构化复核容量、优先级、超额处置、加载与保存分工及交叉引用。
+
+验证记录（2026-09-12，落盘边界轮）：评审指出裁剪快照污染设置页重挂载/失败恢复通道后，容量从 `persistedEntries` 下沉到 `aiSessionStore` 落盘边界（`diskSessionOf`），映射拆分至 session.ts。新增 `aiSessionStore.tauri.test.ts` 落盘边界用例与 hook 全量形态用例先因 invoke 载荷 203 条、保存携带 200 条失败，修复后通过；cap 套件重定向到「形态映射 + 落盘边界」生产组合并补拒绝卡用例。`npx vitest run src/aiSessionStore.tauri.test.ts src/editor/ai/useAiSessionPersistence.test.ts src/editor/ai/useAiSessionPersistence.cap.test.ts` 28 项通过；`npm run lint && npm run build && npm test` 通过（1179 项测试）。设置页往返与失败重开的全量恢复由既有 `App.test.tsx` 用例与上述边界测试共同守护；浏览器内存回退与 Tauri 路径共用同一容量变换，未单独构造无 Tauri 环境用例，记录为复核项。
 
 ## 七、专业管线映射：剧本 / 分镜 / 场记
 

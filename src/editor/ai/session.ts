@@ -152,3 +152,86 @@ export function normalizeAiSession(raw: unknown): AiSessionNormalizeResult {
   })
   return { session: { schemaVersion: 1, entries }, repaired }
 }
+
+/** 去掉执行确认的运行时标注（落盘确认与持久化映射共用）：uncommitted 与
+ * aiRevisionAfter 都只在等待画布落盘期间有意义。 */
+export function stripExecutionRuntime(
+  card: NonNullable<ThreadEntry['card']>,
+): NonNullable<ThreadEntry['card']> {
+  const next = { ...card }
+  delete next.uncommitted
+  delete next.aiRevisionAfter
+  return next
+}
+
+/** 去掉回执与卡片的运行时关联标注（不落盘）。 */
+function stripReceiptLink(entry: ThreadEntry): ThreadEntry {
+  if (entry.cardReceiptFor === undefined) return entry
+  const next = { ...entry }
+  delete next.cardReceiptFor
+  return next
+}
+
+/** 落盘形态映射（不含容量裁剪）：未确认画布落盘的执行卡降级为 pending 并
+ * 剔除其回执（按关联而非位置——回执总是追加在会话尾部）——画布若尚未
+ * 持久化，重开后该卡应重新可执行，而不是同时声称已执行；保留
+ * aiRevisionAfter 供重开时与画布批次计数对账。其余条目原样（剥掉运行时
+ * 关联标注）。面板保存通道与进程内快照（重挂载种子、失败保留、退出冲刷
+ * 待写）持此全量形态——会话内跨设置页/首页导航不丢历史（issue #64）。 */
+export function persistedEntries(thread: ThreadEntry[]): ThreadEntry[] {
+  const uncommitted = new Set(
+    thread.filter((entry) => entry.card?.uncommitted).map((entry) => entry.id),
+  )
+  const entries: ThreadEntry[] = []
+  for (const entry of thread) {
+    if (
+      entry.kind === 'note' &&
+      entry.cardReceiptFor !== undefined &&
+      uncommitted.has(entry.cardReceiptFor)
+    ) {
+      continue
+    }
+    if (entry.card?.uncommitted) {
+      const card = { ...stripExecutionRuntime(entry.card), status: 'pending' as const }
+      if (entry.card.aiRevisionAfter !== undefined) card.aiRevisionAfter = entry.card.aiRevisionAfter
+      entries.push({ ...stripReceiptLink(entry), card })
+      continue
+    }
+    entries.push(stripReceiptLink(entry))
+  }
+  return entries
+}
+
+/** 落盘总条数上限（issue #64）：待执行卡优先，同类自新向旧保留。预览卡的
+ * 命令与补丁载荷使单条可能很大，历史无界会让 ai-session.json 与每次全量
+ * 重写的体积随对话线性增长。裁剪只发生在落盘边界（diskSessionOf，由
+ * aiSessionStore 写入时施加）：内存线程与进程内快照不裁，加载路径不裁
+ * （旧文件全量展示，下次实际变更保存才收敛）。 */
+const PERSISTED_ENTRIES_MAX = 200
+
+/** 在总容量内优先保留可执行 pending 卡（含降级的未确认执行卡），再用
+ * 最新历史补齐；卡片自身超额时也从最旧起裁剪。选择按数组位置，不依赖
+ * id 大小，输出保持原时间线顺序且不重复、不修改输入。校验拒绝卡不可
+ * 执行，按普通历史分配剩余额度。 */
+function capPersistedEntries(entries: ThreadEntry[]): ThreadEntry[] {
+  if (entries.length <= PERSISTED_ENTRIES_MAX) return entries
+  const selected = new Set<number>()
+  for (let i = entries.length - 1; i >= 0 && selected.size < PERSISTED_ENTRIES_MAX; i--) {
+    const card = entries[i].card
+    if (card?.status === 'pending' && card.v.ok) selected.add(i)
+  }
+  for (let i = entries.length - 1; i >= 0 && selected.size < PERSISTED_ENTRIES_MAX; i--) {
+    selected.add(i)
+  }
+  return entries.filter((_, index) => selected.has(index))
+}
+
+/** 落盘边界的容量变换（issue #64）：写入主文件（或浏览器内存回退等价物）
+ * 前把全量落盘形态裁剪到容量内。产出新会话对象，不修改调用方快照——
+ * 进程内保留区（退出冲刷重试、回吐失败事件）继续持全量。 */
+export function diskSessionOf(session: AiSession): AiSession {
+  return {
+    schemaVersion: session.schemaVersion,
+    entries: capPersistedEntries(session.entries),
+  }
+}

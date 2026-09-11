@@ -13,7 +13,7 @@ import {
   runModelTurn,
 } from './aiThreadModel'
 import PreviewCard from './PreviewCard'
-import type { AiSession, ThreadEntry } from '../ai/session'
+import { stripExecutionRuntime, type AiSession, type ThreadEntry } from '../ai/session'
 import {
   registerTurn,
   returnTurn,
@@ -22,10 +22,7 @@ import {
   type TurnBox,
   type TurnResult,
 } from '../ai/pendingTurns'
-import {
-  stripExecutionRuntime,
-  useAiSessionPersistence,
-} from '../ai/useAiSessionPersistence'
+import { useAiSessionPersistence } from '../ai/useAiSessionPersistence'
 
 /** 模型选择域（逻辑 hook，issue #39 拆分）：应用设置加载、面板内模型
  * 选择与三层派生（可用模型 → 生效模型 → provider key 就绪）。 */
