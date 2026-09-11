@@ -1,6 +1,13 @@
 /** 项目 AI 会话的单主文件持久化：失败保留内存，后续编辑、重开或退出时
- * 可重试；不维护恢复副本、后台重试或跨进程版本协议（issue #47）。 */
-import { normalizeAiSession, type AiSession } from './editor/ai/session'
+ * 可重试；不维护恢复副本、后台重试或跨进程版本协议（issue #47）。
+ * 落盘边界施加条数容量（issue #64）：调用方与进程内快照持全量落盘形态
+ * （设置页重挂载种子、保存失败保留、退出冲刷重试），写入主文件或浏览器
+ * 内存回退等价物时才裁剪到容量内。 */
+import {
+  diskSessionOf,
+  normalizeAiSession,
+  type AiSession,
+} from './editor/ai/session'
 import { enqueueProjectWrite, onProjectWriteReplayFailure } from './projectStore/saveChain'
 
 const memorySessions = new Map<string, AiSession>()
@@ -68,17 +75,20 @@ export async function loadAiSession(id: string): Promise<AiSessionLoadResult> {
   }
 }
 
-/** 保存进入项目共享写入/删除链；失败上浮并保留最新快照，无额外写入或定时器。 */
+/** 保存进入项目共享写入/删除链；失败上浮并保留最新快照，无额外写入或定时器。
+ * pending 快照持调用方全量形态（重试/回吐恢复通道不丢进程内历史），
+ * 容量裁剪只在每次实际写入的载荷上执行。 */
 export async function saveAiSession(id: string, session: AiSession): Promise<void> {
   if (!isTauri) {
-    memorySessions.set(id, session)
+    // 浏览器内存回退是主文件的等价物：与 Tauri 路径同容量语义。
+    memorySessions.set(id, diskSessionOf(session))
     return
   }
   const pending = { session }
   pendingSessions.set(id, pending)
   const write = enqueueProjectWrite(id, async () => {
     const { invoke } = await import('@tauri-apps/api/core')
-    await invoke('save_ai_session', { id, session })
+    await invoke('save_ai_session', { id, session: diskSessionOf(session) })
     if (pendingSessions.get(id) === pending) {
       pendingSessions.delete(id)
       savedListeners.forEach((listener) => listener(id))
