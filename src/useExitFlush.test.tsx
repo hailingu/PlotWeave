@@ -4,6 +4,10 @@
  * 并给出可见诊断（issue #47 历轮评审修复）。macOS ⌘Q/Dock 退出（Rust 侧原生接管
  * 后经 app-quit-requested 事件到达）共用同一道屏障，干净后走受控
  * app_exit 退出（issue #47 评审）。
+ *
+ * 启动间隙重放（issue #65）：监听注册完成后必须调用
+ * acknowledge_quit_listener 确认就绪——后端据此重放间隙内缓冲的退出请求；
+ * 确认只能发生在监听注册之后，否则重放事件没有接收者会再次丢失。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, renderHook } from '@testing-library/react'
@@ -19,6 +23,8 @@ const invoke = vi.fn(async (cmd: string): Promise<unknown> => cmd)
 
 const closeHandlers: CloseHandler[] = []
 const quitHandlers: QuitHandler[] = []
+/** acknowledge 调用瞬间退出监听是否已注册（重放必有接收者的时序契约）。 */
+let quitListenerLiveAtAck: boolean | null = null
 
 vi.mock('./aiSessionStore', () => ({
   hasPendingAiSessionSaves: () => hasPending(),
@@ -40,13 +46,19 @@ vi.mock('@tauri-apps/api/event', () => ({
   },
 }))
 vi.mock('@tauri-apps/api/core', () => ({
-  invoke: (cmd: string) => invoke(cmd),
+  invoke: (cmd: string) => {
+    if (cmd === 'acknowledge_quit_listener') {
+      quitListenerLiveAtAck = quitHandlers.length > 0
+    }
+    return invoke(cmd)
+  },
 }))
 
 beforeEach(() => {
   ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
   closeHandlers.length = 0
   quitHandlers.length = 0
+  quitListenerLiveAtAck = null
   hasPending.mockReturnValue(true)
   flushPending.mockResolvedValue([])
   destroy.mockClear()
@@ -105,11 +117,18 @@ describe('useExitFlush（窗口关闭冲刷屏障）', () => {
     expect(destroy).not.toHaveBeenCalled()
     expect(result.current).toContain('已阻止退出')
     expect(result.current).toContain('AI 会话保存失败')
+    expect(invoke).not.toHaveBeenCalledWith('app_exit')
   })
 
 })
 
 describe('useExitFlush（⌘Q 应用级退出冲刷屏障）', () => {
+  it('监听注册完成后确认就绪：间隙内缓冲的退出请求由后端经同一事件重放', async () => {
+    await mountBarrier()
+    expect(invoke).toHaveBeenCalledWith('acknowledge_quit_listener')
+    expect(quitListenerLiveAtAck).toBe(true)
+  })
+
   it('无待保存：直接受控退出（app_exit）', async () => {
     hasPending.mockReturnValue(false)
     await mountBarrier()
@@ -132,7 +151,7 @@ describe('useExitFlush（⌘Q 应用级退出冲刷屏障）', () => {
     flushPending.mockResolvedValue(['p1'])
     const { result } = await mountBarrier()
     await act(async () => { await quitHandlers[0]() })
-    expect(invoke).not.toHaveBeenCalled()
+    expect(invoke).not.toHaveBeenCalledWith('app_exit')
     expect(result.current).toContain('已阻止退出')
   })
 })
