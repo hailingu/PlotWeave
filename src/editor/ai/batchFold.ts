@@ -103,7 +103,8 @@ function resolveRef(st: FoldState, cmd: Record<string, unknown>, key: string): s
  * 不改折叠态）——全部命令一次收集，一次回喂。两类让位：实体引用位
  * （依赖批次内 ref 登记，entities 传缺省跳过，阶段 B 按真实投影校验）；
  * update 经批次内 ref 时目标类型未知，只做「任何可写类型都不支持的字段」
- * 独立判定，类型专属错误随修复重放在阶段 B 点名（分层暴露）。 */
+ * 与「唯一归属 array 字段的非数组值」（恒非法，issue 67）独立判定，其余
+ * 类型专属错误随修复重放在阶段 B 点名（分层暴露）。 */
 function shapeIssuesOf(
   st: FoldState,
   raw: Record<string, unknown>,
@@ -145,8 +146,9 @@ function createShapeIssue(st: FoldState, raw: Record<string, unknown>): string |
 
 /** update 的形状校验（shapeIssuesOf 拆出，S3776）：既有节点按其类型全量
  * 校验；token 被更早的 delete_node 点名过（可经「删除 + 同名 ref 重建」
- * 换主，快照类型过期）或属批次内 ref（类型未知）时，只做全局键判定
- * （类型专属错误分层延后到阶段 B 的顺序解析）。 */
+ * 换主，快照类型过期）或属批次内 ref（类型未知）时，只做全局键与唯一
+ * 归属 array 容器的恒非法判定（issue 67），其余类型专属错误分层延后到
+ * 阶段 B 的顺序解析。 */
 function updateShapeIssue(
   st: FoldState,
   raw: Record<string, unknown>,

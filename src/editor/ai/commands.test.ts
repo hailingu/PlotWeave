@@ -809,7 +809,7 @@ describe('validateAiBatch：分支 options 级联簿记前的成员形状校验�
     expect(create.issues[0]?.message).toContain('options')
   })
 
-  it('经 ref 的 update 携非数组 options：随 create 修复重放在阶段 B 点名（分层）', () => {
+  it('经 ref 的 update 携非数组 options：恒非法，与 create 失败同轮点名（issue 67）', () => {
     const v = validateAiBatch(
       [
         { op: 'create_node', nodeType: 'branch', ref: 'nb', data: { prompt: '？', options: [{ label: 5 }] } },
@@ -817,11 +817,11 @@ describe('validateAiBatch：分支 options 级联簿记前的成员形状校验�
       ],
       richSnap(),
     )
-    // 两阶段契约（owner 批准）：create 形状失败 → 阶段 B 不运行，update 的
-    // 类型专属错误分层延后，不诱导模型在首轮改写它
+    // options 唯一归属 branch 且协议为 array：非数组值对任何目标类型恒
+    // 非法、不依赖 create 的修复结果——阶段 A 同轮点名（issue 67 收窄
+    // 两阶段契约；类型相关形状仍延后，见下方 prompt 用例）
     expect(v.ok).toBe(false)
-    expect(v.issues).toHaveLength(1)
-    expect(v.issues[0]?.index).toBe(0)
+    expect(v.issues.map((i) => i.index)).toEqual([0, 1])
 
     const repaired = validateAiBatch(
       [
@@ -1503,5 +1503,65 @@ describe('validateAiBatch：两阶段校验（阶段 A 全量形状 + 阶段 B �
     // 串行发现，配额可在第四条错误前耗尽）
     expect(v.ok).toBe(false)
     expect(v.issues.map((i) => i.index)).toEqual([1, 2])
+  })
+})
+
+describe('validateAiBatch · 目标类型未知时的恒非法容器判定（issue 67）', () => {
+  it('失败 create 未登记暂定类型：经 ref 的 update 携非数组唯一归属 array 字段同轮点名', () => {
+    for (const key of ['options', 'lines', 'characterIds', 'refs']) {
+      const v = validateAiBatch(
+        [
+          { op: 'create_node', nodeType: 'dragon', ref: 'nb' },
+          { op: 'update_node', nodeId: 'nb', patch: { [key]: 'foo' } },
+        ],
+        snap(),
+      )
+      expect(v.ok, key).toBe(false)
+      // create 的未知类型与 update 的容器形状同轮全量回喂，不再等下一轮
+      expect(v.issues.map((i) => i.index), key).toEqual([0, 1])
+      expect(v.issues[1]?.message, key).toContain(`${key} 须为数组`)
+    }
+  })
+
+  it('唯一归属 array 字段为合法数组时不因目标未知误报', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'create_node', nodeType: 'dragon', ref: 'nb' },
+        { op: 'update_node', nodeId: 'nb', patch: { options: ['A', 'B'] } },
+      ],
+      snap(),
+    )
+    expect(v.issues.map((i) => i.index)).toEqual([0])
+  })
+
+  it('多类型共有字段与非 array 字段仍分层延后（契约收窄仅限恒非法可判定域）', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'create_node', nodeType: 'dragon', ref: 'nb' },
+        { op: 'update_node', nodeId: 'nb', patch: { prompt: 5, tone: 'x' } },
+      ],
+      snap(),
+    )
+    // prompt（branch/shot 共有）、tone（beat 唯一但非 array）：类型相关
+    // 形状不属恒非法可判定域，维持阶段 B 分层延后（契约边界不变）
+    expect(v.issues.map((i) => i.index)).toEqual([0])
+  })
+
+  it('删除 token 换主路径同样点名：恒非法判定与目标归属解耦', () => {
+    const snapWithX: AiGraphSnapshot = {
+      nodes: [{ id: 'x', type: 'scene', label: '场 01' }],
+      edges: [],
+      assets: new Map(),
+    }
+    const v = validateAiBatch(
+      [
+        { op: 'delete_node', nodeId: 'x' },
+        { op: 'create_node', nodeType: 'beat', ref: 'x', data: { name: '立足' } },
+        { op: 'update_node', nodeId: 'x', patch: { options: 'foo' } },
+      ],
+      snapWithX,
+    )
+    expect(v.ok).toBe(false)
+    expect(v.issues.some((i) => i.index === 2 && i.message.includes('options 须为数组'))).toBe(true)
   })
 })
