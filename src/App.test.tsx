@@ -34,11 +34,22 @@ vi.mock('./projectStore', () => ({
         if (index >= 0) retrySavedListeners.splice(index, 1)
       }
     },
+    onAiSessionSaveFailed: (
+      listener: (id: string, event: { session: unknown; error: string }) => void,
+    ) => {
+      replayFailedListeners.push(listener)
+      return () => {
+        const index = replayFailedListeners.indexOf(listener)
+        if (index >= 0) replayFailedListeners.splice(index, 1)
+      }
+    },
   },
 }))
 
 /** projectStore.onAiSessionSaved 已登记的监听器（测试经此模拟退出重试成功）。 */
 const retrySavedListeners: Array<(id: string) => void> = []
+/** projectStore.onAiSessionSaveFailed 已登记的监听器（测试经此模拟回吐重排失败）。 */
+const replayFailedListeners: Array<(id: string, event: { session: unknown; error: string }) => void> = []
 
 vi.mock('./home/HomePage', () => ({
   default: (props: Record<string, unknown>) => {
@@ -86,6 +97,7 @@ afterEach(cleanup)
 beforeEach(() => {
   vi.clearAllMocks()
   retrySavedListeners.length = 0
+  replayFailedListeners.length = 0
   store.list.mockResolvedValue([{ id: 'p1', name: '雨夜' }])
   store.create.mockResolvedValue({ id: 'new-1', name: '未命名短剧' })
   store.load.mockResolvedValue(structuredClone(DOC))
@@ -437,5 +449,33 @@ describe('App 会话读取失败边界', () => {
     expect(editorProps.current.aiSessionLoadFailed).toBe(false)
     expect(editorProps.current.aiSession).toEqual(history)
     expect(store.saveAiSession).not.toHaveBeenCalled()
+  })
+})
+
+describe('App ✦AI 会话回吐重排失败恢复', () => {
+  it('墓碑吸收的会话补写失败：事件登记恢复快照，重开内存副本胜出并提示可重试', async () => {
+    await openEditor()
+    const retained = {
+      schemaVersion: 1 as const,
+      entries: [{ id: 1, kind: 'note' as const, text: '墓碑期消息' }],
+    }
+    // 删除失败回吐重排失败：原始保存已被吸收为成功，失败只能经事件上浮
+    await act(async () => {
+      replayFailedListeners.forEach((listener) =>
+        listener('p1', { session: retained, error: 'Error: 磁盘仍满' }),
+      )
+    })
+    await act(async () => {
+      ;(editorProps.current.onBackHome as () => void)()
+    })
+    expect(await screen.findByTestId('home')).toBeTruthy()
+    // 重开同一项目：磁盘是旧会话，事件登记的恢复快照胜出并提示可重试
+    await act(async () => {
+      await (homeProps.current.onOpenProject as (id: string) => Promise<void>)('p1')
+    })
+    await screen.findByTestId('editor')
+    expect(editorProps.current.aiSession).toEqual(retained)
+    expect(editorProps.current.aiSessionError).toContain('磁盘仍满')
+    expect(editorProps.current.aiSessionRetryable).toBe(true)
   })
 })

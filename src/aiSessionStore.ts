@@ -1,7 +1,7 @@
 /** 项目 AI 会话的单主文件持久化：失败保留内存，后续编辑、重开或退出时
  * 可重试；不维护恢复副本、后台重试或跨进程版本协议（issue #47）。 */
 import { normalizeAiSession, type AiSession } from './editor/ai/session'
-import { enqueueProjectWrite } from './projectStore/saveChain'
+import { enqueueProjectWrite, onProjectWriteReplayFailure } from './projectStore/saveChain'
 
 const memorySessions = new Map<string, AiSession>()
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -22,6 +22,32 @@ export function onAiSessionSaved(listener: (id: string) => void): () => void {
   savedListeners.add(listener)
   return () => savedListeners.delete(listener)
 }
+
+/** 回吐重排失败事件载荷：墓碑期吸收的会话在删除失败后补写失败，携带
+ * 保留的最新快照与失败原因，供 App 级恢复通道登记（重开提示并可重试）。 */
+export interface AiSessionSaveFailedEvent {
+  session: AiSession
+  error: string
+}
+
+const failedListeners = new Set<(id: string, event: AiSessionSaveFailedEvent) => void>()
+
+/** 订阅回吐重排失败（区别于 saveAiSession 向调用方上浮的失败路径：原始
+ * 保存已被吸收为成功，只能经此事件交给恢复通道）；返回退订函数。 */
+export function onAiSessionSaveFailed(
+  listener: (id: string, event: AiSessionSaveFailedEvent) => void,
+): () => void {
+  failedListeners.add(listener)
+  return () => failedListeners.delete(listener)
+}
+
+// 回吐重排失败 → 携带保留快照转成会话失败事件：saveChain 只知「附属写入」，
+// 会话快照与恢复语义在本模块；快照已被删除或取代时无物可恢复，跳过。
+onProjectWriteReplayFailure((id, err) => {
+  const pending = pendingSessions.get(id)
+  if (pending === undefined) return
+  failedListeners.forEach((listener) => listener(id, { session: pending.session, error: String(err) }))
+})
 
 /** 读取唯一主文件；缺失为空历史，损坏条目隔离，I/O 错误交给界面提示。 */
 export async function loadAiSession(id: string): Promise<AiSessionLoadResult> {

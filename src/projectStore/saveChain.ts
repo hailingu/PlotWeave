@@ -30,6 +30,20 @@ const absorbedSaveDocs = new Map<string, ProjectContent>()
  * 项目。同 id 后到的写入取代先到的：闭包载荷为整体快照，只重放最新。 */
 const absorbedProjectWrites = new Map<string, () => Promise<void>>()
 
+/** 回吐重排失败监听器：回吐的写入是墓碑期吸收的迟到排队，原始调用方
+ * 早已拿到成功应答、无从上浮失败——订阅方（如 AI 会话存储）由此把保留
+ * 快照交给上层恢复通道。 */
+export type ProjectWriteReplayFailureListener = (id: string, err: unknown) => void
+const replayFailureListeners = new Set<ProjectWriteReplayFailureListener>()
+
+/** 订阅删除失败后回吐重排的附属写入失败；返回退订函数。 */
+export function onProjectWriteReplayFailure(
+  listener: ProjectWriteReplayFailureListener,
+): () => void {
+  replayFailureListeners.add(listener)
+  return () => replayFailureListeners.delete(listener)
+}
+
 /** 将项目附属数据的写入纳入与画布相同的保存/删除链。删除墓碑期的写入
  * 被吸收（登记最新闭包，删除失败时回吐），保证已删除项目不会因迟到的
  * 独立持久化操作重建目录。 */
@@ -123,7 +137,9 @@ export function enqueueSave(id: string, doc: ProjectContent): Promise<void> {
  * 重新排队保存，最后重排墓碑期间吸收的附属数据写入——不回吐则最新编辑
  * 既没落盘也无重试登记；登记为空即最新保存已成功（或从未失败），不得
  * 回放更早的旧登记（陈旧文档的重试不得覆盖新内容）；删除成功则登记与
- * 吸收的文档、写入随项目一并丢弃。 */
+ * 吸收的文档、写入随项目一并丢弃。回吐重排的附属写入自身失败时经
+ * onProjectWriteReplayFailure 通知订阅者（画布回吐失败自带登记重试，
+ * 不需此通道）。 */
 export function enqueueDelete(id: string): Promise<void> {
   deletingIds.add(id)
   clearSaveRetryTimer(id)
@@ -155,7 +171,14 @@ export function enqueueDelete(id: string): Promise<void> {
         absorbedProjectWrites.delete(id)
         if (retained !== undefined) void enqueueSave(id, retained).catch(() => undefined)
         if (absorbed !== undefined) void enqueueSave(id, absorbed).catch(() => undefined)
-        if (absorbedWrite !== undefined) void enqueueProjectWrite(id, absorbedWrite).catch(() => undefined)
+        if (absorbedWrite !== undefined) {
+          // 回吐失败无调用方可上浮（原始排队已被吸收为成功）：日志兜底并
+          // 通知订阅者转交保留快照（如 AI 会话的 App 级恢复通道）
+          void enqueueProjectWrite(id, absorbedWrite).catch((err) => {
+            console.error('[projectStore] 回吐重排的附属写入失败', id, err)
+            replayFailureListeners.forEach((listener) => listener(id, err))
+          })
+        }
       },
     )
     .catch(() => undefined)

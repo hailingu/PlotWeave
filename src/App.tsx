@@ -292,6 +292,17 @@ export default function App() {
     [],
   )
 
+  // 墓碑吸收的会话在删除失败后补写失败：原始保存早已被吸收为成功、无
+  // 调用方可上浮，只能经此事件登记保留快照——重开项目时内存副本胜出
+  // 并提示可重试，退出屏障仍兜底。删除发起于首页，无需触碰打开态。
+  useEffect(
+    () =>
+      projectStore.onAiSessionSaveFailed((id, { session, error }) => {
+        unsavedAiSessionsRef.current?.set(id, { session, error })
+      }),
+    [],
+  )
+
   const open = useOpenProjectActions(setOpenProject, refreshProjects, unsavedAiSessionsRef)
   const home = useHomeProjectActions(refreshProjects, unsavedAiSessionsRef)
   /** 退出冲刷屏障：未落盘会话仍在时阻止关闭窗口（见 useExitFlush）。 */

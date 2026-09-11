@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { enqueueDelete, enqueueProjectWrite, enqueueSave } from './saveChain'
+import {
+  enqueueDelete,
+  enqueueProjectWrite,
+  enqueueSave,
+  onProjectWriteReplayFailure,
+} from './saveChain'
 import type { ProjectContent } from '../model/content'
 
 const invoke = vi.fn()
@@ -126,5 +131,33 @@ describe('项目删除与保存协调', () => {
 
     expect(commands).not.toContain('aux-write')
     warn.mockRestore()
+  })
+
+  it('删除失败后回吐重排失败：通知回吐失败订阅者', async () => {
+    const id = 'delete-failure-replay-write-failure-test'
+    const failures: Array<{ id: string; err: unknown }> = []
+    const off = onProjectWriteReplayFailure((failedId, err) => failures.push({ id: failedId, err }))
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'delete_project') throw new Error('资产目录只读')
+      return undefined
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    try {
+      const deleting = enqueueDelete(id).catch(() => undefined)
+      await enqueueProjectWrite(id, async () => {
+        throw new Error('会话写入失败')
+      })
+      await deleting
+
+      await vi.waitFor(() => expect(failures).toHaveLength(1))
+      expect(failures[0]?.id).toBe(id)
+      expect(String(failures[0]?.err)).toContain('会话写入失败')
+    } finally {
+      off()
+      warn.mockRestore()
+      error.mockRestore()
+    }
   })
 })
