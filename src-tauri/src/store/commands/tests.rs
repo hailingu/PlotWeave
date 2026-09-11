@@ -264,3 +264,81 @@ fn ai_session_failed_write_preserves_main_and_next_save_succeeds() {
     assert_eq!(fs::read_dir(&dir).expect("目录").count(), 1);
     cleanup_temp(&projects);
 }
+
+/// `projects/{id}` 为符号链接时会话读写均拒绝，且不触碰链接目标（#62）。
+#[cfg(unix)]
+#[test]
+fn ai_session_rejects_symlinked_session_dir_for_read_and_write() {
+    let projects = temp_projects_dir();
+    let outside = projects.parent().expect("临时根").join("session-outside");
+    fs::create_dir_all(&outside).expect("建根外目录");
+    fs::write(projects.join("p-1.json"), b"{}").expect("写项目记录");
+    std::os::unix::fs::symlink(&outside, projects.join("p-1")).expect("建目录符号链接");
+    let session = serde_json::json!({"schemaVersion": 1, "entries": []});
+    let read_err = load_ai_session_file(&cap(&projects), "p-1")
+        .err()
+        .expect("读必须拒绝");
+    assert!(
+        read_err.contains("项目会话目录是符号链接"),
+        "意外诊断：{read_err}"
+    );
+    let write_err = save_ai_session_file(&cap(&projects), "p-1", &session).expect_err("写必须拒绝");
+    assert!(
+        write_err.contains("项目会话目录是符号链接"),
+        "意外诊断：{write_err}"
+    );
+    assert!(
+        fs::symlink_metadata(&outside).is_ok()
+            && fs::read_dir(&outside).expect("根外目录").count() == 0,
+        "拒绝路径不得写入链接目标"
+    );
+    cleanup_temp(&projects);
+}
+
+/// `projects/{id}` 被普通文件占位时会话读写均按「不是目录」拒绝（#62）。
+#[test]
+fn ai_session_rejects_non_directory_session_path_for_read_and_write() {
+    let projects = temp_projects_dir();
+    fs::write(projects.join("p-1.json"), b"{}").expect("写项目记录");
+    fs::write(projects.join("p-1"), b"not a dir").expect("普通文件占位会话路径");
+    let session = serde_json::json!({"schemaVersion": 1, "entries": []});
+    let read_err = load_ai_session_file(&cap(&projects), "p-1")
+        .err()
+        .expect("读必须拒绝");
+    assert!(read_err.contains("不是目录"), "意外诊断：{read_err}");
+    let write_err = save_ai_session_file(&cap(&projects), "p-1", &session).expect_err("写必须拒绝");
+    assert!(write_err.contains("不是目录"), "意外诊断：{write_err}");
+    assert_eq!(
+        fs::read(projects.join("p-1")).expect("占位文件"),
+        b"not a dir",
+        "拒绝路径不得改动占位文件"
+    );
+    cleanup_temp(&projects);
+}
+
+/// 保存前信封校验先行：非对象、异形版本、entries 非数组各自拒绝并给出
+/// 具体诊断，且不创建会话目录（#62）。
+#[test]
+fn ai_session_save_rejects_invalid_envelope_before_touching_disk() {
+    let projects = temp_projects_dir();
+    let cases = [
+        (serde_json::json!([]), "AI 会话必须是对象"),
+        (
+            serde_json::json!({"schemaVersion": 2, "entries": []}),
+            "AI 会话版本不受支持",
+        ),
+        (
+            serde_json::json!({"schemaVersion": 1, "entries": "no"}),
+            "AI 会话 entries 必须是数组",
+        ),
+    ];
+    for (bad, diagnostic) in cases {
+        let err = save_ai_session_file(&cap(&projects), "p-1", &bad).expect_err("信封非法必须拒绝");
+        assert!(err.contains(diagnostic), "意外诊断：{err}");
+    }
+    assert!(
+        fs::symlink_metadata(projects.join("p-1")).is_err(),
+        "拒绝保存不得创建项目会话目录"
+    );
+    cleanup_temp(&projects);
+}
