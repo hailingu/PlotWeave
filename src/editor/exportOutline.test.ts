@@ -103,6 +103,68 @@ describe('buildExportOutline（分支选项去向）', () => {
 
 })
 
+describe('buildExportOutline（分支目标先后关系，review #81）', () => {
+  it.each([-300, 0, 300])('目标 x=%s 时仍在问句和全部选项之后输出', (targetX) => {
+    const nodes = [
+      scene('s1', targetX, 1, '目的场'),
+      branch('b1', 0, '出发？', [{ id: 'a', label: '前往' }, { id: 'b', label: '留下' }]),
+    ]
+    expect(labels(nodes, [branchEdge('e1', 'b1', 'a', 's1')])).toEqual([
+      '分支 · 出发？ · 入口', '前往 → 场 01 · 目的场', '留下 → （未连线）', '场 01 · 目的场',
+    ])
+  })
+
+  it('嵌套分支与后续对白均遵守叙事方向，不受逆向摆放影响', () => {
+    const nodes = [
+      dialogue('d1', -900, '结语'), scene('s1', -600, 1, '目的场'),
+      branch('b2', -300, '再选？', [{ id: 'b', label: '继续' }]),
+      branch('b1', 0, '出发？', [{ id: 'a', label: '前往' }]),
+    ]
+    const edges = [branchEdge('a', 'b1', 'a', 'b2'), branchEdge('b', 'b2', 'b', 's1'), seq('s', 's1', 'd1')]
+    expect(labels(nodes, edges)).toEqual([
+      '分支 · 出发？ · 入口', '前往 → 分支 · 再选？',
+      '分支 · 再选？', '继续 → 场 01 · 目的场', '场 01 · 目的场', '对白 · 结语',
+    ])
+  })
+
+  it('分支目标同时有 sequence 前驱时，必须等待两个来源，不能从另一入口提前输出', () => {
+    const nodes = [
+      scene('s1', -600, 1, '并行入口'), scene('s2', -300, 2, '汇合'),
+      branch('b1', 0, '出发？', [{ id: 'a', label: '前往' }]),
+    ]
+    expect(labels(nodes, [seq('s', 's1', 's2'), branchEdge('a', 'b1', 'a', 's2')])).toEqual([
+      '场 01 · 并行入口 · 入口', '分支 · 出发？ · 入口',
+      '前往 → 场 02 · 汇合', '场 02 · 汇合 · 汇合 2 条路径',
+    ])
+  })
+})
+
+describe('buildExportOutline（叙事依赖与并列入口，review #81）', () => {
+  it('独立入口按 x/id 排序，只有已无前驱依赖的节点参与并列比较', () => {
+    const nodes = [
+      scene('s1', -500, 1, '分支目的场'), scene('s2', -400, 2, '并行后继'),
+      scene('a2', -200, 3, '后入口'), scene('a1', -200, 4, '先入口'),
+      branch('b1', 0, '出发？', [{ id: 'a', label: '前往' }]),
+    ]
+    const edges = [seq('e1', 'a1', 's2'), seq('e2', 'a2', 's2'), branchEdge('b', 'b1', 'a', 's1')]
+    expect(labels(nodes, edges)).toEqual([
+      '场 04 · 先入口 · 入口', '场 03 · 后入口 · 入口', '场 02 · 并行后继 · 汇合 2 条路径',
+      '分支 · 出发？ · 入口', '前往 → 场 01 · 分支目的场', '场 01 · 分支目的场',
+    ])
+  })
+
+  it('跨集分支不改变集升序，也不阻止目标在本集输出', () => {
+    const nodes = [
+      branch('b1', 0, '回到前集？', [{ id: 'a', label: '回想' }], 2),
+      scene('s1', -300, 1, '往事', 1),
+    ]
+    const groups = buildExportOutline(nodes, [branchEdge('b', 'b1', 'a', 's1')], {})
+    expect(groups.map((g) => g.episode)).toEqual([1, 2])
+    expect(groups[0].rows.map((r) => r.text)).toEqual(['场 01 · 往事'])
+    expect(groups[1].rows.map((r) => r.text)).toEqual(['分支 · 回到前集？', '回想 → 场 01 · 往事'])
+  })
+})
+
 describe('buildExportOutline（剧情流汇合与入口）', () => {
   it('多路径汇合：汇合节点只出现一次并标注汇入路径数，不重复平铺', () => {
     const nodes = [
@@ -123,15 +185,15 @@ describe('buildExportOutline（剧情流汇合与入口）', () => {
       seq('e5', 's3', 's4'),
     ]
     const out = labels(nodes, edges)
-    // 主线先展开 A 线：汇合点只出现一次并标注两条路径，B 线随后按 x 序展开
+    // A/B 是选项对应的替代路径；汇合点等两个前驱都输出后只列一次。
     expect(out).toEqual([
       '场 01 · 开场 · 入口',
       '分支 · 分岔？',
       '走 A → 场 02 · A 线',
       '走 B → 场 03 · B 线',
       '场 02 · A 线',
-      '场 04 · 汇合 · 汇合 2 条路径',
       '场 03 · B 线',
+      '场 04 · 汇合 · 汇合 2 条路径',
     ])
   })
 
@@ -293,8 +355,9 @@ describe('buildExportOutline（分支直接汇合，review #81）', () => {
     const edges = [seq('s', 's1', 's2'), branchEdge('a', 'b1', 'a', 's2'), branchEdge('b', 'b2', 'b', 's2')]
     const rows = buildExportOutline(nodes, edges, {})[0].rows.filter((r) => r.kind === 'node')
     expect(rows.map((r) => r.text)).toEqual([
-      '场 01 · 开场 · 入口', '场 02 · 汇合 · 汇合 3 条路径',
+      '场 01 · 开场 · 入口',
       '分支 · 第一问？ · 入口', '分支 · 第二问？ · 入口',
+      '场 02 · 汇合 · 汇合 3 条路径',
     ])
   })
 

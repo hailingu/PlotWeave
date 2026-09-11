@@ -7,7 +7,7 @@ import type { BranchFlowNode, CanvasNode } from './nodes/types'
  * 导出大纲投影（issue #48，docs/ui-design.md §3.5「可选大纲注释」）。
  *
  * 大纲 = 故事脊线的语义投影，而非画布坐标投影：组内顺序由剧情流
- * （`sequence` 边）决定，画布 x 序只用于同级并列（多入口、未接入剧情流）
+ * （`sequence` 与 `branch` 边）决定，画布 x 序只用于同级并列（多入口、未接入剧情流）
  * 的确定性排序；分镜下挂（`attach`）不参与剧情流，也不进入大纲
  * （分镜卡另以剧本附录输出）。分支是结构信息：问句、全部选项与各选项去向
  * 一并输出，未连线选项显式标注，不把替代路径平铺成一条已发生的剧情。
@@ -135,21 +135,20 @@ function destinationLabel(
   return node.type === 'scene' ? sceneLabel(node) : rowText(node, fulfillment.get(node.id))
 }
 
-/** 每组的剧情流边：两端都在本组、且 source 为叙事节点的 sequence 边。
- * 未接入剧情流的节点不得把下游节点拖进脊线（其自身的边在此被排除）。 */
-function spineEdges(edges: Edge[], member: ReadonlySet<string>): Edge[] {
+/** 组内叙事边：sequence 与 branch 均约束先后；跨集、悬空与 attach 不参与。 */
+function groupFlowEdges(edges: Edge[], member: ReadonlySet<string>): Edge[] {
   return edges.filter(
     (e) =>
-      edgeKindOf(e) === 'sequence' &&
+      edgeKindOf(e) !== 'attach' &&
       member.has(e.source) &&
       member.has(e.target),
   )
 }
 
 /** 每个节点的入边来源集合（组内剧情流；自环不计入）。 */
-function parentSources(spine: Edge[]): Map<string, Set<string>> {
+function parentSources(flow: Edge[]): Map<string, Set<string>> {
   const parents = new Map<string, Set<string>>()
-  for (const e of spine) {
+  for (const e of flow) {
     if (e.source === e.target) continue
     const set = parents.get(e.target) ?? new Set<string>()
     set.add(e.source)
@@ -164,47 +163,24 @@ function byCanvasX(nodes: OutlineNode[]): OutlineNode[] {
   return [...nodes].sort((a, b) => a.position.x - b.position.x || (a.id < b.id ? -1 : 1))
 }
 
-/** 每个汇合点的规范前邻：入边来源中画布 x 最小者（并列按 id）。
- * x 序在此只做多路径的确定性归一，不推断分支去向。 */
-function canonicalParents(
-  byId: ReadonlyMap<string, CanvasNode>,
-  parents: ReadonlyMap<string, Set<string>>,
-): Map<string, string> {
-  const canonical = new Map<string, string>()
-  for (const [id, sources] of parents) {
-    const ordered = [...sources].sort((a, b) => {
-      const na = byId.get(a)
-      const nb = byId.get(b)
-      return (na?.position.x ?? 0) - (nb?.position.x ?? 0) || (a < b ? -1 : 1)
-    })
-    canonical.set(id, ordered[0])
-  }
-  return canonical
-}
-
-/** 展开一条组的叙事主线：入口按 x 序深度优先，每个节点只作一次主线成员；
- * 汇合点的其余入边不在行内重复平铺，改由节点行上的「汇合 n 条路径」标注。
- * 多入口（并列起点）与汇合标注共同表达「这不是一条已发生的线性剧情」。 */
+/** 对经边界校验的组内 DAG 排序：所有叙事前驱都已输出的节点才可进入队列，
+ * 当前可输出节点按 x/id 排序。每节点只入队一次，汇合点等待各条路径的前驱；
+ * 分支问句与选项仍由 nodeRows 成组输出，不把选项之间解释为顺序边。 */
 function routeNodes(
-  spine: Edge[],
+  flow: Edge[],
   memberNodes: OutlineNode[],
-  byId: ReadonlyMap<string, CanvasNode>,
 ): OutlineNode[] {
-  const parents = parentSources(spine)
-  const canonical = canonicalParents(byId, parents)
+  const parents = parentSources(flow)
   const visits: OutlineNode[] = []
-  const emitted = new Set<string>()
-  const stack: OutlineNode[] = byCanvasX(memberNodes.filter((n) => !parents.has(n.id))).reverse()
-  while (stack.length > 0) {
-    const node = stack.pop()!
-    if (emitted.has(node.id)) continue
-    emitted.add(node.id)
+  let ready = byCanvasX(memberNodes.filter((n) => !parents.has(n.id)))
+  while (ready.length > 0) {
+    const node = ready.shift()!
     visits.push(node)
-    const next = spine
-      .filter((e) => e.source === node.id && byId.has(e.target))
-      .map((e) => byId.get(e.target)!)
-      .filter((n): n is OutlineNode => isOutlineNode(n) && canonical.get(n.id) === node.id)
-    for (const n of byCanvasX(next).reverse()) stack.push(n)
+    for (const candidate of memberNodes) {
+      const sources = parents.get(candidate.id)
+      if (sources?.delete(node.id) && sources.size === 0) ready.push(candidate)
+    }
+    ready = byCanvasX(ready)
   }
   return visits
 }
@@ -241,12 +217,11 @@ function groupRows(
   fulfillment: ReadonlyMap<string, BeatFulfillment>,
 ): ExportOutlineRow[] {
   const member = new Set(memberNodes.map((n) => n.id))
-  const spine = spineEdges(edges, member)
+  const flow = groupFlowEdges(edges, member)
   const incomingPaths = new Map<string, number>()
   const inFlow = new Set<string>()
   const inbound = new Set<string>()
-  for (const e of edges) {
-    if (edgeKindOf(e) === 'attach' || !member.has(e.source) || !member.has(e.target)) continue
+  for (const e of flow) {
     inFlow.add(e.source)
     inFlow.add(e.target)
     inbound.add(e.target)
@@ -255,7 +230,7 @@ function groupRows(
       incomingPaths.set(e.target, (incomingPaths.get(e.target) ?? 0) + 1)
     }
   }
-  const routes = routeNodes(spine, memberNodes.filter((n) => inFlow.has(n.id)), byId)
+  const routes = routeNodes(flow, memberNodes.filter((n) => inFlow.has(n.id)))
   const rows: ExportOutlineRow[] = []
   for (const node of routes) {
     const merge = incomingPaths.get(node.id) ?? 0
