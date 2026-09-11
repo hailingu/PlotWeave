@@ -1,5 +1,7 @@
+import type { Edge } from '@xyflow/react'
 import { describe, expect, it } from 'vitest'
-import { buildScriptMarkdown } from './exportScript'
+import { branchOptionHandle } from './graphRules'
+import { buildScriptExport, buildScriptMarkdown } from './exportScript'
 import type { CanvasNode } from './nodes/types'
 import { EMPTY_SETTINGS, type ProjectSettings } from './settings'
 
@@ -114,5 +116,142 @@ describe('buildScriptMarkdown（§3.5/§5 导出）', () => {
       settings,
     )
     expect(broken).toContain('在场：已删除角色')
+  })
+})
+
+/** issue #48：带节奏卡与分支的混合项目（节奏 → 场景 → 分支 / 汇合）。 */
+const mixNodes: CanvasNode[] = [
+  mk({
+    id: 'bt1',
+    type: 'beat',
+    position: { x: -100, y: 0 },
+    data: { name: '立势', tone: '压抑', episodeNo: 1 },
+  }),
+  mk({
+    id: 's1',
+    type: 'scene',
+    position: { x: 0, y: 0 },
+    data: { name: '天台夜话', sceneNo: 1, interior: false, time: '🌙 夜', synopsis: '', characterIds: [], episodeNo: 1 },
+  }),
+  mk({
+    id: 'd1',
+    type: 'dialogue',
+    position: { x: 100, y: 0 },
+    data: { name: '摊牌', lines: [], episodeNo: 1 },
+  }),
+  mk({
+    id: 'b1',
+    type: 'branch',
+    position: { x: 200, y: 0 },
+    data: {
+      prompt: '要不要坦白？',
+      options: [
+        { id: 'o1', label: '坦白' },
+        { id: 'o2', label: '隐瞒' },
+      ],
+      episodeNo: 1,
+    },
+  }),
+  mk({
+    id: 's2',
+    type: 'scene',
+    position: { x: 300, y: 0 },
+    data: { name: '旧公寓', sceneNo: 2, interior: true, time: '🌙 夜', synopsis: '', characterIds: [], episodeNo: 2 },
+  }),
+]
+
+const mixEdges = [
+  { id: 'm1', source: 'bt1', target: 's1', className: 'pw-edge-sequence' },
+  { id: 'm2', source: 's1', target: 'd1', className: 'pw-edge-sequence' },
+  { id: 'm3', source: 'd1', target: 'b1', className: 'pw-edge-sequence' },
+  { id: 'm4', source: 'b1', sourceHandle: branchOptionHandle('o1'), target: 's2', type: 'branch' },
+] as unknown as Edge[]
+
+const mixEdgesTyped: Parameters<typeof buildScriptExport>[0]['edges'] = mixEdges
+
+describe('buildScriptExport（大纲 Markdown 层级，review #81）', () => {
+  it('将声明的节点层级转换为连续的列表缩进，不把对白与分支平铺到零级', () => {
+    const draft = buildScriptExport({
+      projectName: '雨夜', nodes: mixNodes, edges: mixEdgesTyped, settings,
+      assets: undefined, episodeTitles: { 1: '立势', 2: '汇合' },
+    })
+    // ExportOutlineRow.level 与 outlineAppendixLines 的两空格/级输出契约。
+    const bulletLines = draft.outline.split('\n').filter((line) => /^\s*- /.test(line))
+    expect(bulletLines).toEqual([
+      '- 节拍 · 立势 · 压抑 · ✓ 兑现于 场 01 · 天台夜话 · 入口',
+      '- 场 01 · 天台夜话',
+      '  - 对白 · 摊牌',
+      '  - 分支 · 要不要坦白？',
+      '    - 坦白 → 场 02 · 旧公寓',
+      '    - 隐瞒 → （未连线）',
+      '- 场 02 · 旧公寓',
+    ])
+  })
+})
+
+describe('buildScriptExport（issue #48 导出模型）', () => {
+  const draft = buildScriptExport({
+    projectName: '雨夜',
+    nodes: mixNodes,
+    edges: mixEdgesTyped,
+    settings,
+    assets: undefined,
+    episodeTitles: { 1: '立势', 2: '汇合' },
+  })
+
+  it('默认关闭大纲：正文仍只由场景 + 对白生成，不含节奏与分支', () => {
+    expect(draft.plain).toContain('## 场 01 · 天台夜话')
+    expect(draft.plain).not.toContain('立势')
+    expect(draft.plain).not.toContain('要不要坦白？')
+    expect(draft.outline).not.toBe('')
+    expect(draft.outline).toContain('要不要坦白？')
+    expect(draft.hasNarrative).toBe(true)
+  })
+
+  it('开启大纲：并入同一生成结果的 Markdown，含集标题、基调、分支与去向', () => {
+    const { outline } = draft
+    expect(outline).toContain('## 附录 · 创作大纲')
+    expect(outline).toContain('### 第 1 集 · 立势')
+    expect(outline).toContain('### 第 2 集 · 汇合')
+    expect(outline).toContain('节拍 · 立势 · 压抑')
+    expect(outline).toContain('分支 · 要不要坦白？')
+    expect(outline).toContain('坦白 → 场 02 · 旧公寓')
+    expect(outline).toContain('隐瞒 → （未连线）')
+    // 正文与分镜附录保持：正文在前，大纲附录在后
+    expect(outline).toContain('对白 · 摊牌')
+    expect(outline).toContain(draft.plain)
+    expect(outline.indexOf('## 场 01')).toBeLessThan(outline.indexOf('## 附录 · 创作大纲'))
+  })
+
+  it('导出范围概要：集/场/对白/节拍/分支计数与大纲可用性', () => {
+    expect(draft.summary).toEqual({
+      episodes: [1, 2],
+      scenes: 2,
+      dialogues: 1,
+      beats: 1,
+      branches: 1,
+      hasOutline: true,
+    })
+    expect(draft.scopeLine).toContain('2 集')
+    expect(draft.scopeLine).toContain('2 场')
+    expect(draft.scopeLine).toContain('1 节拍')
+    expect(draft.scopeLine).toContain('1 分支')
+  })
+
+  it('只有节奏卡与分支、没有场景对白时：正文为空并给出提示，大纲仍可用', () => {
+    const noBody = buildScriptExport({
+      projectName: '空正文',
+      nodes: [mixNodes[0], mixNodes[3]],
+      edges: mixEdgesTyped,
+      settings,
+      assets: undefined,
+      episodeTitles: {},
+    })
+    expect(noBody.hasNarrative).toBe(false)
+    // 概要只列非零项：没有场景对白时不谎报计数
+    expect(noBody.scopeLine).toBe('1 集 · 1 节拍 · 1 分支')
+    // 大纲不依赖正文可用：正文仅剩文件头，附录仍输出节奏结构
+    expect(noBody.outline).toContain('节拍 · 立势')
+    expect(noBody.outline).toContain('分支 · 要不要坦白？')
   })
 })

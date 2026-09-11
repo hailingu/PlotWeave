@@ -1,4 +1,5 @@
 import type { Edge } from '@xyflow/react'
+import { buildExportOutline, summariseExportOutline, type ExportOutlineSummary } from './exportOutline'
 import { SCENE_SHOT_HANDLE } from './nodes/SceneNode'
 import { resolveCharacterName, resolveLocationName, type ProjectSettings } from './settings'
 import type { ProjectContent } from '../model/content'
@@ -9,6 +10,8 @@ import type { CanvasNode, DialogueFlowNode, DialogueLine, SceneFlowNode, ShotFlo
  * 正文只由场景 + 对白生成，节拍与分支不出现；
  * 分镜卡以附录按宿主场分组输出（含镜头 Prompt 与引用位）。
  * 场景顺序 = 画布横向剧情流（position.x 排序）。
+ * 可选「大纲注释」附录（issue #48）：创作大纲恒为独立附录，开关只决定是否并入，
+ * 预览、复制与下载消费同一次生成结果。
  */
 
 /** 说话人 id → 设定集全名（失效引用标注，§4.3）。 */
@@ -121,4 +124,76 @@ export function buildScriptMarkdown(
   }
 
   return lines.join('\n')
+}
+
+/** 导出大纲附录的行：集标题 + 缩进行（结构化行 → Markdown 项目符号）。 */
+function outlineAppendixLines(
+  groups: ReturnType<typeof buildExportOutline>,
+): string[] {
+  const lines: string[] = ['---', '', '## 附录 · 创作大纲', '', '> 节奏与分支的结构备忘，不是剧情正文。', '']
+  for (const group of groups) {
+    lines.push(outlineGroupHeading(group.episode, group.title), '')
+    for (const row of group.rows) {
+      lines.push(`${'  '.repeat(row.level)}- ${row.text}`)
+    }
+    lines.push('')
+  }
+  return lines
+}
+
+/** 集标题行：未分集单列，已分集带集号（无标题时只出集号）。 */
+function outlineGroupHeading(episode: number | null, title: string): string {
+  if (episode === null) return '### 未分集'
+  return title === '' ? `### 第 ${episode} 集` : `### 第 ${episode} 集 · ${title}`
+}
+
+/** 导出模型：大纲开关两个态的完整文本、正文可用性与导出范围概要。
+ * 预览、复制与下载都从这两个全文取一，不各自重新生成。 */
+export interface ScriptExportModel {
+  /** 关闭大纲的全文：场景 + 对白正文 + 分镜附录。 */
+  plain: string
+  /** 开启大纲的全文：正文 + 分镜附录 + 创作大纲附录。 */
+  outline: string
+  /** 是否存在正文内容（场景或对白）；正文为空时由 summary.hasOutline 区分有无节拍/分支。 */
+  hasNarrative: boolean
+  /** 导出范围概要（集/场/对白/节拍/分支）。 */
+  summary: ExportOutlineSummary
+  /** 概要的单行文案，如「2 集 · 3 场 · 1 节拍 · 1 分支」。 */
+  scopeLine: string
+}
+
+/** 概要文案：只列非零项；空项目退化为「空画布」。 */
+function scopeLineOf(summary: ExportOutlineSummary): string {
+  const parts: Array<[number, string]> = [
+    [summary.episodes.length, '集'],
+    [summary.scenes, '场'],
+    [summary.dialogues, '对白'],
+    [summary.beats, '节拍'],
+    [summary.branches, '分支'],
+  ]
+  const counts = parts.filter(([n]) => n > 0).map(([n, unit]) => `${n} ${unit}`)
+  if (counts.length === 0) return '空画布'
+  return counts.join(' · ')
+}
+
+/** 生成一次导出（issue #48）：正文 + 分镜附录恒在，创作大纲作为可并入的附录。 */
+export function buildScriptExport(input: {
+  projectName: string
+  nodes: CanvasNode[]
+  edges: Edge[]
+  settings: ProjectSettings
+  /** 项目资产索引；显式传 undefined = 无资产（引用位按悬空标注）。 */
+  assets: ProjectContent['assets'] | undefined
+  episodeTitles: Record<number, string>
+}): ScriptExportModel {
+  const base = buildScriptMarkdown(input.projectName, input.nodes, input.edges, input.settings, input.assets)
+  const summary = summariseExportOutline(input.nodes)
+  const appendix = outlineAppendixLines(buildExportOutline(input.nodes, input.edges, input.episodeTitles))
+  return {
+    plain: base,
+    outline: `${base}\n${appendix.join('\n')}`,
+    hasNarrative: input.nodes.some((n) => n.type === 'scene' || n.type === 'dialogue'),
+    summary,
+    scopeLine: scopeLineOf(summary),
+  }
 }

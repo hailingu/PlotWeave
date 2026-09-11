@@ -263,6 +263,28 @@
   color: var(--text-secondary);
 }
 
+/* 导出范围概要：标题栏内的次要信息（本次导出覆盖的内容计数） */
+.pw-dialog-scope {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+/* 「创作大纲」开关：正文与大纲共用同一预览、复制与下载文本（issue #48） */
+.pw-export-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.pw-export-toggle input {
+  margin: 0;
+  cursor: pointer;
+}
+
 .pw-dialog-btn {
   border: 1px solid var(--border-hairline);
   border-radius: 6px;
