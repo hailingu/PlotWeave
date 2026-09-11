@@ -108,8 +108,8 @@ describe('runAgentLoop 写批次重试预算与终止（issue 41）', () => {
 
     const result = await run([{ role: 'user', content: '创建节奏卡' }], validators({ commands }))
 
-    expect(llmChatMock).toHaveBeenCalledTimes(3) // 首次 + 2 次纠错重试
-    expect(commands).toHaveBeenCalledTimes(3)
+    expect(llmChatMock).toHaveBeenCalledTimes(4) // 首次 + 3 次纠错重试（quota=3）
+    expect(commands).toHaveBeenCalledTimes(4)
     expect(result.validation?.ok).toBe(false)
     expect(result.validation?.issues[0]?.message).toBe('未知字段：label')
   })

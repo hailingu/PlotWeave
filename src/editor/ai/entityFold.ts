@@ -12,16 +12,15 @@ import { plainObject } from './patchShape'
  * （issue 44）：与 batchFold.ts 的节点折叠同一语义——在「当前设定集 +
  * 本批已建/已改」的虚拟投影上完成 fields 白名单/值形状校验、entityId 解析
  * （既有 id 或本批 ref 别名）与 ref 登记，产出预览条目与已校验命令。
- * 修改必须精确指向 id（名称只作展示，绝不作为定位或覆盖依据）；失败的
- * upsert 登记 ghost 实体，依赖其 ref 的引用按 contingent 跳过（同节点
- * ref 依赖，见 batchFold.registerFailedMutation）。
+ * 修改必须精确指向 id（名称只作展示，绝不作为定位或覆盖依据）；阶段 B
+ * 首错即停——失败 upsert 之后的命令不进入折叠，ref 不会悬空指向未入图
+ * 的虚拟实体。
  */
 
-/** 折叠期新建实体的虚拟 id（不进设定集，仅同批 ref 解析与 contingent 判定用）。
- * 基形 __ent__:<index>，与两桶任一既有 id 重合时追加 '#' 直至避开：角色/地点
+/** 折叠期新建实体的虚拟 id（不进设定集，仅同批 ref 解析用）。基形
+ * __ent__:<index>，与两桶任一既有 id 重合时追加 '#' 直至避开：角色/地点
  * id 无保留前缀约束，持久化 id 可与基形同形——虚拟 id 抢占桶位会把既有实体
- * 误当本批新建（引用校验放行、执行期不解析，落盘悬空绑定）。桶状态在失败
- * 命令的折叠与登记两处调用间不变，同 index 产出同一虚拟 id。 */
+ * 误当本批新建（引用校验放行、执行期不解析，落盘悬空绑定）。 */
 const virtualEntityIdOf = (st: EntityFoldHost, index: number): string => {
   let id = `__ent__:${index}`
   while (st.characters.has(id) || st.locations.has(id)) id += '#'
@@ -33,14 +32,12 @@ export interface EntityFoldHost {
   /** 既有 + 本批投影的实体 id → 名称（新建为虚拟 id，执行期才分配真实 id）。 */
   characters: Map<string, string>
   locations: Map<string, string>
-  /** 本批新建/失败 upsert 的虚拟投影 id：仅可经声明的 ref 别名解析，不得
-   * 作为引用 token 直接命中桶位（执行层只解析别名表，直接放行会落盘
-   * 悬空绑定）。显式集合而非前缀判断——持久化 id 可能与虚拟 id 同形。 */
+  /** 本批新建的虚拟投影 id：仅可经声明的 ref 别名解析，不得作为引用
+   * token 直接命中桶位（执行层只解析别名表，直接放行会落盘悬空绑定）。
+   * 显式集合而非前缀判断——持久化 id 可能与虚拟 id 同形。 */
   virtualEntityIds: Set<string>
   /** ref 别名 → 所属实体（kind + id；新建指向虚拟 id）。 */
   entityRefs: Map<string, { kind: EntityKind; id: string }>
-  /** 本批失败的 upsert 虚拟实体 id：依赖其 ref 的引用按 contingent 跳过。 */
-  ghostEntities: Set<string>
   /** 快照未携带设定集时不做实体校验（旧夹具兼容）；运行时快照恒携带。 */
   entityScope?: EntityTokenScope
   items: PreviewItem[]
@@ -58,7 +55,7 @@ const otherKind = (kind: EntityKind): EntityKind => (kind === 'character' ? 'loc
  * 按引用位期望的种类解析持久化 id：角色/地点是两个独立 id 空间，同 id 可在
  * 两桶共存，期望桶优先命中，不得因固定桶序误判种类。虚拟投影 id 不参与桶位
  * 命中（仅可经声明的 ref 别名解析——执行层只认别名表，直接放行投影 id 会
- * 落盘悬空绑定），别名命中时幽灵实体按 contingent 报告。 */
+ * 落盘悬空绑定）。 */
 export function entityScopeOf(st: EntityFoldHost): EntityTokenScope {
   return {
     kindOf: (token, expect) => {
@@ -68,9 +65,7 @@ export function entityScopeOf(st: EntityFoldHost): EntityTokenScope {
         if (bucketOf(st, other).has(token)) return other
       }
       const ref = st.entityRefs.get(token)
-      if (ref === undefined) return null
-      if (st.ghostEntities.has(ref.id)) return 'contingent'
-      return ref.kind
+      return ref === undefined ? null : ref.kind
     },
   }
 }
@@ -149,8 +144,8 @@ export function normalizeEntityFields(
   return out
 }
 
-/** entityId 解析结果：命中实体 id / 跨种类 / 未知 / 依赖失败前序（contingent）。 */
-type EntityTarget = { id: string } | 'missing' | 'cross' | 'contingent'
+/** entityId 解析结果：命中实体 id / 跨种类 / 未知。 */
+type EntityTarget = { id: string } | 'missing' | 'cross'
 
 /** ref 别名登记守卫（新建/修改两分支共用）：别名与既有实体 id 冲突时返回
  * 错误文案。校验期 token 解析以既有实体优先（entityScopeOf.kindOf 先查投影
@@ -170,7 +165,6 @@ function resolveEntityTarget(st: EntityFoldHost, kind: EntityKind, token: string
   const ref = st.entityRefs.get(token)
   if (ref !== undefined) {
     if (ref.kind !== kind) return 'cross'
-    if (st.ghostEntities.has(ref.id)) return 'contingent'
     return { id: ref.id }
   }
   if (!st.virtualEntityIds.has(token) && bucketOf(st, otherKind(kind)).has(token)) return 'cross'
@@ -210,8 +204,8 @@ function foldCreateEntity(
   } as ValidatedCommand)
 }
 
-/** 修改分支（带 entityId）：解析既有 id 或本批 ref（contingent 跳过、跨种类
- * 与未知拒绝），未提及字段保持不变。 */
+/** 修改分支（带 entityId）：解析既有 id 或本批 ref（跨种类与未知拒绝），
+ * 未提及字段保持不变。 */
 function foldUpdateEntity(
   st: EntityFoldHost,
   raw: Record<string, unknown>,
@@ -225,7 +219,6 @@ function foldUpdateEntity(
   const issue = entityFieldsIssue(kind, fields, 'update')
   if (issue !== null) return st.fail(index, issue)
   const resolved = resolveEntityTarget(st, kind, target)
-  if (resolved === 'contingent') return
   if (resolved === 'cross') {
     return st.fail(
       index,
@@ -282,20 +275,4 @@ export function foldUpsert(
     )
   }
   foldUpdateEntity(st, raw, index, kind, fields, refName, target)
-}
-
-/** 失败 upsert 的依赖登记（batchFold.registerFailedMutation 调用）：ref 指向
- * ghost 虚拟实体，后续引用按 contingent 跳过，随前序修复自愈。 */
-export function registerFailedEntityUpsert(
-  st: EntityFoldHost,
-  raw: Record<string, unknown>,
-  index: number,
-): void {
-  const refName = typeof raw.ref === 'string' ? raw.ref.trim() : ''
-  if (refName === '') return
-  const kind: EntityKind = raw.op === 'upsert_character' ? 'character' : 'location'
-  const virtualId = virtualEntityIdOf(st, index)
-  st.entityRefs.set(refName, { kind, id: virtualId })
-  st.virtualEntityIds.add(virtualId)
-  st.ghostEntities.add(virtualId)
 }

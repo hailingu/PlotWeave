@@ -809,7 +809,7 @@ describe('validateAiBatch：分支 options 级联簿记前的成员形状校验�
     expect(create.issues[0]?.message).toContain('options')
   })
 
-  it('contingent 路径同域（issue 46）：暂定类型为 branch 的 update 携非数组 options 独立点名', () => {
+  it('经 ref 的 update 携非数组 options：随 create 修复重放在阶段 B 点名（分层）', () => {
     const v = validateAiBatch(
       [
         { op: 'create_node', nodeType: 'branch', ref: 'nb', data: { prompt: '？', options: [{ label: 5 }] } },
@@ -817,8 +817,21 @@ describe('validateAiBatch：分支 options 级联簿记前的成员形状校验�
       ],
       richSnap(),
     )
+    // 两阶段契约（owner 批准）：create 形状失败 → 阶段 B 不运行，update 的
+    // 类型专属错误分层延后，不诱导模型在首轮改写它
     expect(v.ok).toBe(false)
-    expect(v.issues.some((i) => i.index === 1 && i.message.includes('options'))).toBe(true)
+    expect(v.issues).toHaveLength(1)
+    expect(v.issues[0]?.index).toBe(0)
+
+    const repaired = validateAiBatch(
+      [
+        { op: 'create_node', nodeType: 'branch', ref: 'nb', data: { prompt: '？', options: ['追'] } },
+        { op: 'update_node', nodeId: 'nb', patch: { options: {} } },
+      ],
+      richSnap(),
+    )
+    expect(repaired.ok).toBe(false)
+    expect(repaired.issues.some((i) => i.index === 1 && i.message.includes('options'))).toBe(true)
   })
 
   it('非数组 options 更新失败同样登记 contingent（评审 5163172679）：越界连线不点名', () => {
@@ -1327,7 +1340,7 @@ describe('validateAiBatch：完整问题收集（评审 5138829847：纠错回�
     expect(v.issues.map((i) => i.message).join('\n')).not.toContain('端点不存在')
   })
 
-  it('与失败前序无关的真实缺失仍独立点名（不过度抑制）', () => {
+  it('前序形状失败时其后的真实缺失分层延后：修复重放后独立点名', () => {
     const v = validateAiBatch(
       [
         { op: 'create_node', nodeType: 'beat', data: { label: '立足' }, ref: 'b' },
@@ -1335,12 +1348,22 @@ describe('validateAiBatch：完整问题收集（评审 5138829847：纠错回�
       ],
       snap(),
     )
-    expect(v.issues).toHaveLength(2)
+    // 阶段 B 首错即停：create 失败 → connect 本轮不校验（分层，契约变更）
+    expect(v.issues).toHaveLength(1)
     expect(v.issues[0]?.message).toContain('label')
-    expect(v.issues[1]?.message).toContain('端点不存在')
+
+    const repaired = validateAiBatch(
+      [
+        { op: 'create_node', nodeType: 'beat', data: { name: '立足' }, ref: 'b' },
+        { op: 'connect_edge', sourceId: 'zz', targetId: 'n1' },
+      ],
+      snap(),
+    )
+    expect(repaired.issues).toHaveLength(1)
+    expect(repaired.issues[0]?.message).toContain('端点不存在')
   })
 
-  it('update_node / delete_node 混合批次： contingent 引用跳过，独立命令照常校验', () => {
+  it('阶段 A 命中即整批拒绝：不折叠任何命令、不产预览项（原子性）', () => {
     const v = validateAiBatch(
       [
         { op: 'create_node', nodeType: 'beat', data: { summary: '小店开张' }, ref: 'b' },
@@ -1351,9 +1374,84 @@ describe('validateAiBatch：完整问题收集（评审 5138829847：纠错回�
       snap(),
     )
     expect(v.ok).toBe(false)
-    // 仅 create 的字段错误；update(b) contingent 跳过，n1 的合法修改与删除正常折叠
+    // 两阶段契约：形状失败 → 阶段 B 不运行，本轮零折叠、零预览项
     expect(v.issues).toHaveLength(1)
     expect(v.issues[0]?.message).toContain('summary')
-    expect(v.items.map((i) => i.kind)).toEqual(['delete', 'update'])
+    expect(v.items).toEqual([])
+    expect(v.commands).toEqual([])
+  })
+})
+
+// 两阶段校验（owner 批准的契约变更）：阶段 A 逐条收集上下文无关的形状
+// 错误（白名单/值形状/options 成员/连线类型/内在 optionIndex/entityId 与
+// fields 形态），一次全量回喂——quota 按轮消耗，多错误批次一轮修完；
+// 阶段 B 在形状全过后顺序折叠，首错即停——失败之后的命令本轮不校验、
+// 不点名，级联误报由「不前进」消除，分层错误随修复重放逐轮暴露。
+describe('validateAiBatch：两阶段校验（阶段 A 全量形状 + 阶段 B 首错即停）', () => {
+  it('阶段 A 全量收集形状错误：多命令一次点名，依赖命令不级联', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'create_node', nodeType: 'branch', ref: 'nb', data: { prompt: '？', options: 42 } },
+        { op: 'update_node', nodeId: 'b1', patch: { nope: 1 } },
+        { op: 'connect_edge', sourceId: 'nb', targetId: 's1' },
+      ],
+      richSnap(),
+    )
+    expect(v.ok).toBe(false)
+    expect(v.commands).toEqual([])
+    // create 与 update 的形状错误全量点名；connect 依赖失败 create，
+    // 阶段 B 不运行、不产生「端点不存在」级联
+    expect(v.issues.map((i) => i.index)).toEqual([0, 1])
+  })
+
+  it('连线类型与内在 optionIndex 属阶段 A：与形状错误同轮全量点名', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'create_node', nodeType: 'branch', ref: 'nb', data: { prompt: '？', options: 42 } },
+        { op: 'connect_edge', sourceId: 'nb', targetId: 's1', edgeKind: 'weird' },
+        { op: 'connect_edge', sourceId: 'nb', targetId: 's1', edgeKind: 'branch', optionIndex: -1 },
+      ],
+      richSnap(),
+    )
+    expect(v.issues.map((i) => i.index)).toEqual([0, 1, 2])
+  })
+
+  it('阶段 B 首错即停：独立结构错误只报首条，其余本轮不校验', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'connect_edge', sourceId: 'n1', targetId: 'ghost-a' },
+        { op: 'connect_edge', sourceId: 'n2', targetId: 'ghost-b' },
+      ],
+      snap(),
+    )
+    expect(v.ok).toBe(false)
+    expect(v.issues).toHaveLength(1)
+    expect(v.issues[0]?.index).toBe(0)
+  })
+
+  it('create 形状失败时，经 ref 的 update 类型专属错误分层延后（首轮不点名）', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'create_node', nodeType: 'branch', ref: 'nb', data: { prompt: '？', options: 42 } },
+        { op: 'update_node', nodeId: 'nb', patch: { prompt: 5 } },
+      ],
+      richSnap(),
+    )
+    // prompt 属可写类型字段的并集：阶段 A 不按未知类型点名；类型专属的
+    // 值形状错误随修复重放在阶段 B 点名（分层暴露，契约变更决策）
+    expect(v.issues).toHaveLength(1)
+    expect(v.issues[0]?.index).toBe(0)
+  })
+
+  it('实体 upsert 的 fields 形状错误属阶段 A：全量点名', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'upsert_character', fields: { name: 5 } },
+        { op: 'upsert_location', fields: { nope: 'x' } },
+      ],
+      entSnap(),
+    )
+    expect(v.ok).toBe(false)
+    expect(v.issues.map((i) => i.index)).toEqual([0, 1])
   })
 })

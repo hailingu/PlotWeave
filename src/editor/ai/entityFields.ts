@@ -37,11 +37,10 @@ export type EntityKind = 'character' | 'location'
  * 实体引用 token 的解析口径（§8.1 场景/对白对设定集的结构化引用）：
  * token 按引用位期望的种类（expect）解析——角色与地点是两个独立 id 空间，
  * 同一 id 在两桶合法共存，不得因固定桶序先命中而误判种类；
- * 'contingent' = token 指向本批校验失败的 upsert（依赖前序修复自愈，
- * 本轮跳过存在性校验）；null = 未知实体。
+ * null = 未知实体。
  */
 export interface EntityTokenScope {
-  kindOf: (token: string, expect: EntityKind) => EntityKind | 'contingent' | null
+  kindOf: (token: string, expect: EntityKind) => EntityKind | null
 }
 
 /** 实体种类 → 人读标签（错误文案与预览标签共用）。 */

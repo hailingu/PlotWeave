@@ -18,7 +18,6 @@ export function plainObject(v: unknown): v is Record<string, unknown> {
 }
 
 /** 结构化引用的实体解析（issue 44）：快照未携带设定集时不校验（旧夹具兼容）；
- * contingent = 引用指向本批失败的 upsert，随前序修复自愈，本轮跳过；
  * 跨种类（如地点 id 写进 characterIds）与未知实体都整批拒绝——放行即产生
  * 跨类型误绑或悬空引用，保存后加载侧只会静默剥离。 */
 function entityRefIssue(
@@ -29,7 +28,7 @@ function entityRefIssue(
 ): string | null {
   if (entities === undefined) return null
   const kind = entities.kindOf(token, expect)
-  if (kind === 'contingent' || kind === expect) return null
+  if (kind === expect) return null
   if (kind === null) {
     return `${field} 的${ENTITY_KIND_LABELS[expect]}实体不存在：${token}（新实体须先在本批 upsert_${expect} 声明 ref）`
   }
