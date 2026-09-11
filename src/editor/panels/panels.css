@@ -422,6 +422,20 @@
 }
 
 /* ---- ✦AI 对话（§6：气泡、引导卡、输入区） ---- */
+/* 常驻挂载包裹层（§3.4，issue 58）：承接 .pw-panel-scroll 的高度链，
+ * 让 .pw-ai 的 height:100% 有确定包含块（历史区内滚、输入区钉底）；
+ * 显式 [hidden] 规则压回 display:none——作者的 display 声明优先级
+ * 高于 UA 样式表的 [hidden] 隐藏，缺这条则检查器分段下 AI 面板仍可见 */
+.pw-ai-pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.pw-ai-pane[hidden] {
+  display: none;
+}
+
 .pw-ai {
   display: flex;
   flex-direction: column;
