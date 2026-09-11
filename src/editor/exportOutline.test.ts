@@ -70,6 +70,24 @@ describe('buildExportOutline（导出大纲投影）', () => {
 
 })
 
+describe('buildExportOutline（类型层级，review #81）', () => {
+  it.each([true, false])('剧情流连通=%s 时，对白和分支保持一级、选项保持二级', (connected) => {
+    const nodes = [
+      beat('bt1', 0, '立势', '压抑'), scene('s1', 100, 1, '开场'),
+      dialogue('d1', 200, '交谈'), branch('b1', 300, '继续？', [{ id: 'a', label: '继续' }]),
+      scene('s2', 400, 2, '后续'),
+    ]
+    const edges = connected ? [
+      seq('e1', 'bt1', 's1'), seq('e2', 's1', 'd1'), seq('e3', 'd1', 'b1'),
+      branchEdge('e4', 'b1', 'a', 's2'),
+    ] : []
+    const rows = buildExportOutline(nodes, edges, {})[0].rows
+    // ExportOutlineRow.level 契约：节拍/场景 0，对白/分支 1，选项 2。
+    expect(rows.map((row) => row.level)).toEqual([0, 0, 1, 1, 2, 0])
+    expect(rows[4]).toMatchObject({ kind: 'option', text: connected ? '继续 → 场 02 · 后续' : '继续 → （未连线）' })
+  })
+})
+
 describe('buildExportOutline（分支选项去向）', () => {
   it('分支行列出问句与全部选项去向，未连线的选项显式标注', () => {
     const nodes = [

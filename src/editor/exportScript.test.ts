@@ -169,6 +169,26 @@ const mixEdges = [
 
 const mixEdgesTyped: Parameters<typeof buildScriptExport>[0]['edges'] = mixEdges
 
+describe('buildScriptExport（大纲 Markdown 层级，review #81）', () => {
+  it('将声明的节点层级转换为连续的列表缩进，不把对白与分支平铺到零级', () => {
+    const draft = buildScriptExport({
+      projectName: '雨夜', nodes: mixNodes, edges: mixEdgesTyped, settings,
+      assets: undefined, episodeTitles: { 1: '立势', 2: '汇合' },
+    })
+    // ExportOutlineRow.level 与 outlineAppendixLines 的两空格/级输出契约。
+    const bulletLines = draft.outline.split('\n').filter((line) => /^\s*- /.test(line))
+    expect(bulletLines).toEqual([
+      '- 节拍 · 立势 · 压抑 · ✓ 兑现于 场 01 · 天台夜话 · 入口',
+      '- 场 01 · 天台夜话',
+      '  - 对白 · 摊牌',
+      '  - 分支 · 要不要坦白？',
+      '    - 坦白 → 场 02 · 旧公寓',
+      '    - 隐瞒 → （未连线）',
+      '- 场 02 · 旧公寓',
+    ])
+  })
+})
+
 describe('buildScriptExport（issue #48 导出模型）', () => {
   const draft = buildScriptExport({
     projectName: '雨夜',
