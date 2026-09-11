@@ -1,11 +1,19 @@
 /**
  * AI 会话的落盘映射与面板持久化域（issue #47，自 AiThread 拆出）：
  * persistedEntries 把运行中的会话条目映射为可落盘形态（未确认画布落盘的
- * 执行卡降级 pending、剥离运行时标注）；useAiSessionPersistence 在条目
- * 变更时经 onSaveSession 落盘，失败上浮为面板可见错误（不清空内存历史）。
+ * 执行卡降级 pending、剥离运行时标注）并施加落盘条数上限（issue #64）；
+ * useAiSessionPersistence 在条目变更时经 onSaveSession 落盘，失败上浮为
+ * 面板可见错误（不清空内存历史）。
  */
 import { useEffect, useRef, useState } from 'react'
 import type { AiSession, ThreadEntry } from './session'
+
+/** 落盘条数上限（issue #64）：自新向旧保留。预览卡的命令与补丁载荷使
+ * 单条可能很大，历史无界会让 ai-session.json 与每次全量重写的体积随
+ * 对话线性增长。只裁落盘：内存线程不裁（会话内滚动不受影响，喂给模型
+ * 的历史另有双界，见 aiThreadModel 的 boundedHistory），加载路径不裁
+ * （旧文件全量展示，下次实际变更保存才收敛）——保存是唯一裁剪点。 */
+const PERSISTED_ENTRIES_MAX = 200
 
 /** 去掉执行确认的运行时标注（落盘确认与持久化映射共用）：uncommitted 与
  * aiRevisionAfter 都只在等待画布落盘期间有意义。 */
@@ -29,7 +37,9 @@ function stripReceiptLink(entry: ThreadEntry): ThreadEntry {
 /** 落盘映射：未确认画布落盘的执行卡降级为 pending 并剔除其回执（按关联
  * 而非位置——回执总是追加在会话尾部）——画布若尚未持久化，重开后该卡应
  * 重新可执行，而不是同时声称已执行；保留 aiRevisionAfter 供重开时与画布
- * 批次计数对账。其余条目原样落盘（剥掉运行时关联标注）。 */
+ * 批次计数对账。其余条目原样落盘（剥掉运行时关联标注）。映射完成后自
+ * 最旧条目起裁剪到 PERSISTED_ENTRIES_MAX（issue #64）：等待画布落盘的
+ * 执行卡与待执行卡都在会话尾部，必落在保留窗口内。 */
 export function persistedEntries(thread: ThreadEntry[]): ThreadEntry[] {
   const uncommitted = new Set(
     thread.filter((entry) => entry.card?.uncommitted).map((entry) => entry.id),
@@ -51,7 +61,7 @@ export function persistedEntries(thread: ThreadEntry[]): ThreadEntry[] {
     }
     entries.push(stripReceiptLink(entry))
   }
-  return entries
+  return entries.slice(-PERSISTED_ENTRIES_MAX)
 }
 
 /** 面板会话的「编辑即保存」状态族：条目变更即落盘；保存失败上浮为可见
