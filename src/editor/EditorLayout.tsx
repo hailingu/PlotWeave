@@ -68,6 +68,7 @@ export default function EditorLayout(props: EditorLayoutProps) {
             panels.setRightTab(tab)
             panels.setRightOpen(true)
           }}
+          projectId={project.id}
           selectedNode={view.selectedNode}
           attachedShotCount={view.selectedNode ? view.shotCountOf(view.selectedNode.id) : 0}
           settings={doc.settings}

@@ -15,6 +15,14 @@ import {
 import PreviewCard from './PreviewCard'
 import type { AiSession, ThreadEntry } from '../ai/session'
 import {
+  registerTurn,
+  returnTurn,
+  takeTurn,
+  unregisterTurn,
+  type TurnBox,
+  type TurnResult,
+} from '../ai/pendingTurns'
+import {
   stripExecutionRuntime,
   useAiSessionPersistence,
 } from '../ai/useAiSessionPersistence'
@@ -67,6 +75,19 @@ function reconcilePendingCard(
   return { ...next, status: 'pending' }
 }
 
+/** 恢复/认领的待执行卡按当前画布重校验（§12.2 历史展示同口径）：落盘或
+ * 迟到批次带回的校验结果可能基于离开前的旧画布（认领回合约住的是已
+ * 卸载实例的校验闭包），预览与可执行状态必须反映当前内容；拒绝卡缺少
+ * 完整原始批次，不重判为合法整批。 */
+function revalidatePendingCard(
+  card: NonNullable<ThreadEntry['card']>,
+  validateCommands: ((commands: AiCommand[]) => BatchValidation | null) | undefined,
+): NonNullable<ThreadEntry['card']> {
+  if (!validateCommands || !card.v.ok) return card
+  const validation = validateCommands(toInboundCommands(card.v.commands))
+  return validation ? { ...card, v: validation } : card
+}
+
 /** 用当前画布重建原先合法卡片的预览，拒绝信任落盘的确认元数据；
  * 校验拒绝卡没有完整原始批次，不能把空命令或合法子集重新判成合法整批。
  * 历史执行卡标注 historical——撤销栈不跨会话存活，不得宣称可撤销。
@@ -85,9 +106,7 @@ function restoreThreadEntries(
     if (based.card?.status !== 'pending') return based
     const card = reconcilePendingCard(based.card, aiRevision)
     if (card.status === 'executed') return { ...based, card }
-    if (!validateCommands || !card.v.ok) return { ...based, card }
-    const validation = validateCommands(toInboundCommands(card.v.commands))
-    return validation ? { ...based, card: { ...card, v: validation } } : { ...based, card }
+    return { ...based, card: revalidatePendingCard(card, validateCommands) }
   })
 }
 
@@ -206,9 +225,84 @@ function useAiThreadMessages(opts: {
   return { thread, armedIdx, setArmedIdx, threadRef, nextId, append, executeCard, markDismissed }
 }
 
+/** 认领条目的重定映射：id 经当前实例重定基（旧计数器已随卸载作废，
+ * 沿用会与恢复条目撞 key）；待执行卡按当前画布重校验——迟到批次带回的
+ * 校验结果基于已卸载实例的旧闭包，不得作为执行预览（issue #63 评审）。 */
+function claimedEntries(
+  entries: ThreadEntry[],
+  nextId: () => number,
+  validateCommands: ((commands: AiCommand[]) => BatchValidation | null) | undefined,
+): ThreadEntry[] {
+  return entries.map((entry) => {
+    const claimed = { ...entry, id: nextId() }
+    if (entry.card?.status !== 'pending') return claimed
+    return { ...claimed, card: revalidatePendingCard(entry.card, validateCommands) }
+  })
+}
+
+/** 回合盒子的提交确认持有（issue #63 评审）：结果交付 setState 后先持有
+ * 盒子；对应更新提交（同批的持久化 effect 已先行入队落盘）后，后置
+ * effect 才撤销登记。落定与卸载同批调度时，未提交的追加会被卸载丢弃，
+ * cleanup 把未确认的盒子归还注册表，重挂载重新认领——回复不因竞态
+ * 丢失；已提交则盒子已释放，不产生重复认领。 */
+function useHeldTurnBox(projectId: string) {
+  const heldRef = useRef<TurnBox | null>(null)
+  useEffect(() => {
+    const held = heldRef.current
+    if (!held) return
+    heldRef.current = null
+    unregisterTurn(projectId, held)
+  })
+  useEffect(
+    () => () => {
+      const held = heldRef.current
+      if (held) returnTurn(projectId, held)
+    },
+    [projectId],
+  )
+  const hold = (box: TurnBox) => {
+    heldRef.current = box
+  }
+  return { hold }
+}
+
+/** 在途回合认领域（issue #63）：挂载即独占认领本项目的在途回合——
+ * 等待中恢复忙碌态，落定经 applyRef 交付（含盒子，交付后由持有机制
+ * 确认提交再释放）；等待中或已交付未提交时卸载，盒子归还注册表。
+ * StrictMode 双挂载下首个 effect 的 cleanup 先归还、第二个 effect
+ * 再取回，认领不丢失。 */
+function usePendingTurnClaim(
+  projectId: string,
+  applyRef: { readonly current: (result: TurnResult, box: TurnBox) => void },
+  setBusy: Dispatch<SetStateAction<boolean>>,
+): void {
+  useEffect(() => {
+    const box = takeTurn(projectId)
+    if (!box) return
+    setBusy(true)
+    let active = true
+    let delivered = false
+    void box.promise.then((result) => {
+      if (!active) {
+        returnTurn(projectId, box)
+        return
+      }
+      delivered = true
+      applyRef.current(result, box)
+    })
+    return () => {
+      active = false
+      if (!delivered) returnTurn(projectId, box)
+    }
+  }, [projectId, setBusy, applyRef])
+}
+
 /** 单轮发送域（逻辑 hook，issue #39 拆分）：输入草稿、画布感知开关与
- * send 动作（用户条目入列 → Agent 循环 → 助手条目/回执入列）。 */
+ * send 动作（用户条目入列 → Agent 循环 → 助手条目/回执入列）。
+ * 在途回合按项目登记（issue #63）：卸载期间落定的结果由重挂载/重开
+ * 同一项目的实例认领（见 pendingTurns 与 usePendingTurnClaim）。 */
 function useAiTurn(opts: {
+  readonly projectId: string
   readonly activeOption: ChatModelOption | null
   readonly activeProvider: AppSettings['providers'][number] | null
   readonly thread: ThreadEntry[]
@@ -225,7 +319,29 @@ function useAiTurn(opts: {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [knowsCanvas, setKnowsCanvas] = useState(true)
-
+  /** 发起实例是否仍挂载：卸载后不得撤销登记（盒子留给认领方）或上屏。
+   * StrictMode 双挂载会先跑一次 cleanup，effect 体内须重置回 true。 */
+  const aliveRef = useRef(true)
+  useEffect(() => {
+    aliveRef.current = true
+    return () => { aliveRef.current = false }
+  }, [])
+  /** 认领落定结果的交付（每渲染同步最新闭包）：条目映射见 claimedEntries；
+   * 盒子交持有机制确认提交后释放（useHeldTurnBox）。 */
+  const heldBox = useHeldTurnBox(opts.projectId)
+  const applyClaimRef = useRef<(result: TurnResult, box: TurnBox) => void>(() => undefined)
+  useEffect(() => {
+    applyClaimRef.current = (result, box) => {
+      setBusy(false)
+      if (result.entries) {
+        opts.append(claimedEntries(result.entries, opts.nextId, opts.onValidateCommands))
+      } else {
+        setError(result.error ?? '请求失败')
+      }
+      heldBox.hold(box)
+    }
+  })
+  usePendingTurnClaim(opts.projectId, applyClaimRef, setBusy)
   const send = async () => {
     const text = draft.trim()
     if (!text || busy || !opts.activeOption || !opts.activeProvider) return
@@ -234,23 +350,31 @@ function useAiTurn(opts: {
     setBusy(true)
     setError(null)
     opts.setArmedIdx(null)
-    try {
-      // 校验在循环内进行（issue 41）：未通过的批次回喂错误清单让模型有限次
-      // 纠错，最终校验结果（通过/耗尽/纯讨论）随循环产出返回
-      const entries = await runModelTurn(
-        opts.activeProvider,
-        opts.activeOption.model,
-        buildMessages(opts.thread, text, knowsCanvas, opts.canvasDigest),
-        readToolOf(opts.canvasDigest, opts.onReadNode, opts.onReadSettings),
-        { commands: opts.onValidateCommands, prose: opts.onValidateAi },
-        opts.nextId,
-      )
-      opts.append(entries)
-    } catch (err) {
-      setError(String(err))
-    } finally {
+    // 校验在循环内进行（issue 41）：未通过的批次回喂错误清单让模型有限次
+    // 纠错，最终校验结果（通过/耗尽/纯讨论）随循环产出返回
+    const settled = runModelTurn(
+      opts.activeProvider,
+      opts.activeOption.model,
+      buildMessages(opts.thread, text, knowsCanvas, opts.canvasDigest),
+      readToolOf(opts.canvasDigest, opts.onReadNode, opts.onReadSettings),
+      { commands: opts.onValidateCommands, prose: opts.onValidateAi },
+      opts.nextId,
+    ).then(
+      (entries): TurnResult => ({ entries, error: null }),
+      (err): TurnResult => ({ entries: null, error: String(err) }),
+    )
+    const box: TurnBox = { promise: settled }
+    registerTurn(opts.projectId, box)
+    const result = await settled
+    if (aliveRef.current) {
+      if (result.entries) opts.append(result.entries)
+      else setError(result.error ?? '请求失败')
       setBusy(false)
+      // 本实例消费，但提交确认前不撤销登记：落定与卸载同批调度时，
+      // 未提交的追加被丢弃，持有机制在 cleanup 把盒子归还待重新认领
+      heldBox.hold(box)
     }
+    // 已卸载：盒子留在注册表，由重挂载/重开同一项目的实例认领
   }
   return { draft, setDraft, busy, error, knowsCanvas, setKnowsCanvas, send }
 }
@@ -454,6 +578,8 @@ function AiEntryBody({
  */
 /** ✦AI 会话面板的对外契约：校验/读工具/执行回调、恢复会话及其持久化通道。 */
 interface AiThreadProps {
+  /** 项目 id：在途回合跨卸载归属的键（issue #63，见 ai/pendingTurns）。 */
+  readonly projectId: string
   readonly onOpenSettings?: () => void
   readonly canvasDigest?: string
   readonly onValidateAi?: (text: string) => BatchValidation | null
@@ -475,6 +601,7 @@ interface AiThreadProps {
 }
 
 export default function AiThread({
+  projectId,
   onOpenSettings,
   canvasDigest,
   onValidateAi,
@@ -499,6 +626,7 @@ export default function AiThread({
   })
   const saveError = useAiSessionPersistence(msg.thread, initialSessionError, onSaveSession, initialSessionRetryable)
   const turn = useAiTurn({
+    projectId,
     activeOption: m.activeOption,
     activeProvider: m.activeProvider,
     thread: msg.thread,
