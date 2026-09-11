@@ -1,6 +1,6 @@
-import { runAgentLoop, type ReadToolExecutor } from '../ai/agentLoop'
+import { runAgentLoop, type AgentLoopResult, type ReadToolExecutor } from '../ai/agentLoop'
 import { type ChatMessage } from '../ai/chat'
-import { type BatchValidation } from '../ai/commands'
+import { CREATION_GUIDE } from '../ai/creationGuide'
 import { entityFieldTableText } from '../ai/entityFields'
 import { nodeFieldTableText } from '../ai/nodeFields'
 import type { ProviderConfig } from '../../settings/types'
@@ -56,7 +56,7 @@ export const SYSTEM_PROMPT =
   '再 connect 新边；设定集段落给出角色/地点实体 id，写 characterIds/locationId 时引用它们。\n' +
   '规则：只使用快照里出现过的 id（新节点/新实体用 ref）；连线不得自环或成环；' +
   '每条命令可用 reason 说明理由。批次被校验拒绝时，按回喂的错误清单修正后' +
-  '重新输出完整批次。'
+  `重新输出完整批次。\n\n${CREATION_GUIDE}`
 
 /** 喂给模型的历史上界：条数与字符双界。持久化会话跨重启增长，无界
  * 历史会顶穿供应商上下文上限并使后续轮次持续失败；完整线程仅用于
@@ -136,11 +136,12 @@ export function buildMessages(
 /** 助手回复 → 会话追加条目（runModelTurn 拆出）：工具错误回执 + 助手
  * 消息（可附预览卡）。批次存在时剥掉 ```json 围栏文本避免重复展示。 */
 function assistantEntries(
-  result: { prose: string; toolErrors: string[]; validation: BatchValidation | null },
+  result: AgentLoopResult,
   nextId: () => number,
 ): ThreadEntry[] {
   const { prose, toolErrors, validation } = result
   let displayText = validation ? prose.replace(/```json[\s\S]*?```/gi, '').trim() : prose
+  if (result.completionError) displayText = [displayText, `⚠ ${result.completionError}`].filter(Boolean).join('\n\n')
   if (!displayText && !validation) displayText = '（模型未返回内容）'
   return [
     ...(toolErrors.length > 0
