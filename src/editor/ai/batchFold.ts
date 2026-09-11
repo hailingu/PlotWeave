@@ -87,7 +87,7 @@ interface FoldState extends EntityFoldHost {
  * 由此谓词收口为字面量联合，供补丁命令的判别化构造（issue 16）。 */
 type AiPatchableType = 'scene' | 'dialogue' | 'beat' | 'branch' | 'shot'
 const isAiPatchableType = (t: string | undefined): t is AiPatchableType =>
-  t !== undefined && t in NODE_FIELD_KEYS
+  t !== undefined && Object.prototype.hasOwnProperty.call(NODE_FIELD_KEYS, t)
 
 /** nodeId/sourceId/targetId 解析：允许既有 id 或本批新建的 ref；
  * 已被本批删除的节点（含按 ref 引用的）一律视为不存在。 */
@@ -138,7 +138,9 @@ function shapeIssueOf(
 /** create 的形状校验（shapeIssuesOf 拆出，S3776）：节点类型与 data 形状。 */
 function createShapeIssue(st: FoldState, raw: Record<string, unknown>): string | null {
   const nodeType = asText(raw.nodeType)
-  if (!(nodeType in NODE_TYPE_LABELS)) return `未知节点类型：${nodeType || '（空）'}`
+  if (!Object.prototype.hasOwnProperty.call(NODE_TYPE_LABELS, nodeType)) {
+    return `未知节点类型：${nodeType || '（空）'}`
+  }
   const data = raw.data ?? {}
   if (!plainObject(data)) return 'data 必须是字段对象'
   return payloadIssue(nodeType, data, st.assets)
@@ -168,7 +170,7 @@ function updateShapeIssue(
  * optionIndex（上界与句柄依赖折叠态，属阶段 B）。 */
 function connectShapeIssue(raw: Record<string, unknown>): string | null {
   const kind = asText(raw.edgeKind) || 'sequence'
-  if (!(kind in EDGE_KIND_LABELS)) return `未知连线类型：${kind}`
+  if (!Object.prototype.hasOwnProperty.call(EDGE_KIND_LABELS, kind)) return `未知连线类型：${kind}`
   if (kind === 'branch' && !isIntrinsicOptionIndex(raw.optionIndex)) {
     return `optionIndex 须为非负整数：${asText(raw.sourceId)} → ${asText(raw.targetId)}`
   }
@@ -189,7 +191,9 @@ function entityUpsertShapeIssue(raw: Record<string, unknown>): string | null {
 
 function foldCreate(st: FoldState, cmd: Record<string, unknown>, index: number): void {
   const nodeType = asText(cmd.nodeType)
-  if (!(nodeType in NODE_TYPE_LABELS)) return st.fail(index, `未知节点类型：${nodeType || '（空）'}`)
+  if (!Object.prototype.hasOwnProperty.call(NODE_TYPE_LABELS, nodeType)) {
+    return st.fail(index, `未知节点类型：${nodeType || '（空）'}`)
+  }
   const data = cmd.data ?? {}
   if (!plainObject(data)) return st.fail(index, 'data 必须是字段对象')
   const dataIssue = payloadIssue(nodeType, data, st.assets, st.entityScope)
@@ -370,7 +374,9 @@ function foldConnectEdge(
   pairLabel: string,
 ): void {
   const kind = asText(cmd.edgeKind) || 'sequence'
-  if (!(kind in EDGE_KIND_LABELS)) return st.fail(index, `未知连线类型：${kind}`)
+  if (!Object.prototype.hasOwnProperty.call(EDGE_KIND_LABELS, kind)) {
+    return st.fail(index, `未知连线类型：${kind}`)
+  }
   const port = edgePortOf(st, kind, cmd, src, dst)
   if (typeof port === 'string') return st.fail(index, port)
   const placementIssue = connectPlacementIssue(st, kind, src, dst, pairLabel)
