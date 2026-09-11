@@ -102,6 +102,45 @@ type UnsavedAiSessionsRef = RefObject<Map<string, UnsavedAiSession>>
 /** 保存路径需要整体替换快照，故用可变盒子而非只读的 RefObject。 */
 type LatestAiSessionRef = { current: LatestAiSession | null }
 
+/** 应用级会话生命周期：持有跨页面快照，订阅共享保存链结果，并在卸载时
+ * 解除订阅；普通保存的最新内容与失败恢复副本均不依赖编辑器挂载状态。 */
+function useAiSessionLifecycle(setOpenProject: OpenProjectSetter) {
+  /** 保存失败会话的保留区：不属于任何一次打开会话的瞬态视图，跨首页存活。 */
+  const unsavedAiSessionsRef = useRef(new Map<string, UnsavedAiSession>())
+  /** 打开期间最新 AI 会话：高频保存路径的 state 外挂载种子（issue #61）。 */
+  const latestAiSessionRef = useRef<LatestAiSession | null>(null)
+
+  // 退出重试保存成功（不经 UI 保存通道）时清除项目级错误与保留快照：
+  // 否则面板持续宣称「保存失败」而会话实际已保存到主文件。清理与
+  // handleSaveAiSession 的成功尾巴幂等重复，无害；无错误时返回原引用，
+  // 不产生多余提交。
+  useEffect(
+    () =>
+      projectStore.onAiSessionSaved((id) => {
+        unsavedAiSessionsRef.current?.delete(id)
+        setOpenProject((project) =>
+          project?.id === id && project.aiSessionError !== null
+            ? { ...project, aiSessionError: null }
+            : project,
+        )
+      }),
+    [setOpenProject],
+  )
+
+  // 墓碑吸收的会话在删除失败后补写失败：原始保存早已被吸收为成功、无
+  // 调用方可上浮，只能经此事件登记保留快照——重开项目时内存副本胜出
+  // 并提示可重试，退出屏障仍兜底。删除发起于首页，无需触碰打开态。
+  useEffect(
+    () =>
+      projectStore.onAiSessionSaveFailed((id, { session, error }) => {
+        unsavedAiSessionsRef.current?.set(id, { session, error })
+      }),
+    [],
+  )
+
+  return { unsavedAiSessionsRef, latestAiSessionRef }
+}
+
 function useOpenProjectActions(
   setOpenProject: OpenProjectSetter,
   refreshProjects: RefreshProjects,
@@ -274,10 +313,7 @@ export default function App() {
   const [openProject, setOpenProject] = useState<OpenProject | null>(null)
   const [loading, setLoading] = useState(true)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  /** 保存失败会话的保留区：不属于任何一次打开会话的瞬态视图，跨首页存活。 */
-  const unsavedAiSessionsRef = useRef(new Map<string, UnsavedAiSession>())
-  /** 打开期间最新 AI 会话：高频保存路径的 state 外挂载种子（issue #61）。 */
-  const latestAiSessionRef = useRef<LatestAiSession | null>(null)
+  const { unsavedAiSessionsRef, latestAiSessionRef } = useAiSessionLifecycle(setOpenProject)
 
   const refreshProjects = useCallback(async () => {
     try {
@@ -305,34 +341,6 @@ export default function App() {
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
   }, [])
-
-  // 退出重试保存成功（不经 UI 保存通道）时清除项目级错误与保留快照：
-  // 否则面板持续宣称「保存失败」而会话实际已保存到主文件。清理与
-  // handleSaveAiSession 的成功尾巴幂等重复，无害；无错误时返回原引用，
-  // 不产生多余提交。
-  useEffect(
-    () =>
-      projectStore.onAiSessionSaved((id) => {
-        unsavedAiSessionsRef.current?.delete(id)
-        setOpenProject((project) =>
-          project?.id === id && project.aiSessionError !== null
-            ? { ...project, aiSessionError: null }
-            : project,
-        )
-      }),
-    [],
-  )
-
-  // 墓碑吸收的会话在删除失败后补写失败：原始保存早已被吸收为成功、无
-  // 调用方可上浮，只能经此事件登记保留快照——重开项目时内存副本胜出
-  // 并提示可重试，退出屏障仍兜底。删除发起于首页，无需触碰打开态。
-  useEffect(
-    () =>
-      projectStore.onAiSessionSaveFailed((id, { session, error }) => {
-        unsavedAiSessionsRef.current?.set(id, { session, error })
-      }),
-    [],
-  )
 
   const open = useOpenProjectActions(setOpenProject, refreshProjects, unsavedAiSessionsRef, latestAiSessionRef)
   const home = useHomeProjectActions(refreshProjects, unsavedAiSessionsRef)
