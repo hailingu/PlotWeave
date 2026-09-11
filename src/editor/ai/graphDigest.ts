@@ -57,7 +57,8 @@ function nodeLine(n: CanvasNode, r: DigestResolvers): string {
         n.data.lines.flatMap((l) => (l.kind === 'line' && l.speaker ? [l.speaker] : [])),
       )
       const lineCount = n.data.lines.filter((l) => l.kind === 'line').length
-      return `- ${n.id} ${epTag(n.data)}对白·${n.data.name}（${speakers.size} 人 · ${lineCount} 句）`
+      const actionCount = n.data.lines.filter((l) => l.kind === 'action').length
+      return `- ${n.id} ${epTag(n.data)}对白·${n.data.name}（${speakers.size} 人 · ${lineCount} 句 · ${actionCount} 条旁白/动作）`
     }
     case 'branch':
       return `- ${n.id} ${epTag(n.data)}分支·${cut(n.data.prompt)}（选项:${n.data.options.map((o) => cut(o.label, 16)).join('/')}）`

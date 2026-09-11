@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react'
-import { type AiCommand, type BatchValidation, type ValidatedCommand } from '../ai/commands'
+import { toInboundCommands, type AiCommand, type BatchValidation, type ValidatedCommand } from '../ai/commands'
 import { settingsStore } from '../../settings/settingsStore'
 import {
   listChatModels,
@@ -67,7 +67,8 @@ function reconcilePendingCard(
   return { ...next, status: 'pending' }
 }
 
-/** 用当前画布重建恢复卡片的完整预览，拒绝信任落盘的确认元数据；
+/** 用当前画布重建原先合法卡片的预览，拒绝信任落盘的确认元数据；
+ * 校验拒绝卡没有完整原始批次，不能把空命令或合法子集重新判成合法整批。
  * 历史执行卡标注 historical——撤销栈不跨会话存活，不得宣称可撤销。
  * 条目 id 重定基为 1..n 有界序列：落盘 id 不受信，防止自增越过
  * MAX_SAFE_INTEGER 产生重复 key 与下次加载被归一化丢弃的条目。 */
@@ -84,8 +85,8 @@ function restoreThreadEntries(
     if (based.card?.status !== 'pending') return based
     const card = reconcilePendingCard(based.card, aiRevision)
     if (card.status === 'executed') return { ...based, card }
-    if (!validateCommands) return { ...based, card }
-    const validation = validateCommands(card.v.commands)
+    if (!validateCommands || !card.v.ok) return { ...based, card }
+    const validation = validateCommands(toInboundCommands(card.v.commands))
     return validation ? { ...based, card: { ...card, v: validation } } : { ...based, card }
   })
 }
@@ -115,6 +116,25 @@ function useCanvasCommitConfirmation(
       })
     }
   }, [thread, whenCanvasCommitted, setThread])
+}
+
+/** 执行结果写回所属卡片：失败可重试，成功清除旧诊断，未落盘时保留对账身份。 */
+function cardAfterExecution(
+  card: NonNullable<ThreadEntry['card']>,
+  err: string | null,
+  awaiting: boolean,
+  aiRevisionAfter: number | undefined,
+): NonNullable<ThreadEntry['card']> {
+  const next = stripExecutionRuntime(card)
+  delete next.executionError
+  if (err) return { ...next, status: 'pending', executionError: err }
+  return {
+    ...next, status: 'executed',
+    ...(awaiting ? {
+      uncommitted: true,
+      ...(aiRevisionAfter !== undefined ? { aiRevisionAfter } : {}),
+    } : {}),
+  }
 }
 
 /** 会话线程域（逻辑 hook，issue #39 拆分）：条目追加、预览卡执行/忽略
@@ -160,14 +180,7 @@ function useAiThreadMessages(opts: {
         i === idx && e.card
           ? {
               ...e,
-              card: awaiting
-                ? {
-                    ...e.card,
-                    status: 'executed' as const,
-                    uncommitted: true as const,
-                    ...(aiRevisionAfter !== undefined ? { aiRevisionAfter } : {}),
-                  }
-                : { ...e.card, status: err ? ('pending' as const) : ('executed' as const) },
+              card: cardAfterExecution(e.card, err, awaiting, aiRevisionAfter),
             }
           : e,
       ),
@@ -178,9 +191,12 @@ function useAiThreadMessages(opts: {
 
   const markDismissed = (idx: number) => {
     setThread((t) =>
-      t.map((e, i) =>
-        i === idx && e.card ? { ...e, card: { ...e.card, status: 'dismissed' as const } } : e,
-      ),
+      t.map((e, i) => {
+        if (i !== idx || !e.card) return e
+        const card = { ...e.card, status: 'dismissed' as const }
+        delete card.executionError
+        return { ...e, card }
+      }),
     )
     setArmedIdx(null)
   }

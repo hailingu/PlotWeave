@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Edge } from '@xyflow/react'
 import { buildGraphDigest } from './graphDigest'
-import type { CanvasNode } from '../nodes/types'
+import type { CanvasNode, DialogueLine } from '../nodes/types'
 
 /** 构造最小节点（只带被测字段）。 */
 function node(partial: Record<string, unknown>): CanvasNode {
@@ -124,5 +124,25 @@ describe('buildGraphDigest（§6/§12.2 画布快照：id + 参数 + 连线语�
         locationName: () => null,
       }),
     ).toBeTruthy()
+  })
+})
+
+describe('buildGraphDigest 旁白/动作摘要（issue 73）', () => {
+  it.each<{ name: string; lines: DialogueLine[]; speech: number; actions: number }>([
+    { name: '空对白', lines: [], speech: 0, actions: 0 },
+    { name: '仅旁白', lines: [{ id: 'a1', kind: 'action', text: '开场旁白' }], speech: 0, actions: 1 },
+    { name: '混合对白', lines: [
+      { id: 'l1', kind: 'line', speaker: 'c1', text: '别走', side: 'left' },
+      { id: 'a1', kind: 'action', text: '动作与旁白' },
+    ], speech: 1, actions: 1 },
+  ])('$name 分别统计台词与旁白/动作，全文仍按需读取', ({ lines, speech, actions }) => {
+    const digest = buildGraphDigest([{
+      id: 'd1', type: 'dialogue', position: { x: 0, y: 0 },
+      data: { name: '开场', lines },
+    }], [], { characters: [], locations: [], characterName: () => null, locationName: () => null })
+    expect(digest).toContain(`${speech} 句`)
+    expect(digest).toContain(`${actions} 条旁白/动作`)
+    expect(digest).not.toContain('开场旁白')
+    expect(digest).not.toContain('动作与旁白')
   })
 })
