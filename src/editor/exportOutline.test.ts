@@ -68,6 +68,9 @@ describe('buildExportOutline（导出大纲投影）', () => {
     expect(labels(nodes, edges)).toEqual(['场 01 · 开场 · 入口', '对白 · 对白一', '场 02 · 收束'])
   })
 
+})
+
+describe('buildExportOutline（分支选项去向）', () => {
   it('分支行列出问句与全部选项去向，未连线的选项显式标注', () => {
     const nodes = [
       scene('s1', 0, 1, '开场'),
@@ -98,6 +101,9 @@ describe('buildExportOutline（导出大纲投影）', () => {
     expect(labels(nodes, edges)).toContain('向左 → （目标已删除）')
   })
 
+})
+
+describe('buildExportOutline（剧情流汇合与入口）', () => {
   it('多路径汇合：汇合节点只出现一次并标注汇入路径数，不重复平铺', () => {
     const nodes = [
       scene('s1', 0, 1, '开场'),
@@ -134,6 +140,9 @@ describe('buildExportOutline（导出大纲投影）', () => {
     expect(labels(nodes, [])).toEqual(['场 01 · 第一条', '场 02 · 第二条'])
   })
 
+})
+
+describe('buildExportOutline（未接入剧情流与集归属）', () => {
   it('未接入剧情流的节点在组内末尾显式列出，不被静默丢弃', () => {
     const nodes = [
       scene('s1', 0, 1, '开场'),
@@ -164,6 +173,9 @@ describe('buildExportOutline（导出大纲投影）', () => {
     expect(groups[0].rows.map((r) => r.text)).toEqual(['场 01 · 一集场'])
   })
 
+})
+
+describe('buildExportOutline（跨集与多目标分支）', () => {
   it('跨集选项目标仍出可读名称，选项只列在其所属分支下', () => {
     const nodes = [
       scene('s1', 0, 1, '开场', 1),
@@ -207,6 +219,9 @@ describe('buildExportOutline（导出大纲投影）', () => {
     expect(labels(nodes, edges)).toContain('向左 → 场 02 · 左路 / 场 03 · 左路支线')
   })
 
+})
+
+describe('buildExportOutline（节奏兑现与非叙事节点）', () => {
   it('选项目标为节奏卡时沿用其兑现状态，同一导出内不自相矛盾（review #81）', () => {
     const nodes = [
       scene('s1', 0, 1, '开场'),
@@ -250,6 +265,51 @@ describe('buildExportOutline（导出大纲投影）', () => {
 
   it('空画布返回空数组', () => {
     expect(buildExportOutline([], [], {})).toEqual([])
+  })
+})
+
+describe('buildExportOutline（分支直接汇合，review #81）', () => {
+  it('同一分支的两个选项直接汇合时保留两条路径，目标只作一次主线成员', () => {
+    const nodes = [
+      branch('b1', 0, '分岔？', [{ id: 'a', label: '走 A' }, { id: 'b', label: '走 B' }]),
+      scene('s1', 100, 1, '汇合'),
+    ]
+    const edges = [branchEdge('a', 'b1', 'a', 's1'), branchEdge('b', 'b1', 'b', 's1')]
+    expect(labels(nodes, edges)).toEqual([
+      '分支 · 分岔？ · 入口',
+      '走 A → 场 01 · 汇合',
+      '走 B → 场 01 · 汇合',
+      '场 01 · 汇合 · 汇合 2 条路径',
+    ])
+  })
+
+  it('sequence 与不同分支的选项共同汇入时逐条计数', () => {
+    const nodes = [
+      scene('s1', 0, 1, '开场'),
+      branch('b1', 100, '第一问？', [{ id: 'a', label: '走 A' }]),
+      branch('b2', 200, '第二问？', [{ id: 'b', label: '走 B' }]),
+      scene('s2', 300, 2, '汇合'),
+    ]
+    const edges = [seq('s', 's1', 's2'), branchEdge('a', 'b1', 'a', 's2'), branchEdge('b', 'b2', 'b', 's2')]
+    const rows = buildExportOutline(nodes, edges, {})[0].rows.filter((r) => r.kind === 'node')
+    expect(rows.map((r) => r.text)).toEqual([
+      '场 01 · 开场 · 入口', '场 02 · 汇合 · 汇合 3 条路径',
+      '分支 · 第一问？ · 入口', '分支 · 第二问？ · 入口',
+    ])
+  })
+
+  it('跨集入边、悬空来源与 attach 下挂不增加组内汇合数', () => {
+    const nodes = [
+      branch('b1', 0, '第一问？', [{ id: 'a', label: '走 A' }], 1),
+      branch('b2', 100, '第二问？', [{ id: 'b', label: '走 B' }], 2),
+      scene('s1', 200, 1, '目的场', 2), shot('sh1', 300, 2),
+    ]
+    const edges = [
+      branchEdge('a', 'b1', 'a', 's1'), branchEdge('b', 'b2', 'b', 's1'),
+      seq('missing', 'ghost', 's1'), attach('shot', 's1', 'sh1'),
+    ]
+    const rows = buildExportOutline(nodes, edges, {})[1].rows.filter((r) => r.kind === 'node')
+    expect(rows.map((r) => r.text)).toEqual(['分支 · 第二问？ · 入口', '场 01 · 目的场'])
   })
 })
 

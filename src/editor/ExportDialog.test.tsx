@@ -10,10 +10,18 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import ExportDialog from './ExportDialog'
 import type { ScriptExportModel } from './exportScript'
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  window.getSelection()?.removeAllRanges()
+  vi.useRealTimers()
+})
+
+beforeEach(() => {
+  stubClipboard(vi.fn().mockResolvedValue(undefined))
+})
 
 /** 以可控桩替换剪贴板（happy-dom 无 clipboard 实现）。 */
-function stubClipboard(writeText: () => Promise<void>) {
+function stubClipboard(writeText: (text: string) => Promise<void>) {
   Object.defineProperty(navigator, 'clipboard', {
     value: { writeText },
     configurable: true,
@@ -41,19 +49,134 @@ function model(over: Partial<ScriptExportModel> = {}): ScriptExportModel {
 
 function setup(props: { model?: ScriptExportModel; onClose?: () => void } = {}) {
   const onClose = props.onClose ?? vi.fn()
-  render(<ExportDialog projectName="雨夜" model={props.model ?? model()} onClose={onClose} />)
-  return { onClose }
+  const view = render(<ExportDialog projectName="雨夜" model={props.model ?? model()} onClose={onClose} />)
+  return { onClose, ...view }
 }
 
 /** 读取预览文本（pre 内容即当前导出文本）。 */
 const preview = () => document.querySelector('.pw-export-pre')!.textContent
 const outlineToggle = () => screen.getByRole('checkbox', { name: /创作大纲/ }) as HTMLInputElement
 
-describe('ExportDialog（剧本导出对话框）', () => {
-  beforeEach(() => {
-    stubClipboard(vi.fn().mockResolvedValue(undefined))
+/** 可控制完成时机的剪贴板替身；保留实际写入文本以核对回执与预览。 */
+function pendingClipboard() {
+  let value = ''
+  let resolve!: () => void
+  let reject!: (error: Error) => void
+  const promise = new Promise<void>((done, fail) => { resolve = done; reject = fail })
+  stubClipboard(async (text) => {
+    await promise
+    value = text
+  })
+  return { resolve, reject, read: () => value }
+}
+
+describe('ExportDialog（过期复制成功，review #81）', () => {
+  it.each([false, true])('从大纲开关 %s 开始复制，切换后忽略旧成功回执', async (startOutline) => {
+    vi.useFakeTimers()
+    const clipboard = pendingClipboard()
+    setup()
+    if (startOutline) fireEvent.click(outlineToggle())
+    fireEvent.click(screen.getByRole('button', { name: '复制全文' }))
+    fireEvent.click(outlineToggle())
+    await act(async () => clipboard.resolve())
+    expect(clipboard.read()).toBe(startOutline ? model().outline : model().plain)
+    expect(preview()).toBe(startOutline ? model().plain : model().outline)
+    expect(screen.queryByRole('button', { name: '✓ 已复制' })).toBeNull()
   })
 
+  it('复制期间切换再切回，也不接受上一轮的回执；重新复制可以成功', async () => {
+    vi.useFakeTimers()
+    const clipboard = pendingClipboard()
+    setup()
+    fireEvent.click(screen.getByRole('button', { name: '复制全文' }))
+    fireEvent.click(outlineToggle())
+    fireEvent.click(outlineToggle())
+    await act(async () => clipboard.resolve())
+    expect(screen.queryByRole('button', { name: '✓ 已复制' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '复制全文' }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(clipboard.read()).toBe(preview())
+    expect(screen.getByRole('button', { name: '✓ 已复制' })).toBeTruthy()
+  })
+})
+
+describe('ExportDialog（过期复制失败与重试，review #81）', () => {
+  it.each(['reject', 'timeout'])('切换后旧请求 %s 不全选新预览', async (outcome) => {
+    vi.useFakeTimers()
+    const clipboard = pendingClipboard()
+    setup()
+    fireEvent.click(screen.getByRole('button', { name: '复制全文' }))
+    fireEvent.click(outlineToggle())
+    await act(async () => {
+      if (outcome === 'reject') clipboard.reject(new Error('denied'))
+      else await vi.advanceTimersByTimeAsync(850)
+    })
+    expect(window.getSelection()?.toString()).toBe('')
+    expect(screen.queryByRole('button', { name: '✓ 已复制' })).toBeNull()
+  })
+
+  it('新复制失败后旧复制才成功，仍保留新尝试的手动复制回退', async () => {
+    vi.useFakeTimers()
+    const clipboard = pendingClipboard()
+    setup()
+    fireEvent.click(screen.getByRole('button', { name: '复制全文' }))
+    stubClipboard(async () => { throw new Error('denied') })
+    fireEvent.click(screen.getByRole('button', { name: '复制全文' }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(window.getSelection()?.toString()).toBe(model().plain)
+    await act(async () => clipboard.resolve())
+    expect(screen.queryByRole('button', { name: '✓ 已复制' })).toBeNull()
+    expect(window.getSelection()?.toString()).toBe(model().plain)
+  })
+
+  it('当前请求超时后全选当前预览，迟到成功不能恢复回执', async () => {
+    vi.useFakeTimers()
+    const clipboard = pendingClipboard()
+    setup()
+    fireEvent.click(screen.getByRole('button', { name: '复制全文' }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(850) })
+    expect(window.getSelection()?.toString()).toBe(model().plain)
+    await act(async () => clipboard.resolve())
+    expect(screen.queryByRole('button', { name: '✓ 已复制' })).toBeNull()
+  })
+})
+
+describe('ExportDialog（复制与文本生命周期，review #81）', () => {
+  it('导出模型更新后旧复制成功，不能给更新后的预览发回执', async () => {
+    vi.useFakeTimers()
+    const clipboard = pendingClipboard()
+    const { rerender, onClose } = setup()
+    fireEvent.click(screen.getByRole('button', { name: '复制全文' }))
+    rerender(<ExportDialog projectName="雨夜" model={model({ plain: '# 新正文' })} onClose={onClose} />)
+    await act(async () => clipboard.resolve())
+    expect(preview()).toBe('# 新正文')
+    expect(screen.queryByRole('button', { name: '✓ 已复制' })).toBeNull()
+  })
+
+  it('成功回执在导出文本更新时立即清除', async () => {
+    vi.useFakeTimers()
+    const { rerender, onClose } = setup()
+    fireEvent.click(screen.getByRole('button', { name: '复制全文' }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(screen.getByRole('button', { name: '✓ 已复制' })).toBeTruthy()
+    rerender(<ExportDialog projectName="雨夜" model={model({ plain: '# 新正文' })} onClose={onClose} />)
+    expect(screen.queryByRole('button', { name: '✓ 已复制' })).toBeNull()
+  })
+
+  it('对话框关闭重开后，旧复制失败不选中新对话框的文本', async () => {
+    vi.useFakeTimers()
+    const clipboard = pendingClipboard()
+    const { unmount } = setup()
+    fireEvent.click(screen.getByRole('button', { name: '复制全文' }))
+    unmount()
+    setup({ model: model({ plain: '# 新对话框' }) })
+    await act(async () => clipboard.reject(new Error('denied')))
+    expect(window.getSelection()?.toString()).toBe('')
+    expect(screen.queryByRole('button', { name: '✓ 已复制' })).toBeNull()
+  })
+})
+
+describe('ExportDialog（剧本导出对话框）', () => {
   it('标题、默认文件名、正文预览与导出范围概要就位', () => {
     setup()
     expect(screen.getByText('导出剧本')).toBeTruthy()
@@ -94,6 +217,9 @@ describe('ExportDialog（剧本导出对话框）', () => {
     clickSpy.mockRestore()
   })
 
+})
+
+describe('ExportDialog（复制回执与关闭）', () => {
   it('复制成功后切换大纲开关即清除「已复制」态，不谎报剪贴板内容（review #81）', async () => {
     vi.useFakeTimers()
     try {
@@ -140,6 +266,9 @@ describe('ExportDialog（剧本导出对话框）', () => {
     expect(onClose).toHaveBeenCalledTimes(3)
   })
 
+})
+
+describe('ExportDialog（剪贴板回退与下载）', () => {
   it('复制成功 → 按钮进入「✓ 已复制」态并限时恢复', async () => {
     vi.useFakeTimers()
     try {

@@ -242,7 +242,7 @@ function groupRows(
 ): ExportOutlineRow[] {
   const member = new Set(memberNodes.map((n) => n.id))
   const spine = spineEdges(edges, member)
-  const parents = parentSources(spine)
+  const incomingPaths = new Map<string, number>()
   const inFlow = new Set<string>()
   const inbound = new Set<string>()
   for (const e of edges) {
@@ -250,11 +250,15 @@ function groupRows(
     inFlow.add(e.source)
     inFlow.add(e.target)
     inbound.add(e.target)
+    // 汇合按叙事入边逐条计数，保留同一分支的不同选项；自环不算路径。
+    if (e.source !== e.target) {
+      incomingPaths.set(e.target, (incomingPaths.get(e.target) ?? 0) + 1)
+    }
   }
   const routes = routeNodes(spine, memberNodes.filter((n) => inFlow.has(n.id)), byId)
   const rows: ExportOutlineRow[] = []
   for (const node of routes) {
-    const merge = parents.get(node.id)?.size ?? 0
+    const merge = incomingPaths.get(node.id) ?? 0
     rows.push(...nodeRows(node, edges, byId, fulfillment, nodeSuffix(node, inbound, merge)))
   }
   const detached = byCanvasX(memberNodes.filter((n) => !inFlow.has(n.id)))
