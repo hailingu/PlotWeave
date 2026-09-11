@@ -1,6 +1,5 @@
 import type { AiCommand } from './commands'
-import { entityFieldTableText } from './entityFields'
-import { nodeFieldTableText } from './nodeFields'
+import { BATCH_PARAMETERS, WRITE_PARAMETERS } from './toolSchemas'
 
 /**
  * Agent 工具表（数据模型 §12.2：工具集 = 命令清单的封装）。
@@ -9,16 +8,6 @@ import { nodeFieldTableText } from './nodeFields'
  * issue 44 起含设定实体通道：get_settings_snapshot 读 + upsert_character /
  * upsert_location 写（实体字段协议单一真相在 entityFields.ts）。
  */
-
-/** data/patch 的协议描述：嵌入共享节点字段表（issue 41）——此前只写
- * 「键见节点字段表」却无处可查，模型只能自造字段（label/summary/stakes）
- * 被校验整批拒绝。字段协议的单一真相在 nodeFields.ts。 */
-const DATA_FIELDS_DESC =
-  `字段对象（只写要定制的字段，其余用默认）。各类型合法字段（表外字段整批拒绝）：\n${nodeFieldTableText()}`
-
-/** upsert fields 的协议描述（issue 44）：与校验白名单同源（entityFields.ts）。 */
-const ENTITY_FIELDS_DESC =
-  `字段对象（只写要定制/修改的字段）。合法字段（表外字段整批拒绝）：\n${entityFieldTableText()}`
 
 export interface ToolSpec {
   type: 'function'
@@ -76,15 +65,7 @@ export const AI_TOOLS: ToolSpec[] = [
     function: {
       name: 'create_node',
       description: '新建节点；data 只写要定制的字段，其余用默认；ref 供后续命令引用新节点',
-      parameters: obj(
-        {
-          nodeType: { type: 'string', description: 'scene|beat|dialogue|branch|shot' },
-          ref: { type: 'string', description: '临时别名，供本批后续命令引用' },
-          data: { type: 'object', description: DATA_FIELDS_DESC },
-          reason: str('改动理由'),
-        },
-        ['nodeType'],
-      ),
+      parameters: WRITE_PARAMETERS.create_node,
     },
   },
   {
@@ -92,7 +73,7 @@ export const AI_TOOLS: ToolSpec[] = [
     function: {
       name: 'delete_node',
       description: '删除节点及其全部连线（撤销可回滚，但预览卡中会标红置顶）',
-      parameters: obj({ nodeId: str('节点 id 或 ref'), reason: str('改动理由') }, ['nodeId']),
+      parameters: WRITE_PARAMETERS.delete_node,
     },
   },
   {
@@ -100,14 +81,7 @@ export const AI_TOOLS: ToolSpec[] = [
     function: {
       name: 'update_node_spec',
       description: '修改节点字段（只写要改的字段）',
-      parameters: obj(
-        {
-          nodeId: str('节点 id 或 ref'),
-          patch: { type: 'object', description: DATA_FIELDS_DESC },
-          reason: str('改动理由'),
-        },
-        ['nodeId', 'patch'],
-      ),
+      parameters: WRITE_PARAMETERS.update_node_spec,
     },
   },
   {
@@ -115,16 +89,7 @@ export const AI_TOOLS: ToolSpec[] = [
     function: {
       name: 'connect_edge',
       description: '建连线：缺省剧情流；branch 需 optionIndex（0 基）；attach 仅 场景→分镜卡',
-      parameters: obj(
-        {
-          sourceId: str('起点节点 id 或 ref'),
-          targetId: str('终点节点 id 或 ref'),
-          edgeKind: { type: 'string', description: 'sequence（缺省）| branch | attach' },
-          optionIndex: { type: 'integer', description: 'edgeKind=branch 时的选项下标' },
-          reason: str('改动理由'),
-        },
-        ['sourceId', 'targetId'],
-      ),
+      parameters: WRITE_PARAMETERS.connect_edge,
     },
   },
   {
@@ -132,10 +97,7 @@ export const AI_TOOLS: ToolSpec[] = [
     function: {
       name: 'disconnect_edge',
       description: '删除两节点间的连线',
-      parameters: obj(
-        { sourceId: str('起点节点 id'), targetId: str('终点节点 id'), reason: str('改动理由') },
-        ['sourceId', 'targetId'],
-      ),
+      parameters: WRITE_PARAMETERS.disconnect_edge,
     },
   },
   {
@@ -147,14 +109,7 @@ export const AI_TOOLS: ToolSpec[] = [
         '供本批后续命令在 scene.characterIds / lines[].speaker 引用）；修改必须带 entityId' +
         '（设定集快照里的精确 id，不要按名字猜），fields 只写要改的字段，未提及字段保持不变；' +
         '不支持删除或合并实体',
-      parameters: obj(
-        {
-          entityId: str('修改目标角色 id（新建时不带）'),
-          ref: { type: 'string', description: '临时别名：新建时声明（或修改时给既有实体挂别名），供本批绑定引用' },
-          fields: { type: 'object', description: ENTITY_FIELDS_DESC },
-          reason: str('改动理由'),
-        },
-      ),
+      parameters: WRITE_PARAMETERS.upsert_character,
     },
   },
   {
@@ -165,14 +120,7 @@ export const AI_TOOLS: ToolSpec[] = [
         '新建或修改地点实体：新建不带 entityId（fields.name 必填，可带 ref 供本批 ' +
         'scene.locationId 引用）；修改必须带 entityId（精确 id，不要按名字猜），' +
         'fields 只写要改的字段，未提及字段保持不变',
-      parameters: obj(
-        {
-          entityId: str('修改目标地点 id（新建时不带）'),
-          ref: { type: 'string', description: '临时别名：新建时声明（或修改时给既有实体挂别名），供本批绑定引用' },
-          fields: { type: 'object', description: ENTITY_FIELDS_DESC },
-          reason: str('改动理由'),
-        },
-      ),
+      parameters: WRITE_PARAMETERS.upsert_location,
     },
   },
   {
@@ -187,25 +135,7 @@ export const AI_TOOLS: ToolSpec[] = [
         '（注意是 update_node，不是 update_node_spec），其余字段与上述写工具参数一致。' +
         '同批可先 upsert 实体再绑定：创建实体的 ref 可直接写进 scene.characterIds / ' +
         'scene.locationId / lines[].speaker，应用解析为真实 id 后落地',
-      parameters: obj(
-        {
-          commands: {
-            type: 'array',
-            description:
-              '命令数组：{"op":"create_node","nodeType":"…","ref":"…","data":{…}} | ' +
-              '{"op":"update_node","nodeId":"…","patch":{…}} | ' +
-              '{"op":"delete_node","nodeId":"…"} | ' +
-              '{"op":"connect_edge","sourceId":"…","targetId":"…"} | ' +
-              '{"op":"disconnect_edge","sourceId":"…","targetId":"…"} | ' +
-              '{"op":"upsert_character","ref":"…","fields":{…}} | ' +
-              '{"op":"upsert_location","entityId":"…","fields":{…}}。' +
-              'data/patch 只写对应节点类型的合法字段（表外字段整批拒绝）：\n' + nodeFieldTableText() +
-              '\nupsert fields 只写对应实体的合法字段（表外字段整批拒绝）：\n' + entityFieldTableText(),
-            items: { type: 'object' },
-          },
-        },
-        ['commands'],
-      ),
+      parameters: BATCH_PARAMETERS,
     },
   },
 ]
