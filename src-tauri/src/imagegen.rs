@@ -41,7 +41,9 @@ async fn read_bytes_capped(response: reqwest::Response, cap: usize) -> Result<Ve
         .await
         .map_err(|e| format!("读取图像失败：{e}"))?
     {
-        append_capped(&mut buf, &chunk, cap)?;
+        // 展示边界转换（issue #45 首片）：超限错误在此转字符串诊断，文案
+        // 与历史 format! 输出逐字一致
+        append_capped(&mut buf, &chunk, cap).map_err(|e| e.to_string())?;
     }
     Ok(buf)
 }
@@ -296,7 +298,10 @@ pub async fn llm_image_generate(app: AppHandle, request: ImageGenRequest) -> Res
         .await
         .map_err(|e| format!("请求失败：{e}"))?;
     let status = response.status();
-    let text = read_text_capped(response, RESPONSE_BODY_MAX_BYTES).await?;
+    // 展示边界转换（issue #45 首片）：文案与历史 format! 输出逐字一致
+    let text = read_text_capped(response, RESPONSE_BODY_MAX_BYTES)
+        .await
+        .map_err(|e| e.to_string())?;
     if is_cancelled(&job_id) {
         clear_cancel(&job_id);
         return Err("已取消".into());

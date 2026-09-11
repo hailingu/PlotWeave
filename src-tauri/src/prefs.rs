@@ -167,7 +167,11 @@ async fn chat_completion(
             }
         })?;
     let status = response.status();
-    let text = crate::http_util::read_text_capped(response, CHAT_RESPONSE_BODY_MAX_BYTES).await?;
+    // 展示边界转换（issue #45 首片）：限读错误在此转字符串诊断，文案
+    // 与历史 format! 输出逐字一致；chat_completion 自身的错误枚举为后续片
+    let text = crate::http_util::read_text_capped(response, CHAT_RESPONSE_BODY_MAX_BYTES)
+        .await
+        .map_err(|e| e.to_string())?;
     if !status.is_success() {
         let head: String = text.chars().take(200).collect();
         return Err(format!("服务返回 {status}：{head}"));
@@ -213,8 +217,8 @@ pub async fn llm_chat(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{Read, Write};
-    use std::net::TcpStream;
+    use crate::testhttp::{drain_request, spawn_local_http};
+    use std::io::Write;
 
     #[test]
     fn provider_id_rules() {
@@ -235,26 +239,8 @@ mod tests {
         assert!(CHAT_RESPONSE_BODY_MAX_BYTES <= 16 * 1024 * 1024);
     }
 
-    /// 本地 HTTP 夹具：环回一次性 TCP 服务器，接受一次连接后按给定脚本
-    /// 处理（丢弃请求、写出响应、可保持连接模拟慢速/挂起）。返回基址。
-    /// 强制 NO_PROXY 环回直连，防环境代理劫持夹具流量。
-    fn spawn_local_http(handler: impl FnOnce(TcpStream) + Send + 'static) -> String {
-        std::env::set_var("NO_PROXY", "127.0.0.1,localhost");
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("绑定环回端口");
-        let port = listener.local_addr().expect("读取端口").port();
-        std::thread::spawn(move || {
-            if let Ok((stream, _)) = listener.accept() {
-                handler(stream);
-            }
-        });
-        format!("http://127.0.0.1:{port}")
-    }
-
-    /// 请求体积小于缓冲：尽力读一次即丢弃，防客户端写端阻塞。
-    fn drain_request(stream: &mut TcpStream) {
-        let mut buf = [0u8; 8192];
-        let _ = stream.read(&mut buf);
-    }
+    /// 本地 HTTP 夹具与请求排空助手已抽至 `crate::testhttp`（http_util 的
+    /// 分类测试与本模块的传输路径测试共用，避免两份实现漂移）。
 
     #[test]
     fn chat_completion_returns_choices0_message_over_local_http() {
