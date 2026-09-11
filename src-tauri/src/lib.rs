@@ -16,7 +16,7 @@
 //! - `imagegen`：画布内 AI 图像生成代理（文生图，docs/data-model.md §13 首片）。
 //! - `http_util`：出站 HTTP 代理共享助手（响应体流式限读内核）。
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 use tauri::Manager;
 
 mod assets;
@@ -81,27 +81,45 @@ fn app_exit(app: tauri::AppHandle) {
 /// `app-quit-requested`，使其进入与直发完全相同的保存冲刷屏障。确认后到达
 /// 的退出请求由已注册监听直接接收，不再缓冲。应用显式拥有的托管状态
 /// （Tauri manage），非进程级可变全局单例；仅主线程回调写入、命令线程读取。
+///
+/// 就绪/暂存迁移用单字三态 CAS 状态机原子完成：标记与确认任意交错下不存在
+/// 「已就绪却残留暂存」的搁浅状态（PR #82 评审修复），正确性不依赖
+/// mark_request 与事件发送在回调体内相邻的调用方约定。
 #[derive(Default)]
 struct QuitGate {
-    /// 前端退出监听已确认就绪；置位后到达的退出请求不再进入缓冲。
-    ready: AtomicBool,
-    /// 就绪确认前收到且尚未重放的退出请求。
-    pending: AtomicBool,
+    /// 0 = 未就绪无暂存；1 = 未就绪有暂存；2 = 已就绪（终态，不再暂存）。
+    state: AtomicU8,
 }
 
 impl QuitGate {
-    /// 原生退出请求到达：就绪前进入缓冲等待确认重放，就绪后不缓冲。
+    /// 原生退出请求到达：未就绪时原子落入暂存（0→1），已就绪不暂存。
     fn mark_request(&self) {
-        if !self.ready.load(Ordering::SeqCst) {
-            self.pending.store(true, Ordering::SeqCst);
+        let mut current = self.state.load(Ordering::SeqCst);
+        while current == 0 {
+            match self
+                .state
+                .compare_exchange(current, 1, Ordering::SeqCst, Ordering::SeqCst)
+            {
+                Ok(_) => return,
+                Err(actual) => current = actual,
+            }
         }
     }
 
-    /// 前端退出监听就绪确认：返回是否需要重放间隙内缓冲的退出请求。
-    /// 多次确认（如 React StrictMode 双挂载）只在首次有暂存时返回 true。
+    /// 前端退出监听就绪确认（任意状态→终态 2）：返回此前是否有暂存需重放。
+    /// 多次确认（如 React StrictMode 双挂载）只在首次自暂存态迁移时返回
+    /// true；确认后再无暂存可被遗留或消费。
     fn acknowledge(&self) -> bool {
-        self.ready.store(true, Ordering::SeqCst);
-        self.pending.swap(false, Ordering::SeqCst)
+        let mut current = self.state.load(Ordering::SeqCst);
+        loop {
+            match self
+                .state
+                .compare_exchange(current, 2, Ordering::SeqCst, Ordering::SeqCst)
+            {
+                Ok(_) => return current == 1,
+                Err(actual) => current = actual,
+            }
+        }
     }
 }
 
