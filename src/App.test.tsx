@@ -15,6 +15,8 @@ import type { ProjectContent } from './projectStore'
 /** 子视图最近一次的 props（回调经此触发，断言经此读参）。 */
 const homeProps: { current: Record<string, unknown> } = { current: {} }
 const editorProps: { current: Record<string, unknown> } = { current: {} }
+/** EditorView mock 的累计渲染次数（issue #61：保存不得重渲染编辑器子树）。 */
+const editorRenders = { count: 0 }
 
 vi.mock('./projectStore', () => ({
   projectStore: {
@@ -61,6 +63,7 @@ vi.mock('./home/HomePage', () => ({
 vi.mock('./editor/EditorView', () => ({
   default: (props: Record<string, unknown>) => {
     editorProps.current = props
+    editorRenders.count += 1
     return <div data-testid="editor">{(props.project as { name: string }).name}</div>
   },
 }))
@@ -96,6 +99,7 @@ afterEach(cleanup)
 
 beforeEach(() => {
   vi.clearAllMocks()
+  editorRenders.count = 0
   retrySavedListeners.length = 0
   replayFailedListeners.length = 0
   store.list.mockResolvedValue([{ id: 'p1', name: '雨夜' }])
@@ -252,6 +256,20 @@ describe('App ✦AI 会话恢复', () => {
 })
 
 describe('App ✦AI 会话保存', () => {
+  it('追加 AI 消息保存成功：编辑器子树零次多余提交（issue #61）', async () => {
+    await openEditor()
+    const rendersBefore = editorRenders.count
+    const session = {
+      schemaVersion: 1 as const,
+      entries: [{ id: 1, kind: 'note' as const, text: '新消息' }],
+    }
+    await act(async () => {
+      await (editorProps.current.onSaveAiSession as (value: typeof session) => Promise<void>)(session)
+    })
+    expect(store.saveAiSession).toHaveBeenCalledWith('p1', session)
+    expect(editorRenders.count).toBe(rendersBefore)
+  })
+
   it('有加载诊断后实际编辑并保存成功：项目级错误清除，重挂载不再报保存失败', async () => {
     const recovered = { schemaVersion: 1 as const, entries: [{ id: 1, kind: 'note' as const, text: '已恢复' }] }
     store.loadAiSession.mockResolvedValue({ session: recovered, repairError: 'Error: 只读目录' })

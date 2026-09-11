@@ -32,7 +32,16 @@ interface UnsavedAiSession {
   error: string
 }
 
-/** 编辑器态：已加载的项目（id + 名称 + 画布文档）。 */
+/** 打开期间最新的 AI 会话快照（App state 之外，issue #61）：保存路径只写
+ * 此引用、不触发渲染；AppView 在渲染时按 id 解析为挂载种子，设置页往返
+ * 等重挂载场景据此恢复到最新历史。 */
+interface LatestAiSession {
+  id: string
+  session: AiSession
+}
+
+/** 编辑器态：已加载的项目（id + 名称 + 画布文档）。aiSession 只是项目打开
+ * /重开时刻的挂载种子；打开期间的最新值由 LatestAiSession 引用承载。 */
 interface OpenProject {
   id: string
   doc: ProjectContent
@@ -90,11 +99,14 @@ async function loadOpenProject(
 type OpenProjectSetter = Dispatch<SetStateAction<OpenProject | null>>
 type RefreshProjects = () => Promise<void>
 type UnsavedAiSessionsRef = RefObject<Map<string, UnsavedAiSession>>
+/** 保存路径需要整体替换快照，故用可变盒子而非只读的 RefObject。 */
+type LatestAiSessionRef = { current: LatestAiSession | null }
 
 function useOpenProjectActions(
   setOpenProject: OpenProjectSetter,
   refreshProjects: RefreshProjects,
   unsavedAiSessions: UnsavedAiSessionsRef,
+  latestAiSession: LatestAiSessionRef,
 ) {
   const handleCreateProject = useCallback(async () => {
     try {
@@ -127,25 +139,33 @@ function useOpenProjectActions(
 
   const handleSaveAiSession = useCallback(
     (id: string) => async (session: AiSession) => {
-      // AI 操作区只在加载成功后开放；实际变更后的会话可在重挂载时重试。
-      setOpenProject((project) =>
-        project?.id === id ? { ...project, aiSession: session, aiSessionRetryable: true } : project,
-      )
+      // 最新会话写入引用而非 React state：成功保存是每条 AI 消息的高频路径，
+      // 不得引起 App 根起的整树重渲染（issue #61）。AI 操作区只在加载成功后
+      // 开放；实际变更后的会话可在重挂载时重试。
+      latestAiSession.current = { id, session }
       try {
         await projectStore.saveAiSession(id, session)
       } catch (err) {
-        // 失败保留在打开项目视图之外：回首页再重开不丢内存副本
+        // 失败保留在打开项目视图之外：回首页再重开不丢内存副本。错误经项目级
+        // 状态上浮（面板自身 catch 同步可见），内存会话是真实内容，重挂载可重试。
         unsavedAiSessions.current?.set(id, { session, error: String(err) })
         setOpenProject((project) =>
-          project?.id === id ? { ...project, aiSessionError: String(err) } : project,
+          project?.id === id
+            ? { ...project, aiSessionError: String(err), aiSessionRetryable: true }
+            : project,
         )
         throw err
       }
       unsavedAiSessions.current?.delete(id)
-      // 保存成功才清除项目级恢复错误：重挂载编辑器不得再宣称会话未落盘
-      setOpenProject((project) => (project?.id === id ? { ...project, aiSessionError: null } : project))
+      // 保存成功才清除项目级恢复错误：重挂载编辑器不得再宣称会话未落盘。
+      // 已是 null 时返回原引用，React 跳过本次提交。
+      setOpenProject((project) =>
+        project?.id === id && project.aiSessionError !== null
+          ? { ...project, aiSessionError: null }
+          : project,
+      )
     },
-    [setOpenProject, unsavedAiSessions],
+    [latestAiSession, setOpenProject, unsavedAiSessions],
   )
 
   return { handleCreateProject, handleOpenProject, handleBackHome, handleEditorRename, handleSaveAiSession }
@@ -194,6 +214,7 @@ function AppView({
   settingsOpen,
   open,
   home,
+  latestAiSession,
   onOpenSettings,
   onCloseSettings,
 }: {
@@ -203,6 +224,7 @@ function AppView({
   readonly settingsOpen: boolean
   readonly open: ReturnType<typeof useOpenProjectActions>
   readonly home: ReturnType<typeof useHomeProjectActions>
+  readonly latestAiSession: LatestAiSessionRef
   readonly onOpenSettings: () => void
   readonly onCloseSettings: () => void
 }) {
@@ -210,10 +232,14 @@ function AppView({
   if (settingsOpen) {
     view = <SettingsView onClose={onCloseSettings} />
   } else if (openProject) {
+    // 挂载种子在渲染时解析：设置页关闭等重挂载时刻读取引用里的最新会话
+    // （issue #61），而非打开项目时落盘/保留区的旧快照。
+    const latest = latestAiSession.current
+    const aiSession = latest?.id === openProject.id ? latest.session : openProject.aiSession
     view = <EditorView
       key={openProject.id}
       project={{ id: openProject.id, ...openProject.doc }}
-      aiSession={openProject.aiSession}
+      aiSession={aiSession}
       aiSessionError={openProject.aiSessionError}
       aiSessionRetryable={openProject.aiSessionRetryable}
       aiSessionLoadFailed={openProject.aiSessionLoadFailed}
@@ -250,6 +276,8 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   /** 保存失败会话的保留区：不属于任何一次打开会话的瞬态视图，跨首页存活。 */
   const unsavedAiSessionsRef = useRef(new Map<string, UnsavedAiSession>())
+  /** 打开期间最新 AI 会话：高频保存路径的 state 外挂载种子（issue #61）。 */
+  const latestAiSessionRef = useRef<LatestAiSession | null>(null)
 
   const refreshProjects = useCallback(async () => {
     try {
@@ -280,13 +308,16 @@ export default function App() {
 
   // 退出重试保存成功（不经 UI 保存通道）时清除项目级错误与保留快照：
   // 否则面板持续宣称「保存失败」而会话实际已保存到主文件。清理与
-  // handleSaveAiSession 的成功尾巴幂等重复，无害。
+  // handleSaveAiSession 的成功尾巴幂等重复，无害；无错误时返回原引用，
+  // 不产生多余提交。
   useEffect(
     () =>
       projectStore.onAiSessionSaved((id) => {
         unsavedAiSessionsRef.current?.delete(id)
         setOpenProject((project) =>
-          project?.id === id ? { ...project, aiSessionError: null } : project,
+          project?.id === id && project.aiSessionError !== null
+            ? { ...project, aiSessionError: null }
+            : project,
         )
       }),
     [],
@@ -303,7 +334,7 @@ export default function App() {
     [],
   )
 
-  const open = useOpenProjectActions(setOpenProject, refreshProjects, unsavedAiSessionsRef)
+  const open = useOpenProjectActions(setOpenProject, refreshProjects, unsavedAiSessionsRef, latestAiSessionRef)
   const home = useHomeProjectActions(refreshProjects, unsavedAiSessionsRef)
   /** 退出冲刷屏障：未落盘会话仍在时阻止关闭窗口（见 useExitFlush）。 */
   const exitBlocked = useExitFlush()
@@ -323,6 +354,7 @@ export default function App() {
       settingsOpen={settingsOpen}
       open={open}
       home={home}
+      latestAiSession={latestAiSessionRef}
       onOpenSettings={() => startTransition(() => setSettingsOpen(true))}
       onCloseSettings={() => startTransition(() => setSettingsOpen(false))}
     />
