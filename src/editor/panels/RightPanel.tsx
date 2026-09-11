@@ -214,7 +214,9 @@ export default function RightPanel({
             ) : (
               <div className="pw-empty">在画布中选择一个节点，查看它的字段。</div>
             ))}
-          <div hidden={tab !== 'ai'}>
+          {/* 常驻挂载包裹层（§3.4）：pw-ai-pane 承接 .pw-panel-scroll → .pw-ai 的
+              高度链（panels.css），hidden 由该类显式压回 display:none（issue 58） */}
+          <div className="pw-ai-pane" hidden={tab !== 'ai'}>
             <AiSessionContent
               loadFailed={aiSessionLoadFailed}
               onOpenSettings={onOpenSettings}

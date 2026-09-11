@@ -6,6 +6,7 @@
  * llmChat 打桩（不触 IPC），settingsStore.load 打桩喂配置。
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import RightPanel from './RightPanel'
 import { llmChat, type AssistantMessage } from '../ai/chat'
@@ -20,6 +21,11 @@ import type { CanvasNode } from '../nodes/types'
 
 vi.mock('../ai/chat', () => ({ llmChat: vi.fn() }))
 const llmChatMock = vi.mocked(llmChat)
+
+/** 读取真实 panels.css 喂给 happy-dom 的 CSS 引擎做级联断言。vitest 默认把
+ * CSS 导入（含 ?raw）stub 为空串，故走 node:fs；npm test 与 SonarQube 门禁
+ * 脚本均固定在仓库根目录运行，仓库根相对路径即为稳定解析基准。 */
+const panelsCss = readFileSync('src/editor/panels/panels.css', 'utf8')
 
 afterEach(() => {
   cleanup()
@@ -285,6 +291,47 @@ describe('RightPanel ✦AI 会话历史保持', () => {
 
     expect(await screen.findByText('怎么增强冲突？')).toBeTruthy()
     expect(screen.getByText('先让人物目标相撞。')).toBeTruthy()
+  })
+})
+
+describe('RightPanel ✦AI 面板高度链（issue 58）', () => {
+  /** 常驻挂载包裹层承接 .pw-panel-scroll → .pw-ai 的高度链（.pw-ai 的
+   * height:100% 需确定包含块），且 [hidden] 时必须显式压回 display:none——
+   * happy-dom 不做布局，断言走 CSS 引擎的计算样式级联；实际滚动布局
+   * 仍需桌面端目验（issue 58 验收）。 */
+  it('包裹层 pw-ai-pane 生效为 flex 纵向满高，切检查器后计算 display 归 none', async () => {
+    vi.spyOn(settingsStore, 'load').mockResolvedValue(APP_WITH_KEY)
+    const style = document.createElement('style')
+    style.textContent = panelsCss
+    document.head.appendChild(style)
+    try {
+      const props = {
+        open: true,
+        width: 320,
+        tab: 'ai' as const,
+        settings: SETTINGS,
+        onResize: vi.fn(),
+        onTabChange: vi.fn(),
+        canvasDigest: 'SNAPSHOT',
+      }
+      const view = render(<RightPanel {...props} />)
+      await screen.findByLabelText('AI 对话输入')
+
+      const pane = view.container.querySelector<HTMLElement>('.pw-ai-pane')
+      expect(pane).toBeTruthy()
+      expect(pane!.contains(view.container.querySelector('.pw-ai'))).toBe(true)
+      // happy-dom 的 getComputedStyle 是活引用，每处断言重新求值
+      expect(getComputedStyle(pane!).display).toBe('flex')
+      expect(getComputedStyle(pane!).flexDirection).toBe('column')
+      expect(getComputedStyle(pane!).height).toBe('100%')
+
+      view.rerender(<RightPanel {...props} tab="inspector" />)
+      expect(pane!.hasAttribute('hidden')).toBe(true)
+      // 作者 display 声明会覆盖 UA 的 [hidden] 隐藏，须有显式 [hidden] 规则压回
+      expect(getComputedStyle(pane!).display).toBe('none')
+    } finally {
+      style.remove()
+    }
   })
 })
 
