@@ -104,15 +104,18 @@ function resolveRef(st: FoldState, cmd: Record<string, unknown>, key: string): s
  * （依赖批次内 ref 登记，entities 传缺省跳过，阶段 B 按真实投影校验）；
  * update 经批次内 ref 时目标类型未知，只做「任何可写类型都不支持的字段」
  * 独立判定，类型专属错误随修复重放在阶段 B 点名（分层暴露）。 */
-function shapeIssuesOf(st: FoldState, raw: Record<string, unknown>, index: number): void {
-  const issue = shapeIssueOf(st, raw)
+function shapeIssuesOf(st: FoldState, raw: Record<string, unknown>, index: number, ownershipUnstable: boolean): void {
+  const issue = shapeIssueOf(st, raw, ownershipUnstable)
   if (issue !== null) st.fail(index, issue)
 }
 
-/** 阶段 A 的单命令形状判定分发（shapeIssuesOf 拆出，S3358/S3776）。 */
-function shapeIssueOf(st: FoldState, raw: Record<string, unknown>): string | null {
+/** 阶段 A 的单命令形状判定分发（shapeIssuesOf 拆出，S3358/S3776）。
+ * ownershipUnstable = 此前存在 delete_node：token 归属可被「删除 + 同名
+ * ref 重建」换主，快照类型过期，update 的类型专属检查让位阶段 B（评审
+ * 5174231991）。 */
+function shapeIssueOf(st: FoldState, raw: Record<string, unknown>, ownershipUnstable: boolean): string | null {
   if (raw.op === 'create_node') return createShapeIssue(st, raw)
-  if (raw.op === 'update_node') return updateShapeIssue(st, raw)
+  if (raw.op === 'update_node') return updateShapeIssue(st, raw, ownershipUnstable)
   if (raw.op === 'connect_edge') return connectShapeIssue(raw)
   if (raw.op === 'upsert_character' || raw.op === 'upsert_location') {
     return entityUpsertShapeIssue(raw)
@@ -130,10 +133,13 @@ function createShapeIssue(st: FoldState, raw: Record<string, unknown>): string |
 }
 
 /** update 的形状校验（shapeIssuesOf 拆出，S3776）：既有节点按其类型全量
- * 校验；批次内 ref 目标类型未知，只做全局键判定（类型专属错误分层延后）。 */
-function updateShapeIssue(st: FoldState, raw: Record<string, unknown>): string | null {
+ * 校验；批次内 ref 目标类型未知或 token 归属不稳定（前序有 delete_node，
+ * 可经「删除 + 同名 ref 重建」换主），只做全局键判定（类型专属错误分层
+ * 延后到阶段 B 的顺序解析）。 */
+function updateShapeIssue(st: FoldState, raw: Record<string, unknown>, ownershipUnstable: boolean): string | null {
   const patch = raw.patch
   if (!plainObject(patch) || Object.keys(patch).length === 0) return 'patch 为空'
+  if (ownershipUnstable) return unknownTargetFieldIssue(patch)
   const nodeId = asText(raw.nodeId)
   const knownType = st.exists.has(nodeId) ? st.types.get(nodeId) : undefined
   return knownType !== undefined
@@ -437,6 +443,28 @@ const FOLDERS: Record<string, (st: FoldState, cmd: Record<string, unknown>, inde
   upsert_location: (st, cmd, index) => foldUpsert(st, cmd, index, 'location'),
 }
 
+/** 阶段 A：全量形状校验（validateAiBatch 拆出，S3776）——一次收集、一次
+ * 回喂。token 归属可被更早的 delete_node + 同名 ref 重建改变（快照类型
+ * 过期）：其后的 update 只做全局键判定，类型专属检查让位阶段 B（评审
+ * 5174231991）。 */
+function collectShapeIssues(st: FoldState, commands: unknown[]): void {
+  let ownershipUnstable = false
+  for (const [index, raw] of commands.entries()) {
+    if (!plainObject(raw)) {
+      st.fail(index, '条目不是对象')
+      continue
+    }
+    const cmd = raw as Record<string, unknown>
+    const folder = FOLDERS[cmd.op as string]
+    if (!folder) {
+      st.fail(index, `未知操作：${String(cmd.op)}`)
+      continue
+    }
+    shapeIssuesOf(st, cmd, index, ownershipUnstable)
+    if (cmd.op === 'delete_node') ownershipUnstable = true
+  }
+}
+
 export function validateAiBatch(rawCommands: unknown, graph: AiGraphSnapshot): BatchValidation {
   const st: FoldState = {
     labels: new Map(graph.nodes.map((n) => [n.id, n.label])),
@@ -468,13 +496,7 @@ export function validateAiBatch(rawCommands: unknown, graph: AiGraphSnapshot): B
   }
   const commands = rawCommands as unknown[]
 
-  // 阶段 A：全量形状校验（一次收集、一次回喂）
-  commands.forEach((raw, index) => {
-    if (!plainObject(raw)) return st.fail(index, '条目不是对象')
-    const folder = FOLDERS[raw.op as string]
-    if (!folder) return st.fail(index, `未知操作：${String(raw.op)}`)
-    shapeIssuesOf(st, raw, index)
-  })
+  collectShapeIssues(st, commands)
 
   // 阶段 B：形状全过后顺序折叠，首错即停——其后命令本轮不校验不点名，
   // 修复重写后从头重放，分层错误逐轮暴露

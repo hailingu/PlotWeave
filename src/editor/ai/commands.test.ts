@@ -1359,8 +1359,10 @@ describe('validateAiBatch：完整问题收集（评审 5138829847：纠错回�
       ],
       snap(),
     )
+    // 拒绝语义按命令定位断言（评审 5174231991：诊断措辞不作契约）
+    expect(repaired.ok).toBe(false)
     expect(repaired.issues).toHaveLength(1)
-    expect(repaired.issues[0]?.message).toContain('端点不存在')
+    expect(repaired.issues[0]?.index).toBe(1)
   })
 
   it('阶段 A 命中即整批拒绝：不折叠任何命令、不产预览项（原子性）', () => {
@@ -1453,5 +1455,37 @@ describe('validateAiBatch：两阶段校验（阶段 A 全量形状 + 阶段 B �
     )
     expect(v.ok).toBe(false)
     expect(v.issues.map((i) => i.index)).toEqual([0, 1])
+  })
+
+  it('前序 delete + 同名 ref 重建换主：update 类型专属检查让位阶段 B（评审 5174231991）', () => {
+    const snapWithX: AiGraphSnapshot = {
+      nodes: [{ id: 'x', type: 'scene', label: '场 01' }],
+      edges: [],
+      assets: new Map(),
+    }
+    const v = validateAiBatch(
+      [
+        { op: 'delete_node', nodeId: 'x' },
+        { op: 'create_node', nodeType: 'beat', ref: 'x', data: { name: '立足' } },
+        { op: 'update_node', nodeId: 'x', patch: { tone: '紧凑' } },
+      ],
+      snapWithX,
+    )
+    // 顺序语义：x 被删后由同名 ref 重建为 beat，tone 是 beat 合法字段——
+    // 阶段 A 的快照类型已过期，不得按 scene 拒绝合法批次
+    expect(v.ok).toBe(true)
+    expect(v.commands).toHaveLength(3)
+  })
+
+  it('delete 在后的 update 仍按快照类型全量点名（对照）', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'update_node', nodeId: 's1', patch: { nope: 1 } },
+        { op: 'delete_node', nodeId: 'sh1' },
+      ],
+      richSnap(),
+    )
+    expect(v.ok).toBe(false)
+    expect(v.issues.map((i) => i.index)).toEqual([0])
   })
 })

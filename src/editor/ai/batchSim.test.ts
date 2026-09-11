@@ -298,6 +298,28 @@ describe('simulateBatch · disconnect_edge', () => {
     backward.forEach((f) => f())
     expect(state.edges.map((e) => e.id)).toEqual(['e1'])
   })
+
+  it('同端点多条边整体拆除与还原：backward 重加全部匹配边（评审 5174231991）', () => {
+    // 分支两条选项边连同一目标：执行通道按端点对删除全部匹配边，撤销须
+    // 整体还原——只捕获/回补首条会让撤销静默丢失其余边（用户数据丢失）
+    const edges: Edge[] = [
+      { id: 'e1', source: 'b1', target: 's1', sourceHandle: 'option-o-l' },
+      { id: 'e2', source: 'b1', target: 's1', sourceHandle: 'option-o-r' },
+      { id: 'e3', source: 'b1', target: 's2' },
+    ]
+    const { state, ops } = mkOps([sceneNode('s1'), sceneNode('s2'), branchNode('b1')], edges)
+
+    const { forward, backward } = simulateBatch(
+      [{ op: 'disconnect_edge', sourceId: 'b1', targetId: 's1' }],
+      ops,
+      state.nodes,
+      state.edges,
+    )
+    forward.forEach((f) => f())
+    expect(state.edges.map((e) => e.id)).toEqual(['e3'])
+    backward.forEach((f) => f())
+    expect(state.edges.map((e) => e.id).sort()).toEqual(['e1', 'e2', 'e3'])
+  })
 })
 
 describe('simulateBatch · 混合批次', () => {
