@@ -240,13 +240,40 @@ function claimedEntries(
   })
 }
 
+/** 回合盒子的提交确认持有（issue #63 评审）：结果交付 setState 后先持有
+ * 盒子；对应更新提交（同批的持久化 effect 已先行入队落盘）后，后置
+ * effect 才撤销登记。落定与卸载同批调度时，未提交的追加会被卸载丢弃，
+ * cleanup 把未确认的盒子归还注册表，重挂载重新认领——回复不因竞态
+ * 丢失；已提交则盒子已释放，不产生重复认领。 */
+function useHeldTurnBox(projectId: string) {
+  const heldRef = useRef<TurnBox | null>(null)
+  useEffect(() => {
+    const held = heldRef.current
+    if (!held) return
+    heldRef.current = null
+    unregisterTurn(projectId, held)
+  })
+  useEffect(
+    () => () => {
+      const held = heldRef.current
+      if (held) returnTurn(projectId, held)
+    },
+    [projectId],
+  )
+  const hold = (box: TurnBox) => {
+    heldRef.current = box
+  }
+  return { hold }
+}
+
 /** 在途回合认领域（issue #63）：挂载即独占认领本项目的在途回合——
- * 等待中恢复忙碌态，落定经 applyRef 上屏并经既有保存通道落盘；落定前
- * 再卸载则归还注册表。StrictMode 双挂载下首个 effect 的 cleanup 先
- * 归还、第二个 effect 再取回，认领不丢失。 */
+ * 等待中恢复忙碌态，落定经 applyRef 交付（含盒子，交付后由持有机制
+ * 确认提交再释放）；等待中或已交付未提交时卸载，盒子归还注册表。
+ * StrictMode 双挂载下首个 effect 的 cleanup 先归还、第二个 effect
+ * 再取回，认领不丢失。 */
 function usePendingTurnClaim(
   projectId: string,
-  applyRef: { readonly current: (result: TurnResult) => void },
+  applyRef: { readonly current: (result: TurnResult, box: TurnBox) => void },
   setBusy: Dispatch<SetStateAction<boolean>>,
 ): void {
   useEffect(() => {
@@ -254,15 +281,18 @@ function usePendingTurnClaim(
     if (!box) return
     setBusy(true)
     let active = true
-    let applied = false
+    let delivered = false
     void box.promise.then((result) => {
-      if (!active) return
-      applied = true
-      applyRef.current(result)
+      if (!active) {
+        returnTurn(projectId, box)
+        return
+      }
+      delivered = true
+      applyRef.current(result, box)
     })
     return () => {
       active = false
-      if (!applied) returnTurn(projectId, box)
+      if (!delivered) returnTurn(projectId, box)
     }
   }, [projectId, setBusy, applyRef])
 }
@@ -296,16 +326,19 @@ function useAiTurn(opts: {
     aliveRef.current = true
     return () => { aliveRef.current = false }
   }, [])
-  /** 认领落定结果的上屏（每渲染同步最新闭包）；映射见 claimedEntries。 */
-  const applyClaimRef = useRef<(result: TurnResult) => void>(() => undefined)
+  /** 认领落定结果的交付（每渲染同步最新闭包）：条目映射见 claimedEntries；
+   * 盒子交持有机制确认提交后释放（useHeldTurnBox）。 */
+  const heldBox = useHeldTurnBox(opts.projectId)
+  const applyClaimRef = useRef<(result: TurnResult, box: TurnBox) => void>(() => undefined)
   useEffect(() => {
-    applyClaimRef.current = (result) => {
+    applyClaimRef.current = (result, box) => {
       setBusy(false)
       if (result.entries) {
         opts.append(claimedEntries(result.entries, opts.nextId, opts.onValidateCommands))
       } else {
         setError(result.error ?? '请求失败')
       }
+      heldBox.hold(box)
     }
   })
   usePendingTurnClaim(opts.projectId, applyClaimRef, setBusy)
@@ -334,10 +367,12 @@ function useAiTurn(opts: {
     registerTurn(opts.projectId, box)
     const result = await settled
     if (aliveRef.current) {
-      unregisterTurn(opts.projectId, box) // 本实例消费：撤登记防重挂载重复认领
       if (result.entries) opts.append(result.entries)
       else setError(result.error ?? '请求失败')
       setBusy(false)
+      // 本实例消费，但提交确认前不撤销登记：落定与卸载同批调度时，
+      // 未提交的追加被丢弃，持有机制在 cleanup 把盒子归还待重新认领
+      heldBox.hold(box)
     }
     // 已卸载：盒子留在注册表，由重挂载/重开同一项目的实例认领
   }

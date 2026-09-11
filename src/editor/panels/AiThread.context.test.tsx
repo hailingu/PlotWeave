@@ -329,40 +329,40 @@ async function readCurrentNode() {
   await send('读取现在的旁白')
 }
 
+/** 发送后仅等到 llm_chat 已发出：在途回合留在按项目登记的注册表
+ * （见 pendingTurns），不等待模型落定（issue #63 系列）。 */
+async function sendInFlight(text = '丰富开场') {
+  const input = screen.getByLabelText('AI 对话输入')
+  fireEvent.change(input, { target: { value: text } })
+  fireEvent.keyDown(input, { key: 'Enter' })
+  await waitFor(() =>
+    expect(invokeMock.mock.calls.some(([cmd]) => cmd === 'llm_chat')).toBe(true))
+}
+
+/** 首个 llm_chat 调用挂起至手动落定，模拟回合跨设置页/首页往返。 */
+function deferredReply() {
+  let resolve!: (message: AssistantMessage) => void
+  invokeMock.mockImplementationOnce(
+    () => new Promise<AssistantMessage>((settle) => { resolve = settle }),
+  )
+  return (message: AssistantMessage) => resolve(message)
+}
+
+/** 同上，但落定为失败：拒绝须发生在卸载之后，故不能直接用已拒绝值。 */
+function deferredFailure() {
+  let reject!: (err: Error) => void
+  invokeMock.mockImplementationOnce(
+    () => new Promise<AssistantMessage>((_, fail) => { reject = fail }),
+  )
+  return (err: Error) => reject(err)
+}
+
+/** 宏任务边界冲刷全部在途微任务：卸载后的落定/失败在无 DOM 可观察时完成。 */
+async function flushAfterUnmount() {
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+}
+
 describe('AiThread 在途回合跨卸载按项目认领（issue #63）', () => {
-  /** 发送后仅等到 llm_chat 已发出：在途回合留在按项目登记的注册表
-   * （见 pendingTurns），不等待模型落定。 */
-  async function sendInFlight(text = '丰富开场') {
-    const input = screen.getByLabelText('AI 对话输入')
-    fireEvent.change(input, { target: { value: text } })
-    fireEvent.keyDown(input, { key: 'Enter' })
-    await waitFor(() =>
-      expect(invokeMock.mock.calls.some(([cmd]) => cmd === 'llm_chat')).toBe(true))
-  }
-
-  /** 首个 llm_chat 调用挂起至手动落定，模拟回合跨设置页/首页往返。 */
-  function deferredReply() {
-    let resolve!: (message: AssistantMessage) => void
-    invokeMock.mockImplementationOnce(
-      () => new Promise<AssistantMessage>((settle) => { resolve = settle }),
-    )
-    return (message: AssistantMessage) => resolve(message)
-  }
-
-  /** 同上，但落定为失败：拒绝须发生在卸载之后，故不能直接用已拒绝值。 */
-  function deferredFailure() {
-    let reject!: (err: Error) => void
-    invokeMock.mockImplementationOnce(
-      () => new Promise<AssistantMessage>((_, fail) => { reject = fail }),
-    )
-    return (err: Error) => reject(err)
-  }
-
-  /** 宏任务边界冲刷全部在途微任务：卸载后的落定/失败在无 DOM 可观察时完成。 */
-  async function flushAfterUnmount() {
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
-  }
-
   it('迟到完成的回复经重挂载认领：重定 id 入列并经保存通道落盘', async () => {
     const reply = deferredReply()
     const h = await setup({ projectId: 'p63-claim' })
@@ -392,6 +392,25 @@ describe('AiThread 在途回合跨卸载按项目认领（issue #63）', () => {
     expect(screen.queryByText('✦ 正在思考…')).toBeNull()
   })
 
+  it('认领的迟到批次按当前画布重校验：目标已删则整批拒绝执行', async () => {
+    // 在途回合约住已卸载实例的校验闭包（issue #63 评审）：迟到批次的
+    // 预览若沿用离开前的旧校验结果，用户会基于过期预览确认执行。
+    const reply = deferredReply()
+    const h = await setup({ projectId: 'p63-revalidate' })
+    await sendInFlight('丰富旁白')
+    const session = normalizeAiSession(h.saved[h.saved.length - 1]).session
+    h.unmount()
+    await act(async () => { reply(proposal()) }) // 旧闭包校验通过（d1 仍在旧画布）
+    await setup({ projectId: 'p63-revalidate', session, nodes: [] }) // 重开后目标已删
+    expect(await screen.findByText(/给开场补充旁白/)).toBeTruthy()
+    const execute = screen.getByRole('button', { name: '✓ 执行改动' }) as HTMLButtonElement
+    expect(execute.disabled).toBe(true)
+    const claimed = screen.getByRole('button', { name: '✓ 执行改动' }).closest('.pw-ai-entry')
+    expect(claimed?.textContent).toContain('第 1 条')
+  })
+})
+
+describe('AiThread 在途回合的归还与失败（issue #63）', () => {
   it('卸载期间请求失败：重挂载显示错误，不追加条目不触发保存', async () => {
     const fail = deferredFailure()
     const h = await setup({ projectId: 'p63-fail' })
@@ -421,20 +440,20 @@ describe('AiThread 在途回合跨卸载按项目认领（issue #63）', () => {
     expect(await screen.findByText('辗转到达。')).toBeTruthy()
   })
 
-  it('认领的迟到批次按当前画布重校验：目标已删则整批拒绝执行', async () => {
-    // 在途回合约住已卸载实例的校验闭包（issue #63 评审）：迟到批次的
-    // 预览若沿用离开前的旧校验结果，用户会基于过期预览确认执行。
+  it('已提交落定的回合不重复认领：二次重开仅一条回复', async () => {
+    // 提交确认释放（useHeldTurnBox）：落定更新提交并落盘后，盒子必须
+    // 已释放——否则每次重开都重复认领同一回复。
     const reply = deferredReply()
-    const h = await setup({ projectId: 'p63-revalidate' })
-    await sendInFlight('丰富旁白')
+    const h = await setup({ projectId: 'p63-once' })
+    await sendInFlight()
     const session = normalizeAiSession(h.saved[h.saved.length - 1]).session
     h.unmount()
-    await act(async () => { reply(proposal()) }) // 旧闭包校验通过（d1 仍在旧画布）
-    await setup({ projectId: 'p63-revalidate', session, nodes: [] }) // 重开后目标已删
-    expect(await screen.findByText(/给开场补充旁白/)).toBeTruthy()
-    const execute = screen.getByRole('button', { name: '✓ 执行改动' }) as HTMLButtonElement
-    expect(execute.disabled).toBe(true)
-    const claimed = screen.getByRole('button', { name: '✓ 执行改动' }).closest('.pw-ai-entry')
-    expect(claimed?.textContent).toContain('第 1 条')
+    await act(async () => { reply({ role: 'assistant', content: '唯一回复。' }) })
+    const first = await setup({ projectId: 'p63-once', session })
+    expect(await screen.findByText('唯一回复。')).toBeTruthy()
+    const committed = normalizeAiSession(first.saved[first.saved.length - 1]).session
+    first.unmount()
+    await setup({ projectId: 'p63-once', session: committed })
+    expect(screen.getAllByText('唯一回复。')).toHaveLength(1)
   })
 })

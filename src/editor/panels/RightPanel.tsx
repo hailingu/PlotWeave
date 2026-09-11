@@ -162,6 +162,24 @@ interface RightPanelProps {
  * 会话容器在 AiThread.tsx、预览卡在 PreviewCard.tsx、会话模型在
  * aiThreadModel.ts（issue #39 拆分），本文件保留检查器域与编排。
  */
+/** ✦AI 分段主体（自 RightPanel 拆出，PR #83 评审：函数行数上限）：
+ * 常驻挂载包裹层（§3.4）——pw-ai-pane 承接 .pw-panel-scroll → .pw-ai 的
+ * 高度链（panels.css），hidden 由该类显式压回 display:none（issue 58），
+ * 切换分段不卸载会话容器。 */
+function AiPane({
+  hidden,
+  ...thread
+}: ComponentProps<typeof AiThread> & {
+  readonly loadFailed?: boolean
+  readonly hidden: boolean
+}) {
+  return (
+    <div className="pw-ai-pane" hidden={hidden}>
+      <AiSessionContent {...thread} />
+    </div>
+  )
+}
+
 export default function RightPanel({
   open,
   width,
@@ -217,27 +235,25 @@ export default function RightPanel({
             ) : (
               <div className="pw-empty">在画布中选择一个节点，查看它的字段。</div>
             ))}
-          {/* 常驻挂载包裹层（§3.4）：pw-ai-pane 承接 .pw-panel-scroll → .pw-ai 的
-              高度链（panels.css），hidden 由该类显式压回 display:none（issue 58） */}
-          <div className="pw-ai-pane" hidden={tab !== 'ai'}>
-            <AiSessionContent
-              loadFailed={aiSessionLoadFailed}
-              projectId={projectId}
-              onOpenSettings={onOpenSettings}
-              canvasDigest={canvasDigest}
-              aiRevision={aiRevision}
-              onValidateAi={onValidateAi}
-              onValidateCommands={onValidateCommands}
-              onReadNode={onReadNode}
-              onReadSettings={onReadSettings}
-              onApplyAiBatch={onApplyAiBatch}
-              whenCanvasCommitted={whenCanvasCommitted}
-              initialSession={aiSession}
-              initialSessionError={aiSessionError}
-              initialSessionRetryable={aiSessionRetryable}
-              onSaveSession={onSaveAiSession}
-            />
-          </div>
+          {/* 常驻挂载语义见 AiPane（issue 58）：hidden 切换不卸载会话容器 */}
+          <AiPane
+            hidden={tab !== 'ai'}
+            loadFailed={aiSessionLoadFailed}
+            projectId={projectId}
+            onOpenSettings={onOpenSettings}
+            canvasDigest={canvasDigest}
+            aiRevision={aiRevision}
+            onValidateAi={onValidateAi}
+            onValidateCommands={onValidateCommands}
+            onReadNode={onReadNode}
+            onReadSettings={onReadSettings}
+            onApplyAiBatch={onApplyAiBatch}
+            whenCanvasCommitted={whenCanvasCommitted}
+            initialSession={aiSession}
+            initialSessionError={aiSessionError}
+            initialSessionRetryable={aiSessionRetryable}
+            onSaveSession={onSaveAiSession}
+          />
         </div>
       </div>
     </aside>
