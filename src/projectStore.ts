@@ -20,7 +20,13 @@ import {
 import { enqueueDelete, enqueueSave } from './projectStore/saveChain'
 import { tauriCreate, tauriList, tauriLoad } from './projectStore/tauri'
 import type { ProjectSummary } from './home/projects'
-import { deleteAiSession, loadAiSession, onAiSessionSaved, saveAiSession } from './aiSessionStore'
+import {
+  deleteAiSession,
+  loadAiSession,
+  onAiSessionSaved,
+  onAiSessionSaveFailed,
+  saveAiSession,
+} from './aiSessionStore'
 import type { AiSession } from './editor/ai/session'
 
 export type { ProjectContent }
@@ -70,6 +76,10 @@ export const projectStore = {
   /** 订阅会话落盘成功（含不经面板通道的退出重试）：App 据此清除
    * 项目级保存错误与保留快照。 */
   onAiSessionSaved,
+
+  /** 订阅墓碑吸收会话的回吐重排失败：原始保存已被视为成功，App 据此
+   * 登记保留快照，重开项目时内存副本胜出并提示可重试。 */
+  onAiSessionSaveFailed,
 
   /** 删除项目（首页卡片菜单，§3.2；确认框由界面层负责）。排进保存链，
    * 迟到的保存/重试不得复活已删项目。 */

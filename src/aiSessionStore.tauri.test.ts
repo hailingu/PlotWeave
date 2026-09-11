@@ -112,6 +112,33 @@ describe('saveAiSession 冲刷固定点排空', () => {
 })
 
 
+describe('墓碑吸收会话的删除失败回吐', () => {
+  it('回吐重排失败：保留快照经失败事件上浮，退出屏障仍可重试', async () => {
+    const store = await import('./aiSessionStore')
+    const { enqueueDelete } = await import('./projectStore/saveChain')
+    invoke.mockImplementation(async (cmd: unknown) => {
+      if (cmd === 'delete_project') throw new Error('资产目录只读')
+      if (cmd === 'save_ai_session') throw new Error('磁盘仍满')
+      return undefined
+    })
+    const failures: Array<{ id: string; session: unknown; error: string }> = []
+    store.onAiSessionSaveFailed((id, event) => {
+      failures.push({ id, session: event.session, error: event.error })
+    })
+
+    const deleting = enqueueDelete('p1').catch(() => undefined)
+    // 墓碑期保存被吸收为成功：调用方无从感知之后的回吐失败
+    await expect(store.saveAiSession('p1', session('墓碑期消息'))).resolves.toBeUndefined()
+    await deleting
+
+    await vi.waitFor(() => expect(failures).toHaveLength(1))
+    expect(failures[0]?.id).toBe('p1')
+    expect(failures[0]?.session).toEqual(session('墓碑期消息'))
+    expect(failures[0]?.error).toContain('磁盘仍满')
+    expect(store.hasPendingAiSessionSaves()).toBe(true)
+  })
+})
+
 describe('loadAiSession 主文件归一化', () => {
   it('缺文件为空会话，读取不产生保存', async () => {
     invoke.mockResolvedValue(rec(null))

@@ -24,10 +24,33 @@ const deletingIds = new Set<string>()
  * 登记；删除成功即随项目一并丢弃，绝不复活已删项目。 */
 const absorbedSaveDocs = new Map<string, ProjectContent>()
 
+/** 删除墓碑期被吸收的附属数据写入（如 AI 会话保存）：按 id 留存最新写入
+ * 闭包——删除失败（项目仍在磁盘）时重排执行，否则该次写入已被上游视为
+ * 成功却从未落盘也无快照重试；删除成功即随项目一并丢弃，绝不复活已删
+ * 项目。同 id 后到的写入取代先到的：闭包载荷为整体快照，只重放最新。 */
+const absorbedProjectWrites = new Map<string, () => Promise<void>>()
+
+/** 回吐重排失败监听器：回吐的写入是墓碑期吸收的迟到排队，原始调用方
+ * 早已拿到成功应答、无从上浮失败——订阅方（如 AI 会话存储）由此把保留
+ * 快照交给上层恢复通道。 */
+export type ProjectWriteReplayFailureListener = (id: string, err: unknown) => void
+const replayFailureListeners = new Set<ProjectWriteReplayFailureListener>()
+
+/** 订阅删除失败后回吐重排的附属写入失败；返回退订函数。 */
+export function onProjectWriteReplayFailure(
+  listener: ProjectWriteReplayFailureListener,
+): () => void {
+  replayFailureListeners.add(listener)
+  return () => replayFailureListeners.delete(listener)
+}
+
 /** 将项目附属数据的写入纳入与画布相同的保存/删除链。删除墓碑期的写入
- * 被吸收，保证已删除项目不会因迟到的独立持久化操作重建目录。 */
+ * 被吸收（登记最新闭包，删除失败时回吐），保证已删除项目不会因迟到的
+ * 独立持久化操作重建目录。 */
 export function enqueueProjectWrite(id: string, write: () => Promise<void>): Promise<void> {
   if (deletingIds.has(id)) {
+    // 吸收但不丢弃：留存最新写入闭包，删除失败时回吐（见 enqueueDelete）
+    absorbedProjectWrites.set(id, write)
     console.warn('[projectStore] 项目删除中，吸收附属数据写入', id)
     return Promise.resolve()
   }
@@ -111,9 +134,12 @@ export function enqueueSave(id: string, doc: ProjectContent): Promise<void> {
  * 期间及之后的保存一律吸收。链落定时读取登记（在途保存失败后新登记的、
  * 或开场留存仍未被取代的）并全量清除，随后删除。删除失败（项目仍在磁盘）
  * 时按入队序回吐：先链落定时留存的登记文档、再墓碑期间吸收的最新文档
- * 重新排队保存——不回吐则最新编辑既没落盘也无重试登记；登记为空即最新
- * 保存已成功（或从未失败），不得回放更早的旧登记（陈旧文档的重试不得
- * 覆盖新内容）；删除成功则登记与吸收的文档随项目一并丢弃。 */
+ * 重新排队保存，最后重排墓碑期间吸收的附属数据写入——不回吐则最新编辑
+ * 既没落盘也无重试登记；登记为空即最新保存已成功（或从未失败），不得
+ * 回放更早的旧登记（陈旧文档的重试不得覆盖新内容）；删除成功则登记与
+ * 吸收的文档、写入随项目一并丢弃。回吐重排的附属写入自身失败时经
+ * onProjectWriteReplayFailure 通知订阅者（画布回吐失败自带登记重试，
+ * 不需此通道）。 */
 export function enqueueDelete(id: string): Promise<void> {
   deletingIds.add(id)
   clearSaveRetryTimer(id)
@@ -134,14 +160,25 @@ export function enqueueDelete(id: string): Promise<void> {
     .then(
       () => {
         absorbedSaveDocs.delete(id)
+        absorbedProjectWrites.delete(id)
       },
       () => {
         // 墓碑已解除（finally 先行）：回吐的保存走正常排队，不再被吸收
         const retained = retainedRetryDoc
         const absorbed = absorbedSaveDocs.get(id)
+        const absorbedWrite = absorbedProjectWrites.get(id)
         absorbedSaveDocs.delete(id)
+        absorbedProjectWrites.delete(id)
         if (retained !== undefined) void enqueueSave(id, retained).catch(() => undefined)
         if (absorbed !== undefined) void enqueueSave(id, absorbed).catch(() => undefined)
+        if (absorbedWrite !== undefined) {
+          // 回吐失败无调用方可上浮（原始排队已被吸收为成功）：日志兜底并
+          // 通知订阅者转交保留快照（如 AI 会话的 App 级恢复通道）
+          void enqueueProjectWrite(id, absorbedWrite).catch((err) => {
+            console.error('[projectStore] 回吐重排的附属写入失败', id, err)
+            replayFailureListeners.forEach((listener) => listener(id, err))
+          })
+        }
       },
     )
     .catch(() => undefined)
