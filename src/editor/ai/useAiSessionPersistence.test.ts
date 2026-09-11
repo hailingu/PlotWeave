@@ -124,4 +124,78 @@ describe('persistedEntries 条数上限（issue #64）', () => {
     expect(cardEntry.card).not.toHaveProperty('uncommitted')
     expect(persisted.every((e) => e.cardReceiptFor === undefined)).toBe(true)
   })
+
+  it('窗口外仍可执行的待执行卡钉住保留：继续对话不丢跨重开可执行性', () => {
+    const thread = [
+      entry(1, '第1句'),
+      entry(2, '第2句'),
+      {
+        id: 3,
+        kind: 'msg' as const,
+        role: 'assistant' as const,
+        text: '早前待执行预览',
+        card: {
+          v: { ok: true, items: [], commands: [], issues: [], hasDeletes: false },
+          status: 'pending' as const,
+        },
+      },
+      entry(4, '第4句'),
+      entry(5, '第5句'),
+      ...longThread(200).map((e) => ({ ...e, id: 5 + e.id, text: `第${5 + e.id}句` })),
+    ]
+    const persisted = persistedEntries(thread)
+    // 最新 200 条（id 6..205）+ 钉住的窗口外待执行卡（id 3）
+    expect(persisted).toHaveLength(201)
+    expect(persisted[0]).toMatchObject({ id: 3 })
+    expect(persisted[0].card).toMatchObject({ status: 'pending' })
+    expect(persisted[1]).toMatchObject({ id: 6 })
+    expect(persisted[200]).toMatchObject({ id: 205 })
+  })
+
+  it('窗口外未确认执行卡同样钉住：降级 pending 且保留对账计数', () => {
+    const thread = [
+      entry(1, '第1句'),
+      {
+        id: 2,
+        kind: 'msg' as const,
+        role: 'assistant' as const,
+        text: '窗口外未确认执行',
+        card: {
+          v: { ok: true, items: [], commands: [], issues: [], hasDeletes: false },
+          status: 'executed' as const,
+          uncommitted: true as const,
+          aiRevisionAfter: 9,
+        },
+      },
+      ...longThread(200).map((e) => ({ ...e, id: 3 + e.id, text: `第${3 + e.id}句` })),
+      { id: 204, kind: 'note' as const, text: '✓ 已执行 0 项', cardReceiptFor: 2 },
+    ]
+    const persisted = persistedEntries(thread)
+    // 回执剔除（关联未确认卡）后 202 条；窗口为最新 200 条（id 4..203），钉住 id 2
+    expect(persisted).toHaveLength(201)
+    expect(persisted[0]).toMatchObject({ id: 2 })
+    expect(persisted[0].card).toMatchObject({ status: 'pending', aiRevisionAfter: 9 })
+    expect(persisted[0].card).not.toHaveProperty('uncommitted')
+  })
+
+  it('窗口外校验拒绝卡不钉住：不可执行的错误历史随窗口裁剪', () => {
+    const thread = [
+      entry(1, '第1句'),
+      {
+        id: 2,
+        kind: 'msg' as const,
+        role: 'assistant' as const,
+        text: '被拒绝的批次',
+        card: {
+          v: { ok: false, items: [], commands: [], issues: [{ index: 0, message: 'x' }], hasDeletes: false },
+          status: 'pending' as const,
+        },
+      },
+      ...longThread(200).map((e) => ({ ...e, id: 2 + e.id, text: `第${2 + e.id}句` })),
+    ]
+    const persisted = persistedEntries(thread)
+    expect(persisted).toHaveLength(200)
+    expect(persisted.some((e) => e.card !== undefined)).toBe(false)
+    expect(persisted[0]).toMatchObject({ id: 3 })
+  })
 })

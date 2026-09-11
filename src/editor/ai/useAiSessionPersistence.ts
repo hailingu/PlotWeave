@@ -34,12 +34,27 @@ function stripReceiptLink(entry: ThreadEntry): ThreadEntry {
   return next
 }
 
+/** 条数上限的裁剪（issue #64）：保留最新 PERSISTED_ENTRIES_MAX 条，另把
+ * 窗口外仍可执行的待执行卡（pending 且校验通过；含自未确认执行卡降级来
+ * 的）钉住保留。待执行卡可长期停留等待确认——用户暂不确认而继续对话不
+ * 得使其失去重开后的可执行性（恢复的待执行卡按当前画布重校验，§12.2）；
+ * 校验拒绝卡不可执行，只作错误历史，不占钉住名额。钉住条目按原顺序回插
+ * 在保留窗口之前，时间线顺序不变；上限语义为「最新 200 条 + 在途待执行卡」，
+ * 钉住数量只随用户留存的可执行提案增长。 */
+function capPersistedEntries(entries: ThreadEntry[]): ThreadEntry[] {
+  if (entries.length <= PERSISTED_ENTRIES_MAX) return entries
+  const dropped = entries.slice(0, -PERSISTED_ENTRIES_MAX)
+  const pinned = dropped.filter((entry) => entry.card?.status === 'pending' && entry.card.v.ok)
+  if (pinned.length === 0) return entries.slice(-PERSISTED_ENTRIES_MAX)
+  return [...pinned, ...entries.slice(-PERSISTED_ENTRIES_MAX)]
+}
+
 /** 落盘映射：未确认画布落盘的执行卡降级为 pending 并剔除其回执（按关联
  * 而非位置——回执总是追加在会话尾部）——画布若尚未持久化，重开后该卡应
  * 重新可执行，而不是同时声称已执行；保留 aiRevisionAfter 供重开时与画布
- * 批次计数对账。其余条目原样落盘（剥掉运行时关联标注）。映射完成后自
- * 最旧条目起裁剪到 PERSISTED_ENTRIES_MAX（issue #64）：等待画布落盘的
- * 执行卡与待执行卡都在会话尾部，必落在保留窗口内。 */
+ * 批次计数对账。其余条目原样落盘（剥掉运行时关联标注）。映射完成后施加
+ * 落盘条数上限（issue #64），窗口外可执行的待执行卡钉住保留，见
+ * capPersistedEntries。 */
 export function persistedEntries(thread: ThreadEntry[]): ThreadEntry[] {
   const uncommitted = new Set(
     thread.filter((entry) => entry.card?.uncommitted).map((entry) => entry.id),
@@ -61,7 +76,7 @@ export function persistedEntries(thread: ThreadEntry[]): ThreadEntry[] {
     }
     entries.push(stripReceiptLink(entry))
   }
-  return entries.slice(-PERSISTED_ENTRIES_MAX)
+  return capPersistedEntries(entries)
 }
 
 /** 面板会话的「编辑即保存」状态族：条目变更即落盘；保存失败上浮为可见
