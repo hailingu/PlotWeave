@@ -78,6 +78,24 @@ describe('normalizeAiSession', () => {
 
 })
 
+describe('normalizeAiSession · 执行失败状态（issue 73）', () => {
+  it.each([
+    { status: 'pending', error: '目标已删除', expected: { executionError: '目标已删除' } },
+    { status: 'pending', error: undefined, expected: {} },
+    { status: 'pending', error: 1, expected: {} },
+    { status: 'pending', error: ' ', expected: {} },
+    { status: 'executed', error: '旧失败', expected: {} },
+    { status: 'dismissed', error: '旧失败', expected: {} },
+  ])('只为待执行卡保留非空失败诊断：$status / $error', ({ status, error, expected }) => {
+    const v = { ok: true, items: [], commands: [], issues: [], hasDeletes: false }
+    const result = normalizeAiSession({ schemaVersion: 1, entries: [{
+      id: 1, kind: 'msg', role: 'assistant', text: '原批次',
+      card: { v, status, executionError: error },
+    }] })
+    expect(result.session.entries[0].card).toEqual({ v, status, ...expected })
+  })
+})
+
 describe('normalizeAiSession · 卡片运行时标注', () => {
   it('保留执行后批次计数供恢复对账，剥离运行时未确认标注', () => {
     const result = normalizeAiSession({

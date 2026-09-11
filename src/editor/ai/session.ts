@@ -19,6 +19,9 @@ export interface ThreadEntry {
   card?: {
     v: BatchValidation
     status: 'pending' | 'executed' | 'dismissed'
+    /** 上次确认执行失败的诊断（仅 pending 保存）；供后续轮次辨认失败，
+     * 重试成功或忽略后清除。旧会话缺省表示没有结构化失败记录。 */
+    executionError?: string
     /** 运行时标注（落盘无权威语义，归一化丢弃、恢复时重derive）：
      * 跨会话恢复的历史执行卡。撤销栈不随会话持久化，历史卡不得
      * 宣称当前 ⌘Z 可整批撤销。 */
@@ -117,6 +120,10 @@ function entryOf(value: unknown): ThreadEntry | null {
     card: {
       v: value.card.v,
       status: value.card.status,
+      ...(value.card.status === 'pending' &&
+      typeof value.card.executionError === 'string' && value.card.executionError.trim() !== ''
+        ? { executionError: value.card.executionError }
+        : {}),
       ...(typeof value.card.aiRevisionAfter === 'number' &&
       Number.isSafeInteger(value.card.aiRevisionAfter) &&
       value.card.aiRevisionAfter >= 0
