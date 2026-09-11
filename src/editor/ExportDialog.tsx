@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { ScriptExportModel } from './exportScript'
+import { useScriptExportActions } from './useScriptExportActions'
 
 interface ExportDialogProps {
   /** 项目名，用于标题与默认文件名。 */
@@ -20,59 +21,24 @@ function bodyHint(showOutline: boolean, hasNarrative: boolean): string {
  * 剧本导出对话框（docs/ui-design.md §3.3 导出、§3.5 剧本导出）。
  * 预览生成的正文（场景 + 对白，节拍/分支不进正文）与附录；
  * 「创作大纲」开关默认关闭，开启后在文末并入大纲附录（节奏名称/基调、分支问句
- * 与选项去向）——开关只切换同一生成结果的文本，不改动画布或项目实体。
- * 预览、复制与下载消费同一 text。Esc / 点击遮罩关闭。
+ * 与选项去向）——开关只切换同一生成结果的文本，不改动画布或项目实体，并清除
+ * 上一变体的复制回执。预览、复制与下载消费同一全文。Esc / 点击遮罩关闭。
  * 文件保存对话框随后续 Tauri 集成升级。
  */
 export default function ExportDialog({ projectName, model, onClose }: ExportDialogProps) {
-  const [copied, setCopied] = useState(false)
   const [showOutline, setShowOutline] = useState(false)
-  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const { copyAll, copied, resetCopied, download } = useScriptExportActions(
+    showOutline ? model.outline : model.plain,
+    `${projectName}-剧本`,
+  )
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
     }
     document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('keydown', onKey)
-      if (copyTimer.current) clearTimeout(copyTimer.current)
-    }
+    return () => document.removeEventListener('keydown', onKey)
   }, [onClose])
-
-  const text = showOutline ? model.outline : model.plain
-
-  const copyAll = async () => {
-    // 无剪贴板权限的环境（部分 WebView）clipboard API 会挂起，限时回退到全选预览
-    const written = await Promise.race([
-      navigator.clipboard.writeText(text).then(() => true).catch(() => false),
-      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 800)),
-    ])
-    if (written) {
-      setCopied(true)
-      if (copyTimer.current) clearTimeout(copyTimer.current)
-      copyTimer.current = setTimeout(() => setCopied(false), 1600)
-    } else {
-      const sel = window.getSelection()
-      const pre = document.querySelector('.pw-export-pre')
-      if (sel && pre) {
-        const range = document.createRange()
-        range.selectNodeContents(pre)
-        sel.removeAllRanges()
-        sel.addRange(range)
-      }
-    }
-  }
-
-  const download = () => {
-    const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${projectName}-剧本.md`
-    a.click()
-    URL.revokeObjectURL(url)
-  }
 
   return (
     <div className="pw-overlay" onPointerDown={onClose}>
@@ -94,13 +60,16 @@ export default function ExportDialog({ projectName, model, onClose }: ExportDial
             ✕
           </button>
         </div>
-        <pre className="pw-export-pre">{text}</pre>
+        <pre className="pw-export-pre">{showOutline ? model.outline : model.plain}</pre>
         <div className="pw-dialog-foot">
           <label className="pw-export-toggle">
             <input
               type="checkbox"
               checked={showOutline}
-              onChange={(e) => setShowOutline(e.target.checked)}
+              onChange={(e) => {
+                setShowOutline(e.target.checked)
+                resetCopied()
+              }}
             />
             <span>创作大纲（节奏与分支）</span>
           </label>

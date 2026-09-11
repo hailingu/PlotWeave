@@ -94,6 +94,30 @@ describe('ExportDialog（剧本导出对话框）', () => {
     clickSpy.mockRestore()
   })
 
+  it('复制成功后切换大纲开关即清除「已复制」态，不谎报剪贴板内容（review #81）', async () => {
+    vi.useFakeTimers()
+    try {
+      const writeText = vi.fn().mockResolvedValue(undefined)
+      stubClipboard(writeText)
+      setup()
+      fireEvent.click(screen.getByRole('button', { name: '复制全文' }))
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(screen.getByRole('button', { name: '✓ 已复制' })).toBeTruthy()
+
+      // 1.6s 恢复计时未到就切换变体：按钮不得继续显示上一变体已复制
+      fireEvent.click(outlineToggle())
+      expect(screen.getByRole('button', { name: '复制全文' })).toBeTruthy()
+
+      // 切回同样不恢复旧态
+      fireEvent.click(outlineToggle())
+      expect(screen.getByRole('button', { name: '复制全文' })).toBeTruthy()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('无正文时提示正文为空并引导开启大纲；开启后提示随态更新', () => {
     setup({ model: model({ plain: '# 空项目', outline: '# 空项目\n\n- 节拍 · 留白', hasNarrative: false }) })
     expect(screen.getByText(/正文为空（尚无场景与对白）/)).toBeTruthy()

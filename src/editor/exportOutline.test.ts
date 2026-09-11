@@ -191,6 +191,39 @@ describe('buildExportOutline（导出大纲投影）', () => {
     expect(groups[1].rows.map((r) => r.text)).toEqual(['场 02 · 二集开场'])
   })
 
+  it('同一选项连向多个目标时逐个列出，不静默丢弃（review #81）', () => {
+    const nodes = [
+      scene('s1', 0, 1, '开场'),
+      branch('b1', 100, '往哪走？', [{ id: 'o1', label: '向左' }]),
+      scene('s2', 200, 2, '左路'),
+      scene('s3', 300, 3, '左路支线'),
+    ]
+    // 同一 option 句柄挂两条边：isDuplicateEdge 含 target，交互与落盘模型均允许
+    const edges = [
+      seq('e1', 's1', 'b1'),
+      branchEdge('b1-o1a', 'b1', 'o1', 's2'),
+      branchEdge('b1-o1b', 'b1', 'o1', 's3'),
+    ]
+    expect(labels(nodes, edges)).toContain('向左 → 场 02 · 左路 / 场 03 · 左路支线')
+  })
+
+  it('选项目标为节奏卡时沿用其兑现状态，同一导出内不自相矛盾（review #81）', () => {
+    const nodes = [
+      scene('s1', 0, 1, '开场'),
+      branch('b1', 100, '停顿？', [{ id: 'o1', label: '停顿' }]),
+      beat('bt1', 200, '留白', '舒缓'),
+      scene('s2', 300, 2, '承载场'),
+    ]
+    const edges = [
+      seq('e1', 's1', 'b1'),
+      branchEdge('b1-o1', 'b1', 'o1', 'bt1'),
+      seq('e2', 'bt1', 's2'),
+    ]
+    const out = labels(nodes, edges)
+    expect(out).toContain('停顿 → 节拍 · 留白 · 舒缓 · ✓ 兑现于 场 02 · 承载场')
+    expect(out).not.toContain('停顿 → 节拍 · 留白 · 舒缓 · 待兑现')
+  })
+
   it('attach 下挂边不进入剧情流，分镜与图片节点不出现在大纲', () => {
     const nodes = [scene('s1', 0, 1, '开场'), scene('s2', 100, 2, '接续'), shot('sh1', 50), image('im1', 60)]
     const edges = [attach('a1', 's1', 'sh1'), seq('e1', 's1', 's2')]

@@ -85,10 +85,18 @@ function branchText(n: OutlineNode): string {
   return `分支 · ${text((n.data as { prompt?: unknown }).prompt)}`
 }
 
-/** 选项去向：目标节点的可读标签；未连线与失效目标分别显式标注。 */
-function optionDestination(edge: Edge | undefined, byId: ReadonlyMap<string, CanvasNode>): string {
-  if (!edge) return '（未连线）'
-  return destinationLabel(byId, edge.target) ?? '（目标已删除）'
+/** 选项去向：全部已连目标的可读标签，逐个列出（同一选项可连多个目标——
+ * `isDuplicateEdge` 含 target，交互与落盘模型均允许；只取首条会静默丢路径）。
+ * 未连线与失效目标分别显式标注。 */
+function optionDestination(
+  targets: Edge[],
+  byId: ReadonlyMap<string, CanvasNode>,
+  fulfillment: ReadonlyMap<string, BeatFulfillment>,
+): string {
+  if (targets.length === 0) return '（未连线）'
+  return targets
+    .map((e) => destinationLabel(byId, e.target, fulfillment) ?? '（目标已删除）')
+    .join(' / ')
 }
 
 /** 分支选项行：未连线显式标注，不静默丢失出口（issue #48 验收）。 */
@@ -96,11 +104,12 @@ function optionRows(
   branch: OutlineNode,
   edges: Edge[],
   byId: ReadonlyMap<string, CanvasNode>,
+  fulfillment: ReadonlyMap<string, BeatFulfillment>,
 ): ExportOutlineRow[] {
   const options = (branch.data as BranchFlowNode['data']).options
   if (!Array.isArray(options)) return []
   return options.map((opt) => {
-    const edge = edges.find(
+    const targets = edges.filter(
       (e) =>
         e.source === branch.id &&
         edgeKindOf(e) === 'branch' &&
@@ -109,16 +118,21 @@ function optionRows(
     return {
       kind: 'option' as const,
       level: 2,
-      text: `${text(opt.label)} → ${optionDestination(edge, byId)}`,
+      text: `${text(opt.label)} → ${optionDestination(targets, byId, fulfillment)}`,
     }
   })
 }
 
-/** 节点的可读去向标签（悬空或非叙事目标返回 null）。 */
-function destinationLabel(byId: ReadonlyMap<string, CanvasNode>, id: string): string | null {
+/** 节点的可读去向标签（悬空或非叙事目标返回 null）；节奏卡目标沿用其
+ * 兑现状态，避免选项目的行与节拍自身行在同一导出内自相矛盾。 */
+function destinationLabel(
+  byId: ReadonlyMap<string, CanvasNode>,
+  id: string,
+  fulfillment: ReadonlyMap<string, BeatFulfillment>,
+): string | null {
   const node = byId.get(id)
   if (!node || !isOutlineNode(node)) return null
-  return node.type === 'scene' ? sceneLabel(node) : rowText(node, undefined)
+  return node.type === 'scene' ? sceneLabel(node) : rowText(node, fulfillment.get(node.id))
 }
 
 /** 每组的剧情流边：两端都在本组、且 source 为叙事节点的 sequence 边。
@@ -215,7 +229,7 @@ function nodeRows(
   const rows: ExportOutlineRow[] = [
     { kind: 'node', level: 0, text: `${rowText(n, fulfillment.get(n.id))}${suffix}` },
   ]
-  if (n.type === 'branch') rows.push(...optionRows(n, edges, byId))
+  if (n.type === 'branch') rows.push(...optionRows(n, edges, byId, fulfillment))
   return rows
 }
 
