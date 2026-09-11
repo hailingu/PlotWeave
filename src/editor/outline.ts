@@ -28,8 +28,12 @@ export interface BeatFulfillment {
 
 const pad2 = (n: number) => String(n).padStart(2, '0')
 
-const sceneLabel = (n: CanvasNode): string =>
-  `场 ${pad2((n.data as { sceneNo: number }).sceneNo)} · ${(n.data as { name: string }).name}`
+/** 场景行内标签，如「场 03 · 天台对峙」：大纲行、节拍兑现状态与导出大纲
+ * 共用同一口径（名称字段防御非字符串，脏数据不产出 "undefined" 字样）。 */
+export const sceneLabel = (n: CanvasNode): string => {
+  const d = n.data as { sceneNo: number; name: unknown }
+  return `场 ${pad2(d.sceneNo)} · ${typeof d.name === 'string' ? d.name : ''}`
+}
 
 /** 派生全部节拍的兑现状态（画布胶囊与大纲行共用）。 */
 export function beatFulfillmentMap(

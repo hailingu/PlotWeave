@@ -4,7 +4,7 @@
  */
 import CanvasContextMenu from './CanvasContextMenu'
 import ExportDialog from './ExportDialog'
-import { buildScriptMarkdown } from './exportScript'
+import { buildScriptExport } from './exportScript'
 import type { EditorLayoutProps } from './editorLayoutProps'
 
 /** 右键菜单：节点 = 设置/复制/删除；空白 = 五类新增（§4.3）。 */
@@ -26,17 +26,18 @@ export default function EditorOverlays(props: EditorLayoutProps) {
           onClose={() => panels.setCtxMenu(null)}
         />
       )}
-      {/* 剧本导出对话框（§3.3/§3.5）：打开时按当前画布生成 */}
+      {/* 剧本导出对话框（§3.3/§3.5）：打开时按当前画布生成一次，正文与可选大纲共用 */}
       {panels.exportOpen && (
         <ExportDialog
           projectName={project.name}
-          text={buildScriptMarkdown(
-            project.name,
-            doc.nodes,
-            doc.edges,
-            doc.settings,
-            doc.assetsRef.current,
-          )}
+          model={buildScriptExport({
+            projectName: project.name,
+            nodes: doc.nodes,
+            edges: doc.edges,
+            settings: doc.settings,
+            assets: doc.assetsRef.current,
+            episodeTitles: doc.episodeTitles,
+          })}
           onClose={() => panels.setExportOpen(false)}
         />
       )}
