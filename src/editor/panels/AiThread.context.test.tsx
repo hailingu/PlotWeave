@@ -420,4 +420,21 @@ describe('AiThread 在途回合跨卸载按项目认领（issue #63）', () => {
     await act(async () => { reply({ role: 'assistant', content: '辗转到达。' }) })
     expect(await screen.findByText('辗转到达。')).toBeTruthy()
   })
+
+  it('认领的迟到批次按当前画布重校验：目标已删则整批拒绝执行', async () => {
+    // 在途回合约住已卸载实例的校验闭包（issue #63 评审）：迟到批次的
+    // 预览若沿用离开前的旧校验结果，用户会基于过期预览确认执行。
+    const reply = deferredReply()
+    const h = await setup({ projectId: 'p63-revalidate' })
+    await sendInFlight('丰富旁白')
+    const session = normalizeAiSession(h.saved[h.saved.length - 1]).session
+    h.unmount()
+    await act(async () => { reply(proposal()) }) // 旧闭包校验通过（d1 仍在旧画布）
+    await setup({ projectId: 'p63-revalidate', session, nodes: [] }) // 重开后目标已删
+    expect(await screen.findByText(/给开场补充旁白/)).toBeTruthy()
+    const execute = screen.getByRole('button', { name: '✓ 执行改动' }) as HTMLButtonElement
+    expect(execute.disabled).toBe(true)
+    const claimed = screen.getByRole('button', { name: '✓ 执行改动' }).closest('.pw-ai-entry')
+    expect(claimed?.textContent).toContain('第 1 条')
+  })
 })

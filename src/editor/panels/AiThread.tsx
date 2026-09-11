@@ -75,6 +75,19 @@ function reconcilePendingCard(
   return { ...next, status: 'pending' }
 }
 
+/** 恢复/认领的待执行卡按当前画布重校验（§12.2 历史展示同口径）：落盘或
+ * 迟到批次带回的校验结果可能基于离开前的旧画布（认领回合约住的是已
+ * 卸载实例的校验闭包），预览与可执行状态必须反映当前内容；拒绝卡缺少
+ * 完整原始批次，不重判为合法整批。 */
+function revalidatePendingCard(
+  card: NonNullable<ThreadEntry['card']>,
+  validateCommands: ((commands: AiCommand[]) => BatchValidation | null) | undefined,
+): NonNullable<ThreadEntry['card']> {
+  if (!validateCommands || !card.v.ok) return card
+  const validation = validateCommands(toInboundCommands(card.v.commands))
+  return validation ? { ...card, v: validation } : card
+}
+
 /** 用当前画布重建原先合法卡片的预览，拒绝信任落盘的确认元数据；
  * 校验拒绝卡没有完整原始批次，不能把空命令或合法子集重新判成合法整批。
  * 历史执行卡标注 historical——撤销栈不跨会话存活，不得宣称可撤销。
@@ -93,9 +106,7 @@ function restoreThreadEntries(
     if (based.card?.status !== 'pending') return based
     const card = reconcilePendingCard(based.card, aiRevision)
     if (card.status === 'executed') return { ...based, card }
-    if (!validateCommands || !card.v.ok) return { ...based, card }
-    const validation = validateCommands(toInboundCommands(card.v.commands))
-    return validation ? { ...based, card: { ...card, v: validation } } : { ...based, card }
+    return { ...based, card: revalidatePendingCard(card, validateCommands) }
   })
 }
 
@@ -214,6 +225,21 @@ function useAiThreadMessages(opts: {
   return { thread, armedIdx, setArmedIdx, threadRef, nextId, append, executeCard, markDismissed }
 }
 
+/** 认领条目的重定映射：id 经当前实例重定基（旧计数器已随卸载作废，
+ * 沿用会与恢复条目撞 key）；待执行卡按当前画布重校验——迟到批次带回的
+ * 校验结果基于已卸载实例的旧闭包，不得作为执行预览（issue #63 评审）。 */
+function claimedEntries(
+  entries: ThreadEntry[],
+  nextId: () => number,
+  validateCommands: ((commands: AiCommand[]) => BatchValidation | null) | undefined,
+): ThreadEntry[] {
+  return entries.map((entry) => {
+    const claimed = { ...entry, id: nextId() }
+    if (entry.card?.status !== 'pending') return claimed
+    return { ...claimed, card: revalidatePendingCard(entry.card, validateCommands) }
+  })
+}
+
 /** 在途回合认领域（issue #63）：挂载即独占认领本项目的在途回合——
  * 等待中恢复忙碌态，落定经 applyRef 上屏并经既有保存通道落盘；落定前
  * 再卸载则归还注册表。StrictMode 双挂载下首个 effect 的 cleanup 先
@@ -270,14 +296,13 @@ function useAiTurn(opts: {
     aliveRef.current = true
     return () => { aliveRef.current = false }
   }, [])
-  /** 认领落定结果的上屏（每渲染同步最新闭包）：迟到条目经本实例 nextId
-   * 重定 id——旧实例计数器已随卸载作废，沿用会与恢复条目撞 key。 */
+  /** 认领落定结果的上屏（每渲染同步最新闭包）；映射见 claimedEntries。 */
   const applyClaimRef = useRef<(result: TurnResult) => void>(() => undefined)
   useEffect(() => {
     applyClaimRef.current = (result) => {
       setBusy(false)
       if (result.entries) {
-        opts.append(result.entries.map((entry) => ({ ...entry, id: opts.nextId() })))
+        opts.append(claimedEntries(result.entries, opts.nextId, opts.onValidateCommands))
       } else {
         setError(result.error ?? '请求失败')
       }
