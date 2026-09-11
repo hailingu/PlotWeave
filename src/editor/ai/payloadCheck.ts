@@ -4,9 +4,9 @@ import { branchOptionsError, nodeValueShapeError } from './patchShape'
 
 /**
  * AI 入站写载荷的字段键与值形状校验（commands.ts 拆分）：create 的 data、
- * update 的 patch 与 contingent 路径的暂定类型校验共用同一序列，错误文案
- * 单点维护。字段协议在 nodeFields.ts，值形状细节在 patchShape.ts；本模块
- * 只负责「白名单 → 值形状 → 分支选项成员」的编排与暂定类型的独立判定。
+ * update 的 patch 共用同一序列，错误文案单点维护。字段协议在
+ * nodeFields.ts，值形状细节在 patchShape.ts；本模块只负责
+ * 「白名单 → 值形状 → 分支选项成员」的编排与目标类型未知时的全局键判定。
  */
 
 /** 节点类型 → 人读标签（错误文案与预览标签共用）。 */
@@ -18,8 +18,8 @@ export const NODE_TYPE_LABELS: Record<string, string> = {
   shot: '分镜卡',
 }
 
-/** 全部可写节点类型字段的并集：update 载荷的全局键校验（contingent 路径
- * 也适用的独立判定）与白名单分类型校验的分界。 */
+/** 全部可写节点类型字段的并集：目标类型未知时（update 经批次内 create
+ * 的 ref）的全局键校验与白名单分类型校验的分界。 */
 const ANY_NODE_FIELD_KEYS = new Set<string>(Object.values(AI_FIELD_KEYS).flat())
 
 /** data/patch 字段白名单校验；返回错误文案或 null。无白名单条目的类型
@@ -55,21 +55,12 @@ export function payloadIssue(
   return null
 }
 
-/** contingent update 的载荷独立判定（目标尚未入虚拟图）：任何节点类型都
- * 不支持的字段恒非法；失败 create 已登记暂定类型时再按该类型的完整写载荷
- * 序列校验——修正 data 不改变已声明的类型语义，这些错误即使 create 修复后
- * 仍然存在。返回错误文案或 null。 */
-export function contingentUpdateIssue(
-  nodeType: string | undefined,
-  patch: Record<string, unknown>,
-  assets: ReadonlyMap<string, string>,
-  entities?: EntityTokenScope,
-): string | null {
-  if (nodeType === undefined) {
-    const globalUnknown = Object.keys(patch).filter((k) => !ANY_NODE_FIELD_KEYS.has(k))
-    return globalUnknown.length > 0
-      ? `未知字段：${globalUnknown.join('、')}（不是任何可写节点类型的字段）`
-      : null
-  }
-  return payloadIssue(nodeType, patch, assets, entities)
+/** 目标类型未知时（update 经批次内 create 的 ref，阶段 A 不读批次内命令）
+ * 的独立字段判定：任何可写节点类型都不支持的字段恒非法；类型专属的值
+ * 形状错误随修复重放在阶段 B 点名（分层暴露）。返回错误文案或 null。 */
+export function unknownTargetFieldIssue(patch: Record<string, unknown>): string | null {
+  const globalUnknown = Object.keys(patch).filter((k) => !ANY_NODE_FIELD_KEYS.has(k))
+  return globalUnknown.length > 0
+    ? `未知字段：${globalUnknown.join('、')}（不是任何可写节点类型的字段）`
+    : null
 }

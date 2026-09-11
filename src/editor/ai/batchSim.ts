@@ -239,14 +239,16 @@ const simDisconnect = (
 ): void => {
   const srcId = sim.refToId.get(cmd.sourceId) ?? cmd.sourceId
   const dstId = sim.refToId.get(cmd.targetId) ?? cmd.targetId
-  const hitIdx = sim.edges.findIndex((e) => e.source === srcId && e.target === dstId)
-  if (hitIdx < 0) return
-  const removed = sim.edges[hitIdx]
-  sim.edges = [...sim.edges.slice(0, hitIdx), ...sim.edges.slice(hitIdx + 1)]
+  // 断线按端点对整体生效（与校验侧 foldDisconnectEdge 同口径）：模拟态、
+  // forward（画布删除）与 backward（撤销还原）三者都作用于全部匹配边——
+  // 只捕获/回补首条会让撤销静默丢失其余边（评审 5174231991）
+  const removed = sim.edges.filter((e) => e.source === srcId && e.target === dstId)
+  if (removed.length === 0) return
+  sim.edges = sim.edges.filter((e) => e.source !== srcId || e.target !== dstId)
   sim.forward.push(() =>
-    ops.setEdges((eds) => eds.filter((e) => !(e.source === removed.source && e.target === removed.target))),
+    ops.setEdges((eds) => eds.filter((e) => e.source !== srcId || e.target !== dstId)),
   )
-  sim.backward.push(() => ops.setEdges((eds) => addEdge(removed, eds)))
+  sim.backward.push(() => ops.setEdges((eds) => removed.reduce((acc, e) => addEdge(e, acc), eds)))
 }
 
 /** 新建实体（issue 44）：真实 id 与默认头像样式由应用工厂分配（模拟期一次），

@@ -18,7 +18,6 @@ export function plainObject(v: unknown): v is Record<string, unknown> {
 }
 
 /** 结构化引用的实体解析（issue 44）：快照未携带设定集时不校验（旧夹具兼容）；
- * contingent = 引用指向本批失败的 upsert，随前序修复自愈，本轮跳过；
  * 跨种类（如地点 id 写进 characterIds）与未知实体都整批拒绝——放行即产生
  * 跨类型误绑或悬空引用，保存后加载侧只会静默剥离。 */
 function entityRefIssue(
@@ -29,7 +28,7 @@ function entityRefIssue(
 ): string | null {
   if (entities === undefined) return null
   const kind = entities.kindOf(token, expect)
-  if (kind === 'contingent' || kind === expect) return null
+  if (kind === expect) return null
   if (kind === null) {
     return `${field} 的${ENTITY_KIND_LABELS[expect]}实体不存在：${token}（新实体须先在本批 upsert_${expect} 声明 ref）`
   }
@@ -112,6 +111,13 @@ export function branchOptionsError(options: unknown[]): string | null {
   const bad = options.some((o) => typeof o !== 'string' && (!plainObject(o) || typeof o.label !== 'string'))
   return bad ? '分支 options 含异型成员（须为字符串或带字符串 label 的对象）' : null
 }
+
+/** options 覆盖的按位简写形态判定（评审 5169767128）：成员全为字符串或
+ * 无 id 对象时，normalizeNodeFields 按位继承旧表 id（重命名语义，修复
+ * 世界同构）——经此覆盖解析的投影存活是必然的；显式 id 成员是绝对绑定。 */
+export const isPositionalOptions = (raw: unknown): boolean =>
+  Array.isArray(raw) &&
+  raw.every((m) => typeof m === 'string' || (plainObject(m) && !('id' in m)))
 
 /** shot.refs 成员的引用位联合 + 资产目标校验（§4.2 ShotRef 的信任边界对等，
  * §7.1/§11.3）：与加载侧 isShotRefShape 同口径——双字段**键在场**即非法
@@ -213,6 +219,37 @@ function shotRefsIssue(refs: unknown, assets: ReadonlyMap<string, string>): stri
   return null
 }
 
+/** dialogue 的 lines 成员校验（S3776 拆解）：整体形状与成员的说话人引用
+ * 校验，返回问题清单（空 = 通过）。 */
+function dialogueLinesIssues(lines: unknown, entities?: EntityTokenScope): string[] {
+  const lineIssue = (l: unknown): boolean =>
+    !plainObject(l) ||
+    typeof l.text !== 'string' ||
+    // speaker 须 trim 后非空（§8.1 共同值域）：空白值会被加载侧归一化
+    // 移除——接受过的 AI 改动不得重开即变
+    ('speaker' in l && (typeof l.speaker !== 'string' || l.speaker.trim() === '')) ||
+    (l.kind !== undefined && l.kind !== 'line' && l.kind !== 'action') ||
+    // action 行不得携带 speaker：对白契约只允许 line 行有说话人，放行的
+    // 隐藏引用会进活动文档并被持久化
+    (l.kind === 'action' && 'speaker' in l) ||
+    (l.side !== undefined && l.side !== 'left' && l.side !== 'right') ||
+    (l.vo !== undefined && typeof l.vo !== 'boolean')
+  if (!Array.isArray(lines) || lines.some(lineIssue)) {
+    return ['lines 须为对象数组（text 字符串必填；kind ∈ line/action、speaker 仅 line 行可带且非空白字符串、side ∈ left/right、vo 布尔可选）']
+  }
+  const issues: string[] = []
+  lines.forEach((l, i) => {
+    if (!plainObject(l) || typeof l.speaker !== 'string') return
+    // 缺省 kind 与 normalizeNodeFields 的判别缺省同口径视为 line：
+    // 否则无 kind 的台词行绕过 speaker 引用校验，跨种类/悬空说话人
+    // 照单进活动文档并被持久化
+    if (l.kind !== undefined && l.kind !== 'line') return
+    const refIssue = entityRefIssue(l.speaker, 'character', `lines[${i}].speaker`, entities)
+    if (refIssue !== null) issues.push(refIssue)
+  })
+  return issues
+}
+
 /** 各类型的列表成员值形状（nodeValueShapeError 的分类型明细）。 */
 function listShapeIssues(
   nodeType: string,
@@ -234,32 +271,12 @@ function listShapeIssues(
     }
   }
   if (nodeType === 'dialogue' && fields.lines !== undefined) {
-    const arr = fields.lines
-    const lineIssue = (l: unknown): boolean =>
-      !plainObject(l) ||
-      typeof l.text !== 'string' ||
-      // speaker 须 trim 后非空（§8.1 共同值域）：空白值会被加载侧归一化
-      // 移除——接受过的 AI 改动不得重开即变样
-      ('speaker' in l && (typeof l.speaker !== 'string' || l.speaker.trim() === '')) ||
-      (l.kind !== undefined && l.kind !== 'line' && l.kind !== 'action') ||
-      // action 行不得携带 speaker：对白契约只允许 line 行有说话人，放行的
-      // 隐藏引用会进活动文档并被持久化
-      (l.kind === 'action' && 'speaker' in l) ||
-      (l.side !== undefined && l.side !== 'left' && l.side !== 'right') ||
-      (l.vo !== undefined && typeof l.vo !== 'boolean')
-    if (!Array.isArray(arr) || arr.some(lineIssue)) {
-      issues.push('lines 须为对象数组（text 字符串必填；kind ∈ line/action、speaker 仅 line 行可带且非空白字符串、side ∈ left/right、vo 布尔可选）')
-    } else {
-      arr.forEach((l, i) => {
-        if (!plainObject(l) || typeof l.speaker !== 'string') return
-        // 缺省 kind 与 normalizeNodeFields 的判别缺省同口径视为 line：
-        // 否则无 kind 的台词行绕过 speaker 引用校验，跨种类/悬空说话人
-        // 照单进活动文档并被持久化
-        if (l.kind !== undefined && l.kind !== 'line') return
-        const refIssue = entityRefIssue(l.speaker, 'character', `lines[${i}].speaker`, entities)
-        if (refIssue !== null) issues.push(refIssue)
-      })
-    }
+    issues.push(...dialogueLinesIssues(fields.lines, entities))
+  }
+  if (nodeType === 'branch' && fields.options !== undefined && !Array.isArray(fields.options)) {
+    // 列表容器先于成员校验（issue 46）：非数组 options 若放行，payloadIssue
+    // 的 Array.isArray 门与 normalizeNodeFields 都会跳过，异型值直达画布分支节点
+    issues.push('options 须为数组')
   }
   if (nodeType === 'shot' && fields.refs !== undefined) {
     const issue = shotRefsIssue(fields.refs, assets)

@@ -1,42 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { validateAiBatch, type AiGraphSnapshot } from './commands'
 import { wouldCreateCycle } from '../graphRules'
-
-/** 测试用快照：节拍 n2 → 场景 n1 的两节点剧情流（无资产）。 */
-function snap(): AiGraphSnapshot {
-  return {
-    nodes: [
-      { id: 'n1', type: 'scene', label: '场 01 · 天台' },
-      { id: 'n2', type: 'beat', label: '节拍 · 开端' },
-    ],
-    edges: [{ source: 'n2', target: 'n1' }],
-    assets: new Map(),
-  }
-}
-
-/** 测试用快照：场景 s1 下挂分镜 sh1，分支 b1（两个选项）；含 image/audio 资产。 */
-function richSnap(): AiGraphSnapshot {
-  return {
-    nodes: [
-      { id: 's1', type: 'scene', label: '场 01 · 天台' },
-      { id: 'sh1', type: 'shot', label: 'SHOT01·中景' },
-      {
-        id: 'b1',
-        type: 'branch',
-        label: '分支 · 追或不追？',
-        options: [
-          { id: 'ob-a', label: '追' },
-          { id: 'ob-b', label: '不追' },
-        ],
-      },
-    ],
-    edges: [],
-    assets: new Map([
-      ['a-img', 'image/png'],
-      ['a-aud', 'audio/mpeg'],
-    ]),
-  }
-}
+import { richSnap, snap } from './testGraphs'
 
 describe('validateAiBatch：校验折叠（数据模型 §12，执行前批量预览）', () => {
   it('合法混合批次逐项折叠；commands 保持原始执行顺序', () => {
@@ -764,6 +729,23 @@ describe('分类型连线校验（剧情流 / 分支选项出口 / 分镜下挂�
     expect(ok.ok).toBe(true)
   })
 
+  it('端点断线移除全部同端点虚拟边：反向连线不因残留边误报成环（评审 5164943585）', () => {
+    // 断线命令无端口参数，执行通道按端点对移除全部同端点边（batchSim 的
+    // forward 过滤同语义）：两条不同选项出口边一并清除，校验态须同口径，
+    // 否则反向剧情流连线被残留边误判成环
+    const v = validateAiBatch(
+      [
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 1 },
+        { op: 'disconnect_edge', sourceId: 'b1', targetId: 's1' },
+        { op: 'connect_edge', sourceId: 's1', targetId: 'b1' },
+      ],
+      richSnap(),
+    )
+    expect(v.ok, JSON.stringify(v.issues)).toBe(true)
+    expect(v.commands).toHaveLength(4)
+  })
+
   it('同对节点的 sequence 涉及分镜卡：拒绝——attach 才是场景↔分镜的唯一连线', () => {
     const v = validateAiBatch(
       [{ op: 'connect_edge', sourceId: 's1', targetId: 'sh1', edgeKind: 'sequence' }],
@@ -805,6 +787,65 @@ describe('validateAiBatch：分支 options 级联簿记前的成员形状校验�
       richSnap(),
     )
     expect(good.ok).toBe(true)
+  })
+
+  // 契约 token 断言：issue #46 的验收标准要求错误信息指名 `options`
+  // （不锁定具体措辞，避免无害文案编辑破坏套件）。
+  it('options 非数组（issue 46）：update 与 create 整批拒绝并点名 options，不得直抵画布', () => {
+    const update = validateAiBatch(
+      [{ op: 'update_node', nodeId: 'b1', patch: { options: 'foo' } }],
+      richSnap(),
+    )
+    expect(update.ok).toBe(false)
+    expect(update.commands).toEqual([])
+    expect(update.issues[0]?.message).toContain('options')
+
+    const create = validateAiBatch(
+      [{ op: 'create_node', nodeType: 'branch', data: { prompt: '？', options: 42 } }],
+      richSnap(),
+    )
+    expect(create.ok).toBe(false)
+    expect(create.commands).toEqual([])
+    expect(create.issues[0]?.message).toContain('options')
+  })
+
+  it('经 ref 的 update 携非数组 options：随 create 修复重放在阶段 B 点名（分层）', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'create_node', nodeType: 'branch', ref: 'nb', data: { prompt: '？', options: [{ label: 5 }] } },
+        { op: 'update_node', nodeId: 'nb', patch: { options: {} } },
+      ],
+      richSnap(),
+    )
+    // 两阶段契约（owner 批准）：create 形状失败 → 阶段 B 不运行，update 的
+    // 类型专属错误分层延后，不诱导模型在首轮改写它
+    expect(v.ok).toBe(false)
+    expect(v.issues).toHaveLength(1)
+    expect(v.issues[0]?.index).toBe(0)
+
+    const repaired = validateAiBatch(
+      [
+        { op: 'create_node', nodeType: 'branch', ref: 'nb', data: { prompt: '？', options: ['追'] } },
+        { op: 'update_node', nodeId: 'nb', patch: { options: {} } },
+      ],
+      richSnap(),
+    )
+    expect(repaired.ok).toBe(false)
+    expect(repaired.issues.some((i) => i.index === 1 && i.message.includes('options'))).toBe(true)
+  })
+
+  it('非数组 options 更新失败同样登记 contingent（评审 5163172679）：越界连线不点名', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'update_node', nodeId: 'b1', patch: { options: 'foo' } },
+        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 2 },
+      ],
+      richSnap(),
+    )
+    expect(v.ok).toBe(false)
+    expect(v.issues).toHaveLength(1)
+    expect(v.issues[0]?.message).toContain('options')
+    expect(v.issues.map((i) => i.message).join('\n')).not.toContain('optionIndex')
   })
 })
 
@@ -1299,7 +1340,7 @@ describe('validateAiBatch：完整问题收集（评审 5138829847：纠错回�
     expect(v.issues.map((i) => i.message).join('\n')).not.toContain('端点不存在')
   })
 
-  it('与失败前序无关的真实缺失仍独立点名（不过度抑制）', () => {
+  it('前序形状失败时其后的真实缺失分层延后：修复重放后独立点名', () => {
     const v = validateAiBatch(
       [
         { op: 'create_node', nodeType: 'beat', data: { label: '立足' }, ref: 'b' },
@@ -1307,12 +1348,24 @@ describe('validateAiBatch：完整问题收集（评审 5138829847：纠错回�
       ],
       snap(),
     )
-    expect(v.issues).toHaveLength(2)
+    // 阶段 B 首错即停：create 失败 → connect 本轮不校验（分层，契约变更）
+    expect(v.issues).toHaveLength(1)
     expect(v.issues[0]?.message).toContain('label')
-    expect(v.issues[1]?.message).toContain('端点不存在')
+
+    const repaired = validateAiBatch(
+      [
+        { op: 'create_node', nodeType: 'beat', data: { name: '立足' }, ref: 'b' },
+        { op: 'connect_edge', sourceId: 'zz', targetId: 'n1' },
+      ],
+      snap(),
+    )
+    // 拒绝语义按命令定位断言（评审 5174231991：诊断措辞不作契约）
+    expect(repaired.ok).toBe(false)
+    expect(repaired.issues).toHaveLength(1)
+    expect(repaired.issues[0]?.index).toBe(1)
   })
 
-  it('update_node / delete_node 混合批次： contingent 引用跳过，独立命令照常校验', () => {
+  it('阶段 A 命中即整批拒绝：不折叠任何命令、不产预览项（原子性）', () => {
     const v = validateAiBatch(
       [
         { op: 'create_node', nodeType: 'beat', data: { summary: '小店开张' }, ref: 'b' },
@@ -1323,424 +1376,132 @@ describe('validateAiBatch：完整问题收集（评审 5138829847：纠错回�
       snap(),
     )
     expect(v.ok).toBe(false)
-    // 仅 create 的字段错误；update(b) contingent 跳过，n1 的合法修改与删除正常折叠
+    // 两阶段契约：形状失败 → 阶段 B 不运行，本轮零折叠、零预览项
     expect(v.issues).toHaveLength(1)
     expect(v.issues[0]?.message).toContain('summary')
-    expect(v.items.map((i) => i.kind)).toEqual(['delete', 'update'])
+    expect(v.items).toEqual([])
+    expect(v.commands).toEqual([])
   })
 })
 
-describe('contingent：依赖失败 branch options 更新的出口连线（评审 5139209906）', () => {
-  it('该分支的越界 optionIndex 随前序修复自愈，不点名；仅报 options 异型', () => {
+// 两阶段校验（owner 批准的契约变更）：阶段 A 逐条收集上下文无关的形状
+// 错误（白名单/值形状/options 成员/连线类型/内在 optionIndex/entityId 与
+// fields 形态），一次全量回喂——quota 按轮消耗，多错误批次一轮修完；
+// 阶段 B 在形状全过后顺序折叠，首错即停——失败之后的命令本轮不校验、
+// 不点名，级联误报由「不前进」消除，分层错误随修复重放逐轮暴露。
+describe('validateAiBatch：两阶段校验（阶段 A 全量形状 + 阶段 B 首错即停）', () => {
+  it('阶段 A 全量收集形状错误：多命令一次点名，依赖命令不级联', () => {
     const v = validateAiBatch(
       [
-        { op: 'update_node', nodeId: 'b1', patch: { options: [{ id: 'ob-a', label: '追' }, { label: 5 }] } },
-        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 2 },
+        { op: 'create_node', nodeType: 'branch', ref: 'nb', data: { prompt: '？', options: 42 } },
+        { op: 'update_node', nodeId: 'b1', patch: { nope: 1 } },
+        { op: 'connect_edge', sourceId: 'nb', targetId: 's1' },
       ],
       richSnap(),
     )
     expect(v.ok).toBe(false)
     expect(v.commands).toEqual([])
-    expect(v.issues).toHaveLength(1)
-    expect(v.issues[0]?.message).toContain('异型')
-    expect(v.issues.map((i) => i.message).join('\n')).not.toContain('optionIndex')
+    // create 与 update 的形状错误全量点名；connect 依赖失败 create，
+    // 阶段 B 不运行、不产生「端点不存在」级联
+    expect(v.issues.map((i) => i.index)).toEqual([0, 1])
   })
 
-  it('豁免只限失败更新的分支：其他分支的越界连线仍独立点名', () => {
-    const s: AiGraphSnapshot = {
-      nodes: [
-        { id: 's1', type: 'scene', label: '场' },
-        { id: 'b1', type: 'branch', label: '分支一', options: [{ id: 'o1', label: 'A' }] },
-        { id: 'b2', type: 'branch', label: '分支二', options: [{ id: 'o2', label: 'B' }] },
+  it('连线类型与内在 optionIndex 属阶段 A：与形状错误同轮全量点名', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'create_node', nodeType: 'branch', ref: 'nb', data: { prompt: '？', options: 42 } },
+        { op: 'connect_edge', sourceId: 'nb', targetId: 's1', edgeKind: 'weird' },
+        { op: 'connect_edge', sourceId: 'nb', targetId: 's1', edgeKind: 'branch', optionIndex: -1 },
       ],
+      richSnap(),
+    )
+    expect(v.issues.map((i) => i.index)).toEqual([0, 1, 2])
+  })
+
+  it('阶段 B 首错即停：独立结构错误只报首条，其余本轮不校验', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'connect_edge', sourceId: 'n1', targetId: 'ghost-a' },
+        { op: 'connect_edge', sourceId: 'n2', targetId: 'ghost-b' },
+      ],
+      snap(),
+    )
+    expect(v.ok).toBe(false)
+    expect(v.issues).toHaveLength(1)
+    expect(v.issues[0]?.index).toBe(0)
+  })
+
+  it('create 形状失败时，经 ref 的 update 类型专属错误分层延后（首轮不点名）', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'create_node', nodeType: 'branch', ref: 'nb', data: { prompt: '？', options: 42 } },
+        { op: 'update_node', nodeId: 'nb', patch: { prompt: 5 } },
+      ],
+      richSnap(),
+    )
+    // prompt 属可写类型字段的并集：阶段 A 不按未知类型点名；类型专属的
+    // 值形状错误随修复重放在阶段 B 点名（分层暴露，契约变更决策）
+    expect(v.issues).toHaveLength(1)
+    expect(v.issues[0]?.index).toBe(0)
+  })
+
+  it('实体 upsert 的 fields 形状错误属阶段 A：全量点名', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'upsert_character', fields: { name: 5 } },
+        { op: 'upsert_location', fields: { nope: 'x' } },
+      ],
+      entSnap(),
+    )
+    expect(v.ok).toBe(false)
+    expect(v.issues.map((i) => i.index)).toEqual([0, 1])
+  })
+
+  it('前序 delete + 同名 ref 重建换主：update 类型专属检查让位阶段 B（评审 5174231991）', () => {
+    const snapWithX: AiGraphSnapshot = {
+      nodes: [{ id: 'x', type: 'scene', label: '场 01' }],
       edges: [],
       assets: new Map(),
     }
     const v = validateAiBatch(
       [
-        { op: 'update_node', nodeId: 'b1', patch: { options: ['A', { label: 5 }] } },
-        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 1 },
-        { op: 'connect_edge', sourceId: 'b2', targetId: 's1', edgeKind: 'branch', optionIndex: 5 },
+        { op: 'delete_node', nodeId: 'x' },
+        { op: 'create_node', nodeType: 'beat', ref: 'x', data: { name: '立足' } },
+        { op: 'update_node', nodeId: 'x', patch: { tone: '紧凑' } },
       ],
-      s,
+      snapWithX,
     )
-    expect(v.ok).toBe(false)
-    expect(v.issues).toHaveLength(2)
-    expect(v.issues[0]?.index).toBe(0)
-    expect(v.issues[0]?.message).toContain('异型')
-    expect(v.issues[1]?.index).toBe(2)
-    expect(v.issues[1]?.message).toContain('optionIndex')
+    // 顺序语义：x 被删后由同名 ref 重建为 beat，tone 是 beat 合法字段——
+    // 阶段 A 的快照类型已过期，不得按 scene 拒绝合法批次
+    expect(v.ok).toBe(true)
+    expect(v.commands).toHaveLength(3)
   })
-})
 
-describe('contingent：依赖失败连线变更的后续连线（评审 5139616254）', () => {
-  it('依赖失败断线的反向连线按 contingent 跳过，不误报成环', () => {
-    // 既有 n2 → n1；模型想反转：断线写反（n1→n2 不存在）失败，反向连线
-    // n1 → n2 在残留边上被误报成环——修复断线后本会合法
+  it('delete 在后的 update 仍按快照类型全量点名（对照）', () => {
     const v = validateAiBatch(
       [
-        { op: 'disconnect_edge', sourceId: 'n1', targetId: 'n2' },
-        { op: 'connect_edge', sourceId: 'n1', targetId: 'n2' },
-      ],
-      snap(),
-    )
-    expect(v.ok).toBe(false)
-    expect(v.commands).toEqual([])
-    expect(v.issues).toHaveLength(1)
-    expect(v.issues[0]?.message).toContain('没有这条连线')
-    expect(v.issues.map((i) => i.message).join('\n')).not.toContain('会造成循环剧情')
-  })
-
-  it('依赖失败连线的断线按 contingent 跳过，不误报「没有这条连线」', () => {
-    const v = validateAiBatch(
-      [
-        { op: 'connect_edge', sourceId: 'n1', targetId: 'n2' },
-        { op: 'disconnect_edge', sourceId: 'n1', targetId: 'n2' },
-      ],
-      snap(),
-    )
-    expect(v.issues).toHaveLength(1)
-    expect(v.issues[0]?.message).toContain('会造成循环剧情')
-  })
-
-  it('无失败断线依托的真实成环仍独立点名（不过度抑制）', () => {
-    const v = validateAiBatch([{ op: 'connect_edge', sourceId: 'n1', targetId: 'n2' }], snap())
-    expect(v.issues).toHaveLength(1)
-    expect(v.issues[0]?.message).toContain('会造成循环剧情')
-  })
-})
-
-describe('contingent 连线的独立约束仍进首轮清单（评审 5139865818）', () => {
-  it('contingent 出口连线仍独立校验端点类型，与 options 异型并列收集', () => {
-    const v = validateAiBatch(
-      [
-        { op: 'update_node', nodeId: 'b1', patch: { options: [{ id: 'ob-a', label: '追' }, { label: 5 }] } },
-        { op: 'connect_edge', sourceId: 'b1', targetId: 'sh1', edgeKind: 'branch', optionIndex: 2 },
+        { op: 'update_node', nodeId: 's1', patch: { nope: 1 } },
+        { op: 'delete_node', nodeId: 'sh1' },
       ],
       richSnap(),
     )
     expect(v.ok).toBe(false)
-    expect(v.commands).toEqual([])
-    // options 异型 + 端点类型（分支连线不得指向分镜卡）均独立于选项表，
-    // 首轮即进完整清单；仅 optionIndex 越界延后
-    expect(v.issues).toHaveLength(2)
-    expect(v.issues[0]?.message).toContain('异型')
-    expect(v.issues[1]?.message).toContain('分镜卡不参与剧情流')
-    expect(v.issues.map((i) => i.message).join('\n')).not.toContain('optionIndex')
+    expect(v.issues.map((i) => i.index)).toEqual([0])
   })
-})
 
-describe('失败标记的生命周期：成功覆盖 options 后清除（评审 5139995027）', () => {
-  it('后续成功更新后，连线按最新选项表独立校验 optionIndex', () => {
+  it('删除只按 token 降级：无关 update 的类型错误仍进阶段 A 聚合（评审 5174367120）', () => {
     const v = validateAiBatch(
       [
-        { op: 'update_node', nodeId: 'b1', patch: { options: [{ id: 'ob-a', label: '追' }, { label: 5 }] } },
-        { op: 'update_node', nodeId: 'b1', patch: { options: ['只留一个'] } },
-        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 2 },
+        { op: 'delete_node', nodeId: 'sh1' },
+        { op: 'update_node', nodeId: 'b1', patch: { tone: '紧凑' } },
+        { op: 'update_node', nodeId: 's1', patch: { prompt: '？' } },
       ],
       richSnap(),
     )
+    // tone/prompt 各自不是目标类型的字段：与被删 sh1 无关的 update 不随
+    // 全局降级——阶段 A 一次点名两条（全局开关会把它们变成每轮一条的
+    // 串行发现，配额可在第四条错误前耗尽）
     expect(v.ok).toBe(false)
-    // 失败标记已被成功的 options 覆盖清除：越界按最新单选项表独立点名
-    expect(v.issues).toHaveLength(2)
-    expect(v.issues[0]?.index).toBe(0)
-    expect(v.issues[0]?.message).toContain('异型')
-    expect(v.issues[1]?.index).toBe(2)
-    expect(v.issues[1]?.message).toContain('optionIndex')
-  })
-})
-
-describe('contingent 不屏蔽独立可判定的约束（评审 5140147147）', () => {
-  it('同一失败 ref 兼作两端的必然自环不被 contingent 屏蔽', () => {
-    const v = validateAiBatch(
-      [
-        { op: 'create_node', nodeType: 'beat', data: { label: '立足' }, ref: 'b' },
-        { op: 'connect_edge', sourceId: 'b', targetId: 'b' },
-      ],
-      snap(),
-    )
-    expect(v.issues).toHaveLength(2)
-    expect(v.issues[0]?.message).toContain('label')
-    expect(v.issues[1]?.message).toContain('会造成循环剧情')
-  })
-
-  it('options 合法但更新因无关标量失败：连线按暂定选项表独立校验', () => {
-    const v = validateAiBatch(
-      [
-        { op: 'update_node', nodeId: 'b1', patch: { options: ['只留一个'], episodeNo: 0 } },
-        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 2 },
-      ],
-      richSnap(),
-    )
-    expect(v.issues).toHaveLength(2)
-    expect(v.issues[0]?.message).toContain('episodeNo')
-    expect(v.issues[1]?.index).toBe(1)
-    expect(v.issues[1]?.message).toContain('optionIndex')
-  })
-
-  it('失败断线不豁免必然自环', () => {
-    const v = validateAiBatch(
-      [
-        { op: 'disconnect_edge', sourceId: 'n1', targetId: 'n1' },
-        { op: 'connect_edge', sourceId: 'n1', targetId: 'n1' },
-      ],
-      snap(),
-    )
-    expect(v.issues).toHaveLength(2)
-    expect(v.issues[0]?.message).toContain('没有这条连线')
-    expect(v.issues[1]?.message).toContain('会造成循环剧情')
-  })
-})
-
-describe('暂定选项表级联与 contingent update 的独立形状（评审 5140344314）', () => {
-  it('暂定 options 同步级联删边：依赖旧出口消失的反向连线不再误报成环', () => {
-    const s: AiGraphSnapshot = {
-      nodes: [
-        { id: 's1', type: 'scene', label: '场' },
-        { id: 'b1', type: 'branch', label: '分支', options: [{ id: 'o1', label: 'A' }, { id: 'o2', label: 'B' }] },
-        { id: 'c1', type: 'beat', label: '节拍' },
-      ],
-      // o2 出口 B→C：options 更新修复后该出口被级联删除，C→B 随之合法
-      edges: [{ source: 'b1', target: 'c1', sourceHandle: 'option-o2' }],
-      assets: new Map(),
-    }
-    const v = validateAiBatch(
-      [
-        { op: 'update_node', nodeId: 'b1', patch: { options: ['保留首项'], episodeNo: 0 } },
-        { op: 'connect_edge', sourceId: 'c1', targetId: 'b1', edgeKind: 'sequence' },
-      ],
-      s,
-    )
-    expect(v.ok).toBe(false)
-    expect(v.issues).toHaveLength(1)
-    expect(v.issues[0]?.message).toContain('episodeNo')
-    expect(v.issues.map((i) => i.message).join('\n')).not.toContain('会造成循环剧情')
-  })
-
-  it('contingent ref 的 update 载荷自身错误仍独立点名', () => {
-    const v = validateAiBatch(
-      [
-        { op: 'create_node', nodeType: 'beat', data: { label: '立足' }, ref: 'b' },
-        { op: 'update_node', nodeId: 'b', patch: {} },
-        { op: 'update_node', nodeId: 'b', patch: { not_any_field: 1, tone: '紧凑' } },
-      ],
-      snap(),
-    )
-    expect(v.issues).toHaveLength(3)
-    expect(v.issues[0]?.message).toContain('label')
-    expect(v.issues[1]?.message).toContain('patch 为空')
-    expect(v.issues[2]?.message).toContain('not_any_field')
-  })
-})
-
-describe('失败标记与残留边快照的覆盖语义（评审 5140501690）', () => {
-  it('暂定选项表覆盖旧失败标记：越界 optionIndex 仍进首轮清单', () => {
-    const v = validateAiBatch(
-      [
-        { op: 'update_node', nodeId: 'b1', patch: { options: [{ id: 'ob-a', label: '追' }, { label: 5 }] } },
-        { op: 'update_node', nodeId: 'b1', patch: { options: ['只留一个'], episodeNo: 0 } },
-        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 2 },
-      ],
-      richSnap(),
-    )
-    expect(v.ok).toBe(false)
-    // 第二次更新虽因 episodeNo 失败，但 options 结果已可判定（暂定表生效）
-    // 并清除第一次异型失败留下的 contingent 标记：越界按单选项表独立点名
-    expect(v.issues).toHaveLength(3)
-    expect(v.issues[0]?.message).toContain('异型')
-    expect(v.issues[1]?.message).toContain('episodeNo')
-    expect(v.issues[2]?.index).toBe(2)
-    expect(v.issues[2]?.message).toContain('optionIndex')
-  })
-
-  it('失败断线后新增的反向边造成的环仍独立点名', () => {
-    const s: AiGraphSnapshot = {
-      nodes: [
-        { id: 'a', type: 'beat', label: '节拍 A' },
-        { id: 'b', type: 'beat', label: '节拍 B' },
-      ],
-      edges: [],
-      assets: new Map(),
-    }
-    const v = validateAiBatch(
-      [
-        { op: 'disconnect_edge', sourceId: 'a', targetId: 'b' },
-        { op: 'connect_edge', sourceId: 'b', targetId: 'a' },
-        { op: 'connect_edge', sourceId: 'a', targetId: 'b' },
-      ],
-      s,
-    )
-    // 空图上的失败断线无可修正的残留边：b → a 由本批中间命令新增，
-    // 修正/删除首条断线都不会移除它，第三条环错误独立进首轮清单
-    expect(v.issues).toHaveLength(2)
-    expect(v.issues[0]?.message).toContain('没有这条连线')
-    expect(v.issues[1]?.index).toBe(2)
-    expect(v.issues[1]?.message).toContain('会造成循环剧情')
-  })
-
-  it('残留同对边之外仍成环时独立点名（快照边移除后环仍在）', () => {
-    const s: AiGraphSnapshot = {
-      nodes: [
-        { id: 'a', type: 'beat', label: '节拍 A' },
-        { id: 'b', type: 'beat', label: '节拍 B' },
-        { id: 'c', type: 'beat', label: '节拍 C' },
-      ],
-      // b → a 是失败断线的同对残留边；b → c → a 是与之无关的既有路径
-      edges: [
-        { source: 'b', target: 'a' },
-        { source: 'b', target: 'c' },
-        { source: 'c', target: 'a' },
-      ],
-      assets: new Map(),
-    }
-    const v = validateAiBatch(
-      [
-        { op: 'disconnect_edge', sourceId: 'a', targetId: 'b' },
-        { op: 'connect_edge', sourceId: 'a', targetId: 'b' },
-      ],
-      s,
-    )
-    expect(v.issues).toHaveLength(2)
-    expect(v.issues[0]?.message).toContain('没有这条连线')
-    expect(v.issues[1]?.message).toContain('会造成循环剧情')
-  })
-})
-
-describe('失败 create 的暂定类型参与后续校验（评审 5143607106）', () => {
-  it('已声明类型对 contingent update 的字段白名单独立点名', () => {
-    const v = validateAiBatch(
-      [
-        { op: 'create_node', nodeType: 'beat', data: { label: '立足' }, ref: 'b' },
-        { op: 'update_node', nodeId: 'b', patch: { prompt: '追或不追？' } },
-      ],
-      snap(),
-    )
-    // create 的 nodeType 已独立通过校验：修正 data 不改变节奏卡语义，
-    // prompt 即使 create 修复后仍非法，首轮即按暂定类型点名
-    expect(v.issues).toHaveLength(2)
-    expect(v.issues[0]?.message).toContain('label')
-    expect(v.issues[1]?.message).toContain('prompt')
-    expect(v.issues[1]?.message).toContain('节奏卡')
-  })
-
-  it('已声明类型的值形状错误同样进首轮清单', () => {
-    const v = validateAiBatch(
-      [
-        { op: 'create_node', nodeType: 'scene', data: { name: 5 }, ref: 's' },
-        { op: 'update_node', nodeId: 's', patch: { episodeNo: 0 } },
-      ],
-      snap(),
-    )
-    expect(v.issues).toHaveLength(2)
-    expect(v.issues[0]?.message).toContain('name')
-    expect(v.issues[1]?.message).toContain('episodeNo')
-  })
-
-  it('暂定 branch 类型的 options 成员异型同样点名', () => {
-    const v = validateAiBatch(
-      [
-        { op: 'create_node', nodeType: 'branch', data: { prompt: 5 }, ref: 'b' },
-        { op: 'update_node', nodeId: 'b', patch: { options: [null] } },
-      ],
-      snap(),
-    )
-    expect(v.issues).toHaveLength(2)
-    expect(v.issues[0]?.message).toContain('prompt')
-    expect(v.issues[1]?.message).toContain('异型')
-  })
-})
-
-describe('contingent 出口连线入暂定拓扑（评审 5143607106）', () => {
-  it('端点已确定的 contingent 出口边参与后续成环判定', () => {
-    const v = validateAiBatch(
-      [
-        { op: 'update_node', nodeId: 'b1', patch: { options: [{ label: 5 }] } },
-        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
-        { op: 'connect_edge', sourceId: 's1', targetId: 'b1' },
-      ],
-      richSnap(),
-    )
-    // options 修复后 b1 → s1 生效，反向边 s1 → b1 仍必然成环：后续连线
-    // 按含暂定边的拓扑独立判定，不因本轮省略而漏报
-    expect(v.issues).toHaveLength(2)
-    expect(v.issues[0]?.message).toContain('异型')
-    expect(v.issues[1]?.index).toBe(2)
-    expect(v.issues[1]?.message).toContain('会造成循环剧情')
-  })
-})
-
-describe('暂定出口边随选项表变化重算（评审 5143770306）', () => {
-  it('后续 options 覆盖清空选项后，暂定出口边失效，反向连线不再误报成环', () => {
-    const v = validateAiBatch(
-      [
-        { op: 'update_node', nodeId: 'b1', patch: { options: [{ label: 5 }] } },
-        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
-        { op: 'update_node', nodeId: 'b1', patch: { options: [] } },
-        { op: 'connect_edge', sourceId: 's1', targetId: 'b1' },
-      ],
-      richSnap(),
-    )
-    // 空数组覆盖级联删除全部出口：暂定边随选项表失效，s1 → b1 实际合法
-    expect(v.issues).toHaveLength(1)
-    expect(v.issues[0]?.message).toContain('异型')
-  })
-
-  it('后续覆盖仍保留该选项位时，暂定出口边继续参与成环判定', () => {
-    const v = validateAiBatch(
-      [
-        { op: 'update_node', nodeId: 'b1', patch: { options: [{ label: 5 }] } },
-        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
-        { op: 'update_node', nodeId: 'b1', patch: { options: ['保留首项'] } },
-        { op: 'connect_edge', sourceId: 's1', targetId: 'b1' },
-      ],
-      richSnap(),
-    )
-    expect(v.issues).toHaveLength(2)
-    expect(v.issues[0]?.message).toContain('异型')
-    expect(v.issues[1]?.message).toContain('会造成循环剧情')
-  })
-})
-
-describe('暂定出口边的稳定身份与断线可见性（评审 5143929155）', () => {
-  it('同长度但换新显式选项 id 的覆盖使暂定出口边失效', () => {
-    const v = validateAiBatch(
-      [
-        { op: 'update_node', nodeId: 'b1', patch: { options: [{ label: 5 }] } },
-        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
-        { op: 'update_node', nodeId: 'b1', patch: { options: [{ id: 'opt-new', label: '换' }] } },
-        { op: 'connect_edge', sourceId: 's1', targetId: 'b1' },
-      ],
-      richSnap(),
-    )
-    // 显式新 id 覆盖后旧选项被级联替换：暂定边随稳定 id 消失，反向连线合法
-    expect(v.issues).toHaveLength(1)
-    expect(v.issues[0]?.message).toContain('异型')
-  })
-
-  it('断线命中前序暂定出口边时不误报「没有这条连线」', () => {
-    const v = validateAiBatch(
-      [
-        { op: 'update_node', nodeId: 'b1', patch: { options: [{ label: 5 }] } },
-        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
-        { op: 'disconnect_edge', sourceId: 'b1', targetId: 's1' },
-      ],
-      richSnap(),
-    )
-    expect(v.issues).toHaveLength(1)
-    expect(v.issues[0]?.message).toContain('异型')
-  })
-
-  it('暂定出口边被断线移除后，反向连线不再误报成环', () => {
-    const v = validateAiBatch(
-      [
-        { op: 'update_node', nodeId: 'b1', patch: { options: [{ label: 5 }] } },
-        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
-        { op: 'disconnect_edge', sourceId: 'b1', targetId: 's1' },
-        { op: 'connect_edge', sourceId: 's1', targetId: 'b1' },
-      ],
-      richSnap(),
-    )
-    expect(v.issues).toHaveLength(1)
-    expect(v.issues[0]?.message).toContain('异型')
+    expect(v.issues.map((i) => i.index)).toEqual([1, 2])
   })
 })

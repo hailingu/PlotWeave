@@ -15,8 +15,9 @@ import type { ProviderConfig } from '../../settings/types'
 
 /** 读工具就地回喂的最大轮数（§12.2 低轮次约束）。 */
 const READ_ROUNDS = 3
-/** 写批次的最多产出次数（首次 + 有限次纠错重试，issue 41）。 */
-const WRITE_ATTEMPTS = 3
+/** 写批次的最多产出次数：首次 + 3 次纠错重试（owner 定的 quota=3；每次
+ * 重写消耗 1 次重试，3 次后仍失败即彻底失败）。 */
+const WRITE_ATTEMPTS = 4
 
 /** 会话循环的最终产出：最后一轮的文本、解析错误与整批校验结果。 */
 export interface AgentLoopResult {
