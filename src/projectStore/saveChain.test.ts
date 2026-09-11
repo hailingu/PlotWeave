@@ -87,4 +87,44 @@ describe('项目删除与保存协调', () => {
 
     await vi.waitFor(() => expect(commands).toContain('save_project'))
   })
+
+  it('删除失败（项目仍在）：墓碑期吸收的附属写入回吐重排', async () => {
+    const id = 'delete-failure-auxiliary-replay-test'
+    const commands: string[] = []
+    invoke.mockImplementation(async (command: string) => {
+      commands.push(command)
+      if (command === 'delete_project') throw new Error('资产目录只读')
+      return undefined
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const deleting = enqueueDelete(id).catch(() => undefined)
+    await enqueueProjectWrite(id, async () => {
+      commands.push('aux-write')
+    })
+    await deleting
+
+    await vi.waitFor(() => expect(commands).toContain('aux-write'))
+    warn.mockRestore()
+  })
+
+  it('删除成功：墓碑期吸收的附属写入不回吐（已删项目不得复活）', async () => {
+    const id = 'delete-success-auxiliary-drop-test'
+    const commands: string[] = []
+    invoke.mockImplementation(async (command: string) => {
+      commands.push(command)
+      return undefined
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const deleting = enqueueDelete(id)
+    await enqueueProjectWrite(id, async () => {
+      commands.push('aux-write')
+    })
+    await deleting
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(commands).not.toContain('aux-write')
+    warn.mockRestore()
+  })
 })
