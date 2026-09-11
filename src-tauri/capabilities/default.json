@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "默认能力集：授予主窗口 Tauri 核心权限（start-dragging 不在 core:window:default 内，须显式授予，标题栏 data-tauri-drag-region 依赖它）",
+  "description": "默认能力集：授予主窗口 Tauri 核心权限（start-dragging 与 destroy 不在 core:window:default 内，须显式授予——前者是标题栏 data-tauri-drag-region 依赖，后者是 useExitFlush 注册 onCloseRequested 后唯一放行关闭出口，缺失即点击关闭按钮被静默吞掉，issue #76）",
   "windows": ["main"],
-  "permissions": ["core:default", "core:window:allow-start-dragging"]
+  "permissions": ["core:default", "core:window:allow-start-dragging", "core:window:allow-destroy"]
 }
