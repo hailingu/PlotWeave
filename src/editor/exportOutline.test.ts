@@ -84,7 +84,22 @@ describe('buildExportOutline（类型层级，review #81）', () => {
     const rows = buildExportOutline(nodes, edges, {})[0].rows
     // ExportOutlineRow.level 契约：节拍/场景 0，对白/分支 1，选项 2。
     expect(rows.map((row) => row.level)).toEqual([0, 0, 1, 1, 2, 0])
+    expect(rows.map((row) => row.kind)).toEqual(['node', 'node', 'node', 'branch', 'option', 'node'])
     expect(rows[4]).toMatchObject({ kind: 'option', text: connected ? '继续 → 场 02 · 后续' : '继续 → （未连线）' })
+  })
+})
+
+describe('buildExportOutline（分支行分类，review #81）', () => {
+  it('连通与独立分支均可按 kind 筛选，空选项分支与分段标记保留各自类别', () => {
+    const nodes = [
+      scene('s1', 0, 1, '开场'),
+      branch('b1', 100, '继续？', [{ id: 'a', label: '继续' }]),
+      branch('b2', 200, '独立问题？', []),
+    ]
+    const rows = buildExportOutline(nodes, [seq('s', 's1', 'b1')], {})[0].rows
+    expect(rows.map((row) => row.kind)).toEqual(['node', 'branch', 'option', 'marker', 'branch'])
+    expect(rows.filter((row) => row.kind === 'branch').map((row) => row.text))
+      .toEqual(['分支 · 继续？', '分支 · 独立问题？'])
   })
 })
 
@@ -371,7 +386,7 @@ describe('buildExportOutline（分支直接汇合，review #81）', () => {
       scene('s2', 300, 2, '汇合'),
     ]
     const edges = [seq('s', 's1', 's2'), branchEdge('a', 'b1', 'a', 's2'), branchEdge('b', 'b2', 'b', 's2')]
-    const rows = buildExportOutline(nodes, edges, {})[0].rows.filter((r) => r.kind === 'node')
+    const rows = buildExportOutline(nodes, edges, {})[0].rows.filter((r) => r.kind === 'node' || r.kind === 'branch')
     expect(rows.map((r) => r.text)).toEqual([
       '场 01 · 开场 · 入口',
       '分支 · 第一问？ · 入口', '分支 · 第二问？ · 入口',
@@ -389,7 +404,7 @@ describe('buildExportOutline（分支直接汇合，review #81）', () => {
       branchEdge('a', 'b1', 'a', 's1'), branchEdge('b', 'b2', 'b', 's1'),
       seq('missing', 'ghost', 's1'), attach('shot', 's1', 'sh1'),
     ]
-    const rows = buildExportOutline(nodes, edges, {})[1].rows.filter((r) => r.kind === 'node')
+    const rows = buildExportOutline(nodes, edges, {})[1].rows.filter((r) => r.kind === 'node' || r.kind === 'branch')
     expect(rows.map((r) => r.text)).toEqual(['分支 · 第二问？ · 入口', '场 01 · 目的场'])
   })
 })

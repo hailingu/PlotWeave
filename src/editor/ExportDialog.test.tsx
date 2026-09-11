@@ -8,7 +8,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import ExportDialog from './ExportDialog'
-import type { ScriptExportModel } from './exportScript'
+import { buildScriptExport, type ScriptExportModel } from './exportScript'
+import { buildCanvasNode } from './nodeFactory'
+import { EMPTY_SETTINGS } from './settings'
 
 afterEach(() => {
   cleanup()
@@ -53,9 +55,58 @@ function setup(props: { model?: ScriptExportModel; onClose?: () => void } = {}) 
   return { onClose, ...view }
 }
 
+/** 使用真实节点工厂与导出生成器核对可用性摘要到界面提示的完整链路。 */
+function generatedModel(types: ReadonlyArray<Parameters<typeof buildCanvasNode>[0]>): ScriptExportModel {
+  const nodes = types.map((type) => buildCanvasNode(type, undefined, { against: [], characters: [], center: null }))
+  return buildScriptExport({
+    projectName: '雨夜', nodes, edges: [], settings: EMPTY_SETTINGS,
+    assets: undefined, episodeTitles: {},
+  })
+}
+
 /** 读取预览文本（pre 内容即当前导出文本）。 */
 const preview = () => document.querySelector('.pw-export-pre')!.textContent
 const outlineToggle = () => screen.getByRole('checkbox', { name: /创作大纲/ }) as HTMLInputElement
+
+describe('ExportDialog（无故事内容，review #81）', () => {
+  it.each([
+    ['空画布', []], ['只有分镜', ['shot']], ['只有图片', ['image']], ['分镜和图片', ['shot', 'image']],
+  ] as const)('%s 在开关两态均显示空内容提示', (_, types) => {
+    const draft = generatedModel(types)
+    setup({ model: draft })
+    expect(screen.getByText('暂无可导出的场景、对白、节奏或分支')).toBeTruthy()
+    expect(preview()).toBe(draft.plain)
+    fireEvent.click(outlineToggle())
+    expect(screen.getByText('暂无可导出的场景、对白、节奏或分支')).toBeTruthy()
+    expect(preview()).toBe(draft.outline)
+  })
+
+  it.each(['beat', 'branch'] as const)('仅有 %s 时仍引导开启有内容的大纲', (type) => {
+    const draft = generatedModel([type])
+    setup({ model: draft })
+    expect(screen.getByText(/开启「创作大纲」可查看节奏与分支/)).toBeTruthy()
+    fireEvent.click(outlineToggle())
+    expect(screen.getByText('正文 = 场景 + 对白；创作大纲与分镜卡为附录')).toBeTruthy()
+    expect(preview()).toBe(draft.outline)
+    expect(preview()).toContain(type === 'beat' ? '新节拍' : '新的分岔是…？')
+  })
+})
+
+describe('ExportDialog（内容可用性变化，review #81）', () => {
+  it('新增内容、开启大纲、清空和恢复正文后，提示始终跟随当前模型', () => {
+    const { rerender, onClose } = setup({ model: generatedModel([]) })
+    rerender(<ExportDialog projectName="雨夜" model={generatedModel(['beat'])} onClose={onClose} />)
+    expect(screen.getByText(/开启「创作大纲」可查看节奏与分支/)).toBeTruthy()
+    fireEvent.click(outlineToggle())
+    rerender(<ExportDialog projectName="雨夜" model={generatedModel([])} onClose={onClose} />)
+    expect(outlineToggle().checked).toBe(true)
+    expect(screen.getByText('暂无可导出的场景、对白、节奏或分支')).toBeTruthy()
+    rerender(<ExportDialog projectName="雨夜" model={generatedModel(['scene'])} onClose={onClose} />)
+    expect(screen.getByText('正文 = 场景 + 对白；创作大纲与分镜卡为附录')).toBeTruthy()
+    fireEvent.click(outlineToggle())
+    expect(screen.getByText('正文 = 场景 + 对白；分镜卡见附录')).toBeTruthy()
+  })
+})
 
 /** 可控制完成时机的剪贴板替身；保留实际写入文本以核对回执与预览。 */
 function pendingClipboard() {

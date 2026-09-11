@@ -10,8 +10,9 @@ interface ExportDialogProps {
   readonly onClose: () => void
 }
 
-/** 开关态下的正文提示：无正文时引导开启大纲（issue #48）。 */
-function bodyHint(showOutline: boolean, hasNarrative: boolean): string {
+/** 根据实际内容与开关态提示：仅有节拍/分支时引导开启大纲，无故事内容则说明空态。 */
+function bodyHint(showOutline: boolean, hasNarrative: boolean, hasOutline: boolean): string {
+  if (!hasNarrative && !hasOutline) return '暂无可导出的场景、对白、节奏或分支'
   if (showOutline) return '正文 = 场景 + 对白；创作大纲与分镜卡为附录'
   if (!hasNarrative) return '正文为空（尚无场景与对白）；开启「创作大纲」可查看节奏与分支'
   return '正文 = 场景 + 对白；分镜卡见附录'
@@ -73,7 +74,7 @@ export default function ExportDialog({ projectName, model, onClose }: ExportDial
             />
             <span>创作大纲（节奏与分支）</span>
           </label>
-          <span className="pw-dialog-hint">{bodyHint(showOutline, model.hasNarrative)}</span>
+          <span className="pw-dialog-hint">{bodyHint(showOutline, model.hasNarrative, model.summary.hasOutline)}</span>
           <span className="pw-sp" />
           <button type="button" className="pw-dialog-btn" onClick={copyAll}>
             {copied ? '✓ 已复制' : '复制全文'}

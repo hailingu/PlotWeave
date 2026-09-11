@@ -194,7 +194,7 @@ function nodeSuffix(node: OutlineNode, inbound: ReadonlySet<string>, mergeCount:
   return marks.length > 0 ? ` · ${marks.join(' · ')}` : ''
 }
 
-/** 按节点类型生成层级：对白/分支为一级，节拍/场景为零级；选项紧跟问句。 */
+/** 按类型生成行类别与层级：分支问句独立分类为一级，选项紧跟问句。 */
 function nodeRows(
   n: OutlineNode,
   edges: Edge[],
@@ -203,8 +203,9 @@ function nodeRows(
   suffix: string,
 ): ExportOutlineRow[] {
   const level = n.type === 'dialogue' || n.type === 'branch' ? 1 : 0
+  const kind = n.type === 'branch' ? 'branch' : 'node'
   const rows: ExportOutlineRow[] = [
-    { kind: 'node', level, text: `${rowText(n, fulfillment.get(n.id))}${suffix}` },
+    { kind, level, text: `${rowText(n, fulfillment.get(n.id))}${suffix}` },
   ]
   if (n.type === 'branch') rows.push(...optionRows(n, edges, byId, fulfillment))
   return rows

@@ -154,7 +154,7 @@ export interface ScriptExportModel {
   plain: string
   /** 开启大纲的全文：正文 + 分镜附录 + 创作大纲附录。 */
   outline: string
-  /** 是否存在正文内容（场景或对白）；false = 只有大纲结构。 */
+  /** 是否存在正文内容（场景或对白）；正文为空时由 summary.hasOutline 区分有无节拍/分支。 */
   hasNarrative: boolean
   /** 导出范围概要（集/场/对白/节拍/分支）。 */
   summary: ExportOutlineSummary
