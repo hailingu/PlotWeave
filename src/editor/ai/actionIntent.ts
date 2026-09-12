@@ -67,8 +67,20 @@ const PREVIEW_PROMISE_AFTER =
 const PREVIEW_PROMISE_BEFORE =
   /确认(?:后|之后|以后)[^。；\n]{0,16}(?:展示|显示|呈现|列出|给出)[^。；\n]{0,10}预览/
 
+/** 否定标记（PR #92 评审）：出现在匹配片段内即不构成交付承诺，如
+ * 「确认后预览不会显示任何改动」「确认后无法展示预览」；「不」紧邻
+ * 展示动词的形态（「预览不展示」）单独覆盖，避免「不同」误伤。 */
+const NEGATION = /(?:不会|不能|无法|没有|无从|并不|并非|不(?=[展显呈列给]))/
+
+/** 匹配成功且片段内无否定标记才构成承诺；否定辖域不跨出片段——
+ * 「确认后预览会展示改动，不会丢失」中承诺仍然成立。 */
+function claimsMatch(text: string, pattern: RegExp): boolean {
+  const span = pattern.exec(text)?.[0]
+  return span !== undefined && !NEGATION.test(span)
+}
+
 /** 模型主动声称提供预览时也应核对交付，不依赖用户是否用了操作关键词。 */
 export function claimsActionPreview(text: string): boolean {
-  return PREVIEW_REFERENCE.test(text) || PREVIEW_PROMISE_AFTER.test(text)
-    || PREVIEW_PROMISE_BEFORE.test(text)
+  return claimsMatch(text, PREVIEW_REFERENCE) || claimsMatch(text, PREVIEW_PROMISE_AFTER)
+    || claimsMatch(text, PREVIEW_PROMISE_BEFORE)
 }

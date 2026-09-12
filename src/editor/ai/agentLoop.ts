@@ -1,5 +1,5 @@
 import { llmChat, type AssistantMessage, type ChatMessage } from './chat'
-import { claimsActionPreview, expectsActionPreview, hasActionVerb, needsActionRewrite } from './actionIntent'
+import { claimsActionPreview, expectsActionPreview, needsActionRewrite } from './actionIntent'
 import { rewriteActionQuery } from './queryRewrite'
 import { extractBatchJson } from './batchText'
 import type { AiCommand, BatchValidation } from './commands'
@@ -135,10 +135,11 @@ export async function runAgentLoop(
   const initialText = [...messages].reverse().find((m) => m.role === 'user')?.content ?? ''
   let expectsPreview = expectsActionPreview(initialText)
   if (needsActionRewrite(initialText)) {
-    // #91：含糊输入经改写归一化判定动作意图；改写失败或非动作回退词表
-    // 结果，回合照常进行。改写每轮至多一次，不计入读写预算。
+    // #91：含糊输入经改写归一化判定动作意图，改写回复按整回复校验后
+    // 才采信；失败或非规范回复回退词表结果，回合照常进行。改写每轮至
+    // 多一次，不计入读写预算。
     const rewritten = await rewriteActionQuery(provider, model, initialText)
-    expectsPreview ||= rewritten !== null && hasActionVerb(rewritten)
+    expectsPreview ||= rewritten !== null
   }
   let result: AgentLoopResult = { prose: '', toolErrors: [], validation: null }
   for (let round = 0; round < READ_ROUNDS + WRITE_ATTEMPTS; round++) {

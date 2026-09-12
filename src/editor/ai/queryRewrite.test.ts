@@ -18,7 +18,12 @@ describe('parseRewrittenQuery · 规范请求提取', () => {
     ['  "修改场04的对白" ', '修改场04的对白'],
     ['「修改场04的对白」', '修改场04的对白'],
     ['修改场04的对白。', '修改场04的对白'],
+    ['增加一场对手戏', '增加一场对手戏'],
     ['NONE', null], ['none', null], ['无', null], ['', null], ['   ', null], [null, null],
+    // PR #92 评审：整回复校验——NONE 标记夹带解释、解释性文字一律拒绝
+    ['NONE（这不是修改请求）', null],
+    ['这不是修改请求，应回复 NONE', null],
+    ['好的，我会修改场04的对白', null],
   ])('%j → %j', (content, expected) => {
     expect(parseRewrittenQuery(content)).toBe(expected)
   })

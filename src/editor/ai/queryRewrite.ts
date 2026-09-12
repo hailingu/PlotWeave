@@ -7,7 +7,8 @@ import type { ProviderConfig } from '../../settings/types'
  * 规范动作描述，替代为口语动词（扩写、润色等）手工扩词表。改写只决定
  * 交付期待（是否进入有界纠正），不解析命令、不授予执行权限；失败或
  * 非动作回退 null，由调用方退回本地词表结果，回合照常进行。提示词与
- * actionIntent 的 ACTION_VERBS 同源，改写输出须通过动词门才被采信。
+ * actionIntent 的 ACTION_VERBS 同源，改写回复按整回复校验（须以规范动
+ * 词开头）后才被采信。
  */
 
 /** 与词表同源的改写提示词：动词只允许规范清单，非改动请求回复 NONE。 */
@@ -28,11 +29,14 @@ function trimWrapperChars(text: string): string {
   return text.slice(start, end)
 }
 
-/** 剥离改写回复的包装引号与句读后取规范请求；NONE／空内容回退 null。 */
+/** 剥离改写回复的包装引号与句读后校验规范改写。改写输出属于不可信
+ * 模型输出（PR #92 评审）：整回复校验——回复须以规范动词开头才算规范
+ * 改写；夹带 NONE 标记或解释文字（非动词开头）的混合回复一律按非动作
+ * 回退 null，不做子串包含判定。 */
 export function parseRewrittenQuery(content: string | null): string | null {
   const text = trimWrapperChars((content ?? '').trim())
-  if (!text || /^none$/i.test(text) || text === '无') return null
-  return text
+  if (!text || /none/i.test(text) || text === '无') return null
+  return ACTION_VERBS.some((verb) => text.startsWith(verb)) ? text : null
 }
 
 /** 改写一轮用户请求；llmChat 是唯一 I/O，失败回退 null 不向回合抛出。 */

@@ -238,6 +238,27 @@ describe('query 改写与预览承诺的交付收敛（issue 91）', () => {
     expect(result).not.toHaveProperty('completionError')
     expect(chat).toHaveBeenCalledTimes(2)
   })
+
+  it('改写回复夹带解释文字时整回复被拒，讨论不进入纠正（PR #92 评审）', async () => {
+    chat.mockResolvedValueOnce(rewrite('NONE（这不是修改请求）'))
+      .mockResolvedValueOnce({ role: 'assistant', content: '场04目前节奏可以。' })
+    const result = await run('帮我看看场04')
+    expect(result).toMatchObject({ prose: '场04目前节奏可以。', validation: null })
+    expect(result).not.toHaveProperty('completionError')
+    expect(chat).toHaveBeenCalledTimes(2)
+  })
+
+  it.each([
+    '确认后预览不会显示任何改动，本轮我没有产出命令。',
+    '确认后不会展示预览。',
+  ])('否定式预览描述不构成交付承诺（PR #92 评审）：%s', async (reply) => {
+    chat.mockResolvedValueOnce(rewrite('NONE'))
+      .mockResolvedValueOnce({ role: 'assistant', content: reply })
+    const result = await run('帮我看看场04')
+    expect(result).toMatchObject({ prose: reply, validation: null })
+    expect(result).not.toHaveProperty('completionError')
+    expect(chat).toHaveBeenCalledTimes(2)
+  })
 })
 
 describe('解析失败属于整批交付失败', () => {
