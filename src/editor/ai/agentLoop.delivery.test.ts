@@ -268,6 +268,13 @@ describe('query 改写与预览承诺的交付收敛（issue 91）', () => {
     expect(result).toMatchObject({ validation: null, completionError: expect.any(String) })
     expect(chat).toHaveBeenCalledTimes(5) // 首次加 3 次纠正
   })
+
+  it('目标文本含英文 None 时规范改写仍被采信（PR #92 评审第四轮）', async () => {
+    chat.mockResolvedValueOnce(rewrite('修改对白：None of us knew'))
+      .mockResolvedValueOnce({ role: 'assistant', content: '我会润色这句对白。' })
+      .mockResolvedValueOnce(proposal())
+    expect((await run('润色对白：None of us knew')).validation?.ok).toBe(true)
+  })
 })
 
 describe('解析失败属于整批交付失败', () => {

@@ -31,15 +31,23 @@ function trimWrapperChars(text: string): string {
 
 /** 剥离改写回复的包装引号与句读后校验规范改写。改写输出属于不可信
  * 模型输出（PR #92 评审）：整回复校验——回复须以规范动词开头才算规范
- * 改写；夹带 NONE 标记或解释文字（非动词开头）的混合回复一律按非动作
- * 回退 null，不做子串包含判定。 */
+ * 改写，NONE 标记与解释性混合回复都不是动词开头，一律按非动作回退，
+ * 不做子串包含判定（目标文本含英文 None 时改写仍被采信，第四轮）。 */
 export function parseRewrittenQuery(content: string | null): string | null {
   const text = trimWrapperChars((content ?? '').trim())
-  if (!text || /none/i.test(text) || text === '无') return null
-  return ACTION_VERBS.some((verb) => text.startsWith(verb)) ? text : null
+  return isCanonicalRewrite(text) ? text : null
 }
 
-/** 改写一轮用户请求；llmChat 是唯一 I/O，失败回退 null 不向回合抛出。 */
+function isCanonicalRewrite(text: string): boolean {
+  return text !== '' && ACTION_VERBS.some((verb) => text.startsWith(verb))
+}
+
+/** 改写调用的独立短超时（PR #92 评审第四轮）：llm_chat 统一 120 秒超时，
+ * 前置改写若同等等待，供应商挂起时会长时间阻塞主回合。 */
+export const REWRITE_TIMEOUT_MS = 8_000
+
+/** 改写一轮用户请求；llmChat 是唯一 I/O。传输失败或超时回退 null，不向
+ * 回合抛出；超时后迟到的改写结果被丢弃，主回合照常开始。 */
 export async function rewriteActionQuery(
   provider: ProviderConfig,
   model: string,
@@ -49,11 +57,17 @@ export async function rewriteActionQuery(
     { role: 'system', content: REWRITE_SYSTEM },
     { role: 'user', content: text },
   ]
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), REWRITE_TIMEOUT_MS)
+  })
   try {
-    const reply = await llmChat(provider, model, messages)
-    return parseRewrittenQuery(reply.content)
+    const reply = await Promise.race([llmChat(provider, model, messages), timeout])
+    return reply ? parseRewrittenQuery(reply.content) : null
   } catch {
     // 改写是尽力而为的归一化步骤，传输失败按未识别处理（issue 91 回退语义）。
     return null
+  } finally {
+    clearTimeout(timer)
   }
 }
