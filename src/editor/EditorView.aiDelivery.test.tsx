@@ -110,6 +110,25 @@ describe('明确操作先交付预览，再由用户确认', () => {
     await waitFor(() => expect(h.entry()?.text).toMatch(/本轮未生成可执行改动/))
     expect(h.entry()?.card).toBeUndefined()
   })
+
+  it('扩写请求回显批次记录时无预览卡、画布不变且显示未交付诊断（issue 91）', async () => {
+    const h = await setup()
+    const echoed = '已完成扩写。\n\n[应用批次记录]\n' + JSON.stringify({
+      batchId: 9, status: 'executed', commandCount: 1,
+      changes: ['修改 对白·场04（lines）'], currentEffect: 'unknown',
+    })
+    ipc.mockResolvedValueOnce({ role: 'assistant', content: '修改场04的对白' })
+      .mockResolvedValue({ role: 'assistant', content: echoed })
+    await send('扩写场04的对白')
+    expect(screen.queryByLabelText('AI 改动预览')).toBeNull()
+    expect(screen.queryByRole('button', { name: '✓ 执行改动' })).toBeNull()
+    expect(screen.getByText(/本轮未生成可执行改动/)).toBeTruthy()
+    // 画布与撤销栈不变：无执行即无撤销项，大纲不出现新场景。
+    expect(screen.getByLabelText('撤销')).toHaveProperty('disabled', true)
+    expect(h.outline.queryByText(/场 03/)).toBeNull()
+    await waitFor(() => expect(h.entry()?.text).toMatch(/本轮未生成可执行改动/))
+    expect(h.entry()?.card).toBeUndefined()
+  })
 })
 
 /** 示例协议是 JSON 围栏批次；受控供应商使用实际收到的示例，不在测试里重写命令。 */

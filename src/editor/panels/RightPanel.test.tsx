@@ -230,6 +230,7 @@ describe('RightPanel ✦AI 对话', () => {
   it('读工具循环：快照就地回喂后重问，第二轮出结论', async () => {
     await toAiTab(APP_WITH_KEY)
     llmChatMock
+      .mockResolvedValueOnce(reply({ content: 'NONE' }))
       .mockResolvedValueOnce(
         reply({
           content: '',
@@ -241,8 +242,8 @@ describe('RightPanel ✦AI 对话', () => {
       .mockResolvedValueOnce(reply({ content: '画布有两场戏。' }))
     send('看看画布')
     expect(await screen.findByText('画布有两场戏。')).toBeTruthy()
-    expect(llmChatMock).toHaveBeenCalledTimes(2)
-    const round2 = llmChatMock.mock.calls[1][2] as ChatMessage[]
+    expect(llmChatMock).toHaveBeenCalledTimes(3) // 1 次改写判定（读取请求非改动）+ 读轮回问
+    const round2 = llmChatMock.mock.calls[2][2] as ChatMessage[]
     const toolMsg = round2.find((m) => m.role === 'tool')
     expect(toolMsg?.content).toBe('SNAPSHOT')
     expect(toolMsg?.tool_call_id).toBe('t1')
@@ -251,6 +252,7 @@ describe('RightPanel ✦AI 对话', () => {
   it('get_node 读工具按 id 现查；模型报错上屏为错误条', async () => {
     const spies = await toAiTab(APP_WITH_KEY)
     llmChatMock
+      .mockResolvedValueOnce(reply({ content: 'NONE' }))
       .mockResolvedValueOnce(
         reply({
           content: '',
@@ -264,6 +266,8 @@ describe('RightPanel ✦AI 对话', () => {
     expect(await screen.findByText('节点已读。')).toBeTruthy()
     expect(spies.onReadNode).toHaveBeenCalledWith('n1')
 
+    // 「再来」先触发改写判定（NONE），随后回合请求的失败照常上屏。
+    llmChatMock.mockResolvedValueOnce(reply({ content: 'NONE' }))
     llmChatMock.mockRejectedValueOnce(new Error('网络超时'))
     send('再来')
     expect(await screen.findByText(/网络超时/)).toBeTruthy()

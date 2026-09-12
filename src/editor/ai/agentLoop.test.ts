@@ -130,14 +130,15 @@ describe('runAgentLoop 写批次重试预算与终止（issue 41）', () => {
       })
       .mockReturnValueOnce(okOf())
     llmChatMock
+      .mockResolvedValueOnce(reply({ content: '修改画布' }))
       .mockResolvedValueOnce(reply({ tool_calls: [batchCall(BAD_BEAT_BATCH)] }))
       .mockResolvedValueOnce(reply({ content: '已全部修正', tool_calls: [batchCall(GOOD_BEAT_BATCH)] }))
 
     const result = await run([{ role: 'user', content: '改画布' }], validators({ commands }))
 
-    expect(llmChatMock).toHaveBeenCalledTimes(2) // 清单完整 → 单轮修正即可通过
+    expect(llmChatMock).toHaveBeenCalledTimes(3) // 1 次改写判定 + 清单完整单轮修正
     expect(result.validation?.ok).toBe(true)
-    const toolMsg = llmChatMock.mock.calls[1][2].find((m) => m.role === 'tool')
+    const toolMsg = llmChatMock.mock.calls[2][2].find((m) => m.role === 'tool')
     expect(toolMsg?.content).toContain('未知字段：label')
     expect(toolMsg?.content).toContain('节点不存在：n9')
     expect(toolMsg?.content).toContain('端点不存在：a → b')
@@ -174,15 +175,16 @@ describe('runAgentLoop 围栏通道与修正指令（issue 41）', () => {
       .mockReturnValueOnce(failOf('端点不存在：a → b'))
       .mockReturnValueOnce(okOf())
     llmChatMock
+      .mockResolvedValueOnce(reply({ content: '连接节点' }))
       .mockResolvedValueOnce(fenceReply(BAD_BEAT_BATCH))
       .mockResolvedValueOnce(fenceReply(GOOD_BEAT_BATCH))
 
     const messages: ChatMessage[] = [{ role: 'user', content: '连一下' }]
     const result = await run(messages, validators({ prose }))
 
-    expect(llmChatMock).toHaveBeenCalledTimes(2)
+    expect(llmChatMock).toHaveBeenCalledTimes(3) // 1 次改写判定 + 单轮修正通过
     expect(result.validation?.ok).toBe(true)
-    const second = llmChatMock.mock.calls[1][2]
+    const second = llmChatMock.mock.calls[2][2]
     const users = second.filter((m) => m.role === 'user')
     const feedback = users[users.length - 1]
     expect(feedback?.content).toContain('端点不存在：a → b')
@@ -208,6 +210,7 @@ describe('runAgentLoop 读工具循环（既有行为保持）', () => {
   it('读调用就地回喂后重问，产出纯文本终止', async () => {
     const readTool = vi.fn(() => 'SNAP')
     llmChatMock
+      .mockResolvedValueOnce(reply({ content: 'NONE' }))
       .mockResolvedValueOnce(
         reply({
           tool_calls: [
@@ -221,8 +224,8 @@ describe('runAgentLoop 读工具循环（既有行为保持）', () => {
     const result = await runAgentLoop(PROVIDER, 'm', messages, readTool, validators({}))
 
     expect(readTool).toHaveBeenCalledWith('get_graph_snapshot', {})
-    expect(llmChatMock).toHaveBeenCalledTimes(2)
-    const toolMsg = llmChatMock.mock.calls[1][2].find((m) => m.role === 'tool')
+    expect(llmChatMock).toHaveBeenCalledTimes(3) // 1 次改写判定（读取请求非改动）+ 读轮回问
+    const toolMsg = llmChatMock.mock.calls[2][2].find((m) => m.role === 'tool')
     expect(toolMsg?.content).toBe('SNAP')
     expect(result).toMatchObject({ prose: '画布为空。', validation: null })
   })

@@ -1,5 +1,6 @@
 import { llmChat, type AssistantMessage, type ChatMessage } from './chat'
-import { claimsActionPreview, expectsActionPreview } from './actionIntent'
+import { claimsActionPreview, expectsActionPreview, hasActionVerb, needsActionRewrite } from './actionIntent'
+import { rewriteActionQuery } from './queryRewrite'
 import { extractBatchJson } from './batchText'
 import type { AiCommand, BatchValidation } from './commands'
 import { AI_TOOLS, toolCallsToCommands, type ReadRequest, type ToolCall, type ToolCallParse } from './tools'
@@ -7,11 +8,12 @@ import type { ProviderConfig } from '../../settings/types'
 
 /**
  * Agent 会话循环（数据模型 §12.2 朴素 tool-calling，issue 41 校验闭环）：
- * 读工具就地执行回喂后重问（≤ READ_ROUNDS 轮）；写命令交给调用方整批
- * 校验，未通过且未耗尽重试预算时把具体校验错误回喂模型（tool-calling
- * 通道按协议逐调用应答，```json 围栏通道以 user 消息回喂），产出共
- * ≤ WRITE_ATTEMPTS 次；明确修改却无批次、解析失败也共享此预算（#75）。
- * 通过、耗尽或纯讨论即终止。重试只发生在对话层，
+ * 含糊请求先经一次 query 改写归一化判定动作意图（#91，失败回退词表，
+ * 不占读写预算）；读工具就地执行回喂后重问（≤ READ_ROUNDS 轮）；写命
+ * 令交给调用方整批校验，未通过且未耗尽重试预算时把具体校验错误回喂
+ * 模型（tool-calling 通道按协议逐调用应答，```json 围栏通道以 user 消
+ * 息回喂），产出共 ≤ WRITE_ATTEMPTS 次；明确修改却无批次、解析失败也
+ * 共享此预算（#75）。通过、耗尽或纯讨论即终止。重试只发生在对话层，
  * 画布零副作用——批次仍须用户在预览卡确认后才执行。
  * 纯编排模块：不触碰 React 状态，llmChat 是唯一 I/O。
  */
@@ -130,7 +132,14 @@ export async function runAgentLoop(
 ): Promise<AgentLoopResult> {
   let readRounds = 0
   let writeAttempts = 0
-  let expectsPreview = expectsActionPreview([...messages].reverse().find((m) => m.role === 'user')?.content ?? '')
+  const initialText = [...messages].reverse().find((m) => m.role === 'user')?.content ?? ''
+  let expectsPreview = expectsActionPreview(initialText)
+  if (needsActionRewrite(initialText)) {
+    // #91：含糊输入经改写归一化判定动作意图；改写失败或非动作回退词表
+    // 结果，回合照常进行。改写每轮至多一次，不计入读写预算。
+    const rewritten = await rewriteActionQuery(provider, model, initialText)
+    expectsPreview ||= rewritten !== null && hasActionVerb(rewritten)
+  }
   let result: AgentLoopResult = { prose: '', toolErrors: [], validation: null }
   for (let round = 0; round < READ_ROUNDS + WRITE_ATTEMPTS; round++) {
     const reply: AssistantMessage = await llmChat(provider, model, messages, AI_TOOLS)
