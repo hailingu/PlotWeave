@@ -19,12 +19,13 @@
  * + index.css 本体规则 + RF dist 样式表），选择器匹配用 Element.matches（悬停
  * /聚焦态剥去对应伪类求命中、特异性仍按原选择器计），按 CSS 作者源级联
  * （!important → 特异性 → 规则序 → 块内声明序；background 简写与
- * background-color 长写同道竞争）与自定义属性继承 + var() 回退链消解出计算值
- * 后断言。九条自检用例注入九类回归形态（接线缺失、更高特异性错误硬编码、
- * 更高特异性覆盖自定义属性、!important、background-color 长写改写颜色分量、
- * 同规则内后置长写覆盖前置简写、悬停道竞争声明、index.css 本体竞争声明、
- * 聚焦抑制描边），钉住消解模型能复现并捕获缺陷（评审 5187020501 /
- * 5187126810 / 5187174354 / 5187272939 / 5187318777 / 5187365964 / 5187386211）。
+ * background-color 长写同道竞争；outline 按 width/style/color 分量分道）与
+ * 自定义属性继承 + var() 回退链消解出计算值后断言。十条自检用例注入十类
+ * 回归形态（接线缺失、更高特异性错误硬编码、更高特异性覆盖自定义属性、
+ * !important、background-color 长写改写颜色分量、同规则内后置长写覆盖前置
+ * 简写、悬停道竞争声明、index.css 本体竞争声明、聚焦抑制描边、outline-style
+ * 长写抑制），钉住消解模型能复现并捕获缺陷（评审 5187020501 / 5187126810 /
+ * 5187174354 / 5187272939 / 5187318777 / 5187365964 / 5187386211 / 5187437948）。
  */
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -301,11 +302,67 @@ function winningSelectorSpec(
   return best
 }
 
-/** background 简写在级联中按 background-color 分道竞争（评审 5187272939）；聚焦道含 outline-color 长写。 */
-const CASCADE_PROPS: Record<'background' | 'color' | 'outline', readonly string[]> = {
+/** background 简写在级联中按 background-color 分道竞争（评审 5187272939）；color 无简写形态。 */
+const CASCADE_PROPS: Record<'background' | 'color', readonly string[]> = {
   background: ['background', 'background-color'],
   color: ['color'],
-  outline: ['outline', 'outline-color'],
+}
+
+/** outline 分量道 → 参与该道的声明属性（评审 5187437948：简写按分量展开入道）。 */
+const OUTLINE_CHANNELS = ['width', 'style', 'color'] as const
+type OutlineChannel = (typeof OUTLINE_CHANNELS)[number]
+const OUTLINE_SOURCE_PROPS: Record<OutlineChannel, readonly string[]> = {
+  width: ['outline', 'outline-width'],
+  style: ['outline', 'outline-style'],
+  color: ['outline', 'outline-color'],
+}
+
+/** 从已消解的 outline 简写值取指定分量（规范序 width style color）；无法识别时原样返回（保守变红）。 */
+function outlineComponent(resolved: string, channel: OutlineChannel): string {
+  const parts = resolved.trim().split(/\s+/)
+  if (parts.length === 3) {
+    const [width, style, color] = parts
+    return channel === 'width' ? width! : channel === 'style' ? style! : color!
+  }
+  return resolved
+}
+
+/**
+ * 聚焦道三分量计算值：width/style/color 各自独立按作者源级联取胜者后经 var
+ * 链消解——仅建模颜色不足以判定可见性，outline-style: none / outline-width: 0
+ * 同样能抑制描边（评审 5187437948）。
+ */
+function computedFocusOutline(
+  button: HappyDOMElement,
+  ruled: Ruled[],
+  scopes: Scopes,
+  state: State,
+): Record<OutlineChannel, string | null> {
+  const result = { width: null, style: null, color: null } as Record<OutlineChannel, string | null>
+  for (const channel of OUTLINE_CHANNELS) {
+    let best: (Candidate & { prop: string }) | undefined
+    for (const { rule, order } of ruled) {
+      const spec = winningSelectorSpec(button, rule.selector, state)
+      if (!spec) continue
+      for (const [decl, node] of rule.nodes.entries()) {
+        if (node.type !== 'decl' || !OUTLINE_SOURCE_PROPS[channel].includes(node.prop)) continue
+        const candidate: Candidate & { prop: string } = {
+          value: node.value,
+          spec,
+          order,
+          decl,
+          important: node.important,
+          prop: node.prop,
+        }
+        if (!best || beats(candidate, best)) best = candidate
+      }
+    }
+    if (!best) continue
+    const resolved = resolveValue(best.value, scopes, button)
+    if (resolved === null) continue
+    result[channel] = best.prop === 'outline' ? outlineComponent(resolved, channel) : resolved
+  }
+  return result
 }
 
 /** 从已消解的 background 简写值中取颜色分量；无法识别时原样返回（断言保守变红）。 */
@@ -320,7 +377,7 @@ function computedProp(
   button: HappyDOMElement,
   ruled: Ruled[],
   scopes: Scopes,
-  prop: 'background' | 'color' | 'outline',
+  prop: 'background' | 'color',
   state: State = 'rest',
 ): string | null {
   const sourceProps = CASCADE_PROPS[prop]
@@ -420,9 +477,10 @@ describe('控件计算样式：生产样式表组合级联（PR #96 评审强化
         tokenValue(hoverScopes, button, '--text-primary'),
       )
       const focusScopes = collectScopes(chain, ruled, 'focus')
-      expect(computedProp(button, ruled, focusScopes, 'outline', 'focus')).toContain(
-        tokenValue(focusScopes, button, '--accent'),
-      )
+      const outline = computedFocusOutline(button, ruled, focusScopes, 'focus')
+      expect(['none', 'hidden']).not.toContain(outline.style)
+      expect(['0', '0px']).not.toContain(outline.width)
+      expect(outline.color).toContain(tokenValue(focusScopes, button, '--accent'))
     }
   })
 
@@ -533,8 +591,21 @@ describe('控件计算样式：生产样式表组合级联（PR #96 评审强化
     layers.splice(layers.length - 1, 0, rogue)
     const ruled = flattenRules([...layers, rfLayer()], DARK)
     const scopes = collectScopes(chain, ruled, 'focus')
-    const outline = computedProp(button, ruled, scopes, 'outline', 'focus')
-    expect(outline).toBe('none')
-    expect(outline).not.toContain(tokenValue(scopes, button, '--accent'))
+    const outline = computedFocusOutline(button, ruled, scopes, 'focus')
+    expect(outline.style).toBe('none')
+    expect(outline.color).not.toContain(tokenValue(scopes, button, '--accent'))
+  })
+
+  it('自检：outline-style 长写抑制描边会胜出并被捕获（评审 5187437948 触发条件）', () => {
+    const { button, chain } = buttonOf()
+    const rogue = postcss.parse('.canvas-root .react-flow__controls-button:focus-visible { outline-style: none; }')
+    const layers = appLayers()
+    layers.splice(layers.length - 1, 0, rogue)
+    const ruled = flattenRules([...layers, rfLayer()], DARK)
+    const scopes = collectScopes(chain, ruled, 'focus')
+    const outline = computedFocusOutline(button, ruled, scopes, 'focus')
+    // 颜色道仍为 accent，但 style 道被长写抑制——可见性不变量必须按分量判定
+    expect(outline.style).toBe('none')
+    expect(outline.color).toContain(tokenValue(scopes, button, '--accent'))
   })
 })
