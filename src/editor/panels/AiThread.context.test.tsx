@@ -545,4 +545,15 @@ describe('AiThread 新会话（issue #89）', () => {
     await setup({ loadFailed: true })
     expect(screen.queryByRole('button', { name: '新会话' })).toBeNull()
   })
+
+  it('请求失败后开新会话：上一会话的错误横幅不遗留到新会话', async () => {
+    await setup()
+    invokeMock.mockRejectedValueOnce(new Error('网络中断'))
+    await send('触发失败')
+    expect(await screen.findByText(/网络中断/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '新会话' }))
+    fireEvent.click(screen.getByRole('button', { name: '再点一次确认清空' }))
+    expect(screen.queryByText(/网络中断/)).toBeNull()
+    expect(screen.getByText(/和 AI 聊聊这一幕怎么写/)).toBeTruthy()
+  })
 })

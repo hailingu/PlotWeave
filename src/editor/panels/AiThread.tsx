@@ -382,7 +382,10 @@ function useAiTurn(opts: {
     }
     // 已卸载：盒子留在注册表，由重挂载/重开同一项目的实例认领
   }
-  return { draft, setDraft, busy, error, knowsCanvas, setKnowsCanvas, send }
+  /** 清除上屏的请求错误（issue #89 评审）：新会话不得继承上一会话的
+   * 失败诊断——错误仅由下次 send 开头清除会让空会话带着旧横幅。 */
+  const clearError = () => setError(null)
+  return { draft, setDraft, busy, error, clearError, knowsCanvas, setKnowsCanvas, send }
 }
 
 function AiThreadTimeline({
@@ -751,7 +754,7 @@ export default function AiThread({
         keyOkByProvider={m.keyOkByProvider}
         onSelect={m.setModelKey}
         onOpenSettings={onOpenSettings}
-        onNewSession={msg.resetSession}
+        onNewSession={() => { turn.clearError(); msg.resetSession() }}
         newSessionReady={!turn.busy && msg.thread.length > 0}
       />
       {!m.ready && <AiGuide hasModels={m.options.length > 0} onOpenSettings={onOpenSettings} />}
