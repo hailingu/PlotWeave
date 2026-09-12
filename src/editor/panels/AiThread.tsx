@@ -217,9 +217,17 @@ function useAiThreadMessages(opts: {
     setArmedIdx(null)
   }
 
+  /** 新会话（issue #89）：清空线程与武装态，经条目变更的持久化 effect
+   * 落盘空会话（重开不复活）。条目 id 计数器继续自增——id 只需实例内
+   * 唯一作渲染 key，恢复时本就按位置重定基，无重置必要。 */
+  const resetSession = () => {
+    setThread([])
+    setArmedIdx(null)
+  }
+
   useCanvasCommitConfirmation(thread, setThread, opts.whenCanvasCommitted)
 
-  return { thread, armedIdx, setArmedIdx, threadRef, nextId, append, executeCard, markDismissed }
+  return { thread, armedIdx, setArmedIdx, threadRef, nextId, append, executeCard, markDismissed, resetSession }
 }
 
 /** 认领条目的重定映射：id 经当前实例重定基（旧计数器已随卸载作废，
@@ -374,7 +382,10 @@ function useAiTurn(opts: {
     }
     // 已卸载：盒子留在注册表，由重挂载/重开同一项目的实例认领
   }
-  return { draft, setDraft, busy, error, knowsCanvas, setKnowsCanvas, send }
+  /** 清除上屏的请求错误（issue #89 评审）：新会话不得继承上一会话的
+   * 失败诊断——错误仅由下次 send 开头清除会让空会话带着旧横幅。 */
+  const clearError = () => setError(null)
+  return { draft, setDraft, busy, error, clearError, knowsCanvas, setKnowsCanvas, send }
 }
 
 function AiThreadTimeline({
@@ -400,6 +411,10 @@ function AiThreadTimeline({
   readonly onExecute: (index: number) => void
   readonly onDismiss: (index: number) => void
 }) {
+  // 新条目/思考态/错误出现时滚动到底（自 AiThread 移入：滚动域即时间线）
+  useEffect(() => {
+    threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight })
+  }, [thread, threadRef, busy, error])
   return <div className="pw-ai-thread" ref={threadRef}>
     {saveError && <div className="pw-ai-msg pw-ai-msg-error">聊天记录保存失败：{saveError}</div>}
     {thread.length === 0 && ready && (
@@ -498,6 +513,41 @@ export function AiSettingsButton({ onOpenSettings }: { readonly onOpenSettings?:
   )
 }
 
+/** 新会话入口（issue #89）：两步确认（预览卡删除同款）——清空不可 ⌘Z，
+ * 未确认预览卡随会话一并丢弃。空会话或 busy（发送中/认领恢复）时禁用：
+ * busy 门闸保证清空时回合注册表必空，迟到回复不可能写入新会话。 */
+function AiNewSessionButton({
+  ready,
+  onNewSession,
+}: {
+  readonly ready: boolean
+  readonly onNewSession?: () => void
+}) {
+  const [armed, setArmed] = useState(false)
+  useEffect(() => {
+    if (!ready) setArmed(false)
+  }, [ready])
+  const click = () => {
+    if (!armed) {
+      setArmed(true)
+      return
+    }
+    setArmed(false)
+    onNewSession?.()
+  }
+  return (
+    <button
+      type="button"
+      className={`pw-ai-new-btn${armed ? ' armed' : ''}`}
+      title={armed ? '再点一次确认清空，未确认预览卡将一并丢弃' : '开始新的 AI 会话（清空当前对话）'}
+      disabled={!ready || !onNewSession}
+      onClick={click}
+    >
+      {armed ? '再点一次确认清空' : '新会话'}
+    </button>
+  )
+}
+
 /** 面板顶栏（issue #87）：模型选择器与常驻设置入口同行。设置入口不依赖
  * 配置状态——配置齐全后空态引导消失，此处是 ⌘, 之外唯一的可见回访入口。 */
 function AiTopbar({
@@ -506,12 +556,18 @@ function AiTopbar({
   keyOkByProvider,
   onSelect,
   onOpenSettings,
+  onNewSession,
+  newSessionReady,
 }: {
   readonly options: ChatModelOption[]
   readonly activeKey: string | null
   readonly keyOkByProvider: Record<string, boolean>
   readonly onSelect: (key: string) => void
   readonly onOpenSettings?: () => void
+  /** 开新会话回调；缺省或 newSessionReady=false 时入口禁用（issue #89）。 */
+  readonly onNewSession?: () => void
+  /** 可清空条件：非 busy 且线程非空（空会话无可清）。 */
+  readonly newSessionReady?: boolean
 }) {
   return (
     <div className="pw-ai-topbar">
@@ -523,6 +579,7 @@ function AiTopbar({
           onSelect={onSelect}
         />
       )}
+      <AiNewSessionButton ready={newSessionReady === true} onNewSession={onNewSession} />
       <AiSettingsButton onOpenSettings={onOpenSettings} />
     </div>
   )
@@ -689,10 +746,6 @@ export default function AiThread({
     onReadSettings,
     onReadDocument,
   })
-  // 新条目/思考态/错误出现时滚动到底（跟随原内联实现）
-  useEffect(() => {
-    msg.threadRef.current?.scrollTo({ top: msg.threadRef.current.scrollHeight })
-  }, [msg.thread, msg.threadRef, turn.busy, turn.error])
   return (
     <div className="pw-ai">
       <AiTopbar
@@ -701,6 +754,8 @@ export default function AiThread({
         keyOkByProvider={m.keyOkByProvider}
         onSelect={m.setModelKey}
         onOpenSettings={onOpenSettings}
+        onNewSession={() => { turn.clearError(); msg.resetSession() }}
+        newSessionReady={!turn.busy && msg.thread.length > 0}
       />
       {!m.ready && <AiGuide hasModels={m.options.length > 0} onOpenSettings={onOpenSettings} />}
       <AiThreadTimeline

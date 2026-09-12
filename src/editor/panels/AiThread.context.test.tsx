@@ -494,3 +494,66 @@ describe('AiThread 常驻设置入口（issue #87）', () => {
     expect(onOpenSettings).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('AiThread 新会话（issue #89）', () => {
+  it('非空线程两步确认：第一次点击不清空，第二次清空并落盘空会话', async () => {
+    const h = await setup()
+    invokeMock.mockResolvedValueOnce(proposal())
+    await send('丰富旁白')
+    expect(screen.getByText('给开场补充旁白。')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '新会话' }))
+    expect(screen.getByRole('button', { name: '再点一次确认清空' })).toBeTruthy()
+    expect(screen.getByText('给开场补充旁白。')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '再点一次确认清空' }))
+    expect(screen.queryByText('给开场补充旁白。')).toBeNull()
+    expect(screen.getByText(/和 AI 聊聊这一幕怎么写/)).toBeTruthy()
+    expect(h.saved[h.saved.length - 1].entries).toEqual([])
+  })
+
+  it('空会话与 busy 时入口禁用，busy 解除后恢复', async () => {
+    const reply = deferredReply()
+    const h = await setup({ projectId: 'p89-busy' })
+    const button = () => screen.getByRole('button', { name: '新会话' }) as HTMLButtonElement
+    expect(button().disabled).toBe(true)
+    await sendInFlight()
+    expect(button().disabled).toBe(true)
+    await act(async () => { reply({ role: 'assistant', content: '迟到回复。' }) })
+    expect(await screen.findByText('迟到回复。')).toBeTruthy()
+    expect(button().disabled).toBe(false)
+    fireEvent.click(button())
+    fireEvent.click(screen.getByRole('button', { name: '再点一次确认清空' }))
+    expect(screen.queryByText('迟到回复。')).toBeNull()
+    expect(h.saved[h.saved.length - 1].entries).toEqual([])
+  })
+
+  it('清空后重开项目：旧历史不复活，入口回到禁用态', async () => {
+    const h = await setup({ projectId: 'p89-reopen' })
+    invokeMock.mockResolvedValueOnce(proposal())
+    await send('丰富旁白')
+    fireEvent.click(screen.getByRole('button', { name: '新会话' }))
+    fireEvent.click(screen.getByRole('button', { name: '再点一次确认清空' }))
+    const session = normalizeAiSession(h.saved[h.saved.length - 1]).session
+    expect(session.entries).toEqual([])
+    h.unmount()
+    await setup({ projectId: 'p89-reopen', session })
+    expect(screen.queryByText('给开场补充旁白。')).toBeNull()
+    expect(screen.getByText(/和 AI 聊聊这一幕怎么写/)).toBeTruthy()
+    expect((screen.getByRole('button', { name: '新会话' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('会话读取失败态：新会话入口不渲染', async () => {
+    await setup({ loadFailed: true })
+    expect(screen.queryByRole('button', { name: '新会话' })).toBeNull()
+  })
+
+  it('请求失败后开新会话：上一会话的错误横幅不遗留到新会话', async () => {
+    await setup()
+    invokeMock.mockRejectedValueOnce(new Error('网络中断'))
+    await send('触发失败')
+    expect(await screen.findByText(/网络中断/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '新会话' }))
+    fireEvent.click(screen.getByRole('button', { name: '再点一次确认清空' }))
+    expect(screen.queryByText(/网络中断/)).toBeNull()
+    expect(screen.getByText(/和 AI 聊聊这一幕怎么写/)).toBeTruthy()
+  })
+})
