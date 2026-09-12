@@ -15,9 +15,10 @@
  * 外观下都必须等于对应语义令牌的解析值。happy-dom 的 getComputedStyle 不解析
  * 两级 var 链（--a: var(--b) 形态消费为空），无法直接对渲染树取计算值；本文件
  * 以 postcss 解析真实生产样式表组合，选择器匹配用 Element.matches，按 CSS 作者
- * 源级联（特异性 → 顺序）与自定义属性继承 + var() 回退链消解出计算值后断言。
- * 两条自检用例向测试内注入两类回归形态（接线缺失、更高特异性错误硬编码），
- * 钉住消解模型能复现并捕获缺陷（评审 5187020501）。
+ * 源级联（!important → 特异性 → 顺序）与自定义属性继承 + var() 回退链消解出
+ * 计算值后断言。四条自检用例向测试内注入四类回归形态（接线缺失、更高特异性
+ * 错误硬编码、更高特异性覆盖自定义属性、!important），钉住消解模型能复现并
+ * 捕获缺陷（评审 5187020501 / 5187126810 / 5187174354）。
  */
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -144,16 +145,30 @@ function sameSpec(a: Specificity, b: Specificity): boolean {
   return a[0] === b[0] && a[1] === b[1] && a[2] === b[2]
 }
 
+/** 级联取胜者候选：值 + 命中特异性 + 源顺序 + 是否 !important。 */
+interface Candidate {
+  value: string
+  spec: Specificity
+  order: number
+  important: boolean
+}
+
+/** 作者源级联判定：!important 先于特异性与顺序，同重要性再比特异性与源顺序。 */
+function beats(candidate: Candidate, best: Candidate): boolean {
+  if (candidate.important !== best.important) return candidate.important
+  return higherSpec(candidate.spec, best.spec) || (sameSpec(candidate.spec, best.spec) && candidate.order > best.order)
+}
+
 type Scopes = Map<HappyDOMElement, Map<string, string>>
 
 /**
  * 收集作用于链上各元素的自定义属性声明。与普通属性同法按作者源级联取胜者
- * （特异性 → 顺序）：评审 5187126810 指出无条件的后写覆盖会让更早的更高
- * 特异性声明（如 .canvas-root .react-flow__controls { --xy-…: #fff }）在
- * 模型中被后面的低特异性规则顶掉，与浏览器行为相悖并使断言假绿。
+ * （!important → 特异性 → 顺序）：首轮评审 5187020501 指出无条件的后写覆盖
+ * 会让更早的更高特异性声明在模型中被顶掉；次轮评审 5187126810 指出自定义
+ * 属性收集同样必须走级联；三轮评审 5187174354 补齐 !important 维度。
  */
 function collectScopes(chain: HappyDOMElement[], ruled: Ruled[]): Scopes {
-  const winners = new Map<HappyDOMElement, Map<string, { value: string; spec: Specificity; order: number }>>()
+  const winners = new Map<HappyDOMElement, Map<string, Candidate>>()
   for (const { rule, order } of ruled) {
     for (const node of rule.nodes) {
       if (node.type !== 'decl' || !node.prop.startsWith('--')) continue
@@ -162,16 +177,15 @@ function collectScopes(chain: HappyDOMElement[], ruled: Ruled[]): Scopes {
         if (!spec) continue
         let scope = winners.get(element)
         if (!scope) winners.set(element, (scope = new Map()))
+        const candidate: Candidate = { value: node.value, spec, order, important: node.important }
         const best = scope.get(node.prop)
-        if (!best || higherSpec(spec, best.spec) || (sameSpec(spec, best.spec) && order > best.order)) {
-          scope.set(node.prop, { value: node.value, spec, order })
-        }
+        if (!best || beats(candidate, best)) scope.set(node.prop, candidate)
       }
     }
   }
   const scopes: Scopes = new Map()
   for (const [element, props] of winners) {
-    scopes.set(element, new Map([...props].map(([name, winner] ) => [name, winner.value])))
+    scopes.set(element, new Map([...props].map(([name, winner]) => [name, winner.value])))
   }
   return scopes
 }
@@ -249,22 +263,21 @@ function winningSelectorSpec(button: HappyDOMElement, selectorList: string): Spe
   return best
 }
 
-/** 按钮某属性的计算值：作者源级联（特异性 → 顺序）取胜出声明后经 var 链消解。 */
+/** 按钮某属性的计算值：作者源级联（!important → 特异性 → 顺序）取胜出声明后经 var 链消解。 */
 function computedProp(
   button: HappyDOMElement,
   ruled: Ruled[],
   scopes: Scopes,
   prop: 'background' | 'color',
 ): string | null {
-  let best: { value: string; spec: Specificity; order: number } | undefined
+  let best: Candidate | undefined
   for (const { rule, order } of ruled) {
     const spec = winningSelectorSpec(button, rule.selector)
     if (!spec) continue
     for (const node of rule.nodes) {
       if (node.type !== 'decl' || node.prop !== prop) continue
-      if (!best || higherSpec(spec, best.spec) || (sameSpec(spec, best.spec) && order > best.order)) {
-        best = { value: node.value, spec, order }
-      }
+      const candidate: Candidate = { value: node.value, spec, order, important: node.important }
+      if (!best || beats(candidate, best)) best = candidate
     }
   }
   if (!best) return null
@@ -361,6 +374,19 @@ describe('控件计算样式：生产样式表组合级联（PR #96 评审强化
     )
     const layers = appLayers()
     layers.splice(layers.length - 1, 0, rogue) // 注入于 nodes.css 层之前：特异性须胜出而非靠顺序
+    const ruled = flattenRules([...layers, rfLayer()], DARK)
+    const scopes = collectScopes(chain, ruled)
+    const background = computedProp(button, ruled, scopes, 'background')
+    expect(background).toBe('#ffffff')
+    expect(background).not.toBe(tokenValue(scopes, button, '--surface-card'))
+  })
+
+  it('自检：!important 无视特异性与顺序取胜并被捕获（评审 5187174354 触发条件）', () => {
+    const { button, chain } = buttonOf()
+    // 与 RF 令牌规则同特异性、且注入在更早的应用层：仅 !important 使其胜出
+    const rogue = postcss.parse('.react-flow__controls-button { background: #ffffff !important; }')
+    const layers = appLayers()
+    layers.splice(layers.length - 1, 0, rogue)
     const ruled = flattenRules([...layers, rfLayer()], DARK)
     const scopes = collectScopes(chain, ruled)
     const background = computedProp(button, ruled, scopes, 'background')
