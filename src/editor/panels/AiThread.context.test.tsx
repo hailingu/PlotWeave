@@ -329,7 +329,7 @@ describe('AiThread 历史成功不覆盖当前画布', () => {
 /** 供应商请求读取详情，经真实 Agent 读工具回喂后再发出第二轮请求。 */
 async function readCurrentNode() {
   // 「读取现在的旁白」无动作动词：首个响应供 query 改写判定，NONE = 非改动。
-  invokeMock.mockResolvedValueOnce({ role: 'assistant', content: 'NONE' })
+  invokeMock.mockResolvedValueOnce({ role: 'assistant', content: '{"action":false}' })
     .mockResolvedValueOnce({ role: 'assistant', content: null, tool_calls: [{
       id: 'read-1', type: 'function', function: { name: 'get_node', arguments: '{"nodeId":"d1"}' },
     }] })

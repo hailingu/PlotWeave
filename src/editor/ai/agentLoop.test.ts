@@ -130,7 +130,7 @@ describe('runAgentLoop 写批次重试预算与终止（issue 41）', () => {
       })
       .mockReturnValueOnce(okOf())
     llmChatMock
-      .mockResolvedValueOnce(reply({ content: '修改画布' }))
+      .mockResolvedValueOnce(reply({ content: '{"action":true,"query":"修改画布"}' }))
       .mockResolvedValueOnce(reply({ tool_calls: [batchCall(BAD_BEAT_BATCH)] }))
       .mockResolvedValueOnce(reply({ content: '已全部修正', tool_calls: [batchCall(GOOD_BEAT_BATCH)] }))
 
@@ -175,7 +175,7 @@ describe('runAgentLoop 围栏通道与修正指令（issue 41）', () => {
       .mockReturnValueOnce(failOf('端点不存在：a → b'))
       .mockReturnValueOnce(okOf())
     llmChatMock
-      .mockResolvedValueOnce(reply({ content: '连接节点' }))
+      .mockResolvedValueOnce(reply({ content: '{"action":true,"query":"连接节点"}' }))
       .mockResolvedValueOnce(fenceReply(BAD_BEAT_BATCH))
       .mockResolvedValueOnce(fenceReply(GOOD_BEAT_BATCH))
 
@@ -210,7 +210,7 @@ describe('runAgentLoop 读工具循环（既有行为保持）', () => {
   it('读调用就地回喂后重问，产出纯文本终止', async () => {
     const readTool = vi.fn(() => 'SNAP')
     llmChatMock
-      .mockResolvedValueOnce(reply({ content: 'NONE' }))
+      .mockResolvedValueOnce(reply({ content: '{"action":false}' }))
       .mockResolvedValueOnce(
         reply({
           tool_calls: [

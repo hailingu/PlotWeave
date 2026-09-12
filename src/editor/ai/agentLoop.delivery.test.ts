@@ -105,7 +105,7 @@ describe('无法交付的收敛与讨论边界', () => {
   })
 
   it('无动词的讨论经改写判 NONE 后仍只返回文本', async () => {
-    chat.mockResolvedValueOnce({ role: 'assistant', content: 'NONE' })
+    chat.mockResolvedValueOnce({ role: 'assistant', content: '{"action":false}' })
       .mockResolvedValueOnce({ role: 'assistant', content: '可以先铺垫冲突。' })
     const result = await run('怎么写？')
     expect(result).toMatchObject({ prose: '可以先铺垫冲突。', validation: null })
@@ -114,7 +114,7 @@ describe('无法交付的收敛与讨论边界', () => {
   })
 
   it('仅检查本轮用户请求，不因历史修改请求或纠正消息把新讨论当成写入', async () => {
-    chat.mockResolvedValueOnce({ role: 'assistant', content: 'NONE' })
+    chat.mockResolvedValueOnce({ role: 'assistant', content: '{"action":false}' })
       .mockResolvedValueOnce({ role: 'assistant', content: '冲突应逐步升级。' })
     const result = await run('', [
       { role: 'user', content: '创建场景' }, { role: 'assistant', content: '已有预览。' },
@@ -132,8 +132,8 @@ describe('无法交付的收敛与讨论边界', () => {
   })
 
   it('即使输入只是“操作”，声称有预览却没有批次也须纠正', async () => {
-    // 改写判为非动作（NONE），期待只能来自模型对预览的声称。
-    chat.mockResolvedValueOnce({ role: 'assistant', content: 'NONE' })
+    // 改写判为非动作（action:false），期待只能来自模型对预览的声称。
+    chat.mockResolvedValueOnce({ role: 'assistant', content: '{"action":false}' })
       .mockResolvedValueOnce({ role: 'assistant', content: '（本消息只包含改动批次，见预览卡）' })
       .mockResolvedValueOnce(proposal())
     expect((await run('操作')).validation?.ok).toBe(true)
@@ -142,8 +142,14 @@ describe('无法交付的收敛与讨论边界', () => {
 
 describe('query 改写与预览承诺的交付收敛（issue 91）', () => {
   const PROMISE = '确认后预览会展示全部新旧行，等待落盘。'
-  /** 供应商对改写调用的应答：规范请求或 NONE（非动作）。 */
-  const rewrite = (content: string) => ({ role: 'assistant' as const, content })
+  /** 供应商对改写调用的应答：协议 JSON（规范请求或非动作分类）。 */
+  const rewrite = (query: string) => ({
+    role: 'assistant' as const,
+    content: JSON.stringify({ action: true, query }),
+  })
+  const rewriteNone = { role: 'assistant' as const, content: '{"action":false}' }
+  /** 偏离协议的原始文本（非 JSON），整回复校验须拒绝。 */
+  const rawReply = (content: string) => ({ role: 'assistant' as const, content })
 
   it('扩写请求经改写归一后，无承诺的纯文本仍须纠正出合法批次', async () => {
     chat.mockResolvedValueOnce(rewrite('修改场04的对白'))
@@ -165,14 +171,14 @@ describe('query 改写与预览承诺的交付收敛（issue 91）', () => {
   })
 
   it('输入未命中词表且改写判为非动作时，模型承诺预览仍独立触发交付检查', async () => {
-    chat.mockResolvedValueOnce(rewrite('NONE'))
+    chat.mockResolvedValueOnce(rewriteNone)
       .mockResolvedValueOnce({ role: 'assistant', content: PROMISE })
       .mockResolvedValueOnce(proposal())
     expect((await run('帮我看看场04')).validation?.ok).toBe(true)
   })
 
   it('改写判为非动作且无承诺的回复按普通讨论结束，不进入纠正', async () => {
-    chat.mockResolvedValueOnce(rewrite('NONE'))
+    chat.mockResolvedValueOnce(rewriteNone)
       .mockResolvedValueOnce({ role: 'assistant', content: '场04目前节奏可以。' })
     const result = await run('帮我看看场04')
     expect(result).toMatchObject({ prose: '场04目前节奏可以。', validation: null })
@@ -231,7 +237,7 @@ describe('query 改写与预览承诺的交付收敛（issue 91）', () => {
   })
 
   it('无动词的明确暂不操作经改写判 NONE 后按文本结束', async () => {
-    chat.mockResolvedValueOnce(rewrite('NONE'))
+    chat.mockResolvedValueOnce(rewriteNone)
       .mockResolvedValueOnce({ role: 'assistant', content: '好的，先不动画布。' })
     const result = await run('先别动画布')
     expect(result).toMatchObject({ prose: '好的，先不动画布。', validation: null })
@@ -240,7 +246,7 @@ describe('query 改写与预览承诺的交付收敛（issue 91）', () => {
   })
 
   it('改写回复夹带解释文字时整回复被拒，讨论不进入纠正（PR #92 评审）', async () => {
-    chat.mockResolvedValueOnce(rewrite('NONE（这不是修改请求）'))
+    chat.mockResolvedValueOnce(rawReply('NONE（这不是修改请求）'))
       .mockResolvedValueOnce({ role: 'assistant', content: '场04目前节奏可以。' })
     const result = await run('帮我看看场04')
     expect(result).toMatchObject({ prose: '场04目前节奏可以。', validation: null })
@@ -253,7 +259,7 @@ describe('query 改写与预览承诺的交付收敛（issue 91）', () => {
     '确认后不会展示预览。',
     '下方不会显示预览卡。',
   ])('否定式预览描述不构成交付承诺（PR #92 评审）：%s', async (reply) => {
-    chat.mockResolvedValueOnce(rewrite('NONE'))
+    chat.mockResolvedValueOnce(rewriteNone)
       .mockResolvedValueOnce({ role: 'assistant', content: reply })
     const result = await run('帮我看看场04')
     expect(result).toMatchObject({ prose: reply, validation: null })
@@ -262,7 +268,7 @@ describe('query 改写与预览承诺的交付收敛（issue 91）', () => {
   })
 
   it('谓词外否定不影响承诺：丢失之说不阻止交付检查（PR #92 评审）', async () => {
-    chat.mockResolvedValueOnce(rewrite('NONE'))
+    chat.mockResolvedValueOnce(rewriteNone)
       .mockResolvedValue({ role: 'assistant', content: '确认后不会丢失原对白，预览会显示新增对白。' })
     const result = await run('帮我看看场04')
     expect(result).toMatchObject({ validation: null, completionError: expect.any(String) })
@@ -275,6 +281,15 @@ describe('query 改写与预览承诺的交付收敛（issue 91）', () => {
       .mockResolvedValueOnce(proposal())
     expect((await run('润色对白：None of us knew')).validation?.ok).toBe(true)
   })
+
+  it('首个否定候选后仍有正向承诺时建立交付期待（PR #92 评审第五轮）', async () => {
+    const reply = '确认后预览不会显示任何改动。确认后预览会显示新增对白。'
+    chat.mockResolvedValueOnce(rewriteNone)
+      .mockResolvedValue({ role: 'assistant', content: reply })
+    const result = await run('帮我看看场04')
+    expect(result).toMatchObject({ validation: null, completionError: expect.any(String) })
+    expect(chat).toHaveBeenCalledTimes(5) // 首次加 3 次纠正
+  })
 })
 
 describe('解析失败属于整批交付失败', () => {
@@ -285,8 +300,8 @@ describe('解析失败属于整批交付失败', () => {
     { role: 'assistant', content: '```json\n{"commands": []}\n```' },
     { role: 'assistant', content: null, tool_calls: [call('batch', '{"commands":[]}')] },
   ] satisfies AssistantMessage[])('坏格式或空批次可纠正：%j', async (bad) => {
-    // 首个响应供 query 改写判定（「继续」无动作动词），NONE 表示非动作请求。
-    chat.mockResolvedValueOnce({ role: 'assistant', content: 'NONE' })
+    // 首个响应供 query 改写判定（「继续」无动作动词），action:false 表示非动作请求。
+    chat.mockResolvedValueOnce({ role: 'assistant', content: '{"action":false}' })
       .mockResolvedValueOnce(bad).mockResolvedValueOnce(proposal())
     const result = await run('继续')
     expect(result.validation?.ok).toBe(true)
@@ -304,7 +319,7 @@ describe('解析失败属于整批交付失败', () => {
   })
 
   it('校验失败后退回纯文本仍共享预算，不能被认作普通讨论而悄悄结束', async () => {
-    chat.mockResolvedValueOnce({ role: 'assistant', content: 'NONE' })
+    chat.mockResolvedValueOnce({ role: 'assistant', content: '{"action":false}' })
       .mockResolvedValueOnce({ role: 'assistant', content: null,
         tool_calls: [call('batch', JSON.stringify({ commands: [{ op: 'delete_node', nodeId: 'missing' }] }))] })
       .mockResolvedValue({ role: 'assistant', content: '我来修正。' })

@@ -12,20 +12,27 @@ const provider: ProviderConfig = {
 
 beforeEach(() => { chat.mockReset() })
 
-describe('parseRewrittenQuery · 规范请求提取', () => {
+/** 协议 JSON：要求修改并给出规范请求。 */
+const ok = (query: string) => JSON.stringify({ action: true, query })
+
+describe('parseRewrittenQuery · 协议 JSON 解析与整回复校验', () => {
   it.each([
-    ['修改场04的对白', '修改场04的对白'],
-    ['  "修改场04的对白" ', '修改场04的对白'],
-    ['「修改场04的对白」', '修改场04的对白'],
-    ['修改场04的对白。', '修改场04的对白'],
-    ['增加一场对手戏', '增加一场对手戏'],
+    [ok('修改场04的对白'), '修改场04的对白'],
+    [`  ${ok('修改场04的对白')}  `, '修改场04的对白'],
+    [ok('增加一场对手戏'), '增加一场对手戏'],
     // 目标文本含英文 None 不影响规范改写采信（PR #92 评审第四轮）
-    ['修改对白：None of us knew', '修改对白：None of us knew'],
-    ['NONE', null], ['none', null], ['无', null], ['', null], ['   ', null], [null, null],
-    // PR #92 评审：整回复校验——NONE 标记夹带解释、解释性文字一律拒绝
+    [ok('修改对白：None of us knew'), '修改对白：None of us knew'],
+    ['```json\n' + ok('修改场04的对白') + '\n```', '修改场04的对白'],
+    ['{"action":false}', null],
+    ['NONE', null], ['none', null], ['无', null], ['', null], [null, null],
+    // 分类标记与解释文字的混合回复、非 JSON 文本一律拒绝（PR #92 评审）
     ['NONE（这不是修改请求）', null],
     ['这不是修改请求，应回复 NONE', null],
     ['好的，我会修改场04的对白', null],
+    ['修改场04的对白', null],
+    ['{"action":true}', null],
+    ['{"action":true,"query":"我觉得挺好的"}', null],
+    ['{bad', null],
   ])('%j → %j', (content, expected) => {
     expect(parseRewrittenQuery(content)).toBe(expected)
   })
@@ -33,7 +40,7 @@ describe('parseRewrittenQuery · 规范请求提取', () => {
 
 describe('rewriteActionQuery · 改写调用与回退', () => {
   it('请求进入消息序列且不携带工具，改写结果原样返回', async () => {
-    chat.mockResolvedValue({ role: 'assistant', content: '修改场04的对白' })
+    chat.mockResolvedValue({ role: 'assistant', content: ok('修改场04的对白') })
     expect(await rewriteActionQuery(provider, 'm', '扩写场04的对白')).toBe('修改场04的对白')
     expect(chat).toHaveBeenCalledTimes(1)
     expect(chat.mock.calls[0][2][chat.mock.calls[0][2].length - 1]?.content).toContain('扩写场04的对白')

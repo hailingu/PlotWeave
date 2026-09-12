@@ -59,15 +59,15 @@ export function needsActionRewrite(text: string): boolean {
 /** 引导查看预览卡的表达：间隙内含否定标记（「下方不会显示预览卡」）
  * 不构成指引。 */
 const PREVIEW_REFERENCE =
-  /(?:见|查看|点击|下方|下面)([^。；\n]{0,8})(?:预览卡|执行改动)/
+  /(?:见|查看|点击|下方|下面)([^。；\n]{0,8})(?:预览卡|执行改动)/g
 
 /** 「确认后预览会展示……」式交付承诺（issue 91 截图措辞）：确认门控、
  * 预览与展示动词同句共现才识别，预览与展示的先后两种语序各一条正则
  * （S5843 复杂度上限内）；跨句、疑问与元描述为已知边界。 */
 const PREVIEW_PROMISE_AFTER =
-  /确认(?:后|之后|以后)([^。；\n]{0,16})预览([^。；\n]{0,10})(?:展示|显示|呈现|列出|给出)/
+  /确认(?:后|之后|以后)([^。；\n]{0,16})预览([^。；\n]{0,10})(?:展示|显示|呈现|列出|给出)/g
 const PREVIEW_PROMISE_BEFORE =
-  /确认(?:后|之后|以后)([^。；\n]{0,10})(?:展示|显示|呈现|列出|给出)([^。；\n]{0,10})预览/
+  /确认(?:后|之后|以后)([^。；\n]{0,10})(?:展示|显示|呈现|列出|给出)([^。；\n]{0,10})预览/g
 
 /** 否定标记（PR #92 评审）：仅当落在预览/展示谓词的紧邻辖域内才取消
  * 承诺——「确认后预览不会显示」「确认后不会展示预览」被排除；整片段
@@ -86,21 +86,26 @@ function negatesNounGap(gap: string): boolean {
   return NEGATION.test(gap.slice(-3))
 }
 
+/** 遍历全部候选（PR #92 评审第五轮）：首个候选被否定后继续扫描，同一
+ * 正文内存在未被否定的承诺即建立交付期待，不因首匹配短路漏检。各间隙
+ * 按谓词紧邻类型选择否定判定（动词间隙包含判定、名词宽间隙只查末尾
+ * 窗口）。 */
+type GapChecks = Array<[number, (gap: string) => boolean]>
+
+function claimsAnyMatch(text: string, pattern: RegExp, checks: GapChecks): boolean {
+  for (const match of text.matchAll(pattern)) {
+    if (checks.every(([index, negates]) => !negates(match[index]))) return true
+  }
+  return false
+}
+
 function claimsReference(text: string): boolean {
-  const gap = PREVIEW_REFERENCE.exec(text)?.[1]
-  return gap !== undefined && !negatesVerbGap(gap)
+  return claimsAnyMatch(text, PREVIEW_REFERENCE, [[1, negatesVerbGap]])
 }
 
 function claimsPromise(text: string): boolean {
-  const after = PREVIEW_PROMISE_AFTER.exec(text)
-  if (after) {
-    return !negatesNounGap(after[1]) && !negatesVerbGap(after[2])
-  }
-  const before = PREVIEW_PROMISE_BEFORE.exec(text)
-  if (before) {
-    return !negatesVerbGap(before[1]) && !negatesVerbGap(before[2])
-  }
-  return false
+  return claimsAnyMatch(text, PREVIEW_PROMISE_AFTER, [[1, negatesNounGap], [2, negatesVerbGap]])
+    || claimsAnyMatch(text, PREVIEW_PROMISE_BEFORE, [[1, negatesVerbGap], [2, negatesVerbGap]])
 }
 
 /** 模型主动声称提供预览时也应核对交付，不依赖用户是否用了操作关键词。 */

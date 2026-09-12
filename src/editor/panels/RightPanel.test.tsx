@@ -231,7 +231,7 @@ describe('RightPanel ✦AI 对话', () => {
   it('读工具循环：快照就地回喂后重问，第二轮出结论', async () => {
     await toAiTab(APP_WITH_KEY)
     llmChatMock
-      .mockResolvedValueOnce(reply({ content: 'NONE' }))
+      .mockResolvedValueOnce(reply({ content: '{"action":false}' }))
       .mockResolvedValueOnce(
         reply({
           content: '',
@@ -253,7 +253,7 @@ describe('RightPanel ✦AI 对话', () => {
   it('get_node 读工具按 id 现查；模型报错上屏为错误条', async () => {
     const spies = await toAiTab(APP_WITH_KEY)
     llmChatMock
-      .mockResolvedValueOnce(reply({ content: 'NONE' }))
+      .mockResolvedValueOnce(reply({ content: '{"action":false}' }))
       .mockResolvedValueOnce(
         reply({
           content: '',
@@ -268,7 +268,7 @@ describe('RightPanel ✦AI 对话', () => {
     expect(spies.onReadNode).toHaveBeenCalledWith('n1')
 
     // 「再来」先触发改写判定（NONE），随后回合请求的失败照常上屏。
-    llmChatMock.mockResolvedValueOnce(reply({ content: 'NONE' }))
+    llmChatMock.mockResolvedValueOnce(reply({ content: '{"action":false}' }))
     llmChatMock.mockRejectedValueOnce(new Error('网络超时'))
     send('再来')
     expect(await screen.findByText(/网络超时/)).toBeTruthy()

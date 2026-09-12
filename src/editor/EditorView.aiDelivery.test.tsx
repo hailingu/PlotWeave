@@ -117,7 +117,7 @@ describe('明确操作先交付预览，再由用户确认', () => {
       batchId: 9, status: 'executed', commandCount: 1,
       changes: ['修改 对白·场04（lines）'], currentEffect: 'unknown',
     })
-    ipc.mockResolvedValueOnce({ role: 'assistant', content: '修改场04的对白' })
+    ipc.mockResolvedValueOnce({ role: 'assistant', content: '{"action":true,"query":"修改场04的对白"}' })
       .mockResolvedValue({ role: 'assistant', content: echoed })
     await send('扩写场04的对白')
     expect(screen.queryByLabelText('AI 改动预览')).toBeNull()
