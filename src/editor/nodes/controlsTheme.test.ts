@@ -15,11 +15,12 @@
  * 外观下都必须等于对应语义令牌的解析值。happy-dom 的 getComputedStyle 不解析
  * 两级 var 链（--a: var(--b) 形态消费为空），无法直接对渲染树取计算值；本文件
  * 以 postcss 解析真实生产样式表组合，选择器匹配用 Element.matches，按 CSS 作者
- * 源级联（!important → 特异性 → 顺序；background 简写与 background-color
- * 长写同道竞争）与自定义属性继承 + var() 回退链消解出计算值后断言。五条自检
- * 用例向测试内注入五类回归形态（接线缺失、更高特异性错误硬编码、更高特异性
- * 覆盖自定义属性、!important、background-color 长写改写颜色分量），钉住消解
- * 模型能复现并捕获缺陷（评审 5187020501 / 5187126810 / 5187174354 / 5187272939）。
+ * 源级联（!important → 特异性 → 规则序 → 块内声明序；background 简写与
+ * background-color 长写同道竞争）与自定义属性继承 + var() 回退链消解出计算值
+ * 后断言。六条自检用例向测试内注入六类回归形态（接线缺失、更高特异性错误
+ * 硬编码、更高特异性覆盖自定义属性、!important、background-color 长写改写
+ * 颜色分量、同规则内后置长写覆盖前置简写），钉住消解模型能复现并捕获缺陷
+ * （评审 5187020501 / 5187126810 / 5187174354 / 5187272939 / 5187318777）。
  */
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -146,18 +147,24 @@ function sameSpec(a: Specificity, b: Specificity): boolean {
   return a[0] === b[0] && a[1] === b[1] && a[2] === b[2]
 }
 
-/** 级联取胜者候选：值 + 命中特异性 + 源顺序 + 是否 !important。 */
+/** 级联取胜者候选：值 + 命中特异性 + 源顺序（规则序 + 块内声明序）+ 是否 !important。 */
 interface Candidate {
   value: string
   spec: Specificity
   order: number
+  decl: number
   important: boolean
 }
 
-/** 作者源级联判定：!important 先于特异性与顺序，同重要性再比特异性与源顺序。 */
+/**
+ * 作者源级联判定：!important 先于特异性与顺序；同重要性比特异性，再同则按
+ * 源顺序——先规则序，同规则内按块内声明序（评审 5187318777：后置长写胜出）。
+ */
 function beats(candidate: Candidate, best: Candidate): boolean {
   if (candidate.important !== best.important) return candidate.important
-  return higherSpec(candidate.spec, best.spec) || (sameSpec(candidate.spec, best.spec) && candidate.order > best.order)
+  if (higherSpec(candidate.spec, best.spec)) return true
+  if (!sameSpec(candidate.spec, best.spec)) return false
+  return candidate.order !== best.order ? candidate.order > best.order : candidate.decl > best.decl
 }
 
 type Scopes = Map<HappyDOMElement, Map<string, string>>
@@ -171,14 +178,14 @@ type Scopes = Map<HappyDOMElement, Map<string, string>>
 function collectScopes(chain: HappyDOMElement[], ruled: Ruled[]): Scopes {
   const winners = new Map<HappyDOMElement, Map<string, Candidate>>()
   for (const { rule, order } of ruled) {
-    for (const node of rule.nodes) {
+    for (const [decl, node] of rule.nodes.entries()) {
       if (node.type !== 'decl' || !node.prop.startsWith('--')) continue
       for (const element of chain) {
         const spec = winningSelectorSpec(element, rule.selector)
         if (!spec) continue
         let scope = winners.get(element)
         if (!scope) winners.set(element, (scope = new Map()))
-        const candidate: Candidate = { value: node.value, spec, order, important: node.important }
+        const candidate: Candidate = { value: node.value, spec, order, decl, important: node.important }
         const best = scope.get(node.prop)
         if (!best || beats(candidate, best)) scope.set(node.prop, candidate)
       }
@@ -289,12 +296,13 @@ function computedProp(
   for (const { rule, order } of ruled) {
     const spec = winningSelectorSpec(button, rule.selector)
     if (!spec) continue
-    for (const node of rule.nodes) {
+    for (const [decl, node] of rule.nodes.entries()) {
       if (node.type !== 'decl' || !sourceProps.includes(node.prop)) continue
       const candidate: Candidate & { prop: string } = {
         value: node.value,
         spec,
         order,
+        decl,
         important: node.important,
         prop: node.prop,
       }
@@ -421,6 +429,21 @@ describe('控件计算样式：生产样式表组合级联（PR #96 评审强化
     const { button, chain } = buttonOf()
     // 更高特异性、注入于 nodes.css 层之前：浏览器按 background-color 分道取胜
     const rogue = postcss.parse('.canvas-root .react-flow__controls-button { background-color: #ffffff; }')
+    const layers = appLayers()
+    layers.splice(layers.length - 1, 0, rogue)
+    const ruled = flattenRules([...layers, rfLayer()], DARK)
+    const scopes = collectScopes(chain, ruled)
+    const background = computedProp(button, ruled, scopes, 'background')
+    expect(background).toBe('#ffffff')
+    expect(background).not.toBe(tokenValue(scopes, button, '--surface-card'))
+  })
+
+  it('自检：同规则内后置的 background-color 覆盖前置简写并被捕获（评审 5187318777 触发条件）', () => {
+    const { button, chain } = buttonOf()
+    // 更高特异性使整条规则胜出；块内简写在前、长写在后，浏览器按声明序取后者
+    const rogue = postcss.parse(
+      '.canvas-root .react-flow__controls-button { background: var(--surface-card); background-color: #ffffff; }',
+    )
     const layers = appLayers()
     layers.splice(layers.length - 1, 0, rogue)
     const ruled = flattenRules([...layers, rfLayer()], DARK)
