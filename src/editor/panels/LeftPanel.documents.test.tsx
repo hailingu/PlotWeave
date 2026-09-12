@@ -91,6 +91,16 @@ describe('LeftPanel 文档列表（issue 56）', () => {
     expect(screen.getByDisplayValue('陈默，落魄侦探。')).toBeTruthy()
     expect(spies.settingsActions.updateDocument).not.toHaveBeenCalled()
   })
+
+  it('编辑器弹窗经 portal 挂到 document.body：不落在 .pw-panel 裁剪上下文内（PR #86 评审）', () => {
+    setup()
+    toSettingsTab()
+    fireEvent.click(screen.getByRole('button', { name: '打开文档 人物小传' }))
+    const dialog = screen.getByRole('dialog', { name: '编辑设定文档' })
+    const overlay = dialog.closest('.pw-overlay')!
+    expect(overlay.parentElement).toBe(document.body)
+    expect(document.querySelector('.pw-panel-left')?.contains(overlay)).toBe(false)
+  })
 })
 
 describe('文档编辑器弹窗（issue 56）', () => {

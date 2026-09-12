@@ -143,6 +143,28 @@ describe('simulateBatch · upsert_document 修改', () => {
     expect(state.settings.documents?.find((d) => d.id === 'doc-1')).toEqual(before)
   })
 
+  it('文档目标不经实体别名表重写：别名与既有文档 id 撞名时仍按文档执行（PR #86 评审）', () => {
+    const { state, ops } = mkOps([], settingsWithDocs())
+    const { forward } = simulateBatch(
+      [
+        // 先登记一个与既有文档 id 同名的实体 ref 别名（校验侧别名冲突只查
+        // 角色/地点桶，不查文档——文档命名空间与实体命名空间独立）
+        { op: 'upsert_character', entityId: 'ch-1', ref: 'doc-1', fields: { bio: 'x' } },
+        { op: 'upsert_document', entityId: 'doc-1', fields: { body: '新全文' } },
+      ] as unknown as ValidatedCommand[],
+      ops,
+      [],
+      [],
+      state.settings,
+    )
+    forward.forEach((f) => f())
+    // 文档更新必须落到文档 doc-1，而不是被别名解析成实体 id 后静默跳过
+    expect(state.settings.documents?.find((d) => d.id === 'doc-1')?.body).toBe('新全文')
+    expect(state.settings.documents?.find((d) => d.id === 'doc-2')?.body).toBe('术语')
+    // 同批的实体改动照常生效
+    expect(state.settings.characters.find((c) => c.id === 'ch-1')?.bio).toBe('x')
+  })
+
   it('relatedIds 整体替换并解析批内 ref；撤销恢复旧数组', () => {
     const { state, ops } = mkOps([], settingsWithDocs())
     const { forward, backward } = simulateBatch(

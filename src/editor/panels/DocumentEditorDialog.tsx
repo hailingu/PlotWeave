@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { DocumentEntity, ProjectSettings } from '../settings'
 
 /**
@@ -7,6 +8,9 @@ import type { DocumentEntity, ProjectSettings } from '../settings'
  * 关联角色/地点经 chips 切换（relatedIds：kind + id 显式成对，§6）。
  * 「保存」一次派发一条 updateDocument 命令入栈可撤销；Esc / 遮罩 /
  * 关闭按钮放弃编辑（编辑即命令的批量变体：单次确认生成单条命令）。
+ * 经 portal 渲染到 document.body：宿主 .pw-panel 同时带 overflow:hidden
+ * 与 backdrop-filter，会为 fixed 后代建立包含块并裁剪到窄侧栏内
+ * （PR #86 评审），弹窗必须落在面板裁剪上下文之外。
  */
 
 /** 文档编辑保存的补丁形状（与 useSettingsActions 的 updateDocument 一致）。 */
@@ -156,7 +160,7 @@ export default function DocumentEditorDialog({
     onClose()
   }
 
-  return (
+  return createPortal(
     <div className="pw-overlay" onPointerDown={onClose}>
       {/* 原生 dialog 承载对话框语义（S6819，同 ExportDialog）；Esc/遮罩关闭 */}
       <dialog
@@ -190,6 +194,7 @@ export default function DocumentEditorDialog({
           </button>
         </div>
       </dialog>
-    </div>
+    </div>,
+    document.body,
   )
 }

@@ -386,14 +386,15 @@ const simDocumentCreate = (
 
 /** 修改既有设定文档（issue 56）：只覆盖 fields 写到的键，未提及字段保持执行
  * 时现值；relatedIds 整体替换；before 文档对象取自工作副本，undo 反序回放
- * 精确还原。 */
+ * 精确还原。entityId 直接使用校验后的文档 id——文档目标无 ref 语义（折叠层
+ * 不登记文档别名），不得经实体别名表重写，否则别名与文档 id 撞名时执行会
+ * 静默跳过或改写错误文档（PR #86 评审）。 */
 const simDocumentUpdate = (
   sim: BatchSim,
   ops: BatchOps,
   cmd: Extract<ValidatedCommand, { op: 'upsert_document' }>,
 ): void => {
-  const token = typeof cmd.entityId === 'string' ? cmd.entityId : ''
-  const id = sim.entityRefToId.get(token) ?? token
+  const id = typeof cmd.entityId === 'string' ? cmd.entityId : ''
   const documents = sim.settings.documents ?? []
   const target = documents.find((d) => d.id === id)
   if (!target) return
