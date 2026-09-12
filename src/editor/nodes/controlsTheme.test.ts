@@ -121,17 +121,6 @@ function fixture(): { chain: HappyDOMElement[] } {
   return { chain }
 }
 
-/** 选择器列表是否命中元素；未识别伪类抛错按不命中处理（静止态语义）。 */
-function matchesElement(element: HappyDOMElement, selectorList: string): boolean {
-  return selectorList.split(',').some((selector) => {
-    try {
-      return element.matches(selector.trim())
-    } catch {
-      return false
-    }
-  })
-}
-
 type Specificity = readonly [ids: number, classes: number, types: number]
 
 /** 选择器特异性（id, 类/伪类, 元素）；仓库样式表无属性选择器。 */
@@ -157,19 +146,32 @@ function sameSpec(a: Specificity, b: Specificity): boolean {
 
 type Scopes = Map<HappyDOMElement, Map<string, string>>
 
-/** 收集作用于链上各元素的自定义属性声明（同作用域后者覆盖前者）。 */
+/**
+ * 收集作用于链上各元素的自定义属性声明。与普通属性同法按作者源级联取胜者
+ * （特异性 → 顺序）：评审 5187126810 指出无条件的后写覆盖会让更早的更高
+ * 特异性声明（如 .canvas-root .react-flow__controls { --xy-…: #fff }）在
+ * 模型中被后面的低特异性规则顶掉，与浏览器行为相悖并使断言假绿。
+ */
 function collectScopes(chain: HappyDOMElement[], ruled: Ruled[]): Scopes {
-  const scopes: Scopes = new Map()
-  for (const { rule } of ruled) {
+  const winners = new Map<HappyDOMElement, Map<string, { value: string; spec: Specificity; order: number }>>()
+  for (const { rule, order } of ruled) {
     for (const node of rule.nodes) {
       if (node.type !== 'decl' || !node.prop.startsWith('--')) continue
       for (const element of chain) {
-        if (!matchesElement(element, rule.selector)) continue
-        let scope = scopes.get(element)
-        if (!scope) scopes.set(element, (scope = new Map()))
-        scope.set(node.prop, node.value)
+        const spec = winningSelectorSpec(element, rule.selector)
+        if (!spec) continue
+        let scope = winners.get(element)
+        if (!scope) winners.set(element, (scope = new Map()))
+        const best = scope.get(node.prop)
+        if (!best || higherSpec(spec, best.spec) || (sameSpec(spec, best.spec) && order > best.order)) {
+          scope.set(node.prop, { value: node.value, spec, order })
+        }
       }
     }
+  }
+  const scopes: Scopes = new Map()
+  for (const [element, props] of winners) {
+    scopes.set(element, new Map([...props].map(([name, winner] ) => [name, winner.value])))
   }
   return scopes
 }
@@ -346,6 +348,20 @@ describe('控件计算样式：生产样式表组合级联（PR #96 评审强化
     const { button, chain } = buttonOf()
     const rogue = postcss.parse('div.canvas-root .react-flow__controls-button { background: #ffffff; }')
     const ruled = flattenRules([...appLayers(), rogue, rfLayer()], DARK)
+    const scopes = collectScopes(chain, ruled)
+    const background = computedProp(button, ruled, scopes, 'background')
+    expect(background).toBe('#ffffff')
+    expect(background).not.toBe(tokenValue(scopes, button, '--surface-card'))
+  })
+
+  it('自检：更高特异性选择器覆盖自定义属性会胜出并被捕获（评审 5187126810 触发条件）', () => {
+    const { button, chain } = buttonOf()
+    const rogue = postcss.parse(
+      '.canvas-root .react-flow__controls { --xy-controls-button-background-color: #ffffff; }',
+    )
+    const layers = appLayers()
+    layers.splice(layers.length - 1, 0, rogue) // 注入于 nodes.css 层之前：特异性须胜出而非靠顺序
+    const ruled = flattenRules([...layers, rfLayer()], DARK)
     const scopes = collectScopes(chain, ruled)
     const background = computedProp(button, ruled, scopes, 'background')
     expect(background).toBe('#ffffff')
