@@ -480,6 +480,24 @@ function AiModelSelect({
   )
 }
 
+/** 常驻设置入口按钮（issue #87）：AiTopbar 与会话读取失败态共用。不依赖
+ * 配置状态——配置齐全后空态引导消失、会话损坏时聊天操作区不挂载，此处
+ * 都是 ⌘, 快捷键之外唯一的可见设置回访入口。 */
+export function AiSettingsButton({ onOpenSettings }: { readonly onOpenSettings?: () => void }) {
+  return (
+    <button
+      type="button"
+      className="pw-ai-settings-btn"
+      aria-label="打开设置"
+      title="打开设置页（⌘,）"
+      disabled={!onOpenSettings}
+      onClick={onOpenSettings}
+    >
+      ⚙
+    </button>
+  )
+}
+
 /** 面板顶栏（issue #87）：模型选择器与常驻设置入口同行。设置入口不依赖
  * 配置状态——配置齐全后空态引导消失，此处是 ⌘, 之外唯一的可见回访入口。 */
 function AiTopbar({
@@ -505,16 +523,7 @@ function AiTopbar({
           onSelect={onSelect}
         />
       )}
-      <button
-        type="button"
-        className="pw-ai-settings-btn"
-        aria-label="打开设置"
-        title="打开设置页（⌘,）"
-        disabled={!onOpenSettings}
-        onClick={onOpenSettings}
-      >
-        ⚙
-      </button>
+      <AiSettingsButton onOpenSettings={onOpenSettings} />
     </div>
   )
 }

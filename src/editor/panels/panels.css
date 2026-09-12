@@ -602,8 +602,13 @@
   margin: 8px 4px 0;
 }
 
+/* min-width:0 解除 flex 项默认 min-content 下限（原生 select 由最长选项
+   决定）：220px 窄栏下选择器可收缩，齿轮入口不被推出视野；收起态的
+   溢出文本由 select 原生截断展示（下拉弹层不受限） */
 .pw-ai-topbar .pw-ai-model {
   flex: 1;
+  min-width: 0;
+  text-overflow: ellipsis;
   margin: 0;
 }
 
@@ -621,6 +626,11 @@
 .pw-ai-settings-btn:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* 会话读取失败态的设置入口行（issue #87）：错误提示与按钮的间距 */
+.pw-ai-error-actions {
+  margin: 12px 4px 0;
 }
 
 /* ---- 资产库真实实现（§8.1：分类计数 → 类别内导入/缩略/改名/标签/删除） ---- */

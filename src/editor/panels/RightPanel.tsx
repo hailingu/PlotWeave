@@ -7,7 +7,7 @@ import {
   resolveCharacterName,
   resolveLocationName,
 } from '../settings'
-import AiThread from './AiThread'
+import AiThread, { AiSettingsButton } from './AiThread'
 import type { CanvasNode } from '../nodes/types'
 import type { AiSession } from '../ai/session'
 
@@ -98,16 +98,23 @@ function inspectorRows(
   }
 }
 
-/** 加载失败时只显示诊断，聊天操作区不挂载，避免空回退产生写入。 */
+/** 加载失败时只显示诊断，聊天操作区不挂载，避免空回退产生写入。设置
+ * 入口不是聊天操作区（无会话写入），失败态照常保留（issue #87）——
+ * 否则会话损坏的用户只剩不可见的 ⌘, 可进设置页。 */
 function AiSessionContent({
   loadFailed,
   ...props
 }: ComponentProps<typeof AiThread> & { readonly loadFailed?: boolean }) {
   if (loadFailed) {
-    return <p className="pw-ai-error" role="alert">
-      聊天记录读取失败，AI 发送和执行已停用。请检查磁盘后重新打开项目。
-      {props.initialSessionError}
-    </p>
+    return <>
+      <p className="pw-ai-error" role="alert">
+        聊天记录读取失败，AI 发送和执行已停用。请检查磁盘后重新打开项目。
+        {props.initialSessionError}
+      </p>
+      <div className="pw-ai-error-actions">
+        <AiSettingsButton onOpenSettings={props.onOpenSettings} />
+      </div>
+    </>
   }
   return <AiThread {...props} />
 }
