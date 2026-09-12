@@ -1,5 +1,12 @@
-import type { BatchIssue, PreviewItem, ValidatedCommand, ValidatedEntityFields } from './commands'
+import type {
+  BatchIssue,
+  PreviewItem,
+  ValidatedCommand,
+  ValidatedDocumentFields,
+  ValidatedEntityFields,
+} from './commands'
 import {
+  AI_DOCUMENT_FIELDS,
   AI_ENTITY_FIELDS,
   ENTITY_KIND_LABELS,
   type EntityKind,
@@ -8,13 +15,14 @@ import {
 import { plainObject } from './patchShape'
 
 /**
- * AI 设定实体命令（upsert_character / upsert_location）的折叠校验实现域
- * （issue 44）：与 batchFold.ts 的节点折叠同一语义——在「当前设定集 +
- * 本批已建/已改」的虚拟投影上完成 fields 白名单/值形状校验、entityId 解析
- * （既有 id 或本批 ref 别名）与 ref 登记，产出预览条目与已校验命令。
- * 修改必须精确指向 id（名称只作展示，绝不作为定位或覆盖依据）；阶段 B
- * 首错即停——失败 upsert 之后的命令不进入折叠，ref 不会悬空指向未入图
- * 的虚拟实体。
+ * AI 设定实体命令（upsert_character / upsert_location）与设定文档命令
+ * （upsert_document，issue 56）的折叠校验实现域（issue 44）：与 batchFold.ts
+ * 的节点折叠同一语义——在「当前设定集 + 本批已建/已改」的虚拟投影上完成
+ * fields 白名单/值形状校验、entityId 解析（既有 id 或本批 ref 别名）与 ref
+ * 登记，产出预览条目与已校验命令。修改必须精确指向 id（名称只作展示，绝不
+ * 作为定位或覆盖依据）；阶段 B 首错即停——失败 upsert 之后的命令不进入折叠，
+ * ref 不会悬空指向未入图的虚拟实体。文档不需要 ref 别名（无节点字段引用
+ * 文档），entityId 只解析 documents 桶。
  */
 
 /** 折叠期新建实体的虚拟 id（不进设定集，仅同批 ref 解析用）。基形
@@ -32,6 +40,10 @@ export interface EntityFoldHost {
   /** 既有 + 本批投影的实体 id → 名称（新建为虚拟 id，执行期才分配真实 id）。 */
   characters: Map<string, string>
   locations: Map<string, string>
+  /** 既有文档 id → 标题与正文字数（issue 56）：upsert_document 的 entityId
+   * 解析、预览标签与 body 全文替换的字数信号消费；文档不建虚拟投影
+   * （无批内 ref 可指向文档）。 */
+  documents: Map<string, { title: string; bodyLength?: number }>
   /** 本批新建的虚拟投影 id：仅可经声明的 ref 别名解析，不得作为引用
    * token 直接命中桶位（执行层只解析别名表，直接放行会落盘悬空绑定）。
    * 显式集合而非前缀判断——持久化 id 可能与虚拟 id 同形。 */
@@ -275,4 +287,206 @@ export function foldUpsert(
     )
   }
   foldUpdateEntity(st, raw, index, kind, fields, refName, target)
+}
+
+// ── 设定文档通道（issue 56，§9.3 upsert_document）────────────────────────
+
+/** 文档 fields 白名单 + 值形状校验（阶段 A，上下文无关）：白名单外字段拒绝；
+ * title/body 须为字符串；relatedIds 须为 {kind, id} 对象数组（裸字符串项、
+ * 未知 kind、缺失/空 id 拒绝，§9.3）。创建 title 必填；修改不许清空 title。 */
+export function documentFieldsIssue(
+  fields: Record<string, unknown>,
+  mode: 'create' | 'update',
+): string | null {
+  const unknownKeys = Object.keys(fields).filter(
+    (k) => !AI_DOCUMENT_FIELDS.some((f) => f.key === k),
+  )
+  if (unknownKeys.length > 0) {
+    return `未知字段：${unknownKeys.join('、')}（文档 允许：${AI_DOCUMENT_FIELDS.map((f) => f.key).join('、')}）`
+  }
+  const issues: string[] = []
+  if (fields.title !== undefined && typeof fields.title !== 'string') issues.push('title 须为字符串')
+  if (fields.body !== undefined && typeof fields.body !== 'string') issues.push('body 须为字符串')
+  appendRelatedIdsIssues(issues, fields.relatedIds)
+  const title = typeof fields.title === 'string' ? fields.title.trim() : ''
+  if (mode === 'create' && title === '') issues.push('创建文档须在 fields 提供 title')
+  if (mode === 'update') {
+    if (Object.keys(fields).length === 0) issues.push('fields 为空')
+    else if (fields.title !== undefined && title === '') issues.push('title 不能为空白')
+  }
+  return issues.length > 0 ? `文档字段错误：${issues.join('；')}` : null
+}
+
+/** relatedIds 条目形状检查（阶段 A）：数组且每项为 {kind, id} 完整对。 */
+function appendRelatedIdsIssues(issues: string[], related: unknown): void {
+  if (related === undefined) return
+  if (!Array.isArray(related)) {
+    issues.push('relatedIds 须为数组')
+    return
+  }
+  related.forEach((item, i) => {
+    if (!plainObject(item)) {
+      issues.push(`relatedIds[${i}] 须为 {kind, id} 对象`)
+      return
+    }
+    const { kind, id } = item as Record<string, unknown>
+    if (kind !== 'character' && kind !== 'location') {
+      issues.push(`relatedIds[${i}].kind 须为 character 或 location`)
+    } else if (typeof id !== 'string' || id.trim() === '') {
+      issues.push(`relatedIds[${i}].id 须为非空白字符串`)
+    }
+  })
+}
+
+/** fields 白名单键序归一（同 normalizeEntityFields 口径）：只保留输入中出现
+ * 过的键；title 去空白；relatedIds 保持原始 token（既有 id 或本批 ref 别名），
+ * 执行期由 batchSim 别名表解析——临时别名不落盘。前置校验通过后调用。 */
+export function normalizeDocumentFields(
+  fields: Record<string, unknown>,
+): ValidatedDocumentFields {
+  const out: ValidatedDocumentFields = {}
+  if (typeof fields.title === 'string') out.title = fields.title.trim()
+  if (typeof fields.body === 'string') out.body = fields.body
+  if (Array.isArray(fields.relatedIds)) {
+    out.relatedIds = (fields.relatedIds as Array<Record<string, unknown>>).map((item) => ({
+      kind: item.kind as 'character' | 'location',
+      id: item.id as string,
+    }))
+  }
+  return out
+}
+
+/** relatedIds 存在性与种类校验（阶段 B）：token 按条目 kind 解析（既有实体
+ * 或本批 ref 别名）；解析结果去重——裸重复与别名/显式 id 指向同一实体都拒绝。
+ * 快照未携带设定集时跳过存在性校验（与实体引用位同口径，旧夹具兼容）。
+ * 返回 null = 已整批拒绝。 */
+function resolveRelatedIds(
+  st: EntityFoldHost,
+  index: number,
+  related: unknown,
+): ValidatedDocumentFields['relatedIds'] | null {
+  if (!Array.isArray(related)) return []
+  const out: Array<{ kind: EntityKind; id: string }> = []
+  const seen = new Set<string>()
+  for (const [i, item] of related.entries()) {
+    const entry = item as Record<string, unknown>
+    const kind = entry.kind as EntityKind
+    const id = entry.id as string
+    if (st.entityScope !== undefined) {
+      const actual = st.entityScope.kindOf(id, kind)
+      if (actual === null) {
+        st.fail(index, `relatedIds[${i}] 引用的${ENTITY_KIND_LABELS[kind]}实体不存在：${id}`)
+        return null
+      }
+      if (actual !== kind) {
+        st.fail(index, `relatedIds[${i}] 指向的是${ENTITY_KIND_LABELS[actual]}实体（kind 写了 ${ENTITY_KIND_LABELS[kind]}）：${id}`)
+        return null
+      }
+    }
+    const resolved = st.entityRefs.get(id)?.id ?? id
+    const key = `${kind}:${resolved}`
+    if (seen.has(key)) {
+      st.fail(index, `relatedIds 重复关联同一实体：${ENTITY_KIND_LABELS[kind]} ${id}`)
+      return null
+    }
+    seen.add(key)
+    out.push({ kind, id })
+  }
+  return out
+}
+
+/** 文档新建（无 entityId）：fields 白名单/形状校验 + relatedIds 解析；
+ * 真实 id 由应用在执行期分配。 */
+function foldCreateDocument(
+  st: EntityFoldHost,
+  raw: Record<string, unknown>,
+  index: number,
+  fields: Record<string, unknown>,
+): void {
+  const issue = documentFieldsIssue(fields, 'create')
+  if (issue !== null) return st.fail(index, issue)
+  if (resolveRelatedIds(st, index, fields.relatedIds) === null) return
+  const normalized = normalizeDocumentFields(fields)
+  st.items.push({
+    kind: 'create_entity',
+    danger: false,
+    key: `ed${index}`,
+    label: `创建 文档 · ${normalized.title}${reasonOf(raw)}`,
+  })
+  st.commands.push({ op: 'upsert_document', fields: normalized })
+}
+
+/** 文档修改条目的字段摘要（预览标签）：body 是全文整体替换（issue 56），
+ * 只显示字段名会让确认者无法区分小幅补写与整篇覆盖——替换发生时显示
+ * 字数变化（旧字数来自校验快照，未携带时退化为纯「全文替换」信号）。 */
+function documentFieldSummary(
+  currentBodyLength: number | undefined,
+  fields: ValidatedDocumentFields,
+): string {
+  return Object.keys(fields)
+    .map((k) => {
+      if (k !== 'body') return k
+      if (currentBodyLength === undefined) return 'body 全文替换'
+      return `body 全文替换：旧 ${currentBodyLength} 字 → 新 ${fields.body!.length} 字`
+    })
+    .join('、')
+}
+
+/** 文档修改（带 entityId）：精确解析 documents 桶（角色/地点实体同 id 不算
+ * 命中——三个独立 id 空间，期望桶优先），未提及字段保持不变。 */
+function foldUpdateDocument(
+  st: EntityFoldHost,
+  raw: Record<string, unknown>,
+  index: number,
+  fields: Record<string, unknown>,
+  target: string,
+): void {
+  const issue = documentFieldsIssue(fields, 'update')
+  if (issue !== null) return st.fail(index, issue)
+  const current = st.documents.get(target)
+  if (current === undefined) {
+    if (st.characters.has(target) || st.locations.has(target)) {
+      return st.fail(index, `entityId 指向的是角色/地点实体（须为文档）：${target}`)
+    }
+    return st.fail(index, `文档不存在：${target}（修改须用设定集快照里的精确 id）`)
+  }
+  if (resolveRelatedIds(st, index, fields.relatedIds) === null) return
+  const normalized = normalizeDocumentFields(fields)
+  if (normalized.title !== undefined) {
+    st.documents.set(target, { ...current, title: normalized.title })
+  }
+  if (normalized.body !== undefined) {
+    st.documents.set(target, { ...st.documents.get(target)!, bodyLength: normalized.body.length })
+  }
+  st.items.push({
+    kind: 'update_entity',
+    danger: false,
+    key: `eu${index}`,
+    label: `修改 文档 · ${current.title}（${documentFieldSummary(current.bodyLength, normalized)}）${reasonOf(raw)}`,
+  })
+  st.commands.push({ op: 'upsert_document', entityId: target, fields: normalized })
+}
+
+/** upsert_document 的折叠校验（issue 56）：缺省 entityId = 新建（执行期分配
+ * 真实 id）；带 entityId = 修改既有文档。entityId 在场但纯空白 = 整批拒绝
+ * （同 foldUpsert 口径——畸形修改意图不得重释为新建通道）。非空白 target
+ * 保留原始串参与桶查找：加载归一化只重写纯空白记录键（reKeyBlankEntries），
+ * 带首尾空白的记录键按「以记录键为准」保留为权威 id 且快照原样下发，trim
+ * 会让模型按广告 id 回写的更新被误判文档不存在（PR #86 评审）。 */
+export function foldUpsertDocument(
+  st: EntityFoldHost,
+  raw: Record<string, unknown>,
+  index: number,
+): void {
+  const fields = raw.fields
+  if (!plainObject(fields)) return st.fail(index, 'fields 必须是字段对象')
+  if (raw.entityId === undefined) return foldCreateDocument(st, raw, index, fields)
+  const target = typeof raw.entityId === 'string' ? raw.entityId : ''
+  if (target.trim() === '') {
+    return st.fail(
+      index,
+      `entityId 在场时须为非空白字符串（缺省才是新建）：${JSON.stringify(raw.entityId)}`,
+    )
+  }
+  foldUpdateDocument(st, raw, index, fields, target)
 }

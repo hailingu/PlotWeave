@@ -51,6 +51,9 @@ function setup(over: Partial<Parameters<typeof LeftPanel>[0]> = {}) {
     addLocation: vi.fn(),
     renameLocation: vi.fn(),
     deleteLocation: vi.fn(),
+    addDocument: vi.fn(),
+    updateDocument: vi.fn(),
+    deleteDocument: vi.fn(),
   }
   const spies = {
     onResize: vi.fn(),

@@ -77,6 +77,8 @@ export interface AiBridge {
   readNode: (nodeId: string) => string | null
   /** 读工具 get_settings_snapshot（issue 44）：返回设定集清单 JSON。 */
   readSettings: () => string
+  /** 读工具 get_document（issue 56）：按 id 返回文档全文 JSON；不存在返回 null。 */
+  readDocument: (documentId: string) => string | null
   /** ✦AI 改动落地：整批作为一条复合命令入栈；返回错误文案或 null。
    * 入参为整批校验通过的执行命令（预览卡的合法子集，issue 16）。 */
   applyAiBatch: (batch: ValidatedCommand[]) => string | null
@@ -111,6 +113,11 @@ function graphSnapshotOf(
     settings: {
       characters: settingsRef.current.characters.map(({ id, name }) => ({ id, name })),
       locations: settingsRef.current.locations.map(({ id, name }) => ({ id, name })),
+      documents: settingsRef.current.documents?.map((d) => ({
+        id: d.id,
+        title: d.title,
+        bodyLength: d.body.length,
+      })),
     },
   }
 }
@@ -215,7 +222,17 @@ function useAiReadTools(deps: {
     [settingsRef],
   )
 
-  return { canvasDigest, aiSnapshot, validateAiReply, validateCommands, readNode, readSettings }
+  /** 读工具 get_document（issue 56）：按需返回文档全文（正文不进快照，
+   * 只经此工具拉取）；不存在返回 null，由调用方给 not found 文案。 */
+  const readDocument = useCallback(
+    (documentId: string): string | null => {
+      const d = settingsRef.current.documents?.find((x) => x.id === documentId)
+      return d ? JSON.stringify({ id: d.id, title: d.title, body: d.body, relatedIds: d.relatedIds }) : null
+    },
+    [settingsRef],
+  )
+
+  return { canvasDigest, aiSnapshot, validateAiReply, validateCommands, readNode, readSettings, readDocument }
 }
 
 export function useAiBridge(deps: AiBridgeDeps): AiBridge {
@@ -232,8 +249,9 @@ export function useAiBridge(deps: AiBridgeDeps): AiBridge {
     pushHistory,
     closeSettings,
   } = deps
-  const { canvasDigest, aiSnapshot, validateAiReply, validateCommands, readNode, readSettings } =
-    useAiReadTools(deps)
+  const {
+    canvasDigest, aiSnapshot, validateAiReply, validateCommands, readNode, readSettings, readDocument,
+  } = useAiReadTools(deps)
 
   /** ✦AI 改动落地：整批作为一条复合命令入栈；返回错误文案或 null。
    * 入参为整批校验通过的执行命令（预览卡的合法子集，issue 16）；
@@ -253,5 +271,5 @@ export function useAiBridge(deps: AiBridgeDeps): AiBridge {
     [aiSnapshot, applyDataPatch, buildNewNode, closeSettings, edgesRef, nodesRef, pushHistory, setAiRevision, setEdges, setNodes, setSettings, settingsRef],
   )
 
-  return { canvasDigest, validateAiReply, validateCommands, readNode, readSettings, applyAiBatch }
+  return { canvasDigest, validateAiReply, validateCommands, readNode, readSettings, readDocument, applyAiBatch }
 }

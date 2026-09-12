@@ -3,8 +3,9 @@ import type { Edge } from '@xyflow/react'
 import SegmentedControl from './SegmentedControl'
 import PanelResizer from './PanelResizer'
 import AssetsPanel from './AssetsPanel'
+import SettingsList from './SettingsList'
+import DocumentEditorDialog from './DocumentEditorDialog'
 import { buildOutlineGroups, type OutlineDropTarget } from '../outline'
-import { PW_ENTITY_MIME, type EntityDragPayload } from '../dragDrop'
 import { EditableName } from '../nodes/settings/NodeSettingsPanel'
 import type { ProjectSettings } from '../settings'
 import type { CanvasNode } from '../nodes/types'
@@ -18,7 +19,7 @@ type DropHint =
   | { kind: 'group'; episode: number | null }
   | null
 
-/** 设定集条目编辑动作（§5：增/改名/删，走命令栈可撤销）。 */
+/** 设定集条目编辑动作（§5：增/改名/删，走命令栈可撤销；issue 56 增文档）。 */
 export interface SettingsActions {
   addCharacter: () => void
   renameCharacter: (id: string, name: string) => void
@@ -26,6 +27,11 @@ export interface SettingsActions {
   addLocation: () => void
   renameLocation: (id: string, name: string) => void
   deleteLocation: (id: string) => void
+  /** 新建占位文档（issue 56）。 */
+  addDocument: () => void
+  /** 保存文档编辑（标题/正文/关联整体 patch）。 */
+  updateDocument: (id: string, patch: { title?: string; body?: string; relatedIds?: Array<{ kind: 'character' | 'location'; id: string }> }) => void
+  deleteDocument: (id: string) => void
 }
 
 /** 左栏分段（docs/ui-design.md §3.4）：大纲 = 故事脊线线性投影，设定集/资产 = 引用源。 */
@@ -96,6 +102,9 @@ export default function LeftPanel({
   )
   const outlineRef = useRef<HTMLElement>(null)
   const [dropHint, setDropHint] = useState<DropHint>(null)
+  /** 正在编辑的文档 id（issue 56）：弹窗以打开时的文档为编辑基线。 */
+  const [editingDocId, setEditingDocId] = useState<string | null>(null)
+  const editingDoc = settings.documents?.find((d) => d.id === editingDocId) ?? null
 
   // level < 3 = 编剧侧四类（分镜随宿主场景，不参与拖拽排序）
   const readDragged = (e: ReactDragEvent): string | null => {
@@ -241,95 +250,24 @@ export default function LeftPanel({
             </section>
           )}
           {tab === 'settings' && (
-            <div className="pw-settings">
-              <div className="pw-settings-group">角色</div>
-              {settings.characters.map((c) => (
-                <div
-                  key={c.id}
-                  className="pw-settings-item pw-draggable"
-                  draggable
-                  title="拖到画布节点建立引用，或拖到空白处新建场景"
-                  onDragStart={(e: ReactDragEvent) => {
-                    e.dataTransfer.setData(
-                      PW_ENTITY_MIME,
-                      JSON.stringify({ kind: 'character', id: c.id, name: c.name } satisfies EntityDragPayload),
-                    )
-                    e.dataTransfer.effectAllowed = 'copy'
-                  }}
-                >
-                  <span className="pw-av pw-av-sm" style={{ background: c.gradient }}>
-                    {c.name.charAt(0)}
-                  </span>
-                  <span className="pw-settings-item-body">
-                    <EditableName
-                      value={c.name}
-                      ariaLabel={`角色名 ${c.name}`}
-                      onChange={(name) => settingsActions.renameCharacter(c.id, name)}
-                    />
-                  </span>
-                  <button
-                    type="button"
-                    className="pw-settings-x"
-                    aria-label={`删除角色 ${c.name}`}
-                    title="删除角色（节点引用将标记失效）"
-                    onClick={() => settingsActions.deleteCharacter(c.id)}
-                  >
-                    ✕
-                  </button>
-                </div>
-              ))}
-              <button
-                type="button"
-                className="pw-settings-add"
-                onClick={settingsActions.addCharacter}
-              >
-                ＋ 新增角色
-              </button>
-              <div className="pw-settings-group">地点</div>
-              {settings.locations.map((l) => (
-                <div
-                  key={l.id}
-                  className="pw-settings-item pw-draggable"
-                  draggable
-                  title="拖到索引卡设置地点，或拖到空白处新建场景"
-                  onDragStart={(e: ReactDragEvent) => {
-                    e.dataTransfer.setData(
-                      PW_ENTITY_MIME,
-                      JSON.stringify({ kind: 'location', id: l.id, name: l.name } satisfies EntityDragPayload),
-                    )
-                    e.dataTransfer.effectAllowed = 'copy'
-                  }}
-                >
-                  <span className="pw-settings-item-body">
-                    <EditableName
-                      value={l.name}
-                      ariaLabel={`地点名 ${l.name}`}
-                      onChange={(name) => settingsActions.renameLocation(l.id, name)}
-                    />
-                  </span>
-                  <button
-                    type="button"
-                    className="pw-settings-x"
-                    aria-label={`删除地点 ${l.name}`}
-                    title="删除地点（节点引用将标记失效）"
-                    onClick={() => settingsActions.deleteLocation(l.id)}
-                  >
-                    ✕
-                  </button>
-                </div>
-              ))}
-              <button
-                type="button"
-                className="pw-settings-add"
-                onClick={settingsActions.addLocation}
-              >
-                ＋ 新增地点
-              </button>
-            </div>
+            <SettingsList
+              settings={settings}
+              actions={settingsActions}
+              onOpenDocument={setEditingDocId}
+            />
           )}
           {tab === 'assets' && <AssetsPanel />}
         </div>
       </div>
+      {/* 文档编辑器弹窗（issue 56）：以打开时的文档快照为编辑基线，保存一次派发 */}
+      {editingDoc && (
+        <DocumentEditorDialog
+          doc={editingDoc}
+          settings={settings}
+          onSave={settingsActions.updateDocument}
+          onClose={() => setEditingDocId(null)}
+        />
+      )}
       {open && (
         <PanelResizer direction={1} startWidth={width} onResize={onResize} />
       )}

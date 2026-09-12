@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
+  AI_DOCUMENT_FIELDS,
   AI_ENTITY_FIELDS,
+  documentFieldTableText,
   entityFieldTableText,
   settingsSnapshotText,
 } from './entityFields'
@@ -28,6 +30,20 @@ describe('AI_ENTITY_FIELDS（issue 44：实体字段协议单一来源）', () =
   })
 })
 
+describe('AI_DOCUMENT_FIELDS（issue 56：设定文档字段协议单一来源）', () => {
+  it('白名单为 title/body/relatedIds；表文本含三字段说明', () => {
+    expect(AI_DOCUMENT_FIELDS.map((f) => f.key)).toEqual(['title', 'body', 'relatedIds'])
+    const text = documentFieldTableText()
+    expect(text).toContain('title(string)')
+    expect(text).toContain('body(string)')
+    expect(text).toContain('relatedIds(array)')
+    for (const f of AI_DOCUMENT_FIELDS) {
+      expect(['string', 'integer', 'boolean', 'array']).toContain(f.type)
+      expect(f.desc.length).toBeGreaterThan(0)
+    }
+  })
+})
+
 describe('settingsSnapshotText（get_settings_snapshot 读工具的返回文本）', () => {
   it('列出角色/地点的 id、名称与小传/备注；不暴露 UI 专属字段（gradient）', () => {
     const text = settingsSnapshotText({
@@ -47,7 +63,7 @@ describe('settingsSnapshotText（get_settings_snapshot 读工具的返回文本�
     expect(text).not.toContain('gradient')
   })
 
-  it('空设定集返回空桶；props/documents 只给只读清单（首期不对 AI 开放写）', () => {
+  it('空设定集返回空桶；documents 清单只给 id+标题元数据（正文经 get_document 按需读取）', () => {
     const empty = JSON.parse(settingsSnapshotText(EMPTY_SETTINGS)) as Record<string, unknown>
     expect(empty).toEqual({ characters: [], locations: [] })
 

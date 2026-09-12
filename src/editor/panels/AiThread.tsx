@@ -311,6 +311,7 @@ function useAiTurn(opts: {
   readonly onValidateCommands?: (commands: AiCommand[]) => BatchValidation | null
   readonly onReadNode?: (nodeId: string) => string | null
   readonly onReadSettings?: () => string
+  readonly onReadDocument?: (documentId: string) => string | null
 }) {
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
@@ -353,7 +354,7 @@ function useAiTurn(opts: {
       opts.activeProvider,
       opts.activeOption.model,
       buildMessages(opts.thread, text, knowsCanvas, opts.canvasDigest),
-      readToolOf(opts.canvasDigest, opts.onReadNode, opts.onReadSettings),
+      readToolOf(opts.canvasDigest, opts.onReadNode, opts.onReadSettings, opts.onReadDocument),
       { commands: opts.onValidateCommands, prose: opts.onValidateAi },
       opts.nextId,
     ).then(
@@ -583,6 +584,8 @@ interface AiThreadProps {
   readonly onValidateCommands?: (commands: AiCommand[]) => BatchValidation | null
   readonly onReadNode?: (nodeId: string) => string | null
   readonly onReadSettings?: () => string
+  /** 读工具 get_document（issue 56）：按 id 返回文档全文 JSON。 */
+  readonly onReadDocument?: (documentId: string) => string | null
   readonly onApplyAiBatch?: (commands: ValidatedCommand[]) => string | null
   /** 承载批次的画布文档确认落盘后兑现；执行卡据此推迟 executed 落盘。 */
   readonly whenCanvasCommitted?: () => Promise<void>
@@ -605,6 +608,7 @@ export default function AiThread({
   onValidateCommands,
   onReadNode,
   onReadSettings,
+  onReadDocument,
   onApplyAiBatch,
   whenCanvasCommitted,
   aiRevision,
@@ -635,6 +639,7 @@ export default function AiThread({
     onValidateCommands,
     onReadNode,
     onReadSettings,
+    onReadDocument,
   })
   // 新条目/思考态/错误出现时滚动到底（跟随原内联实现）
   useEffect(() => {

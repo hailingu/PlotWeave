@@ -5,7 +5,7 @@
  * 用于界面展示）。
  */
 import { describe, expect, it } from 'vitest'
-import { buildMessages } from './aiThreadModel'
+import { buildMessages, readToolOf } from './aiThreadModel'
 import type { ThreadEntry } from '../ai/session'
 
 const msg = (id: number, role: 'user' | 'assistant', text: string): ThreadEntry => ({
@@ -143,5 +143,23 @@ describe('buildMessages 历史上界', () => {
     ]
     const history = historyOf(buildMessages(thread, '继续', false))
     expect(history.some((m) => m.content.includes('已执行'))).toBe(false)
+  })
+})
+
+describe('readToolOf · 读工具分发（issue 56 增 get_document）', () => {
+  const args = (a: Record<string, unknown>) => a
+
+  it('get_document 按 id 分发到文档读取器；缺省读取器返回 not found', () => {
+    const readDocument = (id: string) =>
+      id === 'doc-1' ? JSON.stringify({ id: 'doc-1', title: '世界观', body: '全文' }) : null
+    const tool = readToolOf(undefined, undefined, () => '{}', readDocument)
+    expect(tool('get_document', args({ documentId: 'doc-1' }))).toContain('世界观')
+    expect(tool('get_document', args({ documentId: 'ghost' }))).toBe('document not found: ghost')
+  })
+
+  it('未接线文档读取器时给出占位文案，不抛异常', () => {
+    const tool = readToolOf(undefined, undefined)
+    expect(tool('get_document', args({ documentId: 'doc-1' }))).toBe('document not found: doc-1')
+    expect(tool('unknown_tool', args({}))).toBe('unknown read tool: unknown_tool')
   })
 })

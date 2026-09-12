@@ -53,20 +53,44 @@ export type AiCommand =
       fields?: unknown
       reason?: unknown
     }
+  | {
+      /** 设定文档写通道（issue 56，§9.3 upsert_document）：新建不带 entityId
+       * （fields.title 必填）；修改必须带 entityId 精确指向既有文档，fields
+       * 只写要改的字段（title/body/relatedIds，未提及字段保持不变）。
+       * relatedIds 条目为 {kind, id}，id 可用本批实体 ref 别名。 */
+      op: 'upsert_document'
+      entityId?: unknown
+      ref?: unknown
+      fields?: unknown
+      reason?: unknown
+    }
 
 /** 校验后的实体字段：白名单键 + 全字符串值（entityFold 归一产出）。 */
 export type ValidatedEntityFields = Record<string, string>
+
+/** 校验后的文档字段（issue 56）：relatedIds 条目保持原始 token（既有实体
+ * id 或本批 ref 别名），执行期由 batchSim 的别名表解析为真实 id——与节点
+ * 载荷的实体 ref 同一解析口径，临时别名不落盘。 */
+export interface ValidatedDocumentFields {
+  title?: string
+  body?: string
+  relatedIds?: Array<{ kind: 'character' | 'location'; id: string }>
+}
 
 /** 校验通过的执行命令（BatchValidation.commands → applyAiBatch →
  * simulateBatch 的形态）：与入站 AiCommand 同构，唯一差别是 update_node
  * 的 patch 已按目标节点类型完成键白名单与值形状校验并判别化绑定
  * NodeDataPatch（issue 16），upsert 的 fields 已按实体种类完成白名单与
- * 值形状校验（issue 44）——执行与撤销路径不再接受宽 Record 补丁。 */
+ * 值形状校验（issue 44；文档通道 issue 56）——执行与撤销路径不再接受
+ * 宽 Record 补丁。 */
 export type ValidatedCommand =
   | Extract<AiCommand, { op: 'create_node' | 'delete_node' | 'connect_edge' | 'disconnect_edge' }>
   | (Omit<Extract<AiCommand, { op: 'update_node' }>, 'patch'> & { patch: NodeDataPatch })
   | (Omit<Extract<AiCommand, { op: 'upsert_character' | 'upsert_location' }>, 'fields'> & {
       fields: ValidatedEntityFields
+    })
+  | (Omit<Extract<AiCommand, { op: 'upsert_document' }>, 'fields'> & {
+      fields: ValidatedDocumentFields
     })
 
 /** 执行命令 → 入站形态（applyAiBatch 重校验用）：判别补丁剥回模型侧的
@@ -105,10 +129,13 @@ export interface AiGraphSnapshot {
   settings?: AiEntitySnapshot
 }
 
-/** 设定集实体快照：只携带引用校验需要的 id 与名称（issue 44）。 */
+/** 设定集实体快照：只携带引用校验需要的 id 与名称（issue 44）；documents
+ * 携带 id + 标题 + 正文字数（issue 56）——entityId 解析、预览标签与 body
+ * 全文替换的字数信号消费；正文本身不进校验快照。 */
 export interface AiEntitySnapshot {
   characters: ReadonlyArray<{ id: string; name: string }>
   locations: ReadonlyArray<{ id: string; name: string }>
+  documents?: ReadonlyArray<{ id: string; title: string; bodyLength?: number }>
 }
 
 /** 预览卡的单行条目（§6：逐项列出受影响节点与变更类型；issue 44 增实体条目）。 */

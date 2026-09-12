@@ -11,9 +11,11 @@ import {
 import { dataPatchOf } from '../nodes/patch'
 import { AI_FIELD_KEYS } from './nodeFields'
 import {
+  documentFieldsIssue,
   entityFieldsIssue,
   entityScopeOf,
   foldUpsert,
+  foldUpsertDocument,
   type EntityFoldHost,
 } from './entityFold'
 import type { EntityKind } from './entityFields'
@@ -132,6 +134,7 @@ function shapeIssueOf(
   if (raw.op === 'upsert_character' || raw.op === 'upsert_location') {
     return entityUpsertShapeIssue(raw)
   }
+  if (raw.op === 'upsert_document') return documentUpsertShapeIssue(raw)
   return null
 }
 
@@ -187,6 +190,18 @@ function entityUpsertShapeIssue(raw: Record<string, unknown>): string | null {
     return `entityId 在场时须为非空白字符串（缺省才是新建）：${JSON.stringify(raw.entityId)}`
   }
   return entityFieldsIssue(kind, fields, raw.entityId === undefined ? 'create' : 'update')
+}
+
+/** 文档 upsert 的形状校验（issue 56，阶段 A 上下文无关）：fields 白名单/
+ * 值形状/relatedIds 条目形状；entityId 结构性。目标解析、relatedIds 存在性
+ * 与去重属阶段 B。 */
+function documentUpsertShapeIssue(raw: Record<string, unknown>): string | null {
+  const fields = raw.fields
+  if (!plainObject(fields)) return 'fields 必须是字段对象'
+  if (raw.entityId !== undefined && asText(raw.entityId) === '') {
+    return `entityId 在场时须为非空白字符串（缺省才是新建）：${JSON.stringify(raw.entityId)}`
+  }
+  return documentFieldsIssue(fields, raw.entityId === undefined ? 'create' : 'update')
 }
 
 function foldCreate(st: FoldState, cmd: Record<string, unknown>, index: number): void {
@@ -455,7 +470,8 @@ function foldDisconnectEdge(
 }
 
 /** 折叠器分发表：op → 处理函数。设定实体命令（issue 44）复用实体域的
- * 折叠内核（entityFold.ts），共享同一虚拟投影与问题收集。 */
+ * 折叠内核（entityFold.ts），共享同一虚拟投影与问题收集；文档命令
+ * （issue 56）同域。 */
 const FOLDERS: Record<string, (st: FoldState, cmd: Record<string, unknown>, index: number) => void> = {
   create_node: foldCreate,
   update_node: foldUpdate,
@@ -464,6 +480,7 @@ const FOLDERS: Record<string, (st: FoldState, cmd: Record<string, unknown>, inde
   disconnect_edge: (st, cmd, index) => foldEdge(st, cmd, index, 'disconnect_edge'),
   upsert_character: (st, cmd, index) => foldUpsert(st, cmd, index, 'character'),
   upsert_location: (st, cmd, index) => foldUpsert(st, cmd, index, 'location'),
+  upsert_document: foldUpsertDocument,
 }
 
 /** 阶段 A：全量形状校验（validateAiBatch 拆出，S3776）——一次收集、一次
@@ -503,6 +520,12 @@ export function validateAiBatch(rawCommands: unknown, graph: AiGraphSnapshot): B
     // 运行时快照恒携带（graphSnapshotOf）
     characters: new Map((graph.settings?.characters ?? []).map((c) => [c.id, c.name])),
     locations: new Map((graph.settings?.locations ?? []).map((l) => [l.id, l.name])),
+    documents: new Map(
+      (graph.settings?.documents ?? []).map((d) => [
+        d.id,
+        { title: d.title, bodyLength: d.bodyLength },
+      ]),
+    ),
     virtualEntityIds: new Set(),
     entityRefs: new Map(),
     items: [],

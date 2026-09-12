@@ -32,6 +32,10 @@ describe('batch 命令逐项参数契约', () => {
     { op: 'disconnect_edge', targetId: 'n2' },
     { op: 'upsert_character', fields: {} },
     { op: 'upsert_location', fields: { name: '店', unsupported: '非法字段' } },
+    { op: 'upsert_document', fields: {} },
+    { op: 'upsert_document', fields: { title: 42 } },
+    { op: 'upsert_document', fields: { relatedIds: ['裸字符串'] } },
+    { op: 'upsert_document', entityId: 'doc-1' },
   ])('供应商 schema 拒绝不完整或异型命令：%j', (command) => {
     expect(() => check('batch', { commands: [command] })).toThrow()
   })
@@ -82,6 +86,9 @@ describe('单工具同样提供完整字段结构', () => {
     ['create_node', { nodeType: 'branch', data: { options: ['走', { label: '留' }] } }],
     ['update_node_spec', { nodeId: 'n1', patch: { synopsis: '新的梗概' } }],
     ['upsert_character', { entityId: 'existing', fields: { bio: '只更新小传' } }],
+    ['upsert_document', { fields: { title: '世界观', body: '大陆纪元……' } }],
+    ['upsert_document', { entityId: 'doc-1', fields: { body: '追加世界观设定' } }],
+    ['upsert_document', { fields: { title: '术语表', relatedIds: [{ kind: 'character', id: 'ch-1' }] } }],
   ])('%s 保留默认字段和既有简写输入', (name, payload) => {
     expect(check(name as string, payload as object)).toEqual([])
   })
