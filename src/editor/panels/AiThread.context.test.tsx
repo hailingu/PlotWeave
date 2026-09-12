@@ -91,6 +91,8 @@ async function setup(options: {
   nodes?: CanvasNode[]
   whenCanvasCommitted?: () => Promise<void>
   projectId?: string
+  onOpenSettings?: () => void
+  loadFailed?: boolean
 } = {}) {
   const canvas = canvasHarness(options.nodes, options.aiRevision)
   const saved: AiSession[] = []
@@ -98,6 +100,8 @@ async function setup(options: {
     open: true, width: 320, tab: 'ai' as const, settings: EMPTY_SETTINGS,
     projectId: options.projectId ?? 'p-context',
     onResize: () => undefined, onTabChange: () => undefined,
+    onOpenSettings: options.onOpenSettings,
+    aiSessionLoadFailed: options.loadFailed,
     canvasDigest: canvas.hook.result.current.canvasDigest,
     onValidateCommands: canvas.hook.result.current.validateCommands,
     onValidateAi: canvas.hook.result.current.validateAiReply,
@@ -108,7 +112,8 @@ async function setup(options: {
     onSaveAiSession: async (session: AiSession) => { saved.push(JSON.parse(JSON.stringify(session)) as AiSession) },
   })
   const view = render(<RightPanel {...props()} />)
-  await screen.findByLabelText('AI 对话输入')
+  if (options.loadFailed) await screen.findByRole('alert')
+  else await screen.findByLabelText('AI 对话输入')
   return {
     ...canvas, saved,
     refresh: () => { canvas.hook.rerender(); view.rerender(<RightPanel {...props()} />) },
@@ -455,5 +460,37 @@ describe('AiThread 在途回合的归还与失败（issue #63）', () => {
     first.unmount()
     await setup({ projectId: 'p63-once', session: committed })
     expect(screen.getAllByText('唯一回复。')).toHaveLength(1)
+  })
+})
+
+describe('AiThread 常驻设置入口（issue #87）', () => {
+  it('配置齐全后入口仍可见可点：点击调用 onOpenSettings', async () => {
+    const onOpenSettings = vi.fn()
+    await setup({ onOpenSettings })
+    const entry = screen.getByRole('button', { name: '打开设置' })
+    expect(entry).toBeTruthy()
+    fireEvent.click(entry)
+    expect(onOpenSettings).toHaveBeenCalledTimes(1)
+  })
+
+  it('未配置空态：常驻入口与引导按钮并存，不互斥', async () => {
+    vi.spyOn(settingsStore, 'load').mockResolvedValue({
+      providers: [], defaultChat: null, defaultImage: null,
+    })
+    const onOpenSettings = vi.fn()
+    await setup({ onOpenSettings })
+    expect(screen.getByText('尚未接入 AI 服务')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /前往设置页/ })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '打开设置' }))
+    expect(onOpenSettings).toHaveBeenCalledTimes(1)
+  })
+
+  it('会话读取失败态：聊天操作区不挂载，常驻设置入口仍可用', async () => {
+    const onOpenSettings = vi.fn()
+    await setup({ onOpenSettings, loadFailed: true })
+    expect(screen.getByRole('alert')).toBeTruthy()
+    expect(screen.queryByLabelText('AI 对话输入')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '打开设置' }))
+    expect(onOpenSettings).toHaveBeenCalledTimes(1)
   })
 })

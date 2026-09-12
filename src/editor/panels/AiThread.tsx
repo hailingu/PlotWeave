@@ -480,6 +480,54 @@ function AiModelSelect({
   )
 }
 
+/** 常驻设置入口按钮（issue #87）：AiTopbar 与会话读取失败态共用。不依赖
+ * 配置状态——配置齐全后空态引导消失、会话损坏时聊天操作区不挂载，此处
+ * 都是 ⌘, 快捷键之外唯一的可见设置回访入口。 */
+export function AiSettingsButton({ onOpenSettings }: { readonly onOpenSettings?: () => void }) {
+  return (
+    <button
+      type="button"
+      className="pw-ai-settings-btn"
+      aria-label="打开设置"
+      title="打开设置页（⌘,）"
+      disabled={!onOpenSettings}
+      onClick={onOpenSettings}
+    >
+      ⚙
+    </button>
+  )
+}
+
+/** 面板顶栏（issue #87）：模型选择器与常驻设置入口同行。设置入口不依赖
+ * 配置状态——配置齐全后空态引导消失，此处是 ⌘, 之外唯一的可见回访入口。 */
+function AiTopbar({
+  options,
+  activeKey,
+  keyOkByProvider,
+  onSelect,
+  onOpenSettings,
+}: {
+  readonly options: ChatModelOption[]
+  readonly activeKey: string | null
+  readonly keyOkByProvider: Record<string, boolean>
+  readonly onSelect: (key: string) => void
+  readonly onOpenSettings?: () => void
+}) {
+  return (
+    <div className="pw-ai-topbar">
+      {options.length > 0 && (
+        <AiModelSelect
+          options={options}
+          activeKey={activeKey}
+          keyOkByProvider={keyOkByProvider}
+          onSelect={onSelect}
+        />
+      )}
+      <AiSettingsButton onOpenSettings={onOpenSettings} />
+    </div>
+  )
+}
+
 /** 输入行：消息输入（Enter 发送）+ 画布感知开关。 */
 function AiComposer({
   draft,
@@ -647,15 +695,14 @@ export default function AiThread({
   }, [msg.thread, msg.threadRef, turn.busy, turn.error])
   return (
     <div className="pw-ai">
+      <AiTopbar
+        options={m.options}
+        activeKey={m.activeKey}
+        keyOkByProvider={m.keyOkByProvider}
+        onSelect={m.setModelKey}
+        onOpenSettings={onOpenSettings}
+      />
       {!m.ready && <AiGuide hasModels={m.options.length > 0} onOpenSettings={onOpenSettings} />}
-      {m.options.length > 0 && (
-        <AiModelSelect
-          options={m.options}
-          activeKey={m.activeKey}
-          keyOkByProvider={m.keyOkByProvider}
-          onSelect={m.setModelKey}
-        />
-      )}
       <AiThreadTimeline
         thread={msg.thread}
         threadRef={msg.threadRef}
