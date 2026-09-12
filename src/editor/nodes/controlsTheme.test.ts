@@ -11,18 +11,20 @@
  * - 注入顺序：应用侧按 src/index.css 的 @import 序注入，RF 样式表属懒加载
  *   chunk（App.tsx 惰性 import EditorView）必然最后注入。
  *
- * 可观测不变量：无论样式表注入顺序如何，按钮在静止与悬停两态的计算
- * background/color 在两种外观下都必须等于对应语义令牌的解析值。happy-dom 的
+ * 可观测不变量：无论样式表注入顺序如何，按钮在静止/悬停/键盘聚焦三态的
+ * 计算 background/color/outline 在两种外观下都必须等于对应语义令牌的解析值
+ * （悬停背景 = --fill-quaternary、聚焦描边含 --accent）。happy-dom 的
  * getComputedStyle 不解析两级 var 链（--a: var(--b) 形态消费为空），无法直接
- * 对渲染树取计算值；本文件以 postcss 解析真实生产样式表组合，选择器匹配用
- * Element.matches（悬停态剥去 :hover 求命中、特异性仍按原选择器计），按 CSS
- * 作者源级联（!important → 特异性 → 规则序 → 块内声明序；background 简写与
+ * 对渲染树取计算值；本文件以 postcss 解析真实生产样式表组合（@import 展开层
+ * + index.css 本体规则 + RF dist 样式表），选择器匹配用 Element.matches（悬停
+ * /聚焦态剥去对应伪类求命中、特异性仍按原选择器计），按 CSS 作者源级联
+ * （!important → 特异性 → 规则序 → 块内声明序；background 简写与
  * background-color 长写同道竞争）与自定义属性继承 + var() 回退链消解出计算值
- * 后断言。七条自检用例向测试内注入七类回归形态（接线缺失、更高特异性错误
- * 硬编码、更高特异性覆盖自定义属性、!important、background-color 长写改写
- * 颜色分量、同规则内后置长写覆盖前置简写、悬停道竞争声明），钉住消解模型能
- * 复现并捕获缺陷（评审 5187020501 / 5187126810 / 5187174354 / 5187272939 /
- * 5187318777 / 5187365964）。
+ * 后断言。九条自检用例注入九类回归形态（接线缺失、更高特异性错误硬编码、
+ * 更高特异性覆盖自定义属性、!important、background-color 长写改写颜色分量、
+ * 同规则内后置长写覆盖前置简写、悬停道竞争声明、index.css 本体竞争声明、
+ * 聚焦抑制描边），钉住消解模型能复现并捕获缺陷（评审 5187020501 /
+ * 5187126810 / 5187174354 / 5187272939 / 5187318777 / 5187365964 / 5187386211）。
  */
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -88,14 +90,23 @@ function flattenRules(layers: postcss.Root[], env: Env): Ruled[] {
   return out
 }
 
-/** 应用样式层：按 index.css 的 @import 声明序逐文件解析（生产注入顺序契约）。 */
+/**
+ * 应用样式层：@import 引用的文件按声明序在前，index.css 本体规则殿后——
+ * 与生产一致（Vite 将 @import 内联于文件顶部，本体规则随后参与级联；
+ * 评审 5187386211 指出丢弃本体会使写入 index.css 的竞争声明不可见）。
+ */
 function appLayers(): postcss.Root[] {
   const index = postcss.parse(read('src/index.css'))
   const imports: string[] = []
+  const importRules: postcss.AtRule[] = []
   index.walkAtRules('import', (at) => {
-    imports.push(at.params.replace(/^['"]|['"]$/g, ''))
+    importRules.push(at)
   })
-  return imports.map((file) => postcss.parse(read(`src/${file}`)))
+  for (const at of importRules) {
+    imports.push(at.params.replace(/^['"]|['"]$/g, ''))
+    at.remove()
+  }
+  return [...imports.map((file) => postcss.parse(read(`src/${file}`))), index]
 }
 
 const rfLayer = (): postcss.Root => postcss.parse(read('node_modules/@xyflow/react/dist/style.css'))
@@ -128,8 +139,8 @@ function fixture(): { chain: HappyDOMElement[] } {
 
 type Specificity = readonly [ids: number, classes: number, types: number]
 
-/** 评估的交互状态：rest = 静止态；hover = 悬停态（:hover 规则参与竞争）。 */
-type State = 'rest' | 'hover'
+/** 评估的交互状态：rest = 静止态；hover = 悬停态；focus = 键盘聚焦态。 */
+type State = 'rest' | 'hover' | 'focus'
 
 /** 选择器特异性（id, 类/伪类, 元素）；仓库样式表无属性选择器。 */
 function specificity(selector: string): Specificity {
@@ -261,8 +272,13 @@ function resolveValue(value: string, scopes: Scopes, element: HappyDOMElement, d
 
 /** 求选择器在指定状态下是否命中；未识别伪类抛错按不命中处理。 */
 function matchesInState(element: HappyDOMElement, selector: string, state: State): boolean {
-  // happy-dom 无悬停仿真：悬停态剥去 :hover 求命中，特异性仍按含 :hover 的原选择器计
-  const effective = state === 'hover' ? selector.replace(/:hover\b/gi, '') : selector
+  // happy-dom 无交互态仿真：悬停/聚焦态剥去对应伪类求命中，特异性仍按原选择器计
+  const effective =
+    state === 'hover'
+      ? selector.replace(/:hover\b/gi, '')
+      : state === 'focus'
+        ? selector.replace(/:focus(-visible)?\b/gi, '')
+        : selector
   try {
     return element.matches(effective.trim())
   } catch {
@@ -285,10 +301,11 @@ function winningSelectorSpec(
   return best
 }
 
-/** background 简写在级联中按 background-color 分道竞争（评审 5187272939）；color 无简写形态。 */
-const CASCADE_PROPS: Record<'background' | 'color', readonly string[]> = {
+/** background 简写在级联中按 background-color 分道竞争（评审 5187272939）；聚焦道含 outline-color 长写。 */
+const CASCADE_PROPS: Record<'background' | 'color' | 'outline', readonly string[]> = {
   background: ['background', 'background-color'],
   color: ['color'],
+  outline: ['outline', 'outline-color'],
 }
 
 /** 从已消解的 background 简写值中取颜色分量；无法识别时原样返回（断言保守变红）。 */
@@ -303,7 +320,7 @@ function computedProp(
   button: HappyDOMElement,
   ruled: Ruled[],
   scopes: Scopes,
-  prop: 'background' | 'color',
+  prop: 'background' | 'color' | 'outline',
   state: State = 'rest',
 ): string | null {
   const sourceProps = CASCADE_PROPS[prop]
@@ -402,6 +419,10 @@ describe('控件计算样式：生产样式表组合级联（PR #96 评审强化
       expect(computedProp(button, ruled, hoverScopes, 'color', 'hover')).toBe(
         tokenValue(hoverScopes, button, '--text-primary'),
       )
+      const focusScopes = collectScopes(chain, ruled, 'focus')
+      expect(computedProp(button, ruled, focusScopes, 'outline', 'focus')).toContain(
+        tokenValue(focusScopes, button, '--accent'),
+      )
     }
   })
 
@@ -489,5 +510,31 @@ describe('控件计算样式：生产样式表组合级联（PR #96 评审强化
     const hover = computedProp(button, ruled, scopes, 'background', 'hover')
     expect(hover).toBe('#ffffff')
     expect(hover).not.toBe(tokenValue(scopes, button, '--fill-quaternary'))
+  })
+
+  it('自检：写入入口 index.css 本体的竞争声明会胜出并被捕获（评审 5187386211 触发条件一）', () => {
+    const { button, chain } = buttonOf()
+    const layers = appLayers()
+    // 末层即 index.css 本体（导入文件在前、本体规则殿后），向其追加竞争声明
+    layers[layers.length - 1]!.append(
+      postcss.parse('.canvas-root .react-flow__controls-button { background: #ffffff; }').first!,
+    )
+    const ruled = flattenRules([...layers, rfLayer()], DARK)
+    const scopes = collectScopes(chain, ruled)
+    const background = computedProp(button, ruled, scopes, 'background')
+    expect(background).toBe('#ffffff')
+    expect(background).not.toBe(tokenValue(scopes, button, '--surface-card'))
+  })
+
+  it('自检：更高特异性聚焦规则抑制描边会胜出并被捕获（评审 5187386211 触发条件二）', () => {
+    const { button, chain } = buttonOf()
+    const rogue = postcss.parse('.canvas-root .react-flow__controls-button:focus-visible { outline: none; }')
+    const layers = appLayers()
+    layers.splice(layers.length - 1, 0, rogue)
+    const ruled = flattenRules([...layers, rfLayer()], DARK)
+    const scopes = collectScopes(chain, ruled, 'focus')
+    const outline = computedProp(button, ruled, scopes, 'outline', 'focus')
+    expect(outline).toBe('none')
+    expect(outline).not.toContain(tokenValue(scopes, button, '--accent'))
   })
 })
