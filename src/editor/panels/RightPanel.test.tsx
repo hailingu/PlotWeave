@@ -220,7 +220,8 @@ describe('RightPanel ✦AI 对话', () => {
     expect(await screen.findByText('建议先立冲突。')).toBeTruthy()
     expect(screen.getByText('这一幕怎么写？')).toBeTruthy()
 
-    const messages = llmChatMock.mock.calls[0][2] as ChatMessage[]
+    // calls[0] 是无动词输入的改写判定请求，主回合请求在 calls[1]。
+    const messages = llmChatMock.mock.calls[1][2] as ChatMessage[]
     expect(messages[0].role).toBe('system')
     expect(messages.some((m) => m.content.includes('SNAPSHOT'))).toBe(true)
     expect(messages[messages.length - 1]).toEqual({ role: 'user', content: '这一幕怎么写？' })
@@ -701,7 +702,8 @@ describe('RightPanel ✦AI 字段协议（issue 41）', () => {
     llmChatMock.mockResolvedValue(reply({ content: '好的。' }))
     send('这一幕怎么写？')
     await screen.findByText('好的。')
-    const messages = llmChatMock.mock.calls[0][2] as ChatMessage[]
+    // calls[0] 是无动词输入的改写判定请求，携带字段表的主系统提示在 calls[1]。
+    const messages = llmChatMock.mock.calls[1][2] as ChatMessage[]
     expect(messages[0].role).toBe('system')
     expect(messages[0].content).toContain(nodeFieldTableText())
     expect(messages[0].content).toContain('episodeNo')

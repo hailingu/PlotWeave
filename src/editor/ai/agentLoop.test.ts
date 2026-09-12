@@ -199,7 +199,7 @@ describe('runAgentLoop 围栏通道与修正指令（issue 41）', () => {
 
     const result = await run([{ role: 'user', content: '怎么写？' }], validators({ prose }))
 
-    expect(llmChatMock).toHaveBeenCalledTimes(1)
+    expect(llmChatMock).toHaveBeenCalledTimes(2) // 1 次改写判定（无动词输入）+ 回合终止
     expect(result.validation).toBeNull()
     expect(result.prose).toBe('建议先立冲突。')
     expect(prose).toHaveBeenCalledWith('建议先立冲突。')

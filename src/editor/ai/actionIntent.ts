@@ -46,10 +46,14 @@ export function hasActionVerb(text: string): boolean {
   return matches(CHANGE, text)
 }
 
-/** 无动作动词、也非明确讨论的含糊输入才需要改写调用判定（每轮至多一次）。 */
+/** 无动作动词的含糊输入才需要改写调用判定（每轮至多一次）。讨论/否定
+ * 片段不否决改写（PR #92 评审）：否定辖域（「不要解释」vs「不要修改」）
+ * 与「特别」这类偶发子串，片段匹配无法判别而改写调用可以；明确暂不操
+ * 作的保护由动词快速路径加 expectsActionPreview 否决、以及改写提示词
+ * 的 NONE 分类（无动词输入）共同承担。 */
 export function needsActionRewrite(text: string): boolean {
   const trimmed = text.trim()
-  return trimmed !== '' && !matches(CHANGE, trimmed) && !matches(DISCUSSION, trimmed)
+  return trimmed !== '' && !matches(CHANGE, trimmed)
 }
 
 /** 引导查看预览卡的表达。 */
