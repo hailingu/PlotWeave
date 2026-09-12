@@ -243,6 +243,27 @@ describe('upsert_document · 阶段 B 折叠校验', () => {
     expect(cross.ok).toBe(false)
   })
 
+  it('entityId 保留原始串做桶查找：带首尾空白的权威文档 id 不因 trim 查丢（PR #86 评审）', () => {
+    // 加载归一化只重写纯空白记录键（reKeyBlankEntries），带首尾空白的键按
+    // 「以记录键为准」保留为权威 id，get_settings_snapshot 原样下发
+    const paddedSnap: AiGraphSnapshot = {
+      nodes: [{ id: 'n1', type: 'scene', label: '场 01' }],
+      edges: [],
+      assets: new Map(),
+      settings: {
+        characters: [],
+        locations: [],
+        documents: [{ id: ' doc-1 ', title: '世界观' }],
+      },
+    }
+    const v = validateAiBatch(
+      [{ op: 'upsert_document', entityId: ' doc-1 ', fields: { body: '新全文' } }],
+      paddedSnap,
+    )
+    expect(v.ok).toBe(true)
+    expect(v.commands[0]).toMatchObject({ entityId: ' doc-1 ', fields: { body: '新全文' } })
+  })
+
   it('首错即停：失败文档命令之后的命令不点名', () => {
     const v = validateAiBatch(
       [

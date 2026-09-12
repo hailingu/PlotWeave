@@ -446,8 +446,11 @@ function foldUpdateDocument(
 }
 
 /** upsert_document 的折叠校验（issue 56）：缺省 entityId = 新建（执行期分配
- * 真实 id）；带 entityId = 修改既有文档。entityId 在场但非字符串/空白 = 整批
- * 拒绝（同 foldUpsert 口径——畸形修改意图不得重释为新建通道）。 */
+ * 真实 id）；带 entityId = 修改既有文档。entityId 在场但纯空白 = 整批拒绝
+ * （同 foldUpsert 口径——畸形修改意图不得重释为新建通道）。非空白 target
+ * 保留原始串参与桶查找：加载归一化只重写纯空白记录键（reKeyBlankEntries），
+ * 带首尾空白的记录键按「以记录键为准」保留为权威 id 且快照原样下发，trim
+ * 会让模型按广告 id 回写的更新被误判文档不存在（PR #86 评审）。 */
 export function foldUpsertDocument(
   st: EntityFoldHost,
   raw: Record<string, unknown>,
@@ -456,8 +459,8 @@ export function foldUpsertDocument(
   const fields = raw.fields
   if (!plainObject(fields)) return st.fail(index, 'fields 必须是字段对象')
   if (raw.entityId === undefined) return foldCreateDocument(st, raw, index, fields)
-  const target = typeof raw.entityId === 'string' ? raw.entityId.trim() : ''
-  if (target === '') {
+  const target = typeof raw.entityId === 'string' ? raw.entityId : ''
+  if (target.trim() === '') {
     return st.fail(
       index,
       `entityId 在场时须为非空白字符串（缺省才是新建）：${JSON.stringify(raw.entityId)}`,
