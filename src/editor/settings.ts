@@ -79,6 +79,12 @@ export function createLocation(name: string): LocationEntity {
   return { id: newEntityId('loc'), name: name.trim() }
 }
 
+/** 新建设定文档实体（issue 56）：标题去空白，正文与关联为空，
+ * 由编辑器或 AI 写入通道填充。 */
+export function createDocument(title = '新文档'): DocumentEntity {
+  return { id: newEntityId('doc'), title: title.trim(), body: '', relatedIds: [] }
+}
+
 /** 头像单字标签：取名字首字符。 */
 function avatarLabel(name: string): string {
   return name.trim().charAt(0) || '?'

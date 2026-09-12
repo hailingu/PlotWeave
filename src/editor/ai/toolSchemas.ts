@@ -3,7 +3,13 @@
  * batch 按 op 与创建类型区分成员。仅描述推荐输出，运行时仍由批次校验把关。
  */
 import { AI_NODE_FIELDS, nodeFieldTableText, type AiFieldSpec } from './nodeFields'
-import { AI_ENTITY_FIELDS, entityFieldTableText, type EntityKind } from './entityFields'
+import {
+  AI_DOCUMENT_FIELDS,
+  AI_ENTITY_FIELDS,
+  documentFieldTableText,
+  entityFieldTableText,
+  type EntityKind,
+} from './entityFields'
 
 /** 编排命令 schema 所需的对象形状，保留 properties 供批次成员复用。 */
 interface ObjectSchema extends Record<string, unknown> {
@@ -43,6 +49,34 @@ function entityParameters(kind: EntityKind): ObjectSchema {
   }, ['fields'])
 }
 
+/** relatedIds 的值结构（issue 56）：kind+id 成对，id 须为既有实体或本批实体
+ * ref。单写工具与批次变体共用同一对象，避免两条通道形状漂移。 */
+const relatedIdsSchema = {
+  type: 'array',
+  description: AI_DOCUMENT_FIELDS[2].desc,
+  items: {
+    type: 'object',
+    properties: {
+      kind: { type: 'string', enum: ['character', 'location'], description: '关联条目种类' },
+      id: token('实体 id 或本批实体 ref 别名'),
+    },
+    required: ['kind', 'id'],
+    additionalProperties: false,
+  },
+}
+
+/** 设定文档（issue 56）：relatedIds 为 kind+id 对数组，id 须为既有实体或本批
+ * 实体 ref；title/body 整体替换。新增/修改共用 fields 形状，title 的模式
+ * 要求由 batch 变体表达。 */
+function documentParameters(): ObjectSchema {
+  const fields = fieldsSchema(AI_DOCUMENT_FIELDS)
+  fields.properties.relatedIds = relatedIdsSchema
+  return objectSchema({
+    entityId: token('仅修改时提供目标文档 id；新增必须省略'),
+    fields: { ...fields, minProperties: 1, description: documentFieldTableText() }, reason,
+  }, ['fields'])
+}
+
 /** 单写工具的参数 schema：与 batch 的对应 op 复用，避免两条通道形状漂移。 */
 export const WRITE_PARAMETERS: Record<string, ObjectSchema> = {
   create_node: objectSchema({
@@ -62,6 +96,7 @@ export const WRITE_PARAMETERS: Record<string, ObjectSchema> = {
   }, ['sourceId', 'targetId']),
   upsert_character: entityParameters('character'),
   upsert_location: entityParameters('location'),
+  upsert_document: documentParameters(),
 }
 
 /** 将单工具参数封装成含 op 的批次成员；内部别名 update_node_spec 不进入 op。 */
@@ -89,11 +124,21 @@ function commandVariants(): ObjectSchema[] {
       commandSchema(`upsert_${kind}`, { ...parameters, required: ['entityId', 'fields'] }),
     )
   }
+  // 设定文档（issue 56）：新建必须有 title；修改必须同时带 entityId
+  const documentFields = fieldsSchema(AI_DOCUMENT_FIELDS)
+  documentFields.properties.relatedIds = relatedIdsSchema
+  variants.push(
+    commandSchema('upsert_document', objectSchema({
+      reason,
+      fields: { ...documentFields, required: ['title'] },
+    }, ['fields'])),
+    commandSchema('upsert_document', { ...WRITE_PARAMETERS.upsert_document, required: ['entityId', 'fields'] }),
+  )
   return variants
 }
 
 /** 完整批次参数：每项均有显式 op、参数与嵌套字段，空批次不构成交付。 */
 export const BATCH_PARAMETERS = objectSchema({ commands: {
   type: 'array', minItems: 1, items: { anyOf: commandVariants() },
-  description: `一次改动的完整命令数组，按执行依赖排序。\n${nodeFieldTableText()}\n${entityFieldTableText()}`,
+  description: `一次改动的完整命令数组，按执行依赖排序。\n${nodeFieldTableText()}\n${entityFieldTableText()}\n${documentFieldTableText()}`,
 } }, ['commands'])

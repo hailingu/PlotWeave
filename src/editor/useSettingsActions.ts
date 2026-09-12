@@ -2,15 +2,26 @@
  * 设定集编辑动作（docs/ui-design.md §5）：新增用占位名，改名经 Map 替换，
  * 删除不自动清除节点引用（失效引用由展示层兜底）。每个动作 = 一条
  * patchSettings 命令（before/after 整体替换 settings，入栈可撤销）。
+ * 文档动作（issue 56）：新建占位、编辑保存整体 patch、删除——只触碰
+ * documents 桶，props 与未参与编辑的桶透传保真。
  */
 import { useCallback, useMemo } from 'react'
 import type { HistoryCommand } from './history'
 import type { SettingsActions } from './panels/LeftPanel'
 import {
   createCharacter,
+  createDocument,
   createLocation,
+  type DocumentEntity,
   type ProjectSettings,
 } from './settings'
+
+/** 文档编辑保存的补丁：标题/正文/关联整体替换写到的键。 */
+export type DocumentPatch = {
+  title?: string
+  body?: string
+  relatedIds?: DocumentEntity['relatedIds']
+}
 
 /** 设定集编辑动作组：patchSettings 供外部直接打补丁，settingsActions 供左栏设定页。 */
 export interface SettingsActionBundle {
@@ -62,6 +73,24 @@ export function useSettingsActions(
           ...settings,
           locations: settings.locations.filter((l) => l.id !== id),
         }),
+      addDocument: () => {
+        const doc = createDocument()
+        patchSettings(settings, { ...settings, documents: [...(settings.documents ?? []), doc] })
+      },
+      updateDocument: (id: string, patch: DocumentPatch) => {
+        if (!settings.documents?.some((d) => d.id === id)) return
+        patchSettings(settings, {
+          ...settings,
+          documents: settings.documents.map((d) => (d.id === id ? { ...d, ...patch } : d)),
+        })
+      },
+      deleteDocument: (id: string) => {
+        if (!settings.documents) return
+        patchSettings(settings, {
+          ...settings,
+          documents: settings.documents.filter((d) => d.id !== id),
+        })
+      },
     }),
     [patchSettings, settings],
   )

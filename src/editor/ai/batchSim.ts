@@ -12,11 +12,13 @@ import { dataPatchOf, mergeNodeData, type NodeDataPatch } from '../nodes/patch'
 import type { CanvasNode } from '../nodes/types'
 import {
   createCharacter,
+  createDocument,
   createLocation,
   EMPTY_SETTINGS,
+  type DocumentEntity,
   type ProjectSettings,
 } from '../settings'
-import type { ValidatedCommand } from './commands'
+import type { ValidatedCommand, ValidatedDocumentFields } from './commands'
 
 /** 模拟器的虚拟终态与闭包收集。 */
 interface BatchSim {
@@ -349,6 +351,89 @@ const simUpsert = (
   }
 }
 
+/** relatedIds 的批内实体 ref → 真实 id（issue 56）：别名表只在执行期命中
+ * （模拟态与真实落地同一解析），非别名值原样保留；临时别名不落盘。 */
+function resolveRelatedIds(
+  related: NonNullable<ValidatedDocumentFields['relatedIds']>,
+  refs: Map<string, string>,
+): DocumentEntity['relatedIds'] {
+  return related.map(({ kind, id }) => ({ kind, id: refs.get(id) ?? id }))
+}
+
+/** 新建设定文档（issue 56）：真实 id 由应用工厂分配（模拟期一次），撤销-重做
+ * 复用同一文档对象；props 与未参与编辑的桶透传保真（展开式写入）。 */
+const simDocumentCreate = (
+  sim: BatchSim,
+  ops: BatchOps,
+  cmd: Extract<ValidatedCommand, { op: 'upsert_document' }>,
+): void => {
+  const fields = cmd.fields
+  const doc = createDocument(fields.title ?? '')
+  doc.body = fields.body ?? ''
+  doc.relatedIds = resolveRelatedIds(fields.relatedIds ?? [], sim.entityRefToId)
+  const documents = [...(sim.settings.documents ?? []), doc]
+  sim.settings = { ...sim.settings, documents }
+  sim.forward.push(() =>
+    ops.setSettings((prev) => ({ ...prev, documents: [...(prev.documents ?? []), doc] })),
+  )
+  sim.backward.push(() =>
+    ops.setSettings((prev) => ({
+      ...prev,
+      documents: (prev.documents ?? []).filter((d) => d.id !== doc.id),
+    })),
+  )
+}
+
+/** 修改既有设定文档（issue 56）：只覆盖 fields 写到的键，未提及字段保持执行
+ * 时现值；relatedIds 整体替换；before 文档对象取自工作副本，undo 反序回放
+ * 精确还原。 */
+const simDocumentUpdate = (
+  sim: BatchSim,
+  ops: BatchOps,
+  cmd: Extract<ValidatedCommand, { op: 'upsert_document' }>,
+): void => {
+  const token = typeof cmd.entityId === 'string' ? cmd.entityId : ''
+  const id = sim.entityRefToId.get(token) ?? token
+  const documents = sim.settings.documents ?? []
+  const target = documents.find((d) => d.id === id)
+  if (!target) return
+  const fields = cmd.fields
+  const next: DocumentEntity = {
+    ...target,
+    ...(fields.title !== undefined ? { title: fields.title } : {}),
+    ...(fields.body !== undefined ? { body: fields.body } : {}),
+    ...(fields.relatedIds !== undefined
+      ? { relatedIds: resolveRelatedIds(fields.relatedIds, sim.entityRefToId) }
+      : {}),
+  }
+  sim.settings = { ...sim.settings, documents: documents.map((d) => (d.id === id ? next : d)) }
+  sim.forward.push(() =>
+    ops.setSettings((prev) => ({
+      ...prev,
+      documents: (prev.documents ?? []).map((d) => (d.id === id ? next : d)),
+    })),
+  )
+  sim.backward.push(() =>
+    ops.setSettings((prev) => ({
+      ...prev,
+      documents: (prev.documents ?? []).map((d) => (d.id === id ? target : d)),
+    })),
+  )
+}
+
+/** upsert_document 的模拟分发（issue 56）：带非空 entityId = 修改，否则新建。 */
+const simDocumentUpsert = (
+  sim: BatchSim,
+  ops: BatchOps,
+  cmd: Extract<ValidatedCommand, { op: 'upsert_document' }>,
+): void => {
+  if (typeof cmd.entityId === 'string' && cmd.entityId.trim() !== '') {
+    simDocumentUpdate(sim, ops, cmd)
+  } else {
+    simDocumentCreate(sim, ops, cmd)
+  }
+}
+
 /** 批次折叠执行的结果：forward 按命令顺序生效；backward 反序回放即整批回滚。 */
 export interface BatchSimResult {
   forward: Array<() => void>
@@ -381,7 +466,8 @@ export function simulateBatch(
     else if (cmd.op === 'connect_edge') simConnect(sim, ops, cmd)
     else if (cmd.op === 'disconnect_edge') simDisconnect(sim, ops, cmd)
     else if (cmd.op === 'upsert_character') simUpsert(sim, ops, cmd, 'character')
-    else simUpsert(sim, ops, cmd, 'location')
+    else if (cmd.op === 'upsert_location') simUpsert(sim, ops, cmd, 'location')
+    else if (cmd.op === 'upsert_document') simDocumentUpsert(sim, ops, cmd)
   }
   return { forward: sim.forward, backward: sim.backward }
 }

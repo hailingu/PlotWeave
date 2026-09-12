@@ -368,4 +368,72 @@ describe('useAiBridge · 执行期重校验与读工具（issue 44）', () => {
     const parsed = JSON.parse(text) as { characters: Array<{ id: string; name: string; bio?: string }> }
     expect(parsed.characters[0]).toEqual({ id: 'ch-1', name: '陈默', bio: '侦探' })
   })
+
+  it('readDocument：按 id 返回文档全文 JSON；不存在返回 null（issue 56）', () => {
+    const { result } = setup([], [], {
+      characters: [],
+      locations: [],
+      documents: [
+        { id: 'doc-1', title: '世界观', body: '大陆纪元……', relatedIds: [] },
+      ],
+    })
+    const parsed = JSON.parse(result.current.readDocument('doc-1')!) as {
+      id: string
+      title: string
+      body: string
+      relatedIds: unknown[]
+    }
+    expect(parsed).toEqual({ id: 'doc-1', title: '世界观', body: '大陆纪元……', relatedIds: [] })
+    expect(result.current.readDocument('ghost')).toBeNull()
+  })
+
+  it('文档批次走真实链路：校验（含 relatedIds 存在性）→ 落地 → ⌘Z 回滚（issue 56）', () => {
+    const { result, state, commands } = setup([], [], {
+      characters: [{ id: 'ch-1', name: '陈默', gradient: 'g' }],
+      locations: [],
+      documents: [],
+    })
+    const preview = result.current.validateCommands([
+      {
+        op: 'upsert_document',
+        fields: { title: '陈默小传', body: '正文', relatedIds: [{ kind: 'character', id: 'ch-1' }] },
+      },
+    ])
+    expect(preview?.ok).toBe(true)
+    expect(result.current.applyAiBatch(preview!.commands)).toBeNull()
+    expect(state.settings.documents).toHaveLength(1)
+    expect(state.aiRevision).toBe(1)
+    commands[0].undo()
+    expect(state.settings.documents).toEqual([])
+    commands[0].redo()
+    expect(state.settings.documents).toHaveLength(1)
+
+    const ghost = result.current.validateCommands([
+      {
+        op: 'upsert_document',
+        fields: { title: '悬空', relatedIds: [{ kind: 'character', id: 'ch-404' }] },
+      },
+    ])
+    expect(ghost?.ok).toBe(false)
+  })
+
+  it('预览后关联角色被用户删除：确认执行重校验整批拒绝、无部分写入（issue 56）', () => {
+    const { result, state, commands, deps } = setup([], [], {
+      characters: [{ id: 'ch-1', name: '陈默', gradient: 'g' }],
+      locations: [],
+      documents: [],
+    })
+    const preview = result.current.validateCommands([
+      {
+        op: 'upsert_document',
+        fields: { title: '小传', relatedIds: [{ kind: 'character', id: 'ch-1' }] },
+      },
+    ])
+    expect(preview?.ok).toBe(true)
+    // 预览后用户删除了该角色（经真实 setSettings 通道，settingsRef 同步变化）
+    deps.setSettings(() => ({ characters: [], locations: [] }))
+    expect(result.current.applyAiBatch(preview!.commands)).toContain('无法安全执行')
+    expect(commands).toHaveLength(0)
+    expect(state.settings.documents ?? []).toEqual([])
+  })
 })

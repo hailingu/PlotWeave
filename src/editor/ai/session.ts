@@ -81,6 +81,9 @@ function isPersistedCommand(value: unknown): boolean {
     )
   }
   if (value.op === 'upsert_character' || value.op === 'upsert_location') return isRecord(value.fields)
+  // 设定文档命令（issue 56）：fields 为对象即可恢复重校验，条目形状由
+  // 重校验边界把关——恢复只要求载荷可重新进入 validateAiBatch
+  if (value.op === 'upsert_document') return isRecord(value.fields)
   return ['create_node', 'delete_node', 'connect_edge', 'disconnect_edge'].includes(value.op)
 }
 

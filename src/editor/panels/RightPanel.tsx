@@ -140,6 +140,8 @@ interface RightPanelProps {
   readonly onReadNode?: (nodeId: string) => string | null
   /** 读工具 get_settings_snapshot（issue 44）：返回设定集清单 JSON 文本。 */
   readonly onReadSettings?: () => string
+  /** 读工具 get_document（issue 56）：按 id 返回文档全文 JSON，不存在返回 null。 */
+  readonly onReadDocument?: (documentId: string) => string | null
   /** 执行已确认的批次：整批为一条复合命令入栈，返回错误文案或 null。 */
   readonly onApplyAiBatch?: (commands: ValidatedCommand[]) => string | null
   /** 承载批次的画布文档确认落盘后兑现；执行卡据此推迟 executed 落盘。 */
@@ -197,6 +199,7 @@ export default function RightPanel({
   onValidateCommands,
   onReadNode,
   onReadSettings,
+  onReadDocument,
   onApplyAiBatch,
   whenCanvasCommitted,
   aiSession,
@@ -247,6 +250,7 @@ export default function RightPanel({
             onValidateCommands={onValidateCommands}
             onReadNode={onReadNode}
             onReadSettings={onReadSettings}
+            onReadDocument={onReadDocument}
             onApplyAiBatch={onApplyAiBatch}
             whenCanvasCommitted={whenCanvasCommitted}
             initialSession={aiSession}

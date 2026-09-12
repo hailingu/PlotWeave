@@ -124,3 +124,42 @@ describe('normalizeAiSession · 卡片运行时标注', () => {
     })
   })
 })
+
+describe('normalizeAiSession · 设定文档命令（issue 56）', () => {
+  const docCard = (commands: unknown[]) => ({
+    v: { ok: true, items: [], commands, issues: [], hasDeletes: false },
+    status: 'pending' as const,
+  })
+
+  it('带 upsert_document 的待执行卡完整恢复，载荷不被归一化丢弃', () => {
+    const commands = [
+      { op: 'upsert_document', fields: { title: '小传', body: '正文', relatedIds: [{ kind: 'character', id: 'ch-1' }] } },
+      { op: 'upsert_document', entityId: 'doc-1', fields: { body: '改写' } },
+    ]
+    const result = normalizeAiSession({
+      schemaVersion: 1,
+      entries: [
+        { id: 1, kind: 'msg', role: 'assistant', text: '文档批次', card: docCard(commands) },
+      ],
+    })
+    expect(result.repaired).toBe(false)
+    expect(result.session.entries[0].card?.v.commands).toEqual(commands)
+  })
+
+  it('畸形文档命令（fields 非对象）仍按损坏隔离', () => {
+    const result = normalizeAiSession({
+      schemaVersion: 1,
+      entries: [
+        {
+          id: 1,
+          kind: 'msg',
+          role: 'assistant',
+          text: '坏卡',
+          card: docCard([{ op: 'upsert_document', fields: 'nope' }]),
+        },
+      ],
+    })
+    expect(result.repaired).toBe(true)
+    expect(result.session.entries).toHaveLength(0)
+  })
+})

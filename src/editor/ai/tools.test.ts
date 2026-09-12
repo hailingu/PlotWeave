@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { AI_TOOLS, WRITE_TOOL_NAMES, toolCallsToCommands, type ToolCall } from './tools'
+import { AI_TOOLS, READ_TOOL_NAMES, WRITE_TOOL_NAMES, toolCallsToCommands, type ToolCall } from './tools'
 import { nodeFieldTableText } from './nodeFields'
-import { entityFieldTableText } from './entityFields'
+import { documentFieldTableText, entityFieldTableText } from './entityFields'
 
 const call = (name: string, args: unknown): ToolCall => ({
   id: `call-${name}`,
@@ -118,6 +118,31 @@ describe('issue 44 通道映射：upsert_* 写工具与 get_settings_snapshot �
     expect(readRequests[0].id).toBe('call-get_settings_snapshot')
   })
 
+  it('get_document 进入 readRequests（issue 56：按需读取文档全文）', () => {
+    const { commands, readRequests, errors } = toolCallsToCommands([
+      call('get_document', { documentId: 'doc-1' }),
+    ])
+    expect(errors).toEqual([])
+    expect(commands).toEqual([])
+    expect(readRequests.map((r) => r.name)).toEqual(['get_document'])
+  })
+
+  it('upsert_document 映射为对应命令（issue 56）：fields 归对象、entityId 原样透传', () => {
+    const { commands, errors } = toolCallsToCommands([
+      call('upsert_document', { fields: { title: '世界观', body: '大陆纪元' }, reason: '开篇设定' }),
+      call('upsert_document', { entityId: 'doc-1', fields: { body: '改写' } }),
+      call('upsert_document', { entityId: 7, fields: { title: ['坏'] } }),
+    ])
+    expect(errors).toEqual([])
+    expect(commands[0]).toEqual({
+      op: 'upsert_document',
+      fields: { title: '世界观', body: '大陆纪元' },
+      reason: '开篇设定',
+    })
+    expect(commands[1]).toEqual({ op: 'upsert_document', entityId: 'doc-1', fields: { body: '改写' } })
+    expect(commands[2]).toMatchObject({ op: 'upsert_document', entityId: 7, fields: {} })
+  })
+
   it('upsert_character / upsert_location 映射为对应命令（issue 44）：fields 归对象、entityId 原样透传', () => {
     const { commands, errors } = toolCallsToCommands([
       call('upsert_character', { ref: 'hero', fields: { name: '林一', bio: '侦探' }, reason: '主角' }),
@@ -170,6 +195,16 @@ describe('工具表定义', () => {
     expect(WRITE_TOOL_NAMES.has('get_settings_snapshot')).toBe(false)
   })
 
+  it('issue 56 增补文档通道：get_document 读 + upsert_document 写，读写真名分域', () => {
+    const names = AI_TOOLS.map((t) => t.function.name)
+    expect(names).toContain('get_document')
+    expect(names).toContain('upsert_document')
+    expect(READ_TOOL_NAMES.has('get_document')).toBe(true)
+    expect(WRITE_TOOL_NAMES.has('upsert_document')).toBe(true)
+    expect(READ_TOOL_NAMES.has('upsert_document')).toBe(false)
+    expect(WRITE_TOOL_NAMES.has('get_document')).toBe(false)
+  })
+
   it('data/patch/批次通道嵌入共享字段表（issue 41：协议与校验器同源）', () => {
     const paramOf = (tool: string, key: string): unknown => {
       const props = AI_TOOLS.find((t) => t.function.name === tool)!.function.parameters
@@ -191,5 +226,15 @@ describe('工具表定义', () => {
     expect(paramOf('upsert_character', 'fields')).toContain(entityFieldTableText())
     expect(paramOf('upsert_location', 'fields')).toContain(entityFieldTableText())
     expect(paramOf('batch', 'commands')).toContain(entityFieldTableText())
+  })
+
+  it('upsert_document fields 嵌入文档字段表（issue 56：与校验白名单同源）', () => {
+    const paramOf = (tool: string, key: string): unknown => {
+      const props = AI_TOOLS.find((t) => t.function.name === tool)!.function.parameters
+        .properties as Record<string, { description?: unknown }>
+      return props[key]?.description
+    }
+    expect(paramOf('upsert_document', 'fields')).toContain(documentFieldTableText())
+    expect(paramOf('batch', 'commands')).toContain(documentFieldTableText())
   })
 })

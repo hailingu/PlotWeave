@@ -6,7 +6,8 @@ import { BATCH_PARAMETERS, WRITE_PARAMETERS } from './toolSchemas'
  * 读工具由前端就地执行回喂；写工具调用映射为 AiCommand——
  * 仍走「整批预览 → 用户确认 → 复合命令入栈」通道，绝不自动执行。
  * issue 44 起含设定实体通道：get_settings_snapshot 读 + upsert_character /
- * upsert_location 写（实体字段协议单一真相在 entityFields.ts）。
+ * upsert_location 写；issue 56 起含设定文档通道：get_document 读 +
+ * upsert_document 写（字段协议单一真相在 entityFields.ts）。
  */
 
 export interface ToolSpec {
@@ -55,9 +56,17 @@ export const AI_TOOLS: ToolSpec[] = [
     function: {
       name: 'get_settings_snapshot',
       description:
-        '读取设定集清单：全部角色/地点的 id、名称与小传/备注（props/documents 只读，' +
-        '首期不可写）。写 characterIds/locationId/speaker 或修改实体前先读取以复用已有实体',
+        '读取设定集清单：全部角色/地点的 id、名称与小传/备注，文档只列 id 与标题' +
+        '（props 只读不可写）。写 characterIds/locationId/speaker 或修改实体前先读取以复用已有实体',
       parameters: obj({}),
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_document',
+      description: '读取单个设定文档的完整内容（id/title/body/relatedIds）；写或续写文档前先读取',
+      parameters: obj({ documentId: str('文档 id（来自 get_settings_snapshot 的 documents 清单）') }, ['documentId']),
     },
   },
   {
@@ -126,21 +135,34 @@ export const AI_TOOLS: ToolSpec[] = [
   {
     type: 'function',
     function: {
+      name: 'upsert_document',
+      description:
+        '新建或修改设定文档（人物小传/世界观/术语表等长篇文本，issue 56）：' +
+        '新建不带 entityId（fields.title 必填）；修改必须带 entityId（精确 id，' +
+        '先 get_document 读取全文再改写），fields 只写要改的字段，未提及字段保持不变。' +
+        'relatedIds 关联角色/地点：[{kind, id}]，id 用设定集快照里的实体 id 或本批实体 ref；' +
+        '不支持删除文档',
+      parameters: WRITE_PARAMETERS.upsert_document,
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'batch',
       description:
         '把一次改动的全部命令放进同一个批次（推荐：用户只确认一次）。' +
         'commands 元素形如 {"op":"…",…}，op 只能取：' +
         'create_node / update_node / delete_node / connect_edge / disconnect_edge / ' +
-        'upsert_character / upsert_location' +
+        'upsert_character / upsert_location / upsert_document' +
         '（注意是 update_node，不是 update_node_spec），其余字段与上述写工具参数一致。' +
         '同批可先 upsert 实体再绑定：创建实体的 ref 可直接写进 scene.characterIds / ' +
-        'scene.locationId / lines[].speaker，应用解析为真实 id 后落地',
+        'scene.locationId / lines[].speaker / 文档 relatedIds，应用解析为真实 id 后落地',
       parameters: BATCH_PARAMETERS,
     },
   },
 ]
 
-export const READ_TOOL_NAMES = new Set(['get_graph_snapshot', 'get_node', 'get_settings_snapshot'])
+export const READ_TOOL_NAMES = new Set(['get_graph_snapshot', 'get_node', 'get_settings_snapshot', 'get_document'])
 export const WRITE_TOOL_NAMES = new Set([
   'create_node',
   'delete_node',
@@ -149,6 +171,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'disconnect_edge',
   'upsert_character',
   'upsert_location',
+  'upsert_document',
   'batch',
 ])
 
@@ -205,6 +228,14 @@ const WRITE_MAPPERS: Record<string, (args: Record<string, unknown>) => AiCommand
     op: 'upsert_location' as const,
     ...(a.entityId !== undefined ? { entityId: a.entityId } : {}),
     ref: a.ref,
+    fields: asPatch(a.fields),
+    reason: a.reason,
+  }),
+  // 设定文档（issue 56）：同实体口径——fields 归对象、entityId 原样透传，
+  // 畸形值由折叠层整批拒绝；relatedIds 条目保持原样交给两阶段校验
+  upsert_document: (a) => ({
+    op: 'upsert_document' as const,
+    ...(a.entityId !== undefined ? { entityId: a.entityId } : {}),
     fields: asPatch(a.fields),
     reason: a.reason,
   }),
