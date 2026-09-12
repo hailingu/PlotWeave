@@ -15,10 +15,11 @@
  * 外观下都必须等于对应语义令牌的解析值。happy-dom 的 getComputedStyle 不解析
  * 两级 var 链（--a: var(--b) 形态消费为空），无法直接对渲染树取计算值；本文件
  * 以 postcss 解析真实生产样式表组合，选择器匹配用 Element.matches，按 CSS 作者
- * 源级联（!important → 特异性 → 顺序）与自定义属性继承 + var() 回退链消解出
- * 计算值后断言。四条自检用例向测试内注入四类回归形态（接线缺失、更高特异性
- * 错误硬编码、更高特异性覆盖自定义属性、!important），钉住消解模型能复现并
- * 捕获缺陷（评审 5187020501 / 5187126810 / 5187174354）。
+ * 源级联（!important → 特异性 → 顺序；background 简写与 background-color
+ * 长写同道竞争）与自定义属性继承 + var() 回退链消解出计算值后断言。五条自检
+ * 用例向测试内注入五类回归形态（接线缺失、更高特异性错误硬编码、更高特异性
+ * 覆盖自定义属性、!important、background-color 长写改写颜色分量），钉住消解
+ * 模型能复现并捕获缺陷（评审 5187020501 / 5187126810 / 5187174354 / 5187272939）。
  */
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -263,6 +264,19 @@ function winningSelectorSpec(button: HappyDOMElement, selectorList: string): Spe
   return best
 }
 
+/** background 简写在级联中按 background-color 分道竞争（评审 5187272939）；color 无简写形态。 */
+const CASCADE_PROPS: Record<'background' | 'color', readonly string[]> = {
+  background: ['background', 'background-color'],
+  color: ['color'],
+}
+
+/** 从已消解的 background 简写值中取颜色分量；无法识别时原样返回（断言保守变红）。 */
+function colorComponent(resolved: string): string {
+  const trimmed = resolved.trim()
+  if (/^(#[0-9a-fA-F]+|rgba?\([^()]*\)|hsla?\([^()]*\)|[a-z]+)$/.test(trimmed)) return trimmed
+  return resolved
+}
+
 /** 按钮某属性的计算值：作者源级联（!important → 特异性 → 顺序）取胜出声明后经 var 链消解。 */
 function computedProp(
   button: HappyDOMElement,
@@ -270,18 +284,27 @@ function computedProp(
   scopes: Scopes,
   prop: 'background' | 'color',
 ): string | null {
-  let best: Candidate | undefined
+  const sourceProps = CASCADE_PROPS[prop]
+  let best: (Candidate & { prop: string }) | undefined
   for (const { rule, order } of ruled) {
     const spec = winningSelectorSpec(button, rule.selector)
     if (!spec) continue
     for (const node of rule.nodes) {
-      if (node.type !== 'decl' || node.prop !== prop) continue
-      const candidate: Candidate = { value: node.value, spec, order, important: node.important }
+      if (node.type !== 'decl' || !sourceProps.includes(node.prop)) continue
+      const candidate: Candidate & { prop: string } = {
+        value: node.value,
+        spec,
+        order,
+        important: node.important,
+        prop: node.prop,
+      }
       if (!best || beats(candidate, best)) best = candidate
     }
   }
   if (!best) return null
-  return resolveValue(best.value, scopes, button)
+  const resolved = resolveValue(best.value, scopes, button)
+  if (resolved === null) return null
+  return best.prop === 'background' ? colorComponent(resolved) : resolved
 }
 
 /** 令牌在按钮作用域的解析值（断言基准取自令牌声明本身，不硬编码色值）。 */
@@ -385,6 +408,19 @@ describe('控件计算样式：生产样式表组合级联（PR #96 评审强化
     const { button, chain } = buttonOf()
     // 与 RF 令牌规则同特异性、且注入在更早的应用层：仅 !important 使其胜出
     const rogue = postcss.parse('.react-flow__controls-button { background: #ffffff !important; }')
+    const layers = appLayers()
+    layers.splice(layers.length - 1, 0, rogue)
+    const ruled = flattenRules([...layers, rfLayer()], DARK)
+    const scopes = collectScopes(chain, ruled)
+    const background = computedProp(button, ruled, scopes, 'background')
+    expect(background).toBe('#ffffff')
+    expect(background).not.toBe(tokenValue(scopes, button, '--surface-card'))
+  })
+
+  it('自检：background-color 长写在级联中改写简写颜色分量并被捕获（评审 5187272939 触发条件）', () => {
+    const { button, chain } = buttonOf()
+    // 更高特异性、注入于 nodes.css 层之前：浏览器按 background-color 分道取胜
+    const rogue = postcss.parse('.canvas-root .react-flow__controls-button { background-color: #ffffff; }')
     const layers = appLayers()
     layers.splice(layers.length - 1, 0, rogue)
     const ruled = flattenRules([...layers, rfLayer()], DARK)
