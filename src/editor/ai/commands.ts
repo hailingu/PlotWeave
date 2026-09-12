@@ -130,12 +130,12 @@ export interface AiGraphSnapshot {
 }
 
 /** 设定集实体快照：只携带引用校验需要的 id 与名称（issue 44）；documents
- * 携带 id + 标题（issue 56）——upsert_document 的 entityId 解析与预览标签
- * 消费，正文不进校验快照。 */
+ * 携带 id + 标题 + 正文字数（issue 56）——entityId 解析、预览标签与 body
+ * 全文替换的字数信号消费；正文本身不进校验快照。 */
 export interface AiEntitySnapshot {
   characters: ReadonlyArray<{ id: string; name: string }>
   locations: ReadonlyArray<{ id: string; name: string }>
-  documents?: ReadonlyArray<{ id: string; title: string }>
+  documents?: ReadonlyArray<{ id: string; title: string; bodyLength?: number }>
 }
 
 /** 预览卡的单行条目（§6：逐项列出受影响节点与变更类型；issue 44 增实体条目）。 */

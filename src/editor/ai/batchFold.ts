@@ -520,7 +520,12 @@ export function validateAiBatch(rawCommands: unknown, graph: AiGraphSnapshot): B
     // 运行时快照恒携带（graphSnapshotOf）
     characters: new Map((graph.settings?.characters ?? []).map((c) => [c.id, c.name])),
     locations: new Map((graph.settings?.locations ?? []).map((l) => [l.id, l.name])),
-    documents: new Map((graph.settings?.documents ?? []).map((d) => [d.id, d.title])),
+    documents: new Map(
+      (graph.settings?.documents ?? []).map((d) => [
+        d.id,
+        { title: d.title, bodyLength: d.bodyLength },
+      ]),
+    ),
     virtualEntityIds: new Set(),
     entityRefs: new Map(),
     items: [],

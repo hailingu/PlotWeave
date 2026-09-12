@@ -40,9 +40,10 @@ export interface EntityFoldHost {
   /** 既有 + 本批投影的实体 id → 名称（新建为虚拟 id，执行期才分配真实 id）。 */
   characters: Map<string, string>
   locations: Map<string, string>
-  /** 既有文档 id → 标题（issue 56）：upsert_document 的 entityId 解析与
-   * 预览标签消费；文档不建虚拟投影（无批内 ref 可指向文档）。 */
-  documents: Map<string, string>
+  /** 既有文档 id → 标题与正文字数（issue 56）：upsert_document 的 entityId
+   * 解析、预览标签与 body 全文替换的字数信号消费；文档不建虚拟投影
+   * （无批内 ref 可指向文档）。 */
+  documents: Map<string, { title: string; bodyLength?: number }>
   /** 本批新建的虚拟投影 id：仅可经声明的 ref 别名解析，不得作为引用
    * token 直接命中桶位（执行层只解析别名表，直接放行会落盘悬空绑定）。
    * 显式集合而非前缀判断——持久化 id 可能与虚拟 id 同形。 */
@@ -415,6 +416,22 @@ function foldCreateDocument(
   st.commands.push({ op: 'upsert_document', fields: normalized })
 }
 
+/** 文档修改条目的字段摘要（预览标签）：body 是全文整体替换（issue 56），
+ * 只显示字段名会让确认者无法区分小幅补写与整篇覆盖——替换发生时显示
+ * 字数变化（旧字数来自校验快照，未携带时退化为纯「全文替换」信号）。 */
+function documentFieldSummary(
+  currentBodyLength: number | undefined,
+  fields: ValidatedDocumentFields,
+): string {
+  return Object.keys(fields)
+    .map((k) => {
+      if (k !== 'body') return k
+      if (currentBodyLength === undefined) return 'body 全文替换'
+      return `body 全文替换：旧 ${currentBodyLength} 字 → 新 ${fields.body!.length} 字`
+    })
+    .join('、')
+}
+
 /** 文档修改（带 entityId）：精确解析 documents 桶（角色/地点实体同 id 不算
  * 命中——三个独立 id 空间，期望桶优先），未提及字段保持不变。 */
 function foldUpdateDocument(
@@ -426,8 +443,8 @@ function foldUpdateDocument(
 ): void {
   const issue = documentFieldsIssue(fields, 'update')
   if (issue !== null) return st.fail(index, issue)
-  const currentTitle = st.documents.get(target)
-  if (currentTitle === undefined) {
+  const current = st.documents.get(target)
+  if (current === undefined) {
     if (st.characters.has(target) || st.locations.has(target)) {
       return st.fail(index, `entityId 指向的是角色/地点实体（须为文档）：${target}`)
     }
@@ -435,12 +452,17 @@ function foldUpdateDocument(
   }
   if (resolveRelatedIds(st, index, fields.relatedIds) === null) return
   const normalized = normalizeDocumentFields(fields)
-  if (normalized.title !== undefined) st.documents.set(target, normalized.title)
+  if (normalized.title !== undefined) {
+    st.documents.set(target, { ...current, title: normalized.title })
+  }
+  if (normalized.body !== undefined) {
+    st.documents.set(target, { ...st.documents.get(target)!, bodyLength: normalized.body.length })
+  }
   st.items.push({
     kind: 'update_entity',
     danger: false,
     key: `eu${index}`,
-    label: `修改 文档 · ${currentTitle}（${Object.keys(normalized).join('、')}）${reasonOf(raw)}`,
+    label: `修改 文档 · ${current.title}（${documentFieldSummary(current.bodyLength, normalized)}）${reasonOf(raw)}`,
   })
   st.commands.push({ op: 'upsert_document', entityId: target, fields: normalized })
 }

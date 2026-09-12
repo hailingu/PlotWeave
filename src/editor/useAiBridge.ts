@@ -113,7 +113,11 @@ function graphSnapshotOf(
     settings: {
       characters: settingsRef.current.characters.map(({ id, name }) => ({ id, name })),
       locations: settingsRef.current.locations.map(({ id, name }) => ({ id, name })),
-      documents: settingsRef.current.documents?.map(({ id, title }) => ({ id, title })),
+      documents: settingsRef.current.documents?.map((d) => ({
+        id: d.id,
+        title: d.title,
+        bodyLength: d.body.length,
+      })),
     },
   }
 }

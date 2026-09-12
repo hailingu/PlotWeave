@@ -53,8 +53,36 @@ describe('upsert_document · 阶段 A 形状校验', () => {
       settingsSnap(),
     )
     expect(v.ok).toBe(true)
-    expect(v.items[0]).toMatchObject({ kind: 'update_entity', label: '修改 文档 · 世界观（body）' })
+    // 快照未携带 bodyLength（旧夹具）时标签退化为纯「全文替换」信号
+    expect(v.items[0]).toMatchObject({
+      kind: 'update_entity',
+      label: '修改 文档 · 世界观（body 全文替换）',
+    })
     expect(v.commands[0]).toMatchObject({ entityId: 'doc-1', fields: { body: '新的世界观全文。' } })
+  })
+
+  it('body 全文替换的预览标签显示字数变化，确认前可见丢文风险（PR #86 评审）', () => {
+    const snap: AiGraphSnapshot = {
+      nodes: [{ id: 'n1', type: 'scene', label: '场 01' }],
+      edges: [],
+      assets: new Map(),
+      settings: {
+        characters: [],
+        locations: [],
+        documents: [{ id: 'doc-1', title: '世界观', bodyLength: 5000 }],
+      },
+    }
+    const v = validateAiBatch(
+      [
+        { op: 'upsert_document', entityId: 'doc-1', fields: { body: '短文' } },
+        { op: 'upsert_document', entityId: 'doc-1', fields: { title: '新名' } },
+      ],
+      snap,
+    )
+    expect(v.ok).toBe(true)
+    expect(v.items[0].label).toBe('修改 文档 · 世界观（body 全文替换：旧 5000 字 → 新 2 字）')
+    // 未写 body 的条目保持键名标签；标题投影随首个命令更新供后续标签
+    expect(v.items[1].label).toBe('修改 文档 · 世界观（title）')
   })
 
   it('阶段 A 整批拒绝：fields 非对象、白名单外字段、title/body 非字符串', () => {
