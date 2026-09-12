@@ -251,6 +251,7 @@ describe('query 改写与预览承诺的交付收敛（issue 91）', () => {
   it.each([
     '确认后预览不会显示任何改动，本轮我没有产出命令。',
     '确认后不会展示预览。',
+    '下方不会显示预览卡。',
   ])('否定式预览描述不构成交付承诺（PR #92 评审）：%s', async (reply) => {
     chat.mockResolvedValueOnce(rewrite('NONE'))
       .mockResolvedValueOnce({ role: 'assistant', content: reply })
@@ -258,6 +259,14 @@ describe('query 改写与预览承诺的交付收敛（issue 91）', () => {
     expect(result).toMatchObject({ prose: reply, validation: null })
     expect(result).not.toHaveProperty('completionError')
     expect(chat).toHaveBeenCalledTimes(2)
+  })
+
+  it('谓词外否定不影响承诺：丢失之说不阻止交付检查（PR #92 评审）', async () => {
+    chat.mockResolvedValueOnce(rewrite('NONE'))
+      .mockResolvedValue({ role: 'assistant', content: '确认后不会丢失原对白，预览会显示新增对白。' })
+    const result = await run('帮我看看场04')
+    expect(result).toMatchObject({ validation: null, completionError: expect.any(String) })
+    expect(chat).toHaveBeenCalledTimes(5) // 首次加 3 次纠正
   })
 })
 
