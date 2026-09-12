@@ -11,16 +11,18 @@
  * - 注入顺序：应用侧按 src/index.css 的 @import 序注入，RF 样式表属懒加载
  *   chunk（App.tsx 惰性 import EditorView）必然最后注入。
  *
- * 可观测不变量：无论样式表注入顺序如何，按钮的计算 background/color 在两种
- * 外观下都必须等于对应语义令牌的解析值。happy-dom 的 getComputedStyle 不解析
- * 两级 var 链（--a: var(--b) 形态消费为空），无法直接对渲染树取计算值；本文件
- * 以 postcss 解析真实生产样式表组合，选择器匹配用 Element.matches，按 CSS 作者
- * 源级联（!important → 特异性 → 规则序 → 块内声明序；background 简写与
+ * 可观测不变量：无论样式表注入顺序如何，按钮在静止与悬停两态的计算
+ * background/color 在两种外观下都必须等于对应语义令牌的解析值。happy-dom 的
+ * getComputedStyle 不解析两级 var 链（--a: var(--b) 形态消费为空），无法直接
+ * 对渲染树取计算值；本文件以 postcss 解析真实生产样式表组合，选择器匹配用
+ * Element.matches（悬停态剥去 :hover 求命中、特异性仍按原选择器计），按 CSS
+ * 作者源级联（!important → 特异性 → 规则序 → 块内声明序；background 简写与
  * background-color 长写同道竞争）与自定义属性继承 + var() 回退链消解出计算值
- * 后断言。六条自检用例向测试内注入六类回归形态（接线缺失、更高特异性错误
+ * 后断言。七条自检用例向测试内注入七类回归形态（接线缺失、更高特异性错误
  * 硬编码、更高特异性覆盖自定义属性、!important、background-color 长写改写
- * 颜色分量、同规则内后置长写覆盖前置简写），钉住消解模型能复现并捕获缺陷
- * （评审 5187020501 / 5187126810 / 5187174354 / 5187272939 / 5187318777）。
+ * 颜色分量、同规则内后置长写覆盖前置简写、悬停道竞争声明），钉住消解模型能
+ * 复现并捕获缺陷（评审 5187020501 / 5187126810 / 5187174354 / 5187272939 /
+ * 5187318777 / 5187365964）。
  */
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -126,6 +128,9 @@ function fixture(): { chain: HappyDOMElement[] } {
 
 type Specificity = readonly [ids: number, classes: number, types: number]
 
+/** 评估的交互状态：rest = 静止态；hover = 悬停态（:hover 规则参与竞争）。 */
+type State = 'rest' | 'hover'
+
 /** 选择器特异性（id, 类/伪类, 元素）；仓库样式表无属性选择器。 */
 function specificity(selector: string): Specificity {
   let ids = 0
@@ -175,13 +180,13 @@ type Scopes = Map<HappyDOMElement, Map<string, string>>
  * 会让更早的更高特异性声明在模型中被顶掉；次轮评审 5187126810 指出自定义
  * 属性收集同样必须走级联；三轮评审 5187174354 补齐 !important 维度。
  */
-function collectScopes(chain: HappyDOMElement[], ruled: Ruled[]): Scopes {
+function collectScopes(chain: HappyDOMElement[], ruled: Ruled[], state: State = 'rest'): Scopes {
   const winners = new Map<HappyDOMElement, Map<string, Candidate>>()
   for (const { rule, order } of ruled) {
     for (const [decl, node] of rule.nodes.entries()) {
       if (node.type !== 'decl' || !node.prop.startsWith('--')) continue
       for (const element of chain) {
-        const spec = winningSelectorSpec(element, rule.selector)
+        const spec = winningSelectorSpec(element, rule.selector, state)
         if (!spec) continue
         let scope = winners.get(element)
         if (!scope) winners.set(element, (scope = new Map()))
@@ -254,17 +259,26 @@ function resolveValue(value: string, scopes: Scopes, element: HappyDOMElement, d
   return tail === null ? null : normalize(tail)
 }
 
+/** 求选择器在指定状态下是否命中；未识别伪类抛错按不命中处理。 */
+function matchesInState(element: HappyDOMElement, selector: string, state: State): boolean {
+  // happy-dom 无悬停仿真：悬停态剥去 :hover 求命中，特异性仍按含 :hover 的原选择器计
+  const effective = state === 'hover' ? selector.replace(/:hover\b/gi, '') : selector
+  try {
+    return element.matches(effective.trim())
+  } catch {
+    return false
+  }
+}
+
 /** 命中按钮的选择器中特异性最高者的特异性；无命中为 undefined。 */
-function winningSelectorSpec(button: HappyDOMElement, selectorList: string): Specificity | undefined {
+function winningSelectorSpec(
+  button: HappyDOMElement,
+  selectorList: string,
+  state: State = 'rest',
+): Specificity | undefined {
   let best: Specificity | undefined
   for (const selector of selectorList.split(',')) {
-    let hit: boolean
-    try {
-      hit = button.matches(selector.trim())
-    } catch {
-      continue
-    }
-    if (!hit) continue
+    if (!matchesInState(button, selector, state)) continue
     const spec = specificity(selector)
     if (!best || higherSpec(spec, best)) best = spec
   }
@@ -290,11 +304,12 @@ function computedProp(
   ruled: Ruled[],
   scopes: Scopes,
   prop: 'background' | 'color',
+  state: State = 'rest',
 ): string | null {
   const sourceProps = CASCADE_PROPS[prop]
   let best: (Candidate & { prop: string }) | undefined
   for (const { rule, order } of ruled) {
-    const spec = winningSelectorSpec(button, rule.selector)
+    const spec = winningSelectorSpec(button, rule.selector, state)
     if (!spec) continue
     for (const [decl, node] of rule.nodes.entries()) {
       if (node.type !== 'decl' || !sourceProps.includes(node.prop)) continue
@@ -364,7 +379,7 @@ describe('控件计算样式：生产样式表组合级联（PR #96 评审强化
     return { button: chain[chain.length - 1]!, chain }
   }
 
-  it.each(['light', 'dark'] as const)('%s 外观：生产序与反序注入下计算色均等于令牌解析值', (kind) => {
+  it.each(['light', 'dark'] as const)('%s 外观：静止与悬停态计算色均等于令牌解析值（生产序与反序）', (kind) => {
     const env = kind === 'light' ? LIGHT : DARK
     const { button, chain } = buttonOf()
     const compositions = [
@@ -373,9 +388,20 @@ describe('控件计算样式：生产样式表组合级联（PR #96 评审强化
     ]
     for (const layers of compositions) {
       const ruled = flattenRules(layers, env)
-      const scopes = collectScopes(chain, ruled)
-      expect(computedProp(button, ruled, scopes, 'background')).toBe(tokenValue(scopes, button, '--surface-card'))
-      expect(computedProp(button, ruled, scopes, 'color')).toBe(tokenValue(scopes, button, '--text-primary'))
+      const restScopes = collectScopes(chain, ruled, 'rest')
+      expect(computedProp(button, ruled, restScopes, 'background', 'rest')).toBe(
+        tokenValue(restScopes, button, '--surface-card'),
+      )
+      expect(computedProp(button, ruled, restScopes, 'color', 'rest')).toBe(
+        tokenValue(restScopes, button, '--text-primary'),
+      )
+      const hoverScopes = collectScopes(chain, ruled, 'hover')
+      expect(computedProp(button, ruled, hoverScopes, 'background', 'hover')).toBe(
+        tokenValue(hoverScopes, button, '--fill-quaternary'),
+      )
+      expect(computedProp(button, ruled, hoverScopes, 'color', 'hover')).toBe(
+        tokenValue(hoverScopes, button, '--text-primary'),
+      )
     }
   })
 
@@ -451,5 +477,17 @@ describe('控件计算样式：生产样式表组合级联（PR #96 评审强化
     const background = computedProp(button, ruled, scopes, 'background')
     expect(background).toBe('#ffffff')
     expect(background).not.toBe(tokenValue(scopes, button, '--surface-card'))
+  })
+
+  it('自检：悬停道更高特异性竞争声明会胜出并被捕获（评审 5187365964 触发条件）', () => {
+    const { button, chain } = buttonOf()
+    const rogue = postcss.parse('.canvas-root .react-flow__controls-button:hover { background: #ffffff; }')
+    const layers = appLayers()
+    layers.splice(layers.length - 1, 0, rogue)
+    const ruled = flattenRules([...layers, rfLayer()], DARK)
+    const scopes = collectScopes(chain, ruled, 'hover')
+    const hover = computedProp(button, ruled, scopes, 'background', 'hover')
+    expect(hover).toBe('#ffffff')
+    expect(hover).not.toBe(tokenValue(scopes, button, '--fill-quaternary'))
   })
 })
