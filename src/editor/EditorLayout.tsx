@@ -7,7 +7,9 @@ import EditorTitlebar from './EditorTitlebar'
 import ErrorBanner from './ErrorBanner'
 import LeftPanel from './panels/LeftPanel'
 import RightPanel from './panels/RightPanel'
-import EditorCanvasRegion from './EditorCanvasRegion'
+import EditorCanvasRegion, {
+  type EditorCanvasRegionProps,
+} from './EditorCanvasRegion'
 import EditorOverlays from './EditorOverlays'
 import type { EditorLayoutProps } from './editorLayoutProps'
 
@@ -38,6 +40,31 @@ function switchRightTab(
 ): void {
   panels.setRightTab(tab)
   panels.setRightOpen(true)
+}
+
+/** 画布区域输入挑选（issue #103 渲染隔离）：从整包布局 props 中只挑
+ * EditorCanvasRegion 真实消费的字段——面板状态变化时这些成员引用稳定，
+ * memo 边界即可跳过画布子树执行。画布新增消费字段时在此同步登记。 */
+function toCanvasRegionProps(
+  props: EditorLayoutProps,
+): EditorCanvasRegionProps {
+  return {
+    project: props.project,
+    canvasRef: props.canvasRef,
+    doc: props.doc,
+    displayNodes: props.view.displayNodes,
+    onCanvasDragOver: props.graph.drop.onCanvasDragOver,
+    onCanvasDrop: props.graph.drop.onCanvasDrop,
+    isValidConnection: props.graph.connection.isValidConnection,
+    onConnect: props.graph.connection.onConnect,
+    onNodeDragStart: props.graph.drag.onNodeDragStart,
+    onNodeDragStop: props.graph.drag.onNodeDragStop,
+    onNodeContextMenu: props.graph.menu.onNodeContextMenu,
+    onEdgeContextMenu: props.graph.menu.onEdgeContextMenu,
+    onPaneContextMenu: props.graph.menu.onPaneContextMenu,
+    onAutoLayout: props.graph.layout.onAutoLayout,
+    onMoveEnd: props.persistence.onMoveEnd,
+  }
 }
 
 /** 编辑器整体布局：顶部工具栏（§3.3）+ 三栏主体（§3.4）+ 浮层。 */
@@ -85,7 +112,7 @@ export default function EditorLayout(props: EditorLayoutProps) {
           onRenameEpisode={graph.episodes.renameEpisode}
           onOutlineDrop={graph.outlineDrop}
         />
-        <EditorCanvasRegion {...props} />
+        <EditorCanvasRegion {...toCanvasRegionProps(props)} />
         <RightPanel
           open={panels.rightOpen}
           width={panels.rightWidth}
