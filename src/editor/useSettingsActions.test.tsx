@@ -74,3 +74,44 @@ describe('useSettingsActions（§5 设定集编辑动作 = 补丁命令）', () 
     expect(setSettings).toHaveBeenLastCalledWith(base)
   })
 })
+
+describe('useSettingsActions（issue 95 人工详情编辑）', () => {
+  it('updateCharacter：名称+小传整体 patch；id/渐变与其他实体不动；undo/redo 还原', () => {
+    const { result, setSettings, commands } = setup()
+    result.current.settingsActions.updateCharacter('c1', { name: '小黎', bio: '侦探。\n雨夜登场。' })
+    expect(setSettings).toHaveBeenCalledTimes(1)
+    const after = setSettings.mock.calls[0][0] as ProjectSettings
+    expect(after.characters[0]).toEqual({ ...base.characters[0], name: '小黎', bio: '侦探。\n雨夜登场。' })
+    expect(after.locations).toBe(base.locations)
+    commands[0].undo()
+    expect(setSettings).toHaveBeenLastCalledWith(base)
+    commands[0].redo()
+    expect(setSettings).toHaveBeenLastCalledWith(after)
+  })
+
+  it('updateCharacter：patch 不含 bio 时保留原小传（未编辑字段保真）', () => {
+    const withBio: ProjectSettings = {
+      characters: [{ id: 'c1', name: '阿黎', gradient: 'g', bio: '原小传' }],
+      locations: [],
+    }
+    const { result, setSettings } = setup(withBio)
+    result.current.settingsActions.updateCharacter('c1', { name: '新名' })
+    const after = setSettings.mock.calls[0][0] as ProjectSettings
+    expect(after.characters[0]).toMatchObject({ id: 'c1', name: '新名', bio: '原小传' })
+  })
+
+  it('updateLocation：名称+备注同构', () => {
+    const { result, setSettings } = setup()
+    result.current.settingsActions.updateLocation('l1', { name: '老咖啡馆', note: '雨夜。' })
+    const after = setSettings.mock.calls[0][0] as ProjectSettings
+    expect(after.locations[0]).toEqual({ id: 'l1', name: '老咖啡馆', note: '雨夜。' })
+    expect(after.characters).toBe(base.characters)
+  })
+
+  it('updateCharacter/updateLocation：实体缺失时零派发（不复活已删实体）', () => {
+    const { result, setSettings } = setup()
+    result.current.settingsActions.updateCharacter('gone', { name: 'x' })
+    result.current.settingsActions.updateLocation('gone', { name: 'x' })
+    expect(setSettings).not.toHaveBeenCalled()
+  })
+})
