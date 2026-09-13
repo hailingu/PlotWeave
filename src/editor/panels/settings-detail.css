@@ -58,6 +58,9 @@
 
 .pw-settings-detail-body {
   width: 100%;
+  /* 全宽 + 水平内边距/边框必须 border-box：content-box 会按
+   * (100% + 20px) 计算越出详情卡片（PR #97 评审） */
+  box-sizing: border-box;
   min-height: 88px;
   resize: vertical;
   border: 1px solid var(--border-hairline);
