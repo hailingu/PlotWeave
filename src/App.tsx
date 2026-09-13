@@ -246,6 +246,53 @@ function useHomeProjectActions(
   return { handleRenameProject, handleDuplicateProject, handleDeleteProject }
 }
 
+/** 项目列表状态与保存落定的刷新编排（issue #101，自 App 拆出以守 80 行
+ * 组件上限）：返回首页的读取与保存落定触发的再刷新并发时按发起序收敛，
+ * 只有最近发起的请求可以写列表——慢的旧响应不得覆盖较新的结果。保存落定
+ * （含失败登记后的链上后台重试成功）且首页可见时自动再刷新；保存失败不
+ * 通知，首页保持磁盘现状不虚报成功。编辑器打开期间首页不可见，且列表
+ * state 更新会整树重渲染（issue #61），不刷新。首页可见性经渲染期同步
+ * 镜像而非 effect 闭包：保存落定的通知可能早于订阅 effect 重跑到达，
+ * 闭包会错过刚提交的导航。 */
+function useProjectSummaries(isHomeVisible: () => boolean): {
+  readonly projects: ProjectSummary[]
+  readonly loading: boolean
+  readonly refreshProjects: () => Promise<void>
+} {
+  const [projects, setProjects] = useState<ProjectSummary[]>([])
+  const [loading, setLoading] = useState(true)
+  const refreshSeqRef = useRef(0)
+  const homeVisibleRef = useRef(true)
+  homeVisibleRef.current = isHomeVisible()
+
+  const refreshProjects = useCallback(async () => {
+    const seq = ++refreshSeqRef.current
+    try {
+      const list = await projectStore.list()
+      if (seq === refreshSeqRef.current) setProjects(list)
+    } catch (err) {
+      console.warn('[App] 项目列表加载失败', err)
+      if (seq === refreshSeqRef.current) setProjects([])
+    } finally {
+      if (seq === refreshSeqRef.current) setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void refreshProjects()
+  }, [refreshProjects])
+
+  useEffect(
+    () =>
+      projectStore.onProjectSaved(() => {
+        if (homeVisibleRef.current) void refreshProjects()
+      }),
+    [refreshProjects],
+  )
+
+  return { projects, loading, refreshProjects }
+}
+
 function AppView({
   projects,
   loading,
@@ -309,26 +356,10 @@ function AppView({
  * 项目数据经 projectStore 持久化（Tauri 落盘 / 浏览器内存回退）。
  */
 export default function App() {
-  const [projects, setProjects] = useState<ProjectSummary[]>([])
   const [openProject, setOpenProject] = useState<OpenProject | null>(null)
-  const [loading, setLoading] = useState(true)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const { unsavedAiSessionsRef, latestAiSessionRef } = useAiSessionLifecycle(setOpenProject)
-
-  const refreshProjects = useCallback(async () => {
-    try {
-      setProjects(await projectStore.list())
-    } catch (err) {
-      console.warn('[App] 项目列表加载失败', err)
-      setProjects([])
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    void refreshProjects()
-  }, [refreshProjects])
+  const { projects, loading, refreshProjects } = useProjectSummaries(() => openProject === null)
 
   // ⌘, 打开设置（macOS 惯例，§8.2）；输入控件聚焦时不触发
   useEffect(() => {
