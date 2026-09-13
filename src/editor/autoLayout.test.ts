@@ -165,6 +165,41 @@ describe('computeAutoLayout（issue #94 自动排布）', () => {
     assertNoOverlap(nodes, positions, { width: 340, height: 220 })
   })
 
+  it('落盘恢复的顶层 width/height（测量未完成）优先于类型回退尺寸（PR #111 评审）', () => {
+    // 打开项目即排布：fromStoryNode 已把 layout.size 还原为顶层 width/height，
+    // measured 尚未写入。实际尺寸 600×500 大于图片回退 300×380，
+    // 若误用回退值，同层兄弟（V_GAP=80 < 500-380）必然重叠。
+    const actual: Size = { width: 600, height: 500 }
+    const persisted = (id: string, type: string, x: number, y: number) => {
+      const n = { id, type, position: { x, y }, data: {}, width: actual.width, height: actual.height } as unknown as CanvasNode
+      return n
+    }
+    const nodes = [persisted('s1', 'scene', 0, 0), persisted('i1', 'image', 500, 900), persisted('i2', 'image', 900, 900)]
+    const positions = computeAutoLayout(nodes, [seq('s1', 'i1'), seq('s1', 'i2')])
+    assertNoOverlap(nodes, positions, actual)
+  })
+
+  it('measured 已就绪时优先于顶层 width/height', () => {
+    const measured: Size = { width: 200, height: 100 }
+    const n = (id: string) =>
+      ({
+        id,
+        type: 'image',
+        position: { x: 0, y: 0 },
+        data: {},
+        width: 600,
+        height: 500,
+        measured,
+      }) as unknown as CanvasNode
+    const nodes = [n('i1'), n('i2')]
+    const positions = computeAutoLayout(nodes, [])
+    // 两独立节点分区堆叠：间距按 measured 100+80 计，而非顶层 500+80
+    const y1 = positions.get('i1')!.y
+    const y2 = positions.get('i2')!.y
+    expect(y2 - y1).toBeLessThan(400)
+    assertNoOverlap(nodes, positions, measured)
+  })
+
   it('第二个下挂宿主（脏数据）不产生重复布局目标', () => {
     const nodes = [
       node('sc1', 'scene', 0, 0, SIZE),

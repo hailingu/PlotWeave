@@ -49,12 +49,26 @@ const BAND_GAP = 140
 /** 同宿主分镜行的卡间距。 */
 const SHOT_GAP = 24
 
+/** 首个正数尺寸值（0/负值/缺省视为未提供）。 */
+const positiveSize = (v?: number): number | undefined =>
+  typeof v === 'number' && v > 0 ? v : undefined
+
+/**
+ * 节点尺寸取值顺序：measured（React Flow 已测量）→ 顶层 width/height
+ * （fromStoryNode 把落盘 layout.size 还原为测量前初始尺寸，PR #111 评审）
+ * → 类型回退。跳过前两层任一层都会在不重叠布局中使用偏小的尺寸。
+ */
 const sizeOf = (node: CanvasNode): LayoutSize => {
-  const measured = (node as { measured?: Partial<LayoutSize> }).measured
+  const runtime = node as {
+    measured?: { width?: number; height?: number }
+    width?: number
+    height?: number
+  }
   const fallback = FALLBACK_SIZES[node.type] ?? DEFAULT_SIZE
   return {
-    width: measured?.width && measured.width > 0 ? measured.width : fallback.width,
-    height: measured?.height && measured.height > 0 ? measured.height : fallback.height,
+    width: positiveSize(runtime.measured?.width) ?? positiveSize(runtime.width) ?? fallback.width,
+    height:
+      positiveSize(runtime.measured?.height) ?? positiveSize(runtime.height) ?? fallback.height,
   }
 }
 
