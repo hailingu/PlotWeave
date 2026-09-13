@@ -394,6 +394,22 @@ describe('增强对比度：家族文本 ≥ 4.5:1（§2 原则 2）', () => {
     }
     // branch-dim 是 var 链，消解后同样须达标（浅外观 = text-secondary more 变体）
     expectContrast('--branch-dim', '--branch-bg', '--branch-bg', lightMore, 4.5)
+    // 分支族跟随画布外观：深外观下 dim/opt-text 同样须达标。分支深色底为
+    // transparent，addopt 文字实际画在画布底色上（PR #114 评审 4000027706）
+    expectContrast(
+      '--branch-dim',
+      '--surface-canvas',
+      '--surface-canvas',
+      darkMore,
+      4.5,
+    )
+    expectContrast(
+      '--branch-opt-text',
+      '--branch-opt-bg',
+      '--surface-canvas',
+      darkMore,
+      4.5,
+    )
   })
 
   it('石板文本令牌在 more 对比度下达标（浅/深外观，家族恒定）', () => {
