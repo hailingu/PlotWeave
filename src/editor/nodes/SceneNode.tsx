@@ -2,6 +2,7 @@ import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { useNodeEdit } from '../nodeEdit'
 import { SCENE_SHOT_HANDLE } from '../graphRules'
 import NodeSettingsPanel, { EditableName } from './settings/NodeSettingsPanel'
+import NodeSettingsGear from './settings/NodeSettingsGear'
 import { resolveCharacterAvatar, resolveLocationName } from '../settings'
 import type { SceneFlowNode } from './types'
 
@@ -80,19 +81,12 @@ export default function SceneNode({
           </span>
           <span className="pw-sp" />
           <span className="pw-index-shots">🎞 {shotCountOf(id)} 镜</span>
-          <button
-            type="button"
-            className={`pw-gear pw-gear-light nodrag${settingsOpen ? ' pw-gear-open' : ''}`}
-            data-pw-gear
-            aria-label="场景设置"
-            aria-expanded={settingsOpen}
-            onClick={(e) => {
-              e.stopPropagation()
-              toggleSettings(id)
-            }}
-          >
-            ⚙️
-          </button>
+          <NodeSettingsGear
+            ariaLabel="场景设置"
+            open={settingsOpen}
+            onToggle={() => toggleSettings(id)}
+            light
+          />
         </div>
         <div className="pw-index-meta">
           <span className="pw-index-ie">{data.interior ? '内' : '外'}</span>

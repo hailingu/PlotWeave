@@ -3,6 +3,7 @@ import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { useNodeEdit } from '../nodeEdit'
 import { projectAssets } from '../projectAssets'
 import NodeSettingsPanel from './settings/NodeSettingsPanel'
+import NodeSettingsGear from './settings/NodeSettingsGear'
 import type { AssetRef } from '../../model/document'
 import type { ShotFlowNode } from './types'
 
@@ -63,19 +64,11 @@ export default function ShotNode({
         </span>
         <span className="pw-shot-size">{data.size}</span>
         <span className="pw-sp" />
-        <button
-          type="button"
-          className={`pw-gear nodrag${settingsOpen ? ' pw-gear-open' : ''}`}
-          data-pw-gear
-          aria-label="分镜设置"
-          aria-expanded={settingsOpen}
-          onClick={(e) => {
-            e.stopPropagation()
-            toggleSettings(id)
-          }}
-        >
-          ⚙️
-        </button>
+        <NodeSettingsGear
+          ariaLabel="分镜设置"
+          open={settingsOpen}
+          onToggle={() => toggleSettings(id)}
+        />
       </div>
       <p className="pw-shot-picture">{data.picture}</p>
       <div className="pw-shot-prompt">

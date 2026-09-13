@@ -2,6 +2,7 @@ import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { useNodeEdit } from '../nodeEdit'
 import { branchOptionHandle } from '../graphRules'
 import NodeSettingsPanel, { EditableName } from './settings/NodeSettingsPanel'
+import NodeSettingsGear from './settings/NodeSettingsGear'
 import type { BranchFlowNode } from './types'
 
 /**
@@ -31,19 +32,12 @@ export default function BranchNode({
           }
         />
         <span className="pw-sp" />
-        <button
-          type="button"
-          className={`pw-gear pw-gear-light nodrag${settingsOpen ? ' pw-gear-open' : ''}`}
-          data-pw-gear
-          aria-label="分支设置"
-          aria-expanded={settingsOpen}
-          onClick={(e) => {
-            e.stopPropagation()
-            toggleSettings(id)
-          }}
-        >
-          ⚙️
-        </button>
+        <NodeSettingsGear
+          ariaLabel="分支设置"
+          open={settingsOpen}
+          onToggle={() => toggleSettings(id)}
+          light
+        />
       </div>
       {data.options.map((option) => (
         <div key={option.id} className="pw-branch-opt">

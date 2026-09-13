@@ -1,6 +1,7 @@
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { useNodeEdit } from '../nodeEdit'
 import NodeSettingsPanel, { EditableName } from './settings/NodeSettingsPanel'
+import NodeSettingsGear from './settings/NodeSettingsGear'
 import { resolveCharacterAvatar, resolveCharacterName } from '../settings'
 import type { DialogueFlowNode } from './types'
 
@@ -59,19 +60,12 @@ export default function DialogueNode({
           {speakers.size} 人 · {lineCount} 句
         </span>
         <span className="pw-sp" />
-        <button
-          type="button"
-          className={`pw-gear pw-gear-light nodrag${settingsOpen ? ' pw-gear-open' : ''}`}
-          data-pw-gear
-          aria-label="对白设置"
-          aria-expanded={settingsOpen}
-          onClick={(e) => {
-            e.stopPropagation()
-            toggleSettings(id)
-          }}
-        >
-          ⚙️
-        </button>
+        <NodeSettingsGear
+          ariaLabel="对白设置"
+          open={settingsOpen}
+          onToggle={() => toggleSettings(id)}
+          light
+        />
       </div>
       <div className="pw-dlg-body">
         {data.lines.map((line) =>
