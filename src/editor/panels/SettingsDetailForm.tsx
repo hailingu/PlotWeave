@@ -11,6 +11,57 @@ import { useEffect, useId, useState, type KeyboardEvent as ReactKeyboardEvent } 
  * 字段基线为展开时的实体值；描述直接映射 bio/note，不建平行存储。
  */
 
+/**
+ * 单字段草稿：未触碰时跟随最新已提交值（行内改名等并发提交不被旧草稿
+ * 回退），进入用户编辑即停止跟随、保留草稿（触碰感知基线，PR #97 评审）。
+ */
+function useFieldDraft(baseline: string) {
+  const [value, setValue] = useState(baseline)
+  const [dirty, setDirty] = useState(false)
+  useEffect(() => {
+    if (!dirty) setValue(baseline)
+  }, [baseline, dirty])
+  return {
+    value,
+    /** 进入用户编辑：置触碰标记并落草稿。 */
+    edit: (next: string) => {
+      setDirty(true)
+      setValue(next)
+    },
+  }
+}
+
+/** 表单操作行：取消/Esc 丢弃草稿关闭；保存受名称非空契约约束
+ * （Esc 处理器挂原生按钮，S6848 安全）。 */
+function DetailActions({
+  canSave,
+  escClose,
+  onSave,
+  onClose,
+}: {
+  readonly canSave: boolean
+  readonly escClose: (e: ReactKeyboardEvent<HTMLElement>) => void
+  readonly onSave: () => void
+  readonly onClose: () => void
+}) {
+  return (
+    <div className="pw-settings-detail-actions">
+      <button type="button" className="pw-dialog-btn" onClick={onClose} onKeyDown={escClose}>
+        取消
+      </button>
+      <button
+        type="button"
+        className="pw-dialog-btn pw-dialog-btn-primary"
+        disabled={!canSave}
+        onClick={onSave}
+        onKeyDown={escClose}
+      >
+        保存
+      </button>
+    </div>
+  )
+}
+
 /** 展开控件（条目行的 ▸/▾ 折叠钮）→ 表单 -> 保存/取消的最小编辑单元。 */
 export default function SettingsDetailForm({
   nameField,
@@ -34,18 +85,8 @@ export default function SettingsDetailForm({
   readonly onClose: () => void
 }) {
   const idPrefix = useId()
-  const [name, setName] = useState(baselineName)
-  const [desc, setDesc] = useState(description)
-  const [nameDirty, setNameDirty] = useState(false)
-  const [descDirty, setDescDirty] = useState(false)
-  // 未触碰字段回填最新已提交值（行内改名并发不被旧草稿回退）；
-  // 已触碰字段保留草稿，效果不再覆写。
-  useEffect(() => {
-    if (!nameDirty) setName(baselineName)
-  }, [baselineName, nameDirty])
-  useEffect(() => {
-    if (!descDirty) setDesc(description)
-  }, [description, descDirty])
+  const name = useFieldDraft(baselineName)
+  const desc = useFieldDraft(description)
   // 组合中的 Esc 只取消输入法合成，不收起表单（isComposing 守卫）；
   // 处理器挂在原生交互控件上（S6848：非交互元素不承接键盘事件）
   const escClose = (e: ReactKeyboardEvent<HTMLElement>) => {
@@ -60,11 +101,8 @@ export default function SettingsDetailForm({
         id={`${idPrefix}-name`}
         className="pw-settings-detail-input"
         autoFocus
-        value={name}
-        onChange={(e) => {
-          setNameDirty(true)
-          setName(e.target.value)
-        }}
+        value={name.value}
+        onChange={(e) => name.edit(e.target.value)}
         onKeyDown={escClose}
       />
       <label className="pw-settings-detail-label" htmlFor={`${idPrefix}-desc`}>
@@ -74,27 +112,16 @@ export default function SettingsDetailForm({
         id={`${idPrefix}-desc`}
         className="pw-settings-detail-body"
         rows={4}
-        value={desc}
-        onChange={(e) => {
-          setDescDirty(true)
-          setDesc(e.target.value)
-        }}
+        value={desc.value}
+        onChange={(e) => desc.edit(e.target.value)}
         onKeyDown={escClose}
       />
-      <div className="pw-settings-detail-actions">
-        <button type="button" className="pw-dialog-btn" onClick={onClose} onKeyDown={escClose}>
-          取消
-        </button>
-        <button
-          type="button"
-          className="pw-dialog-btn pw-dialog-btn-primary"
-          disabled={name.trim() === ''}
-          onClick={() => onSave(name.trim(), desc)}
-          onKeyDown={escClose}
-        >
-          保存
-        </button>
-      </div>
+      <DetailActions
+        canSave={name.value.trim() !== ''}
+        escClose={escClose}
+        onSave={() => onSave(name.value.trim(), desc.value)}
+        onClose={onClose}
+      />
     </div>
   )
 }

@@ -111,7 +111,9 @@ describe('角色详情表单（issue 95）', () => {
     fireEvent.keyDown(reopened, { key: 'Escape', isComposing: true })
     expect(screen.getByLabelText('角色名称')).toBeTruthy()
   })
+})
 
+describe('新增自动展开（issue 95）', () => {
   it('新增角色后新条目自动展开详情并聚焦名称输入框', () => {
     const view = setup()
     fireEvent.click(screen.getByRole('button', { name: '＋ 新增角色' }))
