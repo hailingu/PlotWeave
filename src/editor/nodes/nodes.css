@@ -543,25 +543,25 @@
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
 }
 
-/* ---- React Flow 外壳覆盖：控件与选中框贴合设计令牌 ---- */
+/* ---- React Flow 外壳覆盖：控件贴合设计令牌 ----
+ * 配色必须经 RF 官方主题变量注入（自定义属性随继承生效，与样式表注入
+ * 顺序无关）：编辑器是懒加载 chunk，@xyflow/react/dist/style.css 必然晚于
+ * 应用样式注入，对按钮同属性（background/color/border）的直接声明会整体
+ * 落败——issue #93 暗色下即回落 RF 浅色默认 #fefefe 底 + inherit 浅色图标。 */
 .react-flow__controls {
+  --xy-controls-box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  --xy-controls-button-background-color: var(--surface-card);
+  --xy-controls-button-background-color-hover: var(--fill-quaternary);
+  --xy-controls-button-color: var(--text-primary);
+  --xy-controls-button-color-hover: var(--text-primary);
+  --xy-controls-button-border-color: var(--border-hairline);
   border-radius: var(--radius-md);
   overflow: hidden;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
 }
 
-.react-flow__controls-button {
-  background: var(--surface-card);
-  color: var(--text-primary);
-  border-bottom: 1px solid var(--border-hairline);
-}
-
-.react-flow__controls-button:hover {
-  background: var(--fill-quaternary);
-}
-
-.react-flow__controls-button svg {
-  fill: currentColor;
+.react-flow__controls-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .react-flow__attribution {
