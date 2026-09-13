@@ -43,22 +43,24 @@ function writeExecutable(path: string, body: string): void {
 }
 
 /** 在隔离的外部依赖边界下执行真实门禁脚本或 Git hook。 */
-function runGate(target: string, options: GateOptions = {}): GateRun {
-  const sandbox = mkdtempSync(resolve(tmpdir(), 'plotweave-sonar-gate-'))
-  temporaryDirectories.push(sandbox)
+/** runGate 的命令替身路径集（sandbox 内固定布局）。 */
+interface GateStubPaths {
+  readonly logPath: string
+  readonly curlStdinPath: string
+  readonly scannerTokenPath: string
+  readonly coveragePath: string
+  readonly lockPath: string
+  readonly reportPath: string
+  readonly npmPath: string
+  readonly scannerPath: string
+  readonly curlPath: string
+}
 
-  const logPath = resolve(sandbox, 'calls.log')
-  const curlStdinPath = resolve(sandbox, 'curl-stdin.txt')
-  const scannerTokenPath = resolve(sandbox, 'scanner-token.txt')
-  const coveragePath = resolve(sandbox, 'coverage', 'lcov.info')
-  const lockPath = resolve(sandbox, 'sonar-gate.lock')
-  const reportPath = resolve(sandbox, '.scannerwork', 'report-task.txt')
-  const npmPath = resolve(sandbox, 'bin', 'npm')
-  const scannerPath = resolve(sandbox, 'bin', 'sonar-scanner')
-  const curlPath = resolve(sandbox, 'bin', 'curl')
-
+/** 外部命令替身（runGate 拆分，issue #99）：npm / sonar-scanner / curl 的
+ * 记录-并-受控返回替身脚本，按选项预置锁与覆盖率形态。 */
+function writeCommandStubs(paths: GateStubPaths, options: GateOptions): void {
   writeExecutable(
-    npmPath,
+    paths.npmPath,
     String.raw`printf 'npm %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
 if [ "$PLOTWEAVE_TEST_NPM_EXIT" -ne 0 ]; then
   exit "$PLOTWEAVE_TEST_NPM_EXIT"
@@ -84,10 +86,10 @@ esac`,
   )
 
   if (options.lockOccupied) {
-    mkdirSync(lockPath)
+    mkdirSync(paths.lockPath)
   }
   writeExecutable(
-    scannerPath,
+    paths.scannerPath,
     String.raw`printf 'sonar-scanner %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
 printf '%s' "$SONAR_TOKEN" > "$PLOTWEAVE_TEST_SCANNER_TOKEN"
 if [ "$PLOTWEAVE_TEST_SCANNER_EXIT" -ne 0 ]; then
@@ -100,7 +102,7 @@ printf '%s\n' \
   > "$PLOTWEAVE_SONAR_REPORT_PATH"`,
   )
   writeExecutable(
-    curlPath,
+    paths.curlPath,
     String.raw`printf 'curl %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
 cat > "$PLOTWEAVE_TEST_CURL_STDIN"
 case "$*" in
@@ -116,19 +118,26 @@ case "$*" in
     ;;
 esac`,
   )
+}
 
+/** 门禁运行环境（runGate 拆分，issue #99）：替身路径 + 受控选项；令牌不
+ * 继承宿主环境（默认无令牌，按用例显式注入）。 */
+function gateEnvironment(
+  paths: GateStubPaths,
+  options: GateOptions,
+): NodeJS.ProcessEnv {
   const environment: NodeJS.ProcessEnv = {
     ...process.env,
-    PLOTWEAVE_CURL_BIN: curlPath,
-    PLOTWEAVE_COVERAGE_REPORT_PATH: coveragePath,
-    PLOTWEAVE_SONAR_LOCK_DIRECTORY: lockPath,
+    PLOTWEAVE_CURL_BIN: paths.curlPath,
+    PLOTWEAVE_COVERAGE_REPORT_PATH: paths.coveragePath,
+    PLOTWEAVE_SONAR_LOCK_DIRECTORY: paths.lockPath,
     PLOTWEAVE_NODE_BIN: process.execPath,
-    PLOTWEAVE_NPM_BIN: npmPath,
-    PLOTWEAVE_SONAR_REPORT_PATH: reportPath,
-    PLOTWEAVE_SONAR_SCANNER_BIN: scannerPath,
-    PLOTWEAVE_TEST_LOG: logPath,
-    PLOTWEAVE_TEST_CURL_STDIN: curlStdinPath,
-    PLOTWEAVE_TEST_SCANNER_TOKEN: scannerTokenPath,
+    PLOTWEAVE_NPM_BIN: paths.npmPath,
+    PLOTWEAVE_SONAR_REPORT_PATH: paths.reportPath,
+    PLOTWEAVE_SONAR_SCANNER_BIN: paths.scannerPath,
+    PLOTWEAVE_TEST_LOG: paths.logPath,
+    PLOTWEAVE_TEST_CURL_STDIN: paths.curlStdinPath,
+    PLOTWEAVE_TEST_SCANNER_TOKEN: paths.scannerTokenPath,
     PLOTWEAVE_TEST_COVERAGE_MODE: options.coverageMode ?? 'valid',
     PLOTWEAVE_TEST_NPM_EXIT: String(options.npmExit ?? 0),
     PLOTWEAVE_TEST_QUALITY_GATE_STATUS: options.qualityGateStatus ?? 'OK',
@@ -148,17 +157,40 @@ esac`,
   if (options.plotweaveSonarToken !== undefined) {
     environment.PLOTWEAVE_SONAR_TOKEN = options.plotweaveSonarToken
   }
+  return environment
+}
+
+function runGate(target: string, options: GateOptions = {}): GateRun {
+  const sandbox = mkdtempSync(resolve(tmpdir(), 'plotweave-sonar-gate-'))
+  temporaryDirectories.push(sandbox)
+
+  const paths: GateStubPaths = {
+    logPath: resolve(sandbox, 'calls.log'),
+    curlStdinPath: resolve(sandbox, 'curl-stdin.txt'),
+    scannerTokenPath: resolve(sandbox, 'scanner-token.txt'),
+    coveragePath: resolve(sandbox, 'coverage', 'lcov.info'),
+    lockPath: resolve(sandbox, 'sonar-gate.lock'),
+    reportPath: resolve(sandbox, '.scannerwork', 'report-task.txt'),
+    npmPath: resolve(sandbox, 'bin', 'npm'),
+    scannerPath: resolve(sandbox, 'bin', 'sonar-scanner'),
+    curlPath: resolve(sandbox, 'bin', 'curl'),
+  }
+
+  writeCommandStubs(paths, options)
 
   const result = spawnSync('sh', [resolve(repositoryRoot, target)], {
     cwd: repositoryRoot,
     encoding: 'utf8',
-    env: environment,
+    env: gateEnvironment(paths, options),
   })
 
   return {
-    curlStdin: readFileSync(curlStdinPath, { encoding: 'utf8', flag: 'a+' }),
-    log: readFileSync(logPath, { encoding: 'utf8', flag: 'a+' }),
-    scannerToken: readFileSync(scannerTokenPath, {
+    curlStdin: readFileSync(paths.curlStdinPath, {
+      encoding: 'utf8',
+      flag: 'a+',
+    }),
+    log: readFileSync(paths.logPath, { encoding: 'utf8', flag: 'a+' }),
+    scannerToken: readFileSync(paths.scannerTokenPath, {
       encoding: 'utf8',
       flag: 'a+',
     }),

@@ -131,6 +131,75 @@ function inspectorRows(
   }
 }
 
+type RightAiPaneProps = Pick<
+  RightPanelProps,
+  | 'tab'
+  | 'projectId'
+  | 'onOpenSettings'
+  | 'canvasDigest'
+  | 'aiRevision'
+  | 'onValidateAi'
+  | 'onValidateCommands'
+  | 'onReadNode'
+  | 'onReadSettings'
+  | 'onReadDocument'
+  | 'onApplyAiBatch'
+  | 'whenCanvasCommitted'
+  | 'aiSession'
+  | 'aiSessionError'
+  | 'aiSessionRetryable'
+  | 'onSaveAiSession'
+  | 'aiSessionLoadFailed'
+>
+
+/** 右栏 AI 分段（RightPanel 拆分，issue #99）：常驻挂载（hidden 切换不
+ * 卸载会话容器，issue 58），props 自面板契约透传。 */
+function RightAiPane(props: RightAiPaneProps) {
+  return (
+    <AiPane
+      hidden={props.tab !== 'ai'}
+      loadFailed={props.aiSessionLoadFailed}
+      projectId={props.projectId}
+      onOpenSettings={props.onOpenSettings}
+      canvasDigest={props.canvasDigest}
+      aiRevision={props.aiRevision}
+      onValidateAi={props.onValidateAi}
+      onValidateCommands={props.onValidateCommands}
+      onReadNode={props.onReadNode}
+      onReadSettings={props.onReadSettings}
+      onReadDocument={props.onReadDocument}
+      onApplyAiBatch={props.onApplyAiBatch}
+      whenCanvasCommitted={props.whenCanvasCommitted}
+      initialSession={props.aiSession}
+      initialSessionError={props.aiSessionError}
+      initialSessionRetryable={props.aiSessionRetryable}
+      onSaveSession={props.onSaveAiSession}
+    />
+  )
+}
+
+/** 检查器内容（RightPanel 拆分，issue #99）：选中节点时列字段行，
+ * 否则空态引导。 */
+function InspectorBody({
+  selectedNode,
+  rows,
+}: {
+  readonly selectedNode: CanvasNode
+  readonly rows: { label: string; value: string }[]
+}) {
+  return (
+    <div className="pw-inspector">
+      <div className="pw-inspector-type">{TYPE_LABELS[selectedNode.type]}</div>
+      {rows.map((row) => (
+        <div key={row.label} className="pw-inspector-row">
+          <span className="pw-inspector-label">{row.label}</span>
+          <span className="pw-inspector-value">{row.value}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 /** 加载失败时只显示诊断，聊天操作区不挂载，避免空回退产生写入。设置
  * 入口不是聊天操作区（无会话写入），失败态照常保留（issue #87）——
  * 否则会话损坏的用户只剩不可见的 ⌘, 可进设置页。 */
@@ -226,93 +295,45 @@ function AiPane({
   )
 }
 
-export default function RightPanel({
-  open,
-  width,
-  onResize,
-  tab,
-  onTabChange,
-  projectId,
-  selectedNode,
-  attachedShotCount = 0,
-  settings,
-  onOpenSettings,
-  canvasDigest,
-  aiRevision,
-  onValidateAi,
-  onValidateCommands,
-  onReadNode,
-  onReadSettings,
-  onReadDocument,
-  onApplyAiBatch,
-  whenCanvasCommitted,
-  aiSession,
-  aiSessionError,
-  aiSessionRetryable,
-  aiSessionLoadFailed,
-  onSaveAiSession,
-}: RightPanelProps) {
+export default function RightPanel(props: RightPanelProps) {
+  const selectedNode = props.selectedNode
   const rows = selectedNode
-    ? inspectorRows(selectedNode, attachedShotCount, settings)
+    ? inspectorRows(selectedNode, props.attachedShotCount ?? 0, props.settings)
     : []
 
   return (
     <aside
-      className={`pw-panel pw-panel-right${open ? '' : ' pw-panel-closed'}`}
-      style={{ width: open ? width : 0 }}
-      aria-hidden={!open}
+      className={`pw-panel pw-panel-right${props.open ? '' : ' pw-panel-closed'}`}
+      style={{ width: props.open ? props.width : 0 }}
+      aria-hidden={!props.open}
     >
-      {open && (
-        <PanelResizer direction={-1} startWidth={width} onResize={onResize} />
+      {props.open && (
+        <PanelResizer
+          direction={-1}
+          startWidth={props.width}
+          onResize={props.onResize}
+        />
       )}
-      <div className="pw-panel-inner" style={{ width }}>
+      <div className="pw-panel-inner" style={{ width: props.width }}>
         <div className="pw-panel-head">
           <SegmentedControl
             groupLabel="右栏分段"
             options={TABS}
-            value={tab}
-            onChange={onTabChange}
+            value={props.tab}
+            onChange={props.onTabChange}
           />
         </div>
         <div className="pw-panel-scroll">
-          {tab === 'inspector' &&
+          {props.tab === 'inspector' &&
             (selectedNode ? (
-              <div className="pw-inspector">
-                <div className="pw-inspector-type">
-                  {TYPE_LABELS[selectedNode.type]}
-                </div>
-                {rows.map((row) => (
-                  <div key={row.label} className="pw-inspector-row">
-                    <span className="pw-inspector-label">{row.label}</span>
-                    <span className="pw-inspector-value">{row.value}</span>
-                  </div>
-                ))}
-              </div>
+              <InspectorBody selectedNode={selectedNode} rows={rows} />
             ) : (
               <div className="pw-empty">
                 在画布中选择一个节点，查看它的字段。
               </div>
             ))}
           {/* 常驻挂载语义见 AiPane（issue 58）：hidden 切换不卸载会话容器 */}
-          <AiPane
-            hidden={tab !== 'ai'}
-            loadFailed={aiSessionLoadFailed}
-            projectId={projectId}
-            onOpenSettings={onOpenSettings}
-            canvasDigest={canvasDigest}
-            aiRevision={aiRevision}
-            onValidateAi={onValidateAi}
-            onValidateCommands={onValidateCommands}
-            onReadNode={onReadNode}
-            onReadSettings={onReadSettings}
-            onReadDocument={onReadDocument}
-            onApplyAiBatch={onApplyAiBatch}
-            whenCanvasCommitted={whenCanvasCommitted}
-            initialSession={aiSession}
-            initialSessionError={aiSessionError}
-            initialSessionRetryable={aiSessionRetryable}
-            onSaveSession={onSaveAiSession}
-          />
+          <RightAiPane {...props} />
         </div>
       </div>
     </aside>

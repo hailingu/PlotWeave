@@ -16,6 +16,96 @@ export interface NodeFactoryCtx {
   center: XYPosition | null
 }
 
+type SeedBuilder = (
+  ctx: NodeFactoryCtx,
+  select: boolean,
+  maxNo: (pick: (n: CanvasNode) => number) => number,
+  data: Record<string, unknown> | undefined,
+) => CanvasNode
+
+/** 各类型的种子节点构建器（buildCanvasNode 拆分，issue #99）：统一
+ * id/position/selected 骨架，data 为默认字段 + opts.data 覆盖。 */
+const NODE_SEED_BUILDERS: Record<CreatableType, SeedBuilder> = {
+  scene: (_ctx, select, maxNo, data) => ({
+    id: uid('scene'),
+    type: 'scene',
+    position: { x: 0, y: 0 },
+    selected: select,
+    data: {
+      name: '新场景',
+      sceneNo: maxNo((n) => (n.type === 'scene' ? n.data.sceneNo : 0)),
+      interior: true,
+      time: '🌙 夜',
+      synopsis: '这一场发生了什么…',
+      characterIds: [],
+      ...data,
+    },
+  }),
+  beat: (_ctx, select, _maxNo, data) => ({
+    id: uid('beat'),
+    type: 'beat',
+    position: { x: 0, y: 0 },
+    selected: select,
+    data: { name: '新节拍', tone: '待定', ...data },
+  }),
+  dialogue: (ctx, select, _maxNo, data) => ({
+    id: uid('dialogue'),
+    type: 'dialogue',
+    position: { x: 0, y: 0 },
+    selected: select,
+    data: {
+      name: '新对白',
+      lines: [
+        {
+          id: uid('line'),
+          kind: 'line',
+          speaker: ctx.characters[0]?.id,
+          side: 'left',
+          text: '新台词…',
+        },
+      ],
+      ...data,
+    },
+  }),
+  branch: (_ctx, select, _maxNo, data) => ({
+    id: uid('branch'),
+    type: 'branch',
+    position: { x: 0, y: 0 },
+    selected: select,
+    data: {
+      prompt: '新的分岔是…？',
+      options: [
+        { id: uid('opt'), label: '选项 A' },
+        { id: uid('opt'), label: '选项 B' },
+      ],
+      ...data,
+    },
+  }),
+  image: (_ctx, select, _maxNo, data) => ({
+    id: uid('image'),
+    type: 'image',
+    position: { x: 0, y: 0 },
+    selected: select,
+    // model 空串 = 未选择：生成入口回退 AppSettings.defaultImage 并引导配置；
+    // size 默认竖版短剧画幅（plan.ts IMAGE_SIZES 声明的默认推荐档）
+    data: { prompt: '', model: '', size: '1024x1536', outputs: {}, ...data },
+  }),
+  shot: (_ctx, select, maxNo, data) => ({
+    id: uid('shot'),
+    type: 'shot',
+    position: { x: 0, y: 0 },
+    selected: select,
+    data: {
+      shotNo: maxNo((n) => (n.type === 'shot' ? n.data.shotNo : 0)),
+      size: '中景',
+      picture: '画面描述…',
+      prompt: '',
+      refs: [],
+      ...data,
+    },
+  }),
+}
+
 /** 构建指定类型的新节点（selected 默认 true；opts.data 覆盖默认字段）。 */
 export function buildCanvasNode(
   type: CreatableType,
@@ -25,101 +115,14 @@ export function buildCanvasNode(
   ctx: NodeFactoryCtx,
 ): CanvasNode {
   const nds = ctx.against
-  const select = opts?.selected ?? true
   const maxNo = (pick: (n: CanvasNode) => number) =>
     Math.max(0, ...nds.map(pick)) + 1
-  let node: CanvasNode
-  if (type === 'scene') {
-    node = {
-      id: uid('scene'),
-      type: 'scene',
-      position: { x: 0, y: 0 },
-      selected: select,
-      data: {
-        name: '新场景',
-        sceneNo: maxNo((n) => (n.type === 'scene' ? n.data.sceneNo : 0)),
-        interior: true,
-        time: '🌙 夜',
-        synopsis: '这一场发生了什么…',
-        characterIds: [],
-        ...opts?.data,
-      },
-    }
-  } else if (type === 'beat') {
-    node = {
-      id: uid('beat'),
-      type: 'beat',
-      position: { x: 0, y: 0 },
-      selected: select,
-      data: { name: '新节拍', tone: '待定', ...opts?.data },
-    }
-  } else if (type === 'dialogue') {
-    node = {
-      id: uid('dialogue'),
-      type: 'dialogue',
-      position: { x: 0, y: 0 },
-      selected: select,
-      data: {
-        name: '新对白',
-        lines: [
-          {
-            id: uid('line'),
-            kind: 'line',
-            speaker: ctx.characters[0]?.id,
-            side: 'left',
-            text: '新台词…',
-          },
-        ],
-        ...opts?.data,
-      },
-    }
-  } else if (type === 'branch') {
-    node = {
-      id: uid('branch'),
-      type: 'branch',
-      position: { x: 0, y: 0 },
-      selected: select,
-      data: {
-        prompt: '新的分岔是…？',
-        options: [
-          { id: uid('opt'), label: '选项 A' },
-          { id: uid('opt'), label: '选项 B' },
-        ],
-        ...opts?.data,
-      },
-    }
-  } else if (type === 'image') {
-    node = {
-      id: uid('image'),
-      type: 'image',
-      position: { x: 0, y: 0 },
-      selected: select,
-      // model 空串 = 未选择：生成入口回退 AppSettings.defaultImage 并引导配置；
-      // size 默认竖版短剧画幅（plan.ts IMAGE_SIZES 声明的默认推荐档）
-      data: {
-        prompt: '',
-        model: '',
-        size: '1024x1536',
-        outputs: {},
-        ...opts?.data,
-      },
-    }
-  } else {
-    node = {
-      id: uid('shot'),
-      type: 'shot',
-      position: { x: 0, y: 0 },
-      selected: select,
-      data: {
-        shotNo: maxNo((n) => (n.type === 'shot' ? n.data.shotNo : 0)),
-        size: '中景',
-        picture: '画面描述…',
-        prompt: '',
-        refs: [],
-        ...opts?.data,
-      },
-    }
-  }
+  const node = NODE_SEED_BUILDERS[type](
+    ctx,
+    opts?.selected ?? true,
+    maxNo,
+    opts?.data,
+  )
   const cascade = (nds.length % 5) * 28
   if (opts?.at) {
     node.position = opts.at

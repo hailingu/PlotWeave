@@ -54,6 +54,253 @@ function useMenuDismiss(
  * 工具栏 = 搜索框（内存过滤）+「＋ 新建项目」；卡片右键或悬停 ⋯ 打开
  * 项目菜单（打开/重命名/复制/删除）；无项目时居中展示空状态引导。
  */
+/** 项目卡菜单/重命名/删除状态机（HomePage 拆分，issue #99）：右键菜单位
+ * 置态、两步对话框态与「动作后收起菜单」收口。 */
+function useProjectMenus(
+  projects: ProjectSummary[],
+  actions: {
+    readonly onOpen: (id: string) => void
+    readonly onRename: (id: string, name: string) => void
+    readonly onDuplicate: (id: string) => void
+    readonly onDelete: (id: string) => void
+  },
+) {
+  const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(
+    null,
+  )
+  const [renaming, setRenaming] = useState<ProjectSummary | null>(null)
+  const [deleting, setDeleting] = useState<ProjectSummary | null>(null)
+  const openMenu = (
+    e: { clientX: number; clientY: number; preventDefault: () => void },
+    project: ProjectSummary,
+  ) => {
+    e.preventDefault()
+    setMenu({ x: e.clientX, y: e.clientY, id: project.id })
+  }
+  const closeMenu = useCallback(() => setMenu(null), [])
+  useMenuDismiss(menu, closeMenu)
+  const menuProject = menu ? projects.find((p) => p.id === menu.id) : undefined
+  return {
+    menu,
+    menuProject,
+    renaming,
+    deleting,
+    openMenu,
+    open: (id: string) => {
+      actions.onOpen(id)
+      setMenu(null)
+    },
+    rename: (project: ProjectSummary) => {
+      setRenaming(project)
+      setMenu(null)
+    },
+    duplicate: (id: string) => {
+      actions.onDuplicate(id)
+      setMenu(null)
+    },
+    requestDelete: (project: ProjectSummary) => {
+      setDeleting(project)
+      setMenu(null)
+    },
+    closeRename: () => setRenaming(null),
+    confirmRename: (id: string, name: string) => {
+      actions.onRename(id, name)
+      setRenaming(null)
+    },
+    closeDelete: () => setDeleting(null),
+    confirmDelete: (id: string) => {
+      actions.onDelete(id)
+      setDeleting(null)
+    },
+  }
+}
+
+/** 首页标题栏（HomePage 拆分，issue #99）：搜索与新建入口。 */
+function HomeTitlebar({
+  query,
+  onQuery,
+  onCreate,
+}: {
+  readonly query: string
+  readonly onQuery: (value: string) => void
+  readonly onCreate: () => void
+}) {
+  return (
+    <header className="home-titlebar" data-tauri-drag-region>
+      <span className="home-title" data-tauri-drag-region>
+        PlotWeave
+      </span>
+      <span className="home-titlebar-actions">
+        <input
+          className="home-search"
+          type="search"
+          placeholder="🔍 搜索项目"
+          value={query}
+          onChange={(e) => onQuery(e.target.value)}
+          aria-label="搜索项目"
+        />
+        <button type="button" className="home-create" onClick={onCreate}>
+          ＋ 新建项目
+        </button>
+      </span>
+    </header>
+  )
+}
+
+/** 项目网格区（HomePage 拆分，issue #99）：空态引导、无匹配提示与
+ * 项目卡网格（末尾常驻新建卡）。 */
+function ProjectGrid({
+  loading,
+  projects,
+  visible,
+  query,
+  onCreate,
+  onOpen,
+  onMenu,
+}: {
+  readonly loading: boolean
+  readonly projects: ProjectSummary[]
+  readonly visible: ProjectSummary[]
+  readonly query: string
+  readonly onCreate: () => void
+  readonly onOpen: (id: string) => void
+  readonly onMenu: (
+    e: { clientX: number; clientY: number; preventDefault: () => void },
+    project: ProjectSummary,
+  ) => void
+}) {
+  if (!loading && projects.length === 0) {
+    return (
+      <div className="home-empty">
+        <button type="button" className="home-empty-create" onClick={onCreate}>
+          ＋ 创建你的第一部短剧
+        </button>
+      </div>
+    )
+  }
+  return (
+    <main className="home-grid-wrap">
+      {visible.length === 0 ? (
+        <p className="home-no-match">没有匹配「{query.trim()}」的项目</p>
+      ) : (
+        <div className="home-grid">
+          {visible.map((p) => (
+            <ProjectCard
+              key={p.id}
+              project={p}
+              onOpen={onOpen}
+              onMenu={onMenu}
+            />
+          ))}
+          <button type="button" className="project-new" onClick={onCreate}>
+            ＋ 新剧
+          </button>
+        </div>
+      )}
+    </main>
+  )
+}
+
+/** 项目右键菜单（HomePage 拆分，issue #99；§3.2：打开/重命名/复制/
+ * 删除）。 */
+function ProjectMenu({
+  menu,
+  menuProject,
+  onOpen,
+  onRename,
+  onDuplicate,
+  onDelete,
+}: {
+  readonly menu: { x: number; y: number; id: string }
+  readonly menuProject: ProjectSummary
+  readonly onOpen: (id: string) => void
+  readonly onRename: (project: ProjectSummary) => void
+  readonly onDuplicate: (id: string) => void
+  readonly onDelete: (project: ProjectSummary) => void
+}) {
+  return (
+    <div
+      className="editor-ctx"
+      style={{
+        left: Math.min(menu.x, window.innerWidth - 150),
+        top: menu.y,
+      }}
+      role="menu"
+      aria-label="项目菜单"
+    >
+      <button
+        type="button"
+        className="editor-menu-item"
+        role="menuitem"
+        onClick={() => onOpen(menu.id)}
+      >
+        打开
+      </button>
+      <button
+        type="button"
+        className="editor-menu-item"
+        role="menuitem"
+        onClick={() => onRename(menuProject)}
+      >
+        重命名
+      </button>
+      <button
+        type="button"
+        className="editor-menu-item"
+        role="menuitem"
+        onClick={() => onDuplicate(menu.id)}
+      >
+        ⧉ 复制
+      </button>
+      <button
+        type="button"
+        className="editor-menu-item editor-menu-danger"
+        role="menuitem"
+        onClick={() => onDelete(menuProject)}
+      >
+        🗑 删除
+      </button>
+    </div>
+  )
+}
+
+/** 重命名/删除对话框（HomePage 拆分，issue #99）。 */
+function ProjectDialogs({
+  renaming,
+  deleting,
+  onCloseRename,
+  onConfirmRename,
+  onCloseDelete,
+  onConfirmDelete,
+}: {
+  readonly renaming: ProjectSummary | null
+  readonly deleting: ProjectSummary | null
+  readonly onCloseRename: () => void
+  readonly onConfirmRename: (id: string, name: string) => void
+  readonly onCloseDelete: () => void
+  readonly onConfirmDelete: (id: string) => void
+}) {
+  return (
+    <>
+      {renaming && (
+        <RenameDialog
+          currentName={renaming.name}
+          onCancel={onCloseRename}
+          onConfirm={(name) => onConfirmRename(renaming.id, name)}
+        />
+      )}
+      {deleting && (
+        <ConfirmDeleteDialog
+          title="删除项目"
+          message={`删除「${deleting.name}」？项目文件将从磁盘移除，此操作不可撤销。`}
+          onCancel={onCloseDelete}
+          onConfirm={() => onConfirmDelete(deleting.id)}
+        />
+      )}
+    </>
+  )
+}
+
 export default function HomePage({
   projects,
   loading = false,
@@ -65,175 +312,61 @@ export default function HomePage({
   onDeleteProject,
 }: HomePageProps) {
   const [query, setQuery] = useState('')
-  const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(
-    null,
-  )
-  const [renaming, setRenaming] = useState<ProjectSummary | null>(null)
-  const [deleting, setDeleting] = useState<ProjectSummary | null>(null)
   const visible = useMemo(
     () => filterProjects(projects, query),
     [projects, query],
   )
-
-  const openMenu = (
-    e: { clientX: number; clientY: number; preventDefault: () => void },
-    project: ProjectSummary,
-  ) => {
-    e.preventDefault()
-    setMenu({ x: e.clientX, y: e.clientY, id: project.id })
-  }
-
-  const closeMenu = useCallback(() => setMenu(null), [])
-  useMenuDismiss(menu, closeMenu)
-
-  const menuProject = menu ? projects.find((p) => p.id === menu.id) : undefined
+  const menus = useProjectMenus(projects, {
+    onOpen: onOpenProject,
+    onRename: onRenameProject,
+    onDuplicate: onDuplicateProject,
+    onDelete: onDeleteProject,
+  })
 
   return (
     <div className="home-root">
       {/* Overlay 标题栏下整行作为窗口拖拽区；按钮与输入框不带
           data-tauri-drag-region，保持可点击。 */}
-      <header className="home-titlebar" data-tauri-drag-region>
-        <span className="home-title" data-tauri-drag-region>
-          PlotWeave
-        </span>
-        <span className="home-titlebar-actions">
-          <input
-            className="home-search"
-            type="search"
-            placeholder="🔍 搜索项目"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            aria-label="搜索项目"
-          />
-          <button
-            type="button"
-            className="home-create"
-            onClick={onCreateProject}
-          >
-            ＋ 新建项目
-          </button>
-        </span>
-      </header>
+      <HomeTitlebar
+        query={query}
+        onQuery={setQuery}
+        onCreate={onCreateProject}
+      />
 
       {/* 打开失败横幅（issue #98）：role=alert 即时播报；非阻塞，停留至
           下一次打开尝试或新建成功，不拦截首页任何操作。 */}
       {openError && <OpenErrorBanner error={openError} projects={projects} />}
 
-      {!loading && projects.length === 0 ? (
-        <div className="home-empty">
-          <button
-            type="button"
-            className="home-empty-create"
-            onClick={onCreateProject}
-          >
-            ＋ 创建你的第一部短剧
-          </button>
-        </div>
-      ) : (
-        <main className="home-grid-wrap">
-          {visible.length === 0 ? (
-            <p className="home-no-match">没有匹配「{query.trim()}」的项目</p>
-          ) : (
-            <div className="home-grid">
-              {visible.map((p) => (
-                <ProjectCard
-                  key={p.id}
-                  project={p}
-                  onOpen={onOpenProject}
-                  onMenu={openMenu}
-                />
-              ))}
-              <button
-                type="button"
-                className="project-new"
-                onClick={onCreateProject}
-              >
-                ＋ 新剧
-              </button>
-            </div>
-          )}
-        </main>
-      )}
+      <ProjectGrid
+        loading={loading}
+        projects={projects}
+        visible={visible}
+        query={query}
+        onCreate={onCreateProject}
+        onOpen={onOpenProject}
+        onMenu={menus.openMenu}
+      />
 
       {/* 项目菜单（§3.2：打开 / 重命名 / 复制 / 删除） */}
-      {menu && menuProject && (
-        <div
-          className="editor-ctx"
-          style={{
-            left: Math.min(menu.x, window.innerWidth - 150),
-            top: menu.y,
-          }}
-          role="menu"
-          aria-label="项目菜单"
-        >
-          <button
-            type="button"
-            className="editor-menu-item"
-            role="menuitem"
-            onClick={() => {
-              onOpenProject(menu.id)
-              setMenu(null)
-            }}
-          >
-            打开
-          </button>
-          <button
-            type="button"
-            className="editor-menu-item"
-            role="menuitem"
-            onClick={() => {
-              setRenaming(menuProject)
-              setMenu(null)
-            }}
-          >
-            重命名
-          </button>
-          <button
-            type="button"
-            className="editor-menu-item"
-            role="menuitem"
-            onClick={() => {
-              onDuplicateProject(menu.id)
-              setMenu(null)
-            }}
-          >
-            ⧉ 复制
-          </button>
-          <button
-            type="button"
-            className="editor-menu-item editor-menu-danger"
-            role="menuitem"
-            onClick={() => {
-              setDeleting(menuProject)
-              setMenu(null)
-            }}
-          >
-            🗑 删除
-          </button>
-        </div>
+      {menus.menu && menus.menuProject && (
+        <ProjectMenu
+          menu={menus.menu}
+          menuProject={menus.menuProject}
+          onOpen={menus.open}
+          onRename={menus.rename}
+          onDuplicate={menus.duplicate}
+          onDelete={menus.requestDelete}
+        />
       )}
 
-      {renaming && (
-        <RenameDialog
-          currentName={renaming.name}
-          onCancel={() => setRenaming(null)}
-          onConfirm={(name) => {
-            onRenameProject(renaming.id, name)
-            setRenaming(null)
-          }}
-        />
-      )}
-      {deleting && (
-        <ConfirmDeleteDialog
-          title="删除项目"
-          message={`删除「${deleting.name}」？项目文件将从磁盘移除，此操作不可撤销。`}
-          onCancel={() => setDeleting(null)}
-          onConfirm={() => {
-            onDeleteProject(deleting.id)
-            setDeleting(null)
-          }}
-        />
-      )}
+      <ProjectDialogs
+        renaming={menus.renaming}
+        deleting={menus.deleting}
+        onCloseRename={menus.closeRename}
+        onConfirmRename={menus.confirmRename}
+        onCloseDelete={menus.closeDelete}
+        onConfirmDelete={menus.confirmDelete}
+      />
     </div>
   )
 }
