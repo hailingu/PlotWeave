@@ -398,6 +398,111 @@ describe('App ✦首页打开失败反馈（issue #98）', () => {
     await screen.findByTestId('home')
     expect(homeProps.current.openError).toBeNull()
   })
+
+  it('并发：在途打开被新尝试取代后，迟到的拒绝不发布旧错误也不拦截导航', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let rejectSlow!: (err: Error) => void
+    store.list.mockResolvedValue([{ id: 'slow', name: '慢项目' }, { id: 'fast', name: '快速项目' }])
+    store.load.mockImplementation((id: string) =>
+      id === 'slow'
+        ? new Promise((_resolve, reject) => { rejectSlow = reject })
+        : Promise.resolve({ ...structuredClone(DOC), name: '快速项目' }),
+    )
+    render(<App />)
+    await screen.findByTestId('home')
+    await act(async () => {
+      ;(homeProps.current.onOpenProject as (id: string) => Promise<void>)('slow')
+    })
+    await attemptOpen('fast')
+    await screen.findByTestId('editor')
+    await act(async () => {
+      rejectSlow(new Error('文档版本过新（schemaVersion 2），请升级应用'))
+    })
+    warn.mockRestore()
+    await act(async () => {
+      ;(editorProps.current.onBackHome as () => void)()
+    })
+    await screen.findByTestId('home')
+    expect(homeProps.current.openError).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('并发：两个在途打开都失败，显示后发起尝试的错误而非后完成者', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let rejectFirst!: (err: Error) => void
+    store.list.mockResolvedValue([{ id: 'a', name: '甲' }, { id: 'b', name: '乙' }])
+    store.load.mockImplementation((id: string) =>
+      id === 'a'
+        ? new Promise((_resolve, reject) => { rejectFirst = reject })
+        : Promise.reject(new Error('乙的失败')),
+    )
+    render(<App />)
+    await screen.findByTestId('home')
+    await act(async () => {
+      ;(homeProps.current.onOpenProject as (id: string) => Promise<void>)('a')
+    })
+    await attemptOpen('b')
+    warn.mockRestore()
+    expect((homeProps.current.openError as { id: string }).id).toBe('b')
+    await act(async () => {
+      rejectFirst(new Error('甲的失败'))
+    })
+    expect((homeProps.current.openError as { id: string }).id).toBe('b')
+    expect((homeProps.current.openError as { detail: string }).detail).toBe('乙的失败')
+  })
+
+  it('并发：被取代的旧尝试成功晚到，不进入编辑器且新失败的横幅保留', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let releaseSlow!: (doc: ProjectContent) => void
+    store.list.mockResolvedValue([{ id: 'a', name: '甲' }, { id: 'b', name: '乙' }])
+    store.load.mockImplementation((id: string) =>
+      id === 'a'
+        ? new Promise((resolve) => { releaseSlow = resolve })
+        : Promise.reject(new Error('乙的失败')),
+    )
+    render(<App />)
+    await screen.findByTestId('home')
+    await act(async () => {
+      ;(homeProps.current.onOpenProject as (id: string) => Promise<void>)('a')
+    })
+    await attemptOpen('b')
+    warn.mockRestore()
+    expect((homeProps.current.openError as { id: string }).id).toBe('b')
+    await act(async () => {
+      releaseSlow(structuredClone(DOC))
+    })
+    expect(screen.queryByTestId('editor')).toBeNull()
+    expect((homeProps.current.openError as { id: string }).id).toBe('b')
+  })
+
+  it('并发：在途打开的拒绝晚于新建成功，回首页不复活旧横幅', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let rejectSlow!: (err: Error) => void
+    store.list.mockResolvedValue([{ id: 'slow', name: '慢项目' }])
+    store.load.mockImplementation((id: string) =>
+      id === 'slow'
+        ? new Promise((_resolve, reject) => { rejectSlow = reject })
+        : Promise.resolve(structuredClone(DOC)),
+    )
+    render(<App />)
+    await screen.findByTestId('home')
+    await act(async () => {
+      ;(homeProps.current.onOpenProject as (id: string) => Promise<void>)('slow')
+    })
+    await act(async () => {
+      ;(homeProps.current.onCreateProject as () => void)()
+    })
+    await screen.findByTestId('editor')
+    await act(async () => {
+      rejectSlow(new Error('项目文件不可读'))
+    })
+    warn.mockRestore()
+    await act(async () => {
+      ;(editorProps.current.onBackHome as () => void)()
+    })
+    await screen.findByTestId('home')
+    expect(homeProps.current.openError).toBeNull()
+  })
 })
 
 describe('App ✦AI 会话恢复', () => {

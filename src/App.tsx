@@ -157,13 +157,24 @@ function useOpenProjectActions(
   unsavedAiSessions: UnsavedAiSessionsRef,
   latestAiSession: LatestAiSessionRef,
 ) {
+  /** 打开/新建尝试的代序号（PR #110 评审 P2）：加载期间首页控件仍可操作，
+   * 慢的旧尝试可能在新尝试开始后才落定——只有最新发起的尝试可以发布结果
+   * （进入编辑器或失败横幅），被取代的旧尝试只留诊断。与
+   * useProjectSummaries 的刷新序号收敛同款语义（标准「状态、并发与失败
+   * 边界」：并发执行须先定义取消/取代行为）。 */
+  const openAttemptSeqRef = useRef(0)
+
   const handleCreateProject = useCallback(async () => {
+    const seq = ++openAttemptSeqRef.current
     try {
       const meta = await projectStore.create('未命名短剧')
       const open = await loadOpenProject(meta.id)
-      // 新建成功进入编辑器：旧的打开失败横幅随导航过时，回首页不得复活
-      setOpenFailure(null)
-      startTransition(() => setOpenProject(open))
+      // 项目本身已创建，被取代也仍刷新列表；只有最新尝试进入编辑器并
+      // 清理横幅，否则旧尝试的成功导航与横幅清理会晚于新尝试的发布。
+      if (seq === openAttemptSeqRef.current) {
+        setOpenFailure(null)
+        startTransition(() => setOpenProject(open))
+      }
     } catch (err) {
       console.warn('[App] 新建项目失败', err)
     }
@@ -171,14 +182,20 @@ function useOpenProjectActions(
   }, [refreshProjects, setOpenFailure, setOpenProject])
 
   const handleOpenProject = useCallback(async (id: string) => {
+    const seq = ++openAttemptSeqRef.current
     // 新一次打开尝试即视为旧错误过时（issue #98）：失败后重试或改开其他
     // 项目，上一次失败的原因不得残留；本次失败会用新原因覆盖。
     setOpenFailure(null)
     try {
       const open = await loadOpenProject(id, unsavedAiSessions.current ?? undefined)
+      // 被取代的旧尝试成功晚到：不发布导航，新尝试的失败横幅保留。
+      if (seq !== openAttemptSeqRef.current) return
       startTransition(() => setOpenProject(open))
     } catch (err) {
       console.warn('[App] 打开项目失败', err)
+      // 被取代的旧尝试拒绝晚到：不发布横幅，防止新尝试已清除/进入编辑器
+      // 后旧错误复活或「后完成者」覆盖「后发起者」。
+      if (seq !== openAttemptSeqRef.current) return
       setOpenFailure({ id, detail: openFailureDetail(err) })
     }
   }, [setOpenFailure, setOpenProject, unsavedAiSessions])
