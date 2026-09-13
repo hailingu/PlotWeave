@@ -75,8 +75,14 @@ vi.mock('./home/HomePage', () => ({
   },
 }))
 
+/** 编辑器挂起门（PR #110 评审并发用例）：非空时编辑器子树抛出该 Promise
+ * 令过渡停在 chunk 加载态、首页保持可交互——模拟真实 lazy chunk 的排队
+ * 导航提交窗口。仅并发用例设置，beforeEach 复位。 */
+let editorSuspendGate: Promise<void> | null = null
+
 vi.mock('./editor/EditorView', () => ({
   default: (props: Record<string, unknown>) => {
+    if (editorSuspendGate) throw editorSuspendGate
     editorProps.current = props
     editorRenders.count += 1
     return <div data-testid="editor">{(props.project as { name: string }).name}</div>
@@ -115,6 +121,7 @@ afterEach(cleanup)
 beforeEach(() => {
   vi.clearAllMocks()
   editorRenders.count = 0
+  editorSuspendGate = null
   retrySavedListeners.length = 0
   savedListeners.length = 0
   replayFailedListeners.length = 0
@@ -308,14 +315,14 @@ describe('App ✦返回首页摘要与保存落定（issue #101）', () => {
   })
 })
 
-describe('App ✦首页打开失败反馈（issue #98）', () => {
-  /** 打开项目并等待结果落定（openError 已写入或编辑器已挂载）。 */
-  async function attemptOpen(id: string) {
-    await act(async () => {
-      await (homeProps.current.onOpenProject as (id: string) => Promise<void>)(id)
-    })
-  }
+/** 打开项目并等待结果落定（openError 已写入或编辑器已挂载）。 */
+async function attemptOpen(id: string) {
+  await act(async () => {
+    await (homeProps.current.onOpenProject as (id: string) => Promise<void>)(id)
+  })
+}
 
+describe('App ✦首页打开失败反馈（issue #98）', () => {
   it('打开失败：错误上浮为 openError 传给首页显示警示，停留首页', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     store.load.mockRejectedValue(new Error('文档版本过新（schemaVersion 2），请升级应用'))
@@ -339,7 +346,9 @@ describe('App ✦首页打开失败反馈（issue #98）', () => {
     warn.mockRestore()
     expect((homeProps.current.openError as { detail: string }).detail).toBe('项目文件不可读')
   })
+})
 
+describe('App ✦打开失败后的错误清理时机（issue #98）', () => {
   it('失败后重试同一项目成功：横幅清除，回首页不复活旧错误', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     store.load.mockRejectedValueOnce(new Error('项目文件不可读'))
@@ -398,7 +407,9 @@ describe('App ✦首页打开失败反馈（issue #98）', () => {
     await screen.findByTestId('home')
     expect(homeProps.current.openError).toBeNull()
   })
+})
 
+describe('App ✦打开尝试并发收敛（PR #110 评审）', () => {
   it('并发：在途打开被新尝试取代后，迟到的拒绝不发布旧错误也不拦截导航', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     let rejectSlow!: (err: Error) => void
@@ -474,7 +485,9 @@ describe('App ✦首页打开失败反馈（issue #98）', () => {
     expect(screen.queryByTestId('editor')).toBeNull()
     expect((homeProps.current.openError as { id: string }).id).toBe('b')
   })
+})
 
+describe('App ✦并发收敛：新建协调（PR #110 评审）', () => {
   it('并发：在途打开的拒绝晚于新建成功，回首页不复活旧横幅', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     let rejectSlow!: (err: Error) => void
@@ -502,6 +515,35 @@ describe('App ✦首页打开失败反馈（issue #98）', () => {
     })
     await screen.findByTestId('home')
     expect(homeProps.current.openError).toBeNull()
+  })
+})
+
+describe('App ✦并发：chunk 挂起窗口内作废排队导航（PR #110 评审）', () => {
+  it('新尝试失败时，已排队未提交的旧导航被作废，不得吞掉失败横幅', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    store.list.mockResolvedValue([{ id: 'a', name: '甲' }, { id: 'b', name: '乙' }])
+    store.load.mockImplementation((id: string) =>
+      id === 'b' ? Promise.reject(new Error('乙的失败')) : Promise.resolve(structuredClone(DOC)),
+    )
+    render(<App />)
+    await screen.findByTestId('home')
+    // 打开甲：发布已排队；挂起门让过渡停在 chunk 加载态，首页保持可交互
+    let release!: () => void
+    editorSuspendGate = new Promise((resolve) => { release = resolve })
+    await attemptOpen('a')
+    expect(screen.queryByTestId('editor')).toBeNull()
+    // 挂起窗口内改开乙：乙立即失败并发布横幅
+    await attemptOpen('b')
+    expect((homeProps.current.openError as { id: string }).id).toBe('b')
+    // 放行挂起：被取代的甲不得提交导航吞掉乙的失败横幅
+    editorSuspendGate = null
+    await act(async () => {
+      release()
+    })
+    warn.mockRestore()
+    expect(screen.queryByTestId('editor')).toBeNull()
+    expect((homeProps.current.openError as { id: string }).id).toBe('b')
+    expect(screen.getByRole('alert').textContent).toContain('乙的失败')
   })
 })
 

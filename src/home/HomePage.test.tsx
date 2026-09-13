@@ -5,7 +5,8 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import HomePage, { type OpenProjectError } from './HomePage'
+import HomePage from './HomePage'
+import type { OpenProjectError } from './OpenErrorBanner'
 import type { ProjectSummary } from './projects'
 
 afterEach(cleanup)

@@ -11,7 +11,8 @@ import {
   type RefObject,
   type SetStateAction,
 } from 'react'
-import HomePage, { type OpenProjectError } from './home/HomePage'
+import HomePage from './home/HomePage'
+import type { OpenProjectError } from './home/OpenErrorBanner'
 import { useExitFlush } from './useExitFlush'
 import { projectStore, type ProjectContent } from './projectStore'
 import type { ProjectSummary } from './home/projects'
@@ -150,70 +151,18 @@ function useAiSessionLifecycle(setOpenProject: OpenProjectSetter) {
   return { unsavedAiSessionsRef, latestAiSessionRef }
 }
 
-function useOpenProjectActions(
+/** AI 会话保存通道（自 useOpenProjectActions 拆出以守 80 行函数上限，
+ * PR #110 评审）：最新会话写入引用而非 React state——成功保存是每条 AI
+ * 消息的高频路径，不得引起 App 根起的整树重渲染（issue #61）；失败保留
+ * 在打开项目视图之外并上浮项目级错误，重挂载可重试。 */
+function useAiSessionSave(
   setOpenProject: OpenProjectSetter,
-  setOpenFailure: OpenErrorSetter,
-  refreshProjects: RefreshProjects,
   unsavedAiSessions: UnsavedAiSessionsRef,
   latestAiSession: LatestAiSessionRef,
 ) {
-  /** 打开/新建尝试的代序号（PR #110 评审 P2）：加载期间首页控件仍可操作，
-   * 慢的旧尝试可能在新尝试开始后才落定——只有最新发起的尝试可以发布结果
-   * （进入编辑器或失败横幅），被取代的旧尝试只留诊断。与
-   * useProjectSummaries 的刷新序号收敛同款语义（标准「状态、并发与失败
-   * 边界」：并发执行须先定义取消/取代行为）。 */
-  const openAttemptSeqRef = useRef(0)
-
-  const handleCreateProject = useCallback(async () => {
-    const seq = ++openAttemptSeqRef.current
-    try {
-      const meta = await projectStore.create('未命名短剧')
-      const open = await loadOpenProject(meta.id)
-      // 项目本身已创建，被取代也仍刷新列表；只有最新尝试进入编辑器并
-      // 清理横幅，否则旧尝试的成功导航与横幅清理会晚于新尝试的发布。
-      if (seq === openAttemptSeqRef.current) {
-        setOpenFailure(null)
-        startTransition(() => setOpenProject(open))
-      }
-    } catch (err) {
-      console.warn('[App] 新建项目失败', err)
-    }
-    void refreshProjects()
-  }, [refreshProjects, setOpenFailure, setOpenProject])
-
-  const handleOpenProject = useCallback(async (id: string) => {
-    const seq = ++openAttemptSeqRef.current
-    // 新一次打开尝试即视为旧错误过时（issue #98）：失败后重试或改开其他
-    // 项目，上一次失败的原因不得残留；本次失败会用新原因覆盖。
-    setOpenFailure(null)
-    try {
-      const open = await loadOpenProject(id, unsavedAiSessions.current ?? undefined)
-      // 被取代的旧尝试成功晚到：不发布导航，新尝试的失败横幅保留。
-      if (seq !== openAttemptSeqRef.current) return
-      startTransition(() => setOpenProject(open))
-    } catch (err) {
-      console.warn('[App] 打开项目失败', err)
-      // 被取代的旧尝试拒绝晚到：不发布横幅，防止新尝试已清除/进入编辑器
-      // 后旧错误复活或「后完成者」覆盖「后发起者」。
-      if (seq !== openAttemptSeqRef.current) return
-      setOpenFailure({ id, detail: openFailureDetail(err) })
-    }
-  }, [setOpenFailure, setOpenProject, unsavedAiSessions])
-
-  const handleBackHome = useCallback(() => {
-    setOpenProject(null)
-    void refreshProjects()
-  }, [refreshProjects, setOpenProject])
-
-  const handleEditorRename = useCallback((name: string) => {
-    setOpenProject((project) => (project ? { ...project, doc: { ...project.doc, name } } : project))
-  }, [setOpenProject])
-
   const handleSaveAiSession = useCallback(
     (id: string) => async (session: AiSession) => {
-      // 最新会话写入引用而非 React state：成功保存是每条 AI 消息的高频路径，
-      // 不得引起 App 根起的整树重渲染（issue #61）。AI 操作区只在加载成功后
-      // 开放；实际变更后的会话可在重挂载时重试。
+      // AI 操作区只在加载成功后开放；实际变更后的会话可在重挂载时重试。
       latestAiSession.current = { id, session }
       try {
         await projectStore.saveAiSession(id, session)
@@ -239,6 +188,77 @@ function useOpenProjectActions(
     },
     [latestAiSession, setOpenProject, unsavedAiSessions],
   )
+  return handleSaveAiSession
+}
+
+function useOpenProjectActions(
+  setOpenProject: OpenProjectSetter,
+  setOpenFailure: OpenErrorSetter,
+  refreshProjects: RefreshProjects,
+  unsavedAiSessions: UnsavedAiSessionsRef,
+  latestAiSession: LatestAiSessionRef,
+) {
+  /** 打开/新建尝试的代序号（PR #110 评审 P2）：加载期间首页控件仍可操作，
+   * 慢的旧尝试可能在新尝试开始后才落定——只有最新发起的尝试可以发布结果
+   * （进入编辑器或失败横幅），被取代的旧尝试只留诊断。与
+   * useProjectSummaries 的刷新序号收敛同款语义（标准「状态、并发与失败
+   * 边界」：并发执行须先定义取消/取代行为）。 */
+  const openAttemptSeqRef = useRef(0)
+
+  const handleCreateProject = useCallback(async () => {
+    const seq = ++openAttemptSeqRef.current
+    // 作废旧尝试已排队未提交的导航（PR #110 评审）：chunk 挂起窗口内首页
+    // 仍可交互，此前尝试可能已通过序号检查并排队——排队更新无法从外部
+    // 取消，只能以同车道（transition）的 null 更新按入队序覆盖，否则被
+    // 取代的导航会在 chunk 就绪后提交并吞掉新尝试的失败横幅。无排队发布
+    // 时为同值更新，React 跳过。
+    startTransition(() => setOpenProject(null))
+    try {
+      const meta = await projectStore.create('未命名短剧')
+      const open = await loadOpenProject(meta.id)
+      // 项目本身已创建，被取代也仍刷新列表；只有最新尝试进入编辑器并
+      // 清理横幅，否则旧尝试的成功导航与横幅清理会晚于新尝试的发布。
+      if (seq === openAttemptSeqRef.current) {
+        setOpenFailure(null)
+        startTransition(() => setOpenProject(open))
+      }
+    } catch (err) {
+      console.warn('[App] 新建项目失败', err)
+    }
+    void refreshProjects()
+  }, [refreshProjects, setOpenFailure, setOpenProject])
+
+  const handleOpenProject = useCallback(async (id: string) => {
+    const seq = ++openAttemptSeqRef.current
+    // 新一次打开尝试即视为旧错误过时（issue #98）：失败后重试或改开其他
+    // 项目，上一次失败的原因不得残留；本次失败会用新原因覆盖。
+    setOpenFailure(null)
+    // 作废旧尝试已排队未提交的导航（机制见 handleCreateProject 注释）。
+    startTransition(() => setOpenProject(null))
+    try {
+      const open = await loadOpenProject(id, unsavedAiSessions.current ?? undefined)
+      // 被取代的旧尝试成功晚到：不发布导航，新尝试的失败横幅保留。
+      if (seq !== openAttemptSeqRef.current) return
+      startTransition(() => setOpenProject(open))
+    } catch (err) {
+      console.warn('[App] 打开项目失败', err)
+      // 被取代的旧尝试拒绝晚到：不发布横幅，防止新尝试已清除/进入编辑器
+      // 后旧错误复活或「后完成者」覆盖「后发起者」。
+      if (seq !== openAttemptSeqRef.current) return
+      setOpenFailure({ id, detail: openFailureDetail(err) })
+    }
+  }, [setOpenFailure, setOpenProject, unsavedAiSessions])
+
+  const handleBackHome = useCallback(() => {
+    setOpenProject(null)
+    void refreshProjects()
+  }, [refreshProjects, setOpenProject])
+
+  const handleEditorRename = useCallback((name: string) => {
+    setOpenProject((project) => (project ? { ...project, doc: { ...project.doc, name } } : project))
+  }, [setOpenProject])
+
+  const handleSaveAiSession = useAiSessionSave(setOpenProject, unsavedAiSessions, latestAiSession)
 
   return { handleCreateProject, handleOpenProject, handleBackHome, handleEditorRename, handleSaveAiSession }
 }
