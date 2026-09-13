@@ -11,12 +11,12 @@ import { extractBatchJson } from './ai/batchText'
 import { settingsSnapshotText } from './ai/entityFields'
 import {
   toInboundCommands,
-  validateAiBatch,
   type AiCommand,
   type AiGraphSnapshot,
   type BatchValidation,
   type ValidatedCommand,
 } from './ai/commands'
+import { validateAiBatch } from './ai/batchFold'
 import { simulateBatch, type BatchOps, type BuildNewNode } from './ai/batchSim'
 import type { HistoryCommand } from './history'
 import {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { validateAiBatch, type AiGraphSnapshot } from './commands'
+import { validateAiBatch } from './batchFold'
+import type { AiGraphSnapshot } from './commands'
 
 /**
  * upsert_document 整批校验（issue 56，两阶段契约同 issue 44 实体通道）：

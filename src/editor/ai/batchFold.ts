@@ -34,8 +34,9 @@ import type { AiGraphSnapshot, BatchValidation } from './commands'
  * ——一次全量回喂，quota 按轮消耗，多错误批次一轮修完；阶段 B 在形状
  * 全过后于「当前图 + 本批已建未删」虚拟状态上顺序折叠，**首错即停**——
  * 失败之后的命令本轮不校验不点名，级联误报由「不前进」消除，分层错误
- * 随修复重放逐轮暴露。契约类型见 commands.ts，入口 validateAiBatch 由其
- * re-export；批次文本提取在 batchText.ts，模拟执行在 batchSim.ts。
+ * 随修复重放逐轮暴露。契约类型见 commands.ts（实现域 → 契约单向，
+ * issue 106），入口 validateAiBatch 在本文件导出；批次文本提取在
+ * batchText.ts，模拟执行在 batchSim.ts。
  */
 
 /** 各类型节点的合法字段白名单（issue 41 起引用 nodeFields.ts 的协议表）：

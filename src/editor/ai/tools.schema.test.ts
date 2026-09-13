@@ -2,7 +2,7 @@
 import { Linter, type Rule } from 'eslint'
 import { describe, expect, it } from 'vitest'
 import { AI_TOOLS, toolCallsToCommands } from './tools'
-import { validateAiBatch } from './commands'
+import { validateAiBatch } from './batchFold'
 import { snap } from './testGraphs'
 import { SYSTEM_PROMPT } from '../panels/aiThreadModel'
 

@@ -4,11 +4,8 @@
  * 未检查的白名单查表，会导致抛错、非法命令放行或原子性断言失败。
  */
 import { describe, expect, it } from 'vitest'
-import {
-  validateAiBatch,
-  type AiGraphSnapshot,
-  type BatchValidation,
-} from './commands'
+import { validateAiBatch } from './batchFold'
+import type { AiGraphSnapshot, BatchValidation } from './commands'
 import { payloadIssue } from './payloadCheck'
 import { richSnap, snap } from './testGraphs'
 

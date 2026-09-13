@@ -4,7 +4,7 @@ import { useCompositionSafeValue } from './compositionValue'
 import { useNodeEdit } from '../../nodeEdit'
 import type { BeatNodeData } from '../types'
 import type { PatchShape } from '../patch'
-import type { PanelNode } from './NodeSettingsPanel'
+import type { PanelNode } from './panelNode'
 
 /** 节奏卡表单：内容 + 基调（自由文本缓冲中文组合输入，issue #42）。
  * 自 NodeSettingsPanel.tsx 外置（issue #39，ImageNodeForm.tsx 先例）。 */

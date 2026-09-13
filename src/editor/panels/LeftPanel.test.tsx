@@ -12,7 +12,8 @@ import {
   render,
   screen,
 } from '@testing-library/react'
-import LeftPanel, { type SettingsActions } from './LeftPanel'
+import LeftPanel from './LeftPanel'
+import type { SettingsActions } from './settingsActions'
 import { PW_ENTITY_MIME, type EntityDragPayload } from '../dragDrop'
 import type { CanvasNode } from '../nodes/types'
 

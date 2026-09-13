@@ -6,7 +6,7 @@ import { uid } from '../../../uid'
 import type { ProjectSettings } from '../../settings'
 import type { DialogueLine, DialogueNodeData } from '../types'
 import type { PatchShape } from '../patch'
-import type { PanelNode } from './NodeSettingsPanel'
+import type { PanelNode } from './panelNode'
 
 /** 单行台词行（行类型切换、说话人、删除、文本）：DialogueForm 拆出的分区。
  * 行级补丁以 Partial<DialogueLine> 上报，列表装配留在表单内。 */

@@ -25,7 +25,7 @@ import type { EditorDocument } from './useEditorDocument'
 import type { EditorPanels } from './useEditorPanels'
 import type { HistoryCommand } from './history'
 import type { OutlineDropTarget } from './outline'
-import type { SettingsActions } from './panels/LeftPanel'
+import type { SettingsActions } from './panels/settingsActions'
 
 /** 画布写动作装配的依赖：文档/面板状态、命令栈、落点换算、视口适配与错误上浮。 */
 export interface EditorGraphActionsDeps {

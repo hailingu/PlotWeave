@@ -4,7 +4,7 @@ import { useCompositionSafeValue } from './compositionValue'
 import { useNodeEdit } from '../../nodeEdit'
 import { uid } from '../../../uid'
 import type { BranchOption } from '../types'
-import type { PanelNode } from './NodeSettingsPanel'
+import type { PanelNode } from './panelNode'
 
 /** 单个分支选项行（编号、删除、文案输入）：BranchForm 拆出的分区，
  * 文案输入经 useCompositionSafeValue 缓冲中文组合输入（issue #42）。 */

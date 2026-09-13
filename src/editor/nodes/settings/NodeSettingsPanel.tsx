@@ -5,14 +5,7 @@ import BeatForm from './BeatForm'
 import DialogueForm from './DialogueForm'
 import BranchForm from './BranchForm'
 import ShotForm from './ShotForm'
-import type {
-  BeatNodeData,
-  BranchNodeData,
-  DialogueNodeData,
-  ImageNodeData,
-  SceneNodeData,
-  ShotNodeData,
-} from '../types'
+import type { PanelNode } from './panelNode'
 
 /**
  * ⚙️ 设置面板 = 节点编辑器（docs/ui-design.md §4.3）。
@@ -24,17 +17,9 @@ import type {
  * 各节点类型表单独立文件（issue #39，ImageNodeForm.tsx 先例）：
  * SceneForm/BeatForm/DialogueForm/BranchForm/ShotForm；共享分区
  * EpisodeField；内联改名 EditableName（通用交互，外置后经此
- * re-export 保持既有导入路径）。本文件保留面板入参类型与外壳分发。
+ * re-export 保持既有导入路径）。面板入参类型 PanelNode 归属稳定契约
+ * 模块 panelNode.ts（issue 106），本文件保留外壳分发。
  */
-
-/** 面板入参：id + 类型 + 该类型 data 的判别联合（NodeProps 不含完整 node）。 */
-export type PanelNode =
-  | { id: string; type: 'scene'; data: SceneNodeData }
-  | { id: string; type: 'beat'; data: BeatNodeData }
-  | { id: string; type: 'dialogue'; data: DialogueNodeData }
-  | { id: string; type: 'branch'; data: BranchNodeData }
-  | { id: string; type: 'shot'; data: ShotNodeData }
-  | { id: string; type: 'image'; data: ImageNodeData }
 
 export { EditableName } from './EditableName'
 

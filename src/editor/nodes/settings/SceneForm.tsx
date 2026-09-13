@@ -5,7 +5,7 @@ import { useNodeEdit } from '../../nodeEdit'
 import type { ProjectSettings } from '../../settings'
 import type { SceneNodeData } from '../types'
 import type { PatchShape } from '../patch'
-import type { PanelNode } from './NodeSettingsPanel'
+import type { PanelNode } from './panelNode'
 
 /** 内外景分段（§4.2 索引卡徽标）：SceneForm 拆出的同族分区。 */
 function SceneInteriorSegment({
