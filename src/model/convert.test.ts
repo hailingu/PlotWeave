@@ -746,5 +746,21 @@ describe('同版本文档的容器级扩展字段（issue #100 保留策略，§
     })
     expect(parseProject(again).repaired).toBe(false)
   })
+
+  it('扩展值含超安全整数域的整数：域约束诊断警告，不修复不回写（评审 P2，§11 传输边界）', () => {
+    const doc = docWithExtensions()
+    // JS 数字面量写不出 9007199254740993（解析即舍入,与 IPC 行为一致）——
+    // 经字符串构造得到 IPC 舍入后的形态（=== 9007199254740992）
+    const ipcRounded = Number('9007199254740993')
+    ;(doc.graph as Record<string, unknown>).futureGraphNote = ipcRounded
+    const round = parseProject(doc)
+    // 诊断不是修复：打开仍零回写，仅警告值无法无损表示
+    expect(round.repaired).toBe(false)
+    expect(round.warnings.some((w) => w.includes('安全整数'))).toBe(true)
+    expect(round.content.graphExtensions).toEqual({ futureGraphNote: ipcRounded })
+    // 保存固化当前加载值——文件原值已在 IPC 边界丢失，前端无从恢复
+    const again = serializeProject(round.content, 'p-1', NOW) as unknown as Record<string, unknown>
+    expect((again.graph as Record<string, unknown>).futureGraphNote).toBe(ipcRounded)
+  })
 })
 

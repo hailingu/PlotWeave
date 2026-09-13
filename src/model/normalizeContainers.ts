@@ -334,6 +334,47 @@ function assembleDocument(
   }
 }
 
+/** 扩展值域诊断（评审轮 P2，§11 字段演进的传输边界）：扩展值以 JSON 经
+ * Rust→webview IPC 传输，超出 JS 安全整数域（±2^53−1）的整数在 webview
+ * 解析时即舍入——先于前端一切代码，无法检测更无法修复。此类值加载时可能
+ * 已与文件不同，下一次保存将固化当前值。按约束诊断口径记警告：不修复、
+ * 不影响 repaired（打开仍零回写）；需要位精确大整数的字段演进必须升级
+ * schemaVersion 走类型化契约。扩展值出自 JSON 解析（无环），深度优先
+ * 扫描一遍。 */
+function extensionDomainWarnings(
+  extensions: {
+    graph: Record<string, unknown>
+    settings: Record<string, unknown>
+    assets: Record<string, unknown>
+  },
+  warnings: string[],
+): void {
+  const scan = (value: unknown, label: string): void => {
+    if (typeof value === 'number') {
+      if (Number.isInteger(value) && !Number.isSafeInteger(value)) {
+        warnings.push(
+          `${label} 的整数值超出 JS 安全整数域（±2^53−1），跨 IPC 无法无损表示——当前加载值可能已与文件不同，保存将固化当前值`,
+        )
+      }
+      return
+    }
+    if (Array.isArray(value)) {
+      value.forEach((member, i) => scan(member, `${label}[${i}]`))
+      return
+    }
+    if (isPlainObject(value)) {
+      for (const [key, member] of Object.entries(value)) scan(member, `${label}.${key}`)
+    }
+  }
+  for (const [container, name] of [
+    [extensions.graph, 'graph 扩展字段'],
+    [extensions.settings, 'settings 扩展字段'],
+    [extensions.assets, 'assets 扩展字段'],
+  ] as const) {
+    for (const key of Object.keys(container)) scan(container[key], `${name} ${key}`)
+  }
+}
+
 /** §11.1 第 2 步容器级形状校验（先于一切逐项规则；父容器先于子容器）：
  * 异型父/子容器重置为可遍历空容器，非普通对象成员过滤，节点嵌套容器
  * （data/spec/meta/layout + position 坐标）与判别联合形状（§4.1/§4.2）
@@ -381,6 +422,7 @@ export function normalizeContainers(
     settings: extensionEntries(settingsRaw, SETTINGS_CONTRACT_KEYS),
     assets: extensionEntries(assetsRaw, ASSETS_CONTRACT_KEYS),
   }
+  extensionDomainWarnings(extensions, warnings)
 
   // 成员过滤 + 嵌套容器修复；键控桶身份重发、形状校验与旧草案兼容按
   // 阶段模块执行，活动节点集随后修复
