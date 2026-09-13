@@ -129,6 +129,24 @@ describe('nodes.css 颜色结构（issue #107）', () => {
     })
     expect([...referenced].filter((name) => !defined.has(name))).toEqual([])
   })
+
+  it('深色选中分支的填充引用画布令牌（分支族跟随画布外观契约）', () => {
+    let selected: postcss.Rule | undefined
+    nodesCss.walkRules((rule) => {
+      const inDark =
+        rule.parent?.type === 'atrule' &&
+        rule.parent.name === 'media' &&
+        rule.parent.params.includes('prefers-color-scheme: dark')
+      if (inDark && rule.selector === '.pw-branch.pw-on') selected = rule
+    })
+    expect(selected, '未找到深色 .pw-branch.pw-on 规则').toBeDefined()
+    const background = selected!.nodes.find(
+      (node): node is postcss.Declaration =>
+        node.type === 'decl' && node.prop === 'background',
+    )
+    // 令牌当前同值（#131316），但契约上须跟随画布：窗口/画布分化时不得漂移
+    expect(background?.value).toContain('var(--surface-canvas)')
+  })
 })
 
 /** 黄金基准：重构前 nodes.css 的字面量，按令牌逐一钉住（视觉零变化）。 */

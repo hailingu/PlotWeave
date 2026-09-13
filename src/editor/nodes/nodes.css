@@ -493,9 +493,11 @@
     color: var(--branch-text);
   }
 
+  /* 选中填充取画布底色：分支跟随画布外观（§4.2），透明底选中后须与
+   * 画布一致，不引用可能分化的窗口色（PR #114 评审 4000055071）。 */
   .pw-branch.pw-on {
     background:
-      linear-gradient(var(--surface-window), var(--surface-window)) padding-box,
+      linear-gradient(var(--surface-canvas), var(--surface-canvas)) padding-box,
       var(--brand-gradient) border-box;
   }
 
