@@ -28,4 +28,11 @@ export interface ProjectContent {
   aiRevision?: number
   /** 项目资产索引透传（缺省 = 无资产）。 */
   assets?: { byId: Record<string, AssetRef> }
+  /** 同版本文档的容器级扩展字段透传（issue #100 字段演进策略，§11）：
+   * schemaVersion 不变的未来字段增补出现在 graph/settings/assets 容器时
+   * 按未知键原样保留——解析不修复、不警告、不回写，保存原样落盘。
+   * 缺省 = 无扩展字段。顶层与 project 层是封闭契约，不在保留范围。 */
+  graphExtensions?: Record<string, unknown>
+  settingsExtensions?: Record<string, unknown>
+  assetsExtensions?: Record<string, unknown>
 }

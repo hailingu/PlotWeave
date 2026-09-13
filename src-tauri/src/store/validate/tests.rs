@@ -102,6 +102,29 @@ fn save_rejects_malformed_ai_revision() {
 }
 
 #[test]
+fn save_preserves_container_extension_keys() {
+    // 同版本文档的字段演进（issue #100）：graph/settings/assets 容器以
+    // untyped 值透传，容器级未知键按扩展字段无损保留——保存边界只校验
+    // 契约字段，不得拒绝或剥离扩展键，否则携带未来字段的文档将永远
+    // 无法保存（每次保存整份被拒）。顶层与 project 层是类型化封闭契约，
+    // 不在此列（serde 反序列化即剥离，演进须升级 schemaVersion）。
+    let mut doc = valid_save_doc();
+    doc.graph = json!({
+        "nodes": [], "edges": [],
+        "futureGraphNote": { "nested": "构造未来字段" },
+    });
+    doc.settings = json!({
+        "characters": {}, "locations": {}, "props": {}, "documents": {},
+        "futureBucket": {},
+    });
+    doc.assets = json!({ "byId": {}, "futureIndex": ["a-1"] });
+    let prepared = prepare_save("p-1", &doc).expect("扩展键不得拒绝保存");
+    assert_eq!(prepared.graph["futureGraphNote"]["nested"], "构造未来字段");
+    assert!(prepared.settings.get("futureBucket").is_some());
+    assert_eq!(prepared.assets["futureIndex"], json!(["a-1"]));
+}
+
+#[test]
 fn save_rejects_non_canonical_episode_title_keys() {
     // "01"/"1e0" 与规范键折叠到同一集号，转换时按遍历序静默覆盖（§11.1 第 3 步）
     for bad in ["01", "1e0", " 1", "0", "-1", "9007199254740992"] {

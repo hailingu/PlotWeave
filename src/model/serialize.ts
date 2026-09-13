@@ -303,30 +303,48 @@ export function serializeProject(
     graph: {
       nodes: content.nodes.map(toStoryNode),
       edges: content.edges.map(toStoryEdge),
+      // 同版本文档的容器级扩展字段原样落盘（issue #100 字段演进策略，§11）；
+      // 缺省 undefined 的展开是空操作
+      ...content.graphExtensions,
       ...(content.viewport ? { viewport: content.viewport } : {}),
       // AI 批次计数缺省 0 不落盘：旧文档与未用过 AI 的项目保持原信封形状
       ...(content.aiRevision ? { aiRevision: content.aiRevision } : {}),
     },
-    settings: toDocSettings(content.settings),
+    settings: {
+      ...content.settingsExtensions,
+      ...toDocSettings(content.settings),
+    },
     episodeTitles: content.episodeTitles ?? {},
-    assets: content.assets ?? { byId: {} },
+    assets: { ...content.assetsExtensions, ...(content.assets ?? { byId: {} }) },
   }
 }
 
 /** 落盘文档 → 会话文档（归一化之后调用）。视口/资产桶缺省字段保持缺省：
  * 视口缺省 = 打开时 fitView；资产缺省 = 无资产（透传桶，见 content.ts）。
- * episodeTitles 键值域严格化在此收口（§11.1，对所有版本统一执行）。 */
+ * episodeTitles 键值域严格化在此收口（§11.1，对所有版本统一执行）。
+ * 三个透传容器的同版本扩展键（issue #100 字段演进策略，§11）随会话携带：
+ * rest 剥离契约键后剩余键原样透传，非空才携带（与视口缺省省略同口径）；
+ * 会话容器的运行时形状与声明类型一致——扩展键只经 *Extensions 字段往返。 */
 export function fromDocument(doc: ProjectDocument, warnings: string[]): ProjectContent {
+  const graphRaw = doc.graph as ProjectDocument['graph'] & Record<string, unknown>
+  const { nodes, edges, viewport, aiRevision, ...graphExtensions } = graphRaw
+  const settingsRaw = doc.settings as ProjectDocument['settings'] & Record<string, unknown>
+  const { characters, locations, props, documents, ...settingsExtensions } = settingsRaw
+  const assetsRaw = doc.assets as ProjectDocument['assets'] & Record<string, unknown>
+  const { byId, ...assetsExtensions } = assetsRaw
   return {
     name: doc.project.name,
     description: doc.project.description,
     createdAt: doc.project.createdAt || undefined,
-    nodes: doc.graph.nodes.map(fromStoryNode),
-    edges: doc.graph.edges.map(fromStoryEdge),
-    settings: fromDocSettings(doc.settings),
+    nodes: nodes.map(fromStoryNode),
+    edges: edges.map(fromStoryEdge),
+    settings: fromDocSettings({ characters, locations, props, documents }),
     episodeTitles: normalizeEpisodeTitles(doc.episodeTitles, warnings),
-    viewport: doc.graph.viewport,
-    ...(doc.graph.aiRevision !== undefined ? { aiRevision: doc.graph.aiRevision } : {}),
-    assets: doc.assets,
+    viewport,
+    ...(aiRevision !== undefined ? { aiRevision } : {}),
+    assets: { byId },
+    ...(Object.keys(graphExtensions).length > 0 ? { graphExtensions } : {}),
+    ...(Object.keys(settingsExtensions).length > 0 ? { settingsExtensions } : {}),
+    ...(Object.keys(assetsExtensions).length > 0 ? { assetsExtensions } : {}),
   }
 }

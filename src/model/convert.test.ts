@@ -665,3 +665,61 @@ describe('layout.size / layout.zIndex 往返（§4.1 可选布局字段，§9.3 
   })
 })
 
+describe('同版本文档的容器级扩展字段（issue #100 保留策略，§11 字段演进）', () => {
+  /** 净本 + graph/settings/assets 容器各注入一个构造的未来字段（模拟
+   * 同 schemaVersion 的字段增补）。顶层与 project 层不在此列：Rust 信封
+   * 在 IPC 前剥离（issue #100 修正段），前端仅对透传容器执行保留策略。 */
+  const docWithExtensions = () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as Record<string, unknown>
+    ;(doc.graph as Record<string, unknown>).futureGraphNote = { nested: '构造未来字段' }
+    ;(doc.settings as Record<string, unknown>).futureBucket = {
+      'ch-x': { id: 'ch-x', name: '未来实体' },
+    }
+    ;(doc.assets as Record<string, unknown>).futureIndex = ['a-1']
+    return doc
+  }
+
+  it('graph/settings/assets 扩展键：归一化原样保留，净本零修复零警告（打开不回写）', () => {
+    const round = parseProject(docWithExtensions())
+    expect(round.repaired).toBe(false)
+    expect(round.warnings).toEqual([])
+    expect(round.content.graphExtensions).toEqual({ futureGraphNote: { nested: '构造未来字段' } })
+    expect(round.content.settingsExtensions).toEqual({
+      futureBucket: { 'ch-x': { id: 'ch-x', name: '未来实体' } },
+    })
+    expect(round.content.assetsExtensions).toEqual({ futureIndex: ['a-1'] })
+  })
+
+  it('扩展键随会话往返：serializeProject 原样写回，再次解析幂等（保存不销毁）', () => {
+    const round = parseProject(docWithExtensions())
+    const again = serializeProject(round.content, 'p-1', NOW) as unknown as Record<string, unknown>
+    expect((again.graph as Record<string, unknown>).futureGraphNote).toEqual({ nested: '构造未来字段' })
+    expect((again.settings as Record<string, unknown>).futureBucket).toEqual({
+      'ch-x': { id: 'ch-x', name: '未来实体' },
+    })
+    expect((again.assets as Record<string, unknown>).futureIndex).toEqual(['a-1'])
+    // 往返产物是净本：不再触发修复回写
+    expect(parseProject(again).repaired).toBe(false)
+  })
+
+  it('扩展键与已知坏字段并存：修复语义保留（repaired=true），修复不殃及扩展键', () => {
+    const doc = docWithExtensions()
+    ;(doc.graph as Record<string, unknown>).viewport = { x: 'bad', y: 0, zoom: 1 }
+    const round = parseProject(doc)
+    expect(round.repaired).toBe(true)
+    expect(round.warnings.some((w) => w.includes('viewport'))).toBe(true)
+    expect(round.content.viewport).toBeUndefined()
+    expect(round.content.graphExtensions).toEqual({ futureGraphNote: { nested: '构造未来字段' } })
+    const again = serializeProject(round.content, 'p-1', NOW) as unknown as Record<string, unknown>
+    expect((again.graph as Record<string, unknown>).futureGraphNote).toEqual({ nested: '构造未来字段' })
+    expect((again.graph as Record<string, unknown>).viewport).toBeUndefined()
+  })
+
+  it('顶层未知键仍按修复处理（repaired=true）：顶层信封是封闭契约，versionless 补盖依赖此语义', () => {
+    const doc = { ...serializeProject(mkContent(), 'p-1', NOW), versionless: true }
+    const round = parseProject(doc)
+    expect(round.repaired).toBe(true)
+    expect((round.content as unknown as Record<string, unknown>).versionless).toBeUndefined()
+  })
+})
+
