@@ -4,6 +4,7 @@ import { useNodeEdit } from '../nodeEdit'
 import { useImageJobs } from '../imagegen/context'
 import { projectAssets } from '../projectAssets'
 import NodeSettingsPanel from './settings/NodeSettingsPanel'
+import NodeSettingsGear from './settings/NodeSettingsGear'
 import type { AssetRef } from '../../model/document'
 import type { ImageFlowNode } from './types'
 
@@ -99,19 +100,11 @@ export default function ImageNode({
             生成失败
           </span>
         )}
-        <button
-          type="button"
-          className={`pw-gear nodrag${settingsOpen ? ' pw-gear-open' : ''}`}
-          data-pw-gear
-          aria-label="图片节点设置"
-          aria-expanded={settingsOpen}
-          onClick={(e) => {
-            e.stopPropagation()
-            toggleSettings(id)
-          }}
-        >
-          ⚙️
-        </button>
+        <NodeSettingsGear
+          ariaLabel="图片节点设置"
+          open={settingsOpen}
+          onToggle={() => toggleSettings(id)}
+        />
       </div>
       <p className="pw-image-prompt">
         {data.prompt !== '' ? data.prompt : '（未填写 Prompt）'}

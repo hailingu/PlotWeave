@@ -1,6 +1,7 @@
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { useNodeEdit } from '../nodeEdit'
 import NodeSettingsPanel, { EditableName } from './settings/NodeSettingsPanel'
+import NodeSettingsGear from './settings/NodeSettingsGear'
 import type { BeatFlowNode } from './types'
 
 /**
@@ -50,19 +51,12 @@ export default function BeatNode({
           </span>
         )
       )}
-      <button
-        type="button"
-        className={`pw-gear pw-gear-light nodrag${settingsOpen ? ' pw-gear-open' : ''}`}
-        data-pw-gear
-        aria-label="节奏卡设置"
-        aria-expanded={settingsOpen}
-        onClick={(e) => {
-          e.stopPropagation()
-          toggleSettings(id)
-        }}
-      >
-        ⚙️
-      </button>
+      <NodeSettingsGear
+        ariaLabel="节奏卡设置"
+        open={settingsOpen}
+        onToggle={() => toggleSettings(id)}
+        light
+      />
       {settingsOpen && <NodeSettingsPanel node={{ id, type: 'beat', data }} />}
       <Handle type="target" position={Position.Left} className="pw-port" />
       <Handle type="source" position={Position.Right} className="pw-port" />
