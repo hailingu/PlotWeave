@@ -12,13 +12,27 @@ import type { SettingsActions } from './LeftPanel'
  * 点击打开编辑器弹窗）。增删改全部经 SettingsActions 走命令栈可撤销。
  * 人工详情编辑（issue 95）：条目行折叠钮展开侧栏内详情表单（名称 +
  * 小传/备注），保存一次派发 updateCharacter/updateLocation；空项目显示
- * 新增引导，新增后 diff 出新实体自动展开并聚焦首个可编辑字段。
+ * 新增引导，新增后 diff 出新实体自动展开并聚焦首个可编辑字段。展开
+ * 标识按 kind + id 成对记录——角色/地点是两个独立 id 空间，字符串可能
+ * 跨桶同名，裸 id 无法解析归属（数据模型 §8.1，PR #97 评审）。
  */
 
 /** 实体拖拽负载：kind + id + name（dragDrop.ts 的 MIME 契约）。 */
 function entityPayload(e: ReactDragEvent, payload: EntityDragPayload): void {
   e.dataTransfer.setData(PW_ENTITY_MIME, JSON.stringify(payload))
   e.dataTransfer.effectAllowed = 'copy'
+}
+
+/** 详情表单的展开标识：kind + id 显式成对（同 relatedIds 的成对契约）。 */
+type ExpandedEntry = { kind: 'character' | 'location'; id: string }
+
+/** 该条目的详情表单是否展开：kind 与 id 必须同时匹配。 */
+function isOpen(
+  expanded: ExpandedEntry | null,
+  kind: 'character' | 'location',
+  id: string,
+): boolean {
+  return expanded?.kind === kind && expanded.id === id
 }
 
 /** 条目行折叠钮（issue 95）：aria-expanded 语义的展开控件。 */
@@ -51,14 +65,14 @@ function DetailToggle({
 function CharacterRow({
   settings,
   actions,
-  expandedId,
+  expanded,
   onToggle,
   onAdd,
 }: {
   readonly settings: ProjectSettings
   readonly actions: SettingsActions
-  readonly expandedId: string | null
-  readonly onToggle: (id: string) => void
+  readonly expanded: ExpandedEntry | null
+  readonly onToggle: (kind: 'character' | 'location', id: string) => void
   readonly onAdd: () => void
 }) {
   return (
@@ -86,8 +100,8 @@ function CharacterRow({
             </span>
             <DetailToggle
               label={`编辑角色 ${c.name}`}
-              expanded={expandedId === c.id}
-              onToggle={() => onToggle(c.id)}
+              expanded={isOpen(expanded, 'character', c.id)}
+              onToggle={() => onToggle('character', c.id)}
             />
             <button
               type="button"
@@ -99,7 +113,7 @@ function CharacterRow({
               ✕
             </button>
           </div>
-          {expandedId === c.id && (
+          {isOpen(expanded, 'character', c.id) && (
             <SettingsDetailForm
               nameField="角色名称"
               descField="角色小传"
@@ -107,9 +121,9 @@ function CharacterRow({
               description={c.bio ?? ''}
               onSave={(name, bio) => {
                 actions.updateCharacter(c.id, { name, bio })
-                onToggle(c.id)
+                onToggle('character', c.id)
               }}
-              onClose={() => onToggle(c.id)}
+              onClose={() => onToggle('character', c.id)}
             />
           )}
         </Fragment>
@@ -124,14 +138,14 @@ function CharacterRow({
 function LocationRow({
   settings,
   actions,
-  expandedId,
+  expanded,
   onToggle,
   onAdd,
 }: {
   readonly settings: ProjectSettings
   readonly actions: SettingsActions
-  readonly expandedId: string | null
-  readonly onToggle: (id: string) => void
+  readonly expanded: ExpandedEntry | null
+  readonly onToggle: (kind: 'character' | 'location', id: string) => void
   readonly onAdd: () => void
 }) {
   return (
@@ -156,8 +170,8 @@ function LocationRow({
             </span>
             <DetailToggle
               label={`编辑地点 ${l.name}`}
-              expanded={expandedId === l.id}
-              onToggle={() => onToggle(l.id)}
+              expanded={isOpen(expanded, 'location', l.id)}
+              onToggle={() => onToggle('location', l.id)}
             />
             <button
               type="button"
@@ -169,7 +183,7 @@ function LocationRow({
               ✕
             </button>
           </div>
-          {expandedId === l.id && (
+          {isOpen(expanded, 'location', l.id) && (
             <SettingsDetailForm
               nameField="地点名称"
               descField="地点备注"
@@ -177,9 +191,9 @@ function LocationRow({
               description={l.note ?? ''}
               onSave={(name, note) => {
                 actions.updateLocation(l.id, { name, note })
-                onToggle(l.id)
+                onToggle('location', l.id)
               }}
-              onClose={() => onToggle(l.id)}
+              onClose={() => onToggle('location', l.id)}
             />
           )}
         </Fragment>
@@ -244,32 +258,31 @@ export default function SettingsList({
   readonly onOpenDocument: (id: string) => void
 }) {
   const { characters, locations } = settings
-  const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [expanded, setExpanded] = useState<ExpandedEntry | null>(null)
   /** 新增待认领：点击新增时记录既有 id，settings 出现新 id 即自动展开。 */
-  const pendingAdd = useRef<{ bucket: 'characters' | 'locations'; before: Set<string> } | null>(
-    null,
-  )
+  const pendingAdd = useRef<{ kind: 'character' | 'location'; before: Set<string> } | null>(null)
 
   // 新增自动展开（issue 95）：新实体出现即展开其详情表单；
   // 表单名称字段 autoFocus 落焦，即「聚焦首个可编辑字段」。
   useEffect(() => {
     const pending = pendingAdd.current
     if (!pending) return
-    const bucket = pending.bucket === 'characters' ? characters : locations
+    const bucket = pending.kind === 'character' ? characters : locations
     const added = bucket.find((e) => !pending.before.has(e.id))
     if (!added) return
     pendingAdd.current = null
-    setExpandedId(added.id)
+    setExpanded({ kind: pending.kind, id: added.id })
   }, [characters, locations])
 
-  const handleAdd = (bucket: 'characters' | 'locations', add: () => void) => {
+  const handleAdd = (kind: 'character' | 'location', add: () => void) => {
     pendingAdd.current = {
-      bucket,
-      before: new Set((bucket === 'characters' ? characters : locations).map((e) => e.id)),
+      kind,
+      before: new Set((kind === 'character' ? characters : locations).map((e) => e.id)),
     }
     add()
   }
-  const toggle = (id: string) => setExpandedId((cur) => (cur === id ? null : id))
+  const toggle = (kind: 'character' | 'location', id: string) =>
+    setExpanded((cur) => (isOpen(cur, kind, id) ? null : { kind, id }))
   const empty =
     characters.length === 0 && locations.length === 0 && (settings.documents ?? []).length === 0
 
@@ -284,16 +297,16 @@ export default function SettingsList({
       <CharacterRow
         settings={settings}
         actions={actions}
-        expandedId={expandedId}
+        expanded={expanded}
         onToggle={toggle}
-        onAdd={() => handleAdd('characters', actions.addCharacter)}
+        onAdd={() => handleAdd('character', actions.addCharacter)}
       />
       <LocationRow
         settings={settings}
         actions={actions}
-        expandedId={expandedId}
+        expanded={expanded}
         onToggle={toggle}
-        onAdd={() => handleAdd('locations', actions.addLocation)}
+        onAdd={() => handleAdd('location', actions.addLocation)}
       />
       <DocumentRow
         documents={settings.documents ?? []}

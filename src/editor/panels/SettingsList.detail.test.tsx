@@ -147,3 +147,25 @@ describe('地点详情表单（issue 95）', () => {
     })
   })
 })
+
+describe('跨桶同 id 共存（PR #97 评审：独立 id 空间，数据模型 §8.1）', () => {
+  const DUP: ProjectSettings = {
+    characters: [{ id: 'dup-1', name: '陈默', gradient: 'g1' }],
+    locations: [{ id: 'dup-1', name: '茶馆' }],
+  }
+
+  it('点击角色展开钮只展开角色表单，不同时展开同 id 地点表单', () => {
+    const { actions } = setup(DUP)
+    fireEvent.click(screen.getByLabelText('编辑角色 陈默'))
+    expect(screen.getByLabelText('角色名称')).toBeTruthy()
+    expect(screen.queryByLabelText('地点名称')).toBeNull()
+    expect(actions.updateCharacter).not.toHaveBeenCalled()
+  })
+
+  it('点击地点展开钮只展开地点表单，不同时展开同 id 角色表单', () => {
+    setup(DUP)
+    fireEvent.click(screen.getByLabelText('编辑地点 茶馆'))
+    expect(screen.getByLabelText('地点名称')).toBeTruthy()
+    expect(screen.queryByLabelText('角色名称')).toBeNull()
+  })
+})
