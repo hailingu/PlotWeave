@@ -9,7 +9,7 @@ import { PW_ENTITY_MIME, type EntityDragPayload } from '../dragDrop'
 import { EditableName } from '../nodes/settings/NodeSettingsPanel'
 import SettingsDetailForm from './SettingsDetailForm'
 import type { DocumentEntity, ProjectSettings } from '../settings'
-import type { SettingsActions } from './LeftPanel'
+import type { SettingsActions } from './settingsActions'
 
 /**
  * 左栏设定集分段的内容视图（issue 56 自 LeftPanel 拆出：LeftPanel 的组件

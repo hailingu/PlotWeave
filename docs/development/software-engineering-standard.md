@@ -94,7 +94,17 @@ Apply the guardrails as follows:
   UI, database, provider, serialization, or framework details.
 - Cyclic dependencies between maintained modules or packages are prohibited.
   Resolve a cycle by clarifying ownership, extracting a stable contract, or
-  moving shared policy to the module that owns it.
+  moving shared policy to the module that owns it (issue #106).
+- Contract types shared across an internal boundary — for example `PanelNode`,
+  `SettingsActions`, or the AI batch command shapes — live in a dedicated leaf
+  contract module that both the shell and its dependents import. Type ownership
+  must not attach to a shell or implementation entry point, and a facade must
+  not re-export an implementation back over a contract module.
+- The module graph regression test (`src/moduleGraph.test.ts`) builds the
+  relative import graph of non-test `src` modules from the TypeScript AST and
+  asserts that both the compile-time graph (type-only imports included) and
+  the runtime graph (after type erasure) stay acyclic. Routing a cycle through
+  an `import type` edge is a violation, not a loophole.
 - Cross-module calls must use the owning module's public API. Do not import its
   internal persistence models, framework objects, mutable state, or private
   helpers.

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { validateAiBatch, type AiGraphSnapshot } from './commands'
+import { validateAiBatch } from './batchFold'
+import type { AiGraphSnapshot } from './commands'
 import { AI_FIELD_KEYS, AI_NODE_FIELDS, nodeFieldTableText } from './nodeFields'
 
 /** 各类型「恰好填满白名单」的形状合法载荷：与 commands.ts 值形状校验

@@ -9,9 +9,10 @@ import type { NodeDataPatch } from '../nodes/patch'
  * 不触碰任何 React 状态。
  *
  * 职责分工（issue 39）：本文件是契约层——命令/校验结果的类型、入站↔执行
- * 形态转换；从助手回复文本提取批次对象的解析在 batchText.ts（围栏回退
- * 通道）；逐条折叠校验的实现域在 batchFold.ts，validateAiBatch 经此
- * re-export，引用方保持单一入口；模拟执行在 batchSim.ts。
+ * 形态转换，依赖单向（实现域 → 契约，issue 106 解除反向 re-export）；
+ * 从助手回复文本提取批次对象的解析在 batchText.ts（围栏回退通道）；
+ * validateAiBatch 的实现域在 batchFold.ts（引用方直接从其导入）；模拟
+ * 执行在 batchSim.ts。
  */
 
 /** 模型可产出的命令（对齐数据模型 §12.2 写工具集；issue 44 起含设定实体）。
@@ -199,5 +200,3 @@ export interface BatchValidation {
   /** 删除类或级联断线（danger）在预览中：置顶展示并要求二次确认（§6）。 */
   hasDeletes: boolean
 }
-
-export { validateAiBatch } from './batchFold'

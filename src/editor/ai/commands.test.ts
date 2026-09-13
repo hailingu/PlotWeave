@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { validateAiBatch, type AiGraphSnapshot } from './commands'
+import { validateAiBatch } from './batchFold'
+import type { AiGraphSnapshot } from './commands'
 import { wouldCreateCycle } from '../graphRules'
 import { entSnap, richSnap, snap } from './testGraphs'
 

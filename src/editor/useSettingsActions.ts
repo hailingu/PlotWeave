@@ -10,7 +10,7 @@
  */
 import { useCallback, useMemo } from 'react'
 import type { HistoryCommand } from './history'
-import type { SettingsActions } from './panels/LeftPanel'
+import type { SettingsActions } from './panels/settingsActions'
 import {
   createCharacter,
   createDocument,

@@ -6,7 +6,7 @@ import { shotRefMimeMatches } from '../../../model/convert'
 import type { ProjectContent } from '../../../model/content'
 import type { ShotNodeData, ShotRef } from '../types'
 import type { PatchShape } from '../patch'
-import type { PanelNode } from './NodeSettingsPanel'
+import type { PanelNode } from './panelNode'
 
 const REF_KIND_LABELS: Record<ShotRef['kind'], string> = {
   character: '角色垫图',
