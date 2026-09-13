@@ -3,6 +3,7 @@
 @import './editor/editor.css';
 @import './editor/panels/panels.css';
 @import './editor/panels/documents.css';
+@import './editor/panels/settings-detail.css';
 @import './editor/nodes/settings/settings.css';
 @import './settings/settings.css';
 @import './editor/nodes/nodes.css';

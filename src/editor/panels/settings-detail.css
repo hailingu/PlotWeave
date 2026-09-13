@@ -1,0 +1,86 @@
+/* 设定条目侧栏详情编辑（issue 95）：条目折叠钮 + 展开表单 + 空态引导。
+ * 从 panels.css 独立成域——该文件已接近 800 行规模上限（同 documents.css 拆分先例）。 */
+
+/* ---- 条目行折叠钮：常显（可发现性），展开态实心 ---- */
+.pw-settings-caret {
+  margin-left: auto;
+  align-self: center;
+  border: none;
+  background: none;
+  border-radius: var(--radius-sm);
+  padding: 2px 5px;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.pw-settings-caret:hover {
+  background: var(--fill-quaternary);
+  color: var(--text-primary);
+}
+
+.pw-settings-caret[aria-expanded='true'] {
+  color: var(--text-primary);
+}
+
+/* ---- 详情表单：侧栏内展开，窄栏纵向堆叠 ---- */
+.pw-settings-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 0 6px 8px;
+  padding: 9px 10px 10px;
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-md);
+}
+
+.pw-settings-detail-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.pw-settings-detail-input {
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-md);
+  background: var(--fill-quaternary);
+  padding: 6px 9px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  outline: none;
+}
+
+.pw-settings-detail-input:focus,
+.pw-settings-detail-body:focus {
+  border-color: var(--accent-alt);
+}
+
+.pw-settings-detail-body {
+  width: 100%;
+  min-height: 88px;
+  resize: vertical;
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-md);
+  background: var(--fill-quaternary);
+  padding: 7px 9px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-primary);
+  outline: none;
+}
+
+.pw-settings-detail-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+  margin-top: 3px;
+}
+
+/* ---- 空态引导（issue 95：空白区域不是死角） ---- */
+.pw-settings-empty {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  padding: 8px 6px 2px;
+}

@@ -4,6 +4,8 @@
  * patchSettings 命令（before/after 整体替换 settings，入栈可撤销）。
  * 文档动作（issue 56）：新建占位、编辑保存整体 patch、删除——只触碰
  * documents 桶，props 与未参与编辑的桶透传保真。
+ * 详情保存（issue 95）：updateCharacter/updateLocation 整体替换目标实体，
+ * id/渐变与未编辑字段、其他实体保真；实体缺失零派发（不复活已删实体）。
  */
 import { useCallback, useMemo } from 'react'
 import type { HistoryCommand } from './history'
@@ -59,6 +61,14 @@ export function useSettingsActions(
           ...settings,
           characters: settings.characters.filter((c) => c.id !== id),
         }),
+      /** 保存角色详情（issue 95）：缺失 id 零派发，同 updateDocument 守卫。 */
+      updateCharacter: (id: string, patch: { name?: string; bio?: string }) => {
+        if (!settings.characters.some((c) => c.id === id)) return
+        patchSettings(settings, {
+          ...settings,
+          characters: settings.characters.map((c) => (c.id === id ? { ...c, ...patch } : c)),
+        })
+      },
       addLocation: () => {
         const entity = createLocation('新地点')
         patchSettings(settings, { ...settings, locations: [...settings.locations, entity] })
@@ -73,6 +83,14 @@ export function useSettingsActions(
           ...settings,
           locations: settings.locations.filter((l) => l.id !== id),
         }),
+      /** 保存地点详情（issue 95）：同 updateCharacter 同构。 */
+      updateLocation: (id: string, patch: { name?: string; note?: string }) => {
+        if (!settings.locations.some((l) => l.id === id)) return
+        patchSettings(settings, {
+          ...settings,
+          locations: settings.locations.map((l) => (l.id === id ? { ...l, ...patch } : l)),
+        })
+      },
       addDocument: () => {
         const doc = createDocument()
         patchSettings(settings, { ...settings, documents: [...(settings.documents ?? []), doc] })
