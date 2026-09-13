@@ -28,6 +28,7 @@
 | [#39](https://github.com/hailingu/PlotWeave/issues/39) 模块余量 | AI 命令、侧栏、节点表单、库索引/恢复与项目存储进一步拆分；属于结构重构，不扩展设计行为 | 模型 §2、§11 | [PR #52](https://github.com/hailingu/PlotWeave/pull/52) |
 | [#41](https://github.com/hailingu/PlotWeave/issues/41) AI 字段协议 | 原正文已记录共享字段表与最多 3 次产出纠错；本次修正流程图，明确校验、预览、用户确认先于执行 | 模型 §12.2；UI §6 原有规则保留 | [PR #43](https://github.com/hailingu/PlotWeave/pull/43) |
 | [#42](https://github.com/hailingu/PlotWeave/issues/42) 中文组合输入 | 节点面板自由文本在组合期间仅缓冲，结束时提交，避免旧受控值中断输入法；普通输入保持即时提交 | UI §4.3 | [PR #51](https://github.com/hailingu/PlotWeave/pull/51) |
+| [#107](https://github.com/hailingu/PlotWeave/issues/107) 节点颜色令牌化 | `nodes.css` 颜色全部经语义令牌进入（新增纸面/石板/分支家族、端口、投影令牌）；纸面与石板为跨外观恒定内容层，分支族唯一跟随画布外观；常态与交互态取值与重构前相等，more 对比度下家族文本 ≥ 4.5:1 | UI §2.3、§4.1 | [PR #114](https://github.com/hailingu/PlotWeave/pull/114) |
 
 ## 保留的边界与目标差异
 
