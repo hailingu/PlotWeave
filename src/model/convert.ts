@@ -5,7 +5,9 @@
  * 容器/身份/节点/边/资产/悬空引用各阶段实现在 normalize*.ts，序列化方向
  * 在 serialize.ts，共享 JSON 形状谓词在 jsonGuards.ts。归一化保证任何
  * 历史版本的文档都以当前形态进入会话——修复而非拒绝，单条坏数据（孤儿
- * 边、悬空引用）只记警告，不阻断加载。
+ * 边、悬空引用）只记警告，不阻断加载。同版本文档的字段演进（issue #100）：
+ * graph/settings/assets 容器级未知键按扩展字段无损保留（§11），不参与
+ * 修复判定；顶层与 project 层是类型化封闭契约，演进须升级 schemaVersion。
  */
 import type { Edge } from '@xyflow/react'
 import type { CanvasNode } from '../editor/nodes/types'

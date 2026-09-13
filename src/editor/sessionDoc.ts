@@ -16,6 +16,12 @@ export interface EditorProject {
   description?: string
   createdAt?: string
   assets?: { byId: Record<string, AssetRef> }
+  /** 同版本文档的容器级扩展字段透传（issue #100 字段演进策略，§11）：
+   * 与 name/description 同为编辑器不编辑的透传字段，每次构建必须原样
+   * 携带，漏带即防抖保存丢数据（评审 P1）。 */
+  graphExtensions?: Record<string, unknown>
+  settingsExtensions?: Record<string, unknown>
+  assetsExtensions?: Record<string, unknown>
 }
 
 /** 画布可变部分：节点/边/设定集/集标题/视口/资产索引来自编辑器状态。 */
@@ -44,5 +50,9 @@ export function sessionDoc(project: EditorProject, part: SessionDocPart) {
     viewport: part.viewport,
     ...(part.aiRevision ? { aiRevision: part.aiRevision } : {}),
     assets: part.assets,
+    // 同版本文档的容器级扩展字段随会话透传（issue #100，§11）；缺省省略
+    ...(project.graphExtensions ? { graphExtensions: project.graphExtensions } : {}),
+    ...(project.settingsExtensions ? { settingsExtensions: project.settingsExtensions } : {}),
+    ...(project.assetsExtensions ? { assetsExtensions: project.assetsExtensions } : {}),
   }
 }

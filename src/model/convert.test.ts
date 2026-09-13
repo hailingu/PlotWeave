@@ -665,3 +665,121 @@ describe('layout.size / layout.zIndex 往返（§4.1 可选布局字段，§9.3 
   })
 })
 
+/** 净本 + graph/settings/assets 容器各注入一个构造的未来字段（模拟同
+ * schemaVersion 的字段增补）。顶层与 project 层不在此列：Rust 信封在
+ * IPC 前剥离（issue #100 修正段），前端仅对透传容器执行保留策略。 */
+function docWithExtensions(): Record<string, unknown> {
+  const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as Record<string, unknown>
+  ;(doc.graph as Record<string, unknown>).futureGraphNote = { nested: '构造未来字段' }
+  ;(doc.settings as Record<string, unknown>).futureBucket = {
+    'ch-x': { id: 'ch-x', name: '未来实体' },
+  }
+  ;(doc.assets as Record<string, unknown>).futureIndex = ['a-1']
+  return doc
+}
+
+describe('同版本文档扩展字段的保留与往返（issue #100，§11 字段演进）', () => {
+
+  it('graph/settings/assets 扩展键：归一化原样保留，净本零修复零警告（打开不回写）', () => {
+    const round = parseProject(docWithExtensions())
+    expect(round.repaired).toBe(false)
+    expect(round.warnings).toEqual([])
+    expect(round.content.graphExtensions).toEqual({ futureGraphNote: { nested: '构造未来字段' } })
+    expect(round.content.settingsExtensions).toEqual({
+      futureBucket: { 'ch-x': { id: 'ch-x', name: '未来实体' } },
+    })
+    expect(round.content.assetsExtensions).toEqual({ futureIndex: ['a-1'] })
+  })
+
+  it('扩展键随会话往返：serializeProject 原样写回，再次解析幂等（保存不销毁）', () => {
+    const round = parseProject(docWithExtensions())
+    const again = serializeProject(round.content, 'p-1', NOW) as unknown as Record<string, unknown>
+    expect((again.graph as Record<string, unknown>).futureGraphNote).toEqual({ nested: '构造未来字段' })
+    expect((again.settings as Record<string, unknown>).futureBucket).toEqual({
+      'ch-x': { id: 'ch-x', name: '未来实体' },
+    })
+    expect((again.assets as Record<string, unknown>).futureIndex).toEqual(['a-1'])
+    // 往返产物是净本：不再触发修复回写
+    expect(parseProject(again).repaired).toBe(false)
+  })
+
+  it('扩展键与已知坏字段并存：修复语义保留（repaired=true），修复不殃及扩展键', () => {
+    const doc = docWithExtensions()
+    ;(doc.graph as Record<string, unknown>).viewport = { x: 'bad', y: 0, zoom: 1 }
+    const round = parseProject(doc)
+    expect(round.repaired).toBe(true)
+    expect(round.warnings.some((w) => w.includes('viewport'))).toBe(true)
+    expect(round.content.viewport).toBeUndefined()
+    expect(round.content.graphExtensions).toEqual({ futureGraphNote: { nested: '构造未来字段' } })
+    const again = serializeProject(round.content, 'p-1', NOW) as unknown as Record<string, unknown>
+    expect((again.graph as Record<string, unknown>).futureGraphNote).toEqual({ nested: '构造未来字段' })
+    expect((again.graph as Record<string, unknown>).viewport).toBeUndefined()
+  })
+})
+
+describe('同版本文档扩展字段的分层边界（issue #100，§11）', () => {
+  it('顶层未知键仍按修复处理（repaired=true）：顶层信封是封闭契约，versionless 补盖依赖此语义', () => {
+    const doc = { ...serializeProject(mkContent(), 'p-1', NOW), versionless: true }
+    const round = parseProject(doc)
+    expect(round.repaired).toBe(true)
+    expect((round.content as unknown as Record<string, unknown>).versionless).toBeUndefined()
+  })
+
+  it('扩展键 __proto__（自有属性）：空原型承接不丢失、不触发修复（评审 P2）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as Record<string, unknown>
+    // JSON.parse 对 "__proto__" 产出自有属性；对象字面量赋值会触发原型
+    // setter，测试以 defineProperty 复刻该自有属性形态
+    Object.defineProperty(doc.graph, '__proto__', {
+      value: { legacy: '构造原型键' },
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    })
+    const round = parseProject(doc)
+    expect(round.repaired).toBe(false)
+    expect(round.warnings).toEqual([])
+    const extensions = round.content.graphExtensions as Record<string, unknown>
+    expect(Object.getOwnPropertyDescriptor(extensions, '__proto__')?.value).toEqual({
+      legacy: '构造原型键',
+    })
+    // 写回的 graph 仍带自有 __proto__ 键（自有数据属性，非原型变更），往返收敛
+    const again = serializeProject(round.content, 'p-1', NOW) as unknown as Record<string, unknown>
+    expect(Object.getOwnPropertyDescriptor(again.graph, '__proto__')?.value).toEqual({
+      legacy: '构造原型键',
+    })
+    expect(parseProject(again).repaired).toBe(false)
+  })
+
+  it('扩展值含超安全整数域的整数：域约束诊断警告，不修复不回写（评审 P2，§11 传输边界）', () => {
+    const doc = docWithExtensions()
+    // JS 数字面量写不出 9007199254740993（解析即舍入,与 IPC 行为一致）——
+    // 经字符串构造得到 IPC 舍入后的形态（=== 9007199254740992）
+    const ipcRounded = Number('9007199254740993')
+    ;(doc.graph as Record<string, unknown>).futureGraphNote = ipcRounded
+    const round = parseProject(doc)
+    // 诊断不是修复：打开仍零回写，仅警告值无法无损表示
+    expect(round.repaired).toBe(false)
+    expect(round.warnings.some((w) => w.includes('安全整数'))).toBe(true)
+    expect(round.content.graphExtensions).toEqual({ futureGraphNote: ipcRounded })
+    // 保存固化当前加载值——文件原值已在 IPC 边界丢失，前端无从恢复
+    const again = serializeProject(round.content, 'p-1', NOW) as unknown as Record<string, unknown>
+    expect((again.graph as Record<string, unknown>).futureGraphNote).toBe(ipcRounded)
+  })
+
+  it('扩展值含高精度小数：上游解析侧即舍入且 webview 不可检测，按传输边界固化（评审 P2）', () => {
+    const doc = docWithExtensions()
+    // 1.0000000000000001 的最近 f64 是 1.0——Rust serde_json 解析侧（早于
+    // IPC）即舍入，webview 收到的 1 与真实 1 不可区分，诊断无从施策；
+    // JS 面量同样写不出该值，经字符串构造复刻舍入形态
+    const upstreamRounded = Number('1.0000000000000001')
+    expect(upstreamRounded).toBe(1)
+    ;(doc.graph as Record<string, unknown>).futureGraphNote = upstreamRounded
+    const round = parseProject(doc)
+    expect(round.repaired).toBe(false)
+    expect(round.warnings).toEqual([])
+    expect(round.content.graphExtensions).toEqual({ futureGraphNote: 1 })
+    const again = serializeProject(round.content, 'p-1', NOW) as unknown as Record<string, unknown>
+    expect((again.graph as Record<string, unknown>).futureGraphNote).toBe(1)
+  })
+})
+

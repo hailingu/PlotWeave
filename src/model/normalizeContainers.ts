@@ -4,7 +4,14 @@
  * 覆盖、名称回退链、时间戳修复），并按顺序契约调度各阶段模块产出最终
  * ProjectDocument 与边端点/句柄改写所需的映射。
  */
-import { isPlainObject, plainObjectEntries } from './jsonGuards'
+import {
+  ASSETS_CONTRACT_KEYS,
+  GRAPH_CONTRACT_KEYS,
+  SETTINGS_CONTRACT_KEYS,
+  extensionEntries,
+  isPlainObject,
+  plainObjectEntries,
+} from './jsonGuards'
 import {
   CURRENT_SCHEMA_VERSION,
   type ProjectDocument,
@@ -265,16 +272,29 @@ function normalizeActiveNodes(
   return { nodes, optionIdRemap, nodeIdRemap }
 }
 
+/** 装配的信封附加字段载荷：可选契约图字段（viewport/aiRevision，已经
+ * 形状校验）与三个透传容器的同版本扩展键（issue #100 字段演进策略，§11）
+ * 一并收拢，避免装配签名参数继续膨胀。 */
+interface EnvelopeExtras {
+  viewport?: Viewport
+  aiRevision?: number
+  extensions: {
+    graph: Record<string, unknown>
+    settings: Record<string, unknown>
+    assets: Record<string, unknown>
+  }
+}
+
 /** 修复产物装配为 ProjectDocument（episodeTitles 已在调用侧完成键值域
  * 修复——§11.1 第 3 步对所有版本执行，修复是否改写内容以装配产物为准：
  * 只留在 fromDocument 会让回写判定（repaired）看不见标题去空白/非法键
- * 删除；fromDocument 的二次归一化幂等）。graphExtras 收拢可选图字段
- * （viewport/aiRevision），避免装配签名参数继续膨胀。 */
+ * 删除；fromDocument 的二次归一化幂等）。extras.extensions 的未知键原样
+ * 回填透传容器，归一化不视为缺陷（不修复、不警告、不影响 repaired）。 */
 function assembleDocument(
   meta: ReturnType<typeof normalizeProjectMeta>,
   nodes: StoryNode[],
   edges: StoryEdge[],
-  graphExtras: { viewport?: Viewport; aiRevision?: number },
+  extras: EnvelopeExtras,
   settings: Record<string, Record<string, unknown>>,
   byId: Record<string, unknown>,
   episodeTitles: ProjectDocument['episodeTitles'],
@@ -295,13 +315,90 @@ function assembleDocument(
     graph: {
       nodes,
       edges,
-      ...(graphExtras.viewport ? { viewport: graphExtras.viewport } : {}),
-      ...(graphExtras.aiRevision !== undefined ? { aiRevision: graphExtras.aiRevision } : {}),
+      ...extras.extensions.graph,
+      ...(extras.viewport ? { viewport: extras.viewport } : {}),
+      ...(extras.aiRevision !== undefined ? { aiRevision: extras.aiRevision } : {}),
     },
-    settings: settings as unknown as ProjectDocument['settings'],
+    settings: {
+      ...extras.extensions.settings,
+      characters: settings.characters,
+      locations: settings.locations,
+      props: settings.props,
+      documents: settings.documents,
+    } as unknown as ProjectDocument['settings'],
     episodeTitles,
-    assets: { byId: byId as unknown as Record<string, ProjectDocument['assets']['byId'][string]> },
+    assets: {
+      ...extras.extensions.assets,
+      byId: byId as unknown as Record<string, ProjectDocument['assets']['byId'][string]>,
+    },
   }
+}
+
+/** 扩展值域诊断（评审轮 P2，§11 字段演进的传输边界）：扩展值以 JSON 经
+ * Rust→webview IPC 传输，数值须为 IEEE 754 双精度可往返形态才受保留保证。
+ * 可检测子类是整数值越出 JS 安全整数域（±2^53−1）——webview 解析时舍入，
+ * 先于前端一切代码，记警告（不修复、不影响 repaired，打开仍零回写）。
+ * 小数精度超出 f64 的值更早在 Rust serde_json 解析侧舍入，webview 收到的
+ * 值与真实小精度数值不可区分——该子类不可检测、无诊断可施（§11 登记的
+ * 传输边界），两类越域值的保存都固化当前加载值；需要位精确数值的字段
+ * 演进必须升级 schemaVersion 走类型化契约或以字符串承载。扩展值出自
+ * JSON 解析（无环），深度优先扫描一遍。 */
+function extensionDomainWarnings(
+  extensions: {
+    graph: Record<string, unknown>
+    settings: Record<string, unknown>
+    assets: Record<string, unknown>
+  },
+  warnings: string[],
+): void {
+  const scan = (value: unknown, label: string): void => {
+    if (typeof value === 'number') {
+      if (Number.isInteger(value) && !Number.isSafeInteger(value)) {
+        warnings.push(
+          `${label} 的整数值超出 JS 安全整数域（±2^53−1），跨 IPC 无法无损表示——当前加载值可能已与文件不同，保存将固化当前值`,
+        )
+      }
+      return
+    }
+    if (Array.isArray(value)) {
+      value.forEach((member, i) => scan(member, `${label}[${i}]`))
+      return
+    }
+    if (isPlainObject(value)) {
+      for (const [key, member] of Object.entries(value)) scan(member, `${label}.${key}`)
+    }
+  }
+  for (const [container, name] of [
+    [extensions.graph, 'graph 扩展字段'],
+    [extensions.settings, 'settings 扩展字段'],
+    [extensions.assets, 'assets 扩展字段'],
+  ] as const) {
+    for (const key of Object.keys(container)) scan(container[key], `${name} ${key}`)
+  }
+}
+
+/** 透传容器扩展键捕获与值域诊断（issue #100，§11 字段演进；评审轮自
+ * normalizeContainers 拆出保持 80 行函数上限合规）：契约键之外的未知键
+ * 不是缺陷，原样保留随装配回填——重建容器时丢弃它们会让 sameCanonicalJson
+ * 判定结构变化而触发打开即回写，把删除落实；越安全整数域的整数经
+ * extensionDomainWarnings 记诊断警告（不修复）。 */
+function captureEnvelopeExtensions(
+  graphRaw: Record<string, unknown>,
+  settingsRaw: Record<string, unknown>,
+  assetsRaw: Record<string, unknown>,
+  warnings: string[],
+): {
+  graph: Record<string, unknown>
+  settings: Record<string, unknown>
+  assets: Record<string, unknown>
+} {
+  const extensions = {
+    graph: extensionEntries(graphRaw, GRAPH_CONTRACT_KEYS),
+    settings: extensionEntries(settingsRaw, SETTINGS_CONTRACT_KEYS),
+    assets: extensionEntries(assetsRaw, ASSETS_CONTRACT_KEYS),
+  }
+  extensionDomainWarnings(extensions, warnings)
+  return extensions
 }
 
 /** §11.1 第 2 步容器级形状校验（先于一切逐项规则；父容器先于子容器）：
@@ -343,6 +440,7 @@ export function normalizeContainers(
   const assetsRaw = containerOf(raw.assets, 'assets 容器异型，已重置为空资产索引')
   const nodesRaw = arrayOf(graphRaw.nodes, 'graph.nodes 非数组，已重置为空数组')
   const edgesRaw = arrayOf(graphRaw.edges, 'graph.edges 非数组，已重置为空数组')
+  const extensions = captureEnvelopeExtensions(graphRaw, settingsRaw, assetsRaw, warnings)
 
   // 成员过滤 + 嵌套容器修复；键控桶身份重发、形状校验与旧草案兼容按
   // 阶段模块执行，活动节点集随后修复
@@ -374,7 +472,7 @@ export function normalizeContainers(
     meta,
     nodes,
     edges,
-    { viewport, aiRevision },
+    { viewport, aiRevision, extensions },
     settings,
     assetIndex,
     // 边界（issue 16）：normalizeEpisodeTitles 返回「正整数键 → 非空标题」

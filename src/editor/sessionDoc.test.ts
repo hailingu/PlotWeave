@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { sessionDoc } from './sessionDoc'
+import { serializeProject } from '../model/convert'
 import { EMPTY_SETTINGS } from './settings'
 import type { ProjectContent } from '../model/content'
 import type { CanvasNode } from './nodes/types'
@@ -55,5 +56,36 @@ describe('sessionDoc（编辑器会话文档构建）', () => {
     })
     expect(doc.episodeTitles).toBeUndefined()
     expect(doc.viewport).toBeUndefined()
+  })
+
+  it('同版本文档容器级扩展字段透传（issue #100，§11）：随会话携带，序列化落盘不丢（评审 P1）', () => {
+    const project = {
+      id: 'p-1',
+      name: '午夜出租车',
+      nodes: [],
+      edges: [],
+      settings: EMPTY_SETTINGS,
+      graphExtensions: { futureGraphNote: '构造未来字段' },
+      settingsExtensions: { futureBucket: { 'ch-x': { id: 'ch-x', name: '未来实体' } } },
+      assetsExtensions: { futureIndex: ['a-1'] },
+    }
+    const doc: ProjectContent = sessionDoc(project, {
+      nodes: [],
+      edges: [],
+      settings: EMPTY_SETTINGS,
+      episodeTitles: undefined,
+      viewport: undefined,
+      assets: undefined,
+    })
+    expect(doc.graphExtensions).toEqual({ futureGraphNote: '构造未来字段' })
+    expect(doc.settingsExtensions).toEqual({ futureBucket: { 'ch-x': { id: 'ch-x', name: '未来实体' } } })
+    expect(doc.assetsExtensions).toEqual({ futureIndex: ['a-1'] })
+    // 编辑器保存链终点：防抖保存的序列化产物原样带回对应容器
+    const saved = serializeProject(doc, 'p-1') as unknown as Record<string, unknown>
+    expect((saved.graph as Record<string, unknown>).futureGraphNote).toBe('构造未来字段')
+    expect((saved.settings as Record<string, unknown>).futureBucket).toEqual({
+      'ch-x': { id: 'ch-x', name: '未来实体' },
+    })
+    expect((saved.assets as Record<string, unknown>).futureIndex).toEqual(['a-1'])
   })
 })

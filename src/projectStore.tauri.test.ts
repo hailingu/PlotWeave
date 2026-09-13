@@ -551,6 +551,28 @@ describe('tauriLoad：归一化与迁移回写', () => {
   })
 })
 
+describe('tauriLoad：graph 容器扩展字段（issue #100 同版本字段演进）', () => {
+  it('打开零回写，真实保存原样落盘', async () => {
+    const file = modernFile() as Record<string, unknown>
+    ;(file.graph as Record<string, unknown>).futureGraphNote = '构造未来字段'
+    handlers.set('load_project', () => file)
+    handlers.set('save_project', () => undefined)
+    const { projectStore } = await load()
+    const doc = await projectStore.load('p1')
+    // 红：归一化曾把未知 graph 键当结构变化（repaired=true），仅打开就把
+    // 删除落实回写；保留策略下扩展字段不是缺陷，净本零写盘
+    expect(calls.map((c) => c.cmd)).toEqual(['load_project', 'verify_project_assets'])
+    expect(doc.graphExtensions).toEqual({ futureGraphNote: '构造未来字段' })
+    // 用户编辑触发真实保存：扩展字段随序列化原样落盘，不因会话往返丢失
+    await projectStore.save('p1', { ...doc, name: '编辑后' })
+    const saved = calls.find((c) => c.cmd === 'save_project') as unknown as {
+      args: { doc: { graph: Record<string, unknown>; nodes: unknown[] } }
+    }
+    expect(saved.args.doc.graph.futureGraphNote).toBe('构造未来字段')
+    expect(saved.args.doc.graph.nodes).toHaveLength(1)
+  })
+})
+
 describe('tauriList：空库播种与示例升级', () => {
   it('空列表≠空目录：唯一项目是不可读的坏文件时不播种、不覆盖可能可恢复的内容', async () => {
     // list_project_metas 跳过损坏/不可读文件——唯一项目若是 JSON 损坏的
