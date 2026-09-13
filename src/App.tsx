@@ -12,6 +12,7 @@ import {
   type SetStateAction,
 } from 'react'
 import HomePage from './home/HomePage'
+import type { OpenProjectError } from './home/OpenErrorBanner'
 import { useExitFlush } from './useExitFlush'
 import { projectStore, type ProjectContent } from './projectStore'
 import type { ProjectSummary } from './home/projects'
@@ -97,10 +98,19 @@ async function loadOpenProject(
 }
 
 type OpenProjectSetter = Dispatch<SetStateAction<OpenProject | null>>
+type OpenErrorSetter = Dispatch<SetStateAction<OpenProjectError | null>>
 type RefreshProjects = () => Promise<void>
 type UnsavedAiSessionsRef = RefObject<Map<string, UnsavedAiSession>>
 /** 保存路径需要整体替换快照，故用可变盒子而非只读的 RefObject。 */
 type LatestAiSessionRef = { current: LatestAiSession | null }
+
+/** 打开失败原因的可读化（issue #98）：Error 取 message（避免「Error: 」
+ * 前缀上屏），Tauri IPC 常见的字符串拒绝原样保留，其余形态 String() 兜底。 */
+function openFailureDetail(err: unknown): string {
+  if (err instanceof Error) return err.message
+  if (typeof err === 'string') return err
+  return String(err)
+}
 
 /** 应用级会话生命周期：持有跨页面快照，订阅共享保存链结果，并在卸载时
  * 解除订阅；普通保存的最新内容与失败恢复副本均不依赖编辑器挂载状态。 */
@@ -141,46 +151,18 @@ function useAiSessionLifecycle(setOpenProject: OpenProjectSetter) {
   return { unsavedAiSessionsRef, latestAiSessionRef }
 }
 
-function useOpenProjectActions(
+/** AI 会话保存通道（自 useOpenProjectActions 拆出以守 80 行函数上限，
+ * PR #110 评审）：最新会话写入引用而非 React state——成功保存是每条 AI
+ * 消息的高频路径，不得引起 App 根起的整树重渲染（issue #61）；失败保留
+ * 在打开项目视图之外并上浮项目级错误，重挂载可重试。 */
+function useAiSessionSave(
   setOpenProject: OpenProjectSetter,
-  refreshProjects: RefreshProjects,
   unsavedAiSessions: UnsavedAiSessionsRef,
   latestAiSession: LatestAiSessionRef,
 ) {
-  const handleCreateProject = useCallback(async () => {
-    try {
-      const meta = await projectStore.create('未命名短剧')
-      const open = await loadOpenProject(meta.id)
-      startTransition(() => setOpenProject(open))
-    } catch (err) {
-      console.warn('[App] 新建项目失败', err)
-    }
-    void refreshProjects()
-  }, [refreshProjects, setOpenProject])
-
-  const handleOpenProject = useCallback(async (id: string) => {
-    try {
-      const open = await loadOpenProject(id, unsavedAiSessions.current ?? undefined)
-      startTransition(() => setOpenProject(open))
-    } catch (err) {
-      console.warn('[App] 打开项目失败', err)
-    }
-  }, [setOpenProject, unsavedAiSessions])
-
-  const handleBackHome = useCallback(() => {
-    setOpenProject(null)
-    void refreshProjects()
-  }, [refreshProjects, setOpenProject])
-
-  const handleEditorRename = useCallback((name: string) => {
-    setOpenProject((project) => (project ? { ...project, doc: { ...project.doc, name } } : project))
-  }, [setOpenProject])
-
   const handleSaveAiSession = useCallback(
     (id: string) => async (session: AiSession) => {
-      // 最新会话写入引用而非 React state：成功保存是每条 AI 消息的高频路径，
-      // 不得引起 App 根起的整树重渲染（issue #61）。AI 操作区只在加载成功后
-      // 开放；实际变更后的会话可在重挂载时重试。
+      // AI 操作区只在加载成功后开放；实际变更后的会话可在重挂载时重试。
       latestAiSession.current = { id, session }
       try {
         await projectStore.saveAiSession(id, session)
@@ -206,6 +188,77 @@ function useOpenProjectActions(
     },
     [latestAiSession, setOpenProject, unsavedAiSessions],
   )
+  return handleSaveAiSession
+}
+
+function useOpenProjectActions(
+  setOpenProject: OpenProjectSetter,
+  setOpenFailure: OpenErrorSetter,
+  refreshProjects: RefreshProjects,
+  unsavedAiSessions: UnsavedAiSessionsRef,
+  latestAiSession: LatestAiSessionRef,
+) {
+  /** 打开/新建尝试的代序号（PR #110 评审 P2）：加载期间首页控件仍可操作，
+   * 慢的旧尝试可能在新尝试开始后才落定——只有最新发起的尝试可以发布结果
+   * （进入编辑器或失败横幅），被取代的旧尝试只留诊断。与
+   * useProjectSummaries 的刷新序号收敛同款语义（标准「状态、并发与失败
+   * 边界」：并发执行须先定义取消/取代行为）。 */
+  const openAttemptSeqRef = useRef(0)
+
+  const handleCreateProject = useCallback(async () => {
+    const seq = ++openAttemptSeqRef.current
+    // 作废旧尝试已排队未提交的导航（PR #110 评审）：chunk 挂起窗口内首页
+    // 仍可交互，此前尝试可能已通过序号检查并排队——排队更新无法从外部
+    // 取消，只能以同车道（transition）的 null 更新按入队序覆盖，否则被
+    // 取代的导航会在 chunk 就绪后提交并吞掉新尝试的失败横幅。无排队发布
+    // 时为同值更新，React 跳过。
+    startTransition(() => setOpenProject(null))
+    try {
+      const meta = await projectStore.create('未命名短剧')
+      const open = await loadOpenProject(meta.id)
+      // 项目本身已创建，被取代也仍刷新列表；只有最新尝试进入编辑器并
+      // 清理横幅，否则旧尝试的成功导航与横幅清理会晚于新尝试的发布。
+      if (seq === openAttemptSeqRef.current) {
+        setOpenFailure(null)
+        startTransition(() => setOpenProject(open))
+      }
+    } catch (err) {
+      console.warn('[App] 新建项目失败', err)
+    }
+    void refreshProjects()
+  }, [refreshProjects, setOpenFailure, setOpenProject])
+
+  const handleOpenProject = useCallback(async (id: string) => {
+    const seq = ++openAttemptSeqRef.current
+    // 新一次打开尝试即视为旧错误过时（issue #98）：失败后重试或改开其他
+    // 项目，上一次失败的原因不得残留；本次失败会用新原因覆盖。
+    setOpenFailure(null)
+    // 作废旧尝试已排队未提交的导航（机制见 handleCreateProject 注释）。
+    startTransition(() => setOpenProject(null))
+    try {
+      const open = await loadOpenProject(id, unsavedAiSessions.current ?? undefined)
+      // 被取代的旧尝试成功晚到：不发布导航，新尝试的失败横幅保留。
+      if (seq !== openAttemptSeqRef.current) return
+      startTransition(() => setOpenProject(open))
+    } catch (err) {
+      console.warn('[App] 打开项目失败', err)
+      // 被取代的旧尝试拒绝晚到：不发布横幅，防止新尝试已清除/进入编辑器
+      // 后旧错误复活或「后完成者」覆盖「后发起者」。
+      if (seq !== openAttemptSeqRef.current) return
+      setOpenFailure({ id, detail: openFailureDetail(err) })
+    }
+  }, [setOpenFailure, setOpenProject, unsavedAiSessions])
+
+  const handleBackHome = useCallback(() => {
+    setOpenProject(null)
+    void refreshProjects()
+  }, [refreshProjects, setOpenProject])
+
+  const handleEditorRename = useCallback((name: string) => {
+    setOpenProject((project) => (project ? { ...project, doc: { ...project.doc, name } } : project))
+  }, [setOpenProject])
+
+  const handleSaveAiSession = useAiSessionSave(setOpenProject, unsavedAiSessions, latestAiSession)
 
   return { handleCreateProject, handleOpenProject, handleBackHome, handleEditorRename, handleSaveAiSession }
 }
@@ -297,6 +350,7 @@ function AppView({
   projects,
   loading,
   openProject,
+  openFailure,
   settingsOpen,
   open,
   home,
@@ -307,6 +361,7 @@ function AppView({
   readonly projects: ProjectSummary[]
   readonly loading: boolean
   readonly openProject: OpenProject | null
+  readonly openFailure: OpenProjectError | null
   readonly settingsOpen: boolean
   readonly open: ReturnType<typeof useOpenProjectActions>
   readonly home: ReturnType<typeof useHomeProjectActions>
@@ -339,6 +394,7 @@ function AppView({
     view = <HomePage
       projects={projects}
       loading={loading}
+      openError={openFailure}
       onOpenProject={open.handleOpenProject}
       onCreateProject={() => void open.handleCreateProject()}
       onRenameProject={(id, name) => void home.handleRenameProject(id, name)}
@@ -357,6 +413,7 @@ function AppView({
  */
 export default function App() {
   const [openProject, setOpenProject] = useState<OpenProject | null>(null)
+  const [openFailure, setOpenFailure] = useState<OpenProjectError | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const { unsavedAiSessionsRef, latestAiSessionRef } = useAiSessionLifecycle(setOpenProject)
   const { projects, loading, refreshProjects } = useProjectSummaries(() => openProject === null)
@@ -373,7 +430,7 @@ export default function App() {
     return () => document.removeEventListener('keydown', onKey)
   }, [])
 
-  const open = useOpenProjectActions(setOpenProject, refreshProjects, unsavedAiSessionsRef, latestAiSessionRef)
+  const open = useOpenProjectActions(setOpenProject, setOpenFailure, refreshProjects, unsavedAiSessionsRef, latestAiSessionRef)
   const home = useHomeProjectActions(refreshProjects, unsavedAiSessionsRef)
   /** 退出冲刷屏障：未落盘会话仍在时阻止关闭窗口（见 useExitFlush）。 */
   const exitBlocked = useExitFlush()
@@ -390,6 +447,7 @@ export default function App() {
       projects={projects}
       loading={loading}
       openProject={openProject}
+      openFailure={openFailure}
       settingsOpen={settingsOpen}
       open={open}
       home={home}

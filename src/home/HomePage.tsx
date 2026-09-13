@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import ProjectCard from './ProjectCard'
+import OpenErrorBanner, { type OpenProjectError } from './OpenErrorBanner'
 import { ConfirmDeleteDialog, RenameDialog } from './Dialogs'
 import { filterProjects, type ProjectSummary } from './projects'
 
@@ -7,6 +8,9 @@ interface HomePageProps {
   readonly projects: ProjectSummary[]
   /** 列表首次加载中（持久化命令异步返回）；加载完前不显示空状态引导。 */
   readonly loading?: boolean
+  /** 最近一次打开失败的可见反馈（issue #98）：非阻塞横幅展示，停留至
+   * 下一次打开尝试或新建成功；null/缺省 = 无待展示错误。 */
+  readonly openError?: OpenProjectError | null
   /** 单击海报卡打开项目，窗口切换为编辑器（文档式双界面，§3.1；应用方修订：由双击改单击）。 */
   readonly onOpenProject: (id: string) => void
   /** 工具栏「＋ 新建项目」、网格末尾「＋ 新剧」与空状态引导共用此入口。 */
@@ -19,6 +23,29 @@ interface HomePageProps {
   readonly onDeleteProject: (id: string) => void
 }
 
+/** 项目菜单的关闭语义（§3.2；自 HomePage 拆出以守祖父化组件行数）：
+ * Esc 或点击菜单外任意处关闭；菜单内容元素（.editor-ctx 内）上的按下
+ * 不关闭。 */
+function useMenuDismiss(menu: { x: number; y: number; id: string } | null, close: () => void) {
+  useEffect(() => {
+    if (!menu) return
+    const onDown = (e: PointerEvent) => {
+      // e.target 可能是非 Element 的 EventTarget（如 document），安全判断避免抛错
+      const target = e.target
+      if (target instanceof Element && !target.closest('.editor-ctx')) close()
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') close()
+    }
+    document.addEventListener('pointerdown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('pointerdown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [menu, close])
+}
+
 /**
  * 项目首页（文档浏览器）：竖版海报片库（docs/ui-design.md §3.2）。
  * 工具栏 = 搜索框（内存过滤）+「＋ 新建项目」；卡片右键或悬停 ⋯ 打开
@@ -27,6 +54,7 @@ interface HomePageProps {
 export default function HomePage({
   projects,
   loading = false,
+  openError = null,
   onOpenProject,
   onCreateProject,
   onRenameProject,
@@ -50,24 +78,8 @@ export default function HomePage({
     setMenu({ x: e.clientX, y: e.clientY, id: project.id })
   }
 
-  // Esc 关闭菜单；点击菜单外任意处关闭
-  useEffect(() => {
-    if (!menu) return
-    const onDown = (e: PointerEvent) => {
-      // e.target 可能是非 Element 的 EventTarget（如 document），安全判断避免抛错
-      const target = e.target
-      if (target instanceof Element && !target.closest('.editor-ctx')) setMenu(null)
-    }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setMenu(null)
-    }
-    document.addEventListener('pointerdown', onDown)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('pointerdown', onDown)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [menu])
+  const closeMenu = useCallback(() => setMenu(null), [])
+  useMenuDismiss(menu, closeMenu)
 
   const menuProject = menu ? projects.find((p) => p.id === menu.id) : undefined
 
@@ -97,6 +109,10 @@ export default function HomePage({
           </button>
         </span>
       </header>
+
+      {/* 打开失败横幅（issue #98）：role=alert 即时播报；非阻塞，停留至
+          下一次打开尝试或新建成功，不拦截首页任何操作。 */}
+      {openError && <OpenErrorBanner error={openError} projects={projects} />}
 
       {!loading && projects.length === 0 ? (
         <div className="home-empty">
