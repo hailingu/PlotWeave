@@ -183,7 +183,8 @@ function applyValidatedBatch(
 /** 校验与读工具族（useAiBridge 拆出的回调子域）：反应式画布 → 快照 digest；
  * ref 镜像 → 整批校验快照与 get_node / get_settings_snapshot 读工具。
  * aiSnapshot 一并回传供落地重校验复用。 */
-function useAiReadTools(deps: {
+/** useAiReadTools 的依赖：反应式画布状态 + ref 镜像（与 useAiBridge 同源）。 */
+interface AiReadToolsDeps {
   nodes: CanvasNode[]
   edges: Edge[]
   settings: ProjectSettings
@@ -191,7 +192,9 @@ function useAiReadTools(deps: {
   edgesRef: { current: Edge[] }
   settingsRef: { current: ProjectSettings }
   assetsRef: { current: ProjectContent['assets'] }
-}) {
+}
+
+function useAiReadTools(deps: AiReadToolsDeps) {
   const { nodes, edges, settings, nodesRef, edgesRef, settingsRef, assetsRef } =
     deps
 

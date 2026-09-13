@@ -29,6 +29,61 @@ const TYPE_LABELS: Record<CanvasNode['type'], string> = {
   image: '图片节点 · 生成产物',
 }
 
+/** 场景节点检查器行（inspectorRows 拆分，issue #99）。 */
+function sceneInspectorRows(
+  node: Extract<CanvasNode, { type: 'scene' }>,
+  shotCount: number,
+  settings: ProjectSettings,
+): { label: string; value: string }[] {
+  const locationName = node.data.locationId
+    ? resolveLocationName(settings, node.data.locationId)
+    : null
+  return [
+    { label: '名称', value: node.data.name },
+    {
+      label: '场号',
+      value: `SCENE ${String(node.data.sceneNo).padStart(2, '0')}`,
+    },
+    { label: '内外景', value: node.data.interior ? '内' : '外' },
+    {
+      label: '地点',
+      value: locationName ?? (node.data.locationId ? '（已删除）' : '未指定'),
+    },
+    { label: '时间', value: node.data.time },
+    ...(node.data.weather ? [{ label: '天气', value: node.data.weather }] : []),
+    { label: '分镜', value: `🎞 ${shotCount} 镜` },
+    { label: '梗概', value: node.data.synopsis },
+    {
+      label: '在场角色',
+      value:
+        node.data.characterIds
+          .map((id) => resolveCharacterName(settings, id) ?? '（已删除）')
+          .join(' / ') || '—',
+    },
+  ]
+}
+
+/** 对白节点检查器行（inspectorRows 拆分，issue #99）。 */
+function dialogueInspectorRows(
+  node: Extract<CanvasNode, { type: 'dialogue' }>,
+  settings: ProjectSettings,
+): { label: string; value: string }[] {
+  const speakers = new Set(
+    node.data.lines.flatMap((l) =>
+      l.kind === 'line' && l.speaker
+        ? [resolveCharacterName(settings, l.speaker) ?? '（已删除）']
+        : [],
+    ),
+  )
+  const actions = node.data.lines.filter((l) => l.kind === 'action').length
+  return [
+    { label: '名称', value: node.data.name },
+    { label: '人物', value: [...speakers].join(' / ') },
+    { label: '台词', value: `${node.data.lines.length - actions} 句` },
+    { label: '动作行', value: `${actions} 行` },
+  ]
+}
+
 /** 检查器字段行：按节点类型派生只读视图（编辑随后续 ⚙️ 设置面板任务落地）。 */
 function inspectorRows(
   node: CanvasNode,
@@ -36,53 +91,10 @@ function inspectorRows(
   settings: ProjectSettings,
 ): { label: string; value: string }[] {
   switch (node.type) {
-    case 'scene': {
-      const locationName = node.data.locationId
-        ? resolveLocationName(settings, node.data.locationId)
-        : null
-      return [
-        { label: '名称', value: node.data.name },
-        {
-          label: '场号',
-          value: `SCENE ${String(node.data.sceneNo).padStart(2, '0')}`,
-        },
-        { label: '内外景', value: node.data.interior ? '内' : '外' },
-        {
-          label: '地点',
-          value:
-            locationName ?? (node.data.locationId ? '（已删除）' : '未指定'),
-        },
-        { label: '时间', value: node.data.time },
-        ...(node.data.weather
-          ? [{ label: '天气', value: node.data.weather }]
-          : []),
-        { label: '分镜', value: `🎞 ${shotCount} 镜` },
-        { label: '梗概', value: node.data.synopsis },
-        {
-          label: '在场角色',
-          value:
-            node.data.characterIds
-              .map((id) => resolveCharacterName(settings, id) ?? '（已删除）')
-              .join(' / ') || '—',
-        },
-      ]
-    }
-    case 'dialogue': {
-      const speakers = new Set(
-        node.data.lines.flatMap((l) =>
-          l.kind === 'line' && l.speaker
-            ? [resolveCharacterName(settings, l.speaker) ?? '（已删除）']
-            : [],
-        ),
-      )
-      const actions = node.data.lines.filter((l) => l.kind === 'action').length
-      return [
-        { label: '名称', value: node.data.name },
-        { label: '人物', value: [...speakers].join(' / ') },
-        { label: '台词', value: `${node.data.lines.length - actions} 句` },
-        { label: '动作行', value: `${actions} 行` },
-      ]
-    }
+    case 'scene':
+      return sceneInspectorRows(node, shotCount, settings)
+    case 'dialogue':
+      return dialogueInspectorRows(node, settings)
     case 'beat':
       return [
         { label: '名称', value: node.data.name },

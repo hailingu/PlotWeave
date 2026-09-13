@@ -8,7 +8,7 @@ import { entSnap, richSnap, snap } from './testGraphs'
  * 阶段 B 首错即停）与恒非法容器判定；契约来源见各 describe 注释。
  */
 
-describe('validateAiBatch：完整问题收集（评审 5138829847：纠错回喂依赖全量清单）', () => {
+describe('validateAiBatch：完整问题收集 · 逐条收集与级联抑制（评审 5138829847）', () => {
   it('多个独立非法命令逐条收集问题，不再首错短路；原子性保持', () => {
     const v = validateAiBatch(
       [
@@ -49,7 +49,9 @@ describe('validateAiBatch：完整问题收集（评审 5138829847：纠错回�
       '端点不存在',
     )
   })
+})
 
+describe('validateAiBatch：完整问题收集 · 分层延后与原子性', () => {
   it('前序形状失败时其后的真实缺失分层延后：修复重放后独立点名', () => {
     const v = validateAiBatch(
       [
@@ -114,7 +116,7 @@ describe('validateAiBatch：完整问题收集（评审 5138829847：纠错回�
 // fields 形态），一次全量回喂——quota 按轮消耗，多错误批次一轮修完；
 // 阶段 B 在形状全过后顺序折叠，首错即停——失败之后的命令本轮不校验、
 // 不点名，级联误报由「不前进」消除，分层错误随修复重放逐轮暴露。
-describe('validateAiBatch：两阶段校验（阶段 A 全量形状 + 阶段 B 首错即停）', () => {
+describe('validateAiBatch：两阶段校验 · 阶段 A 全量形状点名', () => {
   it('阶段 A 全量收集形状错误：多命令一次点名，依赖命令不级联', () => {
     const v = validateAiBatch(
       [
@@ -164,6 +166,20 @@ describe('validateAiBatch：两阶段校验（阶段 A 全量形状 + 阶段 B �
     expect(v.issues.map((i) => i.index)).toEqual([0, 1, 2])
   })
 
+  it('实体 upsert 的 fields 形状错误属阶段 A：全量点名', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'upsert_character', fields: { name: 5 } },
+        { op: 'upsert_location', fields: { nope: 'x' } },
+      ],
+      entSnap(),
+    )
+    expect(v.ok).toBe(false)
+    expect(v.issues.map((i) => i.index)).toEqual([0, 1])
+  })
+})
+
+describe('validateAiBatch：两阶段校验 · 阶段 B 首错即停与分层延后', () => {
   it('阶段 B 首错即停：独立结构错误只报首条，其余本轮不校验', () => {
     const v = validateAiBatch(
       [
@@ -195,19 +211,9 @@ describe('validateAiBatch：两阶段校验（阶段 A 全量形状 + 阶段 B �
     expect(v.issues).toHaveLength(1)
     expect(v.issues[0]?.index).toBe(0)
   })
+})
 
-  it('实体 upsert 的 fields 形状错误属阶段 A：全量点名', () => {
-    const v = validateAiBatch(
-      [
-        { op: 'upsert_character', fields: { name: 5 } },
-        { op: 'upsert_location', fields: { nope: 'x' } },
-      ],
-      entSnap(),
-    )
-    expect(v.ok).toBe(false)
-    expect(v.issues.map((i) => i.index)).toEqual([0, 1])
-  })
-
+describe('validateAiBatch：两阶段校验 · 顺序语义与删除降级', () => {
   it('前序 delete + 同名 ref 重建换主：update 类型专属检查让位阶段 B（评审 5174231991）', () => {
     const snapWithX: AiGraphSnapshot = {
       nodes: [{ id: 'x', type: 'scene', label: '场 01' }],

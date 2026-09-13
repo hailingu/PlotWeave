@@ -195,18 +195,18 @@ function useAiSessionSave(
   return handleSaveAiSession
 }
 
-function useOpenProjectActions(
+/** 打开/新建尝试的代序号与两条尝试路径（useOpenProjectActions 拆分，
+ * issue #99 格式化后回到 80 行内）。加载期间首页控件仍可操作，慢的旧尝
+ * 试可能在新尝试开始后才落定——只有最新发起的尝试可以发布结果（进入编
+ * 辑器或失败横幅），被取代的旧尝试只留诊断；与 useProjectSummaries 的刷
+ * 新序号收敛同款语义（标准「状态、并发与失败边界」：并发执行须先定义取
+ * 代行为）。 */
+function useProjectOpenAttempt(
   setOpenProject: OpenProjectSetter,
   setOpenFailure: OpenErrorSetter,
   refreshProjects: RefreshProjects,
   unsavedAiSessions: UnsavedAiSessionsRef,
-  latestAiSession: LatestAiSessionRef,
 ) {
-  /** 打开/新建尝试的代序号（PR #110 评审 P2）：加载期间首页控件仍可操作，
-   * 慢的旧尝试可能在新尝试开始后才落定——只有最新发起的尝试可以发布结果
-   * （进入编辑器或失败横幅），被取代的旧尝试只留诊断。与
-   * useProjectSummaries 的刷新序号收敛同款语义（标准「状态、并发与失败
-   * 边界」：并发执行须先定义取消/取代行为）。 */
   const openAttemptSeqRef = useRef(0)
 
   const handleCreateProject = useCallback(async () => {
@@ -257,6 +257,23 @@ function useOpenProjectActions(
       }
     },
     [setOpenFailure, setOpenProject, unsavedAiSessions],
+  )
+
+  return { handleCreateProject, handleOpenProject }
+}
+
+function useOpenProjectActions(
+  setOpenProject: OpenProjectSetter,
+  setOpenFailure: OpenErrorSetter,
+  refreshProjects: RefreshProjects,
+  unsavedAiSessions: UnsavedAiSessionsRef,
+  latestAiSession: LatestAiSessionRef,
+) {
+  const { handleCreateProject, handleOpenProject } = useProjectOpenAttempt(
+    setOpenProject,
+    setOpenFailure,
+    refreshProjects,
+    unsavedAiSessions,
   )
 
   const handleBackHome = useCallback(() => {

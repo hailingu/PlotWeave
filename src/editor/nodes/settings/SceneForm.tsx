@@ -82,6 +82,36 @@ function SceneCastChips({
  * patch 回调在表单内收口 nodeType 判别字段，字段更新保持单行表达；
  * 自由文本字段经 useCompositionSafeValue 缓冲中文组合输入（issue #42）。
  * 自 NodeSettingsPanel.tsx 外置（issue #39，ImageNodeForm.tsx 先例）。 */
+
+/** 场次输入（SceneForm 拆分，issue #99）：必填（导出/卡片头消费）——
+ * 清空/非法输入不产生 patch，保留原值等用户输入完成；§4.1 正安全整数
+ * 域内才提交（有限但越界值如 1e20 落载后会被顺位重发，同域拒收）。 */
+function SceneNoField({
+  value,
+  onPatch,
+}: {
+  readonly value: number
+  readonly onPatch: (n: number) => void
+}) {
+  return (
+    <Field label="场次">
+      <input
+        className="pw-set-input"
+        type="number"
+        min={1}
+        value={value}
+        aria-label="场次"
+        onChange={(e) => {
+          const raw = e.target.value
+          if (raw === '') return
+          const n = Math.max(1, Math.floor(Number(raw)))
+          if (Number.isSafeInteger(n) && n !== value) onPatch(n)
+        }}
+      />
+    </Field>
+  )
+}
+
 export default function SceneForm({
   node,
   settings,
@@ -116,25 +146,7 @@ export default function SceneForm({
       <Field label="名称">
         <input className="pw-set-input" {...name} />
       </Field>
-      <Field label="场次">
-        <input
-          className="pw-set-input"
-          type="number"
-          min={1}
-          value={d.sceneNo}
-          aria-label="场次"
-          onChange={(e) => {
-            // 场次必填（导出/卡片头消费）：清空/非法输入不产生 patch，
-            // 保留原值等用户输入完成
-            const raw = e.target.value
-            if (raw === '') return
-            const n = Math.max(1, Math.floor(Number(raw)))
-            // §4.1 正安全整数域：有限但越界（如 1e20）落载后会被顺位重发，同域拒收
-            if (Number.isSafeInteger(n) && n !== d.sceneNo)
-              patch({ sceneNo: n })
-          }}
-        />
-      </Field>
+      <SceneNoField value={d.sceneNo} onPatch={(n) => patch({ sceneNo: n })} />
       <div className="pw-set-cols">
         <Field label="地点">
           <select

@@ -478,6 +478,77 @@ function captureEnvelopeExtensions(
  * 修复而非拒绝：均记录警告，单个脏字段不阻断加载（§8.2.4）。
  * 返回的 optionIdRemap 携带 branch 空选项 id 的明确句柄映射（节点 id →
  * 原空 id → 新 id），供归一化末段的引出边 option- 句柄同步改写。 */
+/** 异型容器重置为可遍历空容器（缺失视为空，不警告）。 */
+function asContainer(
+  v: unknown,
+  warning: string,
+  warnings: string[],
+): Record<string, unknown> {
+  if (isPlainObject(v)) return v
+  if (v !== undefined) warnings.push(warning)
+  return {}
+}
+
+/** 异型数组重置为空数组（缺失视为空，不警告）。 */
+function asArray(v: unknown, warning: string, warnings: string[]): unknown[] {
+  if (Array.isArray(v)) return v
+  if (v !== undefined) warnings.push(warning)
+  return []
+}
+
+/** 父/子容器解析（normalizeContainers 拆分，issue #99）：异型重置为可
+ * 遍历空容器（缺失视为空，不警告），并捕获信封扩展字段。 */
+function resolveRawContainers(
+  raw: Record<string, unknown>,
+  warnings: string[],
+) {
+  const projectRaw = asContainer(
+    raw.project,
+    'project 容器异型，已重置为空对象后逐字段修复',
+    warnings,
+  )
+  const graphRaw = asContainer(
+    raw.graph,
+    'graph 容器异型，已重置为空画布',
+    warnings,
+  )
+  const settingsRaw = asContainer(
+    raw.settings,
+    'settings 容器异型，已重置为默认空桶',
+    warnings,
+  )
+  const assetsRaw = asContainer(
+    raw.assets,
+    'assets 容器异型，已重置为空资产索引',
+    warnings,
+  )
+  const nodesRaw = asArray(
+    graphRaw.nodes,
+    'graph.nodes 非数组，已重置为空数组',
+    warnings,
+  )
+  const edgesRaw = asArray(
+    graphRaw.edges,
+    'graph.edges 非数组，已重置为空数组',
+    warnings,
+  )
+  const extensions = captureEnvelopeExtensions(
+    graphRaw,
+    settingsRaw,
+    assetsRaw,
+    warnings,
+  )
+  return {
+    projectRaw,
+    graphRaw,
+    settingsRaw,
+    assetsRaw,
+    nodesRaw,
+    edgesRaw,
+    extensions,
+  }
+}
+
 export function normalizeContainers(
   raw: Record<string, unknown>,
   env: NormalizeEnv,
@@ -490,41 +561,15 @@ export function normalizeContainers(
    * 供 Tauri 侧登记别名——修复回写落盘前，重发 id 的媒体经盘上条目解析。 */
   reissuedAssetAliases: [string, string][]
 } {
-  // 父/子容器（异型重置为可遍历空容器；缺失视为空，不警告）
-  const containerOf = (
-    v: unknown,
-    warning: string,
-  ): Record<string, unknown> => {
-    if (isPlainObject(v)) return v
-    if (v !== undefined) warnings.push(warning)
-    return {}
-  }
-  const arrayOf = (v: unknown, warning: string): unknown[] => {
-    if (Array.isArray(v)) return v
-    if (v !== undefined) warnings.push(warning)
-    return []
-  }
-  const projectRaw = containerOf(
-    raw.project,
-    'project 容器异型，已重置为空对象后逐字段修复',
-  )
-  const graphRaw = containerOf(raw.graph, 'graph 容器异型，已重置为空画布')
-  const settingsRaw = containerOf(
-    raw.settings,
-    'settings 容器异型，已重置为默认空桶',
-  )
-  const assetsRaw = containerOf(
-    raw.assets,
-    'assets 容器异型，已重置为空资产索引',
-  )
-  const nodesRaw = arrayOf(graphRaw.nodes, 'graph.nodes 非数组，已重置为空数组')
-  const edgesRaw = arrayOf(graphRaw.edges, 'graph.edges 非数组，已重置为空数组')
-  const extensions = captureEnvelopeExtensions(
+  const {
+    projectRaw,
     graphRaw,
     settingsRaw,
     assetsRaw,
-    warnings,
-  )
+    nodesRaw,
+    edgesRaw,
+    extensions,
+  } = resolveRawContainers(raw, warnings)
 
   // 成员过滤 + 嵌套容器修复；键控桶身份重发、形状校验与旧草案兼容按
   // 阶段模块执行，活动节点集随后修复
@@ -536,9 +581,10 @@ export function normalizeContainers(
   ) as Record<string, Record<string, unknown>>
   const repairs = reKeyBucketIdentities(settings, assetIndex, warnings)
   sanitizeBucketEntries(settings, assetIndex, nodesRaw, env, repairs, warnings)
-  const titlesRaw = containerOf(
+  const titlesRaw = asContainer(
     raw.episodeTitles,
     'episodeTitles 非普通键值对象，已重置为空 Record',
+    warnings,
   )
   const { nodes, optionIdRemap, nodeIdRemap } = normalizeActiveNodes(
     nodesRaw,

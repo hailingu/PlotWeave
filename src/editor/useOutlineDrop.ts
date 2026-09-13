@@ -7,6 +7,7 @@ import { useCallback, type RefObject } from 'react'
 import type { Edge } from '@xyflow/react'
 import { episodeOfNode, hostSceneMap, type OutlineDropTarget } from './outline'
 import { outlineSplicePlan, spliceEdgesWith } from './outlineDrop'
+import type { SplicePlan } from './spine'
 import { episodeNoPatch } from './nodes/patch'
 import type { HistoryCommand } from './history'
 import type { CanvasNode } from './nodes/types'
@@ -20,6 +21,46 @@ export interface OutlineDropDeps {
   applyDataPatch: (id: string, cmd: ReturnType<typeof episodeNoPatch>) => void
   setEdges: (fn: (eds: Edge[]) => Edge[]) => void
   pushHistory: (cmd: HistoryCommand) => void
+}
+
+/** 大纲移动的接缝计划与集归属解析（useOutlineDrop 拆分，issue #99）：
+ * 行落点随锚点所在组，组尾落点即目标组；返回 null = 无可执行变化。 */
+function resolveOutlineMove(
+  nodes: CanvasNode[],
+  edges: Edge[],
+  episodeTitles: Record<number, string>,
+  draggedId: string,
+  target: OutlineDropTarget,
+): {
+  plan: SplicePlan
+  targetEpisode: number | null
+  oldEpisode: number | null
+  episodeChanged: boolean
+} | null {
+  const planned = outlineSplicePlan(
+    nodes,
+    edges,
+    episodeTitles,
+    draggedId,
+    target,
+  )
+  if (!planned) return null
+  const { plan, anchorId } = planned
+  const sceneByShot = hostSceneMap(nodes, edges)
+  const anchorNode = nodes.find((n) => n.id === anchorId)
+  const targetEpisode =
+    target.kind === 'groupEnd'
+      ? target.episode
+      : episodeOfNode(anchorNode!, (id) => sceneByShot.get(id))
+  const dragged = nodes.find((n) => n.id === draggedId)
+  const oldEpisode =
+    dragged && typeof dragged.data.episodeNo === 'number'
+      ? dragged.data.episodeNo
+      : null
+  const noSplice = plan.removes.length === 0 && plan.adds.length === 0
+  const episodeChanged = targetEpisode !== oldEpisode
+  if (noSplice && !episodeChanged) return null
+  return { plan, targetEpisode, oldEpisode, episodeChanged }
 }
 
 export function useOutlineDrop(deps: OutlineDropDeps) {
@@ -48,35 +89,17 @@ export function useOutlineDrop(deps: OutlineDropDeps) {
         return
       }
 
-      // 1) 接缝计划（groupEnd 锚到该组最后一个剧情流行）
-      const planned = outlineSplicePlan(
+      // 1)–2) 接缝计划与集归属（groupEnd 锚到该组最后一个剧情流行；
+      // 行落点随锚点所在组，组尾落点即目标组）
+      const resolved = resolveOutlineMove(
         nodesRef.current ?? [],
         edgesRef.current ?? [],
         episodeTitlesRef.current ?? {},
         draggedId,
         target,
       )
-      if (!planned) return
-      const { plan, anchorId } = planned
-
-      // 2) 落点集归属：行落点随锚点所在组，组尾落点即目标组
-      const sceneByShot = hostSceneMap(
-        nodesRef.current ?? [],
-        edgesRef.current ?? [],
-      )
-      const anchorNode = nodesRef.current?.find((n) => n.id === anchorId)
-      const targetEpisode =
-        target.kind === 'groupEnd'
-          ? target.episode
-          : episodeOfNode(anchorNode!, (id) => sceneByShot.get(id))
-      const oldEpisode =
-        typeof dragged.data.episodeNo === 'number'
-          ? dragged.data.episodeNo
-          : null
-      const episodeChanged = targetEpisode !== oldEpisode
-
-      const noSplice = plan.removes.length === 0 && plan.adds.length === 0
-      if (noSplice && !episodeChanged) return
+      if (!resolved) return
+      const { plan, targetEpisode, oldEpisode, episodeChanged } = resolved
 
       // 3) 单命令执行：边手术 + episodeNo 补丁，一步撤销整批回滚
       const stamp = Date.now().toString(36)

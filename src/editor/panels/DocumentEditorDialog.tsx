@@ -125,6 +125,25 @@ function TitleBodyFields({
   )
 }
 
+/** 对话框头部（DocumentEditorDialog 拆分，issue #99）：标题 + 落盘说明 + 关闭。 */
+function DocumentDialogHead({ onClose }: { readonly onClose: () => void }) {
+  return (
+    <div className="pw-dialog-head">
+      <b>📄 编辑设定文档</b>
+      <span className="pw-dialog-file">保存后随项目自动落盘</span>
+      <span className="pw-sp" />
+      <button
+        type="button"
+        className="pw-dialog-x"
+        onClick={onClose}
+        aria-label="关闭"
+      >
+        ✕
+      </button>
+    </div>
+  )
+}
+
 export default function DocumentEditorDialog({
   doc,
   settings,
@@ -169,19 +188,7 @@ export default function DocumentEditorDialog({
         aria-label="编辑设定文档"
         onPointerDown={(e) => e.stopPropagation()}
       >
-        <div className="pw-dialog-head">
-          <b>📄 编辑设定文档</b>
-          <span className="pw-dialog-file">保存后随项目自动落盘</span>
-          <span className="pw-sp" />
-          <button
-            type="button"
-            className="pw-dialog-x"
-            onClick={onClose}
-            aria-label="关闭"
-          >
-            ✕
-          </button>
-        </div>
+        <DocumentDialogHead onClose={onClose} />
         <div className="pw-doc-editor-body">
           <TitleBodyFields
             title={title}

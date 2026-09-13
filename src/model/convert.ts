@@ -265,58 +265,61 @@ function normalizeV0Options(
  * 嵌套形状先归一化再进迁移器（§11.1——损坏旧档按可修复数据对待），迁移
  * 链 ⑤ 把 v0 的 updated_at 瞬间带入 v1 信封（createdAt 缺省与之同刻，
  * 不用迁移时刻冒充），产物再以 v1 走完整归一化管线。 */
-function parseLegacyProject(
-  raw: Record<string, unknown>,
-  env: NormalizeEnv,
-): ParseResult {
-  const env0 = raw as Partial<ProjectDocument> & {
+/** v0 信封 → 迁移器入口内容（parseLegacyProject 拆分，issue #99）：
+ * 容器/成员修复只到「可遍历形态」（§11.1 损坏旧档按可修复数据对待），
+ * 节点形态预归一化；宽化只存在于迁移入站，产物以 v1 重走完整管线。 */
+function assembleLegacyContent(
+  env0: Partial<ProjectDocument> & {
     project?: Partial<ProjectDocument['project']>
     graph?: { nodes?: CanvasNode[]; edges?: Edge[]; viewport?: Viewport }
     settings?: unknown
     episodeTitles?: unknown
-  }
-  const v0Warnings: string[] = []
+  },
+  warnings: string[],
+): ProjectContent {
   const graphRaw = isPlainObject(env0.graph)
     ? (env0.graph as Record<string, unknown>)
     : {}
   if (!isPlainObject(env0.graph) && env0.graph !== undefined) {
-    v0Warnings.push('graph 容器异型，已重置为空画布')
+    warnings.push('graph 容器异型，已重置为空画布')
   }
-  const v0Array = (v: unknown, label: string): unknown[] => {
+  const asArray = (v: unknown, label: string): unknown[] => {
     if (Array.isArray(v)) return v
-    if (v !== undefined) v0Warnings.push(`${label} 非数组，已重置为空数组`)
+    if (v !== undefined) warnings.push(`${label} 非数组，已重置为空数组`)
     return []
   }
-  const v0Members = (
-    v: unknown[],
-    label: string,
-  ): Record<string, unknown>[] => {
+  const members = (v: unknown[], label: string): Record<string, unknown>[] => {
     const out: Record<string, unknown>[] = []
     v.forEach((item, i) => {
       if (isPlainObject(item)) out.push(item)
-      else v0Warnings.push(`${label} 的成员 #${i} 不是对象，已丢弃`)
+      else warnings.push(`${label} 的成员 #${i} 不是对象，已丢弃`)
     })
     return out
   }
-  const v0Nodes = normalizeV0NodeShapes(
-    v0Members(v0Array(graphRaw.nodes, 'graph.nodes'), 'graph.nodes'),
-    v0Warnings,
-  )
-  const legacy: ProjectContent = {
+  return {
     name: env0.project?.name ?? '',
     createdAt: env0.project?.createdAt || undefined,
-    // 边界（issue 16，v0 兼容入站）：旧档节点是未类型化的历史扁平 JSON，
-    // 预归一化只做容器/成员修复；迁移器按 node.type 分派消费，迁移产物
-    // 会以 v1 信封重走完整归一化管线后才进入会话——宽化只存在于迁移入站
-    nodes: v0Nodes as unknown as CanvasNode[],
-    edges: v0Members(
-      v0Array(graphRaw.edges, 'graph.edges'),
+    nodes: normalizeV0NodeShapes(
+      members(asArray(graphRaw.nodes, 'graph.nodes'), 'graph.nodes'),
+      warnings,
+    ) as unknown as CanvasNode[],
+    edges: members(
+      asArray(graphRaw.edges, 'graph.edges'),
       'graph.edges',
     ) as Edge[],
     settings: (env0.settings ?? {}) as ProjectContent['settings'],
-    episodeTitles: normalizeEpisodeTitles(env0.episodeTitles, v0Warnings),
+    episodeTitles: normalizeEpisodeTitles(env0.episodeTitles, warnings),
     viewport: graphRaw.viewport as Viewport | undefined,
   }
+}
+
+function parseLegacyProject(
+  raw: Record<string, unknown>,
+  env: NormalizeEnv,
+): ParseResult {
+  const env0 = raw as Parameters<typeof assembleLegacyContent>[0]
+  const v0Warnings: string[] = []
+  const legacy = assembleLegacyContent(env0, v0Warnings)
   const migrated = migrateProjectDocument(legacy, v0Warnings)
   const legacyAtMs = Date.parse(
     typeof env0.project?.updatedAt === 'string' ? env0.project.updatedAt : '',

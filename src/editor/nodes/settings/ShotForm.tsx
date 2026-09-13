@@ -96,6 +96,32 @@ function ShotRefRow({
 /** 分镜卡表单：镜号/景别/画面描述/镜头 Prompt/引用位（增删改）。
  * patch 回调在表单内收口 nodeType 判别字段；引用位行为见 ShotRefRow。
  * 自 NodeSettingsPanel.tsx 外置（issue #39，ImageNodeForm.tsx 先例）。 */
+
+/** 镜号输入（ShotForm 拆分，issue #99）：非法输入回退 1；§4.1 正安全整数
+ * 域——有限但越界值（如 1e20）同属非法。 */
+function ShotNoField({
+  value,
+  onPatch,
+}: {
+  readonly value: number
+  readonly onPatch: (n: number) => void
+}) {
+  return (
+    <Field label="镜号">
+      <input
+        className="pw-set-input"
+        type="number"
+        min={1}
+        value={value}
+        onChange={(e) => {
+          const n = Math.max(1, Math.floor(Number(e.target.value)))
+          onPatch(Number.isSafeInteger(n) ? n : 1)
+        }}
+      />
+    </Field>
+  )
+}
+
 export default function ShotForm({
   node,
 }: {
@@ -115,19 +141,7 @@ export default function ShotForm({
   return (
     <>
       <div className="pw-set-cols">
-        <Field label="镜号">
-          <input
-            className="pw-set-input"
-            type="number"
-            min={1}
-            value={d.shotNo}
-            onChange={(e) => {
-              // 非法输入回退 1；§4.1 正安全整数域：有限但越界（如 1e20）同属非法
-              const n = Math.max(1, Math.floor(Number(e.target.value)))
-              patch({ shotNo: Number.isSafeInteger(n) ? n : 1 })
-            }}
-          />
-        </Field>
+        <ShotNoField value={d.shotNo} onPatch={(n) => patch({ shotNo: n })} />
         <Field label="景别">
           <input className="pw-set-input" {...size} />
         </Field>

@@ -10,6 +10,49 @@ interface ExportDialogProps {
   readonly onClose: () => void
 }
 
+/** 导出对话框脚部（issue #99 拆分）：大纲开关（切换即清复制回执）、
+ * 内容提示与复制/下载操作；开关只切换同一生成结果的文本。 */
+function ExportDialogFoot({
+  showOutline,
+  onToggleOutline,
+  hint,
+  copied,
+  copyAll,
+  download,
+}: {
+  readonly showOutline: boolean
+  readonly onToggleOutline: (checked: boolean) => void
+  readonly hint: string
+  readonly copied: boolean
+  readonly copyAll: () => void
+  readonly download: () => void
+}) {
+  return (
+    <div className="pw-dialog-foot">
+      <label className="pw-export-toggle">
+        <input
+          type="checkbox"
+          checked={showOutline}
+          onChange={(e) => onToggleOutline(e.target.checked)}
+        />
+        <span>创作大纲（节奏与分支）</span>
+      </label>
+      <span className="pw-dialog-hint">{hint}</span>
+      <span className="pw-sp" />
+      <button type="button" className="pw-dialog-btn" onClick={copyAll}>
+        {copied ? '✓ 已复制' : '复制全文'}
+      </button>
+      <button
+        type="button"
+        className="pw-dialog-btn pw-dialog-btn-primary"
+        onClick={download}
+      >
+        下载 .md
+      </button>
+    </div>
+  )
+}
+
 /** 根据实际内容与开关态提示：仅有节拍/分支时引导开启大纲，无故事内容则说明空态。 */
 function bodyHint(
   showOutline: boolean,
@@ -78,37 +121,21 @@ export default function ExportDialog({
         <pre className="pw-export-pre">
           {showOutline ? model.outline : model.plain}
         </pre>
-        <div className="pw-dialog-foot">
-          <label className="pw-export-toggle">
-            <input
-              type="checkbox"
-              checked={showOutline}
-              onChange={(e) => {
-                setShowOutline(e.target.checked)
-                resetCopied()
-              }}
-            />
-            <span>创作大纲（节奏与分支）</span>
-          </label>
-          <span className="pw-dialog-hint">
-            {bodyHint(
-              showOutline,
-              model.hasNarrative,
-              model.summary.hasOutline,
-            )}
-          </span>
-          <span className="pw-sp" />
-          <button type="button" className="pw-dialog-btn" onClick={copyAll}>
-            {copied ? '✓ 已复制' : '复制全文'}
-          </button>
-          <button
-            type="button"
-            className="pw-dialog-btn pw-dialog-btn-primary"
-            onClick={download}
-          >
-            下载 .md
-          </button>
-        </div>
+        <ExportDialogFoot
+          showOutline={showOutline}
+          onToggleOutline={(checked) => {
+            setShowOutline(checked)
+            resetCopied()
+          }}
+          hint={bodyHint(
+            showOutline,
+            model.hasNarrative,
+            model.summary.hasOutline,
+          )}
+          copied={copied}
+          copyAll={copyAll}
+          download={download}
+        />
       </dialog>
     </div>
   )

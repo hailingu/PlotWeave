@@ -16,6 +16,41 @@ export { SCENE_SHOT_HANDLE }
  * 端口：左 = 剧情流入口，右 = 剧情流出口，底部 = 分镜卡下挂口（垂直派生）。
  * 名称双击内联改名；⚙️ 打开设置面板（§4.3，编辑即命令）。
  */
+
+/** 在场角色头像串；条目已删除回落 ✕ 占位（SceneNode 拆分，issue #99）。 */
+function CharacterAvatarStrip({
+  settings,
+  characterIds,
+}: {
+  readonly settings: Parameters<typeof resolveCharacterAvatar>[0]
+  readonly characterIds: readonly string[]
+}) {
+  return (
+    <div className="pw-avs">
+      {characterIds.map((cid) => {
+        const avatar = resolveCharacterAvatar(settings, cid)
+        return avatar ? (
+          <span
+            key={cid}
+            className="pw-av"
+            style={{ background: avatar.gradient }}
+          >
+            {avatar.label}
+          </span>
+        ) : (
+          <span
+            key={cid}
+            className="pw-av pw-av-invalid"
+            title="设定集条目已删除"
+          >
+            ✕
+          </span>
+        )
+      })}
+    </div>
+  )
+}
+
 export default function SceneNode({
   id,
   data,
@@ -70,28 +105,10 @@ export default function SceneNode({
         </div>
         <p className="pw-index-syn">{data.synopsis}</p>
         {data.characterIds.length > 0 && (
-          <div className="pw-avs">
-            {data.characterIds.map((cid) => {
-              const avatar = resolveCharacterAvatar(settings, cid)
-              return avatar ? (
-                <span
-                  key={cid}
-                  className="pw-av"
-                  style={{ background: avatar.gradient }}
-                >
-                  {avatar.label}
-                </span>
-              ) : (
-                <span
-                  key={cid}
-                  className="pw-av pw-av-invalid"
-                  title="设定集条目已删除"
-                >
-                  ✕
-                </span>
-              )
-            })}
-          </div>
+          <CharacterAvatarStrip
+            settings={settings}
+            characterIds={data.characterIds}
+          />
         )}
       </div>
       {settingsOpen && <NodeSettingsPanel node={{ id, type: 'scene', data }} />}

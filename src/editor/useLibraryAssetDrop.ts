@@ -14,13 +14,17 @@ import {
   type DragEvent as ReactDragEvent,
   type RefObject,
 } from 'react'
-import { hitDropNode, readLibraryAssetPayload } from './dragDrop'
+import {
+  hitDropNode,
+  readLibraryAssetPayload,
+  type LibraryAssetDragPayload,
+} from './dragDrop'
 import { bindAssetRefPatch, shotRefKindForAsset } from './assetDrop'
 import { projectAssets } from './projectAssets'
 import type { HistoryCommand } from './history'
 import type { AssetRef } from '../model/document'
 import type { NodeDataPatch } from './nodes/patch'
-import type { CanvasNode } from './nodes/types'
+import type { CanvasNode, ShotRef } from './nodes/types'
 
 /** useLibraryAssetDrop 的依赖注入：状态读写与命令栈全部来自 EditorView。 */
 export interface LibraryAssetDropDeps {
@@ -34,6 +38,79 @@ export interface LibraryAssetDropDeps {
   pushHistory: (cmd: HistoryCommand) => void
   /** 用户可见的拖放失败诊断（类型不支持 / 在途冲突 / MIME 不符 / 落盘失败）。 */
   onError: (message: string) => void
+}
+
+/** 库资产导入分镜引用位的异步体（useLibraryAssetDrop 拆分，issue #99）：
+ * 导入 → 权威 MIME 复核 → 当前状态重查 → 绑定 patch + 历史命令
+ * （undo 回滚绑定、redoGuard 复验文件、redo 重放）。 */
+type ImportDeps = Pick<
+  LibraryAssetDropDeps,
+  | 'projectId'
+  | 'nodesRef'
+  | 'applyDataPatch'
+  | 'addAsset'
+  | 'removeAsset'
+  | 'pushHistory'
+  | 'onError'
+>
+
+async function importAssetToShotRef(
+  deps: ImportDeps,
+  inFlight: Set<string>,
+  nodeId: string,
+  payload: LibraryAssetDragPayload,
+  kind: Exclude<ShotRef['kind'], 'free'>,
+): Promise<void> {
+  const {
+    projectId,
+    nodesRef,
+    applyDataPatch,
+    addAsset,
+    removeAsset,
+    pushHistory,
+    onError,
+  } = deps
+  try {
+    const asset = await projectAssets.importFromLibrary(projectId, payload.id)
+    // 载荷可能过期/伪造：以导入返回的权威 MIME 复核引用位 kind
+    if (
+      shotRefKindForAsset({ kind: payload.kind, mime: asset.mime }) !== kind
+    ) {
+      onError(
+        `资产「${payload.name}」实际类型（${asset.mime}）与拖拽载荷不符，未绑定`,
+      )
+      return
+    }
+    // 导入在途期间节点可能被删除/改型：以当前状态为准重查
+    const cur = nodesRef.current?.find((n) => n.id === nodeId)
+    if (cur?.type !== 'shot') return
+    const before = cur.data.refs
+    const patch = bindAssetRefPatch(before, kind, asset.id)
+    if (!patch) return
+    const next = patch.refs
+    const bindPatch: NodeDataPatch = { nodeType: 'shot', patch: { refs: next } }
+    addAsset(asset)
+    applyDataPatch(nodeId, bindPatch)
+    pushHistory({
+      undo: () => {
+        removeAsset(asset.id)
+        applyDataPatch(nodeId, { nodeType: 'shot', patch: { refs: before } })
+      },
+      // 重做防线（issue #10）：撤销窗口内文件可能被外部删改，
+      // redoGuard 复验通过才应用；拒绝则本次重做放弃（文件恢复后可重试）
+      redoGuard: () => projectAssets.revalidate(projectId, asset),
+      redo: () => {
+        addAsset(asset)
+        applyDataPatch(nodeId, bindPatch)
+      },
+    })
+  } catch (err) {
+    onError(
+      `资产「${payload.name}」导入失败：${err instanceof Error ? err.message : String(err)}`,
+    )
+  } finally {
+    inFlight.delete(nodeId)
+  }
 }
 
 /** 返回库资产 drop 处理器；由 useCanvasDrop 在实体载荷不命中时委托调用。 */
@@ -68,59 +145,21 @@ export function useLibraryAssetDrop(deps: LibraryAssetDropDeps) {
         return
       }
       inFlightRef.current.add(nodeId)
-      void (async () => {
-        try {
-          const asset = await projectAssets.importFromLibrary(
-            projectId,
-            payload.id,
-          )
-          // 载荷可能过期/伪造：以导入返回的权威 MIME 复核引用位 kind
-          if (
-            shotRefKindForAsset({ kind: payload.kind, mime: asset.mime }) !==
-            kind
-          ) {
-            onError(
-              `资产「${payload.name}」实际类型（${asset.mime}）与拖拽载荷不符，未绑定`,
-            )
-            return
-          }
-          // 导入在途期间节点可能被删除/改型：以当前状态为准重查
-          const cur = nodesRef.current?.find((n) => n.id === nodeId)
-          if (cur?.type !== 'shot') return
-          const before = cur.data.refs
-          const patch = bindAssetRefPatch(before, kind, asset.id)
-          if (!patch) return
-          const next = patch.refs
-          const bindPatch: NodeDataPatch = {
-            nodeType: 'shot',
-            patch: { refs: next },
-          }
-          addAsset(asset)
-          applyDataPatch(nodeId, bindPatch)
-          pushHistory({
-            undo: () => {
-              removeAsset(asset.id)
-              applyDataPatch(nodeId, {
-                nodeType: 'shot',
-                patch: { refs: before },
-              })
-            },
-            // 重做防线（issue #10）：撤销窗口内文件可能被外部删改，
-            // redoGuard 复验通过才应用；拒绝则本次重做放弃（文件恢复后可重试）
-            redoGuard: () => projectAssets.revalidate(projectId, asset),
-            redo: () => {
-              addAsset(asset)
-              applyDataPatch(nodeId, bindPatch)
-            },
-          })
-        } catch (err) {
-          onError(
-            `资产「${payload.name}」导入失败：${err instanceof Error ? err.message : String(err)}`,
-          )
-        } finally {
-          inFlightRef.current.delete(nodeId)
-        }
-      })()
+      void importAssetToShotRef(
+        {
+          projectId,
+          nodesRef,
+          applyDataPatch,
+          addAsset,
+          removeAsset,
+          pushHistory,
+          onError,
+        },
+        inFlightRef.current,
+        nodeId,
+        payload,
+        kind,
+      )
     },
     [
       projectId,

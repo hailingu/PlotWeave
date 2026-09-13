@@ -71,6 +71,31 @@ function flowMetaOf(m: NodeMetaPassthrough['meta']): NodeMetaPassthrough {
     : {}
 }
 
+type NamedFlowNode = Extract<
+  CanvasNode,
+  { type: 'scene' | 'beat' | 'dialogue' }
+>
+
+/** 名称型节点（scene/beat/dialogue）落盘形态（toStoryNode 拆分，
+ * issue #99）：name/episodeNo 上移 meta.label/episodeNo，其余字段进 spec。 */
+function namedStoryNode(n: NamedFlowNode): StoryNode {
+  const { name, episodeNo, ...spec } = n.data
+  return {
+    id: n.id,
+    layout: layoutOf(n),
+    ui: { selected: false, expanded: true },
+    type: n.type,
+    data: {
+      spec,
+      meta: {
+        label: name ?? '',
+        ...episodeNoOf(episodeNo),
+        ...metaTsOf(n.meta),
+      },
+    },
+  } as StoryNode
+}
+
 /** 节点 → 落盘形态：按 n.type switch 逐分支构造精确的 StoryNode 联合成员
  * （issue 16，穷尽 switch 由返回类型背书）。四分区拆分：名称型节点
  * （scene/beat/dialogue）name/episodeNo 上移 meta.label/episodeNo，其余字段
@@ -83,51 +108,10 @@ export function toStoryNode(n: CanvasNode): StoryNode {
     ui: { selected: false, expanded: true },
   }
   switch (n.type) {
-    case 'scene': {
-      const { name, episodeNo, ...spec } = n.data
-      return {
-        ...base,
-        type: 'scene',
-        data: {
-          spec,
-          meta: {
-            label: name ?? '',
-            ...episodeNoOf(episodeNo),
-            ...metaTsOf(n.meta),
-          },
-        },
-      }
-    }
-    case 'beat': {
-      const { name, episodeNo, ...spec } = n.data
-      return {
-        ...base,
-        type: 'beat',
-        data: {
-          spec,
-          meta: {
-            label: name ?? '',
-            ...episodeNoOf(episodeNo),
-            ...metaTsOf(n.meta),
-          },
-        },
-      }
-    }
-    case 'dialogue': {
-      const { name, episodeNo, ...spec } = n.data
-      return {
-        ...base,
-        type: 'dialogue',
-        data: {
-          spec,
-          meta: {
-            label: name ?? '',
-            ...episodeNoOf(episodeNo),
-            ...metaTsOf(n.meta),
-          },
-        },
-      }
-    }
+    case 'scene':
+    case 'beat':
+    case 'dialogue':
+      return namedStoryNode(n)
     case 'branch': {
       // 剥离 name：v1 残留的 spec.name 经归一化透传、fromStoryNode 拍平后可
       // 混入运行态 data（Record 索引签名）；BranchSpec 无 name（派生标题不落

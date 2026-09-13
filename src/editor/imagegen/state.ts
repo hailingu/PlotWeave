@@ -369,6 +369,51 @@ function useJobTable(): {
   return { jobs, setJobs, jobsRef, notice, setJobError, clearJob, dropResult }
 }
 
+/** 发起生成（useImageJobsState 拆分，issue #99）：同步验型 + running 守卫
+ * 并**同步占位**（直接写 jobsRef，绕过 React 批处理窗口）——设置加载（桌
+ * 面端异步 IPC）返回前，双击的第二次调用看到 running 即返回，不重复发起
+ * 计费请求。 */
+function useImageStart(
+  projectId: string,
+  nodesRef: ImageJobsDeps['nodesRef'],
+  table: Pick<
+    ReturnType<typeof useJobTable>,
+    'jobsRef' | 'setJobs' | 'setJobError' | 'clearJob'
+  >,
+  jobAlive: ReturnType<typeof useJobWriteGuard>,
+  applyResult: (nodeId: string, input: ImageGenInput, asset: AssetRef) => void,
+) {
+  const { jobsRef, setJobs, setJobError, clearJob } = table
+  return useCallback(
+    (nodeId: string) => {
+      const node = nodesRef.current.find((n) => n.id === nodeId)
+      if (node?.type !== 'image') return
+      if (jobsRef.current[nodeId]?.status === 'running') return
+      const jobId = uid('imgjob')
+      jobsRef.current = {
+        ...jobsRef.current,
+        [nodeId]: { status: 'running', jobId },
+      }
+      setJobs(jobsRef.current)
+      void runStart(
+        { projectId, nodesRef, jobAlive, setJobError, clearJob, applyResult },
+        nodeId,
+        jobId,
+      )
+    },
+    [
+      applyResult,
+      clearJob,
+      jobAlive,
+      jobsRef,
+      nodesRef,
+      projectId,
+      setJobError,
+      setJobs,
+    ],
+  )
+}
+
 /** 生成作业的状态机与调度回调（ImageGenProvider 挂载一次）。 */
 export function useImageJobsState(deps: ImageJobsDeps): {
   api: ImageGenApi
@@ -425,36 +470,12 @@ export function useImageJobsState(deps: ImageJobsDeps): {
     ],
   )
 
-  /** 发起：同步验型 + running 守卫并**同步占位**（直接写 jobsRef，绕过
-   * React 批处理窗口）——设置加载（桌面端异步 IPC）返回前，双击的第二次
-   * 调用看到 running 即返回，不重复发起计费请求。 */
-  const start = useCallback(
-    (nodeId: string) => {
-      const node = nodesRef.current.find((n) => n.id === nodeId)
-      if (node?.type !== 'image') return
-      if (jobsRef.current[nodeId]?.status === 'running') return
-      const jobId = uid('imgjob')
-      jobsRef.current = {
-        ...jobsRef.current,
-        [nodeId]: { status: 'running', jobId },
-      }
-      setJobs(jobsRef.current)
-      void runStart(
-        { projectId, nodesRef, jobAlive, setJobError, clearJob, applyResult },
-        nodeId,
-        jobId,
-      )
-    },
-    [
-      applyResult,
-      clearJob,
-      jobAlive,
-      jobsRef,
-      nodesRef,
-      projectId,
-      setJobError,
-      setJobs,
-    ],
+  const start = useImageStart(
+    projectId,
+    nodesRef,
+    { jobsRef, setJobs, setJobError, clearJob },
+    jobAlive,
+    applyResult,
   )
 
   const cancel = useCallback(

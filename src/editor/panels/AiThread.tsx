@@ -194,6 +194,46 @@ function cardAfterExecution(
   }
 }
 
+/** 执行预览卡的线程变换（useAiThreadMessages 拆分，issue #99）：成功 →
+ * 置状态并追加回执；失败 → 错误回执（批次未动）；成功但画布尚未确认落盘
+ * 时标注 uncommitted 并记录执行后批次计数——持久化层据此降级为 pending，
+ * 画布落盘确认后再写 executed。回执关联卡片 id（可能追加在会话尾部）：
+ * 未确认落盘的执行按关联剔除回执。 */
+function applyCardExecution(args: {
+  readonly thread: ThreadEntry[]
+  readonly setThread: Dispatch<SetStateAction<ThreadEntry[]>>
+  readonly setArmedIdx: Dispatch<SetStateAction<number | null>>
+  readonly entry: ThreadEntry
+  readonly idx: number
+  readonly nextId: () => number
+  readonly onApplyAiBatch?: (commands: ValidatedCommand[]) => string | null
+  readonly whenCanvasCommitted?: () => Promise<void>
+  readonly aiRevision?: number
+}): void {
+  const { setThread, setArmedIdx, entry, idx, nextId } = args
+  if (entry.card?.status !== 'pending' || !args.onApplyAiBatch) return
+  const aiRevisionAfter =
+    args.aiRevision === undefined ? undefined : args.aiRevision + 1
+  const err = args.onApplyAiBatch(entry.card.v.commands)
+  const receipt = {
+    ...cardResultEntry(err, entry.card.v.commands.length, nextId),
+    cardReceiptFor: entry.id,
+  }
+  const awaiting = !err && args.whenCanvasCommitted !== undefined
+  setThread((t) => [
+    ...t.map((e, i) =>
+      i === idx && e.card
+        ? {
+            ...e,
+            card: cardAfterExecution(e.card, err, awaiting, aiRevisionAfter),
+          }
+        : e,
+    ),
+    receipt,
+  ])
+  setArmedIdx(null)
+}
+
 /** 会话线程域（逻辑 hook，issue #39 拆分）：条目追加、预览卡执行/忽略
  * 与危险批次的两步确认武装态；threadRef 供容器做滚动跟随。 */
 function useAiThreadMessages(opts: {
@@ -228,31 +268,18 @@ function useAiThreadMessages(opts: {
   /** 执行预览卡：成功 → 置状态并追加回执；失败 → 错误回执（批次未动）。
    * 成功但画布尚未确认落盘时标注 uncommitted 并记录执行后批次计数——
    * 持久化层据此降级为 pending，画布落盘确认后再写 executed。 */
-  const executeCard = (idx: number) => {
-    const entry = thread[idx]
-    if (entry.card?.status !== 'pending' || !opts.onApplyAiBatch) return
-    const aiRevisionAfter =
-      opts.aiRevision === undefined ? undefined : opts.aiRevision + 1
-    const err = opts.onApplyAiBatch(entry.card.v.commands)
-    // 回执关联卡片 id（可能追加在会话尾部）：未确认落盘的执行按关联剔除回执
-    const receipt = {
-      ...cardResultEntry(err, entry.card.v.commands.length, nextId),
-      cardReceiptFor: entry.id,
-    }
-    const awaiting = !err && opts.whenCanvasCommitted !== undefined
-    setThread((t) => [
-      ...t.map((e, i) =>
-        i === idx && e.card
-          ? {
-              ...e,
-              card: cardAfterExecution(e.card, err, awaiting, aiRevisionAfter),
-            }
-          : e,
-      ),
-      receipt,
-    ])
-    setArmedIdx(null)
-  }
+  const executeCard = (idx: number) =>
+    applyCardExecution({
+      thread,
+      setThread,
+      setArmedIdx,
+      entry: thread[idx]!,
+      idx,
+      nextId,
+      onApplyAiBatch: opts.onApplyAiBatch,
+      whenCanvasCommitted: opts.whenCanvasCommitted,
+      aiRevision: opts.aiRevision,
+    })
 
   const markDismissed = (idx: number) => {
     setThread((t) =>
@@ -682,52 +709,44 @@ interface AiThreadProps {
   readonly onSaveSession?: (session: AiSession) => Promise<void>
 }
 
-export default function AiThread({
-  projectId,
-  onOpenSettings,
-  canvasDigest,
-  onValidateAi,
-  onValidateCommands,
-  onReadNode,
-  onReadSettings,
-  onReadDocument,
-  onApplyAiBatch,
-  whenCanvasCommitted,
-  aiRevision,
-  initialSession,
-  initialSessionError,
-  initialSessionRetryable,
-  onSaveSession,
-}: AiThreadProps) {
+/** 装配会话三域（AiThread 拆分，issue #99）：模型选择、线程消息与回合
+ * 驱动；持久化通道挂线程。 */
+function useAiThreadAssembly(props: AiThreadProps) {
   const m = useAiModels()
   const msg = useAiThreadMessages({
-    onApplyAiBatch,
-    initialSession,
-    onValidateCommands,
-    whenCanvasCommitted,
-    aiRevision,
+    onApplyAiBatch: props.onApplyAiBatch,
+    initialSession: props.initialSession,
+    onValidateCommands: props.onValidateCommands,
+    whenCanvasCommitted: props.whenCanvasCommitted,
+    aiRevision: props.aiRevision,
   })
   const saveError = useAiSessionPersistence(
     msg.thread,
-    initialSessionError,
-    onSaveSession,
-    initialSessionRetryable,
+    props.initialSessionError,
+    props.onSaveSession,
+    props.initialSessionRetryable,
   )
   const turn = useAiTurn({
-    projectId,
+    projectId: props.projectId,
     activeOption: m.activeOption,
     activeProvider: m.activeProvider,
     thread: msg.thread,
     append: msg.append,
     nextId: msg.nextId,
     setArmedIdx: msg.setArmedIdx,
-    canvasDigest,
-    onValidateAi,
-    onValidateCommands,
-    onReadNode,
-    onReadSettings,
-    onReadDocument,
+    canvasDigest: props.canvasDigest,
+    onValidateAi: props.onValidateAi,
+    onValidateCommands: props.onValidateCommands,
+    onReadNode: props.onReadNode,
+    onReadSettings: props.onReadSettings,
+    onReadDocument: props.onReadDocument,
   })
+  return { m, msg, saveError, turn }
+}
+
+export default function AiThread(props: AiThreadProps) {
+  const { m, msg, saveError, turn } = useAiThreadAssembly(props)
+  const onOpenSettings = props.onOpenSettings
   return (
     <div className="pw-ai">
       <AiTopbar

@@ -63,6 +63,28 @@ export interface EditorGraphActions {
   drop: ReturnType<typeof useCanvasDrop>
 }
 
+/** 删除动作对（useEditorGraphActions 拆分，issue #99）：节点级联删除
+ * （设定集引用/资产回收随宿主）+ 边删除。 */
+function useGraphDeletion(
+  deps: EditorGraphActionsDeps,
+  assets: ReturnType<typeof useAssetIndex>,
+) {
+  const deleteNodesByIds = useNodeDeletion({
+    nodesRef: deps.doc.nodesRef,
+    edgesRef: deps.doc.edgesRef,
+    settings: deps.doc.settings,
+    assetsRef: deps.doc.assetsRef,
+    addAsset: assets.addAsset,
+    removeAsset: assets.removeAsset,
+    setNodes: deps.doc.setNodes,
+    setEdges: deps.doc.setEdges,
+    pushHistory: deps.pushHistory,
+    closeSettings: deps.panels.closeSettings,
+  })
+  const deleteEdgesByIds = useEdgeDeletion(deps.doc, deps.pushHistory)
+  return { deleteNodesByIds, deleteEdgesByIds }
+}
+
 /** 组装画布写动作族（不含持久化、AI 桥与快捷键）。 */
 export function useEditorGraphActions(
   deps: EditorGraphActionsDeps,
@@ -87,19 +109,7 @@ export function useEditorGraphActions(
     canvasRef,
     pushHistory,
   })
-  const deleteNodesByIds = useNodeDeletion({
-    nodesRef: doc.nodesRef,
-    edgesRef: doc.edgesRef,
-    settings: doc.settings,
-    assetsRef: doc.assetsRef,
-    addAsset: assets.addAsset,
-    removeAsset: assets.removeAsset,
-    setNodes: doc.setNodes,
-    setEdges: doc.setEdges,
-    pushHistory,
-    closeSettings: panels.closeSettings,
-  })
-  const deleteEdgesByIds = useEdgeDeletion(doc, pushHistory)
+  const { deleteNodesByIds, deleteEdgesByIds } = useGraphDeletion(deps, assets)
   const connection = useConnectionRules(doc, pushHistory)
   const menu = useEditorContextMenu(doc, panels.setCtxMenu)
   const episodes = useEpisodeEditing(doc, pushHistory)
