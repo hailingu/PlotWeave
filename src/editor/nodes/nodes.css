@@ -548,7 +548,7 @@
 .pw-edge-label {
   position: absolute;
   background: var(--brand-gradient);
-  color: var(--on-saturated);
+  color: var(--on-brand);
   font-size: 10px;
   font-weight: 600;
   padding: 2px 8px;
@@ -657,7 +657,7 @@
 }
 
 .pw-beat-state.ok {
-  color: var(--on-saturated);
+  color: var(--on-brand);
   background: var(--accent-alt);
 }
 

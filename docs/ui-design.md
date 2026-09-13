@@ -63,7 +63,8 @@ gray-900 #131316  →  surface.canvas        →  canvas.background
 | `branch.*`（`bg`/`text`/`frame`/`opt-*`/`addopt-border`/`dim`） | 分支节点「未定」虚线框家族，唯一跟随画布外观的节点 | 浅色 = 纸面白系，深色 = 画布暗系 |
 | `port.body` / `port.ring` / `connection.valid.glow` | 端口圆点主体/描边/可连发光 | `#3A3A3E` / `#55555A` / `rgba(52,199,89,.8)`，恒定 |
 | `shadow.node.paper/note/beat/slate`、`shadow.edge-label`、`shadow.controls` | 节点家族与连线胶囊投影（家族恒定故投影恒定） | 见 tokens.css |
-| `on.saturated` | 饱和色底上的前景：品牌渐变胶囊、✓ 徽标、角色头像字 | `#FFFFFF`，恒定 |
+| `on.saturated` | 用户内容色底上的前景（角色头像字；配色为应用指派的用户内容，无确定性承载面） | `#FFFFFF`，恒定，不在对比度契约内 |
+| `on.brand` | 品牌渐变连线胶囊、✓ 徽标的前景（确定性品牌底） | `#FFFFFF`；`prefers-contrast: more` 翻黑（渐变两端与徽标色上均 ≥ 4.5:1） |
 | `invalid.stripe` | 失效引用角标的灰斜纹 | `rgba(142,142,147,.35)`，恒定 |
 
 家族材质令牌只在 `:root` 定义一次、不在深色块重声明——纸面与石板是「形态即语义」的家族标识，不随系统外观切换（§4.1）；唯一例外是分支家族按外观切换。令牌表点号记法对应 CSS 的 kebab-case（`surface.slate` → `--surface-slate`）。

@@ -16,7 +16,9 @@
  * | 令牌接线 | 渲染任意节点 | nodes.css 的 var(--x) 全部可解析 | 无失效 var（静默回落初始值） | 接线测试 |
  * | 结构回归 | 新增节点样式 | nodes.css 颜色类声明零硬编码色值 | 新颜色必须经 tokens.css 进入 | 结构测试 |
  * 未覆盖维度：并发/时序不适用（静态样式表）；端口常态色对比度维持基线
- * 值不变（记录在案边界，P3，非文本内容）。
+ * 值不变（记录在案边界，P3，非文本内容）；角色头像字（--on-saturated）的
+ * 承载面是应用指派的渐变用户内容色，无确定性对比面，不在契约内（P3，
+ * PR #114 评审 4000077439 后徽标/胶囊改走确定性契约的 --on-brand）。
  */
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -191,6 +193,7 @@ const CONSTANT_TOKENS: Readonly<Record<string, string>> = {
   '--connection-valid': '#34c759',
   '--connection-valid-glow': 'rgba(52, 199, 89, 0.8)',
   '--on-saturated': '#ffffff',
+  '--on-brand': '#ffffff',
   '--invalid-stripe': 'rgba(142, 142, 147, 0.35)',
   '--shadow-node-paper': '0 12px 32px rgba(0, 0, 0, 0.35)',
   '--shadow-node-note': '0 12px 32px rgba(0, 0, 0, 0.4)',
@@ -435,6 +438,16 @@ describe('增强对比度：家族文本 ≥ 4.5:1（§2 原则 2）', () => {
       for (const token of SLATE_TEXT_TARGETS) {
         expectContrast(token, '--surface-slate', '--surface-slate', tokens, 4.5)
       }
+    }
+  })
+
+  it('品牌底文本（连线胶囊/✓ 徽标）在 more 对比度下达标（浅/深外观）', () => {
+    // 胶囊底 = 品牌渐变 var(--accent-alt) → var(--accent)：sRGB 线性插值的
+    // 各通道介于两端之间、亮度随通道单调，验两端即覆盖全渐变（PR #114
+    // 评审 4000077439）；徽标底 = 纯色 accent-alt。
+    for (const tokens of [lightMore, darkMore]) {
+      expectContrast('--on-brand', '--accent-alt', '--accent-alt', tokens, 4.5)
+      expectContrast('--on-brand', '--accent', '--accent', tokens, 4.5)
     }
   })
 })

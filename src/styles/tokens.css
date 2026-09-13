@@ -78,8 +78,11 @@
   --connection-valid: #34c759;
   --connection-valid-glow: rgba(52, 199, 89, 0.8);
 
-  /* 饱和色底上的前景（品牌渐变胶囊/状态徽标/角色头像字） */
+  /* 饱和色底上的前景。on-saturated = 用户内容色底（角色头像字，配色为应用
+   * 指派的用户内容，无确定性承载面，不在对比度契约内）；on-brand = 品牌渐变
+   * 胶囊/✓ 徽标的确定性品牌底前景，more 对比度下翻黑（各端点 ≥ 4.5:1）。 */
   --on-saturated: #ffffff;
+  --on-brand: #ffffff;
 
   /* 失效引用角标斜纹（§4.3） */
   --invalid-stripe: rgba(142, 142, 147, 0.35);
@@ -167,6 +170,7 @@
     --node-paper-voiceover: #9f25d4;
     --node-paper-voiceover-border: #9f25d4;
     --node-slate-text-caption: rgba(235, 235, 245, 0.7);
+    --on-brand: #000000; /* 黑在渐变两端与徽标色上均 ≥ 4.5:1（最紧 4.52:1） */
     --branch-frame: rgba(0, 0, 0, 0.6);
     --branch-addopt-border: rgba(0, 0, 0, 0.55);
   }
