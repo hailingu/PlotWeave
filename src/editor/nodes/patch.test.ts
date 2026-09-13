@@ -8,11 +8,7 @@ import {
   type NodeDataPatch,
   type PatchShape,
 } from './patch'
-import type {
-  SceneFlowNode,
-  SceneNodeData,
-  ShotFlowNode,
-} from './types'
+import type { SceneFlowNode, SceneNodeData, ShotFlowNode } from './types'
 
 /** 分镜卡测试节点（mergeNodeData 的宿主形态）。 */
 function shotNode(): ShotFlowNode {
@@ -43,11 +39,14 @@ function sceneNode(): SceneFlowNode {
 
 describe('NodeDataPatch（issue 16：补丁命令按节点类型判别绑定）', () => {
   it('同类型字段补丁合法，patch 与该类型 data 形状绑定', () => {
-    const cmd: NodeDataPatch = { nodeType: 'scene', patch: { synopsis: '雨夜', sceneNo: 4 } }
+    const cmd: NodeDataPatch = {
+      nodeType: 'scene',
+      patch: { synopsis: '雨夜', sceneNo: 4 },
+    }
     expect(cmd.nodeType).toBe('scene')
-    expectTypeOf<Extract<NodeDataPatch, { nodeType: 'scene' }>['patch']>().toEqualTypeOf<
-      PatchShape<SceneNodeData>
-    >()
+    expectTypeOf<
+      Extract<NodeDataPatch, { nodeType: 'scene' }>['patch']
+    >().toEqualTypeOf<PatchShape<SceneNodeData>>()
   })
 
   it('跨类型字段（scene 补丁携带对白的 lines）无法编译', () => {
@@ -78,12 +77,19 @@ describe('NodeDataPatch（issue 16：补丁命令按节点类型判别绑定）'
   it('AI 执行通道（ValidatedCommand）的 update_node 补丁为判别化形态', () => {
     type ValidatedUpdate = Extract<ValidatedCommand, { op: 'update_node' }>
     expectTypeOf<ValidatedUpdate['patch']>().toEqualTypeOf<NodeDataPatch>()
-    expectTypeOf<BatchValidation['commands'][number]>().toEqualTypeOf<ValidatedCommand>()
+    expectTypeOf<
+      BatchValidation['commands'][number]
+    >().toEqualTypeOf<ValidatedCommand>()
   })
 
   it('执行通道不接受宽 Record 补丁', () => {
     // @ts-expect-error —— 缺 nodeType 判别字段的宽补丁不得进入执行/撤销路径
-    const wide: ValidatedCommand = { op: 'update_node', nodeId: 'n1', patch: { synopsis: 'x' } }
+    const widePatch: NodeDataPatch = { synopsis: 'x' }
+    const wide: ValidatedCommand = {
+      op: 'update_node',
+      nodeId: 'n1',
+      patch: widePatch,
+    }
     expect(wide).toBeDefined()
   })
 })
@@ -99,8 +105,14 @@ describe('dataPatchOf（受控构造出口：运行态类型字串 → 判别命
 
 describe('episodeNoPatch（§3.5 分集补丁：可分集的编剧侧四类构造）', () => {
   it('按节点类型分派 episodeNo 补丁', () => {
-    expect(episodeNoPatch('scene', 2)).toEqual({ nodeType: 'scene', patch: { episodeNo: 2 } })
-    expect(episodeNoPatch('dialogue', 1)).toEqual({ nodeType: 'dialogue', patch: { episodeNo: 1 } })
+    expect(episodeNoPatch('scene', 2)).toEqual({
+      nodeType: 'scene',
+      patch: { episodeNo: 2 },
+    })
+    expect(episodeNoPatch('dialogue', 1)).toEqual({
+      nodeType: 'dialogue',
+      patch: { episodeNo: 1 },
+    })
   })
 
   it('清空分集 = episodeNo undefined（回退未分集）', () => {

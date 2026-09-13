@@ -38,11 +38,17 @@ import { describe, expect, it } from 'vitest'
 
 // happy-dom 环境会用其 URL 实现替换全局 URL，路径一律走 node:path 确定性拼接。
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../../..')
-const read = (path: string): string => readFileSync(join(repoRoot, path), 'utf8')
+const read = (path: string): string =>
+  readFileSync(join(repoRoot, path), 'utf8')
 
 /** 模拟用户偏好环境（不启用增强对比 / 降透明 / 减动态）。 */
 function userEnv(scheme: 'light' | 'dark') {
-  return { scheme, contrast: 'no-preference', transparency: 'no-preference', motion: 'no-reduce' } as const
+  return {
+    scheme,
+    contrast: 'no-preference',
+    transparency: 'no-preference',
+    motion: 'no-reduce',
+  } as const
 }
 
 type Env = ReturnType<typeof userEnv>
@@ -86,7 +92,12 @@ function flattenRules(layers: postcss.Root[], env: Env): Ruled[] {
   const walk = (container: postcss.Root | postcss.AtRule): void => {
     for (const node of container.nodes ?? []) {
       if (node.type === 'rule') out.push({ rule: node, order: out.length })
-      else if (node.type === 'atrule' && node.name === 'media' && mediaMatches(node.params, env)) walk(node)
+      else if (
+        node.type === 'atrule' &&
+        node.name === 'media' &&
+        mediaMatches(node.params, env)
+      )
+        walk(node)
     }
   }
   for (const layer of layers) walk(layer)
@@ -112,7 +123,8 @@ function appLayers(): postcss.Root[] {
   return [...imports.map((file) => postcss.parse(read(`src/${file}`))), index]
 }
 
-const rfLayer = (): postcss.Root => postcss.parse(read('node_modules/@xyflow/react/dist/style.css'))
+const rfLayer = (): postcss.Root =>
+  postcss.parse(read('node_modules/@xyflow/react/dist/style.css'))
 
 /** 与运行态一致的控件结构：html(:root) → body → .canvas-root → .react-flow → 控件面板 → 按钮。 */
 function fixture(): { chain: HappyDOMElement[] } {
@@ -183,7 +195,9 @@ function beats(candidate: Candidate, best: Candidate): boolean {
   if (candidate.important !== best.important) return candidate.important
   if (higherSpec(candidate.spec, best.spec)) return true
   if (!sameSpec(candidate.spec, best.spec)) return false
-  return candidate.order !== best.order ? candidate.order > best.order : candidate.decl > best.decl
+  return candidate.order !== best.order
+    ? candidate.order > best.order
+    : candidate.decl > best.decl
 }
 
 type Scopes = Map<HappyDOMElement, Map<string, string>>
@@ -194,7 +208,11 @@ type Scopes = Map<HappyDOMElement, Map<string, string>>
  * 会让更早的更高特异性声明在模型中被顶掉；次轮评审 5187126810 指出自定义
  * 属性收集同样必须走级联；三轮评审 5187174354 补齐 !important 维度。
  */
-function collectScopes(chain: HappyDOMElement[], ruled: Ruled[], state: State = 'rest'): Scopes {
+function collectScopes(
+  chain: HappyDOMElement[],
+  ruled: Ruled[],
+  state: State = 'rest',
+): Scopes {
   const winners = new Map<HappyDOMElement, Map<string, Candidate>>()
   for (const { rule, order } of ruled) {
     for (const [decl, node] of rule.nodes.entries()) {
@@ -204,7 +222,13 @@ function collectScopes(chain: HappyDOMElement[], ruled: Ruled[], state: State = 
         if (!spec) continue
         let scope = winners.get(element)
         if (!scope) winners.set(element, (scope = new Map()))
-        const candidate: Candidate = { value: node.value, spec, order, decl, important: node.important }
+        const candidate: Candidate = {
+          value: node.value,
+          spec,
+          order,
+          decl,
+          important: node.important,
+        }
         const best = scope.get(node.prop)
         if (!best || beats(candidate, best)) scope.set(node.prop, candidate)
       }
@@ -212,14 +236,25 @@ function collectScopes(chain: HappyDOMElement[], ruled: Ruled[], state: State = 
   }
   const scopes: Scopes = new Map()
   for (const [element, props] of winners) {
-    scopes.set(element, new Map([...props].map(([name, winner]) => [name, winner.value])))
+    scopes.set(
+      element,
+      new Map([...props].map(([name, winner]) => [name, winner.value])),
+    )
   }
   return scopes
 }
 
 /** 自定义属性取值：沿祖先链继承查找。 */
-function lookupVar(scopes: Scopes, element: HappyDOMElement, name: string): string | undefined {
-  for (let node: HappyDOMElement | null = element; node; node = node.parentElement) {
+function lookupVar(
+  scopes: Scopes,
+  element: HappyDOMElement,
+  name: string,
+): string | undefined {
+  for (
+    let node: HappyDOMElement | null = element;
+    node;
+    node = node.parentElement
+  ) {
     const value = scopes.get(node)?.get(name)
     if (value !== undefined) return value
   }
@@ -239,8 +274,14 @@ function topLevelComma(text: string): number {
 }
 
 /** 解析值中全部 var() 引用（含嵌套回退链）；未定义且无回退返回 null（计算值失效）。 */
-function resolveValue(value: string, scopes: Scopes, element: HappyDOMElement, depth = 0): string | null {
-  const normalize = (resolved: string): string => resolved.replace(/\s+/g, ' ').trim()
+function resolveValue(
+  value: string,
+  scopes: Scopes,
+  element: HappyDOMElement,
+  depth = 0,
+): string | null {
+  const normalize = (resolved: string): string =>
+    resolved.replace(/\s+/g, ' ').trim()
   if (depth > 12) throw new Error('var() 解析深度超限（疑似循环引用）')
   const start = value.indexOf('var(')
   if (start === -1) return normalize(value)
@@ -269,12 +310,21 @@ function resolveValue(value: string, scopes: Scopes, element: HappyDOMElement, d
         ? resolveValue(fallback, scopes, element, depth + 1)
         : null
   if (replacement === null) return null
-  const tail = resolveValue(`${value.slice(0, start)}${replacement}${value.slice(end + 1)}`, scopes, element, depth + 1)
+  const tail = resolveValue(
+    `${value.slice(0, start)}${replacement}${value.slice(end + 1)}`,
+    scopes,
+    element,
+    depth + 1,
+  )
   return tail === null ? null : normalize(tail)
 }
 
 /** 求选择器在指定状态下是否命中；未识别伪类抛错按不命中处理。 */
-function matchesInState(element: HappyDOMElement, selector: string, state: State): boolean {
+function matchesInState(
+  element: HappyDOMElement,
+  selector: string,
+  state: State,
+): boolean {
   // happy-dom 无交互态仿真：悬停/聚焦态剥去对应伪类求命中，特异性仍按原选择器计
   const effective =
     state === 'hover'
@@ -320,22 +370,43 @@ const OUTLINE_SOURCE_PROPS: Record<OutlineChannel, readonly string[]> = {
 }
 
 const OUTLINE_STYLE_KEYWORDS = new Set([
-  'auto', 'none', 'dotted', 'dashed', 'solid', 'double', 'groove', 'ridge', 'inset', 'outset', 'hidden',
+  'auto',
+  'none',
+  'dotted',
+  'dashed',
+  'solid',
+  'double',
+  'groove',
+  'ridge',
+  'inset',
+  'outset',
+  'hidden',
 ])
 const OUTLINE_WIDTH_KEYWORDS = new Set(['thin', 'medium', 'thick'])
 const CSS_WIDE_KEYWORDS = new Set(['inherit', 'initial', 'unset', 'revert'])
 /** outline 简写省略分量的初始值（css-ui：width medium / style none / color currentcolor）。 */
-const OUTLINE_INITIAL: Record<OutlineChannel, string> = { width: 'medium', style: 'none', color: 'currentcolor' }
+const OUTLINE_INITIAL: Record<OutlineChannel, string> = {
+  width: 'medium',
+  style: 'none',
+  color: 'currentcolor',
+}
 
 /** 按值类型归类 outline 分量；全局关键字与无法识别的值返回 undefined（保守原样）。 */
 function classifyOutlineComponent(token: string): OutlineChannel | undefined {
   const lower = token.toLowerCase()
   if (CSS_WIDE_KEYWORDS.has(lower)) return undefined
   if (OUTLINE_STYLE_KEYWORDS.has(lower)) return 'style'
-  if (OUTLINE_WIDTH_KEYWORDS.has(lower) || /^0$|^\d+(\.\d+)?(px|em|rem|pt|pc|in|ex|ch|vw|vh)$/.test(lower)) {
+  if (
+    OUTLINE_WIDTH_KEYWORDS.has(lower) ||
+    /^0$|^\d+(\.\d+)?(px|em|rem|pt|pc|in|ex|ch|vw|vh)$/.test(lower)
+  ) {
     return 'width'
   }
-  if (/^(#[0-9a-fA-F]{3,8}|rgba?\(|hsla?\(|hwb\(|lab\(|lch\(|oklab\(|oklch\(|color\(|currentcolor$)/.test(lower)) {
+  if (
+    /^(#[0-9a-fA-F]{3,8}|rgba?\(|hsla?\(|hwb\(|lab\(|lch\(|oklab\(|oklch\(|color\(|currentcolor$)/.test(
+      lower,
+    )
+  ) {
     return 'color'
   }
   return undefined
@@ -353,7 +424,8 @@ function outlineComponent(resolved: string, channel: OutlineChannel): string {
     .map((part) => ({ part, channel: classifyOutlineComponent(part) }))
   const hit = classified.find((item) => item.channel === channel)
   if (hit) return hit.part
-  if (classified.every((item) => item.channel !== undefined)) return OUTLINE_INITIAL[channel]
+  if (classified.every((item) => item.channel !== undefined))
+    return OUTLINE_INITIAL[channel]
   return resolved
 }
 
@@ -368,14 +440,21 @@ function computedFocusOutline(
   scopes: Scopes,
   state: State,
 ): Record<OutlineChannel, string | null> {
-  const result = { width: null, style: null, color: null } as Record<OutlineChannel, string | null>
+  const result = { width: null, style: null, color: null } as Record<
+    OutlineChannel,
+    string | null
+  >
   for (const channel of OUTLINE_CHANNELS) {
     let best: (Candidate & { prop: string }) | undefined
     for (const { rule, order } of ruled) {
       const spec = winningSelectorSpec(button, rule.selector, state)
       if (!spec) continue
       for (const [decl, node] of rule.nodes.entries()) {
-        if (node.type !== 'decl' || !OUTLINE_SOURCE_PROPS[channel].includes(node.prop)) continue
+        if (
+          node.type !== 'decl' ||
+          !OUTLINE_SOURCE_PROPS[channel].includes(node.prop)
+        )
+          continue
         const candidate: Candidate & { prop: string } = {
           value: node.value,
           spec,
@@ -390,7 +469,8 @@ function computedFocusOutline(
     if (!best) continue
     const resolved = resolveValue(best.value, scopes, button)
     if (resolved === null) continue
-    result[channel] = best.prop === 'outline' ? outlineComponent(resolved, channel) : resolved
+    result[channel] =
+      best.prop === 'outline' ? outlineComponent(resolved, channel) : resolved
   }
   return result
 }
@@ -398,7 +478,8 @@ function computedFocusOutline(
 /** 从已消解的 background 简写值中取颜色分量；无法识别时原样返回（断言保守变红）。 */
 function colorComponent(resolved: string): string {
   const trimmed = resolved.trim()
-  if (/^(#[0-9a-fA-F]+|rgba?\([^()]*\)|hsla?\([^()]*\)|[a-z]+)$/.test(trimmed)) return trimmed
+  if (/^(#[0-9a-fA-F]+|rgba?\([^()]*\)|hsla?\([^()]*\)|[a-z]+)$/.test(trimmed))
+    return trimmed
   return resolved
 }
 
@@ -435,7 +516,11 @@ function computedProp(
 }
 
 /** 令牌在按钮作用域的解析值（断言基准取自令牌声明本身，不硬编码色值）。 */
-function tokenValue(scopes: Scopes, button: HappyDOMElement, name: string): string {
+function tokenValue(
+  scopes: Scopes,
+  button: HappyDOMElement,
+  name: string,
+): string {
   const resolved = resolveValue(`var(${name})`, scopes, button)
   if (resolved === null) throw new Error(`令牌 ${name} 在按钮作用域无法解析`)
   return resolved
@@ -446,7 +531,8 @@ const stylesheet = postcss.parse(read('src/editor/nodes/nodes.css'))
 /** 按精确选择器取规则；同选择器多条时返回首条。 */
 function rule(selector: string): postcss.Rule | undefined {
   return stylesheet.nodes.find(
-    (node): node is postcss.Rule => node.type === 'rule' && node.selector === selector,
+    (node): node is postcss.Rule =>
+      node.type === 'rule' && node.selector === selector,
   )
 }
 
@@ -463,11 +549,19 @@ describe('画布控件主题接线机制（issue #93）', () => {
     const controls = rule('.react-flow__controls')
     expect(controls).toBeDefined()
     const decls = declarations(controls!)
-    expect(decls.get('--xy-controls-button-background-color')).toBe('var(--surface-card)')
-    expect(decls.get('--xy-controls-button-background-color-hover')).toBe('var(--fill-quaternary)')
+    expect(decls.get('--xy-controls-button-background-color')).toBe(
+      'var(--surface-card)',
+    )
+    expect(decls.get('--xy-controls-button-background-color-hover')).toBe(
+      'var(--fill-quaternary)',
+    )
     expect(decls.get('--xy-controls-button-color')).toBe('var(--text-primary)')
-    expect(decls.get('--xy-controls-button-color-hover')).toBe('var(--text-primary)')
-    expect(decls.get('--xy-controls-button-border-color')).toBe('var(--border-hairline)')
+    expect(decls.get('--xy-controls-button-color-hover')).toBe(
+      'var(--text-primary)',
+    )
+    expect(decls.get('--xy-controls-button-border-color')).toBe(
+      'var(--border-hairline)',
+    )
   })
 
   it('键盘聚焦态以品牌色描边可辨', () => {
@@ -483,140 +577,155 @@ describe('控件计算样式：生产样式表组合级联（PR #96 评审强化
     return { button: chain[chain.length - 1]!, chain }
   }
 
-  it.each(['light', 'dark'] as const)('%s 外观：静止与悬停态计算色均等于令牌解析值（生产序与反序）', (kind) => {
-    const env = kind === 'light' ? LIGHT : DARK
-    const { button, chain } = buttonOf()
-    const compositions = [
-      [...appLayers(), rfLayer()], // 生产：RF 属懒加载 chunk 必然最后注入
-      [rfLayer(), ...appLayers()], // 反序：不变量要求与注入顺序无关
-    ]
-    for (const layers of compositions) {
-      const ruled = flattenRules(layers, env)
-      const restScopes = collectScopes(chain, ruled, 'rest')
-      expect(computedProp(button, ruled, restScopes, 'background', 'rest')).toBe(
-        tokenValue(restScopes, button, '--surface-card'),
-      )
-      expect(computedProp(button, ruled, restScopes, 'color', 'rest')).toBe(
-        tokenValue(restScopes, button, '--text-primary'),
-      )
-      const hoverScopes = collectScopes(chain, ruled, 'hover')
-      expect(computedProp(button, ruled, hoverScopes, 'background', 'hover')).toBe(
-        tokenValue(hoverScopes, button, '--fill-quaternary'),
-      )
-      expect(computedProp(button, ruled, hoverScopes, 'color', 'hover')).toBe(
-        tokenValue(hoverScopes, button, '--text-primary'),
-      )
-      const focusScopes = collectScopes(chain, ruled, 'focus')
-      const outline = computedFocusOutline(button, ruled, focusScopes, 'focus')
-      expect(['none', 'hidden']).not.toContain(outline.style)
-      expect(['0', '0px']).not.toContain(outline.width)
-      expect(outline.color).toContain(tokenValue(focusScopes, button, '--accent'))
-    }
-  })
+  it.each(['light', 'dark'] as const)(
+    '%s 外观：静止与悬停态计算色均等于令牌解析值（生产序与反序）',
+    (kind) => {
+      const env = kind === 'light' ? LIGHT : DARK
+      const { button, chain } = buttonOf()
+      const compositions = [
+        [...appLayers(), rfLayer()], // 生产：RF 属懒加载 chunk 必然最后注入
+        [rfLayer(), ...appLayers()], // 反序：不变量要求与注入顺序无关
+      ]
+      for (const layers of compositions) {
+        const ruled = flattenRules(layers, env)
+        const restScopes = collectScopes(chain, ruled, 'rest')
+        expect(
+          computedProp(button, ruled, restScopes, 'background', 'rest'),
+        ).toBe(tokenValue(restScopes, button, '--surface-card'))
+        expect(computedProp(button, ruled, restScopes, 'color', 'rest')).toBe(
+          tokenValue(restScopes, button, '--text-primary'),
+        )
+        const hoverScopes = collectScopes(chain, ruled, 'hover')
+        expect(
+          computedProp(button, ruled, hoverScopes, 'background', 'hover'),
+        ).toBe(tokenValue(hoverScopes, button, '--fill-quaternary'))
+        expect(computedProp(button, ruled, hoverScopes, 'color', 'hover')).toBe(
+          tokenValue(hoverScopes, button, '--text-primary'),
+        )
+        const focusScopes = collectScopes(chain, ruled, 'focus')
+        const outline = computedFocusOutline(
+          button,
+          ruled,
+          focusScopes,
+          'focus',
+        )
+        expect(['none', 'hidden']).not.toContain(outline.style)
+        expect(['0', '0px']).not.toContain(outline.width)
+        expect(outline.color).toContain(
+          tokenValue(focusScopes, button, '--accent'),
+        )
+      }
+    },
+  )
 
   it('自检：应用接线缺失时按钮回落 RF 浅色默认（复现 issue #93 机制）', () => {
     const { button, chain } = buttonOf()
-    const ruled = flattenRules([postcss.parse(read('src/styles/tokens.css')), rfLayer()], DARK)
-    const scopes = collectScopes(chain, ruled)
-    const background = computedProp(button, ruled, scopes, 'background')
-    expect(background).toBe(tokenValue(scopes, button, '--xy-controls-button-background-color-default'))
-    expect(background).not.toBe(tokenValue(scopes, button, '--surface-card'))
-  })
-
-  it('自检：更高特异性选择器注入错误硬编码会胜出并被捕获（评审 5187020501 触发条件）', () => {
-    const { button, chain } = buttonOf()
-    const rogue = postcss.parse('div.canvas-root .react-flow__controls-button { background: #ffffff; }')
-    const ruled = flattenRules([...appLayers(), rogue, rfLayer()], DARK)
-    const scopes = collectScopes(chain, ruled)
-    const background = computedProp(button, ruled, scopes, 'background')
-    expect(background).toBe('#ffffff')
-    expect(background).not.toBe(tokenValue(scopes, button, '--surface-card'))
-  })
-
-  it('自检：更高特异性选择器覆盖自定义属性会胜出并被捕获（评审 5187126810 触发条件）', () => {
-    const { button, chain } = buttonOf()
-    const rogue = postcss.parse(
-      '.canvas-root .react-flow__controls { --xy-controls-button-background-color: #ffffff; }',
+    const ruled = flattenRules(
+      [postcss.parse(read('src/styles/tokens.css')), rfLayer()],
+      DARK,
     )
-    const layers = appLayers()
-    layers.splice(layers.length - 1, 0, rogue) // 注入于 nodes.css 层之前：特异性须胜出而非靠顺序
-    const ruled = flattenRules([...layers, rfLayer()], DARK)
     const scopes = collectScopes(chain, ruled)
     const background = computedProp(button, ruled, scopes, 'background')
-    expect(background).toBe('#ffffff')
-    expect(background).not.toBe(tokenValue(scopes, button, '--surface-card'))
-  })
-
-  it('自检：!important 无视特异性与顺序取胜并被捕获（评审 5187174354 触发条件）', () => {
-    const { button, chain } = buttonOf()
-    // 与 RF 令牌规则同特异性、且注入在更早的应用层：仅 !important 使其胜出
-    const rogue = postcss.parse('.react-flow__controls-button { background: #ffffff !important; }')
-    const layers = appLayers()
-    layers.splice(layers.length - 1, 0, rogue)
-    const ruled = flattenRules([...layers, rfLayer()], DARK)
-    const scopes = collectScopes(chain, ruled)
-    const background = computedProp(button, ruled, scopes, 'background')
-    expect(background).toBe('#ffffff')
-    expect(background).not.toBe(tokenValue(scopes, button, '--surface-card'))
-  })
-
-  it('自检：background-color 长写在级联中改写简写颜色分量并被捕获（评审 5187272939 触发条件）', () => {
-    const { button, chain } = buttonOf()
-    // 更高特异性、注入于 nodes.css 层之前：浏览器按 background-color 分道取胜
-    const rogue = postcss.parse('.canvas-root .react-flow__controls-button { background-color: #ffffff; }')
-    const layers = appLayers()
-    layers.splice(layers.length - 1, 0, rogue)
-    const ruled = flattenRules([...layers, rfLayer()], DARK)
-    const scopes = collectScopes(chain, ruled)
-    const background = computedProp(button, ruled, scopes, 'background')
-    expect(background).toBe('#ffffff')
-    expect(background).not.toBe(tokenValue(scopes, button, '--surface-card'))
-  })
-
-  it('自检：同规则内后置的 background-color 覆盖前置简写并被捕获（评审 5187318777 触发条件）', () => {
-    const { button, chain } = buttonOf()
-    // 更高特异性使整条规则胜出；块内简写在前、长写在后，浏览器按声明序取后者
-    const rogue = postcss.parse(
-      '.canvas-root .react-flow__controls-button { background: var(--surface-card); background-color: #ffffff; }',
+    expect(background).toBe(
+      tokenValue(
+        scopes,
+        button,
+        '--xy-controls-button-background-color-default',
+      ),
     )
-    const layers = appLayers()
-    layers.splice(layers.length - 1, 0, rogue)
-    const ruled = flattenRules([...layers, rfLayer()], DARK)
-    const scopes = collectScopes(chain, ruled)
-    const background = computedProp(button, ruled, scopes, 'background')
-    expect(background).toBe('#ffffff')
     expect(background).not.toBe(tokenValue(scopes, button, '--surface-card'))
   })
 
-  it('自检：悬停道更高特异性竞争声明会胜出并被捕获（评审 5187365964 触发条件）', () => {
-    const { button, chain } = buttonOf()
-    const rogue = postcss.parse('.canvas-root .react-flow__controls-button:hover { background: #ffffff; }')
-    const layers = appLayers()
-    layers.splice(layers.length - 1, 0, rogue)
-    const ruled = flattenRules([...layers, rfLayer()], DARK)
-    const scopes = collectScopes(chain, ruled, 'hover')
-    const hover = computedProp(button, ruled, scopes, 'background', 'hover')
-    expect(hover).toBe('#ffffff')
-    expect(hover).not.toBe(tokenValue(scopes, button, '--fill-quaternary'))
-  })
+  /** 竞争声明背景用例（PR #96 评审触发条件各一）：同一条断言管线，仅注入
+   * 文本、注入方式与计算状态不同——参数化以消除样板并保留触发条件定位。 */
+  type RogueBackgroundCase = {
+    readonly name: string
+    readonly css: string
+    /** 注入策略：应用层之后整表追加 / 末层之前插队 / 追加进末层本体。 */
+    readonly inject:
+      'append-after-app' | 'splice-before-last' | 'into-last-layer'
+    /** 计算状态：悬停道用例为 hover，其余默认 rest。 */
+    readonly state?: State
+  }
 
-  it('自检：写入入口 index.css 本体的竞争声明会胜出并被捕获（评审 5187386211 触发条件一）', () => {
-    const { button, chain } = buttonOf()
-    const layers = appLayers()
-    // 末层即 index.css 本体（导入文件在前、本体规则殿后），向其追加竞争声明
-    layers[layers.length - 1]!.append(
-      postcss.parse('.canvas-root .react-flow__controls-button { background: #ffffff; }').first!,
-    )
-    const ruled = flattenRules([...layers, rfLayer()], DARK)
-    const scopes = collectScopes(chain, ruled)
-    const background = computedProp(button, ruled, scopes, 'background')
-    expect(background).toBe('#ffffff')
-    expect(background).not.toBe(tokenValue(scopes, button, '--surface-card'))
-  })
+  const rogueBackgroundCases: RogueBackgroundCase[] = [
+    {
+      name: '更高特异性选择器注入错误硬编码（评审 5187020501 触发条件）',
+      css: 'div.canvas-root .react-flow__controls-button { background: #ffffff; }',
+      inject: 'append-after-app',
+    },
+    {
+      // 注入于 nodes.css 层之前：特异性须胜出而非靠顺序
+      name: '更高特异性选择器覆盖自定义属性（评审 5187126810 触发条件）',
+      css: '.canvas-root .react-flow__controls { --xy-controls-button-background-color: #ffffff; }',
+      inject: 'splice-before-last',
+    },
+    {
+      // 与 RF 令牌规则同特异性、且注入在更早的应用层：仅 !important 使其胜出
+      name: '!important 无视特异性与顺序取胜（评审 5187174354 触发条件）',
+      css: '.react-flow__controls-button { background: #ffffff !important; }',
+      inject: 'splice-before-last',
+    },
+    {
+      // 更高特异性、注入于 nodes.css 层之前：浏览器按 background-color 分道取胜
+      name: 'background-color 长写在级联中改写简写颜色分量（评审 5187272939 触发条件）',
+      css: '.canvas-root .react-flow__controls-button { background-color: #ffffff; }',
+      inject: 'splice-before-last',
+    },
+    {
+      // 更高特异性使整条规则胜出；块内简写在前、长写在后，浏览器按声明序取后者
+      name: '同规则内后置的 background-color 覆盖前置简写（评审 5187318777 触发条件）',
+      css: '.canvas-root .react-flow__controls-button { background: var(--surface-card); background-color: #ffffff; }',
+      inject: 'splice-before-last',
+    },
+    {
+      name: '悬停道更高特异性竞争声明（评审 5187365964 触发条件）',
+      css: '.canvas-root .react-flow__controls-button:hover { background: #ffffff; }',
+      inject: 'splice-before-last',
+      state: 'hover',
+    },
+    {
+      // 末层即 index.css 本体（导入文件在前、本体规则殿后），向其追加竞争声明
+      name: '写入入口 index.css 本体的竞争声明（评审 5187386211 触发条件一）',
+      css: '.canvas-root .react-flow__controls-button { background: #ffffff; }',
+      inject: 'into-last-layer',
+    },
+  ]
+
+  it.each(rogueBackgroundCases)(
+    '自检：$name 会胜出并被捕获',
+    ({ css, inject, state = 'rest' }) => {
+      const { button, chain } = buttonOf()
+      const rogue = postcss.parse(css)
+      const layers = appLayers()
+      if (inject === 'append-after-app') {
+        layers.push(rogue)
+      } else if (inject === 'splice-before-last') {
+        layers.splice(layers.length - 1, 0, rogue)
+      } else {
+        layers[layers.length - 1]!.append(rogue.first!)
+      }
+      const ruled = flattenRules([...layers, rfLayer()], DARK)
+      const scopes = collectScopes(chain, ruled, state)
+      const background = computedProp(
+        button,
+        ruled,
+        scopes,
+        'background',
+        state,
+      )
+      const expected =
+        state === 'hover' ? '--fill-quaternary' : '--surface-card'
+      expect(background).toBe('#ffffff')
+      expect(background).not.toBe(tokenValue(scopes, button, expected))
+    },
+  )
 
   it('自检：更高特异性聚焦规则抑制描边会胜出并被捕获（评审 5187386211 触发条件二）', () => {
     const { button, chain } = buttonOf()
-    const rogue = postcss.parse('.canvas-root .react-flow__controls-button:focus-visible { outline: none; }')
+    const rogue = postcss.parse(
+      '.canvas-root .react-flow__controls-button:focus-visible { outline: none; }',
+    )
     const layers = appLayers()
     layers.splice(layers.length - 1, 0, rogue)
     const ruled = flattenRules([...layers, rfLayer()], DARK)
@@ -628,7 +737,9 @@ describe('控件计算样式：生产样式表组合级联（PR #96 评审强化
 
   it('自检：outline-style 长写抑制描边会胜出并被捕获（评审 5187437948 触发条件）', () => {
     const { button, chain } = buttonOf()
-    const rogue = postcss.parse('.canvas-root .react-flow__controls-button:focus-visible { outline-style: none; }')
+    const rogue = postcss.parse(
+      '.canvas-root .react-flow__controls-button:focus-visible { outline-style: none; }',
+    )
     const layers = appLayers()
     layers.splice(layers.length - 1, 0, rogue)
     const ruled = flattenRules([...layers, rfLayer()], DARK)
@@ -641,7 +752,9 @@ describe('控件计算样式：生产样式表组合级联（PR #96 评审强化
 
   it('自检：乱序 outline 简写按值类型解析、零宽不可见被捕获（评审 5187475262 触发条件）', () => {
     const { button, chain } = buttonOf()
-    const rogue = postcss.parse('.canvas-root .react-flow__controls-button:focus-visible { outline: solid 0 var(--accent); }')
+    const rogue = postcss.parse(
+      '.canvas-root .react-flow__controls-button:focus-visible { outline: solid 0 var(--accent); }',
+    )
     const layers = appLayers()
     layers.splice(layers.length - 1, 0, rogue)
     const ruled = flattenRules([...layers, rfLayer()], DARK)
