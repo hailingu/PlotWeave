@@ -169,3 +169,56 @@ describe('跨桶同 id 共存（PR #97 评审：独立 id 空间，数据模型 
     expect(screen.queryByLabelText('角色名称')).toBeNull()
   })
 })
+
+describe('并行编辑与按钮焦点（PR #97 评审第二轮）', () => {
+  const RENAMED: ProjectSettings = {
+    characters: [{ id: 'c1', name: '陈默大侠', gradient: 'g1', bio: '落魄侦探。' }],
+    locations: BASE.locations,
+  }
+
+  it('表单打开期间行内改名提交：未触碰的名称字段跟随已提交值，保存不回退改名', () => {
+    const view = setup()
+    fireEvent.click(screen.getByLabelText('编辑角色 陈默'))
+    // 行内改名（EditableName：双击进入 → 输入 → Enter 提交）
+    fireEvent.doubleClick(screen.getByRole('button', { name: '陈默' }))
+    const renameInput = screen.getByLabelText('角色名 陈默') as HTMLInputElement
+    fireEvent.change(renameInput, { target: { value: '陈默大侠' } })
+    fireEvent.keyDown(renameInput, { key: 'Enter' })
+    fireEvent.blur(renameInput)
+    expect(view.actions.renameCharacter).toHaveBeenCalledWith('c1', '陈默大侠')
+    // 提交改名后 settings 更新：表单未触碰的名称输入框应显示最新已提交名
+    view.rerender(<SettingsList settings={RENAMED} actions={view.actions} onOpenDocument={vi.fn()} />)
+    expect((screen.getByLabelText('角色名称') as HTMLInputElement).value).toBe('陈默大侠')
+    fireEvent.change(screen.getByLabelText('角色小传'), { target: { value: '新小传' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    expect(view.actions.updateCharacter).toHaveBeenCalledWith('c1', {
+      name: '陈默大侠',
+      bio: '新小传',
+    })
+  })
+
+  it('已触碰的名称字段保留用户草稿，外部改名不覆盖（快照基线边界）', () => {
+    const view = setup()
+    fireEvent.click(screen.getByLabelText('编辑角色 陈默'))
+    fireEvent.change(screen.getByLabelText('角色名称'), { target: { value: '草稿名' } })
+    view.rerender(<SettingsList settings={RENAMED} actions={view.actions} onOpenDocument={vi.fn()} />)
+    expect((screen.getByLabelText('角色名称') as HTMLInputElement).value).toBe('草稿名')
+    fireEvent.change(screen.getByLabelText('角色小传'), { target: { value: '新小传' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    expect(view.actions.updateCharacter).toHaveBeenCalledWith('c1', {
+      name: '草稿名',
+      bio: '新小传',
+    })
+  })
+
+  it('焦点移到表单操作按钮后按 Esc 仍丢弃草稿并关闭表单', () => {
+    const { actions } = setup()
+    fireEvent.click(screen.getByLabelText('编辑角色 陈默'))
+    fireEvent.change(screen.getByLabelText('角色小传'), { target: { value: '草稿' } })
+    const cancel = screen.getByRole('button', { name: '取消' })
+    cancel.focus()
+    fireEvent.keyDown(cancel, { key: 'Escape' })
+    expect(screen.queryByLabelText('角色名称')).toBeNull()
+    expect(actions.updateCharacter).not.toHaveBeenCalled()
+  })
+})

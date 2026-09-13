@@ -1,12 +1,14 @@
-import { useId, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { useEffect, useId, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 
 /**
  * 设定条目侧栏详情表单（issue 95）：名称单行输入 + 小传/备注多行输入，
  * 显式「保存」= 一次命令入栈可撤销，「取消」/Esc 放弃草稿不改已提交内容。
  * 名称去空白后为空禁用保存（与 createCharacter/EditableName 的非空契约
  * 一致）。草稿只落本地 state，组合输入天然安全（同 EditableName，
- * issue #42）；组合中的 Esc 不误关表单。字段基线为展开时的实体值
- * （与文档编辑器弹窗同语义）；描述直接映射 bio/note，不建平行存储。
+ * issue #42）；组合中的 Esc 不误关表单，Esc 在表单全部焦点控件（含操作
+ * 按钮）可用。未触碰字段持续跟随最新已提交值——行内改名等并发提交不被
+ * 旧草稿静默回退；已触碰字段保留用户草稿（快照基线边界，PR #97 评审）。
+ * 字段基线为展开时的实体值；描述直接映射 bio/note，不建平行存储。
  */
 
 /** 展开控件（条目行的 ▸/▾ 折叠钮）→ 表单 -> 保存/取消的最小编辑单元。 */
@@ -34,9 +36,19 @@ export default function SettingsDetailForm({
   const idPrefix = useId()
   const [name, setName] = useState(baselineName)
   const [desc, setDesc] = useState(description)
+  const [nameDirty, setNameDirty] = useState(false)
+  const [descDirty, setDescDirty] = useState(false)
+  // 未触碰字段回填最新已提交值（行内改名并发不被旧草稿回退）；
+  // 已触碰字段保留草稿，效果不再覆写。
+  useEffect(() => {
+    if (!nameDirty) setName(baselineName)
+  }, [baselineName, nameDirty])
+  useEffect(() => {
+    if (!descDirty) setDesc(description)
+  }, [description, descDirty])
   // 组合中的 Esc 只取消输入法合成，不收起表单（isComposing 守卫）；
-  // 处理器挂在原生输入控件上（S6848：非交互元素不承接键盘事件）
-  const escClose = (e: ReactKeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+  // 处理器挂在原生交互控件上（S6848：非交互元素不承接键盘事件）
+  const escClose = (e: ReactKeyboardEvent<HTMLElement>) => {
     if (e.key === 'Escape' && !e.nativeEvent.isComposing) onClose()
   }
   return (
@@ -49,7 +61,10 @@ export default function SettingsDetailForm({
         className="pw-settings-detail-input"
         autoFocus
         value={name}
-        onChange={(e) => setName(e.target.value)}
+        onChange={(e) => {
+          setNameDirty(true)
+          setName(e.target.value)
+        }}
         onKeyDown={escClose}
       />
       <label className="pw-settings-detail-label" htmlFor={`${idPrefix}-desc`}>
@@ -60,11 +75,14 @@ export default function SettingsDetailForm({
         className="pw-settings-detail-body"
         rows={4}
         value={desc}
-        onChange={(e) => setDesc(e.target.value)}
+        onChange={(e) => {
+          setDescDirty(true)
+          setDesc(e.target.value)
+        }}
         onKeyDown={escClose}
       />
       <div className="pw-settings-detail-actions">
-        <button type="button" className="pw-dialog-btn" onClick={onClose}>
+        <button type="button" className="pw-dialog-btn" onClick={onClose} onKeyDown={escClose}>
           取消
         </button>
         <button
@@ -72,6 +90,7 @@ export default function SettingsDetailForm({
           className="pw-dialog-btn pw-dialog-btn-primary"
           disabled={name.trim() === ''}
           onClick={() => onSave(name.trim(), desc)}
+          onKeyDown={escClose}
         >
           保存
         </button>
