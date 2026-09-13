@@ -335,12 +335,14 @@ function assembleDocument(
 }
 
 /** 扩展值域诊断（评审轮 P2，§11 字段演进的传输边界）：扩展值以 JSON 经
- * Rust→webview IPC 传输，超出 JS 安全整数域（±2^53−1）的整数在 webview
- * 解析时即舍入——先于前端一切代码，无法检测更无法修复。此类值加载时可能
- * 已与文件不同，下一次保存将固化当前值。按约束诊断口径记警告：不修复、
- * 不影响 repaired（打开仍零回写）；需要位精确大整数的字段演进必须升级
- * schemaVersion 走类型化契约。扩展值出自 JSON 解析（无环），深度优先
- * 扫描一遍。 */
+ * Rust→webview IPC 传输，数值须为 IEEE 754 双精度可往返形态才受保留保证。
+ * 可检测子类是整数值越出 JS 安全整数域（±2^53−1）——webview 解析时舍入，
+ * 先于前端一切代码，记警告（不修复、不影响 repaired，打开仍零回写）。
+ * 小数精度超出 f64 的值更早在 Rust serde_json 解析侧舍入，webview 收到的
+ * 值与真实小精度数值不可区分——该子类不可检测、无诊断可施（§11 登记的
+ * 传输边界），两类越域值的保存都固化当前加载值；需要位精确数值的字段
+ * 演进必须升级 schemaVersion 走类型化契约或以字符串承载。扩展值出自
+ * JSON 解析（无环），深度优先扫描一遍。 */
 function extensionDomainWarnings(
   extensions: {
     graph: Record<string, unknown>
@@ -373,6 +375,30 @@ function extensionDomainWarnings(
   ] as const) {
     for (const key of Object.keys(container)) scan(container[key], `${name} ${key}`)
   }
+}
+
+/** 透传容器扩展键捕获与值域诊断（issue #100，§11 字段演进；评审轮自
+ * normalizeContainers 拆出保持 80 行函数上限合规）：契约键之外的未知键
+ * 不是缺陷，原样保留随装配回填——重建容器时丢弃它们会让 sameCanonicalJson
+ * 判定结构变化而触发打开即回写，把删除落实；越安全整数域的整数经
+ * extensionDomainWarnings 记诊断警告（不修复）。 */
+function captureEnvelopeExtensions(
+  graphRaw: Record<string, unknown>,
+  settingsRaw: Record<string, unknown>,
+  assetsRaw: Record<string, unknown>,
+  warnings: string[],
+): {
+  graph: Record<string, unknown>
+  settings: Record<string, unknown>
+  assets: Record<string, unknown>
+} {
+  const extensions = {
+    graph: extensionEntries(graphRaw, GRAPH_CONTRACT_KEYS),
+    settings: extensionEntries(settingsRaw, SETTINGS_CONTRACT_KEYS),
+    assets: extensionEntries(assetsRaw, ASSETS_CONTRACT_KEYS),
+  }
+  extensionDomainWarnings(extensions, warnings)
+  return extensions
 }
 
 /** §11.1 第 2 步容器级形状校验（先于一切逐项规则；父容器先于子容器）：
@@ -414,15 +440,7 @@ export function normalizeContainers(
   const assetsRaw = containerOf(raw.assets, 'assets 容器异型，已重置为空资产索引')
   const nodesRaw = arrayOf(graphRaw.nodes, 'graph.nodes 非数组，已重置为空数组')
   const edgesRaw = arrayOf(graphRaw.edges, 'graph.edges 非数组，已重置为空数组')
-  // 同版本文档的容器级扩展键捕获（issue #100，§11 字段演进）：透传容器
-  // 中契约键之外的未知键不是缺陷，原样保留随装配回填——重建容器时丢弃
-  // 它们会让 sameCanonicalJson 判定结构变化而触发打开即回写，把删除落实
-  const extensions = {
-    graph: extensionEntries(graphRaw, GRAPH_CONTRACT_KEYS),
-    settings: extensionEntries(settingsRaw, SETTINGS_CONTRACT_KEYS),
-    assets: extensionEntries(assetsRaw, ASSETS_CONTRACT_KEYS),
-  }
-  extensionDomainWarnings(extensions, warnings)
+  const extensions = captureEnvelopeExtensions(graphRaw, settingsRaw, assetsRaw, warnings)
 
   // 成员过滤 + 嵌套容器修复；键控桶身份重发、形状校验与旧草案兼容按
   // 阶段模块执行，活动节点集随后修复

@@ -765,5 +765,21 @@ describe('同版本文档扩展字段的分层边界（issue #100，§11）', ()
     const again = serializeProject(round.content, 'p-1', NOW) as unknown as Record<string, unknown>
     expect((again.graph as Record<string, unknown>).futureGraphNote).toBe(ipcRounded)
   })
+
+  it('扩展值含高精度小数：上游解析侧即舍入且 webview 不可检测，按传输边界固化（评审 P2）', () => {
+    const doc = docWithExtensions()
+    // 1.0000000000000001 的最近 f64 是 1.0——Rust serde_json 解析侧（早于
+    // IPC）即舍入，webview 收到的 1 与真实 1 不可区分，诊断无从施策；
+    // JS 面量同样写不出该值，经字符串构造复刻舍入形态
+    const upstreamRounded = Number('1.0000000000000001')
+    expect(upstreamRounded).toBe(1)
+    ;(doc.graph as Record<string, unknown>).futureGraphNote = upstreamRounded
+    const round = parseProject(doc)
+    expect(round.repaired).toBe(false)
+    expect(round.warnings).toEqual([])
+    expect(round.content.graphExtensions).toEqual({ futureGraphNote: 1 })
+    const again = serializeProject(round.content, 'p-1', NOW) as unknown as Record<string, unknown>
+    expect((again.graph as Record<string, unknown>).futureGraphNote).toBe(1)
+  })
 })
 
