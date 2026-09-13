@@ -54,6 +54,22 @@ gray-900 #131316  →  surface.canvas        →  canvas.background
 | `fill.quaternary` | 选中行/悬停底 | `rgba(0,0,0,.06)` | `rgba(255,255,255,.10)` |
 | `connection.valid` / `connection.invalid` | 连线校验反馈 | `#34C759` / `#E35D5D` | 同左 |
 
+节点家族与端口的补充令牌（issue #107 起 `nodes.css` 颜色全部经此进入，无硬编码例外；kebab-case 实现名见 `src/styles/tokens.css`）：
+
+| 令牌 | 含义 | 取值 |
+| --- | --- | --- |
+| `node.paper` / `node.paper.note` | 编剧侧纸面：索引卡暖白 / 对白·节奏卡（内容层恒定） | `#FDFDF8` / `#F5F5F7`，双外观恒定 |
+| `node.paper.text*` / `node.slate.text*` | 家族文本阶梯（次级/辅助/说明/正文，alpha 变体） | 见 tokens.css；`prefers-contrast: more` 下升档至 ≥ 4.5:1 |
+| `branch.*`（`bg`/`text`/`frame`/`opt-*`/`addopt-border`/`dim`） | 分支节点「未定」虚线框家族，唯一跟随画布外观的节点 | 浅色 = 纸面白系，深色 = 画布暗系 |
+| `port.body` / `port.ring` / `connection.valid.glow` | 端口圆点主体/描边/可连发光 | `#3A3A3E` / `#55555A` / `rgba(52,199,89,.8)`，恒定 |
+| `shadow.node.paper/note/beat/slate`、`shadow.edge-label`、`shadow.controls` | 节点家族与连线胶囊投影（家族恒定故投影恒定） | 见 tokens.css |
+| `on.saturated` | 用户内容色底上的前景（角色头像字；配色为应用指派的用户内容，无确定性承载面） | `#FFFFFF`，恒定，不在对比度契约内 |
+| `on.brand` | 品牌渐变连线胶囊、✓ 徽标的前景（确定性品牌底） | `#FFFFFF`；`prefers-contrast: more` 翻黑（配合 `edge.label.bg` 近实色处理全程 ≥ 4.5:1） |
+| `edge.label.bg` | branch 连线选项胶囊底 | 基线品牌渐变；`prefers-contrast: more` 收敛为实色 `accent`（§2.6 背景近实色——渐变内部中段因 sRGB 伽马凸性对黑字跌破 4.5:1，采样用例钉住） |
+| `invalid.stripe` | 失效引用角标的灰斜纹 | `rgba(142,142,147,.35)`，恒定 |
+
+家族材质令牌只在 `:root` 定义一次、不在深色块重声明——纸面与石板是「形态即语义」的家族标识，不随系统外观切换（§4.1）；唯一例外是分支家族按外观切换。令牌表点号记法对应 CSS 的 kebab-case（`surface.slate` → `--surface-slate`）。
+
 ### 2.4 字体
 
 - 栈：`-apple-system` / `PingFang SC` / `"Segoe UI"`（Windows 段预留）/ `sans-serif`。

@@ -31,6 +31,85 @@
   --control-primary-bg: #1d1d1f;
   --control-primary-fg: #ffffff;
 
+  /* 节点家族材质（§4.1，issue #107）：内容层恒定令牌，浅/深外观不切换——
+   * 纸面 = 编剧侧案头物件，石板 = 生成侧监视器质感，是「形态即语义」的
+   * 家族标识；不得改引随系统外观变化的窗口色。 */
+  --node-paper: #fdfdf8; /* 索引卡暖白纸面 */
+  --node-paper-note: #f5f5f7; /* 对白/节奏卡纸面 */
+  --node-paper-text: #1d1d1f;
+  --node-paper-text-secondary: rgba(60, 60, 67, 0.5);
+  --node-paper-text-tertiary: rgba(60, 60, 67, 0.75);
+  --node-paper-text-caption: rgba(60, 60, 67, 0.55);
+  --node-paper-chip-text: rgba(60, 60, 67, 0.6);
+  --node-paper-text-body: rgba(29, 29, 31, 0.85);
+  --node-paper-gear: rgba(60, 60, 67, 0.45);
+  --node-paper-gear-hover: rgba(60, 60, 67, 0.85);
+  --node-paper-hover: rgba(0, 0, 0, 0.06);
+  --node-paper-rule: rgba(90, 130, 190, 0.28); /* 索引卡横格线 */
+  --node-paper-margin: rgba(224, 49, 43, 0.45); /* 索引卡红色边距线 */
+  --node-paper-chip-border: rgba(0, 0, 0, 0.18);
+  --node-paper-mark: rgba(0, 0, 0, 0.07); /* 内外景标记底 */
+  --node-paper-divider: rgba(0, 0, 0, 0.06);
+  --node-paper-bubble: #e9e9eb;
+  --node-paper-bubble-accent: #dcebff;
+  --node-paper-voiceover: #bf5af2;
+  --node-paper-voiceover-border: rgba(191, 90, 242, 0.4);
+
+  /* §2.3 surface.slate：生成侧石板面，双外观恒定 */
+  --surface-slate: #232326;
+  --node-slate-text: #f5f5f7;
+  --node-slate-text-secondary: rgba(235, 235, 245, 0.6);
+  --node-slate-text-soft: rgba(235, 235, 245, 0.75);
+  --node-slate-text-caption: rgba(235, 235, 245, 0.45);
+  --node-slate-text-muted: rgba(235, 235, 245, 0.65);
+  --node-slate-text-body: rgba(245, 245, 247, 0.85);
+  --node-slate-gear-hover: rgba(235, 235, 245, 0.92);
+  --node-slate-hover: rgba(255, 255, 255, 0.1);
+  --node-slate-inset: rgba(0, 0, 0, 0.35); /* Prompt 输入块 */
+  --node-slate-well: rgba(0, 0, 0, 0.45); /* 产物占位 */
+  --node-slate-chip: rgba(255, 255, 255, 0.08); /* 引用位底 */
+  --node-slate-chip-border: rgba(255, 255, 255, 0.2);
+  --node-slate-add: rgba(235, 235, 245, 0.3); /* 引用位虚线 */
+  --node-slate-error: #ff9f9a;
+
+  /* 端口与连线校验反馈（§4.3；§2.3 connection.valid） */
+  --port-body: #3a3a3e;
+  --port-ring: #55555a;
+  --connection-valid: #34c759;
+  --connection-valid-glow: rgba(52, 199, 89, 0.8);
+
+  /* 饱和色底上的前景。on-saturated = 用户内容色底（角色头像字，配色为应用
+   * 指派的用户内容，无确定性承载面，不在对比度契约内）；on-brand = 品牌渐变
+   * 胶囊/✓ 徽标的确定性品牌底前景，more 对比度下翻黑（配合 edge.label.bg
+   * 近实色处理全程 ≥ 4.5:1）。 */
+  --on-saturated: #ffffff;
+  --on-brand: #ffffff;
+
+  /* 连线选项胶囊底：基线走品牌渐变；more 下按 §2.6「背景近实色」收敛为
+   * 实色 accent——渐变内部中段因 sRGB 伽马凸性对黑字会跌到 ~3.7:1（两端
+   * 达标不代表内部达标，见 nodeTokens.test.ts 渐变采样用例）。 */
+  --edge-label-bg: var(--brand-gradient);
+
+  /* 失效引用角标斜纹（§4.3） */
+  --invalid-stripe: rgba(142, 142, 147, 0.35);
+
+  /* 节点投影（家族材质恒定故投影亦恒定；§4.3 选中加深） */
+  --shadow-node-paper: 0 12px 32px rgba(0, 0, 0, 0.35);
+  --shadow-node-note: 0 12px 32px rgba(0, 0, 0, 0.4);
+  --shadow-node-beat: 0 10px 28px rgba(0, 0, 0, 0.35);
+  --shadow-node-slate: 0 12px 32px rgba(0, 0, 0, 0.45);
+  --shadow-edge-label: 0 4px 12px rgba(0, 0, 0, 0.25);
+  --shadow-controls: 0 4px 16px rgba(0, 0, 0, 0.15);
+
+  /* 分支节点（§4.2 岔路路标）：唯一跟随画布外观的节点家族 */
+  --branch-bg: #ffffff;
+  --branch-text: var(--text-primary);
+  --branch-frame: rgba(0, 0, 0, 0.3); /* 虚线「未定」框 */
+  --branch-opt-bg: rgba(0, 0, 0, 0.05);
+  --branch-opt-text: #3a3a3c;
+  --branch-addopt-border: rgba(0, 0, 0, 0.22);
+  --branch-dim: var(--text-secondary);
+
   /* 圆角（§2.5） */
   --radius-sm: 4px;
   --radius-md: 8px;
@@ -63,6 +142,15 @@
     --control-primary-bg: #f2f2f7;
     --control-primary-fg: #1d1d1f;
 
+    /* 分支家族跟随画布外观切到深色画布变体（issue #107） */
+    --branch-bg: transparent;
+    --branch-text: #f5f5f7;
+    --branch-frame: rgba(235, 235, 245, 0.35);
+    --branch-opt-bg: rgba(255, 255, 255, 0.08);
+    --branch-opt-text: rgba(245, 245, 247, 0.92);
+    --branch-addopt-border: rgba(235, 235, 245, 0.3);
+    --branch-dim: rgba(235, 235, 245, 0.45);
+
     color-scheme: dark;
   }
 }
@@ -76,6 +164,22 @@
     --fill-quaternary: rgba(0, 0, 0, 0.12);
     --border-hairline: rgba(0, 0, 0, 0.35);
     --canvas-dot: rgba(0, 0, 0, 0.2);
+
+    /* 节点家族次级文本升档至 ≥ 4.5:1、UI 组件边线 ≥ 3:1（issue #107；
+     * 基线值家族各异且偏低，统一在此收敛，见 nodeTokens.test.ts 对比度用例）。
+     * 石板族家族恒定：浅外观下同样渲染深色石板，caption 升档不随外观分块。 */
+    --node-paper-text-secondary: rgba(60, 60, 67, 0.78);
+    --node-paper-text-tertiary: rgba(60, 60, 67, 0.85);
+    --node-paper-text-caption: rgba(60, 60, 67, 0.8);
+    --node-paper-chip-text: rgba(60, 60, 67, 0.82);
+    --node-paper-gear: rgba(60, 60, 67, 0.8);
+    --node-paper-voiceover: #9f25d4;
+    --node-paper-voiceover-border: #9f25d4;
+    --node-slate-text-caption: rgba(235, 235, 245, 0.7);
+    --on-brand: #000000; /* 黑在渐变两端与徽标色上均 ≥ 4.5:1（最紧 4.52:1） */
+    --edge-label-bg: var(--accent); /* 实色底：黑字浅 4.55 / 深 5.77:1 */
+    --branch-frame: rgba(0, 0, 0, 0.6);
+    --branch-addopt-border: rgba(0, 0, 0, 0.55);
   }
 
   @media (prefers-color-scheme: dark) {
@@ -84,6 +188,11 @@
       --fill-quaternary: rgba(255, 255, 255, 0.18);
       --border-hairline: rgba(255, 255, 255, 0.4);
       --canvas-dot: rgba(255, 255, 255, 0.22);
+
+      /* 分支族跟随画布外观：仅分支令牌随外观分块升档（石板已在上方外块处理） */
+      --branch-frame: rgba(235, 235, 245, 0.7);
+      --branch-addopt-border: rgba(235, 235, 245, 0.65);
+      --branch-dim: rgba(235, 235, 245, 0.6);
     }
   }
 }
