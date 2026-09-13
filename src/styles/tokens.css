@@ -157,7 +157,8 @@
     --canvas-dot: rgba(0, 0, 0, 0.2);
 
     /* 节点家族次级文本升档至 ≥ 4.5:1、UI 组件边线 ≥ 3:1（issue #107；
-     * 基线值家族各异且偏低，统一在此收敛，见 nodeTokens.test.ts 对比度用例） */
+     * 基线值家族各异且偏低，统一在此收敛，见 nodeTokens.test.ts 对比度用例）。
+     * 石板族家族恒定：浅外观下同样渲染深色石板，caption 升档不随外观分块。 */
     --node-paper-text-secondary: rgba(60, 60, 67, 0.78);
     --node-paper-text-tertiary: rgba(60, 60, 67, 0.85);
     --node-paper-text-caption: rgba(60, 60, 67, 0.8);
@@ -165,6 +166,7 @@
     --node-paper-gear: rgba(60, 60, 67, 0.8);
     --node-paper-voiceover: #9f25d4;
     --node-paper-voiceover-border: #9f25d4;
+    --node-slate-text-caption: rgba(235, 235, 245, 0.7);
     --branch-frame: rgba(0, 0, 0, 0.6);
     --branch-addopt-border: rgba(0, 0, 0, 0.55);
   }
@@ -176,7 +178,7 @@
       --border-hairline: rgba(255, 255, 255, 0.4);
       --canvas-dot: rgba(255, 255, 255, 0.22);
 
-      --node-slate-text-caption: rgba(235, 235, 245, 0.7);
+      /* 分支族跟随画布外观：仅分支令牌随外观分块升档（石板已在上方外块处理） */
       --branch-frame: rgba(235, 235, 245, 0.7);
       --branch-addopt-border: rgba(235, 235, 245, 0.65);
     }

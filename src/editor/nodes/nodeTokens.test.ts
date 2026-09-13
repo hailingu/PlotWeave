@@ -323,79 +323,90 @@ function effectiveBg(
   return bg.a >= 1 ? bg : blendOver(bg, surface)
 }
 
-describe('增强对比度：家族文本 ≥ 4.5:1，UI 组件 ≥ 3:1（§2 原则 2）', () => {
-  const LIGHT: Env = {
-    scheme: 'light',
-    contrast: 'more',
-    transparency: 'no-preference',
-    motion: 'no-reduce',
-  }
-  const DARK: Env = {
-    scheme: 'dark',
-    contrast: 'more',
-    transparency: 'no-preference',
-    motion: 'no-reduce',
-  }
-  const light = tokenValues(LIGHT)
-  const dark = tokenValues(DARK)
+/** more 对比度环境（浅/深双外观）：石板族家族恒定，浅外观下同样渲染深色
+ * 石板，石板断言必须覆盖两种外观（PR #114 评审 3999996133）。 */
+const LIGHT_MORE: Env = {
+  scheme: 'light',
+  contrast: 'more',
+  transparency: 'no-preference',
+  motion: 'no-reduce',
+}
+const DARK_MORE: Env = {
+  scheme: 'dark',
+  contrast: 'more',
+  transparency: 'no-preference',
+  motion: 'no-reduce',
+}
+const lightMore = tokenValues(LIGHT_MORE)
+const darkMore = tokenValues(DARK_MORE)
 
-  /** 文本目标：令牌 × 承载背景令牌（在同一表面族上）。 */
-  const textTargets: { token: string; on: string }[] = [
-    { token: '--node-paper-text', on: '--node-paper' },
-    { token: '--node-paper-text-secondary', on: '--node-paper' },
-    { token: '--node-paper-text-tertiary', on: '--node-paper' },
-    { token: '--node-paper-text-caption', on: '--node-paper-note' },
-    { token: '--node-paper-chip-text', on: '--node-paper' },
-    { token: '--node-paper-text-body', on: '--node-paper' },
-    { token: '--node-paper-gear', on: '--node-paper' },
-    { token: '--node-paper-gear-hover', on: '--node-paper-note' },
-    { token: '--node-paper-voiceover', on: '--node-paper-note' },
-    { token: '--branch-opt-text', on: '--branch-opt-bg' },
-  ]
-  const slateText = [
-    '--node-slate-text',
-    '--node-slate-text-secondary',
-    '--node-slate-text-soft',
-    '--node-slate-text-caption',
-    '--node-slate-text-muted',
-    '--node-slate-text-body',
-    '--node-slate-gear-hover',
-    '--node-slate-error',
-  ]
+/** 纸面/分支文本目标：令牌 × 承载背景令牌（在同一表面族上）。 */
+const PAPER_TEXT_TARGETS: Readonly<{ token: string; on: string }[]> = [
+  { token: '--node-paper-text', on: '--node-paper' },
+  { token: '--node-paper-text-secondary', on: '--node-paper' },
+  { token: '--node-paper-text-tertiary', on: '--node-paper' },
+  { token: '--node-paper-text-caption', on: '--node-paper-note' },
+  { token: '--node-paper-chip-text', on: '--node-paper' },
+  { token: '--node-paper-text-body', on: '--node-paper' },
+  { token: '--node-paper-gear', on: '--node-paper' },
+  { token: '--node-paper-gear-hover', on: '--node-paper-note' },
+  { token: '--node-paper-voiceover', on: '--node-paper-note' },
+  { token: '--branch-opt-text', on: '--branch-opt-bg' },
+]
 
-  it('纸面/分支文本令牌在 more 对比度下 ≥ 4.5:1', () => {
-    for (const { token, on } of textTargets) {
-      const fg = tokenColor(token, light)
-      const bg =
-        on === '--branch-opt-bg'
-          ? effectiveBg('--branch-opt-bg', '--branch-bg', light)
-          : effectiveBg(on, on, light)
-      if (!fg) throw new Error(`令牌 ${token} 非颜色值`)
-      expect(
-        contrastRatio(fg, bg),
-        `${token} on ${on} = ${contrastRatio(fg, bg).toFixed(2)}:1`,
-      ).toBeGreaterThanOrEqual(4.5)
+/** 石板族文本目标：家族恒定，浅/深外观共用同一承载面与取值。 */
+const SLATE_TEXT_TARGETS: Readonly<string[]> = [
+  '--node-slate-text',
+  '--node-slate-text-secondary',
+  '--node-slate-text-soft',
+  '--node-slate-text-caption',
+  '--node-slate-text-muted',
+  '--node-slate-text-body',
+  '--node-slate-gear-hover',
+  '--node-slate-error',
+]
+
+/** 断言令牌文本在承载背景上达到目标对比度：半透明前景先按 alpha 合成到
+ * 背景（渲染色），再算 WCAG 对比度——直接对未合成色算会系统性偏高漏检
+ * （PR #114 评审 3999996133 复盘：浅外观石板 caption 漏检即此因）。 */
+function expectContrast(
+  token: string,
+  bgName: string,
+  surfaceName: string,
+  tokens: Map<string, string>,
+  min: number,
+): void {
+  const fg = tokenColor(token, tokens)
+  const bg = effectiveBg(bgName, surfaceName, tokens)
+  if (!fg) throw new Error(`令牌 ${token} 非颜色值`)
+  const rendered = fg.a >= 1 ? fg : blendOver(fg, bg)
+  expect(
+    contrastRatio(rendered, bg),
+    `${token} on ${bgName} = ${contrastRatio(rendered, bg).toFixed(2)}:1`,
+  ).toBeGreaterThanOrEqual(min)
+}
+
+describe('增强对比度：家族文本 ≥ 4.5:1（§2 原则 2）', () => {
+  it('纸面/分支文本令牌在 more 对比度下达标', () => {
+    for (const { token, on } of PAPER_TEXT_TARGETS) {
+      const surface = on === '--branch-opt-bg' ? '--branch-bg' : on
+      expectContrast(token, on, surface, lightMore, 4.5)
     }
     // branch-dim 是 var 链，消解后同样须达标（浅外观 = text-secondary more 变体）
-    const dim = tokenColor('--branch-dim', light)!
-    expect(
-      contrastRatio(dim, effectiveBg('--branch-bg', '--branch-bg', light)),
-    ).toBeGreaterThanOrEqual(4.5)
+    expectContrast('--branch-dim', '--branch-bg', '--branch-bg', lightMore, 4.5)
   })
 
-  it('石板文本令牌在 more 对比度下 ≥ 4.5:1', () => {
-    for (const token of slateText) {
-      const fg = tokenColor(token, dark)
-      if (!fg) throw new Error(`令牌 ${token} 非颜色值`)
-      const bg = effectiveBg('--surface-slate', '--surface-slate', dark)
-      expect(
-        contrastRatio(fg, bg),
-        `${token} = ${contrastRatio(fg, bg).toFixed(2)}:1`,
-      ).toBeGreaterThanOrEqual(4.5)
+  it('石板文本令牌在 more 对比度下达标（浅/深外观，家族恒定）', () => {
+    for (const tokens of [lightMore, darkMore]) {
+      for (const token of SLATE_TEXT_TARGETS) {
+        expectContrast(token, '--surface-slate', '--surface-slate', tokens, 4.5)
+      }
     }
   })
+})
 
-  it('分支虚线框/添加行边、画外音徽标边在 more 对比度下 ≥ 3:1（非文本 UI 组件）', () => {
+describe('增强对比度：UI 组件 ≥ 3:1（非文本）', () => {
+  it('分支虚线框/添加行边、画外音徽标边在 more 对比度下达标', () => {
     const uiTargetsLight = [
       { token: '--branch-frame', bg: '--branch-bg', surface: '--branch-bg' },
       {
@@ -410,17 +421,11 @@ describe('增强对比度：家族文本 ≥ 4.5:1，UI 组件 ≥ 3:1（§2 原
       },
     ]
     for (const { token, bg, surface } of uiTargetsLight) {
-      const fg = tokenColor(token, light)!
-      expect(
-        contrastRatio(fg, effectiveBg(bg, surface, light)),
-        `${token} = ${contrastRatio(fg, effectiveBg(bg, surface, light)).toFixed(2)}:1`,
-      ).toBeGreaterThanOrEqual(3)
+      expectContrast(token, bg, surface, lightMore, 3)
     }
     // 深色下分支底透明，虚线框实际画在画布底色上
-    const canvasDark = tokenColor('--surface-canvas', dark)!
     for (const token of ['--branch-frame', '--branch-addopt-border']) {
-      const fg = tokenColor(token, dark)!
-      expect(contrastRatio(fg, canvasDark)).toBeGreaterThanOrEqual(3)
+      expectContrast(token, '--surface-canvas', '--surface-canvas', darkMore, 3)
     }
   })
 })
