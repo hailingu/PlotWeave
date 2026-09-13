@@ -152,4 +152,30 @@ describe('useAutoLayout · 安全边界（issue #94）', () => {
     expect(fitView).not.toHaveBeenCalled()
     expect(onError).not.toHaveBeenCalled()
   })
+
+  it('减少动态偏好下视口适配降级为无插值即时适配（§2.6，PR #111 评审）', () => {
+    vi.spyOn(window, 'matchMedia').mockImplementation(
+      ((query: string) => ({ matches: query === '(prefers-reduced-motion: reduce)' })) as unknown as typeof window.matchMedia,
+    )
+    const project = makeProject(
+      [sceneNode('s1', 0, 0), sceneNode('s2', 800, 600)],
+      [seqEdge('s1', 's2')],
+    )
+    const { result, fitView } = setup(project)
+    act(() => result.current.layout.onAutoLayout())
+    expect(fitView).toHaveBeenCalledWith(expect.objectContaining({ duration: 0 }))
+  })
+
+  it('默认动效下视口适配保留 400ms 动画（PR #111 评审）', () => {
+    vi.spyOn(window, 'matchMedia').mockImplementation(
+      (() => ({ matches: false })) as unknown as typeof window.matchMedia,
+    )
+    const project = makeProject(
+      [sceneNode('s1', 0, 0), sceneNode('s2', 800, 600)],
+      [seqEdge('s1', 's2')],
+    )
+    const { result, fitView } = setup(project)
+    act(() => result.current.layout.onAutoLayout())
+    expect(fitView).toHaveBeenCalledWith(expect.objectContaining({ duration: 400 }))
+  })
 })

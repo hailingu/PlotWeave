@@ -24,8 +24,14 @@ export interface AutoLayoutDeps {
   computeLayout?: typeof computeAutoLayout
 }
 
-/** 排布完成后的视图适配参数：与大纲定位一致的动画节奏。 */
-const FIT_OPTIONS = { duration: 400, padding: 0.15, maxZoom: 1 }
+/** 视口适配的动画节奏：与大纲定位一致；「减少动态」偏好下降级为无插值
+ * 即时适配（§2.6，CSS 媒体查询管不到 JS 动画，PR #111 评审）。 */
+const FIT_DURATION_MS = 400
+const FIT_OPTIONS = { padding: 0.15, maxZoom: 1 }
+
+const prefersReducedMotion = (): boolean =>
+  typeof window.matchMedia === 'function' &&
+  window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
 /** 自动排布动作：无变化与失败都是安全无操作，成功才有历史与视图副作用。 */
 export function useAutoLayout(deps: AutoLayoutDeps) {
@@ -59,7 +65,7 @@ export function useAutoLayout(deps: AutoLayoutDeps) {
     apply(after)
     // setNodes 是 React 状态：React Flow 内部仓库在提交后才有新位置，
     // fitView 经下一帧调度读到的才是排布后的包围盒
-    window.requestAnimationFrame(() => fitView(FIT_OPTIONS))
+    window.requestAnimationFrame(() => fitView({ ...FIT_OPTIONS, duration: prefersReducedMotion() ? 0 : FIT_DURATION_MS }))
   }, [compute, edgesRef, fitView, nodesRef, onError, pushHistory, setNodes])
 
   return { onAutoLayout }

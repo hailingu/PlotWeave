@@ -30,14 +30,19 @@ export interface LayoutSize {
   height: number
 }
 
-/** 各节点类型的回退尺寸：measured 未就绪时保证整图可算（nodes.css 实宽）。 */
-const FALLBACK_SIZES: Record<string, LayoutSize> = {
+/**
+ * 各节点类型的回退尺寸：measured 与顶层 width/height 均缺省时保证整图可算。
+ * 宽度为 nodes.css 的**外宽**（content-box 声明宽 + padding + border，如
+ * .pw-shot 300 + 28 = 328、.pw-branch 320 + 28 + 3 = 351），按内容宽排布
+ * 会让未测量卡片重叠（PR #111 评审）；高度随内容伸缩，只能估值的保持估值。
+ */
+export const FALLBACK_SIZES: Record<string, LayoutSize> = {
   scene: { width: 340, height: 220 },
   dialogue: { width: 360, height: 240 },
   beat: { width: 220, height: 64 },
-  branch: { width: 320, height: 200 },
-  shot: { width: 300, height: 260 },
-  image: { width: 300, height: 380 },
+  branch: { width: 351, height: 200 },
+  shot: { width: 328, height: 260 },
+  image: { width: 328, height: 380 },
 }
 const DEFAULT_SIZE: LayoutSize = { width: 300, height: 200 }
 

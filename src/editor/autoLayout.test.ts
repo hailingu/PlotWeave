@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import type { Edge } from '@xyflow/react'
-import { computeAutoLayout } from './autoLayout'
+import { computeAutoLayout, FALLBACK_SIZES } from './autoLayout'
 import type { CanvasNode } from './nodes/types'
 
 type Size = { width: number; height: number }
@@ -124,6 +124,14 @@ describe('computeAutoLayout · 分镜下挂与不连通分区', () => {
       expect(p.x).toBeGreaterThanOrEqual(host.x)
     }
     assertNoOverlap(nodes, positions, SIZE)
+  })
+
+  it('未测量分镜卡按外宽（含 padding）计算行内间距（PR #111 评审）', () => {
+    // .pw-shot 为 content-box：width 300 + 左右 padding 各 14 → 外宽 328 > 内容宽。
+    // 若行距按内容宽排布（300+24=324 < 2×328），相邻分镜卡重叠。
+    const nodes = [node('sc1', 'scene', 0, 0), node('sh1', 'shot', 900, 900), node('sh2', 'shot', 1300, 900)]
+    const positions = computeAutoLayout(nodes, [attach('sc1', 'sh1'), attach('sc1', 'sh2')])
+    assertNoOverlap(nodes, positions, FALLBACK_SIZES.shot)
   })
 
   it('不连通子图与独立节点分区放置，互不重叠', () => {
