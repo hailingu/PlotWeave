@@ -162,8 +162,10 @@ describe('useAutoLayout · 安全边界（issue #94）', () => {
     expect(fitView).not.toHaveBeenCalled()
     expect(onError).not.toHaveBeenCalled()
   })
+})
 
-  it('存在未测量节点（max-content 节拍卡）时保留原布局并提示稍后重试（PR #111 评审）', () => {
+describe('useAutoLayout · 测量守卫与减少动态（PR #111 评审）', () => {
+  it('存在未测量节点（max-content 节拍卡）时保留原布局并提示稍后重试', () => {
     const project = makeProject(
       [sceneNode('s1', 0, 0), unmeasuredBeat('bt1', 800, 600)],
       [seqEdge('s1', 'bt1')],
@@ -181,7 +183,7 @@ describe('useAutoLayout · 安全边界（issue #94）', () => {
     expect(positionsOf(result.current.doc.nodes)).toEqual(before)
   })
 
-  it('减少动态偏好下视口适配降级为无插值即时适配（§2.6，PR #111 评审）', () => {
+  it('减少动态偏好下视口适配降级为无插值即时适配（§2.6）', () => {
     vi.spyOn(window, 'matchMedia').mockImplementation(
       ((query: string) => ({ matches: query === '(prefers-reduced-motion: reduce)' })) as unknown as typeof window.matchMedia,
     )
@@ -194,7 +196,7 @@ describe('useAutoLayout · 安全边界（issue #94）', () => {
     expect(fitView).toHaveBeenCalledWith(expect.objectContaining({ duration: 0 }))
   })
 
-  it('默认动效下视口适配保留 400ms 动画（PR #111 评审）', () => {
+  it('默认动效下视口适配保留 400ms 动画', () => {
     vi.spyOn(window, 'matchMedia').mockImplementation(
       (() => ({ matches: false })) as unknown as typeof window.matchMedia,
     )
