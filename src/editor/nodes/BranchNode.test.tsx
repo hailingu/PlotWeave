@@ -18,7 +18,9 @@ vi.mock('@xyflow/react', async (importOriginal) => {
     ...orig,
     /** Handle 桩：脱离 ReactFlow 画布后仅保留锚点语义（type/id）供断言。 */
     Handle: (props: { readonly id?: string; readonly type: string }) => (
-      <div data-testid={`handle-${props.type}${props.id ? `-${props.id}` : ''}`} />
+      <div
+        data-testid={`handle-${props.type}${props.id ? `-${props.id}` : ''}`}
+      />
     ),
   }
 })
@@ -64,8 +66,12 @@ describe('BranchNode（岔路路标）', () => {
     expect(screen.getByText('林晚是否发现真相？')).toBeTruthy()
     expect(screen.getByText('坦白')).toBeTruthy()
     expect(screen.getByText('隐瞒')).toBeTruthy()
-    expect(screen.getByTestId(`handle-source-${BRANCH_OPTION_HANDLE_PREFIX}o1`)).toBeTruthy()
-    expect(screen.getByTestId(`handle-source-${BRANCH_OPTION_HANDLE_PREFIX}o2`)).toBeTruthy()
+    expect(
+      screen.getByTestId(`handle-source-${BRANCH_OPTION_HANDLE_PREFIX}o1`),
+    ).toBeTruthy()
+    expect(
+      screen.getByTestId(`handle-source-${BRANCH_OPTION_HANDLE_PREFIX}o2`),
+    ).toBeTruthy()
     expect(screen.getByTestId('handle-target')).toBeTruthy()
   })
 
@@ -81,10 +87,15 @@ describe('BranchNode（岔路路标）', () => {
 
   it('问句双击内联改名 → patchNode 合并 prompt', () => {
     const { api } = setup()
-    fireEvent.doubleClick(screen.getByRole('button', { name: '林晚是否发现真相？' }))
+    fireEvent.doubleClick(
+      screen.getByRole('button', { name: '林晚是否发现真相？' }),
+    )
     const input = screen.getByRole('textbox', { name: '分支问句' })
     fireEvent.change(input, { target: { value: '追或不追？' } })
     fireEvent.blur(input)
-    expect(api.patchNode).toHaveBeenCalledWith('br1', { nodeType: 'branch', patch: { prompt: '追或不追？' } })
+    expect(api.patchNode).toHaveBeenCalledWith('br1', {
+      nodeType: 'branch',
+      patch: { prompt: '追或不追？' },
+    })
   })
 })

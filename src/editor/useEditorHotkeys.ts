@@ -29,13 +29,19 @@ export function useEditorHotkeys(actions: EditorHotkeyActions): void {
   useEffect(() => {
     const onPointerDown = (e: PointerEvent) => {
       const target = e.target as HTMLElement
-      if (!target.closest('[data-pw-settings],[data-pw-gear],.editor-plus,.editor-ctx')) {
+      if (
+        !target.closest(
+          '[data-pw-settings],[data-pw-gear],.editor-plus,.editor-ctx',
+        )
+      ) {
         ref.current.onCloseTransient()
       }
     }
     const onKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement
-      const typing = target.closest('input,textarea,select,[contenteditable="true"]')
+      const typing = target.closest(
+        'input,textarea,select,[contenteditable="true"]',
+      )
       if (e.key === 'Escape') {
         ref.current.onEscape()
         return

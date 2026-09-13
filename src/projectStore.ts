@@ -17,7 +17,12 @@ import {
   memoryLoad,
   memorySave,
 } from './projectStore/memory'
-import { enqueueDelete, enqueueSave, notifyProjectSaved, onProjectSaved } from './projectStore/saveChain'
+import {
+  enqueueDelete,
+  enqueueSave,
+  notifyProjectSaved,
+  onProjectSaved,
+} from './projectStore/saveChain'
 import { tauriCreate, tauriList, tauriLoad } from './projectStore/tauri'
 import type { ProjectSummary } from './home/projects'
 import {
@@ -31,8 +36,7 @@ import type { AiSession } from './editor/ai/session'
 
 export type { ProjectContent }
 
-const isTauri =
-  typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
 /** 复制命名（§7.3）：新名 = `{源名} 副本`，与现存项目名冲突则递增序号
  * （` 副本 2`、` 副本 3`…）；拼接结果按字符数超 64（§9.3 校验口径）时先
@@ -40,7 +44,8 @@ const isTauri =
 function duplicateName(source: string, taken: ReadonlySet<string>): string {
   const build = (suffix: string): string => {
     const room = Math.max(1, 64 - [...suffix].length)
-    const head = [...source.trim()].slice(0, room).join('').trimEnd() || '未命名'
+    const head =
+      [...source.trim()].slice(0, room).join('').trimEnd() || '未命名'
     return head + suffix
   }
   const first = build(' 副本')
@@ -57,9 +62,7 @@ export const projectStore = {
     isTauri ? tauriList() : Promise.resolve(memoryList()),
 
   create: (name: string): Promise<ProjectSummary> =>
-    isTauri
-      ? tauriCreate(name)
-      : Promise.resolve(memoryCreate(name)),
+    isTauri ? tauriCreate(name) : Promise.resolve(memoryCreate(name)),
 
   load: (id: string): Promise<ProjectContent> =>
     isTauri ? tauriLoad(id) : memoryLoad(id),
@@ -82,7 +85,8 @@ export const projectStore = {
   loadAiSession,
 
   /** AI 会话保存失败上浮给面板展示；内存历史不随失败清空。 */
-  saveAiSession: (id: string, session: AiSession): Promise<void> => saveAiSession(id, session),
+  saveAiSession: (id: string, session: AiSession): Promise<void> =>
+    saveAiSession(id, session),
 
   /** 订阅会话落盘成功（含不经面板通道的退出重试）：App 据此清除
    * 项目级保存错误与保留快照。 */
@@ -124,7 +128,11 @@ export const projectStore = {
       // 清理自身也失败时合并双错向前抛出并报告可能遗留的副本 id，
       // 绝不静默吞掉（否则空/半拷贝副本永留首页且无人知晓）
       await projectStore.delete(meta.id).catch((cleanupErr: unknown) => {
-        console.error('[projectStore] 副本清理失败，首页可能遗留空副本，可手动删除', meta.id, cleanupErr)
+        console.error(
+          '[projectStore] 副本清理失败，首页可能遗留空副本，可手动删除',
+          meta.id,
+          cleanupErr,
+        )
         throw new Error(
           `复制项目失败（${String(err)}），且副本 ${meta.id} 清理失败（${String(cleanupErr)}）——首页可能遗留空副本，可手动删除`,
         )

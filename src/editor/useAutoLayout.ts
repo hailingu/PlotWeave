@@ -4,7 +4,12 @@
  * 历史（useNodeDragHistory）同一快照语义。无位置变化不入栈；计算失败保留
  * 原布局并上浮可读反馈；成功后适配视图让用户看到整理结果（视图操作不入栈）。
  */
-import { useCallback, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
+import {
+  useCallback,
+  type Dispatch,
+  type MutableRefObject,
+  type SetStateAction,
+} from 'react'
 import type { Edge, FitView, XYPosition } from '@xyflow/react'
 import { computeAutoLayout, hasUsableSize, type LayoutEdge } from './autoLayout'
 import type { HistoryCommand } from './history'
@@ -52,7 +57,9 @@ export function useAutoLayout(deps: AutoLayoutDeps) {
     try {
       after = compute(nodes, edgesRef.current as LayoutEdge[])
     } catch (err) {
-      onError(`自动排布失败：${err instanceof Error ? err.message : String(err)}，已保留原布局`)
+      onError(
+        `自动排布失败：${err instanceof Error ? err.message : String(err)}，已保留原布局`,
+      )
       return
     }
     const moved = nodes.some((n) => {
@@ -71,7 +78,12 @@ export function useAutoLayout(deps: AutoLayoutDeps) {
     apply(after)
     // setNodes 是 React 状态：React Flow 内部仓库在提交后才有新位置，
     // fitView 经下一帧调度读到的才是排布后的包围盒
-    window.requestAnimationFrame(() => fitView({ ...FIT_OPTIONS, duration: prefersReducedMotion() ? 0 : FIT_DURATION_MS }))
+    window.requestAnimationFrame(() =>
+      fitView({
+        ...FIT_OPTIONS,
+        duration: prefersReducedMotion() ? 0 : FIT_DURATION_MS,
+      }),
+    )
   }, [compute, edgesRef, fitView, nodesRef, onError, pushHistory, setNodes])
 
   return { onAutoLayout }

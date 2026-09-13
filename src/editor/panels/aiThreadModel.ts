@@ -1,7 +1,14 @@
-import { runAgentLoop, type AgentLoopResult, type ReadToolExecutor } from '../ai/agentLoop'
+import {
+  runAgentLoop,
+  type AgentLoopResult,
+  type ReadToolExecutor,
+} from '../ai/agentLoop'
 import { type ChatMessage } from '../ai/chat'
 import { CREATION_GUIDE } from '../ai/creationGuide'
-import { documentFieldTableText, entityFieldTableText } from '../ai/entityFields'
+import {
+  documentFieldTableText,
+  entityFieldTableText,
+} from '../ai/entityFields'
 import { nodeFieldTableText } from '../ai/nodeFields'
 import type { ProviderConfig } from '../../settings/types'
 import type { ThreadEntry } from '../ai/session'
@@ -83,7 +90,10 @@ function batchStatus(card: NonNullable<ThreadEntry['card']>): string {
 
 /** 状态跟随所属消息，裁剪时一起保留或丢弃；note 回执不独立进入上下文。 */
 function historyMessage(entry: ThreadEntry): ChatMessage {
-  const message: ChatMessage = { role: entry.role ?? 'assistant', content: entry.text }
+  const message: ChatMessage = {
+    role: entry.role ?? 'assistant',
+    content: entry.text,
+  }
   const card = entry.card
   if (!card || message.role !== 'assistant') return message
   const status = batchStatus(card)
@@ -94,13 +104,24 @@ function historyMessage(entry: ThreadEntry): ChatMessage {
     changes: card.v.items.slice(0, 6).map((item) => summaryText(item.label)),
     omittedChanges: Math.max(0, card.v.items.length - 6),
     ...(status === 'validation_failed'
-      ? { issues: card.v.issues.slice(0, 3).map((issue) => summaryText(issue.message)) }
+      ? {
+          issues: card.v.issues
+            .slice(0, 3)
+            .map((issue) => summaryText(issue.message)),
+        }
       : {}),
     ...(status === 'executed' ? { currentEffect: 'unknown' } : {}),
-    ...(status === 'execution_failed' ? { executionError: summaryText(card.executionError!) } : {}),
-    ...(status === 'executed' && card.uncommitted ? { canvasSavePending: true } : {}),
+    ...(status === 'execution_failed'
+      ? { executionError: summaryText(card.executionError!) }
+      : {}),
+    ...(status === 'executed' && card.uncommitted
+      ? { canvasSavePending: true }
+      : {}),
   }
-  return { ...message, content: `${entry.text}\n\n[应用批次记录]\n${JSON.stringify(record)}` }
+  return {
+    ...message,
+    content: `${entry.text}\n\n[应用批次记录]\n${JSON.stringify(record)}`,
+  }
 }
 
 /** 自新向旧保留会话消息，条数与累计字符双界截断；最新一条即使单独
@@ -109,7 +130,11 @@ function historyMessage(entry: ThreadEntry): ChatMessage {
 function boundedHistory(thread: ThreadEntry[]): ChatMessage[] {
   const kept: ChatMessage[] = []
   let chars = 0
-  for (let i = thread.length - 1; i >= 0 && kept.length < HISTORY_MAX_MESSAGES; i -= 1) {
+  for (
+    let i = thread.length - 1;
+    i >= 0 && kept.length < HISTORY_MAX_MESSAGES;
+    i -= 1
+  ) {
     if (thread[i].kind !== 'msg') continue
     const message = historyMessage(thread[i])
     chars += message.content.length
@@ -131,7 +156,12 @@ export function buildMessages(
   return [
     { role: 'system', content: SYSTEM_PROMPT },
     ...(knowsCanvas && canvasDigest
-      ? [{ role: 'system' as const, content: `当前画布快照：\n${canvasDigest}` }]
+      ? [
+          {
+            role: 'system' as const,
+            content: `当前画布快照：\n${canvasDigest}`,
+          },
+        ]
       : []),
     ...boundedHistory(thread),
     { role: 'user', content: text },
@@ -145,19 +175,34 @@ function assistantEntries(
   nextId: () => number,
 ): ThreadEntry[] {
   const { prose, toolErrors, validation } = result
-  let displayText = validation ? prose.replace(/```json[\s\S]*?```/gi, '').trim() : prose
-  if (result.completionError) displayText = [displayText, `⚠ ${result.completionError}`].filter(Boolean).join('\n\n')
+  let displayText = validation
+    ? prose.replace(/```json[\s\S]*?```/gi, '').trim()
+    : prose
+  if (result.completionError)
+    displayText = [displayText, `⚠ ${result.completionError}`]
+      .filter(Boolean)
+      .join('\n\n')
   if (!displayText && !validation) displayText = '（模型未返回内容）'
   return [
     ...(toolErrors.length > 0
-      ? [{ id: nextId(), kind: 'note' as const, text: `⚠ ${toolErrors.join('；')}` }]
+      ? [
+          {
+            id: nextId(),
+            kind: 'note' as const,
+            text: `⚠ ${toolErrors.join('；')}`,
+          },
+        ]
       : []),
     {
       id: nextId(),
       kind: 'msg',
       role: 'assistant',
-      text: displayText || (validation ? '（本次回复只有改动批次，见下方预览卡）' : ''),
-      ...(validation ? { card: { v: validation, status: 'pending' as const } } : {}),
+      text:
+        displayText ||
+        (validation ? '（本次回复只有改动批次，见下方预览卡）' : ''),
+      ...(validation
+        ? { card: { v: validation, status: 'pending' as const } }
+        : {}),
     },
   ]
 }
@@ -172,7 +217,13 @@ export async function runModelTurn(
   validators: Parameters<typeof runAgentLoop>[4],
   nextId: () => number,
 ): Promise<ThreadEntry[]> {
-  const result = await runAgentLoop(provider, model, messages, readTool, validators)
+  const result = await runAgentLoop(
+    provider,
+    model,
+    messages,
+    readTool,
+    validators,
+  )
   return assistantEntries(result, nextId)
 }
 

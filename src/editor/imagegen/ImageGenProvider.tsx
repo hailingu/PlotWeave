@@ -21,7 +21,9 @@ interface ImageGenProviderProps {
   readonly projectId: string
   readonly nodes: CanvasNode[]
   readonly nodesRef: { current: CanvasNode[] }
-  readonly assetsRef: { current: { byId: Record<string, AssetRef> } | undefined }
+  readonly assetsRef: {
+    current: { byId: Record<string, AssetRef> } | undefined
+  }
   readonly settings: Pick<ProjectSettings, 'characters'>
   readonly applyDataPatch: (id: string, cmd: NodeDataPatch) => void
   readonly addAsset: (asset: AssetRef) => void

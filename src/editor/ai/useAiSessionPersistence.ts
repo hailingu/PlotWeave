@@ -22,9 +22,13 @@ export function useAiSessionPersistence(
   onSaveSession: ((session: AiSession) => Promise<void>) | undefined,
   initialSessionRetryable: boolean | undefined,
 ): string | null {
-  const [saveError, setSaveError] = useState<string | null>(initialSessionError ?? null)
+  const [saveError, setSaveError] = useState<string | null>(
+    initialSessionError ?? null,
+  )
   const hasMounted = useRef(false)
-  const retryOnMount = useRef(initialSessionError != null && initialSessionRetryable !== false)
+  const retryOnMount = useRef(
+    initialSessionError != null && initialSessionRetryable !== false,
+  )
   const saveSessionRef = useRef(onSaveSession)
   useEffect(() => {
     saveSessionRef.current = onSaveSession

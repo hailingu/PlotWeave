@@ -14,10 +14,16 @@ import {
   type EditorDocument,
   type EditorProjectContent,
 } from './useEditorDocument'
-import { useEditorGraphActions, type EditorGraphActions } from './useEditorGraphActions'
+import {
+  useEditorGraphActions,
+  type EditorGraphActions,
+} from './useEditorGraphActions'
 import { useEditorHotkeys } from './useEditorHotkeys'
 import { useEditorPanels, type EditorPanels } from './useEditorPanels'
-import { useEditorPersistence, type EditorPersistence } from './useEditorPersistence'
+import {
+  useEditorPersistence,
+  type EditorPersistence,
+} from './useEditorPersistence'
 import { useNodeEditApi } from './useNodeEditApi'
 import type { CommandHistory } from './editorLayoutProps'
 import type { NodeEditApi } from './nodeEdit'
@@ -65,7 +71,9 @@ export interface EditorController {
 }
 
 /** 组装编辑器全部状态、动作与 Provider 依赖。 */
-export function useEditorController(deps: EditorControllerDeps): EditorController {
+export function useEditorController(
+  deps: EditorControllerDeps,
+): EditorController {
   const { project, onSave, screenToFlowPosition, fitView } = deps
   const canvasRef = useRef<HTMLDivElement>(null)
   const doc = useEditorDocument(project)

@@ -16,9 +16,13 @@ import type { ProjectContent } from './projectStore'
 const editorGate = vi.hoisted(() => ({
   resolve: null as null | ((mod: unknown) => void),
 }))
-vi.mock('./editor/EditorView', () => new Promise((resolve) => {
-  editorGate.resolve = resolve as (mod: unknown) => void
-}))
+vi.mock(
+  './editor/EditorView',
+  () =>
+    new Promise((resolve) => {
+      editorGate.resolve = resolve as (mod: unknown) => void
+    }),
+)
 
 vi.mock('./projectStore', () => ({
   projectStore: {
@@ -91,7 +95,9 @@ describe('App（惰性 chunk 加载保留当前界面）', () => {
     await screen.findByTestId('home')
 
     await act(async () => {
-      await (homeProps.current.onOpenProject as (id: string) => Promise<void>)('p1')
+      await (homeProps.current.onOpenProject as (id: string) => Promise<void>)(
+        'p1',
+      )
     })
     // 越过 React 对已显示边界的 fallback 防闪白节流（~300ms）再观察中间态
     await act(async () => {

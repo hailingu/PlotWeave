@@ -11,6 +11,35 @@ import EditorCanvasRegion from './EditorCanvasRegion'
 import EditorOverlays from './EditorOverlays'
 import type { EditorLayoutProps } from './editorLayoutProps'
 
+/** 布局横幅区（EditorLayout 拆分，issue #99）：自动保存失败与动作错误。 */
+function LayoutBanners({
+  saveError,
+  actionError,
+}: {
+  readonly saveError: string | null
+  readonly actionError: string | null
+}) {
+  return (
+    <>
+      {saveError !== null && (
+        <ErrorBanner
+          message={`自动保存失败：${saveError}（修改已保留，正在自动重试；可检查磁盘后继续编辑）`}
+        />
+      )}
+      {actionError !== null && <ErrorBanner message={actionError} />}
+    </>
+  )
+}
+
+/** 右栏切页（EditorLayout 拆分）：切页即展开右栏。 */
+function switchRightTab(
+  panels: EditorLayoutProps['panels'],
+  tab: EditorLayoutProps['panels']['rightTab'],
+): void {
+  panels.setRightTab(tab)
+  panels.setRightOpen(true)
+}
+
 /** 编辑器整体布局：顶部工具栏（§3.3）+ 三栏主体（§3.4）+ 浮层。 */
 export default function EditorLayout(props: EditorLayoutProps) {
   const { project, doc, panels, persistence, history, view, graph, ai } = props
@@ -35,12 +64,10 @@ export default function EditorLayout(props: EditorLayoutProps) {
         aiOn={panels.rightTab === 'ai' && panels.rightOpen}
         onToggleRight={panels.toggleRight}
       />
-      {persistence.saveError !== null && (
-        <ErrorBanner
-          message={`自动保存失败：${persistence.saveError}（修改已保留，正在自动重试；可检查磁盘后继续编辑）`}
-        />
-      )}
-      {props.actionError !== null && <ErrorBanner message={props.actionError} />}
+      <LayoutBanners
+        saveError={persistence.saveError}
+        actionError={props.actionError}
+      />
       <div className="editor-body">
         <LeftPanel
           open={panels.leftOpen}
@@ -64,13 +91,12 @@ export default function EditorLayout(props: EditorLayoutProps) {
           width={panels.rightWidth}
           onResize={panels.setRightWidth}
           tab={panels.rightTab}
-          onTabChange={(tab) => {
-            panels.setRightTab(tab)
-            panels.setRightOpen(true)
-          }}
+          onTabChange={(tab) => switchRightTab(panels, tab)}
           projectId={project.id}
           selectedNode={view.selectedNode}
-          attachedShotCount={view.selectedNode ? view.shotCountOf(view.selectedNode.id) : 0}
+          attachedShotCount={
+            view.selectedNode ? view.shotCountOf(view.selectedNode.id) : 0
+          }
           settings={doc.settings}
           onOpenSettings={props.onOpenSettings}
           canvasDigest={ai.canvasDigest}

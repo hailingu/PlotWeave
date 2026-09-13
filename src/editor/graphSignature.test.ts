@@ -21,8 +21,23 @@ describe('graphSignature', () => {
       EMPTY_SETTINGS,
     )
     const sessionOnly = graphSignature(
-      [node({ selected: true, dragging: true, measured: { width: 10, height: 10 }, className: 'pw-node-dim' })],
-      [{ id: 'e1', source: 'a', target: 'b', selected: true, className: 'pw-edge-sequence' } as Edge],
+      [
+        node({
+          selected: true,
+          dragging: true,
+          measured: { width: 10, height: 10 },
+          className: 'pw-node-dim',
+        }),
+      ],
+      [
+        {
+          id: 'e1',
+          source: 'a',
+          target: 'b',
+          selected: true,
+          className: 'pw-edge-sequence',
+        } as Edge,
+      ],
       EMPTY_SETTINGS,
     )
     expect(sessionOnly).toBe(plain)
@@ -30,9 +45,19 @@ describe('graphSignature', () => {
 
   it('语义内容变化即签名变化：执行前快照可用于对账', () => {
     const base = graphSignature([node()], [], EMPTY_SETTINGS)
-    expect(graphSignature([node({ data: { name: '场二', sceneNo: 1 } })], [], EMPTY_SETTINGS)).not.toBe(base)
     expect(
-      graphSignature([node()], [{ id: 'e1', source: 's1', target: 's2' } as Edge], EMPTY_SETTINGS),
+      graphSignature(
+        [node({ data: { name: '场二', sceneNo: 1 } })],
+        [],
+        EMPTY_SETTINGS,
+      ),
+    ).not.toBe(base)
+    expect(
+      graphSignature(
+        [node()],
+        [{ id: 'e1', source: 's1', target: 's2' } as Edge],
+        EMPTY_SETTINGS,
+      ),
     ).not.toBe(base)
     expect(
       graphSignature([node()], [], {

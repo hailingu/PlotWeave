@@ -14,10 +14,13 @@ beforeEach(() => {
   invoke.mockReset()
 })
 
-const load = async (): Promise<typeof import('./projectAssets')> => import('./projectAssets')
+const load = async (): Promise<typeof import('./projectAssets')> =>
+  import('./projectAssets')
 
 /** 一条合法的 Rust 侧 AssetRef。 */
-const assetRef = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+const assetRef = (
+  over: Record<string, unknown> = {},
+): Record<string, unknown> => ({
   id: 'pa-1',
   relPath: 'assets/pa-1.png',
   mime: 'image/png',
@@ -40,7 +43,10 @@ describe('projectAssets Tauri 路径：importFromLibrary', () => {
       { id: 'p-1', libraryAssetId: 'la-1' },
     ])
     expect(invoke.mock.calls[1][0]).toBe('validate_project_asset')
-    const validated = invoke.mock.calls[1][1] as { id: string; asset: { id: string } }
+    const validated = invoke.mock.calls[1][1] as {
+      id: string
+      asset: { id: string }
+    }
     expect(validated.id).toBe('p-1')
     expect(validated.asset.id).toBe('pa-1')
   })
@@ -48,11 +54,17 @@ describe('projectAssets Tauri 路径：importFromLibrary', () => {
   it('导入或预检返回无效条目抛错（坏数据不进会话索引）', async () => {
     invoke.mockResolvedValueOnce({ id: '' })
     const { projectAssets } = await load()
-    await expect(projectAssets.importFromLibrary('p-1', 'la-1')).rejects.toThrow(/无效资产条目/)
+    await expect(
+      projectAssets.importFromLibrary('p-1', 'la-1'),
+    ).rejects.toThrow(/无效资产条目/)
 
     invoke.mockReset()
-    invoke.mockResolvedValueOnce(assetRef()).mockResolvedValueOnce({ id: 'pa-1' })
-    await expect(projectAssets.importFromLibrary('p-1', 'la-1')).rejects.toThrow(/无效资产条目/)
+    invoke
+      .mockResolvedValueOnce(assetRef())
+      .mockResolvedValueOnce({ id: 'pa-1' })
+    await expect(
+      projectAssets.importFromLibrary('p-1', 'la-1'),
+    ).rejects.toThrow(/无效资产条目/)
   })
 })
 
@@ -60,7 +72,9 @@ describe('projectAssets Tauri 路径：revalidate（撤销后重做防线，issu
   it('经 validate_project_asset 复验：通过则兑现；返回无效条目拒绝', async () => {
     invoke.mockResolvedValueOnce(assetRef())
     const { projectAssets } = await load()
-    await expect(projectAssets.revalidate('p-1', assetRef() as never)).resolves.toBeUndefined()
+    await expect(
+      projectAssets.revalidate('p-1', assetRef() as never),
+    ).resolves.toBeUndefined()
     expect(invoke.mock.calls[0]).toEqual([
       'validate_project_asset',
       { id: 'p-1', asset: assetRef() },
@@ -68,9 +82,9 @@ describe('projectAssets Tauri 路径：revalidate（撤销后重做防线，issu
 
     invoke.mockReset()
     invoke.mockResolvedValueOnce({ id: '' })
-    await expect(projectAssets.revalidate('p-1', assetRef() as never)).rejects.toThrow(
-      /无效资产条目/,
-    )
+    await expect(
+      projectAssets.revalidate('p-1', assetRef() as never),
+    ).rejects.toThrow(/无效资产条目/)
   })
 })
 

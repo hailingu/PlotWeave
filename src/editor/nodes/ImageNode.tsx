@@ -33,7 +33,12 @@ function OutputImage({
       alive = false
     }
   }, [projectId, asset])
-  if (failed) return <span className="pw-image-empty">产物媒体无法读取（{asset.relPath}）</span>
+  if (failed)
+    return (
+      <span className="pw-image-empty">
+        产物媒体无法读取（{asset.relPath}）
+      </span>
+    )
   if (!url) return null
   return (
     <img
@@ -60,7 +65,11 @@ function outputPlaceholder(
  * ⚙️）→ Prompt 预览 → 产物区（生成图像 / 生成中 / 空态 / 悬空引用占位）。
  * 不参与任何连线（自由摆放），无 Handle。
  */
-export default function ImageNode({ id, data, selected }: NodeProps<ImageFlowNode>) {
+export default function ImageNode({
+  id,
+  data,
+  selected,
+}: NodeProps<ImageFlowNode>) {
   const { projectId, openSettingsId, toggleSettings, assets } = useNodeEdit()
   const { jobOf } = useImageJobs()
   const job = jobOf(id)
@@ -79,9 +88,14 @@ export default function ImageNode({ id, data, selected }: NodeProps<ImageFlowNod
         <span className="pw-image-badge">🖼 IMAGE</span>
         <span className="pw-image-size">{data.size}</span>
         <span className="pw-sp" />
-        {job?.status === 'running' && <span className="pw-image-status">生成中…</span>}
+        {job?.status === 'running' && (
+          <span className="pw-image-status">生成中…</span>
+        )}
         {job?.status === 'error' && (
-          <span className="pw-image-status pw-image-status-err" title={job.message}>
+          <span
+            className="pw-image-status pw-image-status-err"
+            title={job.message}
+          >
             生成失败
           </span>
         )}
@@ -99,7 +113,9 @@ export default function ImageNode({ id, data, selected }: NodeProps<ImageFlowNod
           ⚙️
         </button>
       </div>
-      <p className="pw-image-prompt">{data.prompt !== '' ? data.prompt : '（未填写 Prompt）'}</p>
+      <p className="pw-image-prompt">
+        {data.prompt !== '' ? data.prompt : '（未填写 Prompt）'}
+      </p>
       <div className="pw-image-out">
         {asset !== undefined ? (
           <OutputImage projectId={projectId} asset={asset} />

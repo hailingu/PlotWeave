@@ -52,9 +52,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isPreviewItem(value: unknown): boolean {
   return (
     isRecord(value) &&
-    ['delete', 'disconnect', 'create', 'update', 'connect', 'create_entity', 'update_entity'].includes(
-      value.kind as string,
-    ) &&
+    [
+      'delete',
+      'disconnect',
+      'create',
+      'update',
+      'connect',
+      'create_entity',
+      'update_entity',
+    ].includes(value.kind as string) &&
     typeof value.danger === 'boolean' &&
     typeof value.label === 'string' &&
     typeof value.key === 'string'
@@ -80,20 +86,29 @@ function isPersistedCommand(value: unknown): boolean {
       isRecord(value.patch.patch)
     )
   }
-  if (value.op === 'upsert_character' || value.op === 'upsert_location') return isRecord(value.fields)
+  if (value.op === 'upsert_character' || value.op === 'upsert_location')
+    return isRecord(value.fields)
   // 设定文档命令（issue 56）：fields 为对象即可恢复重校验，条目形状由
   // 重校验边界把关——恢复只要求载荷可重新进入 validateAiBatch
   if (value.op === 'upsert_document') return isRecord(value.fields)
-  return ['create_node', 'delete_node', 'connect_edge', 'disconnect_edge'].includes(value.op)
+  return [
+    'create_node',
+    'delete_node',
+    'connect_edge',
+    'disconnect_edge',
+  ].includes(value.op)
 }
 
 function isValidation(value: unknown): value is BatchValidation {
   return (
     isRecord(value) &&
     typeof value.ok === 'boolean' &&
-    Array.isArray(value.items) && value.items.every(isPreviewItem) &&
-    Array.isArray(value.commands) && value.commands.every(isPersistedCommand) &&
-    Array.isArray(value.issues) && value.issues.every(isBatchIssue) &&
+    Array.isArray(value.items) &&
+    value.items.every(isPreviewItem) &&
+    Array.isArray(value.commands) &&
+    value.commands.every(isPersistedCommand) &&
+    Array.isArray(value.issues) &&
+    value.issues.every(isBatchIssue) &&
     typeof value.hasDeletes === 'boolean'
   )
 }
@@ -108,11 +123,21 @@ function entryOf(value: unknown): ThreadEntry | null {
   ) {
     return null
   }
-  if (value.kind === 'note') return { id: value.id, kind: 'note', text: value.text }
-  if (value.kind !== 'msg' || (value.role !== 'user' && value.role !== 'assistant')) return null
-  if (value.card === undefined) return { id: value.id, kind: 'msg', role: value.role, text: value.text }
+  if (value.kind === 'note')
+    return { id: value.id, kind: 'note', text: value.text }
+  if (
+    value.kind !== 'msg' ||
+    (value.role !== 'user' && value.role !== 'assistant')
+  )
+    return null
+  if (value.card === undefined)
+    return { id: value.id, kind: 'msg', role: value.role, text: value.text }
   if (!isRecord(value.card) || !isValidation(value.card.v)) return null
-  if (value.card.status !== 'pending' && value.card.status !== 'executed' && value.card.status !== 'dismissed') {
+  if (
+    value.card.status !== 'pending' &&
+    value.card.status !== 'executed' &&
+    value.card.status !== 'dismissed'
+  ) {
     return null
   }
   return {
@@ -124,7 +149,8 @@ function entryOf(value: unknown): ThreadEntry | null {
       v: value.card.v,
       status: value.card.status,
       ...(value.card.status === 'pending' &&
-      typeof value.card.executionError === 'string' && value.card.executionError.trim() !== ''
+      typeof value.card.executionError === 'string' &&
+      value.card.executionError.trim() !== ''
         ? { executionError: value.card.executionError }
         : {}),
       ...(typeof value.card.aiRevisionAfter === 'number' &&
@@ -138,8 +164,13 @@ function entryOf(value: unknown): ThreadEntry | null {
 
 /** 从不可信的本地 JSON 恢复历史；旧项目无文件时返回空会话。 */
 export function normalizeAiSession(raw: unknown): AiSessionNormalizeResult {
-  if (raw === undefined || raw === null) return { session: EMPTY_SESSION, repaired: false }
-  if (!isRecord(raw) || raw.schemaVersion !== 1 || !Array.isArray(raw.entries)) {
+  if (raw === undefined || raw === null)
+    return { session: EMPTY_SESSION, repaired: false }
+  if (
+    !isRecord(raw) ||
+    raw.schemaVersion !== 1 ||
+    !Array.isArray(raw.entries)
+  ) {
     return { session: EMPTY_SESSION, repaired: true }
   }
   let repaired = false
@@ -195,8 +226,12 @@ export function persistedEntries(thread: ThreadEntry[]): ThreadEntry[] {
       continue
     }
     if (entry.card?.uncommitted) {
-      const card = { ...stripExecutionRuntime(entry.card), status: 'pending' as const }
-      if (entry.card.aiRevisionAfter !== undefined) card.aiRevisionAfter = entry.card.aiRevisionAfter
+      const card = {
+        ...stripExecutionRuntime(entry.card),
+        status: 'pending' as const,
+      }
+      if (entry.card.aiRevisionAfter !== undefined)
+        card.aiRevisionAfter = entry.card.aiRevisionAfter
       entries.push({ ...stripReceiptLink(entry), card })
       continue
     }
@@ -219,11 +254,19 @@ const PERSISTED_ENTRIES_MAX = 200
 function capPersistedEntries(entries: ThreadEntry[]): ThreadEntry[] {
   if (entries.length <= PERSISTED_ENTRIES_MAX) return entries
   const selected = new Set<number>()
-  for (let i = entries.length - 1; i >= 0 && selected.size < PERSISTED_ENTRIES_MAX; i--) {
+  for (
+    let i = entries.length - 1;
+    i >= 0 && selected.size < PERSISTED_ENTRIES_MAX;
+    i--
+  ) {
     const card = entries[i].card
     if (card?.status === 'pending' && card.v.ok) selected.add(i)
   }
-  for (let i = entries.length - 1; i >= 0 && selected.size < PERSISTED_ENTRIES_MAX; i--) {
+  for (
+    let i = entries.length - 1;
+    i >= 0 && selected.size < PERSISTED_ENTRIES_MAX;
+    i--
+  ) {
     selected.add(i)
   }
   return entries.filter((_, index) => selected.has(index))

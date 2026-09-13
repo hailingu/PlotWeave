@@ -65,7 +65,11 @@ function setup(nodes: CanvasNode[] = [shotNode]) {
 }
 
 /** 构造 drop/dragOver 事件替身：target 经 closest 命中给定节点 id（null = 空白画布）。 */
-const fakeEvent = (nodeId: string | null, types: string[], data: Record<string, string>) =>
+const fakeEvent = (
+  nodeId: string | null,
+  types: string[],
+  data: Record<string, string>,
+) =>
   ({
     preventDefault: vi.fn(),
     dataTransfer: {
@@ -81,16 +85,33 @@ const fakeEvent = (nodeId: string | null, types: string[], data: Record<string, 
   }) as unknown as ReactDragEvent
 
 const libPayload = (over: Record<string, unknown> = {}) =>
-  JSON.stringify({ id: 'la-1', name: '林晚.png', kind: 'character', mime: 'image/png', ...over })
+  JSON.stringify({
+    id: 'la-1',
+    name: '林晚.png',
+    kind: 'character',
+    mime: 'image/png',
+    ...over,
+  })
 
 describe('useCanvasDrop：设定集实体路径（既有行为）', () => {
   it('实体拖上节点走 patchNode；空白处按实体预填生成场景', () => {
     const { deps, handlers } = setup([shotNode, sceneNode])
-    const entity = JSON.stringify({ kind: 'character', id: 'ch1', name: '林晚' })
-    handlers.onCanvasDrop(fakeEvent('sc1', [PW_ENTITY_MIME], { [PW_ENTITY_MIME]: entity }))
-    expect(deps.patchNode).toHaveBeenCalledWith('sc1', { nodeType: 'scene', patch: { characterIds: ['ch1'] } })
+    const entity = JSON.stringify({
+      kind: 'character',
+      id: 'ch1',
+      name: '林晚',
+    })
+    handlers.onCanvasDrop(
+      fakeEvent('sc1', [PW_ENTITY_MIME], { [PW_ENTITY_MIME]: entity }),
+    )
+    expect(deps.patchNode).toHaveBeenCalledWith('sc1', {
+      nodeType: 'scene',
+      patch: { characterIds: ['ch1'] },
+    })
 
-    handlers.onCanvasDrop(fakeEvent(null, [PW_ENTITY_MIME], { [PW_ENTITY_MIME]: entity }))
+    handlers.onCanvasDrop(
+      fakeEvent(null, [PW_ENTITY_MIME], { [PW_ENTITY_MIME]: entity }),
+    )
     expect(deps.createNode).toHaveBeenCalledWith('scene', {
       at: { x: 10, y: 20 },
       data: { characterIds: ['ch1'] },
@@ -104,7 +125,9 @@ describe('useCanvasDrop：库资产拖上分镜卡（§7.3 拷贝进项目）', 
     const { deps, handlers } = setup()
     await act(async () => {
       handlers.onCanvasDrop(
-        fakeEvent('sh1', [PW_LIBRARY_ASSET_MIME], { [PW_LIBRARY_ASSET_MIME]: libPayload() }),
+        fakeEvent('sh1', [PW_LIBRARY_ASSET_MIME], {
+          [PW_LIBRARY_ASSET_MIME]: libPayload(),
+        }),
       )
       await Promise.resolve()
     })
@@ -132,7 +155,9 @@ describe('useCanvasDrop：库资产拖上分镜卡（§7.3 拷贝进项目）', 
     const { deps, handlers } = setup()
     await act(async () => {
       handlers.onCanvasDrop(
-        fakeEvent('sh1', [PW_LIBRARY_ASSET_MIME], { [PW_LIBRARY_ASSET_MIME]: libPayload() }),
+        fakeEvent('sh1', [PW_LIBRARY_ASSET_MIME], {
+          [PW_LIBRARY_ASSET_MIME]: libPayload(),
+        }),
       )
       await Promise.resolve()
     })
@@ -149,10 +174,14 @@ describe('useCanvasDrop：库资产拖上分镜卡（§7.3 拷贝进项目）', 
     const { deps, handlers } = setup([shotNode, sceneNode])
     await act(async () => {
       handlers.onCanvasDrop(
-        fakeEvent('sc1', [PW_LIBRARY_ASSET_MIME], { [PW_LIBRARY_ASSET_MIME]: libPayload() }),
+        fakeEvent('sc1', [PW_LIBRARY_ASSET_MIME], {
+          [PW_LIBRARY_ASSET_MIME]: libPayload(),
+        }),
       )
       handlers.onCanvasDrop(
-        fakeEvent(null, [PW_LIBRARY_ASSET_MIME], { [PW_LIBRARY_ASSET_MIME]: libPayload() }),
+        fakeEvent(null, [PW_LIBRARY_ASSET_MIME], {
+          [PW_LIBRARY_ASSET_MIME]: libPayload(),
+        }),
       )
       await Promise.resolve()
     })
@@ -161,7 +190,10 @@ describe('useCanvasDrop：库资产拖上分镜卡（§7.3 拷贝进项目）', 
     await act(async () => {
       handlers.onCanvasDrop(
         fakeEvent('sh1', [PW_LIBRARY_ASSET_MIME], {
-          [PW_LIBRARY_ASSET_MIME]: libPayload({ kind: 'other', mime: 'application/pdf' }),
+          [PW_LIBRARY_ASSET_MIME]: libPayload({
+            kind: 'other',
+            mime: 'application/pdf',
+          }),
         }),
       )
       await Promise.resolve()
@@ -180,13 +212,19 @@ describe('useCanvasDrop：库资产拖上分镜卡（§7.3 拷贝进项目）', 
     )
     const { deps, handlers } = setup()
     handlers.onCanvasDrop(
-      fakeEvent('sh1', [PW_LIBRARY_ASSET_MIME], { [PW_LIBRARY_ASSET_MIME]: libPayload() }),
+      fakeEvent('sh1', [PW_LIBRARY_ASSET_MIME], {
+        [PW_LIBRARY_ASSET_MIME]: libPayload(),
+      }),
     )
     handlers.onCanvasDrop(
-      fakeEvent('sh1', [PW_LIBRARY_ASSET_MIME], { [PW_LIBRARY_ASSET_MIME]: libPayload() }),
+      fakeEvent('sh1', [PW_LIBRARY_ASSET_MIME], {
+        [PW_LIBRARY_ASSET_MIME]: libPayload(),
+      }),
     )
     expect(importMock).toHaveBeenCalledTimes(1)
-    expect(deps.onError).toHaveBeenCalledWith(expect.stringContaining('正在导入'))
+    expect(deps.onError).toHaveBeenCalledWith(
+      expect.stringContaining('正在导入'),
+    )
     await act(async () => {
       resolveImport(importedAsset)
       await Promise.resolve()
@@ -200,7 +238,9 @@ describe('useCanvasDrop：库资产拖上分镜卡（§7.3 拷贝进项目）', 
     const { deps, handlers } = setup()
     await act(async () => {
       handlers.onCanvasDrop(
-        fakeEvent('sh1', [PW_LIBRARY_ASSET_MIME], { [PW_LIBRARY_ASSET_MIME]: libPayload() }),
+        fakeEvent('sh1', [PW_LIBRARY_ASSET_MIME], {
+          [PW_LIBRARY_ASSET_MIME]: libPayload(),
+        }),
       )
       await Promise.resolve()
     })
@@ -215,7 +255,9 @@ describe('useCanvasDrop：库资产拖上分镜卡（§7.3 拷贝进项目）', 
     const { deps, handlers } = setup()
     await act(async () => {
       handlers.onCanvasDrop(
-        fakeEvent('sh1', [PW_LIBRARY_ASSET_MIME], { [PW_LIBRARY_ASSET_MIME]: libPayload() }),
+        fakeEvent('sh1', [PW_LIBRARY_ASSET_MIME], {
+          [PW_LIBRARY_ASSET_MIME]: libPayload(),
+        }),
       )
       await Promise.resolve()
     })

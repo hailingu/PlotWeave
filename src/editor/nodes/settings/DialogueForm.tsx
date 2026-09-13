@@ -23,7 +23,9 @@ function DialogueLineRow({
   readonly onPatch: (patch: Partial<DialogueLine>) => void
   readonly onRemove: () => void
 }) {
-  const text = useCompositionSafeValue(line.text, (next) => onPatch({ text: next }))
+  const text = useCompositionSafeValue(line.text, (next) =>
+    onPatch({ text: next }),
+  )
   return (
     <div className="pw-set-line">
       <div className="pw-set-line-bar">
@@ -57,7 +59,12 @@ function DialogueLineRow({
           </select>
         )}
         <span className="pw-sp" />
-        <button type="button" className="pw-set-x" aria-label="删除此行" onClick={onRemove}>
+        <button
+          type="button"
+          className="pw-set-x"
+          aria-label="删除此行"
+          onClick={onRemove}
+        >
           ✕
         </button>
       </div>
@@ -83,10 +90,13 @@ export default function DialogueForm({
   const { patchNode } = useNodeEdit()
   const defaultSpeaker = settings.characters[0]?.id
   const d = node.data
-  const patch = (p: PatchShape<DialogueNodeData>) => patchNode(node.id, { nodeType: 'dialogue', patch: p })
+  const patch = (p: PatchShape<DialogueNodeData>) =>
+    patchNode(node.id, { nodeType: 'dialogue', patch: p })
   const name = useCompositionSafeValue(d.name, (next) => patch({ name: next }))
   const patchLine = (i: number, linePatch: Partial<DialogueLine>) =>
-    patch({ lines: d.lines.map((l, idx) => (idx === i ? { ...l, ...linePatch } : l)) })
+    patch({
+      lines: d.lines.map((l, idx) => (idx === i ? { ...l, ...linePatch } : l)),
+    })
   return (
     <>
       <Field label="名称">
@@ -100,7 +110,9 @@ export default function DialogueForm({
           defaultSpeaker={defaultSpeaker}
           characters={settings.characters}
           onPatch={(linePatch) => patchLine(i, linePatch)}
-          onRemove={() => patch({ lines: d.lines.filter((_, idx) => idx !== i) })}
+          onRemove={() =>
+            patch({ lines: d.lines.filter((_, idx) => idx !== i) })
+          }
         />
       ))}
       <button
@@ -108,13 +120,26 @@ export default function DialogueForm({
         className="pw-set-add"
         onClick={() =>
           patch({
-            lines: [...d.lines, { id: uid('line'), kind: 'line', speaker: defaultSpeaker, side: 'left', text: '' }],
+            lines: [
+              ...d.lines,
+              {
+                id: uid('line'),
+                kind: 'line',
+                speaker: defaultSpeaker,
+                side: 'left',
+                text: '',
+              },
+            ],
           })
         }
       >
         ＋ 添加台词
       </button>
-      <EpisodeField nodeType="dialogue" nodeId={node.id} episodeNo={d.episodeNo} />
+      <EpisodeField
+        nodeType="dialogue"
+        nodeId={node.id}
+        episodeNo={d.episodeNo}
+      />
     </>
   )
 }

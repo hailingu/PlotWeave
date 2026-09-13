@@ -33,12 +33,16 @@ function lastFenceBody(text: string): string | null {
 
 function isBatchShape(v: unknown): v is { commands: unknown[] } {
   return (
-    typeof v === 'object' && v !== null && Array.isArray((v as { commands?: unknown }).commands)
+    typeof v === 'object' &&
+    v !== null &&
+    Array.isArray((v as { commands?: unknown }).commands)
   )
 }
 
 /** 解析回复文本中的批次对象；无法解析返回 undefined（纯讨论回复）。 */
-export function extractBatchJson(text: string): { commands: unknown[] } | undefined {
+export function extractBatchJson(
+  text: string,
+): { commands: unknown[] } | undefined {
   const last = lastFenceBody(text)
   const candidates: string[] = []
   if (last !== null) candidates.push(last)

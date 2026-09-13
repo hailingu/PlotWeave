@@ -24,7 +24,9 @@ describe('edgeKindOf（§4.4 连线语义归类）', () => {
   })
 
   it('branch 优先于端口形态（type 先判）', () => {
-    expect(edgeKindOf({ type: 'branch', sourceHandle: SCENE_SHOT_HANDLE })).toBe('branch')
+    expect(
+      edgeKindOf({ type: 'branch', sourceHandle: SCENE_SHOT_HANDLE }),
+    ).toBe('branch')
   })
 
   it('sourceHandle 为 null / 未知字符串均按剧情流处理', () => {
@@ -43,13 +45,21 @@ describe('connectionKindOf（拖线瞬间 Connection 的语义归类：Connectio
   })
 
   it('分支选项出口的连线经端口归类为 branch，不被端点校验拒绝（回归：误判 sequence 会拒绝全部交互分支连线）', () => {
-    expect(connectionEndpointIssue('branch', 'scene', connectionKindOf({ sourceHandle: 'option-o1' }))).toBeNull()
+    expect(
+      connectionEndpointIssue(
+        'branch',
+        'scene',
+        connectionKindOf({ sourceHandle: 'option-o1' }),
+      ),
+    ).toBeNull()
   })
 })
 
 describe('branchOptionHandle（选项端口绑稳定 id，删选项不位移其他连线）', () => {
   it('端口名 = option-<选项 id>；branchOptionIdOf 可逆解析', () => {
-    expect(branchOptionHandle('opt-x1')).toBe(`${BRANCH_OPTION_HANDLE_PREFIX}opt-x1`)
+    expect(branchOptionHandle('opt-x1')).toBe(
+      `${BRANCH_OPTION_HANDLE_PREFIX}opt-x1`,
+    )
     expect(branchOptionIdOf('option-opt-x1')).toBe('opt-x1')
   })
 
@@ -114,8 +124,20 @@ describe('wouldCreateCycle（从 target 沿边能否回到 source）', () => {
 describe('isDuplicateEdge（同端点同端口视为重复）', () => {
   it('端点与端口全同才重复；端口不同 = 不同边', () => {
     const edges = [{ source: 'S', target: 'T', sourceHandle: 'option-0' }]
-    expect(isDuplicateEdge(edges, { source: 'S', target: 'T', sourceHandle: 'option-0' })).toBe(true)
-    expect(isDuplicateEdge(edges, { source: 'S', target: 'T', sourceHandle: 'option-1' })).toBe(false)
+    expect(
+      isDuplicateEdge(edges, {
+        source: 'S',
+        target: 'T',
+        sourceHandle: 'option-0',
+      }),
+    ).toBe(true)
+    expect(
+      isDuplicateEdge(edges, {
+        source: 'S',
+        target: 'T',
+        sourceHandle: 'option-1',
+      }),
+    ).toBe(false)
     expect(isDuplicateEdge(edges, { source: 'S', target: 'T' })).toBe(false)
     expect(isDuplicateEdge(edges, { source: 'T', target: 'S' })).toBe(false)
   })
@@ -123,7 +145,9 @@ describe('isDuplicateEdge（同端点同端口视为重复）', () => {
   it('null 与缺省端口等价（?? null 归一）', () => {
     const edges = [{ source: 'S', target: 'T', sourceHandle: null }]
     expect(isDuplicateEdge(edges, { source: 'S', target: 'T' })).toBe(true)
-    expect(isDuplicateEdge(edges, { source: 'S', target: 'T', sourceHandle: null })).toBe(true)
+    expect(
+      isDuplicateEdge(edges, { source: 'S', target: 'T', sourceHandle: null }),
+    ).toBe(true)
   })
 })
 
@@ -133,11 +157,15 @@ describe('connectEdgeExtras（§4.4 新连线差异化字段）', () => {
   })
 
   it('索引卡底端口 → attach 下挂样式类', () => {
-    expect(connectEdgeExtras(false, true)).toEqual({ className: 'pw-edge-attach' })
+    expect(connectEdgeExtras(false, true)).toEqual({
+      className: 'pw-edge-attach',
+    })
   })
 
   it('默认 → sequence 剧情流样式类', () => {
-    expect(connectEdgeExtras(false, false)).toEqual({ className: 'pw-edge-sequence' })
+    expect(connectEdgeExtras(false, false)).toEqual({
+      className: 'pw-edge-sequence',
+    })
   })
 
   it('分支优先于 attach（同一连接只取一种形态）', () => {
@@ -147,16 +175,28 @@ describe('connectEdgeExtras（§4.4 新连线差异化字段）', () => {
 
 describe('connectionEndpointIssue（§5 端口归属：加载侧孤儿边规则的交互/AI 对等）', () => {
   it('剧情流端点为分镜卡：拒绝（保存也会在下次加载被静默删除）', () => {
-    expect(connectionEndpointIssue('shot', 'scene', 'sequence')).toContain('分镜')
-    expect(connectionEndpointIssue('scene', 'shot', 'sequence')).toContain('分镜')
-    expect(connectionEndpointIssue('branch', 'shot', 'branch')).toContain('分镜')
+    expect(connectionEndpointIssue('shot', 'scene', 'sequence')).toContain(
+      '分镜',
+    )
+    expect(connectionEndpointIssue('scene', 'shot', 'sequence')).toContain(
+      '分镜',
+    )
+    expect(connectionEndpointIssue('branch', 'shot', 'branch')).toContain(
+      '分镜',
+    )
   })
   it('sequence/attach 的 source 为分支：拒绝（分支只经选项出口）', () => {
-    expect(connectionEndpointIssue('branch', 'scene', 'sequence')).toContain('分支')
-    expect(connectionEndpointIssue('branch', 'shot', 'attach')).toContain('分支')
+    expect(connectionEndpointIssue('branch', 'scene', 'sequence')).toContain(
+      '分支',
+    )
+    expect(connectionEndpointIssue('branch', 'shot', 'attach')).toContain(
+      '分支',
+    )
   })
   it('attach 端点类型不合法（须 scene → shot）：拒绝', () => {
-    expect(connectionEndpointIssue('scene', 'scene', 'attach')).toContain('attach')
+    expect(connectionEndpointIssue('scene', 'scene', 'attach')).toContain(
+      'attach',
+    )
     expect(connectionEndpointIssue('scene', 'shot', 'attach')).toBeNull()
   })
   it('合法剧情流/分支出口连线放行', () => {
@@ -168,21 +208,46 @@ describe('connectionEndpointIssue（§5 端口归属：加载侧孤儿边规则�
 
 describe('hasAttachHost（§5 attach 宿主唯一：加载侧 isolateExtraAttachHosts 的交互/AI 对等）', () => {
   it('目标已有入向 attach 边即报告（含 legacy className 形态）；出向或其他目标不算', () => {
-    expect(hasAttachHost([{ source: 'a', target: 'sh1', sourceHandle: 'shots' }], 'sh1')).toBe(true)
-    expect(hasAttachHost([{ source: 'a', target: 'sh1', className: 'pw-edge-attach' }], 'sh1')).toBe(true)
+    expect(
+      hasAttachHost(
+        [{ source: 'a', target: 'sh1', sourceHandle: 'shots' }],
+        'sh1',
+      ),
+    ).toBe(true)
+    expect(
+      hasAttachHost(
+        [{ source: 'a', target: 'sh1', className: 'pw-edge-attach' }],
+        'sh1',
+      ),
+    ).toBe(true)
     expect(hasAttachHost([{ source: 'a', target: 'sh1' }], 'sh1')).toBe(false)
-    expect(hasAttachHost([{ source: 'sh1', target: 'a', sourceHandle: 'shots' }], 'sh1')).toBe(false)
+    expect(
+      hasAttachHost(
+        [{ source: 'sh1', target: 'a', sourceHandle: 'shots' }],
+        'sh1',
+      ),
+    ).toBe(false)
   })
 })
 
 describe('图片节点端点约束（§13：图片节点不参与任何剧情流连线）', () => {
   it('sequence/branch 端点为图片节点：拒绝', () => {
-    expect(connectionEndpointIssue('scene', 'image', 'sequence')).toContain('图片节点')
-    expect(connectionEndpointIssue('image', 'scene', 'sequence')).toContain('图片节点')
-    expect(connectionEndpointIssue('image', 'scene', 'branch')).toContain('图片节点')
+    expect(connectionEndpointIssue('scene', 'image', 'sequence')).toContain(
+      '图片节点',
+    )
+    expect(connectionEndpointIssue('image', 'scene', 'sequence')).toContain(
+      '图片节点',
+    )
+    expect(connectionEndpointIssue('image', 'scene', 'branch')).toContain(
+      '图片节点',
+    )
   })
   it('attach 端点为图片节点：拒绝（attach 仅场景 → 分镜卡）', () => {
-    expect(connectionEndpointIssue('scene', 'image', 'attach')).toContain('attach')
-    expect(connectionEndpointIssue('image', 'shot', 'attach')).toContain('attach')
+    expect(connectionEndpointIssue('scene', 'image', 'attach')).toContain(
+      'attach',
+    )
+    expect(connectionEndpointIssue('image', 'shot', 'attach')).toContain(
+      'attach',
+    )
   })
 })

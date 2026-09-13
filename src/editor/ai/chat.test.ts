@@ -35,10 +35,20 @@ describe('llmChat（Rust 代理通道）', () => {
     expect(got).toBe(reply)
     const [cmd, args] = invoke.mock.calls[0] as [
       string,
-      { providerId: string; baseUrl: string; model: string; messages: object[]; tools: unknown },
+      {
+        providerId: string
+        baseUrl: string
+        model: string
+        messages: object[]
+        tools: unknown
+      },
     ]
     expect(cmd).toBe('llm_chat')
-    expect(args).toMatchObject({ providerId: 'openai', baseUrl: provider.baseUrl, model: 'gpt-4o-mini' })
+    expect(args).toMatchObject({
+      providerId: 'openai',
+      baseUrl: provider.baseUrl,
+      model: 'gpt-4o-mini',
+    })
     expect(args.messages).toEqual([
       { role: 'system', content: 'sys' },
       { role: 'user', content: '写一场戏' },
@@ -53,9 +63,19 @@ describe('llmChat（Rust 代理通道）', () => {
       { role: 'tool', content: '{}', tool_call_id: 'c1' },
     ]
     await llmChat(provider, 'm', messages)
-    const args = invoke.mock.calls[0][1] as { messages: Array<Record<string, unknown>> }
-    expect(Object.keys(args.messages[0])).toEqual(['role', 'content', 'tool_calls'])
-    expect(args.messages[1]).toEqual({ role: 'tool', content: '{}', tool_call_id: 'c1' })
+    const args = invoke.mock.calls[0][1] as {
+      messages: Array<Record<string, unknown>>
+    }
+    expect(Object.keys(args.messages[0])).toEqual([
+      'role',
+      'content',
+      'tool_calls',
+    ])
+    expect(args.messages[1]).toEqual({
+      role: 'tool',
+      content: '{}',
+      tool_call_id: 'c1',
+    })
   })
 
   it('tools 缺省传 null；提供时原样透传', async () => {
@@ -64,8 +84,18 @@ describe('llmChat（Rust 代理通道）', () => {
     await llmChat(provider, 'm', [{ role: 'user', content: 'hi' }])
     expect((invoke.mock.calls[0][1] as { tools: unknown }).tools).toBeNull()
 
-    const tools = [{ type: 'function', function: { name: 'get_node', description: 'x', parameters: {} } }]
-    await llmChat(provider, 'm', [{ role: 'user', content: 'hi' }], tools as never)
+    const tools = [
+      {
+        type: 'function',
+        function: { name: 'get_node', description: 'x', parameters: {} },
+      },
+    ]
+    await llmChat(
+      provider,
+      'm',
+      [{ role: 'user', content: 'hi' }],
+      tools as never,
+    )
     expect((invoke.mock.calls[1][1] as { tools: unknown }).tools).toBe(tools)
   })
 })

@@ -5,7 +5,13 @@
  * 命令栈。此前 EditorView 被 App.test.tsx mock，拆分后需要这条装配守护。
  * 断言作用域收敛到左栏大纲，避免与画布节点同名文案互相干扰。
  */
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import EditorView from './EditorView'
 import type { EditorProjectContent } from './useEditorDocument'
@@ -78,7 +84,8 @@ describe('EditorView 装配（issue #35）', () => {
 
   it('边栏开关仍由面板状态驱动（点击后左栏折叠）', () => {
     renderEditor()
-    const panelOf = () => screen.getByLabelText('故事大纲').closest('.pw-panel-left')
+    const panelOf = () =>
+      screen.getByLabelText('故事大纲').closest('.pw-panel-left')
     expect(panelOf()?.className).not.toContain('pw-panel-closed')
     fireEvent.click(screen.getByLabelText('切换边栏'))
     expect(panelOf()?.className).toContain('pw-panel-closed')
@@ -93,13 +100,18 @@ describe('EditorView 装配（issue #35）', () => {
 function trackControlledWrites(input: HTMLInputElement): string[] {
   const writes: string[] = []
   let descriptor: PropertyDescriptor | undefined
-  for (let node: object | null = input; node !== null; node = Object.getPrototypeOf(node)) {
+  for (
+    let node: object | null = input;
+    node !== null;
+    node = Object.getPrototypeOf(node)
+  ) {
     descriptor = Object.getOwnPropertyDescriptor(node, 'value')
     if (descriptor) break
   }
   const read = descriptor?.get
   const write = descriptor?.set
-  if (!read || !write) throw new Error('input 缺少 value 访问器，无法观测受控回写')
+  if (!read || !write)
+    throw new Error('input 缺少 value 访问器，无法观测受控回写')
   Object.defineProperty(input, 'value', {
     configurable: true,
     get: () => read.call(input) as string,
@@ -118,7 +130,8 @@ const beatNode = {
   data: { name: '真相逼近', tone: '' },
 } as unknown as CanvasNode
 
-describe('IME 组合输入（issue #42 真实更新链路）', () => {  const IME_PROJECT: EditorProjectContent = {
+describe('IME 组合输入（issue #42 真实更新链路）', () => {
+  const IME_PROJECT: EditorProjectContent = {
     id: 'p-ime',
     name: '组合输入',
     nodes: [beatNode],
@@ -184,14 +197,23 @@ describe('画布工具栏自动排布（issue #94 装配）', () => {
   const LAYOUT_PROJECT: EditorProjectContent = {
     id: 'p-layout',
     name: '排布装配',
-    nodes: [layoutNode('s1', 0, 0), layoutNode('s2', 900, 700), layoutNode('s3', -500, 1000)],
+    nodes: [
+      layoutNode('s1', 0, 0),
+      layoutNode('s2', 900, 700),
+      layoutNode('s3', -500, 1000),
+    ],
     edges: LAYOUT_EDGES,
     settings: { characters: [], locations: [] },
   }
 
   it('左下角工具栏出现「自动排布」按钮，可通过键盘/可访问名称触发', () => {
     render(
-      <EditorView project={LAYOUT_PROJECT} onBackHome={vi.fn()} onRenameProject={vi.fn()} onSave={vi.fn()} />,
+      <EditorView
+        project={LAYOUT_PROJECT}
+        onBackHome={vi.fn()}
+        onRenameProject={vi.fn()}
+        onSave={vi.fn()}
+      />,
     )
     const button = screen.getByLabelText('自动排布') as HTMLButtonElement
     expect(button.tagName).toBe('BUTTON')
@@ -207,15 +229,26 @@ describe('画布工具栏自动排布（issue #94 装配）', () => {
         onSave={vi.fn()}
       />,
     )
-    expect((screen.getByLabelText('自动排布') as HTMLButtonElement).disabled).toBe(true)
+    expect(
+      (screen.getByLabelText('自动排布') as HTMLButtonElement).disabled,
+    ).toBe(true)
   })
 
   it('点击后排布位置入命令栈：撤销恢复原状、栈回到空', () => {
     render(
-      <EditorView project={LAYOUT_PROJECT} onBackHome={vi.fn()} onRenameProject={vi.fn()} onSave={vi.fn()} />,
+      <EditorView
+        project={LAYOUT_PROJECT}
+        onBackHome={vi.fn()}
+        onRenameProject={vi.fn()}
+        onSave={vi.fn()}
+      />,
     )
     const transformsOf = () =>
-      [...screen.getByRole('button', { name: '自动排布' }).ownerDocument.querySelectorAll('.react-flow__node')]
+      [
+        ...screen
+          .getByRole('button', { name: '自动排布' })
+          .ownerDocument.querySelectorAll('.react-flow__node'),
+      ]
         .map((el) => (el as HTMLElement).style.transform)
         .sort()
     const before = transformsOf()

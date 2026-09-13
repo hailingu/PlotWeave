@@ -8,7 +8,10 @@ import {
   normalizeAiSession,
   type AiSession,
 } from './editor/ai/session'
-import { enqueueProjectWrite, onProjectWriteReplayFailure } from './projectStore/saveChain'
+import {
+  enqueueProjectWrite,
+  onProjectWriteReplayFailure,
+} from './projectStore/saveChain'
 
 const memorySessions = new Map<string, AiSession>()
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -37,7 +40,9 @@ export interface AiSessionSaveFailedEvent {
   error: string
 }
 
-const failedListeners = new Set<(id: string, event: AiSessionSaveFailedEvent) => void>()
+const failedListeners = new Set<
+  (id: string, event: AiSessionSaveFailedEvent) => void
+>()
 
 /** 订阅回吐重排失败（区别于 saveAiSession 向调用方上浮的失败路径：原始
  * 保存已被吸收为成功，只能经此事件交给恢复通道）；返回退订函数。 */
@@ -53,7 +58,9 @@ export function onAiSessionSaveFailed(
 onProjectWriteReplayFailure((id, err) => {
   const pending = pendingSessions.get(id)
   if (pending === undefined) return
-  failedListeners.forEach((listener) => listener(id, { session: pending.session, error: String(err) }))
+  failedListeners.forEach((listener) =>
+    listener(id, { session: pending.session, error: String(err) }),
+  )
 })
 
 /** 读取唯一主文件；缺失为空历史，损坏条目隔离，I/O 错误交给界面提示。 */
@@ -65,20 +72,27 @@ export async function loadAiSession(id: string): Promise<AiSessionLoadResult> {
     }
   }
   const { invoke } = await import('@tauri-apps/api/core')
-  const result = await invoke<{ session: unknown; corrupt: boolean }>('load_ai_session', { id })
+  const result = await invoke<{ session: unknown; corrupt: boolean }>(
+    'load_ai_session',
+    { id },
+  )
   const { session, repaired } = normalizeAiSession(result.session)
   return {
     session,
-    repairError: result.corrupt || repaired
-      ? 'AI 会话文件存在损坏，已保留可用历史；后续保存成功时将更新主文件'
-      : null,
+    repairError:
+      result.corrupt || repaired
+        ? 'AI 会话文件存在损坏，已保留可用历史；后续保存成功时将更新主文件'
+        : null,
   }
 }
 
 /** 保存进入项目共享写入/删除链；失败上浮并保留最新快照，无额外写入或定时器。
  * pending 快照持调用方全量形态（重试/回吐恢复通道不丢进程内历史），
  * 容量裁剪只在每次实际写入的载荷上执行。 */
-export async function saveAiSession(id: string, session: AiSession): Promise<void> {
+export async function saveAiSession(
+  id: string,
+  session: AiSession,
+): Promise<void> {
   if (!isTauri) {
     // 浏览器内存回退是主文件的等价物：与 Tauri 路径同容量语义。
     memorySessions.set(id, diskSessionOf(session))

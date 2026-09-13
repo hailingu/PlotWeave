@@ -44,7 +44,10 @@ vi.mock('./projectStore', () => ({
       }
     },
     onAiSessionSaveFailed: (
-      listener: (id: string, event: { session: unknown; error: string }) => void,
+      listener: (
+        id: string,
+        event: { session: unknown; error: string },
+      ) => void,
     ) => {
       replayFailedListeners.push(listener)
       return () => {
@@ -60,7 +63,9 @@ const retrySavedListeners: Array<(id: string) => void> = []
 /** projectStore.onProjectSaved 已登记的监听器（测试经此模拟画布保存落定，issue #101）。 */
 const savedListeners: Array<(id: string) => void> = []
 /** projectStore.onAiSessionSaveFailed 已登记的监听器（测试经此模拟回吐重排失败）。 */
-const replayFailedListeners: Array<(id: string, event: { session: unknown; error: string }) => void> = []
+const replayFailedListeners: Array<
+  (id: string, event: { session: unknown; error: string }) => void
+> = []
 
 vi.mock('./home/HomePage', () => ({
   default: (props: Record<string, unknown>) => {
@@ -68,7 +73,9 @@ vi.mock('./home/HomePage', () => ({
     const openError = props.openError as { detail: string } | null | undefined
     return (
       <div data-testid="home">
-        {props.loading ? '加载中' : `共${(props.projects as unknown[]).length}项`}
+        {props.loading
+          ? '加载中'
+          : `共${(props.projects as unknown[]).length}项`}
         {openError ? <div role="alert">{openError.detail}</div> : null}
       </div>
     )
@@ -85,7 +92,9 @@ vi.mock('./editor/EditorView', () => ({
     if (editorSuspendGate) throw editorSuspendGate
     editorProps.current = props
     editorRenders.count += 1
-    return <div data-testid="editor">{(props.project as { name: string }).name}</div>
+    return (
+      <div data-testid="editor">{(props.project as { name: string }).name}</div>
+    )
   },
 }))
 
@@ -139,7 +148,9 @@ async function openEditor() {
   render(<App />)
   await screen.findByTestId('home')
   await act(async () => {
-    await (homeProps.current.onOpenProject as (id: string) => Promise<void>)('p1')
+    await (homeProps.current.onOpenProject as (id: string) => Promise<void>)(
+      'p1',
+    )
   })
   await screen.findByTestId('editor')
 }
@@ -170,7 +181,9 @@ describe('App（双界面路由壳）', () => {
     render(<App />)
     await screen.findByTestId('home')
     await act(async () => {
-      await (homeProps.current.onOpenProject as (id: string) => Promise<void>)('p1')
+      await (homeProps.current.onOpenProject as (id: string) => Promise<void>)(
+        'p1',
+      )
     })
     expect(store.load).toHaveBeenCalledWith('p1')
     expect(store.loadAiSession).toHaveBeenCalledWith('p1')
@@ -181,14 +194,20 @@ describe('App（双界面路由壳）', () => {
     render(<App />)
     await screen.findByTestId('home')
     await act(async () => {
-      await (homeProps.current.onOpenProject as (id: string) => Promise<void>)('ghost')
+      await (homeProps.current.onOpenProject as (id: string) => Promise<void>)(
+        'ghost',
+      )
     })
     expect(screen.queryByTestId('editor')).toBeNull()
     warn.mockRestore()
   })
 
   it('新建项目：create 后按落盘文档载入会话（保留 createdAt 溯源），并刷新列表', async () => {
-    const createdDoc: ProjectContent = { ...DOC, name: '未命名短剧', createdAt: '2026-08-31T00:00:00.000Z' }
+    const createdDoc: ProjectContent = {
+      ...DOC,
+      name: '未命名短剧',
+      createdAt: '2026-08-31T00:00:00.000Z',
+    }
     store.load.mockResolvedValue(structuredClone(createdDoc))
     render(<App />)
     await screen.findByTestId('home')
@@ -199,26 +218,36 @@ describe('App（双界面路由壳）', () => {
     // create 只回摘要：须 load 落盘文档进会话，否则首次保存把保存时刻误盖为创建时间
     expect(store.load).toHaveBeenCalledWith('new-1')
     expect(await screen.findByTestId('editor')).toBeTruthy()
-    expect((editorProps.current.project as { createdAt?: string }).createdAt).toBe(
-      '2026-08-31T00:00:00.000Z',
-    )
+    expect(
+      (editorProps.current.project as { createdAt?: string }).createdAt,
+    ).toBe('2026-08-31T00:00:00.000Z')
     expect(store.list).toHaveBeenCalledTimes(2)
   })
-
 })
 
 describe('App（导航与编辑器回调）', () => {
   it('编辑器回调：改名更新打开态文档名；保存委托 save（失败上浮给编辑器重试/横幅）；返回首页刷新', async () => {
     await openEditor()
     act(() => {
-      ;(editorProps.current.onRenameProject as (name: string) => void)('雨夜·修订')
+      ;(editorProps.current.onRenameProject as (name: string) => void)(
+        '雨夜·修订',
+      )
     })
-    expect((editorProps.current.project as { name: string }).name).toBe('雨夜·修订')
+    expect((editorProps.current.project as { name: string }).name).toBe(
+      '雨夜·修订',
+    )
     const savedDoc = { ...DOC, name: '雨夜·修订' }
     ;(editorProps.current.onSave as (doc: ProjectContent) => void)(savedDoc)
     expect(store.save).toHaveBeenCalledWith('p1', savedDoc)
-    const aiSession = { schemaVersion: 1 as const, entries: [{ id: 1, kind: 'note' as const, text: '已保存' }] }
-    await (editorProps.current.onSaveAiSession as (session: typeof aiSession) => Promise<void>)(aiSession)
+    const aiSession = {
+      schemaVersion: 1 as const,
+      entries: [{ id: 1, kind: 'note' as const, text: '已保存' }],
+    }
+    await (
+      editorProps.current.onSaveAiSession as (
+        session: typeof aiSession,
+      ) => Promise<void>
+    )(aiSession)
     expect(store.saveAiSession).toHaveBeenCalledWith('p1', aiSession)
     await act(async () => {
       ;(editorProps.current.onBackHome as () => void)()
@@ -231,15 +260,24 @@ describe('App（导航与编辑器回调）', () => {
     render(<App />)
     await screen.findByTestId('home')
     await act(async () => {
-      await (homeProps.current.onRenameProject as (id: string, name: string) => Promise<void>)('p1', '新名')
+      await (
+        homeProps.current.onRenameProject as (
+          id: string,
+          name: string,
+        ) => Promise<void>
+      )('p1', '新名')
     })
     expect(store.saveQuiet).toHaveBeenCalledWith('p1', { ...DOC, name: '新名' })
     await act(async () => {
-      await (homeProps.current.onDuplicateProject as (id: string) => Promise<void>)('p1')
+      await (
+        homeProps.current.onDuplicateProject as (id: string) => Promise<void>
+      )('p1')
     })
     expect(store.duplicate).toHaveBeenCalledWith('p1')
     await act(async () => {
-      await (homeProps.current.onDeleteProject as (id: string) => Promise<void>)('p1')
+      await (
+        homeProps.current.onDeleteProject as (id: string) => Promise<void>
+      )('p1')
     })
     expect(store.delete).toHaveBeenCalledWith('p1')
     expect(store.list.mock.calls.length).toBeGreaterThanOrEqual(4)
@@ -262,10 +300,16 @@ describe('App ✦返回首页摘要与保存落定（issue #101）', () => {
     await openEditor()
     let releaseSave: (() => void) | null = null
     store.save.mockImplementation(
-      () => new Promise<void>((resolve) => { releaseSave = resolve }),
+      () =>
+        new Promise<void>((resolve) => {
+          releaseSave = resolve
+        }),
     )
     act(() => {
-      ;(editorProps.current.onSave as (doc: ProjectContent) => void)({ ...DOC, name: '新名称' })
+      ;(editorProps.current.onSave as (doc: ProjectContent) => void)({
+        ...DOC,
+        name: '新名称',
+      })
     })
     await act(async () => {
       ;(editorProps.current.onBackHome as () => void)()
@@ -280,7 +324,9 @@ describe('App ✦返回首页摘要与保存落定（issue #101）', () => {
       savedListeners.forEach((notify) => notify('p1'))
     })
     expect(store.list).toHaveBeenCalledTimes(3)
-    expect((homeProps.current.projects as Array<{ name: string }>)[0]?.name).toBe('新名称')
+    expect(
+      (homeProps.current.projects as Array<{ name: string }>)[0]?.name,
+    ).toBe('新名称')
   })
 
   it('编辑器打开期间保存落定：不触发首页列表刷新（首页不可见，防整树重渲染）', async () => {
@@ -298,7 +344,10 @@ describe('App ✦返回首页摘要与保存落定（issue #101）', () => {
     let releaseSlow!: (value: Array<{ id: string; name: string }>) => void
     store.list
       .mockImplementationOnce(
-        () => new Promise<Array<{ id: string; name: string }>>((resolve) => { releaseSlow = resolve }),
+        () =>
+          new Promise<Array<{ id: string; name: string }>>((resolve) => {
+            releaseSlow = resolve
+          }),
       )
       .mockResolvedValueOnce([{ id: 'p1', name: '新名称' }])
     await act(async () => {
@@ -311,7 +360,9 @@ describe('App ✦返回首页摘要与保存落定（issue #101）', () => {
     await act(async () => {
       releaseSlow([{ id: 'p1', name: '旧名称' }])
     })
-    expect((homeProps.current.projects as Array<{ name: string }>)[0]?.name).toBe('新名称')
+    expect(
+      (homeProps.current.projects as Array<{ name: string }>)[0]?.name,
+    ).toBe('新名称')
   })
 })
 
@@ -325,14 +376,19 @@ async function attemptOpen(id: string) {
 describe('App ✦首页打开失败反馈（issue #98）', () => {
   it('打开失败：错误上浮为 openError 传给首页显示警示，停留首页', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    store.load.mockRejectedValue(new Error('文档版本过新（schemaVersion 2），请升级应用'))
+    store.load.mockRejectedValue(
+      new Error('文档版本过新（schemaVersion 2），请升级应用'),
+    )
     render(<App />)
     await screen.findByTestId('home')
     await attemptOpen('p1')
     warn.mockRestore()
     expect(screen.queryByTestId('editor')).toBeNull()
     expect(screen.getByRole('alert').textContent).toContain('请升级应用')
-    const openError = homeProps.current.openError as { id: string; detail: string }
+    const openError = homeProps.current.openError as {
+      id: string
+      detail: string
+    }
     expect(openError.id).toBe('p1')
     expect(openError.detail).toBe('文档版本过新（schemaVersion 2），请升级应用')
   })
@@ -344,7 +400,9 @@ describe('App ✦首页打开失败反馈（issue #98）', () => {
     await screen.findByTestId('home')
     await attemptOpen('p1')
     warn.mockRestore()
-    expect((homeProps.current.openError as { detail: string }).detail).toBe('项目文件不可读')
+    expect((homeProps.current.openError as { detail: string }).detail).toBe(
+      '项目文件不可读',
+    )
   })
 })
 
@@ -368,7 +426,10 @@ describe('App ✦打开失败后的错误清理时机（issue #98）', () => {
 
   it('失败后打开另一正常项目：旧错误不带过去', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    store.list.mockResolvedValue([{ id: 'p1', name: '雨夜' }, { id: 'p2', name: '午夜出租车' }])
+    store.list.mockResolvedValue([
+      { id: 'p1', name: '雨夜' },
+      { id: 'p2', name: '午夜出租车' },
+    ])
     store.load.mockImplementation((id: string) =>
       id === 'p1'
         ? Promise.reject(new Error('项目文件不可读'))
@@ -381,7 +442,9 @@ describe('App ✦打开失败后的错误清理时机（issue #98）', () => {
     expect((homeProps.current.openError as { id: string }).id).toBe('p1')
     await attemptOpen('p2')
     await screen.findByTestId('editor')
-    expect((editorProps.current.project as { name: string }).name).toBe('午夜出租车')
+    expect((editorProps.current.project as { name: string }).name).toBe(
+      '午夜出租车',
+    )
     await act(async () => {
       ;(editorProps.current.onBackHome as () => void)()
     })
@@ -413,16 +476,23 @@ describe('App ✦打开尝试并发收敛（PR #110 评审）', () => {
   it('并发：在途打开被新尝试取代后，迟到的拒绝不发布旧错误也不拦截导航', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     let rejectSlow!: (err: Error) => void
-    store.list.mockResolvedValue([{ id: 'slow', name: '慢项目' }, { id: 'fast', name: '快速项目' }])
+    store.list.mockResolvedValue([
+      { id: 'slow', name: '慢项目' },
+      { id: 'fast', name: '快速项目' },
+    ])
     store.load.mockImplementation((id: string) =>
       id === 'slow'
-        ? new Promise((_resolve, reject) => { rejectSlow = reject })
+        ? new Promise((_resolve, reject) => {
+            rejectSlow = reject
+          })
         : Promise.resolve({ ...structuredClone(DOC), name: '快速项目' }),
     )
     render(<App />)
     await screen.findByTestId('home')
     await act(async () => {
-      ;(homeProps.current.onOpenProject as (id: string) => Promise<void>)('slow')
+      ;(homeProps.current.onOpenProject as (id: string) => Promise<void>)(
+        'slow',
+      )
     })
     await attemptOpen('fast')
     await screen.findByTestId('editor')
@@ -441,10 +511,15 @@ describe('App ✦打开尝试并发收敛（PR #110 评审）', () => {
   it('并发：两个在途打开都失败，显示后发起尝试的错误而非后完成者', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     let rejectFirst!: (err: Error) => void
-    store.list.mockResolvedValue([{ id: 'a', name: '甲' }, { id: 'b', name: '乙' }])
+    store.list.mockResolvedValue([
+      { id: 'a', name: '甲' },
+      { id: 'b', name: '乙' },
+    ])
     store.load.mockImplementation((id: string) =>
       id === 'a'
-        ? new Promise((_resolve, reject) => { rejectFirst = reject })
+        ? new Promise((_resolve, reject) => {
+            rejectFirst = reject
+          })
         : Promise.reject(new Error('乙的失败')),
     )
     render(<App />)
@@ -459,16 +534,23 @@ describe('App ✦打开尝试并发收敛（PR #110 评审）', () => {
       rejectFirst(new Error('甲的失败'))
     })
     expect((homeProps.current.openError as { id: string }).id).toBe('b')
-    expect((homeProps.current.openError as { detail: string }).detail).toBe('乙的失败')
+    expect((homeProps.current.openError as { detail: string }).detail).toBe(
+      '乙的失败',
+    )
   })
 
   it('并发：被取代的旧尝试成功晚到，不进入编辑器且新失败的横幅保留', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     let releaseSlow!: (doc: ProjectContent) => void
-    store.list.mockResolvedValue([{ id: 'a', name: '甲' }, { id: 'b', name: '乙' }])
+    store.list.mockResolvedValue([
+      { id: 'a', name: '甲' },
+      { id: 'b', name: '乙' },
+    ])
     store.load.mockImplementation((id: string) =>
       id === 'a'
-        ? new Promise((resolve) => { releaseSlow = resolve })
+        ? new Promise((resolve) => {
+            releaseSlow = resolve
+          })
         : Promise.reject(new Error('乙的失败')),
     )
     render(<App />)
@@ -494,13 +576,17 @@ describe('App ✦并发收敛：新建协调（PR #110 评审）', () => {
     store.list.mockResolvedValue([{ id: 'slow', name: '慢项目' }])
     store.load.mockImplementation((id: string) =>
       id === 'slow'
-        ? new Promise((_resolve, reject) => { rejectSlow = reject })
+        ? new Promise((_resolve, reject) => {
+            rejectSlow = reject
+          })
         : Promise.resolve(structuredClone(DOC)),
     )
     render(<App />)
     await screen.findByTestId('home')
     await act(async () => {
-      ;(homeProps.current.onOpenProject as (id: string) => Promise<void>)('slow')
+      ;(homeProps.current.onOpenProject as (id: string) => Promise<void>)(
+        'slow',
+      )
     })
     await act(async () => {
       ;(homeProps.current.onCreateProject as () => void)()
@@ -521,15 +607,22 @@ describe('App ✦并发收敛：新建协调（PR #110 评审）', () => {
 describe('App ✦并发：chunk 挂起窗口内作废排队导航（PR #110 评审）', () => {
   it('新尝试失败时，已排队未提交的旧导航被作废，不得吞掉失败横幅', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    store.list.mockResolvedValue([{ id: 'a', name: '甲' }, { id: 'b', name: '乙' }])
+    store.list.mockResolvedValue([
+      { id: 'a', name: '甲' },
+      { id: 'b', name: '乙' },
+    ])
     store.load.mockImplementation((id: string) =>
-      id === 'b' ? Promise.reject(new Error('乙的失败')) : Promise.resolve(structuredClone(DOC)),
+      id === 'b'
+        ? Promise.reject(new Error('乙的失败'))
+        : Promise.resolve(structuredClone(DOC)),
     )
     render(<App />)
     await screen.findByTestId('home')
     // 打开甲：发布已排队；挂起门让过渡停在 chunk 加载态，首页保持可交互
     let release!: () => void
-    editorSuspendGate = new Promise((resolve) => { release = resolve })
+    editorSuspendGate = new Promise((resolve) => {
+      release = resolve
+    })
     await attemptOpen('a')
     expect(screen.queryByTestId('editor')).toBeNull()
     // 挂起窗口内改开乙：乙立即失败并发布横幅
@@ -557,15 +650,20 @@ describe('App ✦AI 会话恢复', () => {
   })
 
   it('AI 会话坏条目隔离后保留可用历史，提示且不自动写回', async () => {
-    const recovered = { schemaVersion: 1 as const, entries: [{ id: 1, kind: 'note' as const, text: '已恢复' }] }
-    store.loadAiSession.mockResolvedValue({ session: recovered, repairError: 'Error: 只读目录' })
+    const recovered = {
+      schemaVersion: 1 as const,
+      entries: [{ id: 1, kind: 'note' as const, text: '已恢复' }],
+    }
+    store.loadAiSession.mockResolvedValue({
+      session: recovered,
+      repairError: 'Error: 只读目录',
+    })
     await openEditor()
     expect(editorProps.current.aiSession).toEqual(recovered)
     expect(editorProps.current.aiSessionError).toBe('Error: 只读目录')
     // 读取仅展示损坏诊断，不触发挂载保存。
     expect(editorProps.current.aiSessionRetryable).toBe(false)
   })
-
 })
 
 describe('App ✦AI 会话保存', () => {
@@ -577,23 +675,40 @@ describe('App ✦AI 会话保存', () => {
       entries: [{ id: 1, kind: 'note' as const, text: '新消息' }],
     }
     await act(async () => {
-      await (editorProps.current.onSaveAiSession as (value: typeof session) => Promise<void>)(session)
+      await (
+        editorProps.current.onSaveAiSession as (
+          value: typeof session,
+        ) => Promise<void>
+      )(session)
     })
     expect(store.saveAiSession).toHaveBeenCalledWith('p1', session)
     expect(editorRenders.count).toBe(rendersBefore)
   })
 
   it('有加载诊断后实际编辑并保存成功：项目级错误清除，重挂载不再报保存失败', async () => {
-    const recovered = { schemaVersion: 1 as const, entries: [{ id: 1, kind: 'note' as const, text: '已恢复' }] }
-    store.loadAiSession.mockResolvedValue({ session: recovered, repairError: 'Error: 只读目录' })
+    const recovered = {
+      schemaVersion: 1 as const,
+      entries: [{ id: 1, kind: 'note' as const, text: '已恢复' }],
+    }
+    store.loadAiSession.mockResolvedValue({
+      session: recovered,
+      repairError: 'Error: 只读目录',
+    })
     store.saveAiSession.mockResolvedValue(undefined)
     await openEditor()
     expect(editorProps.current.aiSessionError).toBe('Error: 只读目录')
     const session = {
       schemaVersion: 1 as const,
-      entries: [...recovered.entries, { id: 2, kind: 'note' as const, text: '新历史' }],
+      entries: [
+        ...recovered.entries,
+        { id: 2, kind: 'note' as const, text: '新历史' },
+      ],
     }
-    await (editorProps.current.onSaveAiSession as (value: typeof session) => Promise<void>)(session)
+    await (
+      editorProps.current.onSaveAiSession as (
+        value: typeof session,
+      ) => Promise<void>
+    )(session)
     await settingsRoundtrip()
     expect(editorProps.current.aiSession).toEqual(session)
     expect(editorProps.current.aiSessionError).toBeNull()
@@ -601,8 +716,15 @@ describe('App ✦AI 会话保存', () => {
 
   it('从设置返回时保留本次打开后新增的 AI 会话历史', async () => {
     await openEditor()
-    const session = { schemaVersion: 1 as const, entries: [{ id: 1, kind: 'note' as const, text: '新的历史' }] }
-    await (editorProps.current.onSaveAiSession as (value: typeof session) => Promise<void>)(session)
+    const session = {
+      schemaVersion: 1 as const,
+      entries: [{ id: 1, kind: 'note' as const, text: '新的历史' }],
+    }
+    await (
+      editorProps.current.onSaveAiSession as (
+        value: typeof session,
+      ) => Promise<void>
+    )(session)
     await settingsRoundtrip()
     expect(editorProps.current.aiSession).toEqual(session)
   })
@@ -617,7 +739,11 @@ describe('App ✦AI 会话保存', () => {
     }
     await act(async () => {
       await expect(
-        (editorProps.current.onSaveAiSession as (value: typeof changed) => Promise<void>)(changed),
+        (
+          editorProps.current.onSaveAiSession as (
+            value: typeof changed,
+          ) => Promise<void>
+        )(changed),
       ).rejects.toThrow('磁盘已满')
     })
     expect(editorProps.current.aiSession).toEqual(changed)
@@ -630,10 +756,17 @@ describe('App ✦AI 会话保存失败', () => {
   it('会话保存失败时拒绝上浮，错误写入项目级：重挂载不丢警告', async () => {
     store.saveAiSession.mockRejectedValueOnce(new Error('磁盘已满'))
     await openEditor()
-    const session = { schemaVersion: 1 as const, entries: [{ id: 1, kind: 'note' as const, text: '未落盘' }] }
+    const session = {
+      schemaVersion: 1 as const,
+      entries: [{ id: 1, kind: 'note' as const, text: '未落盘' }],
+    }
     await act(async () => {
       await expect(
-        (editorProps.current.onSaveAiSession as (value: typeof session) => Promise<void>)(session),
+        (
+          editorProps.current.onSaveAiSession as (
+            value: typeof session,
+          ) => Promise<void>
+        )(session),
       ).rejects.toThrow('磁盘已满')
     })
     expect(editorProps.current.aiSession).toEqual(session)
@@ -651,7 +784,11 @@ describe('App ✦AI 会话保存失败', () => {
     store.saveAiSession.mockRejectedValueOnce(new Error('磁盘已满'))
     await act(async () => {
       await expect(
-        (editorProps.current.onSaveAiSession as (value: typeof changed) => Promise<void>)(changed),
+        (
+          editorProps.current.onSaveAiSession as (
+            value: typeof changed,
+          ) => Promise<void>
+        )(changed),
       ).rejects.toThrow('磁盘已满')
     })
     await act(async () => {
@@ -660,7 +797,9 @@ describe('App ✦AI 会话保存失败', () => {
     expect(await screen.findByTestId('home')).toBeTruthy()
     // 重开同一项目：磁盘上是旧会话，但内存保留的未落盘会话胜出并标记可重试
     await act(async () => {
-      await (homeProps.current.onOpenProject as (id: string) => Promise<void>)('p1')
+      await (homeProps.current.onOpenProject as (id: string) => Promise<void>)(
+        'p1',
+      )
     })
     await screen.findByTestId('editor')
     expect(editorProps.current.aiSession).toEqual(changed)
@@ -679,7 +818,11 @@ describe('App ✦AI 会话重试成功通知', () => {
     }
     await act(async () => {
       await expect(
-        (editorProps.current.onSaveAiSession as (value: typeof changed) => Promise<void>)(changed),
+        (
+          editorProps.current.onSaveAiSession as (
+            value: typeof changed,
+          ) => Promise<void>
+        )(changed),
       ).rejects.toThrow('磁盘已满')
     })
     expect(editorProps.current.aiSessionError).toContain('磁盘已满')
@@ -696,7 +839,9 @@ describe('App ✦AI 会话重试成功通知', () => {
     expect(await screen.findByTestId('home')).toBeTruthy()
     store.loadAiSession.mockClear()
     await act(async () => {
-      await (homeProps.current.onOpenProject as (id: string) => Promise<void>)('p1')
+      await (homeProps.current.onOpenProject as (id: string) => Promise<void>)(
+        'p1',
+      )
     })
     await screen.findByTestId('editor')
     expect(store.loadAiSession).toHaveBeenCalledTimes(1)
@@ -710,7 +855,11 @@ describe('App ✦AI 会话重试成功通知', () => {
     store.saveAiSession.mockRejectedValueOnce(new Error('磁盘已满'))
     await act(async () => {
       await expect(
-        (editorProps.current.onSaveAiSession as (value: typeof changed) => Promise<void>)(changed),
+        (
+          editorProps.current.onSaveAiSession as (
+            value: typeof changed,
+          ) => Promise<void>
+        )(changed),
       ).rejects.toThrow('磁盘已满')
     })
     await act(async () => {
@@ -725,16 +874,21 @@ describe('App ✦AI 会话保存失败（在途）', () => {
     await openEditor()
     let rejectSave!: (err: Error) => void
     store.saveAiSession.mockImplementation(
-      () => new Promise((_resolve, reject) => { rejectSave = reject }),
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectSave = reject
+        }),
     )
     const changed = {
       schemaVersion: 1 as const,
       entries: [{ id: 1, kind: 'note' as const, text: '在途未落盘' }],
     }
     await act(async () => {
-      ;(editorProps.current.onSaveAiSession as (value: typeof changed) => Promise<void>)(changed).catch(
-        () => undefined,
-      )
+      ;(
+        editorProps.current.onSaveAiSession as (
+          value: typeof changed,
+        ) => Promise<void>
+      )(changed).catch(() => undefined)
     })
     await act(async () => {
       ;(editorProps.current.onBackHome as () => void)()
@@ -744,7 +898,10 @@ describe('App ✦AI 会话保存失败（在途）', () => {
     // 重开：load 挂起期间保存拒绝落定（保留区在屏障内被写入）
     let releaseLoad!: (doc: ProjectContent) => void
     store.load.mockImplementation(
-      () => new Promise((resolve) => { releaseLoad = resolve }),
+      () =>
+        new Promise((resolve) => {
+          releaseLoad = resolve
+        }),
     )
     await act(async () => {
       ;(homeProps.current.onOpenProject as (id: string) => Promise<void>)('p1')
@@ -763,18 +920,28 @@ describe('App ✦AI 会话保存失败（在途）', () => {
 
 describe('App 会话读取失败边界', () => {
   it('读取失败禁用 AI，画布继续打开；重开读取成功后解除', async () => {
-    const history = { schemaVersion: 1, entries: [{ id: 1, kind: 'note', text: '原有历史' }] }
-    store.loadAiSession.mockResolvedValue({ session: history, repairError: null })
+    const history = {
+      schemaVersion: 1,
+      entries: [{ id: 1, kind: 'note', text: '原有历史' }],
+    }
+    store.loadAiSession.mockResolvedValue({
+      session: history,
+      repairError: null,
+    })
     store.loadAiSession.mockRejectedValueOnce(new Error('临时读取失败'))
     await openEditor()
     expect(editorProps.current.aiSessionLoadFailed).toBe(true)
     expect(editorProps.current.project).toBeTruthy()
     await settingsRoundtrip()
     expect(editorProps.current.aiSessionLoadFailed).toBe(true)
-    await act(async () => { (editorProps.current.onBackHome as () => void)() })
+    await act(async () => {
+      ;(editorProps.current.onBackHome as () => void)()
+    })
     await screen.findByTestId('home')
     await act(async () => {
-      await (homeProps.current.onOpenProject as (id: string) => Promise<void>)('p1')
+      await (homeProps.current.onOpenProject as (id: string) => Promise<void>)(
+        'p1',
+      )
     })
     await screen.findByTestId('editor')
     expect(editorProps.current.aiSessionLoadFailed).toBe(false)
@@ -802,7 +969,9 @@ describe('App ✦AI 会话回吐重排失败恢复', () => {
     expect(await screen.findByTestId('home')).toBeTruthy()
     // 重开同一项目：磁盘是旧会话，事件登记的恢复快照胜出并提示可重试
     await act(async () => {
-      await (homeProps.current.onOpenProject as (id: string) => Promise<void>)('p1')
+      await (homeProps.current.onOpenProject as (id: string) => Promise<void>)(
+        'p1',
+      )
     })
     await screen.findByTestId('editor')
     expect(editorProps.current.aiSession).toEqual(retained)

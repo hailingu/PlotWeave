@@ -19,11 +19,20 @@ export function outlineSplicePlan(
   target: OutlineDropTarget,
 ): { plan: SplicePlan; anchorId: string } | null {
   if (target.kind === 'row') {
-    const plan = planSpliceIntoSpine(edges, draggedId, target.anchorId, target.position)
+    const plan = planSpliceIntoSpine(
+      edges,
+      draggedId,
+      target.anchorId,
+      target.position,
+    )
     return plan ? { plan, anchorId: target.anchorId } : null
   }
-  const group = buildOutlineGroups(nodes, edges, titles).find((g) => g.episode === target.episode)
-  const spineRows = (group?.rows ?? []).filter((r) => r.id !== draggedId && r.level < 3)
+  const group = buildOutlineGroups(nodes, edges, titles).find(
+    (g) => g.episode === target.episode,
+  )
+  const spineRows = (group?.rows ?? []).filter(
+    (r) => r.id !== draggedId && r.level < 3,
+  )
   for (let i = spineRows.length - 1; i >= 0; i--) {
     const plan = planSpliceIntoSpine(edges, draggedId, spineRows[i].id, 'after')
     if (plan) return { plan, anchorId: spineRows[i].id }
@@ -32,7 +41,12 @@ export function outlineSplicePlan(
 }
 
 /** 大纲拖拽的边重排应用：redo = 去旧边加新边；undo = 去新边还原旧边。 */
-export function spliceEdgesWith(eds: Edge[], removed: Edge[], added: Edge[], redo: boolean): Edge[] {
+export function spliceEdgesWith(
+  eds: Edge[],
+  removed: Edge[],
+  added: Edge[],
+  redo: boolean,
+): Edge[] {
   const dropIds = new Set((redo ? removed : added).map((e) => e.id))
   const kept = eds.filter((e) => !dropIds.has(e.id))
   return redo ? [...kept, ...added] : [...kept, ...removed]

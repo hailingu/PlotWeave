@@ -40,8 +40,20 @@ const nodes: CanvasNode[] = [
       name: '对白',
       lines: [
         { kind: 'action', text: '雨停了', speaker: null, vo: false },
-        { kind: 'line', speaker: 'ch1', side: 'left', text: '我们到此为止。', vo: false },
-        { kind: 'line', speaker: 'ch1', side: 'left', text: '（画外）别走。', vo: true },
+        {
+          kind: 'line',
+          speaker: 'ch1',
+          side: 'left',
+          text: '我们到此为止。',
+          vo: false,
+        },
+        {
+          kind: 'line',
+          speaker: 'ch1',
+          side: 'left',
+          text: '（画外）别走。',
+          vo: true,
+        },
       ],
     },
     selected: false,
@@ -68,7 +80,13 @@ const nodes: CanvasNode[] = [
 /** 项目资产索引：aud-1 存在，gone-1 已删（悬空引用按 §8.2.3 保留）。 */
 const assets = {
   byId: {
-    'aud-1': { id: 'aud-1', relPath: 'assets/aud-1.mp3', mime: 'audio/mpeg', source: 'upload', createdAt: '2026-01-01T00:00:00.000Z' },
+    'aud-1': {
+      id: 'aud-1',
+      relPath: 'assets/aud-1.mp3',
+      mime: 'audio/mpeg',
+      source: 'upload',
+      createdAt: '2026-01-01T00:00:00.000Z',
+    },
   },
 } as Parameters<typeof buildScriptMarkdown>[4]
 
@@ -104,14 +122,21 @@ describe('buildScriptMarkdown（§3.5/§5 导出）', () => {
 
   it('未提供资产索引时引用位按悬空标注（不静默丢引用资产）', () => {
     const bare = buildScriptMarkdown('x', nodes, edges, settings)
-    expect(bare).toContain('引用：氛围图 / aud-1（资产缺失） / gone-1（资产缺失）')
+    expect(bare).toContain(
+      '引用：氛围图 / aud-1（资产缺失） / gone-1（资产缺失）',
+    )
   })
 
   it('节拍与分支不出现在正文；失效角色引用标注已删除', () => {
     expect(md).not.toContain('节拍')
     const broken = buildScriptMarkdown(
       'x',
-      [mk({ ...nodes[0], data: { ...nodes[0].data, characterIds: ['ghost'] } })],
+      [
+        mk({
+          ...nodes[0],
+          data: { ...nodes[0].data, characterIds: ['ghost'] },
+        }),
+      ],
       [],
       settings,
     )
@@ -131,7 +156,15 @@ const mixNodes: CanvasNode[] = [
     id: 's1',
     type: 'scene',
     position: { x: 0, y: 0 },
-    data: { name: '天台夜话', sceneNo: 1, interior: false, time: '🌙 夜', synopsis: '', characterIds: [], episodeNo: 1 },
+    data: {
+      name: '天台夜话',
+      sceneNo: 1,
+      interior: false,
+      time: '🌙 夜',
+      synopsis: '',
+      characterIds: [],
+      episodeNo: 1,
+    },
   }),
   mk({
     id: 'd1',
@@ -156,7 +189,15 @@ const mixNodes: CanvasNode[] = [
     id: 's2',
     type: 'scene',
     position: { x: 300, y: 0 },
-    data: { name: '旧公寓', sceneNo: 2, interior: true, time: '🌙 夜', synopsis: '', characterIds: [], episodeNo: 2 },
+    data: {
+      name: '旧公寓',
+      sceneNo: 2,
+      interior: true,
+      time: '🌙 夜',
+      synopsis: '',
+      characterIds: [],
+      episodeNo: 2,
+    },
   }),
 ]
 
@@ -164,7 +205,13 @@ const mixEdges = [
   { id: 'm1', source: 'bt1', target: 's1', className: 'pw-edge-sequence' },
   { id: 'm2', source: 's1', target: 'd1', className: 'pw-edge-sequence' },
   { id: 'm3', source: 'd1', target: 'b1', className: 'pw-edge-sequence' },
-  { id: 'm4', source: 'b1', sourceHandle: branchOptionHandle('o1'), target: 's2', type: 'branch' },
+  {
+    id: 'm4',
+    source: 'b1',
+    sourceHandle: branchOptionHandle('o1'),
+    target: 's2',
+    type: 'branch',
+  },
 ] as unknown as Edge[]
 
 const mixEdgesTyped: Parameters<typeof buildScriptExport>[0]['edges'] = mixEdges
@@ -172,11 +219,17 @@ const mixEdgesTyped: Parameters<typeof buildScriptExport>[0]['edges'] = mixEdges
 describe('buildScriptExport（大纲 Markdown 层级，review #81）', () => {
   it('将声明的节点层级转换为连续的列表缩进，不把对白与分支平铺到零级', () => {
     const draft = buildScriptExport({
-      projectName: '雨夜', nodes: mixNodes, edges: mixEdgesTyped, settings,
-      assets: undefined, episodeTitles: { 1: '立势', 2: '汇合' },
+      projectName: '雨夜',
+      nodes: mixNodes,
+      edges: mixEdgesTyped,
+      settings,
+      assets: undefined,
+      episodeTitles: { 1: '立势', 2: '汇合' },
     })
     // ExportOutlineRow.level 与 outlineAppendixLines 的两空格/级输出契约。
-    const bulletLines = draft.outline.split('\n').filter((line) => /^\s*- /.test(line))
+    const bulletLines = draft.outline
+      .split('\n')
+      .filter((line) => /^\s*- /.test(line))
     expect(bulletLines).toEqual([
       '- 节拍 · 立势 · 压抑 · ✓ 兑现于 场 01 · 天台夜话 · 入口',
       '- 场 01 · 天台夜话',
@@ -220,7 +273,9 @@ describe('buildScriptExport（issue #48 导出模型）', () => {
     // 正文与分镜附录保持：正文在前，大纲附录在后
     expect(outline).toContain('对白 · 摊牌')
     expect(outline).toContain(draft.plain)
-    expect(outline.indexOf('## 场 01')).toBeLessThan(outline.indexOf('## 附录 · 创作大纲'))
+    expect(outline.indexOf('## 场 01')).toBeLessThan(
+      outline.indexOf('## 附录 · 创作大纲'),
+    )
   })
 
   it('导出范围概要：集/场/对白/节拍/分支计数与大纲可用性', () => {

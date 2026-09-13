@@ -9,7 +9,10 @@ import { useAssetIndex, type AssetIndexActions } from './useAssetIndex'
 import { useCanvasDrop } from './useCanvasDrop'
 import { useConnectionRules, type ConnectionRules } from './useConnectionRules'
 import { useEdgeDeletion } from './useEdgeDeletion'
-import { useEditorContextMenu, type EditorContextMenuHandlers } from './useEditorContextMenu'
+import {
+  useEditorContextMenu,
+  type EditorContextMenuHandlers,
+} from './useEditorContextMenu'
 import { useEpisodeEditing, type EpisodeEditing } from './useEpisodeEditing'
 import { useNodeCreation, type NodeCreationActions } from './useNodeCreation'
 import { useNodeDeletion } from './useNodeDeletion'
@@ -60,9 +63,42 @@ export interface EditorGraphActions {
   drop: ReturnType<typeof useCanvasDrop>
 }
 
+/** 删除动作对（useEditorGraphActions 拆分，issue #99）：节点级联删除
+ * （设定集引用/资产回收随宿主）+ 边删除。 */
+function useGraphDeletion(
+  deps: EditorGraphActionsDeps,
+  assets: ReturnType<typeof useAssetIndex>,
+) {
+  const deleteNodesByIds = useNodeDeletion({
+    nodesRef: deps.doc.nodesRef,
+    edgesRef: deps.doc.edgesRef,
+    settings: deps.doc.settings,
+    assetsRef: deps.doc.assetsRef,
+    addAsset: assets.addAsset,
+    removeAsset: assets.removeAsset,
+    setNodes: deps.doc.setNodes,
+    setEdges: deps.doc.setEdges,
+    pushHistory: deps.pushHistory,
+    closeSettings: deps.panels.closeSettings,
+  })
+  const deleteEdgesByIds = useEdgeDeletion(deps.doc, deps.pushHistory)
+  return { deleteNodesByIds, deleteEdgesByIds }
+}
+
 /** 组装画布写动作族（不含持久化、AI 桥与快捷键）。 */
-export function useEditorGraphActions(deps: EditorGraphActionsDeps): EditorGraphActions {
-  const { projectId, doc, panels, pushHistory, screenToFlowPosition, canvasRef, fitView, onError } = deps
+export function useEditorGraphActions(
+  deps: EditorGraphActionsDeps,
+): EditorGraphActions {
+  const {
+    projectId,
+    doc,
+    panels,
+    pushHistory,
+    screenToFlowPosition,
+    canvasRef,
+    fitView,
+    onError,
+  } = deps
   const assets = useAssetIndex(doc.setAssets)
   const patch = useNodePatch(doc, pushHistory)
   const creation = useNodeCreation({
@@ -73,23 +109,15 @@ export function useEditorGraphActions(deps: EditorGraphActionsDeps): EditorGraph
     canvasRef,
     pushHistory,
   })
-  const deleteNodesByIds = useNodeDeletion({
-    nodesRef: doc.nodesRef,
-    edgesRef: doc.edgesRef,
-    settings: doc.settings,
-    assetsRef: doc.assetsRef,
-    addAsset: assets.addAsset,
-    removeAsset: assets.removeAsset,
-    setNodes: doc.setNodes,
-    setEdges: doc.setEdges,
-    pushHistory,
-    closeSettings: panels.closeSettings,
-  })
-  const deleteEdgesByIds = useEdgeDeletion(doc, pushHistory)
+  const { deleteNodesByIds, deleteEdgesByIds } = useGraphDeletion(deps, assets)
   const connection = useConnectionRules(doc, pushHistory)
   const menu = useEditorContextMenu(doc, panels.setCtxMenu)
   const episodes = useEpisodeEditing(doc, pushHistory)
-  const { settingsActions } = useSettingsActions(doc.settings, doc.setSettings, pushHistory)
+  const { settingsActions } = useSettingsActions(
+    doc.settings,
+    doc.setSettings,
+    pushHistory,
+  )
   const outlineDrop = useOutlineDrop({
     nodesRef: doc.nodesRef,
     edgesRef: doc.edgesRef,

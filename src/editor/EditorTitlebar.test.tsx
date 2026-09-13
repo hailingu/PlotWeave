@@ -43,9 +43,15 @@ describe('EditorTitlebar（§3.3 顶部工具栏）', () => {
 
   it('激活态高亮：leftOpen / inspectorOn / aiOn 决定 on 类与 aria-pressed', () => {
     setup({ leftOpen: true, inspectorOn: false, aiOn: true })
-    expect(screen.getByLabelText('切换边栏').getAttribute('aria-pressed')).toBe('true')
-    expect(screen.getByLabelText('切换检查器').getAttribute('aria-pressed')).toBe('false')
-    expect(screen.getByLabelText('切换 AI 面板').getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByLabelText('切换边栏').getAttribute('aria-pressed')).toBe(
+      'true',
+    )
+    expect(
+      screen.getByLabelText('切换检查器').getAttribute('aria-pressed'),
+    ).toBe('false')
+    expect(
+      screen.getByLabelText('切换 AI 面板').getAttribute('aria-pressed'),
+    ).toBe('true')
   })
 
   it('右栏两个页切换统一走 onToggleRight', () => {

@@ -8,7 +8,10 @@ import { describe, expect, it, vi } from 'vitest'
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import type { Edge } from '@xyflow/react'
 import { useEditorContextMenu } from './useEditorContextMenu'
-import { useEditorDocument, type EditorProjectContent } from './useEditorDocument'
+import {
+  useEditorDocument,
+  type EditorProjectContent,
+} from './useEditorDocument'
 import type { CanvasNode } from './nodes/types'
 
 const scene = (id: string): CanvasNode =>
@@ -31,7 +34,11 @@ const PROJECT: EditorProjectContent = {
 }
 
 const fakeEvent = () =>
-  ({ preventDefault: vi.fn(), clientX: 12, clientY: 34 }) as unknown as ReactMouseEvent
+  ({
+    preventDefault: vi.fn(),
+    clientX: 12,
+    clientY: 34,
+  }) as unknown as ReactMouseEvent
 
 function setup() {
   const setCtxMenu = vi.fn()
@@ -46,10 +53,14 @@ describe('useEditorContextMenu（§4.3）', () => {
   it('节点菜单：阻止默认菜单、单选该节点并写入触发点', () => {
     const { result, setCtxMenu } = setup()
     const event = fakeEvent()
-    act(() => result.current.menu.onNodeContextMenu(event, result.current.doc.nodes[1]))
+    act(() =>
+      result.current.menu.onNodeContextMenu(event, result.current.doc.nodes[1]),
+    )
     expect(event.preventDefault).toHaveBeenCalled()
     expect(setCtxMenu).toHaveBeenCalledWith({ x: 12, y: 34, nodeId: 'n2' })
-    expect(result.current.doc.nodes.filter((n) => n.selected).map((n) => n.id)).toEqual(['n2'])
+    expect(
+      result.current.doc.nodes.filter((n) => n.selected).map((n) => n.id),
+    ).toEqual(['n2'])
   })
 
   it('连线菜单：只记录边 id', () => {

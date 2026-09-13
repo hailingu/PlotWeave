@@ -13,10 +13,13 @@ import type { ProviderConfig } from '../../settings/types'
  */
 
 /** 与词表同源的改写提示词：只输出协议 JSON，动词只允许规范清单。 */
-const REWRITE_SYSTEM = '判断用户的最新请求是否要求修改短剧画布（场景、节奏卡、' +
+const REWRITE_SYSTEM =
+  '判断用户的最新请求是否要求修改短剧画布（场景、节奏卡、' +
   '对白、分镜、连线、分支）或设定集（角色、地点、文档）。只输出一个 JSON 对象，' +
   '不要输出任何其他文字：要求修改时输出 {"action":true,"query":"<归一化后的中文' +
-  '规范请求>"}，query 以动词 ' + ACTION_VERBS.join('、') + ' 之一开头，保留用户对' +
+  '规范请求>"}，query 以动词 ' +
+  ACTION_VERBS.join('、') +
+  ' 之一开头，保留用户对' +
   '目标的原始指称；其余情况（提问、讨论、寒暄、明确暂不操作）输出 {"action":false}。'
 
 /** 改写调用的独立短超时（PR #92 评审第四轮）：llm_chat 统一 120 秒超时，
@@ -51,7 +54,9 @@ function unwrapJsonText(content: string): string {
 export function parseRewrittenQuery(content: string | null): string | null {
   let parsed: unknown
   try {
-    parsed = JSON.parse(trimWrapperChars(unwrapJsonText((content ?? '').trim())))
+    parsed = JSON.parse(
+      trimWrapperChars(unwrapJsonText((content ?? '').trim())),
+    )
   } catch {
     return null
   }
@@ -59,7 +64,8 @@ export function parseRewrittenQuery(content: string | null): string | null {
   const { action, query } = parsed as { action?: unknown; query?: unknown }
   if (action !== true || typeof query !== 'string') return null
   const canonical = trimWrapperChars(query.trim())
-  return canonical !== '' && ACTION_VERBS.some((verb) => canonical.startsWith(verb))
+  return canonical !== '' &&
+    ACTION_VERBS.some((verb) => canonical.startsWith(verb))
     ? canonical
     : null
 }
@@ -80,7 +86,10 @@ export async function rewriteActionQuery(
     timer = setTimeout(() => resolve(null), REWRITE_TIMEOUT_MS)
   })
   try {
-    const reply = await Promise.race([llmChat(provider, model, messages), timeout])
+    const reply = await Promise.race([
+      llmChat(provider, model, messages),
+      timeout,
+    ])
     return reply ? parseRewrittenQuery(reply.content) : null
   } catch {
     // 改写是尽力而为的归一化步骤，传输失败按未识别处理（issue 91 回退语义）。

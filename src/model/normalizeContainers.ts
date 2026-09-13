@@ -37,7 +37,11 @@ import {
   isStrictIso8601,
   normalizeAssetRecords,
 } from './normalizeAssets'
-import { normalizeEdge, normalizeNode, renumberSeqFields } from './normalizeNodes'
+import {
+  normalizeEdge,
+  normalizeNode,
+  renumberSeqFields,
+} from './normalizeNodes'
 import { reissueDuplicateNodeIds } from './normalizeEdges'
 
 /** 归一化环境（§11.1 第 2 步元数据修复的外部事实来源）。 */
@@ -54,7 +58,11 @@ export interface NormalizeEnv {
 }
 
 /** 名称修复链：trim 后合法则采用，否则回退索引名，再退「未命名项目」。 */
-function normalizeProjectName(rawName: unknown, env: NormalizeEnv, warnings: string[]): string {
+function normalizeProjectName(
+  rawName: unknown,
+  env: NormalizeEnv,
+  warnings: string[],
+): string {
   const fallbackName = (): string => {
     const idx = typeof env.indexName === 'string' ? env.indexName.trim() : ''
     return idx && [...idx].length <= 64 ? idx : '未命名项目'
@@ -83,12 +91,20 @@ function normalizeProjectMeta(
   projectRaw: Record<string, unknown>,
   env: NormalizeEnv,
   warnings: string[],
-): { id: string; name: string; description?: string; createdAt: string; updatedAt: string } {
+): {
+  id: string
+  name: string
+  description?: string
+  createdAt: string
+  updatedAt: string
+} {
   const rawId = projectRaw.id
   let id: string
   if (env.projectId !== undefined) {
     if (rawId !== env.projectId) {
-      warnings.push(`project.id（${String(rawId)}）与受信项目 id 不一致，已覆盖为 ${env.projectId}`)
+      warnings.push(
+        `project.id（${String(rawId)}）与受信项目 id 不一致，已覆盖为 ${env.projectId}`,
+      )
     }
     id = env.projectId
   } else {
@@ -96,7 +112,12 @@ function normalizeProjectMeta(
   }
   const name = normalizeProjectName(projectRaw.name, env, warnings)
   /** 单个时间戳字段修复：严格合法则规范化输出，否则回退并警告。 */
-  const repairTimestamp = (v: unknown, label: string, fallback: string, fallbackReason: string): string => {
+  const repairTimestamp = (
+    v: unknown,
+    label: string,
+    fallback: string,
+    fallbackReason: string,
+  ): string => {
     if (typeof v === 'string' && isStrictIso8601(v)) {
       const canon = new Date(v).toISOString()
       // 规范化结果须仍在可保存域（四位年份）：合法的极端偏移换算成 UTC
@@ -105,14 +126,20 @@ function normalizeProjectMeta(
       // 不可保存；越域即按不可修复走回退链
       if (isStrictIso8601(canon)) {
         if (canon !== v) {
-          warnings.push(`project.${label} 是合法的偏移/精度变体，已确定性规范化为 UTC ISO 8601`)
+          warnings.push(
+            `project.${label} 是合法的偏移/精度变体，已确定性规范化为 UTC ISO 8601`,
+          )
         }
         return canon
       }
-      warnings.push(`project.${label} 规范化后越出四位年份域，${fallbackReason}`)
+      warnings.push(
+        `project.${label} 规范化后越出四位年份域，${fallbackReason}`,
+      )
       return fallback
     }
-    warnings.push(`project.${label} 不是严格 ISO 8601 时间戳，${fallbackReason}`)
+    warnings.push(
+      `project.${label} 不是严格 ISO 8601 时间戳，${fallbackReason}`,
+    )
     return fallback
   }
   const updatedAt = repairTimestamp(
@@ -121,17 +148,26 @@ function normalizeProjectMeta(
     new Date().toISOString(),
     '已取本次加载时刻',
   )
-  const createdAt = repairTimestamp(projectRaw.createdAt, 'createdAt', updatedAt, '已采用修复后的 updatedAt')
+  const createdAt = repairTimestamp(
+    projectRaw.createdAt,
+    'createdAt',
+    updatedAt,
+    '已采用修复后的 updatedAt',
+  )
   let description: string | undefined
   if (projectRaw.description !== undefined) {
-    if (typeof projectRaw.description === 'string') description = projectRaw.description
+    if (typeof projectRaw.description === 'string')
+      description = projectRaw.description
     else warnings.push('project.description 非字符串，已剥离')
   }
   return { id, name, description, createdAt, updatedAt }
 }
 
 /** 视口形状校验：非法即删除（回退打开时 fitView，§3 缺省语义）。 */
-function normalizeViewportShape(v: unknown, warnings: string[]): Viewport | undefined {
+function normalizeViewportShape(
+  v: unknown,
+  warnings: string[],
+): Viewport | undefined {
   if (v === undefined) return undefined
   if (
     isPlainObject(v) &&
@@ -148,7 +184,10 @@ function normalizeViewportShape(v: unknown, warnings: string[]): Viewport | unde
 
 /** AI 批次计数形状校验（§12.2 提交身份）：只接受非负安全整数；非法即删除
  * （回退 0，等同未应用过 AI 批次，执行卡恢复时按未落盘处理）。 */
-function normalizeAiRevision(v: unknown, warnings: string[]): number | undefined {
+function normalizeAiRevision(
+  v: unknown,
+  warnings: string[],
+): number | undefined {
   if (v === undefined) return undefined
   if (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0) return v
   warnings.push('graph.aiRevision 形状非法，已删除（按未应用 AI 批次处理）')
@@ -186,26 +225,37 @@ function reKeyBucketIdentities(
     'ch',
     warnings,
   )
-  for (const [oldKey, newKey] of reKeyUnsafeCharacterKeys(entityBucket('characters'), warnings)) {
+  for (const [oldKey, newKey] of reKeyUnsafeCharacterKeys(
+    entityBucket('characters'),
+    warnings,
+  )) {
     characterRemaps.set(oldKey, newKey)
   }
   const blankRemaps: BlankKeyRemaps = {
     characters: characterRemaps,
-    locations: reKeyBlankEntries(entityBucket('locations'), 'settings.locations', 'loc', warnings),
-    assets: reKeyBlankEntries(
-      byId,
-      'assets.byId',
-      'asset',
+    locations: reKeyBlankEntries(
+      entityBucket('locations'),
+      'settings.locations',
+      'loc',
       warnings,
     ),
+    assets: reKeyBlankEntries(byId, 'assets.byId', 'asset', warnings),
   }
   // props/documents 桶无节点引用面，仅重发空键保证身份可用
   reKeyBlankEntries(entityBucket('props'), 'settings.props', 'prop', warnings)
-  reKeyBlankEntries(entityBucket('documents'), 'settings.documents', 'doc', warnings)
+  reKeyBlankEntries(
+    entityBucket('documents'),
+    'settings.documents',
+    'doc',
+    warnings,
+  )
   // 六十四轮 targetId 兼容的身份快照：最终记录键 + 修复前身份（改写前捕获）
   return {
     blankRemaps,
-    characterIds0: identitySnapshot(entityBucket('characters'), preCharacterIds),
+    characterIds0: identitySnapshot(
+      entityBucket('characters'),
+      preCharacterIds,
+    ),
     locationIds0: identitySnapshot(entityBucket('locations'), preLocationIds),
     assetIds0: identitySnapshot(byId, preAssetIds),
   }
@@ -226,14 +276,19 @@ function sanitizeBucketEntries(
   // plainObjectEntries 已过滤为普通对象成员；实路径不可验证键经空键重发
   // 映射对齐（重发换键不改变媒体文件的事实）
   const invalidAssets = new Set(
-    (env.invalidAssetKeys ?? []).map((k) => repairs.blankRemaps.assets.get(k) ?? k),
+    (env.invalidAssetKeys ?? []).map(
+      (k) => repairs.blankRemaps.assets.get(k) ?? k,
+    ),
   )
   normalizeAssetRecords(byId, warnings, invalidAssets)
   // 旧草案 targetId 兼容：先于节点联合校验（refs 成员形状筛选只认当前联合）
   compatLegacyShotTargetIds(
     nodesRaw,
     {
-      characters: settings.characters as Record<string, Record<string, unknown>>,
+      characters: settings.characters as Record<
+        string,
+        Record<string, unknown>
+      >,
       characterIds0: repairs.characterIds0,
       locations: settings.locations as Record<string, Record<string, unknown>>,
       locationIds0: repairs.locationIds0,
@@ -259,7 +314,10 @@ function normalizeActiveNodes(
   optionIdRemap: Map<string, Map<string, string>>
   nodeIdRemap: Map<string, string>
 } {
-  const { members: idRepaired, nodeIdRemap } = reissueDuplicateNodeIds(nodesRaw, warnings)
+  const { members: idRepaired, nodeIdRemap } = reissueDuplicateNodeIds(
+    nodesRaw,
+    warnings,
+  )
   const optionIdRemap = new Map<string, Map<string, string>>()
   const nodes: StoryNode[] = []
   for (const member of idRepaired) {
@@ -308,7 +366,9 @@ function assembleDocument(
     project: {
       id: meta.id,
       name: meta.name,
-      ...(meta.description !== undefined ? { description: meta.description } : {}),
+      ...(meta.description !== undefined
+        ? { description: meta.description }
+        : {}),
       createdAt: meta.createdAt,
       updatedAt: meta.updatedAt,
     },
@@ -317,7 +377,9 @@ function assembleDocument(
       edges,
       ...extras.extensions.graph,
       ...(extras.viewport ? { viewport: extras.viewport } : {}),
-      ...(extras.aiRevision !== undefined ? { aiRevision: extras.aiRevision } : {}),
+      ...(extras.aiRevision !== undefined
+        ? { aiRevision: extras.aiRevision }
+        : {}),
     },
     settings: {
       ...extras.extensions.settings,
@@ -329,7 +391,10 @@ function assembleDocument(
     episodeTitles,
     assets: {
       ...extras.extensions.assets,
-      byId: byId as unknown as Record<string, ProjectDocument['assets']['byId'][string]>,
+      byId: byId as unknown as Record<
+        string,
+        ProjectDocument['assets']['byId'][string]
+      >,
     },
   }
 }
@@ -365,7 +430,8 @@ function extensionDomainWarnings(
       return
     }
     if (isPlainObject(value)) {
-      for (const [key, member] of Object.entries(value)) scan(member, `${label}.${key}`)
+      for (const [key, member] of Object.entries(value))
+        scan(member, `${label}.${key}`)
     }
   }
   for (const [container, name] of [
@@ -373,7 +439,8 @@ function extensionDomainWarnings(
     [extensions.settings, 'settings 扩展字段'],
     [extensions.assets, 'assets 扩展字段'],
   ] as const) {
-    for (const key of Object.keys(container)) scan(container[key], `${name} ${key}`)
+    for (const key of Object.keys(container))
+      scan(container[key], `${name} ${key}`)
   }
 }
 
@@ -411,6 +478,77 @@ function captureEnvelopeExtensions(
  * 修复而非拒绝：均记录警告，单个脏字段不阻断加载（§8.2.4）。
  * 返回的 optionIdRemap 携带 branch 空选项 id 的明确句柄映射（节点 id →
  * 原空 id → 新 id），供归一化末段的引出边 option- 句柄同步改写。 */
+/** 异型容器重置为可遍历空容器（缺失视为空，不警告）。 */
+function asContainer(
+  v: unknown,
+  warning: string,
+  warnings: string[],
+): Record<string, unknown> {
+  if (isPlainObject(v)) return v
+  if (v !== undefined) warnings.push(warning)
+  return {}
+}
+
+/** 异型数组重置为空数组（缺失视为空，不警告）。 */
+function asArray(v: unknown, warning: string, warnings: string[]): unknown[] {
+  if (Array.isArray(v)) return v
+  if (v !== undefined) warnings.push(warning)
+  return []
+}
+
+/** 父/子容器解析（normalizeContainers 拆分，issue #99）：异型重置为可
+ * 遍历空容器（缺失视为空，不警告），并捕获信封扩展字段。 */
+function resolveRawContainers(
+  raw: Record<string, unknown>,
+  warnings: string[],
+) {
+  const projectRaw = asContainer(
+    raw.project,
+    'project 容器异型，已重置为空对象后逐字段修复',
+    warnings,
+  )
+  const graphRaw = asContainer(
+    raw.graph,
+    'graph 容器异型，已重置为空画布',
+    warnings,
+  )
+  const settingsRaw = asContainer(
+    raw.settings,
+    'settings 容器异型，已重置为默认空桶',
+    warnings,
+  )
+  const assetsRaw = asContainer(
+    raw.assets,
+    'assets 容器异型，已重置为空资产索引',
+    warnings,
+  )
+  const nodesRaw = asArray(
+    graphRaw.nodes,
+    'graph.nodes 非数组，已重置为空数组',
+    warnings,
+  )
+  const edgesRaw = asArray(
+    graphRaw.edges,
+    'graph.edges 非数组，已重置为空数组',
+    warnings,
+  )
+  const extensions = captureEnvelopeExtensions(
+    graphRaw,
+    settingsRaw,
+    assetsRaw,
+    warnings,
+  )
+  return {
+    projectRaw,
+    graphRaw,
+    settingsRaw,
+    assetsRaw,
+    nodesRaw,
+    edgesRaw,
+    extensions,
+  }
+}
+
 export function normalizeContainers(
   raw: Record<string, unknown>,
   env: NormalizeEnv,
@@ -423,35 +561,31 @@ export function normalizeContainers(
    * 供 Tauri 侧登记别名——修复回写落盘前，重发 id 的媒体经盘上条目解析。 */
   reissuedAssetAliases: [string, string][]
 } {
-  // 父/子容器（异型重置为可遍历空容器；缺失视为空，不警告）
-  const containerOf = (v: unknown, warning: string): Record<string, unknown> => {
-    if (isPlainObject(v)) return v
-    if (v !== undefined) warnings.push(warning)
-    return {}
-  }
-  const arrayOf = (v: unknown, warning: string): unknown[] => {
-    if (Array.isArray(v)) return v
-    if (v !== undefined) warnings.push(warning)
-    return []
-  }
-  const projectRaw = containerOf(raw.project, 'project 容器异型，已重置为空对象后逐字段修复')
-  const graphRaw = containerOf(raw.graph, 'graph 容器异型，已重置为空画布')
-  const settingsRaw = containerOf(raw.settings, 'settings 容器异型，已重置为默认空桶')
-  const assetsRaw = containerOf(raw.assets, 'assets 容器异型，已重置为空资产索引')
-  const nodesRaw = arrayOf(graphRaw.nodes, 'graph.nodes 非数组，已重置为空数组')
-  const edgesRaw = arrayOf(graphRaw.edges, 'graph.edges 非数组，已重置为空数组')
-  const extensions = captureEnvelopeExtensions(graphRaw, settingsRaw, assetsRaw, warnings)
+  const {
+    projectRaw,
+    graphRaw,
+    settingsRaw,
+    assetsRaw,
+    nodesRaw,
+    edgesRaw,
+    extensions,
+  } = resolveRawContainers(raw, warnings)
 
   // 成员过滤 + 嵌套容器修复；键控桶身份重发、形状校验与旧草案兼容按
   // 阶段模块执行，活动节点集随后修复
   const settings = normalizeSettingsBuckets(settingsRaw, warnings)
-  const assetIndex = plainObjectEntries(assetsRaw.byId, 'assets.byId', warnings) as Record<
-    string,
-    Record<string, unknown>
-  >
+  const assetIndex = plainObjectEntries(
+    assetsRaw.byId,
+    'assets.byId',
+    warnings,
+  ) as Record<string, Record<string, unknown>>
   const repairs = reKeyBucketIdentities(settings, assetIndex, warnings)
   sanitizeBucketEntries(settings, assetIndex, nodesRaw, env, repairs, warnings)
-  const titlesRaw = containerOf(raw.episodeTitles, 'episodeTitles 非普通键值对象，已重置为空 Record')
+  const titlesRaw = asContainer(
+    raw.episodeTitles,
+    'episodeTitles 非普通键值对象，已重置为空 Record',
+    warnings,
+  )
   const { nodes, optionIdRemap, nodeIdRemap } = normalizeActiveNodes(
     nodesRaw,
     settings,
@@ -477,7 +611,10 @@ export function normalizeContainers(
     assetIndex,
     // 边界（issue 16）：normalizeEpisodeTitles 返回「正整数键 → 非空标题」
     // 的普通 Record（键值域已按 §11.1 收口），绑定回文档契约字段
-    normalizeEpisodeTitles(titlesRaw, warnings) as unknown as ProjectDocument['episodeTitles'],
+    normalizeEpisodeTitles(
+      titlesRaw,
+      warnings,
+    ) as unknown as ProjectDocument['episodeTitles'],
   )
   return {
     doc,

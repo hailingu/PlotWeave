@@ -3,7 +3,11 @@ import type { Edge } from '@xyflow/react'
 import { outlineSplicePlan, spliceEdgesWith } from './outlineDrop'
 import type { CanvasNode, SceneFlowNode, ShotFlowNode } from './nodes/types'
 
-function sceneNode(id: string, episodeNo: number | undefined, x: number): SceneFlowNode {
+function sceneNode(
+  id: string,
+  episodeNo: number | undefined,
+  x: number,
+): SceneFlowNode {
   return {
     id,
     type: 'scene',
@@ -25,7 +29,14 @@ function shotNodeOf(id: string, episodeNo: number, x: number): ShotFlowNode {
     id,
     type: 'shot',
     position: { x, y: 0 },
-    data: { shotNo: 1, size: '中景', picture: '…', prompt: '', refs: [], episodeNo } as ShotFlowNode['data'],
+    data: {
+      shotNo: 1,
+      size: '中景',
+      picture: '…',
+      prompt: '',
+      refs: [],
+      episodeNo,
+    } as ShotFlowNode['data'],
   }
 }
 
@@ -68,7 +79,10 @@ describe('outlineSplicePlan（§3.5 大纲拖拽落点 → 锚点换算）', () 
   })
 
   it('组尾落点：从该组最后一个剧情流行向上找可执行锚点', () => {
-    const got = outlineSplicePlan(nodes, edges, {}, 'x', { kind: 'groupEnd', episode: 1 })
+    const got = outlineSplicePlan(nodes, edges, {}, 'x', {
+      kind: 'groupEnd',
+      episode: 1,
+    })
     // 组 1 最后一行是 s2（x 大者靠后），s2 是剧情流成员 → 锚 s2 之后
     expect(got?.anchorId).toBe('s2')
     expect(got?.plan.adds).toEqual([{ source: 's2', target: 'x' }])
@@ -76,16 +90,31 @@ describe('outlineSplicePlan（§3.5 大纲拖拽落点 → 锚点换算）', () 
 
   it('组尾落点跳过不可锚行：末行是非剧情流成员时向上回退', () => {
     // s3 排在组尾但不在剧情流中；shot level 3 不参与锚定
-    const withLoose: CanvasNode[] = [...nodes, sceneNode('s3', 1, 200), shotNodeOf('sh1', 1, 400)]
-    const got = outlineSplicePlan(withLoose, edges, {}, 'x', { kind: 'groupEnd', episode: 1 })
+    const withLoose: CanvasNode[] = [
+      ...nodes,
+      sceneNode('s3', 1, 200),
+      shotNodeOf('sh1', 1, 400),
+    ]
+    const got = outlineSplicePlan(withLoose, edges, {}, 'x', {
+      kind: 'groupEnd',
+      episode: 1,
+    })
     expect(got?.anchorId).toBe('s2')
   })
 
   it('组尾落点排除被拖节点自身；目标组不存在 → null', () => {
-    const got = outlineSplicePlan(nodes, edges, {}, 'x', { kind: 'groupEnd', episode: 2 })
+    const got = outlineSplicePlan(nodes, edges, {}, 'x', {
+      kind: 'groupEnd',
+      episode: 2,
+    })
     // 组 2 只有 x 自己，被排除后无可锚行
     expect(got).toBeNull()
-    expect(outlineSplicePlan(nodes, edges, {}, 'x', { kind: 'groupEnd', episode: 9 })).toBeNull()
+    expect(
+      outlineSplicePlan(nodes, edges, {}, 'x', {
+        kind: 'groupEnd',
+        episode: 9,
+      }),
+    ).toBeNull()
   })
 })
 

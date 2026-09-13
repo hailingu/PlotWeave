@@ -73,7 +73,9 @@ afterEach(() => {
 /** 挂载屏障并等关闭/退出监听注册完成。 */
 async function mountBarrier() {
   const view = renderHook(() => useExitFlush())
-  await act(async () => { await Promise.resolve() })
+  await act(async () => {
+    await Promise.resolve()
+  })
   expect(closeHandlers).toHaveLength(1)
   expect(quitHandlers).toHaveLength(1)
   return view
@@ -84,7 +86,9 @@ describe('useExitFlush（窗口关闭冲刷屏障）', () => {
     hasPending.mockReturnValue(false)
     await mountBarrier()
     const event = { preventDefault: vi.fn() }
-    await act(async () => { await closeHandlers[0](event) })
+    await act(async () => {
+      await closeHandlers[0](event)
+    })
     expect(event.preventDefault).not.toHaveBeenCalled()
     expect(flushPending).not.toHaveBeenCalled()
     expect(destroy).not.toHaveBeenCalled()
@@ -95,7 +99,9 @@ describe('useExitFlush（窗口关闭冲刷屏障）', () => {
     hasPending.mockReturnValue(false).mockReturnValueOnce(true)
     const { result } = await mountBarrier()
     const event = { preventDefault: vi.fn() }
-    await act(async () => { await closeHandlers[0](event) })
+    await act(async () => {
+      await closeHandlers[0](event)
+    })
     expect(event.preventDefault).toHaveBeenCalled()
     expect(flushPending).toHaveBeenCalled()
     expect(destroy).toHaveBeenCalled()
@@ -103,9 +109,14 @@ describe('useExitFlush（窗口关闭冲刷屏障）', () => {
   })
 
   it('冲刷落定后又进入新保存：重查未排空前不得销毁窗口', async () => {
-    hasPending.mockReturnValue(false).mockReturnValueOnce(true).mockReturnValueOnce(true)
+    hasPending
+      .mockReturnValue(false)
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(true)
     await mountBarrier()
-    await act(async () => { await closeHandlers[0]({ preventDefault: vi.fn() }) })
+    await act(async () => {
+      await closeHandlers[0]({ preventDefault: vi.fn() })
+    })
     expect(flushPending).toHaveBeenCalledTimes(2)
     expect(destroy).toHaveBeenCalledTimes(1)
   })
@@ -113,13 +124,14 @@ describe('useExitFlush（窗口关闭冲刷屏障）', () => {
   it('冲刷仍失败：保留窗口并给出可见诊断', async () => {
     flushPending.mockResolvedValue(['p1'])
     const { result } = await mountBarrier()
-    await act(async () => { await closeHandlers[0]({ preventDefault: vi.fn() }) })
+    await act(async () => {
+      await closeHandlers[0]({ preventDefault: vi.fn() })
+    })
     expect(destroy).not.toHaveBeenCalled()
     expect(result.current).toContain('已阻止退出')
     expect(result.current).toContain('AI 会话保存失败')
     expect(invoke).not.toHaveBeenCalledWith('app_exit')
   })
-
 })
 
 describe('useExitFlush（⌘Q 应用级退出冲刷屏障）', () => {
@@ -132,7 +144,9 @@ describe('useExitFlush（⌘Q 应用级退出冲刷屏障）', () => {
   it('无待保存：直接受控退出（app_exit）', async () => {
     hasPending.mockReturnValue(false)
     await mountBarrier()
-    await act(async () => { await quitHandlers[0]() })
+    await act(async () => {
+      await quitHandlers[0]()
+    })
     expect(flushPending).not.toHaveBeenCalled()
     expect(invoke).toHaveBeenCalledWith('app_exit')
     expect(destroy).not.toHaveBeenCalled()
@@ -141,7 +155,9 @@ describe('useExitFlush（⌘Q 应用级退出冲刷屏障）', () => {
   it('有待保存先冲刷：排空后受控退出，不销毁窗口走关闭路径', async () => {
     hasPending.mockReturnValue(false).mockReturnValueOnce(true)
     await mountBarrier()
-    await act(async () => { await quitHandlers[0]() })
+    await act(async () => {
+      await quitHandlers[0]()
+    })
     expect(flushPending).toHaveBeenCalledTimes(1)
     expect(invoke).toHaveBeenCalledWith('app_exit')
     expect(destroy).not.toHaveBeenCalled()
@@ -150,7 +166,9 @@ describe('useExitFlush（⌘Q 应用级退出冲刷屏障）', () => {
   it('冲刷仍有不可恢复项：不退出并显示可见诊断', async () => {
     flushPending.mockResolvedValue(['p1'])
     const { result } = await mountBarrier()
-    await act(async () => { await quitHandlers[0]() })
+    await act(async () => {
+      await quitHandlers[0]()
+    })
     expect(invoke).not.toHaveBeenCalledWith('app_exit')
     expect(result.current).toContain('已阻止退出')
   })

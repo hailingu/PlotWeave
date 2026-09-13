@@ -39,7 +39,8 @@ export function useConnectionRules(
       if (conn.source === conn.target) return false
       const existing = edgesRef.current
       if (isDuplicateEdge(existing, conn)) return false
-      const nodeTypeOf = (id: string) => nodesRef.current.find((n) => n.id === id)?.type
+      const nodeTypeOf = (id: string) =>
+        nodesRef.current.find((n) => n.id === id)?.type
       if (conn.sourceHandle === SCENE_SHOT_HANDLE) {
         const issue = connectionEndpointIssue(
           nodeTypeOf(conn.source),
@@ -50,12 +51,20 @@ export function useConnectionRules(
         // 宿主唯一（§5）：已有宿主的分镜不接受第二条下挂——换宿主须先断开
         return !hasAttachHost(existing, conn.target)
       }
-      const flowEdges = existing.filter((e) => e.sourceHandle !== SCENE_SHOT_HANDLE)
+      const flowEdges = existing.filter(
+        (e) => e.sourceHandle !== SCENE_SHOT_HANDLE,
+      )
       if (wouldCreateCycle(flowEdges, conn.source, conn.target)) return false
       // Connection 无 type/className，语义从端口推出（选项出口 = branch），
       // 误归 sequence 会被「分支不得以 sequence 连出」拒绝而拖不出连线
       const kind = connectionKindOf(conn)
-      return connectionEndpointIssue(nodeTypeOf(conn.source), nodeTypeOf(conn.target), kind) === null
+      return (
+        connectionEndpointIssue(
+          nodeTypeOf(conn.source),
+          nodeTypeOf(conn.target),
+          kind,
+        ) === null
+      )
     },
     [edgesRef, nodesRef],
   )
@@ -63,7 +72,8 @@ export function useConnectionRules(
   const onConnect = useCallback(
     (connection: Connection) => {
       const fromBranchOption =
-        connection.sourceHandle?.startsWith(BRANCH_OPTION_HANDLE_PREFIX) ?? false
+        connection.sourceHandle?.startsWith(BRANCH_OPTION_HANDLE_PREFIX) ??
+        false
       const fromShotHandle = connection.sourceHandle === SCENE_SHOT_HANDLE
       const edge: Edge = {
         ...connection,

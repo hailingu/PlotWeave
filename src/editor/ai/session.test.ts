@@ -13,7 +13,13 @@ describe('normalizeAiSession', () => {
           role: 'assistant',
           text: '可以先让两人的目标相反。',
           card: {
-            v: { ok: true, items: [], commands: [], issues: [], hasDeletes: false },
+            v: {
+              ok: true,
+              items: [],
+              commands: [],
+              issues: [],
+              hasDeletes: false,
+            },
             status: 'executed',
           },
         },
@@ -32,7 +38,13 @@ describe('normalizeAiSession', () => {
           role: 'assistant',
           text: '可以先让两人的目标相反。',
           card: {
-            v: { ok: true, items: [], commands: [], issues: [], hasDeletes: false },
+            v: {
+              ok: true,
+              items: [],
+              commands: [],
+              issues: [],
+              hasDeletes: false,
+            },
             status: 'executed',
           },
         },
@@ -59,7 +71,13 @@ describe('normalizeAiSession', () => {
           role: 'assistant',
           text: '这张卡已损坏。',
           card: {
-            v: { ok: true, items: [], commands: [null], issues: [], hasDeletes: false },
+            v: {
+              ok: true,
+              items: [],
+              commands: [null],
+              issues: [],
+              hasDeletes: false,
+            },
             status: 'pending',
           },
         },
@@ -70,30 +88,52 @@ describe('normalizeAiSession', () => {
     expect(result).toEqual({
       session: {
         schemaVersion: 1,
-        entries: [{ id: 2, kind: 'msg', role: 'user', text: '继续讨论人物动机。' }],
+        entries: [
+          { id: 2, kind: 'msg', role: 'user', text: '继续讨论人物动机。' },
+        ],
       },
       repaired: true,
     })
   })
-
 })
 
 describe('normalizeAiSession · 执行失败状态（issue 73）', () => {
   it.each([
-    { status: 'pending', error: '目标已删除', expected: { executionError: '目标已删除' } },
+    {
+      status: 'pending',
+      error: '目标已删除',
+      expected: { executionError: '目标已删除' },
+    },
     { status: 'pending', error: undefined, expected: {} },
     { status: 'pending', error: 1, expected: {} },
     { status: 'pending', error: ' ', expected: {} },
     { status: 'executed', error: '旧失败', expected: {} },
     { status: 'dismissed', error: '旧失败', expected: {} },
-  ])('只为待执行卡保留非空失败诊断：$status / $error', ({ status, error, expected }) => {
-    const v = { ok: true, items: [], commands: [], issues: [], hasDeletes: false }
-    const result = normalizeAiSession({ schemaVersion: 1, entries: [{
-      id: 1, kind: 'msg', role: 'assistant', text: '原批次',
-      card: { v, status, executionError: error },
-    }] })
-    expect(result.session.entries[0].card).toEqual({ v, status, ...expected })
-  })
+  ])(
+    '只为待执行卡保留非空失败诊断：$status / $error',
+    ({ status, error, expected }) => {
+      const v = {
+        ok: true,
+        items: [],
+        commands: [],
+        issues: [],
+        hasDeletes: false,
+      }
+      const result = normalizeAiSession({
+        schemaVersion: 1,
+        entries: [
+          {
+            id: 1,
+            kind: 'msg',
+            role: 'assistant',
+            text: '原批次',
+            card: { v, status, executionError: error },
+          },
+        ],
+      })
+      expect(result.session.entries[0].card).toEqual({ v, status, ...expected })
+    },
+  )
 })
 
 describe('normalizeAiSession · 卡片运行时标注', () => {
@@ -107,7 +147,13 @@ describe('normalizeAiSession · 卡片运行时标注', () => {
           role: 'assistant',
           text: '待对账的批次。',
           card: {
-            v: { ok: true, items: [], commands: [], issues: [], hasDeletes: false },
+            v: {
+              ok: true,
+              items: [],
+              commands: [],
+              issues: [],
+              hasDeletes: false,
+            },
             status: 'pending',
             aiRevisionAfter: 5,
             uncommitted: true,
@@ -133,13 +179,26 @@ describe('normalizeAiSession · 设定文档命令（issue 56）', () => {
 
   it('带 upsert_document 的待执行卡完整恢复，载荷不被归一化丢弃', () => {
     const commands = [
-      { op: 'upsert_document', fields: { title: '小传', body: '正文', relatedIds: [{ kind: 'character', id: 'ch-1' }] } },
+      {
+        op: 'upsert_document',
+        fields: {
+          title: '小传',
+          body: '正文',
+          relatedIds: [{ kind: 'character', id: 'ch-1' }],
+        },
+      },
       { op: 'upsert_document', entityId: 'doc-1', fields: { body: '改写' } },
     ]
     const result = normalizeAiSession({
       schemaVersion: 1,
       entries: [
-        { id: 1, kind: 'msg', role: 'assistant', text: '文档批次', card: docCard(commands) },
+        {
+          id: 1,
+          kind: 'msg',
+          role: 'assistant',
+          text: '文档批次',
+          card: docCard(commands),
+        },
       ],
     })
     expect(result.repaired).toBe(false)

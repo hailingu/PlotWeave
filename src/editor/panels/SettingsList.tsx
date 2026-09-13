@@ -1,4 +1,10 @@
-import { Fragment, useEffect, useRef, useState, type DragEvent as ReactDragEvent } from 'react'
+import {
+  Fragment,
+  useEffect,
+  useRef,
+  useState,
+  type DragEvent as ReactDragEvent,
+} from 'react'
 import { PW_ENTITY_MIME, type EntityDragPayload } from '../dragDrop'
 import { EditableName } from '../nodes/settings/NodeSettingsPanel'
 import SettingsDetailForm from './SettingsDetailForm'
@@ -240,7 +246,11 @@ function DocumentRow({
           </button>
         </div>
       ))}
-      <button type="button" className="pw-settings-add" onClick={actions.addDocument}>
+      <button
+        type="button"
+        className="pw-settings-add"
+        onClick={actions.addDocument}
+      >
         ＋ 新增文档
       </button>
     </>
@@ -260,7 +270,10 @@ export default function SettingsList({
   const { characters, locations } = settings
   const [expanded, setExpanded] = useState<ExpandedEntry | null>(null)
   /** 新增待认领：点击新增时记录既有 id，settings 出现新 id 即自动展开。 */
-  const pendingAdd = useRef<{ kind: 'character' | 'location'; before: Set<string> } | null>(null)
+  const pendingAdd = useRef<{
+    kind: 'character' | 'location'
+    before: Set<string>
+  } | null>(null)
 
   // 新增自动展开（issue 95）：新实体出现即展开其详情表单；
   // 表单名称字段 autoFocus 落焦，即「聚焦首个可编辑字段」。
@@ -277,21 +290,26 @@ export default function SettingsList({
   const handleAdd = (kind: 'character' | 'location', add: () => void) => {
     pendingAdd.current = {
       kind,
-      before: new Set((kind === 'character' ? characters : locations).map((e) => e.id)),
+      before: new Set(
+        (kind === 'character' ? characters : locations).map((e) => e.id),
+      ),
     }
     add()
   }
   const toggle = (kind: 'character' | 'location', id: string) =>
     setExpanded((cur) => (isOpen(cur, kind, id) ? null : { kind, id }))
   const empty =
-    characters.length === 0 && locations.length === 0 && (settings.documents ?? []).length === 0
+    characters.length === 0 &&
+    locations.length === 0 &&
+    (settings.documents ?? []).length === 0
 
   return (
     // 原生 section + aria-label（隐式 region，S6819 同 LeftPanel 大纲段）
     <section className="pw-settings" aria-label="设定集">
       {empty && (
         <p className="pw-settings-empty">
-          暂无设定条目：从下方新增角色 / 地点 / 文档开始；点击条目的 ▸ 展开钮即可编辑名称与小传、备注。
+          暂无设定条目：从下方新增角色 / 地点 / 文档开始；点击条目的 ▸
+          展开钮即可编辑名称与小传、备注。
         </p>
       )}
       <CharacterRow

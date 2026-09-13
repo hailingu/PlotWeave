@@ -15,17 +15,30 @@ beforeEach(() => {
   invoke.mockReset()
 })
 
-const load = async (): Promise<typeof import('./settingsStore')> => import('./settingsStore')
+const load = async (): Promise<typeof import('./settingsStore')> =>
+  import('./settingsStore')
 
-const prefs = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
-  providers: [{ id: 'openai', label: 'OpenAI 兼容', baseUrl: 'https://api.openai.com/v1', enabled: true, models: ['gpt-4o'] }],
+const prefs = (
+  over: Record<string, unknown> = {},
+): Record<string, unknown> => ({
+  providers: [
+    {
+      id: 'openai',
+      label: 'OpenAI 兼容',
+      baseUrl: 'https://api.openai.com/v1',
+      enabled: true,
+      models: ['gpt-4o'],
+    },
+  ],
   defaultChat: 'openai:gpt-4o',
   ...over,
 })
 
 describe('settingsStore Tauri 路径', () => {
   it('load 调 load_prefs 并按 normalizeSettings 归一（缺字段补内置）', async () => {
-    invoke.mockResolvedValueOnce(prefs({ providers: 'garbage', defaultChat: 7 }))
+    invoke.mockResolvedValueOnce(
+      prefs({ providers: 'garbage', defaultChat: 7 }),
+    )
     const { settingsStore } = await load()
     const s: AppSettings = await settingsStore.load()
     expect(invoke.mock.calls[0]).toEqual(['load_prefs'])
@@ -55,12 +68,22 @@ describe('settingsStore Tauri 路径', () => {
     const base: AppSettings = {
       providers: [
         { id: 'openai', label: 'A', baseUrl: 'u', enabled: true, models: [] },
-        { id: 'volcengine-ark', label: 'B', baseUrl: 'u2', enabled: true, models: [] },
+        {
+          id: 'volcengine-ark',
+          label: 'B',
+          baseUrl: 'u2',
+          enabled: true,
+          models: [],
+        },
       ],
       defaultChat: null,
       defaultImage: null,
     }
-    const updated = await settingsStore.setProviderKey(base, 'openai', 'sk-secret')
+    const updated = await settingsStore.setProviderKey(
+      base,
+      'openai',
+      'sk-secret',
+    )
     expect(invoke.mock.calls[0]).toEqual([
       'set_provider_key',
       { providerId: 'openai', key: 'sk-secret' },

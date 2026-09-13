@@ -4,7 +4,7 @@
 (`src/**` and root frontend manifests). Like the root `AGENTS.md`, this file is
 written in English for agent interoperability.
 
-**Last reviewed**: 2026-09-03
+**Last reviewed**: 2026-09-13
 
 ## Required Reading
 
@@ -21,6 +21,17 @@ written in English for agent interoperability.
 
 - Format with the project's configured formatter and lint with its configured
   linter (`npm run lint`); do not hand-format around them.
+- The configured formatter is Prettier: `npm run format` applies it and
+  `npm run format:check` reports deviations without modifying files
+  (non-zero exit on findings). Configuration lives in `.prettierrc.json`
+  with ignore rules in `.prettierignore`; both are versioned so a clean
+  install formats reproducibly without private editor settings.
+- Formatting and linting are separate responsibilities: Prettier owns
+  whitespace, quotes, semicolons, and line wrapping; ESLint owns code
+  quality rules through `eslint.config.js`. Do not disable ESLint
+  formatting-adjacent rules one by one to fight Prettier — adjust the
+  shared Prettier configuration instead. The Rust backend (`src-tauri`)
+  is formatted by `cargo fmt` and stays outside Prettier's scope.
 - All code must pass type checking with the project's configured `tsc`
   settings (`npm run build`); do not suppress errors with
   `@ts-ignore`/`@ts-expect-error` without an explanatory comment.

@@ -48,7 +48,9 @@
   font-size: 13px;
   line-height: 1;
   align-self: center;
-  transition: background 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 
 .pw-gear:hover {
@@ -212,7 +214,9 @@
 /* 选中 = 品牌渐变描边 + 投影加深（§4.3）。 */
 .pw-dlg.pw-on {
   border: 2px solid transparent;
-  background: linear-gradient(#f5f5f7, #f5f5f7) padding-box, var(--brand-gradient) border-box;
+  background:
+    linear-gradient(#f5f5f7, #f5f5f7) padding-box,
+    var(--brand-gradient) border-box;
 }
 
 .pw-dlg-head {
@@ -309,7 +313,9 @@
 
 .pw-beat.pw-on {
   border: 2px solid transparent;
-  background: linear-gradient(#f5f5f7, #f5f5f7) padding-box, var(--brand-gradient) border-box;
+  background:
+    linear-gradient(#f5f5f7, #f5f5f7) padding-box,
+    var(--brand-gradient) border-box;
 }
 
 .pw-beat-tone {
@@ -336,7 +342,9 @@
 
 .pw-shot.pw-on {
   border: 2px solid transparent;
-  background: linear-gradient(#232326, #232326) padding-box, var(--brand-gradient) border-box;
+  background:
+    linear-gradient(#232326, #232326) padding-box,
+    var(--brand-gradient) border-box;
 }
 
 .pw-shot-tb {
@@ -436,7 +444,9 @@
 /* 选中：虚线「未定」变为品牌渐变实描边。 */
 .pw-branch.pw-on {
   border: 2px solid transparent;
-  background: linear-gradient(#fff, #fff) padding-box, var(--brand-gradient) border-box;
+  background:
+    linear-gradient(#fff, #fff) padding-box,
+    var(--brand-gradient) border-box;
 }
 
 .pw-branch-q {
@@ -484,7 +494,9 @@
   }
 
   .pw-branch.pw-on {
-    background: linear-gradient(#131316, #131316) padding-box, var(--brand-gradient) border-box;
+    background:
+      linear-gradient(#131316, #131316) padding-box,
+      var(--brand-gradient) border-box;
   }
 
   .pw-branch-opt {
@@ -665,7 +677,9 @@
 
 .pw-image.pw-on {
   border: 2px solid transparent;
-  background: linear-gradient(#232326, #232326) padding-box, var(--brand-gradient) border-box;
+  background:
+    linear-gradient(#232326, #232326) padding-box,
+    var(--brand-gradient) border-box;
 }
 
 .pw-image-tb {

@@ -6,7 +6,10 @@
 import { act, renderHook } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { Edge } from '@xyflow/react'
-import { useEditorDocument, type EditorProjectContent } from './useEditorDocument'
+import {
+  useEditorDocument,
+  type EditorProjectContent,
+} from './useEditorDocument'
 import { useEdgeDeletion } from './useEdgeDeletion'
 import type { HistoryCommand } from './history'
 

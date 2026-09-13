@@ -31,12 +31,18 @@ import type { ProjectContent } from '../model/content'
 /** 节点人读标签：画布快照、改动预览与批次执行共用。 */
 export function nodeLabelOf(n: CanvasNode): string {
   switch (n.type) {
-    case 'scene': return `场${n.data.sceneNo}·${n.data.name}`
-    case 'dialogue': return `对白·${n.data.name}`
-    case 'beat': return `节拍·${n.data.name}`
-    case 'branch': return `分支·${n.data.prompt}`
-    case 'shot': return `SHOT${n.data.shotNo}·${n.data.size}`
-    case 'image': return `图片·${n.data.prompt.slice(0, 12)}`
+    case 'scene':
+      return `场${n.data.sceneNo}·${n.data.name}`
+    case 'dialogue':
+      return `对白·${n.data.name}`
+    case 'beat':
+      return `节拍·${n.data.name}`
+    case 'branch':
+      return `分支·${n.data.prompt}`
+    case 'shot':
+      return `SHOT${n.data.shotNo}·${n.data.size}`
+    case 'image':
+      return `图片·${n.data.prompt.slice(0, 12)}`
   }
 }
 
@@ -98,7 +104,9 @@ function graphSnapshotOf(
       id: n.id,
       type: n.type,
       label: nodeLabelOf(n),
-      ...(n.type === 'branch' ? { options: n.data.options.map((o) => ({ id: o.id, label: o.label })) } : {}),
+      ...(n.type === 'branch'
+        ? { options: n.data.options.map((o) => ({ id: o.id, label: o.label })) }
+        : {}),
     })),
     edges: edgesRef.current.map((e) => ({
       source: e.source,
@@ -108,11 +116,20 @@ function graphSnapshotOf(
     })),
     // Map 精确匹配避免普通对象键的原型链误命中（如 assetId "constructor"）
     assets: new Map(
-      Object.entries(assetsRef.current?.byId ?? {}).map(([id, a]) => [id, a.mime]),
+      Object.entries(assetsRef.current?.byId ?? {}).map(([id, a]) => [
+        id,
+        a.mime,
+      ]),
     ),
     settings: {
-      characters: settingsRef.current.characters.map(({ id, name }) => ({ id, name })),
-      locations: settingsRef.current.locations.map(({ id, name }) => ({ id, name })),
+      characters: settingsRef.current.characters.map(({ id, name }) => ({
+        id,
+        name,
+      })),
+      locations: settingsRef.current.locations.map(({ id, name }) => ({
+        id,
+        name,
+      })),
       documents: settingsRef.current.documents?.map((d) => ({
         id: d.id,
         title: d.title,
@@ -166,7 +183,8 @@ function applyValidatedBatch(
 /** 校验与读工具族（useAiBridge 拆出的回调子域）：反应式画布 → 快照 digest；
  * ref 镜像 → 整批校验快照与 get_node / get_settings_snapshot 读工具。
  * aiSnapshot 一并回传供落地重校验复用。 */
-function useAiReadTools(deps: {
+/** useAiReadTools 的依赖：反应式画布状态 + ref 镜像（与 useAiBridge 同源）。 */
+interface AiReadToolsDeps {
   nodes: CanvasNode[]
   edges: Edge[]
   settings: ProjectSettings
@@ -174,8 +192,11 @@ function useAiReadTools(deps: {
   edgesRef: { current: Edge[] }
   settingsRef: { current: ProjectSettings }
   assetsRef: { current: ProjectContent['assets'] }
-}) {
-  const { nodes, edges, settings, nodesRef, edgesRef, settingsRef, assetsRef } = deps
+}
+
+function useAiReadTools(deps: AiReadToolsDeps) {
+  const { nodes, edges, settings, nodesRef, edgesRef, settingsRef, assetsRef } =
+    deps
 
   const canvasDigest = useMemo(
     () =>
@@ -204,7 +225,8 @@ function useAiReadTools(deps: {
   )
 
   const validateCommands = useCallback(
-    (commands: AiCommand[]): BatchValidation | null => validateAiBatch(commands, aiSnapshot()),
+    (commands: AiCommand[]): BatchValidation | null =>
+      validateAiBatch(commands, aiSnapshot()),
     [aiSnapshot],
   )
 
@@ -227,12 +249,27 @@ function useAiReadTools(deps: {
   const readDocument = useCallback(
     (documentId: string): string | null => {
       const d = settingsRef.current.documents?.find((x) => x.id === documentId)
-      return d ? JSON.stringify({ id: d.id, title: d.title, body: d.body, relatedIds: d.relatedIds }) : null
+      return d
+        ? JSON.stringify({
+            id: d.id,
+            title: d.title,
+            body: d.body,
+            relatedIds: d.relatedIds,
+          })
+        : null
     },
     [settingsRef],
   )
 
-  return { canvasDigest, aiSnapshot, validateAiReply, validateCommands, readNode, readSettings, readDocument }
+  return {
+    canvasDigest,
+    aiSnapshot,
+    validateAiReply,
+    validateCommands,
+    readNode,
+    readSettings,
+    readDocument,
+  }
 }
 
 export function useAiBridge(deps: AiBridgeDeps): AiBridge {
@@ -250,7 +287,13 @@ export function useAiBridge(deps: AiBridgeDeps): AiBridge {
     closeSettings,
   } = deps
   const {
-    canvasDigest, aiSnapshot, validateAiReply, validateCommands, readNode, readSettings, readDocument,
+    canvasDigest,
+    aiSnapshot,
+    validateAiReply,
+    validateCommands,
+    readNode,
+    readSettings,
+    readDocument,
   } = useAiReadTools(deps)
 
   /** ✦AI 改动落地：整批作为一条复合命令入栈；返回错误文案或 null。
@@ -268,8 +311,29 @@ export function useAiBridge(deps: AiBridgeDeps): AiBridge {
         pushHistory,
         closeSettings,
       }),
-    [aiSnapshot, applyDataPatch, buildNewNode, closeSettings, edgesRef, nodesRef, pushHistory, setAiRevision, setEdges, setNodes, setSettings, settingsRef],
+    [
+      aiSnapshot,
+      applyDataPatch,
+      buildNewNode,
+      closeSettings,
+      edgesRef,
+      nodesRef,
+      pushHistory,
+      setAiRevision,
+      setEdges,
+      setNodes,
+      setSettings,
+      settingsRef,
+    ],
   )
 
-  return { canvasDigest, validateAiReply, validateCommands, readNode, readSettings, readDocument, applyAiBatch }
+  return {
+    canvasDigest,
+    validateAiReply,
+    validateCommands,
+    readNode,
+    readSettings,
+    readDocument,
+    applyAiBatch,
+  }
 }

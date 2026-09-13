@@ -16,7 +16,14 @@ function sceneNode(id: string): SceneFlowNode {
     id,
     type: 'scene',
     position: { x: 0, y: 0 },
-    data: { name: `场`, sceneNo: 1, interior: true, time: '🌙 夜', synopsis: '…', characterIds: [] },
+    data: {
+      name: `场`,
+      sceneNo: 1,
+      interior: true,
+      time: '🌙 夜',
+      synopsis: '…',
+      characterIds: [],
+    },
   }
 }
 
@@ -68,7 +75,11 @@ describe('simulateBatch · upsert_document 新建', () => {
       [
         {
           op: 'upsert_document',
-          fields: { title: '陈默小传', body: '正文', relatedIds: [{ kind: 'character', id: 'ch-1' }] },
+          fields: {
+            title: '陈默小传',
+            body: '正文',
+            relatedIds: [{ kind: 'character', id: 'ch-1' }],
+          },
         },
       ] as unknown as ValidatedCommand[],
       ops,
@@ -85,11 +96,16 @@ describe('simulateBatch · upsert_document 新建', () => {
     expect(created?.body).toBe('正文')
     expect(created?.relatedIds).toEqual([{ kind: 'character', id: 'ch-1' }])
     expect(state.settings.props).toEqual([{ id: 'prop-1', name: '怀表' }])
-    expect(docs.find((d) => d.id === 'doc-1')).toMatchObject({ title: '世界观', body: '旧全文' })
+    expect(docs.find((d) => d.id === 'doc-1')).toMatchObject({
+      title: '世界观',
+      body: '旧全文',
+    })
 
     backward.forEach((f) => f())
     expect(state.settings.documents).toHaveLength(2)
-    expect(state.settings.documents?.some((d) => d.title === '陈默小传')).toBe(false)
+    expect(state.settings.documents?.some((d) => d.title === '陈默小传')).toBe(
+      false,
+    )
   })
 
   it('relatedIds 的批内 ref 解析为同批新建角色的真实 id；撤销-重做保持同一实体 id', () => {
@@ -99,7 +115,10 @@ describe('simulateBatch · upsert_document 新建', () => {
         { op: 'upsert_character', ref: 'hero', fields: { name: '林晚' } },
         {
           op: 'upsert_document',
-          fields: { title: '小传', relatedIds: [{ kind: 'character', id: 'hero' }] },
+          fields: {
+            title: '小传',
+            relatedIds: [{ kind: 'character', id: 'hero' }],
+          },
         },
       ] as unknown as ValidatedCommand[],
       ops,
@@ -114,9 +133,9 @@ describe('simulateBatch · upsert_document 新建', () => {
     // 撤销-重做复用同一实体对象：引用不悬空
     backward.forEach((f) => f())
     forward.forEach((f) => f())
-    expect(state.settings.documents?.find((d) => d.title === '小传')?.relatedIds).toEqual([
-      { kind: 'character', id: heroId },
-    ])
+    expect(
+      state.settings.documents?.find((d) => d.title === '小传')?.relatedIds,
+    ).toEqual([{ kind: 'character', id: heroId }])
   })
 })
 
@@ -126,7 +145,11 @@ describe('simulateBatch · upsert_document 修改', () => {
     const before = settingsWithDocs().documents?.find((d) => d.id === 'doc-1')
     const { forward, backward } = simulateBatch(
       [
-        { op: 'upsert_document', entityId: 'doc-1', fields: { body: '新全文' } },
+        {
+          op: 'upsert_document',
+          entityId: 'doc-1',
+          fields: { body: '新全文' },
+        },
       ] as unknown as ValidatedCommand[],
       ops,
       [],
@@ -137,10 +160,14 @@ describe('simulateBatch · upsert_document 修改', () => {
     const after = state.settings.documents?.find((d) => d.id === 'doc-1')
     expect(after?.body).toBe('新全文')
     expect(after?.title).toBe(before?.title)
-    expect(state.settings.documents?.find((d) => d.id === 'doc-2')?.body).toBe('术语')
+    expect(state.settings.documents?.find((d) => d.id === 'doc-2')?.body).toBe(
+      '术语',
+    )
 
     backward.forEach((f) => f())
-    expect(state.settings.documents?.find((d) => d.id === 'doc-1')).toEqual(before)
+    expect(state.settings.documents?.find((d) => d.id === 'doc-1')).toEqual(
+      before,
+    )
   })
 
   it('文档目标不经实体别名表重写：别名与既有文档 id 撞名时仍按文档执行（PR #86 评审）', () => {
@@ -149,8 +176,17 @@ describe('simulateBatch · upsert_document 修改', () => {
       [
         // 先登记一个与既有文档 id 同名的实体 ref 别名（校验侧别名冲突只查
         // 角色/地点桶，不查文档——文档命名空间与实体命名空间独立）
-        { op: 'upsert_character', entityId: 'ch-1', ref: 'doc-1', fields: { bio: 'x' } },
-        { op: 'upsert_document', entityId: 'doc-1', fields: { body: '新全文' } },
+        {
+          op: 'upsert_character',
+          entityId: 'ch-1',
+          ref: 'doc-1',
+          fields: { bio: 'x' },
+        },
+        {
+          op: 'upsert_document',
+          entityId: 'doc-1',
+          fields: { body: '新全文' },
+        },
       ] as unknown as ValidatedCommand[],
       ops,
       [],
@@ -159,10 +195,16 @@ describe('simulateBatch · upsert_document 修改', () => {
     )
     forward.forEach((f) => f())
     // 文档更新必须落到文档 doc-1，而不是被别名解析成实体 id 后静默跳过
-    expect(state.settings.documents?.find((d) => d.id === 'doc-1')?.body).toBe('新全文')
-    expect(state.settings.documents?.find((d) => d.id === 'doc-2')?.body).toBe('术语')
+    expect(state.settings.documents?.find((d) => d.id === 'doc-1')?.body).toBe(
+      '新全文',
+    )
+    expect(state.settings.documents?.find((d) => d.id === 'doc-2')?.body).toBe(
+      '术语',
+    )
     // 同批的实体改动照常生效
-    expect(state.settings.characters.find((c) => c.id === 'ch-1')?.bio).toBe('x')
+    expect(state.settings.characters.find((c) => c.id === 'ch-1')?.bio).toBe(
+      'x',
+    )
   })
 
   it('relatedIds 整体替换并解析批内 ref；撤销恢复旧数组', () => {
@@ -186,12 +228,16 @@ describe('simulateBatch · upsert_document 修改', () => {
       state.settings,
     )
     forward.forEach((f) => f())
-    expect(state.settings.documents?.find((d) => d.id === 'doc-1')?.relatedIds).toEqual([
+    expect(
+      state.settings.documents?.find((d) => d.id === 'doc-1')?.relatedIds,
+    ).toEqual([
       { kind: 'location', id: 'loc-1' },
       { kind: 'character', id: 'ch-1' },
     ])
     backward.forEach((f) => f())
-    expect(state.settings.documents?.find((d) => d.id === 'doc-1')?.relatedIds).toEqual([])
+    expect(
+      state.settings.documents?.find((d) => d.id === 'doc-1')?.relatedIds,
+    ).toEqual([])
   })
 })
 
@@ -207,7 +253,10 @@ describe('simulateBatch · 文档与节点/实体同一复合命令', () => {
         },
         {
           op: 'upsert_document',
-          fields: { title: '小传', relatedIds: [{ kind: 'character', id: 'hero' }] },
+          fields: {
+            title: '小传',
+            relatedIds: [{ kind: 'character', id: 'hero' }],
+          },
         },
       ] as unknown as ValidatedCommand[],
       ops,

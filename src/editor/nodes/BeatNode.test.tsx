@@ -18,7 +18,9 @@ vi.mock('@xyflow/react', async (importOriginal) => {
     ...orig,
     /** Handle 桩：脱离 ReactFlow 画布后仅保留锚点语义（type/id）供断言。 */
     Handle: (props: { readonly id?: string; readonly type: string }) => (
-      <div data-testid={`handle-${props.type}${props.id ? `-${props.id}` : ''}`} />
+      <div
+        data-testid={`handle-${props.type}${props.id ? `-${props.id}` : ''}`}
+      />
     ),
   }
 })
@@ -63,11 +65,16 @@ describe('BeatNode（节拍胶囊）', () => {
   it('待兑现：虚线态 + 「待兑现」徽标（节奏漏洞提示）', () => {
     const { container } = setup({ status: 'pending' })
     expect(screen.getByText('待兑现')).toBeTruthy()
-    expect(container.querySelector('.pw-beat')?.className).toContain('pw-beat-pending')
+    expect(container.querySelector('.pw-beat')?.className).toContain(
+      'pw-beat-pending',
+    )
   })
 
   it('已兑现：✓ 徽标，title 标注承载场景', () => {
-    const { container } = setup({ status: 'fulfilled', sceneLabel: '场 03 · 天台对峙' })
+    const { container } = setup({
+      status: 'fulfilled',
+      sceneLabel: '场 03 · 天台对峙',
+    })
     const badge = container.querySelector('.pw-beat-state.ok')
     expect(badge?.getAttribute('title')).toContain('场 03 · 天台对峙')
   })
@@ -81,6 +88,9 @@ describe('BeatNode（节拍胶囊）', () => {
     const input = screen.getByRole('textbox', { name: '节奏卡内容' })
     fireEvent.change(input, { target: { value: '雨夜反转' } })
     fireEvent.blur(input)
-    expect(api.patchNode).toHaveBeenCalledWith('b1', { nodeType: 'beat', patch: { name: '雨夜反转' } })
+    expect(api.patchNode).toHaveBeenCalledWith('b1', {
+      nodeType: 'beat',
+      patch: { name: '雨夜反转' },
+    })
   })
 })

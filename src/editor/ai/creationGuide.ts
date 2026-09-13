@@ -3,28 +3,87 @@
  * 嵌套行、实体引用和顺序插入语义；示例不是当前画布，也不由应用自动执行。
  */
 
-const sceneInsertion = { commands: [
-  { op: 'disconnect_edge', sourceId: 'A', targetId: 'B', reason: '将新场景插入原剧情流' },
-  { op: 'create_node', nodeType: 'scene', ref: 'new_scene', data: {
-    name: '吞并计划', episodeNo: 1, interior: false, time: '午后',
-    synopsis: '对手亮出连锁便利店吞并计划，承接立势节拍。',
-  } },
-  { op: 'connect_edge', sourceId: 'A', targetId: 'new_scene', edgeKind: 'sequence' },
-  { op: 'connect_edge', sourceId: 'new_scene', targetId: 'B', edgeKind: 'sequence' },
-] }
+const sceneInsertion = {
+  commands: [
+    {
+      op: 'disconnect_edge',
+      sourceId: 'A',
+      targetId: 'B',
+      reason: '将新场景插入原剧情流',
+    },
+    {
+      op: 'create_node',
+      nodeType: 'scene',
+      ref: 'new_scene',
+      data: {
+        name: '吞并计划',
+        episodeNo: 1,
+        interior: false,
+        time: '午后',
+        synopsis: '对手亮出连锁便利店吞并计划，承接立势节拍。',
+      },
+    },
+    {
+      op: 'connect_edge',
+      sourceId: 'A',
+      targetId: 'new_scene',
+      edgeKind: 'sequence',
+    },
+    {
+      op: 'connect_edge',
+      sourceId: 'new_scene',
+      targetId: 'B',
+      edgeKind: 'sequence',
+    },
+  ],
+}
 
-const dialogueInsertion = { commands: [
-  { op: 'upsert_character', ref: 'manager', fields: { name: '连锁店长', bio: '负责收购谈判。' } },
-  { op: 'disconnect_edge', sourceId: 'C', targetId: 'B', reason: '将对白插入场景后的剧情流' },
-  { op: 'create_node', nodeType: 'dialogue', ref: 'new_dialogue', data: {
-    name: '收购交锋', episodeNo: 1, lines: [
-      { kind: 'line', speaker: 'manager', side: 'left', vo: false, text: '这份收购方案，你可以考虑一下。' },
-      { kind: 'action', text: '店长把合同推到桌面中央。' },
-    ],
-  } },
-  { op: 'connect_edge', sourceId: 'C', targetId: 'new_dialogue', edgeKind: 'sequence' },
-  { op: 'connect_edge', sourceId: 'new_dialogue', targetId: 'B', edgeKind: 'sequence' },
-] }
+const dialogueInsertion = {
+  commands: [
+    {
+      op: 'upsert_character',
+      ref: 'manager',
+      fields: { name: '连锁店长', bio: '负责收购谈判。' },
+    },
+    {
+      op: 'disconnect_edge',
+      sourceId: 'C',
+      targetId: 'B',
+      reason: '将对白插入场景后的剧情流',
+    },
+    {
+      op: 'create_node',
+      nodeType: 'dialogue',
+      ref: 'new_dialogue',
+      data: {
+        name: '收购交锋',
+        episodeNo: 1,
+        lines: [
+          {
+            kind: 'line',
+            speaker: 'manager',
+            side: 'left',
+            vo: false,
+            text: '这份收购方案，你可以考虑一下。',
+          },
+          { kind: 'action', text: '店长把合同推到桌面中央。' },
+        ],
+      },
+    },
+    {
+      op: 'connect_edge',
+      sourceId: 'C',
+      targetId: 'new_dialogue',
+      edgeKind: 'sequence',
+    },
+    {
+      op: 'connect_edge',
+      sourceId: 'new_dialogue',
+      targetId: 'B',
+      edgeKind: 'sequence',
+    },
+  ],
+}
 
 /** 工具和围栏通道共用同一批次形状；围栏展示的 JSON 可直接用作 batch 参数。 */
 function example(title: string, batch: object): string {
@@ -46,6 +105,12 @@ export const CREATION_GUIDE = [
     '不支持工具时输出同形状的完整 JSON 围栏。不要仅描述将调用工具或将创建预览。' +
     '纠正时重新输出整批，不只输出修正的一条；缺少必要信息时明确提问。' +
     '省略的可选字段由应用提供默认值，节点／行／选项的持久 id 由应用分配。',
-  example('示例一：已确认节拍 A 唯一顺序连接节拍 B，在两者之间插入场景。', sceneInsertion),
-  example('示例二：已确认场03（C）唯一顺序连接 B，设定集中没有「连锁店长」。在场03后插入带该新角色的对白。', dialogueInsertion),
+  example(
+    '示例一：已确认节拍 A 唯一顺序连接节拍 B，在两者之间插入场景。',
+    sceneInsertion,
+  ),
+  example(
+    '示例二：已确认场03（C）唯一顺序连接 B，设定集中没有「连锁店长」。在场03后插入带该新角色的对白。',
+    dialogueInsertion,
+  ),
 ].join('\n\n')

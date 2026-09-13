@@ -32,6 +32,105 @@ export interface EditorTitlebarProps {
   readonly onToggleRight: (tab: RightTab) => void
 }
 
+/** 标题栏左组（EditorTitlebar 拆分，issue #99）：边栏开关 / 撤销 / 重做 /
+ * 返回首页。 */
+function TitlebarLeftGroup(
+  props: Pick<
+    EditorTitlebarProps,
+    | 'leftOpen'
+    | 'onToggleLeft'
+    | 'canUndo'
+    | 'canRedo'
+    | 'onUndo'
+    | 'onRedo'
+    | 'onBackHome'
+  >,
+) {
+  return (
+    <>
+      <button
+        type="button"
+        className={`editor-tbtn${props.leftOpen ? ' on' : ''}`}
+        onClick={props.onToggleLeft}
+        aria-pressed={props.leftOpen}
+        aria-label="切换边栏"
+        title="显示或隐藏边栏"
+      >
+        ▤
+      </button>
+      <button
+        type="button"
+        className="editor-tbtn"
+        onClick={props.onUndo}
+        disabled={!props.canUndo}
+        aria-label="撤销"
+        title="撤销 (⌘Z)"
+      >
+        ↩︎
+      </button>
+      <button
+        type="button"
+        className="editor-tbtn"
+        onClick={props.onRedo}
+        disabled={!props.canRedo}
+        aria-label="重做"
+        title="重做 (⌘⇧Z)"
+      >
+        ↪︎
+      </button>
+      <button
+        type="button"
+        className="editor-back"
+        onClick={props.onBackHome}
+        aria-label="返回首页"
+      >
+        ‹ 首页
+      </button>
+    </>
+  )
+}
+
+/** ＋节点下拉（EditorTitlebar 拆分，issue #99）：开合态由父级持有（失焦
+ * 收起 §4.3 需要外部关闭）。 */
+function PlusNodeMenu(
+  props: Pick<
+    EditorTitlebarProps,
+    'plusOpen' | 'onTogglePlus' | 'onCreateNode'
+  >,
+) {
+  return (
+    <div className="editor-plus">
+      <button
+        type="button"
+        className={`editor-tbtn io${props.plusOpen ? ' on' : ''}`}
+        onClick={props.onTogglePlus}
+        aria-pressed={props.plusOpen}
+        aria-haspopup="menu"
+        aria-expanded={props.plusOpen}
+        aria-label="新增节点"
+        title="新增节点"
+      >
+        ＋ 节点 ▾
+      </button>
+      {props.plusOpen && (
+        <div className="editor-menu" role="menu" aria-label="节点类型">
+          {CREATABLE_TYPES.map((type) => (
+            <button
+              key={type}
+              type="button"
+              className="editor-menu-item"
+              role="menuitem"
+              onClick={() => props.onCreateNode(type)}
+            >
+              {CREATE_LABELS[type]}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function EditorTitlebar({
   projectName,
   onRenameProject,
@@ -52,72 +151,29 @@ export default function EditorTitlebar({
 }: EditorTitlebarProps) {
   return (
     <header className="editor-titlebar" data-tauri-drag-region>
-      <button
-        type="button"
-        className={`editor-tbtn${leftOpen ? ' on' : ''}`}
-        onClick={onToggleLeft}
-        aria-pressed={leftOpen}
-        aria-label="切换边栏"
-        title="显示或隐藏边栏"
-      >
-        ▤
-      </button>
-      <button
-        type="button"
-        className="editor-tbtn"
-        onClick={onUndo}
-        disabled={!canUndo}
-        aria-label="撤销"
-        title="撤销 (⌘Z)"
-      >
-        ↩︎
-      </button>
-      <button
-        type="button"
-        className="editor-tbtn"
-        onClick={onRedo}
-        disabled={!canRedo}
-        aria-label="重做"
-        title="重做 (⌘⇧Z)"
-      >
-        ↪︎
-      </button>
-      <button type="button" className="editor-back" onClick={onBackHome} aria-label="返回首页">
-        ‹ 首页
-      </button>
+      <TitlebarLeftGroup
+        leftOpen={leftOpen}
+        onToggleLeft={onToggleLeft}
+        canUndo={canUndo}
+        canRedo={canRedo}
+        onUndo={onUndo}
+        onRedo={onRedo}
+        onBackHome={onBackHome}
+      />
       {/* 项目名居中（§3.3 中区）：点击内联重命名 */}
       <span className="editor-title">
-        <EditableName value={projectName} ariaLabel="项目名" singleClick onChange={onRenameProject} />
+        <EditableName
+          value={projectName}
+          ariaLabel="项目名"
+          singleClick
+          onChange={onRenameProject}
+        />
       </span>
-      <div className="editor-plus">
-        <button
-          type="button"
-          className={`editor-tbtn io${plusOpen ? ' on' : ''}`}
-          onClick={onTogglePlus}
-          aria-pressed={plusOpen}
-          aria-haspopup="menu"
-          aria-expanded={plusOpen}
-          aria-label="新增节点"
-          title="新增节点"
-        >
-          ＋ 节点 ▾
-        </button>
-        {plusOpen && (
-          <div className="editor-menu" role="menu" aria-label="节点类型">
-            {CREATABLE_TYPES.map((type) => (
-              <button
-                key={type}
-                type="button"
-                className="editor-menu-item"
-                role="menuitem"
-                onClick={() => onCreateNode(type)}
-              >
-                {CREATE_LABELS[type]}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
+      <PlusNodeMenu
+        plusOpen={plusOpen}
+        onTogglePlus={onTogglePlus}
+        onCreateNode={onCreateNode}
+      />
       <button
         type="button"
         className="editor-tbtn"

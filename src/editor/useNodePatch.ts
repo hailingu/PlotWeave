@@ -32,7 +32,9 @@ export function useNodePatch(
 
   const applyDataPatch = useCallback(
     (id: string, cmd: NodeDataPatch) => {
-      setNodes((nds) => nds.map((n) => (n.id === id ? mergeNodeData(n, cmd.patch) : n)))
+      setNodes((nds) =>
+        nds.map((n) => (n.id === id ? mergeNodeData(n, cmd.patch) : n)),
+      )
     },
     [setNodes],
   )
@@ -47,14 +49,19 @@ export function useNodePatch(
       applyDataPatch(id, cmd)
       // 级联：新态缺失的选项句柄 → 删其出口边（branch 节点限定）
       const removedHandles =
-        cur.type === 'branch' && cmd.nodeType === 'branch' && Array.isArray(cmd.patch.options)
+        cur.type === 'branch' &&
+        cmd.nodeType === 'branch' &&
+        Array.isArray(cmd.patch.options)
           ? removedOptionHandles(cur.data.options, cmd.patch.options)
           : []
       const beforeEdges = edgesRef.current
       const dropEdges = () => {
         const gone = new Set(removedHandles)
         setEdges((eds) =>
-          eds.filter((e) => !(e.source === id && e.sourceHandle && gone.has(e.sourceHandle))),
+          eds.filter(
+            (e) =>
+              !(e.source === id && e.sourceHandle && gone.has(e.sourceHandle)),
+          ),
         )
       }
       if (removedHandles.length > 0) dropEdges()

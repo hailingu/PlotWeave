@@ -70,8 +70,10 @@ export function hasUsableSize(node: CanvasNode): boolean {
     width?: number
     height?: number
   }
-  const width = positiveSize(runtime.measured?.width) ?? positiveSize(runtime.width)
-  const height = positiveSize(runtime.measured?.height) ?? positiveSize(runtime.height)
+  const width =
+    positiveSize(runtime.measured?.width) ?? positiveSize(runtime.width)
+  const height =
+    positiveSize(runtime.measured?.height) ?? positiveSize(runtime.height)
   return width !== undefined && height !== undefined
 }
 
@@ -88,9 +90,14 @@ const sizeOf = (node: CanvasNode): LayoutSize => {
   }
   const fallback = FALLBACK_SIZES[node.type] ?? DEFAULT_SIZE
   return {
-    width: positiveSize(runtime.measured?.width) ?? positiveSize(runtime.width) ?? fallback.width,
+    width:
+      positiveSize(runtime.measured?.width) ??
+      positiveSize(runtime.width) ??
+      fallback.width,
     height:
-      positiveSize(runtime.measured?.height) ?? positiveSize(runtime.height) ?? fallback.height,
+      positiveSize(runtime.measured?.height) ??
+      positiveSize(runtime.height) ??
+      fallback.height,
   }
 }
 
@@ -103,41 +110,68 @@ function shotRowOf(
   const shots = shotsByHost.get(sceneId)
   if (!shots || shots.length === 0) return null
   return {
-    width: shots.reduce((sum, s) => sum + sizes.get(s.id)!.width, 0) + SHOT_GAP * (shots.length - 1),
+    width:
+      shots.reduce((sum, s) => sum + sizes.get(s.id)!.width, 0) +
+      SHOT_GAP * (shots.length - 1),
     height: Math.max(...shots.map((s) => sizes.get(s.id)!.height)),
   }
 }
 
 /** 场景有效尺寸：下挂行计入堆叠空间，保证分镜行不与相邻卡片重叠。 */
-function effectiveSize(node: CanvasNode, sizes: Map<string, LayoutSize>, rows: Map<string, LayoutSize | null>): LayoutSize {
+function effectiveSize(
+  node: CanvasNode,
+  sizes: Map<string, LayoutSize>,
+  rows: Map<string, LayoutSize | null>,
+): LayoutSize {
   const base = sizes.get(node.id)!
   const row = rows.get(node.id)
   if (node.type !== 'scene' || !row) return base
-  return { width: Math.max(base.width, row.width), height: base.height + ATTACH_GAP + row.height }
+  return {
+    width: Math.max(base.width, row.width),
+    height: base.height + ATTACH_GAP + row.height,
+  }
 }
 
 /** attach 边归类：目标分镜 → 首个宿主（重复下挂为脏数据，按边 id 取稳定首个）。 */
-function classifyAttach(edges: LayoutEdge[], nodeById: Map<string, CanvasNode>): Map<string, string> {
+function classifyAttach(
+  edges: LayoutEdge[],
+  nodeById: Map<string, CanvasNode>,
+): Map<string, string> {
   const hostOf = new Map<string, string>()
   const ordered = [...edges]
   ordered.sort((a, b) => compareCodeUnits(a.id, b.id))
   for (const e of ordered) {
     if (edgeKindOf(e) !== 'attach') continue
-    if (hostOf.has(e.target) || !nodeById.has(e.source) || !nodeById.has(e.target)) continue
+    if (
+      hostOf.has(e.target) ||
+      !nodeById.has(e.source) ||
+      !nodeById.has(e.target)
+    )
+      continue
     hostOf.set(e.target, e.source)
   }
   return hostOf
 }
 
 /** 剧情流图：剥离 attach 与端点缺失的边，产出有序节点与出入邻接表。 */
-function flowGraph(nodes: CanvasNode[], edges: LayoutEdge[], attached: Set<string>) {
+function flowGraph(
+  nodes: CanvasNode[],
+  edges: LayoutEdge[],
+  attached: Set<string>,
+) {
   const flowNodes = nodes.filter((n) => !attached.has(n.id))
   const ids = flowNodes.map((n) => n.id).sort(compareCodeUnits)
   const inSet = new Set(ids)
   const preds = new Map<string, string[]>(ids.map((id) => [id, []]))
   const succs = new Map<string, string[]>(ids.map((id) => [id, []]))
   for (const e of edges) {
-    if (edgeKindOf(e) === 'attach' || !inSet.has(e.source) || !inSet.has(e.target) || e.source === e.target) continue
+    if (
+      edgeKindOf(e) === 'attach' ||
+      !inSet.has(e.source) ||
+      !inSet.has(e.target) ||
+      e.source === e.target
+    )
+      continue
     succs.get(e.source)!.push(e.target)
     preds.get(e.target)!.push(e.source)
   }
@@ -145,7 +179,11 @@ function flowGraph(nodes: CanvasNode[], edges: LayoutEdge[], attached: Set<strin
 }
 
 /** 连通分量（无向：沿出边与入边双向扩散，汇合节点不拆分）：成员排序保确定性。 */
-function connectedComponents(ids: string[], succs: Map<string, string[]>, preds: Map<string, string[]>): string[][] {
+function connectedComponents(
+  ids: string[],
+  succs: Map<string, string[]>,
+  preds: Map<string, string[]>,
+): string[][] {
   const seen = new Set<string>()
   const components: string[][] = []
   for (const id of ids) {
@@ -174,14 +212,18 @@ function connectedComponents(ids: string[], succs: Map<string, string[]>, preds:
  * 最长路径分层（迭代松弛）：DAG 在 ≤ 节点数轮内收敛到最长路径层；
  * 脏数据成环时不收敛也按轮数上限终止，层级有界且确定（按 id 序松弛）。
  */
-function assignLayers(ids: string[], preds: Map<string, string[]>): Map<string, number> {
+function assignLayers(
+  ids: string[],
+  preds: Map<string, string[]>,
+): Map<string, number> {
   const layer = new Map(ids.map((id) => [id, 0]))
   let round = ids.length
   while (round-- > 0) {
     let changed = false
     for (const id of ids) {
       let max = -1
-      for (const p of preds.get(id) ?? []) max = Math.max(max, layer.get(p) ?? 0)
+      for (const p of preds.get(id) ?? [])
+        max = Math.max(max, layer.get(p) ?? 0)
       if (max >= 0 && max + 1 > layer.get(id)!) {
         layer.set(id, max + 1)
         changed = true
@@ -193,7 +235,12 @@ function assignLayers(ids: string[], preds: Map<string, string[]>): Map<string, 
 }
 
 /** 层内排序：初始按原位置，再按前驱在各层当前序中的重心做两轮减交叉。 */
-function orderLayers(layers: number, grouped: string[][], preds: Map<string, string[]>, origin: Map<string, XYPosition>): string[][] {
+function orderLayers(
+  layers: number,
+  grouped: string[][],
+  preds: Map<string, string[]>,
+  origin: Map<string, XYPosition>,
+): string[][] {
   const indexOf = new Map<string, number>()
   for (const group of grouped) group.forEach((id, i) => indexOf.set(id, i))
   for (let pass = 0; pass < 2; pass++) {
@@ -201,7 +248,10 @@ function orderLayers(layers: number, grouped: string[][], preds: Map<string, str
       const bary = (id: string) => {
         const parents = preds.get(id) ?? []
         if (parents.length === 0) return indexOf.get(id) ?? 0
-        return parents.reduce((sum, p) => sum + (indexOf.get(p) ?? 0), 0) / parents.length
+        return (
+          parents.reduce((sum, p) => sum + (indexOf.get(p) ?? 0), 0) /
+          parents.length
+        )
       }
       const ordered = [...grouped[l]]
       ordered.sort((a, b) => {
@@ -224,7 +274,10 @@ const originYX = (origin: Map<string, XYPosition>, id: string) => {
 }
 
 /** 每层统一 x、层内纵向堆叠：返回相对坐标与分量包围盒。 */
-function placeLayers(grouped: string[][], sizes: Map<string, LayoutSize>): { pos: Map<string, XYPosition>; boxH: number } {
+function placeLayers(
+  grouped: string[][],
+  sizes: Map<string, LayoutSize>,
+): { pos: Map<string, XYPosition>; boxH: number } {
   const pos = new Map<string, XYPosition>()
   let x = 0
   let boxH = 0
@@ -251,7 +304,12 @@ interface ComponentLayout {
 }
 
 /** 单连通分量的分层布局（含层内排序与坐标指派）。 */
-function layoutComponent(members: string[], preds: Map<string, string[]>, origin: Map<string, XYPosition>, sizes: Map<string, LayoutSize>): ComponentLayout {
+function layoutComponent(
+  members: string[],
+  preds: Map<string, string[]>,
+  origin: Map<string, XYPosition>,
+  sizes: Map<string, LayoutSize>,
+): ComponentLayout {
   const layerOf = assignLayers(members, preds)
   const maxLayer = Math.max(0, ...layerOf.values())
   const grouped: string[][] = Array.from({ length: maxLayer + 1 }, () => [])
@@ -284,7 +342,10 @@ function layoutComponent(members: string[], preds: Map<string, string[]>, origin
  * （节点/边原样传入）；结果对相同图确定性一致。任何异常向上抛出，
  * 由调用方兜底为「保留原布局 + 可读反馈」。
  */
-export function computeAutoLayout(nodes: CanvasNode[], edges: LayoutEdge[]): Map<string, XYPosition> {
+export function computeAutoLayout(
+  nodes: CanvasNode[],
+  edges: LayoutEdge[],
+): Map<string, XYPosition> {
   const result = new Map<string, XYPosition>()
   if (nodes.length === 0) return result
   const nodeById = new Map(nodes.map((n) => [n.id, n]))
@@ -300,23 +361,34 @@ export function computeAutoLayout(nodes: CanvasNode[], edges: LayoutEdge[]): Map
     shotsByHost.set(hostId, list)
   }
   for (const shots of shotsByHost.values()) {
-    shots.sort((a, b) => shotNoOf(a) - shotNoOf(b) || compareCodeUnits(a.id, b.id))
+    shots.sort(
+      (a, b) => shotNoOf(a) - shotNoOf(b) || compareCodeUnits(a.id, b.id),
+    )
   }
   const rows = new Map(
-    nodes.map((n) => [n.id, n.type === 'scene' ? shotRowOf(n.id, shotsByHost, sizes) : null]),
+    nodes.map((n) => [
+      n.id,
+      n.type === 'scene' ? shotRowOf(n.id, shotsByHost, sizes) : null,
+    ]),
   )
-  const effSizes = new Map(nodes.map((n) => [n.id, effectiveSize(n, sizes, rows)]))
+  const effSizes = new Map(
+    nodes.map((n) => [n.id, effectiveSize(n, sizes, rows)]),
+  )
   const { ids, preds, succs } = flowGraph(nodes, edges, new Set(hostOf.keys()))
 
   const components = connectedComponents(ids, succs, preds).map((members) =>
     layoutComponent(members, preds, origin, effSizes),
   )
   components.sort(
-    (a, b) => a.key.minY - b.key.minY || a.key.minX - b.key.minX || compareCodeUnits(a.key.minId, b.key.minId),
+    (a, b) =>
+      a.key.minY - b.key.minY ||
+      a.key.minX - b.key.minX ||
+      compareCodeUnits(a.key.minId, b.key.minId),
   )
   let bandY = 0
   for (const component of components) {
-    for (const [id, p] of component.pos) result.set(id, { x: p.x, y: p.y + bandY })
+    for (const [id, p] of component.pos)
+      result.set(id, { x: p.x, y: p.y + bandY })
     bandY += component.boxH + BAND_GAP
   }
 
@@ -336,4 +408,4 @@ export function computeAutoLayout(nodes: CanvasNode[], edges: LayoutEdge[]): Map
 }
 
 const shotNoOf = (node: CanvasNode): number =>
-  node.type === 'shot' ? (node.data as { shotNo?: number }).shotNo ?? 0 : 0
+  node.type === 'shot' ? ((node.data as { shotNo?: number }).shotNo ?? 0) : 0

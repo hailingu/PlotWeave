@@ -13,19 +13,54 @@ import type { CanvasNode } from './nodes/types'
 /** 画布节点夹具：数据字段按需给足，React Flow 必填项由 as 收口。 */
 const mk = (n: unknown): CanvasNode => n as CanvasNode
 
-const scene = (id: string, x: number, sceneNo: number, name: string, episodeNo?: number): CanvasNode =>
+const scene = (
+  id: string,
+  x: number,
+  sceneNo: number,
+  name: string,
+  episodeNo?: number,
+): CanvasNode =>
   mk({
     id,
     type: 'scene',
     position: { x, y: 0 },
-    data: { name, sceneNo, interior: false, time: '🌙 夜', synopsis: '', characterIds: [], episodeNo },
+    data: {
+      name,
+      sceneNo,
+      interior: false,
+      time: '🌙 夜',
+      synopsis: '',
+      characterIds: [],
+      episodeNo,
+    },
   })
 
-const dialogue = (id: string, x: number, name: string, episodeNo?: number): CanvasNode =>
-  mk({ id, type: 'dialogue', position: { x, y: 0 }, data: { name, lines: [], episodeNo } })
+const dialogue = (
+  id: string,
+  x: number,
+  name: string,
+  episodeNo?: number,
+): CanvasNode =>
+  mk({
+    id,
+    type: 'dialogue',
+    position: { x, y: 0 },
+    data: { name, lines: [], episodeNo },
+  })
 
-const beat = (id: string, x: number, name: string, tone: string, episodeNo?: number): CanvasNode =>
-  mk({ id, type: 'beat', position: { x, y: 0 }, data: { name, tone, episodeNo } })
+const beat = (
+  id: string,
+  x: number,
+  name: string,
+  tone: string,
+  episodeNo?: number,
+): CanvasNode =>
+  mk({
+    id,
+    type: 'beat',
+    position: { x, y: 0 },
+    data: { name, tone, episodeNo },
+  })
 
 const branch = (
   id: string,
@@ -34,27 +69,61 @@ const branch = (
   options: Array<{ id: string; label: string }>,
   episodeNo?: number,
 ): CanvasNode =>
-  mk({ id, type: 'branch', position: { x, y: 0 }, data: { prompt, options, episodeNo } })
+  mk({
+    id,
+    type: 'branch',
+    position: { x, y: 0 },
+    data: { prompt, options, episodeNo },
+  })
 
 const shot = (id: string, x: number, episodeNo?: number): CanvasNode =>
   mk({
     id,
     type: 'shot',
     position: { x, y: 200 },
-    data: { shotNo: 1, size: '全景', picture: '', prompt: '', refs: [], episodeNo },
+    data: {
+      shotNo: 1,
+      size: '全景',
+      picture: '',
+      prompt: '',
+      refs: [],
+      episodeNo,
+    },
   })
 
 const image = (id: string, x: number): CanvasNode =>
-  mk({ id, type: 'image', position: { x, y: 0 }, data: { prompt: '', model: '', size: '', outputs: {} } })
+  mk({
+    id,
+    type: 'image',
+    position: { x, y: 0 },
+    data: { prompt: '', model: '', size: '', outputs: {} },
+  })
 
 const seq = (id: string, source: string, target: string): Edge =>
   ({ id, source, target, className: 'pw-edge-sequence' }) as Edge
 
-const branchEdge = (id: string, source: string, optionId: string, target: string): Edge =>
-  ({ id, source, sourceHandle: branchOptionHandle(optionId), target, type: 'branch' }) as Edge
+const branchEdge = (
+  id: string,
+  source: string,
+  optionId: string,
+  target: string,
+): Edge =>
+  ({
+    id,
+    source,
+    sourceHandle: branchOptionHandle(optionId),
+    target,
+    type: 'branch',
+  }) as Edge
 
 const attach = (id: string, source: string, target: string): Edge =>
-  ({ id, source, sourceHandle: 'shots', target, className: 'pw-edge-attach' }) as Edge
+  ({
+    id,
+    source,
+    sourceHandle: 'shots',
+    target,
+    className: 'pw-edge-attach',
+  }) as Edge
 
 /** 标签行文本（结构化行序），便于按语义断言。 */
 const labels = (nodes: CanvasNode[], edges: Edge[]): string[] =>
@@ -63,30 +132,56 @@ const labels = (nodes: CanvasNode[], edges: Edge[]): string[] =>
 describe('buildExportOutline（导出大纲投影）', () => {
   it('按剧情流（sequence 边）排序，不按画布 x 坐标推断', () => {
     // 对白卡在画布上位于最右，但剧情流把它排在两个场景之间
-    const nodes = [scene('s1', 0, 1, '开场'), dialogue('d1', 9000, '对白一'), scene('s2', 200, 2, '收束')]
+    const nodes = [
+      scene('s1', 0, 1, '开场'),
+      dialogue('d1', 9000, '对白一'),
+      scene('s2', 200, 2, '收束'),
+    ]
     const edges = [seq('e1', 's1', 'd1'), seq('e2', 'd1', 's2')]
-    expect(labels(nodes, edges)).toEqual(['场 01 · 开场 · 入口', '对白 · 对白一', '场 02 · 收束'])
+    expect(labels(nodes, edges)).toEqual([
+      '场 01 · 开场 · 入口',
+      '对白 · 对白一',
+      '场 02 · 收束',
+    ])
   })
-
 })
 
 describe('buildExportOutline（类型层级，review #81）', () => {
-  it.each([true, false])('剧情流连通=%s 时，对白和分支保持一级、选项保持二级', (connected) => {
-    const nodes = [
-      beat('bt1', 0, '立势', '压抑'), scene('s1', 100, 1, '开场'),
-      dialogue('d1', 200, '交谈'), branch('b1', 300, '继续？', [{ id: 'a', label: '继续' }]),
-      scene('s2', 400, 2, '后续'),
-    ]
-    const edges = connected ? [
-      seq('e1', 'bt1', 's1'), seq('e2', 's1', 'd1'), seq('e3', 'd1', 'b1'),
-      branchEdge('e4', 'b1', 'a', 's2'),
-    ] : []
-    const rows = buildExportOutline(nodes, edges, {})[0].rows
-    // ExportOutlineRow.level 契约：节拍/场景 0，对白/分支 1，选项 2。
-    expect(rows.map((row) => row.level)).toEqual([0, 0, 1, 1, 2, 0])
-    expect(rows.map((row) => row.kind)).toEqual(['node', 'node', 'node', 'branch', 'option', 'node'])
-    expect(rows[4]).toMatchObject({ kind: 'option', text: connected ? '继续 → 场 02 · 后续' : '继续 → （未连线）' })
-  })
+  it.each([true, false])(
+    '剧情流连通=%s 时，对白和分支保持一级、选项保持二级',
+    (connected) => {
+      const nodes = [
+        beat('bt1', 0, '立势', '压抑'),
+        scene('s1', 100, 1, '开场'),
+        dialogue('d1', 200, '交谈'),
+        branch('b1', 300, '继续？', [{ id: 'a', label: '继续' }]),
+        scene('s2', 400, 2, '后续'),
+      ]
+      const edges = connected
+        ? [
+            seq('e1', 'bt1', 's1'),
+            seq('e2', 's1', 'd1'),
+            seq('e3', 'd1', 'b1'),
+            branchEdge('e4', 'b1', 'a', 's2'),
+          ]
+        : []
+      const rows = buildExportOutline(nodes, edges, {})[0].rows
+      // ExportOutlineRow.level 契约：节拍/场景 0，对白/分支 1，选项 2。
+      expect(rows.map((row) => row.level)).toEqual([0, 0, 1, 1, 2, 0])
+      expect(rows.map((row) => row.kind)).toEqual([
+        'node',
+        'node',
+        'node',
+        'branch',
+        'option',
+        'node',
+      ])
+      expect(rows[4]).toMatchObject({
+        kind: 'option',
+        text: connected ? '继续 → 场 02 · 后续' : '继续 → （未连线）',
+      })
+    },
+  )
 })
 
 describe('buildExportOutline（分支行分类，review #81）', () => {
@@ -97,9 +192,16 @@ describe('buildExportOutline（分支行分类，review #81）', () => {
       branch('b2', 200, '独立问题？', []),
     ]
     const rows = buildExportOutline(nodes, [seq('s', 's1', 'b1')], {})[0].rows
-    expect(rows.map((row) => row.kind)).toEqual(['node', 'branch', 'option', 'marker', 'branch'])
-    expect(rows.filter((row) => row.kind === 'branch').map((row) => row.text))
-      .toEqual(['分支 · 继续？', '分支 · 独立问题？'])
+    expect(rows.map((row) => row.kind)).toEqual([
+      'node',
+      'branch',
+      'option',
+      'marker',
+      'branch',
+    ])
+    expect(
+      rows.filter((row) => row.kind === 'branch').map((row) => row.text),
+    ).toEqual(['分支 · 继续？', '分支 · 独立问题？'])
   })
 })
 
@@ -130,44 +232,69 @@ describe('buildExportOutline（分支选项去向）', () => {
       scene('s1', 0, 1, '开场'),
       branch('b1', 100, '往哪走？', [{ id: 'o1', label: '向左' }]),
     ]
-    const edges = [seq('e1', 's1', 'b1'), branchEdge('b1-o1', 'b1', 'o1', 'ghost')]
+    const edges = [
+      seq('e1', 's1', 'b1'),
+      branchEdge('b1-o1', 'b1', 'o1', 'ghost'),
+    ]
     expect(labels(nodes, edges)).toContain('向左 → （目标已删除）')
   })
-
 })
 
 describe('buildExportOutline（分支目标先后关系，review #81）', () => {
-  it.each([-300, 0, 300])('目标 x=%s 时仍在问句和全部选项之后输出', (targetX) => {
-    const nodes = [
-      scene('s1', targetX, 1, '目的场'),
-      branch('b1', 0, '出发？', [{ id: 'a', label: '前往' }, { id: 'b', label: '留下' }]),
-    ]
-    expect(labels(nodes, [branchEdge('e1', 'b1', 'a', 's1')])).toEqual([
-      '分支 · 出发？ · 入口', '前往 → 场 01 · 目的场', '留下 → （未连线）', '场 01 · 目的场',
-    ])
-  })
+  it.each([-300, 0, 300])(
+    '目标 x=%s 时仍在问句和全部选项之后输出',
+    (targetX) => {
+      const nodes = [
+        scene('s1', targetX, 1, '目的场'),
+        branch('b1', 0, '出发？', [
+          { id: 'a', label: '前往' },
+          { id: 'b', label: '留下' },
+        ]),
+      ]
+      expect(labels(nodes, [branchEdge('e1', 'b1', 'a', 's1')])).toEqual([
+        '分支 · 出发？ · 入口',
+        '前往 → 场 01 · 目的场',
+        '留下 → （未连线）',
+        '场 01 · 目的场',
+      ])
+    },
+  )
 
   it('嵌套分支与后续对白均遵守叙事方向，不受逆向摆放影响', () => {
     const nodes = [
-      dialogue('d1', -900, '结语'), scene('s1', -600, 1, '目的场'),
+      dialogue('d1', -900, '结语'),
+      scene('s1', -600, 1, '目的场'),
       branch('b2', -300, '再选？', [{ id: 'b', label: '继续' }]),
       branch('b1', 0, '出发？', [{ id: 'a', label: '前往' }]),
     ]
-    const edges = [branchEdge('a', 'b1', 'a', 'b2'), branchEdge('b', 'b2', 'b', 's1'), seq('s', 's1', 'd1')]
+    const edges = [
+      branchEdge('a', 'b1', 'a', 'b2'),
+      branchEdge('b', 'b2', 'b', 's1'),
+      seq('s', 's1', 'd1'),
+    ]
     expect(labels(nodes, edges)).toEqual([
-      '分支 · 出发？ · 入口', '前往 → 分支 · 再选？',
-      '分支 · 再选？', '继续 → 场 01 · 目的场', '场 01 · 目的场', '对白 · 结语',
+      '分支 · 出发？ · 入口',
+      '前往 → 分支 · 再选？',
+      '分支 · 再选？',
+      '继续 → 场 01 · 目的场',
+      '场 01 · 目的场',
+      '对白 · 结语',
     ])
   })
 
   it('分支目标同时有 sequence 前驱时，必须等待两个来源，不能从另一入口提前输出', () => {
     const nodes = [
-      scene('s1', -600, 1, '并行入口'), scene('s2', -300, 2, '汇合'),
+      scene('s1', -600, 1, '并行入口'),
+      scene('s2', -300, 2, '汇合'),
       branch('b1', 0, '出发？', [{ id: 'a', label: '前往' }]),
     ]
-    expect(labels(nodes, [seq('s', 's1', 's2'), branchEdge('a', 'b1', 'a', 's2')])).toEqual([
-      '场 01 · 并行入口 · 入口', '分支 · 出发？ · 入口',
-      '前往 → 场 02 · 汇合', '场 02 · 汇合 · 汇合 2 条路径',
+    expect(
+      labels(nodes, [seq('s', 's1', 's2'), branchEdge('a', 'b1', 'a', 's2')]),
+    ).toEqual([
+      '场 01 · 并行入口 · 入口',
+      '分支 · 出发？ · 入口',
+      '前往 → 场 02 · 汇合',
+      '场 02 · 汇合 · 汇合 2 条路径',
     ])
   })
 })
@@ -175,14 +302,24 @@ describe('buildExportOutline（分支目标先后关系，review #81）', () => 
 describe('buildExportOutline（叙事依赖与并列入口，review #81）', () => {
   it('独立入口按 x/id 排序，只有已无前驱依赖的节点参与并列比较', () => {
     const nodes = [
-      scene('s1', -500, 1, '分支目的场'), scene('s2', -400, 2, '并行后继'),
-      scene('a2', -200, 3, '后入口'), scene('a1', -200, 4, '先入口'),
+      scene('s1', -500, 1, '分支目的场'),
+      scene('s2', -400, 2, '并行后继'),
+      scene('a2', -200, 3, '后入口'),
+      scene('a1', -200, 4, '先入口'),
       branch('b1', 0, '出发？', [{ id: 'a', label: '前往' }]),
     ]
-    const edges = [seq('e1', 'a1', 's2'), seq('e2', 'a2', 's2'), branchEdge('b', 'b1', 'a', 's1')]
+    const edges = [
+      seq('e1', 'a1', 's2'),
+      seq('e2', 'a2', 's2'),
+      branchEdge('b', 'b1', 'a', 's1'),
+    ]
     expect(labels(nodes, edges)).toEqual([
-      '场 04 · 先入口 · 入口', '场 03 · 后入口 · 入口', '场 02 · 并行后继 · 汇合 2 条路径',
-      '分支 · 出发？ · 入口', '前往 → 场 01 · 分支目的场', '场 01 · 分支目的场',
+      '场 04 · 先入口 · 入口',
+      '场 03 · 后入口 · 入口',
+      '场 02 · 并行后继 · 汇合 2 条路径',
+      '分支 · 出发？ · 入口',
+      '前往 → 场 01 · 分支目的场',
+      '场 01 · 分支目的场',
     ])
   })
 
@@ -191,69 +328,110 @@ describe('buildExportOutline（叙事依赖与并列入口，review #81）', () 
       branch('b1', 0, '回到前集？', [{ id: 'a', label: '回想' }], 2),
       scene('s1', -300, 1, '往事', 1),
     ]
-    const groups = buildExportOutline(nodes, [branchEdge('b', 'b1', 'a', 's1')], {})
+    const groups = buildExportOutline(
+      nodes,
+      [branchEdge('b', 'b1', 'a', 's1')],
+      {},
+    )
     expect(groups.map((g) => g.episode)).toEqual([1, 2])
     expect(groups[0].rows.map((r) => r.text)).toEqual(['场 01 · 往事'])
-    expect(groups[1].rows.map((r) => r.text)).toEqual(['分支 · 回到前集？', '回想 → 场 01 · 往事'])
+    expect(groups[1].rows.map((r) => r.text)).toEqual([
+      '分支 · 回到前集？',
+      '回想 → 场 01 · 往事',
+    ])
   })
 })
 
 describe('buildExportOutline（跨集端点与本集剧情流，review #81）', () => {
-  it.each(['branch', 'sequence'] as const)('跨集 %s 的两端作为各自组内入口，不因本集另有剧情流而标为孤立', (kind) => {
-    const source = kind === 'branch'
-      ? branch('cross', -300, '回到前集？', [{ id: 'a', label: '回想' }], 2)
-      : scene('cross', -300, 4, '跨集来源', 2)
-    const nodes = [
-      source, scene('target', -300, 1, '往事', 1),
-      scene('s1', 0, 2, '一集主线', 1), dialogue('d1', 100, '一集对白', 1),
-      scene('s2', 0, 3, '二集主线', 2), dialogue('d2', 100, '二集对白', 2),
-    ]
-    const cross = kind === 'branch' ? branchEdge('cross', 'cross', 'a', 'target') : seq('cross', 'cross', 'target')
-    const edges = [cross, seq('local1', 's1', 'd1'), seq('local2', 's2', 'd2')]
-    const groups = buildExportOutline(nodes, edges, {})
-    expect(groups.map((group) => group.episode)).toEqual([1, 2])
-    expect(groups[0].rows.map((row) => row.text)).toEqual([
-      '场 01 · 往事 · 入口', '场 02 · 一集主线 · 入口', '对白 · 一集对白',
-    ])
-    const sourceRows = kind === 'branch'
-      ? ['分支 · 回到前集？ · 入口', '回想 → 场 01 · 往事']
-      : ['场 04 · 跨集来源 · 入口']
-    expect(groups[1].rows.map((row) => row.text)).toEqual([
-      ...sourceRows, '场 03 · 二集主线 · 入口', '对白 · 二集对白',
-    ])
-  })
+  it.each(['branch', 'sequence'] as const)(
+    '跨集 %s 的两端作为各自组内入口，不因本集另有剧情流而标为孤立',
+    (kind) => {
+      const source =
+        kind === 'branch'
+          ? branch('cross', -300, '回到前集？', [{ id: 'a', label: '回想' }], 2)
+          : scene('cross', -300, 4, '跨集来源', 2)
+      const nodes = [
+        source,
+        scene('target', -300, 1, '往事', 1),
+        scene('s1', 0, 2, '一集主线', 1),
+        dialogue('d1', 100, '一集对白', 1),
+        scene('s2', 0, 3, '二集主线', 2),
+        dialogue('d2', 100, '二集对白', 2),
+      ]
+      const cross =
+        kind === 'branch'
+          ? branchEdge('cross', 'cross', 'a', 'target')
+          : seq('cross', 'cross', 'target')
+      const edges = [
+        cross,
+        seq('local1', 's1', 'd1'),
+        seq('local2', 's2', 'd2'),
+      ]
+      const groups = buildExportOutline(nodes, edges, {})
+      expect(groups.map((group) => group.episode)).toEqual([1, 2])
+      expect(groups[0].rows.map((row) => row.text)).toEqual([
+        '场 01 · 往事 · 入口',
+        '场 02 · 一集主线 · 入口',
+        '对白 · 一集对白',
+      ])
+      const sourceRows =
+        kind === 'branch'
+          ? ['分支 · 回到前集？ · 入口', '回想 → 场 01 · 往事']
+          : ['场 04 · 跨集来源 · 入口']
+      expect(groups[1].rows.map((row) => row.text)).toEqual([
+        ...sourceRows,
+        '场 03 · 二集主线 · 入口',
+        '对白 · 二集对白',
+      ])
+    },
+  )
 })
 
 describe('buildExportOutline（跨组连通性恢复与边界，review #81）', () => {
   it('只有跨组连线时也区分未分集端点与孤立节点，断开后重算并可恢复', () => {
     const nodes = [
       branch('b1', 0, '继续？', [{ id: 'a', label: '继续' }], 1),
-      scene('target', 100, 1, '未分集目标'), scene('isolated', -300, 2, '孤立场'),
+      scene('target', 100, 1, '未分集目标'),
+      scene('isolated', -300, 2, '孤立场'),
     ]
     const edges = [branchEdge('cross', 'b1', 'a', 'target')]
     const connected = buildExportOutline(nodes, edges, {})
     expect(connected.map((group) => group.episode)).toEqual([1, null])
     expect(connected[1].rows.map((row) => row.text)).toEqual([
-      '场 01 · 未分集目标', '（未接入剧情流）', '场 02 · 孤立场',
+      '场 01 · 未分集目标',
+      '（未接入剧情流）',
+      '场 02 · 孤立场',
     ])
-    expect(buildExportOutline(nodes, [], {})[1].rows.map((row) => row.text))
-      .toEqual(['场 02 · 孤立场', '场 01 · 未分集目标'])
+    expect(
+      buildExportOutline(nodes, [], {})[1].rows.map((row) => row.text),
+    ).toEqual(['场 02 · 孤立场', '场 01 · 未分集目标'])
     expect(buildExportOutline(nodes, edges, {})).toEqual(connected)
   })
 
   it('悬空、非叙事端点及 attach 不会把孤立节点伪装成跨组剧情流端点', () => {
     const nodes = [
-      scene('external', 0, 1, '外集场', 2), shot('shot1', 0), image('img1', 0),
-      scene('s1', 0, 2, '主线', 1), dialogue('d1', 100, '对白', 1),
+      scene('external', 0, 1, '外集场', 2),
+      shot('shot1', 0),
+      image('img1', 0),
+      scene('s1', 0, 2, '主线', 1),
+      dialogue('d1', 100, '对白', 1),
       scene('isolated', -300, 3, '孤立场', 1),
     ]
     const edges = [
-      seq('local', 's1', 'd1'), seq('missing-in', 'ghost', 'isolated'),
-      seq('missing-out', 'isolated', 'ghost'), seq('shot', 'shot1', 'isolated'),
-      seq('image', 'isolated', 'img1'), attach('attachment', 'external', 'isolated'),
+      seq('local', 's1', 'd1'),
+      seq('missing-in', 'ghost', 'isolated'),
+      seq('missing-out', 'isolated', 'ghost'),
+      seq('shot', 'shot1', 'isolated'),
+      seq('image', 'isolated', 'img1'),
+      attach('attachment', 'external', 'isolated'),
     ]
-    expect(buildExportOutline(nodes, edges, {})[0].rows.map((row) => row.text)).toEqual([
-      '场 02 · 主线 · 入口', '对白 · 对白', '（未接入剧情流）', '场 03 · 孤立场',
+    expect(
+      buildExportOutline(nodes, edges, {})[0].rows.map((row) => row.text),
+    ).toEqual([
+      '场 02 · 主线 · 入口',
+      '对白 · 对白',
+      '（未接入剧情流）',
+      '场 03 · 孤立场',
     ])
   })
 })
@@ -294,7 +472,6 @@ describe('buildExportOutline（剧情流汇合与入口）', () => {
     const nodes = [scene('s2', 300, 2, '第二条'), scene('s1', 100, 1, '第一条')]
     expect(labels(nodes, [])).toEqual(['场 01 · 第一条', '场 02 · 第二条'])
   })
-
 })
 
 describe('buildExportOutline（未接入剧情流与集归属）', () => {
@@ -305,7 +482,12 @@ describe('buildExportOutline（未接入剧情流与集归属）', () => {
       scene('s9', 200, 9, '孤立场'),
     ]
     const out = labels(nodes, [seq('e1', 's1', 's2')])
-    expect(out).toEqual(['场 01 · 开场 · 入口', '场 02 · 接续', '（未接入剧情流）', '场 09 · 孤立场'])
+    expect(out).toEqual([
+      '场 01 · 开场 · 入口',
+      '场 02 · 接续',
+      '（未接入剧情流）',
+      '场 09 · 孤立场',
+    ])
   })
 
   it('全部入口并列时仍按 x 序展开，与画布位置一致', () => {
@@ -319,7 +501,10 @@ describe('buildExportOutline（未接入剧情流与集归属）', () => {
       scene('s1', 100, 1, '一集场', 1),
       scene('s0', 200, 3, '未分集场'),
     ]
-    const groups = buildExportOutline(nodes, [seq('e1', 's1', 's2')], { 1: '立势', 2: '摊牌' })
+    const groups = buildExportOutline(nodes, [seq('e1', 's1', 's2')], {
+      1: '立势',
+      2: '摊牌',
+    })
     expect(groups.map((g) => [g.episode, g.title])).toEqual([
       [1, '立势'],
       [2, '摊牌'],
@@ -327,7 +512,6 @@ describe('buildExportOutline（未接入剧情流与集归属）', () => {
     ])
     expect(groups[0].rows.map((r) => r.text)).toEqual(['场 01 · 一集场'])
   })
-
 })
 
 describe('buildExportOutline（跨集与多目标分支）', () => {
@@ -346,7 +530,11 @@ describe('buildExportOutline（跨集与多目标分支）', () => {
       ),
       scene('s2', 200, 2, '二集开场', 2),
     ]
-    const groups = buildExportOutline(nodes, [seq('e1', 's1', 'b1'), branchEdge('b1-o1', 'b1', 'o1', 's2')], {})
+    const groups = buildExportOutline(
+      nodes,
+      [seq('e1', 's1', 'b1'), branchEdge('b1-o1', 'b1', 'o1', 's2')],
+      {},
+    )
     expect(groups.map((g) => g.episode)).toEqual([1, 2])
     expect(groups[0].rows.map((r) => r.text)).toEqual([
       '场 01 · 开场 · 入口',
@@ -371,9 +559,10 @@ describe('buildExportOutline（跨集与多目标分支）', () => {
       branchEdge('b1-o1a', 'b1', 'o1', 's2'),
       branchEdge('b1-o1b', 'b1', 'o1', 's3'),
     ]
-    expect(labels(nodes, edges)).toContain('向左 → 场 02 · 左路 / 场 03 · 左路支线')
+    expect(labels(nodes, edges)).toContain(
+      '向左 → 场 02 · 左路 / 场 03 · 左路支线',
+    )
   })
-
 })
 
 describe('buildExportOutline（节奏兑现与非叙事节点）', () => {
@@ -395,7 +584,12 @@ describe('buildExportOutline（节奏兑现与非叙事节点）', () => {
   })
 
   it('attach 下挂边不进入剧情流，分镜与图片节点不出现在大纲', () => {
-    const nodes = [scene('s1', 0, 1, '开场'), scene('s2', 100, 2, '接续'), shot('sh1', 50), image('im1', 60)]
+    const nodes = [
+      scene('s1', 0, 1, '开场'),
+      scene('s2', 100, 2, '接续'),
+      shot('sh1', 50),
+      image('im1', 60),
+    ]
     const edges = [attach('a1', 's1', 'sh1'), seq('e1', 's1', 's2')]
     const out = labels(nodes, edges)
     expect(out).toEqual(['场 01 · 开场 · 入口', '场 02 · 接续'])
@@ -409,7 +603,9 @@ describe('buildExportOutline（节奏兑现与非叙事节点）', () => {
       beat('bt2', 200, '反转', '', 1),
     ]
     const out = labels(nodes, [seq('e1', 'bt1', 's1')])
-    expect(out).toContain('节拍 · 立势 · 压抑 · ✓ 兑现于 场 01 · 天台夜话 · 入口')
+    expect(out).toContain(
+      '节拍 · 立势 · 压抑 · ✓ 兑现于 场 01 · 天台夜话 · 入口',
+    )
     expect(out).toContain('节拍 · 反转 · 待兑现')
   })
 
@@ -426,10 +622,16 @@ describe('buildExportOutline（节奏兑现与非叙事节点）', () => {
 describe('buildExportOutline（分支直接汇合，review #81）', () => {
   it('同一分支的两个选项直接汇合时保留两条路径，目标只作一次主线成员', () => {
     const nodes = [
-      branch('b1', 0, '分岔？', [{ id: 'a', label: '走 A' }, { id: 'b', label: '走 B' }]),
+      branch('b1', 0, '分岔？', [
+        { id: 'a', label: '走 A' },
+        { id: 'b', label: '走 B' },
+      ]),
       scene('s1', 100, 1, '汇合'),
     ]
-    const edges = [branchEdge('a', 'b1', 'a', 's1'), branchEdge('b', 'b1', 'b', 's1')]
+    const edges = [
+      branchEdge('a', 'b1', 'a', 's1'),
+      branchEdge('b', 'b1', 'b', 's1'),
+    ]
     expect(labels(nodes, edges)).toEqual([
       '分支 · 分岔？ · 入口',
       '走 A → 场 01 · 汇合',
@@ -445,11 +647,18 @@ describe('buildExportOutline（分支直接汇合，review #81）', () => {
       branch('b2', 200, '第二问？', [{ id: 'b', label: '走 B' }]),
       scene('s2', 300, 2, '汇合'),
     ]
-    const edges = [seq('s', 's1', 's2'), branchEdge('a', 'b1', 'a', 's2'), branchEdge('b', 'b2', 'b', 's2')]
-    const rows = buildExportOutline(nodes, edges, {})[0].rows.filter((r) => r.kind === 'node' || r.kind === 'branch')
+    const edges = [
+      seq('s', 's1', 's2'),
+      branchEdge('a', 'b1', 'a', 's2'),
+      branchEdge('b', 'b2', 'b', 's2'),
+    ]
+    const rows = buildExportOutline(nodes, edges, {})[0].rows.filter(
+      (r) => r.kind === 'node' || r.kind === 'branch',
+    )
     expect(rows.map((r) => r.text)).toEqual([
       '场 01 · 开场 · 入口',
-      '分支 · 第一问？ · 入口', '分支 · 第二问？ · 入口',
+      '分支 · 第一问？ · 入口',
+      '分支 · 第二问？ · 入口',
       '场 02 · 汇合 · 汇合 3 条路径',
     ])
   })
@@ -458,14 +667,22 @@ describe('buildExportOutline（分支直接汇合，review #81）', () => {
     const nodes = [
       branch('b1', 0, '第一问？', [{ id: 'a', label: '走 A' }], 1),
       branch('b2', 100, '第二问？', [{ id: 'b', label: '走 B' }], 2),
-      scene('s1', 200, 1, '目的场', 2), shot('sh1', 300, 2),
+      scene('s1', 200, 1, '目的场', 2),
+      shot('sh1', 300, 2),
     ]
     const edges = [
-      branchEdge('a', 'b1', 'a', 's1'), branchEdge('b', 'b2', 'b', 's1'),
-      seq('missing', 'ghost', 's1'), attach('shot', 's1', 'sh1'),
+      branchEdge('a', 'b1', 'a', 's1'),
+      branchEdge('b', 'b2', 'b', 's1'),
+      seq('missing', 'ghost', 's1'),
+      attach('shot', 's1', 'sh1'),
     ]
-    const rows = buildExportOutline(nodes, edges, {})[1].rows.filter((r) => r.kind === 'node' || r.kind === 'branch')
-    expect(rows.map((r) => r.text)).toEqual(['分支 · 第二问？ · 入口', '场 01 · 目的场'])
+    const rows = buildExportOutline(nodes, edges, {})[1].rows.filter(
+      (r) => r.kind === 'node' || r.kind === 'branch',
+    )
+    expect(rows.map((r) => r.text)).toEqual([
+      '分支 · 第二问？ · 入口',
+      '场 01 · 目的场',
+    ])
   })
 })
 
@@ -489,7 +706,9 @@ describe('summariseExportOutline（导出范围概要）', () => {
   })
 
   it('只含场景与对白时 hasOutline 为 false；空画布亦然', () => {
-    expect(summariseExportOutline([scene('s1', 0, 1, '开场')]).hasOutline).toBe(false)
+    expect(summariseExportOutline([scene('s1', 0, 1, '开场')]).hasOutline).toBe(
+      false,
+    )
     expect(summariseExportOutline([])).toEqual({
       episodes: [],
       scenes: 0,

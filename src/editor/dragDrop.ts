@@ -15,7 +15,9 @@ export type EntityDragPayload =
   | { kind: 'location'; id: string; name: string }
 
 /** 从 dataTransfer 解析实体；非本协议或非法 JSON 返回 null。 */
-export function readEntityPayload(e: { getData: (type: string) => string }): EntityDragPayload | null {
+export function readEntityPayload(e: {
+  getData: (type: string) => string
+}): EntityDragPayload | null {
   try {
     const raw = e.getData(PW_ENTITY_MIME)
     if (!raw) return null
@@ -48,7 +50,9 @@ export function hitDropNode<T extends { id: string }>(
   e: { target: unknown },
   nodes: readonly T[] | null | undefined,
 ): T | undefined {
-  const hit = (e.target as HTMLElement).closest?.('.react-flow__node') as HTMLElement | null
+  const hit = (e.target as HTMLElement).closest?.(
+    '.react-flow__node',
+  ) as HTMLElement | null
   const nodeId = hit?.dataset.id
   return nodeId ? nodes?.find((n) => n.id === nodeId) : undefined
 }

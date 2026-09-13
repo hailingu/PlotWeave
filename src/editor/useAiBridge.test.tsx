@@ -29,7 +29,13 @@ function branchNode(id: string): BranchFlowNode {
     id,
     type: 'branch',
     position: { x: 0, y: 0 },
-    data: { prompt: '去哪？', options: [{ id: 'o-l', label: '左' }, { id: 'o-r', label: '右' }] },
+    data: {
+      prompt: '去哪？',
+      options: [
+        { id: 'o-l', label: '左' },
+        { id: 'o-r', label: '右' },
+      ],
+    },
   }
 }
 
@@ -46,7 +52,12 @@ describe('nodeLabelOf（节点人读标签）', () => {
       }),
     ).toBe('对白·争执')
     expect(
-      nodeLabelOf({ id: 't1', type: 'beat', position: { x: 0, y: 0 }, data: { name: '转折', tone: '待定' } }),
+      nodeLabelOf({
+        id: 't1',
+        type: 'beat',
+        position: { x: 0, y: 0 },
+        data: { name: '转折', tone: '待定' },
+      }),
     ).toBe('节拍·转折')
     expect(
       nodeLabelOf({
@@ -65,7 +76,12 @@ function setup(
   initialEdges: Edge[] = [],
   initialSettings: ProjectSettings = EMPTY_SETTINGS,
 ) {
-  const state = { nodes: [...initialNodes], edges: [...initialEdges], settings: initialSettings, aiRevision: 0 }
+  const state = {
+    nodes: [...initialNodes],
+    edges: [...initialEdges],
+    settings: initialSettings,
+    aiRevision: 0,
+  }
   const commands: HistoryCommand[] = []
   const closeSettings = vi.fn()
   const deps: AiBridgeDeps = {
@@ -78,7 +94,13 @@ function setup(
     assetsRef: {
       current: {
         byId: {
-          'a-img': { id: 'a-img', relPath: 'assets/a-img.png', mime: 'image/png', source: 'upload', createdAt: '2026-01-01T00:00:00.000Z' },
+          'a-img': {
+            id: 'a-img',
+            relPath: 'assets/a-img.png',
+            mime: 'image/png',
+            source: 'upload',
+            createdAt: '2026-01-01T00:00:00.000Z',
+          },
         },
       },
     },
@@ -91,7 +113,9 @@ function setup(
       }) as CanvasNode,
     applyDataPatch: (id, cmd) => {
       state.nodes = state.nodes.map((n) =>
-        n.id === id ? ({ ...n, data: { ...n.data, ...cmd.patch } } as CanvasNode) : n,
+        n.id === id
+          ? ({ ...n, data: { ...n.data, ...cmd.patch } } as CanvasNode)
+          : n,
       )
     },
     setNodes: (up) => {
@@ -129,7 +153,16 @@ describe('useAiBridge（§6/§12 AI 桥回调族）', () => {
     const fenced = [
       '好的，我来创建：',
       '```json',
-      JSON.stringify({ commands: [{ op: 'create_node', nodeType: 'scene', ref: 'a', data: { name: '新场' } }] }),
+      JSON.stringify({
+        commands: [
+          {
+            op: 'create_node',
+            nodeType: 'scene',
+            ref: 'a',
+            data: { name: '新场' },
+          },
+        ],
+      }),
       '```',
     ].join('\n')
     const v = result.current.validateAiReply(fenced)
@@ -154,7 +187,13 @@ describe('useAiBridge（§6/§12 AI 桥回调族）', () => {
       {
         op: 'create_node',
         nodeType: 'shot',
-        data: { shotNo: 1, size: '中景', picture: '', prompt: '', refs: [{ kind: 'character', assetId: 'a-img' }] },
+        data: {
+          shotNo: 1,
+          size: '中景',
+          picture: '',
+          prompt: '',
+          refs: [{ kind: 'character', assetId: 'a-img' }],
+        },
       },
     ])
     expect(good?.ok).toBe(true)
@@ -162,7 +201,13 @@ describe('useAiBridge（§6/§12 AI 桥回调族）', () => {
       {
         op: 'create_node',
         nodeType: 'shot',
-        data: { shotNo: 1, size: '中景', picture: '', prompt: '', refs: [{ kind: 'audio', assetId: 'a-img' }] },
+        data: {
+          shotNo: 1,
+          size: '中景',
+          picture: '',
+          prompt: '',
+          refs: [{ kind: 'audio', assetId: 'a-img' }],
+        },
       },
     ])
     expect(ghost?.ok).toBe(false)
@@ -178,11 +223,23 @@ describe('useAiBridge（§6/§12 AI 桥回调族）', () => {
   })
 
   it('applyAiBatch：合法批次整批落地为一条复合命令，undo 一步回滚', () => {
-    const { result, state, commands, closeSettings } = setup([sceneNode('s1'), branchNode('b1')])
+    const { result, state, commands, closeSettings } = setup([
+      sceneNode('s1'),
+      branchNode('b1'),
+    ])
     const batch: ValidatedCommand[] = [
-      { op: 'create_node', nodeType: 'scene', ref: 'ns', data: { name: '新场' } },
+      {
+        op: 'create_node',
+        nodeType: 'scene',
+        ref: 'ns',
+        data: { name: '新场' },
+      },
       { op: 'connect_edge', sourceId: 's1', targetId: 'ns' },
-      { op: 'update_node', nodeId: 'b1', patch: { nodeType: 'branch', patch: { prompt: '走哪边？' } } },
+      {
+        op: 'update_node',
+        nodeId: 'b1',
+        patch: { nodeType: 'branch', patch: { prompt: '走哪边？' } },
+      },
     ]
     expect(result.current.applyAiBatch(batch)).toBeNull()
     expect(state.nodes).toHaveLength(3)
@@ -212,7 +269,11 @@ describe('useAiBridge · applyAiBatch 执行边界', () => {
     expect(result.current.applyAiBatch([])).toBeNull()
     // 判别化执行通道在编译期已拒绝宽补丁；此处的敌意输入只能经 cast 伪造，
     // 用于锁定运行时重校验仍整批拒绝（纵深防御，issue 16）
-    const hostile = { op: 'update_node', nodeId: 's1', patch: { hack: 1 } } as unknown as ValidatedCommand
+    const hostile = {
+      op: 'update_node',
+      nodeId: 's1',
+      patch: { hack: 1 },
+    } as unknown as ValidatedCommand
     const err = result.current.applyAiBatch([hostile])
     expect(err).toContain('改动无法安全执行')
     expect(state.nodes).toHaveLength(1)
@@ -241,10 +302,20 @@ describe('useAiBridge · 原型属性类型的入站与执行边界（issue 49�
     const { result } = setup([sceneNode('s1'), sceneNode('s2')])
     const batch: AiCommand[] = [
       { op: 'create_node', nodeType: 'toString', data: { name: 'x' } },
-      { op: 'connect_edge', sourceId: 's1', targetId: 's2', edgeKind: 'constructor' },
+      {
+        op: 'connect_edge',
+        sourceId: 's1',
+        targetId: 's2',
+        edgeKind: 'constructor',
+      },
     ]
-    const fenced = ['```json', JSON.stringify({ commands: batch }), '```'].join('\n')
-    for (const validation of [result.current.validateCommands(batch), result.current.validateAiReply(fenced)]) {
+    const fenced = ['```json', JSON.stringify({ commands: batch }), '```'].join(
+      '\n',
+    )
+    for (const validation of [
+      result.current.validateCommands(batch),
+      result.current.validateAiReply(fenced),
+    ]) {
       expect(validation?.ok).toBe(false)
       expect(validation?.commands).toEqual([])
       expect(validation?.issues).toEqual([
@@ -257,18 +328,35 @@ describe('useAiBridge · 原型属性类型的入站与执行边界（issue 49�
   it.each<ValidatedCommand>([
     { op: 'create_node', nodeType: 'toString', data: {} },
     { op: 'create_node', nodeType: '__proto__', data: { name: 'x' } },
-    { op: 'connect_edge', sourceId: 's1', targetId: 's2', edgeKind: 'constructor' },
+    {
+      op: 'connect_edge',
+      sourceId: 's1',
+      targetId: 's2',
+      edgeKind: 'constructor',
+    },
   ])('历史卡 $op 重校验拒绝非法类型，整批无写入且允许纠正重试', (invalid) => {
-    const { result, state, commands } = setup([sceneNode('s1'), sceneNode('s2')])
+    const { result, state, commands } = setup([
+      sceneNode('s1'),
+      sceneNode('s2'),
+    ])
     const before = structuredClone(state)
-    const valid: ValidatedCommand = { op: 'create_node', nodeType: 'beat', data: { name: '新节拍' } }
-    expect(result.current.applyAiBatch([valid, invalid])).toContain('改动无法安全执行')
+    const valid: ValidatedCommand = {
+      op: 'create_node',
+      nodeType: 'beat',
+      data: { name: '新节拍' },
+    }
+    expect(result.current.applyAiBatch([valid, invalid])).toContain(
+      '改动无法安全执行',
+    )
     expect(state).toEqual(before)
     expect(commands).toHaveLength(0)
 
     expect(result.current.applyAiBatch([valid])).toBeNull()
     expect(state.nodes).toHaveLength(3)
-    expect(state.nodes[2]).toMatchObject({ type: 'beat', data: { name: '新节拍' } })
+    expect(state.nodes[2]).toMatchObject({
+      type: 'beat',
+      data: { name: '新节拍' },
+    })
     expect(state.aiRevision).toBe(1)
     expect(commands).toHaveLength(1)
     commands[0].undo()
@@ -280,11 +368,10 @@ describe('useAiBridge · 原型属性类型的入站与执行边界（issue 49�
 
 describe('useAiBridge · 实体校验与实体+绑定复合执行（issue 44）', () => {
   it('validateCommands：快照带设定集时校验实体存在性与引用类型', () => {
-    const { result } = setup(
-      [sceneNode('s1')],
-      [],
-      { characters: [{ id: 'ch-1', name: '陈默', gradient: 'g' }], locations: [] },
-    )
+    const { result } = setup([sceneNode('s1')], [], {
+      characters: [{ id: 'ch-1', name: '陈默', gradient: 'g' }],
+      locations: [],
+    })
     const ok = result.current.validateCommands([
       { op: 'update_node', nodeId: 's1', patch: { characterIds: ['ch-1'] } },
     ])
@@ -300,7 +387,11 @@ describe('useAiBridge · 实体校验与实体+绑定复合执行（issue 44）'
   it('applyAiBatch：新建实体 + 场景绑定为一条复合命令，undo/redo 同时恢复两侧', () => {
     const { result, state, commands } = setup([sceneNode('s1')])
     const batch: ValidatedCommand[] = [
-      { op: 'upsert_character', ref: 'hero', fields: { name: '林一', bio: '侦探' } },
+      {
+        op: 'upsert_character',
+        ref: 'hero',
+        fields: { name: '林一', bio: '侦探' },
+      },
       {
         op: 'update_node',
         nodeId: 's1',
@@ -328,11 +419,10 @@ describe('useAiBridge · 实体校验与实体+绑定复合执行（issue 44）'
 
 describe('useAiBridge · 执行期重校验与读工具（issue 44）', () => {
   it('applyAiBatch：预览后实体被用户删除，执行重校验整体拒绝、无部分写入', () => {
-    const { result, state, commands, deps } = setup(
-      [sceneNode('s1')],
-      [],
-      { characters: [{ id: 'ch-1', name: '陈默', gradient: 'g' }], locations: [] },
-    )
+    const { result, state, commands, deps } = setup([sceneNode('s1')], [], {
+      characters: [{ id: 'ch-1', name: '陈默', gradient: 'g' }],
+      locations: [],
+    })
     const staleBatch = [
       { op: 'upsert_character', entityId: 'ch-1', fields: { bio: 'x' } },
     ] as ValidatedCommand[]
@@ -365,8 +455,14 @@ describe('useAiBridge · 执行期重校验与读工具（issue 44）', () => {
       locations: [],
     })
     const text = result.current.readSettings()
-    const parsed = JSON.parse(text) as { characters: Array<{ id: string; name: string; bio?: string }> }
-    expect(parsed.characters[0]).toEqual({ id: 'ch-1', name: '陈默', bio: '侦探' })
+    const parsed = JSON.parse(text) as {
+      characters: Array<{ id: string; name: string; bio?: string }>
+    }
+    expect(parsed.characters[0]).toEqual({
+      id: 'ch-1',
+      name: '陈默',
+      bio: '侦探',
+    })
   })
 
   it('readDocument：按 id 返回文档全文 JSON；不存在返回 null（issue 56）', () => {
@@ -383,7 +479,12 @@ describe('useAiBridge · 执行期重校验与读工具（issue 44）', () => {
       body: string
       relatedIds: unknown[]
     }
-    expect(parsed).toEqual({ id: 'doc-1', title: '世界观', body: '大陆纪元……', relatedIds: [] })
+    expect(parsed).toEqual({
+      id: 'doc-1',
+      title: '世界观',
+      body: '大陆纪元……',
+      relatedIds: [],
+    })
     expect(result.current.readDocument('ghost')).toBeNull()
   })
 
@@ -396,7 +497,11 @@ describe('useAiBridge · 执行期重校验与读工具（issue 44）', () => {
     const preview = result.current.validateCommands([
       {
         op: 'upsert_document',
-        fields: { title: '陈默小传', body: '正文', relatedIds: [{ kind: 'character', id: 'ch-1' }] },
+        fields: {
+          title: '陈默小传',
+          body: '正文',
+          relatedIds: [{ kind: 'character', id: 'ch-1' }],
+        },
       },
     ])
     expect(preview?.ok).toBe(true)
@@ -411,7 +516,10 @@ describe('useAiBridge · 执行期重校验与读工具（issue 44）', () => {
     const ghost = result.current.validateCommands([
       {
         op: 'upsert_document',
-        fields: { title: '悬空', relatedIds: [{ kind: 'character', id: 'ch-404' }] },
+        fields: {
+          title: '悬空',
+          relatedIds: [{ kind: 'character', id: 'ch-404' }],
+        },
       },
     ])
     expect(ghost?.ok).toBe(false)
@@ -426,13 +534,18 @@ describe('useAiBridge · 执行期重校验与读工具（issue 44）', () => {
     const preview = result.current.validateCommands([
       {
         op: 'upsert_document',
-        fields: { title: '小传', relatedIds: [{ kind: 'character', id: 'ch-1' }] },
+        fields: {
+          title: '小传',
+          relatedIds: [{ kind: 'character', id: 'ch-1' }],
+        },
       },
     ])
     expect(preview?.ok).toBe(true)
     // 预览后用户删除了该角色（经真实 setSettings 通道，settingsRef 同步变化）
     deps.setSettings(() => ({ characters: [], locations: [] }))
-    expect(result.current.applyAiBatch(preview!.commands)).toContain('无法安全执行')
+    expect(result.current.applyAiBatch(preview!.commands)).toContain(
+      '无法安全执行',
+    )
     expect(commands).toHaveLength(0)
     expect(state.settings.documents ?? []).toEqual([])
   })

@@ -1,12 +1,13 @@
 import type { ComponentProps } from 'react'
 import SegmentedControl from './SegmentedControl'
 import PanelResizer from './PanelResizer'
-import { type BatchValidation, type AiCommand, type ValidatedCommand } from '../ai/commands'
-import { type ProjectSettings } from '../settings'
 import {
-  resolveCharacterName,
-  resolveLocationName,
-} from '../settings'
+  type BatchValidation,
+  type AiCommand,
+  type ValidatedCommand,
+} from '../ai/commands'
+import { type ProjectSettings } from '../settings'
+import { resolveCharacterName, resolveLocationName } from '../settings'
 import AiThread, { AiSettingsButton } from './AiThread'
 import type { CanvasNode } from '../nodes/types'
 import type { AiSession } from '../ai/session'
@@ -28,6 +29,61 @@ const TYPE_LABELS: Record<CanvasNode['type'], string> = {
   image: '图片节点 · 生成产物',
 }
 
+/** 场景节点检查器行（inspectorRows 拆分，issue #99）。 */
+function sceneInspectorRows(
+  node: Extract<CanvasNode, { type: 'scene' }>,
+  shotCount: number,
+  settings: ProjectSettings,
+): { label: string; value: string }[] {
+  const locationName = node.data.locationId
+    ? resolveLocationName(settings, node.data.locationId)
+    : null
+  return [
+    { label: '名称', value: node.data.name },
+    {
+      label: '场号',
+      value: `SCENE ${String(node.data.sceneNo).padStart(2, '0')}`,
+    },
+    { label: '内外景', value: node.data.interior ? '内' : '外' },
+    {
+      label: '地点',
+      value: locationName ?? (node.data.locationId ? '（已删除）' : '未指定'),
+    },
+    { label: '时间', value: node.data.time },
+    ...(node.data.weather ? [{ label: '天气', value: node.data.weather }] : []),
+    { label: '分镜', value: `🎞 ${shotCount} 镜` },
+    { label: '梗概', value: node.data.synopsis },
+    {
+      label: '在场角色',
+      value:
+        node.data.characterIds
+          .map((id) => resolveCharacterName(settings, id) ?? '（已删除）')
+          .join(' / ') || '—',
+    },
+  ]
+}
+
+/** 对白节点检查器行（inspectorRows 拆分，issue #99）。 */
+function dialogueInspectorRows(
+  node: Extract<CanvasNode, { type: 'dialogue' }>,
+  settings: ProjectSettings,
+): { label: string; value: string }[] {
+  const speakers = new Set(
+    node.data.lines.flatMap((l) =>
+      l.kind === 'line' && l.speaker
+        ? [resolveCharacterName(settings, l.speaker) ?? '（已删除）']
+        : [],
+    ),
+  )
+  const actions = node.data.lines.filter((l) => l.kind === 'action').length
+  return [
+    { label: '名称', value: node.data.name },
+    { label: '人物', value: [...speakers].join(' / ') },
+    { label: '台词', value: `${node.data.lines.length - actions} 句` },
+    { label: '动作行', value: `${actions} 行` },
+  ]
+}
+
 /** 检查器字段行：按节点类型派生只读视图（编辑随后续 ⚙️ 设置面板任务落地）。 */
 function inspectorRows(
   node: CanvasNode,
@@ -35,42 +91,10 @@ function inspectorRows(
   settings: ProjectSettings,
 ): { label: string; value: string }[] {
   switch (node.type) {
-    case 'scene': {
-      const locationName = node.data.locationId
-        ? resolveLocationName(settings, node.data.locationId)
-        : null
-      return [
-        { label: '名称', value: node.data.name },
-        { label: '场号', value: `SCENE ${String(node.data.sceneNo).padStart(2, '0')}` },
-        { label: '内外景', value: node.data.interior ? '内' : '外' },
-        { label: '地点', value: locationName ?? (node.data.locationId ? '（已删除）' : '未指定') },
-        { label: '时间', value: node.data.time },
-        ...(node.data.weather ? [{ label: '天气', value: node.data.weather }] : []),
-        { label: '分镜', value: `🎞 ${shotCount} 镜` },
-        { label: '梗概', value: node.data.synopsis },
-        {
-          label: '在场角色',
-          value:
-            node.data.characterIds
-              .map((id) => resolveCharacterName(settings, id) ?? '（已删除）')
-              .join(' / ') || '—',
-        },
-      ]
-    }
-    case 'dialogue': {
-      const speakers = new Set(
-        node.data.lines.flatMap((l) =>
-          l.kind === 'line' && l.speaker ? [resolveCharacterName(settings, l.speaker) ?? '（已删除）'] : [],
-        ),
-      )
-      const actions = node.data.lines.filter((l) => l.kind === 'action').length
-      return [
-        { label: '名称', value: node.data.name },
-        { label: '人物', value: [...speakers].join(' / ') },
-        { label: '台词', value: `${node.data.lines.length - actions} 句` },
-        { label: '动作行', value: `${actions} 行` },
-      ]
-    }
+    case 'scene':
+      return sceneInspectorRows(node, shotCount, settings)
+    case 'dialogue':
+      return dialogueInspectorRows(node, settings)
     case 'beat':
       return [
         { label: '名称', value: node.data.name },
@@ -79,15 +103,24 @@ function inspectorRows(
     case 'branch':
       return [
         { label: '问句', value: node.data.prompt },
-        { label: '选项', value: node.data.options.map((o) => o.label).join(' / ') },
+        {
+          label: '选项',
+          value: node.data.options.map((o) => o.label).join(' / '),
+        },
       ]
     case 'shot':
       return [
-        { label: '镜号', value: `SHOT ${String(node.data.shotNo).padStart(2, '0')}` },
+        {
+          label: '镜号',
+          value: `SHOT ${String(node.data.shotNo).padStart(2, '0')}`,
+        },
         { label: '景别', value: node.data.size },
         { label: '画面描述', value: node.data.picture },
         { label: '镜头 PROMPT', value: node.data.prompt },
-        { label: '引用', value: node.data.refs.map((r) => r.label).join(' / ') || '—' },
+        {
+          label: '引用',
+          value: node.data.refs.map((r) => r.label).join(' / ') || '—',
+        },
       ]
     case 'image':
       return [
@@ -98,6 +131,75 @@ function inspectorRows(
   }
 }
 
+type RightAiPaneProps = Pick<
+  RightPanelProps,
+  | 'tab'
+  | 'projectId'
+  | 'onOpenSettings'
+  | 'canvasDigest'
+  | 'aiRevision'
+  | 'onValidateAi'
+  | 'onValidateCommands'
+  | 'onReadNode'
+  | 'onReadSettings'
+  | 'onReadDocument'
+  | 'onApplyAiBatch'
+  | 'whenCanvasCommitted'
+  | 'aiSession'
+  | 'aiSessionError'
+  | 'aiSessionRetryable'
+  | 'onSaveAiSession'
+  | 'aiSessionLoadFailed'
+>
+
+/** 右栏 AI 分段（RightPanel 拆分，issue #99）：常驻挂载（hidden 切换不
+ * 卸载会话容器，issue 58），props 自面板契约透传。 */
+function RightAiPane(props: RightAiPaneProps) {
+  return (
+    <AiPane
+      hidden={props.tab !== 'ai'}
+      loadFailed={props.aiSessionLoadFailed}
+      projectId={props.projectId}
+      onOpenSettings={props.onOpenSettings}
+      canvasDigest={props.canvasDigest}
+      aiRevision={props.aiRevision}
+      onValidateAi={props.onValidateAi}
+      onValidateCommands={props.onValidateCommands}
+      onReadNode={props.onReadNode}
+      onReadSettings={props.onReadSettings}
+      onReadDocument={props.onReadDocument}
+      onApplyAiBatch={props.onApplyAiBatch}
+      whenCanvasCommitted={props.whenCanvasCommitted}
+      initialSession={props.aiSession}
+      initialSessionError={props.aiSessionError}
+      initialSessionRetryable={props.aiSessionRetryable}
+      onSaveSession={props.onSaveAiSession}
+    />
+  )
+}
+
+/** 检查器内容（RightPanel 拆分，issue #99）：选中节点时列字段行，
+ * 否则空态引导。 */
+function InspectorBody({
+  selectedNode,
+  rows,
+}: {
+  readonly selectedNode: CanvasNode
+  readonly rows: { label: string; value: string }[]
+}) {
+  return (
+    <div className="pw-inspector">
+      <div className="pw-inspector-type">{TYPE_LABELS[selectedNode.type]}</div>
+      {rows.map((row) => (
+        <div key={row.label} className="pw-inspector-row">
+          <span className="pw-inspector-label">{row.label}</span>
+          <span className="pw-inspector-value">{row.value}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 /** 加载失败时只显示诊断，聊天操作区不挂载，避免空回退产生写入。设置
  * 入口不是聊天操作区（无会话写入），失败态照常保留（issue #87）——
  * 否则会话损坏的用户只剩不可见的 ⌘, 可进设置页。 */
@@ -106,15 +208,17 @@ function AiSessionContent({
   ...props
 }: ComponentProps<typeof AiThread> & { readonly loadFailed?: boolean }) {
   if (loadFailed) {
-    return <>
-      <p className="pw-ai-error" role="alert">
-        聊天记录读取失败，AI 发送和执行已停用。请检查磁盘后重新打开项目。
-        {props.initialSessionError}
-      </p>
-      <div className="pw-ai-error-actions">
-        <AiSettingsButton onOpenSettings={props.onOpenSettings} />
-      </div>
-    </>
+    return (
+      <>
+        <p className="pw-ai-error" role="alert">
+          聊天记录读取失败，AI 发送和执行已停用。请检查磁盘后重新打开项目。
+          {props.initialSessionError}
+        </p>
+        <div className="pw-ai-error-actions">
+          <AiSettingsButton onOpenSettings={props.onOpenSettings} />
+        </div>
+      </>
+    )
   }
   return <AiThread {...props} />
 }
@@ -142,7 +246,9 @@ interface RightPanelProps {
   /** 校验助手回复中的命令批次（§6/数据模型 §12）；纯讨论回复返回 null。 */
   readonly onValidateAi?: (text: string) => BatchValidation | null
   /** 校验工具调用映射出的命令数组（tool-calling 通道）。 */
-  readonly onValidateCommands?: (commands: AiCommand[]) => BatchValidation | null
+  readonly onValidateCommands?: (
+    commands: AiCommand[],
+  ) => BatchValidation | null
   /** 读工具 get_node：返回节点 JSON 文本，节点不存在返回 null。 */
   readonly onReadNode?: (nodeId: string) => string | null
   /** 读工具 get_settings_snapshot（issue 44）：返回设定集清单 JSON 文本。 */
@@ -189,82 +295,45 @@ function AiPane({
   )
 }
 
-export default function RightPanel({
-  open,
-  width,
-  onResize,
-  tab,
-  onTabChange,
-  projectId,
-  selectedNode,
-  attachedShotCount = 0,
-  settings,
-  onOpenSettings,
-  canvasDigest,
-  aiRevision,
-  onValidateAi,
-  onValidateCommands,
-  onReadNode,
-  onReadSettings,
-  onReadDocument,
-  onApplyAiBatch,
-  whenCanvasCommitted,
-  aiSession,
-  aiSessionError,
-  aiSessionRetryable,
-  aiSessionLoadFailed,
-  onSaveAiSession,
-}: RightPanelProps) {
-  const rows = selectedNode ? inspectorRows(selectedNode, attachedShotCount, settings) : []
+export default function RightPanel(props: RightPanelProps) {
+  const selectedNode = props.selectedNode
+  const rows = selectedNode
+    ? inspectorRows(selectedNode, props.attachedShotCount ?? 0, props.settings)
+    : []
 
   return (
     <aside
-      className={`pw-panel pw-panel-right${open ? '' : ' pw-panel-closed'}`}
-      style={{ width: open ? width : 0 }}
-      aria-hidden={!open}
+      className={`pw-panel pw-panel-right${props.open ? '' : ' pw-panel-closed'}`}
+      style={{ width: props.open ? props.width : 0 }}
+      aria-hidden={!props.open}
     >
-      {open && (
-        <PanelResizer direction={-1} startWidth={width} onResize={onResize} />
+      {props.open && (
+        <PanelResizer
+          direction={-1}
+          startWidth={props.width}
+          onResize={props.onResize}
+        />
       )}
-      <div className="pw-panel-inner" style={{ width }}>
+      <div className="pw-panel-inner" style={{ width: props.width }}>
         <div className="pw-panel-head">
-          <SegmentedControl groupLabel="右栏分段" options={TABS} value={tab} onChange={onTabChange} />
+          <SegmentedControl
+            groupLabel="右栏分段"
+            options={TABS}
+            value={props.tab}
+            onChange={props.onTabChange}
+          />
         </div>
         <div className="pw-panel-scroll">
-          {tab === 'inspector' &&
+          {props.tab === 'inspector' &&
             (selectedNode ? (
-              <div className="pw-inspector">
-                <div className="pw-inspector-type">{TYPE_LABELS[selectedNode.type]}</div>
-                {rows.map((row) => (
-                  <div key={row.label} className="pw-inspector-row">
-                    <span className="pw-inspector-label">{row.label}</span>
-                    <span className="pw-inspector-value">{row.value}</span>
-                  </div>
-                ))}
-              </div>
+              <InspectorBody selectedNode={selectedNode} rows={rows} />
             ) : (
-              <div className="pw-empty">在画布中选择一个节点，查看它的字段。</div>
+              <div className="pw-empty">
+                在画布中选择一个节点，查看它的字段。
+              </div>
             ))}
           {/* 常驻挂载语义见 AiPane（issue 58）：hidden 切换不卸载会话容器 */}
-          <AiPane
-            hidden={tab !== 'ai'}
-            loadFailed={aiSessionLoadFailed}
-            projectId={projectId}
-            onOpenSettings={onOpenSettings}
-            canvasDigest={canvasDigest}
-            aiRevision={aiRevision}
-            onValidateAi={onValidateAi}
-            onValidateCommands={onValidateCommands}
-            onReadNode={onReadNode}
-            onReadSettings={onReadSettings}
-            onReadDocument={onReadDocument}
-            onApplyAiBatch={onApplyAiBatch}
-            whenCanvasCommitted={whenCanvasCommitted}
-            initialSession={aiSession}
-            initialSessionError={aiSessionError}
-            initialSessionRetryable={aiSessionRetryable}
-            onSaveSession={onSaveAiSession}
-          />
+          <RightAiPane {...props} />
         </div>
       </div>
     </aside>

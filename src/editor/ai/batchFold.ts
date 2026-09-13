@@ -19,7 +19,11 @@ import {
   type EntityFoldHost,
 } from './entityFold'
 import type { EntityKind } from './entityFields'
-import { NODE_TYPE_LABELS, payloadIssue, unknownTargetFieldIssue } from './payloadCheck'
+import {
+  NODE_TYPE_LABELS,
+  payloadIssue,
+  unknownTargetFieldIssue,
+} from './payloadCheck'
 import { normalizeNodeFields, plainObject } from './patchShape'
 import type { AiGraphSnapshot, BatchValidation } from './commands'
 
@@ -38,7 +42,13 @@ import type { AiGraphSnapshot, BatchValidation } from './commands'
  * 与 nodes/types.ts 的 *NodeData 一一对应，工具描述与系统提示同源生成；
  * 白名单外字段一律整批拒绝——宁可拒绝也不静默写错字段。 */
 const NODE_FIELD_KEYS = AI_FIELD_KEYS
-const OP_LABELS = { create: '创建', update: '修改', delete: '删除', connect: '连线', disconnect: '断开' }
+const OP_LABELS = {
+  create: '创建',
+  update: '修改',
+  delete: '删除',
+  connect: '连线',
+  disconnect: '断开',
+}
 
 /** 折叠期新建节点的虚拟 id（不进画布，仅同批 ref 解析用）。 */
 const virtualIdOf = (index: number): string => `__new__:${index}`
@@ -64,7 +74,10 @@ const isIntrinsicOptionIndex = (idx: unknown): idx is number =>
   typeof idx === 'number' && Number.isInteger(idx) && idx >= 0
 
 /** 折叠校验的虚拟边：端点 + 源端口/连线类型（与 AiGraphSnapshot.edges 同形）。 */
-type VirtualEdge = EndpointPair & { sourceHandle?: string | null; type?: string }
+type VirtualEdge = EndpointPair & {
+  sourceHandle?: string | null
+  type?: string
+}
 
 /** 折叠校验的虚拟图状态：随每条命令演进的最终态投影。
  * 实体域（issue 44）经 EntityFoldHost 接口并入：既有 + 本批投影的实体
@@ -78,7 +91,7 @@ interface FoldState extends EntityFoldHost {
   /** 本批尚未删除的节点 id（含 __new__ 虚拟 id）。 */
   exists: Set<string>
   /** ref 别名 → 所属节点 id（仅成功折叠的 create 登记——阶段 B 首错即停，
- * 失败 create 之后的命令不会进入折叠，ref 不会悬空指向未入图节点）。 */
+   * 失败 create 之后的命令不会进入折叠，ref 不会悬空指向未入图节点）。 */
   refOwner: Map<string, string>
   /** 项目资产索引（id → MIME）：shot.refs 引用位校验用。 */
   assets: ReadonlyMap<string, string>
@@ -93,7 +106,11 @@ const isAiPatchableType = (t: string | undefined): t is AiPatchableType =>
 
 /** nodeId/sourceId/targetId 解析：允许既有 id 或本批新建的 ref；
  * 已被本批删除的节点（含按 ref 引用的）一律视为不存在。 */
-function resolveRef(st: FoldState, cmd: Record<string, unknown>, key: string): string | null {
+function resolveRef(
+  st: FoldState,
+  cmd: Record<string, unknown>,
+  key: string,
+): string | null {
   const s = asText(cmd[key])
   if (s === '') return null
   if (st.exists.has(s)) return s
@@ -139,7 +156,10 @@ function shapeIssueOf(
 }
 
 /** create 的形状校验（shapeIssuesOf 拆出，S3776）：节点类型与 data 形状。 */
-function createShapeIssue(st: FoldState, raw: Record<string, unknown>): string | null {
+function createShapeIssue(
+  st: FoldState,
+  raw: Record<string, unknown>,
+): string | null {
   const nodeType = asText(raw.nodeType)
   if (!Object.prototype.hasOwnProperty.call(NODE_TYPE_LABELS, nodeType)) {
     return `未知节点类型：${nodeType || '（空）'}`
@@ -160,7 +180,8 @@ function updateShapeIssue(
   deletedTokens: ReadonlySet<string>,
 ): string | null {
   const patch = raw.patch
-  if (!plainObject(patch) || Object.keys(patch).length === 0) return 'patch 为空'
+  if (!plainObject(patch) || Object.keys(patch).length === 0)
+    return 'patch 为空'
   const nodeId = asText(raw.nodeId)
   if (deletedTokens.has(nodeId)) return unknownTargetFieldIssue(patch)
   const knownType = st.exists.has(nodeId) ? st.types.get(nodeId) : undefined
@@ -173,7 +194,8 @@ function updateShapeIssue(
  * optionIndex（上界与句柄依赖折叠态，属阶段 B）。 */
 function connectShapeIssue(raw: Record<string, unknown>): string | null {
   const kind = asText(raw.edgeKind) || 'sequence'
-  if (!Object.prototype.hasOwnProperty.call(EDGE_KIND_LABELS, kind)) return `未知连线类型：${kind}`
+  if (!Object.prototype.hasOwnProperty.call(EDGE_KIND_LABELS, kind))
+    return `未知连线类型：${kind}`
   if (kind === 'branch' && !isIntrinsicOptionIndex(raw.optionIndex)) {
     return `optionIndex 须为非负整数：${asText(raw.sourceId)} → ${asText(raw.targetId)}`
   }
@@ -183,13 +205,18 @@ function connectShapeIssue(raw: Record<string, unknown>): string | null {
 /** 实体 upsert 的形状校验（shapeIssuesOf 拆出，S3776）：fields 形态与
  * entityId 结构性（目标解析与 ref 冲突属阶段 B）。 */
 function entityUpsertShapeIssue(raw: Record<string, unknown>): string | null {
-  const kind: EntityKind = raw.op === 'upsert_character' ? 'character' : 'location'
+  const kind: EntityKind =
+    raw.op === 'upsert_character' ? 'character' : 'location'
   const fields = raw.fields
   if (!plainObject(fields)) return 'fields 必须是字段对象'
   if (raw.entityId !== undefined && asText(raw.entityId) === '') {
     return `entityId 在场时须为非空白字符串（缺省才是新建）：${JSON.stringify(raw.entityId)}`
   }
-  return entityFieldsIssue(kind, fields, raw.entityId === undefined ? 'create' : 'update')
+  return entityFieldsIssue(
+    kind,
+    fields,
+    raw.entityId === undefined ? 'create' : 'update',
+  )
 }
 
 /** 文档 upsert 的形状校验（issue 56，阶段 A 上下文无关）：fields 白名单/
@@ -201,10 +228,17 @@ function documentUpsertShapeIssue(raw: Record<string, unknown>): string | null {
   if (raw.entityId !== undefined && asText(raw.entityId) === '') {
     return `entityId 在场时须为非空白字符串（缺省才是新建）：${JSON.stringify(raw.entityId)}`
   }
-  return documentFieldsIssue(fields, raw.entityId === undefined ? 'create' : 'update')
+  return documentFieldsIssue(
+    fields,
+    raw.entityId === undefined ? 'create' : 'update',
+  )
 }
 
-function foldCreate(st: FoldState, cmd: Record<string, unknown>, index: number): void {
+function foldCreate(
+  st: FoldState,
+  cmd: Record<string, unknown>,
+  index: number,
+): void {
   const nodeType = asText(cmd.nodeType)
   if (!Object.prototype.hasOwnProperty.call(NODE_TYPE_LABELS, nodeType)) {
     return st.fail(index, `未知节点类型：${nodeType || '（空）'}`)
@@ -221,11 +255,19 @@ function foldCreate(st: FoldState, cmd: Record<string, unknown>, index: number):
   st.labels.set(virtualId, `${typeLabel} · ${name}（新建）`)
   st.types.set(virtualId, nodeType)
   if (refName !== '') st.refOwner.set(refName, virtualId)
-  st.items.push({ kind: 'create', danger: false, key: `c${index}`, label: `${OP_LABELS.create} ${typeLabel} · ${name}` })
+  st.items.push({
+    kind: 'create',
+    danger: false,
+    key: `c${index}`,
+    label: `${OP_LABELS.create} ${typeLabel} · ${name}`,
+  })
   const normalized = normalizeNodeFields(nodeType, data)
   // 新建分支节点登记选项 id，同批后续 connect_edge 才能解析稳定端口
   if (nodeType === 'branch' && Array.isArray(normalized.options)) {
-    st.branchOptions.set(virtualId, normalized.options as Array<{ id: string; label: string }>)
+    st.branchOptions.set(
+      virtualId,
+      normalized.options as Array<{ id: string; label: string }>,
+    )
   }
   st.commands.push({
     op: 'create_node',
@@ -235,13 +277,23 @@ function foldCreate(st: FoldState, cmd: Record<string, unknown>, index: number):
   })
 }
 
-function foldUpdate(st: FoldState, cmd: Record<string, unknown>, index: number): void {
+function foldUpdate(
+  st: FoldState,
+  cmd: Record<string, unknown>,
+  index: number,
+): void {
   const patch = cmd.patch
-  if (!plainObject(patch) || Object.keys(patch).length === 0) return st.fail(index, 'patch 为空')
+  if (!plainObject(patch) || Object.keys(patch).length === 0)
+    return st.fail(index, 'patch 为空')
   const id = resolveRef(st, cmd, 'nodeId')
   if (!id) return st.fail(index, `节点不存在：${asText(cmd.nodeId)}`)
   const nodeType = st.types.get(id)
-  const payloadErr = payloadIssue(nodeType ?? '', patch, st.assets, st.entityScope)
+  const payloadErr = payloadIssue(
+    nodeType ?? '',
+    patch,
+    st.assets,
+    st.entityScope,
+  )
   if (payloadErr) return st.fail(index, payloadErr)
   st.items.push({
     kind: 'update',
@@ -249,13 +301,18 @@ function foldUpdate(st: FoldState, cmd: Record<string, unknown>, index: number):
     key: `u${index}`,
     label: `${OP_LABELS.update} ${st.labels.get(id) ?? '未知节点'}（${Object.keys(patch).join('、')}）${reasonOf(cmd)}`,
   })
-  const normalized = normalizeNodeFields(nodeType ?? '', patch, st.branchOptions.get(id))
+  const normalized = normalizeNodeFields(
+    nodeType ?? '',
+    patch,
+    st.branchOptions.get(id),
+  )
   if (nodeType === 'branch' && Array.isArray(normalized.options)) {
     foldBranchCascade(st, id, index, normalized)
   }
   // 键白名单已拒白名单外类型（isAiPatchableType 恒真）：运行态类型字串
   // 收口为字面量后判别化绑定补丁（issue 16），执行通道不再见宽 Record
-  if (!isAiPatchableType(nodeType)) return st.fail(index, '节点类型不支持 AI 命令修改')
+  if (!isAiPatchableType(nodeType))
+    return st.fail(index, '节点类型不支持 AI 命令修改')
   st.commands.push({
     op: 'update_node',
     nodeId: asText(cmd.nodeId),
@@ -283,7 +340,8 @@ function foldBranchCascade(
     const gone = new Set(removed)
     let cascade = 0
     for (const e of st.virtualEdges) {
-      if (e.source !== id || !e.sourceHandle || !gone.has(e.sourceHandle)) continue
+      if (e.source !== id || !e.sourceHandle || !gone.has(e.sourceHandle))
+        continue
       cascade += 1
       st.items.push({
         kind: 'disconnect',
@@ -296,10 +354,17 @@ function foldBranchCascade(
       (e) => !(e.source === id && e.sourceHandle && gone.has(e.sourceHandle)),
     )
   }
-  st.branchOptions.set(id, normalized.options as Array<{ id: string; label: string }>)
+  st.branchOptions.set(
+    id,
+    normalized.options as Array<{ id: string; label: string }>,
+  )
 }
 
-function foldDelete(st: FoldState, cmd: Record<string, unknown>, index: number): void {
+function foldDelete(
+  st: FoldState,
+  cmd: Record<string, unknown>,
+  index: number,
+): void {
   const id = resolveRef(st, cmd, 'nodeId')
   if (!id) return st.fail(index, `节点不存在：${asText(cmd.nodeId)}`)
   if (st.types.get(id) === 'image') {
@@ -309,7 +374,8 @@ function foldDelete(st: FoldState, cmd: Record<string, unknown>, index: number):
     return st.fail(index, '图片节点暂不支持 AI 命令删除（首版边界）')
   }
   st.exists.delete(id)
-  for (const [ref, owner] of st.refOwner) if (owner === id) st.refOwner.delete(ref)
+  for (const [ref, owner] of st.refOwner)
+    if (owner === id) st.refOwner.delete(ref)
   st.virtualEdges.forEach((e) => {
     if (e.source === id) e.source = `__deleted__:${id}`
     if (e.target === id) e.target = `__deleted__:${id}`
@@ -320,13 +386,18 @@ function foldDelete(st: FoldState, cmd: Record<string, unknown>, index: number):
     key: `d${index}`,
     label: `${OP_LABELS.delete} ${st.labels.get(id) ?? '未知节点'}${reasonOf(cmd)}`,
   })
-  st.commands.push({ op: 'delete_node', nodeId: asText(cmd.nodeId), reason: asText(cmd.reason) })
+  st.commands.push({
+    op: 'delete_node',
+    nodeId: asText(cmd.nodeId),
+    reason: asText(cmd.reason),
+  })
 }
 
 /** 预览标签的连线种类后缀；branch 追加选项序号（S3358/S4624：独立成函数）。 */
 function connectKindTag(kind: string, optionIndex: number | undefined): string {
   if (kind === 'sequence') return ''
-  if (kind === 'branch') return `（${EDGE_KIND_LABELS[kind]} ${(optionIndex ?? 0) + 1}）`
+  if (kind === 'branch')
+    return `（${EDGE_KIND_LABELS[kind]} ${(optionIndex ?? 0) + 1}）`
   return `（${EDGE_KIND_LABELS[kind]}）`
 }
 
@@ -345,7 +416,8 @@ function edgePortOf(
     }
     const options = st.branchOptions.get(src)
     const idx = cmd.optionIndex
-    const idxValid = isIntrinsicOptionIndex(idx) && idx < (options?.length ?? -1)
+    const idxValid =
+      isIntrinsicOptionIndex(idx) && idx < (options?.length ?? -1)
     if (!idxValid || options === undefined) {
       const pair = `${st.labels.get(src) ?? src} → ${st.labels.get(dst) ?? dst}`
       return `optionIndex 必须是 0～${(options?.length ?? 1) - 1} 的整数：${pair}`
@@ -370,7 +442,11 @@ function connectPlacementIssue(
   dst: string,
   pairLabel: string,
 ): string | null {
-  const endpointIssue = connectionEndpointIssue(st.types.get(src), st.types.get(dst), kind as EdgeKind)
+  const endpointIssue = connectionEndpointIssue(
+    st.types.get(src),
+    st.types.get(dst),
+    kind as EdgeKind,
+  )
   if (endpointIssue) return `${endpointIssue}：${pairLabel}`
   if (kind === 'attach' && hasAttachHost(st.virtualEdges, dst)) {
     return `分镜卡已有宿主，换宿主须先断开：${pairLabel}`
@@ -397,12 +473,21 @@ function foldConnectEdge(
   const placementIssue = connectPlacementIssue(st, kind, src, dst, pairLabel)
   if (placementIssue) return st.fail(index, placementIssue)
   const handle = port.handle
-  if (st.virtualEdges.some((e) => e.source === src && e.target === dst && (e.sourceHandle ?? null) === handle)) {
+  if (
+    st.virtualEdges.some(
+      (e) =>
+        e.source === src &&
+        e.target === dst &&
+        (e.sourceHandle ?? null) === handle,
+    )
+  ) {
     return st.fail(index, `重复连线：${pairLabel}`)
   }
   // attach 是派生从属边（§4.4 垂直语义）：自身不查环，也不参与
   // 剧情流环检测——环只可能出现在横向剧情流上
-  const flow = st.virtualEdges.filter((e) => e.sourceHandle !== SCENE_SHOT_HANDLE)
+  const flow = st.virtualEdges.filter(
+    (e) => e.sourceHandle !== SCENE_SHOT_HANDLE,
+  )
   if (kind !== 'attach' && wouldCreateCycle(flow, src, dst)) {
     return st.fail(index, `会造成循环剧情：${pairLabel}`)
   }
@@ -423,21 +508,32 @@ function foldConnectEdge(
     sourceId: asText(cmd.sourceId),
     targetId: asText(cmd.targetId),
     edgeKind: kind,
-    ...(port.optionIndex !== undefined ? { optionIndex: port.optionIndex } : {}),
+    ...(port.optionIndex !== undefined
+      ? { optionIndex: port.optionIndex }
+      : {}),
     reason: asText(cmd.reason),
   })
 }
 
 /** connect_edge / disconnect_edge 的折叠校验（阶段 B：形状已在阶段 A
  * 全过，这里只做依赖折叠态的结构校验）。 */
-function foldEdge(st: FoldState, cmd: Record<string, unknown>, index: number, op: string): void {
+function foldEdge(
+  st: FoldState,
+  cmd: Record<string, unknown>,
+  index: number,
+  op: string,
+): void {
   const src = resolveRef(st, cmd, 'sourceId')
   const dst = resolveRef(st, cmd, 'targetId')
   if (!src || !dst) {
-    return st.fail(index, `端点不存在：${asText(cmd.sourceId)} → ${asText(cmd.targetId)}`)
+    return st.fail(
+      index,
+      `端点不存在：${asText(cmd.sourceId)} → ${asText(cmd.targetId)}`,
+    )
   }
   const pairLabel = `${st.labels.get(src) ?? '未知节点'} → ${st.labels.get(dst) ?? '未知节点'}`
-  if (op === 'disconnect_edge') return foldDisconnectEdge(st, cmd, index, src, dst, pairLabel)
+  if (op === 'disconnect_edge')
+    return foldDisconnectEdge(st, cmd, index, src, dst, pairLabel)
   foldConnectEdge(st, cmd, index, src, dst, pairLabel)
 }
 
@@ -452,9 +548,13 @@ function foldDisconnectEdge(
   dst: string,
   pairLabel: string,
 ): void {
-  const hadEdge = st.virtualEdges.some((e) => e.source === src && e.target === dst)
+  const hadEdge = st.virtualEdges.some(
+    (e) => e.source === src && e.target === dst,
+  )
   if (!hadEdge) return st.fail(index, `没有这条连线：${pairLabel}`)
-  st.virtualEdges = st.virtualEdges.filter((e) => !(e.source === src && e.target === dst))
+  st.virtualEdges = st.virtualEdges.filter(
+    (e) => !(e.source === src && e.target === dst),
+  )
   st.items.push({
     kind: 'disconnect',
     danger: false,
@@ -472,12 +572,16 @@ function foldDisconnectEdge(
 /** 折叠器分发表：op → 处理函数。设定实体命令（issue 44）复用实体域的
  * 折叠内核（entityFold.ts），共享同一虚拟投影与问题收集；文档命令
  * （issue 56）同域。 */
-const FOLDERS: Record<string, (st: FoldState, cmd: Record<string, unknown>, index: number) => void> = {
+const FOLDERS: Record<
+  string,
+  (st: FoldState, cmd: Record<string, unknown>, index: number) => void
+> = {
   create_node: foldCreate,
   update_node: foldUpdate,
   delete_node: foldDelete,
   connect_edge: (st, cmd, index) => foldEdge(st, cmd, index, 'connect_edge'),
-  disconnect_edge: (st, cmd, index) => foldEdge(st, cmd, index, 'disconnect_edge'),
+  disconnect_edge: (st, cmd, index) =>
+    foldEdge(st, cmd, index, 'disconnect_edge'),
   upsert_character: (st, cmd, index) => foldUpsert(st, cmd, index, 'character'),
   upsert_location: (st, cmd, index) => foldUpsert(st, cmd, index, 'location'),
   upsert_document: foldUpsertDocument,
@@ -505,12 +609,17 @@ function collectShapeIssues(st: FoldState, commands: unknown[]): void {
   }
 }
 
-export function validateAiBatch(rawCommands: unknown, graph: AiGraphSnapshot): BatchValidation {
+export function validateAiBatch(
+  rawCommands: unknown,
+  graph: AiGraphSnapshot,
+): BatchValidation {
   const st: FoldState = {
     labels: new Map(graph.nodes.map((n) => [n.id, n.label])),
     types: new Map(graph.nodes.map((n) => [n.id, n.type])),
     branchOptions: new Map(
-      graph.nodes.filter((n) => Array.isArray(n.options)).map((n) => [n.id, n.options!]),
+      graph.nodes
+        .filter((n) => Array.isArray(n.options))
+        .map((n) => [n.id, n.options!]),
     ),
     virtualEdges: graph.edges.map((e) => ({ ...e })),
     exists: new Set(graph.nodes.map((n) => n.id)),
@@ -518,8 +627,12 @@ export function validateAiBatch(rawCommands: unknown, graph: AiGraphSnapshot): B
     assets: graph.assets,
     // 设定集投影（issue 44）：快照未携带时不做实体校验（旧夹具兼容），
     // 运行时快照恒携带（graphSnapshotOf）
-    characters: new Map((graph.settings?.characters ?? []).map((c) => [c.id, c.name])),
-    locations: new Map((graph.settings?.locations ?? []).map((l) => [l.id, l.name])),
+    characters: new Map(
+      (graph.settings?.characters ?? []).map((c) => [c.id, c.name]),
+    ),
+    locations: new Map(
+      (graph.settings?.locations ?? []).map((l) => [l.id, l.name]),
+    ),
     documents: new Map(
       (graph.settings?.documents ?? []).map((d) => [
         d.id,
@@ -538,7 +651,13 @@ export function validateAiBatch(rawCommands: unknown, graph: AiGraphSnapshot): B
   if (graph.settings !== undefined) st.entityScope = entityScopeOf(st)
 
   if (!Array.isArray(rawCommands)) {
-    return { ok: false, items: [], commands: [], issues: [{ index: -1, message: '批次不是命令数组' }], hasDeletes: false }
+    return {
+      ok: false,
+      items: [],
+      commands: [],
+      issues: [{ index: -1, message: '批次不是命令数组' }],
+      hasDeletes: false,
+    }
   }
   const commands = rawCommands as unknown[]
 
@@ -556,12 +675,17 @@ export function validateAiBatch(rawCommands: unknown, graph: AiGraphSnapshot): B
 
   const ok = st.issues.length === 0
   // 删除类与级联断线置顶（§6 危险操作升级）；其余按到达顺序稳定排列
-  const sorted = [...st.items.filter((i) => i.danger), ...st.items.filter((i) => !i.danger)]
+  const sorted = [
+    ...st.items.filter((i) => i.danger),
+    ...st.items.filter((i) => !i.danger),
+  ]
   return {
     ok,
     items: sorted,
     commands: ok ? st.commands : [],
     issues: st.issues,
-    hasDeletes: sorted.some((i) => i.kind === 'delete' || (i.kind === 'disconnect' && i.danger)),
+    hasDeletes: sorted.some(
+      (i) => i.kind === 'delete' || (i.kind === 'disconnect' && i.danger),
+    ),
   }
 }

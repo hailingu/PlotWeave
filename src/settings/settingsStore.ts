@@ -4,14 +4,9 @@
  * 返回密文 envelope，随 provider 配置落盘，明文不回前端）；
  * 浏览器预览回退内存实现。
  */
-import {
-  defaultSettings,
-  normalizeSettings,
-  type AppSettings,
-} from './types'
+import { defaultSettings, normalizeSettings, type AppSettings } from './types'
 
-const isTauri =
-  typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
 /** 浏览器回退的内存设置。 */
 let memorySettings: AppSettings | null = null

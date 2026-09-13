@@ -7,7 +7,7 @@
  * 保存失败不丢数据：重新置脏并按防抖节律自动重试，错误经 onSaveResult
  * 上浮给调用方做用户可见诊断（磁盘满/只读/保存边界拒收等）。
  */
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, type MutableRefObject } from 'react'
 import { graphSignature } from './graphSignature'
 import type { ProjectContent } from '../model/content'
 
@@ -37,24 +37,151 @@ function persistSignature(doc: ProjectContent): string {
  * 失败时重新置脏、按防抖节律自动重试并经 onSaveResult 上报（null 表示
  * 本次成功）。返回 markDirty(doc)：供无重渲染的 transient 变更（如视口
  * ref 更新）显式标脏并换入最新文档。 */
-export function useDebouncedSave(
-  doc: ProjectContent,
-  onSave: (doc: ProjectContent) => void | Promise<void>,
-  delayMs = 600,
-  onSaveResult?: (err: unknown) => void,
-): (doc: ProjectContent) => void {
+type SaveTimerRef = MutableRefObject<ReturnType<typeof setTimeout> | null>
+
+/** 保存闸 refs（useDebouncedSave 拆分，issue #99）。卸载后终止失败重试：
+ * 后台循环持有旧文档持续落盘，重开同一项目会出现第二个保存循环，存储恢
+ * 复后陈旧循环可能覆盖新会话的编辑。保存串行化：在途保存期间的新编辑合
+ * 并进后续保存——并发发起时，先发起的旧文档若后完成（资产复验/文件系统
+ * 延迟），会原子覆盖新内容且双双报成功。 */
+function useSaveGateRefs(doc: ProjectContent) {
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const dirtyRef = useRef(false)
   const latestRef = useRef(doc)
   latestRef.current = doc
   const firstRender = useRef(true)
   const lastSigRef = useRef(persistSignature(doc))
-  // 卸载后终止失败重试：后台循环持有旧文档持续落盘，重开同一项目会出现
-  // 第二个保存循环，存储恢复后陈旧循环可能覆盖新会话的编辑
   const unmountedRef = useRef(false)
-  // 保存串行化：在途保存期间的新编辑合并进后续保存——并发起存时，先发起
-  // 的旧文档若后完成（资产复验/文件系统延迟），会原子覆盖新内容且双双报成功
   const inFlightRef = useRef(false)
+  return {
+    saveTimer,
+    dirtyRef,
+    latestRef,
+    firstRender,
+    lastSigRef,
+    unmountedRef,
+    inFlightRef,
+  }
+}
+
+/** 按防抖节律排下一次冲刷（useDebouncedSave 拆分）：先清旧计时器。 */
+function scheduleFlush(
+  saveTimer: SaveTimerRef,
+  delayMs: number,
+  flushSave: () => Promise<void>,
+): void {
+  if (saveTimer.current) clearTimeout(saveTimer.current)
+  saveTimer.current = setTimeout(() => {
+    saveTimer.current = null
+    void flushSave()
+  }, delayMs)
+}
+
+/** 卸载后在途失败的补交（useDebouncedSave 拆分）：不排重试计时器，但卸
+ * 载前置脏的最新文档从未交付过 onSave（项目级重试只持有本次失败的旧文
+ * 档）——补交一次，其成败与重试登记由存储层接管（§3.1 flushPersist 导航
+ * 契约：离开不丢编辑）。 */
+function deliverLatestAfterUnmount(
+  latestRef: MutableRefObject<ProjectContent>,
+  dirtyRef: MutableRefObject<boolean>,
+  onSave: (doc: ProjectContent) => void | Promise<void>,
+  onSaveResult?: (err: unknown) => void,
+): void {
+  if (!dirtyRef.current) return
+  dirtyRef.current = false
+  const latest = latestRef.current
+  void Promise.resolve()
+    .then(() => onSave(latest))
+    .then(
+      () => onSaveResult?.(null),
+      (e: unknown) => onSaveResult?.(e),
+    )
+}
+
+/** 文档签名比对（useDebouncedSave 拆分）：纯会话态变化（选择/拖拽过程
+ * 帧）不置脏；签名命中即更新基线。 */
+function signatureChanged(
+  doc: ProjectContent,
+  lastSigRef: MutableRefObject<string>,
+): boolean {
+  const sig = persistSignature(doc)
+  if (sig === lastSigRef.current) return false
+  lastSigRef.current = sig
+  return true
+}
+
+/** 文档变更置脏（useDebouncedSave 拆分，issue #99）：首渲染跳过；
+ * 名称/节点/边/设定集/集标题/资产索引触发防抖（视口经 markDirty 或卸载
+ * 冲刷兜底）；doc 仅用于计算签名，依赖以签名的组成字段为准。 */
+function useSignatureSaveWatch(
+  doc: ProjectContent,
+  firstRender: MutableRefObject<boolean>,
+  lastSigRef: MutableRefObject<string>,
+  dirtyRef: MutableRefObject<boolean>,
+  saveTimer: SaveTimerRef,
+  delayMs: number,
+  flushSave: () => Promise<void>,
+) {
+  useEffect(() => {
+    if (firstRender.current) {
+      firstRender.current = false
+      return
+    }
+    if (!signatureChanged(doc, lastSigRef)) return
+    dirtyRef.current = true
+    scheduleFlush(saveTimer, delayMs, flushSave)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    doc.name,
+    doc.nodes,
+    doc.edges,
+    doc.settings,
+    doc.episodeTitles,
+    doc.assets,
+    firstRender,
+    lastSigRef,
+    dirtyRef,
+    saveTimer,
+    flushSave,
+    delayMs,
+  ])
+}
+
+/** 卸载冲刷（useDebouncedSave 拆分）：flushSave 依赖变化会重跑本 effect——
+ * 重置卸载标记，仅真正的卸载终止重试。 */
+function useUnmountFlush(
+  unmountedRef: MutableRefObject<boolean>,
+  saveTimer: SaveTimerRef,
+  flushSave: () => Promise<void>,
+) {
+  useEffect(() => {
+    unmountedRef.current = false
+    return () => {
+      unmountedRef.current = true
+      if (saveTimer.current) {
+        clearTimeout(saveTimer.current)
+        saveTimer.current = null
+      }
+      void flushSave()
+    }
+  }, [unmountedRef, saveTimer, flushSave])
+}
+
+export function useDebouncedSave(
+  doc: ProjectContent,
+  onSave: (doc: ProjectContent) => void | Promise<void>,
+  delayMs = 600,
+  onSaveResult?: (err: unknown) => void,
+): (doc: ProjectContent) => void {
+  const {
+    saveTimer,
+    dirtyRef,
+    latestRef,
+    firstRender,
+    lastSigRef,
+    unmountedRef,
+    inFlightRef,
+  } = useSaveGateRefs(doc)
 
   const flushSave = useCallback(async () => {
     if (inFlightRef.current) return // 在途：本轮跳过，新脏数据由在途循环接力
@@ -76,19 +203,7 @@ export function useDebouncedSave(
           }, delayMs)
           return
         }
-        // 卸载后在途失败：不排重试计时器，但卸载前置脏的最新文档从未交付过
-        // onSave（项目级重试只持有本次失败的旧文档）——补交一次，其成败与
-        // 重试登记由存储层接管（§3.1 flushPersist 导航契约：离开不丢编辑）
-        if (dirtyRef.current) {
-          dirtyRef.current = false
-          const latest = latestRef.current
-          void Promise.resolve()
-            .then(() => onSave(latest))
-            .then(
-              () => onSaveResult?.(null),
-              (e: unknown) => onSaveResult?.(e),
-            )
-        }
+        deliverLatestAfterUnmount(latestRef, dirtyRef, onSave, onSaveResult)
         return
       } finally {
         inFlightRef.current = false
@@ -97,52 +212,38 @@ export function useDebouncedSave(
       // 最新文档补存一次（§3.1 flushPersist 导航契约：离开编辑器不丢编辑）
       if (unmountedRef.current && !dirtyRef.current) return
     }
-  }, [onSave, onSaveResult, delayMs])
+    // 闸 ref 由 useSaveGateRefs 持有，实例内恒稳定；列入依赖以满足
+    // exhaustive-deps（issue #99 拆分）。
+  }, [
+    onSave,
+    onSaveResult,
+    delayMs,
+    latestRef,
+    dirtyRef,
+    saveTimer,
+    unmountedRef,
+    inFlightRef,
+  ])
 
   const markDirty = useCallback(
     (next: ProjectContent) => {
       latestRef.current = next
       dirtyRef.current = true
-      if (saveTimer.current) clearTimeout(saveTimer.current)
-      saveTimer.current = setTimeout(() => {
-        saveTimer.current = null
-        void flushSave()
-      }, delayMs)
+      scheduleFlush(saveTimer, delayMs, flushSave)
     },
-    [flushSave, delayMs],
+    [flushSave, delayMs, latestRef, dirtyRef, saveTimer],
   )
 
-  useEffect(() => {
-    if (firstRender.current) {
-      firstRender.current = false
-      return
-    }
-    const sig = persistSignature(doc)
-    if (sig === lastSigRef.current) return // 纯会话态变化（选择/拖拽过程帧）：不置脏
-    lastSigRef.current = sig
-    dirtyRef.current = true
-    if (saveTimer.current) clearTimeout(saveTimer.current)
-    saveTimer.current = setTimeout(() => {
-      saveTimer.current = null
-      void flushSave()
-    }, delayMs)
-    // 名称/节点/边/设定集/集标题/资产索引触发防抖（视口经 markDirty 或卸载
-    // 冲刷兜底）；doc 仅用于计算签名，依赖以签名的组成字段为准
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc.name, doc.nodes, doc.edges, doc.settings, doc.episodeTitles, doc.assets, flushSave, delayMs])
-
-  useEffect(() => {
-    // flushSave 依赖变化会重跑本 effect：重置卸载标记，仅真正的卸载终止重试
-    unmountedRef.current = false
-    return () => {
-      unmountedRef.current = true
-      if (saveTimer.current) {
-        clearTimeout(saveTimer.current)
-        saveTimer.current = null
-      }
-      void flushSave()
-    }
-  }, [flushSave])
+  useSignatureSaveWatch(
+    doc,
+    firstRender,
+    lastSigRef,
+    dirtyRef,
+    saveTimer,
+    delayMs,
+    flushSave,
+  )
+  useUnmountFlush(unmountedRef, saveTimer, flushSave)
 
   return markDirty
 }

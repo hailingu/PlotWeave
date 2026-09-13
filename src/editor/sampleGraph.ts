@@ -11,7 +11,13 @@
 import type { Edge } from '@xyflow/react'
 import { SCENE_SHOT_HANDLE } from './nodes/SceneNode'
 import { branchOptionHandle } from './graphRules'
-import { LIN_WAN_ID, CHEN_MO_ID, LOC_ROOFTOP_ID, LOC_APARTMENT_ID, LOC_STATION_ID } from './sampleData'
+import {
+  LIN_WAN_ID,
+  CHEN_MO_ID,
+  LOC_ROOFTOP_ID,
+  LOC_APARTMENT_ID,
+  LOC_STATION_ID,
+} from './sampleData'
 import type { CanvasNode } from './nodes/types'
 
 export const SAMPLE_NODES: CanvasNode[] = [
@@ -45,7 +51,8 @@ export const SAMPLE_NODES: CanvasNode[] = [
       shotNo: 1,
       size: '远景',
       picture: '雨夜城市天台全景，林晚撑伞站在栏杆边，陈默从阴影中走出。',
-      prompt: 'rainy rooftop at night, cinematic wide shot, neon reflections, two figures confronting',
+      prompt:
+        'rainy rooftop at night, cinematic wide shot, neon reflections, two figures confronting',
       refs: [
         { id: 'ref-sg-1', kind: 'character', label: '林晚垫图' },
         { id: 'ref-sg-2', kind: 'location', label: '天台底图' },
@@ -61,7 +68,8 @@ export const SAMPLE_NODES: CanvasNode[] = [
       shotNo: 2,
       size: '特写',
       picture: '档案袋里的旧照片特写，指尖颤抖，雨水滴落在照片上。',
-      prompt: 'extreme close-up of trembling hands holding an old photo, raindrops, shallow depth of field',
+      prompt:
+        'extreme close-up of trembling hands holding an old photo, raindrops, shallow depth of field',
       refs: [
         { id: 'ref-sg-4', kind: 'character', label: '林晚垫图' },
         { id: 'ref-sg-5', kind: 'audio', label: '雨声' },
@@ -75,9 +83,21 @@ export const SAMPLE_NODES: CanvasNode[] = [
     data: {
       name: '真相逼近',
       lines: [
-        { id: 'line-sg-1', kind: 'line', speaker: LIN_WAN_ID, side: 'left', text: '你早就知道，对吗？' },
+        {
+          id: 'line-sg-1',
+          kind: 'line',
+          speaker: LIN_WAN_ID,
+          side: 'left',
+          text: '你早就知道，对吗？',
+        },
         { id: 'line-sg-2', kind: 'action', text: '陈默沉默，雨声渐大' },
-        { id: 'line-sg-3', kind: 'line', speaker: CHEN_MO_ID, side: 'right', text: '……我是为了保护你。' },
+        {
+          id: 'line-sg-3',
+          kind: 'line',
+          speaker: CHEN_MO_ID,
+          side: 'right',
+          text: '……我是为了保护你。',
+        },
       ],
     },
   },
@@ -85,10 +105,13 @@ export const SAMPLE_NODES: CanvasNode[] = [
     id: 'branch-1',
     type: 'branch',
     position: { x: 1230, y: 60 },
-    data: { prompt: '林晚是否发现真相？', options: [
+    data: {
+      prompt: '林晚是否发现真相？',
+      options: [
         { id: 'opt-sg-1', label: '坦白' },
         { id: 'opt-sg-2', label: '隐瞒' },
-      ] },
+      ],
+    },
   },
   {
     id: 'scene-4',
@@ -112,8 +135,20 @@ export const SAMPLE_NODES: CanvasNode[] = [
     data: {
       name: '十年前的雨',
       lines: [
-        { id: 'line-sg-4', kind: 'line', speaker: CHEN_MO_ID, side: 'left', text: '那晚，我也在旧公寓。' },
-        { id: 'line-sg-5', kind: 'line', speaker: LIN_WAN_ID, side: 'right', text: '为什么十年都不告诉我？' },
+        {
+          id: 'line-sg-4',
+          kind: 'line',
+          speaker: CHEN_MO_ID,
+          side: 'left',
+          text: '那晚，我也在旧公寓。',
+        },
+        {
+          id: 'line-sg-5',
+          kind: 'line',
+          speaker: LIN_WAN_ID,
+          side: 'right',
+          text: '为什么十年都不告诉我？',
+        },
       ],
     },
   },
@@ -148,7 +183,8 @@ export const SAMPLE_NODES: CanvasNode[] = [
       interior: true,
       locationId: LOC_APARTMENT_ID,
       time: '🌙 夜',
-      synopsis: '林晚在旧公寓找到父亲留下的第二张照片，两条支线的真相在此汇合。',
+      synopsis:
+        '林晚在旧公寓找到父亲留下的第二张照片，两条支线的真相在此汇合。',
       characterIds: [LIN_WAN_ID],
     },
   },
@@ -160,7 +196,8 @@ export const SAMPLE_NODES: CanvasNode[] = [
       shotNo: 3,
       size: '中景',
       picture: '旧公寓昏黄灯光下，林晚蹲在纸箱前，手里的照片微微发抖。',
-      prompt: 'dim old apartment, medium shot, woman crouching by cardboard boxes, warm tungsten light',
+      prompt:
+        'dim old apartment, medium shot, woman crouching by cardboard boxes, warm tungsten light',
       refs: [
         { id: 'ref-sg-6', kind: 'character', label: '林晚垫图' },
         { id: 'ref-sg-7', kind: 'location', label: '旧公寓底图' },
@@ -171,10 +208,13 @@ export const SAMPLE_NODES: CanvasNode[] = [
     id: 'branch-2',
     type: 'branch',
     position: { x: 2980, y: 80 },
-    data: { prompt: '林晚是否原谅陈默？', options: [
+    data: {
+      prompt: '林晚是否原谅陈默？',
+      options: [
         { id: 'opt-sg-3', label: '原谅' },
         { id: 'opt-sg-4', label: '不原谅' },
-      ] },
+      ],
+    },
   },
   {
     id: 'scene-7',
@@ -210,7 +250,12 @@ export const SAMPLE_NODES: CanvasNode[] = [
  * branch 从分支选项端口出发、带选项胶囊。 */
 export const SAMPLE_EDGES: Edge[] = [
   // 第一幕：节奏卡 → 索引卡 → 对白 → 分支
-  { id: 'e-beat1-scene3', source: 'beat-1', target: 'scene-3', className: 'pw-edge-sequence' },
+  {
+    id: 'e-beat1-scene3',
+    source: 'beat-1',
+    target: 'scene-3',
+    className: 'pw-edge-sequence',
+  },
   {
     id: 'e-scene3-shot1',
     source: 'scene-3',
@@ -225,8 +270,18 @@ export const SAMPLE_EDGES: Edge[] = [
     target: 'shot-2',
     className: 'pw-edge-attach',
   },
-  { id: 'e-scene3-dialogue1', source: 'scene-3', target: 'dialogue-1', className: 'pw-edge-sequence' },
-  { id: 'e-dialogue1-branch1', source: 'dialogue-1', target: 'branch-1', className: 'pw-edge-sequence' },
+  {
+    id: 'e-scene3-dialogue1',
+    source: 'scene-3',
+    target: 'dialogue-1',
+    className: 'pw-edge-sequence',
+  },
+  {
+    id: 'e-dialogue1-branch1',
+    source: 'dialogue-1',
+    target: 'branch-1',
+    className: 'pw-edge-sequence',
+  },
   // 支线：坦白 / 隐瞒（端口绑稳定选项 id）
   {
     id: 'e-branch1-confess',
@@ -242,11 +297,31 @@ export const SAMPLE_EDGES: Edge[] = [
     target: 'scene-5',
     type: 'branch',
   },
-  { id: 'e-scene4-dialogue2', source: 'scene-4', target: 'dialogue-2', className: 'pw-edge-sequence' },
+  {
+    id: 'e-scene4-dialogue2',
+    source: 'scene-4',
+    target: 'dialogue-2',
+    className: 'pw-edge-sequence',
+  },
   // 第二幕：节奏卡 → 两线汇合于旧公寓
-  { id: 'e-dialogue2-scene6', source: 'dialogue-2', target: 'scene-6', className: 'pw-edge-sequence' },
-  { id: 'e-scene5-scene6', source: 'scene-5', target: 'scene-6', className: 'pw-edge-sequence' },
-  { id: 'e-beat2-scene6', source: 'beat-2', target: 'scene-6', className: 'pw-edge-sequence' },
+  {
+    id: 'e-dialogue2-scene6',
+    source: 'dialogue-2',
+    target: 'scene-6',
+    className: 'pw-edge-sequence',
+  },
+  {
+    id: 'e-scene5-scene6',
+    source: 'scene-5',
+    target: 'scene-6',
+    className: 'pw-edge-sequence',
+  },
+  {
+    id: 'e-beat2-scene6',
+    source: 'beat-2',
+    target: 'scene-6',
+    className: 'pw-edge-sequence',
+  },
   {
     id: 'e-scene6-shot3',
     source: 'scene-6',
@@ -255,7 +330,12 @@ export const SAMPLE_EDGES: Edge[] = [
     className: 'pw-edge-attach',
   },
   // 结局分支：双结局
-  { id: 'e-scene6-branch2', source: 'scene-6', target: 'branch-2', className: 'pw-edge-sequence' },
+  {
+    id: 'e-scene6-branch2',
+    source: 'scene-6',
+    target: 'branch-2',
+    className: 'pw-edge-sequence',
+  },
   {
     id: 'e-branch2-forgive',
     source: 'branch-2',
@@ -271,4 +351,3 @@ export const SAMPLE_EDGES: Edge[] = [
     type: 'branch',
   },
 ]
-

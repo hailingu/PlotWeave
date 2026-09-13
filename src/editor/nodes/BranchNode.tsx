@@ -11,7 +11,11 @@ import type { BranchFlowNode } from './types'
  * 「＋ 添加选项」由 ⚙️ 设置面板承载（§4.3）。外观跟随画布：
  * 浅色画布为纸面变体，深色画布为虚线暗框。
  */
-export default function BranchNode({ id, data, selected }: NodeProps<BranchFlowNode>) {
+export default function BranchNode({
+  id,
+  data,
+  selected,
+}: NodeProps<BranchFlowNode>) {
   const { openSettingsId, toggleSettings, patchNode } = useNodeEdit()
   const settingsOpen = openSettingsId === id
 
@@ -22,7 +26,9 @@ export default function BranchNode({ id, data, selected }: NodeProps<BranchFlowN
         <EditableName
           value={data.prompt}
           ariaLabel="分支问句"
-          onChange={(prompt) => patchNode(id, { nodeType: 'branch', patch: { prompt } })}
+          onChange={(prompt) =>
+            patchNode(id, { nodeType: 'branch', patch: { prompt } })
+          }
         />
         <span className="pw-sp" />
         <button
@@ -50,7 +56,9 @@ export default function BranchNode({ id, data, selected }: NodeProps<BranchFlowN
           />
         </div>
       ))}
-      {settingsOpen && <NodeSettingsPanel node={{ id, type: 'branch', data }} />}
+      {settingsOpen && (
+        <NodeSettingsPanel node={{ id, type: 'branch', data }} />
+      )}
       <Handle type="target" position={Position.Left} className="pw-port" />
     </div>
   )

@@ -72,7 +72,7 @@ npm run tauri dev  # 启动 Tauri 开发调试（Vite 前端 + Rust 壳）
 
 常用校验命令：
 
-- 前端：仓库根目录执行 `npm run lint && npm run build`
+- 前端：仓库根目录执行 `npm run format:check && npm run lint && npm run build`（`npm run format` 应用 Prettier 格式化）
 - 后端：`src-tauri/` 目录执行 `cargo fmt --check && cargo clippy -- -D warnings && cargo test`
 
 ### 提交与推送门禁

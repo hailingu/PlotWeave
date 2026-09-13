@@ -5,7 +5,12 @@ import { EMPTY_SETTINGS } from './settings'
 import type { ProjectContent } from '../model/content'
 import type { CanvasNode } from './nodes/types'
 
-const node = { id: 's1', type: 'scene', position: { x: 0, y: 0 }, data: {} } as unknown as CanvasNode
+const node = {
+  id: 's1',
+  type: 'scene',
+  position: { x: 0, y: 0 },
+  data: {},
+} as unknown as CanvasNode
 
 /** 透传保真（P1 评审）：description 等编辑器不编辑的字段，每次构建会话
  * 文档都必须原样携带，否则保存即丢。资产索引（§7.3 会话内可导入新增）
@@ -24,7 +29,13 @@ describe('sessionDoc（编辑器会话文档构建）', () => {
     }
     const sessionAssets = {
       byId: {
-        'pa-1': { id: 'pa-1', relPath: 'assets/x.png', mime: 'image/png', source: 'upload' as const, createdAt: '' },
+        'pa-1': {
+          id: 'pa-1',
+          relPath: 'assets/x.png',
+          mime: 'image/png',
+          source: 'upload' as const,
+          createdAt: '',
+        },
       },
     }
     const doc = sessionDoc(project, {
@@ -45,7 +56,13 @@ describe('sessionDoc（编辑器会话文档构建）', () => {
   })
 
   it('与 ProjectContent 形状兼容（可直传 useDebouncedSave）', () => {
-    const project = { id: 'p-1', name: '', nodes: [], edges: [], settings: EMPTY_SETTINGS }
+    const project = {
+      id: 'p-1',
+      name: '',
+      nodes: [],
+      edges: [],
+      settings: EMPTY_SETTINGS,
+    }
     const doc: ProjectContent = sessionDoc(project, {
       nodes: [],
       edges: [],
@@ -66,7 +83,9 @@ describe('sessionDoc（编辑器会话文档构建）', () => {
       edges: [],
       settings: EMPTY_SETTINGS,
       graphExtensions: { futureGraphNote: '构造未来字段' },
-      settingsExtensions: { futureBucket: { 'ch-x': { id: 'ch-x', name: '未来实体' } } },
+      settingsExtensions: {
+        futureBucket: { 'ch-x': { id: 'ch-x', name: '未来实体' } },
+      },
       assetsExtensions: { futureIndex: ['a-1'] },
     }
     const doc: ProjectContent = sessionDoc(project, {
@@ -78,14 +97,23 @@ describe('sessionDoc（编辑器会话文档构建）', () => {
       assets: undefined,
     })
     expect(doc.graphExtensions).toEqual({ futureGraphNote: '构造未来字段' })
-    expect(doc.settingsExtensions).toEqual({ futureBucket: { 'ch-x': { id: 'ch-x', name: '未来实体' } } })
+    expect(doc.settingsExtensions).toEqual({
+      futureBucket: { 'ch-x': { id: 'ch-x', name: '未来实体' } },
+    })
     expect(doc.assetsExtensions).toEqual({ futureIndex: ['a-1'] })
     // 编辑器保存链终点：防抖保存的序列化产物原样带回对应容器
-    const saved = serializeProject(doc, 'p-1') as unknown as Record<string, unknown>
-    expect((saved.graph as Record<string, unknown>).futureGraphNote).toBe('构造未来字段')
+    const saved = serializeProject(doc, 'p-1') as unknown as Record<
+      string,
+      unknown
+    >
+    expect((saved.graph as Record<string, unknown>).futureGraphNote).toBe(
+      '构造未来字段',
+    )
     expect((saved.settings as Record<string, unknown>).futureBucket).toEqual({
       'ch-x': { id: 'ch-x', name: '未来实体' },
     })
-    expect((saved.assets as Record<string, unknown>).futureIndex).toEqual(['a-1'])
+    expect((saved.assets as Record<string, unknown>).futureIndex).toEqual([
+      'a-1',
+    ])
   })
 })

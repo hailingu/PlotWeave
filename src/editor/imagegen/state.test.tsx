@@ -23,7 +23,11 @@ import type { CanvasNode, ImageFlowNode } from '../nodes/types'
 import type { NodeDataPatch } from '../nodes/patch'
 
 vi.mock('../projectAssets', () => ({
-  projectAssets: { importFromLibrary: vi.fn(), mediaUrl: vi.fn(), revalidate: vi.fn() },
+  projectAssets: {
+    importFromLibrary: vi.fn(),
+    mediaUrl: vi.fn(),
+    revalidate: vi.fn(),
+  },
   tauriInvoke: vi.fn(),
   normalizeAssetRef: vi.fn(),
 }))
@@ -62,8 +66,12 @@ function imageNodeData(): ImageFlowNode['data'] {
  * nodes 属性（复刻 EditorView 的「状态 + ref 镜像」模式）。 */
 function Harness(props: {
   readonly nodes: CanvasNode[]
-  readonly assetsRef: { current: { byId: Record<string, AssetRef> } | undefined }
-  readonly settings: Pick<ProjectSettings, 'characters'> & { locations?: unknown }
+  readonly assetsRef: {
+    current: { byId: Record<string, AssetRef> } | undefined
+  }
+  readonly settings: Pick<ProjectSettings, 'characters'> & {
+    locations?: unknown
+  }
   readonly applyDataPatch: (id: string, cmd: NodeDataPatch) => void
   readonly addAsset: (asset: AssetRef) => void
   readonly removeAsset: (assetId: string) => void
@@ -90,8 +98,9 @@ let apiRef: ImageGenApi | null = null
 
 /** llm_image_generate 的调用次数。 */
 function generateCount(): number {
-  return vi.mocked(tauriInvoke).mock.calls.filter(([cmd]) => cmd === 'llm_image_generate')
-    .length
+  return vi
+    .mocked(tauriInvoke)
+    .mock.calls.filter(([cmd]) => cmd === 'llm_image_generate').length
 }
 
 /** 已发起生成的 jobId（取自唯一一次调用的请求载荷）。 */
@@ -99,7 +108,10 @@ function generatedJobId(): string {
   const call = vi
     .mocked(tauriInvoke)
     .mock.calls.find(([cmd]) => cmd === 'llm_image_generate')
-  return (call?.[1] as { request: { jobId: string } } | undefined)?.request.jobId ?? ''
+  return (
+    (call?.[1] as { request: { jobId: string } } | undefined)?.request.jobId ??
+    ''
+  )
 }
 
 /** 生成成功路径的公共脚手架：gen 返回 pa-9（§9.3 预检已在命令内，单 IPC）。 */
@@ -116,7 +128,9 @@ function mockSuccessfulGeneration(): void {
     }
     return Promise.resolve({})
   })
-  vi.mocked(normalizeAssetRef).mockImplementation((raw) => raw as unknown as AssetRef)
+  vi.mocked(normalizeAssetRef).mockImplementation(
+    (raw) => raw as unknown as AssetRef,
+  )
 }
 
 function setupHarness(
@@ -127,20 +141,45 @@ function setupHarness(
     characters?: ProjectSettings['characters']
   } = {},
 ) {
-  vi.mocked(settingsStore.load).mockImplementation(() => opts.resolveSettings ?? Promise.resolve(validSettings))
+  vi.mocked(settingsStore.load).mockImplementation(
+    () => opts.resolveSettings ?? Promise.resolve(validSettings),
+  )
   const cmds = {
     applyDataPatch: vi.fn(),
     addAsset: vi.fn(),
     removeAsset: vi.fn(),
     pushHistory: vi.fn(),
   }
-  const nodes = opts.nodes ?? [{ id: 'img1', type: 'image', data: imageNodeData() } as unknown as CanvasNode]
+  const nodes = opts.nodes ?? [
+    {
+      id: 'img1',
+      type: 'image',
+      data: imageNodeData(),
+    } as unknown as CanvasNode,
+  ]
   const assetsRef = { current: opts.assets }
-  const settings = { characters: opts.characters ?? [], locations: [] as never[] }
-  const view = render(<Harness nodes={nodes} assetsRef={assetsRef} settings={settings} {...cmds} />)
+  const settings = {
+    characters: opts.characters ?? [],
+    locations: [] as never[],
+  }
+  const view = render(
+    <Harness
+      nodes={nodes}
+      assetsRef={assetsRef}
+      settings={settings}
+      {...cmds}
+    />,
+  )
   /** 模拟节点表变化（删除/复活）——重挂同一 Harness 换 nodes。 */
   const setNodes = (next: CanvasNode[]) =>
-    view.rerender(<Harness nodes={next} assetsRef={assetsRef} settings={settings} {...cmds} />)
+    view.rerender(
+      <Harness
+        nodes={next}
+        assetsRef={assetsRef}
+        settings={settings}
+        {...cmds}
+      />,
+    )
   return { ...cmds, setNodes }
 }
 
@@ -174,16 +213,22 @@ describe('生成调度：设置加载失败（§13）', () => {
       if (cmd === 'llm_image_generate') return new Promise(() => {})
       return Promise.resolve({})
     })
-    setupHarness({ resolveSettings: Promise.reject(new Error('prefs IPC 失败')) })
+    setupHarness({
+      resolveSettings: Promise.reject(new Error('prefs IPC 失败')),
+    })
 
     void apiRef!.start('img1')
     // start 丢弃 runStart 的 promise：load 拒绝若逃出未处理，占位永远停在
     // running、无诊断，后续生成被 running 守卫挡死
     await waitFor(() => expect(apiRef!.jobOf('img1')?.status).toBe('error'))
-    expect((apiRef!.jobOf('img1') as { message: string }).message).toContain('加载设置失败')
+    expect((apiRef!.jobOf('img1') as { message: string }).message).toContain(
+      '加载设置失败',
+    )
 
     // 错误态可重试：第二次发起进入生成（设置恢复后正常计费一次）
-    vi.mocked(settingsStore.load).mockImplementation(() => Promise.resolve(validSettings))
+    vi.mocked(settingsStore.load).mockImplementation(() =>
+      Promise.resolve(validSettings),
+    )
     void apiRef!.start('img1')
     await waitFor(() => expect(generateCount()).toBe(1))
   })
@@ -194,10 +239,13 @@ describe('生成调度：卸载协作式取消（§13 作业生命周期）', ()
     ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
     let resolveGen!: (v: unknown) => void
     vi.mocked(tauriInvoke).mockImplementation((cmd: string) => {
-      if (cmd === 'llm_image_generate') return new Promise((res) => (resolveGen = res))
+      if (cmd === 'llm_image_generate')
+        return new Promise((res) => (resolveGen = res))
       return Promise.resolve({})
     })
-    vi.mocked(normalizeAssetRef).mockImplementation((raw) => raw as unknown as AssetRef)
+    vi.mocked(normalizeAssetRef).mockImplementation(
+      (raw) => raw as unknown as AssetRef,
+    )
     const { applyDataPatch, addAsset, pushHistory } = setupHarness()
 
     void apiRef!.start('img1')
@@ -220,7 +268,8 @@ describe('生成调度：结果落位复合命令（§7.3 同构）', () => {
   it('生成成功以复合命令入栈：undo 同步移除资产索引，redo 恢复（§7.3 同构）', async () => {
     ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
     mockSuccessfulGeneration()
-    const { applyDataPatch, addAsset, removeAsset, pushHistory } = setupHarness()
+    const { applyDataPatch, addAsset, removeAsset, pushHistory } =
+      setupHarness()
 
     void apiRef!.start('img1')
     await waitFor(() => expect(pushHistory).toHaveBeenCalledTimes(1))
@@ -249,7 +298,10 @@ describe('生成调度：结果落位复合命令（§7.3 同构）', () => {
     expect(cmd.redoGuard).toBeTypeOf('function')
     vi.mocked(projectAssets.revalidate).mockResolvedValue(undefined)
     await cmd.redoGuard?.()
-    expect(projectAssets.revalidate).toHaveBeenCalledWith('p-1', expect.objectContaining({ id: 'pa-9' }))
+    expect(projectAssets.revalidate).toHaveBeenCalledWith(
+      'p-1',
+      expect.objectContaining({ id: 'pa-9' }),
+    )
   })
 })
 
@@ -267,7 +319,9 @@ describe('生成调度：宿主节点删除（§13 作业生命周期）', () =>
     const jobId = generatedJobId()
 
     setNodes([]) // 删除 img1：Provider 仍挂载，靠节点观察取消
-    await waitFor(() => expect(tauriInvoke).toHaveBeenCalledWith('llm_image_cancel', { jobId }))
+    await waitFor(() =>
+      expect(tauriInvoke).toHaveBeenCalledWith('llm_image_cancel', { jobId }),
+    )
   })
 
   it('设置加载间隙中宿主节点被删：提交前复核，不发起计费请求', async () => {
@@ -309,7 +363,9 @@ describe('生成调度：作业身份复核（§13）', () => {
       }
       return Promise.resolve({})
     })
-    vi.mocked(normalizeAssetRef).mockImplementation((raw) => raw as unknown as AssetRef)
+    vi.mocked(normalizeAssetRef).mockImplementation(
+      (raw) => raw as unknown as AssetRef,
+    )
     const { pushHistory } = setupHarness()
     // 计数型 load mock（覆盖 setupHarness 的默认）：首次挂起给 A，此后
     // 立即给 B 有效设置——两个作业不得共享同一个挂起的 Promise
@@ -347,7 +403,10 @@ describe('生成调度：旧产物回收（§7.3）', () => {
         {
           id: 'img1',
           type: 'image',
-          data: { ...imageNodeData(), outputs: { primary: { assetId: 'pa-old' } } },
+          data: {
+            ...imageNodeData(),
+            outputs: { primary: { assetId: 'pa-old' } },
+          },
         } as unknown as CanvasNode,
       ],
       assets: { byId: { 'pa-old': oldAsset } },
@@ -375,7 +434,10 @@ describe('生成调度：旧产物被引用或悬空不回收（§7.3）', () =>
         {
           id: 'img1',
           type: 'image',
-          data: { ...imageNodeData(), outputs: { primary: { assetId: 'pa-old' } } },
+          data: {
+            ...imageNodeData(),
+            outputs: { primary: { assetId: 'pa-old' } },
+          },
         } as unknown as CanvasNode,
         {
           id: 'shot1',
@@ -394,7 +456,10 @@ describe('生成调度：旧产物被引用或悬空不回收（§7.3）', () =>
         {
           id: 'img1',
           type: 'image',
-          data: { ...imageNodeData(), outputs: { primary: { assetId: 'pa-gone' } } },
+          data: {
+            ...imageNodeData(),
+            outputs: { primary: { assetId: 'pa-gone' } },
+          },
         } as unknown as CanvasNode,
       ],
     })
@@ -411,13 +476,21 @@ describe('生成调度：旧产物被引用或悬空不回收（§7.3）', () =>
         {
           id: 'img1',
           type: 'image',
-          data: { ...imageNodeData(), outputs: { primary: { assetId: 'pa-old' } } },
+          data: {
+            ...imageNodeData(),
+            outputs: { primary: { assetId: 'pa-old' } },
+          },
         } as unknown as CanvasNode,
       ],
       assets: { byId: { 'pa-old': {} as AssetRef } },
       // 落盘模型可携带 avatarAssetId（CharacterEntity 未声明、serialize 整对象透传）
       characters: [
-        { id: 'ch1', name: '林晚', gradient: 'g', avatarAssetId: 'pa-old' } as CharacterEntity,
+        {
+          id: 'ch1',
+          name: '林晚',
+          gradient: 'g',
+          avatarAssetId: 'pa-old',
+        } as CharacterEntity,
       ],
     })
     void apiRef!.start('img1')
@@ -433,7 +506,10 @@ describe('生成调度：旧产物被引用或悬空不回收（§7.3）', () =>
         {
           id: 'img1',
           type: 'image',
-          data: { ...imageNodeData(), outputs: { primary: { assetId: '__proto__' } } },
+          data: {
+            ...imageNodeData(),
+            outputs: { primary: { assetId: '__proto__' } },
+          },
         } as unknown as CanvasNode,
       ],
       assets: { byId: {} },
@@ -461,9 +537,14 @@ describe('doomedImageAssets：删除图片节点的产物回收判定（§7.3）
   }
 
   it('产物不再被幸存节点/头像引用且仍在索引：回收（含去重）', () => {
-    const doomed = doomedImageAssets([imgWith('pa-old'), imgWith('pa-old')], [], [], {
-      'pa-old': paOld,
-    })
+    const doomed = doomedImageAssets(
+      [imgWith('pa-old'), imgWith('pa-old')],
+      [],
+      [],
+      {
+        'pa-old': paOld,
+      },
+    )
     expect(doomed).toEqual([paOld])
   })
 
@@ -473,16 +554,29 @@ describe('doomedImageAssets：删除图片节点的产物回收判定（§7.3）
       type: 'shot',
       data: { refs: [{ id: 'r1', kind: 'image', assetId: 'pa-old' }] },
     } as unknown as CanvasNode
-    expect(doomedImageAssets([imgWith('pa-old')], [survivorShot], [], { 'pa-old': paOld })).toEqual([])
+    expect(
+      doomedImageAssets([imgWith('pa-old')], [survivorShot], [], {
+        'pa-old': paOld,
+      }),
+    ).toEqual([])
     expect(
       doomedImageAssets(
         [imgWith('pa-old')],
         [],
-        [{ id: 'ch1', name: '林晚', gradient: 'g', avatarAssetId: 'pa-old' } as CharacterEntity],
+        [
+          {
+            id: 'ch1',
+            name: '林晚',
+            gradient: 'g',
+            avatarAssetId: 'pa-old',
+          } as CharacterEntity,
+        ],
         { 'pa-old': paOld },
       ),
     ).toEqual([])
-    expect(doomedImageAssets([imgWith('pa-gone')], [], [], { 'pa-old': paOld })).toEqual([])
+    expect(
+      doomedImageAssets([imgWith('pa-gone')], [], [], { 'pa-old': paOld }),
+    ).toEqual([])
     expect(doomedImageAssets([imgWith('__proto__')], [], [], {})).toEqual([])
   })
 })

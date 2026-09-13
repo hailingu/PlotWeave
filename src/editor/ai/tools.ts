@@ -39,7 +39,8 @@ export const AI_TOOLS: ToolSpec[] = [
     type: 'function',
     function: {
       name: 'get_graph_snapshot',
-      description: '读取画布快照：节点 id/类型/标签/参数、连线语义、剧情流顺序与设定集 id',
+      description:
+        '读取画布快照：节点 id/类型/标签/参数、连线语义、剧情流顺序与设定集 id',
       parameters: obj({}),
     },
   },
@@ -65,15 +66,24 @@ export const AI_TOOLS: ToolSpec[] = [
     type: 'function',
     function: {
       name: 'get_document',
-      description: '读取单个设定文档的完整内容（id/title/body/relatedIds）；写或续写文档前先读取',
-      parameters: obj({ documentId: str('文档 id（来自 get_settings_snapshot 的 documents 清单）') }, ['documentId']),
+      description:
+        '读取单个设定文档的完整内容（id/title/body/relatedIds）；写或续写文档前先读取',
+      parameters: obj(
+        {
+          documentId: str(
+            '文档 id（来自 get_settings_snapshot 的 documents 清单）',
+          ),
+        },
+        ['documentId'],
+      ),
     },
   },
   {
     type: 'function',
     function: {
       name: 'create_node',
-      description: '新建节点；data 只写要定制的字段，其余用默认；ref 供后续命令引用新节点',
+      description:
+        '新建节点；data 只写要定制的字段，其余用默认；ref 供后续命令引用新节点',
       parameters: WRITE_PARAMETERS.create_node,
     },
   },
@@ -97,7 +107,8 @@ export const AI_TOOLS: ToolSpec[] = [
     type: 'function',
     function: {
       name: 'connect_edge',
-      description: '建连线：缺省剧情流；branch 需 optionIndex（0 基）；attach 仅 场景→分镜卡',
+      description:
+        '建连线：缺省剧情流；branch 需 optionIndex（0 基）；attach 仅 场景→分镜卡',
       parameters: WRITE_PARAMETERS.connect_edge,
     },
   },
@@ -162,7 +173,12 @@ export const AI_TOOLS: ToolSpec[] = [
   },
 ]
 
-export const READ_TOOL_NAMES = new Set(['get_graph_snapshot', 'get_node', 'get_settings_snapshot', 'get_document'])
+export const READ_TOOL_NAMES = new Set([
+  'get_graph_snapshot',
+  'get_node',
+  'get_settings_snapshot',
+  'get_document',
+])
 export const WRITE_TOOL_NAMES = new Set([
   'create_node',
   'delete_node',
@@ -186,7 +202,10 @@ const asPatch = (v: unknown): Record<string, unknown> =>
     : {}
 
 /** 单工具 → 单命令的映射表（S3776：替代 if/else 链）；batch 一对多，循环内单独处理。 */
-const WRITE_MAPPERS: Record<string, (args: Record<string, unknown>) => AiCommand> = {
+const WRITE_MAPPERS: Record<
+  string,
+  (args: Record<string, unknown>) => AiCommand
+> = {
   create_node: (a) => ({
     op: 'create_node',
     nodeType: asId(a.nodeType),
@@ -200,7 +219,11 @@ const WRITE_MAPPERS: Record<string, (args: Record<string, unknown>) => AiCommand
     patch: asPatch(a.patch),
     reason: a.reason,
   }),
-  delete_node: (a) => ({ op: 'delete_node', nodeId: asId(a.nodeId), reason: a.reason }),
+  delete_node: (a) => ({
+    op: 'delete_node',
+    nodeId: asId(a.nodeId),
+    reason: a.reason,
+  }),
   connect_edge: (a) => ({
     op: 'connect_edge',
     sourceId: asId(a.sourceId),
@@ -249,7 +272,11 @@ function normalizeBatchCommand(cmd: unknown): AiCommand {
     cmd !== null &&
     !Array.isArray(cmd) &&
     (cmd as { op?: unknown }).op === 'update_node_spec'
-  if (isSpecAlias) return { ...(cmd as Record<string, unknown>), op: 'update_node' } as AiCommand
+  if (isSpecAlias)
+    return {
+      ...(cmd as Record<string, unknown>),
+      op: 'update_node',
+    } as AiCommand
   return cmd as AiCommand
 }
 
@@ -278,7 +305,11 @@ export function toolCallsToCommands(calls: ToolCall[]): ToolCallParse {
     let args: Record<string, unknown>
     try {
       const parsed: unknown = JSON.parse(c.function.arguments || '{}')
-      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      if (
+        typeof parsed !== 'object' ||
+        parsed === null ||
+        Array.isArray(parsed)
+      ) {
         throw new Error('not an object')
       }
       args = parsed as Record<string, unknown>
@@ -298,7 +329,8 @@ export function toolCallsToCommands(calls: ToolCall[]): ToolCallParse {
     }
     if (name === 'batch') {
       const inner = args.commands
-      if (Array.isArray(inner)) commands.push(...inner.map(normalizeBatchCommand))
+      if (Array.isArray(inner))
+        commands.push(...inner.map(normalizeBatchCommand))
       else errors.push(`batch 工具（${c.id}）：commands 不是数组`)
       continue
     }

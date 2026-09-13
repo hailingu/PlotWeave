@@ -51,7 +51,11 @@ function setup(
     assets: opts.withAsset === false ? undefined : { byId: { 'pa-1': asset } },
   }
   const nodesRef = { current: [] as CanvasNode[] }
-  const props = { id: 'img1', data, selected: false } as unknown as NodeProps<ImageFlowNode>
+  const props = {
+    id: 'img1',
+    data,
+    selected: false,
+  } as unknown as NodeProps<ImageFlowNode>
   const view = render(
     <ImageGenProvider
       projectId="p-1"
@@ -114,7 +118,10 @@ describe('图片节点渲染（§13）', () => {
   })
 
   it('primary 悬空（资产已删）显示缺失占位，不清除引用', () => {
-    setup({ ...baseData(), outputs: { primary: { assetId: 'pa-1' } } }, { withAsset: false })
+    setup(
+      { ...baseData(), outputs: { primary: { assetId: 'pa-1' } } },
+      { withAsset: false },
+    )
     expect(screen.getByText(/产物资产缺失/)).toBeTruthy()
   })
 

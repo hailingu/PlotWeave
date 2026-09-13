@@ -61,7 +61,8 @@ export interface EntityFoldHost {
 const bucketOf = (st: EntityFoldHost, kind: EntityKind): Map<string, string> =>
   kind === 'character' ? st.characters : st.locations
 
-const otherKind = (kind: EntityKind): EntityKind => (kind === 'character' ? 'location' : 'character')
+const otherKind = (kind: EntityKind): EntityKind =>
+  kind === 'character' ? 'location' : 'character'
 
 /** 实体 token 解析口径：快照给批次校验消费（patchShape 的引用存在性/类型检查）。
  * 按引用位期望的种类解析持久化 id：角色/地点是两个独立 id 空间，同 id 可在
@@ -95,7 +96,8 @@ function appendShapeIssues(
   kind: EntityKind,
   fields: Record<string, unknown>,
 ): void {
-  if (fields.name !== undefined && typeof fields.name !== 'string') issues.push('name 须为字符串')
+  if (fields.name !== undefined && typeof fields.name !== 'string')
+    issues.push('name 须为字符串')
   const optionalKey = kind === 'character' ? 'bio' : 'note'
   const optional = fields[optionalKey]
   if (optional !== undefined && typeof optional !== 'string') {
@@ -104,15 +106,24 @@ function appendShapeIssues(
 }
 
 /** 创建模式：name 必填（trim 后非空）。 */
-function appendCreateIssues(issues: string[], label: string, name: string): void {
+function appendCreateIssues(
+  issues: string[],
+  label: string,
+  name: string,
+): void {
   if (name === '') issues.push(`创建${label}须在 fields 提供 name`)
 }
 
 /** 修改模式：fields 不得为空；提供 name 时不得为空白（不许清空名称）。 */
-function appendUpdateIssues(issues: string[], fields: Record<string, unknown>, name: string): void {
+function appendUpdateIssues(
+  issues: string[],
+  fields: Record<string, unknown>,
+  name: string,
+): void {
   const empty = Object.keys(fields).length === 0
   if (empty) issues.push('fields 为空')
-  if (!empty && fields.name !== undefined && name === '') issues.push('name 不能为空白')
+  if (!empty && fields.name !== undefined && name === '')
+    issues.push('name 不能为空白')
 }
 
 /** fields 白名单 + 值形状校验（信任边界）：白名单外字段拒绝；name 须非空白
@@ -124,7 +135,9 @@ export function entityFieldsIssue(
 ): string | null {
   const allowed = AI_ENTITY_FIELDS[kind]
   const label = ENTITY_KIND_LABELS[kind]
-  const unknownKeys = Object.keys(fields).filter((k) => !allowed.some((f) => f.key === k))
+  const unknownKeys = Object.keys(fields).filter(
+    (k) => !allowed.some((f) => f.key === k),
+  )
   if (unknownKeys.length > 0) {
     return `未知字段：${unknownKeys.join('、')}（${label} 允许：${allowed.map((f) => f.key).join('、')}）`
   }
@@ -163,7 +176,10 @@ type EntityTarget = { id: string } | 'missing' | 'cross'
  * 错误文案。校验期 token 解析以既有实体优先（entityScopeOf.kindOf 先查投影
  * 桶），执行期以别名表优先（batchSim 的 entityRefToId），冲突别名会让同一
  * token 在预览校验与执行解析到不同实体，产生跨种类误绑。 */
-function entityRefCollisionIssue(st: EntityFoldHost, refName: string): string | null {
+function entityRefCollisionIssue(
+  st: EntityFoldHost,
+  refName: string,
+): string | null {
   if (st.characters.has(refName) || st.locations.has(refName)) {
     return `ref 别名不得与既有实体 id 相同（预览按既有实体解析、执行按别名解析，会产生不一致绑定）：${refName}`
   }
@@ -172,14 +188,23 @@ function entityRefCollisionIssue(st: EntityFoldHost, refName: string): string | 
 
 /** 修改目标解析：虚拟投影 id 不参与桶位命中（仅声明的 ref 别名可解析，
  * 同 entityScopeOf 口径——直接放行投影 id 会在执行期静默跳过）。 */
-function resolveEntityTarget(st: EntityFoldHost, kind: EntityKind, token: string): EntityTarget {
-  if (!st.virtualEntityIds.has(token) && bucketOf(st, kind).has(token)) return { id: token }
+function resolveEntityTarget(
+  st: EntityFoldHost,
+  kind: EntityKind,
+  token: string,
+): EntityTarget {
+  if (!st.virtualEntityIds.has(token) && bucketOf(st, kind).has(token))
+    return { id: token }
   const ref = st.entityRefs.get(token)
   if (ref !== undefined) {
     if (ref.kind !== kind) return 'cross'
     return { id: ref.id }
   }
-  if (!st.virtualEntityIds.has(token) && bucketOf(st, otherKind(kind)).has(token)) return 'cross'
+  if (
+    !st.virtualEntityIds.has(token) &&
+    bucketOf(st, otherKind(kind)).has(token)
+  )
+    return 'cross'
   return 'missing'
 }
 
@@ -238,13 +263,17 @@ function foldUpdateEntity(
     )
   }
   if (resolved === 'missing') {
-    return st.fail(index, `${label}实体不存在：${target}（修改须用设定集快照里的精确 id）`)
+    return st.fail(
+      index,
+      `${label}实体不存在：${target}（修改须用设定集快照里的精确 id）`,
+    )
   }
   const collision = refName !== '' ? entityRefCollisionIssue(st, refName) : null
   if (collision !== null) return st.fail(index, collision)
   const normalized = normalizeEntityFields(kind, fields)
   const currentName = bucketOf(st, kind).get(resolved.id) ?? target
-  if (normalized.name !== undefined) bucketOf(st, kind).set(resolved.id, normalized.name)
+  if (normalized.name !== undefined)
+    bucketOf(st, kind).set(resolved.id, normalized.name)
   if (refName !== '') st.entityRefs.set(refName, { kind, id: resolved.id })
   st.items.push({
     kind: 'update_entity',
@@ -305,14 +334,18 @@ export function documentFieldsIssue(
     return `未知字段：${unknownKeys.join('、')}（文档 允许：${AI_DOCUMENT_FIELDS.map((f) => f.key).join('、')}）`
   }
   const issues: string[] = []
-  if (fields.title !== undefined && typeof fields.title !== 'string') issues.push('title 须为字符串')
-  if (fields.body !== undefined && typeof fields.body !== 'string') issues.push('body 须为字符串')
+  if (fields.title !== undefined && typeof fields.title !== 'string')
+    issues.push('title 须为字符串')
+  if (fields.body !== undefined && typeof fields.body !== 'string')
+    issues.push('body 须为字符串')
   appendRelatedIdsIssues(issues, fields.relatedIds)
   const title = typeof fields.title === 'string' ? fields.title.trim() : ''
-  if (mode === 'create' && title === '') issues.push('创建文档须在 fields 提供 title')
+  if (mode === 'create' && title === '')
+    issues.push('创建文档须在 fields 提供 title')
   if (mode === 'update') {
     if (Object.keys(fields).length === 0) issues.push('fields 为空')
-    else if (fields.title !== undefined && title === '') issues.push('title 不能为空白')
+    else if (fields.title !== undefined && title === '')
+      issues.push('title 不能为空白')
   }
   return issues.length > 0 ? `文档字段错误：${issues.join('；')}` : null
 }
@@ -348,10 +381,12 @@ export function normalizeDocumentFields(
   if (typeof fields.title === 'string') out.title = fields.title.trim()
   if (typeof fields.body === 'string') out.body = fields.body
   if (Array.isArray(fields.relatedIds)) {
-    out.relatedIds = (fields.relatedIds as Array<Record<string, unknown>>).map((item) => ({
-      kind: item.kind as 'character' | 'location',
-      id: item.id as string,
-    }))
+    out.relatedIds = (fields.relatedIds as Array<Record<string, unknown>>).map(
+      (item) => ({
+        kind: item.kind as 'character' | 'location',
+        id: item.id as string,
+      }),
+    )
   }
   return out
 }
@@ -375,18 +410,27 @@ function resolveRelatedIds(
     if (st.entityScope !== undefined) {
       const actual = st.entityScope.kindOf(id, kind)
       if (actual === null) {
-        st.fail(index, `relatedIds[${i}] 引用的${ENTITY_KIND_LABELS[kind]}实体不存在：${id}`)
+        st.fail(
+          index,
+          `relatedIds[${i}] 引用的${ENTITY_KIND_LABELS[kind]}实体不存在：${id}`,
+        )
         return null
       }
       if (actual !== kind) {
-        st.fail(index, `relatedIds[${i}] 指向的是${ENTITY_KIND_LABELS[actual]}实体（kind 写了 ${ENTITY_KIND_LABELS[kind]}）：${id}`)
+        st.fail(
+          index,
+          `relatedIds[${i}] 指向的是${ENTITY_KIND_LABELS[actual]}实体（kind 写了 ${ENTITY_KIND_LABELS[kind]}）：${id}`,
+        )
         return null
       }
     }
     const resolved = st.entityRefs.get(id)?.id ?? id
     const key = `${kind}:${resolved}`
     if (seen.has(key)) {
-      st.fail(index, `relatedIds 重复关联同一实体：${ENTITY_KIND_LABELS[kind]} ${id}`)
+      st.fail(
+        index,
+        `relatedIds 重复关联同一实体：${ENTITY_KIND_LABELS[kind]} ${id}`,
+      )
       return null
     }
     seen.add(key)
@@ -446,9 +490,15 @@ function foldUpdateDocument(
   const current = st.documents.get(target)
   if (current === undefined) {
     if (st.characters.has(target) || st.locations.has(target)) {
-      return st.fail(index, `entityId 指向的是角色/地点实体（须为文档）：${target}`)
+      return st.fail(
+        index,
+        `entityId 指向的是角色/地点实体（须为文档）：${target}`,
+      )
     }
-    return st.fail(index, `文档不存在：${target}（修改须用设定集快照里的精确 id）`)
+    return st.fail(
+      index,
+      `文档不存在：${target}（修改须用设定集快照里的精确 id）`,
+    )
   }
   if (resolveRelatedIds(st, index, fields.relatedIds) === null) return
   const normalized = normalizeDocumentFields(fields)
@@ -456,7 +506,10 @@ function foldUpdateDocument(
     st.documents.set(target, { ...current, title: normalized.title })
   }
   if (normalized.body !== undefined) {
-    st.documents.set(target, { ...st.documents.get(target)!, bodyLength: normalized.body.length })
+    st.documents.set(target, {
+      ...st.documents.get(target)!,
+      bodyLength: normalized.body.length,
+    })
   }
   st.items.push({
     kind: 'update_entity',
@@ -464,7 +517,11 @@ function foldUpdateDocument(
     key: `eu${index}`,
     label: `修改 文档 · ${current.title}（${documentFieldSummary(current.bodyLength, normalized)}）${reasonOf(raw)}`,
   })
-  st.commands.push({ op: 'upsert_document', entityId: target, fields: normalized })
+  st.commands.push({
+    op: 'upsert_document',
+    entityId: target,
+    fields: normalized,
+  })
 }
 
 /** upsert_document 的折叠校验（issue 56）：缺省 entityId = 新建（执行期分配
@@ -480,7 +537,8 @@ export function foldUpsertDocument(
 ): void {
   const fields = raw.fields
   if (!plainObject(fields)) return st.fail(index, 'fields 必须是字段对象')
-  if (raw.entityId === undefined) return foldCreateDocument(st, raw, index, fields)
+  if (raw.entityId === undefined)
+    return foldCreateDocument(st, raw, index, fields)
   const target = typeof raw.entityId === 'string' ? raw.entityId : ''
   if (target.trim() === '') {
     return st.fail(

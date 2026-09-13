@@ -25,7 +25,12 @@ describe('buildGraphDigest（§6/§12.2 画布快照：id + 参数 + 连线语�
         episodeNo: 1,
       },
     }),
-    node({ id: 'b1', type: 'beat', position: { x: 0, y: 0 }, data: { name: '开端', tone: '压抑', episodeNo: 2 } }),
+    node({
+      id: 'b1',
+      type: 'beat',
+      position: { x: 0, y: 0 },
+      data: { name: '开端', tone: '压抑', episodeNo: 2 },
+    }),
     node({
       id: 'd1',
       type: 'dialogue',
@@ -43,13 +48,25 @@ describe('buildGraphDigest（§6/§12.2 画布快照：id + 参数 + 连线语�
       id: 'br1',
       type: 'branch',
       position: { x: 600, y: 0 },
-      data: { prompt: '追或不追？', options: [{ id: 'o1', label: '追' }, { id: 'o2', label: '不追' }] },
+      data: {
+        prompt: '追或不追？',
+        options: [
+          { id: 'o1', label: '追' },
+          { id: 'o2', label: '不追' },
+        ],
+      },
     }),
     node({
       id: 'sh1',
       type: 'shot',
       position: { x: 200, y: 160 },
-      data: { shotNo: 3, size: '特写', picture: '雨水', prompt: 'rain close-up', refs: [] },
+      data: {
+        shotNo: 3,
+        size: '特写',
+        picture: '雨水',
+        prompt: 'rain close-up',
+        refs: [],
+      },
     }),
   ]
   const edges: Edge[] = [
@@ -62,7 +79,13 @@ describe('buildGraphDigest（§6/§12.2 画布快照：id + 参数 + 连线语�
       sourceHandle: 'option-o2',
       data: { optionLabel: '不追' },
     },
-    { id: 'e3', source: 's1', target: 'sh1', className: 'pw-edge-attach', sourceHandle: 'shots' },
+    {
+      id: 'e3',
+      source: 's1',
+      target: 'sh1',
+      className: 'pw-edge-attach',
+      sourceHandle: 'shots',
+    },
   ]
 
   const digest = buildGraphDigest(nodes, edges, {
@@ -102,7 +125,9 @@ describe('buildGraphDigest（§6/§12.2 画布快照：id + 参数 + 连线语�
   })
 
   it('剧情流顺序 = sequence 子图的线性投影（大纲投影）', () => {
-    const orderLine = digest.split('\n').findIndex((l) => l.includes('剧情流顺序'))
+    const orderLine = digest
+      .split('\n')
+      .findIndex((l) => l.includes('剧情流顺序'))
     const after = digest.split('\n').slice(orderLine)
     const b1Idx = after.findIndex((l) => l.includes('1. b1'))
     const s1Idx = after.findIndex((l) => l.includes('2. s1'))
@@ -128,21 +153,52 @@ describe('buildGraphDigest（§6/§12.2 画布快照：id + 参数 + 连线语�
 })
 
 describe('buildGraphDigest 旁白/动作摘要（issue 73）', () => {
-  it.each<{ name: string; lines: DialogueLine[]; speech: number; actions: number }>([
+  it.each<{
+    name: string
+    lines: DialogueLine[]
+    speech: number
+    actions: number
+  }>([
     { name: '空对白', lines: [], speech: 0, actions: 0 },
-    { name: '仅旁白', lines: [{ id: 'a1', kind: 'action', text: '开场旁白' }], speech: 0, actions: 1 },
-    { name: '混合对白', lines: [
-      { id: 'l1', kind: 'line', speaker: 'c1', text: '别走', side: 'left' },
-      { id: 'a1', kind: 'action', text: '动作与旁白' },
-    ], speech: 1, actions: 1 },
-  ])('$name 分别统计台词与旁白/动作，全文仍按需读取', ({ lines, speech, actions }) => {
-    const digest = buildGraphDigest([{
-      id: 'd1', type: 'dialogue', position: { x: 0, y: 0 },
-      data: { name: '开场', lines },
-    }], [], { characters: [], locations: [], characterName: () => null, locationName: () => null })
-    expect(digest).toContain(`${speech} 句`)
-    expect(digest).toContain(`${actions} 条旁白/动作`)
-    expect(digest).not.toContain('开场旁白')
-    expect(digest).not.toContain('动作与旁白')
-  })
+    {
+      name: '仅旁白',
+      lines: [{ id: 'a1', kind: 'action', text: '开场旁白' }],
+      speech: 0,
+      actions: 1,
+    },
+    {
+      name: '混合对白',
+      lines: [
+        { id: 'l1', kind: 'line', speaker: 'c1', text: '别走', side: 'left' },
+        { id: 'a1', kind: 'action', text: '动作与旁白' },
+      ],
+      speech: 1,
+      actions: 1,
+    },
+  ])(
+    '$name 分别统计台词与旁白/动作，全文仍按需读取',
+    ({ lines, speech, actions }) => {
+      const digest = buildGraphDigest(
+        [
+          {
+            id: 'd1',
+            type: 'dialogue',
+            position: { x: 0, y: 0 },
+            data: { name: '开场', lines },
+          },
+        ],
+        [],
+        {
+          characters: [],
+          locations: [],
+          characterName: () => null,
+          locationName: () => null,
+        },
+      )
+      expect(digest).toContain(`${speech} 句`)
+      expect(digest).toContain(`${actions} 条旁白/动作`)
+      expect(digest).not.toContain('开场旁白')
+      expect(digest).not.toContain('动作与旁白')
+    },
+  )
 })

@@ -24,7 +24,12 @@ const DOC_A: DocumentEntity = {
   body: '陈默，落魄侦探。',
   relatedIds: [{ kind: 'character', id: 'c1' }],
 }
-const DOC_B: DocumentEntity = { id: 'doc-2', title: '术语表', body: '', relatedIds: [] }
+const DOC_B: DocumentEntity = {
+  id: 'doc-2',
+  title: '术语表',
+  body: '',
+  relatedIds: [],
+}
 
 function setup(over: Partial<Parameters<typeof LeftPanel>[0]> = {}) {
   const settingsActions: SettingsActions = {
@@ -76,7 +81,9 @@ describe('LeftPanel 文档列表（issue 56）', () => {
   it('渲染文档条目（标题）与新增/删除动作透传', () => {
     const spies = setup()
     toSettingsTab()
-    expect(screen.getByRole('button', { name: '打开文档 人物小传' })).toBeTruthy()
+    expect(
+      screen.getByRole('button', { name: '打开文档 人物小传' }),
+    ).toBeTruthy()
     expect(screen.getByRole('button', { name: '打开文档 术语表' })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '＋ 新增文档' }))
     expect(spies.settingsActions.addDocument).toHaveBeenCalled()
@@ -101,7 +108,9 @@ describe('LeftPanel 文档列表（issue 56）', () => {
     const dialog = screen.getByRole('dialog', { name: '编辑设定文档' })
     const overlay = dialog.closest('.pw-overlay')!
     expect(overlay.parentElement).toBe(document.body)
-    expect(document.querySelector('.pw-panel-left')?.contains(overlay)).toBe(false)
+    expect(document.querySelector('.pw-panel-left')?.contains(overlay)).toBe(
+      false,
+    )
   })
 })
 
@@ -114,8 +123,12 @@ describe('文档编辑器弹窗（issue 56）', () => {
   it('编辑标题与正文后保存：一次 updateDocument 派发整体编辑态并关闭', () => {
     const spies = setup()
     openEditor()
-    fireEvent.change(screen.getByLabelText('文档标题'), { target: { value: '术语总表' } })
-    fireEvent.change(screen.getByLabelText('文档正文'), { target: { value: '术语 A。' } })
+    fireEvent.change(screen.getByLabelText('文档标题'), {
+      target: { value: '术语总表' },
+    })
+    fireEvent.change(screen.getByLabelText('文档正文'), {
+      target: { value: '术语 A。' },
+    })
     fireEvent.click(screen.getByRole('button', { name: '保存' }))
     expect(spies.settingsActions.updateDocument).toHaveBeenCalledTimes(1)
     expect(spies.settingsActions.updateDocument).toHaveBeenCalledWith('doc-2', {
@@ -164,8 +177,12 @@ describe('文档编辑器弹窗（issue 56）', () => {
   it('Esc 关闭不保存；改动不派发', () => {
     const spies = setup()
     openEditor()
-    fireEvent.change(screen.getByLabelText('文档正文'), { target: { value: '改了但不存。' } })
-    fireEvent.keyDown(screen.getByRole('dialog', { name: '编辑设定文档' }), { key: 'Escape' })
+    fireEvent.change(screen.getByLabelText('文档正文'), {
+      target: { value: '改了但不存。' },
+    })
+    fireEvent.keyDown(screen.getByRole('dialog', { name: '编辑设定文档' }), {
+      key: 'Escape',
+    })
     expect(screen.queryByRole('dialog', { name: '编辑设定文档' })).toBeNull()
     expect(spies.settingsActions.updateDocument).not.toHaveBeenCalled()
   })

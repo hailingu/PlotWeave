@@ -39,12 +39,17 @@ function characterActions(settings: ProjectSettings, patchSettings: Patch) {
   return {
     addCharacter: () => {
       const entity = createCharacter('新角色')
-      patchSettings(settings, { ...settings, characters: [...settings.characters, entity] })
+      patchSettings(settings, {
+        ...settings,
+        characters: [...settings.characters, entity],
+      })
     },
     renameCharacter: (id: string, name: string) =>
       patchSettings(settings, {
         ...settings,
-        characters: settings.characters.map((c) => (c.id === id ? { ...c, name } : c)),
+        characters: settings.characters.map((c) =>
+          c.id === id ? { ...c, name } : c,
+        ),
       }),
     deleteCharacter: (id: string) =>
       patchSettings(settings, {
@@ -56,7 +61,9 @@ function characterActions(settings: ProjectSettings, patchSettings: Patch) {
       if (!settings.characters.some((c) => c.id === id)) return
       patchSettings(settings, {
         ...settings,
-        characters: settings.characters.map((c) => (c.id === id ? { ...c, ...p } : c)),
+        characters: settings.characters.map((c) =>
+          c.id === id ? { ...c, ...p } : c,
+        ),
       })
     },
   }
@@ -67,12 +74,17 @@ function locationActions(settings: ProjectSettings, patchSettings: Patch) {
   return {
     addLocation: () => {
       const entity = createLocation('新地点')
-      patchSettings(settings, { ...settings, locations: [...settings.locations, entity] })
+      patchSettings(settings, {
+        ...settings,
+        locations: [...settings.locations, entity],
+      })
     },
     renameLocation: (id: string, name: string) =>
       patchSettings(settings, {
         ...settings,
-        locations: settings.locations.map((l) => (l.id === id ? { ...l, name } : l)),
+        locations: settings.locations.map((l) =>
+          l.id === id ? { ...l, name } : l,
+        ),
       }),
     deleteLocation: (id: string) =>
       patchSettings(settings, {
@@ -84,7 +96,9 @@ function locationActions(settings: ProjectSettings, patchSettings: Patch) {
       if (!settings.locations.some((l) => l.id === id)) return
       patchSettings(settings, {
         ...settings,
-        locations: settings.locations.map((l) => (l.id === id ? { ...l, ...p } : l)),
+        locations: settings.locations.map((l) =>
+          l.id === id ? { ...l, ...p } : l,
+        ),
       })
     },
   }
@@ -95,13 +109,18 @@ function documentActions(settings: ProjectSettings, patchSettings: Patch) {
   return {
     addDocument: () => {
       const doc = createDocument()
-      patchSettings(settings, { ...settings, documents: [...(settings.documents ?? []), doc] })
+      patchSettings(settings, {
+        ...settings,
+        documents: [...(settings.documents ?? []), doc],
+      })
     },
     updateDocument: (id: string, p: DocumentPatch) => {
       if (!settings.documents?.some((d) => d.id === id)) return
       patchSettings(settings, {
         ...settings,
-        documents: settings.documents.map((d) => (d.id === id ? { ...d, ...p } : d)),
+        documents: settings.documents.map((d) =>
+          d.id === id ? { ...d, ...p } : d,
+        ),
       })
     },
     deleteDocument: (id: string) => {
@@ -125,7 +144,10 @@ export function useSettingsActions(
   const patchSettings = useCallback(
     (before: ProjectSettings, after: ProjectSettings) => {
       setSettings(after)
-      pushHistory({ undo: () => setSettings(before), redo: () => setSettings(after) })
+      pushHistory({
+        undo: () => setSettings(before),
+        redo: () => setSettings(after),
+      })
     },
     [setSettings, pushHistory],
   )

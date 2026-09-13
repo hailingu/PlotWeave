@@ -4,7 +4,12 @@
  * 记录边 id，空白菜单两者皆无（复用 ＋节点 的五类创建）；三者只写入菜单
  * 触发态，具体动作由 CanvasContextMenu 经既有命令通道触发。
  */
-import { useCallback, type Dispatch, type MouseEvent as ReactMouseEvent, type SetStateAction } from 'react'
+import {
+  useCallback,
+  type Dispatch,
+  type MouseEvent as ReactMouseEvent,
+  type SetStateAction,
+} from 'react'
 import type { Edge } from '@xyflow/react'
 import type { EditorDocument } from './useEditorDocument'
 import type { ContextMenuState } from './useEditorPanels'

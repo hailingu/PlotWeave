@@ -1,4 +1,11 @@
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -36,22 +43,24 @@ function writeExecutable(path: string, body: string): void {
 }
 
 /** 在隔离的外部依赖边界下执行真实门禁脚本或 Git hook。 */
-function runGate(target: string, options: GateOptions = {}): GateRun {
-  const sandbox = mkdtempSync(resolve(tmpdir(), 'plotweave-sonar-gate-'))
-  temporaryDirectories.push(sandbox)
+/** runGate 的命令替身路径集（sandbox 内固定布局）。 */
+interface GateStubPaths {
+  readonly logPath: string
+  readonly curlStdinPath: string
+  readonly scannerTokenPath: string
+  readonly coveragePath: string
+  readonly lockPath: string
+  readonly reportPath: string
+  readonly npmPath: string
+  readonly scannerPath: string
+  readonly curlPath: string
+}
 
-  const logPath = resolve(sandbox, 'calls.log')
-  const curlStdinPath = resolve(sandbox, 'curl-stdin.txt')
-  const scannerTokenPath = resolve(sandbox, 'scanner-token.txt')
-  const coveragePath = resolve(sandbox, 'coverage', 'lcov.info')
-  const lockPath = resolve(sandbox, 'sonar-gate.lock')
-  const reportPath = resolve(sandbox, '.scannerwork', 'report-task.txt')
-  const npmPath = resolve(sandbox, 'bin', 'npm')
-  const scannerPath = resolve(sandbox, 'bin', 'sonar-scanner')
-  const curlPath = resolve(sandbox, 'bin', 'curl')
-
+/** 外部命令替身（runGate 拆分，issue #99）：npm / sonar-scanner / curl 的
+ * 记录-并-受控返回替身脚本，按选项预置锁与覆盖率形态。 */
+function writeCommandStubs(paths: GateStubPaths, options: GateOptions): void {
   writeExecutable(
-    npmPath,
+    paths.npmPath,
     String.raw`printf 'npm %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
 if [ "$PLOTWEAVE_TEST_NPM_EXIT" -ne 0 ]; then
   exit "$PLOTWEAVE_TEST_NPM_EXIT"
@@ -77,10 +86,10 @@ esac`,
   )
 
   if (options.lockOccupied) {
-    mkdirSync(lockPath)
+    mkdirSync(paths.lockPath)
   }
   writeExecutable(
-    scannerPath,
+    paths.scannerPath,
     String.raw`printf 'sonar-scanner %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
 printf '%s' "$SONAR_TOKEN" > "$PLOTWEAVE_TEST_SCANNER_TOKEN"
 if [ "$PLOTWEAVE_TEST_SCANNER_EXIT" -ne 0 ]; then
@@ -93,7 +102,7 @@ printf '%s\n' \
   > "$PLOTWEAVE_SONAR_REPORT_PATH"`,
   )
   writeExecutable(
-    curlPath,
+    paths.curlPath,
     String.raw`printf 'curl %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
 cat > "$PLOTWEAVE_TEST_CURL_STDIN"
 case "$*" in
@@ -109,19 +118,26 @@ case "$*" in
     ;;
 esac`,
   )
+}
 
+/** 门禁运行环境（runGate 拆分，issue #99）：替身路径 + 受控选项；令牌不
+ * 继承宿主环境（默认无令牌，按用例显式注入）。 */
+function gateEnvironment(
+  paths: GateStubPaths,
+  options: GateOptions,
+): NodeJS.ProcessEnv {
   const environment: NodeJS.ProcessEnv = {
     ...process.env,
-    PLOTWEAVE_CURL_BIN: curlPath,
-    PLOTWEAVE_COVERAGE_REPORT_PATH: coveragePath,
-    PLOTWEAVE_SONAR_LOCK_DIRECTORY: lockPath,
+    PLOTWEAVE_CURL_BIN: paths.curlPath,
+    PLOTWEAVE_COVERAGE_REPORT_PATH: paths.coveragePath,
+    PLOTWEAVE_SONAR_LOCK_DIRECTORY: paths.lockPath,
     PLOTWEAVE_NODE_BIN: process.execPath,
-    PLOTWEAVE_NPM_BIN: npmPath,
-    PLOTWEAVE_SONAR_REPORT_PATH: reportPath,
-    PLOTWEAVE_SONAR_SCANNER_BIN: scannerPath,
-    PLOTWEAVE_TEST_LOG: logPath,
-    PLOTWEAVE_TEST_CURL_STDIN: curlStdinPath,
-    PLOTWEAVE_TEST_SCANNER_TOKEN: scannerTokenPath,
+    PLOTWEAVE_NPM_BIN: paths.npmPath,
+    PLOTWEAVE_SONAR_REPORT_PATH: paths.reportPath,
+    PLOTWEAVE_SONAR_SCANNER_BIN: paths.scannerPath,
+    PLOTWEAVE_TEST_LOG: paths.logPath,
+    PLOTWEAVE_TEST_CURL_STDIN: paths.curlStdinPath,
+    PLOTWEAVE_TEST_SCANNER_TOKEN: paths.scannerTokenPath,
     PLOTWEAVE_TEST_COVERAGE_MODE: options.coverageMode ?? 'valid',
     PLOTWEAVE_TEST_NPM_EXIT: String(options.npmExit ?? 0),
     PLOTWEAVE_TEST_QUALITY_GATE_STATUS: options.qualityGateStatus ?? 'OK',
@@ -141,17 +157,43 @@ esac`,
   if (options.plotweaveSonarToken !== undefined) {
     environment.PLOTWEAVE_SONAR_TOKEN = options.plotweaveSonarToken
   }
+  return environment
+}
+
+function runGate(target: string, options: GateOptions = {}): GateRun {
+  const sandbox = mkdtempSync(resolve(tmpdir(), 'plotweave-sonar-gate-'))
+  temporaryDirectories.push(sandbox)
+
+  const paths: GateStubPaths = {
+    logPath: resolve(sandbox, 'calls.log'),
+    curlStdinPath: resolve(sandbox, 'curl-stdin.txt'),
+    scannerTokenPath: resolve(sandbox, 'scanner-token.txt'),
+    coveragePath: resolve(sandbox, 'coverage', 'lcov.info'),
+    lockPath: resolve(sandbox, 'sonar-gate.lock'),
+    reportPath: resolve(sandbox, '.scannerwork', 'report-task.txt'),
+    npmPath: resolve(sandbox, 'bin', 'npm'),
+    scannerPath: resolve(sandbox, 'bin', 'sonar-scanner'),
+    curlPath: resolve(sandbox, 'bin', 'curl'),
+  }
+
+  writeCommandStubs(paths, options)
 
   const result = spawnSync('sh', [resolve(repositoryRoot, target)], {
     cwd: repositoryRoot,
     encoding: 'utf8',
-    env: environment,
+    env: gateEnvironment(paths, options),
   })
 
   return {
-    curlStdin: readFileSync(curlStdinPath, { encoding: 'utf8', flag: 'a+' }),
-    log: readFileSync(logPath, { encoding: 'utf8', flag: 'a+' }),
-    scannerToken: readFileSync(scannerTokenPath, { encoding: 'utf8', flag: 'a+' }),
+    curlStdin: readFileSync(paths.curlStdinPath, {
+      encoding: 'utf8',
+      flag: 'a+',
+    }),
+    log: readFileSync(paths.logPath, { encoding: 'utf8', flag: 'a+' }),
+    scannerToken: readFileSync(paths.scannerTokenPath, {
+      encoding: 'utf8',
+      flag: 'a+',
+    }),
     status: result.status,
     stderr: result.stderr,
     stdout: result.stdout,
@@ -172,12 +214,12 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
     const result = runGate('scripts/sonar-quality-gate.sh')
 
     expect(result.status).toBe(0)
-    expect(result.log.split('\n').filter(Boolean).map((line) => line.split(' ')[0])).toEqual([
-      'npm',
-      'sonar-scanner',
-      'curl',
-      'curl',
-    ])
+    expect(
+      result.log
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => line.split(' ')[0]),
+    ).toEqual(['npm', 'sonar-scanner', 'curl', 'curl'])
     expect(result.log).toContain('npm run test:coverage')
     expect(result.log).toContain('-Dsonar.qualitygate.wait=true')
     expect(result.log).toContain('-Dsonar.host.url=http://sonar.test')
@@ -188,7 +230,9 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
   })
 
   it('未显式配置 SonarQube 地址时阻止操作，避免误扫 SonarQube Cloud', () => {
-    const result = runGate('scripts/sonar-quality-gate.sh', { sonarHostUrl: null })
+    const result = runGate('scripts/sonar-quality-gate.sh', {
+      sonarHostUrl: null,
+    })
 
     expect(result.status).not.toBe(0)
     expect(result.log).toBe('')
@@ -203,17 +247,22 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
     expect(result.log).not.toContain('sonar-scanner')
   })
 
-  it.each(['missing', 'empty', 'malformed', 'uncovered'] as const)('覆盖率报告为 %s 时停止，不发布破坏性分析', (coverageMode) => {
-    const result = runGate('scripts/sonar-quality-gate.sh', { coverageMode })
+  it.each(['missing', 'empty', 'malformed', 'uncovered'] as const)(
+    '覆盖率报告为 %s 时停止，不发布破坏性分析',
+    (coverageMode) => {
+      const result = runGate('scripts/sonar-quality-gate.sh', { coverageMode })
 
-    expect(result.status).not.toBe(0)
-    expect(result.log).toContain('npm run test:coverage')
-    expect(result.log).not.toContain('sonar-scanner')
-    expect(`${result.stdout}${result.stderr}`).toContain('覆盖率报告')
-  })
+      expect(result.status).not.toBe(0)
+      expect(result.log).toContain('npm run test:coverage')
+      expect(result.log).not.toContain('sonar-scanner')
+      expect(`${result.stdout}${result.stderr}`).toContain('覆盖率报告')
+    },
+  )
 
   it('另一个门禁正在运行时停止，避免共享扫描目录互相覆盖', () => {
-    const result = runGate('scripts/sonar-quality-gate.sh', { lockOccupied: true })
+    const result = runGate('scripts/sonar-quality-gate.sh', {
+      lockOccupied: true,
+    })
 
     expect(result.status).not.toBe(0)
     expect(result.log).toBe('')
@@ -229,21 +278,27 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
   })
 
   it('Quality Gate 非 OK 时阻止提交', () => {
-    const result = runGate('scripts/sonar-quality-gate.sh', { qualityGateStatus: 'ERROR' })
+    const result = runGate('scripts/sonar-quality-gate.sh', {
+      qualityGateStatus: 'ERROR',
+    })
 
     expect(result.status).not.toBe(0)
     expect(`${result.stdout}${result.stderr}`).toContain('Quality Gate')
   })
 
   it('新增代码仍有未解决问题时阻止提交', () => {
-    const result = runGate('scripts/sonar-quality-gate.sh', { unresolvedIssues: 3 })
+    const result = runGate('scripts/sonar-quality-gate.sh', {
+      unresolvedIssues: 3,
+    })
 
     expect(result.status).not.toBe(0)
     expect(`${result.stdout}${result.stderr}`).toContain('3')
   })
 
   it('SONAR_TOKEN 经 curl 标准输入传 Authorization 头并以环境变量供扫描器，不进入命令参数或调用日志', () => {
-    const result = runGate('scripts/sonar-quality-gate.sh', { sonarToken: 'sqp_token-a.1' })
+    const result = runGate('scripts/sonar-quality-gate.sh', {
+      sonarToken: 'sqp_token-a.1',
+    })
 
     expect(result.status).toBe(0)
     expect(result.curlStdin).toContain('Authorization: Bearer sqp_token-a.1')
@@ -252,7 +307,9 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
   })
 
   it('未设 SONAR_TOKEN 时回退到 PLOTWEAVE_SONAR_TOKEN（如 ~/.zshrc 导出的值），扫描器与 API 调用同源', () => {
-    const result = runGate('scripts/sonar-quality-gate.sh', { plotweaveSonarToken: 'sqp_fallback~1' })
+    const result = runGate('scripts/sonar-quality-gate.sh', {
+      plotweaveSonarToken: 'sqp_fallback~1',
+    })
 
     expect(result.status).toBe(0)
     expect(result.curlStdin).toContain('Authorization: Bearer sqp_fallback~1')
@@ -280,19 +337,24 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
   })
 
   it('回退令牌含不支持字符时阻止操作', () => {
-    const result = runGate('scripts/sonar-quality-gate.sh', { plotweaveSonarToken: 'sqp_bad/token' })
+    const result = runGate('scripts/sonar-quality-gate.sh', {
+      plotweaveSonarToken: 'sqp_bad/token',
+    })
 
     expect(result.status).not.toBe(0)
     expect(`${result.stdout}${result.stderr}`).toContain('不支持的字符')
   })
 })
 
-describe.each(['.githooks/pre-commit', '.githooks/pre-push'])('%s', (hookPath) => {
-  it('执行同一个增量清零门禁并透传失败状态', () => {
-    const result = runGate(hookPath, { unresolvedIssues: 1 })
+describe.each(['.githooks/pre-commit', '.githooks/pre-push'])(
+  '%s',
+  (hookPath) => {
+    it('执行同一个增量清零门禁并透传失败状态', () => {
+      const result = runGate(hookPath, { unresolvedIssues: 1 })
 
-    expect(result.status).not.toBe(0)
-    expect(result.log).toContain('npm run test:coverage')
-    expect(`${result.stdout}${result.stderr}`).toContain('1')
-  })
-})
+      expect(result.status).not.toBe(0)
+      expect(result.log).toContain('npm run test:coverage')
+      expect(`${result.stdout}${result.stderr}`).toContain('1')
+    })
+  },
+)

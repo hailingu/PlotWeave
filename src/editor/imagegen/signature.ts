@@ -14,14 +14,13 @@ export interface ImageGenInput {
 
 /** 输入子集 → 规范化签名字符串（字段定序，序列化即比较）。 */
 export function imageGenSignature(input: ImageGenInput): string {
-  return JSON.stringify([
-    input.prompt.trim(),
-    input.model,
-    input.size,
-  ])
+  return JSON.stringify([input.prompt.trim(), input.model, input.size])
 }
 
 /** 触发时刻输入与当前节点输入是否仍一致（一致才允许写回结果）。 */
-export function signatureMatches(triggered: ImageGenInput, current: ImageGenInput): boolean {
+export function signatureMatches(
+  triggered: ImageGenInput,
+  current: ImageGenInput,
+): boolean {
   return imageGenSignature(triggered) === imageGenSignature(current)
 }

@@ -12,8 +12,16 @@ describe('归一化：设定集实体形状校验（§11.3，与 §9.3 upsert �
     const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
       settings: Record<string, Record<string, unknown>>
     }
-    doc.settings.characters['ch-bad'] = { id: 'ch-bad', name: null, gradient: 'g' }
-    doc.settings.characters['ch-blank'] = { id: 'ch-blank', name: '   ', gradient: 'g' }
+    doc.settings.characters['ch-bad'] = {
+      id: 'ch-bad',
+      name: null,
+      gradient: 'g',
+    }
+    doc.settings.characters['ch-blank'] = {
+      id: 'ch-blank',
+      name: '   ',
+      gradient: 'g',
+    }
     doc.settings.characters['ch-nog'] = { id: 'ch-nog', name: '无渐变' }
     doc.settings.locations['loc-bad'] = { id: 'loc-bad', name: 42 }
     const round = parseProject(doc)
@@ -24,7 +32,9 @@ describe('归一化：设定集实体形状校验（§11.3，与 §9.3 upsert �
     expect(round.warnings.some((w) => w.includes('ch-nog'))).toBe(true)
     expect(round.warnings.some((w) => w.includes('loc-bad'))).toBe(true)
     // 被隔离条目的既有引用按 §8.2.3 悬空标记，不清除 id
-    const scene = round.content.nodes.find((n) => n.id === 's1')!.data as { characterIds: string[] }
+    const scene = round.content.nodes.find((n) => n.id === 's1')!.data as {
+      characterIds: string[]
+    }
     expect(scene.characterIds).toEqual(['ch-1'])
   })
 
@@ -39,10 +49,18 @@ describe('归一化：设定集实体形状校验（§11.3，与 §9.3 upsert �
     expect(round.content.settings.characters[0].id).toBe('ch-1')
     expect(round.content.settings.locations[0].id).toBe('loc-1')
     // 场景对 ch-1/loc-1 的引用按键解析，漂移修复后不得误报悬空
-    expect(round.warnings.some((w) => w.includes('不存在的角色 ch-1'))).toBe(false)
-    expect(round.warnings.some((w) => w.includes('不存在的地点 loc-1'))).toBe(false)
-    expect(round.warnings.some((w) => w.includes('ch-1') && w.includes('内嵌 id'))).toBe(true)
-    expect(round.warnings.some((w) => w.includes('loc-1') && w.includes('内嵌 id'))).toBe(true)
+    expect(round.warnings.some((w) => w.includes('不存在的角色 ch-1'))).toBe(
+      false,
+    )
+    expect(round.warnings.some((w) => w.includes('不存在的地点 loc-1'))).toBe(
+      false,
+    )
+    expect(
+      round.warnings.some((w) => w.includes('ch-1') && w.includes('内嵌 id')),
+    ).toBe(true)
+    expect(
+      round.warnings.some((w) => w.includes('loc-1') && w.includes('内嵌 id')),
+    ).toBe(true)
   })
 
   it('可选字段（bio/note/description/avatarAssetId）类型错误：剥离该字段并警告，条目保留', () => {
@@ -54,9 +72,19 @@ describe('归一化：设定集实体形状校验（§11.3，与 §9.3 upsert �
     doc.settings.locations['loc-1'].note = []
     doc.settings.props['pr-1'] = { id: 'pr-1', name: '怀表', description: 42 }
     const round = parseProject(doc)
-    expect(round.content.settings.characters[0]).toEqual({ id: 'ch-1', name: '林晚', gradient: 'g-lin' })
-    expect(round.content.settings.locations[0]).toEqual({ id: 'loc-1', name: '天台' })
-    expect(round.content.settings.props?.[0]).toEqual({ id: 'pr-1', name: '怀表' })
+    expect(round.content.settings.characters[0]).toEqual({
+      id: 'ch-1',
+      name: '林晚',
+      gradient: 'g-lin',
+    })
+    expect(round.content.settings.locations[0]).toEqual({
+      id: 'loc-1',
+      name: '天台',
+    })
+    expect(round.content.settings.props?.[0]).toEqual({
+      id: 'pr-1',
+      name: '怀表',
+    })
     expect(round.warnings.length).toBeGreaterThan(0)
   })
 })
@@ -73,19 +101,27 @@ describe('归一化：键控桶空记录键重发与同桶引用改写（§11.1 
     const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as DirtyDoc
     doc.settings.characters[''] = { id: '', name: '幽灵', gradient: 'g-ghost' }
     const scene = doc.graph.nodes.find((n) => n.id === 's1')!
-    ;(scene.data as { spec: { characterIds: string[] } }).spec.characterIds.push('')
+    ;(
+      scene.data as { spec: { characterIds: string[] } }
+    ).spec.characterIds.push('')
     const dlg = doc.graph.nodes.find((n) => n.id === 'd1')!
-    ;(dlg.data as { spec: { lines: { speaker?: string }[] } }).spec.lines[0].speaker = ''
+    ;(
+      dlg.data as { spec: { lines: { speaker?: string }[] } }
+    ).spec.lines[0].speaker = ''
     const round = parseProject(doc)
-    const ghost = round.content.settings.characters.find((c) => c.name === '幽灵')!
+    const ghost = round.content.settings.characters.find(
+      (c) => c.name === '幽灵',
+    )!
     expect(ghost.id.trim().length).toBeGreaterThan(0)
     const sceneData = round.content.nodes.find((n) => n.id === 's1')!.data as {
       characterIds: string[]
     }
     expect(sceneData.characterIds).toContain(ghost.id)
-    const lines = (round.content.nodes.find((n) => n.id === 'd1')!.data as {
-      lines: { speaker?: string }[]
-    }).lines
+    const lines = (
+      round.content.nodes.find((n) => n.id === 'd1')!.data as {
+        lines: { speaker?: string }[]
+      }
+    ).lines
     expect(lines[0].speaker).toBe(ghost.id)
     // 改写后引用解析到新实体，不误报悬空
     expect(round.warnings.some((w) => w.includes('不存在的角色'))).toBe(false)
@@ -99,7 +135,9 @@ describe('归一化：键控桶空记录键重发与同桶引用改写（§11.1 
     const scene = doc.graph.nodes.find((n) => n.id === 's1')!
     ;(scene.data as { spec: { locationId?: string } }).spec.locationId = '  '
     const round = parseProject(doc)
-    const ruin = round.content.settings.locations.find((l) => l.name === '废墟')!
+    const ruin = round.content.settings.locations.find(
+      (l) => l.name === '废墟',
+    )!
     expect(ruin.id.trim().length).toBeGreaterThan(0)
     const sceneData = round.content.nodes.find((n) => n.id === 's1')!.data as {
       locationId?: string
@@ -125,13 +163,17 @@ describe('归一化：键控桶空记录键重发与同桶引用改写（§11.1 
     ]
     const round = parseProject(doc)
     const byId = round.content.assets?.byId ?? {}
-    const assetId = Object.keys(byId).find((k) => byId[k].relPath === 'assets/ghost.wav')!
+    const assetId = Object.keys(byId).find(
+      (k) => byId[k].relPath === 'assets/ghost.wav',
+    )!
     expect(assetId.trim().length).toBeGreaterThan(0)
     const ch = round.content.settings.characters.find((c) => c.id === 'ch-1')!
     expect((ch as { avatarAssetId?: string }).avatarAssetId).toBe(assetId)
-    const refs = (round.content.nodes.find((n) => n.id === 'sh1')!.data as {
-      refs: { assetId?: string }[]
-    }).refs
+    const refs = (
+      round.content.nodes.find((n) => n.id === 'sh1')!.data as {
+        refs: { assetId?: string }[]
+      }
+    ).refs
     expect(refs[0].assetId).toBe(assetId)
     expect(round.warnings.some((w) => w.includes('不存在的目标'))).toBe(false)
     expect(round.warnings.some((w) => w.includes('重发'))).toBe(true)
@@ -159,12 +201,16 @@ describe('归一化：设定文档 relatedIds 成员校验（§6/§11.1 第 3 �
       },
     }
     const round = parseProject(doc)
-    const d = (round.content.settings.documents ?? []).find((x) => x.id === 'doc-1')!
+    const d = (round.content.settings.documents ?? []).find(
+      (x) => x.id === 'doc-1',
+    )!
     expect(d.relatedIds).toEqual([
       { kind: 'character', id: 'ch-1' },
       { kind: 'location', id: 'loc-1' },
     ])
-    expect(round.warnings.filter((w) => w.includes('doc-1')).length).toBeGreaterThanOrEqual(4)
+    expect(
+      round.warnings.filter((w) => w.includes('doc-1')).length,
+    ).toBeGreaterThanOrEqual(4)
   })
 })
 
@@ -193,7 +239,12 @@ describe('归一化：设定文档的键修复与 v0 时间戳保真（§6/§11.
   it('v0 迁移保留旧档 updatedAt 瞬间：createdAt 缺省与之同刻（⑤），不用迁移时刻', () => {
     const v0 = {
       schemaVersion: 0,
-      project: { id: 'p-old', name: '旧剧', createdAt: '', updatedAt: '2025-12-31T23:59:59.000Z' },
+      project: {
+        id: 'p-old',
+        name: '旧剧',
+        createdAt: '',
+        updatedAt: '2025-12-31T23:59:59.000Z',
+      },
       graph: { nodes: [], edges: [] },
       settings: { characters: [], locations: [] },
       episodeTitles: {},
@@ -202,7 +253,11 @@ describe('归一化：设定文档的键修复与 v0 时间戳保真（§6/§11.
     const round = parseProject(v0)
     expect(round.content.createdAt).toBe('2025-12-31T23:59:59.000Z')
     // 信封 updatedAt 同为旧档瞬间（而非本次转换时刻）
-    const envelope = serializeProject(round.content, 'p-old', new Date('2026-09-01T00:00:00.000Z'))
+    const envelope = serializeProject(
+      round.content,
+      'p-old',
+      new Date('2026-09-01T00:00:00.000Z'),
+    )
     expect(envelope.project.createdAt).toBe('2025-12-31T23:59:59.000Z')
   })
 })
@@ -210,32 +265,61 @@ describe('归一化：设定文档的键修复与 v0 时间戳保真（§6/§11.
 describe('归一化：空白 id 引用的重发改写贯通与节点时间戳透传（§6/§11.1 第 3 步/迁移链 ⑤/§4.1）', () => {
   it('v1 relatedIds 指向空白键实体：随空键重发改写到新 id，不再提前删除', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
-      settings: { characters: Record<string, Record<string, unknown>>; documents: Record<string, Record<string, unknown>> }
+      settings: {
+        characters: Record<string, Record<string, unknown>>
+        documents: Record<string, Record<string, unknown>>
+      }
     }
     doc.settings.characters = { '': { id: '', name: '林', gradient: 'g' } }
     doc.settings.documents = {
-      'doc-1': { id: 'doc-1', title: '小传', body: '正文', relatedIds: [{ kind: 'character', id: '' }] },
+      'doc-1': {
+        id: 'doc-1',
+        title: '小传',
+        body: '正文',
+        relatedIds: [{ kind: 'character', id: '' }],
+      },
     }
     const round = parseProject(doc)
     const ch = round.content.settings.characters.find((c) => c.name === '林')!
     expect(ch.id.startsWith('ch-')).toBe(true)
-    const rel = (round.content.settings.documents ?? []).find((d) => d.id === 'doc-1')!.relatedIds
+    const rel = (round.content.settings.documents ?? []).find(
+      (d) => d.id === 'doc-1',
+    )!.relatedIds
     expect(rel).toEqual([{ kind: 'character', id: ch.id }])
   })
 
   it('v0 空白实体 id 重发时改写节点引用：characterIds/speaker/locationId 不悬空', () => {
     const v0 = {
       schemaVersion: 0,
-      project: { id: 'p-old', name: '旧剧', createdAt: '', updatedAt: '2026-01-01T00:00:00.000Z' },
+      project: {
+        id: 'p-old',
+        name: '旧剧',
+        createdAt: '',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
       graph: {
         nodes: [
           {
-            id: 's1', type: 'scene', position: { x: 0, y: 0 },
-            data: { name: '场一', sceneNo: 1, interior: true, synopsis: '', characterIds: [''], locationId: '' },
+            id: 's1',
+            type: 'scene',
+            position: { x: 0, y: 0 },
+            data: {
+              name: '场一',
+              sceneNo: 1,
+              interior: true,
+              synopsis: '',
+              characterIds: [''],
+              locationId: '',
+            },
           },
           {
-            id: 'd1', type: 'dialogue', position: { x: 0, y: 0 },
-            data: { name: '对白', lines: [{ kind: 'line' as const, speaker: '', text: '台词' }] },
+            id: 'd1',
+            type: 'dialogue',
+            position: { x: 0, y: 0 },
+            data: {
+              name: '对白',
+              lines: [{ kind: 'line' as const, speaker: '', text: '台词' }],
+            },
           },
         ],
         edges: [],
@@ -249,7 +333,8 @@ describe('归一化：空白 id 引用的重发改写贯通与节点时间戳透
     }
     const round = parseProject(v0)
     const spec = round.content.nodes.find((n) => n.id === 's1')!.data as {
-      characterIds: string[]; locationId?: string
+      characterIds: string[]
+      locationId?: string
     }
     expect(spec.characterIds).toHaveLength(1)
     expect(spec.characterIds[0].startsWith('ch-')).toBe(true)
@@ -265,7 +350,9 @@ describe('归一化：空白 id 引用的重发改写贯通与节点时间戳透
     doc.graph.nodes[0].data.meta.createdAt = '2026-01-02T03:04:05.000Z'
     doc.graph.nodes[0].data.meta.updatedAt = '2026-02-03T04:05:06.000Z'
     const round = parseProject(doc)
-    const node = round.content.nodes[0] as { meta?: { createdAt?: string; updatedAt?: string } }
+    const node = round.content.nodes[0] as {
+      meta?: { createdAt?: string; updatedAt?: string }
+    }
     expect(node.meta?.createdAt).toBe('2026-01-02T03:04:05.000Z')
     expect(node.meta?.updatedAt).toBe('2026-02-03T04:05:06.000Z')
     const again = serializeProject(round.content, 'p-1', NOW)
@@ -282,15 +369,28 @@ describe('归一化：角色 id/token 专项修复（§6 子值域 [A-Za-z0-9_-]
       { id: 'bad]id', name: '林', gradient: 'g' },
       { id: 'x'.repeat(65), name: '陈', gradient: 'g' },
     ] as never
-    ;(content.nodes.find((n) => n.id === 's1')!.data as Record<string, unknown>).characterIds = [
-      'bad]id',
-      'x'.repeat(65),
-    ]
+    ;(
+      content.nodes.find((n) => n.id === 's1')!.data as Record<string, unknown>
+    ).characterIds = ['bad]id', 'x'.repeat(65)]
     const dialogue = content.nodes.find((n) => n.id === 'd1')!.data as {
-      lines: Array<{ id: string; kind: string; text: string; speaker: string; side: string; vo: boolean }>
+      lines: Array<{
+        id: string
+        kind: string
+        text: string
+        speaker: string
+        side: string
+        vo: boolean
+      }>
     }
     dialogue.lines = [
-      { id: 'line-1', kind: 'line', speaker: 'bad]id', text: '喂 @[character:bad]id] 看这里', side: 'left', vo: false },
+      {
+        id: 'line-1',
+        kind: 'line',
+        speaker: 'bad]id',
+        text: '喂 @[character:bad]id] 看这里',
+        side: 'left',
+        vo: false,
+      },
     ]
     const round = parseProject(serializeProject(content, 'p-1', NOW))
     const chars = round.content.settings.characters
@@ -319,10 +419,11 @@ describe('归一化：角色 id/token 专项修复（§6 子值域 [A-Za-z0-9_-]
     ]
     const round = parseProject(serializeProject(content, 'p-1', NOW))
     // 红：普通 {} 赋值触发原型 setter，条目不进 Object.entries/Object.values 而丢失
-    expect(round.content.settings.characters.map((c) => c.name)).toContain('原型')
+    expect(round.content.settings.characters.map((c) => c.name)).toContain(
+      '原型',
+    )
     // 回存也不得丢（漏带即下次保存永久删除该实体）
     const out = serializeProject(round.content, 'p-1', NOW)
     expect(Object.keys(out.settings.characters)).toContain('__proto__')
   })
 })
-

@@ -9,7 +9,10 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { NodeEditContext, type NodeEditApi } from '../../nodeEdit'
 import type { NodeDataPatch } from '../patch'
 import type { ProjectSettings } from '../../settings'
-import NodeSettingsPanel, { EditableName, type PanelNode } from './NodeSettingsPanel'
+import NodeSettingsPanel, {
+  EditableName,
+  type PanelNode,
+} from './NodeSettingsPanel'
 
 afterEach(cleanup)
 
@@ -35,8 +38,20 @@ function setup(node: PanelNode) {
     settings: structuredClone(SETTINGS),
     assets: {
       byId: {
-        'a-1': { id: 'a-1', relPath: 'assets/a-1.png', mime: 'image/png', source: 'upload', createdAt: '2026-01-01T00:00:00.000Z' },
-        'a-aud': { id: 'a-aud', relPath: 'assets/a-aud.mp3', mime: 'audio/mpeg', source: 'upload', createdAt: '2026-01-01T00:00:00.000Z' },
+        'a-1': {
+          id: 'a-1',
+          relPath: 'assets/a-1.png',
+          mime: 'image/png',
+          source: 'upload',
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
+        'a-aud': {
+          id: 'a-aud',
+          relPath: 'assets/a-aud.mp3',
+          mime: 'audio/mpeg',
+          source: 'upload',
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
       },
     },
   }
@@ -50,8 +65,11 @@ function setup(node: PanelNode) {
 
 /** 取 patchNode 第 n 次调用的补丁本体（判别命令剥去 nodeType 外壳）。 */
 const patchOf = (api: NodeEditApi, n = 0): Record<string, unknown> =>
-  ((api.patchNode as ReturnType<typeof vi.fn>).mock.calls[n][1] as NodeDataPatch)
-    .patch as Record<string, unknown>
+  (
+    (api.patchNode as ReturnType<typeof vi.fn>).mock.calls[
+      n
+    ][1] as NodeDataPatch
+  ).patch as Record<string, unknown>
 
 const sceneNode: PanelNode = {
   id: 'n1',
@@ -70,7 +88,9 @@ const sceneNode: PanelNode = {
 describe('SceneForm', () => {
   it('名称/梗概实时 patch；地点下拉可清空为未指定', () => {
     const { api } = setup(sceneNode)
-    fireEvent.change(screen.getByDisplayValue('场一'), { target: { value: '场一改' } })
+    fireEvent.change(screen.getByDisplayValue('场一'), {
+      target: { value: '场一改' },
+    })
     expect(patchOf(api)).toEqual({ name: '场一改' })
 
     fireEvent.change(screen.getByRole('combobox'), { target: { value: '' } })
@@ -93,8 +113,12 @@ describe('SceneForm', () => {
 
   it('场次/集归属拒绝非安全整数（§4.1 正安全整数域：有限但越界如 1e20 落载后会被顺位重发，输入边界同域拒收、保留原值）', () => {
     const { api } = setup(sceneNode)
-    fireEvent.change(screen.getByDisplayValue('1'), { target: { value: '100000000000000000000' } })
-    fireEvent.change(screen.getByPlaceholderText('未分集'), { target: { value: '100000000000000000000' } })
+    fireEvent.change(screen.getByDisplayValue('1'), {
+      target: { value: '100000000000000000000' },
+    })
+    fireEvent.change(screen.getByPlaceholderText('未分集'), {
+      target: { value: '100000000000000000000' },
+    })
     expect(api.patchNode).not.toHaveBeenCalled()
   })
 
@@ -104,14 +128,23 @@ describe('SceneForm', () => {
     // 断言目标补丁出现过即可，不依赖调用次序
     const segButtons = container.querySelectorAll('.pw-set-seg button')
     fireEvent.click(segButtons[1])
-    expect(api.patchNode).toHaveBeenCalledWith('n1', { nodeType: 'scene', patch: { interior: false } })
+    expect(api.patchNode).toHaveBeenCalledWith('n1', {
+      nodeType: 'scene',
+      patch: { interior: false },
+    })
 
     // happy-dom 中 label 包裹的 chip 可访问名串扰，用结构选择器：chips[1] = 苏珩
     const chips = container.querySelectorAll('.pw-set-chip')
     fireEvent.click(chips[1])
-    expect(api.patchNode).toHaveBeenCalledWith('n1', { nodeType: 'scene', patch: { characterIds: ['c1', 'c2'] } })
+    expect(api.patchNode).toHaveBeenCalledWith('n1', {
+      nodeType: 'scene',
+      patch: { characterIds: ['c1', 'c2'] },
+    })
     fireEvent.click(chips[0])
-    expect(api.patchNode).toHaveBeenCalledWith('n1', { nodeType: 'scene', patch: { characterIds: [] } })
+    expect(api.patchNode).toHaveBeenCalledWith('n1', {
+      nodeType: 'scene',
+      patch: { characterIds: [] },
+    })
   })
 
   it('集归属：输入归一为正整数；清空/✕ 移出集传 undefined', () => {
@@ -170,7 +203,9 @@ describe('BeatForm（IME 组合输入，issue #42）', () => {
 
   it('非组合态直接输入仍即时 patch（英文输入与既有基调编辑不受影响）', () => {
     const { api } = setup(beatNode)
-    fireEvent.change(screen.getByLabelText('基调'), { target: { value: 'tension' } })
+    fireEvent.change(screen.getByLabelText('基调'), {
+      target: { value: 'tension' },
+    })
     expect(patchOf(api)).toEqual({ tone: 'tension' })
   })
 
@@ -193,7 +228,13 @@ describe('DialogueForm', () => {
     data: {
       name: '对白',
       lines: [
-        { id: 'line-t1', kind: 'line', speaker: 'c1', side: 'left', text: '第一句' },
+        {
+          id: 'line-t1',
+          kind: 'line',
+          speaker: 'c1',
+          side: 'left',
+          text: '第一句',
+        },
         { id: 'line-t2', kind: 'action', text: '他转身' },
       ],
     },
@@ -204,7 +245,12 @@ describe('DialogueForm', () => {
     fireEvent.click(screen.getByRole('button', { name: '＋ 添加台词' }))
     const lines = patchOf(api).lines as Array<Record<string, unknown>>
     expect(lines).toHaveLength(3)
-    expect(lines[2]).toMatchObject({ kind: 'line', speaker: 'c1', side: 'left', text: '' })
+    expect(lines[2]).toMatchObject({
+      kind: 'line',
+      speaker: 'c1',
+      side: 'left',
+      text: '',
+    })
     expect(lines[2].id).toMatch(/^line-/)
 
     const delButtons = screen.getAllByRole('button', { name: '删除此行' })
@@ -218,7 +264,11 @@ describe('DialogueForm', () => {
     const kindSelects = screen.getAllByRole('combobox', { name: '行类型' })
     fireEvent.change(kindSelects[0], { target: { value: 'action' } })
     const lines = patchOf(api).lines as Array<Record<string, unknown>>
-    expect(lines[0]).toMatchObject({ id: 'line-t1', kind: 'action', text: '第一句' })
+    expect(lines[0]).toMatchObject({
+      id: 'line-t1',
+      kind: 'action',
+      text: '第一句',
+    })
     expect(lines[0].speaker).toBeUndefined()
     expect(lines[0].side).toBeUndefined()
 
@@ -229,7 +279,9 @@ describe('DialogueForm', () => {
 
   it('台词文本逐行 patch；说话人可经下拉改派', () => {
     const { api } = setup(dialogueNode)
-    fireEvent.change(screen.getByDisplayValue('第一句'), { target: { value: '改后' } })
+    fireEvent.change(screen.getByDisplayValue('第一句'), {
+      target: { value: '改后' },
+    })
     const lines = patchOf(api).lines as Array<{ text: string }>
     expect(lines[0].text).toBe('改后')
 
@@ -247,17 +299,28 @@ describe('BranchForm', () => {
     type: 'branch',
     data: {
       prompt: '她该怎么办？',
-      options: [{ id: 'oa', label: ' A ' }, { id: 'ob', label: 'B' }],
+      options: [
+        { id: 'oa', label: ' A ' },
+        { id: 'ob', label: 'B' },
+      ],
     },
   }
 
   it('选项编辑（保 id）/添加（自动编号字母 + 新 id）/删除', () => {
     const { api } = setup(branchNode)
-    fireEvent.change(screen.getByDisplayValue('B'), { target: { value: '离开' } })
-    expect(patchOf(api).options).toEqual([{ id: 'oa', label: ' A ' }, { id: 'ob', label: '离开' }])
+    fireEvent.change(screen.getByDisplayValue('B'), {
+      target: { value: '离开' },
+    })
+    expect(patchOf(api).options).toEqual([
+      { id: 'oa', label: ' A ' },
+      { id: 'ob', label: '离开' },
+    ])
 
     fireEvent.click(screen.getByRole('button', { name: '＋ 添加选项' }))
-    const grown = patchOf(api, 1).options as Array<{ id: string; label: string }>
+    const grown = patchOf(api, 1).options as Array<{
+      id: string
+      label: string
+    }>
     expect(grown).toHaveLength(3)
     expect(grown[2].label).toBe('选项 C')
     expect(grown[2].id).toMatch(/^opt-/)
@@ -282,11 +345,15 @@ describe('ShotForm', () => {
 
   it('镜号非法输入回退 1；引用位可改类型/文案、增删', () => {
     const { api } = setup(shotNode)
-    fireEvent.change(screen.getByDisplayValue('3'), { target: { value: 'abc' } })
+    fireEvent.change(screen.getByDisplayValue('3'), {
+      target: { value: 'abc' },
+    })
     expect(patchOf(api)).toEqual({ shotNo: 1 })
 
     // 非安全整数同属非法（§4.1 正安全整数域，落载后会被顺位重发）：同款回退 1
-    fireEvent.change(screen.getByDisplayValue('3'), { target: { value: '100000000000000000000' } })
+    fireEvent.change(screen.getByDisplayValue('3'), {
+      target: { value: '100000000000000000000' },
+    })
     expect(patchOf(api, 1)).toEqual({ shotNo: 1 })
 
     fireEvent.change(screen.getByRole('combobox', { name: '引用类型' }), {
@@ -296,7 +363,11 @@ describe('ShotForm', () => {
     expect(refs[0].kind).toBe('audio')
 
     fireEvent.click(screen.getByRole('button', { name: '＋ 添加引用' }))
-    const added = patchOf(api, 3).refs as Array<{ id: string; kind: string; label: string }>
+    const added = patchOf(api, 3).refs as Array<{
+      id: string
+      kind: string
+      label: string
+    }>
     expect(added).toHaveLength(2)
     expect(added[1]).toMatchObject({ kind: 'character', label: '' })
     expect(added[1].id).toMatch(/^ref-/)
@@ -325,8 +396,12 @@ describe('ShotForm', () => {
     const { api } = setup(assetShot)
     // 引用位显示资产 id 占位；输入文字即切换为自由位（§4.2 assetId/label 互斥——
     // 双字段形态保存成功但下次加载被归一化静默删除）
-    fireEvent.change(screen.getByPlaceholderText(/a-1/), { target: { value: '人物垫图' } })
-    expect(patchOf(api).refs).toEqual([{ id: 'r1', kind: 'character', label: '人物垫图' }])
+    fireEvent.change(screen.getByPlaceholderText(/a-1/), {
+      target: { value: '人物垫图' },
+    })
+    expect(patchOf(api).refs).toEqual([
+      { id: 'r1', kind: 'character', label: '人物垫图' },
+    ])
   })
 
   it('资产引用位的 kind 切换受 MIME 家族约束：音频资产不可改为垫图/底图用途', () => {
@@ -343,9 +418,9 @@ describe('ShotForm', () => {
     }
     setup(assetShot)
     const optionOf = (value: string) =>
-      screen.getByRole('combobox', { name: '引用类型' }).querySelector(
-        `option[value="${value}"]`,
-      ) as HTMLOptionElement | null
+      screen
+        .getByRole('combobox', { name: '引用类型' })
+        .querySelector(`option[value="${value}"]`) as HTMLOptionElement | null
     // 错配 kind（§4.2：audio 限 audio/*）保存后重开只是"不可用引用"警告——
     // 编辑边界直接禁用；本 kind 与同家族切换保持可用
     expect(optionOf('audio')?.disabled).toBe(false)
@@ -368,7 +443,9 @@ describe('ShotForm', () => {
     const selects = screen.getAllByRole('combobox', { name: '引用类型' })
     const lastSelect = selects[selects.length - 1]
     const freeOptionOf = (value: string) =>
-      lastSelect.querySelector(`option[value="${value}"]`) as HTMLOptionElement | null
+      lastSelect.querySelector(
+        `option[value="${value}"]`,
+      ) as HTMLOptionElement | null
     expect(freeOptionOf('audio')?.disabled).toBe(false)
     expect(freeOptionOf('character')?.disabled).toBe(false)
     expect(freeOptionOf('location')?.disabled).toBe(false)
@@ -388,7 +465,9 @@ describe('面板动作', () => {
 describe('EditableName', () => {
   it('双击进入编辑，Enter（blur）提交去空白的新名', () => {
     const onChange = vi.fn()
-    render(<EditableName value="旧名" onChange={onChange} ariaLabel="节点名称" />)
+    render(
+      <EditableName value="旧名" onChange={onChange} ariaLabel="节点名称" />,
+    )
     fireEvent.doubleClick(screen.getByRole('button', { name: '旧名' }))
     const input = screen.getByRole('textbox', { name: '节点名称' })
     fireEvent.change(input, { target: { value: '  新名  ' } })
@@ -399,7 +478,9 @@ describe('EditableName', () => {
 
   it('Esc 取消；空值与未改名不提交', () => {
     const onChange = vi.fn()
-    render(<EditableName value="旧名" onChange={onChange} ariaLabel="节点名称" />)
+    render(
+      <EditableName value="旧名" onChange={onChange} ariaLabel="节点名称" />,
+    )
     fireEvent.doubleClick(screen.getByRole('button', { name: '旧名' }))
     let input = screen.getByRole('textbox', { name: '节点名称' })
     fireEvent.change(input, { target: { value: '被丢弃' } })
@@ -416,13 +497,22 @@ describe('EditableName', () => {
 
   it('singleClick 模式单击进入编辑；键盘 Enter 也可进入', () => {
     const onChange = vi.fn()
-    render(<EditableName value="项目" onChange={onChange} ariaLabel="项目名" singleClick />)
+    render(
+      <EditableName
+        value="项目"
+        onChange={onChange}
+        ariaLabel="项目名"
+        singleClick
+      />,
+    )
     fireEvent.click(screen.getByRole('button', { name: '项目' }))
     expect(screen.getByRole('textbox', { name: '项目名' })).toBeTruthy()
 
     cleanup()
     render(<EditableName value="节点" onChange={onChange} ariaLabel="节点名" />)
-    fireEvent.keyDown(screen.getByRole('button', { name: '节点' }), { key: 'Enter' })
+    fireEvent.keyDown(screen.getByRole('button', { name: '节点' }), {
+      key: 'Enter',
+    })
     expect(screen.getByRole('textbox', { name: '节点名' })).toBeTruthy()
   })
 })

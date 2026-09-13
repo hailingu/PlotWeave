@@ -68,7 +68,9 @@ export function normalizeNodeFields(
     // 再补稳定 id
     out.lines = normalizeIds(
       (out.lines as unknown[]).map((l) =>
-        plainObject(l) && l.kind === undefined ? { ...l, kind: 'line' as const } : l,
+        plainObject(l) && l.kind === undefined
+          ? { ...l, kind: 'line' as const }
+          : l,
       ),
       'line',
     )
@@ -87,7 +89,10 @@ export function normalizeNodeFields(
           const prev = existing[i]
           return prev !== undefined ? { id: prev.id, label: o } : { label: o }
         }
-        if (plainObject(o) && (typeof o.id !== 'string' || o.id.trim() === '')) {
+        if (
+          plainObject(o) &&
+          (typeof o.id !== 'string' || o.id.trim() === '')
+        ) {
           const prev = existing[i]
           if (prev !== undefined) return { ...o, id: prev.id }
         }
@@ -108,8 +113,13 @@ export function normalizeNodeFields(
  * o.id 解引用直接抛异常，对象形态 label 进画布后还会被 BranchNode 当
  * React 子节点渲染而崩溃——返回拒绝原因，null 表示通过。 */
 export function branchOptionsError(options: unknown[]): string | null {
-  const bad = options.some((o) => typeof o !== 'string' && (!plainObject(o) || typeof o.label !== 'string'))
-  return bad ? '分支 options 含异型成员（须为字符串或带字符串 label 的对象）' : null
+  const bad = options.some(
+    (o) =>
+      typeof o !== 'string' && (!plainObject(o) || typeof o.label !== 'string'),
+  )
+  return bad
+    ? '分支 options 含异型成员（须为字符串或带字符串 label 的对象）'
+    : null
 }
 
 /** options 覆盖的按位简写形态判定（评审 5169767128）：成员全为字符串或
@@ -127,15 +137,20 @@ export const isPositionalOptions = (raw: unknown): boolean =>
  * 与加载侧归一化同域）——不存在的资产或用途错配的引用进画布即悬空/不可用，
  * 保存虽成功、加载侧只会标记问题，AI 边界须前置拒绝。返回拒绝原因；
  * null 表示通过。 */
-function shotRefMemberIssue(r: unknown, assets: ReadonlyMap<string, string>): string | null {
+function shotRefMemberIssue(
+  r: unknown,
+  assets: ReadonlyMap<string, string>,
+): string | null {
   if (!plainObject(r)) return '不是普通对象'
   if (r.kind !== 'character' && r.kind !== 'location' && r.kind !== 'audio') {
     return `kind 未知（${String(r.kind)}）`
   }
-  if ('assetId' in r && 'label' in r) return 'assetId 与 label 并存（引用位与自由位互斥）'
+  if ('assetId' in r && 'label' in r)
+    return 'assetId 与 label 并存（引用位与自由位互斥）'
   const hasAsset = typeof r.assetId === 'string' && r.assetId.trim() !== ''
   const hasLabel = typeof r.label === 'string'
-  if (hasAsset === hasLabel) return 'assetId 非空白字符串 / label 字符串须恰居其一'
+  if (hasAsset === hasLabel)
+    return 'assetId 非空白字符串 / label 字符串须恰居其一'
   if (!hasAsset) return null
   const mime = assets.get(r.assetId as string)
   if (mime === undefined) {
@@ -156,13 +171,17 @@ function scalarShapeIssues(
 ): string[] {
   const issues: string[] = []
   const str = (f: string) => {
-    if (fields[f] !== undefined && typeof fields[f] !== 'string') issues.push(`${f} 须为字符串`)
+    if (fields[f] !== undefined && typeof fields[f] !== 'string')
+      issues.push(`${f} 须为字符串`)
   }
   // 数值编号域（§9.3 命令边界）：正安全整数——放行 1.5/0/-2 这类值会被
   // 下次加载的归一化静默重编号/删除分集，接受的 AI 输出重开即变样
   const positiveSafeInt = (f: string) => {
     const v = fields[f]
-    if (v !== undefined && !(typeof v === 'number' && Number.isSafeInteger(v) && v > 0)) {
+    if (
+      v !== undefined &&
+      !(typeof v === 'number' && Number.isSafeInteger(v) && v > 0)
+    ) {
       issues.push(`${f} 须为正整数`)
     }
   }
@@ -173,16 +192,25 @@ function scalarShapeIssues(
       // 加载侧归一化移除——接受的 AI 改动不得重开即变样
       if (
         fields.locationId !== undefined &&
-        (typeof fields.locationId !== 'string' || fields.locationId.trim() === '')
+        (typeof fields.locationId !== 'string' ||
+          fields.locationId.trim() === '')
       ) {
         issues.push('locationId 须为非空白字符串')
       } else if (typeof fields.locationId === 'string') {
-        const refIssue = entityRefIssue(fields.locationId, 'location', 'locationId', entities)
+        const refIssue = entityRefIssue(
+          fields.locationId,
+          'location',
+          'locationId',
+          entities,
+        )
         if (refIssue) issues.push(refIssue)
       }
       positiveSafeInt('sceneNo')
       positiveSafeInt('episodeNo')
-      if (fields.interior !== undefined && typeof fields.interior !== 'boolean') {
+      if (
+        fields.interior !== undefined &&
+        typeof fields.interior !== 'boolean'
+      ) {
         issues.push('interior 须为布尔')
       }
       break
@@ -210,7 +238,10 @@ function scalarShapeIssues(
 }
 
 /** shot.refs 列表的成员校验（S3776 拆解）：返回首见成员问题文案或 null。 */
-function shotRefsIssue(refs: unknown, assets: ReadonlyMap<string, string>): string | null {
+function shotRefsIssue(
+  refs: unknown,
+  assets: ReadonlyMap<string, string>,
+): string | null {
   if (!Array.isArray(refs)) return 'refs 须为对象数组'
   for (const [i, r] of refs.entries()) {
     const issue = shotRefMemberIssue(r, assets)
@@ -221,13 +252,17 @@ function shotRefsIssue(refs: unknown, assets: ReadonlyMap<string, string>): stri
 
 /** dialogue 的 lines 成员校验（S3776 拆解）：整体形状与成员的说话人引用
  * 校验，返回问题清单（空 = 通过）。 */
-function dialogueLinesIssues(lines: unknown, entities?: EntityTokenScope): string[] {
+function dialogueLinesIssues(
+  lines: unknown,
+  entities?: EntityTokenScope,
+): string[] {
   const lineIssue = (l: unknown): boolean =>
     !plainObject(l) ||
     typeof l.text !== 'string' ||
     // speaker 须 trim 后非空（§8.1 共同值域）：空白值会被加载侧归一化
     // 移除——接受过的 AI 改动不得重开即变
-    ('speaker' in l && (typeof l.speaker !== 'string' || l.speaker.trim() === '')) ||
+    ('speaker' in l &&
+      (typeof l.speaker !== 'string' || l.speaker.trim() === '')) ||
     (l.kind !== undefined && l.kind !== 'line' && l.kind !== 'action') ||
     // action 行不得携带 speaker：对白契约只允许 line 行有说话人，放行的
     // 隐藏引用会进活动文档并被持久化
@@ -235,7 +270,9 @@ function dialogueLinesIssues(lines: unknown, entities?: EntityTokenScope): strin
     (l.side !== undefined && l.side !== 'left' && l.side !== 'right') ||
     (l.vo !== undefined && typeof l.vo !== 'boolean')
   if (!Array.isArray(lines) || lines.some(lineIssue)) {
-    return ['lines 须为对象数组（text 字符串必填；kind ∈ line/action、speaker 仅 line 行可带且非空白字符串、side ∈ left/right、vo 布尔可选）']
+    return [
+      'lines 须为对象数组（text 字符串必填；kind ∈ line/action、speaker 仅 line 行可带且非空白字符串、side ∈ left/right、vo 布尔可选）',
+    ]
   }
   const issues: string[] = []
   lines.forEach((l, i) => {
@@ -244,7 +281,12 @@ function dialogueLinesIssues(lines: unknown, entities?: EntityTokenScope): strin
     // 否则无 kind 的台词行绕过 speaker 引用校验，跨种类/悬空说话人
     // 照单进活动文档并被持久化
     if (l.kind !== undefined && l.kind !== 'line') return
-    const refIssue = entityRefIssue(l.speaker, 'character', `lines[${i}].speaker`, entities)
+    const refIssue = entityRefIssue(
+      l.speaker,
+      'character',
+      `lines[${i}].speaker`,
+      entities,
+    )
     if (refIssue !== null) issues.push(refIssue)
   })
   return issues
@@ -261,11 +303,19 @@ function listShapeIssues(
   if (nodeType === 'scene' && fields.characterIds !== undefined) {
     const arr = fields.characterIds
     // 成员 trim 后非空（§8.1）：空白成员会被加载侧移除，接受的批次重开即变
-    if (!Array.isArray(arr) || arr.some((c) => typeof c !== 'string' || c.trim() === '')) {
+    if (
+      !Array.isArray(arr) ||
+      arr.some((c) => typeof c !== 'string' || c.trim() === '')
+    ) {
       issues.push('characterIds 须为非空白字符串数组')
     } else {
       arr.forEach((c, i) => {
-        const refIssue = entityRefIssue(c as string, 'character', `characterIds[${i}]`, entities)
+        const refIssue = entityRefIssue(
+          c as string,
+          'character',
+          `characterIds[${i}]`,
+          entities,
+        )
         if (refIssue !== null) issues.push(refIssue)
       })
     }
@@ -273,7 +323,11 @@ function listShapeIssues(
   if (nodeType === 'dialogue' && fields.lines !== undefined) {
     issues.push(...dialogueLinesIssues(fields.lines, entities))
   }
-  if (nodeType === 'branch' && fields.options !== undefined && !Array.isArray(fields.options)) {
+  if (
+    nodeType === 'branch' &&
+    fields.options !== undefined &&
+    !Array.isArray(fields.options)
+  ) {
     // 列表容器先于成员校验（issue 46）：非数组 options 若放行，payloadIssue
     // 的 Array.isArray 门与 normalizeNodeFields 都会跳过，异型值直达画布分支节点
     issues.push('options 须为数组')

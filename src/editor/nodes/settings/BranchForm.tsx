@@ -25,7 +25,12 @@ function BranchOptionRow({
       <div className="pw-set-line-bar">
         <span className="pw-set-optno">{String.fromCodePoint(65 + index)}</span>
         <span className="pw-sp" />
-        <button type="button" className="pw-set-x" aria-label="删除此选项" onClick={onRemove}>
+        <button
+          type="button"
+          className="pw-set-x"
+          aria-label="删除此选项"
+          onClick={onRemove}
+        >
           ✕
         </button>
       </div>
@@ -36,7 +41,11 @@ function BranchOptionRow({
 
 /** 分支表单：问句 + 选项增删（排序随后续任务）。
  * 自 NodeSettingsPanel.tsx 外置（issue #39，ImageNodeForm.tsx 先例）。 */
-export default function BranchForm({ node }: { readonly node: Extract<PanelNode, { type: 'branch' }> }) {
+export default function BranchForm({
+  node,
+}: {
+  readonly node: Extract<PanelNode, { type: 'branch' }>
+}) {
   const { patchNode } = useNodeEdit()
   const d = node.data
   const prompt = useCompositionSafeValue(d.prompt, (next) =>
@@ -56,7 +65,11 @@ export default function BranchForm({ node }: { readonly node: Extract<PanelNode,
           onLabel={(label) =>
             patchNode(node.id, {
               nodeType: 'branch',
-              patch: { options: d.options.map((o, idx) => (idx === i ? { ...o, label } : o)) },
+              patch: {
+                options: d.options.map((o, idx) =>
+                  idx === i ? { ...o, label } : o,
+                ),
+              },
             })
           }
           onRemove={() =>
@@ -73,13 +86,25 @@ export default function BranchForm({ node }: { readonly node: Extract<PanelNode,
         onClick={() =>
           patchNode(node.id, {
             nodeType: 'branch',
-            patch: { options: [...d.options, { id: uid('opt'), label: `选项 ${String.fromCodePoint(65 + d.options.length)}` }] },
+            patch: {
+              options: [
+                ...d.options,
+                {
+                  id: uid('opt'),
+                  label: `选项 ${String.fromCodePoint(65 + d.options.length)}`,
+                },
+              ],
+            },
           })
         }
       >
         ＋ 添加选项
       </button>
-      <EpisodeField nodeType="branch" nodeId={node.id} episodeNo={d.episodeNo} />
+      <EpisodeField
+        nodeType="branch"
+        nodeId={node.id}
+        episodeNo={d.episodeNo}
+      />
     </>
   )
 }

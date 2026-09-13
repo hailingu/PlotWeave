@@ -46,7 +46,10 @@ type ExplicitFields<T> = {
 /** 运行态 data 字段合并（EditorView.applyDataPatch 与 AI 批量模拟共用）：
  * 逐键覆盖。联合展开的宽化收口于此——patch 已由 NodeDataPatch 与目标
  * 节点类型绑定，合并语义与历史行为一致（不校验、不剥离）。 */
-export function mergeNodeData(n: CanvasNode, patch: Record<string, unknown>): CanvasNode {
+export function mergeNodeData(
+  n: CanvasNode,
+  patch: Record<string, unknown>,
+): CanvasNode {
   return { ...n, data: { ...n.data, ...patch } } as CanvasNode
 }
 
@@ -55,7 +58,10 @@ export function mergeNodeData(n: CanvasNode, patch: Record<string, unknown>): Ca
  * 的原值）、AI 校验器已完成键白名单与值形状校验（§9.3）、episodeNo
  * 补丁的字段即为全量内容；泛型关联无法被 TS 证明，cast 收口于此，
  * 调用点不得散布裸转换。 */
-export function dataPatchOf(nodeType: keyof NodeDataOf, patch: Record<string, unknown>): NodeDataPatch {
+export function dataPatchOf(
+  nodeType: keyof NodeDataOf,
+  patch: Record<string, unknown>,
+): NodeDataPatch {
   return { nodeType, patch } as NodeDataPatch
 }
 

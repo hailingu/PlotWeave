@@ -1,10 +1,26 @@
 import type { AiGraphSnapshot } from './commands'
 
 /**
- * AI 批命令校验测试的共享图快照夹具（issue 68）：commands.test.ts 与
- * commands.contingent.test.ts 的单一来源，避免各测试文件复制漂移；
- * 仅服务测试，不进运行时调用图。
+ * AI 批命令校验测试的共享图快照夹具（issue 68）：commands.test.ts、
+ * commands.contingent.test.ts 与 commands.batchPhases.test.ts 的单一来源，
+ * 避免各测试文件复制漂移；仅服务测试，不进运行时调用图。
  */
+
+/** 测试用快照：场景 s1 + 对白 d1；设定集含角色 ch-1（陈默）与地点 loc-1（茶馆）。 */
+export function entSnap(): AiGraphSnapshot {
+  return {
+    nodes: [
+      { id: 's1', type: 'scene', label: '场 01 · 茶馆' },
+      { id: 'd1', type: 'dialogue', label: '对白 · 对质' },
+    ],
+    edges: [],
+    assets: new Map(),
+    settings: {
+      characters: [{ id: 'ch-1', name: '陈默' }],
+      locations: [{ id: 'loc-1', name: '茶馆' }],
+    },
+  }
+}
 
 /** 测试用快照：节拍 n2 → 场景 n1 的两节点剧情流（无资产）。 */
 export function snap(): AiGraphSnapshot {

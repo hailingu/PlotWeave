@@ -50,12 +50,21 @@ export interface NodeCreationDeps {
 
 /** 以文档写通道实现新建/复制节点。 */
 export function useNodeCreation(deps: NodeCreationDeps): NodeCreationActions {
-  const { doc, setPlusOpen, closeSettings, screenToFlowPosition, canvasRef, pushHistory } = deps
+  const {
+    doc,
+    setPlusOpen,
+    closeSettings,
+    screenToFlowPosition,
+    canvasRef,
+    pushHistory,
+  } = deps
   const { nodesRef, setNodes, settings } = doc
 
   const buildNewNode = useCallback(
     (type: CreatableType, opts?: NewNodeOptions): CanvasNode => {
-      const rect = opts?.at ? undefined : canvasRef.current?.getBoundingClientRect()
+      const rect = opts?.at
+        ? undefined
+        : canvasRef.current?.getBoundingClientRect()
       const center = rect
         ? screenToFlowPosition({
             x: rect.left + rect.width / 2,
@@ -72,8 +81,15 @@ export function useNodeCreation(deps: NodeCreationDeps): NodeCreationActions {
   )
 
   const createNode = useCallback(
-    (type: CreatableType, opts?: { at?: XYPosition; data?: Record<string, unknown> }) => {
-      const node = buildNewNode(type, { at: opts?.at, selected: true, data: opts?.data })
+    (
+      type: CreatableType,
+      opts?: { at?: XYPosition; data?: Record<string, unknown> },
+    ) => {
+      const node = buildNewNode(type, {
+        at: opts?.at,
+        selected: true,
+        data: opts?.data,
+      })
       setNodes((all) => [...all.map((n) => ({ ...n, selected: false })), node])
       pushHistory({
         undo: () => setNodes((all) => all.filter((n) => n.id !== node.id)),

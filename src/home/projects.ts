@@ -47,7 +47,10 @@ export function filterProjects(
 }
 
 /** 相对更新时间：刚刚 / n 分钟前 / n 小时前 / 昨天 / n 天前 / M 月 D 日。 */
-export function formatRelativeTime(iso: string, now: Date = new Date()): string {
+export function formatRelativeTime(
+  iso: string,
+  now: Date = new Date(),
+): string {
   const then = new Date(iso)
   const diffMs = now.getTime() - then.getTime()
   if (Number.isNaN(diffMs) || diffMs < 0) return ''

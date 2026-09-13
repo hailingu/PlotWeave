@@ -2,10 +2,7 @@ import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { useNodeEdit } from '../nodeEdit'
 import { SCENE_SHOT_HANDLE } from '../graphRules'
 import NodeSettingsPanel, { EditableName } from './settings/NodeSettingsPanel'
-import {
-  resolveCharacterAvatar,
-  resolveLocationName,
-} from '../settings'
+import { resolveCharacterAvatar, resolveLocationName } from '../settings'
 import type { SceneFlowNode } from './types'
 
 // 常量权威定义在 graphRules（连线规则纯函数），此处按原导出名转出
@@ -19,8 +16,48 @@ export { SCENE_SHOT_HANDLE }
  * 端口：左 = 剧情流入口，右 = 剧情流出口，底部 = 分镜卡下挂口（垂直派生）。
  * 名称双击内联改名；⚙️ 打开设置面板（§4.3，编辑即命令）。
  */
-export default function SceneNode({ id, data, selected }: NodeProps<SceneFlowNode>) {
-  const { openSettingsId, toggleSettings, patchNode, shotCountOf, settings } = useNodeEdit()
+
+/** 在场角色头像串；条目已删除回落 ✕ 占位（SceneNode 拆分，issue #99）。 */
+function CharacterAvatarStrip({
+  settings,
+  characterIds,
+}: {
+  readonly settings: Parameters<typeof resolveCharacterAvatar>[0]
+  readonly characterIds: readonly string[]
+}) {
+  return (
+    <div className="pw-avs">
+      {characterIds.map((cid) => {
+        const avatar = resolveCharacterAvatar(settings, cid)
+        return avatar ? (
+          <span
+            key={cid}
+            className="pw-av"
+            style={{ background: avatar.gradient }}
+          >
+            {avatar.label}
+          </span>
+        ) : (
+          <span
+            key={cid}
+            className="pw-av pw-av-invalid"
+            title="设定集条目已删除"
+          >
+            ✕
+          </span>
+        )
+      })}
+    </div>
+  )
+}
+
+export default function SceneNode({
+  id,
+  data,
+  selected,
+}: NodeProps<SceneFlowNode>) {
+  const { openSettingsId, toggleSettings, patchNode, shotCountOf, settings } =
+    useNodeEdit()
   const settingsOpen = openSettingsId === id
   const locationName = data.locationId
     ? resolveLocationName(settings, data.locationId)
@@ -34,7 +71,9 @@ export default function SceneNode({ id, data, selected }: NodeProps<SceneFlowNod
           <EditableName
             value={data.name}
             ariaLabel="场景名称"
-            onChange={(name) => patchNode(id, { nodeType: 'scene', patch: { name } })}
+            onChange={(name) =>
+              patchNode(id, { nodeType: 'scene', patch: { name } })
+            }
           />
           <span className="pw-index-no">
             SCENE {String(data.sceneNo).padStart(2, '0')}
@@ -66,20 +105,10 @@ export default function SceneNode({ id, data, selected }: NodeProps<SceneFlowNod
         </div>
         <p className="pw-index-syn">{data.synopsis}</p>
         {data.characterIds.length > 0 && (
-          <div className="pw-avs">
-            {data.characterIds.map((cid) => {
-              const avatar = resolveCharacterAvatar(settings, cid)
-              return avatar ? (
-                <span key={cid} className="pw-av" style={{ background: avatar.gradient }}>
-                  {avatar.label}
-                </span>
-              ) : (
-                <span key={cid} className="pw-av pw-av-invalid" title="设定集条目已删除">
-                  ✕
-                </span>
-              )
-            })}
-          </div>
+          <CharacterAvatarStrip
+            settings={settings}
+            characterIds={data.characterIds}
+          />
         )}
       </div>
       {settingsOpen && <NodeSettingsPanel node={{ id, type: 'scene', data }} />}

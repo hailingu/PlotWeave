@@ -17,10 +17,16 @@ const p = (over: Partial<ProjectSummary>): ProjectSummary => ({
 
 describe('projectStatsLabel（海报底部统计）', () => {
   it('场景数 + 结局后缀的三种形态', () => {
-    expect(projectStatsLabel(p({ sceneCount: 24, endingCount: 2 }))).toBe('24 场 · 双结局')
-    expect(projectStatsLabel(p({ sceneCount: 24, endingCount: 3 }))).toBe('24 场 · 3 结局')
+    expect(projectStatsLabel(p({ sceneCount: 24, endingCount: 2 }))).toBe(
+      '24 场 · 双结局',
+    )
+    expect(projectStatsLabel(p({ sceneCount: 24, endingCount: 3 }))).toBe(
+      '24 场 · 3 结局',
+    )
     expect(projectStatsLabel(p({ sceneCount: 24 }))).toBe('24 场')
-    expect(projectStatsLabel(p({ sceneCount: 24, endingCount: 1 }))).toBe('24 场')
+    expect(projectStatsLabel(p({ sceneCount: 24, endingCount: 1 }))).toBe(
+      '24 场',
+    )
   })
 })
 
@@ -54,7 +60,9 @@ describe('formatRelativeTime（注入时钟，边界档位）', () => {
   })
 
   it('未来时间与非法输入返回空串', () => {
-    expect(formatRelativeTime(new Date(now.getTime() + 1000).toISOString(), now)).toBe('')
+    expect(
+      formatRelativeTime(new Date(now.getTime() + 1000).toISOString(), now),
+    ).toBe('')
     expect(formatRelativeTime('not-a-date', now)).toBe('')
   })
 })
@@ -63,9 +71,14 @@ describe('createSampleProjects（占位数据）', () => {
   it('两张卡片：带封面与不带；updatedAt 按注入时钟回推', () => {
     const now = new Date('2026-08-28T12:00:00Z')
     const list = createSampleProjects(now)
-    expect(list.map((x) => x.id)).toEqual(['sample-du-shi-qi-yuan', 'sample-wu-ye-chu-zu-che'])
+    expect(list.map((x) => x.id)).toEqual([
+      'sample-du-shi-qi-yuan',
+      'sample-wu-ye-chu-zu-che',
+    ])
     expect(list[0].cover).toContain('linear-gradient')
     expect(list[1].cover).toBeUndefined()
-    expect(list[0].updatedAt).toBe(new Date(now.getTime() - 2 * 3_600_000).toISOString())
+    expect(list[0].updatedAt).toBe(
+      new Date(now.getTime() - 2 * 3_600_000).toISOString(),
+    )
   })
 })

@@ -71,7 +71,9 @@ function nonEmptyOf(v: unknown, fallback: string): string {
 
 /** 字符串数组读取：过滤非字符串项。 */
 function strArrayOf(v: unknown): string[] {
-  return Array.isArray(v) ? v.filter((m): m is string => typeof m === 'string') : []
+  return Array.isArray(v)
+    ? v.filter((m): m is string => typeof m === 'string')
+    : []
 }
 
 /** stored 条目里读取可透传的 keyEnc envelope（非 pw1: 前缀丢弃）。 */
@@ -81,12 +83,20 @@ function keyEncOf(found: unknown): string | undefined {
 }
 
 /** 内置 provider 与存量配置合并：存量缺席时补回内置默认（S3776 拆分）。 */
-function mergeBuiltinProvider(builtin: ProviderConfig, stored: unknown[]): ProviderConfig {
-  const found = stored.find((p) => (p as { id?: unknown } | null)?.id === builtin.id)
+function mergeBuiltinProvider(
+  builtin: ProviderConfig,
+  stored: unknown[],
+): ProviderConfig {
+  const found = stored.find(
+    (p) => (p as { id?: unknown } | null)?.id === builtin.id,
+  )
   if (!found) return { ...builtin, models: [...builtin.models] }
   return {
     ...builtin,
-    baseUrl: nonEmptyOf((found as { baseUrl?: unknown }).baseUrl, builtin.baseUrl),
+    baseUrl: nonEmptyOf(
+      (found as { baseUrl?: unknown }).baseUrl,
+      builtin.baseUrl,
+    ),
     enabled: (found as { enabled?: unknown }).enabled !== false,
     models: strArrayOf((found as { models?: unknown }).models),
     keyEnc: keyEncOf(found),
@@ -97,7 +107,8 @@ function mergeBuiltinProvider(builtin: ProviderConfig, stored: unknown[]): Provi
 function customProviderOf(p: unknown): ProviderConfig | null {
   if (typeof p !== 'object' || p === null) return null
   const id = (p as { id?: unknown }).id
-  if (typeof id !== 'string' || BUILTIN_PROVIDERS.some((b) => b.id === id)) return null
+  if (typeof id !== 'string' || BUILTIN_PROVIDERS.some((b) => b.id === id))
+    return null
   const rec = p as Record<string, unknown>
   return {
     id,
@@ -112,9 +123,13 @@ function customProviderOf(p: unknown): ProviderConfig | null {
 /** 旧文件/缺失字段合并为完整设置；内置 provider 缺席时补回。
  * keyEnc 随 provider 配置透传（非字符串/空串丢弃）。 */
 export function normalizeSettings(raw: unknown): AppSettings {
-  const obj = (typeof raw === 'object' && raw !== null ? raw : {}) as Partial<AppSettings>
+  const obj = (
+    typeof raw === 'object' && raw !== null ? raw : {}
+  ) as Partial<AppSettings>
   const stored = Array.isArray(obj.providers) ? obj.providers : []
-  const providers = BUILTIN_PROVIDERS.map((b) => mergeBuiltinProvider(b, stored))
+  const providers = BUILTIN_PROVIDERS.map((b) =>
+    mergeBuiltinProvider(b, stored),
+  )
   for (const p of stored) {
     const custom = customProviderOf(p)
     if (custom) providers.push(custom)
@@ -122,7 +137,8 @@ export function normalizeSettings(raw: unknown): AppSettings {
   return {
     providers,
     defaultChat: typeof obj.defaultChat === 'string' ? obj.defaultChat : null,
-    defaultImage: typeof obj.defaultImage === 'string' ? obj.defaultImage : null,
+    defaultImage:
+      typeof obj.defaultImage === 'string' ? obj.defaultImage : null,
   }
 }
 
@@ -154,7 +170,12 @@ function resolveDefaultModel(
   const providerId = value.slice(0, sep)
   const model = value.slice(sep + 1)
   const provider = settings.providers.find((p) => p.id === providerId)
-  if (!provider || !provider.enabled || !provider.baseUrl || !provider.models.includes(model)) {
+  if (
+    !provider ||
+    !provider.enabled ||
+    !provider.baseUrl ||
+    !provider.models.includes(model)
+  ) {
     return null
   }
   return { provider, model }
@@ -179,7 +200,12 @@ export function listChatModels(settings: AppSettings): ChatModelOption[] {
   for (const p of settings.providers) {
     if (!p.enabled || !p.baseUrl) continue
     for (const m of p.models) {
-      out.push({ key: `${p.id}:${m}`, providerId: p.id, providerLabel: p.label, model: m })
+      out.push({
+        key: `${p.id}:${m}`,
+        providerId: p.id,
+        providerLabel: p.label,
+        model: m,
+      })
     }
   }
   return out

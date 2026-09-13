@@ -21,7 +21,10 @@ export interface AiEntityFieldSpec {
 }
 
 /** 各 AI 可写实体种类的字段协议表。gradient 由应用分配，不接受模型指定。 */
-export const AI_ENTITY_FIELDS: Record<'character' | 'location', readonly AiEntityFieldSpec[]> = {
+export const AI_ENTITY_FIELDS: Record<
+  'character' | 'location',
+  readonly AiEntityFieldSpec[]
+> = {
   character: [
     { key: 'name', type: 'string', desc: '角色名（创建必填）' },
     { key: 'bio', type: 'string', desc: '一句小传（可省）' },
@@ -77,7 +80,9 @@ export function entityFieldTableText(): string {
 
 /** 设定文档字段协议行式文本（同 entityFieldTableText 口径，issue 56）。 */
 export function documentFieldTableText(): string {
-  const row = AI_DOCUMENT_FIELDS.map((f) => `${f.key}(${f.type}) ${f.desc}`).join('；')
+  const row = AI_DOCUMENT_FIELDS.map(
+    (f) => `${f.key}(${f.type}) ${f.desc}`,
+  ).join('；')
   return `document: ${row}`
 }
 
@@ -102,7 +107,9 @@ export function settingsSnapshotText(s: ProjectSettings): string {
   return JSON.stringify({
     characters,
     locations,
-    ...(s.props ? { props: s.props.map(({ id, name }) => ({ id, name })) } : {}),
+    ...(s.props
+      ? { props: s.props.map(({ id, name }) => ({ id, name })) }
+      : {}),
     ...(s.documents
       ? { documents: s.documents.map(({ id, title }) => ({ id, title })) }
       : {}),

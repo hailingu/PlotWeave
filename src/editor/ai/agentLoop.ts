@@ -1,9 +1,19 @@
 import { llmChat, type AssistantMessage, type ChatMessage } from './chat'
-import { claimsActionPreview, expectsActionPreview, needsActionRewrite } from './actionIntent'
+import {
+  claimsActionPreview,
+  expectsActionPreview,
+  needsActionRewrite,
+} from './actionIntent'
 import { rewriteActionQuery } from './queryRewrite'
 import { extractBatchJson } from './batchText'
 import type { AiCommand, BatchValidation } from './commands'
-import { AI_TOOLS, toolCallsToCommands, type ReadRequest, type ToolCall, type ToolCallParse } from './tools'
+import {
+  AI_TOOLS,
+  toolCallsToCommands,
+  type ReadRequest,
+  type ToolCall,
+  type ToolCallParse,
+} from './tools'
 import type { ProviderConfig } from '../../settings/types'
 
 /**
@@ -23,8 +33,10 @@ const READ_ROUNDS = 3
 /** 写批次的最多产出次数：首次 + 3 次纠错重试（owner 定的 quota=3；每次
  * 重写消耗 1 次重试，3 次后仍失败即彻底失败）。 */
 const WRITE_ATTEMPTS = 4
-const READ_LIMIT_MESSAGE = '读取轮数已达上限，请使用已有信息；信息不足时请向用户澄清。'
-const MISSING_BATCH_FEEDBACK = '本轮没有可确认的合法改动批次，操作说明不能代替预览。' +
+const READ_LIMIT_MESSAGE =
+  '读取轮数已达上限，请使用已有信息；信息不足时请向用户澄清。'
+const MISSING_BATCH_FEEDBACK =
+  '本轮没有可确认的合法改动批次，操作说明不能代替预览。' +
   '若用户要求修改且信息足够，请参照系统提示中的完整批次示例和工具参数 schema，' +
   '通过写工具或完整 JSON 围栏输出全部命令及必要关联；' +
   '如信息不足，请明确询问缺少的目标或内容；如不支持，请说明限制。不要猜测目标，不要声称已执行或已有预览。'
@@ -49,7 +61,10 @@ export interface BatchValidators {
   prose?: (text: string) => BatchValidation | null
 }
 
-export type ReadToolExecutor = (name: string, args: Record<string, unknown>) => string
+export type ReadToolExecutor = (
+  name: string,
+  args: Record<string, unknown>,
+) => string
 
 /** 校验失败清单的人读文本（回喂与上屏共用同一编号口径）。 */
 function issueListText(v: BatchValidation): string {
@@ -70,27 +85,53 @@ function pushFeedback(
     messages.push({ role: 'assistant', content: prose, tool_calls: calls })
     const readById = new Map(reads.map((r) => [r.id, readTool(r.name, r.args)]))
     for (const c of calls) {
-      messages.push({ role: 'tool', tool_call_id: c.id, content: readById.get(c.id) ?? errorText })
+      messages.push({
+        role: 'tool',
+        tool_call_id: c.id,
+        content: readById.get(c.id) ?? errorText,
+      })
     }
     // 围栏错误可能与纯读工具同轮出现；每个读调用仍须收到真实结果，
     // 另附纠正消息，不能因没有写调用可承载错误而吞掉整批诊断。
-    if (errorText && calls.length === reads.length) messages.push({ role: 'user', content: errorText })
+    if (errorText && calls.length === reads.length)
+      messages.push({ role: 'user', content: errorText })
     return
   }
-  messages.push({ role: 'assistant', content: prose }, { role: 'user', content: errorText })
+  messages.push(
+    { role: 'assistant', content: prose },
+    { role: 'user', content: errorText },
+  )
 }
 
 /** 通道解析也是整批边界，任一工具错误不能被其他合法命令或围栏掩盖。 */
-function validateReply(parsed: ToolCallParse, prose: string, validators: BatchValidators): BatchValidation | null {
+function validateReply(
+  parsed: ToolCallParse,
+  prose: string,
+  validators: BatchValidators,
+): BatchValidation | null {
   if (parsed.errors.length > 0) {
-    return { ok: false, commands: [], items: [], hasDeletes: false,
-      issues: parsed.errors.map((message, index) => ({ index, message })) }
+    return {
+      ok: false,
+      commands: [],
+      items: [],
+      hasDeletes: false,
+      issues: parsed.errors.map((message, index) => ({ index, message })),
+    }
   }
-  const validation = parsed.commands.length > 0
-    ? (validators.commands?.(parsed.commands) ?? null)
-    : (validators.prose?.(prose) ?? null)
-  if (validation?.ok && validation.commands.length === 0 && extractBatchJson(prose)?.commands.length === 0) {
-    return { ...validation, ok: false, issues: [{ index: 0, message: '批次没有任何改动命令。' }] }
+  const validation =
+    parsed.commands.length > 0
+      ? (validators.commands?.(parsed.commands) ?? null)
+      : (validators.prose?.(prose) ?? null)
+  if (
+    validation?.ok &&
+    validation.commands.length === 0 &&
+    extractBatchJson(prose)?.commands.length === 0
+  ) {
+    return {
+      ...validation,
+      ok: false,
+      issues: [{ index: 0, message: '批次没有任何改动命令。' }],
+    }
   }
   return validation
 }
@@ -99,10 +140,14 @@ function validateReply(parsed: ToolCallParse, prose: string, validators: BatchVa
 function correctionText(result: AgentLoopResult): string | null {
   const v = result.validation
   if (v && !v.ok) {
-    return `你给出的改动批次未通过校验：\n${issueListText(v)}\n` +
+    return (
+      `你给出的改动批次未通过校验：\n${issueListText(v)}\n` +
       '请逐条修正上述错误后重新输出完整批次（涉及字段时只使用字段表中该类型的合法字段），未被点名的命令保持原样。'
+    )
   }
-  return result.completionError ? `${result.completionError}\n${MISSING_BATCH_FEEDBACK}` : null
+  return result.completionError
+    ? `${result.completionError}\n${MISSING_BATCH_FEEDBACK}`
+    : null
 }
 
 /** 汇总一次产出的校验结果；已期待写方案却无批次时附上同轮交付诊断。 */
@@ -113,10 +158,18 @@ function resultForReply(
   expectsPreview: boolean,
   readsOnly: boolean,
 ): AgentLoopResult {
-  const result: AgentLoopResult = { prose, toolErrors: parsed.errors, validation }
+  const result: AgentLoopResult = {
+    prose,
+    toolErrors: parsed.errors,
+    validation,
+  }
   if (validation === null && (expectsPreview || readsOnly)) {
-    const reason = parsed.commands.length > 0 ? '当前没有可用的批次校验结果。' : '模型没有返回可解析的非空改动批次。'
-    result.completionError = `本轮未生成可执行改动，未执行本轮操作，也没有可确认的预览卡。${readsOnly ? READ_LIMIT_MESSAGE : reason}` +
+    const reason =
+      parsed.commands.length > 0
+        ? '当前没有可用的批次校验结果。'
+        : '模型没有返回可解析的非空改动批次。'
+    result.completionError =
+      `本轮未生成可执行改动，未执行本轮操作，也没有可确认的预览卡。${readsOnly ? READ_LIMIT_MESSAGE : reason}` +
       '请补充目标节点或具体改动后重试；若回复在询问信息，请先回答该问题。'
   }
   return result
@@ -132,7 +185,8 @@ export async function runAgentLoop(
 ): Promise<AgentLoopResult> {
   let readRounds = 0
   let writeAttempts = 0
-  const initialText = [...messages].reverse().find((m) => m.role === 'user')?.content ?? ''
+  const initialText =
+    [...messages].reverse().find((m) => m.role === 'user')?.content ?? ''
   let expectsPreview = expectsActionPreview(initialText)
   if (needsActionRewrite(initialText)) {
     // #91：含糊输入经改写归一化判定动作意图，改写回复按整回复校验后
@@ -143,25 +197,41 @@ export async function runAgentLoop(
   }
   let result: AgentLoopResult = { prose: '', toolErrors: [], validation: null }
   for (let round = 0; round < READ_ROUNDS + WRITE_ATTEMPTS; round++) {
-    const reply: AssistantMessage = await llmChat(provider, model, messages, AI_TOOLS)
+    const reply: AssistantMessage = await llmChat(
+      provider,
+      model,
+      messages,
+      AI_TOOLS,
+    )
     const calls: ToolCall[] = reply.tool_calls ?? []
     const parsed = toolCallsToCommands(calls)
     const { readRequests, errors } = parsed
     const prose = (reply.content ?? '').trim()
     const validation = validateReply(parsed, prose, validators)
-    const attempted = calls.length > readRequests.length || validation !== null || /"commands"\s*:/.test(prose)
+    const attempted =
+      calls.length > readRequests.length ||
+      validation !== null ||
+      /"commands"\s*:/.test(prose)
     expectsPreview ||= attempted || claimsActionPreview(prose)
-    const readsOnly = !attempted && errors.length === 0 && readRequests.length > 0
+    const readsOnly =
+      !attempted && errors.length === 0 && readRequests.length > 0
     if (readsOnly && readRounds < READ_ROUNDS) {
       readRounds += 1
       pushFeedback(messages, calls, prose, '', readTool, readRequests)
       continue
     }
-    result = resultForReply(parsed, prose, validation, expectsPreview, readsOnly)
+    result = resultForReply(
+      parsed,
+      prose,
+      validation,
+      expectsPreview,
+      readsOnly,
+    )
     writeAttempts += 1
     const feedback = correctionText(result)
     if (feedback === null || writeAttempts >= WRITE_ATTEMPTS) break
-    const boundedRead = readRounds < READ_ROUNDS ? readTool : () => READ_LIMIT_MESSAGE
+    const boundedRead =
+      readRounds < READ_ROUNDS ? readTool : () => READ_LIMIT_MESSAGE
     if (readRequests.length > 0 && readRounds < READ_ROUNDS) readRounds += 1
     pushFeedback(messages, calls, prose, feedback, boundedRead, readRequests)
   }

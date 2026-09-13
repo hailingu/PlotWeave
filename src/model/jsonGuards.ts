@@ -14,8 +14,18 @@ export function isPlainObject(v: unknown): v is Record<string, unknown> {
  * 扩展字段无损保留——归一化捕获（normalizeContainers）与序列化还原
  * （fromDocument）共用同一清单，防止两处键域漂移。顶层与 project 层是
  * 类型化封闭契约（未知键在 IPC 前即被剥离），不在保留范围。 */
-export const GRAPH_CONTRACT_KEYS = ['nodes', 'edges', 'viewport', 'aiRevision'] as const
-export const SETTINGS_CONTRACT_KEYS = ['characters', 'locations', 'props', 'documents'] as const
+export const GRAPH_CONTRACT_KEYS = [
+  'nodes',
+  'edges',
+  'viewport',
+  'aiRevision',
+] as const
+export const SETTINGS_CONTRACT_KEYS = [
+  'characters',
+  'locations',
+  'props',
+  'documents',
+] as const
 export const ASSETS_CONTRACT_KEYS = ['byId'] as const
 
 /** 捕获容器中契约键之外的扩展键（值原样引用：JSON 解析产物无别名，且
@@ -75,7 +85,8 @@ export function plainObjectEntries(
 ): Record<string, unknown> {
   const out: Record<string, unknown> = Object.create(null)
   if (!isPlainObject(v)) {
-    if (v !== undefined) warnings.push(`${label} 非普通键值对象，已重置为空 Record`)
+    if (v !== undefined)
+      warnings.push(`${label} 非普通键值对象，已重置为空 Record`)
     return out
   }
   for (const [k, item] of Object.entries(v)) {

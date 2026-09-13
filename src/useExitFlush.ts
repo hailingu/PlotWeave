@@ -10,7 +10,8 @@ import {
 export function useExitFlush(): string | null {
   const [blocked, setBlocked] = useState<string | null>(null)
   useEffect(() => {
-    if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return
+    if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window))
+      return
     let disposed = false
     const unlistens: Array<() => void> = []
     void (async () => {
@@ -22,11 +23,15 @@ export function useExitFlush(): string | null {
       if (disposed) return
       const appWindow = getCurrentWindow()
       /** 排空到固定点后执行 onClean；仍有阻断项则不执行并显示诊断。 */
-      const drainAndThen = async (onClean: () => Promise<void>): Promise<void> => {
+      const drainAndThen = async (
+        onClean: () => Promise<void>,
+      ): Promise<void> => {
         for (;;) {
           const failed = await flushPendingAiSessionSaves()
           if (failed.length > 0) {
-            setBlocked(`有 ${failed.length} 个项目的 AI 会话保存失败，已阻止退出：请检查磁盘后重试退出`)
+            setBlocked(
+              `有 ${failed.length} 个项目的 AI 会话保存失败，已阻止退出：请检查磁盘后重试退出`,
+            )
             return
           }
           if (!hasPendingAiSessionSaves()) break

@@ -29,10 +29,15 @@ function sceneRefWarnings(
 
 /** 设定集实体的悬空头像资产引用警告（§11.4）：avatarAssetId 在
  * Character 实体上（非节点 spec），指向 assets.byId 中不存在的条目即警告。 */
-export function characterAvatarWarnings(doc: ProjectDocument, warnings: string[]): void {
+export function characterAvatarWarnings(
+  doc: ProjectDocument,
+  warnings: string[],
+): void {
   for (const ch of Object.values(doc.settings.characters ?? {})) {
     if (ch.avatarAssetId && !doc.assets?.byId[ch.avatarAssetId]) {
-      warnings.push(`角色 ${ch.name}（${ch.id}）的头像引用了不存在的资产 ${ch.avatarAssetId}`)
+      warnings.push(
+        `角色 ${ch.name}（${ch.id}）的头像引用了不存在的资产 ${ch.avatarAssetId}`,
+      )
     }
   }
 }
@@ -44,7 +49,8 @@ function dialogueRefWarnings(
   warnings: string[],
 ): void {
   const characters = doc.settings.characters ?? {}
-  for (const line of (n.data.spec as { lines?: { speaker?: string }[] }).lines ?? []) {
+  for (const line of (n.data.spec as { lines?: { speaker?: string }[] })
+    .lines ?? []) {
     if (line.speaker && !characters[line.speaker]) {
       warnings.push(`节点 ${n.id} 的对白引用了不存在的角色 ${line.speaker}`)
     }
@@ -63,8 +69,17 @@ export function shotRefMimeMatches(kind: string, mime: string): boolean {
  * assets.byId 解析——目标缺失保留为悬空引用并警告（不删除用户选择）；
  * 目标存在但 MIME 家族与 kind 用途不匹配时保留为不可用引用并警告，
  * 不改按其他命名空间解释。 */
-function shotRefWarnings(n: StoryNode, doc: ProjectDocument, warnings: string[]): void {
-  const refs = (n.data.spec as { refs?: Array<{ id: string; kind: string; assetId?: string }> }).refs ?? []
+function shotRefWarnings(
+  n: StoryNode,
+  doc: ProjectDocument,
+  warnings: string[],
+): void {
+  const refs =
+    (
+      n.data.spec as {
+        refs?: Array<{ id: string; kind: string; assetId?: string }>
+      }
+    ).refs ?? []
   for (const ref of refs) {
     if (!ref.assetId) continue
     const asset = doc.assets?.byId[ref.assetId]
@@ -73,7 +88,9 @@ function shotRefWarnings(n: StoryNode, doc: ProjectDocument, warnings: string[])
       continue
     }
     if (!shotRefMimeMatches(ref.kind, asset.mime)) {
-      warnings.push(`节点 ${n.id} 的分镜引用 ${ref.id} 的 MIME 家族与 kind 用途不匹配（资产 ${ref.assetId} 为 ${asset.mime}），保留为不可用引用`)
+      warnings.push(
+        `节点 ${n.id} 的分镜引用 ${ref.id} 的 MIME 家族与 kind 用途不匹配（资产 ${ref.assetId} 为 ${asset.mime}），保留为不可用引用`,
+      )
     }
   }
 }
@@ -82,11 +99,19 @@ function shotRefWarnings(n: StoryNode, doc: ProjectDocument, warnings: string[])
  * 判定 token 形片段——`@[character:<安全 id>]` 为合法 token，目标不存在时
  * 警告失效（token 本身保留，悬空展示与恢复由 UI 消费）；近似但非法的
  * 片段（id 不满足安全字符集、未闭合）保留原文并警告。文本一律不改写。 */
-function dialogueMentionWarnings(n: StoryNode, doc: ProjectDocument, warnings: string[]): void {
-  const lines = (n.data.spec as { lines?: Array<{ text?: unknown }> }).lines ?? []
+function dialogueMentionWarnings(
+  n: StoryNode,
+  doc: ProjectDocument,
+  warnings: string[],
+): void {
+  const lines =
+    (n.data.spec as { lines?: Array<{ text?: unknown }> }).lines ?? []
   for (const [i, line] of lines.entries()) {
     if (typeof line.text !== 'string') continue
-    for (const issue of mentionIssuesOfLine(line.text, doc.settings.characters ?? {})) {
+    for (const issue of mentionIssuesOfLine(
+      line.text,
+      doc.settings.characters ?? {},
+    )) {
       warnings.push(`节点 ${n.id} 的对白行 ${i} ${issue}`)
     }
   }
@@ -113,7 +138,9 @@ function mentionIssuesOfLine(
     if (!SAFE_CHARACTER_ID.test(id)) {
       issues.push('含非法的提及 token 形片段，已保留原文')
     } else if (characters[id] === undefined) {
-      issues.push(`的提及 token @[character:${id}] 目标不存在，已标记失效（token 保留）`)
+      issues.push(
+        `的提及 token @[character:${id}] 目标不存在，已标记失效（token 保留）`,
+      )
     }
     from = close + 1
   }
@@ -122,9 +149,14 @@ function mentionIssuesOfLine(
 /** 图片节点产物引用的悬空警告（§11.4/§13）：primary.assetId 只按本项目
  * assets.byId 解析——目标缺失保留为悬空引用并警告（§8.2.3 不删除用户
  * 选择），UI 按缺失占位展示。 */
-function imageOutputWarnings(n: StoryNode, doc: ProjectDocument, warnings: string[]): void {
-  const primary = (n.data.spec as { outputs?: { primary?: { assetId?: unknown } } }).outputs
-    ?.primary
+function imageOutputWarnings(
+  n: StoryNode,
+  doc: ProjectDocument,
+  warnings: string[],
+): void {
+  const primary = (
+    n.data.spec as { outputs?: { primary?: { assetId?: unknown } } }
+  ).outputs?.primary
   const assetId = primary?.assetId
   if (typeof assetId === 'string' && !doc.assets?.byId[assetId]) {
     warnings.push(`节点 ${n.id} 的生成产物引用指向不存在的资产 ${assetId}`)

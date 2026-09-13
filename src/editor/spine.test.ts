@@ -30,8 +30,12 @@ describe('planSpliceIntoSpine（§3.5 大纲拖拽 = 重排 sequence 边）', ()
 
   it('拖到开头（before 首节点）与拖到游离节点接入', () => {
     const head = planSpliceIntoSpine(chain(), 'C', 'S', 'before')!
-    expect(head.adds.some((a) => a.source === 'C' && a.target === 'S')).toBe(true)
-    expect(head.adds.some((a) => a.source === 'B' && a.target === 'C')).toBe(false)
+    expect(head.adds.some((a) => a.source === 'C' && a.target === 'S')).toBe(
+      true,
+    )
+    expect(head.adds.some((a) => a.source === 'B' && a.target === 'C')).toBe(
+      false,
+    )
 
     // 游离节点 D 拖到 B 之后 = 纯接入，两条新边，不删任何边
     const join = planSpliceIntoSpine(chain(), 'D', 'B', 'after')!
@@ -49,7 +53,10 @@ describe('planSpliceIntoSpine（§3.5 大纲拖拽 = 重排 sequence 边）', ()
   })
 
   it('拖到分镜（非剧情流锚点）与自身锚点返回 null', () => {
-    const edges = [...chain(), { id: 'e9', source: 'C', target: 'SH', sourceHandle: 'shots' }]
+    const edges = [
+      ...chain(),
+      { id: 'e9', source: 'C', target: 'SH', sourceHandle: 'shots' },
+    ]
     expect(planSpliceIntoSpine(edges, 'B', 'SH', 'after')).toBeNull()
     expect(planSpliceIntoSpine(edges, 'B', 'B', 'after')).toBeNull()
   })

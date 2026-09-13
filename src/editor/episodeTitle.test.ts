@@ -4,7 +4,10 @@ import { applyEpisodeTitle } from './episodeTitle'
 describe('applyEpisodeTitle（§3.5 集标题映射的单一更新语义）', () => {
   it('非空标题写入对应集号；首尾空白被去除', () => {
     expect(applyEpisodeTitle({}, 1, '夜戏')).toEqual({ 1: '夜戏' })
-    expect(applyEpisodeTitle({ 1: '旧' }, 2, '  第二集 ')).toEqual({ 1: '旧', 2: '第二集' })
+    expect(applyEpisodeTitle({ 1: '旧' }, 2, '  第二集 ')).toEqual({
+      1: '旧',
+      2: '第二集',
+    })
   })
 
   it('非空标题覆盖同集旧标题', () => {
@@ -12,7 +15,9 @@ describe('applyEpisodeTitle（§3.5 集标题映射的单一更新语义）', ()
   })
 
   it('标题清空（含纯空白）= 移除该集命名，而不是残留空字符串键', () => {
-    expect(applyEpisodeTitle({ 1: '夜戏', 2: '日戏' }, 1, '')).toEqual({ 2: '日戏' })
+    expect(applyEpisodeTitle({ 1: '夜戏', 2: '日戏' }, 1, '')).toEqual({
+      2: '日戏',
+    })
     expect(applyEpisodeTitle({ 1: '夜戏' }, 1, '   ')).toEqual({})
   })
 

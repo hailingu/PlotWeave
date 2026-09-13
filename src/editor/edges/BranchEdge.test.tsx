@@ -13,17 +13,24 @@ import type { ReactNode } from 'react'
 import BranchEdge, { type BranchFlowEdge } from './BranchEdge'
 
 const useInternalNodeMock = vi.hoisted(() => vi.fn())
-const edgeLookupMock = vi.hoisted(() => ({ current: new Map<string, { sourceHandle?: string | null }>() }))
+const edgeLookupMock = vi.hoisted(() => ({
+  current: new Map<string, { sourceHandle?: string | null }>(),
+}))
 
 vi.mock('@xyflow/react', async (importOriginal) => {
   const orig = await importOriginal<typeof import('@xyflow/react')>()
   return {
     ...orig,
     /** 标签渲染器桩：画布外无 portal 容器，内联渲染子内容。 */
-    EdgeLabelRenderer: ({ children }: { readonly children: ReactNode }) => <>{children}</>,
+    EdgeLabelRenderer: ({ children }: { readonly children: ReactNode }) => (
+      <>{children}</>
+    ),
     useInternalNode: (id: string) => useInternalNodeMock(id),
-    useStore: <T,>(selector: (s: { edgeLookup: Map<string, { sourceHandle?: string | null }> }) => T) =>
-      selector({ edgeLookup: edgeLookupMock.current }),
+    useStore: <T,>(
+      selector: (s: {
+        edgeLookup: Map<string, { sourceHandle?: string | null }>
+      }) => T,
+    ) => selector({ edgeLookup: edgeLookupMock.current }),
   }
 })
 
@@ -33,10 +40,18 @@ type Option = { id: string; label: string }
 
 /** 源节点桩：BranchEdge 经 useInternalNode(source) 读取其 options。 */
 function branchSource(options: Option[], type = 'branch') {
-  return { internals: { userNode: { id: 'br1', type, data: { prompt: '去哪', options } } } }
+  return {
+    internals: {
+      userNode: { id: 'br1', type, data: { prompt: '去哪', options } },
+    },
+  }
 }
 
-function setup(options: Option[] = [], sourceType = 'branch', handle = 'option-o1') {
+function setup(
+  options: Option[] = [],
+  sourceType = 'branch',
+  handle = 'option-o1',
+) {
   useInternalNodeMock.mockReset()
   useInternalNodeMock.mockReturnValue(branchSource(options, sourceType))
   edgeLookupMock.current = new Map([['e1', { sourceHandle: handle }]])
@@ -100,7 +115,9 @@ describe('BranchEdge（分支连线）', () => {
         ))}
       </svg>,
     )
-    const ids = [...container.querySelectorAll('linearGradient')].map((g) => g.id)
+    const ids = [...container.querySelectorAll('linearGradient')].map(
+      (g) => g.id,
+    )
     expect(new Set(ids).size).toBe(2)
   })
 

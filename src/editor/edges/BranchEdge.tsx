@@ -50,7 +50,8 @@ export default function BranchEdge({
   // （订阅粒度为该边句柄变更，改名不经过此处）
   const sourceHandle = useStore((s) => s.edgeLookup.get(id)?.sourceHandle)
   const userNode = useInternalNode<CanvasNode>(source)?.internals.userNode
-  const options = userNode?.type === 'branch' ? userNode.data.options : undefined
+  const options =
+    userNode?.type === 'branch' ? userNode.data.options : undefined
   const optionLabel =
     options?.find((o) => o.id === branchOptionIdOf(sourceHandle))?.label ?? ''
 

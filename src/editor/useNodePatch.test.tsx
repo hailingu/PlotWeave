@@ -7,7 +7,10 @@
 import { act, renderHook } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { Edge } from '@xyflow/react'
-import { useEditorDocument, type EditorProjectContent } from './useEditorDocument'
+import {
+  useEditorDocument,
+  type EditorProjectContent,
+} from './useEditorDocument'
 import { useNodePatch } from './useNodePatch'
 import type { HistoryCommand } from './history'
 import type { CanvasNode } from './nodes/types'
@@ -57,7 +60,10 @@ describe('useNodePatch（§4.3 编辑即命令）', () => {
   it('patchNode 实时合并字段并按「patch:<id>:<keys>」生成合并键', () => {
     const { result, commands } = setup()
     act(() =>
-      result.current.patch.patchNode('br1', { nodeType: 'branch', patch: { prompt: '新问句' } }),
+      result.current.patch.patchNode('br1', {
+        nodeType: 'branch',
+        patch: { prompt: '新问句' },
+      }),
     )
     expect(branchData(result.current.doc.nodes[0]).prompt).toBe('新问句')
     expect(commands).toHaveLength(1)
@@ -72,7 +78,10 @@ describe('useNodePatch（§4.3 编辑即命令）', () => {
   it('未知节点 id 不写状态也不入栈', () => {
     const { result, pushHistory } = setup()
     act(() =>
-      result.current.patch.patchNode('missing', { nodeType: 'branch', patch: { prompt: 'x' } }),
+      result.current.patch.patchNode('missing', {
+        nodeType: 'branch',
+        patch: { prompt: 'x' },
+      }),
     )
     expect(pushHistory).not.toHaveBeenCalled()
     expect(branchData(result.current.doc.nodes[0]).prompt).toBe('走哪条路')
@@ -86,7 +95,9 @@ describe('useNodePatch（§4.3 编辑即命令）', () => {
         patch: { options: [{ id: 'o1', label: '上楼' }] },
       }),
     )
-    expect(result.current.doc.edges.map((e) => e.id)).toEqual(['e-br1-option-o1-sc1'])
+    expect(result.current.doc.edges.map((e) => e.id)).toEqual([
+      'e-br1-option-o1-sc1',
+    ])
     expect(branchData(result.current.doc.nodes[0]).options).toHaveLength(1)
     // 有边级联时不可与普通补丁合并撤销，必须单独成步
     expect(commands).toHaveLength(1)
@@ -100,7 +111,9 @@ describe('useNodePatch（§4.3 编辑即命令）', () => {
     expect(branchData(result.current.doc.nodes[0]).options).toHaveLength(2)
 
     act(() => commands[0].redo())
-    expect(result.current.doc.edges.map((e) => e.id)).toEqual(['e-br1-option-o1-sc1'])
+    expect(result.current.doc.edges.map((e) => e.id)).toEqual([
+      'e-br1-option-o1-sc1',
+    ])
   })
 
   it('applyDataPatch 是纯写入：不进命令栈', () => {

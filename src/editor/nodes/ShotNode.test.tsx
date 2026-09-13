@@ -24,14 +24,19 @@ vi.mock('@xyflow/react', async (importOriginal) => {
     ...orig,
     /** Handle 桩：脱离 ReactFlow 画布后仅保留锚点语义（type/id）供断言。 */
     Handle: (props: { readonly id?: string; readonly type: string }) => (
-      <div data-testid={`handle-${props.type}${props.id ? `-${props.id}` : ''}`} />
+      <div
+        data-testid={`handle-${props.type}${props.id ? `-${props.id}` : ''}`}
+      />
     ),
   }
 })
 
 afterEach(cleanup)
 
-function setup(openSettingsId: string | null = null, refs?: ShotFlowNode['data']['refs']) {
+function setup(
+  openSettingsId: string | null = null,
+  refs?: ShotFlowNode['data']['refs'],
+) {
   const api: NodeEditApi = {
     projectId: 'p-1',
     openSettingsId,
@@ -114,7 +119,9 @@ describe('ShotNode（监视器卡）', () => {
   it('资产引用位：image/* 资产经 mediaUrl 解析渲染缩略图；解析失败回退纯文本', async () => {
     const { projectAssets } = await import('../projectAssets')
     vi.mocked(projectAssets.mediaUrl).mockResolvedValue('asset://media/pa-1')
-    const { container } = setup(null, [{ id: 'r4', kind: 'character', assetId: 'pa-1' }])
+    const { container } = setup(null, [
+      { id: 'r4', kind: 'character', assetId: 'pa-1' },
+    ])
     const img = (await screen.findAllByRole('img'))[0]
     expect(img.getAttribute('src')).toBe('asset://media/pa-1')
     expect(vi.mocked(projectAssets.mediaUrl).mock.calls[0][0]).toBe('p-1')

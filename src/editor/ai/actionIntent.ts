@@ -13,24 +13,78 @@ interface IntentVocabulary {
 
 /** 用法提问、讨论与明确禁止操作优先作为文本回合，避免强求写方案。 */
 const DISCUSSION: IntentVocabulary = {
-  fragments: ['如何', '怎么', '怎样', '为什么', '是否', '讨论', '解释', '建议', '不要', '不用', '别', '暂不', '先不', '只聊', '只说', '只需说明'],
+  fragments: [
+    '如何',
+    '怎么',
+    '怎样',
+    '为什么',
+    '是否',
+    '讨论',
+    '解释',
+    '建议',
+    '不要',
+    '不用',
+    '别',
+    '暂不',
+    '先不',
+    '只聊',
+    '只说',
+    '只需说明',
+  ],
   words: /\b(?:how|why|discuss|explain|do not|don't)\b/i,
 }
 /** 首期已支持的画布／设定实体对象；不扩展道具或设定文档写能力。 */
 const TARGET: IntentVocabulary = {
-  fragments: ['画布', '节点', '场景', '节奏卡', '节拍', '分镜', '对白', '台词', '旁白', '分支', '连线', '角色', '地点'],
+  fragments: [
+    '画布',
+    '节点',
+    '场景',
+    '节奏卡',
+    '节拍',
+    '分镜',
+    '对白',
+    '台词',
+    '旁白',
+    '分支',
+    '连线',
+    '角色',
+    '地点',
+  ],
   words: /\b(?:canvas|node|scene|shot|beat|dialogue|character|location)\b/i,
 }
 /** 规范动作动词：既是快速路径的命中词表，也是改写输出的动词门
  * （queryRewrite 提示词与本表同源，改写结果必须落在清单内才采信）。 */
 const CHANGE: IntentVocabulary = {
-  fragments: ['增加', '新增', '添加', '创建', '新建', '删除', '移除', '修改', '更新', '改为', '改成', '替换', '补充', '丰富', '续写', '连接', '连到', '断开', '重排'],
+  fragments: [
+    '增加',
+    '新增',
+    '添加',
+    '创建',
+    '新建',
+    '删除',
+    '移除',
+    '修改',
+    '更新',
+    '改为',
+    '改成',
+    '替换',
+    '补充',
+    '丰富',
+    '续写',
+    '连接',
+    '连到',
+    '断开',
+    '重排',
+  ],
   words: /\b(?:add|create|delete|remove|update|change|connect|disconnect)\b/i,
 }
 
 /** 片段和单词两种匹配方式共用一份词表，不构造动态正则。 */
 function matches(vocabulary: IntentVocabulary, text: string): boolean {
-  return vocabulary.fragments.some((fragment) => text.includes(fragment)) || vocabulary.words.test(text)
+  return (
+    vocabulary.fragments.some((fragment) => text.includes(fragment)) ||
+    vocabulary.words.test(text)
+  )
 }
 
 /** 改写提示词引用的规范动词清单，与 CHANGE 词表保持同源。 */
@@ -38,7 +92,9 @@ export const ACTION_VERBS: readonly string[] = CHANGE.fragments
 
 /** 仅针对本轮用户输入决定是否期待预览；省略或歧义表达留给正常对话。 */
 export function expectsActionPreview(text: string): boolean {
-  return !matches(DISCUSSION, text) && matches(TARGET, text) && matches(CHANGE, text)
+  return (
+    !matches(DISCUSSION, text) && matches(TARGET, text) && matches(CHANGE, text)
+  )
 }
 
 /** 输入已含动作动词时无需改写判定：目标含糊仍属修改意图（如「再丰富点」）。 */
@@ -92,7 +148,11 @@ function negatesNounGap(gap: string): boolean {
  * 窗口）。 */
 type GapChecks = Array<[number, (gap: string) => boolean]>
 
-function claimsAnyMatch(text: string, pattern: RegExp, checks: GapChecks): boolean {
+function claimsAnyMatch(
+  text: string,
+  pattern: RegExp,
+  checks: GapChecks,
+): boolean {
   for (const match of text.matchAll(pattern)) {
     if (checks.every(([index, negates]) => !negates(match[index]))) return true
   }
@@ -104,8 +164,16 @@ function claimsReference(text: string): boolean {
 }
 
 function claimsPromise(text: string): boolean {
-  return claimsAnyMatch(text, PREVIEW_PROMISE_AFTER, [[1, negatesNounGap], [2, negatesVerbGap]])
-    || claimsAnyMatch(text, PREVIEW_PROMISE_BEFORE, [[1, negatesVerbGap], [2, negatesVerbGap]])
+  return (
+    claimsAnyMatch(text, PREVIEW_PROMISE_AFTER, [
+      [1, negatesNounGap],
+      [2, negatesVerbGap],
+    ]) ||
+    claimsAnyMatch(text, PREVIEW_PROMISE_BEFORE, [
+      [1, negatesVerbGap],
+      [2, negatesVerbGap],
+    ])
+  )
 }
 
 /** 模型主动声称提供预览时也应核对交付，不依赖用户是否用了操作关键词。 */

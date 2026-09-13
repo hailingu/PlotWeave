@@ -1,15 +1,25 @@
 import { describe, expect, it } from 'vitest'
 import { validateAiBatch, type AiGraphSnapshot } from './commands'
 import { wouldCreateCycle } from '../graphRules'
-import { richSnap, snap } from './testGraphs'
+import { entSnap, richSnap, snap } from './testGraphs'
 
 describe('validateAiBatch：校验折叠（数据模型 §12，执行前批量预览）', () => {
   it('合法混合批次逐项折叠；commands 保持原始执行顺序', () => {
     const v = validateAiBatch(
       [
-        { op: 'update_node', nodeId: 'n1', patch: { synopsis: '雨中分手' }, reason: '加强冲突' },
+        {
+          op: 'update_node',
+          nodeId: 'n1',
+          patch: { synopsis: '雨中分手' },
+          reason: '加强冲突',
+        },
         { op: 'delete_node', nodeId: 'n2', reason: '并入场景' },
-        { op: 'create_node', nodeType: 'scene', ref: 'a', data: { name: '雨夜追逐' } },
+        {
+          op: 'create_node',
+          nodeType: 'scene',
+          ref: 'a',
+          data: { name: '雨夜追逐' },
+        },
         { op: 'connect_edge', sourceId: 'a', targetId: 'n1' },
       ],
       snap(),
@@ -58,7 +68,12 @@ describe('validateAiBatch：校验折叠（数据模型 §12，执行前批量�
   it('批次内引用：ref 建立的新节点可被后续命令使用，先删后连被拒', () => {
     const okV = validateAiBatch(
       [
-        { op: 'create_node', nodeType: 'branch', ref: 'x', data: { prompt: '追或不追？' } },
+        {
+          op: 'create_node',
+          nodeType: 'branch',
+          ref: 'x',
+          data: { prompt: '追或不追？' },
+        },
         { op: 'connect_edge', sourceId: 'n1', targetId: 'x' },
       ],
       snap(),
@@ -76,28 +91,16 @@ describe('validateAiBatch：校验折叠（数据模型 §12，执行前批量�
     expect(badV.ok).toBe(false)
   })
 })
-
-/** 测试用快照：场景 s1 + 对白 d1；设定集含角色 ch-1（陈默）与地点 loc-1（茶馆）。 */
-function entSnap(): AiGraphSnapshot {
-  return {
-    nodes: [
-      { id: 's1', type: 'scene', label: '场 01 · 茶馆' },
-      { id: 'd1', type: 'dialogue', label: '对白 · 对质' },
-    ],
-    edges: [],
-    assets: new Map(),
-    settings: {
-      characters: [{ id: 'ch-1', name: '陈默' }],
-      locations: [{ id: 'loc-1', name: '茶馆' }],
-    },
-  }
-}
-
 describe('validateAiBatch · 实体折叠与预览产出（新建 / 修改 / 同批绑定 ref，issue 44）', () => {
   it('同批「新建角色/地点 → 场景与对白绑定 ref」逐项折叠；实体改动进预览', () => {
     const v = validateAiBatch(
       [
-        { op: 'upsert_character', ref: 'hero', fields: { name: '林一', bio: '落魄侦探' }, reason: '主角' },
+        {
+          op: 'upsert_character',
+          ref: 'hero',
+          fields: { name: '林一', bio: '落魄侦探' },
+          reason: '主角',
+        },
         { op: 'upsert_location', ref: 'home', fields: { name: '公寓' } },
         {
           op: 'create_node',
@@ -105,11 +108,17 @@ describe('validateAiBatch · 实体折叠与预览产出（新建 / 修改 / 同
           ref: 'sc',
           data: { name: '开场', characterIds: ['hero'], locationId: 'home' },
         },
-        { op: 'update_node', nodeId: 's1', patch: { characterIds: ['ch-1', 'hero'] } },
+        {
+          op: 'update_node',
+          nodeId: 's1',
+          patch: { characterIds: ['ch-1', 'hero'] },
+        },
         {
           op: 'update_node',
           nodeId: 'd1',
-          patch: { lines: [{ kind: 'line', speaker: 'hero', text: '你来了。' }] },
+          patch: {
+            lines: [{ kind: 'line', speaker: 'hero', text: '你来了。' }],
+          },
         },
       ],
       entSnap(),
@@ -126,19 +135,30 @@ describe('validateAiBatch · 实体折叠与预览产出（新建 / 修改 / 同
     const itemKinds = v.items.map((i) => i.kind)
     expect(itemKinds).toContain('create_entity')
     expect(itemKinds).toContain('update')
-    expect(v.items.find((i) => i.kind === 'create_entity')?.label).toContain('林一')
+    expect(v.items.find((i) => i.kind === 'create_entity')?.label).toContain(
+      '林一',
+    )
   })
 
   it('已有实体补充 bio：entityId 精确指向，预览标 update_entity 且只列变更字段', () => {
     const v = validateAiBatch(
-      [{ op: 'upsert_character', entityId: 'ch-1', fields: { bio: '戒了三年又复吸' } }],
+      [
+        {
+          op: 'upsert_character',
+          entityId: 'ch-1',
+          fields: { bio: '戒了三年又复吸' },
+        },
+      ],
       entSnap(),
     )
     expect(v.ok).toBe(true)
     expect(v.items[0]).toMatchObject({ kind: 'update_entity' })
     expect(v.items[0].label).toContain('陈默')
     expect(v.items[0].label).toContain('bio')
-    expect(v.commands[0]).toMatchObject({ op: 'upsert_character', entityId: 'ch-1' })
+    expect(v.commands[0]).toMatchObject({
+      op: 'upsert_character',
+      entityId: 'ch-1',
+    })
   })
 
   it('修改未提及 name：执行命令 fields 只含写入键（归一化不注入空名，预览→执行同口径）', () => {
@@ -147,7 +167,9 @@ describe('validateAiBatch · 实体折叠与预览产出（新建 / 修改 / 同
       entSnap(),
     )
     expect(v.ok).toBe(true)
-    expect((v.commands[0] as { fields: Record<string, unknown> }).fields).toEqual({
+    expect(
+      (v.commands[0] as { fields: Record<string, unknown> }).fields,
+    ).toEqual({
       bio: '新小传',
     })
     // 预览标签只列实际写入的字段，不把未提及的 name 列为变更
@@ -228,18 +250,26 @@ describe('validateAiBatch · entityId 解析与结构化引用校验（issue 44�
     expect(ghost.issues[0].message).toContain('地点实体不存在')
 
     const ghostSpeaker = validateAiBatch(
-      [{
-        op: 'update_node',
-        nodeId: 'd1',
-        patch: { lines: [{ kind: 'line', speaker: 'who', text: '？' }] },
-      }],
+      [
+        {
+          op: 'update_node',
+          nodeId: 'd1',
+          patch: { lines: [{ kind: 'line', speaker: 'who', text: '？' }] },
+        },
+      ],
       entSnap(),
     )
     expect(ghostSpeaker.ok).toBe(false)
     expect(ghostSpeaker.issues[0].message).toContain('角色实体不存在')
 
     const okExisting = validateAiBatch(
-      [{ op: 'update_node', nodeId: 's1', patch: { characterIds: ['ch-1'], locationId: 'loc-1' } }],
+      [
+        {
+          op: 'update_node',
+          nodeId: 's1',
+          patch: { characterIds: ['ch-1'], locationId: 'loc-1' },
+        },
+      ],
       entSnap(),
     )
     expect(okExisting.ok).toBe(true)
@@ -250,7 +280,11 @@ describe('validateAiBatch · ref 别名与同批先建后改（contingent 自愈
   it('失败 upsert 的 ref 依赖按 contingent 跳过：不产级联假阳性，修复后自愈', () => {
     const v = validateAiBatch(
       [
-        { op: 'upsert_character', ref: 'hero', fields: { bio: '缺 name，失败' } },
+        {
+          op: 'upsert_character',
+          ref: 'hero',
+          fields: { bio: '缺 name，失败' },
+        },
         { op: 'update_node', nodeId: 's1', patch: { characterIds: ['hero'] } },
       ],
       entSnap(),
@@ -273,7 +307,12 @@ describe('validateAiBatch · ref 别名与同批先建后改（contingent 自愈
   it('同批 ref 别名既有实体：update 挂 ref 后，后续绑定可用 ref 引用', () => {
     const v = validateAiBatch(
       [
-        { op: 'upsert_character', entityId: 'ch-1', ref: 'hero', fields: { bio: '补小传' } },
+        {
+          op: 'upsert_character',
+          entityId: 'ch-1',
+          ref: 'hero',
+          fields: { bio: '补小传' },
+        },
         { op: 'update_node', nodeId: 's1', patch: { characterIds: ['hero'] } },
       ],
       entSnap(),
@@ -352,7 +391,11 @@ describe('validateAiBatch · id 口径严格化（畸形 entityId / 独立 id �
     const asCharacter = validateAiBatch(
       [
         { op: 'upsert_character', ref: 'hero', fields: { name: '林一' } },
-        { op: 'update_node', nodeId: 's1', patch: { characterIds: ['__ent__:0'] } },
+        {
+          op: 'update_node',
+          nodeId: 's1',
+          patch: { characterIds: ['__ent__:0'] },
+        },
       ],
       snap,
     )
@@ -383,7 +426,11 @@ describe('validateAiBatch · 虚拟投影 id 不可直接引用（仅声明的 r
     const viaCharacterIds = validateAiBatch(
       [
         { op: 'upsert_character', fields: { name: '林一' } },
-        { op: 'update_node', nodeId: 's1', patch: { characterIds: ['__ent__:0'] } },
+        {
+          op: 'update_node',
+          nodeId: 's1',
+          patch: { characterIds: ['__ent__:0'] },
+        },
       ],
       snap,
     )
@@ -408,26 +455,35 @@ describe('validateAiBatch · 台词行 speaker 引用与 ref 别名冲突（issu
         {
           op: 'create_node',
           nodeType: 'dialogue',
-          data: { name: '对质', lines: [{ speaker: 'loc-1', text: '你来了。' }] },
+          data: {
+            name: '对质',
+            lines: [{ speaker: 'loc-1', text: '你来了。' }],
+          },
         },
       ],
       entSnap(),
     )
     expect(cross.ok).toBe(false)
-    expect(cross.issues.some((i) => i.message.includes('lines[0].speaker'))).toBe(true)
+    expect(
+      cross.issues.some((i) => i.message.includes('lines[0].speaker')),
+    ).toBe(true)
 
     const unknown = validateAiBatch(
       [
         {
           op: 'update_node',
           nodeId: 'd1',
-          patch: { lines: [{ id: 'line-1', speaker: 'ghost-ch', text: '在。' }] },
+          patch: {
+            lines: [{ id: 'line-1', speaker: 'ghost-ch', text: '在。' }],
+          },
         },
       ],
       entSnap(),
     )
     expect(unknown.ok).toBe(false)
-    expect(unknown.issues.some((i) => i.message.includes('lines[0].speaker'))).toBe(true)
+    expect(
+      unknown.issues.some((i) => i.message.includes('lines[0].speaker')),
+    ).toBe(true)
   })
 
   it('ref 别名与既有实体 id 冲突时整批拒绝（校验按既有实体解析、执行按别名解析）', () => {
@@ -443,11 +499,20 @@ describe('validateAiBatch · 台词行 speaker 引用与 ref 别名冲突（issu
 
     // 修改既有实体挂冲突别名同样拒绝
     const onUpdate = validateAiBatch(
-      [{ op: 'upsert_character', entityId: 'ch-1', ref: 'loc-1', fields: { bio: '补' } }],
+      [
+        {
+          op: 'upsert_character',
+          entityId: 'ch-1',
+          ref: 'loc-1',
+          fields: { bio: '补' },
+        },
+      ],
       entSnap(),
     )
     expect(onUpdate.ok).toBe(false)
-    expect(onUpdate.issues.some((i) => i.message.includes('ref 别名'))).toBe(true)
+    expect(onUpdate.issues.some((i) => i.message.includes('ref 别名'))).toBe(
+      true,
+    )
   })
 })
 
@@ -481,13 +546,22 @@ describe('列表项稳定 id 归一化（S6479 信任边界：AI 可送旧形态
         {
           op: 'create_node',
           nodeType: 'branch',
-          data: { prompt: '追或不追？', options: ['追', { label: '不追' }, { id: 'opt-keep', label: '观望' }] },
+          data: {
+            prompt: '追或不追？',
+            options: [
+              '追',
+              { label: '不追' },
+              { id: 'opt-keep', label: '观望' },
+            ],
+          },
         },
       ],
       snap(),
     )
     expect(v.ok).toBe(true)
-    const cmd = v.commands[0] as { data: { options: Array<{ id: string; label: string }> } }
+    const cmd = v.commands[0] as {
+      data: { options: Array<{ id: string; label: string }> }
+    }
     expect(cmd.data.options.map((o) => o.label)).toEqual(['追', '不追', '观望'])
     expect(cmd.data.options[0].id).toMatch(/^opt-/)
     expect(cmd.data.options[1].id).toMatch(/^opt-/)
@@ -500,7 +574,13 @@ describe('列表项稳定 id 归一化（S6479 信任边界：AI 可送旧形态
         {
           op: 'create_node',
           nodeType: 'shot',
-          data: { shotNo: 1, size: '中景', picture: '', prompt: '', refs: [{ kind: 'audio', label: '雨声' }] },
+          data: {
+            shotNo: 1,
+            size: '中景',
+            picture: '',
+            prompt: '',
+            refs: [{ kind: 'audio', label: '雨声' }],
+          },
         },
       ],
       snap(),
@@ -517,7 +597,13 @@ describe('列表项稳定 id 归一化（S6479 信任边界：AI 可送旧形态
       assets: new Map(),
     }
     const v = validateAiBatch(
-      [{ op: 'update_node', nodeId: 'd9', patch: { lines: [{ kind: 'action', text: '沉默' }] } }],
+      [
+        {
+          op: 'update_node',
+          nodeId: 'd9',
+          patch: { lines: [{ kind: 'action', text: '沉默' }] },
+        },
+      ],
       s,
     )
     expect(v.ok).toBe(true)
@@ -538,8 +624,20 @@ describe('列表项稳定 id 归一化（S6479 信任边界：AI 可送旧形态
           data: {
             name: '摊牌',
             lines: [
-              { id: 'dup', kind: 'line', speaker: 'ch1', side: 'left', text: '一' },
-              { id: 'dup', kind: 'line', speaker: 'ch1', side: 'left', text: '二' },
+              {
+                id: 'dup',
+                kind: 'line',
+                speaker: 'ch1',
+                side: 'left',
+                text: '一',
+              },
+              {
+                id: 'dup',
+                kind: 'line',
+                speaker: 'ch1',
+                side: 'left',
+                text: '二',
+              },
               { id: '', kind: 'action', text: '三' },
               { id: 'solo', kind: 'action', text: '四' },
               { id: '   ', kind: 'action', text: '五' },
@@ -549,18 +647,32 @@ describe('列表项稳定 id 归一化（S6479 信任边界：AI 可送旧形态
         {
           op: 'create_node',
           nodeType: 'branch',
-          data: { prompt: '？', options: [{ id: 'x', label: 'A' }, { id: 'x', label: 'B' }] },
+          data: {
+            prompt: '？',
+            options: [
+              { id: 'x', label: 'A' },
+              { id: 'x', label: 'B' },
+            ],
+          },
         },
         {
           op: 'create_node',
           nodeType: 'shot',
-          data: { shotNo: 1, size: '中景', picture: '', prompt: '', refs: [{ id: '', kind: 'audio', label: '雨声' }] },
+          data: {
+            shotNo: 1,
+            size: '中景',
+            picture: '',
+            prompt: '',
+            refs: [{ id: '', kind: 'audio', label: '雨声' }],
+          },
         },
       ],
       snap(),
     )
     expect(v.ok).toBe(true)
-    const lines = (v.commands[0] as unknown as { data: { lines: Array<{ id: string }> } }).data.lines
+    const lines = (
+      v.commands[0] as unknown as { data: { lines: Array<{ id: string }> } }
+    ).data.lines
     const lineIds = lines.map((l) => l.id)
     expect(new Set(lineIds).size).toBe(5) // 全唯一
     expect(lineIds.every((id) => id !== '')).toBe(true)
@@ -572,11 +684,15 @@ describe('列表项稳定 id 归一化（S6479 信任边界：AI 可送旧形态
     // 被接受的命令不得自带重开即变的“稳定”身份
     expect(lineIds[4]).toMatch(/^line-/)
 
-    const options = (v.commands[1] as unknown as { data: { options: Array<{ id: string }> } }).data.options
+    const options = (
+      v.commands[1] as unknown as { data: { options: Array<{ id: string }> } }
+    ).data.options
     expect(options[0].id).toBe('x')
     expect(options[1].id).toMatch(/^opt-/)
 
-    const refs = (v.commands[2] as unknown as { data: { refs: Array<{ id: string }> } }).data.refs
+    const refs = (
+      v.commands[2] as unknown as { data: { refs: Array<{ id: string }> } }
+    ).data.refs
     expect(refs[0].id).toMatch(/^ref-/)
   })
 })
@@ -595,13 +711,22 @@ describe('wouldCreateCycle（连线防环，画布与批量共用）', () => {
 describe('参数字段校验（⚙️ 设置面板字段的 AI 通道）', () => {
   it('patch / data 的未知字段整批拒绝，并提示允许字段', () => {
     const v1 = validateAiBatch(
-      [{ op: 'update_node', nodeId: 'n1', patch: { synopsis: '雨中分手', hacker: true } }],
+      [
+        {
+          op: 'update_node',
+          nodeId: 'n1',
+          patch: { synopsis: '雨中分手', hacker: true },
+        },
+      ],
       snap(),
     )
     expect(v1.ok).toBe(false)
     expect(v1.issues[0].message).toContain('synopsis')
 
-    const v2 = validateAiBatch([{ op: 'create_node', nodeType: 'beat', data: { name: '转折', foo: 1 } }], snap())
+    const v2 = validateAiBatch(
+      [{ op: 'create_node', nodeType: 'beat', data: { name: '转折', foo: 1 } }],
+      snap(),
+    )
     expect(v2.ok).toBe(false)
     expect(v2.issues[0].message).toContain('tone')
   })
@@ -609,8 +734,16 @@ describe('参数字段校验（⚙️ 设置面板字段的 AI 通道）', () =>
   it('各类型合法字段通过（含场号/镜号改排 = 大纲级操作）', () => {
     const v = validateAiBatch(
       [
-        { op: 'update_node', nodeId: 'n1', patch: { sceneNo: 3, time: '🌅 晨', characterIds: ['c1'] } },
-        { op: 'create_node', nodeType: 'shot', data: { shotNo: 2, size: '特写', prompt: '雨水划过脸庞' } },
+        {
+          op: 'update_node',
+          nodeId: 'n1',
+          patch: { sceneNo: 3, time: '🌅 晨', characterIds: ['c1'] },
+        },
+        {
+          op: 'create_node',
+          nodeType: 'shot',
+          data: { shotNo: 2, size: '特写', prompt: '雨水划过脸庞' },
+        },
       ],
       snap(),
     )
@@ -622,7 +755,12 @@ describe('参数字段校验（⚙️ 设置面板字段的 AI 通道）', () =>
       [
         { op: 'update_node', nodeId: 'n1', patch: { episodeNo: 1 } },
         { op: 'update_node', nodeId: 'n2', patch: { episodeNo: 1 } },
-        { op: 'create_node', nodeType: 'dialogue', ref: 'd', data: { episodeNo: 2 } },
+        {
+          op: 'create_node',
+          nodeType: 'dialogue',
+          ref: 'd',
+          data: { episodeNo: 2 },
+        },
       ],
       snap(),
     )
@@ -630,14 +768,20 @@ describe('参数字段校验（⚙️ 设置面板字段的 AI 通道）', () =>
 
     const bad = validateAiBatch(
       [{ op: 'update_node', nodeId: 'n1', patch: { episodeNo: 0 } }],
-      { ...snap(), nodes: [...snap().nodes, { id: 'x', type: 'shot', label: 'SHOT01' }] },
+      {
+        ...snap(),
+        nodes: [...snap().nodes, { id: 'x', type: 'shot', label: 'SHOT01' }],
+      },
     )
     // n1 是 scene：字段可写但值域非法（§9.3 正整数）——零/负/小数拒绝
     expect(bad.ok).toBe(false)
 
     const shotBad = validateAiBatch(
       [{ op: 'update_node', nodeId: 'x', patch: { episodeNo: 1 } }],
-      { ...snap(), nodes: [...snap().nodes, { id: 'x', type: 'shot', label: 'SHOT01' }] },
+      {
+        ...snap(),
+        nodes: [...snap().nodes, { id: 'x', type: 'shot', label: 'SHOT01' }],
+      },
     )
     expect(shotBad.ok).toBe(false)
     expect(shotBad.issues[0].message).toContain('分镜')
@@ -646,10 +790,19 @@ describe('参数字段校验（⚙️ 设置面板字段的 AI 通道）', () =>
 
 describe('分类型连线校验（剧情流 / 分支选项出口 / 分镜下挂）', () => {
   it('默认 sequence：普通节点间连线合法；分支 source 走 sequence 拒绝（§5 端口归属）', () => {
-    const v = validateAiBatch([{ op: 'connect_edge', sourceId: 'n2', targetId: 'n1' }], { ...snap(), edges: [] })
+    const v = validateAiBatch(
+      [{ op: 'connect_edge', sourceId: 'n2', targetId: 'n1' }],
+      {
+        ...snap(),
+        edges: [],
+      },
+    )
     expect(v.ok).toBe(true)
     expect(v.commands[0]).toMatchObject({ edgeKind: 'sequence' })
-    const fromBranch = validateAiBatch([{ op: 'connect_edge', sourceId: 'b1', targetId: 's1' }], richSnap())
+    const fromBranch = validateAiBatch(
+      [{ op: 'connect_edge', sourceId: 'b1', targetId: 's1' }],
+      richSnap(),
+    )
     expect(fromBranch.ok).toBe(false)
   })
 
@@ -657,15 +810,32 @@ describe('分类型连线校验（剧情流 / 分支选项出口 / 分镜下挂�
     // 快照携带旧草案遗留的反向边（sh1→s1）：attach 是垂直派生边，即便快照
     // 中存在这样的横向路径也不参与环检测——但批次不得再新建分镜端点的剧情流边
     const ok = validateAiBatch(
-      [{ op: 'connect_edge', sourceId: 's1', targetId: 'sh1', edgeKind: 'attach' }],
+      [
+        {
+          op: 'connect_edge',
+          sourceId: 's1',
+          targetId: 'sh1',
+          edgeKind: 'attach',
+        },
+      ],
       { ...richSnap(), edges: [{ source: 'sh1', target: 's1' }] },
     )
     expect(ok.ok).toBe(true)
     expect(ok.commands[0]).toMatchObject({ edgeKind: 'attach' })
 
     for (const bad of [
-      { op: 'connect_edge', sourceId: 'sh1', targetId: 's1', edgeKind: 'attach' },
-      { op: 'connect_edge', sourceId: 'b1', targetId: 'sh1', edgeKind: 'attach' },
+      {
+        op: 'connect_edge',
+        sourceId: 'sh1',
+        targetId: 's1',
+        edgeKind: 'attach',
+      },
+      {
+        op: 'connect_edge',
+        sourceId: 'b1',
+        targetId: 'sh1',
+        edgeKind: 'attach',
+      },
     ]) {
       const v = validateAiBatch([bad], richSnap())
       expect(v.ok, JSON.stringify(bad)).toBe(false)
@@ -678,11 +848,22 @@ describe('分类型连线校验（剧情流 / 分支选项出口 / 分镜下挂�
     // 若校验态不清除被删选项的边，BFS 会把 s1→b1 误判为成环而拒绝合法批次。
     const snapWithEdge: AiGraphSnapshot = {
       ...snap,
-      edges: [{ source: 'b1', target: 's1', sourceHandle: 'option-ob-a', type: 'branch' }],
+      edges: [
+        {
+          source: 'b1',
+          target: 's1',
+          sourceHandle: 'option-ob-a',
+          type: 'branch',
+        },
+      ],
     }
     const v = validateAiBatch(
       [
-        { op: 'update_node', nodeId: 'b1', patch: { options: [{ id: 'ob-b', label: '不追' }] } },
+        {
+          op: 'update_node',
+          nodeId: 'b1',
+          patch: { options: [{ id: 'ob-b', label: '不追' }] },
+        },
         { op: 'connect_edge', sourceId: 's1', targetId: 'b1' },
       ],
       snapWithEdge,
@@ -692,16 +873,41 @@ describe('分类型连线校验（剧情流 / 分支选项出口 / 分镜下挂�
 
   it('branch 需要来源为分支节点且 optionIndex 在选项范围内', () => {
     const ok = validateAiBatch(
-      [{ op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 1 }],
+      [
+        {
+          op: 'connect_edge',
+          sourceId: 'b1',
+          targetId: 's1',
+          edgeKind: 'branch',
+          optionIndex: 1,
+        },
+      ],
       richSnap(),
     )
     expect(ok.ok).toBe(true)
     expect(ok.commands[0]).toMatchObject({ edgeKind: 'branch', optionIndex: 1 })
 
     for (const bad of [
-      { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch' },
-      { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 2 },
-      { op: 'connect_edge', sourceId: 's1', targetId: 'sh1', edgeKind: 'branch', optionIndex: 0 },
+      {
+        op: 'connect_edge',
+        sourceId: 'b1',
+        targetId: 's1',
+        edgeKind: 'branch',
+      },
+      {
+        op: 'connect_edge',
+        sourceId: 'b1',
+        targetId: 's1',
+        edgeKind: 'branch',
+        optionIndex: 2,
+      },
+      {
+        op: 'connect_edge',
+        sourceId: 's1',
+        targetId: 'sh1',
+        edgeKind: 'branch',
+        optionIndex: 0,
+      },
     ]) {
       const v = validateAiBatch([bad], richSnap())
       expect(v.ok, JSON.stringify(bad)).toBe(false)
@@ -711,8 +917,20 @@ describe('分类型连线校验（剧情流 / 分支选项出口 / 分镜下挂�
   it('同一 option 端口的重复连线拒绝；不同选项各自可达', () => {
     const v = validateAiBatch(
       [
-        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
-        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
+        {
+          op: 'connect_edge',
+          sourceId: 'b1',
+          targetId: 's1',
+          edgeKind: 'branch',
+          optionIndex: 0,
+        },
+        {
+          op: 'connect_edge',
+          sourceId: 'b1',
+          targetId: 's1',
+          edgeKind: 'branch',
+          optionIndex: 0,
+        },
       ],
       richSnap(),
     )
@@ -721,8 +939,20 @@ describe('分类型连线校验（剧情流 / 分支选项出口 / 分镜下挂�
 
     const ok = validateAiBatch(
       [
-        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
-        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 1 },
+        {
+          op: 'connect_edge',
+          sourceId: 'b1',
+          targetId: 's1',
+          edgeKind: 'branch',
+          optionIndex: 0,
+        },
+        {
+          op: 'connect_edge',
+          sourceId: 'b1',
+          targetId: 's1',
+          edgeKind: 'branch',
+          optionIndex: 1,
+        },
       ],
       richSnap(),
     )
@@ -735,8 +965,20 @@ describe('分类型连线校验（剧情流 / 分支选项出口 / 分镜下挂�
     // 否则反向剧情流连线被残留边误判成环
     const v = validateAiBatch(
       [
-        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
-        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 1 },
+        {
+          op: 'connect_edge',
+          sourceId: 'b1',
+          targetId: 's1',
+          edgeKind: 'branch',
+          optionIndex: 0,
+        },
+        {
+          op: 'connect_edge',
+          sourceId: 'b1',
+          targetId: 's1',
+          edgeKind: 'branch',
+          optionIndex: 1,
+        },
         { op: 'disconnect_edge', sourceId: 'b1', targetId: 's1' },
         { op: 'connect_edge', sourceId: 's1', targetId: 'b1' },
       ],
@@ -748,7 +990,14 @@ describe('分类型连线校验（剧情流 / 分支选项出口 / 分镜下挂�
 
   it('同对节点的 sequence 涉及分镜卡：拒绝——attach 才是场景↔分镜的唯一连线', () => {
     const v = validateAiBatch(
-      [{ op: 'connect_edge', sourceId: 's1', targetId: 'sh1', edgeKind: 'sequence' }],
+      [
+        {
+          op: 'connect_edge',
+          sourceId: 's1',
+          targetId: 'sh1',
+          edgeKind: 'sequence',
+        },
+      ],
       richSnap(),
     )
     expect(v.ok).toBe(false)
@@ -772,7 +1021,13 @@ describe('validateAiBatch：分支 options 级联簿记前的成员形状校验�
 
   it('create_node 的 options 含异型成员：整批拒绝；字符串选项与完整成员仍放行', () => {
     const bad = validateAiBatch(
-      [{ op: 'create_node', nodeType: 'branch', data: { prompt: '？', options: [42] } }],
+      [
+        {
+          op: 'create_node',
+          nodeType: 'branch',
+          data: { prompt: '？', options: [42] },
+        },
+      ],
       richSnap(),
     )
     expect(bad.ok).toBe(false)
@@ -781,7 +1036,10 @@ describe('validateAiBatch：分支 options 级联簿记前的成员形状校验�
         {
           op: 'create_node',
           nodeType: 'branch',
-            data: { prompt: '？', options: ['徒手', { id: 'o2', label: '叫人' }] },
+          data: {
+            prompt: '？',
+            options: ['徒手', { id: 'o2', label: '叫人' }],
+          },
         },
       ],
       richSnap(),
@@ -801,7 +1059,13 @@ describe('validateAiBatch：分支 options 级联簿记前的成员形状校验�
     expect(update.issues[0]?.message).toContain('options')
 
     const create = validateAiBatch(
-      [{ op: 'create_node', nodeType: 'branch', data: { prompt: '？', options: 42 } }],
+      [
+        {
+          op: 'create_node',
+          nodeType: 'branch',
+          data: { prompt: '？', options: 42 },
+        },
+      ],
       richSnap(),
     )
     expect(create.ok).toBe(false)
@@ -812,7 +1076,12 @@ describe('validateAiBatch：分支 options 级联簿记前的成员形状校验�
   it('经 ref 的 update 携非数组 options：恒非法，与 create 失败同轮点名（issue 67）', () => {
     const v = validateAiBatch(
       [
-        { op: 'create_node', nodeType: 'branch', ref: 'nb', data: { prompt: '？', options: [{ label: 5 }] } },
+        {
+          op: 'create_node',
+          nodeType: 'branch',
+          ref: 'nb',
+          data: { prompt: '？', options: [{ label: 5 }] },
+        },
         { op: 'update_node', nodeId: 'nb', patch: { options: {} } },
       ],
       richSnap(),
@@ -825,27 +1094,44 @@ describe('validateAiBatch：分支 options 级联簿记前的成员形状校验�
 
     const repaired = validateAiBatch(
       [
-        { op: 'create_node', nodeType: 'branch', ref: 'nb', data: { prompt: '？', options: ['追'] } },
+        {
+          op: 'create_node',
+          nodeType: 'branch',
+          ref: 'nb',
+          data: { prompt: '？', options: ['追'] },
+        },
         { op: 'update_node', nodeId: 'nb', patch: { options: {} } },
       ],
       richSnap(),
     )
     expect(repaired.ok).toBe(false)
-    expect(repaired.issues.some((i) => i.index === 1 && i.message.includes('options'))).toBe(true)
+    expect(
+      repaired.issues.some(
+        (i) => i.index === 1 && i.message.includes('options'),
+      ),
+    ).toBe(true)
   })
 
   it('非数组 options 更新失败同样登记 contingent（评审 5163172679）：越界连线不点名', () => {
     const v = validateAiBatch(
       [
         { op: 'update_node', nodeId: 'b1', patch: { options: 'foo' } },
-        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 2 },
+        {
+          op: 'connect_edge',
+          sourceId: 'b1',
+          targetId: 's1',
+          edgeKind: 'branch',
+          optionIndex: 2,
+        },
       ],
       richSnap(),
     )
     expect(v.ok).toBe(false)
     expect(v.issues).toHaveLength(1)
     expect(v.issues[0]?.message).toContain('options')
-    expect(v.issues.map((i) => i.message).join('\n')).not.toContain('optionIndex')
+    expect(v.issues.map((i) => i.message).join('\n')).not.toContain(
+      'optionIndex',
+    )
   })
 })
 
@@ -856,7 +1142,13 @@ describe('AI 批量命令的逐类型载荷形状校验（信任边界：字段�
         {
           op: 'create_node',
           nodeType: 'shot',
-          data: { shotNo: 1, size: '特写', picture: {}, prompt: '', refs: [null] },
+          data: {
+            shotNo: 1,
+            size: '特写',
+            picture: {},
+            prompt: '',
+            refs: [null],
+          },
         },
       ],
       snap(),
@@ -870,7 +1162,16 @@ describe('AI 批量命令的逐类型载荷形状校验（信任边界：字段�
   it('scene 的标量/列表形状：interior 非布尔、characterIds 含非字符串成员均拒绝', () => {
     const bad = validateAiBatch(
       [
-        { op: 'create_node', nodeType: 'scene', data: { name: '场', sceneNo: 1, interior: 'yes', characterIds: ['ch-1', 7] } },
+        {
+          op: 'create_node',
+          nodeType: 'scene',
+          data: {
+            name: '场',
+            sceneNo: 1,
+            interior: 'yes',
+            characterIds: ['ch-1', 7],
+          },
+        },
       ],
       snap(),
     )
@@ -882,7 +1183,16 @@ describe('AI 批量命令的逐类型载荷形状校验（信任边界：字段�
 
   it('dialogue 的 lines 成员须为带字符串 text 的对象；update patch 同域校验', () => {
     const badCreate = validateAiBatch(
-      [{ op: 'create_node', nodeType: 'dialogue', data: { name: '对白', lines: [{ id: 'l1', kind: 'line', speaker: '', text: 42 }] } }],
+      [
+        {
+          op: 'create_node',
+          nodeType: 'dialogue',
+          data: {
+            name: '对白',
+            lines: [{ id: 'l1', kind: 'line', speaker: '', text: 42 }],
+          },
+        },
+      ],
       snap(),
     )
     expect(badCreate.ok).toBe(false)
@@ -893,12 +1203,25 @@ describe('AI 批量命令的逐类型载荷形状校验（信任边界：字段�
       snap(),
     )
     expect(badUpdate.ok).toBe(false)
-    expect(badUpdate.issues.map((i) => i.message).join('\n')).toContain('synopsis')
+    expect(badUpdate.issues.map((i) => i.message).join('\n')).toContain(
+      'synopsis',
+    )
   })
 
   it('action 台词行携带 speaker：拒绝（隐藏引用不得进活动文档并持久化）', () => {
     const bad = validateAiBatch(
-      [{ op: 'create_node', nodeType: 'dialogue', data: { name: '对白', lines: [{ id: 'l1', kind: 'action', speaker: 'ch1', text: '雨声渐大' }] } }],
+      [
+        {
+          op: 'create_node',
+          nodeType: 'dialogue',
+          data: {
+            name: '对白',
+            lines: [
+              { id: 'l1', kind: 'action', speaker: 'ch1', text: '雨声渐大' },
+            ],
+          },
+        },
+      ],
       snap(),
     )
     expect(bad.ok).toBe(false)
@@ -912,7 +1235,10 @@ describe('AI 批量命令的逐类型载荷形状校验（信任边界：字段�
           op: 'create_node',
           nodeType: 'shot',
           data: {
-            shotNo: 1, size: '特写', picture: '', prompt: '',
+            shotNo: 1,
+            size: '特写',
+            picture: '',
+            prompt: '',
             refs: [
               { id: 'r1', kind: 'ghost', label: '异灵' },
               { id: 'r2', kind: 'audio', assetId: 'a-1', label: '并存' },
@@ -933,7 +1259,10 @@ describe('AI 批量命令的逐类型载荷形状校验（信任边界：字段�
           op: 'create_node',
           nodeType: 'shot',
           data: {
-            shotNo: 1, size: '特写', picture: '', prompt: '',
+            shotNo: 1,
+            size: '特写',
+            picture: '',
+            prompt: '',
             refs: [
               { id: 'r1', kind: 'audio', assetId: '' },
               { id: 'r2', kind: 'audio', assetId: '  ' },
@@ -992,7 +1321,14 @@ describe('AI 批量命令的逐类型载荷形状校验（信任边界：字段�
   it('选项替换的级联断线进预览并触发删除级确认：一键不得静默删除剧情路径', () => {
     const snapWithEdge = (): AiGraphSnapshot => ({
       ...richSnap(),
-      edges: [{ source: 'b1', target: 's1', sourceHandle: 'option-ob-a', type: 'branch' }],
+      edges: [
+        {
+          source: 'b1',
+          target: 's1',
+          sourceHandle: 'option-ob-a',
+          type: 'branch',
+        },
+      ],
     })
     // 显式合法 id 的替换对象：被换选项（ob-a/ob-b）的引出边会被级联删除
     const v = validateAiBatch(
@@ -1034,7 +1370,8 @@ describe('AI 批量命令的逐类型载荷形状校验（信任边界：字段�
     )
     expect(v.ok).toBe(true)
     const options =
-      v.commands[0].op === 'update_node' && v.commands[0].patch.nodeType === 'branch'
+      v.commands[0].op === 'update_node' &&
+      v.commands[0].patch.nodeType === 'branch'
         ? (v.commands[0].patch.patch.options ?? [])
         : []
     expect(options).toEqual([
@@ -1048,13 +1385,20 @@ describe('AI 批量命令的逐类型载荷形状校验（信任边界：字段�
         {
           op: 'update_node',
           nodeId: 'b1',
-          patch: { options: ['追！', { label: '不追' }, { id: 'ob-x', label: '新选项' }] },
+          patch: {
+            options: [
+              '追！',
+              { label: '不追' },
+              { id: 'ob-x', label: '新选项' },
+            ],
+          },
         },
       ],
       richSnap(),
     )
     const mixedOptions =
-      mixed.commands[0].op === 'update_node' && mixed.commands[0].patch.nodeType === 'branch'
+      mixed.commands[0].op === 'update_node' &&
+      mixed.commands[0].patch.nodeType === 'branch'
         ? (mixed.commands[0].patch.patch.options ?? [])
         : []
     expect(mixedOptions.map((o) => o.id)).toEqual(['ob-a', 'ob-b', 'ob-x'])
@@ -1064,12 +1408,19 @@ describe('AI 批量命令的逐类型载荷形状校验（信任边界：字段�
     // 红：字符串形态整体重发新 id——全部既有 option- 句柄被视为已删选项，
     // 折叠/模拟静默清除每条引出线，而预览只显示一次普通选项更新
     const v = validateAiBatch(
-      [{ op: 'update_node', nodeId: 'b1', patch: { options: ['追！', '不追'] } }],
+      [
+        {
+          op: 'update_node',
+          nodeId: 'b1',
+          patch: { options: ['追！', '不追'] },
+        },
+      ],
       richSnap(),
     )
     expect(v.ok).toBe(true)
     const options =
-      v.commands[0].op === 'update_node' && v.commands[0].patch.nodeType === 'branch'
+      v.commands[0].op === 'update_node' &&
+      v.commands[0].patch.nodeType === 'branch'
         ? (v.commands[0].patch.patch.options ?? [])
         : []
     expect(options).toEqual([
@@ -1078,11 +1429,18 @@ describe('AI 批量命令的逐类型载荷形状校验（信任边界：字段�
     ])
     // 超出现有选项数的字符串仍是新增（发新 id）
     const grown = validateAiBatch(
-      [{ op: 'update_node', nodeId: 'b1', patch: { options: ['追！', '不追', '再想想'] } }],
+      [
+        {
+          op: 'update_node',
+          nodeId: 'b1',
+          patch: { options: ['追！', '不追', '再想想'] },
+        },
+      ],
       richSnap(),
     )
     const grownOptions =
-      grown.commands[0].op === 'update_node' && grown.commands[0].patch.nodeType === 'branch'
+      grown.commands[0].op === 'update_node' &&
+      grown.commands[0].patch.nodeType === 'branch'
         ? (grown.commands[0].patch.patch.options ?? [])
         : []
     expect(grownOptions[0].id).toBe('ob-a')
@@ -1092,7 +1450,10 @@ describe('AI 批量命令的逐类型载荷形状校验（信任边界：字段�
   it('对白行 speaker 空白域拒收：加载侧会移除该值——接受的 AI 改动不得重开即变样', () => {
     const snapWithDialogue = (): AiGraphSnapshot => ({
       ...snap(),
-      nodes: [...snap().nodes, { id: 'd9', type: 'dialogue', label: '对白 · 夜谈' }],
+      nodes: [
+        ...snap().nodes,
+        { id: 'd9', type: 'dialogue', label: '对白 · 夜谈' },
+      ],
     })
     // 红：只查值类型——空白 speaker 进画布落盘，下次加载被归一化移除
     const bad = validateAiBatch(
@@ -1127,7 +1488,10 @@ describe('AI 批量命令的逐类型载荷形状校验（信任边界：字段�
     ]
     // 红：只查成员类型——空白引用进画布落盘，下次加载被归一化移除，
     // 接受过的 AI 改动重开即变样
-    const badIds = validateAiBatch(sceneWith({ characterIds: ['ch-1', '   '] }), richSnap())
+    const badIds = validateAiBatch(
+      sceneWith({ characterIds: ['ch-1', '   '] }),
+      richSnap(),
+    )
     expect(badIds.ok).toBe(false)
     expect(badIds.issues[0].message).toContain('characterIds')
 
@@ -1135,7 +1499,10 @@ describe('AI 批量命令的逐类型载荷形状校验（信任边界：字段�
     expect(badLoc.ok).toBe(false)
     expect(badLoc.issues[0].message).toContain('locationId')
 
-    const good = validateAiBatch(sceneWith({ characterIds: ['ch-1'] }), richSnap())
+    const good = validateAiBatch(
+      sceneWith({ characterIds: ['ch-1'] }),
+      richSnap(),
+    )
     expect(good.ok).toBe(true)
   })
 
@@ -1160,7 +1527,13 @@ describe('AI 批量命令的逐类型载荷形状校验（信任边界：字段�
         {
           op: 'create_node',
           nodeType: 'shot',
-          data: { shotNo: 2, size: '全景', picture: '夜景街道', prompt: '雨夜', refs: [{ kind: 'audio', label: '雨声' }] },
+          data: {
+            shotNo: 2,
+            size: '全景',
+            picture: '夜景街道',
+            prompt: '雨夜',
+            refs: [{ kind: 'audio', label: '雨声' }],
+          },
         },
       ],
       snap(),
@@ -1172,14 +1545,33 @@ describe('AI 批量命令的逐类型载荷形状校验（信任边界：字段�
 describe('对白行判别字段与可选字段（信任边界：不被下次加载静默删除）', () => {
   it('kind 非 line/action 拒绝；缺省 kind 归一为 line', () => {
     const bad = validateAiBatch(
-      [{ op: 'create_node', nodeType: 'dialogue', data: { name: '对白', lines: [{ id: 'l1', kind: 'narration', text: '旁白' }] } }],
+      [
+        {
+          op: 'create_node',
+          nodeType: 'dialogue',
+          data: {
+            name: '对白',
+            lines: [{ id: 'l1', kind: 'narration', text: '旁白' }],
+          },
+        },
+      ],
       snap(),
     )
     expect(bad.ok).toBe(false)
     expect(bad.issues.map((i) => i.message).join('\n')).toContain('lines')
 
     const ok = validateAiBatch(
-      [{ op: 'create_node', nodeType: 'dialogue', ref: 'd', data: { name: '对白', lines: [{ text: '台词' }, { kind: 'action', text: '转身' }] } }],
+      [
+        {
+          op: 'create_node',
+          nodeType: 'dialogue',
+          ref: 'd',
+          data: {
+            name: '对白',
+            lines: [{ text: '台词' }, { kind: 'action', text: '转身' }],
+          },
+        },
+      ],
       snap(),
     )
     expect(ok.ok).toBe(true)
@@ -1190,7 +1582,16 @@ describe('对白行判别字段与可选字段（信任边界：不被下次加�
 
   it('可选字段 side/vo 异型拒绝', () => {
     const bad = validateAiBatch(
-      [{ op: 'create_node', nodeType: 'dialogue', data: { name: '对白', lines: [{ kind: 'line', text: 'x', side: 'middle', vo: 1 }] } }],
+      [
+        {
+          op: 'create_node',
+          nodeType: 'dialogue',
+          data: {
+            name: '对白',
+            lines: [{ kind: 'line', text: 'x', side: 'middle', vo: 1 }],
+          },
+        },
+      ],
       snap(),
     )
     expect(bad.ok).toBe(false)
@@ -1206,7 +1607,14 @@ describe('attach 宿主唯一（§5：交互/AI 侧对等，不留「重开即�
       edges: [{ source: 's9', target: 'sh1', sourceHandle: 'shots' }],
     }
     const bad = validateAiBatch(
-      [{ op: 'connect_edge', sourceId: 's1', targetId: 'sh1', edgeKind: 'attach' }],
+      [
+        {
+          op: 'connect_edge',
+          sourceId: 's1',
+          targetId: 'sh1',
+          edgeKind: 'attach',
+        },
+      ],
       snapWithHost,
     )
     expect(bad.ok).toBe(false)
@@ -1215,7 +1623,12 @@ describe('attach 宿主唯一（§5：交互/AI 侧对等，不留「重开即�
     const rehost = validateAiBatch(
       [
         { op: 'disconnect_edge', sourceId: 's9', targetId: 'sh1' },
-        { op: 'connect_edge', sourceId: 's1', targetId: 'sh1', edgeKind: 'attach' },
+        {
+          op: 'connect_edge',
+          sourceId: 's1',
+          targetId: 'sh1',
+          edgeKind: 'attach',
+        },
       ],
       snapWithHost,
     )
@@ -1230,7 +1643,13 @@ describe('ShotRef 双字段并存（§4.2 联合的键在场判定）', () => {
         {
           op: 'create_node',
           nodeType: 'shot',
-          data: { shotNo: 1, size: '特写', picture: '', prompt: '', refs: [{ kind: 'audio', assetId: 'a1', label: 5 }] },
+          data: {
+            shotNo: 1,
+            size: '特写',
+            picture: '',
+            prompt: '',
+            refs: [{ kind: 'audio', assetId: 'a1', label: 5 }],
+          },
         },
       ],
       snap(),
@@ -1243,13 +1662,25 @@ describe('ShotRef 双字段并存（§4.2 联合的键在场判定）', () => {
 describe('AI 数值域（§9.3 命令边界：正安全整数，加载不静默改写）', () => {
   it('sceneNo 1.5 / shotNo -2 / episodeNo 0 均拒绝', () => {
     const bad1 = validateAiBatch(
-      [{ op: 'create_node', nodeType: 'scene', data: { name: '场', sceneNo: 1.5 } }],
+      [
+        {
+          op: 'create_node',
+          nodeType: 'scene',
+          data: { name: '场', sceneNo: 1.5 },
+        },
+      ],
       snap(),
     )
     expect(bad1.ok).toBe(false)
     expect(bad1.issues.map((i) => i.message).join('\n')).toContain('sceneNo')
     const bad2 = validateAiBatch(
-      [{ op: 'create_node', nodeType: 'shot', data: { shotNo: -2, size: '特写', picture: '', prompt: '' } }],
+      [
+        {
+          op: 'create_node',
+          nodeType: 'shot',
+          data: { shotNo: -2, size: '特写', picture: '', prompt: '' },
+        },
+      ],
       snap(),
     )
     expect(bad2.ok).toBe(false)
@@ -1278,7 +1709,9 @@ describe('图片节点的 AI 命令边界（§13 首版：快照只读可见、�
       s,
     )
     expect(bad.ok).toBe(false)
-    expect(bad.issues.map((i) => i.message).join('\n')).toContain('暂不支持 AI 命令修改')
+    expect(bad.issues.map((i) => i.message).join('\n')).toContain(
+      '暂不支持 AI 命令修改',
+    )
   })
 
   it('create_node 声明 image 类型：按未知节点类型拒绝（类型标签表未含）', () => {
@@ -1287,7 +1720,9 @@ describe('图片节点的 AI 命令边界（§13 首版：快照只读可见、�
       snap(),
     )
     expect(bad.ok).toBe(false)
-    expect(bad.issues.map((i) => i.message).join('\n')).toContain('未知节点类型')
+    expect(bad.issues.map((i) => i.message).join('\n')).toContain(
+      '未知节点类型',
+    )
   })
 
   it('delete_node 目标为图片节点：整批拒绝（与 create/update 同口径）', () => {
@@ -1301,267 +1736,8 @@ describe('图片节点的 AI 命令边界（§13 首版：快照只读可见、�
     }
     const bad = validateAiBatch([{ op: 'delete_node', nodeId: 'img1' }], s)
     expect(bad.ok).toBe(false)
-    expect(bad.issues.map((i) => i.message).join('\n')).toContain('暂不支持 AI 命令删除')
-  })
-})
-
-describe('validateAiBatch：完整问题收集（评审 5138829847：纠错回喂依赖全量清单）', () => {
-  it('多个独立非法命令逐条收集问题，不再首错短路；原子性保持', () => {
-    const v = validateAiBatch(
-      [
-        { op: 'create_node', nodeType: 'beat', data: { label: '立足' } },
-        { op: 'create_node', nodeType: 'beat', data: { summary: '小店开张' } },
-        { op: 'no_such_op', nodeId: 'x' },
-      ],
-      snap(),
+    expect(bad.issues.map((i) => i.message).join('\n')).toContain(
+      '暂不支持 AI 命令删除',
     )
-    expect(v.ok).toBe(false)
-    expect(v.commands).toEqual([])
-    expect(v.issues).toHaveLength(3)
-    expect(v.issues.map((i) => i.index)).toEqual([0, 1, 2])
-    expect(v.issues[0]?.message).toContain('label')
-    expect(v.issues[1]?.message).toContain('summary')
-    expect(v.issues[2]?.message).toContain('未知操作')
-  })
-
-  it('依赖失败 create 的引用命令按 contingent 跳过，不产生级联假阳性', () => {
-    const v = validateAiBatch(
-      [
-        { op: 'create_node', nodeType: 'beat', data: { label: '立足' }, ref: 'b' },
-        { op: 'connect_edge', sourceId: 'b', targetId: 'n1' },
-      ],
-      snap(),
-    )
-    expect(v.ok).toBe(false)
-    expect(v.commands).toEqual([])
-    // 只点名 create 自身的字段错误；修复后依赖命令自愈，不诱导模型改写
-    expect(v.issues).toHaveLength(1)
-    expect(v.issues[0]?.message).toContain('label')
-    expect(v.issues.map((i) => i.message).join('\n')).not.toContain('端点不存在')
-  })
-
-  it('前序形状失败时其后的真实缺失分层延后：修复重放后独立点名', () => {
-    const v = validateAiBatch(
-      [
-        { op: 'create_node', nodeType: 'beat', data: { label: '立足' }, ref: 'b' },
-        { op: 'connect_edge', sourceId: 'zz', targetId: 'n1' },
-      ],
-      snap(),
-    )
-    // 阶段 B 首错即停：create 失败 → connect 本轮不校验（分层，契约变更）
-    expect(v.issues).toHaveLength(1)
-    expect(v.issues[0]?.message).toContain('label')
-
-    const repaired = validateAiBatch(
-      [
-        { op: 'create_node', nodeType: 'beat', data: { name: '立足' }, ref: 'b' },
-        { op: 'connect_edge', sourceId: 'zz', targetId: 'n1' },
-      ],
-      snap(),
-    )
-    // 拒绝语义按命令定位断言（评审 5174231991：诊断措辞不作契约）
-    expect(repaired.ok).toBe(false)
-    expect(repaired.issues).toHaveLength(1)
-    expect(repaired.issues[0]?.index).toBe(1)
-  })
-
-  it('阶段 A 命中即整批拒绝：不折叠任何命令、不产预览项（原子性）', () => {
-    const v = validateAiBatch(
-      [
-        { op: 'create_node', nodeType: 'beat', data: { summary: '小店开张' }, ref: 'b' },
-        { op: 'update_node', nodeId: 'b', patch: { tone: '紧凑' } },
-        { op: 'update_node', nodeId: 'n1', patch: { time: '🌅 晨' } },
-        { op: 'delete_node', nodeId: 'n2' },
-      ],
-      snap(),
-    )
-    expect(v.ok).toBe(false)
-    // 两阶段契约：形状失败 → 阶段 B 不运行，本轮零折叠、零预览项
-    expect(v.issues).toHaveLength(1)
-    expect(v.issues[0]?.message).toContain('summary')
-    expect(v.items).toEqual([])
-    expect(v.commands).toEqual([])
-  })
-})
-
-// 两阶段校验（owner 批准的契约变更）：阶段 A 逐条收集上下文无关的形状
-// 错误（白名单/值形状/options 成员/连线类型/内在 optionIndex/entityId 与
-// fields 形态），一次全量回喂——quota 按轮消耗，多错误批次一轮修完；
-// 阶段 B 在形状全过后顺序折叠，首错即停——失败之后的命令本轮不校验、
-// 不点名，级联误报由「不前进」消除，分层错误随修复重放逐轮暴露。
-describe('validateAiBatch：两阶段校验（阶段 A 全量形状 + 阶段 B 首错即停）', () => {
-  it('阶段 A 全量收集形状错误：多命令一次点名，依赖命令不级联', () => {
-    const v = validateAiBatch(
-      [
-        { op: 'create_node', nodeType: 'branch', ref: 'nb', data: { prompt: '？', options: 42 } },
-        { op: 'update_node', nodeId: 'b1', patch: { nope: 1 } },
-        { op: 'connect_edge', sourceId: 'nb', targetId: 's1' },
-      ],
-      richSnap(),
-    )
-    expect(v.ok).toBe(false)
-    expect(v.commands).toEqual([])
-    // create 与 update 的形状错误全量点名；connect 依赖失败 create，
-    // 阶段 B 不运行、不产生「端点不存在」级联
-    expect(v.issues.map((i) => i.index)).toEqual([0, 1])
-  })
-
-  it('连线类型与内在 optionIndex 属阶段 A：与形状错误同轮全量点名', () => {
-    const v = validateAiBatch(
-      [
-        { op: 'create_node', nodeType: 'branch', ref: 'nb', data: { prompt: '？', options: 42 } },
-        { op: 'connect_edge', sourceId: 'nb', targetId: 's1', edgeKind: 'weird' },
-        { op: 'connect_edge', sourceId: 'nb', targetId: 's1', edgeKind: 'branch', optionIndex: -1 },
-      ],
-      richSnap(),
-    )
-    expect(v.issues.map((i) => i.index)).toEqual([0, 1, 2])
-  })
-
-  it('阶段 B 首错即停：独立结构错误只报首条，其余本轮不校验', () => {
-    const v = validateAiBatch(
-      [
-        { op: 'connect_edge', sourceId: 'n1', targetId: 'ghost-a' },
-        { op: 'connect_edge', sourceId: 'n2', targetId: 'ghost-b' },
-      ],
-      snap(),
-    )
-    expect(v.ok).toBe(false)
-    expect(v.issues).toHaveLength(1)
-    expect(v.issues[0]?.index).toBe(0)
-  })
-
-  it('create 形状失败时，经 ref 的 update 类型专属错误分层延后（首轮不点名）', () => {
-    const v = validateAiBatch(
-      [
-        { op: 'create_node', nodeType: 'branch', ref: 'nb', data: { prompt: '？', options: 42 } },
-        { op: 'update_node', nodeId: 'nb', patch: { prompt: 5 } },
-      ],
-      richSnap(),
-    )
-    // prompt 属可写类型字段的并集：阶段 A 不按未知类型点名；类型专属的
-    // 值形状错误随修复重放在阶段 B 点名（分层暴露，契约变更决策）
-    expect(v.issues).toHaveLength(1)
-    expect(v.issues[0]?.index).toBe(0)
-  })
-
-  it('实体 upsert 的 fields 形状错误属阶段 A：全量点名', () => {
-    const v = validateAiBatch(
-      [
-        { op: 'upsert_character', fields: { name: 5 } },
-        { op: 'upsert_location', fields: { nope: 'x' } },
-      ],
-      entSnap(),
-    )
-    expect(v.ok).toBe(false)
-    expect(v.issues.map((i) => i.index)).toEqual([0, 1])
-  })
-
-  it('前序 delete + 同名 ref 重建换主：update 类型专属检查让位阶段 B（评审 5174231991）', () => {
-    const snapWithX: AiGraphSnapshot = {
-      nodes: [{ id: 'x', type: 'scene', label: '场 01' }],
-      edges: [],
-      assets: new Map(),
-    }
-    const v = validateAiBatch(
-      [
-        { op: 'delete_node', nodeId: 'x' },
-        { op: 'create_node', nodeType: 'beat', ref: 'x', data: { name: '立足' } },
-        { op: 'update_node', nodeId: 'x', patch: { tone: '紧凑' } },
-      ],
-      snapWithX,
-    )
-    // 顺序语义：x 被删后由同名 ref 重建为 beat，tone 是 beat 合法字段——
-    // 阶段 A 的快照类型已过期，不得按 scene 拒绝合法批次
-    expect(v.ok).toBe(true)
-    expect(v.commands).toHaveLength(3)
-  })
-
-  it('delete 在后的 update 仍按快照类型全量点名（对照）', () => {
-    const v = validateAiBatch(
-      [
-        { op: 'update_node', nodeId: 's1', patch: { nope: 1 } },
-        { op: 'delete_node', nodeId: 'sh1' },
-      ],
-      richSnap(),
-    )
-    expect(v.ok).toBe(false)
-    expect(v.issues.map((i) => i.index)).toEqual([0])
-  })
-
-  it('删除只按 token 降级：无关 update 的类型错误仍进阶段 A 聚合（评审 5174367120）', () => {
-    const v = validateAiBatch(
-      [
-        { op: 'delete_node', nodeId: 'sh1' },
-        { op: 'update_node', nodeId: 'b1', patch: { tone: '紧凑' } },
-        { op: 'update_node', nodeId: 's1', patch: { prompt: '？' } },
-      ],
-      richSnap(),
-    )
-    // tone/prompt 各自不是目标类型的字段：与被删 sh1 无关的 update 不随
-    // 全局降级——阶段 A 一次点名两条（全局开关会把它们变成每轮一条的
-    // 串行发现，配额可在第四条错误前耗尽）
-    expect(v.ok).toBe(false)
-    expect(v.issues.map((i) => i.index)).toEqual([1, 2])
-  })
-})
-
-describe('validateAiBatch · 目标类型未知时的恒非法容器判定（issue 67）', () => {
-  it('失败 create 未登记暂定类型：经 ref 的 update 携非数组唯一归属 array 字段同轮点名', () => {
-    for (const key of ['options', 'lines', 'characterIds', 'refs']) {
-      const v = validateAiBatch(
-        [
-          { op: 'create_node', nodeType: 'dragon', ref: 'nb' },
-          { op: 'update_node', nodeId: 'nb', patch: { [key]: 'foo' } },
-        ],
-        snap(),
-      )
-      expect(v.ok, key).toBe(false)
-      // create 的未知类型与 update 的容器形状同轮全量回喂，不再等下一轮
-      expect(v.issues.map((i) => i.index), key).toEqual([0, 1])
-      expect(v.issues[1]?.message, key).toContain(`${key} 须为数组`)
-    }
-  })
-
-  it('唯一归属 array 字段为合法数组时不因目标未知误报', () => {
-    const v = validateAiBatch(
-      [
-        { op: 'create_node', nodeType: 'dragon', ref: 'nb' },
-        { op: 'update_node', nodeId: 'nb', patch: { options: ['A', 'B'] } },
-      ],
-      snap(),
-    )
-    expect(v.issues.map((i) => i.index)).toEqual([0])
-  })
-
-  it('多类型共有字段与非 array 字段仍分层延后（契约收窄仅限恒非法可判定域）', () => {
-    const v = validateAiBatch(
-      [
-        { op: 'create_node', nodeType: 'dragon', ref: 'nb' },
-        { op: 'update_node', nodeId: 'nb', patch: { prompt: 5, tone: 'x' } },
-      ],
-      snap(),
-    )
-    // prompt（branch/shot 共有）、tone（beat 唯一但非 array）：类型相关
-    // 形状不属恒非法可判定域，维持阶段 B 分层延后（契约边界不变）
-    expect(v.issues.map((i) => i.index)).toEqual([0])
-  })
-
-  it('删除 token 换主路径同样点名：恒非法判定与目标归属解耦', () => {
-    const snapWithX: AiGraphSnapshot = {
-      nodes: [{ id: 'x', type: 'scene', label: '场 01' }],
-      edges: [],
-      assets: new Map(),
-    }
-    const v = validateAiBatch(
-      [
-        { op: 'delete_node', nodeId: 'x' },
-        { op: 'create_node', nodeType: 'beat', ref: 'x', data: { name: '立足' } },
-        { op: 'update_node', nodeId: 'x', patch: { options: 'foo' } },
-      ],
-      snapWithX,
-    )
-    expect(v.ok).toBe(false)
-    expect(v.issues.some((i) => i.index === 2 && i.message.includes('options 须为数组'))).toBe(true)
   })
 })

@@ -336,7 +336,9 @@ describe('useCommandHistory（命令栈 hook：惰性构建 + version 驱动重�
 
   it('重渲染复用同一栈实例（回调引用稳定）', () => {
     const onRedoError = sink()
-    const { result, rerender } = renderHook(() => useCommandHistory(onRedoError))
+    const { result, rerender } = renderHook(() =>
+      useCommandHistory(onRedoError),
+    )
     const pushRef = result.current.push
     act(() => result.current.push(cmd('k')))
     rerender()
@@ -355,13 +357,25 @@ describe('useCommandHistory（命令栈 hook：惰性构建 + version 驱动重�
     expect(sync.redo).toHaveBeenCalledTimes(1)
     expect(onRedoError).not.toHaveBeenCalled()
 
-    const guardMock = vi.fn((): Promise<void> => Promise.reject(new Error('资产文件已失效')))
-    const guarded: HistoryCommand = { undo: vi.fn(), redo: vi.fn(), redoGuard: guardMock }
+    const guardMock = vi.fn((): Promise<void> =>
+      Promise.reject(new Error('资产文件已失效')),
+    )
+    const guarded: HistoryCommand = {
+      undo: vi.fn(),
+      redo: vi.fn(),
+      redoGuard: guardMock,
+    }
     act(() => result.current.push(guarded))
     act(() => result.current.undo())
     act(() => result.current.onRedo())
-    await waitFor(() => expect(onRedoError).toHaveBeenCalledWith(expect.stringContaining('资产文件已失效')))
-    expect(onRedoError).toHaveBeenLastCalledWith(expect.stringContaining('重做失败'))
+    await waitFor(() =>
+      expect(onRedoError).toHaveBeenCalledWith(
+        expect.stringContaining('资产文件已失效'),
+      ),
+    )
+    expect(onRedoError).toHaveBeenLastCalledWith(
+      expect.stringContaining('重做失败'),
+    )
     expect(guarded.redo).not.toHaveBeenCalled()
 
     // 慢校验成功应用后不得回投 null 清横幅：共享槽内可能有更新的其他

@@ -30,7 +30,8 @@ import { resolveImageGenPlan } from './plan'
 import { signatureMatches, type ImageGenInput } from './signature'
 
 /** 非桌面环境的统一文案（浏览器预览无 IPC，无法代理生成）。 */
-const PREVIEW_UNSUPPORTED = '浏览器预览不支持图像生成（媒体落盘需桌面端 Rust 侧执行）'
+const PREVIEW_UNSUPPORTED =
+  '浏览器预览不支持图像生成（媒体落盘需桌面端 Rust 侧执行）'
 
 /** 调度内核的依赖：EditorView 的稳定引用（ref/命令栈与状态写入回调）。 */
 export interface ImageJobsDeps {
@@ -64,7 +65,12 @@ function isDesktopTauri(): boolean {
 async function runGeneration(
   projectId: string,
   jobId: string,
-  plan: { provider: { id: string; baseUrl: string }; model: string; prompt: string; size: string },
+  plan: {
+    provider: { id: string; baseUrl: string }
+    model: string
+    prompt: string
+    size: string
+  },
 ): Promise<AssetRef> {
   const raw = await tauriInvoke<unknown>('llm_image_generate', {
     request: {
@@ -150,13 +156,19 @@ function applyGenerationResult(
       : undefined
   deps.addAsset(asset)
   if (superseded !== undefined) deps.removeAsset(superseded.id)
-  const outputsPatch: NodeDataPatch = { nodeType: 'image', patch: { outputs: next } }
+  const outputsPatch: NodeDataPatch = {
+    nodeType: 'image',
+    patch: { outputs: next },
+  }
   deps.applyDataPatch(nodeId, outputsPatch)
   deps.pushHistory({
     undo: () => {
       deps.removeAsset(asset.id)
       if (superseded !== undefined) deps.addAsset(superseded)
-      deps.applyDataPatch(nodeId, { nodeType: 'image', patch: { outputs: before } })
+      deps.applyDataPatch(nodeId, {
+        nodeType: 'image',
+        patch: { outputs: before },
+      })
     },
     // 重做防线（issue #10，§7.3 库资产导入同构）：产物文件在撤销窗口
     // 内被外部删改则拒绝重做入脏
@@ -264,9 +276,9 @@ export function doomedImageAssets(
  * aliveRef 标记挂载状态，卸载清理对全部 running 作业发协作式取消——
  * Rust 侧在检查点放弃结果（落盘前），防孤儿媒体文件与卸载后写回；
  * jobAlive 供完成回调判定「仍是该作业且组件存活」。 */
-function useJobWriteGuard(
-  jobsRef: { current: Record<string, ImageJobView> },
-): (nodeId: string, jobId: string) => boolean {
+function useJobWriteGuard(jobsRef: {
+  current: Record<string, ImageJobView>
+}): (nodeId: string, jobId: string) => boolean {
   const aliveRef = useRef(true)
   // 稳定读取器：清理时经函数调用取最新作业表（直接在 cleanup 读 ref.current
   // 会触发 exhaustive-deps 的两难告警——参数化 ref 无法被插件豁免）
@@ -277,7 +289,9 @@ function useJobWriteGuard(
       aliveRef.current = false
       for (const job of Object.values(readJobs())) {
         if (job?.status === 'running') {
-          void tauriInvoke('llm_image_cancel', { jobId: job.jobId }).catch(() => {})
+          void tauriInvoke('llm_image_cancel', { jobId: job.jobId }).catch(
+            () => {},
+          )
         }
       }
     }
@@ -285,7 +299,9 @@ function useJobWriteGuard(
   return useCallback(
     (nodeId: string, jobId: string): boolean => {
       const cur = jobsRef.current[nodeId]
-      return aliveRef.current && cur?.status === 'running' && cur.jobId === jobId
+      return (
+        aliveRef.current && cur?.status === 'running' && cur.jobId === jobId
+      )
     },
     [jobsRef],
   )
@@ -333,7 +349,9 @@ function useJobTable(): {
   const clearJob = useCallback((nodeId: string) => {
     setJobs((cur) => {
       if (!(nodeId in cur)) return cur
-      return Object.fromEntries(Object.entries(cur).filter(([k]) => k !== nodeId))
+      return Object.fromEntries(
+        Object.entries(cur).filter(([k]) => k !== nodeId),
+      )
     })
     // 同步镜像清理（与 start 的同步占位对偶）：同一事件循环内「取消→重启」
     // 读到已清状态，不被 running 守卫误挡（状态提交前 ref 是真源）
@@ -351,14 +369,69 @@ function useJobTable(): {
   return { jobs, setJobs, jobsRef, notice, setJobError, clearJob, dropResult }
 }
 
+/** 发起生成（useImageJobsState 拆分，issue #99）：同步验型 + running 守卫
+ * 并**同步占位**（直接写 jobsRef，绕过 React 批处理窗口）——设置加载（桌
+ * 面端异步 IPC）返回前，双击的第二次调用看到 running 即返回，不重复发起
+ * 计费请求。 */
+function useImageStart(
+  projectId: string,
+  nodesRef: ImageJobsDeps['nodesRef'],
+  table: Pick<
+    ReturnType<typeof useJobTable>,
+    'jobsRef' | 'setJobs' | 'setJobError' | 'clearJob'
+  >,
+  jobAlive: ReturnType<typeof useJobWriteGuard>,
+  applyResult: (nodeId: string, input: ImageGenInput, asset: AssetRef) => void,
+) {
+  const { jobsRef, setJobs, setJobError, clearJob } = table
+  return useCallback(
+    (nodeId: string) => {
+      const node = nodesRef.current.find((n) => n.id === nodeId)
+      if (node?.type !== 'image') return
+      if (jobsRef.current[nodeId]?.status === 'running') return
+      const jobId = uid('imgjob')
+      jobsRef.current = {
+        ...jobsRef.current,
+        [nodeId]: { status: 'running', jobId },
+      }
+      setJobs(jobsRef.current)
+      void runStart(
+        { projectId, nodesRef, jobAlive, setJobError, clearJob, applyResult },
+        nodeId,
+        jobId,
+      )
+    },
+    [
+      applyResult,
+      clearJob,
+      jobAlive,
+      jobsRef,
+      nodesRef,
+      projectId,
+      setJobError,
+      setJobs,
+    ],
+  )
+}
+
 /** 生成作业的状态机与调度回调（ImageGenProvider 挂载一次）。 */
 export function useImageJobsState(deps: ImageJobsDeps): {
   api: ImageGenApi
   notice: string | null
 } {
-  const { projectId, nodes, nodesRef, assetsRef, settingsRef, applyDataPatch, addAsset, removeAsset, pushHistory } =
-    deps
-  const { jobs, setJobs, jobsRef, notice, setJobError, clearJob, dropResult } = useJobTable()
+  const {
+    projectId,
+    nodes,
+    nodesRef,
+    assetsRef,
+    settingsRef,
+    applyDataPatch,
+    addAsset,
+    removeAsset,
+    pushHistory,
+  } = deps
+  const { jobs, setJobs, jobsRef, notice, setJobError, clearJob, dropResult } =
+    useJobTable()
   /** 作业写回守卫：卸载协作式取消 + 存活/身份判定（useJobWriteGuard）。 */
   const jobAlive = useJobWriteGuard(jobsRef)
   /** 宿主节点删除观察：running 作业随宿主删除协作式取消并清表。 */
@@ -397,20 +470,12 @@ export function useImageJobsState(deps: ImageJobsDeps): {
     ],
   )
 
-  /** 发起：同步验型 + running 守卫并**同步占位**（直接写 jobsRef，绕过
-   * React 批处理窗口）——设置加载（桌面端异步 IPC）返回前，双击的第二次
-   * 调用看到 running 即返回，不重复发起计费请求。 */
-  const start = useCallback(
-    (nodeId: string) => {
-      const node = nodesRef.current.find((n) => n.id === nodeId)
-      if (node?.type !== 'image') return
-      if (jobsRef.current[nodeId]?.status === 'running') return
-      const jobId = uid('imgjob')
-      jobsRef.current = { ...jobsRef.current, [nodeId]: { status: 'running', jobId } }
-      setJobs(jobsRef.current)
-      void runStart({ projectId, nodesRef, jobAlive, setJobError, clearJob, applyResult }, nodeId, jobId)
-    },
-    [applyResult, clearJob, jobAlive, jobsRef, nodesRef, projectId, setJobError, setJobs],
+  const start = useImageStart(
+    projectId,
+    nodesRef,
+    { jobsRef, setJobs, setJobError, clearJob },
+    jobAlive,
+    applyResult,
   )
 
   const cancel = useCallback(

@@ -22,7 +22,10 @@ beforeAll(() => {
     class {
       constructor(private cb: IntersectionObserverCallback) {}
       observe(el: Element) {
-        this.cb([{ isIntersecting: true, target: el } as IntersectionObserverEntry], this as never)
+        this.cb(
+          [{ isIntersecting: true, target: el } as IntersectionObserverEntry],
+          this as never,
+        )
       }
       unobserve() {}
       disconnect() {}
@@ -52,7 +55,9 @@ function mockStore(list: LibraryAsset[]) {
     put: vi.spyOn(libraryStore, 'put'),
     updateMeta: vi.spyOn(libraryStore, 'updateMeta').mockResolvedValue(asset()),
     remove: vi.spyOn(libraryStore, 'remove').mockResolvedValue(undefined),
-    mediaUrl: vi.spyOn(libraryStore, 'mediaUrl').mockResolvedValue('blob:mock-url'),
+    mediaUrl: vi
+      .spyOn(libraryStore, 'mediaUrl')
+      .mockResolvedValue('blob:mock-url'),
   }
 }
 
@@ -61,11 +66,15 @@ describe('AssetsPanel 分类列表', () => {
     mockStore([asset(), asset({ id: 'a2', name: '男主侧面' })])
     render(<AssetsPanel />)
     // 角色设定 2 条，其余 0
-    const charRow = (await screen.findByText('角色设定')).closest('.pw-assets-row')!
+    const charRow = (await screen.findByText('角色设定')).closest(
+      '.pw-assets-row',
+    )!
     expect(charRow.textContent).toContain('2')
 
     fireEvent.click(screen.getByTitle('查看服化道'))
-    expect(await screen.findByText('暂无资产，点击「＋ 导入」添加参考图。')).toBeTruthy()
+    expect(
+      await screen.findByText('暂无资产，点击「＋ 导入」添加参考图。'),
+    ).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: '返回分类列表' }))
     expect(await screen.findByText('个人资产库 · 跨项目')).toBeTruthy()
@@ -105,7 +114,9 @@ describe('AssetsPanel 类别内操作', () => {
     const tags = screen.getByLabelText('资产标签 女主正面')
     fireEvent.change(tags, { target: { value: '主角， 现代 ,, 校服' } })
     fireEvent.blur(tags)
-    expect(spies.updateMeta).toHaveBeenCalledWith('a1', { tags: ['主角', '现代', '校服'] })
+    expect(spies.updateMeta).toHaveBeenCalledWith('a1', {
+      tags: ['主角', '现代', '校服'],
+    })
   })
 
   it('删除需确认：取消保留、确认移除并回收 blob URL', async () => {
@@ -132,7 +143,9 @@ describe('AssetsPanel 类别内操作', () => {
 describe('AssetsPanel 导入', () => {
   it('选择文件逐个写库并追加到列表；busy 期间禁用导入按钮', async () => {
     const spies = mockStore([])
-    spies.put.mockResolvedValue(asset({ id: 'a9', name: '新图.png', kind: 'other' }))
+    spies.put.mockResolvedValue(
+      asset({ id: 'a9', name: '新图.png', kind: 'other' }),
+    )
     render(<AssetsPanel />)
     await screen.findByText('个人资产库 · 跨项目')
 
@@ -153,7 +166,10 @@ describe('AssetsPanel 导入', () => {
     render(<AssetsPanel />)
     await screen.findByText('个人资产库 · 跨项目')
     const input = document.querySelector('input[type=file]') as HTMLInputElement
-    Object.defineProperty(input, 'files', { value: [new File(['x'], 'f.png')], configurable: true })
+    Object.defineProperty(input, 'files', {
+      value: [new File(['x'], 'f.png')],
+      configurable: true,
+    })
     fireEvent.change(input)
     expect(await screen.findByText(/磁盘满/)).toBeTruthy()
   })
