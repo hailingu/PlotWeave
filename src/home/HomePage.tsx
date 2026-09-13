@@ -3,10 +3,29 @@ import ProjectCard from './ProjectCard'
 import { ConfirmDeleteDialog, RenameDialog } from './Dialogs'
 import { filterProjects, type ProjectSummary } from './projects'
 
+/** 最近一次打开失败的可见反馈（issue #98）：App 层在加载拒绝时写入，
+ * 首页以非阻塞横幅展示可读原因；id 供横幅按项目列表解析名称。 */
+export interface OpenProjectError {
+  /** 打开失败的项目 id。 */
+  readonly id: string
+  /** 可读失败原因（版本过新/损坏/IO 等，已去 Error 前缀）。 */
+  readonly detail: string
+}
+
+/** 横幅文案：列表可解析出项目名则点名失败项目，否则用通用说法——
+ * 损坏文件可能在列表阶段被跳过而未进列表，不能假设 id 一定可解析。 */
+function openErrorText(error: OpenProjectError, projects: readonly ProjectSummary[]): string {
+  const name = projects.find((p) => p.id === error.id)?.name
+  return name ? `打开「${name}」失败：${error.detail}` : `打开项目失败：${error.detail}`
+}
+
 interface HomePageProps {
   readonly projects: ProjectSummary[]
   /** 列表首次加载中（持久化命令异步返回）；加载完前不显示空状态引导。 */
   readonly loading?: boolean
+  /** 最近一次打开失败的可见反馈（issue #98）：非阻塞横幅展示，停留至
+   * 下一次打开尝试或新建成功；null/缺省 = 无待展示错误。 */
+  readonly openError?: OpenProjectError | null
   /** 单击海报卡打开项目，窗口切换为编辑器（文档式双界面，§3.1；应用方修订：由双击改单击）。 */
   readonly onOpenProject: (id: string) => void
   /** 工具栏「＋ 新建项目」、网格末尾「＋ 新剧」与空状态引导共用此入口。 */
@@ -27,6 +46,7 @@ interface HomePageProps {
 export default function HomePage({
   projects,
   loading = false,
+  openError = null,
   onOpenProject,
   onCreateProject,
   onRenameProject,
@@ -97,6 +117,14 @@ export default function HomePage({
           </button>
         </span>
       </header>
+
+      {/* 打开失败横幅（issue #98）：role=alert 即时播报；非阻塞，停留至
+          下一次打开尝试或新建成功，不拦截首页任何操作。 */}
+      {openError && (
+        <div className="home-open-error" role="alert">
+          {openErrorText(openError, projects)}
+        </div>
+      )}
 
       {!loading && projects.length === 0 ? (
         <div className="home-empty">

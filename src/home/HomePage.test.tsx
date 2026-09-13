@@ -5,7 +5,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import HomePage from './HomePage'
+import HomePage, { type OpenProjectError } from './HomePage'
 import type { ProjectSummary } from './projects'
 
 afterEach(cleanup)
@@ -18,7 +18,11 @@ const mk = (over: Partial<ProjectSummary> = {}): ProjectSummary => ({
   ...over,
 })
 
-function setup(projects: ProjectSummary[] = [mk()], loading = false) {
+function setup(
+  projects: ProjectSummary[] = [mk()],
+  loading = false,
+  openError: OpenProjectError | null = null,
+) {
   const spies = {
     onOpenProject: vi.fn(),
     onCreateProject: vi.fn(),
@@ -26,7 +30,7 @@ function setup(projects: ProjectSummary[] = [mk()], loading = false) {
     onDuplicateProject: vi.fn(),
     onDeleteProject: vi.fn(),
   }
-  render(<HomePage projects={projects} loading={loading} {...spies} />)
+  render(<HomePage projects={projects} loading={loading} openError={openError} {...spies} />)
   return spies
 }
 
@@ -66,6 +70,31 @@ describe('HomePage 列表与搜索', () => {
     fireEvent.click(screen.getByRole('button', { name: '＋ 新建项目' }))
     fireEvent.click(screen.getByRole('button', { name: '＋ 新剧' }))
     expect(spies.onCreateProject).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('HomePage 打开失败横幅（issue #98）', () => {
+  it('openError 命中列表项目：横幅点名项目并显示可读原因；卡片仍可操作', () => {
+    const spies = setup([mk()], false, {
+      id: 'p1',
+      detail: '文档版本过新（schemaVersion 2），请升级应用',
+    })
+    const alert = screen.getByRole('alert')
+    expect(alert.textContent).toContain('打开「都市奇缘」失败')
+    expect(alert.textContent).toContain('请升级应用')
+    // 横幅非阻塞：打开失败后首页操作能力保留（issue #98 期望结果）
+    fireEvent.click(screen.getByRole('button', { name: '打开项目 都市奇缘' }))
+    expect(spies.onOpenProject).toHaveBeenCalledWith('p1')
+  })
+
+  it('openError 的项目不在列表（损坏文件可能未进列表）：用通用文案', () => {
+    setup([], false, { id: 'ghost', detail: '项目文件不可读' })
+    expect(screen.getByRole('alert').textContent).toBe('打开项目失败：项目文件不可读')
+  })
+
+  it('无 openError 时不渲染横幅', () => {
+    setup()
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 })
 

@@ -11,7 +11,7 @@ import {
   type RefObject,
   type SetStateAction,
 } from 'react'
-import HomePage from './home/HomePage'
+import HomePage, { type OpenProjectError } from './home/HomePage'
 import { useExitFlush } from './useExitFlush'
 import { projectStore, type ProjectContent } from './projectStore'
 import type { ProjectSummary } from './home/projects'
@@ -97,10 +97,19 @@ async function loadOpenProject(
 }
 
 type OpenProjectSetter = Dispatch<SetStateAction<OpenProject | null>>
+type OpenErrorSetter = Dispatch<SetStateAction<OpenProjectError | null>>
 type RefreshProjects = () => Promise<void>
 type UnsavedAiSessionsRef = RefObject<Map<string, UnsavedAiSession>>
 /** 保存路径需要整体替换快照，故用可变盒子而非只读的 RefObject。 */
 type LatestAiSessionRef = { current: LatestAiSession | null }
+
+/** 打开失败原因的可读化（issue #98）：Error 取 message（避免「Error: 」
+ * 前缀上屏），Tauri IPC 常见的字符串拒绝原样保留，其余形态 String() 兜底。 */
+function openFailureDetail(err: unknown): string {
+  if (err instanceof Error) return err.message
+  if (typeof err === 'string') return err
+  return String(err)
+}
 
 /** 应用级会话生命周期：持有跨页面快照，订阅共享保存链结果，并在卸载时
  * 解除订阅；普通保存的最新内容与失败恢复副本均不依赖编辑器挂载状态。 */
@@ -143,6 +152,7 @@ function useAiSessionLifecycle(setOpenProject: OpenProjectSetter) {
 
 function useOpenProjectActions(
   setOpenProject: OpenProjectSetter,
+  setOpenFailure: OpenErrorSetter,
   refreshProjects: RefreshProjects,
   unsavedAiSessions: UnsavedAiSessionsRef,
   latestAiSession: LatestAiSessionRef,
@@ -151,21 +161,27 @@ function useOpenProjectActions(
     try {
       const meta = await projectStore.create('未命名短剧')
       const open = await loadOpenProject(meta.id)
+      // 新建成功进入编辑器：旧的打开失败横幅随导航过时，回首页不得复活
+      setOpenFailure(null)
       startTransition(() => setOpenProject(open))
     } catch (err) {
       console.warn('[App] 新建项目失败', err)
     }
     void refreshProjects()
-  }, [refreshProjects, setOpenProject])
+  }, [refreshProjects, setOpenFailure, setOpenProject])
 
   const handleOpenProject = useCallback(async (id: string) => {
+    // 新一次打开尝试即视为旧错误过时（issue #98）：失败后重试或改开其他
+    // 项目，上一次失败的原因不得残留；本次失败会用新原因覆盖。
+    setOpenFailure(null)
     try {
       const open = await loadOpenProject(id, unsavedAiSessions.current ?? undefined)
       startTransition(() => setOpenProject(open))
     } catch (err) {
       console.warn('[App] 打开项目失败', err)
+      setOpenFailure({ id, detail: openFailureDetail(err) })
     }
-  }, [setOpenProject, unsavedAiSessions])
+  }, [setOpenFailure, setOpenProject, unsavedAiSessions])
 
   const handleBackHome = useCallback(() => {
     setOpenProject(null)
@@ -297,6 +313,7 @@ function AppView({
   projects,
   loading,
   openProject,
+  openFailure,
   settingsOpen,
   open,
   home,
@@ -307,6 +324,7 @@ function AppView({
   readonly projects: ProjectSummary[]
   readonly loading: boolean
   readonly openProject: OpenProject | null
+  readonly openFailure: OpenProjectError | null
   readonly settingsOpen: boolean
   readonly open: ReturnType<typeof useOpenProjectActions>
   readonly home: ReturnType<typeof useHomeProjectActions>
@@ -339,6 +357,7 @@ function AppView({
     view = <HomePage
       projects={projects}
       loading={loading}
+      openError={openFailure}
       onOpenProject={open.handleOpenProject}
       onCreateProject={() => void open.handleCreateProject()}
       onRenameProject={(id, name) => void home.handleRenameProject(id, name)}
@@ -357,6 +376,7 @@ function AppView({
  */
 export default function App() {
   const [openProject, setOpenProject] = useState<OpenProject | null>(null)
+  const [openFailure, setOpenFailure] = useState<OpenProjectError | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const { unsavedAiSessionsRef, latestAiSessionRef } = useAiSessionLifecycle(setOpenProject)
   const { projects, loading, refreshProjects } = useProjectSummaries(() => openProject === null)
@@ -373,7 +393,7 @@ export default function App() {
     return () => document.removeEventListener('keydown', onKey)
   }, [])
 
-  const open = useOpenProjectActions(setOpenProject, refreshProjects, unsavedAiSessionsRef, latestAiSessionRef)
+  const open = useOpenProjectActions(setOpenProject, setOpenFailure, refreshProjects, unsavedAiSessionsRef, latestAiSessionRef)
   const home = useHomeProjectActions(refreshProjects, unsavedAiSessionsRef)
   /** 退出冲刷屏障：未落盘会话仍在时阻止关闭窗口（见 useExitFlush）。 */
   const exitBlocked = useExitFlush()
@@ -390,6 +410,7 @@ export default function App() {
       projects={projects}
       loading={loading}
       openProject={openProject}
+      openFailure={openFailure}
       settingsOpen={settingsOpen}
       open={open}
       home={home}

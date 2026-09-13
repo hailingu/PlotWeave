@@ -65,7 +65,13 @@ const replayFailedListeners: Array<(id: string, event: { session: unknown; error
 vi.mock('./home/HomePage', () => ({
   default: (props: Record<string, unknown>) => {
     homeProps.current = props
-    return <div data-testid="home">{props.loading ? '加载中' : `共${(props.projects as unknown[]).length}项`}</div>
+    const openError = props.openError as { detail: string } | null | undefined
+    return (
+      <div data-testid="home">
+        {props.loading ? '加载中' : `共${(props.projects as unknown[]).length}项`}
+        {openError ? <div role="alert">{openError.detail}</div> : null}
+      </div>
+    )
   },
 }))
 
@@ -299,6 +305,98 @@ describe('App ✦返回首页摘要与保存落定（issue #101）', () => {
       releaseSlow([{ id: 'p1', name: '旧名称' }])
     })
     expect((homeProps.current.projects as Array<{ name: string }>)[0]?.name).toBe('新名称')
+  })
+})
+
+describe('App ✦首页打开失败反馈（issue #98）', () => {
+  /** 打开项目并等待结果落定（openError 已写入或编辑器已挂载）。 */
+  async function attemptOpen(id: string) {
+    await act(async () => {
+      await (homeProps.current.onOpenProject as (id: string) => Promise<void>)(id)
+    })
+  }
+
+  it('打开失败：错误上浮为 openError 传给首页显示警示，停留首页', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    store.load.mockRejectedValue(new Error('文档版本过新（schemaVersion 2），请升级应用'))
+    render(<App />)
+    await screen.findByTestId('home')
+    await attemptOpen('p1')
+    warn.mockRestore()
+    expect(screen.queryByTestId('editor')).toBeNull()
+    expect(screen.getByRole('alert').textContent).toContain('请升级应用')
+    const openError = homeProps.current.openError as { id: string; detail: string }
+    expect(openError.id).toBe('p1')
+    expect(openError.detail).toBe('文档版本过新（schemaVersion 2），请升级应用')
+  })
+
+  it('打开失败（IPC 字符串拒绝）：字符串原样作为原因', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    store.load.mockRejectedValue('项目文件不可读')
+    render(<App />)
+    await screen.findByTestId('home')
+    await attemptOpen('p1')
+    warn.mockRestore()
+    expect((homeProps.current.openError as { detail: string }).detail).toBe('项目文件不可读')
+  })
+
+  it('失败后重试同一项目成功：横幅清除，回首页不复活旧错误', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    store.load.mockRejectedValueOnce(new Error('项目文件不可读'))
+    render(<App />)
+    await screen.findByTestId('home')
+    await attemptOpen('p1')
+    warn.mockRestore()
+    expect(homeProps.current.openError).not.toBeNull()
+    await attemptOpen('p1')
+    await screen.findByTestId('editor')
+    await act(async () => {
+      ;(editorProps.current.onBackHome as () => void)()
+    })
+    await screen.findByTestId('home')
+    expect(homeProps.current.openError).toBeNull()
+  })
+
+  it('失败后打开另一正常项目：旧错误不带过去', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    store.list.mockResolvedValue([{ id: 'p1', name: '雨夜' }, { id: 'p2', name: '午夜出租车' }])
+    store.load.mockImplementation((id: string) =>
+      id === 'p1'
+        ? Promise.reject(new Error('项目文件不可读'))
+        : Promise.resolve({ ...structuredClone(DOC), name: '午夜出租车' }),
+    )
+    render(<App />)
+    await screen.findByTestId('home')
+    await attemptOpen('p1')
+    warn.mockRestore()
+    expect((homeProps.current.openError as { id: string }).id).toBe('p1')
+    await attemptOpen('p2')
+    await screen.findByTestId('editor')
+    expect((editorProps.current.project as { name: string }).name).toBe('午夜出租车')
+    await act(async () => {
+      ;(editorProps.current.onBackHome as () => void)()
+    })
+    await screen.findByTestId('home')
+    expect(homeProps.current.openError).toBeNull()
+  })
+
+  it('打开失败后新建项目成功：错误随导航过时，回首页不复活', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    store.load.mockRejectedValueOnce(new Error('项目文件不可读'))
+    render(<App />)
+    await screen.findByTestId('home')
+    await attemptOpen('p1')
+    warn.mockRestore()
+    expect(homeProps.current.openError).not.toBeNull()
+    await act(async () => {
+      ;(homeProps.current.onCreateProject as () => void)()
+    })
+    await screen.findByTestId('editor')
+    await act(async () => {
+      ;(editorProps.current.onBackHome as () => void)()
+    })
+    await screen.findByTestId('home')
+    expect(homeProps.current.openError).toBeNull()
   })
 })
 

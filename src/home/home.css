@@ -43,6 +43,20 @@
   gap: 10px;
 }
 
+/* 打开失败横幅（issue #98）：非阻塞警示条，位于工具栏与片库之间；停留至
+ * 下一次打开尝试或新建成功，不拦截首页任何操作。 */
+.home-open-error {
+  flex: none;
+  margin: 12px 24px 0;
+  padding: 8px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--danger);
+  background: var(--surface-card);
+  color: var(--danger);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .home-search {
   width: 180px;
   font-size: 12px;
