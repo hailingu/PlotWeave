@@ -17,7 +17,7 @@ import {
   memoryLoad,
   memorySave,
 } from './projectStore/memory'
-import { enqueueDelete, enqueueSave } from './projectStore/saveChain'
+import { enqueueDelete, enqueueSave, notifyProjectSaved, onProjectSaved } from './projectStore/saveChain'
 import { tauriCreate, tauriList, tauriLoad } from './projectStore/tauri'
 import type { ProjectSummary } from './home/projects'
 import {
@@ -64,8 +64,19 @@ export const projectStore = {
   load: (id: string): Promise<ProjectContent> =>
     isTauri ? tauriLoad(id) : memoryLoad(id),
 
-  save: (id: string, doc: ProjectContent): Promise<void> =>
-    isTauri ? enqueueSave(id, doc) : memorySave(id, doc),
+  /** 订阅项目文档保存落定（issue #101）：链上保存成功（含失败登记后的后台
+   * 重试成功）时通知，首页据此在导航读取之后再刷新摘要；保存失败不通知。 */
+  onProjectSaved,
+
+  save: async (id: string, doc: ProjectContent): Promise<void> => {
+    if (isTauri) {
+      await enqueueSave(id, doc)
+      return
+    }
+    // 内存回退不经保存链：落定通知由门面补发，两环境行为不分叉（issue #101）
+    await memorySave(id, doc)
+    notifyProjectSaved(id)
+  },
 
   /** 项目 AI 会话独立于画布文档保存，旧项目无文件时返回空历史。 */
   loadAiSession,

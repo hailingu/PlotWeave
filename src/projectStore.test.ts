@@ -130,6 +130,23 @@ describe('projectStore 内存门面（浏览器回退）', () => {
     const me = (await projectStore.list()).find((x) => x.id === meta.id)
     expect(me?.endingCount).toBe(2) // b、c 无出边
   })
+
+  it('内存保存成功通知订阅者（issue #101：浏览器回退与桌面同知保存落定）', async () => {
+    const seen: string[] = []
+    const off = projectStore.onProjectSaved((id) => seen.push(id))
+    try {
+      const meta = await projectStore.create('通知剧')
+      await projectStore.save(meta.id, {
+        name: '通知剧',
+        nodes: [],
+        edges: [],
+        settings: { characters: [], locations: [] },
+      })
+      expect(seen).toEqual([meta.id])
+    } finally {
+      off()
+    }
+  })
 })
 
 describe('复制命名（§7.3：截断源名保上限 + 冲突递增序号）', () => {

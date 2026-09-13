@@ -3,6 +3,7 @@ import {
   enqueueDelete,
   enqueueProjectWrite,
   enqueueSave,
+  onProjectSaved,
   onProjectWriteReplayFailure,
 } from './saveChain'
 import type { ProjectContent } from '../model/content'
@@ -17,6 +18,64 @@ const DOC: ProjectContent = {
   edges: [],
   settings: { characters: [], locations: [] },
 }
+
+describe('保存落定通知（issue #101：返回首页后摘要跟随最终保存结果）', () => {
+  afterEach(() => vi.clearAllMocks())
+
+  it('保存成功：通知订阅者（含卸载冲刷/链上重试等一切链上成功保存）', async () => {
+    const id = 'saved-notify-success-test'
+    const seen: string[] = []
+    const off = onProjectSaved((savedId) => seen.push(savedId))
+    try {
+      invoke.mockImplementation(async () => undefined)
+      await enqueueSave(id, DOC)
+      expect(seen).toEqual([id])
+    } finally {
+      off()
+    }
+  })
+
+  it('保存失败：不通知（磁盘仍是旧内容，首页不得虚报新摘要）', async () => {
+    const id = 'saved-notify-failure-test'
+    const seen: string[] = []
+    const off = onProjectSaved((savedId) => seen.push(savedId))
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      invoke.mockImplementation(async (command: string) => {
+        if (command === 'save_project') throw new Error('磁盘已满')
+      })
+      await expect(enqueueSave(id, DOC)).rejects.toThrow('磁盘已满')
+      expect(seen).toEqual([])
+    } finally {
+      off()
+      error.mockRestore()
+    }
+  })
+
+  it('失败登记的后台重试成功：通知订阅者（编辑器已卸载时首页据此恢复最新摘要）', async () => {
+    const id = 'saved-notify-retry-test'
+    const seen: string[] = []
+    let off: (() => void) | undefined
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    let failing = true
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'save_project' && failing) throw new Error('磁盘已满')
+    })
+    vi.useFakeTimers()
+    try {
+      off = onProjectSaved((savedId) => seen.push(savedId))
+      await expect(enqueueSave(id, DOC)).rejects.toThrow('磁盘已满')
+      expect(seen).toEqual([])
+      failing = false
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(seen).toEqual([id])
+    } finally {
+      off?.()
+      error.mockRestore()
+      vi.useRealTimers()
+    }
+  })
+})
 
 describe('项目附属数据保存链', () => {
   afterEach(() => vi.clearAllMocks())

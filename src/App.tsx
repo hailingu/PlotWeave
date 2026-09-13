@@ -315,20 +315,41 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const { unsavedAiSessionsRef, latestAiSessionRef } = useAiSessionLifecycle(setOpenProject)
 
+  const refreshSeqRef = useRef(0)
   const refreshProjects = useCallback(async () => {
+    // 发起序守卫（issue #101）：返回首页的读取与保存落定触发的再刷新并发时，
+    // 只有最近发起的请求可以写列表——慢的旧响应不得覆盖较新的结果
+    const seq = ++refreshSeqRef.current
     try {
-      setProjects(await projectStore.list())
+      const list = await projectStore.list()
+      if (seq === refreshSeqRef.current) setProjects(list)
     } catch (err) {
       console.warn('[App] 项目列表加载失败', err)
-      setProjects([])
+      if (seq === refreshSeqRef.current) setProjects([])
     } finally {
-      setLoading(false)
+      if (seq === refreshSeqRef.current) setLoading(false)
     }
   }, [])
 
   useEffect(() => {
     void refreshProjects()
   }, [refreshProjects])
+
+  // issue #101：返回首页的列表读取早于编辑器卸载冲刷/在途保存的落定，首页
+  // 卡片会停留旧摘要。保存落定（含失败登记后的链上后台重试成功）即再刷新
+  // 一次；保存失败不通知，首页保持磁盘现状不虚报成功。编辑器打开期间首页
+  // 不可见，且列表 state 更新会整树重渲染（issue #61），不刷新。首页可见性
+  // 经渲染期同步镜像而非 effect 闭包：保存落定的通知可能早于订阅 effect
+  // 重跑到达，闭包会错过刚提交的导航。
+  const homeVisibleRef = useRef(true)
+  homeVisibleRef.current = openProject === null
+  useEffect(
+    () =>
+      projectStore.onProjectSaved(() => {
+        if (homeVisibleRef.current) void refreshProjects()
+      }),
+    [refreshProjects],
+  )
 
   // ⌘, 打开设置（macOS 惯例，§8.2）；输入控件聚焦时不触发
   useEffect(() => {

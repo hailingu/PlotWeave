@@ -887,6 +887,7 @@ type GraphCommandOf<K extends CommandType> = Extract<GraphCommand, { type: K }>
 - 在目标文件的受信父目录句柄下排他创建随机同目录临时文件（如 `project.json.<随机值>.tmp`），写入并 flush 后以目录句柄相对 rename 覆盖 `project.json`（rename 原子，读者只见旧版或新版，不见半个文件）。`index.json` / `library.json` / `settings.json` 同样处理；不得使用可被提前布置的固定 `.tmp` 路径。
 - `project.json` 是项目内容及合法 name/updatedAt 的权威真源，`index.json` 只是可丢弃、可重建的首页缓存；两个文件的独立 rename **不构成跨文件事务**。`create_project`/`save_project` 先原子提交项目文档，再以同一 name/updatedAt 更新索引。Rust 启动时、且最迟在每次 `list_projects()` 返回前，扫描项目文档（布局迁移期同时覆盖 §10.1 的旧路径回退），以受信路径 id 与文档中的合法 name/updatedAt 重建或校正索引：补缺失项、覆盖不一致项、移除已确认没有项目真源的陈旧项；缩略图等仅存于索引的展示字段只在对应项目仍存在时保留。文档元数据异型时不得把非法值写进索引：保留可用的合法索引回退，否则返回明确的损坏占位与诊断，留待 §11.1 加载归一化修复。校正后的列表直接从这份内存投影返回，并尝试以 tmp + flush + rename 回写索引；即使回写再次失败也不得返回已知陈旧的 name/updatedAt，须报告可恢复警告。由此在两次 rename 之间崩溃、索引写失败或索引损坏只会造成可恢复的缓存陈旧，不会让首页长期显示与项目文档不一致的名称或更新时间。
 - 前端防抖 500ms 提交一次；失败回队重试；`flushPersist()` 在关闭窗口/切换项目前调用。重试可以复用同一份序列化载荷，但其中的 `project.updatedAt` 不具有权威性：每次 `save_project` 尝试都由 Rust 在保存边界重新生成时间，调用方不得通过预先盖戳或重放旧值决定本次保存时刻。序列化时节点 `ui` 会话态（`selected`/`expanded`）按 §3 不落盘——`serializeProject` 输出统一重置为加载初值（`selected: false`、`expanded: true`），内存中的选中态不进入载荷；`update_node_ui` 不置脏（§9.4），纯选择/折叠操作不触发防抖保存，也不会因此刷新 `updatedAt` 改变首页最近项目排序。
+- 项目文档保存成功（含失败登记后的链上后台重试成功）即向前端发出落定通知（issue #101）：编辑器卸载冲刷/在途保存可以晚于返回首页的列表读取，首页摘要（名称、派生统计、更新时间/排序）靠该通知在导航读取之后再刷新一次，恢复到与磁盘一致；保存失败不发出通知，首页保持磁盘现状，不虚报新摘要。首页并发发起的多次列表读取按发起序收敛，较旧的响应不得覆盖较新的结果。
 
 ### 10.3 Provider 与模型配置
 

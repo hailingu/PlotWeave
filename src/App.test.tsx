@@ -36,6 +36,13 @@ vi.mock('./projectStore', () => ({
         if (index >= 0) retrySavedListeners.splice(index, 1)
       }
     },
+    onProjectSaved: (listener: (id: string) => void) => {
+      savedListeners.push(listener)
+      return () => {
+        const index = savedListeners.indexOf(listener)
+        if (index >= 0) savedListeners.splice(index, 1)
+      }
+    },
     onAiSessionSaveFailed: (
       listener: (id: string, event: { session: unknown; error: string }) => void,
     ) => {
@@ -50,6 +57,8 @@ vi.mock('./projectStore', () => ({
 
 /** projectStore.onAiSessionSaved 已登记的监听器（测试经此模拟退出重试成功）。 */
 const retrySavedListeners: Array<(id: string) => void> = []
+/** projectStore.onProjectSaved 已登记的监听器（测试经此模拟画布保存落定，issue #101）。 */
+const savedListeners: Array<(id: string) => void> = []
 /** projectStore.onAiSessionSaveFailed 已登记的监听器（测试经此模拟回吐重排失败）。 */
 const replayFailedListeners: Array<(id: string, event: { session: unknown; error: string }) => void> = []
 
@@ -101,6 +110,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   editorRenders.count = 0
   retrySavedListeners.length = 0
+  savedListeners.length = 0
   replayFailedListeners.length = 0
   store.list.mockResolvedValue([{ id: 'p1', name: '雨夜' }])
   store.create.mockResolvedValue({ id: 'new-1', name: '未命名短剧' })
@@ -231,6 +241,64 @@ describe('App（导航与编辑器回调）', () => {
     expect(await screen.findByTestId('settings')).toBeTruthy()
     fireEvent.click(screen.getByTestId('settings'))
     expect(await screen.findByTestId('home')).toBeTruthy()
+  })
+})
+
+describe('App ✦返回首页摘要与保存落定（issue #101）', () => {
+  it('保存在途时返回首页：保存落定通知后再刷新，卡片跟随新摘要', async () => {
+    await openEditor()
+    let releaseSave: (() => void) | null = null
+    store.save.mockImplementation(
+      () => new Promise<void>((resolve) => { releaseSave = resolve }),
+    )
+    act(() => {
+      ;(editorProps.current.onSave as (doc: ProjectContent) => void)({ ...DOC, name: '新名称' })
+    })
+    await act(async () => {
+      ;(editorProps.current.onBackHome as () => void)()
+    })
+    expect(await screen.findByTestId('home')).toBeTruthy()
+    // 返回首页的列表读取先于保存落定：此刻（第 2 次 list）读到旧摘要
+    expect(store.list).toHaveBeenCalledTimes(2)
+    // 保存落定成功（存储层通知首页）→ 自动再刷新，读到新名称
+    store.list.mockResolvedValue([{ id: 'p1', name: '新名称' }])
+    await act(async () => {
+      releaseSave?.()
+      savedListeners.forEach((notify) => notify('p1'))
+    })
+    expect(store.list).toHaveBeenCalledTimes(3)
+    expect((homeProps.current.projects as Array<{ name: string }>)[0]?.name).toBe('新名称')
+  })
+
+  it('编辑器打开期间保存落定：不触发首页列表刷新（首页不可见，防整树重渲染）', async () => {
+    await openEditor()
+    expect(store.list).toHaveBeenCalledTimes(1)
+    await act(async () => {
+      savedListeners.forEach((notify) => notify('p1'))
+    })
+    expect(store.list).toHaveBeenCalledTimes(1)
+  })
+
+  it('并发刷新：先发起的慢响应不得覆盖较新刷新的结果', async () => {
+    render(<App />)
+    expect(await screen.findByText('共1项')).toBeTruthy()
+    let releaseSlow!: (value: Array<{ id: string; name: string }>) => void
+    store.list
+      .mockImplementationOnce(
+        () => new Promise<Array<{ id: string; name: string }>>((resolve) => { releaseSlow = resolve }),
+      )
+      .mockResolvedValueOnce([{ id: 'p1', name: '新名称' }])
+    await act(async () => {
+      savedListeners.forEach((notify) => notify('p1'))
+    })
+    await act(async () => {
+      savedListeners.forEach((notify) => notify('p1'))
+    })
+    // 慢刷新（旧摘要）最后落定：不得覆盖较新发起且已完成的新摘要
+    await act(async () => {
+      releaseSlow([{ id: 'p1', name: '旧名称' }])
+    })
+    expect((homeProps.current.projects as Array<{ name: string }>)[0]?.name).toBe('新名称')
   })
 })
 

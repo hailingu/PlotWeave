@@ -44,6 +44,25 @@ export function onProjectWriteReplayFailure(
   return () => replayFailureListeners.delete(listener)
 }
 
+/** 项目文档保存落定监听器：入参为落盘成功的项目 id。 */
+export type ProjectSavedListener = (id: string) => void
+const savedListeners = new Set<ProjectSavedListener>()
+
+/** 订阅项目文档保存落定（issue #101）：链上每一次保存成功都通知——编辑器
+ * 卸载冲刷/在途保存可以晚于返回首页的列表读取，保存失败登记后的后台重试
+ * 成功也发生在编辑器卸载之后，首页摘要只能靠这条通知恢复到与磁盘一致。
+ * 保存失败不通知（磁盘保持旧内容，首页不得虚报新摘要）。返回退订函数。 */
+export function onProjectSaved(listener: ProjectSavedListener): () => void {
+  savedListeners.add(listener)
+  return () => savedListeners.delete(listener)
+}
+
+/** 保存落定通知的补发口（issue #101）：仅供不经保存链的内存回退路径在
+ * 门面保存成功后调用；链上路径的通知由 enqueueSave 成功段自带。 */
+export function notifyProjectSaved(id: string): void {
+  savedListeners.forEach((listener) => listener(id))
+}
+
 /** 将项目附属数据的写入纳入与画布相同的保存/删除链。删除墓碑期的写入
  * 被吸收（登记最新闭包，删除失败时回吐），保证已删除项目不会因迟到的
  * 独立持久化操作重建目录。 */
@@ -110,6 +129,9 @@ export function enqueueSave(id: string, doc: ProjectContent): Promise<void> {
     try {
       await tauriSave(id, doc)
       pendingRetryDocs.delete(id)
+      // 落定通知放在失败登记清除之后：此刻磁盘已是本次内容且无待重试文档，
+      // 订阅方（首页摘要刷新）据此读到的一定是最终状态（issue #101）
+      notifyProjectSaved(id)
     } catch (err) {
       pendingRetryDocs.set(id, doc)
       // 新代次失败接管定时器：旧代次定时器留着会在触发时因代次不符自灭，
