@@ -81,6 +81,7 @@ export function useEditorController(deps: EditorControllerDeps): EditorControlle
     pushHistory: history.push,
     screenToFlowPosition,
     canvasRef,
+    fitView,
     onError: setActionError,
   })
   const ai = useAiBridge({

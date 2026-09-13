@@ -75,8 +75,33 @@ export default function EditorCanvasRegion(props: EditorLayoutProps) {
           size={1}
           color="var(--canvas-dot)"
         />
-        <Controls />
+        <Controls>
+          {/* 自动排布（issue #94）：复用控件按钮样式保证暗/浅色可辨认；
+              空画布禁用。整图位置整理入命令栈，动作语义在 useAutoLayout。 */}
+          <button
+            type="button"
+            className="react-flow__controls-button"
+            title="自动排布"
+            aria-label="自动排布"
+            disabled={doc.nodes.length === 0}
+            onClick={graph.layout.onAutoLayout}
+          >
+            <AutoLayoutIcon />
+          </button>
+        </Controls>
       </ReactFlow>
     </div>
+  )
+}
+
+/** 自动排布按钮图标：三卡对齐 + 归位箭头，表达「整理布局」。 */
+function AutoLayoutIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+      <rect x="3" y="3" width="7" height="6" rx="1.2" />
+      <rect x="3" y="12" width="7" height="6" rx="1.2" />
+      <path d="M14 5h7M14 9h4" strokeLinecap="round" />
+      <path d="M14 14h7M14 18h4" strokeLinecap="round" />
+    </svg>
   )
 }

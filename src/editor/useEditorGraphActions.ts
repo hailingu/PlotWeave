@@ -4,7 +4,7 @@
  * 画布拖放各自需要的文档写通道与命令栈接线到一处，供装配层与布局层消费。
  * 本模块只做依赖注入与分组，不新增语义；各动作的行为由对应 hook 单测守护。
  */
-import type { XYPosition } from '@xyflow/react'
+import type { FitView, XYPosition } from '@xyflow/react'
 import { useAssetIndex, type AssetIndexActions } from './useAssetIndex'
 import { useCanvasDrop } from './useCanvasDrop'
 import { useConnectionRules, type ConnectionRules } from './useConnectionRules'
@@ -14,6 +14,7 @@ import { useEpisodeEditing, type EpisodeEditing } from './useEpisodeEditing'
 import { useNodeCreation, type NodeCreationActions } from './useNodeCreation'
 import { useNodeDeletion } from './useNodeDeletion'
 import { useNodeDragHistory } from './useNodeDragHistory'
+import { useAutoLayout } from './useAutoLayout'
 import { useNodePatch, type NodePatchActions } from './useNodePatch'
 import { useOutlineDrop } from './useOutlineDrop'
 import { useSettingsActions } from './useSettingsActions'
@@ -23,7 +24,7 @@ import type { HistoryCommand } from './history'
 import type { OutlineDropTarget } from './outline'
 import type { SettingsActions } from './panels/LeftPanel'
 
-/** 画布写动作装配的依赖：文档/面板状态、命令栈、落点换算与错误上浮。 */
+/** 画布写动作装配的依赖：文档/面板状态、命令栈、落点换算、视口适配与错误上浮。 */
 export interface EditorGraphActionsDeps {
   projectId: string
   doc: EditorDocument
@@ -32,6 +33,8 @@ export interface EditorGraphActionsDeps {
   screenToFlowPosition: (pos: { x: number; y: number }) => XYPosition
   /** 画布容器：新节点落点中心换算读它。 */
   canvasRef: { current: HTMLDivElement | null }
+  /** 自动排布完成后的视图适配。 */
+  fitView: FitView
   /** 拖放导入失败等瞬态动作诊断上浮。 */
   onError: (message: string) => void
 }
@@ -52,12 +55,14 @@ export interface EditorGraphActions {
   settingsActions: SettingsActions
   outlineDrop: (draggedId: string, target: OutlineDropTarget) => void
   drag: ReturnType<typeof useNodeDragHistory>
+  /** 自动排布（issue #94）：整图位置整理为一次撤销单元。 */
+  layout: ReturnType<typeof useAutoLayout>
   drop: ReturnType<typeof useCanvasDrop>
 }
 
 /** 组装画布写动作族（不含持久化、AI 桥与快捷键）。 */
 export function useEditorGraphActions(deps: EditorGraphActionsDeps): EditorGraphActions {
-  const { projectId, doc, panels, pushHistory, screenToFlowPosition, canvasRef, onError } = deps
+  const { projectId, doc, panels, pushHistory, screenToFlowPosition, canvasRef, fitView, onError } = deps
   const assets = useAssetIndex(doc.setAssets)
   const patch = useNodePatch(doc, pushHistory)
   const creation = useNodeCreation({
@@ -94,6 +99,14 @@ export function useEditorGraphActions(deps: EditorGraphActionsDeps): EditorGraph
     pushHistory,
   })
   const drag = useNodeDragHistory({ setNodes: doc.setNodes, pushHistory })
+  const layout = useAutoLayout({
+    nodesRef: doc.nodesRef,
+    edgesRef: doc.edgesRef,
+    setNodes: doc.setNodes,
+    pushHistory,
+    fitView,
+    onError,
+  })
   const drop = useCanvasDrop({
     projectId,
     nodesRef: doc.nodesRef,
@@ -119,6 +132,7 @@ export function useEditorGraphActions(deps: EditorGraphActionsDeps): EditorGraph
     settingsActions,
     outlineDrop,
     drag,
+    layout,
     drop,
   }
 }
