@@ -23,7 +23,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: #fff;
+  color: var(--on-saturated);
   flex: none;
 }
 
@@ -44,7 +44,7 @@
   align-items: center;
   justify-content: center;
   background: transparent;
-  color: rgba(235, 235, 245, 0.6);
+  color: var(--node-slate-text-secondary);
   font-size: 13px;
   line-height: 1;
   align-self: center;
@@ -54,18 +54,18 @@
 }
 
 .pw-gear:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: rgba(235, 235, 245, 0.92);
+  background: var(--node-slate-hover);
+  color: var(--node-slate-gear-hover);
 }
 
 /* 纸面卡片上的浅色齿轮。 */
 .pw-gear.pw-gear-light {
-  color: rgba(60, 60, 67, 0.45);
+  color: var(--node-paper-gear);
 }
 
 .pw-gear.pw-gear-light:hover {
-  background: rgba(0, 0, 0, 0.06);
-  color: rgba(60, 60, 67, 0.85);
+  background: var(--node-paper-hover);
+  color: var(--node-paper-gear-hover);
 }
 
 /* ⚙️ 打开设置面板时的常亮态（§4.3）。 */
@@ -79,14 +79,14 @@
   width: 11px;
   height: 11px;
   border-radius: 50%;
-  background: #3a3a3e;
-  border: 2px solid #55555a;
+  background: var(--port-body);
+  border: 2px solid var(--port-ring);
 }
 
 .react-flow__handle.pw-port.connectable:hover {
-  background: #34c759;
-  border-color: #34c759;
-  box-shadow: 0 0 10px rgba(52, 199, 89, 0.8);
+  background: var(--connection-valid);
+  border-color: var(--connection-valid);
+  box-shadow: 0 0 10px var(--connection-valid-glow);
 }
 
 /* ---- 场景节点 = 索引卡（编剧侧纸面，双外观恒定） ---- */
@@ -94,7 +94,7 @@
   width: 340px;
   position: relative;
   border-radius: 10px;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-node-paper);
   transition: transform 0.15s;
 }
 
@@ -106,20 +106,20 @@
 .pw-index-body {
   border-radius: 10px;
   padding: 12px 16px 16px 40px;
-  color: #1d1d1f;
+  color: var(--node-paper-text);
   background:
     linear-gradient(
       to right,
       transparent 27px,
-      rgba(224, 49, 43, 0.45) 27px 28.5px,
+      var(--node-paper-margin) 27px 28.5px,
       transparent 28.5px
     ),
     repeating-linear-gradient(
       to bottom,
       transparent 0 27px,
-      rgba(90, 130, 190, 0.28) 27px 28px
+      var(--node-paper-rule) 27px 28px
     ),
-    #fdfdf8;
+    var(--node-paper);
 }
 
 .pw-index-tb {
@@ -136,13 +136,13 @@
 
 .pw-index-no {
   font-size: 11px;
-  color: rgba(60, 60, 67, 0.5);
+  color: var(--node-paper-text-secondary);
   letter-spacing: 0.12em;
 }
 
 .pw-index-shots {
   font-size: 11px;
-  color: rgba(60, 60, 67, 0.5);
+  color: var(--node-paper-text-secondary);
   display: flex;
   align-items: center;
   gap: 4px;
@@ -152,7 +152,7 @@
 .pw-index-meta {
   margin-top: 10px;
   font-size: 12px;
-  color: rgba(60, 60, 67, 0.75);
+  color: var(--node-paper-text-tertiary);
   display: flex;
   gap: 8px;
   align-items: center;
@@ -160,8 +160,8 @@
 
 .pw-index-ie {
   font-weight: 700;
-  color: #1d1d1f;
-  background: rgba(0, 0, 0, 0.07);
+  color: var(--node-paper-text);
+  background: var(--node-paper-mark);
   border-radius: 5px;
   padding: 1px 7px;
   font-size: 11px;
@@ -173,11 +173,11 @@
 
 .pw-index-wx {
   font-size: 10px;
-  border: 1px solid rgba(0, 0, 0, 0.18);
+  border: 1px solid var(--node-paper-chip-border);
   border-radius: 99px;
   padding: 1px 8px;
-  color: rgba(60, 60, 67, 0.6);
-  background: #fdfdf8;
+  color: var(--node-paper-chip-text);
+  background: var(--node-paper);
 }
 
 /* 梗概直接压在索引卡横格线上。 */
@@ -185,14 +185,14 @@
   margin: 12px 0 0;
   font-size: 12.5px;
   line-height: 28px;
-  color: rgba(29, 29, 31, 0.85);
+  color: var(--node-paper-text-body);
 }
 
 /* 选中 = 品牌渐变描边 + 投影加深（§4.3 通用反馈）。 */
 .pw-index.pw-on {
   border: 2px solid transparent;
   background:
-    linear-gradient(#fdfdf8, #fdfdf8) padding-box,
+    linear-gradient(var(--node-paper), var(--node-paper)) padding-box,
     var(--brand-gradient) border-box;
 }
 
@@ -200,10 +200,10 @@
 .pw-dlg {
   position: relative;
   width: 360px;
-  background: #f5f5f7;
-  color: #1d1d1f;
+  background: var(--node-paper-note);
+  color: var(--node-paper-text);
   border-radius: 14px;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-node-note);
   transition: transform 0.15s;
 }
 
@@ -215,7 +215,7 @@
 .pw-dlg.pw-on {
   border: 2px solid transparent;
   background:
-    linear-gradient(#f5f5f7, #f5f5f7) padding-box,
+    linear-gradient(var(--node-paper-note), var(--node-paper-note)) padding-box,
     var(--brand-gradient) border-box;
 }
 
@@ -226,12 +226,12 @@
   padding: 10px 14px;
   font-size: 13px;
   font-weight: 600;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  border-bottom: 1px solid var(--node-paper-divider);
 }
 
 .pw-dlg-stat {
   font-size: 11px;
-  color: rgba(60, 60, 67, 0.5);
+  color: var(--node-paper-text-secondary);
   font-weight: 400;
 }
 
@@ -252,7 +252,7 @@
 }
 
 .pw-dlg-bub {
-  background: #e9e9eb;
+  background: var(--node-paper-bubble);
   border-radius: 12px;
   padding: 6px 10px;
   font-size: 12.5px;
@@ -260,14 +260,14 @@
 }
 
 .pw-dlg-bubrow.pw-right .pw-dlg-bub {
-  background: #dcebff;
+  background: var(--node-paper-bubble-accent);
 }
 
 .pw-dlg-vo {
   font-size: 9px;
   font-weight: 700;
-  color: #bf5af2;
-  border: 1px solid rgba(191, 90, 242, 0.4);
+  color: var(--node-paper-voiceover);
+  border: 1px solid var(--node-paper-voiceover-border);
   border-radius: 4px;
   padding: 0 4px;
   margin-left: 5px;
@@ -278,7 +278,7 @@
   text-align: center;
   font-size: 11.5px;
   font-style: italic;
-  color: rgba(60, 60, 67, 0.55);
+  color: var(--node-paper-text-caption);
   padding: 2px 20px;
 }
 
@@ -293,8 +293,8 @@
 /* ---- 节奏卡 = 节拍胶囊（编剧侧纸面便签） ---- */
 .pw-beat {
   position: relative;
-  background: #f5f5f7;
-  color: #1d1d1f;
+  background: var(--node-paper-note);
+  color: var(--node-paper-text);
   border-radius: 999px;
   padding: 10px 16px;
   display: flex;
@@ -303,7 +303,7 @@
   font-size: 13px;
   font-weight: 600;
   width: max-content;
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-node-beat);
   transition: transform 0.15s;
 }
 
@@ -314,25 +314,25 @@
 .pw-beat.pw-on {
   border: 2px solid transparent;
   background:
-    linear-gradient(#f5f5f7, #f5f5f7) padding-box,
+    linear-gradient(var(--node-paper-note), var(--node-paper-note)) padding-box,
     var(--brand-gradient) border-box;
 }
 
 .pw-beat-tone {
   font-size: 11px;
   font-weight: 400;
-  color: rgba(60, 60, 67, 0.5);
+  color: var(--node-paper-text-secondary);
 }
 
 /* ---- 分镜卡 = 监视器卡（生成侧深色石板，双外观恒定） ---- */
 .pw-shot {
   width: 300px;
   position: relative;
-  background: #232326;
-  color: #f5f5f7;
+  background: var(--surface-slate);
+  color: var(--node-slate-text);
   border-radius: 14px;
   padding: 12px 14px 14px;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--shadow-node-slate);
   transition: transform 0.15s;
 }
 
@@ -343,7 +343,7 @@
 .pw-shot.pw-on {
   border: 2px solid transparent;
   background:
-    linear-gradient(#232326, #232326) padding-box,
+    linear-gradient(var(--surface-slate), var(--surface-slate)) padding-box,
     var(--brand-gradient) border-box;
 }
 
@@ -361,8 +361,8 @@
 
 .pw-shot-size {
   font-size: 11px;
-  color: rgba(235, 235, 245, 0.6);
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: var(--node-slate-text-secondary);
+  border: 1px solid var(--node-slate-chip-border);
   border-radius: 99px;
   padding: 1px 8px;
 }
@@ -371,25 +371,25 @@
   margin: 10px 0 0;
   font-size: 12.5px;
   line-height: 1.6;
-  color: rgba(245, 245, 247, 0.85);
+  color: var(--node-slate-text-body);
 }
 
 /* 镜头 Prompt：等宽感的输入块，是 AI 视频模型的直接输入。 */
 .pw-shot-prompt {
   margin-top: 10px;
-  background: rgba(0, 0, 0, 0.35);
+  background: var(--node-slate-inset);
   border-radius: 8px;
   padding: 8px 10px;
   font-size: 11.5px;
   line-height: 1.5;
-  color: rgba(235, 235, 245, 0.75);
+  color: var(--node-slate-text-soft);
 }
 
 .pw-shot-prompt-label {
   display: block;
   font-size: 9px;
   letter-spacing: 0.08em;
-  color: rgba(235, 235, 245, 0.45);
+  color: var(--node-slate-text-caption);
   margin-bottom: 3px;
 }
 
@@ -403,10 +403,10 @@
 
 .pw-shot-ref {
   font-size: 11px;
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--node-slate-chip);
   border-radius: 99px;
   padding: 2px 9px;
-  color: rgba(245, 245, 247, 0.85);
+  color: var(--node-slate-text-body);
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -422,18 +422,18 @@
 
 .pw-shot-ref-add {
   background: transparent;
-  border: 1px dashed rgba(235, 235, 245, 0.3);
-  color: rgba(235, 235, 245, 0.45);
+  border: 1px dashed var(--node-slate-add);
+  color: var(--node-slate-text-caption);
 }
 
 /* ---- 分支节点 = 岔路路标（编剧侧，跟随画布外观） ---- */
 .pw-branch {
   width: 320px;
-  background: #fff;
-  border: 1.5px dashed rgba(0, 0, 0, 0.3);
+  background: var(--branch-bg);
+  border: 1.5px dashed var(--branch-frame);
   border-radius: 14px;
   padding: 12px 14px;
-  color: #1d1d1f;
+  color: var(--branch-text);
   transition: transform 0.15s;
 }
 
@@ -445,7 +445,7 @@
 .pw-branch.pw-on {
   border: 2px solid transparent;
   background:
-    linear-gradient(#fff, #fff) padding-box,
+    linear-gradient(var(--branch-bg), var(--branch-bg)) padding-box,
     var(--brand-gradient) border-box;
 }
 
@@ -460,8 +460,8 @@
 .pw-branch-opt {
   position: relative;
   margin-top: 8px;
-  background: rgba(0, 0, 0, 0.05);
-  color: #3a3a3c;
+  background: var(--branch-opt-bg);
+  color: var(--branch-opt-text);
   border-radius: 8px;
   padding: 6px 10px;
   font-size: 12px;
@@ -472,36 +472,36 @@
   right: -6px;
   width: 9px;
   height: 9px;
-  background: #fff;
+  background: var(--branch-bg);
   border: 2px solid var(--accent);
 }
 
 .pw-branch-addopt {
   margin-top: 8px;
-  border: 1px dashed rgba(0, 0, 0, 0.22);
+  border: 1px dashed var(--branch-addopt-border);
   border-radius: 8px;
   padding: 6px 10px;
   font-size: 12px;
-  color: var(--text-secondary);
+  color: var(--branch-dim);
   text-align: center;
 }
 
 @media (prefers-color-scheme: dark) {
   .pw-branch {
     background: transparent;
-    border-color: rgba(235, 235, 245, 0.35);
-    color: #f5f5f7;
+    border-color: var(--branch-frame);
+    color: var(--branch-text);
   }
 
   .pw-branch.pw-on {
     background:
-      linear-gradient(#131316, #131316) padding-box,
+      linear-gradient(var(--surface-window), var(--surface-window)) padding-box,
       var(--brand-gradient) border-box;
   }
 
   .pw-branch-opt {
-    background: rgba(255, 255, 255, 0.08);
-    color: rgba(245, 245, 247, 0.92);
+    background: var(--branch-opt-bg);
+    color: var(--branch-opt-text);
   }
 
   .react-flow__handle.pw-branch-port {
@@ -510,18 +510,18 @@
   }
 
   .pw-branch-addopt {
-    border-color: rgba(235, 235, 245, 0.3);
-    color: rgba(235, 235, 245, 0.45);
+    border-color: var(--branch-addopt-border);
+    color: var(--branch-dim);
   }
 
   /* 深色画布下分支虚线框上的齿轮用深色系。 */
   .pw-branch .pw-gear-light {
-    color: rgba(235, 235, 245, 0.6);
+    color: var(--node-slate-text-secondary);
   }
 
   .pw-branch .pw-gear-light:hover {
-    background: rgba(255, 255, 255, 0.1);
-    color: rgba(235, 235, 245, 0.92);
+    background: var(--node-slate-hover);
+    color: var(--node-slate-gear-hover);
   }
 }
 
@@ -546,13 +546,13 @@
 .pw-edge-label {
   position: absolute;
   background: var(--brand-gradient);
-  color: #fff;
+  color: var(--on-saturated);
   font-size: 10px;
   font-weight: 600;
   padding: 2px 8px;
   border-radius: 999px;
   pointer-events: none;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+  box-shadow: var(--shadow-edge-label);
 }
 
 /* ---- React Flow 外壳覆盖：控件贴合设计令牌 ----
@@ -561,7 +561,7 @@
  * 应用样式注入，对按钮同属性（background/color/border）的直接声明会整体
  * 落败——issue #93 暗色下即回落 RF 浅色默认 #fefefe 底 + inherit 浅色图标。 */
 .react-flow__controls {
-  --xy-controls-box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  --xy-controls-box-shadow: var(--shadow-controls);
   --xy-controls-button-background-color: var(--surface-card);
   --xy-controls-button-background-color-hover: var(--fill-quaternary);
   --xy-controls-button-color: var(--text-primary);
@@ -607,7 +607,7 @@
 .pw-av.pw-av-invalid {
   background: repeating-linear-gradient(
     -45deg,
-    rgba(142, 142, 147, 0.35) 0 3px,
+    var(--invalid-stripe) 0 3px,
     transparent 3px 6px
   );
   color: var(--text-secondary);
@@ -655,7 +655,7 @@
 }
 
 .pw-beat-state.ok {
-  color: #fff;
+  color: var(--on-saturated);
   background: var(--accent-alt);
 }
 
@@ -663,11 +663,11 @@
 .pw-image {
   width: 300px;
   position: relative;
-  background: #232326;
-  color: #f5f5f7;
+  background: var(--surface-slate);
+  color: var(--node-slate-text);
   border-radius: 14px;
   padding: 12px 14px 14px;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--shadow-node-slate);
   transition: transform 0.15s;
 }
 
@@ -678,7 +678,7 @@
 .pw-image.pw-on {
   border: 2px solid transparent;
   background:
-    linear-gradient(#232326, #232326) padding-box,
+    linear-gradient(var(--surface-slate), var(--surface-slate)) padding-box,
     var(--brand-gradient) border-box;
 }
 
@@ -696,29 +696,29 @@
 
 .pw-image-size {
   font-size: 11px;
-  color: rgba(235, 235, 245, 0.6);
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: var(--node-slate-text-secondary);
+  border: 1px solid var(--node-slate-chip-border);
   border-radius: 99px;
   padding: 1px 8px;
 }
 
 .pw-image-status {
   font-size: 11px;
-  color: rgba(235, 235, 245, 0.65);
+  color: var(--node-slate-text-muted);
 }
 
 .pw-image-status-err {
-  color: #ff9f9a;
+  color: var(--node-slate-error);
 }
 
 .pw-image-prompt {
   margin: 10px 0 0;
-  background: rgba(0, 0, 0, 0.35);
+  background: var(--node-slate-inset);
   border-radius: 8px;
   padding: 8px 10px;
   font-size: 11.5px;
   line-height: 1.5;
-  color: rgba(235, 235, 245, 0.75);
+  color: var(--node-slate-text-soft);
   display: -webkit-box;
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
@@ -729,7 +729,7 @@
 .pw-image-out {
   margin-top: 10px;
   border-radius: 8px;
-  background: rgba(0, 0, 0, 0.45);
+  background: var(--node-slate-well);
   min-height: 96px;
   display: flex;
   align-items: center;
@@ -746,7 +746,7 @@
 
 .pw-image-empty {
   font-size: 11.5px;
-  color: rgba(235, 235, 245, 0.45);
+  color: var(--node-slate-text-caption);
   padding: 12px;
   text-align: center;
 }
