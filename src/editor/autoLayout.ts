@@ -59,6 +59,23 @@ const positiveSize = (v?: number): number | undefined =>
   typeof v === 'number' && v > 0 ? v : undefined
 
 /**
+ * 节点是否具备可用于布局的尺寸：measured 或顶层 width/height（fromStoryNode
+ * 还原的落盘 layout.size）任一来源能解析出正数宽与高。宽高任一维只能落入
+ * 类型回退时（如 .pw-beat 为 max-content，宽度随用户文本无上界），调用方应
+ * 等待测量完成而非提交可能重叠的布局（PR #111 评审）。
+ */
+export function hasUsableSize(node: CanvasNode): boolean {
+  const runtime = node as {
+    measured?: { width?: number; height?: number }
+    width?: number
+    height?: number
+  }
+  const width = positiveSize(runtime.measured?.width) ?? positiveSize(runtime.width)
+  const height = positiveSize(runtime.measured?.height) ?? positiveSize(runtime.height)
+  return width !== undefined && height !== undefined
+}
+
+/**
  * 节点尺寸取值顺序：measured（React Flow 已测量）→ 顶层 width/height
  * （fromStoryNode 把落盘 layout.size 还原为测量前初始尺寸，PR #111 评审）
  * → 类型回退。跳过前两层任一层都会在不重叠布局中使用偏小的尺寸。

@@ -163,6 +163,7 @@ const layoutNode = (id: string, x: number, y: number) =>
     id,
     type: 'scene',
     position: { x, y },
+    measured: { width: 340, height: 200 },
     data: {
       name: id,
       sceneNo: 1,

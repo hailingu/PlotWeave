@@ -22,7 +22,17 @@ const sceneNode = (id: string, x: number, y: number) =>
     id,
     type: 'scene',
     position: { x, y },
+    measured: { width: 340, height: 200 },
     data: { name: id, sceneNo: 1, interior: true, time: '', synopsis: '', characterIds: [] },
+  }) as unknown as CanvasNode
+
+/** 未测量且无落盘尺寸的节拍卡：.pw-beat 为 max-content，宽度随文本无上界。 */
+const unmeasuredBeat = (id: string, x: number, y: number) =>
+  ({
+    id,
+    type: 'beat',
+    position: { x, y },
+    data: { name: '一段非常长的节拍名称会把胶囊卡片撑到回退宽度之外' },
   }) as unknown as CanvasNode
 
 const seqEdge = (source: string, target: string): Edge => ({
@@ -151,6 +161,24 @@ describe('useAutoLayout · 安全边界（issue #94）', () => {
     expect(pushHistory).not.toHaveBeenCalled()
     expect(fitView).not.toHaveBeenCalled()
     expect(onError).not.toHaveBeenCalled()
+  })
+
+  it('存在未测量节点（max-content 节拍卡）时保留原布局并提示稍后重试（PR #111 评审）', () => {
+    const project = makeProject(
+      [sceneNode('s1', 0, 0), unmeasuredBeat('bt1', 800, 600)],
+      [seqEdge('s1', 'bt1')],
+    )
+    const { result, commands, pushHistory, fitView, onError } = setup(project)
+    const before = positionsOf(result.current.doc.nodes)
+
+    act(() => result.current.layout.onAutoLayout())
+
+    expect(onError).toHaveBeenCalledTimes(1)
+    expect(String(onError.mock.calls[0][0])).toContain('尺寸测量')
+    expect(pushHistory).not.toHaveBeenCalled()
+    expect(commands).toHaveLength(0)
+    expect(fitView).not.toHaveBeenCalled()
+    expect(positionsOf(result.current.doc.nodes)).toEqual(before)
   })
 
   it('减少动态偏好下视口适配降级为无插值即时适配（§2.6，PR #111 评审）', () => {

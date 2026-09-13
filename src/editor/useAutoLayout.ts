@@ -6,7 +6,7 @@
  */
 import { useCallback, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
 import type { Edge, FitView, XYPosition } from '@xyflow/react'
-import { computeAutoLayout, type LayoutEdge } from './autoLayout'
+import { computeAutoLayout, hasUsableSize, type LayoutEdge } from './autoLayout'
 import type { HistoryCommand } from './history'
 import type { CanvasNode } from './nodes/types'
 
@@ -41,6 +41,12 @@ export function useAutoLayout(deps: AutoLayoutDeps) {
   const onAutoLayout = useCallback(() => {
     const nodes = nodesRef.current
     if (nodes.length === 0) return
+    // 尺寸测量未完成的节点（实测/落盘均无宽高，如 max-content 节拍卡）
+    // 回退尺寸不可信：等待测量而非提交可能重叠的布局（issue #94 验收标准）
+    if (!nodes.every(hasUsableSize)) {
+      onError('部分节点尚未完成尺寸测量，已保留原布局，请稍后重试')
+      return
+    }
     const before = new Map(nodes.map((n) => [n.id, { ...n.position }]))
     let after: Map<string, XYPosition>
     try {
