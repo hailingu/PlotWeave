@@ -118,8 +118,7 @@ const beatNode = {
   data: { name: '真相逼近', tone: '' },
 } as unknown as CanvasNode
 
-describe('IME 组合输入（issue #42 真实更新链路）', () => {
-  const IME_PROJECT: EditorProjectContent = {
+describe('IME 组合输入（issue #42 真实更新链路）', () => {  const IME_PROJECT: EditorProjectContent = {
     id: 'p-ime',
     name: '组合输入',
     nodes: [beatNode],
@@ -156,5 +155,76 @@ describe('IME 组合输入（issue #42 真实更新链路）', () => {
     expect(screen.getByLabelText('基调')).toBe(tone)
     expect(tone.value).toBe('清冷')
     expect(screen.getByText('基调：清冷')).toBeTruthy()
+  })
+})
+
+const layoutNode = (id: string, x: number, y: number) =>
+  ({
+    id,
+    type: 'scene',
+    position: { x, y },
+    data: {
+      name: id,
+      sceneNo: 1,
+      interior: true,
+      time: '',
+      synopsis: '',
+      characterIds: [],
+      locationId: null,
+    },
+  }) as unknown as CanvasNode
+
+const LAYOUT_EDGES: EditorProjectContent['edges'] = [
+  { id: 'e1', source: 's1', target: 's2', className: 'pw-edge-sequence' },
+  { id: 'e2', source: 's2', target: 's3', className: 'pw-edge-sequence' },
+]
+
+describe('画布工具栏自动排布（issue #94 装配）', () => {
+  const LAYOUT_PROJECT: EditorProjectContent = {
+    id: 'p-layout',
+    name: '排布装配',
+    nodes: [layoutNode('s1', 0, 0), layoutNode('s2', 900, 700), layoutNode('s3', -500, 1000)],
+    edges: LAYOUT_EDGES,
+    settings: { characters: [], locations: [] },
+  }
+
+  it('左下角工具栏出现「自动排布」按钮，可通过键盘/可访问名称触发', () => {
+    render(
+      <EditorView project={LAYOUT_PROJECT} onBackHome={vi.fn()} onRenameProject={vi.fn()} onSave={vi.fn()} />,
+    )
+    const button = screen.getByLabelText('自动排布') as HTMLButtonElement
+    expect(button.tagName).toBe('BUTTON')
+    expect(button.disabled).toBe(false)
+  })
+
+  it('空画布时按钮禁用', () => {
+    render(
+      <EditorView
+        project={{ ...LAYOUT_PROJECT, id: 'p-empty', nodes: [], edges: [] }}
+        onBackHome={vi.fn()}
+        onRenameProject={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    )
+    expect((screen.getByLabelText('自动排布') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('点击后排布位置入命令栈：撤销恢复原状、栈回到空', () => {
+    render(
+      <EditorView project={LAYOUT_PROJECT} onBackHome={vi.fn()} onRenameProject={vi.fn()} onSave={vi.fn()} />,
+    )
+    const transformsOf = () =>
+      [...screen.getByRole('button', { name: '自动排布' }).ownerDocument.querySelectorAll('.react-flow__node')]
+        .map((el) => (el as HTMLElement).style.transform)
+        .sort()
+    const before = transformsOf()
+
+    fireEvent.click(screen.getByLabelText('自动排布'))
+    expect(undoButton().disabled).toBe(false)
+    expect(transformsOf()).not.toEqual(before)
+
+    fireEvent.click(undoButton())
+    expect(undoButton().disabled).toBe(true)
+    expect(transformsOf()).toEqual(before)
   })
 })
