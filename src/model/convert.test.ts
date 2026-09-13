@@ -721,5 +721,30 @@ describe('同版本文档的容器级扩展字段（issue #100 保留策略，§
     expect(round.repaired).toBe(true)
     expect((round.content as unknown as Record<string, unknown>).versionless).toBeUndefined()
   })
+
+  it('扩展键 __proto__（自有属性）：空原型承接不丢失、不触发修复（评审 P2）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as Record<string, unknown>
+    // JSON.parse 对 "__proto__" 产出自有属性；对象字面量赋值会触发原型
+    // setter，测试以 defineProperty 复刻该自有属性形态
+    Object.defineProperty(doc.graph, '__proto__', {
+      value: { legacy: '构造原型键' },
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    })
+    const round = parseProject(doc)
+    expect(round.repaired).toBe(false)
+    expect(round.warnings).toEqual([])
+    const extensions = round.content.graphExtensions as Record<string, unknown>
+    expect(Object.getOwnPropertyDescriptor(extensions, '__proto__')?.value).toEqual({
+      legacy: '构造原型键',
+    })
+    // 写回的 graph 仍带自有 __proto__ 键（自有数据属性，非原型变更），往返收敛
+    const again = serializeProject(round.content, 'p-1', NOW) as unknown as Record<string, unknown>
+    expect(Object.getOwnPropertyDescriptor(again.graph, '__proto__')?.value).toEqual({
+      legacy: '构造原型键',
+    })
+    expect(parseProject(again).repaired).toBe(false)
+  })
 })
 

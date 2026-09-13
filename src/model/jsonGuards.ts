@@ -19,16 +19,18 @@ export const SETTINGS_CONTRACT_KEYS = ['characters', 'locations', 'props', 'docu
 export const ASSETS_CONTRACT_KEYS = ['byId'] as const
 
 /** 捕获容器中契约键之外的扩展键（值原样引用：JSON 解析产物无别名，且
- * 归一化只沿契约键就地改写，扩展值不会被管线触碰）。 */
+ * 归一化只沿契约键就地改写，扩展值不会被管线触碰）。空原型记录承接：
+ * JSON 允许 `__proto__` 作为普通键（JSON.parse 产出自有属性），普通对象
+ * 字面量赋值会触发原型 setter 丢失条目（与 plainObjectEntries 同口径）。 */
 export function extensionEntries(
   container: Record<string, unknown>,
   contractKeys: readonly string[],
 ): Record<string, unknown> {
-  const extras: Record<string, unknown> = {}
+  const out: Record<string, unknown> = Object.create(null)
   for (const [key, value] of Object.entries(container)) {
-    if (!contractKeys.includes(key)) extras[key] = value
+    if (!contractKeys.includes(key)) out[key] = value
   }
-  return extras
+  return out
 }
 
 /** 确定性码点序比较器（规范化产物须跨环境一致，非 locale 相关：
