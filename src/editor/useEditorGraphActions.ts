@@ -9,7 +9,10 @@ import { useAssetIndex, type AssetIndexActions } from './useAssetIndex'
 import { useCanvasDrop } from './useCanvasDrop'
 import { useConnectionRules, type ConnectionRules } from './useConnectionRules'
 import { useEdgeDeletion } from './useEdgeDeletion'
-import { useEditorContextMenu, type EditorContextMenuHandlers } from './useEditorContextMenu'
+import {
+  useEditorContextMenu,
+  type EditorContextMenuHandlers,
+} from './useEditorContextMenu'
 import { useEpisodeEditing, type EpisodeEditing } from './useEpisodeEditing'
 import { useNodeCreation, type NodeCreationActions } from './useNodeCreation'
 import { useNodeDeletion } from './useNodeDeletion'
@@ -61,8 +64,19 @@ export interface EditorGraphActions {
 }
 
 /** 组装画布写动作族（不含持久化、AI 桥与快捷键）。 */
-export function useEditorGraphActions(deps: EditorGraphActionsDeps): EditorGraphActions {
-  const { projectId, doc, panels, pushHistory, screenToFlowPosition, canvasRef, fitView, onError } = deps
+export function useEditorGraphActions(
+  deps: EditorGraphActionsDeps,
+): EditorGraphActions {
+  const {
+    projectId,
+    doc,
+    panels,
+    pushHistory,
+    screenToFlowPosition,
+    canvasRef,
+    fitView,
+    onError,
+  } = deps
   const assets = useAssetIndex(doc.setAssets)
   const patch = useNodePatch(doc, pushHistory)
   const creation = useNodeCreation({
@@ -89,7 +103,11 @@ export function useEditorGraphActions(deps: EditorGraphActionsDeps): EditorGraph
   const connection = useConnectionRules(doc, pushHistory)
   const menu = useEditorContextMenu(doc, panels.setCtxMenu)
   const episodes = useEpisodeEditing(doc, pushHistory)
-  const { settingsActions } = useSettingsActions(doc.settings, doc.setSettings, pushHistory)
+  const { settingsActions } = useSettingsActions(
+    doc.settings,
+    doc.setSettings,
+    pushHistory,
+  )
   const outlineDrop = useOutlineDrop({
     nodesRef: doc.nodesRef,
     edgesRef: doc.edgesRef,

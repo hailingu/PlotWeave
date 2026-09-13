@@ -10,8 +10,18 @@ import type { ImageNodeData } from '../nodes/types'
 
 const settings = normalizeSettings({
   providers: [
-    { id: 'openai', enabled: true, baseUrl: 'https://x/v1', models: ['gpt-image-1', 'gpt-4o'] },
-    { id: 'ark', enabled: true, baseUrl: 'https://ark/v3', models: ['seedream-4'] },
+    {
+      id: 'openai',
+      enabled: true,
+      baseUrl: 'https://x/v1',
+      models: ['gpt-image-1', 'gpt-4o'],
+    },
+    {
+      id: 'ark',
+      enabled: true,
+      baseUrl: 'https://ark/v3',
+      models: ['seedream-4'],
+    },
   ],
   defaultImage: 'ark:seedream-4',
 })
@@ -34,7 +44,10 @@ describe('resolveImageGenPlan（§13 生成入口的模型解析）', () => {
     }
   })
   it('节点显式选择模型 → 覆盖默认；size 沿用节点值', () => {
-    const plan = resolveImageGenPlan(node({ model: 'openai:gpt-image-1', size: '1024x1536' }), settings)
+    const plan = resolveImageGenPlan(
+      node({ model: 'openai:gpt-image-1', size: '1024x1536' }),
+      settings,
+    )
     expect(plan.ok).toBe(true)
     if (plan.ok) {
       expect(plan.provider.id).toBe('openai')
@@ -43,7 +56,10 @@ describe('resolveImageGenPlan（§13 生成入口的模型解析）', () => {
     }
   })
   it('节点指向失效组合（provider 禁用/模型移出清单）→ 失败文案', () => {
-    const plan = resolveImageGenPlan(node({ model: 'openai:gone-model' }), settings)
+    const plan = resolveImageGenPlan(
+      node({ model: 'openai:gone-model' }),
+      settings,
+    )
     expect(plan.ok).toBe(false)
     if (!plan.ok) expect(plan.message).toContain('openai:gone-model')
   })

@@ -34,7 +34,13 @@ const legacyDialogue = node({
     name: '对白',
     lines: [
       { kind: 'action', text: '雨停了', speaker: null, vo: false },
-      { kind: 'line', speaker: { label: '林', gradient: 'g-lin' }, side: 'left', text: '别走', vo: false },
+      {
+        kind: 'line',
+        speaker: { label: '林', gradient: 'g-lin' },
+        side: 'left',
+        text: '别走',
+        vo: false,
+      },
     ],
   },
 } as unknown as CanvasNode)
@@ -48,7 +54,11 @@ describe('migrateProjectDocument（旧 schema → 引用 id 化）', () => {
       settings: { characters: [], locations: [] },
     })
     expect(migrated).toBe(true)
-    const scene = doc.nodes[0].data as { characterIds: string[]; locationId?: string; characters?: unknown }
+    const scene = doc.nodes[0].data as {
+      characterIds: string[]
+      locationId?: string
+      characters?: unknown
+    }
     expect(scene.characters).toBeUndefined()
     expect(scene.characterIds).toHaveLength(2)
     expect(scene.locationId).toBeDefined()
@@ -65,17 +75,34 @@ describe('migrateProjectDocument（旧 schema → 引用 id 化）', () => {
       type: 'scene',
       position: { x: 0, y: 0 },
       selected: false,
-      data: { name: '码头', sceneNo: 2, interior: false, time: '☀️ 日', synopsis: '', location: 42 },
+      data: {
+        name: '码头',
+        sceneNo: 2,
+        interior: false,
+        time: '☀️ 日',
+        synopsis: '',
+        location: 42,
+      },
     } as unknown as CanvasNode)
     const { doc, migrated } = migrateProjectDocument(
-      { name: 'x', nodes: [scene], edges: [], settings: { characters: [], locations: [] } },
+      {
+        name: 'x',
+        nodes: [scene],
+        edges: [],
+        settings: { characters: [], locations: [] },
+      },
       warnings,
     )
     expect(migrated).toBe(true)
-    const data = doc.nodes[0].data as { location?: unknown; locationId?: unknown }
+    const data = doc.nodes[0].data as {
+      location?: unknown
+      locationId?: unknown
+    }
     expect('location' in data).toBe(false)
     expect(data.locationId).toBeUndefined()
-    expect(warnings.some((w) => w.includes('s9') && w.includes('地点'))).toBe(true)
+    expect(warnings.some((w) => w.includes('s9') && w.includes('地点'))).toBe(
+      true,
+    )
   })
 
   it('对白 speaker 对象 → 实体 id；同名/同渐变头像复用既有实体不重复建', () => {
@@ -86,7 +113,9 @@ describe('migrateProjectDocument（旧 schema → 引用 id 化）', () => {
       edges: [],
       settings: { characters: [existing], locations: [] },
     })
-    const lines = (doc.nodes[0].data as { lines: Array<{ kind: string; speaker: unknown }> }).lines
+    const lines = (
+      doc.nodes[0].data as { lines: Array<{ kind: string; speaker: unknown }> }
+    ).lines
     expect(lines[1].speaker).toBe('ch-lin') // 渐变+名字前缀命中既有「林晚」
     const names = doc.settings.characters.map((c) => c.name)
     expect(names).toContain('林晚')
@@ -99,16 +128,28 @@ describe('migrateProjectDocument（旧 schema → 引用 id 化）', () => {
       type: 'scene',
       position: { x: 0, y: 0 },
       selected: false,
-      data: { name: '新场', sceneNo: 2, interior: false, time: '☀️ 日', synopsis: '', characterIds: ['ch1'] },
+      data: {
+        name: '新场',
+        sceneNo: 2,
+        interior: false,
+        time: '☀️ 日',
+        synopsis: '',
+        characterIds: ['ch1'],
+      },
     } as unknown as CanvasNode)
     const { doc, migrated } = migrateProjectDocument({
       name: 'x',
       nodes: [modern],
       edges: [],
-      settings: { characters: [{ id: 'ch1', name: '林晚', gradient: 'g' }], locations: [] },
+      settings: {
+        characters: [{ id: 'ch1', name: '林晚', gradient: 'g' }],
+        locations: [],
+      },
     })
     expect(migrated).toBe(false)
-    expect((doc.nodes[0].data as { characterIds: string[] }).characterIds).toEqual(['ch1'])
+    expect(
+      (doc.nodes[0].data as { characterIds: string[] }).characterIds,
+    ).toEqual(['ch1'])
   })
 
   it('场景既无 characters 也无 characterIds：补空数组并标记迁移', () => {
@@ -117,11 +158,24 @@ describe('migrateProjectDocument（旧 schema → 引用 id 化）', () => {
       type: 'scene',
       position: { x: 0, y: 0 },
       selected: false,
-      data: { name: '空场', sceneNo: 3, interior: true, time: '🌙 夜', synopsis: '' },
+      data: {
+        name: '空场',
+        sceneNo: 3,
+        interior: true,
+        time: '🌙 夜',
+        synopsis: '',
+      },
     } as unknown as CanvasNode)
-    const { doc, migrated } = migrateProjectDocument({ name: 'x', nodes: [bare], edges: [], settings: undefined as unknown as ProjectContent['settings'] })
+    const { doc, migrated } = migrateProjectDocument({
+      name: 'x',
+      nodes: [bare],
+      edges: [],
+      settings: undefined as unknown as ProjectContent['settings'],
+    })
     expect(migrated).toBe(true)
-    expect((doc.nodes[0].data as { characterIds: string[] }).characterIds).toEqual([])
+    expect(
+      (doc.nodes[0].data as { characterIds: string[] }).characterIds,
+    ).toEqual([])
     expect(doc.settings.characters).toEqual([])
   })
 })
@@ -133,12 +187,25 @@ describe('migrateProjectDocument · v0 头像兼容子步骤（§11：合并去�
       type: 'scene',
       position: { x: 0, y: 0 },
       selected: false,
-      data: { name: '过渡场', sceneNo: 9, interior: true, time: '🌙 夜', synopsis: '', ...extra },
+      data: {
+        name: '过渡场',
+        sceneNo: 9,
+        interior: true,
+        time: '🌙 夜',
+        synopsis: '',
+        ...extra,
+      },
     } as unknown as CanvasNode)
   const run = (
     scene: CanvasNode,
     characters: ProjectContent['settings']['characters'],
-  ) => migrateProjectDocument({ name: 'x', nodes: [scene], edges: [], settings: { characters, locations: [] } })
+  ) =>
+    migrateProjectDocument({
+      name: 'x',
+      nodes: [scene],
+      edges: [],
+      settings: { characters, locations: [] },
+    })
   const idsOf = (doc: ReturnType<typeof migrateProjectDocument>['doc']) =>
     (doc.nodes[0].data as { characterIds: string[] }).characterIds
 
@@ -151,12 +218,17 @@ describe('migrateProjectDocument · v0 头像兼容子步骤（§11：合并去�
       }),
       [existing],
     )
-    const scene = doc.nodes[0].data as { characterIds: string[]; characters?: unknown }
+    const scene = doc.nodes[0].data as {
+      characterIds: string[]
+      characters?: unknown
+    }
     expect(scene.characters).toBeUndefined()
     // 头像建出的新 id 在前，既有结构化引用保留，重复 ch-keep 去重
     expect(scene.characterIds).toHaveLength(2)
     expect(scene.characterIds[1]).toBe('ch-keep')
-    expect(doc.settings.characters.some((c) => c.id === scene.characterIds[0])).toBe(true)
+    expect(
+      doc.settings.characters.some((c) => c.id === scene.characterIds[0]),
+    ).toBe(true)
   })
 
   it('空头像数组不清空已有 characterIds（可恢复来源为零时保留结构化引用）', () => {
@@ -167,29 +239,41 @@ describe('migrateProjectDocument · v0 头像兼容子步骤（§11：合并去�
   })
 
   it('同名优先复用（gradient 不一致仍按完整名复用）；多字标签不做前缀匹配', () => {
-    const { doc } = run(sceneWith({ characters: [{ label: '张三', gradient: 'g-y' }] }), [
-      { id: 'ch-a', name: '张三', gradient: 'g-x' },
-    ])
+    const { doc } = run(
+      sceneWith({ characters: [{ label: '张三', gradient: 'g-y' }] }),
+      [{ id: 'ch-a', name: '张三', gradient: 'g-x' }],
+    )
     expect(idsOf(doc)).toEqual(['ch-a'])
     expect(doc.settings.characters).toHaveLength(1)
 
-    const { doc: doc2 } = run(sceneWith({ characters: [{ label: '张三', gradient: 'g-a' }] }), [
-      { id: 'ch-b', name: '张三丰', gradient: 'g-a' },
-    ])
+    const { doc: doc2 } = run(
+      sceneWith({ characters: [{ label: '张三', gradient: 'g-a' }] }),
+      [{ id: 'ch-b', name: '张三丰', gradient: 'g-a' }],
+    )
     expect(idsOf(doc2)).not.toContain('ch-b')
-    expect(doc2.settings.characters.map((c) => c.name)).toEqual(['张三丰', '张三'])
+    expect(doc2.settings.characters.map((c) => c.name)).toEqual([
+      '张三丰',
+      '张三',
+    ])
   })
 
   it('单字标签前缀歧义（张三/张四）→ 新建独立角色，不错绑首见项', () => {
-    const { doc } = run(sceneWith({ characters: [{ label: '张', gradient: 'g-a' }] }), [
-      { id: 'ch-a', name: '张三', gradient: 'g-a' },
-      { id: 'ch-b', name: '张四', gradient: 'g-a' },
-    ])
+    const { doc } = run(
+      sceneWith({ characters: [{ label: '张', gradient: 'g-a' }] }),
+      [
+        { id: 'ch-a', name: '张三', gradient: 'g-a' },
+        { id: 'ch-b', name: '张四', gradient: 'g-a' },
+      ],
+    )
     const ids = idsOf(doc)
     expect(ids).toHaveLength(1)
     expect(ids[0]).not.toBe('ch-a')
     expect(ids[0]).not.toBe('ch-b')
-    expect(doc.settings.characters.map((c) => c.name)).toEqual(['张三', '张四', '张'])
+    expect(doc.settings.characters.map((c) => c.name)).toEqual([
+      '张三',
+      '张四',
+      '张',
+    ])
     expect(doc.settings.characters[2].id).toBe(ids[0])
   })
 
@@ -209,7 +293,14 @@ describe('migrateProjectDocument · v0 头像兼容子步骤（§11：合并去�
         type: 'scene',
         position: { x: 0, y: 0 },
         selected: false,
-        data: { name: '厨房戏', sceneNo: 7, interior: true, time: '日', synopsis: '', location },
+        data: {
+          name: '厨房戏',
+          sceneNo: 7,
+          interior: true,
+          time: '日',
+          synopsis: '',
+          location,
+        },
       } as unknown as CanvasNode)
     const { doc } = migrateProjectDocument({
       name: 'x',
@@ -217,7 +308,9 @@ describe('migrateProjectDocument · v0 头像兼容子步骤（§11：合并去�
       edges: [],
       settings: { characters: [], locations: [existing] },
     })
-    expect((doc.nodes[0].data as { locationId?: string }).locationId).toBe('loc-1')
+    expect((doc.nodes[0].data as { locationId?: string }).locationId).toBe(
+      'loc-1',
+    )
     expect(doc.settings.locations).toHaveLength(1)
   })
 
@@ -228,14 +321,29 @@ describe('migrateProjectDocument · v0 头像兼容子步骤（§11：合并去�
         type: 'scene',
         position: { x: 0, y: 0 },
         selected: false,
-        data: { name: '空白地点场', sceneNo: 8, interior: true, time: '日', synopsis: '', location: '   ' },
+        data: {
+          name: '空白地点场',
+          sceneNo: 8,
+          interior: true,
+          time: '日',
+          synopsis: '',
+          location: '   ',
+        },
       } as unknown as CanvasNode)
     const warnings: string[] = []
     const { doc } = migrateProjectDocument(
-      { name: 'x', nodes: [sceneAt()], edges: [], settings: { characters: [], locations: [] } },
+      {
+        name: 'x',
+        nodes: [sceneAt()],
+        edges: [],
+        settings: { characters: [], locations: [] },
+      },
       warnings,
     )
-    const scene = doc.nodes[0].data as { locationId?: string; location?: unknown }
+    const scene = doc.nodes[0].data as {
+      locationId?: string
+      location?: unknown
+    }
     expect(scene.locationId).toBeUndefined()
     expect(scene.location).toBeUndefined()
     expect(doc.settings.locations).toEqual([])
@@ -249,7 +357,10 @@ describe('migrateProjectDocument · 列表项稳定 id 回填（S6479）', () =>
       id: 'b1',
       type: 'branch',
       position: { x: 0, y: 0 },
-      data: { prompt: '？', options: ['坦白', { label: '隐瞒' }, { id: 'opt-keep', label: '沉默' }] },
+      data: {
+        prompt: '？',
+        options: ['坦白', { label: '隐瞒' }, { id: 'opt-keep', label: '沉默' }],
+      },
     } as unknown as CanvasNode)
     const { doc, migrated } = migrateProjectDocument({
       name: 'x',
@@ -258,7 +369,9 @@ describe('migrateProjectDocument · 列表项稳定 id 回填（S6479）', () =>
       settings: { characters: [], locations: [] },
     })
     expect(migrated).toBe(true)
-    const options = (doc.nodes[0].data as { options: Array<{ id: string; label: string }> }).options
+    const options = (
+      doc.nodes[0].data as { options: Array<{ id: string; label: string }> }
+    ).options
     expect(options.map((o) => o.label)).toEqual(['坦白', '隐瞒', '沉默'])
     expect(options[0].id).toMatch(/^opt-/)
     expect(options[1].id).toMatch(/^opt-/)
@@ -276,7 +389,13 @@ describe('migrateProjectDocument · 列表项稳定 id 回填（S6479）', () =>
       id: 'sh1',
       type: 'shot',
       position: { x: 0, y: 0 },
-      data: { shotNo: 1, size: '中景', picture: '', prompt: '', refs: [{ kind: 'audio', label: '雨声' }] },
+      data: {
+        shotNo: 1,
+        size: '中景',
+        picture: '',
+        prompt: '',
+        refs: [{ kind: 'audio', label: '雨声' }],
+      },
     } as unknown as CanvasNode)
     const { doc, migrated } = migrateProjectDocument({
       name: 'x',
@@ -290,7 +409,12 @@ describe('migrateProjectDocument · 列表项稳定 id 回填（S6479）', () =>
     expect(lines[0].id).toMatch(/^line-/)
     expect(refs[0].id).toMatch(/^ref-/)
 
-    const again = migrateProjectDocument({ name: 'x', nodes: doc.nodes, edges: [], settings: doc.settings })
+    const again = migrateProjectDocument({
+      name: 'x',
+      nodes: doc.nodes,
+      edges: [],
+      settings: doc.settings,
+    })
     expect(again.migrated).toBe(false)
   })
 })
@@ -307,7 +431,14 @@ describe('rewriteIndexOptionHandles（旧下标句柄改写，§11.1 ②）', ()
     id: 't1',
     type: 'scene',
     position: { x: 0, y: 0 },
-    data: { name: '目标', sceneNo: 1, interior: true, time: '', synopsis: '', characterIds: [] },
+    data: {
+      name: '目标',
+      sceneNo: 1,
+      interior: true,
+      time: '',
+      synopsis: '',
+      characterIds: [],
+    },
   } as unknown as CanvasNode)
 
   it('规范 0 基下标改写到稳定选项 id；越界句柄隔离', () => {
@@ -317,7 +448,8 @@ describe('rewriteIndexOptionHandles（旧下标句柄改写，§11.1 ②）', ()
       edges: [],
       settings: { characters: [], locations: [] },
     })
-    const options = (doc.nodes[0].data as { options: Array<{ id: string }> }).options
+    const options = (doc.nodes[0].data as { options: Array<{ id: string }> })
+      .options
     const edges = [
       { id: 'e-ok', source: 'b1', target: 't1', sourceHandle: 'option-1' },
       { id: 'e-oob', source: 'b1', target: 't1', sourceHandle: 'option-9' },
@@ -342,6 +474,8 @@ describe('rewriteIndexOptionHandles（旧下标句柄改写，§11.1 ②）', ()
     const warnings: string[] = []
     const out = rewriteIndexOptionHandles({ ...doc, edges }, warnings)
     expect(out.edges).toHaveLength(0)
-    expect(warnings.some((w) => w.includes('e-nc') && w.includes('非规范'))).toBe(true)
+    expect(
+      warnings.some((w) => w.includes('e-nc') && w.includes('非规范')),
+    ).toBe(true)
   })
 })

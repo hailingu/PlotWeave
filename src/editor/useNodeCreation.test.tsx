@@ -5,7 +5,10 @@
  */
 import { act, renderHook } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { useEditorDocument, type EditorProjectContent } from './useEditorDocument'
+import {
+  useEditorDocument,
+  type EditorProjectContent,
+} from './useEditorDocument'
 import { useNodeCreation } from './useNodeCreation'
 import type { HistoryCommand } from './history'
 import type { CanvasNode } from './nodes/types'
@@ -24,7 +27,9 @@ const PROJECT: EditorProjectContent = {
   nodes: [existingNode],
   edges: [],
   settings: {
-    characters: [{ id: 'c1', name: '阿黎', gradient: 'linear-gradient(#000,#111)' }],
+    characters: [
+      { id: 'c1', name: '阿黎', gradient: 'linear-gradient(#000,#111)' },
+    ],
     locations: [],
   },
 }
@@ -32,7 +37,12 @@ const PROJECT: EditorProjectContent = {
 /** 画布容器替身：无显式落点时取 getBoundingClientRect 的中心。 */
 const canvasRef = {
   current: {
-    getBoundingClientRect: () => ({ left: 10, top: 20, width: 100, height: 50 }),
+    getBoundingClientRect: () => ({
+      left: 10,
+      top: 20,
+      width: 100,
+      height: 50,
+    }),
   } as unknown as HTMLDivElement,
 }
 

@@ -25,7 +25,10 @@ import {
   rewriteRemappedOptionHandles,
   stripAlienHandles,
 } from './normalizeEdges'
-import { characterAvatarWarnings, collectDanglingRefWarnings } from './normalizeRefs'
+import {
+  characterAvatarWarnings,
+  collectDanglingRefWarnings,
+} from './normalizeRefs'
 import {
   migrateProjectDocument,
   normalizeEpisodeTitles,
@@ -68,7 +71,11 @@ export interface ParseResult {
 function normalizeDocument(
   raw: Record<string, unknown>,
   env: NormalizeEnv,
-): { doc: ProjectDocument; warnings: string[]; reissuedAssetAliases: [string, string][] } {
+): {
+  doc: ProjectDocument
+  warnings: string[]
+  reissuedAssetAliases: [string, string][]
+} {
   const warnings: string[] = []
   const {
     doc: shaped,
@@ -96,7 +103,10 @@ function normalizeDocument(
           .filter((e): e is StoryEdge => e !== null)
           .filter((e) => {
             const orphan = isOrphanEdge(e, nodesById)
-            if (orphan) warnings.push(`已隔离孤儿边 ${e.id}：端点节点缺失、绑定选项不存在或端口归属不合法`)
+            if (orphan)
+              warnings.push(
+                `已隔离孤儿边 ${e.id}：端点节点缺失、绑定选项不存在或端口归属不合法`,
+              )
             return !orphan
           }),
         warnings,
@@ -110,7 +120,11 @@ function normalizeDocument(
     return { ...n, ui: { ...n.ui, selected: false } }
   })
   characterAvatarWarnings(shaped, warnings)
-  return { doc: { ...shaped, graph: { ...shaped.graph, nodes, edges } }, warnings, reissuedAssetAliases }
+  return {
+    doc: { ...shaped, graph: { ...shaped.graph, nodes, edges } },
+    warnings,
+    reissuedAssetAliases,
+  }
 }
 
 /** v0 键控列表的单字段预归一化：非数组重置为空并警告、异型成员按 keep
@@ -203,7 +217,9 @@ function normalizeV0NodeShape(
       // 字符串 id 引用不在此处置，交由空键重发/悬空引用规则处理
       for (const line of data.lines as Record<string, unknown>[]) {
         if (isPlainObject(line.speaker) && !isUsableAvatar(line.speaker)) {
-          warnings.push(`节点 ${nid} 的对白行 speaker 头像不可用（label 缺失/空白或 gradient 异型），已置空`)
+          warnings.push(
+            `节点 ${nid} 的对白行 speaker 头像不可用（label 缺失/空白或 gradient 异型），已置空`,
+          )
           line.speaker = null
         }
       }
@@ -223,7 +239,11 @@ function normalizeV0NodeShape(
 /** branch.options 的槽位保序预归一化（§11.1 ①）：旧下标句柄改写前不得
  * 压缩数组——异型成员以占位对象顶位（迁移器为其补发 id，改写后由 v1
  * 形状校验移除并警告），指向该槽位的连线按孤儿边隔离而非滑向后一选项。 */
-function normalizeV0Options(data: Record<string, unknown>, nid: string, warnings: string[]): void {
+function normalizeV0Options(
+  data: Record<string, unknown>,
+  nid: string,
+  warnings: string[],
+): void {
   const options = data.options
   if (options === undefined) {
     data.options = []
@@ -245,7 +265,10 @@ function normalizeV0Options(data: Record<string, unknown>, nid: string, warnings
  * 嵌套形状先归一化再进迁移器（§11.1——损坏旧档按可修复数据对待），迁移
  * 链 ⑤ 把 v0 的 updated_at 瞬间带入 v1 信封（createdAt 缺省与之同刻，
  * 不用迁移时刻冒充），产物再以 v1 走完整归一化管线。 */
-function parseLegacyProject(raw: Record<string, unknown>, env: NormalizeEnv): ParseResult {
+function parseLegacyProject(
+  raw: Record<string, unknown>,
+  env: NormalizeEnv,
+): ParseResult {
   const env0 = raw as Partial<ProjectDocument> & {
     project?: Partial<ProjectDocument['project']>
     graph?: { nodes?: CanvasNode[]; edges?: Edge[]; viewport?: Viewport }
@@ -253,7 +276,9 @@ function parseLegacyProject(raw: Record<string, unknown>, env: NormalizeEnv): Pa
     episodeTitles?: unknown
   }
   const v0Warnings: string[] = []
-  const graphRaw = isPlainObject(env0.graph) ? (env0.graph as Record<string, unknown>) : {}
+  const graphRaw = isPlainObject(env0.graph)
+    ? (env0.graph as Record<string, unknown>)
+    : {}
   if (!isPlainObject(env0.graph) && env0.graph !== undefined) {
     v0Warnings.push('graph 容器异型，已重置为空画布')
   }
@@ -262,7 +287,10 @@ function parseLegacyProject(raw: Record<string, unknown>, env: NormalizeEnv): Pa
     if (v !== undefined) v0Warnings.push(`${label} 非数组，已重置为空数组`)
     return []
   }
-  const v0Members = (v: unknown[], label: string): Record<string, unknown>[] => {
+  const v0Members = (
+    v: unknown[],
+    label: string,
+  ): Record<string, unknown>[] => {
     const out: Record<string, unknown>[] = []
     v.forEach((item, i) => {
       if (isPlainObject(item)) out.push(item)
@@ -281,7 +309,10 @@ function parseLegacyProject(raw: Record<string, unknown>, env: NormalizeEnv): Pa
     // 预归一化只做容器/成员修复；迁移器按 node.type 分派消费，迁移产物
     // 会以 v1 信封重走完整归一化管线后才进入会话——宽化只存在于迁移入站
     nodes: v0Nodes as unknown as CanvasNode[],
-    edges: v0Members(v0Array(graphRaw.edges, 'graph.edges'), 'graph.edges') as Edge[],
+    edges: v0Members(
+      v0Array(graphRaw.edges, 'graph.edges'),
+      'graph.edges',
+    ) as Edge[],
     settings: (env0.settings ?? {}) as ProjectContent['settings'],
     episodeTitles: normalizeEpisodeTitles(env0.episodeTitles, v0Warnings),
     viewport: graphRaw.viewport as Viewport | undefined,
@@ -290,13 +321,19 @@ function parseLegacyProject(raw: Record<string, unknown>, env: NormalizeEnv): Pa
   const legacyAtMs = Date.parse(
     typeof env0.project?.updatedAt === 'string' ? env0.project.updatedAt : '',
   )
-  const legacyNow = Number.isFinite(legacyAtMs) ? new Date(legacyAtMs) : new Date()
+  const legacyNow = Number.isFinite(legacyAtMs)
+    ? new Date(legacyAtMs)
+    : new Date()
   const doc = serializeProject(
     rewriteIndexOptionHandles(migrated.doc, v0Warnings),
     env0.project?.id ?? '',
     legacyNow,
   )
-  const { doc: normalized, warnings, reissuedAssetAliases } = normalizeDocument(
+  const {
+    doc: normalized,
+    warnings,
+    reissuedAssetAliases,
+  } = normalizeDocument(
     // 边界（issue 16）：刚构造的 ProjectDocument 以原始 JSON 形态进入归一化
     // 容器校验（§11.1 第 2 步从 Record 起步），方向是「收窄到可遍历形态」
     doc as unknown as Record<string, unknown>,
@@ -316,13 +353,22 @@ function parseLegacyProject(raw: Record<string, unknown>, env: NormalizeEnv): Pa
  * v0 信封（旧扁平格式经 Rust 包装）先走节点字段迁移，再按 v1 解析。
  * env 携带加载路径的受信事实（projectId / 索引名），供元数据修复使用。
  */
-export function parseProject(raw: unknown, env: NormalizeEnv = {}): ParseResult {
+export function parseProject(
+  raw: unknown,
+  env: NormalizeEnv = {},
+): ParseResult {
   if (typeof raw !== 'object' || raw === null) {
     throw new TypeError('项目文件损坏：不是有效的文档对象')
   }
   const version = (raw as { schemaVersion?: unknown }).schemaVersion
-  if (typeof version !== 'number' || !Number.isSafeInteger(version) || version < 0) {
-    throw new TypeError('项目文件损坏：schemaVersion 缺失或非法（须为非负安全整数，§11.1 第 0 步）')
+  if (
+    typeof version !== 'number' ||
+    !Number.isSafeInteger(version) ||
+    version < 0
+  ) {
+    throw new TypeError(
+      '项目文件损坏：schemaVersion 缺失或非法（须为非负安全整数，§11.1 第 0 步）',
+    )
   }
   if (version > CURRENT_SCHEMA_VERSION) {
     throw new Error(`文档版本过新（schemaVersion ${version}），请升级应用`)
@@ -335,7 +381,11 @@ export function parseProject(raw: unknown, env: NormalizeEnv = {}): ParseResult 
   // 原始文档先克隆：归一化就地改写（id 重发/字段剥离/隔离），事后与改写
   // 产物比较须以未改动的原始为基准——repaired 决定调用方是否回写落定修复
   const pristine = structuredClone(raw)
-  const { doc: normalized, warnings, reissuedAssetAliases } = normalizeDocument(raw as Record<string, unknown>, env)
+  const {
+    doc: normalized,
+    warnings,
+    reissuedAssetAliases,
+  } = normalizeDocument(raw as Record<string, unknown>, env)
   return {
     content: fromDocument(normalized, warnings),
     migrated: false,

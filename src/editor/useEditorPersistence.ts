@@ -50,9 +50,13 @@ function buildSessionDoc(
  * 代次，成功后兑现全部早于本次代次的等待者；失败不兑现，等待者由后续
  * 重试保存兑现。等待者注册发生在渲染提交后的 effect 中，故任何晚于注册
  * 开始的保存都携带注册时的文档（含刚执行的 AI 批次）。 */
-function useCanvasCommitBarrier(onSave: (doc: ProjectContent) => void | Promise<void>) {
+function useCanvasCommitBarrier(
+  onSave: (doc: ProjectContent) => void | Promise<void>,
+) {
   const attemptRef = useRef(0)
-  const waitersRef = useRef<Array<{ minAttempt: number; resolve: () => void }>>([])
+  const waitersRef = useRef<Array<{ minAttempt: number; resolve: () => void }>>(
+    [],
+  )
   const wrappedOnSave = useCallback(
     async (doc: ProjectContent) => {
       const attempt = ++attemptRef.current

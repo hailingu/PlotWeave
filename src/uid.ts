@@ -3,4 +3,5 @@
  * 以满足 SonarQube S2245（禁用 Math.random 类弱伪随机生成标识符）。
  * crypto.randomUUID 仅在安全上下文可用——Tauri WebView 与 localhost
  * 开发服务器均满足。 */
-export const uid = (prefix: string): string => `${prefix}-${crypto.randomUUID()}`
+export const uid = (prefix: string): string =>
+  `${prefix}-${crypto.randomUUID()}`

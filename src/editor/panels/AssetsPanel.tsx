@@ -1,4 +1,9 @@
-import { useEffect, useRef, useState, type ChangeEvent as ReactChangeEvent } from 'react'
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent as ReactChangeEvent,
+} from 'react'
 import {
   libraryStore,
   LIBRARY_KINDS,
@@ -41,7 +46,8 @@ export default function AssetsPanel() {
     }
   }, [])
 
-  const count = (kind: LibraryKind) => assets.filter((a) => a.kind === kind).length
+  const count = (kind: LibraryKind) =>
+    assets.filter((a) => a.kind === kind).length
   const refreshUrl = (asset: LibraryAsset) => {
     libraryStore
       .mediaUrl(asset)
@@ -106,7 +112,9 @@ export default function AssetsPanel() {
         accept="image/*"
         multiple
         hidden
-        onChange={(e: ReactChangeEvent<HTMLInputElement>) => void importFiles(e.target.files)}
+        onChange={(e: ReactChangeEvent<HTMLInputElement>) =>
+          void importFiles(e.target.files)
+        }
       />
       {selectedKind === null ? (
         <>
@@ -162,7 +170,9 @@ export default function AssetsPanel() {
             </button>
           </div>
           {assets.filter((a) => a.kind === selectedKind).length === 0 && (
-            <div className="pw-empty">暂无资产，点击「＋ 导入」添加参考图。</div>
+            <div className="pw-empty">
+              暂无资产，点击「＋ 导入」添加参考图。
+            </div>
           )}
           {assets
             .filter((a) => a.kind === selectedKind)
@@ -223,7 +233,11 @@ function AssetRow({
     <div className="pw-asset">
       <AssetThumb asset={asset} url={url} onVisible={onVisible} />
       <div className="pw-asset-body">
-        <EditableName value={asset.name} ariaLabel={`资产名 ${asset.name}`} onChange={onRename} />
+        <EditableName
+          value={asset.name}
+          ariaLabel={`资产名 ${asset.name}`}
+          onChange={onRename}
+        />
         <input
           className="pw-asset-tags"
           defaultValue={asset.tags.join('，')}
@@ -283,12 +297,21 @@ function AssetThumb({
       onDragStart={(e) => {
         e.dataTransfer.setData(
           PW_LIBRARY_ASSET_MIME,
-          JSON.stringify({ id: asset.id, name: asset.name, kind: asset.kind, mime: asset.mime }),
+          JSON.stringify({
+            id: asset.id,
+            name: asset.name,
+            kind: asset.kind,
+            mime: asset.mime,
+          }),
         )
         e.dataTransfer.effectAllowed = 'copy'
       }}
     >
-      {url ? <img src={url} alt={asset.name} loading="lazy" /> : <span aria-hidden>🖼</span>}
+      {url ? (
+        <img src={url} alt={asset.name} loading="lazy" />
+      ) : (
+        <span aria-hidden>🖼</span>
+      )}
     </div>
   )
 }

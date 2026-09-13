@@ -6,7 +6,11 @@
  */
 import { useCallback, useMemo } from 'react'
 import type { FitView } from '@xyflow/react'
-import { applyEpisodeFocus, beatFulfillmentMap, type BeatFulfillment } from './outline'
+import {
+  applyEpisodeFocus,
+  beatFulfillmentMap,
+  type BeatFulfillment,
+} from './outline'
 import { SCENE_SHOT_HANDLE } from './graphRules'
 import type { EditorDocument } from './useEditorDocument'
 import type { CanvasNode } from './nodes/types'
@@ -32,7 +36,10 @@ export interface CanvasView {
 }
 
 /** 由文档状态派生视图，并给出大纲联动所需的定位回调。 */
-export function useCanvasView(doc: EditorDocument, fitView: FitView): CanvasView {
+export function useCanvasView(
+  doc: EditorDocument,
+  fitView: FitView,
+): CanvasView {
   const { nodes, edges, edgesRef, nodesRef, focusedEpisode, setNodes } = doc
 
   const displayNodes = useMemo(
@@ -43,11 +50,15 @@ export function useCanvasView(doc: EditorDocument, fitView: FitView): CanvasView
 
   const shotCountOf = useCallback(
     (id: string) =>
-      edgesRef.current.filter((e) => e.source === id && e.sourceHandle === SCENE_SHOT_HANDLE)
-        .length,
+      edgesRef.current.filter(
+        (e) => e.source === id && e.sourceHandle === SCENE_SHOT_HANDLE,
+      ).length,
     [edgesRef],
   )
-  const beatFulfillment = useMemo(() => beatFulfillmentMap(nodes, edges), [nodes, edges])
+  const beatFulfillment = useMemo(
+    () => beatFulfillmentMap(nodes, edges),
+    [nodes, edges],
+  )
   const beatFulfillmentOf = useCallback(
     (id: string): BeatFulfillment | null => beatFulfillment.get(id) ?? null,
     [beatFulfillment],

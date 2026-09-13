@@ -40,7 +40,9 @@ function isLexicalAssetRelPath(p: string): boolean {
  * Rust 边界整份拒绝。 */
 export function isStrictIso8601(s: string): boolean {
   const m =
-    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-]\d{2}:\d{2})$/.exec(s)
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-]\d{2}:\d{2})$/.exec(
+      s,
+    )
   if (!m) return false
   const year = Number(m[1])
   const month = Number(m[2])
@@ -48,7 +50,20 @@ export function isStrictIso8601(s: string): boolean {
   if (month < 1 || month > 12) return false
   if (Number(m[4]) > 23 || Number(m[5]) > 59 || Number(m[6]) > 59) return false
   const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0
-  const daysInMonth = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1]
+  const daysInMonth = [
+    31,
+    leap ? 29 : 28,
+    31,
+    30,
+    31,
+    30,
+    31,
+    31,
+    30,
+    31,
+    30,
+    31,
+  ][month - 1]
   if (day < 1 || day > daysInMonth) return false
   if (m[7] !== 'Z') {
     const offset = m[7].slice(1).split(':')
@@ -60,16 +75,25 @@ export function isStrictIso8601(s: string): boolean {
 /** 单条资产条目的逐字段形状校验（§11.3）：返回隔离原因；null 表示通过。
  * MIME 的合法性按已规范化（trim + 小写）后的值判定。 */
 function assetIsolationReason(entry: Record<string, unknown>): string | null {
-  if (typeof entry.relPath !== 'string' || !isLexicalAssetRelPath(entry.relPath)) {
+  if (
+    typeof entry.relPath !== 'string' ||
+    !isLexicalAssetRelPath(entry.relPath)
+  ) {
     return 'relPath 缺失、非字符串或越出资产子目录'
   }
-  if (typeof entry.mime !== 'string' || !isCanonicalMime(entry.mime.trim().toLowerCase())) {
+  if (
+    typeof entry.mime !== 'string' ||
+    !isCanonicalMime(entry.mime.trim().toLowerCase())
+  ) {
     return 'mime 缺失或非规范形式'
   }
   if (entry.source !== 'upload' && entry.source !== 'generated') {
     return 'source 非法'
   }
-  if (typeof entry.createdAt !== 'string' || !isStrictIso8601(entry.createdAt)) {
+  if (
+    typeof entry.createdAt !== 'string' ||
+    !isStrictIso8601(entry.createdAt)
+  ) {
     return 'createdAt 不是严格 ISO 8601 时间戳'
   }
   return null
@@ -88,12 +112,16 @@ export function normalizeAssetRecords(
 ): void {
   for (const [key, entry] of Object.entries(byId)) {
     if (invalidKeys.has(key)) {
-      warnings.push(`资产 ${key} 的媒体文件实路径复验未通过（缺失/符号链接/逃逸），已从索引隔离`)
+      warnings.push(
+        `资产 ${key} 的媒体文件实路径复验未通过（缺失/符号链接/逃逸），已从索引隔离`,
+      )
       delete byId[key]
       continue
     }
     if (entry.id !== key) {
-      warnings.push(`资产 ${key} 的内嵌 id 缺失或与记录键不一致，已以记录键为准改写`)
+      warnings.push(
+        `资产 ${key} 的内嵌 id 缺失或与记录键不一致，已以记录键为准改写`,
+      )
       entry.id = key
     }
     const reason = assetIsolationReason(entry)
@@ -114,7 +142,9 @@ export function normalizeAssetRecords(
     // 每次保存/修复回写都注定失败、重试永久排队
     const canon = new Date(entry.createdAt as string).toISOString()
     if (!isStrictIso8601(canon)) {
-      warnings.push(`资产 ${key} 的 createdAt 规范化越出四位年份域（无规范 UTC 形可落），已隔离`)
+      warnings.push(
+        `资产 ${key} 的 createdAt 规范化越出四位年份域（无规范 UTC 形可落），已隔离`,
+      )
       delete byId[key]
       continue
     }
@@ -176,16 +206,28 @@ export interface LegacyTargetIdCtx {
 }
 
 /** 旧值是否命中对应设定桶实体（修复前后的身份，已隔离实体不计）。 */
-function legacyEntityHit(value: string, bucket: Record<string, unknown>, snap: IdentitySnapshot[]): boolean {
+function legacyEntityHit(
+  value: string,
+  bucket: Record<string, unknown>,
+  snap: IdentitySnapshot[],
+): boolean {
   return snap.some((e) => e.key in bucket && e.ids.has(value))
 }
 
 /** 旧值按资产键修复前后的身份唯一命中活动 image/* 资产时返回最终记录键；
  * 零命中、多命中（歧义）或命中资产已被隔离/家族不符时返回 null。 */
-function legacyImageAssetKey(value: string, ctx: LegacyTargetIdCtx): string | null {
+function legacyImageAssetKey(
+  value: string,
+  ctx: LegacyTargetIdCtx,
+): string | null {
   const hits = ctx.assetIds0.filter((a) => {
     const asset = ctx.byId[a.key]
-    return asset !== undefined && typeof asset.mime === 'string' && asset.mime.startsWith('image/') && a.ids.has(value)
+    return (
+      asset !== undefined &&
+      typeof asset.mime === 'string' &&
+      asset.mime.startsWith('image/') &&
+      a.ids.has(value)
+    )
   })
   return hits.length === 1 ? hits[0].key : null
 }
@@ -201,12 +243,16 @@ function compatOneShotTargetId(
 ): unknown[] {
   if (!isPlainObject(ref) || !('targetId' in ref)) return [ref]
   const isolate = (reason: string): unknown[] => {
-    warnings.push(`节点 ${nid} 的分镜引用携带旧字段 targetId（${reason}），已隔离该引用`)
+    warnings.push(
+      `节点 ${nid} 的分镜引用携带旧字段 targetId（${reason}），已隔离该引用`,
+    )
     return []
   }
-  if ('assetId' in ref || 'label' in ref) return isolate('与 assetId/label 并存，歧义')
+  if ('assetId' in ref || 'label' in ref)
+    return isolate('与 assetId/label 并存，歧义')
   const value = ref.targetId
-  if (typeof value !== 'string' || !value.trim()) return isolate('旧值不是合法字符串 id')
+  if (typeof value !== 'string' || !value.trim())
+    return isolate('旧值不是合法字符串 id')
   if (ref.kind === 'audio') {
     ref.assetId = ctx.assetRemap.get(value) ?? value
     delete ref.targetId
@@ -239,10 +285,13 @@ export function compatLegacyShotTargetIds(
 ): void {
   for (const member of nodesRaw) {
     if (!isPlainObject(member) || member.type !== 'shot') continue
-    if (!isPlainObject(member.data) || !isPlainObject(member.data.spec)) continue
+    if (!isPlainObject(member.data) || !isPlainObject(member.data.spec))
+      continue
     const spec = member.data.spec
     if (!Array.isArray(spec.refs)) continue
     const nid = typeof member.id === 'string' ? member.id : '未知'
-    spec.refs = (spec.refs as unknown[]).flatMap((ref) => compatOneShotTargetId(nid, ref, ctx, warnings))
+    spec.refs = (spec.refs as unknown[]).flatMap((ref) =>
+      compatOneShotTargetId(nid, ref, ctx, warnings),
+    )
   }
 }

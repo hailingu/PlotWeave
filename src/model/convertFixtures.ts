@@ -43,7 +43,16 @@ function mkSampleNodes(): CanvasNode[] {
       position: { x: 0, y: 0 },
       data: {
         name: '对白',
-        lines: [{ id: 'line-1', kind: 'line', text: '别走', speaker: 'ch-1', side: 'left', vo: false }],
+        lines: [
+          {
+            id: 'line-1',
+            kind: 'line',
+            text: '别走',
+            speaker: 'ch-1',
+            side: 'left',
+            vo: false,
+          },
+        ],
       },
     } as unknown as CanvasNode,
     {
@@ -78,7 +87,13 @@ function mkSampleNodes(): CanvasNode[] {
  * attach（e3，scene → shot）。 */
 function mkSampleEdges(): Edge[] {
   return [
-    { id: 'e1', source: 's1', target: 'd1', className: 'pw-edge-sequence', selected: true } as Edge,
+    {
+      id: 'e1',
+      source: 's1',
+      target: 'd1',
+      className: 'pw-edge-sequence',
+      selected: true,
+    } as Edge,
     {
       id: 'e2',
       source: 'br1',
@@ -86,7 +101,13 @@ function mkSampleEdges(): Edge[] {
       target: 'd1',
       type: 'branch',
     } as Edge,
-    { id: 'e3', source: 's1', sourceHandle: 'shots', target: 'sh1', className: 'pw-edge-attach' } as Edge,
+    {
+      id: 'e3',
+      source: 's1',
+      sourceHandle: 'shots',
+      target: 'sh1',
+      className: 'pw-edge-attach',
+    } as Edge,
   ]
 }
 
@@ -98,7 +119,9 @@ export function mkContent(): ProjectContent {
     nodes: mkSampleNodes(),
     edges: mkSampleEdges(),
     settings: {
-      characters: [{ id: 'ch-1', name: '林晚', gradient: 'g-lin', bio: '女主' }],
+      characters: [
+        { id: 'ch-1', name: '林晚', gradient: 'g-lin', bio: '女主' },
+      ],
       locations: [{ id: 'loc-1', name: '天台', note: '雨夜' }],
     },
     episodeTitles: { 2: '摊牌' },

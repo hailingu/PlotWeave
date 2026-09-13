@@ -13,7 +13,10 @@ import type { BranchEdge, BranchSpec, StoryEdge, StoryNode } from './document'
  * （必须 scene → shot）；剧情流边端点为 shot（§4.2 分镜卡不参与横向剧情流）
  * 或 source 为 branch（§5 端口归属反向约束——branch 无匿名输出端口）
  * 同论。句柄可剥离的矛盾形态已在 stripAlienHandles 阶段处理，不在此隔离。 */
-export function isOrphanEdge(e: StoryEdge, nodesById: Map<string, StoryNode>): boolean {
+export function isOrphanEdge(
+  e: StoryEdge,
+  nodesById: Map<string, StoryNode>,
+): boolean {
   const src = nodesById.get(e.source)
   const dst = nodesById.get(e.target)
   if (!src || !dst) return true
@@ -23,7 +26,12 @@ export function isOrphanEdge(e: StoryEdge, nodesById: Map<string, StoryNode>): b
   }
   // 剧情流端点约束：分镜卡与图片节点不参与横向剧情流（§4.2/§13——
   // 图片节点是自由摆放的生成产物，不经边挂接）
-  if (src.type === 'shot' || dst.type === 'shot' || src.type === 'image' || dst.type === 'image') {
+  if (
+    src.type === 'shot' ||
+    dst.type === 'shot' ||
+    src.type === 'image' ||
+    dst.type === 'image'
+  ) {
     return true
   }
   // §5 端口归属反向约束：branch 无匿名输出端口，不能引出 sequence 边
@@ -55,11 +63,15 @@ export function rewriteBlankNodeEndpoints(
   const out = { ...e }
   if (source !== undefined) {
     out.source = source
-    warnings.push(`边 ${e.id} 的 source 指向已重发的空节点 id，已改写为 ${source}`)
+    warnings.push(
+      `边 ${e.id} 的 source 指向已重发的空节点 id，已改写为 ${source}`,
+    )
   }
   if (target !== undefined) {
     out.target = target
-    warnings.push(`边 ${e.id} 的 target 指向已重发的空节点 id，已改写为 ${target}`)
+    warnings.push(
+      `边 ${e.id} 的 target 指向已重发的空节点 id，已改写为 ${target}`,
+    )
   }
   return out
 }
@@ -78,9 +90,13 @@ export function rewriteRemappedOptionHandles(
   if (!isBranchEdge(e)) return e
   const handle = e.sourceHandle
   if (typeof handle !== 'string' || !handle.startsWith('option-')) return e
-  const mapped = optionIdRemap.get(e.source)?.get(handle.slice('option-'.length))
+  const mapped = optionIdRemap
+    .get(e.source)
+    ?.get(handle.slice('option-'.length))
   if (mapped === undefined) return e
-  warnings.push(`边 ${e.id} 的句柄 ${handle} 指向已重发的空选项 id，已改写为 option-${mapped}`)
+  warnings.push(
+    `边 ${e.id} 的句柄 ${handle} 指向已重发的空选项 id，已改写为 option-${mapped}`,
+  )
   return { ...e, sourceHandle: `option-${mapped}` }
 }
 
@@ -88,7 +104,10 @@ export function rewriteRemappedOptionHandles(
  * sequence 的 sourceHandle 无法绑定真实端口——剥离不改变连接语义，
  * 记录警告而不隔离。未知/非字符串 kind 无法判定变体，直接隔离并警告
  * （绝不为未知 kind 猜测变体）。 */
-export function stripAlienHandles(e: StoryEdge, warnings: string[]): StoryEdge | null {
+export function stripAlienHandles(
+  e: StoryEdge,
+  warnings: string[],
+): StoryEdge | null {
   const kind = (e.data as { kind?: unknown }).kind
   if (kind !== 'sequence' && kind !== 'branch' && kind !== 'attach') {
     warnings.push(`已隔离边 ${e.id}：data.kind 未知或非字符串`)
@@ -99,15 +118,26 @@ export function stripAlienHandles(e: StoryEdge, warnings: string[]): StoryEdge |
     warnings.push(`边 ${e.id} 的 targetHandle 无法绑定匿名端口，已剥离`)
     delete out.targetHandle
   }
-  if (kind === 'sequence' && (out as { sourceHandle?: string }).sourceHandle !== undefined) {
-    warnings.push(`sequence 边 ${e.id} 的 sourceHandle 无法绑定匿名端口，已剥离`)
+  if (
+    kind === 'sequence' &&
+    (out as { sourceHandle?: string }).sourceHandle !== undefined
+  ) {
+    warnings.push(
+      `sequence 边 ${e.id} 的 sourceHandle 无法绑定匿名端口，已剥离`,
+    )
     delete (out as { sourceHandle?: string }).sourceHandle
   }
   // branch/attach 的 sourceHandle 承载连接语义（选项出口 / shots 端口），
   // JSON 边界擦除类型后的非字符串值无法剥离修复（剥离即改接语义），隔离该边
   const sh = (out as { sourceHandle?: unknown }).sourceHandle
-  if ((kind === 'branch' || kind === 'attach') && sh !== undefined && typeof sh !== 'string') {
-    warnings.push(`已隔离边 ${e.id}：${kind} 边的 sourceHandle 非字符串，无法绑定端口`)
+  if (
+    (kind === 'branch' || kind === 'attach') &&
+    sh !== undefined &&
+    typeof sh !== 'string'
+  ) {
+    warnings.push(
+      `已隔离边 ${e.id}：${kind} 边的 sourceHandle 非字符串，无法绑定端口`,
+    )
     return null
   }
   return out
@@ -150,7 +180,11 @@ export function reissueDuplicateNodeIds(
     let fresh = uid('node')
     while (seen.has(fresh)) fresh = uid('node')
     seen.add(fresh)
-    if (typeof m.id === 'string' && !m.id.trim() && blankCounts.get(m.id) === 1) {
+    if (
+      typeof m.id === 'string' &&
+      !m.id.trim() &&
+      blankCounts.get(m.id) === 1
+    ) {
       nodeIdRemap.set(m.id, fresh)
     }
     const shown = typeof m.id === 'string' && m.id.trim() ? `${m.id} ` : ''
@@ -168,7 +202,10 @@ export function reissueDuplicateNodeIds(
  * 选中/删除/撤销会命中错误边）同款重发。边 id 不被任何数据引用（端点/句柄
  * 只指向节点与选项），重发无副作用；身份唯一后 React Flow 的选中/删除
  * 不再歧义。 */
-export function reissueDuplicateEdgeIds(edges: StoryEdge[], warnings: string[]): StoryEdge[] {
+export function reissueDuplicateEdgeIds(
+  edges: StoryEdge[],
+  warnings: string[],
+): StoryEdge[] {
   const seen = new Set<string>()
   return edges.map((e) => {
     if (typeof e.id === 'string' && e.id.trim() && !seen.has(e.id)) {
@@ -178,14 +215,21 @@ export function reissueDuplicateEdgeIds(edges: StoryEdge[], warnings: string[]):
     let fresh = uid('edge')
     while (seen.has(fresh)) fresh = uid('edge')
     seen.add(fresh)
-    const reason = typeof e.id === 'string' && e.id.trim() ? `边 id ${e.id} 重复` : '边 id 缺失或非法'
+    const reason =
+      typeof e.id === 'string' && e.id.trim()
+        ? `边 id ${e.id} 重复`
+        : '边 id 缺失或非法'
     warnings.push(`${reason}：保留文档序首条原 id，后续边已重发新 id ${fresh}`)
     return { ...e, id: fresh }
   })
 }
 
 /** 已接受剧情流边中 from 是否可达 to（BFS 传递闭包，§4.3 DAG 不变量）。 */
-function flowReaches(adj: Map<string, string[]>, from: string, to: string): boolean {
+function flowReaches(
+  adj: Map<string, string[]>,
+  from: string,
+  to: string,
+): boolean {
   const seen = new Set([from])
   const queue = [from]
   while (queue.length > 0) {
@@ -204,7 +248,10 @@ function flowReaches(adj: Map<string, string[]>, from: string, to: string): bool
 /** 剧情流成环隔离（§11.1 第 3 步）：候选边按文档序逐边重建剧情流图，
  * 自环（source === target）与加入即闭合回路的 sequence/branch 边按孤儿边
  * 隔离并警告；attach 垂直从属不参与环检测（§4.3）。 */
-export function isolateCycleEdges(edges: StoryEdge[], warnings: string[]): StoryEdge[] {
+export function isolateCycleEdges(
+  edges: StoryEdge[],
+  warnings: string[],
+): StoryEdge[] {
   const adj = new Map<string, string[]>()
   const kept: StoryEdge[] = []
   for (const e of edges) {
@@ -217,7 +264,9 @@ export function isolateCycleEdges(edges: StoryEdge[], warnings: string[]): Story
       continue
     }
     if (flowReaches(adj, e.target, e.source)) {
-      warnings.push(`已隔离成环边 ${e.id}：加入后剧情流闭合回路（${e.target} 已可达 ${e.source}）`)
+      warnings.push(
+        `已隔离成环边 ${e.id}：加入后剧情流闭合回路（${e.target} 已可达 ${e.source}）`,
+      )
       continue
     }
     const list = adj.get(e.source)
@@ -230,7 +279,10 @@ export function isolateCycleEdges(edges: StoryEdge[], warnings: string[]): Story
 
 /** attach 宿主唯一（§5/§11.1 第 3 步）：同一 shot 至多一条入向 attach 边
  * （分集归属与下挂布局的唯一依据）——保留文档序首条，其余按孤儿边隔离并警告。 */
-export function isolateExtraAttachHosts(edges: StoryEdge[], warnings: string[]): StoryEdge[] {
+export function isolateExtraAttachHosts(
+  edges: StoryEdge[],
+  warnings: string[],
+): StoryEdge[] {
   const hosted = new Set<string>()
   const kept: StoryEdge[] = []
   for (const e of edges) {
@@ -239,7 +291,9 @@ export function isolateExtraAttachHosts(edges: StoryEdge[], warnings: string[]):
       continue
     }
     if (hosted.has(e.target)) {
-      warnings.push(`已隔离多余的 attach 边 ${e.id}：分镜 ${e.target} 已有宿主场景（宿主唯一）`)
+      warnings.push(
+        `已隔离多余的 attach 边 ${e.id}：分镜 ${e.target} 已有宿主场景（宿主唯一）`,
+      )
       continue
     }
     hosted.add(e.target)
@@ -253,12 +307,17 @@ export function isolateExtraAttachHosts(edges: StoryEdge[], warnings: string[]):
  * 图遍历与统计也把同一关系重复计数。元组键用 JSON 编码：source/target
  * 是不可信输入，JSON 字符串可含任意分隔字符（含 \u0000）——拼接键会让
  * 不同端点的边折叠成同键、被误判重复并随修复回写永久移除。 */
-export function isolateDuplicateEdges(edges: StoryEdge[], warnings: string[]): StoryEdge[] {
+export function isolateDuplicateEdges(
+  edges: StoryEdge[],
+  warnings: string[],
+): StoryEdge[] {
   const seen = new Set<string>()
   return edges.filter((e) => {
     const key = JSON.stringify([e.source, e.target, e.sourceHandle ?? ''])
     if (seen.has(key)) {
-      warnings.push(`已隔离重复边 ${e.id}：与既有边同 source/target/sourceHandle（逻辑重复）`)
+      warnings.push(
+        `已隔离重复边 ${e.id}：与既有边同 source/target/sourceHandle（逻辑重复）`,
+      )
       return false
     }
     seen.add(key)

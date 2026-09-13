@@ -195,7 +195,9 @@ describe('项目删除与保存协调', () => {
   it('删除失败后回吐重排失败：通知回吐失败订阅者', async () => {
     const id = 'delete-failure-replay-write-failure-test'
     const failures: Array<{ id: string; err: unknown }> = []
-    const off = onProjectWriteReplayFailure((failedId, err) => failures.push({ id: failedId, err }))
+    const off = onProjectWriteReplayFailure((failedId, err) =>
+      failures.push({ id: failedId, err }),
+    )
     invoke.mockImplementation(async (command: string) => {
       if (command === 'delete_project') throw new Error('资产目录只读')
       return undefined

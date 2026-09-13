@@ -23,7 +23,14 @@ export interface OutlineDropDeps {
 }
 
 export function useOutlineDrop(deps: OutlineDropDeps) {
-  const { nodesRef, edgesRef, episodeTitlesRef, applyDataPatch, setEdges, pushHistory } = deps
+  const {
+    nodesRef,
+    edgesRef,
+    episodeTitlesRef,
+    applyDataPatch,
+    setEdges,
+    pushHistory,
+  } = deps
 
   return useCallback(
     (draggedId: string, target: OutlineDropTarget) => {
@@ -32,7 +39,12 @@ export function useOutlineDrop(deps: OutlineDropDeps) {
       // 大纲行可拖拽的只有编剧侧四类（LeftPanel level < 3）；分镜卡随宿主
       // 场景分集（§3.5，运行态不落独立 episodeNo），图片节点不进大纲——
       // 非四类直接放弃，不产出注定被序列化剥离的分集补丁
-      if (dragged.type !== 'scene' && dragged.type !== 'beat' && dragged.type !== 'dialogue' && dragged.type !== 'branch') {
+      if (
+        dragged.type !== 'scene' &&
+        dragged.type !== 'beat' &&
+        dragged.type !== 'dialogue' &&
+        dragged.type !== 'branch'
+      ) {
         return
       }
 
@@ -48,11 +60,19 @@ export function useOutlineDrop(deps: OutlineDropDeps) {
       const { plan, anchorId } = planned
 
       // 2) 落点集归属：行落点随锚点所在组，组尾落点即目标组
-      const sceneByShot = hostSceneMap(nodesRef.current ?? [], edgesRef.current ?? [])
+      const sceneByShot = hostSceneMap(
+        nodesRef.current ?? [],
+        edgesRef.current ?? [],
+      )
       const anchorNode = nodesRef.current?.find((n) => n.id === anchorId)
       const targetEpisode =
-        target.kind === 'groupEnd' ? target.episode : episodeOfNode(anchorNode!, (id) => sceneByShot.get(id))
-      const oldEpisode = typeof dragged.data.episodeNo === 'number' ? dragged.data.episodeNo : null
+        target.kind === 'groupEnd'
+          ? target.episode
+          : episodeOfNode(anchorNode!, (id) => sceneByShot.get(id))
+      const oldEpisode =
+        typeof dragged.data.episodeNo === 'number'
+          ? dragged.data.episodeNo
+          : null
       const episodeChanged = targetEpisode !== oldEpisode
 
       const noSplice = plan.removes.length === 0 && plan.adds.length === 0
@@ -60,7 +80,9 @@ export function useOutlineDrop(deps: OutlineDropDeps) {
 
       // 3) 单命令执行：边手术 + episodeNo 补丁，一步撤销整批回滚
       const stamp = Date.now().toString(36)
-      const removedEdges = (edgesRef.current ?? []).filter((e) => plan.removes.includes(e.id))
+      const removedEdges = (edgesRef.current ?? []).filter((e) =>
+        plan.removes.includes(e.id),
+      )
       const addedEdges: Edge[] = plan.adds.map(({ source, target: t }, i) => ({
         id: `e-${source}-out-${t}-mv-${stamp}-${i}`,
         source,
@@ -86,6 +108,13 @@ export function useOutlineDrop(deps: OutlineDropDeps) {
         },
       })
     },
-    [nodesRef, edgesRef, episodeTitlesRef, applyDataPatch, pushHistory, setEdges],
+    [
+      nodesRef,
+      edgesRef,
+      episodeTitlesRef,
+      applyDataPatch,
+      pushHistory,
+      setEdges,
+    ],
   )
 }

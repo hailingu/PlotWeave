@@ -13,12 +13,17 @@ export interface NodeDragHistoryDeps {
   pushHistory: (cmd: HistoryCommand) => void
 }
 
-export function useNodeDragHistory({ setNodes, pushHistory }: NodeDragHistoryDeps) {
+export function useNodeDragHistory({
+  setNodes,
+  pushHistory,
+}: NodeDragHistoryDeps) {
   const dragStartPos = useRef<Map<string, XYPosition> | null>(null)
 
   const onNodeDragStart = useCallback(
     (_e: MouseEvent | TouchEvent, _node: CanvasNode, dragged: CanvasNode[]) => {
-      dragStartPos.current = new Map(dragged.map((n) => [n.id, { ...n.position }]))
+      dragStartPos.current = new Map(
+        dragged.map((n) => [n.id, { ...n.position }]),
+      )
     },
     [],
   )

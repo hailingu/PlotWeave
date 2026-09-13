@@ -1,9 +1,24 @@
 import type { Edge } from '@xyflow/react'
-import { buildExportOutline, summariseExportOutline, type ExportOutlineSummary } from './exportOutline'
+import {
+  buildExportOutline,
+  summariseExportOutline,
+  type ExportOutlineSummary,
+} from './exportOutline'
 import { SCENE_SHOT_HANDLE } from './nodes/SceneNode'
-import { resolveCharacterName, resolveLocationName, type ProjectSettings } from './settings'
+import {
+  resolveCharacterName,
+  resolveLocationName,
+  type ProjectSettings,
+} from './settings'
 import type { ProjectContent } from '../model/content'
-import type { CanvasNode, DialogueFlowNode, DialogueLine, SceneFlowNode, ShotFlowNode, ShotRef } from './nodes/types'
+import type {
+  CanvasNode,
+  DialogueFlowNode,
+  DialogueLine,
+  SceneFlowNode,
+  ShotFlowNode,
+  ShotRef,
+} from './nodes/types'
 
 /**
  * 剧本导出生成器（docs/ui-design.md §3.5/§5）。
@@ -20,7 +35,10 @@ function speakerName(settings: ProjectSettings, id: string): string {
 }
 
 /** 场景地点名：地点已删除时标注占位（S3358：嵌套三元独立成函数）。 */
-function locationLabel(settings: ProjectSettings, locationId: string | undefined): string | null {
+function locationLabel(
+  settings: ProjectSettings,
+  locationId: string | undefined,
+): string | null {
   if (!locationId) return null
   return resolveLocationName(settings, locationId) ?? '（地点已删除）'
 }
@@ -34,7 +52,8 @@ function refText(assets: ProjectContent['assets'], ref: ShotRef): string {
   if (ref.label !== undefined) return ref.label
   const byId = assets?.byId
   const exists =
-    byId !== undefined && Object.prototype.hasOwnProperty.call(byId, ref.assetId)
+    byId !== undefined &&
+    Object.prototype.hasOwnProperty.call(byId, ref.assetId)
   return exists ? ref.assetId : `${ref.assetId}（资产缺失）`
 }
 
@@ -46,7 +65,9 @@ function shotAppendixLines(
   assets: ProjectContent['assets'],
 ): string[] {
   const shots = edges
-    .filter((e) => e.source === scene.id && e.sourceHandle === SCENE_SHOT_HANDLE)
+    .filter(
+      (e) => e.source === scene.id && e.sourceHandle === SCENE_SHOT_HANDLE,
+    )
     .map((e) => nodes.find((n) => n.id === e.target))
     .filter((n): n is ShotFlowNode => n?.type === 'shot')
     .sort((a, b) => a.data.shotNo - b.data.shotNo)
@@ -57,10 +78,14 @@ function shotAppendixLines(
     '',
   )
   for (const shot of shots) {
-    lines.push(`- **SHOT ${String(shot.data.shotNo).padStart(2, '0')} · ${shot.data.size}** — ${shot.data.picture}`)
+    lines.push(
+      `- **SHOT ${String(shot.data.shotNo).padStart(2, '0')} · ${shot.data.size}** — ${shot.data.picture}`,
+    )
     if (shot.data.prompt) lines.push(`  - Prompt：${shot.data.prompt}`)
     if (shot.data.refs.length > 0) {
-      lines.push(`  - 引用：${shot.data.refs.map((r) => refText(assets, r)).join(' / ')}`)
+      lines.push(
+        `  - 引用：${shot.data.refs.map((r) => refText(assets, r)).join(' / ')}`,
+      )
     }
   }
   lines.push('')
@@ -68,12 +93,25 @@ function shotAppendixLines(
 }
 
 /** 场景标题块：场号/名 + 内外·地点·时间·天气 + 梗概 + 在场角色。 */
-function sceneBlockLines(node: SceneFlowNode, settings: ProjectSettings): string[] {
+function sceneBlockLines(
+  node: SceneFlowNode,
+  settings: ProjectSettings,
+): string[] {
   const d = node.data
-  const meta = [d.interior ? '内' : '外', locationLabel(settings, d.locationId), d.time, d.weather]
+  const meta = [
+    d.interior ? '内' : '外',
+    locationLabel(settings, d.locationId),
+    d.time,
+    d.weather,
+  ]
     .filter(Boolean)
     .join(' · ')
-  const lines = [`## 场 ${String(d.sceneNo).padStart(2, '0')} · ${d.name}`, '', meta, '']
+  const lines = [
+    `## 场 ${String(d.sceneNo).padStart(2, '0')} · ${d.name}`,
+    '',
+    meta,
+    '',
+  ]
   if (d.synopsis) lines.push(`> ${d.synopsis}`, '')
   const cast = d.characterIds.map((id) => speakerName(settings, id)).join('、')
   if (cast) lines.push(`在场：${cast}`, '')
@@ -81,14 +119,20 @@ function sceneBlockLines(node: SceneFlowNode, settings: ProjectSettings): string
 }
 
 /** 对白块的一行台词：说话人缺失标注「？」，VO 追注。 */
-function dialogueLineText(settings: ProjectSettings, line: DialogueLine): string {
+function dialogueLineText(
+  settings: ProjectSettings,
+  line: DialogueLine,
+): string {
   const name = line.speaker ? speakerName(settings, line.speaker) : '？'
   const vo = line.vo ? '（VO）' : ''
   return `${name}：${line.text}${vo}`
 }
 
 /** 对白块：动作行（括注）与台词行交替。 */
-function dialogueBlockLines(node: DialogueFlowNode, settings: ProjectSettings): string[] {
+function dialogueBlockLines(
+  node: DialogueFlowNode,
+  settings: ProjectSettings,
+): string[] {
   const lines: string[] = []
   for (const line of node.data.lines) {
     if (line.kind === 'action') lines.push(`（${line.text}）`)
@@ -109,11 +153,15 @@ export function buildScriptMarkdown(
 ): string {
   const ordered = [...nodes].sort((a, b) => a.position.x - b.position.x)
   const lines: string[] = [`# ${projectName}`, '']
-  lines.push(`> 由 PlotWeave 导出 · ${new Date().toLocaleDateString('zh-CN')}`, '')
+  lines.push(
+    `> 由 PlotWeave 导出 · ${new Date().toLocaleDateString('zh-CN')}`,
+    '',
+  )
 
   for (const node of ordered) {
     if (node.type === 'scene') lines.push(...sceneBlockLines(node, settings))
-    else if (node.type === 'dialogue') lines.push(...dialogueBlockLines(node, settings))
+    else if (node.type === 'dialogue')
+      lines.push(...dialogueBlockLines(node, settings))
   }
 
   const appendix = ordered
@@ -130,7 +178,14 @@ export function buildScriptMarkdown(
 function outlineAppendixLines(
   groups: ReturnType<typeof buildExportOutline>,
 ): string[] {
-  const lines: string[] = ['---', '', '## 附录 · 创作大纲', '', '> 节奏与分支的结构备忘，不是剧情正文。', '']
+  const lines: string[] = [
+    '---',
+    '',
+    '## 附录 · 创作大纲',
+    '',
+    '> 节奏与分支的结构备忘，不是剧情正文。',
+    '',
+  ]
   for (const group of groups) {
     lines.push(outlineGroupHeading(group.episode, group.title), '')
     for (const row of group.rows) {
@@ -144,7 +199,9 @@ function outlineAppendixLines(
 /** 集标题行：未分集单列，已分集带集号（无标题时只出集号）。 */
 function outlineGroupHeading(episode: number | null, title: string): string {
   if (episode === null) return '### 未分集'
-  return title === '' ? `### 第 ${episode} 集` : `### 第 ${episode} 集 · ${title}`
+  return title === ''
+    ? `### 第 ${episode} 集`
+    : `### 第 ${episode} 集 · ${title}`
 }
 
 /** 导出模型：大纲开关两个态的完整文本、正文可用性与导出范围概要。
@@ -186,13 +243,23 @@ export function buildScriptExport(input: {
   assets: ProjectContent['assets'] | undefined
   episodeTitles: Record<number, string>
 }): ScriptExportModel {
-  const base = buildScriptMarkdown(input.projectName, input.nodes, input.edges, input.settings, input.assets)
+  const base = buildScriptMarkdown(
+    input.projectName,
+    input.nodes,
+    input.edges,
+    input.settings,
+    input.assets,
+  )
   const summary = summariseExportOutline(input.nodes)
-  const appendix = outlineAppendixLines(buildExportOutline(input.nodes, input.edges, input.episodeTitles))
+  const appendix = outlineAppendixLines(
+    buildExportOutline(input.nodes, input.edges, input.episodeTitles),
+  )
   return {
     plain: base,
     outline: `${base}\n${appendix.join('\n')}`,
-    hasNarrative: input.nodes.some((n) => n.type === 'scene' || n.type === 'dialogue'),
+    hasNarrative: input.nodes.some(
+      (n) => n.type === 'scene' || n.type === 'dialogue',
+    ),
     summary,
     scopeLine: scopeLineOf(summary),
   }

@@ -55,7 +55,9 @@ export function beatFulfillmentMap(
       .find((cand): cand is CanvasNode => cand?.type === 'scene')
     map.set(
       n.id,
-      host ? { status: 'fulfilled', sceneLabel: sceneLabel(host) } : { status: 'pending' },
+      host
+        ? { status: 'fulfilled', sceneLabel: sceneLabel(host) }
+        : { status: 'pending' },
     )
   }
   return map
@@ -81,20 +83,31 @@ function rowOf(n: CanvasNode): OutlineRow {
     case 'beat':
       return { id: n.id, level: 0, label: `节拍 · ${n.data.name}` }
     case 'scene':
-      return { id: n.id, level: 1, label: `场 ${pad2(n.data.sceneNo)} · ${n.data.name}` }
+      return {
+        id: n.id,
+        level: 1,
+        label: `场 ${pad2(n.data.sceneNo)} · ${n.data.name}`,
+      }
     case 'dialogue':
       return { id: n.id, level: 2, label: `对白 · ${n.data.name}` }
     case 'branch':
       return { id: n.id, level: 2, label: `分支 · ${n.data.prompt}` }
     case 'shot':
-      return { id: n.id, level: 3, label: `SHOT ${pad2(n.data.shotNo)} · ${n.data.size}` }
+      return {
+        id: n.id,
+        level: 3,
+        label: `SHOT ${pad2(n.data.shotNo)} · ${n.data.size}`,
+      }
     case 'image':
       return { id: n.id, level: 0, label: '图片节点' }
   }
 }
 
 /** 下挂分镜 → 宿主场景映射（attach 派生从属；大纲分组与集聚焦共用）。 */
-export function hostSceneMap(nodes: CanvasNode[], edges: Edge[]): Map<string, CanvasNode> {
+export function hostSceneMap(
+  nodes: CanvasNode[],
+  edges: Edge[],
+): Map<string, CanvasNode> {
   const map = new Map<string, CanvasNode>()
   for (const e of edges) {
     if (e.sourceHandle === SCENE_SHOT_HANDLE) {
@@ -167,7 +180,11 @@ export function buildOutlineGroups(
   const groups: OutlineGroup[] = [...byEpisode.keys()]
     .filter((k): k is number => k !== null)
     .sort((a, b) => a - b)
-    .map((ep) => ({ episode: ep, title: episodeTitles[ep] ?? '', rows: byEpisode.get(ep)! }))
+    .map((ep) => ({
+      episode: ep,
+      title: episodeTitles[ep] ?? '',
+      rows: byEpisode.get(ep)!,
+    }))
   const ungrouped = byEpisode.get(null)
   if (ungrouped) groups.push({ episode: null, title: '', rows: ungrouped })
   return groups

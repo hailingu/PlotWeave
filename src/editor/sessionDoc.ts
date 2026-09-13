@@ -51,8 +51,14 @@ export function sessionDoc(project: EditorProject, part: SessionDocPart) {
     ...(part.aiRevision ? { aiRevision: part.aiRevision } : {}),
     assets: part.assets,
     // 同版本文档的容器级扩展字段随会话透传（issue #100，§11）；缺省省略
-    ...(project.graphExtensions ? { graphExtensions: project.graphExtensions } : {}),
-    ...(project.settingsExtensions ? { settingsExtensions: project.settingsExtensions } : {}),
-    ...(project.assetsExtensions ? { assetsExtensions: project.assetsExtensions } : {}),
+    ...(project.graphExtensions
+      ? { graphExtensions: project.graphExtensions }
+      : {}),
+    ...(project.settingsExtensions
+      ? { settingsExtensions: project.settingsExtensions }
+      : {}),
+    ...(project.assetsExtensions
+      ? { assetsExtensions: project.assetsExtensions }
+      : {}),
   }
 }

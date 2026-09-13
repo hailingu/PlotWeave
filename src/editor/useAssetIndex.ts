@@ -14,9 +14,12 @@ export interface AssetIndexActions {
 }
 
 /** 以文档状态的 setAssets 为写通道的资产索引增删。 */
-export function useAssetIndex(setAssets: EditorDocument['setAssets']): AssetIndexActions {
+export function useAssetIndex(
+  setAssets: EditorDocument['setAssets'],
+): AssetIndexActions {
   const addAsset = useCallback(
-    (asset: AssetRef) => setAssets((cur) => ({ byId: { ...cur?.byId, [asset.id]: asset } })),
+    (asset: AssetRef) =>
+      setAssets((cur) => ({ byId: { ...cur?.byId, [asset.id]: asset } })),
     [setAssets],
   )
   const removeAsset = useCallback(

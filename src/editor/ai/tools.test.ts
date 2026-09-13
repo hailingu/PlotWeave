@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { AI_TOOLS, READ_TOOL_NAMES, WRITE_TOOL_NAMES, toolCallsToCommands, type ToolCall } from './tools'
+import {
+  AI_TOOLS,
+  READ_TOOL_NAMES,
+  WRITE_TOOL_NAMES,
+  toolCallsToCommands,
+  type ToolCall,
+} from './tools'
 import { nodeFieldTableText } from './nodeFields'
 import { documentFieldTableText, entityFieldTableText } from './entityFields'
 
@@ -12,10 +18,23 @@ const call = (name: string, args: unknown): ToolCall => ({
 describe('toolCallsToCommands（§12.2 tool_calls → 预览卡命令）', () => {
   it('五个写工具映射为对应命令；reason 透传', () => {
     const { commands, errors } = toolCallsToCommands([
-      call('create_node', { nodeType: 'scene', ref: 'a', data: { name: '天台' } }),
-      call('update_node_spec', { nodeId: 'a', patch: { time: '🌙 夜' }, reason: '夜戏' }),
+      call('create_node', {
+        nodeType: 'scene',
+        ref: 'a',
+        data: { name: '天台' },
+      }),
+      call('update_node_spec', {
+        nodeId: 'a',
+        patch: { time: '🌙 夜' },
+        reason: '夜戏',
+      }),
       call('delete_node', { nodeId: 'x' }),
-      call('connect_edge', { sourceId: 'a', targetId: 'b', edgeKind: 'branch', optionIndex: 1 }),
+      call('connect_edge', {
+        sourceId: 'a',
+        targetId: 'b',
+        edgeKind: 'branch',
+        optionIndex: 1,
+      }),
       call('disconnect_edge', { sourceId: 'b', targetId: 'c' }),
     ])
     expect(errors).toEqual([])
@@ -36,7 +55,9 @@ describe('toolCallsToCommands（§12.2 tool_calls → 预览卡命令）', () =>
       { op: 'create_node', nodeType: 'beat', ref: 'b' },
       { op: 'connect_edge', sourceId: 'b', targetId: 's1' },
     ]
-    const { commands, errors } = toolCallsToCommands([call('batch', { commands: inner })])
+    const { commands, errors } = toolCallsToCommands([
+      call('batch', { commands: inner }),
+    ])
     expect(errors).toEqual([])
     expect(commands).toEqual(inner)
   })
@@ -45,14 +66,22 @@ describe('toolCallsToCommands（§12.2 tool_calls → 预览卡命令）', () =>
     const { commands, errors } = toolCallsToCommands([
       call('batch', {
         commands: [
-          { op: 'update_node_spec', nodeId: 'n1', patch: { options: ['坦白', '隐瞒', '沉默'] } },
+          {
+            op: 'update_node_spec',
+            nodeId: 'n1',
+            patch: { options: ['坦白', '隐瞒', '沉默'] },
+          },
           { op: 'update_node', nodeId: 'n2', patch: { tone: '爆发' } },
         ],
       }),
     ])
     expect(errors).toEqual([])
     expect(commands).toEqual([
-      { op: 'update_node', nodeId: 'n1', patch: { options: ['坦白', '隐瞒', '沉默'] } },
+      {
+        op: 'update_node',
+        nodeId: 'n1',
+        patch: { options: ['坦白', '隐瞒', '沉默'] },
+      },
       { op: 'update_node', nodeId: 'n2', patch: { tone: '爆发' } },
     ])
   })
@@ -63,7 +92,10 @@ describe('toolCallsToCommands（§12.2 tool_calls → 预览卡命令）', () =>
       call('get_node', { nodeId: 'n1' }),
     ])
     expect(commands).toEqual([])
-    expect(readRequests.map((r) => r.name)).toEqual(['get_graph_snapshot', 'get_node'])
+    expect(readRequests.map((r) => r.name)).toEqual([
+      'get_graph_snapshot',
+      'get_node',
+    ])
     expect(readRequests[1].args).toEqual({ nodeId: 'n1' })
     expect(readRequests[0].id).toBe('call-get_graph_snapshot')
   })
@@ -102,7 +134,12 @@ describe('issue 44 通道映射：upsert_* 写工具与 get_settings_snapshot �
       { op: 'connect_edge', sourceId: 'b', targetId: 's1' },
     ]
     const { commands, errors } = toolCallsToCommands([
-      call('batch', { commands: [{ op: 'update_node_spec', nodeId: 'n1', patch: { tone: '爆发' } }, ...inner] }),
+      call('batch', {
+        commands: [
+          { op: 'update_node_spec', nodeId: 'n1', patch: { tone: '爆发' } },
+          ...inner,
+        ],
+      }),
     ])
     expect(errors).toEqual([])
     expect(commands).toEqual([
@@ -112,7 +149,9 @@ describe('issue 44 通道映射：upsert_* 写工具与 get_settings_snapshot �
   })
 
   it('get_settings_snapshot 进入 readRequests（读工具，不产生命令）', () => {
-    const { commands, readRequests } = toolCallsToCommands([call('get_settings_snapshot', {})])
+    const { commands, readRequests } = toolCallsToCommands([
+      call('get_settings_snapshot', {}),
+    ])
     expect(commands).toEqual([])
     expect(readRequests.map((r) => r.name)).toEqual(['get_settings_snapshot'])
     expect(readRequests[0].id).toBe('call-get_settings_snapshot')
@@ -129,7 +168,10 @@ describe('issue 44 通道映射：upsert_* 写工具与 get_settings_snapshot �
 
   it('upsert_document 映射为对应命令（issue 56）：fields 归对象、entityId 原样透传', () => {
     const { commands, errors } = toolCallsToCommands([
-      call('upsert_document', { fields: { title: '世界观', body: '大陆纪元' }, reason: '开篇设定' }),
+      call('upsert_document', {
+        fields: { title: '世界观', body: '大陆纪元' },
+        reason: '开篇设定',
+      }),
       call('upsert_document', { entityId: 'doc-1', fields: { body: '改写' } }),
       call('upsert_document', { entityId: 7, fields: { title: ['坏'] } }),
     ])
@@ -139,13 +181,25 @@ describe('issue 44 通道映射：upsert_* 写工具与 get_settings_snapshot �
       fields: { title: '世界观', body: '大陆纪元' },
       reason: '开篇设定',
     })
-    expect(commands[1]).toEqual({ op: 'upsert_document', entityId: 'doc-1', fields: { body: '改写' } })
-    expect(commands[2]).toMatchObject({ op: 'upsert_document', entityId: 7, fields: {} })
+    expect(commands[1]).toEqual({
+      op: 'upsert_document',
+      entityId: 'doc-1',
+      fields: { body: '改写' },
+    })
+    expect(commands[2]).toMatchObject({
+      op: 'upsert_document',
+      entityId: 7,
+      fields: {},
+    })
   })
 
   it('upsert_character / upsert_location 映射为对应命令（issue 44）：fields 归对象、entityId 原样透传', () => {
     const { commands, errors } = toolCallsToCommands([
-      call('upsert_character', { ref: 'hero', fields: { name: '林一', bio: '侦探' }, reason: '主角' }),
+      call('upsert_character', {
+        ref: 'hero',
+        fields: { name: '林一', bio: '侦探' },
+        reason: '主角',
+      }),
       call('upsert_location', { entityId: 'loc-1', fields: { note: '雨夜' } }),
       call('upsert_character', { entityId: 9, fields: { name: ['坏'] } }),
     ])
@@ -163,7 +217,11 @@ describe('issue 44 通道映射：upsert_* 写工具与 get_settings_snapshot �
     })
     // 非字符串 entityId 原样透传（映射层不吞不转），由折叠层整批拒绝——
     // 畸形的修改意图不得在映射层被重释；非对象 fields 回退空对象由校验器点名
-    expect(commands[2]).toMatchObject({ op: 'upsert_character', entityId: 9, fields: {} })
+    expect(commands[2]).toMatchObject({
+      op: 'upsert_character',
+      entityId: 9,
+      fields: {},
+    })
   })
 })
 
@@ -207,8 +265,8 @@ describe('工具表定义', () => {
 
   it('data/patch/批次通道嵌入共享字段表（issue 41：协议与校验器同源）', () => {
     const paramOf = (tool: string, key: string): unknown => {
-      const props = AI_TOOLS.find((t) => t.function.name === tool)!.function.parameters
-        .properties as Record<string, { description?: unknown }>
+      const props = AI_TOOLS.find((t) => t.function.name === tool)!.function
+        .parameters.properties as Record<string, { description?: unknown }>
       return props[key]?.description
     }
     // 模型产 data/patch 的三个入口都拿到同一份字段协议文本
@@ -219,22 +277,28 @@ describe('工具表定义', () => {
 
   it('upsert 工具 fields 嵌入实体字段表（issue 44：与校验白名单同源）', () => {
     const paramOf = (tool: string, key: string): unknown => {
-      const props = AI_TOOLS.find((t) => t.function.name === tool)!.function.parameters
-        .properties as Record<string, { description?: unknown }>
+      const props = AI_TOOLS.find((t) => t.function.name === tool)!.function
+        .parameters.properties as Record<string, { description?: unknown }>
       return props[key]?.description
     }
-    expect(paramOf('upsert_character', 'fields')).toContain(entityFieldTableText())
-    expect(paramOf('upsert_location', 'fields')).toContain(entityFieldTableText())
+    expect(paramOf('upsert_character', 'fields')).toContain(
+      entityFieldTableText(),
+    )
+    expect(paramOf('upsert_location', 'fields')).toContain(
+      entityFieldTableText(),
+    )
     expect(paramOf('batch', 'commands')).toContain(entityFieldTableText())
   })
 
   it('upsert_document fields 嵌入文档字段表（issue 56：与校验白名单同源）', () => {
     const paramOf = (tool: string, key: string): unknown => {
-      const props = AI_TOOLS.find((t) => t.function.name === tool)!.function.parameters
-        .properties as Record<string, { description?: unknown }>
+      const props = AI_TOOLS.find((t) => t.function.name === tool)!.function
+        .parameters.properties as Record<string, { description?: unknown }>
       return props[key]?.description
     }
-    expect(paramOf('upsert_document', 'fields')).toContain(documentFieldTableText())
+    expect(paramOf('upsert_document', 'fields')).toContain(
+      documentFieldTableText(),
+    )
     expect(paramOf('batch', 'commands')).toContain(documentFieldTableText())
   })
 })

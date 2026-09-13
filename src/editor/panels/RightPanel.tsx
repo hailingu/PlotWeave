@@ -1,12 +1,13 @@
 import type { ComponentProps } from 'react'
 import SegmentedControl from './SegmentedControl'
 import PanelResizer from './PanelResizer'
-import { type BatchValidation, type AiCommand, type ValidatedCommand } from '../ai/commands'
-import { type ProjectSettings } from '../settings'
 import {
-  resolveCharacterName,
-  resolveLocationName,
-} from '../settings'
+  type BatchValidation,
+  type AiCommand,
+  type ValidatedCommand,
+} from '../ai/commands'
+import { type ProjectSettings } from '../settings'
+import { resolveCharacterName, resolveLocationName } from '../settings'
 import AiThread, { AiSettingsButton } from './AiThread'
 import type { CanvasNode } from '../nodes/types'
 import type { AiSession } from '../ai/session'
@@ -41,11 +42,20 @@ function inspectorRows(
         : null
       return [
         { label: '名称', value: node.data.name },
-        { label: '场号', value: `SCENE ${String(node.data.sceneNo).padStart(2, '0')}` },
+        {
+          label: '场号',
+          value: `SCENE ${String(node.data.sceneNo).padStart(2, '0')}`,
+        },
         { label: '内外景', value: node.data.interior ? '内' : '外' },
-        { label: '地点', value: locationName ?? (node.data.locationId ? '（已删除）' : '未指定') },
+        {
+          label: '地点',
+          value:
+            locationName ?? (node.data.locationId ? '（已删除）' : '未指定'),
+        },
         { label: '时间', value: node.data.time },
-        ...(node.data.weather ? [{ label: '天气', value: node.data.weather }] : []),
+        ...(node.data.weather
+          ? [{ label: '天气', value: node.data.weather }]
+          : []),
         { label: '分镜', value: `🎞 ${shotCount} 镜` },
         { label: '梗概', value: node.data.synopsis },
         {
@@ -60,7 +70,9 @@ function inspectorRows(
     case 'dialogue': {
       const speakers = new Set(
         node.data.lines.flatMap((l) =>
-          l.kind === 'line' && l.speaker ? [resolveCharacterName(settings, l.speaker) ?? '（已删除）'] : [],
+          l.kind === 'line' && l.speaker
+            ? [resolveCharacterName(settings, l.speaker) ?? '（已删除）']
+            : [],
         ),
       )
       const actions = node.data.lines.filter((l) => l.kind === 'action').length
@@ -79,15 +91,24 @@ function inspectorRows(
     case 'branch':
       return [
         { label: '问句', value: node.data.prompt },
-        { label: '选项', value: node.data.options.map((o) => o.label).join(' / ') },
+        {
+          label: '选项',
+          value: node.data.options.map((o) => o.label).join(' / '),
+        },
       ]
     case 'shot':
       return [
-        { label: '镜号', value: `SHOT ${String(node.data.shotNo).padStart(2, '0')}` },
+        {
+          label: '镜号',
+          value: `SHOT ${String(node.data.shotNo).padStart(2, '0')}`,
+        },
         { label: '景别', value: node.data.size },
         { label: '画面描述', value: node.data.picture },
         { label: '镜头 PROMPT', value: node.data.prompt },
-        { label: '引用', value: node.data.refs.map((r) => r.label).join(' / ') || '—' },
+        {
+          label: '引用',
+          value: node.data.refs.map((r) => r.label).join(' / ') || '—',
+        },
       ]
     case 'image':
       return [
@@ -106,15 +127,17 @@ function AiSessionContent({
   ...props
 }: ComponentProps<typeof AiThread> & { readonly loadFailed?: boolean }) {
   if (loadFailed) {
-    return <>
-      <p className="pw-ai-error" role="alert">
-        聊天记录读取失败，AI 发送和执行已停用。请检查磁盘后重新打开项目。
-        {props.initialSessionError}
-      </p>
-      <div className="pw-ai-error-actions">
-        <AiSettingsButton onOpenSettings={props.onOpenSettings} />
-      </div>
-    </>
+    return (
+      <>
+        <p className="pw-ai-error" role="alert">
+          聊天记录读取失败，AI 发送和执行已停用。请检查磁盘后重新打开项目。
+          {props.initialSessionError}
+        </p>
+        <div className="pw-ai-error-actions">
+          <AiSettingsButton onOpenSettings={props.onOpenSettings} />
+        </div>
+      </>
+    )
   }
   return <AiThread {...props} />
 }
@@ -142,7 +165,9 @@ interface RightPanelProps {
   /** 校验助手回复中的命令批次（§6/数据模型 §12）；纯讨论回复返回 null。 */
   readonly onValidateAi?: (text: string) => BatchValidation | null
   /** 校验工具调用映射出的命令数组（tool-calling 通道）。 */
-  readonly onValidateCommands?: (commands: AiCommand[]) => BatchValidation | null
+  readonly onValidateCommands?: (
+    commands: AiCommand[],
+  ) => BatchValidation | null
   /** 读工具 get_node：返回节点 JSON 文本，节点不存在返回 null。 */
   readonly onReadNode?: (nodeId: string) => string | null
   /** 读工具 get_settings_snapshot（issue 44）：返回设定集清单 JSON 文本。 */
@@ -215,7 +240,9 @@ export default function RightPanel({
   aiSessionLoadFailed,
   onSaveAiSession,
 }: RightPanelProps) {
-  const rows = selectedNode ? inspectorRows(selectedNode, attachedShotCount, settings) : []
+  const rows = selectedNode
+    ? inspectorRows(selectedNode, attachedShotCount, settings)
+    : []
 
   return (
     <aside
@@ -228,13 +255,20 @@ export default function RightPanel({
       )}
       <div className="pw-panel-inner" style={{ width }}>
         <div className="pw-panel-head">
-          <SegmentedControl groupLabel="右栏分段" options={TABS} value={tab} onChange={onTabChange} />
+          <SegmentedControl
+            groupLabel="右栏分段"
+            options={TABS}
+            value={tab}
+            onChange={onTabChange}
+          />
         </div>
         <div className="pw-panel-scroll">
           {tab === 'inspector' &&
             (selectedNode ? (
               <div className="pw-inspector">
-                <div className="pw-inspector-type">{TYPE_LABELS[selectedNode.type]}</div>
+                <div className="pw-inspector-type">
+                  {TYPE_LABELS[selectedNode.type]}
+                </div>
                 {rows.map((row) => (
                   <div key={row.label} className="pw-inspector-row">
                     <span className="pw-inspector-label">{row.label}</span>
@@ -243,7 +277,9 @@ export default function RightPanel({
                 ))}
               </div>
             ) : (
-              <div className="pw-empty">在画布中选择一个节点，查看它的字段。</div>
+              <div className="pw-empty">
+                在画布中选择一个节点，查看它的字段。
+              </div>
             ))}
           {/* 常驻挂载语义见 AiPane（issue 58）：hidden 切换不卸载会话容器 */}
           <AiPane

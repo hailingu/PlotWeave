@@ -15,7 +15,10 @@ import {
   readEntityPayload,
 } from './dragDrop'
 import { entityDropPatch } from './entityDrop'
-import { useLibraryAssetDrop, type LibraryAssetDropDeps } from './useLibraryAssetDrop'
+import {
+  useLibraryAssetDrop,
+  type LibraryAssetDropDeps,
+} from './useLibraryAssetDrop'
 import type { CreatableType } from './creatable'
 import type { NodeDataPatch } from './nodes/patch'
 

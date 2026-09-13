@@ -97,7 +97,15 @@ export default function EditorCanvasRegion(props: EditorLayoutProps) {
 /** 自动排布按钮图标：三卡对齐 + 归位箭头，表达「整理布局」。 */
 function AutoLayoutIcon() {
   return (
-    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+    <svg
+      viewBox="0 0 24 24"
+      width="16"
+      height="16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      aria-hidden="true"
+    >
       <rect x="3" y="3" width="7" height="6" rx="1.2" />
       <rect x="3" y="12" width="7" height="6" rx="1.2" />
       <path d="M14 5h7M14 9h4" strokeLinecap="round" />

@@ -19,7 +19,9 @@ export interface NodeFactoryCtx {
 /** 构建指定类型的新节点（selected 默认 true；opts.data 覆盖默认字段）。 */
 export function buildCanvasNode(
   type: CreatableType,
-  opts: { at?: XYPosition; selected?: boolean; data?: Record<string, unknown> } | undefined,
+  opts:
+    | { at?: XYPosition; selected?: boolean; data?: Record<string, unknown> }
+    | undefined,
   ctx: NodeFactoryCtx,
 ): CanvasNode {
   const nds = ctx.against
@@ -60,7 +62,13 @@ export function buildCanvasNode(
       data: {
         name: '新对白',
         lines: [
-          { id: uid('line'), kind: 'line', speaker: ctx.characters[0]?.id, side: 'left', text: '新台词…' },
+          {
+            id: uid('line'),
+            kind: 'line',
+            speaker: ctx.characters[0]?.id,
+            side: 'left',
+            text: '新台词…',
+          },
         ],
         ...opts?.data,
       },
@@ -88,7 +96,13 @@ export function buildCanvasNode(
       selected: select,
       // model 空串 = 未选择：生成入口回退 AppSettings.defaultImage 并引导配置；
       // size 默认竖版短剧画幅（plan.ts IMAGE_SIZES 声明的默认推荐档）
-      data: { prompt: '', model: '', size: '1024x1536', outputs: {}, ...opts?.data },
+      data: {
+        prompt: '',
+        model: '',
+        size: '1024x1536',
+        outputs: {},
+        ...opts?.data,
+      },
     }
   } else {
     node = {
@@ -110,7 +124,10 @@ export function buildCanvasNode(
   if (opts?.at) {
     node.position = opts.at
   } else if (ctx.center) {
-    node.position = { x: ctx.center.x - 170 + cascade, y: ctx.center.y - 60 + cascade }
+    node.position = {
+      x: ctx.center.x - 170 + cascade,
+      y: ctx.center.y - 60 + cascade,
+    }
   }
   return node
 }

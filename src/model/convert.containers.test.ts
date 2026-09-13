@@ -50,7 +50,13 @@ describe('归一化一期：容器级形状校验（§11.1 第 2 步）——容
     doc.graph.edges.push(null, 'oops')
     doc.settings.characters['bad'] = null
     const round = parseProject(doc)
-    expect(round.content.nodes.map((n) => n.id)).toEqual(['s1', 'b1', 'd1', 'br1', 'sh1'])
+    expect(round.content.nodes.map((n) => n.id)).toEqual([
+      's1',
+      'b1',
+      'd1',
+      'br1',
+      'sh1',
+    ])
     expect(round.content.edges.map((e) => e.id)).toEqual(['e1', 'e2', 'e3'])
     expect(round.content.settings.characters.map((c) => c.id)).toEqual(['ch-1'])
     expect(round.warnings.length).toBeGreaterThan(0)
@@ -58,7 +64,10 @@ describe('归一化一期：容器级形状校验（§11.1 第 2 步）——容
 
   it('节点缺 data/spec/meta/layout 或边缺 data：无法机械修复，隔离节点（关联边随之成孤儿）/隔离该边', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
-      graph: { nodes: Record<string, unknown>[]; edges: Record<string, unknown>[] }
+      graph: {
+        nodes: Record<string, unknown>[]
+        edges: Record<string, unknown>[]
+      }
     }
     const scene = doc.graph.nodes.find((n) => n.id === 's1')!
     delete scene.data // s1 是 e1/e3 的端点
@@ -87,7 +96,9 @@ describe('归一化一期：容器级形状校验（§11.1 第 2 步）——容
 describe('归一化一期：容器级形状校验（§11.1 第 2 步）——必填列表与节点 ui', () => {
   it('按类型的必填列表缺失/非数组：重置为空数组并警告，节点保留', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
-      graph: { nodes: { id: string; data: { spec: Record<string, unknown> } }[] }
+      graph: {
+        nodes: { id: string; data: { spec: Record<string, unknown> } }[]
+      }
     }
     for (const n of doc.graph.nodes) {
       if (n.id === 's1') delete n.data.spec.characterIds
@@ -96,7 +107,13 @@ describe('归一化一期：容器级形状校验（§11.1 第 2 步）——必
       if (n.id === 'sh1') n.data.spec.refs = null
     }
     const round = parseProject(doc)
-    expect(round.content.nodes.map((n) => n.id)).toEqual(['s1', 'b1', 'd1', 'br1', 'sh1'])
+    expect(round.content.nodes.map((n) => n.id)).toEqual([
+      's1',
+      'b1',
+      'd1',
+      'br1',
+      'sh1',
+    ])
     const scene = round.content.nodes[0].data as { characterIds: string[] }
     expect(scene.characterIds).toEqual([])
     // branch 选项被清空后，绑定选项的 e2 边成为孤儿边被隔离
@@ -106,16 +123,23 @@ describe('归一化一期：容器级形状校验（§11.1 第 2 步）——必
 
   it('列表成员过滤：characterIds 非字符串成员、lines/options 非普通对象成员移除并警告', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
-      graph: { nodes: { id: string; data: { spec: Record<string, unknown> } }[] }
+      graph: {
+        nodes: { id: string; data: { spec: Record<string, unknown> } }[]
+      }
     }
     for (const n of doc.graph.nodes) {
       if (n.id === 's1') n.data.spec.characterIds = ['ch-1', 7, null]
-      if (n.id === 'd1') n.data.spec.lines = [{ id: 'line-1', kind: 'line', text: '别走' }, null]
+      if (n.id === 'd1')
+        n.data.spec.lines = [{ id: 'line-1', kind: 'line', text: '别走' }, null]
     }
     const round = parseProject(doc)
-    const scene = round.content.nodes.find((n) => n.id === 's1')!.data as { characterIds: string[] }
+    const scene = round.content.nodes.find((n) => n.id === 's1')!.data as {
+      characterIds: string[]
+    }
     expect(scene.characterIds).toEqual(['ch-1'])
-    const dialogue = round.content.nodes.find((n) => n.id === 'd1')!.data as { lines: unknown[] }
+    const dialogue = round.content.nodes.find((n) => n.id === 'd1')!.data as {
+      lines: unknown[]
+    }
     expect(dialogue.lines).toHaveLength(1)
     expect(round.warnings.length).toBeGreaterThan(0)
   })
@@ -145,10 +169,14 @@ describe('归一化一期：project 元数据修复（§11.1 第 2 步，受信 
       project: { name: unknown }
     }
     doc.project.name = '   '
-    expect(parseProject(doc, { indexName: '索引名' }).content.name).toBe('索引名')
+    expect(parseProject(doc, { indexName: '索引名' }).content.name).toBe(
+      '索引名',
+    )
     expect(parseProject(doc).content.name).toBe('未命名项目')
     doc.project.name = 42
-    expect(parseProject(doc, { indexName: '索引名' }).content.name).toBe('索引名')
+    expect(parseProject(doc, { indexName: '索引名' }).content.name).toBe(
+      '索引名',
+    )
     doc.project.name = '长'.repeat(65)
     expect(parseProject(doc).content.name).toBe('未命名项目')
     // 合法名称去首尾空白后采用
@@ -223,7 +251,11 @@ describe('归一化一期：视口形状校验（§11.1）', () => {
 
 describe('归一化：AI 批次计数形状校验（§11.1/§12.2 提交身份）', () => {
   it('非负安全整数原样保留；异型/负数/非整数/非安全整数删除（回退未应用）', () => {
-    const doc = serializeProject({ ...mkContent(), aiRevision: 3 }, 'p-1', NOW) as unknown as {
+    const doc = serializeProject(
+      { ...mkContent(), aiRevision: 3 },
+      'p-1',
+      NOW,
+    ) as unknown as {
       graph: { aiRevision: unknown }
     }
     expect(doc.graph.aiRevision).toBe(3)
@@ -237,9 +269,17 @@ describe('归一化：AI 批次计数形状校验（§11.1/§12.2 提交身份�
   })
 
   it('缺省/0 不落盘：旧信封形状不变，缺省读回 undefined（会话层回退 0）', () => {
-    expect('aiRevision' in serializeProject(mkContent(), 'p-1', NOW).graph).toBe(false)
-    expect('aiRevision' in serializeProject({ ...mkContent(), aiRevision: 0 }, 'p-1', NOW).graph).toBe(false)
-    expect(parseProject(serializeProject(mkContent(), 'p-1', NOW)).content.aiRevision).toBeUndefined()
+    expect(
+      'aiRevision' in serializeProject(mkContent(), 'p-1', NOW).graph,
+    ).toBe(false)
+    expect(
+      'aiRevision' in
+        serializeProject({ ...mkContent(), aiRevision: 0 }, 'p-1', NOW).graph,
+    ).toBe(false)
+    expect(
+      parseProject(serializeProject(mkContent(), 'p-1', NOW)).content
+        .aiRevision,
+    ).toBeUndefined()
   })
 })
 
@@ -258,8 +298,16 @@ describe('归一化：project 时间戳严格校验与规范化（§11.1，与 R
     doc.project.updatedAt = '2026-08-02T12:30:00.5+08:00'
     const round = parseProject(doc)
     expect(round.content.createdAt).toBe('2026-08-01T00:00:00.000Z')
-    expect(round.warnings.some((w) => w.includes('createdAt') && w.includes('规范化'))).toBe(true)
-    expect(round.warnings.some((w) => w.includes('updatedAt') && w.includes('规范化'))).toBe(true)
+    expect(
+      round.warnings.some(
+        (w) => w.includes('createdAt') && w.includes('规范化'),
+      ),
+    ).toBe(true)
+    expect(
+      round.warnings.some(
+        (w) => w.includes('updatedAt') && w.includes('规范化'),
+      ),
+    ).toBe(true)
   })
 
   it('Date.parse 的宽松超集（纯日期/无显式时区）不放行：修复并警告，再保存不被 Rust 边界拒绝', () => {
@@ -270,10 +318,17 @@ describe('归一化：project 时间戳严格校验与规范化（§11.1，与 R
     expect(round.warnings.some((w) => w.includes('createdAt'))).toBe(true)
     expect(round.warnings.some((w) => w.includes('updatedAt'))).toBe(true)
     // createdAt 回退到修复后的 updatedAt；两者均为带显式 Z 的严格形式
-    expect(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(round.content.createdAt ?? '')).toBe(true)
+    expect(
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(
+        round.content.createdAt ?? '',
+      ),
+    ).toBe(true)
     // 修复后的值随 serializeProject 原样回写，下一次 save_project 不再被整份拒绝
     const again = serializeProject(round.content, 'p-1', NOW)
-    expect(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(again.project.createdAt)).toBe(true)
+    expect(
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(
+        again.project.createdAt,
+      ),
+    ).toBe(true)
   })
 })
-

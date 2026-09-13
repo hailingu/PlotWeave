@@ -12,7 +12,10 @@ import { fileURLToPath } from 'node:url'
  * 会越过详情卡片右缘并在 .pw-panel-scroll 产生横向溢出。
  */
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../../..')
-const css = readFileSync(join(repoRoot, 'src/editor/panels/settings-detail.css'), 'utf8')
+const css = readFileSync(
+  join(repoRoot, 'src/editor/panels/settings-detail.css'),
+  'utf8',
+)
 
 /** 目标选择器的声明表（postcss 解析生产样式表，非文本断言）。 */
 function declarationsOf(selector: string): Map<string, string> {

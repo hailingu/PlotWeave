@@ -21,24 +21,53 @@ export interface AiFieldSpec {
 }
 
 /** 列表成员共享的对象 schema；新建条目的 id 可省略，由应用分配。 */
-const itemObject = (properties: Record<string, unknown>, required: string[]) => ({
-  type: 'object', properties, required, additionalProperties: false,
+const itemObject = (
+  properties: Record<string, unknown>,
+  required: string[],
+) => ({
+  type: 'object',
+  properties,
+  required,
+  additionalProperties: false,
 })
 const textValue = { type: 'string' }
 const referenceValue = { type: 'string', pattern: String.raw`\S` }
 const positiveNumber = { minimum: 1, maximum: Number.MAX_SAFE_INTEGER }
 const lineFields = {
-  id: textValue, text: textValue, side: { type: 'string', enum: ['left', 'right'] }, vo: { type: 'boolean' },
+  id: textValue,
+  text: textValue,
+  side: { type: 'string', enum: ['left', 'right'] },
+  vo: { type: 'boolean' },
 }
-const dialogueItems = { anyOf: [
-  itemObject({ ...lineFields, kind: { type: 'string', enum: ['line'] }, speaker: referenceValue }, ['text']),
-  itemObject({ ...lineFields, kind: { type: 'string', enum: ['action'] } }, ['kind', 'text']),
-] }
-const shotRefFields = { id: textValue, kind: { type: 'string', enum: ['character', 'location', 'audio'] } }
-const shotRefItems = { anyOf: [
-  itemObject({ ...shotRefFields, assetId: referenceValue }, ['kind', 'assetId']),
-  itemObject({ ...shotRefFields, label: textValue }, ['kind', 'label']),
-] }
+const dialogueItems = {
+  anyOf: [
+    itemObject(
+      {
+        ...lineFields,
+        kind: { type: 'string', enum: ['line'] },
+        speaker: referenceValue,
+      },
+      ['text'],
+    ),
+    itemObject({ ...lineFields, kind: { type: 'string', enum: ['action'] } }, [
+      'kind',
+      'text',
+    ]),
+  ],
+}
+const shotRefFields = {
+  id: textValue,
+  kind: { type: 'string', enum: ['character', 'location', 'audio'] },
+}
+const shotRefItems = {
+  anyOf: [
+    itemObject({ ...shotRefFields, assetId: referenceValue }, [
+      'kind',
+      'assetId',
+    ]),
+    itemObject({ ...shotRefFields, label: textValue }, ['kind', 'label']),
+  ],
+}
 
 /** 各 AI 可写节点类型的字段协议表。episodeNo（§3.5 分集）：编剧侧四类
  * 可写；分镜卡随宿主场景，不可单独分集。图片节点（§13 首版 AI 只读）
@@ -46,45 +75,109 @@ const shotRefItems = { anyOf: [
 export const AI_NODE_FIELDS: Record<string, readonly AiFieldSpec[]> = {
   scene: [
     { key: 'name', type: 'string', desc: '场景名' },
-    { key: 'sceneNo', type: 'integer', desc: '场号（正整数）', schema: positiveNumber },
+    {
+      key: 'sceneNo',
+      type: 'integer',
+      desc: '场号（正整数）',
+      schema: positiveNumber,
+    },
     { key: 'interior', type: 'boolean', desc: '内景 true / 外景 false' },
-    { key: 'locationId', type: 'string', desc: '地点实体 id 或同批新地点 ref（无地点时省略，不传 null）', schema: { pattern: String.raw`\S` } },
+    {
+      key: 'locationId',
+      type: 'string',
+      desc: '地点实体 id 或同批新地点 ref（无地点时省略，不传 null）',
+      schema: { pattern: String.raw`\S` },
+    },
     { key: 'time', type: 'string', desc: '时间（如 🌙 夜）' },
     { key: 'weather', type: 'string', desc: '天气（可省）' },
     { key: 'synopsis', type: 'string', desc: '梗概' },
-    { key: 'characterIds', type: 'array', desc: '在场角色实体 id 或同批角色 ref 数组', schema: { items: referenceValue } },
-    { key: 'episodeNo', type: 'integer', desc: '集归属（正整数）', schema: positiveNumber },
+    {
+      key: 'characterIds',
+      type: 'array',
+      desc: '在场角色实体 id 或同批角色 ref 数组',
+      schema: { items: referenceValue },
+    },
+    {
+      key: 'episodeNo',
+      type: 'integer',
+      desc: '集归属（正整数）',
+      schema: positiveNumber,
+    },
   ],
   dialogue: [
     { key: 'name', type: 'string', desc: '对白名' },
-    { key: 'lines', type: 'array', desc: '台词行对象数组：text 字符串必填；kind 缺省 line；speaker 仅 line 行可带，为角色实体 id 或同批新角色 ref，不能填角色名或对象；side 为 left/right、vo 为布尔；action 行不带 speaker；新行 id 可省略', schema: { items: dialogueItems } },
-    { key: 'episodeNo', type: 'integer', desc: '集归属（正整数）', schema: positiveNumber },
+    {
+      key: 'lines',
+      type: 'array',
+      desc: '台词行对象数组：text 字符串必填；kind 缺省 line；speaker 仅 line 行可带，为角色实体 id 或同批新角色 ref，不能填角色名或对象；side 为 left/right、vo 为布尔；action 行不带 speaker；新行 id 可省略',
+      schema: { items: dialogueItems },
+    },
+    {
+      key: 'episodeNo',
+      type: 'integer',
+      desc: '集归属（正整数）',
+      schema: positiveNumber,
+    },
   ],
   beat: [
     { key: 'name', type: 'string', desc: '节拍名' },
     { key: 'tone', type: 'string', desc: '情绪基调' },
-    { key: 'episodeNo', type: 'integer', desc: '集归属（正整数）', schema: positiveNumber },
+    {
+      key: 'episodeNo',
+      type: 'integer',
+      desc: '集归属（正整数）',
+      schema: positiveNumber,
+    },
   ],
   branch: [
     { key: 'prompt', type: 'string', desc: '分岔问句' },
-    { key: 'options', type: 'array', desc: '选项文案数组（字符串或 {id?, label} 对象，新项 id 可省略）', schema: {
-      items: { anyOf: [textValue, itemObject({ id: textValue, label: textValue }, ['label'])] },
-    } },
-    { key: 'episodeNo', type: 'integer', desc: '集归属（正整数）', schema: positiveNumber },
+    {
+      key: 'options',
+      type: 'array',
+      desc: '选项文案数组（字符串或 {id?, label} 对象，新项 id 可省略）',
+      schema: {
+        items: {
+          anyOf: [
+            textValue,
+            itemObject({ id: textValue, label: textValue }, ['label']),
+          ],
+        },
+      },
+    },
+    {
+      key: 'episodeNo',
+      type: 'integer',
+      desc: '集归属（正整数）',
+      schema: positiveNumber,
+    },
   ],
   shot: [
-    { key: 'shotNo', type: 'integer', desc: '镜号（正整数）', schema: positiveNumber },
+    {
+      key: 'shotNo',
+      type: 'integer',
+      desc: '镜号（正整数）',
+      schema: positiveNumber,
+    },
     { key: 'size', type: 'string', desc: '景别（特写/中景/全景…）' },
     { key: 'picture', type: 'string', desc: '画面描述' },
     { key: 'prompt', type: 'string', desc: '镜头 Prompt（AI 视频模型输入）' },
-    { key: 'refs', type: 'array', desc: '引用位对象数组：kind ∈ character/location/audio；assetId 资产引用或 label 自由文案恰选其一，新项 id 可省略', schema: { items: shotRefItems } },
+    {
+      key: 'refs',
+      type: 'array',
+      desc: '引用位对象数组：kind ∈ character/location/audio；assetId 资产引用或 label 自由文案恰选其一，新项 id 可省略',
+      schema: { items: shotRefItems },
+    },
   ],
 }
 
 /** 校验白名单视图：类型 → 合法字段键（checkFieldKeys 消费）。 */
-export const AI_FIELD_KEYS: Record<string, readonly string[]> = Object.fromEntries(
-  Object.entries(AI_NODE_FIELDS).map(([type, fields]) => [type, fields.map((f) => f.key)]),
-)
+export const AI_FIELD_KEYS: Record<string, readonly string[]> =
+  Object.fromEntries(
+    Object.entries(AI_NODE_FIELDS).map(([type, fields]) => [
+      type,
+      fields.map((f) => f.key),
+    ]),
+  )
 
 /** 生成「类型: 字段(类型) 说明」行式协议文本：系统提示与工具描述共用
  * 同一函数输出，保证两处逐字一致、随协议表同步演进。 */

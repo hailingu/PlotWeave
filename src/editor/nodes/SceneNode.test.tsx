@@ -19,7 +19,9 @@ vi.mock('@xyflow/react', async (importOriginal) => {
     ...orig,
     /** Handle 桩：脱离 ReactFlow 画布后仅保留锚点语义（type/id）供断言。 */
     Handle: (props: { readonly id?: string; readonly type: string }) => (
-      <div data-testid={`handle-${props.type}${props.id ? `-${props.id}` : ''}`} />
+      <div
+        data-testid={`handle-${props.type}${props.id ? `-${props.id}` : ''}`}
+      />
     ),
   }
 })
@@ -45,7 +47,10 @@ const DATA: SceneNodeData = {
   characterIds: ['c1', 'gone'],
 }
 
-function setup(data: Partial<SceneNodeData> = {}, openSettingsId: string | null = null) {
+function setup(
+  data: Partial<SceneNodeData> = {},
+  openSettingsId: string | null = null,
+) {
   const api: NodeEditApi = {
     projectId: 'p-1',
     openSettingsId,
@@ -125,6 +130,8 @@ describe('SceneNode（索引卡）', () => {
     setup()
     expect(screen.getByTestId('handle-target')).toBeTruthy()
     expect(screen.getByTestId('handle-source')).toBeTruthy()
-    expect(screen.getByTestId(`handle-source-${SCENE_SHOT_HANDLE}`)).toBeTruthy()
+    expect(
+      screen.getByTestId(`handle-source-${SCENE_SHOT_HANDLE}`),
+    ).toBeTruthy()
   })
 })

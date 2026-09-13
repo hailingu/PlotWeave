@@ -7,7 +7,10 @@ const node = (n: CanvasNode): CanvasNode => n
 describe('projectStore 内存门面（浏览器回退）', () => {
   it('list 首次返回两个种子项目，按更新时间倒序', async () => {
     const list = await projectStore.list()
-    expect(list.map((x) => x.id)).toEqual(['sample-du-shi-qi-yuan', 'sample-wu-ye-chu-zu-che'])
+    expect(list.map((x) => x.id)).toEqual([
+      'sample-du-shi-qi-yuan',
+      'sample-wu-ye-chu-zu-che',
+    ])
     expect(list[0].name).toBe('都市奇缘')
   })
 
@@ -40,13 +43,20 @@ describe('projectStore 内存门面（浏览器回退）', () => {
     expect(loaded.episodeTitles).toEqual({ 1: '开局' })
     // load 返回深拷贝：改动不影响存档
     loaded.episodeTitles![1] = '改了'
-    expect((await projectStore.load(meta.id)).episodeTitles).toEqual({ 1: '开局' })
+    expect((await projectStore.load(meta.id)).episodeTitles).toEqual({
+      1: '开局',
+    })
   })
 
   it('load 不存在的 id 抛错；delete 后消失；duplicate 产出「副本」', async () => {
     await expect(projectStore.load('ghost')).rejects.toThrow(/不存在/)
     const meta = await projectStore.create('原剧')
-    await projectStore.save(meta.id, { name: '原剧', nodes: [], edges: [], settings: { characters: [], locations: [] } })
+    await projectStore.save(meta.id, {
+      name: '原剧',
+      nodes: [],
+      edges: [],
+      settings: { characters: [], locations: [] },
+    })
     const copy = await projectStore.duplicate(meta.id)
     expect(copy.name).toBe('原剧 副本')
     await projectStore.delete(meta.id)
@@ -64,7 +74,17 @@ describe('projectStore 内存门面（浏览器回退）', () => {
       nodes: [],
       edges: [],
       settings: { characters: [], locations: [] },
-      assets: { byId: { 'a-1': { id: 'a-1', relPath: 'assets/x.png', mime: 'image/png', source: 'upload', createdAt: '2026-01-01T00:00:00.000Z' } } },
+      assets: {
+        byId: {
+          'a-1': {
+            id: 'a-1',
+            relPath: 'assets/x.png',
+            mime: 'image/png',
+            source: 'upload',
+            createdAt: '2026-01-01T00:00:00.000Z',
+          },
+        },
+      },
     })
     const copy = await projectStore.duplicate(meta.id)
     const copyDoc = await projectStore.load(copy.id)
@@ -99,12 +119,18 @@ describe('projectStore 内存门面（浏览器回退）', () => {
           data: { name: '场二', sceneNo: 2, interior: true, synopsis: '' },
         } as unknown as CanvasNode,
       ],
-      edges: [{ id: 'e1', source: 's1', target: 's2', selected: true } as never],
+      edges: [
+        { id: 'e1', source: 's1', target: 's2', selected: true } as never,
+      ],
       settings: { characters: [], locations: [] },
     })
     const loaded = await projectStore.load(meta.id)
     expect(loaded.nodes[0].selected).toBe(false)
-    const n = loaded.nodes[0] as { className?: string; measured?: unknown; dragging?: boolean }
+    const n = loaded.nodes[0] as {
+      className?: string
+      measured?: unknown
+      dragging?: boolean
+    }
     expect(n.className).toBeUndefined()
     expect(n.measured).toBeUndefined()
     expect(n.dragging).toBeUndefined()
@@ -113,14 +139,32 @@ describe('projectStore 内存门面（浏览器回退）', () => {
 
   it('saveQuiet 吞掉异常不打断调用方', async () => {
     await expect(
-      projectStore.saveQuiet('ghost-id-不校验', { name: 'x', nodes: [], edges: [], settings: { characters: [], locations: [] } }),
+      projectStore.saveQuiet('ghost-id-不校验', {
+        name: 'x',
+        nodes: [],
+        edges: [],
+        settings: { characters: [], locations: [] },
+      }),
     ).resolves.toBeUndefined()
   })
 
   it('list 的 endingCount 由「无出边场景数」派发（>1 才携带）', async () => {
     const meta = await projectStore.create('双结局剧')
     const sceneNoOut = (id: string, no: number) =>
-      node({ id, type: 'scene', position: { x: no, y: 0 }, selected: false, data: { name: `场${no}`, sceneNo: no, interior: true, time: '🌙 夜', synopsis: '', characterIds: [] } } as unknown as CanvasNode)
+      node({
+        id,
+        type: 'scene',
+        position: { x: no, y: 0 },
+        selected: false,
+        data: {
+          name: `场${no}`,
+          sceneNo: no,
+          interior: true,
+          time: '🌙 夜',
+          synopsis: '',
+          characterIds: [],
+        },
+      } as unknown as CanvasNode)
     await projectStore.save(meta.id, {
       name: '双结局剧',
       nodes: [sceneNoOut('a', 1), sceneNoOut('b', 2), sceneNoOut('c', 3)],

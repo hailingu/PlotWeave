@@ -11,10 +11,15 @@ interface ExportDialogProps {
 }
 
 /** 根据实际内容与开关态提示：仅有节拍/分支时引导开启大纲，无故事内容则说明空态。 */
-function bodyHint(showOutline: boolean, hasNarrative: boolean, hasOutline: boolean): string {
+function bodyHint(
+  showOutline: boolean,
+  hasNarrative: boolean,
+  hasOutline: boolean,
+): string {
   if (!hasNarrative && !hasOutline) return '暂无可导出的场景、对白、节奏或分支'
   if (showOutline) return '正文 = 场景 + 对白；创作大纲与分镜卡为附录'
-  if (!hasNarrative) return '正文为空（尚无场景与对白）；开启「创作大纲」可查看节奏与分支'
+  if (!hasNarrative)
+    return '正文为空（尚无场景与对白）；开启「创作大纲」可查看节奏与分支'
   return '正文 = 场景 + 对白；分镜卡见附录'
 }
 
@@ -26,7 +31,11 @@ function bodyHint(showOutline: boolean, hasNarrative: boolean, hasOutline: boole
  * 上一变体的复制回执。预览、复制与下载消费同一全文。Esc / 点击遮罩关闭。
  * 文件保存对话框随后续 Tauri 集成升级。
  */
-export default function ExportDialog({ projectName, model, onClose }: ExportDialogProps) {
+export default function ExportDialog({
+  projectName,
+  model,
+  onClose,
+}: ExportDialogProps) {
   const [showOutline, setShowOutline] = useState(false)
   const { copyAll, copied, resetCopied, download } = useScriptExportActions(
     showOutline ? model.outline : model.plain,
@@ -57,11 +66,18 @@ export default function ExportDialog({ projectName, model, onClose }: ExportDial
             本次导出：{model.scopeLine}
           </span>
           <span className="pw-sp" />
-          <button type="button" className="pw-dialog-x" onClick={onClose} aria-label="关闭">
+          <button
+            type="button"
+            className="pw-dialog-x"
+            onClick={onClose}
+            aria-label="关闭"
+          >
             ✕
           </button>
         </div>
-        <pre className="pw-export-pre">{showOutline ? model.outline : model.plain}</pre>
+        <pre className="pw-export-pre">
+          {showOutline ? model.outline : model.plain}
+        </pre>
         <div className="pw-dialog-foot">
           <label className="pw-export-toggle">
             <input
@@ -74,12 +90,22 @@ export default function ExportDialog({ projectName, model, onClose }: ExportDial
             />
             <span>创作大纲（节奏与分支）</span>
           </label>
-          <span className="pw-dialog-hint">{bodyHint(showOutline, model.hasNarrative, model.summary.hasOutline)}</span>
+          <span className="pw-dialog-hint">
+            {bodyHint(
+              showOutline,
+              model.hasNarrative,
+              model.summary.hasOutline,
+            )}
+          </span>
           <span className="pw-sp" />
           <button type="button" className="pw-dialog-btn" onClick={copyAll}>
             {copied ? '✓ 已复制' : '复制全文'}
           </button>
-          <button type="button" className="pw-dialog-btn pw-dialog-btn-primary" onClick={download}>
+          <button
+            type="button"
+            className="pw-dialog-btn pw-dialog-btn-primary"
+            onClick={download}
+          >
             下载 .md
           </button>
         </div>

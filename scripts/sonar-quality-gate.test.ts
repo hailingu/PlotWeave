@@ -1,4 +1,11 @@
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -151,7 +158,10 @@ esac`,
   return {
     curlStdin: readFileSync(curlStdinPath, { encoding: 'utf8', flag: 'a+' }),
     log: readFileSync(logPath, { encoding: 'utf8', flag: 'a+' }),
-    scannerToken: readFileSync(scannerTokenPath, { encoding: 'utf8', flag: 'a+' }),
+    scannerToken: readFileSync(scannerTokenPath, {
+      encoding: 'utf8',
+      flag: 'a+',
+    }),
     status: result.status,
     stderr: result.stderr,
     stdout: result.stdout,
@@ -172,12 +182,12 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
     const result = runGate('scripts/sonar-quality-gate.sh')
 
     expect(result.status).toBe(0)
-    expect(result.log.split('\n').filter(Boolean).map((line) => line.split(' ')[0])).toEqual([
-      'npm',
-      'sonar-scanner',
-      'curl',
-      'curl',
-    ])
+    expect(
+      result.log
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => line.split(' ')[0]),
+    ).toEqual(['npm', 'sonar-scanner', 'curl', 'curl'])
     expect(result.log).toContain('npm run test:coverage')
     expect(result.log).toContain('-Dsonar.qualitygate.wait=true')
     expect(result.log).toContain('-Dsonar.host.url=http://sonar.test')
@@ -188,7 +198,9 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
   })
 
   it('未显式配置 SonarQube 地址时阻止操作，避免误扫 SonarQube Cloud', () => {
-    const result = runGate('scripts/sonar-quality-gate.sh', { sonarHostUrl: null })
+    const result = runGate('scripts/sonar-quality-gate.sh', {
+      sonarHostUrl: null,
+    })
 
     expect(result.status).not.toBe(0)
     expect(result.log).toBe('')
@@ -203,17 +215,22 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
     expect(result.log).not.toContain('sonar-scanner')
   })
 
-  it.each(['missing', 'empty', 'malformed', 'uncovered'] as const)('覆盖率报告为 %s 时停止，不发布破坏性分析', (coverageMode) => {
-    const result = runGate('scripts/sonar-quality-gate.sh', { coverageMode })
+  it.each(['missing', 'empty', 'malformed', 'uncovered'] as const)(
+    '覆盖率报告为 %s 时停止，不发布破坏性分析',
+    (coverageMode) => {
+      const result = runGate('scripts/sonar-quality-gate.sh', { coverageMode })
 
-    expect(result.status).not.toBe(0)
-    expect(result.log).toContain('npm run test:coverage')
-    expect(result.log).not.toContain('sonar-scanner')
-    expect(`${result.stdout}${result.stderr}`).toContain('覆盖率报告')
-  })
+      expect(result.status).not.toBe(0)
+      expect(result.log).toContain('npm run test:coverage')
+      expect(result.log).not.toContain('sonar-scanner')
+      expect(`${result.stdout}${result.stderr}`).toContain('覆盖率报告')
+    },
+  )
 
   it('另一个门禁正在运行时停止，避免共享扫描目录互相覆盖', () => {
-    const result = runGate('scripts/sonar-quality-gate.sh', { lockOccupied: true })
+    const result = runGate('scripts/sonar-quality-gate.sh', {
+      lockOccupied: true,
+    })
 
     expect(result.status).not.toBe(0)
     expect(result.log).toBe('')
@@ -229,21 +246,27 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
   })
 
   it('Quality Gate 非 OK 时阻止提交', () => {
-    const result = runGate('scripts/sonar-quality-gate.sh', { qualityGateStatus: 'ERROR' })
+    const result = runGate('scripts/sonar-quality-gate.sh', {
+      qualityGateStatus: 'ERROR',
+    })
 
     expect(result.status).not.toBe(0)
     expect(`${result.stdout}${result.stderr}`).toContain('Quality Gate')
   })
 
   it('新增代码仍有未解决问题时阻止提交', () => {
-    const result = runGate('scripts/sonar-quality-gate.sh', { unresolvedIssues: 3 })
+    const result = runGate('scripts/sonar-quality-gate.sh', {
+      unresolvedIssues: 3,
+    })
 
     expect(result.status).not.toBe(0)
     expect(`${result.stdout}${result.stderr}`).toContain('3')
   })
 
   it('SONAR_TOKEN 经 curl 标准输入传 Authorization 头并以环境变量供扫描器，不进入命令参数或调用日志', () => {
-    const result = runGate('scripts/sonar-quality-gate.sh', { sonarToken: 'sqp_token-a.1' })
+    const result = runGate('scripts/sonar-quality-gate.sh', {
+      sonarToken: 'sqp_token-a.1',
+    })
 
     expect(result.status).toBe(0)
     expect(result.curlStdin).toContain('Authorization: Bearer sqp_token-a.1')
@@ -252,7 +275,9 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
   })
 
   it('未设 SONAR_TOKEN 时回退到 PLOTWEAVE_SONAR_TOKEN（如 ~/.zshrc 导出的值），扫描器与 API 调用同源', () => {
-    const result = runGate('scripts/sonar-quality-gate.sh', { plotweaveSonarToken: 'sqp_fallback~1' })
+    const result = runGate('scripts/sonar-quality-gate.sh', {
+      plotweaveSonarToken: 'sqp_fallback~1',
+    })
 
     expect(result.status).toBe(0)
     expect(result.curlStdin).toContain('Authorization: Bearer sqp_fallback~1')
@@ -280,19 +305,24 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
   })
 
   it('回退令牌含不支持字符时阻止操作', () => {
-    const result = runGate('scripts/sonar-quality-gate.sh', { plotweaveSonarToken: 'sqp_bad/token' })
+    const result = runGate('scripts/sonar-quality-gate.sh', {
+      plotweaveSonarToken: 'sqp_bad/token',
+    })
 
     expect(result.status).not.toBe(0)
     expect(`${result.stdout}${result.stderr}`).toContain('不支持的字符')
   })
 })
 
-describe.each(['.githooks/pre-commit', '.githooks/pre-push'])('%s', (hookPath) => {
-  it('执行同一个增量清零门禁并透传失败状态', () => {
-    const result = runGate(hookPath, { unresolvedIssues: 1 })
+describe.each(['.githooks/pre-commit', '.githooks/pre-push'])(
+  '%s',
+  (hookPath) => {
+    it('执行同一个增量清零门禁并透传失败状态', () => {
+      const result = runGate(hookPath, { unresolvedIssues: 1 })
 
-    expect(result.status).not.toBe(0)
-    expect(result.log).toContain('npm run test:coverage')
-    expect(`${result.stdout}${result.stderr}`).toContain('1')
-  })
-})
+      expect(result.status).not.toBe(0)
+      expect(result.log).toContain('npm run test:coverage')
+      expect(`${result.stdout}${result.stderr}`).toContain('1')
+    })
+  },
+)

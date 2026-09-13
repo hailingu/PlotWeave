@@ -28,14 +28,23 @@ describe('upsert_document · 阶段 A 形状校验', () => {
         {
           op: 'upsert_document',
           ref: 'bio',
-          fields: { title: '陈默小传', body: '沉默寡言的老刑警。', relatedIds: [{ kind: 'character', id: 'ch-1' }] },
+          fields: {
+            title: '陈默小传',
+            body: '沉默寡言的老刑警。',
+            relatedIds: [{ kind: 'character', id: 'ch-1' }],
+          },
         },
       ],
       settingsSnap(),
     )
     expect(v.ok).toBe(true)
     expect(v.items).toEqual([
-      { kind: 'create_entity', danger: false, key: 'ed0', label: '创建 文档 · 陈默小传' },
+      {
+        kind: 'create_entity',
+        danger: false,
+        key: 'ed0',
+        label: '创建 文档 · 陈默小传',
+      },
     ])
     expect(v.commands[0]).toMatchObject({
       op: 'upsert_document',
@@ -49,7 +58,13 @@ describe('upsert_document · 阶段 A 形状校验', () => {
 
   it('修改：entityId 指向既有文档，fields 只写要改的字段', () => {
     const v = validateAiBatch(
-      [{ op: 'upsert_document', entityId: 'doc-1', fields: { body: '新的世界观全文。' } }],
+      [
+        {
+          op: 'upsert_document',
+          entityId: 'doc-1',
+          fields: { body: '新的世界观全文。' },
+        },
+      ],
       settingsSnap(),
     )
     expect(v.ok).toBe(true)
@@ -58,7 +73,10 @@ describe('upsert_document · 阶段 A 形状校验', () => {
       kind: 'update_entity',
       label: '修改 文档 · 世界观（body 全文替换）',
     })
-    expect(v.commands[0]).toMatchObject({ entityId: 'doc-1', fields: { body: '新的世界观全文。' } })
+    expect(v.commands[0]).toMatchObject({
+      entityId: 'doc-1',
+      fields: { body: '新的世界观全文。' },
+    })
   })
 
   it('body 全文替换的预览标签显示字数变化，确认前可见丢文风险（PR #86 评审）', () => {
@@ -80,7 +98,9 @@ describe('upsert_document · 阶段 A 形状校验', () => {
       snap,
     )
     expect(v.ok).toBe(true)
-    expect(v.items[0].label).toBe('修改 文档 · 世界观（body 全文替换：旧 5000 字 → 新 2 字）')
+    expect(v.items[0].label).toBe(
+      '修改 文档 · 世界观（body 全文替换：旧 5000 字 → 新 2 字）',
+    )
     // 未写 body 的条目保持键名标签；标题投影随首个命令更新供后续标签
     expect(v.items[1].label).toBe('修改 文档 · 世界观（title）')
   })
@@ -88,9 +108,15 @@ describe('upsert_document · 阶段 A 形状校验', () => {
   it('阶段 A 整批拒绝：fields 非对象、白名单外字段、title/body 非字符串', () => {
     for (const [label, cmd] of [
       ['fields 非对象', { op: 'upsert_document', fields: 'not-an-object' }],
-      ['未知字段', { op: 'upsert_document', fields: { title: 't', gradient: 'red' } }],
+      [
+        '未知字段',
+        { op: 'upsert_document', fields: { title: 't', gradient: 'red' } },
+      ],
       ['title 非字符串', { op: 'upsert_document', fields: { title: 42 } }],
-      ['body 非字符串', { op: 'upsert_document', fields: { title: 't', body: [] } }],
+      [
+        'body 非字符串',
+        { op: 'upsert_document', fields: { title: 't', body: [] } },
+      ],
       [
         'relatedIds 条目非对象',
         { op: 'upsert_document', fields: { title: 't', relatedIds: ['ch-1'] } },
@@ -101,21 +127,30 @@ describe('upsert_document · 阶段 A 形状校验', () => {
           op: 'upsert_document',
           fields: {
             title: 't',
-            relatedIds: [
-              { kind: 'prop', id: 'p-1' },
-              { kind: 'character' },
-            ],
+            relatedIds: [{ kind: 'prop', id: 'p-1' }, { kind: 'character' }],
           },
         },
       ],
       [
         'relatedIds 非数组',
-        { op: 'upsert_document', fields: { title: 't', relatedIds: { kind: 'character', id: 'ch-1' } } },
+        {
+          op: 'upsert_document',
+          fields: { title: 't', relatedIds: { kind: 'character', id: 'ch-1' } },
+        },
       ],
-      ['entityId 在场但空白', { op: 'upsert_document', entityId: '  ', fields: { body: 'x' } }],
-      ['entityId 非字符串', { op: 'upsert_document', entityId: 7, fields: { body: 'x' } }],
+      [
+        'entityId 在场但空白',
+        { op: 'upsert_document', entityId: '  ', fields: { body: 'x' } },
+      ],
+      [
+        'entityId 非字符串',
+        { op: 'upsert_document', entityId: 7, fields: { body: 'x' } },
+      ],
     ] as const) {
-      const v = validateAiBatch([cmd as unknown as Record<string, unknown>], settingsSnap())
+      const v = validateAiBatch(
+        [cmd as unknown as Record<string, unknown>],
+        settingsSnap(),
+      )
       expect(v.ok, label).toBe(false)
       expect(v.issues.length, label).toBeGreaterThanOrEqual(1)
       expect(v.commands, label).toEqual([])
@@ -139,7 +174,10 @@ describe('upsert_document · 阶段 A 形状校验', () => {
   })
 
   it('未知操作名不被接受（upsert_documents 复数等）', () => {
-    const v = validateAiBatch([{ op: 'upsert_documents', fields: { title: 't' } }], settingsSnap())
+    const v = validateAiBatch(
+      [{ op: 'upsert_documents', fields: { title: 't' } }],
+      settingsSnap(),
+    )
     expect(v.ok).toBe(false)
     expect(v.issues[0]?.message).toContain('未知操作')
   })
@@ -152,7 +190,12 @@ describe('upsert_document · 阶段 B 折叠校验', () => {
       ['地点 id 填成 character 种类', [{ kind: 'character', id: 'loc-1' }]],
     ] as const) {
       const v = validateAiBatch(
-        [{ op: 'upsert_document', fields: { title: 't', relatedIds: related } }],
+        [
+          {
+            op: 'upsert_document',
+            fields: { title: 't', relatedIds: related },
+          },
+        ],
         settingsSnap(),
       )
       expect(v.ok, label).toBe(false)
@@ -193,7 +236,10 @@ describe('upsert_document · 阶段 B 折叠校验', () => {
         { op: 'upsert_character', ref: 'hero', fields: { name: '林晚' } },
         {
           op: 'upsert_document',
-          fields: { title: '林晚小传', relatedIds: [{ kind: 'character', id: 'hero' }] },
+          fields: {
+            title: '林晚小传',
+            relatedIds: [{ kind: 'character', id: 'hero' }],
+          },
         },
       ],
       settingsSnap(),
@@ -210,7 +256,10 @@ describe('upsert_document · 阶段 B 折叠校验', () => {
         { op: 'upsert_location', ref: 'shop', fields: { name: '当铺' } },
         {
           op: 'upsert_document',
-          fields: { title: 't', relatedIds: [{ kind: 'character', id: 'shop' }] },
+          fields: {
+            title: 't',
+            relatedIds: [{ kind: 'character', id: 'shop' }],
+          },
         },
       ],
       settingsSnap(),
@@ -239,7 +288,12 @@ describe('upsert_document · 阶段 B 折叠校验', () => {
     // update 挂 ref 别名后，别名与显式 id 解析到同一既有角色 → 重复关联
     const dupViaRef = validateAiBatch(
       [
-        { op: 'upsert_character', entityId: 'ch-1', ref: 'hero', fields: { bio: 'x' } },
+        {
+          op: 'upsert_character',
+          entityId: 'ch-1',
+          ref: 'hero',
+          fields: { bio: 'x' },
+        },
         {
           op: 'upsert_document',
           fields: {
@@ -285,11 +339,20 @@ describe('upsert_document · 阶段 B 折叠校验', () => {
       },
     }
     const v = validateAiBatch(
-      [{ op: 'upsert_document', entityId: ' doc-1 ', fields: { body: '新全文' } }],
+      [
+        {
+          op: 'upsert_document',
+          entityId: ' doc-1 ',
+          fields: { body: '新全文' },
+        },
+      ],
       paddedSnap,
     )
     expect(v.ok).toBe(true)
-    expect(v.commands[0]).toMatchObject({ entityId: ' doc-1 ', fields: { body: '新全文' } })
+    expect(v.commands[0]).toMatchObject({
+      entityId: ' doc-1 ',
+      fields: { body: '新全文' },
+    })
   })
 
   it('首错即停：失败文档命令之后的命令不点名', () => {

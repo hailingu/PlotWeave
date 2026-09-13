@@ -4,7 +4,9 @@ import { fireEvent } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { useEditorHotkeys, type EditorHotkeyActions } from './useEditorHotkeys'
 
-function mkActions(overrides: Partial<EditorHotkeyActions> = {}): EditorHotkeyActions {
+function mkActions(
+  overrides: Partial<EditorHotkeyActions> = {},
+): EditorHotkeyActions {
   return {
     onEscape: vi.fn(),
     onCloseTransient: vi.fn(),
@@ -24,7 +26,11 @@ describe('useEditorHotkeys（全局快捷键 + 失焦收起）', () => {
     renderHook(() => useEditorHotkeys(a))
     fireEvent.keyDown(document.body, { key: 'z', metaKey: true })
     expect(a.onUndo).toHaveBeenCalledTimes(1)
-    fireEvent.keyDown(document.body, { key: 'Z', metaKey: true, shiftKey: true })
+    fireEvent.keyDown(document.body, {
+      key: 'Z',
+      metaKey: true,
+      shiftKey: true,
+    })
     expect(a.onRedo).toHaveBeenCalledTimes(1)
     fireEvent.keyDown(document.body, { key: 'y', ctrlKey: true })
     expect(a.onRedo).toHaveBeenCalledTimes(2)
@@ -45,7 +51,10 @@ describe('useEditorHotkeys（全局快捷键 + 失焦收起）', () => {
   })
 
   it('Delete 删除选中：节点优先于连线；无选中不动作', () => {
-    const a = mkActions({ selectedNodeIds: () => ['n1', 'n2'], selectedEdgeIds: () => ['e1'] })
+    const a = mkActions({
+      selectedNodeIds: () => ['n1', 'n2'],
+      selectedEdgeIds: () => ['e1'],
+    })
     renderHook(() => useEditorHotkeys(a))
     fireEvent.keyDown(document.body, { key: 'Delete' })
     expect(a.onDeleteNodes).toHaveBeenCalledWith(['n1', 'n2'])

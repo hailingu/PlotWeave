@@ -10,13 +10,21 @@
  * （qqiqinqing）。本 hook 在组合期间只更新本地缓冲、不提交，compositionend
  * 才提交最终文本；非组合态仍逐键提交，编辑即命令语义不变。
  */
-import { useEffect, useRef, useState, type ChangeEvent, type CompositionEvent } from 'react'
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type CompositionEvent,
+} from 'react'
 
 /** 可直接展开到 input / textarea 上的组合安全受控值。 */
 export interface CompositionSafeValue {
   /** 展示值：组合期间为本地缓冲，其余时刻跟随外部值。 */
   readonly value: string
-  readonly onChange: (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => void
+  readonly onChange: (
+    event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
+  ) => void
   readonly onCompositionStart: () => void
   readonly onCompositionEnd: (
     event: CompositionEvent<HTMLInputElement | HTMLTextAreaElement>,

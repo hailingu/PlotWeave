@@ -44,7 +44,10 @@ describe('引用解析（失效引用返回 null，由调用方按 §4.3 渲染�
   it('角色：名字/头像（首字标签）', () => {
     expect(resolveCharacterName(settings, 'ch1')).toBe('林晚')
     expect(resolveCharacterName(settings, 'ghost')).toBeNull()
-    expect(resolveCharacterAvatar(settings, 'ch1')).toEqual({ label: '林', gradient: 'g1' })
+    expect(resolveCharacterAvatar(settings, 'ch1')).toEqual({
+      label: '林',
+      gradient: 'g1',
+    })
     expect(resolveCharacterAvatar(settings, 'ghost')).toBeNull()
   })
 
@@ -62,7 +65,11 @@ describe('normalizeSettings（旧文件缺省合并）', () => {
   it('非对象/缺字段补空集；合法数组透传', () => {
     expect(normalizeSettings(null)).toEqual({ characters: [], locations: [] })
     expect(normalizeSettings('x')).toEqual({ characters: [], locations: [] })
-    expect(normalizeSettings({ characters: [{ id: 'ch1', name: '林', gradient: 'g' }] })).toEqual({
+    expect(
+      normalizeSettings({
+        characters: [{ id: 'ch1', name: '林', gradient: 'g' }],
+      }),
+    ).toEqual({
       characters: [{ id: 'ch1', name: '林', gradient: 'g' }],
       locations: [],
     })
@@ -70,7 +77,9 @@ describe('normalizeSettings（旧文件缺省合并）', () => {
 
   it('props/documents 契约透传桶：合法数组原样保留，异型丢弃（v0 迁移回写不得丢道具/文档）', () => {
     const props = [{ id: 'pr1', name: '旧皮箱' }]
-    const documents = [{ id: 'doc1', title: '人物小传', body: '…', relatedIds: [] }]
+    const documents = [
+      { id: 'doc1', title: '人物小传', body: '…', relatedIds: [] },
+    ]
     expect(normalizeSettings({ props, documents })).toEqual({
       characters: [],
       locations: [],

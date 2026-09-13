@@ -11,9 +11,14 @@ export interface OpenProjectError {
 
 /** 横幅文案：列表可解析出项目名则点名失败项目，否则用通用说法——
  * 损坏文件可能在列表阶段被跳过而未进列表，不能假设 id 一定可解析。 */
-function openErrorText(error: OpenProjectError, projects: readonly ProjectSummary[]): string {
+function openErrorText(
+  error: OpenProjectError,
+  projects: readonly ProjectSummary[],
+): string {
   const name = projects.find((p) => p.id === error.id)?.name
-  return name ? `打开「${name}」失败：${error.detail}` : `打开项目失败：${error.detail}`
+  return name
+    ? `打开「${name}」失败：${error.detail}`
+    : `打开项目失败：${error.detail}`
 }
 
 /** 打开失败警示横幅（issue #98；自 HomePage 拆出以守祖父化组件行数，

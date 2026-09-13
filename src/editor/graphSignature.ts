@@ -25,7 +25,9 @@ export function graphSignature(
   settings: ProjectSettings,
 ): string {
   return JSON.stringify({
-    nodes: nodes.map((n) => stripRuntime(n, ['selected', 'dragging', 'measured', 'className'])),
+    nodes: nodes.map((n) =>
+      stripRuntime(n, ['selected', 'dragging', 'measured', 'className']),
+    ),
     edges: edges.map((e) => stripRuntime(e, ['selected', 'className'])),
     settings,
   })

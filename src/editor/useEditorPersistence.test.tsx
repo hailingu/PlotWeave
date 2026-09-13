@@ -6,7 +6,10 @@
  */
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { useEditorDocument, type EditorProjectContent } from './useEditorDocument'
+import {
+  useEditorDocument,
+  type EditorProjectContent,
+} from './useEditorDocument'
 import { useEditorPersistence } from './useEditorPersistence'
 import type { ProjectContent } from '../model/content'
 
@@ -41,19 +44,30 @@ describe('useEditorPersistence（§3/§10.2）', () => {
 
   it('onMoveEnd 更新视口 ref，并按最新视口构建文档落盘', async () => {
     const { result, onSave } = setup()
-    act(() => result.current.persistence.onMoveEnd(null, { x: 5, y: 6, zoom: 2 }))
-    expect(result.current.doc.viewportRef.current).toEqual({ x: 5, y: 6, zoom: 2 })
+    act(() =>
+      result.current.persistence.onMoveEnd(null, { x: 5, y: 6, zoom: 2 }),
+    )
+    expect(result.current.doc.viewportRef.current).toEqual({
+      x: 5,
+      y: 6,
+      zoom: 2,
+    })
 
     await flush()
     expect(onSave).toHaveBeenCalled()
     const saved = onSave.mock.calls[onSave.mock.calls.length - 1][0]
-    expect(saved).toMatchObject({ name: '测试项目', viewport: { x: 5, y: 6, zoom: 2 } })
+    expect(saved).toMatchObject({
+      name: '测试项目',
+      viewport: { x: 5, y: 6, zoom: 2 },
+    })
   })
 
   it('保存失败上浮横幅文案，自动重试成功后清除', async () => {
     const { result, onSave } = setup()
     onSave.mockRejectedValueOnce(new Error('磁盘已满'))
-    act(() => result.current.persistence.onMoveEnd(null, { x: 0, y: 0, zoom: 1 }))
+    act(() =>
+      result.current.persistence.onMoveEnd(null, { x: 0, y: 0, zoom: 1 }),
+    )
 
     await flush()
     expect(result.current.persistence.saveError).toBe('磁盘已满')
@@ -66,22 +80,38 @@ describe('useEditorPersistence（§3/§10.2）', () => {
     const { result, onSave } = setup()
     let releaseFirst!: () => void
     onSave.mockImplementationOnce(
-      () => new Promise<void>((resolve) => { releaseFirst = resolve }),
+      () =>
+        new Promise<void>((resolve) => {
+          releaseFirst = resolve
+        }),
     )
-    act(() => result.current.persistence.onMoveEnd(null, { x: 1, y: 1, zoom: 1 }))
-    await act(async () => { await vi.advanceTimersByTimeAsync(700) })
+    act(() =>
+      result.current.persistence.onMoveEnd(null, { x: 1, y: 1, zoom: 1 }),
+    )
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(700)
+    })
     expect(onSave).toHaveBeenCalledTimes(1)
 
     // 保存仍在途时登记等待者：旧文档落定不得兑现（它早于本次改动）
     let committed = false
-    const waiter = result.current.persistence.whenCanvasCommitted().then(() => { committed = true })
-    await act(async () => { releaseFirst(); await Promise.resolve() })
+    const waiter = result.current.persistence.whenCanvasCommitted().then(() => {
+      committed = true
+    })
+    await act(async () => {
+      releaseFirst()
+      await Promise.resolve()
+    })
     expect(committed).toBe(false)
 
     // 注册之后开始的保存成功落定才兑现
-    act(() => result.current.persistence.onMoveEnd(null, { x: 2, y: 2, zoom: 1 }))
+    act(() =>
+      result.current.persistence.onMoveEnd(null, { x: 2, y: 2, zoom: 1 }),
+    )
     await flush()
-    await act(async () => { await waiter })
+    await act(async () => {
+      await waiter
+    })
     expect(committed).toBe(true)
   })
 
@@ -89,15 +119,21 @@ describe('useEditorPersistence（§3/§10.2）', () => {
     const { result, onSave } = setup()
     onSave.mockRejectedValueOnce(new Error('磁盘已满'))
     let committed = false
-    const waiter = result.current.persistence.whenCanvasCommitted().then(() => { committed = true })
-    act(() => result.current.persistence.onMoveEnd(null, { x: 1, y: 1, zoom: 1 }))
+    const waiter = result.current.persistence.whenCanvasCommitted().then(() => {
+      committed = true
+    })
+    act(() =>
+      result.current.persistence.onMoveEnd(null, { x: 1, y: 1, zoom: 1 }),
+    )
 
     await flush()
     expect(result.current.persistence.saveError).toBe('磁盘已满')
     expect(committed).toBe(false)
 
     await flush()
-    await act(async () => { await waiter })
+    await act(async () => {
+      await waiter
+    })
     expect(committed).toBe(true)
   })
 })

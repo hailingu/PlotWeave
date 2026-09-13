@@ -5,10 +5,7 @@
  */
 import type { Edge } from '@xyflow/react'
 import type { CanvasNode } from '../editor/nodes/types'
-import {
-  branchOptionHandle,
-  branchOptionIdOf,
-} from '../editor/graphRules'
+import { branchOptionHandle, branchOptionIdOf } from '../editor/graphRules'
 import {
   newEntityId,
   normalizeSettings,
@@ -35,7 +32,9 @@ export function normalizeEpisodeTitles(
   }
   for (const [k, title] of Object.entries(v as Record<string, unknown>)) {
     if (!/^[1-9]\d*$/.test(k) || !Number.isSafeInteger(Number(k))) {
-      warnings?.push(`episodeTitles 键 "${k}" 不是规范十进制正整数（或超出安全整数范围），已删除`)
+      warnings?.push(
+        `episodeTitles 键 "${k}" 不是规范十进制正整数（或超出安全整数范围），已删除`,
+      )
       continue
     }
     if (typeof title !== 'string') {
@@ -87,13 +86,16 @@ export function migrateProjectDocument(
     prefix: string,
   ): { list: T[]; remap: Map<string, string> } => {
     const rawOf = (e: T): string | null =>
-      e !== null && typeof e === 'object' && typeof (e as { id?: unknown }).id === 'string'
+      e !== null &&
+      typeof e === 'object' &&
+      typeof (e as { id?: unknown }).id === 'string'
         ? ((e as { id?: unknown }).id as string)
         : null
     const blankCount = new Map<string, number>()
     for (const e of list) {
       const raw = rawOf(e)
-      if (raw !== null && !raw.trim()) blankCount.set(raw, (blankCount.get(raw) ?? 0) + 1)
+      if (raw !== null && !raw.trim())
+        blankCount.set(raw, (blankCount.get(raw) ?? 0) + 1)
     }
     const remap = new Map<string, string>()
     const seen = new Set<string>()
@@ -125,11 +127,10 @@ export function migrateProjectDocument(
   // props/documents 同款数组期重发：v0 数组里重复/非法 id 若留到键化
   // （toDocSettings 的 Object.fromEntries）才处理，同键折叠会永久丢弃
   // 除末见外的全部条目——迁移回写即丢失；两桶无被引用字段，重发即可
-  settings.props = reissueEntityIds(settings.props ?? [], 'prop').list as typeof settings.props
-  settings.documents = reissueEntityIds(
-    settings.documents ?? [],
-    'doc',
-  ).list as typeof settings.documents
+  settings.props = reissueEntityIds(settings.props ?? [], 'prop')
+    .list as typeof settings.props
+  settings.documents = reissueEntityIds(settings.documents ?? [], 'doc')
+    .list as typeof settings.documents
 
   /** 同桶空白 id 引用改写（迁移链 ⑤ 与 §11.1 第 3 步同款）：relatedIds 按
    * kind 对应桶改写，禁止跨命名空间。 */
@@ -179,13 +180,16 @@ export function migrateProjectDocument(
     if (exact) return exact.id
     if ([...label].length === 1) {
       const prefixHits = candidates.filter(
-        (c) => (gradient === undefined || c.gradient === gradient) && nameOf(c).startsWith(label),
+        (c) =>
+          (gradient === undefined || c.gradient === gradient) &&
+          nameOf(c).startsWith(label),
       )
       if (prefixHits.length === 1) return prefixHits[0].id
     }
     // 新建 id 避开本域已有键与本轮已分配 id（§11 兼容子步骤）
     let fresh = newEntityId('ch')
-    while (settings.characters.some((c) => c.id === fresh)) fresh = newEntityId('ch')
+    while (settings.characters.some((c) => c.id === fresh))
+      fresh = newEntityId('ch')
     const entity = {
       id: fresh,
       name: label,
@@ -205,7 +209,8 @@ export function migrateProjectDocument(
     )
     if (hit) return hit.id
     let fresh = newEntityId('loc')
-    while (settings.locations.some((l) => l.id === fresh)) fresh = newEntityId('loc')
+    while (settings.locations.some((l) => l.id === fresh))
+      fresh = newEntityId('loc')
     const entity = { id: fresh, name }
     settings.locations.push(entity)
     migrated = true
@@ -231,8 +236,8 @@ export function migrateProjectDocument(
       : null
     let characterIds: string[]
     if (Array.isArray(avatars)) {
-      const avatarIds = (avatars as { label: string; gradient?: string }[]).map((av) =>
-        ensureCharacter(av.label, av.gradient),
+      const avatarIds = (avatars as { label: string; gradient?: string }[]).map(
+        (av) => ensureCharacter(av.label, av.gradient),
       )
       characterIds = [...avatarIds, ...(existingIds ?? [])].filter(
         (id, i, all) => all.indexOf(id) === i,
@@ -252,7 +257,9 @@ export function migrateProjectDocument(
     if (typeof d.location === 'string') {
       const locationName = d.location.trim()
       if (!locationName) {
-        warnings?.push(`节点 ${String(node.id)} 的旧地点镜像为空白，已删除（不建实体）`)
+        warnings?.push(
+          `节点 ${String(node.id)} 的旧地点镜像为空白，已删除（不建实体）`,
+        )
       } else if (!(typeof locationId === 'string' && locationId.trim())) {
         locationId = ensureLocation(locationName)
       }
@@ -276,13 +283,23 @@ export function migrateProjectDocument(
       const d = node.data
       const lines = d.lines.map((line) => {
         let next = line
-        if (next.kind === 'line' && next.speaker && typeof next.speaker === 'object') {
+        if (
+          next.kind === 'line' &&
+          next.speaker &&
+          typeof next.speaker === 'object'
+        ) {
           const av = next.speaker as { label: string; gradient?: string }
           migrated = true
           next = { ...next, speaker: ensureCharacter(av.label, av.gradient) }
-        } else if (typeof next.speaker === 'string' && characterRemap.has(next.speaker)) {
+        } else if (
+          typeof next.speaker === 'string' &&
+          characterRemap.has(next.speaker)
+        ) {
           // 字符串 speaker 随空白 id 重发改写（⑤）
-          next = { ...next, speaker: characterRemap.get(next.speaker) as string }
+          next = {
+            ...next,
+            speaker: characterRemap.get(next.speaker) as string,
+          }
         }
         if (typeof next.id !== 'string') {
           migrated = true
@@ -354,12 +371,16 @@ export function rewriteIndexOptionHandles(
       const src = nodesById.get(e.source)
       if (src?.type !== 'branch') return e
       if (!/^(0|[1-9]\d*)$/.test(optionId)) {
-        warnings?.push(`边 ${e.id} 的旧下标句柄 ${String(e.sourceHandle)} 非规范书写（须 0 基规范十进制），已隔离`)
+        warnings?.push(
+          `边 ${e.id} 的旧下标句柄 ${String(e.sourceHandle)} 非规范书写（须 0 基规范十进制），已隔离`,
+        )
         return null
       }
       const option = src.data.options[Number(optionId)]
       if (option) return { ...e, sourceHandle: branchOptionHandle(option.id) }
-      warnings?.push(`边 ${e.id} 的旧下标句柄 ${String(e.sourceHandle)} 越界或指向已删选项，已隔离`)
+      warnings?.push(
+        `边 ${e.id} 的旧下标句柄 ${String(e.sourceHandle)} 越界或指向已删选项，已隔离`,
+      )
       return null
     })
     .filter((e): e is Edge => e !== null)

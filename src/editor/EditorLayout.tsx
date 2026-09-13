@@ -40,7 +40,9 @@ export default function EditorLayout(props: EditorLayoutProps) {
           message={`自动保存失败：${persistence.saveError}（修改已保留，正在自动重试；可检查磁盘后继续编辑）`}
         />
       )}
-      {props.actionError !== null && <ErrorBanner message={props.actionError} />}
+      {props.actionError !== null && (
+        <ErrorBanner message={props.actionError} />
+      )}
       <div className="editor-body">
         <LeftPanel
           open={panels.leftOpen}
@@ -70,7 +72,9 @@ export default function EditorLayout(props: EditorLayoutProps) {
           }}
           projectId={project.id}
           selectedNode={view.selectedNode}
-          attachedShotCount={view.selectedNode ? view.shotCountOf(view.selectedNode.id) : 0}
+          attachedShotCount={
+            view.selectedNode ? view.shotCountOf(view.selectedNode.id) : 0
+          }
           settings={doc.settings}
           onOpenSettings={props.onOpenSettings}
           canvasDigest={ai.canvasDigest}

@@ -1,12 +1,19 @@
 import WeaveCover from './WeaveCover'
-import { formatRelativeTime, projectStatsLabel, type ProjectSummary } from './projects'
+import {
+  formatRelativeTime,
+  projectStatsLabel,
+  type ProjectSummary,
+} from './projects'
 
 interface ProjectCardProps {
   readonly project: ProjectSummary
   /** 单击海报打开项目（docs/ui-design.md §3.2；应用方修订：由双击改单击）。 */
   readonly onOpen: (id: string) => void
   /** 右键海报或点悬停 ⋯ 按钮弹出项目菜单（§3.2）。 */
-  readonly onMenu: (e: { clientX: number; clientY: number; preventDefault: () => void }, project: ProjectSummary) => void
+  readonly onMenu: (
+    e: { clientX: number; clientY: number; preventDefault: () => void },
+    project: ProjectSummary,
+  ) => void
 }
 
 /**
@@ -15,10 +22,12 @@ interface ProjectCardProps {
  * 宽度由网格列固定（180–220pt），卡片自身不拉伸。
  * 悬停右上角浮现 ⋯ 菜单按钮，与右键同源（§3.2）。
  */
-export default function ProjectCard({ project, onOpen, onMenu }: ProjectCardProps) {
-  const posterStyle = project.cover
-    ? { background: project.cover }
-    : undefined
+export default function ProjectCard({
+  project,
+  onOpen,
+  onMenu,
+}: ProjectCardProps) {
+  const posterStyle = project.cover ? { background: project.cover } : undefined
   return (
     <div className="project-card">
       <button

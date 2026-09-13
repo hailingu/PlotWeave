@@ -7,7 +7,10 @@ import { act, renderHook } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { Edge } from '@xyflow/react'
 import { useCanvasView } from './useCanvasView'
-import { useEditorDocument, type EditorProjectContent } from './useEditorDocument'
+import {
+  useEditorDocument,
+  type EditorProjectContent,
+} from './useEditorDocument'
 import type { CanvasNode } from './nodes/types'
 
 const scene = (id: string, name: string, episodeNo?: number): CanvasNode =>
@@ -44,14 +47,26 @@ const shot = {
 } as unknown as CanvasNode
 
 const EDGES: Edge[] = [
-  { id: 'e-attach', source: 's1', target: 'sh1', sourceHandle: 'shots', selected: true },
+  {
+    id: 'e-attach',
+    source: 's1',
+    target: 'sh1',
+    sourceHandle: 'shots',
+    selected: true,
+  },
   { id: 'e-seq', source: 'b1', target: 's1', className: 'pw-edge-sequence' },
 ]
 
 const PROJECT: EditorProjectContent = {
   id: 'p1',
   name: '测试项目',
-  nodes: [scene('s1', '天台', 1), scene('s2', '车站', 2), shot, beat('b1', 1), beat('b2')],
+  nodes: [
+    scene('s1', '天台', 1),
+    scene('s2', '车站', 2),
+    shot,
+    beat('b1', 1),
+    beat('b2'),
+  ],
   edges: EDGES,
   settings: { characters: [], locations: [] },
 }
@@ -78,7 +93,9 @@ describe('useCanvasView（§3.5/§7.2 派生与定位）', () => {
       status: 'fulfilled',
       sceneLabel: '场 01 · 天台',
     })
-    expect(result.current.view.beatFulfillmentOf('b2')).toEqual({ status: 'pending' })
+    expect(result.current.view.beatFulfillmentOf('b2')).toEqual({
+      status: 'pending',
+    })
     expect(result.current.view.beatFulfillmentOf('s1')).toBeNull()
   })
 
@@ -103,7 +120,13 @@ describe('useCanvasView（§3.5/§7.2 派生与定位）', () => {
   it('locateNode：单选该节点并居中', () => {
     const { result, fitView } = setup()
     act(() => result.current.view.locateNode('s2'))
-    expect(result.current.doc.nodes.filter((n) => n.selected).map((n) => n.id)).toEqual(['s2'])
-    expect(fitView).toHaveBeenCalledWith({ nodes: [{ id: 's2' }], duration: 400, maxZoom: 1 })
+    expect(
+      result.current.doc.nodes.filter((n) => n.selected).map((n) => n.id),
+    ).toEqual(['s2'])
+    expect(fitView).toHaveBeenCalledWith({
+      nodes: [{ id: 's2' }],
+      duration: 400,
+      maxZoom: 1,
+    })
   })
 })

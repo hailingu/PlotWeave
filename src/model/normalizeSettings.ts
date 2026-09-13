@@ -8,7 +8,12 @@ import { isPlainObject, plainObjectEntries } from './jsonGuards'
 import { uid } from '../uid'
 import type { StoryNode } from './document'
 
-const SETTINGS_BUCKETS = ['characters', 'locations', 'props', 'documents'] as const
+const SETTINGS_BUCKETS = [
+  'characters',
+  'locations',
+  'props',
+  'documents',
+] as const
 
 /** relatedIds 成员的非法原因（§6 的 {kind,id} 显式成对：kind ∈
  * character/location、id 字符串；(kind,id) 数组内唯一——重复关联会让
@@ -18,7 +23,8 @@ const SETTINGS_BUCKETS = ['characters', 'locations', 'props', 'documents'] as co
  * 在那里移除——提前删除会把有效关联连同空白键实体一起误杀。 */
 function relatedIdIssue(r: unknown, seen: Set<string>): string | null {
   if (!isPlainObject(r)) return '异型（非普通对象）'
-  if (r.kind !== 'character' && r.kind !== 'location') return `kind 未知（${String(r.kind)}）`
+  if (r.kind !== 'character' && r.kind !== 'location')
+    return `kind 未知（${String(r.kind)}）`
   if (typeof r.id !== 'string') return 'id 非字符串'
   const pair = `${r.kind} ${r.id}`
   if (seen.has(pair)) return '与首见项 (kind, id) 重复'
@@ -31,7 +37,11 @@ function relatedIdIssue(r: unknown, seen: Set<string>): string | null {
  * (kind,id) 对（保留首见）逐项移除并警告——空白字符串 id 暂留待空键重发
  * 改写（见 relatedIdIssue）。非法关联若原样进会话会以 typed
  * DocumentEntity 暴露给反向索引/导航，且保存边界只验桶容器、会原样落盘。 */
-function normalizeRelatedIds(key: string, entry: Record<string, unknown>, warnings: string[]): void {
+function normalizeRelatedIds(
+  key: string,
+  entry: Record<string, unknown>,
+  warnings: string[],
+): void {
   const related = entry.relatedIds
   if (!Array.isArray(related)) {
     warnings.push(`设定文档 ${key} 的 relatedIds 缺失或非数组，已重置为空数组`)
@@ -41,7 +51,8 @@ function normalizeRelatedIds(key: string, entry: Record<string, unknown>, warnin
   const seen = new Set<string>()
   const kept = related.filter((r: unknown) => {
     const issue = relatedIdIssue(r, seen)
-    if (issue) warnings.push(`设定文档 ${key} 的 relatedIds 成员${issue}，已移除`)
+    if (issue)
+      warnings.push(`设定文档 ${key} 的 relatedIds 成员${issue}，已移除`)
     return issue === null
   })
   if (kept.length !== related.length) entry.relatedIds = kept
@@ -54,7 +65,11 @@ export function normalizeSettingsBuckets(
 ): Record<string, Record<string, unknown>> {
   const settings: Record<string, Record<string, unknown>> = {}
   for (const bucket of SETTINGS_BUCKETS) {
-    settings[bucket] = plainObjectEntries(settingsRaw[bucket], `settings.${bucket}`, warnings)
+    settings[bucket] = plainObjectEntries(
+      settingsRaw[bucket],
+      `settings.${bucket}`,
+      warnings,
+    )
   }
   for (const [k, v] of Object.entries(settings.documents)) {
     // 桶成员已经上方过滤为普通对象；title/body 形状与键修复在
@@ -97,7 +112,9 @@ function stripWrongTypedOptionalFields(
 ): void {
   for (const field of fields) {
     if (entry[field] !== undefined && typeof entry[field] !== 'string') {
-      warnings.push(`settings.${bucket} 条目 ${key} 的可选字段 ${field} 非字符串，已剥离`)
+      warnings.push(
+        `settings.${bucket} 条目 ${key} 的可选字段 ${field} 非字符串，已剥离`,
+      )
       delete entry[field]
     }
   }
@@ -124,7 +141,9 @@ export function reKeyBlankEntries(
     record[fresh] = entry
     entry.id = fresh
     remap.set(key, fresh)
-    warnings.push(`${bucketLabel} 存在空记录键，已重发新键 ${fresh}（值内 id 随键同步）`)
+    warnings.push(
+      `${bucketLabel} 存在空记录键，已重发新键 ${fresh}（值内 id 随键同步）`,
+    )
   }
   return remap
 }
@@ -191,18 +210,34 @@ function rewriteSceneBlankRefs(
 ): void {
   if (Array.isArray(spec.characterIds)) {
     const remapped = (spec.characterIds as unknown[]).map((cid, i) =>
-      rewriteRef(remaps.characters, cid, `节点 ${nid} 的 characterIds[${i}]`, warnings),
+      rewriteRef(
+        remaps.characters,
+        cid,
+        `节点 ${nid} 的 characterIds[${i}]`,
+        warnings,
+      ),
     )
-    const kept = remapped.filter((cid) => !(typeof cid === 'string' && !cid.trim()))
+    const kept = remapped.filter(
+      (cid) => !(typeof cid === 'string' && !cid.trim()),
+    )
     if (kept.length !== remapped.length) {
-      warnings.push(`节点 ${nid} 的 characterIds 含无映射可改写的空白引用，已移除`)
+      warnings.push(
+        `节点 ${nid} 的 characterIds 含无映射可改写的空白引用，已移除`,
+      )
     }
     spec.characterIds = kept
   }
   if ('locationId' in spec) {
-    spec.locationId = rewriteRef(remaps.locations, spec.locationId, `节点 ${nid} 的 locationId`, warnings)
+    spec.locationId = rewriteRef(
+      remaps.locations,
+      spec.locationId,
+      `节点 ${nid} 的 locationId`,
+      warnings,
+    )
     if (typeof spec.locationId === 'string' && !spec.locationId.trim()) {
-      warnings.push(`节点 ${nid} 的 locationId 为无映射可改写的空白引用，已移除`)
+      warnings.push(
+        `节点 ${nid} 的 locationId 为无映射可改写的空白引用，已移除`,
+      )
       delete spec.locationId
     }
   }
@@ -218,12 +253,19 @@ function rewriteDialogueBlankRefs(
   if (!Array.isArray(spec.lines)) return
   for (const [i, line] of (spec.lines as unknown[]).entries()) {
     if (!isPlainObject(line) || !('speaker' in line)) continue
-    line.speaker = rewriteRef(characters, line.speaker, `节点 ${nid} 的对白行 ${i} speaker`, warnings)
+    line.speaker = rewriteRef(
+      characters,
+      line.speaker,
+      `节点 ${nid} 的对白行 ${i} speaker`,
+      warnings,
+    )
     // 空键重发改写后仍空白且无映射（§8.1 共同值域之外、不可恢复）直接
     // 移除——与场景/分镜路径同口径：原样保留只会展示/落盘虚构的
     // 「已删除说话人」引用
     if (typeof line.speaker === 'string' && !line.speaker.trim()) {
-      warnings.push(`节点 ${nid} 的对白行 ${i} speaker 为无映射可改写的空白引用，已移除`)
+      warnings.push(
+        `节点 ${nid} 的对白行 ${i} speaker 为无映射可改写的空白引用，已移除`,
+      )
       delete line.speaker
     }
   }
@@ -247,9 +289,16 @@ function rewriteShotBlankRefs(
       kept.push(ref)
       continue
     }
-    const next = rewriteRef(remaps.assets, ref.assetId, `节点 ${nid} 的分镜引用 ${String(ref.id)}`, warnings)
+    const next = rewriteRef(
+      remaps.assets,
+      ref.assetId,
+      `节点 ${nid} 的分镜引用 ${String(ref.id)}`,
+      warnings,
+    )
     if (typeof next === 'string' && !next.trim()) {
-      warnings.push(`节点 ${nid} 的分镜引用 ${String(ref.id)} 的 assetId 空白且无空键资产映射，已移除`)
+      warnings.push(
+        `节点 ${nid} 的分镜引用 ${String(ref.id)} 的 assetId 空白且无空键资产映射，已移除`,
+      )
       continue
     }
     ref.assetId = next
@@ -297,14 +346,22 @@ function replaceMentionLiterals(
 
 /** 设定文档 relatedIds 的空键改写（§11.1 第 3 步，六十六轮）：按 kind
  * 对应桶改写（禁止跨命名空间）；改写后仍指向空白 id 且无对应重发的项
- * 移除并警告。 */function rewriteDocumentBlankRefs(
+ * 移除并警告。 */ function rewriteDocumentBlankRefs(
   settings: Record<string, Record<string, unknown>>,
   remaps: BlankKeyRemaps,
   warnings: string[],
 ): void {
-  for (const [key, doc] of Object.entries(settings.documents) as [string, Record<string, unknown>][]) {
+  for (const [key, doc] of Object.entries(settings.documents) as [
+    string,
+    Record<string, unknown>,
+  ][]) {
     if (!Array.isArray(doc.relatedIds)) continue
-    doc.relatedIds = rewrittenDocumentRelations(key, doc.relatedIds as unknown[], remaps, warnings)
+    doc.relatedIds = rewrittenDocumentRelations(
+      key,
+      doc.relatedIds as unknown[],
+      remaps,
+      warnings,
+    )
   }
 }
 
@@ -317,11 +374,16 @@ function rewrittenDocumentRelations(
 ): unknown[] {
   const kept: unknown[] = []
   for (const r of related) {
-    if (!isPlainObject(r) || (r.kind !== 'character' && r.kind !== 'location')) continue
+    if (!isPlainObject(r) || (r.kind !== 'character' && r.kind !== 'location'))
+      continue
     const map = r.kind === 'character' ? remaps.characters : remaps.locations
-    if (typeof r.id === 'string' && map.has(r.id)) r.id = map.get(r.id) as string
+    if (typeof r.id === 'string' && map.has(r.id))
+      r.id = map.get(r.id) as string
     if (typeof r.id === 'string' && r.id.trim()) kept.push(r)
-    else warnings.push(`设定文档 ${key} 的 relatedIds 项指向空白 id 且无对应重发，已移除`)
+    else
+      warnings.push(
+        `设定文档 ${key} 的 relatedIds 项指向空白 id 且无对应重发，已移除`,
+      )
   }
   return kept
 }
@@ -341,18 +403,30 @@ export function rewriteBlankKeyReferences(
     // 只做引用字段的重发改写，字段域由各 rewrite*BlankRefs 谓词背书
     const spec = n.data.spec as unknown as Record<string, unknown>
     if (n.type === 'scene') rewriteSceneBlankRefs(n.id, spec, remaps, warnings)
-    if (n.type === 'dialogue') rewriteDialogueBlankRefs(n.id, spec, remaps.characters, warnings)
+    if (n.type === 'dialogue')
+      rewriteDialogueBlankRefs(n.id, spec, remaps.characters, warnings)
     if (n.type === 'shot') rewriteShotBlankRefs(n.id, spec, remaps, warnings)
-    if (n.type === 'image') rewriteImageBlankRefs(n.id, spec, remaps.assets, warnings)
+    if (n.type === 'image')
+      rewriteImageBlankRefs(n.id, spec, remaps.assets, warnings)
   }
-  for (const [key, ch] of Object.entries(settings.characters) as [string, Record<string, unknown>][]) {
+  for (const [key, ch] of Object.entries(settings.characters) as [
+    string,
+    Record<string, unknown>,
+  ][]) {
     if (!('avatarAssetId' in ch)) continue
-    ch.avatarAssetId = rewriteRef(remaps.assets, ch.avatarAssetId, `角色 ${key} 的 avatarAssetId`, warnings)
+    ch.avatarAssetId = rewriteRef(
+      remaps.assets,
+      ch.avatarAssetId,
+      `角色 ${key} 的 avatarAssetId`,
+      warnings,
+    )
     // 空键重发改写后仍空白且无映射（§8.1 共同值域之外、不可恢复）直接
     // 移除——与场景/对白/分镜路径同口径：原样保留只会每次加载警告悬空、
     // 原样落盘，恢复不了非空白 id 不变量
     if (typeof ch.avatarAssetId === 'string' && !ch.avatarAssetId.trim()) {
-      warnings.push(`角色 ${key} 的 avatarAssetId 为无映射可改写的空白引用，已移除`)
+      warnings.push(
+        `角色 ${key} 的 avatarAssetId 为无映射可改写的空白引用，已移除`,
+      )
       delete ch.avatarAssetId
     }
   }
@@ -372,7 +446,12 @@ function rewriteImageBlankRefs(
   if (!isPlainObject(outputs)) return
   const primary = outputs.primary
   if (!isPlainObject(primary) || typeof primary.assetId !== 'string') return
-  const next = rewriteRef(assetRemap, primary.assetId, `节点 ${nid} 的图片产物引用`, warnings)
+  const next = rewriteRef(
+    assetRemap,
+    primary.assetId,
+    `节点 ${nid} 的图片产物引用`,
+    warnings,
+  )
   if (typeof next === 'string' && !next.trim()) {
     warnings.push(`节点 ${nid} 的图片产物引用空白且无空键资产映射，已剥离`)
     delete outputs.primary
@@ -395,13 +474,24 @@ export function normalizeEntityShapes(
     props: ['description'],
     documents: [],
   }
-  for (const bucket of ['characters', 'locations', 'props', 'documents'] as const) {
+  for (const bucket of [
+    'characters',
+    'locations',
+    'props',
+    'documents',
+  ] as const) {
     const entries = settings[bucket]
     // 桶成员已经 plainObjectEntries/成员过滤保证为普通对象
-    for (const [key, entry] of Object.entries(entries) as [string, Record<string, unknown>][]) {
+    for (const [key, entry] of Object.entries(entries) as [
+      string,
+      Record<string, unknown>,
+    ][]) {
       const reason = entityIsolationReason(bucket, entry)
       if (reason) {
-        const label = bucket === 'characters' ? `角色 ${key}` : `settings.${bucket} 条目 ${key}`
+        const label =
+          bucket === 'characters'
+            ? `角色 ${key}`
+            : `settings.${bucket} 条目 ${key}`
         warnings.push(`${label} 的 ${reason}，已隔离`)
         delete entries[key]
         continue
@@ -415,7 +505,13 @@ export function normalizeEntityShapes(
         )
         entry.id = key
       }
-      stripWrongTypedOptionalFields(bucket, key, entry, optionalStringFields[bucket], warnings)
+      stripWrongTypedOptionalFields(
+        bucket,
+        key,
+        entry,
+        optionalStringFields[bucket],
+        warnings,
+      )
     }
   }
 }

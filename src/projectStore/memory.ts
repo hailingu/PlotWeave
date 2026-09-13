@@ -9,7 +9,10 @@ import type { ProjectContent } from '../model/content'
 import { seedProjects } from './seeds'
 import type { ProjectSummary } from '../home/projects'
 
-const memoryStore = new Map<string, { doc: ProjectContent; updatedAt: number }>()
+const memoryStore = new Map<
+  string,
+  { doc: ProjectContent; updatedAt: number }
+>()
 let memorySeeded = false
 
 /** 会话文档 → 归一化后的会话文档（serialize 剥离运行态 + parse 重置选中态）；
@@ -39,9 +42,7 @@ export function memoryList(): ProjectSummary[] {
     nodes.filter((n) => n.type === 'scene').length
   return [...memoryStore.entries()]
     .map(([id, { doc, updatedAt }]) => {
-      const hasOutgoing = new Set(
-        doc.edges.map((e) => e.source),
-      )
+      const hasOutgoing = new Set(doc.edges.map((e) => e.source))
       const endings = doc.nodes.filter(
         (n) => n.type === 'scene' && !hasOutgoing.has(n.id),
       ).length
@@ -80,7 +81,10 @@ export async function memoryLoad(id: string): Promise<ProjectContent> {
   return JSON.parse(JSON.stringify(entry.doc)) as ProjectContent
 }
 
-export async function memorySave(id: string, doc: ProjectContent): Promise<void> {
+export async function memorySave(
+  id: string,
+  doc: ProjectContent,
+): Promise<void> {
   memoryStore.set(id, { doc: memoryNormalize(doc, id), updatedAt: Date.now() })
 }
 

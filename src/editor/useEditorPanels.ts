@@ -4,7 +4,12 @@
  * 与右键菜单。失焦收起所需的两个批量关闭回调也收口在此，供快捷键 hook
  * 直接消费（Escape 连导出对话框一起收，画布外 pointerdown 只收瞬态浮层）。
  */
-import { useCallback, useState, type Dispatch, type SetStateAction } from 'react'
+import {
+  useCallback,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from 'react'
 import type { RightTab } from './panels/RightPanel'
 
 /** 左右栏初始宽度（§3.4 可调区间 220–320pt 的居中默认值）。 */

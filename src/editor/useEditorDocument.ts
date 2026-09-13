@@ -5,7 +5,14 @@
  * 闭包必须在 setState updater 之外读到最新状态（StrictMode 下 updater 双调）。
  * 返回对象按字段 memo：状态不变时保持引用稳定，下游 useMemo/useCallback 有效。
  */
-import { useMemo, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
+import {
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type MutableRefObject,
+  type SetStateAction,
+} from 'react'
 import {
   useEdgesState,
   useNodesState,
@@ -53,8 +60,12 @@ export interface EditorDocument {
 }
 
 /** 从项目会话内容初始化文档状态，并建立镜像 ref 与视口 ref。 */
-export function useEditorDocument(project: EditorProjectContent): EditorDocument {
-  const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNode>(project.nodes)
+export function useEditorDocument(
+  project: EditorProjectContent,
+): EditorDocument {
+  const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNode>(
+    project.nodes,
+  )
   const [edges, setEdges, onEdgesChange] = useEdgesState(project.edges)
   const [settings, setSettings] = useState<ProjectSettings>(project.settings)
   /** 大纲集标题（§3.5）与集聚焦态：聚焦时该集节点提亮、其余降透明度。 */
@@ -104,13 +115,13 @@ export function useEditorDocument(project: EditorProjectContent): EditorDocument
       setAssets,
       focusedEpisode,
       setFocusedEpisode,
-    nodesRef,
-    edgesRef,
-    settingsRef,
-    assetsRef,
-    episodeTitlesRef,
-    viewportRef,
-  }),
+      nodesRef,
+      edgesRef,
+      settingsRef,
+      assetsRef,
+      episodeTitlesRef,
+      viewportRef,
+    }),
     [
       nodes,
       setNodes,

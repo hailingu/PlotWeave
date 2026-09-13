@@ -82,12 +82,22 @@ export default function EditorTitlebar({
       >
         ↪︎
       </button>
-      <button type="button" className="editor-back" onClick={onBackHome} aria-label="返回首页">
+      <button
+        type="button"
+        className="editor-back"
+        onClick={onBackHome}
+        aria-label="返回首页"
+      >
         ‹ 首页
       </button>
       {/* 项目名居中（§3.3 中区）：点击内联重命名 */}
       <span className="editor-title">
-        <EditableName value={projectName} ariaLabel="项目名" singleClick onChange={onRenameProject} />
+        <EditableName
+          value={projectName}
+          ariaLabel="项目名"
+          singleClick
+          onChange={onRenameProject}
+        />
       </span>
       <div className="editor-plus">
         <button

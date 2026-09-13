@@ -9,7 +9,10 @@ import type { ShotRef } from './nodes/types'
 
 /** 库资产可绑的引用位 kind：audio/* 一律落音频位；角色/场景分类的 image/*
  * 映射到对应 kind；其余分类与错配 MIME 返回 null（该资产无引用位语义）。 */
-export function shotRefKindForAsset(asset: { kind: string; mime: string }): ShotRef['kind'] | null {
+export function shotRefKindForAsset(asset: {
+  kind: string
+  mime: string
+}): ShotRef['kind'] | null {
   if (asset.mime.startsWith('audio/')) return 'audio'
   const kind = asset.kind
   if (kind !== 'character' && kind !== 'location') return null

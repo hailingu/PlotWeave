@@ -26,7 +26,10 @@ type SpliceEdge = {
 }
 
 const pairSig = (pairs: Array<{ source: string; target: string }>): string =>
-  pairs.map((p) => `${p.source}->${p.target}`).sort(compareCodeUnits).join(',')
+  pairs
+    .map((p) => `${p.source}->${p.target}`)
+    .sort(compareCodeUnits)
+    .join(',')
 
 /** id 是否剧情流成员（只有 attach 下挂边的分镜卡不算）。 */
 function isSpineMember(seq: SpliceEdge[], id: string): boolean {
@@ -57,12 +60,16 @@ function insertionNeighbors(
   if (position === 'after') {
     const upstream = anchorId
     const downstream =
-      upstream === prev ? next : (remaining.find((e) => e.source === upstream)?.target ?? null)
+      upstream === prev
+        ? next
+        : (remaining.find((e) => e.source === upstream)?.target ?? null)
     return { upstream, downstream }
   }
   const downstream = anchorId
   const upstream =
-    downstream === next ? prev : (remaining.find((e) => e.target === downstream)?.source ?? null)
+    downstream === next
+      ? prev
+      : (remaining.find((e) => e.target === downstream)?.source ?? null)
   return { upstream, downstream }
 }
 
@@ -81,32 +88,46 @@ export function planSpliceIntoSpine(
   const seq = edges.filter((e) => edgeKindOf(e) === 'sequence')
   // 锚点必须是剧情流成员（只有 attach 下挂边的分镜卡不可作锚点）
   if (!isSpineMember(seq, anchorId)) return null
-  const mine = seq.filter((e) => e.source === draggedId || e.target === draggedId)
+  const mine = seq.filter(
+    (e) => e.source === draggedId || e.target === draggedId,
+  )
   const mineIds = new Set(mine.map((e) => e.id))
   const remaining = seq.filter((e) => !mineIds.has(e.id))
 
   // 原位前邻/后邻（恰各一条时才可缝合；多出口的分叉不擅自直连）
   const prev = uniquePredecessor(seq, draggedId)
   const next = uniqueSuccessor(seq, draggedId)
-  const { upstream, downstream } = insertionNeighbors(remaining, anchorId, position, prev, next)
+  const { upstream, downstream } = insertionNeighbors(
+    remaining,
+    anchorId,
+    position,
+    prev,
+    next,
+  )
 
   const adds: Array<{ source: string; target: string }> = []
   // 新位恰为原位时不缝合（否则会给 A→X→C 平行一条 A→C 捷径）
   const inPlace = upstream === prev && downstream === next
-  if (!inPlace && prev !== null && next !== null) adds.push({ source: prev, target: next })
+  if (!inPlace && prev !== null && next !== null)
+    adds.push({ source: prev, target: next })
   if (upstream !== null) adds.push({ source: upstream, target: draggedId })
   if (downstream !== null) adds.push({ source: draggedId, target: downstream })
 
   // 原位重放：新边端点对与拔掉的原边完全一致 → 无需变更
-  if (pairSig(adds) === pairSig(mine.map((e) => ({ source: e.source, target: e.target })))) {
+  if (
+    pairSig(adds) ===
+    pairSig(mine.map((e) => ({ source: e.source, target: e.target })))
+  ) {
     return { removes: [], adds: [] }
   }
 
   // 防御性环检测（剧情流理应无环；带外状态兜底）
-  const flow: Array<{ source: string; target: string }> = remaining.map((e) => ({
-    source: e.source,
-    target: e.target,
-  }))
+  const flow: Array<{ source: string; target: string }> = remaining.map(
+    (e) => ({
+      source: e.source,
+      target: e.target,
+    }),
+  )
   for (const a of adds) {
     if (wouldCreateCycle(flow, a.source, a.target)) return null
     flow.push(a)

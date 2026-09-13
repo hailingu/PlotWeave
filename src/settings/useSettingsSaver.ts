@@ -44,7 +44,9 @@ function enqueueSave(refs: SaverRefs, next: AppSettings): Promise<void> {
   const rev = ++refs.revRef.current
   const prev = refs.saveChainRef.current
   const run =
-    prev === null ? settingsStore.save(next) : prev.then(() => settingsStore.save(next))
+    prev === null
+      ? settingsStore.save(next)
+      : prev.then(() => settingsStore.save(next))
   const tail = run.catch(() => {})
   refs.saveChainRef.current = tail
   void tail.finally(() => {
@@ -95,9 +97,10 @@ export function useSettingsSaver(
       if (saveTimer.current) clearTimeout(saveTimer.current)
       saveTimer.current = setTimeout(() => {
         pendingSaveRef.current = null
-        enqueueSave({ saveTimer, pendingSaveRef, saveChainRef, revRef }, next).catch(
-          (err) => console.warn('[SettingsView] 防抖落盘失败', err),
-        )
+        enqueueSave(
+          { saveTimer, pendingSaveRef, saveChainRef, revRef },
+          next,
+        ).catch((err) => console.warn('[SettingsView] 防抖落盘失败', err))
       }, 500)
     },
     [setSettings],
@@ -105,7 +108,8 @@ export function useSettingsSaver(
 
   /** 关闭冲刷：委托 flushPendingSaves（S3358），失败保留现场上抛。 */
   const flush = useCallback(
-    (): Promise<void> => flushPendingSaves({ saveTimer, pendingSaveRef, saveChainRef, revRef }),
+    (): Promise<void> =>
+      flushPendingSaves({ saveTimer, pendingSaveRef, saveChainRef, revRef }),
     [],
   )
 
@@ -118,7 +122,9 @@ export function useSettingsSaver(
         onClose()
       })
       .catch((err) => {
-        setCloseError(`保存设置失败：${err instanceof Error ? err.message : String(err)}——请重试关闭`)
+        setCloseError(
+          `保存设置失败：${err instanceof Error ? err.message : String(err)}——请重试关闭`,
+        )
         setClosing(false)
       })
   }, [closing, flush, onClose])
@@ -126,7 +132,9 @@ export function useSettingsSaver(
   // 卸载兜底（非常规关闭）：flush 只经 ref 读写，首帧闭包行为不变
   useEffect(() => {
     return () => {
-      void flush().catch((err) => console.warn('[SettingsView] 卸载冲刷保存失败', err))
+      void flush().catch((err) =>
+        console.warn('[SettingsView] 卸载冲刷保存失败', err),
+      )
     }
   }, [flush])
 

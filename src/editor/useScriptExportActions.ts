@@ -36,7 +36,10 @@ export interface ScriptExportActions {
  * 与渲染分离，让对话框组件专注布局；两个动作都消费调用时传入的全文，
  * 复制回执按请求代次归属；切换文本、重试或卸载后忽略旧请求结果。
  */
-export function useScriptExportActions(text: string, fileName: string): ScriptExportActions {
+export function useScriptExportActions(
+  text: string,
+  fileName: string,
+): ScriptExportActions {
   const [copied, setCopied] = useState(false)
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const copyGeneration = useRef(0)
@@ -65,8 +68,13 @@ export function useScriptExportActions(text: string, fileName: string): ScriptEx
     resetCopied()
     const generation = copyGeneration.current
     const written = await Promise.race([
-      navigator.clipboard.writeText(text).then(() => true).catch(() => false),
-      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), CLIPBOARD_TIMEOUT_MS)),
+      navigator.clipboard
+        .writeText(text)
+        .then(() => true)
+        .catch(() => false),
+      new Promise<boolean>((resolve) =>
+        setTimeout(() => resolve(false), CLIPBOARD_TIMEOUT_MS),
+      ),
     ])
     if (generation !== copyGeneration.current) return
     if (!written) {

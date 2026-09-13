@@ -8,7 +8,12 @@
  * 文件不随撤销删除）；重做经 redoGuard 复验落盘状态后才恢复（issue #10：
  * 撤销窗口内文件被外部删改则拒绝重做入脏）。
  */
-import { useCallback, useRef, type DragEvent as ReactDragEvent, type RefObject } from 'react'
+import {
+  useCallback,
+  useRef,
+  type DragEvent as ReactDragEvent,
+  type RefObject,
+} from 'react'
 import { hitDropNode, readLibraryAssetPayload } from './dragDrop'
 import { bindAssetRefPatch, shotRefKindForAsset } from './assetDrop'
 import { projectAssets } from './projectAssets'
@@ -33,7 +38,15 @@ export interface LibraryAssetDropDeps {
 
 /** 返回库资产 drop 处理器；由 useCanvasDrop 在实体载荷不命中时委托调用。 */
 export function useLibraryAssetDrop(deps: LibraryAssetDropDeps) {
-  const { projectId, nodesRef, applyDataPatch, addAsset, removeAsset, pushHistory, onError } = deps
+  const {
+    projectId,
+    nodesRef,
+    applyDataPatch,
+    addAsset,
+    removeAsset,
+    pushHistory,
+    onError,
+  } = deps
   /** 同一分镜卡的导入在途标记（按 nodeId 串行化，宁可拒绝也不覆盖绑定）。 */
   const inFlightRef = useRef(new Set<string>())
 
@@ -57,10 +70,18 @@ export function useLibraryAssetDrop(deps: LibraryAssetDropDeps) {
       inFlightRef.current.add(nodeId)
       void (async () => {
         try {
-          const asset = await projectAssets.importFromLibrary(projectId, payload.id)
+          const asset = await projectAssets.importFromLibrary(
+            projectId,
+            payload.id,
+          )
           // 载荷可能过期/伪造：以导入返回的权威 MIME 复核引用位 kind
-          if (shotRefKindForAsset({ kind: payload.kind, mime: asset.mime }) !== kind) {
-            onError(`资产「${payload.name}」实际类型（${asset.mime}）与拖拽载荷不符，未绑定`)
+          if (
+            shotRefKindForAsset({ kind: payload.kind, mime: asset.mime }) !==
+            kind
+          ) {
+            onError(
+              `资产「${payload.name}」实际类型（${asset.mime}）与拖拽载荷不符，未绑定`,
+            )
             return
           }
           // 导入在途期间节点可能被删除/改型：以当前状态为准重查
@@ -70,13 +91,19 @@ export function useLibraryAssetDrop(deps: LibraryAssetDropDeps) {
           const patch = bindAssetRefPatch(before, kind, asset.id)
           if (!patch) return
           const next = patch.refs
-          const bindPatch: NodeDataPatch = { nodeType: 'shot', patch: { refs: next } }
+          const bindPatch: NodeDataPatch = {
+            nodeType: 'shot',
+            patch: { refs: next },
+          }
           addAsset(asset)
           applyDataPatch(nodeId, bindPatch)
           pushHistory({
             undo: () => {
               removeAsset(asset.id)
-              applyDataPatch(nodeId, { nodeType: 'shot', patch: { refs: before } })
+              applyDataPatch(nodeId, {
+                nodeType: 'shot',
+                patch: { refs: before },
+              })
             },
             // 重做防线（issue #10）：撤销窗口内文件可能被外部删改，
             // redoGuard 复验通过才应用；拒绝则本次重做放弃（文件恢复后可重试）
@@ -87,12 +114,22 @@ export function useLibraryAssetDrop(deps: LibraryAssetDropDeps) {
             },
           })
         } catch (err) {
-          onError(`资产「${payload.name}」导入失败：${err instanceof Error ? err.message : String(err)}`)
+          onError(
+            `资产「${payload.name}」导入失败：${err instanceof Error ? err.message : String(err)}`,
+          )
         } finally {
           inFlightRef.current.delete(nodeId)
         }
       })()
     },
-    [projectId, nodesRef, applyDataPatch, addAsset, removeAsset, pushHistory, onError],
+    [
+      projectId,
+      nodesRef,
+      applyDataPatch,
+      addAsset,
+      removeAsset,
+      pushHistory,
+      onError,
+    ],
   )
 }

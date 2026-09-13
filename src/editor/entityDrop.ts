@@ -18,11 +18,17 @@ function refPatch(
   label: string,
 ): NodeDataPatch | null {
   if (refs.some((r) => r.label === label)) return null
-  return { nodeType: 'shot', patch: { refs: [...refs, { id: uid('ref'), kind, label }] } }
+  return {
+    nodeType: 'shot',
+    patch: { refs: [...refs, { id: uid('ref'), kind, label }] },
+  }
 }
 
 /** 角色实体 → 节点的引用补丁：场景出场 / 对白新台词 / 分镜垫图。 */
-function characterDropPatch(node: CanvasNode, entity: EntityDragPayload): NodeDataPatch | null {
+function characterDropPatch(
+  node: CanvasNode,
+  entity: EntityDragPayload,
+): NodeDataPatch | null {
   if (node.type === 'scene') {
     const ids = node.data.characterIds
     if (ids.includes(entity.id)) return null
@@ -34,24 +40,39 @@ function characterDropPatch(node: CanvasNode, entity: EntityDragPayload): NodeDa
       patch: {
         lines: [
           ...node.data.lines,
-          { id: uid('line'), kind: 'line', speaker: entity.id, side: 'left', text: '新台词…' },
+          {
+            id: uid('line'),
+            kind: 'line',
+            speaker: entity.id,
+            side: 'left',
+            text: '新台词…',
+          },
         ],
       },
     }
   }
-  if (node.type === 'shot') return refPatch(node.data.refs, 'character', entity.name)
+  if (node.type === 'shot')
+    return refPatch(node.data.refs, 'character', entity.name)
   return null
 }
 
 /** 地点实体 → 节点的引用补丁：场景地点 / 分镜底图。 */
-function locationDropPatch(node: CanvasNode, entity: EntityDragPayload): NodeDataPatch | null {
-  if (node.type === 'scene') return { nodeType: 'scene', patch: { locationId: entity.id } }
-  if (node.type === 'shot') return refPatch(node.data.refs, 'location', entity.name)
+function locationDropPatch(
+  node: CanvasNode,
+  entity: EntityDragPayload,
+): NodeDataPatch | null {
+  if (node.type === 'scene')
+    return { nodeType: 'scene', patch: { locationId: entity.id } }
+  if (node.type === 'shot')
+    return refPatch(node.data.refs, 'location', entity.name)
   return null
 }
 
 /** 设定集实体拖上节点的引用补丁（§5）：按实体 kind 分派。 */
-export function entityDropPatch(node: CanvasNode, entity: EntityDragPayload): NodeDataPatch | null {
+export function entityDropPatch(
+  node: CanvasNode,
+  entity: EntityDragPayload,
+): NodeDataPatch | null {
   if (entity.kind === 'character') return characterDropPatch(node, entity)
   return locationDropPatch(node, entity)
 }

@@ -57,11 +57,19 @@ describe('SettingsView Provider 分段', () => {
   it('模型清单按行解析并过滤空行，可用组合进入默认模型下拉', async () => {
     render(<SettingsView onClose={vi.fn()} />)
     await screen.findByText('OpenAI 兼容')
-    const arkModels = screen.getAllByRole('textbox').find(
-      (el) => el.tagName === 'TEXTAREA' && el.closest('.settings-card')?.textContent?.includes('火山'),
-    ) as HTMLTextAreaElement
-    fireEvent.change(arkModels, { target: { value: 'doubao-pro\n\n  doubao-lite  \n' } })
-    const select = screen.getByRole('combobox', { name: /AI 对话模型/ }) as HTMLSelectElement
+    const arkModels = screen
+      .getAllByRole('textbox')
+      .find(
+        (el) =>
+          el.tagName === 'TEXTAREA' &&
+          el.closest('.settings-card')?.textContent?.includes('火山'),
+      ) as HTMLTextAreaElement
+    fireEvent.change(arkModels, {
+      target: { value: 'doubao-pro\n\n  doubao-lite  \n' },
+    })
+    const select = screen.getByRole('combobox', {
+      name: /AI 对话模型/,
+    }) as HTMLSelectElement
     const options = Array.from(select.options).map((o) => o.value)
     expect(options).toContain('volcengine-ark:doubao-pro')
     expect(options).toContain('volcengine-ark:doubao-lite')
@@ -71,19 +79,26 @@ describe('SettingsView Provider 分段', () => {
 describe('SettingsView 默认模型分段', () => {
   it('未选择时显示引导；选择后提示当前对话走向', async () => {
     render(<SettingsView onClose={vi.fn()} />)
-    expect(await screen.findByText('尚未选择默认模型，AI 面板将显示引导。')).toBeTruthy()
+    expect(
+      await screen.findByText('尚未选择默认模型，AI 面板将显示引导。'),
+    ).toBeTruthy()
     fireEvent.change(screen.getByRole('combobox', { name: /AI 对话模型/ }), {
       target: { value: 'openai:gpt-4o' },
     })
-    expect(await screen.findByText('当前对话走 OpenAI 兼容 · gpt-4o。')).toBeTruthy()
+    expect(
+      await screen.findByText('当前对话走 OpenAI 兼容 · gpt-4o。'),
+    ).toBeTruthy()
   })
 
   it('禁用所有 provider 后提示暂无可用模型', async () => {
     render(<SettingsView onClose={vi.fn()} />)
     await screen.findByText('OpenAI 兼容')
-    for (const toggle of screen.getAllByRole('checkbox')) fireEvent.click(toggle)
+    for (const toggle of screen.getAllByRole('checkbox'))
+      fireEvent.click(toggle)
     expect(
-      await screen.findByText('暂无可用模型：请启用 provider、配置 API key 并添加模型 id。'),
+      await screen.findByText(
+        '暂无可用模型：请启用 provider、配置 API key 并添加模型 id。',
+      ),
     ).toBeTruthy()
   })
 })
@@ -108,9 +123,9 @@ describe('SettingsView 关闭冲刷：防抖窗口内', () => {
 
   it('点「完成」：先 await 冲刷落盘，再回调 onClose（界面切换不早于落盘）', async () => {
     let resolveSave!: (v: void) => void
-    const saveSpy = vi.spyOn(settingsStore, 'save').mockImplementation(
-      () => new Promise<void>((res) => (resolveSave = res)),
-    )
+    const saveSpy = vi
+      .spyOn(settingsStore, 'save')
+      .mockImplementation(() => new Promise<void>((res) => (resolveSave = res)))
     const onClose = vi.fn()
     render(<SettingsView onClose={onClose} />)
     await screen.findByText('OpenAI 兼容')
@@ -134,9 +149,9 @@ describe('SettingsView 关闭冲刷：防抖窗口内', () => {
 describe('SettingsView 关闭冲刷：在途 save', () => {
   it('防抖已触发、save 在途时点「完成」：等在途 save 完成才切换界面', async () => {
     let resolveSave!: (v: void) => void
-    const saveSpy = vi.spyOn(settingsStore, 'save').mockImplementation(
-      () => new Promise<void>((res) => (resolveSave = res)),
-    )
+    const saveSpy = vi
+      .spyOn(settingsStore, 'save')
+      .mockImplementation(() => new Promise<void>((res) => (resolveSave = res)))
     const onClose = vi.fn()
     render(<SettingsView onClose={onClose} />)
     await screen.findByText('OpenAI 兼容')
@@ -166,8 +181,12 @@ describe('SettingsView 关闭冲刷：在途 save', () => {
     let resolveSecond!: (v: void) => void
     const saveSpy = vi
       .spyOn(settingsStore, 'save')
-      .mockImplementationOnce(() => new Promise<void>((res) => (resolveFirst = res)))
-      .mockImplementationOnce(() => new Promise<void>((res) => (resolveSecond = res)))
+      .mockImplementationOnce(
+        () => new Promise<void>((res) => (resolveFirst = res)),
+      )
+      .mockImplementationOnce(
+        () => new Promise<void>((res) => (resolveSecond = res)),
+      )
     const onClose = vi.fn()
     render(<SettingsView onClose={onClose} />)
     await screen.findByText('OpenAI 兼容')
@@ -207,8 +226,12 @@ describe('SettingsView 关闭冲刷：串行队列', () => {
     let resolveB!: (v: void) => void
     const saveSpy = vi
       .spyOn(settingsStore, 'save')
-      .mockImplementationOnce(() => new Promise<void>((res) => (resolveA = res)))
-      .mockImplementationOnce(() => new Promise<void>((res) => (resolveB = res)))
+      .mockImplementationOnce(
+        () => new Promise<void>((res) => (resolveA = res)),
+      )
+      .mockImplementationOnce(
+        () => new Promise<void>((res) => (resolveB = res)),
+      )
     const onClose = vi.fn()
     render(<SettingsView onClose={onClose} />)
     await screen.findByText('OpenAI 兼容')
@@ -251,7 +274,9 @@ describe('SettingsView 关闭冲刷：迟到失败不回退', () => {
     let rejectA!: () => void
     const saveSpy = vi
       .spyOn(settingsStore, 'save')
-      .mockImplementationOnce(() => new Promise<void>((_res, rej) => (rejectA = rej)))
+      .mockImplementationOnce(
+        () => new Promise<void>((_res, rej) => (rejectA = rej)),
+      )
       .mockImplementation(() => Promise.resolve())
     const onClose = vi.fn()
     render(<SettingsView onClose={onClose} />)
@@ -293,7 +318,9 @@ describe('SettingsView 关闭冲刷：失败', () => {
     let rejectA!: () => void
     const saveSpy = vi
       .spyOn(settingsStore, 'save')
-      .mockImplementationOnce(() => new Promise<void>((_res, rej) => (rejectA = rej)))
+      .mockImplementationOnce(
+        () => new Promise<void>((_res, rej) => (rejectA = rej)),
+      )
       .mockImplementation(() => Promise.resolve())
     const onClose = vi.fn()
     render(<SettingsView onClose={onClose} />)

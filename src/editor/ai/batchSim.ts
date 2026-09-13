@@ -6,7 +6,11 @@
  * 产出的 forward/backward 闭包列表由调用方整体入栈为一条复合命令。
  */
 import { addEdge, type Edge, type XYPosition } from '@xyflow/react'
-import { SCENE_SHOT_HANDLE, branchOptionHandle, removedOptionHandles } from '../graphRules'
+import {
+  SCENE_SHOT_HANDLE,
+  branchOptionHandle,
+  removedOptionHandles,
+} from '../graphRules'
 import type { CreatableType } from '../creatable'
 import { dataPatchOf, mergeNodeData, type NodeDataPatch } from '../nodes/patch'
 import type { CanvasNode } from '../nodes/types'
@@ -74,10 +78,13 @@ const simCreate = (
     data,
     against: sim.nodes,
   })
-  if (typeof cmd.ref === 'string' && cmd.ref !== '') sim.refToId.set(cmd.ref, node.id)
+  if (typeof cmd.ref === 'string' && cmd.ref !== '')
+    sim.refToId.set(cmd.ref, node.id)
   sim.nodes = [...sim.nodes, node]
   sim.forward.push(() => ops.setNodes((all) => [...all, node]))
-  sim.backward.push(() => ops.setNodes((all) => all.filter((n) => n.id !== node.id)))
+  sim.backward.push(() =>
+    ops.setNodes((all) => all.filter((n) => n.id !== node.id)),
+  )
 }
 
 /** 场景/对白载荷里的实体 ref → 真实 id（issue 44）：create 载荷与 update
@@ -93,7 +100,8 @@ function resolveEntityRefs(
     typeof v === 'string' ? (refs.get(v) ?? v) : v
   if (nodeType === 'scene') {
     if (raw.locationId !== undefined) raw.locationId = token(raw.locationId)
-    if (Array.isArray(raw.characterIds)) raw.characterIds = raw.characterIds.map(token)
+    if (Array.isArray(raw.characterIds))
+      raw.characterIds = raw.characterIds.map(token)
   }
   if (nodeType === 'dialogue' && Array.isArray(raw.lines)) {
     raw.lines = raw.lines.map((l) => {
@@ -104,7 +112,10 @@ function resolveEntityRefs(
         typeof (l as { speaker?: unknown }).speaker === 'string' &&
         refs.has((l as { speaker: string }).speaker)
       ) {
-        return { ...(l as Record<string, unknown>), speaker: refs.get((l as { speaker: string }).speaker) }
+        return {
+          ...(l as Record<string, unknown>),
+          speaker: refs.get((l as { speaker: string }).speaker),
+        }
       }
       return l
     })
@@ -125,17 +136,25 @@ const simUpdate = (
   const { nodeType, patch: originalPatch } = cmd.patch
   const patch = resolveEntityRefs(nodeType, cmd.patch.patch, sim.entityRefToId)
   const before: Record<string, unknown> = {}
-  for (const k of Object.keys(patch)) before[k] = (target.data as Record<string, unknown>)[k]
+  for (const k of Object.keys(patch))
+    before[k] = (target.data as Record<string, unknown>)[k]
   sim.nodes = sim.nodes.map((n) => (n.id === id ? mergeNodeData(n, patch) : n))
   // 分支选项级联（§8.2.2，与 EditorView.patchNode 同规则）：替换 options
   // 删掉的选项，其出口 branch 边一并移除——模拟态与真实画布同一撤销单元
   const removedHandles =
-    target.type === 'branch' && nodeType === 'branch' && Array.isArray(originalPatch.options)
+    target.type === 'branch' &&
+    nodeType === 'branch' &&
+    Array.isArray(originalPatch.options)
       ? removedOptionHandles(target.data.options, originalPatch.options)
       : []
   const removedEdges =
     removedHandles.length > 0
-      ? sim.edges.filter((e) => e.source === id && e.sourceHandle && removedHandles.includes(e.sourceHandle))
+      ? sim.edges.filter(
+          (e) =>
+            e.source === id &&
+            e.sourceHandle &&
+            removedHandles.includes(e.sourceHandle),
+        )
       : []
   if (removedEdges.length > 0) {
     const gone = new Set(removedEdges.map((e) => e.id))
@@ -166,13 +185,19 @@ const simDelete = (
   const idSet = new Set([removedId])
   const removedNodes = sim.nodes.filter((n) => idSet.has(n.id))
   if (removedNodes.length === 0) return
-  const removedEdges = sim.edges.filter((e) => idSet.has(e.source) || idSet.has(e.target))
+  const removedEdges = sim.edges.filter(
+    (e) => idSet.has(e.source) || idSet.has(e.target),
+  )
   sim.nodes = sim.nodes.filter((n) => !idSet.has(n.id))
-  sim.edges = sim.edges.filter((e) => !idSet.has(e.source) && !idSet.has(e.target))
+  sim.edges = sim.edges.filter(
+    (e) => !idSet.has(e.source) && !idSet.has(e.target),
+  )
   // 状态删除内联（不走 deleteNodesByIds——那会额外入栈破坏单步撤销）
   sim.forward.push(() => {
     ops.setNodes((all) => all.filter((n) => n.id !== removedId))
-    ops.setEdges((eds) => eds.filter((e) => e.source !== removedId && e.target !== removedId))
+    ops.setEdges((eds) =>
+      eds.filter((e) => e.source !== removedId && e.target !== removedId),
+    )
   })
   sim.backward.push(() => {
     ops.setNodes((all) => [...all, ...removedNodes])
@@ -203,7 +228,8 @@ const connectEdgeOf = (
     // 由 BranchEdge 按 sourceHandle 实时派生，运行态不落镜像
     const idx = typeof cmd.optionIndex === 'number' ? cmd.optionIndex : 0
     const branchNode = sim.nodes.find((n) => n.id === srcId)
-    const option = branchNode?.type === 'branch' ? branchNode.data.options[idx] : undefined
+    const option =
+      branchNode?.type === 'branch' ? branchNode.data.options[idx] : undefined
     const handle = branchOptionHandle(option?.id ?? `${idx}`)
     return {
       id: `e-${srcId}-${handle}-${dstId}-ai-${sim.forward.length}`,
@@ -231,7 +257,9 @@ const simConnect = (
   const edge = connectEdgeOf(sim, cmd, srcId, dstId)
   sim.edges = [...sim.edges, edge]
   sim.forward.push(() => ops.setEdges((eds) => addEdge(edge, eds)))
-  sim.backward.push(() => ops.setEdges((eds) => eds.filter((e) => e.id !== edge.id)))
+  sim.backward.push(() =>
+    ops.setEdges((eds) => eds.filter((e) => e.id !== edge.id)),
+  )
 }
 
 const simDisconnect = (
@@ -244,13 +272,19 @@ const simDisconnect = (
   // 断线按端点对整体生效（与校验侧 foldDisconnectEdge 同口径）：模拟态、
   // forward（画布删除）与 backward（撤销还原）三者都作用于全部匹配边——
   // 只捕获/回补首条会让撤销静默丢失其余边（评审 5174231991）
-  const removed = sim.edges.filter((e) => e.source === srcId && e.target === dstId)
+  const removed = sim.edges.filter(
+    (e) => e.source === srcId && e.target === dstId,
+  )
   if (removed.length === 0) return
   sim.edges = sim.edges.filter((e) => e.source !== srcId || e.target !== dstId)
   sim.forward.push(() =>
-    ops.setEdges((eds) => eds.filter((e) => e.source !== srcId || e.target !== dstId)),
+    ops.setEdges((eds) =>
+      eds.filter((e) => e.source !== srcId || e.target !== dstId),
+    ),
   )
-  sim.backward.push(() => ops.setEdges((eds) => removed.reduce((acc, e) => addEdge(e, acc), eds)))
+  sim.backward.push(() =>
+    ops.setEdges((eds) => removed.reduce((acc, e) => addEdge(e, acc), eds)),
+  )
 }
 
 /** 新建实体（issue 44）：真实 id 与默认头像样式由应用工厂分配（模拟期一次），
@@ -258,7 +292,10 @@ const simDisconnect = (
 const simEntityCreate = (
   sim: BatchSim,
   ops: BatchOps,
-  cmd: Extract<ValidatedCommand, { op: 'upsert_character' | 'upsert_location' }>,
+  cmd: Extract<
+    ValidatedCommand,
+    { op: 'upsert_character' | 'upsert_location' }
+  >,
   kind: 'character' | 'location',
 ): void => {
   const fields = cmd.fields
@@ -275,21 +312,27 @@ const simEntityCreate = (
           return l
         })()
   const bucket = kind === 'character' ? 'characters' : 'locations'
-  const ref = typeof cmd.ref === 'string' && cmd.ref !== '' ? cmd.ref : undefined
+  const ref =
+    typeof cmd.ref === 'string' && cmd.ref !== '' ? cmd.ref : undefined
   if (ref !== undefined) sim.entityRefToId.set(ref, entity.id)
   sim.settings = {
     ...sim.settings,
     [bucket]: [...sim.settings[bucket], entity],
   } as ProjectSettings
   sim.forward.push(() =>
-    ops.setSettings((prev) => ({ ...prev, [bucket]: [...prev[bucket], entity] }) as ProjectSettings),
+    ops.setSettings(
+      (prev) =>
+        ({ ...prev, [bucket]: [...prev[bucket], entity] }) as ProjectSettings,
+    ),
   )
   sim.backward.push(() =>
     ops.setSettings(
       (prev) =>
         ({
           ...prev,
-          [bucket]: (prev[bucket] as Array<{ id: string }>).filter((e) => e.id !== entity.id),
+          [bucket]: (prev[bucket] as Array<{ id: string }>).filter(
+            (e) => e.id !== entity.id,
+          ),
         }) as ProjectSettings,
     ),
   )
@@ -301,7 +344,10 @@ const simEntityCreate = (
 const simEntityUpdate = (
   sim: BatchSim,
   ops: BatchOps,
-  cmd: Extract<ValidatedCommand, { op: 'upsert_character' | 'upsert_location' }>,
+  cmd: Extract<
+    ValidatedCommand,
+    { op: 'upsert_character' | 'upsert_location' }
+  >,
   kind: 'character' | 'location',
 ): void => {
   const bucket = kind === 'character' ? 'characters' : 'locations'
@@ -311,19 +357,23 @@ const simEntityUpdate = (
   const target = list.find((e) => e.id === id)
   if (!target) return
   const next = { ...target }
-  for (const [k, v] of Object.entries(cmd.fields)) (next as Record<string, unknown>)[k] = v
+  for (const [k, v] of Object.entries(cmd.fields))
+    (next as Record<string, unknown>)[k] = v
   sim.settings = {
     ...sim.settings,
     [bucket]: list.map((e) => (e.id === id ? next : e)),
   } as ProjectSettings
-  const ref = typeof cmd.ref === 'string' && cmd.ref !== '' ? cmd.ref : undefined
+  const ref =
+    typeof cmd.ref === 'string' && cmd.ref !== '' ? cmd.ref : undefined
   if (ref !== undefined) sim.entityRefToId.set(ref, id)
   sim.forward.push(() =>
     ops.setSettings(
       (prev) =>
         ({
           ...prev,
-          [bucket]: (prev[bucket] as Array<{ id: string }>).map((e) => (e.id === id ? next : e)),
+          [bucket]: (prev[bucket] as Array<{ id: string }>).map((e) =>
+            e.id === id ? next : e,
+          ),
         }) as ProjectSettings,
     ),
   )
@@ -332,7 +382,9 @@ const simEntityUpdate = (
       (prev) =>
         ({
           ...prev,
-          [bucket]: (prev[bucket] as Array<{ id: string }>).map((e) => (e.id === id ? target : e)),
+          [bucket]: (prev[bucket] as Array<{ id: string }>).map((e) =>
+            e.id === id ? target : e,
+          ),
         }) as ProjectSettings,
     ),
   )
@@ -341,7 +393,10 @@ const simEntityUpdate = (
 const simUpsert = (
   sim: BatchSim,
   ops: BatchOps,
-  cmd: Extract<ValidatedCommand, { op: 'upsert_character' | 'upsert_location' }>,
+  cmd: Extract<
+    ValidatedCommand,
+    { op: 'upsert_character' | 'upsert_location' }
+  >,
   kind: 'character' | 'location',
 ): void => {
   if (typeof cmd.entityId === 'string' && cmd.entityId.trim() !== '') {
@@ -374,7 +429,10 @@ const simDocumentCreate = (
   const documents = [...(sim.settings.documents ?? []), doc]
   sim.settings = { ...sim.settings, documents }
   sim.forward.push(() =>
-    ops.setSettings((prev) => ({ ...prev, documents: [...(prev.documents ?? []), doc] })),
+    ops.setSettings((prev) => ({
+      ...prev,
+      documents: [...(prev.documents ?? []), doc],
+    })),
   )
   sim.backward.push(() =>
     ops.setSettings((prev) => ({
@@ -407,7 +465,10 @@ const simDocumentUpdate = (
       ? { relatedIds: resolveRelatedIds(fields.relatedIds, sim.entityRefToId) }
       : {}),
   }
-  sim.settings = { ...sim.settings, documents: documents.map((d) => (d.id === id ? next : d)) }
+  sim.settings = {
+    ...sim.settings,
+    documents: documents.map((d) => (d.id === id ? next : d)),
+  }
   sim.forward.push(() =>
     ops.setSettings((prev) => ({
       ...prev,
@@ -466,7 +527,8 @@ export function simulateBatch(
     else if (cmd.op === 'delete_node') simDelete(sim, ops, cmd)
     else if (cmd.op === 'connect_edge') simConnect(sim, ops, cmd)
     else if (cmd.op === 'disconnect_edge') simDisconnect(sim, ops, cmd)
-    else if (cmd.op === 'upsert_character') simUpsert(sim, ops, cmd, 'character')
+    else if (cmd.op === 'upsert_character')
+      simUpsert(sim, ops, cmd, 'character')
     else if (cmd.op === 'upsert_location') simUpsert(sim, ops, cmd, 'location')
     else if (cmd.op === 'upsert_document') simDocumentUpsert(sim, ops, cmd)
   }

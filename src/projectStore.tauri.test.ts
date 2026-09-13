@@ -28,7 +28,8 @@ beforeEach(() => {
   }))
 })
 
-const load = async (): Promise<typeof import('./projectStore')> => import('./projectStore')
+const load = async (): Promise<typeof import('./projectStore')> =>
+  import('./projectStore')
 
 const UPDATED_ISO = new Date(1_700_000_000_000).toISOString()
 
@@ -43,7 +44,12 @@ const meta = (id: string) => ({
 /** v1 信封：四分区节点 + Record 设定集。 */
 const modernFile = () => ({
   schemaVersion: 1,
-  project: { id: 'p1', name: '现代剧', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: UPDATED_ISO },
+  project: {
+    id: 'p1',
+    name: '现代剧',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: UPDATED_ISO,
+  },
   graph: {
     nodes: [
       {
@@ -52,7 +58,13 @@ const modernFile = () => ({
         layout: { position: { x: 0, y: 0 } },
         ui: { selected: false, expanded: true },
         data: {
-          spec: { sceneNo: 1, interior: true, time: '🌙 夜', synopsis: '', characterIds: [] },
+          spec: {
+            sceneNo: 1,
+            interior: true,
+            time: '🌙 夜',
+            synopsis: '',
+            characterIds: [],
+          },
           meta: { label: '场一' },
         },
       },
@@ -76,7 +88,11 @@ const legacyFile = () => ({
         type: 'scene',
         position: { x: 0, y: 0 },
         data: {
-          name: '场一', sceneNo: 1, interior: true, time: '🌙 夜', synopsis: '',
+          name: '场一',
+          sceneNo: 1,
+          interior: true,
+          time: '🌙 夜',
+          synopsis: '',
           characters: [{ label: '林', gradient: 'g' }],
           location: '天台',
         },
@@ -94,27 +110,46 @@ describe('tauriLoad：归一化与迁移回写', () => {
   it('episodeTitles 只保留「正整数键 → 非空标题」，标题去空白', async () => {
     handlers.set('load_project', () => ({
       ...modernFile(),
-      episodeTitles: { 1: ' 开局 ', 2: '   ', x: 'y', 0: '零', '-1': '负', '3.5': '小数', 4: 7 },
+      episodeTitles: {
+        1: ' 开局 ',
+        2: '   ',
+        x: 'y',
+        0: '零',
+        '-1': '负',
+        '3.5': '小数',
+        4: 7,
+      },
     }))
     handlers.set('save_project', () => undefined)
     const { projectStore } = await load()
     const doc = await projectStore.load('p1')
     expect(doc.episodeTitles).toEqual({ 1: '开局' })
     // 修复型归一化（键值域修复）同样回写落定；加载侧资产复验固定先行
-    expect(calls.map((c) => c.cmd)).toEqual(['load_project', 'verify_project_assets', 'save_project'])
+    expect(calls.map((c) => c.cmd)).toEqual([
+      'load_project',
+      'verify_project_assets',
+      'save_project',
+    ])
   })
 
   it('加载等待在途保存链落定：关闭后立即重开不读旧盘（编辑不基于旧内容反向覆盖新冲刷）', async () => {
     let releaseSave: (() => void) | null = null
     handlers.set('load_project', () => modernFile())
     handlers.set('verify_project_assets', () => [])
-    handlers.set('save_project', () =>
-      new Promise<void>((resolve) => {
-        releaseSave = resolve
-      }),
+    handlers.set(
+      'save_project',
+      () =>
+        new Promise<void>((resolve) => {
+          releaseSave = resolve
+        }),
     )
     const { projectStore } = await load()
-    const docOf = (name: string) => ({ name, nodes: [], edges: [], settings: { characters: [], locations: [] } })
+    const docOf = (name: string) => ({
+      name,
+      nodes: [],
+      edges: [],
+      settings: { characters: [], locations: [] },
+    })
     // 用户编辑 v2 后立即离开编辑器：卸载冲刷挂起（慢盘）
     const saving = projectStore.save('p1', docOf('v2'))
     await vi.waitFor(() => expect(releaseSave).not.toBeNull())
@@ -141,12 +176,20 @@ describe('tauriLoad：归一化与迁移回写', () => {
       if (loadCalls === 1) {
         // load_project 在途：卸载冲刷排队保存，且该保存落盘失败（登记为
         // 待重试——比磁盘新）
-        void storeBox.current
-          ?.projectStore.save('p1', { name: '登记的最新', nodes: [], edges: [], settings: { characters: [], locations: [] } })
+        void storeBox.current?.projectStore
+          .save('p1', {
+            name: '登记的最新',
+            nodes: [],
+            edges: [],
+            settings: { characters: [], locations: [] },
+          })
           .catch(() => undefined)
         return modernFile()
       }
-      return { ...modernFile(), project: { ...modernFile().project, name: '重读的磁盘' } }
+      return {
+        ...modernFile(),
+        project: { ...modernFile().project, name: '重读的磁盘' },
+      }
     })
     handlers.set('save_project', () => {
       throw new Error('磁盘满')
@@ -166,17 +209,35 @@ describe('tauriLoad：归一化与迁移回写', () => {
       loadCalls += 1
       if (loadCalls === 1) {
         // load_project 在途：编辑器卸载冲刷把新保存排进链（此前链本静止）
-        void storeBox.current
-          ?.projectStore.save('p1', { name: '冲刷的新编辑', nodes: [], edges: [], settings: { characters: [], locations: [] } })
+        void storeBox.current?.projectStore
+          .save('p1', {
+            name: '冲刷的新编辑',
+            nodes: [],
+            edges: [],
+            settings: { characters: [], locations: [] },
+          })
           .catch(() => undefined)
         // 返回写前旧文件（脏 v1：空白边 id 触发修复回写）
         return {
           ...modernFile(),
-          graph: { ...modernFile().graph, edges: [{ id: '   ', source: 's1', target: 's1', data: { kind: 'sequence' } }] },
+          graph: {
+            ...modernFile().graph,
+            edges: [
+              {
+                id: '   ',
+                source: 's1',
+                target: 's1',
+                data: { kind: 'sequence' },
+              },
+            ],
+          },
         }
       }
       // 守卫触发重来的读取：写后净本，不再触发回写
-      return { ...modernFile(), project: { ...modernFile().project, name: '写后净本' } }
+      return {
+        ...modernFile(),
+        project: { ...modernFile().project, name: '写后净本' },
+      }
     })
     handlers.set('save_project', () => undefined)
     const mod = await load()
@@ -184,7 +245,12 @@ describe('tauriLoad：归一化与迁移回写', () => {
     const doc = await mod.projectStore.load('p1')
     // 旧内容的修复回写不得在冲刷之后落盘——重来后读到净本即无需回写
     const saves = calls.filter((c) => c.cmd === 'save_project')
-    expect(saves.map((s) => (s.args as { doc: { project: { name: string } } }).doc.project.name)).toEqual(['冲刷的新编辑'])
+    expect(
+      saves.map(
+        (s) =>
+          (s.args as { doc: { project: { name: string } } }).doc.project.name,
+      ),
+    ).toEqual(['冲刷的新编辑'])
     expect(doc.name).toBe('写后净本')
   })
 
@@ -204,7 +270,12 @@ describe('tauriLoad：归一化与迁移回写', () => {
       return undefined // B 立即完成
     })
     const { projectStore } = await load()
-    const docOf = (name: string) => ({ name, nodes: [], edges: [], settings: { characters: [], locations: [] } })
+    const docOf = (name: string) => ({
+      name,
+      nodes: [],
+      edges: [],
+      settings: { characters: [], locations: [] },
+    })
     const savingA = projectStore.save('p1', docOf('A'))
     await vi.waitFor(() => expect(releaseA).not.toBeNull())
     // load 先捕获 A 的链（单次等待只能看到 A）
@@ -219,7 +290,9 @@ describe('tauriLoad：归一化与迁移回写', () => {
     // 红：单次等待在 A 落定后立即读盘（B 尚未起跑）——读到的旧会话被编辑
     // 即覆盖 B；须循环等到链静止
     const order = calls.map((c) => c.cmd)
-    expect(order.indexOf('load_project')).toBeGreaterThan(order.lastIndexOf('save_project'))
+    expect(order.indexOf('load_project')).toBeGreaterThan(
+      order.lastIndexOf('save_project'),
+    )
   })
 
   it('加载优先交付失败登记的最新文档：磁盘滞后时不展示丢编辑的旧版本', async () => {
@@ -230,8 +303,15 @@ describe('tauriLoad：归一化与迁移回写', () => {
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {
       const { projectStore } = await load()
-      const docOf = (name: string) => ({ name, nodes: [], edges: [], settings: { characters: [], locations: [] } })
-      await expect(projectStore.save('p1', docOf('最新'))).rejects.toThrow('磁盘满')
+      const docOf = (name: string) => ({
+        name,
+        nodes: [],
+        edges: [],
+        settings: { characters: [], locations: [] },
+      })
+      await expect(projectStore.save('p1', docOf('最新'))).rejects.toThrow(
+        '磁盘满',
+      )
       // 红：直接读盘拿到的是滞后内容（现代剧），丢掉待重试的最新编辑
       const doc = await projectStore.load('p1')
       expect(doc.name).toBe('最新')
@@ -244,7 +324,9 @@ describe('tauriLoad：归一化与迁移回写', () => {
     handlers.set('load_project', () => modernFile())
     handlers.set('verify_project_assets', () => ['a-1'])
     handlers.set('save_project', (args) => {
-      const byId = (args as { doc: { assets: { byId: Record<string, unknown> } } }).doc.assets.byId
+      const byId = (
+        args as { doc: { assets: { byId: Record<string, unknown> } } }
+      ).doc.assets.byId
       if ('a-1' in byId) throw new Error('资产 a-1：资产文件不存在')
       return undefined
     })
@@ -252,12 +334,23 @@ describe('tauriLoad：归一化与迁移回写', () => {
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {
       const { projectStore } = await load()
-      const docOf = (name: string) => ({ name, nodes: [], edges: [], settings: { characters: [], locations: [] } })
+      const docOf = (name: string) => ({
+        name,
+        nodes: [],
+        edges: [],
+        settings: { characters: [], locations: [] },
+      })
       const dirty = {
         ...docOf('最新'),
         assets: {
           byId: {
-            'a-1': { id: 'a-1', relPath: 'assets/a-1.png', mime: 'image/png', source: 'upload', createdAt: '2026-01-01T00:00:00.000Z' },
+            'a-1': {
+              id: 'a-1',
+              relPath: 'assets/a-1.png',
+              mime: 'image/png',
+              source: 'upload',
+              createdAt: '2026-01-01T00:00:00.000Z',
+            },
           },
         },
       } as unknown as ProjectContent
@@ -269,7 +362,9 @@ describe('tauriLoad：归一化与迁移回写', () => {
       await vi.advanceTimersByTimeAsync(5000)
       const saves = calls.filter((c) => c.cmd === 'save_project')
       expect(saves).toHaveLength(2)
-      const retried = (saves[1].args as { doc: { assets: { byId: Record<string, unknown> } } }).doc.assets.byId
+      const retried = (
+        saves[1].args as { doc: { assets: { byId: Record<string, unknown> } } }
+      ).doc.assets.byId
       expect('a-1' in retried).toBe(false)
     } finally {
       errSpy.mockRestore()
@@ -300,8 +395,15 @@ describe('tauriLoad：归一化与迁移回写', () => {
     vi.useFakeTimers()
     try {
       const { projectStore } = await load()
-      const docOf = (name: string) => ({ name, nodes: [], edges: [], settings: { characters: [], locations: [] } })
-      await expect(projectStore.save('p1', docOf('旧登记'))).rejects.toThrow('磁盘满')
+      const docOf = (name: string) => ({
+        name,
+        nodes: [],
+        edges: [],
+        settings: { characters: [], locations: [] },
+      })
+      await expect(projectStore.save('p1', docOf('旧登记'))).rejects.toThrow(
+        '磁盘满',
+      )
       // load 捕获旧登记后进入复验等待
       const loading = projectStore.load('p1')
       await vi.waitFor(() => expect(releaseVerify).not.toBeNull())
@@ -328,7 +430,9 @@ describe('tauriLoad：归一化与迁移回写', () => {
     const save = calls.find((c) => c.cmd === 'save_project')
     expect(save).toBeDefined()
     // 回写载荷带显式 schemaVersion 且不再携带标记（持久化输出恒 false）
-    const saved = (save?.args as { doc: { schemaVersion: number; versionless?: boolean } }).doc
+    const saved = (
+      save?.args as { doc: { schemaVersion: number; versionless?: boolean } }
+    ).doc
     expect(saved.schemaVersion).toBe(1)
     expect(saved.versionless).toBeUndefined()
   })
@@ -354,7 +458,11 @@ describe('tauriLoad：归一化与迁移回写', () => {
     await projectStore.load('p1')
     const alias = calls.find((c) => c.cmd === 'register_project_asset_alias')
     expect(alias).toBeDefined()
-    const args = alias?.args as { id: string; blankKey: string; freshId: string }
+    const args = alias?.args as {
+      id: string
+      blankKey: string
+      freshId: string
+    }
     expect(args.id).toBe('p1')
     expect(args.blankKey).toBe('')
     expect(args.freshId.trim().length).toBeGreaterThan(0)
@@ -362,7 +470,9 @@ describe('tauriLoad：归一化与迁移回写', () => {
     handlers.set('load_project', () => modernFile())
     calls.length = 0
     await projectStore.load('p1')
-    expect(calls.some((c) => c.cmd === 'register_project_asset_alias')).toBe(false)
+    expect(calls.some((c) => c.cmd === 'register_project_asset_alias')).toBe(
+      false,
+    )
   })
 
   it('别名登记 IPC 期间新保存入队：链身份守卫重来，修复回写不得晚于新保存覆盖新内容（issue #31 评审修复 P2-6）', async () => {
@@ -384,20 +494,30 @@ describe('tauriLoad：归一化与迁移回写', () => {
       },
       graph: {
         ...modernFile().graph,
-        edges: [{ id: '   ', source: 's1', target: 's1', data: { kind: 'sequence' } }],
+        edges: [
+          { id: '   ', source: 's1', target: 's1', data: { kind: 'sequence' } },
+        ],
       },
     })
     handlers.set('load_project', () => {
       loadCalls += 1
       if (loadCalls === 1) return dirtyFile()
       // 守卫触发重来的读取：写后净本，不再触发回写与登记
-      return { ...modernFile(), project: { ...modernFile().project, name: '写后净本' } }
+      return {
+        ...modernFile(),
+        project: { ...modernFile().project, name: '写后净本' },
+      }
     })
     handlers.set('save_project', () => undefined)
     handlers.set('register_project_asset_alias', () => {
       // 首次别名 IPC 在途：编辑器卸载冲刷把新保存排进链（此前链本静止）
-      void storeBox.current
-        ?.projectStore.save('p1', { name: '冲刷的新编辑', nodes: [], edges: [], settings: { characters: [], locations: [] } })
+      void storeBox.current?.projectStore
+        .save('p1', {
+          name: '冲刷的新编辑',
+          nodes: [],
+          edges: [],
+          settings: { characters: [], locations: [] },
+        })
         .catch(() => undefined)
       return undefined
     })
@@ -406,7 +526,12 @@ describe('tauriLoad：归一化与迁移回写', () => {
     const doc = await mod.projectStore.load('p1')
     // 旧内容的修复回写不得在冲刷之后落盘——登记后须复查链身份整体重来
     const saves = calls.filter((c) => c.cmd === 'save_project')
-    expect(saves.map((s) => (s.args as { doc: { project: { name: string } } }).doc.project.name)).toEqual(['冲刷的新编辑'])
+    expect(
+      saves.map(
+        (s) =>
+          (s.args as { doc: { project: { name: string } } }).doc.project.name,
+      ),
+    ).toEqual(['冲刷的新编辑'])
     expect(doc.name).toBe('写后净本')
   })
 
@@ -415,7 +540,9 @@ describe('tauriLoad：归一化与迁移回写', () => {
       ...modernFile(),
       graph: {
         ...modernFile().graph,
-        edges: [{ id: '   ', source: 's1', target: 's1', data: { kind: 'sequence' } }],
+        edges: [
+          { id: '   ', source: 's1', target: 's1', data: { kind: 'sequence' } },
+        ],
       },
     }))
     handlers.set('save_project', () => undefined)
@@ -451,7 +578,11 @@ describe('tauriLoad：归一化与迁移回写', () => {
     const doc = await projectStore.load('p1')
     expect(doc.name).toBe('现代剧')
     expect(doc.createdAt).toBe('2026-01-01T00:00:00.000Z')
-    expect(doc.nodes[0].data).toMatchObject({ name: '场一', sceneNo: 1, characterIds: [] })
+    expect(doc.nodes[0].data).toMatchObject({
+      name: '场一',
+      sceneNo: 1,
+      characterIds: [],
+    })
   })
 
   it('旧格式（v0）触发迁移并回写 save_project（下次打开不再迁移）', async () => {
@@ -459,7 +590,10 @@ describe('tauriLoad：归一化与迁移回写', () => {
     handlers.set('save_project', () => undefined)
     const { projectStore } = await load()
     const doc: ProjectContent = await projectStore.load('p1')
-    const scene = doc.nodes[0].data as { characterIds: string[]; locationId?: string }
+    const scene = doc.nodes[0].data as {
+      characterIds: string[]
+      locationId?: string
+    }
     expect(scene.characterIds).toHaveLength(1)
     expect(doc.settings.locations.map((l) => l.name)).toEqual(['天台'])
     // 回写是 fire-and-forget（void tauriSave）：轮询等到 save_project 落盘调用
@@ -470,7 +604,9 @@ describe('tauriLoad：归一化与迁移回写', () => {
     expect(save).toBeDefined()
     expect((save?.args as { id: string }).id).toBe('p1')
     // 回写内容为 v1 信封
-    const savedDoc = (save?.args as { doc: { schemaVersion: number; episodeTitles: unknown } }).doc
+    const savedDoc = (
+      save?.args as { doc: { schemaVersion: number; episodeTitles: unknown } }
+    ).doc
     expect(savedDoc.schemaVersion).toBe(1)
     expect(savedDoc.episodeTitles).toEqual({})
   })
@@ -478,15 +614,17 @@ describe('tauriLoad：归一化与迁移回写', () => {
   it('迁移回写先于返回：慢回写在途时 load 不得返回（后续改名保存不被旧内容覆盖）', async () => {
     let releaseWriteback: (() => void) | null = null
     handlers.set('load_project', () => legacyFile())
-    handlers.set('save_project', () =>
-      new Promise<void>((resolve) => {
-        if (releaseWriteback === null) {
-          // 首个调用 = 迁移回写：挂起模拟慢盘
-          releaseWriteback = resolve
-          return
-        }
-        resolve()
-      }),
+    handlers.set(
+      'save_project',
+      () =>
+        new Promise<void>((resolve) => {
+          if (releaseWriteback === null) {
+            // 首个调用 = 迁移回写：挂起模拟慢盘
+            releaseWriteback = resolve
+            return
+          }
+          resolve()
+        }),
     )
     const { projectStore } = await load()
     const loaded = projectStore.load('p1')
@@ -507,7 +645,9 @@ describe('tauriLoad：归一化与迁移回写', () => {
     const saves = calls.filter((c) => c.cmd === 'save_project')
     expect(saves).toHaveLength(2)
     const last = saves[saves.length - 1]
-    expect((last.args as { doc: { project: { name: string } } }).doc.project.name).toBe('新名')
+    expect(
+      (last.args as { doc: { project: { name: string } } }).doc.project.name,
+    ).toBe('新名')
   })
 
   it('回写失败：内存副本照常交付，显式诊断且不留未处理拒绝', async () => {
@@ -535,7 +675,13 @@ describe('tauriLoad：归一化与迁移回写', () => {
       ...modernFile(),
       assets: {
         byId: {
-          'a-1': { id: 'a-1', relPath: 'assets/lost.png', mime: 'image/png', source: 'upload', createdAt: '2026-01-01T00:00:00.000Z' },
+          'a-1': {
+            id: 'a-1',
+            relPath: 'assets/lost.png',
+            mime: 'image/png',
+            source: 'upload',
+            createdAt: '2026-01-01T00:00:00.000Z',
+          },
         },
       },
     }))
@@ -547,7 +693,9 @@ describe('tauriLoad：归一化与迁移回写', () => {
     const verify = calls.find((c) => c.cmd === 'verify_project_assets')
     expect((verify?.args as { id: string }).id).toBe('p1')
     const sent = (verify?.args as { assets: { byId: unknown } }).assets
-    expect((sent as { byId: Record<string, unknown> }).byId['a-1']).toBeDefined()
+    expect(
+      (sent as { byId: Record<string, unknown> }).byId['a-1'],
+    ).toBeDefined()
   })
 })
 
@@ -561,7 +709,10 @@ describe('tauriLoad：graph 容器扩展字段（issue #100 同版本字段演�
     const doc = await projectStore.load('p1')
     // 红：归一化曾把未知 graph 键当结构变化（repaired=true），仅打开就把
     // 删除落实回写；保留策略下扩展字段不是缺陷，净本零写盘
-    expect(calls.map((c) => c.cmd)).toEqual(['load_project', 'verify_project_assets'])
+    expect(calls.map((c) => c.cmd)).toEqual([
+      'load_project',
+      'verify_project_assets',
+    ])
     expect(doc.graphExtensions).toEqual({ futureGraphNote: '构造未来字段' })
     // 用户编辑触发真实保存：扩展字段随序列化原样落盘，不因会话往返丢失
     await projectStore.save('p1', { ...doc, name: '编辑后' })
@@ -595,20 +746,29 @@ describe('tauriList：空库播种与示例升级', () => {
   })
 
   it('示例为未来版本（schemaVersion 高于当前）：升级检查单例隔离，list 不中止、摘要原样', async () => {
-    handlers.set('list_projects', () => [meta('sample-wu-ye-chu-zu-che'), meta('user-p1')])
+    handlers.set('list_projects', () => [
+      meta('sample-wu-ye-chu-zu-che'),
+      meta('user-p1'),
+    ])
     handlers.set('load_project', () => ({ ...modernFile(), schemaVersion: 99 }))
     const { projectStore } = await load()
     // 红：parseProject 抛「版本过新」令 list 整体拒绝，首页被清成空列表
     const list = await projectStore.list()
-    expect(list.map((x) => x.id)).toEqual(['sample-wu-ye-chu-zu-che', 'user-p1'])
+    expect(list.map((x) => x.id)).toEqual([
+      'sample-wu-ye-chu-zu-che',
+      'user-p1',
+    ])
   })
-
 
   it('首次（无项目文件）写入两个种子项目后重列', async () => {
     let listed = false
     handlers.set('list_projects', () => {
       if (listed) {
-        return [meta('sample-wu-ye-chu-zu-che'), meta('sample-du-shi-qi-yuan'), meta('user-p1')]
+        return [
+          meta('sample-wu-ye-chu-zu-che'),
+          meta('sample-du-shi-qi-yuan'),
+          meta('user-p1'),
+        ]
       }
       listed = true
       return []
@@ -620,7 +780,8 @@ describe('tauriList：空库播种与示例升级', () => {
     let loadCalls = 0
     handlers.set('load_project', (args) => {
       loadCalls += 1
-      if (loadCalls <= 2) throw new Error(`项目不存在：${(args as { id: string }).id}`)
+      if (loadCalls <= 2)
+        throw new Error(`项目不存在：${(args as { id: string }).id}`)
       return {
         ...modernFile(),
         project: { ...modernFile().project, id: (args as { id: string }).id },
@@ -628,7 +789,11 @@ describe('tauriList：空库播种与示例升级', () => {
     })
     const { projectStore } = await load()
     const list = await projectStore.list()
-    expect(list.map((x) => x.id)).toEqual(['sample-wu-ye-chu-zu-che', 'sample-du-shi-qi-yuan', 'user-p1'])
+    expect(list.map((x) => x.id)).toEqual([
+      'sample-wu-ye-chu-zu-che',
+      'sample-du-shi-qi-yuan',
+      'user-p1',
+    ])
     // 两个种子各写盘一次
     expect(calls.filter((c) => c.cmd === 'save_project')).toHaveLength(2)
     expect(list[0].updatedAt).toBe(UPDATED_ISO)
@@ -639,7 +804,8 @@ describe('tauriList：空库播种与示例升级', () => {
     let listCalls = 0
     handlers.set('list_projects', () => {
       listCalls += 1
-      if (listCalls === 1) return [{ ...meta('sample-wu-ye-chu-zu-che'), name: '旧名' }]
+      if (listCalls === 1)
+        return [{ ...meta('sample-wu-ye-chu-zu-che'), name: '旧名' }]
       return [{ ...meta('sample-wu-ye-chu-zu-che'), name: '新名' }]
     })
     let loadCalls = 0
@@ -649,14 +815,32 @@ describe('tauriList：空库播种与示例升级', () => {
         // 脏 v1（空白边 id）：触发修复回写
         return {
           ...modernFile(),
-          project: { ...modernFile().project, id: 'sample-wu-ye-chu-zu-che', name: '新名' },
-          graph: { ...modernFile().graph, edges: [{ id: '   ', source: 's1', target: 's1', data: { kind: 'sequence' } }] },
+          project: {
+            ...modernFile().project,
+            id: 'sample-wu-ye-chu-zu-che',
+            name: '新名',
+          },
+          graph: {
+            ...modernFile().graph,
+            edges: [
+              {
+                id: '   ',
+                source: 's1',
+                target: 's1',
+                data: { kind: 'sequence' },
+              },
+            ],
+          },
         }
       }
       // 回写后的净本：重列的升级检查不再触发写
       return {
         ...modernFile(),
-        project: { ...modernFile().project, id: 'sample-wu-ye-chu-zu-che', name: '新名' },
+        project: {
+          ...modernFile().project,
+          id: 'sample-wu-ye-chu-zu-che',
+          name: '新名',
+        },
       }
     })
     handlers.set('save_project', () => undefined)
@@ -668,7 +852,10 @@ describe('tauriList：空库播种与示例升级', () => {
   })
 
   it('示例项目仍是旧格式但已被编辑：迁移回写用户内容，不用新种子覆盖', async () => {
-    handlers.set('list_projects', () => [meta('sample-wu-ye-chu-zu-che'), meta('user-p1')])
+    handlers.set('list_projects', () => [
+      meta('sample-wu-ye-chu-zu-che'),
+      meta('user-p1'),
+    ])
     let loadCalls = 0
     handlers.set('load_project', (args) => {
       const { id } = args as { id: string }
@@ -676,10 +863,16 @@ describe('tauriList：空库播种与示例升级', () => {
       loadCalls += 1
       if (loadCalls === 1) {
         // 用户编辑过的示例（已改名，仍是 v0 旧扁平格式）
-        return { ...legacyFile(), project: { ...legacyFile().project, id, name: '我的修改版' } }
+        return {
+          ...legacyFile(),
+          project: { ...legacyFile().project, id, name: '我的修改版' },
+        }
       }
       // 回写后的净本（重列的升级检查读到迁移产物，不再触发写）
-      return { ...modernFile(), project: { ...modernFile().project, id, name: '我的修改版' } }
+      return {
+        ...modernFile(),
+        project: { ...modernFile().project, id, name: '我的修改版' },
+      }
     })
     handlers.set('save_project', () => undefined)
     const { projectStore } = await load()
@@ -689,7 +882,11 @@ describe('tauriList：空库播种与示例升级', () => {
     const saves = calls.filter((c) => c.cmd === 'save_project')
     expect(saves).toHaveLength(1)
     // 写回的是迁移后的用户内容，不是硬编码种子的「午夜出租车」
-    const saved = (saves[0].args as { doc: { schemaVersion: number; project: { name: string } } }).doc
+    const saved = (
+      saves[0].args as {
+        doc: { schemaVersion: number; project: { name: string } }
+      }
+    ).doc
     expect(saved.schemaVersion).toBe(1)
     expect(saved.project.name).toBe('我的修改版')
     // 重列返回的首页列表就绪（不再抛未处理拒绝）
@@ -697,7 +894,10 @@ describe('tauriList：空库播种与示例升级', () => {
   })
 
   it('示例迁移/修复回写前先过加载侧资产复验：不可验证键隔离后再回写，坏资产不再让 list 中止、首页清空', async () => {
-    handlers.set('list_projects', () => [meta('sample-wu-ye-chu-zu-che'), meta('user-p1')])
+    handlers.set('list_projects', () => [
+      meta('sample-wu-ye-chu-zu-che'),
+      meta('user-p1'),
+    ])
     let loadCalls = 0
     handlers.set('load_project', (args) => {
       const { id } = args as { id: string }
@@ -709,24 +909,46 @@ describe('tauriList：空库播种与示例升级', () => {
         return {
           ...modernFile(),
           project: { ...modernFile().project, id, name: '我的修改版' },
-          graph: { ...modernFile().graph, edges: [{ id: '   ', source: 's1', target: 's1', data: { kind: 'sequence' } }] },
+          graph: {
+            ...modernFile().graph,
+            edges: [
+              {
+                id: '   ',
+                source: 's1',
+                target: 's1',
+                data: { kind: 'sequence' },
+              },
+            ],
+          },
           assets: {
             byId: {
-              'a-1': { id: 'a-1', relPath: 'assets/lost.png', mime: 'image/png', source: 'upload', createdAt: '2026-01-01T00:00:00.000Z' },
+              'a-1': {
+                id: 'a-1',
+                relPath: 'assets/lost.png',
+                mime: 'image/png',
+                source: 'upload',
+                createdAt: '2026-01-01T00:00:00.000Z',
+              },
             },
           },
         }
       }
       // 回写后的净本：坏资产已隔离，重列复检不再触发写
-      return { ...modernFile(), project: { ...modernFile().project, id, name: '我的修改版' } }
+      return {
+        ...modernFile(),
+        project: { ...modernFile().project, id, name: '我的修改版' },
+      }
     })
     handlers.set('verify_project_assets', (args) => {
-      const sent = (args as { assets: { byId?: Record<string, unknown> } }).assets
+      const sent = (args as { assets: { byId?: Record<string, unknown> } })
+        .assets
       return sent.byId?.['a-1'] !== undefined ? ['a-1'] : []
     })
     // 保存边界（§10.5）对不可验证资产整次拒收：mock 复刻该契约
     handlers.set('save_project', (args) => {
-      const doc = (args as { doc: { assets?: { byId?: Record<string, unknown> } } }).doc
+      const doc = (
+        args as { doc: { assets?: { byId?: Record<string, unknown> } } }
+      ).doc
       if (doc.assets?.byId?.['a-1'] !== undefined) {
         throw new Error('资产 a-1：资产文件不存在：assets/lost.png')
       }
@@ -741,7 +963,9 @@ describe('tauriList：空库播种与示例升级', () => {
     expect((verify?.args as { id: string }).id).toBe('sample-wu-ye-chu-zu-che')
     const saves = calls.filter((c) => c.cmd === 'save_project')
     expect(saves).toHaveLength(1)
-    const saved = (saves[0].args as { doc: { assets: { byId: Record<string, unknown> } } }).doc
+    const saved = (
+      saves[0].args as { doc: { assets: { byId: Record<string, unknown> } } }
+    ).doc
     expect(saved.assets.byId['a-1']).toBeUndefined()
   })
 })
@@ -760,7 +984,10 @@ describe('tauriCreate / delete / duplicate', () => {
 
   it('duplicate = load → create → copy_project_assets → save 全链路（副本名拼接）', async () => {
     handlers.set('load_project', () => modernFile())
-    handlers.set('create_project', (args) => ({ ...meta('copy-1'), name: (args as { name: string }).name }))
+    handlers.set('create_project', (args) => ({
+      ...meta('copy-1'),
+      name: (args as { name: string }).name,
+    }))
     handlers.set('copy_project_assets', () => undefined)
     handlers.set('save_project', () => undefined)
     const { projectStore } = await load()
@@ -774,7 +1001,17 @@ describe('tauriCreate / delete / duplicate', () => {
   it('duplicate：带资产索引的项目先整目录拷贝(from→to)再保存，供 §10.5 实路径复验通过', async () => {
     handlers.set('load_project', () => ({
       ...modernFile(),
-      assets: { byId: { 'a-1': { id: 'a-1', relPath: 'assets/x.png', mime: 'image/png', source: 'upload', createdAt: '2026-01-01T00:00:00.000Z' } } },
+      assets: {
+        byId: {
+          'a-1': {
+            id: 'a-1',
+            relPath: 'assets/x.png',
+            mime: 'image/png',
+            source: 'upload',
+            createdAt: '2026-01-01T00:00:00.000Z',
+          },
+        },
+      },
     }))
     handlers.set('create_project', () => meta('copy-9'))
     handlers.set('copy_project_assets', () => undefined)
@@ -784,7 +1021,9 @@ describe('tauriCreate / delete / duplicate', () => {
     const copyCall = calls.find((c) => c.cmd === 'copy_project_assets')
     expect(copyCall?.args).toEqual({ fromId: 'p1', toId: 'copy-9' })
     const order = calls.map((c) => c.cmd)
-    expect(order.indexOf('copy_project_assets')).toBeLessThan(order.indexOf('save_project'))
+    expect(order.indexOf('copy_project_assets')).toBeLessThan(
+      order.indexOf('save_project'),
+    )
   })
 
   it('duplicate：保存失败向前抛出并清理刚建的空副本，不再静默返回空项目', async () => {
@@ -847,15 +1086,31 @@ describe('项目级持久化所有者（保存失败重试不随编辑器卸载�
     vi.useFakeTimers()
     try {
       const { projectStore } = await load()
-      await expect(projectStore.save('p1', { name: 'v1', nodes: [], edges: [], settings: { characters: [], locations: [] } })).rejects.toThrow('磁盘满')
+      await expect(
+        projectStore.save('p1', {
+          name: 'v1',
+          nodes: [],
+          edges: [],
+          settings: { characters: [], locations: [] },
+        }),
+      ).rejects.toThrow('磁盘满')
       await vi.advanceTimersByTimeAsync(5000)
-      await expect(projectStore.save('p1', { name: 'v2', nodes: [], edges: [], settings: { characters: [], locations: [] } })).rejects.toThrow('磁盘满')
+      await expect(
+        projectStore.save('p1', {
+          name: 'v2',
+          nodes: [],
+          edges: [],
+          settings: { characters: [], locations: [] },
+        }),
+      ).rejects.toThrow('磁盘满')
       // 编辑器此时卸载：无组件持有文档——所有者仍按节律重试最新（v2）文档
       await vi.advanceTimersByTimeAsync(5000)
       await vi.advanceTimersByTimeAsync(5000)
       const saves = calls.filter((c) => c.cmd === 'save_project')
       expect(saves.length).toBeGreaterThanOrEqual(3)
-      const last = saves[saves.length - 1].args as { doc: { project: { name: string } } }
+      const last = saves[saves.length - 1].args as {
+        doc: { project: { name: string } }
+      }
       expect(last.doc.project.name).toBe('v2')
     } finally {
       vi.useRealTimers()
@@ -875,13 +1130,28 @@ describe('项目级持久化所有者（保存失败重试不随编辑器卸载�
     vi.useFakeTimers()
     try {
       const { projectStore } = await load()
-      await expect(projectStore.save('p1', { name: '旧', nodes: [], edges: [], settings: { characters: [], locations: [] } })).rejects.toThrow('只读')
+      await expect(
+        projectStore.save('p1', {
+          name: '旧',
+          nodes: [],
+          edges: [],
+          settings: { characters: [], locations: [] },
+        }),
+      ).rejects.toThrow('只读')
       // 恢复后新会话手动保存更新文档（成功）——待重试登记被清除
-      await projectStore.save('p1', { name: '新', nodes: [], edges: [], settings: { characters: [], locations: [] } })
+      await projectStore.save('p1', {
+        name: '新',
+        nodes: [],
+        edges: [],
+        settings: { characters: [], locations: [] },
+      })
       await vi.advanceTimersByTimeAsync(20000)
       const names = calls
         .filter((c) => c.cmd === 'save_project')
-        .map((c) => (c.args as { doc: { project: { name: string } } }).doc.project.name)
+        .map(
+          (c) =>
+            (c.args as { doc: { project: { name: string } } }).doc.project.name,
+        )
       expect(names).toEqual(['旧', '新'])
     } finally {
       vi.useRealTimers()
@@ -894,33 +1164,51 @@ describe('持久化所有者的代次与删除串行（陈旧重试/复活防护
     let aFailed = false
     let releaseB: (() => void) | null = null
     handlers.set('load_project', () => modernFile())
-    handlers.set('save_project', (args) =>
-      new Promise<void>((resolve, reject) => {
-        const name = (args as { doc: { project: { name: string } } }).doc.project.name
-        if (name === '旧') {
-          if (!aFailed) {
-            aFailed = true
-            reject(new Error('瞬时故障'))
+    handlers.set(
+      'save_project',
+      (args) =>
+        new Promise<void>((resolve, reject) => {
+          const name = (args as { doc: { project: { name: string } } }).doc
+            .project.name
+          if (name === '旧') {
+            if (!aFailed) {
+              aFailed = true
+              reject(new Error('瞬时故障'))
+              return
+            }
+            resolve() // 重试若被放行会成功——正是要证明它不该跑
             return
           }
-          resolve() // 重试若被放行会成功——正是要证明它不该跑
-          return
-        }
-        releaseB = resolve // 新文档挂起（在途超过重试周期）
-      }),
+          releaseB = resolve // 新文档挂起（在途超过重试周期）
+        }),
     )
     vi.useFakeTimers()
     try {
       const { projectStore } = await load()
-      await expect(projectStore.save('p1', { name: '旧', nodes: [], edges: [], settings: { characters: [], locations: [] } })).rejects.toThrow('瞬时故障')
-      const savingB = projectStore.save('p1', { name: '新', nodes: [], edges: [], settings: { characters: [], locations: [] } })
+      await expect(
+        projectStore.save('p1', {
+          name: '旧',
+          nodes: [],
+          edges: [],
+          settings: { characters: [], locations: [] },
+        }),
+      ).rejects.toThrow('瞬时故障')
+      const savingB = projectStore.save('p1', {
+        name: '新',
+        nodes: [],
+        edges: [],
+        settings: { characters: [], locations: [] },
+      })
       await vi.advanceTimersByTimeAsync(5000) // 重试到点：须因新保存已排队而作废
       ;(releaseB as unknown as (() => void) | undefined)?.()
       await savingB
       await vi.advanceTimersByTimeAsync(20000)
       const names = calls
         .filter((c) => c.cmd === 'save_project')
-        .map((c) => (c.args as { doc: { project: { name: string } } }).doc.project.name)
+        .map(
+          (c) =>
+            (c.args as { doc: { project: { name: string } } }).doc.project.name,
+        )
       expect(names).toEqual(['旧', '新'])
     } finally {
       vi.useRealTimers()
@@ -930,10 +1218,21 @@ describe('持久化所有者的代次与删除串行（陈旧重试/复活防护
   it('删除排在在途保存之后：保存完成前不得发出 delete_project', async () => {
     let releaseSave: (() => void) | null = null
     handlers.set('load_project', () => modernFile())
-    handlers.set('save_project', () => new Promise<void>((resolve) => { releaseSave = resolve }))
+    handlers.set(
+      'save_project',
+      () =>
+        new Promise<void>((resolve) => {
+          releaseSave = resolve
+        }),
+    )
     handlers.set('delete_project', () => undefined)
     const { projectStore } = await load()
-    const saving = projectStore.save('p1', { name: 'x', nodes: [], edges: [], settings: { characters: [], locations: [] } })
+    const saving = projectStore.save('p1', {
+      name: 'x',
+      nodes: [],
+      edges: [],
+      settings: { characters: [], locations: [] },
+    })
     const deleting = projectStore.delete('p1')
     // 等保存真正挂起（invoke 链有多跳微任务），删除此时不得越过它
     await vi.waitFor(() => expect(releaseSave).not.toBeNull())
@@ -953,7 +1252,14 @@ describe('持久化所有者的代次与删除串行（陈旧重试/复活防护
     vi.useFakeTimers()
     try {
       const { projectStore } = await load()
-      await expect(projectStore.save('p1', { name: 'x', nodes: [], edges: [], settings: { characters: [], locations: [] } })).rejects.toThrow('只读')
+      await expect(
+        projectStore.save('p1', {
+          name: 'x',
+          nodes: [],
+          edges: [],
+          settings: { characters: [], locations: [] },
+        }),
+      ).rejects.toThrow('只读')
       await projectStore.delete('p1')
       await vi.advanceTimersByTimeAsync(20000)
       expect(calls.filter((c) => c.cmd === 'save_project')).toHaveLength(1) // 红：重试复活
@@ -964,7 +1270,12 @@ describe('持久化所有者的代次与删除串行（陈旧重试/复活防护
 })
 
 describe('持久化所有者的代次重排与删除墓碑', () => {
-  const docOf = (name: string) => ({ name, nodes: [], edges: [], settings: { characters: [], locations: [] } })
+  const docOf = (name: string) => ({
+    name,
+    nodes: [],
+    edges: [],
+    settings: { characters: [], locations: [] },
+  })
 
   it('新代次失败须接管重试定时器：最新失败文档最终落盘', async () => {
     handlers.set('load_project', () => modernFile())
@@ -980,7 +1291,10 @@ describe('持久化所有者的代次重排与删除墓碑', () => {
       await vi.advanceTimersByTimeAsync(5000)
       const names = calls
         .filter((c) => c.cmd === 'save_project')
-        .map((c) => (c.args as { doc: { project: { name: string } } }).doc.project.name)
+        .map(
+          (c) =>
+            (c.args as { doc: { project: { name: string } } }).doc.project.name,
+        )
       expect(names).toEqual(['旧', '新', '新']) // 重试以最新文档发起
     } finally {
       vi.useRealTimers()
@@ -990,14 +1304,16 @@ describe('持久化所有者的代次重排与删除墓碑', () => {
   it('删除开始后的保存排队被吸收：不复活已删项目', async () => {
     let releaseA: (() => void) | null = null
     handlers.set('load_project', () => modernFile())
-    handlers.set('save_project', () =>
-      new Promise<void>((resolve) => {
-        if (releaseA !== null) {
-          resolve() // 首次之后的保存立即完成：红态下 B 复活项目即被断言抓住
-          return
-        }
-        releaseA = resolve
-      }),
+    handlers.set(
+      'save_project',
+      () =>
+        new Promise<void>((resolve) => {
+          if (releaseA !== null) {
+            resolve() // 首次之后的保存立即完成：红态下 B 复活项目即被断言抓住
+            return
+          }
+          releaseA = resolve
+        }),
     )
     handlers.set('delete_project', () => undefined)
     const { projectStore } = await load()
@@ -1017,10 +1333,12 @@ describe('持久化所有者的代次重排与删除墓碑', () => {
     let rejectDelete: ((err: Error) => void) | null = null
     handlers.set('load_project', () => modernFile())
     handlers.set('save_project', () => undefined)
-    handlers.set('delete_project', () =>
-      new Promise<void>((_resolve, reject) => {
-        rejectDelete = reject
-      }),
+    handlers.set(
+      'delete_project',
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectDelete = reject
+        }),
     )
     const { projectStore } = await load()
     const deleting = projectStore.delete('p1')
@@ -1036,7 +1354,10 @@ describe('持久化所有者的代次重排与删除墓碑', () => {
     await vi.waitFor(() => {
       const names = calls
         .filter((c) => c.cmd === 'save_project')
-        .map((c) => (c.args as { doc: { project: { name: string } } }).doc.project.name)
+        .map(
+          (c) =>
+            (c.args as { doc: { project: { name: string } } }).doc.project.name,
+        )
       expect(names).toEqual(['新迟到']) // 只回吐最新一份
     })
   })
@@ -1062,7 +1383,10 @@ describe('持久化所有者的代次重排与删除墓碑', () => {
     await vi.waitFor(() => {
       const names = calls
         .filter((c) => c.cmd === 'save_project')
-        .map((c) => (c.args as { doc: { project: { name: string } } }).doc.project.name)
+        .map(
+          (c) =>
+            (c.args as { doc: { project: { name: string } } }).doc.project.name,
+        )
       expect(names).toEqual(['Z', 'Z'])
     })
   })
@@ -1094,7 +1418,10 @@ describe('持久化所有者的代次重排与删除墓碑', () => {
     await vi.waitFor(() => {
       const names = calls
         .filter((c) => c.cmd === 'save_project')
-        .map((c) => (c.args as { doc: { project: { name: string } } }).doc.project.name)
+        .map(
+          (c) =>
+            (c.args as { doc: { project: { name: string } } }).doc.project.name,
+        )
       expect(names).toEqual(['A', 'A'])
     })
   })
@@ -1115,7 +1442,9 @@ describe('持久化所有者的代次重排与删除墓碑', () => {
     vi.useFakeTimers()
     try {
       const { projectStore } = await load()
-      await expect(projectStore.save('p1', docOf('旧A'))).rejects.toThrow('磁盘满')
+      await expect(projectStore.save('p1', docOf('旧A'))).rejects.toThrow(
+        '磁盘满',
+      )
       // B 排在 A 之后、删除排队时仍在途：B 成功即取代 A 的重试登记
       const savingB = projectStore.save('p1', docOf('新B'))
       const deleting = projectStore.delete('p1')
@@ -1125,7 +1454,10 @@ describe('持久化所有者的代次重排与删除墓碑', () => {
       await vi.advanceTimersByTimeAsync(20000)
       const names = calls
         .filter((c) => c.cmd === 'save_project')
-        .map((c) => (c.args as { doc: { project: { name: string } } }).doc.project.name)
+        .map(
+          (c) =>
+            (c.args as { doc: { project: { name: string } } }).doc.project.name,
+        )
       expect(names).toEqual(['旧A', '新B'])
     } finally {
       vi.useRealTimers()

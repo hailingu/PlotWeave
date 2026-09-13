@@ -11,7 +11,13 @@ const REF_ICONS = { character: '👤', location: '🏞', audio: '🎵' } as cons
 
 /** 引用位缩略图（§8.1）：image/* 资产经项目资产门面解析媒体 URL 懒渲染；
  * 解析失败/非图片不渲染图，chip 回退纯文本。 */
-function RefThumb({ projectId, asset }: { readonly projectId: string; readonly asset: AssetRef }) {
+function RefThumb({
+  projectId,
+  asset,
+}: {
+  readonly projectId: string
+  readonly asset: AssetRef
+}) {
   const [url, setUrl] = useState<string | null>(null)
   useEffect(() => {
     let alive = true
@@ -36,7 +42,11 @@ function RefThumb({ projectId, asset }: { readonly projectId: string; readonly a
  * 从属关系走顶部入口：宿主索引卡底部端口垂直下挂（§4.4 attach 边）。
  * ⚙️ 打开设置面板（§4.3，编辑即命令）；镜号标题行不设内联改名。
  */
-export default function ShotNode({ id, data, selected }: NodeProps<ShotFlowNode>) {
+export default function ShotNode({
+  id,
+  data,
+  selected,
+}: NodeProps<ShotFlowNode>) {
   const { projectId, openSettingsId, toggleSettings, assets } = useNodeEdit()
   const settingsOpen = openSettingsId === id
 
@@ -48,7 +58,9 @@ export default function ShotNode({ id, data, selected }: NodeProps<ShotFlowNode>
   return (
     <div className={`pw-shot${selected ? ' pw-on' : ''}`}>
       <div className="pw-shot-tb">
-        <span className="pw-shot-no">SHOT {String(data.shotNo).padStart(2, '0')}</span>
+        <span className="pw-shot-no">
+          SHOT {String(data.shotNo).padStart(2, '0')}
+        </span>
         <span className="pw-shot-size">{data.size}</span>
         <span className="pw-sp" />
         <button
@@ -72,7 +84,8 @@ export default function ShotNode({ id, data, selected }: NodeProps<ShotFlowNode>
       </div>
       <div className="pw-shot-refs">
         {data.refs.map((ref) => {
-          const asset = ref.assetId !== undefined ? assets?.byId?.[ref.assetId] : undefined
+          const asset =
+            ref.assetId !== undefined ? assets?.byId?.[ref.assetId] : undefined
           return (
             <span key={ref.id} className="pw-shot-ref">
               {asset !== undefined && asset.mime.startsWith('image/') && (

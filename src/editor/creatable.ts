@@ -5,7 +5,14 @@
  */
 
 /** ＋节点下拉的创建项（§3.3；图片节点为 §13 生成侧媒体节点）。 */
-export const CREATABLE_TYPES = ['scene', 'beat', 'dialogue', 'branch', 'shot', 'image'] as const
+export const CREATABLE_TYPES = [
+  'scene',
+  'beat',
+  'dialogue',
+  'branch',
+  'shot',
+  'image',
+] as const
 
 /** 可创建节点类型字面量联合。 */
 export type CreatableType = (typeof CREATABLE_TYPES)[number]

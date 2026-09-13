@@ -17,10 +17,12 @@ import {
 } from './document'
 import { normalizeEpisodeTitles } from './legacy'
 
-
 /** meta 时间戳透传（§4.1 演进占位）：会话带上才写回，缺失即省略；非字符串
  * 值不带（下游不落盘即剥离）。 */
-function metaTsOf(m: NodeMetaPassthrough['meta']): { createdAt?: string; updatedAt?: string } {
+function metaTsOf(m: NodeMetaPassthrough['meta']): {
+  createdAt?: string
+  updatedAt?: string
+} {
   return {
     ...(typeof m?.createdAt === 'string' ? { createdAt: m.createdAt } : {}),
     ...(typeof m?.updatedAt === 'string' ? { updatedAt: m.updatedAt } : {}),
@@ -64,7 +66,9 @@ function flowLayoutOf(n: StoryNode): {
 /** 落盘 meta 时间戳 → 运行态顶层 meta 透传（均缺省即无 meta 键）。 */
 function flowMetaOf(m: NodeMetaPassthrough['meta']): NodeMetaPassthrough {
   const ts = metaTsOf(m)
-  return ts.createdAt !== undefined || ts.updatedAt !== undefined ? { meta: ts } : {}
+  return ts.createdAt !== undefined || ts.updatedAt !== undefined
+    ? { meta: ts }
+    : {}
 }
 
 /** 节点 → 落盘形态：按 n.type switch 逐分支构造精确的 StoryNode 联合成员
@@ -73,7 +77,11 @@ function flowMetaOf(m: NodeMetaPassthrough['meta']): NodeMetaPassthrough {
  * 进 spec；branch 派生标题不落 meta.label 镜像；分镜卡随宿主场景分集、
  * 图片节点非叙事单元不进大纲分组，均不落独立 episodeNo（§3.5/§13）。 */
 export function toStoryNode(n: CanvasNode): StoryNode {
-  const base = { id: n.id, layout: layoutOf(n), ui: { selected: false, expanded: true } }
+  const base = {
+    id: n.id,
+    layout: layoutOf(n),
+    ui: { selected: false, expanded: true },
+  }
   switch (n.type) {
     case 'scene': {
       const { name, episodeNo, ...spec } = n.data
@@ -82,7 +90,11 @@ export function toStoryNode(n: CanvasNode): StoryNode {
         type: 'scene',
         data: {
           spec,
-          meta: { label: name ?? '', ...episodeNoOf(episodeNo), ...metaTsOf(n.meta) },
+          meta: {
+            label: name ?? '',
+            ...episodeNoOf(episodeNo),
+            ...metaTsOf(n.meta),
+          },
         },
       }
     }
@@ -93,7 +105,11 @@ export function toStoryNode(n: CanvasNode): StoryNode {
         type: 'beat',
         data: {
           spec,
-          meta: { label: name ?? '', ...episodeNoOf(episodeNo), ...metaTsOf(n.meta) },
+          meta: {
+            label: name ?? '',
+            ...episodeNoOf(episodeNo),
+            ...metaTsOf(n.meta),
+          },
         },
       }
     }
@@ -104,7 +120,11 @@ export function toStoryNode(n: CanvasNode): StoryNode {
         type: 'dialogue',
         data: {
           spec,
-          meta: { label: name ?? '', ...episodeNoOf(episodeNo), ...metaTsOf(n.meta) },
+          meta: {
+            label: name ?? '',
+            ...episodeNoOf(episodeNo),
+            ...metaTsOf(n.meta),
+          },
         },
       }
     }
@@ -118,7 +138,10 @@ export function toStoryNode(n: CanvasNode): StoryNode {
       return {
         ...base,
         type: 'branch',
-        data: { spec, meta: { ...episodeNoOf(episodeNo), ...metaTsOf(n.meta) } },
+        data: {
+          spec,
+          meta: { ...episodeNoOf(episodeNo), ...metaTsOf(n.meta) },
+        },
       }
     }
     case 'shot': {
@@ -231,12 +254,20 @@ export function toStoryEdge(e: Edge): StoryEdge {
   const kind = edgeKindOf(e)
   if (kind === 'branch') {
     // branch 边必带选项句柄（§5 判别联合）；无句柄属非法形态，归一化按孤儿边隔离
-    return { ...base, sourceHandle: e.sourceHandle ?? '', data: { kind: 'branch', ...optionalOrder } }
+    return {
+      ...base,
+      sourceHandle: e.sourceHandle ?? '',
+      data: { kind: 'branch', ...optionalOrder },
+    }
   }
   if (kind === 'attach') {
     // attach 定义上只从 shots 端口发起（§4.3）：句柄恒为 shots，
     // 顺带归一化历史遗留的缺失/异常句柄
-    return { ...base, sourceHandle: SCENE_SHOT_HANDLE, data: { kind: 'attach', ...optionalOrder } }
+    return {
+      ...base,
+      sourceHandle: SCENE_SHOT_HANDLE,
+      data: { kind: 'attach', ...optionalOrder },
+    }
   }
   return { ...base, data: { kind: 'sequence', ...optionalOrder } }
 }
@@ -253,7 +284,8 @@ export function fromStoryEdge(e: StoryEdge): Edge {
     out.type = 'branch'
     if (order !== undefined) out.data = { order }
   } else {
-    out.className = e.data.kind === 'attach' ? 'pw-edge-attach' : 'pw-edge-sequence'
+    out.className =
+      e.data.kind === 'attach' ? 'pw-edge-attach' : 'pw-edge-sequence'
     if (order !== undefined) out.data = { order }
   }
   return out
@@ -261,18 +293,24 @@ export function fromStoryEdge(e: StoryEdge): Edge {
 
 /** 设定集 → 落盘形态：数组转 Record<id, 实体>。props/documents 首版只透传
  * （UI 未开放编辑），原样回写保真。 */
-export function toDocSettings(settings: ProjectSettings): ProjectDocument['settings'] {
+export function toDocSettings(
+  settings: ProjectSettings,
+): ProjectDocument['settings'] {
   return {
     characters: Object.fromEntries(settings.characters.map((c) => [c.id, c])),
     locations: Object.fromEntries(settings.locations.map((l) => [l.id, l])),
     props: Object.fromEntries((settings.props ?? []).map((p) => [p.id, p])),
-    documents: Object.fromEntries((settings.documents ?? []).map((d) => [d.id, d])),
+    documents: Object.fromEntries(
+      (settings.documents ?? []).map((d) => [d.id, d]),
+    ),
   }
 }
 
 /** 设定集 → 运行态：Record 转数组（插入序即展示序），容忍缺桶；
  * props/documents 桶透传进会话（契约实体，不得静默丢弃）。 */
-export function fromDocSettings(settings: Partial<ProjectDocument['settings']>): ProjectSettings {
+export function fromDocSettings(
+  settings: Partial<ProjectDocument['settings']>,
+): ProjectSettings {
   return {
     characters: Object.values(settings.characters ?? {}),
     locations: Object.values(settings.locations ?? {}),
@@ -315,7 +353,10 @@ export function serializeProject(
       ...toDocSettings(content.settings),
     },
     episodeTitles: content.episodeTitles ?? {},
-    assets: { ...content.assetsExtensions, ...(content.assets ?? { byId: {} }) },
+    assets: {
+      ...content.assetsExtensions,
+      ...(content.assets ?? { byId: {} }),
+    },
   }
 }
 
@@ -325,12 +366,19 @@ export function serializeProject(
  * 三个透传容器的同版本扩展键（issue #100 字段演进策略，§11）随会话携带：
  * rest 剥离契约键后剩余键原样透传，非空才携带（与视口缺省省略同口径）；
  * 会话容器的运行时形状与声明类型一致——扩展键只经 *Extensions 字段往返。 */
-export function fromDocument(doc: ProjectDocument, warnings: string[]): ProjectContent {
-  const graphRaw = doc.graph as ProjectDocument['graph'] & Record<string, unknown>
+export function fromDocument(
+  doc: ProjectDocument,
+  warnings: string[],
+): ProjectContent {
+  const graphRaw = doc.graph as ProjectDocument['graph'] &
+    Record<string, unknown>
   const { nodes, edges, viewport, aiRevision, ...graphExtensions } = graphRaw
-  const settingsRaw = doc.settings as ProjectDocument['settings'] & Record<string, unknown>
-  const { characters, locations, props, documents, ...settingsExtensions } = settingsRaw
-  const assetsRaw = doc.assets as ProjectDocument['assets'] & Record<string, unknown>
+  const settingsRaw = doc.settings as ProjectDocument['settings'] &
+    Record<string, unknown>
+  const { characters, locations, props, documents, ...settingsExtensions } =
+    settingsRaw
+  const assetsRaw = doc.assets as ProjectDocument['assets'] &
+    Record<string, unknown>
   const { byId, ...assetsExtensions } = assetsRaw
   return {
     name: doc.project.name,
@@ -344,7 +392,9 @@ export function fromDocument(doc: ProjectDocument, warnings: string[]): ProjectC
     ...(aiRevision !== undefined ? { aiRevision } : {}),
     assets: { byId },
     ...(Object.keys(graphExtensions).length > 0 ? { graphExtensions } : {}),
-    ...(Object.keys(settingsExtensions).length > 0 ? { settingsExtensions } : {}),
+    ...(Object.keys(settingsExtensions).length > 0
+      ? { settingsExtensions }
+      : {}),
     ...(Object.keys(assetsExtensions).length > 0 ? { assetsExtensions } : {}),
   }
 }

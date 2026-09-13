@@ -35,7 +35,11 @@ function keyedIdIssue(id: unknown): string {
   return '重复'
 }
 
-const KEYED_LIST_PREFIX: Record<string, string> = { lines: 'line', options: 'opt', refs: 'ref' }
+const KEYED_LIST_PREFIX: Record<string, string> = {
+  lines: 'line',
+  options: 'opt',
+  refs: 'ref',
+}
 
 /** 键控列表成员中空白字符串 id 的原值计数（「空 id → 新 id」映射的唯一性
  * 判定：同一空白原值仅出现一次时映射明确）。非对象成员无 id 可计。 */
@@ -80,8 +84,11 @@ function normalizeKeyedListIds(
     while (seen.has(fresh)) fresh = uid(KEYED_LIST_PREFIX[listKey])
     seen.add(fresh)
     // 非字符串 id 不为它建句柄映射：字符串句柄不得猜测为某个非字符串选项 id
-    if (typeof id === 'string' && !id.trim() && blankCounts.get(id) === 1) remap.set(id, fresh)
-    warnings.push(`节点 ${nid} 的 ${listKey} 成员 id ${keyedIdIssue(id)}，已重发新 id ${fresh}`)
+    if (typeof id === 'string' && !id.trim() && blankCounts.get(id) === 1)
+      remap.set(id, fresh)
+    warnings.push(
+      `节点 ${nid} 的 ${listKey} 成员 id ${keyedIdIssue(id)}，已重发新 id ${fresh}`,
+    )
     item.id = fresh
   }
   return remap
@@ -103,7 +110,12 @@ function isBranchOptionShape(item: unknown): boolean {
  * 到达此处即异型。 */
 function isShotRefShape(item: unknown): boolean {
   if (!isPlainObject(item)) return false
-  if (item.kind !== 'character' && item.kind !== 'location' && item.kind !== 'audio') return false
+  if (
+    item.kind !== 'character' &&
+    item.kind !== 'location' &&
+    item.kind !== 'audio'
+  )
+    return false
   if ('assetId' in item && 'label' in item) return false
   const hasAsset = typeof item.assetId === 'string'
   const hasLabel = typeof item.label === 'string'
@@ -174,7 +186,12 @@ export function repairKeyedListIds(
 ): void {
   const listKey = REQUIRED_LISTS[member.type as string]
   if (listKey !== 'lines' && listKey !== 'options' && listKey !== 'refs') return
-  const remap = normalizeKeyedListIds(spec[listKey] as unknown[], listKey, nid, warnings)
+  const remap = normalizeKeyedListIds(
+    spec[listKey] as unknown[],
+    listKey,
+    nid,
+    warnings,
+  )
   if (
     listKey === 'options' &&
     remap.size > 0 &&

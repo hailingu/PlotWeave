@@ -41,9 +41,12 @@ describe('useDebouncedSave（防抖落盘 + 脏态卸载冲刷）', () => {
 
   it('doc 变化后防抖落盘：会话文档原样透传（序列化在模型层完成）', () => {
     const onSave = vi.fn()
-    const { rerender } = renderHook(({ doc }) => useDebouncedSave(doc, onSave), {
-      initialProps: { doc: mkDoc() },
-    })
+    const { rerender } = renderHook(
+      ({ doc }) => useDebouncedSave(doc, onSave),
+      {
+        initialProps: { doc: mkDoc() },
+      },
+    )
     // rerender 与前进分开 act：passive effect 在 act 退出时才冲刷，
     // 同一块内先 advance 会错过尚未调度的计时器。
     act(() => {
@@ -67,9 +70,12 @@ describe('useDebouncedSave（防抖落盘 + 脏态卸载冲刷）', () => {
 
   it('窗口内连续变化只落最后一次（防抖重置）', () => {
     const onSave = vi.fn()
-    const { rerender } = renderHook(({ doc }) => useDebouncedSave(doc, onSave), {
-      initialProps: { doc: mkDoc('v0') },
-    })
+    const { rerender } = renderHook(
+      ({ doc }) => useDebouncedSave(doc, onSave),
+      {
+        initialProps: { doc: mkDoc('v0') },
+      },
+    )
     act(() => {
       rerender({ doc: mkDoc('v1') })
     })
@@ -92,9 +98,12 @@ describe('useDebouncedSave（防抖落盘 + 脏态卸载冲刷）', () => {
 
   it('计时器未到时卸载：脏数据立即冲刷一次', () => {
     const onSave = vi.fn()
-    const { rerender, unmount } = renderHook(({ doc }) => useDebouncedSave(doc, onSave), {
-      initialProps: { doc: mkDoc() },
-    })
+    const { rerender, unmount } = renderHook(
+      ({ doc }) => useDebouncedSave(doc, onSave),
+      {
+        initialProps: { doc: mkDoc() },
+      },
+    )
     act(() => {
       rerender({ doc: mkDoc('未落定') })
     })
@@ -107,7 +116,10 @@ describe('useDebouncedSave（防抖落盘 + 脏态卸载冲刷）', () => {
     const onSave = vi.fn()
     const { result } = renderHook(() => useDebouncedSave(mkDoc(), onSave))
     // 模拟 EditorView.onMoveEnd：ref 更新后显式标脏，文档带最新视口
-    const moved: ProjectContent = { ...mkDoc(), viewport: { x: 500, y: 300, zoom: 0.8 } }
+    const moved: ProjectContent = {
+      ...mkDoc(),
+      viewport: { x: 500, y: 300, zoom: 0.8 },
+    }
     act(() => {
       result.current(moved)
     })
@@ -115,14 +127,21 @@ describe('useDebouncedSave（防抖落盘 + 脏态卸载冲刷）', () => {
       vi.advanceTimersByTime(600)
     })
     expect(onSave).toHaveBeenCalledTimes(1)
-    expect((onSave.mock.calls[0][0] as ProjectContent).viewport).toEqual({ x: 500, y: 300, zoom: 0.8 })
+    expect((onSave.mock.calls[0][0] as ProjectContent).viewport).toEqual({
+      x: 500,
+      y: 300,
+      zoom: 0.8,
+    })
   })
 
   it('纯选择/运行态变化不置脏（§9.4：update_node_ui 不落盘、不刷新 updatedAt）', () => {
     const onSave = vi.fn()
-    const { rerender, unmount } = renderHook(({ doc }) => useDebouncedSave(doc, onSave), {
-      initialProps: { doc: mkDoc() },
-    })
+    const { rerender, unmount } = renderHook(
+      ({ doc }) => useDebouncedSave(doc, onSave),
+      {
+        initialProps: { doc: mkDoc() },
+      },
+    )
     // React Flow 选中/拖拽过程帧只翻转会话态字段，节点数组随之换新引用
     const base = mkDoc()
     const sessionOnly: ProjectContent = {
@@ -151,16 +170,23 @@ describe('useDebouncedSave（防抖落盘 + 脏态卸载冲刷）', () => {
 
   it('className 运行态样式变化不置脏（集聚焦 pw-node-dim 等纯 UI 变化不刷新 updatedAt）', () => {
     const onSave = vi.fn()
-    const { rerender, unmount } = renderHook(({ doc }) => useDebouncedSave(doc, onSave), {
-      initialProps: { doc: mkDoc() },
-    })
+    const { rerender, unmount } = renderHook(
+      ({ doc }) => useDebouncedSave(doc, onSave),
+      {
+        initialProps: { doc: mkDoc() },
+      },
+    )
     // 运行态样式类注入/剥离（displayNodes 投影、fromStoryEdge 派生重建等
     // 带来的 className 差异）不是持久化内容——签名须与序列化同口径剥离
     const base = mkDoc()
     const styleOnly: ProjectContent = {
       ...base,
-      nodes: [{ ...base.nodes[0], className: 'pw-node-dim' } as unknown as CanvasNode],
-      edges: [{ id: 'e1', source: 'a', target: 'b', className: 'pw-edge-sequence' }],
+      nodes: [
+        { ...base.nodes[0], className: 'pw-node-dim' } as unknown as CanvasNode,
+      ],
+      edges: [
+        { id: 'e1', source: 'a', target: 'b', className: 'pw-edge-sequence' },
+      ],
     }
     act(() => {
       rerender({ doc: styleOnly })
@@ -175,14 +201,19 @@ describe('useDebouncedSave（防抖落盘 + 脏态卸载冲刷）', () => {
 
   it('会话态变化之后的真实内容变化仍正常落盘', () => {
     const onSave = vi.fn()
-    const { rerender } = renderHook(({ doc }) => useDebouncedSave(doc, onSave), {
-      initialProps: { doc: mkDoc() },
-    })
+    const { rerender } = renderHook(
+      ({ doc }) => useDebouncedSave(doc, onSave),
+      {
+        initialProps: { doc: mkDoc() },
+      },
+    )
     act(() => {
       rerender({
         doc: {
           ...mkDoc(),
-          nodes: [{ ...mkDoc().nodes[0], selected: false } as unknown as CanvasNode],
+          nodes: [
+            { ...mkDoc().nodes[0], selected: false } as unknown as CanvasNode,
+          ],
         },
       })
     })
@@ -198,9 +229,12 @@ describe('useDebouncedSave（防抖落盘 + 脏态卸载冲刷）', () => {
 
   it('资产索引变化（§7.3 会话内导入新增条目）也置脏落盘', async () => {
     const onSave = vi.fn()
-    const { rerender } = renderHook(({ doc }) => useDebouncedSave(doc, onSave), {
-      initialProps: { doc: mkDoc() },
-    })
+    const { rerender } = renderHook(
+      ({ doc }) => useDebouncedSave(doc, onSave),
+      {
+        initialProps: { doc: mkDoc() },
+      },
+    )
     const withAsset: ProjectContent = {
       ...mkDoc(),
       assets: {
@@ -222,14 +256,19 @@ describe('useDebouncedSave（防抖落盘 + 脏态卸载冲刷）', () => {
       await vi.advanceTimersByTimeAsync(600)
     })
     expect(onSave).toHaveBeenCalledTimes(1)
-    expect((onSave.mock.calls[0][0] as ProjectContent).assets?.byId['pa-1']).toBeDefined()
+    expect(
+      (onSave.mock.calls[0][0] as ProjectContent).assets?.byId['pa-1'],
+    ).toBeDefined()
   })
 
   it('仅集标题变化（renameEpisode 的改名/清空）也置脏落盘，不静默丢失', async () => {
     const onSave = vi.fn()
-    const { rerender } = renderHook(({ doc }) => useDebouncedSave(doc, onSave), {
-      initialProps: { doc: mkDoc() },
-    })
+    const { rerender } = renderHook(
+      ({ doc }) => useDebouncedSave(doc, onSave),
+      {
+        initialProps: { doc: mkDoc() },
+      },
+    )
     // 大纲行内改名：name/nodes/edges/settings 全不变，只有 episodeTitles 变。
     // 异步 advance：串行化下在途保存的完成续体需微任务冲刷后才释放在途标记
     act(() => {
@@ -239,7 +278,9 @@ describe('useDebouncedSave（防抖落盘 + 脏态卸载冲刷）', () => {
       await vi.advanceTimersByTimeAsync(600)
     })
     expect(onSave).toHaveBeenCalledTimes(1)
-    expect((onSave.mock.calls[0][0] as ProjectContent).episodeTitles).toEqual({ 1: '重逢' })
+    expect((onSave.mock.calls[0][0] as ProjectContent).episodeTitles).toEqual({
+      1: '重逢',
+    })
     // 清空该集命名（applyEpisodeTitle 删除键）同样触发
     act(() => {
       rerender({ doc: { ...mkDoc(), episodeTitles: {} } })
@@ -248,14 +289,19 @@ describe('useDebouncedSave（防抖落盘 + 脏态卸载冲刷）', () => {
       await vi.advanceTimersByTimeAsync(600)
     })
     expect(onSave).toHaveBeenCalledTimes(2)
-    expect((onSave.mock.calls[1][0] as ProjectContent).episodeTitles).toEqual({})
+    expect((onSave.mock.calls[1][0] as ProjectContent).episodeTitles).toEqual(
+      {},
+    )
   })
 
   it('落盘后再卸载不重复冲刷（脏标记已清）', () => {
     const onSave = vi.fn()
-    const { rerender, unmount } = renderHook(({ doc }) => useDebouncedSave(doc, onSave), {
-      initialProps: { doc: mkDoc() },
-    })
+    const { rerender, unmount } = renderHook(
+      ({ doc }) => useDebouncedSave(doc, onSave),
+      {
+        initialProps: { doc: mkDoc() },
+      },
+    )
     act(() => {
       rerender({ doc: mkDoc('已落定') })
       vi.advanceTimersByTime(600)
@@ -270,7 +316,8 @@ describe('useDebouncedSave（保存失败上浮与防抖重试）', () => {
   afterEach(() => vi.useRealTimers())
 
   it('保存失败：重新置脏、防抖自动重试，失败经 onResult 上报', async () => {
-    const onSave = vi.fn()
+    const onSave = vi
+      .fn()
       .mockRejectedValueOnce(new Error('磁盘已满'))
       .mockResolvedValue(undefined)
     const onResult = vi.fn()
@@ -285,7 +332,9 @@ describe('useDebouncedSave（保存失败上浮与防抖重试）', () => {
       await vi.advanceTimersByTimeAsync(600)
     })
     expect(onSave).toHaveBeenCalledTimes(1)
-    expect(onResult).toHaveBeenCalledWith(expect.objectContaining({ message: '磁盘已满' }))
+    expect(onResult).toHaveBeenCalledWith(
+      expect.objectContaining({ message: '磁盘已满' }),
+    )
     // 失败重新置脏 → 防抖到点自动重试
     await act(async () => {
       await vi.advanceTimersByTimeAsync(600)
@@ -308,7 +357,9 @@ describe('useDebouncedSave（保存失败上浮与防抖重试）', () => {
       await vi.advanceTimersByTimeAsync(600)
     })
     unmount()
-    expect(onResult).toHaveBeenCalledWith(expect.objectContaining({ message: '只读' }))
+    expect(onResult).toHaveBeenCalledWith(
+      expect.objectContaining({ message: '只读' }),
+    )
   })
 })
 
@@ -319,7 +370,10 @@ describe('useDebouncedSave（卸载后终止失败重试）', () => {
   it('卸载后才失败的保存不得复活重试循环（不留后台循环覆盖新会话编辑）', async () => {
     let rejectSave: ((e: Error) => void) | null = null
     const onSave = vi.fn(
-      () => new Promise<void>((_, rej) => { rejectSave = rej }),
+      () =>
+        new Promise<void>((_, rej) => {
+          rejectSave = rej
+        }),
     )
     const onResult = vi.fn()
     const { rerender, unmount } = renderHook(
@@ -364,9 +418,12 @@ describe('useDebouncedSave（保存串行化：在途保存期间的新编辑合
           resolve()
         }),
     )
-    const { rerender } = renderHook(({ doc }) => useDebouncedSave(doc, onSave, 600), {
-      initialProps: { doc: mkDoc() },
-    })
+    const { rerender } = renderHook(
+      ({ doc }) => useDebouncedSave(doc, onSave, 600),
+      {
+        initialProps: { doc: mkDoc() },
+      },
+    )
     act(() => {
       rerender({ doc: mkDoc('A') })
     })
@@ -413,9 +470,12 @@ describe('useDebouncedSave（在途保存期间卸载：待冲刷编辑不丢）
           resolve()
         }),
     )
-    const { rerender, unmount } = renderHook(({ doc }) => useDebouncedSave(doc, onSave, 600), {
-      initialProps: { doc: mkDoc() },
-    })
+    const { rerender, unmount } = renderHook(
+      ({ doc }) => useDebouncedSave(doc, onSave, 600),
+      {
+        initialProps: { doc: mkDoc() },
+      },
+    )
     act(() => {
       rerender({ doc: mkDoc('A') })
     })
@@ -449,9 +509,12 @@ describe('useDebouncedSave（在途保存期间卸载：待冲刷编辑不丢）
           resolve()
         }),
     )
-    const { rerender, unmount } = renderHook(({ doc }) => useDebouncedSave(doc, onSave, 600), {
-      initialProps: { doc: mkDoc() },
-    })
+    const { rerender, unmount } = renderHook(
+      ({ doc }) => useDebouncedSave(doc, onSave, 600),
+      {
+        initialProps: { doc: mkDoc() },
+      },
+    )
     act(() => {
       rerender({ doc: mkDoc('A') })
     })

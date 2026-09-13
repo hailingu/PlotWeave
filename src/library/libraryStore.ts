@@ -10,14 +10,13 @@
 import { uid } from '../uid'
 
 export type LibraryKind =
-  | 'character'
-  | 'location'
-  | 'wardrobe'
-  | 'colorlight'
-  | 'reference'
-  | 'other'
+  'character' | 'location' | 'wardrobe' | 'colorlight' | 'reference' | 'other'
 
-export const LIBRARY_KINDS: Array<{ kind: LibraryKind; label: string; icon: string }> = [
+export const LIBRARY_KINDS: Array<{
+  kind: LibraryKind
+  label: string
+  icon: string
+}> = [
   { kind: 'character', label: '角色设定', icon: '🎭' },
   { kind: 'location', label: '场景设定', icon: '🏔' },
   { kind: 'wardrobe', label: '服化道', icon: '🧥' },
@@ -69,17 +68,28 @@ interface RawAsset {
 
 function normalizeAsset(raw: RawAsset | null): LibraryAsset | null {
   // IPC 信任边界：非对象载荷（含 null）整条丢弃，不向上抛 TypeError
-  if (raw === null || typeof raw !== 'object' || typeof raw.id !== 'string' || raw.id === '') {
+  if (
+    raw === null ||
+    typeof raw !== 'object' ||
+    typeof raw.id !== 'string' ||
+    raw.id === ''
+  ) {
     return null
   }
   return {
     id: raw.id,
-    name: typeof raw.name === 'string' && raw.name !== '' ? raw.name : '未命名资产',
-    kind: typeof raw.kind === 'string' && KIND_SET.has(raw.kind) ? (raw.kind as LibraryKind) : 'other',
+    name:
+      typeof raw.name === 'string' && raw.name !== '' ? raw.name : '未命名资产',
+    kind:
+      typeof raw.kind === 'string' && KIND_SET.has(raw.kind)
+        ? (raw.kind as LibraryKind)
+        : 'other',
     view: typeof raw.view === 'string' ? raw.view : null,
     mime: typeof raw.mime === 'string' ? raw.mime : 'application/octet-stream',
     relPath: typeof raw.relPath === 'string' ? raw.relPath : '',
-    tags: Array.isArray(raw.tags) ? raw.tags.filter((t): t is string => typeof t === 'string') : [],
+    tags: Array.isArray(raw.tags)
+      ? raw.tags.filter((t): t is string => typeof t === 'string')
+      : [],
     groupId: typeof raw.groupId === 'string' ? raw.groupId : null,
     // createdAt 是 §7.2 UTC ISO 字符串：原样保留，非法/缺失回退空串（评审
     // 修复，PR #33 第四轮——只认 number 会把真实创建时间静默归 0 丢失）
@@ -89,8 +99,7 @@ function normalizeAsset(raw: RawAsset | null): LibraryAsset | null {
   }
 }
 
-const isTauri =
-  typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
 /** 后端隔离/修复诊断统一进既有 console.warn 路径（issue #17）：list 与
  * 各变更命令的 warnings 清单逐条上报，被隔离条目不得静默消失或被
@@ -98,7 +107,8 @@ const isTauri =
 function reportLibraryWarnings(warnings: unknown): void {
   if (Array.isArray(warnings)) {
     for (const w of warnings) {
-      if (typeof w === 'string' && w !== '') console.warn('[Library] 索引条目隔离：', w)
+      if (typeof w === 'string' && w !== '')
+        console.warn('[Library] 索引条目隔离：', w)
     }
   }
 }
@@ -147,7 +157,9 @@ async function tauriPut(file: File, kind: LibraryKind): Promise<LibraryAsset> {
 /** 媒体 opaque URL（§7.1，issue #26）：只传逻辑 scope + assetId，由 Rust
  * 按当前索引解析并返回 `pwmedia://` URL——relPath 与本机绝对路径不出
  * Rust，前端不再拼接。冲突期条目本地快路径先行拦截（issue #25）。 */
-async function tauriMediaUrl(asset: Pick<LibraryAsset, 'id' | 'conflicted'>): Promise<string> {
+async function tauriMediaUrl(
+  asset: Pick<LibraryAsset, 'id' | 'conflicted'>,
+): Promise<string> {
   if (asset.conflicted) throw new Error('资产处于删除事务冲突期，媒体不可用')
   const { invoke } = await import('@tauri-apps/api/core')
   return invoke<string>('get_asset_media_url', {
@@ -163,7 +175,9 @@ export const libraryStore = {
       ? tauriList()
       : // 克隆返回（评审修复，PR #36 第九轮）：调用方 mutate 列表资产不得
         // 绕过组校验直接改 memoryAssets
-        Promise.resolve([...memoryAssets.values()].map((v) => ({ ...v.asset }))),
+        Promise.resolve(
+          [...memoryAssets.values()].map((v) => ({ ...v.asset })),
+        ),
 
   put: (file: File, kind: LibraryKind): Promise<LibraryAsset> => {
     if (isTauri) return tauriPut(file, kind)
@@ -183,11 +197,19 @@ export const libraryStore = {
     return Promise.resolve({ ...asset })
   },
 
-  updateMeta: (id: string, patch: Partial<Pick<LibraryAsset, 'name' | 'tags' | 'groupId' | 'view'>>): Promise<LibraryAsset> => {
+  updateMeta: (
+    id: string,
+    patch: Partial<Pick<LibraryAsset, 'name' | 'tags' | 'groupId' | 'view'>>,
+  ): Promise<LibraryAsset> => {
     if (isTauri) {
       return import('@tauri-apps/api/core').then(async ({ invoke }) => {
-        const entry = await invoke<RawAsset>('update_library_asset', { id, patch })
-        reportLibraryWarnings((entry as { warnings?: unknown } | null)?.warnings)
+        const entry = await invoke<RawAsset>('update_library_asset', {
+          id,
+          patch,
+        })
+        reportLibraryWarnings(
+          (entry as { warnings?: unknown } | null)?.warnings,
+        )
         const normalized = normalizeAsset(entry)
         if (!normalized) throw new Error('更新返回了无效条目')
         return normalized
@@ -200,7 +222,9 @@ export const libraryStore = {
     // （第八轮：Rust apply_group_id 把空白归清除，空串不得落入存储）
     const groupIdRaw = patch.groupId
     const groupId =
-      typeof groupIdRaw === 'string' && groupIdRaw.trim() !== '' ? groupIdRaw : null
+      typeof groupIdRaw === 'string' && groupIdRaw.trim() !== ''
+        ? groupIdRaw
+        : null
     if (groupId !== null) {
       const group = memoryGroups.get(groupId)
       if (!group) return Promise.reject(new Error(`组不存在：${groupId}`))
@@ -222,7 +246,10 @@ export const libraryStore = {
   remove: (id: string): Promise<void> => {
     if (isTauri) {
       return import('@tauri-apps/api/core').then(async ({ invoke }) => {
-        const result = await invoke<{ warnings?: unknown; cleanupPending?: unknown[] }>('delete_library_asset', { id })
+        const result = await invoke<{
+          warnings?: unknown
+          cleanupPending?: unknown[]
+        }>('delete_library_asset', { id })
         reportLibraryWarnings(result?.warnings)
         // 隔离区积压随删除响应上报（评审修复：删除成功后不再静默累积）
         if (result?.cleanupPending?.length) {
@@ -239,9 +266,12 @@ export const libraryStore = {
    * 入参只需 id/conflicted 子集：项目资产导入拷贝（projectAssets）按来源
    * 库资产 id 取源媒体建独立 URL（§7.3 拷贝语义）；冲突期条目拒绝服务
    * （issue #25）。 */
-  mediaUrl: (asset: Pick<LibraryAsset, 'id' | 'conflicted'>): Promise<string> => {
+  mediaUrl: (
+    asset: Pick<LibraryAsset, 'id' | 'conflicted'>,
+  ): Promise<string> => {
     if (isTauri) return tauriMediaUrl(asset)
-    if (asset.conflicted) return Promise.reject(new Error('资产处于删除事务冲突期，媒体不可用'))
+    if (asset.conflicted)
+      return Promise.reject(new Error('资产处于删除事务冲突期，媒体不可用'))
     const hit = memoryAssets.get(asset.id)
     if (!hit) return Promise.reject(new Error(`资产不存在：${asset.id}`))
     return Promise.resolve(URL.createObjectURL(hit.blob))
@@ -259,11 +289,15 @@ export const libraryStore = {
           cleanupPending?: unknown[]
         }>('list_library_assets')
         reportLibraryWarnings(index.warnings)
-        if (Array.isArray(index.cleanupPending) && index.cleanupPending.length > 0) {
+        if (
+          Array.isArray(index.cleanupPending) &&
+          index.cleanupPending.length > 0
+        ) {
           console.warn('[Library] 删除隔离区待清理：', index.cleanupPending)
         }
         const byId = index.groups?.byId
-        const entries = byId && typeof byId === 'object' ? Object.values(byId) : []
+        const entries =
+          byId && typeof byId === 'object' ? Object.values(byId) : []
         return entries
           .map((g) => g as { id?: unknown; name?: unknown; kind?: unknown })
           .filter(
@@ -283,11 +317,12 @@ export const libraryStore = {
   upsertGroup: (group: AssetGroup): Promise<AssetGroup> => {
     if (isTauri) {
       return import('@tauri-apps/api/core').then(async ({ invoke }) => {
-        const result = await invoke<AssetGroup & { cleanupPending?: unknown[] }>(
-          'upsert_library_group',
-          { group },
+        const result = await invoke<
+          AssetGroup & { cleanupPending?: unknown[] }
+        >('upsert_library_group', { group })
+        reportLibraryWarnings(
+          (result as { warnings?: unknown } | null)?.warnings,
         )
-        reportLibraryWarnings((result as { warnings?: unknown } | null)?.warnings)
         // cleanupPending 随 upsert 响应上报（评审修复，PR #36 第三轮）——
         // 与 list/delete 同款，删除隔离区积压不得静默
         if (result?.cleanupPending?.length) {
@@ -324,9 +359,14 @@ export const libraryStore = {
     // （updateMeta 可先挂悬空 groupId，新建组时 kind 不一致不得放行）
     const normalized: AssetGroup = { ...group, name }
     for (const v of memoryAssets.values()) {
-      if (v.asset.groupId === normalized.id && v.asset.kind !== normalized.kind) {
+      if (
+        v.asset.groupId === normalized.id &&
+        v.asset.kind !== normalized.kind
+      ) {
         return Promise.reject(
-          new Error(`组 ${normalized.id} 的 kind 与成员资产冲突：存在 kind 不一致的成员`),
+          new Error(
+            `组 ${normalized.id} 的 kind 与成员资产冲突：存在 kind 不一致的成员`,
+          ),
         )
       }
     }
@@ -340,10 +380,10 @@ export const libraryStore = {
   deleteGroup: (id: string): Promise<void> => {
     if (isTauri) {
       return import('@tauri-apps/api/core').then(async ({ invoke }) => {
-        const result = await invoke<{ warnings?: unknown; cleanupPending?: unknown[] }>(
-          'delete_library_group',
-          { id },
-        )
+        const result = await invoke<{
+          warnings?: unknown
+          cleanupPending?: unknown[]
+        }>('delete_library_group', { id })
         reportLibraryWarnings(result?.warnings)
         if (result?.cleanupPending?.length) {
           console.warn('[Library] 删除隔离区待清理：', result.cleanupPending)

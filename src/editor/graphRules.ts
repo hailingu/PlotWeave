@@ -39,7 +39,9 @@ export function removedOptionHandles(
   next: Array<{ id: string }>,
 ): string[] {
   const kept = new Set(next.map((o) => o.id))
-  return prev.filter((o) => !kept.has(o.id)).map((o) => branchOptionHandle(o.id))
+  return prev
+    .filter((o) => !kept.has(o.id))
+    .map((o) => branchOptionHandle(o.id))
 }
 
 /** 连线语义（§4.4）：横向剧情流 / 分支选项出口 / 分镜下挂。 */
@@ -57,7 +59,8 @@ export function connectionEndpointIssue(
   kind: EdgeKind,
 ): string | null {
   if (kind === 'attach') {
-    if (sourceType === 'branch') return '分支没有下挂端口（attach 须场景 → 分镜卡）'
+    if (sourceType === 'branch')
+      return '分支没有下挂端口（attach 须场景 → 分镜卡）'
     if (sourceType !== 'scene' || targetType !== 'shot') {
       return 'attach 下挂连线必须是场景 → 分镜卡'
     }
@@ -101,7 +104,8 @@ export function edgeKindOf(e: {
   sourceHandle?: string | null
 }): EdgeKind {
   if (e.type === 'branch') return 'branch'
-  if (e.sourceHandle === SCENE_SHOT_HANDLE || e.className === 'pw-edge-attach') return 'attach'
+  if (e.sourceHandle === SCENE_SHOT_HANDLE || e.className === 'pw-edge-attach')
+    return 'attach'
   return 'sequence'
 }
 
@@ -111,7 +115,9 @@ export function edgeKindOf(e: {
  * 字段归类（落盘边 kind 显式，option-* 端口不得反推），本函数只用于
  * isValidConnection 的交互判定——误归 sequence 会被「分支不得以 sequence
  * 连出」拒绝，分支选项的连线全部拖不出来。 */
-export function connectionKindOf(conn: { sourceHandle?: string | null }): EdgeKind {
+export function connectionKindOf(conn: {
+  sourceHandle?: string | null
+}): EdgeKind {
   if (branchOptionIdOf(conn.sourceHandle) !== undefined) return 'branch'
   if (conn.sourceHandle === SCENE_SHOT_HANDLE) return 'attach'
   return 'sequence'

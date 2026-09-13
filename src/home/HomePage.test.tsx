@@ -31,7 +31,14 @@ function setup(
     onDuplicateProject: vi.fn(),
     onDeleteProject: vi.fn(),
   }
-  render(<HomePage projects={projects} loading={loading} openError={openError} {...spies} />)
+  render(
+    <HomePage
+      projects={projects}
+      loading={loading}
+      openError={openError}
+      {...spies}
+    />,
+  )
   return spies
 }
 
@@ -47,8 +54,12 @@ describe('HomePage 列表与搜索', () => {
     fireEvent.change(screen.getByRole('searchbox', { name: '搜索项目' }), {
       target: { value: '出租车' },
     })
-    expect(screen.queryByRole('button', { name: '打开项目 都市奇缘' })).toBeNull()
-    expect(screen.getByRole('button', { name: '打开项目 午夜出租车' })).toBeTruthy()
+    expect(
+      screen.queryByRole('button', { name: '打开项目 都市奇缘' }),
+    ).toBeNull()
+    expect(
+      screen.getByRole('button', { name: '打开项目 午夜出租车' }),
+    ).toBeTruthy()
 
     fireEvent.change(screen.getByRole('searchbox', { name: '搜索项目' }), {
       target: { value: '不存在' },
@@ -58,12 +69,16 @@ describe('HomePage 列表与搜索', () => {
 
   it('空项目显示创建引导；loading 期间不显示', () => {
     const spies = setup([])
-    fireEvent.click(screen.getByRole('button', { name: '＋ 创建你的第一部短剧' }))
+    fireEvent.click(
+      screen.getByRole('button', { name: '＋ 创建你的第一部短剧' }),
+    )
     expect(spies.onCreateProject).toHaveBeenCalledTimes(1)
 
     cleanup()
     setup([], true)
-    expect(screen.queryByRole('button', { name: '＋ 创建你的第一部短剧' })).toBeNull()
+    expect(
+      screen.queryByRole('button', { name: '＋ 创建你的第一部短剧' }),
+    ).toBeNull()
   })
 
   it('工具栏「＋ 新建项目」与网格末尾「＋ 新剧」都走 onCreateProject', () => {
@@ -90,7 +105,9 @@ describe('HomePage 打开失败横幅（issue #98）', () => {
 
   it('openError 的项目不在列表（损坏文件可能未进列表）：用通用文案', () => {
     setup([], false, { id: 'ghost', detail: '项目文件不可读' })
-    expect(screen.getByRole('alert').textContent).toBe('打开项目失败：项目文件不可读')
+    expect(screen.getByRole('alert').textContent).toBe(
+      '打开项目失败：项目文件不可读',
+    )
   })
 
   it('无 openError 时不渲染横幅', () => {

@@ -27,7 +27,9 @@ export interface NodeDeletionDeps {
 }
 
 /** 返回节点删除回调：⚙️ 面板与右键菜单共用入口。 */
-export function useNodeDeletion(deps: NodeDeletionDeps): (ids: string[]) => void {
+export function useNodeDeletion(
+  deps: NodeDeletionDeps,
+): (ids: string[]) => void {
   const {
     nodesRef,
     edgesRef,
@@ -56,7 +58,11 @@ export function useNodeDeletion(deps: NodeDeletionDeps): (ids: string[]) => void
         assetsRef.current?.byId,
       )
       const apply = (remove: boolean) => {
-        setNodes((nds) => (remove ? nds.filter((n) => !idSet.has(n.id)) : [...nds, ...removedNodes]))
+        setNodes((nds) =>
+          remove
+            ? nds.filter((n) => !idSet.has(n.id))
+            : [...nds, ...removedNodes],
+        )
         setEdges((eds) =>
           remove
             ? eds.filter((e) => !idSet.has(e.source) && !idSet.has(e.target))
@@ -68,6 +74,17 @@ export function useNodeDeletion(deps: NodeDeletionDeps): (ids: string[]) => void
       pushHistory({ undo: () => apply(false), redo: () => apply(true) })
       closeSettings()
     },
-    [addAsset, assetsRef, closeSettings, edgesRef, nodesRef, pushHistory, removeAsset, setEdges, setNodes, settings.characters],
+    [
+      addAsset,
+      assetsRef,
+      closeSettings,
+      edgesRef,
+      nodesRef,
+      pushHistory,
+      removeAsset,
+      setEdges,
+      setNodes,
+      settings.characters,
+    ],
   )
 }

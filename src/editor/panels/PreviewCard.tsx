@@ -46,20 +46,30 @@ export default function PreviewCard({
   if (status === 'dismissed') return null
   return (
     // 原生 section 地标承载分组语义（S6819）
-    <section className={`pw-ai-card${v.hasDeletes ? ' danger' : ''}`} aria-label="AI 改动预览">
+    <section
+      className={`pw-ai-card${v.hasDeletes ? ' danger' : ''}`}
+      aria-label="AI 改动预览"
+    >
       <div className="pw-ai-card-head">✦ 改动预览 · {v.commands.length} 项</div>
       {!v.ok && (
         <ul className="pw-ai-issues">
           {v.issues.map((iss) => (
-            <li key={iss.index} className="pw-ai-issue">第 {iss.index + 1} 条：{iss.message}</li>
+            <li key={iss.index} className="pw-ai-issue">
+              第 {iss.index + 1} 条：{iss.message}
+            </li>
           ))}
         </ul>
       )}
       {v.ok && (
         <ul className="pw-ai-items">
           {v.items.map((item) => (
-            <li key={item.key} className={`pw-ai-item${item.danger ? ' danger' : ''}`}>
-              <span className="pw-ai-item-icon" aria-hidden>{ITEM_ICONS[item.kind]}</span>
+            <li
+              key={item.key}
+              className={`pw-ai-item${item.danger ? ' danger' : ''}`}
+            >
+              <span className="pw-ai-item-icon" aria-hidden>
+                {ITEM_ICONS[item.kind]}
+              </span>
               {item.label}
             </li>
           ))}
@@ -67,7 +77,9 @@ export default function PreviewCard({
       )}
       <div className="pw-ai-actions">
         {status === 'executed' ? (
-          <span className="pw-ai-note">{historical ? '✓ 已执行（历史改动）' : '✓ 已执行，⌘Z 可整批撤销'}</span>
+          <span className="pw-ai-note">
+            {historical ? '✓ 已执行（历史改动）' : '✓ 已执行，⌘Z 可整批撤销'}
+          </span>
         ) : (
           <>
             <button
@@ -92,7 +104,9 @@ export default function PreviewCard({
           </>
         )}
       </div>
-      {!v.ok && <div className="pw-ai-note">批次未通过校验，画布未发生任何变化。</div>}
+      {!v.ok && (
+        <div className="pw-ai-note">批次未通过校验，画布未发生任何变化。</div>
+      )}
     </section>
   )
 }

@@ -16,9 +16,13 @@ const REF_KIND_LABELS: Record<ShotRef['kind'], string> = {
 
 /** 资产 MIME 解析（§7.1）：own 属性判定防原型链键误命中（库内键控桶
  * 同款口径）；悬空引用（资产已删）返回 undefined——kind 切换不设限。 */
-function assetMimeOf(assets: ProjectContent['assets'], id: string): string | undefined {
+function assetMimeOf(
+  assets: ProjectContent['assets'],
+  id: string,
+): string | undefined {
   const byId = assets?.byId
-  if (byId === undefined || !Object.prototype.hasOwnProperty.call(byId, id)) return undefined
+  if (byId === undefined || !Object.prototype.hasOwnProperty.call(byId, id))
+    return undefined
   const mime = byId[id].mime
   return typeof mime === 'string' ? mime : undefined
 }
@@ -52,7 +56,9 @@ function ShotRefRow({
         >
           {Object.entries(REF_KIND_LABELS).map(([kind, label]) => {
             const mime =
-              shotRef.assetId !== undefined ? assetMimeOf(assets, shotRef.assetId) : undefined
+              shotRef.assetId !== undefined
+                ? assetMimeOf(assets, shotRef.assetId)
+                : undefined
             return (
               <option
                 key={kind}
@@ -65,7 +71,12 @@ function ShotRefRow({
           })}
         </select>
         <span className="pw-sp" />
-        <button type="button" className="pw-set-x" aria-label="删除此引用" onClick={onRemove}>
+        <button
+          type="button"
+          className="pw-set-x"
+          aria-label="删除此引用"
+          onClick={onRemove}
+        >
           ✕
         </button>
       </div>
@@ -85,13 +96,22 @@ function ShotRefRow({
 /** 分镜卡表单：镜号/景别/画面描述/镜头 Prompt/引用位（增删改）。
  * patch 回调在表单内收口 nodeType 判别字段；引用位行为见 ShotRefRow。
  * 自 NodeSettingsPanel.tsx 外置（issue #39，ImageNodeForm.tsx 先例）。 */
-export default function ShotForm({ node }: { readonly node: Extract<PanelNode, { type: 'shot' }> }) {
+export default function ShotForm({
+  node,
+}: {
+  readonly node: Extract<PanelNode, { type: 'shot' }>
+}) {
   const { patchNode, assets } = useNodeEdit()
   const d = node.data
-  const patch = (p: PatchShape<ShotNodeData>) => patchNode(node.id, { nodeType: 'shot', patch: p })
+  const patch = (p: PatchShape<ShotNodeData>) =>
+    patchNode(node.id, { nodeType: 'shot', patch: p })
   const size = useCompositionSafeValue(d.size, (next) => patch({ size: next }))
-  const picture = useCompositionSafeValue(d.picture, (next) => patch({ picture: next }))
-  const prompt = useCompositionSafeValue(d.prompt, (next) => patch({ prompt: next }))
+  const picture = useCompositionSafeValue(d.picture, (next) =>
+    patch({ picture: next }),
+  )
+  const prompt = useCompositionSafeValue(d.prompt, (next) =>
+    patch({ prompt: next }),
+  )
   return (
     <>
       <div className="pw-set-cols">
@@ -125,7 +145,9 @@ export default function ShotForm({ node }: { readonly node: Extract<PanelNode, {
           shotRef={ref}
           assets={assets}
           onKind={(kind) =>
-            patch({ refs: d.refs.map((r, idx) => (idx === i ? { ...r, kind } : r)) })
+            patch({
+              refs: d.refs.map((r, idx) => (idx === i ? { ...r, kind } : r)),
+            })
           }
           onRemove={() => patch({ refs: d.refs.filter((_, idx) => idx !== i) })}
           onLabel={(text) =>
@@ -133,7 +155,9 @@ export default function ShotForm({ node }: { readonly node: Extract<PanelNode, {
               // 输入文字即切换为自由位（§4.2 assetId/label 互斥）：剥离
               // assetId 而非并存——双字段形态保存成功但下次加载被归一化
               // 静默删除，用户输入凭空丢失
-              refs: d.refs.map((r, idx) => (idx === i ? { id: r.id, kind: r.kind, label: text } : r)),
+              refs: d.refs.map((r, idx) =>
+                idx === i ? { id: r.id, kind: r.kind, label: text } : r,
+              ),
             })
           }
         />
@@ -141,7 +165,11 @@ export default function ShotForm({ node }: { readonly node: Extract<PanelNode, {
       <button
         type="button"
         className="pw-set-add"
-        onClick={() => patch({ refs: [...d.refs, { id: uid('ref'), kind: 'character', label: '' }] })}
+        onClick={() =>
+          patch({
+            refs: [...d.refs, { id: uid('ref'), kind: 'character', label: '' }],
+          })
+        }
       >
         ＋ 添加引用
       </button>

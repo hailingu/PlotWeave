@@ -10,7 +10,13 @@ import type { CanvasNode } from './nodes/types'
 
 type Size = { width: number; height: number }
 
-const node = (id: string, type: string, x: number, y: number, measured?: Size) =>
+const node = (
+  id: string,
+  type: string,
+  x: number,
+  y: number,
+  measured?: Size,
+) =>
   ({
     id,
     type,
@@ -20,14 +26,20 @@ const node = (id: string, type: string, x: number, y: number, measured?: Size) =
   }) as unknown as CanvasNode
 
 type EdgeExtra = { type?: 'branch'; sourceHandle?: string; className?: string }
-const edge = (id: string, source: string, target: string, extra: EdgeExtra = {}): Edge => ({
+const edge = (
+  id: string,
+  source: string,
+  target: string,
+  extra: EdgeExtra = {},
+): Edge => ({
   id,
   source,
   target,
   ...extra,
 })
 
-const seq = (source: string, target: string) => edge(`e-${source}-${target}`, source, target)
+const seq = (source: string, target: string) =>
+  edge(`e-${source}-${target}`, source, target)
 const branchEdge = (source: string, target: string, optionId: string) =>
   edge(`e-${source}-${optionId}-${target}`, source, target, {
     type: 'branch',
@@ -37,7 +49,10 @@ const attach = (source: string, target: string) =>
   edge(`e-${source}-shots-${target}`, source, target, { sourceHandle: 'shots' })
 
 /** 包围盒相交判定：重叠面积在两轴均超过 1px 视为碰撞（边界相切允许）。 */
-function overlaps(a: { x: number; y: number; w: number; h: number }, b: typeof a): boolean {
+function overlaps(
+  a: { x: number; y: number; w: number; h: number },
+  b: typeof a,
+): boolean {
   const dx = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x)
   const dy = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y)
   return dx > 1 && dy > 1
@@ -56,7 +71,10 @@ function assertNoOverlap(
   })
   for (let i = 0; i < boxes.length; i++) {
     for (let j = i + 1; j < boxes.length; j++) {
-      expect(overlaps(boxes[i], boxes[j]), `节点 ${boxes[i].id} 与 ${boxes[j].id} 重叠`).toBe(false)
+      expect(
+        overlaps(boxes[i], boxes[j]),
+        `节点 ${boxes[i].id} 与 ${boxes[j].id} 重叠`,
+      ).toBe(false)
     }
   }
 }
@@ -69,8 +87,15 @@ describe('computeAutoLayout · 剧情流分层（issue #94 自动排布）', () 
   })
 
   it('线性剧情按连线方向从左至右分层，且全覆盖原节点 id', () => {
-    const nodes = [node('s3', 'scene', 1000, 0, SIZE), node('s1', 'scene', 0, 0, SIZE), node('s2', 'scene', 500, 500, SIZE)]
-    const positions = computeAutoLayout(nodes, [seq('s1', 's2'), seq('s2', 's3')])
+    const nodes = [
+      node('s3', 'scene', 1000, 0, SIZE),
+      node('s1', 'scene', 0, 0, SIZE),
+      node('s2', 'scene', 500, 500, SIZE),
+    ]
+    const positions = computeAutoLayout(nodes, [
+      seq('s1', 's2'),
+      seq('s2', 's3'),
+    ])
     expect([...positions.keys()].sort()).toEqual(['s1', 's2', 's3'])
     expect(positions.get('s1')!.x).toBeLessThan(positions.get('s2')!.x)
     expect(positions.get('s2')!.x).toBeLessThan(positions.get('s3')!.x)
@@ -83,7 +108,12 @@ describe('computeAutoLayout · 剧情流分层（issue #94 自动排布）', () 
       node('sb', 'scene', 600, 300, SIZE),
       node('sc', 'scene', 1200, 0, SIZE),
     ]
-    const edges = [branchEdge('br1', 'sa', 'o1'), branchEdge('br1', 'sb', 'o2'), seq('sa', 'sc'), seq('sb', 'sc')]
+    const edges = [
+      branchEdge('br1', 'sa', 'o1'),
+      branchEdge('br1', 'sb', 'o2'),
+      seq('sa', 'sc'),
+      seq('sb', 'sc'),
+    ]
     const positions = computeAutoLayout(nodes, edges)
     const a = positions.get('sa')!
     const b = positions.get('sb')!
@@ -116,7 +146,10 @@ describe('computeAutoLayout · 分镜下挂与不连通分区', () => {
       node('sh1', 'shot', 900, 900, shotSize),
       node('sh2', 'shot', 1300, 900, shotSize),
     ]
-    const positions = computeAutoLayout(nodes, [attach('sc1', 'sh1'), attach('sc1', 'sh2')])
+    const positions = computeAutoLayout(nodes, [
+      attach('sc1', 'sh1'),
+      attach('sc1', 'sh2'),
+    ])
     const host = positions.get('sc1')!
     for (const id of ['sh1', 'sh2']) {
       const p = positions.get(id)!
@@ -129,8 +162,15 @@ describe('computeAutoLayout · 分镜下挂与不连通分区', () => {
   it('未测量分镜卡按外宽（含 padding）计算行内间距（PR #111 评审）', () => {
     // .pw-shot 为 content-box：width 300 + 左右 padding 各 14 → 外宽 328 > 内容宽。
     // 若行距按内容宽排布（300+24=324 < 2×328），相邻分镜卡重叠。
-    const nodes = [node('sc1', 'scene', 0, 0), node('sh1', 'shot', 900, 900), node('sh2', 'shot', 1300, 900)]
-    const positions = computeAutoLayout(nodes, [attach('sc1', 'sh1'), attach('sc1', 'sh2')])
+    const nodes = [
+      node('sc1', 'scene', 0, 0),
+      node('sh1', 'shot', 900, 900),
+      node('sh2', 'shot', 1300, 900),
+    ]
+    const positions = computeAutoLayout(nodes, [
+      attach('sc1', 'sh1'),
+      attach('sc1', 'sh2'),
+    ])
     assertNoOverlap(nodes, positions, FALLBACK_SIZES.shot)
   })
 
@@ -152,7 +192,10 @@ describe('computeAutoLayout · 分镜下挂与不连通分区', () => {
       node('sc2', 'scene', 500, 500, SIZE),
       node('sh1', 'shot', 900, 900, { width: 300, height: 260 }),
     ]
-    const positions = computeAutoLayout(nodes, [attach('sc1', 'sh1'), attach('sc2', 'sh1')])
+    const positions = computeAutoLayout(nodes, [
+      attach('sc1', 'sh1'),
+      attach('sc2', 'sh1'),
+    ])
     expect([...positions.keys()].sort()).toEqual(['sc1', 'sc2', 'sh1'])
     assertNoOverlap(nodes, positions, SIZE)
   })
@@ -169,12 +212,20 @@ describe('computeAutoLayout · 不重叠不变量与脏数据', () => {
       node('s2', 'scene', 1000, 0, SIZE),
       node('img1', 'image', 1500, 0, img),
     ]
-    const positions = computeAutoLayout(nodes, [seq('s1', 'd1'), seq('s1', 'd2'), seq('d1', 's2')])
+    const positions = computeAutoLayout(nodes, [
+      seq('s1', 'd1'),
+      seq('s1', 'd2'),
+      seq('d1', 's2'),
+    ])
     assertNoOverlap(nodes, positions, SIZE)
   })
 
   it('脏数据成环时安全终止，全部节点有位置且不重叠', () => {
-    const nodes = [node('a', 'scene', 0, 0, SIZE), node('b', 'scene', 500, 0, SIZE), node('c', 'scene', 1000, 0, SIZE)]
+    const nodes = [
+      node('a', 'scene', 0, 0, SIZE),
+      node('b', 'scene', 500, 0, SIZE),
+      node('c', 'scene', 1000, 0, SIZE),
+    ]
     const edges = [seq('a', 'b'), seq('b', 'c'), seq('c', 'a')]
     const positions = computeAutoLayout(nodes, edges)
     expect([...positions.keys()].sort()).toEqual(['a', 'b', 'c'])
@@ -184,7 +235,11 @@ describe('computeAutoLayout · 不重叠不变量与脏数据', () => {
 
 describe('computeAutoLayout · 尺寸取值顺序（PR #111 评审）', () => {
   it('节点缺 measured 时用回退尺寸完成整图计算', () => {
-    const nodes = [node('s1', 'scene', 0, 0), node('d1', 'dialogue', 400, 400), node('sh1', 'shot', 800, 800)]
+    const nodes = [
+      node('s1', 'scene', 0, 0),
+      node('d1', 'dialogue', 400, 400),
+      node('sh1', 'shot', 800, 800),
+    ]
     const positions = computeAutoLayout(nodes, [seq('s1', 'd1')])
     expect([...positions.keys()].sort()).toEqual(['d1', 's1', 'sh1'])
     assertNoOverlap(nodes, positions, { width: 340, height: 220 })
@@ -196,11 +251,25 @@ describe('computeAutoLayout · 尺寸取值顺序（PR #111 评审）', () => {
     // 若误用回退值，同层兄弟（V_GAP=80 < 500-380）必然重叠。
     const actual: Size = { width: 600, height: 500 }
     const persisted = (id: string, type: string, x: number, y: number) => {
-      const n = { id, type, position: { x, y }, data: {}, width: actual.width, height: actual.height } as unknown as CanvasNode
+      const n = {
+        id,
+        type,
+        position: { x, y },
+        data: {},
+        width: actual.width,
+        height: actual.height,
+      } as unknown as CanvasNode
       return n
     }
-    const nodes = [persisted('s1', 'scene', 0, 0), persisted('i1', 'image', 500, 900), persisted('i2', 'image', 900, 900)]
-    const positions = computeAutoLayout(nodes, [seq('s1', 'i1'), seq('s1', 'i2')])
+    const nodes = [
+      persisted('s1', 'scene', 0, 0),
+      persisted('i1', 'image', 500, 900),
+      persisted('i2', 'image', 900, 900),
+    ]
+    const positions = computeAutoLayout(nodes, [
+      seq('s1', 'i1'),
+      seq('s1', 'i2'),
+    ])
     assertNoOverlap(nodes, positions, actual)
   })
 

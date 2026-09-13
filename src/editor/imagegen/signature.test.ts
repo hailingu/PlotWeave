@@ -6,7 +6,11 @@
 import { describe, expect, it } from 'vitest'
 import { imageGenSignature, signatureMatches } from './signature'
 
-const base = { prompt: '雨夜霓虹街道，中景', model: 'openai:gpt-image-1', size: '1024x1536' }
+const base = {
+  prompt: '雨夜霓虹街道，中景',
+  model: 'openai:gpt-image-1',
+  size: '1024x1536',
+}
 
 describe('imageGenSignature（§13 输入签名）', () => {
   it('相同输入 → 相同签名', () => {
@@ -15,10 +19,14 @@ describe('imageGenSignature（§13 输入签名）', () => {
   })
   it('prompt / model / size 任一变化 → 签名失配', () => {
     expect(signatureMatches(base, { ...base, prompt: '换了描述' })).toBe(false)
-    expect(signatureMatches(base, { ...base, model: 'openai:other' })).toBe(false)
+    expect(signatureMatches(base, { ...base, model: 'openai:other' })).toBe(
+      false,
+    )
     expect(signatureMatches(base, { ...base, size: '1536x1024' })).toBe(false)
   })
   it('prompt 以规范化值参与签名（首尾空白不制造假失配）', () => {
-    expect(signatureMatches(base, { ...base, prompt: `  ${base.prompt}  ` })).toBe(true)
+    expect(
+      signatureMatches(base, { ...base, prompt: `  ${base.prompt}  ` }),
+    ).toBe(true)
   })
 })

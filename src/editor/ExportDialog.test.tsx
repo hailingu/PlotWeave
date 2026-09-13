@@ -49,28 +49,52 @@ function model(over: Partial<ScriptExportModel> = {}): ScriptExportModel {
   }
 }
 
-function setup(props: { model?: ScriptExportModel; onClose?: () => void } = {}) {
+function setup(
+  props: { model?: ScriptExportModel; onClose?: () => void } = {},
+) {
   const onClose = props.onClose ?? vi.fn()
-  const view = render(<ExportDialog projectName="雨夜" model={props.model ?? model()} onClose={onClose} />)
+  const view = render(
+    <ExportDialog
+      projectName="雨夜"
+      model={props.model ?? model()}
+      onClose={onClose}
+    />,
+  )
   return { onClose, ...view }
 }
 
 /** 使用真实节点工厂与导出生成器核对可用性摘要到界面提示的完整链路。 */
-function generatedModel(types: ReadonlyArray<Parameters<typeof buildCanvasNode>[0]>): ScriptExportModel {
-  const nodes = types.map((type) => buildCanvasNode(type, undefined, { against: [], characters: [], center: null }))
+function generatedModel(
+  types: ReadonlyArray<Parameters<typeof buildCanvasNode>[0]>,
+): ScriptExportModel {
+  const nodes = types.map((type) =>
+    buildCanvasNode(type, undefined, {
+      against: [],
+      characters: [],
+      center: null,
+    }),
+  )
   return buildScriptExport({
-    projectName: '雨夜', nodes, edges: [], settings: EMPTY_SETTINGS,
-    assets: undefined, episodeTitles: {},
+    projectName: '雨夜',
+    nodes,
+    edges: [],
+    settings: EMPTY_SETTINGS,
+    assets: undefined,
+    episodeTitles: {},
   })
 }
 
 /** 读取预览文本（pre 内容即当前导出文本）。 */
 const preview = () => document.querySelector('.pw-export-pre')!.textContent
-const outlineToggle = () => screen.getByRole('checkbox', { name: /创作大纲/ }) as HTMLInputElement
+const outlineToggle = () =>
+  screen.getByRole('checkbox', { name: /创作大纲/ }) as HTMLInputElement
 
 describe('ExportDialog（无故事内容，review #81）', () => {
   it.each([
-    ['空画布', []], ['只有分镜', ['shot']], ['只有图片', ['image']], ['分镜和图片', ['shot', 'image']],
+    ['空画布', []],
+    ['只有分镜', ['shot']],
+    ['只有图片', ['image']],
+    ['分镜和图片', ['shot', 'image']],
   ] as const)('%s 在开关两态均显示空内容提示', (_, types) => {
     const draft = generatedModel(types)
     setup({ model: draft })
@@ -81,28 +105,53 @@ describe('ExportDialog（无故事内容，review #81）', () => {
     expect(preview()).toBe(draft.outline)
   })
 
-  it.each(['beat', 'branch'] as const)('仅有 %s 时仍引导开启有内容的大纲', (type) => {
-    const draft = generatedModel([type])
-    setup({ model: draft })
-    expect(screen.getByText(/开启「创作大纲」可查看节奏与分支/)).toBeTruthy()
-    fireEvent.click(outlineToggle())
-    expect(screen.getByText('正文 = 场景 + 对白；创作大纲与分镜卡为附录')).toBeTruthy()
-    expect(preview()).toBe(draft.outline)
-    expect(preview()).toContain(type === 'beat' ? '新节拍' : '新的分岔是…？')
-  })
+  it.each(['beat', 'branch'] as const)(
+    '仅有 %s 时仍引导开启有内容的大纲',
+    (type) => {
+      const draft = generatedModel([type])
+      setup({ model: draft })
+      expect(screen.getByText(/开启「创作大纲」可查看节奏与分支/)).toBeTruthy()
+      fireEvent.click(outlineToggle())
+      expect(
+        screen.getByText('正文 = 场景 + 对白；创作大纲与分镜卡为附录'),
+      ).toBeTruthy()
+      expect(preview()).toBe(draft.outline)
+      expect(preview()).toContain(type === 'beat' ? '新节拍' : '新的分岔是…？')
+    },
+  )
 })
 
 describe('ExportDialog（内容可用性变化，review #81）', () => {
   it('新增内容、开启大纲、清空和恢复正文后，提示始终跟随当前模型', () => {
     const { rerender, onClose } = setup({ model: generatedModel([]) })
-    rerender(<ExportDialog projectName="雨夜" model={generatedModel(['beat'])} onClose={onClose} />)
+    rerender(
+      <ExportDialog
+        projectName="雨夜"
+        model={generatedModel(['beat'])}
+        onClose={onClose}
+      />,
+    )
     expect(screen.getByText(/开启「创作大纲」可查看节奏与分支/)).toBeTruthy()
     fireEvent.click(outlineToggle())
-    rerender(<ExportDialog projectName="雨夜" model={generatedModel([])} onClose={onClose} />)
+    rerender(
+      <ExportDialog
+        projectName="雨夜"
+        model={generatedModel([])}
+        onClose={onClose}
+      />,
+    )
     expect(outlineToggle().checked).toBe(true)
     expect(screen.getByText('暂无可导出的场景、对白、节奏或分支')).toBeTruthy()
-    rerender(<ExportDialog projectName="雨夜" model={generatedModel(['scene'])} onClose={onClose} />)
-    expect(screen.getByText('正文 = 场景 + 对白；创作大纲与分镜卡为附录')).toBeTruthy()
+    rerender(
+      <ExportDialog
+        projectName="雨夜"
+        model={generatedModel(['scene'])}
+        onClose={onClose}
+      />,
+    )
+    expect(
+      screen.getByText('正文 = 场景 + 对白；创作大纲与分镜卡为附录'),
+    ).toBeTruthy()
     fireEvent.click(outlineToggle())
     expect(screen.getByText('正文 = 场景 + 对白；分镜卡见附录')).toBeTruthy()
   })
@@ -113,7 +162,10 @@ function pendingClipboard() {
   let value = ''
   let resolve!: () => void
   let reject!: (error: Error) => void
-  const promise = new Promise<void>((done, fail) => { resolve = done; reject = fail })
+  const promise = new Promise<void>((done, fail) => {
+    resolve = done
+    reject = fail
+  })
   stubClipboard(async (text) => {
     await promise
     value = text
@@ -122,18 +174,23 @@ function pendingClipboard() {
 }
 
 describe('ExportDialog（过期复制成功，review #81）', () => {
-  it.each([false, true])('从大纲开关 %s 开始复制，切换后忽略旧成功回执', async (startOutline) => {
-    vi.useFakeTimers()
-    const clipboard = pendingClipboard()
-    setup()
-    if (startOutline) fireEvent.click(outlineToggle())
-    fireEvent.click(screen.getByRole('button', { name: '复制全文' }))
-    fireEvent.click(outlineToggle())
-    await act(async () => clipboard.resolve())
-    expect(clipboard.read()).toBe(startOutline ? model().outline : model().plain)
-    expect(preview()).toBe(startOutline ? model().plain : model().outline)
-    expect(screen.queryByRole('button', { name: '✓ 已复制' })).toBeNull()
-  })
+  it.each([false, true])(
+    '从大纲开关 %s 开始复制，切换后忽略旧成功回执',
+    async (startOutline) => {
+      vi.useFakeTimers()
+      const clipboard = pendingClipboard()
+      setup()
+      if (startOutline) fireEvent.click(outlineToggle())
+      fireEvent.click(screen.getByRole('button', { name: '复制全文' }))
+      fireEvent.click(outlineToggle())
+      await act(async () => clipboard.resolve())
+      expect(clipboard.read()).toBe(
+        startOutline ? model().outline : model().plain,
+      )
+      expect(preview()).toBe(startOutline ? model().plain : model().outline)
+      expect(screen.queryByRole('button', { name: '✓ 已复制' })).toBeNull()
+    },
+  )
 
   it('复制期间切换再切回，也不接受上一轮的回执；重新复制可以成功', async () => {
     vi.useFakeTimers()
@@ -145,35 +202,44 @@ describe('ExportDialog（过期复制成功，review #81）', () => {
     await act(async () => clipboard.resolve())
     expect(screen.queryByRole('button', { name: '✓ 已复制' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '复制全文' }))
-    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
     expect(clipboard.read()).toBe(preview())
     expect(screen.getByRole('button', { name: '✓ 已复制' })).toBeTruthy()
   })
 })
 
 describe('ExportDialog（过期复制失败与重试，review #81）', () => {
-  it.each(['reject', 'timeout'])('切换后旧请求 %s 不全选新预览', async (outcome) => {
-    vi.useFakeTimers()
-    const clipboard = pendingClipboard()
-    setup()
-    fireEvent.click(screen.getByRole('button', { name: '复制全文' }))
-    fireEvent.click(outlineToggle())
-    await act(async () => {
-      if (outcome === 'reject') clipboard.reject(new Error('denied'))
-      else await vi.advanceTimersByTimeAsync(850)
-    })
-    expect(window.getSelection()?.toString()).toBe('')
-    expect(screen.queryByRole('button', { name: '✓ 已复制' })).toBeNull()
-  })
+  it.each(['reject', 'timeout'])(
+    '切换后旧请求 %s 不全选新预览',
+    async (outcome) => {
+      vi.useFakeTimers()
+      const clipboard = pendingClipboard()
+      setup()
+      fireEvent.click(screen.getByRole('button', { name: '复制全文' }))
+      fireEvent.click(outlineToggle())
+      await act(async () => {
+        if (outcome === 'reject') clipboard.reject(new Error('denied'))
+        else await vi.advanceTimersByTimeAsync(850)
+      })
+      expect(window.getSelection()?.toString()).toBe('')
+      expect(screen.queryByRole('button', { name: '✓ 已复制' })).toBeNull()
+    },
+  )
 
   it('新复制失败后旧复制才成功，仍保留新尝试的手动复制回退', async () => {
     vi.useFakeTimers()
     const clipboard = pendingClipboard()
     setup()
     fireEvent.click(screen.getByRole('button', { name: '复制全文' }))
-    stubClipboard(async () => { throw new Error('denied') })
+    stubClipboard(async () => {
+      throw new Error('denied')
+    })
     fireEvent.click(screen.getByRole('button', { name: '复制全文' }))
-    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
     expect(window.getSelection()?.toString()).toBe(model().plain)
     await act(async () => clipboard.resolve())
     expect(screen.queryByRole('button', { name: '✓ 已复制' })).toBeNull()
@@ -185,7 +251,9 @@ describe('ExportDialog（过期复制失败与重试，review #81）', () => {
     const clipboard = pendingClipboard()
     setup()
     fireEvent.click(screen.getByRole('button', { name: '复制全文' }))
-    await act(async () => { await vi.advanceTimersByTimeAsync(850) })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(850)
+    })
     expect(window.getSelection()?.toString()).toBe(model().plain)
     await act(async () => clipboard.resolve())
     expect(screen.queryByRole('button', { name: '✓ 已复制' })).toBeNull()
@@ -198,7 +266,13 @@ describe('ExportDialog（复制与文本生命周期，review #81）', () => {
     const clipboard = pendingClipboard()
     const { rerender, onClose } = setup()
     fireEvent.click(screen.getByRole('button', { name: '复制全文' }))
-    rerender(<ExportDialog projectName="雨夜" model={model({ plain: '# 新正文' })} onClose={onClose} />)
+    rerender(
+      <ExportDialog
+        projectName="雨夜"
+        model={model({ plain: '# 新正文' })}
+        onClose={onClose}
+      />,
+    )
     await act(async () => clipboard.resolve())
     expect(preview()).toBe('# 新正文')
     expect(screen.queryByRole('button', { name: '✓ 已复制' })).toBeNull()
@@ -208,9 +282,17 @@ describe('ExportDialog（复制与文本生命周期，review #81）', () => {
     vi.useFakeTimers()
     const { rerender, onClose } = setup()
     fireEvent.click(screen.getByRole('button', { name: '复制全文' }))
-    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
     expect(screen.getByRole('button', { name: '✓ 已复制' })).toBeTruthy()
-    rerender(<ExportDialog projectName="雨夜" model={model({ plain: '# 新正文' })} onClose={onClose} />)
+    rerender(
+      <ExportDialog
+        projectName="雨夜"
+        model={model({ plain: '# 新正文' })}
+        onClose={onClose}
+      />,
+    )
     expect(screen.queryByRole('button', { name: '✓ 已复制' })).toBeNull()
   })
 
@@ -233,7 +315,9 @@ describe('ExportDialog（剧本导出对话框）', () => {
     expect(screen.getByText('导出剧本')).toBeTruthy()
     expect(screen.getByText('雨夜-剧本.md')).toBeTruthy()
     expect(screen.getByText(/第一场/)).toBeTruthy()
-    expect(screen.getByText('本次导出：1 集 · 1 场 · 1 对白 · 1 节拍')).toBeTruthy()
+    expect(
+      screen.getByText('本次导出：1 集 · 1 场 · 1 对白 · 1 节拍'),
+    ).toBeTruthy()
   })
 
   it('「创作大纲」默认关闭；开启后预览并入大纲附录，关闭后还原', () => {
@@ -254,9 +338,17 @@ describe('ExportDialog（剧本导出对话框）', () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     stubClipboard(writeText)
     const createUrl = vi.fn().mockReturnValue('blob:mock')
-    Object.defineProperty(URL, 'createObjectURL', { value: createUrl, configurable: true })
-    Object.defineProperty(URL, 'revokeObjectURL', { value: vi.fn(), configurable: true })
-    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    Object.defineProperty(URL, 'createObjectURL', {
+      value: createUrl,
+      configurable: true,
+    })
+    Object.defineProperty(URL, 'revokeObjectURL', {
+      value: vi.fn(),
+      configurable: true,
+    })
+    const clickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, 'click')
+      .mockImplementation(() => {})
 
     setup()
     fireEvent.click(outlineToggle())
@@ -264,10 +356,11 @@ describe('ExportDialog（剧本导出对话框）', () => {
     expect(writeText).toHaveBeenCalledWith(model().outline)
     fireEvent.click(screen.getByRole('button', { name: '下载 .md' }))
     expect(createUrl).toHaveBeenCalledTimes(1)
-    expect((createUrl.mock.calls[0][0] as Blob).type).toBe('text/markdown;charset=utf-8')
+    expect((createUrl.mock.calls[0][0] as Blob).type).toBe(
+      'text/markdown;charset=utf-8',
+    )
     clickSpy.mockRestore()
   })
-
 })
 
 describe('ExportDialog（复制回执与关闭）', () => {
@@ -296,10 +389,18 @@ describe('ExportDialog（复制回执与关闭）', () => {
   })
 
   it('无正文时提示正文为空并引导开启大纲；开启后提示随态更新', () => {
-    setup({ model: model({ plain: '# 空项目', outline: '# 空项目\n\n- 节拍 · 留白', hasNarrative: false }) })
+    setup({
+      model: model({
+        plain: '# 空项目',
+        outline: '# 空项目\n\n- 节拍 · 留白',
+        hasNarrative: false,
+      }),
+    })
     expect(screen.getByText(/正文为空（尚无场景与对白）/)).toBeTruthy()
     fireEvent.click(outlineToggle())
-    expect(screen.getByText('正文 = 场景 + 对白；创作大纲与分镜卡为附录')).toBeTruthy()
+    expect(
+      screen.getByText('正文 = 场景 + 对白；创作大纲与分镜卡为附录'),
+    ).toBeTruthy()
   })
 
   it('Esc / 点击遮罩 / ✕ 按钮均关闭；对话框本体按下不穿透关闭', () => {
@@ -307,7 +408,9 @@ describe('ExportDialog（复制回执与关闭）', () => {
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(onClose).toHaveBeenCalledTimes(1)
 
-    fireEvent.pointerDown(screen.getByRole('button', { name: '关闭' }).closest('.pw-overlay')!)
+    fireEvent.pointerDown(
+      screen.getByRole('button', { name: '关闭' }).closest('.pw-overlay')!,
+    )
     expect(onClose).toHaveBeenCalledTimes(2)
 
     fireEvent.pointerDown(screen.getByRole('dialog', { name: '导出剧本' }))
@@ -316,7 +419,6 @@ describe('ExportDialog（复制回执与关闭）', () => {
     fireEvent.click(screen.getByRole('button', { name: '关闭' }))
     expect(onClose).toHaveBeenCalledTimes(3)
   })
-
 })
 
 describe('ExportDialog（剪贴板回退与下载）', () => {
@@ -356,9 +458,17 @@ describe('ExportDialog（剪贴板回退与下载）', () => {
   it('下载 .md：Blob 建链触发 a.click 并回收 ObjectURL', () => {
     const createUrl = vi.fn().mockReturnValue('blob:mock')
     const revokeUrl = vi.fn()
-    Object.defineProperty(URL, 'createObjectURL', { value: createUrl, configurable: true })
-    Object.defineProperty(URL, 'revokeObjectURL', { value: revokeUrl, configurable: true })
-    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    Object.defineProperty(URL, 'createObjectURL', {
+      value: createUrl,
+      configurable: true,
+    })
+    Object.defineProperty(URL, 'revokeObjectURL', {
+      value: revokeUrl,
+      configurable: true,
+    })
+    const clickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, 'click')
+      .mockImplementation(() => {})
 
     setup()
     fireEvent.click(screen.getByRole('button', { name: '下载 .md' }))

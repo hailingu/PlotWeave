@@ -20,7 +20,8 @@ export interface Viewport {
 }
 
 /** 节点类型：编剧侧（节奏卡/索引卡/对白/分支）+ 生成侧（分镜卡/图片）。 */
-export type NodeType = 'scene' | 'beat' | 'dialogue' | 'branch' | 'shot' | 'image'
+export type NodeType =
+  'scene' | 'beat' | 'dialogue' | 'branch' | 'shot' | 'image'
 
 /** 场景（索引卡）：一个时空单元的叙事容器。 */
 export interface SceneSpec {
@@ -111,12 +112,7 @@ export interface ImageSpec {
 
 /** 节点 spec 的判别联合：形状由 StoryNode.type 决定。 */
 export type NodeSpec =
-  | SceneSpec
-  | BeatSpec
-  | DialogueSpec
-  | BranchSpec
-  | ShotSpec
-  | ImageSpec
+  SceneSpec | BeatSpec | DialogueSpec | BranchSpec | ShotSpec | ImageSpec
 
 /** 名称型节点 meta：label 必填（scene/beat/dialogue 显示并编辑名称）。 */
 export interface LabeledMeta {

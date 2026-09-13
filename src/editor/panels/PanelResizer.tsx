@@ -18,7 +18,11 @@ interface PanelResizerProps {
 export const PANEL_WIDTH_MIN = 220
 export const PANEL_WIDTH_MAX = 320
 
-export default function PanelResizer({ direction, onResize, startWidth }: PanelResizerProps) {
+export default function PanelResizer({
+  direction,
+  onResize,
+  startWidth,
+}: PanelResizerProps) {
   const handlePointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     e.preventDefault()
     const el = e.currentTarget

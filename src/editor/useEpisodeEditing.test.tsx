@@ -5,7 +5,10 @@
  */
 import { act, renderHook } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { useEditorDocument, type EditorProjectContent } from './useEditorDocument'
+import {
+  useEditorDocument,
+  type EditorProjectContent,
+} from './useEditorDocument'
 import { useEpisodeEditing } from './useEpisodeEditing'
 import type { HistoryCommand } from './history'
 

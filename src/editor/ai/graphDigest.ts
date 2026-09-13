@@ -54,7 +54,9 @@ function nodeLine(n: CanvasNode, r: DigestResolvers): string {
       return `- ${n.id} ${epTag(n.data)}节拍·${n.data.name}（${n.data.tone}）`
     case 'dialogue': {
       const speakers = new Set(
-        n.data.lines.flatMap((l) => (l.kind === 'line' && l.speaker ? [l.speaker] : [])),
+        n.data.lines.flatMap((l) =>
+          l.kind === 'line' && l.speaker ? [l.speaker] : [],
+        ),
       )
       const lineCount = n.data.lines.filter((l) => l.kind === 'line').length
       const actionCount = n.data.lines.filter((l) => l.kind === 'action').length
@@ -108,7 +110,9 @@ function spineLines(nodes: CanvasNode[], edges: Edge[]): string[] {
   }
   const lines: string[] = []
   const visited = new Set<string>()
-  const roots = seqEdges.map((e) => e.source).filter((id) => !hasIncoming.has(id))
+  const roots = seqEdges
+    .map((e) => e.source)
+    .filter((id) => !hasIncoming.has(id))
   const walk = (id: string) => {
     if (visited.has(id)) return
     visited.add(id)
@@ -120,7 +124,11 @@ function spineLines(nodes: CanvasNode[], edges: Edge[]): string[] {
 }
 
 /** 构建完整画布快照文本。 */
-export function buildGraphDigest(nodes: CanvasNode[], edges: Edge[], r: DigestResolvers): string {
+export function buildGraphDigest(
+  nodes: CanvasNode[],
+  edges: Edge[],
+  r: DigestResolvers,
+): string {
   const nodeLines = nodes.map((n) => nodeLine(n, r))
   const edgeLines = edges.map((e) => {
     const kind = edgeKindOf(e)
@@ -138,7 +146,10 @@ export function buildGraphDigest(nodes: CanvasNode[], edges: Edge[], r: DigestRe
     if (kind === 'branch') {
       // 端口绑稳定选项 id：按 id 回源解析选项文案，不给模型看下标
       const optId = branchOptionIdOf(e.sourceHandle)
-      const opt = src?.type === 'branch' ? src.data.options.find((o) => o.id === optId) : undefined
+      const opt =
+        src?.type === 'branch'
+          ? src.data.options.find((o) => o.id === optId)
+          : undefined
       return `- branch(选项${opt?.label ?? '?'} · ${e.sourceHandle ?? '?'}): ${e.source} → ${e.target}（${endLabel(src)} → ${endLabel(dst)}）`
     }
     if (kind === 'attach' || e.sourceHandle === SCENE_SHOT_HANDLE) {

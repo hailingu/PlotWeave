@@ -5,7 +5,15 @@
  * 会话保存经过 JSON 序列化和生产归一化，验证发送边界而非模型的随机措辞。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react'
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+} from '@testing-library/react'
 import { invoke } from '@tauri-apps/api/core'
 import type { ChatMessage, AssistantMessage } from '../ai/chat'
 import type { AiCommand } from '../ai/commands'
@@ -23,60 +31,116 @@ const invokeMock = vi.mocked(invoke)
 
 beforeEach(() => {
   Element.prototype.scrollTo = vi.fn()
-  invokeMock.mockReset().mockResolvedValue({ role: 'assistant', content: '继续讨论。' })
+  invokeMock
+    .mockReset()
+    .mockResolvedValue({ role: 'assistant', content: '继续讨论。' })
   vi.spyOn(settingsStore, 'load').mockResolvedValue({
-    providers: [{
-      id: 'test', label: '测试服务', baseUrl: 'https://example.test/v1', enabled: true,
-      models: ['test-model'], keyEnc: 'pw1:test-fixture',
-    }],
-    defaultChat: 'test:test-model', defaultImage: null,
+    providers: [
+      {
+        id: 'test',
+        label: '测试服务',
+        baseUrl: 'https://example.test/v1',
+        enabled: true,
+        models: ['test-model'],
+        keyEnc: 'pw1:test-fixture',
+      },
+    ],
+    defaultChat: 'test:test-model',
+    defaultImage: null,
   })
 })
 
-afterEach(() => { cleanup(); vi.restoreAllMocks() })
+afterEach(() => {
+  cleanup()
+  vi.restoreAllMocks()
+})
 
 /** 空的开场对白；测试通过真实 update_node 命令写入 action 旁白。 */
 function dialogueNode(texts: string[] = []): DialogueFlowNode {
   return {
-    id: 'd1', type: 'dialogue', position: { x: 0, y: 0 },
-    data: { name: '开场', lines: texts.map((text, i) => ({ id: `a${i}`, kind: 'action', text })) },
+    id: 'd1',
+    type: 'dialogue',
+    position: { x: 0, y: 0 },
+    data: {
+      name: '开场',
+      lines: texts.map((text, i) => ({ id: `a${i}`, kind: 'action', text })),
+    },
   }
 }
 
 /** 工具与围栏两种供应商响应都进入生产批次解析、校验与预览流程。 */
 function proposal(fenced = false): AssistantMessage {
-  const commands = [{ op: 'update_node', nodeId: 'd1', patch: {
-    lines: dialogueNode(['旁白一', '旁白二', '旁白三', '旁白四']).data.lines,
-  } }]
+  const commands = [
+    {
+      op: 'update_node',
+      nodeId: 'd1',
+      patch: {
+        lines: dialogueNode(['旁白一', '旁白二', '旁白三', '旁白四']).data
+          .lines,
+      },
+    },
+  ]
   const args = JSON.stringify({ commands })
-  if (fenced) return { role: 'assistant', content: `给开场补充旁白。\n\`\`\`json\n${args}\n\`\`\`` }
-  return { role: 'assistant', content: '给开场补充旁白。', tool_calls: [{
-    id: 'batch-1', type: 'function', function: { name: 'batch', arguments: args },
-  }] }
+  if (fenced)
+    return {
+      role: 'assistant',
+      content: `给开场补充旁白。\n\`\`\`json\n${args}\n\`\`\``,
+    }
+  return {
+    role: 'assistant',
+    content: '给开场补充旁白。',
+    tool_calls: [
+      {
+        id: 'batch-1',
+        type: 'function',
+        function: { name: 'batch', arguments: args },
+      },
+    ],
+  }
 }
 
 /** 模拟 EditorView 的状态写入依赖；业务校验、模拟执行与命令栈保持真实。 */
-function canvasHarness(initialNodes: CanvasNode[] = [dialogueNode()], aiRevision = 0) {
+function canvasHarness(
+  initialNodes: CanvasNode[] = [dialogueNode()],
+  aiRevision = 0,
+) {
   const state = { nodes: initialNodes, aiRevision }
   const history = new CommandStack()
   const deps: AiBridgeDeps = {
-    nodes: state.nodes, edges: [], settings: EMPTY_SETTINGS,
-    nodesRef: { current: state.nodes }, edgesRef: { current: [] },
-    settingsRef: { current: EMPTY_SETTINGS }, assetsRef: { current: { byId: {} } },
-    buildNewNode: () => { throw new Error('此用例只允许更新现有节点') },
-    applyDataPatch: (id, cmd) => deps.setNodes((nodes) =>
-      nodes.map((node) => node.id === id ? mergeNodeData(node, cmd.patch) : node)),
+    nodes: state.nodes,
+    edges: [],
+    settings: EMPTY_SETTINGS,
+    nodesRef: { current: state.nodes },
+    edgesRef: { current: [] },
+    settingsRef: { current: EMPTY_SETTINGS },
+    assetsRef: { current: { byId: {} } },
+    buildNewNode: () => {
+      throw new Error('此用例只允许更新现有节点')
+    },
+    applyDataPatch: (id, cmd) =>
+      deps.setNodes((nodes) =>
+        nodes.map((node) =>
+          node.id === id ? mergeNodeData(node, cmd.patch) : node,
+        ),
+      ),
     setNodes: (update) => {
       state.nodes = update(state.nodes)
       deps.nodes = state.nodes
       deps.nodesRef.current = state.nodes
     },
-    setEdges: (update) => { deps.edges = update(deps.edges); deps.edgesRef.current = deps.edges },
-    setSettings: (update) => {
-      deps.settings = update(deps.settings); deps.settingsRef.current = deps.settings
+    setEdges: (update) => {
+      deps.edges = update(deps.edges)
+      deps.edgesRef.current = deps.edges
     },
-    setAiRevision: (update) => { state.aiRevision = update(state.aiRevision) },
-    pushHistory: (command) => history.push(command), closeSettings: () => undefined,
+    setSettings: (update) => {
+      deps.settings = update(deps.settings)
+      deps.settingsRef.current = deps.settings
+    },
+    setAiRevision: (update) => {
+      state.aiRevision = update(state.aiRevision)
+    },
+    pushHistory: (command) => history.push(command),
+    closeSettings: () => undefined,
   }
   const hook = renderHook(() => useAiBridge(deps))
   return { state, history, deps, hook }
@@ -85,21 +149,27 @@ function canvasHarness(initialNodes: CanvasNode[] = [dialogueNode()], aiRevision
 /** 装配真实右栏和 AI 桥；refresh 对应画布更新后 EditorView 的重渲染。
  * projectId 用于在途回合的项目归属（issue #63）——跨用例模块级注册表
  * 共享，需要隔离的用例显式传入独立 id。 */
-async function setup(options: {
-  session?: AiSession
-  aiRevision?: number
-  nodes?: CanvasNode[]
-  whenCanvasCommitted?: () => Promise<void>
-  projectId?: string
-  onOpenSettings?: () => void
-  loadFailed?: boolean
-} = {}) {
+async function setup(
+  options: {
+    session?: AiSession
+    aiRevision?: number
+    nodes?: CanvasNode[]
+    whenCanvasCommitted?: () => Promise<void>
+    projectId?: string
+    onOpenSettings?: () => void
+    loadFailed?: boolean
+  } = {},
+) {
   const canvas = canvasHarness(options.nodes, options.aiRevision)
   const saved: AiSession[] = []
   const props = () => ({
-    open: true, width: 320, tab: 'ai' as const, settings: EMPTY_SETTINGS,
+    open: true,
+    width: 320,
+    tab: 'ai' as const,
+    settings: EMPTY_SETTINGS,
     projectId: options.projectId ?? 'p-context',
-    onResize: () => undefined, onTabChange: () => undefined,
+    onResize: () => undefined,
+    onTabChange: () => undefined,
     onOpenSettings: options.onOpenSettings,
     aiSessionLoadFailed: options.loadFailed,
     canvasDigest: canvas.hook.result.current.canvasDigest,
@@ -107,17 +177,27 @@ async function setup(options: {
     onValidateAi: canvas.hook.result.current.validateAiReply,
     onApplyAiBatch: canvas.hook.result.current.applyAiBatch,
     onReadNode: canvas.hook.result.current.readNode,
-    aiSession: options.session, aiRevision: canvas.state.aiRevision,
+    aiSession: options.session,
+    aiRevision: canvas.state.aiRevision,
     whenCanvasCommitted: options.whenCanvasCommitted,
-    onSaveAiSession: async (session: AiSession) => { saved.push(JSON.parse(JSON.stringify(session)) as AiSession) },
+    onSaveAiSession: async (session: AiSession) => {
+      saved.push(JSON.parse(JSON.stringify(session)) as AiSession)
+    },
   })
   const view = render(<RightPanel {...props()} />)
   if (options.loadFailed) await screen.findByRole('alert')
   else await screen.findByLabelText('AI 对话输入')
   return {
-    ...canvas, saved,
-    refresh: () => { canvas.hook.rerender(); view.rerender(<RightPanel {...props()} />) },
-    unmount: () => { view.unmount(); canvas.hook.unmount() },
+    ...canvas,
+    saved,
+    refresh: () => {
+      canvas.hook.rerender()
+      view.rerender(<RightPanel {...props()} />)
+    },
+    unmount: () => {
+      view.unmount()
+      canvas.hook.unmount()
+    },
   }
 }
 
@@ -138,31 +218,48 @@ function lastRequest(): ChatMessage[] {
 
 /** §12.2 每条助手消息的应用批次 JSON 记录，不能依赖孤立 note 回执。 */
 function records(messages = lastRequest()): Record<string, unknown>[] {
-  return messages.filter((message) => message.role === 'assistant').flatMap((message) => {
-    const record = message.content.split('\n[应用批次记录]\n')[1]
-    return record ? [JSON.parse(record) as Record<string, unknown>] : []
-  })
+  return messages
+    .filter((message) => message.role === 'assistant')
+    .flatMap((message) => {
+      const record = message.content.split('\n[应用批次记录]\n')[1]
+      return record ? [JSON.parse(record) as Record<string, unknown>] : []
+    })
 }
 
 describe('AiThread 确认后下一轮的真实请求', () => {
-  it.each([false, true])('工具/围栏通道 fenced=%s：较早卡片执行后状态仍绑定原批次', async (fenced) => {
-    const h = await setup()
-    invokeMock.mockResolvedValueOnce(proposal(fenced))
-    await send('丰富开场点题的旁白')
-    expect(h.state.nodes[0].data.lines).toEqual([])
-    await send('先解释一下')
-    expect(records()).toMatchObject([{ batchId: 2, status: 'pending', commandCount: 1 }])
-    fireEvent.click(screen.getByRole('button', { name: '✓ 执行改动' }))
-    h.refresh()
-    expect(h.state.nodes[0].data.lines).toHaveLength(4)
-    expect(h.state.aiRevision).toBe(1)
-    await send()
-    expect(records()).toMatchObject([{
-      batchId: 2, status: 'executed', commandCount: 1, currentEffect: 'unknown',
-    }])
-    expect(lastRequest().find((m) => m.content.startsWith('当前画布快照'))?.content).toContain('4 条旁白/动作')
-    expect(lastRequest().some((m) => m.role === 'tool' || m.tool_calls)).toBe(false)
-  })
+  it.each([false, true])(
+    '工具/围栏通道 fenced=%s：较早卡片执行后状态仍绑定原批次',
+    async (fenced) => {
+      const h = await setup()
+      invokeMock.mockResolvedValueOnce(proposal(fenced))
+      await send('丰富开场点题的旁白')
+      expect(h.state.nodes[0].data.lines).toEqual([])
+      await send('先解释一下')
+      expect(records()).toMatchObject([
+        { batchId: 2, status: 'pending', commandCount: 1 },
+      ])
+      fireEvent.click(screen.getByRole('button', { name: '✓ 执行改动' }))
+      h.refresh()
+      expect(h.state.nodes[0].data.lines).toHaveLength(4)
+      expect(h.state.aiRevision).toBe(1)
+      await send()
+      expect(records()).toMatchObject([
+        {
+          batchId: 2,
+          status: 'executed',
+          commandCount: 1,
+          currentEffect: 'unknown',
+        },
+      ])
+      expect(
+        lastRequest().find((m) => m.content.startsWith('当前画布快照'))
+          ?.content,
+      ).toContain('4 条旁白/动作')
+      expect(lastRequest().some((m) => m.role === 'tool' || m.tool_calls)).toBe(
+        false,
+      )
+    },
+  )
 
   it('忽略后继续提问仍带 dismissed，关闭快照不删除对话的批次状态', async () => {
     const h = await setup()
@@ -172,7 +269,9 @@ describe('AiThread 确认后下一轮的真实请求', () => {
     fireEvent.click(screen.getByRole('button', { name: /了解当前画布/ }))
     await send()
     expect(records()).toMatchObject([{ status: 'dismissed' }])
-    expect(lastRequest().some((m) => m.content.startsWith('当前画布快照'))).toBe(false)
+    expect(
+      lastRequest().some((m) => m.content.startsWith('当前画布快照')),
+    ).toBe(false)
     expect(h.state.nodes[0].data.lines).toEqual([])
     expect(h.history.canUndo).toBe(false)
   })
@@ -190,7 +289,12 @@ describe('AiThread 失败恢复与成功重试', () => {
     expect(h.state.nodes).toEqual([])
     expect(h.state.aiRevision).toBe(0)
     expect(h.history.canUndo).toBe(false)
-    expect(records()).toMatchObject([{ status: 'execution_failed', executionError: expect.stringContaining('d1') }])
+    expect(records()).toMatchObject([
+      {
+        status: 'execution_failed',
+        executionError: expect.stringContaining('d1'),
+      },
+    ])
     const session = normalizeAiSession(h.saved[h.saved.length - 1]).session
     h.unmount()
     // 目标在重开前恢复：重新校验可执行，但上次失败记录仍是历史事实。
@@ -203,7 +307,10 @@ describe('AiThread 失败恢复与成功重试', () => {
     expect(reopened.state.nodes[0].data.lines).toHaveLength(4)
     expect(records()).toMatchObject([{ status: 'executed' }])
     expect(records()[0]).not.toHaveProperty('executionError')
-    expect(reopened.saved[reopened.saved.length - 1].entries.find((e) => e.card)!.card).not.toHaveProperty('executionError')
+    expect(
+      reopened.saved[reopened.saved.length - 1].entries.find((e) => e.card)!
+        .card,
+    ).not.toHaveProperty('executionError')
   })
 
   it('执行失败后忽略同一卡片，后续请求及保存不再携带旧失败状态', async () => {
@@ -217,7 +324,9 @@ describe('AiThread 失败恢复与成功重试', () => {
     await send()
     expect(records()).toMatchObject([{ status: 'dismissed' }])
     expect(records()[0]).not.toHaveProperty('executionError')
-    expect(h.saved[h.saved.length - 1].entries.find((e) => e.card)!.card).not.toHaveProperty('executionError')
+    expect(
+      h.saved[h.saved.length - 1].entries.find((e) => e.card)!.card,
+    ).not.toHaveProperty('executionError')
     expect(h.history.canUndo).toBe(false)
   })
 })
@@ -225,25 +334,41 @@ describe('AiThread 失败恢复与成功重试', () => {
 describe('AiThread 执行与保存是独立事实', () => {
   it('画布确认前模型知道已在内存执行，持久会话仍待对账；确认后去掉未保存提示', async () => {
     let confirm!: () => void
-    const committed = new Promise<void>((resolve) => { confirm = resolve })
+    const committed = new Promise<void>((resolve) => {
+      confirm = resolve
+    })
     const h = await setup({ whenCanvasCommitted: () => committed })
     invokeMock.mockResolvedValueOnce(proposal())
     await send('丰富旁白')
     fireEvent.click(screen.getByRole('button', { name: '✓ 执行改动' }))
     h.refresh()
     await send()
-    expect(records()).toMatchObject([{ status: 'executed', canvasSavePending: true }])
-    expect(h.saved[h.saved.length - 1].entries.find((e) => e.card)!.card).toMatchObject({ status: 'pending', aiRevisionAfter: 1 })
-    await act(async () => { confirm() })
+    expect(records()).toMatchObject([
+      { status: 'executed', canvasSavePending: true },
+    ])
+    expect(
+      h.saved[h.saved.length - 1].entries.find((e) => e.card)!.card,
+    ).toMatchObject({ status: 'pending', aiRevisionAfter: 1 })
+    await act(async () => {
+      confirm()
+    })
     await send()
     expect(records()).toMatchObject([{ status: 'executed' }])
     expect(records()[0]).not.toHaveProperty('canvasSavePending')
-    expect(h.saved[h.saved.length - 1].entries.find((e) => e.card)!.card?.status).toBe('executed')
+    expect(
+      h.saved[h.saved.length - 1].entries.find((e) => e.card)!.card?.status,
+    ).toBe('executed')
   })
 
-  it.each([{ revision: 0, status: 'pending' }, { revision: 1, status: 'executed' }])(
-    '未确认批次重开后按画布计数 $revision 对账再发送 $status', async ({ revision, status }) => {
-      const h = await setup({ whenCanvasCommitted: () => new Promise<void>(() => undefined) })
+  it.each([
+    { revision: 0, status: 'pending' },
+    { revision: 1, status: 'executed' },
+  ])(
+    '未确认批次重开后按画布计数 $revision 对账再发送 $status',
+    async ({ revision, status }) => {
+      const h = await setup({
+        whenCanvasCommitted: () => new Promise<void>(() => undefined),
+      })
       invokeMock.mockResolvedValueOnce(proposal())
       await send('丰富旁白')
       fireEvent.click(screen.getByRole('button', { name: '✓ 执行改动' }))
@@ -255,11 +380,15 @@ describe('AiThread 执行与保存是独立事实', () => {
       await send('重开后继续')
       expect(records()).toMatchObject([{ status }])
       expect(records()[0]).not.toHaveProperty('canvasSavePending')
-      expect(Boolean(screen.queryByRole('button', { name: '✓ 执行改动' }))).toBe(status === 'pending')
+      expect(
+        Boolean(screen.queryByRole('button', { name: '✓ 执行改动' })),
+      ).toBe(status === 'pending')
       if (status === 'pending') {
         fireEvent.click(screen.getByRole('button', { name: '✓ 执行改动' }))
         await send('确认后继续')
-        expect(records()).toMatchObject([{ status: 'executed', commandCount: 1 }])
+        expect(records()).toMatchObject([
+          { status: 'executed', commandCount: 1 },
+        ])
       }
     },
   )
@@ -275,34 +404,60 @@ describe('AiThread 恢复待执行卡的校验边界', () => {
     const reopened = await setup({ session, nodes: [] })
     await send()
     expect(records()).toMatchObject([{ status: 'validation_failed' }])
-    expect((screen.getByRole('button', { name: '✓ 执行改动' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(
+      (screen.getByRole('button', { name: '✓ 执行改动' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true)
     expect(reopened.history.canUndo).toBe(false)
   })
 
-  it.each([false, true])('校验拒绝卡（兼容合法子集=%s）重开后仍保持整批拒绝', async (withSubset) => {
-    const h = await setup()
-    const commands: AiCommand[] = [
-      { op: 'update_node', nodeId: 'd1', patch: { name: '新名称' } },
-      { op: 'update_node', nodeId: 'missing', patch: { name: '无效目标' } },
-    ]
-    invokeMock.mockResolvedValue({ role: 'assistant', content: '建议两项修改。', tool_calls: [{
-      id: 'bad-batch', type: 'function', function: { name: 'batch', arguments: JSON.stringify({ commands }) },
-    }] })
-    await send('修改两个节点')
-    const session = normalizeAiSession(h.saved[h.saved.length - 1]).session
-    const rejected = session.entries.find((e) => e.card)!.card!
-    expect(rejected.v).toMatchObject({ ok: false, commands: [] })
-    // 当前拒绝结果不保留命令；兼容契约允许存在已校验的子集，两者都不是原始整批。
-    if (withSubset) rejected.v.commands = h.hook.result.current.validateCommands([commands[0]])!.commands
-    h.unmount()
-    const reopened = await setup({ session })
-    invokeMock.mockResolvedValue({ role: 'assistant', content: '继续讨论。' })
-    await send()
-    expect(records()).toMatchObject([{ status: 'validation_failed' }])
-    expect((screen.getByRole('button', { name: '✓ 执行改动' }) as HTMLButtonElement).disabled).toBe(true)
-    expect(reopened.state.nodes[0].data.name).toBe('开场')
-    expect(reopened.history.canUndo).toBe(false)
-  })
+  it.each([false, true])(
+    '校验拒绝卡（兼容合法子集=%s）重开后仍保持整批拒绝',
+    async (withSubset) => {
+      const h = await setup()
+      const commands: AiCommand[] = [
+        { op: 'update_node', nodeId: 'd1', patch: { name: '新名称' } },
+        { op: 'update_node', nodeId: 'missing', patch: { name: '无效目标' } },
+      ]
+      invokeMock.mockResolvedValue({
+        role: 'assistant',
+        content: '建议两项修改。',
+        tool_calls: [
+          {
+            id: 'bad-batch',
+            type: 'function',
+            function: {
+              name: 'batch',
+              arguments: JSON.stringify({ commands }),
+            },
+          },
+        ],
+      })
+      await send('修改两个节点')
+      const session = normalizeAiSession(h.saved[h.saved.length - 1]).session
+      const rejected = session.entries.find((e) => e.card)!.card!
+      expect(rejected.v).toMatchObject({ ok: false, commands: [] })
+      // 当前拒绝结果不保留命令；兼容契约允许存在已校验的子集，两者都不是原始整批。
+      if (withSubset)
+        rejected.v.commands = h.hook.result.current.validateCommands([
+          commands[0],
+        ])!.commands
+      h.unmount()
+      const reopened = await setup({ session })
+      invokeMock.mockResolvedValue({ role: 'assistant', content: '继续讨论。' })
+      await send()
+      expect(records()).toMatchObject([{ status: 'validation_failed' }])
+      expect(
+        (
+          screen.getByRole('button', {
+            name: '✓ 执行改动',
+          }) as HTMLButtonElement
+        ).disabled,
+      ).toBe(true)
+      expect(reopened.state.nodes[0].data.name).toBe('开场')
+      expect(reopened.history.canUndo).toBe(false)
+    },
+  )
 })
 
 describe('AiThread 历史成功不覆盖当前画布', () => {
@@ -315,24 +470,42 @@ describe('AiThread 历史成功不覆盖当前画布', () => {
     h.refresh()
     expect(h.state.nodes[0].data.lines).toEqual([])
     await readCurrentNode()
-    expect(JSON.parse(lastRequest().find((m) => m.role === 'tool')!.content).data.lines).toEqual([])
-    expect(records()).toMatchObject([{ status: 'executed', currentEffect: 'unknown' }])
+    expect(
+      JSON.parse(lastRequest().find((m) => m.role === 'tool')!.content).data
+        .lines,
+    ).toEqual([])
+    expect(records()).toMatchObject([
+      { status: 'executed', currentEffect: 'unknown' },
+    ])
     h.deps.setNodes(() => [dialogueNode(['手动写的新旁白'])])
     h.refresh()
     await readCurrentNode()
-    expect(JSON.parse(lastRequest().find((m) => m.role === 'tool')!.content).data.lines)
-      .toEqual([{ id: 'a0', kind: 'action', text: '手动写的新旁白' }])
-    expect(records()).toMatchObject([{ status: 'executed', currentEffect: 'unknown' }])
+    expect(
+      JSON.parse(lastRequest().find((m) => m.role === 'tool')!.content).data
+        .lines,
+    ).toEqual([{ id: 'a0', kind: 'action', text: '手动写的新旁白' }])
+    expect(records()).toMatchObject([
+      { status: 'executed', currentEffect: 'unknown' },
+    ])
   })
 })
 
 /** 供应商请求读取详情，经真实 Agent 读工具回喂后再发出第二轮请求。 */
 async function readCurrentNode() {
   // 「读取现在的旁白」无动作动词：首个响应供 query 改写判定，NONE = 非改动。
-  invokeMock.mockResolvedValueOnce({ role: 'assistant', content: '{"action":false}' })
-    .mockResolvedValueOnce({ role: 'assistant', content: null, tool_calls: [{
-      id: 'read-1', type: 'function', function: { name: 'get_node', arguments: '{"nodeId":"d1"}' },
-    }] })
+  invokeMock
+    .mockResolvedValueOnce({ role: 'assistant', content: '{"action":false}' })
+    .mockResolvedValueOnce({
+      role: 'assistant',
+      content: null,
+      tool_calls: [
+        {
+          id: 'read-1',
+          type: 'function',
+          function: { name: 'get_node', arguments: '{"nodeId":"d1"}' },
+        },
+      ],
+    })
   await send('读取现在的旁白')
 }
 
@@ -343,14 +516,20 @@ async function sendInFlight(text = '丰富开场') {
   fireEvent.change(input, { target: { value: text } })
   fireEvent.keyDown(input, { key: 'Enter' })
   await waitFor(() =>
-    expect(invokeMock.mock.calls.some(([cmd]) => cmd === 'llm_chat')).toBe(true))
+    expect(invokeMock.mock.calls.some(([cmd]) => cmd === 'llm_chat')).toBe(
+      true,
+    ),
+  )
 }
 
 /** 首个 llm_chat 调用挂起至手动落定，模拟回合跨设置页/首页往返。 */
 function deferredReply() {
   let resolve!: (message: AssistantMessage) => void
   invokeMock.mockImplementationOnce(
-    () => new Promise<AssistantMessage>((settle) => { resolve = settle }),
+    () =>
+      new Promise<AssistantMessage>((settle) => {
+        resolve = settle
+      }),
   )
   return (message: AssistantMessage) => resolve(message)
 }
@@ -359,14 +538,19 @@ function deferredReply() {
 function deferredFailure() {
   let reject!: (err: Error) => void
   invokeMock.mockImplementationOnce(
-    () => new Promise<AssistantMessage>((_, fail) => { reject = fail }),
+    () =>
+      new Promise<AssistantMessage>((_, fail) => {
+        reject = fail
+      }),
   )
   return (err: Error) => reject(err)
 }
 
 /** 宏任务边界冲刷全部在途微任务：卸载后的落定/失败在无 DOM 可观察时完成。 */
 async function flushAfterUnmount() {
-  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
 }
 
 describe('AiThread 在途回合跨卸载按项目认领（issue #63）', () => {
@@ -377,12 +561,17 @@ describe('AiThread 在途回合跨卸载按项目认领（issue #63）', () => {
     expect(screen.getByText('✦ 正在思考…')).toBeTruthy()
     const session = normalizeAiSession(h.saved[h.saved.length - 1]).session
     h.unmount() // ⌘, 进入设置：编辑器整体卸载，回合仍在途
-    await act(async () => { reply({ role: 'assistant', content: '迟到回复。' }) })
+    await act(async () => {
+      reply({ role: 'assistant', content: '迟到回复。' })
+    })
     const reopened = await setup({ projectId: 'p63-claim', session })
     expect(await screen.findByText('迟到回复。')).toBeTruthy()
     expect(screen.queryByText('✦ 正在思考…')).toBeNull()
     const last = reopened.saved[reopened.saved.length - 1]
-    expect(last.entries.map((e) => e.role ?? e.kind)).toEqual(['user', 'assistant'])
+    expect(last.entries.map((e) => e.role ?? e.kind)).toEqual([
+      'user',
+      'assistant',
+    ])
     expect(new Set(last.entries.map((e) => e.id)).size).toBe(2)
   })
 
@@ -394,7 +583,9 @@ describe('AiThread 在途回合跨卸载按项目认领（issue #63）', () => {
     h.unmount()
     await setup({ projectId: 'p63-wait', session })
     expect(screen.getByText('✦ 正在思考…')).toBeTruthy()
-    await act(async () => { reply({ role: 'assistant', content: '等待后到达。' }) })
+    await act(async () => {
+      reply({ role: 'assistant', content: '等待后到达。' })
+    })
     expect(await screen.findByText('等待后到达。')).toBeTruthy()
     expect(screen.queryByText('✦ 正在思考…')).toBeNull()
   })
@@ -407,12 +598,18 @@ describe('AiThread 在途回合跨卸载按项目认领（issue #63）', () => {
     await sendInFlight('丰富旁白')
     const session = normalizeAiSession(h.saved[h.saved.length - 1]).session
     h.unmount()
-    await act(async () => { reply(proposal()) }) // 旧闭包校验通过（d1 仍在旧画布）
+    await act(async () => {
+      reply(proposal())
+    }) // 旧闭包校验通过（d1 仍在旧画布）
     await setup({ projectId: 'p63-revalidate', session, nodes: [] }) // 重开后目标已删
     expect(await screen.findByText(/给开场补充旁白/)).toBeTruthy()
-    const execute = screen.getByRole('button', { name: '✓ 执行改动' }) as HTMLButtonElement
+    const execute = screen.getByRole('button', {
+      name: '✓ 执行改动',
+    }) as HTMLButtonElement
     expect(execute.disabled).toBe(true)
-    const claimed = screen.getByRole('button', { name: '✓ 执行改动' }).closest('.pw-ai-entry')
+    const claimed = screen
+      .getByRole('button', { name: '✓ 执行改动' })
+      .closest('.pw-ai-entry')
     expect(claimed?.textContent).toContain('第 1 条')
   })
 })
@@ -424,7 +621,9 @@ describe('AiThread 在途回合的归还与失败（issue #63）', () => {
     await sendInFlight()
     const session = normalizeAiSession(h.saved[h.saved.length - 1]).session
     h.unmount()
-    await act(async () => { fail(new Error('网络中断')) }) // 失败在卸载后落定
+    await act(async () => {
+      fail(new Error('网络中断'))
+    }) // 失败在卸载后落定
     await flushAfterUnmount()
     const reopened = await setup({ projectId: 'p63-fail', session })
     expect(await screen.findByText(/网络中断/)).toBeTruthy()
@@ -443,7 +642,9 @@ describe('AiThread 在途回合的归还与失败（issue #63）', () => {
     middle.unmount() // 等待期间再次进入设置
     await setup({ projectId: 'p63-return', session })
     expect(screen.getByText('✦ 正在思考…')).toBeTruthy()
-    await act(async () => { reply({ role: 'assistant', content: '辗转到达。' }) })
+    await act(async () => {
+      reply({ role: 'assistant', content: '辗转到达。' })
+    })
     expect(await screen.findByText('辗转到达。')).toBeTruthy()
   })
 
@@ -455,10 +656,14 @@ describe('AiThread 在途回合的归还与失败（issue #63）', () => {
     await sendInFlight()
     const session = normalizeAiSession(h.saved[h.saved.length - 1]).session
     h.unmount()
-    await act(async () => { reply({ role: 'assistant', content: '唯一回复。' }) })
+    await act(async () => {
+      reply({ role: 'assistant', content: '唯一回复。' })
+    })
     const first = await setup({ projectId: 'p63-once', session })
     expect(await screen.findByText('唯一回复。')).toBeTruthy()
-    const committed = normalizeAiSession(first.saved[first.saved.length - 1]).session
+    const committed = normalizeAiSession(
+      first.saved[first.saved.length - 1],
+    ).session
     first.unmount()
     await setup({ projectId: 'p63-once', session: committed })
     expect(screen.getAllByText('唯一回复。')).toHaveLength(1)
@@ -477,7 +682,9 @@ describe('AiThread 常驻设置入口（issue #87）', () => {
 
   it('未配置空态：常驻入口与引导按钮并存，不互斥', async () => {
     vi.spyOn(settingsStore, 'load').mockResolvedValue({
-      providers: [], defaultChat: null, defaultImage: null,
+      providers: [],
+      defaultChat: null,
+      defaultImage: null,
     })
     const onOpenSettings = vi.fn()
     await setup({ onOpenSettings })
@@ -504,7 +711,9 @@ describe('AiThread 新会话（issue #89）', () => {
     await send('丰富旁白')
     expect(screen.getByText('给开场补充旁白。')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '新会话' }))
-    expect(screen.getByRole('button', { name: '再点一次确认清空' })).toBeTruthy()
+    expect(
+      screen.getByRole('button', { name: '再点一次确认清空' }),
+    ).toBeTruthy()
     expect(screen.getByText('给开场补充旁白。')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '再点一次确认清空' }))
     expect(screen.queryByText('给开场补充旁白。')).toBeNull()
@@ -515,11 +724,14 @@ describe('AiThread 新会话（issue #89）', () => {
   it('空会话与 busy 时入口禁用，busy 解除后恢复', async () => {
     const reply = deferredReply()
     const h = await setup({ projectId: 'p89-busy' })
-    const button = () => screen.getByRole('button', { name: '新会话' }) as HTMLButtonElement
+    const button = () =>
+      screen.getByRole('button', { name: '新会话' }) as HTMLButtonElement
     expect(button().disabled).toBe(true)
     await sendInFlight()
     expect(button().disabled).toBe(true)
-    await act(async () => { reply({ role: 'assistant', content: '迟到回复。' }) })
+    await act(async () => {
+      reply({ role: 'assistant', content: '迟到回复。' })
+    })
     expect(await screen.findByText('迟到回复。')).toBeTruthy()
     expect(button().disabled).toBe(false)
     fireEvent.click(button())
@@ -540,7 +752,10 @@ describe('AiThread 新会话（issue #89）', () => {
     await setup({ projectId: 'p89-reopen', session })
     expect(screen.queryByText('给开场补充旁白。')).toBeNull()
     expect(screen.getByText(/和 AI 聊聊这一幕怎么写/)).toBeTruthy()
-    expect((screen.getByRole('button', { name: '新会话' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(
+      (screen.getByRole('button', { name: '新会话' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true)
   })
 
   it('会话读取失败态：新会话入口不渲染', async () => {

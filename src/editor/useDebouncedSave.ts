@@ -129,7 +129,16 @@ export function useDebouncedSave(
     // 名称/节点/边/设定集/集标题/资产索引触发防抖（视口经 markDirty 或卸载
     // 冲刷兜底）；doc 仅用于计算签名，依赖以签名的组成字段为准
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc.name, doc.nodes, doc.edges, doc.settings, doc.episodeTitles, doc.assets, flushSave, delayMs])
+  }, [
+    doc.name,
+    doc.nodes,
+    doc.edges,
+    doc.settings,
+    doc.episodeTitles,
+    doc.assets,
+    flushSave,
+    delayMs,
+  ])
 
   useEffect(() => {
     // flushSave 依赖变化会重跑本 effect：重置卸载标记，仅真正的卸载终止重试

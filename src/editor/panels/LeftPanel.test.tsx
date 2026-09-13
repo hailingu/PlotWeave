@@ -5,7 +5,13 @@
  * 设定集分段的增删改与实体拖拽负载、资产分段挂载。
  */
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { cleanup, createEvent, fireEvent, render, screen } from '@testing-library/react'
+import {
+  cleanup,
+  createEvent,
+  fireEvent,
+  render,
+  screen,
+} from '@testing-library/react'
 import LeftPanel, { type SettingsActions } from './LeftPanel'
 import { PW_ENTITY_MIME, type EntityDragPayload } from '../dragDrop'
 import type { CanvasNode } from '../nodes/types'
@@ -25,8 +31,13 @@ const nodes: CanvasNode[] = [
     type: 'scene',
     position: { x: 100, y: 0 },
     data: {
-      name: '场一', sceneNo: 1, interior: true, time: '🌙 夜',
-      synopsis: '', characterIds: [], episodeNo: 1,
+      name: '场一',
+      sceneNo: 1,
+      interior: true,
+      time: '🌙 夜',
+      synopsis: '',
+      characterIds: [],
+      episodeNo: 1,
     },
   } as CanvasNode,
   {
@@ -86,7 +97,13 @@ function setup(over: Partial<Parameters<typeof LeftPanel>[0]> = {}) {
 
 /** 大纲行查询：行是 button，文本含 label。 */
 const row = (label: string) =>
-  screen.getAllByRole('button').find((b) => b.classList.contains('pw-outline-row') && b.textContent?.includes(label))!
+  screen
+    .getAllByRole('button')
+    .find(
+      (b) =>
+        b.classList.contains('pw-outline-row') &&
+        b.textContent?.includes(label),
+    )!
 
 /** dataTransfer 桩：happy-dom 的 DragEvent 不带数据通道。 */
 function dt(init: Record<string, string> = {}) {
@@ -150,7 +167,9 @@ describe('LeftPanel 大纲拖拽', () => {
     fireEvent.dragStart(row('节拍 · 节拍一'), { dataTransfer: d })
     expect(d.store[OUTLINE_MIME]).toBe('b1')
 
-    fireEvent.drop(row('场 01 · 场一'), { dataTransfer: dt({ [OUTLINE_MIME]: 'b1' }) })
+    fireEvent.drop(row('场 01 · 场一'), {
+      dataTransfer: dt({ [OUTLINE_MIME]: 'b1' }),
+    })
     expect(spies.onOutlineDrop).toHaveBeenCalledWith('b1', {
       kind: 'row',
       anchorId: 's1',
@@ -160,13 +179,20 @@ describe('LeftPanel 大纲拖拽', () => {
 
   it('拖到「未分集」组头触发 groupEnd 落点', () => {
     const spies = setup()
-    fireEvent.drop(screen.getByText('未分集'), { dataTransfer: dt({ [OUTLINE_MIME]: 's1' }) })
-    expect(spies.onOutlineDrop).toHaveBeenCalledWith('s1', { kind: 'groupEnd', episode: null })
+    fireEvent.drop(screen.getByText('未分集'), {
+      dataTransfer: dt({ [OUTLINE_MIME]: 's1' }),
+    })
+    expect(spies.onOutlineDrop).toHaveBeenCalledWith('s1', {
+      kind: 'groupEnd',
+      episode: null,
+    })
   })
 
   it('拖拽源与目标相同则不派发', () => {
     const spies = setup()
-    fireEvent.drop(row('场 01 · 场一'), { dataTransfer: dt({ [OUTLINE_MIME]: 's1' }) })
+    fireEvent.drop(row('场 01 · 场一'), {
+      dataTransfer: dt({ [OUTLINE_MIME]: 's1' }),
+    })
     expect(spies.onOutlineDrop).not.toHaveBeenCalled()
   })
 
@@ -176,7 +202,9 @@ describe('LeftPanel 大纲拖拽', () => {
     // happy-dom 的 getBoundingClientRect 全零：clientY < 0 = 上半；
     // 且其 DragEvent 忽略 init 里的 clientY，须建事件后显式覆写
     const dragOverAt = (clientY: number) => {
-      const ev = createEvent.dragOver(target, { dataTransfer: dt({ [OUTLINE_MIME]: 'b1' }) })
+      const ev = createEvent.dragOver(target, {
+        dataTransfer: dt({ [OUTLINE_MIME]: 'b1' }),
+      })
       Object.defineProperty(ev, 'clientY', { value: clientY })
       fireEvent(target, ev)
     }
@@ -193,7 +221,10 @@ describe('LeftPanel 大纲拖拽', () => {
   it('dragOver 非大纲 MIME 不出提示；分镜行（level ≥ 3）不接收排序悬停', () => {
     setup()
     const target = row('场 01 · 场一')
-    fireEvent.dragOver(target, { dataTransfer: dt({ 'text/plain': 'x' }), clientY: -1 })
+    fireEvent.dragOver(target, {
+      dataTransfer: dt({ 'text/plain': 'x' }),
+      clientY: -1,
+    })
     expect(target.className).not.toContain('pw-drop-above')
   })
 
@@ -204,7 +235,10 @@ describe('LeftPanel 大纲拖拽', () => {
     expect(head.className).toContain('pw-drop-into')
 
     fireEvent.drop(head, { dataTransfer: dt({ [OUTLINE_MIME]: 'd1' }) })
-    expect(spies.onOutlineDrop).toHaveBeenCalledWith('d1', { kind: 'groupEnd', episode: 1 })
+    expect(spies.onOutlineDrop).toHaveBeenCalledWith('d1', {
+      kind: 'groupEnd',
+      episode: 1,
+    })
     expect(head.className).not.toContain('pw-drop-into')
   })
 
@@ -244,14 +278,19 @@ describe('LeftPanel 设定集分段', () => {
     fireEvent.change(input, { target: { value: '林晚晴' } })
     fireEvent.keyDown(input, { key: 'Enter' })
     fireEvent.blur(input)
-    expect(spies.settingsActions.renameCharacter).toHaveBeenCalledWith('c1', '林晚晴')
+    expect(spies.settingsActions.renameCharacter).toHaveBeenCalledWith(
+      'c1',
+      '林晚晴',
+    )
   })
 
   it('实体拖拽负载为 PW_ENTITY_MIME JSON', () => {
     setup()
     toSettingsTab()
     const d = dt()
-    fireEvent.dragStart(screen.getByTitle(/拖到画布节点建立引用/), { dataTransfer: d })
+    fireEvent.dragStart(screen.getByTitle(/拖到画布节点建立引用/), {
+      dataTransfer: d,
+    })
     const payload = JSON.parse(d.store[PW_ENTITY_MIME]) as EntityDragPayload
     expect(payload).toEqual({ kind: 'character', id: 'c1', name: '林晚' })
   })
@@ -263,10 +302,15 @@ describe('LeftPanel 设定集分段', () => {
     const input = screen.getByRole('textbox', { name: '地点名 天台' })
     fireEvent.change(input, { target: { value: '旧天台' } })
     fireEvent.blur(input)
-    expect(spies.settingsActions.renameLocation).toHaveBeenCalledWith('l1', '旧天台')
+    expect(spies.settingsActions.renameLocation).toHaveBeenCalledWith(
+      'l1',
+      '旧天台',
+    )
 
     const d = dt()
-    fireEvent.dragStart(screen.getByTitle(/拖到索引卡设置地点/), { dataTransfer: d })
+    fireEvent.dragStart(screen.getByTitle(/拖到索引卡设置地点/), {
+      dataTransfer: d,
+    })
     const payload = JSON.parse(d.store[PW_ENTITY_MIME]) as EntityDragPayload
     expect(payload).toEqual({ kind: 'location', id: 'l1', name: '天台' })
   })

@@ -37,7 +37,15 @@ function dialogueNode(): DialogueFlowNode {
     position: { x: 0, y: 0 },
     data: {
       name: '对白',
-      lines: [{ id: 'line-0', kind: 'line', speaker: 'c0', side: 'left', text: '你好' }],
+      lines: [
+        {
+          id: 'line-0',
+          kind: 'line',
+          speaker: 'c0',
+          side: 'left',
+          text: '你好',
+        },
+      ],
     },
   }
 }
@@ -64,7 +72,12 @@ describe('entityDropPatch（§5 设定集实体拖上节点 = 建立引用）', 
     const cmd = entityDropPatch(dialogueNode(), char)
     const lines = cmd?.nodeType === 'dialogue' ? (cmd.patch.lines ?? []) : []
     expect(lines).toHaveLength(2)
-    expect(lines[1]).toMatchObject({ kind: 'line', speaker: 'c1', side: 'left', text: '新台词…' })
+    expect(lines[1]).toMatchObject({
+      kind: 'line',
+      speaker: 'c1',
+      side: 'left',
+      text: '新台词…',
+    })
     expect(lines[1].id).toMatch(/^line-/)
   })
 
@@ -89,14 +102,23 @@ describe('entityDropPatch（§5 设定集实体拖上节点 = 建立引用）', 
       id: 'br1',
       type: 'branch',
       position: { x: 0, y: 0 },
-      data: { prompt: '？', options: [{ id: 'oa', label: 'A' }, { id: 'ob', label: 'B' }] },
+      data: {
+        prompt: '？',
+        options: [
+          { id: 'oa', label: 'A' },
+          { id: 'ob', label: 'B' },
+        ],
+      },
     }
     expect(entityDropPatch(beat as CanvasNode, char)).toBeNull()
     expect(entityDropPatch(branch as CanvasNode, char)).toBeNull()
   })
 
   it('地点 → 索引卡：写入 locationId；→ 分镜卡：落自由位引用（label = 实体名）并去重', () => {
-    expect(entityDropPatch(sceneNode(), loc)).toEqual({ nodeType: 'scene', patch: { locationId: 'l1' } })
+    expect(entityDropPatch(sceneNode(), loc)).toEqual({
+      nodeType: 'scene',
+      patch: { locationId: 'l1' },
+    })
     const cmd = entityDropPatch(shotNode(), loc)
     const refs = cmd?.nodeType === 'shot' ? (cmd.patch.refs ?? []) : []
     expect(refs).toHaveLength(1)

@@ -10,7 +10,12 @@ import type {
   ShotMeta,
   ShotSpec,
 } from './document'
-import type { BranchFlowNode, SceneFlowNode, SceneNodeData, ShotFlowNode } from '../editor/nodes/types'
+import type {
+  BranchFlowNode,
+  SceneFlowNode,
+  SceneNodeData,
+  ShotFlowNode,
+} from '../editor/nodes/types'
 
 /** 场景运行态节点（§4.2 字段）。 */
 function sceneFlowNode(): SceneFlowNode {
@@ -39,7 +44,11 @@ function sceneDocNode(): SceneDocNode {
   return {
     id: 's1',
     type: 'scene',
-    layout: { position: { x: 1, y: 2 }, size: { width: 320, height: 180 }, zIndex: 3 },
+    layout: {
+      position: { x: 1, y: 2 },
+      size: { width: 320, height: 180 },
+      zIndex: 3,
+    },
     ui: { selected: true, expanded: false },
     data: {
       spec: {
@@ -50,7 +59,11 @@ function sceneDocNode(): SceneDocNode {
         synopsis: '…',
         characterIds: ['c1'],
       },
-      meta: { label: '天台', episodeNo: 2, createdAt: '2026-01-01T00:00:00.000Z' },
+      meta: {
+        label: '天台',
+        episodeNo: 2,
+        createdAt: '2026-01-01T00:00:00.000Z',
+      },
     },
   }
 }
@@ -83,7 +96,9 @@ describe('toStoryNode（issue 16：按节点类型精确构造落盘联合成员
     // @ts-expect-error —— ShotMeta 禁写 episodeNo（分镜卡随宿主场景分集）
     shotMeta.episodeNo = 1
     expectTypeOf<BeatDocNode['data']['meta']>().toEqualTypeOf<LabeledMeta>()
-    expectTypeOf<BranchDocNode['data']['spec']['prompt']>().toEqualTypeOf<string>()
+    expectTypeOf<
+      BranchDocNode['data']['spec']['prompt']
+    >().toEqualTypeOf<string>()
   })
 
   it('分镜卡：data 即 ShotSpec（ShotNodeData 与落盘 spec 同构）', () => {
@@ -97,7 +112,13 @@ describe('toStoryNode（issue 16：按节点类型精确构造落盘联合成员
     if (doc.type !== 'shot') throw new Error('判别失败')
     expectTypeOf(doc.data.spec).toEqualTypeOf<ShotSpec>()
     expectTypeOf(doc.data.meta).toEqualTypeOf<ShotMeta>()
-    expect(doc.data.spec).toEqual({ shotNo: 2, size: '中景', picture: '…', prompt: '', refs: [] })
+    expect(doc.data.spec).toEqual({
+      shotNo: 2,
+      size: '中景',
+      picture: '…',
+      prompt: '',
+      refs: [],
+    })
   })
 
   it('分镜卡落盘剥离运行态混入的过期 episodeNo/name（随宿主场景分集，§3.5）', () => {
@@ -108,11 +129,25 @@ describe('toStoryNode（issue 16：按节点类型精确构造落盘联合成员
       id: 'sh1',
       type: 'shot',
       position: { x: 0, y: 0 },
-      data: { shotNo: 2, size: '中景', picture: '…', prompt: '', refs: [], episodeNo: 7, name: 'x' },
+      data: {
+        shotNo: 2,
+        size: '中景',
+        picture: '…',
+        prompt: '',
+        refs: [],
+        episodeNo: 7,
+        name: 'x',
+      },
     }
     const doc = toStoryNode(shot)
     if (doc.type !== 'shot') throw new Error('判别失败')
-    expect(doc.data.spec).toEqual({ shotNo: 2, size: '中景', picture: '…', prompt: '', refs: [] })
+    expect(doc.data.spec).toEqual({
+      shotNo: 2,
+      size: '中景',
+      picture: '…',
+      prompt: '',
+      refs: [],
+    })
     expect('episodeNo' in doc.data.spec).toBe(false)
     expect('name' in doc.data.spec).toBe(false)
   })
@@ -125,11 +160,18 @@ describe('toStoryNode（issue 16：按节点类型精确构造落盘联合成员
       id: 'b1',
       type: 'branch',
       position: { x: 0, y: 0 },
-      data: { prompt: '去哪？', options: [{ id: 'o1', label: 'A' }], name: 'x' },
+      data: {
+        prompt: '去哪？',
+        options: [{ id: 'o1', label: 'A' }],
+        name: 'x',
+      },
     }
     const doc = toStoryNode(branch)
     if (doc.type !== 'branch') throw new Error('判别失败')
-    expect(doc.data.spec).toEqual({ prompt: '去哪？', options: [{ id: 'o1', label: 'A' }] })
+    expect(doc.data.spec).toEqual({
+      prompt: '去哪？',
+      options: [{ id: 'o1', label: 'A' }],
+    })
     expect('name' in doc.data.spec).toBe(false)
   })
 })

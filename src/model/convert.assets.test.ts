@@ -40,7 +40,11 @@ const setRefs = (doc: RefDoc, refs: unknown[]) => {
 
 /** 取解析结果中 sh1 分镜节点的引用位列表。 */
 const refsOf = (round: ReturnType<typeof parseProject>) =>
-  (round.content.nodes.find((n) => n.id === 'sh1')!.data as unknown as { refs: Record<string, unknown>[] }).refs
+  (
+    round.content.nodes.find((n) => n.id === 'sh1')!.data as unknown as {
+      refs: Record<string, unknown>[]
+    }
+  ).refs
 
 describe('归一化：assets.byId 完整 AssetRef 形状校验（§11.3，Rust 保存边界的加载侧对等）——条目形状与规范化', () => {
   it('内嵌 id 缺失或与记录键漂移：以记录键为准改写并警告（条目保留）', () => {
@@ -48,13 +52,18 @@ describe('归一化：assets.byId 完整 AssetRef 形状校验（§11.3，Rust �
       assets: { byId: Record<string, Record<string, unknown>> }
     }
     doc.assets.byId['a-1'] = { ...goodAsset, id: 'a-other' }
-    const noId: Record<string, unknown> = { ...goodAsset, relPath: 'assets/two.png' }
+    const noId: Record<string, unknown> = {
+      ...goodAsset,
+      relPath: 'assets/two.png',
+    }
     delete noId.id
     doc.assets.byId['a-2'] = noId
     const round = parseProject(doc)
     expect(round.content.assets?.byId['a-1']?.id).toBe('a-1')
     expect(round.content.assets?.byId['a-2']?.id).toBe('a-2')
-    expect(round.warnings.some((w) => w.includes('a-other') || w.includes('a-1'))).toBe(true)
+    expect(
+      round.warnings.some((w) => w.includes('a-other') || w.includes('a-1')),
+    ).toBe(true)
     // 合法条目原样透传
     const again = serializeProject(round.content, 'p-1', NOW)
     expect(again.assets.byId['a-1'].relPath).toBe('assets/lin.png')
@@ -64,9 +73,17 @@ describe('归一化：assets.byId 完整 AssetRef 形状校验（§11.3，Rust �
     const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
       assets: { byId: Record<string, Record<string, unknown>> }
     }
-    doc.assets.byId['a-path'] = { ...goodAsset, id: 'a-path', relPath: 'assets/../secret' }
+    doc.assets.byId['a-path'] = {
+      ...goodAsset,
+      id: 'a-path',
+      relPath: 'assets/../secret',
+    }
     doc.assets.byId['a-src'] = { ...goodAsset, id: 'a-src', source: 'unknown' }
-    doc.assets.byId['a-time'] = { ...goodAsset, id: 'a-time', createdAt: '2026-08-01' }
+    doc.assets.byId['a-time'] = {
+      ...goodAsset,
+      id: 'a-time',
+      createdAt: '2026-08-01',
+    }
     doc.assets.byId['a-mime'] = { ...goodAsset, id: 'a-mime', mime: 'image' }
     doc.assets.byId['a-empty'] = {}
     const round = parseProject(doc)
@@ -95,12 +112,20 @@ describe('归一化：assets.byId 完整 AssetRef 形状校验（§11.3，Rust �
       assets: { byId: Record<string, Record<string, unknown>> }
     }
     doc.assets.byId['a-1'] = { ...goodAsset, mime: ' IMAGE/PNG ' }
-    doc.assets.byId['a-2'] = { ...goodAsset, id: 'a-2', relPath: 'assets/a.wav', mime: 'audio/wav', createdAt: '2026-08-01T08:00:00+08:00' }
+    doc.assets.byId['a-2'] = {
+      ...goodAsset,
+      id: 'a-2',
+      relPath: 'assets/a.wav',
+      mime: 'audio/wav',
+      createdAt: '2026-08-01T08:00:00+08:00',
+    }
     const round = parseProject(doc)
     expect(round.content.assets?.byId['a-1']?.mime).toBe('image/png')
     // 红：偏移形式原样保留——同一瞬间存在多种持久化表示（§7.1 要求
     // 统一落为 UTC toISOString()）
-    expect(round.content.assets?.byId['a-2']?.createdAt).toBe('2026-08-01T00:00:00.000Z')
+    expect(round.content.assets?.byId['a-2']?.createdAt).toBe(
+      '2026-08-01T00:00:00.000Z',
+    )
     expect(round.warnings.some((w) => w.includes('createdAt'))).toBe(true)
   })
 
@@ -111,11 +136,15 @@ describe('归一化：assets.byId 完整 AssetRef 形状校验（§11.3，Rust �
     // 合法的 -23:59 偏移使 UTC 换算越过 9999 年：toISOString 产出
     // +010000-… 无规范形可落，Rust 保存边界只收 24 字符规范 UTC
     doc.assets.byId['a-ext'] = {
-      ...goodAsset, id: 'a-ext', createdAt: '9999-12-31T23:59:59-23:59',
+      ...goodAsset,
+      id: 'a-ext',
+      createdAt: '9999-12-31T23:59:59-23:59',
     }
     const round = parseProject(doc)
     expect(round.content.assets?.byId['a-ext']).toBeUndefined()
-    expect(round.warnings.some((w) => w.includes('a-ext') && w.includes('四位年份'))).toBe(true)
+    expect(
+      round.warnings.some((w) => w.includes('a-ext') && w.includes('四位年份')),
+    ).toBe(true)
   })
 })
 
@@ -154,14 +183,23 @@ describe('归一化：时间戳可保存域与对白 @ 提及扫描（§11.1，�
     // 回退链产出四位年份域内的时间戳
     expect(round.content.createdAt).toMatch(/^\d{4}-/)
     // 再落盘可过保存边界（四位年份域内）
-    const again = serializeProject(round.content, 'p-1', new Date(round.content.createdAt!))
+    const again = serializeProject(
+      round.content,
+      'p-1',
+      new Date(round.content.createdAt!),
+    )
     expect(again.project.updatedAt).toMatch(/^\d{4}-/)
     expect(again.project.createdAt).toBe(round.content.createdAt)
   })
 
   it('对白文本 @ 提及扫描（§11.1 第 5 步）：悬空 token 警告失效、畸形/未闭合片段警告并保留原文', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
-      graph: { nodes: Array<{ type?: string; data: { spec: { lines?: Array<Record<string, unknown>> } } }> }
+      graph: {
+        nodes: Array<{
+          type?: string
+          data: { spec: { lines?: Array<Record<string, unknown>> } }
+        }>
+      }
     }
     const dialogue = doc.graph.nodes.find((n) => n.type === 'dialogue')!
     const lines = dialogue.data.spec.lines!
@@ -171,11 +209,16 @@ describe('归一化：时间戳可保存域与对白 @ 提及扫描（§11.1，�
     line.text = original
     const round = parseProject(doc)
     // 红：提及扫描缺失——悬空 token 与畸形片段无声进入活动文档
-    expect(round.warnings.some((w) => w.includes('ghost') && w.includes('失效'))).toBe(true)
-    expect(round.warnings.some((w) => w.includes('非法') && w.includes('片段'))).toBe(true)
+    expect(
+      round.warnings.some((w) => w.includes('ghost') && w.includes('失效')),
+    ).toBe(true)
+    expect(
+      round.warnings.some((w) => w.includes('非法') && w.includes('片段')),
+    ).toBe(true)
     expect(round.warnings.some((w) => w.includes('未闭合'))).toBe(true)
     // token 与片段一律保留原文（不改写、不删除）；有效 token（目标存在）不警告
-    const out = round.content.nodes.find((n) => n.type === 'dialogue')!.data as unknown as {
+    const out = round.content.nodes.find((n) => n.type === 'dialogue')!
+      .data as unknown as {
       lines: Array<Record<string, unknown>>
     }
     expect(out.lines.some((l) => l.text === original)).toBe(true)
@@ -188,23 +231,38 @@ describe('归一化：空白/异型引用值的加载侧收口（§8.1 共同值
     const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
       settings: Record<string, Record<string, Record<string, unknown>>>
     }
-    ;(doc.settings.characters['ch-1'] as Record<string, unknown>).avatarAssetId = '   '
+    ;(
+      doc.settings.characters['ch-1'] as Record<string, unknown>
+    ).avatarAssetId = '   '
     const round = parseProject(doc)
     // 红：字段只过字符串类型检查——空白引用原样保留并落盘，每次加载仅警告悬空
-    expect((round.content.settings.characters[0] as unknown as Record<string, unknown>).avatarAssetId).toBeUndefined()
+    expect(
+      (
+        round.content.settings.characters[0] as unknown as Record<
+          string,
+          unknown
+        >
+      ).avatarAssetId,
+    ).toBeUndefined()
     expect(round.warnings.some((w) => w.includes('avatarAssetId'))).toBe(true)
   })
 
   it('对白行 speaker 空白且无映射：移除并警告——与场景/分镜路径同口径收口', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
-      graph: { nodes: Array<{ type?: string; data: { spec: { lines?: Array<Record<string, unknown>> } } }> }
+      graph: {
+        nodes: Array<{
+          type?: string
+          data: { spec: { lines?: Array<Record<string, unknown>> } }
+        }>
+      }
     }
     const dialogue = doc.graph.nodes.find((n) => n.type === 'dialogue')!
     const lines = dialogue.data.spec.lines!
     const line = lines.find((l) => l.kind === 'line') ?? lines[0]
     line.speaker = '   '
     const round = parseProject(doc)
-    const out = round.content.nodes.find((n) => n.type === 'dialogue')!.data as unknown as {
+    const out = round.content.nodes.find((n) => n.type === 'dialogue')!
+      .data as unknown as {
       lines: Array<Record<string, unknown>>
     }
     expect(out.lines[0].speaker).toBeUndefined()
@@ -213,17 +271,30 @@ describe('归一化：空白/异型引用值的加载侧收口（§8.1 共同值
 
   it('对白 action 行携带 speaker：归一化剥离并标记 repaired——隐藏引用不得存留（§4.2 只允许 line 行有说话人）', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
-      graph: { nodes: Array<{ type?: string; data: { spec: { lines?: Array<Record<string, unknown>> } } }> }
+      graph: {
+        nodes: Array<{
+          type?: string
+          data: { spec: { lines?: Array<Record<string, unknown>> } }
+        }>
+      }
     }
     const dialogue = doc.graph.nodes.find((n) => n.type === 'dialogue')!
-    dialogue.data.spec.lines!.push({ id: 'line-act', kind: 'action', text: '雨声渐大', speaker: 'ch-1' })
+    dialogue.data.spec.lines!.push({
+      id: 'line-act',
+      kind: 'action',
+      text: '雨声渐大',
+      speaker: 'ch-1',
+    })
     const round = parseProject(doc)
-    const out = round.content.nodes.find((n) => n.type === 'dialogue')!.data as unknown as {
+    const out = round.content.nodes.find((n) => n.type === 'dialogue')!
+      .data as unknown as {
       lines: Array<Record<string, unknown>>
     }
     const action = out.lines.find((l) => l.kind === 'action')!
     expect('speaker' in action).toBe(false)
-    expect(round.warnings.some((w) => w.includes('action') && w.includes('speaker'))).toBe(true)
+    expect(
+      round.warnings.some((w) => w.includes('action') && w.includes('speaker')),
+    ).toBe(true)
     expect(round.repaired).toBe(true)
   })
 
@@ -235,7 +306,10 @@ describe('归一化：空白/异型引用值的加载侧收口（§8.1 共同值
     doc.graph.nodes[0].data.spec.characterIds = ['ch-1', '   ']
     doc.graph.nodes[0].data.spec.locationId = '   '
     const round = parseProject(doc)
-    const scene = round.content.nodes[0].data as { characterIds: string[]; locationId?: string }
+    const scene = round.content.nodes[0].data as {
+      characterIds: string[]
+      locationId?: string
+    }
     expect(scene.characterIds).toEqual(['ch-1'])
     expect(scene.locationId).toBeUndefined()
     expect(round.warnings.some((w) => w.includes('characterIds'))).toBe(true)
@@ -272,7 +346,11 @@ describe('归一化：ShotRef 旧草案 targetId 的无歧义兼容（§4.2/§8.
 
   it('character/location 旧 targetId：唯一命中活动 image/* 资产且未命中对应设定桶实体才改名，否则隔离', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as RefDoc
-    doc.assets.byId['a-img'] = mkAsset('a-img', 'assets/portrait.png', 'image/png')
+    doc.assets.byId['a-img'] = mkAsset(
+      'a-img',
+      'assets/portrait.png',
+      'image/png',
+    )
     doc.assets.byId['a-wav'] = mkAsset('a-wav', 'assets/rain.wav', 'audio/wav')
     setRefs(doc, [
       { id: 'r1', kind: 'character', targetId: 'a-img' }, // 唯一命中 image 资产、未命中实体 → 改名
@@ -281,8 +359,12 @@ describe('归一化：ShotRef 旧草案 targetId 的无歧义兼容（§4.2/§8.
       { id: 'r4', kind: 'location', targetId: 'loc-gone' }, // 资产与实体两不沾 → 隔离
     ])
     const round = parseProject(doc)
-    expect(refsOf(round)).toEqual([{ id: 'r1', kind: 'character', assetId: 'a-img' }])
-    expect(round.warnings.filter((w) => w.includes('targetId')).length).toBeGreaterThanOrEqual(3)
+    expect(refsOf(round)).toEqual([
+      { id: 'r1', kind: 'character', assetId: 'a-img' },
+    ])
+    expect(
+      round.warnings.filter((w) => w.includes('targetId')).length,
+    ).toBeGreaterThanOrEqual(3)
   })
 
   it('旧 targetId 与 assetId/label 并存、空白或非字符串：按歧义/异型隔离该 ref', () => {
@@ -296,7 +378,9 @@ describe('归一化：ShotRef 旧草案 targetId 的无歧义兼容（§4.2/§8.
       { id: 'r5', kind: 'audio', targetId: 'a-wav' }, // 正常改名保留
     ])
     const round = parseProject(doc)
-    expect(refsOf(round)).toEqual([{ id: 'r5', kind: 'audio', assetId: 'a-wav' }])
+    expect(refsOf(round)).toEqual([
+      { id: 'r5', kind: 'audio', assetId: 'a-wav' },
+    ])
     expect(round.warnings.filter((w) => w.includes('targetId'))).toHaveLength(4)
   })
 })
@@ -306,13 +390,23 @@ describe('归一化：ShotRef 旧草案 targetId 的无歧义兼容（§4.2/§8.
     const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as RefDoc
     // 角色原始键/内嵌 id 均为 bad]id（不满足安全字符集 [A-Za-z0-9_-]，将被重发）；
     // 同名 image 资产并存 → 旧 targetId 同时命中修复前角色身份与资产，须隔离
-    doc.settings.characters['bad]id'] = { id: 'bad]id', name: '阿灿', gradient: 'g' }
-    doc.assets.byId['bad]id'] = mkAsset('bad]id', 'assets/portrait.png', 'image/png')
+    doc.settings.characters['bad]id'] = {
+      id: 'bad]id',
+      name: '阿灿',
+      gradient: 'g',
+    }
+    doc.assets.byId['bad]id'] = mkAsset(
+      'bad]id',
+      'assets/portrait.png',
+      'image/png',
+    )
     setRefs(doc, [{ id: 'r1', kind: 'character', targetId: 'bad]id' }])
     const round = parseProject(doc)
     // 红：快照在重发后捕获，查无 bad]id 身份 → 误转 assetId
     expect(refsOf(round)).toEqual([])
-    expect(round.warnings.some((w) => w.includes('targetId') && w.includes('隔离'))).toBe(true)
+    expect(
+      round.warnings.some((w) => w.includes('targetId') && w.includes('隔离')),
+    ).toBe(true)
   })
 
   it('资产空键被重发：旧 targetId 按修复前身份仍唯一命中该资产并改名（身份捕获先于一切键/id 改写）', () => {
@@ -331,7 +425,11 @@ describe('归一化：ShotRef 旧草案 targetId 的无歧义兼容（§4.2/§8.
 
   it('assetId 的 MIME 家族与 kind 用途不匹配：保留为不可用引用并警告，不改按其他命名空间解释', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as RefDoc
-    doc.assets.byId['a-img'] = mkAsset('a-img', 'assets/portrait.png', 'image/png')
+    doc.assets.byId['a-img'] = mkAsset(
+      'a-img',
+      'assets/portrait.png',
+      'image/png',
+    )
     doc.assets.byId['a-wav'] = mkAsset('a-wav', 'assets/rain.wav', 'audio/wav')
     setRefs(doc, [
       { id: 'r1', kind: 'character', assetId: 'a-wav' }, // audio 资产作角色垫图
@@ -364,7 +462,9 @@ describe('归一化：不可验证资产与设定文档形状（§7.1/§6/§11.3
     expect(round.content.assets?.byId['a-1']).toBeUndefined()
     expect(round.warnings.some((w) => w.includes('a-1'))).toBe(true)
     // 引用该资产的角色头像现按悬空标记（§11.4 既有警告语义）
-    expect(round.warnings.some((w) => w.includes('不存在的资产 a-1'))).toBe(true)
+    expect(round.warnings.some((w) => w.includes('不存在的资产 a-1'))).toBe(
+      true,
+    )
     // 再落盘：索引不再含不可验证条目，保存可过实路径复验
     const again = serializeProject(round.content, 'p-1', NOW)
     expect(again.assets.byId['a-1']).toBeUndefined()
@@ -375,9 +475,19 @@ describe('归一化：不可验证资产与设定文档形状（§7.1/§6/§11.3
       settings: { documents: Record<string, Record<string, unknown>> }
     }
     doc.settings.documents = {
-      'doc-bad-title': { id: 'doc-bad-title', title: {}, body: '正文', relatedIds: [] },
+      'doc-bad-title': {
+        id: 'doc-bad-title',
+        title: {},
+        body: '正文',
+        relatedIds: [],
+      },
       'doc-bad-body': { id: 'doc-bad-body', title: '小传', relatedIds: [] },
-      'doc-ok': { id: 'doc-ok', title: '世界观', body: '设定', relatedIds: [{ kind: 'ghost' }] },
+      'doc-ok': {
+        id: 'doc-ok',
+        title: '世界观',
+        body: '设定',
+        relatedIds: [{ kind: 'ghost' }],
+      },
     }
     const round = parseProject(doc)
     const docs = round.content.settings.documents ?? []
@@ -388,4 +498,3 @@ describe('归一化：不可验证资产与设定文档形状（§7.1/§6/§11.3
     expect(docs.find((d) => d.id === 'doc-ok')?.relatedIds).toEqual([])
   })
 })
-

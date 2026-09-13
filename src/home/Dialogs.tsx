@@ -17,7 +17,11 @@ interface RenameDialogProps {
   readonly onConfirm: (name: string) => void
 }
 
-export function RenameDialog({ currentName, onCancel, onConfirm }: RenameDialogProps) {
+export function RenameDialog({
+  currentName,
+  onCancel,
+  onConfirm,
+}: RenameDialogProps) {
   const [name, setName] = useState(currentName)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -119,7 +123,11 @@ export function ConfirmDeleteDialog({
           <button type="button" className="pw-dialog-btn" onClick={onCancel}>
             取消
           </button>
-          <button type="button" className="pw-dialog-btn pw-dialog-danger" onClick={onConfirm}>
+          <button
+            type="button"
+            className="pw-dialog-btn pw-dialog-danger"
+            onClick={onConfirm}
+          >
             删除
           </button>
         </div>

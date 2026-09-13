@@ -21,8 +21,19 @@ import type { NodeDataPatch } from '../nodes/patch'
  * upsert：不带 entityId = 新建（应用分配真实 id）；带 entityId = 修改既有
  * 实体（fields 只写要改的字段，未提及字段保持不变）。 */
 export type AiCommand =
-  | { op: 'create_node'; nodeType: string; ref?: unknown; data?: unknown; reason?: unknown }
-  | { op: 'update_node'; nodeId: string; patch: Record<string, unknown>; reason?: unknown }
+  | {
+      op: 'create_node'
+      nodeType: string
+      ref?: unknown
+      data?: unknown
+      reason?: unknown
+    }
+  | {
+      op: 'update_node'
+      nodeId: string
+      patch: Record<string, unknown>
+      reason?: unknown
+    }
   | { op: 'delete_node'; nodeId: string; reason?: unknown }
   | {
       op: 'connect_edge'
@@ -34,7 +45,12 @@ export type AiCommand =
       optionIndex?: unknown
       reason?: unknown
     }
-  | { op: 'disconnect_edge'; sourceId: string; targetId: string; reason?: unknown }
+  | {
+      op: 'disconnect_edge'
+      sourceId: string
+      targetId: string
+      reason?: unknown
+    }
   | {
       op: 'upsert_character'
       /** 修改目标实体 id（或本批 ref 别名）；缺省 = 新建。 */
@@ -84,9 +100,17 @@ export interface ValidatedDocumentFields {
  * 值形状校验（issue 44；文档通道 issue 56）——执行与撤销路径不再接受
  * 宽 Record 补丁。 */
 export type ValidatedCommand =
-  | Extract<AiCommand, { op: 'create_node' | 'delete_node' | 'connect_edge' | 'disconnect_edge' }>
-  | (Omit<Extract<AiCommand, { op: 'update_node' }>, 'patch'> & { patch: NodeDataPatch })
-  | (Omit<Extract<AiCommand, { op: 'upsert_character' | 'upsert_location' }>, 'fields'> & {
+  | Extract<
+      AiCommand,
+      { op: 'create_node' | 'delete_node' | 'connect_edge' | 'disconnect_edge' }
+    >
+  | (Omit<Extract<AiCommand, { op: 'update_node' }>, 'patch'> & {
+      patch: NodeDataPatch
+    })
+  | (Omit<
+      Extract<AiCommand, { op: 'upsert_character' | 'upsert_location' }>,
+      'fields'
+    > & {
       fields: ValidatedEntityFields
     })
   | (Omit<Extract<AiCommand, { op: 'upsert_document' }>, 'fields'> & {
@@ -119,7 +143,12 @@ export interface AiGraphSnapshot {
     /** branch 节点必填：选项（id + 文案），branch 连线的 optionIndex 校验与端口 id 解析用。 */
     options?: Array<{ id: string; label: string }>
   }>
-  edges: Array<{ source: string; target: string; sourceHandle?: string | null; type?: string }>
+  edges: Array<{
+    source: string
+    target: string
+    sourceHandle?: string | null
+    type?: string
+  }>
   /** 项目资产索引（id → MIME）：shot.refs 引用位的资产存在性与用途匹配校验
    * （§7.1/§11.3 的批命令对等）。空索引 = 无资产，引用位一律拒绝。 */
   assets: ReadonlyMap<string, string>

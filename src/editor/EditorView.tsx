@@ -63,8 +63,19 @@ function EditorWindow({
   onSaveAiSession = async () => undefined,
 }: EditorViewProps) {
   const { screenToFlowPosition, fitView } = useReactFlow()
-  const { canvasRef, doc, panels, persistence, history, view, graph, ai, actionError, nodeEditApi, imageGen } =
-    useEditorController({ project, onSave, screenToFlowPosition, fitView })
+  const {
+    canvasRef,
+    doc,
+    panels,
+    persistence,
+    history,
+    view,
+    graph,
+    ai,
+    actionError,
+    nodeEditApi,
+    imageGen,
+  } = useEditorController({ project, onSave, screenToFlowPosition, fitView })
   return (
     <NodeEditContext.Provider value={nodeEditApi}>
       <ImageGenProvider {...imageGen}>

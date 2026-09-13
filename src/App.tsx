@@ -172,7 +172,11 @@ function useAiSessionSave(
         unsavedAiSessions.current?.set(id, { session, error: String(err) })
         setOpenProject((project) =>
           project?.id === id
-            ? { ...project, aiSessionError: String(err), aiSessionRetryable: true }
+            ? {
+                ...project,
+                aiSessionError: String(err),
+                aiSessionRetryable: true,
+              }
             : project,
         )
         throw err
@@ -228,73 +232,103 @@ function useOpenProjectActions(
     void refreshProjects()
   }, [refreshProjects, setOpenFailure, setOpenProject])
 
-  const handleOpenProject = useCallback(async (id: string) => {
-    const seq = ++openAttemptSeqRef.current
-    // 新一次打开尝试即视为旧错误过时（issue #98）：失败后重试或改开其他
-    // 项目，上一次失败的原因不得残留；本次失败会用新原因覆盖。
-    setOpenFailure(null)
-    // 作废旧尝试已排队未提交的导航（机制见 handleCreateProject 注释）。
-    startTransition(() => setOpenProject(null))
-    try {
-      const open = await loadOpenProject(id, unsavedAiSessions.current ?? undefined)
-      // 被取代的旧尝试成功晚到：不发布导航，新尝试的失败横幅保留。
-      if (seq !== openAttemptSeqRef.current) return
-      startTransition(() => setOpenProject(open))
-    } catch (err) {
-      console.warn('[App] 打开项目失败', err)
-      // 被取代的旧尝试拒绝晚到：不发布横幅，防止新尝试已清除/进入编辑器
-      // 后旧错误复活或「后完成者」覆盖「后发起者」。
-      if (seq !== openAttemptSeqRef.current) return
-      setOpenFailure({ id, detail: openFailureDetail(err) })
-    }
-  }, [setOpenFailure, setOpenProject, unsavedAiSessions])
+  const handleOpenProject = useCallback(
+    async (id: string) => {
+      const seq = ++openAttemptSeqRef.current
+      // 新一次打开尝试即视为旧错误过时（issue #98）：失败后重试或改开其他
+      // 项目，上一次失败的原因不得残留；本次失败会用新原因覆盖。
+      setOpenFailure(null)
+      // 作废旧尝试已排队未提交的导航（机制见 handleCreateProject 注释）。
+      startTransition(() => setOpenProject(null))
+      try {
+        const open = await loadOpenProject(
+          id,
+          unsavedAiSessions.current ?? undefined,
+        )
+        // 被取代的旧尝试成功晚到：不发布导航，新尝试的失败横幅保留。
+        if (seq !== openAttemptSeqRef.current) return
+        startTransition(() => setOpenProject(open))
+      } catch (err) {
+        console.warn('[App] 打开项目失败', err)
+        // 被取代的旧尝试拒绝晚到：不发布横幅，防止新尝试已清除/进入编辑器
+        // 后旧错误复活或「后完成者」覆盖「后发起者」。
+        if (seq !== openAttemptSeqRef.current) return
+        setOpenFailure({ id, detail: openFailureDetail(err) })
+      }
+    },
+    [setOpenFailure, setOpenProject, unsavedAiSessions],
+  )
 
   const handleBackHome = useCallback(() => {
     setOpenProject(null)
     void refreshProjects()
   }, [refreshProjects, setOpenProject])
 
-  const handleEditorRename = useCallback((name: string) => {
-    setOpenProject((project) => (project ? { ...project, doc: { ...project.doc, name } } : project))
-  }, [setOpenProject])
+  const handleEditorRename = useCallback(
+    (name: string) => {
+      setOpenProject((project) =>
+        project ? { ...project, doc: { ...project.doc, name } } : project,
+      )
+    },
+    [setOpenProject],
+  )
 
-  const handleSaveAiSession = useAiSessionSave(setOpenProject, unsavedAiSessions, latestAiSession)
+  const handleSaveAiSession = useAiSessionSave(
+    setOpenProject,
+    unsavedAiSessions,
+    latestAiSession,
+  )
 
-  return { handleCreateProject, handleOpenProject, handleBackHome, handleEditorRename, handleSaveAiSession }
+  return {
+    handleCreateProject,
+    handleOpenProject,
+    handleBackHome,
+    handleEditorRename,
+    handleSaveAiSession,
+  }
 }
 
 function useHomeProjectActions(
   refreshProjects: RefreshProjects,
   unsavedAiSessions: UnsavedAiSessionsRef,
 ) {
-  const handleRenameProject = useCallback(async (id: string, name: string) => {
-    try {
-      const doc = await projectStore.load(id)
-      await projectStore.saveQuiet(id, { ...doc, name })
-      await refreshProjects()
-    } catch (err) {
-      console.warn('[App] 重命名失败', err)
-    }
-  }, [refreshProjects])
+  const handleRenameProject = useCallback(
+    async (id: string, name: string) => {
+      try {
+        const doc = await projectStore.load(id)
+        await projectStore.saveQuiet(id, { ...doc, name })
+        await refreshProjects()
+      } catch (err) {
+        console.warn('[App] 重命名失败', err)
+      }
+    },
+    [refreshProjects],
+  )
 
-  const handleDuplicateProject = useCallback(async (id: string) => {
-    try {
-      await projectStore.duplicate(id)
-      await refreshProjects()
-    } catch (err) {
-      console.warn('[App] 复制项目失败', err)
-    }
-  }, [refreshProjects])
+  const handleDuplicateProject = useCallback(
+    async (id: string) => {
+      try {
+        await projectStore.duplicate(id)
+        await refreshProjects()
+      } catch (err) {
+        console.warn('[App] 复制项目失败', err)
+      }
+    },
+    [refreshProjects],
+  )
 
-  const handleDeleteProject = useCallback(async (id: string) => {
-    try {
-      await projectStore.delete(id)
-      unsavedAiSessions.current?.delete(id)
-      await refreshProjects()
-    } catch (err) {
-      console.warn('[App] 删除项目失败', err)
-    }
-  }, [refreshProjects, unsavedAiSessions])
+  const handleDeleteProject = useCallback(
+    async (id: string) => {
+      try {
+        await projectStore.delete(id)
+        unsavedAiSessions.current?.delete(id)
+        await refreshProjects()
+      } catch (err) {
+        console.warn('[App] 删除项目失败', err)
+      }
+    },
+    [refreshProjects, unsavedAiSessions],
+  )
 
   return { handleRenameProject, handleDuplicateProject, handleDeleteProject }
 }
@@ -376,31 +410,36 @@ function AppView({
     // 挂载种子在渲染时解析：设置页关闭等重挂载时刻读取引用里的最新会话
     // （issue #61），而非打开项目时落盘/保留区的旧快照。
     const latest = latestAiSession.current
-    const aiSession = latest?.id === openProject.id ? latest.session : openProject.aiSession
-    view = <EditorView
-      key={openProject.id}
-      project={{ id: openProject.id, ...openProject.doc }}
-      aiSession={aiSession}
-      aiSessionError={openProject.aiSessionError}
-      aiSessionRetryable={openProject.aiSessionRetryable}
-      aiSessionLoadFailed={openProject.aiSessionLoadFailed}
-      onBackHome={open.handleBackHome}
-      onRenameProject={open.handleEditorRename}
-      onOpenSettings={onOpenSettings}
-      onSave={(doc) => projectStore.save(openProject.id, doc)}
-      onSaveAiSession={open.handleSaveAiSession(openProject.id)}
-    />
+    const aiSession =
+      latest?.id === openProject.id ? latest.session : openProject.aiSession
+    view = (
+      <EditorView
+        key={openProject.id}
+        project={{ id: openProject.id, ...openProject.doc }}
+        aiSession={aiSession}
+        aiSessionError={openProject.aiSessionError}
+        aiSessionRetryable={openProject.aiSessionRetryable}
+        aiSessionLoadFailed={openProject.aiSessionLoadFailed}
+        onBackHome={open.handleBackHome}
+        onRenameProject={open.handleEditorRename}
+        onOpenSettings={onOpenSettings}
+        onSave={(doc) => projectStore.save(openProject.id, doc)}
+        onSaveAiSession={open.handleSaveAiSession(openProject.id)}
+      />
+    )
   } else {
-    view = <HomePage
-      projects={projects}
-      loading={loading}
-      openError={openFailure}
-      onOpenProject={open.handleOpenProject}
-      onCreateProject={() => void open.handleCreateProject()}
-      onRenameProject={(id, name) => void home.handleRenameProject(id, name)}
-      onDuplicateProject={(id) => void home.handleDuplicateProject(id)}
-      onDeleteProject={(id) => void home.handleDeleteProject(id)}
-    />
+    view = (
+      <HomePage
+        projects={projects}
+        loading={loading}
+        openError={openFailure}
+        onOpenProject={open.handleOpenProject}
+        onCreateProject={() => void open.handleCreateProject()}
+        onRenameProject={(id, name) => void home.handleRenameProject(id, name)}
+        onDuplicateProject={(id) => void home.handleDuplicateProject(id)}
+        onDeleteProject={(id) => void home.handleDeleteProject(id)}
+      />
+    )
   }
   return <Suspense fallback={null}>{view}</Suspense>
 }
@@ -415,8 +454,11 @@ export default function App() {
   const [openProject, setOpenProject] = useState<OpenProject | null>(null)
   const [openFailure, setOpenFailure] = useState<OpenProjectError | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const { unsavedAiSessionsRef, latestAiSessionRef } = useAiSessionLifecycle(setOpenProject)
-  const { projects, loading, refreshProjects } = useProjectSummaries(() => openProject === null)
+  const { unsavedAiSessionsRef, latestAiSessionRef } =
+    useAiSessionLifecycle(setOpenProject)
+  const { projects, loading, refreshProjects } = useProjectSummaries(
+    () => openProject === null,
+  )
 
   // ⌘, 打开设置（macOS 惯例，§8.2）；输入控件聚焦时不触发
   useEffect(() => {
@@ -430,30 +472,43 @@ export default function App() {
     return () => document.removeEventListener('keydown', onKey)
   }, [])
 
-  const open = useOpenProjectActions(setOpenProject, setOpenFailure, refreshProjects, unsavedAiSessionsRef, latestAiSessionRef)
+  const open = useOpenProjectActions(
+    setOpenProject,
+    setOpenFailure,
+    refreshProjects,
+    unsavedAiSessionsRef,
+    latestAiSessionRef,
+  )
   const home = useHomeProjectActions(refreshProjects, unsavedAiSessionsRef)
   /** 退出冲刷屏障：未落盘会话仍在时阻止关闭窗口（见 useExitFlush）。 */
   const exitBlocked = useExitFlush()
-  return <>
-    {exitBlocked !== null && (
-      <div
-        role="alert"
-        style={{ padding: '6px 16px', background: '#5c1d1d', color: '#ffe3e3', fontSize: 13 }}
-      >
-        {exitBlocked}
-      </div>
-    )}
-    <AppView
-      projects={projects}
-      loading={loading}
-      openProject={openProject}
-      openFailure={openFailure}
-      settingsOpen={settingsOpen}
-      open={open}
-      home={home}
-      latestAiSession={latestAiSessionRef}
-      onOpenSettings={() => startTransition(() => setSettingsOpen(true))}
-      onCloseSettings={() => startTransition(() => setSettingsOpen(false))}
-    />
-  </>
+  return (
+    <>
+      {exitBlocked !== null && (
+        <div
+          role="alert"
+          style={{
+            padding: '6px 16px',
+            background: '#5c1d1d',
+            color: '#ffe3e3',
+            fontSize: 13,
+          }}
+        >
+          {exitBlocked}
+        </div>
+      )}
+      <AppView
+        projects={projects}
+        loading={loading}
+        openProject={openProject}
+        openFailure={openFailure}
+        settingsOpen={settingsOpen}
+        open={open}
+        home={home}
+        latestAiSession={latestAiSessionRef}
+        onOpenSettings={() => startTransition(() => setSettingsOpen(true))}
+        onCloseSettings={() => startTransition(() => setSettingsOpen(false))}
+      />
+    </>
+  )
 }

@@ -34,7 +34,11 @@ function Host({
 }
 
 /** 模拟中文拼音上屏：组合期间的中间拼音 + 上屏文本 + compositionend。 */
-function typePinyin(input: HTMLElement, pinyin: readonly string[], committed: string) {
+function typePinyin(
+  input: HTMLElement,
+  pinyin: readonly string[],
+  committed: string,
+) {
   fireEvent.compositionStart(input)
   for (const step of pinyin) {
     fireEvent.input(input, { target: { value: step }, isComposing: true })

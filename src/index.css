@@ -21,11 +21,7 @@ body,
 
 /* 字体栈跟随系统（docs/ui-design.md §2.4），窗口底色用语义令牌。 */
 body {
-  font-family:
-    -apple-system,
-    'PingFang SC',
-    'Segoe UI',
-    sans-serif;
+  font-family: -apple-system, 'PingFang SC', 'Segoe UI', sans-serif;
   background: var(--surface-window);
   color: var(--text-primary);
 }

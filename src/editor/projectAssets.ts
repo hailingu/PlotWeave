@@ -74,7 +74,10 @@ function extFromNameOrMime(name: string, mime: string): string {
   return byMime[mime] ?? 'bin'
 }
 
-async function tauriImport(projectId: string, libraryAssetId: string): Promise<AssetRef> {
+async function tauriImport(
+  projectId: string,
+  libraryAssetId: string,
+): Promise<AssetRef> {
   const { invoke } = await import('@tauri-apps/api/core')
   const imported = normalizeAssetRef(
     await invoke<RawAssetRef>('import_project_asset_from_library', {
@@ -84,12 +87,18 @@ async function tauriImport(projectId: string, libraryAssetId: string): Promise<A
   )
   // §9.3：入索引前过 Rust 预检，使用预检返回的规范化条目
   return normalizeAssetRef(
-    await invoke<RawAssetRef>('validate_project_asset', { id: projectId, asset: imported }),
+    await invoke<RawAssetRef>('validate_project_asset', {
+      id: projectId,
+      asset: imported,
+    }),
   )
 }
 
 // 浏览器预览无项目目录：projectId 仅保持与 Tauri 路径接口同形，不参与逻辑
-async function memoryImport(_projectId: string, libraryAssetId: string): Promise<AssetRef> {
+async function memoryImport(
+  _projectId: string,
+  libraryAssetId: string,
+): Promise<AssetRef> {
   const list = await libraryStore.list()
   const lib = list.find((a) => a.id === libraryAssetId)
   if (!lib) throw new Error(`库资产不存在：${libraryAssetId}`)
@@ -102,14 +111,20 @@ async function memoryImport(_projectId: string, libraryAssetId: string): Promise
     createdAt: new Date().toISOString(),
   }
   // 拷贝语义（§7.3）：导入即经源 blob 建独立 object URL，源取不到则导入失败
-  memoryUrls.set(id, await libraryStore.mediaUrl({ id: lib.id, conflicted: lib.conflicted }))
+  memoryUrls.set(
+    id,
+    await libraryStore.mediaUrl({ id: lib.id, conflicted: lib.conflicted }),
+  )
   return asset
 }
 
 /** 媒体 opaque URL（§7.1，issue #31）：只传逻辑 scope + assetId，由 Rust
  * 按项目文档 assets.byId 逐请求解析并返回 pwmedia URL——relPath 与本机
  * 绝对路径不出 Rust，前端不再拼接。 */
-async function tauriMediaUrl(projectId: string, asset: AssetRef): Promise<string> {
+async function tauriMediaUrl(
+  projectId: string,
+  asset: AssetRef,
+): Promise<string> {
   const { invoke } = await import('@tauri-apps/api/core')
   return invoke<string>('get_asset_media_url', {
     scope: { kind: 'project', projectId },
@@ -119,7 +134,10 @@ async function tauriMediaUrl(projectId: string, asset: AssetRef): Promise<string
 
 /** IPC 直调助手（仅桌面端；动态导入避免浏览器预览加载 Tauri 模块）：
  * 生成命令等新增 Rust 管线的复用入口。 */
-export function tauriInvoke<T>(cmd: string, args: Record<string, unknown>): Promise<T> {
+export function tauriInvoke<T>(
+  cmd: string,
+  args: Record<string, unknown>,
+): Promise<T> {
   return (async () => {
     const { invoke } = await import('@tauri-apps/api/core')
     return invoke<T>(cmd, args)
@@ -129,8 +147,13 @@ export function tauriInvoke<T>(cmd: string, args: Record<string, unknown>): Prom
 /** 统一门面：两种环境同签名。 */
 export const projectAssets = {
   /** 库资产拷贝进项目（§7.3）：返回项目级 AssetRef（新 id）。 */
-  importFromLibrary: (projectId: string, libraryAssetId: string): Promise<AssetRef> =>
-    isTauri ? tauriImport(projectId, libraryAssetId) : memoryImport(projectId, libraryAssetId),
+  importFromLibrary: (
+    projectId: string,
+    libraryAssetId: string,
+  ): Promise<AssetRef> =>
+    isTauri
+      ? tauriImport(projectId, libraryAssetId)
+      : memoryImport(projectId, libraryAssetId),
 
   /** 媒体 URL：Tauri 走 pwmedia opaque URL（scope + assetId，issue #31）；
    * 内存回退返回导入时建立的独立 object URL（源库删除不影响）——重载后
@@ -139,7 +162,11 @@ export const projectAssets = {
     if (isTauri) return tauriMediaUrl(projectId, asset)
     const url = memoryUrls.get(asset.id)
     if (!url) {
-      return Promise.reject(new Error(`资产 ${asset.id} 的媒体不在本会话内存中（浏览器预览不落盘）`))
+      return Promise.reject(
+        new Error(
+          `资产 ${asset.id} 的媒体不在本会话内存中（浏览器预览不落盘）`,
+        ),
+      )
     }
     return Promise.resolve(url)
   },
@@ -150,10 +177,11 @@ export const projectAssets = {
    * validate_project_asset；浏览器预览内存态无盘上文件，恒通过。 */
   revalidate: (projectId: string, asset: AssetRef): Promise<void> => {
     if (!isTauri) return Promise.resolve()
-    return tauriInvoke<RawAssetRef>('validate_project_asset', { id: projectId, asset }).then(
-      (raw) => {
-        normalizeAssetRef(raw)
-      },
-    )
+    return tauriInvoke<RawAssetRef>('validate_project_asset', {
+      id: projectId,
+      asset,
+    }).then((raw) => {
+      normalizeAssetRef(raw)
+    })
   },
 }

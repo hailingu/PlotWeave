@@ -7,8 +7,7 @@ import { createContext, useContext } from 'react'
 
 /** 节点作业的运行态视图：running 携带 jobId（取消与过期完成判定用）。 */
 export type ImageJobView =
-  | { status: 'running'; jobId: string }
-  | { status: 'error'; message: string }
+  { status: 'running'; jobId: string } | { status: 'error'; message: string }
 
 /** 图片节点消费的生成调度接口。 */
 export interface ImageGenApi {

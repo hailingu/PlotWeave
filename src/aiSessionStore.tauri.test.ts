@@ -21,7 +21,10 @@ const payload = { schemaVersion: 1 as const, entries: [] }
 /** Rust 主文件加载结果的 IPC 契约。 */
 const rec = (session: unknown, corrupt = false) => ({ session, corrupt })
 
-afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals() })
+afterEach(() => {
+  vi.useRealTimers()
+  vi.unstubAllGlobals()
+})
 
 // #47 单主文件契约：失败只保留内存，不写恢复副本或定时重试。
 describe('saveAiSession 单主文件边界', () => {
@@ -34,7 +37,9 @@ describe('saveAiSession 单主文件边界', () => {
       return rec(null)
     })
     const store = await import('./aiSessionStore')
-    await expect(store.saveAiSession('p1', session('未保存消息'))).rejects.toThrow('磁盘已满')
+    await expect(
+      store.saveAiSession('p1', session('未保存消息')),
+    ).rejects.toThrow('磁盘已满')
     await vi.advanceTimersByTimeAsync(15000)
     expect(disk.size).toBe(0)
     expect(commandsOf()).toEqual(['save_ai_session'])
@@ -70,7 +75,9 @@ describe('saveAiSession 冲刷固定点排空', () => {
     const saving = store.saveAiSession('p1', payload).catch(() => undefined)
     expect(store.hasPendingAiSessionSaves()).toBe(true)
     // 等待动态导入与 IPC 发起
-    await vi.waitFor(() => { expect(typeof release).toBe('function') })
+    await vi.waitFor(() => {
+      expect(typeof release).toBe('function')
+    })
     const flushing = store.flushPendingAiSessionSaves()
     release()
     await saving
@@ -83,23 +90,33 @@ describe('saveAiSession 冲刷固定点排空', () => {
     const gates: Array<() => void> = []
     invoke.mockImplementation((cmd: unknown) => {
       if (cmd === 'save_ai_session') {
-        return new Promise<void>((resolve) => { gates.push(() => resolve()) })
+        return new Promise<void>((resolve) => {
+          gates.push(() => resolve())
+        })
       }
       return Promise.resolve(undefined)
     })
 
     const first = store.saveAiSession('p1', payload).catch(() => undefined)
-    await vi.waitFor(() => { expect(gates).toHaveLength(1) })
+    await vi.waitFor(() => {
+      expect(gates).toHaveLength(1)
+    })
     // 关闭已被拦截、冲刷正在等第一笔慢保存时用户又改了会话：新保存替换
     // 同项目的在途项（不加入先前捕获的数组），且按写链排在第一笔之后
     const flushing = store.flushPendingAiSessionSaves()
-    const second = store.saveAiSession('p1', session('关闭期间的新变更')).catch(() => undefined)
+    const second = store
+      .saveAiSession('p1', session('关闭期间的新变更'))
+      .catch(() => undefined)
     gates[0]()
     await first
-    await vi.waitFor(() => { expect(gates).toHaveLength(2) })
+    await vi.waitFor(() => {
+      expect(gates).toHaveLength(2)
+    })
 
     let flushed = false
-    void flushing.then(() => { flushed = true })
+    void flushing.then(() => {
+      flushed = true
+    })
     // 第一笔已落定、第二笔仍在途：只等一次快照的冲刷会在此误判已排空
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(flushed).toBe(false)
@@ -110,7 +127,6 @@ describe('saveAiSession 冲刷固定点排空', () => {
     expect(store.hasPendingAiSessionSaves()).toBe(false)
   })
 })
-
 
 describe('墓碑吸收会话的删除失败回吐', () => {
   it('回吐重排失败：保留快照经失败事件上浮，退出屏障仍可重试', async () => {
@@ -128,7 +144,9 @@ describe('墓碑吸收会话的删除失败回吐', () => {
 
     const deleting = enqueueDelete('p1').catch(() => undefined)
     // 墓碑期保存被吸收为成功：调用方无从感知之后的回吐失败
-    await expect(store.saveAiSession('p1', session('墓碑期消息'))).resolves.toBeUndefined()
+    await expect(
+      store.saveAiSession('p1', session('墓碑期消息')),
+    ).resolves.toBeUndefined()
     await deleting
 
     await vi.waitFor(() => expect(failures).toHaveLength(1))
@@ -143,16 +161,21 @@ describe('loadAiSession 主文件归一化', () => {
   it('缺文件为空会话，读取不产生保存', async () => {
     invoke.mockResolvedValue(rec(null))
     const store = await import('./aiSessionStore')
-    await expect(store.loadAiSession('p1')).resolves.toEqual({ session: payload, repairError: null })
+    await expect(store.loadAiSession('p1')).resolves.toEqual({
+      session: payload,
+      repairError: null,
+    })
     expect(store.hasPendingAiSessionSaves()).toBe(false)
     expect(commandsOf()).toEqual(['load_ai_session'])
   })
 
   it('坏条目被隔离，保留其余历史并提示，读盘不修复写回', async () => {
-    invoke.mockResolvedValue(rec({
-      schemaVersion: 1,
-      entries: [{ id: 1, kind: 'note', text: '可用' }, { id: 'bad' }],
-    }))
+    invoke.mockResolvedValue(
+      rec({
+        schemaVersion: 1,
+        entries: [{ id: 1, kind: 'note', text: '可用' }, { id: 'bad' }],
+      }),
+    )
     const store = await import('./aiSessionStore')
     const loaded = await store.loadAiSession('p1')
     expect(loaded.session).toEqual(session('可用'))
@@ -163,7 +186,9 @@ describe('loadAiSession 主文件归一化', () => {
 
   it('文件损坏显示诊断；I/O 读取失败上浮，不当成空文件保存', async () => {
     const store = await import('./aiSessionStore')
-    invoke.mockResolvedValueOnce(rec(null, true)).mockRejectedValueOnce(new Error('无法读取'))
+    invoke
+      .mockResolvedValueOnce(rec(null, true))
+      .mockRejectedValueOnce(new Error('无法读取'))
     const loaded = await store.loadAiSession('p1')
     expect(loaded.session).toEqual(payload)
     expect(loaded.repairError).toContain('损坏')
@@ -178,12 +203,17 @@ describe('saveAiSession 按需重试', () => {
     const full = {
       schemaVersion: 1 as const,
       entries: Array.from({ length: 203 }, (_, i) => ({
-        id: i + 1, kind: 'note' as const, text: `第${i + 1}句`,
+        id: i + 1,
+        kind: 'note' as const,
+        text: `第${i + 1}句`,
       })),
     }
     const payloads: Array<Array<{ id: number }>> = []
     invoke.mockImplementation(async (_cmd: unknown, args: unknown) => {
-      payloads.push((args as { session: { entries: Array<{ id: number }> } }).session.entries)
+      payloads.push(
+        (args as { session: { entries: Array<{ id: number }> } }).session
+          .entries,
+      )
       throw new Error('磁盘已满')
     })
     await expect(store.saveAiSession('p1', full)).rejects.toThrow('磁盘已满')
@@ -201,7 +231,9 @@ describe('saveAiSession 按需重试', () => {
   it('失败后退出仅重试一次，仍失败则保留阻断，后续成功清除', async () => {
     const store = await import('./aiSessionStore')
     invoke.mockRejectedValue(new Error('只读目录'))
-    await expect(store.saveAiSession('p1', session('未保存'))).rejects.toThrow('只读目录')
+    await expect(store.saveAiSession('p1', session('未保存'))).rejects.toThrow(
+      '只读目录',
+    )
     await expect(store.flushPendingAiSessionSaves()).resolves.toEqual(['p1'])
     expect(commandsOf()).toEqual(['save_ai_session', 'save_ai_session'])
     let disk: unknown
@@ -221,7 +253,9 @@ describe('saveAiSession 按需重试', () => {
     await expect(store.saveAiSession('p1', session('旧'))).rejects.toThrow()
     await expect(store.saveAiSession('p1', session('新'))).rejects.toThrow()
     let disk: unknown
-    invoke.mockImplementation(async (_cmd, args) => { disk = (args as { session: unknown }).session })
+    invoke.mockImplementation(async (_cmd, args) => {
+      disk = (args as { session: unknown }).session
+    })
     await store.flushPendingAiSessionSaves()
     expect(disk).toEqual(session('新'))
     expect(saved).toEqual(['p1'])

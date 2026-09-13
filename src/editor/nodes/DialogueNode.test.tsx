@@ -18,7 +18,9 @@ vi.mock('@xyflow/react', async (importOriginal) => {
     ...orig,
     /** Handle 桩：脱离 ReactFlow 画布后仅保留锚点语义（type/id）供断言。 */
     Handle: (props: { readonly id?: string; readonly type: string }) => (
-      <div data-testid={`handle-${props.type}${props.id ? `-${props.id}` : ''}`} />
+      <div
+        data-testid={`handle-${props.type}${props.id ? `-${props.id}` : ''}`}
+      />
     ),
   }
 })
@@ -33,10 +35,20 @@ const SETTINGS: ProjectSettings = {
 const LINES: DialogueLine[] = [
   { id: 'l1', kind: 'line', speaker: 'c1', side: 'left', text: '你早就知道' },
   { id: 'l2', kind: 'action', text: '雨声渐大' },
-  { id: 'l3', kind: 'line', speaker: 'ghost', side: 'right', text: '……', vo: true },
+  {
+    id: 'l3',
+    kind: 'line',
+    speaker: 'ghost',
+    side: 'right',
+    text: '……',
+    vo: true,
+  },
 ]
 
-function setup(data: { name?: string; lines?: DialogueLine[] } = {}, openSettingsId: string | null = null) {
+function setup(
+  data: { name?: string; lines?: DialogueLine[] } = {},
+  openSettingsId: string | null = null,
+) {
   const api: NodeEditApi = {
     projectId: 'p-1',
     openSettingsId,
@@ -103,7 +115,10 @@ describe('DialogueNode（气泡流卡）', () => {
     const input = screen.getByRole('textbox', { name: '对白名称' })
     fireEvent.change(input, { target: { value: '雨夜摊牌' } })
     fireEvent.blur(input)
-    expect(api.patchNode).toHaveBeenCalledWith('d1', { nodeType: 'dialogue', patch: { name: '雨夜摊牌' } })
+    expect(api.patchNode).toHaveBeenCalledWith('d1', {
+      nodeType: 'dialogue',
+      patch: { name: '雨夜摊牌' },
+    })
   })
 
   it('端口：左入右出', () => {

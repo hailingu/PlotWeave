@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from 'react'
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent as ReactDragEvent,
+} from 'react'
 import type { Edge } from '@xyflow/react'
 import SegmentedControl from './SegmentedControl'
 import PanelResizer from './PanelResizer'
@@ -35,7 +41,14 @@ export interface SettingsActions {
   /** 新建占位文档（issue 56）。 */
   addDocument: () => void
   /** 保存文档编辑（标题/正文/关联整体 patch）。 */
-  updateDocument: (id: string, patch: { title?: string; body?: string; relatedIds?: Array<{ kind: 'character' | 'location'; id: string }> }) => void
+  updateDocument: (
+    id: string,
+    patch: {
+      title?: string
+      body?: string
+      relatedIds?: Array<{ kind: 'character' | 'location'; id: string }>
+    },
+  ) => void
   deleteDocument: (id: string) => void
 }
 
@@ -74,7 +87,10 @@ interface LeftPanelProps {
   /** 集标题行内改名（编辑即命令）。 */
   readonly onRenameEpisode?: (episode: number, title: string) => void
   /** 大纲拖拽落点（§3.5：重排 sequence 边 / 跨组改集归属）。 */
-  readonly onOutlineDrop?: (draggedId: string, target: OutlineDropTarget) => void
+  readonly onOutlineDrop?: (
+    draggedId: string,
+    target: OutlineDropTarget,
+  ) => void
 }
 
 /**
@@ -109,14 +125,18 @@ export default function LeftPanel({
   const [dropHint, setDropHint] = useState<DropHint>(null)
   /** 正在编辑的文档 id（issue 56）：弹窗以打开时的文档为编辑基线。 */
   const [editingDocId, setEditingDocId] = useState<string | null>(null)
-  const editingDoc = settings.documents?.find((d) => d.id === editingDocId) ?? null
+  const editingDoc =
+    settings.documents?.find((d) => d.id === editingDocId) ?? null
 
   // level < 3 = 编剧侧四类（分镜随宿主场景，不参与拖拽排序）
   const readDragged = (e: ReactDragEvent): string | null => {
     const id = e.dataTransfer.getData(OUTLINE_MIME)
     return id !== '' ? id : null
   }
-  const rowDragOver = (e: ReactDragEvent, row: { id: string; level: number }) => {
+  const rowDragOver = (
+    e: ReactDragEvent,
+    row: { id: string; level: number },
+  ) => {
     if (row.level >= 3 || !onOutlineDrop) return
     if (!e.dataTransfer.types.includes(OUTLINE_MIME)) return
     e.preventDefault()
@@ -128,9 +148,13 @@ export default function LeftPanel({
   const rowDrop = (e: ReactDragEvent, row: { id: string; level: number }) => {
     const dragged = readDragged(e)
     setDropHint(null)
-    if (!dragged || dragged === row.id || row.level >= 3 || !onOutlineDrop) return
+    if (!dragged || dragged === row.id || row.level >= 3 || !onOutlineDrop)
+      return
     e.preventDefault()
-    const pos = dropHint?.kind === 'row' && dropHint.id === row.id ? dropHint.pos : 'after'
+    const pos =
+      dropHint?.kind === 'row' && dropHint.id === row.id
+        ? dropHint.pos
+        : 'after'
     onOutlineDrop(dragged, { kind: 'row', anchorId: row.id, position: pos })
   }
   const groupDragOver = (e: ReactDragEvent, episode: number | null) => {
@@ -164,12 +188,21 @@ export default function LeftPanel({
     >
       <div className="pw-panel-inner" style={{ width }}>
         <div className="pw-panel-head">
-          <SegmentedControl groupLabel="左栏分段" options={TABS} value={tab} onChange={setTab} />
+          <SegmentedControl
+            groupLabel="左栏分段"
+            options={TABS}
+            value={tab}
+            onChange={setTab}
+          />
         </div>
         <div className="pw-panel-scroll">
           {tab === 'outline' && (
             // 原生 section + aria-label（隐式 region），替代 div role="group"（S6819）
-            <section className="pw-outline" aria-label="故事大纲" ref={outlineRef}>
+            <section
+              className="pw-outline"
+              aria-label="故事大纲"
+              ref={outlineRef}
+            >
               {groups.map((group) => (
                 <div key={group.episode ?? 'none'} className="pw-outline-group">
                   {group.episode === null ? (
@@ -200,16 +233,23 @@ export default function LeftPanel({
                       <EditableName
                         value={group.title}
                         ariaLabel={`第 ${group.episode} 集标题`}
-                        onChange={(title) => onRenameEpisode?.(group.episode!, title)}
+                        onChange={(title) =>
+                          onRenameEpisode?.(group.episode!, title)
+                        }
                       />
                       <span className="pw-sp" />
-                      <span className="pw-outline-ep-count">{group.rows.length} 行</span>
+                      <span className="pw-outline-ep-count">
+                        {group.rows.length} 行
+                      </span>
                     </div>
                   )}
                   {group.rows.map((row) => {
-                    const draggable = row.level < 3 && onOutlineDrop !== undefined
+                    const draggable =
+                      row.level < 3 && onOutlineDrop !== undefined
                     const hint =
-                      dropHint?.kind === 'row' && dropHint.id === row.id ? dropHint.pos : null
+                      dropHint?.kind === 'row' && dropHint.id === row.id
+                        ? dropHint.pos
+                        : null
                     return (
                       <button
                         key={row.id}
@@ -223,7 +263,11 @@ export default function LeftPanel({
                         data-level={row.level}
                         style={{ paddingLeft: 10 + row.level * 16 }}
                         draggable={draggable}
-                        title={draggable ? '拖拽排序（重排剧情流）；点击定位到画布' : '点击定位到画布'}
+                        title={
+                          draggable
+                            ? '拖拽排序（重排剧情流）；点击定位到画布'
+                            : '点击定位到画布'
+                        }
                         onDragStart={(e) => {
                           e.dataTransfer.setData(OUTLINE_MIME, row.id)
                           e.dataTransfer.effectAllowed = 'move'
@@ -231,19 +275,27 @@ export default function LeftPanel({
                         onDragEnd={() => setDropHint(null)}
                         onDragOver={(e) => rowDragOver(e, row)}
                         onDragLeave={() =>
-                          setDropHint((h) => (h?.kind === 'row' && h.id === row.id ? null : h))
+                          setDropHint((h) =>
+                            h?.kind === 'row' && h.id === row.id ? null : h,
+                          )
                         }
                         onDrop={(e) => rowDrop(e, row)}
                         onClick={() => onLocate?.(row.id)}
                       >
                         {row.label}
                         {row.beat?.pending && (
-                          <span className="pw-beat-state pending" title="未被场景承载的节拍 = 节奏漏洞">
+                          <span
+                            className="pw-beat-state pending"
+                            title="未被场景承载的节拍 = 节奏漏洞"
+                          >
                             待兑现
                           </span>
                         )}
                         {row.beat && !row.beat.pending && (
-                          <span className="pw-beat-state ok" title="承载场景（sequence 邻接派生）">
+                          <span
+                            className="pw-beat-state ok"
+                            title="承载场景（sequence 邻接派生）"
+                          >
                             ✓ 兑现于 {row.beat.label}
                           </span>
                         )}

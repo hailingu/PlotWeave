@@ -1,4 +1,9 @@
-import { useEffect, useId, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import {
+  useEffect,
+  useId,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from 'react'
 
 /**
  * 设定条目侧栏详情表单（issue 95）：名称单行输入 + 小传/备注多行输入，
@@ -46,7 +51,12 @@ function DetailActions({
 }) {
   return (
     <div className="pw-settings-detail-actions">
-      <button type="button" className="pw-dialog-btn" onClick={onClose} onKeyDown={escClose}>
+      <button
+        type="button"
+        className="pw-dialog-btn"
+        onClick={onClose}
+        onKeyDown={escClose}
+      >
         取消
       </button>
       <button

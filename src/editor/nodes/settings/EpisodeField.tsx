@@ -32,7 +32,8 @@ export default function EpisodeField({
             const n = Math.max(1, Math.floor(Number(raw)))
             // §4.1 正安全整数域：有限但越界（如 1e20）落载后会被顺位重发，
             // 输入边界同域拒收——不 patch，保留原值等用户输入完成
-            if (Number.isSafeInteger(n)) patchNode(nodeId, { nodeType, patch: { episodeNo: n } })
+            if (Number.isSafeInteger(n))
+              patchNode(nodeId, { nodeType, patch: { episodeNo: n } })
           }}
         />
         {episodeNo !== undefined && (
@@ -41,7 +42,9 @@ export default function EpisodeField({
             className="pw-set-x"
             aria-label="移出集"
             title="移出集（未分集）"
-            onClick={() => patchNode(nodeId, { nodeType, patch: { episodeNo: undefined } })}
+            onClick={() =>
+              patchNode(nodeId, { nodeType, patch: { episodeNo: undefined } })
+            }
           >
             ✕
           </button>

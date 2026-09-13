@@ -16,10 +16,13 @@ beforeEach(() => {
   invoke.mockReset()
 })
 
-const load = async (): Promise<typeof import('./libraryStore')> => import('./libraryStore')
+const load = async (): Promise<typeof import('./libraryStore')> =>
+  import('./libraryStore')
 
 /** 一条合法的 Rust 侧索引条目。 */
-const entry = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+const entry = (
+  over: Record<string, unknown> = {},
+): Record<string, unknown> => ({
   id: 'la-1',
   name: '参考图.png',
   kind: 'reference',
@@ -34,7 +37,9 @@ const entry = (over: Record<string, unknown> = {}): Record<string, unknown> => (
 
 /** §7.2 Record 形状（issue #29）：list_library_assets 的 assets 为
  * { byId: { [id]: entry } }，键自动取条目 id。 */
-const byId = (...entries: Array<Record<string, unknown>>): Record<string, unknown> => ({
+const byId = (
+  ...entries: Array<Record<string, unknown>>
+): Record<string, unknown> => ({
   byId: Object.fromEntries(entries.map((e) => [e.id, e])),
 })
 
@@ -45,7 +50,17 @@ describe('libraryStore Tauri 路径：list（normalizeAsset 归一化）', () =>
         entry(),
         // 缺 id → 整条丢弃；其余坏字段按兜底规则归一
         entry({ id: '' }),
-        entry({ id: 'la-2', name: '', kind: 'mystery', view: 3, mime: null, relPath: 7, tags: 'x', groupId: 42, createdAt: 't' }),
+        entry({
+          id: 'la-2',
+          name: '',
+          kind: 'mystery',
+          view: 3,
+          mime: null,
+          relPath: 7,
+          tags: 'x',
+          groupId: 42,
+          createdAt: 't',
+        }),
       ),
     })
     const { libraryStore } = await load()
@@ -97,7 +112,10 @@ describe('libraryStore Tauri 路径：list（normalizeAsset 归一化）', () =>
 
   it('warnings 缺失/非字符串/空串项不产生告警', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    invoke.mockResolvedValue({ assets: byId(entry()), warnings: [42, '', null] })
+    invoke.mockResolvedValue({
+      assets: byId(entry()),
+      warnings: [42, '', null],
+    })
     const { libraryStore } = await load()
     await libraryStore.list()
     expect(warn).not.toHaveBeenCalled()
@@ -106,9 +124,14 @@ describe('libraryStore Tauri 路径：list（normalizeAsset 归一化）', () =>
 
   it('put 返回条目携带 warnings 时同样上报诊断', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    invoke.mockResolvedValue(entry({ id: 'la-9', warnings: ['已隔离非法索引条目 #1：…'] }))
+    invoke.mockResolvedValue(
+      entry({ id: 'la-9', warnings: ['已隔离非法索引条目 #1：…'] }),
+    )
     const { libraryStore } = await load()
-    await libraryStore.put(new File(['x'], 'a.png', { type: 'image/png' }), 'other')
+    await libraryStore.put(
+      new File(['x'], 'a.png', { type: 'image/png' }),
+      'other',
+    )
     expect(warn).toHaveBeenCalledTimes(1)
     expect(warn.mock.calls[0]).toContain('已隔离非法索引条目 #1：…')
     warn.mockRestore()
@@ -116,7 +139,11 @@ describe('libraryStore Tauri 路径：list（normalizeAsset 归一化）', () =>
 
   it('updateMeta 返回条目携带 warnings 时同样上报诊断', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    invoke.mockResolvedValue(entry({ warnings: ['条目 la-1 的 mime 已规范化： Image/PNG → image/png'] }))
+    invoke.mockResolvedValue(
+      entry({
+        warnings: ['条目 la-1 的 mime 已规范化： Image/PNG → image/png'],
+      }),
+    )
     const { libraryStore } = await load()
     await libraryStore.updateMeta('la-1', { name: '改名' })
     expect(warn).toHaveBeenCalledTimes(1)
@@ -143,13 +170,22 @@ describe('libraryStore Tauri 路径：put', () => {
     invoke.mockResolvedValue(entry({ id: 'la-9' }))
     const { libraryStore } = await load()
     const asset: LibraryAsset = await libraryStore.put(
-      new File([new Uint8Array([1, 2, 255])], '新图.png', { type: 'image/png' }),
+      new File([new Uint8Array([1, 2, 255])], '新图.png', {
+        type: 'image/png',
+      }),
       'reference',
     )
     expect(asset.id).toBe('la-9')
-    const [cmd, args] = invoke.mock.calls[0] as [string, Record<string, unknown>]
+    const [cmd, args] = invoke.mock.calls[0] as [
+      string,
+      Record<string, unknown>,
+    ]
     expect(cmd).toBe('import_library_asset')
-    expect(args).toMatchObject({ name: '新图.png', mime: 'image/png', kind: 'reference' })
+    expect(args).toMatchObject({
+      name: '新图.png',
+      mime: 'image/png',
+      kind: 'reference',
+    })
     expect(args.bytes).toEqual([1, 2, 255])
   })
 
@@ -157,7 +193,9 @@ describe('libraryStore Tauri 路径：put', () => {
     invoke.mockResolvedValueOnce(entry())
     const { libraryStore } = await load()
     await libraryStore.put(new File(['x'], 'a.bin'), 'other')
-    expect(invoke.mock.calls[0][1]).toMatchObject({ mime: 'application/octet-stream' })
+    expect(invoke.mock.calls[0][1]).toMatchObject({
+      mime: 'application/octet-stream',
+    })
 
     invoke.mockResolvedValueOnce({ id: '' })
     await expect(
@@ -178,14 +216,19 @@ describe('libraryStore Tauri 路径：updateMeta / remove', () => {
     ])
 
     invoke.mockResolvedValueOnce(null)
-    await expect(libraryStore.updateMeta('la-1', {})).rejects.toThrow(/无效条目/)
+    await expect(libraryStore.updateMeta('la-1', {})).rejects.toThrow(
+      /无效条目/,
+    )
   })
 
   it('remove 透传 id 给 delete_library_asset', async () => {
     invoke.mockResolvedValue(undefined)
     const { libraryStore } = await load()
     await libraryStore.remove('la-1')
-    expect(invoke.mock.calls[0]).toEqual(['delete_library_asset', { id: 'la-1' }])
+    expect(invoke.mock.calls[0]).toEqual([
+      'delete_library_asset',
+      { id: 'la-1' },
+    ])
   })
 })
 
@@ -267,10 +310,9 @@ describe('libraryStore Tauri 路径：listGroups', () => {
       '[Library] 索引条目隔离：',
       '条目 la-1 已隔离',
     )
-    expect(warn).toHaveBeenCalledWith(
-      '[Library] 删除隔离区待清理：',
-      ['assets/.trash/t-1'],
-    )
+    expect(warn).toHaveBeenCalledWith('[Library] 删除隔离区待清理：', [
+      'assets/.trash/t-1',
+    ])
   })
 })
 
@@ -287,7 +329,11 @@ describe('libraryStore Tauri 路径：upsertGroup', () => {
       cleanupPending: ['assets/.trash/t-1'],
     })
     const { libraryStore } = await load()
-    await libraryStore.upsertGroup({ id: 'g-1', name: '女主', kind: 'character' })
+    await libraryStore.upsertGroup({
+      id: 'g-1',
+      name: '女主',
+      kind: 'character',
+    })
     expect(warn).toHaveBeenCalledWith('[Library] 删除隔离区待清理：', [
       'assets/.trash/t-1',
     ])

@@ -7,7 +7,10 @@ import { SAMPLE_SETTINGS } from '../editor/sampleData'
 import type { ProjectContent } from '../model/content'
 import type { ProjectSummary } from '../home/projects'
 
-export function seedProjects(): { meta: ProjectSummary; doc: ProjectContent }[] {
+export function seedProjects(): {
+  meta: ProjectSummary
+  doc: ProjectContent
+}[] {
   const hoursAgo = (h: number) =>
     new Date(Date.now() - h * 3_600_000).toISOString()
   const sceneCount = SAMPLE_NODES.filter((n) => n.type === 'scene').length
@@ -20,7 +23,12 @@ export function seedProjects(): { meta: ProjectSummary; doc: ProjectContent }[] 
         endingCount: 2,
         updatedAt: hoursAgo(26),
       },
-      doc: { name: '午夜出租车', nodes: SAMPLE_NODES, edges: SAMPLE_EDGES, settings: SAMPLE_SETTINGS },
+      doc: {
+        name: '午夜出租车',
+        nodes: SAMPLE_NODES,
+        edges: SAMPLE_EDGES,
+        settings: SAMPLE_SETTINGS,
+      },
     },
     {
       meta: {
@@ -31,7 +39,12 @@ export function seedProjects(): { meta: ProjectSummary; doc: ProjectContent }[] 
         cover: 'linear-gradient(160deg, #2b2f4c, #e0176e)',
         updatedAt: hoursAgo(2),
       },
-      doc: { name: '都市奇缘', nodes: SAMPLE_NODES, edges: SAMPLE_EDGES, settings: SAMPLE_SETTINGS },
+      doc: {
+        name: '都市奇缘',
+        nodes: SAMPLE_NODES,
+        edges: SAMPLE_EDGES,
+        settings: SAMPLE_SETTINGS,
+      },
     },
   ]
 }

@@ -21,9 +21,19 @@ beforeEach(() => {
   llmChatMock.mockReset()
 })
 
-const PROVIDER = { id: 'p', label: 'P', baseUrl: 'https://x/v1', enabled: true, models: ['m'] } as ProviderConfig
+const PROVIDER = {
+  id: 'p',
+  label: 'P',
+  baseUrl: 'https://x/v1',
+  enabled: true,
+  models: ['m'],
+} as ProviderConfig
 
-const reply = (over: Partial<AssistantMessage>): AssistantMessage => ({ role: 'assistant', content: null, ...over })
+const reply = (over: Partial<AssistantMessage>): AssistantMessage => ({
+  role: 'assistant',
+  content: null,
+  ...over,
+})
 
 const batchCall = (commands: unknown[], id = 'w1'): ToolCall => ({
   id,
@@ -48,15 +58,25 @@ const failOf = (message: string): BatchValidation => ({
 })
 
 const BAD_BEAT_BATCH = [
-  { op: 'create_node', nodeType: 'beat', data: { label: '立足', summary: '小店开张', stakes: '能否站稳' } },
+  {
+    op: 'create_node',
+    nodeType: 'beat',
+    data: { label: '立足', summary: '小店开张', stakes: '能否站稳' },
+  },
 ]
-const GOOD_BEAT_BATCH = [{ op: 'create_node', nodeType: 'beat', data: { name: '立足', tone: '紧凑' } }]
+const GOOD_BEAT_BATCH = [
+  { op: 'create_node', nodeType: 'beat', data: { name: '立足', tone: '紧凑' } },
+]
 
 /** 围栏批次回复：正文里带 ```json 批次。 */
 const fenceReply = (commands: unknown[]): AssistantMessage =>
-  reply({ content: `好的。\n\`\`\`json\n${JSON.stringify({ commands })}\n\`\`\`` } as Partial<AssistantMessage>)
+  reply({
+    content: `好的。\n\`\`\`json\n${JSON.stringify({ commands })}\n\`\`\``,
+  } as Partial<AssistantMessage>)
 
-const validators = (over: Partial<BatchValidators>): BatchValidators => ({ ...over })
+const validators = (over: Partial<BatchValidators>): BatchValidators => ({
+  ...over,
+})
 
 const run = (messages: ChatMessage[], v: BatchValidators) =>
   runAgentLoop(PROVIDER, 'm', messages, () => 'SNAP', v)
@@ -65,11 +85,17 @@ describe('runAgentLoop 写批次纠错回喂：tool 通道（issue 41）', () =>
   it('tool 通道：校验错误按 tool 协议回喂，纠正批次获得通过', async () => {
     const commands = vi
       .fn<NonNullable<BatchValidators['commands']>>()
-      .mockReturnValueOnce(failOf('未知字段：label、summary、stakes（节奏卡 允许：name、tone、episodeNo）'))
+      .mockReturnValueOnce(
+        failOf(
+          '未知字段：label、summary、stakes（节奏卡 允许：name、tone、episodeNo）',
+        ),
+      )
       .mockReturnValueOnce(okOf())
     llmChatMock
       .mockResolvedValueOnce(reply({ tool_calls: [batchCall(BAD_BEAT_BATCH)] }))
-      .mockResolvedValueOnce(reply({ content: '已修正', tool_calls: [batchCall(GOOD_BEAT_BATCH)] }))
+      .mockResolvedValueOnce(
+        reply({ content: '已修正', tool_calls: [batchCall(GOOD_BEAT_BATCH)] }),
+      )
 
     const messages: ChatMessage[] = [{ role: 'user', content: '创建节奏卡' }]
     const result = await run(messages, validators({ commands }))
@@ -80,7 +106,9 @@ describe('runAgentLoop 写批次纠错回喂：tool 通道（issue 41）', () =>
     // 第二次请求按协议携带：失败的 assistant tool_calls + 每个调用的 tool 应答
     const second = llmChatMock.mock.calls[1][2]
     const assistant = second.find(
-      (m) => m.role === 'assistant' && (m.tool_calls as unknown[] | undefined)?.length,
+      (m) =>
+        m.role === 'assistant' &&
+        (m.tool_calls as unknown[] | undefined)?.length,
     )
     expect(assistant).toBeTruthy()
     const toolMsg = second.find((m) => m.role === 'tool')
@@ -88,25 +116,38 @@ describe('runAgentLoop 写批次纠错回喂：tool 通道（issue 41）', () =>
     expect(toolMsg?.content).toContain('未知字段：label、summary、stakes')
     expect(toolMsg?.content).toContain('允许：name、tone、episodeNo')
   })
-
 })
 
 describe('runAgentLoop 写批次重试预算与终止（issue 41）', () => {
   it('校验通过即终止，不额外重问', async () => {
-    const commands = vi.fn<NonNullable<BatchValidators['commands']>>().mockReturnValue(okOf())
-    llmChatMock.mockResolvedValue(reply({ tool_calls: [batchCall(GOOD_BEAT_BATCH)] }))
+    const commands = vi
+      .fn<NonNullable<BatchValidators['commands']>>()
+      .mockReturnValue(okOf())
+    llmChatMock.mockResolvedValue(
+      reply({ tool_calls: [batchCall(GOOD_BEAT_BATCH)] }),
+    )
 
-    const result = await run([{ role: 'user', content: '创建节奏卡' }], validators({ commands }))
+    const result = await run(
+      [{ role: 'user', content: '创建节奏卡' }],
+      validators({ commands }),
+    )
 
     expect(llmChatMock).toHaveBeenCalledTimes(1)
     expect(result.validation?.ok).toBe(true)
   })
 
   it('重试耗尽：有限次产出后保留最后一次校验失败', async () => {
-    const commands = vi.fn<NonNullable<BatchValidators['commands']>>().mockReturnValue(failOf('未知字段：label'))
-    llmChatMock.mockResolvedValue(reply({ tool_calls: [batchCall(BAD_BEAT_BATCH)] }))
+    const commands = vi
+      .fn<NonNullable<BatchValidators['commands']>>()
+      .mockReturnValue(failOf('未知字段：label'))
+    llmChatMock.mockResolvedValue(
+      reply({ tool_calls: [batchCall(BAD_BEAT_BATCH)] }),
+    )
 
-    const result = await run([{ role: 'user', content: '创建节奏卡' }], validators({ commands }))
+    const result = await run(
+      [{ role: 'user', content: '创建节奏卡' }],
+      validators({ commands }),
+    )
 
     expect(llmChatMock).toHaveBeenCalledTimes(4) // 首次 + 3 次纠错重试（quota=3）
     expect(commands).toHaveBeenCalledTimes(4)
@@ -130,11 +171,21 @@ describe('runAgentLoop 写批次重试预算与终止（issue 41）', () => {
       })
       .mockReturnValueOnce(okOf())
     llmChatMock
-      .mockResolvedValueOnce(reply({ content: '{"action":true,"query":"修改画布"}' }))
+      .mockResolvedValueOnce(
+        reply({ content: '{"action":true,"query":"修改画布"}' }),
+      )
       .mockResolvedValueOnce(reply({ tool_calls: [batchCall(BAD_BEAT_BATCH)] }))
-      .mockResolvedValueOnce(reply({ content: '已全部修正', tool_calls: [batchCall(GOOD_BEAT_BATCH)] }))
+      .mockResolvedValueOnce(
+        reply({
+          content: '已全部修正',
+          tool_calls: [batchCall(GOOD_BEAT_BATCH)],
+        }),
+      )
 
-    const result = await run([{ role: 'user', content: '改画布' }], validators({ commands }))
+    const result = await run(
+      [{ role: 'user', content: '改画布' }],
+      validators({ commands }),
+    )
 
     expect(llmChatMock).toHaveBeenCalledTimes(3) // 1 次改写判定 + 清单完整单轮修正
     expect(result.validation?.ok).toBe(true)
@@ -143,14 +194,15 @@ describe('runAgentLoop 写批次重试预算与终止（issue 41）', () => {
     expect(toolMsg?.content).toContain('节点不存在：n9')
     expect(toolMsg?.content).toContain('端点不存在：a → b')
   })
-
 })
 
 describe('runAgentLoop 围栏通道与修正指令（issue 41）', () => {
   it('围栏通道：校验错误以 user 消息回喂并重试，纠正后通过', async () => {
     const prose = vi
       .fn<NonNullable<BatchValidators['prose']>>()
-      .mockReturnValueOnce(failOf('未知字段：label（节奏卡 允许：name、tone、episodeNo）'))
+      .mockReturnValueOnce(
+        failOf('未知字段：label（节奏卡 允许：name、tone、episodeNo）'),
+      )
       .mockReturnValueOnce(okOf())
     llmChatMock
       .mockResolvedValueOnce(fenceReply(BAD_BEAT_BATCH))
@@ -175,7 +227,9 @@ describe('runAgentLoop 围栏通道与修正指令（issue 41）', () => {
       .mockReturnValueOnce(failOf('端点不存在：a → b'))
       .mockReturnValueOnce(okOf())
     llmChatMock
-      .mockResolvedValueOnce(reply({ content: '{"action":true,"query":"连接节点"}' }))
+      .mockResolvedValueOnce(
+        reply({ content: '{"action":true,"query":"连接节点"}' }),
+      )
       .mockResolvedValueOnce(fenceReply(BAD_BEAT_BATCH))
       .mockResolvedValueOnce(fenceReply(GOOD_BEAT_BATCH))
 
@@ -194,10 +248,15 @@ describe('runAgentLoop 围栏通道与修正指令（issue 41）', () => {
   })
 
   it('纯讨论回复（无批次）立即终止，validation 为 null', async () => {
-    const prose = vi.fn<NonNullable<BatchValidators['prose']>>().mockReturnValue(null)
+    const prose = vi
+      .fn<NonNullable<BatchValidators['prose']>>()
+      .mockReturnValue(null)
     llmChatMock.mockResolvedValue(reply({ content: '建议先立冲突。' }))
 
-    const result = await run([{ role: 'user', content: '怎么写？' }], validators({ prose }))
+    const result = await run(
+      [{ role: 'user', content: '怎么写？' }],
+      validators({ prose }),
+    )
 
     expect(llmChatMock).toHaveBeenCalledTimes(2) // 1 次改写判定（无动词输入）+ 回合终止
     expect(result.validation).toBeNull()
@@ -214,14 +273,24 @@ describe('runAgentLoop 读工具循环（既有行为保持）', () => {
       .mockResolvedValueOnce(
         reply({
           tool_calls: [
-            { id: 't1', type: 'function', function: { name: 'get_graph_snapshot', arguments: '{}' } },
+            {
+              id: 't1',
+              type: 'function',
+              function: { name: 'get_graph_snapshot', arguments: '{}' },
+            },
           ],
         }),
       )
       .mockResolvedValueOnce(reply({ content: '画布为空。' }))
 
     const messages: ChatMessage[] = [{ role: 'user', content: '看看画布' }]
-    const result = await runAgentLoop(PROVIDER, 'm', messages, readTool, validators({}))
+    const result = await runAgentLoop(
+      PROVIDER,
+      'm',
+      messages,
+      readTool,
+      validators({}),
+    )
 
     expect(readTool).toHaveBeenCalledWith('get_graph_snapshot', {})
     expect(llmChatMock).toHaveBeenCalledTimes(3) // 1 次改写判定（读取请求非改动）+ 读轮回问

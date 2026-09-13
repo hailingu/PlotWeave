@@ -9,28 +9,43 @@ import type { BeatFlowNode } from './types'
  * 兑现状态（§3.5）：未被场景承载 = 待兑现虚线态；兑现后 ✓ 徽标（派生，不落字段）。
  * 名称双击内联改名；⚙️ 打开设置面板（§4.3，编辑即命令）。
  */
-export default function BeatNode({ id, data, selected }: NodeProps<BeatFlowNode>) {
-  const { openSettingsId, toggleSettings, patchNode, beatFulfillmentOf } = useNodeEdit()
+export default function BeatNode({
+  id,
+  data,
+  selected,
+}: NodeProps<BeatFlowNode>) {
+  const { openSettingsId, toggleSettings, patchNode, beatFulfillmentOf } =
+    useNodeEdit()
   const settingsOpen = openSettingsId === id
   const fulfillment = beatFulfillmentOf(id)
   const pending = fulfillment?.status === 'pending'
 
   return (
-    <div className={`pw-beat${selected ? ' pw-on' : ''}${pending ? ' pw-beat-pending' : ''}`}>
+    <div
+      className={`pw-beat${selected ? ' pw-on' : ''}${pending ? ' pw-beat-pending' : ''}`}
+    >
       <span aria-hidden>⚡</span>
       <EditableName
         value={data.name}
         ariaLabel="节奏卡内容"
-        onChange={(name) => patchNode(id, { nodeType: 'beat', patch: { name } })}
+        onChange={(name) =>
+          patchNode(id, { nodeType: 'beat', patch: { name } })
+        }
       />
       <span className="pw-beat-tone">基调：{data.tone}</span>
       {pending ? (
-        <span className="pw-beat-state pending" title="未被场景承载的节拍 = 节奏漏洞">
+        <span
+          className="pw-beat-state pending"
+          title="未被场景承载的节拍 = 节奏漏洞"
+        >
           待兑现
         </span>
       ) : (
         fulfillment?.status === 'fulfilled' && (
-          <span className="pw-beat-state ok" title={`兑现于 ${fulfillment.sceneLabel ?? ''}`}>
+          <span
+            className="pw-beat-state ok"
+            title={`兑现于 ${fulfillment.sceneLabel ?? ''}`}
+          >
             ✓
           </span>
         )

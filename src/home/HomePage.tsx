@@ -26,7 +26,10 @@ interface HomePageProps {
 /** 项目菜单的关闭语义（§3.2；自 HomePage 拆出以守祖父化组件行数）：
  * Esc 或点击菜单外任意处关闭；菜单内容元素（.editor-ctx 内）上的按下
  * 不关闭。 */
-function useMenuDismiss(menu: { x: number; y: number; id: string } | null, close: () => void) {
+function useMenuDismiss(
+  menu: { x: number; y: number; id: string } | null,
+  close: () => void,
+) {
   useEffect(() => {
     if (!menu) return
     const onDown = (e: PointerEvent) => {
@@ -62,7 +65,9 @@ export default function HomePage({
   onDeleteProject,
 }: HomePageProps) {
   const [query, setQuery] = useState('')
-  const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null)
+  const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(
+    null,
+  )
   const [renaming, setRenaming] = useState<ProjectSummary | null>(null)
   const [deleting, setDeleting] = useState<ProjectSummary | null>(null)
   const visible = useMemo(
@@ -131,7 +136,12 @@ export default function HomePage({
           ) : (
             <div className="home-grid">
               {visible.map((p) => (
-                <ProjectCard key={p.id} project={p} onOpen={onOpenProject} onMenu={openMenu} />
+                <ProjectCard
+                  key={p.id}
+                  project={p}
+                  onOpen={onOpenProject}
+                  onMenu={openMenu}
+                />
               ))}
               <button
                 type="button"
@@ -149,7 +159,10 @@ export default function HomePage({
       {menu && menuProject && (
         <div
           className="editor-ctx"
-          style={{ left: Math.min(menu.x, window.innerWidth - 150), top: menu.y }}
+          style={{
+            left: Math.min(menu.x, window.innerWidth - 150),
+            top: menu.y,
+          }}
           role="menu"
           aria-label="项目菜单"
         >

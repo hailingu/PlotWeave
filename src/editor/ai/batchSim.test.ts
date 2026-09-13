@@ -27,7 +27,12 @@ function dialogueNode(id: string): CanvasNode {
     id,
     type: 'dialogue',
     position: { x: 0, y: 0 },
-    data: { name: '对质', lines: [{ id: 'line-1', kind: 'line', speaker: 'ch-1', text: '你来了。' }] },
+    data: {
+      name: '对质',
+      lines: [
+        { id: 'line-1', kind: 'line', speaker: 'ch-1', text: '你来了。' },
+      ],
+    },
   } as CanvasNode
 }
 
@@ -36,12 +41,22 @@ function branchNode(id: string): BranchFlowNode {
     id,
     type: 'branch',
     position: { x: 0, y: 0 },
-    data: { prompt: '去哪？', options: [{ id: 'o-l', label: '左' }, { id: 'o-r', label: '右' }] },
+    data: {
+      prompt: '去哪？',
+      options: [
+        { id: 'o-l', label: '左' },
+        { id: 'o-r', label: '右' },
+      ],
+    },
   }
 }
 
 /** 可变状态 + 注入 ops：模拟 EditorView 的真实 setState 行为。 */
-function mkOps(initialNodes: CanvasNode[], initialEdges: Edge[] = [], initialSettings: ProjectSettings = EMPTY_SETTINGS) {
+function mkOps(
+  initialNodes: CanvasNode[],
+  initialEdges: Edge[] = [],
+  initialSettings: ProjectSettings = EMPTY_SETTINGS,
+) {
   const state = {
     nodes: [...initialNodes],
     edges: [...initialEdges],
@@ -58,7 +73,9 @@ function mkOps(initialNodes: CanvasNode[], initialEdges: Edge[] = [], initialSet
         data: { ...(opts?.data ?? {}) },
       }) as CanvasNode,
     applyDataPatch: (id, cmd) => {
-      state.nodes = state.nodes.map((n) => (n.id === id ? mergeNodeData(n, cmd.patch) : n))
+      state.nodes = state.nodes.map((n) =>
+        n.id === id ? mergeNodeData(n, cmd.patch) : n,
+      )
     },
     setNodes: (up) => {
       state.nodes = up(state.nodes)
@@ -78,8 +95,17 @@ describe('simulateBatch · create_node（虚拟终态建链 + 前进/回退闭�
     const { state, ops } = mkOps([sceneNode('s1')])
     const { forward, backward } = simulateBatch(
       [
-        { op: 'create_node', nodeType: 'scene', ref: 'new-scene', data: { name: '新场景' } },
-        { op: 'update_node', nodeId: 'new-scene', patch: { nodeType: 'scene', patch: { synopsis: '改写' } } },
+        {
+          op: 'create_node',
+          nodeType: 'scene',
+          ref: 'new-scene',
+          data: { name: '新场景' },
+        },
+        {
+          op: 'update_node',
+          nodeId: 'new-scene',
+          patch: { nodeType: 'scene', patch: { synopsis: '改写' } },
+        },
       ],
       ops,
       state.nodes,
@@ -98,7 +124,16 @@ describe('simulateBatch · create_node（虚拟终态建链 + 前进/回退闭�
   it('update_node 捕获变更前字段值，undo 精确还原（未写字段不受影响）', () => {
     const { state, ops } = mkOps([sceneNode('s1', 3)])
     const { forward, backward } = simulateBatch(
-      [{ op: 'update_node', nodeId: 's1', patch: { nodeType: 'scene', patch: { name: '改名', interior: false } } }],
+      [
+        {
+          op: 'update_node',
+          nodeId: 's1',
+          patch: {
+            nodeType: 'scene',
+            patch: { name: '改名', interior: false },
+          },
+        },
+      ],
       ops,
       state.nodes,
       state.edges,
@@ -115,7 +150,13 @@ describe('simulateBatch · create_node（虚拟终态建链 + 前进/回退闭�
   it('update_node 目标不存在时不产生任何闭包', () => {
     const { state, ops } = mkOps([])
     const { forward, backward } = simulateBatch(
-      [{ op: 'update_node', nodeId: 'ghost', patch: { nodeType: 'scene', patch: { name: 'x' } } }],
+      [
+        {
+          op: 'update_node',
+          nodeId: 'ghost',
+          patch: { nodeType: 'scene', patch: { name: 'x' } },
+        },
+      ],
       ops,
       state.nodes,
       state.edges,
@@ -131,7 +172,10 @@ describe('simulateBatch · delete_node（连带边清理 + 整体还原）', () 
       { id: 'e1', source: 's1', target: 's2' },
       { id: 'e2', source: 's2', target: 's3' },
     ]
-    const { state, ops } = mkOps([sceneNode('s1'), sceneNode('s2'), sceneNode('s3')], edges)
+    const { state, ops } = mkOps(
+      [sceneNode('s1'), sceneNode('s2'), sceneNode('s3')],
+      edges,
+    )
     const { forward, backward } = simulateBatch(
       [{ op: 'delete_node', nodeId: 's2' }],
       ops,
@@ -171,7 +215,11 @@ describe('simulateBatch · connect_edge（§4.4 三态边形态）', () => {
     )
     forward.forEach((f) => f())
     expect(state.edges).toHaveLength(1)
-    expect(state.edges[0]).toMatchObject({ source: 's1', target: 's2', className: 'pw-edge-sequence' })
+    expect(state.edges[0]).toMatchObject({
+      source: 's1',
+      target: 's2',
+      className: 'pw-edge-sequence',
+    })
   })
 
   it('attach：索引卡底端口下挂分镜（sourceHandle = shots）', () => {
@@ -179,7 +227,12 @@ describe('simulateBatch · connect_edge（§4.4 三态边形态）', () => {
     const { forward } = simulateBatch(
       [
         { op: 'create_node', nodeType: 'shot', ref: 'shot-x', data: {} },
-        { op: 'connect_edge', sourceId: 's1', targetId: 'shot-x', edgeKind: 'attach' },
+        {
+          op: 'connect_edge',
+          sourceId: 's1',
+          targetId: 'shot-x',
+          edgeKind: 'attach',
+        },
       ],
       ops,
       state.nodes,
@@ -199,7 +252,15 @@ describe('simulateBatch · connect_edge（§4.4 三态边形态）', () => {
   it('branch：选项出口边带 type=branch；胶囊文案由 BranchEdge 实时派生，不落 data 镜像', () => {
     const { state, ops } = mkOps([branchNode('b1'), sceneNode('s1')])
     const { forward } = simulateBatch(
-      [{ op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch', optionIndex: 1 }],
+      [
+        {
+          op: 'connect_edge',
+          sourceId: 'b1',
+          targetId: 's1',
+          edgeKind: 'branch',
+          optionIndex: 1,
+        },
+      ],
       ops,
       state.nodes,
       state.edges,
@@ -213,37 +274,70 @@ describe('simulateBatch · connect_edge（§4.4 三态边形态）', () => {
   })
 
   it('branch 未给 optionIndex 时默认 0；非分支源节点回退首选项端口', () => {
-    const { state, ops } = mkOps([branchNode('b1'), sceneNode('s1'), sceneNode('s2')])
+    const { state, ops } = mkOps([
+      branchNode('b1'),
+      sceneNode('s1'),
+      sceneNode('s2'),
+    ])
     const { forward } = simulateBatch(
       [
-        { op: 'connect_edge', sourceId: 'b1', targetId: 's1', edgeKind: 'branch' },
-        { op: 'connect_edge', sourceId: 's2', targetId: 's1', edgeKind: 'branch', optionIndex: 0 },
+        {
+          op: 'connect_edge',
+          sourceId: 'b1',
+          targetId: 's1',
+          edgeKind: 'branch',
+        },
+        {
+          op: 'connect_edge',
+          sourceId: 's2',
+          targetId: 's1',
+          edgeKind: 'branch',
+          optionIndex: 0,
+        },
       ],
       ops,
       state.nodes,
       state.edges,
     )
     forward.forEach((f) => f())
-    expect(state.edges[0]).toMatchObject({ sourceHandle: 'option-o-l', type: 'branch' })
+    expect(state.edges[0]).toMatchObject({
+      sourceHandle: 'option-o-l',
+      type: 'branch',
+    })
     expect(state.edges[0].data).toBeUndefined()
     // 非分支源：端口回退下标句柄，仍不落镜像
-    expect(state.edges[1]).toMatchObject({ sourceHandle: 'option-0', type: 'branch' })
+    expect(state.edges[1]).toMatchObject({
+      sourceHandle: 'option-0',
+      type: 'branch',
+    })
     expect(state.edges[1].data).toBeUndefined()
   })
 
   it('update_node 替换分支选项删掉已连线选项：连带删边，undo 一并恢复（§8.2.2）', () => {
-    const { state, ops } = mkOps([branchNode('b1'), sceneNode('s1')], [
-      {
-        id: 'e1',
-        source: 'b1',
-        sourceHandle: 'option-o-l',
-        target: 's1',
-        type: 'branch',
-        data: { optionLabel: '左' },
-      },
-    ])
+    const { state, ops } = mkOps(
+      [branchNode('b1'), sceneNode('s1')],
+      [
+        {
+          id: 'e1',
+          source: 'b1',
+          sourceHandle: 'option-o-l',
+          target: 's1',
+          type: 'branch',
+          data: { optionLabel: '左' },
+        },
+      ],
+    )
     const { forward, backward } = simulateBatch(
-      [{ op: 'update_node', nodeId: 'b1', patch: { nodeType: 'branch', patch: { options: [{ id: 'o-r', label: '右' }] } } }],
+      [
+        {
+          op: 'update_node',
+          nodeId: 'b1',
+          patch: {
+            nodeType: 'branch',
+            patch: { options: [{ id: 'o-r', label: '右' }] },
+          },
+        },
+      ],
       ops,
       state.nodes,
       state.edges,
@@ -276,7 +370,9 @@ describe('simulateBatch · connect_edge（§4.4 三态边形态）', () => {
 
 describe('simulateBatch · disconnect_edge', () => {
   it('forward 拆除匹配边；backward 重加；无匹配边时不产生闭包', () => {
-    const edges: Edge[] = [{ id: 'e1', source: 's1', target: 's2', className: 'pw-edge-sequence' }]
+    const edges: Edge[] = [
+      { id: 'e1', source: 's1', target: 's2', className: 'pw-edge-sequence' },
+    ]
     const { state, ops } = mkOps([sceneNode('s1'), sceneNode('s2')], edges)
 
     const miss = simulateBatch(
@@ -307,7 +403,10 @@ describe('simulateBatch · disconnect_edge', () => {
       { id: 'e2', source: 'b1', target: 's1', sourceHandle: 'option-o-r' },
       { id: 'e3', source: 'b1', target: 's2' },
     ]
-    const { state, ops } = mkOps([sceneNode('s1'), sceneNode('s2'), branchNode('b1')], edges)
+    const { state, ops } = mkOps(
+      [sceneNode('s1'), sceneNode('s2'), branchNode('b1')],
+      edges,
+    )
 
     const { forward, backward } = simulateBatch(
       [{ op: 'disconnect_edge', sourceId: 'b1', targetId: 's1' }],
@@ -326,12 +425,26 @@ describe('simulateBatch · 混合批次', () => {
   it('backward 反序回放 = 整批回滚到初始态', () => {
     const { state, ops } = mkOps([sceneNode('s1'), branchNode('b1')])
     const batch: ValidatedCommand[] = [
-      { op: 'create_node', nodeType: 'scene', ref: 'ns', data: { name: '新场' } },
-      { op: 'update_node', nodeId: 's1', patch: { nodeType: 'scene', patch: { synopsis: '改了' } } },
+      {
+        op: 'create_node',
+        nodeType: 'scene',
+        ref: 'ns',
+        data: { name: '新场' },
+      },
+      {
+        op: 'update_node',
+        nodeId: 's1',
+        patch: { nodeType: 'scene', patch: { synopsis: '改了' } },
+      },
       { op: 'connect_edge', sourceId: 's1', targetId: 'ns' },
       { op: 'delete_node', nodeId: 'b1' },
     ]
-    const { forward, backward } = simulateBatch(batch, ops, state.nodes, state.edges)
+    const { forward, backward } = simulateBatch(
+      batch,
+      ops,
+      state.nodes,
+      state.edges,
+    )
     forward.forEach((f) => f())
     expect(state.nodes).toHaveLength(2)
     expect(state.edges).toHaveLength(1)
@@ -347,29 +460,49 @@ describe('simulateBatch · 混合批次', () => {
 describe('simulateBatch · 新建实体并按 ref 绑定（执行期解析真实 id，undo/redo 往返，issue 44）', () => {
   it('新建角色/地点并按 ref 绑定场景与对白：落地真实 id，无临时 ref 残留；undo 整体回滚', () => {
     const ch = { id: 'ch-keep', name: '陈默', gradient: 'g0' }
-    const { state, ops } = mkOps(
-      [sceneNode('s1'), dialogueNode('d1')],
-      [],
-      { characters: [ch], locations: [] },
-    )
+    const { state, ops } = mkOps([sceneNode('s1'), dialogueNode('d1')], [], {
+      characters: [ch],
+      locations: [],
+    })
     const batch: ValidatedCommand[] = [
-      { op: 'upsert_character', ref: 'hero', fields: { name: '林一', bio: '侦探' } } as ValidatedCommand,
-      { op: 'upsert_location', ref: 'home', fields: { name: '公寓' } } as ValidatedCommand,
+      {
+        op: 'upsert_character',
+        ref: 'hero',
+        fields: { name: '林一', bio: '侦探' },
+      } as ValidatedCommand,
+      {
+        op: 'upsert_location',
+        ref: 'home',
+        fields: { name: '公寓' },
+      } as ValidatedCommand,
       {
         op: 'update_node',
         nodeId: 's1',
-        patch: { nodeType: 'scene', patch: { characterIds: ['hero', 'ch-keep'], locationId: 'home' } },
+        patch: {
+          nodeType: 'scene',
+          patch: { characterIds: ['hero', 'ch-keep'], locationId: 'home' },
+        },
       },
       {
         op: 'update_node',
         nodeId: 'd1',
         patch: {
           nodeType: 'dialogue',
-          patch: { lines: [{ id: 'line-1', kind: 'line', speaker: 'hero', text: '你来了。' }] },
+          patch: {
+            lines: [
+              { id: 'line-1', kind: 'line', speaker: 'hero', text: '你来了。' },
+            ],
+          },
         },
       },
     ]
-    const { forward, backward } = simulateBatch(batch, ops, state.nodes, state.edges, state.settings)
+    const { forward, backward } = simulateBatch(
+      batch,
+      ops,
+      state.nodes,
+      state.edges,
+      state.settings,
+    )
     forward.forEach((f) => f())
 
     // 实体以应用分配的真实 id 落地（ch-/loc- 前缀），绑定处已解析、无 ref 残留
@@ -380,8 +513,13 @@ describe('simulateBatch · 新建实体并按 ref 绑定（执行期解析真实
     expect(state.settings.locations[0].id).toMatch(/^loc-/)
     expect(state.settings.locations[0].name).toBe('公寓')
     const s1 = state.nodes.find((n) => n.id === 's1')!
-    expect(s1.type === 'scene' && s1.data.characterIds).toEqual([hero.id, 'ch-keep'])
-    expect(s1.type === 'scene' && s1.data.locationId).toBe(state.settings.locations[0].id)
+    expect(s1.type === 'scene' && s1.data.characterIds).toEqual([
+      hero.id,
+      'ch-keep',
+    ])
+    expect(s1.type === 'scene' && s1.data.locationId).toBe(
+      state.settings.locations[0].id,
+    )
     const d1 = state.nodes.find((n) => n.id === 'd1')!
     expect(d1.type === 'dialogue' && d1.data.lines[0].speaker).toBe(hero.id)
 
@@ -395,7 +533,9 @@ describe('simulateBatch · 新建实体并按 ref 绑定（执行期解析真实
 
     // redo 复用同一实体对象：撤销-重做往返不改变实体 id
     forward.forEach((f) => f())
-    expect(state.settings.characters.find((c) => c.name === '林一')?.id).toBe(hero.id)
+    expect(state.settings.characters.find((c) => c.name === '林一')?.id).toBe(
+      hero.id,
+    )
   })
 })
 
@@ -404,17 +544,34 @@ describe('simulateBatch · 修改既有实体与同批先建后改（issue 44）
     const ch = { id: 'ch-1', name: '陈默', gradient: 'g1', bio: '旧小传' }
     const loc = { id: 'loc-1', name: '茶馆', note: '老城区' }
     const props = [{ id: 'prop-1', name: '怀表' }]
-    const documents = [{ id: 'doc-1', title: '小传', body: '……', relatedIds: [] }]
-    const { state, ops } = mkOps(
-      [],
-      [],
-      { characters: [ch], locations: [loc], props, documents },
-    )
-    const batch: ValidatedCommand[] = [
-      { op: 'upsert_character', entityId: 'ch-1', fields: { bio: '新小传' } } as ValidatedCommand,
-      { op: 'upsert_location', entityId: 'loc-1', fields: { note: '拆迁前' } } as ValidatedCommand,
+    const documents = [
+      { id: 'doc-1', title: '小传', body: '……', relatedIds: [] },
     ]
-    const { forward, backward } = simulateBatch(batch, ops, state.nodes, state.edges, state.settings)
+    const { state, ops } = mkOps([], [], {
+      characters: [ch],
+      locations: [loc],
+      props,
+      documents,
+    })
+    const batch: ValidatedCommand[] = [
+      {
+        op: 'upsert_character',
+        entityId: 'ch-1',
+        fields: { bio: '新小传' },
+      } as ValidatedCommand,
+      {
+        op: 'upsert_location',
+        entityId: 'loc-1',
+        fields: { note: '拆迁前' },
+      } as ValidatedCommand,
+    ]
+    const { forward, backward } = simulateBatch(
+      batch,
+      ops,
+      state.nodes,
+      state.edges,
+      state.settings,
+    )
     forward.forEach((f) => f())
     const chAfter = state.settings.characters[0]
     expect(chAfter.id).toBe('ch-1')
@@ -434,10 +591,24 @@ describe('simulateBatch · 修改既有实体与同批先建后改（issue 44）
   it('同批先建后改（entityId 用 ref）：第二次修改不覆盖第一次的结果', () => {
     const { state, ops } = mkOps([], [])
     const batch: ValidatedCommand[] = [
-      { op: 'upsert_character', ref: 'hero', fields: { name: '林一' } } as ValidatedCommand,
-      { op: 'upsert_character', entityId: 'hero', fields: { bio: '侦探' } } as ValidatedCommand,
+      {
+        op: 'upsert_character',
+        ref: 'hero',
+        fields: { name: '林一' },
+      } as ValidatedCommand,
+      {
+        op: 'upsert_character',
+        entityId: 'hero',
+        fields: { bio: '侦探' },
+      } as ValidatedCommand,
     ]
-    const { forward, backward } = simulateBatch(batch, ops, state.nodes, state.edges, state.settings)
+    const { forward, backward } = simulateBatch(
+      batch,
+      ops,
+      state.nodes,
+      state.edges,
+      state.settings,
+    )
     forward.forEach((f) => f())
     const hero = state.settings.characters[0]
     expect(hero.name).toBe('林一')
@@ -451,12 +622,30 @@ describe('simulateBatch · 修改既有实体与同批先建后改（issue 44）
 describe('simulateBatch · 实体 ref 别名的绑定解析（update patch 与 create 载荷同口径，issue 44）', () => {
   it('update 挂 ref 别名既有实体后，绑定命令经别名解析', () => {
     const ch = { id: 'ch-1', name: '陈默', gradient: 'g1' }
-    const { state, ops } = mkOps([sceneNode('s1')], [], { characters: [ch], locations: [] })
+    const { state, ops } = mkOps([sceneNode('s1')], [], {
+      characters: [ch],
+      locations: [],
+    })
     const batch: ValidatedCommand[] = [
-      { op: 'upsert_character', entityId: 'ch-1', ref: 'hero', fields: { bio: '补' } } as ValidatedCommand,
-      { op: 'update_node', nodeId: 's1', patch: { nodeType: 'scene', patch: { characterIds: ['hero'] } } },
+      {
+        op: 'upsert_character',
+        entityId: 'ch-1',
+        ref: 'hero',
+        fields: { bio: '补' },
+      } as ValidatedCommand,
+      {
+        op: 'update_node',
+        nodeId: 's1',
+        patch: { nodeType: 'scene', patch: { characterIds: ['hero'] } },
+      },
     ]
-    const { forward } = simulateBatch(batch, ops, state.nodes, state.edges, state.settings)
+    const { forward } = simulateBatch(
+      batch,
+      ops,
+      state.nodes,
+      state.edges,
+      state.settings,
+    )
     forward.forEach((f) => f())
     const s1 = state.nodes[0]
     expect(s1.type === 'scene' && s1.data.characterIds).toEqual(['ch-1'])
@@ -465,8 +654,16 @@ describe('simulateBatch · 实体 ref 别名的绑定解析（update patch 与 c
   it('create_node 载荷里的实体 ref 同样解析为真实 id（与 update patch 同一口径）', () => {
     const { state, ops } = mkOps([])
     const batch: ValidatedCommand[] = [
-      { op: 'upsert_character', ref: 'hero', fields: { name: '林一', bio: '侦探' } } as ValidatedCommand,
-      { op: 'upsert_location', ref: 'home', fields: { name: '公寓' } } as ValidatedCommand,
+      {
+        op: 'upsert_character',
+        ref: 'hero',
+        fields: { name: '林一', bio: '侦探' },
+      } as ValidatedCommand,
+      {
+        op: 'upsert_location',
+        ref: 'home',
+        fields: { name: '公寓' },
+      } as ValidatedCommand,
       {
         op: 'create_node',
         nodeType: 'scene',
@@ -477,11 +674,19 @@ describe('simulateBatch · 实体 ref 别名的绑定解析（update patch 与 c
         nodeType: 'dialogue',
         data: {
           name: '新对白',
-          lines: [{ id: 'line-9', kind: 'line', speaker: 'hero', text: '在。' }],
+          lines: [
+            { id: 'line-9', kind: 'line', speaker: 'hero', text: '在。' },
+          ],
         },
       },
     ]
-    const { forward, backward } = simulateBatch(batch, ops, state.nodes, state.edges, state.settings)
+    const { forward, backward } = simulateBatch(
+      batch,
+      ops,
+      state.nodes,
+      state.edges,
+      state.settings,
+    )
     forward.forEach((f) => f())
 
     const hero = state.settings.characters.find((c) => c.name === '林一')!

@@ -44,7 +44,8 @@ function toSummary(m: {
 async function seedFirstRun(): Promise<boolean> {
   const { invoke } = await import('@tauri-apps/api/core')
   const notFound = (e: unknown) =>
-    (typeof e === 'string' || e instanceof Error) && String(e).includes('项目不存在')
+    (typeof e === 'string' || e instanceof Error) &&
+    String(e).includes('项目不存在')
   let seeded = false
   for (const seed of seedProjects()) {
     try {
@@ -52,7 +53,11 @@ async function seedFirstRun(): Promise<boolean> {
       console.warn('[projectStore] 播种跳过：项目已存在', seed.meta.id)
     } catch (err) {
       if (!notFound(err)) {
-        console.warn('[projectStore] 播种跳过：项目文件不可读，不覆盖可能可恢复的内容', seed.meta.id, err)
+        console.warn(
+          '[projectStore] 播种跳过：项目文件不可读，不覆盖可能可恢复的内容',
+          seed.meta.id,
+          err,
+        )
         continue
       }
       await tauriSave(seed.meta.id, seed.doc)
@@ -82,13 +87,20 @@ async function upgradeKnownSamples(metas: { id: string }[]): Promise<boolean> {
         id: meta.id,
         assets: (file as { assets?: unknown }).assets ?? {},
       })
-      const { content, migrated, repaired } = parseProject(file, { projectId: meta.id, invalidAssetKeys })
+      const { content, migrated, repaired } = parseProject(file, {
+        projectId: meta.id,
+        invalidAssetKeys,
+      })
       if (migrated || repaired) {
         await tauriSave(meta.id, content)
         repairedAny = true
       }
     } catch (err) {
-      console.warn('[projectStore] 示例升级检查失败，保留该示例现状', meta.id, err)
+      console.warn(
+        '[projectStore] 示例升级检查失败，保留该示例现状',
+        meta.id,
+        err,
+      )
     }
   }
   return repairedAny
@@ -100,7 +112,13 @@ export async function tauriList(): Promise<ProjectSummary[]> {
   // 首页滞留旧名旧序——重列直到无回写（回写后的净本不再触发写，循环有界）
   for (;;) {
     const metas = await invoke<
-      { id: string; name: string; updated_at: string; scene_count: number; ending_count: number }[]
+      {
+        id: string
+        name: string
+        updated_at: string
+        scene_count: number
+        ending_count: number
+      }[]
     >('list_projects')
     if (metas.length === 0) {
       if (!(await seedFirstRun())) return metas.map(toSummary)
@@ -114,10 +132,13 @@ export async function tauriList(): Promise<ProjectSummary[]> {
 export async function tauriCreate(name: string): Promise<ProjectSummary> {
   const { invoke } = await import('@tauri-apps/api/core')
   return toSummary(
-    await invoke<{ id: string; name: string; updated_at: string; scene_count: number; ending_count: number }>(
-      'create_project',
-      { name },
-    ),
+    await invoke<{
+      id: string
+      name: string
+      updated_at: string
+      scene_count: number
+      ending_count: number
+    }>('create_project', { name }),
   )
 }
 
@@ -167,7 +188,8 @@ export async function tauriLoad(id: string): Promise<ProjectContent> {
     if (saveChains.get(id) !== chainBefore) continue
     // §11 归一化管线：迁移 + 孤儿边隔离 + 悬空引用标记；
     // projectId 为路径给定的受信 id，供 §11.1 元数据修复覆盖 project.id
-    const { content, migrated, repaired, warnings, reissuedAssetAliases } = parseProject(file, { projectId: id, invalidAssetKeys })
+    const { content, migrated, repaired, warnings, reissuedAssetAliases } =
+      parseProject(file, { projectId: id, invalidAssetKeys })
     for (const w of warnings) console.warn(`[projectStore] ${w}`)
     await registerAssetAliases(id, reissuedAssetAliases)
     // 别名登记的异步 IPC 期间可能又有新保存排队（如编辑器卸载冲刷）：
@@ -184,7 +206,10 @@ export async function tauriLoad(id: string): Promise<ProjectContent> {
     // 重试登记接管——内存已交付修复结果，磁盘保持旧内容，下次打开会重新修复
     if (migrated || repaired) {
       await enqueueSave(id, content).catch((err: unknown) => {
-        console.error('[projectStore] 迁移/修复回写失败，已登记后台重试（下次打开将重新修复）', err)
+        console.error(
+          '[projectStore] 迁移/修复回写失败，已登记后台重试（下次打开将重新修复）',
+          err,
+        )
       })
     }
     return content
@@ -194,14 +219,21 @@ export async function tauriLoad(id: string): Promise<ProjectContent> {
 /** 登记加载归一化的资产空白键重发别名（issue #31 评审修复 P2-3）：修复
  * 回写按防抖节律才落盘，期间重发 id 的媒体经盘上条目解析；单条登记失败
  * 只诊断不阻断加载（下次打开重新归一化重新登记）。 */
-async function registerAssetAliases(id: string, aliases: [string, string][]): Promise<void> {
+async function registerAssetAliases(
+  id: string,
+  aliases: [string, string][],
+): Promise<void> {
   if (aliases.length === 0) return
   const { invoke } = await import('@tauri-apps/api/core')
   for (const [blankKey, freshId] of aliases) {
     try {
       await invoke('register_project_asset_alias', { id, blankKey, freshId })
     } catch (err) {
-      console.warn('[projectStore] 资产别名登记失败（媒体在修复回写落盘前暂不可见）', freshId, err)
+      console.warn(
+        '[projectStore] 资产别名登记失败（媒体在修复回写落盘前暂不可见）',
+        freshId,
+        err,
+      )
     }
   }
 }

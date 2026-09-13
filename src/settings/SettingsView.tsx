@@ -19,8 +19,10 @@ function defaultModelHint(
   optionCount: number,
   chatModel: { provider: ProviderConfig; model: string } | null,
 ): string {
-  if (optionCount === 0) return '暂无可用模型：请启用 provider、配置 API key 并添加模型 id。'
-  if (chatModel) return `当前对话走 ${chatModel.provider.label} · ${chatModel.model}。`
+  if (optionCount === 0)
+    return '暂无可用模型：请启用 provider、配置 API key 并添加模型 id。'
+  if (chatModel)
+    return `当前对话走 ${chatModel.provider.label} · ${chatModel.model}。`
   return '尚未选择默认模型，AI 面板将显示引导。'
 }
 
@@ -34,17 +36,26 @@ interface DefaultModelsSectionProps {
 
 /** 默认模型分段（§8.2）：AI 对话与图像生成（图片节点默认，§13）的默认
  * 模型下拉，候选为三层过滤后的可用组合；未选时 AI 面板显示引导。 */
-function DefaultModelsSection({ settings, update, chatOptions, chatModel }: DefaultModelsSectionProps) {
+function DefaultModelsSection({
+  settings,
+  update,
+  chatOptions,
+  chatModel,
+}: DefaultModelsSectionProps) {
   return (
     <>
       <h3 className="settings-sec">默认模型</h3>
       <div className="settings-card">
         <label className="pw-set-field">
-          <span className="pw-set-label">AI 对话模型（三层过滤后的可用组合）</span>
+          <span className="pw-set-label">
+            AI 对话模型（三层过滤后的可用组合）
+          </span>
           <select
             className="pw-set-input"
             value={settings.defaultChat ?? ''}
-            onChange={(e) => update({ ...settings, defaultChat: e.target.value || null })}
+            onChange={(e) =>
+              update({ ...settings, defaultChat: e.target.value || null })
+            }
           >
             <option value="">未选择</option>
             {chatOptions.map((opt) => (
@@ -55,11 +66,15 @@ function DefaultModelsSection({ settings, update, chatOptions, chatModel }: Defa
           </select>
         </label>
         <label className="pw-set-field">
-          <span className="pw-set-label">图像生成模型（图片节点默认，§13）</span>
+          <span className="pw-set-label">
+            图像生成模型（图片节点默认，§13）
+          </span>
           <select
             className="pw-set-input"
             value={settings.defaultImage ?? ''}
-            onChange={(e) => update({ ...settings, defaultImage: e.target.value || null })}
+            onChange={(e) =>
+              update({ ...settings, defaultImage: e.target.value || null })
+            }
           >
             <option value="">未选择</option>
             {chatOptions.map((opt) => (
@@ -70,10 +85,13 @@ function DefaultModelsSection({ settings, update, chatOptions, chatModel }: Defa
           </select>
         </label>
         <p className="settings-hint">
-          图像模型需支持 /images/generations（如 gpt-image-1）；对话模型不能生图——清单是跨用途共享的模型
+          图像模型需支持 /images/generations（如
+          gpt-image-1）；对话模型不能生图——清单是跨用途共享的模型
           id，请按用途选用。
         </p>
-        <p className="settings-hint">{defaultModelHint(chatOptions.length, chatModel)}</p>
+        <p className="settings-hint">
+          {defaultModelHint(chatOptions.length, chatModel)}
+        </p>
       </div>
     </>
   )
@@ -91,7 +109,10 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
   const [keyDraft, setKeyDraft] = useState<Record<string, string>>({})
   const [keyError, setKeyError] = useState<Record<string, string>>({})
   /** 「编辑即保存」状态族（防抖/关闭冲刷/失败重试）拆至 useSettingsSaver。 */
-  const { update, handleClose, closeError, closing } = useSettingsSaver(setSettings, onClose)
+  const { update, handleClose, closeError, closing } = useSettingsSaver(
+    setSettings,
+    onClose,
+  )
 
   useEffect(() => {
     void settingsStore.load().then((s) => {
@@ -102,7 +123,9 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
   const patchProvider = (id: string, patch: Partial<ProviderConfig>) => {
     update({
       ...settings,
-      providers: settings.providers.map((p) => (p.id === id ? { ...p, ...patch } : p)),
+      providers: settings.providers.map((p) =>
+        p.id === id ? { ...p, ...patch } : p,
+      ),
     })
   }
 
@@ -131,7 +154,12 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
   const chatModel = resolveChatModel(settings)
   const chatOptions = settings.providers
     .filter((p) => p.enabled && p.baseUrl && p.models.length > 0)
-    .flatMap((p) => p.models.map((m) => ({ value: `${p.id}:${m}`, label: `${p.label} · ${m}` })))
+    .flatMap((p) =>
+      p.models.map((m) => ({
+        value: `${p.id}:${m}`,
+        label: `${p.label} · ${m}`,
+      })),
+    )
 
   return (
     <div className="settings-root">
@@ -150,7 +178,11 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
         </button>
       </header>
       {closeError !== null && (
-        <p className="settings-key-error" role="alert" style={{ margin: '8px 16px 0' }}>
+        <p
+          className="settings-key-error"
+          role="alert"
+          style={{ margin: '8px 16px 0' }}
+        >
           {closeError}
         </p>
       )}
@@ -174,7 +206,9 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
                   <input
                     type="checkbox"
                     checked={p.enabled}
-                    onChange={(e) => patchProvider(p.id, { enabled: e.target.checked })}
+                    onChange={(e) =>
+                      patchProvider(p.id, { enabled: e.target.checked })
+                    }
                   />
                   {/* 表达式容器显式化文本，避免与前一元素间的空白歧义（S6772）；
                       视觉间距由 .settings-toggle 的 gap 提供 */}
@@ -186,13 +220,17 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
                 <input
                   className="pw-set-input"
                   value={p.baseUrl}
-                  onChange={(e) => patchProvider(p.id, { baseUrl: e.target.value })}
+                  onChange={(e) =>
+                    patchProvider(p.id, { baseUrl: e.target.value })
+                  }
                 />
               </label>
               <div className="pw-set-field">
                 <span className="pw-set-label">API KEY</span>
                 <div className="settings-key-row">
-                  <span className={`settings-key-state${keyStatus[p.id] ? ' ok' : ''}`}>
+                  <span
+                    className={`settings-key-state${keyStatus[p.id] ? ' ok' : ''}`}
+                  >
                     {keyStatus[p.id] ? '已配置' : '未配置'}
                   </span>
                   <input
@@ -201,21 +239,33 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
                     placeholder={keyStatus[p.id] ? '更新 key…' : '粘贴 API key'}
                     value={keyDraft[p.id] ?? ''}
                     aria-label={`${p.label} API key`}
-                    onChange={(e) => setKeyDraft((d) => ({ ...d, [p.id]: e.target.value }))}
+                    onChange={(e) =>
+                      setKeyDraft((d) => ({ ...d, [p.id]: e.target.value }))
+                    }
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') submitKey(p.id)
                     }}
                   />
-                  <button type="button" className="pw-dialog-btn" onClick={() => submitKey(p.id)}>
+                  <button
+                    type="button"
+                    className="pw-dialog-btn"
+                    onClick={() => submitKey(p.id)}
+                  >
                     保存
                   </button>
                   {keyStatus[p.id] && (
-                    <button type="button" className="pw-dialog-btn" onClick={() => removeKey(p.id)}>
+                    <button
+                      type="button"
+                      className="pw-dialog-btn"
+                      onClick={() => removeKey(p.id)}
+                    >
                       清除
                     </button>
                   )}
                 </div>
-                {keyError[p.id] && <span className="settings-key-error">{keyError[p.id]}</span>}
+                {keyError[p.id] && (
+                  <span className="settings-key-error">{keyError[p.id]}</span>
+                )}
               </div>
               <div className="pw-set-field">
                 <span className="pw-set-label">模型（每行一个 id）</span>
@@ -245,7 +295,8 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
             chatModel={chatModel}
           />
           <p className="settings-hint">
-            API key 经 AES-256-GCM 加密后保存在本机设置文件（绑定此电脑），不回显明文；
+            API key 经 AES-256-GCM
+            加密后保存在本机设置文件（绑定此电脑），不回显明文；
             外观跟随系统，不设主题开关。
           </p>
         </section>

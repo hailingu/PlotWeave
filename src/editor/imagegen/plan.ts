@@ -17,7 +17,13 @@ export const IMAGE_SIZES = ['1024x1024', '1024x1536', '1536x1024'] as const
 
 /** 解析结果：可执行的生成计划（ok 分支）或面向用户的失败文案。 */
 export type ImageGenPlanResult =
-  | { ok: true; provider: ProviderConfig; model: string; prompt: string; size: string }
+  | {
+      ok: true
+      provider: ProviderConfig
+      model: string
+      prompt: string
+      size: string
+    }
   | { ok: false; message: string }
 
 /** 按优先级解析节点输入 → 生成计划；prompt 空白也在此拒绝。 */
@@ -31,7 +37,9 @@ export function resolveImageGenPlan(
   }
   const model = data.model !== '' ? data.model : settings.defaultImage
   const resolved =
-    model !== null ? resolveImageModel({ ...settings, defaultImage: model }) : null
+    model !== null
+      ? resolveImageModel({ ...settings, defaultImage: model })
+      : null
   if (model === null || resolved === null) {
     return {
       ok: false,

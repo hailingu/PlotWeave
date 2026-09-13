@@ -34,7 +34,11 @@ function setup(settings: ProjectSettings = BASE) {
     updateLocation: vi.fn(),
   }
   const view = render(
-    <SettingsList settings={settings} actions={actions} onOpenDocument={vi.fn()} />,
+    <SettingsList
+      settings={settings}
+      actions={actions}
+      onOpenDocument={vi.fn()}
+    />,
   )
   return { actions, ...view }
 }
@@ -63,7 +67,9 @@ describe('角色详情表单（issue 95）', () => {
   it('编辑名称与小传后保存：一次 updateCharacter，名称去空白、多行保留，表单关闭', () => {
     const { actions } = setup()
     fireEvent.click(screen.getByLabelText('编辑角色 陈默'))
-    fireEvent.change(screen.getByLabelText('角色名称'), { target: { value: '  陈默2 ' } })
+    fireEvent.change(screen.getByLabelText('角色名称'), {
+      target: { value: '  陈默2 ' },
+    })
     fireEvent.change(screen.getByLabelText('角色小传'), {
       target: { value: '侦探。\n雨夜登场。' },
     })
@@ -79,8 +85,12 @@ describe('角色详情表单（issue 95）', () => {
   it('名称为纯空白时保存禁用且零派发', () => {
     const { actions } = setup()
     fireEvent.click(screen.getByLabelText('编辑角色 陈默'))
-    fireEvent.change(screen.getByLabelText('角色名称'), { target: { value: '   ' } })
-    const save = screen.getByRole('button', { name: '保存' }) as HTMLButtonElement
+    fireEvent.change(screen.getByLabelText('角色名称'), {
+      target: { value: '   ' },
+    })
+    const save = screen.getByRole('button', {
+      name: '保存',
+    }) as HTMLButtonElement
     expect(save.disabled).toBe(true)
     fireEvent.click(save)
     expect(actions.updateCharacter).not.toHaveBeenCalled()
@@ -89,7 +99,9 @@ describe('角色详情表单（issue 95）', () => {
   it('取消关闭表单且不派发；再次展开显示已提交原值', () => {
     const { actions } = setup()
     fireEvent.click(screen.getByLabelText('编辑角色 陈默'))
-    fireEvent.change(screen.getByLabelText('角色小传'), { target: { value: '草稿改动' } })
+    fireEvent.change(screen.getByLabelText('角色小传'), {
+      target: { value: '草稿改动' },
+    })
     fireEvent.click(screen.getByRole('button', { name: '取消' }))
     expect(screen.queryByLabelText('角色名称')).toBeNull()
     expect(actions.updateCharacter).not.toHaveBeenCalled()
@@ -121,7 +133,10 @@ describe('新增自动展开（issue 95）', () => {
       <SettingsList
         settings={{
           ...BASE,
-          characters: [...BASE.characters, { id: 'c2', name: '新角色', gradient: 'g2' }],
+          characters: [
+            ...BASE.characters,
+            { id: 'c2', name: '新角色', gradient: 'g2' },
+          ],
         }}
         actions={view.actions}
         onOpenDocument={vi.fn()}
@@ -139,8 +154,12 @@ describe('地点详情表单（issue 95）', () => {
     fireEvent.click(screen.getByLabelText('编辑地点 茶馆'))
     expect(screen.getByDisplayValue('茶馆')).toBeTruthy()
     expect(screen.getByDisplayValue('老城区。')).toBeTruthy()
-    fireEvent.change(screen.getByLabelText('地点名称'), { target: { value: '老茶馆' } })
-    fireEvent.change(screen.getByLabelText('地点备注'), { target: { value: '雨夜灯笼。' } })
+    fireEvent.change(screen.getByLabelText('地点名称'), {
+      target: { value: '老茶馆' },
+    })
+    fireEvent.change(screen.getByLabelText('地点备注'), {
+      target: { value: '雨夜灯笼。' },
+    })
     fireEvent.click(screen.getByRole('button', { name: '保存' }))
     expect(actions.updateLocation).toHaveBeenCalledTimes(1)
     expect(actions.updateLocation).toHaveBeenCalledWith('l1', {
@@ -174,7 +193,9 @@ describe('跨桶同 id 共存（PR #97 评审：独立 id 空间，数据模型 
 
 describe('并行编辑与按钮焦点（PR #97 评审第二轮）', () => {
   const RENAMED: ProjectSettings = {
-    characters: [{ id: 'c1', name: '陈默大侠', gradient: 'g1', bio: '落魄侦探。' }],
+    characters: [
+      { id: 'c1', name: '陈默大侠', gradient: 'g1', bio: '落魄侦探。' },
+    ],
     locations: BASE.locations,
   }
 
@@ -189,9 +210,19 @@ describe('并行编辑与按钮焦点（PR #97 评审第二轮）', () => {
     fireEvent.blur(renameInput)
     expect(view.actions.renameCharacter).toHaveBeenCalledWith('c1', '陈默大侠')
     // 提交改名后 settings 更新：表单未触碰的名称输入框应显示最新已提交名
-    view.rerender(<SettingsList settings={RENAMED} actions={view.actions} onOpenDocument={vi.fn()} />)
-    expect((screen.getByLabelText('角色名称') as HTMLInputElement).value).toBe('陈默大侠')
-    fireEvent.change(screen.getByLabelText('角色小传'), { target: { value: '新小传' } })
+    view.rerender(
+      <SettingsList
+        settings={RENAMED}
+        actions={view.actions}
+        onOpenDocument={vi.fn()}
+      />,
+    )
+    expect((screen.getByLabelText('角色名称') as HTMLInputElement).value).toBe(
+      '陈默大侠',
+    )
+    fireEvent.change(screen.getByLabelText('角色小传'), {
+      target: { value: '新小传' },
+    })
     fireEvent.click(screen.getByRole('button', { name: '保存' }))
     expect(view.actions.updateCharacter).toHaveBeenCalledWith('c1', {
       name: '陈默大侠',
@@ -202,10 +233,22 @@ describe('并行编辑与按钮焦点（PR #97 评审第二轮）', () => {
   it('已触碰的名称字段保留用户草稿，外部改名不覆盖（快照基线边界）', () => {
     const view = setup()
     fireEvent.click(screen.getByLabelText('编辑角色 陈默'))
-    fireEvent.change(screen.getByLabelText('角色名称'), { target: { value: '草稿名' } })
-    view.rerender(<SettingsList settings={RENAMED} actions={view.actions} onOpenDocument={vi.fn()} />)
-    expect((screen.getByLabelText('角色名称') as HTMLInputElement).value).toBe('草稿名')
-    fireEvent.change(screen.getByLabelText('角色小传'), { target: { value: '新小传' } })
+    fireEvent.change(screen.getByLabelText('角色名称'), {
+      target: { value: '草稿名' },
+    })
+    view.rerender(
+      <SettingsList
+        settings={RENAMED}
+        actions={view.actions}
+        onOpenDocument={vi.fn()}
+      />,
+    )
+    expect((screen.getByLabelText('角色名称') as HTMLInputElement).value).toBe(
+      '草稿名',
+    )
+    fireEvent.change(screen.getByLabelText('角色小传'), {
+      target: { value: '新小传' },
+    })
     fireEvent.click(screen.getByRole('button', { name: '保存' }))
     expect(view.actions.updateCharacter).toHaveBeenCalledWith('c1', {
       name: '草稿名',
@@ -216,7 +259,9 @@ describe('并行编辑与按钮焦点（PR #97 评审第二轮）', () => {
   it('焦点移到表单操作按钮后按 Esc 仍丢弃草稿并关闭表单', () => {
     const { actions } = setup()
     fireEvent.click(screen.getByLabelText('编辑角色 陈默'))
-    fireEvent.change(screen.getByLabelText('角色小传'), { target: { value: '草稿' } })
+    fireEvent.change(screen.getByLabelText('角色小传'), {
+      target: { value: '草稿' },
+    })
     const cancel = screen.getByRole('button', { name: '取消' })
     cancel.focus()
     fireEvent.keyDown(cancel, { key: 'Escape' })

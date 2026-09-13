@@ -1,6 +1,12 @@
 import type { Edge } from '@xyflow/react'
 import { branchOptionIdOf, edgeKindOf } from './graphRules'
-import { beatFulfillmentMap, episodeOfNode, hostSceneMap, sceneLabel, type BeatFulfillment } from './outline'
+import {
+  beatFulfillmentMap,
+  episodeOfNode,
+  hostSceneMap,
+  sceneLabel,
+  type BeatFulfillment,
+} from './outline'
 import type { BranchFlowNode, CanvasNode } from './nodes/types'
 
 /**
@@ -62,7 +68,8 @@ function beatText(n: OutlineNode, f: BeatFulfillment | undefined): string {
   const d = n.data as { name?: unknown; tone?: unknown }
   const tone = text(d.tone)
   const tonePart = tone === '' ? '' : ` · ${tone}`
-  const state = f?.status === 'fulfilled' ? `✓ 兑现于 ${f.sceneLabel ?? ''}` : '待兑现'
+  const state =
+    f?.status === 'fulfilled' ? `✓ 兑现于 ${f.sceneLabel ?? ''}` : '待兑现'
   return `节拍 · ${text(d.name)}${tonePart} · ${state}`
 }
 
@@ -95,7 +102,9 @@ function optionDestination(
 ): string {
   if (targets.length === 0) return '（未连线）'
   return targets
-    .map((e) => destinationLabel(byId, e.target, fulfillment) ?? '（目标已删除）')
+    .map(
+      (e) => destinationLabel(byId, e.target, fulfillment) ?? '（目标已删除）',
+    )
     .join(' / ')
 }
 
@@ -132,11 +141,16 @@ function destinationLabel(
 ): string | null {
   const node = byId.get(id)
   if (!node || !isOutlineNode(node)) return null
-  return node.type === 'scene' ? sceneLabel(node) : rowText(node, fulfillment.get(node.id))
+  return node.type === 'scene'
+    ? sceneLabel(node)
+    : rowText(node, fulfillment.get(node.id))
 }
 
 /** 指定节点范围内的叙事边：只接纳两端均在范围内的 sequence / branch，排除 attach。 */
-function narrativeEdgesWithin(edges: Edge[], member: ReadonlySet<string>): Edge[] {
+function narrativeEdgesWithin(
+  edges: Edge[],
+  member: ReadonlySet<string>,
+): Edge[] {
   return edges.filter(
     (e) =>
       edgeKindOf(e) !== 'attach' &&
@@ -160,16 +174,15 @@ function parentSources(flow: Edge[]): Map<string, Set<string>> {
 /** 组内节点按画布 x 序（并列再按 id）；x 序只做同级确定性排序，
  * 不用于推断分支去向。 */
 function byCanvasX(nodes: OutlineNode[]): OutlineNode[] {
-  return [...nodes].sort((a, b) => a.position.x - b.position.x || (a.id < b.id ? -1 : 1))
+  return [...nodes].sort(
+    (a, b) => a.position.x - b.position.x || (a.id < b.id ? -1 : 1),
+  )
 }
 
 /** 对经边界校验的组内 DAG 排序：所有叙事前驱都已输出的节点才可进入队列，
  * 当前可输出节点按 x/id 排序。每节点只入队一次，汇合点等待各条路径的前驱；
  * 分支问句与选项仍由 nodeRows 成组输出，不把选项之间解释为顺序边。 */
-function routeNodes(
-  flow: Edge[],
-  memberNodes: OutlineNode[],
-): OutlineNode[] {
+function routeNodes(flow: Edge[], memberNodes: OutlineNode[]): OutlineNode[] {
   const parents = parentSources(flow)
   const visits: OutlineNode[] = []
   let ready = byCanvasX(memberNodes.filter((n) => !parents.has(n.id)))
@@ -187,7 +200,11 @@ function routeNodes(
 
 /** 节点行的后缀标注：叙事入口 / 分支汇合；均不适用时为空串。
  * 「入口」只在组内存在叙事入边时标注——整组都无连线时不逐行重复。 */
-function nodeSuffix(node: OutlineNode, inbound: ReadonlySet<string>, mergeCount: number): string {
+function nodeSuffix(
+  node: OutlineNode,
+  inbound: ReadonlySet<string>,
+  mergeCount: number,
+): string {
   const marks: string[] = []
   if (inbound.size > 0 && !inbound.has(node.id)) marks.push('入口')
   if (mergeCount > 1) marks.push(`汇合 ${mergeCount} 条路径`)
@@ -230,18 +247,30 @@ function groupRows(
       incomingPaths.set(e.target, (incomingPaths.get(e.target) ?? 0) + 1)
     }
   }
-  const routes = routeNodes(flow, memberNodes.filter((n) => inFlow.has(n.id)))
+  const routes = routeNodes(
+    flow,
+    memberNodes.filter((n) => inFlow.has(n.id)),
+  )
   const rows: ExportOutlineRow[] = []
   for (const node of routes) {
     const merge = incomingPaths.get(node.id) ?? 0
-    rows.push(...nodeRows(node, edges, byId, fulfillment, nodeSuffix(node, inbound, merge)))
+    rows.push(
+      ...nodeRows(
+        node,
+        edges,
+        byId,
+        fulfillment,
+        nodeSuffix(node, inbound, merge),
+      ),
+    )
   }
   const detached = byCanvasX(memberNodes.filter((n) => !inFlow.has(n.id)))
   // 全组没有任何叙事边端点时按 x 序列出即可，不贴分段标题。
   if (routes.length > 0 && detached.length > 0) {
     rows.push({ kind: 'marker', level: 1, text: '（未接入剧情流）' })
   }
-  for (const n of detached) rows.push(...nodeRows(n, edges, byId, fulfillment, ''))
+  for (const n of detached)
+    rows.push(...nodeRows(n, edges, byId, fulfillment, ''))
   return rows
 }
 
@@ -270,7 +299,13 @@ export function buildExportOutline(
   const groups: ExportOutlineGroup[] = ordered.map((ep) => ({
     episode: ep,
     title: text(episodeTitles[ep]),
-    rows: groupRows(byCanvasX(byEpisode.get(ep)!), edges, byId, fulfillment, inFlow),
+    rows: groupRows(
+      byCanvasX(byEpisode.get(ep)!),
+      edges,
+      byId,
+      fulfillment,
+      inFlow,
+    ),
   }))
   const ungrouped = byEpisode.get(null)
   if (ungrouped) {
@@ -284,12 +319,19 @@ export function buildExportOutline(
 }
 
 /** 导出范围概要：只统计画布实际内容，不从文案反推。 */
-export function summariseExportOutline(nodes: CanvasNode[]): ExportOutlineSummary {
+export function summariseExportOutline(
+  nodes: CanvasNode[],
+): ExportOutlineSummary {
   const narrative = nodes.filter(isOutlineNode)
-  const episodes = [...new Set(narrative.map((n) => (n.data as { episodeNo?: unknown }).episodeNo))]
+  const episodes = [
+    ...new Set(
+      narrative.map((n) => (n.data as { episodeNo?: unknown }).episodeNo),
+    ),
+  ]
     .filter((ep): ep is number => typeof ep === 'number')
     .sort((a, b) => a - b)
-  const count = (type: CanvasNode['type']) => narrative.filter((n) => n.type === type).length
+  const count = (type: CanvasNode['type']) =>
+    narrative.filter((n) => n.type === type).length
   const beats = count('beat')
   const branches = count('branch')
   return {
