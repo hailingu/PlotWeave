@@ -445,26 +445,6 @@ describe('tauriLoad：归一化与迁移回写', () => {
     expect(calls.some((c) => c.cmd === 'save_project')).toBe(true)
   })
 
-  it('graph 容器扩展字段：打开零回写，真实保存原样落盘（issue #100 同版本字段演进）', async () => {
-    const file = modernFile() as Record<string, unknown>
-    ;(file.graph as Record<string, unknown>).futureGraphNote = '构造未来字段'
-    handlers.set('load_project', () => file)
-    handlers.set('save_project', () => undefined)
-    const { projectStore } = await load()
-    const doc = await projectStore.load('p1')
-    // 红：归一化曾把未知 graph 键当结构变化（repaired=true），仅打开就把
-    // 删除落实回写；保留策略下扩展字段不是缺陷，净本零写盘
-    expect(calls.map((c) => c.cmd)).toEqual(['load_project', 'verify_project_assets'])
-    expect(doc.graphExtensions).toEqual({ futureGraphNote: '构造未来字段' })
-    // 用户编辑触发真实保存：扩展字段随序列化原样落盘，不因会话往返丢失
-    await projectStore.save('p1', { ...doc, name: '编辑后' })
-    const saved = calls.find((c) => c.cmd === 'save_project') as unknown as {
-      args: { doc: { graph: Record<string, unknown>; nodes: unknown[] } }
-    }
-    expect(saved.args.doc.graph.futureGraphNote).toBe('构造未来字段')
-    expect(saved.args.doc.graph.nodes).toHaveLength(1)
-  })
-
   it('v1 文档解析为会话文档：spec/meta 拍平回节点 data', async () => {
     handlers.set('load_project', () => modernFile())
     const { projectStore } = await load()
@@ -568,6 +548,28 @@ describe('tauriLoad：归一化与迁移回写', () => {
     expect((verify?.args as { id: string }).id).toBe('p1')
     const sent = (verify?.args as { assets: { byId: unknown } }).assets
     expect((sent as { byId: Record<string, unknown> }).byId['a-1']).toBeDefined()
+  })
+})
+
+describe('tauriLoad：graph 容器扩展字段（issue #100 同版本字段演进）', () => {
+  it('打开零回写，真实保存原样落盘', async () => {
+    const file = modernFile() as Record<string, unknown>
+    ;(file.graph as Record<string, unknown>).futureGraphNote = '构造未来字段'
+    handlers.set('load_project', () => file)
+    handlers.set('save_project', () => undefined)
+    const { projectStore } = await load()
+    const doc = await projectStore.load('p1')
+    // 红：归一化曾把未知 graph 键当结构变化（repaired=true），仅打开就把
+    // 删除落实回写；保留策略下扩展字段不是缺陷，净本零写盘
+    expect(calls.map((c) => c.cmd)).toEqual(['load_project', 'verify_project_assets'])
+    expect(doc.graphExtensions).toEqual({ futureGraphNote: '构造未来字段' })
+    // 用户编辑触发真实保存：扩展字段随序列化原样落盘，不因会话往返丢失
+    await projectStore.save('p1', { ...doc, name: '编辑后' })
+    const saved = calls.find((c) => c.cmd === 'save_project') as unknown as {
+      args: { doc: { graph: Record<string, unknown>; nodes: unknown[] } }
+    }
+    expect(saved.args.doc.graph.futureGraphNote).toBe('构造未来字段')
+    expect(saved.args.doc.graph.nodes).toHaveLength(1)
   })
 })
 

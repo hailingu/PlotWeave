@@ -665,19 +665,20 @@ describe('layout.size / layout.zIndex 往返（§4.1 可选布局字段，§9.3 
   })
 })
 
-describe('同版本文档的容器级扩展字段（issue #100 保留策略，§11 字段演进）', () => {
-  /** 净本 + graph/settings/assets 容器各注入一个构造的未来字段（模拟
-   * 同 schemaVersion 的字段增补）。顶层与 project 层不在此列：Rust 信封
-   * 在 IPC 前剥离（issue #100 修正段），前端仅对透传容器执行保留策略。 */
-  const docWithExtensions = () => {
-    const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as Record<string, unknown>
-    ;(doc.graph as Record<string, unknown>).futureGraphNote = { nested: '构造未来字段' }
-    ;(doc.settings as Record<string, unknown>).futureBucket = {
-      'ch-x': { id: 'ch-x', name: '未来实体' },
-    }
-    ;(doc.assets as Record<string, unknown>).futureIndex = ['a-1']
-    return doc
+/** 净本 + graph/settings/assets 容器各注入一个构造的未来字段（模拟同
+ * schemaVersion 的字段增补）。顶层与 project 层不在此列：Rust 信封在
+ * IPC 前剥离（issue #100 修正段），前端仅对透传容器执行保留策略。 */
+function docWithExtensions(): Record<string, unknown> {
+  const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as Record<string, unknown>
+  ;(doc.graph as Record<string, unknown>).futureGraphNote = { nested: '构造未来字段' }
+  ;(doc.settings as Record<string, unknown>).futureBucket = {
+    'ch-x': { id: 'ch-x', name: '未来实体' },
   }
+  ;(doc.assets as Record<string, unknown>).futureIndex = ['a-1']
+  return doc
+}
+
+describe('同版本文档扩展字段的保留与往返（issue #100，§11 字段演进）', () => {
 
   it('graph/settings/assets 扩展键：归一化原样保留，净本零修复零警告（打开不回写）', () => {
     const round = parseProject(docWithExtensions())
@@ -714,7 +715,9 @@ describe('同版本文档的容器级扩展字段（issue #100 保留策略，§
     expect((again.graph as Record<string, unknown>).futureGraphNote).toEqual({ nested: '构造未来字段' })
     expect((again.graph as Record<string, unknown>).viewport).toBeUndefined()
   })
+})
 
+describe('同版本文档扩展字段的分层边界（issue #100，§11）', () => {
   it('顶层未知键仍按修复处理（repaired=true）：顶层信封是封闭契约，versionless 补盖依赖此语义', () => {
     const doc = { ...serializeProject(mkContent(), 'p-1', NOW), versionless: true }
     const round = parseProject(doc)
