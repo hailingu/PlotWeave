@@ -544,10 +544,11 @@
   opacity: 0.75;
 }
 
-/* branch：线上选项胶囊（品牌渐变，文案与分支选项同源）。 */
+/* branch：线上选项胶囊（文案与分支选项同源；底色经 edge.label.bg，
+ * more 对比度下近实色化，见 tokens.css）。 */
 .pw-edge-label {
   position: absolute;
-  background: var(--brand-gradient);
+  background: var(--edge-label-bg);
   color: var(--on-brand);
   font-size: 10px;
   font-weight: 600;

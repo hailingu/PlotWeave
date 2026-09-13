@@ -12,7 +12,7 @@
  * | 浅/深外观，节点常态 | 渲染节点家族 | 计算色 == 重构前字面量（黄金基准） | 视觉零变化（尺寸/端口/语义不变由本单不触碰 TSX 保证） | 黄金表 |
  * | 悬停/选中/open/端口可连 | 进入交互态 | 各态计算色 == 黄金基准 | 交互态色值不漂移 | 黄金表（令牌映射原交互态字面量） |
  * | 浅 ↔ 深外观切换 | 系统外观切换 | 纸面/石板家族计算色不变 | 家族材质是跨外观恒定内容层（§4.1），不回落窗口色 | 黄金表断言 light == dark |
- * | 增强对比度 more | 开启 prefers-contrast | 家族文本令牌对比度 ≥ 4.5:1，虚线框/徽标边 ≥ 3:1 | 设计原则 2 的对比度承诺在对比度模式下成立 | WCAG 计算 |
+ * | 增强对比度 more | 开启 prefers-contrast | 家族文本令牌对比度 ≥ 4.5:1，品牌底文本（含渐变内部采样）≥ 4.5:1，虚线框/徽标边 ≥ 3:1 | 设计原则 2 的对比度承诺在对比度模式下成立 | WCAG 计算（渐变沿 sRGB 插值采样） |
  * | 令牌接线 | 渲染任意节点 | nodes.css 的 var(--x) 全部可解析 | 无失效 var（静默回落初始值） | 接线测试 |
  * | 结构回归 | 新增节点样式 | nodes.css 颜色类声明零硬编码色值 | 新颜色必须经 tokens.css 进入 | 结构测试 |
  * 未覆盖维度：并发/时序不适用（静态样式表）；端口常态色对比度维持基线
@@ -194,6 +194,7 @@ const CONSTANT_TOKENS: Readonly<Record<string, string>> = {
   '--connection-valid-glow': 'rgba(52, 199, 89, 0.8)',
   '--on-saturated': '#ffffff',
   '--on-brand': '#ffffff',
+  '--edge-label-bg': 'var(--brand-gradient)',
   '--invalid-stripe': 'rgba(142, 142, 147, 0.35)',
   '--shadow-node-paper': '0 12px 32px rgba(0, 0, 0, 0.35)',
   '--shadow-node-note': '0 12px 32px rgba(0, 0, 0, 0.4)',
@@ -344,6 +345,76 @@ function effectiveBg(
   return bg.a >= 1 ? bg : blendOver(bg, surface)
 }
 
+/** 迭代消解 var() 引用链至无引用（深度限 12，防循环）。 */
+function resolveChain(value: string, tokens: Map<string, string>): string {
+  let current = value
+  for (let i = 0; i < 12 && current.includes('var('); i += 1) {
+    current = resolveOnce(current, tokens)
+  }
+  if (current.includes('var(')) throw new Error(`var() 链过深: ${value}`)
+  return current
+}
+
+/** 顶层逗号分割（忽略括号内逗号），用于展开渐变参数列表。 */
+function splitTopLevel(text: string): string[] {
+  const parts: string[] = []
+  let depth = 0
+  let current = ''
+  for (const ch of text) {
+    if (ch === '(') depth += 1
+    else if (ch === ')') depth -= 1
+    if (ch === ',' && depth === 0) {
+      parts.push(current)
+      current = ''
+    } else {
+      current += ch
+    }
+  }
+  parts.push(current)
+  return parts
+}
+
+/**
+ * 解析纯色或 linear-gradient 色标并沿 sRGB 插值均匀采样。纯色返回单点；
+ * 渐变按色标分段插值（浏览器默认 sRGB 插值）。角度/方向首段跳过。
+ */
+function gradientSamples(resolved: string, steps: number): Rgb[] {
+  const value = resolved.trim()
+  const colors: Rgb[] = []
+  const expand = (raw: string): void => {
+    if (raw.toLowerCase().startsWith('linear-gradient')) {
+      const inner = raw.slice(raw.indexOf('(') + 1, raw.lastIndexOf(')'))
+      for (const part of splitTopLevel(inner)) {
+        const trimmed = part.trim()
+        if (/^(-?[\d.]+(deg|turn|rad|grad)|to\s)/i.test(trimmed)) continue
+        const color = parseColor(trimmed)
+        if (!color) throw new Error(`无法解析渐变色标: ${trimmed}`)
+        colors.push(color)
+      }
+      return
+    }
+    const color = parseColor(raw)
+    if (!color) throw new Error(`无法解析背景色: ${raw}`)
+    colors.push(color)
+  }
+  expand(value)
+  if (colors.length <= 1) return colors
+  const samples: Rgb[] = []
+  for (let i = 0; i < steps; i += 1) {
+    const t = (i / (steps - 1)) * (colors.length - 1)
+    const seg = Math.min(Math.floor(t), colors.length - 2)
+    const local = t - seg
+    const a = colors[seg]!
+    const b = colors[seg + 1]!
+    samples.push({
+      r: a.r + (b.r - a.r) * local,
+      g: a.g + (b.g - a.g) * local,
+      b: a.b + (b.b - a.b) * local,
+    })
+  }
+  return samples
+}
+
 /** more 对比度环境（浅/深双外观）：石板族家族恒定，浅外观下同样渲染深色
  * 石板，石板断言必须覆盖两种外观（PR #114 评审 3999996133）。 */
 const LIGHT_MORE: Env = {
@@ -442,12 +513,45 @@ describe('增强对比度：家族文本 ≥ 4.5:1（§2 原则 2）', () => {
   })
 
   it('品牌底文本（连线胶囊/✓ 徽标）在 more 对比度下达标（浅/深外观）', () => {
-    // 胶囊底 = 品牌渐变 var(--accent-alt) → var(--accent)：sRGB 线性插值的
-    // 各通道介于两端之间、亮度随通道单调，验两端即覆盖全渐变（PR #114
-    // 评审 4000077439）；徽标底 = 纯色 accent-alt。
+    // 胶囊底 = 品牌渐变 var(--accent-alt) → var(--accent)（more 下经
+    // --edge-label-bg 收敛为实色 accent）；徽标底 = 纯色 accent-alt。
+    // 注意：sRGB 伽马曲线的凸性使亮度沿插值非单调，两端达标不代表内部
+    // 达标——渐变内部由下方 .pw-edge-label 采样用例覆盖（PR #114 评审
+    // 4000077439 / 4000104125）。
     for (const tokens of [lightMore, darkMore]) {
       expectContrast('--on-brand', '--accent-alt', '--accent-alt', tokens, 4.5)
       expectContrast('--on-brand', '--accent', '--accent', tokens, 4.5)
+    }
+  })
+
+  it('连线胶囊背景全程（含渐变内部）与 on-brand ≥ 4.5:1（浅/深）', () => {
+    // 直接对 nodes.css 中 .pw-edge-label 的实际 background 声明沿渐变
+    // sRGB 插值采样 9 点断言（评审 4000104125：仅验两端会漏掉中段
+    // 3.69–4.08:1 的凹陷；more 下胶囊底经 --edge-label-bg 近实色化）。
+    let label: postcss.Rule | undefined
+    nodesCss.walkRules((rule) => {
+      if (rule.selector === '.pw-edge-label') label = rule
+    })
+    expect(label, '未找到 .pw-edge-label 规则').toBeDefined()
+    const background = label!.nodes.find(
+      (node): node is postcss.Declaration =>
+        node.type === 'decl' && node.prop === 'background',
+    )
+    expect(background, '未找到 background 声明').toBeDefined()
+    for (const [name, tokens] of [
+      ['light', lightMore],
+      ['dark', darkMore],
+    ] as const) {
+      const fg = tokenColor('--on-brand', tokens)!
+      for (const [i, bg] of gradientSamples(
+        resolveChain(background!.value, tokens),
+        9,
+      ).entries()) {
+        expect(
+          contrastRatio(fg, bg),
+          `${name} 背景采样 ${i} = ${contrastRatio(fg, bg).toFixed(2)}:1`,
+        ).toBeGreaterThanOrEqual(4.5)
+      }
     }
   })
 })
