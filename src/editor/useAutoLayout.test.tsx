@@ -65,7 +65,7 @@ function setup(project: EditorProjectContent, overrides: { computeLayout?: typeo
 const positionsOf = (nodes: CanvasNode[]) =>
   new Map(nodes.map((n) => [n.id, { ...n.position }] as const))
 
-describe('useAutoLayout（issue #94）', () => {
+describe('useAutoLayout · 撤销单元与视图适配（issue #94）', () => {
   it('散乱节点一键排布：整图换位、入栈一个撤销单元，撤销恢复全部原位置、重做恢复排布', () => {
     const project = makeProject(
       [sceneNode('s1', 0, 0), sceneNode('s2', 800, 600), sceneNode('s3', -400, 900)],
@@ -90,6 +90,31 @@ describe('useAutoLayout（issue #94）', () => {
     expect(positionsOf(result.current.doc.nodes)).toEqual(after)
   })
 
+  it('排布不改动节点与边的内容、类型与连接端点', () => {
+    const project = makeProject(
+      [sceneNode('s1', 0, 0), sceneNode('s2', 800, 600)],
+      [seqEdge('s1', 's2')],
+    )
+    const { result } = setup(project)
+    const beforeNodes = result.current.doc.nodes
+    const beforeEdges = result.current.doc.edges
+
+    act(() => result.current.layout.onAutoLayout())
+
+    const afterNodes = result.current.doc.nodes
+    expect(afterNodes.map((n) => n.id)).toEqual(beforeNodes.map((n) => n.id))
+    expect(afterNodes.map((n) => n.type)).toEqual(beforeNodes.map((n) => n.type))
+    expect(afterNodes.map((n) => n.data)).toEqual(beforeNodes.map((n) => n.data))
+    const moved = afterNodes.filter((n) => {
+      const b = positionsOf(beforeNodes).get(n.id) as XYPosition
+      return b.x !== n.position.x || b.y !== n.position.y
+    })
+    expect(moved.length).toBeGreaterThan(0)
+    expect(result.current.doc.edges).toEqual(beforeEdges)
+  })
+})
+
+describe('useAutoLayout · 安全边界（issue #94）', () => {
   it('无位置变化时不增加无意义历史记录', () => {
     const { result, pushHistory, fitView, onError } = setup(makeProject([sceneNode('s1', 0, 0)], []))
     act(() => result.current.layout.onAutoLayout())
@@ -126,28 +151,5 @@ describe('useAutoLayout（issue #94）', () => {
     expect(pushHistory).not.toHaveBeenCalled()
     expect(fitView).not.toHaveBeenCalled()
     expect(onError).not.toHaveBeenCalled()
-  })
-
-  it('排布不改动节点与边的内容、类型与连接端点', () => {
-    const project = makeProject(
-      [sceneNode('s1', 0, 0), sceneNode('s2', 800, 600)],
-      [seqEdge('s1', 's2')],
-    )
-    const { result } = setup(project)
-    const beforeNodes = result.current.doc.nodes
-    const beforeEdges = result.current.doc.edges
-
-    act(() => result.current.layout.onAutoLayout())
-
-    const afterNodes = result.current.doc.nodes
-    expect(afterNodes.map((n) => n.id)).toEqual(beforeNodes.map((n) => n.id))
-    expect(afterNodes.map((n) => n.type)).toEqual(beforeNodes.map((n) => n.type))
-    expect(afterNodes.map((n) => n.data)).toEqual(beforeNodes.map((n) => n.data))
-    const moved = afterNodes.filter((n) => {
-      const b = positionsOf(beforeNodes).get(n.id) as XYPosition
-      return b.x !== n.position.x || b.y !== n.position.y
-    })
-    expect(moved.length).toBeGreaterThan(0)
-    expect(result.current.doc.edges).toEqual(beforeEdges)
   })
 })

@@ -63,7 +63,7 @@ function assertNoOverlap(
 
 const SIZE: Size = { width: 340, height: 200 }
 
-describe('computeAutoLayout（issue #94 自动排布）', () => {
+describe('computeAutoLayout · 剧情流分层（issue #94 自动排布）', () => {
   it('空画布返回空结果', () => {
     expect(computeAutoLayout([], [])).toEqual(new Map())
   })
@@ -94,6 +94,21 @@ describe('computeAutoLayout（issue #94 自动排布）', () => {
     assertNoOverlap(nodes, positions, SIZE)
   })
 
+  it('相同图不同数组顺序得到相同布局（确定性）', () => {
+    const nodes = [
+      node('s1', 'scene', 0, 0, SIZE),
+      node('s2', 'scene', 500, 0, SIZE),
+      node('s3', 'scene', 1000, 0, SIZE),
+      node('bt1', 'beat', 2000, 0),
+    ]
+    const edges = [seq('s1', 's2'), seq('s2', 's3')]
+    const a = computeAutoLayout(nodes, edges)
+    const b = computeAutoLayout([...nodes].reverse(), [...edges].reverse())
+    expect(b).toEqual(a)
+  })
+})
+
+describe('computeAutoLayout · 分镜下挂与不连通分区', () => {
   it('分镜卡下挂在宿主场景下方，不与宿主重叠', () => {
     const shotSize: Size = { width: 300, height: 260 }
     const nodes = [
@@ -123,6 +138,19 @@ describe('computeAutoLayout（issue #94 自动排布）', () => {
     assertNoOverlap(nodes, positions, { width: 300, height: 200 })
   })
 
+  it('第二个下挂宿主（脏数据）不产生重复布局目标', () => {
+    const nodes = [
+      node('sc1', 'scene', 0, 0, SIZE),
+      node('sc2', 'scene', 500, 500, SIZE),
+      node('sh1', 'shot', 900, 900, { width: 300, height: 260 }),
+    ]
+    const positions = computeAutoLayout(nodes, [attach('sc1', 'sh1'), attach('sc2', 'sh1')])
+    expect([...positions.keys()].sort()).toEqual(['sc1', 'sc2', 'sh1'])
+    assertNoOverlap(nodes, positions, SIZE)
+  })
+})
+
+describe('computeAutoLayout · 不重叠不变量与脏数据', () => {
   it('混合尺寸（长对白、图片等）整图不重叠', () => {
     const dlg: Size = { width: 360, height: 800 }
     const img: Size = { width: 300, height: 420 }
@@ -137,19 +165,6 @@ describe('computeAutoLayout（issue #94 自动排布）', () => {
     assertNoOverlap(nodes, positions, SIZE)
   })
 
-  it('相同图不同数组顺序得到相同布局（确定性）', () => {
-    const nodes = [
-      node('s1', 'scene', 0, 0, SIZE),
-      node('s2', 'scene', 500, 0, SIZE),
-      node('s3', 'scene', 1000, 0, SIZE),
-      node('bt1', 'beat', 2000, 0),
-    ]
-    const edges = [seq('s1', 's2'), seq('s2', 's3')]
-    const a = computeAutoLayout(nodes, edges)
-    const b = computeAutoLayout([...nodes].reverse(), [...edges].reverse())
-    expect(b).toEqual(a)
-  })
-
   it('脏数据成环时安全终止，全部节点有位置且不重叠', () => {
     const nodes = [node('a', 'scene', 0, 0, SIZE), node('b', 'scene', 500, 0, SIZE), node('c', 'scene', 1000, 0, SIZE)]
     const edges = [seq('a', 'b'), seq('b', 'c'), seq('c', 'a')]
@@ -157,7 +172,9 @@ describe('computeAutoLayout（issue #94 自动排布）', () => {
     expect([...positions.keys()].sort()).toEqual(['a', 'b', 'c'])
     assertNoOverlap(nodes, positions, SIZE)
   })
+})
 
+describe('computeAutoLayout · 尺寸取值顺序（PR #111 评审）', () => {
   it('节点缺 measured 时用回退尺寸完成整图计算', () => {
     const nodes = [node('s1', 'scene', 0, 0), node('d1', 'dialogue', 400, 400), node('sh1', 'shot', 800, 800)]
     const positions = computeAutoLayout(nodes, [seq('s1', 'd1')])
@@ -165,7 +182,7 @@ describe('computeAutoLayout（issue #94 自动排布）', () => {
     assertNoOverlap(nodes, positions, { width: 340, height: 220 })
   })
 
-  it('落盘恢复的顶层 width/height（测量未完成）优先于类型回退尺寸（PR #111 评审）', () => {
+  it('落盘恢复的顶层 width/height（测量未完成）优先于类型回退尺寸', () => {
     // 打开项目即排布：fromStoryNode 已把 layout.size 还原为顶层 width/height，
     // measured 尚未写入。实际尺寸 600×500 大于图片回退 300×380，
     // 若误用回退值，同层兄弟（V_GAP=80 < 500-380）必然重叠。
@@ -198,16 +215,5 @@ describe('computeAutoLayout（issue #94 自动排布）', () => {
     const y2 = positions.get('i2')!.y
     expect(y2 - y1).toBeLessThan(400)
     assertNoOverlap(nodes, positions, measured)
-  })
-
-  it('第二个下挂宿主（脏数据）不产生重复布局目标', () => {
-    const nodes = [
-      node('sc1', 'scene', 0, 0, SIZE),
-      node('sc2', 'scene', 500, 500, SIZE),
-      node('sh1', 'shot', 900, 900, { width: 300, height: 260 }),
-    ]
-    const positions = computeAutoLayout(nodes, [attach('sc1', 'sh1'), attach('sc2', 'sh1')])
-    expect([...positions.keys()].sort()).toEqual(['sc1', 'sc2', 'sh1'])
-    assertNoOverlap(nodes, positions, SIZE)
   })
 })
