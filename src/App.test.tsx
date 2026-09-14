@@ -479,6 +479,49 @@ describe('App ✦设置往返保留最新画布文档（issue #118）', () => {
     expect(editorProps.current.project).not.toEqual({ id: 'p1', ...revised })
   })
 
+  it('首次保存后改名：重挂载种子同步改名，旧名称不得回退（issue #118 评审）', async () => {
+    await openEditor()
+    await act(async () => {
+      await (
+        editorProps.current.onSave as (doc: ProjectContent) => Promise<void>
+      )(structuredClone(DOC))
+    })
+    act(() => {
+      ;(editorProps.current.onRenameProject as (name: string) => void)(
+        '雨夜·修订',
+      )
+    })
+    expect((editorProps.current.project as { name: string }).name).toBe(
+      '雨夜·修订',
+    )
+  })
+
+  it('返回首页后卸载冲刷复活的引用不得在重开时胜出（issue #118 评审）', async () => {
+    await openEditor()
+    // 真实编辑器卸载冲刷经此闭包在返回首页后把最新文档交回 onSave
+    const staleOnSave = editorProps.current.onSave as (
+      doc: ProjectContent,
+    ) => Promise<void>
+    await act(async () => {
+      ;(editorProps.current.onBackHome as () => void)()
+    })
+    await screen.findByTestId('home')
+    await act(async () => {
+      await staleOnSave({ ...structuredClone(DOC), name: '冲刷交付' })
+    })
+    // 首页改名后重开：load 桩返回改名后的文档，复活的引用不得胜出
+    store.load.mockResolvedValue({ ...structuredClone(DOC), name: '首页改名' })
+    await act(async () => {
+      await (homeProps.current.onOpenProject as (id: string) => Promise<void>)(
+        'p1',
+      )
+    })
+    await screen.findByTestId('editor')
+    expect((editorProps.current.project as { name: string }).name).toBe(
+      '首页改名',
+    )
+  })
+
   it('画布保存路径写带外引用不触发渲染：编辑器子树零次多余提交', async () => {
     await openEditor()
     const rendersBefore = editorRenders.count

@@ -147,12 +147,12 @@ function useSignatureSaveWatch(
   ])
 }
 
-/** 卸载冲刷（useDebouncedSave 拆分）：flushSave 依赖变化会重跑本 effect——
- * 重置卸载标记，仅真正的卸载终止重试。 */
+/** 卸载冲刷（useDebouncedSave 拆分）：effect 依赖变化会重跑本 effect——
+ * 重置卸载标记，仅真正的卸载触发 onUnmount 冲刷。 */
 function useUnmountFlush(
   unmountedRef: MutableRefObject<boolean>,
   saveTimer: SaveTimerRef,
-  flushSave: () => Promise<void>,
+  onUnmount: () => void,
 ) {
   useEffect(() => {
     unmountedRef.current = false
@@ -162,9 +162,9 @@ function useUnmountFlush(
         clearTimeout(saveTimer.current)
         saveTimer.current = null
       }
-      void flushSave()
+      onUnmount()
     }
-  }, [unmountedRef, saveTimer, flushSave])
+  }, [onUnmount, saveTimer, unmountedRef])
 }
 
 export function useDebouncedSave(
@@ -243,7 +243,19 @@ export function useDebouncedSave(
     delayMs,
     flushSave,
   )
-  useUnmountFlush(unmountedRef, saveTimer, flushSave)
+  /** 卸载冲刷：无在途保存时走常规冲刷；有在途保存时立即补交最新文档——
+   * 在途循环的接力要等本次保存落定，设置页往返的重挂载若先发生，重挂载
+   * 种子会停留在在途旧文档且新编辑器不再吸收补交内容（issue #118 评审）。
+   * 补交前置脏已清，在途保存落定后循环不会再重复交付。 */
+  const flushOnUnmount = useCallback(() => {
+    if (inFlightRef.current) {
+      deliverLatestAfterUnmount(latestRef, dirtyRef, onSave, onSaveResult)
+      return
+    }
+    void flushSave()
+  }, [dirtyRef, flushSave, inFlightRef, latestRef, onSave, onSaveResult])
+
+  useUnmountFlush(unmountedRef, saveTimer, flushOnUnmount)
 
   return markDirty
 }

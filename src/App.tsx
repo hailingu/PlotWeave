@@ -215,11 +215,16 @@ function useProjectOpenAttempt(
   setOpenFailure: OpenErrorSetter,
   refreshProjects: RefreshProjects,
   unsavedAiSessions: UnsavedAiSessionsRef,
+  latestDoc: LatestDocRef,
 ) {
   const openAttemptSeqRef = useRef(0)
 
   const handleCreateProject = useCallback(async () => {
     const seq = ++openAttemptSeqRef.current
+    // 新一次打开尝试即作废旧会话的带外最新文档（issue #118 评审）：返回
+    // 首页时编辑器卸载冲刷会经 onSave 复活引用，打开尝试开始时的清除才是
+    // 权威失效点——重开项目一律以磁盘载入为准。
+    latestDoc.current = null
     // 作废旧尝试已排队未提交的导航（PR #110 评审）：chunk 挂起窗口内首页
     // 仍可交互，此前尝试可能已通过序号检查并排队——排队更新无法从外部
     // 取消，只能以同车道（transition）的 null 更新按入队序覆盖，否则被
@@ -239,11 +244,14 @@ function useProjectOpenAttempt(
       console.warn('[App] 新建项目失败', err)
     }
     void refreshProjects()
-  }, [refreshProjects, setOpenFailure, setOpenProject])
+  }, [latestDoc, refreshProjects, setOpenFailure, setOpenProject])
 
   const handleOpenProject = useCallback(
     async (id: string) => {
       const seq = ++openAttemptSeqRef.current
+      // 权威失效点同 handleCreateProject（issue #118 评审）：重开同一项目
+      // 时，返回首页后卸载冲刷复活的引用不得压过磁盘载入结果。
+      latestDoc.current = null
       // 新一次打开尝试即视为旧错误过时（issue #98）：失败后重试或改开其他
       // 项目，上一次失败的原因不得残留；本次失败会用新原因覆盖。
       setOpenFailure(null)
@@ -265,7 +273,7 @@ function useProjectOpenAttempt(
         setOpenFailure({ id, detail: openFailureDetail(err) })
       }
     },
-    [setOpenFailure, setOpenProject, unsavedAiSessions],
+    [latestDoc, setOpenFailure, setOpenProject, unsavedAiSessions],
   )
 
   return { handleCreateProject, handleOpenProject }
@@ -284,12 +292,12 @@ function useOpenProjectActions(
     setOpenFailure,
     refreshProjects,
     unsavedAiSessions,
+    latestDoc,
   )
 
   const handleBackHome = useCallback(() => {
-    // 带外最新文档只服务同一次打开会话内的重挂载（issue #118）：返回首页
-    // 即清除，重开项目以磁盘载入为准——首页改名或外部编辑可能已更新盘上
-    // 文档，残留引用会让旧文档在重开时胜出。
+    // 常规路径下返回首页即清除带外最新文档；但随后的编辑器卸载冲刷仍会经
+    // onSave 闭包复活引用，权威失效点在打开尝试开始处（issue #118 评审）。
     latestDoc.current = null
     setOpenProject(null)
     void refreshProjects()
@@ -297,11 +305,21 @@ function useOpenProjectActions(
 
   const handleEditorRename = useCallback(
     (name: string) => {
-      setOpenProject((project) =>
-        project ? { ...project, doc: { ...project.doc, name } } : project,
-      )
+      setOpenProject((project) => {
+        if (!project) return project
+        // 同步补丁带外最新文档（issue #118 评审）：重挂载种子解析以它优先，
+        // 只更新 openProject.doc 会让首次防抖保存之后的改名被旧名回退且
+        // 永不落盘。updater 在 StrictMode 下双调，两次写同值，幂等无害。
+        if (latestDoc.current?.id === project.id) {
+          latestDoc.current = {
+            id: project.id,
+            doc: { ...latestDoc.current.doc, name },
+          }
+        }
+        return { ...project, doc: { ...project.doc, name } }
+      })
     },
-    [setOpenProject],
+    [latestDoc, setOpenProject],
   )
 
   const handleSaveAiSession = useAiSessionSave(
