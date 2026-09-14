@@ -51,8 +51,12 @@ const OP_LABELS = {
   disconnect: '断开',
 }
 
+/** 折叠期新建节点的虚拟 id 前缀（不进画布，仅同批 ref 解析用）；同时是
+ * ref 别名的保留命名空间——别名占用同形 token 会与后续 create 的虚拟 id
+ * 相撞，令校验的 id 优先解析与执行的别名优先解析失配（nodeRefCollisionIssue）。 */
+const NEW_NODE_ID_PREFIX = '__new__:'
 /** 折叠期新建节点的虚拟 id（不进画布，仅同批 ref 解析用）。 */
-const virtualIdOf = (index: number): string => `__new__:${index}`
+const virtualIdOf = (index: number): string => `${NEW_NODE_ID_PREFIX}${index}`
 const EDGE_KIND_LABELS: Record<string, string> = {
   sequence: '剧情流',
   branch: '分支出口',
@@ -235,6 +239,23 @@ function documentUpsertShapeIssue(raw: Record<string, unknown>): string | null {
   )
 }
 
+/** 节点 ref 别名冲突守卫（issue 117，镜像实体域 entityRefCollisionIssue 的
+ * 同一规则）：校验侧 resolveRef 以既有 id 优先、执行侧 refToId 以别名优先，
+ * 别名与任一在存节点 id 相撞会让同一 token 在预览校验与执行解析到不同
+ * 节点，登记点整批拒绝。按折叠期当前 exists 判定（快照 id 被本批更早
+ * delete 后允许同名 ref 重建换主）；保留前缀 __new__: 是折叠期虚拟 id 的
+ * 命名空间，别名同形会让后续 create 的虚拟 id 抢占解析，一并拒绝。返回
+ * 错误文案或 null。 */
+function nodeRefCollisionIssue(st: FoldState, refName: string): string | null {
+  if (st.exists.has(refName)) {
+    return `ref 别名不得与既有节点 id 相同（预览按既有节点解析、执行按别名解析，会产生不一致绑定）：${refName}`
+  }
+  if (refName.startsWith(NEW_NODE_ID_PREFIX)) {
+    return `ref 别名不得使用保留前缀 ${NEW_NODE_ID_PREFIX}（与折叠期虚拟 id 同形会让预览与执行解析到不同节点）：${refName}`
+  }
+  return null
+}
+
 function foldCreate(
   st: FoldState,
   cmd: Record<string, unknown>,
@@ -252,6 +273,8 @@ function foldCreate(
   const name = asText(data.name) || asText(data.prompt) || '未命名'
   const virtualId = virtualIdOf(index)
   const refName = typeof cmd.ref === 'string' ? cmd.ref.trim() : ''
+  const refIssue = refName === '' ? null : nodeRefCollisionIssue(st, refName)
+  if (refIssue !== null) return st.fail(index, refIssue)
   st.exists.add(virtualId)
   st.labels.set(virtualId, `${typeLabel} · ${name}（新建）`)
   st.types.set(virtualId, nodeType)

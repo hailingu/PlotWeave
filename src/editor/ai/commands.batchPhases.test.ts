@@ -340,3 +340,53 @@ describe('validateAiBatch · 目标类型未知时的恒非法容器判定（iss
     ).toBe(true)
   })
 })
+
+// 节点 ref 别名冲突守卫（issue 117，镜像实体域 entityRefCollisionIssue 的
+// 同一规则）：校验侧 resolveRef 以既有 id 优先、执行侧 refToId 以别名优先，
+// 别名与在存节点 id（或折叠期虚拟 id 的保留前缀）相撞会让同一 token 在
+// 预览校验与执行解析到不同节点——登记点整批拒绝，两侧必同解。
+describe('validateAiBatch：阶段 B 折叠 · 节点 ref 别名与在存节点 id 冲突（issue 117）', () => {
+  it('create 的 ref 与既有节点 id 同名时整批拒绝，消除错目标绑定', () => {
+    // issue 117 复现批次：n2 是既有 beat；守卫缺失时校验按真 id 验
+    // beat.tone、执行按别名把 tone 写进新建 dialogue
+    const v = validateAiBatch(
+      [
+        {
+          op: 'create_node',
+          nodeType: 'dialogue',
+          ref: 'n2',
+          data: { name: '对质' },
+        },
+        { op: 'update_node', nodeId: 'n2', patch: { tone: '误写基调' } },
+      ],
+      snap(),
+    )
+    expect(v.ok).toBe(false)
+    expect(v.commands).toEqual([])
+    expect(v.issues).toHaveLength(1)
+    expect(v.issues[0]?.index).toBe(0)
+    expect(v.issues[0]?.message).toContain('ref 别名')
+  })
+
+  it('ref 与保留前缀 __new__: 同形时同样拒绝，后续虚拟 id 不得抢占别名', () => {
+    // '__new__:1' 先被别名占用，第二 create 的虚拟 id 会与其同形——校验
+    // 的 id 优先解析将命中该虚拟节点而执行仍按别名表，同属错目标绑定
+    const v = validateAiBatch(
+      [
+        {
+          op: 'create_node',
+          nodeType: 'beat',
+          ref: '__new__:1',
+          data: { name: '立足' },
+        },
+        { op: 'create_node', nodeType: 'scene', data: { name: '场 02' } },
+        { op: 'update_node', nodeId: '__new__:1', patch: { tone: '紧凑' } },
+      ],
+      snap(),
+    )
+    expect(v.ok).toBe(false)
+    expect(v.issues).toHaveLength(1)
+    expect(v.issues[0]?.index).toBe(0)
+    expect(v.issues[0]?.message).toContain('ref 别名')
+  })
+})
