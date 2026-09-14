@@ -304,8 +304,11 @@ export default function SettingsList({
     (settings.documents ?? []).length === 0
 
   return (
-    // 原生 section + aria-label（隐式 region，S6819 同 LeftPanel 大纲段）
-    <section className="pw-settings" aria-label="设定集">
+    // 原生 section + aria-label（隐式 region，S6819 同 LeftPanel 大纲段）。
+    // 根类不可用裸 pw-settings：那是节点设置弹层的锚定根类
+    // （nodes/settings/settings.css，absolute 定位），撞名会把整个列表
+    // 定位出面板可视区（issue 95 构建版空白的根因）。
+    <section className="pw-settings-list" aria-label="设定集">
       {empty && (
         <p className="pw-settings-empty">
           暂无设定条目：从下方新增角色 / 地点 / 文档开始；点击条目的 ▸

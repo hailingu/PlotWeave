@@ -269,3 +269,11 @@ describe('并行编辑与按钮焦点（PR #97 评审第二轮）', () => {
     expect(actions.updateCharacter).not.toHaveBeenCalled()
   })
 })
+
+describe('设定集列表类名命名空间（issue 95 构建版面板空白回归）', () => {
+  it('列表根不复用节点设置弹层的根类 pw-settings（settings.css 锚定弹层契约），避免被其绝对定位规则劫持', () => {
+    setup()
+    const root = screen.getByRole('region', { name: '设定集' })
+    expect([...root.classList]).not.toContain('pw-settings')
+  })
+})
