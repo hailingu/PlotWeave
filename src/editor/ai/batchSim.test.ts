@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { Edge } from '@xyflow/react'
 import { simulateBatch, type BatchOps } from './batchSim'
-import type { ValidatedCommand } from './commands'
+import { validateAiBatch } from './batchFold'
+import type { AiGraphSnapshot, ValidatedCommand } from './commands'
+import { snap } from './testGraphs'
 import { mergeNodeData } from '../nodes/patch'
 import type { CanvasNode, SceneFlowNode, BranchFlowNode } from '../nodes/types'
 import { EMPTY_SETTINGS, type ProjectSettings } from '../settings'
@@ -702,5 +704,102 @@ describe('simulateBatch · 实体 ref 别名的绑定解析（update patch 与 c
     ;[...backward].reverse().forEach((f) => f())
     expect(state.nodes).toEqual([])
     expect(state.settings.characters).toEqual([])
+  })
+})
+
+// ref 解析与折叠校验同解（issue 117 验收）：守卫拒绝冲突别名后，合法批次
+// 的预览点名与执行落点必须逐命令一致——覆盖删除后重建、重复 ref 与经
+// ref 的 connect/disconnect（update/delete/connect/disconnect 四通道）。
+// 批次经 validateAiBatch 产出，走真实「预览 → simulateBatch」链路。
+describe('simulateBatch · ref 解析与折叠校验同解（issue 117 验收）', () => {
+  it('删除后同名 ref 重建：update 在预览与执行都落到重建节点', () => {
+    const snapWithX: AiGraphSnapshot = {
+      nodes: [{ id: 'x', type: 'scene', label: '场 01' }],
+      edges: [],
+      assets: new Map(),
+    }
+    const v = validateAiBatch(
+      [
+        { op: 'delete_node', nodeId: 'x' },
+        {
+          op: 'create_node',
+          nodeType: 'beat',
+          ref: 'x',
+          data: { name: '立足' },
+        },
+        { op: 'update_node', nodeId: 'x', patch: { tone: '紧凑' } },
+      ],
+      snapWithX,
+    )
+    expect(v.ok).toBe(true)
+    // 预览点名重建的节奏卡，而非被删场景
+    expect(v.items.find((i) => i.kind === 'update')?.label).toContain('节奏卡')
+
+    const { state, ops } = mkOps([sceneNode('x')])
+    const { forward } = simulateBatch(v.commands, ops, state.nodes, state.edges)
+    forward.forEach((f) => f())
+    expect(state.nodes.find((n) => n.id === 'x')).toBeUndefined()
+    const beat = state.nodes.find((n) => n.type === 'beat')
+    expect((beat?.data as { tone?: string }).tone).toBe('紧凑')
+  })
+
+  it('重复 ref 以最后一条 create 为准：预览与执行同表 last-wins', () => {
+    const v = validateAiBatch(
+      [
+        { op: 'create_node', nodeType: 'beat', ref: 'r', data: { name: '甲' } },
+        { op: 'create_node', nodeType: 'beat', ref: 'r', data: { name: '乙' } },
+        { op: 'update_node', nodeId: 'r', patch: { tone: '紧凑' } },
+      ],
+      snap(),
+    )
+    expect(v.ok).toBe(true)
+    expect(v.items.find((i) => i.kind === 'update')?.label).toContain('乙')
+
+    const { state, ops } = mkOps([])
+    const { forward } = simulateBatch(v.commands, ops, state.nodes, state.edges)
+    forward.forEach((f) => f())
+    const patched = state.nodes.filter(
+      (n) => (n.data as { tone?: string }).tone === '紧凑',
+    )
+    expect(patched).toHaveLength(1)
+    expect((patched[0]?.data as { name?: string }).name).toBe('乙')
+  })
+
+  it('经 ref 的 connect/disconnect 端点与预览同解', () => {
+    const v = validateAiBatch(
+      [
+        {
+          op: 'create_node',
+          nodeType: 'scene',
+          ref: 's',
+          data: { name: '场 02' },
+        },
+        {
+          op: 'create_node',
+          nodeType: 'beat',
+          ref: 'b',
+          data: { name: '立足' },
+        },
+        { op: 'connect_edge', sourceId: 'b', targetId: 's' },
+        { op: 'disconnect_edge', sourceId: 'b', targetId: 's' },
+        { op: 'connect_edge', sourceId: 'b', targetId: 's' },
+      ],
+      snap(),
+    )
+    expect(v.ok).toBe(true)
+    const { state, ops } = mkOps([sceneNode('s1')])
+    const { forward } = simulateBatch(v.commands, ops, state.nodes, state.edges)
+    forward.forEach((f) => f())
+    const scene = state.nodes.find(
+      (n) => (n.data as { name?: string }).name === '场 02',
+    )
+    const beat = state.nodes.find(
+      (n) => (n.data as { name?: string }).name === '立足',
+    )
+    expect(
+      state.edges.filter(
+        (e) => e.source === beat?.id && e.target === scene?.id,
+      ),
+    ).toHaveLength(1)
   })
 })
