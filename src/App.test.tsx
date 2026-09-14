@@ -163,6 +163,53 @@ async function settingsRoundtrip() {
   await screen.findByTestId('editor')
 }
 
+/** 打开项目并保存一份全字段变更文档，返回该文档供种子断言
+ * （issue #118 套件共享；置于模块层以守 describe 回调 80 行上限）。 */
+async function saveRevisedDoc() {
+  await openEditor()
+  const revised: ProjectContent = {
+    ...DOC,
+    name: '雨夜·二稿',
+    nodes: [
+      {
+        id: 'n1',
+        type: 'scene',
+        position: { x: 0, y: 0 },
+        data: {
+          name: '开场',
+          sceneNo: 1,
+          interior: false,
+          time: '夜',
+          synopsis: '雨夜出租车',
+          characterIds: [],
+        },
+      },
+    ],
+    edges: [{ id: 'e1', source: 'n1', target: 'n1' }],
+    settings: { characters: [], locations: [] },
+    episodeTitles: { 1: '第一集' },
+    viewport: { x: 12, y: 34, zoom: 1.25 },
+    aiRevision: 3,
+    assets: {
+      byId: {
+        a1: {
+          id: 'a1',
+          relPath: 'projects/p1/assets/a1.wav',
+          mime: 'audio/wav',
+          source: 'upload',
+          createdAt: '2026-09-14T00:00:00.000Z',
+        },
+      },
+    },
+  }
+  await act(async () => {
+    await (
+      editorProps.current.onSave as (doc: ProjectContent) => Promise<void>
+    )(structuredClone(revised))
+  })
+  return revised
+}
+
 describe('App（双界面路由壳）', () => {
   it('启动加载项目列表 → 首页；列表失败 warn 兜底为空', async () => {
     render(<App />)
@@ -368,53 +415,7 @@ describe('App ✦返回首页摘要与保存落定（issue #101）', () => {
   })
 })
 
-describe('App ✦设置往返保留最新画布文档（issue #118）', () => {
-  /** 打开项目并保存一份全字段变更文档，返回该文档供种子断言。 */
-  async function saveRevisedDoc() {
-    await openEditor()
-    const revised: ProjectContent = {
-      ...DOC,
-      name: '雨夜·二稿',
-      nodes: [
-        {
-          id: 'n1',
-          type: 'scene',
-          position: { x: 0, y: 0 },
-          data: {
-            name: '开场',
-            sceneNo: 1,
-            interior: false,
-            time: '夜',
-            synopsis: '雨夜出租车',
-            characterIds: [],
-          },
-        },
-      ],
-      edges: [{ id: 'e1', source: 'n1', target: 'n1' }],
-      settings: { characters: [], locations: [] },
-      episodeTitles: { 1: '第一集' },
-      viewport: { x: 12, y: 34, zoom: 1.25 },
-      aiRevision: 3,
-      assets: {
-        byId: {
-          a1: {
-            id: 'a1',
-            relPath: 'projects/p1/assets/a1.wav',
-            mime: 'audio/wav',
-            source: 'upload',
-            createdAt: '2026-09-14T00:00:00.000Z',
-          },
-        },
-      },
-    }
-    await act(async () => {
-      await (
-        editorProps.current.onSave as (doc: ProjectContent) => Promise<void>
-      )(structuredClone(revised))
-    })
-    return revised
-  }
-
+describe('App ✦设置往返的重挂载种子（issue #118）', () => {
   it('保存落定后设置往返：重挂载种子解析保存路径的最新文档（全字段一致）', async () => {
     const revised = await saveRevisedDoc()
     await settingsRoundtrip()
@@ -459,6 +460,19 @@ describe('App ✦设置往返保留最新画布文档（issue #118）', () => {
     expect(editorProps.current.project).toEqual({ id: 'p1', ...revised })
   })
 
+  it('画布保存路径写带外引用不触发渲染：编辑器子树零次多余提交', async () => {
+    await openEditor()
+    const rendersBefore = editorRenders.count
+    await act(async () => {
+      await (
+        editorProps.current.onSave as (doc: ProjectContent) => Promise<void>
+      )(structuredClone(DOC))
+    })
+    expect(editorRenders.count).toBe(rendersBefore)
+  })
+})
+
+describe('App ✦设置往返的引用边界（issue #118）', () => {
   it('返回首页清除带外文档：重开项目以磁盘载入为准，旧引用不得胜出', async () => {
     const revised = await saveRevisedDoc()
     await act(async () => {
@@ -520,17 +534,6 @@ describe('App ✦设置往返保留最新画布文档（issue #118）', () => {
     expect((editorProps.current.project as { name: string }).name).toBe(
       '首页改名',
     )
-  })
-
-  it('画布保存路径写带外引用不触发渲染：编辑器子树零次多余提交', async () => {
-    await openEditor()
-    const rendersBefore = editorRenders.count
-    await act(async () => {
-      await (
-        editorProps.current.onSave as (doc: ProjectContent) => Promise<void>
-      )(structuredClone(DOC))
-    })
-    expect(editorRenders.count).toBe(rendersBefore)
   })
 })
 
