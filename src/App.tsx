@@ -41,6 +41,14 @@ interface LatestAiSession {
   session: AiSession
 }
 
+/** 打开期间最新的画布文档快照（App state 之外，issue #118）：保存路径只写
+ * 此引用、不触发渲染；设置页互斥路由会卸载编辑器，重挂载若以打开时刻的
+ * openProject.doc 为种子，下一次全量保存就会回滚往返前的较新编辑。 */
+interface LatestDoc {
+  id: string
+  doc: ProjectContent
+}
+
 /** 编辑器态：已加载的项目（id + 名称 + 画布文档）。aiSession 只是项目打开
  * /重开时刻的挂载种子；打开期间的最新值由 LatestAiSession 引用承载。 */
 interface OpenProject {
@@ -103,6 +111,7 @@ type RefreshProjects = () => Promise<void>
 type UnsavedAiSessionsRef = RefObject<Map<string, UnsavedAiSession>>
 /** 保存路径需要整体替换快照，故用可变盒子而非只读的 RefObject。 */
 type LatestAiSessionRef = { current: LatestAiSession | null }
+type LatestDocRef = { current: LatestDoc | null }
 
 /** 打开失败原因的可读化（issue #98）：Error 取 message（避免「Error: 」
  * 前缀上屏），Tauri IPC 常见的字符串拒绝原样保留，其余形态 String() 兜底。 */
@@ -268,6 +277,7 @@ function useOpenProjectActions(
   refreshProjects: RefreshProjects,
   unsavedAiSessions: UnsavedAiSessionsRef,
   latestAiSession: LatestAiSessionRef,
+  latestDoc: LatestDocRef,
 ) {
   const { handleCreateProject, handleOpenProject } = useProjectOpenAttempt(
     setOpenProject,
@@ -277,9 +287,13 @@ function useOpenProjectActions(
   )
 
   const handleBackHome = useCallback(() => {
+    // 带外最新文档只服务同一次打开会话内的重挂载（issue #118）：返回首页
+    // 即清除，重开项目以磁盘载入为准——首页改名或外部编辑可能已更新盘上
+    // 文档，残留引用会让旧文档在重开时胜出。
+    latestDoc.current = null
     setOpenProject(null)
     void refreshProjects()
-  }, [refreshProjects, setOpenProject])
+  }, [latestDoc, refreshProjects, setOpenProject])
 
   const handleEditorRename = useCallback(
     (name: string) => {
@@ -406,6 +420,7 @@ function AppView({
   open,
   home,
   latestAiSession,
+  latestDoc,
   onOpenSettings,
   onCloseSettings,
 }: {
@@ -417,6 +432,7 @@ function AppView({
   readonly open: ReturnType<typeof useOpenProjectActions>
   readonly home: ReturnType<typeof useHomeProjectActions>
   readonly latestAiSession: LatestAiSessionRef
+  readonly latestDoc: LatestDocRef
   readonly onOpenSettings: () => void
   readonly onCloseSettings: () => void
 }) {
@@ -429,10 +445,17 @@ function AppView({
     const latest = latestAiSession.current
     const aiSession =
       latest?.id === openProject.id ? latest.session : openProject.aiSession
+    // 画布文档同款带外解析（issue #118）：重挂载种子取保存路径的最新
+    // 文档，不用打开时刻的旧快照回退设置往返前已保存的编辑。
+    const latestCanvasDoc = latestDoc.current
+    const doc =
+      latestCanvasDoc?.id === openProject.id
+        ? latestCanvasDoc.doc
+        : openProject.doc
     view = (
       <EditorView
         key={openProject.id}
-        project={{ id: openProject.id, ...openProject.doc }}
+        project={{ id: openProject.id, ...doc }}
         aiSession={aiSession}
         aiSessionError={openProject.aiSessionError}
         aiSessionRetryable={openProject.aiSessionRetryable}
@@ -440,7 +463,12 @@ function AppView({
         onBackHome={open.handleBackHome}
         onRenameProject={open.handleEditorRename}
         onOpenSettings={onOpenSettings}
-        onSave={(doc) => projectStore.save(openProject.id, doc)}
+        // 先同步登记再委托存储（issue #118）：防抖卸载冲刷的交付无论
+        // 保存成败都进入引用，失败时重挂载种子仍是内存最新文档。
+        onSave={(next) => {
+          latestDoc.current = { id: openProject.id, doc: next }
+          return projectStore.save(openProject.id, next)
+        }}
         onSaveAiSession={open.handleSaveAiSession(openProject.id)}
       />
     )
@@ -471,6 +499,8 @@ export default function App() {
   const [openProject, setOpenProject] = useState<OpenProject | null>(null)
   const [openFailure, setOpenFailure] = useState<OpenProjectError | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  /** 打开期间最新画布文档：保存路径的 state 外挂载种子（issue #118）。 */
+  const latestDocRef = useRef<LatestDoc | null>(null)
   const { unsavedAiSessionsRef, latestAiSessionRef } =
     useAiSessionLifecycle(setOpenProject)
   const { projects, loading, refreshProjects } = useProjectSummaries(
@@ -495,6 +525,7 @@ export default function App() {
     refreshProjects,
     unsavedAiSessionsRef,
     latestAiSessionRef,
+    latestDocRef,
   )
   const home = useHomeProjectActions(refreshProjects, unsavedAiSessionsRef)
   /** 退出冲刷屏障：未落盘会话仍在时阻止关闭窗口（见 useExitFlush）。 */
@@ -523,6 +554,7 @@ export default function App() {
         open={open}
         home={home}
         latestAiSession={latestAiSessionRef}
+        latestDoc={latestDocRef}
         onOpenSettings={() => startTransition(() => setSettingsOpen(true))}
         onCloseSettings={() => startTransition(() => setSettingsOpen(false))}
       />

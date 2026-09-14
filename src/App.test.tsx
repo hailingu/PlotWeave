@@ -299,7 +299,9 @@ describe('App ✦返回首页摘要与保存落定（issue #101）', () => {
   it('保存在途时返回首页：保存落定通知后再刷新，卡片跟随新摘要', async () => {
     await openEditor()
     let releaseSave: (() => void) | null = null
-    store.save.mockImplementation(
+    // Once 变体：挂起实现不得泄漏到后续用例（clearAllMocks 不清实现，
+    // 普通实现会让其后所有 await store.save 的用例永久挂起）
+    store.save.mockImplementationOnce(
       () =>
         new Promise<void>((resolve) => {
           releaseSave = resolve
@@ -363,6 +365,129 @@ describe('App ✦返回首页摘要与保存落定（issue #101）', () => {
     expect(
       (homeProps.current.projects as Array<{ name: string }>)[0]?.name,
     ).toBe('新名称')
+  })
+})
+
+describe('App ✦设置往返保留最新画布文档（issue #118）', () => {
+  /** 打开项目并保存一份全字段变更文档，返回该文档供种子断言。 */
+  async function saveRevisedDoc() {
+    await openEditor()
+    const revised: ProjectContent = {
+      ...DOC,
+      name: '雨夜·二稿',
+      nodes: [
+        {
+          id: 'n1',
+          type: 'scene',
+          position: { x: 0, y: 0 },
+          data: {
+            name: '开场',
+            sceneNo: 1,
+            interior: false,
+            time: '夜',
+            synopsis: '雨夜出租车',
+            characterIds: [],
+          },
+        },
+      ],
+      edges: [{ id: 'e1', source: 'n1', target: 'n1' }],
+      settings: { characters: [], locations: [] },
+      episodeTitles: { 1: '第一集' },
+      viewport: { x: 12, y: 34, zoom: 1.25 },
+      aiRevision: 3,
+      assets: {
+        byId: {
+          a1: {
+            id: 'a1',
+            relPath: 'projects/p1/assets/a1.wav',
+            mime: 'audio/wav',
+            source: 'upload',
+            createdAt: '2026-09-14T00:00:00.000Z',
+          },
+        },
+      },
+    }
+    await act(async () => {
+      await (
+        editorProps.current.onSave as (doc: ProjectContent) => Promise<void>
+      )(structuredClone(revised))
+    })
+    return revised
+  }
+
+  it('保存落定后设置往返：重挂载种子解析保存路径的最新文档（全字段一致）', async () => {
+    const revised = await saveRevisedDoc()
+    await settingsRoundtrip()
+    expect(editorProps.current.project).toEqual({ id: 'p1', ...revised })
+  })
+
+  it('保存在途时设置往返：重挂载种子仍为最新文档，不回退打开快照', async () => {
+    await openEditor()
+    let releaseSave: (() => void) | null = null
+    // Once 变体：挂起实现不得泄漏到后续用例（clearAllMocks 不清实现）
+    store.save.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseSave = resolve
+        }),
+    )
+    const revised = { ...DOC, name: '雨夜·在途' }
+    await act(async () => {
+      ;(editorProps.current.onSave as (doc: ProjectContent) => Promise<void>)(
+        revised,
+      ).catch(() => undefined)
+    })
+    await settingsRoundtrip()
+    expect(editorProps.current.project).toEqual({ id: 'p1', ...revised })
+    await act(async () => {
+      releaseSave?.()
+    })
+  })
+
+  it('保存失败后设置往返：重挂载种子为内存最新文档（失败不得回退打开快照）', async () => {
+    await openEditor()
+    store.save.mockRejectedValueOnce(new Error('磁盘已满'))
+    const revised = { ...DOC, name: '雨夜·未落盘' }
+    await act(async () => {
+      await expect(
+        (editorProps.current.onSave as (doc: ProjectContent) => Promise<void>)(
+          revised,
+        ),
+      ).rejects.toThrow('磁盘已满')
+    })
+    await settingsRoundtrip()
+    expect(editorProps.current.project).toEqual({ id: 'p1', ...revised })
+  })
+
+  it('返回首页清除带外文档：重开项目以磁盘载入为准，旧引用不得胜出', async () => {
+    const revised = await saveRevisedDoc()
+    await act(async () => {
+      ;(editorProps.current.onBackHome as () => void)()
+    })
+    await screen.findByTestId('home')
+    await act(async () => {
+      await (homeProps.current.onOpenProject as (id: string) => Promise<void>)(
+        'p1',
+      )
+    })
+    await screen.findByTestId('editor')
+    // load 桩固定返回打开快照：带外引用已清除，磁盘载入结果胜出
+    expect(editorProps.current.project).toEqual({
+      id: 'p1',
+      ...structuredClone(DOC),
+    })
+    expect(editorProps.current.project).not.toEqual({ id: 'p1', ...revised })
+  })
+
+  it('画布保存路径写带外引用不触发渲染：编辑器子树零次多余提交', async () => {
+    await openEditor()
+    const rendersBefore = editorRenders.count
+    await act(async () => {
+      await (
+        editorProps.current.onSave as (doc: ProjectContent) => Promise<void>
+      )(structuredClone(DOC))
+    })
+    expect(editorRenders.count).toBe(rendersBefore)
   })
 })
 
