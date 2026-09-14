@@ -536,3 +536,46 @@ describe('useDebouncedSave（在途保存期间卸载：待冲刷编辑不丢）
     expect(names).toEqual(['B'])
   })
 })
+
+describe('useDebouncedSave（在途未落定时的卸载补交，issue #118 评审）', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it('在途保存未落定时卸载：最新脏文档立即交付，不依赖在途保存落定', async () => {
+    // holder 而非裸 let：嵌套回调内的赋值不参与外层收窄，裸 let 会被
+    // TS 收窄为 null 使末尾调用不可达
+    const releaseRef: { current: (() => void) | null } = { current: null }
+    const onSave = vi.fn(
+      (_doc: ProjectContent) =>
+        new Promise<void>((resolve) => {
+          releaseRef.current = resolve
+        }),
+    )
+    const { rerender, unmount } = renderHook(
+      ({ doc }) => useDebouncedSave(doc, onSave),
+      {
+        initialProps: { doc: mkDoc() },
+      },
+    )
+    // D1 进入防抖并冲刷，保存在途挂起（onSave 同步调用，Promise 保持未决）
+    act(() => {
+      rerender({ doc: mkDoc('在途D1') })
+    })
+    act(() => {
+      vi.advanceTimersByTime(600)
+    })
+    expect(onSave).toHaveBeenCalledTimes(1)
+    // 在途期间又编辑出 D2（防抖计时器尚未触发）
+    act(() => {
+      rerender({ doc: mkDoc('最新D2') })
+    })
+    // 设置页往返触发卸载：在途未落定也必须立即交付 D2——若等在途循环
+    // 接力，设置关闭的重挂载可能先发生，重挂载种子将停留在 D1
+    await act(async () => {
+      unmount()
+    })
+    expect(onSave).toHaveBeenCalledTimes(2)
+    expect((onSave.mock.calls[1][0] as ProjectContent).name).toBe('最新D2')
+    releaseRef.current?.()
+  })
+})

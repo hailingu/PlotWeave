@@ -147,12 +147,12 @@ function useSignatureSaveWatch(
   ])
 }
 
-/** 卸载冲刷（useDebouncedSave 拆分）：flushSave 依赖变化会重跑本 effect——
- * 重置卸载标记，仅真正的卸载终止重试。 */
+/** 卸载冲刷（useDebouncedSave 拆分）：effect 依赖变化会重跑本 effect——
+ * 重置卸载标记，仅真正的卸载触发 onUnmount 冲刷。 */
 function useUnmountFlush(
   unmountedRef: MutableRefObject<boolean>,
   saveTimer: SaveTimerRef,
-  flushSave: () => Promise<void>,
+  onUnmount: () => void,
 ) {
   useEffect(() => {
     unmountedRef.current = false
@@ -162,26 +162,21 @@ function useUnmountFlush(
         clearTimeout(saveTimer.current)
         saveTimer.current = null
       }
-      void flushSave()
+      onUnmount()
     }
-  }, [unmountedRef, saveTimer, flushSave])
+  }, [onUnmount, saveTimer, unmountedRef])
 }
 
-export function useDebouncedSave(
-  doc: ProjectContent,
+/** 冲刷与标脏动作（useDebouncedSave 拆分，issue #118 评审：主 hook 守
+ * 80 行上限）：消费保存闸 refs 组装三条动作通道。闸 ref 实例内恒稳定，
+ * 列入依赖以满足 exhaustive-deps（issue #99 拆分）。 */
+function useSaveFlush(
+  gates: ReturnType<typeof useSaveGateRefs>,
   onSave: (doc: ProjectContent) => void | Promise<void>,
-  delayMs = 600,
-  onSaveResult?: (err: unknown) => void,
-): (doc: ProjectContent) => void {
-  const {
-    saveTimer,
-    dirtyRef,
-    latestRef,
-    firstRender,
-    lastSigRef,
-    unmountedRef,
-    inFlightRef,
-  } = useSaveGateRefs(doc)
+  onSaveResult: ((err: unknown) => void) | undefined,
+  delayMs: number,
+) {
+  const { saveTimer, dirtyRef, latestRef, unmountedRef, inFlightRef } = gates
 
   const flushSave = useCallback(async () => {
     if (inFlightRef.current) return // 在途：本轮跳过，新脏数据由在途循环接力
@@ -212,8 +207,6 @@ export function useDebouncedSave(
       // 最新文档补存一次（§3.1 flushPersist 导航契约：离开编辑器不丢编辑）
       if (unmountedRef.current && !dirtyRef.current) return
     }
-    // 闸 ref 由 useSaveGateRefs 持有，实例内恒稳定；列入依赖以满足
-    // exhaustive-deps（issue #99 拆分）。
   }, [
     onSave,
     onSaveResult,
@@ -234,16 +227,45 @@ export function useDebouncedSave(
     [flushSave, delayMs, latestRef, dirtyRef, saveTimer],
   )
 
+  /** 卸载冲刷：无在途保存时走常规冲刷；有在途保存时立即补交最新文档——
+   * 在途循环的接力要等本次保存落定，设置页往返的重挂载若先发生，重挂载
+   * 种子会停留在在途旧文档且新编辑器不再吸收补交内容（issue #118 评审）。
+   * 补交前置脏已清，在途保存落定后循环不会再重复交付。 */
+  const flushOnUnmount = useCallback(() => {
+    if (inFlightRef.current) {
+      deliverLatestAfterUnmount(latestRef, dirtyRef, onSave, onSaveResult)
+      return
+    }
+    void flushSave()
+  }, [dirtyRef, flushSave, inFlightRef, latestRef, onSave, onSaveResult])
+
+  return { flushSave, markDirty, flushOnUnmount }
+}
+
+export function useDebouncedSave(
+  doc: ProjectContent,
+  onSave: (doc: ProjectContent) => void | Promise<void>,
+  delayMs = 600,
+  onSaveResult?: (err: unknown) => void,
+): (doc: ProjectContent) => void {
+  const gates = useSaveGateRefs(doc)
+  const { flushSave, markDirty, flushOnUnmount } = useSaveFlush(
+    gates,
+    onSave,
+    onSaveResult,
+    delayMs,
+  )
+
   useSignatureSaveWatch(
     doc,
-    firstRender,
-    lastSigRef,
-    dirtyRef,
-    saveTimer,
+    gates.firstRender,
+    gates.lastSigRef,
+    gates.dirtyRef,
+    gates.saveTimer,
     delayMs,
     flushSave,
   )
-  useUnmountFlush(unmountedRef, saveTimer, flushSave)
+  useUnmountFlush(gates.unmountedRef, gates.saveTimer, flushOnUnmount)
 
   return markDirty
 }
