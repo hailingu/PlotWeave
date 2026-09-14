@@ -708,10 +708,10 @@ describe('simulateBatch · 实体 ref 别名的绑定解析（update patch 与 c
 })
 
 // ref 解析与折叠校验同解（issue 117 验收）：守卫拒绝冲突别名后，合法批次
-// 的预览点名与执行落点必须逐命令一致——覆盖删除后重建、重复 ref 与经
-// ref 的 connect/disconnect（update/delete/connect/disconnect 四通道）。
-// 批次经 validateAiBatch 产出，走真实「预览 → simulateBatch」链路。
-describe('simulateBatch · ref 解析与折叠校验同解（issue 117 验收）', () => {
+// 的预览点名与执行落点必须逐命令一致。批次经 validateAiBatch 产出，走真实
+// 「预览 → simulateBatch」链路；按命令通道拆组满足套件回调的 80 行上限
+// （评审 4001587255）。
+describe('simulateBatch · ref 解析与折叠校验同解（issue 117 验收）· update 落点', () => {
   it('删除后同名 ref 重建：update 在预览与执行都落到重建节点', () => {
     const snapWithX: AiGraphSnapshot = {
       nodes: [{ id: 'x', type: 'scene', label: '场 01' }],
@@ -764,7 +764,9 @@ describe('simulateBatch · ref 解析与折叠校验同解（issue 117 验收）
     expect(patched).toHaveLength(1)
     expect((patched[0]?.data as { name?: string }).name).toBe('乙')
   })
+})
 
+describe('simulateBatch · ref 解析与折叠校验同解（issue 117 验收）· 连线端点', () => {
   it('经 ref 的 connect/disconnect 端点与预览同解', () => {
     const v = validateAiBatch(
       [
