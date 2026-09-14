@@ -338,4 +338,46 @@ describe('退出冲刷（issue #119：屏障等待画布防抖与失败重试）
       error.mockRestore()
     }
   })
+
+  it('flushPendingProjectSaves：冲刷等待期间登记被新代次取代并失败时，新登记仍重存一次（PR #174 评审：陈旧空操作不得标记已尝试）', async () => {
+    const id = 'exit-flush-regen-test'
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.useFakeTimers()
+    try {
+      // 第一代保存失败登记
+      invoke.mockImplementation(async () => {
+        throw new Error('磁盘已满')
+      })
+      await expect(enqueueSave(id, { ...DOC, name: '一代稿' })).rejects.toThrow(
+        '磁盘已满',
+      )
+      // 更新保存排队（代次前进）且写入挂起
+      const pendingWrites: Array<{
+        resolve: () => void
+        reject: (e: Error) => void
+      }> = []
+      invoke.mockImplementation(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            pendingWrites.push({ resolve, reject })
+          }),
+      )
+      const savingNew = enqueueSave(id, { ...DOC, name: '二代稿' })
+      const flushing = flushPendingProjectSaves()
+      // 更新保存在冲刷等待期间失败：登记被替换为二代稿
+      await vi.waitFor(() => expect(pendingWrites).toHaveLength(1))
+      pendingWrites[0]!.reject(new Error('磁盘仍满'))
+      await expect(savingNew).rejects.toThrow('磁盘仍满')
+      // 新登记必须被冲刷实际重存一次（而非因 id 已标记为已尝试直接放行失败）
+      await vi.waitFor(() => expect(pendingWrites).toHaveLength(2))
+      pendingWrites[1]!.resolve()
+      expect(await flushing).toEqual([])
+      expect(savedNames()).toEqual(['一代稿', '二代稿', '二代稿'])
+      // 烧掉登记成功后仍挂着的旧代次重试定时器（代次不符自灭）
+      await vi.advanceTimersByTimeAsync(5000)
+    } finally {
+      error.mockRestore()
+      vi.useRealTimers()
+    }
+  })
 })

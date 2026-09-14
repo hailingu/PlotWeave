@@ -112,14 +112,17 @@ function clearSaveRetry(id: string): void {
 
 /** 定时器到期与退出冲刷（flushPendingProjectSaves）共用的重试触发：代次
  * 仍是登记代次才重排入队——新保存排队即自增代次，旧登记由新代次自洽
- * （陈旧文档不得后完成覆盖新内容）。 */
-function fireSaveRetry(id: string): void {
+ * （陈旧文档不得后完成覆盖新内容）。返回是否实际发起重存：无登记定时器
+ * 或代次已前进均为空操作（false），调用方据此决定是否计入已尝试。 */
+function fireSaveRetry(id: string): boolean {
   const entry = retryTimers.get(id)
-  if (entry === undefined) return
+  if (entry === undefined) return false
   clearSaveRetryTimer(id)
-  if (saveGenerations.get(id) !== entry.generation) return
+  if (saveGenerations.get(id) !== entry.generation) return false
   const doc = pendingRetryDocs.get(id)
-  if (doc !== undefined) void enqueueSave(id, doc).catch(() => undefined)
+  if (doc === undefined) return false
+  void enqueueSave(id, doc).catch(() => undefined)
+  return true
 }
 
 function scheduleSaveRetry(id: string, generation: number): void {
@@ -146,24 +149,41 @@ export function hasPendingProjectSaves(): boolean {
   return pendingRetryDocs.size > 0 || unsettledChains.size > 0
 }
 
+/** 发起所有尚未实际尝试过的登记重存：失败重排的登记持有同一文档对象，
+ * 不产生重复尝试；陈旧登记的空操作触发不计入已发起（PR #174 评审）。 */
+function fireUnfiredRegistrations(fired: Map<string, ProjectContent>): void {
+  for (const [id, doc] of Array.from(pendingRetryDocs)) {
+    if (fired.get(id) === doc) continue
+    if (!fireSaveRetry(id)) continue
+    fired.set(id, doc)
+  }
+}
+
+/** 仍有未发起过的登记（冲刷等待期间新登记的文档）需要再来一轮冲刷。 */
+function hasUnfiredRegistrations(fired: Map<string, ProjectContent>): boolean {
+  for (const [id, doc] of pendingRetryDocs) {
+    if (fired.get(id) !== doc) return true
+  }
+  return false
+}
+
 /** 退出冲刷（issue #119）：登记在案的失败重试文档立即重存（不等 5s 后台
  * 节律）并等待全部链上动作落定，仍失败的登记原样保留并返回其项目 id——
  * 退出屏障据此阻断退出并提示。代次已前进的陈旧登记不重放（新保存拥有
  * 终态）；冲刷等待期间新登记的文档也各尝试一次，不紧循环：持续失败交给
  * 再次退出与后台节律接管。 */
 export async function flushPendingProjectSaves(): Promise<string[]> {
-  const attempted = new Set<string>()
+  /** 已实际发起重存的登记，按登记的文档身份跟踪（PR #174 评审）：仅记录
+   * 项目 id 会把「陈旧登记的空操作触发」误标为已尝试——其取代者（更新的
+   * 保存）在冲刷等待期间失败重新登记（同 id、新文档）时将不再重存，首次
+   * 退出即被不必要阻断。 */
+  const fired = new Map<string, ProjectContent>()
   for (;;) {
-    for (const id of Array.from(pendingRetryDocs.keys())) {
-      if (attempted.has(id)) continue
-      attempted.add(id)
-      fireSaveRetry(id)
-    }
+    fireUnfiredRegistrations(fired)
     while (unsettledChains.size > 0) {
       await Promise.allSettled(Array.from(unsettledChains))
     }
-    if (Array.from(pendingRetryDocs.keys()).every((id) => attempted.has(id)))
-      break
+    if (!hasUnfiredRegistrations(fired)) break
   }
   return Array.from(pendingRetryDocs.keys())
 }
