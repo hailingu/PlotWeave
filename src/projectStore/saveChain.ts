@@ -13,8 +13,16 @@ import type { ProjectContent } from '../model/content'
 const SAVE_RETRY_DELAY_MS = 5000
 export const saveChains = new Map<string, Promise<unknown>>()
 export const pendingRetryDocs = new Map<string, ProjectContent>()
-const retryTimers = new Map<string, ReturnType<typeof setTimeout>>()
+/** 重试登记的触发器：定时器句柄 + 登记代次（触发时代次不符即自灭）。 */
+const retryTimers = new Map<
+  string,
+  { timer: ReturnType<typeof setTimeout>; generation: number }
+>()
 const saveGenerations = new Map<string, number>()
+/** 未落定的链上动作（保存/删除/附属写入，issue #119）：退出屏障的就绪探针
+ * 与冲刷等待面。链条 Promise 长期留存于 saveChains（落定后也不清除），
+ * 不能据此判断在途，须另行跟踪。 */
+const unsettledChains = new Set<Promise<unknown>>()
 /** 删除墓碑：删除开始即立——之后为该项目排队的任何保存被吸收，迟到的
  * 合并冲刷/重试不得重建 JSON 复活用户刚删的项目；删除落定（成功或失败）
  * 后清除，失败时项目仍在、可继续保存。 */
@@ -81,6 +89,7 @@ export function enqueueProjectWrite(
   }
   const run = (saveChains.get(id) ?? Promise.resolve()).catch(() => undefined)
   const next = run.then(write)
+  trackChainSettle(next)
   saveChains.set(id, next)
   return next
 }
@@ -89,9 +98,9 @@ export function enqueueProjectWrite(
  * 期定时器即使触发也只会被 enqueueSave 吸收（不会复活已删项目），但停摆
  * 更干净；登记文档留待链落定处的全量清除与回吐判定。 */
 function clearSaveRetryTimer(id: string): void {
-  const timer = retryTimers.get(id)
-  if (timer !== undefined) {
-    clearTimeout(timer)
+  const entry = retryTimers.get(id)
+  if (entry !== undefined) {
+    clearTimeout(entry.timer)
     retryTimers.delete(id)
   }
 }
@@ -101,17 +110,62 @@ function clearSaveRetry(id: string): void {
   pendingRetryDocs.delete(id)
 }
 
+/** 定时器到期与退出冲刷（flushPendingProjectSaves）共用的重试触发：代次
+ * 仍是登记代次才重排入队——新保存排队即自增代次，旧登记由新代次自洽
+ * （陈旧文档不得后完成覆盖新内容）。 */
+function fireSaveRetry(id: string): void {
+  const entry = retryTimers.get(id)
+  if (entry === undefined) return
+  clearSaveRetryTimer(id)
+  if (saveGenerations.get(id) !== entry.generation) return
+  const doc = pendingRetryDocs.get(id)
+  if (doc !== undefined) void enqueueSave(id, doc).catch(() => undefined)
+}
+
 function scheduleSaveRetry(id: string, generation: number): void {
-  retryTimers.set(
-    id,
-    setTimeout(() => {
-      retryTimers.delete(id)
-      // 代次已前进（有更新的保存排队/完成）：本次登记作废，由新代次自洽
-      if (saveGenerations.get(id) !== generation) return
-      const doc = pendingRetryDocs.get(id)
-      if (doc !== undefined) void enqueueSave(id, doc).catch(() => undefined)
-    }, SAVE_RETRY_DELAY_MS),
-  )
+  clearSaveRetryTimer(id)
+  retryTimers.set(id, {
+    timer: setTimeout(() => fireSaveRetry(id), SAVE_RETRY_DELAY_MS),
+    generation,
+  })
+}
+
+/** 登记链上新链接并在落定后解除未落定登记。解除晚于落定一个微任务：
+ * 退出屏障的同步探针因此保守多真一拍，屏障冲刷自身会等链静止，无害。 */
+function trackChainSettle(link: Promise<unknown>): void {
+  unsettledChains.add(link)
+  void link
+    .catch(() => undefined)
+    .then(() => {
+      unsettledChains.delete(link)
+    })
+}
+
+/** 退出屏障就绪探针（issue #119）：有待重试登记文档或未落定链上动作。 */
+export function hasPendingProjectSaves(): boolean {
+  return pendingRetryDocs.size > 0 || unsettledChains.size > 0
+}
+
+/** 退出冲刷（issue #119）：登记在案的失败重试文档立即重存（不等 5s 后台
+ * 节律）并等待全部链上动作落定，仍失败的登记原样保留并返回其项目 id——
+ * 退出屏障据此阻断退出并提示。代次已前进的陈旧登记不重放（新保存拥有
+ * 终态）；冲刷等待期间新登记的文档也各尝试一次，不紧循环：持续失败交给
+ * 再次退出与后台节律接管。 */
+export async function flushPendingProjectSaves(): Promise<string[]> {
+  const attempted = new Set<string>()
+  for (;;) {
+    for (const id of Array.from(pendingRetryDocs.keys())) {
+      if (attempted.has(id)) continue
+      attempted.add(id)
+      fireSaveRetry(id)
+    }
+    while (unsettledChains.size > 0) {
+      await Promise.allSettled(Array.from(unsettledChains))
+    }
+    if (Array.from(pendingRetryDocs.keys()).every((id) => attempted.has(id)))
+      break
+  }
+  return Array.from(pendingRetryDocs.keys())
 }
 
 /** 链上写盘动作（Tauri save_project 命令）：入参为会话文档，序列化
@@ -143,18 +197,15 @@ export function enqueueSave(id: string, doc: ProjectContent): Promise<void> {
       notifyProjectSaved(id)
     } catch (err) {
       pendingRetryDocs.set(id, doc)
-      // 新代次失败接管定时器：旧代次定时器留着会在触发时因代次不符自灭，
-      // 最新登记将无人重试（编辑器已卸载时即永久丢编辑）
-      const stale = retryTimers.get(id)
-      if (stale !== undefined) {
-        clearTimeout(stale)
-        retryTimers.delete(id)
-      }
+      // 新代次失败接管定时器（scheduleSaveRetry 自清旧登记）：旧代次定时器
+      // 留着会在触发时因代次不符自灭，最新登记将无人重试（编辑器已卸载时
+      // 即永久丢编辑）
       scheduleSaveRetry(id, generation)
       console.error('[projectStore] 保存失败，已登记后台重试', err)
       throw err
     }
   })
+  trackChainSettle(next)
   saveChains.set(id, next)
   return next
 }
@@ -215,10 +266,9 @@ export function enqueueDelete(id: string): Promise<void> {
       },
     )
     .catch(() => undefined)
-  saveChains.set(
-    id,
-    next.catch(() => undefined),
-  )
+  const stored = next.catch(() => undefined)
+  trackChainSettle(stored)
+  saveChains.set(id, stored)
   return next
 }
 

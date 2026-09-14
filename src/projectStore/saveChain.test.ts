@@ -3,6 +3,8 @@ import {
   enqueueDelete,
   enqueueProjectWrite,
   enqueueSave,
+  flushPendingProjectSaves,
+  hasPendingProjectSaves,
   onProjectSaved,
   onProjectWriteReplayFailure,
 } from './saveChain'
@@ -47,6 +49,9 @@ describe('保存落定通知（issue #101：返回首页后摘要跟随最终保
       await expect(enqueueSave(id, DOC)).rejects.toThrow('磁盘已满')
       expect(seen).toEqual([])
     } finally {
+      // 清除本用例遗留的全局重试登记（后续用例的探针/冲刷断言依赖静止基线）
+      invoke.mockImplementation(async () => undefined)
+      await flushPendingProjectSaves()
       off()
       error.mockRestore()
     }
@@ -218,6 +223,118 @@ describe('项目删除与保存协调', () => {
     } finally {
       off()
       warn.mockRestore()
+      error.mockRestore()
+    }
+  })
+})
+
+describe('退出冲刷（issue #119：屏障等待画布防抖与失败重试）', () => {
+  afterEach(() => vi.clearAllMocks())
+
+  /** 统计 save_project 写入载荷中的文档名（ProjectDocument.project.name）。 */
+  function savedNames(): string[] {
+    return invoke.mock.calls
+      .filter(([command]) => command === 'save_project')
+      .map(([, payload]) => {
+        const doc = (payload as { doc: { project: { name: string } } }).doc
+        return doc.project.name
+      })
+  }
+
+  it('hasPendingProjectSaves：在途保存与待重试登记为真，全部静止后为假', async () => {
+    const id = 'exit-pending-probe-test'
+    expect(hasPendingProjectSaves()).toBe(false)
+    const release: { current: (() => void) | null } = { current: null }
+    invoke.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          release.current = resolve
+        }),
+    )
+    const saving = enqueueSave(id, DOC)
+    expect(hasPendingProjectSaves()).toBe(true)
+    // 链上动作经微任务才到达 invoke；等写入挂起后再放行
+    await vi.waitFor(() => expect(release.current).not.toBeNull())
+    release.current?.()
+    await saving
+    await vi.waitFor(() => expect(hasPendingProjectSaves()).toBe(false))
+  })
+
+  it('flushPendingProjectSaves：登记文档立即重存，不等 5s 后台节律', async () => {
+    const id = 'exit-flush-retry-test'
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      invoke.mockImplementation(async () => {
+        throw new Error('磁盘已满')
+      })
+      await expect(enqueueSave(id, { ...DOC, name: '登记稿' })).rejects.toThrow(
+        '磁盘已满',
+      )
+      invoke.mockImplementation(async () => undefined)
+      // 未推近任何计时器：冲刷必须自己发起重存
+      const failed = await flushPendingProjectSaves()
+      expect(failed).toEqual([])
+      expect(hasPendingProjectSaves()).toBe(false)
+      expect(savedNames()).toEqual(['登记稿', '登记稿'])
+    } finally {
+      error.mockRestore()
+    }
+  })
+
+  it('flushPendingProjectSaves：冲刷重试仍失败时返回项目 id，登记与后台节律保留', async () => {
+    const id = 'exit-flush-fail-test'
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.useFakeTimers()
+    try {
+      invoke.mockImplementation(async () => {
+        throw new Error('磁盘仍满')
+      })
+      await expect(enqueueSave(id, DOC)).rejects.toThrow('磁盘仍满')
+      const failed = await flushPendingProjectSaves()
+      expect(failed).toEqual([id])
+      expect(hasPendingProjectSaves()).toBe(true)
+      // 失败尝试 + 冲刷重试各一次（每登记至多尝试一次，不紧循环）
+      expect(savedNames()).toEqual([DOC.name, DOC.name])
+      // 后台 5s 节律仍接管：到点再次重试
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(savedNames()).toHaveLength(3)
+    } finally {
+      // 清除本用例遗留的重试登记（后续用例的冲刷断言依赖静止基线）
+      invoke.mockImplementation(async () => undefined)
+      await flushPendingProjectSaves()
+      error.mockRestore()
+      vi.useRealTimers()
+    }
+  })
+
+  it('flushPendingProjectSaves：代次前进后不重放陈旧登记（陈旧稿不得覆盖新内容）', async () => {
+    const id = 'exit-flush-stale-test'
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      invoke.mockImplementation(async () => {
+        throw new Error('磁盘已满')
+      })
+      await expect(enqueueSave(id, { ...DOC, name: '陈旧稿' })).rejects.toThrow(
+        '磁盘已满',
+      )
+      // 更新保存排队（代次前进），写入挂起在 invoke 上
+      const release: { current: (() => void) | null } = { current: null }
+      invoke.mockImplementation(
+        () =>
+          new Promise<void>((resolve) => {
+            release.current = resolve
+          }),
+      )
+      const savingNew = enqueueSave(id, { ...DOC, name: '新稿' })
+      const flushing = flushPendingProjectSaves()
+      // 链上前一保存（陈旧稿的失败链接）落定后新稿写入才到达 invoke
+      await vi.waitFor(() => expect(release.current).not.toBeNull())
+      release.current?.()
+      await savingNew
+      expect(await flushing).toEqual([])
+      // 陈旧稿只有最初那次失败尝试：冲刷不得把它重放到新稿之后
+      expect(savedNames()).toEqual(['陈旧稿', '新稿'])
+    } finally {
       error.mockRestore()
     }
   })

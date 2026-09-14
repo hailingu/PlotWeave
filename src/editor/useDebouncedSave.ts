@@ -9,6 +9,7 @@
  */
 import { useCallback, useEffect, useRef, type MutableRefObject } from 'react'
 import { graphSignature } from './graphSignature'
+import { registerCanvasFlushGate } from '../canvasSaveRegistry'
 import type { ProjectContent } from '../model/content'
 
 /** 持久化签名（§9.4）：剥离 React Flow 会话态（selected/dragging/measured/
@@ -53,6 +54,9 @@ function useSaveGateRefs(doc: ProjectContent) {
   const lastSigRef = useRef(persistSignature(doc))
   const unmountedRef = useRef(false)
   const inFlightRef = useRef(false)
+  /** 在途保存循环（flushSave 的 run）：退出冲刷闸据此真实等待在途落定，
+   * 而非像防抖触发那样静默跳过（issue #119）。 */
+  const inFlightPromiseRef = useRef<Promise<void> | null>(null)
   return {
     saveTimer,
     dirtyRef,
@@ -61,6 +65,7 @@ function useSaveGateRefs(doc: ProjectContent) {
     lastSigRef,
     unmountedRef,
     inFlightRef,
+    inFlightPromiseRef,
   }
 }
 
@@ -176,37 +181,52 @@ function useSaveFlush(
   onSaveResult: ((err: unknown) => void) | undefined,
   delayMs: number,
 ) {
-  const { saveTimer, dirtyRef, latestRef, unmountedRef, inFlightRef } = gates
+  const {
+    saveTimer,
+    dirtyRef,
+    latestRef,
+    unmountedRef,
+    inFlightRef,
+    inFlightPromiseRef,
+  } = gates
 
   const flushSave = useCallback(async () => {
     if (inFlightRef.current) return // 在途：本轮跳过，新脏数据由在途循环接力
-    while (dirtyRef.current) {
-      dirtyRef.current = false
-      inFlightRef.current = true
-      try {
-        await onSave(latestRef.current)
-        onSaveResult?.(null)
-      } catch (err) {
-        onSaveResult?.(err)
-        if (!unmountedRef.current) {
-          // 失败不丢数据：重新置脏，按防抖节律自动重试（不紧循环）；
-          // 卸载后不排新计时器——后台循环不得覆盖新会话的编辑
-          dirtyRef.current = true
-          saveTimer.current ??= setTimeout(() => {
-            saveTimer.current = null
-            void flushSave()
-          }, delayMs)
+    const run = (async () => {
+      while (dirtyRef.current) {
+        dirtyRef.current = false
+        inFlightRef.current = true
+        try {
+          await onSave(latestRef.current)
+          onSaveResult?.(null)
+        } catch (err) {
+          onSaveResult?.(err)
+          if (!unmountedRef.current) {
+            // 失败不丢数据：重新置脏，按防抖节律自动重试（不紧循环）；
+            // 卸载后不排新计时器——后台循环不得覆盖新会话的编辑
+            dirtyRef.current = true
+            saveTimer.current ??= setTimeout(() => {
+              saveTimer.current = null
+              void flushSave()
+            }, delayMs)
+            return
+          }
+          deliverLatestAfterUnmount(latestRef, dirtyRef, onSave, onSaveResult)
           return
+        } finally {
+          inFlightRef.current = false
         }
-        deliverLatestAfterUnmount(latestRef, dirtyRef, onSave, onSaveResult)
-        return
-      } finally {
-        inFlightRef.current = false
+        // 卸载后不再发起「新一轮」冲刷，但在途保存完成时仍须把卸载前置脏的
+        // 最新文档补存一次（§3.1 flushPersist 导航契约：离开编辑器不丢编辑）
+        if (unmountedRef.current && !dirtyRef.current) return
       }
-      // 卸载后不再发起「新一轮」冲刷，但在途保存完成时仍须把卸载前置脏的
-      // 最新文档补存一次（§3.1 flushPersist 导航契约：离开编辑器不丢编辑）
-      if (unmountedRef.current && !dirtyRef.current) return
+    })()
+    inFlightPromiseRef.current = run
+    const settle = () => {
+      if (inFlightPromiseRef.current === run) inFlightPromiseRef.current = null
     }
+    void run.then(settle, settle)
+    await run
   }, [
     onSave,
     onSaveResult,
@@ -216,7 +236,18 @@ function useSaveFlush(
     saveTimer,
     unmountedRef,
     inFlightRef,
+    inFlightPromiseRef,
   ])
+
+  /** 退出冲刷闸的冲刷动作（issue #119）：先等在途保存循环真实落定（其间
+   * 接力保存含在途期间的新编辑），再补一轮立即冲刷。失败保留脏态
+   * （hasPending 仍真）交防抖节律重试，不在闸内紧循环。 */
+  const flushForExit = useCallback(async () => {
+    while (inFlightPromiseRef.current !== null) {
+      await inFlightPromiseRef.current.catch(() => undefined)
+    }
+    await flushSave()
+  }, [flushSave, inFlightPromiseRef])
 
   const markDirty = useCallback(
     (next: ProjectContent) => {
@@ -239,7 +270,7 @@ function useSaveFlush(
     void flushSave()
   }, [dirtyRef, flushSave, inFlightRef, latestRef, onSave, onSaveResult])
 
-  return { flushSave, markDirty, flushOnUnmount }
+  return { flushSave, markDirty, flushOnUnmount, flushForExit }
 }
 
 export function useDebouncedSave(
@@ -249,7 +280,8 @@ export function useDebouncedSave(
   onSaveResult?: (err: unknown) => void,
 ): (doc: ProjectContent) => void {
   const gates = useSaveGateRefs(doc)
-  const { flushSave, markDirty, flushOnUnmount } = useSaveFlush(
+  const { dirtyRef, inFlightRef } = gates
+  const { flushSave, markDirty, flushOnUnmount, flushForExit } = useSaveFlush(
     gates,
     onSave,
     onSaveResult,
@@ -266,6 +298,17 @@ export function useDebouncedSave(
     flushSave,
   )
   useUnmountFlush(gates.unmountedRef, gates.saveTimer, flushOnUnmount)
+
+  // 退出冲刷闸（issue #119）：防抖脏文档是组件内 refs，App 级退出屏障
+  // （useExitFlush）经 canvasSaveRegistry 感知并立即冲刷；卸载注销。
+  // 有脏或在途即视为待保存——防抖计时未到不代表可放行退出。
+  useEffect(() => {
+    registerCanvasFlushGate({
+      hasPending: () => dirtyRef.current || inFlightRef.current,
+      flush: flushForExit,
+    })
+    return () => registerCanvasFlushGate(null)
+  }, [dirtyRef, inFlightRef, flushForExit])
 
   return markDirty
 }

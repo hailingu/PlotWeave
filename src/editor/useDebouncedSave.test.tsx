@@ -3,6 +3,11 @@ import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useDebouncedSave } from './useDebouncedSave'
 import { EMPTY_SETTINGS } from './settings'
+import {
+  flushPendingCanvasSaves,
+  hasPendingCanvasSaves,
+  registerCanvasFlushGate,
+} from '../canvasSaveRegistry'
 import type { ProjectContent } from '../model/content'
 import type { CanvasNode } from './nodes/types'
 
@@ -545,8 +550,10 @@ describe('useDebouncedSave（在途未落定时的卸载补交，issue #118 评�
     // holder 而非裸 let：嵌套回调内的赋值不参与外层收窄，裸 let 会被
     // TS 收窄为 null 使末尾调用不可达
     const releaseRef: { current: (() => void) | null } = { current: null }
-    const onSave = vi.fn(
-      (_doc: ProjectContent) =>
+    // 泛型给出 (doc) => Promise 签名（断言读取 mock.calls[1][0]），实现不
+    // 声明未用参数
+    const onSave = vi.fn<(doc: ProjectContent) => Promise<void>>(
+      () =>
         new Promise<void>((resolve) => {
           releaseRef.current = resolve
         }),
@@ -577,5 +584,119 @@ describe('useDebouncedSave（在途未落定时的卸载补交，issue #118 评�
     expect(onSave).toHaveBeenCalledTimes(2)
     expect((onSave.mock.calls[1][0] as ProjectContent).name).toBe('最新D2')
     releaseRef.current?.()
+  })
+})
+
+describe('useDebouncedSave（退出冲刷闸注册，issue #119）', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => {
+    registerCanvasFlushGate(null)
+    vi.useRealTimers()
+  })
+
+  it('防抖窗口内的脏编辑经闸可见；flush 立即冲刷不等待节律', async () => {
+    const onSave = vi.fn()
+    const { rerender } = renderHook(
+      ({ doc }) => useDebouncedSave(doc, onSave),
+      { initialProps: { doc: mkDoc('v0') } },
+    )
+    // 首渲染跳过 + 无编辑：闸无待冲刷
+    expect(hasPendingCanvasSaves()).toBe(false)
+    act(() => {
+      rerender({ doc: mkDoc('窗口内编辑') })
+    })
+    expect(hasPendingCanvasSaves()).toBe(true)
+    await act(async () => {
+      await flushPendingCanvasSaves()
+    })
+    expect(onSave).toHaveBeenCalledTimes(1)
+    expect((onSave.mock.calls[0][0] as ProjectContent).name).toBe('窗口内编辑')
+    expect(hasPendingCanvasSaves()).toBe(false)
+  })
+
+  it('闸 flush 在在途保存期间调用：等在途落定并接力补存最新文档', async () => {
+    const names: string[] = []
+    const release: { current: (() => void) | null } = { current: null }
+    const onSave = vi.fn(
+      (doc: ProjectContent) =>
+        new Promise<void>((resolve) => {
+          if (release.current === null) {
+            release.current = () => {
+              names.push(doc.name)
+              resolve()
+            }
+            return
+          }
+          names.push(doc.name)
+          resolve()
+        }),
+    )
+    const { rerender } = renderHook(
+      ({ doc }) => useDebouncedSave(doc, onSave, 600),
+      { initialProps: { doc: mkDoc('v0') } },
+    )
+    act(() => {
+      rerender({ doc: mkDoc('A') })
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600)
+    })
+    expect(onSave).toHaveBeenCalledTimes(1) // A 在途挂起
+    act(() => {
+      rerender({ doc: mkDoc('B') })
+    }) // B 置脏（防抖未到）
+    const flushing = flushPendingCanvasSaves()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+      release.current?.() // A 落定，在途循环接力保存 B
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    await flushing
+    expect(names).toEqual(['A', 'B'])
+    expect(hasPendingCanvasSaves()).toBe(false)
+  })
+
+  it('闸 flush 冲刷失败：脏态保留待防抖节律重试（不紧循环）', async () => {
+    const onSave = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('磁盘已满'))
+      .mockResolvedValue(undefined)
+    const { rerender } = renderHook(
+      ({ doc }) => useDebouncedSave(doc, onSave),
+      { initialProps: { doc: mkDoc('v0') } },
+    )
+    act(() => {
+      rerender({ doc: mkDoc('落盘失败') })
+    })
+    await act(async () => {
+      await flushPendingCanvasSaves()
+    })
+    expect(onSave).toHaveBeenCalledTimes(1)
+    expect(hasPendingCanvasSaves()).toBe(true)
+    // 失败保留可重试状态，由防抖节律接管重试成功
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600)
+    })
+    expect(onSave).toHaveBeenCalledTimes(2)
+    expect(hasPendingCanvasSaves()).toBe(false)
+  })
+
+  it('卸载注销闸：hasPending 恢复为假，flush 不再触发保存', async () => {
+    const onSave = vi.fn()
+    const { rerender, unmount } = renderHook(
+      ({ doc }) => useDebouncedSave(doc, onSave),
+      { initialProps: { doc: mkDoc('v0') } },
+    )
+    act(() => {
+      rerender({ doc: mkDoc('脏') })
+    })
+    expect(hasPendingCanvasSaves()).toBe(true)
+    unmount()
+    expect(hasPendingCanvasSaves()).toBe(false)
+    await act(async () => {
+      await flushPendingCanvasSaves()
+    })
+    // 卸载冲刷已交付一次；闸已注销，flush 不再追加保存
+    expect(onSave).toHaveBeenCalledTimes(1)
   })
 })
