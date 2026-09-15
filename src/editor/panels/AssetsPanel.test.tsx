@@ -219,6 +219,36 @@ describe('AssetsPanel 标签提交：乱序与迟到响应（issue #124）', () 
     expect(spies.updateMeta).toHaveBeenCalledTimes(2)
   })
 
+  it('被取代的成功推进持久化基线：较新提交失败后的回退仍写库（PR #176 评审）', async () => {
+    const spies = mockStore([asset()])
+    const resolvers: Array<(a: LibraryAsset) => void> = []
+    let call = 0
+    spies.updateMeta.mockImplementation(() => {
+      call += 1
+      if (call === 2) return Promise.reject(new Error('C 写入失败'))
+      return new Promise<LibraryAsset>((res) => resolvers.push(res))
+    })
+    const tags = await openTagsInput()
+    fireEvent.change(tags, { target: { value: 'B值' } })
+    fireEvent.blur(tags) // seq1：B 排队
+    fireEvent.change(tags, { target: { value: 'C值' } })
+    fireEvent.blur(tags) // seq2：C 排队于 B 后
+    await act(async () => {}) // 链发出 B（resolvers[0] 就绪）
+    await act(async () => {
+      resolvers[0](asset({ tags: ['B值'] })) // B 成功但已被 C 取代；C 随即失败
+    })
+    expect(await screen.findByText(/C 写入失败/)).toBeTruthy()
+
+    fireEvent.change(tags, { target: { value: '主角' } }) // 放弃 C 回退（本地仍 A）
+    fireEvent.blur(tags)
+    await act(async () => {})
+    // 存储已是 B值：回退不得零写入放行，必须把 A 写回库
+    expect(spies.updateMeta).toHaveBeenCalledTimes(3)
+    expect(spies.updateMeta).toHaveBeenNthCalledWith(3, 'a1', {
+      tags: ['主角'],
+    })
+  })
+
   it('迟到成功响应落地后，重挂载的输入框收敛到新标签且失焦不写库', async () => {
     const spies = mockStore([asset()])
     let resolveSave!: (a: LibraryAsset) => void

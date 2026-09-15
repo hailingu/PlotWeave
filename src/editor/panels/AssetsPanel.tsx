@@ -266,9 +266,12 @@ function useAssetTagsCommit(
    * 单个资产成功/回退不得隐藏其余资产的未解决错误（PR #176 评审）。 */
   const tagsErrors = useRef(new Map<string, string>())
   /** 每资产未落定的最新写入目标（在途或已排队）：回退失焦值与本地
-   * tags 相同而与它不同时，必须把回退排队写在其后——否则旧提交落定
-   * 会用其目标覆盖用户明确的撤回（PR #176 评审，P1）。 */
+   * tags 相同而与它不同时，必须把回退排队写在其后（PR #176 评审，P1）。 */
   const pendingTags = useRef(new Map<string, string[]>())
+  /** 每资产最近一次成功落盘的 tags（持久化基线）：每次成功都推进——
+   * 含被更新提交取代的成功；零写入守卫须同时与本地值和基线一致，
+   * 否则较新提交失败后回退被放行，界面无错但存储落后（PR #176 评审）。 */
+  const persistedTags = useRef(new Map<string, string[]>())
   /** 每资产提交链尾：串行发起（前一落定才发下一个），保证到达存储的
    * 顺序与发起顺序一致（并发 IPC 的处理顺序无保证）。 */
   const commitChains = useRef(new Map<string, Promise<unknown>>())
@@ -295,11 +298,12 @@ function useAssetTagsCommit(
     commitChains.current.set(assetId, run)
     run
       .then((updated) => {
+        // 基线在代际判定前推进：被取代的成功也是已落盘事实
+        persistedTags.current.set(assetId, updated.tags)
         if (tagsCommitSeq.current.get(assetId) !== seq) return
         pendingTags.current.delete(assetId)
         resolveTagsError(assetId)
-        // 成功保存同步本地状态（issue #124 验收）：只合并 tags 字段——
-        // 响应是全量条目，整体替换会清掉并发的乐观改名
+        // 成功同步本地只合并 tags 字段（issue #124，防清乐观改名）
         setAssets((list) =>
           list.map((a) =>
             a.id === assetId ? { ...a, tags: updated.tags } : a,
@@ -307,8 +311,7 @@ function useAssetTagsCommit(
         )
       })
       .catch((err) => {
-        // 失败保留输入（AssetTagsInput 草稿不丢）并逐资产记录提示；
-        // 被更新提交取代的旧失败不再上报（代际守卫）
+        // 失败保留输入并逐资产记录；被取代的旧失败不再上报（代际守卫）
         if (tagsCommitSeq.current.get(assetId) !== seq) return
         pendingTags.current.delete(assetId)
         tagsErrors.current.set(assetId, String(err))
@@ -318,12 +321,13 @@ function useAssetTagsCommit(
 
   const commitTags = (asset: LibraryAsset, raw: string) => {
     const tags = parseAssetTags(raw)
-    // 输入未变化的失焦不写库：否则陈旧 asset.tags 的重挂载输入会把
-    // 刚保存的新标签覆盖回旧值（issue #124 复现路径的回写来源）；
-    // 无在途差异提交时同时解除自身未解决错误（回退 = 放弃该次修改）
+    // 输入未变化的失焦零写入（issue #124 回写来源）：须与本地值、持久化
+    // 基线都一致且无目标不同的在途提交；否则解除自身未解决错误即可
     const pending = pendingTags.current.get(asset.id)
+    const persisted = persistedTags.current.get(asset.id) ?? asset.tags
     if (
       sameTags(tags, asset.tags) &&
+      sameTags(tags, persisted) &&
       (pending === undefined || sameTags(pending, tags))
     ) {
       resolveTagsError(asset.id)
