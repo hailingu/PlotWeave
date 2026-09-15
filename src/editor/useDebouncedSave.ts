@@ -221,14 +221,15 @@ function useExitFlushAction(
 }
 
 /** 提交内容是否已被持久化覆盖（PR #174 评审）：链上重存成功登记的水位
- * 与当前编辑水位一致且未卸载——冗余重复保存失败据此静默处理。 */
+ * 与本次提交的水位一致且未卸载——冗余重复保存失败据此静默处理。 */
 function isCoveredByPersistedWatermark(
   gates: ReturnType<typeof useSaveGateRefs>,
+  submittedSeq: number,
 ): boolean {
   return (
     !gates.unmountedRef.current &&
     gates.persistedSeqRef.current !== null &&
-    gates.editSeqRef.current === gates.persistedSeqRef.current
+    submittedSeq === gates.persistedSeqRef.current
   )
 }
 
@@ -259,24 +260,27 @@ function useFlushSave(
         while (dirtyRef.current) {
           dirtyRef.current = false
           inFlightRef.current = true
+          // 提交文档与提交时编辑水位一并捕获（PR #174 评审）：失败登记
+          // 不得读取失败时刻的水位——排队期间的新编辑会错标水位
           const submitted = latestRef.current
+          const submittedSeq = editSeqRef.current
           try {
             await onSave(submitted)
             onSaveResult?.(null)
           } catch (err) {
-            // 链上重存已确认同一编辑水位的内容落盘（PR #174 评审）：排队
+            // 链上重存已确认同一提交水位的内容落盘（PR #174 评审）：排队
             // 中的冗余重复保存失败属于无数据风险的重写失败——静默返回，
             // 不重新置脏/上浮/再排程，避免对已落盘文档的循环重试
-            if (isCoveredByPersistedWatermark(gates)) return
+            if (isCoveredByPersistedWatermark(gates, submittedSeq)) return
             onSaveResult?.(err)
             if (!unmountedRef.current) {
               // 失败不丢数据：重新置脏，按防抖节律自动重试（不紧循环）；
               // 卸载后不排新计时器——后台循环不得覆盖新会话的编辑。
-              // 登记提交的文档与编辑水位：保存链重存成功同一文档且此后
-              // 无更新编辑时清脏（防冗余冲刷与误兑现）
+              // 登记提交文档与提交时水位：重存成功同一文档且此后无更新
+              // 编辑时清脏（防冗余冲刷与误兑现）
               dirtyRef.current = true
               lastFailedDocRef.current = submitted
-              failedEditSeqRef.current = editSeqRef.current
+              failedEditSeqRef.current = submittedSeq
               saveTimer.current ??= setTimeout(() => {
                 saveTimer.current = null
                 void flushSave()

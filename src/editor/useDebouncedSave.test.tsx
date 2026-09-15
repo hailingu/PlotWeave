@@ -846,4 +846,52 @@ describe('useDebouncedSave（退出冲刷闸：持久化覆盖合并冗余保存
     })
     expect(onSave).toHaveBeenCalledTimes(2)
   })
+
+  it('排队中的 A 冗余保存失败前已有更新编辑 B：失败按提交水位登记，A 完成不兑现 B（PR #174 评审）', async () => {
+    const calls: Array<{
+      doc: ProjectContent
+      resolve: () => void
+      reject: (e: Error) => void
+    }> = []
+    const onSave = vi.fn(
+      (doc: ProjectContent) =>
+        new Promise<void>((resolve, reject) => {
+          calls.push({ doc, resolve, reject })
+        }),
+    )
+    const onResult = vi.fn()
+    const { rerender } = renderHook(
+      ({ doc }) => useDebouncedSave(doc, onSave, 600, onResult),
+      { initialProps: { doc: mkDoc('v0') } },
+    )
+    act(() => {
+      rerender({ doc: mkDoc('D') })
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600)
+    })
+    expect(onSave).toHaveBeenCalledTimes(1) // A='D' 在途挂起（提交水位 1）
+    // A 在途期间用户编辑出 B（水位前进到 2，置脏），随后 A 的保存失败
+    act(() => {
+      rerender({ doc: mkDoc('B') })
+    })
+    calls[0]!.reject(new Error('磁盘已满'))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    // A 的链上重存成功通知：失败须按提交水位（1）登记——不得清 B 的脏态
+    act(() => {
+      notifyRetryPersisted(onSave.mock.calls[0][0] as ProjectContent)
+    })
+    expect(hasPendingCanvasSaves()).toBe(true)
+    expect(onResult).toHaveBeenCalledTimes(1)
+    // B 由防抖节律真实保存成功后才清洁
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600)
+      calls[1]!.resolve()
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect((onSave.mock.calls[1][0] as ProjectContent).name).toBe('B')
+    expect(hasPendingCanvasSaves()).toBe(false)
+  })
 })
