@@ -13,8 +13,20 @@ import type { ProjectContent } from '../model/content'
 const SAVE_RETRY_DELAY_MS = 5000
 export const saveChains = new Map<string, Promise<unknown>>()
 export const pendingRetryDocs = new Map<string, ProjectContent>()
-const retryTimers = new Map<string, ReturnType<typeof setTimeout>>()
+/** 重试登记的触发器：定时器句柄 + 登记代次（触发时代次不符即自灭）。 */
+const retryTimers = new Map<
+  string,
+  { timer: ReturnType<typeof setTimeout>; generation: number }
+>()
 const saveGenerations = new Map<string, number>()
+/** 未落定的链上动作（保存/删除/附属写入，issue #119）：退出屏障的就绪探针
+ * 与冲刷等待面。链条 Promise 长期留存于 saveChains（落定后也不清除），
+ * 不能据此判断在途，须另行跟踪。 */
+const unsettledChains = new Set<Promise<unknown>>()
+/** 最近经重试确认落盘的登记文档（按 id，PR #174 评审）：同一文档对象的
+ * 后续保存失败是冗余重写失败——磁盘已持有该内容，不再登记重试，避免
+ * 假性「待保存」阻断退出。新内容（不同对象）照常登记。 */
+const retryPersistedDocs = new Map<string, ProjectContent>()
 /** 删除墓碑：删除开始即立——之后为该项目排队的任何保存被吸收，迟到的
  * 合并冲刷/重试不得重建 JSON 复活用户刚删的项目；删除落定（成功或失败）
  * 后清除，失败时项目仍在、可继续保存。 */
@@ -81,6 +93,7 @@ export function enqueueProjectWrite(
   }
   const run = (saveChains.get(id) ?? Promise.resolve()).catch(() => undefined)
   const next = run.then(write)
+  trackChainSettle(next)
   saveChains.set(id, next)
   return next
 }
@@ -89,9 +102,9 @@ export function enqueueProjectWrite(
  * 期定时器即使触发也只会被 enqueueSave 吸收（不会复活已删项目），但停摆
  * 更干净；登记文档留待链落定处的全量清除与回吐判定。 */
 function clearSaveRetryTimer(id: string): void {
-  const timer = retryTimers.get(id)
-  if (timer !== undefined) {
-    clearTimeout(timer)
+  const entry = retryTimers.get(id)
+  if (entry !== undefined) {
+    clearTimeout(entry.timer)
     retryTimers.delete(id)
   }
 }
@@ -101,17 +114,106 @@ function clearSaveRetry(id: string): void {
   pendingRetryDocs.delete(id)
 }
 
+/** 定时器到期与退出冲刷（flushPendingProjectSaves）共用的重试触发：代次
+ * 仍是登记代次才重排入队——新保存排队即自增代次，旧登记由新代次自洽
+ * （陈旧文档不得后完成覆盖新内容）。返回是否实际发起重存：无登记定时器
+ * 或代次已前进均为空操作（false），调用方据此决定是否计入已尝试。 */
+function fireSaveRetry(id: string): boolean {
+  const entry = retryTimers.get(id)
+  if (entry === undefined) return false
+  clearSaveRetryTimer(id)
+  if (saveGenerations.get(id) !== entry.generation) return false
+  const doc = pendingRetryDocs.get(id)
+  if (doc === undefined) return false
+  void enqueueSave(id, doc).catch(() => undefined)
+  return true
+}
+
 function scheduleSaveRetry(id: string, generation: number): void {
-  retryTimers.set(
-    id,
-    setTimeout(() => {
-      retryTimers.delete(id)
-      // 代次已前进（有更新的保存排队/完成）：本次登记作废，由新代次自洽
-      if (saveGenerations.get(id) !== generation) return
-      const doc = pendingRetryDocs.get(id)
-      if (doc !== undefined) void enqueueSave(id, doc).catch(() => undefined)
-    }, SAVE_RETRY_DELAY_MS),
-  )
+  clearSaveRetryTimer(id)
+  retryTimers.set(id, {
+    timer: setTimeout(() => fireSaveRetry(id), SAVE_RETRY_DELAY_MS),
+    generation,
+  })
+}
+
+/** 登记链上新链接并在落定后解除未落定登记。解除晚于落定一个微任务：
+ * 退出屏障的同步探针因此保守多真一拍，屏障冲刷自身会等链静止，无害。 */
+function trackChainSettle(link: Promise<unknown>): void {
+  unsettledChains.add(link)
+  void link
+    .catch(() => undefined)
+    .then(() => {
+      unsettledChains.delete(link)
+    })
+}
+
+/** 退出屏障就绪探针（issue #119）：有待重试登记文档或未落定链上动作。 */
+export function hasPendingProjectSaves(): boolean {
+  return pendingRetryDocs.size > 0 || unsettledChains.size > 0
+}
+
+/** 发起所有尚未实际尝试过的登记重存：已发起且未被其他入口取代（登记代次
+ * 未变）的跳过；陈旧登记的空操作触发不计入已发起（PR #174 评审）。 */
+function fireUnfiredRegistrations(fired: Map<string, number>): void {
+  for (const id of Array.from(pendingRetryDocs.keys())) {
+    const entry = retryTimers.get(id)
+    if (entry === undefined || fired.get(id) === entry.generation) continue
+    if (!fireSaveRetry(id)) continue
+    // 记录本次发起消费的代次：其自身失败重排为同一代次登记，不重复尝试
+    // （不紧循环）；其他入口（编辑器防抖重试/外部保存）失败产生的——即便
+    // 携带同一文档对象——新代次登记仍会再试一轮（PR #174 评审）
+    fired.set(id, saveGenerations.get(id) ?? 0)
+  }
+}
+
+/** 仍有未发起过的登记需要再来一轮冲刷：登记代次不等于已发起代次即算
+ * （含他入口同文档对象重新登记）。无定时器的登记（其入队保存在途）由链
+ * 排空等待落定，不算未发起。 */
+function hasUnfiredRegistrations(fired: Map<string, number>): boolean {
+  for (const id of pendingRetryDocs.keys()) {
+    const entry = retryTimers.get(id)
+    if (entry !== undefined && fired.get(id) !== entry.generation) return true
+  }
+  return false
+}
+
+/** 退出冲刷（issue #119）：登记在案的失败重试文档立即重存（不等 5s 后台
+ * 节律）并等待全部链上动作落定，仍失败的登记原样保留并返回其项目 id——
+ * 退出屏障据此阻断退出并提示。代次已前进的陈旧登记不重放（新保存拥有
+ * 终态）；冲刷等待期间新登记的文档也各尝试一次——已发起按登记代次跟踪
+ * （文档对象身份不足以区分两个携带同一对象的代次，PR #174 评审）。
+ * 不紧循环：冲刷自身发起的保存失败重排为同一代次，不重复尝试；持续失败
+ * 交给再次退出与后台节律接管。 */
+export async function flushPendingProjectSaves(): Promise<string[]> {
+  /** 已实际发起重存的登记：项目 id → 本次发起消费的代次。 */
+  const fired = new Map<string, number>()
+  for (;;) {
+    fireUnfiredRegistrations(fired)
+    while (unsettledChains.size > 0) {
+      await Promise.allSettled(Array.from(unsettledChains))
+    }
+    if (!hasUnfiredRegistrations(fired)) break
+  }
+  return Array.from(pendingRetryDocs.keys())
+}
+
+/** 登记文档重存成功监听器：入参为已落盘的登记文档对象（与登记为同一
+ * 引用）。 */
+export type RetryPersistedListener = (doc: ProjectContent) => void
+const retryPersistedListeners = new Set<RetryPersistedListener>()
+
+/** 订阅登记文档经链上重存成功：画布冲刷闸据此清除对应脏态，退出屏障的
+ * 定点检查不再对已落盘文档发起冗余重存（PR #174 评审）。返回退订函数。 */
+export function onRetryPersisted(listener: RetryPersistedListener): () => void {
+  retryPersistedListeners.add(listener)
+  return () => retryPersistedListeners.delete(listener)
+}
+
+/** 登记文档重存成功的通知口（enqueueSave 落定登记文档时触发；独立导出
+ * 供测试注入）。 */
+export function notifyRetryPersisted(doc: ProjectContent): void {
+  retryPersistedListeners.forEach((listener) => listener(doc))
 }
 
 /** 链上写盘动作（Tauri save_project 命令）：入参为会话文档，序列化
@@ -137,24 +239,34 @@ export function enqueueSave(id: string, doc: ProjectContent): Promise<void> {
   const next = run.then(async () => {
     try {
       await tauriSave(id, doc)
-      pendingRetryDocs.delete(id)
+      // 任何成功保存都取代并清除既有登记（陈旧登记不得残留）；仅当落盘的
+      // 正是登记文档时通知订阅者并记忆落盘文档（画布闸据此清脏、冗余
+      // 重写失败据此免登记，PR #174 评审）
+      const registered = pendingRetryDocs.get(id)
+      if (registered !== undefined) {
+        if (registered === doc) {
+          retryPersistedDocs.set(id, doc)
+          notifyRetryPersisted(doc)
+        }
+        pendingRetryDocs.delete(id)
+      }
       // 落定通知放在失败登记清除之后：此刻磁盘已是本次内容且无待重试文档，
       // 订阅方（首页摘要刷新）据此读到的一定是最终状态（issue #101）
       notifyProjectSaved(id)
     } catch (err) {
+      // 同一文档对象已经重试落盘（PR #174 评审）：本次是冗余重写失败，
+      // 磁盘已持有该内容——不登记重试、不排定时器，退出屏障不得因此阻断
+      if (retryPersistedDocs.get(id) === doc) throw err
       pendingRetryDocs.set(id, doc)
-      // 新代次失败接管定时器：旧代次定时器留着会在触发时因代次不符自灭，
-      // 最新登记将无人重试（编辑器已卸载时即永久丢编辑）
-      const stale = retryTimers.get(id)
-      if (stale !== undefined) {
-        clearTimeout(stale)
-        retryTimers.delete(id)
-      }
+      // 新代次失败接管定时器（scheduleSaveRetry 自清旧登记）：旧代次定时器
+      // 留着会在触发时因代次不符自灭，最新登记将无人重试（编辑器已卸载时
+      // 即永久丢编辑）
       scheduleSaveRetry(id, generation)
       console.error('[projectStore] 保存失败，已登记后台重试', err)
       throw err
     }
   })
+  trackChainSettle(next)
   saveChains.set(id, next)
   return next
 }
@@ -184,9 +296,15 @@ export function enqueueDelete(id: string): Promise<void> {
     const { invoke } = await import('@tauri-apps/api/core')
     await invoke('delete_project', { id })
   })
-  next
+  /** 删除失败时的回吐分支：重新登记保留/吸收的快照与附属写入。该链纳入
+   * 未落定跟踪（PR #174 评审）：stored 只覆盖删除本身——按微任务续延排序
+   * 恢复分支的入队注册恰先于跟踪器移除 stored，屏障实际观测不到空窗；
+   * 显式跟踪恢复链后，退出屏障的「unsettled 为空 ⇒ 无待回吐」不变量不再
+   * 依赖这一排序。 */
+  const recovery = next
     .finally(() => {
       deletingIds.delete(id)
+      retryPersistedDocs.delete(id)
     })
     .then(
       () => {
@@ -214,11 +332,10 @@ export function enqueueDelete(id: string): Promise<void> {
         }
       },
     )
-    .catch(() => undefined)
-  saveChains.set(
-    id,
-    next.catch(() => undefined),
-  )
+  trackChainSettle(recovery)
+  const stored = next.catch(() => undefined)
+  trackChainSettle(stored)
+  saveChains.set(id, stored)
   return next
 }
 

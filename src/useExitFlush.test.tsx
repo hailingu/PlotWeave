@@ -20,6 +20,11 @@ const hasPending = vi.fn(() => true)
 const flushPending = vi.fn(async (): Promise<string[]> => [])
 const destroy = vi.fn(async () => undefined)
 const invoke = vi.fn(async (cmd: string): Promise<unknown> => cmd)
+/** 画布防抖冲刷闸（issue #119）与项目保存链重试冲刷的桩。 */
+const hasPendingCanvas = vi.fn(() => false)
+const flushCanvas = vi.fn(async () => undefined)
+const hasPendingProject = vi.fn(() => false)
+const flushProject = vi.fn(async (): Promise<string[]> => [])
 
 const closeHandlers: CloseHandler[] = []
 const quitHandlers: QuitHandler[] = []
@@ -29,6 +34,14 @@ let quitListenerLiveAtAck: boolean | null = null
 vi.mock('./aiSessionStore', () => ({
   hasPendingAiSessionSaves: () => hasPending(),
   flushPendingAiSessionSaves: () => flushPending(),
+}))
+vi.mock('./canvasSaveRegistry', () => ({
+  hasPendingCanvasSaves: () => hasPendingCanvas(),
+  flushPendingCanvasSaves: () => flushCanvas(),
+}))
+vi.mock('./projectStore/saveChain', () => ({
+  hasPendingProjectSaves: () => hasPendingProject(),
+  flushPendingProjectSaves: () => flushProject(),
 }))
 vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: () => ({
@@ -61,6 +74,10 @@ beforeEach(() => {
   quitListenerLiveAtAck = null
   hasPending.mockReturnValue(true)
   flushPending.mockResolvedValue([])
+  hasPendingCanvas.mockReturnValue(false)
+  flushCanvas.mockResolvedValue(undefined)
+  hasPendingProject.mockReturnValue(false)
+  flushProject.mockResolvedValue([])
   destroy.mockClear()
   invoke.mockClear()
 })
@@ -171,5 +188,85 @@ describe('useExitFlush（⌘Q 应用级退出冲刷屏障）', () => {
     })
     expect(invoke).not.toHaveBeenCalledWith('app_exit')
     expect(result.current).toContain('已阻止退出')
+  })
+})
+
+describe('useExitFlush（退出屏障覆盖画布防抖与项目重试，issue #119）', () => {
+  it('三源全空：直接放行关闭，不触发任何冲刷', async () => {
+    hasPending.mockReturnValue(false)
+    await mountBarrier()
+    const event = { preventDefault: vi.fn() }
+    await act(async () => {
+      await closeHandlers[0](event)
+    })
+    expect(event.preventDefault).not.toHaveBeenCalled()
+    expect(flushCanvas).not.toHaveBeenCalled()
+    expect(flushProject).not.toHaveBeenCalled()
+    expect(flushPending).not.toHaveBeenCalled()
+    expect(destroy).not.toHaveBeenCalled()
+  })
+
+  it('无 AI 待保存但有画布脏数据：阻止关闭，冲刷画布与项目链后放行', async () => {
+    hasPending.mockReturnValue(false)
+    let canvasPending = true
+    hasPendingCanvas.mockImplementation(() => canvasPending)
+    flushCanvas.mockImplementation(async () => {
+      canvasPending = false
+    })
+    const { result } = await mountBarrier()
+    const event = { preventDefault: vi.fn() }
+    await act(async () => {
+      await closeHandlers[0](event)
+    })
+    expect(event.preventDefault).toHaveBeenCalled()
+    expect(flushCanvas).toHaveBeenCalled()
+    expect(flushProject).toHaveBeenCalled()
+    expect(destroy).toHaveBeenCalled()
+    expect(result.current).toBeNull()
+  })
+
+  it('画布冲刷后项目登记重试仍失败：保留窗口并显示画布保存诊断', async () => {
+    hasPending.mockReturnValue(false)
+    hasPendingCanvas.mockReturnValue(true)
+    flushProject.mockResolvedValue(['p1'])
+    const { result } = await mountBarrier()
+    await act(async () => {
+      await closeHandlers[0]({ preventDefault: vi.fn() })
+    })
+    expect(destroy).not.toHaveBeenCalled()
+    expect(result.current).toContain('已阻止退出')
+    expect(result.current).toContain('画布保存失败')
+    expect(invoke).not.toHaveBeenCalledWith('app_exit')
+  })
+
+  it('⌘Q 无 AI 待保存但有项目待重试：先冲刷项目保存再受控退出', async () => {
+    hasPending.mockReturnValue(false)
+    let projectPending = true
+    hasPendingProject.mockImplementation(() => projectPending)
+    flushProject.mockImplementation(async () => {
+      projectPending = false
+      return []
+    })
+    await mountBarrier()
+    await act(async () => {
+      await quitHandlers[0]()
+    })
+    expect(projectPending).toBe(false)
+    expect(flushCanvas).toHaveBeenCalled()
+    expect(invoke).toHaveBeenCalledWith('app_exit')
+    expect(destroy).not.toHaveBeenCalled()
+  })
+
+  it('⌘Q 项目重试冲刷仍失败：不退出并显示画布保存诊断', async () => {
+    hasPending.mockReturnValue(false)
+    hasPendingProject.mockReturnValue(true)
+    flushProject.mockResolvedValue(['p1'])
+    const { result } = await mountBarrier()
+    await act(async () => {
+      await quitHandlers[0]()
+    })
+    expect(invoke).not.toHaveBeenCalledWith('app_exit')
+    expect(result.current).toContain('已阻止退出')
+    expect(result.current).toContain('画布保存失败')
   })
 })

@@ -70,6 +70,18 @@ function useCanvasCommitBarrier(
     },
     [onSave],
   )
+  /** 链上重存成功同一登记文档时的外部完成口（PR #174 评审）：该文档已
+   * 落盘，兑现全部既有等待者并前移代次——此后登记的等待者由后续真实
+   * 保存负责，不因本次外部完成被错误兑现。 */
+  const markExternallyPersisted = useCallback(() => {
+    const attempt = ++attemptRef.current
+    const waiters = waitersRef.current
+    waitersRef.current = waiters.filter((waiter) => {
+      if (waiter.minAttempt >= attempt) return true
+      waiter.resolve()
+      return false
+    })
+  }, [])
   const whenCanvasCommitted = useCallback(
     () =>
       new Promise<void>((resolve) => {
@@ -77,7 +89,7 @@ function useCanvasCommitBarrier(
       }),
     [],
   )
-  return { wrappedOnSave, whenCanvasCommitted }
+  return { wrappedOnSave, whenCanvasCommitted, markExternallyPersisted }
 }
 
 /** 防抖落盘与保存失败诊断（§10.2）。 */
@@ -95,12 +107,24 @@ export function useEditorPersistence(
     setSaveError(errorBannerMessage(err))
   }, [])
 
-  const { wrappedOnSave, whenCanvasCommitted } = useCanvasCommitBarrier(onSave)
+  const { wrappedOnSave, whenCanvasCommitted, markExternallyPersisted } =
+    useCanvasCommitBarrier(onSave)
+
+  // 链上重存成功同一登记文档且闸内无更新编辑（闸守卫通过，issue #119，
+  // PR #174 评审）：画布已落盘，完成语义与常规保存成功对齐——兑现 AI
+  // 执行回执等待者、清除失败横幅。守卫在 useDebouncedSave 的订阅内（按
+  // 最新文档身份过滤），B 等更新编辑的等待者只由其真实保存兑现。
+  const handleRetryPersistedSuccess = useCallback(() => {
+    markExternallyPersisted()
+    handleSaveResult(null)
+  }, [markExternallyPersisted, handleSaveResult])
+
   const markDirty = useDebouncedSave(
     buildSessionDoc(project, doc, doc.viewportRef.current),
     wrappedOnSave,
     SAVE_DEBOUNCE_MS,
     handleSaveResult,
+    handleRetryPersistedSuccess,
   )
 
   const onMoveEnd = useCallback(
