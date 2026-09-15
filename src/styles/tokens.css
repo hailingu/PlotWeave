@@ -220,3 +220,15 @@
     -webkit-backdrop-filter: none !important;
   }
 }
+
+/* 宿主外观同步（原生 WKWebView 外壳，docs/swiftui-react-flow-migration-plan.md
+ * §2.2）：原生把系统外观与辅助显示语义显式落到 data 属性，不假定目标
+ * WebKit 的媒体查询全部生效。宿主注入存在时 color-scheme 以宿主值为准
+ * （浅深令牌当前与系统设置同源，媒体查询与宿主语义一致；若后续实测发现
+ * 分叉，按 data 属性补齐对应令牌镜像）。 */
+:root[data-host-color-scheme='dark'] {
+  color-scheme: dark;
+}
+:root[data-host-color-scheme='light'] {
+  color-scheme: light;
+}

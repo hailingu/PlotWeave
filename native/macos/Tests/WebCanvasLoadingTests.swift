@@ -11,7 +11,8 @@ struct WebCanvasLoadingTests {
     /// M01 regression: a packaged canvas must both report ready and render nodes.
     @Test func bundledCanvasRendersAndReportsReady() async throws {
         let state = WebCanvasState()
-        let coordinator = WebCanvasCoordinator(state: state)
+        let appearance = CanvasAppearanceState()
+        let coordinator = WebCanvasCoordinator(state: state, appearance: appearance)
         let configuration = WKWebViewConfiguration()
         configuration.userContentController.add(coordinator, name: WebCanvasCoordinator.bridgeName)
         configuration.userContentController.addUserScript(WKUserScript(

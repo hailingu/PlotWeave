@@ -9,14 +9,30 @@ import SwiftUI
 /// column hosts ``WebCanvasSection``: a WKWebView rendering the in-memory
 /// demo canvas built from the shared frontend sources.
 struct NativeShellRoot: View {
-    @State private var layout = ShellLayoutState()
+    @State private var layout: ShellLayoutState
+    @State private var appearance: CanvasAppearanceState
+
+    /// InjectableViews keep the canonical in-app defaults while letting
+    /// lifecycle tests drive the very state objects the live shell uses.
+    init(
+        layout: ShellLayoutState = ShellLayoutState(),
+        appearance: CanvasAppearanceState = CanvasAppearanceState()
+    ) {
+        _layout = State(initialValue: layout)
+        _appearance = State(initialValue: appearance)
+    }
 
     var body: some View {
         @Bindable var layout = layout
-        NavigationSplitView {
+        NavigationSplitView(
+            columnVisibility: Binding(
+                get: { layout.sidebarVisible ? .all : .detailOnly },
+                set: { layout.sidebarVisible = $0 != .detailOnly }
+            )
+        ) {
             ShellSidebarView()
         } detail: {
-            WebCanvasSection()
+            WebCanvasSection(appearance: appearance)
         }
         .inspector(isPresented: $layout.inspectorVisible) {
             ShellInspectorView()
@@ -31,6 +47,8 @@ struct NativeShellRoot: View {
             }
         }
         .frame(minWidth: 960, minHeight: 600)
+        .task { appearance.startObserving() }
+        .onDisappear { appearance.stopObserving() }
     }
 }
 

@@ -17,6 +17,16 @@ class ResizeObserverStub {
   disconnect(): void {}
 }
 
+/** happy-dom 的 document 跨用例共享，宿主外观属性必须逐例清理。 */
+function clearHostAppearanceState(): void {
+  const dataset = document.documentElement.dataset
+  delete dataset.hostColorScheme
+  delete dataset.hostReduceTransparency
+  delete dataset.hostIncreaseContrast
+  delete dataset.hostReduceMotion
+  delete (window as { __pwHostAppearance?: unknown }).__pwHostAppearance
+}
+
 describe('NativeCanvasApp 演示页（P1 视觉首片）', () => {
   it('渲染画布容器与内存演示数据标记', () => {
     vi.stubGlobal('ResizeObserver', ResizeObserverStub)
@@ -47,6 +57,58 @@ describe('NativeCanvasApp 演示页（P1 视觉首片）', () => {
       const { unmount } = render(<NativeCanvasApp />)
       unmount()
     }).not.toThrow()
+    vi.unstubAllGlobals()
+  })
+
+  it('挂载时应用宿主注入的初始外观语义（§2.2 宿主同步）', async () => {
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub)
+    ;(window as { __pwHostAppearance?: unknown }).__pwHostAppearance = {
+      colorScheme: 'dark',
+      reduceTransparency: true,
+      increaseContrast: false,
+      reduceMotion: true,
+    }
+    const { unmount } = render(<NativeCanvasApp />)
+    const dataset = document.documentElement.dataset
+    await waitFor(() => expect(dataset.hostColorScheme).toBe('dark'))
+    expect(dataset.hostReduceTransparency).toBe('true')
+    expect(dataset.hostIncreaseContrast).toBe('false')
+    expect(dataset.hostReduceMotion).toBe('true')
+    unmount()
+    clearHostAppearanceState()
+    vi.unstubAllGlobals()
+  })
+
+  it('宿主推送变化后更新语义属性，无效推送保持原值', async () => {
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub)
+    ;(window as { __pwHostAppearance?: unknown }).__pwHostAppearance = {
+      colorScheme: 'light',
+      reduceTransparency: false,
+      increaseContrast: false,
+      reduceMotion: false,
+    }
+    const { unmount } = render(<NativeCanvasApp />)
+    await waitFor(() =>
+      expect(document.documentElement.dataset.hostColorScheme).toBe('light'),
+    )
+    const push = (window as { __pwApplyHostAppearance?: unknown })
+      .__pwApplyHostAppearance as (payload: unknown) => void
+    push({
+      colorScheme: 'dark',
+      reduceTransparency: false,
+      increaseContrast: false,
+      reduceMotion: false,
+    })
+    expect(document.documentElement.dataset.hostColorScheme).toBe('dark')
+    push({
+      colorScheme: 'blue',
+      reduceTransparency: false,
+      increaseContrast: false,
+      reduceMotion: false,
+    })
+    expect(document.documentElement.dataset.hostColorScheme).toBe('dark')
+    unmount()
+    clearHostAppearanceState()
     vi.unstubAllGlobals()
   })
 })

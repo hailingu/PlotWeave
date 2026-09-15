@@ -6,8 +6,10 @@
  * 在 src/model/convert.ts。统一约定：updatedAt 对外为 ISO 字符串。
  *
  * 域拆分（issue #39）：seeds（演示种子）、memory（内存回退）、saveChain
- * （§3.1 保存链与删除墓碑）、tauri（Rust 命令域）；本文件保留环境分派、
- * 复制命名规则与统一门面。
+ * （§3.1 保存链与删除墓碑）、tauri（命令域）；本文件保留环境分派、
+ * 复制命名规则与统一门面。环境分派与命令调用经 src/platform/（P2 宿主
+ * 接口收敛）：内存回退仅限纯浏览器预览，Swift 原生宿主与 Tauri 同走
+ * 命令域（宿主传输未接通时可见失败，不落内存模式）。
  */
 import type { ProjectContent } from './model/content'
 import {
@@ -25,6 +27,8 @@ import {
 } from './projectStore/saveChain'
 import { tauriCreate, tauriList, tauriLoad } from './projectStore/tauri'
 import type { ProjectSummary } from './home/projects'
+import { isBrowserPreviewHost } from './platform/hostEnvironment'
+import { hostInvoke } from './platform/hostCommands'
 import {
   deleteAiSession,
   loadAiSession,
@@ -35,8 +39,6 @@ import {
 import type { AiSession } from './editor/ai/session'
 
 export type { ProjectContent }
-
-const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
 /** 复制命名（§7.3）：新名 = `{源名} 副本`，与现存项目名冲突则递增序号
  * （` 副本 2`、` 副本 3`…）；拼接结果按字符数超 64（§9.3 校验口径）时先
@@ -56,23 +58,25 @@ function duplicateName(source: string, taken: ReadonlySet<string>): string {
   }
 }
 
-/** 统一门面：两种环境同签名。 */
+/** 统一门面：内存回退仅限纯浏览器预览（P2 平台收敛），其余宿主走命令域。 */
 export const projectStore = {
   list: (): Promise<ProjectSummary[]> =>
-    isTauri ? tauriList() : Promise.resolve(memoryList()),
+    isBrowserPreviewHost() ? Promise.resolve(memoryList()) : tauriList(),
 
   create: (name: string): Promise<ProjectSummary> =>
-    isTauri ? tauriCreate(name) : Promise.resolve(memoryCreate(name)),
+    isBrowserPreviewHost()
+      ? Promise.resolve(memoryCreate(name))
+      : tauriCreate(name),
 
   load: (id: string): Promise<ProjectContent> =>
-    isTauri ? tauriLoad(id) : memoryLoad(id),
+    isBrowserPreviewHost() ? memoryLoad(id) : tauriLoad(id),
 
   /** 订阅项目文档保存落定（issue #101）：链上保存成功（含失败登记后的后台
    * 重试成功）时通知，首页据此在导航读取之后再刷新摘要；保存失败不通知。 */
   onProjectSaved,
 
   save: async (id: string, doc: ProjectContent): Promise<void> => {
-    if (isTauri) {
+    if (!isBrowserPreviewHost()) {
       await enqueueSave(id, doc)
       return
     }
@@ -99,7 +103,7 @@ export const projectStore = {
   /** 删除项目（首页卡片菜单，§3.2；确认框由界面层负责）。排进保存链，
    * 迟到的保存/重试不得复活已删项目。 */
   delete: async (id: string): Promise<void> => {
-    if (isTauri) await enqueueDelete(id)
+    if (!isBrowserPreviewHost()) await enqueueDelete(id)
     else await memoryDelete(id)
     deleteAiSession(id)
   },
@@ -117,9 +121,8 @@ export const projectStore = {
     const name = duplicateName(doc.name, taken)
     const meta = await projectStore.create(name)
     try {
-      if (isTauri) {
-        const { invoke } = await import('@tauri-apps/api/core')
-        await invoke('copy_project_assets', { fromId: id, toId: meta.id })
+      if (!isBrowserPreviewHost()) {
+        await hostInvoke('copy_project_assets', { fromId: id, toId: meta.id })
       }
       await projectStore.save(meta.id, { ...doc, name, createdAt: undefined })
     } catch (err) {

@@ -21,6 +21,7 @@ import { settingsStore } from '../../settings/settingsStore'
 import type { AppSettings } from '../../settings/types'
 import { uid } from '../../uid'
 import { normalizeAssetRef, projectAssets, tauriInvoke } from '../projectAssets'
+import { isBrowserPreviewHost } from '../../platform/hostEnvironment'
 import type { ProjectSettings } from '../settings'
 import type { HistoryCommand } from '../history'
 import type { NodeDataPatch } from '../nodes/patch'
@@ -29,7 +30,8 @@ import type { ImageGenApi, ImageJobView } from './context'
 import { resolveImageGenPlan } from './plan'
 import { signatureMatches, type ImageGenInput } from './signature'
 
-/** 非桌面环境的统一文案（浏览器预览无 IPC，无法代理生成）。 */
+/** 纯浏览器预览的统一文案（无 IPC，无法代理生成；P2 平台收敛后仅此宿主
+ * 走该分支，Swift 宿主经命令传输可见失败，不落此文案）。 */
 const PREVIEW_UNSUPPORTED =
   '浏览器预览不支持图像生成（媒体落盘需桌面端 Rust 侧执行）'
 
@@ -54,10 +56,6 @@ export interface ImageJobsDeps {
 /** 错误对象的用户可见文案：字符串原样、其余 toString 兜底。 */
 function errorText(err: unknown): string {
   return typeof err === 'string' ? err : String(err)
-}
-
-function isDesktopTauri(): boolean {
-  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 }
 
 /** Rust 生成命令的执行（§9.3 预检已在命令内完成，前端单次 IPC 直收
@@ -198,7 +196,9 @@ async function runStart(
   nodeId: string,
   jobId: string,
 ): Promise<void> {
-  if (!isDesktopTauri()) {
+  // P2 平台收敛：仅纯浏览器预览走不支持文案；原生宿主（Tauri）继续执行，
+  // Swift 宿主由命令传输的可见失败接管（P4 接通）
+  if (isBrowserPreviewHost()) {
     deps.setJobError(nodeId, PREVIEW_UNSUPPORTED)
     return
   }

@@ -1,0 +1,168 @@
+import AppKit
+import SwiftUI
+import Testing
+import WebKit
+@testable import PlotWeaveNative
+
+/// Panel lifecycle against the real shell composition
+/// (`docs/swiftui-react-flow-migration-plan.md` §4.2): toggling the
+/// inspector and collapsing the sidebar must keep the very same WKWebView
+/// instance and the loaded page alive. Also seeds M13 by asserting the
+/// host appearance sync lands on the real web page.
+@MainActor
+struct ShellWebCanvasLifecycleTests {
+
+    private struct Timeout: Error {}
+
+    /// Mutable holder feeding a controllable appearance reader.
+    @MainActor
+    private final class ForcedSnapshot {
+        var value: CanvasAppearanceState.Snapshot
+
+        init(_ value: CanvasAppearanceState.Snapshot) {
+            self.value = value
+        }
+    }
+
+    @Test func panelTogglesKeepWebViewAndPageAlive() async throws {
+        let layout = ShellLayoutState()
+        let forced = ForcedSnapshot(
+            CanvasAppearanceState.Snapshot(
+                colorScheme: "light",
+                reduceTransparency: false,
+                increaseContrast: false,
+                reduceMotion: false
+            )
+        )
+        let appearance = CanvasAppearanceState(reader: { forced.value })
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1200, height: 800),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(
+            rootView: NativeShellRoot(layout: layout, appearance: appearance)
+        )
+        window.orderFront(nil)
+        defer { window.close() }
+
+        let webView = try await waitForWebView(in: window)
+        try await waitForReadyCanvas(webView)
+        #expect(
+            try await hostColorScheme(webView) == "light",
+            "host appearance must land before the panel toggles"
+        )
+        try await webView.evaluateJavaScript("window.__pwLifecycleProbe = 314159")
+        let identity = ObjectIdentifier(webView)
+
+        layout.toggleInspector()
+        try await settle()
+        layout.sidebarVisible = false
+        try await settle()
+        layout.sidebarVisible = true
+        try await settle()
+
+        #expect(ObjectIdentifier(try await waitForWebView(in: window)) == identity)
+        let probe = try await webView.evaluateJavaScript(
+            "window.__pwLifecycleProbe"
+        ) as? Int
+        #expect(probe == 314159, "the page must not reload across panel toggles")
+        try await waitForReadyCanvas(webView)
+
+        forced.value = CanvasAppearanceState.Snapshot(
+            colorScheme: "dark",
+            reduceTransparency: true,
+            increaseContrast: true,
+            reduceMotion: true
+        )
+        appearance.refresh()
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        var pushed = try await hostColorScheme(webView)
+        while pushed != "dark" && ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(50))
+            pushed = try await hostColorScheme(webView)
+        }
+        #expect(pushed == "dark", "appearance pushes must reach the live page")
+        let contrast = try await webView.evaluateJavaScript(
+            "document.documentElement.getAttribute('data-host-increase-contrast')"
+        ) as? String
+        #expect(contrast == "true")
+    }
+
+    /// M17: the document-start user script must expose the Swift host marker
+    /// (`window.__pwNativeHost = {"kind":"swift"}`) before any app script runs
+    /// — the web side's host identification consumes exactly this marker
+    /// (plan §2.3/§3, matrix M17) and must never fall back to memory mode.
+    @Test func documentStartScriptInjectsSwiftHostMarker() async throws {
+        let layout = ShellLayoutState()
+        let appearance = CanvasAppearanceState()
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1200, height: 800),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(
+            rootView: NativeShellRoot(layout: layout, appearance: appearance)
+        )
+        window.orderFront(nil)
+        defer { window.close() }
+
+        let webView = try await waitForWebView(in: window)
+        try await waitForReadyCanvas(webView)
+        let marker = try await webView.evaluateJavaScript(
+            "JSON.stringify(window.__pwNativeHost ?? null)"
+        ) as? String
+        #expect(marker == #"{"kind":"swift"}"#)
+    }
+
+    /// Reads the semantic attribute the web side applies from host sync.
+    private func hostColorScheme(_ webView: WKWebView) async throws -> String? {
+        try await webView.evaluateJavaScript(
+            "document.documentElement.getAttribute('data-host-color-scheme')"
+        ) as? String
+    }
+
+    /// Lets SwiftUI apply the layout change before re-asserting identity.
+    private func settle() async throws {
+        try await Task.sleep(for: .milliseconds(400))
+    }
+
+    /// Finds the shell's WKWebView once SwiftUI mounted the canvas section.
+    private func waitForWebView(in window: NSWindow) async throws -> WKWebView {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+        while ContinuousClock.now < deadline {
+            if let contentView = window.contentView,
+                let webView = Self.firstWebView(in: contentView) {
+                return webView
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        throw Timeout()
+    }
+
+    /// Waits until the demo canvas reports its full node set again.
+    private func waitForReadyCanvas(_ webView: WKWebView) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(17))
+        while ContinuousClock.now < deadline {
+            let nodes = try await webView.evaluateJavaScript(
+                "document.querySelectorAll('.react-flow__node').length"
+            ) as? Int
+            if nodes == 9 { return }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        Issue.record("canvas did not render its 9 demo nodes in time")
+    }
+
+    /// Depth-first search for the hosted web view inside the SwiftUI tree.
+    private static func firstWebView(in view: NSView) -> WKWebView? {
+        if let webView = view as? WKWebView { return webView }
+        for subview in view.subviews {
+            if let found = firstWebView(in: subview) { return found }
+        }
+        return nil
+    }
+}

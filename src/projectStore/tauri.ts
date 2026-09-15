@@ -1,11 +1,13 @@
 /**
- * 项目持久化的 Tauri 命令域（issue #39 自 projectStore.ts 拆出）：列表/新建/
+ * 项目持久化的命令域（issue #39 自 projectStore.ts 拆出；P2 起经
+ * src/platform 宿主命令传输调用）：列表/新建/
  * 加载走 Rust 命令（JSON 文件落盘于应用数据目录）。加载为「单循环三段」
  * ——链静止 → 失败登记复验 → 磁盘读取（链身份守卫），保证「读到即最新」；
  * 空库播种与已知示例的旧格式升级回写也在此域。
  */
 import { parseProject } from '../model/convert'
 import type { ProjectContent } from '../model/content'
+import { hostInvoke } from '../platform/hostCommands'
 import { memoryNormalize } from './memory'
 import {
   enqueueSave,
@@ -42,14 +44,13 @@ function toSummary(m: {
  * 播种为 no-replace 语义：仅当 load_project 确证「项目不存在」才写种子，
  * 文件存在（含不可读）一律跳过并留痕。返回是否写入了任一种子。 */
 async function seedFirstRun(): Promise<boolean> {
-  const { invoke } = await import('@tauri-apps/api/core')
   const notFound = (e: unknown) =>
     (typeof e === 'string' || e instanceof Error) &&
     String(e).includes('项目不存在')
   let seeded = false
   for (const seed of seedProjects()) {
     try {
-      await invoke<unknown>('load_project', { id: seed.meta.id })
+      await hostInvoke<unknown>('load_project', { id: seed.meta.id })
       console.warn('[projectStore] 播种跳过：项目已存在', seed.meta.id)
     } catch (err) {
       if (!notFound(err)) {
@@ -76,17 +77,19 @@ async function seedFirstRun(): Promise<boolean> {
  * 信封仍返回、parseProject 才拒绝）只跳过该例并留痕，摘要原样保留，版本
  * 错误延迟到该项目被打开时呈现。返回是否发生回写。 */
 async function upgradeKnownSamples(metas: { id: string }[]): Promise<boolean> {
-  const { invoke } = await import('@tauri-apps/api/core')
   let repairedAny = false
   for (const meta of metas) {
     if (!meta.id.startsWith('sample-')) continue
     if (!seedProjects().some((s) => s.meta.id === meta.id)) continue
     try {
-      const file = await invoke<unknown>('load_project', { id: meta.id })
-      const invalidAssetKeys = await invoke<string[]>('verify_project_assets', {
-        id: meta.id,
-        assets: (file as { assets?: unknown }).assets ?? {},
-      })
+      const file = await hostInvoke<unknown>('load_project', { id: meta.id })
+      const invalidAssetKeys = await hostInvoke<string[]>(
+        'verify_project_assets',
+        {
+          id: meta.id,
+          assets: (file as { assets?: unknown }).assets ?? {},
+        },
+      )
       const { content, migrated, repaired } = parseProject(file, {
         projectId: meta.id,
         invalidAssetKeys,
@@ -107,11 +110,10 @@ async function upgradeKnownSamples(metas: { id: string }[]): Promise<boolean> {
 }
 
 export async function tauriList(): Promise<ProjectSummary[]> {
-  const { invoke } = await import('@tauri-apps/api/core')
   // 回写改写了名称/统计并盖戳 updatedAt：metas 是写前快照，直接返回会让
   // 首页滞留旧名旧序——重列直到无回写（回写后的净本不再触发写，循环有界）
   for (;;) {
-    const metas = await invoke<
+    const metas = await hostInvoke<
       {
         id: string
         name: string
@@ -130,9 +132,8 @@ export async function tauriList(): Promise<ProjectSummary[]> {
 }
 
 export async function tauriCreate(name: string): Promise<ProjectSummary> {
-  const { invoke } = await import('@tauri-apps/api/core')
   return toSummary(
-    await invoke<{
+    await hostInvoke<{
       id: string
       name: string
       updated_at: string
@@ -143,7 +144,6 @@ export async function tauriCreate(name: string): Promise<ProjectSummary> {
 }
 
 export async function tauriLoad(id: string): Promise<ProjectContent> {
-  const { invoke } = await import('@tauri-apps/api/core')
   // 单循环三段：链静止 → 失败登记复验（优先）→ 磁盘读取（链身份守卫）。
   // 任何段的重启都回到循环顶——尤其磁盘段读取期间排队的保存若失败，其
   // 失败登记（比磁盘新）必须在下一轮的登记复验段被优先交付，不得只在
@@ -167,7 +167,7 @@ export async function tauriLoad(id: string): Promise<ProjectContent> {
     await waitForSaveChainIdle(id)
     const pending = pendingRetryDocs.get(id)
     if (pending !== undefined) {
-      const invalid = await invoke<string[]>('verify_project_assets', {
+      const invalid = await hostInvoke<string[]>('verify_project_assets', {
         id,
         assets: pending.assets ?? {},
       })
@@ -177,14 +177,17 @@ export async function tauriLoad(id: string): Promise<ProjectContent> {
       return verified
     }
     const chainBefore = saveChains.get(id)
-    const file = await invoke<unknown>('load_project', { id })
+    const file = await hostInvoke<unknown>('load_project', { id })
     // §7.1/§10.5 加载侧资产实路径复验：Rust 以受信资产根 no-follow 验证
     // （前端无法访问文件系统），不可验证键交归一化层隔离、引用位标记悬空
     // ——否则下一次保存会被保存边界拒收而防抖吞错，用户编辑永不落盘
-    const invalidAssetKeys = await invoke<string[]>('verify_project_assets', {
-      id,
-      assets: (file as { assets?: unknown }).assets ?? {},
-    })
+    const invalidAssetKeys = await hostInvoke<string[]>(
+      'verify_project_assets',
+      {
+        id,
+        assets: (file as { assets?: unknown }).assets ?? {},
+      },
+    )
     if (saveChains.get(id) !== chainBefore) continue
     // §11 归一化管线：迁移 + 孤儿边隔离 + 悬空引用标记；
     // projectId 为路径给定的受信 id，供 §11.1 元数据修复覆盖 project.id
@@ -224,10 +227,13 @@ async function registerAssetAliases(
   aliases: [string, string][],
 ): Promise<void> {
   if (aliases.length === 0) return
-  const { invoke } = await import('@tauri-apps/api/core')
   for (const [blankKey, freshId] of aliases) {
     try {
-      await invoke('register_project_asset_alias', { id, blankKey, freshId })
+      await hostInvoke('register_project_asset_alias', {
+        id,
+        blankKey,
+        freshId,
+      })
     } catch (err) {
       console.warn(
         '[projectStore] 资产别名登记失败（媒体在修复回写落盘前暂不可见）',

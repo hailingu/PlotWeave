@@ -8,13 +8,14 @@ import {
   normalizeAiSession,
   type AiSession,
 } from './editor/ai/session'
+import { isBrowserPreviewHost } from './platform/hostEnvironment'
+import { hostInvoke } from './platform/hostCommands'
 import {
   enqueueProjectWrite,
   onProjectWriteReplayFailure,
 } from './projectStore/saveChain'
 
 const memorySessions = new Map<string, AiSession>()
-const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
 /** 加载结果：可用历史及文件/条目损坏的可见诊断；读取本身不写回文件。 */
 export interface AiSessionLoadResult {
@@ -63,16 +64,17 @@ onProjectWriteReplayFailure((id, err) => {
   )
 })
 
-/** 读取唯一主文件；缺失为空历史，损坏条目隔离，I/O 错误交给界面提示。 */
+/** 读取唯一主文件；缺失为空历史，损坏条目隔离，I/O 错误交给界面提示。
+ * 内存回退仅限纯浏览器预览（P2 平台收敛）：Swift 宿主走命令传输，
+ * 未接通时可见失败，不得以空历史伪装成功。 */
 export async function loadAiSession(id: string): Promise<AiSessionLoadResult> {
-  if (!isTauri) {
+  if (isBrowserPreviewHost()) {
     return {
       session: memorySessions.get(id) ?? { schemaVersion: 1, entries: [] },
       repairError: null,
     }
   }
-  const { invoke } = await import('@tauri-apps/api/core')
-  const result = await invoke<{ session: unknown; corrupt: boolean }>(
+  const result = await hostInvoke<{ session: unknown; corrupt: boolean }>(
     'load_ai_session',
     { id },
   )
@@ -93,16 +95,15 @@ export async function saveAiSession(
   id: string,
   session: AiSession,
 ): Promise<void> {
-  if (!isTauri) {
-    // 浏览器内存回退是主文件的等价物：与 Tauri 路径同容量语义。
+  if (isBrowserPreviewHost()) {
+    // 浏览器内存回退是主文件的等价物：与命令路径同容量语义。
     memorySessions.set(id, diskSessionOf(session))
     return
   }
   const pending = { session }
   pendingSessions.set(id, pending)
   const write = enqueueProjectWrite(id, async () => {
-    const { invoke } = await import('@tauri-apps/api/core')
-    await invoke('save_ai_session', { id, session: diskSessionOf(session) })
+    await hostInvoke('save_ai_session', { id, session: diskSessionOf(session) })
     if (pendingSessions.get(id) === pending) {
       pendingSessions.delete(id)
       savedListeners.forEach((listener) => listener(id))

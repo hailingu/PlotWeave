@@ -1,21 +1,22 @@
 /**
  * 项目资产门面（数据模型 §7.1/§7.3/§9.3）。
- * Tauri 环境走 Rust 命令：导入 = 库文件拷贝进项目 assets/（句柄链
+ * 原生宿主经 src/platform 命令传输走 Rust 命令（P2 收敛；Swift 宿主传输
+ * 待接通，未接通时可见失败）：导入 = 库文件拷贝进项目 assets/（句柄链
  * no-follow 落盘）并生成项目级 AssetRef，入会话索引前再过
  * validate_project_asset 预检（§9.3 set_asset 强制）；媒体 URL 经
  * get_asset_media_url 以 scope + assetId 换取 pwmedia opaque URL
  * （issue #31，与库媒体 issue #26 同构）——relPath 与本机绝对路径不出
  * Rust，前端不再拼接。
- * 浏览器预览无 IPC，回退为内存实现：导入生成假规范 relPath 的 AssetRef
+ * 纯浏览器预览无 IPC，回退为内存实现：导入生成假规范 relPath 的 AssetRef
  *（归一化往返可存活），同时经源 blob 建独立 object URL 挂到项目资产 id
  *（拷贝语义：源库资产删除不影响项目缩略图；重载后映射丢失即拒绝，
  * 预览不落盘，属预期）。
  */
 import type { AssetRef } from '../model/document'
 import { libraryStore } from '../library/libraryStore'
+import { isBrowserPreviewHost } from '../platform/hostEnvironment'
+import { hostInvoke } from '../platform/hostCommands'
 import { uid } from '../uid'
-
-const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
 /** 内存回退：项目资产 id → 导入时建立的独立 object URL（URL store 钉住
  * 源 blob，脱离库内条目存活；会话内有效，重载即失效）。 */
@@ -78,16 +79,15 @@ async function tauriImport(
   projectId: string,
   libraryAssetId: string,
 ): Promise<AssetRef> {
-  const { invoke } = await import('@tauri-apps/api/core')
   const imported = normalizeAssetRef(
-    await invoke<RawAssetRef>('import_project_asset_from_library', {
+    await hostInvoke<RawAssetRef>('import_project_asset_from_library', {
       id: projectId,
       libraryAssetId,
     }),
   )
   // §9.3：入索引前过 Rust 预检，使用预检返回的规范化条目
   return normalizeAssetRef(
-    await invoke<RawAssetRef>('validate_project_asset', {
+    await hostInvoke<RawAssetRef>('validate_project_asset', {
       id: projectId,
       asset: imported,
     }),
@@ -125,59 +125,57 @@ async function tauriMediaUrl(
   projectId: string,
   asset: AssetRef,
 ): Promise<string> {
-  const { invoke } = await import('@tauri-apps/api/core')
-  return invoke<string>('get_asset_media_url', {
+  return hostInvoke<string>('get_asset_media_url', {
     scope: { kind: 'project', projectId },
     assetId: asset.id,
   })
 }
 
-/** IPC 直调助手（仅桌面端；动态导入避免浏览器预览加载 Tauri 模块）：
- * 生成命令等新增 Rust 管线的复用入口。 */
+/** 命令直调助手（原生宿主；P2 起为平台宿主传输的兼容别名，签名不变，
+ * imagegen 域既有调用与测试继续生效）：生成命令等新增 Rust 管线的复用入口。 */
 export function tauriInvoke<T>(
   cmd: string,
   args: Record<string, unknown>,
 ): Promise<T> {
-  return (async () => {
-    const { invoke } = await import('@tauri-apps/api/core')
-    return invoke<T>(cmd, args)
-  })()
+  return hostInvoke<T>(cmd, args)
 }
 
-/** 统一门面：两种环境同签名。 */
+/** 统一门面：内存回退仅限纯浏览器预览（P2 平台收敛）。 */
 export const projectAssets = {
   /** 库资产拷贝进项目（§7.3）：返回项目级 AssetRef（新 id）。 */
   importFromLibrary: (
     projectId: string,
     libraryAssetId: string,
   ): Promise<AssetRef> =>
-    isTauri
-      ? tauriImport(projectId, libraryAssetId)
-      : memoryImport(projectId, libraryAssetId),
+    isBrowserPreviewHost()
+      ? memoryImport(projectId, libraryAssetId)
+      : tauriImport(projectId, libraryAssetId),
 
-  /** 媒体 URL：Tauri 走 pwmedia opaque URL（scope + assetId，issue #31）；
+  /** 媒体 URL：原生宿主走 pwmedia opaque URL（scope + assetId，issue #31）；
    * 内存回退返回导入时建立的独立 object URL（源库删除不影响）——重载后
    * 映射丢失即拒绝（预览不落盘，属预期）。 */
   mediaUrl: (projectId: string, asset: AssetRef): Promise<string> => {
-    if (isTauri) return tauriMediaUrl(projectId, asset)
-    const url = memoryUrls.get(asset.id)
-    if (!url) {
-      return Promise.reject(
-        new Error(
-          `资产 ${asset.id} 的媒体不在本会话内存中（浏览器预览不落盘）`,
-        ),
-      )
+    if (isBrowserPreviewHost()) {
+      const url = memoryUrls.get(asset.id)
+      if (!url) {
+        return Promise.reject(
+          new Error(
+            `资产 ${asset.id} 的媒体不在本会话内存中（浏览器预览不落盘）`,
+          ),
+        )
+      }
+      return Promise.resolve(url)
     }
-    return Promise.resolve(url)
+    return tauriMediaUrl(projectId, asset)
   },
 
   /** 复验既有项目资产的落盘状态（§9.3 实路径复验同域）：撤销后重做的
    * 防线（issue #10）——撤销窗口内文件被外部删改则拒绝，避免失效条目
-   * 重做入脏、save_project 全量拒绝卡死自动保存。Tauri 走 Rust
+   * 重做入脏、save_project 全量拒绝卡死自动保存。 原生宿主走 Rust
    * validate_project_asset；浏览器预览内存态无盘上文件，恒通过。 */
   revalidate: (projectId: string, asset: AssetRef): Promise<void> => {
-    if (!isTauri) return Promise.resolve()
-    return tauriInvoke<RawAssetRef>('validate_project_asset', {
+    if (isBrowserPreviewHost()) return Promise.resolve()
+    return hostInvoke<RawAssetRef>('validate_project_asset', {
       id: projectId,
       asset,
     }).then((raw) => {

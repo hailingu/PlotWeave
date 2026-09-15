@@ -169,3 +169,100 @@ xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNati
 - TypeScript AST 检查本次新增函数与测试回调均不超过 80 行；图连线与编辑器装配各自保持单一职责。文档与工程配置已结构化复核，`git diff --cached --check` 通过。
 
 本节是本阶段的验证快照，不表示保存、AI、完整手势或 Liquid Glass 视觉验收已完成。现有本地演示产物继续保留供所有者使用，均不进入提交；本次无推送或发布操作。
+
+## P1-6 系统外观同步与面板生命周期（2026-09-15）
+
+**阶段 / 日期 / 分支与代码修订**：P1 第 6 项的代码部分；`codex/swiftui-react-flow` 同工作区未提交状态。
+
+**目标**：原生侧显式读取系统外观与辅助显示语义并同步给 Web（计划 §2.2「不能只假定媒体查询在目标 WebKit 上全部生效」）；验证侧栏收展、检查器开关等面板变化不重建 WKWebView、不重载页面（计划 §4.2）。握手与加载失败验证已由 P1-2b/3 覆盖（含缺资源实测与真实 WebKit 回归），本切片不重复。
+
+**改动前关键状态与不变量矩阵（M13/M02 种子）**：
+
+| 前置状态 | 动作 / 顺序 | 预期可观察结果 | 不变量 / 所有者 / 入口 | 验证 |
+| --- | --- | --- | --- | --- |
+| WKWebView 首次加载，系统处于任意外观/辅助组合 | document-start 注入宿主语义快照 → React 挂载后消费 | `<html>` 上 `data-host-color-scheme` 等四个语义属性反映宿主读取值 | 宿主语义单来源：`NSApp.effectiveAppearance` 与 `NSWorkspace` 辅助设置；`CanvasAppearanceState` | `NativeCanvasApp` 单测（注入值落属性）+ 真实 WKWebView 生命周期测试断言属性为 light/dark |
+| 页面已挂载，宿主语义快照随后变化 | 原生刷新快照 → evaluateJavaScript 推送 → Web 校验并应用 | data 属性更新为新值；无效载荷（缺字段/非法枚举）被拒绝，属性保持原值 | 桥接载荷经边界校验（§4.1）；相同快照不重复推送 | `CanvasAppearanceStateTests`（编码往返、契约值域、仅实际变化通知、停止观测脱钩）+ 真实 WKWebView 测试注入受控 reader 改值推送 |
+| 页面 ready（含 retry 重载后） | ready 握手 → 宿主推当前快照 | 重载后页面与宿主当前语义对齐，不残留构建期旧值 | 文档启动注入与 ready 推送共同保证加载完成后对齐；`WebCanvasCoordinator` | `bundledCanvasRendersAndReportsReady`（既有真实加载回归，覆盖 ready 路径） |
+| 画布已 ready、窗口可见 | 切换检查器 → 收展侧栏 → 恢复 | WKWebView 实例 ObjectIdentifier 不变；页面 JS 探针不变（未重载）；9 节点仍在 | WebView 生命周期独立于面板可见性（§4.2）；`ShellLayoutState` / `WebCanvasSection` | `ShellWebCanvasLifecycleTests.panelTogglesKeepWebViewAndPageAlive`（NSHostingView + 真实 NativeShellRoot） |
+| 无宿主桥（浏览器 dev 环境） | 挂载与推送均不发生 | 不抛错、不落属性 | 浏览器兼容：无桥静默跳过（沿用 ready 握手约定） | bridge 单测（无注入返回 null）+ 演示页既有无桥用例 |
+
+**交付内容**：
+
+- **Swift 侧**
+  - `CanvasAppearanceState`（@MainActor @Observable）：宿主外观语义单来源——快照 = `NSApp.effectiveAppearance`（bestMatch light/dark）+ `NSWorkspace` 的减少透明度/增强对比度/减少动态效果；KVO 观测（effectiveAppearance 与三个辅助属性），reader 可注入供测试；仅实际变化通知，`payloadJSON` 为 Web 桥校验的 JSON 文本。
+  - `WebCanvasCoordinator`：ready 握手后推送当前快照（retry 重载后重新对齐，不残留构建期旧值）；`startAppearanceSync` 承接变化推送，可选调用形式（`window.__pwApplyHostAppearance && …`）在 Web 端未注册前为安全 no-op。
+  - `WebCanvasHostView`：document-start `WKUserScript` 注入 `window.__pwHostAppearance`，首帧即带语义。
+  - `NativeShellRoot`：layout 与 appearance 参数化注入（应用内默认不变，测试驱动真实状态对象）；`ShellLayoutState.sidebarVisible` 经 `columnVisibility` 绑定成为侧栏收展单一来源（系统工具栏开关与测试同源）；`.task/.onDisappear` 启停外观观测。
+- **Web 侧**
+  - `canvasHostBridge`：`readInitialHostAppearance` / `setHostAppearanceHandler` / `HostAppearance`，载荷逐字段校验（colorScheme 枚举 + 三布尔），无效载荷丢弃不污染已应用状态；`main.tsx` 入口不变。
+  - `NativeCanvasApp`：挂载时应用初始注入并注册推送，语义落到 `<html>` 的 `data-host-color-scheme` / `data-host-reduce-transparency` / `data-host-increase-contrast` / `data-host-reduce-motion`；卸载时移除入口。
+  - `tokens.css`：宿主存在时 `color-scheme` 以宿主 data 属性声明为准（UA 部件一致）；媒体查询令牌块保持不动。
+
+**矩阵 / 验证结果**：
+
+| 验证项 | 命令或步骤 | 预期 | 实际 | 结论 |
+| --- | --- | --- | --- | --- |
+| Web 红先 | 新增 bridge/演示页外观用例后 `npx vitest run src/native-canvas` | 模块/函数缺失失败 | `setHostAppearanceHandler is not a function` 等 8 用例失败 | 红已观察 |
+| Web 绿 | 同上 | 全部通过 | 4 文件 / 21 测试通过 | 通过 |
+| Swift 红先 | 新增 `CanvasAppearanceStateTests` 后路由命令 | 类型缺失编译失败 | `Cannot find 'CanvasAppearanceState' in scope`，TEST FAILED | 红已观察 |
+| Swift 绿 | `npm run build:native-canvas && xcodebuild … test` | TEST SUCCEEDED | 6 suites / 15 tests 通过（含 `panelTogglesKeepWebViewAndPageAlive` 1.6 秒真实窗口路径） | 通过 |
+| 前端路由检查 | `npm run format:check && npm run lint && npm run build && npm test` | 全绿 | format 通过；lint 0 error（仅 `useDebouncedSave` 既有警告）；build 通过；122 文件 / 1489 测试通过 | 通过 |
+
+真实窗口测试覆盖的完整链路：`NSHostingView(NativeShellRoot)` 挂载 → WKWebView 加载 9 节点画布 → 初始外观属性为 light → 注入页面探针 → 切检查器/收展侧栏/恢复 → WebView 实例同一、探针不变、9 节点仍在 → 受控 reader 改为 dark + 全辅助开启 → `refresh()` 推送 → 页面属性变 dark 且 `data-host-increase-contrast` 为 true。
+
+**失败场景、尚未接通的能力与未验证原因**：
+
+- 真实系统外观/辅助设置切换的人工目验（M13 完整矩阵：浅↔深、减少透明度、增强对比度、减少动态效果组合）待所有者执行——自动化测试以受控 reader 验证了推送链路，未模拟真实系统设置事件。P1 第 6 项暂不勾选，待此目验后完成（与第 3 项同模式）。
+- `tokens.css` / `nodes.css` 的浅深、对比度、透明度令牌块未镜像 data-attr 选择器：宿主语义与 WKWebView 媒体查询同源（NSApp/NSWorkspace），当前无分叉场景，重复大块变量有漂移风险；M13/P5 实测发现某条媒体查询不生效时再按 data 属性补镜像。
+- `data-host-reduce-motion` 语义已同步，但 Web 端尚无消费点（nodes.css 现有 `prefers-reduced-motion` 规则未镜像），随 M13 视觉收敛处理。
+- 截图仍缺屏幕录制授权；本会话未启动应用实例（生命周期验证在测试宿主内完成）。
+- 未运行 SonarQube 门禁：本次未提交、未推送（提交前按 `AGENTS.md` 执行）。
+- `native/macos/build/` 与 `native/macos/App/WebCanvas/` 为一次性构建产物（gitignore），沿用所有者决策保留供启动，不进入提交。
+
+**下一步**：所有者目验第 3 项画布交互与真实系统外观切换后勾选 P1 第 3、6 项；随后 P1 第 4–5 项（Tauri 基线对比、Apple Figma 参考映射与外观/玻璃验证）收敛收尾 P1。
+
+## P1-4/5 Figma 参考记录、基线准备与所有者目验指引（2026-09-15）
+
+**阶段 / 日期 / 分支与代码修订**：P1 第 4–5 项的可会话内部分；`codex/swiftui-react-flow` 同工作区未提交状态。本会话终端宿主与 ZCode Computer Use 均未获「屏幕录制」「辅助功能（AX）」「Apple Events」授权（`screencapture`、System Events 均被拒），视觉目验与截图只能由仓库所有者完成；应用实例已启动供直接目验（见下文指引）。
+
+### Apple Figma 参考与控件映射（第 5 项前半）
+
+官方入口 [developer.apple.com/design/resources](https://developer.apple.com/design/resources/) 当前 macOS 区列 **macOS 27 UI Kit**（Figma Community file [1651309434229735362](https://www.figma.com/community/file/1651309434229735362/macos-27)）；本分支构建目标固定为 macOS 26 SDK（见 P1-1 工具链记录），故采用同代 **macOS 26 UI Kit**（Figma Community file [1543337041090580818](https://www.figma.com/community/file/1543337041090580818/macos-26)，Apple 官方发布，含组件、文本样式、色彩样式与材质）为基准，macOS 27 kit 作为后续升级对照。两个链接经官方入口与检索结果确认；Figma 文件内部的具体页面/组件节点定位需在设计工具中打开后补齐（本会话无 Figma 访问能力，不预填未经验证的节点链接）。
+
+控件映射（原生实现 → kit 通用规范条目）：
+
+| 原生外壳实现（本分支） | macOS UI Kit 对应 | 说明 |
+| --- | --- | --- |
+| `NavigationSplitView` 导航侧栏 | Navigation sidebar / source list | 标准导航容器，玻璃由系统提供（§2.2） |
+| 统一工具栏（`primaryAction`） | Window toolbar | 工具栏项位置与状态遵循 kit 标注 |
+| 尾随检查器（`inspector`） | Inspector pane（trailing） | P3 接内容前为占位列表 |
+| 悬浮玻璃簇（`glassEffect(.regular, in: .capsule)`） | Liquid Glass floating controls（capsule） | 自定义浮动控件的玻璃路径（§2.2） |
+| 画布区 + 加载/失败覆盖层 | Content area | 不透明内容表面，不套玻璃（§2.2） |
+| Web 画布令牌（tokens.css） | kit 色彩/文本样式仅作对照 | Web 内容样式由 CSS 令牌承载，不逐值复制 kit |
+
+### 性能基线准备（第 4 项推进，夹具与指标规格定稿）
+
+按计划 §7.2 固定以下夹具规格（实现与测量属后续切片，此处为定稿记录）：
+
+| 夹具 | 节点 / 边 | 家族比例（剧本/对白/节奏/角色/场景/生成图） | 图片资产 | 视口与可见性 |
+| --- | --- | --- | --- | --- |
+| 常用-100 | 100 / ~110（sequence 70%、branch 20%、attach 10%） | 20/25/20/10/10/15 | 512² 与 1024×768 各半 | 1440×900@2x，fitView 后可见约 60 |
+| 常用-500 | 500 / ~560 | 同上 | 同上 | 同视口，缩放后可见约 120 |
+| 压力-1000 | 1000 / ~1100 | 生成侧重（生成图 40%） | 同上 | 25% 全览 |
+
+指标（两宿主同机同夹具记录）：首次可交互（ready 握手）、拖拽/平移帧耗时 p50/p95、超帧预算长帧计数、JS 与原生主线程工作、消息频率/体积、内存峰值、反复开关 10 次趋势；60Hz 与 120Hz 分别测（M4 Max 内置屏支持）。帧预算按 §7.2：60Hz ≈16.7ms、120Hz ≈8.3ms。
+
+已可引用的原生首片观测：真实 WKWebView 冷加载→ready 约 0.30 秒（`WebCanvasLoadingTests` 两次加载合计约 0.30 秒的单次本机观测，见「画布加载超时修复」节，不作为性能承诺）。
+
+**Tauri 对比接缝（登记待做）**：演示夹具当前不在 Tauri 壳内，严格同夹具对比需二选一——(a) 以 Tauri dev 入口伺服 `native-canvas.html`（vite dev server 多页面可直接伺服该页）；(b) 构造同规模项目文件驱动 Tauri 完整编辑器（含持久化路径，超出 P1 范围）。P1 采用 (a) 的路径，属下一切片工作；未完成前不以浏览器单测或主观数据冒充基线。
+
+### 所有者目验指引（第 3、6 项收尾与第 5 项视觉验证）
+
+应用实例已启动（本次会话 `open -n` 新实例，系统当前为深色外观）。请按下列清单目验；全部通过后勾选计划第 3、6 项。截图需先在「系统设置 > 隐私与安全性 > 屏幕录制」为终端宿主授权，用 ⌘⇧4 窗口截图或 `screencapture -l <窗口id>` 归档至 `docs/assets/swiftui-react-flow/`（建议命名见括号）。
+
+1. **画布交互（第 3 项）**：拖拽任一节点（位移跟随、无闪烁，`p1-canvas-dark.png`）；从节点端口拖出连线到另一节点（合法连接建立，非法目标被拒）；空白处拖拽平移；触控板捏合或 ⌘+滚轮缩放；左下角缩放控件与百分比正常（`p1-canvas-zoomed.png`）。
+2. **系统外观切换（第 6 项 M13）**：控制中心或「系统设置 > 外观」切换浅色→画布背景/节点令牌随之变浅（`p1-canvas-light.png`），切回深色恢复；「系统设置 > 辅助功能 > 显示」逐项开「减少透明度」「增强对比度」（以及「减少动态效果」）观察原生玻璃与 Web 内容适配。
+3. **面板与窗口（第 5 项，M02）**：工具栏收展侧栏、检查器开关（画布不闪烁、不重载）；调整窗口尺寸与全屏（`p1-sidebar-collapsed.png`）；确认悬浮玻璃簇覆盖处节点仍可正常命中交互。
+4. **失败路径**（可选，已有实测记录）：删除 `native/macos/App/WebCanvas/` 后重新 `xcodebuild build` 启动，确认「未找到画布资源」诊断与重试入口。
+
+观察结果（通过/异常现象）直接反馈即可作为勾选依据；异常将按矩阵行回到对应测试补回归。

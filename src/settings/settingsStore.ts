@@ -1,31 +1,30 @@
 /**
  * 设置与 API key 加密的前端门面（docs/ui-design.md §8.2 修订）。
- * Tauri 环境走 Rust 命令（settings.json 落盘；key 由 Rust 加密后
- * 返回密文 envelope，随 provider 配置落盘，明文不回前端）；
- * 浏览器预览回退内存实现。
+ * 原生宿主经 src/platform 命令传输走 Rust 命令（settings.json 落盘；key
+ * 由 Rust 加密后返回密文 envelope，随 provider 配置落盘，明文不回前端；
+ * Swift 宿主传输待 P2 后续接通，未接通时可见失败）；内存回退仅限纯
+ * 浏览器预览（P2 平台收敛）。
  */
 import { defaultSettings, normalizeSettings, type AppSettings } from './types'
-
-const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+import { isBrowserPreviewHost } from '../platform/hostEnvironment'
+import { hostInvoke } from '../platform/hostCommands'
 
 /** 浏览器回退的内存设置。 */
 let memorySettings: AppSettings | null = null
 
 async function tauriLoad(): Promise<AppSettings> {
-  const { invoke } = await import('@tauri-apps/api/core')
-  const raw = await invoke<unknown>('load_prefs')
+  const raw = await hostInvoke<unknown>('load_prefs')
   return normalizeSettings(raw)
 }
 
 async function tauriSave(settings: AppSettings): Promise<void> {
-  const { invoke } = await import('@tauri-apps/api/core')
-  await invoke('save_prefs', { prefs: settings })
+  await hostInvoke('save_prefs', { prefs: settings })
 }
 
 /** 统一门面。 */
 export const settingsStore = {
   load: (): Promise<AppSettings> => {
-    if (!isTauri) {
+    if (isBrowserPreviewHost()) {
       memorySettings ??= defaultSettings()
       return Promise.resolve(memorySettings)
     }
@@ -36,7 +35,7 @@ export const settingsStore = {
   },
 
   save: (settings: AppSettings): Promise<void> => {
-    if (!isTauri) {
+    if (isBrowserPreviewHost()) {
       memorySettings = settings
       return Promise.resolve()
     }
@@ -55,11 +54,13 @@ export const settingsStore = {
     key: string,
   ): Promise<AppSettings> => {
     let keyEnc: string
-    if (isTauri) {
-      const { invoke } = await import('@tauri-apps/api/core')
-      keyEnc = await invoke<string>('set_provider_key', { providerId, key })
-    } else {
+    if (isBrowserPreviewHost()) {
       keyEnc = `pw1:preview:${btoa(String.fromCodePoint(...new TextEncoder().encode(key)))}`
+    } else {
+      keyEnc = await hostInvoke<string>('set_provider_key', {
+        providerId,
+        key,
+      })
     }
     return {
       ...settings,

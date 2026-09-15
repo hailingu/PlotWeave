@@ -7,9 +7,13 @@ import SwiftUI
 struct WebCanvasSection: View {
     @State private var state = WebCanvasState()
 
+    /// Host appearance semantics synced into the hosted page (plan §2.2);
+    /// owned by the shell root so the page outlives panel-visibility churn.
+    let appearance: CanvasAppearanceState
+
     var body: some View {
         ZStack {
-            WebCanvasHostView(state: state)
+            WebCanvasHostView(state: state, appearance: appearance)
             switch state.phase {
             case .loading:
                 CanvasPhaseOverlay {

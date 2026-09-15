@@ -6,6 +6,7 @@
  * 原文（content + 可选 tool_calls），写调用映射为预览卡命令、读调用就地回喂。
  */
 import type { ProviderConfig } from '../../settings/types'
+import { hostInvoke } from '../../platform/hostCommands'
 import type { ToolSpec } from './tools'
 
 export interface ChatMessage {
@@ -27,15 +28,15 @@ export interface AssistantMessage {
   }>
 }
 
-/** 发送一轮对话，返回 assistant message（含可选 tool_calls）。 */
+/** 发送一轮对话，返回 assistant message（含可选 tool_calls）；
+ * 命令经平台宿主传输（P2 收敛），Swift 宿主未接通时同样可见失败。 */
 export async function llmChat(
   provider: ProviderConfig,
   model: string,
   messages: ChatMessage[],
   tools?: ToolSpec[],
 ): Promise<AssistantMessage> {
-  const { invoke } = await import('@tauri-apps/api/core')
-  return invoke<AssistantMessage>('llm_chat', {
+  return hostInvoke<AssistantMessage>('llm_chat', {
     providerId: provider.id,
     baseUrl: provider.baseUrl,
     model,

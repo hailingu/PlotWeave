@@ -9,6 +9,7 @@
  */
 import { serializeProject } from '../model/convert'
 import type { ProjectContent } from '../model/content'
+import { hostInvoke } from '../platform/hostCommands'
 
 const SAVE_RETRY_DELAY_MS = 5000
 export const saveChains = new Map<string, Promise<unknown>>()
@@ -216,14 +217,13 @@ export function notifyRetryPersisted(doc: ProjectContent): void {
   retryPersistedListeners.forEach((listener) => listener(doc))
 }
 
-/** 链上写盘动作（Tauri save_project 命令）：入参为会话文档，序列化
- * （剥离会话态）在写入边界执行——归一化/迁移在 model/convert。 */
+/** 链上写盘动作（save_project 命令，P2 起经平台宿主传输）：入参为会话
+ * 文档，序列化（剥离会话态）在写入边界执行——归一化/迁移在 model/convert。 */
 export async function tauriSave(
   id: string,
   doc: ProjectContent,
 ): Promise<void> {
-  const { invoke } = await import('@tauri-apps/api/core')
-  await invoke('save_project', { id, doc: serializeProject(doc, id) })
+  await hostInvoke('save_project', { id, doc: serializeProject(doc, id) })
 }
 
 export function enqueueSave(id: string, doc: ProjectContent): Promise<void> {
@@ -293,8 +293,7 @@ export function enqueueDelete(id: string): Promise<void> {
     // 捕获值会把被取代的旧文档重放覆盖已落盘的新内容
     retainedRetryDoc = pendingRetryDocs.get(id)
     clearSaveRetry(id)
-    const { invoke } = await import('@tauri-apps/api/core')
-    await invoke('delete_project', { id })
+    await hostInvoke('delete_project', { id })
   })
   /** 删除失败时的回吐分支：重新登记保留/吸收的快照与附属写入。该链纳入
    * 未落定跟踪（PR #174 评审）：stored 只覆盖删除本身——按微任务续延排序
