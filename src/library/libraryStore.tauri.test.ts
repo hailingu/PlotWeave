@@ -205,6 +205,9 @@ describe('libraryStore Tauri 路径：put', () => {
 })
 
 describe('libraryStore Tauri 路径：updateMeta / remove', () => {
+  /** 宏任务节拍：清空门面队列与动态 import 的微任务链。 */
+  const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
+
   it('补丁透传给 update_library_asset；无效返回抛错', async () => {
     invoke.mockResolvedValueOnce(entry({ id: 'la-1', name: '改名.png' }))
     const { libraryStore } = await load()
@@ -229,6 +232,43 @@ describe('libraryStore Tauri 路径：updateMeta / remove', () => {
       'delete_library_asset',
       { id: 'la-1' },
     ])
+  })
+
+  it('同资产 updateMeta 串行：前一落定前后一不发起 invoke（PR #176 评审）', async () => {
+    const { libraryStore } = await load()
+    let resolveFirst!: (v: unknown) => void
+    invoke.mockImplementationOnce(
+      () => new Promise((res) => (resolveFirst = res)),
+    )
+    invoke.mockImplementationOnce(() => Promise.resolve(entry({ tags: ['C'] })))
+    const first = libraryStore.updateMeta('la-1', { tags: ['B'] })
+    await tick() // 队列发出第一次 invoke（挂起）
+    const second = libraryStore.updateMeta('la-1', { tags: ['C'] })
+    await tick()
+    expect(invoke).toHaveBeenCalledTimes(1) // 第二次在第一次落定前排队不发起
+
+    resolveFirst(entry({ tags: ['B'] }))
+    await expect(first).resolves.toMatchObject({ tags: ['B'] })
+    await expect(second).resolves.toMatchObject({ tags: ['C'] })
+    expect(invoke).toHaveBeenCalledTimes(2)
+  })
+
+  it('不同资产的 updateMeta 互不阻塞', async () => {
+    const { libraryStore } = await load()
+    let resolveA!: (v: unknown) => void
+    invoke.mockImplementationOnce(() => new Promise((res) => (resolveA = res)))
+    invoke.mockImplementationOnce(() =>
+      Promise.resolve(entry({ id: 'la-2', name: '乙' })),
+    )
+    const first = libraryStore.updateMeta('la-1', { name: '甲' })
+    await tick()
+    const second = libraryStore.updateMeta('la-2', { name: '乙' })
+    await tick()
+    expect(invoke).toHaveBeenCalledTimes(2) // la-2 不等 la-1 落定
+
+    resolveA(entry({ name: '甲' }))
+    await expect(first).resolves.toMatchObject({ name: '甲' })
+    await expect(second).resolves.toMatchObject({ name: '乙' })
   })
 })
 

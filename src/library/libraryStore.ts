@@ -168,6 +168,56 @@ async function tauriMediaUrl(
   })
 }
 
+/** 每资产更新队列尾（PR #176 评审）：同一资产的 updateMeta 在门面层串行
+ * 落定——排序身份跨面板挂载存活（面板切换卸载会丢失组件内提交链，跨
+ * 实例并发 invoke 的落库顺序无保证，后写可能被旧实例的先写覆盖）。 */
+const updateQueues = new Map<string, Promise<unknown>>()
+
+/** updateMeta 的实际执行体（门面串行包装之内）：Tauri 走 IPC 补丁更新，
+ * 内存回退做同语义的 groupId 校验与合并。 */
+function applyUpdateMeta(
+  id: string,
+  patch: Partial<Pick<LibraryAsset, 'name' | 'tags' | 'groupId' | 'view'>>,
+): Promise<LibraryAsset> {
+  if (isTauri) {
+    return import('@tauri-apps/api/core').then(async ({ invoke }) => {
+      const entry = await invoke<RawAsset>('update_library_asset', {
+        id,
+        patch,
+      })
+      reportLibraryWarnings((entry as { warnings?: unknown } | null)?.warnings)
+      const normalized = normalizeAsset(entry)
+      if (!normalized) throw new Error('更新返回了无效条目')
+      return normalized
+    })
+  }
+  const hit = memoryAssets.get(id)
+  if (!hit) return Promise.reject(new Error(`资产不存在：${id}`))
+  // groupId 校验（评审修复，PR #36 第五轮）：与 Rust update_meta_with 的
+  // 复验同语义——组不存在或 kind 不一致即拒绝；null/空串/空白同归清除
+  // （第八轮：Rust apply_group_id 把空白归清除，空串不得落入存储）
+  const groupIdRaw = patch.groupId
+  const groupId =
+    typeof groupIdRaw === 'string' && groupIdRaw.trim() !== ''
+      ? groupIdRaw
+      : null
+  if (groupId !== null) {
+    const group = memoryGroups.get(groupId)
+    if (!group) return Promise.reject(new Error(`组不存在：${groupId}`))
+    if (group.kind !== hit.asset.kind) {
+      return Promise.reject(
+        new Error(`组 ${groupId} 的 kind 与资产不一致，拒绝编组`),
+      )
+    }
+  }
+  // 归一化后的 groupId 入存储：空串/空白不留（与 Rust 落盘删字段同语义）
+  const patchNorm = patch.groupId !== undefined ? { ...patch, groupId } : patch
+  hit.asset = { ...hit.asset, ...patchNorm }
+  memoryAssets.set(id, hit)
+  // 克隆返回（评审修复，PR #36 第九轮）：与 list/put 同款
+  return Promise.resolve({ ...hit.asset })
+}
+
 /** 统一门面：两种环境同签名。 */
 export const libraryStore = {
   list: (): Promise<LibraryAsset[]> =>
@@ -197,50 +247,21 @@ export const libraryStore = {
     return Promise.resolve({ ...asset })
   },
 
+  /** 元数据补丁更新：门面层按资产串行（见 updateQueues）——跨面板挂载
+   * 与跨消费方（改名/标签同走此口）保证到达存储的顺序与发起顺序一致。 */
   updateMeta: (
     id: string,
     patch: Partial<Pick<LibraryAsset, 'name' | 'tags' | 'groupId' | 'view'>>,
   ): Promise<LibraryAsset> => {
-    if (isTauri) {
-      return import('@tauri-apps/api/core').then(async ({ invoke }) => {
-        const entry = await invoke<RawAsset>('update_library_asset', {
-          id,
-          patch,
-        })
-        reportLibraryWarnings(
-          (entry as { warnings?: unknown } | null)?.warnings,
-        )
-        const normalized = normalizeAsset(entry)
-        if (!normalized) throw new Error('更新返回了无效条目')
-        return normalized
-      })
+    const prev = updateQueues.get(id) ?? Promise.resolve()
+    const run = prev.catch(() => {}).then(() => applyUpdateMeta(id, patch))
+    updateQueues.set(id, run)
+    // 落定后回收队列槽（仅当仍是本资产最新一次）：失败不阻塞后续排队
+    const cleanup = () => {
+      if (updateQueues.get(id) === run) updateQueues.delete(id)
     }
-    const hit = memoryAssets.get(id)
-    if (!hit) return Promise.reject(new Error(`资产不存在：${id}`))
-    // groupId 校验（评审修复，PR #36 第五轮）：与 Rust update_meta_with 的
-    // 复验同语义——组不存在或 kind 不一致即拒绝；null/空串/空白同归清除
-    // （第八轮：Rust apply_group_id 把空白归清除，空串不得落入存储）
-    const groupIdRaw = patch.groupId
-    const groupId =
-      typeof groupIdRaw === 'string' && groupIdRaw.trim() !== ''
-        ? groupIdRaw
-        : null
-    if (groupId !== null) {
-      const group = memoryGroups.get(groupId)
-      if (!group) return Promise.reject(new Error(`组不存在：${groupId}`))
-      if (group.kind !== hit.asset.kind) {
-        return Promise.reject(
-          new Error(`组 ${groupId} 的 kind 与资产不一致，拒绝编组`),
-        )
-      }
-    }
-    // 归一化后的 groupId 入存储：空串/空白不留（与 Rust 落盘删字段同语义）
-    const patchNorm =
-      patch.groupId !== undefined ? { ...patch, groupId } : patch
-    hit.asset = { ...hit.asset, ...patchNorm }
-    memoryAssets.set(id, hit)
-    // 克隆返回（评审修复，PR #36 第九轮）：与 list/put 同款
-    return Promise.resolve({ ...hit.asset })
+    run.then(cleanup, cleanup)
+    return run
   },
 
   remove: (id: string): Promise<void> => {
