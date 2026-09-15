@@ -21,6 +21,16 @@ const DOC: ProjectContent = {
   settings: { characters: [], locations: [] },
 }
 
+/** 统计 save_project 写入载荷中的文档名（ProjectDocument.project.name）。 */
+function savedNames(): string[] {
+  return invoke.mock.calls
+    .filter(([command]) => command === 'save_project')
+    .map(([, payload]) => {
+      const doc = (payload as { doc: { project: { name: string } } }).doc
+      return doc.project.name
+    })
+}
+
 describe('保存落定通知（issue #101：返回首页后摘要跟随最终保存结果）', () => {
   afterEach(() => vi.clearAllMocks())
 
@@ -228,18 +238,8 @@ describe('项目删除与保存协调', () => {
   })
 })
 
-describe('退出冲刷（issue #119：屏障等待画布防抖与失败重试）', () => {
+describe('退出冲刷：就绪探针与立即重存（issue #119）', () => {
   afterEach(() => vi.clearAllMocks())
-
-  /** 统计 save_project 写入载荷中的文档名（ProjectDocument.project.name）。 */
-  function savedNames(): string[] {
-    return invoke.mock.calls
-      .filter(([command]) => command === 'save_project')
-      .map(([, payload]) => {
-        const doc = (payload as { doc: { project: { name: string } } }).doc
-        return doc.project.name
-      })
-  }
 
   it('hasPendingProjectSaves：在途保存与待重试登记为真，全部静止后为假', async () => {
     const id = 'exit-pending-probe-test'
@@ -280,6 +280,10 @@ describe('退出冲刷（issue #119：屏障等待画布防抖与失败重试）
       error.mockRestore()
     }
   })
+})
+
+describe('退出冲刷：重试仍失败的阻断与后台节律（issue #119）', () => {
+  afterEach(() => vi.clearAllMocks())
 
   it('flushPendingProjectSaves：冲刷重试仍失败时返回项目 id，登记与后台节律保留', async () => {
     const id = 'exit-flush-fail-test'
@@ -306,6 +310,10 @@ describe('退出冲刷（issue #119：屏障等待画布防抖与失败重试）
       vi.useRealTimers()
     }
   })
+})
+
+describe('退出冲刷：代次守卫（陈旧稿不得覆盖新内容，issue #119）', () => {
+  afterEach(() => vi.clearAllMocks())
 
   it('flushPendingProjectSaves：代次前进后不重放陈旧登记（陈旧稿不得覆盖新内容）', async () => {
     const id = 'exit-flush-stale-test'
@@ -380,6 +388,10 @@ describe('退出冲刷（issue #119：屏障等待画布防抖与失败重试）
       vi.useRealTimers()
     }
   })
+})
+
+describe('退出冲刷：他入口重试与冲刷并发（同文档对象新代次，PR #174 评审）', () => {
+  afterEach(() => vi.clearAllMocks())
 
   it('flushPendingProjectSaves：他入口以同一文档对象重新登记（新代次）仍重存一次（PR #174 评审：按登记代次跟踪已发起）', async () => {
     const id = 'exit-flush-samedoc-test'

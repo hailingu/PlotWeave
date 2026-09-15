@@ -587,7 +587,7 @@ describe('useDebouncedSave（在途未落定时的卸载补交，issue #118 评�
   })
 })
 
-describe('useDebouncedSave（退出冲刷闸注册，issue #119）', () => {
+describe('useDebouncedSave（退出冲刷闸：脏态可见与失败保留，issue #119）', () => {
   beforeEach(() => vi.useFakeTimers())
   afterEach(() => {
     registerCanvasFlushGate(null)
@@ -612,6 +612,39 @@ describe('useDebouncedSave（退出冲刷闸注册，issue #119）', () => {
     expect(onSave).toHaveBeenCalledTimes(1)
     expect((onSave.mock.calls[0][0] as ProjectContent).name).toBe('窗口内编辑')
     expect(hasPendingCanvasSaves()).toBe(false)
+  })
+
+  it('闸 flush 冲刷失败：脏态保留待防抖节律重试（不紧循环）', async () => {
+    const onSave = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('磁盘已满'))
+      .mockResolvedValue(undefined)
+    const { rerender } = renderHook(
+      ({ doc }) => useDebouncedSave(doc, onSave),
+      { initialProps: { doc: mkDoc('v0') } },
+    )
+    act(() => {
+      rerender({ doc: mkDoc('落盘失败') })
+    })
+    await act(async () => {
+      await flushPendingCanvasSaves()
+    })
+    expect(onSave).toHaveBeenCalledTimes(1)
+    expect(hasPendingCanvasSaves()).toBe(true)
+    // 失败保留可重试状态，由防抖节律接管重试成功
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600)
+    })
+    expect(onSave).toHaveBeenCalledTimes(2)
+    expect(hasPendingCanvasSaves()).toBe(false)
+  })
+})
+
+describe('useDebouncedSave（退出冲刷闸：在途等待接力，issue #119）', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => {
+    registerCanvasFlushGate(null)
+    vi.useRealTimers()
   })
 
   it('闸 flush 在在途保存期间调用：等在途落定并接力补存最新文档', async () => {
@@ -655,30 +688,13 @@ describe('useDebouncedSave（退出冲刷闸注册，issue #119）', () => {
     expect(names).toEqual(['A', 'B'])
     expect(hasPendingCanvasSaves()).toBe(false)
   })
+})
 
-  it('闸 flush 冲刷失败：脏态保留待防抖节律重试（不紧循环）', async () => {
-    const onSave = vi
-      .fn()
-      .mockRejectedValueOnce(new Error('磁盘已满'))
-      .mockResolvedValue(undefined)
-    const { rerender } = renderHook(
-      ({ doc }) => useDebouncedSave(doc, onSave),
-      { initialProps: { doc: mkDoc('v0') } },
-    )
-    act(() => {
-      rerender({ doc: mkDoc('落盘失败') })
-    })
-    await act(async () => {
-      await flushPendingCanvasSaves()
-    })
-    expect(onSave).toHaveBeenCalledTimes(1)
-    expect(hasPendingCanvasSaves()).toBe(true)
-    // 失败保留可重试状态，由防抖节律接管重试成功
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(600)
-    })
-    expect(onSave).toHaveBeenCalledTimes(2)
-    expect(hasPendingCanvasSaves()).toBe(false)
+describe('useDebouncedSave（退出冲刷闸：卸载注销，issue #119）', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => {
+    registerCanvasFlushGate(null)
+    vi.useRealTimers()
   })
 
   it('卸载注销闸：hasPending 恢复为假，flush 不再触发保存', async () => {

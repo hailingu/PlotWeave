@@ -261,7 +261,12 @@ export function enqueueDelete(id: string): Promise<void> {
     const { invoke } = await import('@tauri-apps/api/core')
     await invoke('delete_project', { id })
   })
-  next
+  /** 删除失败时的回吐分支：重新登记保留/吸收的快照与附属写入。该链纳入
+   * 未落定跟踪（PR #174 评审）：stored 只覆盖删除本身——按微任务续延排序
+   * 恢复分支的入队注册恰先于跟踪器移除 stored，屏障实际观测不到空窗；
+   * 显式跟踪恢复链后，退出屏障的「unsettled 为空 ⇒ 无待回吐」不变量不再
+   * 依赖这一排序。 */
+  const recovery = next
     .finally(() => {
       deletingIds.delete(id)
     })
@@ -291,7 +296,7 @@ export function enqueueDelete(id: string): Promise<void> {
         }
       },
     )
-    .catch(() => undefined)
+  trackChainSettle(recovery)
   const stored = next.catch(() => undefined)
   trackChainSettle(stored)
   saveChains.set(id, stored)
