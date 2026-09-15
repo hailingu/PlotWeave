@@ -270,6 +270,18 @@ describe('libraryStore Tauri 路径：updateMeta / remove', () => {
     await expect(first).resolves.toMatchObject({ name: '甲' })
     await expect(second).resolves.toMatchObject({ name: '乙' })
   })
+
+  it('updateMeta 成功记录持久化快照，跨调用方可见；remove 清除（PR #176 评审）', async () => {
+    invoke.mockResolvedValueOnce(entry({ tags: ['B'] }))
+    const { libraryStore } = await load()
+    await libraryStore.updateMeta('la-1', { tags: ['B'] })
+    expect(libraryStore.persistedSnapshot('la-1')?.tags).toEqual(['B'])
+    expect(libraryStore.persistedSnapshot('la-2')).toBeUndefined()
+
+    invoke.mockResolvedValue(undefined)
+    await libraryStore.remove('la-1')
+    expect(libraryStore.persistedSnapshot('la-1')).toBeUndefined()
+  })
 })
 
 describe('libraryStore Tauri 路径：mediaUrl', () => {

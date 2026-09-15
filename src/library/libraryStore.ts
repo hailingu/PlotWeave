@@ -218,6 +218,12 @@ function applyUpdateMeta(
   return Promise.resolve({ ...hit.asset })
 }
 
+/** 每资产最近一次经门面成功落盘的条目快照（PR #176 评审）：与
+ * updateQueues 同层（页面会话生命周期），跨面板挂载、跨消费方共享——
+ * 组件实例卸载后，其发起的成功落盘仍对新实例可见（persistedSnapshot），
+ * 零写入守卫不得以陈旧本地值放行。 */
+const lastPersistedAssets = new Map<string, LibraryAsset>()
+
 /** 统一门面：两种环境同签名。 */
 export const libraryStore = {
   list: (): Promise<LibraryAsset[]> =>
@@ -248,7 +254,8 @@ export const libraryStore = {
   },
 
   /** 元数据补丁更新：门面层按资产串行（见 updateQueues）——跨面板挂载
-   * 与跨消费方（改名/标签同走此口）保证到达存储的顺序与发起顺序一致。 */
+   * 与跨消费方（改名/标签同走此口）保证到达存储的顺序与发起顺序一致；
+   * 每次成功（含发起方实例已卸载）都推进 lastPersistedAssets 基线。 */
   updateMeta: (
     id: string,
     patch: Partial<Pick<LibraryAsset, 'name' | 'tags' | 'groupId' | 'view'>>,
@@ -256,12 +263,23 @@ export const libraryStore = {
     const prev = updateQueues.get(id) ?? Promise.resolve()
     const run = prev.catch(() => {}).then(() => applyUpdateMeta(id, patch))
     updateQueues.set(id, run)
-    // 落定后回收队列槽（仅当仍是本资产最新一次）：失败不阻塞后续排队
+    // 成功即记录持久化快照（跨挂载共享）；落定后回收队列槽（仅当仍是
+    // 本资产最新一次）；失败不阻塞后续排队
     const cleanup = () => {
       if (updateQueues.get(id) === run) updateQueues.delete(id)
     }
-    run.then(cleanup, cleanup)
+    run.then((updated) => {
+      lastPersistedAssets.set(id, { ...updated })
+      cleanup()
+    }, cleanup)
     return run
+  },
+
+  /** 该资产最近一次经门面成功落盘的条目快照（克隆）；本会话未经门面
+   * 更新过则 undefined，调用方回退自身列表值。 */
+  persistedSnapshot: (id: string): LibraryAsset | undefined => {
+    const hit = lastPersistedAssets.get(id)
+    return hit === undefined ? undefined : { ...hit }
   },
 
   remove: (id: string): Promise<void> => {
@@ -276,9 +294,11 @@ export const libraryStore = {
         if (result?.cleanupPending?.length) {
           console.warn('[Library] 删除隔离区待清理：', result.cleanupPending)
         }
+        lastPersistedAssets.delete(id)
       })
     }
     memoryAssets.delete(id)
+    lastPersistedAssets.delete(id)
     return Promise.resolve()
   },
 

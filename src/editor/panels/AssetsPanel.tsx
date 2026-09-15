@@ -268,10 +268,6 @@ function useAssetTagsCommit(
   /** 每资产未落定的最新写入目标（在途或已排队）：回退失焦值与本地
    * tags 相同而与它不同时，必须把回退排队写在其后（PR #176 评审，P1）。 */
   const pendingTags = useRef(new Map<string, string[]>())
-  /** 每资产最近一次成功落盘的 tags（持久化基线）：每次成功都推进——
-   * 含被更新提交取代的成功；零写入守卫须同时与本地值和基线一致，
-   * 否则较新提交失败后回退被放行，界面无错但存储落后（PR #176 评审）。 */
-  const persistedTags = useRef(new Map<string, string[]>())
   /** 每资产提交链尾：串行发起（前一落定才发下一个），保证到达存储的
    * 顺序与发起顺序一致（并发 IPC 的处理顺序无保证）。 */
   const commitChains = useRef(new Map<string, Promise<unknown>>())
@@ -298,8 +294,7 @@ function useAssetTagsCommit(
     commitChains.current.set(assetId, run)
     run
       .then((updated) => {
-        // 基线在代际判定前推进：被取代的成功也是已落盘事实
-        persistedTags.current.set(assetId, updated.tags)
+        // 持久化基线由门面快照推进（跨挂载共享）：被取代的成功也落盘
         if (tagsCommitSeq.current.get(assetId) !== seq) return
         pendingTags.current.delete(assetId)
         resolveTagsError(assetId)
@@ -321,13 +316,14 @@ function useAssetTagsCommit(
 
   const commitTags = (asset: LibraryAsset, raw: string) => {
     const tags = parseAssetTags(raw)
-    // 输入未变化的失焦零写入（issue #124 回写来源）：须与本地值、持久化
-    // 基线都一致且无目标不同的在途提交；否则解除自身未解决错误即可
+    // 输入未变化的失焦零写入（issue #124 回写来源）：须与本地值、门面
+    // 持久化基线（跨挂载共享，旧实例的成功落盘也可见）都一致且无目标
+    // 不同的在途提交；否则解除自身未解决错误即可
     const pending = pendingTags.current.get(asset.id)
-    const persisted = persistedTags.current.get(asset.id) ?? asset.tags
+    const persisted = libraryStore.persistedSnapshot(asset.id)?.tags
     if (
       sameTags(tags, asset.tags) &&
-      sameTags(tags, persisted) &&
+      sameTags(tags, persisted ?? asset.tags) &&
       (pending === undefined || sameTags(pending, tags))
     ) {
       resolveTagsError(asset.id)
