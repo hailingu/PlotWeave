@@ -6,7 +6,7 @@
  * libraryStore 方法一律打桩，不触内存/IPC 实现。
  */
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import AssetsPanel from './AssetsPanel'
 import { libraryStore, type LibraryAsset } from '../../library/libraryStore'
 
@@ -137,6 +137,110 @@ describe('AssetsPanel 类别内操作', () => {
     expect(screen.queryByText('女主正面')).toBeNull()
     expect(spies.remove).toHaveBeenCalledWith('a1')
     expect(revokeSpy).toHaveBeenCalledWith('blob:mock-url')
+  })
+})
+
+describe('AssetsPanel 标签提交状态同步（issue #124）', () => {
+  /** 进入角色分类并返回标签输入框元素。 */
+  const openTagsInput = async (): Promise<HTMLInputElement> => {
+    render(<AssetsPanel />)
+    fireEvent.click(await screen.findByText('角色设定'))
+    return (await screen.findByLabelText(
+      '资产标签 女主正面',
+    )) as HTMLInputElement
+  }
+
+  /** 返回分类列表再重进角色分类，返回重挂载后的标签输入框。 */
+  const roundTrip = async (): Promise<HTMLInputElement> => {
+    fireEvent.click(screen.getByRole('button', { name: '返回分类列表' }))
+    fireEvent.click(await screen.findByText('角色设定'))
+    return (await screen.findByLabelText(
+      '资产标签 女主正面',
+    )) as HTMLInputElement
+  }
+
+  it('保存成功同步本地：重进分类显示新标签，未编辑失焦不再写库', async () => {
+    const spies = mockStore([asset()])
+    spies.updateMeta.mockImplementation((_id, patch) =>
+      Promise.resolve(asset({ tags: patch.tags ?? [] })),
+    )
+    const tags = await openTagsInput()
+    fireEvent.change(tags, { target: { value: '新标签' } })
+    fireEvent.blur(tags)
+    expect(spies.updateMeta).toHaveBeenCalledWith('a1', { tags: ['新标签'] })
+    await act(async () => {}) // 等成功响应把已保存 tags 同步进本地列表
+
+    const remounted = await roundTrip()
+    expect(remounted.value).toBe('新标签')
+    fireEvent.blur(remounted)
+    expect(spies.updateMeta).toHaveBeenCalledTimes(1)
+  })
+
+  it('未编辑的失焦（输入即当前 tags）不写库', async () => {
+    const spies = mockStore([asset()])
+    const tags = await openTagsInput()
+    fireEvent.blur(tags)
+    expect(spies.updateMeta).not.toHaveBeenCalled()
+  })
+
+  it('异步乱序：迟到的旧提交响应不得回滚最新标签', async () => {
+    const spies = mockStore([asset()])
+    let resolveFirst!: (a: LibraryAsset) => void
+    const first = new Promise<LibraryAsset>((res) => {
+      resolveFirst = res
+    })
+    let call = 0
+    spies.updateMeta.mockImplementation((_id, patch) => {
+      call += 1
+      return call === 1
+        ? first
+        : Promise.resolve(asset({ tags: patch.tags ?? [] }))
+    })
+    const tags = await openTagsInput()
+    fireEvent.change(tags, { target: { value: '中间' } })
+    fireEvent.blur(tags) // 第一次提交挂起
+    fireEvent.change(tags, { target: { value: '最终' } })
+    fireEvent.blur(tags) // 第二次提交先返回
+    await act(async () => {
+      resolveFirst(asset({ tags: ['中间'] })) // 旧提交迟到返回
+    })
+
+    const remounted = await roundTrip()
+    expect(remounted.value).toBe('最终')
+    fireEvent.blur(remounted)
+    expect(spies.updateMeta).toHaveBeenCalledTimes(2)
+  })
+
+  it('保存失败：提示错误且保留输入，本地不写入', async () => {
+    const spies = mockStore([asset()])
+    spies.updateMeta.mockRejectedValue(new Error('写入失败'))
+    const tags = await openTagsInput()
+    fireEvent.change(tags, { target: { value: '新标签' } })
+    fireEvent.blur(tags)
+    expect(await screen.findByText(/写入失败/)).toBeTruthy()
+    expect(tags.value).toBe('新标签')
+    expect(spies.updateMeta).toHaveBeenCalledTimes(1)
+  })
+
+  it('迟到成功响应落地后，重挂载的输入框收敛到新标签且失焦不写库', async () => {
+    const spies = mockStore([asset()])
+    let resolveSave!: (a: LibraryAsset) => void
+    spies.updateMeta.mockImplementation(
+      () => new Promise<LibraryAsset>((res) => (resolveSave = res)),
+    )
+    const tags = await openTagsInput()
+    fireEvent.change(tags, { target: { value: '新标签' } })
+    fireEvent.blur(tags)
+    // 保存未返回前完成分类往返：重挂载时本地仍是旧值
+    const remounted = await roundTrip()
+    expect(remounted.value).toBe('主角')
+    await act(async () => {
+      resolveSave(asset({ tags: ['新标签'] }))
+    })
+
+    expect(remounted.value).toBe('新标签')
+    fireEvent.blur(remounted)
+    expect(spies.updateMeta).toHaveBeenCalledTimes(1)
   })
 })
 
