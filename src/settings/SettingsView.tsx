@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   defaultSettings,
   resolveChatModel,
@@ -12,6 +12,34 @@ import { useSettingsSaver } from './useSettingsSaver'
 interface SettingsViewProps {
   /** 关闭设置返回上一界面（编辑器或首页）。 */
   readonly onClose: () => void
+}
+
+/** 设置加载状态（issue #120）：加载完成前不渲染编辑表单——彼时编辑
+ * 会把初始默认值连同改动全量落盘；失败进入可重试错误态，原文件不动。 */
+type SettingsLoadPhase =
+  | { status: 'loading' }
+  | { status: 'ready' }
+  | { status: 'error'; message: string }
+
+/** 设置加载失败分段（issue #120）：可见错误 + 重试 + 原文件保护说明。 */
+function SettingsLoadError({
+  message,
+  onRetry,
+}: {
+  readonly message: string
+  readonly onRetry: () => void
+}) {
+  return (
+    <div className="settings-card" role="alert">
+      <p>设置读取失败：{message}</p>
+      <p className="settings-hint">
+        原配置文件未被改动；修复文件或权限后可重试。此状态下关闭设置不会保存任何更改。
+      </p>
+      <button type="button" className="pw-dialog-btn" onClick={onRetry}>
+        重试
+      </button>
+    </div>
+  )
 }
 
 /** 默认模型分段的提示文案：无可用模型 / 已选 / 未选（S3358 独立成函数）。 */
@@ -329,20 +357,16 @@ function ProviderCard({
   )
 }
 
-/**
- * 设置页（docs/ui-design.md §8.2 修订）：⌘, 打开，左侧分段列表。
- * Provider 分段：Base URL / 启用 / API key（加密后存本机设置，
- * 不回显明文）/ 模型清单；默认模型分段：三层过滤后的可用组合下拉。
- * 编辑即保存（防抖 500ms，关闭时冲刷未落盘编辑）；无外观设置（跟随
- * 系统，原则 1）。
- */
-export default function SettingsView({ onClose }: SettingsViewProps) {
-  const [settings, setSettings] = useState<AppSettings>(defaultSettings)
-  /** 「编辑即保存」状态族（防抖/关闭冲刷/失败重试）拆至 useSettingsSaver。 */
-  const { update, handleClose, closeError, closing } = useSettingsSaver(
-    setSettings,
-    onClose,
-  )
+/** 可编辑态主体（SettingsView 拆分，issue #120）：Provider 卡片 + 默认
+ * 模型分段 + key 加密说明；含 key 表单族状态，仅在设置加载成功后由
+ * SettingsView 挂载——失败/加载中不渲染，编辑入口即被阻断。 */
+function SettingsEditorBody({
+  settings,
+  update,
+}: {
+  readonly settings: AppSettings
+  readonly update: (next: AppSettings) => void
+}) {
   const {
     keyDraft,
     setKeyDraft,
@@ -351,20 +375,88 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
     submitKey,
     removeKey,
   } = useProviderKeyForms(settings, update)
-
-  useEffect(() => {
-    void settingsStore.load().then((s) => {
-      setSettings(s)
-    })
-  }, [])
-
   // key 状态直接从 provider 配置派生（keyEnc 存在即已配置）
   const keyStatus = Object.fromEntries(
     settings.providers.map((p) => [p.id, Boolean(p.keyEnc)]),
   )
-
   const chatModel = resolveChatModel(settings)
   const chatOptions = chatModelOptionsOf(settings)
+  return (
+    <>
+      {/* Provider 分段 */}
+      <h3 className="settings-sec">Provider</h3>
+      {settings.providers.map((p) => (
+        <ProviderCard
+          key={p.id}
+          provider={p}
+          keyConfigured={keyStatus[p.id] === true}
+          keyDraft={keyDraft[p.id] ?? ''}
+          keyError={keyError[p.id]}
+          onPatch={(patch) => patchProvider(p.id, patch)}
+          onSubmitKey={() => void submitKey(p.id)}
+          onRemoveKey={() => removeKey(p.id)}
+          onKeyDraftChange={(value) =>
+            setKeyDraft((d) => ({ ...d, [p.id]: value }))
+          }
+        />
+      ))}
+
+      {/* 默认模型分段 */}
+      <DefaultModelsSection
+        settings={settings}
+        update={update}
+        chatOptions={chatOptions}
+        chatModel={chatModel}
+      />
+      <p className="settings-hint">
+        API key 经 AES-256-GCM
+        加密后保存在本机设置文件（绑定此电脑），不回显明文；
+        外观跟随系统，不设主题开关。
+      </p>
+    </>
+  )
+}
+
+/**
+ * 设置页（docs/ui-design.md §8.2 修订）：⌘, 打开，左侧分段列表。
+ * Provider 分段：Base URL / 启用 / API key（加密后存本机设置，
+ * 不回显明文）/ 模型清单；默认模型分段：三层过滤后的可用组合下拉。
+ * 编辑即保存（防抖 500ms，关闭时冲刷未落盘编辑）；无外观设置（跟随
+ * 系统，原则 1）。加载完成前不渲染编辑表单，读取失败进入可重试
+ * 错误态且不保存（issue #120）。
+ */
+export default function SettingsView({ onClose }: SettingsViewProps) {
+  const [settings, setSettings] = useState<AppSettings>(defaultSettings)
+  const [loadPhase, setLoadPhase] = useState<SettingsLoadPhase>({
+    status: 'loading',
+  })
+  /** 「编辑即保存」状态族（防抖/关闭冲刷/失败重试）拆至 useSettingsSaver。 */
+  const { update, handleClose, closeError, closing } = useSettingsSaver(
+    setSettings,
+    onClose,
+  )
+
+  /** 读取设置（issue #120）：成功才进入可编辑态；失败保持错误态可重试，
+   * 原配置不被默认值覆盖。 */
+  const reloadSettings = useCallback(() => {
+    setLoadPhase({ status: 'loading' })
+    settingsStore
+      .load()
+      .then((s) => {
+        setSettings(s)
+        setLoadPhase({ status: 'ready' })
+      })
+      .catch((err: unknown) => {
+        setLoadPhase({
+          status: 'error',
+          message: err instanceof Error ? err.message : String(err),
+        })
+      })
+  }, [])
+
+  useEffect(() => {
+    reloadSettings()
+  }, [reloadSettings])
 
   return (
     <div className="settings-root">
@@ -376,36 +468,18 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
       <main className="settings-body">
         <SettingsNav />
         <section className="settings-content">
-          {/* Provider 分段 */}
-          <h3 className="settings-sec">Provider</h3>
-          {settings.providers.map((p) => (
-            <ProviderCard
-              key={p.id}
-              provider={p}
-              keyConfigured={keyStatus[p.id] === true}
-              keyDraft={keyDraft[p.id] ?? ''}
-              keyError={keyError[p.id]}
-              onPatch={(patch) => patchProvider(p.id, patch)}
-              onSubmitKey={() => void submitKey(p.id)}
-              onRemoveKey={() => removeKey(p.id)}
-              onKeyDraftChange={(value) =>
-                setKeyDraft((d) => ({ ...d, [p.id]: value }))
-              }
+          {loadPhase.status === 'error' && (
+            <SettingsLoadError
+              message={loadPhase.message}
+              onRetry={reloadSettings}
             />
-          ))}
-
-          {/* 默认模型分段 */}
-          <DefaultModelsSection
-            settings={settings}
-            update={update}
-            chatOptions={chatOptions}
-            chatModel={chatModel}
-          />
-          <p className="settings-hint">
-            API key 经 AES-256-GCM
-            加密后保存在本机设置文件（绑定此电脑），不回显明文；
-            外观跟随系统，不设主题开关。
-          </p>
+          )}
+          {loadPhase.status === 'loading' && (
+            <p className="settings-hint">正在加载设置…</p>
+          )}
+          {loadPhase.status === 'ready' && (
+            <SettingsEditorBody settings={settings} update={update} />
+          )}
         </section>
       </main>
     </div>

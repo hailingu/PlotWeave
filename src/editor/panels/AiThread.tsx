@@ -37,9 +37,14 @@ function useAiModels() {
   /** 面板内选中的模型 key；null = 跟随设置页默认。 */
   const [modelKey, setModelKey] = useState<string | null>(null)
   // 每次切到 AI 分段重载配置（从设置页回来也能刷新）；
-  // key 状态直接从 provider 配置派生（keyEnc 密文存在即已配置）
+  // key 状态直接从 provider 配置派生（keyEnc 密文存在即已配置）；
+  // 读取失败（issue #120）保持 null → 空选项走引导，面板只读不落盘
   useEffect(() => {
-    void settingsStore.load().then(setAppSettings)
+    void settingsStore
+      .load()
+      .then(setAppSettings, (err: unknown) =>
+        console.warn('[AiThread] 读取设置失败', err),
+      )
   }, [])
   const options: ChatModelOption[] = appSettings
     ? listChatModels(appSettings)

@@ -418,3 +418,84 @@ describe('SettingsView 关闭', () => {
     expect(onClose).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('SettingsView 加载失败（issue #120）', () => {
+  it('load 拒绝：显示可重试错误，不渲染编辑表单，不落盘', async () => {
+    const saveSpy = vi.spyOn(settingsStore, 'save')
+    const loadSpy = vi
+      .spyOn(settingsStore, 'load')
+      .mockRejectedValue('设置文件损坏：expected value at line 1 column 1')
+    render(<SettingsView onClose={vi.fn()} />)
+    expect(await screen.findByRole('alert')).toBeTruthy()
+    expect(screen.getByText(/设置文件损坏/)).toBeTruthy()
+    expect(screen.queryByText('OpenAI 兼容')).toBeNull() // 无编辑 UI
+    expect(screen.queryByRole('checkbox')).toBeNull()
+    expect(saveSpy).not.toHaveBeenCalled() // 原配置不被默认值覆盖
+    loadSpy.mockRestore()
+  })
+
+  it('加载失败态点「完成」：直接关闭且 save 零调用（不得全量覆盖原文件）', async () => {
+    const saveSpy = vi.spyOn(settingsStore, 'save')
+    vi.spyOn(settingsStore, 'load').mockRejectedValue(
+      '读取设置失败：Permission denied',
+    )
+    const onClose = vi.fn()
+    render(<SettingsView onClose={onClose} />)
+    await screen.findByRole('alert')
+    fireEvent.click(screen.getByRole('button', { name: '关闭设置' }))
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(onClose).toHaveBeenCalledTimes(1) // 无待存编辑：冲刷 no-op 即关
+    expect(saveSpy).not.toHaveBeenCalled()
+  })
+
+  it('重试成功：恢复编辑表单，后续编辑照常防抖落盘', async () => {
+    let fail = true
+    const loadSpy = vi
+      .spyOn(settingsStore, 'load')
+      .mockImplementation(() =>
+        fail
+          ? Promise.reject(new Error('读取设置失败：暂时不可读'))
+          : Promise.resolve(defaultSettings()),
+      )
+    const saveSpy = vi.spyOn(settingsStore, 'save')
+    render(<SettingsView onClose={vi.fn()} />)
+    await screen.findByRole('alert')
+
+    fail = false
+    fireEvent.click(screen.getByRole('button', { name: '重试' }))
+    expect(await screen.findByText('OpenAI 兼容')).toBeTruthy() // 可编辑态恢复
+    expect(screen.queryByRole('alert')).toBeNull()
+
+    vi.useFakeTimers()
+    fireEvent.change(screen.getByRole('combobox', { name: /图像生成模型/ }), {
+      target: { value: 'openai:gpt-4o' },
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600)
+    })
+    expect(saveSpy).toHaveBeenCalledTimes(1) // 正常路径不受影响
+    expect(saveSpy.mock.calls[0][0].defaultImage).toBe('openai:gpt-4o')
+    loadSpy.mockRestore()
+  })
+
+  it('加载完成前不渲染编辑表单（防默认值竞态覆盖原配置）', async () => {
+    let resolveLoad!: (s: ReturnType<typeof defaultSettings>) => void
+    const loadSpy = vi
+      .spyOn(settingsStore, 'load')
+      .mockImplementation(() => new Promise((res) => (resolveLoad = res)))
+    const view = render(<SettingsView onClose={vi.fn()} />)
+    // load 在途：表单缺席（此时编辑会把初始默认值连同改动落盘）
+    expect(screen.queryByRole('checkbox')).toBeNull()
+    expect(screen.queryByText('OpenAI 兼容')).toBeNull()
+    await act(async () => {
+      resolveLoad(defaultSettings())
+      await Promise.resolve()
+    })
+    expect(await screen.findByText('OpenAI 兼容')).toBeTruthy()
+    view.unmount()
+    loadSpy.mockRestore()
+  })
+})

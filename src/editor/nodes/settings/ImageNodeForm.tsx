@@ -19,7 +19,12 @@ const SIZE_LABELS: Record<(typeof IMAGE_SIZES)[number], string> = {
 function useChatModelOptions() {
   const [appSettings, setAppSettings] = useState<AppSettings | null>(null)
   useEffect(() => {
-    void settingsStore.load().then(setAppSettings)
+    // 读取失败（issue #120）保持 null → 仅「跟随默认」选项，表单只读不落盘
+    void settingsStore
+      .load()
+      .then(setAppSettings, (err: unknown) =>
+        console.warn('[ImageNodeForm] 读取设置失败', err),
+      )
   }, [])
   return appSettings !== null ? listChatModels(appSettings) : []
 }

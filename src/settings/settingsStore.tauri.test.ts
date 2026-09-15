@@ -46,12 +46,12 @@ describe('settingsStore Tauri 路径', () => {
     expect(s.defaultChat).toBeNull()
   })
 
-  it('load 抛错时回退默认设置（不向上传播）', async () => {
-    invoke.mockRejectedValueOnce(new Error('disk dead'))
-    const { settingsStore } = await load()
-    await expect(settingsStore.load()).resolves.toEqual(
-      (await import('./types')).defaultSettings(),
+  it('load 抛错时向上传播（issue #120：不得回退默认设置掩盖读取失败）', async () => {
+    invoke.mockRejectedValueOnce(
+      '设置文件损坏：expected value at line 1 column 1',
     )
+    const { settingsStore } = await load()
+    await expect(settingsStore.load()).rejects.toMatch(/设置文件损坏/)
   })
 
   it('save 透传 prefs 给 save_prefs', async () => {
