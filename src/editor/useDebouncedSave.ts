@@ -66,6 +66,9 @@ function useSaveGateRefs(doc: ProjectContent) {
    * 使完成只兑现被该次重存覆盖的等待者/脏态。 */
   const editSeqRef = useRef(0)
   const failedEditSeqRef = useRef<number | null>(null)
+  /** 已确认落盘的编辑水位（PR #174 评审）：链上重存成功时登记——同水位
+   * 的后续冗余重复保存失败不重新置脏/上浮/再排程。 */
+  const persistedSeqRef = useRef<number | null>(null)
   return {
     saveTimer,
     dirtyRef,
@@ -78,6 +81,7 @@ function useSaveGateRefs(doc: ProjectContent) {
     lastFailedDocRef,
     editSeqRef,
     failedEditSeqRef,
+    persistedSeqRef,
   }
 }
 
@@ -216,6 +220,18 @@ function useExitFlushAction(
   }, [flushSave, inFlightPromiseRef])
 }
 
+/** 提交内容是否已被持久化覆盖（PR #174 评审）：链上重存成功登记的水位
+ * 与当前编辑水位一致且未卸载——冗余重复保存失败据此静默处理。 */
+function isCoveredByPersistedWatermark(
+  gates: ReturnType<typeof useSaveGateRefs>,
+): boolean {
+  return (
+    !gates.unmountedRef.current &&
+    gates.persistedSeqRef.current !== null &&
+    gates.editSeqRef.current === gates.persistedSeqRef.current
+  )
+}
+
 /** 防抖冲刷动作（useSaveFlush 拆出，PR #174 评审：在途登记与退出闸加入
  * 后宿主钩子超 80 行上限，与 issue #99/#118 同款拆分）。循环体同步执行到
  * 首个 await——inFlightRef 置位发生在入口检查之后的同一同步段，并发触发
@@ -248,6 +264,10 @@ function useFlushSave(
             await onSave(submitted)
             onSaveResult?.(null)
           } catch (err) {
+            // 链上重存已确认同一编辑水位的内容落盘（PR #174 评审）：排队
+            // 中的冗余重复保存失败属于无数据风险的重写失败——静默返回，
+            // 不重新置脏/上浮/再排程，避免对已落盘文档的循环重试
+            if (isCoveredByPersistedWatermark(gates)) return
             onSaveResult?.(err)
             if (!unmountedRef.current) {
               // 失败不丢数据：重新置脏，按防抖节律自动重试（不紧循环）；
@@ -289,6 +309,7 @@ function useFlushSave(
     lastFailedDocRef,
     editSeqRef,
     failedEditSeqRef,
+    gates.persistedSeqRef,
   ])
   return flushSave
 }
@@ -363,19 +384,21 @@ export function useDebouncedSave(
   }, [dirtyRef, inFlightRef, flushForExit])
 
   // 链上重存成功清脏（issue #119，PR #174 评审）：闸冲刷失败后保存链会
-  // 登记并重存同一文档，成功时据此清除闸脏态并对齐完成语义。生效条件：
-  // 重存的是本次失败的文档、且此后无更新编辑（编辑序号水位未前进，纯
-  // 渲染/会话态变化不影响）——B 等更新编辑的等待者只由其真实保存兑现，
-  // 防抖节律接管其重试。
+  // 登记并重存同一文档，成功时登记持久化覆盖水位——同水位的冗余重复保
+  // 存失败不再置脏/上浮/排程。无更新编辑（水位未前进）时清脏并对齐完成
+  // 语义；B 等更新编辑的等待者只由其真实保存兑现，防抖节律接管其重试。
+  // 覆盖登记不依赖瞬态脏标志：排队中的重复保存会把脏标志提前清掉。
   useEffect(
     () =>
       onRetryPersisted((persisted) => {
         if (
-          dirtyRef.current &&
-          gates.lastFailedDocRef.current === persisted &&
-          gates.failedEditSeqRef.current !== null &&
-          gates.editSeqRef.current === gates.failedEditSeqRef.current
-        ) {
+          gates.lastFailedDocRef.current !== persisted ||
+          gates.failedEditSeqRef.current === null
+        )
+          return
+        const seq = gates.failedEditSeqRef.current
+        gates.persistedSeqRef.current = seq
+        if (gates.editSeqRef.current === seq) {
           gates.lastFailedDocRef.current = null
           gates.failedEditSeqRef.current = null
           dirtyRef.current = false
@@ -387,6 +410,7 @@ export function useDebouncedSave(
       gates.lastFailedDocRef,
       gates.failedEditSeqRef,
       gates.editSeqRef,
+      gates.persistedSeqRef,
       onRetryPersistedSuccess,
     ],
   )

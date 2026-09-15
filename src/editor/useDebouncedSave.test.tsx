@@ -784,3 +784,66 @@ describe('useDebouncedSave（退出冲刷闸：链上重存成功清脏，PR #17
     expect(hasPendingCanvasSaves()).toBe(false)
   })
 })
+
+describe('useDebouncedSave（退出冲刷闸：持久化覆盖合并冗余保存，PR #174 评审）', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => {
+    registerCanvasFlushGate(null)
+    vi.useRealTimers()
+  })
+
+  it('链上重存完成先于排队中的冗余重复保存失败：内容已覆盖，不重新置脏/上浮/再排程', async () => {
+    const calls: Array<{
+      doc: ProjectContent
+      resolve: () => void
+      reject: (e: Error) => void
+    }> = []
+    const onSave = vi.fn(
+      (doc: ProjectContent) =>
+        new Promise<void>((resolve, reject) => {
+          calls.push({ doc, resolve, reject })
+        }),
+    )
+    const onResult = vi.fn()
+    const { rerender } = renderHook(
+      ({ doc }) => useDebouncedSave(doc, onSave, 600, onResult),
+      { initialProps: { doc: mkDoc('v0') } },
+    )
+    act(() => {
+      rerender({ doc: mkDoc('D') })
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600)
+    })
+    expect(onSave).toHaveBeenCalledTimes(1)
+    calls[0]!.reject(new Error('磁盘已满'))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(onResult).toHaveBeenCalledTimes(1)
+    expect(hasPendingCanvasSaves()).toBe(true)
+    // 600ms 防抖重试先于链上重存完成而启动：提交即清脏，但在途保存仍计
+    // 为待保存（屏障需等待其落定）
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600)
+    })
+    expect(onSave).toHaveBeenCalledTimes(2)
+    expect(hasPendingCanvasSaves()).toBe(true)
+    // 链上重存成功通知到达：登记持久化覆盖并完成（不依赖瞬态脏标志）
+    act(() => {
+      notifyRetryPersisted(onSave.mock.calls[0][0] as ProjectContent)
+    })
+    // 排队中的冗余重复保存随后失败：内容已在磁盘，静默处理（不重新置脏/
+    // 上浮/再排程），闸随之清洁
+    calls[1]!.reject(new Error('间歇故障'))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(hasPendingCanvasSaves()).toBe(false)
+    expect(onResult).toHaveBeenCalledTimes(1)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6000)
+    })
+    expect(onSave).toHaveBeenCalledTimes(2)
+  })
+})
