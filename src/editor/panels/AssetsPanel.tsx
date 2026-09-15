@@ -3,8 +3,6 @@ import {
   useRef,
   useState,
   type ChangeEvent as ReactChangeEvent,
-  type Dispatch,
-  type SetStateAction,
 } from 'react'
 import {
   libraryStore,
@@ -254,43 +252,44 @@ function sameTags(a: string[], b: string[]): boolean {
 }
 
 /** 标签提交状态族（AssetsPanel 拆分，PR #176 评审）：未变守卫、assetId
- * 级代际计数（迟到旧响应不回滚）、成功响应字段级合并同步，以及按资产
- * 逐个记录的未解决错误——任一资产成功只解除自身，横幅刷新为其余未
- * 解决项（无剩余才清除），不掩盖其他资产或操作的错误。 */
+ * 级代际计数（迟到旧响应不回滚）、成功响应字段级合并同步，以及独立的
+ * 标签错误横幅——按资产逐个记录未解决失败、自持展示状态，与导入/列表
+ * 错误分属两行互不覆盖（同文案也不误清）；任一资产成功或无写入的回退
+ * （放弃该次修改）都只解除自身错误，横幅刷新为其余未解决项。 */
 function useAssetTagsCommit(
   setAssets: (fn: (list: LibraryAsset[]) => LibraryAsset[]) => void,
-  setError: Dispatch<SetStateAction<string | null>>,
 ) {
   /** 提交代际（issue #124）：assetId → 最新已发起提交的序号。 */
   const tagsCommitSeq = useRef(new Map<string, number>())
   /** 各资产未解决的标签失败（assetId → 错误文案）：多资产并发失败时
-   * 单个资产成功不得隐藏其余资产的未解决错误（PR #176 评审）。 */
+   * 单个资产成功/回退不得隐藏其余资产的未解决错误（PR #176 评审）。 */
   const tagsErrors = useRef(new Map<string, string>())
-  /** 标签路径最近写入横幅的内容（null = 无）：成功刷新/清除前以函数式
-   * 比较确认横幅仍显示本路径内容，被其他操作覆盖则不触碰。 */
-  const tagsBanner = useRef<string | null>(null)
+  /** 标签错误横幅（独立状态行）：归属以状态槽本身为身份，不以文案
+   * 相等判断——跨操作同文案（如同一磁盘错误）互不误清（PR #176 评审）。 */
+  const [tagsError, setTagsError] = useState<string | null>(null)
+
+  /** 解除某资产的未解决失败并刷新标签横幅为剩余项（无剩余清除）。 */
+  const resolveTagsError = (assetId: string) => {
+    if (!tagsErrors.current.delete(assetId)) return
+    setTagsError(joinTagsErrors(tagsErrors.current) || null)
+  }
 
   const commitTags = (asset: LibraryAsset, raw: string) => {
     const tags = parseAssetTags(raw)
     // 输入未变化的失焦不写库：否则陈旧 asset.tags 的重挂载输入会把
     // 刚保存的新标签覆盖回旧值（issue #124 复现路径的回写来源）
-    if (sameTags(tags, asset.tags)) return
+    if (sameTags(tags, asset.tags)) {
+      // 无写入的回退 = 放弃该次失败修改：视为已解除，不留残留横幅
+      resolveTagsError(asset.id)
+      return
+    }
     const seq = (tagsCommitSeq.current.get(asset.id) ?? 0) + 1
     tagsCommitSeq.current.set(asset.id, seq)
     libraryStore
       .updateMeta(asset.id, { tags })
       .then((updated) => {
         if (tagsCommitSeq.current.get(asset.id) !== seq) return
-        if (tagsErrors.current.delete(asset.id)) {
-          // 本资产曾有未解决失败：横幅仍显示本路径内容时刷新为剩余
-          // 未解决项（无剩余才清除），其余失败不被这次成功掩盖
-          const shown = tagsBanner.current
-          if (shown !== null) {
-            const next = joinTagsErrors(tagsErrors.current) || null
-            tagsBanner.current = next
-            setError((prev) => (prev === shown ? next : prev))
-          }
-        }
+        resolveTagsError(asset.id)
         // 成功保存同步本地状态（issue #124 验收）：只合并 tags 字段——
         // 响应是全量条目，整体替换会清掉并发的乐观改名
         setAssets((list) =>
@@ -304,12 +303,10 @@ function useAssetTagsCommit(
         // 被更新提交取代的旧失败不再上报（代际守卫）
         if (tagsCommitSeq.current.get(asset.id) !== seq) return
         tagsErrors.current.set(asset.id, String(err))
-        const joined = joinTagsErrors(tagsErrors.current)
-        tagsBanner.current = joined
-        setError(joined)
+        setTagsError(joinTagsErrors(tagsErrors.current))
       })
   }
-  return { commitTags }
+  return { commitTags, tagsError }
 }
 
 /** 把各资产未解决的标签失败合并为单条横幅文案（分号分隔）。 */
@@ -330,7 +327,7 @@ export default function AssetsPanel() {
     setError,
     refreshUrl,
   )
-  const { commitTags } = useAssetTagsCommit(setAssets, setError)
+  const { commitTags, tagsError } = useAssetTagsCommit(setAssets)
 
   const remove = (asset: LibraryAsset) =>
     removeLibraryAsset(asset, urls, setAssets, setUrls, setError)
@@ -375,6 +372,9 @@ export default function AssetsPanel() {
       )}
       {busy && <div className="pw-assets-hint">导入中…</div>}
       {error && <div className="pw-assets-hint pw-assets-error">{error}</div>}
+      {tagsError && (
+        <div className="pw-assets-hint pw-assets-error">{tagsError}</div>
+      )}
       {pendingRemove !== null && (
         <RemoveAssetDialog
           asset={pendingRemove}

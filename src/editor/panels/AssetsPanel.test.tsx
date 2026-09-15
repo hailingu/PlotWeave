@@ -8,7 +8,14 @@
  * libraryStore 方法一律打桩，不触内存/IPC 实现。
  */
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react'
 import AssetsPanel from './AssetsPanel'
 import { libraryStore, type LibraryAsset } from '../../library/libraryStore'
 
@@ -180,17 +187,6 @@ describe('AssetsPanel 标签提交：保存同步与未变失焦（issue #124）
     fireEvent.blur(tags)
     expect(spies.updateMeta).not.toHaveBeenCalled()
   })
-
-  it('保存失败：提示错误且保留输入，本地不写入', async () => {
-    const spies = mockStore([asset()])
-    spies.updateMeta.mockRejectedValue(new Error('写入失败'))
-    const tags = await openTagsInput()
-    fireEvent.change(tags, { target: { value: '新标签' } })
-    fireEvent.blur(tags)
-    expect(await screen.findByText(/写入失败/)).toBeTruthy()
-    expect(tags.value).toBe('新标签')
-    expect(spies.updateMeta).toHaveBeenCalledTimes(1)
-  })
 })
 
 describe('AssetsPanel 标签提交：乱序与迟到响应（issue #124）', () => {
@@ -266,7 +262,32 @@ describe('AssetsPanel 标签提交：乱序与迟到响应（issue #124）', () 
   })
 })
 
-describe('AssetsPanel 标签提交：错误横幅资产关联（issue #124 评审）', () => {
+describe('AssetsPanel 标签提交：错误提示与解除（issue #124 评审）', () => {
+  it('保存失败：提示错误且保留输入，本地不写入', async () => {
+    const spies = mockStore([asset()])
+    spies.updateMeta.mockRejectedValue(new Error('写入失败'))
+    const tags = await openTagsInput()
+    fireEvent.change(tags, { target: { value: '新标签' } })
+    fireEvent.blur(tags)
+    expect(await screen.findByText(/写入失败/)).toBeTruthy()
+    expect(tags.value).toBe('新标签')
+    expect(spies.updateMeta).toHaveBeenCalledTimes(1)
+  })
+
+  it('无写入的回退解除本资产的未解决失败（PR #176 评审）', async () => {
+    const spies = mockStore([asset()])
+    spies.updateMeta.mockRejectedValue(new Error('写入失败'))
+    const tags = await openTagsInput()
+    fireEvent.change(tags, { target: { value: '新标签' } })
+    fireEvent.blur(tags) // 提交失败：错误行显示
+    expect(await screen.findByText(/写入失败/)).toBeTruthy()
+    fireEvent.change(tags, { target: { value: '主角' } }) // 放弃修改回退
+    fireEvent.blur(tags)
+    await act(async () => {})
+    expect(screen.queryByText(/写入失败/)).toBeNull() // 回退 = 解除
+    expect(spies.updateMeta).toHaveBeenCalledTimes(1) // 回退零写入
+  })
+
   it('无关资产的成功不掩盖失败提示；失败资产重试成功后清除', async () => {
     const spies = mockStore([asset(), asset({ id: 'a2', name: '男主侧面' })])
     const calls: Record<string, number> = {}
@@ -299,8 +320,10 @@ describe('AssetsPanel 标签提交：错误横幅资产关联（issue #124 评�
     expect(screen.queryByText(/a1 写入失败/)).toBeNull()
     expect(spies.updateMeta).toHaveBeenCalledTimes(3)
   })
+})
 
-  it('按资产保留未解决错误：单个资产重试成功后其余失败仍显示（PR #176 评审）', async () => {
+describe('AssetsPanel 标签提交：多资产与跨操作错误（PR #176 评审）', () => {
+  it('按资产保留未解决错误：单个资产重试成功后其余失败仍显示', async () => {
     const spies = mockStore([asset(), asset({ id: 'a2', name: '男主侧面' })])
     const failIds = new Set(['a1', 'a2'])
     spies.updateMeta.mockImplementation((id, patch) =>
@@ -336,6 +359,39 @@ describe('AssetsPanel 标签提交：错误横幅资产关联（issue #124 评�
     fireEvent.blur(t1) // a1 最后重试成功：横幅清空
     await act(async () => {})
     expect(screen.queryByText(/a1 写入失败/)).toBeNull()
+  })
+
+  it('相同文案的错误分属两行互不误清', async () => {
+    const spies = mockStore([asset()])
+    spies.put.mockRejectedValue(new Error('磁盘满'))
+    let call = 0
+    spies.updateMeta.mockImplementation((_id, patch) => {
+      call += 1
+      return call === 1
+        ? Promise.reject(new Error('磁盘满'))
+        : Promise.resolve(asset({ tags: patch.tags ?? [] }))
+    })
+    render(<AssetsPanel />)
+    fireEvent.click(await screen.findByText('角色设定'))
+    const tags = (await screen.findByLabelText(
+      '资产标签 女主正面',
+    )) as HTMLInputElement
+    fireEvent.change(tags, { target: { value: '新标签' } })
+    fireEvent.blur(tags) // 标签失败：标签错误行显示
+    expect(await screen.findAllByText(/磁盘满/)).toHaveLength(1)
+
+    const file = document.querySelector('input[type=file]') as HTMLInputElement
+    Object.defineProperty(file, 'files', {
+      value: [new File(['x'], 'f.png')],
+      configurable: true,
+    })
+    fireEvent.change(file) // 导入失败：共享错误行，同文案并示
+    await waitFor(() => expect(screen.getAllByText(/磁盘满/)).toHaveLength(2))
+
+    fireEvent.blur(tags) // 标签重试成功：仅清标签行，导入错误保留
+    await act(async () => {})
+    expect(screen.getAllByText(/磁盘满/)).toHaveLength(1)
+    expect(spies.updateMeta).toHaveBeenCalledTimes(2)
   })
 })
 
