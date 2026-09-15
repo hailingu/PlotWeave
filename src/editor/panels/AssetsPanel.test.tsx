@@ -123,6 +123,7 @@ describe('AssetsPanel 类别内操作', () => {
     const tags = screen.getByLabelText('资产标签 女主正面')
     fireEvent.change(tags, { target: { value: '主角， 现代 ,, 校服' } })
     fireEvent.blur(tags)
+    await act(async () => {}) // 提交链异步发起（PR #176 评审：串行化）
     expect(spies.updateMeta).toHaveBeenCalledWith('a1', {
       tags: ['主角', '现代', '校服'],
     })
@@ -172,8 +173,8 @@ describe('AssetsPanel 标签提交：保存同步与未变失焦（issue #124）
     const tags = await openTagsInput()
     fireEvent.change(tags, { target: { value: '新标签' } })
     fireEvent.blur(tags)
-    expect(spies.updateMeta).toHaveBeenCalledWith('a1', { tags: ['新标签'] })
     await act(async () => {}) // 等成功响应把已保存 tags 同步进本地列表
+    expect(spies.updateMeta).toHaveBeenCalledWith('a1', { tags: ['新标签'] })
 
     const remounted = await roundTrip()
     expect(remounted.value).toBe('新标签')
@@ -238,8 +239,10 @@ describe('AssetsPanel 标签提交：乱序与迟到响应（issue #124）', () 
     fireEvent.blur(remounted)
     expect(spies.updateMeta).toHaveBeenCalledTimes(1)
   })
+})
 
-  it('编辑中的撤回草稿不被迟到的保存响应抢占（PR #176 评审）', async () => {
+describe('AssetsPanel 标签提交：撤回保护（PR #176 评审）', () => {
+  it('编辑中的撤回草稿不被迟到的保存响应抢占（响应先到）', async () => {
     const spies = mockStore([asset()])
     let resolveSave!: (a: LibraryAsset) => void
     spies.updateMeta.mockImplementation(
@@ -249,6 +252,7 @@ describe('AssetsPanel 标签提交：乱序与迟到响应（issue #124）', () 
     fireEvent.change(tags, { target: { value: '新标签' } })
     fireEvent.blur(tags) // 提交「新标签」在途
     fireEvent.change(tags, { target: { value: '主角' } }) // 响应前改回旧值（撤回）
+    await act(async () => {}) // 提交链发出第一次提交，resolveSave 就绪
     await act(async () => {
       resolveSave(asset({ tags: ['新标签'] }))
     })
@@ -256,9 +260,43 @@ describe('AssetsPanel 标签提交：乱序与迟到响应（issue #124）', () 
     // 编辑中（dirty）：显示不被在途保存的结果抢占
     expect(tags.value).toBe('主角')
     fireEvent.blur(tags) // 撤回作为一次真实编辑提交
+    await act(async () => {}) // 提交链异步发起
     expect(spies.updateMeta).toHaveBeenNthCalledWith(2, 'a1', {
       tags: ['主角'],
     })
+  })
+
+  it('在途提交目标不同时，回退失焦排队写回已保存值（回退先失焦）', async () => {
+    const spies = mockStore([asset()])
+    const resolvers: Array<(a: LibraryAsset) => void> = []
+    spies.updateMeta.mockImplementation(
+      () => new Promise<LibraryAsset>((res) => resolvers.push(res)),
+    )
+    const tags = await openTagsInput()
+    fireEvent.change(tags, { target: { value: '新标签' } })
+    fireEvent.blur(tags) // 提交「新标签」在途（resolvers[0]）
+    fireEvent.change(tags, { target: { value: '主角' } })
+    fireEvent.blur(tags) // 响应前回退失焦：本地 tags 仍是旧值
+    await act(async () => {}) // 提交链发出第一次提交，回退仍排队
+    expect(spies.updateMeta).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      resolvers[0](asset({ tags: ['新标签'] })) // 旧提交迟到落定
+    })
+    // 本地与显示不被旧提交覆盖：撤回已排队在其后发出
+    expect(tags.value).toBe('主角')
+    expect(spies.updateMeta).toHaveBeenCalledTimes(2)
+    expect(spies.updateMeta).toHaveBeenNthCalledWith(2, 'a1', {
+      tags: ['主角'],
+    })
+
+    await act(async () => {
+      resolvers[1](asset({ tags: ['主角'] })) // 回退写回落定
+    })
+    const remounted = await roundTrip()
+    expect(remounted.value).toBe('主角')
+    fireEvent.blur(remounted)
+    expect(spies.updateMeta).toHaveBeenCalledTimes(2)
   })
 })
 

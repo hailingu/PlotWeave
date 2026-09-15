@@ -252,10 +252,11 @@ function sameTags(a: string[], b: string[]): boolean {
 }
 
 /** 标签提交状态族（AssetsPanel 拆分，PR #176 评审）：未变守卫、assetId
- * 级代际计数（迟到旧响应不回滚）、成功响应字段级合并同步，以及独立的
- * 标签错误横幅——按资产逐个记录未解决失败、自持展示状态，与导入/列表
- * 错误分属两行互不覆盖（同文案也不误清）；任一资产成功或无写入的回退
- * （放弃该次修改）都只解除自身错误，横幅刷新为其余未解决项。 */
+ * 级代际计数（迟到旧响应不回滚）、按资产串行的提交链（到达存储顺序 =
+ * 发起顺序）、成功响应字段级合并同步，以及独立的标签错误横幅——按资产
+ * 逐个记录未解决失败、自持展示状态，与导入/列表错误分属两行互不覆盖
+ * （同文案也不误清）；任一资产成功或无写入的回退（放弃该次修改）都只
+ * 解除自身错误，横幅刷新为其余未解决项。 */
 function useAssetTagsCommit(
   setAssets: (fn: (list: LibraryAsset[]) => LibraryAsset[]) => void,
 ) {
@@ -264,6 +265,13 @@ function useAssetTagsCommit(
   /** 各资产未解决的标签失败（assetId → 错误文案）：多资产并发失败时
    * 单个资产成功/回退不得隐藏其余资产的未解决错误（PR #176 评审）。 */
   const tagsErrors = useRef(new Map<string, string>())
+  /** 每资产未落定的最新写入目标（在途或已排队）：回退失焦值与本地
+   * tags 相同而与它不同时，必须把回退排队写在其后——否则旧提交落定
+   * 会用其目标覆盖用户明确的撤回（PR #176 评审，P1）。 */
+  const pendingTags = useRef(new Map<string, string[]>())
+  /** 每资产提交链尾：串行发起（前一落定才发下一个），保证到达存储的
+   * 顺序与发起顺序一致（并发 IPC 的处理顺序无保证）。 */
+  const commitChains = useRef(new Map<string, Promise<unknown>>())
   /** 标签错误横幅（独立状态行）：归属以状态槽本身为身份，不以文案
    * 相等判断——跨操作同文案（如同一磁盘错误）互不误清（PR #176 评审）。 */
   const [tagsError, setTagsError] = useState<string | null>(null)
@@ -274,37 +282,54 @@ function useAssetTagsCommit(
     setTagsError(joinTagsErrors(tagsErrors.current) || null)
   }
 
-  const commitTags = (asset: LibraryAsset, raw: string) => {
-    const tags = parseAssetTags(raw)
-    // 输入未变化的失焦不写库：否则陈旧 asset.tags 的重挂载输入会把
-    // 刚保存的新标签覆盖回旧值（issue #124 复现路径的回写来源）
-    if (sameTags(tags, asset.tags)) {
-      // 无写入的回退 = 放弃该次失败修改：视为已解除，不留残留横幅
-      resolveTagsError(asset.id)
-      return
-    }
-    const seq = (tagsCommitSeq.current.get(asset.id) ?? 0) + 1
-    tagsCommitSeq.current.set(asset.id, seq)
-    libraryStore
-      .updateMeta(asset.id, { tags })
+  /** 排队一次标签写入：串行链发起 + 代际守卫取用响应；成功只合并
+   * tags 字段并解除自身错误，失败逐资产记录。 */
+  const enqueueTagsCommit = (assetId: string, tags: string[]) => {
+    const seq = (tagsCommitSeq.current.get(assetId) ?? 0) + 1
+    tagsCommitSeq.current.set(assetId, seq)
+    pendingTags.current.set(assetId, tags)
+    const prev = commitChains.current.get(assetId) ?? Promise.resolve()
+    const run = prev
+      .catch(() => {})
+      .then(() => libraryStore.updateMeta(assetId, { tags }))
+    commitChains.current.set(assetId, run)
+    run
       .then((updated) => {
-        if (tagsCommitSeq.current.get(asset.id) !== seq) return
-        resolveTagsError(asset.id)
+        if (tagsCommitSeq.current.get(assetId) !== seq) return
+        pendingTags.current.delete(assetId)
+        resolveTagsError(assetId)
         // 成功保存同步本地状态（issue #124 验收）：只合并 tags 字段——
         // 响应是全量条目，整体替换会清掉并发的乐观改名
         setAssets((list) =>
           list.map((a) =>
-            a.id === asset.id ? { ...a, tags: updated.tags } : a,
+            a.id === assetId ? { ...a, tags: updated.tags } : a,
           ),
         )
       })
       .catch((err) => {
         // 失败保留输入（AssetTagsInput 草稿不丢）并逐资产记录提示；
         // 被更新提交取代的旧失败不再上报（代际守卫）
-        if (tagsCommitSeq.current.get(asset.id) !== seq) return
-        tagsErrors.current.set(asset.id, String(err))
+        if (tagsCommitSeq.current.get(assetId) !== seq) return
+        pendingTags.current.delete(assetId)
+        tagsErrors.current.set(assetId, String(err))
         setTagsError(joinTagsErrors(tagsErrors.current))
       })
+  }
+
+  const commitTags = (asset: LibraryAsset, raw: string) => {
+    const tags = parseAssetTags(raw)
+    // 输入未变化的失焦不写库：否则陈旧 asset.tags 的重挂载输入会把
+    // 刚保存的新标签覆盖回旧值（issue #124 复现路径的回写来源）；
+    // 无在途差异提交时同时解除自身未解决错误（回退 = 放弃该次修改）
+    const pending = pendingTags.current.get(asset.id)
+    if (
+      sameTags(tags, asset.tags) &&
+      (pending === undefined || sameTags(pending, tags))
+    ) {
+      resolveTagsError(asset.id)
+      return
+    }
+    enqueueTagsCommit(asset.id, tags)
   }
   return { commitTags, tagsError }
 }
