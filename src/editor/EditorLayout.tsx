@@ -10,7 +10,7 @@ import RightPanel from './panels/RightPanel'
 import EditorCanvasRegion, {
   type EditorCanvasRegionProps,
 } from './EditorCanvasRegion'
-import EditorOverlays from './EditorOverlays'
+import EditorOverlays, { type EditorOverlaysProps } from './EditorOverlays'
 import type { EditorLayoutProps } from './editorLayoutProps'
 
 /** 布局横幅区（EditorLayout 拆分，issue #99）：自动保存失败与动作错误。 */
@@ -64,6 +64,19 @@ function toCanvasRegionProps(
     onPaneContextMenu: props.graph.menu.onPaneContextMenu,
     onAutoLayout: props.graph.layout.onAutoLayout,
     onMoveEnd: props.persistence.onMoveEnd,
+  }
+}
+
+/** 浮层区域输入挑选（issue #104）：只下传 EditorOverlays 真实消费的四个域
+ * （收窄契约见 EditorOverlaysProps），AI 会话、保存回调等其余输入在类型层
+ * 即不可达；新增浮层消费字段时在此与该接口同步登记。组件外的挑选函数同时
+ * 保证布局组件自身不超过 80 行上限。 */
+function toOverlaysProps(props: EditorLayoutProps): EditorOverlaysProps {
+  return {
+    project: props.project,
+    doc: props.doc,
+    panels: props.panels,
+    graph: props.graph,
   }
 }
 
@@ -142,14 +155,7 @@ export default function EditorLayout(props: EditorLayoutProps) {
           onSaveAiSession={props.onSaveAiSession}
         />
       </div>
-      {/* 浮层输入按域显式下传（issue #104）：EditorOverlays 只收真实消费的
-          project/doc/panels/graph，AI 会话等其余域在类型层即不可达。 */}
-      <EditorOverlays
-        project={project}
-        doc={doc}
-        panels={panels}
-        graph={graph}
-      />
+      <EditorOverlays {...toOverlaysProps(props)} />
     </div>
   )
 }
