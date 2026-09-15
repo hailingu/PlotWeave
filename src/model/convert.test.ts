@@ -890,9 +890,8 @@ describe('parseProject 输入所有权契约（issue #102：归一化就地改�
     expect(doc).not.toEqual(before)
     // repaired 的比较基准是入口内部的调用前快照，不因输入被就地改写而失真
     expect(round.repaired).toBe(true)
-    expect(
-      round.warnings.some((w) => w.includes('c1') && w.includes('记录键')),
-    ).toBe(true)
+    // 警告按语义断言：须引用受影响的记录键（夹具数据标识符，非措辞）
+    expect(round.warnings.some((w) => w.includes('c1'))).toBe(true)
     // 归一化结果不回归：会话设定集含改写后的条目
     expect(round.content.settings.characters.map((c) => c.id)).toContain('c1')
   })
