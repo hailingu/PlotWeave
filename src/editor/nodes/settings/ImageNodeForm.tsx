@@ -1,11 +1,10 @@
-import { useEffect, useState } from 'react'
 import Field from './Field'
 import { useCompositionSafeValue } from './compositionValue'
 import { useNodeEdit } from '../../nodeEdit'
 import { useImageJobs } from '../../imagegen/context'
 import { IMAGE_SIZES } from '../../imagegen/plan'
-import { settingsStore } from '../../../settings/settingsStore'
-import { listChatModels, type AppSettings } from '../../../settings/types'
+import { useSettingsSnapshot } from '../../../settings/useSettingsSnapshot'
+import { listChatModels } from '../../../settings/types'
 import type { ImageNodeData } from '../types'
 
 /** 尺寸档位的人读标签：竖版贴短剧画幅作为默认推荐。 */
@@ -15,17 +14,10 @@ const SIZE_LABELS: Record<(typeof IMAGE_SIZES)[number], string> = {
   '1536x1024': '1536 × 1024 · 横版',
 }
 
-/** 应用设置加载后的可用模型选项（与 ✦AI 面板同源的三层过滤枚举）。 */
+/** 应用设置加载后的可用模型选项（与 ✦AI 面板同源的三层过滤枚举）；
+ * 读取失败保持 null → 仅「跟随默认」选项，表单只读不落盘（issue #120）。 */
 function useChatModelOptions() {
-  const [appSettings, setAppSettings] = useState<AppSettings | null>(null)
-  useEffect(() => {
-    // 读取失败（issue #120）保持 null → 仅「跟随默认」选项，表单只读不落盘
-    void settingsStore
-      .load()
-      .then(setAppSettings, (err: unknown) =>
-        console.warn('[ImageNodeForm] 读取设置失败', err),
-      )
-  }, [])
+  const appSettings = useSettingsSnapshot()
   return appSettings !== null ? listChatModels(appSettings) : []
 }
 
