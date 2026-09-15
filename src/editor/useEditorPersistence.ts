@@ -4,11 +4,12 @@
  * onMoveEnd 更新 ref 后经 markDirty 显式标脏换入最新文档——纯平移/缩放也
  * 落盘，卸载冲刷与后续内容保存拿到的都是最新视口（不落 stale 值）。
  */
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Viewport } from '@xyflow/react'
 import { errorBannerMessage } from './errorBannerMessage'
 import { sessionDoc } from './sessionDoc'
 import { useDebouncedSave } from './useDebouncedSave'
+import { onRetryPersisted } from '../projectStore/saveChain'
 import type { EditorDocument, EditorProjectContent } from './useEditorDocument'
 import type { ProjectContent } from '../model/content'
 
@@ -70,6 +71,18 @@ function useCanvasCommitBarrier(
     },
     [onSave],
   )
+  /** 链上重存成功同一登记文档时的外部完成口（PR #174 评审）：该文档已
+   * 落盘，兑现全部既有等待者并前移代次——此后登记的等待者由后续真实
+   * 保存负责，不因本次外部完成被错误兑现。 */
+  const markExternallyPersisted = useCallback(() => {
+    const attempt = ++attemptRef.current
+    const waiters = waitersRef.current
+    waitersRef.current = waiters.filter((waiter) => {
+      if (waiter.minAttempt >= attempt) return true
+      waiter.resolve()
+      return false
+    })
+  }, [])
   const whenCanvasCommitted = useCallback(
     () =>
       new Promise<void>((resolve) => {
@@ -77,7 +90,7 @@ function useCanvasCommitBarrier(
       }),
     [],
   )
-  return { wrappedOnSave, whenCanvasCommitted }
+  return { wrappedOnSave, whenCanvasCommitted, markExternallyPersisted }
 }
 
 /** 防抖落盘与保存失败诊断（§10.2）。 */
@@ -95,12 +108,43 @@ export function useEditorPersistence(
     setSaveError(errorBannerMessage(err))
   }, [])
 
-  const { wrappedOnSave, whenCanvasCommitted } = useCanvasCommitBarrier(onSave)
+  // 包装 onSave 记录失败时提交的文档（PR #174 评审）：保存链对同一登记
+  // 文档重存成功时据此对齐完成语义（兑现等待者、清除失败横幅）。
+  const lastFailedDocRef = useRef<ProjectContent | null>(null)
+  const saveThroughBarrier = useCallback(
+    async (docToSave: ProjectContent) => {
+      try {
+        await onSave(docToSave)
+        lastFailedDocRef.current = null
+      } catch (err) {
+        lastFailedDocRef.current = docToSave
+        throw err
+      }
+    },
+    [onSave],
+  )
+
+  const { wrappedOnSave, whenCanvasCommitted, markExternallyPersisted } =
+    useCanvasCommitBarrier(saveThroughBarrier)
   const markDirty = useDebouncedSave(
     buildSessionDoc(project, doc, doc.viewportRef.current),
     wrappedOnSave,
     SAVE_DEBOUNCE_MS,
     handleSaveResult,
+  )
+
+  // 链上重存成功同一登记文档（issue #119，PR #174 评审）：画布已落盘，
+  // 完成语义与常规保存成功对齐——兑现 AI 执行回执等待者、清除失败横幅；
+  // 闸脏态的清除由 useDebouncedSave 自己的订阅负责。
+  useEffect(
+    () =>
+      onRetryPersisted((persisted) => {
+        if (lastFailedDocRef.current !== persisted) return
+        lastFailedDocRef.current = null
+        markExternallyPersisted()
+        handleSaveResult(null)
+      }),
+    [handleSaveResult, markExternallyPersisted],
   )
 
   const onMoveEnd = useCallback(

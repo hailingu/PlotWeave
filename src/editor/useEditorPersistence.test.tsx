@@ -11,6 +11,7 @@ import {
   type EditorProjectContent,
 } from './useEditorDocument'
 import { useEditorPersistence } from './useEditorPersistence'
+import { notifyRetryPersisted } from '../projectStore/saveChain'
 import type { ProjectContent } from '../model/content'
 
 const PROJECT: EditorProjectContent = {
@@ -135,5 +136,32 @@ describe('useEditorPersistence（§3/§10.2）', () => {
       await waiter
     })
     expect(committed).toBe(true)
+  })
+
+  it('链上重存成功同一登记文档：兑现等待者并清除失败横幅（PR #174 评审）', async () => {
+    const { result, onSave } = setup()
+    onSave.mockRejectedValue(new Error('磁盘已满'))
+    let committed = false
+    const waiter = result.current.persistence.whenCanvasCommitted().then(() => {
+      committed = true
+    })
+    act(() =>
+      result.current.persistence.onMoveEnd(null, { x: 1, y: 1, zoom: 1 }),
+    )
+
+    await flush()
+    expect(result.current.persistence.saveError).toBe('磁盘已满')
+    expect(committed).toBe(false)
+
+    // 保存链对同一登记文档重存成功（携带同一文档对象）：完成语义与常规
+    // 保存成功对齐——兑现 AI 执行回执等待者、清除失败横幅
+    act(() => {
+      notifyRetryPersisted(onSave.mock.calls[0][0] as ProjectContent)
+    })
+    await act(async () => {
+      await waiter
+    })
+    expect(committed).toBe(true)
+    expect(result.current.persistence.saveError).toBeNull()
   })
 })
