@@ -3,13 +3,17 @@
 //! - 设置本体（provider 配置 / 默认模型 / 加密 key）存应用数据目录
 //!   `settings.json`，结构对前端自有，以 `serde_json::Value` 透传，
 //!   仅做大小与文件名校验。
+//! - 读取语义（issue #120）：仅文件缺失（首次启动）返回空对象；损坏、
+//!   超限或其余读取失败一律 Err——未知原配置不得降级为默认值后被
+//!   全量保存覆盖。
 //! - API key 不入钥匙串：经 `seal` 模块 AES-256-GCM 加密（绑定本机），
 //!   密文随 provider 配置落 `settings.json`（`keyEnc` 字段）；
 //!   明文只在加密/请求的进程内存中出现，不落盘、不回显。
 //!   历史钥匙串数据保留只读回退，不再写入。
 
 use std::fs;
-use std::path::PathBuf;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use tauri::{AppHandle, Manager};
@@ -40,19 +44,26 @@ fn prefs_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir.join("settings.json"))
 }
 
-/// 读取应用设置；文件不存在返回空对象（首次启动）。
+/// 读取设置内核（issue #120）：文件不存在 = 首次启动，返回空对象；
+/// 其余读取失败（权限/IO 异常）与损坏、超限一律 Err 上抛——把未知
+/// 原配置降级为空对象，会被前端默认值经全量保存覆盖原文件。
+fn read_prefs_at(path: &Path) -> Result<serde_json::Value, String> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(serde_json::json!({})),
+        Err(e) => return Err(format!("读取设置失败：{e}")),
+    };
+    if text.len() > PREFS_MAX_BYTES {
+        return Err("设置文件过大".into());
+    }
+    serde_json::from_str(&text).map_err(|e| format!("设置文件损坏：{e}"))
+}
+
+/// 读取应用设置；仅文件不存在（首次启动）返回空对象，其余失败上抛。
 #[tauri::command]
 pub fn load_prefs(app: AppHandle) -> Result<serde_json::Value, String> {
     let path = prefs_path(&app)?;
-    match fs::read_to_string(&path) {
-        Ok(text) => {
-            if text.len() > PREFS_MAX_BYTES {
-                return Err("设置文件过大".into());
-            }
-            serde_json::from_str(&text).map_err(|e| format!("设置文件损坏：{e}"))
-        }
-        Err(_) => Ok(serde_json::json!({})),
-    }
+    read_prefs_at(&path)
 }
 
 /// 全量保存应用设置（原子写：临时文件 + 改名）。
@@ -239,11 +250,71 @@ mod tests {
         assert!(CHAT_RESPONSE_BODY_MAX_BYTES <= 16 * 1024 * 1024);
     }
 
-    /// 本地 HTTP 夹具与请求排空助手已抽至 `crate::testhttp`（http_util 的
-    /// 分类测试与本模块的传输路径测试共用，避免两份实现漂移）。
+    // ---- issue #120：load_prefs 读取失败分类（read_prefs_at 内核） ----
+
+    /// 唯一临时目录：`{tmp}/pw-prefs-test-{new_id}-{tag}/`。
+    fn temp_prefs_dir(tag: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("pw-prefs-test-{}-{tag}", crate::store::new_id()));
+        fs::create_dir_all(&dir).expect("创建临时目录");
+        dir
+    }
+
+    #[test]
+    fn read_prefs_at_missing_file_is_first_launch_empty_object() {
+        // 首次启动语义仅此一例：文件不存在 → Ok 空对象（前端补默认）
+        let dir = temp_prefs_dir("missing");
+        let v = read_prefs_at(&dir.join("settings.json")).expect("缺文件应 Ok 空对象");
+        assert_eq!(v, serde_json::json!({}));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_prefs_at_reads_valid_file() {
+        let dir = temp_prefs_dir("valid");
+        fs::write(
+            dir.join("settings.json"),
+            r#"{"defaultChat":"openai:gpt-4o"}"#,
+        )
+        .expect("写入设置");
+        let v = read_prefs_at(&dir.join("settings.json")).expect("合法文件应 Ok");
+        assert_eq!(v["defaultChat"], "openai:gpt-4o");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_prefs_at_rejects_corrupt_json() {
+        let dir = temp_prefs_dir("corrupt");
+        fs::write(dir.join("settings.json"), "{ not json").expect("写入损坏设置");
+        let err = read_prefs_at(&dir.join("settings.json")).expect_err("损坏 JSON 应 Err");
+        assert!(err.contains("设置文件损坏"), "实际错误：{err}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_prefs_at_rejects_oversize_file() {
+        let dir = temp_prefs_dir("oversize");
+        fs::write(dir.join("settings.json"), vec![b'x'; PREFS_MAX_BYTES + 1])
+            .expect("写入超限设置");
+        let err = read_prefs_at(&dir.join("settings.json")).expect_err("超限应 Err");
+        assert!(err.contains("设置文件过大"), "实际错误：{err}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_prefs_at_rejects_read_failure_beyond_not_found() {
+        // 以目录当读取目标：稳定产生 NotFound 之外的读取失败（权限/异型
+        // 同类），不得降级为空对象——那是首次启动专属语义（issue #120）
+        let dir = temp_prefs_dir("dir-target");
+        let err = read_prefs_at(&dir).expect_err("非 NotFound 读取失败应 Err");
+        assert!(err.contains("读取设置失败"), "实际错误：{err}");
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn chat_completion_returns_choices0_message_over_local_http() {
+        // 本地 HTTP 夹具与请求排空助手已抽至 `crate::testhttp`（http_util
+        // 的分类测试与本模块的传输路径测试共用，避免两份实现漂移）。
         let payload = serde_json::json!({
             "choices": [{ "message": { "role": "assistant", "content": "你好" } }]
         })

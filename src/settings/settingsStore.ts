@@ -29,10 +29,10 @@ export const settingsStore = {
       memorySettings ??= defaultSettings()
       return Promise.resolve(memorySettings)
     }
-    return tauriLoad().catch((err) => {
-      console.warn('[settingsStore] 读取设置失败', err)
-      return defaultSettings()
-    })
+    // issue #120：读取失败（损坏/权限/超限）向上传播，由调用方展示可
+    // 重试错误并阻止以默认值全量覆盖原配置；首次启动由 Rust 侧仅对
+    // 文件缺失返回空对象，经 normalizeSettings 补内置默认。
+    return tauriLoad()
   },
 
   save: (settings: AppSettings): Promise<void> => {

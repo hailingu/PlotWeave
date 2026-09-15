@@ -10,12 +10,8 @@ import {
   type BatchValidation,
   type ValidatedCommand,
 } from '../ai/commands'
-import { settingsStore } from '../../settings/settingsStore'
-import {
-  listChatModels,
-  type AppSettings,
-  type ChatModelOption,
-} from '../../settings/types'
+import { useSettingsSnapshot } from '../../settings/useSettingsSnapshot'
+import { listChatModels, type ChatModelOption } from '../../settings/types'
 import { cardResultEntry } from './aiThreadModel'
 import PreviewCard from './PreviewCard'
 import {
@@ -33,14 +29,12 @@ export { AiSettingsButton } from './AiThreadTopbar'
 /** 模型选择域（逻辑 hook，issue #39 拆分）：应用设置加载、面板内模型
  * 选择与三层派生（可用模型 → 生效模型 → provider key 就绪）。 */
 function useAiModels() {
-  const [appSettings, setAppSettings] = useState<AppSettings | null>(null)
+  // 挂载时读一次设置快照（切回 AI 分段即重挂重读，从设置页回来能刷新）；
+  // 读取失败保持 null → 空选项走引导（issue #120）；key 状态直接从
+  // provider 配置派生（keyEnc 密文存在即已配置）
+  const appSettings = useSettingsSnapshot()
   /** 面板内选中的模型 key；null = 跟随设置页默认。 */
   const [modelKey, setModelKey] = useState<string | null>(null)
-  // 每次切到 AI 分段重载配置（从设置页回来也能刷新）；
-  // key 状态直接从 provider 配置派生（keyEnc 密文存在即已配置）
-  useEffect(() => {
-    void settingsStore.load().then(setAppSettings)
-  }, [])
   const options: ChatModelOption[] = appSettings
     ? listChatModels(appSettings)
     : []
