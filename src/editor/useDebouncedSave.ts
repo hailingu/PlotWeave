@@ -172,61 +172,83 @@ function useUnmountFlush(
   }, [onUnmount, saveTimer, unmountedRef])
 }
 
-/** 冲刷与标脏动作（useDebouncedSave 拆分，issue #118 评审：主 hook 守
- * 80 行上限）：消费保存闸 refs 组装三条动作通道。闸 ref 实例内恒稳定，
- * 列入依赖以满足 exhaustive-deps（issue #99 拆分）。 */
-function useSaveFlush(
+/** 启动保存循环并登记/解除在途 Promise（useSaveFlush 拆出，PR #174 评审：
+ * 宿主钩子守 80 行上限）。循环体同步执行到首个 await——inFlightRef 置位
+ * 仍发生在 flushSave 入口检查之后的同一同步段，并发触发照旧被挡回。 */
+function startTrackedSaveRun(
+  run: Promise<void>,
+  inFlightPromiseRef: MutableRefObject<Promise<void> | null>,
+): Promise<void> {
+  inFlightPromiseRef.current = run
+  const settle = () => {
+    if (inFlightPromiseRef.current === run) inFlightPromiseRef.current = null
+  }
+  void run.then(settle, settle)
+  return run
+}
+
+/** 退出冲刷闸的冲刷动作（issue #119，useSaveFlush 拆出以守 80 行上限）：
+ * 先等在途保存循环真实落定（其间接力保存含在途期间的新编辑），再补一轮
+ * 立即冲刷。失败保留脏态（hasPending 仍真）交防抖节律重试，不在闸内紧
+ * 循环。 */
+function useExitFlushAction(
+  flushSave: () => Promise<void>,
+  inFlightPromiseRef: MutableRefObject<Promise<void> | null>,
+): () => Promise<void> {
+  return useCallback(async () => {
+    while (inFlightPromiseRef.current !== null) {
+      await inFlightPromiseRef.current.catch(() => undefined)
+    }
+    await flushSave()
+  }, [flushSave, inFlightPromiseRef])
+}
+
+/** 防抖冲刷动作（useSaveFlush 拆出，PR #174 评审：在途登记与退出闸加入
+ * 后宿主钩子超 80 行上限，与 issue #99/#118 同款拆分）。循环体同步执行到
+ * 首个 await——inFlightRef 置位发生在入口检查之后的同一同步段，并发触发
+ * 照旧被挡回；失败按未卸载/已卸载分流（重试节律 / 卸载补交）。 */
+function useFlushSave(
   gates: ReturnType<typeof useSaveGateRefs>,
   onSave: (doc: ProjectContent) => void | Promise<void>,
   onSaveResult: ((err: unknown) => void) | undefined,
   delayMs: number,
-) {
-  const {
-    saveTimer,
-    dirtyRef,
-    latestRef,
-    unmountedRef,
-    inFlightRef,
-    inFlightPromiseRef,
-  } = gates
-
+): () => Promise<void> {
+  const { saveTimer, dirtyRef, latestRef, unmountedRef, inFlightRef } = gates
   const flushSave = useCallback(async () => {
     if (inFlightRef.current) return // 在途：本轮跳过，新脏数据由在途循环接力
-    const run = (async () => {
-      while (dirtyRef.current) {
-        dirtyRef.current = false
-        inFlightRef.current = true
-        try {
-          await onSave(latestRef.current)
-          onSaveResult?.(null)
-        } catch (err) {
-          onSaveResult?.(err)
-          if (!unmountedRef.current) {
-            // 失败不丢数据：重新置脏，按防抖节律自动重试（不紧循环）；
-            // 卸载后不排新计时器——后台循环不得覆盖新会话的编辑
-            dirtyRef.current = true
-            saveTimer.current ??= setTimeout(() => {
-              saveTimer.current = null
-              void flushSave()
-            }, delayMs)
+    await startTrackedSaveRun(
+      (async () => {
+        while (dirtyRef.current) {
+          dirtyRef.current = false
+          inFlightRef.current = true
+          try {
+            await onSave(latestRef.current)
+            onSaveResult?.(null)
+          } catch (err) {
+            onSaveResult?.(err)
+            if (!unmountedRef.current) {
+              // 失败不丢数据：重新置脏，按防抖节律自动重试（不紧循环）；
+              // 卸载后不排新计时器——后台循环不得覆盖新会话的编辑
+              dirtyRef.current = true
+              saveTimer.current ??= setTimeout(() => {
+                saveTimer.current = null
+                void flushSave()
+              }, delayMs)
+              return
+            }
+            deliverLatestAfterUnmount(latestRef, dirtyRef, onSave, onSaveResult)
             return
+          } finally {
+            inFlightRef.current = false
           }
-          deliverLatestAfterUnmount(latestRef, dirtyRef, onSave, onSaveResult)
-          return
-        } finally {
-          inFlightRef.current = false
+          // 卸载后不再发起「新一轮」冲刷，但在途保存完成时仍须把卸载前置脏
+          // 的最新文档补存一次（§3.1 flushPersist 导航契约：离开编辑器不丢
+          // 编辑）
+          if (unmountedRef.current && !dirtyRef.current) return
         }
-        // 卸载后不再发起「新一轮」冲刷，但在途保存完成时仍须把卸载前置脏的
-        // 最新文档补存一次（§3.1 flushPersist 导航契约：离开编辑器不丢编辑）
-        if (unmountedRef.current && !dirtyRef.current) return
-      }
-    })()
-    inFlightPromiseRef.current = run
-    const settle = () => {
-      if (inFlightPromiseRef.current === run) inFlightPromiseRef.current = null
-    }
-    void run.then(settle, settle)
-    await run
+      })(),
+      gates.inFlightPromiseRef,
+    )
   }, [
     onSave,
     onSaveResult,
@@ -236,18 +258,24 @@ function useSaveFlush(
     saveTimer,
     unmountedRef,
     inFlightRef,
-    inFlightPromiseRef,
+    gates.inFlightPromiseRef,
   ])
+  return flushSave
+}
 
-  /** 退出冲刷闸的冲刷动作（issue #119）：先等在途保存循环真实落定（其间
-   * 接力保存含在途期间的新编辑），再补一轮立即冲刷。失败保留脏态
-   * （hasPending 仍真）交防抖节律重试，不在闸内紧循环。 */
-  const flushForExit = useCallback(async () => {
-    while (inFlightPromiseRef.current !== null) {
-      await inFlightPromiseRef.current.catch(() => undefined)
-    }
-    await flushSave()
-  }, [flushSave, inFlightPromiseRef])
+/** 冲刷与标脏动作（useDebouncedSave 拆分，issue #118 评审：主 hook 守
+ * 80 行上限）：消费保存闸 refs 组装三条动作通道。闸 ref 实例内恒稳定，
+ * 列入依赖以满足 exhaustive-deps（issue #99 拆分）。 */
+function useSaveFlush(
+  gates: ReturnType<typeof useSaveGateRefs>,
+  onSave: (doc: ProjectContent) => void | Promise<void>,
+  onSaveResult: ((err: unknown) => void) | undefined,
+  delayMs: number,
+) {
+  const { saveTimer, dirtyRef, latestRef, inFlightRef } = gates
+
+  const flushSave = useFlushSave(gates, onSave, onSaveResult, delayMs)
+  const flushForExit = useExitFlushAction(flushSave, gates.inFlightPromiseRef)
 
   const markDirty = useCallback(
     (next: ProjectContent) => {
