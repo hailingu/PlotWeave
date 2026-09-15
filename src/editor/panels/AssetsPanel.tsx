@@ -268,6 +268,23 @@ function mergeAssetTags(
   return list.map((asset) => (asset.id === id ? { ...asset, tags } : asset))
 }
 
+/** 标签失败的独立状态槽：按资产记录、重试/回退/删除只解除自身，
+ * 与导入及删除的共享错误行互不覆盖。 */
+function useAssetTagsErrors() {
+  const tagsErrors = useRef(new Map<string, string>())
+  const [tagsError, setTagsError] = useState<string | null>(null)
+  const hasTagsError = (id: string) => tagsErrors.current.has(id)
+  const recordTagsError = (id: string, error: unknown) => {
+    tagsErrors.current.set(id, String(error))
+    setTagsError(joinTagsErrors(tagsErrors.current))
+  }
+  const resolveTagsError = (id: string) => {
+    if (!tagsErrors.current.delete(id)) return
+    setTagsError(joinTagsErrors(tagsErrors.current) || null)
+  }
+  return { tagsError, hasTagsError, recordTagsError, resolveTagsError }
+}
+
 /** 标签提交状态族（AssetsPanel 拆分，PR #176 评审）：未变守卫、assetId
  * 级代际计数（迟到旧响应不回滚）、编辑立即进入门面队列（跨挂载保序）、
  * 成功响应字段级合并同步，以及独立的标签错误横幅——按资产
@@ -279,20 +296,17 @@ function useAssetTagsCommit(
 ) {
   /** 提交代际（issue #124）：assetId → 最新已发起提交的序号。 */
   const tagsCommitSeq = useRef(new Map<string, number>())
-  /** 各资产未解决的标签失败（assetId → 错误文案）：多资产并发失败时
-   * 单个资产成功/回退不得隐藏其余资产的未解决错误（PR #176 评审）。 */
-  const tagsErrors = useRef(new Map<string, string>())
+  const { tagsError, hasTagsError, recordTagsError, resolveTagsError } =
+    useAssetTagsErrors()
   /** 每资产未落定的最新写入目标（在途或已排队）：回退失焦值与本地
    * tags 相同而与它不同时，必须把回退排队写在其后（PR #176 评审，P1）。 */
   const pendingTags = useRef(new Map<string, string[]>())
-  /** 标签错误横幅（独立状态行）：归属以状态槽本身为身份，不以文案
-   * 相等判断——跨操作同文案（如同一磁盘错误）互不误清（PR #176 评审）。 */
-  const [tagsError, setTagsError] = useState<string | null>(null)
 
-  /** 解除某资产的未解决失败并刷新标签横幅为剩余项（无剩余清除）。 */
-  const resolveTagsError = (assetId: string) => {
-    if (!tagsErrors.current.delete(assetId)) return
-    setTagsError(joinTagsErrors(tagsErrors.current) || null)
+  /** 确认删除时终结该行标签编辑：失效在途响应，并解除该资产的错误。 */
+  const forgetTags = (id: string) => {
+    tagsCommitSeq.current.set(id, (tagsCommitSeq.current.get(id) ?? 0) + 1)
+    pendingTags.current.delete(id)
+    resolveTagsError(id)
   }
 
   /** 排队一次标签写入：立即进入门面队列 + 代际守卫取用响应；成功只合并
@@ -314,8 +328,7 @@ function useAssetTagsCommit(
         // 失败保留输入并逐资产记录；被取代的旧失败不再上报（代际守卫）
         if (tagsCommitSeq.current.get(assetId) !== seq) return
         pendingTags.current.delete(assetId)
-        tagsErrors.current.set(assetId, String(err))
-        setTagsError(joinTagsErrors(tagsErrors.current))
+        recordTagsError(assetId, err)
       })
   }
 
@@ -328,10 +341,7 @@ function useAssetTagsCommit(
     const pending = pendingTags.current.get(asset.id)
     const persisted = libraryStore.persistedSnapshot(asset.id)?.tags
     // 无本轮编辑只允许保留的失败草稿重试；陈旧显示只读同步，不能回写。
-    if (
-      intent !== 'edit' &&
-      !(intent === 'draft' && tagsErrors.current.has(asset.id))
-    ) {
+    if (intent !== 'edit' && !(intent === 'draft' && hasTagsError(asset.id))) {
       if (pending === undefined && persisted) {
         setAssets((list) => mergeAssetTags(list, asset.id, persisted))
       }
@@ -341,7 +351,7 @@ function useAssetTagsCommit(
     if (
       sameTags(tags, asset.tags) &&
       sameTags(tags, persisted ?? asset.tags) &&
-      !libraryStore.hasPendingUpdate(asset.id) &&
+      !libraryStore.hasPendingOperation(asset.id) &&
       (pending === undefined || sameTags(pending, tags))
     ) {
       resolveTagsError(asset.id)
@@ -349,7 +359,7 @@ function useAssetTagsCommit(
     }
     enqueueTagsCommit(asset.id, tags)
   }
-  return { commitTags, tagsError }
+  return { commitTags, tagsError, forgetTags }
 }
 
 /** 把各资产未解决的标签失败合并为单条横幅文案（分号分隔）。 */
@@ -370,10 +380,12 @@ export default function AssetsPanel() {
     setError,
     refreshUrl,
   )
-  const { commitTags, tagsError } = useAssetTagsCommit(setAssets)
+  const { commitTags, tagsError, forgetTags } = useAssetTagsCommit(setAssets)
 
-  const remove = (asset: LibraryAsset) =>
+  const remove = (asset: LibraryAsset) => {
+    forgetTags(asset.id)
     removeLibraryAsset(asset, urls, setAssets, setUrls, setError)
+  }
 
   return (
     <div className="pw-assets">

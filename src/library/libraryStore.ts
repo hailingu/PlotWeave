@@ -168,10 +168,24 @@ async function tauriMediaUrl(
   })
 }
 
-/** 每资产更新队列尾（PR #176 评审）：同一资产的 updateMeta 在门面层串行
- * 落定——排序身份跨面板挂载存活（面板切换卸载会丢失组件内提交链，跨
- * 实例并发 invoke 的落库顺序无保证，后写可能被旧实例的先写覆盖）。 */
-const updateQueues = new Map<string, Promise<unknown>>()
+/** 每资产操作队列尾：更新与删除按调用顺序落定，排序身份跨面板挂载
+ * 存活；删除不能抢先于尚未发出的更新，失败不能阻塞后续操作。 */
+const assetQueues = new Map<string, Promise<unknown>>()
+
+/** 统一更新/删除的串行边界；不同资产互不阻塞，只有当前队尾可回收槽位。 */
+function enqueueAssetOperation<T>(
+  id: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const previous = assetQueues.get(id) ?? Promise.resolve()
+  const run = previous.catch(() => {}).then(operation)
+  assetQueues.set(id, run)
+  const cleanup = () => {
+    if (assetQueues.get(id) === run) assetQueues.delete(id)
+  }
+  void run.then(cleanup, cleanup)
+  return run
+}
 
 /** updateMeta 的实际执行体（门面串行包装之内）：Tauri 走 IPC 补丁更新，
  * 内存回退做同语义的 groupId 校验与合并。 */
@@ -219,10 +233,29 @@ function applyUpdateMeta(
 }
 
 /** 每资产最近一次经门面成功落盘的条目快照（PR #176 评审）：与
- * updateQueues 同层（页面会话生命周期），跨面板挂载、跨消费方共享——
+ * assetQueues 同层（页面会话生命周期），跨面板挂载、跨消费方共享——
  * 组件实例卸载后，其发起的成功落盘仍对新实例可见（persistedSnapshot），
  * 零写入守卫不得以陈旧本地值放行。 */
 const lastPersistedAssets = new Map<string, LibraryAsset>()
+
+/** 删除的实际执行体：排队落定后才删除，成功清除快照，失败保持原基线
+ * 并交由调用方呈现错误；Tauri 返回的隔离区诊断继续上报。 */
+async function applyRemove(id: string): Promise<void> {
+  if (isTauri) {
+    const { invoke } = await import('@tauri-apps/api/core')
+    const result = await invoke<{
+      warnings?: unknown
+      cleanupPending?: unknown[]
+    }>('delete_library_asset', { id })
+    reportLibraryWarnings(result?.warnings)
+    if (result?.cleanupPending?.length) {
+      console.warn('[Library] 删除隔离区待清理：', result.cleanupPending)
+    }
+  } else {
+    memoryAssets.delete(id)
+  }
+  lastPersistedAssets.delete(id)
+}
 
 /** 统一门面：两种环境同签名。 */
 export const libraryStore = {
@@ -253,27 +286,18 @@ export const libraryStore = {
     return Promise.resolve({ ...asset })
   },
 
-  /** 元数据补丁更新：门面层按资产串行（见 updateQueues）——跨面板挂载
+  /** 元数据补丁更新：门面层按资产串行（见 assetQueues）——跨面板挂载
    * 与跨消费方（改名/标签同走此口）保证到达存储的顺序与发起顺序一致；
    * 每次成功（含发起方实例已卸载）都推进 lastPersistedAssets 基线。 */
   updateMeta: (
     id: string,
     patch: Partial<Pick<LibraryAsset, 'name' | 'tags' | 'groupId' | 'view'>>,
-  ): Promise<LibraryAsset> => {
-    const prev = updateQueues.get(id) ?? Promise.resolve()
-    const run = prev.catch(() => {}).then(() => applyUpdateMeta(id, patch))
-    updateQueues.set(id, run)
-    // 成功即记录持久化快照（跨挂载共享）；落定后回收队列槽（仅当仍是
-    // 本资产最新一次）；失败不阻塞后续排队
-    const cleanup = () => {
-      if (updateQueues.get(id) === run) updateQueues.delete(id)
-    }
-    run.then((updated) => {
+  ): Promise<LibraryAsset> =>
+    enqueueAssetOperation(id, async () => {
+      const updated = await applyUpdateMeta(id, patch)
       lastPersistedAssets.set(id, { ...updated })
-      cleanup()
-    }, cleanup)
-    return run
-  },
+      return updated
+    }),
 
   /** 该资产最近一次经门面成功落盘的条目快照（克隆）；本会话未经门面
    * 更新过则 undefined，调用方回退自身列表值。 */
@@ -282,29 +306,13 @@ export const libraryStore = {
     return hit === undefined ? undefined : { ...hit }
   },
 
-  /** 是否有尚未落定的元数据更新（跨面板挂载共享）；真实撤回不能在
-   * 前序写入仍可能改变持久化值时被误判为无变化。 */
-  hasPendingUpdate: (id: string): boolean => updateQueues.has(id),
+  /** 是否有尚未落定的更新或删除（跨面板挂载共享）；前序操作仍可能
+   * 改变持久化值时，真实撤回不能被判为无变化。 */
+  hasPendingOperation: (id: string): boolean => assetQueues.has(id),
 
-  remove: (id: string): Promise<void> => {
-    if (isTauri) {
-      return import('@tauri-apps/api/core').then(async ({ invoke }) => {
-        const result = await invoke<{
-          warnings?: unknown
-          cleanupPending?: unknown[]
-        }>('delete_library_asset', { id })
-        reportLibraryWarnings(result?.warnings)
-        // 隔离区积压随删除响应上报（评审修复：删除成功后不再静默累积）
-        if (result?.cleanupPending?.length) {
-          console.warn('[Library] 删除隔离区待清理：', result.cleanupPending)
-        }
-        lastPersistedAssets.delete(id)
-      })
-    }
-    memoryAssets.delete(id)
-    lastPersistedAssets.delete(id)
-    return Promise.resolve()
-  },
+  /** 删除排在该资产的既有更新之后，避免抢先删除使排队更新失去目标。 */
+  remove: (id: string): Promise<void> =>
+    enqueueAssetOperation(id, () => applyRemove(id)),
 
   /** 媒体 URL：Tauri 走 pwmedia 自定义协议（opaque URL，Rust 侧逐请求
    * 解析 id）；内存回退为 object URL。

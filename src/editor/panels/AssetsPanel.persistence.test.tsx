@@ -14,7 +14,7 @@ import {
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { invoke } from '@tauri-apps/api/core'
 import AssetsPanel from './AssetsPanel'
-import type { LibraryAsset } from '../../library/libraryStore'
+import { libraryStore, type LibraryAsset } from '../../library/libraryStore'
 
 vi.hoisted(() => {
   Object.defineProperty(window, '__TAURI_INTERNALS__', {
@@ -44,10 +44,9 @@ afterAll(() => {
 
 let nextId = 0
 
-/** 可控 IPC 存储：首次写入挂起，后续写入可失败；读取返回独立快照，
- * 成功才应用补丁。资产 ID 隔离各用例的真实门面队列与持久化快照。 */
-function mockStorage() {
-  let saved: LibraryAsset = {
+/** 每个场景使用独立的合法资产，避免门面会话快照相互影响。 */
+function storedAsset(): LibraryAsset {
+  return {
     id: `cross-mount-${++nextId}`,
     name: '角色',
     kind: 'character',
@@ -58,6 +57,12 @@ function mockStorage() {
     groupId: null,
     createdAt: '2026-01-01T00:00:00.000Z',
   }
+}
+
+/** 可控 IPC 存储：首次写入挂起，后续写入可失败；读取返回独立快照，
+ * 成功才应用补丁。资产 ID 隔离各用例的真实门面队列与持久化快照。 */
+function mockStorage() {
+  let saved = storedAsset()
   let release!: () => void
   const firstWrite = new Promise<void>((resolve) => {
     release = resolve
@@ -234,5 +239,128 @@ describe('值相等时的失败草稿重试', () => {
     expect(storage.readTags()).toEqual(['A'])
     expect(input.value).toBe('A')
     expect(screen.queryByText(/保存失败/)).toBeNull()
+  })
+})
+
+/** 模拟 Rust library_op_lock：同一库的更新和删除互斥、失败释放锁；
+ * 第一次更新持锁挂起，让删除与尚未发出的后续更新竞争锁次序。 */
+function mockDeletionStorage(failUpdate = false, failDelete = false) {
+  let saved = storedAsset()
+  let exists = true
+  let release!: () => void
+  const firstWrite = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const operations: string[] = []
+  let lock = Promise.resolve()
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === 'list_library_assets') {
+      return Promise.resolve({
+        assets: { byId: exists ? { [saved.id]: structuredClone(saved) } : {} },
+      })
+    }
+    const run = lock.then(async () => {
+      const { id, patch } = args as {
+        id: string
+        patch?: Partial<LibraryAsset>
+      }
+      if (id !== saved.id) throw new Error('更新了错误的资产')
+      if (command === 'delete_library_asset') {
+        operations.push('delete')
+        if (failDelete) throw new Error('删除失败')
+        exists = false
+        return {}
+      }
+      if (command !== 'update_library_asset')
+        throw new Error(`意外 IPC：${command}`)
+      const tag = patch?.tags?.[0] ?? ''
+      operations.push(tag)
+      if (!exists) throw new Error('资产不存在')
+      if (operations.length === 1) await firstWrite
+      if (failUpdate && tag === 'C') throw new Error('标签保存失败')
+      saved = { ...saved, ...structuredClone(patch) }
+      return structuredClone(saved)
+    })
+    lock = run.then(
+      () => {},
+      () => {},
+    )
+    return run
+  })
+  return { release, operations, id: saved.id }
+}
+
+/** 只在应用确认框中确认删除；取消路径由对应测试独立触发。 */
+async function confirmAssetDeletion() {
+  fireEvent.click(screen.getByRole('button', { name: '删除资产 角色' }))
+  fireEvent.click(await screen.findByRole('button', { name: '删除' }))
+  await act(async () => {})
+}
+
+describe('删除与排队更新（PR #176 review 5208013926）', () => {
+  it.each([false, true])(
+    '后续更新失败=%s：删除在更新之后且不残留标签错误',
+    async (failUpdate) => {
+      const storage = mockDeletionStorage(failUpdate)
+      const panel = await mountTags()
+      await editTags(panel.input, 'B')
+      await editTags(panel.input, 'C')
+      await confirmAssetDeletion()
+      expect(screen.queryByLabelText('资产标签 角色')).toBeNull()
+      await act(async () => {
+        storage.release()
+      })
+      expect(document.querySelector('.pw-assets-error')).toBeNull()
+      expect(storage.operations).toEqual(['B', 'C', 'delete'])
+      expect(await libraryStore.list()).toEqual([])
+      expect(libraryStore.persistedSnapshot(storage.id)).toBeUndefined()
+    },
+  )
+
+  it('删除失败仍显示删除错误并保留此前更新', async () => {
+    const storage = mockDeletionStorage(false, true)
+    const panel = await mountTags()
+    await editTags(panel.input, 'B')
+    await editTags(panel.input, 'C')
+    await confirmAssetDeletion()
+    await act(async () => {
+      storage.release()
+    })
+    expect(screen.getByText(/删除失败/)).toBeTruthy()
+    expect(storage.operations).toEqual(['B', 'C', 'delete'])
+    expect(await libraryStore.list()).toMatchObject([{ tags: ['C'] }])
+    expect(libraryStore.persistedSnapshot(storage.id)?.tags).toEqual(['C'])
+  })
+})
+
+describe('删除取消与既有失败', () => {
+  it('取消删除不失效标签提交，保存失败仍可见', async () => {
+    const storage = mockDeletionStorage(true)
+    const panel = await mountTags()
+    await editTags(panel.input, 'B')
+    await editTags(panel.input, 'C')
+    fireEvent.click(screen.getByRole('button', { name: '删除资产 角色' }))
+    fireEvent.click(await screen.findByRole('button', { name: '取消' }))
+    await act(async () => {
+      storage.release()
+    })
+    expect(screen.getByText(/标签保存失败/)).toBeTruthy()
+    expect(panel.input.value).toBe('C')
+    expect(storage.operations).toEqual(['B', 'C'])
+    expect(await libraryStore.list()).toMatchObject([{ tags: ['B'] }])
+  })
+
+  it('确认删除清除本资产已经显示的标签失败', async () => {
+    const storage = mockDeletionStorage(true)
+    const panel = await mountTags()
+    await editTags(panel.input, 'B')
+    await editTags(panel.input, 'C')
+    await act(async () => {
+      storage.release()
+    })
+    expect(screen.getByText(/标签保存失败/)).toBeTruthy()
+    await confirmAssetDeletion()
+    expect(document.querySelector('.pw-assets-error')).toBeNull()
+    expect(await libraryStore.list()).toEqual([])
   })
 })

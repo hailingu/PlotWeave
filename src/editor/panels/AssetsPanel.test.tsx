@@ -157,6 +157,29 @@ const openTagsInput = async (): Promise<HTMLInputElement> => {
   return (await screen.findByLabelText('资产标签 女主正面')) as HTMLInputElement
 }
 
+describe('AssetsPanel 删除的标签错误隔离', () => {
+  it('删除一个资产只清除其标签错误，另一资产错误仍可见', async () => {
+    const spies = mockStore([asset(), asset({ id: 'a2', name: '男主侧面' })])
+    spies.updateMeta.mockImplementation((id) =>
+      Promise.reject(new Error(`${id} 保存失败`)),
+    )
+    const first = await openTagsInput()
+    const second = screen.getByLabelText('资产标签 男主侧面')
+    for (const input of [first, second]) {
+      fireEvent.change(input, { target: { value: '新标签' } })
+      fireEvent.blur(input)
+    }
+    await screen.findByText(/a1 保存失败.*a2 保存失败/)
+    fireEvent.click(screen.getByRole('button', { name: '删除资产 女主正面' }))
+    fireEvent.click(await screen.findByRole('button', { name: '删除' }))
+    await act(async () => {})
+    expect(screen.queryByText(/a1 保存失败/)).toBeNull()
+    expect(screen.getByText(/a2 保存失败/)).toBeTruthy()
+    expect(screen.queryByLabelText('资产标签 女主正面')).toBeNull()
+    expect(screen.getByLabelText('资产标签 男主侧面')).toBeTruthy()
+  })
+})
+
 /** 返回分类列表再重进角色分类，返回重挂载后的标签输入框。 */
 const roundTrip = async (): Promise<HTMLInputElement> => {
   fireEvent.click(screen.getByRole('button', { name: '返回分类列表' }))
