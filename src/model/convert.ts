@@ -355,6 +355,14 @@ function parseLegacyProject(
  * 归一化管线入口（§11）：schemaVersion 校验与迁移 → 归一化 → 会话文档。
  * v0 信封（旧扁平格式经 Rust 包装）先走节点字段迁移，再按 v1 解析。
  * env 携带加载路径的受信事实（projectId / 索引名），供元数据修复使用。
+ *
+ * 输入所有权契约（issue #102）：归一化/迁移**就地改写**传入的 raw 及其
+ * 嵌套成员（v1 键控桶内嵌 id 以记录键改写、字段剥离/补默认；v0 预归一化
+ * 重置数组、补 position 等同样落在调用方对象上）。调用后不得假设输入保持
+ * 原样，也不得把调用后的 raw 再当原始档使用；需保留原始文档或嵌套引用的
+ * 调用方须先自行克隆（structuredClone）再传入。入口内部的未改动快照仅
+ * 服务 repaired 判定，不构成对调用方对象的保护。raw 按 IPC 反序列化的
+ * 单次消费产物设计，unknown 不承诺比上述契约更深的所有权约束。
  */
 export function parseProject(
   raw: unknown,
@@ -381,8 +389,9 @@ export function parseProject(
     return parseLegacyProject(raw as Record<string, unknown>, env)
   }
 
-  // 原始文档先克隆：归一化就地改写（id 重发/字段剥离/隔离），事后与改写
-  // 产物比较须以未改动的原始为基准——repaired 决定调用方是否回写落定修复
+  // 原始文档先克隆：归一化就地改写（id 重发/字段剥离/隔离，输入所有权
+  // 契约见上方 parseProject 公开说明），事后与改写产物比较须以未改动的
+  // 原始为基准——repaired 决定调用方是否回写落定修复
   const pristine = structuredClone(raw)
   const {
     doc: normalized,

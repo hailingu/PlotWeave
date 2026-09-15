@@ -980,6 +980,8 @@ provider 的 API key 以**密文 `keyEnc`** 存于 provider 配置：Rust `seal`
 
 **实现入口（#6、#39）**：`model/convert.ts` 的 `parseProject` 负责信封判型与阶段编排；容器、节点、键控列表、边、资产、设定、引用分别由 `normalizeContainers`、`normalizeNodes`、`normalizeKeyedLists`、`normalizeEdges`、`normalizeAssets`、`normalizeSettings`、`normalizeRefs` 等模块处理，输出由 `serialize.ts` 统一序列化。原 `convert.ts`/`convert.test.ts` 与 `normalizeContainers` 的历史规模豁免已随拆分失效；阶段顺序和修复语义保持不变。
 
+**入口输入所有权（[issue #102](https://github.com/hailingu/PlotWeave/issues/102)）**：`parseProject` 保留可变输入设计——归一化与 v0 迁移前预归一化**就地改写**传入对象及其嵌套成员（键控桶内嵌 id 以记录键改写、字段剥离/补默认、数组重置等）。调用后不得假设输入保持原样，也不得把调用后的输入再当原始档使用；需保留原始文档或嵌套引用的调用方须先自行克隆（`structuredClone`）再传入。`repaired` 判定基于入口内部的未改动快照，不受就地改写影响；`raw: unknown` 不承诺比该契约更深的所有权约束。错误路径（信封拒绝）不承诺任何改写语义；纯解析入口（克隆后归一化）属独立行为变更，不在该 issue 范围。
+
 **v0 内嵌设定引用兼容子步骤（逻辑上属于第 0 步预检与第 1 步迁移 ④，优先于下文通用列表补缺）**：当前已发布的旧项目不只使用 `data.characterIds`/`locationId`/字符串 speaker；还可能把场景出场角色写成 `data.characters: Array<{ label, gradient? }>`、地点写成 `data.location: string`，把对白行 speaker 写成 `{ label, gradient? }`。迁移器必须在把缺失的 `characterIds` 补成空数组、校验新形态 speaker 或拆分节点四分区之前识别并保留这些字段：
 
 - 预检确认 `data.characters` 为数组后只保留普通对象成员；每项 `label` 须为 trim 后非空字符串、可选 `gradient` 须为字符串，异型项删除并逐项警告，不得让成员字段读取先抛错。合法头像先在 v0 `settings.characters[]` 中确定性复用实体：优先同名同 gradient，再同名；仅当单字旧标签在兼容 gradient 的既有名称中唯一匹配前缀时才复用，零个或多个候选时新建本域唯一 id 的 Character（名称取 label，gradient 缺省取默认值）。把所得 id 与已有合法 `data.characterIds` 按原顺序合并去重后写入 `characterIds`，成功转换后才删除 `characters`；只有两种来源都不存在时才补 `[]`。
