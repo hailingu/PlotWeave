@@ -7,18 +7,19 @@ use std::fs;
 use cap_std::{ambient_authority, fs::Dir as CapDir};
 use tauri::{AppHandle, Manager};
 
+use crate::store::error::StoreError;
 use crate::store::types::new_id;
 /// 资产路径组件的 no-follow 元数据（相对锚定句柄），缺失映射为「资产文件不存在」。
 pub(crate) fn asset_stat(
     dir: &CapDir,
     comp: &str,
     rel_path: &str,
-) -> Result<cap_std::fs::Metadata, String> {
+) -> Result<cap_std::fs::Metadata, StoreError> {
     dir.symlink_metadata(comp).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
-            format!("资产文件不存在：{rel_path}")
+            StoreError::missing(format!("资产文件不存在：{rel_path}"))
         } else {
-            format!("读取资产路径元数据失败（{rel_path}）：{e}")
+            StoreError::io(format!("读取资产路径元数据失败（{rel_path}）"), e)
         }
     })
 }
@@ -35,32 +36,32 @@ pub(crate) fn asset_identity(md: &cap_std::fs::Metadata) -> (u64, u64) {
 /// 屏障内核复用，不按路径名重开（`open_ambient_dir` 与 fsync 重开都会把
 /// 并发替换后的目录变成表面根）。路径名被换时：越界被沙箱拒绝，界内
 /// 替换被身份绑定拒绝。
-pub(crate) fn projects_dir(app: &AppHandle) -> Result<CapDir, String> {
+pub(crate) fn projects_dir(app: &AppHandle) -> Result<CapDir, StoreError> {
     let root_path = app
         .path()
         .app_data_dir()
-        .map_err(|e| format!("无法定位应用数据目录：{e}"))?;
-    fs::create_dir_all(&root_path).map_err(|e| format!("创建应用数据目录失败：{e}"))?;
+        .map_err(|e| StoreError::AppDataDir { source: e })?;
+    fs::create_dir_all(&root_path).map_err(|e| StoreError::io("创建应用数据目录失败", e))?;
     let root_path = root_path
         .canonicalize()
-        .map_err(|e| format!("解析应用数据目录真实路径失败：{e}"))?;
+        .map_err(|e| StoreError::io("解析应用数据目录真实路径失败", e))?;
     let root = CapDir::open_ambient_dir(&root_path, ambient_authority())
-        .map_err(|e| format!("打开应用数据根目录失败：{e}"))?;
+        .map_err(|e| StoreError::io("打开应用数据根目录失败", e))?;
     match root.symlink_metadata("projects") {
         Ok(_) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => root
             .create_dir("projects")
-            .map_err(|e| format!("创建项目目录失败：{e}"))?,
-        Err(e) => return Err(format!("读取项目目录元数据失败：{e}")),
+            .map_err(|e| StoreError::io("创建项目目录失败", e))?,
+        Err(e) => return Err(StoreError::io("读取项目目录元数据失败", e)),
     }
     let md = root
         .symlink_metadata("projects")
-        .map_err(|e| format!("读取项目目录元数据失败：{e}"))?;
+        .map_err(|e| StoreError::io("读取项目目录元数据失败", e))?;
     if md.file_type().is_symlink() {
-        return Err("拒绝符号链接形式的项目目录".into());
+        return Err(StoreError::refused("拒绝符号链接形式的项目目录"));
     }
     if !md.is_dir() {
-        return Err("项目目录路径不是目录".into());
+        return Err(StoreError::refused("项目目录路径不是目录"));
     }
     open_dir_bound(&root, "projects", &md, "项目目录")
 }
@@ -75,17 +76,19 @@ pub(crate) fn open_dir_bound<P: AsRef<std::path::Path>>(
     rel: P,
     classified: &cap_std::fs::Metadata,
     label: &str,
-) -> Result<CapDir, String> {
+) -> Result<CapDir, StoreError> {
     let opened = parent
         .open_dir(&rel)
-        .map_err(|e| format!("打开{label}失败：{e}"))?;
+        .map_err(|e| StoreError::io(format!("打开{label}失败"), e))?;
     #[cfg(unix)]
     {
         let fm = opened
             .dir_metadata()
-            .map_err(|e| format!("读取{label}句柄元数据失败：{e}"))?;
+            .map_err(|e| StoreError::io(format!("读取{label}句柄元数据失败"), e))?;
         if asset_identity(&fm) != asset_identity(classified) {
-            return Err(format!("{label}在归类后被替换，拒绝操作"));
+            return Err(StoreError::refused(format!(
+                "{label}在归类后被替换，拒绝操作"
+            )));
         }
     }
     // 非 Unix 无 (dev, ino) 可比（该助手已服务破坏性删除递归——不绑定的
@@ -96,15 +99,17 @@ pub(crate) fn open_dir_bound<P: AsRef<std::path::Path>>(
     {
         let recheck = parent
             .symlink_metadata(&rel)
-            .map_err(|e| format!("复核{label}元数据失败：{e}"))?;
+            .map_err(|e| StoreError::io(format!("复核{label}元数据失败"), e))?;
         if recheck.file_type().is_symlink()
             || !recheck.is_dir()
             || !opened
                 .dir_metadata()
-                .map_err(|e| format!("读取{label}句柄元数据失败：{e}"))?
+                .map_err(|e| StoreError::io(format!("读取{label}句柄元数据失败"), e))?
                 .is_dir()
         {
-            return Err(format!("{label}在归类后被替换，拒绝操作"));
+            return Err(StoreError::refused(format!(
+                "{label}在归类后被替换，拒绝操作"
+            )));
         }
     }
     #[cfg(not(unix))]
@@ -118,15 +123,15 @@ pub(crate) fn open_dir_bound<P: AsRef<std::path::Path>>(
 /// 相互包含照样通过。返回目录项身份（Unix 为 (dev, ino)）供调用方在打开
 /// 后绑定同一实体——校验与打开之间被替换（换成符号链接或另一文件）即
 /// 拒绝且不读取。
-fn verify_control_file(root: &CapDir, name: &str) -> Result<Option<(u64, u64)>, String> {
+fn verify_control_file(root: &CapDir, name: &str) -> Result<Option<(u64, u64)>, StoreError> {
     let md = root
         .symlink_metadata(name)
-        .map_err(|e| format!("读取项目文件元数据失败：{e}"))?;
+        .map_err(|e| StoreError::io("读取项目文件元数据失败", e))?;
     if md.file_type().is_symlink() {
-        return Err("项目文件是符号链接，拒绝读取".into());
+        return Err(StoreError::refused("项目文件是符号链接，拒绝读取"));
     }
     if !md.is_file() {
-        return Err("项目文件不是普通文件".into());
+        return Err(StoreError::refused("项目文件不是普通文件"));
     }
     #[cfg(unix)]
     {
@@ -141,19 +146,19 @@ fn verify_control_file(root: &CapDir, name: &str) -> Result<Option<(u64, u64)>, 
 /// 解析，projects/ 路径名在校验后被并发整体替换（rename 换目录树）也无法
 /// 把读取引到替换树；cap-std 沙箱保证解析不逃出锚定根，校验与打开之间的
 /// 目录项替换（换成符号链接或另一文件）由身份比对拒绝且不读取。
-pub(crate) fn read_verified_file(root: &CapDir, name: &str) -> Result<String, String> {
+pub(crate) fn read_verified_file(root: &CapDir, name: &str) -> Result<String, StoreError> {
     let verified_identity = verify_control_file(root, name)?;
     use std::io::Read;
     let mut file = root
         .open(name)
-        .map_err(|e| format!("打开项目文件失败：{e}"))?;
+        .map_err(|e| StoreError::io("打开项目文件失败", e))?;
     #[cfg(unix)]
     if let Some(id) = verified_identity {
         let fm = file
             .metadata()
-            .map_err(|e| format!("读取项目文件句柄元数据失败：{e}"))?;
+            .map_err(|e| StoreError::io("读取项目文件句柄元数据失败", e))?;
         if asset_identity(&fm) != id {
-            return Err("项目文件在读取前被替换，拒绝读取".into());
+            return Err(StoreError::refused("项目文件在读取前被替换，拒绝读取"));
         }
     }
     // 非 Unix 无 (dev, ino) 可比：打开后重走 no-follow 归类，换成符号链接/
@@ -163,12 +168,12 @@ pub(crate) fn read_verified_file(root: &CapDir, name: &str) -> Result<String, St
         verify_control_file(root, name)?;
         match file.metadata() {
             Ok(fm) if fm.is_file() => {}
-            _ => return Err("项目文件在读取前被替换，拒绝读取".into()),
+            _ => return Err(StoreError::refused("项目文件在读取前被替换，拒绝读取")),
         }
     }
     let mut text = String::new();
     file.read_to_string(&mut text)
-        .map_err(|e| format!("读取项目文件失败：{e}"))?;
+        .map_err(|e| StoreError::io("读取项目文件失败", e))?;
     Ok(text)
 }
 /// 原子写控制文件（§10.2）：全程相对已验证父目录的打开句柄执行（cap-std
@@ -180,47 +185,52 @@ pub(crate) fn read_verified_file(root: &CapDir, name: &str) -> Result<String, St
 /// fsync（持久性屏障，打开/同步失败向上传播、不粉饰成功）；失败尽力清理
 /// 临时文件。file_name 须为单段文件名（不含路径分量）：归类、创建与
 /// rename 之外的越界形态在此拒绝，不得相对句柄逃出 projects/。
-pub(crate) fn atomic_write(root: &CapDir, file_name: &str, text: &str) -> Result<(), String> {
+pub(crate) fn atomic_write(root: &CapDir, file_name: &str, text: &str) -> Result<(), StoreError> {
     use std::io::Write;
     if std::path::Path::new(file_name).components().count() != 1 {
-        return Err(format!("项目文件名含路径分量，拒绝：{file_name}"));
+        return Err(StoreError::refused(format!(
+            "项目文件名含路径分量，拒绝：{file_name}"
+        )));
     }
     // 目标归类（现存为符号链接或非普通文件即拒绝，不跟随）：仅**确证缺失**
     // 视作新建目标——权限/瞬态 I/O 错误当缺失放行会跳过归类，rename 可能
     // 覆盖未验证的目录项（fail closed）
-    let check_target = || -> Result<(), String> {
+    let check_target = || -> Result<(), StoreError> {
         match root.symlink_metadata(file_name) {
-            Ok(md) if md.file_type().is_symlink() => Err("拒绝符号链接形式的项目文件".into()),
-            Ok(md) if !md.is_file() => Err("项目路径不是普通文件".into()),
+            Ok(md) if md.file_type().is_symlink() => {
+                Err(StoreError::refused("拒绝符号链接形式的项目文件"))
+            }
+            Ok(md) if !md.is_file() => Err(StoreError::refused("项目路径不是普通文件")),
             Ok(_) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(format!("读取项目文件元数据失败：{e}")),
+            Err(e) => Err(StoreError::io("读取项目文件元数据失败", e)),
         }
     };
     check_target()?;
     let tmp_name = format!(".{file_name}.{}.tmp", new_id());
-    let result = (|| -> Result<(), String> {
+    let result = (|| -> Result<(), StoreError> {
         let mut f = root
             .open_with(
                 &tmp_name,
                 cap_std::fs::OpenOptions::new().write(true).create_new(true),
             )
-            .map_err(|e| format!("创建临时文件失败：{e}"))?;
+            .map_err(|e| StoreError::io("创建临时文件失败", e))?;
         f.write_all(text.as_bytes())
-            .map_err(|e| format!("写入项目失败：{e}"))?;
-        f.sync_all().map_err(|e| format!("同步临时文件失败：{e}"))?;
+            .map_err(|e| StoreError::io("写入项目失败", e))?;
+        f.sync_all()
+            .map_err(|e| StoreError::io("同步临时文件失败", e))?;
         drop(f);
         // rename 前复核现存目标（§10.2）：写临时文件期间被换上的符号链接
         // 或异型条目在此拒绝，不被 rename 覆盖
         check_target()?;
         root.rename(&tmp_name, root, file_name)
-            .map_err(|e| format!("落盘项目失败：{e}"))?;
+            .map_err(|e| StoreError::io("落盘项目失败", e))?;
         // 持久性屏障同步锚定句柄本身（经其重新绑定自身再 fsync，不按路径名
         // 重开——否则屏障加到并发替换后的目录上，保存成功而加载另一棵树）
         #[cfg(unix)]
         root.open_dir(".")
             .and_then(|d| d.into_std_file().sync_all())
-            .map_err(|e| format!("同步项目目录失败（持久性屏障缺失）：{e}"))?;
+            .map_err(|e| StoreError::io("同步项目目录失败（持久性屏障缺失）", e))?;
         // Windows 无法对目录句柄 fsync：跳过屏障而非误报成功写失败
         #[cfg(not(unix))]
         let _ = root;
@@ -247,7 +257,10 @@ mod tests {
         let dir_as_file = projects.join("p-2.json");
         fs::create_dir(&dir_as_file).expect("建目录占位");
         let err = verify_control_file(&cap(&projects), "p-2.json").unwrap_err();
-        assert!(err.contains("普通文件"), "意外诊断：{err}");
+        assert!(
+            matches!(err, StoreError::Refused { ref detail } if detail.contains("普通文件")),
+            "意外诊断：{err}"
+        );
         // 缺失文件拒绝（读取前置）
         assert!(verify_control_file(&cap(&projects), "p-3.json").is_err());
         cleanup_temp(&projects);
@@ -261,7 +274,10 @@ mod tests {
         fs::write(&outside, b"{}").expect("写根外文件");
         std::os::unix::fs::symlink(&outside, projects.join("p-1.json")).expect("建符号链接");
         let err = verify_control_file(&cap(&projects), "p-1.json").unwrap_err();
-        assert!(err.contains("符号链接"), "意外诊断：{err}");
+        assert!(
+            matches!(err, StoreError::Refused { ref detail } if detail.contains("符号链接")),
+            "意外诊断：{err}"
+        );
         cleanup_temp(&projects);
     }
 
@@ -270,7 +286,10 @@ mod tests {
         let projects = temp_projects_dir();
         // 句柄相对写入的最后边界：嵌套形态的文件名不得相对句柄逃出 projects/
         let err = atomic_write(&cap(&projects), "../evil.json", "{}").unwrap_err();
-        assert!(err.contains("路径分量"), "意外诊断：{err}");
+        assert!(
+            matches!(err, StoreError::Refused { ref detail } if detail.contains("路径分量")),
+            "意外诊断：{err}"
+        );
         assert!(
             fs::symlink_metadata(projects.parent().expect("临时根").join("evil.json")).is_err(),
             "含路径分量的文件名不应写出 projects/"
@@ -293,7 +312,14 @@ mod tests {
         let mut perms = fs::metadata(&projects).unwrap().permissions();
         perms.set_mode(0o755);
         let _ = fs::set_permissions(&projects, perms);
-        assert!(err.contains("元数据"), "意外诊断：{err}");
+        assert!(
+            matches!(&err, StoreError::Io { context, .. } if context.contains("元数据")),
+            "意外诊断：{err}"
+        );
+        assert!(
+            std::error::Error::source(&err).is_some(),
+            "归类失败的 io 来源应保留"
+        );
         cleanup_temp(&projects);
     }
 }

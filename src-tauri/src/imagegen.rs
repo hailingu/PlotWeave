@@ -329,7 +329,7 @@ pub async fn llm_image_generate(app: AppHandle, request: ImageGenRequest) -> Res
         clear_cancel(&job_id);
         return Err("已取消".into());
     }
-    let projects = crate::store::projects_dir(&app)?;
+    let projects = crate::store::projects_dir(&app).map_err(crate::store::to_ipc_text)?;
     let pending = app.state::<crate::assets::project_media::PendingProjectAssets>();
     let written =
         crate::assets::write_generated_asset(&projects, &project_id, &bytes, mime, &pending)?;

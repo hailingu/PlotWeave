@@ -13,7 +13,7 @@ use crate::library_fs::{
     assets_root, ensure_index_size, open_parent_dir, read_index_capped, write_index,
     INDEX_MAX_BYTES,
 };
-use crate::store::{asset_stat, new_id};
+use crate::store::{asset_stat, new_id, to_ipc_text};
 
 /// 删除事务（§7.2 四步）：返回携带 warnings 与 cleanupPending 的响应负载。
 pub(crate) fn delete_asset_transacted(library: &CapDir, id: &str) -> Result<Value, String> {
@@ -107,7 +107,7 @@ fn capture_original(
         .ok_or_else(|| format!("relPath 越出 assets/：{rel}"))?;
     let (parent, last) =
         open_parent_dir(assets, suffix)?.ok_or_else(|| format!("资产父目录缺失：{rel}"))?;
-    let md = asset_stat(&parent, &last, rel)?;
+    let md = asset_stat(&parent, &last, rel).map_err(to_ipc_text)?;
     if md.file_type().is_symlink() || !md.is_file() {
         return Err(format!("资产路径不是普通文件，拒绝删除：{rel}"));
     }
