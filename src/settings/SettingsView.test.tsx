@@ -6,9 +6,10 @@
  * happy-dom 无 __TAURI_INTERNALS__，settingsStore 走内存回退路径。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { StrictMode } from 'react'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import SettingsView from './SettingsView'
-import { defaultSettings } from './types'
+import { defaultSettings, type AppSettings } from './types'
 import { settingsStore } from './settingsStore'
 
 afterEach(() => {
@@ -496,6 +497,51 @@ describe('SettingsView 加载失败（issue #120）', () => {
     })
     expect(await screen.findByText('OpenAI 兼容')).toBeTruthy()
     view.unmount()
+    loadSpy.mockRestore()
+  })
+
+  it('迟到完成的旧 load 不得覆盖新请求结果或拉回错误态（PR #175 评审）', async () => {
+    // StrictMode 双挂载（main.tsx 启用）：首个 effect 的 load 悬置模拟
+    // 延迟 IPC；第二次挂载快速失败进错误态 → 用户修复文件后重试读到
+    // 修复配置；悬置的旧 load 此刻才完成——不得覆盖修复快照/回错误态
+    const repaired: AppSettings = {
+      providers: [
+        {
+          id: 'openai',
+          label: '已修复供应商',
+          baseUrl: 'https://repaired.example/v1',
+          enabled: true,
+          models: ['m1'],
+        },
+      ],
+      defaultChat: null,
+      defaultImage: null,
+    }
+    let resolveStale!: (s: AppSettings) => void
+    const loadSpy = vi
+      .spyOn(settingsStore, 'load')
+      .mockImplementationOnce(
+        () => new Promise<AppSettings>((res) => (resolveStale = res)),
+      )
+      .mockImplementationOnce(() =>
+        Promise.reject(new Error('读取设置失败：暂时不可读')),
+      )
+      .mockImplementationOnce(() => Promise.resolve(repaired))
+    render(
+      <StrictMode>
+        <SettingsView onClose={vi.fn()} />
+      </StrictMode>,
+    )
+    fireEvent.click(await screen.findByRole('button', { name: '重试' }))
+    expect(await screen.findByText('已修复供应商')).toBeTruthy()
+
+    await act(async () => {
+      resolveStale(defaultSettings()) // 旧请求携带陈旧内容迟到完成
+      await Promise.resolve()
+    })
+    expect(screen.getByText('已修复供应商')).toBeTruthy() // 修复快照不被换掉
+    expect(screen.queryByText('OpenAI 兼容')).toBeNull() // 陈旧内容不上屏
+    expect(screen.queryByRole('alert')).toBeNull() // 不拉回错误态
     loadSpy.mockRestore()
   })
 })

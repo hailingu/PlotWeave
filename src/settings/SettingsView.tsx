@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   defaultSettings,
   resolveChatModel,
@@ -430,6 +430,10 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
   const [loadPhase, setLoadPhase] = useState<SettingsLoadPhase>({
     status: 'loading',
   })
+  /** load 代际（PR #175 评审）：StrictMode 双挂载/重试使新请求先行完成
+   * 时，迟到的旧完成不得覆盖修复快照或把界面拉回错误态——仅最新代
+   * 可写状态。 */
+  const loadGenRef = useRef(0)
   /** 「编辑即保存」状态族（防抖/关闭冲刷/失败重试）拆至 useSettingsSaver。 */
   const { update, handleClose, closeError, closing } = useSettingsSaver(
     setSettings,
@@ -437,16 +441,19 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
   )
 
   /** 读取设置（issue #120）：成功才进入可编辑态；失败保持错误态可重试，
-   * 原配置不被默认值覆盖。 */
+   * 原配置不被默认值覆盖。完成按代际守卫：仅最新发起的请求可写状态。 */
   const reloadSettings = useCallback(() => {
+    const gen = ++loadGenRef.current
     setLoadPhase({ status: 'loading' })
     settingsStore
       .load()
       .then((s) => {
+        if (gen !== loadGenRef.current) return // 旧请求迟到完成：丢弃
         setSettings(s)
         setLoadPhase({ status: 'ready' })
       })
       .catch((err: unknown) => {
+        if (gen !== loadGenRef.current) return
         setLoadPhase({
           status: 'error',
           message: err instanceof Error ? err.message : String(err),
