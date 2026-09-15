@@ -39,7 +39,7 @@ const flush = async () => {
   })
 }
 
-describe('useEditorPersistence（§3/§10.2）', () => {
+describe('useEditorPersistence（§3/§10.2 装配：视口与诊断横幅）', () => {
   beforeEach(() => vi.useFakeTimers())
   afterEach(() => vi.useRealTimers())
 
@@ -76,6 +76,11 @@ describe('useEditorPersistence（§3/§10.2）', () => {
     await flush()
     expect(result.current.persistence.saveError).toBeNull()
   })
+})
+
+describe('useEditorPersistence（whenCanvasCommitted 持久化闸门）', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
 
   it('whenCanvasCommitted 只由注册之后开始的保存兑现：在途旧保存不算数', async () => {
     const { result, onSave } = setup()
@@ -137,6 +142,11 @@ describe('useEditorPersistence（§3/§10.2）', () => {
     })
     expect(committed).toBe(true)
   })
+})
+
+describe('useEditorPersistence（链上重存成功对齐完成语义，PR #174 评审）', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
 
   it('链上重存成功同一登记文档：兑现等待者并清除失败横幅（PR #174 评审）', async () => {
     const { result, onSave } = setup()
