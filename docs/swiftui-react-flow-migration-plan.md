@@ -2,7 +2,7 @@
 
 > 决策日期：2026-09-15。依据：仓库所有者在本任务中明确选择 SwiftUI/AppKit 外壳 + React Flow 画布，要求建立分支并分阶段开发验证。
 > 工作分支：`codex/swiftui-react-flow`；起点为当前本地 `dev`：`fa74520e20497359205ed1f2055115b2d6f90c79`。未同步远端。
-> 状态：P0 计划已建立；P1 第 1–2 项已完成，第 3 项（画布夹具）与第 6 项（握手/加载失败/系统外观同步/面板不重建 WebView）代码与自动化验证完成、待所有者目验（应用实例已启动，操作清单见 [P1 证据记录](swiftui-react-flow-p1-evidence.md)），第 4–5 项已推进（Figma 记录与夹具/指标规格定稿；性能实测与 Tauri 对比待做）；P2 第 1 项（前端宿主接口收敛）已完成（见 [P2 证据记录](swiftui-react-flow-p2-evidence.md)），P2 第 2–5 项与 P3–P5 尚未实现、尚未验证。当前可日常使用的产品应用仍是 Tauri + React + Rust。
+> 状态：P0 计划已建立；P1 第 1–2 项已完成，第 3 项（画布夹具）与第 6 项（握手/加载失败/系统外观同步/面板不重建 WebView）代码与自动化验证完成、待所有者目验（应用实例已启动，操作清单见 [P1 证据记录](swiftui-react-flow-p1-evidence.md)），第 4–5 项已推进（Figma 记录与夹具/指标规格定稿；性能实测与 Tauri 对比待做）；P2 第 1 项（前端宿主接口收敛）与第 2 项（Rust 项目存储内核抽出并接入 C ABI）已完成（见 [P2 证据记录](swiftui-react-flow-p2-evidence.md)），P2 第 3–5 项与 P3–P5 尚未实现、尚未验证。当前可日常使用的产品应用仍是 Tauri + React + Rust。
 > 配套：[UI 设计 §12](ui-design.md#十二macos-原生外壳改造规划)、[数据模型](data-model.md)、[工程规范](development/software-engineering-standard.md)、[仓库工作流](../AGENTS.md)。
 
 ## 1. 目标与范围
@@ -58,12 +58,14 @@ flowchart TB
 
 ### 2.3 计划中的目录归属
 
-`src/platform/` 已于 P2-1 建立（宿主识别 + 命令传输，Swift 传输待 P2 后续接通）；其余为待创建的目标目录，不代表现在已有工程或命令：
+`src/platform/`（P2-1，宿主识别 + 命令传输，Swift 传输待接通）与
+`crates/plotweave-core` + `crates/plotweave-ffi`（P2-2，项目存储内核 + C ABI）
+已建立；其余为待创建的目标目录，不代表现在已有工程或命令：
 
 | 目录 | 责任 |
 | --- | --- |
 | `native/macos/` | SwiftUI/AppKit 应用、Web 宿主适配、原生单测及 UI 测试 |
-| `crates/plotweave-core/` | 从现有 Rust 模块逐域抽出的宿主无关内核 |
+| `crates/plotweave-core/` | 从现有 Rust 模块逐域抽出的宿主无关内核（P2-2 起为项目存储域） |
 | `crates/plotweave-ffi/` | 供 Swift 链接的静态库及 C ABI 边界 |
 | `src/platform/` | 前端宿主接口、Tauri/Swift 适配及可控测试实现 |
 | `src/editor/` | 继续持有编辑会话、图操作、历史栈及 React Flow 组件 |
@@ -82,7 +84,7 @@ flowchart TB
 | `src/editor/useEditorPersistence.ts`、`src/projectStore/saveChain.ts` | 保留防抖、顺序写入、失败登记与删除期间写入的恢复语义 |
 | `src/useExitFlush.ts`、`src-tauri/src/native_quit.rs` | 将原生退出入口接到同一保存屏障；不能直接关闭 WebView 或 terminate 应用 |
 | `src/projectStore.ts`、`src/settings/settingsStore.ts`、`src/library/libraryStore.ts`、`src/aiSessionStore.ts` | 逐一收敛 Tauri 直接调用，保持门面语义与浏览器测试回退；明确 Swift 宿主识别，不能误落入内存模式 |
-| `src-tauri/src/store/`、`library/`、`assets/`、`prefs.rs`、`imagegen.rs` | 按实际调用链抽出内核，注入数据根目录、密钥能力和任务运行环境；原 Tauri commands 改为薄适配 |
+| `src-tauri/src/store/`、`library/`、`assets/`、`prefs.rs`、`imagegen.rs` | 按实际调用链抽出内核，注入数据根目录、密钥能力和任务运行环境；原 Tauri commands 改为薄适配（P2-2 完成 store 域：内核在 `crates/plotweave-core`，src-tauri 保留命令包装与 `crate::store::` re-export，`projects_dir` 路径解析留在宿主侧） |
 | `src-tauri/src/library/media.rs` 与资产读取内核 | 以 WKURLSchemeHandler 承接 `pwmedia` 语义，复用 scope、assetId、会话索引及媒体限读逻辑 |
 
 Rust 目前包含 `AppHandle`、Tauri 托管状态和异步运行时调用，不能直接作为 Swift 静态库复用。P2 按项目存储、媒体、设置/密钥、模型请求的顺序抽离，不在首个视觉原型中一次性搬迁所有模块。
@@ -152,10 +154,12 @@ Figma 参考与基线准备（2026-09-15，第 4–5 项推进）：控件映射
 ### P2：桥接与第一条可持久化编辑链路
 
 - [x] 收敛前端宿主接口，明确 Swift 与 Tauri 适配，保持当前宿主回归可运行。
-- [ ] 抽出 Rust 项目存储内核并接入 C ABI，验证分配/释放、异步完成、错误与取消。
+- [x] 抽出 Rust 项目存储内核并接入 C ABI，验证分配/释放、异步完成、错误与取消。
 - [ ] 实现打开夹具项目 → 编辑 → 防抖保存 → 关闭冲刷 → 重开恢复；对写入失败先加回归测试再实现恢复。
 - [ ] 接通正式编辑命令与状态投影，覆盖陈旧会话、重复请求、乱序响应、节点已删除等边界。
 - [ ] 接入只涉及当前能力的退出屏障；未接通的能力明确禁用并标注，不返回假成功。
+
+存储内核抽出与 C ABI（2026-09-15，第 2 项）：store 域（types/validate/persist/list/commands/copy + isotime）整体迁至 `crates/plotweave-core`（宿主无关、数据根注入 `open_projects_root`，原 75 项 store 测试随迁全绿）；src-tauri 保留薄命令适配与 `crate::store::` re-export，外部域零改动、201 项测试全绿。`crates/plotweave-ffi` 提供 C ABI：不透明句柄 + JSON 请求/回执、单工作线程串行执行与完成回调（非主线程）、未派发取消、`catch_unwind` 包裹（panic 转结构化 ERROR）、结果字符串分配/释放契约；先红（ABI 集成测试因缺库失败 + 确定性取消/panic 单测）后绿（ABI 集成 5 项：创建→保存→重开恢复→删除、错误上浮、取消 no-op、坏输入拒绝）。同变更补 `AGENTS.md` `crates/**` 路由、rust-standard crate 布局节与 `.gitignore`。命令与缺口见 [P2 证据记录](swiftui-react-flow-p2-evidence.md)。
 
 宿主接口收敛（2026-09-15，第 1 项）：`src/platform/` 落地——`hostEnvironment` 为宿主识别单一来源（tauri > swift > browser，Swift 宿主经原生注入的 `window.__pwNativeHost={kind:"swift"}` 识别，内存回退仅限纯浏览器预览），`hostInvoke` 为命令传输统一入口（swift 宿主以稳定错误码 `PW_HOST_COMMAND_UNAVAILABLE` 可见失败，其余宿主路由 `@tauri-apps/api/core` invoke、行为与收敛前等价）。8 个 store/门面（项目/保存链/设置/库/AI 会话/项目资产/对话通道/图片生成）的 `isTauri` 判定与约 30 处 invoke 直调全部收敛；原生 document-start 脚本同批注入宿主标记（M17）。两端先红后绿（Web 3 文件 20 测试、Swift 真实 WebKit 标记注入），前端路由检查（125 文件 1509 测试）与原生路由检查（6 套件 16 测试）通过。命令、结果与缺口见 [P2 证据记录](swiftui-react-flow-p2-evidence.md)。
 
@@ -207,7 +211,7 @@ Figma 参考与基线准备（2026-09-15，第 4–5 项推进）：控件映射
 | M11 / P4 | 媒体有效、缺失、脏索引或请求已取消 | 加载→切项目/移除视图→迟到完成 | 正确图像或可读占位，无越界读取/失效回调 | Rust 媒体内核与 WK 资源适配；项目/库/生成图片 | 协议测试+真机解码，待验证 |
 | M12 / P4 | 图像生成运行，或 AI 批次待确认 | 取消/删节点/切会话→旧结果返回；确认时内容已变 | 不覆盖新作业或错项目，执行保持既有校验 | 现有 AI 控制器与 Rust 代理；原生面板/Web 节点 | 本地服务故障注入，真实计费服务尚未验证 |
 | M13 / P1/P5 | 浅深色及辅助功能组合 | 切换透明度/对比度/动态效果并操作控件 | 原生与 Web 一致适配，内容可读可操作 | 外观由宿主同步，Web 语义令牌消费 | 视觉审阅、键盘与 VoiceOver 实测，待验证（宿主语义同步管线已由 P1-6 自动化覆盖） |
-| M14 / P2/P5 | FFI 请求在途或 Web 进程异常结束 | 取消/释放宿主/迟到回调/重载 | 无失效内存访问，不拿空状态覆盖文件 | FFI 任务所有权与宿主生命周期 | 边界测试、进程终止注入；未落盘崩溃恢复不作保证 |
+| M14 / P2/P5 | FFI 请求在途或 Web 进程异常结束 | 取消/释放宿主/迟到回调/重载 | 无失效内存访问，不拿空状态覆盖文件 | FFI 任务所有权与宿主生命周期 | 部分验证（P2-2，2026-09-15）：取消门（未派发转 CANCELLED）、释放（free 前排空回调、join 后不再回调）、坏输入拒绝与 panic 不跨 FFI 已由 Rust 侧 ABI 测试覆盖；真实 Swift 宿主链接、主线程回投与 Web 进程终止注入待 P2 后续切片；未落盘崩溃恢复不作保证 |
 | M15 / P5 | 固定规模与内容的图 | 持续拖拽、缩放、面板操作、打开/关闭 | 操作连续，内存无持续无界增长 | React 渲染隔离、桥接合并与原生任务调度 | §7 性能记录，尚无测量结果 |
 | M16 / P2 | 页面分别运行于 Tauri webview、Swift WKWebView（原生注入 `__pwNativeHost={kind:'swift'}`）、纯浏览器预览 | 经统一平台层调用任一 store 门面（项目/设置/库/AI 会话/项目资产/模型代理） | Tauri：命令与载荷经平台传输原样到达 `invoke`，行为与收敛前等价；Swift：拒绝并携带稳定错误码 `PW_HOST_COMMAND_UNAVAILABLE`，界面可见失败；浏览器：内存回退与现状一致 | 宿主识别单一来源、优先级 tauri > swift > browser；Swift 宿主绝不落入内存回退（§3「不能误落入内存模式」）；内存回退仅限纯浏览器预览 | 已验证（P2-1，2026-09-15）：平台层单测 + `memoryFallbackBoundary` 门面测试先红后绿 + 既有 `.tauri.test.ts` 套件回归全绿，详见 [P2 证据记录](swiftui-react-flow-p2-evidence.md)；`useExitFlush` 与 `main.tsx` 的 Tauri 专属检测不属本切片（退出屏障归 P2 第 5 项） |
 | M17 / P2 | 原生外壳创建 WKWebView | 文档开始前 userScript 注入 | `window.__pwNativeHost = {kind:'swift'}` 与外观快照同批先于任何应用脚本存在 | 宿主标记是 Swift 适配的识别契约，注入时机不晚于应用脚本首帧 | 已验证（P2-1，2026-09-15）：Swift 真实 WebKit 测试先红（marker 为 null）后绿（`documentStartScriptInjectsSwiftHostMarker`），Web 侧由 M16 的 Swift 行为测试消费同一标记 |

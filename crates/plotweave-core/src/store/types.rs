@@ -99,7 +99,7 @@ pub fn new_id() -> String {
 /// 第十二/十七轮）：时间戳毫秒 + 随机段 + 进程内计数。随机段（RandomState
 /// 每进程随机种子）使跨进程同毫秒不再必然同 id——进程内计数器在多进程
 /// （如 Windows 进程本地库锁）下各自从零起算，仅靠计数跨进程可碰撞。
-pub(crate) fn new_id_with_prefix(prefix: &str) -> String {
+pub fn new_id_with_prefix(prefix: &str) -> String {
     use std::collections::hash_map::RandomState;
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -117,13 +117,13 @@ pub(crate) fn new_id_with_prefix(prefix: &str) -> String {
 fn is_false(v: &bool) -> bool {
     !*v
 }
-pub(crate) fn empty_assets() -> serde_json::Value {
+pub fn empty_assets() -> serde_json::Value {
     json!({ "byId": {} })
 }
 /// 新建空项目（空画布 v1 信封），返回其摘要。
 /// 新建项目的初始 v1 文档：settings 四桶齐备（§10.5 保存边界同域）——
 /// 新建文档必须无需归一化修复即可通过 create → load → save 原始链路。
-pub(crate) fn new_project_file(id: &str, name: String, now: String) -> ProjectFile {
+pub fn new_project_file(id: &str, name: String, now: String) -> ProjectFile {
     ProjectFile {
         schema_version: 1,
         versionless: false,

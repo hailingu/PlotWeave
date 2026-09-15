@@ -1,9 +1,10 @@
 # Rust Development Standard
 
-**Applies to**: any Rust crate in this repository (`src-tauri/**`). Like the
-root `AGENTS.md`, this file is written in English for agent interoperability.
+**Applies to**: any Rust crate in this repository (`src-tauri/**` and
+`crates/**`). Like the root `AGENTS.md`, this file is written in English for
+agent interoperability.
 
-**Last reviewed**: 2026-09-03
+**Last reviewed**: 2026-09-15
 
 ## Required Reading
 
@@ -24,6 +25,22 @@ root `AGENTS.md`, this file is written in English for agent interoperability.
 - Prefer `Result<T, E>` and domain error types for fallible behavior; avoid
   `unwrap()`/`expect()` in production paths unless the invariant is local,
   explicit, and documented.
+
+## Crate Layout
+
+- `src-tauri/` — the Tauri host application: command wrappers, host-specific
+  adapters (data-root resolution via `AppHandle`), and domains not yet
+  extracted. Persistence and other kernels must not depend on `AppHandle`.
+- `crates/plotweave-core/` — host-agnostic business kernels extracted from
+  `src-tauri` (project storage first, P2 of the native-shell migration): data
+  roots are injected by the caller, no Tauri runtime dependency, kernels stay
+  callable from both the Tauri adapter and the FFI boundary.
+- `crates/plotweave-ffi/` — the C ABI boundary for the Swift host: opaque
+  handle, JSON request/response, worker-thread completion callbacks, explicit
+  allocation/free and cancellation contracts (see the crate-level docs of
+  `plotweave-ffi/src/lib.rs`).
+- `crates/` forms its own Cargo workspace; run its routed checks from the
+  `crates` directory.
 
 ## Rust Engineering Practices
 

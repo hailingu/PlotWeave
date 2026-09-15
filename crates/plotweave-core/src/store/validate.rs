@@ -4,13 +4,12 @@
 //! 落盘动作之前完成全部校验并盖戳 updatedAt。
 
 use cap_std::fs::Dir as CapDir;
-use tauri::AppHandle;
 
 use crate::isotime::{is_canonical_utc_timestamp, is_valid_iso8601, now_iso};
 #[cfg(unix)]
 use crate::store::persist::asset_identity;
-use crate::store::persist::{asset_stat, open_dir_bound, projects_dir};
-use crate::store::types::{sanitize_name, validate_id, ProjectFile, ProjectInfo};
+use crate::store::persist::{asset_stat, open_dir_bound};
+use crate::store::types::{sanitize_name, ProjectFile, ProjectInfo};
 /// 当前支持的文档版本（§3）。
 const CURRENT_SCHEMA_VERSION: u32 = 1;
 /// RFC 9110 tchar 且排除 `*`（索引不保存通配媒体类型，§7.1）。
@@ -37,7 +36,7 @@ fn is_mime_token(s: &str) -> bool {
         })
 }
 /// 规范 MIME 形式（§7.1）：已去首尾空白、已小写、恰好两个具体 token 以 `/` 分隔。
-pub(crate) fn is_canonical_mime(s: &str) -> bool {
+pub fn is_canonical_mime(s: &str) -> bool {
     if s != s.trim() || s != s.to_ascii_lowercase() {
         return false;
     }
@@ -49,7 +48,7 @@ pub(crate) fn is_canonical_mime(s: &str) -> bool {
 }
 /// 词法 relPath（§7.1）：纯相对路径（正斜杠分隔，拒绝绝对路径/盘符/反斜杠），
 /// 解析目标必须位于项目资产子目录内——首段固定 `assets`，组件不含空段/`.`/`..`。
-pub(crate) fn is_valid_asset_rel_path(p: &str) -> bool {
+pub fn is_valid_asset_rel_path(p: &str) -> bool {
     if p.is_empty() || p != p.trim() {
         return false;
     }
@@ -75,7 +74,7 @@ pub(crate) fn is_valid_asset_rel_path(p: &str) -> bool {
 /// 活动索引 relPath 词法（§7.1/§7.2）：在基础词法之上排除保留隔离目录
 /// `assets/.trash/` 组件——隔离区是删除事务的私有命名空间，永不进入
 /// AssetRef、媒体 URL 或活动索引（issue #25）。
-pub(crate) fn is_valid_active_asset_rel_path(p: &str) -> bool {
+pub fn is_valid_active_asset_rel_path(p: &str) -> bool {
     is_valid_asset_rel_path(p) && !p.split('/').any(|c| c == ".trash")
 }
 
@@ -210,7 +209,7 @@ fn validate_save_assets(assets: &serde_json::Value) -> Result<(), String> {
 /// 符号链接或另一实体）即拒绝，句柄返回给调用方持有至保存完成后释放。
 /// 校验与落盘之间被替换的残余窗口由加载侧复验（verify_project_assets）在
 /// 下次打开时隔离兜底。
-pub(crate) fn verify_asset_real_path(
+pub fn verify_asset_real_path(
     root: &CapDir,
     id: &str,
     rel_path: &str,
@@ -264,7 +263,7 @@ pub(crate) fn verify_asset_real_path(
 /// 或字段形状缺失的条目交给 prepare_save 的信封诊断，此处跳过避免重复误报。
 /// 返回已验证资产的打开句柄——调用方持有至保存完成后释放，期间实体不可
 /// 被替换为未验证目标（句柄绑定见 verify_asset_real_path）。
-pub(crate) fn verify_save_asset_files(
+pub fn verify_save_asset_files(
     root: &CapDir,
     id: &str,
     assets: &serde_json::Value,
@@ -289,7 +288,7 @@ pub(crate) fn verify_save_asset_files(
 /// §7.1/§10.5 加载侧资产实路径复验内核：返回文档 assets.byId 中词法合法、
 /// 但以受信资产根 no-follow 验证失败（缺失/符号链接/非普通文件/逃逸）的
 /// 记录键。词法非法或形状缺失的条目不在此报告——前端形状归一化负责隔离。
-fn unverifiable_asset_keys(root: &CapDir, id: &str, assets: &serde_json::Value) -> Vec<String> {
+pub fn unverifiable_asset_keys(root: &CapDir, id: &str, assets: &serde_json::Value) -> Vec<String> {
     let mut bad = Vec::new();
     let Some(by_id) = assets.get("byId").and_then(|v| v.as_object()) else {
         return bad;
@@ -311,21 +310,11 @@ fn unverifiable_asset_keys(root: &CapDir, id: &str, assets: &serde_json::Value) 
 /// 返回不可验证键，交前端归一化层隔离——否则下一次保存会被保存边界
 /// 拒收，防抖静默吞错后用户编辑永不落盘。加载本身保持只读；复验相对
 /// projects_dir 的受信根锚定句柄执行。
-#[tauri::command]
-pub fn verify_project_assets(
-    app: AppHandle,
-    id: String,
-    assets: serde_json::Value,
-) -> Result<Vec<String>, String> {
-    validate_id(&id)?;
-    let root = projects_dir(&app)?;
-    Ok(unverifiable_asset_keys(&root, &id, &assets))
-}
 /// save_project 的信封校验与规范化（§10.5）：在创建临时文件、生成保存时间
 /// 或更新索引之前完成——任一校验失败整次拒绝，不得静默剥离。全部通过后
 /// 以受信路径参数覆盖 id，并由 Rust 为本次尝试只取一次系统时间无条件盖戳
 /// updatedAt（不信任旧值、未来值或前端时钟）。
-pub(crate) fn prepare_save(id: &str, doc: &ProjectFile) -> Result<ProjectFile, String> {
+pub fn prepare_save(id: &str, doc: &ProjectFile) -> Result<ProjectFile, String> {
     if doc.schema_version != CURRENT_SCHEMA_VERSION {
         return Err(format!(
             "文档版本不受支持（schemaVersion {}），拒绝保存",

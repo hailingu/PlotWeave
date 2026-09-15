@@ -1,60 +1,36 @@
-//! 项目生命周期 Tauri 命令（数据模型 §10）：create/load/save/delete
-//! 与各自的可测内核——不可信 id 词法校验先于任何路径拼接；保存走
-//! 保存边界校验 + 原子落盘 + 落盘后复验；删除按句柄相对递归且幂等。
+//! 项目生命周期内核（数据模型 §10；P2 抽离为宿主无关）：create/load/save
+//! /delete 及 AI 会话读写内核——不可信 id 词法校验先于任何路径拼接；
+//! 保存走保存边界校验 + 原子落盘 + 落盘后复验；删除按句柄相对递归且幂等。
+//! 原 Tauri 命令包装移至 src-tauri 的 store 薄适配层。
 
 use cap_std::fs::Dir as CapDir;
-use tauri::AppHandle;
 
 use crate::isotime::now_iso;
 use crate::store::list::{parse_file, read_meta};
 #[cfg(unix)]
 use crate::store::persist::asset_identity;
-use crate::store::persist::{atomic_write, open_dir_bound, projects_dir, read_verified_file};
+use crate::store::persist::{atomic_write, open_dir_bound, read_verified_file};
 use crate::store::types::{
     new_id, new_project_file, sanitize_name, validate_id, ProjectFile, ProjectMeta,
 };
 use crate::store::validate::{prepare_save, verify_save_asset_files};
-#[tauri::command]
-pub fn create_project(app: AppHandle, name: String) -> Result<ProjectMeta, String> {
-    let name = sanitize_name(&name)?;
+/// 新建项目内核：名称清洗、id 生成与边界复核、原子落盘。返回摘要元信息。
+pub fn create_project_in(root: &CapDir, name: &str) -> Result<ProjectMeta, String> {
+    let name = sanitize_name(name)?;
     let id = new_id();
     // 边界校验先于任何文件名拼接（与 persist_project 同款）：id 虽为本地
     // 生成，仍以同一口径复核后才参与路径构造
     validate_id(&id)?;
     let file = new_project_file(&id, name, now_iso());
-    let root = projects_dir(&app)?;
     let text = serde_json::to_string_pretty(&file).map_err(|e| format!("序列化失败：{e}"))?;
-    atomic_write(&root, &format!("{id}.json"), &text)?;
+    atomic_write(root, &format!("{id}.json"), &text)?;
     Ok(read_meta(&id, &file))
 }
-/// 读取项目完整内容（含画布）；旧扁平格式包装为 v0 信封返回。读取相对
-/// projects_dir 的受信根锚定句柄解析（§10.2），不按路径名重开。
-#[tauri::command]
-pub fn load_project(app: AppHandle, id: String) -> Result<ProjectFile, String> {
-    let root = projects_dir(&app)?;
-    load_project_file(&root, &id)
-}
-
-/// 读取项目独立 AI 会话：`session` 为 None 表示缺失（旧项目，前端视作空
-/// 历史）或损坏（`corrupt` 置位，按可安全替换归类）；会话损坏只阻断会话
-/// 恢复，不影响同项目的画布文档读取。
-#[tauri::command]
-pub fn load_ai_session(app: AppHandle, id: String) -> Result<SessionCopy, String> {
-    let root = projects_dir(&app)?;
-    load_ai_session_file(&root, &id)
-}
-
-/// 单实例会话保存：仅原子写入主文件，失败直接上浮，不写恢复副本。
-#[tauri::command]
-pub fn save_ai_session(
-    app: AppHandle,
-    id: String,
-    session: serde_json::Value,
-) -> Result<(), String> {
-    let root = projects_dir(&app)?;
-    save_ai_session_file(&root, &id, &session)
-}
-
+/// 读取项目独立 AI 会话内核（原 Tauri 命令包装在 src-tauri 适配层）：
+/// `session` 为 None 表示缺失（旧项目，前端视作空历史）或损坏（`corrupt`
+/// 置位，按可安全替换归类）；会话损坏只阻断会话恢复，不影响同项目的
+/// 画布文档读取。
+/// 单实例会话保存内核：仅原子写入主文件，失败直接上浮，不写恢复副本。
 /// 主文件加载结果；缺失为空历史，损坏由前端提示，真实 I/O 错误仍返回 Err。
 #[derive(serde::Serialize)]
 pub struct SessionCopy {
@@ -122,7 +98,7 @@ fn ai_session_dir(root: &CapDir, id: &str) -> Result<CapDir, String> {
 
 /// 会话读写内核：缺文件是旧项目的合法状态（None，前端视作空历史）；
 /// 损坏（不可解析/信封非法）以 corrupt 提示，不可读则返回 Err。
-pub(crate) fn load_ai_session_file(root: &CapDir, id: &str) -> Result<SessionCopy, String> {
+pub fn load_ai_session_file(root: &CapDir, id: &str) -> Result<SessionCopy, String> {
     validate_id(id)?;
     let dir = match root.symlink_metadata(id) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -165,7 +141,7 @@ pub(crate) fn load_ai_session_file(root: &CapDir, id: &str) -> Result<SessionCop
 }
 
 /// 复用项目记录校验和原子落盘；单进程的调用顺序由前端共享保存链拥有。
-pub(crate) fn save_ai_session_file(
+pub fn save_ai_session_file(
     root: &CapDir,
     id: &str,
     session: &serde_json::Value,
@@ -181,7 +157,7 @@ pub(crate) fn save_ai_session_file(
 /// 先于任何路径拼接——嵌套路径形态的 id（如 `p-1/assets/x`）不得把
 /// projects/ 内的任意 JSON 经项目通道读出（句柄相对解析被沙箱限定在
 /// projects/ 树内）。读取走 read_verified_file 的锚定句柄绑定。
-pub(crate) fn load_project_file(root: &CapDir, id: &str) -> Result<ProjectFile, String> {
+pub fn load_project_file(root: &CapDir, id: &str) -> Result<ProjectFile, String> {
     validate_id(id)?;
     let name = format!("{id}.json");
     match root.symlink_metadata(&name) {
@@ -200,19 +176,10 @@ pub(crate) fn load_project_file(root: &CapDir, id: &str) -> Result<ProjectFile, 
 /// 落盘后再复验一次——句柄只绑定打开时的 inode，不钉住路径名，保存期间
 /// 被并发进程替换（unlink/重命名/换符号链接）的路径在写后复验中上浮为
 /// 显式失败（文档虽已提交，篡改不得静默；下次加载复验会隔离条目兜底）。
-#[tauri::command]
-pub fn save_project(app: AppHandle, id: String, doc: ProjectFile) -> Result<ProjectMeta, String> {
-    let root = projects_dir(&app)?;
-    persist_project(&root, &id, doc)
-}
 /// save_project 的可测内核（给定已验证的 projects 目录）。id 是 IPC 调用方
 /// 传入的不可信参数：词法校验先于任何路径拼接——否则 `../prefs` 式 id 可把
 /// 空资产索引（复验不设防）的整份文档写到 projects/ 之外。
-pub(crate) fn persist_project(
-    root: &CapDir,
-    id: &str,
-    doc: ProjectFile,
-) -> Result<ProjectMeta, String> {
+pub fn persist_project(root: &CapDir, id: &str, doc: ProjectFile) -> Result<ProjectMeta, String> {
     validate_id(id)?;
     // 句柄持有至函数结束——复验过的实体覆盖整个保存决策
     let _verified_assets = verify_save_asset_files(root, id, &doc.assets)?;
@@ -232,11 +199,6 @@ pub(crate) fn persist_project(
 /// no-follow 且全程相对已打开的 projects 根目录句柄（§10.2 openat 语义，
 /// cap-std）——符号链接条目只移除链接本身，绝不跟随；任一失败显式报错，
 /// 不静默遗留媒体文件。
-#[tauri::command]
-pub fn delete_project(app: AppHandle, id: String) -> Result<(), String> {
-    let root = projects_dir(&app)?;
-    delete_project_files(&root, &id)
-}
 /// delete_project 的可测内核：资产目录与项目 JSON 的成对移除，幂等。
 /// 顺序契约：先删资产树再删权威项目文件——树删除失败时项目仍在列表中
 /// 可发现、可重试删除；反过来先删 JSON 会让失败留下不可发现的孤儿媒体。
@@ -271,7 +233,7 @@ fn remove_dir_contents_bound(dir: &CapDir) -> Result<(), String> {
     }
     Ok(())
 }
-fn delete_project_files(root: &CapDir, id: &str) -> Result<(), String> {
+pub fn delete_project_files(root: &CapDir, id: &str) -> Result<(), String> {
     validate_id(id)?;
     match root.symlink_metadata(id) {
         Ok(md) if md.is_dir() => {

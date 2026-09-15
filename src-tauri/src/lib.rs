@@ -22,7 +22,7 @@ use tauri::Manager;
 mod assets;
 mod http_util;
 mod imagegen;
-mod isotime;
+use plotweave_core::isotime;
 mod library;
 mod library_fs;
 mod library_index;

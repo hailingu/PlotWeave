@@ -3,11 +3,10 @@
 //! 失败回滚不遗留半拷贝。
 
 use cap_std::fs::Dir as CapDir;
-use tauri::AppHandle;
 
 #[cfg(unix)]
 use crate::store::persist::asset_identity;
-use crate::store::persist::{open_dir_bound, projects_dir};
+use crate::store::persist::open_dir_bound;
 use crate::store::types::validate_id;
 /// §7.3 复制项目：整目录拷贝项目资产（当前扁平布局下 `projects/{fromId}/
 /// assets` → `projects/{toId}/assets`），供 §10.5 保存边界的实路径复验在
@@ -15,16 +14,11 @@ use crate::store::types::validate_id;
 /// 符号链接的实际目录，子树逐项 no-follow——符号链接与非普通文件条目
 /// 拒绝；目标目录已存在视为异常（新副本 id 刚分配）。任一失败整次报错
 /// 并回滚已拷贝的目标子树，不遗留半拷贝。
-#[tauri::command]
-pub fn copy_project_assets(app: AppHandle, from_id: String, to_id: String) -> Result<(), String> {
-    let root = projects_dir(&app)?;
-    copy_assets_tree(&root, &from_id, &to_id)
-}
 /// copy_project_assets 的可测内核。全程相对已打开的 projects 根目录句柄
 /// 执行（§10.2 openat 语义，cap-std）：归类、目录打开、递归与文件创建
 /// 不再退回路径名拼接——源/目标子目录在元数据检查后被并发替换（含换成
 /// 符号链接）时，句柄相对解析仍不逃出 projects/，越界符号链接被沙箱拒绝。
-fn copy_assets_tree(root: &CapDir, from_id: &str, to_id: &str) -> Result<(), String> {
+pub fn copy_assets_tree(root: &CapDir, from_id: &str, to_id: &str) -> Result<(), String> {
     validate_id(from_id)?;
     validate_id(to_id)?;
     // 源项目目录先归类绑定（§10.2）：组合路径 `{from_id}/assets` 的

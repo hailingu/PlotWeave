@@ -2845,12 +2845,22 @@ dependencies = [
  "cap-std",
  "keyring",
  "libc",
+ "plotweave-core",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
  "sha2",
  "tauri",
  "tauri-build",
+]
+
+[[package]]
+name = "plotweave-core"
+version = "0.1.0"
+dependencies = [
+ "cap-std",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

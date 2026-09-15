@@ -16,6 +16,7 @@ pnpm-debug.log*
 
 # --- Rust / Tauri ---
 src-tauri/target/
+crates/target/
 src-tauri/gen/schemas/
 **/*.rs.bk
 

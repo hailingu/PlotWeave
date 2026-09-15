@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// epoch 毫秒 → ISO 8601（UTC，civil-from-days 算法，无外部依赖）。接受
 /// 负毫秒（1970 前瞬间）——加载归一化需把合法 pre-epoch 时间戳规范化为
 /// 规范 UTC 形，不得因符号被隔离（评审修复，PR #33 第八轮）。
-pub(crate) fn iso_from_ms(ms: i64) -> String {
+pub fn iso_from_ms(ms: i64) -> String {
     let secs = ms.div_euclid(1000);
     let millis = ms.rem_euclid(1000) as u64;
     let days = secs.div_euclid(86400);
@@ -29,7 +29,7 @@ pub(crate) fn iso_from_ms(ms: i64) -> String {
     format!("{y:04}-{mo:02}-{d:02}T{h:02}:{m:02}:{s:02}.{millis:03}Z")
 }
 
-pub(crate) fn now_iso() -> String {
+pub fn now_iso() -> String {
     let ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
@@ -133,13 +133,13 @@ fn iso_suffix_valid(s: &str) -> bool {
 
 /// 规范 UTC 时间戳（§7.1/§10.5）：toISOString() 同形——恒 3 位毫秒、恒 `Z`
 /// （长 24）；偏移/缺毫秒的合法 ISO 往返不稳定，资产 createdAt 保存只收此形。
-pub(crate) fn is_canonical_utc_timestamp(s: &str) -> bool {
+pub fn is_canonical_utc_timestamp(s: &str) -> bool {
     is_valid_iso8601(s) && s.len() == 24 && s.ends_with('Z')
 }
 
 /// ISO 8601 校验：`YYYY-MM-DDTHH:MM:SS[.fff](Z|±HH:MM)`，含各字段取值
 /// 范围与闰年规则——反序列化不校验字符串内容，边界自行把关。
-pub(crate) fn is_valid_iso8601(s: &str) -> bool {
+pub fn is_valid_iso8601(s: &str) -> bool {
     match parse_iso_prefix(s) {
         Some(f) => iso_fields_in_range(&f) && iso_suffix_valid(s),
         None => false,
@@ -194,7 +194,7 @@ fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
 /// ISO 8601 → Unix epoch 毫秒（项目列表排序键）：时区偏移与小数秒归一化后
 /// 同一瞬间得同一键——字典序无法比较 `+10:00` 与 `Z` 之类的等价/交错写法；
 /// 非法串返回 None，由调用方决定兜底次序。
-pub(crate) fn iso8601_to_epoch_millis(s: &str) -> Option<i64> {
+pub fn iso8601_to_epoch_millis(s: &str) -> Option<i64> {
     if !is_valid_iso8601(s) {
         return None;
     }

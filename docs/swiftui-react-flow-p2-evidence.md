@@ -40,3 +40,34 @@
 - 未运行 SonarQube 门禁：本次未提交、未推送（提交前按 `AGENTS.md` 执行）。
 
 **下一步**：P2 第 2 项——抽出 Rust 项目存储内核并接入 C ABI，验证分配/释放、异步完成、错误与取消；随后把 Swift 侧 `hostInvoke` 的 swift 分支接到真实传输。
+
+## P2-2 Rust 项目存储内核抽出与 C ABI（2026-09-15）
+
+**阶段 / 日期 / 分支与代码修订**：P2 第 2 项（矩阵 M14 部分）；2026-09-15；`codex/swiftui-react-flow` 工作区未提交状态（叠加于提交 `96b332d` 之上）。
+
+**交付内容**：
+
+- `crates/`（独立 Cargo workspace，`AGENTS.md` 已加 `crates/**` 路由行、rust-standard 补 crate 布局节、`.gitignore` 加 `crates/target/`）：
+  - `plotweave-core`：store 域（types/validate/persist/list/commands/copy + testutil + 各 tests）与 `isotime` 自 src-tauri 整体迁出（`git mv`，原测试随迁）；`projects_dir(app)` 的路径解析留宿主侧，内核改为注入路径的 `open_projects_root(data_root)`（§4.3 数据根由宿主注入）；内核函数转 `pub`（`create_project_in` 自原命令体抽出）。
+  - `plotweave-ffi`（staticlib + rlib）：C ABI——`pw_core_new`（注入数据根开根，失败 NULL）/`pw_core_free`（排空回调并 join 后释放）/`pw_request_submit`（JSON 请求，非零 id，工作线程完成回调）/`pw_request_cancel`（未派发转 CANCELLED，未知/已落定 no-op）/`pw_string_free`；单工作线程串行执行（单写入者）、`catch_unwind` 包裹（panic 转结构化 ERROR，不跨 FFI）、9 个操作（listProjects/createProject/loadProject/saveProject/deleteProject/loadAiSession/saveAiSession/verifyProjectAssets/copyProjectAssets）逐字段校验载荷。
+- src-tauri：新薄 `src/store/mod.rs`（9 个 `#[tauri::command]` 包装 + `projects_dir` 宿主解析 + 内核 re-export，外部 13 个文件的 `crate::store::X` 与 lib.rs 注册路径零改动）；`Cargo.toml` 加 path 依赖；`lib.rs` 的 `mod isotime` 改为 core re-export。
+
+**矩阵 ID / 测试命令或步骤 / 预期 / 实际 / 结论**：
+
+| 验证项 | 命令或步骤 | 预期 | 实际 | 结论 |
+| --- | --- | --- | --- | --- |
+| M14 先红 | `cd crates && cargo test`（实现前） | FFI 库缺失，ABI 集成测试无法编译 | `can't find library plotweave_ffi`；随后确定性单测（取消门/panic 包裹/坏请求）逐项转绿 | 通过（先红观察到位） |
+| M14 后绿 + 迁移回归 | `cd crates && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` | 全绿 | fmt/clippy 通过；core 75 + ffi 单测 3 + ABI 集成 5（创建→保存→重开恢复→删除全链、内核错误上浮（含「项目不存在」）、取消对未知/已落定安全、坏数据根/坏指针拒绝）全部通过 | 通过 |
+| Tauri 宿主等价回归 | `cd src-tauri && cargo fmt --check && cargo clippy -- -D warnings && cargo test` | 适配层不破现有行为 | fmt/clippy 通过；201 测试全绿（含 store 之外的 assets/library/prefs 域） | 通过 |
+| 函数/文件规模 | `wc -l` 抽查 | ≤800/≤80 | 最大文件 `plotweave-ffi/src/lib.rs` 362 行；新增函数均 ≤80 行 | 通过 |
+
+**矩阵覆盖说明**：M14 的「取消/释放/迟到回调」中，未派发取消、释放时序（free 前送达全部回执、join 后不再回调）、panic 不跨 FFI 与坏输入拒绝已由 Rust 侧 ABI 测试覆盖；已派发操作不中断、迟到结果照常交付的语义在 crate 契约中固定，真实 Swift 宿主的链接、主线程回投与 Web 进程终止注入待 P2-3/P2-4 接线时验证。Tauri 宿主行为等价性由随迁的 75 项 store 测试 + src-tauri 201 项全量测试守护。
+
+**失败场景、尚未接通的能力与未验证原因**：
+
+- FFI 尚未链接进 Xcode 工程、Swift 侧无真实调用：`hostInvoke` 的 swift 分支仍返回 `PW_HOST_COMMAND_UNAVAILABLE`，接通属 P2 第 3–4 项（桥接协议 + 编辑链路）。
+- C 头文件未单独提供：当前契约以 `plotweave-ffi/src/lib.rs` crate 文档 + `# Safety` 段为准；真实 Swift 链接任务再落 `include/plotweave_ffi.h` 与 Xcode 集成。
+- 前端路由检查未运行：本切片未触及 `src/**`。
+- 未运行 SonarQube 门禁：提交时随钩子执行。
+
+**下一步**：P2 第 3 项——打开夹具项目 → 编辑 → 防抖保存 → 关闭冲刷 → 重开恢复的端到端链路（Swift 侧接 FFI 传输，写入失败先加回归测试再实现恢复）。

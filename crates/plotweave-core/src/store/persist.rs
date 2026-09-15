@@ -3,13 +3,13 @@
 //! 控制文件读取与原子写——全程句柄相对执行，不按路径名重解析。
 
 use std::fs;
+use std::path::Path;
 
 use cap_std::{ambient_authority, fs::Dir as CapDir};
-use tauri::{AppHandle, Manager};
 
 use crate::store::types::new_id;
 /// 资产路径组件的 no-follow 元数据（相对锚定句柄），缺失映射为「资产文件不存在」。
-pub(crate) fn asset_stat(
+pub fn asset_stat(
     dir: &CapDir,
     comp: &str,
     rel_path: &str,
@@ -25,22 +25,20 @@ pub(crate) fn asset_stat(
 /// Unix 组件身份 (dev, ino)：读取与资产校验全程句柄相对后，身份比对只在
 /// cap-std 元数据之间进行（归类元数据与打开句柄元数据同源）。
 #[cfg(unix)]
-pub(crate) fn asset_identity(md: &cap_std::fs::Metadata) -> (u64, u64) {
+pub fn asset_identity(md: &cap_std::fs::Metadata) -> (u64, u64) {
     use cap_std::fs::MetadataExt;
     (md.dev(), md.ino())
 }
-/// 项目根目录（§10.2 信任链）：canonicalize 应用数据根并以**受信根句柄**
+/// 项目根目录（§10.2 信任链）：canonicalize 注入的数据根并以**受信根句柄**
 /// 锚定——`projects/` 的创建、非符号链接校验与打开全部相对该句柄执行，
 /// 打开经 (dev, ino) 身份绑定。返回的 projects 句柄供读/写/删/拷与持久性
 /// 屏障内核复用，不按路径名重开（`open_ambient_dir` 与 fsync 重开都会把
 /// 并发替换后的目录变成表面根）。路径名被换时：越界被沙箱拒绝，界内
-/// 替换被身份绑定拒绝。
-pub(crate) fn projects_dir(app: &AppHandle) -> Result<CapDir, String> {
-    let root_path = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("无法定位应用数据目录：{e}"))?;
-    fs::create_dir_all(&root_path).map_err(|e| format!("创建应用数据目录失败：{e}"))?;
+/// 替换被身份绑定拒绝。数据根由宿主注入（P2 抽离，§4.3）：Tauri 传应用
+/// 数据目录，Swift/FFI 传隔离数据根——内核自身不定位任何宿主目录。
+pub fn open_projects_root(data_root: &Path) -> Result<CapDir, String> {
+    let root_path = data_root;
+    fs::create_dir_all(root_path).map_err(|e| format!("创建应用数据目录失败：{e}"))?;
     let root_path = root_path
         .canonicalize()
         .map_err(|e| format!("解析应用数据目录真实路径失败：{e}"))?;
@@ -70,7 +68,7 @@ pub(crate) fn projects_dir(app: &AppHandle) -> Result<CapDir, String> {
 /// Unix 无身份可比，改为打开后重走 no-follow 归类复核（换名残余窗口由
 /// cap-std 沙箱限定在 projects/ 树内）。
 #[allow(unused_variables)]
-pub(crate) fn open_dir_bound<P: AsRef<std::path::Path>>(
+pub fn open_dir_bound<P: AsRef<std::path::Path>>(
     parent: &CapDir,
     rel: P,
     classified: &cap_std::fs::Metadata,
@@ -141,7 +139,7 @@ fn verify_control_file(root: &CapDir, name: &str) -> Result<Option<(u64, u64)>, 
 /// 解析，projects/ 路径名在校验后被并发整体替换（rename 换目录树）也无法
 /// 把读取引到替换树；cap-std 沙箱保证解析不逃出锚定根，校验与打开之间的
 /// 目录项替换（换成符号链接或另一文件）由身份比对拒绝且不读取。
-pub(crate) fn read_verified_file(root: &CapDir, name: &str) -> Result<String, String> {
+pub fn read_verified_file(root: &CapDir, name: &str) -> Result<String, String> {
     let verified_identity = verify_control_file(root, name)?;
     use std::io::Read;
     let mut file = root
@@ -180,7 +178,7 @@ pub(crate) fn read_verified_file(root: &CapDir, name: &str) -> Result<String, St
 /// fsync（持久性屏障，打开/同步失败向上传播、不粉饰成功）；失败尽力清理
 /// 临时文件。file_name 须为单段文件名（不含路径分量）：归类、创建与
 /// rename 之外的越界形态在此拒绝，不得相对句柄逃出 projects/。
-pub(crate) fn atomic_write(root: &CapDir, file_name: &str, text: &str) -> Result<(), String> {
+pub fn atomic_write(root: &CapDir, file_name: &str, text: &str) -> Result<(), String> {
     use std::io::Write;
     if std::path::Path::new(file_name).components().count() != 1 {
         return Err(format!("项目文件名含路径分量，拒绝：{file_name}"));

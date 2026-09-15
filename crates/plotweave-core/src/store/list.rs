@@ -6,10 +6,9 @@ use std::collections::HashSet;
 
 use cap_std::fs::Dir as CapDir;
 use serde_json::json;
-use tauri::AppHandle;
 
 use crate::isotime::{iso8601_to_epoch_millis, iso_from_ms};
-use crate::store::persist::{projects_dir, read_verified_file};
+use crate::store::persist::read_verified_file;
 use crate::store::types::{empty_assets, validate_id, ProjectFile, ProjectInfo, ProjectMeta};
 /// 从画布 graph 派生统计：场数 = scene 节点数；结局数 = 无剧情流出边的
 /// 场景数（分支剧情的叶子场景即结局）。attach 下挂边（索引卡 → 分镜卡，
@@ -112,17 +111,12 @@ fn sort_metas_by_recency(metas: &mut [ProjectMeta]) {
     metas.sort_by_key(|m| std::cmp::Reverse(iso8601_to_epoch_millis(&m.updated_at)));
 }
 /// 列出全部项目，按更新时间新→旧排序。扫描相对受信根锚定句柄执行。
-#[tauri::command]
-pub fn list_projects(app: AppHandle) -> Result<Vec<ProjectMeta>, String> {
-    let root = projects_dir(&app)?;
-    list_project_metas(&root)
-}
 /// list_projects 的可测内核（给定已验证的 projects 根句柄）。目录扫描逐条
 /// 跳过符号链接/异型项/坏文件（单条坏数据不阻断列表），扫描与读取全程
 /// 句柄相对——projects/ 路径名被并发整体替换也不会列出替换树的条目；
 /// 读取走 read_verified_file 的身份绑定，校验通过后被并发替换为符号链接
 /// 或另一文件时读到的仍是校验时的同一实体，否则跳过该条目。
-fn list_project_metas(root: &CapDir) -> Result<Vec<ProjectMeta>, String> {
+pub fn list_project_metas(root: &CapDir) -> Result<Vec<ProjectMeta>, String> {
     let mut metas: Vec<ProjectMeta> = Vec::new();
     for entry in root
         .entries()
