@@ -14,10 +14,12 @@
 //! 模块组织（issue #14 拆分）：types（信封类型与 id/名称工具）、
 //! validate（保存边界校验与实路径复验）、persist（受信句柄与原子写
 //! 原语）、list（列表与多版本封套解析）、commands（生命周期命令）、
-//! copy（跨项目资产复制）；对外 store:: 符号路径经 re-export 保持不变。
+//! copy（跨项目资产复制）、error（领域错误类型，issue #144 store 分片）；
+//! 对外 store:: 符号路径经 re-export 保持不变。
 
 mod commands;
 mod copy;
+mod error;
 mod list;
 mod persist;
 mod types;
@@ -31,6 +33,10 @@ pub use commands::{
 };
 pub use copy::copy_project_assets;
 pub use list::list_projects;
+// 展示边界转换（issue #144 store 分片）：store 内核返回类型化的
+// store::error::StoreError，跨域调用方与 Tauri 命令出口经 to_ipc_text
+// 按既有中文文案上浮（领域错误类型本体经 crate::store::error 路径引用）
+pub(crate) use error::to_ipc_text;
 // 项目文档读取内核供 pwmedia 项目 scope 媒体解析复用（issue #31，store 外
 // 唯一消费方为 assets::resolve_project_media_entry）
 pub(crate) use commands::load_project_file;

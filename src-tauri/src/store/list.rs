@@ -9,6 +9,7 @@ use serde_json::json;
 use tauri::AppHandle;
 
 use crate::isotime::{iso8601_to_epoch_millis, iso_from_ms};
+use crate::store::error::{to_ipc_text, StoreError};
 use crate::store::persist::{projects_dir, read_verified_file};
 use crate::store::types::{empty_assets, validate_id, ProjectFile, ProjectInfo, ProjectMeta};
 /// 从画布 graph 派生统计：场数 = scene 节点数；结局数 = 无剧情流出边的
@@ -114,21 +115,21 @@ fn sort_metas_by_recency(metas: &mut [ProjectMeta]) {
 /// 列出全部项目，按更新时间新→旧排序。扫描相对受信根锚定句柄执行。
 #[tauri::command]
 pub fn list_projects(app: AppHandle) -> Result<Vec<ProjectMeta>, String> {
-    let root = projects_dir(&app)?;
-    list_project_metas(&root)
+    let root = projects_dir(&app).map_err(to_ipc_text)?;
+    list_project_metas(&root).map_err(to_ipc_text)
 }
 /// list_projects 的可测内核（给定已验证的 projects 根句柄）。目录扫描逐条
 /// 跳过符号链接/异型项/坏文件（单条坏数据不阻断列表），扫描与读取全程
 /// 句柄相对——projects/ 路径名被并发整体替换也不会列出替换树的条目；
 /// 读取走 read_verified_file 的身份绑定，校验通过后被并发替换为符号链接
 /// 或另一文件时读到的仍是校验时的同一实体，否则跳过该条目。
-fn list_project_metas(root: &CapDir) -> Result<Vec<ProjectMeta>, String> {
+fn list_project_metas(root: &CapDir) -> Result<Vec<ProjectMeta>, StoreError> {
     let mut metas: Vec<ProjectMeta> = Vec::new();
     for entry in root
         .entries()
-        .map_err(|e| format!("读取项目目录失败：{e}"))?
+        .map_err(|e| StoreError::io("读取项目目录失败", e))?
     {
-        let entry = entry.map_err(|e| format!("遍历项目目录失败：{e}"))?;
+        let entry = entry.map_err(|e| StoreError::io("遍历项目目录失败", e))?;
         let file_name = entry.file_name();
         let Some(name) = file_name.to_str() else {
             continue;
@@ -207,27 +208,31 @@ fn parse_explicit_envelope(
     value: serde_json::Value,
     v1_keys: usize,
     legacy_keys: usize,
-) -> Result<ProjectFile, String> {
+) -> Result<ProjectFile, StoreError> {
     let Some(version) = value.get("schemaVersion").and_then(|sv| sv.as_u64()) else {
-        return Err("schemaVersion 不是非负整数，无法判别文档信封（已保留原文件）".into());
+        return Err(StoreError::CorruptEnvelope(
+            "schemaVersion 不是非负整数，无法判别文档信封（已保留原文件）",
+        ));
     };
     if version == 0 {
         if v1_keys > 0 {
-            return Err(
-                "文档信封自相矛盾：schemaVersion 0 却携带 v1 专属键（已保留原文件）".into(),
-            );
+            return Err(StoreError::CorruptEnvelope(
+                "文档信封自相矛盾：schemaVersion 0 却携带 v1 专属键（已保留原文件）",
+            ));
         }
         return Ok(wrap_legacy(id, &value));
     }
     if legacy_keys > 0 {
-        return Err(
-            "文档信封自相矛盾：schemaVersion ≥ 1 却携带旧扁平特征键（已保留原文件）".into(),
-        );
+        return Err(StoreError::CorruptEnvelope(
+            "文档信封自相矛盾：schemaVersion ≥ 1 却携带旧扁平特征键（已保留原文件）",
+        ));
     }
     if version > u64::from(u32::MAX) {
         // 超出 u32 的版本号无法无损载入信封：截断回退会把未来文档当作当前
         // v1 交付，保存时按 v1 回写并丢弃未知字段——拒绝加载并保留原文件
-        return Err("schemaVersion 超出可表示范围（疑似未来版本），拒绝加载并保留原文件".into());
+        return Err(StoreError::CorruptEnvelope(
+            "schemaVersion 超出可表示范围（疑似未来版本），拒绝加载并保留原文件",
+        ));
     }
     Ok(parse_v1_envelope(&value))
 }
@@ -241,7 +246,7 @@ fn classify_versionless(
     v1_keys: usize,
     legacy_keys: usize,
     has_legacy_list: bool,
-) -> Result<ProjectFile, String> {
+) -> Result<ProjectFile, StoreError> {
     if v1_keys > 0 && legacy_keys == 0 {
         let mut file = parse_v1_envelope(&value);
         file.versionless = true;
@@ -250,7 +255,9 @@ fn classify_versionless(
     if v1_keys == 0 && legacy_keys >= 2 && has_legacy_list {
         return Ok(wrap_legacy(id, &value));
     }
-    Err("无法判别文档信封：v1 与旧扁平特征键混合或均不足（已保留原文件）".into())
+    Err(StoreError::CorruptEnvelope(
+        "无法判别文档信封：v1 与旧扁平特征键混合或均不足（已保留原文件）",
+    ))
 }
 /// 解析项目文件（§11 第 0 步信封判型）：显式 `schemaVersion` 定族并经
 /// 家族一致性校验（parse_explicit_envelope），缺失时按顶层键形状特征判型
@@ -261,8 +268,8 @@ fn classify_versionless(
 /// 未动过的项目顶到最近列表顶端。修复与落盘归前端 §11.1 第 2 步
 /// （受信 id 覆盖、时间戳回退链，随 repaired 标志回写）；列表排序把
 /// 不可解析时间戳稳定排最后（sort_metas_by_recency）。
-pub(crate) fn parse_file(id: &str, text: &str) -> Result<ProjectFile, String> {
-    let value: serde_json::Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
+pub(crate) fn parse_file(id: &str, text: &str) -> Result<ProjectFile, StoreError> {
+    let value: serde_json::Value = serde_json::from_str(text).map_err(StoreError::CorruptJson)?;
     let v1_keys = ["project", "graph", "assets"]
         .iter()
         .filter(|k| value.get(*k).is_some())

@@ -4,7 +4,7 @@
 
 use cap_std::fs::Dir as CapDir;
 
-use crate::store::open_dir_bound;
+use crate::store::{open_dir_bound, to_ipc_text};
 
 use super::journal_io::JournalEntry;
 
@@ -99,7 +99,9 @@ pub(super) fn verify_trash_identity(
 pub(super) fn open_trash_dir(assets: &CapDir) -> Result<Option<CapDir>, String> {
     match assets.symlink_metadata(".trash") {
         Ok(md) if md.file_type().is_symlink() => Err("隔离目录是符号链接，拒绝操作".into()),
-        Ok(md) if md.is_dir() => open_dir_bound(assets, ".trash", &md, "隔离目录").map(Some),
+        Ok(md) if md.is_dir() => open_dir_bound(assets, ".trash", &md, "隔离目录")
+            .map(Some)
+            .map_err(to_ipc_text),
         Ok(_) => Err("隔离目录路径不是目录，拒绝操作".into()),
         // 仅 NotFound 视为缺失（评审修复：权限/瞬态 I/O 误当缺失会在未检查
         // 隔离项的情况下清除日志，丢失唯一清理记录）；其余错误中止恢复
@@ -122,7 +124,7 @@ pub(super) fn ensure_trash_dir(assets: &CapDir) -> Result<CapDir, String> {
     if md.file_type().is_symlink() || !md.is_dir() {
         return Err("隔离目录被占用为非目录，拒绝操作".into());
     }
-    let dir = open_dir_bound(assets, ".trash", &md, "隔离目录")?;
+    let dir = open_dir_bound(assets, ".trash", &md, "隔离目录").map_err(to_ipc_text)?;
     fsync_dir(assets)?;
     Ok(dir)
 }

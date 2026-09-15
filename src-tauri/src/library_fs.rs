@@ -12,7 +12,7 @@ use cap_std::fs::Dir as CapDir;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
 
-use crate::store::{new_id, open_dir_bound};
+use crate::store::{new_id, open_dir_bound, to_ipc_text};
 
 /// 库索引大小上限（1 MiB，对齐 prefs.rs 设置文件上限）：异常膨胀的索引在
 /// 物化进内存前显式拒绝，防脏数据/篡改文件拖垮解析与 IPC。
@@ -66,7 +66,7 @@ pub(crate) fn ensure_library_dir(root: &CapDir) -> Result<CapDir, String> {
     if !md.is_dir() {
         return Err("资产库路径不是目录".into());
     }
-    open_dir_bound(root, "library", &md, "资产库目录")
+    open_dir_bound(root, "library", &md, "资产库目录").map_err(to_ipc_text)
 }
 
 /// 资产库根目录的受信锚定句柄（§10.2 信任链，与 store::projects_dir 同构）：
@@ -111,7 +111,7 @@ pub(crate) fn assets_root(library: &CapDir) -> Result<CapDir, String> {
     if !md.is_dir() {
         return Err("资产目录路径不是目录".into());
     }
-    open_dir_bound(library, "assets", &md, "资产目录")
+    open_dir_bound(library, "assets", &md, "资产目录").map_err(to_ipc_text)
 }
 
 /// 逐组件 no-follow 走到 rel_path 的父目录：中间组件必须是非符号链接的
@@ -146,7 +146,7 @@ pub(crate) fn open_parent_dir(
         if !md.is_dir() {
             return Err(format!("资产路径的中间组件不是目录：{rel_path}"));
         }
-        dir = open_dir_bound(&dir, comp, &md, "资产路径中间目录")?;
+        dir = open_dir_bound(&dir, comp, &md, "资产路径中间目录").map_err(to_ipc_text)?;
     }
     Ok(Some((dir, (*last).to_string())))
 }
@@ -349,7 +349,7 @@ pub(crate) fn ensure_index_size(index: &Value) -> Result<(), String> {
 pub(crate) fn write_index(library: &CapDir, index: &Value) -> Result<(), String> {
     ensure_index_size(index)?;
     let text = serde_json::to_string(index).map_err(|e| format!("序列化索引失败：{e}"))?;
-    crate::store::atomic_write(library, INDEX_FILE_NAME, &text)
+    crate::store::atomic_write(library, INDEX_FILE_NAME, &text).map_err(to_ipc_text)
 }
 
 /// 同目录原子落盘内核（排他临时文件 + sync + rename + 父目录 fsync 持久性

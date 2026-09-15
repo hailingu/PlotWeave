@@ -15,7 +15,7 @@ use serde_json::Value;
 use tauri::{AppHandle, Manager};
 
 use crate::store::{
-    is_canonical_mime, is_valid_active_asset_rel_path, load_project_file, validate_id,
+    is_canonical_mime, is_valid_active_asset_rel_path, load_project_file, to_ipc_text, validate_id,
     verify_asset_real_path,
 };
 
@@ -181,7 +181,7 @@ pub(crate) fn resolve_project_media_entry(
         pending.drain_project(project_id);
         return Err(err);
     }
-    let doc = load_project_file(projects, project_id)?;
+    let doc = load_project_file(projects, project_id).map_err(to_ipc_text)?;
     if let Some(entry) = doc.assets.get("byId").and_then(|by_id| by_id.get(asset_id)) {
         let resolved = checked_media_fields(
             asset_id,
@@ -227,7 +227,7 @@ pub(crate) fn open_project_media_with(
     pending: &PendingProjectAssets,
 ) -> Result<(String, cap_std::fs::File), String> {
     let (rel, mime) = resolve_project_media_entry(projects, project_id, asset_id, pending)?;
-    let file = verify_asset_real_path(projects, project_id, &rel)?;
+    let file = verify_asset_real_path(projects, project_id, &rel).map_err(to_ipc_text)?;
     Ok((mime, file))
 }
 

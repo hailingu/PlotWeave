@@ -22,7 +22,7 @@ use crate::library_fs::{assets_root, atomic_write_with, library_root, open_paren
 use crate::store::asset_identity;
 use crate::store::{
     asset_stat, is_canonical_mime, is_valid_asset_rel_path, new_id, open_dir_bound, projects_dir,
-    validate_id, verify_asset_real_path,
+    to_ipc_text, validate_id, verify_asset_real_path,
 };
 
 pub(crate) mod project_media;
@@ -104,7 +104,7 @@ pub(crate) fn open_library_asset(
         // 进入拷贝流程；删除侧才按幂等处理，语义分野见 library_fs）
         return Err(format!("资产文件不存在：{rel_path}"));
     };
-    let md = asset_stat(&parent, &last, rel_path)?;
+    let md = asset_stat(&parent, &last, rel_path).map_err(to_ipc_text)?;
     if md.file_type().is_symlink() {
         return Err(format!("库资产路径含符号链接：{rel_path}"));
     }
@@ -146,7 +146,7 @@ fn ensure_child_dir(parent: &CapDir, name: &str, label: &str) -> Result<CapDir, 
     if !md.is_dir() {
         return Err(format!("{label}不是目录，拒绝写入"));
     }
-    open_dir_bound(parent, name, &md, label)
+    open_dir_bound(parent, name, &md, label).map_err(to_ipc_text)
 }
 
 /// 流式拷贝进目标目录（原子落盘，与 store::atomic_write 同构）。
@@ -325,7 +325,9 @@ pub(crate) fn validate_project_asset_with(
         .get("id")
         .and_then(Value::as_str)
         .ok_or("资产 id 缺失")?;
-    verify_asset_real_path(root, id, rel_path).map_err(|e| format!("资产 {asset_id}：{e}"))?;
+    verify_asset_real_path(root, id, rel_path)
+        .map_err(|e| e.prefixed(format!("资产 {asset_id}")))
+        .map_err(to_ipc_text)?;
     Ok(normalized)
 }
 
@@ -337,7 +339,7 @@ pub fn import_project_asset_from_library(
     id: String,
     library_asset_id: String,
 ) -> Result<Value, String> {
-    let projects = projects_dir(&app)?;
+    let projects = projects_dir(&app).map_err(to_ipc_text)?;
     let library = library_root(&app)?;
     // 库操作互斥锁（issue #25 评审修复）：导入的恢复 + 读取 + 拷贝全链路
     // 与删除串行——import 在删除写入索引前恢复并把媒体移回原位，删除随后
@@ -353,7 +355,7 @@ pub fn import_project_asset_from_library(
 #[tauri::command]
 pub fn validate_project_asset(app: AppHandle, id: String, asset: Value) -> Result<Value, String> {
     validate_id(&id)?;
-    let root = projects_dir(&app)?;
+    let root = projects_dir(&app).map_err(to_ipc_text)?;
     validate_project_asset_with(&root, &id, &asset)
 }
 

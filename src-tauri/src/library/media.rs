@@ -16,7 +16,9 @@ use crate::assets::project_media::{
 use crate::library::ASSET_MAX_BYTES;
 use crate::library_fs::{library_root, read_index_capped, validate_asset_id};
 use crate::library_journal::{library_file_lock, library_op_lock};
-use crate::store::{is_canonical_mime, is_valid_active_asset_rel_path, projects_dir, validate_id};
+use crate::store::{
+    is_canonical_mime, is_valid_active_asset_rel_path, projects_dir, to_ipc_text, validate_id,
+};
 
 /// opaque asset URL 的自定义协议名（lib.rs 注册同名协议处理器）。
 pub(crate) const MEDIA_SCHEME: &str = "pwmedia";
@@ -431,7 +433,7 @@ pub(crate) fn handle_media_request(app: &AppHandle, uri: &tauri::http::Uri) -> M
             // 项目 scope（issue #31）：按项目文档逐请求解析后经
             // verify_asset_real_path 句柄链打开身份绑定句柄；读取上限为
             // 覆盖持久化契约的防御界（评审修复 P2-4）
-            let projects = projects_dir(app)?;
+            let projects = projects_dir(app).map_err(to_ipc_text)?;
             let pending = app.state::<PendingProjectAssets>();
             let opened = open_project_media_with(&projects, &project_id, &id, &pending);
             opened.and_then(|(mime, file)| read_project_media_capped(&id, mime, file))
@@ -474,7 +476,7 @@ pub fn get_asset_media_url(
             // 项目 assetId 是不透明契约（评审修复）：命令面按同域值域
             // 先行校验，非法 id 在触达文件系统前拒绝
             validate_project_media_id(&asset_id)?;
-            let projects = projects_dir(&app)?;
+            let projects = projects_dir(&app).map_err(to_ipc_text)?;
             let pending = app.state::<PendingProjectAssets>();
             resolve_project_media_entry(&projects, project_id, &asset_id, &pending)?;
         }
