@@ -1,6 +1,7 @@
 /**
- * 画布区域（EditorLayout 三栏的中区）：ReactFlow 画布本体、节点/连线类型
- * 注册与背景控件。交互回调与视口持久化全部来自装配层，本组件不持状态。
+ * 画布区域（EditorLayout 三栏的中区）：ReactFlow 画布本体与背景控件。
+ * 节点/连线类型注册在 canvasRegistry（单一来源，原生外壳演示页共用）；
+ * 交互回调与视口持久化全部来自装配层，本组件不持状态。
  * 渲染隔离（issue #103）：输入按真实消费字段收窄为 EditorCanvasRegionProps
  * 并以 memo 包裹——面板状态（边栏开合/＋菜单/右栏切页/对话框）变化时，
  * 布局层下传的这些成员引用保持稳定，整个 ReactFlow 子树跳过执行；节点/
@@ -12,38 +13,16 @@ import {
   BackgroundVariant,
   Controls,
   ReactFlow,
-  type EdgeTypes,
-  type NodeTypes,
 } from '@xyflow/react'
-import SceneNode from './nodes/SceneNode'
-import DialogueNode from './nodes/DialogueNode'
-import BeatNode from './nodes/BeatNode'
-import BranchNode from './nodes/BranchNode'
-import ShotNode from './nodes/ShotNode'
-import ImageNode from './nodes/ImageNode'
-import BranchEdge from './edges/BranchEdge'
+import {
+  CANVAS_DOT_GAP,
+  canvasEdgeTypes,
+  canvasNodeTypes,
+} from './canvasRegistry'
 import type { EditorGraphActions } from './useEditorGraphActions'
 import type { EditorPersistence } from './useEditorPersistence'
 import type { CanvasView } from './useCanvasView'
 import type { EditorDocument, EditorProjectContent } from './useEditorDocument'
-
-/** 画布节点类型注册：索引卡 / 对白 / 节奏卡 / 分支 / 分镜卡 / 图片节点（docs/ui-design.md §4.2/§13）。 */
-const nodeTypes: NodeTypes = {
-  scene: SceneNode,
-  dialogue: DialogueNode,
-  beat: BeatNode,
-  branch: BranchNode,
-  shot: ShotNode,
-  image: ImageNode,
-}
-
-/** 连线类型注册：branch = 品牌渐变 + 选项胶囊；sequence 用默认贝塞尔加样式类。 */
-const edgeTypes: EdgeTypes = {
-  branch: BranchEdge,
-}
-
-/** 背景点阵间距（像素），与画布网格视觉密度一致。 */
-const CANVAS_DOT_GAP = 22
 
 /**
  * 画布区域的收窄输入（issue #103 渲染隔离）：只声明本区域真实消费的字段，
@@ -109,8 +88,8 @@ function EditorCanvasRegion(props: EditorCanvasRegionProps) {
       <ReactFlow
         nodes={displayNodes}
         edges={doc.edges}
-        nodeTypes={nodeTypes}
-        edgeTypes={edgeTypes}
+        nodeTypes={canvasNodeTypes}
+        edgeTypes={canvasEdgeTypes}
         proOptions={{ hideAttribution: true }}
         onNodesChange={doc.onNodesChange}
         onEdgesChange={doc.onEdgesChange}

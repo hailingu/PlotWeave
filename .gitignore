@@ -19,6 +19,12 @@ src-tauri/target/
 src-tauri/gen/schemas/
 **/*.rs.bk
 
+# --- macOS 原生工程（native/macos）---
+native/macos/build/
+native/macos/App/WebCanvas/
+xcuserdata/
+*.xcuserstate
+
 # --- 环境变量 ---
 .env
 .env.*

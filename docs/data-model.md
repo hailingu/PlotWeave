@@ -123,7 +123,7 @@
 
 ## 一、设计背景与原则
 
-PlotWeave 是 Tauri + React Flow + Rust 的单用户桌面工具：创作者在画布上把剧本、场景、角色与剧情分支组织为节点图。模型配置走 BYOK——用户自己在客户端里配置 provider（base URL + API key），无服务端、无计费。
+PlotWeave 当前是 Tauri + React Flow + Rust 的单用户桌面工具：创作者在画布上把剧本、场景、角色与剧情分支组织为节点图。模型配置走 BYOK——用户自己在客户端里配置 provider（base URL + API key），无服务端、无计费。
 
 全部模型设计从五条原则推出，后文每个决策都能回溯到其中之一：
 
@@ -156,6 +156,8 @@ Rust 持久化层（Tauri commands：文件读写、资产导入、设置与密�
 **当前实现映射（#6、#14、#16、#35、#39）**：`EditorView` 负责装配，`useEditorDocument` 持有会话文档，`useEditorController` 汇集按域 hooks，`EditorLayout`/`EditorCanvasRegion`/`EditorOverlays` 承载布局；撤销重做由 `history.ts` 的 `CommandStack` 承载。会话 `ProjectContent` 与磁盘 `ProjectDocument` 通过 `model/convert.ts` 门面转换，归一化阶段位于 `normalize*.ts`，序列化位于 `serialize.ts`。UI 补丁经 `nodes/patch.ts` 的 `NodeDataPatch` 按节点类型判别，`PatchShape` 去掉索引签名，序列化按节点联合穷尽分派；JSON 输入仍须运行时校验。`projectStore.ts` 是持久化门面，内部按 `memory`/`tauri`/`saveChain`/`seeds` 分域；Rust 项目存储位于 `store/`，库索引与删除恢复分别位于 `library_index/`、`library_journal/`。这些拆分不改变文档格式或产品行为。
 
 下文顺序：先定义数据本身（三~七）与引用规则（八），再定义变更机制（九：命令与撤销），然后是落地（十：存储；十一：加载归一化），最后是建立在命令通道之上的 AI 能力（十二）与演进方向（十三）。
+
+**原生外壳改造目标（2026-09-15，尚未实现）**：根据仓库所有者选定的[SwiftUI/AppKit + React Flow 改造计划](swiftui-react-flow-migration-plan.md)，原生界面提交编辑意图，React 编辑会话继续拥有文档、图命令、撤销和项目写入协调；Swift 仅消费画布的只读投影。Rust 业务与存储内核逐域脱离 Tauri 宿主依赖，经 C ABI 适配供 Swift 调用。现有 Tauri 入口在迁移期复用同一内核作为回归基线。本计划不修改 ProjectDocument、AI 会话、资产或设置的磁盘合同；下文 `Tauri commands`、`app_data_dir` 等仍描述当前实现。新宿主的数据根、密钥身份、`pwmedia`、写入队列与退出屏障须按计划验证兼容后再更新实现说明。应用级会话不能随原生页面隐藏而丢失，原生项目操作不得绕过现有保存/删除协调语义。
 
 ## 三、ProjectDocument
 

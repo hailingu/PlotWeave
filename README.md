@@ -18,7 +18,7 @@
 - [ ] 画布对齐与吸附
 - [ ] 剧本导出：结构化格式（JSON）
 - [x] 画布内 AI 图像生成（文生图首版）：图片节点生成角色垫图 / 场景底图 / 分镜关键帧，产物落项目资产（媒体节点 + 输入签名守护 + 协作式取消，详见 `docs/data-model.md` §13；图生图引用边、视频节点与 job 落盘恢复随演进）
-- [ ] macOS 原生界面质感：窗口级毛玻璃（Tauri `windowEffects`）+ 无头组件（Radix）承载弹层交互 + 设计令牌扩展，实现路径详见 `docs/ui-design.md` §12
+- [ ] macOS 原生外壳：SwiftUI/AppKit 承载窗口、工具栏与面板，WKWebView 内保留 React Flow 画布并复用 Rust 内核；在 `codex/swiftui-react-flow` 分支按[改造计划](docs/swiftui-react-flow-migration-plan.md)逐阶段验证视觉与功能（P1 内存画布演示已实现，完整业务迁移待续）
 
 ## 技术栈
 
@@ -29,6 +29,8 @@
 
 桌面端由 Tauri 打包，前端负责画布交互，业务逻辑与文件读写下沉到 Rust 侧。
 
+以上为当前实现。macOS 外壳改造的目标是 **SwiftUI/AppKit + WKWebView / React Flow + Rust 内核**；当前分支先建立计划，再依次交付原生视觉首片、持久化链路、原生编辑面板及完整功能回归。阶段状态与验证要求见[改造计划](docs/swiftui-react-flow-migration-plan.md)。
+
 ## 仓库结构
 
 ```
@@ -37,6 +39,7 @@ PlotWeave/
 ├── scripts/        # SonarQube 门禁及其行为测试
 ├── src/            # React + React Flow 前端
 ├── src-tauri/      # Rust 后端与 Tauri 壳（commands、持久化、导出）
+├── native/         # SwiftUI/AppKit 原生外壳（codex/swiftui-react-flow 分支改造中，P1 骨架）
 ├── docs/           # 项目文档（数据模型设计等）
 ├── AGENTS.md       # AI 代理协作规范
 ├── README.md
@@ -74,6 +77,20 @@ npm run tauri dev  # 启动 Tauri 开发调试（Vite 前端 + Rust 壳）
 
 - 前端：仓库根目录执行 `npm run format:check && npm run lint && npm run build`（`npm run format` 应用 Prettier 格式化）
 - 后端：`src-tauri/` 目录执行 `cargo fmt --check && cargo clippy -- -D warnings && cargo test`
+- 原生外壳（`codex/swiftui-react-flow` 分支）：仓库根目录执行 `npm run build:native-canvas && xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNative -destination 'platform=macOS' -derivedDataPath native/macos/build/DerivedData test`（需 Xcode 26.6 / macOS 26 SDK，工具链记录见 [P1 证据记录](docs/swiftui-react-flow-p1-evidence.md)）。要获得带画布演示的可运行应用，执行 `npm run build:native`（一条链完成画布资源构建 `build:native-canvas` 与 `xcodebuild build`），随后 `open native/macos/build/DerivedData/Build/Products/Debug/PlotWeaveNative.app`；注意单独 `xcodebuild build` 不会重新生成画布资源，缺失时应用会显示"未找到画布资源"诊断。`native/macos/build/` 与 `native/macos/App/WebCanvas/` 均为生成产物，不提交到 Git。纯测试输出在验证后删除；本地演示构建在使用完后删除。
+
+### 启动原生画布演示
+
+```bash
+# 在 PlotWeave 仓库根目录执行
+nvm use
+npm run build:native
+open -n native/macos/build/DerivedData/Build/Products/Debug/PlotWeaveNative.app
+```
+
+`open -n` 启动本次构建的新实例，避免激活 Xcode 默认 DerivedData 中的旧同名应用。重新构建后需启动新实例；已运行的窗口不会自动替换资源。Xcode ⌘R 调试前先运行 `npm run build:native-canvas`。
+
+原生资源采用单一 IIFE 脚本（经典 `defer` 入口）与独立 CSS，以适配 WKWebView 的 `file://` 加载；独立入口包含 React Flow 基础样式。验证须检查真实页面的节点与就绪通知，不能只检查资源是否入包。详见 [P1 加载修复证据](docs/swiftui-react-flow-p1-evidence.md#p1-画布加载超时修复2026-09-15)。
 
 ### 提交与推送门禁
 
@@ -92,6 +109,7 @@ npm run tauri dev  # 启动 Tauri 开发调试（Vite 前端 + Rust 壳）
 - AI 代理（ZCode / Codex 等）开始任何工作前，先阅读 [AGENTS.md](AGENTS.md)。
 - 项目文档使用中文。
 - 设计文档：[数据模型](docs/data-model.md)、[UI 规格](docs/ui-design.md)；已关闭 issue 的落地结论与保留边界见[设计同步记录](docs/design-sync.md)。
+- macOS 外壳改造：[SwiftUI/AppKit + React Flow 开发与验证计划](docs/swiftui-react-flow-migration-plan.md)。
 
 ## 许可证
 
