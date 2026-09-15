@@ -380,4 +380,47 @@ describe('退出冲刷（issue #119：屏障等待画布防抖与失败重试）
       vi.useRealTimers()
     }
   })
+
+  it('flushPendingProjectSaves：他入口以同一文档对象重新登记（新代次）仍重存一次（PR #174 评审：按登记代次跟踪已发起）', async () => {
+    const id = 'exit-flush-samedoc-test'
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.useFakeTimers()
+    try {
+      const sameDoc = { ...DOC, name: '同对象稿' }
+      // 首次保存失败登记（代次 1）
+      invoke.mockImplementation(async () => {
+        throw new Error('磁盘已满')
+      })
+      await expect(enqueueSave(id, sameDoc)).rejects.toThrow('磁盘已满')
+      // 冲刷发起的重存在途挂起；期间另一入口（如编辑器防抖重试）以同一
+      // 文档对象再次排队（串行链上随后者落定才到达 invoke）
+      const pendingWrites: Array<{
+        resolve: () => void
+        reject: (e: Error) => void
+      }> = []
+      invoke.mockImplementation(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            pendingWrites.push({ resolve, reject })
+          }),
+      )
+      const flushing = flushPendingProjectSaves()
+      const racing = enqueueSave(id, sameDoc)
+      await vi.waitFor(() => expect(pendingWrites).toHaveLength(1))
+      // 冲刷自身重存成功（登记清除），随后的他入口保存失败 → 同对象重新登记
+      pendingWrites[0]!.resolve()
+      await vi.waitFor(() => expect(pendingWrites).toHaveLength(2))
+      pendingWrites[1]!.reject(new Error('磁盘仍满'))
+      await expect(racing).rejects.toThrow('磁盘仍满')
+      // 新代次登记必须被冲刷实际重存一次（按对象身份跟踪会误判为已发起）
+      await vi.waitFor(() => expect(pendingWrites).toHaveLength(3))
+      pendingWrites[2]!.resolve()
+      expect(await flushing).toEqual([])
+      expect(savedNames()).toHaveLength(4)
+      await vi.advanceTimersByTimeAsync(5000)
+    } finally {
+      error.mockRestore()
+      vi.useRealTimers()
+    }
+  })
 })

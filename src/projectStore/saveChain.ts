@@ -149,20 +149,27 @@ export function hasPendingProjectSaves(): boolean {
   return pendingRetryDocs.size > 0 || unsettledChains.size > 0
 }
 
-/** 发起所有尚未实际尝试过的登记重存：失败重排的登记持有同一文档对象，
- * 不产生重复尝试；陈旧登记的空操作触发不计入已发起（PR #174 评审）。 */
-function fireUnfiredRegistrations(fired: Map<string, ProjectContent>): void {
-  for (const [id, doc] of Array.from(pendingRetryDocs)) {
-    if (fired.get(id) === doc) continue
+/** 发起所有尚未实际尝试过的登记重存：已发起且未被其他入口取代（登记代次
+ * 未变）的跳过；陈旧登记的空操作触发不计入已发起（PR #174 评审）。 */
+function fireUnfiredRegistrations(fired: Map<string, number>): void {
+  for (const id of Array.from(pendingRetryDocs.keys())) {
+    const entry = retryTimers.get(id)
+    if (entry === undefined || fired.get(id) === entry.generation) continue
     if (!fireSaveRetry(id)) continue
-    fired.set(id, doc)
+    // 记录本次发起消费的代次：其自身失败重排为同一代次登记，不重复尝试
+    // （不紧循环）；其他入口（编辑器防抖重试/外部保存）失败产生的——即便
+    // 携带同一文档对象——新代次登记仍会再试一轮（PR #174 评审）
+    fired.set(id, saveGenerations.get(id) ?? 0)
   }
 }
 
-/** 仍有未发起过的登记（冲刷等待期间新登记的文档）需要再来一轮冲刷。 */
-function hasUnfiredRegistrations(fired: Map<string, ProjectContent>): boolean {
-  for (const [id, doc] of pendingRetryDocs) {
-    if (fired.get(id) !== doc) return true
+/** 仍有未发起过的登记需要再来一轮冲刷：登记代次不等于已发起代次即算
+ * （含他入口同文档对象重新登记）。无定时器的登记（其入队保存在途）由链
+ * 排空等待落定，不算未发起。 */
+function hasUnfiredRegistrations(fired: Map<string, number>): boolean {
+  for (const id of pendingRetryDocs.keys()) {
+    const entry = retryTimers.get(id)
+    if (entry !== undefined && fired.get(id) !== entry.generation) return true
   }
   return false
 }
@@ -170,14 +177,13 @@ function hasUnfiredRegistrations(fired: Map<string, ProjectContent>): boolean {
 /** 退出冲刷（issue #119）：登记在案的失败重试文档立即重存（不等 5s 后台
  * 节律）并等待全部链上动作落定，仍失败的登记原样保留并返回其项目 id——
  * 退出屏障据此阻断退出并提示。代次已前进的陈旧登记不重放（新保存拥有
- * 终态）；冲刷等待期间新登记的文档也各尝试一次，不紧循环：持续失败交给
- * 再次退出与后台节律接管。 */
+ * 终态）；冲刷等待期间新登记的文档也各尝试一次——已发起按登记代次跟踪
+ * （文档对象身份不足以区分两个携带同一对象的代次，PR #174 评审）。
+ * 不紧循环：冲刷自身发起的保存失败重排为同一代次，不重复尝试；持续失败
+ * 交给再次退出与后台节律接管。 */
 export async function flushPendingProjectSaves(): Promise<string[]> {
-  /** 已实际发起重存的登记，按登记的文档身份跟踪（PR #174 评审）：仅记录
-   * 项目 id 会把「陈旧登记的空操作触发」误标为已尝试——其取代者（更新的
-   * 保存）在冲刷等待期间失败重新登记（同 id、新文档）时将不再重存，首次
-   * 退出即被不必要阻断。 */
-  const fired = new Map<string, ProjectContent>()
+  /** 已实际发起重存的登记：项目 id → 本次发起消费的代次。 */
+  const fired = new Map<string, number>()
   for (;;) {
     fireUnfiredRegistrations(fired)
     while (unsettledChains.size > 0) {
