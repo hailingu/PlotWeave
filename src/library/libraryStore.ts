@@ -282,6 +282,10 @@ export const libraryStore = {
     return hit === undefined ? undefined : { ...hit }
   },
 
+  /** 是否有尚未落定的元数据更新（跨面板挂载共享）；真实撤回不能在
+   * 前序写入仍可能改变持久化值时被误判为无变化。 */
+  hasPendingUpdate: (id: string): boolean => updateQueues.has(id),
+
   remove: (id: string): Promise<void> => {
     if (isTauri) {
       return import('@tauri-apps/api/core').then(async ({ invoke }) => {

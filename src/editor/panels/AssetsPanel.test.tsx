@@ -189,14 +189,16 @@ describe('AssetsPanel 标签提交：保存同步与未变失焦（issue #124）
     expect(spies.updateMeta).not.toHaveBeenCalled()
   })
 
-  it('零写入守卫咨询门面持久化快照：基线不同即真实写入（PR #176 评审）', async () => {
+  it('零写入守卫咨询门面持久化快照：明确撤回才写入（PR #176 评审）', async () => {
     const spies = mockStore([asset()])
     // 跨挂载场景的组件侧投影：本地列表仍是 A，而门面快照（旧实例的
-    // 成功落盘）已是 B——未编辑失焦不得以陈旧本地值放行零写入
+    // 成功落盘）已是 B——用户明确改回 A 时不能放行零写入
     vi.spyOn(libraryStore, 'persistedSnapshot').mockReturnValue(
       asset({ tags: ['B值'] }),
     )
     const tags = await openTagsInput()
+    fireEvent.change(tags, { target: { value: '临时草稿' } })
+    fireEvent.change(tags, { target: { value: '主角' } })
     fireEvent.blur(tags)
     await act(async () => {})
     expect(spies.updateMeta).toHaveBeenCalledWith('a1', { tags: ['主角'] })
@@ -318,7 +320,7 @@ describe('AssetsPanel 标签提交：撤回保护（PR #176 评审）', () => {
     })
   })
 
-  it('在途提交目标不同时，回退失焦排队写回已保存值（回退先失焦）', async () => {
+  it('在途提交目标不同时，回退失焦提交已保存值（回退先失焦）', async () => {
     const spies = mockStore([asset()])
     const resolvers: Array<(a: LibraryAsset) => void> = []
     spies.updateMeta.mockImplementation(
@@ -329,8 +331,9 @@ describe('AssetsPanel 标签提交：撤回保护（PR #176 评审）', () => {
     fireEvent.blur(tags) // 提交「新标签」在途（resolvers[0]）
     fireEvent.change(tags, { target: { value: '主角' } })
     fireEvent.blur(tags) // 响应前回退失焦：本地 tags 仍是旧值
-    await act(async () => {}) // 提交链发出第一次提交，回退仍排队
-    expect(spies.updateMeta).toHaveBeenCalledTimes(1)
+    await act(async () => {})
+    // 组件立即把回退交给门面；真实 IPC 排序由 persistence 集成用例覆盖。
+    expect(spies.updateMeta).toHaveBeenCalledTimes(2)
 
     await act(async () => {
       resolvers[0](asset({ tags: ['新标签'] })) // 旧提交迟到落定

@@ -14,6 +14,10 @@ import { PW_LIBRARY_ASSET_MIME } from '../dragDrop'
 import { EditableName } from '../nodes/settings/NodeSettingsPanel'
 import { ConfirmDeleteDialog } from '../../home/Dialogs'
 
+/** 失焦身份：本轮真实编辑、已提交但仍保留的草稿、无草稿的已保存显示。
+ * draft 仅在有未解决失败时用于重试；值相等不代表未编辑。 */
+type AssetTagsIntent = 'edit' | 'draft' | 'none'
+
 /**
  * 左栏「资产」分段的真实实现（docs/ui-design.md §8.1）：
  * 应用级资产库跨项目复用，按影视美术部门分类——分类列表带计数，
@@ -191,7 +195,11 @@ function AssetKindList({
   readonly onBack: () => void
   readonly onPick: (kind: LibraryKind) => void
   readonly onRename: (asset: LibraryAsset, name: string) => void
-  readonly onTagsBlur: (asset: LibraryAsset, raw: string) => void
+  readonly onTagsBlur: (
+    asset: LibraryAsset,
+    raw: string,
+    intent: AssetTagsIntent,
+  ) => void
   readonly onRequestRemove: (asset: LibraryAsset) => void
   readonly onVisible: (asset: LibraryAsset) => void
 }) {
@@ -230,7 +238,7 @@ function AssetKindList({
           url={urls[asset.id]}
           onVisible={onVisible}
           onRename={(name) => onRename(asset, name)}
-          onTagsBlur={(raw) => onTagsBlur(asset, raw)}
+          onTagsBlur={(raw, intent) => onTagsBlur(asset, raw, intent)}
           onRequestRemove={() => onRequestRemove(asset)}
         />
       ))}
@@ -251,9 +259,18 @@ function sameTags(a: string[], b: string[]): boolean {
   return a.length === b.length && a.every((t, i) => t === b[i])
 }
 
+/** 成功或只读快照同步只合并 tags，保留并发乐观改名及其他字段。 */
+function mergeAssetTags(
+  list: LibraryAsset[],
+  id: string,
+  tags: string[],
+): LibraryAsset[] {
+  return list.map((asset) => (asset.id === id ? { ...asset, tags } : asset))
+}
+
 /** 标签提交状态族（AssetsPanel 拆分，PR #176 评审）：未变守卫、assetId
- * 级代际计数（迟到旧响应不回滚）、按资产串行的提交链（到达存储顺序 =
- * 发起顺序）、成功响应字段级合并同步，以及独立的标签错误横幅——按资产
+ * 级代际计数（迟到旧响应不回滚）、编辑立即进入门面队列（跨挂载保序）、
+ * 成功响应字段级合并同步，以及独立的标签错误横幅——按资产
  * 逐个记录未解决失败、自持展示状态，与导入/列表错误分属两行互不覆盖
  * （同文案也不误清）；任一资产成功或无写入的回退（放弃该次修改）都只
  * 解除自身错误，横幅刷新为其余未解决项。 */
@@ -268,9 +285,6 @@ function useAssetTagsCommit(
   /** 每资产未落定的最新写入目标（在途或已排队）：回退失焦值与本地
    * tags 相同而与它不同时，必须把回退排队写在其后（PR #176 评审，P1）。 */
   const pendingTags = useRef(new Map<string, string[]>())
-  /** 每资产提交链尾：串行发起（前一落定才发下一个），保证到达存储的
-   * 顺序与发起顺序一致（并发 IPC 的处理顺序无保证）。 */
-  const commitChains = useRef(new Map<string, Promise<unknown>>())
   /** 标签错误横幅（独立状态行）：归属以状态槽本身为身份，不以文案
    * 相等判断——跨操作同文案（如同一磁盘错误）互不误清（PR #176 评审）。 */
   const [tagsError, setTagsError] = useState<string | null>(null)
@@ -281,29 +295,20 @@ function useAssetTagsCommit(
     setTagsError(joinTagsErrors(tagsErrors.current) || null)
   }
 
-  /** 排队一次标签写入：串行链发起 + 代际守卫取用响应；成功只合并
+  /** 排队一次标签写入：立即进入门面队列 + 代际守卫取用响应；成功只合并
    * tags 字段并解除自身错误，失败逐资产记录。 */
   const enqueueTagsCommit = (assetId: string, tags: string[]) => {
     const seq = (tagsCommitSeq.current.get(assetId) ?? 0) + 1
     tagsCommitSeq.current.set(assetId, seq)
     pendingTags.current.set(assetId, tags)
-    const prev = commitChains.current.get(assetId) ?? Promise.resolve()
-    const run = prev
-      .catch(() => {})
-      .then(() => libraryStore.updateMeta(assetId, { tags }))
-    commitChains.current.set(assetId, run)
-    run
+    libraryStore
+      .updateMeta(assetId, { tags })
       .then((updated) => {
         // 持久化基线由门面快照推进（跨挂载共享）：被取代的成功也落盘
         if (tagsCommitSeq.current.get(assetId) !== seq) return
         pendingTags.current.delete(assetId)
         resolveTagsError(assetId)
-        // 成功同步本地只合并 tags 字段（issue #124，防清乐观改名）
-        setAssets((list) =>
-          list.map((a) =>
-            a.id === assetId ? { ...a, tags: updated.tags } : a,
-          ),
-        )
+        setAssets((list) => mergeAssetTags(list, assetId, updated.tags))
       })
       .catch((err) => {
         // 失败保留输入并逐资产记录；被取代的旧失败不再上报（代际守卫）
@@ -314,16 +319,29 @@ function useAssetTagsCommit(
       })
   }
 
-  const commitTags = (asset: LibraryAsset, raw: string) => {
+  const commitTags = (
+    asset: LibraryAsset,
+    raw: string,
+    intent: AssetTagsIntent,
+  ) => {
     const tags = parseAssetTags(raw)
-    // 输入未变化的失焦零写入（issue #124 回写来源）：须与本地值、门面
-    // 持久化基线（跨挂载共享，旧实例的成功落盘也可见）都一致且无目标
-    // 不同的在途提交；否则解除自身未解决错误即可
     const pending = pendingTags.current.get(asset.id)
     const persisted = libraryStore.persistedSnapshot(asset.id)?.tags
+    // 无本轮编辑只允许保留的失败草稿重试；陈旧显示只读同步，不能回写。
+    if (
+      intent !== 'edit' &&
+      !(intent === 'draft' && tagsErrors.current.has(asset.id))
+    ) {
+      if (pending === undefined && persisted) {
+        setAssets((list) => mergeAssetTags(list, asset.id, persisted))
+      }
+      return
+    }
+    // 真实回退还须排在旧挂载的更新后，不能只检查当前 hook 的 pending。
     if (
       sameTags(tags, asset.tags) &&
       sameTags(tags, persisted ?? asset.tags) &&
+      !libraryStore.hasPendingUpdate(asset.id) &&
       (pending === undefined || sameTags(pending, tags))
     ) {
       resolveTagsError(asset.id)
@@ -419,8 +437,8 @@ export default function AssetsPanel() {
  * 收敛到新值，堵住「重挂载显示陈旧值 + 未编辑失焦回写」的窗口；编辑中
  * （含提交后在响应到达前改回旧值的撤回）以显式 dirty 标记保护，迟到的
  * 保存响应不抢占草稿（PR #176 评审：不得以「草稿恰好等于旧保存值」推断
- * 未编辑）；失败未同步则草稿保留，用户输入不丢。提交语义不变：失焦把
- * 原始文本交给上层解析写库（未变化由上层守卫跳过）。 */
+ * 未编辑）；失败未同步则草稿保留，用户输入不丢。失焦携带编辑/草稿
+ * 身份，上层仅对本轮编辑或未解决失败的保留草稿判断写入。 */
 function AssetTagsInput({
   tags,
   ariaLabel,
@@ -428,7 +446,7 @@ function AssetTagsInput({
 }: {
   readonly tags: string[]
   readonly ariaLabel: string
-  readonly onCommit: (raw: string) => void
+  readonly onCommit: (raw: string, intent: AssetTagsIntent) => void
 }) {
   const saved = tags.join('，')
   /** null = 无草稿，显示跟随已保存值。 */
@@ -451,7 +469,8 @@ function AssetTagsInput({
         setDirty(true)
       }}
       onBlur={(e) => {
-        onCommit(e.target.value)
+        const unchangedIntent = draft === null ? 'none' : 'draft'
+        onCommit(e.target.value, dirty ? 'edit' : unchangedIntent)
         setDirty(false)
       }}
     />
@@ -472,7 +491,7 @@ function AssetRow({
   readonly url?: string
   readonly onVisible: (asset: LibraryAsset) => void
   readonly onRename: (name: string) => void
-  readonly onTagsBlur: (raw: string) => void
+  readonly onTagsBlur: (raw: string, intent: AssetTagsIntent) => void
   readonly onRequestRemove: () => void
 }) {
   return (
