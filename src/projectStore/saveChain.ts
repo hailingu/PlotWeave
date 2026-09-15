@@ -23,6 +23,10 @@ const saveGenerations = new Map<string, number>()
  * 与冲刷等待面。链条 Promise 长期留存于 saveChains（落定后也不清除），
  * 不能据此判断在途，须另行跟踪。 */
 const unsettledChains = new Set<Promise<unknown>>()
+/** 最近经重试确认落盘的登记文档（按 id，PR #174 评审）：同一文档对象的
+ * 后续保存失败是冗余重写失败——磁盘已持有该内容，不再登记重试，避免
+ * 假性「待保存」阻断退出。新内容（不同对象）照常登记。 */
+const retryPersistedDocs = new Map<string, ProjectContent>()
 /** 删除墓碑：删除开始即立——之后为该项目排队的任何保存被吸收，迟到的
  * 合并冲刷/重试不得重建 JSON 复活用户刚删的项目；删除落定（成功或失败）
  * 后清除，失败时项目仍在、可继续保存。 */
@@ -236,16 +240,23 @@ export function enqueueSave(id: string, doc: ProjectContent): Promise<void> {
     try {
       await tauriSave(id, doc)
       // 任何成功保存都取代并清除既有登记（陈旧登记不得残留）；仅当落盘的
-      // 正是登记文档时通知订阅者（画布闸据此清脏，PR #174 评审）
+      // 正是登记文档时通知订阅者并记忆落盘文档（画布闸据此清脏、冗余
+      // 重写失败据此免登记，PR #174 评审）
       const registered = pendingRetryDocs.get(id)
       if (registered !== undefined) {
-        if (registered === doc) notifyRetryPersisted(doc)
+        if (registered === doc) {
+          retryPersistedDocs.set(id, doc)
+          notifyRetryPersisted(doc)
+        }
         pendingRetryDocs.delete(id)
       }
       // 落定通知放在失败登记清除之后：此刻磁盘已是本次内容且无待重试文档，
       // 订阅方（首页摘要刷新）据此读到的一定是最终状态（issue #101）
       notifyProjectSaved(id)
     } catch (err) {
+      // 同一文档对象已经重试落盘（PR #174 评审）：本次是冗余重写失败，
+      // 磁盘已持有该内容——不登记重试、不排定时器，退出屏障不得因此阻断
+      if (retryPersistedDocs.get(id) === doc) throw err
       pendingRetryDocs.set(id, doc)
       // 新代次失败接管定时器（scheduleSaveRetry 自清旧登记）：旧代次定时器
       // 留着会在触发时因代次不符自灭，最新登记将无人重试（编辑器已卸载时
@@ -293,6 +304,7 @@ export function enqueueDelete(id: string): Promise<void> {
   const recovery = next
     .finally(() => {
       deletingIds.delete(id)
+      retryPersistedDocs.delete(id)
     })
     .then(
       () => {

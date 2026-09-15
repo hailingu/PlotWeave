@@ -307,6 +307,46 @@ describe('退出冲刷：就绪探针与立即重存（issue #119）', () => {
   })
 })
 
+describe('退出冲刷：重试落盘后的冗余登记抑制（PR #174 评审）', () => {
+  afterEach(() => vi.clearAllMocks())
+
+  it('重试落盘后的同对象冗余保存失败：不登记重试、不阻断退出（PR #174 评审）', async () => {
+    const id = 'retry-persisted-dup-test'
+    const doc = { ...DOC, name: '同对象稿' }
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.useFakeTimers()
+    try {
+      invoke.mockImplementation(async () => {
+        throw new Error('磁盘已满')
+      })
+      await expect(enqueueSave(id, doc)).rejects.toThrow('磁盘已满')
+      // 冲刷发起的重试成功：内容落盘、登记清除
+      invoke.mockImplementation(async () => undefined)
+      expect(await flushPendingProjectSaves()).toEqual([])
+      // 同一文档对象的冗余重复保存再失败：磁盘已持有该内容，不得再登记
+      invoke.mockImplementation(async () => {
+        throw new Error('间歇故障')
+      })
+      await expect(enqueueSave(id, doc)).rejects.toThrow('间歇故障')
+      expect(hasPendingProjectSaves()).toBe(false)
+      expect(await flushPendingProjectSaves()).toEqual([])
+      // 后台 5s 节律也无登记可重试（三次 invoke：首次失败 + 重试成功 + 冗余失败）
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(savedNames()).toHaveLength(3)
+      // 不同内容（新对象）的失败照常登记重试
+      await expect(enqueueSave(id, { ...DOC, name: '新稿' })).rejects.toThrow(
+        '间歇故障',
+      )
+      expect(hasPendingProjectSaves()).toBe(true)
+    } finally {
+      invoke.mockImplementation(async () => undefined)
+      await flushPendingProjectSaves()
+      error.mockRestore()
+      vi.useRealTimers()
+    }
+  })
+})
+
 describe('退出冲刷：重试仍失败的阻断与后台节律（issue #119）', () => {
   afterEach(() => vi.clearAllMocks())
 
@@ -418,7 +458,7 @@ describe('退出冲刷：代次守卫（陈旧稿不得覆盖新内容，issue #
 describe('退出冲刷：他入口重试与冲刷并发（同文档对象新代次，PR #174 评审）', () => {
   afterEach(() => vi.clearAllMocks())
 
-  it('flushPendingProjectSaves：他入口以同一文档对象重新登记（新代次）仍重存一次（PR #174 评审：按登记代次跟踪已发起）', async () => {
+  it('他入口同对象保存与冲刷重存并发：重存先成功，他入口失败免登记（磁盘已持有该内容）', async () => {
     const id = 'exit-flush-samedoc-test'
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     vi.useFakeTimers()
@@ -444,17 +484,17 @@ describe('退出冲刷：他入口重试与冲刷并发（同文档对象新代�
       const flushing = flushPendingProjectSaves()
       const racing = enqueueSave(id, sameDoc)
       await vi.waitFor(() => expect(pendingWrites).toHaveLength(1))
-      // 冲刷自身重存成功（登记清除），随后的他入口保存失败 → 同对象重新登记
+      // 冲刷自身重存成功（登记清除、落盘记忆），随后的他入口保存失败：
+      // 同对象内容已在磁盘，免登记重试（PR #174 评审：不假性阻断退出）
       pendingWrites[0]!.resolve()
       await vi.waitFor(() => expect(pendingWrites).toHaveLength(2))
       pendingWrites[1]!.reject(new Error('磁盘仍满'))
       await expect(racing).rejects.toThrow('磁盘仍满')
-      // 新代次登记必须被冲刷实际重存一次（按对象身份跟踪会误判为已发起）
-      await vi.waitFor(() => expect(pendingWrites).toHaveLength(3))
-      pendingWrites[2]!.resolve()
       expect(await flushing).toEqual([])
-      expect(savedNames()).toHaveLength(4)
+      // 无第三次写入、无登记：5s 节律与退出冲刷均无物可重试
+      expect(pendingWrites).toHaveLength(2)
       await vi.advanceTimersByTimeAsync(5000)
+      expect(pendingWrites).toHaveLength(2)
     } finally {
       error.mockRestore()
       vi.useRealTimers()
