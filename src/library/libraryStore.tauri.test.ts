@@ -205,6 +205,9 @@ describe('libraryStore Tauri 路径：put', () => {
 })
 
 describe('libraryStore Tauri 路径：updateMeta / remove', () => {
+  /** 宏任务节拍：清空门面队列与动态 import 的微任务链。 */
+  const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
+
   it('补丁透传给 update_library_asset；无效返回抛错', async () => {
     invoke.mockResolvedValueOnce(entry({ id: 'la-1', name: '改名.png' }))
     const { libraryStore } = await load()
@@ -229,6 +232,89 @@ describe('libraryStore Tauri 路径：updateMeta / remove', () => {
       'delete_library_asset',
       { id: 'la-1' },
     ])
+  })
+
+  it('同资产 updateMeta 串行：前一落定前后一不发起 invoke（PR #176 评审）', async () => {
+    const { libraryStore } = await load()
+    let resolveFirst!: (v: unknown) => void
+    invoke.mockImplementationOnce(
+      () => new Promise((res) => (resolveFirst = res)),
+    )
+    invoke.mockImplementationOnce(() => Promise.resolve(entry({ tags: ['C'] })))
+    const first = libraryStore.updateMeta('la-1', { tags: ['B'] })
+    await tick() // 队列发出第一次 invoke（挂起）
+    const second = libraryStore.updateMeta('la-1', { tags: ['C'] })
+    await tick()
+    expect(invoke).toHaveBeenCalledTimes(1) // 第二次在第一次落定前排队不发起
+
+    resolveFirst(entry({ tags: ['B'] }))
+    await expect(first).resolves.toMatchObject({ tags: ['B'] })
+    await expect(second).resolves.toMatchObject({ tags: ['C'] })
+    expect(invoke).toHaveBeenCalledTimes(2)
+  })
+
+  it('不同资产的 updateMeta 互不阻塞', async () => {
+    const { libraryStore } = await load()
+    let resolveA!: (v: unknown) => void
+    invoke.mockImplementationOnce(() => new Promise((res) => (resolveA = res)))
+    invoke.mockImplementationOnce(() =>
+      Promise.resolve(entry({ id: 'la-2', name: '乙' })),
+    )
+    const first = libraryStore.updateMeta('la-1', { name: '甲' })
+    await tick()
+    const second = libraryStore.updateMeta('la-2', { name: '乙' })
+    await tick()
+    expect(invoke).toHaveBeenCalledTimes(2) // la-2 不等 la-1 落定
+
+    resolveA(entry({ name: '甲' }))
+    await expect(first).resolves.toMatchObject({ name: '甲' })
+    await expect(second).resolves.toMatchObject({ name: '乙' })
+  })
+
+  it('updateMeta 成功记录持久化快照，跨调用方可见；remove 清除（PR #176 评审）', async () => {
+    invoke.mockResolvedValueOnce(entry({ tags: ['B'] }))
+    const { libraryStore } = await load()
+    await libraryStore.updateMeta('la-1', { tags: ['B'] })
+    expect(libraryStore.persistedSnapshot('la-1')?.tags).toEqual(['B'])
+    expect(libraryStore.persistedSnapshot('la-2')).toBeUndefined()
+
+    invoke.mockResolvedValue(undefined)
+    await libraryStore.remove('la-1')
+    expect(libraryStore.persistedSnapshot('la-1')).toBeUndefined()
+  })
+})
+
+describe('libraryStore Tauri 路径：删除队列隔离与恢复', () => {
+  it('一个资产更新挂起不阻塞另一个资产删除', async () => {
+    const { libraryStore } = await load()
+    let release!: (value: unknown) => void
+    invoke.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve
+        }),
+    )
+    invoke.mockResolvedValueOnce(undefined)
+    const update = libraryStore.updateMeta('la-1', { tags: ['B'] })
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(1))
+    await expect(libraryStore.remove('la-2')).resolves.toBeUndefined()
+    expect(libraryStore.hasPendingOperation('la-1')).toBe(true)
+    expect(libraryStore.hasPendingOperation('la-2')).toBe(false)
+    release(entry({ tags: ['B'] }))
+    await expect(update).resolves.toMatchObject({ tags: ['B'] })
+    expect(libraryStore.persistedSnapshot('la-1')?.tags).toEqual(['B'])
+  })
+
+  it('删除失败不阻塞已排队的后续更新，落定后可回收队列', async () => {
+    const { libraryStore } = await load()
+    invoke.mockRejectedValueOnce(new Error('删除失败'))
+    invoke.mockResolvedValueOnce(entry({ tags: ['C'] }))
+    const removal = libraryStore.remove('la-1')
+    const update = libraryStore.updateMeta('la-1', { tags: ['C'] })
+    await expect(removal).rejects.toThrow('删除失败')
+    await expect(update).resolves.toMatchObject({ tags: ['C'] })
+    expect(libraryStore.persistedSnapshot('la-1')?.tags).toEqual(['C'])
+    expect(libraryStore.hasPendingOperation('la-1')).toBe(false)
   })
 })
 

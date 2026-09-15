@@ -99,6 +99,22 @@ describe('libraryStore 内存回退：remove', () => {
     expect(after.some((a) => a.id === asset.id)).toBe(false)
     await expect(libraryStore.remove(asset.id)).resolves.toBeUndefined()
   })
+
+  it('连续更新后删除按调用顺序落定，成功快照随删除清除', async () => {
+    const asset = await putSample('更新后删除.png')
+    const first = libraryStore.updateMeta(asset.id, { tags: ['B'] })
+    const second = libraryStore.updateMeta(asset.id, { tags: ['C'] })
+    const removal = libraryStore.remove(asset.id)
+    await expect(Promise.all([first, second, removal])).resolves.toMatchObject([
+      { tags: ['B'] },
+      { tags: ['C'] },
+      undefined,
+    ])
+    expect(
+      (await libraryStore.list()).some((item) => item.id === asset.id),
+    ).toBe(false)
+    expect(libraryStore.persistedSnapshot(asset.id)).toBeUndefined()
+  })
 })
 
 describe('libraryStore 内存回退：mediaUrl', () => {

@@ -14,6 +14,10 @@ import { PW_LIBRARY_ASSET_MIME } from '../dragDrop'
 import { EditableName } from '../nodes/settings/NodeSettingsPanel'
 import { ConfirmDeleteDialog } from '../../home/Dialogs'
 
+/** 失焦身份：本轮真实编辑、已提交但仍保留的草稿、无草稿的已保存显示。
+ * draft 仅在有未解决失败时用于重试；值相等不代表未编辑。 */
+type AssetTagsIntent = 'edit' | 'draft' | 'none'
+
 /**
  * 左栏「资产」分段的真实实现（docs/ui-design.md §8.1）：
  * 应用级资产库跨项目复用，按影视美术部门分类——分类列表带计数，
@@ -191,7 +195,11 @@ function AssetKindList({
   readonly onBack: () => void
   readonly onPick: (kind: LibraryKind) => void
   readonly onRename: (asset: LibraryAsset, name: string) => void
-  readonly onTagsBlur: (asset: LibraryAsset, raw: string) => void
+  readonly onTagsBlur: (
+    asset: LibraryAsset,
+    raw: string,
+    intent: AssetTagsIntent,
+  ) => void
   readonly onRequestRemove: (asset: LibraryAsset) => void
   readonly onVisible: (asset: LibraryAsset) => void
 }) {
@@ -230,12 +238,133 @@ function AssetKindList({
           url={urls[asset.id]}
           onVisible={onVisible}
           onRename={(name) => onRename(asset, name)}
-          onTagsBlur={(raw) => onTagsBlur(asset, raw)}
+          onTagsBlur={(raw, intent) => onTagsBlur(asset, raw, intent)}
           onRequestRemove={() => onRequestRemove(asset)}
         />
       ))}
     </>
   )
+}
+
+/** 解析标签输入（§8.1 标签自由维度）：中英文逗号分隔、去空白、滤空段。 */
+function parseAssetTags(raw: string): string[] {
+  return raw
+    .split(/[,，]/)
+    .map((t) => t.trim())
+    .filter((t) => t !== '')
+}
+
+/** 标签逐项相等（顺序敏感）：未变化的失焦据此跳过写库（issue #124）。 */
+function sameTags(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((t, i) => t === b[i])
+}
+
+/** 成功或只读快照同步只合并 tags，保留并发乐观改名及其他字段。 */
+function mergeAssetTags(
+  list: LibraryAsset[],
+  id: string,
+  tags: string[],
+): LibraryAsset[] {
+  return list.map((asset) => (asset.id === id ? { ...asset, tags } : asset))
+}
+
+/** 标签失败的独立状态槽：按资产记录、重试/回退/删除只解除自身，
+ * 与导入及删除的共享错误行互不覆盖。 */
+function useAssetTagsErrors() {
+  const tagsErrors = useRef(new Map<string, string>())
+  const [tagsError, setTagsError] = useState<string | null>(null)
+  const hasTagsError = (id: string) => tagsErrors.current.has(id)
+  const recordTagsError = (id: string, error: unknown) => {
+    tagsErrors.current.set(id, String(error))
+    setTagsError(joinTagsErrors(tagsErrors.current))
+  }
+  const resolveTagsError = (id: string) => {
+    if (!tagsErrors.current.delete(id)) return
+    setTagsError(joinTagsErrors(tagsErrors.current) || null)
+  }
+  return { tagsError, hasTagsError, recordTagsError, resolveTagsError }
+}
+
+/** 标签提交状态族（AssetsPanel 拆分，PR #176 评审）：未变守卫、assetId
+ * 级代际计数（迟到旧响应不回滚）、编辑立即进入门面队列（跨挂载保序）、
+ * 成功响应字段级合并同步，以及独立的标签错误横幅——按资产
+ * 逐个记录未解决失败、自持展示状态，与导入/列表错误分属两行互不覆盖
+ * （同文案也不误清）；任一资产成功或无写入的回退（放弃该次修改）都只
+ * 解除自身错误，横幅刷新为其余未解决项。 */
+function useAssetTagsCommit(
+  setAssets: (fn: (list: LibraryAsset[]) => LibraryAsset[]) => void,
+) {
+  /** 提交代际（issue #124）：assetId → 最新已发起提交的序号。 */
+  const tagsCommitSeq = useRef(new Map<string, number>())
+  const { tagsError, hasTagsError, recordTagsError, resolveTagsError } =
+    useAssetTagsErrors()
+  /** 每资产未落定的最新写入目标（在途或已排队）：回退失焦值与本地
+   * tags 相同而与它不同时，必须把回退排队写在其后（PR #176 评审，P1）。 */
+  const pendingTags = useRef(new Map<string, string[]>())
+
+  /** 确认删除时终结该行标签编辑：失效在途响应，并解除该资产的错误。 */
+  const forgetTags = (id: string) => {
+    tagsCommitSeq.current.set(id, (tagsCommitSeq.current.get(id) ?? 0) + 1)
+    pendingTags.current.delete(id)
+    resolveTagsError(id)
+  }
+
+  /** 排队一次标签写入：立即进入门面队列 + 代际守卫取用响应；成功只合并
+   * tags 字段并解除自身错误，失败逐资产记录。 */
+  const enqueueTagsCommit = (assetId: string, tags: string[]) => {
+    const seq = (tagsCommitSeq.current.get(assetId) ?? 0) + 1
+    tagsCommitSeq.current.set(assetId, seq)
+    pendingTags.current.set(assetId, tags)
+    libraryStore
+      .updateMeta(assetId, { tags })
+      .then((updated) => {
+        // 持久化基线由门面快照推进（跨挂载共享）：被取代的成功也落盘
+        if (tagsCommitSeq.current.get(assetId) !== seq) return
+        pendingTags.current.delete(assetId)
+        resolveTagsError(assetId)
+        setAssets((list) => mergeAssetTags(list, assetId, updated.tags))
+      })
+      .catch((err) => {
+        // 失败保留输入并逐资产记录；被取代的旧失败不再上报（代际守卫）
+        if (tagsCommitSeq.current.get(assetId) !== seq) return
+        pendingTags.current.delete(assetId)
+        recordTagsError(assetId, err)
+      })
+  }
+
+  const commitTags = (
+    asset: LibraryAsset,
+    raw: string,
+    intent: AssetTagsIntent,
+  ) => {
+    const tags = parseAssetTags(raw)
+    const pending = pendingTags.current.get(asset.id)
+    const persisted = libraryStore.persistedSnapshot(asset.id)?.tags
+    // 无本轮编辑只允许保留的失败草稿重试；陈旧显示只读同步，不能回写。
+    if (intent !== 'edit' && !(intent === 'draft' && hasTagsError(asset.id))) {
+      if (pending === undefined && persisted) {
+        setAssets((list) => mergeAssetTags(list, asset.id, persisted))
+      }
+      return
+    }
+    // 真实回退还须排在旧挂载的更新后，不能只检查当前 hook 的 pending。
+    if (
+      sameTags(tags, asset.tags) &&
+      sameTags(tags, persisted ?? asset.tags) &&
+      !libraryStore.hasPendingOperation(asset.id) &&
+      (pending === undefined || sameTags(pending, tags))
+    ) {
+      resolveTagsError(asset.id)
+      return
+    }
+    enqueueTagsCommit(asset.id, tags)
+  }
+  return { commitTags, tagsError, forgetTags }
+}
+
+/** 把各资产未解决的标签失败合并为单条横幅文案（分号分隔）。 */
+function joinTagsErrors(errors: Map<string, string>): string {
+  return [...errors.values()].join('；')
 }
 
 export default function AssetsPanel() {
@@ -251,19 +380,12 @@ export default function AssetsPanel() {
     setError,
     refreshUrl,
   )
+  const { commitTags, tagsError, forgetTags } = useAssetTagsCommit(setAssets)
 
-  const commitTags = (asset: LibraryAsset, raw: string) => {
-    const tags = raw
-      .split(/[,，]/)
-      .map((t) => t.trim())
-      .filter((t) => t !== '')
-    libraryStore
-      .updateMeta(asset.id, { tags })
-      .catch((err) => setError(String(err)))
-  }
-
-  const remove = (asset: LibraryAsset) =>
+  const remove = (asset: LibraryAsset) => {
+    forgetTags(asset.id)
     removeLibraryAsset(asset, urls, setAssets, setUrls, setError)
+  }
 
   return (
     <div className="pw-assets">
@@ -305,6 +427,9 @@ export default function AssetsPanel() {
       )}
       {busy && <div className="pw-assets-hint">导入中…</div>}
       {error && <div className="pw-assets-hint pw-assets-error">{error}</div>}
+      {tagsError && (
+        <div className="pw-assets-hint pw-assets-error">{tagsError}</div>
+      )}
       {pendingRemove !== null && (
         <RemoveAssetDialog
           asset={pendingRemove}
@@ -316,6 +441,51 @@ export default function AssetsPanel() {
         />
       )}
     </div>
+  )
+}
+
+/** 标签输入（issue #124）：受控草稿 + 跟随已保存值收敛。已保存 tags 变化
+ * 落地（提交成功同步、迟到响应）时，无未提交编辑（!dirty）的输入框显示
+ * 收敛到新值，堵住「重挂载显示陈旧值 + 未编辑失焦回写」的窗口；编辑中
+ * （含提交后在响应到达前改回旧值的撤回）以显式 dirty 标记保护，迟到的
+ * 保存响应不抢占草稿（PR #176 评审：不得以「草稿恰好等于旧保存值」推断
+ * 未编辑）；失败未同步则草稿保留，用户输入不丢。失焦携带编辑/草稿
+ * 身份，上层仅对本轮编辑或未解决失败的保留草稿判断写入。 */
+function AssetTagsInput({
+  tags,
+  ariaLabel,
+  onCommit,
+}: {
+  readonly tags: string[]
+  readonly ariaLabel: string
+  readonly onCommit: (raw: string, intent: AssetTagsIntent) => void
+}) {
+  const saved = tags.join('，')
+  /** null = 无草稿，显示跟随已保存值。 */
+  const [draft, setDraft] = useState<string | null>(null)
+  /** 编辑中：失焦提交后为 false（已保存值变化可收敛显示），true 不抢占。 */
+  const [dirty, setDirty] = useState(false)
+  const [prevSaved, setPrevSaved] = useState(saved)
+  if (saved !== prevSaved) {
+    setPrevSaved(saved)
+    if (!dirty) setDraft(null)
+  }
+  return (
+    <input
+      className="pw-asset-tags"
+      value={draft ?? saved}
+      placeholder="标签（逗号分隔，可选）"
+      aria-label={ariaLabel}
+      onChange={(e) => {
+        setDraft(e.target.value)
+        setDirty(true)
+      }}
+      onBlur={(e) => {
+        const unchangedIntent = draft === null ? 'none' : 'draft'
+        onCommit(e.target.value, dirty ? 'edit' : unchangedIntent)
+        setDirty(false)
+      }}
+    />
   )
 }
 
@@ -333,7 +503,7 @@ function AssetRow({
   readonly url?: string
   readonly onVisible: (asset: LibraryAsset) => void
   readonly onRename: (name: string) => void
-  readonly onTagsBlur: (raw: string) => void
+  readonly onTagsBlur: (raw: string, intent: AssetTagsIntent) => void
   readonly onRequestRemove: () => void
 }) {
   return (
@@ -345,12 +515,10 @@ function AssetRow({
           ariaLabel={`资产名 ${asset.name}`}
           onChange={onRename}
         />
-        <input
-          className="pw-asset-tags"
-          defaultValue={asset.tags.join('，')}
-          placeholder="标签（逗号分隔，可选）"
-          aria-label={`资产标签 ${asset.name}`}
-          onBlur={(e) => onTagsBlur(e.target.value)}
+        <AssetTagsInput
+          tags={asset.tags}
+          ariaLabel={`资产标签 ${asset.name}`}
+          onCommit={onTagsBlur}
         />
       </div>
       <button
