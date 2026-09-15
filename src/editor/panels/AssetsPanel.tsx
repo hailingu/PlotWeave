@@ -254,20 +254,21 @@ function sameTags(a: string[], b: string[]): boolean {
 }
 
 /** 标签提交状态族（AssetsPanel 拆分，PR #176 评审）：未变守卫、assetId
- * 级代际计数（迟到旧响应不回滚）、成功响应字段级合并同步，以及资产关联
- * 的错误横幅——成功只清除本资产先前写入的失败提示，不掩盖其他资产或
- * 操作的错误。 */
+ * 级代际计数（迟到旧响应不回滚）、成功响应字段级合并同步，以及按资产
+ * 逐个记录的未解决错误——任一资产成功只解除自身，横幅刷新为其余未
+ * 解决项（无剩余才清除），不掩盖其他资产或操作的错误。 */
 function useAssetTagsCommit(
   setAssets: (fn: (list: LibraryAsset[]) => LibraryAsset[]) => void,
   setError: Dispatch<SetStateAction<string | null>>,
 ) {
   /** 提交代际（issue #124）：assetId → 最新已发起提交的序号。 */
   const tagsCommitSeq = useRef(new Map<string, number>())
-  /** 最近一次由标签提交写入横幅的失败（assetId + 文案）：跨资产并发时
-   * 无关资产的成功不得清除它（PR #176 评审）。 */
-  const lastTagsError = useRef<{ assetId: string; message: string } | null>(
-    null,
-  )
+  /** 各资产未解决的标签失败（assetId → 错误文案）：多资产并发失败时
+   * 单个资产成功不得隐藏其余资产的未解决错误（PR #176 评审）。 */
+  const tagsErrors = useRef(new Map<string, string>())
+  /** 标签路径最近写入横幅的内容（null = 无）：成功刷新/清除前以函数式
+   * 比较确认横幅仍显示本路径内容，被其他操作覆盖则不触碰。 */
+  const tagsBanner = useRef<string | null>(null)
 
   const commitTags = (asset: LibraryAsset, raw: string) => {
     const tags = parseAssetTags(raw)
@@ -280,11 +281,15 @@ function useAssetTagsCommit(
       .updateMeta(asset.id, { tags })
       .then((updated) => {
         if (tagsCommitSeq.current.get(asset.id) !== seq) return
-        const own = lastTagsError.current
-        if (own !== null && own.assetId === asset.id) {
-          // 仅清除本资产先前写入的失败提示；横幅已被其他错误覆盖则不动
-          setError((prev) => (prev === own.message ? null : prev))
-          lastTagsError.current = null
+        if (tagsErrors.current.delete(asset.id)) {
+          // 本资产曾有未解决失败：横幅仍显示本路径内容时刷新为剩余
+          // 未解决项（无剩余才清除），其余失败不被这次成功掩盖
+          const shown = tagsBanner.current
+          if (shown !== null) {
+            const next = joinTagsErrors(tagsErrors.current) || null
+            tagsBanner.current = next
+            setError((prev) => (prev === shown ? next : prev))
+          }
         }
         // 成功保存同步本地状态（issue #124 验收）：只合并 tags 字段——
         // 响应是全量条目，整体替换会清掉并发的乐观改名
@@ -295,15 +300,21 @@ function useAssetTagsCommit(
         )
       })
       .catch((err) => {
-        // 失败保留输入（AssetTagsInput 草稿不丢）并提示；被更新提交
-        // 取代的旧失败不再上报，横幅始终反映最新一次提交的结果
+        // 失败保留输入（AssetTagsInput 草稿不丢）并逐资产记录提示；
+        // 被更新提交取代的旧失败不再上报（代际守卫）
         if (tagsCommitSeq.current.get(asset.id) !== seq) return
-        const message = String(err)
-        lastTagsError.current = { assetId: asset.id, message }
-        setError(message)
+        tagsErrors.current.set(asset.id, String(err))
+        const joined = joinTagsErrors(tagsErrors.current)
+        tagsBanner.current = joined
+        setError(joined)
       })
   }
   return { commitTags }
+}
+
+/** 把各资产未解决的标签失败合并为单条横幅文案（分号分隔）。 */
+function joinTagsErrors(errors: Map<string, string>): string {
+  return [...errors.values()].join('；')
 }
 
 export default function AssetsPanel() {

@@ -299,6 +299,44 @@ describe('AssetsPanel 标签提交：错误横幅资产关联（issue #124 评�
     expect(screen.queryByText(/a1 写入失败/)).toBeNull()
     expect(spies.updateMeta).toHaveBeenCalledTimes(3)
   })
+
+  it('按资产保留未解决错误：单个资产重试成功后其余失败仍显示（PR #176 评审）', async () => {
+    const spies = mockStore([asset(), asset({ id: 'a2', name: '男主侧面' })])
+    const failIds = new Set(['a1', 'a2'])
+    spies.updateMeta.mockImplementation((id, patch) =>
+      failIds.has(id)
+        ? Promise.reject(new Error(`${id} 写入失败`))
+        : Promise.resolve(asset({ id, tags: patch.tags ?? [] })),
+    )
+    render(<AssetsPanel />)
+    fireEvent.click(await screen.findByText('角色设定'))
+    const t1 = (await screen.findByLabelText(
+      '资产标签 女主正面',
+    )) as HTMLInputElement
+    const t2 = (await screen.findByLabelText(
+      '资产标签 男主侧面',
+    )) as HTMLInputElement
+
+    fireEvent.change(t1, { target: { value: 'A新' } })
+    fireEvent.blur(t1) // a1 失败
+    expect(await screen.findByText(/a1 写入失败/)).toBeTruthy()
+    fireEvent.change(t2, { target: { value: 'B新' } })
+    fireEvent.blur(t2) // a2 也失败：横幅并示两资产错误
+    expect(await screen.findByText(/a2 写入失败/)).toBeTruthy()
+    expect(screen.getByText(/a1 写入失败/)).toBeTruthy()
+
+    failIds.delete('a2') // a2 重试可成功
+    fireEvent.blur(t2)
+    await act(async () => {})
+    // a2 的成功只解除自身：a1 未解决失败仍在横幅
+    expect(screen.getByText(/a1 写入失败/)).toBeTruthy()
+    expect(screen.queryByText(/a2 写入失败/)).toBeNull()
+
+    failIds.delete('a1')
+    fireEvent.blur(t1) // a1 最后重试成功：横幅清空
+    await act(async () => {})
+    expect(screen.queryByText(/a1 写入失败/)).toBeNull()
+  })
 })
 
 describe('AssetsPanel 导入', () => {
