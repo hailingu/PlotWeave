@@ -846,6 +846,14 @@ describe('useDebouncedSave（退出冲刷闸：持久化覆盖合并冗余保存
     })
     expect(onSave).toHaveBeenCalledTimes(2)
   })
+})
+
+describe('useDebouncedSave（退出冲刷闸：失败按提交水位登记，PR #174 评审）', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => {
+    registerCanvasFlushGate(null)
+    vi.useRealTimers()
+  })
 
   it('排队中的 A 冗余保存失败前已有更新编辑 B：失败按提交水位登记，A 完成不兑现 B（PR #174 评审）', async () => {
     const calls: Array<{
