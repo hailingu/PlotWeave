@@ -4,12 +4,11 @@
  * onMoveEnd 更新 ref 后经 markDirty 显式标脏换入最新文档——纯平移/缩放也
  * 落盘，卸载冲刷与后续内容保存拿到的都是最新视口（不落 stale 值）。
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import type { Viewport } from '@xyflow/react'
 import { errorBannerMessage } from './errorBannerMessage'
 import { sessionDoc } from './sessionDoc'
 import { useDebouncedSave } from './useDebouncedSave'
-import { onRetryPersisted } from '../projectStore/saveChain'
 import type { EditorDocument, EditorProjectContent } from './useEditorDocument'
 import type { ProjectContent } from '../model/content'
 
@@ -108,43 +107,24 @@ export function useEditorPersistence(
     setSaveError(errorBannerMessage(err))
   }, [])
 
-  // 包装 onSave 记录失败时提交的文档（PR #174 评审）：保存链对同一登记
-  // 文档重存成功时据此对齐完成语义（兑现等待者、清除失败横幅）。
-  const lastFailedDocRef = useRef<ProjectContent | null>(null)
-  const saveThroughBarrier = useCallback(
-    async (docToSave: ProjectContent) => {
-      try {
-        await onSave(docToSave)
-        lastFailedDocRef.current = null
-      } catch (err) {
-        lastFailedDocRef.current = docToSave
-        throw err
-      }
-    },
-    [onSave],
-  )
-
   const { wrappedOnSave, whenCanvasCommitted, markExternallyPersisted } =
-    useCanvasCommitBarrier(saveThroughBarrier)
+    useCanvasCommitBarrier(onSave)
+
+  // 链上重存成功同一登记文档且闸内无更新编辑（闸守卫通过，issue #119，
+  // PR #174 评审）：画布已落盘，完成语义与常规保存成功对齐——兑现 AI
+  // 执行回执等待者、清除失败横幅。守卫在 useDebouncedSave 的订阅内（按
+  // 最新文档身份过滤），B 等更新编辑的等待者只由其真实保存兑现。
+  const handleRetryPersistedSuccess = useCallback(() => {
+    markExternallyPersisted()
+    handleSaveResult(null)
+  }, [markExternallyPersisted, handleSaveResult])
+
   const markDirty = useDebouncedSave(
     buildSessionDoc(project, doc, doc.viewportRef.current),
     wrappedOnSave,
     SAVE_DEBOUNCE_MS,
     handleSaveResult,
-  )
-
-  // 链上重存成功同一登记文档（issue #119，PR #174 评审）：画布已落盘，
-  // 完成语义与常规保存成功对齐——兑现 AI 执行回执等待者、清除失败横幅；
-  // 闸脏态的清除由 useDebouncedSave 自己的订阅负责。
-  useEffect(
-    () =>
-      onRetryPersisted((persisted) => {
-        if (lastFailedDocRef.current !== persisted) return
-        lastFailedDocRef.current = null
-        markExternallyPersisted()
-        handleSaveResult(null)
-      }),
-    [handleSaveResult, markExternallyPersisted],
+    handleRetryPersistedSuccess,
   )
 
   const onMoveEnd = useCallback(

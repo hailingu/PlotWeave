@@ -164,4 +164,38 @@ describe('useEditorPersistence（§3/§10.2）', () => {
     expect(committed).toBe(true)
     expect(result.current.persistence.saveError).toBeNull()
   })
+
+  it('链上重存成功前已有更新编辑 B：B 的等待者不被 A 的完成兑现（PR #174 评审）', async () => {
+    const { result, onSave } = setup()
+    onSave.mockRejectedValue(new Error('磁盘已满'))
+    // A 冲刷失败并登记
+    act(() =>
+      result.current.persistence.onMoveEnd(null, { x: 1, y: 1, zoom: 1 }),
+    )
+    await flush()
+    expect(result.current.persistence.saveError).toBe('磁盘已满')
+    // A 的重试在途期间用户编辑出 B，并登记 AI 执行回执等待者
+    act(() =>
+      result.current.persistence.onMoveEnd(null, { x: 2, y: 2, zoom: 1 }),
+    )
+    let committed = false
+    const waiter = result.current.persistence.whenCanvasCommitted().then(() => {
+      committed = true
+    })
+    // A 的重存完成通知：B 尚未落盘，其等待者不得被兑现
+    act(() => {
+      notifyRetryPersisted(onSave.mock.calls[0][0] as ProjectContent)
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(committed).toBe(false)
+    // B 由防抖节律真实保存成功后才兑现
+    onSave.mockResolvedValue(undefined)
+    await flush()
+    await act(async () => {
+      await waiter
+    })
+    expect(committed).toBe(true)
+  })
 })

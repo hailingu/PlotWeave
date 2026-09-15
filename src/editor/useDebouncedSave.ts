@@ -59,8 +59,13 @@ function useSaveGateRefs(doc: ProjectContent) {
    * 而非像防抖触发那样静默跳过（issue #119）。 */
   const inFlightPromiseRef = useRef<Promise<void> | null>(null)
   /** 冲刷失败时提交的文档（issue #119，PR #174 评审）：保存链对同一登记
-   * 文档重存成功时，据此判断可否清除闸脏态（防误清更新编辑）。 */
+   * 文档重存成功时，据此关联本次失败的重试。 */
   const lastFailedDocRef = useRef<ProjectContent | null>(null)
+  /** 编辑序号水位（PR #174 评审）：markDirty 与签名置脏各自递增——失败
+   * 时记录当时的序号，重存完成通知仅当序号未前进（无更新编辑）才生效，
+   * 使完成只兑现被该次重存覆盖的等待者/脏态。 */
+  const editSeqRef = useRef(0)
+  const failedEditSeqRef = useRef<number | null>(null)
   return {
     saveTimer,
     dirtyRef,
@@ -71,6 +76,8 @@ function useSaveGateRefs(doc: ProjectContent) {
     inFlightRef,
     inFlightPromiseRef,
     lastFailedDocRef,
+    editSeqRef,
+    failedEditSeqRef,
   }
 }
 
@@ -122,22 +129,22 @@ function signatureChanged(
 
 /** 文档变更置脏（useDebouncedSave 拆分，issue #99）：首渲染跳过；
  * 名称/节点/边/设定集/集标题/资产索引触发防抖（视口经 markDirty 或卸载
- * 冲刷兜底）；doc 仅用于计算签名，依赖以签名的组成字段为准。 */
+ * 冲刷兜底）；doc 仅用于计算签名，依赖以签名的组成字段为准。真实编辑
+ * 前进编辑序号（PR #174 评审：重存完成通知的生效水位）。 */
 function useSignatureSaveWatch(
+  gates: ReturnType<typeof useSaveGateRefs>,
   doc: ProjectContent,
-  firstRender: MutableRefObject<boolean>,
-  lastSigRef: MutableRefObject<string>,
-  dirtyRef: MutableRefObject<boolean>,
-  saveTimer: SaveTimerRef,
   delayMs: number,
   flushSave: () => Promise<void>,
 ) {
+  const { firstRender, lastSigRef, dirtyRef, saveTimer, editSeqRef } = gates
   useEffect(() => {
     if (firstRender.current) {
       firstRender.current = false
       return
     }
     if (!signatureChanged(doc, lastSigRef)) return
+    editSeqRef.current++
     dirtyRef.current = true
     scheduleFlush(saveTimer, delayMs, flushSave)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -154,6 +161,7 @@ function useSignatureSaveWatch(
     saveTimer,
     flushSave,
     delayMs,
+    editSeqRef,
   ])
 }
 
@@ -225,6 +233,8 @@ function useFlushSave(
     unmountedRef,
     inFlightRef,
     lastFailedDocRef,
+    editSeqRef,
+    failedEditSeqRef,
   } = gates
   const flushSave = useCallback(async () => {
     if (inFlightRef.current) return // 在途：本轮跳过，新脏数据由在途循环接力
@@ -242,9 +252,11 @@ function useFlushSave(
             if (!unmountedRef.current) {
               // 失败不丢数据：重新置脏，按防抖节律自动重试（不紧循环）；
               // 卸载后不排新计时器——后台循环不得覆盖新会话的编辑。
-              // 登记提交的文档：保存链重存成功同一文档时清脏（防冗余冲刷）
+              // 登记提交的文档与编辑水位：保存链重存成功同一文档且此后
+              // 无更新编辑时清脏（防冗余冲刷与误兑现）
               dirtyRef.current = true
               lastFailedDocRef.current = submitted
+              failedEditSeqRef.current = editSeqRef.current
               saveTimer.current ??= setTimeout(() => {
                 saveTimer.current = null
                 void flushSave()
@@ -275,6 +287,8 @@ function useFlushSave(
     inFlightRef,
     gates.inFlightPromiseRef,
     lastFailedDocRef,
+    editSeqRef,
+    failedEditSeqRef,
   ])
   return flushSave
 }
@@ -288,7 +302,7 @@ function useSaveFlush(
   onSaveResult: ((err: unknown) => void) | undefined,
   delayMs: number,
 ) {
-  const { saveTimer, dirtyRef, latestRef, inFlightRef } = gates
+  const { saveTimer, dirtyRef, latestRef, inFlightRef, editSeqRef } = gates
 
   const flushSave = useFlushSave(gates, onSave, onSaveResult, delayMs)
   const flushForExit = useExitFlushAction(flushSave, gates.inFlightPromiseRef)
@@ -296,10 +310,11 @@ function useSaveFlush(
   const markDirty = useCallback(
     (next: ProjectContent) => {
       latestRef.current = next
+      editSeqRef.current++ // 纯视口等 transient 编辑也前进水位（PR #174 评审）
       dirtyRef.current = true
       scheduleFlush(saveTimer, delayMs, flushSave)
     },
-    [flushSave, delayMs, latestRef, dirtyRef, saveTimer],
+    [flushSave, delayMs, latestRef, dirtyRef, editSeqRef, saveTimer],
   )
 
   /** 卸载冲刷：无在途保存时走常规冲刷；有在途保存时立即补交最新文档——
@@ -322,6 +337,7 @@ export function useDebouncedSave(
   onSave: (doc: ProjectContent) => void | Promise<void>,
   delayMs = 600,
   onSaveResult?: (err: unknown) => void,
+  onRetryPersistedSuccess?: () => void,
 ): (doc: ProjectContent) => void {
   const gates = useSaveGateRefs(doc)
   const { dirtyRef, inFlightRef } = gates
@@ -332,15 +348,7 @@ export function useDebouncedSave(
     delayMs,
   )
 
-  useSignatureSaveWatch(
-    doc,
-    gates.firstRender,
-    gates.lastSigRef,
-    gates.dirtyRef,
-    gates.saveTimer,
-    delayMs,
-    flushSave,
-  )
+  useSignatureSaveWatch(gates, doc, delayMs, flushSave)
   useUnmountFlush(gates.unmountedRef, gates.saveTimer, flushOnUnmount)
 
   // 退出冲刷闸（issue #119）：防抖脏文档是组件内 refs，App 级退出屏障
@@ -355,22 +363,32 @@ export function useDebouncedSave(
   }, [dirtyRef, inFlightRef, flushForExit])
 
   // 链上重存成功清脏（issue #119，PR #174 评审）：闸冲刷失败后保存链会
-  // 登记并重存同一文档，成功时据此清除闸脏态——屏障定点检查不再对已落盘
-  // 文档发起冗余重存。仅当闸内最新文档就是已落盘的那份时才清（防误清
-  // 更新编辑；更新编辑由签名 effect 重新置脏、防抖节律接管）。
+  // 登记并重存同一文档，成功时据此清除闸脏态并对齐完成语义。生效条件：
+  // 重存的是本次失败的文档、且此后无更新编辑（编辑序号水位未前进，纯
+  // 渲染/会话态变化不影响）——B 等更新编辑的等待者只由其真实保存兑现，
+  // 防抖节律接管其重试。
   useEffect(
     () =>
       onRetryPersisted((persisted) => {
         if (
           dirtyRef.current &&
           gates.lastFailedDocRef.current === persisted &&
-          gates.latestRef.current === persisted
+          gates.failedEditSeqRef.current !== null &&
+          gates.editSeqRef.current === gates.failedEditSeqRef.current
         ) {
-          dirtyRef.current = false
           gates.lastFailedDocRef.current = null
+          gates.failedEditSeqRef.current = null
+          dirtyRef.current = false
+          onRetryPersistedSuccess?.()
         }
       }),
-    [dirtyRef, gates.lastFailedDocRef, gates.latestRef],
+    [
+      dirtyRef,
+      gates.lastFailedDocRef,
+      gates.failedEditSeqRef,
+      gates.editSeqRef,
+      onRetryPersistedSuccess,
+    ],
   )
 
   return markDirty
