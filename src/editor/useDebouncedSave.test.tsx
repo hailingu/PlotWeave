@@ -8,6 +8,7 @@ import {
   hasPendingCanvasSaves,
   registerCanvasFlushGate,
 } from '../canvasSaveRegistry'
+import { notifyRetryPersisted } from '../projectStore/saveChain'
 import type { ProjectContent } from '../model/content'
 import type { CanvasNode } from './nodes/types'
 
@@ -714,5 +715,72 @@ describe('useDebouncedSave（退出冲刷闸：卸载注销，issue #119）', ()
     })
     // 卸载冲刷已交付一次；闸已注销，flush 不再追加保存
     expect(onSave).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('useDebouncedSave（退出冲刷闸：链上重存成功清脏，PR #174 评审）', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => {
+    registerCanvasFlushGate(null)
+    vi.useRealTimers()
+  })
+
+  it('链上重存成功同一登记文档：闸脏态清除，定点检查不再发起冗余冲刷', async () => {
+    const onSave = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('磁盘已满'))
+      .mockResolvedValue(undefined)
+    const { rerender } = renderHook(
+      ({ doc }) => useDebouncedSave(doc, onSave),
+      { initialProps: { doc: mkDoc('v0') } },
+    )
+    act(() => {
+      rerender({ doc: mkDoc('落盘失败') })
+    })
+    await act(async () => {
+      await flushPendingCanvasSaves()
+    })
+    expect(onSave).toHaveBeenCalledTimes(1)
+    expect(hasPendingCanvasSaves()).toBe(true)
+    // 保存链对同一登记文档重存成功（携带同一文档对象）
+    act(() => {
+      notifyRetryPersisted(onSave.mock.calls[0][0] as ProjectContent)
+    })
+    expect(hasPendingCanvasSaves()).toBe(false)
+    await act(async () => {
+      await flushPendingCanvasSaves()
+    })
+    expect(onSave).toHaveBeenCalledTimes(1)
+  })
+
+  it('登记文档重存成功但已有更新编辑（不同文档）时不误清脏态', async () => {
+    const onSave = vi.fn().mockRejectedValue(new Error('磁盘已满'))
+    const { rerender } = renderHook(
+      ({ doc }) => useDebouncedSave(doc, onSave),
+      { initialProps: { doc: mkDoc('v0') } },
+    )
+    act(() => {
+      rerender({ doc: mkDoc('D') })
+    })
+    await act(async () => {
+      await flushPendingCanvasSaves()
+    })
+    // D 冲刷失败后有更新编辑 E（签名变化重新置脏）
+    act(() => {
+      rerender({ doc: mkDoc('E') })
+    })
+    // D 经链上重存成功：E 仍未落盘，不得误清
+    act(() => {
+      notifyRetryPersisted(onSave.mock.calls[0][0] as ProjectContent)
+    })
+    expect(hasPendingCanvasSaves()).toBe(true)
+    // E 由防抖节律接管重试（保存恢复成功后脏态清除）
+    await act(async () => {
+      onSave.mockResolvedValue(undefined)
+      await vi.advanceTimersByTimeAsync(600)
+    })
+    expect(onSave).toHaveBeenCalledTimes(2)
+    expect((onSave.mock.calls[1][0] as ProjectContent).name).toBe('E')
+    expect(hasPendingCanvasSaves()).toBe(false)
   })
 })

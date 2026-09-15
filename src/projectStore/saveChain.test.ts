@@ -7,6 +7,7 @@ import {
   hasPendingProjectSaves,
   onProjectSaved,
   onProjectWriteReplayFailure,
+  onRetryPersisted,
 } from './saveChain'
 import type { ProjectContent } from '../model/content'
 
@@ -277,6 +278,30 @@ describe('退出冲刷：就绪探针与立即重存（issue #119）', () => {
       expect(hasPendingProjectSaves()).toBe(false)
       expect(savedNames()).toEqual(['登记稿', '登记稿'])
     } finally {
+      error.mockRestore()
+    }
+  })
+
+  it('登记文档经链上重存成功时通知订阅者（携带同一文档对象）；首次保存成功不通知', async () => {
+    const id = 'retry-notify-test'
+    const seen: ProjectContent[] = []
+    const off = onRetryPersisted((doc) => seen.push(doc))
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      invoke.mockImplementation(async () => {
+        throw new Error('磁盘已满')
+      })
+      await expect(enqueueSave(id, DOC)).rejects.toThrow('磁盘已满')
+      expect(seen).toEqual([])
+      invoke.mockImplementation(async () => undefined)
+      expect(await flushPendingProjectSaves()).toEqual([])
+      // 重存成功：通知携带与登记相同的文档对象（画布闸据此清脏）
+      expect(seen).toEqual([DOC])
+      // 不经登记的首次保存成功不触发通知
+      await enqueueSave(`${id}-fresh`, DOC)
+      expect(seen).toEqual([DOC])
+    } finally {
+      off()
       error.mockRestore()
     }
   })

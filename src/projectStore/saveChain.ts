@@ -194,6 +194,24 @@ export async function flushPendingProjectSaves(): Promise<string[]> {
   return Array.from(pendingRetryDocs.keys())
 }
 
+/** 登记文档重存成功监听器：入参为已落盘的登记文档对象（与登记为同一
+ * 引用）。 */
+export type RetryPersistedListener = (doc: ProjectContent) => void
+const retryPersistedListeners = new Set<RetryPersistedListener>()
+
+/** 订阅登记文档经链上重存成功：画布冲刷闸据此清除对应脏态，退出屏障的
+ * 定点检查不再对已落盘文档发起冗余重存（PR #174 评审）。返回退订函数。 */
+export function onRetryPersisted(listener: RetryPersistedListener): () => void {
+  retryPersistedListeners.add(listener)
+  return () => retryPersistedListeners.delete(listener)
+}
+
+/** 登记文档重存成功的通知口（enqueueSave 落定登记文档时触发；独立导出
+ * 供测试注入）。 */
+export function notifyRetryPersisted(doc: ProjectContent): void {
+  retryPersistedListeners.forEach((listener) => listener(doc))
+}
+
 /** 链上写盘动作（Tauri save_project 命令）：入参为会话文档，序列化
  * （剥离会话态）在写入边界执行——归一化/迁移在 model/convert。 */
 export async function tauriSave(
@@ -217,7 +235,13 @@ export function enqueueSave(id: string, doc: ProjectContent): Promise<void> {
   const next = run.then(async () => {
     try {
       await tauriSave(id, doc)
-      pendingRetryDocs.delete(id)
+      // 任何成功保存都取代并清除既有登记（陈旧登记不得残留）；仅当落盘的
+      // 正是登记文档时通知订阅者（画布闸据此清脏，PR #174 评审）
+      const registered = pendingRetryDocs.get(id)
+      if (registered !== undefined) {
+        if (registered === doc) notifyRetryPersisted(doc)
+        pendingRetryDocs.delete(id)
+      }
       // 落定通知放在失败登记清除之后：此刻磁盘已是本次内容且无待重试文档，
       // 订阅方（首页摘要刷新）据此读到的一定是最终状态（issue #101）
       notifyProjectSaved(id)

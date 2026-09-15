@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useRef, type MutableRefObject } from 'react'
 import { graphSignature } from './graphSignature'
 import { registerCanvasFlushGate } from '../canvasSaveRegistry'
+import { onRetryPersisted } from '../projectStore/saveChain'
 import type { ProjectContent } from '../model/content'
 
 /** 持久化签名（§9.4）：剥离 React Flow 会话态（selected/dragging/measured/
@@ -57,6 +58,9 @@ function useSaveGateRefs(doc: ProjectContent) {
   /** 在途保存循环（flushSave 的 run）：退出冲刷闸据此真实等待在途落定，
    * 而非像防抖触发那样静默跳过（issue #119）。 */
   const inFlightPromiseRef = useRef<Promise<void> | null>(null)
+  /** 冲刷失败时提交的文档（issue #119，PR #174 评审）：保存链对同一登记
+   * 文档重存成功时，据此判断可否清除闸脏态（防误清更新编辑）。 */
+  const lastFailedDocRef = useRef<ProjectContent | null>(null)
   return {
     saveTimer,
     dirtyRef,
@@ -66,6 +70,7 @@ function useSaveGateRefs(doc: ProjectContent) {
     unmountedRef,
     inFlightRef,
     inFlightPromiseRef,
+    lastFailedDocRef,
   }
 }
 
@@ -213,7 +218,14 @@ function useFlushSave(
   onSaveResult: ((err: unknown) => void) | undefined,
   delayMs: number,
 ): () => Promise<void> {
-  const { saveTimer, dirtyRef, latestRef, unmountedRef, inFlightRef } = gates
+  const {
+    saveTimer,
+    dirtyRef,
+    latestRef,
+    unmountedRef,
+    inFlightRef,
+    lastFailedDocRef,
+  } = gates
   const flushSave = useCallback(async () => {
     if (inFlightRef.current) return // 在途：本轮跳过，新脏数据由在途循环接力
     await startTrackedSaveRun(
@@ -221,15 +233,18 @@ function useFlushSave(
         while (dirtyRef.current) {
           dirtyRef.current = false
           inFlightRef.current = true
+          const submitted = latestRef.current
           try {
-            await onSave(latestRef.current)
+            await onSave(submitted)
             onSaveResult?.(null)
           } catch (err) {
             onSaveResult?.(err)
             if (!unmountedRef.current) {
               // 失败不丢数据：重新置脏，按防抖节律自动重试（不紧循环）；
-              // 卸载后不排新计时器——后台循环不得覆盖新会话的编辑
+              // 卸载后不排新计时器——后台循环不得覆盖新会话的编辑。
+              // 登记提交的文档：保存链重存成功同一文档时清脏（防冗余冲刷）
               dirtyRef.current = true
+              lastFailedDocRef.current = submitted
               saveTimer.current ??= setTimeout(() => {
                 saveTimer.current = null
                 void flushSave()
@@ -259,6 +274,7 @@ function useFlushSave(
     unmountedRef,
     inFlightRef,
     gates.inFlightPromiseRef,
+    lastFailedDocRef,
   ])
   return flushSave
 }
@@ -337,6 +353,25 @@ export function useDebouncedSave(
     })
     return () => registerCanvasFlushGate(null)
   }, [dirtyRef, inFlightRef, flushForExit])
+
+  // 链上重存成功清脏（issue #119，PR #174 评审）：闸冲刷失败后保存链会
+  // 登记并重存同一文档，成功时据此清除闸脏态——屏障定点检查不再对已落盘
+  // 文档发起冗余重存。仅当闸内最新文档就是已落盘的那份时才清（防误清
+  // 更新编辑；更新编辑由签名 effect 重新置脏、防抖节律接管）。
+  useEffect(
+    () =>
+      onRetryPersisted((persisted) => {
+        if (
+          dirtyRef.current &&
+          gates.lastFailedDocRef.current === persisted &&
+          gates.latestRef.current === persisted
+        ) {
+          dirtyRef.current = false
+          gates.lastFailedDocRef.current = null
+        }
+      }),
+    [dirtyRef, gates.lastFailedDocRef, gates.latestRef],
+  )
 
   return markDirty
 }
