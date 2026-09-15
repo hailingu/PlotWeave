@@ -3,6 +3,8 @@ import {
   useRef,
   useState,
   type ChangeEvent as ReactChangeEvent,
+  type Dispatch,
+  type SetStateAction,
 } from 'react'
 import {
   libraryStore,
@@ -251,21 +253,20 @@ function sameTags(a: string[], b: string[]): boolean {
   return a.length === b.length && a.every((t, i) => t === b[i])
 }
 
-export default function AssetsPanel() {
-  const { assets, setAssets, error, setError, urls, setUrls, refreshUrl } =
-    useLibraryAssetList()
-  const [selectedKind, setSelectedKind] = useState<LibraryKind | null>(null)
-  /** 待删除资产（非 null 时弹应用内确认框）。 */
-  const [pendingRemove, setPendingRemove] = useState<LibraryAsset | null>(null)
-  /** 标签提交代际（issue #124）：assetId → 最新已发起提交的序号。迟到的
-   * 旧响应（用户已再次编辑提交）不得把本地列表回滚到旧标签。 */
+/** 标签提交状态族（AssetsPanel 拆分，PR #176 评审）：未变守卫、assetId
+ * 级代际计数（迟到旧响应不回滚）、成功响应字段级合并同步，以及资产关联
+ * 的错误横幅——成功只清除本资产先前写入的失败提示，不掩盖其他资产或
+ * 操作的错误。 */
+function useAssetTagsCommit(
+  setAssets: (fn: (list: LibraryAsset[]) => LibraryAsset[]) => void,
+  setError: Dispatch<SetStateAction<string | null>>,
+) {
+  /** 提交代际（issue #124）：assetId → 最新已发起提交的序号。 */
   const tagsCommitSeq = useRef(new Map<string, number>())
-  const count = (kind: LibraryKind) =>
-    assets.filter((a) => a.kind === kind).length
-  const { busy, fileRef, importFiles, onPick } = useAssetImport(
-    setAssets,
-    setError,
-    refreshUrl,
+  /** 最近一次由标签提交写入横幅的失败（assetId + 文案）：跨资产并发时
+   * 无关资产的成功不得清除它（PR #176 评审）。 */
+  const lastTagsError = useRef<{ assetId: string; message: string } | null>(
+    null,
   )
 
   const commitTags = (asset: LibraryAsset, raw: string) => {
@@ -279,9 +280,14 @@ export default function AssetsPanel() {
       .updateMeta(asset.id, { tags })
       .then((updated) => {
         if (tagsCommitSeq.current.get(asset.id) !== seq) return
+        const own = lastTagsError.current
+        if (own !== null && own.assetId === asset.id) {
+          // 仅清除本资产先前写入的失败提示；横幅已被其他错误覆盖则不动
+          setError((prev) => (prev === own.message ? null : prev))
+          lastTagsError.current = null
+        }
         // 成功保存同步本地状态（issue #124 验收）：只合并 tags 字段——
         // 响应是全量条目，整体替换会清掉并发的乐观改名
-        setError(null)
         setAssets((list) =>
           list.map((a) =>
             a.id === asset.id ? { ...a, tags: updated.tags } : a,
@@ -292,9 +298,28 @@ export default function AssetsPanel() {
         // 失败保留输入（AssetTagsInput 草稿不丢）并提示；被更新提交
         // 取代的旧失败不再上报，横幅始终反映最新一次提交的结果
         if (tagsCommitSeq.current.get(asset.id) !== seq) return
-        setError(String(err))
+        const message = String(err)
+        lastTagsError.current = { assetId: asset.id, message }
+        setError(message)
       })
   }
+  return { commitTags }
+}
+
+export default function AssetsPanel() {
+  const { assets, setAssets, error, setError, urls, setUrls, refreshUrl } =
+    useLibraryAssetList()
+  const [selectedKind, setSelectedKind] = useState<LibraryKind | null>(null)
+  /** 待删除资产（非 null 时弹应用内确认框）。 */
+  const [pendingRemove, setPendingRemove] = useState<LibraryAsset | null>(null)
+  const count = (kind: LibraryKind) =>
+    assets.filter((a) => a.kind === kind).length
+  const { busy, fileRef, importFiles, onPick } = useAssetImport(
+    setAssets,
+    setError,
+    refreshUrl,
+  )
+  const { commitTags } = useAssetTagsCommit(setAssets, setError)
 
   const remove = (asset: LibraryAsset) =>
     removeLibraryAsset(asset, urls, setAssets, setUrls, setError)
@@ -354,10 +379,12 @@ export default function AssetsPanel() {
 }
 
 /** 标签输入（issue #124）：受控草稿 + 跟随已保存值收敛。已保存 tags 变化
- * 落地（提交成功同步、迟到响应）时，无更新编辑（草稿仍停在旧保存值）的
- * 输入框显示收敛到新值，堵住「重挂载显示陈旧值 + 未编辑失焦回写」的窗口；
- * 编辑中的草稿不被动抢占；提交失败未同步则草稿保留，用户输入不丢。提交
- * 语义不变：失焦把原始文本交给上层解析写库（未变化由上层守卫跳过）。 */
+ * 落地（提交成功同步、迟到响应）时，无未提交编辑（!dirty）的输入框显示
+ * 收敛到新值，堵住「重挂载显示陈旧值 + 未编辑失焦回写」的窗口；编辑中
+ * （含提交后在响应到达前改回旧值的撤回）以显式 dirty 标记保护，迟到的
+ * 保存响应不抢占草稿（PR #176 评审：不得以「草稿恰好等于旧保存值」推断
+ * 未编辑）；失败未同步则草稿保留，用户输入不丢。提交语义不变：失焦把
+ * 原始文本交给上层解析写库（未变化由上层守卫跳过）。 */
 function AssetTagsInput({
   tags,
   ariaLabel,
@@ -368,12 +395,14 @@ function AssetTagsInput({
   readonly onCommit: (raw: string) => void
 }) {
   const saved = tags.join('，')
-  /** null = 无未提交编辑，显示跟随已保存值。 */
+  /** null = 无草稿，显示跟随已保存值。 */
   const [draft, setDraft] = useState<string | null>(null)
+  /** 编辑中：失焦提交后为 false（已保存值变化可收敛显示），true 不抢占。 */
+  const [dirty, setDirty] = useState(false)
   const [prevSaved, setPrevSaved] = useState(saved)
   if (saved !== prevSaved) {
     setPrevSaved(saved)
-    if (draft !== null && draft === prevSaved) setDraft(null)
+    if (!dirty) setDraft(null)
   }
   return (
     <input
@@ -381,8 +410,14 @@ function AssetTagsInput({
       value={draft ?? saved}
       placeholder="标签（逗号分隔，可选）"
       aria-label={ariaLabel}
-      onChange={(e) => setDraft(e.target.value)}
-      onBlur={(e) => onCommit(e.target.value)}
+      onChange={(e) => {
+        setDraft(e.target.value)
+        setDirty(true)
+      }}
+      onBlur={(e) => {
+        onCommit(e.target.value)
+        setDirty(false)
+      }}
     />
   )
 }
