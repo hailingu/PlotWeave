@@ -142,7 +142,14 @@ export default function EditorLayout(props: EditorLayoutProps) {
           onSaveAiSession={props.onSaveAiSession}
         />
       </div>
-      <EditorOverlays {...props} />
+      {/* 浮层输入按域显式下传（issue #104）：EditorOverlays 只收真实消费的
+          project/doc/panels/graph，AI 会话等其余域在类型层即不可达。 */}
+      <EditorOverlays
+        project={project}
+        doc={doc}
+        panels={panels}
+        graph={graph}
+      />
     </div>
   )
 }
