@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs'
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react'
 import { useAiTurn, type UseAiTurnOpts } from './aiThreadTurn'
 import { runModelTurn } from './aiThreadModel'
-import { takeTurn, type TurnBox } from '../ai/pendingTurns'
+import { takeTurn } from '../ai/pendingTurns'
 import { TurnCancelledError } from '../ai/agentLoop'
 import type { ThreadEntry } from '../ai/session'
 import type { ProviderConfig } from '../../settings/types'
@@ -235,32 +235,41 @@ describe('useAiTurn 取消（issue #154）', () => {
     expect(takeTurn(opts.projectId)).toBeNull()
   })
 
-  it('取消的盒子带 canceller：认领方据此停止旧轮（PR #187 评审 4024585097）', async () => {
+  it('认领的在途回合可经 canceller 取消，迟到结果不再交付（PR #187 评审 4025795506）', async () => {
     const calls = pendingTurn()
     const append = vi.fn()
     const opts = mkOpts({ append })
+    // 发起实例发起后卸载，盒子（含 canceller）留在注册表
     const first = renderHook(() => useAiTurn(opts))
     act(() => {
       first.result.current.setDraft('你好')
     })
     await startSend(first.result)
     await waitFor(() => expect(first.result.current.busy).toBe(true))
-    // 模拟导航卸载，盒子留在注册表
     first.unmount()
-    const box = takeTurn(opts.projectId)
-    expect(box).not.toBeNull()
-    // 取消路径产出的盒子暴露 canceller，认领方可停止旧轮
-    const settled = Promise.resolve({
-      entries: [{ id: 960, kind: 'note' as const, text: '已取消' }],
-      error: null,
+    // 认领实例挂载：claim effect 取回注册表的盒子并恢复 busy
+    const second = renderHook(() => useAiTurn(opts))
+    await waitFor(() => expect(second.result.current.busy).toBe(true))
+    // 盒子从创建起即带 canceller；认领实例 cancel 调用其 canceller 停止旧轮
+    const claimed = takeTurn(opts.projectId)
+    expect(claimed).toBeNull() // 已被 claim effect 取走
+    act(() => {
+      second.result.current.cancel()
     })
-    const cancelBox: TurnBox = {
-      promise: settled,
-      canceller: () =>
-        calls[0]!.signal && (calls[0]!.signal.isCancelled = () => true),
-    }
-    cancelBox.canceller?.()
     expect(calls[0]!.signal?.isCancelled()).toBe(true)
+    // 旧轮迟到结果：signal 已置位，agentLoop 将抛 TurnCancelledError，
+    // 经世代守卫不交付本实例——不覆盖、不上屏
+    await act(async () => {
+      calls[0]!.resolve([
+        { id: 970, kind: 'msg', role: 'assistant', text: '迟到回复' },
+      ])
+    })
+    const appended = append.mock.calls
+      .map((c) => c[0] as ThreadEntry[])
+      .flat()
+      .map((e) => e.text)
+    expect(appended).not.toContain('迟到回复')
+    expect(second.result.current.busy).toBe(false)
     void calls
   })
 

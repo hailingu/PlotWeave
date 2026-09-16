@@ -15,7 +15,6 @@ import {
   type AiCommand,
   type BatchValidation,
 } from '../ai/commands'
-import { isCancelledTurnResult } from '../ai/pendingTurns'
 import {
   registerTurn,
   returnTurn,
@@ -88,8 +87,8 @@ function useTurnLifecycle(projectId: string) {
 }
 
 /** 运行一轮模型回合并登记盒子（useAiTurn 拆分降行数）：runModelTurn 跑
- * agentLoop（带 signal），结果收敛为 TurnResult；取消形状落定后给盒子打
- * canceller 标（认领方据此停止旧轮，PR #187 评审）。 */
+ * agentLoop（带 signal），结果收敛为 TurnResult；盒子从创建起即带
+ * canceller（置位 signal）——认领方据此可停止旧轮（PR #187 评审 4025795506）。 */
 function runTurn(
   opts: UseAiTurnOpts,
   text: string,
@@ -117,22 +116,14 @@ function runTurn(
         ? { entries: [{ id: 0, kind: 'note', text: '已取消' }], error: null }
         : { entries: null, error: String(err) },
   )
-  const boxRef: { current: TurnBox | null } = { current: null }
-  const consumed = settled.then((result) => {
-    const cancelBox = boxRef.current
-    if (cancelBox && isCancelledTurnResult(result)) {
-      Object.assign(cancelBox, {
-        canceller: () => {
-          signal.isCancelled = () => true
-        },
-      })
-    }
-    return result
-  })
-  const box: TurnBox = { promise: consumed }
-  boxRef.current = box
+  const box: TurnBox = {
+    promise: settled,
+    canceller: () => {
+      signal.isCancelled = () => true
+    },
+  }
   register(box)
-  return consumed
+  return settled
 }
 
 /** 认领条目的重定映射：id 经当前实例重定基（旧计数器已随卸载作废，
@@ -189,11 +180,13 @@ function usePendingTurnClaim(
   projectId: string,
   applyRef: { readonly current: (result: TurnResult, box: TurnBox) => void },
   setBusy: Dispatch<SetStateAction<boolean>>,
+  claimBoxRef: { current: TurnBox | null },
 ): void {
   useEffect(() => {
     const box = takeTurn(projectId)
     if (!box) return
     setBusy(true)
+    claimBoxRef.current = box
     let active = true
     let delivered = false
     void box.promise.then((result) => {
@@ -202,13 +195,14 @@ function usePendingTurnClaim(
         return
       }
       delivered = true
+      // claimBoxRef 由 applyRef 统一清理（取消时 cancel 已置 null）
       applyRef.current(result, box)
     })
     return () => {
       active = false
       if (!delivered) returnTurn(projectId, box)
     }
-  }, [projectId, setBusy, applyRef])
+  }, [projectId, setBusy, applyRef, claimBoxRef])
 }
 
 /** useAiTurn 的选项契约（AiThread 容器透传）。 */
@@ -237,6 +231,7 @@ function useTurnClaimDelivery(
   heldBox: ReturnType<typeof useHeldTurnBox>,
   setBusy: Dispatch<SetStateAction<boolean>>,
   setError: Dispatch<SetStateAction<string | null>>,
+  claimBoxRef: { current: TurnBox | null },
 ) {
   const applyClaimRef = useRef<(result: TurnResult, box: TurnBox) => void>(
     () => undefined,
@@ -244,6 +239,11 @@ function useTurnClaimDelivery(
   useEffect(() => {
     applyClaimRef.current = (result, box) => {
       setBusy(false)
+      // 取消守卫：claim 期间被取消的盒子不交付（PR #187 评审 4025795506）。
+      // cancel 把 claimBoxRef 置 null 并置位 signal，迟到结果不得上屏。
+      const wasCancelled = claimBoxRef.current === null
+      claimBoxRef.current = null
+      if (wasCancelled) return
       if (result.entries) {
         opts.append(
           claimedEntries(result.entries, opts.nextId, opts.onValidateCommands),
@@ -254,7 +254,7 @@ function useTurnClaimDelivery(
       heldBox.hold(box)
     }
   })
-  usePendingTurnClaim(opts.projectId, applyClaimRef, setBusy)
+  usePendingTurnClaim(opts.projectId, applyClaimRef, setBusy, claimBoxRef)
   return applyClaimRef
 }
 
@@ -278,7 +278,9 @@ export function useAiTurn(opts: UseAiTurnOpts) {
     }
   }, [])
   const heldBox = useHeldTurnBox(opts.projectId)
-  useTurnClaimDelivery(opts, heldBox, setBusy, setError)
+  /** 认领盒子的 canceller（issue #154）：claim 存入、cancel 调用以停止旧轮。 */
+  const claimBoxRef = useRef<TurnBox | null>(null)
+  useTurnClaimDelivery(opts, heldBox, setBusy, setError, claimBoxRef)
   const send = async () => {
     const text = draft.trim()
     if (!text || busy || !opts.activeOption || !opts.activeProvider) return
@@ -311,6 +313,12 @@ export function useAiTurn(opts: UseAiTurnOpts) {
   const cancel = () => {
     if (!busy) return
     turn.cancel()
+    // 认领的回合：置位 signal 停止旧轮，并清 claimBoxRef 使守卫跳过交付
+    const claimed = claimBoxRef.current
+    if (claimed) {
+      claimBoxRef.current = null
+      claimed.canceller?.()
+    }
     setBusy(false)
   }
   /** 取消回执上屏（issue #154）：随会话持久化的「已取消」note；供 AiThread

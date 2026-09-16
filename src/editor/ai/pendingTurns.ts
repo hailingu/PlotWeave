@@ -21,20 +21,8 @@ export interface TurnResult {
 /** 在途回合容器：promise 落定后持有结果；由注册表跨卸载转交给认领方。 */
 export interface TurnBox {
   readonly promise: Promise<TurnResult>
-  /** 取消钩子（issue #154）：认领方调用以停止旧轮（置位其取消信号）。
-   * 仅取消路径产出的盒子携带；普通在途回合无此钩子（其 signal 归发起方）。 */
+  /** 取消钩子（issue #154）：认领方调用以停止旧轮（置位其取消信号）。 */
   readonly canceller?: () => void
-}
-
-/** 取消路径产出的回合结果：单条「已取消」note、无错误。 */
-export function isCancelledTurnResult(result: TurnResult): boolean {
-  return (
-    result.error === null &&
-    result.entries !== null &&
-    result.entries.length === 1 &&
-    result.entries[0].kind === 'note' &&
-    result.entries[0].text === '已取消'
-  )
 }
 
 const boxes = new Map<string, TurnBox>()
