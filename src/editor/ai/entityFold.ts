@@ -350,7 +350,8 @@ export function documentFieldsIssue(
   return issues.length > 0 ? `文档字段错误：${issues.join('；')}` : null
 }
 
-/** relatedIds 条目形状检查（阶段 A）：数组且每项为 {kind, id} 完整对。 */
+/** relatedIds 条目形状检查（阶段 A）：数组且每项为 {kind, id} 完整对；
+ * 成员未知自有键整批拒绝（issue #140，与 AI 命令列表成员同一政策）。 */
 function appendRelatedIdsIssues(issues: string[], related: unknown): void {
   if (related === undefined) return
   if (!Array.isArray(related)) {
@@ -367,6 +368,14 @@ function appendRelatedIdsIssues(issues: string[], related: unknown): void {
       issues.push(`relatedIds[${i}].kind 须为 character 或 location`)
     } else if (typeof id !== 'string' || id.trim() === '') {
       issues.push(`relatedIds[${i}].id 须为非空白字符串`)
+    }
+    const unknown = Object.keys(item as Record<string, unknown>).filter(
+      (k) => k !== 'kind' && k !== 'id',
+    )
+    if (unknown.length > 0) {
+      issues.push(
+        `relatedIds[${i}] 含未知字段：${unknown.join('、')}（成员允许：kind、id）`,
+      )
     }
   })
 }

@@ -1543,6 +1543,160 @@ describe('AI 批量命令的逐类型载荷形状校验（信任边界：字段�
   })
 })
 
+describe('AI 列表成员未知自有键白名单（issue #140：与 schema additionalProperties:false 同口径）', () => {
+  it('lines 成员携带协议外自有键（evil）：整批拒绝，按下标与键名点名，命令零产出', () => {
+    const bad = validateAiBatch(
+      [
+        {
+          op: 'create_node',
+          nodeType: 'dialogue',
+          data: {
+            name: '对白',
+            lines: [
+              { kind: 'line', text: '先来', speaker: 'ch-1' },
+              {
+                kind: 'line',
+                text: '后到',
+                speaker: 'ch-1',
+                evil: { nested: true },
+              },
+            ],
+          },
+        },
+      ],
+      entSnap(),
+    )
+    expect(bad.ok).toBe(false)
+    expect(bad.commands).toEqual([])
+    const msg = bad.issues.map((i) => i.message).join('\n')
+    expect(msg).toContain('lines[1]')
+    expect(msg).toContain('evil')
+  })
+
+  it('lines 成员携带自有 __proto__ 键（JSON 数据形态）：同样按未知键拒绝', () => {
+    // JSON.parse 产生的 __proto__ 是自有可枚举键（非原型污染），
+    // 成员白名单按未知键处理
+    const line = JSON.parse(
+      '{"kind":"action","text":"雨声","__proto__":{"x":1}}',
+    )
+    const bad = validateAiBatch(
+      [
+        {
+          op: 'create_node',
+          nodeType: 'dialogue',
+          data: { name: '对白', lines: [line] },
+        },
+      ],
+      snap(),
+    )
+    expect(bad.ok).toBe(false)
+    expect(bad.issues.map((i) => i.message).join('\n')).toContain('lines[0]')
+  })
+
+  it('options 对象成员携带协议外自有键：整批拒绝并点名；字符串与合法成员照常通过', () => {
+    const bad = validateAiBatch(
+      [
+        {
+          op: 'update_node',
+          nodeId: 'b1',
+          patch: {
+            options: [{ id: 'ob-a', label: '追', extra: 'x' }],
+          },
+        },
+      ],
+      richSnap(),
+    )
+    expect(bad.ok).toBe(false)
+    expect(bad.commands).toEqual([])
+    const msg = bad.issues.map((i) => i.message).join('\n')
+    expect(msg).toContain('options[0]')
+    expect(msg).toContain('extra')
+
+    const good = validateAiBatch(
+      [
+        {
+          op: 'update_node',
+          nodeId: 'b1',
+          patch: { options: ['追', { id: 'ob-x', label: '新' }] },
+        },
+      ],
+      richSnap(),
+    )
+    expect(good.ok).toBe(true)
+  })
+
+  it('refs 成员携带协议外自有键：整批拒绝并点名', () => {
+    const bad = validateAiBatch(
+      [
+        {
+          op: 'create_node',
+          nodeType: 'shot',
+          data: {
+            shotNo: 1,
+            size: '特写',
+            picture: '',
+            prompt: '',
+            refs: [{ kind: 'audio', assetId: 'a-aud', note: '自定义' }],
+          },
+        },
+      ],
+      richSnap(),
+    )
+    expect(bad.ok).toBe(false)
+    expect(bad.commands).toEqual([])
+    const msg = bad.issues.map((i) => i.message).join('\n')
+    expect(msg).toContain('refs[0]')
+    expect(msg).toContain('note')
+  })
+
+  it('relatedIds 成员携带协议外自有键：整批拒绝并点名（upsert_document 同一政策）', () => {
+    const bad = validateAiBatch(
+      [
+        {
+          op: 'upsert_document',
+          fields: {
+            title: '世界观',
+            relatedIds: [{ kind: 'character', id: 'ch-1', tag: '主角' }],
+          },
+        },
+      ],
+      entSnap(),
+    )
+    expect(bad.ok).toBe(false)
+    expect(bad.commands).toEqual([])
+    const msg = bad.issues.map((i) => i.message).join('\n')
+    expect(msg).toContain('relatedIds[0]')
+    expect(msg).toContain('tag')
+  })
+
+  it('协议内全键成员照常通过（不因白名单收紧而误拒）', () => {
+    const good = validateAiBatch(
+      [
+        {
+          op: 'create_node',
+          nodeType: 'dialogue',
+          data: {
+            name: '对白',
+            lines: [
+              {
+                id: 'l1',
+                kind: 'line',
+                text: '台词',
+                speaker: 'ch-1',
+                side: 'left',
+                vo: true,
+              },
+              { id: 'l2', kind: 'action', text: '转身' },
+            ],
+          },
+        },
+      ],
+      entSnap(),
+    )
+    expect(good.ok).toBe(true)
+  })
+})
+
 describe('对白行判别字段与可选字段（信任边界：不被下次加载静默删除）', () => {
   it('kind 非 line/action 拒绝；缺省 kind 归一为 line', () => {
     const bad = validateAiBatch(
