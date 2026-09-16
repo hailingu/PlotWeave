@@ -198,6 +198,44 @@ describe('runAgentLoop 写批次重试预算与终止（issue 41）', () => {
     expect(toolMsg?.content).toContain('节点不存在：n9')
     expect(toolMsg?.content).toContain('端点不存在：a → b')
   })
+
+  it('批次级整体错误（index=-1）回喂不编序号：不得出现「第 0 条」（issue #150）', async () => {
+    const commands = vi
+      .fn<NonNullable<BatchValidators['commands']>>()
+      .mockReturnValueOnce({
+        ok: false,
+        items: [],
+        commands: [],
+        issues: [{ index: -1, message: '批次不是命令数组' }],
+        hasDeletes: false,
+      })
+      .mockReturnValueOnce(okOf())
+    llmChatMock
+      .mockResolvedValueOnce(
+        reply({ content: '{"action":true,"query":"修改画布"}' }),
+      )
+      .mockResolvedValueOnce(reply({ tool_calls: [batchCall(BAD_BEAT_BATCH)] }))
+      .mockResolvedValueOnce(
+        reply({
+          content: '已修正为数组',
+          tool_calls: [batchCall(GOOD_BEAT_BATCH)],
+        }),
+      )
+
+    const result = await run(
+      [{ role: 'user', content: '改画布' }],
+      validators({ commands }),
+    )
+
+    expect(result.validation?.ok).toBe(true)
+    const feedback = llmChatMock.mock.calls
+      .map((c) => c[2])
+      .flat()
+      .map((m) => m.content)
+      .join('\n')
+    expect(feedback).toContain('批次不是命令数组')
+    expect(feedback).not.toContain('第 0 条')
+  })
 })
 
 describe('runAgentLoop 围栏通道与修正指令（issue 41）', () => {
