@@ -299,3 +299,84 @@ describe('runAgentLoop 读工具循环（既有行为保持）', () => {
     expect(result).toMatchObject({ prose: '画布为空。', validation: null })
   })
 })
+
+describe('runAgentLoop 形状错误不进纠错（#127 所有者裁决）', () => {
+  it('tool_calls 外壳畸形：结构化诊断中止本轮，零重试、零回喂', async () => {
+    llmChatMock.mockResolvedValueOnce(
+      reply({
+        content: '我先看看画布',
+        tool_calls: [{ id: 'c', type: 'function' }],
+      } as unknown as Partial<AssistantMessage>),
+    )
+    const messages: ChatMessage[] = [{ role: 'user', content: '创建节点' }]
+    const result = await run(messages, validators({}))
+
+    expect(llmChatMock).toHaveBeenCalledTimes(1)
+    expect(result.validation).toBeNull()
+    expect(result.toolErrors).toEqual([])
+    expect(result.completionError ?? '').toContain('结构非法')
+    expect(result.prose).toBe('我先看看画布')
+  })
+
+  it('tool_calls 非数组 / function:null / arguments 非字符串同款中止', async () => {
+    const malformed: unknown[] = [
+      { id: 'c' },
+      [{ id: 'c', type: 'function', function: null }],
+      [
+        {
+          id: 'c',
+          type: 'function',
+          function: { name: 'batch', arguments: {} },
+        },
+      ],
+    ]
+    for (const toolCalls of malformed) {
+      llmChatMock.mockReset()
+      llmChatMock.mockResolvedValueOnce(
+        reply({
+          content: null,
+          tool_calls: toolCalls,
+        } as unknown as Partial<AssistantMessage>),
+      )
+      const result = await run(
+        [{ role: 'user', content: '创建节点' }],
+        validators({}),
+      )
+      expect(llmChatMock).toHaveBeenCalledTimes(1)
+      expect(result.completionError ?? '').toContain('结构非法')
+    }
+  })
+
+  it('内容错误（坏 JSON 参数）仍走既有纠错回喂，不受形状中止影响', async () => {
+    llmChatMock
+      .mockResolvedValueOnce(
+        reply({
+          tool_calls: [
+            {
+              id: 'w1',
+              type: 'function',
+              function: { name: 'batch', arguments: '{bad' },
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        reply({ content: '已修正', tool_calls: [batchCall(GOOD_BEAT_BATCH)] }),
+      )
+    const commands = vi
+      .fn<NonNullable<BatchValidators['commands']>>()
+      .mockReturnValue(okOf())
+
+    const result = await run(
+      [{ role: 'user', content: '创建节点' }],
+      validators({ commands }),
+    )
+
+    expect(llmChatMock).toHaveBeenCalledTimes(2)
+    expect(result.validation?.ok).toBe(true)
+    // 外壳合法、内容非法：按纠错通道回喂（tool 应答携带解析诊断），模型重试后通过
+    const second = llmChatMock.mock.calls[1][2]
+    const toolMsg = second.find((m) => m.role === 'tool')
+    expect(toolMsg?.content).toContain('参数不是有效对象')
+  })
+})

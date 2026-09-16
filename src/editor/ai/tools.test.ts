@@ -3,6 +3,7 @@ import {
   AI_TOOLS,
   READ_TOOL_NAMES,
   WRITE_TOOL_NAMES,
+  toolCallsShapeDiagnostic,
   toolCallsToCommands,
   type ToolCall,
 } from './tools'
@@ -300,5 +301,74 @@ describe('工具表定义', () => {
       documentFieldTableText(),
     )
     expect(paramOf('batch', 'commands')).toContain(documentFieldTableText())
+  })
+})
+
+describe('toolCallsShapeDiagnostic（provider 回复的信任边界形状守卫，#127）', () => {
+  it('合法形态返回 null：undefined/数组/完整成员/arguments 缺省或空串', () => {
+    expect(toolCallsShapeDiagnostic(undefined)).toBeNull()
+    expect(toolCallsShapeDiagnostic(null)).toBeNull()
+    expect(
+      toolCallsShapeDiagnostic([
+        {
+          id: 'a',
+          type: 'function',
+          function: { name: 'get_node', arguments: '{"nodeId":"n1"}' },
+        },
+        {
+          id: 'b',
+          type: 'function',
+          function: { name: 'batch', arguments: '' },
+        },
+      ]),
+    ).toBeNull()
+    expect(
+      toolCallsShapeDiagnostic([
+        { id: 'c', type: 'function', function: { name: 'get_graph_snapshot' } },
+      ]),
+    ).toBeNull()
+  })
+
+  it('issue #127 复现三形态均给出可读形状诊断', () => {
+    expect(toolCallsShapeDiagnostic({ id: 'c' })).toMatch(/不是数组/)
+    expect(toolCallsShapeDiagnostic([{ id: 'c', type: 'function' }])).toMatch(
+      /第 1 项缺 function/,
+    )
+    expect(
+      toolCallsShapeDiagnostic([
+        {
+          id: 'c',
+          type: 'function',
+          function: { name: 'batch', arguments: '{}' },
+        },
+        { id: 'd', type: 'function', function: null },
+      ]),
+    ).toMatch(/第 2 项缺 function/)
+  })
+
+  it('name/id 非字符串、arguments 非字符串均为形状错误（协议外壳）', () => {
+    expect(
+      toolCallsShapeDiagnostic([
+        { id: 'c', type: 'function', function: { name: 7, arguments: '{}' } },
+      ]),
+    ).toMatch(/name/)
+    expect(
+      toolCallsShapeDiagnostic([
+        {
+          id: 9,
+          type: 'function',
+          function: { name: 'batch', arguments: '{}' },
+        },
+      ]),
+    ).toMatch(/id/)
+    expect(
+      toolCallsShapeDiagnostic([
+        {
+          id: 'c',
+          type: 'function',
+          function: { name: 'batch', arguments: { commands: [] } },
+        },
+      ]),
+    ).toMatch(/arguments/)
   })
 })
