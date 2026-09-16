@@ -502,6 +502,21 @@
   opacity: 0.5;
 }
 
+/* 在途回合取消按钮（issue #154）：busy 时替代输入框；danger 语义 */
+.pw-ai-cancel {
+  border: none;
+  border-radius: 8px;
+  padding: 7px 10px;
+  font-size: 12px;
+  background: var(--fill-quaternary);
+  color: var(--danger, var(--text-primary));
+  cursor: pointer;
+}
+
+.pw-ai-cancel:hover {
+  background: var(--fill-tertiary);
+}
+
 .pw-ai-ctx {
   font-size: 10.5px;
   color: var(--text-secondary);

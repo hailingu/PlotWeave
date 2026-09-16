@@ -369,7 +369,8 @@ function AiGuide({
   )
 }
 
-/** 输入行：消息输入（Enter 发送）+ 画布感知开关。 */
+/** 输入行（issue #154）：busy 时切换为取消按钮——在途回合可停止（协作式：
+ * agentLoop 停止后续循环，在途 llm_chat 不被中止）；画布感知开关常驻。 */
 function AiComposer({
   draft,
   setDraft,
@@ -378,6 +379,7 @@ function AiComposer({
   knowsCanvas,
   setKnowsCanvas,
   onSend,
+  onCancel,
 }: {
   readonly draft: string
   readonly setDraft: (v: string) => void
@@ -386,20 +388,32 @@ function AiComposer({
   readonly knowsCanvas: boolean
   readonly setKnowsCanvas: (updater: (v: boolean) => boolean) => void
   readonly onSend: () => void
+  readonly onCancel: () => void
 }) {
   return (
     <div className="pw-ai-input">
-      <input
-        type="text"
-        value={draft}
-        placeholder={ready ? '输入消息，Enter 发送…' : '配置后可输入…'}
-        aria-label="AI 对话输入"
-        disabled={!ready || busy}
-        onChange={(e) => setDraft(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') onSend()
-        }}
-      />
+      {busy ? (
+        <button
+          type="button"
+          className="pw-ai-cancel"
+          aria-label="取消"
+          onClick={onCancel}
+        >
+          取消
+        </button>
+      ) : (
+        <input
+          type="text"
+          value={draft}
+          placeholder={ready ? '输入消息，Enter 发送…' : '配置后可输入…'}
+          aria-label="AI 对话输入"
+          disabled={!ready}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') onSend()
+          }}
+        />
+      )}
       <button
         type="button"
         className={`pw-ai-ctx-toggle${knowsCanvas ? ' on' : ''}`}
@@ -573,6 +587,10 @@ export default function AiThread(props: AiThreadProps) {
         knowsCanvas={turn.knowsCanvas}
         setKnowsCanvas={turn.setKnowsCanvas}
         onSend={() => void turn.send()}
+        onCancel={() => {
+          turn.cancel()
+          turn.appendCancelReceipt()
+        }}
       />
     </div>
   )

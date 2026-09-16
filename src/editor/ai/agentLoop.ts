@@ -67,6 +67,27 @@ export type ReadToolExecutor = (
   args: Record<string, unknown>,
 ) => string
 
+/** 取消信号（issue #154）：协作式——runAgentLoop 在各检查点调用 isCancelled，
+ * 返回 true 即停止后续循环并抛出 TurnCancelledError；调用方据此刻「已取消」
+ * 并忽略本回合迟到结果。在途的这一次 llm_chat 请求不被中止（owner 裁决：
+ * 仅停止循环），会继续跑完，其结果随回合一起被丢弃。 */
+export interface TurnCancelSignal {
+  isCancelled(): boolean
+}
+
+/** 回合被取消时抛出的可判别错误：调用方据此产出取消回执而非错误横幅。 */
+export class TurnCancelledError extends Error {
+  constructor() {
+    super('已取消')
+    this.name = 'TurnCancelledError'
+  }
+}
+
+/** 取消检查点：置位即抛出，停止后续循环（含读回喂与纠错重试）。 */
+function throwIfCancelled(signal: TurnCancelSignal | undefined): void {
+  if (signal?.isCancelled()) throw new TurnCancelledError()
+}
+
 /** 校验失败清单的人读文本（回喂与上屏共用同一编号口径）。 */
 function issueListText(v: BatchValidation): string {
   return v.issues.map((i) => `第 ${i.index + 1} 条：${i.message}`).join('\n')
@@ -218,11 +239,14 @@ export async function runAgentLoop(
   messages: ChatMessage[],
   readTool: ReadToolExecutor,
   validators: BatchValidators,
+  signal?: TurnCancelSignal,
 ): Promise<AgentLoopResult> {
   let readRounds = 0
   let writeAttempts = 0
   const initialText =
     [...messages].reverse().find((m) => m.role === 'user')?.content ?? ''
+  // 取消点：改写归一化也消耗一次请求——用户在改写期间取消应同样生效
+  throwIfCancelled(signal)
   let expectsPreview = await expectsPreviewWithRewrite(
     provider,
     model,
@@ -230,12 +254,15 @@ export async function runAgentLoop(
   )
   let result: AgentLoopResult = { prose: '', toolErrors: [], validation: null }
   for (let round = 0; round < READ_ROUNDS + WRITE_ATTEMPTS; round++) {
+    throwIfCancelled(signal)
     const reply: AssistantMessage = await llmChat(
       provider,
       model,
       messages,
       AI_TOOLS,
     )
+    // 取消点：在途请求落定后、消费其产出前检查——取消优先于形状中止/纠错
+    throwIfCancelled(signal)
     // 形状错误结构化中止（#127 所有者裁决）：不进纠错、零回喂
     const aborted = shapeAbortResult(reply)
     if (aborted !== null) return aborted

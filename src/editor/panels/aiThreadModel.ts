@@ -1,7 +1,9 @@
 import {
   runAgentLoop,
+  TurnCancelledError,
   type AgentLoopResult,
   type ReadToolExecutor,
+  type TurnCancelSignal,
 } from '../ai/agentLoop'
 import { type ChatMessage } from '../ai/chat'
 import { CREATION_GUIDE } from '../ai/creationGuide'
@@ -208,7 +210,10 @@ function assistantEntries(
 }
 
 /** 单轮模型回合（send 拆出，issue 39）：跑 Agent 循环并把最终产出
- * 转为待追加的会话条目；网络/服务异常原样抛出，由调用方呈上屏错误。 */
+ * 转为待追加的会话条目；网络/服务异常原样抛出，由调用方呈上屏错误。
+ * 取消（issue #154）：signal 置位后 agentLoop 停止循环并抛
+ * TurnCancelledError——此处收敛为一条「已取消」note 回执（随会话持久化，
+ * 不进入喂给模型的历史），调用方据此刻「已取消」并忽略本回合迟到结果。 */
 export async function runModelTurn(
   provider: ProviderConfig,
   model: string,
@@ -216,15 +221,24 @@ export async function runModelTurn(
   readTool: ReadToolExecutor,
   validators: Parameters<typeof runAgentLoop>[4],
   nextId: () => number,
+  signal?: TurnCancelSignal,
 ): Promise<ThreadEntry[]> {
-  const result = await runAgentLoop(
-    provider,
-    model,
-    messages,
-    readTool,
-    validators,
-  )
-  return assistantEntries(result, nextId)
+  try {
+    const result = await runAgentLoop(
+      provider,
+      model,
+      messages,
+      readTool,
+      validators,
+      signal,
+    )
+    return assistantEntries(result, nextId)
+  } catch (err) {
+    if (err instanceof TurnCancelledError) {
+      return [{ id: nextId(), kind: 'note', text: '已取消' }]
+    }
+    throw err
+  }
 }
 
 /** 读工具就地执行（send 拆出）：快照来自常驻快照 prop，节点详情按 id 现查，

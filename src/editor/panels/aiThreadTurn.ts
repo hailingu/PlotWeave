@@ -25,7 +25,30 @@ import {
 } from '../ai/pendingTurns'
 import { type AppSettings, type ChatModelOption } from '../../settings/types'
 import { buildMessages, readToolOf, runModelTurn } from './aiThreadModel'
+import { TurnCancelledError } from '../ai/agentLoop'
 import { type ThreadEntry } from '../ai/session'
+
+/** 回合世代守卫与取消信号（issue #154）：send 时 beginTurn 推进世代、
+ * 重置信号；cancelTurn 置位并推进世代。回合 settle 时只有 generation 与
+ * 发起时一致（无更新的轮次）才交付上屏——新一轮或取消之后的迟到结果
+ * 都被丢弃，不覆盖新轮次、不误形成预览，也不重复上屏取消回执。 */
+function useTurnGeneration() {
+  const generationRef = useRef(0)
+  const flagRef = useRef({ cancelled: false })
+  const beginTurn = () => {
+    const generation = ++generationRef.current
+    const flag = { cancelled: false }
+    flagRef.current = flag
+    const signal = { isCancelled: () => flag.cancelled }
+    return { generation, signal }
+  }
+  const cancelTurn = () => {
+    generationRef.current += 1
+    flagRef.current.cancelled = true
+  }
+  const currentGeneration = () => generationRef.current
+  return { beginTurn, cancelTurn, currentGeneration }
+}
 
 /** 认领条目的重定映射：id 经当前实例重定基（旧计数器已随卸载作废，
  * 沿用会与恢复条目撞 key）；待执行卡按当前画布重校验——迟到批次带回的
@@ -104,7 +127,7 @@ function usePendingTurnClaim(
 }
 
 /** useAiTurn 的选项契约（AiThread 容器透传）。 */
-interface UseAiTurnOpts {
+export interface UseAiTurnOpts {
   readonly projectId: string
   readonly activeOption: ChatModelOption | null
   readonly activeProvider: AppSettings['providers'][number] | null
@@ -159,6 +182,7 @@ export function useAiTurn(opts: UseAiTurnOpts) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [knowsCanvas, setKnowsCanvas] = useState(true)
+  const turnGen = useTurnGeneration()
   /** 发起实例是否仍挂载：卸载后不得撤销登记（盒子留给认领方）或上屏。
    * StrictMode 双挂载会先跑一次 cleanup，effect 体内须重置回 true。 */
   const aliveRef = useRef(true)
@@ -173,6 +197,8 @@ export function useAiTurn(opts: UseAiTurnOpts) {
   const send = async () => {
     const text = draft.trim()
     if (!text || busy || !opts.activeOption || !opts.activeProvider) return
+    // 新一轮：世代 +1、重置取消标志（旧轮迟到的 signal 引用不影响本轮）
+    const { generation, signal } = turnGen.beginTurn()
     opts.append([{ id: opts.nextId(), kind: 'msg', role: 'user', text }])
     setDraft('')
     setBusy(true)
@@ -192,14 +218,20 @@ export function useAiTurn(opts: UseAiTurnOpts) {
       ),
       { commands: opts.onValidateCommands, prose: opts.onValidateAi },
       opts.nextId,
+      signal,
     ).then(
       (entries): TurnResult => ({ entries, error: null }),
-      (err): TurnResult => ({ entries: null, error: String(err) }),
+      (err): TurnResult =>
+        err instanceof TurnCancelledError
+          ? { entries: [{ id: 0, kind: 'note', text: '已取消' }], error: null }
+          : { entries: null, error: String(err) },
     )
     const box: TurnBox = { promise: settled }
     registerTurn(opts.projectId, box)
     const result = await settled
-    if (aliveRef.current) {
+    // 世代守卫：新一轮或取消之后，本回合结果不再交付本实例（取消回执
+    // 已由取消路径上屏，不随迟到结果重复交付）
+    if (aliveRef.current && generation === turnGen.currentGeneration()) {
       if (result.entries) opts.append(result.entries)
       else setError(result.error ?? '请求失败')
       setBusy(false)
@@ -207,8 +239,20 @@ export function useAiTurn(opts: UseAiTurnOpts) {
       // 未提交的追加被丢弃，持有机制在 cleanup 把盒子归还待重新认领
       heldBox.hold(box)
     }
-    // 已卸载：盒子留在注册表，由重挂载/重开同一项目的实例认领
+    // 已卸载或已被取代（取消/新轮次）：结果不上屏；已卸载时盒子留在
+    // 注册表由重挂载/重开同一项目的实例认领（issue #63）
   }
+  /** 取消在途回合（issue #154）：协作式——agentLoop 各检查点停止循环；
+   * 推进世代使本回合迟到结果不再交付；回执由 appendCancelReceipt 上屏。 */
+  const cancel = () => {
+    if (!busy) return
+    turnGen.cancelTurn()
+    setBusy(false)
+  }
+  /** 取消回执上屏（issue #154）：随会话持久化的「已取消」note；供 AiThread
+   * 在 cancel 后调用。 */
+  const appendCancelReceipt = () =>
+    opts.append([{ id: opts.nextId(), kind: 'note', text: '已取消' }])
   /** 清除上屏的请求错误（issue #89 评审）：新会话不得继承上一会话的
    * 失败诊断——错误仅由下次 send 开头清除会让空会话带着旧横幅。 */
   const clearError = () => setError(null)
@@ -221,6 +265,8 @@ export function useAiTurn(opts: UseAiTurnOpts) {
     knowsCanvas,
     setKnowsCanvas,
     send,
+    cancel,
+    appendCancelReceipt,
   }
 }
 
