@@ -375,10 +375,14 @@ export default function AssetsPanel() {
   const [pendingRemove, setPendingRemove] = useState<LibraryAsset | null>(null)
   const count = (kind: LibraryKind) =>
     assets.filter((a) => a.kind === kind).length
-  /** 每资产最近发起的重命名意图（#125）：迟到的旧失败被新意图取代时
-   * 不回滚、不上报——快速连续改名按最新意图收敛（与标签提交的代际
-   * 守卫同思路，不引入队列/重试）。 */
-  const renameIntent = useRef(new Map<string, string>())
+  /** 每资产最近发起的重命名代际序号（#125）：迟到的旧失败被新意图取代
+   * 时不回滚、不上报——快速连续改名按最新意图收敛。判定用递增序号而非
+   * 名称值：A→B→C→B 同名往返时首个请求的迟到失败不得误判为当前意图
+   * （PR #180 评审修复；与标签提交的代际守卫同思路，不引入队列/重试）。 */
+  const renameSeq = useRef(new Map<string, number>())
+  /** 每资产未决改名链条锚定的已落盘基线（PR #180 评审修复）：链条首个
+   * 未决改名发起时锚定，成功按落盘名推进，失败回滚消费后清除。 */
+  const renameBaseline = useRef(new Map<string, string>())
   const { busy, fileRef, importFiles, onPick } = useAssetImport(
     setAssets,
     setError,
@@ -420,26 +424,45 @@ export default function AssetsPanel() {
           onPick={onPick}
           onVisible={refreshUrl}
           onRename={(asset, name) => {
+            const seq = (renameSeq.current.get(asset.id) ?? 0) + 1
+            renameSeq.current.set(asset.id, seq)
+            // 连续改名期间锚定稳定的已落盘基线（PR #180 评审修复）：链条
+            // 首个未决改名发起时取最近快照/磁盘名；中途意图发起时的 prop
+            // 名是乐观值，不得当基线——失败回滚沿用到链条结束
+            if (!renameBaseline.current.has(asset.id)) {
+              renameBaseline.current.set(
+                asset.id,
+                libraryStore.persistedSnapshot(asset.id)?.name ?? asset.name,
+              )
+            }
             setAssets((list) =>
               list.map((a) => (a.id === asset.id ? { ...a, name } : a)),
             )
-            // 失败处理（#125）：错误横幅可见 + 乐观值回滚到最近已落盘
-            // 基线——不把未落盘名称显示为已保存结果；被更新的重命名
-            // 意图取代的迟到失败静默（见 renameIntent）。不做重试或
-            // 草稿暂存，用户可重新发起改名。
-            renameIntent.current.set(asset.id, name)
-            libraryStore.updateMeta(asset.id, { name }).catch((err) => {
-              if (renameIntent.current.get(asset.id) !== name) return
-              renameIntent.current.delete(asset.id)
-              setError(String(err))
-              const baseline =
-                libraryStore.persistedSnapshot(asset.id)?.name ?? asset.name
-              setAssets((list) =>
-                list.map((a) =>
-                  a.id === asset.id ? { ...a, name: baseline } : a,
-                ),
-              )
-            })
+            // 失败处理（#125）：错误横幅可见 + 乐观值回滚到锚定基线——
+            // 不把未落盘名称显示为已保存结果。代际判定用递增序号而非
+            // 名称值（PR #180 评审修复：A→B→C→B 同名往返不得误判），
+            // 被新意图取代的迟到失败静默。不做重试或草稿暂存，用户可
+            // 重新发起改名。
+            libraryStore
+              .updateMeta(asset.id, { name })
+              .then(() => {
+                // 门面按资产 FIFO 串行：每次成功把基线推进到该次落盘名，
+                // 最终值即磁盘真值（被取代的成功同样推进）
+                renameBaseline.current.set(asset.id, name)
+              })
+              .catch((err) => {
+                if (renameSeq.current.get(asset.id) !== seq) return
+                const baseline = renameBaseline.current.get(asset.id)
+                renameBaseline.current.delete(asset.id)
+                setError(String(err))
+                setAssets((list) =>
+                  list.map((a) =>
+                    a.id === asset.id && baseline !== undefined
+                      ? { ...a, name: baseline }
+                      : a,
+                  ),
+                )
+              })
           }}
           onTagsBlur={commitTags}
           onRequestRemove={setPendingRemove}
