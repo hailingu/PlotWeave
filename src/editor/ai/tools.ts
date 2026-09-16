@@ -280,6 +280,39 @@ function normalizeBatchCommand(cmd: unknown): AiCommand {
   return cmd as AiCommand
 }
 
+/**
+ * provider 回复 tool_calls 的信任边界形状守卫（issue #127，所有者裁决）：
+ * 外壳畸形（非数组 / 成员非对象 / 缺 function 对象 / name、id 非字符串 /
+ * arguments 在场而非字符串）属 provider 协议故障，不是模型可修正的生成
+ * 错误——不进纠错回喂，由调用方以结构化诊断直接中止本轮。arguments
+ * 缺省被下游 \`|| '{}'\` 容忍，不计形状错误；type 字段消费侧不使用，
+ * 不校验。外壳合法后，arguments 字符串内容坏 JSON、未知工具名等仍走
+ * toolCallsToCommands 的内容级 errors 通道（纠错回喂）。
+ */
+export function toolCallsShapeDiagnostic(calls: unknown): string | null {
+  if (calls === undefined || calls === null) return null
+  if (!Array.isArray(calls)) return 'tool_calls 不是数组'
+  for (let i = 0; i < calls.length; i += 1) {
+    const c = calls[i]
+    if (typeof c !== 'object' || c === null || Array.isArray(c))
+      return `tool_calls 第 ${i + 1} 项不是对象`
+    if (typeof (c as { id?: unknown }).id !== 'string')
+      return `tool_calls 第 ${i + 1} 项的 id 不是字符串`
+    const fn = (c as { function?: unknown }).function
+    if (typeof fn !== 'object' || fn === null || Array.isArray(fn))
+      return `tool_calls 第 ${i + 1} 项缺 function 对象`
+    const { arguments: args, name } = fn as {
+      name?: unknown
+      arguments?: unknown
+    }
+    if (typeof name !== 'string' || name === '')
+      return `tool_calls 第 ${i + 1} 项的 function.name 不是非空字符串`
+    if (args !== undefined && typeof args !== 'string')
+      return `tool_calls 第 ${i + 1} 项的 function.arguments 不是字符串`
+  }
+  return null
+}
+
 export interface ReadRequest {
   /** tool_call id，回喂 role:'tool' 消息时透传。 */
   id: string

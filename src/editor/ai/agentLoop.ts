@@ -9,6 +9,7 @@ import { extractBatchJson } from './batchText'
 import type { AiCommand, BatchValidation } from './commands'
 import {
   AI_TOOLS,
+  toolCallsShapeDiagnostic,
   toolCallsToCommands,
   type ReadRequest,
   type ToolCall,
@@ -175,6 +176,41 @@ function resultForReply(
   return result
 }
 
+/** 信任边界形状守卫的中止结果（#127 所有者裁决）：tool_calls 外壳畸形
+ * 是 provider 协议故障而非模型可修正错误——纠错回喂是面向模型的修正
+ * 指令，外壳错误模型无力修正且重试大概率原样失败、空烧预算；以
+ * completionError 结构化诊断（展示侧 ⚠ 前缀随历史保存）直接结束本轮。
+ * 外壳合法后的内容级错误（坏 JSON 参数、未知工具名）不在此列。 */
+function shapeAbortResult(reply: AssistantMessage): AgentLoopResult | null {
+  const shapeError = toolCallsShapeDiagnostic(reply.tool_calls)
+  if (shapeError === null) return null
+  return {
+    prose: (reply.content ?? '').trim(),
+    toolErrors: [],
+    validation: null,
+    completionError:
+      `本轮中止：模型服务返回的 tool_calls 结构非法（${shapeError}）。` +
+      '这属于 provider 兼容性问题，自动重试无法修正；' +
+      '请检查所选 provider 的 OpenAI 兼容性，或调整后重新发送。',
+  }
+}
+
+/** 初始动作意图预判（#91）：词表先行；含糊输入经一次改写归一化补充
+ * 判定——改写回复按整回复校验后才采信，失败或非规范回复回退词表结果，
+ * 回合照常进行；改写不占读写预算。返回是否期待写方案预览。 */
+async function expectsPreviewWithRewrite(
+  provider: ProviderConfig,
+  model: string,
+  initialText: string,
+): Promise<boolean> {
+  let expects = expectsActionPreview(initialText)
+  if (needsActionRewrite(initialText)) {
+    const rewritten = await rewriteActionQuery(provider, model, initialText)
+    expects ||= rewritten !== null
+  }
+  return expects
+}
+
 /** 朴素 tool-calling 循环：messages 原地追加，返回最后一轮结果。 */
 export async function runAgentLoop(
   provider: ProviderConfig,
@@ -187,14 +223,11 @@ export async function runAgentLoop(
   let writeAttempts = 0
   const initialText =
     [...messages].reverse().find((m) => m.role === 'user')?.content ?? ''
-  let expectsPreview = expectsActionPreview(initialText)
-  if (needsActionRewrite(initialText)) {
-    // #91：含糊输入经改写归一化判定动作意图，改写回复按整回复校验后
-    // 才采信；失败或非规范回复回退词表结果，回合照常进行。改写每轮至
-    // 多一次，不计入读写预算。
-    const rewritten = await rewriteActionQuery(provider, model, initialText)
-    expectsPreview ||= rewritten !== null
-  }
+  let expectsPreview = await expectsPreviewWithRewrite(
+    provider,
+    model,
+    initialText,
+  )
   let result: AgentLoopResult = { prose: '', toolErrors: [], validation: null }
   for (let round = 0; round < READ_ROUNDS + WRITE_ATTEMPTS; round++) {
     const reply: AssistantMessage = await llmChat(
@@ -203,6 +236,9 @@ export async function runAgentLoop(
       messages,
       AI_TOOLS,
     )
+    // 形状错误结构化中止（#127 所有者裁决）：不进纠错、零回喂
+    const aborted = shapeAbortResult(reply)
+    if (aborted !== null) return aborted
     const calls: ToolCall[] = reply.tool_calls ?? []
     const parsed = toolCallsToCommands(calls)
     const { readRequests, errors } = parsed
