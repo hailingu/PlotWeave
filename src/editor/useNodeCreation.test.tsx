@@ -115,6 +115,34 @@ describe('useNodeCreation（§3.3 新建/复制）', () => {
     expect(result.current.doc.nodes.map((n) => n.id)).toEqual(['sc1'])
   })
 
+  it('同毫秒连续复制：副本 id 互异，单次撤销只移除该次副本（#129）', () => {
+    // 构造时间固定的最小探针（issue 复现口径）：同 Date.now() 值内复制两次
+    const fixedNow = vi.spyOn(Date, 'now').mockReturnValue(1700000000000)
+    const { result, commands } = setup()
+    act(() => result.current.creation.duplicateNode('sc1'))
+    act(() => result.current.creation.duplicateNode('sc1'))
+    fixedNow.mockRestore()
+
+    const nodes = result.current.doc.nodes
+    expect(nodes).toHaveLength(3)
+    const [firstCopyId, secondCopyId] = [nodes[1].id, nodes[2].id]
+    expect(new Set(nodes.map((n) => n.id)).size).toBe(3)
+
+    // 撤销第二次复制：按 id 过滤只移除该副本，第一次副本保留
+    act(() => commands[1].undo())
+    expect(result.current.doc.nodes.map((n) => n.id)).toEqual([
+      'sc1',
+      firstCopyId,
+    ])
+    // 重做恢复：三节点、身份不变
+    act(() => commands[1].redo())
+    expect(result.current.doc.nodes.map((n) => n.id)).toEqual([
+      'sc1',
+      firstCopyId,
+      secondCopyId,
+    ])
+  })
+
   it('duplicateNode：未知 id 不写状态也不入栈', () => {
     const { result, commands } = setup()
     act(() => result.current.creation.duplicateNode('missing'))
