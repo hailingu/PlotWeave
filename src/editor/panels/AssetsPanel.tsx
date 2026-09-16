@@ -362,6 +362,69 @@ function useAssetTagsCommit(
   return { commitTags, tagsError, forgetTags }
 }
 
+/** 重命名提交状态族（AssetsPanel 拆分，PR #180 评审修复超限）：乐观
+ * 更新 + 失败回滚 + 代际守卫 + 专属错误行。
+ * - 代际（每资产递增序号，非名称值）：被新意图取代的迟到失败静默——
+ *   A→B→C→B 同名往返不得误判（快速连续改名按最新意图收敛）。
+ * - 基线：失败回滚优先读门面跨挂载推进的 persistedSnapshot（面板重挂载
+ *   期间旧实例的排队写入可能已把磁盘推进到新于本地锚点的值），本地
+ *   锚点兜底——链条首个未决改名发起时锚定（中途意图的 prop 名是乐观
+ *   值，不得当基线），成功按该次落盘名推进（门面按资产 FIFO，最终成功
+ *   即磁盘真值），失败回滚消费后清除。
+ * - 错误：重命名专属行（与导入/列表/标签错误互不覆盖），同资产重试
+ *   成功即解除，不误清其他操作的错误。
+ * 不做重试或草稿暂存，用户可重新发起改名（#125）。 */
+function useAssetRename(
+  setAssets: (fn: (list: LibraryAsset[]) => LibraryAsset[]) => void,
+) {
+  /** 每资产最近发起的重命名代际序号。 */
+  const renameSeq = useRef(new Map<string, number>())
+  /** 每资产未决改名链条锚定的已落盘基线。 */
+  const renameBaseline = useRef(new Map<string, string>())
+  const [renameError, setRenameError] = useState<{
+    id: string
+    message: string
+  } | null>(null)
+
+  const rename = (asset: LibraryAsset, name: string) => {
+    const seq = (renameSeq.current.get(asset.id) ?? 0) + 1
+    renameSeq.current.set(asset.id, seq)
+    if (!renameBaseline.current.has(asset.id)) {
+      renameBaseline.current.set(
+        asset.id,
+        libraryStore.persistedSnapshot(asset.id)?.name ?? asset.name,
+      )
+    }
+    setAssets((list) =>
+      list.map((a) => (a.id === asset.id ? { ...a, name } : a)),
+    )
+    libraryStore
+      .updateMeta(asset.id, { name })
+      .then(() => {
+        renameBaseline.current.set(asset.id, name)
+        setRenameError((cur) => (cur?.id === asset.id ? null : cur))
+      })
+      .catch((err) => {
+        if (renameSeq.current.get(asset.id) !== seq) return
+        // 跨挂载真值优先：重挂载期间旧实例排队写入可能已把快照推进到
+        // 新于本地锚点的值（PR #180 评审修复）
+        const baseline =
+          libraryStore.persistedSnapshot(asset.id)?.name ??
+          renameBaseline.current.get(asset.id)
+        renameBaseline.current.delete(asset.id)
+        setRenameError({ id: asset.id, message: String(err) })
+        setAssets((list) =>
+          list.map((a) =>
+            a.id === asset.id && baseline !== undefined
+              ? { ...a, name: baseline }
+              : a,
+          ),
+        )
+      })
+  }
+  return { rename, renameError }
+}
+
 /** 把各资产未解决的标签失败合并为单条横幅文案（分号分隔）。 */
 function joinTagsErrors(errors: Map<string, string>): string {
   return [...errors.values()].join('；')
@@ -375,20 +438,13 @@ export default function AssetsPanel() {
   const [pendingRemove, setPendingRemove] = useState<LibraryAsset | null>(null)
   const count = (kind: LibraryKind) =>
     assets.filter((a) => a.kind === kind).length
-  /** 每资产最近发起的重命名代际序号（#125）：迟到的旧失败被新意图取代
-   * 时不回滚、不上报——快速连续改名按最新意图收敛。判定用递增序号而非
-   * 名称值：A→B→C→B 同名往返时首个请求的迟到失败不得误判为当前意图
-   * （PR #180 评审修复；与标签提交的代际守卫同思路，不引入队列/重试）。 */
-  const renameSeq = useRef(new Map<string, number>())
-  /** 每资产未决改名链条锚定的已落盘基线（PR #180 评审修复）：链条首个
-   * 未决改名发起时锚定，成功按落盘名推进，失败回滚消费后清除。 */
-  const renameBaseline = useRef(new Map<string, string>())
   const { busy, fileRef, importFiles, onPick } = useAssetImport(
     setAssets,
     setError,
     refreshUrl,
   )
   const { commitTags, tagsError, forgetTags } = useAssetTagsCommit(setAssets)
+  const { rename, renameError } = useAssetRename(setAssets)
 
   const remove = (asset: LibraryAsset) => {
     forgetTags(asset.id)
@@ -423,53 +479,18 @@ export default function AssetsPanel() {
           onBack={() => setSelectedKind(null)}
           onPick={onPick}
           onVisible={refreshUrl}
-          onRename={(asset, name) => {
-            const seq = (renameSeq.current.get(asset.id) ?? 0) + 1
-            renameSeq.current.set(asset.id, seq)
-            // 连续改名期间锚定稳定的已落盘基线（PR #180 评审修复）：链条
-            // 首个未决改名发起时取最近快照/磁盘名；中途意图发起时的 prop
-            // 名是乐观值，不得当基线——失败回滚沿用到链条结束
-            if (!renameBaseline.current.has(asset.id)) {
-              renameBaseline.current.set(
-                asset.id,
-                libraryStore.persistedSnapshot(asset.id)?.name ?? asset.name,
-              )
-            }
-            setAssets((list) =>
-              list.map((a) => (a.id === asset.id ? { ...a, name } : a)),
-            )
-            // 失败处理（#125）：错误横幅可见 + 乐观值回滚到锚定基线——
-            // 不把未落盘名称显示为已保存结果。代际判定用递增序号而非
-            // 名称值（PR #180 评审修复：A→B→C→B 同名往返不得误判），
-            // 被新意图取代的迟到失败静默。不做重试或草稿暂存，用户可
-            // 重新发起改名。
-            libraryStore
-              .updateMeta(asset.id, { name })
-              .then(() => {
-                // 门面按资产 FIFO 串行：每次成功把基线推进到该次落盘名，
-                // 最终值即磁盘真值（被取代的成功同样推进）
-                renameBaseline.current.set(asset.id, name)
-              })
-              .catch((err) => {
-                if (renameSeq.current.get(asset.id) !== seq) return
-                const baseline = renameBaseline.current.get(asset.id)
-                renameBaseline.current.delete(asset.id)
-                setError(String(err))
-                setAssets((list) =>
-                  list.map((a) =>
-                    a.id === asset.id && baseline !== undefined
-                      ? { ...a, name: baseline }
-                      : a,
-                  ),
-                )
-              })
-          }}
+          onRename={rename}
           onTagsBlur={commitTags}
           onRequestRemove={setPendingRemove}
         />
       )}
       {busy && <div className="pw-assets-hint">导入中…</div>}
       {error && <div className="pw-assets-hint pw-assets-error">{error}</div>}
+      {renameError && (
+        <div className="pw-assets-hint pw-assets-error">
+          {renameError.message}
+        </div>
+      )}
       {tagsError && (
         <div className="pw-assets-hint pw-assets-error">{tagsError}</div>
       )}

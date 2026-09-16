@@ -218,6 +218,61 @@ describe('AssetsPanel 类别内操作', () => {
     expect(await screen.findByText('Error: 磁盘只读')).toBeTruthy()
   })
 
+  it('面板重挂载后失败回滚到门面快照推进的基线（PR #180 评审）', async () => {
+    const spies = mockStore([asset()])
+    // 门面快照随旧实例排队写入的成功跨挂载推进（桩变量模拟）
+    let persisted: LibraryAsset | undefined = asset()
+    vi.spyOn(libraryStore, 'persistedSnapshot').mockImplementation(
+      () => persisted,
+    )
+    let resolveFirst!: (v: LibraryAsset) => void
+    let rejectSecond!: (err: Error) => void
+    spies.updateMeta
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            rejectSecond = reject
+          }),
+      )
+    await enterCharacter()
+    await renameInline('女主正面', '女主微笑')
+    // 切出资产 tab：面板卸载，新实例按列表读到 A（B 尚未落盘）并发起 C
+    cleanup()
+    await enterCharacter()
+    await renameInline('女主正面', '女主微笑2')
+    // 旧实例排队的 B 先成功：门面快照推进到 B（磁盘真值）
+    resolveFirst(asset({ name: '女主微笑' }))
+    persisted = asset({ name: '女主微笑' })
+    // 新实例的 C 失败：回滚须取门面快照（B），不得用本地锚定的 A
+    rejectSecond(new Error('磁盘只读'))
+    await act(async () => {})
+    expect(await screen.findByRole('button', { name: '女主微笑' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '女主正面' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '女主微笑2' })).toBeNull()
+    expect(await screen.findByText('Error: 磁盘只读')).toBeTruthy()
+  })
+
+  it('改名失败后同资产重试成功解除错误（PR #180 评审）', async () => {
+    const spies = mockStore([asset()])
+    vi.spyOn(libraryStore, 'persistedSnapshot').mockReturnValue(asset())
+    spies.updateMeta
+      .mockRejectedValueOnce(new Error('磁盘只读'))
+      .mockResolvedValueOnce(asset({ name: '女主微笑' }))
+    await enterCharacter()
+    await renameInline('女主正面', '女主微笑')
+    expect(await screen.findByText('Error: 磁盘只读')).toBeTruthy()
+    // 失败已回滚，重新发起同名改名并成功：错误随之解除
+    await renameInline('女主正面', '女主微笑')
+    expect(await screen.findByRole('button', { name: '女主微笑' })).toBeTruthy()
+    await waitFor(() => expect(screen.queryByText(/磁盘只读/)).toBeNull())
+  })
+
   it('标签失焦提交：中英文逗号分隔、去空白、滤空', async () => {
     const spies = mockStore([asset()])
     await enterCharacter()
