@@ -24,7 +24,8 @@ choosing one rule over another.
 Size is a review signal, not a substitute for judging cohesion. Crossing a
 review threshold requires an explicit decomposition review. The repository's
 hard caps in the root [`AGENTS.md`](../../AGENTS.md) (800 physical lines for
-maintained source files, 1800 for test files, 80 for executable units) remain
+maintained source files, 1800 for test files, 80 code lines for executable
+units — comments excluded) remain
 mandatory; the review thresholds below trigger earlier, discussion-only
 attention.
 
@@ -32,7 +33,7 @@ attention.
 | --- | --- | --- |
 | Maintained production source file | More than 600 physical lines | 800 physical lines |
 | Maintained test source file | More than 1,000 physical lines | 1,800 physical lines |
-| Function, method, closure, hook, component, or equivalent executable unit | More than 60 physical lines | 80 physical lines |
+| Function, method, closure, hook, component, or equivalent executable unit | More than 60 code lines | 80 code lines (comments excluded) |
 | Cyclomatic complexity, when measured by configured tooling | More than 10 | N/A — record and decompose |
 | Executable nesting depth | More than 4 levels | 6 levels |
 
@@ -41,8 +42,10 @@ Apply the guardrails as follows:
 - Count a file's complete physical span, including comments and documentation,
   because that is the amount a reviewer must navigate. Count an executable
   unit's span from its declaration or signature through the end of its
-  implementation body; preceding annotations and documentation comments are
-  outside the limit.
+  implementation body: comment lines — documentation or inline, anywhere in
+  the span — are excluded from the unit-level counts (owner decision,
+  2026-09-16) and blank lines still count; the file-level caps remain
+  complete physical spans.
 - Treat every measurement as point-in-time evidence for the inspected source
   revision. Re-run the review when an affected change crosses a threshold; do
   not continuously rewrite historical evidence after unrelated edits.
