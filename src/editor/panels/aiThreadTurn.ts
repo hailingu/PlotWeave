@@ -57,6 +57,84 @@ function useTurnGeneration() {
   return { beginTurn, cancelTurn, isCurrentTurnCancelled, currentGeneration }
 }
 
+/** 回合生命周期（issue #154，useAiTurn 拆分降行数）：发起时 begin 建 signal
+ * 并登记盒子；settle 按世代守卫交付或注销（取消时避免重开复活）；cancel
+ * 置位本世代 signal 并推进世代（发起方 settle 据此注销，claim 方据此不恢复 busy）。 */
+function useTurnLifecycle(projectId: string) {
+  const { beginTurn, cancelTurn, isCurrentTurnCancelled, currentGeneration } =
+    useTurnGeneration()
+  const boxRef = useRef<TurnBox | null>(null)
+  const begin = () => beginTurn()
+  const register = (box: TurnBox) => {
+    boxRef.current = box
+    registerTurn(projectId, box)
+  }
+  /** settle 守卫：本实例仍拥有当前世代才交付；否则已取消则注销盒子。 */
+  const settle = (
+    generation: number,
+    alive: boolean,
+    consume: () => void,
+    hold: (box: TurnBox) => void,
+  ) => {
+    const box = boxRef.current
+    if (alive && generation === currentGeneration()) {
+      consume()
+      if (box) hold(box)
+    } else if (isCurrentTurnCancelled() && box) {
+      unregisterTurn(projectId, box)
+    }
+  }
+  return { begin, register, settle, cancel: cancelTurn }
+}
+
+/** 运行一轮模型回合并登记盒子（useAiTurn 拆分降行数）：runModelTurn 跑
+ * agentLoop（带 signal），结果收敛为 TurnResult；取消形状落定后给盒子打
+ * canceller 标（认领方据此停止旧轮，PR #187 评审）。 */
+function runTurn(
+  opts: UseAiTurnOpts,
+  text: string,
+  knowsCanvas: boolean,
+  signal: { isCancelled: () => boolean },
+  register: (box: TurnBox) => void,
+): Promise<TurnResult> {
+  const settled = runModelTurn(
+    opts.activeProvider!,
+    opts.activeOption!.model,
+    buildMessages(opts.thread, text, knowsCanvas, opts.canvasDigest),
+    readToolOf(
+      opts.canvasDigest,
+      opts.onReadNode,
+      opts.onReadSettings,
+      opts.onReadDocument,
+    ),
+    { commands: opts.onValidateCommands, prose: opts.onValidateAi },
+    opts.nextId,
+    signal,
+  ).then(
+    (entries): TurnResult => ({ entries, error: null }),
+    (err): TurnResult =>
+      err instanceof TurnCancelledError
+        ? { entries: [{ id: 0, kind: 'note', text: '已取消' }], error: null }
+        : { entries: null, error: String(err) },
+  )
+  const boxRef: { current: TurnBox | null } = { current: null }
+  const consumed = settled.then((result) => {
+    const cancelBox = boxRef.current
+    if (cancelBox && isCancelledTurnResult(result)) {
+      Object.assign(cancelBox, {
+        canceller: () => {
+          signal.isCancelled = () => true
+        },
+      })
+    }
+    return result
+  })
+  const box: TurnBox = { promise: consumed }
+  boxRef.current = box
+  register(box)
+  return consumed
+}
+
 /** 认领条目的重定映射：id 经当前实例重定基（旧计数器已随卸载作废，
  * 沿用会与恢复条目撞 key）；待执行卡按当前画布重校验——迟到批次带回的
  * 校验结果基于已卸载实例的旧闭包，不得作为执行预览（issue #63 评审）。 */
@@ -189,7 +267,7 @@ export function useAiTurn(opts: UseAiTurnOpts) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [knowsCanvas, setKnowsCanvas] = useState(true)
-  const turnGen = useTurnGeneration()
+  const turn = useTurnLifecycle(opts.projectId)
   /** 发起实例是否仍挂载：卸载后不得撤销登记（盒子留给认领方）或上屏。
    * StrictMode 双挂载会先跑一次 cleanup，effect 体内须重置回 true。 */
   const aliveRef = useRef(true)
@@ -205,67 +283,26 @@ export function useAiTurn(opts: UseAiTurnOpts) {
     const text = draft.trim()
     if (!text || busy || !opts.activeOption || !opts.activeProvider) return
     // 新一轮：世代 +1、重置取消标志（旧轮迟到的 signal 引用不影响本轮）
-    const { generation, signal } = turnGen.beginTurn()
+    const { generation, signal } = turn.begin()
     opts.append([{ id: opts.nextId(), kind: 'msg', role: 'user', text }])
     setDraft('')
     setBusy(true)
     setError(null)
     opts.setArmedIdx(null)
-    // 校验在循环内进行（issue 41）：未通过的批次回喂错误清单让模型有限次
-    // 纠错，最终校验结果（通过/耗尽/纯讨论）随循环产出返回
-    const settled = runModelTurn(
-      opts.activeProvider,
-      opts.activeOption.model,
-      buildMessages(opts.thread, text, knowsCanvas, opts.canvasDigest),
-      readToolOf(
-        opts.canvasDigest,
-        opts.onReadNode,
-        opts.onReadSettings,
-        opts.onReadDocument,
-      ),
-      { commands: opts.onValidateCommands, prose: opts.onValidateAi },
-      opts.nextId,
-      signal,
-    ).then(
-      (entries): TurnResult => ({ entries, error: null }),
-      (err): TurnResult =>
-        err instanceof TurnCancelledError
-          ? { entries: [{ id: 0, kind: 'note', text: '已取消' }], error: null }
-          : { entries: null, error: String(err) },
-    )
-    // 取消盒子的消费者（.then 后）——落定后据此打 canceller 标并判取消
-    const boxRef: { current: TurnBox | null } = { current: null }
-    const consumed = settled.then((result) => {
-      const cancelBox = boxRef.current
-      if (cancelBox && isCancelledTurnResult(result)) {
-        Object.assign(cancelBox, {
-          canceller: () => {
-            signal.isCancelled = () => true
-          },
-        })
-      }
-      return result
-    })
-    const box: TurnBox = { promise: consumed }
-    boxRef.current = box
-    registerTurn(opts.projectId, box)
-    const result = await consumed
+    // 校验在循环内进行（issue 41）：批次回喂纠错，最终校验随循环产出
+    const result = await runTurn(opts, text, knowsCanvas, signal, turn.register)
     // 世代守卫：新一轮或取消之后，本回合结果不再交付本实例（取消回执
     // 已由取消路径上屏，不随迟到结果重复交付）
-    if (aliveRef.current && generation === turnGen.currentGeneration()) {
-      if (result.entries) opts.append(result.entries)
-      else setError(result.error ?? '请求失败')
-      setBusy(false)
-      // 本实例消费，但提交确认前不撤销登记：落定与卸载同批调度时，
-      // 未提交的追加被丢弃，持有机制在 cleanup 把盒子归还待重新认领
-      heldBox.hold(box)
-    } else if (turnGen.isCurrentTurnCancelled()) {
-      // 本实例不再消费（已卸载/被取代）且本世代已取消：注销注册表，避免重开
-      // 复活旧盒子、重复上屏取消回执或陈旧失败（含 reject 形状——在途请求先
-      // reject 时结果为错误而非取消；identity 检查保证只移除本盒子，不误删
-      // 已登记的新轮）。未取消：留盒给认领方（#63）。
-      unregisterTurn(opts.projectId, box)
-    }
+    turn.settle(
+      generation,
+      aliveRef.current,
+      () => {
+        if (result.entries) opts.append(result.entries)
+        else setError(result.error ?? '请求失败')
+        setBusy(false)
+      },
+      heldBox.hold,
+    )
     // 已卸载或已被取代（取消/新轮次）：结果不上屏；已取消盒子已注销，
     // 普通（未取消）在途回合的盒子由认领路径转移（issue #63）
   }
@@ -273,7 +310,7 @@ export function useAiTurn(opts: UseAiTurnOpts) {
    * 推进世代使本回合迟到结果不再交付；回执由 appendCancelReceipt 上屏。 */
   const cancel = () => {
     if (!busy) return
-    turnGen.cancelTurn()
+    turn.cancel()
     setBusy(false)
   }
   /** 取消回执上屏（issue #154）：随会话持久化的「已取消」note；供 AiThread

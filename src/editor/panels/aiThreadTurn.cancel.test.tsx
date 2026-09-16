@@ -6,6 +6,7 @@
  * runModelTurn 打桩，不触 IPC。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react'
 import { useAiTurn, type UseAiTurnOpts } from './aiThreadTurn'
 import { runModelTurn } from './aiThreadModel'
@@ -261,5 +262,22 @@ describe('useAiTurn 取消（issue #154）', () => {
     cancelBox.canceller?.()
     expect(calls[0]!.signal?.isCancelled()).toBe(true)
     void calls
+  })
+
+  it('useAiTurn 不超过 80 代码行（函数上限，评审 P1）', () => {
+    const lines = readFileSync(
+      `${import.meta.dirname}/aiThreadTurn.ts`,
+      'utf8',
+    ).split('\n')
+    const start = lines.findIndex((l) =>
+      l.startsWith('export function useAiTurn'),
+    )
+    expect(start).toBeGreaterThanOrEqual(0)
+    let end = start
+    while (end < lines.length && lines[end] !== '}') end++
+    const codeLines = lines
+      .slice(start, end + 1)
+      .filter((l) => l.trim() !== '' && !l.trim().startsWith('//'))
+    expect(codeLines.length).toBeLessThanOrEqual(80)
   })
 })
