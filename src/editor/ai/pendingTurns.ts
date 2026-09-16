@@ -21,6 +21,8 @@ export interface TurnResult {
 /** 在途回合容器：promise 落定后持有结果；由注册表跨卸载转交给认领方。 */
 export interface TurnBox {
   readonly promise: Promise<TurnResult>
+  /** 取消钩子（issue #154）：认领方调用以停止旧轮（置位其取消信号）。 */
+  readonly canceller?: () => void
 }
 
 const boxes = new Map<string, TurnBox>()

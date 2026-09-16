@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { llmChat, type AssistantMessage, type ChatMessage } from './chat'
-import { runAgentLoop, type BatchValidators } from './agentLoop'
+import {
+  runAgentLoop,
+  TurnCancelledError,
+  type BatchValidators,
+} from './agentLoop'
 import type { BatchValidation, ValidatedCommand } from './commands'
 import type { ProviderConfig } from '../../settings/types'
 import type { ToolCall } from './tools'
@@ -378,5 +382,56 @@ describe('runAgentLoop 形状错误不进纠错（#127 所有者裁决）', () =
     const second = llmChatMock.mock.calls[1][2]
     const toolMsg = second.find((m) => m.role === 'tool')
     expect(toolMsg?.content).toContain('参数不是有效对象')
+  })
+})
+
+describe('runAgentLoop 取消（issue #154）', () => {
+  it('取消信号：停止后续循环，抛出可判别的 TurnCancelledError', async () => {
+    let round = 0
+    llmChatMock.mockImplementation(() => {
+      round += 1
+      // 第 1 次 = 改写判定；第 2 次 = 回合第 1 轮（纯读）；第 3 次起取消生效
+      if (round <= 2)
+        return Promise.resolve(
+          reply({
+            tool_calls: [
+              {
+                id: 'r1',
+                type: 'function',
+                function: { name: 'get_graph_snapshot', arguments: '{}' },
+              },
+            ],
+          }),
+        )
+      return Promise.resolve(reply({ content: '画布概览。' }))
+    })
+    const signal = { isCancelled: () => round >= 3 }
+
+    await expect(
+      runAgentLoop(
+        PROVIDER,
+        'm',
+        [{ role: 'user', content: '看看画布再改' }],
+        () => 'SNAP',
+        validators({}),
+        signal,
+      ),
+    ).rejects.toThrowError(TurnCancelledError)
+    // 改写 + 第 1 轮已发；第 1 轮落定后、消费其产出前命中取消检查点（在途
+    // 请求不被中止），循环终止，第 2 轮不再发起
+    expect(llmChatMock).toHaveBeenCalledTimes(3)
+  })
+
+  it('未提供取消信号时循环行为不变', async () => {
+    llmChatMock.mockResolvedValue(reply({ content: '建议先立冲突。' }))
+    const result = await runAgentLoop(
+      PROVIDER,
+      'm',
+      [{ role: 'user', content: '怎么写？' }],
+      () => 'SNAP',
+      validators({}),
+    )
+    expect(result.prose).toBe('建议先立冲突。')
+    expect(result.validation).toBeNull()
   })
 })

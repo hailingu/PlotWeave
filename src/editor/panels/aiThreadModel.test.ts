@@ -4,9 +4,26 @@
  * 持续失败，喂给模型的部分必须按条数与字符双界截断（完整线程仅
  * 用于界面展示）。
  */
-import { describe, expect, it } from 'vitest'
-import { buildMessages, readToolOf } from './aiThreadModel'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { buildMessages, readToolOf, runModelTurn } from './aiThreadModel'
+import { TurnCancelledError } from '../ai/agentLoop'
+import { runAgentLoop } from '../ai/agentLoop'
 import type { ThreadEntry } from '../ai/session'
+import type { ProviderConfig } from '../../settings/types'
+
+vi.mock('../ai/agentLoop', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../ai/agentLoop')>()
+  return { ...actual, runAgentLoop: vi.fn() }
+})
+const runAgentLoopMock = vi.mocked(runAgentLoop)
+
+afterEach(() => {
+  vi.restoreAllMocks()
+})
+
+beforeEach(() => {
+  runAgentLoopMock.mockReset()
+})
 
 const msg = (
   id: number,
@@ -250,5 +267,68 @@ describe('readToolOf · 读工具分发（issue 56 增 get_document）', () => {
     expect(tool('unknown_tool', args({}))).toBe(
       'unknown read tool: unknown_tool',
     )
+  })
+})
+
+describe('runModelTurn 取消（issue #154）', () => {
+  const provider = {
+    id: 'p',
+    label: 'P',
+    baseUrl: 'https://x/v1',
+    enabled: true,
+    models: ['m'],
+  } as unknown as ProviderConfig
+  let id = 0
+  const nextId = () => ++id
+
+  it('取消：产出单条「已取消」note 回执，透传 signal 给 agentLoop', async () => {
+    const signal = { isCancelled: () => true }
+    runAgentLoopMock.mockRejectedValue(new TurnCancelledError())
+
+    const entries = await runModelTurn(
+      provider,
+      'm',
+      [{ role: 'user', content: '看看画布' }],
+      () => 'SNAP',
+      {},
+      nextId,
+      signal,
+    )
+
+    expect(runAgentLoopMock).toHaveBeenCalledWith(
+      provider,
+      'm',
+      [{ role: 'user', content: '看看画布' }],
+      expect.any(Function),
+      {},
+      signal,
+    )
+    expect(entries).toEqual([
+      { id: expect.any(Number), kind: 'note', text: '已取消' },
+    ])
+  })
+
+  it('未取消：正常映射 agentLoop 产出', async () => {
+    runAgentLoopMock.mockResolvedValue({
+      prose: '建议先立冲突。',
+      toolErrors: [],
+      validation: null,
+    })
+    const entries = await runModelTurn(
+      provider,
+      'm',
+      [{ role: 'user', content: '怎么写？' }],
+      () => 'SNAP',
+      {},
+      nextId,
+    )
+    expect(entries).toEqual([
+      {
+        id: expect.any(Number),
+        kind: 'msg',
+        role: 'assistant',
+        text: '建议先立冲突。',
+      },
+    ])
   })
 })
