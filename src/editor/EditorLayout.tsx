@@ -128,6 +128,7 @@ export function EditorLayout(props: EditorLayoutProps) {
           width={panels.leftWidth}
           onResize={panels.setLeftWidth}
           nodes={doc.nodes}
+          contentNodes={doc.contentNodes}
           edges={doc.edges}
           onLocate={view.locateNode}
           selectedId={view.selectedNode?.id}

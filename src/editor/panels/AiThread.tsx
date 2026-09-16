@@ -1,4 +1,5 @@
 import {
+  memo,
   useEffect,
   useRef,
   useState,
@@ -542,7 +543,10 @@ function useAiThreadAssembly(props: AiThreadProps) {
   return { m, msg, saveError, turn }
 }
 
-export function AiThread(props: AiThreadProps) {
+/** memo 边界（issue #157）：位置帧（拖拽过程帧）不重渲染 AI 会话面板——
+ * 输入（画布摘要、批次计数、校验/读取/落地回调、会话快照）在无内容变化
+ * 的帧间引用稳定；会话内交互照常驱动自身状态更新。 */
+export const AiThread = memo(function AiThread(props: AiThreadProps) {
   const { m, msg, saveError, turn } = useAiThreadAssembly(props)
   const onOpenSettings = props.onOpenSettings
   return (
@@ -594,4 +598,4 @@ export function AiThread(props: AiThreadProps) {
       />
     </div>
   )
-}
+})

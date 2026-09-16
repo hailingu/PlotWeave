@@ -97,6 +97,7 @@ function DocPanelHost({
         open
         width={280}
         nodes={nodes}
+        contentNodes={nodes}
         edges={[]}
         settings={settings}
         episodeTitles={{}}

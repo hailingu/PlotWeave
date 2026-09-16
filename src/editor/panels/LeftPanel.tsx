@@ -47,6 +47,9 @@ interface LeftPanelProps {
   readonly onResize: (width: number) => void
   /** 画布节点，用于派生大纲行。 */
   readonly nodes: CanvasNode[]
+  /** 内容稳定投影（issue #157）：大纲派生按「内容 + x 序」键控重算，
+   * 位置帧不逐帧重建。 */
+  readonly contentNodes: CanvasNode[]
   /** 画布连线：下挂分镜的集归属随宿主场景派生（§7.2）。 */
   readonly edges: Edge[]
   /** 大纲 ⇄ 画布联动（§3.5）：点击大纲行选中并居中该节点。 */
@@ -146,6 +149,40 @@ function useOutlineDnD(
 }
 
 type OutlineDnD = ReturnType<typeof useOutlineDnD>
+
+/** 大纲派生的「内容 + x 序」键控缓存（issue #157）：大纲行序按画布 x 排序，
+ * 依赖位置——但拖拽过程帧绝大多数不改变相对 x 序。仅当业务内容
+ * （contentNodes 换引用）或 x 序（跨节点拖动）变化时才换输入引用重算，
+ * 同向小幅位移帧复用上次结果。 */
+function useOutlineGroups(
+  nodes: CanvasNode[],
+  contentNodes: CanvasNode[],
+  edges: Edge[],
+  episodeTitles: Record<number, string>,
+): OutlineGroup[] {
+  // 序键只表达「按 x 排序的 id 序列」：同向小幅位移不改变序 → 键不变；
+  // 跨节点拖动改变相对顺序 → 键变 → 重算（不把 x 值编进键，否则每帧都变）
+  const orderKey = nodes
+    .slice()
+    .sort((a, b) => a.position.x - b.position.x || (a.id < b.id ? -1 : 1))
+    .map((n) => n.id)
+    .join('|')
+  const cacheRef = useRef<{
+    content: CanvasNode[]
+    orderKey: string
+    source: CanvasNode[]
+  } | null>(null)
+  const cache = cacheRef.current
+  // cache 为 null 时 undefined !== … 即 stale（可选链等价于 !cache 析取）
+  const stale = cache?.content !== contentNodes || cache?.orderKey !== orderKey
+  if (stale)
+    cacheRef.current = { content: contentNodes, orderKey, source: nodes }
+  const source = stale ? nodes : (cache?.source ?? nodes)
+  return useMemo(
+    () => buildOutlineGroups(source, edges, episodeTitles),
+    [source, edges, episodeTitles],
+  )
+}
 
 /** 大纲行按钮（LeftPanel 拆分，issue #99）：层级缩进、拖拽排序与定位；
  * level < 3 = 编剧侧四类（分镜随宿主场景，不参与拖拽排序）。 */
@@ -381,6 +418,7 @@ export function LeftPanel({
   width,
   onResize,
   nodes,
+  contentNodes,
   edges,
   onLocate,
   selectedId,
@@ -394,10 +432,7 @@ export function LeftPanel({
   onOutlineDrop,
 }: LeftPanelProps) {
   const [tab, setTab] = useState<LeftTab>('outline')
-  const groups = useMemo(
-    () => buildOutlineGroups(nodes, edges, episodeTitles),
-    [nodes, edges, episodeTitles],
-  )
+  const groups = useOutlineGroups(nodes, contentNodes, edges, episodeTitles)
   const outlineRef = useRef<HTMLElement>(null)
   const dnd = useOutlineDnD(onOutlineDrop)
   useOutlineScrollFollow(tab, selectedId, outlineRef)

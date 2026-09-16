@@ -82,6 +82,7 @@ function setup(over: Partial<Parameters<typeof LeftPanel>[0]> = {}) {
       open
       width={280}
       nodes={nodes}
+      contentNodes={nodes}
       edges={[]}
       settings={{
         characters: [{ id: 'c1', name: '林晚', gradient: 'g1' }],

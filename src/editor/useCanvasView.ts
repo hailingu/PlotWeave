@@ -40,7 +40,15 @@ export function useCanvasView(
   doc: EditorDocument,
   fitView: FitView,
 ): CanvasView {
-  const { nodes, edges, edgesRef, nodesRef, focusedEpisode, setNodes } = doc
+  const {
+    nodes,
+    edges,
+    edgesRef,
+    nodesRef,
+    contentNodes,
+    focusedEpisode,
+    setNodes,
+  } = doc
 
   const displayNodes = useMemo(
     () => applyEpisodeFocus(nodes, edges, focusedEpisode),
@@ -55,9 +63,11 @@ export function useCanvasView(
       ).length,
     [edgesRef],
   )
+  // 兑现状态是纯内容派生（sequence 邻接）：消费内容稳定投影（issue #157），
+  // 拖拽过程帧不逐帧重算
   const beatFulfillment = useMemo(
-    () => beatFulfillmentMap(nodes, edges),
-    [nodes, edges],
+    () => beatFulfillmentMap(contentNodes, edges),
+    [contentNodes, edges],
   )
   const beatFulfillmentOf = useCallback(
     (id: string): BeatFulfillment | null => beatFulfillment.get(id) ?? null,

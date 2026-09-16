@@ -93,7 +93,7 @@ export function useEditorController(
     onError: setActionError,
   })
   const ai = useAiBridge({
-    nodes: doc.nodes,
+    contentNodes: doc.contentNodes,
     edges: doc.edges,
     settings: doc.settings,
     nodesRef: doc.nodesRef,

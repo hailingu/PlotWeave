@@ -51,12 +51,58 @@ export interface EditorDocument {
   setFocusedEpisode: Dispatch<SetStateAction<number | null>>
   nodesRef: MutableRefObject<CanvasNode[]>
   edgesRef: MutableRefObject<Edge[]>
+  /** 内容稳定投影（issue #157）：仅当节点非位置/非会话内容变化时换引用——
+   * 拖拽过程帧（position/selected/dragging/measured 变化）保持引用稳定，
+   * 纯内容派生（AI 摘要、节拍兑现）据此跳过逐帧重算。条目仍是原节点对象。 */
+  contentNodes: CanvasNode[]
   /** 设定集镜像（issue 44）：AI 校验/落地读取「当前」实体注册表——
    * 预览到确认之间用户的设定集编辑经此被重校验发现。 */
   settingsRef: MutableRefObject<ProjectSettings>
   assetsRef: MutableRefObject<ProjectContent['assets']>
   episodeTitlesRef: MutableRefObject<Record<number, string>>
   viewportRef: MutableRefObject<Viewport | undefined>
+}
+
+/** 节点会话态键（issue #157）：position/selected/dragging/measured 等
+ * 不属于业务内容——逐帧变化不构成 contentNodes 的内容差异。 */
+const SESSION_NODE_KEYS = new Set([
+  'position',
+  'selected',
+  'dragging',
+  'measured',
+  'className',
+  'zIndex',
+  'internals',
+  'width',
+  'height',
+])
+
+/** 两节点业务内容是否相同（issue #157）：同引用，或除会话态键外全部
+ * 自有键相等（data/meta 等真实内容以引用变化表达——补丁路径都产新引用）。 */
+function sameNodeContent(a: CanvasNode, b: CanvasNode): boolean {
+  if (a === b) return true
+  for (const k of Object.keys(a))
+    if (
+      !SESSION_NODE_KEYS.has(k) &&
+      a[k as keyof CanvasNode] !== b[k as keyof CanvasNode]
+    )
+      return false
+  for (const k of Object.keys(b))
+    if (!SESSION_NODE_KEYS.has(k) && !(k in a)) return false
+  return true
+}
+
+/** 内容稳定投影（issue #157）：数组引用仅在内容差异时更换，条目保持
+ * 当时的原节点对象（消费方不读会话态键）。 */
+function useContentNodes(nodes: CanvasNode[]): CanvasNode[] {
+  const ref = useRef(nodes)
+  if (
+    ref.current.length !== nodes.length ||
+    ref.current.some((n, i) => !sameNodeContent(n, nodes[i]))
+  ) {
+    ref.current = nodes
+  }
+  return ref.current
 }
 
 /** 状态镜像 refs（useEditorDocument 拆分，issue #99）：命令的 undo/redo
@@ -104,6 +150,7 @@ export function useEditorDocument(
 
   const { nodesRef, edgesRef, settingsRef, assetsRef, episodeTitlesRef } =
     useDocumentMirrorRefs(nodes, edges, settings, assets, episodeTitles)
+  const contentNodes = useContentNodes(nodes)
 
   // 视口随文档持久化（数据模型 §3）：本身无重渲染，onMoveEnd 更新 ref 后
   // 经 markDirty 显式标脏并换入最新文档——纯平移/缩放也会防抖落盘，
@@ -130,6 +177,7 @@ export function useEditorDocument(
       setFocusedEpisode,
       nodesRef,
       edgesRef,
+      contentNodes,
       settingsRef,
       assetsRef,
       episodeTitlesRef,
@@ -155,6 +203,7 @@ export function useEditorDocument(
       // 以满足 exhaustive-deps（issue #99 拆分）。
       nodesRef,
       edgesRef,
+      contentNodes,
       settingsRef,
       assetsRef,
       episodeTitlesRef,
