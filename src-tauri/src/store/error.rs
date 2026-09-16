@@ -96,10 +96,9 @@ impl StoreError {
             source: Box::new(self),
         }
     }
-    /// 越过 [`StoreError::Contextual`] 包装链取根因（类别判定用）。当前
-    /// 消费方为领域内核的类别断言（测试）；生产调用方需要按类别分派时
-    /// 移除 `cfg(test)` 提升为通用 API。
-    #[cfg(test)]
+    /// 越过 [`StoreError::Contextual`] 包装链取根因（类别判定用）：生产
+    /// 消费方为列表内核的读取失败分派（issue #123——I/O 失败占位呈现、
+    /// 信任链拒绝与并发删除跳过），测试用于类别断言。
     pub(crate) fn root(&self) -> &StoreError {
         match self {
             StoreError::Contextual { source, .. } => source.root(),

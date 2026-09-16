@@ -953,7 +953,7 @@ provider 的 API key 以**密文 `keyEnc`** 存于 provider 配置：Rust `seal`
 
 | 命令 | 职责 |
 | --- | --- |
-| `list_projects()` | 按 §10.2 先验证应用根、项目目录与每个候选控制文件，再扫描项目文档真源并与 `index.json` 缓存校正后返回内存投影；索引缺失、损坏或与文档的 id/name/updatedAt 不一致时重建并原子回写，不直接返回陈旧缓存 |
+| `list_projects()` | 按 §10.2 先验证应用根、项目目录与每个候选控制文件，再扫描项目文档真源并与 `index.json` 缓存校正后返回内存投影；索引缺失、损坏或与文档的 id/name/updatedAt 不一致时重建并原子回写，不直接返回陈旧缓存。单个项目文档 JSON 损坏、信封不可判型或底层 I/O 读取失败（非并发删除、非信任链拒绝）时，以**损坏占位摘要**返回（受信路径 id + 诊断文案，名称/统计/时间缺省——缺省时间排序稳定居末），不再静默跳过（[issue #123](https://github.com/hailingu/PlotWeave/issues/123)，已实现）：首页渲染损坏占位卡供定位，点击打开仍由 `load_project` 的失败诊断（issue #98 横幅）承接；信任链拒绝的符号链接/异型条目与读取时已并发删除（NotFound）的条目仍跳过，目录级读取失败整次报错、由首页错误态（issue #133）承接 |
 | `create_project(name)` | 按 §10.2 验证/创建项目目录及控制文件目标后，先原子写初始 `project.json`，再更新可重建索引；name 按 §9.3 项目名校验口径校验（与 rename_project 同规则），跨文件中断由 §10.2 校正恢复 |
 | `load_project(projectId)` | 按 §10.2 验证完整目录/文件信任链后才读 `project.json`；项目基准目录或文件逃逸即拒绝整个加载。随后按 §11.1 第 0 步只做信封判型：旧扁平形状包装为 v0，缺失/异型版本号的 v1 形状标记为待修复 v1，混合/无法判定的信封或显式版本与形状冲突时拒绝且不改写；并随原始文档返回受信 `projectId` 与可用的索引元数据。v1 的 `project` 父容器或成员异型不得在 Rust 层整份拒绝，交由前端归一化修复；节点级 schemaVersion 迁移与归一化同样在前端模型层（见十一），Rust 不参与 |
 | `load_ai_session(projectId)` / `save_ai_session(projectId, session)` | 已实现：经受信项目目录句柄读取/原子写入唯一主文件 `ai-session.json`。缺失或损坏由 `{ session, corrupt }` 区分，真实 I/O 失败返回 Err。保存校验会话 v1 信封及数组 entries、要求项目记录存在，失败直接上浮。逐条归一化由前端加载完成；落盘形态映射（运行时标注剥离、未确认执行卡降级）在前端保存通道保持全量，总量最多 200 条（待执行卡优先占容量，其自身超额则保留最新 200 张）的容量裁剪由前端会话存储 `aiSessionStore` 在写入边界统一施加——进程内快照（设置页重挂载/失败保留/退出冲刷）持全量形态（[issue #64](https://github.com/hailingu/PlotWeave/issues/64)、[PR #85](https://github.com/hailingu/PlotWeave/pull/85)），后端保存校验不含条数上限；没有恢复副本命令或跨进程定序协议（§10.1）。 |

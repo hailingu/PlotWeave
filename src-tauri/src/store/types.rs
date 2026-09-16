@@ -65,6 +65,12 @@ pub struct ProjectMeta {
     pub updated_at: String,
     pub scene_count: u64,
     pub ending_count: u64,
+    /// 损坏占位诊断（issue #123）：文件存在但不可读或信封不可判型时的
+    /// 简短文案。Some = 首页损坏占位卡（名称/统计/时间均为缺省，仅供
+    /// 定位与诊断，点击打开走 load_project 的失败横幅）；正常项目 None
+    /// 且序列化省略键（wire 形状不变）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostic: Option<String>,
 }
 /// 项目名约束：非空、去空白后 ≤ 64 字符。
 pub fn sanitize_name(raw: &str) -> Result<String, String> {

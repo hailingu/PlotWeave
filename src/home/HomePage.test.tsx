@@ -52,6 +52,33 @@ describe('HomePage 列表与搜索', () => {
     expect(spies.onOpenProject).toHaveBeenCalledWith('p1')
   })
 
+  it('损坏占位卡（issue #123）：显示占位名与诊断，不显示统计与时间，点击仍走打开入口', () => {
+    const spies = setup([
+      mk(),
+      mk({
+        id: 'p-bad',
+        name: '无法读取的项目',
+        sceneCount: 0,
+        updatedAt: '1970-01-01T00:00:00.000Z',
+        error: '项目文件损坏：无法判别文档信封（已保留原文件）',
+      }),
+    ])
+    expect(screen.getByText('无法读取的项目')).toBeTruthy()
+    expect(
+      screen.getByText('项目文件损坏：无法判别文档信封（已保留原文件）'),
+    ).toBeTruthy()
+    // 损坏卡无统计语义（不渲染「0 场」）也不渲染相对时间（epoch 会让
+    // 正常变体显示「1 月 1 日」——损坏变体整体隐藏时间行）
+    expect(screen.queryByText('0 场')).toBeNull()
+    expect(screen.queryByText('1 月 1 日')).toBeNull()
+    expect(screen.getByText('刚刚')).toBeTruthy() // 正常卡时间照常
+    // 点击占位卡仍走打开入口：load_project 失败由 #98 横幅呈现完整诊断
+    fireEvent.click(
+      screen.getByRole('button', { name: '项目损坏 无法读取的项目' }),
+    )
+    expect(spies.onOpenProject).toHaveBeenCalledWith('p-bad')
+  })
+
   it('搜索框内存过滤；无匹配时显示提示', () => {
     setup([mk(), mk({ id: 'p2', name: '午夜出租车' })])
     fireEvent.change(screen.getByRole('searchbox', { name: '搜索项目' }), {

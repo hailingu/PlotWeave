@@ -68,6 +68,33 @@ pub(crate) fn read_meta(id: &str, file: &ProjectFile) -> ProjectMeta {
         updated_at: file.project.updated_at.clone(),
         scene_count,
         ending_count,
+        diagnostic: None,
+    }
+}
+/// 损坏占位摘要（issue #123）：文件存在但不可读或不可解析时不再静默
+/// 跳过——name 留空（展示文案归前端损坏卡变体），updated_at 缺省使其
+/// 排序列表末尾，统计为 0，诊断随 IPC 交付。
+fn broken_meta(id: &str, reason: String) -> ProjectMeta {
+    ProjectMeta {
+        id: id.to_string(),
+        name: String::new(),
+        updated_at: String::new(),
+        scene_count: 0,
+        ending_count: 0,
+        diagnostic: Some(reason),
+    }
+}
+/// 读取失败能否作为损坏占位呈现（issue #123）：底层 I/O 失败（权限/
+/// 磁盘故障等，非 NotFound）是用户可定位的项目文件状态 → 占位并附
+/// 诊断；信任链保护性拒绝（符号链接/异型条目/读取前替换）与并发删除
+/// （NotFound）不是——前者是外部/攻击形态（§10.2 维持不可见），后者
+/// 的文件已不存在。返回 None 即维持静默跳过。
+fn read_failure_diagnostic(e: &StoreError) -> Option<String> {
+    match e.root() {
+        StoreError::Io { source, .. } if source.kind() != std::io::ErrorKind::NotFound => {
+            Some(format!("项目文件不可读：{e}"))
+        }
+        _ => None,
     }
 }
 /// 旧扁平格式（无 schemaVersion）→ v0 信封：节点/边上移 graph，
@@ -119,9 +146,12 @@ pub fn list_projects(app: AppHandle) -> Result<Vec<ProjectMeta>, String> {
     list_project_metas(&root).map_err(to_ipc_text)
 }
 /// list_projects 的可测内核（给定已验证的 projects 根句柄）。目录扫描逐条
-/// 跳过符号链接/异型项/坏文件（单条坏数据不阻断列表），扫描与读取全程
-/// 句柄相对——projects/ 路径名被并发整体替换也不会列出替换树的条目；
-/// 读取走 read_verified_file 的身份绑定，校验通过后被并发替换为符号链接
+/// 跳过符号链接/异型项（单条坏数据不阻断列表），JSON 损坏或信封不可判型
+/// 的项目以损坏占位摘要返回而非静默消失（issue #123）——用户能定位文件、
+/// 点击打开仍得到 load_project 的完整诊断；底层 I/O 读取失败同款占位，
+/// 信任链拒绝与并发删除（NotFound）仍跳过。扫描与读取全程句柄相对——
+/// projects/ 路径名被并发整体替换也不会列出替换树的条目；读取走
+/// read_verified_file 的身份绑定，校验通过后被并发替换为符号链接
 /// 或另一文件时读到的仍是校验时的同一实体，否则跳过该条目。
 fn list_project_metas(root: &CapDir) -> Result<Vec<ProjectMeta>, StoreError> {
     let mut metas: Vec<ProjectMeta> = Vec::new();
@@ -141,12 +171,17 @@ fn list_project_metas(root: &CapDir) -> Result<Vec<ProjectMeta>, StoreError> {
             continue;
         }
         // §10.2 目录扫描：校验 + 打开 + 读取绑定同一实体，绝不跟随替换
-        let Ok(text) = read_verified_file(root, name) else {
-            continue;
+        let meta = match read_verified_file(root, name) {
+            Ok(text) => match parse_file(id, &text) {
+                Ok(file) => read_meta(id, &file),
+                Err(e) => broken_meta(id, format!("项目文件损坏：{e}")),
+            },
+            Err(e) => match read_failure_diagnostic(&e) {
+                Some(reason) => broken_meta(id, reason),
+                None => continue,
+            },
         };
-        if let Ok(file) = parse_file(id, &text) {
-            metas.push(read_meta(id, &file));
-        }
+        metas.push(meta);
     }
     sort_metas_by_recency(&mut metas);
     Ok(metas)
