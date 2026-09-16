@@ -108,9 +108,7 @@ export function useNodeCreation(deps: NodeCreationDeps): NodeCreationActions {
       if (!src) return
       const copy = {
         ...src,
-        // 统一唯一 id 能力（#129）：type + Date.now() 在同毫秒复制下重号，
-        // 一次撤销按 id 过滤会删掉多个副本——归队 uid()（CSPRNG，与
-        // nodeFactory 的前缀约定一致）
+        // 统一唯一 id（#129）：type+Date.now() 同毫秒复制重号，归队 uid()
         id: uid(src.type),
         position: {
           x: src.position.x + DUPLICATE_OFFSET.x,
