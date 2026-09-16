@@ -328,6 +328,38 @@ describe('AssetsPanel 删除终结重命名状态（PR #180 评审）', () => {
     await waitFor(() => expect(screen.queryByText(/磁盘只读/)).toBeNull())
   })
 
+  it('多资产改名失败互不覆盖，解除只影响自身（PR #180 评审）', async () => {
+    const spies = mockStore([
+      asset(),
+      asset({ id: 'a2', name: '男主侧面', relPath: 'character/a2.png' }),
+    ])
+    const persisted = new Map([
+      ['a1', asset()],
+      [
+        'a2',
+        asset({ id: 'a2', name: '男主侧面', relPath: 'character/a2.png' }),
+      ],
+    ])
+    vi.spyOn(libraryStore, 'persistedSnapshot').mockImplementation((id) =>
+      persisted.get(id),
+    )
+    spies.updateMeta
+      .mockRejectedValueOnce(new Error('磁盘只读一'))
+      .mockRejectedValueOnce(new Error('磁盘只读二'))
+      .mockResolvedValueOnce(asset({ name: '男主微笑' }))
+    await enterCharacter()
+    await renameInline('女主正面', '女主微笑')
+    await renameInline('男主侧面', '男主微笑')
+    // 两个资产的失败均可见（分号合并，互不覆盖）
+    expect(
+      await screen.findByText('Error: 磁盘只读一；Error: 磁盘只读二'),
+    ).toBeTruthy()
+    // 第二个资产重试成功：只解除自身，第一个资产的失败仍然可见
+    await renameInline('男主侧面', '男主微笑')
+    expect(await screen.findByText('Error: 磁盘只读一')).toBeTruthy()
+    expect(screen.queryByText(/磁盘只读二/)).toBeNull()
+  })
+
   it('在途改名失败在删除资产后不得复活错误（PR #180 评审）', async () => {
     const spies = mockStore([asset()])
     vi.spyOn(libraryStore, 'persistedSnapshot').mockReturnValue(asset())

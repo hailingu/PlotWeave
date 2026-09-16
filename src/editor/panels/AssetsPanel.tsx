@@ -276,11 +276,11 @@ function useAssetTagsErrors() {
   const hasTagsError = (id: string) => tagsErrors.current.has(id)
   const recordTagsError = (id: string, error: unknown) => {
     tagsErrors.current.set(id, String(error))
-    setTagsError(joinTagsErrors(tagsErrors.current))
+    setTagsError(joinAssetErrors(tagsErrors.current))
   }
   const resolveTagsError = (id: string) => {
     if (!tagsErrors.current.delete(id)) return
-    setTagsError(joinTagsErrors(tagsErrors.current) || null)
+    setTagsError(joinAssetErrors(tagsErrors.current) || null)
   }
   return { tagsError, hasTagsError, recordTagsError, resolveTagsError }
 }
@@ -381,10 +381,8 @@ function useAssetRename(
   const renameSeq = useRef(new Map<string, number>())
   /** 每资产未决改名链条锚定的已落盘基线。 */
   const renameBaseline = useRef(new Map<string, string>())
-  const [renameError, setRenameError] = useState<{
-    id: string
-    message: string
-  } | null>(null)
+  const renameErrors = useRef(new Map<string, string>())
+  const [renameError, setRenameError] = useState<string | null>(null)
 
   const rename = (asset: LibraryAsset, name: string) => {
     const seq = (renameSeq.current.get(asset.id) ?? 0) + 1
@@ -402,7 +400,7 @@ function useAssetRename(
       .updateMeta(asset.id, { name })
       .then(() => {
         renameBaseline.current.set(asset.id, name)
-        setRenameError((cur) => (cur?.id === asset.id ? null : cur))
+        resolveRenameError(asset.id)
       })
       .catch((err) => {
         if (renameSeq.current.get(asset.id) !== seq) return
@@ -412,7 +410,8 @@ function useAssetRename(
           libraryStore.persistedSnapshot(asset.id)?.name ??
           renameBaseline.current.get(asset.id)
         renameBaseline.current.delete(asset.id)
-        setRenameError({ id: asset.id, message: String(err) })
+        renameErrors.current.set(asset.id, String(err))
+        setRenameError(joinAssetErrors(renameErrors.current))
         setAssets((list) =>
           list.map((a) =>
             a.id === asset.id && baseline !== undefined
@@ -425,16 +424,20 @@ function useAssetRename(
   /** 确认删除时终结该资产的重命名状态（PR #180 评审修复）：代际 +1
    * 失效在途响应（迟到的失败不写错误、不回滚），清除锚定基线并解除
    * 对应错误——已删资产的失败不得残留或复活。 */
+  const resolveRenameError = (id: string) => {
+    if (!renameErrors.current.delete(id)) return
+    setRenameError(joinAssetErrors(renameErrors.current) || null)
+  }
   const forgetRename = (id: string) => {
     renameSeq.current.set(id, (renameSeq.current.get(id) ?? 0) + 1)
     renameBaseline.current.delete(id)
-    setRenameError((cur) => (cur?.id === id ? null : cur))
+    resolveRenameError(id)
   }
   return { rename, renameError, forgetRename }
 }
 
-/** 把各资产未解决的标签失败合并为单条横幅文案（分号分隔）。 */
-function joinTagsErrors(errors: Map<string, string>): string {
+/** 把各资产未解决的失败（标签/重命名）合并为单条横幅文案（分号分隔）。 */
+function joinAssetErrors(errors: Map<string, string>): string {
   return [...errors.values()].join('；')
 }
 
@@ -496,9 +499,7 @@ export default function AssetsPanel() {
       {busy && <div className="pw-assets-hint">导入中…</div>}
       {error && <div className="pw-assets-hint pw-assets-error">{error}</div>}
       {renameError && (
-        <div className="pw-assets-hint pw-assets-error">
-          {renameError.message}
-        </div>
+        <div className="pw-assets-hint pw-assets-error">{renameError}</div>
       )}
       {tagsError && (
         <div className="pw-assets-hint pw-assets-error">{tagsError}</div>
