@@ -6,7 +6,11 @@ import {
 } from './actionIntent'
 import { rewriteActionQuery } from './queryRewrite'
 import { extractBatchJson } from './batchText'
-import type { AiCommand, BatchValidation } from './commands'
+import {
+  batchIssueText,
+  type AiCommand,
+  type BatchValidation,
+} from './commands'
 import {
   AI_TOOLS,
   toolCallsShapeDiagnostic,
@@ -88,9 +92,10 @@ function throwIfCancelled(signal: TurnCancelSignal | undefined): void {
   if (signal?.isCancelled()) throw new TurnCancelledError()
 }
 
-/** 校验失败清单的人读文本（回喂与上屏共用同一编号口径）。 */
+/** 校验失败清单的人读文本（回喂与上屏共用同一编号口径，issue #150 起
+ * 经 batchIssueText 格式化：批次级整体错误不编「第 N 条」序号）。 */
 function issueListText(v: BatchValidation): string {
-  return v.issues.map((i) => `第 ${i.index + 1} 条：${i.message}`).join('\n')
+  return v.issues.map((i) => batchIssueText(i)).join('\n')
 }
 
 /** 读结果与交付失败共用协议回喂：逐调用应答，文本通道以 assistant + user

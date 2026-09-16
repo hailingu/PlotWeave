@@ -1,4 +1,4 @@
-import { type BatchValidation } from '../ai/commands'
+import { batchIssueText, type BatchValidation } from '../ai/commands'
 
 const ITEM_ICONS: Record<BatchValidation['items'][number]['kind'], string> = {
   create: '＋',
@@ -112,7 +112,8 @@ export default function PreviewCard({
         <ul className="pw-ai-issues">
           {v.issues.map((iss) => (
             <li key={iss.index} className="pw-ai-issue">
-              第 {iss.index + 1} 条：{iss.message}
+              {/* 批次级整体错误不编序号（issue #150，与 agentLoop 回喂同口径） */}
+              {batchIssueText(iss)}
             </li>
           ))}
         </ul>

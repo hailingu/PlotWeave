@@ -185,8 +185,22 @@ export interface PreviewItem {
 }
 
 export interface BatchIssue {
+  /** 所属命令序号（0 基）；BATCH_LEVEL_ISSUE_INDEX（-1）= 批次级整体
+   * 错误（如「批次不是命令数组」），不属于任何一条命令、不编「第 N 条」。 */
   index: number
   message: string
+}
+
+/** 批次级整体错误的 index 哨兵：诊断针对整批而非某条命令。 */
+export const BATCH_LEVEL_ISSUE_INDEX = -1
+
+/** 校验问题的人读文案（issue #150，回喂模型与预览卡共用）：命令级带
+ * 「第 N 条」序号（N 从 1 起），批次级只显示消息本身——index+1 会把
+ * 整体错误渲染成「第 0 条」。 */
+export function batchIssueText(issue: BatchIssue): string {
+  return issue.index === BATCH_LEVEL_ISSUE_INDEX
+    ? issue.message
+    : `第 ${issue.index + 1} 条：${issue.message}`
 }
 
 export interface BatchValidation {
