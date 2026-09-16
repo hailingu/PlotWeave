@@ -315,9 +315,12 @@ function layoutComponent(
   const grouped: string[][] = Array.from({ length: maxLayer + 1 }, () => [])
   for (const id of members) grouped[layerOf.get(id)!].push(id)
   for (const group of grouped) {
+    // origin 对每个节点 id 都有值（computeAutoLayout 以全量节点构建，
+    // members ⊆ 节点 id）：非空断言即 Map 完整性不变量的表达（issue #165
+    // 评审基线：XYPosition 本就是 {x,y}，不再叠双重断言逃逸类型）
     group.sort((a, b) => {
-      const pa = origin.get(a)! as unknown as { x: number; y: number }
-      const pb = origin.get(b)! as unknown as { x: number; y: number }
+      const pa = origin.get(a)!
+      const pb = origin.get(b)!
       return pa.y - pb.y || pa.x - pb.x || (a < b ? -1 : 1)
     })
   }
