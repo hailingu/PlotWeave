@@ -207,6 +207,33 @@ describe('useAiTurn 取消（issue #154）', () => {
     expect(takeTurn(opts.projectId)).toBeNull()
   })
 
+  it('取消后在途请求 reject（错误形状）：仍注销盒子，重开不复活陈旧失败（PR #187 评审 4024818105）', async () => {
+    const calls = pendingTurn()
+    const append = vi.fn()
+    const opts = mkOpts({ append })
+    const { result, unmount } = renderHook(() => useAiTurn(opts))
+
+    act(() => {
+      result.current.setDraft('你好')
+    })
+    await startSend(result)
+    await waitFor(() => expect(result.current.busy).toBe(true))
+    act(() => result.current.cancel())
+    unmount()
+    // 在途请求先 reject（runAgentLoop 在 post-request 取消检查前传播 rejection），
+    // 结果为错误形状而非取消形状
+    await act(async () => {
+      calls[0]!.reject(new Error('网络中断'))
+    })
+    // 发起实例已卸载：不上屏错误；被取代的盒子仍注销，重开不复活陈旧失败
+    const appended = append.mock.calls
+      .map((c) => c[0] as ThreadEntry[])
+      .flat()
+      .map((e) => e.text)
+    expect(appended).toEqual(['你好'])
+    expect(takeTurn(opts.projectId)).toBeNull()
+  })
+
   it('取消的盒子带 canceller：认领方据此停止旧轮（PR #187 评审 4024585097）', async () => {
     const calls = pendingTurn()
     const append = vi.fn()

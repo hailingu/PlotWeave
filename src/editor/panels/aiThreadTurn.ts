@@ -50,8 +50,11 @@ function useTurnGeneration() {
     generationRef.current += 1
     flagRef.current.cancelled = true
   }
+  /** 当前世代是否已被取消（本回合 signal 置位）——含 reject 形状（在途
+   * 请求先 reject 时结果为错误而非取消，仍视为已取消，PR #187 评审）。 */
+  const isCurrentTurnCancelled = () => flagRef.current.cancelled
   const currentGeneration = () => generationRef.current
-  return { beginTurn, cancelTurn, currentGeneration }
+  return { beginTurn, cancelTurn, isCurrentTurnCancelled, currentGeneration }
 }
 
 /** 认领条目的重定映射：id 经当前实例重定基（旧计数器已随卸载作废，
@@ -256,13 +259,15 @@ export function useAiTurn(opts: UseAiTurnOpts) {
       // 本实例消费，但提交确认前不撤销登记：落定与卸载同批调度时，
       // 未提交的追加被丢弃，持有机制在 cleanup 把盒子归还待重新认领
       heldBox.hold(box)
-    } else if (isCancelledTurnResult(result)) {
-      // 取消且本实例不再消费（已卸载/被取代）：注销注册表，避免重开复活
-      // 已取消盒子、重复上屏取消回执（PR #187 评审 4024585104）
+    } else if (turnGen.isCurrentTurnCancelled()) {
+      // 本实例不再消费（已卸载/被取代）且本世代已取消：注销注册表，避免重开
+      // 复活旧盒子、重复上屏取消回执或陈旧失败（含 reject 形状——在途请求先
+      // reject 时结果为错误而非取消；identity 检查保证只移除本盒子，不误删
+      // 已登记的新轮）。未取消：留盒给认领方（#63）。
       unregisterTurn(opts.projectId, box)
     }
-    // 已卸载或已被取代（取消/新轮次）：结果不上屏；已卸载时盒子留在
-    // 注册表由重挂载/重开同一项目的实例认领（issue #63）
+    // 已卸载或已被取代（取消/新轮次）：结果不上屏；已取消盒子已注销，
+    // 普通（未取消）在途回合的盒子由认领路径转移（issue #63）
   }
   /** 取消在途回合（issue #154）：协作式——agentLoop 各检查点停止循环；
    * 推进世代使本回合迟到结果不再交付；回执由 appendCancelReceipt 上屏。 */
