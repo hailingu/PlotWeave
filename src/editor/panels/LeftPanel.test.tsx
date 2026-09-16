@@ -406,4 +406,23 @@ describe('大纲行序的拖拽跟随（issue #157 评审 4027623775）', () => 
     )
     expect(rowTexts()[0]).toContain('节拍A')
   })
+
+  it('分隔符歧义 id（a 与 a|a，脏档合法形态）：越序仍正确翻转（PR #194 评审 4027732274）', () => {
+    // id 契约仅要求非空唯一：'a' 与 'a|a' 可共存；join('|') 对两种顺序
+    // 都产生 'a|a|a'——编码歧义会让越序不失效缓存
+    const A = beat('a|a', '节拍A', 100)
+    const B = beat('a', '节拍B', 0)
+    const contentNodes = [B, A]
+    const { rerender } = render(
+      <LeftPanel {...mkProps([B, A], contentNodes)} />,
+    )
+    expect(rowTexts()[0]).toContain('节拍B')
+
+    rerender(
+      <LeftPanel
+        {...mkProps([{ ...B, position: { x: 200, y: 0 } }, A], contentNodes)}
+      />,
+    )
+    expect(rowTexts()[0]).toContain('节拍A')
+  })
 })

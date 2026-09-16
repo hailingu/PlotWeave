@@ -160,25 +160,26 @@ function useOutlineGroups(
   edges: Edge[],
   episodeTitles: Record<number, string>,
 ): OutlineGroup[] {
-  // 序键与 buildOutlineGroups 同语义（PR #194 评审 4027623775）：仅按 x
-  // 稳定排序（同 x 保持数组序），不带 id 次级键——次级键会让相等帧的键
-  // 先于真实行序变化，越序后键不再变、缓存不失效。序键只表达 id 序列：
-  // 位移不越序则键不变；越序或数组序变化则键变。
-  const orderKey = nodes
+  // 序与 buildOutlineGroups 同语义（PR #194 评审 4027623775）：仅按 x 稳定
+  // 排序（同 x 保持数组序），不带 id 次级键——次级键会让相等帧的序先于
+  // 真实行序变化，越序后序不变、缓存不失效。缓存直接持有 id 数组并逐元素
+  // 比较（评审 4027732274）：id 契约仅要求非空唯一，join('|') 等分隔符
+  // 编码对 'a' 与 'a|a' 这类合法脏档 id 有歧义（两种顺序同串）。
+  const order = nodes
     .slice()
     .sort((a, b) => a.position.x - b.position.x)
     .map((n) => n.id)
-    .join('|')
   const cacheRef = useRef<{
     content: CanvasNode[]
-    orderKey: string
+    order: string[]
     source: CanvasNode[]
   } | null>(null)
   const cache = cacheRef.current
-  // cache 为 null 时 undefined !== … 即 stale（可选链等价于 !cache 析取）
-  const stale = cache?.content !== contentNodes || cache?.orderKey !== orderKey
-  if (stale)
-    cacheRef.current = { content: contentNodes, orderKey, source: nodes }
+  const sameOrder =
+    cache?.order.length === order.length &&
+    cache.order.every((id, i) => id === order[i])
+  const stale = cache?.content !== contentNodes || !sameOrder
+  if (stale) cacheRef.current = { content: contentNodes, order, source: nodes }
   const source = stale ? nodes : (cache?.source ?? nodes)
   return useMemo(
     () => buildOutlineGroups(source, edges, episodeTitles),
