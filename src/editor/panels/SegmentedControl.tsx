@@ -16,7 +16,7 @@ interface SegmentedControlProps<T extends string> {
   readonly onChange: (value: T) => void
 }
 
-export default function SegmentedControl<T extends string>({
+export function SegmentedControl<T extends string>({
   groupLabel,
   options,
   value,

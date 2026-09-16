@@ -11,7 +11,7 @@ import { ReactFlowProvider, useReactFlow } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { ImageGenProvider } from './imagegen/ImageGenProvider'
 import { NodeEditContext } from './nodeEdit'
-import EditorLayout from './EditorLayout'
+import { EditorLayout } from './EditorLayout'
 import { useEditorController } from './useEditorController'
 import type { EditorProjectContent } from './useEditorDocument'
 import type { ProjectContent } from '../model/content'
@@ -41,7 +41,7 @@ interface EditorViewProps {
 }
 
 /** Provider 薄壳：把 ReactFlow 上下文交给内部装配层。 */
-export default function EditorView(props: EditorViewProps) {
+export function EditorView(props: EditorViewProps) {
   return (
     <ReactFlowProvider>
       <EditorWindow {...props} />

@@ -5,7 +5,7 @@ import { useId } from 'react'
  * 呼应 PlotWeave 之名（docs/ui-design.md §3.2）。
  * 纯展示组件，随海报尺寸缩放。
  */
-export default function WeaveCover() {
+export function WeaveCover() {
   const gradientId = useId()
   return (
     <svg

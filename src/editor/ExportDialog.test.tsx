@@ -7,7 +7,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
-import ExportDialog from './ExportDialog'
+import { ExportDialog } from './ExportDialog'
 import { buildScriptExport, type ScriptExportModel } from './exportScript'
 import { buildCanvasNode } from './nodeFactory'
 import { EMPTY_SETTINGS } from './settings'

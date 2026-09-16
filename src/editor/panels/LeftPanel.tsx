@@ -7,11 +7,11 @@ import {
   type RefObject,
 } from 'react'
 import type { Edge } from '@xyflow/react'
-import SegmentedControl from './SegmentedControl'
-import PanelResizer from './PanelResizer'
-import AssetsPanel from './AssetsPanel'
-import SettingsList from './SettingsList'
-import DocumentEditorDialog from './DocumentEditorDialog'
+import { SegmentedControl } from './SegmentedControl'
+import { PanelResizer } from './PanelResizer'
+import { AssetsPanel } from './AssetsPanel'
+import { SettingsList } from './SettingsList'
+import { DocumentEditorDialog } from './DocumentEditorDialog'
 import type { SettingsActions } from './settingsActions'
 import {
   buildOutlineGroups,
@@ -376,7 +376,7 @@ function DocumentEditDialog({
   )
 }
 
-export default function LeftPanel({
+export function LeftPanel({
   open,
   width,
   onResize,

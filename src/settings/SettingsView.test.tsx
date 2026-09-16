@@ -8,7 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { StrictMode } from 'react'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
-import SettingsView from './SettingsView'
+import { SettingsView } from './SettingsView'
 import { defaultSettings, type AppSettings } from './types'
 import { settingsStore } from './settingsStore'
 

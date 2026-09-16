@@ -8,7 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { ComponentType, ReactNode } from 'react'
-import App from './App'
+import { App } from './App'
 import { projectStore } from './projectStore'
 import type { ProjectContent } from './projectStore'
 
@@ -42,14 +42,14 @@ vi.mock('./projectStore', () => ({
 }))
 
 vi.mock('./home/HomePage', () => ({
-  default: (props: Record<string, unknown>) => {
+  HomePage: (props: Record<string, unknown>) => {
     homeProps.current = props
     return <div data-testid="home">{props.loading ? '加载中' : '首页'}</div>
   },
 }))
 
 vi.mock('./settings/SettingsView', () => ({
-  default: (props: { onClose: () => void }): ReactNode => (
+  SettingsView: (props: { onClose: () => void }): ReactNode => (
     <button type="button" data-testid="settings" onClick={props.onClose}>
       设置
     </button>
@@ -121,7 +121,7 @@ describe('App（惰性 chunk 加载保留当前界面）', () => {
 
     // chunk 就绪：放行动态导入，关闭生效并切换到编辑器
     await act(async () => {
-      editorGate.resolve?.({ default: EditorStub as ComponentType })
+      editorGate.resolve?.({ EditorView: EditorStub as ComponentType })
     })
     expect(await screen.findByTestId('editor')).toBeTruthy()
     expect(screen.queryByTestId('settings')).toBeNull()

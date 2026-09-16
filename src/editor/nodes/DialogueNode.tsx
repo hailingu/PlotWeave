@@ -1,7 +1,7 @@
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { useNodeEdit } from '../nodeEdit'
-import NodeSettingsPanel, { EditableName } from './settings/NodeSettingsPanel'
-import NodeSettingsGear from './settings/NodeSettingsGear'
+import { NodeSettingsPanel, EditableName } from './settings/NodeSettingsPanel'
+import { NodeSettingsGear } from './settings/NodeSettingsGear'
 import { resolveCharacterAvatar, resolveCharacterName } from '../settings'
 import type { DialogueFlowNode } from './types'
 
@@ -32,7 +32,7 @@ function SpeakerAvatar({
   )
 }
 
-export default function DialogueNode({
+export function DialogueNode({
   id,
   data,
   selected,

@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react'
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { useNodeEdit } from '../nodeEdit'
 import { projectAssets } from '../projectAssets'
-import NodeSettingsPanel from './settings/NodeSettingsPanel'
-import NodeSettingsGear from './settings/NodeSettingsGear'
+import { NodeSettingsPanel } from './settings/NodeSettingsPanel'
+import { NodeSettingsGear } from './settings/NodeSettingsGear'
 import type { AssetRef } from '../../model/document'
 import type { ShotFlowNode } from './types'
 
@@ -43,11 +43,7 @@ function RefThumb({
  * 从属关系走顶部入口：宿主索引卡底部端口垂直下挂（§4.4 attach 边）。
  * ⚙️ 打开设置面板（§4.3，编辑即命令）；镜号标题行不设内联改名。
  */
-export default function ShotNode({
-  id,
-  data,
-  selected,
-}: NodeProps<ShotFlowNode>) {
+export function ShotNode({ id, data, selected }: NodeProps<ShotFlowNode>) {
   const { projectId, openSettingsId, toggleSettings, assets } = useNodeEdit()
   const settingsOpen = openSettingsId === id
 

@@ -8,7 +8,7 @@
  */
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import EditorOverlays, { type EditorOverlaysProps } from './EditorOverlays'
+import { EditorOverlays, type EditorOverlaysProps } from './EditorOverlays'
 import type { EditorDocument, EditorProjectContent } from './useEditorDocument'
 
 afterEach(cleanup)

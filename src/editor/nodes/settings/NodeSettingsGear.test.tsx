@@ -6,7 +6,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import NodeSettingsGear from './NodeSettingsGear'
+import { NodeSettingsGear } from './NodeSettingsGear'
 
 afterEach(cleanup)
 

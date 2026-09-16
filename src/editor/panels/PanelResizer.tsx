@@ -18,7 +18,7 @@ interface PanelResizerProps {
 export const PANEL_WIDTH_MIN = 220
 export const PANEL_WIDTH_MAX = 320
 
-export default function PanelResizer({
+export function PanelResizer({
   direction,
   onResize,
   startWidth,

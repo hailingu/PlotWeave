@@ -15,13 +15,13 @@ import {
   type EdgeTypes,
   type NodeTypes,
 } from '@xyflow/react'
-import SceneNode from './nodes/SceneNode'
-import DialogueNode from './nodes/DialogueNode'
-import BeatNode from './nodes/BeatNode'
-import BranchNode from './nodes/BranchNode'
-import ShotNode from './nodes/ShotNode'
-import ImageNode from './nodes/ImageNode'
-import BranchEdge from './edges/BranchEdge'
+import { SceneNode } from './nodes/SceneNode'
+import { DialogueNode } from './nodes/DialogueNode'
+import { BeatNode } from './nodes/BeatNode'
+import { BranchNode } from './nodes/BranchNode'
+import { ShotNode } from './nodes/ShotNode'
+import { ImageNode } from './nodes/ImageNode'
+import { BranchEdge } from './edges/BranchEdge'
 import type { EditorGraphActions } from './useEditorGraphActions'
 import type { EditorPersistence } from './useEditorPersistence'
 import type { CanvasView } from './useCanvasView'
@@ -81,7 +81,7 @@ export interface EditorCanvasRegionProps {
 }
 
 /** 画布容器与 ReactFlow 装配；文档变化经 doc/displayNodes 穿透 memo 边界。 */
-function EditorCanvasRegion(props: EditorCanvasRegionProps) {
+function EditorCanvasRegionImpl(props: EditorCanvasRegionProps) {
   const {
     project,
     canvasRef,
@@ -153,8 +153,10 @@ function EditorCanvasRegion(props: EditorCanvasRegionProps) {
   )
 }
 
-/** memo 隔离边界（issue #103）：与画布输入无关的状态变化不重执行本区域。 */
-export default memo(EditorCanvasRegion)
+/** memo 隔离边界（issue #103）：与画布输入无关的状态变化不重执行本区域。
+ * 命名导出（issue #164）：内部实现与导出名分离，消费方仍按
+ * EditorCanvasRegion 引用。 */
+export const EditorCanvasRegion = memo(EditorCanvasRegionImpl)
 
 /** 自动排布按钮图标：三卡对齐 + 归位箭头，表达「整理布局」。 */
 function AutoLayoutIcon() {

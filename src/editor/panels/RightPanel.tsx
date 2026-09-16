@@ -1,6 +1,6 @@
 import type { ComponentProps } from 'react'
-import SegmentedControl from './SegmentedControl'
-import PanelResizer from './PanelResizer'
+import { SegmentedControl } from './SegmentedControl'
+import { PanelResizer } from './PanelResizer'
 import {
   type BatchValidation,
   type AiCommand,
@@ -8,7 +8,7 @@ import {
 } from '../ai/commands'
 import { type ProjectSettings } from '../settings'
 import { resolveCharacterName, resolveLocationName } from '../settings'
-import AiThread, { AiSettingsButton } from './AiThread'
+import { AiThread, AiSettingsButton } from './AiThread'
 import type { CanvasNode } from '../nodes/types'
 import type { AiSession } from '../ai/session'
 
@@ -295,7 +295,7 @@ function AiPane({
   )
 }
 
-export default function RightPanel(props: RightPanelProps) {
+export function RightPanel(props: RightPanelProps) {
   const selectedNode = props.selectedNode
   const rows = selectedNode
     ? inspectorRows(selectedNode, props.attachedShotCount ?? 0, props.settings)

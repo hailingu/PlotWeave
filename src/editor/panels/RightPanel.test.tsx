@@ -23,7 +23,7 @@ import {
   screen,
   waitFor,
 } from '@testing-library/react'
-import RightPanel from './RightPanel'
+import { RightPanel } from './RightPanel'
 import { llmChat, type AssistantMessage } from '../ai/chat'
 import type { ChatMessage } from '../ai/chat'
 import type { BatchValidation, ValidatedCommand } from '../ai/commands'

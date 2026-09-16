@@ -4,8 +4,8 @@
  * 输入边界（issue #104）：只接收本区域真实消费的四个域，布局层不再透传
  * 整包 EditorLayoutProps——AI 会话、保存回调等无关输入在类型层即不可达。
  */
-import CanvasContextMenu from './CanvasContextMenu'
-import ExportDialog from './ExportDialog'
+import { CanvasContextMenu } from './CanvasContextMenu'
+import { ExportDialog } from './ExportDialog'
 import { buildScriptExport } from './exportScript'
 import type { EditorGraphActions } from './useEditorGraphActions'
 import type { EditorPanels } from './useEditorPanels'
@@ -31,7 +31,7 @@ export interface EditorOverlaysProps {
 }
 
 /** 右键菜单：节点 = 设置/复制/删除；空白 = 五类新增（§4.3）。 */
-export default function EditorOverlays(props: EditorOverlaysProps) {
+export function EditorOverlays(props: EditorOverlaysProps) {
   const { project, doc, panels, graph } = props
   return (
     <>

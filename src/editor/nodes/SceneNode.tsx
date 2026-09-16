@@ -1,8 +1,8 @@
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { useNodeEdit } from '../nodeEdit'
 import { SCENE_SHOT_HANDLE } from '../graphRules'
-import NodeSettingsPanel, { EditableName } from './settings/NodeSettingsPanel'
-import NodeSettingsGear from './settings/NodeSettingsGear'
+import { NodeSettingsPanel, EditableName } from './settings/NodeSettingsPanel'
+import { NodeSettingsGear } from './settings/NodeSettingsGear'
 import { resolveCharacterAvatar, resolveLocationName } from '../settings'
 import type { SceneFlowNode } from './types'
 
@@ -52,11 +52,7 @@ function CharacterAvatarStrip({
   )
 }
 
-export default function SceneNode({
-  id,
-  data,
-  selected,
-}: NodeProps<SceneFlowNode>) {
+export function SceneNode({ id, data, selected }: NodeProps<SceneFlowNode>) {
   const { openSettingsId, toggleSettings, patchNode, shotCountOf, settings } =
     useNodeEdit()
   const settingsOpen = openSettingsId === id

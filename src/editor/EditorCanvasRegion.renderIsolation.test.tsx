@@ -10,7 +10,7 @@
  */
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import EditorView from './EditorView'
+import { EditorView } from './EditorView'
 import type { EditorProjectContent } from './useEditorDocument'
 import type { CanvasNode } from './nodes/types'
 
@@ -20,7 +20,7 @@ const probe = vi.hoisted(() => ({ executions: 0 }))
 vi.mock('./EditorCanvasRegion', async () => {
   const { memo } = await import('react')
   return {
-    default: memo(function EditorCanvasRegionRenderProbe() {
+    EditorCanvasRegion: memo(function EditorCanvasRegionRenderProbe() {
       probe.executions += 1
       return null
     }),

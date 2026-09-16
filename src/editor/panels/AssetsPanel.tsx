@@ -427,7 +427,7 @@ function joinAssetErrors(errors: Map<string, string>): string {
   return [...errors.values()].join('；')
 }
 
-export default function AssetsPanel() {
+export function AssetsPanel() {
   const { assets, setAssets, error, setError, urls, setUrls, refreshUrl } =
     useLibraryAssetList()
   const [selectedKind, setSelectedKind] = useState<LibraryKind | null>(null)

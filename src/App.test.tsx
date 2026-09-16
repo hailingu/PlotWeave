@@ -15,7 +15,7 @@ import {
   waitFor,
 } from '@testing-library/react'
 import type { ReactNode } from 'react'
-import App from './App'
+import { App } from './App'
 import { projectStore } from './projectStore'
 import type { ProjectContent } from './projectStore'
 
@@ -75,7 +75,7 @@ const replayFailedListeners: Array<
 > = []
 
 vi.mock('./home/HomePage', () => ({
-  default: (props: Record<string, unknown>) => {
+  HomePage: (props: Record<string, unknown>) => {
     homeProps.current = props
     const openError = props.openError as { detail: string } | null | undefined
     return (
@@ -95,7 +95,7 @@ vi.mock('./home/HomePage', () => ({
 let editorSuspendGate: Promise<void> | null = null
 
 vi.mock('./editor/EditorView', () => ({
-  default: (props: Record<string, unknown>) => {
+  EditorView: (props: Record<string, unknown>) => {
     if (editorSuspendGate) throw editorSuspendGate
     editorProps.current = props
     editorRenders.count += 1
@@ -106,7 +106,7 @@ vi.mock('./editor/EditorView', () => ({
 }))
 
 vi.mock('./settings/SettingsView', () => ({
-  default: (props: { onClose: () => void }): ReactNode => (
+  SettingsView: (props: { onClose: () => void }): ReactNode => (
     <button type="button" data-testid="settings" onClick={props.onClose}>
       设置
     </button>
