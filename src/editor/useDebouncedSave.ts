@@ -21,16 +21,23 @@ import type { ProjectContent } from '../model/content'
  * 不刷新 updatedAt 改变首页排序。集标题（§3.5 renameEpisode）无独立
  * 脏标记通道，纳入签名随 effect 置脏。画布部分复用 graphSignature：
  * AI 执行卡恢复对账消费同一语义签名。 */
-function persistSignature(doc: ProjectContent): string {
-  return JSON.stringify({
-    name: doc.name,
-    graph: graphSignature(doc.nodes, doc.edges, doc.settings),
+/** 持久字段域（单一契约，issue #155）：签名与置脏监听共用本元组——
+ * persistSignature 序列化它，useSignatureSaveWatch 的 effect 依赖展开它；
+ * 新增持久字段两处自动同步，杜绝「签名含字段而变更监听遗漏」的漂移。 */
+function persistFields(doc: ProjectContent): readonly unknown[] {
+  return [
+    doc.name,
+    graphSignature(doc.nodes, doc.edges, doc.settings),
     // AI 批次计数是文档内容（§12.2 提交身份）：只增不减，单独变化也必须置脏
-    aiRevision: doc.aiRevision ?? 0,
-    episodeTitles: doc.episodeTitles ?? {},
+    doc.aiRevision ?? 0,
+    doc.episodeTitles ?? {},
     // 资产索引（§7.3 会话内导入新增条目）纳入签名：漏签即导入不落盘
-    assets: doc.assets ?? null,
-  })
+    doc.assets ?? null,
+  ]
+}
+
+function persistSignature(doc: ProjectContent): string {
+  return JSON.stringify(persistFields(doc))
 }
 
 /** 画布变化防抖落盘：doc 任意片段变化后 delayMs 内无新变化才写入；
@@ -45,14 +52,16 @@ type SaveTimerRef = MutableRefObject<ReturnType<typeof setTimeout> | null>
  * 后台循环持有旧文档持续落盘，重开同一项目会出现第二个保存循环，存储恢
  * 复后陈旧循环可能覆盖新会话的编辑。保存串行化：在途保存期间的新编辑合
  * 并进后续保存——并发发起时，先发起的旧文档若后完成（资产复验/文件系统
- * 延迟），会原子覆盖新内容且双双报成功。 */
-function useSaveGateRefs(doc: ProjectContent) {
+ * 延迟），会原子覆盖新内容且双双报成功。initialSig 由宿主每渲染算一次
+ * 传入（PR #191 评审）：useRef 参数每渲染求值，宿主内重复计算会把
+ * O(图大小) 的签名开销按调用点翻倍。 */
+function useSaveGateRefs(doc: ProjectContent, initialSig: string) {
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const dirtyRef = useRef(false)
   const latestRef = useRef(doc)
   latestRef.current = doc
   const firstRender = useRef(true)
-  const lastSigRef = useRef(persistSignature(doc))
+  const lastSigRef = useRef(initialSig)
   const unmountedRef = useRef(false)
   const inFlightRef = useRef(false)
   /** 在途保存循环（flushSave 的 run）：退出冲刷闸据此真实等待在途落定，
@@ -119,25 +128,17 @@ function deliverLatestAfterUnmount(
     )
 }
 
-/** 文档签名比对（useDebouncedSave 拆分）：纯会话态变化（选择/拖拽过程
- * 帧）不置脏；签名命中即更新基线。 */
-function signatureChanged(
-  doc: ProjectContent,
-  lastSigRef: MutableRefObject<string>,
-): boolean {
-  const sig = persistSignature(doc)
-  if (sig === lastSigRef.current) return false
-  lastSigRef.current = sig
-  return true
-}
-
 /** 文档变更置脏（useDebouncedSave 拆分，issue #99）：首渲染跳过；
- * 名称/节点/边/设定集/集标题/资产索引触发防抖（视口经 markDirty 或卸载
- * 冲刷兜底）；doc 仅用于计算签名，依赖以签名的组成字段为准。真实编辑
- * 前进编辑序号（PR #174 评审：重存完成通知的生效水位）。 */
+ * 名称/节点/边/设定集/AI 批次计数/集标题/资产索引触发防抖（视口经
+ * markDirty 或卸载冲刷兜底）。effect 依赖持久化签名本身（单一契约，
+ * issue #155）：签名包含的每个字段变化都使签名不同、必然进入触发条件，
+ * 新增持久字段自动同步；纯会话态变化（选择/拖拽过程帧）签名不变即不
+ * 触发。sig 由宿主每渲染算一次传入（PR #191 评审）：本 hook 与 gate
+ * refs 的初值共用同一计算，避免 O(图大小) 的签名开销按调用点翻倍。
+ * 真实编辑前进编辑序号（PR #174 评审：重存完成通知的生效水位）。 */
 function useSignatureSaveWatch(
   gates: ReturnType<typeof useSaveGateRefs>,
-  doc: ProjectContent,
+  sig: string,
   delayMs: number,
   flushSave: () => Promise<void>,
 ) {
@@ -145,20 +146,16 @@ function useSignatureSaveWatch(
   useEffect(() => {
     if (firstRender.current) {
       firstRender.current = false
+      lastSigRef.current = sig
       return
     }
-    if (!signatureChanged(doc, lastSigRef)) return
+    if (sig === lastSigRef.current) return
+    lastSigRef.current = sig
     editSeqRef.current++
     dirtyRef.current = true
     scheduleFlush(saveTimer, delayMs, flushSave)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    doc.name,
-    doc.nodes,
-    doc.edges,
-    doc.settings,
-    doc.episodeTitles,
-    doc.assets,
+    sig,
     firstRender,
     lastSigRef,
     dirtyRef,
@@ -364,7 +361,10 @@ export function useDebouncedSave(
   onSaveResult?: (err: unknown) => void,
   onRetryPersistedSuccess?: () => void,
 ): (doc: ProjectContent) => void {
-  const gates = useSaveGateRefs(doc)
+  // 持久化签名每渲染计算一次（PR #191 评审）：gate refs 初值与置脏监听
+  // 共用——重复计算会把 O(图大小) 的签名+序列化开销按调用点翻倍
+  const sig = persistSignature(doc)
+  const gates = useSaveGateRefs(doc, sig)
   const { dirtyRef, inFlightRef } = gates
   const { flushSave, markDirty, flushOnUnmount, flushForExit } = useSaveFlush(
     gates,
@@ -373,7 +373,7 @@ export function useDebouncedSave(
     delayMs,
   )
 
-  useSignatureSaveWatch(gates, doc, delayMs, flushSave)
+  useSignatureSaveWatch(gates, sig, delayMs, flushSave)
   useUnmountFlush(gates.unmountedRef, gates.saveTimer, flushOnUnmount)
 
   // 退出冲刷闸（issue #119）：防抖脏文档是组件内 refs，App 级退出屏障
