@@ -1,5 +1,7 @@
-//! 出站 HTTP 代理共享助手：`imagegen` 与 `prefs::llm_chat` 两个面向
-//! provider 的代理共用的响应体流式限读内核（issue #15）。
+//! 出站 HTTP 代理共享内核：`imagegen` 与 `prefs::llm_chat` 两个面向
+//! provider 的代理共用的响应体流式限读内核（issue #15）与代理领域错误
+//! [`ProxyError`]（issue #144 代理分片：发送/超时/限读透传/状态/JSON/
+//! 下载公网边界的类别区分，展示边界统一转既有文案）。
 //!
 //! provider 响应属外部输入（信任边界）：异常/恶意 provider 的超大响应
 //! 必须在物化前被拒——分块流式累加、超限立即中止且不落半截。限读内核
@@ -42,6 +44,98 @@ impl std::error::Error for ReadBodyError {
             ReadBodyError::ResponseTooLarge { .. } => None,
             ReadBodyError::ReadTimeout(e) | ReadBodyError::Read(e) => Some(e),
             ReadBodyError::InvalidUtf8(e) => Some(e),
+        }
+    }
+}
+
+/// 出站代理领域错误（issue #144 代理分片）：`prefs::llm_chat` 与
+/// `imagegen` 的请求/下载链路错误按失败类别区分——客户端构造、发送
+/// （超时单列）、响应体读取（底层传输）、限读（[`ReadBodyError`] 透传，
+/// 不重实现）、状态码错误、JSON 解析（保留 `serde_json::Error` 来源）、
+/// 响应形状缺失与下载目标公网边界拒绝。展示边界（Tauri 命令出口）以
+/// `Display` 统一转换为既有中文文案（与历史 `format!` 输出逐字一致）。
+#[derive(Debug)]
+pub(crate) enum ProxyError {
+    /// HTTP 客户端构造失败：`context` 为操作阶段，`source` 保留底层错误。
+    Client {
+        context: String,
+        source: reqwest::Error,
+    },
+    /// 请求发送失败（非超时）：`context` 区分生成请求与 url 回退下载，
+    /// `source` 保留 `reqwest::Error`。
+    Send {
+        context: String,
+        source: reqwest::Error,
+    },
+    /// 发送阶段超时（总超时在 send 触发，如 provider 不回包）：携带
+    /// 超时秒数供调用方区分慢速网络与挂起。
+    SendTimeout { secs: u64, source: reqwest::Error },
+    /// 响应体分块读取失败（url 回退下载路径）：`source` 保留 reqwest 错误。
+    Read(reqwest::Error),
+    /// 响应体限读错误透传（超限/读取超时/读取失败/UTF-8，#45 首片类型）：
+    /// 文案与来源链原样保留。
+    Body(ReadBodyError),
+    /// 非 2xx 状态：`context` 为「服务返回」/「下载图像返回」，`head` 为
+    /// 截断后的响应体前缀（下载路径无响应体时为空）。
+    Status {
+        context: String,
+        code: reqwest::StatusCode,
+        head: String,
+    },
+    /// 响应体 JSON 解析失败：`source` 保留 `serde_json::Error`。
+    InvalidJson {
+        context: String,
+        source: serde_json::Error,
+    },
+    /// 响应形状缺失（无可交付的回复/图像成员）。
+    InvalidResponse { detail: String },
+    /// 下载目标公网边界拒绝（协议/主机分类/解析/重定向形态）与下载路径
+    /// 输入非法——决策类失败；解析失败的底层原因并入文案，不另设变体。
+    DownloadRefused { detail: String },
+}
+
+/// 展示边界契约：文案与历史 `format!` 输出逐字一致，前端可见诊断不变。
+impl std::fmt::Display for ProxyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProxyError::Client { context, source } => write!(f, "{context}：{source}"),
+            ProxyError::Send { context, source } => write!(f, "{context}：{source}"),
+            ProxyError::SendTimeout { secs, source } => {
+                write!(f, "请求超时（{secs}s）：{source}")
+            }
+            ProxyError::Read(source) => write!(f, "读取图像失败：{source}"),
+            ProxyError::Body(e) => write!(f, "{e}"),
+            ProxyError::Status {
+                context,
+                code,
+                head,
+            } if head.is_empty() => {
+                write!(f, "{context} {code}")
+            }
+            ProxyError::Status {
+                context,
+                code,
+                head,
+            } => write!(f, "{context} {code}：{head}"),
+            ProxyError::InvalidJson { context, source } => write!(f, "{context}：{source}"),
+            ProxyError::InvalidResponse { detail } => write!(f, "{detail}"),
+            ProxyError::DownloadRefused { detail } => write!(f, "{detail}"),
+        }
+    }
+}
+
+impl std::error::Error for ProxyError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ProxyError::Client { source, .. } => Some(source),
+            ProxyError::Send { source, .. } => Some(source),
+            ProxyError::SendTimeout { source, .. } => Some(source),
+            ProxyError::Read(source) => Some(source),
+            ProxyError::Body(e) => Some(e),
+            ProxyError::InvalidJson { source, .. } => Some(source),
+            ProxyError::Status { .. }
+            | ProxyError::InvalidResponse { .. }
+            | ProxyError::DownloadRefused { .. } => None,
         }
     }
 }
@@ -244,5 +338,68 @@ mod tests {
         );
         let source = std::error::Error::source(&err).expect("编码失败来源应保留");
         assert!(source.is::<std::string::FromUtf8Error>());
+    }
+
+    /// 代理错误展示边界契约（issue #144 代理分片）：文案与历史 `format!`
+    /// 输出逐字一致（命令出口以 to_string 转换，前端可见诊断不变）。
+    /// 构造一个真实 reqwest 错误（非法代理串）：reqwest::Error 无公开
+    /// 构造器，经可失败的公开 API 取得。
+    fn reqwest_err() -> reqwest::Error {
+        reqwest::Proxy::http(":://not-a-url").expect_err("非法代理串应产生 reqwest 错误")
+    }
+
+    #[test]
+    fn proxy_error_display_composes_historical_texts() {
+        let e = ProxyError::Client {
+            context: "构造 HTTP 客户端失败".into(),
+            source: reqwest_err(),
+        };
+        assert!(
+            e.to_string().starts_with("构造 HTTP 客户端失败："),
+            "实际：{e}"
+        );
+        assert!(
+            std::error::Error::source(&e).is_some(),
+            "客户端构造来源应保留"
+        );
+        let e = ProxyError::Send {
+            context: "请求失败".into(),
+            source: reqwest_err(),
+        };
+        assert!(e.to_string().starts_with("请求失败："), "实际：{e}");
+        let e = ProxyError::Status {
+            context: "下载图像返回".into(),
+            code: reqwest::StatusCode::NOT_FOUND,
+            head: String::new(),
+        };
+        assert_eq!(e.to_string(), "下载图像返回 404 Not Found");
+        let e = ProxyError::InvalidResponse {
+            detail: "服务未返回回复内容".into(),
+        };
+        assert_eq!(e.to_string(), "服务未返回回复内容");
+        assert!(std::error::Error::source(&e).is_none());
+    }
+
+    /// 超时与限读透传：发送超时携带秒数，ReadBodyError 原样透传（不重
+    /// 实现 #45 首片类型），类别与来源链均可区分。
+    #[test]
+    fn proxy_error_classifies_timeout_and_body_passthrough() {
+        let e = ProxyError::SendTimeout {
+            secs: 120,
+            source: reqwest_err(),
+        };
+        assert!(e.to_string().starts_with("请求超时（120s）："), "实际：{e}");
+        assert!(
+            matches!(e, ProxyError::SendTimeout { .. }),
+            "发送超时应为独立类别"
+        );
+        let body = ProxyError::Body(ReadBodyError::ResponseTooLarge { limit: 16 });
+        assert_eq!(body.to_string(), "响应体超过 16 字节上限");
+        // 透传保留内层类型与来源链（超限自身的 source 为空，与 #45 首片一致）
+        assert!(
+            std::error::Error::source(&body).is_some_and(|s| s.is::<ReadBodyError>()),
+            "透传应保留内层类型：{body:?}"
+        );
+        assert!(matches!(body, ProxyError::Body(_)));
     }
 }

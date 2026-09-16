@@ -4,7 +4,8 @@
 
 use cap_std::fs::Dir as CapDir;
 
-use crate::store::{open_dir_bound, to_ipc_text};
+use crate::library::error::LibraryError;
+use crate::store::open_dir_bound;
 
 use super::journal_io::JournalEntry;
 
@@ -15,16 +16,16 @@ pub(super) const TRASH_DIR: &str = "assets/.trash";
 /// procfs 符号链接，unlink 不解引用最终符号链接（EPERM），不得伪装修复。
 /// 按契约统一报告能力缺失：保留隔离项与日志并记录 cleanupPending，索引
 /// 不回滚；未来接入等价原语（如内核提供的 funlink）时在此收口。
-pub(super) fn identity_bound_unlink(_file: &cap_std::fs::File) -> Result<(), String> {
-    Err("平台缺少身份绑定删除原语".into())
+pub(super) fn identity_bound_unlink(_file: &cap_std::fs::File) -> Result<(), LibraryError> {
+    Err(LibraryError::refused("平台缺少身份绑定删除原语"))
 }
 
 /// 目录持久性屏障（Unix）。
 #[cfg(unix)]
-pub(super) fn fsync_dir(dir: &CapDir) -> Result<(), String> {
+pub(super) fn fsync_dir(dir: &CapDir) -> Result<(), LibraryError> {
     dir.open_dir(".")
         .and_then(|d| d.into_std_file().sync_all())
-        .map_err(|e| format!("同步目录失败（持久性屏障缺失）：{e}"))
+        .map_err(|e| LibraryError::io("同步目录失败（持久性屏障缺失）", e))
 }
 
 #[cfg(not(unix))]
@@ -41,14 +42,14 @@ pub(super) enum PathIdentity {
 }
 
 #[cfg(unix)]
-pub(super) fn path_identity(parent: &CapDir, name: &str) -> Result<PathIdentity, String> {
+pub(super) fn path_identity(parent: &CapDir, name: &str) -> Result<PathIdentity, LibraryError> {
     use cap_std::fs::MetadataExt;
     match parent.symlink_metadata(name) {
         Ok(md) if md.file_type().is_symlink() => Ok(PathIdentity::Other),
         Ok(md) if md.is_file() => Ok(PathIdentity::Regular(md.dev(), md.ino())),
         Ok(_) => Ok(PathIdentity::Other),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(PathIdentity::Missing),
-        Err(e) => Err(format!("读取路径元数据失败（{name}）：{e}")),
+        Err(e) => Err(LibraryError::io(format!("读取路径元数据失败（{name}）"), e)),
     }
 }
 
@@ -66,13 +67,16 @@ pub(super) enum TrashVerdict {
 pub(super) fn verify_trash_identity(
     trash: &CapDir,
     entry: &JournalEntry,
-) -> Result<TrashVerdict, String> {
+) -> Result<TrashVerdict, LibraryError> {
     let file_name = entry.trash_name.rsplit('/').next().unwrap_or_default();
     let md = match trash.symlink_metadata(file_name) {
         Ok(md) => md,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(TrashVerdict::Missing),
         Err(e) => {
-            return Err(format!("读取隔离项元数据失败（{}）：{e}", entry.trash_name));
+            return Err(LibraryError::io(
+                format!("读取隔离项元数据失败（{}）", entry.trash_name),
+                e,
+            ));
         }
     };
     if md.file_type().is_symlink() || !md.is_file() {
@@ -84,10 +88,10 @@ pub(super) fn verify_trash_identity(
     }
     let f = trash
         .open(file_name)
-        .map_err(|e| format!("打开隔离项失败（{}）：{e}", entry.trash_name))?;
+        .map_err(|e| LibraryError::io(format!("打开隔离项失败（{}）", entry.trash_name), e))?;
     let fm = f
         .metadata()
-        .map_err(|e| format!("读取隔离项句柄元数据失败：{e}"))?;
+        .map_err(|e| LibraryError::io("读取隔离项句柄元数据失败", e))?;
     if (fm.dev(), fm.ino()) != (entry.dev, entry.ino) {
         return Ok(TrashVerdict::Mismatch);
     }
@@ -96,35 +100,37 @@ pub(super) fn verify_trash_identity(
 
 /// 打开 .trash 隔离区目录句柄（缺失返回 None；不在此创建——创建只发生在
 /// 事务步骤①与恢复重隔离，且都在已验证资产根句柄下）。
-pub(super) fn open_trash_dir(assets: &CapDir) -> Result<Option<CapDir>, String> {
+pub(super) fn open_trash_dir(assets: &CapDir) -> Result<Option<CapDir>, LibraryError> {
     match assets.symlink_metadata(".trash") {
-        Ok(md) if md.file_type().is_symlink() => Err("隔离目录是符号链接，拒绝操作".into()),
+        Ok(md) if md.file_type().is_symlink() => {
+            Err(LibraryError::refused("隔离目录是符号链接，拒绝操作"))
+        }
         Ok(md) if md.is_dir() => open_dir_bound(assets, ".trash", &md, "隔离目录")
             .map(Some)
-            .map_err(to_ipc_text),
-        Ok(_) => Err("隔离目录路径不是目录，拒绝操作".into()),
+            .map_err(LibraryError::from),
+        Ok(_) => Err(LibraryError::refused("隔离目录路径不是目录，拒绝操作")),
         // 仅 NotFound 视为缺失（评审修复：权限/瞬态 I/O 误当缺失会在未检查
         // 隔离项的情况下清除日志，丢失唯一清理记录）；其余错误中止恢复
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(format!("读取隔离目录元数据失败：{e}")),
+        Err(e) => Err(LibraryError::io("读取隔离目录元数据失败", e)),
     }
 }
 
 /// 在已验证资产根句柄下确保 .trash 为真实目录并 fsync 资产根。
 #[cfg(unix)]
-pub(super) fn ensure_trash_dir(assets: &CapDir) -> Result<CapDir, String> {
+pub(super) fn ensure_trash_dir(assets: &CapDir) -> Result<CapDir, LibraryError> {
     if let Err(e) = assets.create_dir(".trash") {
         if e.kind() != std::io::ErrorKind::AlreadyExists {
-            return Err(format!("创建隔离目录失败：{e}"));
+            return Err(LibraryError::io("创建隔离目录失败", e));
         }
     }
     let md = assets
         .symlink_metadata(".trash")
-        .map_err(|e| format!("读取隔离目录元数据失败：{e}"))?;
+        .map_err(|e| LibraryError::io("读取隔离目录元数据失败", e))?;
     if md.file_type().is_symlink() || !md.is_dir() {
-        return Err("隔离目录被占用为非目录，拒绝操作".into());
+        return Err(LibraryError::refused("隔离目录被占用为非目录，拒绝操作"));
     }
-    let dir = open_dir_bound(assets, ".trash", &md, "隔离目录").map_err(to_ipc_text)?;
+    let dir = open_dir_bound(assets, ".trash", &md, "隔离目录").map_err(LibraryError::from)?;
     fsync_dir(assets)?;
     Ok(dir)
 }
@@ -140,18 +146,18 @@ pub(super) fn restore_from_trash(
     entry: &JournalEntry,
     parent: &CapDir,
     last: &str,
-) -> Result<(), String> {
+) -> Result<(), LibraryError> {
     let file_name = entry.trash_name.rsplit('/').next().unwrap_or_default();
     // linkat 语义：目标存在即失败（no-replace），句柄相对解析——
     // 源为隔离名（.trash），目标为原路径（原名）
     trash
         .hard_link(file_name, parent, last)
-        .map_err(|e| format!("回迁隔离项失败（{}）：{e}", entry.asset_id))?;
+        .map_err(|e| LibraryError::io(format!("回迁隔离项失败（{}）", entry.asset_id), e))?;
     // 耐久顺序（评审修复）：先让目标目录的硬链接持久化，再释放隔离名并
     // 持久化隔离目录——中断在中间不致于隔离名已删而目标未持久
     fsync_dir(parent)?;
     trash
         .remove_file(file_name)
-        .map_err(|e| format!("释放隔离名失败（{}）：{e}", entry.asset_id))?;
+        .map_err(|e| LibraryError::io(format!("释放隔离名失败（{}）", entry.asset_id), e))?;
     fsync_dir(trash)
 }

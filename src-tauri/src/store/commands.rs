@@ -278,10 +278,10 @@ fn remove_dir_contents_bound(dir: &CapDir) -> Result<(), StoreError> {
             let child = open_dir_bound(dir, &name, &md, "待删子目录")?;
             remove_dir_contents_bound(&child)?;
             dir.remove_dir(&name)
-                .map_err(|e| StoreError::io(format!("删除子目录失败（{name:?}"), e))?;
+                .map_err(|e| StoreError::io(format!("删除子目录失败（{name:?}）"), e))?;
         } else {
             dir.remove_file(&name)
-                .map_err(|e| StoreError::io(format!("移除条目失败（{name:?}"), e))?;
+                .map_err(|e| StoreError::io(format!("移除条目失败（{name:?}）"), e))?;
         }
     }
     Ok(())

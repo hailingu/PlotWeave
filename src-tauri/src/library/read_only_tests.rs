@@ -208,7 +208,7 @@ fn update_meta_rejects_kind_change_conflicting_with_group() {
     let err = update_meta_with(&cap(&library), "la-1", &json!({ "kind": "location" }))
         .expect_err("与组 kind 冲突的更新应拒绝");
     assert!(
-        err.contains("groupId") || err.contains("kind"),
+        err.to_string().contains("groupId") || err.to_string().contains("kind"),
         "意外诊断：{err}"
     );
     let after = fs::read(library.join("library.json")).expect("读落盘索引字节");
@@ -255,7 +255,10 @@ fn update_meta_rejects_patch_fields_outside_value_domain() {
         ),
     ] {
         let err = update_meta_with(&lib, "la-1", &patch).expect_err(&format!("{why} 应拒绝"));
-        assert!(!err.is_empty(), "{why} 应携带诊断");
+        assert!(
+            matches!(err, LibraryError::InvalidInput { .. }),
+            "{why} 应为非法输入类别：{err}"
+        );
     }
     // 超过 16 项拒绝（不得静默截断）
     let many = json!({ "tags": (0..17).map(|i| format!("t{i}")).collect::<Vec<_>>() });
@@ -263,7 +266,7 @@ fn update_meta_rejects_patch_fields_outside_value_domain() {
     // 对照：合法 tags 更新成功
     let ok = update_meta_with(&lib, "la-1", &json!({ "tags": [" hero ", "hero"] }))
         .expect_err("规范化后重复（hero）应拒绝");
-    assert!(ok.contains("重复"), "规范化后重复应拒绝：{ok}");
+    assert!(ok.to_string().contains("重复"), "规范化后重复应拒绝：{ok}");
     let updated = update_meta_with(&lib, "la-1", &json!({ "tags": [" hero "] }))
         .expect("带空白的合法 tags 应成功");
     assert_eq!(updated["tags"], json!(["hero"]));
@@ -289,7 +292,7 @@ fn update_meta_rejects_padded_group_id_patch() {
     let before = fs::read(library.join("library.json")).expect("读原始索引字节");
     let err = update_meta_with(&cap(&library), "la-1", &json!({ "groupId": " g-1 " }))
         .expect_err("带空白 groupId 补丁应拒绝");
-    assert!(err.contains("groupId"), "意外诊断：{err}");
+    assert!(err.to_string().contains("groupId"), "意外诊断：{err}");
     let after = fs::read(library.join("library.json")).expect("读落盘索引字节");
     assert_eq!(before, after, "拒绝更新不得写盘");
     cleanup(&root);
@@ -407,7 +410,7 @@ fn upsert_library_group_rejects_kind_change_conflicting_with_members() {
     let err = upsert_group_with(&cap(&library), &group_entry("g-1", "女主", "location"))
         .expect_err("改 kind 与成员冲突应拒绝");
     assert!(
-        err.contains("kind") || err.contains("冲突"),
+        err.to_string().contains("kind") || err.to_string().contains("冲突"),
         "意外诊断：{err}"
     );
     let after = fs::read(library.join("library.json")).expect("读落盘索引");

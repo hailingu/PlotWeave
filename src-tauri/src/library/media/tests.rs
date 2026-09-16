@@ -17,7 +17,8 @@ use std::path::{Path, PathBuf};
 /// 随元组返回后立即丢弃（测试不持有交付）。
 fn media_read(library: &CapDir, id: &str) -> Result<(String, Vec<u8>), String> {
     open_media_with(library, id)
-        .and_then(|(mime, file)| read_media_capped(id, mime, file))
+        .map_err(|e| e.to_string())
+        .and_then(|(mime, file)| read_media_capped(id, mime, file).map_err(|e| e.to_string()))
         .map(|(mime, bytes, _permit)| (mime, bytes))
 }
 
@@ -31,7 +32,10 @@ fn project_media_read(
     // 协议路径的 pending 可见性归 assets::project_media 用例覆盖
     let pending = crate::assets::project_media::PendingProjectAssets::new();
     crate::assets::project_media::open_project_media_with(projects, project_id, id, &pending)
-        .and_then(|(mime, file)| read_project_media_capped(id, mime, file))
+        .map_err(|e| e.to_string())
+        .and_then(|(mime, file)| {
+            read_project_media_capped(id, mime, file).map_err(|e| e.to_string())
+        })
         .map(|(mime, bytes, _permit)| (mime, bytes))
 }
 

@@ -138,10 +138,10 @@ fn import_rejects_missing_project_and_unknown_library_asset() {
     seed_library(&library, "la-1", "la-1.png", b"A", "image/png");
     let err = import_asset_from_library(&cap(&projects), &cap(&library), "p-9", "la-1", &pending())
         .expect_err("不存在的项目应拒绝");
-    assert!(err.contains("项目不存在"), "意外诊断：{err}");
+    assert!(err.to_string().contains("项目不存在"), "意外诊断：{err}");
     let err = import_asset_from_library(&cap(&projects), &cap(&library), "p-1", "la-9", &pending())
         .expect_err("未知库资产应拒绝");
-    assert!(err.contains("库资产不存在"), "意外诊断：{err}");
+    assert!(err.to_string().contains("库资产不存在"), "意外诊断：{err}");
     cleanup(&root);
 }
 
@@ -163,7 +163,7 @@ fn import_rejects_index_entry_with_escaping_rel_path() {
     // relPath 永不进入拷贝流程
     let err = import_asset_from_library(&cap(&projects), &cap(&library), "p-1", "la-1", &pending())
         .expect_err("越界 relPath 应拒绝");
-    assert!(err.contains("库资产不存在"), "意外诊断：{err}");
+    assert!(err.to_string().contains("库资产不存在"), "意外诊断：{err}");
     cleanup(&root);
 }
 
@@ -189,7 +189,7 @@ fn import_rejects_symlinked_library_source() {
     .expect("写库索引");
     let err = import_asset_from_library(&cap(&projects), &cap(&library), "p-1", "la-1", &pending())
         .expect_err("符号链接源应拒绝");
-    assert!(err.contains("符号链接"), "意外诊断：{err}");
+    assert!(err.to_string().contains("符号链接"), "意外诊断：{err}");
     assert!(
         fs::symlink_metadata(projects.join("p-1").join("assets")).is_err()
             || fs::read_dir(projects.join("p-1").join("assets"))
@@ -245,7 +245,10 @@ fn validate_rejects_shape_violations() {
         }
         let err =
             validate_project_asset_with(&cap(&projects), "p-1", &bad).expect_err("形状违规应拒绝");
-        assert!(err.contains(expect_msg), "诊断缺 {expect_msg}：{err}");
+        assert!(
+            err.to_string().contains(expect_msg),
+            "诊断缺 {expect_msg}：{err}"
+        );
     }
     cleanup(&root);
 }
@@ -264,7 +267,10 @@ fn import_rejects_missing_or_swapped_media_file() {
     });
     let err =
         validate_project_asset_with(&cap(&projects), "p-1", &asset).expect_err("媒体缺失应拒绝");
-    assert!(err.contains("资产文件不存在"), "意外诊断：{err}");
+    assert!(
+        err.to_string().contains("资产文件不存在"),
+        "意外诊断：{err}"
+    );
     cleanup(&root);
 }
 
@@ -285,7 +291,10 @@ fn import_rejects_missing_nested_parent_dir() {
     .expect("写库索引");
     let err = import_asset_from_library(&cap(&projects), &cap(&library), "p-1", "la-1", &pending())
         .expect_err("父目录缺失应拒绝导入");
-    assert!(err.contains("资产文件不存在"), "意外诊断：{err}");
+    assert!(
+        err.to_string().contains("资产文件不存在"),
+        "意外诊断：{err}"
+    );
     cleanup(&root);
 }
 
@@ -333,7 +342,7 @@ fn write_generated_asset_rejects_missing_project() {
     seed_project(&projects, "p-1");
     let err = write_generated_asset(&cap(&projects), "p-9", b"PNG", "image/png", &pending())
         .expect_err("不存在的项目应拒绝");
-    assert!(err.contains("项目不存在"), "意外诊断：{err}");
+    assert!(err.to_string().contains("项目不存在"), "意外诊断：{err}");
     cleanup(&root);
 }
 

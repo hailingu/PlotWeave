@@ -97,7 +97,10 @@ fn delete_refuses_poisoned_index_self_target() {
     );
     let err = crate::library_journal::delete_asset_transacted(&cap(&library), "la-1")
         .expect_err("脏条目应拒绝删除");
-    assert!(err.contains("资产不存在"), "隔离条目应不可达：{err}");
+    assert!(
+        matches!(err, LibraryError::NotFound { .. }),
+        "隔离条目应为缺失类别：{err}"
+    );
     assert!(
         fs::metadata(library.join("library.json")).is_ok(),
         "索引自身不得被删除"
@@ -118,7 +121,10 @@ fn delete_refuses_absolute_rel_path_outside_library() {
     );
     let err = crate::library_journal::delete_asset_transacted(&cap(&library), "la-1")
         .expect_err("绝对路径应拒绝");
-    assert!(err.contains("资产不存在"), "隔离条目应不可达：{err}");
+    assert!(
+        err.to_string().contains("资产不存在"),
+        "隔离条目应不可达：{err}"
+    );
     assert_eq!(fs::read(&victim).expect("受害者文件必须幸存"), b"VICTIM");
     cleanup(&root);
 }
@@ -135,7 +141,10 @@ fn delete_refuses_relative_name_outside_assets() {
     );
     let err = crate::library_journal::delete_asset_transacted(&cap(&library), "la-1")
         .expect_err("assets/ 外相对名应拒绝");
-    assert!(err.contains("资产不存在"), "隔离条目应不可达：{err}");
+    assert!(
+        err.to_string().contains("资产不存在"),
+        "隔离条目应不可达：{err}"
+    );
     assert_eq!(
         fs::read(library.join("settings.json")).expect("库内非资产文件必须幸存"),
         b"{}"
@@ -164,7 +173,10 @@ fn delete_refuses_symlinked_parent_component() {
     );
     let err = crate::library_journal::delete_asset_transacted(&cap(&library), "la-1")
         .expect_err("符号链接中间组件应拒绝");
-    assert!(err.contains("符号链接"), "意外诊断：{err}");
+    assert!(
+        matches!(err, LibraryError::Refused { .. }),
+        "符号链接应为保护性拒绝类别：{err}"
+    );
     assert_eq!(
         fs::read(outside.join("g.png")).expect("链外目标文件必须幸存"),
         b"G"
@@ -183,7 +195,7 @@ fn delete_refuses_non_file_target() {
     );
     let err = crate::library_journal::delete_asset_transacted(&cap(&library), "la-1")
         .expect_err("非普通文件目标应拒绝");
-    assert!(err.contains("不是普通文件"), "意外诊断：{err}");
+    assert!(err.to_string().contains("不是普通文件"), "意外诊断：{err}");
     assert!(
         fs::metadata(library.join("assets").join("la-1.png")).is_ok(),
         "目标目录必须幸存"
@@ -294,7 +306,7 @@ fn read_index_enforces_size_cap() {
         &json!({ "assets": by_id([]), "groups": by_id([]), "pad": pad }),
     );
     let err = crate::library_fs::read_index_capped(&cap(&library)).expect_err("超限索引应拒绝");
-    assert!(err.contains("上限"), "意外诊断：{err}");
+    assert!(err.to_string().contains("上限"), "意外诊断：{err}");
     cleanup(&root);
 }
 
@@ -323,7 +335,7 @@ fn read_index_rejects_non_object_root() {
         fs::write(library.join("library.json"), raw).expect("写非对象根索引");
         let err =
             crate::library_fs::read_index_capped(&cap(&library)).expect_err("非对象根应显式拒绝");
-        assert!(err.contains("对象"), "意外诊断：{err}");
+        assert!(err.to_string().contains("对象"), "意外诊断：{err}");
     }
     cleanup(&root);
 }
@@ -378,7 +390,7 @@ fn put_rejects_when_serialized_index_would_exceed_cap() {
     // 导入条目用同款长名，把候选索引推过写上限
     let err = put_asset_with(&cap(&library), &long_name, "image/png", "other", b"A")
         .expect_err("超限候选索引应拒绝写入");
-    assert!(err.contains("上限"), "意外诊断：{err}");
+    assert!(err.to_string().contains("上限"), "意外诊断：{err}");
     let files = fs::read_dir(library.join("assets"))
         .expect("读资产目录")
         .count();
@@ -513,7 +525,7 @@ fn put_rejects_non_canonical_mime() {
     let (library, root) = temp_fixture();
     let err = put_asset_with(&cap(&library), "a.png", "not a mime", "other", b"A")
         .expect_err("非法 mime 应拒绝");
-    assert!(err.contains("mime"), "意外诊断：{err}");
+    assert!(err.to_string().contains("mime"), "意外诊断：{err}");
     let files = fs::read_dir(library.join("assets"))
         .expect("读资产目录")
         .count();
@@ -541,7 +553,9 @@ fn read_index_rejects_when_normalized_form_exceeds_cap() {
     );
     let err =
         crate::library_fs::read_index_capped(&cap(&library)).expect_err("规范化表示超限应拒绝读取");
-    assert!(err.contains("上限"), "意外诊断：{err}");
+    // 大小上限族为独立类别（issue #144）：读取侧规范化表示超限可按类型区分
+    assert!(matches!(err, LibraryError::Limit { .. }), "实际错误：{err}");
+    assert!(err.to_string().contains("上限"), "意外诊断：{err}");
     cleanup(&root);
 }
 
@@ -659,7 +673,7 @@ fn migration_suspended_blocks_mutations_preserving_disk() {
     let err = update_meta_with(&cap(&library), "la-0", &json!({ "name": "改名" }))
         .expect_err("迁移挂起态应阻断变更");
     assert!(
-        err.contains("上限") || err.contains("迁移"),
+        err.to_string().contains("上限") || err.to_string().contains("迁移"),
         "意外诊断：{err}"
     );
     let after = fs::read(library.join("library.json")).expect("读落盘索引字节");

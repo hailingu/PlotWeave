@@ -209,6 +209,12 @@ fn delete_project_files_keeps_record_when_asset_tree_removal_fails() {
         matches!(err.root(), StoreError::Io { .. }),
         "删除失败应为底层 I/O 类别：{err:?}"
     );
+    // 展示边界契约（PR #179 评审修复）：条目名括注必须闭合，
+    // 文案与历史 format! 形态逐字一致
+    assert!(
+        err.to_string().starts_with("移除条目失败（\"a.png\"）："),
+        "实际文案：{err}"
+    );
     // 权威项目文件必须仍在：项目可发现、删除可重试，不留孤儿媒体树
     assert!(
         projects.join("p-1.json").exists(),

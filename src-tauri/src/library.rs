@@ -10,6 +10,7 @@
 use serde_json::{json, Value};
 use tauri::AppHandle;
 
+use crate::library::error::LibraryError;
 use crate::library_fs::{
     assets_root, atomic_write_with, ensure_index_size, library_root, read_index_capped,
     validate_asset_id, write_index,
@@ -48,10 +49,10 @@ const VIEWS: [&str; 8] = [
 /// `cleanupPending` 随索引返回，冲突期条目标记 `conflicted` 不可用。
 #[tauri::command]
 pub fn list_library_assets(app: AppHandle) -> Result<Value, String> {
-    let library = library_root(&app)?;
+    let library = library_root(&app).map_err(|e| e.to_string())?;
     let _op = library_op_lock();
-    let _file_lock = library_file_lock(&library)?;
-    let (mut index, warnings) = list_assets_with(&library)?;
+    let _file_lock = library_file_lock(&library).map_err(|e| e.to_string())?;
+    let (mut index, warnings) = list_assets_with(&library).map_err(|e| e.to_string())?;
     index["warnings"] = json!(warnings);
     Ok(index)
 }
@@ -60,7 +61,9 @@ pub fn list_library_assets(app: AppHandle) -> Result<Value, String> {
 /// 再按只读态分流读取——日志异型（只读告警态）用不落盘读取，索引保持
 /// 原始字节（评审修复，PR #33 第五轮：只读态下迁移落盘会改写索引）；迁移
 /// 警告与冲突期标记随结果返回。
-pub(crate) fn list_assets_with(library: &cap_std::fs::Dir) -> Result<(Value, Vec<String>), String> {
+pub(crate) fn list_assets_with(
+    library: &cap_std::fs::Dir,
+) -> Result<(Value, Vec<String>), LibraryError> {
     let mut recovery = crate::library_journal::recover(library)?;
     let (mut index, mut warnings) = if recovery.read_only {
         let (idx, w) = crate::library_fs::read_index_normalized_readonly(library)?;
@@ -90,22 +93,26 @@ pub(crate) fn put_asset_with(
     mime: &str,
     kind: &str,
     bytes: &[u8],
-) -> Result<Value, String> {
-    validate_name(name)?;
-    validate_kind(kind)?;
+) -> Result<Value, LibraryError> {
+    validate_name(name).map_err(LibraryError::invalid)?;
+    validate_kind(kind).map_err(LibraryError::invalid)?;
     let mime = mime.trim().to_ascii_lowercase();
     if !is_canonical_mime(&mime) {
-        return Err(format!("非法 mime：{mime}"));
+        return Err(LibraryError::invalid(format!("非法 mime：{mime}")));
     }
     if bytes.is_empty() {
-        return Err("文件内容为空".into());
+        return Err(LibraryError::invalid("文件内容为空"));
     }
     if bytes.len() > ASSET_MAX_BYTES {
-        return Err("文件超过 20 MiB 上限".into());
+        return Err(LibraryError::Limit {
+            detail: "文件超过 20 MiB 上限".into(),
+        });
     }
     let recovery = crate::library_journal::recover(library)?;
     if recovery.read_only {
-        return Err("删除日志异常，库写入/删除已暂停：须人工修复 asset-delete-journal.json".into());
+        return Err(LibraryError::refused(
+            "删除日志异常，库写入/删除已暂停：须人工修复 asset-delete-journal.json",
+        ));
     }
     // 迁移落盘已发生而导入可能因业务失败早退——诊断兜底进日志（评审修复，
     // PR #33 第十二轮）
@@ -113,10 +120,9 @@ pub(crate) fn put_asset_with(
     let assets = assets_root(library)?;
     let (mut index, mut warnings, migration_suspended) = read_index_capped(library)?;
     if migration_suspended {
-        return Err(
-            "资产索引迁移挂起（迁移结果超大小上限），写入已暂停：须人工修整 library.json 条目"
-                .into(),
-        );
+        return Err(LibraryError::refused(
+            "资产索引迁移挂起（迁移结果超大小上限），写入已暂停：须人工修整 library.json 条目",
+        ));
     }
     warnings.extend(recovery.warnings);
     let cleanup_pending = recovery.cleanup_pending;
@@ -127,7 +133,9 @@ pub(crate) fn put_asset_with(
     let id = {
         let taken = index["assets"]["byId"]
             .as_object()
-            .ok_or("资产索引结构损坏")?
+            .ok_or_else(|| LibraryError::Corrupt {
+                detail: "资产索引结构损坏".into(),
+            })?
             .clone();
         unique_library_id(&taken)
     };
@@ -144,7 +152,9 @@ pub(crate) fn put_asset_with(
     });
     index["assets"]["byId"]
         .as_object_mut()
-        .ok_or("资产索引结构损坏")?
+        .ok_or_else(|| LibraryError::Corrupt {
+            detail: "资产索引结构损坏".into(),
+        })?
         .insert(id.clone(), entry.clone());
     // 媒体落盘前先校验候选索引大小（评审修复）：超限在物化前拒绝，
     // 不留下索引写不回去的孤儿媒体文件
@@ -172,10 +182,10 @@ pub fn import_library_asset(
     kind: String,
     bytes: Vec<u8>,
 ) -> Result<Value, String> {
-    let library = library_root(&app)?;
+    let library = library_root(&app).map_err(|e| e.to_string())?;
     let _op = library_op_lock();
-    let _file_lock = library_file_lock(&library)?;
-    put_asset_with(&library, &name, &mime, &kind, &bytes)
+    let _file_lock = library_file_lock(&library).map_err(|e| e.to_string())?;
+    put_asset_with(&library, &name, &mime, &kind, &bytes).map_err(|e| e.to_string())
 }
 
 fn validate_name(name: &str) -> Result<(), String> {
@@ -358,39 +368,46 @@ fn apply_group_id(entry: &mut Value, g: &Value) -> Result<(), String> {
 #[tauri::command]
 pub fn delete_library_asset(app: AppHandle, id: String) -> Result<Value, String> {
     validate_asset_id(&id)?;
-    let library = library_root(&app)?;
+    let library = library_root(&app).map_err(|e| e.to_string())?;
     let _op = library_op_lock();
-    let _file_lock = library_file_lock(&library)?;
-    crate::library_journal::delete_asset_transacted(&library, &id)
+    let _file_lock = library_file_lock(&library).map_err(|e| e.to_string())?;
+    crate::library_journal::delete_asset_transacted(&library, &id).map_err(|e| e.to_string())
 }
 
 /// 更新元信息内核（句柄域）：补丁值域校验（§7.2 在内核强制——绕过命令
 /// 层的原始 IPC 同样不得绕过）→ 净化读取 → 定位条目 → 应用补丁 → 复验
 /// 合并结果 → 原子写回；返回条目随写回携带净化诊断（仅在非空时附加）。
-fn update_meta_with(library: &cap_std::fs::Dir, id: &str, patch: &Value) -> Result<Value, String> {
-    validate_meta_patch(patch)?;
+fn update_meta_with(
+    library: &cap_std::fs::Dir,
+    id: &str,
+    patch: &Value,
+) -> Result<Value, LibraryError> {
+    validate_meta_patch(patch).map_err(LibraryError::invalid)?;
     let tags = normalize_tags(patch.get("tags"));
     let recovery = crate::library_journal::recover(library)?;
     if recovery.read_only {
-        return Err("删除日志异常，库写入/删除已暂停：须人工修复 asset-delete-journal.json".into());
+        return Err(LibraryError::refused(
+            "删除日志异常，库写入/删除已暂停：须人工修复 asset-delete-journal.json",
+        ));
     }
     // 迁移落盘已发生而命令可能因业务失败早退（资产不存在/合并结果冲突）——
     // 诊断兜底进日志，修复可见性不随 Err 丢失（评审修复，PR #33 第十二轮）
     crate::library_fs::report_recovery_diagnostics("元信息更新", &recovery.warnings);
     let (mut index, mut warnings, migration_suspended) = read_index_capped(library)?;
     if migration_suspended {
-        return Err(
-            "资产索引迁移挂起（迁移结果超大小上限），写入已暂停：须人工修整 library.json 条目"
-                .into(),
-        );
+        return Err(LibraryError::refused(
+            "资产索引迁移挂起（迁移结果超大小上限），写入已暂停：须人工修整 library.json 条目",
+        ));
     }
     warnings.extend(recovery.warnings);
     let assets = index["assets"]["byId"]
         .as_object_mut()
-        .ok_or("资产索引结构损坏")?;
+        .ok_or_else(|| LibraryError::Corrupt {
+            detail: "资产索引结构损坏".into(),
+        })?;
     let entry = assets
         .get_mut(id)
-        .ok_or_else(|| format!("资产不存在：{id}"))?;
+        .ok_or_else(|| LibraryError::missing(format!("资产不存在：{id}")))?;
     if let Some(n) = patch.get("name").and_then(|v| v.as_str()) {
         entry["name"] = json!(n.trim());
     }
@@ -409,7 +426,7 @@ fn update_meta_with(library: &cap_std::fs::Dir, id: &str, patch: &Value) -> Resu
         entry["tags"] = json!(tags);
     }
     if let Some(g) = patch.get("groupId") {
-        apply_group_id(entry, g)?;
+        apply_group_id(entry, g).map_err(LibraryError::invalid)?;
     }
     // 复验完整合并结果（§7.2）：groupId 存在性与「资产和组 kind 一致」——
     // 改 kind 或换编组后的条目若与当前组冲突，整次命令拒绝且不写盘，不得
@@ -423,9 +440,9 @@ fn update_meta_with(library: &cap_std::fs::Dir, id: &str, patch: &Value) -> Resu
             .and_then(Value::as_str);
         let entry_kind = merged.get("kind").and_then(Value::as_str);
         if group_kind.is_none() || group_kind != entry_kind {
-            return Err(format!(
+            return Err(LibraryError::refused(format!(
                 "资产 {id} 的编组 {gid} 不存在或与资产 kind 不一致，拒绝更新"
-            ));
+            )));
         }
     }
     let mut updated = merged;
@@ -442,12 +459,13 @@ fn update_meta_with(library: &cap_std::fs::Dir, id: &str, patch: &Value) -> Resu
 #[tauri::command]
 pub fn update_library_asset(app: AppHandle, id: String, patch: Value) -> Result<Value, String> {
     validate_asset_id(&id)?;
-    let library = library_root(&app)?;
+    let library = library_root(&app).map_err(|e| e.to_string())?;
     let _op = library_op_lock();
-    let _file_lock = library_file_lock(&library)?;
-    update_meta_with(&library, &id, &patch)
+    let _file_lock = library_file_lock(&library).map_err(|e| e.to_string())?;
+    update_meta_with(&library, &id, &patch).map_err(|e| e.to_string())
 }
 
+pub(crate) mod error;
 pub(crate) mod group_commands;
 pub(crate) mod media;
 #[cfg(test)]

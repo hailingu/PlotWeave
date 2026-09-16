@@ -19,7 +19,7 @@
 
 mod commands;
 mod copy;
-mod error;
+pub(crate) mod error;
 mod list;
 mod persist;
 mod types;

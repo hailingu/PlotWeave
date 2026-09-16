@@ -20,7 +20,7 @@ use reqwest::Url;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
 
-use crate::http_util::{append_capped, read_text_capped};
+use crate::http_util::{append_capped, read_text_capped, ProxyError};
 
 /// 生成产物大小上限（32 MiB）：防异常响应把内存/磁盘撑爆。pwmedia 项目
 /// scope 的读取上限（256 MiB 防御界）远超本值——生成产物契约是项目资产
@@ -33,17 +33,12 @@ const GENERATED_IMAGE_MAX_BYTES: usize = 32 * 1024 * 1024;
 const RESPONSE_BODY_MAX_BYTES: usize = GENERATED_IMAGE_MAX_BYTES * 2;
 
 /// 有上限地流式读取响应体为字节（url 回退下载，cap = 产物上限）。
-async fn read_bytes_capped(response: reqwest::Response, cap: usize) -> Result<Vec<u8>, String> {
+async fn read_bytes_capped(response: reqwest::Response, cap: usize) -> Result<Vec<u8>, ProxyError> {
     let mut resp = response;
     let mut buf = Vec::new();
-    while let Some(chunk) = resp
-        .chunk()
-        .await
-        .map_err(|e| format!("读取图像失败：{e}"))?
-    {
-        // 展示边界转换（issue #45 首片）：超限错误在此转字符串诊断，文案
-        // 与历史 format! 输出逐字一致
-        append_capped(&mut buf, &chunk, cap).map_err(|e| e.to_string())?;
+    while let Some(chunk) = resp.chunk().await.map_err(ProxyError::Read)? {
+        // 限读错误经 Body 透传（#45 首片类型）：文案与来源链原样保留
+        append_capped(&mut buf, &chunk, cap).map_err(ProxyError::Body)?;
     }
     Ok(buf)
 }
@@ -166,11 +161,14 @@ fn static_target_violation(url: &Url) -> Option<String> {
 /// 主机解析后要求全部地址为公网——`localhost` 等 DNS 名同样可能指向
 /// 环回/内网。注：本校验的解析与客户端连接各自解析存在固有的 DNS
 /// 再绑定窗口，此层为纵深防御而非绝对边界（威胁模型见 AGENTS.md）。
-async fn ensure_public_download_target(url: &Url) -> Result<(), String> {
+async fn ensure_public_download_target(url: &Url) -> Result<(), ProxyError> {
     if let Some(reason) = static_target_violation(url) {
-        return Err(reason);
+        return Err(ProxyError::DownloadRefused { detail: reason });
     }
-    let host = url.host_str().ok_or("图像 url 缺少主机")?;
+    let refused = |detail: String| ProxyError::DownloadRefused { detail };
+    let host = url
+        .host_str()
+        .ok_or_else(|| refused("图像 url 缺少主机".into()))?;
     let literal = host
         .strip_prefix('[')
         .and_then(|h| h.strip_suffix(']'))
@@ -178,19 +176,24 @@ async fn ensure_public_download_target(url: &Url) -> Result<(), String> {
     if literal.parse::<IpAddr>().is_ok() {
         return Ok(());
     }
-    let port = url.port_or_known_default().ok_or("图像 url 端口未知")?;
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| refused("图像 url 端口未知".into()))?;
     let target = format!("{host}:{port}");
-    // std 解析是阻塞调用：挪到阻塞线程池，不占异步工作线程
+    // std 解析是阻塞调用：挪到阻塞线程池，不占异步工作线程；解析失败的
+    // 底层原因并入文案（JoinError/io 一次性来源，不另设变体）
     let addrs = tauri::async_runtime::spawn_blocking(move || target.to_socket_addrs())
         .await
-        .map_err(|e| format!("解析图像主机失败：{e}"))?
-        .map_err(|e| format!("解析图像主机 {host} 失败：{e}"))?;
+        .map_err(|e| refused(format!("解析图像主机失败：{e}")))?
+        .map_err(|e| refused(format!("解析图像主机 {host} 失败：{e}")))?;
     let list: Vec<std::net::SocketAddr> = addrs.collect();
     if list.is_empty() {
-        return Err(format!("图像主机 {host} 未解析到地址"));
+        return Err(refused(format!("图像主机 {host} 未解析到地址")));
     }
     if list.iter().any(|a| !is_public_ip(a.ip())) {
-        return Err(format!("图像主机 {host} 解析到非公网地址，已拒绝下载"));
+        return Err(refused(format!(
+            "图像主机 {host} 解析到非公网地址，已拒绝下载"
+        )));
     }
     Ok(())
 }
@@ -198,41 +201,52 @@ async fn ensure_public_download_target(url: &Url) -> Result<(), String> {
 /// url 成员回退下载：目标与每跳重定向均过公网边界校验（仅 http(s)、
 /// 环回/私网/链路本地/CGNAT 等一律拒绝）；禁用自动重定向、逐跳显式
 /// 复验（上限 DOWNLOAD_REDIRECT_LIMIT 跳）；字节仍按魔数定型 MIME。
-async fn fetch_image_url(url: &str) -> Result<Vec<u8>, String> {
+async fn fetch_image_url(url: &str) -> Result<Vec<u8>, ProxyError> {
+    let refused = |detail: String| ProxyError::DownloadRefused { detail };
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(IMAGE_DOWNLOAD_TIMEOUT_SECS))
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .map_err(|e| format!("构造下载客户端失败：{e}"))?;
-    let mut current: Url = url.parse().map_err(|_| "图像 url 非法".to_string())?;
+        .map_err(|e| ProxyError::Client {
+            context: "构造下载客户端失败".into(),
+            source: e,
+        })?;
+    let mut current: Url = url.parse().map_err(|_| refused("图像 url 非法".into()))?;
     for _ in 0..=DOWNLOAD_REDIRECT_LIMIT {
         ensure_public_download_target(&current).await?;
         let response = client
             .get(current.clone())
             .send()
             .await
-            .map_err(|e| format!("下载图像失败：{e}"))?;
+            .map_err(|e| ProxyError::Send {
+                context: "下载图像失败".into(),
+                source: e,
+            })?;
         if response.status().is_redirection() {
             let location = response
                 .headers()
                 .get(reqwest::header::LOCATION)
                 .and_then(|v| v.to_str().ok())
-                .ok_or("图像重定向缺少 Location")?;
+                .ok_or_else(|| refused("图像重定向缺少 Location".into()))?;
             current = current
                 .join(location)
-                .map_err(|_| "图像重定向 Location 非法".to_string())?;
+                .map_err(|_| refused("图像重定向 Location 非法".into()))?;
             continue;
         }
         let status = response.status();
         let bytes = read_bytes_capped(response, GENERATED_IMAGE_MAX_BYTES).await?;
         if !status.is_success() {
-            return Err(format!("下载图像返回 {status}"));
+            return Err(ProxyError::Status {
+                context: "下载图像返回".into(),
+                code: status,
+                head: String::new(),
+            });
         }
         return Ok(bytes.to_vec());
     }
-    Err(format!(
+    Err(refused(format!(
         "图像下载重定向超过 {DOWNLOAD_REDIRECT_LIMIT} 跳上限"
-    ))
+    )))
 }
 
 /// 生成请求参数（前端单对象传入：provider 配置 + 生成输入 + job 标识）。
@@ -316,7 +330,7 @@ pub async fn llm_image_generate(app: AppHandle, request: ImageGenRequest) -> Res
         Some(b) => b,
         None => {
             let url = image_url_of(&parsed).ok_or("服务未返回图像内容")?;
-            fetch_image_url(&url).await?
+            fetch_image_url(&url).await.map_err(|e| e.to_string())?
         }
     };
     if bytes.len() > GENERATED_IMAGE_MAX_BYTES {
@@ -332,9 +346,11 @@ pub async fn llm_image_generate(app: AppHandle, request: ImageGenRequest) -> Res
     let projects = crate::store::projects_dir(&app).map_err(crate::store::to_ipc_text)?;
     let pending = app.state::<crate::assets::project_media::PendingProjectAssets>();
     let written =
-        crate::assets::write_generated_asset(&projects, &project_id, &bytes, mime, &pending)?;
+        crate::assets::write_generated_asset(&projects, &project_id, &bytes, mime, &pending)
+            .map_err(|e| e.to_string())?;
     // §9.3 预检并入命令内（同一根句柄）：返回的产物已完成形状+实路径校验
-    let asset = crate::assets::validate_project_asset_with(&projects, &project_id, &written)?;
+    let asset = crate::assets::validate_project_asset_with(&projects, &project_id, &written)
+        .map_err(|e| e.to_string())?;
     clear_cancel(&job_id);
     Ok(asset)
 }

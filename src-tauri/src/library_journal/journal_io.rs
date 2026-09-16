@@ -6,8 +6,9 @@ use std::io::Read;
 use cap_std::fs::Dir as CapDir;
 use serde_json::{json, Value};
 
+use crate::library::error::LibraryError;
 use crate::library_fs::INDEX_MAX_BYTES;
-use crate::store::{atomic_write, is_valid_asset_rel_path, to_ipc_text};
+use crate::store::{atomic_write, is_valid_asset_rel_path};
 
 use super::transaction::journal_entry_value;
 use super::trash::fsync_dir;
@@ -137,9 +138,13 @@ pub(super) fn read_journal(
 }
 
 /// 日志原子落盘（library/ 句柄相对）并 fsync 所在目录。
-pub(super) fn write_journal(library: &CapDir, entries: &[JournalEntry]) -> Result<(), String> {
+pub(super) fn write_journal(
+    library: &CapDir,
+    entries: &[JournalEntry],
+) -> Result<(), LibraryError> {
     let items: Vec<Value> = entries.iter().map(journal_entry_value).collect();
-    let text = serde_json::to_string(&json!(items)).map_err(|e| format!("序列化日志失败：{e}"))?;
-    atomic_write(library, JOURNAL_FILE_NAME, &text).map_err(to_ipc_text)?;
+    let text = serde_json::to_string(&json!(items))
+        .map_err(|e| LibraryError::serialize("序列化日志失败", e))?;
+    atomic_write(library, JOURNAL_FILE_NAME, &text).map_err(LibraryError::from)?;
     fsync_dir(library)
 }
