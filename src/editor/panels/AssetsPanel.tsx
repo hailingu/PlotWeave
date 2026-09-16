@@ -422,7 +422,15 @@ function useAssetRename(
         )
       })
   }
-  return { rename, renameError }
+  /** 确认删除时终结该资产的重命名状态（PR #180 评审修复）：代际 +1
+   * 失效在途响应（迟到的失败不写错误、不回滚），清除锚定基线并解除
+   * 对应错误——已删资产的失败不得残留或复活。 */
+  const forgetRename = (id: string) => {
+    renameSeq.current.set(id, (renameSeq.current.get(id) ?? 0) + 1)
+    renameBaseline.current.delete(id)
+    setRenameError((cur) => (cur?.id === id ? null : cur))
+  }
+  return { rename, renameError, forgetRename }
 }
 
 /** 把各资产未解决的标签失败合并为单条横幅文案（分号分隔）。 */
@@ -444,10 +452,11 @@ export default function AssetsPanel() {
     refreshUrl,
   )
   const { commitTags, tagsError, forgetTags } = useAssetTagsCommit(setAssets)
-  const { rename, renameError } = useAssetRename(setAssets)
+  const { rename, renameError, forgetRename } = useAssetRename(setAssets)
 
   const remove = (asset: LibraryAsset) => {
     forgetTags(asset.id)
+    forgetRename(asset.id)
     removeLibraryAsset(asset, urls, setAssets, setUrls, setError)
   }
 
