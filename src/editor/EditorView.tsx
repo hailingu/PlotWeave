@@ -49,6 +49,17 @@ export function EditorView(props: EditorViewProps) {
   )
 }
 
+/** 会话缺省值提为模块常量（issue #157）：缺省参数每渲染重建引用，会
+ * 击穿 AiThread 的 memo 边界——未传会话 props 的直接消费者（含测试）
+ * 在位置帧间拿到稳定引用。 */
+const DEFAULT_AI_SESSION: NonNullable<EditorViewProps['aiSession']> = {
+  schemaVersion: 1,
+  entries: [],
+}
+const DEFAULT_ON_SAVE_AI_SESSION: NonNullable<
+  EditorViewProps['onSaveAiSession']
+> = async () => undefined
+
 /** 编辑器装配层：组装各域 hook 与 Provider，渲染布局（不含业务语义）。 */
 function EditorWindow({
   project,
@@ -56,11 +67,11 @@ function EditorWindow({
   onRenameProject,
   onOpenSettings,
   onSave,
-  aiSession = { schemaVersion: 1, entries: [] },
+  aiSession = DEFAULT_AI_SESSION,
   aiSessionError = null,
   aiSessionRetryable = true,
   aiSessionLoadFailed = false,
-  onSaveAiSession = async () => undefined,
+  onSaveAiSession = DEFAULT_ON_SAVE_AI_SESSION,
 }: EditorViewProps) {
   const { screenToFlowPosition, fitView } = useReactFlow()
   const {

@@ -107,7 +107,7 @@ function canvasHarness(
   const state = { nodes: initialNodes, aiRevision }
   const history = new CommandStack()
   const deps: AiBridgeDeps = {
-    nodes: state.nodes,
+    contentNodes: state.nodes,
     edges: [],
     settings: EMPTY_SETTINGS,
     nodesRef: { current: state.nodes },
@@ -125,7 +125,7 @@ function canvasHarness(
       ),
     setNodes: (update) => {
       state.nodes = update(state.nodes)
-      deps.nodes = state.nodes
+      deps.contentNodes = state.nodes
       deps.nodesRef.current = state.nodes
     },
     setEdges: (update) => {

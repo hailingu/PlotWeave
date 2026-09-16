@@ -48,9 +48,10 @@ export function nodeLabelOf(n: CanvasNode): string {
   }
 }
 
-/** AI 桥依赖：反应式画布用于 digest；ref 镜像供校验/读取/落地读取当前态。 */
+/** AI 桥依赖：内容稳定投影用于 digest（issue #157：拖拽过程帧不重建摘要）；
+ * ref 镜像供校验/读取/落地读取当前态。 */
 export interface AiBridgeDeps {
-  nodes: CanvasNode[]
+  contentNodes: CanvasNode[]
   edges: Edge[]
   settings: ProjectSettings
   nodesRef: { current: CanvasNode[] }
@@ -187,7 +188,7 @@ function applyValidatedBatch(
  * aiSnapshot 一并回传供落地重校验复用。 */
 /** useAiReadTools 的依赖：反应式画布状态 + ref 镜像（与 useAiBridge 同源）。 */
 interface AiReadToolsDeps {
-  nodes: CanvasNode[]
+  contentNodes: CanvasNode[]
   edges: Edge[]
   settings: ProjectSettings
   nodesRef: { current: CanvasNode[] }
@@ -197,18 +198,26 @@ interface AiReadToolsDeps {
 }
 
 function useAiReadTools(deps: AiReadToolsDeps) {
-  const { nodes, edges, settings, nodesRef, edgesRef, settingsRef, assetsRef } =
-    deps
+  const {
+    contentNodes,
+    edges,
+    settings,
+    nodesRef,
+    edgesRef,
+    settingsRef,
+    assetsRef,
+  } = deps
 
+  // 摘要是纯内容派生（不含位置）：消费内容稳定投影，拖拽过程帧不重建
   const canvasDigest = useMemo(
     () =>
-      buildGraphDigest(nodes, edges, {
+      buildGraphDigest(contentNodes, edges, {
         characters: settings.characters,
         locations: settings.locations,
         characterName: (id) => resolveCharacterName(settings, id),
         locationName: (id) => resolveLocationName(settings, id),
       }),
-    [nodes, edges, settings],
+    [contentNodes, edges, settings],
   )
 
   /** AI 校验用的图快照（§12.2）：装配见 graphSnapshotOf。 */

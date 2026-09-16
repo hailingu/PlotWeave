@@ -47,6 +47,9 @@ interface LeftPanelProps {
   readonly onResize: (width: number) => void
   /** 画布节点，用于派生大纲行。 */
   readonly nodes: CanvasNode[]
+  /** 内容稳定投影（issue #157）：大纲派生按「内容 + x 序」键控重算，
+   * 位置帧不逐帧重建。 */
+  readonly contentNodes: CanvasNode[]
   /** 画布连线：下挂分镜的集归属随宿主场景派生（§7.2）。 */
   readonly edges: Edge[]
   /** 大纲 ⇄ 画布联动（§3.5）：点击大纲行选中并居中该节点。 */
@@ -146,6 +149,43 @@ function useOutlineDnD(
 }
 
 type OutlineDnD = ReturnType<typeof useOutlineDnD>
+
+/** 大纲派生的「内容 + x 序」键控缓存（issue #157）：大纲行序按画布 x 排序，
+ * 依赖位置——但拖拽过程帧绝大多数不改变相对 x 序。仅当业务内容
+ * （contentNodes 换引用）或 x 序（跨节点拖动）变化时才换输入引用重算，
+ * 同向小幅位移帧复用上次结果。 */
+function useOutlineGroups(
+  nodes: CanvasNode[],
+  contentNodes: CanvasNode[],
+  edges: Edge[],
+  episodeTitles: Record<number, string>,
+): OutlineGroup[] {
+  // 序与 buildOutlineGroups 同语义（PR #194 评审 4027623775）：仅按 x 稳定
+  // 排序（同 x 保持数组序），不带 id 次级键——次级键会让相等帧的序先于
+  // 真实行序变化，越序后序不变、缓存不失效。缓存直接持有 id 数组并逐元素
+  // 比较（评审 4027732274）：id 契约仅要求非空唯一，join('|') 等分隔符
+  // 编码对 'a' 与 'a|a' 这类合法脏档 id 有歧义（两种顺序同串）。
+  const order = nodes
+    .slice()
+    .sort((a, b) => a.position.x - b.position.x)
+    .map((n) => n.id)
+  const cacheRef = useRef<{
+    content: CanvasNode[]
+    order: string[]
+    source: CanvasNode[]
+  } | null>(null)
+  const cache = cacheRef.current
+  const sameOrder =
+    cache?.order.length === order.length &&
+    cache.order.every((id, i) => id === order[i])
+  const stale = cache?.content !== contentNodes || !sameOrder
+  if (stale) cacheRef.current = { content: contentNodes, order, source: nodes }
+  const source = stale ? nodes : (cache?.source ?? nodes)
+  return useMemo(
+    () => buildOutlineGroups(source, edges, episodeTitles),
+    [source, edges, episodeTitles],
+  )
+}
 
 /** 大纲行按钮（LeftPanel 拆分，issue #99）：层级缩进、拖拽排序与定位；
  * level < 3 = 编剧侧四类（分镜随宿主场景，不参与拖拽排序）。 */
@@ -381,6 +421,7 @@ export function LeftPanel({
   width,
   onResize,
   nodes,
+  contentNodes,
   edges,
   onLocate,
   selectedId,
@@ -394,10 +435,7 @@ export function LeftPanel({
   onOutlineDrop,
 }: LeftPanelProps) {
   const [tab, setTab] = useState<LeftTab>('outline')
-  const groups = useMemo(
-    () => buildOutlineGroups(nodes, edges, episodeTitles),
-    [nodes, edges, episodeTitles],
-  )
+  const groups = useOutlineGroups(nodes, contentNodes, edges, episodeTitles)
   const outlineRef = useRef<HTMLElement>(null)
   const dnd = useOutlineDnD(onOutlineDrop)
   useOutlineScrollFollow(tab, selectedId, outlineRef)

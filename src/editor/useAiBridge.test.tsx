@@ -97,7 +97,7 @@ function setup(
   const commands: HistoryCommand[] = []
   const closeSettings = vi.fn()
   const deps: AiBridgeDeps = {
-    nodes: state.nodes,
+    contentNodes: state.nodes,
     edges: state.edges,
     settings: state.settings,
     nodesRef: { current: state.nodes },
