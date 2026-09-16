@@ -189,9 +189,13 @@ function usePendingTurnClaim(
     claimBoxRef.current = box
     let active = true
     let delivered = false
+    /** 未交付且 claimBoxRef 已被清空 = 本盒子在认领期间被取消——丢弃而非
+     * 归还：signal 已置位、循环将终止，归还会让重开恢复 busy 并重复交付
+     * 取消回执/陈旧失败（PR #187 评审 4025952895）。 */
+    const retireIfCancelled = () => !delivered && claimBoxRef.current === null
     void box.promise.then((result) => {
       if (!active) {
-        returnTurn(projectId, box)
+        if (!retireIfCancelled()) returnTurn(projectId, box)
         return
       }
       delivered = true
@@ -200,7 +204,7 @@ function usePendingTurnClaim(
     })
     return () => {
       active = false
-      if (!delivered) returnTurn(projectId, box)
+      if (!delivered && !retireIfCancelled()) returnTurn(projectId, box)
     }
   }, [projectId, setBusy, applyRef, claimBoxRef])
 }

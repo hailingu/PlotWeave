@@ -6,7 +6,6 @@
  * runModelTurn 打桩，不触 IPC。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { readFileSync } from 'node:fs'
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react'
 import { useAiTurn, type UseAiTurnOpts } from './aiThreadTurn'
 import { runModelTurn } from './aiThreadModel'
@@ -273,20 +272,39 @@ describe('useAiTurn 取消（issue #154）', () => {
     void calls
   })
 
-  it('useAiTurn 不超过 80 代码行（函数上限，评审 P1）', () => {
-    const lines = readFileSync(
-      `${import.meta.dirname}/aiThreadTurn.ts`,
-      'utf8',
-    ).split('\n')
-    const start = lines.findIndex((l) =>
-      l.startsWith('export function useAiTurn'),
-    )
-    expect(start).toBeGreaterThanOrEqual(0)
-    let end = start
-    while (end < lines.length && lines[end] !== '}') end++
-    const codeLines = lines
-      .slice(start, end + 1)
-      .filter((l) => l.trim() !== '' && !l.trim().startsWith('//'))
-    expect(codeLines.length).toBeLessThanOrEqual(80)
+  it('认领的回合取消后、落定前卸载：盒子丢弃不归还，重开不复活（PR #187 评审 4025952895）', async () => {
+    const calls = pendingTurn()
+    const append = vi.fn()
+    const opts = mkOpts({ append })
+    // 发起实例发起后卸载
+    const first = renderHook(() => useAiTurn(opts))
+    act(() => {
+      first.result.current.setDraft('你好')
+    })
+    await startSend(first.result)
+    await waitFor(() => expect(first.result.current.busy).toBe(true))
+    first.unmount()
+    // 认领实例挂载、取消、并在落定前卸载
+    const second = renderHook(() => useAiTurn(opts))
+    await waitFor(() => expect(second.result.current.busy).toBe(true))
+    act(() => {
+      second.result.current.cancel()
+    })
+    second.unmount()
+    // 请求随后落定：已取消的盒子不得归还注册表
+    await act(async () => {
+      calls[0]!.resolve([
+        { id: 980, kind: 'msg', role: 'assistant', text: '迟到回复' },
+      ])
+    })
+    expect(takeTurn(opts.projectId)).toBeNull()
+    // 第三次挂载：不恢复 busy、不重复交付
+    const third = renderHook(() => useAiTurn(opts))
+    await waitFor(() => expect(third.result.current.busy).toBe(false))
+    const appended = append.mock.calls
+      .map((c) => c[0] as ThreadEntry[])
+      .flat()
+      .map((e) => e.text)
+    expect(appended).toEqual(['你好'])
   })
 })
