@@ -2,6 +2,7 @@ import {
   useEffect,
   useRef,
   useState,
+  useSyncExternalStore,
   type ChangeEvent as ReactChangeEvent,
 } from 'react'
 import {
@@ -10,6 +11,14 @@ import {
   type LibraryAsset,
   type LibraryKind,
 } from '../../library/libraryStore'
+import {
+  beginRename,
+  completeRename,
+  failRename,
+  forgetRename,
+  renameErrorsSnapshot,
+  subscribeRenameErrors,
+} from './assetsRenameState'
 import { PW_LIBRARY_ASSET_MIME } from '../dragDrop'
 import { EditableName } from '../nodes/settings/NodeSettingsPanel'
 import { ConfirmDeleteDialog } from '../../home/Dialogs'
@@ -276,11 +285,11 @@ function useAssetTagsErrors() {
   const hasTagsError = (id: string) => tagsErrors.current.has(id)
   const recordTagsError = (id: string, error: unknown) => {
     tagsErrors.current.set(id, String(error))
-    setTagsError(joinTagsErrors(tagsErrors.current))
+    setTagsError(joinAssetErrors(tagsErrors.current))
   }
   const resolveTagsError = (id: string) => {
     if (!tagsErrors.current.delete(id)) return
-    setTagsError(joinTagsErrors(tagsErrors.current) || null)
+    setTagsError(joinAssetErrors(tagsErrors.current) || null)
   }
   return { tagsError, hasTagsError, recordTagsError, resolveTagsError }
 }
@@ -362,8 +371,59 @@ function useAssetTagsCommit(
   return { commitTags, tagsError, forgetTags }
 }
 
-/** 把各资产未解决的标签失败合并为单条横幅文案（分号分隔）。 */
-function joinTagsErrors(errors: Map<string, string>): string {
+/** 重命名提交状态族（AssetsPanel 拆分，PR #180 评审修复超限）：乐观
+ * 更新 + 失败回滚 + 代际守卫 + 专属错误行。
+ * - 代际（每资产递增序号，非名称值）：被新意图取代的迟到失败静默——
+ *   A→B→C→B 同名往返不得误判（快速连续改名按最新意图收敛）。
+ * - 基线：失败回滚优先读门面跨挂载推进的 persistedSnapshot（面板重挂载
+ *   期间旧实例的排队写入可能已把磁盘推进到新于本地锚点的值），本地
+ *   锚点兜底——链条首个未决改名发起时锚定（中途意图的 prop 名是乐观
+ *   值，不得当基线），成功按该次落盘名推进（门面按资产 FIFO，最终成功
+ *   即磁盘真值），失败回滚消费后清除。
+ * - 错误：重命名专属行（与导入/列表/标签错误互不覆盖），同资产重试
+ *   成功即解除，不误清其他操作的错误。
+ * 不做重试或草稿暂存，用户可重新发起改名（#125）。 */
+function useAssetRename(
+  setAssets: (fn: (list: LibraryAsset[]) => LibraryAsset[]) => void,
+) {
+  const renameError = useSyncExternalStore(
+    subscribeRenameErrors,
+    renameErrorsSnapshot,
+  )
+
+  const rename = (asset: LibraryAsset, name: string) => {
+    // 代际/基线/错误统一由跨挂载所有者持有（PR #180 评审修复）：无挂载
+    // 或新旧实例交替期间落定的响应，仍能被当前挂载实例看见并正确处置
+    const seq = beginRename(
+      asset.id,
+      libraryStore.persistedSnapshot(asset.id)?.name ?? asset.name,
+    )
+    setAssets((list) =>
+      list.map((a) => (a.id === asset.id ? { ...a, name } : a)),
+    )
+    libraryStore
+      .updateMeta(asset.id, { name })
+      .then(() => completeRename(asset.id, name))
+      .catch((err) => {
+        // 回滚基线快照优先（门面随成功跨挂载推进），锚点兜底；被取代
+        // 的迟到失败（新意图或删除终结）静默
+        const baseline = failRename(
+          asset.id,
+          seq,
+          err,
+          libraryStore.persistedSnapshot(asset.id)?.name,
+        )
+        if (baseline === undefined) return
+        setAssets((list) =>
+          list.map((a) => (a.id === asset.id ? { ...a, name: baseline } : a)),
+        )
+      })
+  }
+  return { rename, renameError, forgetRename }
+}
+
+/** 把各资产未解决的失败（标签/重命名）合并为单条横幅文案（分号分隔）。 */
+function joinAssetErrors(errors: Map<string, string>): string {
   return [...errors.values()].join('；')
 }
 
@@ -381,9 +441,11 @@ export default function AssetsPanel() {
     refreshUrl,
   )
   const { commitTags, tagsError, forgetTags } = useAssetTagsCommit(setAssets)
+  const { rename, renameError, forgetRename } = useAssetRename(setAssets)
 
   const remove = (asset: LibraryAsset) => {
     forgetTags(asset.id)
+    forgetRename(asset.id)
     removeLibraryAsset(asset, urls, setAssets, setUrls, setError)
   }
 
@@ -415,18 +477,16 @@ export default function AssetsPanel() {
           onBack={() => setSelectedKind(null)}
           onPick={onPick}
           onVisible={refreshUrl}
-          onRename={(asset, name) => {
-            setAssets((list) =>
-              list.map((a) => (a.id === asset.id ? { ...a, name } : a)),
-            )
-            void libraryStore.updateMeta(asset.id, { name })
-          }}
+          onRename={rename}
           onTagsBlur={commitTags}
           onRequestRemove={setPendingRemove}
         />
       )}
       {busy && <div className="pw-assets-hint">导入中…</div>}
       {error && <div className="pw-assets-hint pw-assets-error">{error}</div>}
+      {renameError && (
+        <div className="pw-assets-hint pw-assets-error">{renameError}</div>
+      )}
       {tagsError && (
         <div className="pw-assets-hint pw-assets-error">{tagsError}</div>
       )}

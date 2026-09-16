@@ -17,11 +17,13 @@ import {
   waitFor,
 } from '@testing-library/react'
 import AssetsPanel from './AssetsPanel'
+import { resetRenameStateForTests } from './assetsRenameState'
 import { libraryStore, type LibraryAsset } from '../../library/libraryStore'
 
 afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
+  resetRenameStateForTests()
 })
 
 beforeAll(() => {
@@ -90,31 +92,29 @@ describe('AssetsPanel 分类列表', () => {
   })
 })
 
-describe('AssetsPanel 类别内操作', () => {
-  const enterCharacter = async () => {
-    render(<AssetsPanel />)
-    fireEvent.click(await screen.findByText('角色设定'))
-    await screen.findByText('女主正面')
-  }
+/** 行内改名（#125）：双击进入编辑、Enter 确认后失焦退出编辑态。 */
+const renameInline = async (from: string, to: string) => {
+  fireEvent.doubleClick(screen.getByRole('button', { name: from }))
+  const input = screen.getByRole('textbox', { name: `资产名 ${from}` })
+  fireEvent.change(input, { target: { value: to } })
+  fireEvent.keyDown(input, { key: 'Enter' })
+  fireEvent.blur(input)
+}
 
+/** 进入角色分类并等待列表出现（测试辅助）。 */
+const enterCharacter = async () => {
+  render(<AssetsPanel />)
+  fireEvent.click(await screen.findByText('角色设定'))
+  await screen.findByText('女主正面')
+}
+
+describe('AssetsPanel 类别内操作', () => {
   it('缩略懒加载：进入视口后取媒体 URL 渲染 img', async () => {
     const spies = mockStore([asset()])
     await enterCharacter()
     const img = (await screen.findByAltText('女主正面')) as HTMLImageElement
     expect(img.src).toBe('blob:mock-url')
     expect(spies.mediaUrl).toHaveBeenCalledWith(asset())
-  })
-
-  it('行内改名：本地列表更新并写库', async () => {
-    const spies = mockStore([asset()])
-    await enterCharacter()
-    fireEvent.doubleClick(screen.getByRole('button', { name: '女主正面' }))
-    const input = screen.getByRole('textbox', { name: '资产名 女主正面' })
-    fireEvent.change(input, { target: { value: '女主微笑' } })
-    fireEvent.keyDown(input, { key: 'Enter' })
-    fireEvent.blur(input)
-    expect(spies.updateMeta).toHaveBeenCalledWith('a1', { name: '女主微笑' })
-    expect(await screen.findByText('女主微笑')).toBeTruthy()
   })
 
   it('标签失焦提交：中英文逗号分隔、去空白、滤空', async () => {
@@ -147,6 +147,315 @@ describe('AssetsPanel 类别内操作', () => {
     expect(screen.queryByText('女主正面')).toBeNull()
     expect(spies.remove).toHaveBeenCalledWith('a1')
     expect(revokeSpy).toHaveBeenCalledWith('blob:mock-url')
+  })
+})
+
+describe('AssetsPanel 行内改名', () => {
+  it('行内改名：本地列表更新并写库', async () => {
+    const spies = mockStore([asset()])
+    await enterCharacter()
+    fireEvent.doubleClick(screen.getByRole('button', { name: '女主正面' }))
+    const input = screen.getByRole('textbox', { name: '资产名 女主正面' })
+    fireEvent.change(input, { target: { value: '女主微笑' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    fireEvent.blur(input)
+    expect(spies.updateMeta).toHaveBeenCalledWith('a1', { name: '女主微笑' })
+    expect(await screen.findByText('女主微笑')).toBeTruthy()
+  })
+
+  it('行内改名失败：错误可见并回滚为已落盘名称（#125）', async () => {
+    const spies = mockStore([asset()])
+    vi.spyOn(libraryStore, 'persistedSnapshot').mockReturnValue(asset())
+    spies.updateMeta.mockRejectedValueOnce(new Error('磁盘只读'))
+    await enterCharacter()
+    await renameInline('女主正面', '女主微笑')
+    // 拒绝有可见反馈（错误横幅，与导入/列表错误同一展示位）
+    expect(await screen.findByText('Error: 磁盘只读')).toBeTruthy()
+    // 不把未落盘名称显示为已保存结果：回滚到最近已落盘基线
+    expect(await screen.findByRole('button', { name: '女主正面' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '女主微笑' })).toBeNull()
+  })
+
+  it('改名失败后同资产重试成功解除错误（PR #180 评审）', async () => {
+    const spies = mockStore([asset()])
+    vi.spyOn(libraryStore, 'persistedSnapshot').mockReturnValue(asset())
+    spies.updateMeta
+      .mockRejectedValueOnce(new Error('磁盘只读'))
+      .mockResolvedValueOnce(asset({ name: '女主微笑' }))
+    await enterCharacter()
+    await renameInline('女主正面', '女主微笑')
+    expect(await screen.findByText('Error: 磁盘只读')).toBeTruthy()
+    // 失败已回滚，重新发起同名改名并成功：错误随之解除
+    await renameInline('女主正面', '女主微笑')
+    expect(await screen.findByRole('button', { name: '女主微笑' })).toBeTruthy()
+    await waitFor(() => expect(screen.queryByText(/磁盘只读/)).toBeNull())
+  })
+})
+
+describe('AssetsPanel 行内改名代际守卫（PR #180 评审）', () => {
+  it('被取代的迟到改名失败不回滚新意图（#125）', async () => {
+    const spies = mockStore([asset()])
+    vi.spyOn(libraryStore, 'persistedSnapshot').mockReturnValue(asset())
+    let rejectFirst!: (err: Error) => void
+    spies.updateMeta
+      .mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            rejectFirst = reject
+          }),
+      )
+      .mockResolvedValueOnce(asset({ name: '女主微笑2' }))
+    await enterCharacter()
+    // 第一次改名挂起未决，随后第二次改名（更新意图）成功
+    await renameInline('女主正面', '女主微笑')
+    await renameInline('女主微笑', '女主微笑2')
+    expect(await screen.findByText('女主微笑2')).toBeTruthy()
+    // 第一次的迟到失败不回滚、不上报：新意图已落盘，陈旧失败静默
+    rejectFirst(new Error('磁盘只读'))
+    await act(async () => {})
+    expect(
+      await screen.findByRole('button', { name: '女主微笑2' }),
+    ).toBeTruthy()
+    expect(screen.queryByText(/磁盘只读/)).toBeNull()
+  })
+
+  it('同名往返的迟到失败不按名称误判为当前意图（PR #180 评审）', async () => {
+    const spies = mockStore([asset()])
+    vi.spyOn(libraryStore, 'persistedSnapshot').mockReturnValue(asset())
+    let rejectFirst!: (err: Error) => void
+    spies.updateMeta
+      .mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            rejectFirst = reject
+          }),
+      )
+      .mockResolvedValueOnce(asset({ name: '女主微笑2' }))
+      .mockResolvedValueOnce(asset({ name: '女主微笑' }))
+    await enterCharacter()
+    // A→B（挂起）→C→B：首个 B 请求的迟到失败与当前意图同名，代际判定
+    // 不得按名称值误判——界面保持 B、不报错、不回滚到 A
+    await renameInline('女主正面', '女主微笑')
+    await renameInline('女主微笑', '女主微笑2')
+    await renameInline('女主微笑2', '女主微笑')
+    expect(await screen.findByRole('button', { name: '女主微笑' })).toBeTruthy()
+    rejectFirst(new Error('磁盘只读'))
+    await act(async () => {})
+    expect(await screen.findByRole('button', { name: '女主微笑' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '女主正面' })).toBeNull()
+    expect(screen.queryByText(/磁盘只读/)).toBeNull()
+  })
+})
+
+describe('AssetsPanel 行内改名回滚基线（PR #180 评审）', () => {
+  it('连续改名全失败时回滚到链条锚定的已落盘基线（PR #180 评审）', async () => {
+    const spies = mockStore([asset()])
+    // 本会话无快照：基线须锚定链条发起时的磁盘名，而非中途乐观值
+    vi.spyOn(libraryStore, 'persistedSnapshot').mockReturnValue(undefined)
+    let rejectFirst!: (err: Error) => void
+    spies.updateMeta
+      .mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            rejectFirst = reject
+          }),
+      )
+      .mockRejectedValueOnce(new Error('磁盘只读'))
+    await enterCharacter()
+    await renameInline('女主正面', '女主微笑')
+    await renameInline('女主微笑', '女主微笑2')
+    // 第一次失败被取代（静默）；第二次失败按最新意图处理
+    rejectFirst(new Error('第一次失败（被取代）'))
+    await act(async () => {})
+    // 回滚到锚定基线 女主正面（磁盘真值），而非乐观值 女主微笑
+    expect(await screen.findByRole('button', { name: '女主正面' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '女主微笑' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '女主微笑2' })).toBeNull()
+    expect(await screen.findByText('Error: 磁盘只读')).toBeTruthy()
+  })
+
+  it('面板重挂载后失败回滚到门面快照推进的基线（PR #180 评审）', async () => {
+    const spies = mockStore([asset()])
+    // 门面快照随旧实例排队写入的成功跨挂载推进（桩变量模拟）
+    let persisted: LibraryAsset | undefined = asset()
+    vi.spyOn(libraryStore, 'persistedSnapshot').mockImplementation(
+      () => persisted,
+    )
+    let resolveFirst!: (v: LibraryAsset) => void
+    let rejectSecond!: (err: Error) => void
+    spies.updateMeta
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            rejectSecond = reject
+          }),
+      )
+    await enterCharacter()
+    await renameInline('女主正面', '女主微笑')
+    // 切出资产 tab：面板卸载，新实例按列表读到 A（B 尚未落盘）并发起 C
+    cleanup()
+    await enterCharacter()
+    await renameInline('女主正面', '女主微笑2')
+    // 旧实例排队的 B 先成功：门面快照推进到 B（磁盘真值）
+    resolveFirst(asset({ name: '女主微笑' }))
+    persisted = asset({ name: '女主微笑' })
+    // 新实例的 C 失败：回滚须取门面快照（B），不得用本地锚定的 A
+    rejectSecond(new Error('磁盘只读'))
+    await act(async () => {})
+    expect(await screen.findByRole('button', { name: '女主微笑' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '女主正面' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '女主微笑2' })).toBeNull()
+    expect(await screen.findByText('Error: 磁盘只读')).toBeTruthy()
+  })
+})
+
+describe('AssetsPanel 多资产重命名错误（PR #180 评审）', () => {
+  it('多资产改名失败互不覆盖，解除只影响自身（PR #180 评审）', async () => {
+    const spies = mockStore([
+      asset(),
+      asset({ id: 'a2', name: '男主侧面', relPath: 'character/a2.png' }),
+    ])
+    const persisted = new Map([
+      ['a1', asset()],
+      [
+        'a2',
+        asset({ id: 'a2', name: '男主侧面', relPath: 'character/a2.png' }),
+      ],
+    ])
+    vi.spyOn(libraryStore, 'persistedSnapshot').mockImplementation((id) =>
+      persisted.get(id),
+    )
+    spies.updateMeta
+      .mockRejectedValueOnce(new Error('磁盘只读一'))
+      .mockRejectedValueOnce(new Error('磁盘只读二'))
+      .mockResolvedValueOnce(asset({ name: '男主微笑' }))
+    await enterCharacter()
+    await renameInline('女主正面', '女主微笑')
+    await renameInline('男主侧面', '男主微笑')
+    // 两个资产的失败均可见（分号合并，互不覆盖）
+    expect(
+      await screen.findByText('Error: 磁盘只读一；Error: 磁盘只读二'),
+    ).toBeTruthy()
+    // 第二个资产重试成功：只解除自身，第一个资产的失败仍然可见
+    await renameInline('男主侧面', '男主微笑')
+    expect(await screen.findByText('Error: 磁盘只读一')).toBeTruthy()
+    expect(screen.queryByText(/磁盘只读二/)).toBeNull()
+  })
+})
+
+describe('AssetsPanel 跨挂载重命名失败（PR #180 评审）', () => {
+  it('无挂载期间落定的失败在重挂载后可见（PR #180 评审）', async () => {
+    const spies = mockStore([asset()])
+    vi.spyOn(libraryStore, 'persistedSnapshot').mockReturnValue(asset())
+    let rejectRename!: (err: Error) => void
+    spies.updateMeta.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectRename = reject
+        }),
+    )
+    await enterCharacter()
+    await renameInline('女主正面', '女主微笑')
+    // 切走资产分段：面板卸载，失败在无挂载期间落定
+    cleanup()
+    rejectRename(new Error('磁盘只读'))
+    await act(async () => {})
+    // 回到资产分段：新实例须能看到未解决的失败，名称与磁盘一致
+    await enterCharacter()
+    expect(await screen.findByText('Error: 磁盘只读')).toBeTruthy()
+    expect(await screen.findByRole('button', { name: '女主正面' })).toBeTruthy()
+  })
+  it('重挂载后旧实例落定的失败仍可见并随重试解除（PR #180 评审）', async () => {
+    const spies = mockStore([asset()])
+    vi.spyOn(libraryStore, 'persistedSnapshot').mockReturnValue(asset())
+    let rejectRename!: (err: Error) => void
+    spies.updateMeta
+      .mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            rejectRename = reject
+          }),
+      )
+      .mockResolvedValueOnce(asset({ name: '女主微笑' }))
+    await enterCharacter()
+    await renameInline('女主正面', '女主微笑')
+    // 切走后先重挂载新实例（旧请求仍未决），旧实例的迟到失败须对新实例可见
+    cleanup()
+    await enterCharacter()
+    rejectRename(new Error('磁盘只读'))
+    expect(await screen.findByText('Error: 磁盘只读')).toBeTruthy()
+    // 同资产在新实例重试成功：错误解除
+    await renameInline('女主正面', '女主微笑')
+    expect(await screen.findByRole('button', { name: '女主微笑' })).toBeTruthy()
+    await waitFor(() => expect(screen.queryByText(/磁盘只读/)).toBeNull())
+  })
+
+  it('重挂载后删除资产失效旧实例的在途失败（PR #180 评审）', async () => {
+    const spies = mockStore([asset()])
+    vi.spyOn(libraryStore, 'persistedSnapshot').mockReturnValue(asset())
+    let rejectRename!: (err: Error) => void
+    spies.updateMeta.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectRename = reject
+        }),
+    )
+    await enterCharacter()
+    await renameInline('女主正面', '女主微笑')
+    cleanup()
+    await enterCharacter()
+    // 新实例确认删除：跨实例失效旧实例在途请求的代际，迟到失败静默
+    fireEvent.click(screen.getByRole('button', { name: '删除资产 女主正面' }))
+    fireEvent.click(await screen.findByRole('button', { name: '删除' }))
+    rejectRename(new Error('磁盘只读'))
+    await act(async () => {})
+    expect(screen.queryByText(/磁盘只读/)).toBeNull()
+    // 再次重挂载：已删资产的错误不得重新出现
+    cleanup()
+    await enterCharacter()
+    expect(screen.queryByText(/磁盘只读/)).toBeNull()
+  })
+})
+
+describe('AssetsPanel 删除终结重命名状态（PR #180 评审）', () => {
+  it('改名失败后删除资产：错误随之解除不残留（PR #180 评审）', async () => {
+    const spies = mockStore([asset()])
+    vi.spyOn(libraryStore, 'persistedSnapshot').mockReturnValue(asset())
+    spies.updateMeta.mockRejectedValueOnce(new Error('磁盘只读'))
+    await enterCharacter()
+    await renameInline('女主正面', '女主微笑')
+    expect(await screen.findByText('Error: 磁盘只读')).toBeTruthy()
+    // 确认删除该资产：已删资产的错误不得残留
+    fireEvent.click(screen.getByRole('button', { name: '删除资产 女主正面' }))
+    fireEvent.click(await screen.findByRole('button', { name: '删除' }))
+    expect(screen.queryByText('女主正面')).toBeNull()
+    await waitFor(() => expect(screen.queryByText(/磁盘只读/)).toBeNull())
+  })
+
+  it('在途改名失败在删除资产后不得复活错误（PR #180 评审）', async () => {
+    const spies = mockStore([asset()])
+    vi.spyOn(libraryStore, 'persistedSnapshot').mockReturnValue(asset())
+    let rejectRename!: (err: Error) => void
+    spies.updateMeta.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectRename = reject
+        }),
+    )
+    await enterCharacter()
+    await renameInline('女主正面', '女主微笑')
+    // 确认删除后迟到的失败失效：不写错误、不回滚（行已不存在）
+    fireEvent.click(screen.getByRole('button', { name: '删除资产 女主微笑' }))
+    fireEvent.click(await screen.findByRole('button', { name: '删除' }))
+    rejectRename(new Error('磁盘只读'))
+    await act(async () => {})
+    expect(screen.queryByText(/磁盘只读/)).toBeNull()
   })
 })
 
