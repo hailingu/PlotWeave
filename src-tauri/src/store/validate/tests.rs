@@ -7,6 +7,32 @@ use serde_json::json;
 use std::fs;
 
 #[test]
+fn episode_titles_accept_frontend_canonical_set() {
+    // issue #122 共享边界夹具：前端规范裁剪（trimTitleWhitespace，
+    // src/model/titleWhitespace.ts，集合 ⊇ Rust White_Space）产出的标题
+    // 必须全部通过保存边界——两端夹具字面量一致，规则漂移时两侧同步失败
+    for canonical in ["标题", "剧 名", "全角"] {
+        let mut doc = valid_save_doc();
+        doc.episode_titles = json!({ "1": canonical });
+        prepare_save("p-1", &doc)
+            .unwrap_or_else(|e| panic!("前端规范标题必须可保存：{canonical}，{e}"));
+    }
+}
+
+#[test]
+fn episode_titles_reject_unnormalized_nel_edges() {
+    // 保存边界只验证不修复（§10.5）：U+0085 在 Rust White_Space 集合内，
+    // 未归一化的载荷仍整次拒绝——canonical 化责任归前端（issue #122）
+    let mut doc = valid_save_doc();
+    doc.episode_titles = json!({ "1": "\u{85}标题" });
+    let err = prepare_save("p-1", &doc).unwrap_err();
+    assert!(
+        matches!(err, StoreError::InvalidInput { ref detail } if detail.contains("去空白")),
+        "意外诊断：{err}"
+    );
+}
+
+#[test]
 fn save_rejects_missing_settings_buckets() {
     // 缺桶落盘后下次加载被归一化为空 Record，既有 characters/locations/
     // props/documents 永久丢失——持久化信任边界（§10.5）要求四桶齐备且

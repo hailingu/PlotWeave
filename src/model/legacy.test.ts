@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { migrateProjectDocument, rewriteIndexOptionHandles } from './legacy'
+import {
+  migrateProjectDocument,
+  normalizeEpisodeTitles,
+  rewriteIndexOptionHandles,
+} from './legacy'
 import type { ProjectContent } from './content'
 import type { CanvasNode } from '../editor/nodes/types'
 
@@ -477,5 +481,18 @@ describe('rewriteIndexOptionHandles（旧下标句柄改写，§11.1 ②）', ()
     expect(
       warnings.some((w) => w.includes('e-nc') && w.includes('非规范')),
     ).toBe(true)
+  })
+})
+
+describe('normalizeEpisodeTitles（与保存边界同域的标题裁剪）', () => {
+  it('剥 U+0085（NEL）边缘标题：加载归一化的 repaired 载荷须能通过保存（#122）', () => {
+    const warnings: string[] = []
+    expect(
+      normalizeEpisodeTitles({ '1': '\u0085夜戏\u0085' }, warnings),
+    ).toEqual({
+      1: '夜戏',
+    })
+    expect(normalizeEpisodeTitles({ '2': '\u0085' }, warnings)).toEqual({})
+    expect(warnings).toEqual(['episodeTitles["2"] 的标题去空白后为空，已删除'])
   })
 })
