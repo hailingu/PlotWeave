@@ -5,6 +5,7 @@
 use cap_std::fs::Dir as CapDir;
 use serde_json::Value;
 
+use crate::library::error::LibraryError;
 use crate::library_fs::{assets_root, open_parent_dir};
 use crate::store::new_id;
 
@@ -26,10 +27,13 @@ pub(crate) struct Recovery {
 }
 
 /// 原 relPath 的已绑定父目录句柄与终点名（父目录缺失返回 None）。
-fn original_parent(assets: &CapDir, rel_path: &str) -> Result<Option<(CapDir, String)>, String> {
+fn original_parent(
+    assets: &CapDir,
+    rel_path: &str,
+) -> Result<Option<(CapDir, String)>, LibraryError> {
     let suffix = rel_path
         .strip_prefix("assets/")
-        .ok_or_else(|| format!("日志 relPath 越出 assets/：{rel_path}"))?;
+        .ok_or_else(|| LibraryError::invalid(format!("日志 relPath 越出 assets/：{rel_path}")))?;
     open_parent_dir(assets, suffix)
 }
 
@@ -65,7 +69,7 @@ fn try_bound_cleanup(
     trash: &CapDir,
     entry: &JournalEntry,
     recovery: &mut Recovery,
-) -> Result<bool, String> {
+) -> Result<bool, LibraryError> {
     match verify_trash_identity(trash, entry)? {
         TrashVerdict::IdentityOk(f) => match identity_bound_unlink(&f) {
             Ok(()) => {
@@ -96,7 +100,7 @@ fn try_bound_cleanup(
 /// 消费日志。日志当前状态以 `current` 持有，分支变更即时可落盘（重隔离的
 /// 新映射在 rename 前耐久记录，评审修复）。只动日志与文件（回迁/清理），
 /// 不改 library.json——索引的权威状态不受恢复影响。
-pub(crate) fn recover(library: &CapDir) -> Result<Recovery, String> {
+pub(crate) fn recover(library: &CapDir) -> Result<Recovery, LibraryError> {
     // 锁由调用方在操作边界持有（library_op_lock）——recover 不再自持。
     // 先读索引（不落盘）+ 读日志，日志异型判定优先于索引迁移落盘（评审修复，
     // PR #33 第三轮）：journal 异型须进入只读告警态，不得先把 library.json
@@ -158,7 +162,7 @@ fn recover_entry(
     recovery: &mut Recovery,
     current: &mut Vec<JournalEntry>,
     changed: &mut bool,
-) -> Result<(), String> {
+) -> Result<(), LibraryError> {
     let refs = index_refs(index, entry);
     let trash = open_trash_dir(assets)?;
     // 共享引用须以身份复核为准（评审修复）：relPath 字符串相等但占用者
@@ -180,7 +184,7 @@ fn recover_shared_file(
     recovery: &mut Recovery,
     current: &mut Vec<JournalEntry>,
     changed: &mut bool,
-) -> Result<(), String> {
+) -> Result<(), LibraryError> {
     match trash {
         Some(trash) => {
             if try_bound_cleanup(&trash, entry, recovery)? {
@@ -207,7 +211,7 @@ fn mark_conflict(entry: &JournalEntry, recovery: &mut Recovery, why: &str) {
 }
 
 /// 原路径是否仍绑定事务预期身份（恢复分支共用判定）。
-fn original_binds_expected(assets: &CapDir, entry: &JournalEntry) -> Result<bool, String> {
+fn original_binds_expected(assets: &CapDir, entry: &JournalEntry) -> Result<bool, LibraryError> {
     Ok(match original_parent(assets, &entry.rel_path)? {
         Some((parent, last)) => matches!(
             path_identity(&parent, &last)?,
@@ -225,7 +229,7 @@ fn recover_restore_if_vacant(
     recovery: &mut Recovery,
     current: &mut Vec<JournalEntry>,
     changed: &mut bool,
-) -> Result<(), String> {
+) -> Result<(), LibraryError> {
     let (parent, last) = match original_parent(assets, &entry.rel_path)? {
         Some(p) => p,
         None => {
@@ -247,9 +251,9 @@ fn recover_restore_if_vacant(
             // 耐久顺序（评审修复）：先让原名持久化，再释放隔离名——
             // 中断不致于隔离名已删而原名未持久
             fsync_dir(&parent)?;
-            trash
-                .remove_file(file_name)
-                .map_err(|e| format!("清理硬链接残留失败（{}）：{e}", entry.asset_id))?;
+            trash.remove_file(file_name).map_err(|e| {
+                LibraryError::io(format!("清理硬链接残留失败（{}）", entry.asset_id), e)
+            })?;
             fsync_dir(trash)?;
             retire_entry(current, entry);
             *changed = true;
@@ -269,7 +273,7 @@ fn recover_index_still_references(
     recovery: &mut Recovery,
     current: &mut Vec<JournalEntry>,
     changed: &mut bool,
-) -> Result<(), String> {
+) -> Result<(), LibraryError> {
     // 隔离项 Missing（目录缺失/条目缺失/rename 失败未生成）与无隔离目录
     // 同义：媒体仍绑定预期身份即未开始事务（评审修复：rename 失败残留的
     // 日志不得永久标记冲突）
@@ -309,7 +313,7 @@ fn recover_index_committed(
     recovery: &mut Recovery,
     current: &mut Vec<JournalEntry>,
     changed: &mut bool,
-) -> Result<(), String> {
+) -> Result<(), LibraryError> {
     let verdict = match &trash {
         Some(trash) => Some(verify_trash_identity(trash, entry)?),
         None => None,
@@ -367,10 +371,15 @@ fn re_quarantine(
     entry: &JournalEntry,
     recovery: &mut Recovery,
     current: &mut Vec<JournalEntry>,
-) -> Result<(), String> {
+) -> Result<(), LibraryError> {
     let (parent, last) = match original_parent(assets, &entry.rel_path)? {
         Some(p) => p,
-        None => return Err(format!("重隔离失败：原父目录缺失（{}）", entry.rel_path)),
+        None => {
+            return Err(LibraryError::missing(format!(
+                "重隔离失败：原父目录缺失（{}）",
+                entry.rel_path
+            )))
+        }
     };
     let trash = ensure_trash_dir(assets)?;
     let txn = format!("t-{}", new_id());
@@ -381,7 +390,7 @@ fn re_quarantine(
     write_journal(library, current)?;
     parent
         .rename(&last, &trash, &txn)
-        .map_err(|e| format!("重隔离失败（{}）：{e}", entry.asset_id))?;
+        .map_err(|e| LibraryError::io(format!("重隔离失败（{}）", entry.asset_id), e))?;
     fsync_dir(&trash)?;
     fsync_dir(&parent)?;
     if !try_bound_cleanup(&trash, &updated, recovery)? {

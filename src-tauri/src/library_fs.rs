@@ -12,6 +12,7 @@ use cap_std::fs::Dir as CapDir;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
 
+use crate::library::error::LibraryError;
 use crate::store::{new_id, open_dir_bound};
 
 /// 库索引大小上限（1 MiB，对齐 prefs.rs 设置文件上限）：异常膨胀的索引在
@@ -45,44 +46,44 @@ pub(crate) fn default_index() -> Value {
 /// 与 assets.rs 的 ensure_child_dir 同语义：总是尝试创建、失败方在另一
 /// 命令刚建好时照常继续，归类校验与身份绑定兜底），现存必须是非符号链接
 /// 的真实目录并经身份绑定打开。
-pub(crate) fn ensure_library_dir(root: &CapDir) -> Result<CapDir, String> {
+pub(crate) fn ensure_library_dir(root: &CapDir) -> Result<CapDir, LibraryError> {
     match root.symlink_metadata("library") {
         Ok(_) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             if let Err(e) = root.create_dir("library") {
                 if e.kind() != std::io::ErrorKind::AlreadyExists {
-                    return Err(format!("创建资产库目录失败：{e}"));
+                    return Err(LibraryError::io("创建资产库目录失败", e));
                 }
             }
         }
-        Err(e) => return Err(format!("读取资产库目录元数据失败：{e}")),
+        Err(e) => return Err(LibraryError::io("读取资产库目录元数据失败", e)),
     }
     let md = root
         .symlink_metadata("library")
-        .map_err(|e| format!("读取资产库目录元数据失败：{e}"))?;
+        .map_err(|e| LibraryError::io("读取资产库目录元数据失败", e))?;
     if md.file_type().is_symlink() {
-        return Err("拒绝符号链接形式的资产库目录".into());
+        return Err(LibraryError::refused("拒绝符号链接形式的资产库目录"));
     }
     if !md.is_dir() {
-        return Err("资产库路径不是目录".into());
+        return Err(LibraryError::refused("资产库路径不是目录"));
     }
-    open_dir_bound(root, "library", &md, "资产库目录")
+    open_dir_bound(root, "library", &md, "资产库目录").map_err(LibraryError::from)
 }
 
 /// 资产库根目录的受信锚定句柄（§10.2 信任链，与 store::projects_dir 同构）：
 /// canonicalize 应用数据根 → 锚定 → `library/` 缺失即创建、现存必须是非符号
 /// 链接的真实目录并经身份绑定打开——不按路径名重开。
-pub(crate) fn library_root(app: &AppHandle) -> Result<CapDir, String> {
+pub(crate) fn library_root(app: &AppHandle) -> Result<CapDir, LibraryError> {
     let root_path = app
         .path()
         .app_data_dir()
-        .map_err(|e| format!("无法定位应用数据目录：{e}"))?;
-    fs::create_dir_all(&root_path).map_err(|e| format!("创建应用数据目录失败：{e}"))?;
+        .map_err(|e| LibraryError::AppDataDir { source: e })?;
+    fs::create_dir_all(&root_path).map_err(|e| LibraryError::io("创建应用数据目录失败", e))?;
     let root_path = root_path
         .canonicalize()
-        .map_err(|e| format!("解析应用数据目录真实路径失败：{e}"))?;
+        .map_err(|e| LibraryError::io("解析应用数据目录真实路径失败", e))?;
     let root = CapDir::open_ambient_dir(&root_path, ambient_authority())
-        .map_err(|e| format!("打开应用数据根目录失败：{e}"))?;
+        .map_err(|e| LibraryError::io("打开应用数据根目录失败", e))?;
     ensure_library_dir(&root)
 }
 
@@ -90,28 +91,28 @@ pub(crate) fn library_root(app: &AppHandle) -> Result<CapDir, String> {
 /// 由该句柄出发）：缺失即创建（并发首用容忍 AlreadyExists），现存必须是
 /// 非符号链接的真实目录并经身份绑定打开——媒体删除与读取从此不可达
 /// assets/ 之外的任何路径。
-pub(crate) fn assets_root(library: &CapDir) -> Result<CapDir, String> {
+pub(crate) fn assets_root(library: &CapDir) -> Result<CapDir, LibraryError> {
     match library.symlink_metadata("assets") {
         Ok(_) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             if let Err(e) = library.create_dir("assets") {
                 if e.kind() != std::io::ErrorKind::AlreadyExists {
-                    return Err(format!("创建资产目录失败：{e}"));
+                    return Err(LibraryError::io("创建资产目录失败", e));
                 }
             }
         }
-        Err(e) => return Err(format!("读取资产目录元数据失败：{e}")),
+        Err(e) => return Err(LibraryError::io("读取资产目录元数据失败", e)),
     }
     let md = library
         .symlink_metadata("assets")
-        .map_err(|e| format!("读取资产目录元数据失败：{e}"))?;
+        .map_err(|e| LibraryError::io("读取资产目录元数据失败", e))?;
     if md.file_type().is_symlink() {
-        return Err("资产目录是符号链接，拒绝操作".into());
+        return Err(LibraryError::refused("资产目录是符号链接，拒绝操作"));
     }
     if !md.is_dir() {
-        return Err("资产目录路径不是目录".into());
+        return Err(LibraryError::refused("资产目录路径不是目录"));
     }
-    open_dir_bound(library, "assets", &md, "资产目录")
+    open_dir_bound(library, "assets", &md, "资产目录").map_err(LibraryError::from)
 }
 
 /// 逐组件 no-follow 走到 rel_path 的父目录：中间组件必须是非符号链接的
@@ -123,30 +124,41 @@ pub(crate) fn assets_root(library: &CapDir) -> Result<CapDir, String> {
 pub(crate) fn open_parent_dir(
     root: &CapDir,
     rel_path: &str,
-) -> Result<Option<(CapDir, String)>, String> {
+) -> Result<Option<(CapDir, String)>, LibraryError> {
     let comps: Vec<&str> = rel_path.split('/').collect();
     let Some((last, parents)) = comps.split_last() else {
-        return Err(format!("资产路径为空：{rel_path}"));
+        return Err(LibraryError::invalid(format!("资产路径为空：{rel_path}")));
     };
     if last.is_empty() || *last == "." || *last == ".." {
-        return Err(format!("资产路径终点非法：{rel_path}"));
+        return Err(LibraryError::invalid(format!(
+            "资产路径终点非法：{rel_path}"
+        )));
     }
     let mut dir = root
         .try_clone()
-        .map_err(|e| format!("复制锚定句柄失败：{e}"))?;
+        .map_err(|e| LibraryError::io("复制锚定句柄失败", e))?;
     for comp in parents {
         let md = match dir.symlink_metadata(comp) {
             Ok(md) => md,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(e) => return Err(format!("读取资产路径元数据失败（{rel_path}）：{e}")),
+            Err(e) => {
+                return Err(LibraryError::io(
+                    format!("读取资产路径元数据失败（{rel_path}）"),
+                    e,
+                ))
+            }
         };
         if md.file_type().is_symlink() {
-            return Err(format!("资产路径含符号链接：{rel_path}"));
+            return Err(LibraryError::refused(format!(
+                "资产路径含符号链接：{rel_path}"
+            )));
         }
         if !md.is_dir() {
-            return Err(format!("资产路径的中间组件不是目录：{rel_path}"));
+            return Err(LibraryError::refused(format!(
+                "资产路径的中间组件不是目录：{rel_path}"
+            )));
         }
-        dir = open_dir_bound(&dir, comp, &md, "资产路径中间目录")?;
+        dir = open_dir_bound(&dir, comp, &md, "资产路径中间目录").map_err(LibraryError::from)?;
     }
     Ok(Some((dir, (*last).to_string())))
 }
@@ -184,7 +196,9 @@ pub(crate) struct NormalizedIndex {
 /// 返回挂起标志：写路径（put/update/delete）检测到即拒绝（评审修复，PR #33
 /// 第十六轮）。本函数总在持有 `library_op_lock`/`library_file_lock` 的命令
 /// 上下文内被调用。
-pub(crate) fn read_index_capped(library: &CapDir) -> Result<(Value, Vec<String>, bool), String> {
+pub(crate) fn read_index_capped(
+    library: &CapDir,
+) -> Result<(Value, Vec<String>, bool), LibraryError> {
     let normalized = read_index_normalized(library)?;
     let suspended = normalized.suspended;
     if normalized.migrated {
@@ -203,7 +217,7 @@ pub(crate) fn read_index_capped(library: &CapDir) -> Result<(Value, Vec<String>,
 /// （实际行为是隔离）、置 suspended 供写路径拒绝；否则迁移落盘失败会把
 /// 「可读的旧索引」升级成全库命令死锁，放行写回又会让无关变更永久抹掉
 /// 被隔离条目。
-pub(crate) fn read_index_normalized(library: &CapDir) -> Result<NormalizedIndex, String> {
+pub(crate) fn read_index_normalized(library: &CapDir) -> Result<NormalizedIndex, LibraryError> {
     match read_index_text_capped(library)? {
         None => Ok(NormalizedIndex {
             index: default_index(),
@@ -212,21 +226,24 @@ pub(crate) fn read_index_normalized(library: &CapDir) -> Result<NormalizedIndex,
             suspended: false,
         }),
         Some(text) => {
-            let index: Value =
-                serde_json::from_str(&text).map_err(|e| format!("资产索引损坏：{e}"))?;
+            let index: Value = serde_json::from_str(&text).map_err(LibraryError::CorruptIndex)?;
             // 非对象根（标量/数组）显式拒绝：字符串索引在非对象根上 panic
             // 会把脏数据放大成全部库命令不可用（评审修复）
             if !index.is_object() {
-                return Err("资产索引根必须是对象".into());
+                return Err(LibraryError::Corrupt {
+                    detail: "资产索引根必须是对象".into(),
+                });
             }
             // 规范化表示同上限（评审修复）：原始字节达标但解析后规范化表示
             // 膨胀（如 1e10 → 10000000000.0）的索引同样拒绝——可读 ⇒ 可写回
             // 的编码闭环不因词法差异破洞
             if normalized_len(&index)? > INDEX_MAX_BYTES {
-                return Err(format!(
-                    "资产索引规范化表示超过 {} MiB 上限，拒绝读取",
-                    INDEX_MAX_BYTES / (1024 * 1024)
-                ));
+                return Err(LibraryError::Limit {
+                    detail: format!(
+                        "资产索引规范化表示超过 {} MiB 上限，拒绝读取",
+                        INDEX_MAX_BYTES / (1024 * 1024)
+                    ),
+                });
             }
             // 超限降级（评审修复，PR #33 第十四/十五/十六轮）：迁移产物越过
             // 写上限时进入挂起态——只读归一化隔离需重发的条目；诊断只保留
@@ -266,20 +283,23 @@ pub(crate) fn read_index_normalized(library: &CapDir) -> Result<NormalizedIndex,
 /// 导入三个读取路径在 `recovery.read_only` 时使用。
 pub(crate) fn read_index_normalized_readonly(
     library: &CapDir,
-) -> Result<(Value, Vec<String>), String> {
+) -> Result<(Value, Vec<String>), LibraryError> {
     match read_index_text_capped(library)? {
         None => Ok((default_index(), Vec::new())),
         Some(text) => {
-            let index: Value =
-                serde_json::from_str(&text).map_err(|e| format!("资产索引损坏：{e}"))?;
+            let index: Value = serde_json::from_str(&text).map_err(LibraryError::CorruptIndex)?;
             if !index.is_object() {
-                return Err("资产索引根必须是对象".into());
+                return Err(LibraryError::Corrupt {
+                    detail: "资产索引根必须是对象".into(),
+                });
             }
             if normalized_len(&index)? > INDEX_MAX_BYTES {
-                return Err(format!(
-                    "资产索引规范化表示超过 {} MiB 上限，拒绝读取",
-                    INDEX_MAX_BYTES / (1024 * 1024)
-                ));
+                return Err(LibraryError::Limit {
+                    detail: format!(
+                        "资产索引规范化表示超过 {} MiB 上限，拒绝读取",
+                        INDEX_MAX_BYTES / (1024 * 1024)
+                    ),
+                });
             }
             let (normalized, warnings, _) =
                 crate::library_index::migrate_and_normalize_readonly(index);
@@ -290,53 +310,59 @@ pub(crate) fn read_index_normalized_readonly(
 
 /// 索引文本受限读取：no-follow 归类（拒符号链接/异型）、总量上限内读取、
 /// 缺失返回 None（回退默认索引）。
-fn read_index_text_capped(library: &CapDir) -> Result<Option<String>, String> {
+fn read_index_text_capped(library: &CapDir) -> Result<Option<String>, LibraryError> {
     let md = match library.symlink_metadata(INDEX_FILE_NAME) {
         Ok(md) => md,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(format!("读取资产库索引元数据失败：{e}")),
+        Err(e) => return Err(LibraryError::io("读取资产库索引元数据失败", e)),
     };
     if md.file_type().is_symlink() {
-        return Err("资产库索引是符号链接，拒绝读取".into());
+        return Err(LibraryError::refused("资产库索引是符号链接，拒绝读取"));
     }
     if !md.is_file() {
-        return Err("资产库索引不是普通文件".into());
+        return Err(LibraryError::refused("资产库索引不是普通文件"));
     }
     let file = library
         .open(INDEX_FILE_NAME)
-        .map_err(|e| format!("打开资产库索引失败：{e}"))?;
+        .map_err(|e| LibraryError::io("打开资产库索引失败", e))?;
     let mut bytes = Vec::new();
     file.take((INDEX_MAX_BYTES + 1) as u64)
         .read_to_end(&mut bytes)
-        .map_err(|e| format!("读取资产库索引失败：{e}"))?;
+        .map_err(|e| LibraryError::io("读取资产库索引失败", e))?;
     if bytes.len() > INDEX_MAX_BYTES {
-        return Err(format!(
-            "资产库索引超过 {} MiB 上限，拒绝读取",
-            INDEX_MAX_BYTES / (1024 * 1024)
-        ));
+        return Err(LibraryError::Limit {
+            detail: format!(
+                "资产库索引超过 {} MiB 上限，拒绝读取",
+                INDEX_MAX_BYTES / (1024 * 1024)
+            ),
+        });
     }
     String::from_utf8(bytes)
         .map(Some)
-        .map_err(|_| "资产库索引不是合法 UTF-8".to_string())
+        .map_err(|_| LibraryError::Corrupt {
+            detail: "资产库索引不是合法 UTF-8".into(),
+        })
 }
 
 /// 索引规范化（紧凑）表示的字节长度：读取侧与写入侧的统一度量。
-fn normalized_len(index: &Value) -> Result<usize, String> {
+fn normalized_len(index: &Value) -> Result<usize, LibraryError> {
     serde_json::to_string(index)
         .map(|text| text.len())
-        .map_err(|e| format!("序列化索引失败：{e}"))
+        .map_err(|e| LibraryError::serialize("序列化索引失败", e))
 }
 
 /// 写入侧同上限（与 read_index_capped 同一编码度量，评审修复）：候选索引
 /// 按落盘使用的**紧凑**序列化计长，超过 INDEX_MAX_BYTES 即拒绝——读侧在
 /// 规范化表示上同检（见 read_index_capped），两侧闭环（可读即可写回，
 /// 删除永不因写盘编码膨胀而卡死）。
-pub(crate) fn ensure_index_size(index: &Value) -> Result<(), String> {
+pub(crate) fn ensure_index_size(index: &Value) -> Result<(), LibraryError> {
     if normalized_len(index)? > INDEX_MAX_BYTES {
-        return Err(format!(
-            "资产库索引超过 {} MiB 上限，拒绝写入",
-            INDEX_MAX_BYTES / (1024 * 1024)
-        ));
+        return Err(LibraryError::Limit {
+            detail: format!(
+                "资产库索引超过 {} MiB 上限，拒绝写入",
+                INDEX_MAX_BYTES / (1024 * 1024)
+            ),
+        });
     }
     Ok(())
 }
@@ -346,23 +372,32 @@ pub(crate) fn ensure_index_size(index: &Value) -> Result<(), String> {
 /// 序列化使用紧凑形式并校验读取侧同款大小上限（评审修复）：读侧量磁盘
 /// 原始字节、写侧量即将写出的同一紧凑表示，两侧同一编码闭环——超限索引
 /// 拒绝落盘，可读的索引永远可写回。调用方传入的索引应为净化后视图。
-pub(crate) fn write_index(library: &CapDir, index: &Value) -> Result<(), String> {
+pub(crate) fn write_index(library: &CapDir, index: &Value) -> Result<(), LibraryError> {
     ensure_index_size(index)?;
-    let text = serde_json::to_string(index).map_err(|e| format!("序列化索引失败：{e}"))?;
-    crate::store::atomic_write(library, INDEX_FILE_NAME, &text)
+    let text =
+        serde_json::to_string(index).map_err(|e| LibraryError::serialize("序列化索引失败", e))?;
+    crate::store::atomic_write(library, INDEX_FILE_NAME, &text).map_err(LibraryError::from)
 }
 
 /// 同目录原子落盘内核（排他临时文件 + sync + rename + 父目录 fsync 持久性
 /// 屏障，Unix）：rename 前复核目标仍未被占（fail closed），失败尽力清理
 /// 临时文件。写入动作由 write 闭包提供（拷贝源文件 / 写生成字节共用）。
-pub(crate) fn atomic_write_with<F>(dir: &CapDir, final_name: &str, write: F) -> Result<(), String>
+pub(crate) fn atomic_write_with<F>(
+    dir: &CapDir,
+    final_name: &str,
+    write: F,
+) -> Result<(), LibraryError>
 where
     F: FnOnce(&mut cap_std::fs::File) -> std::io::Result<()>,
 {
     match dir.symlink_metadata(final_name) {
-        Ok(_) => return Err(format!("目标资产文件已存在：{final_name}")),
+        Ok(_) => {
+            return Err(LibraryError::refused(format!(
+                "目标资产文件已存在：{final_name}"
+            )))
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(format!("读取目标资产元数据失败：{e}")),
+        Err(e) => return Err(LibraryError::io("读取目标资产元数据失败", e)),
     }
     let tmp_name = format!(".{final_name}.{}.tmp", new_id());
     let result = write_tmp_and_rename(dir, &tmp_name, final_name, write);
@@ -379,7 +414,7 @@ fn write_tmp_and_rename<F>(
     tmp_name: &str,
     final_name: &str,
     write: F,
-) -> Result<(), String>
+) -> Result<(), LibraryError>
 where
     F: FnOnce(&mut cap_std::fs::File) -> std::io::Result<()>,
 {
@@ -388,21 +423,25 @@ where
             tmp_name,
             cap_std::fs::OpenOptions::new().write(true).create_new(true),
         )
-        .map_err(|e| format!("创建临时资产文件失败：{e}"))?;
-    write(&mut dst).map_err(|e| format!("写入资产文件失败：{e}"))?;
+        .map_err(|e| LibraryError::io("创建临时资产文件失败", e))?;
+    write(&mut dst).map_err(|e| LibraryError::io("写入资产文件失败", e))?;
     dst.sync_all()
-        .map_err(|e| format!("同步资产文件失败：{e}"))?;
+        .map_err(|e| LibraryError::io("同步资产文件失败", e))?;
     drop(dst);
     match dir.symlink_metadata(final_name) {
-        Ok(_) => return Err(format!("目标资产文件已存在：{final_name}")),
+        Ok(_) => {
+            return Err(LibraryError::refused(format!(
+                "目标资产文件已存在：{final_name}"
+            )))
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(format!("读取目标资产元数据失败：{e}")),
+        Err(e) => return Err(LibraryError::io("读取目标资产元数据失败", e)),
     }
     dir.rename(tmp_name, dir, final_name)
-        .map_err(|e| format!("落盘资产文件失败：{e}"))?;
+        .map_err(|e| LibraryError::io("落盘资产文件失败", e))?;
     #[cfg(unix)]
     dir.open_dir(".")
         .and_then(|d| d.into_std_file().sync_all())
-        .map_err(|e| format!("同步资产目录失败（持久性屏障缺失）：{e}"))?;
+        .map_err(|e| LibraryError::io("同步资产目录失败（持久性屏障缺失）", e))?;
     Ok(())
 }

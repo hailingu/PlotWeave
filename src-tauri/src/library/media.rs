@@ -13,10 +13,13 @@ use tauri::{AppHandle, Manager};
 use crate::assets::project_media::{
     open_project_media_with, resolve_project_media_entry, PendingProjectAssets,
 };
+use crate::library::error::LibraryError;
 use crate::library::ASSET_MAX_BYTES;
 use crate::library_fs::{library_root, read_index_capped, validate_asset_id};
 use crate::library_journal::{library_file_lock, library_op_lock};
-use crate::store::{is_canonical_mime, is_valid_active_asset_rel_path, projects_dir, validate_id};
+use crate::store::{
+    is_canonical_mime, is_valid_active_asset_rel_path, projects_dir, to_ipc_text, validate_id,
+};
 
 /// opaque asset URL 的自定义协议名（lib.rs 注册同名协议处理器）。
 pub(crate) const MEDIA_SCHEME: &str = "pwmedia";
@@ -172,11 +175,13 @@ pub(crate) fn parse_media_uri(uri: &tauri::http::Uri) -> Result<(MediaScope, Str
 fn resolve_media_entry_with(
     library: &cap_std::fs::Dir,
     id: &str,
-) -> Result<(String, String), String> {
-    validate_asset_id(id)?;
+) -> Result<(String, String), LibraryError> {
+    validate_asset_id(id).map_err(LibraryError::invalid)?;
     let recovery = crate::library_journal::recover(library)?;
     if recovery.conflicted.iter().any(|c| c == id) {
-        return Err(format!("资产 {id} 处于删除事务冲突期，媒体不可用"));
+        return Err(LibraryError::refused(format!(
+            "资产 {id} 处于删除事务冲突期，媒体不可用"
+        )));
     }
     // 只读告警态用不落盘读取（评审修复，PR #33 第五轮）：媒体读取本身不受限，
     // 但不得在只读态把迁移结果写回 library.json
@@ -200,13 +205,15 @@ fn resolve_media_entry_with(
     }
     let entry = index["assets"]["byId"]
         .get(id)
-        .ok_or_else(|| format!("资产不存在：{id}"))?;
+        .ok_or_else(|| LibraryError::missing(format!("资产不存在：{id}")))?;
     let rel = entry
         .get("relPath")
         .and_then(Value::as_str)
-        .ok_or_else(|| format!("资产 {id} 的 relPath 缺失"))?;
+        .ok_or_else(|| LibraryError::invalid(format!("资产 {id} 的 relPath 缺失")))?;
     if !is_valid_active_asset_rel_path(rel) {
-        return Err(format!("资产 {id} 的 relPath 非法：{rel}"));
+        return Err(LibraryError::invalid(format!(
+            "资产 {id} 的 relPath 非法：{rel}"
+        )));
     }
     let mime = entry
         .get("mime")
@@ -226,7 +233,7 @@ fn resolve_media_entry_with(
 pub(crate) fn open_media_with(
     library: &cap_std::fs::Dir,
     id: &str,
-) -> Result<(String, cap_std::fs::File), String> {
+) -> Result<(String, cap_std::fs::File), LibraryError> {
     let (rel, mime) = resolve_media_entry_with(library, id)?;
     let file = crate::assets::open_library_asset(library, &rel)?;
     Ok((mime, file))
@@ -312,18 +319,20 @@ pub(crate) fn read_media_capped_in<'g>(
     mime: String,
     file: cap_std::fs::File,
     max_bytes: usize,
-) -> Result<(String, Vec<u8>, MediaReadPermit<'g>), String> {
+) -> Result<(String, Vec<u8>, MediaReadPermit<'g>), LibraryError> {
     use std::io::Read;
     let permit = gate.acquire();
     let mut bytes = Vec::new();
     file.take((max_bytes + 1) as u64)
         .read_to_end(&mut bytes)
-        .map_err(|e| format!("读取资产 {id} 媒体失败：{e}"))?;
+        .map_err(|e| LibraryError::io(format!("读取资产 {id} 媒体失败"), e))?;
     if bytes.len() > max_bytes {
-        return Err(format!(
-            "资产 {id} 的媒体超过 {} MiB 上限",
-            max_bytes / (1024 * 1024)
-        ));
+        return Err(LibraryError::Limit {
+            detail: format!(
+                "资产 {id} 的媒体超过 {} MiB 上限",
+                max_bytes / (1024 * 1024)
+            ),
+        });
     }
     Ok((mime, bytes, permit))
 }
@@ -334,7 +343,7 @@ pub(crate) fn read_media_capped(
     id: &str,
     mime: String,
     file: cap_std::fs::File,
-) -> Result<(String, Vec<u8>, MediaReadPermit<'static>), String> {
+) -> Result<(String, Vec<u8>, MediaReadPermit<'static>), LibraryError> {
     read_media_capped_in(MediaReadGate::gate(), id, mime, file, ASSET_MAX_BYTES)
 }
 
@@ -346,7 +355,7 @@ pub(crate) fn read_project_media_capped(
     id: &str,
     mime: String,
     file: cap_std::fs::File,
-) -> Result<(String, Vec<u8>, MediaReadPermit<'static>), String> {
+) -> Result<(String, Vec<u8>, MediaReadPermit<'static>), LibraryError> {
     read_media_capped_in(
         MediaReadGate::gate(),
         id,
@@ -414,27 +423,33 @@ pub(crate) struct MediaDelivery {
 /// 会话登记表经 `tauri::State` 显式获取（评审修复：可变全局单例由应用
 /// 拥有的状态替代）。
 pub(crate) fn handle_media_request(app: &AppHandle, uri: &tauri::http::Uri) -> MediaDelivery {
+    // 展示边界（issue #144）：领域错误在此按既有文案折叠，404 与日志不变
     let result = parse_media_uri(uri).and_then(|(scope, id)| match scope {
         MediaScope::Library => {
-            let library = library_root(app)?;
+            let library = library_root(app).map_err(|e| e.to_string())?;
             // 锁内：恢复复核 + 净化索引解析 + 身份绑定打开；锁随打开结束
             let opened = {
                 let _op = library_op_lock();
-                let _file_lock = library_file_lock(&library)?;
-                open_media_with(&library, &id)
+                let _file_lock = library_file_lock(&library).map_err(|e| e.to_string())?;
+                open_media_with(&library, &id).map_err(|e| e.to_string())
             };
             // 锁外：消费已绑定句柄读取字节（评审修复，PR #32 第三轮）；成功
             // 时许可随结果返回，交由 MediaDelivery 持有到交付之后
-            opened.and_then(|(mime, file)| read_media_capped(&id, mime, file))
+            opened.and_then(|(mime, file)| {
+                read_media_capped(&id, mime, file).map_err(|e| e.to_string())
+            })
         }
         MediaScope::Project { project_id } => {
             // 项目 scope（issue #31）：按项目文档逐请求解析后经
             // verify_asset_real_path 句柄链打开身份绑定句柄；读取上限为
             // 覆盖持久化契约的防御界（评审修复 P2-4）
-            let projects = projects_dir(app)?;
+            let projects = projects_dir(app).map_err(to_ipc_text)?;
             let pending = app.state::<PendingProjectAssets>();
-            let opened = open_project_media_with(&projects, &project_id, &id, &pending);
-            opened.and_then(|(mime, file)| read_project_media_capped(&id, mime, file))
+            let opened = open_project_media_with(&projects, &project_id, &id, &pending)
+                .map_err(|e| e.to_string());
+            opened.and_then(|(mime, file)| {
+                read_project_media_capped(&id, mime, file).map_err(|e| e.to_string())
+            })
         }
     });
     if let Err(e) = &result {
@@ -465,18 +480,19 @@ pub fn get_asset_media_url(
     let parsed = parse_media_scope(&scope)?;
     match &parsed {
         MediaScope::Library => {
-            let library = library_root(&app)?;
+            let library = library_root(&app).map_err(|e| e.to_string())?;
             let _op = library_op_lock();
-            let _file_lock = library_file_lock(&library)?;
-            resolve_media_entry_with(&library, &asset_id)?;
+            let _file_lock = library_file_lock(&library).map_err(|e| e.to_string())?;
+            resolve_media_entry_with(&library, &asset_id).map_err(|e| e.to_string())?;
         }
         MediaScope::Project { project_id } => {
             // 项目 assetId 是不透明契约（评审修复）：命令面按同域值域
             // 先行校验，非法 id 在触达文件系统前拒绝
             validate_project_media_id(&asset_id)?;
-            let projects = projects_dir(&app)?;
+            let projects = projects_dir(&app).map_err(to_ipc_text)?;
             let pending = app.state::<PendingProjectAssets>();
-            resolve_project_media_entry(&projects, project_id, &asset_id, &pending)?;
+            resolve_project_media_entry(&projects, project_id, &asset_id, &pending)
+                .map_err(|e| e.to_string())?;
         }
     }
     Ok(opaque_media_url(&parsed, &asset_id))

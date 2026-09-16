@@ -5,6 +5,7 @@
 use cap_std::fs::Dir as CapDir;
 use tauri::AppHandle;
 
+use crate::store::error::{to_ipc_text, StoreError};
 #[cfg(unix)]
 use crate::store::persist::asset_identity;
 use crate::store::persist::{open_dir_bound, projects_dir};
@@ -17,16 +18,16 @@ use crate::store::types::validate_id;
 /// 并回滚已拷贝的目标子树，不遗留半拷贝。
 #[tauri::command]
 pub fn copy_project_assets(app: AppHandle, from_id: String, to_id: String) -> Result<(), String> {
-    let root = projects_dir(&app)?;
-    copy_assets_tree(&root, &from_id, &to_id)
+    let root = projects_dir(&app).map_err(to_ipc_text)?;
+    copy_assets_tree(&root, &from_id, &to_id).map_err(to_ipc_text)
 }
 /// copy_project_assets 的可测内核。全程相对已打开的 projects 根目录句柄
 /// 执行（§10.2 openat 语义，cap-std）：归类、目录打开、递归与文件创建
 /// 不再退回路径名拼接——源/目标子目录在元数据检查后被并发替换（含换成
 /// 符号链接）时，句柄相对解析仍不逃出 projects/，越界符号链接被沙箱拒绝。
-fn copy_assets_tree(root: &CapDir, from_id: &str, to_id: &str) -> Result<(), String> {
-    validate_id(from_id)?;
-    validate_id(to_id)?;
+fn copy_assets_tree(root: &CapDir, from_id: &str, to_id: &str) -> Result<(), StoreError> {
+    validate_id(from_id).map_err(StoreError::invalid)?;
+    validate_id(to_id).map_err(StoreError::invalid)?;
     // 源项目目录先归类绑定（§10.2）：组合路径 `{from_id}/assets` 的
     // symlink_metadata 会跟随中间的 {from_id} 符号链接——projects/{from}
     // 被换成指向根内其他项目的链接时，归类与身份绑定都落在错误项目的
@@ -34,44 +35,48 @@ fn copy_assets_tree(root: &CapDir, from_id: &str, to_id: &str) -> Result<(), Str
     let proj_md = match root.symlink_metadata(from_id) {
         Ok(md) => md,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(format!("读取源项目目录元数据失败：{e}")),
+        Err(e) => return Err(StoreError::io("读取源项目目录元数据失败", e)),
     };
     if proj_md.file_type().is_symlink() {
-        return Err("源项目目录是符号链接，拒绝复制".into());
+        return Err(StoreError::refused("源项目目录是符号链接，拒绝复制"));
     }
     if !proj_md.is_dir() {
-        return Err("源项目路径不是目录，拒绝复制".into());
+        return Err(StoreError::refused("源项目路径不是目录，拒绝复制"));
     }
     let src_proj = open_dir_bound(root, from_id, &proj_md, "源项目目录")?;
     let md = match src_proj.symlink_metadata("assets") {
         Ok(md) => md,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(format!("读取源资产目录元数据失败：{e}")),
+        Err(e) => return Err(StoreError::io("读取源资产目录元数据失败", e)),
     };
     if md.file_type().is_symlink() {
-        return Err("源资产目录是符号链接，拒绝复制".into());
+        return Err(StoreError::refused("源资产目录是符号链接，拒绝复制"));
     }
     if !md.is_dir() {
-        return Err("源资产路径不是目录，拒绝复制".into());
+        return Err(StoreError::refused("源资产路径不是目录，拒绝复制"));
     }
     match root.symlink_metadata(to_id) {
-        Ok(_) => return Err(format!("目标资产目录已存在，拒绝复制：{to_id}")),
+        Ok(_) => {
+            return Err(StoreError::refused(format!(
+                "目标资产目录已存在，拒绝复制：{to_id}"
+            )))
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(format!("读取目标资产目录元数据失败：{e}")),
+        Err(e) => return Err(StoreError::io("读取目标资产目录元数据失败", e)),
     }
     // 拷贝目标是 {to}/assets：与 relPath 首段（§7.1）及实路径复验的资产根一致
     let src_dir = open_dir_bound(&src_proj, "assets", &md, "源资产目录")?;
     root.create_dir_all(to_id)
-        .map_err(|e| format!("创建目标项目目录失败：{e}"))?;
+        .map_err(|e| StoreError::io("创建目标项目目录失败", e))?;
     let dst_root = root
         .open_dir(to_id)
-        .map_err(|e| format!("打开目标项目目录失败：{e}"))?;
+        .map_err(|e| StoreError::io("打开目标项目目录失败", e))?;
     dst_root
         .create_dir("assets")
-        .map_err(|e| format!("创建目标资产目录失败：{e}"))?;
+        .map_err(|e| StoreError::io("创建目标资产目录失败", e))?;
     let dst_assets = dst_root
         .open_dir("assets")
-        .map_err(|e| format!("打开目标资产目录失败：{e}"))?;
+        .map_err(|e| StoreError::io("打开目标资产目录失败", e))?;
     if let Err(e) = copy_dir_handles(&src_dir, &dst_assets) {
         // 回滚清理同款句柄相对删除（§10.2）：dst_root 被并发换成符号链接时
         // remove_dir_all 只移除链接自身，不进入其指向的外部树
@@ -88,34 +93,38 @@ fn copy_assets_tree(root: &CapDir, from_id: &str, to_id: &str) -> Result<(), Str
 /// 文件以 create_new 排他创建，预置在目标路径上的符号链接无法截获写入；
 /// 目标子目录 create_dir 排他创建后立即打开，残余窗口内的替换也被 cap-std
 /// 沙箱限定在 projects/ 树内。
-fn copy_dir_handles(src: &CapDir, dst: &CapDir) -> Result<(), String> {
+fn copy_dir_handles(src: &CapDir, dst: &CapDir) -> Result<(), StoreError> {
     let entries = src
         .entries()
-        .map_err(|e| format!("扫描源资产目录失败：{e}"))?;
+        .map_err(|e| StoreError::io("扫描源资产目录失败", e))?;
     for entry in entries {
-        let entry = entry.map_err(|e| format!("扫描源资产目录失败：{e}"))?;
+        let entry = entry.map_err(|e| StoreError::io("扫描源资产目录失败", e))?;
         // DirEntry::metadata 取 lstat 语义，不跟随符号链接
         let md = entry
             .metadata()
-            .map_err(|e| format!("读取源资产条目元数据失败：{e}"))?;
+            .map_err(|e| StoreError::io("读取源资产条目元数据失败", e))?;
         let name = entry.file_name();
         let shown = name.to_string_lossy();
         let ft = md.file_type();
         if ft.is_symlink() {
-            return Err(format!("源资产子树含符号链接，拒绝复制：{shown}"));
+            return Err(StoreError::refused(format!(
+                "源资产子树含符号链接，拒绝复制：{shown}"
+            )));
         }
         if ft.is_dir() {
             let child_src = open_dir_bound(src, &name, &md, "源资产子目录")?;
             dst.create_dir(&name)
-                .map_err(|e| format!("创建目标资产子目录失败（{shown}）：{e}"))?;
+                .map_err(|e| StoreError::io(format!("创建目标资产子目录失败（{shown}）"), e))?;
             let child_dst = dst
                 .open_dir(&name)
-                .map_err(|e| format!("打开目标资产子目录失败（{shown}）：{e}"))?;
+                .map_err(|e| StoreError::io(format!("打开目标资产子目录失败（{shown}）"), e))?;
             copy_dir_handles(&child_src, &child_dst)?;
         } else if ft.is_file() {
             copy_file_bound(src, &name, &md, dst)?;
         } else {
-            return Err(format!("源资产子树含非普通文件条目：{shown}"));
+            return Err(StoreError::refused(format!(
+                "源资产子树含非普通文件条目：{shown}"
+            )));
         }
     }
     Ok(())
@@ -126,18 +135,20 @@ fn copy_file_bound(
     name: &std::ffi::OsStr,
     classified: &cap_std::fs::Metadata,
     dst_dir: &CapDir,
-) -> Result<(), String> {
+) -> Result<(), StoreError> {
     let shown = name.to_string_lossy();
     let mut src = src_dir
         .open(name)
-        .map_err(|e| format!("打开源资产失败（{shown}）：{e}"))?;
+        .map_err(|e| StoreError::io(format!("打开源资产失败（{shown}）"), e))?;
     #[cfg(unix)]
     {
         let fm = src
             .metadata()
-            .map_err(|e| format!("读取源资产句柄元数据失败（{shown}）：{e}"))?;
+            .map_err(|e| StoreError::io(format!("读取源资产句柄元数据失败（{shown}）"), e))?;
         if asset_identity(&fm) != asset_identity(classified) {
-            return Err(format!("源资产在拷贝期间被替换，拒绝复制：{shown}"));
+            return Err(StoreError::refused(format!(
+                "源资产在拷贝期间被替换，拒绝复制：{shown}"
+            )));
         }
     }
     #[cfg(not(unix))]
@@ -147,10 +158,10 @@ fn copy_file_bound(
             name,
             cap_std::fs::OpenOptions::new().write(true).create_new(true),
         )
-        .map_err(|e| format!("创建目标资产失败（{shown}）：{e}"))?;
+        .map_err(|e| StoreError::io(format!("创建目标资产失败（{shown}）"), e))?;
     std::io::copy(&mut src, &mut dst_file)
         .map(|_| ())
-        .map_err(|e| format!("拷贝资产文件失败（{shown}）：{e}"))
+        .map_err(|e| StoreError::io(format!("拷贝资产文件失败（{shown}）"), e))
 }
 
 #[cfg(test)]
@@ -184,7 +195,10 @@ mod tests {
         fs::create_dir_all(projects.join("p-1").join("assets")).expect("建源目录");
         fs::create_dir_all(projects.join("p-3")).expect("预置目标");
         let err = copy_assets_tree(&cap(&projects), "p-1", "p-3").unwrap_err();
-        assert!(err.contains("目标资产目录已存在"), "意外诊断：{err}");
+        assert!(
+            matches!(err, StoreError::Refused { ref detail } if detail.contains("目标资产目录已存在")),
+            "意外诊断：{err}"
+        );
         cleanup_temp(&projects);
     }
 
@@ -199,7 +213,10 @@ mod tests {
         fs::write(&outside, b"secret").expect("写根外文件");
         std::os::unix::fs::symlink(&outside, src.join("link.png")).expect("建符号链接");
         let err = copy_assets_tree(&cap(&projects), "p-1", "p-2").unwrap_err();
-        assert!(err.contains("符号链接"), "意外诊断：{err}");
+        assert!(
+            matches!(err, StoreError::Refused { ref detail } if detail.contains("符号链接")),
+            "意外诊断：{err}"
+        );
         // 失败回滚：不遗留半拷贝的目标目录
         assert!(fs::symlink_metadata(projects.join("p-2")).is_err());
         cleanup_temp(&projects);
@@ -217,7 +234,10 @@ mod tests {
         std::os::unix::fs::symlink(projects.join("p-2"), projects.join("p-1"))
             .expect("建项目符号链接");
         let err = copy_assets_tree(&cap(&projects), "p-1", "p-3").unwrap_err();
-        assert!(err.contains("符号链接"), "意外诊断：{err}");
+        assert!(
+            matches!(err, StoreError::Refused { ref detail } if detail.contains("符号链接")),
+            "意外诊断：{err}"
+        );
         cleanup_temp(&projects);
     }
 }

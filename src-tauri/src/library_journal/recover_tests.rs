@@ -222,10 +222,10 @@ fn malformed_journal_blocks_library_writes() {
         recovery.warnings
     );
     let err = delete_asset_transacted(&cap(&library), "la-1").expect_err("删除应被暂停");
-    assert!(err.contains("暂停"), "意外诊断：{err}");
+    assert!(err.to_string().contains("暂停"), "意外诊断：{err}");
     let err = put_asset_with(&cap(&library), "a.png", "image/png", "other", b"A")
         .expect_err("导入应被暂停");
-    assert!(err.contains("暂停"), "意外诊断：{err}");
+    assert!(err.to_string().contains("暂停"), "意外诊断：{err}");
     cleanup(&root);
 }
 
@@ -486,7 +486,7 @@ fn delete_rejected_when_journal_near_cap() {
         .collect();
     write_journal_raw(&library, json!(pad));
     let err = delete_asset_transacted(&cap(&library), "la-1").expect_err("接近上限应拒绝新事务");
-    assert!(err.contains("接近上限"), "意外诊断：{err}");
+    assert!(err.to_string().contains("接近上限"), "意外诊断：{err}");
     // 索引未动：删除被拒绝且媒体原样
     assert!(fs::metadata(library.join("assets").join("la-1.png")).is_ok());
     cleanup(&root);

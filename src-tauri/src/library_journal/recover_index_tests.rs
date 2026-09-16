@@ -194,7 +194,7 @@ fn import_refuses_conflicted_asset() {
         &crate::assets::project_media::PendingProjectAssets::new(),
     )
     .expect_err("冲突期条目应拒绝导入");
-    assert!(err.contains("冲突期"), "意外诊断：{err}");
+    assert!(err.to_string().contains("冲突期"), "意外诊断：{err}");
     cleanup(&root);
 }
 
@@ -264,7 +264,7 @@ fn media_bytes_rechecks_conflict_state_per_request() {
     // 冲突期：拒绝服务（relPath 不再由前端传入，按 id 复核）
     let err =
         crate::library::media::open_media_with(&cap(&library), "la-1").expect_err("冲突期应拒绝");
-    assert!(err.contains("冲突期"), "意外诊断：{err}");
+    assert!(err.to_string().contains("冲突期"), "意外诊断：{err}");
     // 冲突解决后（移除日志）：按当前索引解析 id 读取媒体字节
     fs::remove_file(library.join(JOURNAL_FILE_NAME)).expect("移除日志");
     let (mime, file) =
@@ -298,6 +298,6 @@ fn index_entry_pointing_into_trash_is_quarantined() {
     // 媒体读取同样拒绝：投毒条目在净化索引中不存在
     let err = crate::library::media::open_media_with(&cap(&library), "la-1")
         .expect_err("保留目录词法应拒绝");
-    assert!(err.contains("不存在"), "意外诊断：{err}");
+    assert!(err.to_string().contains("不存在"), "意外诊断：{err}");
     cleanup(&root);
 }

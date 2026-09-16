@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::isotime::now_iso;
+use crate::store::error::StoreError;
 use crate::store::testutil::{cap, cleanup_temp, temp_projects_dir};
 use std::fs;
 
@@ -21,7 +22,10 @@ fn persist_project_rejects_untrusted_id_before_any_join() {
     let doc = new_project_file("p-1", "剧".into(), now_iso());
     // 空资产索引下复验不设防：id 词法校验必须在任何路径拼接前拒绝
     let err = persist_project(&cap(&projects), "../evil", doc).unwrap_err();
-    assert!(err.contains("非法"), "意外诊断：{err}");
+    assert!(
+        matches!(err.root(), StoreError::InvalidInput { ref detail } if detail.contains("非法")),
+        "意外诊断：{err}"
+    );
     // 不得在 projects/ 之外创建任何文件
     assert!(
         fs::symlink_metadata(projects.parent().expect("临时根").join("evil.json")).is_err(),
@@ -58,7 +62,10 @@ fn persist_project_rejects_symlinked_target_without_following() {
     std::os::unix::fs::symlink(&outside, projects.join("p-1.json")).expect("建符号链接");
     let doc = new_project_file("p-1", "剧".into(), now_iso());
     let err = persist_project(&cap(&projects), "p-1", doc).unwrap_err();
-    assert!(err.contains("符号链接"), "意外诊断：{err}");
+    assert!(
+        matches!(err.root(), StoreError::Refused { ref detail } if detail.contains("符号链接")),
+        "意外诊断：{err}"
+    );
     // 链接未被跟随或覆盖：根外文件原样保留，链接本身仍在
     assert_eq!(fs::read(&outside).expect("读根外文件"), b"{}".to_vec());
     assert!(fs::symlink_metadata(projects.join("p-1.json"))
@@ -74,7 +81,7 @@ fn load_project_file_rejects_path_like_id_before_any_join() {
     // 嵌套路径形态的 id：projects/ 内的资产/私有 JSON 不得经 load_project 读出
     let err = load_project_file(&cap(&projects), "p-1/assets/private").unwrap_err();
     assert!(
-        err.contains("非法") || err.contains("不存在"),
+        matches!(err.root(), StoreError::InvalidInput { ref detail } if detail.contains("非法")),
         "意外诊断：{err}"
     );
     cleanup_temp(&projects);
@@ -150,7 +157,10 @@ fn ai_session_save_requires_existing_project_record() {
     let session = serde_json::json!({ "schemaVersion": 1, "entries": [] });
     let err = save_ai_session_file(&cap(&projects), "p-1", &session)
         .expect_err("已删除项目不得被迟到会话保存重建");
-    assert!(err.contains("项目不存在"), "意外诊断：{err}");
+    assert!(
+        matches!(err.root(), StoreError::NotFound { ref detail } if detail.contains("项目不存在")),
+        "意外诊断：{err}"
+    );
     assert!(
         fs::symlink_metadata(projects.join("p-1")).is_err(),
         "拒绝保存不得创建项目会话目录"
@@ -194,7 +204,17 @@ fn delete_project_files_keeps_record_when_asset_tree_removal_fails() {
     let mut perms = fs::metadata(&assets).unwrap().permissions();
     perms.set_mode(0o755);
     let _ = fs::set_permissions(&assets, perms);
-    assert!(result.is_err(), "资产目录删除失败应显式报错");
+    let err = result.expect_err("资产目录删除失败应显式报错");
+    assert!(
+        matches!(err.root(), StoreError::Io { .. }),
+        "删除失败应为底层 I/O 类别：{err:?}"
+    );
+    // 展示边界契约（PR #179 评审修复）：条目名括注必须闭合，
+    // 文案与历史 format! 形态逐字一致
+    assert!(
+        err.to_string().starts_with("移除条目失败（\"a.png\"）："),
+        "实际文案：{err}"
+    );
     // 权威项目文件必须仍在：项目可发现、删除可重试，不留孤儿媒体树
     assert!(
         projects.join("p-1.json").exists(),
@@ -279,12 +299,12 @@ fn ai_session_rejects_symlinked_session_dir_for_read_and_write() {
         .err()
         .expect("读必须拒绝");
     assert!(
-        read_err.contains("项目会话目录是符号链接"),
+        matches!(read_err.root(), StoreError::Refused { ref detail } if detail.contains("项目会话目录是符号链接")),
         "意外诊断：{read_err}"
     );
     let write_err = save_ai_session_file(&cap(&projects), "p-1", &session).expect_err("写必须拒绝");
     assert!(
-        write_err.contains("项目会话目录是符号链接"),
+        matches!(write_err.root(), StoreError::Refused { ref detail } if detail.contains("项目会话目录是符号链接")),
         "意外诊断：{write_err}"
     );
     assert!(
@@ -305,9 +325,15 @@ fn ai_session_rejects_non_directory_session_path_for_read_and_write() {
     let read_err = load_ai_session_file(&cap(&projects), "p-1")
         .err()
         .expect("读必须拒绝");
-    assert!(read_err.contains("不是目录"), "意外诊断：{read_err}");
+    assert!(
+        matches!(read_err.root(), StoreError::Refused { ref detail } if detail.contains("不是目录")),
+        "意外诊断：{read_err}"
+    );
     let write_err = save_ai_session_file(&cap(&projects), "p-1", &session).expect_err("写必须拒绝");
-    assert!(write_err.contains("不是目录"), "意外诊断：{write_err}");
+    assert!(
+        matches!(write_err.root(), StoreError::Refused { ref detail } if detail.contains("不是目录")),
+        "意外诊断：{write_err}"
+    );
     assert_eq!(
         fs::read(projects.join("p-1")).expect("占位文件"),
         b"not a dir",
@@ -334,11 +360,80 @@ fn ai_session_save_rejects_invalid_envelope_before_touching_disk() {
     ];
     for (bad, diagnostic) in cases {
         let err = save_ai_session_file(&cap(&projects), "p-1", &bad).expect_err("信封非法必须拒绝");
-        assert!(err.contains(diagnostic), "意外诊断：{err}");
+        assert!(
+            matches!(err.root(), StoreError::InvalidInput { ref detail } if detail.contains(diagnostic)),
+            "意外诊断：{err}"
+        );
     }
     assert!(
         fs::symlink_metadata(projects.join("p-1")).is_err(),
         "拒绝保存不得创建项目会话目录"
+    );
+    cleanup_temp(&projects);
+}
+
+/// store 域错误分片（issue #144）：内核按失败类别区分且保留来源——
+/// 缺失为 NotFound、损坏为 CorruptJson（serde 来源经 source 链可取）、
+/// 信任链拒绝为 Refused、不可信输入为 InvalidInput；包装层保留阶段前缀。
+#[test]
+fn load_project_file_classifies_missing_as_not_found() {
+    let projects = temp_projects_dir();
+    let err = load_project_file(&cap(&projects), "p-1").unwrap_err();
+    assert!(
+        matches!(err.root(), StoreError::NotFound { ref detail } if detail == "项目不存在：p-1"),
+        "实际错误：{err:?}"
+    );
+    assert_eq!(err.to_string(), "项目不存在：p-1");
+    cleanup_temp(&projects);
+}
+
+#[test]
+fn load_project_file_classifies_corrupt_json_with_serde_source() {
+    let projects = temp_projects_dir();
+    fs::write(projects.join("p-1.json"), b"not json").expect("写损坏文件");
+    let err = load_project_file(&cap(&projects), "p-1").unwrap_err();
+    assert!(
+        err.to_string().starts_with("项目文件损坏："),
+        "实际文案：{err}"
+    );
+    assert!(
+        matches!(err.root(), StoreError::CorruptJson(_)),
+        "实际错误：{err:?}"
+    );
+    assert!(
+        std::error::Error::source(&err).is_some(),
+        "损坏来源应经 source 链保留"
+    );
+    cleanup_temp(&projects);
+}
+
+#[cfg(unix)]
+#[test]
+fn load_project_file_classifies_symlinked_file_as_refused() {
+    let projects = temp_projects_dir();
+    let outside = projects.parent().expect("临时根").join("evil.json");
+    fs::write(&outside, b"{}").expect("写根外文件");
+    std::os::unix::fs::symlink(&outside, projects.join("p-1.json")).expect("建符号链接");
+    let err = load_project_file(&cap(&projects), "p-1").unwrap_err();
+    assert!(
+        matches!(err.root(), StoreError::Refused { .. }),
+        "实际错误：{err:?}"
+    );
+    assert_eq!(
+        err.to_string(),
+        "拒绝读取项目文件：项目文件是符号链接，拒绝读取"
+    );
+    cleanup_temp(&projects);
+}
+
+#[test]
+fn persist_project_classifies_untrusted_id_as_invalid_input() {
+    let projects = temp_projects_dir();
+    let doc = new_project_file("p-1", "剧".into(), now_iso());
+    let err = persist_project(&cap(&projects), "../evil", doc).unwrap_err();
+    assert!(
+        matches!(err.root(), StoreError::InvalidInput { .. }),
+        "实际错误：{err:?}"
     );
     cleanup_temp(&projects);
 }

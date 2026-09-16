@@ -162,7 +162,7 @@ fn doc_hit_drains_pending_entry() {
     write_project_doc_raw(&projects, pid, json!({}));
     let err = resolve_project_media_entry(&cap(&projects), pid, &asset_id, &pending)
         .expect_err("登记项清除后应按不存在拒绝");
-    assert!(err.contains("不存在"), "意外诊断：{err}");
+    assert!(err.to_string().contains("不存在"), "意外诊断：{err}");
     cleanup(&root);
 }
 
@@ -189,7 +189,7 @@ fn pending_media_is_not_served_after_project_deletion() {
     fs::remove_dir_all(projects.join(pid)).expect("删除项目资产目录");
     let err = resolve_project_media_entry(&cap(&projects), pid, asset_id, &pending)
         .expect_err("已删项目的登记项不得复活媒体");
-    assert!(err.contains("项目不存在"), "意外诊断：{err}");
+    assert!(err.to_string().contains("项目不存在"), "意外诊断：{err}");
     cleanup(&root);
 }
 
@@ -242,7 +242,7 @@ fn alias_never_overrides_absent_disk_entry() {
     register_reissued_asset_alias(&pending, pid, "", "pa-fresh");
     let err = resolve_project_media_entry(&cap(&projects), pid, "pa-fresh", &pending)
         .expect_err("盘上无对应条目时别名不得复活媒体");
-    assert!(err.contains("不存在"), "意外诊断：{err}");
+    assert!(err.to_string().contains("不存在"), "意外诊断：{err}");
     cleanup(&root);
 }
 

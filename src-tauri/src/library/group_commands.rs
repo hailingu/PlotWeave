@@ -6,6 +6,7 @@
 use serde_json::{json, Value};
 use tauri::AppHandle;
 
+use crate::library::error::LibraryError;
 use crate::library::library_root;
 use crate::library_fs::{read_index_capped, validate_asset_id, write_index};
 use crate::library_journal::{library_file_lock, library_op_lock};
@@ -16,8 +17,9 @@ use crate::library_journal::{library_file_lock, library_op_lock};
 pub(crate) fn upsert_group_with(
     library: &cap_std::fs::Dir,
     group: &Value,
-) -> Result<Value, String> {
-    let normalized_group = crate::library_index::validate_group_for_write(group)?;
+) -> Result<Value, LibraryError> {
+    let normalized_group =
+        crate::library_index::validate_group_for_write(group).map_err(LibraryError::invalid)?;
     let gid = normalized_group["id"]
         .as_str()
         .expect("校验后 id 必在")
@@ -25,15 +27,16 @@ pub(crate) fn upsert_group_with(
     let gkind = normalized_group["kind"].as_str().expect("校验后 kind 必在");
     let recovery = crate::library_journal::recover(library)?;
     if recovery.read_only {
-        return Err("删除日志异常，库写入/删除已暂停：须人工修复 asset-delete-journal.json".into());
+        return Err(LibraryError::refused(
+            "删除日志异常，库写入/删除已暂停：须人工修复 asset-delete-journal.json",
+        ));
     }
     crate::library_fs::report_recovery_diagnostics("组写入", &recovery.warnings);
     let (mut index, mut warnings, migration_suspended) = read_index_capped(library)?;
     if migration_suspended {
-        return Err(
-            "资产索引迁移挂起（迁移结果超大小上限），写入已暂停：须人工修整 library.json 条目"
-                .into(),
-        );
+        return Err(LibraryError::refused(
+            "资产索引迁移挂起（迁移结果超大小上限），写入已暂停：须人工修整 library.json 条目",
+        ));
     }
     warnings.extend(recovery.warnings);
     // 迁移落盘已发生而命令可能因业务失败早退（改 kind 冲突/组不存在）——
@@ -53,15 +56,17 @@ pub(crate) fn upsert_group_with(
                 })
                 .unwrap_or(false);
             if conflict {
-                return Err(format!(
+                return Err(LibraryError::refused(format!(
                     "组 {gid} 改 kind 与成员资产冲突：存在 kind 不一致的成员，拒绝更新"
-                ));
+                )));
             }
         }
     }
     index["groups"]["byId"]
         .as_object_mut()
-        .ok_or("资产索引结构损坏")?
+        .ok_or_else(|| LibraryError::Corrupt {
+            detail: "资产索引结构损坏".into(),
+        })?
         .insert(gid.clone(), normalized_group.clone());
     write_index(library, &index)?;
     // 响应携带 cleanupPending（评审修复，PR #36 第二轮）：删除隔离区积压
@@ -77,19 +82,23 @@ pub(crate) fn upsert_group_with(
 
 /// 组删除内核（句柄域，§7.2）：组存在 → 同次原子写删组并剥离成员资产的
 /// groupId（不留悬空编组引用）；返回响应带净化诊断。
-pub(crate) fn delete_group_with(library: &cap_std::fs::Dir, id: &str) -> Result<Value, String> {
-    validate_asset_id(id)?;
+pub(crate) fn delete_group_with(
+    library: &cap_std::fs::Dir,
+    id: &str,
+) -> Result<Value, LibraryError> {
+    validate_asset_id(id).map_err(LibraryError::invalid)?;
     let recovery = crate::library_journal::recover(library)?;
     if recovery.read_only {
-        return Err("删除日志异常，库写入/删除已暂停：须人工修复 asset-delete-journal.json".into());
+        return Err(LibraryError::refused(
+            "删除日志异常，库写入/删除已暂停：须人工修复 asset-delete-journal.json",
+        ));
     }
     crate::library_fs::report_recovery_diagnostics("组删除", &recovery.warnings);
     let (mut index, mut warnings, migration_suspended) = read_index_capped(library)?;
     if migration_suspended {
-        return Err(
-            "资产索引迁移挂起（迁移结果超大小上限），写入已暂停：须人工修整 library.json 条目"
-                .into(),
-        );
+        return Err(LibraryError::refused(
+            "资产索引迁移挂起（迁移结果超大小上限），写入已暂停：须人工修整 library.json 条目",
+        ));
     }
     warnings.extend(recovery.warnings);
     // 迁移落盘已发生而删除可能因「组不存在」早退——归一化诊断兜底进日志
@@ -97,9 +106,11 @@ pub(crate) fn delete_group_with(library: &cap_std::fs::Dir, id: &str) -> Result<
     crate::library_fs::report_recovery_diagnostics("组删除", &warnings);
     let groups = index["groups"]["byId"]
         .as_object_mut()
-        .ok_or("资产索引结构损坏")?;
+        .ok_or_else(|| LibraryError::Corrupt {
+            detail: "资产索引结构损坏".into(),
+        })?;
     if groups.remove(id).is_none() {
-        return Err(format!("组不存在：{id}"));
+        return Err(LibraryError::missing(format!("组不存在：{id}")));
     }
     // 同次原子写剥离成员 groupId（§7.2：不留悬空编组引用）
     if let Some(assets) = index["assets"]["byId"].as_object_mut() {
@@ -121,17 +132,17 @@ pub(crate) fn delete_group_with(library: &cap_std::fs::Dir, id: &str) -> Result<
 /// 组写入命令：新建/更新编组；改 kind 与成员冲突即拒绝。
 #[tauri::command]
 pub fn upsert_library_group(app: AppHandle, group: Value) -> Result<Value, String> {
-    let library = library_root(&app)?;
+    let library = library_root(&app).map_err(|e| e.to_string())?;
     let _op = library_op_lock();
-    let _file_lock = library_file_lock(&library)?;
-    upsert_group_with(&library, &group)
+    let _file_lock = library_file_lock(&library).map_err(|e| e.to_string())?;
+    upsert_group_with(&library, &group).map_err(|e| e.to_string())
 }
 
 /// 组删除命令：原子删除组并剥离成员资产的 groupId。
 #[tauri::command]
 pub fn delete_library_group(app: AppHandle, id: String) -> Result<Value, String> {
-    let library = library_root(&app)?;
+    let library = library_root(&app).map_err(|e| e.to_string())?;
     let _op = library_op_lock();
-    let _file_lock = library_file_lock(&library)?;
-    delete_group_with(&library, &id)
+    let _file_lock = library_file_lock(&library).map_err(|e| e.to_string())?;
+    delete_group_with(&library, &id).map_err(|e| e.to_string())
 }

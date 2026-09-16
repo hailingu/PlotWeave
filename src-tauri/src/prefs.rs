@@ -18,6 +18,8 @@ use std::time::Duration;
 
 use tauri::{AppHandle, Manager};
 
+use crate::http_util::ProxyError;
+
 /// 对话请求超时（120s）：非流式补全耗时可能长于普通 API（长回复、慢
 /// 模型），但不长于图像生成（imagegen 取 300s）——落 issue #15 验收
 /// 基线"不低于 120s"，防 provider 网关不回包/慢速滴流时命令无限挂起。
@@ -151,7 +153,7 @@ async fn chat_completion(
     tools: Option<serde_json::Value>,
     key: &str,
     timeout_secs: u64,
-) -> Result<serde_json::Value, String> {
+) -> Result<serde_json::Value, ProxyError> {
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     let mut body = serde_json::json!({ "model": model, "messages": messages, "stream": false });
     if let Some(tools) = tools {
@@ -163,7 +165,10 @@ async fn chat_completion(
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(timeout_secs))
         .build()
-        .map_err(|e| format!("构造 HTTP 客户端失败：{e}"))?;
+        .map_err(|e| ProxyError::Client {
+            context: "构造 HTTP 客户端失败".into(),
+            source: e,
+        })?;
     let response = client
         .post(&url)
         .bearer_auth(key)
@@ -172,28 +177,42 @@ async fn chat_completion(
         .await
         .map_err(|e| {
             if e.is_timeout() {
-                format!("请求超时（{timeout_secs}s）：{e}")
+                ProxyError::SendTimeout {
+                    secs: timeout_secs,
+                    source: e,
+                }
             } else {
-                format!("请求失败：{e}")
+                ProxyError::Send {
+                    context: "请求失败".into(),
+                    source: e,
+                }
             }
         })?;
     let status = response.status();
-    // 展示边界转换（issue #45 首片）：限读错误在此转字符串诊断，文案
-    // 与历史 format! 输出逐字一致；chat_completion 自身的错误枚举为后续片
+    // 限读错误经 Body 透传（#45 首片类型）：文案与来源链原样保留
     let text = crate::http_util::read_text_capped(response, CHAT_RESPONSE_BODY_MAX_BYTES)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(ProxyError::Body)?;
     if !status.is_success() {
         let head: String = text.chars().take(200).collect();
-        return Err(format!("服务返回 {status}：{head}"));
+        return Err(ProxyError::Status {
+            context: "服务返回".into(),
+            code: status,
+            head,
+        });
     }
     let parsed: serde_json::Value =
-        serde_json::from_str(&text).map_err(|e| format!("响应不是有效 JSON：{e}"))?;
+        serde_json::from_str(&text).map_err(|e| ProxyError::InvalidJson {
+            context: "响应不是有效 JSON".into(),
+            source: e,
+        })?;
     parsed
         .pointer("/choices/0/message")
         .cloned()
         .filter(|m| m.is_object())
-        .ok_or_else(|| "服务未返回回复内容".to_string())
+        .ok_or(ProxyError::InvalidResponse {
+            detail: "服务未返回回复内容".into(),
+        })
 }
 
 /// LLM 对话代理（§6/数据模型 §12.2）：key 的密文存 settings.json，
@@ -223,6 +242,7 @@ pub async fn llm_chat(
         CHAT_REQUEST_TIMEOUT_SECS,
     )
     .await
+    .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -369,9 +389,10 @@ mod tests {
             30,
         ));
         let err = result.expect_err("超限响应应被拒绝");
-        assert!(err.contains("响应体超过"), "实际错误：{err}");
+        assert!(err.to_string().contains("响应体超过"), "实际错误：{err}");
         assert!(
-            err.contains(&CHAT_RESPONSE_BODY_MAX_BYTES.to_string()),
+            err.to_string()
+                .contains(&CHAT_RESPONSE_BODY_MAX_BYTES.to_string()),
             "实际错误：{err}"
         );
     }
@@ -397,7 +418,18 @@ mod tests {
             1,
         ));
         let err = result.expect_err("挂起的响应体应超时");
-        assert!(err.contains("读取响应超时"), "实际错误：{err}");
+        // 限读超时经 Body 透传（#45 首片类型），类别与文案均可区分
+        assert!(
+            matches!(
+                err,
+                ProxyError::Body(crate::http_util::ReadBodyError::ReadTimeout(_))
+            ),
+            "实际错误：{err:?}"
+        );
+        assert!(
+            err.to_string().starts_with("读取响应超时"),
+            "实际错误：{err}"
+        );
     }
 
     #[test]
@@ -416,6 +448,11 @@ mod tests {
             1,
         ));
         let err = result.expect_err("不回包应超时");
-        assert!(err.contains("请求超时"), "实际错误：{err}");
+        // 发送阶段超时为独立类别（issue #144 代理分片）
+        assert!(
+            matches!(err, ProxyError::SendTimeout { .. }),
+            "实际错误：{err:?}"
+        );
+        assert!(err.to_string().starts_with("请求超时"), "实际错误：{err}");
     }
 }

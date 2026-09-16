@@ -20,6 +20,7 @@ use crate::store::{
 };
 
 use super::ensure_project_control;
+use super::error::AssetsError;
 
 /// 项目资产 id 的持久化契约（与保存边界 `validate_save_assets` 同域，
 /// 评审修复）：非空白不透明字符串——`bad]`/Unicode/超长 id 是合法持久化
@@ -151,10 +152,13 @@ fn checked_media_fields(
     asset_id: &str,
     rel: Option<&str>,
     mime: Option<&str>,
-) -> Result<(String, String), String> {
-    let rel = rel.ok_or_else(|| format!("资产 {asset_id} 的 relPath 缺失"))?;
+) -> Result<(String, String), AssetsError> {
+    let rel =
+        rel.ok_or_else(|| AssetsError::invalid(format!("资产 {asset_id} 的 relPath 缺失")))?;
     if !is_valid_active_asset_rel_path(rel) {
-        return Err(format!("资产 {asset_id} 的 relPath 非法：{rel}"));
+        return Err(AssetsError::invalid(format!(
+            "资产 {asset_id} 的 relPath 非法：{rel}"
+        )));
     }
     let mime = mime
         .filter(|m| is_canonical_mime(m))
@@ -174,14 +178,14 @@ pub(crate) fn resolve_project_media_entry(
     project_id: &str,
     asset_id: &str,
     pending: &PendingProjectAssets,
-) -> Result<(String, String), String> {
-    validate_id(project_id)?;
-    validate_project_asset_id(asset_id)?;
+) -> Result<(String, String), AssetsError> {
+    validate_id(project_id).map_err(AssetsError::invalid)?;
+    validate_project_asset_id(asset_id).map_err(AssetsError::invalid)?;
     if let Err(err) = ensure_project_control(projects, project_id) {
         pending.drain_project(project_id);
         return Err(err);
     }
-    let doc = load_project_file(projects, project_id)?;
+    let doc = load_project_file(projects, project_id).map_err(AssetsError::Store)?;
     if let Some(entry) = doc.assets.get("byId").and_then(|by_id| by_id.get(asset_id)) {
         let resolved = checked_media_fields(
             asset_id,
@@ -212,7 +216,7 @@ pub(crate) fn resolve_project_media_entry(
             );
         }
     }
-    Err(format!("资产不存在：{asset_id}"))
+    Err(AssetsError::missing(format!("资产不存在：{asset_id}")))
 }
 
 /// 项目媒体句柄打开（pwmedia 项目 scope，issue #31）：[`resolve_project_media_entry`]
@@ -225,9 +229,9 @@ pub(crate) fn open_project_media_with(
     project_id: &str,
     asset_id: &str,
     pending: &PendingProjectAssets,
-) -> Result<(String, cap_std::fs::File), String> {
+) -> Result<(String, cap_std::fs::File), AssetsError> {
     let (rel, mime) = resolve_project_media_entry(projects, project_id, asset_id, pending)?;
-    let file = verify_asset_real_path(projects, project_id, &rel)?;
+    let file = verify_asset_real_path(projects, project_id, &rel).map_err(AssetsError::Store)?;
     Ok((mime, file))
 }
 
