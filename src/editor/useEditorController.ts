@@ -114,6 +114,8 @@ export function useEditorController(
     onCloseTransient: panels.closeTransient,
     onUndo: history.undo,
     onRedo: history.onRedo,
+    // 设定文档弹窗打开 = 模态编辑会话：全局撤销/重做挂起（issue #126）
+    modalEditingOpen: panels.editingDocId !== null,
     selectedNodeIds: view.selectedNodeIds,
     selectedEdgeIds: view.selectedEdgeIds,
     onDeleteNodes: graph.deleteNodesByIds,

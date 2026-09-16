@@ -1,8 +1,11 @@
 /**
- * 编辑器全局快捷键与失焦收起（docs/ui-design.md §4.3）。
+ * 编辑器全局快捷键与失焦收起（docs/ui-design.md §4.3/§5）。
  * document 级监听：⌘Z/⌘⇧Z/⌘Y 撤销重做、Delete/Backspace 删除选中
  * （节点优先于连线）、Escape 收起全部浮层；输入态（光标在输入控件内）
- * 时除 Escape 外全部放行；画布外 pointerdown 收起设置面板/＋菜单/右键菜单。
+ * 时除 Escape 外全部放行（输入框保持原生文本撤销）；模态文本编辑会话
+ * （设定文档弹窗，issue #126）打开时同样仅放行 Escape——非输入焦点的
+ * 全局撤销/重做/删除挂起，命令栈不在弹窗底下被改写；画布外 pointerdown
+ * 收起设置面板/＋菜单/右键菜单。
  */
 import { useEffect, useRef } from 'react'
 
@@ -14,6 +17,9 @@ export interface EditorHotkeyActions {
   onCloseTransient: () => void
   onUndo: () => void
   onRedo: () => void
+  /** 模态文本编辑会话（设定文档弹窗）打开：非输入焦点的撤销/重做/删除
+   * 挂起，仅 Escape 放行（issue #126；随渲染更新）。 */
+  modalEditingOpen: boolean
   /** 当前选中节点/连线 id 列表（Delete 的删除对象，节点优先）。 */
   selectedNodeIds: () => string[]
   selectedEdgeIds: () => string[]
@@ -47,6 +53,8 @@ export function useEditorHotkeys(actions: EditorHotkeyActions): void {
         return
       }
       if (typing) return
+      // 模态文本编辑会话打开：非输入焦点的全局快捷键挂起（issue #126）
+      if (ref.current.modalEditingOpen) return
       const mod = e.metaKey || e.ctrlKey
       if (mod && e.key.toLowerCase() === 'z') {
         e.preventDefault()

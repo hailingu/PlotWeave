@@ -57,4 +57,13 @@ describe('useEditorPanels（§3.4/§4.3）', () => {
     act(() => result.current.closeAllTransient())
     expect(result.current.exportOpen).toBe(false)
   })
+
+  it('openDocument/closeDocument：设定文档编辑弹窗状态（issue #126 状态提升）', () => {
+    const { result } = renderHook(() => useEditorPanels())
+    expect(result.current.editingDocId).toBeNull()
+    act(() => result.current.openDocument('doc-1'))
+    expect(result.current.editingDocId).toBe('doc-1')
+    act(() => result.current.closeDocument())
+    expect(result.current.editingDocId).toBeNull()
+  })
 })

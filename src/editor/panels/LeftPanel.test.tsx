@@ -89,6 +89,7 @@ function setup(over: Partial<Parameters<typeof LeftPanel>[0]> = {}) {
       }}
       episodeTitles={{ 1: '开局' }}
       focusedEpisode={null}
+      docDialog={{ editingDocId: null, open: vi.fn(), close: vi.fn() }}
       {...spies}
       {...over}
     />,
