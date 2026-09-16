@@ -13,6 +13,7 @@ import type { EditorDocument, EditorProjectContent } from './useEditorDocument'
 import type { EditorGraphActions } from './useEditorGraphActions'
 import type { EditorPanels } from './useEditorPanels'
 import type { EditorPersistence } from './useEditorPersistence'
+import type { AiCommitIdentity } from './ai/commitIdentity'
 import type { AiSession } from './ai/session'
 
 /** 命令栈 hook 的返回值（撤销/重做可用态与入口）。 */
@@ -29,6 +30,11 @@ export interface EditorLayoutProps {
   /** 画布容器：新节点落点中心换算与拖放命中读它。 */
   readonly canvasRef: RefObject<HTMLDivElement>
   readonly doc: EditorDocument
+  /** AI 执行卡的提交身份（§12.2 / issue #139）：装配层把 doc.aiRevision 与
+   * persistence.whenCanvasCommitted 捆成单一嵌套对象——批次计数必带、画布
+   * 确认等待器可选，类型层禁止「有等待器无计数」的误配（缺身份的未确认卡
+   * 落盘后无法与画布对账，重开可能重复应用）。 */
+  readonly commitIdentity: AiCommitIdentity
   readonly panels: EditorPanels
   readonly persistence: EditorPersistence
   readonly history: CommandHistory

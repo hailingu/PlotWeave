@@ -7,6 +7,7 @@
  * 画布写动作 useEditorGraphActions、AI 桥 useAiBridge 等），布局见
  * EditorLayout 及其区域子组件。
  */
+import { useMemo } from 'react'
 import { ReactFlowProvider, useReactFlow } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { ImageGenProvider } from './imagegen/ImageGenProvider'
@@ -15,6 +16,7 @@ import { EditorLayout } from './EditorLayout'
 import { useEditorController } from './useEditorController'
 import type { EditorProjectContent } from './useEditorDocument'
 import type { ProjectContent } from '../model/content'
+import type { AiCommitIdentity } from './ai/commitIdentity'
 import type { AiSession } from './ai/session'
 
 interface EditorViewProps {
@@ -87,6 +89,18 @@ function EditorWindow({
     nodeEditApi,
     imageGen,
   } = useEditorController({ project, onSave, screenToFlowPosition, fitView })
+  // AI 执行卡的提交身份捆绑（issue #139）：把 doc.aiRevision 与
+  // persistence.whenCanvasCommitted 收成单一嵌套对象下传——类型层保证
+  // 等画布落盘的执行卡必带批次计数（缺身份的未确认卡落盘后无法与画布
+  // 对账，重开可能重复应用已落盘批次）。useMemo 稳定引用：位置帧重渲染
+  // 不得击穿 AiThread 的 memo 边界（issue #157）。
+  const commitIdentity = useMemo<AiCommitIdentity>(
+    () => ({
+      aiRevision: doc.aiRevision,
+      whenCanvasCommitted: persistence.whenCanvasCommitted,
+    }),
+    [doc.aiRevision, persistence.whenCanvasCommitted],
+  )
   return (
     <NodeEditContext.Provider value={nodeEditApi}>
       <ImageGenProvider {...imageGen}>
@@ -97,6 +111,7 @@ function EditorWindow({
           onOpenSettings={onOpenSettings}
           canvasRef={canvasRef}
           doc={doc}
+          commitIdentity={commitIdentity}
           panels={panels}
           persistence={persistence}
           history={history}

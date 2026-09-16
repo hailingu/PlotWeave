@@ -9,6 +9,7 @@ import {
 import { type ProjectSettings } from '../settings'
 import { resolveCharacterName, resolveLocationName } from '../settings'
 import { AiThread, AiSettingsButton } from './AiThread'
+import type { AiCommitIdentity } from '../ai/commitIdentity'
 import type { CanvasNode } from '../nodes/types'
 import type { AiSession } from '../ai/session'
 
@@ -137,14 +138,13 @@ type RightAiPaneProps = Pick<
   | 'projectId'
   | 'onOpenSettings'
   | 'canvasDigest'
-  | 'aiRevision'
+  | 'commitIdentity'
   | 'onValidateAi'
   | 'onValidateCommands'
   | 'onReadNode'
   | 'onReadSettings'
   | 'onReadDocument'
   | 'onApplyAiBatch'
-  | 'whenCanvasCommitted'
   | 'aiSession'
   | 'aiSessionError'
   | 'aiSessionRetryable'
@@ -162,14 +162,13 @@ function RightAiPane(props: RightAiPaneProps) {
       projectId={props.projectId}
       onOpenSettings={props.onOpenSettings}
       canvasDigest={props.canvasDigest}
-      aiRevision={props.aiRevision}
+      commitIdentity={props.commitIdentity}
       onValidateAi={props.onValidateAi}
       onValidateCommands={props.onValidateCommands}
       onReadNode={props.onReadNode}
       onReadSettings={props.onReadSettings}
       onReadDocument={props.onReadDocument}
       onApplyAiBatch={props.onApplyAiBatch}
-      whenCanvasCommitted={props.whenCanvasCommitted}
       initialSession={props.aiSession}
       initialSessionError={props.aiSessionError}
       initialSessionRetryable={props.aiSessionRetryable}
@@ -241,8 +240,9 @@ interface RightPanelProps {
   readonly onOpenSettings?: () => void
   /** 画布上下文快照（§6「了解当前画布」）：附到 system prompt，并作为读工具返回。 */
   readonly canvasDigest?: string
-  /** 画布批次计数（§12.2 提交身份）：执行后 +1 记录到卡片，恢复时对账。 */
-  readonly aiRevision?: number
+  /** AI 执行卡的提交身份（§12.2 / issue #139）：批次计数必带、画布确认
+   * 等待器可选（嵌套形状禁止「有等待器无计数」的误配）；省略 = 隔离装配。 */
+  readonly commitIdentity?: AiCommitIdentity
   /** 校验助手回复中的命令批次（§6/数据模型 §12）；纯讨论回复返回 null。 */
   readonly onValidateAi?: (text: string) => BatchValidation | null
   /** 校验工具调用映射出的命令数组（tool-calling 通道）。 */
@@ -257,8 +257,6 @@ interface RightPanelProps {
   readonly onReadDocument?: (documentId: string) => string | null
   /** 执行已确认的批次：整批为一条复合命令入栈，返回错误文案或 null。 */
   readonly onApplyAiBatch?: (commands: ValidatedCommand[]) => string | null
-  /** 承载批次的画布文档确认落盘后兑现；执行卡据此推迟 executed 落盘。 */
-  readonly whenCanvasCommitted?: () => Promise<void>
   /** 当前项目恢复的 AI 会话与其独立保存通道。 */
   readonly aiSession?: AiSession
   readonly aiSessionError?: string | null
