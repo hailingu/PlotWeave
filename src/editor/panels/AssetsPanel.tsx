@@ -2,6 +2,7 @@ import {
   useEffect,
   useRef,
   useState,
+  useSyncExternalStore,
   type ChangeEvent as ReactChangeEvent,
 } from 'react'
 import {
@@ -11,10 +12,13 @@ import {
   type LibraryKind,
 } from '../../library/libraryStore'
 import {
-  joinedRenameErrors,
-  recordRenameError,
-  resolveRenameError,
-} from './assetsRenameErrors'
+  beginRename,
+  completeRename,
+  failRename,
+  forgetRename,
+  renameErrorsSnapshot,
+  subscribeRenameErrors,
+} from './assetsRenameState'
 import { PW_LIBRARY_ASSET_MIME } from '../dragDrop'
 import { EditableName } from '../nodes/settings/NodeSettingsPanel'
 import { ConfirmDeleteDialog } from '../../home/Dialogs'
@@ -382,60 +386,38 @@ function useAssetTagsCommit(
 function useAssetRename(
   setAssets: (fn: (list: LibraryAsset[]) => LibraryAsset[]) => void,
 ) {
-  /** 每资产最近发起的重命名代际序号。 */
-  const renameSeq = useRef(new Map<string, number>())
-  /** 每资产未决改名链条锚定的已落盘基线。 */
-  const renameBaseline = useRef(new Map<string, string>())
-  const [renameError, setRenameError] = useState(joinedRenameErrors)
+  const renameError = useSyncExternalStore(
+    subscribeRenameErrors,
+    renameErrorsSnapshot,
+  )
 
   const rename = (asset: LibraryAsset, name: string) => {
-    const seq = (renameSeq.current.get(asset.id) ?? 0) + 1
-    renameSeq.current.set(asset.id, seq)
-    if (!renameBaseline.current.has(asset.id)) {
-      renameBaseline.current.set(
-        asset.id,
-        libraryStore.persistedSnapshot(asset.id)?.name ?? asset.name,
-      )
-    }
+    // 代际/基线/错误统一由跨挂载所有者持有（PR #180 评审修复）：无挂载
+    // 或新旧实例交替期间落定的响应，仍能被当前挂载实例看见并正确处置
+    const seq = beginRename(
+      asset.id,
+      libraryStore.persistedSnapshot(asset.id)?.name ?? asset.name,
+    )
     setAssets((list) =>
       list.map((a) => (a.id === asset.id ? { ...a, name } : a)),
     )
     libraryStore
       .updateMeta(asset.id, { name })
-      .then(() => {
-        renameBaseline.current.set(asset.id, name)
-        dismissRenameError(asset.id)
-      })
+      .then(() => completeRename(asset.id, name))
       .catch((err) => {
-        if (renameSeq.current.get(asset.id) !== seq) return
-        // 跨挂载真值优先：重挂载期间旧实例排队写入可能已把快照推进到
-        // 新于本地锚点的值（PR #180 评审修复）
-        const baseline =
-          libraryStore.persistedSnapshot(asset.id)?.name ??
-          renameBaseline.current.get(asset.id)
-        renameBaseline.current.delete(asset.id)
-        recordRenameError(asset.id, err)
-        setRenameError(joinedRenameErrors())
+        // 回滚基线快照优先（门面随成功跨挂载推进），锚点兜底；被取代
+        // 的迟到失败（新意图或删除终结）静默
+        const baseline = failRename(
+          asset.id,
+          seq,
+          err,
+          libraryStore.persistedSnapshot(asset.id)?.name,
+        )
+        if (baseline === undefined) return
         setAssets((list) =>
-          list.map((a) =>
-            a.id === asset.id && baseline !== undefined
-              ? { ...a, name: baseline }
-              : a,
-          ),
+          list.map((a) => (a.id === asset.id ? { ...a, name: baseline } : a)),
         )
       })
-  }
-  /** 确认删除时终结该资产的重命名状态（PR #180 评审修复）：代际 +1
-   * 失效在途响应（迟到的失败不写错误、不回滚），清除锚定基线并解除
-   * 对应错误——已删资产的失败不得残留或复活。 */
-  const dismissRenameError = (id: string) => {
-    if (!resolveRenameError(id)) return
-    setRenameError(joinedRenameErrors())
-  }
-  const forgetRename = (id: string) => {
-    renameSeq.current.set(id, (renameSeq.current.get(id) ?? 0) + 1)
-    renameBaseline.current.delete(id)
-    dismissRenameError(id)
   }
   return { rename, renameError, forgetRename }
 }
