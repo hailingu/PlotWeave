@@ -4,6 +4,7 @@ import {
   type EdgeKind,
   type EndpointPair,
   hasAttachHost,
+  isDuplicateEdge,
   removedOptionHandles,
   SCENE_SHOT_HANDLE,
   wouldCreateCycle,
@@ -497,13 +498,14 @@ function foldConnectEdge(
   const placementIssue = connectPlacementIssue(st, kind, src, dst, pairLabel)
   if (placementIssue) return st.fail(index, placementIssue)
   const handle = port.handle
+  // 重复连线判定复用共享谓词（issue #153）——与交互侧 useConnectionRules
+  // 及加载归一化同口径；各自诊断/修复策略（此处拒绝本批命令）保留
   if (
-    st.virtualEdges.some(
-      (e) =>
-        e.source === src &&
-        e.target === dst &&
-        (e.sourceHandle ?? null) === handle,
-    )
+    isDuplicateEdge(st.virtualEdges, {
+      source: src,
+      target: dst,
+      sourceHandle: handle,
+    })
   ) {
     return st.fail(index, `重复连线：${pairLabel}`)
   }
