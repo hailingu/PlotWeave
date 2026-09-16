@@ -40,8 +40,8 @@ function branchNode(id: string): BranchFlowNode {
 }
 
 describe('nodeLabelOf（节点人读标签）', () => {
-  it('五类节点各有标签格式', () => {
-    expect(nodeLabelOf(sceneNode('s1', 3))).toBe('场3·场3')
+  it('五类节点各有标签格式（场号/镜号补零，与图摘要同口径，issue #156）', () => {
+    expect(nodeLabelOf(sceneNode('s1', 3))).toBe('场03·场3')
     expect(nodeLabelOf(branchNode('b1'))).toBe('分支·去哪？')
     expect(
       nodeLabelOf({
@@ -66,7 +66,19 @@ describe('nodeLabelOf（节点人读标签）', () => {
         position: { x: 0, y: 0 },
         data: { shotNo: 2, size: '特写', picture: '', prompt: '', refs: [] },
       }),
-    ).toBe('SHOT2·特写')
+    ).toBe('SHOT02·特写')
+  })
+
+  it('两位以上编号保持完整（补零不截断，issue #156 验收）', () => {
+    expect(nodeLabelOf(sceneNode('s9', 100))).toBe('场100·场100')
+    expect(
+      nodeLabelOf({
+        id: 'sh9',
+        type: 'shot',
+        position: { x: 0, y: 0 },
+        data: { shotNo: 123, size: '全景', picture: '', prompt: '', refs: [] },
+      }),
+    ).toBe('SHOT123·全景')
   })
 })
 

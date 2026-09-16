@@ -27,6 +27,18 @@ function cut(s: string, max = CUT): string {
 
 const pad2 = (n: number) => String(n).padStart(2, '0')
 
+/** 场景/分镜的人读标签（issue #156）：AI 工作流内同一节点在图摘要与
+ * 预览/执行回执中呈现同一格式——编号补零，两位以上保持完整（padStart
+ * 不截断）；useAiBridge.nodeLabelOf 与本模块三处标签共用，不做第二实现。 */
+export function sceneLabel(sceneNo: number, name: string): string {
+  return `场${pad2(sceneNo)}·${name}`
+}
+
+/** 分镜标签（issue #156，同 sceneLabel 口径）。 */
+export function shotLabel(shotNo: number, size: string): string {
+  return `SHOT${pad2(shotNo)}·${size}`
+}
+
 /** 集 N 前缀（§3.5 分集）：有 episodeNo 的编剧侧节点才标注。 */
 function epTag(data: { episodeNo?: unknown }): string {
   return typeof data.episodeNo === 'number' ? `集${data.episodeNo} ` : ''
@@ -48,7 +60,7 @@ function nodeLine(n: CanvasNode, r: DigestResolvers): string {
           ? `角色:${n.data.characterIds.map((id) => r.characterName(id) ?? '（已删除）').join('/')}`
           : null,
       ].filter((x): x is string => x !== null && x !== '')
-      return `- ${n.id} ${epTag(n.data)}场${pad2(n.data.sceneNo)}·${n.data.name}（${parts.join(' · ')}）`
+      return `- ${n.id} ${epTag(n.data)}${sceneLabel(n.data.sceneNo, n.data.name)}（${parts.join(' · ')}）`
     }
     case 'beat':
       return `- ${n.id} ${epTag(n.data)}节拍·${n.data.name}（${n.data.tone}）`
@@ -65,7 +77,7 @@ function nodeLine(n: CanvasNode, r: DigestResolvers): string {
     case 'branch':
       return `- ${n.id} ${epTag(n.data)}分支·${cut(n.data.prompt)}（选项:${n.data.options.map((o) => cut(o.label, 16)).join('/')}）`
     case 'shot':
-      return `- ${n.id} SHOT${pad2(n.data.shotNo)}·${n.data.size}（画面:${cut(n.data.picture, 24)} · Prompt:${cut(n.data.prompt, 24)}）`
+      return `- ${n.id} ${shotLabel(n.data.shotNo, n.data.size)}（画面:${cut(n.data.picture, 24)} · Prompt:${cut(n.data.prompt, 24)}）`
     case 'image':
       return `- ${n.id} 图片·${cut(n.data.prompt, 24)}（${n.data.size}）`
   }
@@ -80,7 +92,7 @@ function nodeLine(n: CanvasNode, r: DigestResolvers): string {
 function spineNodeLabel(n: CanvasNode): string {
   switch (n.type) {
     case 'scene':
-      return `场${pad2(n.data.sceneNo)}·${n.data.name}`
+      return sceneLabel(n.data.sceneNo, n.data.name)
     case 'dialogue':
       return `对白·${n.data.name}`
     case 'beat':
@@ -90,7 +102,7 @@ function spineNodeLabel(n: CanvasNode): string {
     case 'image':
       return `图片·${cut(n.data.prompt, 24)}`
     case 'shot':
-      return `SHOT${pad2(n.data.shotNo)}·${n.data.size}`
+      return shotLabel(n.data.shotNo, n.data.size)
   }
 }
 
@@ -136,12 +148,12 @@ export function buildGraphDigest(
     const dst = nodes.find((n) => n.id === e.target)
     const endLabel = (n?: CanvasNode): string => {
       if (!n) return '?'
-      if (n.type === 'scene') return `场${pad2(n.data.sceneNo)}·${n.data.name}`
+      if (n.type === 'scene') return sceneLabel(n.data.sceneNo, n.data.name)
       if (n.type === 'dialogue') return `对白·${n.data.name}`
       if (n.type === 'beat') return `节拍·${n.data.name}`
       if (n.type === 'branch') return `分支·${cut(n.data.prompt, 24)}`
       if (n.type === 'image') return `图片·${cut(n.data.prompt, 24)}`
-      return `SHOT${pad2(n.data.shotNo)}·${n.data.size}`
+      return shotLabel(n.data.shotNo, n.data.size)
     }
     if (kind === 'branch') {
       // 端口绑稳定选项 id：按 id 回源解析选项文案，不给模型看下标
