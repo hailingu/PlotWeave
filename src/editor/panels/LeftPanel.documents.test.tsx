@@ -80,7 +80,8 @@ function mkSpies(): PanelSpies {
 }
 
 /** 测试宿主（issue #126）：弹窗状态提升后由父层持有 editingDocId，
- * 在 rerender（settings 可替换）间保持弹窗挂载状态。 */
+ * 在 rerender（settings 可替换）间保持弹窗挂载状态；探针暴露当前 id，
+ * 供断言「文档消失后挂载 id 被清空」（PR #185 评审）。 */
 function DocPanelHost({
   settings,
   spies,
@@ -90,21 +91,24 @@ function DocPanelHost({
 }) {
   const [editingDocId, setEditingDocId] = useState<string | null>(null)
   return (
-    <LeftPanel
-      open
-      width={280}
-      nodes={nodes}
-      edges={[]}
-      settings={settings}
-      episodeTitles={{}}
-      focusedEpisode={null}
-      docDialog={{
-        editingDocId,
-        open: setEditingDocId,
-        close: () => setEditingDocId(null),
-      }}
-      {...spies}
-    />
+    <>
+      <div data-testid="doc-dialog-id">{editingDocId ?? 'null'}</div>
+      <LeftPanel
+        open
+        width={280}
+        nodes={nodes}
+        edges={[]}
+        settings={settings}
+        episodeTitles={{}}
+        focusedEpisode={null}
+        docDialog={{
+          editingDocId,
+          open: setEditingDocId,
+          close: () => setEditingDocId(null),
+        }}
+        {...spies}
+      />
+    </>
   )
 }
 
@@ -291,6 +295,16 @@ describe('文档弹窗与底层文档协调（issue #126）', () => {
     fireEvent.click(screen.getByRole('button', { name: '打开文档 术语表' }))
     rerender({ ...SETTINGS, documents: [DOC_A] })
     expect(screen.queryByRole('dialog', { name: '编辑设定文档' })).toBeNull()
+    expect(spies.settingsActions.updateDocument).not.toHaveBeenCalled()
+  })
+
+  it('底层文档被删除后挂载 id 被清空：模态会话结束，全局快捷键可恢复（PR #185 评审）', () => {
+    const { spies, rerender } = setup()
+    toSettingsTab()
+    fireEvent.click(screen.getByRole('button', { name: '打开文档 术语表' }))
+    expect(screen.getByTestId('doc-dialog-id').textContent).toBe('doc-2')
+    rerender({ ...SETTINGS, documents: [DOC_A] })
+    expect(screen.getByTestId('doc-dialog-id').textContent).toBe('null')
     expect(spies.settingsActions.updateDocument).not.toHaveBeenCalled()
   })
 })

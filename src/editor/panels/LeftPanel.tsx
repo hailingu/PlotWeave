@@ -347,26 +347,31 @@ function OutlinePane({
   )
 }
 
-/** 文档编辑器弹窗（LeftPanel 拆分，issue #99）：以打开时的文档快照为编辑
- * 基线，保存一次派发；doc 为 null 时不渲染。 */
+/** 文档编辑器弹窗（LeftPanel 拆分，issue #99）：按挂载 id 解析当前文档并
+ * 渲染弹窗，保存一次派发；doc 为 null 时不渲染。解析失败（底层文档被
+ * 删除/撤销）即清空挂载 id——模态会话随卸载同步结束，全局快捷键不因
+ * 残留 id 持续挂起（issue #126，PR #185 评审）。 */
 function DocumentEditDialog({
-  doc,
   settings,
+  docDialog,
   onSave,
-  onClose,
 }: {
-  readonly doc: NonNullable<ProjectSettings['documents']>[number] | null
   readonly settings: ProjectSettings
+  readonly docDialog: LeftPanelProps['docDialog']
   readonly onSave: SettingsActions['updateDocument']
-  readonly onClose: () => void
 }) {
+  const doc =
+    settings.documents?.find((d) => d.id === docDialog.editingDocId) ?? null
+  useEffect(() => {
+    if (docDialog.editingDocId !== null && doc === null) docDialog.close()
+  }, [docDialog, doc])
   if (doc === null) return null
   return (
     <DocumentEditorDialog
       doc={doc}
       settings={settings}
       onSave={onSave}
-      onClose={onClose}
+      onClose={docDialog.close}
     />
   )
 }
@@ -395,9 +400,6 @@ export default function LeftPanel({
   )
   const outlineRef = useRef<HTMLElement>(null)
   const dnd = useOutlineDnD(onOutlineDrop)
-  // 弹窗以 id 解析当前文档：底层文档被删除时解析失败即卸载关闭（#126）
-  const editingDoc =
-    settings.documents?.find((d) => d.id === docDialog.editingDocId) ?? null
   useOutlineScrollFollow(tab, selectedId, outlineRef)
 
   return (
@@ -440,12 +442,11 @@ export default function LeftPanel({
         </div>
       </div>
       {/* 文档编辑器弹窗（issue 56）：挂载状态在面板域（issue #126），
-          保存一次派发；草稿协调见 DocumentEditorDialog */}
+          保存一次派发；草稿协调与 id 清理见 DocumentEditDialog */}
       <DocumentEditDialog
-        doc={editingDoc}
         settings={settings}
+        docDialog={docDialog}
         onSave={settingsActions.updateDocument}
-        onClose={docDialog.close}
       />
       {open && (
         <PanelResizer direction={1} startWidth={width} onResize={onResize} />
