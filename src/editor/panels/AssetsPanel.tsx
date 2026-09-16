@@ -10,6 +10,11 @@ import {
   type LibraryAsset,
   type LibraryKind,
 } from '../../library/libraryStore'
+import {
+  joinedRenameErrors,
+  recordRenameError,
+  resolveRenameError,
+} from './assetsRenameErrors'
 import { PW_LIBRARY_ASSET_MIME } from '../dragDrop'
 import { EditableName } from '../nodes/settings/NodeSettingsPanel'
 import { ConfirmDeleteDialog } from '../../home/Dialogs'
@@ -381,8 +386,7 @@ function useAssetRename(
   const renameSeq = useRef(new Map<string, number>())
   /** 每资产未决改名链条锚定的已落盘基线。 */
   const renameBaseline = useRef(new Map<string, string>())
-  const renameErrors = useRef(new Map<string, string>())
-  const [renameError, setRenameError] = useState<string | null>(null)
+  const [renameError, setRenameError] = useState(joinedRenameErrors)
 
   const rename = (asset: LibraryAsset, name: string) => {
     const seq = (renameSeq.current.get(asset.id) ?? 0) + 1
@@ -400,7 +404,7 @@ function useAssetRename(
       .updateMeta(asset.id, { name })
       .then(() => {
         renameBaseline.current.set(asset.id, name)
-        resolveRenameError(asset.id)
+        dismissRenameError(asset.id)
       })
       .catch((err) => {
         if (renameSeq.current.get(asset.id) !== seq) return
@@ -410,8 +414,8 @@ function useAssetRename(
           libraryStore.persistedSnapshot(asset.id)?.name ??
           renameBaseline.current.get(asset.id)
         renameBaseline.current.delete(asset.id)
-        renameErrors.current.set(asset.id, String(err))
-        setRenameError(joinAssetErrors(renameErrors.current))
+        recordRenameError(asset.id, err)
+        setRenameError(joinedRenameErrors())
         setAssets((list) =>
           list.map((a) =>
             a.id === asset.id && baseline !== undefined
@@ -424,14 +428,14 @@ function useAssetRename(
   /** 确认删除时终结该资产的重命名状态（PR #180 评审修复）：代际 +1
    * 失效在途响应（迟到的失败不写错误、不回滚），清除锚定基线并解除
    * 对应错误——已删资产的失败不得残留或复活。 */
-  const resolveRenameError = (id: string) => {
-    if (!renameErrors.current.delete(id)) return
-    setRenameError(joinAssetErrors(renameErrors.current) || null)
+  const dismissRenameError = (id: string) => {
+    if (!resolveRenameError(id)) return
+    setRenameError(joinedRenameErrors())
   }
   const forgetRename = (id: string) => {
     renameSeq.current.set(id, (renameSeq.current.get(id) ?? 0) + 1)
     renameBaseline.current.delete(id)
-    resolveRenameError(id)
+    dismissRenameError(id)
   }
   return { rename, renameError, forgetRename }
 }
