@@ -80,6 +80,18 @@ function toOverlaysProps(props: EditorLayoutProps): EditorOverlaysProps {
   }
 }
 
+/** LeftPanel 的文档弹窗域（issue #126 状态提升）：面板域持有挂载开关与
+ * 开关动作，快捷键层据此挂起全局撤销/重做（组件外挑选保持行数上限）。 */
+function toDocDialogProps(panels: EditorLayoutProps['panels']) {
+  return {
+    docDialog: {
+      editingDocId: panels.editingDocId,
+      open: panels.openDocument,
+      close: panels.closeDocument,
+    },
+  }
+}
+
 /** 编辑器整体布局：顶部工具栏（§3.3）+ 三栏主体（§3.4）+ 浮层。 */
 export default function EditorLayout(props: EditorLayoutProps) {
   const { project, doc, panels, persistence, history, view, graph, ai } = props
@@ -110,6 +122,7 @@ export default function EditorLayout(props: EditorLayoutProps) {
       />
       <div className="editor-body">
         <LeftPanel
+          {...toDocDialogProps(panels)}
           open={panels.leftOpen}
           width={panels.leftWidth}
           onResize={panels.setLeftWidth}

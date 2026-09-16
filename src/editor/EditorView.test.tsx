@@ -262,3 +262,47 @@ describe('画布工具栏自动排布（issue #94 装配）', () => {
     expect(transformsOf()).toEqual(before)
   })
 })
+
+describe('设定文档弹窗与全局撤销协调（issue #126 装配）', () => {
+  const DOC_PROJECT: EditorProjectContent = {
+    id: 'p-doc',
+    name: '文档撤销',
+    nodes: [sceneNode],
+    edges: [],
+    settings: {
+      characters: [],
+      locations: [],
+      documents: [
+        { id: 'doc-1', title: '人物小传', body: '陈默。', relatedIds: [] },
+      ],
+    },
+  }
+
+  it('弹窗打开时非输入焦点 ⌘Z 挂起不触达命令栈；关闭后撤销恢复', () => {
+    render(
+      <EditorView
+        project={DOC_PROJECT}
+        onBackHome={vi.fn()}
+        onRenameProject={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    )
+    // 先入栈一条创建命令，使撤销可用（初始栈空）
+    fireEvent.click(screen.getByLabelText('新增节点'))
+    fireEvent.click(screen.getByRole('menuitem', { name: '场景' }))
+    expect(undoButton().disabled).toBe(false)
+
+    // 打开文档编辑弹窗：非输入焦点 ⌘Z 应被模态会话挂起
+    fireEvent.click(screen.getByRole('button', { name: '设定集' }))
+    fireEvent.click(screen.getByRole('button', { name: '打开文档 人物小传' }))
+    const dialog = screen.getByRole('dialog', { name: '编辑设定文档' })
+    fireEvent.keyDown(document.body, { key: 'z', metaKey: true })
+    expect(undoButton().disabled).toBe(false)
+    expect(screen.getByDisplayValue('陈默。')).toBeTruthy()
+
+    // 关闭弹窗后 ⌘Z 恢复：撤销移除新建节点，栈回到空
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    fireEvent.keyDown(document.body, { key: 'z', metaKey: true })
+    expect(undoButton().disabled).toBe(true)
+  })
+})

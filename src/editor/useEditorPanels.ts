@@ -1,8 +1,9 @@
 /**
  * 编辑器面板与瞬态浮层状态（EditorView 拆出的 UI 状态域，docs/ui-design.md
- * §3.4/§4.3）：三栏显隐与宽度、右栏页、⚙️ 设置面板、＋节点下拉、导出对话框
- * 与右键菜单。失焦收起所需的两个批量关闭回调也收口在此，供快捷键 hook
- * 直接消费（Escape 连导出对话框一起收，画布外 pointerdown 只收瞬态浮层）。
+ * §3.4/§4.3/§5）：三栏显隐与宽度、右栏页、⚙️ 设置面板、＋节点下拉、导出
+ * 对话框、右键菜单与设定文档编辑弹窗（issue #126 状态提升）。失焦收起所
+ * 需的两个批量关闭回调也收口在此，供快捷键 hook 直接消费（Escape 连导出
+ * 对话框一起收，画布外 pointerdown 只收瞬态浮层）。
  */
 import {
   useCallback,
@@ -45,6 +46,13 @@ export interface EditorPanels {
   setExportOpen: Dispatch<SetStateAction<boolean>>
   ctxMenu: ContextMenuState | null
   setCtxMenu: Dispatch<SetStateAction<ContextMenuState | null>>
+  /** 正在编辑的设定文档 id（issue #126 状态提升）：null = 弹窗关闭。
+   * 快捷键层据此挂起全局撤销/重做，见 useEditorHotkeys。 */
+  editingDocId: string | null
+  /** 打开设定文档编辑弹窗（SettingsList 行点击）。 */
+  openDocument: (id: string) => void
+  /** 关闭设定文档编辑弹窗（Esc/遮罩/保存/关闭按钮）。 */
+  closeDocument: () => void
   toggleRight: (tab: RightTab) => void
   /** 画布外 pointerdown：收起设置面板、＋菜单与右键菜单（§4.3 失焦收起）。 */
   closeTransient: () => void
@@ -70,6 +78,12 @@ export function useEditorPanels(): EditorPanels {
     setOpenSettingsId((cur) => (cur === id ? null : id))
   }, [])
   const closeSettings = useCallback(() => setOpenSettingsId(null), [])
+
+  // 设定文档编辑弹窗（issue 56；issue #126 从左栏局部状态提升）：
+  // 全局快捷键需要感知模态会话以挂起撤销/重做
+  const [editingDocId, setEditingDocId] = useState<string | null>(null)
+  const openDocument = useCallback((id: string) => setEditingDocId(id), [])
+  const closeDocument = useCallback(() => setEditingDocId(null), [])
 
   /** 右栏页切换：同页再点收起，异页直接切换并展开。 */
   const toggleRight = useCallback(
@@ -112,6 +126,9 @@ export function useEditorPanels(): EditorPanels {
     setExportOpen,
     ctxMenu,
     setCtxMenu,
+    editingDocId,
+    openDocument,
+    closeDocument,
     toggleRight,
     closeTransient,
     closeAllTransient,

@@ -8,6 +8,10 @@ import type { DocumentEntity, ProjectSettings } from '../settings'
  * 关联角色/地点经 chips 切换（relatedIds：kind + id 显式成对，§6）。
  * 「保存」一次派发一条 updateDocument 命令入栈可撤销；Esc / 遮罩 /
  * 关闭按钮放弃编辑（编辑即命令的批量变体：单次确认生成单条命令）。
+ * 弹窗是一次模态编辑会话（issue #126）：打开期间全局撤销/重做/删除快捷键
+ * 挂起（useEditorHotkeys，输入框内保持原生文本撤销）；底层文档若仍经残余
+ * 路径变化，未编辑草稿跟随刷新、已编辑草稿保留（useDocumentDraft），文档
+ * 删除则弹窗随 id 解析失败由宿主卸载——保存永不把已撤销的旧草稿写回。
  * 经 portal 渲染到 document.body：宿主 .pw-panel 同时带 overflow:hidden
  * 与 backdrop-filter，会为 fixed 后代建立包含块并裁剪到窄侧栏内
  * （PR #86 评审），弹窗必须落在面板裁剪上下文之外。
@@ -144,6 +148,42 @@ function DocumentDialogHead({ onClose }: { readonly onClose: () => void }) {
   )
 }
 
+/**
+ * 文档编辑草稿（issue #126）：挂载时以底层文档为基线；底层文档经 props
+ * 更新且草稿未被编辑时跟随刷新——保存永不写回陈旧字段；一旦编辑即固定
+ * 用户输入，不以 props 同步覆盖未保存内容。文档删除由宿主按 id 解析失败
+ * 卸载弹窗，不在草稿层处理。
+ */
+function useDocumentDraft(doc: DocumentEntity) {
+  const [title, setTitle] = useState(doc.title)
+  const [body, setBody] = useState(doc.body)
+  const [relatedIds, setRelatedIds] = useState(doc.relatedIds)
+  const [edited, setEdited] = useState(false)
+  useEffect(() => {
+    if (edited) return
+    setTitle(doc.title)
+    setBody(doc.body)
+    setRelatedIds(doc.relatedIds)
+  }, [doc, edited])
+  const editTitle = (v: string) => {
+    setEdited(true)
+    setTitle(v)
+  }
+  const editBody = (v: string) => {
+    setEdited(true)
+    setBody(v)
+  }
+  const toggleRelated = (kind: 'character' | 'location', id: string) => {
+    setEdited(true)
+    setRelatedIds((prev) =>
+      prev.some((r) => r.kind === kind && r.id === id)
+        ? prev.filter((r) => !(r.kind === kind && r.id === id))
+        : [...prev, { kind, id }],
+    )
+  }
+  return { title, body, relatedIds, editTitle, editBody, toggleRelated }
+}
+
 export default function DocumentEditorDialog({
   doc,
   settings,
@@ -155,9 +195,7 @@ export default function DocumentEditorDialog({
   readonly onSave: (id: string, patch: DocumentSavePatch) => void
   readonly onClose: () => void
 }) {
-  const [title, setTitle] = useState(doc.title)
-  const [body, setBody] = useState(doc.body)
-  const [relatedIds, setRelatedIds] = useState(doc.relatedIds)
+  const draft = useDocumentDraft(doc)
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -167,15 +205,12 @@ export default function DocumentEditorDialog({
     return () => document.removeEventListener('keydown', onKey)
   }, [onClose])
 
-  const toggleRelated = (kind: 'character' | 'location', id: string) =>
-    setRelatedIds((prev) =>
-      prev.some((r) => r.kind === kind && r.id === id)
-        ? prev.filter((r) => !(r.kind === kind && r.id === id))
-        : [...prev, { kind, id }],
-    )
-
   const save = () => {
-    onSave(doc.id, { title, body, relatedIds })
+    onSave(doc.id, {
+      title: draft.title,
+      body: draft.body,
+      relatedIds: draft.relatedIds,
+    })
     onClose()
   }
 
@@ -191,26 +226,26 @@ export default function DocumentEditorDialog({
         <DocumentDialogHead onClose={onClose} />
         <div className="pw-doc-editor-body">
           <TitleBodyFields
-            title={title}
-            body={body}
-            onTitle={setTitle}
-            onBody={setBody}
+            title={draft.title}
+            body={draft.body}
+            onTitle={draft.editTitle}
+            onBody={draft.editBody}
           />
           <RelatedPicker
             settings={settings}
-            relatedIds={relatedIds}
-            onToggle={toggleRelated}
+            relatedIds={draft.relatedIds}
+            onToggle={draft.toggleRelated}
           />
         </div>
         <div className="pw-dialog-foot">
           <span className="pw-dialog-hint">
-            标题为空时无法保存；Esc 关闭放弃改动
+            标题为空时无法保存；编辑中全局撤销挂起；Esc 关闭放弃改动
           </span>
           <span className="pw-sp" />
           <button
             type="button"
             className="pw-dialog-btn pw-dialog-btn-primary"
-            disabled={title.trim() === ''}
+            disabled={draft.title.trim() === ''}
             onClick={save}
           >
             保存

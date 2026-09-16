@@ -57,6 +57,14 @@ interface LeftPanelProps {
   readonly settings: ProjectSettings
   /** 设定集条目编辑动作（§5）。 */
   readonly settingsActions: SettingsActions
+  /** 设定文档编辑弹窗域（issue #126 状态提升到面板层）：editingDocId =
+   * 弹窗挂载开关，open/close 由列表行点击与弹窗关闭动作调用；快捷键层
+   * 据此挂起全局撤销/重做。 */
+  readonly docDialog: {
+    editingDocId: string | null
+    open: (id: string) => void
+    close: () => void
+  }
   /** 集 = 编号 + 行内标题（§3.5）。 */
   readonly episodeTitles: Record<number, string>
   /** 当前聚焦的集；null = 无聚焦。 */
@@ -296,19 +304,6 @@ function useOutlineScrollFollow(
   }, [selectedId, tab, outlineRef])
 }
 
-/** 文档编辑态（LeftPanel 拆分，issue #99）：正在编辑的文档 id（弹窗以打
- * 开时的文档为编辑基线）。 */
-function useDocumentEditState(settings: ProjectSettings) {
-  const [editingDocId, setEditingDocId] = useState<string | null>(null)
-  const editingDoc =
-    settings.documents?.find((d) => d.id === editingDocId) ?? null
-  return {
-    editingDoc,
-    openDocument: setEditingDocId,
-    closeDocument: () => setEditingDocId(null),
-  }
-}
-
 /** 大纲分页主体（LeftPanel 拆分，issue #99）：原生 section + aria-label
  * （隐式 region，替代 div role="group"，S6819）承载分组列表。 */
 function OutlinePane({
@@ -352,26 +347,31 @@ function OutlinePane({
   )
 }
 
-/** 文档编辑器弹窗（LeftPanel 拆分，issue #99）：以打开时的文档快照为编辑
- * 基线，保存一次派发；doc 为 null 时不渲染。 */
+/** 文档编辑器弹窗（LeftPanel 拆分，issue #99）：按挂载 id 解析当前文档并
+ * 渲染弹窗，保存一次派发；doc 为 null 时不渲染。解析失败（底层文档被
+ * 删除/撤销）即清空挂载 id——模态会话随卸载同步结束，全局快捷键不因
+ * 残留 id 持续挂起（issue #126，PR #185 评审）。 */
 function DocumentEditDialog({
-  doc,
   settings,
+  docDialog,
   onSave,
-  onClose,
 }: {
-  readonly doc: NonNullable<ProjectSettings['documents']>[number] | null
   readonly settings: ProjectSettings
+  readonly docDialog: LeftPanelProps['docDialog']
   readonly onSave: SettingsActions['updateDocument']
-  readonly onClose: () => void
 }) {
+  const doc =
+    settings.documents?.find((d) => d.id === docDialog.editingDocId) ?? null
+  useEffect(() => {
+    if (docDialog.editingDocId !== null && doc === null) docDialog.close()
+  }, [docDialog, doc])
   if (doc === null) return null
   return (
     <DocumentEditorDialog
       doc={doc}
       settings={settings}
       onSave={onSave}
-      onClose={onClose}
+      onClose={docDialog.close}
     />
   )
 }
@@ -386,6 +386,7 @@ export default function LeftPanel({
   selectedId,
   settings,
   settingsActions,
+  docDialog,
   episodeTitles,
   focusedEpisode,
   onFocusEpisode,
@@ -399,8 +400,6 @@ export default function LeftPanel({
   )
   const outlineRef = useRef<HTMLElement>(null)
   const dnd = useOutlineDnD(onOutlineDrop)
-  const { editingDoc, openDocument, closeDocument } =
-    useDocumentEditState(settings)
   useOutlineScrollFollow(tab, selectedId, outlineRef)
 
   return (
@@ -436,18 +435,18 @@ export default function LeftPanel({
             <SettingsList
               settings={settings}
               actions={settingsActions}
-              onOpenDocument={openDocument}
+              onOpenDocument={docDialog.open}
             />
           )}
           {tab === 'assets' && <AssetsPanel />}
         </div>
       </div>
-      {/* 文档编辑器弹窗（issue 56）：以打开时的文档快照为编辑基线，保存一次派发 */}
+      {/* 文档编辑器弹窗（issue 56）：挂载状态在面板域（issue #126），
+          保存一次派发；草稿协调与 id 清理见 DocumentEditDialog */}
       <DocumentEditDialog
-        doc={editingDoc}
         settings={settings}
+        docDialog={docDialog}
         onSave={settingsActions.updateDocument}
-        onClose={closeDocument}
       />
       {open && (
         <PanelResizer direction={1} startWidth={width} onResize={onResize} />
