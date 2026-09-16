@@ -334,52 +334,53 @@ describe('LeftPanel 外壳', () => {
   })
 })
 
+/** 全部大纲行文本（按 DOM 序）——行序即真实 x 序的投影（issue #157 评审
+ * 用例的文件级 fixture：describe 闭包同样受 80 行上限约束）。 */
+const rowTexts = () =>
+  [...document.querySelectorAll('.pw-outline-row')].map(
+    (r) => r.textContent ?? '',
+  )
+
+const beat = (id: string, name: string, x: number): CanvasNode =>
+  ({
+    id,
+    type: 'beat',
+    position: { x, y: 0 },
+    data: { name, tone: '', episodeNo: 1 },
+  }) as unknown as CanvasNode
+
+const mkProps = (nodes: CanvasNode[], contentNodes: CanvasNode[]) =>
+  ({
+    open: true,
+    width: 280,
+    nodes,
+    contentNodes,
+    edges: [],
+    settings: { characters: [], locations: [] },
+    episodeTitles: {},
+    focusedEpisode: null,
+    docDialog: { editingDocId: null, open: vi.fn(), close: vi.fn() },
+    onResize: vi.fn(),
+    onLocate: vi.fn(),
+    onFocusEpisode: vi.fn(),
+    onRenameEpisode: vi.fn(),
+    onOutlineDrop: vi.fn(),
+    settingsActions: {
+      addCharacter: vi.fn(),
+      renameCharacter: vi.fn(),
+      deleteCharacter: vi.fn(),
+      updateCharacter: vi.fn(),
+      addLocation: vi.fn(),
+      renameLocation: vi.fn(),
+      deleteLocation: vi.fn(),
+      updateLocation: vi.fn(),
+      addDocument: vi.fn(),
+      updateDocument: vi.fn(),
+      deleteDocument: vi.fn(),
+    },
+  }) as Parameters<typeof LeftPanel>[0]
+
 describe('大纲行序的拖拽跟随（issue #157 评审 4027623775）', () => {
-  /** 全部大纲行文本（按 DOM 序）——行序即真实 x 序的投影。 */
-  const rowTexts = () =>
-    [...document.querySelectorAll('.pw-outline-row')].map(
-      (r) => r.textContent ?? '',
-    )
-
-  const beat = (id: string, name: string, x: number): CanvasNode =>
-    ({
-      id,
-      type: 'beat',
-      position: { x, y: 0 },
-      data: { name, tone: '', episodeNo: 1 },
-    }) as unknown as CanvasNode
-
-  const mkProps = (nodes: CanvasNode[], contentNodes: CanvasNode[]) =>
-    ({
-      open: true,
-      width: 280,
-      nodes,
-      contentNodes,
-      edges: [],
-      settings: { characters: [], locations: [] },
-      episodeTitles: {},
-      focusedEpisode: null,
-      docDialog: { editingDocId: null, open: vi.fn(), close: vi.fn() },
-      onResize: vi.fn(),
-      onLocate: vi.fn(),
-      onFocusEpisode: vi.fn(),
-      onRenameEpisode: vi.fn(),
-      onOutlineDrop: vi.fn(),
-      settingsActions: {
-        addCharacter: vi.fn(),
-        renameCharacter: vi.fn(),
-        deleteCharacter: vi.fn(),
-        updateCharacter: vi.fn(),
-        addLocation: vi.fn(),
-        renameLocation: vi.fn(),
-        deleteLocation: vi.fn(),
-        updateLocation: vi.fn(),
-        addDocument: vi.fn(),
-        updateDocument: vi.fn(),
-        deleteDocument: vi.fn(),
-      },
-    }) as Parameters<typeof LeftPanel>[0]
-
   it('同 x 相等帧保持数组序；越过 A 后行序翻转为真实 x 序', () => {
     const A = beat('n-a', '节拍A', 100) // id 字典序小于 n-b
     const B = beat('n-b', '节拍B', 0)
