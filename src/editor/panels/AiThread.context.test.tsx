@@ -178,8 +178,12 @@ async function setup(
     onApplyAiBatch: canvas.hook.result.current.applyAiBatch,
     onReadNode: canvas.hook.result.current.readNode,
     aiSession: options.session,
-    aiRevision: canvas.state.aiRevision,
-    whenCanvasCommitted: options.whenCanvasCommitted,
+    commitIdentity: {
+      aiRevision: canvas.state.aiRevision,
+      ...(options.whenCanvasCommitted
+        ? { whenCanvasCommitted: options.whenCanvasCommitted }
+        : {}),
+    },
     onSaveAiSession: async (session: AiSession) => {
       saved.push(JSON.parse(JSON.stringify(session)) as AiSession)
     },

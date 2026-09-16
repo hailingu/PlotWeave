@@ -546,8 +546,7 @@ describe('RightPanel ✦AI 执行回执落盘时序', () => {
       saved.push(session)
     })
     const spies = await toAiTab(APP_WITH_KEY, {
-      whenCanvasCommitted,
-      aiRevision: 4,
+      commitIdentity: { aiRevision: 4, whenCanvasCommitted },
       onSaveAiSession: onSaveSession,
     })
     spies.onValidateCommands.mockReturnValue(validationOf())
@@ -584,6 +583,30 @@ describe('RightPanel ✦AI 执行回执落盘时序', () => {
       ).toBe(true)
     })
   })
+
+  it('无提交身份的隔离装配：执行成功立即 executed，卡片不携带对账运行时标注', async () => {
+    // issue #139 保留的隔离测试能力：省略 commitIdentity（无画布确认等待器
+    // 也无批次计数）时执行不进入未确认态——不标注 uncommitted、不记录
+    // aiRevisionAfter，落盘即最终事实。
+    const saved: AiSession[] = []
+    const onSaveSession = vi.fn(async (session: AiSession) => {
+      saved.push(session)
+    })
+    const spies = await toAiTab(APP_WITH_KEY, {
+      onSaveAiSession: onSaveSession,
+    })
+    spies.onValidateCommands.mockReturnValue(validationOf())
+    llmChatMock.mockResolvedValue(batchReply())
+    send('加一场戏')
+    await screen.findByText('✦ 改动预览 · 1 项')
+    fireEvent.click(screen.getByRole('button', { name: '✓ 执行改动' }))
+    expect(await screen.findByText(/✓ 已执行 1 项改动/)).toBeTruthy()
+    await waitFor(() => expect(saved.length).toBeGreaterThan(0))
+    const card = saved[saved.length - 1].entries.find((e) => e.card)?.card
+    expect(card?.status).toBe('executed')
+    expect(card).not.toHaveProperty('uncommitted')
+    expect(card).not.toHaveProperty('aiRevisionAfter')
+  })
 })
 
 describe('RightPanel ✦AI 回执关联剔除', () => {
@@ -600,8 +623,7 @@ describe('RightPanel ✦AI 回执关联剔除', () => {
       saved.push(session)
     })
     const spies = await toAiTab(APP_WITH_KEY, {
-      whenCanvasCommitted,
-      aiRevision: 2,
+      commitIdentity: { aiRevision: 2, whenCanvasCommitted },
       onSaveAiSession: onSaveSession,
     })
     spies.onValidateCommands.mockReturnValue(validationOf())
@@ -664,7 +686,7 @@ describe('RightPanel ✦AI 执行卡落盘对账', () => {
     const validate = vi.fn(() => validationOf())
     await toAiTab(APP_WITH_KEY, {
       aiSession: uncommittedSession(),
-      aiRevision: 4,
+      commitIdentity: { aiRevision: 4 },
       onValidateCommands: validate,
     })
     expect(validate).toHaveBeenCalled()
@@ -675,7 +697,7 @@ describe('RightPanel ✦AI 执行卡落盘对账', () => {
   it('画布计数已达执行后计数：批次已随画布落盘，恢复为不可再执行的历史卡', async () => {
     await toAiTab(APP_WITH_KEY, {
       aiSession: uncommittedSession(),
-      aiRevision: 5,
+      commitIdentity: { aiRevision: 5 },
     })
     expect(screen.getByText(/历史改动/)).toBeTruthy()
     expect(screen.queryByRole('button', { name: '✓ 执行改动' })).toBeNull()

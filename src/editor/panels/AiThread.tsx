@@ -141,33 +141,32 @@ function useCanvasCommitConfirmation(
   }, [thread, whenCanvasCommitted, setThread])
 }
 
-/** 执行结果写回所属卡片：失败可重试，成功清除旧诊断，未落盘时保留对账身份。 */
+/** 执行结果写回所属卡片：失败可重试，成功清除旧诊断并按提交身份分流——
+ * 带画布确认等待器即标注 uncommitted 并记录对账计数（嵌套形状保证计数
+ * 必在，未确认卡不可能没有 aiRevisionAfter 身份），否则立即 executed。 */
 function cardAfterExecution(
   card: NonNullable<ThreadEntry['card']>,
   err: string | null,
-  awaiting: boolean,
-  aiRevisionAfter: number | undefined,
+  identity: AiCommitIdentity | undefined,
 ): NonNullable<ThreadEntry['card']> {
   const next = stripExecutionRuntime(card)
   delete next.executionError
   if (err) return { ...next, status: 'pending', executionError: err }
+  if (identity?.whenCanvasCommitted === undefined)
+    return { ...next, status: 'executed' }
   return {
     ...next,
     status: 'executed',
-    ...(awaiting
-      ? {
-          uncommitted: true,
-          ...(aiRevisionAfter !== undefined ? { aiRevisionAfter } : {}),
-        }
-      : {}),
+    uncommitted: true,
+    aiRevisionAfter: identity.aiRevision + 1,
   }
 }
 
 /** 执行预览卡的线程变换（useAiThreadMessages 拆分，issue #99）：成功 →
- * 置状态并追加回执；失败 → 错误回执（批次未动）；成功但画布尚未确认落盘
- * 时标注 uncommitted 并记录执行后批次计数——持久化层据此降级为 pending，
- * 画布落盘确认后再写 executed。回执关联卡片 id（可能追加在会话尾部）：
- * 未确认落盘的执行按关联剔除回执。 */
+ * 置状态并追加回执；失败 → 错误回执（批次未动）；提交身份带画布确认
+ * 等待器时标注 uncommitted 并记录执行后批次计数——持久化层据此降级为
+ * pending，画布落盘确认后再写 executed。回执关联卡片 id（可能追加在
+ * 会话尾部）：未确认落盘的执行按关联剔除回执。 */
 function applyCardExecution(args: {
   readonly thread: ThreadEntry[]
   readonly setThread: Dispatch<SetStateAction<ThreadEntry[]>>
@@ -176,26 +175,19 @@ function applyCardExecution(args: {
   readonly idx: number
   readonly nextId: () => number
   readonly onApplyAiBatch?: (commands: ValidatedCommand[]) => string | null
-  readonly whenCanvasCommitted?: () => Promise<void>
-  readonly aiRevision?: number
+  readonly identity?: AiCommitIdentity
 }): void {
   const { setThread, setArmedIdx, entry, idx, nextId } = args
   if (entry.card?.status !== 'pending' || !args.onApplyAiBatch) return
-  const aiRevisionAfter =
-    args.aiRevision === undefined ? undefined : args.aiRevision + 1
   const err = args.onApplyAiBatch(entry.card.v.commands)
   const receipt = {
     ...cardResultEntry(err, entry.card.v.commands.length, nextId),
     cardReceiptFor: entry.id,
   }
-  const awaiting = !err && args.whenCanvasCommitted !== undefined
   setThread((t) => [
     ...t.map((e, i) =>
       i === idx && e.card
-        ? {
-            ...e,
-            card: cardAfterExecution(e.card, err, awaiting, aiRevisionAfter),
-          }
+        ? { ...e, card: cardAfterExecution(e.card, err, args.identity) }
         : e,
     ),
     receipt,
@@ -211,16 +203,14 @@ function useAiThreadMessages(opts: {
   readonly onValidateCommands?: (
     commands: AiCommand[],
   ) => BatchValidation | null
-  /** 承载批次的画布文档确认落盘后兑现（见 useAiSessionPersistence 的落盘映射）。 */
-  readonly whenCanvasCommitted?: () => Promise<void>
-  /** 画布批次计数（§12.2 提交身份）：执行后 +1 记录到卡片，恢复时对账。 */
-  readonly aiRevision?: number
+  /** 提交身份（issue #139）：计数供恢复对账，等待器决定 executed 落盘推迟。 */
+  readonly identity?: AiCommitIdentity
 }) {
   const [thread, setThread] = useState<ThreadEntry[]>(() =>
     restoreThreadEntries(
       opts.initialSession,
       opts.onValidateCommands,
-      opts.aiRevision,
+      opts.identity?.aiRevision,
     ),
   )
   /** 危险批次的两步确认：处于武装态的会话条目下标，null = 无。 */
@@ -235,7 +225,7 @@ function useAiThreadMessages(opts: {
     setThread((t) => [...t, ...entries])
 
   /** 执行预览卡：成功 → 置状态并追加回执；失败 → 错误回执（批次未动）。
-   * 成功但画布尚未确认落盘时标注 uncommitted 并记录执行后批次计数——
+   * 提交身份带画布确认等待器时标注 uncommitted 并记录执行后批次计数——
    * 持久化层据此降级为 pending，画布落盘确认后再写 executed。 */
   const executeCard = (idx: number) =>
     applyCardExecution({
@@ -246,8 +236,7 @@ function useAiThreadMessages(opts: {
       idx,
       nextId,
       onApplyAiBatch: opts.onApplyAiBatch,
-      whenCanvasCommitted: opts.whenCanvasCommitted,
-      aiRevision: opts.aiRevision,
+      identity: opts.identity,
     })
 
   const markDismissed = (idx: number) => {
@@ -270,7 +259,11 @@ function useAiThreadMessages(opts: {
     setArmedIdx(null)
   }
 
-  useCanvasCommitConfirmation(thread, setThread, opts.whenCanvasCommitted)
+  useCanvasCommitConfirmation(
+    thread,
+    setThread,
+    opts.identity?.whenCanvasCommitted,
+  )
 
   return {
     thread,
@@ -480,6 +473,20 @@ function AiEntryBody({
  * - 服务不支持工具时退回 ```json 围栏批次文本协议。
  * 逻辑在 useAiModels/useAiThreadMessages/useAiTurn，纯函数在 aiThreadModel.ts。
  */
+/** 执行卡的提交身份（§12.2 提交身份，[issue #139](https://github.com/hailingu/PlotWeave/issues/139)
+ * 收紧）：批次计数必带、画布确认等待器可选——嵌套形状在类型层固定两者
+ * 耦合（等待器存在 ⇒ 计数必在）。要推迟 executed 落盘（等待器存在）而
+ * 缺计数的装配，会让未确认卡落盘降级 pending 后没有 aiRevisionAfter 对账
+ * 身份，重开时已随画布落盘的批次可被再次执行；该误配形态不可构造。
+ * 只带计数的形态供恢复会话对账（不等提交）；省略整组为无持久化的隔离
+ * 装配——执行成功立即 executed，不进入未确认态。 */
+export interface AiCommitIdentity {
+  /** 画布批次计数（§12.2 提交身份）：执行后 +1 记录到卡片，恢复时对账。 */
+  readonly aiRevision: number
+  /** 承载批次的画布文档确认落盘后兑现；执行卡据此推迟 executed 落盘。 */
+  readonly whenCanvasCommitted?: () => Promise<void>
+}
+
 /** ✦AI 会话面板的对外契约：校验/读工具/执行回调、恢复会话及其持久化通道。 */
 interface AiThreadProps {
   /** 项目 id：在途回合跨卸载归属的键（issue #63，见 ai/pendingTurns）。 */
@@ -495,10 +502,8 @@ interface AiThreadProps {
   /** 读工具 get_document（issue 56）：按 id 返回文档全文 JSON。 */
   readonly onReadDocument?: (documentId: string) => string | null
   readonly onApplyAiBatch?: (commands: ValidatedCommand[]) => string | null
-  /** 承载批次的画布文档确认落盘后兑现；执行卡据此推迟 executed 落盘。 */
-  readonly whenCanvasCommitted?: () => Promise<void>
-  /** 画布批次计数（§12.2 提交身份）：执行后 +1 记录到卡片，恢复时对账。 */
-  readonly aiRevision?: number
+  /** 执行卡的提交身份（issue #139）：计数必带、等待器可选；见 AiCommitIdentity。 */
+  readonly commitIdentity?: AiCommitIdentity
   /** 打开项目时恢复的独立会话快照。 */
   readonly initialSession?: AiSession
   readonly initialSessionError?: string | null
@@ -516,8 +521,7 @@ function useAiThreadAssembly(props: AiThreadProps) {
     onApplyAiBatch: props.onApplyAiBatch,
     initialSession: props.initialSession,
     onValidateCommands: props.onValidateCommands,
-    whenCanvasCommitted: props.whenCanvasCommitted,
-    aiRevision: props.aiRevision,
+    identity: props.commitIdentity,
   })
   const saveError = useAiSessionPersistence(
     msg.thread,
@@ -544,8 +548,9 @@ function useAiThreadAssembly(props: AiThreadProps) {
 }
 
 /** memo 边界（issue #157）：位置帧（拖拽过程帧）不重渲染 AI 会话面板——
- * 输入（画布摘要、批次计数、校验/读取/落地回调、会话快照）在无内容变化
- * 的帧间引用稳定；会话内交互照常驱动自身状态更新。 */
+ * 输入（画布摘要、提交身份捆绑对象、校验/读取/落地回调、会话快照）在
+ * 无内容变化的帧间引用稳定（提交身份由装配层 useMemo 稳定，见
+ * EditorView）；会话内交互照常驱动自身状态更新。 */
 export const AiThread = memo(function AiThread(props: AiThreadProps) {
   const { m, msg, saveError, turn } = useAiThreadAssembly(props)
   const onOpenSettings = props.onOpenSettings
