@@ -6,7 +6,7 @@
  */
 import { useCallback, useMemo } from 'react'
 import type { Edge } from '@xyflow/react'
-import { buildGraphDigest } from './ai/graphDigest'
+import { buildGraphDigest, sceneLabel, shotLabel } from './ai/graphDigest'
 import { extractBatchJson } from './ai/batchText'
 import { settingsSnapshotText } from './ai/entityFields'
 import {
@@ -28,11 +28,13 @@ import type { NodeDataPatch } from './nodes/patch'
 import type { CanvasNode } from './nodes/types'
 import type { ProjectContent } from '../model/content'
 
-/** 节点人读标签：画布快照、改动预览与批次执行共用。 */
+/** 节点人读标签：画布快照、改动预览与批次执行共用。场景/分镜编号经
+ * graphDigest 的共享标签函数（issue #156）：与图摘要同口径补零，同一
+ * 节点在 AI 工作流各处呈现一致。 */
 export function nodeLabelOf(n: CanvasNode): string {
   switch (n.type) {
     case 'scene':
-      return `场${n.data.sceneNo}·${n.data.name}`
+      return sceneLabel(n.data.sceneNo, n.data.name)
     case 'dialogue':
       return `对白·${n.data.name}`
     case 'beat':
@@ -40,7 +42,7 @@ export function nodeLabelOf(n: CanvasNode): string {
     case 'branch':
       return `分支·${n.data.prompt}`
     case 'shot':
-      return `SHOT${n.data.shotNo}·${n.data.size}`
+      return shotLabel(n.data.shotNo, n.data.size)
     case 'image':
       return `图片·${n.data.prompt.slice(0, 12)}`
   }
