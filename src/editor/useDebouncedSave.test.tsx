@@ -300,6 +300,54 @@ describe('useDebouncedSave（防抖落盘 + 脏态卸载冲刷）', () => {
     )
   })
 
+  it('仅 aiRevision 递增（其他字段引用稳定）也置脏落盘（issue #155：AI 批次计数是文档内容）', async () => {
+    const onSave = vi.fn()
+    const base = mkDoc()
+    const { rerender } = renderHook(
+      ({ doc }) => useDebouncedSave(doc, onSave),
+      {
+        initialProps: { doc: base },
+      },
+    )
+    // 图/设定/集标题/资产引用全部不变，只有批次计数前进（§12.2 提交身份）
+    act(() => {
+      rerender({ doc: { ...base, aiRevision: 1 } })
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600)
+    })
+    expect(onSave).toHaveBeenCalledTimes(1)
+    expect((onSave.mock.calls[0][0] as ProjectContent).aiRevision).toBe(1)
+    // 再递增同样触发（只增不减的水位各自置脏）
+    act(() => {
+      rerender({ doc: { ...base, aiRevision: 2 } })
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600)
+    })
+    expect(onSave).toHaveBeenCalledTimes(2)
+    expect((onSave.mock.calls[1][0] as ProjectContent).aiRevision).toBe(2)
+  })
+
+  it('仅 aiRevision 递增后、计时器未到时卸载：脏数据立即冲刷（issue #155）', async () => {
+    const onSave = vi.fn()
+    const base = mkDoc()
+    const { rerender, unmount } = renderHook(
+      ({ doc }) => useDebouncedSave(doc, onSave),
+      {
+        initialProps: { doc: base },
+      },
+    )
+    act(() => {
+      rerender({ doc: { ...base, aiRevision: 3 } })
+    })
+    act(() => {
+      unmount()
+    })
+    expect(onSave).toHaveBeenCalledTimes(1)
+    expect((onSave.mock.calls[0][0] as ProjectContent).aiRevision).toBe(3)
+  })
+
   it('落盘后再卸载不重复冲刷（脏标记已清）', () => {
     const onSave = vi.fn()
     const { rerender, unmount } = renderHook(

@@ -21,16 +21,23 @@ import type { ProjectContent } from '../model/content'
  * 不刷新 updatedAt 改变首页排序。集标题（§3.5 renameEpisode）无独立
  * 脏标记通道，纳入签名随 effect 置脏。画布部分复用 graphSignature：
  * AI 执行卡恢复对账消费同一语义签名。 */
-function persistSignature(doc: ProjectContent): string {
-  return JSON.stringify({
-    name: doc.name,
-    graph: graphSignature(doc.nodes, doc.edges, doc.settings),
+/** 持久字段域（单一契约，issue #155）：签名与置脏监听共用本元组——
+ * persistSignature 序列化它，useSignatureSaveWatch 的 effect 依赖展开它；
+ * 新增持久字段两处自动同步，杜绝「签名含字段而变更监听遗漏」的漂移。 */
+function persistFields(doc: ProjectContent): readonly unknown[] {
+  return [
+    doc.name,
+    graphSignature(doc.nodes, doc.edges, doc.settings),
     // AI 批次计数是文档内容（§12.2 提交身份）：只增不减，单独变化也必须置脏
-    aiRevision: doc.aiRevision ?? 0,
-    episodeTitles: doc.episodeTitles ?? {},
+    doc.aiRevision ?? 0,
+    doc.episodeTitles ?? {},
     // 资产索引（§7.3 会话内导入新增条目）纳入签名：漏签即导入不落盘
-    assets: doc.assets ?? null,
-  })
+    doc.assets ?? null,
+  ]
+}
+
+function persistSignature(doc: ProjectContent): string {
+  return JSON.stringify(persistFields(doc))
 }
 
 /** 画布变化防抖落盘：doc 任意片段变化后 delayMs 内无新变化才写入；
@@ -119,22 +126,14 @@ function deliverLatestAfterUnmount(
     )
 }
 
-/** 文档签名比对（useDebouncedSave 拆分）：纯会话态变化（选择/拖拽过程
- * 帧）不置脏；签名命中即更新基线。 */
-function signatureChanged(
-  doc: ProjectContent,
-  lastSigRef: MutableRefObject<string>,
-): boolean {
-  const sig = persistSignature(doc)
-  if (sig === lastSigRef.current) return false
-  lastSigRef.current = sig
-  return true
-}
-
 /** 文档变更置脏（useDebouncedSave 拆分，issue #99）：首渲染跳过；
- * 名称/节点/边/设定集/集标题/资产索引触发防抖（视口经 markDirty 或卸载
- * 冲刷兜底）；doc 仅用于计算签名，依赖以签名的组成字段为准。真实编辑
- * 前进编辑序号（PR #174 评审：重存完成通知的生效水位）。 */
+ * 名称/节点/边/设定集/AI 批次计数/集标题/资产索引触发防抖（视口经
+ * markDirty 或卸载冲刷兜底）。effect 依赖持久化签名本身（单一契约，
+ * issue #155）：签名包含的每个字段变化都使签名不同、必然进入触发条件，
+ * 新增持久字段自动同步；纯会话态变化（选择/拖拽过程帧）签名不变即不
+ * 触发。签名每渲染计算——原本字段引用变化的 effect 重跑也要算签名，
+ * 额外开销仅为持久字段引用全稳定的渲染，有界且廉价。真实编辑前进编辑
+ * 序号（PR #174 评审：重存完成通知的生效水位）。 */
 function useSignatureSaveWatch(
   gates: ReturnType<typeof useSaveGateRefs>,
   doc: ProjectContent,
@@ -142,23 +141,20 @@ function useSignatureSaveWatch(
   flushSave: () => Promise<void>,
 ) {
   const { firstRender, lastSigRef, dirtyRef, saveTimer, editSeqRef } = gates
+  const sig = persistSignature(doc)
   useEffect(() => {
     if (firstRender.current) {
       firstRender.current = false
+      lastSigRef.current = sig
       return
     }
-    if (!signatureChanged(doc, lastSigRef)) return
+    if (sig === lastSigRef.current) return
+    lastSigRef.current = sig
     editSeqRef.current++
     dirtyRef.current = true
     scheduleFlush(saveTimer, delayMs, flushSave)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    doc.name,
-    doc.nodes,
-    doc.edges,
-    doc.settings,
-    doc.episodeTitles,
-    doc.assets,
+    sig,
     firstRender,
     lastSigRef,
     dirtyRef,
