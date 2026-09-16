@@ -117,6 +117,54 @@ describe('AssetsPanel 类别内操作', () => {
     expect(await screen.findByText('女主微笑')).toBeTruthy()
   })
 
+  /** 行内改名改名（#125）：双击进入编辑、Enter 确认后失焦退出编辑态。 */
+  const renameInline = async (from: string, to: string) => {
+    fireEvent.doubleClick(screen.getByRole('button', { name: from }))
+    const input = screen.getByRole('textbox', { name: `资产名 ${from}` })
+    fireEvent.change(input, { target: { value: to } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    fireEvent.blur(input)
+  }
+
+  it('行内改名失败：错误可见并回滚为已落盘名称（#125）', async () => {
+    const spies = mockStore([asset()])
+    vi.spyOn(libraryStore, 'persistedSnapshot').mockReturnValue(asset())
+    spies.updateMeta.mockRejectedValueOnce(new Error('磁盘只读'))
+    await enterCharacter()
+    await renameInline('女主正面', '女主微笑')
+    // 拒绝有可见反馈（错误横幅，与导入/列表错误同一展示位）
+    expect(await screen.findByText('Error: 磁盘只读')).toBeTruthy()
+    // 不把未落盘名称显示为已保存结果：回滚到最近已落盘基线
+    expect(await screen.findByRole('button', { name: '女主正面' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '女主微笑' })).toBeNull()
+  })
+
+  it('被取代的迟到改名失败不回滚新意图（#125）', async () => {
+    const spies = mockStore([asset()])
+    vi.spyOn(libraryStore, 'persistedSnapshot').mockReturnValue(asset())
+    let rejectFirst!: (err: Error) => void
+    spies.updateMeta
+      .mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            rejectFirst = reject
+          }),
+      )
+      .mockResolvedValueOnce(asset({ name: '女主微笑2' }))
+    await enterCharacter()
+    // 第一次改名挂起未决，随后第二次改名（更新意图）成功
+    await renameInline('女主正面', '女主微笑')
+    await renameInline('女主微笑', '女主微笑2')
+    expect(await screen.findByText('女主微笑2')).toBeTruthy()
+    // 第一次的迟到失败不回滚、不上报：新意图已落盘，陈旧失败静默
+    rejectFirst(new Error('磁盘只读'))
+    await act(async () => {})
+    expect(
+      await screen.findByRole('button', { name: '女主微笑2' }),
+    ).toBeTruthy()
+    expect(screen.queryByText(/磁盘只读/)).toBeNull()
+  })
+
   it('标签失焦提交：中英文逗号分隔、去空白、滤空', async () => {
     const spies = mockStore([asset()])
     await enterCharacter()

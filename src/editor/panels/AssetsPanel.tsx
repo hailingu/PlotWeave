@@ -375,6 +375,10 @@ export default function AssetsPanel() {
   const [pendingRemove, setPendingRemove] = useState<LibraryAsset | null>(null)
   const count = (kind: LibraryKind) =>
     assets.filter((a) => a.kind === kind).length
+  /** 每资产最近发起的重命名意图（#125）：迟到的旧失败被新意图取代时
+   * 不回滚、不上报——快速连续改名按最新意图收敛（与标签提交的代际
+   * 守卫同思路，不引入队列/重试）。 */
+  const renameIntent = useRef(new Map<string, string>())
   const { busy, fileRef, importFiles, onPick } = useAssetImport(
     setAssets,
     setError,
@@ -419,7 +423,23 @@ export default function AssetsPanel() {
             setAssets((list) =>
               list.map((a) => (a.id === asset.id ? { ...a, name } : a)),
             )
-            void libraryStore.updateMeta(asset.id, { name })
+            // 失败处理（#125）：错误横幅可见 + 乐观值回滚到最近已落盘
+            // 基线——不把未落盘名称显示为已保存结果；被更新的重命名
+            // 意图取代的迟到失败静默（见 renameIntent）。不做重试或
+            // 草稿暂存，用户可重新发起改名。
+            renameIntent.current.set(asset.id, name)
+            libraryStore.updateMeta(asset.id, { name }).catch((err) => {
+              if (renameIntent.current.get(asset.id) !== name) return
+              renameIntent.current.delete(asset.id)
+              setError(String(err))
+              const baseline =
+                libraryStore.persistedSnapshot(asset.id)?.name ?? asset.name
+              setAssets((list) =>
+                list.map((a) =>
+                  a.id === asset.id ? { ...a, name: baseline } : a,
+                ),
+              )
+            })
           }}
           onTagsBlur={commitTags}
           onRequestRemove={setPendingRemove}
