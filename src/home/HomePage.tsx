@@ -11,6 +11,11 @@ interface HomePageProps {
   /** 最近一次打开失败的可见反馈（issue #98）：非阻塞横幅展示，停留至
    * 下一次打开尝试或新建成功；null/缺省 = 无待展示错误。 */
   readonly openError?: OpenProjectError | null
+  /** 列表读取失败诊断（issue #133）：无已知列表时以错误态代替首次使用
+   * 引导；已有列表时保留卡片并显示刷新失败横幅。null/缺省 = 无错误。 */
+  readonly loadError?: string | null
+  /** 错误态/横幅的重试入口（重新拉取列表）。 */
+  readonly onRetryLoad?: () => void
   /** 单击海报卡打开项目，窗口切换为编辑器（文档式双界面，§3.1；应用方修订：由双击改单击）。 */
   readonly onOpenProject: (id: string) => void
   /** 工具栏「＋ 新建项目」、网格末尾「＋ 新剧」与空状态引导共用此入口。 */
@@ -149,11 +154,59 @@ function HomeTitlebar({
 
 /** 项目网格区（HomePage 拆分，issue #99）：空态引导、无匹配提示与
  * 项目卡网格（末尾常驻新建卡）。 */
+/** 列表读取失败的错误块（issue #133）：读取失败 ≠ 空列表——无已知列表
+ * 时以错误态代替首次使用引导（诊断 + 重试），绝不让目录级故障伪装成
+ * 「你的库是空的」。 */
+function ListErrorState({
+  loadError,
+  onRetry,
+}: {
+  readonly loadError: string
+  readonly onRetry?: () => void
+}) {
+  return (
+    <div className="home-empty" role="alert">
+      <p className="home-list-error">
+        项目列表加载失败：{loadError}
+        <br />
+        已有项目未受影响；请检查存储后重试。
+      </p>
+      {onRetry && (
+        <button type="button" className="home-empty-create" onClick={onRetry}>
+          重试
+        </button>
+      )}
+    </div>
+  )
+}
+
+/** 已有列表的刷新失败横幅（issue #133）：保留卡片展示最近一次成功读取。 */
+function RefreshErrorBanner({
+  loadError,
+  onRetry,
+}: {
+  readonly loadError: string
+  readonly onRetry?: () => void
+}) {
+  return (
+    <p className="home-refresh-error" role="alert">
+      {`列表刷新失败：${loadError}——当前展示最近一次成功读取的结果`}
+      {onRetry ? (
+        <button type="button" className="home-retry" onClick={onRetry}>
+          重试
+        </button>
+      ) : null}
+    </p>
+  )
+}
+
 function ProjectGrid({
   loading,
   projects,
   visible,
   query,
+  loadError,
+  onRetry,
   onCreate,
   onOpen,
   onMenu,
@@ -162,6 +215,8 @@ function ProjectGrid({
   readonly projects: ProjectSummary[]
   readonly visible: ProjectSummary[]
   readonly query: string
+  readonly loadError: string | null
+  readonly onRetry?: () => void
   readonly onCreate: () => void
   readonly onOpen: (id: string) => void
   readonly onMenu: (
@@ -170,6 +225,8 @@ function ProjectGrid({
   ) => void
 }) {
   if (!loading && projects.length === 0) {
+    if (loadError !== null)
+      return <ListErrorState loadError={loadError} onRetry={onRetry} />
     return (
       <div className="home-empty">
         <button type="button" className="home-empty-create" onClick={onCreate}>
@@ -305,6 +362,8 @@ export default function HomePage({
   projects,
   loading = false,
   openError = null,
+  loadError = null,
+  onRetryLoad,
   onOpenProject,
   onCreateProject,
   onRenameProject,
@@ -337,11 +396,17 @@ export default function HomePage({
           下一次打开尝试或新建成功，不拦截首页任何操作。 */}
       {openError && <OpenErrorBanner error={openError} projects={projects} />}
 
+      {projects.length > 0 && loadError !== null && (
+        <RefreshErrorBanner loadError={loadError} onRetry={onRetryLoad} />
+      )}
+
       <ProjectGrid
         loading={loading}
         projects={projects}
         visible={visible}
         query={query}
+        loadError={loadError}
+        onRetry={onRetryLoad}
         onCreate={onCreateProject}
         onOpen={onOpenProject}
         onMenu={menus.openMenu}
