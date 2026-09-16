@@ -6,7 +6,14 @@
  * projectStore 以桩隔离。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react'
 import type { ReactNode } from 'react'
 import App from './App'
 import { projectStore } from './projectStore'
@@ -211,7 +218,7 @@ async function saveRevisedDoc() {
 }
 
 describe('App（双界面路由壳）', () => {
-  it('启动加载项目列表 → 首页；列表失败 warn 兜底为空', async () => {
+  it('启动加载项目列表 → 首页；列表失败进入错误态而非空列表（#133）', async () => {
     render(<App />)
     expect(await screen.findByText('共1项')).toBeTruthy()
     expect(store.list).toHaveBeenCalledTimes(1)
@@ -220,6 +227,12 @@ describe('App（双界面路由壳）', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     render(<App />)
     expect(await screen.findByText('共0项')).toBeTruthy()
+    // 读取失败 ≠ 空列表：错误态就位（HomePage 侧不渲染首次使用引导）
+    await waitFor(() =>
+      expect(typeof homeProps.current.loadError).toBe('string'),
+    )
+    expect(homeProps.current.loadError).toMatch(/io/)
+    expect(typeof homeProps.current.onRetryLoad).toBe('function')
     expect(warn).toHaveBeenCalled()
     warn.mockRestore()
   })
@@ -574,6 +587,50 @@ describe('App ✦首页打开失败反馈（issue #98）', () => {
     expect((homeProps.current.openError as { detail: string }).detail).toBe(
       '项目文件不可读',
     )
+  })
+})
+
+describe('App ✦首页列表读取失败处置（issue #133）', () => {
+  it('已有列表刷新失败：保留已知列表并置错误态；重试成功清除', async () => {
+    render(<App />)
+    await screen.findByText('共1项')
+    store.list.mockRejectedValueOnce(new Error('目录不可读'))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await act(async () => {
+      await (homeProps.current.onRetryLoad as () => Promise<void>)()
+    })
+    expect(await screen.findByText('共1项')).toBeTruthy()
+    expect(homeProps.current.loadError).toMatch(/目录不可读/)
+    warn.mockRestore()
+
+    await act(async () => {
+      await (homeProps.current.onRetryLoad as () => Promise<void>)()
+    })
+    expect(await screen.findByText('共1项')).toBeTruthy()
+    expect(homeProps.current.loadError).toBeNull()
+  })
+
+  it('较旧的失败响应不得覆盖较新的成功（#133）', async () => {
+    let rejectSlow!: (err: Error) => void
+    store.list.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectSlow = reject
+        }),
+    )
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    render(<App />)
+    // 首次加载挂起期间发起重试（较新）并成功
+    await act(async () => {
+      await (homeProps.current.onRetryLoad as () => Promise<void>)()
+    })
+    expect(await screen.findByText('共1项')).toBeTruthy()
+    // 迟到的首次加载失败：被代际守卫取代，不清列表、不置错误
+    rejectSlow(new Error('迟到的目录错误'))
+    await act(async () => {})
+    expect(await screen.findByText('共1项')).toBeTruthy()
+    expect(homeProps.current.loadError).toBeNull()
+    warn.mockRestore()
   })
 })
 

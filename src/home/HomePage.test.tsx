@@ -23,6 +23,7 @@ function setup(
   projects: ProjectSummary[] = [mk()],
   loading = false,
   openError: OpenProjectError | null = null,
+  loadError: string | null = null,
 ) {
   const spies = {
     onOpenProject: vi.fn(),
@@ -30,12 +31,14 @@ function setup(
     onRenameProject: vi.fn(),
     onDuplicateProject: vi.fn(),
     onDeleteProject: vi.fn(),
+    onRetryLoad: vi.fn(),
   }
   render(
     <HomePage
       projects={projects}
       loading={loading}
       openError={openError}
+      loadError={loadError}
       {...spies}
     />,
   )
@@ -86,6 +89,39 @@ describe('HomePage 列表与搜索', () => {
     fireEvent.click(screen.getByRole('button', { name: '＋ 新建项目' }))
     fireEvent.click(screen.getByRole('button', { name: '＋ 新剧' }))
     expect(spies.onCreateProject).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('HomePage 列表读取失败错误态（issue #133）', () => {
+  it('无已知列表时显示错误态与重试，不显示首次使用引导', () => {
+    const spies = setup([], false, null, '读取设置目录失败：权限不足')
+    expect(
+      screen.queryByRole('button', { name: '＋ 创建你的第一部短剧' }),
+    ).toBeNull()
+    expect(screen.getByText(/项目列表加载失败/)).toBeTruthy()
+    expect(screen.getByText(/权限不足/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '重试' }))
+    expect(spies.onRetryLoad).toHaveBeenCalledTimes(1)
+    // 工具栏新建仍可用：错误态不拦截创建入口
+    expect(screen.getByRole('button', { name: '＋ 新建项目' })).toBeTruthy()
+  })
+
+  it('已有列表时刷新失败：卡片保留并显示诊断横幅与重试', () => {
+    const spies = setup([mk()], false, null, '读取设置目录失败：权限不足')
+    expect(
+      screen.getByRole('button', { name: '打开项目 都市奇缘' }),
+    ).toBeTruthy()
+    expect(screen.getByText(/刷新失败/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '重试' }))
+    expect(spies.onRetryLoad).toHaveBeenCalledTimes(1)
+  })
+
+  it('无错误时空态与网格行为不变', () => {
+    setup([])
+    expect(
+      screen.getByRole('button', { name: '＋ 创建你的第一部短剧' }),
+    ).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '重试' })).toBeNull()
   })
 })
 

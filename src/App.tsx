@@ -393,10 +393,13 @@ function useHomeProjectActions(
 function useProjectSummaries(isHomeVisible: () => boolean): {
   readonly projects: ProjectSummary[]
   readonly loading: boolean
+  /** 最近一次读取失败的诊断（#133）：null = 无错误。失败不清空已知列表。 */
+  readonly loadError: string | null
   readonly refreshProjects: () => Promise<void>
 } {
   const [projects, setProjects] = useState<ProjectSummary[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const refreshSeqRef = useRef(0)
   const homeVisibleRef = useRef(true)
   homeVisibleRef.current = isHomeVisible()
@@ -405,10 +408,16 @@ function useProjectSummaries(isHomeVisible: () => boolean): {
     const seq = ++refreshSeqRef.current
     try {
       const list = await projectStore.list()
-      if (seq === refreshSeqRef.current) setProjects(list)
+      // 仅最新请求发布（代际收敛）：较旧失败已在守卫下跳过，不覆盖较新成功
+      if (seq === refreshSeqRef.current) {
+        setProjects(list)
+        setLoadError(null)
+      }
     } catch (err) {
       console.warn('[App] 项目列表加载失败', err)
-      if (seq === refreshSeqRef.current) setProjects([])
+      // 读取失败 ≠ 空列表（#133）：保留已知列表供展示，只置错误态交由
+      // HomePage 呈现诊断/重试；项目文件本身未受影响（整次枚举失败）
+      if (seq === refreshSeqRef.current) setLoadError(String(err))
     } finally {
       if (seq === refreshSeqRef.current) setLoading(false)
     }
@@ -426,12 +435,14 @@ function useProjectSummaries(isHomeVisible: () => boolean): {
     [refreshProjects],
   )
 
-  return { projects, loading, refreshProjects }
+  return { projects, loading, loadError, refreshProjects }
 }
 
 function AppView({
   projects,
   loading,
+  loadError,
+  onRetryLoad,
   openProject,
   openFailure,
   settingsOpen,
@@ -444,6 +455,8 @@ function AppView({
 }: {
   readonly projects: ProjectSummary[]
   readonly loading: boolean
+  readonly loadError: string | null
+  readonly onRetryLoad: () => void
   readonly openProject: OpenProject | null
   readonly openFailure: OpenProjectError | null
   readonly settingsOpen: boolean
@@ -492,19 +505,53 @@ function AppView({
     )
   } else {
     view = (
-      <HomePage
+      <HomeScreen
         projects={projects}
         loading={loading}
+        loadError={loadError}
+        onRetryLoad={onRetryLoad}
         openError={openFailure}
-        onOpenProject={open.handleOpenProject}
-        onCreateProject={() => void open.handleCreateProject()}
-        onRenameProject={(id, name) => void home.handleRenameProject(id, name)}
-        onDuplicateProject={(id) => void home.handleDuplicateProject(id)}
-        onDeleteProject={(id) => void home.handleDeleteProject(id)}
+        open={open}
+        home={home}
       />
     )
   }
   return <Suspense fallback={null}>{view}</Suspense>
+}
+
+/** 首页视图装配（AppView 拆分，80 行上限）：列表数据 + 打开/新建/重命名/
+ * 复制/删除动作接线与读取失败错误态（#133）透传。 */
+function HomeScreen({
+  projects,
+  loading,
+  loadError,
+  onRetryLoad,
+  openError,
+  open,
+  home,
+}: {
+  readonly projects: ProjectSummary[]
+  readonly loading: boolean
+  readonly loadError: string | null
+  readonly onRetryLoad: () => void
+  readonly openError: OpenProjectError | null
+  readonly open: ReturnType<typeof useOpenProjectActions>
+  readonly home: ReturnType<typeof useHomeProjectActions>
+}) {
+  return (
+    <HomePage
+      projects={projects}
+      loading={loading}
+      loadError={loadError}
+      onRetryLoad={onRetryLoad}
+      openError={openError}
+      onOpenProject={open.handleOpenProject}
+      onCreateProject={() => void open.handleCreateProject()}
+      onRenameProject={(id, name) => void home.handleRenameProject(id, name)}
+      onDuplicateProject={(id) => void home.handleDuplicateProject(id)}
+      onDeleteProject={(id) => void home.handleDeleteProject(id)}
+    />
+  )
 }
 
 /**
@@ -521,7 +568,7 @@ export default function App() {
   const latestDocRef = useRef<LatestDoc | null>(null)
   const { unsavedAiSessionsRef, latestAiSessionRef } =
     useAiSessionLifecycle(setOpenProject)
-  const { projects, loading, refreshProjects } = useProjectSummaries(
+  const { projects, loading, loadError, refreshProjects } = useProjectSummaries(
     () => openProject === null,
   )
 
@@ -566,6 +613,8 @@ export default function App() {
       <AppView
         projects={projects}
         loading={loading}
+        loadError={loadError}
+        onRetryLoad={() => void refreshProjects()}
         openProject={openProject}
         openFailure={openFailure}
         settingsOpen={settingsOpen}
