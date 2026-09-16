@@ -160,11 +160,13 @@ function useOutlineGroups(
   edges: Edge[],
   episodeTitles: Record<number, string>,
 ): OutlineGroup[] {
-  // 序键只表达「按 x 排序的 id 序列」：同向小幅位移不改变序 → 键不变；
-  // 跨节点拖动改变相对顺序 → 键变 → 重算（不把 x 值编进键，否则每帧都变）
+  // 序键与 buildOutlineGroups 同语义（PR #194 评审 4027623775）：仅按 x
+  // 稳定排序（同 x 保持数组序），不带 id 次级键——次级键会让相等帧的键
+  // 先于真实行序变化，越序后键不再变、缓存不失效。序键只表达 id 序列：
+  // 位移不越序则键不变；越序或数组序变化则键变。
   const orderKey = nodes
     .slice()
-    .sort((a, b) => a.position.x - b.position.x || (a.id < b.id ? -1 : 1))
+    .sort((a, b) => a.position.x - b.position.x)
     .map((n) => n.id)
     .join('|')
   const cacheRef = useRef<{

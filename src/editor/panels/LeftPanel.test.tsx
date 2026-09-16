@@ -333,3 +333,77 @@ describe('LeftPanel 外壳', () => {
     expect(await screen.findByText('个人资产库 · 跨项目')).toBeTruthy()
   })
 })
+
+describe('大纲行序的拖拽跟随（issue #157 评审 4027623775）', () => {
+  /** 全部大纲行文本（按 DOM 序）——行序即真实 x 序的投影。 */
+  const rowTexts = () =>
+    [...document.querySelectorAll('.pw-outline-row')].map(
+      (r) => r.textContent ?? '',
+    )
+
+  const beat = (id: string, name: string, x: number): CanvasNode =>
+    ({
+      id,
+      type: 'beat',
+      position: { x, y: 0 },
+      data: { name, tone: '', episodeNo: 1 },
+    }) as unknown as CanvasNode
+
+  const mkProps = (nodes: CanvasNode[], contentNodes: CanvasNode[]) =>
+    ({
+      open: true,
+      width: 280,
+      nodes,
+      contentNodes,
+      edges: [],
+      settings: { characters: [], locations: [] },
+      episodeTitles: {},
+      focusedEpisode: null,
+      docDialog: { editingDocId: null, open: vi.fn(), close: vi.fn() },
+      onResize: vi.fn(),
+      onLocate: vi.fn(),
+      onFocusEpisode: vi.fn(),
+      onRenameEpisode: vi.fn(),
+      onOutlineDrop: vi.fn(),
+      settingsActions: {
+        addCharacter: vi.fn(),
+        renameCharacter: vi.fn(),
+        deleteCharacter: vi.fn(),
+        updateCharacter: vi.fn(),
+        addLocation: vi.fn(),
+        renameLocation: vi.fn(),
+        deleteLocation: vi.fn(),
+        updateLocation: vi.fn(),
+        addDocument: vi.fn(),
+        updateDocument: vi.fn(),
+        deleteDocument: vi.fn(),
+      },
+    }) as Parameters<typeof LeftPanel>[0]
+
+  it('同 x 相等帧保持数组序；越过 A 后行序翻转为真实 x 序', () => {
+    const A = beat('n-a', '节拍A', 100) // id 字典序小于 n-b
+    const B = beat('n-b', '节拍B', 0)
+    // contentNodes 引用恒定（位置帧不换内容引用——与运行时投影语义一致）
+    const contentNodes = [B, A]
+    const { rerender } = render(
+      <LeftPanel {...mkProps([B, A], contentNodes)} />,
+    )
+    expect(rowTexts()[0]).toContain('节拍B') // B.x 更小，行序 B 在前
+
+    // 相等帧：B 拖到与 A 相同 x——稳定排序保持数组序（B 仍在前）
+    rerender(
+      <LeftPanel
+        {...mkProps([{ ...B, position: { x: 100, y: 0 } }, A], contentNodes)}
+      />,
+    )
+    expect(rowTexts()[0]).toContain('节拍B')
+
+    // 越过 A：真实 x 序翻转为 A 在前——序键语义须与大纲一致才能失效缓存
+    rerender(
+      <LeftPanel
+        {...mkProps([{ ...B, position: { x: 200, y: 0 } }, A], contentNodes)}
+      />,
+    )
+    expect(rowTexts()[0]).toContain('节拍A')
+  })
+})
