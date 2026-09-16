@@ -66,15 +66,18 @@ vi.mock('./ai/graphDigest', async (orig) => {
   }
 })
 
-vi.mock('./panels/AiThread', async (orig) => {
-  const actual = await orig<typeof import('./panels/AiThread')>()
-  const { memo } = await import('react')
+// 探针挂真实 AiThread 必然渲染的子组件（AiTopbar）且**不带自有 memo**
+// （PR #194 评审 4027847221）：计数的是真实 AiThread 渲染体的执行——
+// 生产 memo 边界被移除时，位置帧会逐帧驱动子探针、测试失败；mock 若
+// 自带 memo 会替换掉真实组件，永远测不到生产边界。
+vi.mock('./panels/AiThreadTopbar', async (orig) => {
+  const actual = await orig<typeof import('./panels/AiThreadTopbar')>()
   return {
     ...actual,
-    AiThread: memo(function AiThreadRenderProbe() {
+    AiTopbar: function AiTopbarRenderProbe() {
       counts.aiPanel += 1
       return null
-    }),
+    },
   }
 })
 
