@@ -3,6 +3,7 @@
  * schemaVersion 0 文档的节点/设定集仍是「引用 id 化之前」的形态，
  * 本模块把它升级为当前运行态形状，再由 convert.ts 包装为 v1 信封。
  */
+import { trimTitleWhitespace } from './titleWhitespace'
 import type { Edge } from '@xyflow/react'
 import type { CanvasNode } from '../editor/nodes/types'
 import { branchOptionHandle, branchOptionIdOf } from '../editor/graphRules'
@@ -41,7 +42,7 @@ export function normalizeEpisodeTitles(
       warnings?.push(`episodeTitles["${k}"] 的值不是字符串，已删除`)
       continue
     }
-    const trimmed = title.trim()
+    const trimmed = trimTitleWhitespace(title)
     if (!trimmed) {
       warnings?.push(`episodeTitles["${k}"] 的标题去空白后为空，已删除`)
       continue
