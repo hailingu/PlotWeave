@@ -24,7 +24,7 @@ import { EMPTY_SETTINGS } from '../settings'
 import { mergeNodeData } from '../nodes/patch'
 import type { CanvasNode, DialogueFlowNode } from '../nodes/types'
 import { settingsStore } from '../../settings/settingsStore'
-import RightPanel from './RightPanel'
+import { RightPanel } from './RightPanel'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }))
 const invokeMock = vi.mocked(invoke)

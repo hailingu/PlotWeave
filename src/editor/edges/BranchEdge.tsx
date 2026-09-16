@@ -26,7 +26,7 @@ export type BranchFlowEdge = Edge<BranchEdgeData, 'branch'>
  * 源缺失/非分支/悬空句柄（指向已删选项）回退空串，胶囊隐藏。
  * 渐变以各边独立 id 的 linearGradient 定义，引用品牌色语义令牌。
  */
-export default function BranchEdge({
+export function BranchEdge({
   id,
   source,
   sourceX,

@@ -13,7 +13,7 @@ import {
 import { useSettingsSnapshot } from '../../settings/useSettingsSnapshot'
 import { listChatModels, type ChatModelOption } from '../../settings/types'
 import { cardResultEntry } from './aiThreadModel'
-import PreviewCard from './PreviewCard'
+import { PreviewCard } from './PreviewCard'
 import {
   stripExecutionRuntime,
   type AiSession,
@@ -542,7 +542,7 @@ function useAiThreadAssembly(props: AiThreadProps) {
   return { m, msg, saveError, turn }
 }
 
-export default function AiThread(props: AiThreadProps) {
+export function AiThread(props: AiThreadProps) {
   const { m, msg, saveError, turn } = useAiThreadAssembly(props)
   const onOpenSettings = props.onOpenSettings
   return (

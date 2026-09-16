@@ -1,5 +1,5 @@
-import Field from './Field'
-import EpisodeField from './EpisodeField'
+import { Field } from './Field'
+import { EpisodeField } from './EpisodeField'
 import { useCompositionSafeValue } from './compositionValue'
 import { useNodeEdit } from '../../nodeEdit'
 import type { ProjectSettings } from '../../settings'
@@ -112,7 +112,7 @@ function SceneNoField({
   )
 }
 
-export default function SceneForm({
+export function SceneForm({
   node,
   settings,
 }: {

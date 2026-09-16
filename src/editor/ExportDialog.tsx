@@ -74,7 +74,7 @@ function bodyHint(
  * 上一变体的复制回执。预览、复制与下载消费同一全文。Esc / 点击遮罩关闭。
  * 文件保存对话框随后续 Tauri 集成升级。
  */
-export default function ExportDialog({
+export function ExportDialog({
   projectName,
   model,
   onClose,

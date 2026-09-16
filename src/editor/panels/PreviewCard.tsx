@@ -90,7 +90,7 @@ interface PreviewCardProps {
   readonly onDismiss: () => void
 }
 
-export default function PreviewCard({
+export function PreviewCard({
   v,
   status,
   historical,

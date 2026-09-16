@@ -131,7 +131,7 @@ function PlusNodeMenu(
   )
 }
 
-export default function EditorTitlebar({
+export function EditorTitlebar({
   projectName,
   onRenameProject,
   leftOpen,

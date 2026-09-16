@@ -54,6 +54,11 @@ written in English for agent interoperability.
 - Avoid barrel exports that create cycles or unintentionally widen a package's
   public API. Cross-feature imports must use the owning feature's explicit
   public entry point.
+- Use named exports only (per the Google TypeScript Style Guide reference
+  above; [issue #164](https://github.com/hailingu/PlotWeave/issues/164),
+  implemented). `React.lazy` assembly is not a reason to keep a default
+  export: map the named export at the assembly point, e.g.
+  `lazy(() => import('./EditorView').then((m) => ({ default: m.EditorView })))`.
 - Distinguish browser (Tauri webview) and shared modules so
   environment-specific dependencies cannot leak across runtime boundaries; the
   browser-memory persistence fallback must stay behaviorally aligned with the

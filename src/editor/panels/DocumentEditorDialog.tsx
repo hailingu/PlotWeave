@@ -184,7 +184,7 @@ function useDocumentDraft(doc: DocumentEntity) {
   return { title, body, relatedIds, editTitle, editBody, toggleRelated }
 }
 
-export default function DocumentEditorDialog({
+export function DocumentEditorDialog({
   doc,
   settings,
   onSave,

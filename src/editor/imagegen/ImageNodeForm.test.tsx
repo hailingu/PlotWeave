@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { NodeEditContext, type NodeEditApi } from '../nodeEdit'
 import { ImageGenProvider } from './ImageGenProvider'
-import ImageNodeForm from '../nodes/settings/ImageNodeForm'
+import { ImageNodeForm } from '../nodes/settings/ImageNodeForm'
 import type { CanvasNode, ImageFlowNode } from '../nodes/types'
 
 vi.mock('../projectAssets', () => ({

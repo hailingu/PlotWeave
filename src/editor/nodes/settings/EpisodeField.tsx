@@ -1,10 +1,10 @@
-import Field from './Field'
+import { Field } from './Field'
 import { useNodeEdit } from '../../nodeEdit'
 
 /** 集归属（§3.5：集 = 编号 + 行内标题，节点以 episodeNo 归属集）。
  * 清空 = 移出所有集；分镜卡随宿主场景（attach 派生），不出此字段。
  * 场景/节奏/对白/分支四类表单共享（issue #39 自 NodeSettingsPanel 拆出）。 */
-export default function EpisodeField({
+export function EpisodeField({
   nodeType,
   nodeId,
   episodeNo,

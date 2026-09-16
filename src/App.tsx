@@ -11,7 +11,7 @@ import {
   type RefObject,
   type SetStateAction,
 } from 'react'
-import HomePage from './home/HomePage'
+import { HomePage } from './home/HomePage'
 import type { OpenProjectError } from './home/OpenErrorBanner'
 import { useExitFlush } from './useExitFlush'
 import { projectStore, type ProjectContent } from './projectStore'
@@ -21,11 +21,17 @@ import type { AiSession } from './editor/ai/session'
 /** 编辑器视图按域惰性加载：React Flow 的运行时引用全部封闭在编辑器域内，
  * 拆出入口 chunk 后冷启动只解析首页所需代码（issue #34）。
  * 切换经 startTransition 包裹：chunk 未就绪前保留当前界面而非整窗空白
- * （评审 P2，pullrequestreview-5138102539）。 */
-const EditorView = lazy(() => import('./editor/EditorView'))
+ * （评审 P2，pullrequestreview-5138102539）。
+ * 命名导出经 default 映射装配 React.lazy（issue #164，规范：named
+ * exports only——lazy 是装配点而非保留 default export 的理由）。 */
+const EditorView = lazy(() =>
+  import('./editor/EditorView').then((m) => ({ default: m.EditorView })),
+)
 
 /** 设置视图低频使用（⌘, 叠加打开），同样惰性加载不占入口 chunk。 */
-const SettingsView = lazy(() => import('./settings/SettingsView'))
+const SettingsView = lazy(() =>
+  import('./settings/SettingsView').then((m) => ({ default: m.SettingsView })),
+)
 
 /** 未落盘会话的保留条目：保存失败后跨首页保留，重开项目时恢复并自动重试。 */
 interface UnsavedAiSession {
@@ -560,7 +566,7 @@ function HomeScreen({
  * （独立窗口形态随桌面端演进升级），关闭后回到原界面。
  * 项目数据经 projectStore 持久化（Tauri 落盘 / 浏览器内存回退）。
  */
-export default function App() {
+export function App() {
   const [openProject, setOpenProject] = useState<OpenProject | null>(null)
   const [openFailure, setOpenFailure] = useState<OpenProjectError | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)

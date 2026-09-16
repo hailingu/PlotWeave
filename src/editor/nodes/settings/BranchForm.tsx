@@ -1,5 +1,5 @@
-import Field from './Field'
-import EpisodeField from './EpisodeField'
+import { Field } from './Field'
+import { EpisodeField } from './EpisodeField'
 import { useCompositionSafeValue } from './compositionValue'
 import { useNodeEdit } from '../../nodeEdit'
 import { uid } from '../../../uid'
@@ -41,7 +41,7 @@ function BranchOptionRow({
 
 /** 分支表单：问句 + 选项增删（排序随后续任务）。
  * 自 NodeSettingsPanel.tsx 外置（issue #39，ImageNodeForm.tsx 先例）。 */
-export default function BranchForm({
+export function BranchForm({
   node,
 }: {
   readonly node: Extract<PanelNode, { type: 'branch' }>

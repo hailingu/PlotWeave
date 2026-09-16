@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import ProjectCard from './ProjectCard'
-import OpenErrorBanner, { type OpenProjectError } from './OpenErrorBanner'
+import { ProjectCard } from './ProjectCard'
+import { OpenErrorBanner, type OpenProjectError } from './OpenErrorBanner'
 import { ConfirmDeleteDialog, RenameDialog } from './Dialogs'
 import { filterProjects, type ProjectSummary } from './projects'
 
@@ -358,7 +358,7 @@ function ProjectDialogs({
   )
 }
 
-export default function HomePage({
+export function HomePage({
   projects,
   loading = false,
   openError = null,

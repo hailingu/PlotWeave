@@ -1,10 +1,10 @@
 import { useNodeEdit } from '../../nodeEdit'
-import ImageNodeForm from './ImageNodeForm'
-import SceneForm from './SceneForm'
-import BeatForm from './BeatForm'
-import DialogueForm from './DialogueForm'
-import BranchForm from './BranchForm'
-import ShotForm from './ShotForm'
+import { ImageNodeForm } from './ImageNodeForm'
+import { SceneForm } from './SceneForm'
+import { BeatForm } from './BeatForm'
+import { DialogueForm } from './DialogueForm'
+import { BranchForm } from './BranchForm'
+import { ShotForm } from './ShotForm'
 import type { PanelNode } from './panelNode'
 
 /**
@@ -27,11 +27,7 @@ export { EditableName } from './EditableName'
  * 设置面板外壳：按节点类型分发表单；底部 ⧉ 复制 / 🗑 删除（§4.3）。
  * 由各节点组件在 openSettingsId 命中时渲染于卡片下方。
  */
-export default function NodeSettingsPanel({
-  node,
-}: {
-  readonly node: PanelNode
-}) {
+export function NodeSettingsPanel({ node }: { readonly node: PanelNode }) {
   const { duplicateNode, deleteNode, settings } = useNodeEdit()
 
   return (

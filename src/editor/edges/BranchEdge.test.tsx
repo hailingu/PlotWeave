@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
 import { Position, type EdgeProps } from '@xyflow/react'
 import type { ReactNode } from 'react'
-import BranchEdge, { type BranchFlowEdge } from './BranchEdge'
+import { BranchEdge, type BranchFlowEdge } from './BranchEdge'
 
 const useInternalNodeMock = vi.hoisted(() => vi.fn())
 const edgeLookupMock = vi.hoisted(() => ({

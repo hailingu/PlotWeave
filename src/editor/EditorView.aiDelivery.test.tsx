@@ -10,7 +10,7 @@ import {
 } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { invoke } from '@tauri-apps/api/core'
-import EditorView from './EditorView'
+import { EditorView } from './EditorView'
 import type { EditorProjectContent } from './useEditorDocument'
 import type { AssistantMessage, ChatMessage } from './ai/chat'
 import type { AiSession } from './ai/session'

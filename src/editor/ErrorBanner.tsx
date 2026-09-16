@@ -1,5 +1,5 @@
 /** 顶部横幅：role=alert，深红底——保存/导入失败的持续可见提示（§10.2 用户可见诊断）。 */
-export default function ErrorBanner({ message }: { readonly message: string }) {
+export function ErrorBanner({ message }: { readonly message: string }) {
   return (
     <div
       role="alert"

@@ -10,7 +10,7 @@ import type { NodeProps } from '@xyflow/react'
 import { NodeEditContext, type NodeEditApi } from '../nodeEdit'
 import type { ProjectSettings } from '../settings'
 import { SCENE_SHOT_HANDLE } from '../graphRules'
-import SceneNode from './SceneNode'
+import { SceneNode } from './SceneNode'
 import type { SceneFlowNode, SceneNodeData } from './types'
 
 vi.mock('@xyflow/react', async (importOriginal) => {

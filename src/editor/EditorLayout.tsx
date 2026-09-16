@@ -3,14 +3,15 @@
  * 三栏主体（左栏大纲/设定集、中区画布、右栏检查器/AI）与顶层浮层。
  * 本组件只做 props 解构与布局，不含状态与业务语义。
  */
-import EditorTitlebar from './EditorTitlebar'
-import ErrorBanner from './ErrorBanner'
-import LeftPanel from './panels/LeftPanel'
-import RightPanel from './panels/RightPanel'
-import EditorCanvasRegion, {
+import { EditorTitlebar } from './EditorTitlebar'
+import { ErrorBanner } from './ErrorBanner'
+import { LeftPanel } from './panels/LeftPanel'
+import { RightPanel } from './panels/RightPanel'
+import {
+  EditorCanvasRegion,
   type EditorCanvasRegionProps,
 } from './EditorCanvasRegion'
-import EditorOverlays, { type EditorOverlaysProps } from './EditorOverlays'
+import { EditorOverlays, type EditorOverlaysProps } from './EditorOverlays'
 import type { EditorLayoutProps } from './editorLayoutProps'
 
 /** 布局横幅区（EditorLayout 拆分，issue #99）：自动保存失败与动作错误。 */
@@ -93,7 +94,7 @@ function toDocDialogProps(panels: EditorLayoutProps['panels']) {
 }
 
 /** 编辑器整体布局：顶部工具栏（§3.3）+ 三栏主体（§3.4）+ 浮层。 */
-export default function EditorLayout(props: EditorLayoutProps) {
+export function EditorLayout(props: EditorLayoutProps) {
   const { project, doc, panels, persistence, history, view, graph, ai } = props
   return (
     <div className="editor-root">

@@ -13,7 +13,7 @@ import {
   within,
 } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import EditorView from './EditorView'
+import { EditorView } from './EditorView'
 import type { EditorProjectContent } from './useEditorDocument'
 import type { CanvasNode } from './nodes/types'
 

@@ -3,8 +3,8 @@ import { type NodeProps } from '@xyflow/react'
 import { useNodeEdit } from '../nodeEdit'
 import { useImageJobs } from '../imagegen/context'
 import { projectAssets } from '../projectAssets'
-import NodeSettingsPanel from './settings/NodeSettingsPanel'
-import NodeSettingsGear from './settings/NodeSettingsGear'
+import { NodeSettingsPanel } from './settings/NodeSettingsPanel'
+import { NodeSettingsGear } from './settings/NodeSettingsGear'
 import type { AssetRef } from '../../model/document'
 import type { ImageFlowNode } from './types'
 
@@ -66,11 +66,7 @@ function outputPlaceholder(
  * ⚙️）→ Prompt 预览 → 产物区（生成图像 / 生成中 / 空态 / 悬空引用占位）。
  * 不参与任何连线（自由摆放），无 Handle。
  */
-export default function ImageNode({
-  id,
-  data,
-  selected,
-}: NodeProps<ImageFlowNode>) {
+export function ImageNode({ id, data, selected }: NodeProps<ImageFlowNode>) {
   const { projectId, openSettingsId, toggleSettings, assets } = useNodeEdit()
   const { jobOf } = useImageJobs()
   const job = jobOf(id)

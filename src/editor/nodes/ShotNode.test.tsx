@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { NodeProps } from '@xyflow/react'
 import { NodeEditContext, type NodeEditApi } from '../nodeEdit'
-import ShotNode from './ShotNode'
+import { ShotNode } from './ShotNode'
 import type { ShotFlowNode } from './types'
 
 vi.mock('../projectAssets', () => ({

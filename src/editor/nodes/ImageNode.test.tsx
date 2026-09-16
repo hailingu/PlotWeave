@@ -10,7 +10,7 @@ import type { NodeProps } from '@xyflow/react'
 import { NodeEditContext, type NodeEditApi } from '../nodeEdit'
 import { ImageGenProvider } from '../imagegen/ImageGenProvider'
 import { projectAssets } from '../projectAssets'
-import ImageNode from './ImageNode'
+import { ImageNode } from './ImageNode'
 import type { AssetRef } from '../../model/document'
 import type { CanvasNode, ImageFlowNode } from './types'
 

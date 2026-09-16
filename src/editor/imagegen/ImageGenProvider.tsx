@@ -7,7 +7,7 @@
  */
 import { useRef, type ReactNode } from 'react'
 import type { AssetRef } from '../../model/document'
-import ErrorBanner from '../ErrorBanner'
+import { ErrorBanner } from '../ErrorBanner'
 import type { ProjectSettings } from '../settings'
 import type { NodeDataPatch } from '../nodes/patch'
 import type { CanvasNode } from '../nodes/types'

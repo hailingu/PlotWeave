@@ -425,7 +425,7 @@ function SettingsEditorBody({
  * 系统，原则 1）。加载完成前不渲染编辑表单，读取失败进入可重试
  * 错误态且不保存（issue #120）。
  */
-export default function SettingsView({ onClose }: SettingsViewProps) {
+export function SettingsView({ onClose }: SettingsViewProps) {
   const [settings, setSettings] = useState<AppSettings>(defaultSettings)
   const [loadPhase, setLoadPhase] = useState<SettingsLoadPhase>({
     status: 'loading',

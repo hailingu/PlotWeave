@@ -22,7 +22,7 @@ export interface CanvasContextMenuProps {
   readonly onClose: () => void
 }
 
-export default function CanvasContextMenu({
+export function CanvasContextMenu({
   x,
   y,
   nodeId,

@@ -1,4 +1,4 @@
-import Field from './Field'
+import { Field } from './Field'
 import { useCompositionSafeValue } from './compositionValue'
 import { useNodeEdit } from '../../nodeEdit'
 import { uid } from '../../../uid'
@@ -122,7 +122,7 @@ function ShotNoField({
   )
 }
 
-export default function ShotForm({
+export function ShotForm({
   node,
 }: {
   readonly node: Extract<PanelNode, { type: 'shot' }>

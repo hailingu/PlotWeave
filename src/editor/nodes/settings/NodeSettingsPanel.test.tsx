@@ -9,7 +9,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { NodeEditContext, type NodeEditApi } from '../../nodeEdit'
 import type { NodeDataPatch } from '../patch'
 import type { ProjectSettings } from '../../settings'
-import NodeSettingsPanel, { EditableName } from './NodeSettingsPanel'
+import { NodeSettingsPanel, EditableName } from './NodeSettingsPanel'
 import type { PanelNode } from './panelNode'
 
 afterEach(cleanup)

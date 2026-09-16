@@ -16,7 +16,7 @@ import {
   screen,
   waitFor,
 } from '@testing-library/react'
-import AssetsPanel from './AssetsPanel'
+import { AssetsPanel } from './AssetsPanel'
 import { resetRenameStateForTests } from './assetsRenameState'
 import { libraryStore, type LibraryAsset } from '../../library/libraryStore'
 

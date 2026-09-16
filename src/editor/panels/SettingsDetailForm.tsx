@@ -73,7 +73,7 @@ function DetailActions({
 }
 
 /** 展开控件（条目行的 ▸/▾ 折叠钮）→ 表单 -> 保存/取消的最小编辑单元。 */
-export default function SettingsDetailForm({
+export function SettingsDetailForm({
   nameField,
   descField,
   baselineName,

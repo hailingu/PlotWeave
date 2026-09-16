@@ -10,7 +10,7 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { useState } from 'react'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import LeftPanel from './LeftPanel'
+import { LeftPanel } from './LeftPanel'
 import type { SettingsActions } from './settingsActions'
 import type { CanvasNode } from '../nodes/types'
 import type { DocumentEntity, ProjectSettings } from '../settings'

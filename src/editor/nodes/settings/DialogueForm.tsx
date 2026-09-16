@@ -1,5 +1,5 @@
-import Field from './Field'
-import EpisodeField from './EpisodeField'
+import { Field } from './Field'
+import { EpisodeField } from './EpisodeField'
 import { useCompositionSafeValue } from './compositionValue'
 import { useNodeEdit } from '../../nodeEdit'
 import { uid } from '../../../uid'
@@ -80,7 +80,7 @@ function DialogueLineRow({
 /** 对白表单：名称 + 台词列表（台词/动作、说话人、增删）。@ 提及与排序随后续任务。
  * patch 回调在表单内收口 nodeType 判别字段。
  * 自 NodeSettingsPanel.tsx 外置（issue #39，ImageNodeForm.tsx 先例）。 */
-export default function DialogueForm({
+export function DialogueForm({
   node,
   settings,
 }: {
