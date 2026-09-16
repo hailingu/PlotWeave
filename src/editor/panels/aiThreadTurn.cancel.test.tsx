@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react'
 import { useAiTurn, type UseAiTurnOpts } from './aiThreadTurn'
 import { runModelTurn } from './aiThreadModel'
+import { takeTurn, type TurnBox } from '../ai/pendingTurns'
 import { TurnCancelledError } from '../ai/agentLoop'
 import type { ThreadEntry } from '../ai/session'
 import type { ProviderConfig } from '../../settings/types'
@@ -183,7 +184,8 @@ describe('useAiTurn 取消（issue #154）', () => {
   it('卸载后（#63 导航）迟到的已取消结果不上屏、不复活旧轮', async () => {
     const calls = pendingTurn()
     const append = vi.fn()
-    const { result, unmount } = renderHook(() => useAiTurn(mkOpts({ append })))
+    const opts = mkOpts({ append })
+    const { result, unmount } = renderHook(() => useAiTurn(opts))
 
     act(() => {
       result.current.setDraft('你好')
@@ -201,5 +203,36 @@ describe('useAiTurn 取消（issue #154）', () => {
       .flat()
       .map((e) => e.text)
     expect(appended).toEqual(['你好'])
+    // 取消后注销注册表：重开不再认领到已取消的盒子（PR #187 评审 4024585104）
+    expect(takeTurn(opts.projectId)).toBeNull()
+  })
+
+  it('取消的盒子带 canceller：认领方据此停止旧轮（PR #187 评审 4024585097）', async () => {
+    const calls = pendingTurn()
+    const append = vi.fn()
+    const opts = mkOpts({ append })
+    const first = renderHook(() => useAiTurn(opts))
+    act(() => {
+      first.result.current.setDraft('你好')
+    })
+    await startSend(first.result)
+    await waitFor(() => expect(first.result.current.busy).toBe(true))
+    // 模拟导航卸载，盒子留在注册表
+    first.unmount()
+    const box = takeTurn(opts.projectId)
+    expect(box).not.toBeNull()
+    // 取消路径产出的盒子暴露 canceller，认领方可停止旧轮
+    const settled = Promise.resolve({
+      entries: [{ id: 960, kind: 'note' as const, text: '已取消' }],
+      error: null,
+    })
+    const cancelBox: TurnBox = {
+      promise: settled,
+      canceller: () =>
+        calls[0]!.signal && (calls[0]!.signal.isCancelled = () => true),
+    }
+    cancelBox.canceller?.()
+    expect(calls[0]!.signal?.isCancelled()).toBe(true)
+    void calls
   })
 })

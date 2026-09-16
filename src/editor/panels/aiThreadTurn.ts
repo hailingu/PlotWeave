@@ -15,6 +15,7 @@ import {
   type AiCommand,
   type BatchValidation,
 } from '../ai/commands'
+import { isCancelledTurnResult } from '../ai/pendingTurns'
 import {
   registerTurn,
   returnTurn,
@@ -39,7 +40,10 @@ function useTurnGeneration() {
     const generation = ++generationRef.current
     const flag = { cancelled: false }
     flagRef.current = flag
-    const signal = { isCancelled: () => flag.cancelled }
+    // signal 为可变方法：认领方的 canceller 据此停止旧轮（PR #187 评审）
+    const signal: { isCancelled: () => boolean } = {
+      isCancelled: () => flag.cancelled,
+    }
     return { generation, signal }
   }
   const cancelTurn = () => {
@@ -226,9 +230,23 @@ export function useAiTurn(opts: UseAiTurnOpts) {
           ? { entries: [{ id: 0, kind: 'note', text: '已取消' }], error: null }
           : { entries: null, error: String(err) },
     )
-    const box: TurnBox = { promise: settled }
+    // 取消盒子的消费者（.then 后）——落定后据此打 canceller 标并判取消
+    const boxRef: { current: TurnBox | null } = { current: null }
+    const consumed = settled.then((result) => {
+      const cancelBox = boxRef.current
+      if (cancelBox && isCancelledTurnResult(result)) {
+        Object.assign(cancelBox, {
+          canceller: () => {
+            signal.isCancelled = () => true
+          },
+        })
+      }
+      return result
+    })
+    const box: TurnBox = { promise: consumed }
+    boxRef.current = box
     registerTurn(opts.projectId, box)
-    const result = await settled
+    const result = await consumed
     // 世代守卫：新一轮或取消之后，本回合结果不再交付本实例（取消回执
     // 已由取消路径上屏，不随迟到结果重复交付）
     if (aliveRef.current && generation === turnGen.currentGeneration()) {
@@ -238,6 +256,10 @@ export function useAiTurn(opts: UseAiTurnOpts) {
       // 本实例消费，但提交确认前不撤销登记：落定与卸载同批调度时，
       // 未提交的追加被丢弃，持有机制在 cleanup 把盒子归还待重新认领
       heldBox.hold(box)
+    } else if (isCancelledTurnResult(result)) {
+      // 取消且本实例不再消费（已卸载/被取代）：注销注册表，避免重开复活
+      // 已取消盒子、重复上屏取消回执（PR #187 评审 4024585104）
+      unregisterTurn(opts.projectId, box)
     }
     // 已卸载或已被取代（取消/新轮次）：结果不上屏；已卸载时盒子留在
     // 注册表由重挂载/重开同一项目的实例认领（issue #63）
