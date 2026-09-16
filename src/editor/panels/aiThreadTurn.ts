@@ -83,7 +83,18 @@ function useTurnLifecycle(projectId: string) {
       unregisterTurn(projectId, box)
     }
   }
-  return { begin, register, settle, cancel: cancelTurn }
+  /** 取消：置位 signal + 推进世代，并即时注销本回合盒子——不等 settle，
+   * 否则取消后导航重开会认领已取消盒子、重复交付取消回执（PR #187 评审
+   * 4026037966）；identity 检查保证不误删已登记的新轮。 */
+  const cancel = () => {
+    cancelTurn()
+    const box = boxRef.current
+    if (box) {
+      boxRef.current = null
+      unregisterTurn(projectId, box)
+    }
+  }
+  return { begin, register, settle, cancel }
 }
 
 /** 运行一轮模型回合并登记盒子（useAiTurn 拆分降行数）：runModelTurn 跑
@@ -242,12 +253,14 @@ function useTurnClaimDelivery(
   )
   useEffect(() => {
     applyClaimRef.current = (result, box) => {
-      setBusy(false)
       // 取消守卫：claim 期间被取消的盒子不交付（PR #187 评审 4025795506）。
-      // cancel 把 claimBoxRef 置 null 并置位 signal，迟到结果不得上屏。
+      // cancel 把 claimBoxRef 置 null 并置位 signal；守卫须先于 setBusy——
+      // 否则旧 promise 迟到落定会清掉取代轮次的 busy、放开并发发送
+      // （PR #187 评审 4026037975）。取消路径的 busy 已由 cancel 自身复位。
       const wasCancelled = claimBoxRef.current === null
       claimBoxRef.current = null
       if (wasCancelled) return
+      setBusy(false)
       if (result.entries) {
         opts.append(
           claimedEntries(result.entries, opts.nextId, opts.onValidateCommands),

@@ -307,4 +307,72 @@ describe('useAiTurn 取消（issue #154）', () => {
       .map((e) => e.text)
     expect(appended).toEqual(['你好'])
   })
+
+  it('本地取消后落定前导航：盒子即时注销，重开认领不到（PR #187 评审 4026037966）', async () => {
+    const calls = pendingTurn()
+    const opts = mkOpts()
+    const first = renderHook(() => useAiTurn(opts))
+    act(() => {
+      first.result.current.setDraft('你好')
+    })
+    await startSend(first.result)
+    await waitFor(() => expect(first.result.current.busy).toBe(true))
+    // 取消后立即卸载（请求仍未落定）：盒子须已注销，不留待 settle
+    act(() => {
+      first.result.current.cancel()
+    })
+    first.unmount()
+    expect(takeTurn(opts.projectId)).toBeNull()
+    await act(async () => {
+      calls[0]!.resolve([
+        { id: 990, kind: 'msg', role: 'assistant', text: '迟到回复' },
+      ])
+    })
+    expect(takeTurn(opts.projectId)).toBeNull()
+  })
+
+  it('认领回合取消后发新轮：旧 promise 落定不清新轮 busy（PR #187 评审 4026037975）', async () => {
+    const calls = pendingTurn()
+    const append = vi.fn()
+    const opts = mkOpts({ append })
+    // 发起 → 卸载 → 认领
+    const first = renderHook(() => useAiTurn(opts))
+    act(() => {
+      first.result.current.setDraft('你好')
+    })
+    await startSend(first.result)
+    await waitFor(() => expect(first.result.current.busy).toBe(true))
+    first.unmount()
+    const second = renderHook(() => useAiTurn(opts))
+    await waitFor(() => expect(second.result.current.busy).toBe(true))
+    // 取消认领的回合，随即发起新一轮
+    act(() => {
+      second.result.current.cancel()
+    })
+    act(() => {
+      second.result.current.setDraft('继续')
+    })
+    await startSend(second.result)
+    await waitFor(() => expect(second.result.current.busy).toBe(true))
+    expect(calls).toHaveLength(2)
+    // 被取消的旧 promise 迟到落定：不得清掉新轮的 busy
+    await act(async () => {
+      calls[0]!.resolve([
+        { id: 991, kind: 'msg', role: 'assistant', text: '旧轮回复' },
+      ])
+    })
+    expect(second.result.current.busy).toBe(true)
+    const appended = append.mock.calls
+      .map((c) => c[0] as ThreadEntry[])
+      .flat()
+      .map((e) => e.text)
+    expect(appended).not.toContain('旧轮回复')
+    // 新轮正常落定
+    await act(async () => {
+      calls[1]!.resolve([
+        { id: 992, kind: 'msg', role: 'assistant', text: '新轮回复' },
+      ])
+    })
+    await waitFor(() => expect(second.result.current.busy).toBe(false))
+  })
 })
