@@ -75,13 +75,16 @@ pub(crate) enum ProxyError {
     /// 响应体限读错误透传（超限/读取超时/读取失败/UTF-8，#45 首片类型）：
     /// 文案与来源链原样保留。
     Body(ReadBodyError),
-    /// 非 2xx 状态：`context` 为「服务返回」/「下载图像返回」，`head` 为
-    /// 截断后的响应体前缀（下载路径无响应体时为空）。
+    /// 主响应非 2xx 状态（聊天/生成主请求）：`context` 为「服务返回」，
+    /// `head` 为截断后的响应体前缀——分隔符「：」恒在（历史行为：空响应
+    /// 体也保留尾部冒号，PR #179 评审修复）。
     Status {
         context: String,
         code: reqwest::StatusCode,
         head: String,
     },
+    /// url 回退下载的非 2xx 状态：无响应体摘录，历史文案不带分隔符。
+    DownloadStatus(reqwest::StatusCode),
     /// 响应体 JSON 解析失败：`source` 保留 `serde_json::Error`。
     InvalidJson {
         context: String,
@@ -109,14 +112,8 @@ impl std::fmt::Display for ProxyError {
                 context,
                 code,
                 head,
-            } if head.is_empty() => {
-                write!(f, "{context} {code}")
-            }
-            ProxyError::Status {
-                context,
-                code,
-                head,
             } => write!(f, "{context} {code}：{head}"),
+            ProxyError::DownloadStatus(code) => write!(f, "下载图像返回 {code}"),
             ProxyError::InvalidJson { context, source } => write!(f, "{context}：{source}"),
             ProxyError::InvalidResponse { detail } => write!(f, "{detail}"),
             ProxyError::DownloadRefused { detail } => write!(f, "{detail}"),
@@ -134,6 +131,7 @@ impl std::error::Error for ProxyError {
             ProxyError::Body(e) => Some(e),
             ProxyError::InvalidJson { source, .. } => Some(source),
             ProxyError::Status { .. }
+            | ProxyError::DownloadStatus(_)
             | ProxyError::InvalidResponse { .. }
             | ProxyError::DownloadRefused { .. } => None,
         }
@@ -367,11 +365,15 @@ mod tests {
             source: reqwest_err(),
         };
         assert!(e.to_string().starts_with("请求失败："), "实际：{e}");
+        // 主响应空体也保留尾部「：」（历史 format! 形态，评审修复回归）
         let e = ProxyError::Status {
-            context: "下载图像返回".into(),
+            context: "服务返回".into(),
             code: reqwest::StatusCode::NOT_FOUND,
             head: String::new(),
         };
+        assert_eq!(e.to_string(), "服务返回 404 Not Found：");
+        // url 回退下载状态无摘录、不带分隔符（独立历史形态）
+        let e = ProxyError::DownloadStatus(reqwest::StatusCode::NOT_FOUND);
         assert_eq!(e.to_string(), "下载图像返回 404 Not Found");
         let e = ProxyError::InvalidResponse {
             detail: "服务未返回回复内容".into(),

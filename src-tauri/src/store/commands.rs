@@ -17,6 +17,10 @@ use crate::store::types::{
 use crate::store::validate::{prepare_save, verify_save_asset_files};
 #[tauri::command]
 pub fn create_project(app: AppHandle, name: String) -> Result<ProjectMeta, String> {
+    // 不可信输入校验先于任何存储打开/创建（PR #179 评审修复）：名称非法
+    // 不得触发应用数据/projects 目录创建副作用，也不得被存储故障顶替为
+    // 名称诊断——历史行为是名称校验先于 projects_dir
+    sanitize_name(&name)?;
     let root = projects_dir(&app).map_err(to_ipc_text)?;
     create_project_file(&root, &name).map_err(to_ipc_text)
 }

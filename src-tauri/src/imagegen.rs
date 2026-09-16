@@ -236,11 +236,7 @@ async fn fetch_image_url(url: &str) -> Result<Vec<u8>, ProxyError> {
         let status = response.status();
         let bytes = read_bytes_capped(response, GENERATED_IMAGE_MAX_BYTES).await?;
         if !status.is_success() {
-            return Err(ProxyError::Status {
-                context: "下载图像返回".into(),
-                code: status,
-                head: String::new(),
-            });
+            return Err(ProxyError::DownloadStatus(status));
         }
         return Ok(bytes.to_vec());
     }
