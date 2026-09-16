@@ -16,7 +16,7 @@ import { EditorLayout } from './EditorLayout'
 import { useEditorController } from './useEditorController'
 import type { EditorProjectContent } from './useEditorDocument'
 import type { ProjectContent } from '../model/content'
-import type { AiCommitIdentity } from './panels/AiThread'
+import type { AiCommitIdentity } from './ai/commitIdentity'
 import type { AiSession } from './ai/session'
 
 interface EditorViewProps {

@@ -8,7 +8,8 @@ import {
 } from '../ai/commands'
 import { type ProjectSettings } from '../settings'
 import { resolveCharacterName, resolveLocationName } from '../settings'
-import { AiThread, AiSettingsButton, type AiCommitIdentity } from './AiThread'
+import { AiThread, AiSettingsButton } from './AiThread'
+import type { AiCommitIdentity } from '../ai/commitIdentity'
 import type { CanvasNode } from '../nodes/types'
 import type { AiSession } from '../ai/session'
 

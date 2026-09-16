@@ -20,6 +20,7 @@ import {
   type AiSession,
   type ThreadEntry,
 } from '../ai/session'
+import type { AiCommitIdentity } from '../ai/commitIdentity'
 
 import { useAiSessionPersistence } from '../ai/useAiSessionPersistence'
 import { revalidatePendingCard, useAiTurn } from './aiThreadTurn'
@@ -473,20 +474,6 @@ function AiEntryBody({
  * - 服务不支持工具时退回 ```json 围栏批次文本协议。
  * 逻辑在 useAiModels/useAiThreadMessages/useAiTurn，纯函数在 aiThreadModel.ts。
  */
-/** 执行卡的提交身份（§12.2 提交身份，[issue #139](https://github.com/hailingu/PlotWeave/issues/139)
- * 收紧）：批次计数必带、画布确认等待器可选——嵌套形状在类型层固定两者
- * 耦合（等待器存在 ⇒ 计数必在）。要推迟 executed 落盘（等待器存在）而
- * 缺计数的装配，会让未确认卡落盘降级 pending 后没有 aiRevisionAfter 对账
- * 身份，重开时已随画布落盘的批次可被再次执行；该误配形态不可构造。
- * 只带计数的形态供恢复会话对账（不等提交）；省略整组为无持久化的隔离
- * 装配——执行成功立即 executed，不进入未确认态。 */
-export interface AiCommitIdentity {
-  /** 画布批次计数（§12.2 提交身份）：执行后 +1 记录到卡片，恢复时对账。 */
-  readonly aiRevision: number
-  /** 承载批次的画布文档确认落盘后兑现；执行卡据此推迟 executed 落盘。 */
-  readonly whenCanvasCommitted?: () => Promise<void>
-}
-
 /** ✦AI 会话面板的对外契约：校验/读工具/执行回调、恢复会话及其持久化通道。 */
 interface AiThreadProps {
   /** 项目 id：在途回合跨卸载归属的键（issue #63，见 ai/pendingTurns）。 */
