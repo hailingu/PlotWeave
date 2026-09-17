@@ -425,7 +425,9 @@ function useHomeProjectActions(
         // 拒绝式保存（PR #199 评审）：saveQuiet 按契约吞掉一切拒绝——
         // 落盘失败永远到不了失败横幅；走 save 拒绝（失败同经保存链登记
         // 后台重试，横幅负责立即可见可重试）
-        await projectStore.save(id, { ...doc, name })
+        const renamed = { ...doc, name }
+        feedback.watchSave(seq, renamed)
+        await projectStore.save(id, renamed)
         feedback.succeed(seq)
         await refreshProjects()
       } catch (err) {

@@ -1,5 +1,7 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { HomeActionFailure } from './home/ActionErrorBanner'
+import type { ProjectContent } from './model/content'
+import { onRetryPersisted } from './projectStore/saveChain'
 
 /** 首页项目变更失败反馈（issue #132，自 App.tsx 拆出守文件行数上限）：
  * 创建/重命名/复制/删除四动作共用。尝试开始即清旧错（新尝试视为旧错误
@@ -12,16 +14,23 @@ export function useHomeActionFeedback() {
     readonly retry?: () => void
   } | null>(null)
   const seqRef = useRef(0)
+  const pendingSaveRef = useRef<{
+    seq: number
+    doc: ProjectContent
+    recovered: boolean
+  } | null>(null)
   /** 尝试开始：作废旧错误，返回本次尝试序号。 */
   const begin = useCallback(() => {
     const seq = ++seqRef.current
+    pendingSaveRef.current = null
     setFailure(null)
     return seq
   }, [])
   /** 尝试失败（序号仍为最新才提交）：登记动作/目标/诊断与可选重试闭包。 */
   const fail = useCallback(
     (seq: number, error: HomeActionFailure, retry?: () => void) => {
-      if (seq === seqRef.current) setFailure({ error, retry })
+      if (seq === seqRef.current && !pendingSaveRef.current?.recovered)
+        setFailure({ error, retry })
     },
     [],
   )
@@ -29,8 +38,24 @@ export function useHomeActionFeedback() {
   const succeed = useCallback((seq: number) => {
     if (seq === seqRef.current) setFailure(null)
   }, [])
+  /** 在保存前登记当前尝试的文档身份；较旧读取迟到时不得覆盖新登记。 */
+  const watchSave = useCallback((seq: number, doc: ProjectContent) => {
+    if (seq === seqRef.current)
+      pendingSaveRef.current = { seq, doc, recovered: false }
+  }, [])
+  useEffect(
+    () =>
+      onRetryPersisted((doc) => {
+        const pending = pendingSaveRef.current
+        if (pending?.doc !== doc) return
+        // 同一保存的恢复可能早于原拒绝处理：记录终态，避免迟到失败复活。
+        pending.recovered = true
+        succeed(pending.seq)
+      }),
+    [succeed],
+  )
   const retry = useCallback(() => {
     failure?.retry?.()
   }, [failure])
-  return { failure, begin, fail, succeed, retry }
+  return { failure, begin, fail, succeed, watchSave, retry }
 }
