@@ -1,8 +1,12 @@
 /** 首页创建/复制的完整尝试队列，避免非幂等失败对账跨请求认领项目。 */
 import { useCallback, useRef } from 'react'
 import { projectStore } from './projectStore'
+import { seedProjects } from './projectStore/seeds'
 import type { ProjectSummary } from './home/projects'
 import type { CreateFamilyOutcome } from './home/createFamilyOutcome'
+
+/** 列表维护使用固定示例身份；创建/复制生成新身份，不能认领这些维护产物。 */
+const seedIds = new Set(seedProjects().map(({ meta }) => meta.id))
 
 /** 在独占的尝试窗口内读取存储基线、执行变更并对账。基线失败时不写入；
  * 操作拒绝后读取也失败时保留未知状态，不能用空列表开放盲重试。 */
@@ -22,7 +26,9 @@ async function executeAttempt(
   } catch (err) {
     try {
       const projects = await readProjects()
-      const committed = projects.some((project) => !before.has(project.id))
+      const committed = projects.some(
+        (project) => !before.has(project.id) && !seedIds.has(project.id),
+      )
       return {
         kind: 'rejected',
         err,
@@ -37,7 +43,8 @@ async function executeAttempt(
 
 /** 创建和复制共用队列：前次失败对账结束后，下一次才读取存储基线并
  * 执行。整段独占消除双拒绝时的归属歧义；不依赖尚未渲染的列表镜像，
- * 也不改变 IPC/落盘身份契约。重命名、删除与普通列表刷新不创建新身份。 */
+ * 也不改变 IPC/落盘身份契约。删除不在队列内，清空库后的普通刷新或对账
+ * 读取可能播种示例；固定示例身份不计入本次尝试产出。 */
 export function useCreateFamilyAttempts(
   readProjects: () => Promise<ProjectSummary[]>,
 ) {

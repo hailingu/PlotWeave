@@ -69,9 +69,11 @@ beforeEach(() => {
   documents.clear()
   seed('p1')
   handlers.set('list_projects', () => [...documents.values()].map(metadata))
-  handlers.set('load_project', ({ id }) =>
-    structuredClone(documents.get(String(id))),
-  )
+  handlers.set('load_project', ({ id }) => {
+    const document = documents.get(String(id))
+    if (!document) throw new Error(`项目不存在：${String(id)}`)
+    return structuredClone(document)
+  })
   handlers.set('verify_project_assets', () => [])
   handlers.set('create_project', ({ name }) =>
     seed(`copy-${++nextId}`, String(name)),
@@ -105,6 +107,110 @@ function run(
     ? family.createWithReconcile(attempts, '新项目')
     : family.duplicateWithReconcile(attempts, 'p1')
 }
+
+/** 暂挂创建 IPC 应答，允许队列外的删除/刷新先落定，再交付创建失败。 */
+function pauseCreate() {
+  let entered!: () => void
+  let reject!: (reason: Error) => void
+  const started = new Promise<void>((resolve) => (entered = resolve))
+  const pending = new Promise<never>((_resolve, fail) => (reject = fail))
+  handlers.set('create_project', () => {
+    entered()
+    return pending
+  })
+  return { started, fail: () => reject(new Error('创建命令拒绝')) }
+}
+
+// 回归目标：把列表播种误认成创建族产出会吞掉错误或错误禁止安全重试。
+it.each([
+  ['create', false],
+  ['duplicate', false],
+  ['create', true],
+  ['duplicate', true],
+] as const)(
+  '%s 无写入失败，最后项目被删除（普通刷新先播种=%s）：示例不算本次产出',
+  async (action, refreshFirst) => {
+    const paused = pauseCreate()
+    const attempts = coordinator()
+    const result = run(attempts, action)
+    await paused.started
+    await store.delete('p1')
+    if (refreshFirst) await store.list()
+    paused.fail()
+    expect(await result).toMatchObject({
+      kind: 'rejected',
+      commitState: 'absent',
+      err: new Error('创建命令拒绝'),
+    })
+    expect((await store.list()).map((project) => project.id).sort()).toEqual([
+      'sample-du-shi-qi-yuan',
+      'sample-wu-ye-chu-zu-che',
+    ])
+    handlers.set('create_project', ({ name }) => seed('retried', String(name)))
+    // 复制源已被删除，恢复该源后同参重试；创建则直接重试。
+    if (action === 'duplicate') seed('p1')
+    expect(await run(attempts, action)).toEqual({
+      kind: 'created',
+      id: 'retried',
+    })
+    expect((await store.load('retried')).name).toBe(
+      action === 'create' ? '新项目' : '雨夜 副本',
+    )
+  },
+)
+
+// 排除规则须精确匹配示例身份；同名或同前缀的其他项目仍是实际产出。
+it.each(['p-created', 'sample-custom'])(
+  '播种之外还提交了 %s：即使与示例同名也不能开放盲重试',
+  async (id) => {
+    const paused = pauseCreate()
+    const result = family.createWithReconcile(coordinator(), '午夜出租车')
+    await paused.started
+    await store.delete('p1')
+    await store.list()
+    seed(id, '午夜出租车')
+    paused.fail()
+    expect(await result).toMatchObject({
+      kind: 'rejected',
+      commitState: 'present',
+    })
+    expect((await store.list()).map((project) => project.id)).toContain(id)
+    expect((await store.load(id)).name).toBe('午夜出租车')
+  },
+)
+
+// 回归目标：重列失败必须保留未知状态，即使已经知道列表写入了示例。
+it('对账播种后重列失败保留未知；读取恢复后队列可继续', async () => {
+  const list = handlers.get('list_projects')!
+  const paused = pauseCreate()
+  const attempts = coordinator()
+  const result = run(attempts, 'create')
+  await paused.started
+  await store.delete('p1')
+  handlers.set('list_projects', (args) => {
+    if (documents.has('sample-wu-ye-chu-zu-che')) {
+      throw new Error('播种后重列失败')
+    }
+    return list(args)
+  })
+  paused.fail()
+  expect(await result).toMatchObject({
+    kind: 'rejected',
+    commitState: 'unknown',
+    err: new Error('创建命令拒绝'),
+  })
+  handlers.set('list_projects', list)
+  expect((await store.list()).map((project) => project.id).sort()).toEqual([
+    'sample-du-shi-qi-yuan',
+    'sample-wu-ye-chu-zu-che',
+  ])
+  handlers.set('create_project', ({ name }) => seed('recovered', String(name)))
+  expect(await run(attempts, 'create')).toEqual({
+    kind: 'created',
+    id: 'recovered',
+  })
+  expect((await store.load('recovered')).name).toBe('新项目')
+})
 
 // 回归目标：失败先后与产出归属不能混淆，create/duplicate 必须共用完整尝试窗口。
 describe('创建族双拒绝的产出归属', () => {
