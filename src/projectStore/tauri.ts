@@ -11,7 +11,6 @@ import {
   enqueueSave,
   pendingRetryDocs,
   saveChains,
-  tauriSave,
   waitForSaveChainIdle,
 } from './saveChain'
 import { seedProjects } from './seeds'
@@ -48,7 +47,9 @@ function toSummary(m: {
  * 但占位与探测之间存在时序窗口（文件在列表后、探测前损坏/不可读）：
  * 播种仍为 no-replace 语义——仅当 load_project 确证「项目不存在」才写
  * 种子，文件存在（含不可读）一律跳过并留痕，不用硬编码种子原子覆盖
- * 可能可恢复的用户文件。返回是否写入了任一种子。 */
+ * 可能可恢复的用户文件。种子写经保存链（issue #134）：与普通保存统一
+ * 排序与失败登记，删除墓碑期被吸收——探测窗口内被删除的示例不被种子
+ * 复活。返回是否写入了任一种子。 */
 async function seedFirstRun(): Promise<boolean> {
   const { invoke } = await import('@tauri-apps/api/core')
   const notFound = (e: unknown) =>
@@ -68,7 +69,7 @@ async function seedFirstRun(): Promise<boolean> {
         )
         continue
       }
-      await tauriSave(seed.meta.id, seed.doc)
+      await enqueueSave(seed.meta.id, seed.doc)
       seeded = true
     }
   }
@@ -80,9 +81,12 @@ async function seedFirstRun(): Promise<boolean> {
  * 硬编码种子覆盖会在升级后首次打开首页时静默摧毁这些编辑；演示内容刷新
  * 只经由空库播种路径发生。与 tauriLoad 同款加载侧资产复验（§7.1/§10.5）：
  * 索引资产文件缺失/被换链接时先隔离再回写，回写不被保存边界拒收。
- * 单例隔离：该示例升级检查失败（如未来版本 schemaVersion——Rust 列表与
- * 信封仍返回、parseProject 才拒绝）只跳过该例并留痕，摘要原样保留，版本
- * 错误延迟到该项目被打开时呈现。返回是否发生回写。 */
+ * 回写经保存链且守卫异步窗口（issue #134）：读盘前先等链静止，读盘/
+ * 复验窗口内该示例排入新保存或删除（链身份变化）即跳过本次回写——迟到
+ * 修复不得覆盖较新内容或复活已删对象，下次列表/打开重查；回写失败由
+ * 链登记重试。单例隔离：该示例升级检查失败（如未来版本 schemaVersion
+ * ——Rust 列表与信封仍返回、parseProject 才拒绝）只跳过该例并留痕，
+ * 摘要原样保留，版本错误延迟到该项目被打开时呈现。返回是否发生回写。 */
 async function upgradeKnownSamples(metas: { id: string }[]): Promise<boolean> {
   const { invoke } = await import('@tauri-apps/api/core')
   let repairedAny = false
@@ -90,6 +94,8 @@ async function upgradeKnownSamples(metas: { id: string }[]): Promise<boolean> {
     if (!meta.id.startsWith('sample-')) continue
     if (!seedProjects().some((s) => s.meta.id === meta.id)) continue
     try {
+      await waitForSaveChainIdle(meta.id)
+      const chainBefore = saveChains.get(meta.id)
       const file = await invoke<unknown>('load_project', { id: meta.id })
       const invalidAssetKeys = await invoke<string[]>('verify_project_assets', {
         id: meta.id,
@@ -100,8 +106,23 @@ async function upgradeKnownSamples(metas: { id: string }[]): Promise<boolean> {
         invalidAssetKeys,
       })
       if (migrated || repaired) {
-        await tauriSave(meta.id, content)
-        repairedAny = true
+        if (saveChains.get(meta.id) !== chainBefore) {
+          console.warn(
+            '[projectStore] 示例升级窗口内出现新的保存/删除排队，跳过本次回写（下次列表/打开重查）',
+            meta.id,
+          )
+          continue
+        }
+        try {
+          await enqueueSave(meta.id, content)
+          repairedAny = true
+        } catch (err) {
+          console.error(
+            '[projectStore] 示例迁移/修复回写失败（已登记保存链重试）',
+            meta.id,
+            err,
+          )
+        }
       }
     } catch (err) {
       console.warn(

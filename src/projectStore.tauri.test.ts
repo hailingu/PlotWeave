@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ProjectContent } from './projectStore'
+import { parseProject } from './model/convert'
 
 /** projectStore 的 Tauri 路径：mock IPC，isTauri 判真后动态 import。
  * invoke 按命令名路由，行为由各用例编排。
@@ -1005,6 +1006,158 @@ describe('tauriList：空库播种与示例升级', () => {
       saves[0].args as { doc: { assets: { byId: Record<string, unknown> } } }
     ).doc
     expect(saved.assets.byId['a-1']).toBeUndefined()
+  })
+
+  /** issue #134：列表维护写（示例升级回写/空库播种）与用户保存/删除的
+   * 交错栅栏——维护写必须经保存链（统一排序、失败登记、删除墓碑），
+   * 迟到修复不得覆盖较新内容或复活已删对象。 */
+  const SID = 'sample-wu-ye-chu-zu-che'
+  const legacyOf = () => ({
+    ...legacyFile(),
+    project: { ...legacyFile().project, id: SID },
+  })
+  const cleanOf = () => ({
+    ...modernFile(),
+    project: { ...modernFile().project, id: SID },
+  })
+  const userDoc = () =>
+    parseProject(
+      { ...cleanOf(), project: { ...cleanOf().project, name: '用户编辑' } },
+      { projectId: SID },
+    ).content
+  /** 一次性栅栏：首次调用挂起至放行并返回待迁移旧格式；此后返回迁移
+   * 净本——旧实现回写后重列的升级检查读到净本，不再触发写也不再挂起。 */
+  const gatedThenCleanLoad = (gate: { fn: (() => void) | null }) => {
+    let gated = true
+    return () => {
+      if (!gated) return cleanOf()
+      gated = false
+      return new Promise<unknown>((res) => {
+        gate.fn = () => res(legacyOf())
+      })
+    }
+  }
+
+  it('升级窗口内排入新保存：迟到修复跳过回写，不覆盖较新内容（issue #134）', async () => {
+    const gate = { fn: null as (() => void) | null }
+    handlers.set('list_projects', () => [meta(SID)])
+    handlers.set('load_project', gatedThenCleanLoad(gate))
+    handlers.set('save_project', () => undefined)
+    const { projectStore } = await load()
+    const listing = projectStore.list()
+    await vi.waitFor(() =>
+      expect(calls.filter((c) => c.cmd === 'load_project')).toHaveLength(1),
+    )
+    const saving = projectStore.save(SID, userDoc())
+    await vi.waitFor(() =>
+      expect(calls.some((c) => c.cmd === 'save_project')).toBeTruthy(),
+    )
+    gate.fn!()
+    await Promise.all([listing, saving])
+    const saves = calls.filter((c) => c.cmd === 'save_project')
+    // 红（旧实现）：迁移回写作为第二个 save_project 落盘，旧内容覆盖用户编辑
+    expect(saves).toHaveLength(1)
+    expect(
+      (saves[0].args as { doc: { project: { name: string } } }).doc.project
+        .name,
+    ).toBe('用户编辑')
+  })
+
+  it('升级窗口内删除示例：迟到修复跳过回写，不复活已删对象（issue #134）', async () => {
+    const gate = { fn: null as (() => void) | null }
+    handlers.set('list_projects', () => [meta(SID)])
+    handlers.set('load_project', gatedThenCleanLoad(gate))
+    handlers.set('save_project', () => undefined)
+    handlers.set('delete_project', () => undefined)
+    handlers.set('delete_ai_session', () => undefined)
+    const { projectStore } = await load()
+    const listing = projectStore.list()
+    await vi.waitFor(() =>
+      expect(calls.filter((c) => c.cmd === 'load_project')).toHaveLength(1),
+    )
+    const deleting = projectStore.delete(SID)
+    await vi.waitFor(() =>
+      expect(calls.some((c) => c.cmd === 'delete_project')).toBeTruthy(),
+    )
+    gate.fn!()
+    await Promise.all([listing, deleting])
+    // 红（旧实现）：直连 tauriSave 在删除排队后落盘——重建 JSON 复活已删项目
+    expect(calls.filter((c) => c.cmd === 'save_project')).toHaveLength(0)
+  })
+
+  it('播种探测窗口内示例删除在途：种子写被墓碑吸收，已删示例零落盘（issue #134）', async () => {
+    let releaseProbe: (() => void) | null = null
+    let releaseDelete: (() => void) | null = null
+    let probed = false
+    handlers.set('list_projects', () =>
+      calls.some((c) => c.cmd === 'save_project')
+        ? [meta('sample-du-shi-qi-yuan')]
+        : [],
+    )
+    handlers.set('load_project', () => {
+      if (!probed) {
+        probed = true
+        return new Promise((_res, rej) => {
+          releaseProbe = () => rej(new Error('项目不存在：'))
+        })
+      }
+      return Promise.reject(new Error('项目不存在'))
+    })
+    handlers.set(
+      'delete_project',
+      () =>
+        new Promise((res) => {
+          releaseDelete = () => res(undefined)
+        }),
+    )
+    handlers.set('delete_ai_session', () => undefined)
+    handlers.set('save_project', () => undefined)
+    const { projectStore } = await load()
+    const listing = projectStore.list()
+    await vi.waitFor(() => expect(releaseProbe).not.toBeNull())
+    const deleting = projectStore.delete(SID)
+    await vi.waitFor(() => expect(releaseDelete).not.toBeNull())
+    releaseProbe!()
+    await listing
+    releaseDelete!()
+    await deleting
+    // 红（旧实现）：直连 tauriSave 在墓碑期落盘该示例；链路径被墓碑吸收，
+    // 已删示例零落盘（另一示例 not-found 确证后正常播种）
+    const deletedSaves = calls.filter(
+      (c) => c.cmd === 'save_project' && (c.args as { id: string }).id === SID,
+    )
+    expect(deletedSaves).toHaveLength(0)
+    expect(
+      calls.some(
+        (c) =>
+          c.cmd === 'save_project' &&
+          (c.args as { id: string }).id === 'sample-du-shi-qi-yuan',
+      ),
+    ).toBe(true)
+  })
+
+  it('示例有在途保存时升级检查先等链落定再读盘（issue #134）', async () => {
+    let releaseSave: (() => void) | null = null
+    handlers.set('list_projects', () => [meta(SID)])
+    handlers.set(
+      'save_project',
+      () =>
+        new Promise((res) => {
+          releaseSave = () => res(undefined)
+        }),
+    )
+    handlers.set('load_project', () => cleanOf())
+    const { projectStore } = await load()
+    const saving = projectStore.save(SID, userDoc())
+    await vi.waitFor(() => expect(releaseSave).not.toBeNull())
+    const listing = projectStore.list()
+    await new Promise((r) => setTimeout(r, 10))
+    // 红（旧实现）：不等链静止即读盘——读到保存前的旧内容，随后的修复
+    // 回写以旧内容参与排序竞争
+    expect(calls.filter((c) => c.cmd === 'load_project')).toHaveLength(0)
+    releaseSave!()
+    await Promise.all([saving, listing])
+    expect(calls.filter((c) => c.cmd === 'load_project')).toHaveLength(1)
   })
 })
 
