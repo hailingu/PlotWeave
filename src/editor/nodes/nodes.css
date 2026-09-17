@@ -420,6 +420,12 @@
   border-radius: 4px;
 }
 
+/* 引用位媒体不可读标记（issue #131）：换绑失败不以旧图冒充，⚠ + title
+ *（relPath）保持失败可见可定位。 */
+.pw-shot-ref-broken {
+  color: var(--danger);
+}
+
 .pw-shot-ref-add {
   background: transparent;
   border: 1px dashed var(--node-slate-add);

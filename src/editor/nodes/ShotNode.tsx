@@ -11,7 +11,10 @@ import type { ShotFlowNode } from './types'
 const REF_ICONS = { character: '👤', location: '🏞', audio: '🎵' } as const
 
 /** 引用位缩略图（§8.1）：image/* 资产经项目资产门面解析媒体 URL 懒渲染；
- * 解析失败/非图片不渲染图，chip 回退纯文本。 */
+ * 解析失败/非图片不渲染图，chip 回退纯文本。生命周期（issue #131）：
+ * 换绑即清旧预览——读取在途或失败都不得以旧资产的图冒充当前引用
+ *（alt 已是新资产，图文错配即「A 冒充 B」）；失败以 ⚠ 标记可定位
+ *（title 带 relPath），img 加载/解码失败同款转失败态。 */
 function RefThumb({
   projectId,
   asset,
@@ -20,20 +23,42 @@ function RefThumb({
   readonly asset: AssetRef
 }) {
   const [url, setUrl] = useState<string | null>(null)
+  const [failed, setFailed] = useState(false)
+  const assetId = asset.id
   useEffect(() => {
     let alive = true
+    setUrl(null)
+    setFailed(false)
     projectAssets
-      .mediaUrl(projectId, asset)
+      .mediaUrl(projectId, assetId)
       .then((u) => {
         if (alive) setUrl(u)
       })
-      .catch(() => {})
+      .catch(() => {
+        if (alive) setFailed(true)
+      })
     return () => {
       alive = false
     }
-  }, [projectId, asset])
+  }, [projectId, assetId])
+  if (failed)
+    return (
+      <span
+        className="pw-shot-ref-broken"
+        title={`媒体不可读（${asset.relPath}）`}
+      >
+        ⚠
+      </span>
+    )
   if (!url) return null
-  return <img className="pw-shot-ref-thumb" src={url} alt={asset.relPath} />
+  return (
+    <img
+      className="pw-shot-ref-thumb"
+      src={url}
+      alt={asset.relPath}
+      onError={() => setFailed(true)}
+    />
+  )
 }
 
 /**

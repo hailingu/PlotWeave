@@ -9,7 +9,8 @@ import type { AssetRef } from '../../model/document'
 import type { ImageFlowNode } from './types'
 
 /** 产物图像：项目资产门面解析媒体 URL 懒渲染；解析失败显示可读占位
- * （资产条目在而媒体不可读属异常态——不静默空白，保留可诊断线索）。 */
+ * （资产条目在而媒体不可读属异常态——不静默空白，保留可诊断线索）。
+ * 换绑即清旧预览（issue #131）：读取在途不以旧资产的图冒充当前产物。 */
 function OutputImage({
   projectId,
   asset,
@@ -19,11 +20,13 @@ function OutputImage({
 }) {
   const [url, setUrl] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
+  const assetId = asset.id
   useEffect(() => {
     let alive = true
+    setUrl(null)
     setFailed(false)
     projectAssets
-      .mediaUrl(projectId, asset)
+      .mediaUrl(projectId, assetId)
       .then((u) => {
         if (alive) setUrl(u)
       })
@@ -33,7 +36,7 @@ function OutputImage({
     return () => {
       alive = false
     }
-  }, [projectId, asset])
+  }, [projectId, assetId])
   if (failed)
     return (
       <span className="pw-image-empty">

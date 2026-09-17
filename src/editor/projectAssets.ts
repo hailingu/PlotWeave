@@ -123,12 +123,12 @@ async function memoryImport(
  * 绝对路径不出 Rust，前端不再拼接。 */
 async function tauriMediaUrl(
   projectId: string,
-  asset: AssetRef,
+  assetId: string,
 ): Promise<string> {
   const { invoke } = await import('@tauri-apps/api/core')
   return invoke<string>('get_asset_media_url', {
     scope: { kind: 'project', projectId },
-    assetId: asset.id,
+    assetId,
   })
 }
 
@@ -157,15 +157,15 @@ export const projectAssets = {
 
   /** 媒体 URL：Tauri 走 pwmedia opaque URL（scope + assetId，issue #31）；
    * 内存回退返回导入时建立的独立 object URL（源库删除不影响）——重载后
-   * 映射丢失即拒绝（预览不落盘，属预期）。 */
-  mediaUrl: (projectId: string, asset: AssetRef): Promise<string> => {
-    if (isTauri) return tauriMediaUrl(projectId, asset)
-    const url = memoryUrls.get(asset.id)
+   * 映射丢失即拒绝（预览不落盘，属预期）。入参只取 assetId（解析内核即
+   * scope + id）：调用方 effect 依赖得以精确到 id，同 id 的资产对象身份
+   * 变化（无关编辑致索引重建）不重取不闪（issue #131）。 */
+  mediaUrl: (projectId: string, assetId: string): Promise<string> => {
+    if (isTauri) return tauriMediaUrl(projectId, assetId)
+    const url = memoryUrls.get(assetId)
     if (!url) {
       return Promise.reject(
-        new Error(
-          `资产 ${asset.id} 的媒体不在本会话内存中（浏览器预览不落盘）`,
-        ),
+        new Error(`资产 ${assetId} 的媒体不在本会话内存中（浏览器预览不落盘）`),
       )
     }
     return Promise.resolve(url)
