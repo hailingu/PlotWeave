@@ -20,7 +20,10 @@ import type { ProjectSummary } from '../home/projects'
 /** Rust ProjectMeta → 首页 ProjectSummary；updated_at 为 ISO 字符串。
  * 非法时间戳（空串/坏格式）回退 epoch，绝不让 new Date 抛错清空首页列表。
  * 带 diagnostic 的条目是损坏占位（issue #123）：名称换占位文案、诊断随
- * error 下发，统计/时间不具语义（卡片损坏变体不展示）。 */
+ * error 下发，统计/时间不具语义（卡片损坏变体不展示）。占位名携带受信
+ * id（PR #196 评审）：多个坏项目占位名相同会让卡片、删除确认与打开
+ * 失败横幅不可区分，用户可能删错坏文件；id 即 projects/ 下文件名主干，
+ * 入名后各展示面与搜索过滤都能按 id 定位。 */
 function toSummary(m: {
   id: string
   name: string
@@ -32,7 +35,7 @@ function toSummary(m: {
   const t = Date.parse(m.updated_at)
   return {
     id: m.id,
-    name: m.diagnostic !== undefined ? '无法读取的项目' : m.name,
+    name: m.diagnostic !== undefined ? `无法读取的项目（${m.id}）` : m.name,
     sceneCount: m.scene_count,
     ...(m.ending_count > 1 ? { endingCount: m.ending_count } : {}),
     updatedAt: new Date(Number.isFinite(t) ? t : 0).toISOString(),
