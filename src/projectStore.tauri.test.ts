@@ -1007,7 +1007,9 @@ describe('tauriList：空库播种与示例升级', () => {
     ).doc
     expect(saved.assets.byId['a-1']).toBeUndefined()
   })
+})
 
+describe('tauriList 维护写与保存链/重试登记交错（issue #134）', () => {
   /** issue #134：列表维护写（示例升级回写/空库播种）与用户保存/删除的
    * 交错栅栏——维护写必须经保存链（统一排序、失败登记、删除墓碑），
    * 迟到修复不得覆盖较新内容或复活已删对象。 */
@@ -1158,6 +1160,32 @@ describe('tauriList：空库播种与示例升级', () => {
     releaseSave!()
     await Promise.all([saving, listing])
     expect(calls.filter((c) => c.cmd === 'load_project')).toHaveLength(1)
+  })
+
+  it('示例存在待重试的失败保存：升级跳过回写，最新登记不被成功维护写清除（PR #198 评审）', async () => {
+    let loadCalls = 0
+    handlers.set('list_projects', () => [meta(SID)])
+    handlers.set('load_project', () => {
+      loadCalls += 1
+      return loadCalls === 1 ? legacyOf() : cleanOf()
+    })
+    let saveCalls = 0
+    handlers.set('save_project', () => {
+      saveCalls += 1
+      if (saveCalls === 1) throw new Error('磁盘满')
+      return undefined
+    })
+    const { projectStore } = await load()
+    // 用户保存失败：最新编辑登记为待重试（比磁盘新）
+    await projectStore.save(SID, userDoc()).catch(() => undefined)
+    const { pendingRetryDocs } = await import('./projectStore/saveChain')
+    expect(pendingRetryDocs.get(SID)?.name).toBe('用户编辑')
+    const list = await projectStore.list()
+    // 红（旧实现）：升级以旧盘内容成功回写，成功保存按契约清除登记——
+    // 用户最新编辑被永久丢弃（saveCalls 变 2、登记消失）
+    expect(saveCalls).toBe(1)
+    expect(pendingRetryDocs.get(SID)?.name).toBe('用户编辑')
+    expect(list.map((x) => x.id)).toEqual([SID])
   })
 })
 
