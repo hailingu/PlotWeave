@@ -403,17 +403,14 @@ fn list_returns_broken_placeholder_for_unclassifiable_envelope() {
     cleanup_temp(&projects);
 }
 
-/// 底层 I/O 读取失败（如权限）产出「不可读」占位（issue #123）。
-#[cfg(unix)]
+/// 底层 I/O 读取失败产出「不可读」占位（issue #123）。触发机制取非 UTF-8
+/// 字节而非 mode 000 收权（PR #196 评审）：root/CAP_DAC_OVERRIDE（容器 CI
+/// 常态）下收权不拦读取，`{}` 会被解析成「损坏」占位而误报；read_to_string
+/// 的 UTF-8 校验与特权无关，同一 Io 分派分支（kind ≠ NotFound）随处触发。
 #[test]
 fn list_returns_broken_placeholder_for_unreadable_file() {
     let projects = temp_projects_dir();
-    fs::write(projects.join("p-locked.json"), "{}").expect("写项目文件");
-    use std::os::unix::fs::PermissionsExt;
-    let file = projects.join("p-locked.json");
-    let mut perms = fs::metadata(&file).unwrap().permissions();
-    perms.set_mode(0o000);
-    fs::set_permissions(&file, perms).expect("收权");
+    fs::write(projects.join("p-locked.json"), [0xff, 0xfe, b'{']).expect("写项目文件");
     let metas = list_project_metas(&cap(&projects)).expect("列出项目");
     assert_eq!(metas.len(), 1);
     assert!(
