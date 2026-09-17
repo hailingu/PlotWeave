@@ -157,6 +157,21 @@
   background: #1a1a1e;
 }
 
+/* 损坏占位卡（issue #123）：文件存在但不可读/不可解析——深底 + 虚线框
+   与诊断文案替代统计行，降低对比呈现，不与正常海报竞争注意力。 */
+.project-poster--broken {
+  background: #232326;
+  border: 1px dashed rgba(255, 255, 255, 0.28);
+}
+
+.project-poster--broken .project-poster-name {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.project-poster--broken .project-poster-stats {
+  color: rgba(255, 176, 122, 0.92);
+}
+
 .weave-cover {
   width: 70%;
   height: auto;

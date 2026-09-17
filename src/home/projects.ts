@@ -21,6 +21,12 @@ export interface ProjectSummary {
   cover?: string
   /** 最近更新时间（ISO 8601）。 */
   updatedAt: string
+  /**
+   * 损坏占位诊断（issue #123）：项目文件存在但不可读或信封不可判型时
+   * 由 Rust 列表附带；存在即渲染损坏占位卡（无统计/时间语义），点击
+   * 仍走打开入口——load_project 失败横幅（issue #98）呈现完整诊断。
+   */
+  readonly error?: string
 }
 
 /** 结局数后缀：恰双结局用固定文案，更多则计数；单结局/未知不加。 */

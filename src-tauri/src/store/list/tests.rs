@@ -342,6 +342,88 @@ fn list_project_metas_reads_only_verified_entries() {
     cleanup_temp(&projects);
 }
 
+/// [issue #123](https://github.com/hailingu/PlotWeave/issues/123)：损坏或
+/// 不可读的项目不再从列表静默消失——以占位摘要（诊断 + 缺省统计/时间，
+/// 缺省时间排序最后）返回，正常项目不受影响；点击占位卡打开仍走
+/// load_project 的失败诊断（issue #98 横幅）。
+#[test]
+fn list_returns_broken_placeholder_for_corrupt_project() {
+    let projects = temp_projects_dir();
+    let doc = new_project_file("p-ok", "正常项目".into(), now_iso());
+    persist_project(&cap(&projects), "p-ok", doc).expect("先保存");
+    fs::write(projects.join("p-bad.json"), "{not json").expect("写损坏文件");
+    let metas = list_project_metas(&cap(&projects)).expect("列出项目");
+    assert_eq!(metas.len(), 2, "坏项目不得静默消失");
+    assert_eq!(metas[0].id, "p-ok", "正常项目在前，不受坏项目影响");
+    let broken = &metas[1];
+    assert_eq!(broken.id, "p-bad");
+    assert!(
+        broken
+            .diagnostic
+            .as_deref()
+            .is_some_and(|d| d.contains("损坏")),
+        "占位须带诊断：{:?}",
+        broken.diagnostic
+    );
+    assert_eq!(broken.scene_count, 0);
+    assert_eq!(broken.ending_count, 0);
+    assert!(broken.updated_at.is_empty(), "缺省时间排序最后");
+    // IPC 形状：正常项目省略 diagnostic 键（wire 兼容），占位携带
+    assert!(serde_json::to_value(&metas[0])
+        .unwrap()
+        .get("diagnostic")
+        .is_none());
+    assert_eq!(
+        serde_json::to_value(broken).unwrap()["diagnostic"],
+        json!(broken.diagnostic)
+    );
+    cleanup_temp(&projects);
+}
+
+/// 信封两族矛盾（不可判型）同样产出占位而非跳过（issue #123）。
+#[test]
+fn list_returns_broken_placeholder_for_unclassifiable_envelope() {
+    let projects = temp_projects_dir();
+    fs::write(
+        projects.join("p-mixed.json"),
+        r#"{"schemaVersion":0,"project":{"name":"伪装旧版"},"graph":{"nodes":[]},"assets":{"byId":{}}}"#,
+    )
+    .expect("写信封矛盾文件");
+    let metas = list_project_metas(&cap(&projects)).expect("列出项目");
+    assert_eq!(metas.len(), 1);
+    assert_eq!(metas[0].id, "p-mixed");
+    assert!(
+        metas[0]
+            .diagnostic
+            .as_deref()
+            .is_some_and(|d| d.contains("信封")),
+        "占位须带判型诊断：{:?}",
+        metas[0].diagnostic
+    );
+    cleanup_temp(&projects);
+}
+
+/// 底层 I/O 读取失败产出「不可读」占位（issue #123）。触发机制取非 UTF-8
+/// 字节而非 mode 000 收权（PR #196 评审）：root/CAP_DAC_OVERRIDE（容器 CI
+/// 常态）下收权不拦读取，`{}` 会被解析成「损坏」占位而误报；read_to_string
+/// 的 UTF-8 校验与特权无关，同一 Io 分派分支（kind ≠ NotFound）随处触发。
+#[test]
+fn list_returns_broken_placeholder_for_unreadable_file() {
+    let projects = temp_projects_dir();
+    fs::write(projects.join("p-locked.json"), [0xff, 0xfe, b'{']).expect("写项目文件");
+    let metas = list_project_metas(&cap(&projects)).expect("列出项目");
+    assert_eq!(metas.len(), 1);
+    assert!(
+        metas[0]
+            .diagnostic
+            .as_deref()
+            .is_some_and(|d| d.contains("不可读")),
+        "占位须带不可读诊断：{:?}",
+        metas[0].diagnostic
+    );
+    cleanup_temp(&projects);
+}
+
 #[test]
 fn list_projects_falls_back_to_placeholder_for_overlong_name() {
     let projects = temp_projects_dir();

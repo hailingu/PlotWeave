@@ -725,6 +725,44 @@ describe('tauriLoad：graph 容器扩展字段（issue #100 同版本字段演�
 })
 
 describe('tauriList：空库播种与示例升级', () => {
+  it('损坏占位（issue #123）：列表携带诊断的条目映射为占位摘要，非空列表不触发播种探测', async () => {
+    // Rust 列表对损坏/不可读项目返回带 diagnostic 的占位摘要：坏项目
+    // 在首页可见可定位；列表非空即不走空库播种（坏文件不被种子覆盖）。
+    // 两个同因坏项目的占位名须各携受信 id（PR #196 评审）：id 即
+    // projects/ 下文件名主干，否则卡片/删除确认同名不可区分，用户可能
+    // 删错坏文件
+    handlers.set('list_projects', () => [
+      meta('p1'),
+      {
+        id: 'p-bad',
+        name: '',
+        updated_at: '',
+        scene_count: 0,
+        ending_count: 0,
+        diagnostic: '项目文件损坏：无法判别文档信封（已保留原文件）',
+      },
+      {
+        id: 'p-bad-2',
+        name: '',
+        updated_at: '',
+        scene_count: 0,
+        ending_count: 0,
+        diagnostic: '项目文件损坏：无法判别文档信封（已保留原文件）',
+      },
+    ])
+    const { projectStore } = await load()
+    const list = await projectStore.list()
+    expect(list.map((x) => x.id)).toEqual(['p1', 'p-bad', 'p-bad-2'])
+    const broken = list[1]!
+    expect(broken.name).toBe('无法读取的项目（p-bad）')
+    expect(broken.error).toBe('项目文件损坏：无法判别文档信封（已保留原文件）')
+    // 同因坏项目占位名不同（各含受信 id），删除确认可点名唯一目标
+    expect(list[2]!.name).toBe('无法读取的项目（p-bad-2）')
+    // 非法时间戳回退 epoch（卡片损坏变体不展示时间，不因 Date 抛错）
+    expect(broken.updatedAt).toBe(new Date(0).toISOString())
+    expect(calls.filter((c) => c.cmd === 'load_project')).toHaveLength(0)
+  })
+
   it('空列表≠空目录：唯一项目是不可读的坏文件时不播种、不覆盖可能可恢复的内容', async () => {
     // list_project_metas 跳过损坏/不可读文件——唯一项目若是 JSON 损坏的
     // 已编辑示例，metas 为空但目录非空；播种必须是 no-replace 语义

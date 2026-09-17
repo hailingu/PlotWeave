@@ -39,6 +39,7 @@ pub(crate) fn meta(id: &str, updated_at: &str) -> ProjectMeta {
         updated_at: updated_at.into(),
         scene_count: 0,
         ending_count: 0,
+        diagnostic: None,
     }
 }
 

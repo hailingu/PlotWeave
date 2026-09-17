@@ -18,29 +18,37 @@ import { seedProjects } from './seeds'
 import type { ProjectSummary } from '../home/projects'
 
 /** Rust ProjectMeta → 首页 ProjectSummary；updated_at 为 ISO 字符串。
- * 非法时间戳（空串/坏格式）回退 epoch，绝不让 new Date 抛错清空首页列表。 */
+ * 非法时间戳（空串/坏格式）回退 epoch，绝不让 new Date 抛错清空首页列表。
+ * 带 diagnostic 的条目是损坏占位（issue #123）：名称换占位文案、诊断随
+ * error 下发，统计/时间不具语义（卡片损坏变体不展示）。占位名携带受信
+ * id（PR #196 评审）：多个坏项目占位名相同会让卡片、删除确认与打开
+ * 失败横幅不可区分，用户可能删错坏文件；id 即 projects/ 下文件名主干，
+ * 入名后各展示面与搜索过滤都能按 id 定位。 */
 function toSummary(m: {
   id: string
   name: string
   updated_at: string
   scene_count: number
   ending_count: number
+  diagnostic?: string
 }): ProjectSummary {
   const t = Date.parse(m.updated_at)
   return {
     id: m.id,
-    name: m.name,
+    name: m.diagnostic !== undefined ? `无法读取的项目（${m.id}）` : m.name,
     sceneCount: m.scene_count,
     ...(m.ending_count > 1 ? { endingCount: m.ending_count } : {}),
     updatedAt: new Date(Number.isFinite(t) ? t : 0).toISOString(),
+    ...(m.diagnostic !== undefined ? { error: m.diagnostic } : {}),
   }
 }
 
-/** 首次启动（无任何项目文件）时写入种子示例。metas 为空不证明目录为空：
- * list_project_metas 会跳过损坏/不可读文件——唯一项目若是 JSON 损坏的已
- * 编辑示例，无条件播种会用硬编码种子原子覆盖可能可恢复的用户文件。
- * 播种为 no-replace 语义：仅当 load_project 确证「项目不存在」才写种子，
- * 文件存在（含不可读）一律跳过并留痕。返回是否写入了任一种子。 */
+/** 首次启动（无任何项目文件）时写入种子示例。损坏/不可读项目自
+ * issue #123 起以占位摘要进入列表（metas 为空即目录确无项目文件），
+ * 但占位与探测之间存在时序窗口（文件在列表后、探测前损坏/不可读）：
+ * 播种仍为 no-replace 语义——仅当 load_project 确证「项目不存在」才写
+ * 种子，文件存在（含不可读）一律跳过并留痕，不用硬编码种子原子覆盖
+ * 可能可恢复的用户文件。返回是否写入了任一种子。 */
 async function seedFirstRun(): Promise<boolean> {
   const { invoke } = await import('@tauri-apps/api/core')
   const notFound = (e: unknown) =>
@@ -118,6 +126,7 @@ export async function tauriList(): Promise<ProjectSummary[]> {
         updated_at: string
         scene_count: number
         ending_count: number
+        diagnostic?: string
       }[]
     >('list_projects')
     if (metas.length === 0) {
