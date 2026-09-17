@@ -16,7 +16,9 @@ export interface ImageGenApi {
   /** 发起生成（按 nodesRef 中的最新节点数据解析计划）；同步占位作业表，
    * 设置加载的异步间隙内重复调用不会重复发起。 */
   start: (nodeId: string) => void
-  /** 协作式取消进行中的作业（Rust 侧放弃结果）。 */
+  /** 协作式取消进行中的作业（Rust 侧放弃结果）：本地立即清作业，
+   * 取消请求 IPC 被拒时转入作业错误态呈现诊断（issue #160——不承诺
+   * 已停止远端付费请求，结果到达时仍按取消语义丢弃）。 */
   cancel: (nodeId: string) => void
 }
 

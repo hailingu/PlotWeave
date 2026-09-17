@@ -290,7 +290,15 @@ function useJobWriteGuard(jobsRef: {
       for (const job of Object.values(readJobs())) {
         if (job?.status === 'running') {
           void tauriInvoke('llm_image_cancel', { jobId: job.jobId }).catch(
-            () => {},
+            (err: unknown) => {
+              // 卸载后无 UI 宿主（issue #160）：控制台留痕即可定位——
+              // 文案诚实：协作式取消未送达，不承诺已停止远端付费请求
+              console.error(
+                '[imagegen] 卸载取消请求失败（协作式取消未送达，远端生成可能继续并计费）',
+                job.jobId,
+                err,
+              )
+            },
           )
         }
       }
@@ -320,7 +328,17 @@ function useNodeDeletionWatch(
     const alive = new Set(nodes.map((n) => n.id))
     for (const [nodeId, job] of Object.entries(jobsRef.current)) {
       if (job?.status !== 'running' || alive.has(nodeId)) continue
-      void tauriInvoke('llm_image_cancel', { jobId: job.jobId }).catch(() => {})
+      void tauriInvoke('llm_image_cancel', { jobId: job.jobId }).catch(
+        (err: unknown) => {
+          // 宿主已删无节点级 UI 宿主（issue #160）：控制台留痕定位；
+          // 结果到达时 jobAlive 已清，仍按取消语义丢弃
+          console.error(
+            '[imagegen] 宿主节点已删除，取消请求失败（远端生成可能继续并计费，结果将被丢弃）',
+            job.jobId,
+            err,
+          )
+        },
+      )
       clearJob(nodeId)
     }
   }, [nodes, jobsRef, clearJob])
@@ -484,9 +502,17 @@ export function useImageJobsState(deps: ImageJobsDeps): {
       if (cur?.status !== 'running') return
       const jobId = cur.jobId
       clearJob(nodeId)
-      void tauriInvoke('llm_image_cancel', { jobId }).catch(() => {})
+      // 后端确认与失败反馈（issue #160）：本地先清（可立即重新生成），
+      // IPC 拒绝 = 后端未收到取消请求的唯一线索——转入作业错误态呈现；
+      // 文案诚实：不承诺已停止远端付费请求，结果到达时仍按取消语义丢弃
+      void tauriInvoke('llm_image_cancel', { jobId }).catch((err: unknown) => {
+        setJobError(
+          nodeId,
+          `取消请求发送失败（协作式取消：远端生成可能继续并计费，结果到达时将被丢弃）：${errorText(err)}`,
+        )
+      })
     },
-    [clearJob, jobsRef],
+    [clearJob, jobsRef, setJobError],
   )
 
   const api = useMemo<ImageGenApi>(

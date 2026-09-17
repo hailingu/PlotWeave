@@ -264,6 +264,105 @@ describe('生成调度：卸载协作式取消（§13 作业生命周期）', ()
   })
 })
 
+describe('生成调度：用户取消的失败反馈（issue #160）', () => {
+  it('取消 IPC 拒绝：作业转入错误态呈现诊断与协作式后果，迟到结果不落位', async () => {
+    ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
+    let resolveGen!: (v: unknown) => void
+    vi.mocked(tauriInvoke).mockImplementation((cmd: string) => {
+      if (cmd === 'llm_image_generate')
+        return new Promise((res) => (resolveGen = res))
+      if (cmd === 'llm_image_cancel')
+        return Promise.reject(new Error('IPC 通道关闭'))
+      return Promise.resolve({})
+    })
+    vi.mocked(normalizeAssetRef).mockImplementation(
+      (raw) => raw as unknown as AssetRef,
+    )
+    const { addAsset, applyDataPatch } = setupHarness()
+
+    void apiRef!.start('img1')
+    await waitFor(() => expect(generateCount()).toBe(1))
+    apiRef!.cancel('img1')
+    // 红（旧实现）：空 catch 吞掉拒绝——作业表为 null，后端未收到取消
+    // 请求这一事实对用户不可见
+    await waitFor(() => expect(apiRef!.jobOf('img1')?.status).toBe('error'))
+    const job = apiRef!.jobOf('img1') as { message: string }
+    expect(job.message).toContain('取消请求发送失败')
+    expect(job.message).toContain('IPC 通道关闭')
+    expect(job.message).toContain('远端生成可能继续并计费')
+
+    // 迟到产物仍按取消语义丢弃：不写回（错误态不是 running，jobAlive 假）
+    resolveGen({ id: 'pa-1' })
+    await new Promise((r) => setTimeout(r, 0))
+    expect(addAsset).not.toHaveBeenCalled()
+    expect(applyDataPatch).not.toHaveBeenCalled()
+  })
+
+  it('取消 IPC 成功：作业清空且无错误条目（正常路径零噪音）', async () => {
+    ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
+    vi.mocked(tauriInvoke).mockImplementation((cmd: string) => {
+      if (cmd === 'llm_image_generate') return new Promise(() => {})
+      return Promise.resolve({})
+    })
+    setupHarness()
+    void apiRef!.start('img1')
+    await waitFor(() => expect(generateCount()).toBe(1))
+    apiRef!.cancel('img1')
+    await new Promise((r) => setTimeout(r, 0))
+    expect(apiRef!.jobOf('img1')).toBeNull()
+  })
+})
+
+describe('生成调度：卸载/删除取消的失败留痕（issue #160）', () => {
+  it('卸载取消 IPC 拒绝：控制台点名 jobId 与协作式后果，不产生未处理拒绝', async () => {
+    ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.mocked(tauriInvoke).mockImplementation((cmd: string) => {
+      if (cmd === 'llm_image_generate') return new Promise(() => {})
+      if (cmd === 'llm_image_cancel')
+        return Promise.reject(new Error('通道关闭'))
+      return Promise.resolve({})
+    })
+    setupHarness()
+    void apiRef!.start('img1')
+    await waitFor(() => expect(generateCount()).toBe(1))
+    const jobId = generatedJobId()
+    cleanup()
+    await new Promise((r) => setTimeout(r, 0))
+    // 红（旧实现）：空 catch——无任何留痕
+    expect(errSpy).toHaveBeenCalledWith(
+      expect.stringContaining('卸载取消请求失败'),
+      jobId,
+      expect.any(Error),
+    )
+    errSpy.mockRestore()
+  })
+
+  it('宿主节点删除的取消 IPC 拒绝：控制台点名 jobId，作业表已清', async () => {
+    ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.mocked(tauriInvoke).mockImplementation((cmd: string) => {
+      if (cmd === 'llm_image_generate') return new Promise(() => {})
+      if (cmd === 'llm_image_cancel')
+        return Promise.reject(new Error('通道关闭'))
+      return Promise.resolve({})
+    })
+    const { setNodes } = setupHarness()
+    void apiRef!.start('img1')
+    await waitFor(() => expect(generateCount()).toBe(1))
+    const jobId = generatedJobId()
+    setNodes([])
+    await waitFor(() => expect(apiRef!.jobOf('img1')).toBeNull())
+    await new Promise((r) => setTimeout(r, 0))
+    expect(errSpy).toHaveBeenCalledWith(
+      expect.stringContaining('取消请求失败'),
+      jobId,
+      expect.any(Error),
+    )
+    errSpy.mockRestore()
+  })
+})
+
 describe('生成调度：结果落位复合命令（§7.3 同构）', () => {
   it('生成成功以复合命令入栈：undo 同步移除资产索引，redo 恢复（§7.3 同构）', async () => {
     ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
