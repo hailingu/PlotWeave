@@ -34,8 +34,9 @@ function actionErrorText(
 }
 
 /** 首页项目变更失败横幅（issue #132）：role=alert 即时播报，非阻塞——
- * 首页操作能力保留；重试以同参重发失败的动作（App 层持有重试闭包），
- * 横幅停留至下一次变更尝试或重试成功（新尝试即视为旧错误过时）。 */
+ * 首页操作能力保留；可重试失败提供重试按钮（同参重发，App 层持有重试
+ * 闭包），非幂等操作部分提交后不提供（PR #199 评审：盲重试会造出重复
+ * 项目/空副本）。横幅停留至下一次变更尝试或重试成功。 */
 export function ActionErrorBanner({
   error,
   projects,
@@ -43,14 +44,16 @@ export function ActionErrorBanner({
 }: {
   readonly error: HomeActionFailure
   readonly projects: readonly ProjectSummary[]
-  readonly onRetry: () => void
+  readonly onRetry?: () => void
 }) {
   return (
     <div className="home-open-error" role="alert">
       {actionErrorText(error, projects)}
-      <button type="button" className="home-retry" onClick={onRetry}>
-        重试
-      </button>
+      {onRetry && (
+        <button type="button" className="home-retry" onClick={onRetry}>
+          重试
+        </button>
+      )}
     </div>
   )
 }

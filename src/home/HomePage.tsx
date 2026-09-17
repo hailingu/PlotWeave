@@ -405,9 +405,10 @@ export function HomePage({
           下一次打开尝试或新建成功，不拦截首页任何操作。 */}
       {openError && <OpenErrorBanner error={openError} projects={projects} />}
 
-      {/* 项目变更失败横幅（issue #132）：动作 + 目标 + 诊断 + 同参重试，
-          非阻塞，停留至下一次变更尝试或重试成功。 */}
-      {mutationError && onRetryMutation && (
+      {/* 项目变更失败横幅（issue #132）：动作 + 目标 + 诊断，可重试失败
+          附同参重试（部分提交的非幂等操作不提供，PR #199 评审）；非阻塞，
+          停留至下一次变更尝试或重试成功。 */}
+      {mutationError && (
         <ActionErrorBanner
           error={mutationError}
           projects={projects}

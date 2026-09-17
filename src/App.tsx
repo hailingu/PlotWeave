@@ -13,7 +13,13 @@ import {
 } from 'react'
 import { HomePage } from './home/HomePage'
 import type { OpenProjectError } from './home/OpenErrorBanner'
+import { useHomeActionFeedback } from './useHomeActionFeedback'
 import type { HomeActionFailure } from './home/ActionErrorBanner'
+import {
+  createWithReconcile,
+  duplicateWithReconcile,
+  useCreateFamilyAttempts,
+} from './useCreateFamilyAttempts'
 import { useExitFlush } from './useExitFlush'
 import { projectStore, type ProjectContent } from './projectStore'
 import type { ProjectSummary } from './home/projects'
@@ -224,7 +230,7 @@ function useProjectOpenAttempt(
   unsavedAiSessions: UnsavedAiSessionsRef,
   latestDoc: LatestDocRef,
   feedback: ReturnType<typeof useHomeActionFeedback>,
-  projectsRef: RefObject<ProjectSummary[]>,
+  attempts: ReturnType<typeof useCreateFamilyAttempts>,
 ) {
   const openAttemptSeqRef = useRef(0)
 
@@ -244,31 +250,26 @@ function useProjectOpenAttempt(
     // 存储创建与随后打开分段反馈（issue #132）：创建被拒 = 变更失败横幅
     // （可重试）；创建成功但打开失败 = 项目已存在，不虚报变更失败，由
     // #98 打开横幅承接。
-    // 尝试前快照（PR #199 评审）：create 非幂等——原子 rename 之后的目录
-    // fsync 失败或 IPC 应答丢失都会拒绝而已建出项目，盲重试会以新 id 造
-    // 出重复项目；失败后先重列对账，确有新项目即按已创建对待（卡片已在
-    // 列表），只对确未创建的失败给横幅与重试。
-    const before = new Set((projectsRef.current ?? []).map((x) => x.id))
-    let meta: { id: string }
-    try {
-      meta = await projectStore.create('未命名短剧')
-      feedback.succeed(fbSeq)
-    } catch (err) {
-      console.warn('[App] 新建项目失败', err)
-      const list = await refreshProjects()
-      if (!list.some((x) => !before.has(x.id))) {
+    // 创建族对账（PR #199 评审）：create 非幂等，失败先对账（排除他次
+    // 尝试产出）——确未创建才给横幅与重试，认领到产出即按已创建对待。
+    const outcome = await createWithReconcile(attempts, '未命名短剧')
+    if (outcome.kind === 'rejected') {
+      console.warn('[App] 新建项目失败', outcome.err)
+      if (!outcome.reconciled) {
         feedback.fail(
           fbSeq,
           {
             action: 'create',
             targetName: '未命名短剧',
-            detail: openFailureDetail(err),
+            detail: openFailureDetail(outcome.err),
           },
           () => void handleCreateProject(),
         )
       }
       return
     }
+    feedback.succeed(fbSeq)
+    const meta: { id: string } = { id: outcome.id }
     try {
       const open = await loadOpenProject(meta.id)
       // 项目本身已创建，被取代也仍刷新列表；只有最新尝试进入编辑器并
@@ -290,7 +291,7 @@ function useProjectOpenAttempt(
     setOpenFailure,
     setOpenProject,
     feedback,
-    projectsRef,
+    attempts,
   ])
 
   const handleOpenProject = useCallback(
@@ -334,7 +335,7 @@ function useOpenProjectActions({
   latestAiSession,
   latestDoc,
   feedback,
-  projectsRef,
+  attempts,
 }: {
   readonly setOpenProject: OpenProjectSetter
   readonly setOpenFailure: OpenErrorSetter
@@ -343,7 +344,7 @@ function useOpenProjectActions({
   readonly latestAiSession: LatestAiSessionRef
   readonly latestDoc: LatestDocRef
   readonly feedback: ReturnType<typeof useHomeActionFeedback>
-  readonly projectsRef: RefObject<ProjectSummary[]>
+  readonly attempts: ReturnType<typeof useCreateFamilyAttempts>
 }) {
   const { handleCreateProject, handleOpenProject } = useProjectOpenAttempt(
     setOpenProject,
@@ -352,7 +353,7 @@ function useOpenProjectActions({
     unsavedAiSessions,
     latestDoc,
     feedback,
-    projectsRef,
+    attempts,
   )
 
   const handleBackHome = useCallback(() => {
@@ -397,42 +398,11 @@ function useOpenProjectActions({
   }
 }
 
-/** 首页项目变更失败反馈（issue #132）：创建/重命名/复制/删除四动作共用。
- * 尝试开始即清旧错（新尝试视为旧错误过时），结果按尝试序提交——旧尝试
- * 的迟到失败不得覆盖新尝试的已清状态；失败态携带同参重发的重试闭包。 */
-function useHomeActionFeedback() {
-  const [failure, setFailure] = useState<{
-    readonly error: HomeActionFailure
-    readonly retry: () => void
-  } | null>(null)
-  const seqRef = useRef(0)
-  /** 尝试开始：作废旧错误，返回本次尝试序号。 */
-  const begin = useCallback(() => {
-    const seq = ++seqRef.current
-    setFailure(null)
-    return seq
-  }, [])
-  /** 尝试失败（序号仍为最新才提交）：登记动作/目标/诊断与重试闭包。 */
-  const fail = useCallback(
-    (seq: number, error: HomeActionFailure, retry: () => void) => {
-      if (seq === seqRef.current) setFailure({ error, retry })
-    },
-    [],
-  )
-  /** 尝试成功（序号仍为最新才提交）：清除失败态，不虚报也不残留。 */
-  const succeed = useCallback((seq: number) => {
-    if (seq === seqRef.current) setFailure(null)
-  }, [])
-  const retry = useCallback(() => {
-    failure?.retry()
-  }, [failure])
-  return { failure, begin, fail, succeed, retry }
-}
-
 function useHomeProjectActions(
   refreshProjects: RefreshProjects,
   unsavedAiSessions: UnsavedAiSessionsRef,
   feedback: ReturnType<typeof useHomeActionFeedback>,
+  attempts: ReturnType<typeof useCreateFamilyAttempts>,
 ) {
   const handleRenameProject = useCallback(
     async (id: string, name: string) => {
@@ -465,20 +435,22 @@ function useHomeProjectActions(
   const handleDuplicateProject = useCallback(
     async (id: string) => {
       const seq = feedback.begin()
-      try {
-        await projectStore.duplicate(id)
-        feedback.succeed(seq)
-        await refreshProjects()
-      } catch (err) {
-        console.warn('[App] 复制项目失败', err)
-        feedback.fail(
-          seq,
-          { action: 'duplicate', targetId: id, detail: openFailureDetail(err) },
-          () => void handleDuplicateProject(id),
-        )
+      // 复制同样非幂等（PR #199 评审）：失败后对账——认领到产出即部分
+      // 提交（列表已出现未完成的空副本），不给盲重试（重试会再造一份并
+      // 留下空副本），横幅提示手动处理
+      const outcome = await duplicateWithReconcile(attempts, id)
+      if (outcome.kind === 'rejected') {
+        console.warn('[App] 复制项目失败', outcome.err)
+        const detail = outcome.reconciled
+          ? `${openFailureDetail(outcome.err)}（列表可能已出现未完成的空副本，可手动删除）`
+          : openFailureDetail(outcome.err)
+        feedback.fail(seq, { action: 'duplicate', targetId: id, detail })
+        return
       }
+      feedback.succeed(seq)
+      await refreshProjects()
     },
-    [refreshProjects, feedback],
+    [refreshProjects, feedback, attempts],
   )
 
   const handleDeleteProject = useCallback(
@@ -637,9 +609,9 @@ function AppView({
   readonly openFailure: OpenProjectError | null
   readonly mutationFailure: {
     readonly error: HomeActionFailure
-    readonly retry: () => void
+    readonly retry?: () => void
   } | null
-  readonly onRetryMutation: () => void
+  readonly onRetryMutation?: () => void
   readonly settingsOpen: boolean
   readonly open: ReturnType<typeof useOpenProjectActions>
   readonly home: ReturnType<typeof useHomeProjectActions>
@@ -670,7 +642,7 @@ function AppView({
         onRetryLoad={onRetryLoad}
         openError={openFailure}
         mutationError={mutationFailure?.error ?? null}
-        onRetryMutation={onRetryMutation}
+        onRetryMutation={mutationFailure?.retry ? onRetryMutation : undefined}
         open={open}
         home={home}
       />
@@ -698,7 +670,7 @@ function HomeScreen({
   readonly onRetryLoad: () => void
   readonly openError: OpenProjectError | null
   readonly mutationError: HomeActionFailure | null
-  readonly onRetryMutation: () => void
+  readonly onRetryMutation?: () => void
   readonly open: ReturnType<typeof useOpenProjectActions>
   readonly home: ReturnType<typeof useHomeProjectActions>
 }) {
@@ -740,9 +712,10 @@ export function App() {
   // 首页项目变更失败反馈（issue #132）：创建/重命名/复制/删除共用
   const actionFeedback = useHomeActionFeedback()
   /** 列表镜像（渲染期同步，同 useProjectSummaries 的可见性镜像模式）：
-   * 创建失败后的结果对账需要尝试前快照（PR #199 评审）。 */
+   * 创建族失败对账需要尝试前快照（PR #199 评审）。 */
   const projectsRef = useRef<ProjectSummary[]>([])
   projectsRef.current = projects
+  const attempts = useCreateFamilyAttempts(refreshProjects, projectsRef)
 
   // ⌘, 打开设置（macOS 惯例，§8.2）；输入控件聚焦时不触发
   useEffect(() => {
@@ -764,12 +737,13 @@ export function App() {
     latestAiSession: latestAiSessionRef,
     latestDoc: latestDocRef,
     feedback: actionFeedback,
-    projectsRef,
+    attempts,
   })
   const home = useHomeProjectActions(
     refreshProjects,
     unsavedAiSessionsRef,
     actionFeedback,
+    attempts,
   )
   /** 退出冲刷屏障：未落盘会话仍在时阻止关闭窗口（见 useExitFlush）。 */
   const exitBlocked = useExitFlush()
