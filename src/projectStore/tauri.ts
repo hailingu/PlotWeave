@@ -49,7 +49,10 @@ function toSummary(m: {
  * 种子，文件存在（含不可读）一律跳过并留痕，不用硬编码种子原子覆盖
  * 可能可恢复的用户文件。种子写经保存链（issue #134）：与普通保存统一
  * 排序与失败登记，删除墓碑期被吸收——探测窗口内被删除的示例不被种子
- * 复活。返回是否写入了任一种子。 */
+ * 复活；目标存在待重试的失败保存（登记比磁盘/空目录新）或探测窗口内
+ * 排入新写入（链身份变化，探测结果已过时）同样跳过（PR #198 评审）——
+ * 成功的种子写会清除该登记，用户最新内容被永久丢弃。返回是否写入了
+ * 任一种子。 */
 async function seedFirstRun(): Promise<boolean> {
   const { invoke } = await import('@tauri-apps/api/core')
   const notFound = (e: unknown) =>
@@ -57,6 +60,7 @@ async function seedFirstRun(): Promise<boolean> {
     String(e).includes('项目不存在')
   let seeded = false
   for (const seed of seedProjects()) {
+    const chainBefore = saveChains.get(seed.meta.id)
     try {
       await invoke<unknown>('load_project', { id: seed.meta.id })
       console.warn('[projectStore] 播种跳过：项目已存在', seed.meta.id)
@@ -66,6 +70,16 @@ async function seedFirstRun(): Promise<boolean> {
           '[projectStore] 播种跳过：项目文件不可读，不覆盖可能可恢复的内容',
           seed.meta.id,
           err,
+        )
+        continue
+      }
+      if (
+        pendingRetryDocs.get(seed.meta.id) !== undefined ||
+        saveChains.get(seed.meta.id) !== chainBefore
+      ) {
+        console.warn(
+          '[projectStore] 播种跳过：存在待重试的更新保存或窗口内有新写入，不以种子覆盖',
+          seed.meta.id,
         )
         continue
       }
