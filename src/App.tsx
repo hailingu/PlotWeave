@@ -13,6 +13,7 @@ import {
 } from 'react'
 import { HomePage } from './home/HomePage'
 import type { OpenProjectError } from './home/OpenErrorBanner'
+import type { HomeActionFailure } from './home/ActionErrorBanner'
 import { useExitFlush } from './useExitFlush'
 import { projectStore, type ProjectContent } from './projectStore'
 import type { ProjectSummary } from './home/projects'
@@ -222,11 +223,13 @@ function useProjectOpenAttempt(
   refreshProjects: RefreshProjects,
   unsavedAiSessions: UnsavedAiSessionsRef,
   latestDoc: LatestDocRef,
+  feedback: ReturnType<typeof useHomeActionFeedback>,
 ) {
   const openAttemptSeqRef = useRef(0)
 
   const handleCreateProject = useCallback(async () => {
     const seq = ++openAttemptSeqRef.current
+    const fbSeq = feedback.begin()
     // 新一次打开尝试即作废旧会话的带外最新文档（issue #118 评审）：返回
     // 首页时编辑器卸载冲刷会经 onSave 复活引用，打开尝试开始时的清除才是
     // 权威失效点——重开项目一律以磁盘载入为准。
@@ -237,8 +240,28 @@ function useProjectOpenAttempt(
     // 取代的导航会在 chunk 就绪后提交并吞掉新尝试的失败横幅。无排队发布
     // 时为同值更新，React 跳过。
     startTransition(() => setOpenProject(null))
+    // 存储创建与随后打开分段反馈（issue #132）：创建被拒 = 变更失败横幅
+    // （可重试）；创建成功但打开失败 = 项目已存在，不虚报变更失败，由
+    // #98 打开横幅承接。
+    let meta: { id: string }
     try {
-      const meta = await projectStore.create('未命名短剧')
+      meta = await projectStore.create('未命名短剧')
+      feedback.succeed(fbSeq)
+    } catch (err) {
+      console.warn('[App] 新建项目失败', err)
+      feedback.fail(
+        fbSeq,
+        {
+          action: 'create',
+          targetName: '未命名短剧',
+          detail: openFailureDetail(err),
+        },
+        () => void handleCreateProject(),
+      )
+      void refreshProjects()
+      return
+    }
+    try {
       const open = await loadOpenProject(meta.id)
       // 项目本身已创建，被取代也仍刷新列表；只有最新尝试进入编辑器并
       // 清理横幅，否则旧尝试的成功导航与横幅清理会晚于新尝试的发布。
@@ -247,10 +270,13 @@ function useProjectOpenAttempt(
         startTransition(() => setOpenProject(open))
       }
     } catch (err) {
-      console.warn('[App] 新建项目失败', err)
+      console.warn('[App] 新建后打开失败', err)
+      // 被取代的旧尝试拒绝晚到：不发布横幅（与 handleOpenProject 同款）
+      if (seq === openAttemptSeqRef.current)
+        setOpenFailure({ id: meta.id, detail: openFailureDetail(err) })
     }
     void refreshProjects()
-  }, [latestDoc, refreshProjects, setOpenFailure, setOpenProject])
+  }, [latestDoc, refreshProjects, setOpenFailure, setOpenProject, feedback])
 
   const handleOpenProject = useCallback(
     async (id: string) => {
@@ -292,6 +318,7 @@ function useOpenProjectActions(
   unsavedAiSessions: UnsavedAiSessionsRef,
   latestAiSession: LatestAiSessionRef,
   latestDoc: LatestDocRef,
+  feedback: ReturnType<typeof useHomeActionFeedback>,
 ) {
   const { handleCreateProject, handleOpenProject } = useProjectOpenAttempt(
     setOpenProject,
@@ -299,6 +326,7 @@ function useOpenProjectActions(
     refreshProjects,
     unsavedAiSessions,
     latestDoc,
+    feedback,
   )
 
   const handleBackHome = useCallback(() => {
@@ -343,46 +371,105 @@ function useOpenProjectActions(
   }
 }
 
+/** 首页项目变更失败反馈（issue #132）：创建/重命名/复制/删除四动作共用。
+ * 尝试开始即清旧错（新尝试视为旧错误过时），结果按尝试序提交——旧尝试
+ * 的迟到失败不得覆盖新尝试的已清状态；失败态携带同参重发的重试闭包。 */
+function useHomeActionFeedback() {
+  const [failure, setFailure] = useState<{
+    readonly error: HomeActionFailure
+    readonly retry: () => void
+  } | null>(null)
+  const seqRef = useRef(0)
+  /** 尝试开始：作废旧错误，返回本次尝试序号。 */
+  const begin = useCallback(() => {
+    const seq = ++seqRef.current
+    setFailure(null)
+    return seq
+  }, [])
+  /** 尝试失败（序号仍为最新才提交）：登记动作/目标/诊断与重试闭包。 */
+  const fail = useCallback(
+    (seq: number, error: HomeActionFailure, retry: () => void) => {
+      if (seq === seqRef.current) setFailure({ error, retry })
+    },
+    [],
+  )
+  /** 尝试成功（序号仍为最新才提交）：清除失败态，不虚报也不残留。 */
+  const succeed = useCallback((seq: number) => {
+    if (seq === seqRef.current) setFailure(null)
+  }, [])
+  const retry = useCallback(() => {
+    failure?.retry()
+  }, [failure])
+  return { failure, begin, fail, succeed, retry }
+}
+
 function useHomeProjectActions(
   refreshProjects: RefreshProjects,
   unsavedAiSessions: UnsavedAiSessionsRef,
+  feedback: ReturnType<typeof useHomeActionFeedback>,
 ) {
   const handleRenameProject = useCallback(
     async (id: string, name: string) => {
+      const seq = feedback.begin()
       try {
         const doc = await projectStore.load(id)
         await projectStore.saveQuiet(id, { ...doc, name })
+        feedback.succeed(seq)
         await refreshProjects()
       } catch (err) {
         console.warn('[App] 重命名失败', err)
+        feedback.fail(
+          seq,
+          {
+            action: 'rename',
+            targetId: id,
+            targetName: name,
+            detail: openFailureDetail(err),
+          },
+          () => void handleRenameProject(id, name),
+        )
       }
     },
-    [refreshProjects],
+    [refreshProjects, feedback],
   )
 
   const handleDuplicateProject = useCallback(
     async (id: string) => {
+      const seq = feedback.begin()
       try {
         await projectStore.duplicate(id)
+        feedback.succeed(seq)
         await refreshProjects()
       } catch (err) {
         console.warn('[App] 复制项目失败', err)
+        feedback.fail(
+          seq,
+          { action: 'duplicate', targetId: id, detail: openFailureDetail(err) },
+          () => void handleDuplicateProject(id),
+        )
       }
     },
-    [refreshProjects],
+    [refreshProjects, feedback],
   )
 
   const handleDeleteProject = useCallback(
     async (id: string) => {
+      const seq = feedback.begin()
       try {
         await projectStore.delete(id)
         unsavedAiSessions.current?.delete(id)
+        feedback.succeed(seq)
         await refreshProjects()
       } catch (err) {
         console.warn('[App] 删除项目失败', err)
+        feedback.fail(
+          seq,
+          { action: 'delete', targetId: id, detail: openFailureDetail(err) },
+          () => void handleDeleteProject(id),
+        )
       }
     },
-    [refreshProjects, unsavedAiSessions],
+    [refreshProjects, unsavedAiSessions, feedback],
   )
 
   return { handleRenameProject, handleDuplicateProject, handleDeleteProject }
@@ -451,6 +538,8 @@ function AppView({
   onRetryLoad,
   openProject,
   openFailure,
+  mutationFailure,
+  onRetryMutation,
   settingsOpen,
   open,
   home,
@@ -465,6 +554,11 @@ function AppView({
   readonly onRetryLoad: () => void
   readonly openProject: OpenProject | null
   readonly openFailure: OpenProjectError | null
+  readonly mutationFailure: {
+    readonly error: HomeActionFailure
+    readonly retry: () => void
+  } | null
+  readonly onRetryMutation: () => void
   readonly settingsOpen: boolean
   readonly open: ReturnType<typeof useOpenProjectActions>
   readonly home: ReturnType<typeof useHomeProjectActions>
@@ -517,6 +611,8 @@ function AppView({
         loadError={loadError}
         onRetryLoad={onRetryLoad}
         openError={openFailure}
+        mutationError={mutationFailure?.error ?? null}
+        onRetryMutation={onRetryMutation}
         open={open}
         home={home}
       />
@@ -526,13 +622,15 @@ function AppView({
 }
 
 /** 首页视图装配（AppView 拆分，80 行上限）：列表数据 + 打开/新建/重命名/
- * 复制/删除动作接线与读取失败错误态（#133）透传。 */
+ * 复制/删除动作接线与读取失败错误态（#133）/变更失败横幅（#132）透传。 */
 function HomeScreen({
   projects,
   loading,
   loadError,
   onRetryLoad,
   openError,
+  mutationError,
+  onRetryMutation,
   open,
   home,
 }: {
@@ -541,6 +639,8 @@ function HomeScreen({
   readonly loadError: string | null
   readonly onRetryLoad: () => void
   readonly openError: OpenProjectError | null
+  readonly mutationError: HomeActionFailure | null
+  readonly onRetryMutation: () => void
   readonly open: ReturnType<typeof useOpenProjectActions>
   readonly home: ReturnType<typeof useHomeProjectActions>
 }) {
@@ -551,6 +651,8 @@ function HomeScreen({
       loadError={loadError}
       onRetryLoad={onRetryLoad}
       openError={openError}
+      mutationError={mutationError}
+      onRetryMutation={onRetryMutation}
       onOpenProject={open.handleOpenProject}
       onCreateProject={() => void open.handleCreateProject()}
       onRenameProject={(id, name) => void home.handleRenameProject(id, name)}
@@ -577,6 +679,8 @@ export function App() {
   const { projects, loading, loadError, refreshProjects } = useProjectSummaries(
     () => openProject === null,
   )
+  // 首页项目变更失败反馈（issue #132）：创建/重命名/复制/删除共用
+  const actionFeedback = useHomeActionFeedback()
 
   // ⌘, 打开设置（macOS 惯例，§8.2）；输入控件聚焦时不触发
   useEffect(() => {
@@ -597,8 +701,13 @@ export function App() {
     unsavedAiSessionsRef,
     latestAiSessionRef,
     latestDocRef,
+    actionFeedback,
   )
-  const home = useHomeProjectActions(refreshProjects, unsavedAiSessionsRef)
+  const home = useHomeProjectActions(
+    refreshProjects,
+    unsavedAiSessionsRef,
+    actionFeedback,
+  )
   /** 退出冲刷屏障：未落盘会话仍在时阻止关闭窗口（见 useExitFlush）。 */
   const exitBlocked = useExitFlush()
   return (
@@ -623,6 +732,8 @@ export function App() {
         onRetryLoad={() => void refreshProjects()}
         openProject={openProject}
         openFailure={openFailure}
+        mutationFailure={actionFeedback.failure}
+        onRetryMutation={actionFeedback.retry}
         settingsOpen={settingsOpen}
         open={open}
         home={home}

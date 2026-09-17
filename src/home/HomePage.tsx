@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { ActionErrorBanner, type HomeActionFailure } from './ActionErrorBanner'
 import { ProjectCard } from './ProjectCard'
 import { OpenErrorBanner, type OpenProjectError } from './OpenErrorBanner'
 import { ConfirmDeleteDialog, RenameDialog } from './Dialogs'
@@ -11,6 +12,12 @@ interface HomePageProps {
   /** 最近一次打开失败的可见反馈（issue #98）：非阻塞横幅展示，停留至
    * 下一次打开尝试或新建成功；null/缺省 = 无待展示错误。 */
   readonly openError?: OpenProjectError | null
+  /** 最近一次项目变更失败（issue #132）：创建/重命名/复制/删除的存储
+   * 拒绝以非阻塞横幅呈现（动作 + 目标 + 诊断 + 重试）；新一次变更尝试
+   * 即视为旧错误过时。null/缺省 = 无待展示错误。 */
+  readonly mutationError?: HomeActionFailure | null
+  /** 变更失败横幅的重试入口（同参重发失败的动作）。 */
+  readonly onRetryMutation?: () => void
   /** 列表读取失败诊断（issue #133）：无已知列表时以错误态代替首次使用
    * 引导；已有列表时保留卡片并显示刷新失败横幅。null/缺省 = 无错误。 */
   readonly loadError?: string | null
@@ -362,6 +369,8 @@ export function HomePage({
   projects,
   loading = false,
   openError = null,
+  mutationError = null,
+  onRetryMutation,
   loadError = null,
   onRetryLoad,
   onOpenProject,
@@ -395,6 +404,16 @@ export function HomePage({
       {/* 打开失败横幅（issue #98）：role=alert 即时播报；非阻塞，停留至
           下一次打开尝试或新建成功，不拦截首页任何操作。 */}
       {openError && <OpenErrorBanner error={openError} projects={projects} />}
+
+      {/* 项目变更失败横幅（issue #132）：动作 + 目标 + 诊断 + 同参重试，
+          非阻塞，停留至下一次变更尝试或重试成功。 */}
+      {mutationError && onRetryMutation && (
+        <ActionErrorBanner
+          error={mutationError}
+          projects={projects}
+          onRetry={onRetryMutation}
+        />
+      )}
 
       {projects.length > 0 && loadError !== null && (
         <RefreshErrorBanner loadError={loadError} onRetry={onRetryLoad} />
