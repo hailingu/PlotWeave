@@ -273,3 +273,51 @@ describe('HomePage 删除流程', () => {
     expect(screen.queryByRole('dialog', { name: '删除项目' })).toBeNull()
   })
 })
+
+describe('项目变更失败横幅（issue #132）', () => {
+  it('id 目标经当前列表解析名称点名；重试触发回调', () => {
+    const onRetryMutation = vi.fn()
+    render(
+      <HomePage
+        projects={[mk()]}
+        mutationError={{ action: 'delete', targetId: 'p1', detail: '只读目录' }}
+        onRetryMutation={onRetryMutation}
+        onOpenProject={vi.fn()}
+        onCreateProject={vi.fn()}
+        onRenameProject={vi.fn()}
+        onDuplicateProject={vi.fn()}
+        onDeleteProject={vi.fn()}
+      />,
+    )
+    expect(screen.getByText(/删除「都市奇缘」失败：只读目录/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '重试' }))
+    expect(onRetryMutation).toHaveBeenCalledTimes(1)
+  })
+
+  it('名称目标（重命名的新名）直接点名；无横幅时不渲染', () => {
+    const { rerender } = render(
+      <HomePage
+        projects={[mk()]}
+        mutationError={{ action: 'rename', targetName: '新名', detail: 'io' }}
+        onRetryMutation={vi.fn()}
+        onOpenProject={vi.fn()}
+        onCreateProject={vi.fn()}
+        onRenameProject={vi.fn()}
+        onDuplicateProject={vi.fn()}
+        onDeleteProject={vi.fn()}
+      />,
+    )
+    expect(screen.getByText(/重命名「新名」失败：io/)).toBeTruthy()
+    rerender(
+      <HomePage
+        projects={[mk()]}
+        onOpenProject={vi.fn()}
+        onCreateProject={vi.fn()}
+        onRenameProject={vi.fn()}
+        onDuplicateProject={vi.fn()}
+        onDeleteProject={vi.fn()}
+      />,
+    )
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+})

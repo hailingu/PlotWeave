@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { ActionErrorBanner, type HomeActionFailure } from './ActionErrorBanner'
 import { ProjectCard } from './ProjectCard'
 import { OpenErrorBanner, type OpenProjectError } from './OpenErrorBanner'
 import { ConfirmDeleteDialog, RenameDialog } from './Dialogs'
@@ -11,6 +12,12 @@ interface HomePageProps {
   /** 最近一次打开失败的可见反馈（issue #98）：非阻塞横幅展示，停留至
    * 下一次打开尝试或新建成功；null/缺省 = 无待展示错误。 */
   readonly openError?: OpenProjectError | null
+  /** 最近一次项目变更失败（issue #132）：创建/重命名/复制/删除的存储
+   * 拒绝以非阻塞横幅呈现（动作 + 目标 + 诊断 + 重试）；新一次变更尝试
+   * 即视为旧错误过时。null/缺省 = 无待展示错误。 */
+  readonly mutationError?: HomeActionFailure | null
+  /** 变更失败横幅的重试入口（同参重发失败的动作）。 */
+  readonly onRetryMutation?: () => void
   /** 列表读取失败诊断（issue #133）：无已知列表时以错误态代替首次使用
    * 引导；已有列表时保留卡片并显示刷新失败横幅。null/缺省 = 无错误。 */
   readonly loadError?: string | null
@@ -54,11 +61,6 @@ function useMenuDismiss(
   }, [menu, close])
 }
 
-/**
- * 项目首页（文档浏览器）：竖版海报片库（docs/ui-design.md §3.2）。
- * 工具栏 = 搜索框（内存过滤）+「＋ 新建项目」；卡片右键或悬停 ⋯ 打开
- * 项目菜单（打开/重命名/复制/删除）；无项目时居中展示空状态引导。
- */
 /** 项目卡菜单/重命名/删除状态机（HomePage 拆分，issue #99）：右键菜单位
  * 置态、两步对话框态与「动作后收起菜单」收口。 */
 function useProjectMenus(
@@ -358,10 +360,59 @@ function ProjectDialogs({
   )
 }
 
+/** 首页非阻塞错误区：按打开、项目变更、列表刷新的顺序展示独立诊断，
+ * 分别保留变更重试与列表重试入口；无已知项目时由网格展示列表错误态。 */
+function HomeErrorBanners({
+  projects,
+  openError,
+  mutationError,
+  onRetryMutation,
+  loadError = null,
+  onRetryLoad,
+}: Pick<
+  HomePageProps,
+  | 'projects'
+  | 'openError'
+  | 'mutationError'
+  | 'onRetryMutation'
+  | 'loadError'
+  | 'onRetryLoad'
+>) {
+  return (
+    <>
+      {/* 打开失败横幅（issue #98）：role=alert 即时播报；非阻塞，停留至
+          下一次打开尝试或新建成功，不拦截首页任何操作。 */}
+      {openError && <OpenErrorBanner error={openError} projects={projects} />}
+
+      {/* 项目变更失败横幅（issue #132）：动作 + 目标 + 诊断，可重试失败
+          附同参重试（部分提交的非幂等操作不提供，PR #199 评审）；非阻塞，
+          停留至下一次变更尝试或重试成功。 */}
+      {mutationError && (
+        <ActionErrorBanner
+          error={mutationError}
+          projects={projects}
+          onRetry={onRetryMutation}
+        />
+      )}
+
+      {projects.length > 0 && loadError !== null && (
+        <RefreshErrorBanner loadError={loadError} onRetry={onRetryLoad} />
+      )}
+    </>
+  )
+}
+
+/**
+ * 项目首页（文档浏览器）：竖版海报片库（docs/ui-design.md §3.2）。
+ * 工具栏 = 搜索框（内存过滤）+「＋ 新建项目」；卡片右键或悬停 ⋯ 打开
+ * 项目菜单（打开/重命名/复制/删除）；无项目时居中展示空状态引导。
+ */
 export function HomePage({
   projects,
   loading = false,
   openError = null,
+  mutationError = null,
+  onRetryMutation,
   loadError = null,
   onRetryLoad,
   onOpenProject,
@@ -392,13 +443,14 @@ export function HomePage({
         onCreate={onCreateProject}
       />
 
-      {/* 打开失败横幅（issue #98）：role=alert 即时播报；非阻塞，停留至
-          下一次打开尝试或新建成功，不拦截首页任何操作。 */}
-      {openError && <OpenErrorBanner error={openError} projects={projects} />}
-
-      {projects.length > 0 && loadError !== null && (
-        <RefreshErrorBanner loadError={loadError} onRetry={onRetryLoad} />
-      )}
+      <HomeErrorBanners
+        projects={projects}
+        openError={openError}
+        mutationError={mutationError}
+        onRetryMutation={onRetryMutation}
+        loadError={loadError}
+        onRetryLoad={onRetryLoad}
+      />
 
       <ProjectGrid
         loading={loading}

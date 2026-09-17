@@ -18,6 +18,7 @@ import type { ReactNode } from 'react'
 import { App } from './App'
 import { projectStore } from './projectStore'
 import type { ProjectContent } from './projectStore'
+import { notifyRetryPersisted } from './projectStore/saveChain'
 
 /** 子视图最近一次的 props（回调经此触发，断言经此读参）。 */
 const homeProps: { current: Record<string, unknown> } = { current: {} }
@@ -78,12 +79,35 @@ vi.mock('./home/HomePage', () => ({
   HomePage: (props: Record<string, unknown>) => {
     homeProps.current = props
     const openError = props.openError as { detail: string } | null | undefined
+    const mutationError = props.mutationError as
+      | {
+          action: string
+          targetId?: string
+          targetName?: string
+          detail: string
+        }
+      | null
+      | undefined
     return (
       <div data-testid="home">
         {props.loading
           ? '加载中'
           : `共${(props.projects as unknown[]).length}项`}
         {openError ? <div role="alert">{openError.detail}</div> : null}
+        {mutationError ? (
+          <div role="alert">
+            {`${mutationError.action}:${mutationError.targetName ?? mutationError.targetId ?? ''}:${mutationError.detail}`}
+            {props.onRetryMutation ? (
+              <button
+                type="button"
+                data-testid="retry-mutation"
+                onClick={props.onRetryMutation as () => void}
+              >
+                重试
+              </button>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     )
   },
@@ -143,6 +167,7 @@ beforeEach(() => {
   replayFailedListeners.length = 0
   store.list.mockResolvedValue([{ id: 'p1', name: '雨夜' }])
   store.create.mockResolvedValue({ id: 'new-1', name: '未命名短剧' })
+  store.duplicate.mockResolvedValue({ id: 'copy-1', name: '雨夜 副本' })
   store.load.mockResolvedValue(structuredClone(DOC))
   store.loadAiSession.mockResolvedValue({
     session: { schemaVersion: 1, entries: [] },
@@ -281,7 +306,7 @@ describe('App（双界面路由壳）', () => {
     expect(
       (editorProps.current.project as { createdAt?: string }).createdAt,
     ).toBe('2026-08-31T00:00:00.000Z')
-    expect(store.list).toHaveBeenCalledTimes(2)
+    expect(store.list).toHaveBeenCalledTimes(3)
   })
 })
 
@@ -327,7 +352,7 @@ describe('App（导航与编辑器回调）', () => {
         ) => Promise<void>
       )('p1', '新名')
     })
-    expect(store.saveQuiet).toHaveBeenCalledWith('p1', { ...DOC, name: '新名' })
+    expect(store.save).toHaveBeenCalledWith('p1', { ...DOC, name: '新名' })
     await act(async () => {
       await (
         homeProps.current.onDuplicateProject as (id: string) => Promise<void>
@@ -1206,4 +1231,443 @@ describe('App ✦AI 会话回吐重排失败恢复', () => {
     expect(editorProps.current.aiSessionError).toContain('磁盘仍满')
     expect(editorProps.current.aiSessionRetryable).toBe(true)
   })
+})
+
+describe('App ✦首页项目变更失败反馈：重命名与删除/复制（issue #132）', () => {
+  it('重命名失败（saveQuiet 生产契约吞错，须走拒绝式 save）：横幅点名动作、目标与诊断；重试成功后横幅消失', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    store.load.mockResolvedValue(structuredClone(DOC))
+    store.save.mockRejectedValueOnce(new Error('只读目录'))
+    render(<App />)
+    await screen.findByTestId('home')
+    await act(async () => {
+      await (
+        homeProps.current.onRenameProject as (
+          id: string,
+          name: string,
+        ) => Promise<void>
+      )('p1', '新名')
+    })
+    expect(await screen.findByText(/rename:新名:只读目录/)).toBeTruthy()
+    fireEvent.click(screen.getByTestId('retry-mutation'))
+    await vi.waitFor(() => expect(store.save).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(screen.queryByRole('alert')).toBeNull())
+    warn.mockRestore()
+  })
+
+  it('删除/复制失败：目标以项目 id 归属；重试生效后横幅消失', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    store.delete.mockRejectedValueOnce(new Error('io'))
+    render(<App />)
+    await screen.findByTestId('home')
+    await act(async () => {
+      await (
+        homeProps.current.onDeleteProject as (id: string) => Promise<void>
+      )('p1')
+    })
+    expect(await screen.findByText(/delete:p1:io/)).toBeTruthy()
+    fireEvent.click(screen.getByTestId('retry-mutation'))
+    await vi.waitFor(() => expect(store.delete).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(screen.queryByRole('alert')).toBeNull())
+    warn.mockRestore()
+  })
+})
+
+describe('App ✦创建失败反馈与结果对账（issue #132/PR #199 评审）', () => {
+  it('创建失败：横幅点名尝试名称；重试成功后进入编辑器且无失败横幅', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    store.create.mockRejectedValueOnce(new Error('磁盘满'))
+    render(<App />)
+    await screen.findByTestId('home')
+    await act(async () => {
+      await (homeProps.current.onCreateProject as () => Promise<void>)()
+    })
+    expect(await screen.findByText(/create:未命名短剧:磁盘满/)).toBeTruthy()
+    fireEvent.click(screen.getByTestId('retry-mutation'))
+    await vi.waitFor(() => expect(store.create).toHaveBeenCalledTimes(2))
+    await screen.findByTestId('editor')
+    expect(homeProps.current.mutationError).toBeNull()
+    warn.mockRestore()
+  })
+
+  it('创建成功但随后打开失败：变更不虚报失败，打开失败走 #98 横幅', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    store.create.mockResolvedValue({ id: 'new-1', name: '未命名短剧' })
+    store.duplicate.mockResolvedValue({ id: 'copy-1', name: '雨夜 副本' })
+    store.load.mockRejectedValueOnce(new Error('打开失败'))
+    render(<App />)
+    await screen.findByTestId('home')
+    await act(async () => {
+      await (homeProps.current.onCreateProject as () => Promise<void>)()
+    })
+    expect(await screen.findByText(/打开失败/)).toBeTruthy()
+    expect(homeProps.current.mutationError).toBeNull()
+    warn.mockRestore()
+  })
+})
+
+describe('App ✦创建族失败对账（PR #199 评审）', () => {
+  it('创建被拒但项目已实际存在（fsync 失败/应答丢失）：对账为已创建，不横幅不盲重试', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const projects = [{ id: 'p1', name: '雨夜' }]
+    store.list.mockImplementation(async () => [...projects])
+    store.create.mockImplementationOnce(async () => {
+      projects.push({ id: 'new-9', name: '未命名短剧' })
+      throw new Error('目录 fsync 失败')
+    })
+    render(<App />)
+    await screen.findByTestId('home')
+    await act(async () => {
+      await (homeProps.current.onCreateProject as () => Promise<void>)()
+    })
+    expect(homeProps.current.projects).toEqual(projects)
+    expect(homeProps.current.mutationError).toBeNull()
+    expect(screen.queryByTestId('retry-mutation')).toBeNull()
+    expect(store.create).toHaveBeenCalledTimes(1)
+    warn.mockRestore()
+  })
+
+  it('并发创建：他次尝试的产出不被本次失败认领（对账按尝试归属）', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let createCalls = 0
+    let firstCommitted = false
+    store.create.mockImplementation(() => {
+      createCalls += 1
+      if (createCalls === 1) {
+        // 第一次：提交成功（产出 c1，随后列表可见）
+        firstCommitted = true
+        return Promise.resolve({ id: 'c1', name: '未命名短剧' })
+      }
+      // 第二次：确未创建（如磁盘满）
+      return Promise.reject(new Error('磁盘满'))
+    })
+    // 两次打开都失败：首页保持可见，横幅可断言（#98 横幅并存）
+    store.load.mockRejectedValue(new Error('打开失败'))
+    let listCalls = 0
+    store.list.mockImplementation(() => {
+      listCalls += 1
+      return firstCommitted && listCalls > 1
+        ? [
+            { id: 'p1', name: '雨夜' },
+            { id: 'c1', name: '未命名短剧' },
+          ]
+        : [{ id: 'p1', name: '雨夜' }]
+    })
+    render(<App />)
+    await screen.findByTestId('home')
+    await act(async () => {
+      const first = (homeProps.current.onCreateProject as () => Promise<void>)()
+      const second = (
+        homeProps.current.onCreateProject as () => Promise<void>
+      )()
+      await Promise.all([first, second])
+    })
+    // c1 由第一次认领；第二次确未创建——失败不得被吞（旧实现把 c1 误当
+    // 第二次产出，横幅被抑制）
+    expect(await screen.findByText(/create:未命名短剧:磁盘满/)).toBeTruthy()
+    expect(store.create).toHaveBeenCalledTimes(2)
+    warn.mockRestore()
+  })
+})
+
+describe('App ✦复制失败对账：部分提交（PR #199 评审）', () => {
+  it('复制在其创建段提交后才失败：对账识别部分提交，不给盲重试', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let dupCommitted = false
+    store.duplicate.mockImplementation(() => {
+      dupCommitted = true
+      return Promise.reject(new Error('目录 fsync 失败'))
+    })
+    let listCalls = 0
+    store.list.mockImplementation(() => {
+      listCalls += 1
+      return dupCommitted && listCalls > 1
+        ? [
+            { id: 'p1', name: '雨夜' },
+            { id: 'copy-1', name: '雨夜 副本' },
+          ]
+        : [{ id: 'p1', name: '雨夜' }]
+    })
+    render(<App />)
+    await screen.findByTestId('home')
+    await act(async () => {
+      await (
+        homeProps.current.onDuplicateProject as (id: string) => Promise<void>
+      )('p1')
+    })
+    // 部分（或全部）提交过：横幅给出诊断与空副本提示，但不提供盲重试
+    expect(await screen.findByText(/duplicate:p1:/)).toBeTruthy()
+    expect(screen.queryByTestId('retry-mutation')).toBeNull()
+    expect(store.duplicate).toHaveBeenCalledTimes(1)
+    warn.mockRestore()
+  })
+})
+
+describe('App ✦并发动作与旧错误序号（issue #132）', () => {
+  it('并发动作：后发起者拥有终态，旧尝试的迟到失败不覆盖新尝试状态', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let releaseRename: (() => void) | null = null
+    store.delete.mockRejectedValue(new Error('del-fail'))
+    store.load.mockResolvedValue(structuredClone(DOC))
+    store.save.mockImplementationOnce(
+      () =>
+        new Promise((_res, rej) => {
+          releaseRename = () => rej(new Error('rename-fail'))
+        }),
+    )
+    render(<App />)
+    await screen.findByTestId('home')
+    await act(async () => {
+      void (homeProps.current.onDeleteProject as (id: string) => Promise<void>)(
+        'p1',
+      )
+      void (
+        homeProps.current.onRenameProject as (
+          id: string,
+          name: string,
+        ) => Promise<void>
+      )('p1', '新名')
+    })
+    // delete 立即失败但其尝试序已被 rename 顶替：迟到失败被抑制
+    expect(screen.queryByText(/del-fail/)).toBeNull()
+    releaseRename!()
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(await screen.findByText(/rename:新名:rename-fail/)).toBeTruthy()
+    warn.mockRestore()
+  })
+})
+
+// 回归目标：不能按拒绝先后抢占另一失败尝试的已提交项目。
+describe('App ✦并发失败的创建族归属', () => {
+  it.each(['create', 'duplicate'] as const)(
+    '先行创建无写入，后发 %s 已提交但也拒绝：不给后者盲重试',
+    async (action) => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const projects = [{ id: 'p1', name: '雨夜' }]
+      store.list.mockImplementation(async () => [...projects])
+      const commitThenReject = async () => {
+        await Promise.resolve()
+        projects.push({ id: 'committed', name: '新项目' })
+        throw new Error('应答丢失')
+      }
+      store.create.mockRejectedValueOnce(new Error('磁盘满'))
+      if (action === 'create')
+        store.create.mockImplementationOnce(commitThenReject)
+      else store.duplicate.mockImplementationOnce(commitThenReject)
+      render(<App />)
+      await screen.findByText('共1项')
+      await act(async () => {
+        const first = (
+          homeProps.current.onCreateProject as () => Promise<void>
+        )()
+        const second =
+          action === 'create'
+            ? (homeProps.current.onCreateProject as () => Promise<void>)()
+            : (
+                homeProps.current.onDuplicateProject as (
+                  id: string,
+                ) => Promise<void>
+              )('p1')
+        await Promise.all([first, second])
+      })
+      expect(screen.queryByTestId('retry-mutation')).toBeNull()
+      expect(homeProps.current.projects).toHaveLength(2)
+      if (action === 'create')
+        expect(homeProps.current.mutationError).toBeNull()
+      else expect(screen.getByRole('alert').textContent).toMatch(/副本/)
+      warn.mockRestore()
+    },
+  )
+})
+
+// 回归目标：列表读取拒绝不能被 [] 掩盖并开放非幂等重试。
+describe('App ✦失败对账结果未知', () => {
+  it.each(['create', 'duplicate'] as const)(
+    '%s 拒绝后列表也失败：保留已知卡片与诊断，不提供重试',
+    async (action) => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      store[action].mockImplementationOnce(async () => {
+        store.list.mockRejectedValue(new Error('目录暂不可读'))
+        throw new Error('应答丢失')
+      })
+      render(<App />)
+      await screen.findByText('共1项')
+      await act(async () => {
+        if (action === 'create') {
+          await (homeProps.current.onCreateProject as () => Promise<void>)()
+        } else {
+          await (
+            homeProps.current.onDuplicateProject as (
+              id: string,
+            ) => Promise<void>
+          )('p1')
+        }
+      })
+      expect(screen.queryByTestId('retry-mutation')).toBeNull()
+      expect(screen.getByRole('alert').textContent).toMatch(/应答丢失/)
+      expect(screen.getByRole('alert').textContent).toMatch(/无法确认/)
+      expect(homeProps.current.loadError).toMatch(/目录暂不可读/)
+      expect(homeProps.current.projects).toEqual([{ id: 'p1', name: '雨夜' }])
+      warn.mockRestore()
+    },
+  )
+})
+
+// 回归目标：确认没有副本残留的失败必须提供可完成复制的同参重试。
+it('App ✦复制完全回滚后可重试，成功新增卡片并清除错误', async () => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  const projects = [{ id: 'p1', name: '雨夜' }]
+  store.list.mockImplementation(async () => [...projects])
+  store.duplicate.mockRejectedValueOnce(new Error('拷贝失败且已清理'))
+  store.duplicate.mockImplementationOnce(async () => {
+    const copy = { id: 'copy-2', name: '雨夜 副本' }
+    projects.push(copy)
+    return copy
+  })
+  render(<App />)
+  await screen.findByText('共1项')
+  await act(async () => {
+    await (
+      homeProps.current.onDuplicateProject as (id: string) => Promise<void>
+    )('p1')
+  })
+  expect(screen.getByRole('alert').textContent).toMatch(/duplicate:p1:拷贝失败/)
+  fireEvent.click(screen.getByTestId('retry-mutation'))
+  await screen.findByText('共2项')
+  expect(screen.queryByRole('alert')).toBeNull()
+  expect(store.duplicate).toHaveBeenNthCalledWith(2, 'p1')
+  warn.mockRestore()
+})
+
+/** 准备真实反馈状态并返回交给保存边界的文档身份，供恢复事件精确匹配。 */
+async function failHomeRename() {
+  store.save.mockRejectedValueOnce(new Error('暂时只读'))
+  render(<App />)
+  await screen.findByText('共1项')
+  await act(async () => {
+    await (
+      homeProps.current.onRenameProject as (
+        id: string,
+        name: string,
+      ) => Promise<void>
+    )('p1', '新名')
+  })
+  expect(screen.getByRole('alert').textContent).toMatch(/rename:新名:暂时只读/)
+  return store.save.mock.lastCall![1] as ProjectContent
+}
+
+it('App ✦重命名后台恢复：当前文档重存成功后横幅消失、卡片刷新', async () => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  const doc = await failHomeRename()
+  store.list.mockResolvedValue([{ id: 'p1', name: '新名' }])
+  await act(async () => {
+    notifyRetryPersisted(doc)
+    savedListeners.forEach((notify) => notify('p1'))
+  })
+  expect(homeProps.current.projects).toEqual([{ id: 'p1', name: '新名' }])
+  expect(screen.queryByRole('alert')).toBeNull()
+  expect(screen.queryByTestId('retry-mutation')).toBeNull()
+  warn.mockRestore()
+})
+
+it('App ✦重命名后台恢复：同名但不同文档的成功通知不能清错', async () => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  const doc = await failHomeRename()
+  act(() => notifyRetryPersisted(structuredClone(doc)))
+  expect(screen.getByRole('alert').textContent).toMatch(/暂时只读/)
+  act(() => notifyRetryPersisted(doc))
+  expect(screen.queryByRole('alert')).toBeNull()
+  warn.mockRestore()
+})
+
+it.each(['rename', 'delete'] as const)(
+  'App ✦重命名后台恢复：旧恢复不能清除后续 %s 失败',
+  async (action) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const oldDoc = await failHomeRename()
+    if (action === 'rename')
+      store.save.mockRejectedValueOnce(new Error('新失败'))
+    else store.delete.mockRejectedValueOnce(new Error('新失败'))
+    await act(async () => {
+      if (action === 'rename') {
+        await (
+          homeProps.current.onRenameProject as (
+            id: string,
+            name: string,
+          ) => Promise<void>
+        )('p1', '后名')
+      } else {
+        await (
+          homeProps.current.onDeleteProject as (id: string) => Promise<void>
+        )('p1')
+      }
+    })
+    act(() => notifyRetryPersisted(oldDoc))
+    expect(screen.getByRole('alert').textContent).toContain(`${action}:`)
+    expect(screen.getByRole('alert').textContent).toMatch(/新失败/)
+    if (action === 'rename') {
+      act(() =>
+        notifyRetryPersisted(store.save.mock.lastCall![1] as ProjectContent),
+      )
+      expect(screen.queryByRole('alert')).toBeNull()
+    }
+    warn.mockRestore()
+  },
+)
+
+it('App ✦重命名后台恢复：旧读取迟到不覆盖新尝试的恢复身份', async () => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  let release!: (doc: ProjectContent) => void
+  store.load.mockImplementationOnce(
+    () =>
+      new Promise<ProjectContent>((resolve) => {
+        release = resolve
+      }),
+  )
+  store.save
+    .mockRejectedValueOnce(new Error('暂时只读'))
+    .mockRejectedValueOnce(new Error('暂时只读'))
+  render(<App />)
+  await screen.findByText('共1项')
+  let first!: Promise<void>
+  await act(async () => {
+    const rename = homeProps.current.onRenameProject as (
+      id: string,
+      name: string,
+    ) => Promise<void>
+    first = rename('p1', '旧名')
+    await rename('p1', '新名')
+  })
+  const currentDoc = store.save.mock.lastCall![1] as ProjectContent
+  await act(async () => {
+    release(structuredClone(DOC))
+    await first
+    notifyRetryPersisted(currentDoc)
+  })
+  expect(screen.queryByRole('alert')).toBeNull()
+  warn.mockRestore()
+})
+
+it('App ✦重命名后台恢复：先收到恢复成功、后处理保存拒绝，错误不复活', async () => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  store.save.mockImplementationOnce(
+    async (_id: string, doc: ProjectContent) => {
+      notifyRetryPersisted(doc)
+      throw new Error('迟到的拒绝')
+    },
+  )
+  render(<App />)
+  await screen.findByText('共1项')
+  await act(async () => {
+    await (
+      homeProps.current.onRenameProject as (
+        id: string,
+        name: string,
+      ) => Promise<void>
+    )('p1', '新名')
+  })
+  expect(screen.queryByRole('alert')).toBeNull()
+  warn.mockRestore()
 })
