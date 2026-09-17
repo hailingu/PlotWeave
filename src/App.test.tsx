@@ -348,7 +348,7 @@ describe('App（导航与编辑器回调）', () => {
         ) => Promise<void>
       )('p1', '新名')
     })
-    expect(store.saveQuiet).toHaveBeenCalledWith('p1', { ...DOC, name: '新名' })
+    expect(store.save).toHaveBeenCalledWith('p1', { ...DOC, name: '新名' })
     await act(async () => {
       await (
         homeProps.current.onDuplicateProject as (id: string) => Promise<void>
@@ -1230,10 +1230,10 @@ describe('App ✦AI 会话回吐重排失败恢复', () => {
 })
 
 describe('App ✦首页项目变更失败反馈（issue #132）', () => {
-  it('重命名失败：横幅点名动作、目标与诊断；重试成功后横幅消失', async () => {
+  it('重命名失败（saveQuiet 生产契约吞错，须走拒绝式 save）：横幅点名动作、目标与诊断；重试成功后横幅消失', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     store.load.mockResolvedValue(structuredClone(DOC))
-    store.saveQuiet.mockRejectedValueOnce(new Error('只读目录'))
+    store.save.mockRejectedValueOnce(new Error('只读目录'))
     render(<App />)
     await screen.findByTestId('home')
     await act(async () => {
@@ -1246,7 +1246,7 @@ describe('App ✦首页项目变更失败反馈（issue #132）', () => {
     })
     expect(await screen.findByText(/rename:新名:只读目录/)).toBeTruthy()
     fireEvent.click(screen.getByTestId('retry-mutation'))
-    await vi.waitFor(() => expect(store.saveQuiet).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(store.save).toHaveBeenCalledTimes(2))
     await vi.waitFor(() => expect(screen.queryByRole('alert')).toBeNull())
     warn.mockRestore()
   })
@@ -1306,12 +1306,38 @@ describe('App ✦首页项目变更失败反馈（issue #132）', () => {
     warn.mockRestore()
   })
 
+  it('创建被拒但项目已实际存在（fsync 失败/应答丢失）：对账为已创建，不横幅不盲重试', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let listCalls = 0
+    store.list.mockImplementation(() => {
+      listCalls += 1
+      // 挂载首读无新项目；失败后重列出现新建卡（create 在原子 rename 后才拒绝）
+      return listCalls === 1
+        ? [{ id: 'p1', name: '雨夜' }]
+        : [
+            { id: 'p1', name: '雨夜' },
+            { id: 'new-9', name: '未命名短剧' },
+          ]
+    })
+    store.create.mockRejectedValue(new Error('目录 fsync 失败'))
+    render(<App />)
+    await screen.findByTestId('home')
+    await act(async () => {
+      await (homeProps.current.onCreateProject as () => Promise<void>)()
+    })
+    await vi.waitFor(() => expect(store.list).toHaveBeenCalledTimes(2))
+    expect(homeProps.current.mutationError).toBeNull()
+    expect(screen.queryByTestId('retry-mutation')).toBeNull()
+    expect(store.create).toHaveBeenCalledTimes(1)
+    warn.mockRestore()
+  })
+
   it('并发动作：后发起者拥有终态，旧尝试的迟到失败不覆盖新尝试状态', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     let releaseRename: (() => void) | null = null
     store.delete.mockRejectedValue(new Error('del-fail'))
     store.load.mockResolvedValue(structuredClone(DOC))
-    store.saveQuiet.mockImplementationOnce(
+    store.save.mockImplementationOnce(
       () =>
         new Promise((_res, rej) => {
           releaseRename = () => rej(new Error('rename-fail'))

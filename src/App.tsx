@@ -114,7 +114,7 @@ async function loadOpenProject(
 
 type OpenProjectSetter = Dispatch<SetStateAction<OpenProject | null>>
 type OpenErrorSetter = Dispatch<SetStateAction<OpenProjectError | null>>
-type RefreshProjects = () => Promise<void>
+type RefreshProjects = () => Promise<ProjectSummary[]>
 type UnsavedAiSessionsRef = RefObject<Map<string, UnsavedAiSession>>
 /** 保存路径需要整体替换快照，故用可变盒子而非只读的 RefObject。 */
 type LatestAiSessionRef = { current: LatestAiSession | null }
@@ -224,6 +224,7 @@ function useProjectOpenAttempt(
   unsavedAiSessions: UnsavedAiSessionsRef,
   latestDoc: LatestDocRef,
   feedback: ReturnType<typeof useHomeActionFeedback>,
+  projectsRef: RefObject<ProjectSummary[]>,
 ) {
   const openAttemptSeqRef = useRef(0)
 
@@ -243,22 +244,29 @@ function useProjectOpenAttempt(
     // 存储创建与随后打开分段反馈（issue #132）：创建被拒 = 变更失败横幅
     // （可重试）；创建成功但打开失败 = 项目已存在，不虚报变更失败，由
     // #98 打开横幅承接。
+    // 尝试前快照（PR #199 评审）：create 非幂等——原子 rename 之后的目录
+    // fsync 失败或 IPC 应答丢失都会拒绝而已建出项目，盲重试会以新 id 造
+    // 出重复项目；失败后先重列对账，确有新项目即按已创建对待（卡片已在
+    // 列表），只对确未创建的失败给横幅与重试。
+    const before = new Set((projectsRef.current ?? []).map((x) => x.id))
     let meta: { id: string }
     try {
       meta = await projectStore.create('未命名短剧')
       feedback.succeed(fbSeq)
     } catch (err) {
       console.warn('[App] 新建项目失败', err)
-      feedback.fail(
-        fbSeq,
-        {
-          action: 'create',
-          targetName: '未命名短剧',
-          detail: openFailureDetail(err),
-        },
-        () => void handleCreateProject(),
-      )
-      void refreshProjects()
+      const list = await refreshProjects()
+      if (!list.some((x) => !before.has(x.id))) {
+        feedback.fail(
+          fbSeq,
+          {
+            action: 'create',
+            targetName: '未命名短剧',
+            detail: openFailureDetail(err),
+          },
+          () => void handleCreateProject(),
+        )
+      }
       return
     }
     try {
@@ -276,7 +284,14 @@ function useProjectOpenAttempt(
         setOpenFailure({ id: meta.id, detail: openFailureDetail(err) })
     }
     void refreshProjects()
-  }, [latestDoc, refreshProjects, setOpenFailure, setOpenProject, feedback])
+  }, [
+    latestDoc,
+    refreshProjects,
+    setOpenFailure,
+    setOpenProject,
+    feedback,
+    projectsRef,
+  ])
 
   const handleOpenProject = useCallback(
     async (id: string) => {
@@ -311,15 +326,25 @@ function useProjectOpenAttempt(
   return { handleCreateProject, handleOpenProject }
 }
 
-function useOpenProjectActions(
-  setOpenProject: OpenProjectSetter,
-  setOpenFailure: OpenErrorSetter,
-  refreshProjects: RefreshProjects,
-  unsavedAiSessions: UnsavedAiSessionsRef,
-  latestAiSession: LatestAiSessionRef,
-  latestDoc: LatestDocRef,
-  feedback: ReturnType<typeof useHomeActionFeedback>,
-) {
+function useOpenProjectActions({
+  setOpenProject,
+  setOpenFailure,
+  refreshProjects,
+  unsavedAiSessions,
+  latestAiSession,
+  latestDoc,
+  feedback,
+  projectsRef,
+}: {
+  readonly setOpenProject: OpenProjectSetter
+  readonly setOpenFailure: OpenErrorSetter
+  readonly refreshProjects: RefreshProjects
+  readonly unsavedAiSessions: UnsavedAiSessionsRef
+  readonly latestAiSession: LatestAiSessionRef
+  readonly latestDoc: LatestDocRef
+  readonly feedback: ReturnType<typeof useHomeActionFeedback>
+  readonly projectsRef: RefObject<ProjectSummary[]>
+}) {
   const { handleCreateProject, handleOpenProject } = useProjectOpenAttempt(
     setOpenProject,
     setOpenFailure,
@@ -327,6 +352,7 @@ function useOpenProjectActions(
     unsavedAiSessions,
     latestDoc,
     feedback,
+    projectsRef,
   )
 
   const handleBackHome = useCallback(() => {
@@ -413,7 +439,10 @@ function useHomeProjectActions(
       const seq = feedback.begin()
       try {
         const doc = await projectStore.load(id)
-        await projectStore.saveQuiet(id, { ...doc, name })
+        // 拒绝式保存（PR #199 评审）：saveQuiet 按契约吞掉一切拒绝——
+        // 落盘失败永远到不了失败横幅；走 save 拒绝（失败同经保存链登记
+        // 后台重试，横幅负责立即可见可重试）
+        await projectStore.save(id, { ...doc, name })
         feedback.succeed(seq)
         await refreshProjects()
       } catch (err) {
@@ -488,7 +517,8 @@ function useProjectSummaries(isHomeVisible: () => boolean): {
   readonly loading: boolean
   /** 最近一次读取失败的诊断（#133）：null = 无错误。失败不清空已知列表。 */
   readonly loadError: string | null
-  readonly refreshProjects: () => Promise<void>
+  /** 拉取并发布列表；返回本次拉到的列表（供创建失败后的结果对账）。 */
+  readonly refreshProjects: () => Promise<ProjectSummary[]>
 } {
   const [projects, setProjects] = useState<ProjectSummary[]>([])
   const [loading, setLoading] = useState(true)
@@ -497,7 +527,9 @@ function useProjectSummaries(isHomeVisible: () => boolean): {
   const homeVisibleRef = useRef(true)
   homeVisibleRef.current = isHomeVisible()
 
-  const refreshProjects = useCallback(async () => {
+  /** 拉取并发布列表；返回本次拉到的列表（调用方可做前后对账，issue #132
+   * 评审：create 拒绝但项目已存在时不盲重试）。 */
+  const refreshProjects = useCallback(async (): Promise<ProjectSummary[]> => {
     const seq = ++refreshSeqRef.current
     try {
       const list = await projectStore.list()
@@ -506,11 +538,13 @@ function useProjectSummaries(isHomeVisible: () => boolean): {
         setProjects(list)
         setLoadError(null)
       }
+      return list
     } catch (err) {
       console.warn('[App] 项目列表加载失败', err)
       // 读取失败 ≠ 空列表（#133）：保留已知列表供展示，只置错误态交由
       // HomePage 呈现诊断/重试；项目文件本身未受影响（整次枚举失败）
       if (seq === refreshSeqRef.current) setLoadError(String(err))
+      return []
     } finally {
       if (seq === refreshSeqRef.current) setLoading(false)
     }
@@ -529,6 +563,53 @@ function useProjectSummaries(isHomeVisible: () => boolean): {
   )
 
   return { projects, loading, loadError, refreshProjects }
+}
+
+/** 编辑器视图装配（AppView 拆分，PR #199 评审守组件 80 行上限）：带外
+ * 最新会话/画布文档的重挂载种子解析与保存接线——设置页关闭等重挂载
+ * 时刻读取引用里的最新内容，而非打开项目时落盘/保留区的旧快照
+ * （issue #61/#118）。 */
+function EditorScreen({
+  openProject,
+  open,
+  latestAiSession,
+  latestDoc,
+  onOpenSettings,
+}: {
+  readonly openProject: OpenProject
+  readonly open: ReturnType<typeof useOpenProjectActions>
+  readonly latestAiSession: LatestAiSessionRef
+  readonly latestDoc: LatestDocRef
+  readonly onOpenSettings: () => void
+}) {
+  const latest = latestAiSession.current
+  const aiSession =
+    latest?.id === openProject.id ? latest.session : openProject.aiSession
+  const latestCanvasDoc = latestDoc.current
+  const doc =
+    latestCanvasDoc?.id === openProject.id
+      ? latestCanvasDoc.doc
+      : openProject.doc
+  return (
+    <EditorView
+      key={openProject.id}
+      project={{ id: openProject.id, ...doc }}
+      aiSession={aiSession}
+      aiSessionError={openProject.aiSessionError}
+      aiSessionRetryable={openProject.aiSessionRetryable}
+      aiSessionLoadFailed={openProject.aiSessionLoadFailed}
+      onBackHome={open.handleBackHome}
+      onRenameProject={open.handleEditorRename}
+      onOpenSettings={onOpenSettings}
+      // 先同步登记再委托存储（issue #118）：防抖卸载冲刷的交付无论
+      // 保存成败都进入引用，失败时重挂载种子仍是内存最新文档。
+      onSave={(next) => {
+        latestDoc.current = { id: openProject.id, doc: next }
+        return projectStore.save(openProject.id, next)
+      }}
+      onSaveAiSession={open.handleSaveAiSession(openProject.id)}
+    />
+  )
 }
 
 function AppView({
@@ -571,36 +652,13 @@ function AppView({
   if (settingsOpen) {
     view = <SettingsView onClose={onCloseSettings} />
   } else if (openProject) {
-    // 挂载种子在渲染时解析：设置页关闭等重挂载时刻读取引用里的最新会话
-    // （issue #61），而非打开项目时落盘/保留区的旧快照。
-    const latest = latestAiSession.current
-    const aiSession =
-      latest?.id === openProject.id ? latest.session : openProject.aiSession
-    // 画布文档同款带外解析（issue #118）：重挂载种子取保存路径的最新
-    // 文档，不用打开时刻的旧快照回退设置往返前已保存的编辑。
-    const latestCanvasDoc = latestDoc.current
-    const doc =
-      latestCanvasDoc?.id === openProject.id
-        ? latestCanvasDoc.doc
-        : openProject.doc
     view = (
-      <EditorView
-        key={openProject.id}
-        project={{ id: openProject.id, ...doc }}
-        aiSession={aiSession}
-        aiSessionError={openProject.aiSessionError}
-        aiSessionRetryable={openProject.aiSessionRetryable}
-        aiSessionLoadFailed={openProject.aiSessionLoadFailed}
-        onBackHome={open.handleBackHome}
-        onRenameProject={open.handleEditorRename}
+      <EditorScreen
+        openProject={openProject}
+        open={open}
+        latestAiSession={latestAiSession}
+        latestDoc={latestDoc}
         onOpenSettings={onOpenSettings}
-        // 先同步登记再委托存储（issue #118）：防抖卸载冲刷的交付无论
-        // 保存成败都进入引用，失败时重挂载种子仍是内存最新文档。
-        onSave={(next) => {
-          latestDoc.current = { id: openProject.id, doc: next }
-          return projectStore.save(openProject.id, next)
-        }}
-        onSaveAiSession={open.handleSaveAiSession(openProject.id)}
       />
     )
   } else {
@@ -681,6 +739,10 @@ export function App() {
   )
   // 首页项目变更失败反馈（issue #132）：创建/重命名/复制/删除共用
   const actionFeedback = useHomeActionFeedback()
+  /** 列表镜像（渲染期同步，同 useProjectSummaries 的可见性镜像模式）：
+   * 创建失败后的结果对账需要尝试前快照（PR #199 评审）。 */
+  const projectsRef = useRef<ProjectSummary[]>([])
+  projectsRef.current = projects
 
   // ⌘, 打开设置（macOS 惯例，§8.2）；输入控件聚焦时不触发
   useEffect(() => {
@@ -694,15 +756,16 @@ export function App() {
     return () => document.removeEventListener('keydown', onKey)
   }, [])
 
-  const open = useOpenProjectActions(
+  const open = useOpenProjectActions({
     setOpenProject,
     setOpenFailure,
     refreshProjects,
-    unsavedAiSessionsRef,
-    latestAiSessionRef,
-    latestDocRef,
-    actionFeedback,
-  )
+    unsavedAiSessions: unsavedAiSessionsRef,
+    latestAiSession: latestAiSessionRef,
+    latestDoc: latestDocRef,
+    feedback: actionFeedback,
+    projectsRef,
+  })
   const home = useHomeProjectActions(
     refreshProjects,
     unsavedAiSessionsRef,
