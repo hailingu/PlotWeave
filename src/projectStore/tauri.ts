@@ -11,7 +11,6 @@ import {
   enqueueSave,
   pendingRetryDocs,
   saveChains,
-  tauriSave,
   waitForSaveChainIdle,
 } from './saveChain'
 import { seedProjects } from './seeds'
@@ -48,7 +47,13 @@ function toSummary(m: {
  * 但占位与探测之间存在时序窗口（文件在列表后、探测前损坏/不可读）：
  * 播种仍为 no-replace 语义——仅当 load_project 确证「项目不存在」才写
  * 种子，文件存在（含不可读）一律跳过并留痕，不用硬编码种子原子覆盖
- * 可能可恢复的用户文件。返回是否写入了任一种子。 */
+ * 可能可恢复的用户文件。种子写经保存链（issue #134）：与普通保存统一
+ * 排序与失败登记，删除墓碑期被吸收——探测窗口内被删除的示例不被种子
+ * 复活；探测先等该 id 在途保存落定（在途链落定不改身份，守卫看不见，
+ * 等落定后保存所建文件经「项目已存在」自然跳过）；目标存在待重试的
+ * 失败保存（登记比磁盘/空目录新）或探测窗口内排入新写入（链身份变化，
+ * 探测结果已过时）同样跳过（PR #198 评审）——成功的种子写会清除该
+ * 登记，用户最新内容被永久丢弃。返回是否写入了任一种子。 */
 async function seedFirstRun(): Promise<boolean> {
   const { invoke } = await import('@tauri-apps/api/core')
   const notFound = (e: unknown) =>
@@ -56,6 +61,11 @@ async function seedFirstRun(): Promise<boolean> {
     String(e).includes('项目不存在')
   let seeded = false
   for (const seed of seedProjects()) {
+    // 先等该 id 在途保存落定再探测（PR #198 评审）：预先存在的在途链
+    // 落定不改链身份、守卫看不见；等落定后探测，保存已建文件即走
+    // 「项目已存在」自然跳过，种子不会排在其后覆盖用户写入
+    await waitForSaveChainIdle(seed.meta.id)
+    const chainBefore = saveChains.get(seed.meta.id)
     try {
       await invoke<unknown>('load_project', { id: seed.meta.id })
       console.warn('[projectStore] 播种跳过：项目已存在', seed.meta.id)
@@ -68,7 +78,17 @@ async function seedFirstRun(): Promise<boolean> {
         )
         continue
       }
-      await tauriSave(seed.meta.id, seed.doc)
+      if (
+        pendingRetryDocs.get(seed.meta.id) !== undefined ||
+        saveChains.get(seed.meta.id) !== chainBefore
+      ) {
+        console.warn(
+          '[projectStore] 播种跳过：存在待重试的更新保存或窗口内有新写入，不以种子覆盖',
+          seed.meta.id,
+        )
+        continue
+      }
+      await enqueueSave(seed.meta.id, seed.doc)
       seeded = true
     }
   }
@@ -80,38 +100,71 @@ async function seedFirstRun(): Promise<boolean> {
  * 硬编码种子覆盖会在升级后首次打开首页时静默摧毁这些编辑；演示内容刷新
  * 只经由空库播种路径发生。与 tauriLoad 同款加载侧资产复验（§7.1/§10.5）：
  * 索引资产文件缺失/被换链接时先隔离再回写，回写不被保存边界拒收。
- * 单例隔离：该示例升级检查失败（如未来版本 schemaVersion——Rust 列表与
- * 信封仍返回、parseProject 才拒绝）只跳过该例并留痕，摘要原样保留，版本
- * 错误延迟到该项目被打开时呈现。返回是否发生回写。 */
+ * 回写经保存链且守卫异步窗口（issue #134，守卫细节见 tryUpgradeSample）。
+ * 单例隔离：该示例升级检查失败只跳过该例并留痕，摘要原样保留，版本错误
+ * 延迟到该项目被打开时呈现。返回是否发生回写。 */
 async function upgradeKnownSamples(metas: { id: string }[]): Promise<boolean> {
-  const { invoke } = await import('@tauri-apps/api/core')
   let repairedAny = false
   for (const meta of metas) {
     if (!meta.id.startsWith('sample-')) continue
     if (!seedProjects().some((s) => s.meta.id === meta.id)) continue
-    try {
-      const file = await invoke<unknown>('load_project', { id: meta.id })
-      const invalidAssetKeys = await invoke<string[]>('verify_project_assets', {
-        id: meta.id,
-        assets: (file as { assets?: unknown }).assets ?? {},
-      })
-      const { content, migrated, repaired } = parseProject(file, {
-        projectId: meta.id,
-        invalidAssetKeys,
-      })
-      if (migrated || repaired) {
-        await tauriSave(meta.id, content)
-        repairedAny = true
-      }
-    } catch (err) {
-      console.warn(
-        '[projectStore] 示例升级检查失败，保留该示例现状',
-        meta.id,
-        err,
-      )
-    }
+    if (await tryUpgradeSample(meta.id)) repairedAny = true
   }
   return repairedAny
+}
+
+/** 单个已知示例的升级检查与回写（upgradeKnownSamples 内核拆分，
+ * S3776）：读盘前先等链静止；链上存在保存失败的重试登记（最新未落盘
+ * 内容比磁盘新，PR #198 评审）即跳过——以旧盘内容成功回写会按「成功
+ * 保存清除登记」契约丢弃该登记，最新编辑被永久丢失，留待链重试交付。
+ * 读盘/复验窗口内该示例排入新保存或删除（链身份变化）即跳过本次
+ * 回写——迟到修复不得覆盖较新内容或复活已删对象，下次列表/打开重查；
+ * 回写失败由链登记重试。任何步骤失败按单例隔离（只留痕不中止列表）。
+ * 返回是否实际回写。 */
+async function tryUpgradeSample(id: string): Promise<boolean> {
+  const { invoke } = await import('@tauri-apps/api/core')
+  try {
+    await waitForSaveChainIdle(id)
+    if (pendingRetryDocs.get(id) !== undefined) {
+      console.warn(
+        '[projectStore] 示例存在待重试的更新保存，跳过本次升级回写',
+        id,
+      )
+      return false
+    }
+    const chainBefore = saveChains.get(id)
+    const file = await invoke<unknown>('load_project', { id })
+    const invalidAssetKeys = await invoke<string[]>('verify_project_assets', {
+      id,
+      assets: (file as { assets?: unknown }).assets ?? {},
+    })
+    const { content, migrated, repaired } = parseProject(file, {
+      projectId: id,
+      invalidAssetKeys,
+    })
+    if (!(migrated || repaired)) return false
+    if (saveChains.get(id) !== chainBefore) {
+      console.warn(
+        '[projectStore] 示例升级窗口内出现新的保存/删除排队，跳过本次回写（下次列表/打开重查）',
+        id,
+      )
+      return false
+    }
+    try {
+      await enqueueSave(id, content)
+      return true
+    } catch (err) {
+      console.error(
+        '[projectStore] 示例迁移/修复回写失败（已登记保存链重试）',
+        id,
+        err,
+      )
+      return false
+    }
+  } catch (err) {
+    console.warn('[projectStore] 示例升级检查失败，保留该示例现状', id, err)
+    return false
+  }
 }
 
 export async function tauriList(): Promise<ProjectSummary[]> {
