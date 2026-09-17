@@ -305,7 +305,7 @@ describe('App（双界面路由壳）', () => {
     expect(
       (editorProps.current.project as { createdAt?: string }).createdAt,
     ).toBe('2026-08-31T00:00:00.000Z')
-    expect(store.list).toHaveBeenCalledTimes(2)
+    expect(store.list).toHaveBeenCalledTimes(3)
   })
 })
 
@@ -1308,23 +1308,18 @@ describe('App ✦创建失败反馈与结果对账（issue #132/PR #199 评审�
 describe('App ✦创建族失败对账（PR #199 评审）', () => {
   it('创建被拒但项目已实际存在（fsync 失败/应答丢失）：对账为已创建，不横幅不盲重试', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    let listCalls = 0
-    store.list.mockImplementation(() => {
-      listCalls += 1
-      return listCalls === 1
-        ? [{ id: 'p1', name: '雨夜' }]
-        : [
-            { id: 'p1', name: '雨夜' },
-            { id: 'new-9', name: '未命名短剧' },
-          ]
+    const projects = [{ id: 'p1', name: '雨夜' }]
+    store.list.mockImplementation(async () => [...projects])
+    store.create.mockImplementationOnce(async () => {
+      projects.push({ id: 'new-9', name: '未命名短剧' })
+      throw new Error('目录 fsync 失败')
     })
-    store.create.mockRejectedValue(new Error('目录 fsync 失败'))
     render(<App />)
     await screen.findByTestId('home')
     await act(async () => {
       await (homeProps.current.onCreateProject as () => Promise<void>)()
     })
-    await vi.waitFor(() => expect(store.list).toHaveBeenCalledTimes(2))
+    expect(homeProps.current.projects).toEqual(projects)
     expect(homeProps.current.mutationError).toBeNull()
     expect(screen.queryByTestId('retry-mutation')).toBeNull()
     expect(store.create).toHaveBeenCalledTimes(1)
@@ -1441,4 +1436,106 @@ describe('App ✦并发动作与旧错误序号（issue #132）', () => {
     expect(await screen.findByText(/rename:新名:rename-fail/)).toBeTruthy()
     warn.mockRestore()
   })
+})
+
+// 回归目标：不能按拒绝先后抢占另一失败尝试的已提交项目。
+describe('App ✦并发失败的创建族归属', () => {
+  it.each(['create', 'duplicate'] as const)(
+    '先行创建无写入，后发 %s 已提交但也拒绝：不给后者盲重试',
+    async (action) => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const projects = [{ id: 'p1', name: '雨夜' }]
+      store.list.mockImplementation(async () => [...projects])
+      const commitThenReject = async () => {
+        await Promise.resolve()
+        projects.push({ id: 'committed', name: '新项目' })
+        throw new Error('应答丢失')
+      }
+      store.create.mockRejectedValueOnce(new Error('磁盘满'))
+      if (action === 'create')
+        store.create.mockImplementationOnce(commitThenReject)
+      else store.duplicate.mockImplementationOnce(commitThenReject)
+      render(<App />)
+      await screen.findByText('共1项')
+      await act(async () => {
+        const first = (
+          homeProps.current.onCreateProject as () => Promise<void>
+        )()
+        const second =
+          action === 'create'
+            ? (homeProps.current.onCreateProject as () => Promise<void>)()
+            : (
+                homeProps.current.onDuplicateProject as (
+                  id: string,
+                ) => Promise<void>
+              )('p1')
+        await Promise.all([first, second])
+      })
+      expect(screen.queryByTestId('retry-mutation')).toBeNull()
+      expect(homeProps.current.projects).toHaveLength(2)
+      if (action === 'create')
+        expect(homeProps.current.mutationError).toBeNull()
+      else expect(screen.getByRole('alert').textContent).toMatch(/副本/)
+      warn.mockRestore()
+    },
+  )
+})
+
+// 回归目标：列表读取拒绝不能被 [] 掩盖并开放非幂等重试。
+describe('App ✦失败对账结果未知', () => {
+  it.each(['create', 'duplicate'] as const)(
+    '%s 拒绝后列表也失败：保留已知卡片与诊断，不提供重试',
+    async (action) => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      store[action].mockImplementationOnce(async () => {
+        store.list.mockRejectedValue(new Error('目录暂不可读'))
+        throw new Error('应答丢失')
+      })
+      render(<App />)
+      await screen.findByText('共1项')
+      await act(async () => {
+        if (action === 'create') {
+          await (homeProps.current.onCreateProject as () => Promise<void>)()
+        } else {
+          await (
+            homeProps.current.onDuplicateProject as (
+              id: string,
+            ) => Promise<void>
+          )('p1')
+        }
+      })
+      expect(screen.queryByTestId('retry-mutation')).toBeNull()
+      expect(screen.getByRole('alert').textContent).toMatch(/应答丢失/)
+      expect(screen.getByRole('alert').textContent).toMatch(/无法确认/)
+      expect(homeProps.current.loadError).toMatch(/目录暂不可读/)
+      expect(homeProps.current.projects).toEqual([{ id: 'p1', name: '雨夜' }])
+      warn.mockRestore()
+    },
+  )
+})
+
+// 回归目标：确认没有副本残留的失败必须提供可完成复制的同参重试。
+it('App ✦复制完全回滚后可重试，成功新增卡片并清除错误', async () => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  const projects = [{ id: 'p1', name: '雨夜' }]
+  store.list.mockImplementation(async () => [...projects])
+  store.duplicate.mockRejectedValueOnce(new Error('拷贝失败且已清理'))
+  store.duplicate.mockImplementationOnce(async () => {
+    const copy = { id: 'copy-2', name: '雨夜 副本' }
+    projects.push(copy)
+    return copy
+  })
+  render(<App />)
+  await screen.findByText('共1项')
+  await act(async () => {
+    await (
+      homeProps.current.onDuplicateProject as (id: string) => Promise<void>
+    )('p1')
+  })
+  expect(screen.getByRole('alert').textContent).toMatch(/duplicate:p1:拷贝失败/)
+  fireEvent.click(screen.getByTestId('retry-mutation'))
+  await screen.findByText('共2项')
+  expect(screen.queryByRole('alert')).toBeNull()
+  expect(store.duplicate).toHaveBeenNthCalledWith(2, 'p1')
+  warn.mockRestore()
 })

@@ -15,12 +15,14 @@ import { HomePage } from './home/HomePage'
 import type { OpenProjectError } from './home/OpenErrorBanner'
 import { useHomeActionFeedback } from './useHomeActionFeedback'
 import type { HomeActionFailure } from './home/ActionErrorBanner'
+import type { CreateFamilyOutcome } from './home/createFamilyOutcome'
 import {
   createWithReconcile,
   duplicateWithReconcile,
   useCreateFamilyAttempts,
 } from './useCreateFamilyAttempts'
 import { useExitFlush } from './useExitFlush'
+import { useProjectSummaries } from './useProjectSummaries'
 import { projectStore, type ProjectContent } from './projectStore'
 import type { ProjectSummary } from './home/projects'
 import type { AiSession } from './editor/ai/session'
@@ -120,7 +122,7 @@ async function loadOpenProject(
 
 type OpenProjectSetter = Dispatch<SetStateAction<OpenProject | null>>
 type OpenErrorSetter = Dispatch<SetStateAction<OpenProjectError | null>>
-type RefreshProjects = () => Promise<ProjectSummary[]>
+type RefreshProjects = () => Promise<void>
 type UnsavedAiSessionsRef = RefObject<Map<string, UnsavedAiSession>>
 /** 保存路径需要整体替换快照，故用可变盒子而非只读的 RefObject。 */
 type LatestAiSessionRef = { current: LatestAiSession | null }
@@ -250,28 +252,26 @@ function useProjectOpenAttempt(
     // 存储创建与随后打开分段反馈（issue #132）：创建被拒 = 变更失败横幅
     // （可重试）；创建成功但打开失败 = 项目已存在，不虚报变更失败，由
     // #98 打开横幅承接。
-    // 创建族对账（PR #199 评审）：create 非幂等，失败先对账（排除他次
-    // 尝试产出）——确未创建才给横幅与重试，认领到产出即按已创建对待。
+    // 创建族从基线读取到失败对账完整串行；只有确认未创建才开放重试。
     const outcome = await createWithReconcile(attempts, '未命名短剧')
     if (outcome.kind === 'rejected') {
       console.warn('[App] 新建项目失败', outcome.err)
-      if (!outcome.reconciled) {
+      if (outcome.commitState !== 'present') {
         feedback.fail(
           fbSeq,
           {
             action: 'create',
             targetName: '未命名短剧',
-            detail: openFailureDetail(outcome.err),
+            detail: createFamilyFailureDetail(outcome, 'create'),
           },
-          () => void handleCreateProject(),
+          outcome.commitState === 'absent' ? handleCreateProject : undefined,
         )
       }
       return
     }
     feedback.succeed(fbSeq)
-    const meta: { id: string } = { id: outcome.id }
     try {
-      const open = await loadOpenProject(meta.id)
+      const open = await loadOpenProject(outcome.id)
       // 项目本身已创建，被取代也仍刷新列表；只有最新尝试进入编辑器并
       // 清理横幅，否则旧尝试的成功导航与横幅清理会晚于新尝试的发布。
       if (seq === openAttemptSeqRef.current) {
@@ -282,7 +282,7 @@ function useProjectOpenAttempt(
       console.warn('[App] 新建后打开失败', err)
       // 被取代的旧尝试拒绝晚到：不发布横幅（与 handleOpenProject 同款）
       if (seq === openAttemptSeqRef.current)
-        setOpenFailure({ id: meta.id, detail: openFailureDetail(err) })
+        setOpenFailure({ id: outcome.id, detail: openFailureDetail(err) })
     }
     void refreshProjects()
   }, [
@@ -398,6 +398,19 @@ function useOpenProjectActions({
   }
 }
 
+/** 创建族诊断区分未提交、部分提交与无法确认；未知时引导先刷新核对。 */
+function createFamilyFailureDetail(
+  outcome: Extract<CreateFamilyOutcome, { kind: 'rejected' }>,
+  action: 'create' | 'duplicate',
+): string {
+  const detail = openFailureDetail(outcome.err)
+  if (outcome.commitState === 'unknown')
+    return `${detail}（无法确认是否已创建，请刷新项目列表后核对）`
+  if (action === 'duplicate' && outcome.commitState === 'present')
+    return `${detail}（列表可能已出现未完成的空副本，可手动删除）`
+  return detail
+}
+
 function useHomeProjectActions(
   refreshProjects: RefreshProjects,
   unsavedAiSessions: UnsavedAiSessionsRef,
@@ -441,10 +454,14 @@ function useHomeProjectActions(
       const outcome = await duplicateWithReconcile(attempts, id)
       if (outcome.kind === 'rejected') {
         console.warn('[App] 复制项目失败', outcome.err)
-        const detail = outcome.reconciled
-          ? `${openFailureDetail(outcome.err)}（列表可能已出现未完成的空副本，可手动删除）`
-          : openFailureDetail(outcome.err)
-        feedback.fail(seq, { action: 'duplicate', targetId: id, detail })
+        const detail = createFamilyFailureDetail(outcome, 'duplicate')
+        feedback.fail(
+          seq,
+          { action: 'duplicate', targetId: id, detail },
+          outcome.commitState === 'absent'
+            ? () => void handleDuplicateProject(id)
+            : undefined,
+        )
         return
       }
       feedback.succeed(seq)
@@ -474,67 +491,6 @@ function useHomeProjectActions(
   )
 
   return { handleRenameProject, handleDuplicateProject, handleDeleteProject }
-}
-
-/** 项目列表状态与保存落定的刷新编排（issue #101，自 App 拆出以守 80 行
- * 组件上限）：返回首页的读取与保存落定触发的再刷新并发时按发起序收敛，
- * 只有最近发起的请求可以写列表——慢的旧响应不得覆盖较新的结果。保存落定
- * （含失败登记后的链上后台重试成功）且首页可见时自动再刷新；保存失败不
- * 通知，首页保持磁盘现状不虚报成功。编辑器打开期间首页不可见，且列表
- * state 更新会整树重渲染（issue #61），不刷新。首页可见性经渲染期同步
- * 镜像而非 effect 闭包：保存落定的通知可能早于订阅 effect 重跑到达，
- * 闭包会错过刚提交的导航。 */
-function useProjectSummaries(isHomeVisible: () => boolean): {
-  readonly projects: ProjectSummary[]
-  readonly loading: boolean
-  /** 最近一次读取失败的诊断（#133）：null = 无错误。失败不清空已知列表。 */
-  readonly loadError: string | null
-  /** 拉取并发布列表；返回本次拉到的列表（供创建失败后的结果对账）。 */
-  readonly refreshProjects: () => Promise<ProjectSummary[]>
-} {
-  const [projects, setProjects] = useState<ProjectSummary[]>([])
-  const [loading, setLoading] = useState(true)
-  const [loadError, setLoadError] = useState<string | null>(null)
-  const refreshSeqRef = useRef(0)
-  const homeVisibleRef = useRef(true)
-  homeVisibleRef.current = isHomeVisible()
-
-  /** 拉取并发布列表；返回本次拉到的列表（调用方可做前后对账，issue #132
-   * 评审：create 拒绝但项目已存在时不盲重试）。 */
-  const refreshProjects = useCallback(async (): Promise<ProjectSummary[]> => {
-    const seq = ++refreshSeqRef.current
-    try {
-      const list = await projectStore.list()
-      // 仅最新请求发布（代际收敛）：较旧失败已在守卫下跳过，不覆盖较新成功
-      if (seq === refreshSeqRef.current) {
-        setProjects(list)
-        setLoadError(null)
-      }
-      return list
-    } catch (err) {
-      console.warn('[App] 项目列表加载失败', err)
-      // 读取失败 ≠ 空列表（#133）：保留已知列表供展示，只置错误态交由
-      // HomePage 呈现诊断/重试；项目文件本身未受影响（整次枚举失败）
-      if (seq === refreshSeqRef.current) setLoadError(String(err))
-      return []
-    } finally {
-      if (seq === refreshSeqRef.current) setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    void refreshProjects()
-  }, [refreshProjects])
-
-  useEffect(
-    () =>
-      projectStore.onProjectSaved(() => {
-        if (homeVisibleRef.current) void refreshProjects()
-      }),
-    [refreshProjects],
-  )
-
-  return { projects, loading, loadError, refreshProjects }
 }
 
 /** 编辑器视图装配（AppView 拆分，PR #199 评审守组件 80 行上限）：带外
@@ -706,16 +662,11 @@ export function App() {
   const latestDocRef = useRef<LatestDoc | null>(null)
   const { unsavedAiSessionsRef, latestAiSessionRef } =
     useAiSessionLifecycle(setOpenProject)
-  const { projects, loading, loadError, refreshProjects } = useProjectSummaries(
-    () => openProject === null,
-  )
+  const { projects, loading, loadError, refreshProjects, readProjects } =
+    useProjectSummaries(() => openProject === null)
   // 首页项目变更失败反馈（issue #132）：创建/重命名/复制/删除共用
   const actionFeedback = useHomeActionFeedback()
-  /** 列表镜像（渲染期同步，同 useProjectSummaries 的可见性镜像模式）：
-   * 创建族失败对账需要尝试前快照（PR #199 评审）。 */
-  const projectsRef = useRef<ProjectSummary[]>([])
-  projectsRef.current = projects
-  const attempts = useCreateFamilyAttempts(refreshProjects, projectsRef)
+  const attempts = useCreateFamilyAttempts(readProjects)
 
   // ⌘, 打开设置（macOS 惯例，§8.2）；输入控件聚焦时不触发
   useEffect(() => {
