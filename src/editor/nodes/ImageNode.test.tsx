@@ -131,3 +131,92 @@ describe('图片节点渲染（§13）', () => {
     expect(screen.getByPlaceholderText(/角色定妆/)).toBeTruthy()
   })
 })
+
+/** 可重渲染的隔离渲染（issue #131：产物换绑 = 同一 OutputImage 实例换
+ * assetId）；byId 可注入多个资产。 */
+function renderImageNode(
+  assetId: string,
+  byId: Record<string, AssetRef> = { 'pa-1': asset },
+) {
+  const api: NodeEditApi = {
+    projectId: 'p-1',
+    openSettingsId: null,
+    toggleSettings: vi.fn(),
+    closeSettings: vi.fn(),
+    patchNode: vi.fn(),
+    duplicateNode: vi.fn(),
+    deleteNode: vi.fn(),
+    shotCountOf: () => 0,
+    beatFulfillmentOf: () => null,
+    settings: { characters: [], locations: [] },
+    assets: { byId },
+  }
+  const nodesRef = { current: [] as CanvasNode[] }
+  const props = (id: string) =>
+    ({
+      id: 'img1',
+      data: { ...baseData(), outputs: { primary: { assetId: id } } },
+      selected: false,
+    }) as unknown as NodeProps<ImageFlowNode>
+  const view = render(
+    <ImageGenProvider
+      projectId="p-1"
+      nodes={nodesRef.current}
+      nodesRef={nodesRef}
+      assetsRef={{ current: undefined }}
+      settings={{ characters: [] }}
+      applyDataPatch={vi.fn()}
+      addAsset={vi.fn()}
+      removeAsset={vi.fn()}
+      pushHistory={vi.fn()}
+    >
+      <NodeEditContext.Provider value={api}>
+        <ImageNode {...props(assetId)} />
+      </NodeEditContext.Provider>
+    </ImageGenProvider>,
+  )
+  return {
+    rerender: (id: string) =>
+      view.rerender(
+        <ImageGenProvider
+          projectId="p-1"
+          nodes={nodesRef.current}
+          nodesRef={nodesRef}
+          assetsRef={{ current: undefined }}
+          settings={{ characters: [] }}
+          applyDataPatch={vi.fn()}
+          addAsset={vi.fn()}
+          removeAsset={vi.fn()}
+          pushHistory={vi.fn()}
+        >
+          <NodeEditContext.Provider value={api}>
+            <ImageNode {...props(id)} />
+          </NodeEditContext.Provider>
+        </ImageGenProvider>,
+      ),
+  }
+}
+
+describe('产物区换绑生命周期（issue #131）', () => {
+  it('产物换绑：在途窗口清空旧图不以 A 冒充 B；读取失败显示占位', async () => {
+    vi.mocked(projectAssets.mediaUrl)
+      .mockResolvedValueOnce('asset://a')
+      .mockImplementationOnce(() => new Promise(() => {}))
+      .mockRejectedValueOnce(new Error('媒体不可读'))
+    const byId = {
+      'pa-1': asset,
+      'pa-2': { ...asset, id: 'pa-2', relPath: 'assets/pa-2.png' },
+      'pa-3': { ...asset, id: 'pa-3', relPath: 'assets/pa-3.png' },
+    }
+    const { rerender } = renderImageNode('pa-1', byId)
+    expect((await screen.findByRole('img')).getAttribute('src')).toBe(
+      'asset://a',
+    )
+    rerender('pa-2')
+    // 过渡窗口：B 在途，不得残留 A 的图
+    expect(screen.queryByRole('img')).toBeNull()
+    rerender('pa-3')
+    expect(await screen.findByText(/产物媒体无法读取/)).toBeTruthy()
+    expect(screen.queryByRole('img')).toBeNull()
+  })
+})
