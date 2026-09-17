@@ -1177,6 +1177,58 @@ describe('tauriList 维护写：成功维护写不得清除更新的重试登记
   })
 })
 
+describe('tauriList 维护写：播种与在途保存定序（PR #198 评审）', () => {
+  it('播种开始前该示例已有在途保存：等链落定再探测，保存落盘后自然跳过（PR #198 评审）', async () => {
+    const DSID = 'sample-du-shi-qi-yuan'
+    let releaseSave: (() => void) | null = null
+    let saveCalls = 0
+    const saved = new Set<string>()
+    handlers.set('list_projects', () => (saved.size > 0 ? [meta(DSID)] : []))
+    handlers.set('save_project', (args) => {
+      const { id } = args as { id: string }
+      if (saveCalls === 0) {
+        saveCalls += 1
+        return new Promise((res) => {
+          releaseSave = () => {
+            saved.add(id)
+            res(undefined)
+          }
+        })
+      }
+      saved.add(id)
+      return undefined
+    })
+    handlers.set('load_project', (args) => {
+      const { id } = args as { id: string }
+      // 保存落盘前探测会 not-found（在途）；落盘后应读到「已存在」
+      if (id === DSID && saved.has(DSID)) {
+        return Promise.resolve({
+          ...modernFile(),
+          project: { ...modernFile().project, id },
+        })
+      }
+      return Promise.reject(new Error(`项目不存在：${id}`))
+    })
+    const { projectStore } = await load()
+    // 用户保存先行在途（慢盘）；空库列表随后启动播种
+    const saving = projectStore.save(DSID, userDocOf(DSID))
+    await vi.waitFor(() => expect(savesOf(DSID).length).toBeGreaterThan(0))
+    const listing = projectStore.list()
+    // 留出旧实现「不等链」探测的时序窗（新实现阻塞在等链落定，不受影响）
+    await new Promise((r) => setTimeout(r, 20))
+    releaseSave!()
+    await Promise.all([saving, listing])
+    // 红（旧实现）：不等链落定即探测 not-found，链身份未变守卫放行，
+    // 种子排在用户保存之后落盘——硬编码内容覆盖用户写入
+    const dsidSaves = savesOf(DSID)
+    expect(dsidSaves).toHaveLength(1)
+    expect(
+      (dsidSaves[0].args as { doc: { project: { name: string } } }).doc.project
+        .name,
+    ).toBe('用户编辑')
+  })
+})
+
 describe('tauriList 维护写：播种不覆盖既有内容（issue #134）', () => {
   it('播种探测窗口内示例删除在途：种子写被墓碑吸收，已删示例零落盘（issue #134）', async () => {
     let releaseProbe: (() => void) | null = null

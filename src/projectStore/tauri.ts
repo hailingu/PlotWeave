@@ -49,10 +49,11 @@ function toSummary(m: {
  * 种子，文件存在（含不可读）一律跳过并留痕，不用硬编码种子原子覆盖
  * 可能可恢复的用户文件。种子写经保存链（issue #134）：与普通保存统一
  * 排序与失败登记，删除墓碑期被吸收——探测窗口内被删除的示例不被种子
- * 复活；目标存在待重试的失败保存（登记比磁盘/空目录新）或探测窗口内
- * 排入新写入（链身份变化，探测结果已过时）同样跳过（PR #198 评审）——
- * 成功的种子写会清除该登记，用户最新内容被永久丢弃。返回是否写入了
- * 任一种子。 */
+ * 复活；探测先等该 id 在途保存落定（在途链落定不改身份，守卫看不见，
+ * 等落定后保存所建文件经「项目已存在」自然跳过）；目标存在待重试的
+ * 失败保存（登记比磁盘/空目录新）或探测窗口内排入新写入（链身份变化，
+ * 探测结果已过时）同样跳过（PR #198 评审）——成功的种子写会清除该
+ * 登记，用户最新内容被永久丢弃。返回是否写入了任一种子。 */
 async function seedFirstRun(): Promise<boolean> {
   const { invoke } = await import('@tauri-apps/api/core')
   const notFound = (e: unknown) =>
@@ -60,6 +61,10 @@ async function seedFirstRun(): Promise<boolean> {
     String(e).includes('项目不存在')
   let seeded = false
   for (const seed of seedProjects()) {
+    // 先等该 id 在途保存落定再探测（PR #198 评审）：预先存在的在途链
+    // 落定不改链身份、守卫看不见；等落定后探测，保存已建文件即走
+    // 「项目已存在」自然跳过，种子不会排在其后覆盖用户写入
+    await waitForSaveChainIdle(seed.meta.id)
     const chainBefore = saveChains.get(seed.meta.id)
     try {
       await invoke<unknown>('load_project', { id: seed.meta.id })
