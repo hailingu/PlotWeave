@@ -14,7 +14,9 @@ use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager};
 
 use crate::library::error::LibraryError;
-use crate::store::{new_id, open_dir_bound};
+#[cfg(unix)]
+use crate::store::asset_identity;
+use crate::store::{asset_stat, new_id, open_dir_bound};
 
 /// 库索引大小上限（1 MiB，对齐 prefs.rs 设置文件上限）：异常膨胀的索引在
 /// 物化进内存前显式拒绝，防脏数据/篡改文件拖垮解析与 IPC。
@@ -526,4 +528,50 @@ where
         .and_then(|d| d.into_std_file().sync_all())
         .map_err(|e| LibraryError::io("同步资产目录失败（持久性屏障缺失）", e))?;
     Ok(())
+}
+
+/// 打开库媒体文件（经 `library/assets/` 专用根句柄逐组件 no-follow 解析，
+/// 父目录链走 library_fs::open_parent_dir 共享内核）：终点必须是普通文件
+/// 且打开句柄按 (dev, ino) 与归类实体一致（Unix）——校验与打开之间被替换
+/// 即拒绝。导入拷贝与 pwmedia 媒体读取共用（issue #26 评审修复：媒体
+/// 读取侧同样不得跟随最终组件符号链接）。
+pub(crate) fn open_library_asset(
+    library: &CapDir,
+    rel_path: &str,
+) -> Result<cap_std::fs::File, LibraryError> {
+    let suffix = rel_path
+        .strip_prefix("assets/")
+        .ok_or_else(|| LibraryError::invalid(format!("库资产 relPath 越出 assets/：{rel_path}")))?;
+    let assets = assets_root(library)?;
+    let Some((parent, last)) = open_parent_dir(&assets, suffix)? else {
+        // 中间目录缺失：终点媒体必然不存在，导入侧为显式错误（坏数据绝不
+        // 进入拷贝流程；删除侧才按幂等处理，语义分野见 library_fs）
+        return Err(LibraryError::missing(format!("资产文件不存在：{rel_path}")));
+    };
+    let md = asset_stat(&parent, &last, rel_path).map_err(LibraryError::from)?;
+    if md.file_type().is_symlink() {
+        return Err(LibraryError::refused(format!(
+            "库资产路径含符号链接：{rel_path}"
+        )));
+    }
+    if !md.is_file() {
+        return Err(LibraryError::refused(format!(
+            "库资产路径不是普通文件：{rel_path}"
+        )));
+    }
+    let file = parent
+        .open(&last)
+        .map_err(|e| LibraryError::io(format!("打开库资产文件失败（{rel_path}）"), e))?;
+    #[cfg(unix)]
+    {
+        let fm = file
+            .metadata()
+            .map_err(|e| LibraryError::io(format!("读取库资产句柄元数据失败（{rel_path}）"), e))?;
+        if asset_identity(&fm) != asset_identity(&md) {
+            return Err(LibraryError::refused(format!(
+                "库资产文件在校验期间被替换：{rel_path}"
+            )));
+        }
+    }
+    Ok(file)
 }

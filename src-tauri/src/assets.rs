@@ -17,19 +17,15 @@ use tauri::{AppHandle, Manager};
 
 use crate::assets::error::AssetsError;
 use crate::isotime::{is_canonical_utc_timestamp, now_iso};
-use crate::library::ext_for;
-use crate::library_fs::{assets_root, atomic_write_with, library_root, open_parent_dir};
-#[cfg(unix)]
-use crate::store::asset_identity;
+use crate::library_fs::{atomic_write_with, library_root, open_library_asset};
+use crate::media_format::{ext_for, ext_for_mime};
 use crate::store::{
-    asset_stat, is_canonical_mime, is_valid_asset_rel_path, new_id, open_dir_bound, projects_dir,
-    to_ipc_text, validate_id, verify_asset_real_path,
+    is_canonical_mime, is_valid_asset_rel_path, new_id, open_dir_bound, projects_dir, to_ipc_text,
+    validate_id, verify_asset_real_path,
 };
 
 pub(crate) mod error;
 pub(crate) mod project_media;
-
-use crate::library::error::LibraryError;
 
 /// 新资产 id：`pa-{ms:x}-{seq:x}`（复用 store 的毫秒 + 进程内计数不碰撞内核）。
 fn new_asset_id() -> String {
@@ -94,52 +90,6 @@ fn find_library_entry(
         ))
     })?;
     Ok((rel_path.to_string(), mime, name.to_string()))
-}
-
-/// 打开库媒体文件（经 `library/assets/` 专用根句柄逐组件 no-follow 解析，
-/// 父目录链走 library_fs::open_parent_dir 共享内核）：终点必须是普通文件
-/// 且打开句柄按 (dev, ino) 与归类实体一致（Unix）——校验与打开之间被替换
-/// 即拒绝。导入拷贝与 pwmedia 媒体读取共用（issue #26 评审修复：媒体
-/// 读取侧同样不得跟随最终组件符号链接）。
-pub(crate) fn open_library_asset(
-    library: &CapDir,
-    rel_path: &str,
-) -> Result<cap_std::fs::File, LibraryError> {
-    let suffix = rel_path
-        .strip_prefix("assets/")
-        .ok_or_else(|| LibraryError::invalid(format!("库资产 relPath 越出 assets/：{rel_path}")))?;
-    let assets = assets_root(library)?;
-    let Some((parent, last)) = open_parent_dir(&assets, suffix)? else {
-        // 中间目录缺失：终点媒体必然不存在，导入侧为显式错误（坏数据绝不
-        // 进入拷贝流程；删除侧才按幂等处理，语义分野见 library_fs）
-        return Err(LibraryError::missing(format!("资产文件不存在：{rel_path}")));
-    };
-    let md = asset_stat(&parent, &last, rel_path).map_err(LibraryError::from)?;
-    if md.file_type().is_symlink() {
-        return Err(LibraryError::refused(format!(
-            "库资产路径含符号链接：{rel_path}"
-        )));
-    }
-    if !md.is_file() {
-        return Err(LibraryError::refused(format!(
-            "库资产路径不是普通文件：{rel_path}"
-        )));
-    }
-    let file = parent
-        .open(&last)
-        .map_err(|e| LibraryError::io(format!("打开库资产文件失败（{rel_path}）"), e))?;
-    #[cfg(unix)]
-    {
-        let fm = file
-            .metadata()
-            .map_err(|e| LibraryError::io(format!("读取库资产句柄元数据失败（{rel_path}）"), e))?;
-        if asset_identity(&fm) != asset_identity(&md) {
-            return Err(LibraryError::refused(format!(
-                "库资产文件在校验期间被替换：{rel_path}"
-            )));
-        }
-    }
-    Ok(file)
 }
 
 /// 确保子目录存在并返回身份绑定的打开句柄：缺失即创建（排他语义由后续
@@ -237,18 +187,6 @@ pub(crate) fn import_asset_from_library(
         "source": "upload",
         "createdAt": now_iso(),
     }))
-}
-
-/// 生成媒体 MIME → 文件名扩展（生成产物没有源文件名，只按 MIME 映射；
-/// 调用方已按字节魔数定型 MIME，未知值兜底 bin）。
-fn ext_for_mime(mime: &str) -> &'static str {
-    match mime {
-        "image/png" => "png",
-        "image/jpeg" => "jpg",
-        "image/webp" => "webp",
-        "image/gif" => "gif",
-        _ => "bin",
-    }
 }
 
 /// 生成媒体落盘内核（docs/data-model.md §13 outputs 槽位的媒体侧）：

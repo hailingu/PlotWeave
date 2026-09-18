@@ -3,7 +3,8 @@
 //! 的 opaque URL——库 scope 自 issue #26 按当前净化索引解析，项目 scope 自
 //! issue #31 按项目文档 `assets.byId` 逐请求解析 assetId → relPath；自定义
 //! 协议处理器（lib.rs 注册）每次请求重新执行解析，并经受信句柄链读取字节。
-//! 自 `library.rs` 拆出以符合源文件 800 行上限（评审修复，PR #32 第六轮）。
+//! 跨作用域协议适配器独立于图库命令（issue #146）：单向消费项目/库读取能力，
+//! 领域层不依赖协议；文件打开策略归 library_fs，项目登记生命周期归 assets。
 
 use std::sync::{Condvar, Mutex, OnceLock};
 
@@ -15,7 +16,7 @@ use crate::assets::project_media::{
 };
 use crate::library::error::LibraryError;
 use crate::library::ASSET_MAX_BYTES;
-use crate::library_fs::{library_root, read_index_capped, validate_asset_id};
+use crate::library_fs::{library_root, open_library_asset, read_index_capped, validate_asset_id};
 use crate::library_journal::{library_file_lock, library_op_lock};
 use crate::store::{
     is_canonical_mime, is_valid_active_asset_rel_path, projects_dir, to_ipc_text, validate_id,
@@ -225,7 +226,7 @@ fn resolve_media_entry_with(
 }
 
 /// 库 scope 锁内打开媒体句柄（句柄域，锁由调用方持有）：[`resolve_media_entry_with`]
-/// 解析后复用 [`crate::assets::open_library_asset`] 的句柄链定位——最终
+/// 解析后复用 [`crate::library_fs::open_library_asset`] 的句柄链定位——最终
 /// 组件 no-follow 拒绝符号链接、确认普通文件并按 (dev, ino) 身份绑定。
 /// 锁的作用域到打开即结束：字节读取在锁外消费已绑定句柄（评审修复，PR
 /// #32 第三轮——最多 20 MiB 的 I/O 不得串行化并发缩略图请求、不得把
@@ -235,7 +236,7 @@ pub(crate) fn open_media_with(
     id: &str,
 ) -> Result<(String, cap_std::fs::File), LibraryError> {
     let (rel, mime) = resolve_media_entry_with(library, id)?;
-    let file = crate::assets::open_library_asset(library, &rel)?;
+    let file = open_library_asset(library, &rel)?;
     Ok((mime, file))
 }
 
