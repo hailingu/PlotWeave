@@ -190,11 +190,14 @@ fn save_directory_sync_failure_reports_error_with_complete_new_file() {
 
 #[test]
 fn save_obeys_durability_protocol_order() {
-    // 数据模型 §10.2：文件内容同步必须先于 rename，父目录屏障必须后于 rename。
+    // 数据模型 §10.2：文件内容同步必须先于 rename，父目录屏障必须后于 rename；
+    // 目录条目宿主屏障（Unix）先于一切内容写入。
     let dir = PrefsDir::new();
     let injection = Injection::new(None, None);
     save_prefs_in(&dir.0, json!({"defaultChat": "new"})).unwrap();
     let expected = vec![
+        #[cfg(unix)]
+        Stage::EntrySync,
         Stage::Create,
         Stage::Write,
         Stage::FileSync,
@@ -203,6 +206,64 @@ fn save_obeys_durability_protocol_order() {
         Stage::DirectorySync,
     ];
     assert_eq!(injection.stages(), expected);
+    assert_eq!(dir.read(), json!({"defaultChat": "new"}));
+}
+
+#[cfg(unix)]
+#[test]
+fn save_syncs_entry_host_when_data_dir_newly_created() {
+    // PR #201 评审（P2）：首次保存创建数据目录时，新目录条目所在的宿主
+    // 必须先于内容写入同步——否则断电可整体丢目录而保存已报告成功。
+    let base = PrefsDir::new();
+    let target = base.0.join("app-data");
+    let injection = Injection::new(None, None);
+    save_prefs_in(&target, json!({"defaultChat": "new"})).unwrap();
+    assert_eq!(
+        read_prefs_at(&target.join("settings.json")).unwrap(),
+        json!({"defaultChat": "new"})
+    );
+    let stages = injection.stages();
+    assert_eq!(
+        stages.first(),
+        Some(&Stage::EntrySync),
+        "实际阶段：{stages:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn save_syncs_every_host_of_newly_created_levels() {
+    // 多级新建（nested/app-data）：最深已存在祖先与每个中间级都是新条目
+    // 的宿主，逐级同步，缺一不可。
+    let base = PrefsDir::new();
+    let target = base.0.join("nested").join("app-data");
+    let injection = Injection::new(None, None);
+    save_prefs_in(&target, json!({"defaultChat": "new"})).unwrap();
+    let stages = injection.stages();
+    assert_eq!(
+        &stages[..2],
+        &[Stage::EntrySync, Stage::EntrySync],
+        "实际阶段：{stages:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn save_entry_sync_failure_preserves_old_settings_and_allows_retry() {
+    // 条目宿主同步失败发生在任何临时文件创建之前：旧设置不变、无新增
+    // 条目，失败上抛；重试可完成。
+    let dir = PrefsDir::new();
+    fs::write(dir.0.join("settings.json"), r#"{"defaultChat":"old"}"#).unwrap();
+    let injection = Injection::new(Some(Stage::EntrySync), None);
+    let error = save_prefs_in(&dir.0, json!({"defaultChat": "new"})).unwrap_err();
+    assert!(error.contains("injected EntrySync failure"), "{error}");
+    assert_eq!(
+        fs::read_to_string(dir.0.join("settings.json")).unwrap(),
+        r#"{"defaultChat":"old"}"#
+    );
+    assert_eq!(dir.entries(), ["settings.json"]);
+    drop(injection);
+    save_prefs_in(&dir.0, json!({"defaultChat": "new"})).unwrap();
     assert_eq!(dir.read(), json!({"defaultChat": "new"}));
 }
 

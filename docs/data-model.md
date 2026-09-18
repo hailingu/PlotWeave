@@ -895,7 +895,7 @@ type GraphCommandOf<K extends CommandType> = Extract<GraphCommand, { type: K }>
 
 #### 设置保存状态与不变量（issue #121）
 
-[issue #121](https://github.com/hailingu/PlotWeave/issues/121) 已实现：`save_prefs` 的设置层负责序列化、1 MiB 上限与应用数据根句柄，复用 `store::atomic_write` 完成控制文件替换及持久性屏障。所有设置保存入口均经同一内核；不改变整份保存的 IPC 协议、设置读取失败策略或前端保存排序。旧 `settings.json.tmp` 占位无需删除，也不会被本次保存改写。
+[issue #121](https://github.com/hailingu/PlotWeave/issues/121) 已实现：`save_prefs` 的设置层负责序列化、1 MiB 上限与应用数据根句柄，复用 `store::atomic_write` 完成控制文件替换及持久性屏障。数据目录经 `store::create_dir_all_durable` 持久化创建（[PR #201](https://github.com/hailingu/PlotWeave/pull/201) 评审修订，Unix）：新建目录条目所在的各级宿主（从最深已存在祖先到直接父目录）在写入任何内容前逐级 fsync；目录已存在时仍同步其直接父目录一次——应用数据根可能由未做屏障的其他入口（设置读取路径、store、library）先行创建，保存侧不假设既有条目已经落盘。所有设置保存入口均经同一内核；不改变整份保存的 IPC 协议、设置读取失败策略或前端保存排序。旧 `settings.json.tmp` 占位无需删除，也不会被本次保存改写。
 
 | 前置状态 | 动作／时序 | 预期可观察结果 | 跨转换不变量及所有者 | 验证结果（`prefs::save_tests`） |
 | --- | --- | --- | --- | --- |
@@ -904,11 +904,14 @@ type GraphCommandOf<K extends CommandType> = Extract<GraphCommand, { type: K }>
 | `settings.json` 是目录或符号链接 | 发起保存 | 拒绝并返回诊断，原条目及外部内容不变 | 原子写层：目标归类与改名前复核共用信任链 | `save_rejects_directory_target_without_leaving_temp_files`、`save_rejects_symlink_target_without_replacing_it` 先红后绿 |
 | 已有旧设置 | 创建、写入、文件同步或改名阶段失败，然后重试 | 失败上抛；改名前旧文件不变；本次临时文件尽力清理；重试可完成 | 原子写层：只有成功排他创建的临时文件归本次操作所有；未提交不得损坏旧设置 | `save_precommit_io_failures_preserve_old_settings_and_allow_retry`、`atomic_save_collision_does_not_remove_another_writers_temp_file` 先红后绿 |
 | 新文件已改名，父目录尚未同步 | 目录同步失败，然后重试 | 返回失败；完整新版可能已可见；重试成功 | 原子写层：耐久性未确认不得报告成功；改名后失败不承诺恢复旧版 | `save_directory_sync_failure_reports_error_with_complete_new_file`、`save_obeys_durability_protocol_order` 先红后绿 |
+| 数据根缺失（首次保存）或由未做屏障的入口先行创建 | 保存合法 JSON，新建一或多级目录 | 写入内容前先同步新条目的各级宿主（Unix；数据根已存在时仍同步直接父目录一次）；宿主同步失败上抛且不触碰 `settings.json`，重试可完成 | 原子写层：返回成功 ⇒ 目录条目与文件内容同为持久；条目屏障缺失不得报告成功 | `save_syncs_entry_host_when_data_dir_newly_created`、`save_syncs_every_host_of_newly_created_levels`、`save_entry_sync_failure_preserves_old_settings_and_allows_retry` 先红后绿（[PR #201](https://github.com/hailingu/PlotWeave/pull/201) 评审）；宿主链计算另有 `persist::tests::entry_sync_chain_covers_each_host_of_new_levels` |
 | 多次保存重叠 | 并发写入不同完整快照 | 每次使用独立临时文件，最终为某一完整快照 | 原子写层：不互相截断或清理临时文件；业务先后由既有调用方负责 | `overlapping_saves_leave_one_complete_snapshot` 先红后绿；不承诺跨进程业务排序 |
 
-验证边界：在隔离临时目录运行真实文件 I/O；同步故障以测试专用注入覆盖错误传播与文件可恢复状态，不等同真实断电实验。非 Unix 沿用共享内核不执行父目录 fsync 的平台边界，本仓库未验证 Windows；不新增同用户恶意换树防御。
+验证边界：在隔离临时目录运行真实文件 I/O；同步故障以测试专用注入覆盖错误传播与文件可恢复状态，不等同真实断电实验。非 Unix 沿用共享内核不执行父目录／条目宿主 fsync 的平台边界，本仓库未验证 Windows；不新增同用户恶意换树防御。
 
 验证记录（2026-09-18）：在 `src-tauri` 执行 `cargo test --lib prefs::save_tests`，11 项通过；`cargo fmt --check && cargo clippy -- -D warnings && cargo test` 的各项检查通过，Rust 单元测试 312 项、原生退出集成夹具通过。首次全量测试因沙箱禁止绑定环回端口，9 个既有 HTTP 测试失败；允许本地端口后全量重跑通过。测试编译仍有 `library_index/fixup_tests.rs` 的未使用 `Value` 导入和 `library_index/normalize_tests.rs` 的未使用 `warnings` 变量两条既有警告，本次未改动。构建产物使用独立临时目录并在完成前清理；未触碰真实设置或调用真实供应商。两个设计文档无配置的自动检查，按保存入口、状态矩阵、失败语义、平台边界与交叉引用作结构化复核。圈复杂度 `N/A — no configured complexity tool`；人工检查本次新增／修改函数均未超过 80 代码行，受影响源文件均少于 800 行。
+
+验证记录（2026-09-18，[PR #201](https://github.com/hailingu/PlotWeave/pull/201) 评审修复）：新增目录条目宿主屏障后，`cargo test --lib prefs::save_tests` 14 项通过（含 3 项先红后绿的评审回归）；`persist::tests::entry_sync_chain_covers_each_host_of_new_levels` 覆盖宿主链计算（两级新建、一级新建、目标已存在、根目录无宿主）。条目屏障对 `projects/`、`library/` 根的同型首次创建窗口不在本次范围（见 PR 回复的后续事项）。
 
 ### 10.3 Provider 与模型配置
 

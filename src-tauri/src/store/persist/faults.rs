@@ -13,6 +13,8 @@ pub(crate) enum Stage {
     Rename,
     #[cfg(unix)]
     DirectorySync,
+    #[cfg(unix)]
+    EntrySync,
 }
 
 #[derive(Default)]
