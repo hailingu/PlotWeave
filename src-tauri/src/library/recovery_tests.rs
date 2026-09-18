@@ -254,3 +254,30 @@ fn healthy_asset_imports_into_project_without_rewriting_corrupt_library() {
     assert_eq!(fixture.original(), raw.as_bytes());
     assert!(fixture.backups().is_empty());
 }
+
+#[test]
+fn mismatched_member_cannot_expose_or_persist_nested_asset() {
+    let fixture = LibraryFixture::new();
+    let raw = format!(
+        r#"{{"groups":{{"byId":{{"g":{{"id":"g","name":"组","kind":"other"}}}}}},"assets":{{"byId":{{"a":{},"bad":{{"nested":],"fake":{},"pad":[}}}}}}}}"#,
+        asset("a"),
+        asset("fake"),
+    );
+    fixture.write(&raw);
+    fs::write(fixture.path.join("assets/fake.png"), b"unconfirmed").unwrap();
+    let (index, warnings) = list_assets_with(&fixture.dir).unwrap();
+    assert!(!warnings.is_empty());
+    assert_eq!(index["assets"]["byId"], json!({"a":asset("a")}));
+    assert_eq!(index["groups"]["byId"]["g"]["name"], "组");
+    assert!(media::open_media_with(&fixture.dir, "fake").is_err());
+    assert_eq!(fixture.original(), raw.as_bytes());
+    update_meta_with(&fixture.dir, "a", &json!({"name":"保留的资产"})).unwrap();
+    let (saved, _) = list_assets_with(&fixture.dir).unwrap();
+    assert_eq!(saved["assets"]["byId"].as_object().unwrap().len(), 1);
+    assert_eq!(saved["assets"]["byId"]["a"]["name"], "保留的资产");
+    assert_eq!(fixture.backups(), vec![raw.into_bytes()]);
+    assert_eq!(
+        fs::read(fixture.path.join("assets/fake.png")).unwrap(),
+        b"unconfirmed"
+    );
+}

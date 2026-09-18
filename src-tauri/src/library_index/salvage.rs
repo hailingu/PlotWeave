@@ -65,7 +65,8 @@ fn trim(bytes: &[u8]) -> &[u8] {
 }
 
 /// 在字符串、转义和嵌套容器之外切分成员；截断容器保留已结束的前序成员。
-/// 未闭合字符串/嵌套对象之后的边界无法确认，不将其内部内容提升成同级条目。
+/// 括号错配立即截断本次扫描；保留此前字节供内层提取已确认的完整成员，
+/// 不将错配或未闭合结构之后归属不明的内容提升成同级条目。
 fn container_parts(bytes: &[u8]) -> Vec<&[u8]> {
     let bytes = trim(bytes);
     if !matches!(bytes.first(), Some(b'{' | b'[')) {
@@ -73,7 +74,7 @@ fn container_parts(bytes: &[u8]) -> Vec<&[u8]> {
     }
     let mut parts = Vec::new();
     let mut start = 1;
-    let mut depth = 0usize;
+    let mut delimiters = vec![bytes[0]];
     let mut quoted = false;
     let mut escaped = false;
     for (i, &byte) in bytes.iter().enumerate().skip(1) {
@@ -89,13 +90,18 @@ fn container_parts(bytes: &[u8]) -> Vec<&[u8]> {
         }
         match byte {
             b'"' => quoted = true,
-            b'{' | b'[' => depth += 1,
-            b'}' | b']' if depth > 0 => depth -= 1,
+            b'{' | b'[' => delimiters.push(byte),
             b'}' | b']' => {
-                parts.push(&bytes[start..i]);
-                return parts;
+                let matched = matches!(
+                    (delimiters.pop(), byte),
+                    (Some(b'{'), b'}') | (Some(b'['), b']')
+                );
+                if !matched || delimiters.is_empty() {
+                    parts.push(&bytes[start..i]);
+                    return parts;
+                }
             }
-            b',' if depth == 0 => {
+            b',' if delimiters.len() == 1 => {
                 parts.push(&bytes[start..i]);
                 start = i + 1;
             }

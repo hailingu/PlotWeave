@@ -39,3 +39,27 @@ fn unfinished_member_does_not_promote_nested_keys() {
     let (index, _, _) = parse_index(br#"{"assets":{"byId":{"a":{},"bad":{"nested":{"fake":{}}"#);
     assert_eq!(index["assets"]["byId"], json!({"a":{}}));
 }
+
+#[test]
+fn mismatched_delimiters_keep_only_confirmed_prefix_records() {
+    for (broken, padding) in [(r#"{"nested":]"#, "[}"), ("[}", "{]")] {
+        for bucket in ["assets", "groups"] {
+            let raw = format!(
+                r#"{{"{bucket}":{{"byId":{{"a":{{}},"bad":{broken},"fake":{{"id":"fake"}},"pad":{padding}}}}}}}"#
+            );
+            let (index, warnings, damaged) = parse_index(raw.as_bytes());
+            assert!(damaged);
+            assert!(!warnings.is_empty());
+            assert_eq!(index[bucket]["byId"], json!({"a":{}}));
+        }
+    }
+}
+
+#[test]
+fn mismatched_delimiters_do_not_promote_legacy_items_or_root_buckets() {
+    let (index, _, _) = parse_index(
+        br#"{"assets":[{"id":"a"},{"nested":],{"id":"fake"},[}],"groups":{"byId":{"fake":{}}}}"#,
+    );
+    assert_eq!(index["assets"], json!([{"id":"a"}]));
+    assert_eq!(index["groups"]["byId"], json!({}));
+}
