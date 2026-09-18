@@ -13,6 +13,20 @@ import type { EditorDocument, EditorProjectContent } from './useEditorDocument'
 
 afterEach(cleanup)
 
+/** buildScriptExport 调用计数间谍（issue #158）：包装真实实现守护
+ * 「无关渲染不重建」的缓存语义，行为断言仍走真实导出。 */
+const buildSpy = vi.hoisted(() => vi.fn())
+vi.mock('./exportScript', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('./exportScript')>()
+  return {
+    ...mod,
+    buildScriptExport: (input: Parameters<typeof mod.buildScriptExport>[0]) => {
+      buildSpy()
+      return mod.buildScriptExport(input)
+    },
+  }
+})
+
 /** 打开的项目（结构同装配层下传；浮层只读 name）。 */
 const PROJECT: EditorProjectContent = {
   id: 'p1',
@@ -22,12 +36,12 @@ const PROJECT: EditorProjectContent = {
   settings: { characters: [], locations: [] },
 }
 
-/** 最小文档夹具：只填浮层真实读取的字段（导出正文与集标题）。 */
+/** 最小文档夹具：只填浮层真实读取的字段（导出正文、资产与集标题）。 */
 const DOC = {
   nodes: [],
   edges: [],
   settings: { characters: [], locations: [] },
-  assetsRef: { current: undefined },
+  assets: undefined,
   episodeTitles: {},
 } as unknown as EditorDocument
 
@@ -66,7 +80,7 @@ function setup(
       deleteEdgesByIds: actions.deleteEdgesByIds,
     } as unknown as EditorOverlaysProps['graph'],
   }
-  return { actions, view: render(<EditorOverlays {...props} />) }
+  return { actions, props, view: render(<EditorOverlays {...props} />) }
 }
 
 describe('EditorOverlays 输入边界（issue #104）', () => {
@@ -92,5 +106,31 @@ describe('EditorOverlays 输入边界（issue #104）', () => {
     expect(screen.getByText('浮层边界-剧本.md')).toBeTruthy()
     fireEvent.click(screen.getByLabelText('关闭'))
     expect(actions.setExportOpen).toHaveBeenCalledWith(false)
+  })
+
+  it('导出模型按内容依赖缓存（issue #158）：无关重渲染不重建，内容变化才重建', () => {
+    buildSpy.mockClear()
+    const { view, props } = setup({ exportOpen: true })
+    expect(buildSpy).toHaveBeenCalledTimes(1)
+
+    // 无关布局重渲染（props 不变的重演）：模型复用，不得逐渲染重建
+    view.rerender(<EditorOverlays {...props} />)
+    expect(buildSpy).toHaveBeenCalledTimes(1)
+
+    // 内容变化（新增场景 → nodes 引用更换）：实时预览语义下重建，
+    // 预览与下载继续共读同一模型
+    const withScene = {
+      ...props.doc,
+      nodes: [
+        {
+          id: 's1',
+          type: 'scene',
+          position: { x: 0, y: 0 },
+          data: { name: '场 01', sceneNo: 1, interior: true, characterIds: [] },
+        } as unknown as EditorDocument['nodes'][number],
+      ],
+    } as EditorDocument
+    view.rerender(<EditorOverlays {...props} doc={withScene} />)
+    expect(buildSpy).toHaveBeenCalledTimes(2)
   })
 })
