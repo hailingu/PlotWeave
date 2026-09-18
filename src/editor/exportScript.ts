@@ -4,7 +4,7 @@ import {
   summariseExportOutline,
   type ExportOutlineSummary,
 } from './exportOutline'
-import { SCENE_SHOT_HANDLE } from './nodes/SceneNode'
+import { SCENE_SHOT_HANDLE } from './graphRules'
 import {
   resolveCharacterName,
   resolveLocationName,
