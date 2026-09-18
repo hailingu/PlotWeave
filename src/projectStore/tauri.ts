@@ -205,6 +205,32 @@ export async function tauriCreate(name: string): Promise<ProjectSummary> {
   )
 }
 
+/** 登记段内核（tauriLoad 拆出，S3776）：链静止后复验并交付失败登记的
+ * 最新文档（复验/替换语义详见 tauriLoad 登记段注释）。返回净载荷；
+ * 'restart' = 复验期间登记被取代，须按当前保存状态整体重来；
+ * null = 无登记，落磁盘段。 */
+async function verifiedPendingRetryDoc(
+  id: string,
+): Promise<ProjectContent | 'restart' | null> {
+  const pending = pendingRetryDocOf(id)
+  if (pending === undefined) return null
+  const { invoke } = await import('@tauri-apps/api/core')
+  const invalid = await invoke<string[]>('verify_project_assets', {
+    id,
+    assets: pending.assets ?? {},
+  })
+  // 归一化前先复查登记身份（PR #207 评审）：复验 await 期间登记可能被
+  // 更新保存清除/取代（重试成功、新失败），已作废的登记文档可能是不可
+  // 序列化的脏会话形状——对其归一化会抛错，较新的有效保存明明已落盘
+  // 却让加载失败
+  if (pendingRetryDocOf(id) !== pending) return 'restart'
+  const verified = memoryNormalize(pending, id, invalid)
+  // 替换仍走条件写回：只有当前登记仍是观察到的那份才替换，不复活已被
+  // 取代的旧文档
+  if (!replacePendingRetryDoc(id, pending, verified)) return 'restart'
+  return verified
+}
+
 export async function tauriLoad(id: string): Promise<ProjectContent> {
   const { invoke } = await import('@tauri-apps/api/core')
   // 单循环三段：链静止 → 失败登记复验（优先）→ 磁盘读取（链身份守卫）。
@@ -228,18 +254,9 @@ export async function tauriLoad(id: string): Promise<ProjectContent> {
   // 重启到循环顶（等待新链落定；失败登记由登记段接管），保证「读到即最新」
   for (;;) {
     await waitForSaveChainIdle(id)
-    const pending = pendingRetryDocOf(id)
-    if (pending !== undefined) {
-      const invalid = await invoke<string[]>('verify_project_assets', {
-        id,
-        assets: pending.assets ?? {},
-      })
-      const verified = memoryNormalize(pending, id, invalid)
-      // 复验的 await 期间登记可能被更新保存清除/取代（重试成功、新失败）：
-      // 条件替换仍用对象同一性——失败即放弃本轮，按当前保存状态整体重来
-      if (!replacePendingRetryDoc(id, pending, verified)) continue
-      return verified
-    }
+    const pending = await verifiedPendingRetryDoc(id)
+    if (pending === 'restart') continue
+    if (pending !== null) return pending
     const chainBefore = saveChainTokenOf(id)
     const file = await invoke<unknown>('load_project', { id })
     // §7.1/§10.5 加载侧资产实路径复验：Rust 以受信资产根 no-follow 验证

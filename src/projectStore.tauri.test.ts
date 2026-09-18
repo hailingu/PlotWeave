@@ -420,6 +420,45 @@ describe('tauriLoad：归一化与迁移回写', () => {
     }
   })
 
+  it('复验等待期间登记被取代且旧登记为脏形状：归一化前复查身份，加载不随已作废登记崩坏（PR #207 评审）', async () => {
+    // 与上一用例同款的复验窗口，但旧登记带不可序列化的脏会话形状（缺
+    // nodes）：身份复查若晚于归一化（先归一化再条件替换），memoryNormalize
+    // 会在已作废文档上抛错——尽管较新的有效保存已经落盘，加载不应失败
+    let releaseVerify: ((v: string[]) => void) | null = null
+    handlers.set('load_project', () => modernFile())
+    let verifyCalls = 0
+    handlers.set('verify_project_assets', () => {
+      verifyCalls += 1
+      // 首次（登记复验）挂起制造竞态窗口；磁盘路径的复验即答
+      if (verifyCalls === 1) {
+        return new Promise<string[]>((resolve) => {
+          releaseVerify = resolve
+        })
+      }
+      return Promise.resolve([])
+    })
+    handlers.set('save_project', () => undefined)
+    const { projectStore } = await load()
+    // 脏形状登记：缺 nodes 的会话文档——序列化即抛错，save 以该失败登记
+    const dirty = { name: '旧登记' } as unknown as ProjectContent
+    await expect(projectStore.save('p1', dirty)).rejects.toThrow()
+    // load 捕获旧登记后进入复验等待
+    const loading = projectStore.load('p1')
+    await vi.waitFor(() => expect(releaseVerify).not.toBeNull())
+    // 复验在途期间新保存（合法内容）成功落盘：旧登记被清除
+    await projectStore.save('p1', {
+      name: '新保存',
+      nodes: [],
+      edges: [],
+      settings: { characters: [], locations: [] },
+    })
+    ;(releaseVerify as unknown as (v: string[]) => void)([])
+    const doc = await loading
+    // 红：先归一化旧登记抛错，loading 整体拒绝；修复后归一化前复查身份，
+    // 登记已清除即按当前状态重来，读到磁盘最新文件
+    expect(doc.name).toBe('现代剧')
+  })
+
   it('versionless IPC 标记触发回写补盖版本号：无版本文件不再永久无版本', async () => {
     // Rust 判型给缺 schemaVersion 的 v1 形状载荷打 versionless: true——
     // 额外键使前端 repaired 比较必然不等，回写落定显式版本（§10.5/§11.1）
