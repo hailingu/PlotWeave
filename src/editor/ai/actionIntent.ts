@@ -97,11 +97,6 @@ export function expectsActionPreview(text: string): boolean {
   )
 }
 
-/** 输入已含动作动词时无需改写判定：目标含糊仍属修改意图（如「再丰富点」）。 */
-export function hasActionVerb(text: string): boolean {
-  return matches(CHANGE, text)
-}
-
 /** 无动作动词的含糊输入才需要改写调用判定（每轮至多一次）。讨论/否定
  * 片段不否决改写（PR #92 评审）：否定辖域（「不要解释」vs「不要修改」）
  * 与「特别」这类偶发子串，片段匹配无法判别而改写调用可以；明确暂不操
