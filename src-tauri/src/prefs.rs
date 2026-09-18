@@ -5,7 +5,8 @@
 //!   仅做大小与文件名校验。
 //! - 读取语义（issue #120）：仅文件缺失（首次启动）返回空对象；损坏、
 //!   超限或其余读取失败一律 Err——未知原配置不得降级为默认值后被
-//!   全量保存覆盖。
+//!   全量保存覆盖。内容读取经 cap+1 流式限读（issue #147），超限在
+//!   物化全文件前拒绝。
 //! - 保存（issue #121）复用受信目录句柄下的控制文件原子写：随机排他
 //!   临时文件、文件同步、改名与 Unix 父目录同步全部成功后才返回成功；
 //!   数据目录的创建（读取与保存入口）经 `store::create_dir_all_durable`
@@ -18,6 +19,7 @@
 
 use std::fs;
 use std::io;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -42,6 +44,38 @@ const KEYCHAIN_SERVICE: &str = "com.plotweave.app";
 /// 设置文件大小上限（1 MiB），防异常输入撑爆读写。
 const PREFS_MAX_BYTES: usize = 1024 * 1024;
 
+/// 设置受限读取的错误分野（issue #147）：超限是硬拒绝（与读取失败不同
+/// 诊断、不回退），IO/UTF-8 失败原样携带供调用方按 issue #120 语义分类
+/// ——UTF-8 失败映射为 io InvalidData，与 fs::read_to_string 同分类。
+#[derive(Debug)]
+enum PrefsReadError {
+    Io(io::Error),
+    TooLarge,
+}
+
+/// 设置文本的受限读取内核（复用 library_fs::read_index_text_capped 的
+/// cap+1 流式限读方式，issue #147）：最多物化 PREFS_MAX_BYTES+1 字节，
+/// 超限在有限读取后拒绝，不先读入全文件再判断长度。
+fn capped_prefs_text(reader: impl io::Read) -> Result<String, PrefsReadError> {
+    let mut bytes = Vec::new();
+    reader
+        .take((PREFS_MAX_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(PrefsReadError::Io)?;
+    if bytes.len() > PREFS_MAX_BYTES {
+        return Err(PrefsReadError::TooLarge);
+    }
+    String::from_utf8(bytes)
+        .map_err(|e| PrefsReadError::Io(io::Error::new(io::ErrorKind::InvalidData, e)))
+}
+
+/// 设置文件的受限读取入口：打开失败（含首次启动的 NotFound）原样上抛，
+/// 内容读取经 cap+1 限读内核。
+fn read_prefs_text_capped(path: &Path) -> Result<String, PrefsReadError> {
+    let file = fs::File::open(path).map_err(PrefsReadError::Io)?;
+    capped_prefs_text(file)
+}
+
 /// 确保数据目录存在且新建条目各级宿主已同步（§10.2，Unix）：读取与
 /// 保存入口共用同一持久化创建内核——首启读取路径也会创建数据目录，
 /// 多级缺失（干净轮廓、嵌套 XDG_DATA_HOME）时若不同步，随后的保存
@@ -62,15 +96,16 @@ fn prefs_path(app: &AppHandle) -> Result<PathBuf, String> {
 /// 读取设置内核（issue #120）：文件不存在 = 首次启动，返回空对象；
 /// 其余读取失败（权限/IO 异常）与损坏、超限一律 Err 上抛——把未知
 /// 原配置降级为空对象，会被前端默认值经全量保存覆盖原文件。
+/// 读取经 cap+1 流式限读（issue #147）：超限文件在物化全量内容前被拒。
 fn read_prefs_at(path: &Path) -> Result<serde_json::Value, String> {
-    let text = match fs::read_to_string(path) {
+    let text = match read_prefs_text_capped(path) {
         Ok(text) => text,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(serde_json::json!({})),
-        Err(e) => return Err(format!("读取设置失败：{e}")),
+        Err(PrefsReadError::Io(e)) if e.kind() == io::ErrorKind::NotFound => {
+            return Ok(serde_json::json!({}))
+        }
+        Err(PrefsReadError::Io(e)) => return Err(format!("读取设置失败：{e}")),
+        Err(PrefsReadError::TooLarge) => return Err("设置文件过大".into()),
     };
-    if text.len() > PREFS_MAX_BYTES {
-        return Err("设置文件过大".into());
-    }
     serde_json::from_str(&text).map_err(|e| format!("设置文件损坏：{e}"))
 }
 
@@ -143,25 +178,28 @@ pub fn set_provider_key(provider_id: String, key: String) -> Result<String, Stri
 pub(crate) fn provider_secret(app: &AppHandle, provider_id: &str) -> Result<String, String> {
     validate_provider_id(provider_id)?;
     let path = prefs_path(app)?;
-    if let Ok(text) = fs::read_to_string(&path) {
-        // 信任边界：与 load_prefs 同一大小上限，防篡改的超大文件拖垮解析
-        if text.len() > PREFS_MAX_BYTES {
-            return Err("设置文件过大，拒绝读取密文".into());
-        }
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
-            let enc = v
-                .get("providers")
-                .and_then(|p| p.as_array())
-                .and_then(|arr| {
-                    arr.iter()
-                        .find(|p| p.get("id").and_then(|x| x.as_str()) == Some(provider_id))
-                })
-                .and_then(|p| p.get("keyEnc"))
-                .and_then(|x| x.as_str());
-            if let Some(envelope) = enc {
-                return crate::seal::open(envelope);
+    // 信任边界：与 load_prefs 同一大小上限（同经 cap+1 限读内核，
+    // issue #147）——超限硬拒绝；读取失败（含缺失/UTF-8 失败）维持
+    // 原语义落入钥匙串只读回退
+    match read_prefs_text_capped(&path) {
+        Ok(text) => {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                let enc = v
+                    .get("providers")
+                    .and_then(|p| p.as_array())
+                    .and_then(|arr| {
+                        arr.iter()
+                            .find(|p| p.get("id").and_then(|x| x.as_str()) == Some(provider_id))
+                    })
+                    .and_then(|p| p.get("keyEnc"))
+                    .and_then(|x| x.as_str());
+                if let Some(envelope) = enc {
+                    return crate::seal::open(envelope);
+                }
             }
         }
+        Err(PrefsReadError::TooLarge) => return Err("设置文件过大，拒绝读取密文".into()),
+        Err(PrefsReadError::Io(_)) => {}
     }
     let entry = keyring::Entry::new(KEYCHAIN_SERVICE, provider_id)
         .map_err(|e| format!("钥匙串不可用：{e}"))?;
@@ -360,6 +398,53 @@ mod tests {
         let err = read_prefs_at(&dir).expect_err("非 NotFound 读取失败应 Err");
         assert!(err.contains("读取设置失败"), "实际错误：{err}");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    // ---- issue #147：设置读取的受限物化（cap+1 流式限读） ----
+
+    /// 无尽字节源：记录被拉取总量，供「超限拒绝前读取有界」断言。
+    struct EndlessReader {
+        pulled: usize,
+    }
+
+    impl io::Read for EndlessReader {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            buf.fill(0);
+            self.pulled += buf.len();
+            Ok(buf.len())
+        }
+    }
+
+    #[test]
+    fn capped_read_rejects_oversize_without_materializing() {
+        // 超限拒绝必须发生在有限读取之后：从无尽源流拉取的字节数不得
+        // 超过上限+1，不得先物化全量内容再判断长度（issue #147）
+        let mut src = EndlessReader { pulled: 0 };
+        let result = capped_prefs_text(&mut src);
+        assert!(
+            matches!(result, Err(PrefsReadError::TooLarge)),
+            "超限应拒绝，实际：{result:?}"
+        );
+        assert!(
+            src.pulled <= PREFS_MAX_BYTES + 1,
+            "读取应有界于 cap+1：pulled={}",
+            src.pulled
+        );
+    }
+
+    #[test]
+    fn capped_read_maps_invalid_utf8_to_read_failure() {
+        // 与 fs::read_to_string 同分类：非法 UTF-8 归为读取失败
+        //（InvalidData）——load_prefs 的「读取设置失败」诊断与
+        // provider_secret 的钥匙串回退语义不因实现替换而改变
+        let bytes = [0xff, 0xfe, 0x00, 0x61];
+        let result = capped_prefs_text(bytes.as_slice());
+        match result {
+            Err(PrefsReadError::Io(e)) => {
+                assert_eq!(e.kind(), io::ErrorKind::InvalidData, "实际错误：{e}")
+            }
+            other => panic!("非法 UTF-8 应归类为读取失败，实际：{other:?}"),
+        }
     }
 
     #[test]
