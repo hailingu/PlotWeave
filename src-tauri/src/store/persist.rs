@@ -9,6 +9,20 @@ use tauri::{AppHandle, Manager};
 
 use crate::store::error::StoreError;
 use crate::store::types::new_id;
+
+#[cfg(test)]
+pub(crate) mod faults;
+
+/// 故障注入仅在测试中替换单个系统 I/O；发布构建直接执行原表达式。
+macro_rules! atomic_io {
+    ($stage:ident, $operation:expr) => {{
+        #[cfg(test)]
+        let result = faults::run(faults::Stage::$stage, || $operation);
+        #[cfg(not(test))]
+        let result = $operation;
+        result
+    }};
+}
 /// 资产路径组件的 no-follow 元数据（相对锚定句柄），缺失映射为「资产文件不存在」。
 pub(crate) fn asset_stat(
     dir: &CapDir,
@@ -183,7 +197,8 @@ pub(crate) fn read_verified_file(root: &CapDir, name: &str) -> Result<String, St
 /// rename 原子覆盖（cap-std 在 Windows 上以替换语义实现 rename，std::fs::
 /// rename 在该平台不替换已存在目标，已建项目的每次保存都会失败）→ 父目录
 /// fsync（持久性屏障，打开/同步失败向上传播、不粉饰成功）；失败尽力清理
-/// 临时文件。file_name 须为单段文件名（不含路径分量）：归类、创建与
+/// 本次成功创建的临时文件，排他创建失败不得清理其他写者的条目。
+/// file_name 须为单段文件名（不含路径分量）：归类、创建与
 /// rename 之外的越界形态在此拒绝，不得相对句柄逃出 projects/。
 pub(crate) fn atomic_write(root: &CapDir, file_name: &str, text: &str) -> Result<(), StoreError> {
     use std::io::Write;
@@ -208,29 +223,37 @@ pub(crate) fn atomic_write(root: &CapDir, file_name: &str, text: &str) -> Result
     };
     check_target()?;
     let tmp_name = format!(".{file_name}.{}.tmp", new_id());
+    #[cfg(test)]
+    let tmp_name = faults::temp_name(tmp_name);
+    // 排他创建失败直接返回；只有取得临时文件所有权后才进入失败清理区。
+    let file = atomic_io!(
+        Create,
+        root.open_with(
+            &tmp_name,
+            cap_std::fs::OpenOptions::new().write(true).create_new(true),
+        )
+    )
+    .map_err(|e| StoreError::io("创建临时文件失败", e))?;
     let result = (|| -> Result<(), StoreError> {
-        let mut f = root
-            .open_with(
-                &tmp_name,
-                cap_std::fs::OpenOptions::new().write(true).create_new(true),
-            )
-            .map_err(|e| StoreError::io("创建临时文件失败", e))?;
-        f.write_all(text.as_bytes())
+        let mut f = file;
+        atomic_io!(Write, f.write_all(text.as_bytes()))
             .map_err(|e| StoreError::io("写入项目失败", e))?;
-        f.sync_all()
-            .map_err(|e| StoreError::io("同步临时文件失败", e))?;
+        atomic_io!(FileSync, f.sync_all()).map_err(|e| StoreError::io("同步临时文件失败", e))?;
         drop(f);
         // rename 前复核现存目标（§10.2）：写临时文件期间被换上的符号链接
         // 或异型条目在此拒绝，不被 rename 覆盖
         check_target()?;
-        root.rename(&tmp_name, root, file_name)
+        atomic_io!(Rename, root.rename(&tmp_name, root, file_name))
             .map_err(|e| StoreError::io("落盘项目失败", e))?;
         // 持久性屏障同步锚定句柄本身（经其重新绑定自身再 fsync，不按路径名
         // 重开——否则屏障加到并发替换后的目录上，保存成功而加载另一棵树）
         #[cfg(unix)]
-        root.open_dir(".")
-            .and_then(|d| d.into_std_file().sync_all())
-            .map_err(|e| StoreError::io("同步项目目录失败（持久性屏障缺失）", e))?;
+        atomic_io!(
+            DirectorySync,
+            root.open_dir(".")
+                .and_then(|d| d.into_std_file().sync_all())
+        )
+        .map_err(|e| StoreError::io("同步项目目录失败（持久性屏障缺失）", e))?;
         // Windows 无法对目录句柄 fsync：跳过屏障而非误报成功写失败
         #[cfg(not(unix))]
         let _ = root;

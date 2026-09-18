@@ -6,6 +6,8 @@
 //! - 读取语义（issue #120）：仅文件缺失（首次启动）返回空对象；损坏、
 //!   超限或其余读取失败一律 Err——未知原配置不得降级为默认值后被
 //!   全量保存覆盖。
+//! - 保存（issue #121）复用受信目录句柄下的控制文件原子写：随机排他
+//!   临时文件、文件同步、改名与 Unix 父目录同步全部成功后才返回成功。
 //! - API key 不入钥匙串：经 `seal` 模块 AES-256-GCM 加密（绑定本机），
 //!   密文随 provider 配置落 `settings.json`（`keyEnc` 字段）；
 //!   明文只在加密/请求的进程内存中出现，不落盘、不回显。
@@ -68,18 +70,35 @@ pub fn load_prefs(app: AppHandle) -> Result<serde_json::Value, String> {
     read_prefs_at(&path)
 }
 
-/// 全量保存应用设置（原子写：临时文件 + 改名）。
+/// 全量保存应用设置：校验大小后在受信应用根下执行 §10.2 原子写与持久性屏障。
 #[tauri::command]
 pub fn save_prefs(app: AppHandle, prefs: serde_json::Value) -> Result<(), String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("无法定位应用数据目录：{e}"))?;
+    save_prefs_in(&dir, prefs)
+}
+
+/// 设置保存的文件系统边界：canonicalize 应用数据根后锚定句柄，
+/// 后续创建、替换与同步均相对该句柄执行；序列化超限时不触盘。
+fn save_prefs_in(dir: &Path, prefs: serde_json::Value) -> Result<(), String> {
     let text = serde_json::to_string_pretty(&prefs).map_err(|e| format!("序列化失败：{e}"))?;
     if text.len() > PREFS_MAX_BYTES {
         return Err("设置内容过大".into());
     }
-    let path = prefs_path(&app)?;
-    let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, text).map_err(|e| format!("写入设置失败：{e}"))?;
-    fs::rename(&tmp, &path).map_err(|e| format!("落盘设置失败：{e}"))
+    fs::create_dir_all(dir).map_err(|e| format!("创建数据目录失败：{e}"))?;
+    let dir = dir
+        .canonicalize()
+        .map_err(|e| format!("解析设置目录真实路径失败：{e}"))?;
+    let root = cap_std::fs::Dir::open_ambient_dir(&dir, cap_std::ambient_authority())
+        .map_err(|e| format!("打开设置目录失败：{e}"))?;
+    crate::store::atomic_write(&root, "settings.json", &text)
+        .map_err(|e| format!("保存设置失败：{e}"))
 }
+
+#[cfg(test)]
+mod save_tests;
 
 /// provider id 约束：钥匙串账号安全字符集。
 fn validate_provider_id(id: &str) -> Result<(), String> {
