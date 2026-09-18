@@ -4,6 +4,7 @@ import {
   type EntityKind,
   type EntityTokenScope,
 } from './entityFields'
+import { textBudgetIssue } from './textBudget'
 
 /**
  * AI 入站 data/patch 的值形状校验与列表项归一化（信任边界，§9.3/§11.3
@@ -154,6 +155,12 @@ export function branchOptionsError(options: unknown[]): string | null {
     if (unknown)
       return `options[${i}] 含未知字段：${unknown.join('、')}（选项成员允许：${OPTION_MEMBER_KEYS.join('、')}）`
   }
+  // 选项文案的体积预算（issue #170）：字符串形态与对象 label 同域
+  for (const [i, o] of options.entries()) {
+    const label = typeof o === 'string' ? o : (o as { label: string }).label
+    const budget = textBudgetIssue(`options[${i}]`, label)
+    if (budget !== null) return budget
+  }
   return null
 }
 
@@ -190,7 +197,10 @@ function shotRefMemberIssue(
   const hasLabel = typeof r.label === 'string'
   if (hasAsset === hasLabel)
     return 'assetId 非空白字符串 / label 字符串须恰居其一'
-  if (!hasAsset) return null
+  if (!hasAsset) {
+    // 自由文案位的体积预算（issue #170）
+    return textBudgetIssue('label', r.label)
+  }
   const mime = assets.get(r.assetId as string)
   if (mime === undefined) {
     return `资产 ${r.assetId as string} 不存在（引用位只按本项目资产索引解析）`
@@ -210,8 +220,13 @@ function scalarShapeIssues(
 ): string[] {
   const issues: string[] = []
   const str = (f: string) => {
-    if (fields[f] !== undefined && typeof fields[f] !== 'string')
+    if (fields[f] !== undefined && typeof fields[f] !== 'string') {
       issues.push(`${f} 须为字符串`)
+      return
+    }
+    // 自由文本体积预算（issue #170）：超限拒绝，不截断
+    const budget = textBudgetIssue(f, fields[f])
+    if (budget !== null) issues.push(budget)
   }
   // 数值编号域（§9.3 命令边界）：正安全整数——放行 1.5/0/-2 这类值会被
   // 下次加载的归一化静默重编号/删除分集，接受的 AI 输出重开即变样
@@ -314,6 +329,14 @@ function dialogueLinesIssues(
     ]
   }
   const issues: string[] = []
+  // 台词文本的体积预算（issue #170）：逐行点名下标，超限拒绝不截断
+  lines.forEach((l, i) => {
+    const budget = textBudgetIssue(
+      `lines[${i}].text`,
+      (l as { text: unknown }).text,
+    )
+    if (budget !== null) issues.push(budget)
+  })
   // 成员未知自有键（issue #140）：形状全过后逐项点名（下标 + 键名可定位）
   lines.forEach((l, i) => {
     const unknown = unknownMemberKeys(

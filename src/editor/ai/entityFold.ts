@@ -13,6 +13,7 @@ import {
   type EntityTokenScope,
 } from './entityFields'
 import { plainObject } from './patchShape'
+import { DOCUMENT_BODY_MAX_CHARS, textBudgetIssue } from './textBudget'
 
 /**
  * AI 设定实体命令（upsert_character / upsert_location）与设定文档命令
@@ -90,7 +91,7 @@ function reasonOf(cmd: Record<string, unknown>): string {
 }
 
 /** fields 值形状检查：name 与本种类可选字段（character.bio / location.note）
- * 在场时须为字符串。 */
+ * 在场时须为字符串且不超过自由文本体积预算（issue #170）。 */
 function appendShapeIssues(
   issues: string[],
   kind: EntityKind,
@@ -102,6 +103,10 @@ function appendShapeIssues(
   const optional = fields[optionalKey]
   if (optional !== undefined && typeof optional !== 'string') {
     issues.push(`${optionalKey} 须为字符串`)
+  }
+  for (const key of ['name', optionalKey]) {
+    const budget = textBudgetIssue(key, fields[key])
+    if (budget !== null) issues.push(budget)
   }
 }
 
@@ -338,6 +343,7 @@ export function documentFieldsIssue(
     issues.push('title 须为字符串')
   if (fields.body !== undefined && typeof fields.body !== 'string')
     issues.push('body 须为字符串')
+  appendDocumentBudgetIssues(issues, fields)
   appendRelatedIdsIssues(issues, fields.relatedIds)
   const title = typeof fields.title === 'string' ? fields.title.trim() : ''
   if (mode === 'create' && title === '')
@@ -348,6 +354,23 @@ export function documentFieldsIssue(
       issues.push('title 不能为空白')
   }
   return issues.length > 0 ? `文档字段错误：${issues.join('；')}` : null
+}
+
+/** 文档字段的体积预算检查（documentFieldsIssue 拆出，S3776；issue #170）：
+ * title 按普通自由文本域；body 定位长篇正文，适用分级后的文档预算——
+ * 超限整批拒绝，不截断。 */
+function appendDocumentBudgetIssues(
+  issues: string[],
+  fields: Record<string, unknown>,
+): void {
+  const titleBudget = textBudgetIssue('title', fields.title)
+  if (titleBudget !== null) issues.push(titleBudget)
+  const bodyBudget = textBudgetIssue(
+    'body',
+    fields.body,
+    DOCUMENT_BODY_MAX_CHARS,
+  )
+  if (bodyBudget !== null) issues.push(bodyBudget)
 }
 
 /** relatedIds 条目形状检查（阶段 A）：数组且每项为 {kind, id} 完整对；
