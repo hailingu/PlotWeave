@@ -33,6 +33,9 @@ import { signatureMatches, type ImageGenInput } from './signature'
 const PREVIEW_UNSUPPORTED =
   '浏览器预览不支持图像生成（媒体落盘需桌面端 Rust 侧执行）'
 
+/** 尚可向节点写入诊断的取消请求；新作业或宿主生命周期变化使身份失效。 */
+type PendingCancellationsRef = { current: Map<string, string> }
+
 /** 调度内核的依赖：EditorView 的稳定引用（ref/命令栈与状态写入回调）。 */
 export interface ImageJobsDeps {
   projectId: string
@@ -276,26 +279,37 @@ export function doomedImageAssets(
  * aliveRef 标记挂载状态，卸载清理对全部 running 作业发协作式取消——
  * Rust 侧在检查点放弃结果（落盘前），防孤儿媒体文件与卸载后写回；
  * jobAlive 供完成回调判定「仍是该作业且组件存活」。 */
-function useJobWriteGuard(jobsRef: {
-  current: Record<string, ImageJobView>
-}): (nodeId: string, jobId: string) => boolean {
+function useJobWriteGuard(
+  jobsRef: { current: Record<string, ImageJobView> },
+  pendingCancellationsRef: PendingCancellationsRef,
+): (nodeId: string, jobId: string) => boolean {
   const aliveRef = useRef(true)
   // 稳定读取器：清理时经函数调用取最新作业表（直接在 cleanup 读 ref.current
   // 会触发 exhaustive-deps 的两难告警——参数化 ref 无法被插件豁免）
   const readJobs = useCallback(() => jobsRef.current, [jobsRef])
   useEffect(() => {
+    const pendingCancellations = pendingCancellationsRef.current
     aliveRef.current = true
     return () => {
       aliveRef.current = false
+      pendingCancellations.clear()
       for (const job of Object.values(readJobs())) {
         if (job?.status === 'running') {
           void tauriInvoke('llm_image_cancel', { jobId: job.jobId }).catch(
-            () => {},
+            (err: unknown) => {
+              // 卸载后无 UI 宿主（issue #160）：控制台留痕即可定位——
+              // 文案诚实：协作式取消未送达，不承诺已停止远端付费请求
+              console.error(
+                '[imagegen] 卸载取消请求失败（协作式取消未送达，远端生成可能继续并计费）',
+                job.jobId,
+                err,
+              )
+            },
           )
         }
       }
     }
-  }, [readJobs])
+  }, [pendingCancellationsRef, readJobs])
   return useCallback(
     (nodeId: string, jobId: string): boolean => {
       const cur = jobsRef.current[nodeId]
@@ -307,23 +321,39 @@ function useJobWriteGuard(jobsRef: {
   )
 }
 
-/** 宿主节点删除观察（§13 作业生命周期）：running 作业的宿主节点被删即
- * 协作式取消（Rust 未过检查点即放弃结果）并清作业表——不为已删节点
- * 白白支付、不留孤儿媒体；结果若已过检查点返回，jobAlive 已清即静默
- * 丢弃。删除可撤销：undo 复活节点后作业已清，重新生成即可。 */
+/** 宿主节点删除观察（§13 作业生命周期）：清除被删宿主的全部作业状态，
+ * 包括已落定错误；仅 running 作业额外发协作式取消，未过 Rust 检查点
+ * 即放弃结果。迟到产物经 jobAlive 丢弃；undo 复活节点不恢复旧诊断，
+ * 可以重新生成。 */
 function useNodeDeletionWatch(
   nodes: CanvasNode[],
   jobsRef: { current: Record<string, ImageJobView> },
   clearJob: (nodeId: string) => void,
+  pendingCancellationsRef: PendingCancellationsRef,
 ): void {
   useEffect(() => {
     const alive = new Set(nodes.map((n) => n.id))
+    for (const nodeId of pendingCancellationsRef.current.keys()) {
+      if (!alive.has(nodeId)) pendingCancellationsRef.current.delete(nodeId)
+    }
     for (const [nodeId, job] of Object.entries(jobsRef.current)) {
-      if (job?.status !== 'running' || alive.has(nodeId)) continue
-      void tauriInvoke('llm_image_cancel', { jobId: job.jobId }).catch(() => {})
+      if (alive.has(nodeId)) continue
+      if (job?.status === 'running') {
+        void tauriInvoke('llm_image_cancel', { jobId: job.jobId }).catch(
+          (err: unknown) => {
+            // 宿主已删无节点级 UI 宿主（issue #160）：控制台留痕定位；
+            // 结果到达时 jobAlive 已清，仍按取消语义丢弃
+            console.error(
+              '[imagegen] 宿主节点已删除，取消请求失败（远端生成可能继续并计费，结果将被丢弃）',
+              job.jobId,
+              err,
+            )
+          },
+        )
+      }
       clearJob(nodeId)
     }
-  }, [nodes, jobsRef, clearJob])
+  }, [nodes, jobsRef, clearJob, pendingCancellationsRef])
 }
 
 /** 作业表状态族（useImageJobsState 的状态层）：jobs 表与 ref 镜像、
@@ -332,6 +362,7 @@ function useJobTable(): {
   jobs: Record<string, ImageJobView>
   setJobs: Dispatch<SetStateAction<Record<string, ImageJobView>>>
   jobsRef: { current: Record<string, ImageJobView> }
+  pendingCancellationsRef: PendingCancellationsRef
   notice: string | null
   setJobError: (nodeId: string, message: string) => void
   clearJob: (nodeId: string) => void
@@ -342,6 +373,7 @@ function useJobTable(): {
    * 同步占位也直接写此处（绕过 React 批处理窗口挡双击）。 */
   const jobsRef = useRef(jobs)
   jobsRef.current = jobs
+  const pendingCancellationsRef = useRef(new Map<string, string>())
   const [notice, setNotice] = useState<string | null>(null)
   const setJobError = useCallback((nodeId: string, message: string) => {
     setJobs((cur) => ({ ...cur, [nodeId]: { status: 'error', message } }))
@@ -366,7 +398,16 @@ function useJobTable(): {
       `图片节点 ${nodeId} 的输入已修改，本次生成结果已丢弃（媒体文件留存待回收，可重新生成）`,
     )
   }, [])
-  return { jobs, setJobs, jobsRef, notice, setJobError, clearJob, dropResult }
+  return {
+    jobs,
+    setJobs,
+    jobsRef,
+    pendingCancellationsRef,
+    notice,
+    setJobError,
+    clearJob,
+    dropResult,
+  }
 }
 
 /** 发起生成（useImageJobsState 拆分，issue #99）：同步验型 + running 守卫
@@ -378,18 +419,25 @@ function useImageStart(
   nodesRef: ImageJobsDeps['nodesRef'],
   table: Pick<
     ReturnType<typeof useJobTable>,
-    'jobsRef' | 'setJobs' | 'setJobError' | 'clearJob'
+    | 'jobsRef'
+    | 'setJobs'
+    | 'setJobError'
+    | 'clearJob'
+    | 'pendingCancellationsRef'
   >,
   jobAlive: ReturnType<typeof useJobWriteGuard>,
   applyResult: (nodeId: string, input: ImageGenInput, asset: AssetRef) => void,
 ) {
-  const { jobsRef, setJobs, setJobError, clearJob } = table
+  const { jobsRef, setJobs, setJobError, clearJob, pendingCancellationsRef } =
+    table
   return useCallback(
     (nodeId: string) => {
       const node = nodesRef.current.find((n) => n.id === nodeId)
       if (node?.type !== 'image') return
       if (jobsRef.current[nodeId]?.status === 'running') return
       const jobId = uid('imgjob')
+      // 同步失效：B 即使已经完成或再次取消，A 的迟到诊断也不得再写回。
+      pendingCancellationsRef.current.delete(nodeId)
       jobsRef.current = {
         ...jobsRef.current,
         [nodeId]: { status: 'running', jobId },
@@ -407,10 +455,57 @@ function useImageStart(
       jobAlive,
       jobsRef,
       nodesRef,
+      pendingCancellationsRef,
       projectId,
       setJobError,
       setJobs,
     ],
+  )
+}
+
+/** 用户取消先释放运行作业；仅仍拥有节点诊断归属的请求可呈现错误。
+ * 过期/无宿主的失败仍记录 jobId，避免丢失远端可能继续计费的诊断。 */
+function useImageCancel(
+  nodesRef: ImageJobsDeps['nodesRef'],
+  table: Pick<
+    ReturnType<typeof useJobTable>,
+    'jobsRef' | 'pendingCancellationsRef' | 'clearJob' | 'setJobError'
+  >,
+) {
+  const { jobsRef, pendingCancellationsRef, clearJob, setJobError } = table
+  return useCallback(
+    (nodeId: string) => {
+      const cur = jobsRef.current[nodeId]
+      if (cur?.status !== 'running') return
+      const jobId = cur.jobId
+      clearJob(nodeId)
+      pendingCancellationsRef.current.set(nodeId, jobId)
+      const ownsDiagnostic = () =>
+        pendingCancellationsRef.current.get(nodeId) === jobId
+      void tauriInvoke('llm_image_cancel', { jobId })
+        .catch((err: unknown) => {
+          if (
+            ownsDiagnostic() &&
+            nodesRef.current.some((n) => n.id === nodeId && n.type === 'image')
+          ) {
+            setJobError(
+              nodeId,
+              `取消请求发送失败（协作式取消：远端生成可能继续并计费，结果到达时将被丢弃）：${errorText(err)}`,
+            )
+          } else {
+            console.error(
+              '[imagegen] 取消请求失败（作业已更替或宿主已移除，远端生成可能继续并计费，结果将被丢弃）',
+              jobId,
+              err,
+            )
+          }
+        })
+        .finally(() => {
+          // A 的结束不能清除后续 B 取消请求的诊断归属。
+          if (ownsDiagnostic()) pendingCancellationsRef.current.delete(nodeId)
+        })
+    },
+    [clearJob, jobsRef, nodesRef, pendingCancellationsRef, setJobError],
   )
 }
 
@@ -430,12 +525,19 @@ export function useImageJobsState(deps: ImageJobsDeps): {
     removeAsset,
     pushHistory,
   } = deps
-  const { jobs, setJobs, jobsRef, notice, setJobError, clearJob, dropResult } =
-    useJobTable()
+  const table = useJobTable()
+  const {
+    jobs,
+    jobsRef,
+    pendingCancellationsRef,
+    notice,
+    clearJob,
+    dropResult,
+  } = table
   /** 作业写回守卫：卸载协作式取消 + 存活/身份判定（useJobWriteGuard）。 */
-  const jobAlive = useJobWriteGuard(jobsRef)
-  /** 宿主节点删除观察：running 作业随宿主删除协作式取消并清表。 */
-  useNodeDeletionWatch(nodes, jobsRef, clearJob)
+  const jobAlive = useJobWriteGuard(jobsRef, pendingCancellationsRef)
+  /** 宿主节点删除观察：全部作业状态清表，仅 running 作业发协作式取消。 */
+  useNodeDeletionWatch(nodes, jobsRef, clearJob, pendingCancellationsRef)
 
   const applyResult = useCallback(
     (nodeId: string, input: ImageGenInput, asset: AssetRef) =>
@@ -470,24 +572,9 @@ export function useImageJobsState(deps: ImageJobsDeps): {
     ],
   )
 
-  const start = useImageStart(
-    projectId,
-    nodesRef,
-    { jobsRef, setJobs, setJobError, clearJob },
-    jobAlive,
-    applyResult,
-  )
+  const start = useImageStart(projectId, nodesRef, table, jobAlive, applyResult)
 
-  const cancel = useCallback(
-    (nodeId: string) => {
-      const cur = jobsRef.current[nodeId]
-      if (cur?.status !== 'running') return
-      const jobId = cur.jobId
-      clearJob(nodeId)
-      void tauriInvoke('llm_image_cancel', { jobId }).catch(() => {})
-    },
-    [clearJob, jobsRef],
-  )
+  const cancel = useImageCancel(nodesRef, table)
 
   const api = useMemo<ImageGenApi>(
     () => ({ jobOf: (nodeId) => jobs[nodeId] ?? null, start, cancel }),
