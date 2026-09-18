@@ -283,6 +283,8 @@ function useAiReadTools(deps: AiReadToolsDeps) {
   }
 }
 
+/** AI 通道与画布文档的桥接 hook：快照供给、批次执行与读工具就地回喂
+ * 在此装配；镜像 ref 读「当前值」语义见各依赖的注入注释。 */
 export function useAiBridge(deps: AiBridgeDeps): AiBridge {
   const {
     nodesRef,

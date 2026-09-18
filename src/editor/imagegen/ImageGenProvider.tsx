@@ -32,6 +32,8 @@ interface ImageGenProviderProps {
   readonly children: ReactNode
 }
 
+/** 图像生成调度 Provider（语义见模块头）：EditorView 挂载一次，卸载即
+ * 协作式取消全部 running 作业；状态机内核在 state.ts。 */
 export function ImageGenProvider({
   projectId,
   nodes,

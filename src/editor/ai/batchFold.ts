@@ -637,6 +637,8 @@ function collectShapeIssues(st: FoldState, commands: unknown[]): void {
   }
 }
 
+/** AI 批命令的整批校验入口（两阶段契约见模块头）：输入原始命令数组与
+ * 画布快照，输出预览条目、问题清单与（全合法时的）待执行命令。 */
 export function validateAiBatch(
   rawCommands: unknown,
   graph: AiGraphSnapshot,

@@ -184,6 +184,8 @@ function useDocumentDraft(doc: DocumentEntity) {
   return { title, body, relatedIds, editTitle, editBody, toggleRelated }
 }
 
+/** 设定文档查看/编辑弹窗（语义见模块头，issue 56）：模态会话期间全局
+ * 快捷键挂起，「保存」一次派发一条可撤销命令。 */
 export function DocumentEditorDialog({
   doc,
   settings,

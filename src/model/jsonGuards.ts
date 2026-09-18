@@ -20,12 +20,14 @@ export const GRAPH_CONTRACT_KEYS = [
   'viewport',
   'aiRevision',
 ] as const
+/** settings 容器的契约键清单（同 GRAPH_CONTRACT_KEYS 的保留策略）。 */
 export const SETTINGS_CONTRACT_KEYS = [
   'characters',
   'locations',
   'props',
   'documents',
 ] as const
+/** assets 容器的契约键清单（同 GRAPH_CONTRACT_KEYS 的保留策略）。 */
 export const ASSETS_CONTRACT_KEYS = ['byId'] as const
 
 /** 捕获容器中契约键之外的扩展键（值原样引用：JSON 解析产物无别名，且

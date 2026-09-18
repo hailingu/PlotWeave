@@ -36,6 +36,8 @@ export interface NodeEditApi {
   assets: ProjectContent['assets']
 }
 
+/** 节点编辑能力的上下文（设置面板/改名/资产解析的注入通道）；
+ * 消费一律经 useNodeEdit（越界即抛错），不直接读本对象。 */
 export const NodeEditContext = createContext<NodeEditApi | null>(null)
 
 /** 节点组件内取编辑能力的 hook；必须在 NodeEditContext.Provider 内使用。 */

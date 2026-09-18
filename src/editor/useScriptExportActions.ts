@@ -17,6 +17,8 @@ function selectPreviewText(): void {
   sel.addRange(range)
 }
 
+/** 剧本导出对话框的动作族（复制/回执/关闭失效）；请求归属与回执失效
+ * 语义见 useScriptExportActions。 */
 export interface ScriptExportActions {
   /** 复制当前全文；成功则按钮进入「✓ 已复制」态并限时恢复。 */
   copyAll: () => Promise<void>

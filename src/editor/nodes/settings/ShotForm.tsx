@@ -122,6 +122,8 @@ function ShotNoField({
   )
 }
 
+/** 分镜卡的设置表单（§4.3：镜号/景别/画面描述/镜头 Prompt/引用位）：
+ * 引用位的资产 MIME 家族校验走 shotRefMimeMatches（§8.1 编辑边界）。 */
 export function ShotForm({
   node,
 }: {

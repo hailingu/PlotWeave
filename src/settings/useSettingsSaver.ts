@@ -79,6 +79,8 @@ async function flushPendingSaves(refs: SaverRefs): Promise<void> {
   }
 }
 
+/** 设置页「编辑即保存」的调度 hook：返回防抖落盘/关闭冲刷动作族与可见
+ * 错误态；串行队列与失败回填语义见模块头（不静默丢失编辑）。 */
 export function useSettingsSaver(
   setSettings: (next: AppSettings) => void,
   onClose: () => void,

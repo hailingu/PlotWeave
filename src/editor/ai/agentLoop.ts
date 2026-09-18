@@ -66,6 +66,7 @@ export interface BatchValidators {
   prose?: (text: string) => BatchValidation | null
 }
 
+/** 读工具执行器签名：同步返回回喂文本（读工具就地执行，不进命令通道）。 */
 export type ReadToolExecutor = (
   name: string,
   args: Record<string, unknown>,

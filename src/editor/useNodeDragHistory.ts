@@ -13,6 +13,8 @@ export interface NodeDragHistoryDeps {
   pushHistory: (cmd: HistoryCommand) => void
 }
 
+/** 节点拖拽历史 hook（语义见模块头）：整段拖拽记为一步撤销，返回
+ * 拖开始/拖停止处理器供 React Flow 事件接线。 */
 export function useNodeDragHistory({
   setNodes,
   pushHistory,

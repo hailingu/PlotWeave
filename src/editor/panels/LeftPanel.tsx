@@ -416,6 +416,8 @@ function DocumentEditDialog({
   )
 }
 
+/** 左侧面板（§3.4/§3.5：大纲 / 设定集 / 资产分段）：大纲行定位画布、
+ * 设定集与资产条目拖拽上画布；宽度经 PanelResizer 调整。 */
 export function LeftPanel({
   open,
   width,

@@ -6,6 +6,8 @@
  */
 import { CREATE_LABELS, CREATABLE_TYPES, type CreatableType } from './creatable'
 
+/** 右键菜单输入（三形态见模块头）：触发坐标、目标（节点/连线/空白）
+ * 与全部动作回调；动作执行后由 onClose 统一收起。 */
 export interface CanvasContextMenuProps {
   /** 触发点视口坐标（左缘收敛在窗口内，防贴右缘溢出）。 */
   readonly x: number
@@ -22,6 +24,7 @@ export interface CanvasContextMenuProps {
   readonly onClose: () => void
 }
 
+/** 画布右键上下文菜单（§4.3）：节点/连线/空白三形态，纯展示组件。 */
 export function CanvasContextMenu({
   x,
   y,

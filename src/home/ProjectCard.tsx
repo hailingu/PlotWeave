@@ -32,6 +32,8 @@ function posterClass(project: ProjectSummary): string {
   return `project-poster${project.cover ? '' : ' project-poster--weave'}`
 }
 
+/** 首页项目卡片（docs/ui-design.md §3.2）：海报（封面/织纹占位/损坏
+ * 占位）、名称与统计摘要；打开与菜单动作由父级注入。 */
 export function ProjectCard({ project, onOpen, onMenu }: ProjectCardProps) {
   const broken = project.error !== undefined
   const posterStyle =

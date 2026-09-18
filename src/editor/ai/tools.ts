@@ -19,6 +19,8 @@ export interface ToolSpec {
   }
 }
 
+/** OpenAI 兼容 tool_call 的最小形状（arguments 为未解析的 JSON 字符串，
+ * 解析与分流见 toolCallsToCommands）。 */
 export interface ToolCall {
   id: string
   type: 'function'
@@ -173,12 +175,14 @@ export const AI_TOOLS: ToolSpec[] = [
   },
 ]
 
+/** 读工具名集合：就地执行回喂（不进预览/命令通道）。 */
 export const READ_TOOL_NAMES = new Set([
   'get_graph_snapshot',
   'get_node',
   'get_settings_snapshot',
   'get_document',
 ])
+/** 写工具名集合：映射为 AiCommand 走「整批预览 → 确认 → 执行」通道。 */
 export const WRITE_TOOL_NAMES = new Set([
   'create_node',
   'delete_node',
@@ -313,6 +317,7 @@ export function toolCallsShapeDiagnostic(calls: unknown): string | null {
   return null
 }
 
+/** 一次读工具调用的解析结果：就地执行后按 id 回喂 role:'tool' 消息。 */
 export interface ReadRequest {
   /** tool_call id，回喂 role:'tool' 消息时透传。 */
   id: string
@@ -320,6 +325,7 @@ export interface ReadRequest {
   args: Record<string, unknown>
 }
 
+/** tool_calls 解析产出：写命令、读请求与解析失败文案三路分流。 */
 export interface ToolCallParse {
   commands: AiCommand[]
   readRequests: ReadRequest[]

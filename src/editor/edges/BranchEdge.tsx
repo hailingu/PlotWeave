@@ -18,6 +18,8 @@ export interface BranchEdgeData extends Record<string, unknown> {
   order?: number
 }
 
+/** 分支连线的 React Flow 类型别名：Edge 泛型钉住 BranchEdgeData 与
+ * 'branch' 判别，消费点不重复展开。 */
 export type BranchFlowEdge = Edge<BranchEdgeData, 'branch'>
 
 /**

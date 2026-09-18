@@ -20,6 +20,7 @@ import {
 } from './sampleData'
 import type { CanvasNode } from './nodes/types'
 
+/** 示例画布的节点集（结构见模块头：两幕短剧演示）；种子项目的内容来源。 */
 export const SAMPLE_NODES: CanvasNode[] = [
   {
     id: 'beat-1',

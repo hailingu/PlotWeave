@@ -32,6 +32,8 @@ function SpeakerAvatar({
   )
 }
 
+/** 对白节点卡（§4.3）：台词计数徽标 + 可改名标题；说话人头像/名称经
+ * 设定集实时解析（失效引用按 §4.3 标注）。 */
 export function DialogueNode({
   id,
   data,

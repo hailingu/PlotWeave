@@ -427,6 +427,8 @@ function joinAssetErrors(errors: Map<string, string>): string {
   return [...errors.values()].join('；')
 }
 
+/** 资产库面板（§8.1）：分类筛选、导入/删除与缩略图懒加载；
+ * 删除走应用内确认框（不可逆），状态由 useLibraryAssetList 持有。 */
 export function AssetsPanel() {
   const { assets, setAssets, error, setError, urls, setUrls, refreshUrl } =
     useLibraryAssetList()

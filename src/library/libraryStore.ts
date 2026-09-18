@@ -9,9 +9,12 @@
 
 import { uid } from '../uid'
 
+/** 资产库分类（§7）：索引条目的 kind 域；中文标签/图标见 LIBRARY_KINDS。 */
 export type LibraryKind =
   'character' | 'location' | 'wardrobe' | 'colorlight' | 'reference' | 'other'
 
+/** 资产库分类的展示表（kind → 中文标签 + 图标）：面板分组与筛选共用，
+ * 单一来源防各处文案漂移。 */
 export const LIBRARY_KINDS: Array<{
   kind: LibraryKind
   label: string
