@@ -3,9 +3,11 @@
  * PreviewCard 校验问题清单的序号语义（issue #150）：命令级问题按
  * 「第 N 条」编序（N 从 1 起）；批次级整体错误（index=-1，如
  * 「批次不是命令数组」）不编序号——不得显示为「第 0 条」。
+ * 另覆盖失败卡的忽略操作（issue #151）：忽略独立于校验状态，
+ * 仅受 busy 并发约束；失败卡仍不可执行。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { PreviewCard } from './PreviewCard'
 import type { BatchValidation } from '../ai/commands'
 
@@ -55,5 +57,71 @@ describe('PreviewCard 校验问题序号（issue #150）', () => {
     )
     expect(screen.getByText('第 1 条：未知节点类型：foo')).toBeTruthy()
     expect(screen.getByText('第 3 条：端点不存在：a → b')).toBeTruthy()
+  })
+})
+
+describe('PreviewCard 失败卡的忽略操作（issue #151）', () => {
+  it('非 busy 失败卡：忽略可用并触发 onDismiss；执行仍被校验禁用', () => {
+    const onDismiss = vi.fn()
+    const onExecute = vi.fn()
+    render(
+      <PreviewCard
+        v={validationWith([{ index: 0, message: '未知节点类型：foo' }])}
+        status="pending"
+        armed={false}
+        busy={false}
+        onArm={vi.fn()}
+        onExecute={onExecute}
+        onDismiss={onDismiss}
+      />,
+    )
+    const dismiss = screen.getByRole('button', { name: '忽略' })
+    expect((dismiss as HTMLButtonElement).disabled).toBe(false)
+    fireEvent.click(dismiss)
+    expect(onDismiss).toHaveBeenCalledTimes(1)
+    const execute = screen.getByRole('button', { name: '✓ 执行改动' })
+    expect((execute as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(execute)
+    expect(onExecute).not.toHaveBeenCalled()
+  })
+
+  it('busy 期间失败卡的忽略仍禁用（并发约束保留），有效卡忽略不受新增限制', () => {
+    const v: BatchValidation = {
+      ...validationWith([]),
+      ok: true,
+      items: [
+        { kind: 'create', danger: false, label: '新建 场景 · 场二', key: 'c0' },
+      ],
+    }
+    const { rerender } = render(
+      <PreviewCard
+        v={validationWith([{ index: 0, message: '未知节点类型：foo' }])}
+        status="pending"
+        armed={false}
+        busy={true}
+        onArm={vi.fn()}
+        onExecute={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    )
+    expect(
+      (screen.getByRole('button', { name: '忽略' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true)
+    rerender(
+      <PreviewCard
+        v={v}
+        status="pending"
+        armed={false}
+        busy={false}
+        onArm={vi.fn()}
+        onExecute={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    )
+    expect(
+      (screen.getByRole('button', { name: '忽略' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false)
   })
 })

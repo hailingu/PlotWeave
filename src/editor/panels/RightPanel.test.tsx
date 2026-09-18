@@ -2,7 +2,8 @@
 /**
  * 编辑器右栏组件测试：检查器五类节点的只读字段派生（含失效引用）、
  * ✦AI 会话的引导态/模型选择、纯文本问答、读工具就地回喂循环、
- * 写工具 → 预览卡 → 执行/两步删除确认/忽略/失败回执、围栏批次回退。
+ * 写工具 → 预览卡 → 执行/两步删除确认/忽略（含校验失败卡，issue #151）/
+ * 失败回执、围栏批次回退。
  * llmChat 打桩（不触 IPC），settingsStore.load 打桩喂配置。
  */
 import {
@@ -515,6 +516,42 @@ describe('RightPanel ✦AI 改动预览卡', () => {
     expect(
       (screen.getByRole('button', { name: '✓ 执行改动' }) as HTMLButtonElement)
         .disabled,
+    ).toBe(true)
+  })
+
+  it('校验失败的预览卡可忽略：卡片消失、不执行、处置落盘且会话其余条目保留（issue #151）', async () => {
+    const saved: AiSession[] = []
+    const onSaveSession = vi.fn(async (session: AiSession) => {
+      saved.push(session)
+    })
+    const spies = await toAiTab(APP_WITH_KEY, {
+      onSaveAiSession: onSaveSession,
+    })
+    spies.onValidateCommands.mockReturnValue(
+      validationOf({ ok: false, issues: [{ index: 0, message: '不能自环' }] }),
+    )
+    llmChatMock.mockResolvedValue(batchReply())
+    send('加')
+    expect(await screen.findByText('第 1 条：不能自环')).toBeTruthy()
+    // 失败卡仍不可执行（校验闭环不变），但忽略不再被校验状态禁用
+    expect(
+      (screen.getByRole('button', { name: '✓ 执行改动' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: '忽略' }))
+    expect(screen.queryByLabelText('AI 改动预览')).toBeNull()
+    expect(spies.onApplyAiBatch).not.toHaveBeenCalled()
+    // 处置持久化：最后一次落盘会话中该卡为 dismissed；清空的是单卡处置，
+    // 会话其余条目（用户提问等）保留——不是整段会话丢失
+    await waitFor(() =>
+      expect(
+        saved[saved.length - 1].entries.find((e) => e.card)?.card?.status,
+      ).toBe('dismissed'),
+    )
+    expect(
+      saved[saved.length - 1].entries.some(
+        (e) => e.kind === 'msg' && e.role === 'user',
+      ),
     ).toBe(true)
   })
 
