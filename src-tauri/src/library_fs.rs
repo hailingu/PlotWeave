@@ -10,6 +10,7 @@ use std::io::Read;
 use cap_std::ambient_authority;
 use cap_std::fs::Dir as CapDir;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager};
 
 use crate::library::error::LibraryError;
@@ -399,7 +400,7 @@ where
     crate::store::atomic_write(library, INDEX_FILE_NAME, &text).map_err(LibraryError::from)
 }
 
-/// 替换损坏索引前按原字节耐久备份；失败即阻止覆盖，媒体文件保持不动。
+/// 按原字节摘要命名并复用耐久备份，失败重试不累计相同副本；备份异常阻止覆盖。
 fn backup_damaged_index(library: &CapDir) -> Result<(), LibraryError> {
     let Some(bytes) = read_index_bytes_capped(library)? else {
         return Ok(());
@@ -407,10 +408,57 @@ fn backup_damaged_index(library: &CapDir) -> Result<(), LibraryError> {
     if serde_json::from_slice::<Value>(&bytes).is_ok_and(|value| value.is_object()) {
         return Ok(());
     }
-    let name = format!("library-corrupt-{}.bak", new_id());
+    let name = format!("library-corrupt-{:x}.bak", Sha256::digest(&bytes));
+    if reuse_durable_backup(library, &name, &bytes)? {
+        return Ok(());
+    }
     atomic_write_with(library, &name, |file| {
         std::io::Write::write_all(file, &bytes)
     })
+}
+
+/// 摘要仅用于定位；复用前校验普通文件身份及完整字节，再同步文件和目录。
+/// 同名备份被修改或读取/同步失败时拒绝继续，既不覆盖证据也不忽略错误。
+fn reuse_durable_backup(library: &CapDir, name: &str, bytes: &[u8]) -> Result<bool, LibraryError> {
+    let md = match library.symlink_metadata(name) {
+        Ok(md) => md,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(LibraryError::io("读取索引备份元数据失败", error)),
+    };
+    if md.file_type().is_symlink() || !md.is_file() {
+        return Err(LibraryError::refused("索引备份不是普通文件，拒绝复用"));
+    }
+    if md.len() != bytes.len() as u64 {
+        return Err(LibraryError::refused("索引备份内容不符，保留原件待核对"));
+    }
+    let mut file = library
+        .open(name)
+        .map_err(|error| LibraryError::io("打开索引备份失败", error))?;
+    #[cfg(unix)]
+    {
+        let opened = file
+            .metadata()
+            .map_err(|error| LibraryError::io("读取索引备份句柄元数据失败", error))?;
+        if crate::store::asset_identity(&opened) != crate::store::asset_identity(&md) {
+            return Err(LibraryError::refused("索引备份在校验期间被替换"));
+        }
+    }
+    let mut stored = Vec::new();
+    (&mut file)
+        .take((bytes.len() + 1) as u64)
+        .read_to_end(&mut stored)
+        .map_err(|error| LibraryError::io("读取索引备份失败", error))?;
+    if stored != bytes {
+        return Err(LibraryError::refused("索引备份内容不符，保留原件待核对"));
+    }
+    file.sync_all()
+        .map_err(|error| LibraryError::io("同步索引备份失败", error))?;
+    #[cfg(unix)]
+    library
+        .open_dir(".")
+        .and_then(|dir| dir.into_std_file().sync_all())
+        .map_err(|error| LibraryError::io("同步索引备份目录失败", error))?;
+    Ok(true)
 }
 
 /// 同目录原子落盘内核（排他临时文件 + sync + rename + 父目录 fsync 持久性

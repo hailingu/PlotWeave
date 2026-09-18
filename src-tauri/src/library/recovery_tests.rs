@@ -35,6 +35,17 @@ impl LibraryFixture {
             })
             .collect()
     }
+
+    /// 仅用于已经断言创建一份备份的异常注入，不依赖备份文件的命名算法。
+    fn only_backup_path(&self) -> PathBuf {
+        let paths: Vec<_> = fs::read_dir(&self.path)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "bak"))
+            .collect();
+        assert_eq!(paths.len(), 1);
+        paths.into_iter().next().unwrap()
+    }
 }
 
 impl Drop for LibraryFixture {
@@ -324,9 +335,16 @@ fn failed_import_media_keeps_original_index_and_backup() {
     fixture.write(&raw);
     let assets = fixture.path.join("assets");
     fs::set_permissions(&assets, fs::Permissions::from_mode(0o500)).unwrap();
-    let result = put_asset_with(&fixture.dir, "new.png", "image/png", "other", b"new");
+    let attempts: Vec<_> = (0..3)
+        .map(|_| {
+            let reopened = Dir::open_ambient_dir(&fixture.path, ambient_authority()).unwrap();
+            let failed =
+                put_asset_with(&reopened, "new.png", "image/png", "other", b"new").is_err();
+            (failed, fixture.backups().len())
+        })
+        .collect();
     fs::set_permissions(&assets, fs::Permissions::from_mode(0o700)).unwrap();
-    assert!(result.is_err());
+    assert_eq!(attempts, vec![(true, 1); 3]);
     assert_eq!(fixture.original(), raw.as_bytes());
     assert_eq!(fixture.backups(), vec![raw.as_bytes().to_vec()]);
     assert_eq!(fs::read_dir(&assets).unwrap().count(), 0);
@@ -336,10 +354,7 @@ fn failed_import_media_keeps_original_index_and_backup() {
         .get(added["id"].as_str().unwrap())
         .is_some());
     assert_eq!(fs::read_dir(&assets).unwrap().count(), 1);
-    assert!(fixture
-        .backups()
-        .iter()
-        .all(|backup| backup == raw.as_bytes()));
+    assert_eq!(fixture.backups(), vec![raw.into_bytes()]);
 }
 
 #[cfg(unix)]
@@ -371,4 +386,85 @@ fn index_commit_failure_after_media_preserves_recovery_evidence() {
     assert!(list_assets_with(&fixture.dir).unwrap().0["assets"]["byId"]
         .get("new")
         .is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn changed_damaged_original_keeps_distinct_backups() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = LibraryFixture::new();
+    let first = damaged_index();
+    let second = first.replace("BROKEN", "OTHER_BROKEN");
+    let assets = fixture.path.join("assets");
+    fs::set_permissions(&assets, fs::Permissions::from_mode(0o500)).unwrap();
+    let attempts: Vec<_> = [&first, &second, &second]
+        .into_iter()
+        .map(|raw| {
+            fixture.write(raw);
+            let failed =
+                put_asset_with(&fixture.dir, "new.png", "image/png", "other", b"new").is_err();
+            (failed, fixture.backups().len())
+        })
+        .collect();
+    fs::set_permissions(&assets, fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(attempts, [(true, 1), (true, 2), (true, 2)]);
+    assert_eq!(fixture.original(), second.as_bytes());
+    assert!(fixture.backups().contains(&first.into_bytes()));
+    assert!(fixture.backups().contains(&second.into_bytes()));
+    assert_eq!(fs::read_dir(assets).unwrap().count(), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn mismatched_existing_backup_blocks_replacement() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = LibraryFixture::new();
+    let raw = damaged_index();
+    fixture.write(&raw);
+    let assets = fixture.path.join("assets");
+    fs::set_permissions(&assets, fs::Permissions::from_mode(0o500)).unwrap();
+    let failed = put_asset_with(&fixture.dir, "new.png", "image/png", "other", b"new");
+    fs::set_permissions(&assets, fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(failed.is_err());
+    let path = fixture.only_backup_path();
+    let mut changed = raw.as_bytes().to_vec();
+    changed[0] = b'[';
+    fs::write(&path, &changed).unwrap();
+    assert!(put_asset_with(&fixture.dir, "new.png", "image/png", "other", b"new").is_err());
+    assert_eq!(fixture.original(), raw.as_bytes());
+    assert_eq!(fixture.backups(), vec![changed]);
+    assert_eq!(fs::read_dir(&assets).unwrap().count(), 0);
+    fs::write(&path, &raw).unwrap();
+    put_asset_with(&fixture.dir, "new.png", "image/png", "other", b"new").unwrap();
+    assert_eq!(fixture.backups(), vec![raw.into_bytes()]);
+    assert_eq!(fs::read_dir(assets).unwrap().count(), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn unsafe_existing_backup_blocks_replacement() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    for use_symlink in [false, true] {
+        let fixture = LibraryFixture::new();
+        let raw = damaged_index();
+        fixture.write(&raw);
+        let assets = fixture.path.join("assets");
+        fs::set_permissions(&assets, fs::Permissions::from_mode(0o500)).unwrap();
+        let failed = put_asset_with(&fixture.dir, "new.png", "image/png", "other", b"new");
+        fs::set_permissions(&assets, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(failed.is_err());
+        let path = fixture.only_backup_path();
+        fs::remove_file(&path).unwrap();
+        let target = fixture.path.join("original-copy");
+        fs::write(&target, &raw).unwrap();
+        if use_symlink {
+            symlink(&target, &path).unwrap();
+        } else {
+            fs::create_dir(&path).unwrap();
+        }
+        assert!(put_asset_with(&fixture.dir, "new.png", "image/png", "other", b"new").is_err());
+        assert_eq!(fixture.original(), raw.as_bytes());
+        assert_eq!(fs::read(target).unwrap(), raw.as_bytes());
+        assert_eq!(fs::read_dir(&assets).unwrap().count(), 0);
+    }
 }
