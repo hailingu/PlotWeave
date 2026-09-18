@@ -6,9 +6,6 @@ import { NodeSettingsGear } from './settings/NodeSettingsGear'
 import { resolveCharacterAvatar, resolveLocationName } from '../settings'
 import type { SceneFlowNode } from './types'
 
-// 常量权威定义在 graphRules（连线规则纯函数），此处按原导出名转出
-export { SCENE_SHOT_HANDLE }
-
 /**
  * 场景节点 = 索引卡（docs/ui-design.md §4.2，编剧侧纸面）。
  * 经典编剧索引卡形态：暖白纸面 + 满页蓝色横格线 + 左侧红色竖边距线；

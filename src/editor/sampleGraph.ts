@@ -9,8 +9,7 @@
  * 持久化落地后作为首次启动的种子项目写入；真实创作项目由用户新建。
  */
 import type { Edge } from '@xyflow/react'
-import { SCENE_SHOT_HANDLE } from './nodes/SceneNode'
-import { branchOptionHandle } from './graphRules'
+import { SCENE_SHOT_HANDLE, branchOptionHandle } from './graphRules'
 import {
   LIN_WAN_ID,
   CHEN_MO_ID,
