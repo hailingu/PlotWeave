@@ -267,6 +267,26 @@ fn save_entry_sync_failure_preserves_old_settings_and_allows_retry() {
     assert_eq!(dir.read(), json!({"defaultChat": "new"}));
 }
 
+#[cfg(unix)]
+#[test]
+fn ensure_data_dir_persists_every_host_of_new_levels() {
+    // PR #201 第二轮评审（P2）：读取路径（首启 load_prefs）同样会创建
+    // 数据目录——多级缺失（干净轮廓、嵌套 XDG_DATA_HOME）时，创建本身
+    // 必须同步每个新条目宿主；否则随后的保存只同步直接父目录，更上层
+    // 条目仍未落盘，成功返回后断电仍可丢失整棵目录。
+    let base = PrefsDir::new();
+    let target = base.0.join("level-a").join("level-b");
+    let injection = Injection::new(None, None);
+    ensure_data_dir(&target).unwrap();
+    assert!(target.is_dir());
+    assert_eq!(
+        injection.stages(),
+        vec![Stage::EntrySync, Stage::EntrySync],
+        "实际阶段：{:?}",
+        injection.stages()
+    );
+}
+
 #[test]
 fn atomic_save_collision_does_not_remove_another_writers_temp_file() {
     // 排他创建失败意味着该临时文件从未归本次操作所有，清理不能删除它。

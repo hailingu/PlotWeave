@@ -8,8 +8,9 @@
 //!   全量保存覆盖。
 //! - 保存（issue #121）复用受信目录句柄下的控制文件原子写：随机排他
 //!   临时文件、文件同步、改名与 Unix 父目录同步全部成功后才返回成功；
-//!   数据目录的创建经 `store::create_dir_all_durable` 先同步新目录条目
-//!   的各级宿主（Unix），首次保存的条目与内容同为持久。
+//!   数据目录的创建（读取与保存入口）经 `store::create_dir_all_durable`
+//!   先同步新目录条目的各级宿主（Unix），首启读取与首次保存创建的
+//!   条目均与内容同为持久。
 //! - API key 不入钥匙串：经 `seal` 模块 AES-256-GCM 加密（绑定本机），
 //!   密文随 provider 配置落 `settings.json`（`keyEnc` 字段）；
 //!   明文只在加密/请求的进程内存中出现，不落盘、不回显。
@@ -41,14 +42,20 @@ const KEYCHAIN_SERVICE: &str = "com.plotweave.app";
 /// 设置文件大小上限（1 MiB），防异常输入撑爆读写。
 const PREFS_MAX_BYTES: usize = 1024 * 1024;
 
+/// 确保数据目录存在且新建条目各级宿主已同步（§10.2，Unix）：读取与
+/// 保存入口共用同一持久化创建内核——首启读取路径也会创建数据目录，
+/// 多级缺失（干净轮廓、嵌套 XDG_DATA_HOME）时若不同步，随后的保存
+/// 仅兜底同步直接父目录，更上层条目仍未落盘（PR #201 第二轮评审）。
+fn ensure_data_dir(dir: &Path) -> Result<(), String> {
+    crate::store::create_dir_all_durable(dir).map_err(|e| format!("创建数据目录失败：{e}"))
+}
+
 fn prefs_path(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app
         .path()
         .app_data_dir()
         .map_err(|e| format!("无法定位应用数据目录：{e}"))?;
-    // 读取路径无持久性承诺；保存侧无条件同步直接父目录，兜住此处
-    // 未做屏障的目录创建（PR #201 评审）。
-    fs::create_dir_all(&dir).map_err(|e| format!("创建数据目录失败：{e}"))?;
+    ensure_data_dir(&dir)?;
     Ok(dir.join("settings.json"))
 }
 
@@ -92,7 +99,7 @@ fn save_prefs_in(dir: &Path, prefs: serde_json::Value) -> Result<(), String> {
     if text.len() > PREFS_MAX_BYTES {
         return Err("设置内容过大".into());
     }
-    crate::store::create_dir_all_durable(dir).map_err(|e| format!("创建数据目录失败：{e}"))?;
+    ensure_data_dir(dir)?;
     let dir = dir
         .canonicalize()
         .map_err(|e| format!("解析设置目录真实路径失败：{e}"))?;

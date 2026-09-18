@@ -266,9 +266,11 @@ pub(crate) fn atomic_write(root: &CapDir, file_name: &str, text: &str) -> Result
 }
 /// 计算目录条目宿主链（§10.2，Unix）：从 `dir` 的最深已存在祖先（锚点，
 /// 含 `dir` 本身）到其直接父目录的每一级路径——新建目录的条目都落在
-/// 这些宿主里。`dir` 已存在时退化为仅含直接父目录：条目可能由未做
-/// 屏障的其他入口（设置读取路径、store、library）先行创建，调用方不
-/// 能假设既有条目已经落盘。根目录无父级宿主，返回 None。
+/// 这些宿主里。`dir` 已存在时退化为仅含直接父目录：这是单级未同步
+/// 创建的兜底（宿主链在创建时刻已不可考），多级兜底由「每个创建入口
+/// 都用 [`create_dir_all_durable`] 在创建时刻同步」承担——store/library
+/// 侧入口尚未接入该助手，属已记录的后续事项（PR #201 评审）。根目录
+/// 无父级宿主，返回 None。
 #[cfg(unix)]
 fn entry_sync_chain(dir: &std::path::Path) -> Option<Vec<std::path::PathBuf>> {
     let parent = dir.parent()?;
