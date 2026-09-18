@@ -19,7 +19,9 @@ function executeLabel(v: BatchValidation, armed: boolean): string {
 }
 
 /** 卡片操作区（PreviewCard 拆分，issue #99）：已执行回执，或忽略 +
- * 两步确认执行（含删除时先武装再执行）。 */
+ * 两步确认执行（含删除时先武装再执行）。忽略只受 busy 并发约束——校验
+ * 失败卡不可执行，但用户可逐张忽略其处置（issue #151，状态随会话
+ * 落盘并回喂模型，ui-design §6）；执行仍要求批次通过校验。 */
 function PreviewCardActions({
   v,
   status,
@@ -51,7 +53,7 @@ function PreviewCardActions({
           <button
             type="button"
             className="pw-ai-btn"
-            disabled={!v.ok || busy}
+            disabled={busy}
             onClick={onDismiss}
           >
             忽略
