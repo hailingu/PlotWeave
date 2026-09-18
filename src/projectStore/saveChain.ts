@@ -6,13 +6,26 @@
  * 代次**：每次入队自增，新保存一排队旧代次重试即作废——陈旧文档的重试
  * 不得后完成覆盖新内容。删除同样排进链：在途保存落定后才删，且先取消
  * 全部重试登记，已删项目不得被迟到的完成/重试复活。
+ *
+ * 可变状态归属（issue #162，工程标准「可变全局单例须登记有界生命周期与
+ * 移除计划」的批准例外）：saveChains/pendingRetryDocs 等模块级可变表由
+ * 本模块（保存协调器）独占所有，外部模块只经窄操作消费——
+ * `pendingRetryDocOf`（查询）、`replacePendingRetryDoc`（同一性条件
+ * 替换）、`saveChainTokenOf`（不透明链身份令牌，仅同值比较），不得直接
+ * 读写 Map。生命周期：条目随保存失败登记、保存成功/删除落定清除，与
+ * 进程同寿是产品目的（导航/卸载后最新未落盘文档只存于此）；移除计划：
+ * 无——进程内保留即设计本身，若未来引入项目级显式关闭语义再评估。
  */
 import { serializeProject } from '../model/convert'
 import type { ProjectContent } from '../model/content'
 
 const SAVE_RETRY_DELAY_MS = 5000
-export const saveChains = new Map<string, Promise<unknown>>()
-export const pendingRetryDocs = new Map<string, ProjectContent>()
+/** 项目 id → 保存链尾 Promise（模块私有，issue #162）：外部经
+ * `saveChainTokenOf` 取不透明令牌做身份比较，不持有 Map 本身。 */
+const saveChains = new Map<string, Promise<unknown>>()
+/** 项目 id → 待重试的最新未落盘文档（模块私有，issue #162）：外部经
+ * `pendingRetryDocOf` / `replacePendingRetryDoc` 消费。 */
+const pendingRetryDocs = new Map<string, ProjectContent>()
 /** 重试登记的触发器：定时器句柄 + 登记代次（触发时代次不符即自灭）。 */
 const retryTimers = new Map<
   string,
@@ -350,4 +363,31 @@ export async function waitForSaveChainIdle(id: string): Promise<void> {
     await chain.catch(() => undefined)
     if (saveChains.get(id) === chain) return
   }
+}
+
+/** 链身份令牌（issue #162 的窄查询口）：返回当前链尾 Promise 作为不透明
+ * 身份——调用方只许同值比较（观测窗口内是否有新保存/删除排队），不得
+ * await 之外的任何读取（等待静止用 waitForSaveChainIdle）。 */
+export function saveChainTokenOf(id: string): Promise<unknown> | undefined {
+  return saveChains.get(id)
+}
+
+/** 待重试文档的窄查询口（issue #162）：返回当前登记的最新未落盘文档，
+ * 无登记返回 undefined。 */
+export function pendingRetryDocOf(id: string): ProjectContent | undefined {
+  return pendingRetryDocs.get(id)
+}
+
+/** 待重试文档的同一性条件替换（issue #162，tauriLoad 复验净载荷回写）：
+ * 仅当当前登记仍是要替换的那份（对象同一）才替换为 next 并返回 true——
+ * 复验 await 期间登记被更新保存清除/取代时返回 false，调用方按当前保存
+ * 状态整体重来，不把已被取代的旧文档复活进登记。 */
+export function replacePendingRetryDoc(
+  id: string,
+  expected: ProjectContent,
+  next: ProjectContent,
+): boolean {
+  if (pendingRetryDocs.get(id) !== expected) return false
+  pendingRetryDocs.set(id, next)
+  return true
 }

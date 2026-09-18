@@ -9,8 +9,9 @@ import type { ProjectContent } from '../model/content'
 import { memoryNormalize } from './memory'
 import {
   enqueueSave,
-  pendingRetryDocs,
-  saveChains,
+  pendingRetryDocOf,
+  replacePendingRetryDoc,
+  saveChainTokenOf,
   waitForSaveChainIdle,
 } from './saveChain'
 import { seedProjects } from './seeds'
@@ -65,7 +66,7 @@ async function seedFirstRun(): Promise<boolean> {
     // 落定不改链身份、守卫看不见；等落定后探测，保存已建文件即走
     // 「项目已存在」自然跳过，种子不会排在其后覆盖用户写入
     await waitForSaveChainIdle(seed.meta.id)
-    const chainBefore = saveChains.get(seed.meta.id)
+    const chainBefore = saveChainTokenOf(seed.meta.id)
     try {
       await invoke<unknown>('load_project', { id: seed.meta.id })
       console.warn('[projectStore] 播种跳过：项目已存在', seed.meta.id)
@@ -79,8 +80,8 @@ async function seedFirstRun(): Promise<boolean> {
         continue
       }
       if (
-        pendingRetryDocs.get(seed.meta.id) !== undefined ||
-        saveChains.get(seed.meta.id) !== chainBefore
+        pendingRetryDocOf(seed.meta.id) !== undefined ||
+        saveChainTokenOf(seed.meta.id) !== chainBefore
       ) {
         console.warn(
           '[projectStore] 播种跳过：存在待重试的更新保存或窗口内有新写入，不以种子覆盖',
@@ -125,14 +126,14 @@ async function tryUpgradeSample(id: string): Promise<boolean> {
   const { invoke } = await import('@tauri-apps/api/core')
   try {
     await waitForSaveChainIdle(id)
-    if (pendingRetryDocs.get(id) !== undefined) {
+    if (pendingRetryDocOf(id) !== undefined) {
       console.warn(
         '[projectStore] 示例存在待重试的更新保存，跳过本次升级回写',
         id,
       )
       return false
     }
-    const chainBefore = saveChains.get(id)
+    const chainBefore = saveChainTokenOf(id)
     const file = await invoke<unknown>('load_project', { id })
     const invalidAssetKeys = await invoke<string[]>('verify_project_assets', {
       id,
@@ -143,7 +144,7 @@ async function tryUpgradeSample(id: string): Promise<boolean> {
       invalidAssetKeys,
     })
     if (!(migrated || repaired)) return false
-    if (saveChains.get(id) !== chainBefore) {
+    if (saveChainTokenOf(id) !== chainBefore) {
       console.warn(
         '[projectStore] 示例升级窗口内出现新的保存/删除排队，跳过本次回写（下次列表/打开重查）',
         id,
@@ -227,18 +228,19 @@ export async function tauriLoad(id: string): Promise<ProjectContent> {
   // 重启到循环顶（等待新链落定；失败登记由登记段接管），保证「读到即最新」
   for (;;) {
     await waitForSaveChainIdle(id)
-    const pending = pendingRetryDocs.get(id)
+    const pending = pendingRetryDocOf(id)
     if (pending !== undefined) {
       const invalid = await invoke<string[]>('verify_project_assets', {
         id,
         assets: pending.assets ?? {},
       })
-      if (pendingRetryDocs.get(id) !== pending) continue
       const verified = memoryNormalize(pending, id, invalid)
-      pendingRetryDocs.set(id, verified)
+      // 复验的 await 期间登记可能被更新保存清除/取代（重试成功、新失败）：
+      // 条件替换仍用对象同一性——失败即放弃本轮，按当前保存状态整体重来
+      if (!replacePendingRetryDoc(id, pending, verified)) continue
       return verified
     }
-    const chainBefore = saveChains.get(id)
+    const chainBefore = saveChainTokenOf(id)
     const file = await invoke<unknown>('load_project', { id })
     // §7.1/§10.5 加载侧资产实路径复验：Rust 以受信资产根 no-follow 验证
     // （前端无法访问文件系统），不可验证键交归一化层隔离、引用位标记悬空
@@ -247,7 +249,7 @@ export async function tauriLoad(id: string): Promise<ProjectContent> {
       id,
       assets: (file as { assets?: unknown }).assets ?? {},
     })
-    if (saveChains.get(id) !== chainBefore) continue
+    if (saveChainTokenOf(id) !== chainBefore) continue
     // §11 归一化管线：迁移 + 孤儿边隔离 + 悬空引用标记；
     // projectId 为路径给定的受信 id，供 §11.1 元数据修复覆盖 project.id
     const { content, migrated, repaired, warnings, reissuedAssetAliases } =
@@ -258,7 +260,7 @@ export async function tauriLoad(id: string): Promise<ProjectContent> {
     // 顶部链身份检查已失效，此刻修复回写会把旧内容排在较新保存之后反向
     // 覆盖用户编辑——链身份变化即重启到循环顶（评审修复 P2-6，与读盘
     // 段守卫同款语义；别名登记幂等，重来无副作用）
-    if (saveChains.get(id) !== chainBefore) continue
+    if (saveChainTokenOf(id) !== chainBefore) continue
     // 迁移或修复发生则写回磁盘（下次打开不再迁移/重复修复）。v1 的可修复
     // 脏数据（空白/重复 id 等）只修在内存时，用户只开不编辑（防抖保存跳过
     // 首帧）会让脏文件长留磁盘，每次打开都重新生成不同的"稳定" id——修复
