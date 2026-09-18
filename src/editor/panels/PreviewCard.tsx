@@ -90,6 +90,8 @@ interface PreviewCardProps {
   readonly onDismiss: () => void
 }
 
+/** AI 改动预览卡（§6）：整批条目的图标化清单 + 确认/忽略动作；
+ * 删除类置顶与「执行须先确认」的武装语义由父级状态驱动。 */
 export function PreviewCard({
   v,
   status,

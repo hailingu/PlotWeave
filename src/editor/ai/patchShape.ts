@@ -14,6 +14,8 @@ import { textBudgetIssue } from './textBudget'
  * 加载归一化来不及兜底）与列表项的入站归一化（旧契约形态升级 + 稳定 id）。
  */
 
+/** 普通对象判别：排除 null 与数组——AI 入站的字段对象必须逐键校验，
+ * 数组/标量冒充字段对象会被白名单检查误解为「无未知键」而放行。 */
 export function plainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
 }

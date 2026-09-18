@@ -139,10 +139,15 @@ export interface ImageNodeData extends Record<string, unknown> {
 /** 各节点形态的 React Flow 别名：为 useNodesState 等泛型上下文钉住
  * Node<Data, Type> 的精确组合，避免在各消费点重复展开联合。 */
 export type SceneFlowNode = Node<SceneNodeData, 'scene'>
+/** 对白节点的 React Flow 别名（组语义见上方共享注释）。 */
 export type DialogueFlowNode = Node<DialogueNodeData, 'dialogue'>
+/** 节拍节点的 React Flow 别名（同上）。 */
 export type BeatFlowNode = Node<BeatNodeData, 'beat'>
+/** 分支节点的 React Flow 别名（同上）。 */
 export type BranchFlowNode = Node<BranchNodeData, 'branch'>
+/** 分镜卡节点的 React Flow 别名（同上）。 */
 export type ShotFlowNode = Node<ShotNodeData, 'shot'>
+/** 图片节点的 React Flow 别名（同上）。 */
 export type ImageFlowNode = Node<ImageNodeData, 'image'>
 
 /** 落盘 meta 时间戳透传（§4.1 演进占位字段）：编辑器不维护也不展示，

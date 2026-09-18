@@ -8,6 +8,8 @@ import { CREATE_LABELS, CREATABLE_TYPES, type CreatableType } from './creatable'
 import { EditableName } from './nodes/settings/NodeSettingsPanel'
 import type { RightTab } from './panels/RightPanel'
 
+/** 标题栏输入（语义见模块头，§3.3）：左/中/右三区的展示值与动作回调，
+ * 全部状态由 EditorWindow 持有。 */
 export interface EditorTitlebarProps {
   /** 项目名（中区展示 + 单击重命名）。 */
   readonly projectName: string
@@ -131,6 +133,7 @@ function PlusNodeMenu(
   )
 }
 
+/** 编辑器标题栏（§3.3）：纯展示组件，整行为窗口拖拽区（按钮除外）。 */
 export function EditorTitlebar({
   projectName,
   onRenameProject,

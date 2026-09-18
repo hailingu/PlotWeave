@@ -63,6 +63,8 @@ function resolveOutlineMove(
   return { plan, targetEpisode, oldEpisode, episodeChanged }
 }
 
+/** 大纲拖拽排序 hook（§3.5：拖拽 = 重排 sequence 边 + 改集归属）：
+ * 返回大纲行的拖放处理器；落点规划与连线改写计划见实现内分段注释。 */
 export function useOutlineDrop(deps: OutlineDropDeps) {
   const {
     nodesRef,

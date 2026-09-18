@@ -112,6 +112,8 @@ function SceneNoField({
   )
 }
 
+/** 场景节点的设置表单（§4.3：名称/场次/地点/时间/内外景/天气/梗概/
+ * 出场角色）：编辑即命令，组合输入安全由 useCompositionSafeValue 承担。 */
 export function SceneForm({
   node,
   settings,

@@ -16,6 +16,8 @@ interface SegmentedControlProps<T extends string> {
   readonly onChange: (value: T) => void
 }
 
+/** macOS 风格分段控件（语义见模块头）：纯展示结构组件，选中态由父组件
+ * 持有；原生 fieldset 承载分组语义。 */
 export function SegmentedControl<T extends string>({
   groupLabel,
   options,

@@ -23,6 +23,8 @@ export interface ImageGenApi {
   cancel: (nodeId: string) => void
 }
 
+/** 图像生成调度的上下文对象；消费一律经 useImageJobs（越界即抛错），
+ * 不直接读本对象。 */
 export const ImageGenContext = createContext<ImageGenApi | null>(null)
 
 /** 图片节点/表单内取生成调度能力；必须在 ImageGenProvider 内使用。 */

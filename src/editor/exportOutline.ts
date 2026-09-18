@@ -22,6 +22,8 @@ import type { BranchFlowNode, CanvasNode } from './nodes/types'
 /** 大纲行的语义分类：节点行 / 分支问句行 / 选项去向行 / 组内分段标题。 */
 export type ExportOutlineRowKind = 'node' | 'branch' | 'option' | 'marker'
 
+/** 导出大纲的结构化行：语义分类 + 缩进层级 + 纯文本（Markdown 项目
+ * 符号与缩进由渲染层生成，本结构不含）。 */
 export interface ExportOutlineRow {
   /** 行的语义类别：渲染层据此决定样式，也便于单独断言某类行。 */
   kind: ExportOutlineRowKind

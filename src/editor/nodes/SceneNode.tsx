@@ -52,6 +52,8 @@ function CharacterAvatarStrip({
   )
 }
 
+/** 场景索引卡（§4.3）：卡片头（场号 + 可改名标题）、设定摘要与底部
+ * shots 端口（attach 下挂分镜卡，§4.4）；设置面板锚定展开。 */
 export function SceneNode({ id, data, selected }: NodeProps<SceneFlowNode>) {
   const { openSettingsId, toggleSettings, patchNode, shotCountOf, settings } =
     useNodeEdit()

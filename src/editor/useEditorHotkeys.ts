@@ -27,6 +27,8 @@ export interface EditorHotkeyActions {
   onDeleteEdges: (ids: string[]) => void
 }
 
+/** 编辑器全局快捷键 hook（撤销/重做/删除等）：监听只挂一次，动作经
+ * ref 读取最新实现；输入焦点与弹窗态的抑制规则在实现内。 */
 export function useEditorHotkeys(actions: EditorHotkeyActions): void {
   // 动作经 ref 读取：监听只挂一次，动作实现随渲染更新（等价于原 deps 重挂）。
   const ref = useRef(actions)

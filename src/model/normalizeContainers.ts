@@ -549,6 +549,8 @@ function resolveRawContainers(
   }
 }
 
+/** 容器级形状校验与文档装配入口（语义见模块头，§11.1 第 2 步）：
+ * 返回最终 ProjectDocument 与逐项规则所需的 id 重发映射。 */
 export function normalizeContainers(
   raw: Record<string, unknown>,
   env: NormalizeEnv,

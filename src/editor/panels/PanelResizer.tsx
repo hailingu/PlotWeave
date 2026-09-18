@@ -15,9 +15,13 @@ interface PanelResizerProps {
   readonly startWidth: number
 }
 
+/** 面板宽度下限（pt，§3.4）。 */
 export const PANEL_WIDTH_MIN = 220
+/** 面板宽度上限（pt，§3.4）。 */
 export const PANEL_WIDTH_MAX = 320
 
+/** 面板拖拽调宽手柄（语义见模块头）：只负责指针手势，宽度钳制与回调
+ * 由父组件持有。 */
 export function PanelResizer({
   direction,
   onResize,

@@ -34,6 +34,8 @@ export interface CanvasDropDeps extends LibraryAssetDropDeps {
   screenToFlowPosition: (pos: { x: number; y: number }) => XYPosition
 }
 
+/** 画布拖放 hook（语义见模块头，§5/§7.3）：返回 onDragOver/onDrop 处理器，
+ * 设定集实体与资产库条目两类载荷在此分流。 */
 export function useCanvasDrop(deps: CanvasDropDeps) {
   const { nodesRef, patchNode, createNode, screenToFlowPosition } = deps
   const dropLibraryAsset = useLibraryAssetDrop(deps)

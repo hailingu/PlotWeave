@@ -8,6 +8,9 @@
 import type { ProviderConfig } from '../../settings/types'
 import type { ToolSpec } from './tools'
 
+/** OpenAI 兼容对话消息（模块头：经 Rust llm_chat 代理的非流式通道）：
+ * 覆盖 system/user/assistant/tool 四种角色，tool 回喂与 tool_calls 透传
+ * 字段按 tool-calling 循环需要保留。 */
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool'
   content: string
@@ -17,6 +20,8 @@ export interface ChatMessage {
   tool_calls?: unknown
 }
 
+/** llmChat 的返回形态：assistant 原文（content 可空 + 可选 tool_calls），
+ * 写调用映射与读调用回喂都由上层循环消费。 */
 export interface AssistantMessage {
   role: 'assistant'
   content: string | null

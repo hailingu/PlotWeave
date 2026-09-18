@@ -184,6 +184,8 @@ export interface PreviewItem {
   key: string
 }
 
+/** 批次校验问题：index 指向来源命令（0 基），批次级整体错误用
+ * BATCH_LEVEL_ISSUE_INDEX 哨兵；人读文案经 batchIssueText 生成。 */
 export interface BatchIssue {
   /** 所属命令序号（0 基）；BATCH_LEVEL_ISSUE_INDEX（-1）= 批次级整体
    * 错误（如「批次不是命令数组」），不属于任何一条命令、不编「第 N 条」。 */
@@ -203,6 +205,8 @@ export function batchIssueText(issue: BatchIssue): string {
     : `第 ${issue.index + 1} 条：${issue.message}`
 }
 
+/** 批次校验结果（§6/§12）：ok=false 时 commands 恒为空（原子性），
+ * issues 供回喂模型纠错；预览条目与待执行命令同源于一次折叠。 */
 export interface BatchValidation {
   /** false = 整批拒绝（原子性：不允许只执行一半）。 */
   ok: boolean

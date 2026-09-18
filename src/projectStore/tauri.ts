@@ -168,6 +168,8 @@ async function tryUpgradeSample(id: string): Promise<boolean> {
   }
 }
 
+/** 项目列表门面：空库先播种、已知示例先升级回写（回写后重列以返回
+ * 净本摘要）；损坏条目以占位摘要进列表（toSummary）。 */
 export async function tauriList(): Promise<ProjectSummary[]> {
   const { invoke } = await import('@tauri-apps/api/core')
   // 回写改写了名称/统计并盖戳 updatedAt：metas 是写前快照，直接返回会让
@@ -192,6 +194,7 @@ export async function tauriList(): Promise<ProjectSummary[]> {
   }
 }
 
+/** 新建项目门面：委托 Rust create_project（空文档落盘）并返回摘要。 */
 export async function tauriCreate(name: string): Promise<ProjectSummary> {
   const { invoke } = await import('@tauri-apps/api/core')
   return toSummary(
@@ -231,6 +234,9 @@ async function verifiedPendingRetryDoc(
   return verified
 }
 
+/** 项目加载门面：「读到即最新」——单循环三段（链静止 → 失败登记复验
+ * 优先交付 → 磁盘读取带链身份守卫），段内窗口期出现新写入即回到循环顶；
+ * 迁移/修复写回走保存链，失败由重试登记接管（详见循环上方分段注释）。 */
 export async function tauriLoad(id: string): Promise<ProjectContent> {
   const { invoke } = await import('@tauri-apps/api/core')
   // 单循环三段：链静止 → 失败登记复验（优先）→ 磁盘读取（链身份守卫）。

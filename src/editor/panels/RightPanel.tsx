@@ -293,6 +293,8 @@ function AiPane({
   )
 }
 
+/** 右侧面板（§3.4：检查器 / ✦AI 分段）：检查器显示选中节点的只读摘要，
+ * AI 页承载会话；宽度经 PanelResizer 调整。 */
 export function RightPanel(props: RightPanelProps) {
   const selectedNode = props.selectedNode
   const rows = selectedNode

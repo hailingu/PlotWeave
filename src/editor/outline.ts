@@ -63,6 +63,7 @@ export function beatFulfillmentMap(
   return map
 }
 
+/** 大纲分组（§3.5）：一集一组，未分集殿底；rows 为该集的缩进树行。 */
 export interface OutlineGroup {
   /** 集号；null = 未分集（组排在最后）。 */
   episode: number | null

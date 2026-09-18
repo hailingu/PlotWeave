@@ -48,6 +48,8 @@ export interface ProjectSettings {
   documents?: DocumentEntity[]
 }
 
+/** 空设定集常量：新建项目与无设定快照的缺省值；消费方不得就地进行
+ * 数组改写（共享引用）。 */
 export const EMPTY_SETTINGS: ProjectSettings = { characters: [], locations: [] }
 
 /** 新增角色/地点的默认头像渐变调色板（轮转取用）。 */

@@ -7,6 +7,8 @@ import { SAMPLE_SETTINGS } from '../editor/sampleData'
 import type { ProjectContent } from '../model/content'
 import type { ProjectSummary } from '../home/projects'
 
+/** 种子示例项目清单（语义见模块头：首启/空库播种与内存回退共用）：
+ * 返回 meta + doc 对，供播种路径按 no-replace 语义写入。 */
 export function seedProjects(): {
   meta: ProjectSummary
   doc: ProjectContent

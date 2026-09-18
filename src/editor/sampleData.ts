@@ -8,11 +8,17 @@ import type { ProjectSettings } from './settings'
 
 /** 种子设定集：两位角色 + 三个地点。 */
 export const LIN_WAN_ID = 'ch-linwan'
+/** 种子角色「陈默」的实体 id（示例画布与设定集引用同名同源）。 */
 export const CHEN_MO_ID = 'ch-chenmo'
+/** 种子地点「天台」的实体 id。 */
 export const LOC_ROOFTOP_ID = 'loc-tiantai'
+/** 种子地点「旧公寓」的实体 id。 */
 export const LOC_APARTMENT_ID = 'loc-jiugongyu'
+/** 种子地点「车站」的实体 id。 */
 export const LOC_STATION_ID = 'loc-chezhan'
 
+/** 种子设定集内容（两角色 + 三地点）：随种子项目持久化，画布节点经
+ * 实体 id 引用（改名/删除全局联动，见模块头）。 */
 export const SAMPLE_SETTINGS: ProjectSettings = {
   characters: [
     {
@@ -43,6 +49,8 @@ export interface AssetCategory {
   count: number
 }
 
+/** 首页资产库六分类的占位展示数据（§8.1 演示内容，当前无消费方——
+ * 真实分类表以 libraryStore 的 LIBRARY_KINDS 为准）。 */
 export const ASSET_CATEGORIES: AssetCategory[] = [
   { kind: 'character', label: '角色设定', icon: '👤', count: 2 },
   { kind: 'location', label: '场景设定', icon: '🏞', count: 3 },

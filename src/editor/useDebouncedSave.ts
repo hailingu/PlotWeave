@@ -354,6 +354,8 @@ function useSaveFlush(
   return { flushSave, markDirty, flushOnUnmount, flushForExit }
 }
 
+/** 画布防抖落盘 hook（语义见模块头）：返回置脏回调；失败重试、卸载/
+ * 退出冲刷与跳过首帧的语义不变，错误经 onSaveResult 上浮。 */
 export function useDebouncedSave(
   doc: ProjectContent,
   onSave: (doc: ProjectContent) => void | Promise<void>,
