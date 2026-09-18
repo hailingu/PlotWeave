@@ -239,13 +239,13 @@ describe('tauriList 维护写：成功维护写不得清除更新的重试登记
     const { projectStore } = await load()
     // 用户保存失败：最新编辑登记为待重试（比磁盘新）
     await projectStore.save(SID, userDocOf(SID)).catch(() => undefined)
-    const { pendingRetryDocs } = await import('./projectStore/saveChain')
-    expect(pendingRetryDocs.get(SID)?.name).toBe('用户编辑')
+    const { pendingRetryDocOf } = await import('./projectStore/saveChain')
+    expect(pendingRetryDocOf(SID)?.name).toBe('用户编辑')
     const list = await projectStore.list()
     // 红（旧实现）：升级以旧盘内容成功回写，成功保存按契约清除登记——
     // 用户最新编辑被永久丢弃（saveCalls 变 2、登记消失）
     expect(saveCalls).toBe(1)
-    expect(pendingRetryDocs.get(SID)?.name).toBe('用户编辑')
+    expect(pendingRetryDocOf(SID)?.name).toBe('用户编辑')
     expect(list.map((x) => x.id)).toEqual([SID])
   })
 
@@ -267,13 +267,13 @@ describe('tauriList 维护写：成功维护写不得清除更新的重试登记
     const { projectStore } = await load()
     // 示例文件已丢失且其用户保存失败：最新编辑登记重试（比磁盘/空目录新）
     await projectStore.save(SID, userDocOf(SID)).catch(() => undefined)
-    const { pendingRetryDocs } = await import('./projectStore/saveChain')
-    expect(pendingRetryDocs.get(SID)?.name).toBe('用户编辑')
+    const { pendingRetryDocOf } = await import('./projectStore/saveChain')
+    expect(pendingRetryDocOf(SID)?.name).toBe('用户编辑')
     const list = await projectStore.list()
     // 红（旧实现）：种子写在登记之后成功落盘并清除登记——用户编辑被
     // 永久丢弃；修复后种子跳过（留待链重试重建文件），另一示例正常播种
     expect(savesOf(SID)).toHaveLength(1)
-    expect(pendingRetryDocs.get(SID)?.name).toBe('用户编辑')
+    expect(pendingRetryDocOf(SID)?.name).toBe('用户编辑')
     expect(savesOf('sample-du-shi-qi-yuan').length).toBeGreaterThan(0)
     expect(list.map((x) => x.id)).toEqual(['sample-du-shi-qi-yuan'])
   })
