@@ -65,6 +65,45 @@ function RefThumb({
   )
 }
 
+/** 引用位只解析资产桶自有条目；缺失/异型 MIME 局部警告并保留原引用，
+ * 不把单条脏数据扩大为整卡渲染失败（issue #130）。 */
+function RefChip({
+  reference,
+}: {
+  readonly reference: ShotFlowNode['data']['refs'][number]
+}) {
+  const { projectId, assets } = useNodeEdit()
+  const asset =
+    reference.assetId !== undefined &&
+    assets?.byId !== undefined &&
+    Object.prototype.hasOwnProperty.call(assets.byId, reference.assetId)
+      ? assets.byId[reference.assetId]
+      : undefined
+  const usableAsset = typeof asset?.mime === 'string' ? asset : undefined
+  const unavailableReason = asset === undefined ? '缺失' : '不可用'
+
+  return (
+    <span className="pw-shot-ref">
+      {reference.assetId !== undefined && usableAsset === undefined && (
+        <span
+          className="pw-shot-ref-broken"
+          title={`引用资产${unavailableReason}（${reference.assetId}）`}
+        >
+          ⚠
+        </span>
+      )}
+      {usableAsset?.mime.startsWith('image/') && (
+        <RefThumb
+          key={usableAsset.id}
+          projectId={projectId}
+          asset={usableAsset}
+        />
+      )}
+      {REF_ICONS[reference.kind]} {reference.label ?? reference.assetId ?? ''}
+    </span>
+  )
+}
+
 /**
  * 分镜卡 = 监视器卡（docs/ui-design.md §4.2，生成侧深色石板，双外观恒定）。
  * 一张卡 = 一个镜头及其 AI 燃料：镜号 + 景别标题行（常驻 ⚙️）、
@@ -73,13 +112,8 @@ function RefThumb({
  * ⚙️ 打开设置面板（§4.3，编辑即命令）；镜号标题行不设内联改名。
  */
 export function ShotNode({ id, data, selected }: NodeProps<ShotFlowNode>) {
-  const { projectId, openSettingsId, toggleSettings, assets } = useNodeEdit()
+  const { openSettingsId, toggleSettings } = useNodeEdit()
   const settingsOpen = openSettingsId === id
-
-  /** 引用位显示名（§8.1）：自由位显示手填文案；引用位回退 assetId 供辨认
-   *（image/* 资产另渲染缩略图）。 */
-  const refText = (ref: ShotFlowNode['data']['refs'][number]): string =>
-    ref.label ?? ref.assetId ?? ''
 
   return (
     <div className={`pw-shot${selected ? ' pw-on' : ''}`}>
@@ -101,18 +135,9 @@ export function ShotNode({ id, data, selected }: NodeProps<ShotFlowNode>) {
         {data.prompt}
       </div>
       <div className="pw-shot-refs">
-        {data.refs.map((ref) => {
-          const asset =
-            ref.assetId !== undefined ? assets?.byId?.[ref.assetId] : undefined
-          return (
-            <span key={ref.id} className="pw-shot-ref">
-              {asset !== undefined && asset.mime.startsWith('image/') && (
-                <RefThumb key={asset.id} projectId={projectId} asset={asset} />
-              )}
-              {REF_ICONS[ref.kind]} {refText(ref)}
-            </span>
-          )
-        })}
+        {data.refs.map((ref) => (
+          <RefChip key={ref.id} reference={ref} />
+        ))}
         <span className="pw-shot-ref pw-shot-ref-add" aria-hidden>
           ＋ 引用
         </span>

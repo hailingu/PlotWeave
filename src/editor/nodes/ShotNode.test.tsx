@@ -147,6 +147,7 @@ const refAsset = (id: string): AssetRef => ({
 function renderShotWithRef(
   assetId: string,
   byId: Record<string, AssetRef> = { 'pa-1': refAsset('pa-1') },
+  kind: ShotFlowNode['data']['refs'][number]['kind'] = 'character',
 ) {
   const api: NodeEditApi = {
     projectId: 'p-1',
@@ -169,7 +170,7 @@ function renderShotWithRef(
         size: '特写',
         picture: '画面',
         prompt: 'prompt',
-        refs: [{ id: 'r4', kind: 'character' as const, assetId: id }],
+        refs: [{ id: 'r4', kind, assetId: id }],
       },
       selected: false,
     }) as unknown as NodeProps<ShotFlowNode>
@@ -189,6 +190,104 @@ function renderShotWithRef(
     },
   }
 }
+
+describe('分镜引用资产读取边界（issue #130）', () => {
+  beforeEach(() => {
+    vi.mocked(projectAssets.mediaUrl)
+      .mockReset()
+      .mockResolvedValue('asset://valid')
+  })
+
+  // 去掉自有属性检查会把原型成员当资产；普通缺失也必须留下可定位占位。
+  it.each(['constructor', 'toString', '__proto__', 'missing'])(
+    '非自有资产 %s 保留引用并显示局部缺失警告',
+    (assetId) => {
+      renderShotWithRef(assetId, {})
+      expect(screen.getByTitle(`引用资产缺失（${assetId}）`)).toBeTruthy()
+      expect(screen.getByText(`👤 ${assetId}`, { exact: false })).toBeTruthy()
+      expect(screen.getByText('SHOT 03')).toBeTruthy()
+      expect(screen.queryByRole('img')).toBeNull()
+    },
+  )
+
+  // 绕过加载校验构造脏会话条目；缺少 MIME 类型防护会在 startsWith 抛错。
+  it.each([null, { mime: undefined }, { mime: null }, { mime: 7 }])(
+    '异型资产 %j 回退带资产 ID 的不可用警告',
+    (malformed) => {
+      const asset = (malformed && {
+        ...refAsset('bad'),
+        ...malformed,
+      }) as unknown as AssetRef
+      renderShotWithRef('bad', { bad: asset })
+      expect(screen.getByTitle('引用资产不可用（bad）')).toBeTruthy()
+      expect(screen.getByText('SHOT 03')).toBeTruthy()
+      expect(screen.queryByRole('img')).toBeNull()
+    },
+  )
+
+  it.each(['constructor', 'toString', '__proto__'])(
+    '特殊键 %s 是自有合法图片时仍显示缩略图',
+    async (assetId) => {
+      renderShotWithRef(assetId, { [assetId]: refAsset(assetId) })
+      const img = await screen.findByRole('img')
+      expect(img.getAttribute('src')).toBe('asset://valid')
+      expect(img.getAttribute('alt')).toBe(`assets/${assetId}.png`)
+      expect(screen.queryByTitle(/引用资产/)).toBeNull()
+    },
+  )
+
+  it('合法音频引用保留图标与 ID，无图片或错误占位', () => {
+    renderShotWithRef(
+      'audio',
+      { audio: { ...refAsset('audio'), mime: 'audio/mpeg' } },
+      'audio',
+    )
+    expect(screen.getByText('🎵 audio')).toBeTruthy()
+    expect(screen.queryByRole('img')).toBeNull()
+    expect(screen.queryByTitle(/引用资产/)).toBeNull()
+  })
+})
+
+describe('分镜坏引用的隔离与恢复（issue #130）', () => {
+  beforeEach(() => {
+    vi.mocked(projectAssets.mediaUrl)
+      .mockReset()
+      .mockResolvedValue('asset://valid')
+  })
+
+  it('坏引用不会阻断同卡片的合法图片引用', async () => {
+    setup(null, [
+      { id: 'bad', kind: 'character', assetId: 'constructor' },
+      { id: 'good', kind: 'location', assetId: 'pa-1' },
+    ])
+    expect(screen.getByTitle('引用资产缺失（constructor）')).toBeTruthy()
+    expect((await screen.findByRole('img')).getAttribute('src')).toBe(
+      'asset://valid',
+    )
+  })
+
+  it.each([
+    { byId: {}, title: '引用资产缺失（pa-1）' },
+    {
+      byId: { 'pa-1': { ...refAsset('pa-1'), mime: null } },
+      title: '引用资产不可用（pa-1）',
+    },
+  ])('资产失效并恢复：$title 清旧图且保留引用', async ({ byId, title }) => {
+    const { rerender } = renderShotWithRef('pa-1')
+    await screen.findByRole('img')
+    // JSON/会话脏数据绕过类型边界，渲染必须局部降级。
+    rerender('pa-1', byId as unknown as Record<string, AssetRef>)
+    expect(screen.queryByRole('img')).toBeNull()
+    expect(screen.getByTitle(title)).toBeTruthy()
+    expect(screen.getByText(/👤 pa-1/)).toBeTruthy()
+
+    rerender('pa-1', { 'pa-1': refAsset('pa-1') })
+    expect((await screen.findByRole('img')).getAttribute('src')).toBe(
+      'asset://valid',
+    )
+    expect(screen.queryByTitle(/引用资产/)).toBeNull()
+  })
+})
 
 describe('RefThumb 引用位缩略图生命周期（issue #131）', () => {
   beforeEach(() => {
