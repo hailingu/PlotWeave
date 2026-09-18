@@ -111,7 +111,7 @@ pub(crate) fn recover(library: &CapDir) -> Result<Recovery, LibraryError> {
     let index_warnings = normalized.warnings;
     let migrated = normalized.migrated;
     let mut recovery = Recovery::default();
-    let (entries, malformed) = read_journal(library, &mut recovery.warnings);
+    let (mut entries, malformed) = read_journal(library, &mut recovery.warnings);
     if malformed {
         recovery.read_only = true;
         // 只读态诊断与实际行为一致（评审修复，PR #33 第十三轮）：journal 异型
@@ -121,6 +121,9 @@ pub(crate) fn recover(library: &CapDir) -> Result<Recovery, LibraryError> {
         return Ok(recovery);
     }
     recovery.warnings.extend(index_warnings);
+    if normalized.damaged {
+        hold_uncertain_deletions(library, &index, &mut entries)?;
+    }
     // 日志非异型：此刻才允许把索引迁移/修复原子落盘（重发 id 跨读稳定）
     if migrated {
         crate::library_fs::write_index(library, &index)?;
@@ -148,6 +151,25 @@ pub(crate) fn recover(library: &CapDir) -> Result<Recovery, LibraryError> {
     Ok(recovery)
 }
 
+/// 在任何索引修复/媒体操作之前耐久标记无法判定的事务，防修复后误删媒体。
+fn hold_uncertain_deletions(
+    library: &CapDir,
+    index: &Value,
+    entries: &mut [JournalEntry],
+) -> Result<(), LibraryError> {
+    let mut changed = false;
+    for entry in entries.iter_mut() {
+        if index["assets"]["byId"].get(&entry.asset_id).is_none() && !entry.index_uncertain {
+            entry.index_uncertain = true;
+            changed = true;
+        }
+    }
+    if changed {
+        write_journal(library, entries)?;
+    }
+    Ok(())
+}
+
 /// 从当前日志状态移除事务条目（清理完成/未开始/回迁一致）。
 fn retire_entry(current: &mut Vec<JournalEntry>, entry: &JournalEntry) {
     current.retain(|e| e.id != entry.id);
@@ -163,6 +185,15 @@ fn recover_entry(
     current: &mut Vec<JournalEntry>,
     changed: &mut bool,
 ) -> Result<(), LibraryError> {
+    if entry.index_uncertain {
+        recovery.cleanup_pending.push(entry.trash_name.clone());
+        mark_conflict(
+            entry,
+            recovery,
+            "索引曾损坏，删除结果无法确认；媒体与日志保留待核对",
+        );
+        return Ok(());
+    }
     let refs = index_refs(index, entry);
     let trash = open_trash_dir(assets)?;
     // 共享引用须以身份复核为准（评审修复）：relPath 字符串相等但占用者

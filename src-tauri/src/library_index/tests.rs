@@ -23,7 +23,7 @@ fn record_shape_passes_through_unchanged() {
 
 #[test]
 fn non_object_root_is_rejected_shape() {
-    // 调用方（read_index_capped）已拒绝非标量根；此处内核按空库收敛并告警
+    // #137：异型根按空视图收敛并告警，IO 层保留原件直到后续写入。
     let (out, warnings, _migrated) = migrate_and_normalize(json!([]));
     assert_eq!(out["assets"], json!({ "byId": {} }));
     assert_eq!(out["groups"], json!({ "byId": {} }));

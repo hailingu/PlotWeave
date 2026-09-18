@@ -149,13 +149,17 @@ fn check_same_fs(trash: &CapDir, identity: (u64, u64)) -> Result<(), LibraryErro
 
 /// 单条事务 → journal JSON 形状（write_journal 与上限投影共用）。
 pub(super) fn journal_entry_value(e: &JournalEntry) -> Value {
-    json!({
+    let mut value = json!({
         "id": e.id,
         "assetId": e.asset_id,
         "relPath": e.rel_path,
         "identity": { "dev": e.dev, "ino": e.ino },
         "trashName": e.trash_name,
-    })
+    });
+    if e.index_uncertain {
+        value["indexUncertain"] = json!(true);
+    }
+    value
 }
 
 /// 删除入口守卫：读取磁盘日志并检查追加投影大小（先于 recover，避免
@@ -198,6 +202,7 @@ fn record_delete_journal(
         dev: identity.0,
         ino: identity.1,
         trash_name: format!("{TRASH_DIR}/{txn}"),
+        index_uncertain: false,
     };
     let (mut entries, malformed) = read_journal(library, warnings);
     if malformed {

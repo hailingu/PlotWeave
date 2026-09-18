@@ -8,6 +8,7 @@
  */
 
 import { uid } from '../uid'
+import { publishLibraryWarnings } from './libraryDiagnostics'
 
 /** 资产库分类（§7）：索引条目的 kind 域；中文标签/图标见 LIBRARY_KINDS。 */
 export type LibraryKind =
@@ -104,10 +105,10 @@ function normalizeAsset(raw: RawAsset | null): LibraryAsset | null {
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
-/** 后端隔离/修复诊断统一进既有 console.warn 路径（issue #17）：list 与
- * 各变更命令的 warnings 清单逐条上报，被隔离条目不得静默消失或被
- * "落盘即净化"静默改写。 */
+/** 后端隔离/修复诊断同时进入日志与图库提示（#17/#137）：读取和变更
+ * 共用上报入口，跨挂载保留至用户关闭，不因后续干净响应抹掉修复信息。 */
 function reportLibraryWarnings(warnings: unknown): void {
+  publishLibraryWarnings(warnings)
   if (Array.isArray(warnings)) {
     for (const w of warnings) {
       if (typeof w === 'string' && w !== '')

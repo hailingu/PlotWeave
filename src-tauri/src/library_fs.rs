@@ -10,6 +10,7 @@ use std::io::Read;
 use cap_std::ambient_authority;
 use cap_std::fs::Dir as CapDir;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager};
 
 use crate::library::error::LibraryError;
@@ -185,6 +186,8 @@ pub(crate) struct NormalizedIndex {
     pub(crate) migrated: bool,
     /// 迁移挂起：迁移产物超限，本次仅内存只读视图（写路径拒绝）。
     pub(crate) suspended: bool,
+    /// 原始字节损坏：只提供稳定的局部视图，等待用户写入时备份并替换。
+    pub(crate) damaged: bool,
 }
 
 /// 索引受限读取（library.rs 命令面与 assets.rs 导入路径的**唯一**索引读
@@ -217,21 +220,29 @@ pub(crate) fn read_index_capped(
 /// （实际行为是隔离）、置 suspended 供写路径拒绝；否则迁移落盘失败会把
 /// 「可读的旧索引」升级成全库命令死锁，放行写回又会让无关变更永久抹掉
 /// 被隔离条目。
+/// #137：语法/编码或根形状损坏只交付稳定的局部视图，不在读取时覆盖原件；
+/// 后续写入由 write_index 先备份原始字节，再原子保存可用条目。
 pub(crate) fn read_index_normalized(library: &CapDir) -> Result<NormalizedIndex, LibraryError> {
-    match read_index_text_capped(library)? {
+    match read_index_bytes_capped(library)? {
         None => Ok(NormalizedIndex {
             index: default_index(),
             warnings: Vec::new(),
             migrated: false,
             suspended: false,
+            damaged: false,
         }),
-        Some(text) => {
-            let index: Value = serde_json::from_str(&text).map_err(LibraryError::CorruptIndex)?;
-            // 非对象根（标量/数组）显式拒绝：字符串索引在非对象根上 panic
-            // 会把脏数据放大成全部库命令不可用（评审修复）
-            if !index.is_object() {
-                return Err(LibraryError::Corrupt {
-                    detail: "资产索引根必须是对象".into(),
+        Some(bytes) => {
+            let (index, mut warnings, damaged) = crate::library_index::parse_index(&bytes);
+            if damaged {
+                let (index, repairs, _) =
+                    crate::library_index::migrate_and_normalize_readonly(index);
+                warnings.extend(repairs);
+                return Ok(NormalizedIndex {
+                    index,
+                    warnings,
+                    migrated: false,
+                    suspended: false,
+                    damaged,
                 });
             }
             // 规范化表示同上限（评审修复）：原始字节达标但解析后规范化表示
@@ -265,6 +276,7 @@ pub(crate) fn read_index_normalized(library: &CapDir) -> Result<NormalizedIndex,
                     warnings,
                     migrated: false,
                     suspended: true,
+                    damaged: false,
                 });
             }
             Ok(NormalizedIndex {
@@ -272,6 +284,7 @@ pub(crate) fn read_index_normalized(library: &CapDir) -> Result<NormalizedIndex,
                 warnings: writable_warnings,
                 migrated,
                 suspended: false,
+                damaged: false,
             })
         }
     }
@@ -284,15 +297,10 @@ pub(crate) fn read_index_normalized(library: &CapDir) -> Result<NormalizedIndex,
 pub(crate) fn read_index_normalized_readonly(
     library: &CapDir,
 ) -> Result<(Value, Vec<String>), LibraryError> {
-    match read_index_text_capped(library)? {
+    match read_index_bytes_capped(library)? {
         None => Ok((default_index(), Vec::new())),
-        Some(text) => {
-            let index: Value = serde_json::from_str(&text).map_err(LibraryError::CorruptIndex)?;
-            if !index.is_object() {
-                return Err(LibraryError::Corrupt {
-                    detail: "资产索引根必须是对象".into(),
-                });
-            }
+        Some(bytes) => {
+            let (index, mut warnings, _) = crate::library_index::parse_index(&bytes);
             if normalized_len(&index)? > INDEX_MAX_BYTES {
                 return Err(LibraryError::Limit {
                     detail: format!(
@@ -301,16 +309,17 @@ pub(crate) fn read_index_normalized_readonly(
                     ),
                 });
             }
-            let (normalized, warnings, _) =
+            let (normalized, repairs, _) =
                 crate::library_index::migrate_and_normalize_readonly(index);
+            warnings.extend(repairs);
             Ok((normalized, warnings))
         }
     }
 }
 
-/// 索引文本受限读取：no-follow 归类（拒符号链接/异型）、总量上限内读取、
-/// 缺失返回 None（回退默认索引）。
-fn read_index_text_capped(library: &CapDir) -> Result<Option<String>, LibraryError> {
+/// 索引原字节受限读取：no-follow 归类、总量上限内读取；保留坏编码供局部
+/// 解析与写前备份，缺失返回 None（回退默认索引）。
+fn read_index_bytes_capped(library: &CapDir) -> Result<Option<Vec<u8>>, LibraryError> {
     let md = match library.symlink_metadata(INDEX_FILE_NAME) {
         Ok(md) => md,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -337,11 +346,7 @@ fn read_index_text_capped(library: &CapDir) -> Result<Option<String>, LibraryErr
             ),
         });
     }
-    String::from_utf8(bytes)
-        .map(Some)
-        .map_err(|_| LibraryError::Corrupt {
-            detail: "资产库索引不是合法 UTF-8".into(),
-        })
+    Ok(Some(bytes))
 }
 
 /// 索引规范化（紧凑）表示的字节长度：读取侧与写入侧的统一度量。
@@ -373,10 +378,87 @@ pub(crate) fn ensure_index_size(index: &Value) -> Result<(), LibraryError> {
 /// 原始字节、写侧量即将写出的同一紧凑表示，两侧同一编码闭环——超限索引
 /// 拒绝落盘，可读的索引永远可写回。调用方传入的索引应为净化后视图。
 pub(crate) fn write_index(library: &CapDir, index: &Value) -> Result<(), LibraryError> {
+    write_index_with(library, index, || Ok(()))
+}
+
+/// 校验/序列化与损坏原件备份先于媒体物化，媒体成功后才提交索引。
+/// 调用方持续持有库锁；物化失败不提交索引，最终提交失败沿用 §7.2 的
+/// 孤儿保留协议，不在提交结果可能不确定时删除媒体。
+pub(crate) fn write_index_with<F>(
+    library: &CapDir,
+    index: &Value,
+    materialize: F,
+) -> Result<(), LibraryError>
+where
+    F: FnOnce() -> Result<(), LibraryError>,
+{
     ensure_index_size(index)?;
     let text =
         serde_json::to_string(index).map_err(|e| LibraryError::serialize("序列化索引失败", e))?;
+    backup_damaged_index(library)?;
+    materialize()?;
     crate::store::atomic_write(library, INDEX_FILE_NAME, &text).map_err(LibraryError::from)
+}
+
+/// 按原字节摘要命名并复用耐久备份，失败重试不累计相同副本；备份异常阻止覆盖。
+fn backup_damaged_index(library: &CapDir) -> Result<(), LibraryError> {
+    let Some(bytes) = read_index_bytes_capped(library)? else {
+        return Ok(());
+    };
+    if serde_json::from_slice::<Value>(&bytes).is_ok_and(|value| value.is_object()) {
+        return Ok(());
+    }
+    let name = format!("library-corrupt-{:x}.bak", Sha256::digest(&bytes));
+    if reuse_durable_backup(library, &name, &bytes)? {
+        return Ok(());
+    }
+    atomic_write_with(library, &name, |file| {
+        std::io::Write::write_all(file, &bytes)
+    })
+}
+
+/// 摘要仅用于定位；复用前校验普通文件身份及完整字节，再同步文件和目录。
+/// 同名备份被修改或读取/同步失败时拒绝继续，既不覆盖证据也不忽略错误。
+fn reuse_durable_backup(library: &CapDir, name: &str, bytes: &[u8]) -> Result<bool, LibraryError> {
+    let md = match library.symlink_metadata(name) {
+        Ok(md) => md,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(LibraryError::io("读取索引备份元数据失败", error)),
+    };
+    if md.file_type().is_symlink() || !md.is_file() {
+        return Err(LibraryError::refused("索引备份不是普通文件，拒绝复用"));
+    }
+    if md.len() != bytes.len() as u64 {
+        return Err(LibraryError::refused("索引备份内容不符，保留原件待核对"));
+    }
+    let mut file = library
+        .open(name)
+        .map_err(|error| LibraryError::io("打开索引备份失败", error))?;
+    #[cfg(unix)]
+    {
+        let opened = file
+            .metadata()
+            .map_err(|error| LibraryError::io("读取索引备份句柄元数据失败", error))?;
+        if crate::store::asset_identity(&opened) != crate::store::asset_identity(&md) {
+            return Err(LibraryError::refused("索引备份在校验期间被替换"));
+        }
+    }
+    let mut stored = Vec::new();
+    (&mut file)
+        .take((bytes.len() + 1) as u64)
+        .read_to_end(&mut stored)
+        .map_err(|error| LibraryError::io("读取索引备份失败", error))?;
+    if stored != bytes {
+        return Err(LibraryError::refused("索引备份内容不符，保留原件待核对"));
+    }
+    file.sync_all()
+        .map_err(|error| LibraryError::io("同步索引备份失败", error))?;
+    #[cfg(unix)]
+    library
+        .open_dir(".")
+        .and_then(|dir| dir.into_std_file().sync_all())
+        .map_err(|error| LibraryError::io("同步索引备份目录失败", error))?;
+    Ok(true)
 }
 
 /// 同目录原子落盘内核（排他临时文件 + sync + rename + 父目录 fsync 持久性

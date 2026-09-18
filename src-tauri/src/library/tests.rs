@@ -326,16 +326,21 @@ fn read_index_missing_falls_back_to_default() {
     cleanup(&root);
 }
 
-/// 非对象根（标量/数组）显式拒绝而非 panic（评审修复：serde_json 字符串
-/// 索引在非对象根上 panic 会让全部库命令不可用）。
+/// #137：非对象根按损坏视图提示，原字节保留，后续导入可备份后替换。
 #[test]
-fn read_index_rejects_non_object_root() {
+fn read_index_preserves_non_object_root_with_warning() {
     let (library, root) = temp_fixture();
     for raw in ["[1,2,3]", "42", "\"text\""] {
         fs::write(library.join("library.json"), raw).expect("写非对象根索引");
-        let err =
-            crate::library_fs::read_index_capped(&cap(&library)).expect_err("非对象根应显式拒绝");
-        assert!(err.to_string().contains("对象"), "意外诊断：{err}");
+        let (index, warnings, suspended) =
+            crate::library_fs::read_index_capped(&cap(&library)).unwrap();
+        assert_eq!(index, crate::library_fs::default_index());
+        assert!(!warnings.is_empty());
+        assert!(!suspended);
+        assert_eq!(
+            fs::read_to_string(library.join("library.json")).unwrap(),
+            raw
+        );
     }
     cleanup(&root);
 }
