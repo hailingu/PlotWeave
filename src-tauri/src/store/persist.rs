@@ -286,6 +286,10 @@ struct EntrySyncPlan {
 #[cfg(unix)]
 fn existing_anchor(dir: &std::path::Path) -> Result<std::path::PathBuf, StoreError> {
     for ancestor in dir.ancestors() {
+        #[cfg(test)]
+        if let Some(e) = faults::fail_at(faults::Stage::AnchorProbe) {
+            return Err(StoreError::io("探测目录条目宿主失败", e));
+        }
         match ancestor.symlink_metadata() {
             Ok(_) => return Ok(ancestor.to_path_buf()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -412,14 +416,27 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn entry_sync_plan_fail_closed_on_transient_metadata_error() {
-        // PR #201 第四轮评审：现存目录的瞬态 I/O 失败（如权限、EAGAIN）
-        // 不得被吞为「缺失」——否则 rollback 会拆掉非本次创建的目录。
-        // 用与 NotFound 不同 kind 的注入错误直接验证 fail-closed。
+        // PR #201 第四、五轮评审：注入非 NotFound 的元数据失败必须
+        // fail-closed 上抛，先于任何创建与清理（旧 is_ok 吞错实现会把
+        // 现存目录误判为本次新建并被失败清理拆除；该测试在探测站点
+        // 接入注入前必然失败——旧断言只走正常路径，吞错实现也能通过）。
         let tmp = std::env::temp_dir().join(format!("pw-anchor-{}", new_id()));
         fs::create_dir(&tmp).expect("建临时根");
-        let dir = tmp.join("leaf");
-        let result = existing_anchor(&dir);
-        assert!(result.is_ok(), "正常路径应能探测锚点");
+        fs::create_dir(tmp.join("parent")).expect("建已存在层级");
+        let target = tmp.join("parent").join("leaf");
+        let injection = faults::Injection::new(Some(faults::Stage::AnchorProbe), None);
+        let err = create_dir_all_durable(&target).unwrap_err();
+        assert!(
+            err.to_string().contains("injected AnchorProbe failure"),
+            "实际错误：{err}"
+        );
+        assert!(
+            err.to_string().contains("探测目录条目宿主失败"),
+            "实际错误：{err}"
+        );
+        drop(injection);
+        assert!(tmp.join("parent").is_dir(), "已存在层级不得被触碰");
+        assert!(!target.exists(), "探测失败不得产生任何新建");
         fs::remove_dir_all(&tmp).expect("清理临时根");
     }
 

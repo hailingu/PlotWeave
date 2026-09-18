@@ -919,6 +919,8 @@ type GraphCommandOf<K extends CommandType> = Extract<GraphCommand, { type: K }>
 
 验证记录（2026-09-18，[PR #201](https://github.com/hailingu/PlotWeave/pull/201) 第四轮评审修复）：锚点探测 `existing_anchor` 改为 `NotFound` 视为缺失、其余 I/O 失败按 fail-closed 上抛（探测失败优先于任何回滚计划），消除「瞬态元数据错误使现存目录被误判为本次新建、进而被失败清理拆除」的窗口。`cargo test --lib prefs::save_tests` 17 项通过；320 项单元测试全绿。
 
+验证记录（2026-09-18，[PR #201](https://github.com/hailingu/PlotWeave/pull/201) 第五轮评审修复）：第四轮的 fail-closed 回归测试此前只走正常路径（`leaf` 缺失、`tmp` 父目录正常，旧 `is_ok` 吞错实现同样通过），未真正覆盖所声称分支。现经 `faults::fail_at(Stage::AnchorProbe)`（仅判定注入、不进入协议序记录）在探测站点注入非 NotFound 失败，`persist::tests::entry_sync_plan_fail_closed_on_transient_metadata_error` 在接入注入前红、接入后绿，断言错误上抛且无任何创建／清理副作用。
+
 ### 10.3 Provider 与模型配置
 
 BYOK 下 provider 分两层：**内置适配器在代码里，用户配置（含加密后的 API key）在 `settings.json`**。

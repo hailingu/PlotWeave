@@ -15,6 +15,8 @@ pub(crate) enum Stage {
     DirectorySync,
     #[cfg(unix)]
     EntrySync,
+    #[cfg(unix)]
+    AnchorProbe,
 }
 
 #[derive(Default)]
@@ -82,5 +84,18 @@ pub(super) fn temp_name(generated: String) -> String {
             .as_ref()
             .and_then(|state| state.temp_name.clone())
             .unwrap_or(generated)
+    })
+}
+
+/// 仅判定指定阶段的失败注入，不记录协议阶段：探测类辅助调用不属于
+/// §10.2 协议序，进入 `stages` 会污染顺序契约断言。
+pub(super) fn fail_at(stage: Stage) -> Option<io::Error> {
+    STATE.with(|slot| {
+        let slot = slot.borrow();
+        if matches!(slot.as_ref(), Some(state) if state.fail == Some(stage)) {
+            Some(io::Error::other(format!("injected {stage:?} failure")))
+        } else {
+            None
+        }
     })
 }
