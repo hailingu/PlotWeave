@@ -893,6 +893,34 @@ type GraphCommandOf<K extends CommandType> = Extract<GraphCommand, { type: K }>
 - 项目文档保存成功（含失败登记后的链上后台重试成功）即向前端发出落定通知（issue #101）：编辑器卸载冲刷/在途保存可以晚于返回首页的列表读取，首页摘要（名称、派生统计、更新时间/排序）靠该通知在导航读取之后再刷新一次，恢复到与磁盘一致；保存失败不发出通知，首页保持磁盘现状，不虚报新摘要。首页并发发起的多次列表读取按发起序收敛，较旧的响应不得覆盖较新的结果。
 - 首页列表的维护写与普通保存共用同一项目保存链（[issue #134](https://github.com/hailingu/PlotWeave/issues/134)，已实现）：空库播种先等该 id 在途保存落定再探测（在途链落定不改链身份、身份守卫看不见；等落定后探测，保存所建文件经「项目已存在」自然跳过），仅在 `load_project` 确证「项目不存在」后经链写入（no-replace 语义不变——文件存在含不可读一律跳过），探测窗口内目标示例的删除在途时种子写被删除墓碑吸收、不为删除中项目落盘，目标存在保存失败的重试登记（最新未落盘内容比磁盘/空目录新）或探测窗口内排入新写入（链身份变化，探测结果已过时）时同样跳过种子写——成功的种子写会清除登记或以硬编码内容覆盖窗口内写入，留待链重试交付；已知示例的旧格式迁移/修复回写先等该示例保存链静止再读盘，读盘/资产复验的 await 窗口内该示例排入新保存或删除（链身份变化）即跳过本次回写——迟到修复不得覆盖较新内容或复活已删对象，留待下次列表/打开重查；链上存在保存失败的重试登记（最新未落盘内容比磁盘新）同样跳过回写——成功保存会清除登记、永久丢弃该内容，留待链重试交付；回写失败由链登记重试并经落定通知刷新首页。
 
+#### 设置保存状态与不变量（issue #121）
+
+[issue #121](https://github.com/hailingu/PlotWeave/issues/121) 已实现：`save_prefs` 的设置层负责序列化、1 MiB 上限与应用数据根句柄，复用 `store::atomic_write` 完成控制文件替换及持久性屏障。数据目录的创建（设置读取与保存入口共用 `ensure_data_dir` 内核）经 `store::create_dir_all_durable` 持久化完成（[PR #201](https://github.com/hailingu/PlotWeave/pull/201) 三轮评审修订，Unix）：创建时刻探测最深已存在祖先，新建目录条目所在的各级宿主（自锚点至直接父目录）在写入任何内容前逐级 fsync——首启读取（`load_prefs`）与首次保存创建的条目均与内容同为持久。创建或同步失败时，内核尽力自深至浅拆除本次新建的层级（仅空目录可拆）后返回原错误，重试得以重新探测锚点、再做全链同步，而非退化为「目录已存在」的单级兜底。目录已存在时保存仍兜底同步其直接父目录一次（单级防御）。剩余边界：清理前来不及执行的崩溃／断电、清理不完整（并发写入占据层级）与并发调用方在创建与同步之间进入，均残留多级未同步状态并由下次调用的单级兜底承接——需要「多级新建 + 精确崩溃窗口 + 其后断电」三重叠加，按 P2 记录在案；store／library 侧创建入口尚未接入该助手，属已记录的后续事项。所有设置保存入口均经同一内核；不改变整份保存的 IPC 协议、设置读取失败策略或前端保存排序。旧 `settings.json.tmp` 占位无需删除，也不会被本次保存改写。
+
+| 前置状态 | 动作／时序 | 预期可观察结果 | 跨转换不变量及所有者 | 验证结果（`prefs::save_tests`） |
+| --- | --- | --- | --- | --- |
+| 首次保存或已有设置 | 保存合法 JSON，再读取 | 完整新设置可读，正常结束无临时文件 | 设置层：读写采用相同 1 MiB 字节上限；原子写层：目标不会成为半份 JSON | `save_creates_then_replaces_complete_settings`、`save_enforces_serialized_byte_limit_before_touching_files` 通过 |
+| 旧 `settings.json.tmp` 被文件、目录或符号链接占据 | 保存新设置 | 保存成功，占位条目及其指向的内容保持原状 | 原子写层：临时文件必须同目录随机排他创建，不借用或清理其他条目 | `save_ignores_legacy_temp_directory_and_file`、`save_does_not_follow_legacy_temp_symlink` 先红后绿 |
+| `settings.json` 是目录或符号链接 | 发起保存 | 拒绝并返回诊断，原条目及外部内容不变 | 原子写层：目标归类与改名前复核共用信任链 | `save_rejects_directory_target_without_leaving_temp_files`、`save_rejects_symlink_target_without_replacing_it` 先红后绿 |
+| 已有旧设置 | 创建、写入、文件同步或改名阶段失败，然后重试 | 失败上抛；改名前旧文件不变；本次临时文件尽力清理；重试可完成 | 原子写层：只有成功排他创建的临时文件归本次操作所有；未提交不得损坏旧设置 | `save_precommit_io_failures_preserve_old_settings_and_allow_retry`、`atomic_save_collision_does_not_remove_another_writers_temp_file` 先红后绿 |
+| 新文件已改名，父目录尚未同步 | 目录同步失败，然后重试 | 返回失败；完整新版可能已可见；重试成功 | 原子写层：耐久性未确认不得报告成功；改名后失败不承诺恢复旧版 | `save_directory_sync_failure_reports_error_with_complete_new_file`、`save_obeys_durability_protocol_order` 先红后绿 |
+| 数据根缺失，首启读取或首次保存新建一或多级目录 | `load_prefs`／`save_prefs` 创建数据目录；创建或条目同步失败后重试 | 创建时刻同步新条目的各级宿主（Unix）；失败时自深至浅尽力拆除本次新建层级后上抛，重试重新探测锚点做全链同步；数据根已存在时保存仍兜底同步直接父目录一次（单级） | 原子写层：返回成功 ⇒ 目录条目与文件内容同为持久；条目屏障缺失不得报告成功；失败残留仅剩「清理前来不及执行的崩溃／清理不完整／并发进入」记录边界 | `save_syncs_entry_host_when_data_dir_newly_created`、`save_syncs_every_host_of_newly_created_levels`、`ensure_data_dir_persists_every_host_of_new_levels`、`ensure_data_dir_removes_created_levels_on_sync_failure_for_full_retry`、`ensure_data_dir_rejects_file_blocked_path_without_side_effects`、`save_entry_sync_failure_preserves_old_settings_and_allows_retry` 先红后绿（[PR #201](https://github.com/hailingu/PlotWeave/pull/201) 评审）；宿主链与回滚范围计算另有 `persist::tests::entry_sync_plan_covers_hosts_and_rollback_scope_of_new_levels` |
+| 多次保存重叠 | 并发写入不同完整快照 | 每次使用独立临时文件，最终为某一完整快照 | 原子写层：不互相截断或清理临时文件；业务先后由既有调用方负责 | `overlapping_saves_leave_one_complete_snapshot` 先红后绿；不承诺跨进程业务排序 |
+
+验证边界：在隔离临时目录运行真实文件 I/O；同步故障以测试专用注入覆盖错误传播与文件可恢复状态，不等同真实断电实验。非 Unix 沿用共享内核不执行父目录／条目宿主 fsync 的平台边界，本仓库未验证 Windows；不新增同用户恶意换树防御。
+
+验证记录（2026-09-18）：在 `src-tauri` 执行 `cargo test --lib prefs::save_tests`，11 项通过；`cargo fmt --check && cargo clippy -- -D warnings && cargo test` 的各项检查通过，Rust 单元测试 312 项、原生退出集成夹具通过。首次全量测试因沙箱禁止绑定环回端口，9 个既有 HTTP 测试失败；允许本地端口后全量重跑通过。测试编译仍有 `library_index/fixup_tests.rs` 的未使用 `Value` 导入和 `library_index/normalize_tests.rs` 的未使用 `warnings` 变量两条既有警告，本次未改动。构建产物使用独立临时目录并在完成前清理；未触碰真实设置或调用真实供应商。两个设计文档无配置的自动检查，按保存入口、状态矩阵、失败语义、平台边界与交叉引用作结构化复核。圈复杂度 `N/A — no configured complexity tool`；人工检查本次新增／修改函数均未超过 80 代码行，受影响源文件均少于 800 行。
+
+验证记录（2026-09-18，[PR #201](https://github.com/hailingu/PlotWeave/pull/201) 评审修复）：新增目录条目宿主屏障后，`cargo test --lib prefs::save_tests` 14 项通过（含 3 项先红后绿的评审回归）；`persist::tests::entry_sync_chain_covers_each_host_of_new_levels` 覆盖宿主链计算（两级新建、一级新建、目标已存在、根目录无宿主）。条目屏障对 `projects/`、`library/` 根的同型首次创建窗口不在本次范围（见 PR 回复的后续事项）。
+
+验证记录（2026-09-18，[PR #201](https://github.com/hailingu/PlotWeave/pull/201) 第二轮评审修复）：读取路径创建内核 `ensure_data_dir` 接入持久化创建（多级缺失在创建时刻同步全部宿主），`cargo test --lib prefs::save_tests` 15 项通过（新增 `ensure_data_dir_persists_every_host_of_new_levels` 先红后绿）。剩余多级未同步窗口仅存在于 store／library 创建入口，属后续事项，不在设置契约内。
+
+验证记录（2026-09-18，[PR #201](https://github.com/hailingu/PlotWeave/pull/201) 第三轮评审修复）：`create_dir_all_durable` 的创建／同步失败路径新增回滚——自深至浅尽力拆除本次新建层级（仅空目录可拆），重试重新探测锚点做全链同步而非退化为单级兜底。`cargo test --lib prefs::save_tests` 17 项通过（新增 `ensure_data_dir_removes_created_levels_on_sync_failure_for_full_retry` 先红后绿、`ensure_data_dir_rejects_file_blocked_path_without_side_effects` 守卫）；`persist::tests::entry_sync_plan_covers_hosts_and_rollback_scope_of_new_levels` 同时断言宿主链与回滚范围。残留边界（清理前来不及执行的崩溃／断电、清理不完整、并发进入）按 P2 记录于上文，未覆盖 store／library 入口。
+
+验证记录（2026-09-18，[PR #201](https://github.com/hailingu/PlotWeave/pull/201) 第四轮评审修复）：锚点探测 `existing_anchor` 改为 `NotFound` 视为缺失、其余 I/O 失败按 fail-closed 上抛（探测失败优先于任何回滚计划），消除「瞬态元数据错误使现存目录被误判为本次新建、进而被失败清理拆除」的窗口。`cargo test --lib prefs::save_tests` 17 项通过；320 项单元测试全绿。
+
+验证记录（2026-09-18，[PR #201](https://github.com/hailingu/PlotWeave/pull/201) 第五轮评审修复）：第四轮的 fail-closed 回归测试此前只走正常路径（`leaf` 缺失、`tmp` 父目录正常，旧 `is_ok` 吞错实现同样通过），未真正覆盖所声称分支。现经 `faults::fail_at(Stage::AnchorProbe)`（仅判定注入、不进入协议序记录）在探测站点注入非 NotFound 失败，`persist::tests::entry_sync_plan_fail_closed_on_transient_metadata_error` 在接入注入前红、接入后绿，断言错误上抛且无任何创建／清理副作用。
+
 ### 10.3 Provider 与模型配置
 
 BYOK 下 provider 分两层：**内置适配器在代码里，用户配置（含加密后的 API key）在 `settings.json`**。
@@ -972,7 +1000,7 @@ provider 的 API key 以**密文 `keyEnc`** 存于 provider 配置：Rust `seal`
 | `delete_library_group(groupId)` | 要求组存在；原子删除组并剥离成员资产的 groupId，不留下悬空编组引用 |
 | `delete_library_asset(assetId)` | 按 §7.2 从本次受信规范化索引解析 id：若新索引仍有其他条目引用同一已打开文件身份，仅耐久提交去项索引；否则先耐久写 `asset-delete-journal.json`，再把身份核验后的原目录项通过受信句柄原子移入 `assets/.trash/` 随机名并复核移动后身份，隔离与目录 fsync 成功后才提交去项索引。提交后只用绑定已打开身份的平台原语清理隔离项；普通按名称 unlink 禁止。身份冲突、平台能力不足、清理或 fsync 失败均按阶段回迁或返回 `cleanupPending`，由启动/列表/后续写入按日志恢复；不得回滚已提交索引，也不得覆盖原名处后来出现的文件 |
 | `collect_library_asset(projectId, projectAssetId, meta)`（待实现） | #29 明确保留项目 → 库收藏链路；以下为目标职责。按 §7.1 分别以受信项目/库资产根句柄 no-follow 读取与写入，把项目资产完成文件 flush/fsync、原子落位与资产父目录 fsync 后才耐久提交新增库索引（「收藏」）；索引失败只留下可诊断孤儿文件 |
-| `get_settings()` / `update_settings(patch)`（目标名称） | 当前 IPC 为 `load_prefs()` / `save_prefs(prefs)`，读取/保存整份设置；不可把目标 patch 接口当作现有协议。`load_prefs` 仅在设置文件缺失（首次启动）返回空对象；损坏、超限或其余读取失败返回 Err 上抛，前端设置页展示可重试错误并阻止以默认值全量覆盖原配置（[issue #120](https://github.com/hailingu/PlotWeave/issues/120)） |
+| `get_settings()` / `update_settings(patch)`（目标名称） | 当前 IPC 为 `load_prefs()` / `save_prefs(prefs)`，读取/保存整份设置；不可把目标 patch 接口当作现有协议。`load_prefs` 仅在设置文件缺失（首次启动）返回空对象；损坏、超限或其余读取失败返回 Err 上抛，前端设置页展示可重试错误并阻止以默认值全量覆盖原配置（[issue #120](https://github.com/hailingu/PlotWeave/issues/120)）。`save_prefs` 在 1 MiB 序列化上限校验后，经受信应用根句柄执行 §10.2 原子写及持久性屏障；保存各阶段错误均上抛（[issue #121](https://github.com/hailingu/PlotWeave/issues/121)） |
 | `set_provider_key(provider, key)` | 加密并返回 envelope 密文（由前端随 settings 落盘；解密走 `seal::open`，无独立读命令） |
 | `llm_chat(messages, tools)` | LLM 请求代理：key 由 settings 密文在 Rust 内存解密，绕开 webview CORS（见 12.2）；#15 已补 120 秒请求超时、16 MiB 响应体流式限读，与图像代理共用 `http_util`，发送/读取超时有明确诊断 |
 | `llm_image_generate(request)` | 文生图代理（§13 首版）：单对象载荷（projectId/jobId/provider 配置/model/prompt/size），key 解密同 `llm_chat`；请求 OpenAI 兼容 `/images/generations`（b64_json 优先，url 成员回退下载），响应体流式限读（主响应 64 MiB 文本 / url 回退 32 MiB 字节，超限即中止）；产物按字节魔数定型 MIME（PNG/JPEG/WebP/GIF，provider 声称的 content-type 不作为依据）、过 32 MiB 上限后经原子写内核落盘进项目 `assets/`，§9.3 预检（形状 + 实路径复验）在命令内、返回前完成，前端单次 IPC 直收已校验的 `source=generated` AssetRef 并入索引。请求返回后与落盘前各查一次取消标志：协作式取消即放弃结果 |

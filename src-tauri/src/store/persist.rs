@@ -9,6 +9,20 @@ use tauri::{AppHandle, Manager};
 
 use crate::store::error::StoreError;
 use crate::store::types::new_id;
+
+#[cfg(test)]
+pub(crate) mod faults;
+
+/// 故障注入仅在测试中替换单个系统 I/O；发布构建直接执行原表达式。
+macro_rules! atomic_io {
+    ($stage:ident, $operation:expr) => {{
+        #[cfg(test)]
+        let result = faults::run(faults::Stage::$stage, || $operation);
+        #[cfg(not(test))]
+        let result = $operation;
+        result
+    }};
+}
 /// 资产路径组件的 no-follow 元数据（相对锚定句柄），缺失映射为「资产文件不存在」。
 pub(crate) fn asset_stat(
     dir: &CapDir,
@@ -183,7 +197,8 @@ pub(crate) fn read_verified_file(root: &CapDir, name: &str) -> Result<String, St
 /// rename 原子覆盖（cap-std 在 Windows 上以替换语义实现 rename，std::fs::
 /// rename 在该平台不替换已存在目标，已建项目的每次保存都会失败）→ 父目录
 /// fsync（持久性屏障，打开/同步失败向上传播、不粉饰成功）；失败尽力清理
-/// 临时文件。file_name 须为单段文件名（不含路径分量）：归类、创建与
+/// 本次成功创建的临时文件，排他创建失败不得清理其他写者的条目。
+/// file_name 须为单段文件名（不含路径分量）：归类、创建与
 /// rename 之外的越界形态在此拒绝，不得相对句柄逃出 projects/。
 pub(crate) fn atomic_write(root: &CapDir, file_name: &str, text: &str) -> Result<(), StoreError> {
     use std::io::Write;
@@ -208,29 +223,37 @@ pub(crate) fn atomic_write(root: &CapDir, file_name: &str, text: &str) -> Result
     };
     check_target()?;
     let tmp_name = format!(".{file_name}.{}.tmp", new_id());
+    #[cfg(test)]
+    let tmp_name = faults::temp_name(tmp_name);
+    // 排他创建失败直接返回；只有取得临时文件所有权后才进入失败清理区。
+    let file = atomic_io!(
+        Create,
+        root.open_with(
+            &tmp_name,
+            cap_std::fs::OpenOptions::new().write(true).create_new(true),
+        )
+    )
+    .map_err(|e| StoreError::io("创建临时文件失败", e))?;
     let result = (|| -> Result<(), StoreError> {
-        let mut f = root
-            .open_with(
-                &tmp_name,
-                cap_std::fs::OpenOptions::new().write(true).create_new(true),
-            )
-            .map_err(|e| StoreError::io("创建临时文件失败", e))?;
-        f.write_all(text.as_bytes())
+        let mut f = file;
+        atomic_io!(Write, f.write_all(text.as_bytes()))
             .map_err(|e| StoreError::io("写入项目失败", e))?;
-        f.sync_all()
-            .map_err(|e| StoreError::io("同步临时文件失败", e))?;
+        atomic_io!(FileSync, f.sync_all()).map_err(|e| StoreError::io("同步临时文件失败", e))?;
         drop(f);
         // rename 前复核现存目标（§10.2）：写临时文件期间被换上的符号链接
         // 或异型条目在此拒绝，不被 rename 覆盖
         check_target()?;
-        root.rename(&tmp_name, root, file_name)
+        atomic_io!(Rename, root.rename(&tmp_name, root, file_name))
             .map_err(|e| StoreError::io("落盘项目失败", e))?;
         // 持久性屏障同步锚定句柄本身（经其重新绑定自身再 fsync，不按路径名
         // 重开——否则屏障加到并发替换后的目录上，保存成功而加载另一棵树）
         #[cfg(unix)]
-        root.open_dir(".")
-            .and_then(|d| d.into_std_file().sync_all())
-            .map_err(|e| StoreError::io("同步项目目录失败（持久性屏障缺失）", e))?;
+        atomic_io!(
+            DirectorySync,
+            root.open_dir(".")
+                .and_then(|d| d.into_std_file().sync_all())
+        )
+        .map_err(|e| StoreError::io("同步项目目录失败（持久性屏障缺失）", e))?;
         // Windows 无法对目录句柄 fsync：跳过屏障而非误报成功写失败
         #[cfg(not(unix))]
         let _ = root;
@@ -241,11 +264,181 @@ pub(crate) fn atomic_write(root: &CapDir, file_name: &str, text: &str) -> Result
     }
     result
 }
+/// 目录条目持久化计划（§10.2，Unix）：`hosts` 为新条目宿主链——从
+/// `dir` 的最深已存在祖先（锚点，含 `dir` 本身）到其直接父目录的每一
+/// 级路径，新建目录的条目都落在这些宿主里；`created` 为本次调用预期
+/// 新建的各级目录（严格位于锚点之下、含 `dir` 本身，浅→深），是失败
+/// 清理的回滚范围。`dir` 已存在时 hosts 退化为仅含直接父目录：这是
+/// 单级未同步创建的兜底（宿主链在创建时刻已不可考），多级兜底由
+/// 「每个创建入口都用 [`create_dir_all_durable`] 在创建时刻同步、失败
+/// 即拆除新建层级让重试重新探测锚点」承担——store/library 侧入口
+/// 尚未接入该助手，属已记录的后续事项（PR #201 评审）。根目录无父级
+/// 宿主，返回 None。
+#[cfg(unix)]
+struct EntrySyncPlan {
+    hosts: Vec<std::path::PathBuf>,
+    created: Vec<std::path::PathBuf>,
+}
+/// 探测锚点（§10.2，Unix）：`dir` 的最深已存在祖先。逐级自深向浅比对
+/// 元数据，`NotFound` 视为缺失候选，其余 I/O 失败按 fail-closed 直接上抛
+/// （PR #201 第四轮评审：现存目录被瞬态错误吞掉会误判为「本次新建」，
+/// 进而在失败清理中被拆）。`dir` 自身存在返回 `Ok(dir)`。
+#[cfg(unix)]
+fn existing_anchor(dir: &std::path::Path) -> Result<std::path::PathBuf, StoreError> {
+    for ancestor in dir.ancestors() {
+        #[cfg(test)]
+        if let Some(e) = faults::fail_at(faults::Stage::AnchorProbe) {
+            return Err(StoreError::io("探测目录条目宿主失败", e));
+        }
+        match ancestor.symlink_metadata() {
+            Ok(_) => return Ok(ancestor.to_path_buf()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(StoreError::io("探测目录条目宿主失败", e)),
+        }
+    }
+    // 理论上不可达（根总是存在）；防御性按 IO 错误处理
+    Err(StoreError::io(
+        "探测目录条目宿主失败",
+        std::io::Error::other("找不到已存在的祖先"),
+    ))
+}
+#[cfg(unix)]
+fn entry_sync_plan(dir: &std::path::Path) -> Result<Option<EntrySyncPlan>, StoreError> {
+    let Some(parent) = dir.parent().map(|p| p.to_path_buf()) else {
+        return Ok(None);
+    };
+    let anchor = existing_anchor(dir)?;
+    if anchor == dir {
+        // dir 已存在：单级兜底同步直接父目录，无回滚范围
+        return Ok(Some(EntrySyncPlan {
+            hosts: vec![parent],
+            created: Vec::new(),
+        }));
+    }
+    // 新建级 = 严格位于锚点之下、含 dir 的各段，浅→深
+    let missing = dir.strip_prefix(&anchor).unwrap();
+    let mut created = Vec::new();
+    let mut cursor = anchor.clone();
+    for component in missing.components() {
+        cursor = cursor.join(component);
+        created.push(cursor.clone());
+    }
+    // hosts = 锚点 + 除最深层（dir）外的各新建级：每级新条目落在其父宿主里
+    let mut hosts = Vec::with_capacity(created.len());
+    hosts.push(anchor);
+    hosts.extend(created[..created.len() - 1].iter().cloned());
+    Ok(Some(EntrySyncPlan { hosts, created }))
+}
+/// 逐级同步目录条目宿主：自锚点向下游（先持久宿主条目，再持久子级），
+/// 任一失败上抛，不粉饰成功。
+#[cfg(unix)]
+fn sync_entry_hosts(hosts: &[std::path::PathBuf]) -> Result<(), StoreError> {
+    for host in hosts {
+        atomic_io!(EntrySync, fs::File::open(host).and_then(|f| f.sync_all()))
+            .map_err(|e| StoreError::io("同步目录条目失败（持久性屏障缺失）", e))?;
+    }
+    Ok(())
+}
+/// 失败清理：自深至浅尽力拆除本次新建的各级目录（仅空目录可拆）。
+/// 拆除失败（并发写入占据等）不掩盖原始错误；残留层级与「清理前来
+/// 不及执行的崩溃／断电」同属记录边界——下次调用走「目录已存在」
+/// 单级兜底（PR #201 第三轮评审）。
+#[cfg(unix)]
+fn remove_created_levels(created: &[std::path::PathBuf]) {
+    for path in created.iter().rev() {
+        let _ = fs::remove_dir(path);
+    }
+}
+/// [`fs::create_dir_all`] 的持久化版本（§10.2）：先探测最深已存在祖先，
+/// 创建 `dir` 后逐级 fsync 新目录条目所在的宿主（Unix），使首次创建的
+/// 目录条目与调用方后续写入的内容同为持久；宿主链在写入内容前同步，
+/// 失败时 `dir` 内尚无内容产生。创建或同步失败即尽力拆除本次新建层级
+/// 后返回原错误——重试得以重新探测锚点、再做全链同步，而非退化为
+/// 「目录已存在」的单级兜底（PR #201 第三轮评审）。非 Unix 沿用共享
+/// 内核现状，不执行目录 fsync（Windows 目录句柄无法 fsync）。并发创建
+/// 幂等：`create_dir_all` 不区分本次或他方创建，宿主链覆盖锚点到直接
+/// 父目录的每一级路径。
+pub(crate) fn create_dir_all_durable(dir: &std::path::Path) -> Result<(), StoreError> {
+    #[cfg(unix)]
+    let plan = entry_sync_plan(dir)?;
+    if let Err(e) = fs::create_dir_all(dir) {
+        #[cfg(unix)]
+        if let Some(plan) = &plan {
+            remove_created_levels(&plan.created);
+        }
+        return Err(StoreError::io("创建目录失败", e));
+    }
+    #[cfg(unix)]
+    if let Some(plan) = plan {
+        if let Err(e) = sync_entry_hosts(&plan.hosts) {
+            remove_created_levels(&plan.created);
+            return Err(e);
+        }
+    }
+    Ok(())
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::store::testutil::{cap, cleanup_temp, temp_projects_dir};
+
+    #[cfg(unix)]
+    #[test]
+    fn entry_sync_plan_covers_hosts_and_rollback_scope_of_new_levels() {
+        let tmp = std::env::temp_dir().join(format!("pw-chain-{}", new_id()));
+        fs::create_dir(&tmp).expect("建临时根");
+        // 两级新建：宿主 = 锚点 tmp 与中间级 tmp/mid；回滚范围含 dir 本身
+        let plan = entry_sync_plan(&tmp.join("mid").join("leaf"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(plan.hosts, vec![tmp.clone(), tmp.join("mid")]);
+        assert_eq!(
+            plan.created,
+            vec![tmp.join("mid"), tmp.join("mid").join("leaf")]
+        );
+        // 一级新建：宿主 = 既有父目录；回滚范围 = 目标本身
+        let plan = entry_sync_plan(&tmp.join("leaf")).unwrap().unwrap();
+        assert_eq!(plan.hosts, vec![tmp.clone()]);
+        assert_eq!(plan.created, vec![tmp.join("leaf")]);
+        // 目标已存在：仍同步直接父目录（单级兜底），无回滚范围
+        fs::create_dir(tmp.join("exists")).expect("预建目标");
+        let plan = entry_sync_plan(&tmp.join("exists")).unwrap().unwrap();
+        assert_eq!(plan.hosts, vec![tmp.clone()]);
+        assert!(plan.created.is_empty());
+        // 根目录无父级宿主
+        assert!(entry_sync_plan(std::path::Path::new("/"))
+            .unwrap()
+            .is_none());
+        fs::remove_dir_all(&tmp).expect("清理临时根");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn entry_sync_plan_fail_closed_on_transient_metadata_error() {
+        // PR #201 第四、五轮评审：注入非 NotFound 的元数据失败必须
+        // fail-closed 上抛，先于任何创建与清理（旧 is_ok 吞错实现会把
+        // 现存目录误判为本次新建并被失败清理拆除；该测试在探测站点
+        // 接入注入前必然失败——旧断言只走正常路径，吞错实现也能通过）。
+        let tmp = std::env::temp_dir().join(format!("pw-anchor-{}", new_id()));
+        fs::create_dir(&tmp).expect("建临时根");
+        fs::create_dir(tmp.join("parent")).expect("建已存在层级");
+        let target = tmp.join("parent").join("leaf");
+        let injection = faults::Injection::new(Some(faults::Stage::AnchorProbe), None);
+        let err = create_dir_all_durable(&target).unwrap_err();
+        assert!(
+            err.to_string().contains("injected AnchorProbe failure"),
+            "实际错误：{err}"
+        );
+        assert!(
+            err.to_string().contains("探测目录条目宿主失败"),
+            "实际错误：{err}"
+        );
+        drop(injection);
+        assert!(tmp.join("parent").is_dir(), "已存在层级不得被触碰");
+        assert!(!target.exists(), "探测失败不得产生任何新建");
+        fs::remove_dir_all(&tmp).expect("清理临时根");
+    }
 
     #[test]
     fn verify_control_file_requires_regular_file() {

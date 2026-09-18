@@ -46,7 +46,11 @@ pub use validate::verify_project_assets;
 
 #[cfg(unix)]
 pub(crate) use persist::asset_identity;
-pub(crate) use persist::{asset_stat, atomic_write, open_dir_bound, projects_dir};
+#[cfg(test)]
+pub(crate) use persist::faults as atomic_write_faults;
+pub(crate) use persist::{
+    asset_stat, atomic_write, create_dir_all_durable, open_dir_bound, projects_dir,
+};
 pub(crate) use validate::{
     is_canonical_mime, is_valid_active_asset_rel_path, is_valid_asset_rel_path,
     verify_asset_real_path,
