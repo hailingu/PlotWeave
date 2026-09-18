@@ -36,10 +36,14 @@ const itemObject = (
   additionalProperties: false,
 })
 const textValue = { type: 'string', ...freeTextBudget }
+/** 列表成员 id 的 schema：身份 token 不背体积预算——运行态按「非空白
+ * 唯一」原样保留既有 id（含超长脏数据/导入条目），广告边界没有的
+ * 约束会让模型无法忠实重述既有条目（PR #204 评审）。 */
+const idValue = { type: 'string' }
 const referenceValue = { type: 'string', pattern: String.raw`\S` }
 const positiveNumber = { minimum: 1, maximum: Number.MAX_SAFE_INTEGER }
 const lineFields = {
-  id: textValue,
+  id: idValue,
   text: textValue,
   side: { type: 'string', enum: ['left', 'right'] },
   vo: { type: 'boolean' },
@@ -61,7 +65,7 @@ const dialogueItems = {
   ],
 }
 const shotRefFields = {
-  id: textValue,
+  id: idValue,
   kind: { type: 'string', enum: ['character', 'location', 'audio'] },
 }
 const shotRefItems = {
@@ -169,7 +173,7 @@ export const AI_NODE_FIELDS: Record<string, readonly AiFieldSpec[]> = {
         items: {
           anyOf: [
             textValue,
-            itemObject({ id: textValue, label: textValue }, ['label']),
+            itemObject({ id: idValue, label: textValue }, ['label']),
           ],
         },
       },

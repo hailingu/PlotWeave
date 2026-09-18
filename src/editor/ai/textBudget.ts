@@ -20,17 +20,21 @@ export const DOCUMENT_BODY_MAX_CHARS = 1024 * 1024
 
 /** 单字段长度预算诊断：值在场为字符串且超过 max 时返回点名字段与
  * 实际上限的错误文案；非字符串/缺省/上限内返回 null（类型形状由
- * 调用方各自的形状校验先行判定）。字符数按 Unicode 码点计（迭代器
- * 语义），与工具 schema 广告的 JSON Schema maxLength 同口径——按
+ * 调用方各自的形状校验先行判定）。字符数按 Unicode 码点计（for..of
+ * 迭代语义），与工具 schema 广告的 JSON Schema maxLength 同口径——按
  * UTF-16 码元（String.length）会让星号平面字符（emoji 等）双计，
- * 模型可见契约与校验边界漂移（PR #204 评审）。 */
+ * 模型可见契约与校验边界漂移（PR #204 评审）。计数不物化码点数组
+ * （病态 16 MiB 输入下数组展开自身即成内存放大点，同评审）：码元数
+ * 不超限时码点数必然不超限，短文本 O(1) 直通；仅可疑输入逐码点迭代。 */
 export function textBudgetIssue(
   field: string,
   value: unknown,
   max: number = FREE_TEXT_MAX_CHARS,
 ): string | null {
-  if (typeof value !== 'string') return null
-  const chars = [...value].length
+  if (typeof value !== 'string' || value.length <= max) return null
+  const codePoints = value[Symbol.iterator]()
+  let chars = 0
+  while (!codePoints.next().done) chars += 1
   if (chars <= max) return null
   return `${field} 长度超过上限（最多 ${max} 字符，实际 ${chars} 字符）`
 }

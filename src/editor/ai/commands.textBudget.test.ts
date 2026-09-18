@@ -249,4 +249,51 @@ describe('issue #170 · 工具 schema 向模型广告同一预算', () => {
       `实际 ${FREE_TEXT_MAX_CHARS + 1} 字符`,
     )
   })
+
+  it('成员 id 不广告体积预算：schema 无 maxLength，运行态保留超长既有 id', () => {
+    // 脏/导入数据的既有成员 id 可能超预算长度——运行态按「非空白唯一」
+    // 原样保留（normalizeNodeFields），schema 不得广告边界没有的约束，
+    // 否则模型无法忠实重述既有条目（PR #204 评审）
+    const longId = 'i'.repeat(FREE_TEXT_MAX_CHARS + 1)
+    const ok = validateAiBatch(
+      [
+        {
+          op: 'create_node',
+          nodeType: 'dialogue',
+          data: {
+            name: '对白',
+            lines: [{ kind: 'line', text: '短句', id: longId }],
+          },
+        },
+      ],
+      entGraph(),
+    )
+    expect(ok.ok, JSON.stringify(ok.issues)).toBe(true)
+    const data = ok.commands[0] as { data: { lines: Array<{ id: string }> } }
+    expect(data.data.lines[0].id).toBe(longId)
+
+    const variants = WRITE_PARAMETERS.create_node.properties.data as {
+      anyOf: Array<{
+        properties: Record<
+          string,
+          {
+            items?: {
+              anyOf: Array<{
+                properties: Record<string, { maxLength?: number }>
+              }>
+            }
+          }
+        >
+      }>
+    }
+    const dialogue = variants.anyOf.find(
+      (v) => v.properties.lines !== undefined,
+    )
+    const lineItems = dialogue?.properties.lines.items?.anyOf ?? []
+    expect(lineItems.length).toBeGreaterThan(0)
+    for (const item of lineItems) {
+      expect(item.properties.text.maxLength).toBe(FREE_TEXT_MAX_CHARS)
+      expect(item.properties.id.maxLength).toBeUndefined()
+    }
+  })
 })
