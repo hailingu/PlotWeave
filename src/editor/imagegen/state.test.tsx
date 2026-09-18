@@ -9,7 +9,7 @@
  * 经最小 Harness 组件直挂 useImageJobsState，桌面态以 __TAURI_INTERNALS__ 模拟。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, waitFor } from '@testing-library/react'
+import { act, cleanup, render, waitFor } from '@testing-library/react'
 import { useRef } from 'react'
 import type { AppSettings } from '../../settings/types'
 import { settingsStore } from '../../settings/settingsStore'
@@ -310,6 +310,225 @@ describe('生成调度：用户取消的失败反馈（issue #160）', () => {
     apiRef!.cancel('img1')
     await new Promise((r) => setTimeout(r, 0))
     expect(apiRef!.jobOf('img1')).toBeNull()
+  })
+})
+
+/** 可控 IPC 响应：显式安排生成与取消完成顺序，避免计时器竞态。 */
+function pendingResponse<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
+/** 取消竞态脚手架：真实 React 调度，并观察资产索引和节点输出的最终状态。 */
+function setupCancellationRace() {
+  ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
+  const generations = [pendingResponse<AssetRef>(), pendingResponse<AssetRef>()]
+  const cancellations = [pendingResponse<unknown>(), pendingResponse<unknown>()]
+  let generationIndex = 0
+  let cancellationIndex = 0
+  vi.mocked(tauriInvoke).mockImplementation((cmd: string) => {
+    if (cmd === 'llm_image_generate')
+      return generations[generationIndex++].promise
+    if (cmd === 'llm_image_cancel')
+      return cancellations[cancellationIndex++].promise
+    return Promise.resolve({})
+  })
+  vi.mocked(normalizeAssetRef).mockImplementation(
+    (raw) => raw as unknown as AssetRef,
+  )
+  const node = {
+    id: 'img1',
+    type: 'image',
+    data: imageNodeData(),
+  } as ImageFlowNode
+  const assets = { byId: {} as Record<string, AssetRef> }
+  const harness = setupHarness({ nodes: [node], assets })
+  harness.addAsset.mockImplementation((asset: AssetRef) => {
+    assets.byId[asset.id] = asset
+  })
+  harness.applyDataPatch.mockImplementation(
+    (_id: string, patch: NodeDataPatch) => {
+      if (patch.nodeType === 'image') Object.assign(node.data, patch.patch)
+    },
+  )
+  const diagnostic = vi.spyOn(console, 'error').mockImplementation(() => {})
+  return { ...harness, generations, cancellations, node, assets, diagnostic }
+}
+
+/** 生成响应的有效资产；实际写回由生产调度与复合命令执行。 */
+function generatedAsset(id: string): AssetRef {
+  return {
+    id,
+    relPath: `assets/${id}.png`,
+    mime: 'image/png',
+    source: 'generated',
+    createdAt: '2026-09-18T00:00:00.000Z',
+  }
+}
+
+describe('生成调度：取消响应身份隔离（PR #200）', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it.each(['settings', 'generation'] as const)(
+    'B 在 %s 阶段：A 取消失败不阻断 B 落位，A 产物丢弃',
+    async (phase) => {
+      const h = setupCancellationRace()
+      act(() => apiRef!.start('img1'))
+      await waitFor(() => expect(generateCount()).toBe(1))
+      const jobA = generatedJobId()
+      const settings = pendingResponse<AppSettings>()
+      if (phase === 'settings')
+        vi.mocked(settingsStore.load).mockReturnValueOnce(settings.promise)
+      act(() => {
+        apiRef!.cancel('img1')
+        apiRef!.start('img1')
+      })
+      if (phase === 'generation')
+        await waitFor(() => expect(generateCount()).toBe(2))
+      const jobB = apiRef!.jobOf('img1')
+      await act(async () => h.cancellations[0].reject(new Error('A 取消失败')))
+      expect(apiRef!.jobOf('img1')).toEqual(jobB)
+      expect(h.diagnostic).toHaveBeenCalledWith(
+        expect.any(String),
+        jobA,
+        expect.any(Error),
+      )
+      await act(async () => settings.resolve(validSettings))
+      await waitFor(() => expect(generateCount()).toBe(2))
+      await act(async () => h.generations[1].resolve(generatedAsset('pa-b')))
+      await act(async () => h.generations[0].resolve(generatedAsset('pa-a')))
+      expect(h.assets.byId).toEqual({ 'pa-b': generatedAsset('pa-b') })
+      expect(h.node.data.outputs.primary).toEqual({ assetId: 'pa-b' })
+      expect(h.pushHistory).toHaveBeenCalledTimes(1)
+      expect(apiRef!.jobOf('img1')).toBeNull()
+    },
+  )
+})
+
+describe('生成调度：取消不覆盖后续终态（PR #200）', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it.each(['success', 'error'] as const)(
+    'B 已到终态 %s：A 的取消失败不覆盖后续状态',
+    async (outcome) => {
+      const h = setupCancellationRace()
+      act(() => apiRef!.start('img1'))
+      await waitFor(() => expect(generateCount()).toBe(1))
+      act(() => {
+        apiRef!.cancel('img1')
+        apiRef!.start('img1')
+      })
+      await waitFor(() => expect(generateCount()).toBe(2))
+      await act(async () => {
+        if (outcome === 'success')
+          h.generations[1].resolve(generatedAsset('pa-b'))
+        else h.generations[1].reject(new Error('B 生成失败'))
+      })
+      const terminal = apiRef!.jobOf('img1')
+      await act(async () => h.cancellations[0].reject(new Error('A 取消失败')))
+      expect(apiRef!.jobOf('img1')).toEqual(terminal)
+      expect(h.node.data.outputs.primary?.assetId).toBe(
+        outcome === 'success' ? 'pa-b' : undefined,
+      )
+      expect(Object.keys(h.assets.byId)).toEqual(
+        outcome === 'success' ? ['pa-b'] : [],
+      )
+    },
+  )
+})
+
+describe('生成调度：连续取消乱序（PR #200）', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it.each(['resolve', 'reject'] as const)(
+    '连续取消：A %s 不撤销 B 的诊断归属',
+    async (settleA) => {
+      const h = setupCancellationRace()
+      act(() => apiRef!.start('img1'))
+      await waitFor(() => expect(generateCount()).toBe(1))
+      act(() => {
+        apiRef!.cancel('img1')
+        apiRef!.start('img1')
+      })
+      await waitFor(() => expect(generateCount()).toBe(2))
+      act(() => apiRef!.cancel('img1'))
+      await act(async () => h.cancellations[0][settleA](new Error('A 响应')))
+      expect(apiRef!.jobOf('img1')).toBeNull()
+      await act(async () => h.cancellations[1].reject(new Error('B 取消失败')))
+      expect(apiRef!.jobOf('img1')).toEqual({
+        status: 'error',
+        message: expect.stringContaining('B 取消失败'),
+      })
+    },
+  )
+
+  it('B 取消失败先返回：A 的迟到失败不覆盖 B 诊断', async () => {
+    const h = setupCancellationRace()
+    act(() => apiRef!.start('img1'))
+    await waitFor(() => expect(generateCount()).toBe(1))
+    act(() => {
+      apiRef!.cancel('img1')
+      apiRef!.start('img1')
+    })
+    await waitFor(() => expect(generateCount()).toBe(2))
+    act(() => apiRef!.cancel('img1'))
+    await act(async () => h.cancellations[1].reject(new Error('B 取消失败')))
+    const latestError = apiRef!.jobOf('img1')
+    await act(async () => h.cancellations[0].reject(new Error('A 取消失败')))
+    expect(apiRef!.jobOf('img1')).toEqual(latestError)
+  })
+})
+
+describe('生成调度：取消诊断生命周期（PR #200）', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it.each(['delete', 'restore', 'unmount'] as const)(
+    '用户取消后 %s：迟到失败仅留痕，不复活作业',
+    async (transition) => {
+      const h = setupCancellationRace()
+      act(() => apiRef!.start('img1'))
+      await waitFor(() => expect(generateCount()).toBe(1))
+      const jobId = generatedJobId()
+      act(() => apiRef!.cancel('img1'))
+      if (transition === 'unmount') cleanup()
+      else {
+        h.setNodes([])
+        if (transition === 'restore') h.setNodes([h.node])
+      }
+      await act(async () => h.cancellations[0].reject(new Error('取消失败')))
+      expect(apiRef!.jobOf('img1')).toBeNull()
+      expect(h.diagnostic).toHaveBeenCalledWith(
+        expect.any(String),
+        jobId,
+        expect.any(Error),
+      )
+      await act(async () => h.generations[0].resolve(generatedAsset('pa-a')))
+      expect(h.assets.byId).toEqual({})
+      expect(h.node.data.outputs).toEqual({})
+    },
+  )
+
+  it('其他节点启动不使当前节点的取消诊断失效', async () => {
+    const h = setupCancellationRace()
+    const nodeB = { ...h.node, id: 'img2', data: imageNodeData() }
+    h.setNodes([h.node, nodeB])
+    act(() => apiRef!.start('img1'))
+    await waitFor(() => expect(generateCount()).toBe(1))
+    act(() => {
+      apiRef!.cancel('img1')
+      apiRef!.start('img2')
+    })
+    await waitFor(() => expect(generateCount()).toBe(2))
+    await act(async () => h.cancellations[0].reject(new Error('A 取消失败')))
+    expect(apiRef!.jobOf('img1')?.status).toBe('error')
+    expect(apiRef!.jobOf('img2')?.status).toBe('running')
+    expect(h.diagnostic).not.toHaveBeenCalled()
+    await act(async () => h.cancellations[1].resolve(undefined))
   })
 })
 
