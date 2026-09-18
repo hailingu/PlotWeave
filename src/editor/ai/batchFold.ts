@@ -401,10 +401,12 @@ function foldDelete(
   st.exists.delete(id)
   for (const [ref, owner] of st.refOwner)
     if (owner === id) st.refOwner.delete(ref)
-  st.virtualEdges.forEach((e) => {
-    if (e.source === id) e.source = `__deleted__:${id}`
-    if (e.target === id) e.target = `__deleted__:${id}`
-  })
+  // 虚拟删除与执行同口径（issue #128）：simDelete 会移除被删节点的全部
+  // 关联边，折叠态若只改写幽灵端点而保留边，hasAttachHost/成环检测仍按
+  // 旧拓扑判定——删除宿主后重连分镜、删除中间节点后连线都会被误拒
+  st.virtualEdges = st.virtualEdges.filter(
+    (e) => e.source !== id && e.target !== id,
+  )
   st.items.push({
     kind: 'delete',
     danger: true,
