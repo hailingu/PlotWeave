@@ -377,10 +377,25 @@ pub(crate) fn ensure_index_size(index: &Value) -> Result<(), LibraryError> {
 /// 原始字节、写侧量即将写出的同一紧凑表示，两侧同一编码闭环——超限索引
 /// 拒绝落盘，可读的索引永远可写回。调用方传入的索引应为净化后视图。
 pub(crate) fn write_index(library: &CapDir, index: &Value) -> Result<(), LibraryError> {
+    write_index_with(library, index, || Ok(()))
+}
+
+/// 校验/序列化与损坏原件备份先于媒体物化，媒体成功后才提交索引。
+/// 调用方持续持有库锁；物化失败不提交索引，最终提交失败沿用 §7.2 的
+/// 孤儿保留协议，不在提交结果可能不确定时删除媒体。
+pub(crate) fn write_index_with<F>(
+    library: &CapDir,
+    index: &Value,
+    materialize: F,
+) -> Result<(), LibraryError>
+where
+    F: FnOnce() -> Result<(), LibraryError>,
+{
     ensure_index_size(index)?;
     let text =
         serde_json::to_string(index).map_err(|e| LibraryError::serialize("序列化索引失败", e))?;
     backup_damaged_index(library)?;
+    materialize()?;
     crate::store::atomic_write(library, INDEX_FILE_NAME, &text).map_err(LibraryError::from)
 }
 

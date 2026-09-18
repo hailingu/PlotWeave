@@ -281,3 +281,94 @@ fn mismatched_member_cannot_expose_or_persist_nested_asset() {
         b"unconfirmed"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn failed_import_backup_leaves_no_media_across_retries() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = LibraryFixture::new();
+    let raw = damaged_index();
+    fixture.write(&raw);
+    let assets = fixture.path.join("assets");
+    fs::write(assets.join("a.png"), b"original-a").unwrap();
+    fs::set_permissions(&assets, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::set_permissions(&fixture.path, fs::Permissions::from_mode(0o500)).unwrap();
+    let attempts: Vec<_> = (0..3)
+        .map(|_| {
+            let failed =
+                put_asset_with(&fixture.dir, "new.png", "image/png", "other", b"new").is_err();
+            (failed, fs::read_dir(&assets).unwrap().count())
+        })
+        .collect();
+    fs::set_permissions(&fixture.path, fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(attempts, vec![(true, 1); 3]);
+    assert_eq!(fixture.original(), raw.as_bytes());
+    assert!(fixture.backups().is_empty());
+    let added = put_asset_with(&fixture.dir, "new.png", "image/png", "other", b"new").unwrap();
+    let (index, _) = list_assets_with(&fixture.dir).unwrap();
+    assert_eq!(index["assets"]["byId"]["a"], asset("a"));
+    assert!(index["assets"]["byId"]
+        .get(added["id"].as_str().unwrap())
+        .is_some());
+    assert_eq!(fs::read_dir(&assets).unwrap().count(), 2);
+    assert_eq!(fs::read(assets.join("a.png")).unwrap(), b"original-a");
+    assert_eq!(fixture.backups(), vec![raw.into_bytes()]);
+}
+
+#[cfg(unix)]
+#[test]
+fn failed_import_media_keeps_original_index_and_backup() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = LibraryFixture::new();
+    let raw = damaged_index();
+    fixture.write(&raw);
+    let assets = fixture.path.join("assets");
+    fs::set_permissions(&assets, fs::Permissions::from_mode(0o500)).unwrap();
+    let result = put_asset_with(&fixture.dir, "new.png", "image/png", "other", b"new");
+    fs::set_permissions(&assets, fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(result.is_err());
+    assert_eq!(fixture.original(), raw.as_bytes());
+    assert_eq!(fixture.backups(), vec![raw.as_bytes().to_vec()]);
+    assert_eq!(fs::read_dir(&assets).unwrap().count(), 0);
+    let added = put_asset_with(&fixture.dir, "new.png", "image/png", "other", b"new").unwrap();
+    let (index, _) = list_assets_with(&fixture.dir).unwrap();
+    assert!(index["assets"]["byId"]
+        .get(added["id"].as_str().unwrap())
+        .is_some());
+    assert_eq!(fs::read_dir(&assets).unwrap().count(), 1);
+    assert!(fixture
+        .backups()
+        .iter()
+        .all(|backup| backup == raw.as_bytes()));
+}
+
+#[cfg(unix)]
+#[test]
+fn index_commit_failure_after_media_preserves_recovery_evidence() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = LibraryFixture::new();
+    let raw = damaged_index();
+    fixture.write(&raw);
+    let (mut index, _) = list_assets_with(&fixture.dir).unwrap();
+    index["assets"]["byId"]["new"] = asset("new");
+    let assets = assets_root(&fixture.dir).unwrap();
+    let result = write_index_with(&fixture.dir, &index, || {
+        atomic_write_with(&assets, "new.png", |file| {
+            std::io::Write::write_all(file, b"new")
+        })?;
+        // 模拟媒体成功之后索引目录不可写；最终索引提交仍须显式失败。
+        fs::set_permissions(&fixture.path, fs::Permissions::from_mode(0o500)).unwrap();
+        Ok(())
+    });
+    fs::set_permissions(&fixture.path, fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(result.is_err());
+    assert_eq!(fixture.original(), raw.as_bytes());
+    assert_eq!(fixture.backups(), vec![raw.into_bytes()]);
+    assert_eq!(
+        fs::read(fixture.path.join("assets/new.png")).unwrap(),
+        b"new"
+    );
+    assert!(list_assets_with(&fixture.dir).unwrap().0["assets"]["byId"]
+        .get("new")
+        .is_none());
+}

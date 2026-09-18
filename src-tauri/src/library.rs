@@ -12,8 +12,8 @@ use tauri::AppHandle;
 
 use crate::library::error::LibraryError;
 use crate::library_fs::{
-    assets_root, atomic_write_with, ensure_index_size, library_root, read_index_capped,
-    validate_asset_id, write_index,
+    assets_root, atomic_write_with, library_root, read_index_capped, validate_asset_id,
+    write_index, write_index_with,
 };
 use crate::library_journal::{library_file_lock, library_op_lock};
 use crate::store::is_canonical_mime;
@@ -156,13 +156,12 @@ pub(crate) fn put_asset_with(
             detail: "资产索引结构损坏".into(),
         })?
         .insert(id.clone(), entry.clone());
-    // 媒体落盘前先校验候选索引大小（评审修复）：超限在物化前拒绝，
-    // 不留下索引写不回去的孤儿媒体文件
-    ensure_index_size(&index)?;
-    atomic_write_with(&assets, &file_name, |dst| {
-        std::io::Write::write_all(dst, bytes).map(|_| ())
+    // 索引校验和损坏原件备份均先于媒体物化，备份失败重试不积累孤儿文件。
+    write_index_with(library, &index, || {
+        atomic_write_with(&assets, &file_name, |dst| {
+            std::io::Write::write_all(dst, bytes).map(|_| ())
+        })
     })?;
-    write_index(library, &index)?;
     // 净化诊断随响应可见（评审修复）：脏索引变脏后直接导入时，被隔离
     // 条目/规范化修复不得随"落盘即净化"静默发生；仅在非空时附加，保持
     // 常态响应形状纯净
