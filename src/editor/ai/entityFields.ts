@@ -1,4 +1,5 @@
 import type { ProjectSettings } from '../settings'
+import { DOCUMENT_BODY_MAX_CHARS, FREE_TEXT_MAX_CHARS } from './textBudget'
 
 /**
  * AI 设定实体字段协议的单一真相（issue 44，机制同 nodeFields.ts / issue 41）：
@@ -18,7 +19,12 @@ export interface AiEntityFieldSpec {
   type: 'string' | 'integer' | 'boolean' | 'array'
   /** 人读一句话说明（进系统提示与工具描述）。 */
   desc: string
+  /** 供应商 JSON Schema 的值约束（issue #170 体积预算经此广告）。 */
+  schema?: Record<string, unknown>
 }
+
+/** 自由文本字段的 schema 预算声明（issue #170）：与校验边界同常量。 */
+const freeTextBudget = { maxLength: FREE_TEXT_MAX_CHARS }
 
 /** 各 AI 可写实体种类的字段协议表。gradient 由应用分配，不接受模型指定。 */
 export const AI_ENTITY_FIELDS: Record<
@@ -26,12 +32,32 @@ export const AI_ENTITY_FIELDS: Record<
   readonly AiEntityFieldSpec[]
 > = {
   character: [
-    { key: 'name', type: 'string', desc: '角色名（创建必填）' },
-    { key: 'bio', type: 'string', desc: '一句小传（可省）' },
+    {
+      key: 'name',
+      type: 'string',
+      desc: '角色名（创建必填）',
+      schema: freeTextBudget,
+    },
+    {
+      key: 'bio',
+      type: 'string',
+      desc: '一句小传（可省）',
+      schema: freeTextBudget,
+    },
   ],
   location: [
-    { key: 'name', type: 'string', desc: '地点名（创建必填）' },
-    { key: 'note', type: 'string', desc: '备注（可省）' },
+    {
+      key: 'name',
+      type: 'string',
+      desc: '地点名（创建必填）',
+      schema: freeTextBudget,
+    },
+    {
+      key: 'note',
+      type: 'string',
+      desc: '备注（可省）',
+      schema: freeTextBudget,
+    },
   ],
 }
 
@@ -39,8 +65,18 @@ export const AI_ENTITY_FIELDS: Record<
  * 在清单中的身份（创建必填、修改不许清空）；body 为长篇正文（整体替换）；
  * relatedIds 为关联条目（kind + id 成对，整体替换，id 可用本批实体 ref）。 */
 export const AI_DOCUMENT_FIELDS: readonly AiEntityFieldSpec[] = [
-  { key: 'title', type: 'string', desc: '文档标题（创建必填，修改不许清空）' },
-  { key: 'body', type: 'string', desc: '长篇正文，整体替换（可省）' },
+  {
+    key: 'title',
+    type: 'string',
+    desc: '文档标题（创建必填，修改不许清空）',
+    schema: freeTextBudget,
+  },
+  {
+    key: 'body',
+    type: 'string',
+    desc: '长篇正文，整体替换（可省）',
+    schema: { maxLength: DOCUMENT_BODY_MAX_CHARS },
+  },
   {
     key: 'relatedIds',
     type: 'array',

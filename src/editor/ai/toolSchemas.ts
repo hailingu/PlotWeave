@@ -39,6 +39,18 @@ const reason = text('改动理由')
 const ref = token('本批临时别名；不是持久 id，供后续命令引用')
 const nodeTypes = Object.keys(AI_NODE_FIELDS)
 
+/** 实体名称的通道化 schema：在协议表生成形状（含 issue #170 的 maxLength
+ * 体积预算）上叠加非空白 pattern 与通道文案——整体替换会丢掉预算，
+ * 模型可见协议与校验边界漂移（PR #204 评审）。 */
+const entityNameSchema = (
+  generated: unknown,
+  description: string,
+): Record<string, unknown> => ({
+  ...(generated as Record<string, unknown>),
+  description,
+  pattern: String.raw`\S`,
+})
+
 /** 字段键、基础类型、说明与嵌套值结构从同一协议表生成。 */
 function fieldsSchema(fields: readonly AiFieldSpec[]): ObjectSchema {
   return objectSchema(
@@ -64,7 +76,10 @@ const nodeDataUnion = {
 /** 实体的新增字段和局部更新共用形状；name 的存在性由 batch 的模式变体表达。 */
 function entityParameters(kind: EntityKind): ObjectSchema {
   const fields = fieldsSchema(AI_ENTITY_FIELDS[kind])
-  fields.properties.name = token('实体名称：新增必填，修改时可省略')
+  fields.properties.name = entityNameSchema(
+    fields.properties.name,
+    '实体名称：新增必填，修改时可省略',
+  )
   return objectSchema(
     {
       entityId: token('仅修改时提供目标实体 id；新增必须省略'),
@@ -212,7 +227,10 @@ function commandVariants(): ObjectSchema[] {
     const parameters = WRITE_PARAMETERS[`upsert_${kind}`]
     const createProperties = { ref, reason }
     const fields = fieldsSchema(AI_ENTITY_FIELDS[kind])
-    fields.properties.name = token('新实体名称')
+    fields.properties.name = entityNameSchema(
+      fields.properties.name,
+      '新实体名称',
+    )
     variants.push(
       commandSchema(
         `upsert_${kind}`,

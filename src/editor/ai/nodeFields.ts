@@ -8,6 +8,8 @@
  * 新增可写字段须同步本表的形状说明和对应的边界校验。
  */
 
+import { FREE_TEXT_MAX_CHARS } from './textBudget'
+
 /** 单个 AI 可写字段的协议描述。 */
 export interface AiFieldSpec {
   /** 字段键（= *NodeData 属性名，校验白名单的直接来源）。 */
@@ -20,6 +22,9 @@ export interface AiFieldSpec {
   schema?: Record<string, unknown>
 }
 
+/** 自由文本字段的 schema 预算声明（issue #170）：与校验边界同常量。 */
+const freeTextBudget = { maxLength: FREE_TEXT_MAX_CHARS }
+
 /** 列表成员共享的对象 schema；新建条目的 id 可省略，由应用分配。 */
 const itemObject = (
   properties: Record<string, unknown>,
@@ -30,11 +35,15 @@ const itemObject = (
   required,
   additionalProperties: false,
 })
-const textValue = { type: 'string' }
+const textValue = { type: 'string', ...freeTextBudget }
+/** 列表成员 id 的 schema：身份 token 不背体积预算——运行态按「非空白
+ * 唯一」原样保留既有 id（含超长脏数据/导入条目），广告边界没有的
+ * 约束会让模型无法忠实重述既有条目（PR #204 评审）。 */
+const idValue = { type: 'string' }
 const referenceValue = { type: 'string', pattern: String.raw`\S` }
 const positiveNumber = { minimum: 1, maximum: Number.MAX_SAFE_INTEGER }
 const lineFields = {
-  id: textValue,
+  id: idValue,
   text: textValue,
   side: { type: 'string', enum: ['left', 'right'] },
   vo: { type: 'boolean' },
@@ -56,7 +65,7 @@ const dialogueItems = {
   ],
 }
 const shotRefFields = {
-  id: textValue,
+  id: idValue,
   kind: { type: 'string', enum: ['character', 'location', 'audio'] },
 }
 const shotRefItems = {
@@ -74,7 +83,7 @@ const shotRefItems = {
  * 不在此表——白名单缺失类型一律整批拒绝。 */
 export const AI_NODE_FIELDS: Record<string, readonly AiFieldSpec[]> = {
   scene: [
-    { key: 'name', type: 'string', desc: '场景名' },
+    { key: 'name', type: 'string', desc: '场景名', schema: freeTextBudget },
     {
       key: 'sceneNo',
       type: 'integer',
@@ -88,9 +97,24 @@ export const AI_NODE_FIELDS: Record<string, readonly AiFieldSpec[]> = {
       desc: '地点实体 id 或同批新地点 ref（无地点时省略，不传 null）',
       schema: { pattern: String.raw`\S` },
     },
-    { key: 'time', type: 'string', desc: '时间（如 🌙 夜）' },
-    { key: 'weather', type: 'string', desc: '天气（可省）' },
-    { key: 'synopsis', type: 'string', desc: '梗概' },
+    {
+      key: 'time',
+      type: 'string',
+      desc: '时间（如 🌙 夜）',
+      schema: freeTextBudget,
+    },
+    {
+      key: 'weather',
+      type: 'string',
+      desc: '天气（可省）',
+      schema: freeTextBudget,
+    },
+    {
+      key: 'synopsis',
+      type: 'string',
+      desc: '梗概',
+      schema: freeTextBudget,
+    },
     {
       key: 'characterIds',
       type: 'array',
@@ -105,7 +129,7 @@ export const AI_NODE_FIELDS: Record<string, readonly AiFieldSpec[]> = {
     },
   ],
   dialogue: [
-    { key: 'name', type: 'string', desc: '对白名' },
+    { key: 'name', type: 'string', desc: '对白名', schema: freeTextBudget },
     {
       key: 'lines',
       type: 'array',
@@ -120,8 +144,13 @@ export const AI_NODE_FIELDS: Record<string, readonly AiFieldSpec[]> = {
     },
   ],
   beat: [
-    { key: 'name', type: 'string', desc: '节拍名' },
-    { key: 'tone', type: 'string', desc: '情绪基调' },
+    { key: 'name', type: 'string', desc: '节拍名', schema: freeTextBudget },
+    {
+      key: 'tone',
+      type: 'string',
+      desc: '情绪基调',
+      schema: freeTextBudget,
+    },
     {
       key: 'episodeNo',
       type: 'integer',
@@ -130,7 +159,12 @@ export const AI_NODE_FIELDS: Record<string, readonly AiFieldSpec[]> = {
     },
   ],
   branch: [
-    { key: 'prompt', type: 'string', desc: '分岔问句' },
+    {
+      key: 'prompt',
+      type: 'string',
+      desc: '分岔问句',
+      schema: freeTextBudget,
+    },
     {
       key: 'options',
       type: 'array',
@@ -139,7 +173,7 @@ export const AI_NODE_FIELDS: Record<string, readonly AiFieldSpec[]> = {
         items: {
           anyOf: [
             textValue,
-            itemObject({ id: textValue, label: textValue }, ['label']),
+            itemObject({ id: idValue, label: textValue }, ['label']),
           ],
         },
       },
@@ -158,9 +192,24 @@ export const AI_NODE_FIELDS: Record<string, readonly AiFieldSpec[]> = {
       desc: '镜号（正整数）',
       schema: positiveNumber,
     },
-    { key: 'size', type: 'string', desc: '景别（特写/中景/全景…）' },
-    { key: 'picture', type: 'string', desc: '画面描述' },
-    { key: 'prompt', type: 'string', desc: '镜头 Prompt（AI 视频模型输入）' },
+    {
+      key: 'size',
+      type: 'string',
+      desc: '景别（特写/中景/全景…）',
+      schema: freeTextBudget,
+    },
+    {
+      key: 'picture',
+      type: 'string',
+      desc: '画面描述',
+      schema: freeTextBudget,
+    },
+    {
+      key: 'prompt',
+      type: 'string',
+      desc: '镜头 Prompt（AI 视频模型输入）',
+      schema: freeTextBudget,
+    },
     {
       key: 'refs',
       type: 'array',
