@@ -321,10 +321,10 @@ function useJobWriteGuard(
   )
 }
 
-/** 宿主节点删除观察（§13 作业生命周期）：running 作业的宿主节点被删即
- * 协作式取消（Rust 未过检查点即放弃结果）并清作业表——不为已删节点
- * 白白支付、不留孤儿媒体；结果若已过检查点返回，jobAlive 已清即静默
- * 丢弃。删除可撤销：undo 复活节点后作业已清，重新生成即可。 */
+/** 宿主节点删除观察（§13 作业生命周期）：清除被删宿主的全部作业状态，
+ * 包括已落定错误；仅 running 作业额外发协作式取消，未过 Rust 检查点
+ * 即放弃结果。迟到产物经 jobAlive 丢弃；undo 复活节点不恢复旧诊断，
+ * 可以重新生成。 */
 function useNodeDeletionWatch(
   nodes: CanvasNode[],
   jobsRef: { current: Record<string, ImageJobView> },
@@ -337,18 +337,20 @@ function useNodeDeletionWatch(
       if (!alive.has(nodeId)) pendingCancellationsRef.current.delete(nodeId)
     }
     for (const [nodeId, job] of Object.entries(jobsRef.current)) {
-      if (job?.status !== 'running' || alive.has(nodeId)) continue
-      void tauriInvoke('llm_image_cancel', { jobId: job.jobId }).catch(
-        (err: unknown) => {
-          // 宿主已删无节点级 UI 宿主（issue #160）：控制台留痕定位；
-          // 结果到达时 jobAlive 已清，仍按取消语义丢弃
-          console.error(
-            '[imagegen] 宿主节点已删除，取消请求失败（远端生成可能继续并计费，结果将被丢弃）',
-            job.jobId,
-            err,
-          )
-        },
-      )
+      if (alive.has(nodeId)) continue
+      if (job?.status === 'running') {
+        void tauriInvoke('llm_image_cancel', { jobId: job.jobId }).catch(
+          (err: unknown) => {
+            // 宿主已删无节点级 UI 宿主（issue #160）：控制台留痕定位；
+            // 结果到达时 jobAlive 已清，仍按取消语义丢弃
+            console.error(
+              '[imagegen] 宿主节点已删除，取消请求失败（远端生成可能继续并计费，结果将被丢弃）',
+              job.jobId,
+              err,
+            )
+          },
+        )
+      }
       clearJob(nodeId)
     }
   }, [nodes, jobsRef, clearJob, pendingCancellationsRef])
@@ -534,7 +536,7 @@ export function useImageJobsState(deps: ImageJobsDeps): {
   } = table
   /** 作业写回守卫：卸载协作式取消 + 存活/身份判定（useJobWriteGuard）。 */
   const jobAlive = useJobWriteGuard(jobsRef, pendingCancellationsRef)
-  /** 宿主节点删除观察：running 作业随宿主删除协作式取消并清表。 */
+  /** 宿主节点删除观察：全部作业状态清表，仅 running 作业发协作式取消。 */
   useNodeDeletionWatch(nodes, jobsRef, clearJob, pendingCancellationsRef)
 
   const applyResult = useCallback(

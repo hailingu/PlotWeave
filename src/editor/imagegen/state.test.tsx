@@ -532,6 +532,93 @@ describe('生成调度：取消诊断生命周期（PR #200）', () => {
   })
 })
 
+describe('生成调度：已落定错误随宿主删除清理（PR #200）', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it.each(['cancel', 'generation', 'settings', 'plan'] as const)(
+    '%s 错误后删除并复活：不保留旧诊断、不重复取消，重新生成可落位',
+    async (source) => {
+      const h = setupCancellationRace()
+      if (source === 'settings')
+        vi.mocked(settingsStore.load).mockRejectedValueOnce(
+          new Error('设置加载失败'),
+        )
+      if (source === 'plan')
+        vi.mocked(settingsStore.load).mockResolvedValueOnce({
+          ...validSettings,
+          defaultImage: null,
+        })
+      act(() => apiRef!.start('img1'))
+      if (source === 'cancel' || source === 'generation') {
+        await waitFor(() => expect(generateCount()).toBe(1))
+        if (source === 'cancel') {
+          act(() => apiRef!.cancel('img1'))
+          await act(async () =>
+            h.cancellations[0].reject(new Error('取消失败')),
+          )
+        } else {
+          await act(async () => h.generations[0].reject(new Error('生成失败')))
+        }
+      }
+      await waitFor(() => expect(apiRef!.jobOf('img1')?.status).toBe('error'))
+      h.setNodes([])
+      expect(apiRef!.jobOf('img1')).toBeNull()
+      h.setNodes([h.node])
+      expect(apiRef!.jobOf('img1')).toBeNull()
+      expect(
+        vi
+          .mocked(tauriInvoke)
+          .mock.calls.filter(([cmd]) => cmd === 'llm_image_cancel'),
+      ).toHaveLength(source === 'cancel' ? 1 : 0)
+
+      const nextGeneration = generateCount()
+      act(() => apiRef!.start('img1'))
+      await waitFor(() => expect(generateCount()).toBe(nextGeneration + 1))
+      await act(async () =>
+        h.generations[nextGeneration].resolve(generatedAsset('pa-new')),
+      )
+      if (source === 'cancel')
+        await act(async () =>
+          h.generations[0].resolve(generatedAsset('pa-old')),
+        )
+      expect(h.assets.byId).toEqual({ 'pa-new': generatedAsset('pa-new') })
+      expect(h.node.data.outputs.primary).toEqual({ assetId: 'pa-new' })
+      expect(h.pushHistory).toHaveBeenCalledTimes(1)
+      expect(apiRef!.jobOf('img1')).toBeNull()
+    },
+  )
+})
+
+describe('生成调度：删除错误状态的节点隔离（PR #200）', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('只清理被删宿主的错误，保留幸存节点的诊断', async () => {
+    const h = setupCancellationRace()
+    const other = { ...h.node, id: 'img2', data: imageNodeData() }
+    h.setNodes([h.node, other])
+    act(() => {
+      apiRef!.start('img1')
+      apiRef!.start('img2')
+    })
+    await waitFor(() => expect(generateCount()).toBe(2))
+    await act(async () => {
+      h.generations[0].reject(new Error('节点 1 生成失败'))
+      h.generations[1].reject(new Error('节点 2 生成失败'))
+    })
+    expect(apiRef!.jobOf('img1')?.status).toBe('error')
+    expect(apiRef!.jobOf('img2')?.status).toBe('error')
+    const retained = apiRef!.jobOf('img2')
+    h.setNodes([other])
+    expect(apiRef!.jobOf('img1')).toBeNull()
+    expect(apiRef!.jobOf('img2')).toEqual(retained)
+    expect(
+      vi
+        .mocked(tauriInvoke)
+        .mock.calls.filter(([cmd]) => cmd === 'llm_image_cancel'),
+    ).toHaveLength(0)
+  })
+})
+
 describe('生成调度：卸载/删除取消的失败留痕（issue #160）', () => {
   it('卸载取消 IPC 拒绝：控制台点名 jobId 与协作式后果，不产生未处理拒绝', async () => {
     ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
