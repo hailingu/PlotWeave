@@ -264,30 +264,45 @@ pub(crate) fn atomic_write(root: &CapDir, file_name: &str, text: &str) -> Result
     }
     result
 }
-/// 计算目录条目宿主链（§10.2，Unix）：从 `dir` 的最深已存在祖先（锚点，
-/// 含 `dir` 本身）到其直接父目录的每一级路径——新建目录的条目都落在
-/// 这些宿主里。`dir` 已存在时退化为仅含直接父目录：这是单级未同步
-/// 创建的兜底（宿主链在创建时刻已不可考），多级兜底由「每个创建入口
-/// 都用 [`create_dir_all_durable`] 在创建时刻同步」承担——store/library
-/// 侧入口尚未接入该助手，属已记录的后续事项（PR #201 评审）。根目录
-/// 无父级宿主，返回 None。
+/// 目录条目持久化计划（§10.2，Unix）：`hosts` 为新条目宿主链——从
+/// `dir` 的最深已存在祖先（锚点，含 `dir` 本身）到其直接父目录的每一
+/// 级路径，新建目录的条目都落在这些宿主里；`created` 为本次调用预期
+/// 新建的各级目录（严格位于锚点之下、含 `dir` 本身，浅→深），是失败
+/// 清理的回滚范围。`dir` 已存在时 hosts 退化为仅含直接父目录：这是
+/// 单级未同步创建的兜底（宿主链在创建时刻已不可考），多级兜底由
+/// 「每个创建入口都用 [`create_dir_all_durable`] 在创建时刻同步、失败
+/// 即拆除新建层级让重试重新探测锚点」承担——store/library 侧入口
+/// 尚未接入该助手，属已记录的后续事项（PR #201 评审）。根目录无父级
+/// 宿主，返回 None。
 #[cfg(unix)]
-fn entry_sync_chain(dir: &std::path::Path) -> Option<Vec<std::path::PathBuf>> {
+struct EntrySyncPlan {
+    hosts: Vec<std::path::PathBuf>,
+    created: Vec<std::path::PathBuf>,
+}
+#[cfg(unix)]
+fn entry_sync_plan(dir: &std::path::Path) -> Option<EntrySyncPlan> {
     let parent = dir.parent()?;
     let anchor = dir.ancestors().find(|p| p.symlink_metadata().is_ok())?;
     if anchor == dir {
-        return Some(vec![parent.to_path_buf()]);
+        return Some(EntrySyncPlan {
+            hosts: vec![parent.to_path_buf()],
+            created: Vec::new(),
+        });
     }
-    let mut hosts = Vec::new();
-    let mut cursor = parent;
+    // 自 dir 向上收集新建级（深→浅），再反转为浅→深
+    let mut created = Vec::new();
+    let mut cursor = dir;
     while cursor != anchor {
-        hosts.push(cursor.to_path_buf());
+        created.push(cursor.to_path_buf());
         // 锚点是 dir 的严格祖先，父链必经；None 仅为防御性早退
         cursor = cursor.parent()?;
     }
+    created.reverse();
+    // hosts = 锚点 + 除最深层（dir）外的各新建级：每级新条目落在其父宿主里
+    let mut hosts = Vec::with_capacity(created.len());
     hosts.push(anchor.to_path_buf());
-    hosts.reverse();
-    Some(hosts)
+    hosts.extend(created[..created.len() - 1].iter().cloned());
+    Some(EntrySyncPlan { hosts, created })
 }
 /// 逐级同步目录条目宿主：自锚点向下游（先持久宿主条目，再持久子级），
 /// 任一失败上抛，不粉饰成功。
@@ -299,19 +314,41 @@ fn sync_entry_hosts(hosts: &[std::path::PathBuf]) -> Result<(), StoreError> {
     }
     Ok(())
 }
+/// 失败清理：自深至浅尽力拆除本次新建的各级目录（仅空目录可拆）。
+/// 拆除失败（并发写入占据等）不掩盖原始错误；残留层级与「清理前来
+/// 不及执行的崩溃／断电」同属记录边界——下次调用走「目录已存在」
+/// 单级兜底（PR #201 第三轮评审）。
+#[cfg(unix)]
+fn remove_created_levels(created: &[std::path::PathBuf]) {
+    for path in created.iter().rev() {
+        let _ = fs::remove_dir(path);
+    }
+}
 /// [`fs::create_dir_all`] 的持久化版本（§10.2）：先探测最深已存在祖先，
 /// 创建 `dir` 后逐级 fsync 新目录条目所在的宿主（Unix），使首次创建的
 /// 目录条目与调用方后续写入的内容同为持久；宿主链在写入内容前同步，
-/// 失败时 `dir` 内尚无内容产生。非 Unix 沿用共享内核现状，不执行目录
-/// fsync（Windows 目录句柄无法 fsync）。并发创建幂等：`create_dir_all`
-/// 不区分本次或他方创建，宿主链覆盖锚点到直接父目录的每一级路径。
+/// 失败时 `dir` 内尚无内容产生。创建或同步失败即尽力拆除本次新建层级
+/// 后返回原错误——重试得以重新探测锚点、再做全链同步，而非退化为
+/// 「目录已存在」的单级兜底（PR #201 第三轮评审）。非 Unix 沿用共享
+/// 内核现状，不执行目录 fsync（Windows 目录句柄无法 fsync）。并发创建
+/// 幂等：`create_dir_all` 不区分本次或他方创建，宿主链覆盖锚点到直接
+/// 父目录的每一级路径。
 pub(crate) fn create_dir_all_durable(dir: &std::path::Path) -> Result<(), StoreError> {
     #[cfg(unix)]
-    let hosts = entry_sync_chain(dir);
-    fs::create_dir_all(dir).map_err(|e| StoreError::io("创建目录失败", e))?;
+    let plan = entry_sync_plan(dir);
+    if let Err(e) = fs::create_dir_all(dir) {
+        #[cfg(unix)]
+        if let Some(plan) = &plan {
+            remove_created_levels(&plan.created);
+        }
+        return Err(StoreError::io("创建目录失败", e));
+    }
     #[cfg(unix)]
-    if let Some(hosts) = hosts {
-        sync_entry_hosts(&hosts)?;
+    if let Some(plan) = plan {
+        if let Err(e) = sync_entry_hosts(&plan.hosts) {
+            remove_created_levels(&plan.created);
+            return Err(e);
+        }
     }
     Ok(())
 }
@@ -323,27 +360,27 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn entry_sync_chain_covers_each_host_of_new_levels() {
+    fn entry_sync_plan_covers_hosts_and_rollback_scope_of_new_levels() {
         let tmp = std::env::temp_dir().join(format!("pw-chain-{}", new_id()));
         fs::create_dir(&tmp).expect("建临时根");
-        // 两级新建：宿主 = 锚点 tmp 与中间级 tmp/mid
+        // 两级新建：宿主 = 锚点 tmp 与中间级 tmp/mid；回滚范围含 dir 本身
+        let plan = entry_sync_plan(&tmp.join("mid").join("leaf")).unwrap();
+        assert_eq!(plan.hosts, vec![tmp.clone(), tmp.join("mid")]);
         assert_eq!(
-            entry_sync_chain(&tmp.join("mid").join("leaf")).unwrap(),
-            vec![tmp.clone(), tmp.join("mid")]
+            plan.created,
+            vec![tmp.join("mid"), tmp.join("mid").join("leaf")]
         );
-        // 一级新建：宿主 = 既有父目录
-        assert_eq!(
-            entry_sync_chain(&tmp.join("leaf")).unwrap(),
-            vec![tmp.clone()]
-        );
-        // 目标已存在：仍同步直接父目录（其他入口可能未做屏障先行创建）
+        // 一级新建：宿主 = 既有父目录；回滚范围 = 目标本身
+        let plan = entry_sync_plan(&tmp.join("leaf")).unwrap();
+        assert_eq!(plan.hosts, vec![tmp.clone()]);
+        assert_eq!(plan.created, vec![tmp.join("leaf")]);
+        // 目标已存在：仍同步直接父目录（单级兜底），无回滚范围
         fs::create_dir(tmp.join("exists")).expect("预建目标");
-        assert_eq!(
-            entry_sync_chain(&tmp.join("exists")).unwrap(),
-            vec![tmp.clone()]
-        );
+        let plan = entry_sync_plan(&tmp.join("exists")).unwrap();
+        assert_eq!(plan.hosts, vec![tmp.clone()]);
+        assert!(plan.created.is_empty());
         // 根目录无父级宿主
-        assert!(entry_sync_chain(std::path::Path::new("/")).is_none());
+        assert!(entry_sync_plan(std::path::Path::new("/")).is_none());
         fs::remove_dir_all(&tmp).expect("清理临时根");
     }
 

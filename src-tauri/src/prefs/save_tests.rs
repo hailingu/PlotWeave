@@ -287,6 +287,47 @@ fn ensure_data_dir_persists_every_host_of_new_levels() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn ensure_data_dir_removes_created_levels_on_sync_failure_for_full_retry() {
+    // PR #201 第三轮评审（P2）：多级新建后条目同步失败时，新建层级若
+    // 残留，重试会走「目录已存在」分支只兜底直接父目录，更上层条目
+    // 永不落盘——失败必须拆除本次新建层级，重试才能重新探测锚点、
+    // 再次全链同步。
+    let base = PrefsDir::new();
+    let target = base.0.join("level-a").join("level-b");
+    let injection = Injection::new(Some(Stage::EntrySync), None);
+    assert!(ensure_data_dir(&target).is_err());
+    drop(injection);
+    assert!(!target.exists(), "失败后最深新建层级应被清理");
+    assert!(
+        !base.0.join("level-a").exists(),
+        "失败后中间新建层级应被清理"
+    );
+    let injection = Injection::new(None, None);
+    ensure_data_dir(&target).unwrap();
+    assert_eq!(
+        injection.stages(),
+        vec![Stage::EntrySync, Stage::EntrySync],
+        "重试应重新全链同步，实际阶段：{:?}",
+        injection.stages()
+    );
+}
+
+#[test]
+fn ensure_data_dir_rejects_file_blocked_path_without_side_effects() {
+    // 守卫：路径中间级被文件占据时创建失败，不产生任何新建层级，也
+    // 不改动既有条目（部分失败残留清理的边界用例）。
+    let base = PrefsDir::new();
+    let blocker = base.0.join("blocker");
+    fs::write(&blocker, "occupied").unwrap();
+    let target = blocker.join("leaf");
+    let error = ensure_data_dir(&target).unwrap_err();
+    assert!(error.contains("创建数据目录失败"), "{error}");
+    assert_eq!(fs::read_to_string(&blocker).unwrap(), "occupied");
+    assert!(!target.exists());
+}
+
 #[test]
 fn atomic_save_collision_does_not_remove_another_writers_temp_file() {
     // 排他创建失败意味着该临时文件从未归本次操作所有，清理不能删除它。
