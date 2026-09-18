@@ -334,9 +334,10 @@ mod tests {
         // issue #15 验收基线：对话为非流式补全（长回复、慢模型），超时
         // 不低于 120s；主响应是纯 JSON 文本（无 base64 图像膨胀），上限
         // 无需 64 MiB，按对话 JSON 合理放宽（16 MiB 量级）。
-        assert!(CHAT_REQUEST_TIMEOUT_SECS >= 120);
-        assert!(CHAT_RESPONSE_BODY_MAX_BYTES >= 1024 * 1024);
-        assert!(CHAT_RESPONSE_BODY_MAX_BYTES <= 16 * 1024 * 1024);
+        // 编译期断言（const block）：基线失守即编译失败，强于运行时测试。
+        const { assert!(CHAT_REQUEST_TIMEOUT_SECS >= 120) };
+        const { assert!(CHAT_RESPONSE_BODY_MAX_BYTES >= 1024 * 1024) };
+        const { assert!(CHAT_RESPONSE_BODY_MAX_BYTES <= 16 * 1024 * 1024) };
     }
 
     // ---- issue #120：load_prefs 读取失败分类（read_prefs_at 内核） ----
