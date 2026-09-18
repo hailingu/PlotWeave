@@ -22,6 +22,7 @@ import {
 import { PW_LIBRARY_ASSET_MIME } from '../dragDrop'
 import { EditableName } from '../nodes/settings/NodeSettingsPanel'
 import { ConfirmDeleteDialog } from '../../home/Dialogs'
+import { LibraryWarnings } from './LibraryWarnings'
 
 /** 失焦身份：本轮真实编辑、已提交但仍保留的草稿、无草稿的已保存显示。
  * draft 仅在有未解决失败时用于重试；值相等不代表未编辑。 */
@@ -453,6 +454,7 @@ export function AssetsPanel() {
 
   return (
     <div className="pw-assets">
+      <LibraryWarnings />
       <input
         ref={fileRef}
         type="file"

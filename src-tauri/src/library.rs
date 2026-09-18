@@ -471,4 +471,6 @@ pub(crate) mod media;
 #[cfg(test)]
 mod read_only_tests;
 #[cfg(test)]
+mod recovery_tests;
+#[cfg(test)]
 mod tests;

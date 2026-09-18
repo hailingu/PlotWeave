@@ -25,6 +25,8 @@ pub(super) struct JournalEntry {
     pub(super) dev: u64,
     pub(super) ino: u64,
     pub(super) trash_name: String,
+    /// 索引损坏时无法证明删除已提交；持久保留现场，不从缺失项推断清理。
+    pub(super) index_uncertain: bool,
 }
 
 /// 解析 journal 单元格式的身份对象。
@@ -65,6 +67,10 @@ fn parse_entry(v: &Value, seen: &mut Vec<String>) -> Option<JournalEntry> {
         return None;
     }
     let (dev, ino) = parse_identity(o.get("identity"))?;
+    let index_uncertain = match o.get("indexUncertain") {
+        None => false,
+        Some(value) => value.as_bool()?,
+    };
     seen.push(id.clone());
     Some(JournalEntry {
         id,
@@ -73,6 +79,7 @@ fn parse_entry(v: &Value, seen: &mut Vec<String>) -> Option<JournalEntry> {
         dev,
         ino,
         trash_name: trash_name.to_string(),
+        index_uncertain,
     })
 }
 
@@ -145,6 +152,11 @@ pub(super) fn write_journal(
     let items: Vec<Value> = entries.iter().map(journal_entry_value).collect();
     let text = serde_json::to_string(&json!(items))
         .map_err(|e| LibraryError::serialize("序列化日志失败", e))?;
+    if text.len() > INDEX_MAX_BYTES {
+        return Err(LibraryError::Limit {
+            detail: "删除日志更新超过大小上限，拒绝写入".into(),
+        });
+    }
     atomic_write(library, JOURNAL_FILE_NAME, &text).map_err(LibraryError::from)?;
     fsync_dir(library)
 }
