@@ -15,8 +15,8 @@ fn cap(p: &Path) -> CapDir {
     CapDir::open_ambient_dir(p, ambient_authority()).expect("打开测试根句柄")
 }
 
-/// 本测试专用的登记表实例：唯一项目 id（见各用例）+ 独立实例双保险，
-/// 并行执行不串扰（评审修复）。
+// 本测试专用的登记表实例：唯一项目 id（见各用例）+ 独立实例双保险，
+// 并行执行不串扰（评审修复）。
 
 /// 唯一临时根：`{tmp}/pw-pmedia-test-{new_id}/` 下含 `projects/` 与
 /// `library/assets/`；返回 (projects, library, root)——root 供清理。

@@ -382,6 +382,10 @@ fn legacy_float_spelled_epoch_millis_converts_to_utc_iso() {
     );
     // 转换本身是修复（毫秒→ISO），诊断可见；不要求特定文案——值域非法的
     // 拼写（非整数/负数/超范围）才须隔离警告
+    assert!(
+        !warnings.is_empty(),
+        "浮点拼写转换为修复路径，应产生规范化诊断"
+    );
     let mut b = asset("la-2");
     b["createdAt"] = json!(1.7e12);
     let legacy = json!({ "assets": [b], "groups": [] });
