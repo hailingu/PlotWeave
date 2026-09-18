@@ -3,7 +3,7 @@ import { validateAiBatch } from './batchFold'
 import type { AiGraphSnapshot } from './commands'
 import { entSnap, snap } from './testGraphs'
 import { DOCUMENT_BODY_MAX_CHARS, FREE_TEXT_MAX_CHARS } from './textBudget'
-import { WRITE_PARAMETERS } from './toolSchemas'
+import { WRITE_PARAMETERS, BATCH_PARAMETERS } from './toolSchemas'
 
 /**
  * AI 自由文本字段的写入体积预算（issue #170）：普通自由文本字段
@@ -186,5 +186,67 @@ describe('issue #170 · 工具 schema 向模型广告同一预算', () => {
     }
     expect(docFields.properties.body.maxLength).toBe(DOCUMENT_BODY_MAX_CHARS)
     expect(docFields.properties.title.maxLength).toBe(FREE_TEXT_MAX_CHARS)
+  })
+
+  it('实体 name 的通道化重建保留 maxLength（单写与批次新建两入口）', () => {
+    // toolSchemas 为实体名称叠加非空白 pattern 与通道文案时不得丢掉协议表
+    // 广告的体积预算——替换式重建会让模型可见协议与校验边界漂移（评审）
+    const single = WRITE_PARAMETERS.upsert_character.properties.fields as {
+      properties: Record<string, { maxLength?: number }>
+    }
+    expect(single.properties.name.maxLength).toBe(FREE_TEXT_MAX_CHARS)
+
+    type Variant = {
+      properties: {
+        op: { enum: string[] }
+        fields: {
+          required?: string[]
+          properties: Record<string, { maxLength?: number }>
+        }
+      }
+    }
+    const batchVariants = (
+      BATCH_PARAMETERS.properties.commands as { items: { anyOf: Variant[] } }
+    ).items.anyOf
+    const createCharacter = batchVariants.find(
+      (v) =>
+        v.properties.op.enum[0] === 'upsert_character' &&
+        v.properties.fields.required?.includes('name'),
+    )
+    expect(createCharacter?.properties.fields.properties.name.maxLength).toBe(
+      FREE_TEXT_MAX_CHARS,
+    )
+  })
+
+  it('字符数按 Unicode 码点计（与 JSON Schema maxLength 同口径）', () => {
+    // 星号平面字符（emoji）占两个 UTF-16 码元：按 length 会把 65,536 个
+    // 码点误计为 131,072——广告契约放行而校验边界拒绝，诊断字数同样错
+    const fit = '😀'.repeat(FREE_TEXT_MAX_CHARS)
+    const over = '😀'.repeat(FREE_TEXT_MAX_CHARS + 1)
+    const ok = validateAiBatch(
+      [
+        {
+          op: 'create_node',
+          nodeType: 'scene',
+          data: { name: '场', synopsis: fit },
+        },
+      ],
+      snap(),
+    )
+    expect(ok.ok, JSON.stringify(ok.issues)).toBe(true)
+    const bad = validateAiBatch(
+      [
+        {
+          op: 'create_node',
+          nodeType: 'scene',
+          data: { name: '场', synopsis: over },
+        },
+      ],
+      snap(),
+    )
+    expect(bad.ok).toBe(false)
+    expect(bad.issues.map((i) => i.message).join('\n')).toContain(
+      `实际 ${FREE_TEXT_MAX_CHARS + 1} 字符`,
+    )
   })
 })
