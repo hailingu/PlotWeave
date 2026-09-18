@@ -361,6 +361,8 @@ type ShotRef =
   | { id: string; kind: 'character' | 'location' | 'audio'; label: string; assetId?: never }  // 自由位：手填文案
 ```
 
+**分镜引用读取防护（[issue #130](https://github.com/hailingu/PlotWeave/issues/130)，已实现）**：`ShotNode` 仅将 `assets.byId` 的自有条目视为引用目标，不把对象原型的继承成员当成资产；特殊属性名不是禁用 id，同名自有合法条目仍可解析。渲染前检查 MIME 为字符串，目标缺失、条目为空或 MIME 缺失/异型时仅对该引用显示带资产 ID 的失效提示，不清除 `ShotRef`、不修改资产索引，合法条目恢复后重新展示。这是 §8.2.3 的局部展示兜底，不替代 §7.1/§11 的完整资产校验，不改变持久化格式或写入契约。
+
 **图片节点（§13 文生图首版，生成侧媒体节点）**：自由摆放在画布上，不参与任何连线（sequence/branch/attach 端点均不得为 image——§5 端口归属与 §11.3 孤儿边规则同域拒绝）；生成操作由 `spec` 携带，产物落 `outputs` 槽位：
 
 ```ts
