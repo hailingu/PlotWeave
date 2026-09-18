@@ -4,6 +4,7 @@
  * 输入边界（issue #104）：只接收本区域真实消费的四个域，布局层不再透传
  * 整包 EditorLayoutProps——AI 会话、保存回调等无关输入在类型层即不可达。
  */
+import { useMemo } from 'react'
 import { CanvasContextMenu } from './CanvasContextMenu'
 import { ExportDialog } from './ExportDialog'
 import { buildScriptExport } from './exportScript'
@@ -33,6 +34,33 @@ export interface EditorOverlaysProps {
 /** 右键菜单：节点 = 设置/复制/删除；空白 = 五类新增（§4.3）。 */
 export function EditorOverlays(props: EditorOverlaysProps) {
   const { project, doc, panels, graph } = props
+  // 剧本导出模型按内容依赖缓存（issue #158，语义收口为「实时预览」）：
+  // 打开期间无关渲染复用同一模型——预览/复制/下载本就共读一份；
+  // 节点/连线/设定/资产/集标题/项目名任一变化才重建，内容不冻结。
+  // 资产取响应式 doc.assets 而非 assetsRef 镜像：ref 读取不进依赖，
+  // 模型变化不会触发重建
+  const exportModel = useMemo(
+    () =>
+      panels.exportOpen
+        ? buildScriptExport({
+            projectName: project.name,
+            nodes: doc.nodes,
+            edges: doc.edges,
+            settings: doc.settings,
+            assets: doc.assets,
+            episodeTitles: doc.episodeTitles,
+          })
+        : null,
+    [
+      panels.exportOpen,
+      project.name,
+      doc.nodes,
+      doc.edges,
+      doc.settings,
+      doc.assets,
+      doc.episodeTitles,
+    ],
+  )
   return (
     <>
       {panels.ctxMenu && (
@@ -49,18 +77,11 @@ export function EditorOverlays(props: EditorOverlaysProps) {
           onClose={() => panels.setCtxMenu(null)}
         />
       )}
-      {/* 剧本导出对话框（§3.3/§3.5）：打开时按当前画布生成一次，正文与可选大纲共用 */}
-      {panels.exportOpen && (
+      {/* 剧本导出对话框（§3.3/§3.5）：正文与可选大纲共用缓存模型 */}
+      {panels.exportOpen && exportModel !== null && (
         <ExportDialog
           projectName={project.name}
-          model={buildScriptExport({
-            projectName: project.name,
-            nodes: doc.nodes,
-            edges: doc.edges,
-            settings: doc.settings,
-            assets: doc.assetsRef.current,
-            episodeTitles: doc.episodeTitles,
-          })}
+          model={exportModel}
           onClose={() => panels.setExportOpen(false)}
         />
       )}
