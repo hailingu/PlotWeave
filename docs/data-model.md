@@ -917,6 +917,8 @@ type GraphCommandOf<K extends CommandType> = Extract<GraphCommand, { type: K }>
 
 验证记录（2026-09-18，[PR #201](https://github.com/hailingu/PlotWeave/pull/201) 第三轮评审修复）：`create_dir_all_durable` 的创建／同步失败路径新增回滚——自深至浅尽力拆除本次新建层级（仅空目录可拆），重试重新探测锚点做全链同步而非退化为单级兜底。`cargo test --lib prefs::save_tests` 17 项通过（新增 `ensure_data_dir_removes_created_levels_on_sync_failure_for_full_retry` 先红后绿、`ensure_data_dir_rejects_file_blocked_path_without_side_effects` 守卫）；`persist::tests::entry_sync_plan_covers_hosts_and_rollback_scope_of_new_levels` 同时断言宿主链与回滚范围。残留边界（清理前来不及执行的崩溃／断电、清理不完整、并发进入）按 P2 记录于上文，未覆盖 store／library 入口。
 
+验证记录（2026-09-18，[PR #201](https://github.com/hailingu/PlotWeave/pull/201) 第四轮评审修复）：锚点探测 `existing_anchor` 改为 `NotFound` 视为缺失、其余 I/O 失败按 fail-closed 上抛（探测失败优先于任何回滚计划），消除「瞬态元数据错误使现存目录被误判为本次新建、进而被失败清理拆除」的窗口。`cargo test --lib prefs::save_tests` 17 项通过；320 项单元测试全绿。
+
 ### 10.3 Provider 与模型配置
 
 BYOK 下 provider 分两层：**内置适配器在代码里，用户配置（含加密后的 API key）在 `settings.json`**。
