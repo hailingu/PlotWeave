@@ -1,7 +1,7 @@
 //! 个人资产库（docs/ui-design.md §8.1 / 数据模型 §7）：
 //! 应用级 `library/` 目录跨项目复用——`library.json` 全量索引（内存过滤），
 //! 媒体文件落 `library/assets/`，展示经 `pwmedia` 自定义协议按 id 懒加载
-//! （§7.1 opaque asset URL，协议面在 [`media`] 子模块，issue #26/#31）。
+//! （§7.1 opaque asset URL，协议面由 [`crate::media_protocol`] 独立持有，issue #26/#31）。
 //! 索引结构对前端自有（serde_json::Value 透传）。
 //! 全部文件操作经 [`crate::library_fs`] 共享内核的受信锚定句柄执行（§7.1/§7.2
 //! 信任链）：脏索引条目在读取时白名单隔离，删除经 `library/assets/` 专用根
@@ -16,6 +16,7 @@ use crate::library_fs::{
     write_index, write_index_with,
 };
 use crate::library_journal::{library_file_lock, library_op_lock};
+use crate::media_format::ext_for;
 use crate::store::is_canonical_mime;
 
 /// 单文件上限 20 MiB：资产库放参考图/氛围图，防异常输入撑爆磁盘与 IPC。
@@ -249,27 +250,6 @@ fn unique_library_id_with<G: FnMut() -> String>(
     fallback
 }
 
-/// mime → 扩展名（未知类型回退 bin，文件名扩展优先）。
-pub(crate) fn ext_for(name: &str, mime: &str) -> String {
-    if let Some(dot) = name.rfind('.') {
-        let ext = &name[dot + 1..];
-        let ok =
-            !ext.is_empty() && ext.len() <= 8 && ext.chars().all(|c| c.is_ascii_alphanumeric());
-        if ok {
-            return ext.to_ascii_lowercase();
-        }
-    }
-    match mime {
-        "image/png" => "png",
-        "image/jpeg" => "jpg",
-        "image/webp" => "webp",
-        "image/gif" => "gif",
-        "image/avif" => "avif",
-        _ => "bin",
-    }
-    .to_string()
-}
-
 /// 校验元信息补丁（§7.2）：字段白名单；字段**一旦出现**即做运行时类型和
 /// 值域校验——非字符串的 name/kind/view、tags 的异型/空白/超长/重复成员与
 /// 超 16 项一律拒绝整次命令，不得静默跳过校验、截断或留待读取归一化剥离
@@ -466,7 +446,6 @@ pub fn update_library_asset(app: AppHandle, id: String, patch: Value) -> Result<
 
 pub(crate) mod error;
 pub(crate) mod group_commands;
-pub(crate) mod media;
 #[cfg(test)]
 mod read_only_tests;
 #[cfg(test)]

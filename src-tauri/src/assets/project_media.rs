@@ -25,7 +25,7 @@ use super::error::AssetsError;
 /// 项目资产 id 的持久化契约（与保存边界 `validate_save_assets` 同域，
 /// 评审修复）：非空白不透明字符串——`bad]`/Unicode/超长 id 是合法持久化
 /// 资产，此前经 project_asset_path 可显示，迁移后不得被库 id 白名单
-/// 永久拒绝。协议侧 URL 分段与 hex 编码细节归 library/media.rs。
+/// 永久拒绝。协议侧 URL 分段与 hex 编码细节归 media_protocol.rs。
 fn validate_project_asset_id(id: &str) -> Result<(), String> {
     if id.trim().is_empty() {
         return Err(format!("非法项目资产 id：{id}"));

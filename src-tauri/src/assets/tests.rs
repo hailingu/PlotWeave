@@ -363,8 +363,6 @@ fn write_generated_asset_ext_follows_mime() {
         .and_then(Value::as_str)
         .expect("relPath");
     assert!(rel.ends_with(".jpg"), "jpeg 扩展应映射为 .jpg：{rel}");
-    assert_eq!(ext_for_mime("image/webp"), "webp");
-    assert_eq!(ext_for_mime("application/octet-stream"), "bin");
     cleanup(&root);
 }
 

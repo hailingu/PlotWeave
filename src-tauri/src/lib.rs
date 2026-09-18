@@ -5,7 +5,7 @@
 //!   加密后随配置落盘，LLM 代理在 Rust 内存中解密，§6/§8.2）。
 //! - `seal`：API key 加密封装（AES-256-GCM，绑定本机）。
 //! - `library`：个人资产库（应用级 library/ 目录，索引 + 媒体文件，§8.1）。
-//! - `library::media`：`pwmedia` opaque asset URL 媒体协议（库 scope 按净化
+//! - `media_protocol`：`pwmedia` opaque asset URL 媒体协议（库 scope 按净化
 //!   索引、项目 scope 按项目文档索引逐请求解析 id，§7.1/§10.5，issue #26/#31）。
 //! - `library_fs`：资产库文件系统共享内核（受信锚定句柄、索引受限读取与
 //!   脏条目隔离——library 与 assets 共用，§7.1/§7.2 信任链）。
@@ -14,6 +14,7 @@
 //! - `assets`：项目资产管线（库资产拷贝导入、set_asset 预检、项目媒体
 //!   解析/打开内核，§7.1/§7.3/§9.3）。
 //! - `imagegen`：画布内 AI 图像生成代理（文生图，docs/data-model.md §13 首片）。
+//! - `media_format`：导入/生成媒体扩展名的无 IO 叶子策略。
 //! - `http_util`：出站 HTTP 代理共享助手（响应体流式限读内核）。
 
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -27,6 +28,8 @@ mod library;
 mod library_fs;
 mod library_index;
 mod library_journal;
+mod media_format;
+mod media_protocol;
 #[cfg(target_os = "macos")]
 mod native_quit;
 mod prefs;
@@ -192,7 +195,7 @@ pub fn run() {
             library::delete_library_asset,
             library::group_commands::upsert_library_group,
             library::group_commands::delete_library_group,
-            library::media::get_asset_media_url,
+            media_protocol::get_asset_media_url,
             assets::import_project_asset_from_library,
             assets::validate_project_asset,
             assets::project_media::register_project_asset_alias,
@@ -206,7 +209,7 @@ pub fn run() {
         // 后返回字节——本机路径与 relPath 不进入前端媒体链路。读盘放
         // spawn_blocking，避免占用主线程。
         .register_asynchronous_uri_scheme_protocol(
-            library::media::MEDIA_SCHEME,
+            media_protocol::MEDIA_SCHEME,
             |ctx, request, responder| {
                 let app = ctx.app_handle().clone();
                 let uri = request.uri().clone();
@@ -214,10 +217,10 @@ pub fn run() {
                     // 许可生命周期覆盖交付（评审修复，PR #32 第五轮）：
                     // respond 返回后才出界释放——等待中的读者不得在先前
                     // 响应体仍待交付/消费时分配新缓冲（4×单文件上限峰值契约）
-                    let library::media::MediaDelivery {
+                    let media_protocol::MediaDelivery {
                         response,
                         permit: _permit,
-                    } = library::media::handle_media_request(&app, &uri);
+                    } = media_protocol::handle_media_request(&app, &uri);
                     responder.respond(response);
                 });
             },

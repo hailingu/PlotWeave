@@ -76,14 +76,6 @@ fn name_and_kind_rules() {
     assert!(validate_kind("prop").is_err());
 }
 
-#[test]
-fn ext_mapping_prefers_name_and_falls_back_to_mime() {
-    assert_eq!(ext_for("立绘.PNG", "image/png"), "png");
-    assert_eq!(ext_for("noext", "image/webp"), "webp");
-    assert_eq!(ext_for("noext", "application/x-unknown"), "bin");
-    assert_eq!(ext_for("bad.<script>", "image/png"), "png");
-}
-
 // ---- 脏索引安全回归（issue #17 阶段 1：场景 1-3 + 符号链接 + 隔离）----
 
 /// 场景 1：relPath = "library.json" 通过旧 `!contains("..")` 检查，可删除
