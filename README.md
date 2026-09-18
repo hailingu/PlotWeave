@@ -63,6 +63,8 @@ feature/  ●───●  ●──●      任务分支（PR → dev）
 
 ```bash
 nvm use            # 切换到 .nvmrc 指定的 Node 版本（24.18.0）
+# Rust 工具链无需手动切换：rust-toolchain.toml 固定 1.95.0（含 rustfmt/clippy），
+# rustup 代理在仓库任意目录自动解析，缺失时自动安装
 npm install        # 安装前端依赖
 export SONAR_HOST_URL=http://localhost:9000 # 指向本机实际使用的 SonarQube
 export SONAR_TOKEN=your-local-token         # 服务要求认证时设置，替换为本机令牌；也可用 PLOTWEAVE_SONAR_TOKEN（如写入 ~/.zshrc）

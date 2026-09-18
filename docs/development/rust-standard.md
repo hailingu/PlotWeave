@@ -18,6 +18,13 @@ root `AGENTS.md`, this file is written in English for agent interoperability.
 
 ## Baseline Practices
 
+- Toolchain: the repository pins `rustc`/`rustfmt`/`clippy` via
+  `rust-toolchain.toml` at the repository root (currently `1.95.0`; issue
+  #167). rustup resolves it from any repository directory, so routed checks
+  are reproducible on a clean machine. Upgrades are a dedicated change to
+  that file: record the routed-command verification (`cargo fmt --check &&
+  cargo clippy --all-targets -- -D warnings && cargo test`) in the upgrade
+  PR, and do not add platform targets without a project decision.
 - Format with `cargo fmt`; do not hand-format around it.
 - Lint with `cargo clippy`; treat new warnings as defects to fix or explicitly
   and narrowly suppress with a comment explaining why.
