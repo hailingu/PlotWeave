@@ -17,14 +17,18 @@ use crate::store::types::{
     new_id, new_project_file, sanitize_name, validate_id, ProjectFile, ProjectMeta,
 };
 use crate::store::validate::{prepare_save, verify_save_asset_files};
+/// 新建项目：先校验名称，再在阻塞线程内完成目录准备和原子落盘。
 #[tauri::command]
-pub fn create_project(app: AppHandle, name: String) -> Result<ProjectMeta, String> {
-    // 不可信输入校验先于任何存储打开/创建（PR #179 评审修复）：名称非法
-    // 不得触发应用数据/projects 目录创建副作用，也不得被存储故障顶替为
-    // 名称诊断——历史行为是名称校验先于 projects_dir
-    sanitize_name(&name)?;
-    let root = projects_dir(&app).map_err(to_ipc_text)?;
-    create_project_file(&root, &name).map_err(to_ipc_text)
+pub async fn create_project(app: AppHandle, name: String) -> Result<ProjectMeta, String> {
+    crate::blocking::run("create_project", move || {
+        // 不可信输入校验先于任何存储打开/创建（PR #179 评审修复）：名称非法
+        // 不得触发应用数据/projects 目录创建副作用，也不得被存储故障顶替为
+        // 名称诊断——历史行为是名称校验先于 projects_dir
+        sanitize_name(&name)?;
+        let root = projects_dir(&app).map_err(to_ipc_text)?;
+        create_project_file(&root, &name).map_err(to_ipc_text)
+    })
+    .await
 }
 /// create_project 的可测内核：名称清洗 → 本地 id 复核 → 新建空信封 →
 /// 原子落盘（与 persist_project 同款：词法校验先于任何文件名拼接——
@@ -45,29 +49,38 @@ fn create_project_file(root: &CapDir, name: &str) -> Result<ProjectMeta, StoreEr
 /// 读取项目完整内容（含画布）；旧扁平格式包装为 v0 信封返回。读取相对
 /// projects_dir 的受信根锚定句柄解析（§10.2），不按路径名重开。
 #[tauri::command]
-pub fn load_project(app: AppHandle, id: String) -> Result<ProjectFile, String> {
-    let root = projects_dir(&app).map_err(to_ipc_text)?;
-    load_project_file(&root, &id).map_err(to_ipc_text)
+pub async fn load_project(app: AppHandle, id: String) -> Result<ProjectFile, String> {
+    crate::blocking::run("load_project", move || {
+        let root = projects_dir(&app).map_err(to_ipc_text)?;
+        load_project_file(&root, &id).map_err(to_ipc_text)
+    })
+    .await
 }
 
 /// 读取项目独立 AI 会话：`session` 为 None 表示缺失（旧项目，前端视作空
 /// 历史）或损坏（`corrupt` 置位，按可安全替换归类）；会话损坏只阻断会话
 /// 恢复，不影响同项目的画布文档读取。
 #[tauri::command]
-pub fn load_ai_session(app: AppHandle, id: String) -> Result<SessionCopy, String> {
-    let root = projects_dir(&app).map_err(to_ipc_text)?;
-    load_ai_session_file(&root, &id).map_err(to_ipc_text)
+pub async fn load_ai_session(app: AppHandle, id: String) -> Result<SessionCopy, String> {
+    crate::blocking::run("load_ai_session", move || {
+        let root = projects_dir(&app).map_err(to_ipc_text)?;
+        load_ai_session_file(&root, &id).map_err(to_ipc_text)
+    })
+    .await
 }
 
 /// 单实例会话保存：仅原子写入主文件，失败直接上浮，不写恢复副本。
 #[tauri::command]
-pub fn save_ai_session(
+pub async fn save_ai_session(
     app: AppHandle,
     id: String,
     session: serde_json::Value,
 ) -> Result<(), String> {
-    let root = projects_dir(&app).map_err(to_ipc_text)?;
-    save_ai_session_file(&root, &id, &session).map_err(to_ipc_text)
+    crate::blocking::run("save_ai_session", move || {
+        let root = projects_dir(&app).map_err(to_ipc_text)?;
+        save_ai_session_file(&root, &id, &session).map_err(to_ipc_text)
+    })
+    .await
 }
 
 /// 主文件加载结果；缺失为空历史，损坏由前端提示，真实 I/O 错误仍返回 Err。
@@ -226,9 +239,16 @@ pub(crate) fn load_project_file(root: &CapDir, id: &str) -> Result<ProjectFile, 
 /// 被并发进程替换（unlink/重命名/换符号链接）的路径在写后复验中上浮为
 /// 显式失败（文档虽已提交，篡改不得静默；下次加载复验会隔离条目兜底）。
 #[tauri::command]
-pub fn save_project(app: AppHandle, id: String, doc: ProjectFile) -> Result<ProjectMeta, String> {
-    let root = projects_dir(&app).map_err(to_ipc_text)?;
-    persist_project(&root, &id, doc).map_err(to_ipc_text)
+pub async fn save_project(
+    app: AppHandle,
+    id: String,
+    doc: ProjectFile,
+) -> Result<ProjectMeta, String> {
+    crate::blocking::run("save_project", move || {
+        let root = projects_dir(&app).map_err(to_ipc_text)?;
+        persist_project(&root, &id, doc).map_err(to_ipc_text)
+    })
+    .await
 }
 /// save_project 的可测内核（给定已验证的 projects 目录）。id 是 IPC 调用方
 /// 传入的不可信参数：词法校验先于任何路径拼接——否则 `../prefs` 式 id 可把
@@ -259,9 +279,12 @@ pub(crate) fn persist_project(
 /// cap-std）——符号链接条目只移除链接本身，绝不跟随；任一失败显式报错，
 /// 不静默遗留媒体文件。
 #[tauri::command]
-pub fn delete_project(app: AppHandle, id: String) -> Result<(), String> {
-    let root = projects_dir(&app).map_err(to_ipc_text)?;
-    delete_project_files(&root, &id).map_err(to_ipc_text)
+pub async fn delete_project(app: AppHandle, id: String) -> Result<(), String> {
+    crate::blocking::run("delete_project", move || {
+        let root = projects_dir(&app).map_err(to_ipc_text)?;
+        delete_project_files(&root, &id).map_err(to_ipc_text)
+    })
+    .await
 }
 /// delete_project 的可测内核：资产目录与项目 JSON 的成对移除，幂等。
 /// 顺序契约：先删资产树再删权威项目文件——树删除失败时项目仍在列表中
@@ -341,3 +364,6 @@ fn delete_project_files(root: &CapDir, id: &str) -> Result<(), StoreError> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod blocking_tests;

@@ -329,14 +329,17 @@ fn unverifiable_asset_keys(root: &CapDir, id: &str, assets: &serde_json::Value) 
 /// 拒收，防抖静默吞错后用户编辑永不落盘。加载本身保持只读；复验相对
 /// projects_dir 的受信根锚定句柄执行。
 #[tauri::command]
-pub fn verify_project_assets(
+pub async fn verify_project_assets(
     app: AppHandle,
     id: String,
     assets: serde_json::Value,
 ) -> Result<Vec<String>, String> {
-    validate_id(&id)?;
-    let root = projects_dir(&app).map_err(to_ipc_text)?;
-    Ok(unverifiable_asset_keys(&root, &id, &assets))
+    crate::blocking::run("verify_project_assets", move || {
+        validate_id(&id)?;
+        let root = projects_dir(&app).map_err(to_ipc_text)?;
+        Ok(unverifiable_asset_keys(&root, &id, &assets))
+    })
+    .await
 }
 /// save_project 的信封校验与规范化（§10.5）：在创建临时文件、生成保存时间
 /// 或更新索引之前完成——任一校验失败整次拒绝，不得静默剥离。全部通过后

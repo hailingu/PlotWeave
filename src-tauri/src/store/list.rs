@@ -144,9 +144,12 @@ fn sort_metas_by_recency(metas: &mut [ProjectMeta]) {
 }
 /// 列出全部项目，按更新时间新→旧排序。扫描相对受信根锚定句柄执行。
 #[tauri::command]
-pub fn list_projects(app: AppHandle) -> Result<Vec<ProjectMeta>, String> {
-    let root = projects_dir(&app).map_err(to_ipc_text)?;
-    list_project_metas(&root).map_err(to_ipc_text)
+pub async fn list_projects(app: AppHandle) -> Result<Vec<ProjectMeta>, String> {
+    crate::blocking::run("list_projects", move || {
+        let root = projects_dir(&app).map_err(to_ipc_text)?;
+        list_project_metas(&root).map_err(to_ipc_text)
+    })
+    .await
 }
 /// list_projects 的可测内核（给定已验证的 projects 根句柄）。目录扫描逐条
 /// 跳过符号链接/异型项（单条坏数据不阻断列表），JSON 损坏或信封不可判型

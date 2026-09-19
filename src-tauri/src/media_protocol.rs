@@ -481,33 +481,36 @@ pub(crate) fn handle_media_request(app: &AppHandle, uri: &tauri::http::Uri) -> M
 /// Rust。此处仅做早反馈（库冲突期/存在性复核、项目条目存在性复核），权威
 /// 校验在协议处理器的每次媒体请求内（issue #26/#31）。
 #[tauri::command]
-pub fn get_asset_media_url(
+pub async fn get_asset_media_url(
     app: AppHandle,
     scope: Value,
     asset_id: String,
 ) -> Result<String, String> {
-    let parsed = parse_media_scope(&scope)?;
-    match &parsed {
-        MediaScope::Library => {
-            let library = library_root(&app).map_err(|e| e.to_string())?;
-            with_recovery_snapshot(
-                &library,
-                |library, report| resolve_media_entry_with(library, &asset_id, report),
-                |snapshot| publish_recovery(&app, snapshot),
-            )
-            .map_err(|e| e.to_string())?;
-        }
-        MediaScope::Project { project_id } => {
-            // 项目 assetId 是不透明契约（评审修复）：命令面按同域值域
-            // 先行校验，非法 id 在触达文件系统前拒绝
-            validate_project_media_id(&asset_id)?;
-            let projects = projects_dir(&app).map_err(to_ipc_text)?;
-            let pending = app.state::<PendingProjectAssets>();
-            resolve_project_media_entry(&projects, project_id, &asset_id, &pending)
+    crate::blocking::run("get_asset_media_url", move || {
+        let parsed = parse_media_scope(&scope)?;
+        match &parsed {
+            MediaScope::Library => {
+                let library = library_root(&app).map_err(|e| e.to_string())?;
+                with_recovery_snapshot(
+                    &library,
+                    |library, report| resolve_media_entry_with(library, &asset_id, report),
+                    |snapshot| publish_recovery(&app, snapshot),
+                )
                 .map_err(|e| e.to_string())?;
+            }
+            MediaScope::Project { project_id } => {
+                // 项目 assetId 是不透明契约（评审修复）：命令面按同域值域
+                // 先行校验，非法 id 在触达文件系统前拒绝
+                validate_project_media_id(&asset_id)?;
+                let projects = projects_dir(&app).map_err(to_ipc_text)?;
+                let pending = app.state::<PendingProjectAssets>();
+                resolve_project_media_entry(&projects, project_id, &asset_id, &pending)
+                    .map_err(|e| e.to_string())?;
+            }
         }
-    }
-    Ok(opaque_media_url(&parsed, &asset_id))
+        Ok(opaque_media_url(&parsed, &asset_id))
+    })
+    .await
 }
 
 #[cfg(test)]

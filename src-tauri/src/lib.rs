@@ -22,6 +22,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use tauri::Manager;
 
 mod assets;
+mod blocking;
 mod http_util;
 mod imagegen;
 mod isotime;
@@ -168,10 +169,9 @@ fn acknowledge_quit_listener(app: tauri::AppHandle) {
     }
 }
 
-/// 启动 Tauri 应用；移动端通过 `mobile_entry_point` 复用同一入口。
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
-    let app = tauri::Builder::default()
+/// 组合桌面命令、托管状态和媒体协议；原生集成测试复用相同的命令注册边界。
+pub fn app_builder() -> tauri::Builder<tauri::Wry> {
+    tauri::Builder::default()
         // 会话新增项目资产登记表（pwmedia 项目 scope 的防抖落盘窗口，
         // issue #31 评审修复）：应用显式拥有的状态，非进程级可变全局单例
         .manage(assets::project_media::PendingProjectAssets::new())
@@ -231,6 +231,12 @@ pub fn run() {
                 });
             },
         )
+}
+
+/// 启动 Tauri 应用；移动端通过 `mobile_entry_point` 复用同一入口。
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    let app = app_builder()
         .build(tauri::generate_context!())
         .expect("启动 PlotWeave 应用失败");
     #[cfg(target_os = "macos")]

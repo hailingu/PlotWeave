@@ -17,9 +17,16 @@ use crate::store::types::validate_id;
 /// 拒绝；目标目录已存在视为异常（新副本 id 刚分配）。任一失败整次报错
 /// 并回滚已拷贝的目标子树，不遗留半拷贝。
 #[tauri::command]
-pub fn copy_project_assets(app: AppHandle, from_id: String, to_id: String) -> Result<(), String> {
-    let root = projects_dir(&app).map_err(to_ipc_text)?;
-    copy_assets_tree(&root, &from_id, &to_id).map_err(to_ipc_text)
+pub async fn copy_project_assets(
+    app: AppHandle,
+    from_id: String,
+    to_id: String,
+) -> Result<(), String> {
+    crate::blocking::run("copy_project_assets", move || {
+        let root = projects_dir(&app).map_err(to_ipc_text)?;
+        copy_assets_tree(&root, &from_id, &to_id).map_err(to_ipc_text)
+    })
+    .await
 }
 /// copy_project_assets 的可测内核。全程相对已打开的 projects 根目录句柄
 /// 执行（§10.2 openat 语义，cap-std）：归类、目录打开、递归与文件创建

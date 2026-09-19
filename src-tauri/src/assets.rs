@@ -288,34 +288,51 @@ pub(crate) fn validate_project_asset_with(
 /// 库资产导入命令（§7.3 库资产进入项目 = 拷贝）：返回新 AssetRef 交前端
 /// 并入会话资产索引与引用位绑定。
 #[tauri::command]
-pub fn import_project_asset_from_library(
+pub async fn import_project_asset_from_library(
     app: AppHandle,
     id: String,
     library_asset_id: String,
 ) -> Result<Value, String> {
-    let projects = projects_dir(&app).map_err(to_ipc_text)?;
-    let library = library_root(&app).map_err(|e| e.to_string())?;
-    // 库操作互斥锁（issue #25 评审修复）：导入的恢复 + 读取 + 拷贝全链路
-    // 与删除串行——import 在删除写入索引前恢复并把媒体移回原位，删除随后
-    // 提交去项索引会把已恢复的媒体孤儿化
-    let pending = app.state::<project_media::PendingProjectAssets>();
-    crate::library::diagnostics::with_recovery_snapshot(
-        &library,
-        |library, report| {
-            import_asset_from_library(&projects, library, &id, &library_asset_id, &pending, report)
-        },
-        |snapshot| crate::library::diagnostics::publish_recovery(&app, snapshot),
-    )
-    .map_err(|e| e.to_string())
+    crate::blocking::run("import_project_asset_from_library", move || {
+        let projects = projects_dir(&app).map_err(to_ipc_text)?;
+        let library = library_root(&app).map_err(|e| e.to_string())?;
+        // 库操作互斥锁（issue #25 评审修复）：导入的恢复 + 读取 + 拷贝全链路
+        // 与删除串行——import 在删除写入索引前恢复并把媒体移回原位，删除随后
+        // 提交去项索引会把已恢复的媒体孤儿化
+        let pending = app.state::<project_media::PendingProjectAssets>();
+        crate::library::diagnostics::with_recovery_snapshot(
+            &library,
+            |library, report| {
+                import_asset_from_library(
+                    &projects,
+                    library,
+                    &id,
+                    &library_asset_id,
+                    &pending,
+                    report,
+                )
+            },
+            |snapshot| crate::library::diagnostics::publish_recovery(&app, snapshot),
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
 }
 
 /// set_asset 调度前的强制预检命令（§9.3）：形状 + 实路径复验，返回规范化
 /// AssetRef（分发器必须使用返回值而非调用方原值）。
 #[tauri::command]
-pub fn validate_project_asset(app: AppHandle, id: String, asset: Value) -> Result<Value, String> {
-    validate_id(&id)?;
-    let root = projects_dir(&app).map_err(to_ipc_text)?;
-    validate_project_asset_with(&root, &id, &asset).map_err(|e| e.to_string())
+pub async fn validate_project_asset(
+    app: AppHandle,
+    id: String,
+    asset: Value,
+) -> Result<Value, String> {
+    crate::blocking::run("validate_project_asset", move || {
+        validate_id(&id)?;
+        let root = projects_dir(&app).map_err(to_ipc_text)?;
+        validate_project_asset_with(&root, &id, &asset).map_err(|e| e.to_string())
+    })
+    .await
 }
 
 #[cfg(test)]

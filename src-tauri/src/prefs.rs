@@ -110,19 +110,25 @@ fn read_prefs_at(path: &Path) -> Result<serde_json::Value, String> {
 
 /// 读取应用设置；仅文件不存在（首次启动）返回空对象，其余失败上抛。
 #[tauri::command]
-pub fn load_prefs(app: AppHandle) -> Result<serde_json::Value, String> {
-    let path = prefs_path(&app)?;
-    read_prefs_at(&path)
+pub async fn load_prefs(app: AppHandle) -> Result<serde_json::Value, String> {
+    crate::blocking::run("load_prefs", move || {
+        let path = prefs_path(&app)?;
+        read_prefs_at(&path)
+    })
+    .await
 }
 
 /// 全量保存应用设置：校验大小后在受信应用根下执行 §10.2 原子写与持久性屏障。
 #[tauri::command]
-pub fn save_prefs(app: AppHandle, prefs: serde_json::Value) -> Result<(), String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("无法定位应用数据目录：{e}"))?;
-    save_prefs_in(&dir, prefs)
+pub async fn save_prefs(app: AppHandle, prefs: serde_json::Value) -> Result<(), String> {
+    crate::blocking::run("save_prefs", move || {
+        let dir = app
+            .path()
+            .app_data_dir()
+            .map_err(|e| format!("无法定位应用数据目录：{e}"))?;
+        save_prefs_in(&dir, prefs)
+    })
+    .await
 }
 
 /// 设置保存的文件系统边界：先持久化创建数据目录（§10.2 条目宿主屏障，
@@ -166,12 +172,15 @@ fn validate_provider_id(id: &str) -> Result<(), String> {
 /// 加密 provider API key：返回 envelope 密文，由前端随 settings.json 落盘。
 /// 明文只在本次调用的进程内存中出现，不落盘、不回显、不入钥匙串。
 #[tauri::command]
-pub fn set_provider_key(provider_id: String, key: String) -> Result<String, String> {
-    validate_provider_id(&provider_id)?;
-    if key.trim().is_empty() {
-        return Err("API key 不能为空".into());
-    }
-    crate::seal::seal(key.trim())
+pub async fn set_provider_key(provider_id: String, key: String) -> Result<String, String> {
+    crate::blocking::run("set_provider_key", move || {
+        validate_provider_id(&provider_id)?;
+        if key.trim().is_empty() {
+            return Err("API key 不能为空".into());
+        }
+        crate::seal::seal(key.trim())
+    })
+    .await
 }
 
 /// 解析 provider 当前可用的 key：优先 settings.json 的 `keyEnc` 密文；
