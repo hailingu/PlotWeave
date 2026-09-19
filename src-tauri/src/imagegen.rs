@@ -166,9 +166,12 @@ fn dns_budget_error() -> ProxyError {
 }
 
 /// 有界解析内核（生产与测试共用，`resolve` 注入以便夹具替换）：专用
-/// 线程跑不可取消的解析，等待者在 Tokio 阻塞池 `recv_timeout`（到点
-/// 退出、线程不泄漏）；预算耗尽先于一切（不占用额度），在途到顶
-/// fail-fast（解析繁忙），解析线程返回即归还额度（可恢复）。
+/// 线程跑不可取消的解析，结果经 tokio 异步通道回传（`blocking_send`
+/// 在接收端被丢弃时立即返回，线程不会卡死）；等待侧不经任何阻塞池
+/// 任务，由 `timeout_at(绝对截止时间)` 约束（PR #220 第五轮评审——
+/// 阻塞池排队不会把等待拖过 deadline，也不存在按入队前陈旧相对时长
+/// 计时的窗口）。预算耗尽先于一切（不占用额度），在途到顶 fail-fast
+/// （解析繁忙），解析线程返回即归还额度（可恢复）。
 async fn resolve_host_bounded_with(
     target: String,
     host: &str,
@@ -185,27 +188,21 @@ async fn resolve_host_bounded_with(
             detail: "图像主机解析繁忙（并发解析已达上限），请稍后重试".into(),
         });
     }
-    let (tx, rx) = std::sync::mpsc::channel();
+    let (tx, mut rx) = tauri::async_runtime::channel(1);
     std::thread::spawn(move || {
-        let _ = tx.send(resolve(target));
+        let _ = tx.blocking_send(resolve(target));
         DNS_RESOLVE_IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
     });
-    let remaining = remaining_budget(deadline).ok_or_else(dns_budget_error)?;
     let host = host.to_string();
-    let outcome = tauri::async_runtime::spawn_blocking(move || rx.recv_timeout(remaining))
-        .await
-        .map_err(|e| ProxyError::DownloadRefused {
-            detail: format!("解析图像主机失败：{e}"),
-        })?;
-    match outcome {
-        Ok(Ok(addrs)) => Ok(addrs),
-        Ok(Err(io)) => Err(ProxyError::DownloadRefused {
+    match tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), rx.recv()).await {
+        Ok(Some(Ok(addrs))) => Ok(addrs),
+        Ok(Some(Err(io))) => Err(ProxyError::DownloadRefused {
             detail: format!("解析图像主机 {host} 失败：{io}"),
         }),
-        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(dns_budget_error()),
-        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(ProxyError::DownloadRefused {
+        Ok(None) => Err(ProxyError::DownloadRefused {
             detail: format!("解析图像主机 {host} 失败：解析线程异常终止"),
         }),
+        Err(_) => Err(dns_budget_error()),
     }
 }
 
@@ -284,7 +281,9 @@ fn static_target_violation(url: &Url) -> Option<String> {
 /// 隔离在严格并发上限的专用线程边界内（PR #220 第四轮评审，见
 /// [`DNS_RESOLVE_MAX_IN_FLIGHT`]）：挂起的解析线程不占用 Tokio 阻塞
 /// 池、不蔓延到凭据读取等其他阻塞工作，泄漏上限为常量个线程；等待
-/// 者经 recv_timeout 有界退出，额度随解析线程返回归还（可恢复）。
+/// 侧经异步通道由 `timeout_at(绝对截止时间)` 约束（第五轮评审——
+/// 阻塞池排队不会把等待拖过 deadline），额度随解析线程返回归还
+/// （可恢复）。
 async fn ensure_public_download_target(
     url: &Url,
     deadline: std::time::Instant,
