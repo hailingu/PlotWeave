@@ -10,7 +10,9 @@ use crate::store::error::{to_ipc_text, StoreError};
 use crate::store::list::{parse_file, read_meta};
 #[cfg(unix)]
 use crate::store::persist::asset_identity;
-use crate::store::persist::{atomic_write, open_dir_bound, projects_dir, read_verified_file};
+use crate::store::persist::{
+    atomic_write, open_dir_bound, projects_dir, projects_op_lock, read_verified_file,
+};
 use crate::store::types::{
     new_id, new_project_file, sanitize_name, validate_id, ProjectFile, ProjectMeta,
 };
@@ -28,6 +30,9 @@ pub fn create_project(app: AppHandle, name: String) -> Result<ProjectMeta, Strin
 /// 原子落盘（与 persist_project 同款：词法校验先于任何文件名拼接——
 /// id 虽为本地生成，仍以同一口径复核后才参与路径构造）。
 fn create_project_file(root: &CapDir, name: &str) -> Result<ProjectMeta, StoreError> {
+    // 与列表清扫串行（PR #217 第三轮评审）：挂起/时钟前跳致临时文件
+    // 显得超龄时，清扫也不得插入排他创建与 rename 之间
+    let _op = projects_op_lock();
     let name = sanitize_name(name).map_err(StoreError::invalid)?;
     let id = new_id();
     validate_id(&id).map_err(StoreError::invalid)?;
@@ -233,6 +238,8 @@ pub(crate) fn persist_project(
     id: &str,
     doc: ProjectFile,
 ) -> Result<ProjectMeta, StoreError> {
+    // 与列表清扫串行（PR #217 第三轮评审，同 create_project_file）
+    let _op = projects_op_lock();
     validate_id(id).map_err(StoreError::invalid)?;
     // 句柄持有至函数结束——复验过的实体覆盖整个保存决策
     let _verified_assets = verify_save_asset_files(root, id, &doc.assets)?;

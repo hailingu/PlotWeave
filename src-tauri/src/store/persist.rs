@@ -270,6 +270,21 @@ pub(crate) fn atomic_write(root: &CapDir, file_name: &str, text: &str) -> Result
 /// 创建与 rename 之间进程被终止」的遗留——阈值内一律保留，绝不触碰
 /// 进行中的写入。
 const ORPHAN_TEMP_MIN_AGE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+/// projects/ 操作互斥锁（PR #217 第三轮评审，issue #148 后续）：进程内
+/// Mutex 串行项目列表（含孤儿临时文件清扫）与项目文档原子写——挂起
+/// 恢复或时钟前跳使进行中写入的临时文件 mtime 越过宽限期时，清扫也
+/// 无法在排他创建与 rename 之间插入（库侧同型机制见
+/// `library_journal::library_op_lock`）。跨进程协同不在本锁范围：§10.2
+/// 单写者模型由前端保存链承担，两个应用实例并发写同一 projects/ 树
+/// 属记录边界。
+static PROJECTS_OP_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+
+pub(crate) fn projects_op_lock() -> std::sync::MutexGuard<'static, ()> {
+    PROJECTS_OP_LOCK
+        .get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .expect("项目操作锁被污染")
+}
 /// 随机 id 段的精确归属（PR #217 评审修复）：临时名的 id 段只可能来自
 /// `new_id()`，其唯一产出形状是 `p-{ms:x}{rnd:x}-{seq:x}`——`p-` 前缀加
 /// 两段非空小写十六进制。宽字符集（字母数字/`-`/`_`）会把
@@ -337,6 +352,10 @@ fn is_sweep_candidate(
 /// no-follow 归类为普通文件、mtime 超龄」三条件同时成立的条目；
 /// `target_ok` 由调用方给出本目录的原子写目标白名单（projects/ 见
 /// [`is_project_temp_target`]，library/ 与 assets/ 见 library_fs）。
+/// 调用方须持有本目录的操作锁（projects/ 见 [`projects_op_lock`]，
+/// library/ 由 `library_journal::library_op_lock` 覆盖）——仅凭年龄
+/// 判孤儿时，挂起恢复/时钟前跳会让进行中写入的临时文件显得超龄
+/// （PR #217 第三轮评审）；锁保证清扫不在排他创建与 rename 之间插入。
 /// remove_file 只移除目录项自身，不跟随符号链接。尽力而为、fail-soft
 /// ——扫描/元数据/删除失败只留结构化诊断，不向调用方传播：清扫永不
 /// 阻断列表/启动，也不因单条坏数据中断其余条目的回收。只删除、不
