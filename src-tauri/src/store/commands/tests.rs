@@ -567,3 +567,33 @@ fn persist_project_expect_existing_saves_when_target_present() {
         .expect("目标存在时 expectExisting 保存照常");
     cleanup_temp(&projects);
 }
+
+/// [PR #224 第九轮评审](https://github.com/hailingu/PlotWeave/pull/224)：
+/// expectExisting 前置的元数据失败（非 NotFound，如权限错误）不得误判为
+/// 「项目不存在」——保留底层 I/O 诊断（可行动），不谎报契约状态。
+#[test]
+fn expect_existing_keeps_metadata_error_diagnostic() {
+    let projects = temp_projects_dir();
+    let root = cap(&projects);
+    persist_project(&root, "p-1", valid_save_doc()).expect("先建项目");
+    // 收权使 symlink_metadata 报 EACCES（非 NotFound）；句柄先开好——
+    // ambient 打开同样会被 0o000 拒绝
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = fs::metadata(&projects).unwrap().permissions();
+    perms.set_mode(0o000);
+    fs::set_permissions(&projects, perms).expect("收权");
+    let err = persist_project_expect_existing(&root, "p-1", valid_save_doc(), true);
+    let mut perms = fs::metadata(&projects).unwrap().permissions();
+    perms.set_mode(0o755);
+    let _ = fs::set_permissions(&projects, perms);
+    let err = err.unwrap_err();
+    assert!(
+        matches!(err.root(), StoreError::Io { context, .. } if context.contains("元数据")),
+        "非 NotFound 的元数据失败应保留 I/O 诊断：{err}"
+    );
+    assert!(
+        !err.to_string().contains("项目不存在"),
+        "不得把存在性校验失败谎报为项目不存在：{err}"
+    );
+    cleanup_temp(&projects);
+}

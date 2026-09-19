@@ -284,10 +284,20 @@ pub(crate) fn persist_project_expect_existing(
     // 与列表清扫串行（PR #217 第三轮评审，同 create_project_file）
     let _op = projects_op_lock();
     validate_id(id).map_err(StoreError::invalid)?;
-    if expect_existing && root.symlink_metadata(format!("{id}.json")).is_err() {
-        return Err(StoreError::missing(format!(
-            "项目不存在，拒绝写入副本：{id}"
-        )));
+    if expect_existing {
+        // 仅确证缺失视为「项目不存在」（PR #224 第九轮评审）：权限/瞬态
+        // I/O 错误按原语境上抛（可行动诊断），不得谎报契约状态
+        match root.symlink_metadata(format!("{id}.json")) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(StoreError::missing(format!(
+                    "项目不存在，拒绝写入副本：{id}"
+                )));
+            }
+            Err(e) => {
+                return Err(StoreError::io("读取项目文件元数据失败", e));
+            }
+            Ok(_) => {}
+        }
     }
     // 句柄持有至函数结束——复验过的实体覆盖整个保存决策
     let _verified_assets = verify_save_asset_files(root, id, &doc.assets)?;
