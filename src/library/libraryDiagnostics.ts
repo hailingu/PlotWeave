@@ -1,5 +1,9 @@
 /** 图库操作诊断的会话存储：读取和写入共享提示，跨面板挂载保留至用户关闭。 */
 let warnings: readonly string[] = []
+/** 清理保护独立于提示可见性：警告可能是仅存原媒体的唯一冲突信号。
+ * 会话内收到有效警告即保守暂停目录级指引；关闭提示、干净或迟到响应
+ * 均不能证明现场已核对。完全重启后由新一轮恢复诊断重新判定。 */
+let cleanupBlocked = false
 /** 删除隔离区待清理状态（issue #135）：当前快照语义（非历史累积）——
  * 真实删除返回 cleanupPending 时对用户可见；空状态不显示（不误报）。 */
 let cleanupPending: readonly string[] = []
@@ -14,6 +18,7 @@ export function publishLibraryWarnings(input: unknown): void {
   const valid = input.filter(
     (item): item is string => typeof item === 'string' && item !== '',
   )
+  if (valid.length > 0) cleanupBlocked = true
   const next = [...new Set([...warnings, ...valid])]
   if (next.length === warnings.length) return
   warnings = next
@@ -75,6 +80,11 @@ export function partitionCleanupPending(entries: readonly string[]): {
 /** 返回稳定快照供 React 外部存储订阅；不暴露可变的诊断数组。 */
 export function libraryWarningsSnapshot(): readonly string[] {
   return warnings
+}
+
+/** 返回不随提示关闭而清除的会话保护状态；不依赖警告文案识别冲突。 */
+export function libraryCleanupBlockedSnapshot(): boolean {
+  return cleanupBlocked
 }
 
 /** 订阅诊断变化；卸载只解除订阅，保留用户尚未关闭的提示。 */

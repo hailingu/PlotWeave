@@ -11,6 +11,23 @@ beforeEach(() => {
 })
 
 describe('libraryDiagnostics：删除隔离区待清理状态（issue #135）', () => {
+  it('警告触发的清理保护跨关闭、空响应和重复发布保留', async () => {
+    const d = await load()
+    expect(d.libraryCleanupBlockedSnapshot()).toBe(false)
+    d.publishLibraryWarnings([null, '', 1])
+    expect(d.libraryCleanupBlockedSnapshot()).toBe(false)
+    d.publishLibraryWarnings(['无法自动核对的图库状态'])
+    expect(d.libraryCleanupBlockedSnapshot()).toBe(true)
+    d.dismissLibraryWarnings()
+    d.publishLibraryWarnings([])
+    d.publishLibraryWarnings(undefined)
+    d.publishCleanupPending([])
+    expect(d.libraryWarningsSnapshot()).toEqual([])
+    expect(d.libraryCleanupBlockedSnapshot()).toBe(true)
+    d.publishLibraryWarnings(['无法自动核对的图库状态'])
+    expect(d.libraryCleanupBlockedSnapshot()).toBe(true)
+  })
+
   it('发布待清理条目后快照可见；内容非数组/空数组不显示（不误报）', async () => {
     const d = await load()
     d.publishCleanupPending('not-an-array')

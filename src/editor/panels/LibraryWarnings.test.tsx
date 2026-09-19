@@ -57,6 +57,32 @@ describe('LibraryWarnings 删除隔离区待清理展示（issue #135）', () =>
 })
 
 describe('LibraryWarnings 冲突证据区（PR #222 评审 P1）', () => {
+  it('仅 warnings 携带冲突时也不得给出目录级清理指引', async () => {
+    const { diagnostics, LibraryWarnings } = await load()
+    diagnostics.publishLibraryWarnings([
+      '资产 la-conflict 删除事务冲突（原路径已被后来文件占用），标记为不可用',
+    ])
+    diagnostics.publishCleanupPending(['媒体已隔离待清理：assets/la-1.png'])
+    render(<LibraryWarnings />)
+    expect(screen.queryByRole('note', { name: '隔离区清理指引' })).toBeNull()
+    expect(screen.getByRole('note', { name: '隔离区清理暂停' })).toBeTruthy()
+  })
+
+  it('关闭冲突提示后待清理快照变化，不得解除目录级清理保护', async () => {
+    const { diagnostics, LibraryWarnings } = await load()
+    diagnostics.publishLibraryWarnings([
+      '资产 la-conflict 删除事务冲突（隔离项身份不符），标记为不可用',
+    ])
+    render(<LibraryWarnings />)
+    fireEvent.click(screen.getByRole('button', { name: '关闭图库提示' }))
+    act(() => {
+      diagnostics.publishLibraryWarnings([])
+      diagnostics.publishCleanupPending(['媒体已隔离待清理：assets/la-1.png'])
+    })
+    expect(screen.queryByRole('note', { name: '隔离区清理指引' })).toBeNull()
+    expect(screen.getByRole('note', { name: '隔离区清理暂停' })).toBeTruthy()
+  })
+
   it('证据类条目单独成区：明示保留现场、不含删除指引', async () => {
     const { diagnostics, LibraryWarnings } = await load()
     diagnostics.publishCleanupPending([
