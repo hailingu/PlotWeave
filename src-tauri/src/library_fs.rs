@@ -16,7 +16,7 @@ use tauri::{AppHandle, Manager};
 use crate::library::error::LibraryError;
 #[cfg(unix)]
 use crate::store::asset_identity;
-use crate::store::{asset_stat, new_id, open_dir_bound};
+use crate::store::{asset_stat, new_id, open_dir_bound, sweep_orphan_temp_files};
 
 /// 库索引大小上限（1 MiB，对齐 prefs.rs 设置文件上限）：异常膨胀的索引在
 /// 物化进内存前显式拒绝，防脏数据/篡改文件拖垮解析与 IPC。
@@ -116,6 +116,65 @@ pub(crate) fn assets_root(library: &CapDir) -> Result<CapDir, LibraryError> {
         return Err(LibraryError::refused("资产目录路径不是目录"));
     }
     open_dir_bound(library, "assets", &md, "资产目录").map_err(LibraryError::from)
+}
+
+/// library/ 根的原子写目标白名单（§7.2/§10.2）：索引、删除日志与损坏
+/// 备份（摘要命名）——除此之外库根不产生原子写临时文件。
+fn is_library_control_temp_target(target: &str) -> bool {
+    target == INDEX_FILE_NAME
+        || target == crate::library_journal::JOURNAL_FILE_NAME
+        || is_corrupt_backup_temp_target(target)
+}
+
+/// 损坏备份目标名：`library-corrupt-<sha256 小写十六进制 64 字符>.bak`
+/// （backup_damaged_index 的摘要命名）。
+fn is_corrupt_backup_temp_target(target: &str) -> bool {
+    let Some(digest) = target
+        .strip_prefix("library-corrupt-")
+        .and_then(|s| s.strip_suffix(".bak"))
+    else {
+        return false;
+    };
+    digest.len() == 64 && digest.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'))
+}
+
+/// library/assets/ 的原子写目标白名单（§7.1）：`{资产 id}.{扩展名}`——
+/// id 同资产 id 域（含旧 `la-{ms}-{size}` 方案的存量命名），扩展名同
+/// `media_format::ext_for` 的产出域（1~8 个小写字母数字，未知类型
+/// 回退 bin）。
+fn is_library_asset_temp_target(target: &str) -> bool {
+    let Some((stem, ext)) = target.rsplit_once('.') else {
+        return false;
+    };
+    validate_asset_id(stem).is_ok()
+        && !ext.is_empty()
+        && ext.len() <= 8
+        && ext
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+}
+
+/// 库域崩溃遗留孤儿临时文件清扫（§10.2 资源回收边界，issue #148）：
+/// 库根（索引/日志/损坏备份的原子写临时文件）与 `library/assets/`（媒体
+/// 落盘临时文件）各扫一次，复用 store 同一清扫内核（目标白名单 +
+/// 生成器 id 形状 + 超龄 + 普通文件，fail-soft）。`assets/` 缺失、符号
+/// 链接或异型时跳过该目录——列表等读路径不产生创建副作用（创建归
+/// 导入等写入口），不跟随符号链接；跳过不影响库根清扫与列表本身。
+pub(crate) fn sweep_library_temp_files(library: &CapDir) {
+    sweep_orphan_temp_files(library, "资产库目录", is_library_control_temp_target);
+    let md = match library.symlink_metadata("assets") {
+        Ok(md) => md,
+        Err(_) => return,
+    };
+    if md.file_type().is_symlink() || !md.is_dir() {
+        return;
+    }
+    match open_dir_bound(library, "assets", &md, "资产目录") {
+        Ok(assets) => {
+            sweep_orphan_temp_files(&assets, "资产目录", is_library_asset_temp_target);
+        }
+        Err(e) => eprintln!("[library] 打开资产目录失败（跳过临时文件清扫）：{e}"),
+    }
 }
 
 /// 逐组件 no-follow 走到 rel_path 的父目录：中间组件必须是非符号链接的

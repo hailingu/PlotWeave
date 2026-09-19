@@ -24,6 +24,7 @@ struct State {
     fail: Option<Stage>,
     temp_name: Option<String>,
     stages: Vec<Stage>,
+    probe: Option<(Stage, Box<dyn FnOnce() + Send>)>,
 }
 
 thread_local! {
@@ -52,6 +53,21 @@ impl Injection {
     pub(crate) fn stages(&self) -> Vec<Stage> {
         STATE.with(|slot| slot.borrow().as_ref().unwrap().stages.clone())
     }
+
+    /// 仅挂协议阶段探针的注入（不注入失败）：抵达指定阶段时执行一次
+    /// `probe`——例如在 rename 前回拨临时文件 mtime 模拟挂起恢复/时钟
+    /// 前跳，或暂停写入线程与另一线程的清扫做确定性协同。
+    pub(crate) fn with_probe(stage: Stage, probe: impl FnOnce() + Send + 'static) -> Self {
+        STATE.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            assert!(slot.is_none(), "不允许嵌套原子写故障注入");
+            *slot = Some(State {
+                probe: Some((stage, Box::new(probe))),
+                ..State::default()
+            });
+        });
+        Self
+    }
 }
 
 impl Drop for Injection {
@@ -61,15 +77,25 @@ impl Drop for Injection {
 }
 
 /// 包住单个真实系统调用；模拟磁盘/同步失败，保留其余阶段的副作用。
+/// 抵达挂有探针的阶段时先执行探针（探针可观察/修改真实文件系统状态、
+/// 参与跨线程协同），再按注入判定失败或执行原操作。
 pub(super) fn run<T>(stage: Stage, operation: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
-    let fail = STATE.with(|slot| {
+    let (fail, probe) = STATE.with(|slot| {
         let mut slot = slot.borrow_mut();
         let Some(state) = slot.as_mut() else {
-            return false;
+            return (false, None);
         };
         state.stages.push(stage);
-        state.fail == Some(stage)
+        let probe = if matches!(&state.probe, Some((s, _)) if *s == stage) {
+            state.probe.take().map(|(_, p)| p)
+        } else {
+            None
+        };
+        (state.fail == Some(stage), probe)
     });
+    if let Some(probe) = probe {
+        probe();
+    }
     if fail {
         Err(io::Error::other(format!("injected {stage:?} failure")))
     } else {

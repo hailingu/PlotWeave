@@ -10,7 +10,10 @@ use tauri::AppHandle;
 
 use crate::isotime::{iso8601_to_epoch_millis, iso_from_ms};
 use crate::store::error::{to_ipc_text, StoreError};
-use crate::store::persist::{projects_dir, read_verified_file};
+use crate::store::persist::{
+    is_project_temp_target, projects_dir, projects_op_lock, read_verified_file,
+    sweep_orphan_temp_files,
+};
 use crate::store::types::{empty_assets, validate_id, ProjectFile, ProjectInfo, ProjectMeta};
 /// 从画布 graph 派生统计：场数 = scene 节点数；结局数 = 无剧情流出边的
 /// 场景数（分支剧情的叶子场景即结局）。attach 下挂边（索引卡 → 分镜卡，
@@ -154,6 +157,12 @@ pub fn list_projects(app: AppHandle) -> Result<Vec<ProjectMeta>, String> {
 /// read_verified_file 的身份绑定，校验通过后被并发替换为符号链接
 /// 或另一文件时读到的仍是校验时的同一实体，否则跳过该条目。
 fn list_project_metas(root: &CapDir) -> Result<Vec<ProjectMeta>, StoreError> {
+    // 崩溃遗留孤儿临时文件清扫（issue #148，§10.2 资源回收边界）：持
+    // projects 操作锁与项目文档原子写串行（PR #217 第三轮评审）——挂起
+    // 恢复/时钟前跳使进行中写入的临时文件显得超龄时，清扫也不会插入
+    // 排他创建与 rename 之间；fail-soft 不阻断列表
+    let _op = projects_op_lock();
+    sweep_orphan_temp_files(root, "项目目录", is_project_temp_target);
     let mut metas: Vec<ProjectMeta> = Vec::new();
     for entry in root
         .entries()

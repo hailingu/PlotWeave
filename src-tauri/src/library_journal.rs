@@ -17,7 +17,8 @@ mod op_lock;
 mod recover;
 mod trash;
 
-#[cfg(test)]
+// 日志文件名对 library_fs 的孤儿临时文件清扫（issue #148 目标白名单）
+// 与测试可见；单一事实源仍在 journal_io
 pub(crate) use journal_io::JOURNAL_FILE_NAME;
 pub(crate) use op_lock::{library_file_lock, library_op_lock};
 pub(crate) use recover::{recover, Recovery};

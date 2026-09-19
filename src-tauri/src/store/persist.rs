@@ -8,7 +8,7 @@ use cap_std::{ambient_authority, fs::Dir as CapDir};
 use tauri::{AppHandle, Manager};
 
 use crate::store::error::StoreError;
-use crate::store::types::new_id;
+use crate::store::types::{new_id, validate_id};
 
 #[cfg(test)]
 pub(crate) mod faults;
@@ -264,6 +264,154 @@ pub(crate) fn atomic_write(root: &CapDir, file_name: &str, text: &str) -> Result
     }
     result
 }
+/// 崩溃遗留临时文件的归属宽限期（§10.2 资源回收边界，issue #148）：原子写
+/// 临时文件的正常生命周期为毫秒~秒级（写入 + fsync + rename，最大的
+/// 256 MiB 项目媒体拷贝也在分钟级），mtime 超过本阈值只可能来自「排他
+/// 创建与 rename 之间进程被终止」的遗留——阈值内一律保留，绝不触碰
+/// 进行中的写入。
+const ORPHAN_TEMP_MIN_AGE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+/// projects/ 操作互斥锁（PR #217 第三轮评审，issue #148 后续）：进程内
+/// Mutex 串行项目列表（含孤儿临时文件清扫）与项目文档原子写——挂起
+/// 恢复或时钟前跳使进行中写入的临时文件 mtime 越过宽限期时，清扫也
+/// 无法在排他创建与 rename 之间插入（库侧同型机制见
+/// `library_journal::library_op_lock`）。跨进程协同不在本锁范围：§10.2
+/// 单写者模型由前端保存链承担，两个应用实例并发写同一 projects/ 树
+/// 属记录边界。
+static PROJECTS_OP_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+
+pub(crate) fn projects_op_lock() -> std::sync::MutexGuard<'static, ()> {
+    PROJECTS_OP_LOCK
+        .get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .expect("项目操作锁被污染")
+}
+/// 随机 id 段的精确归属（PR #217 评审修复）：临时名的 id 段只可能来自
+/// `new_id()`，其唯一产出形状是 `p-{ms:x}{rnd:x}-{seq:x}`——`p-` 前缀加
+/// 两段非空小写十六进制。宽字符集（字母数字/`-`/`_`）会把
+/// `.notes.backup.tmp` 之类外来文件误判为本协议临时文件并在超龄后
+/// 误删；归属收紧为生成器实际形状——误收方向是数据丢失，误拒方向
+/// 仅是遗留文件暂不回收（fail-safe）。长度上限沿用 id 域 64 字符。
+fn is_generated_temp_id(id: &str) -> bool {
+    let Some(rest) = id.strip_prefix("p-") else {
+        return false;
+    };
+    let Some((body, seq)) = rest.rsplit_once('-') else {
+        return false;
+    };
+    let lowercase_hex = |s: &str| {
+        !s.is_empty() && s.len() <= 62 && s.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'))
+    };
+    id.len() <= 64 && lowercase_hex(body) && lowercase_hex(seq)
+}
+/// 原子写临时名的归属判定（§10.2 命名协议 `.{目标名}.{new_id()}.tmp`）：
+/// 隐藏点前缀 + `.tmp` 后缀，去掉首尾后按最后一个 `.` 分出目标名段与
+/// 随机 id 段（目标名段自身可含 `.`，如 `p-1.json`）——目标名段须落在
+/// 调用方目录的原子写目标白名单内（`target_ok`，PR #217 第二轮评审：
+/// 仅非空会把 `.notes.p-18f-0.tmp` 之类「合成 id + 非法目标」的外来
+/// 文件误收误删），id 段须匹配生成器实际产出形状（见
+/// [`is_generated_temp_id`]）。不满足任一条件的条目与本协议无关，永不
+/// 进入清扫候选（用户放入应用数据目录的 `.tmp` 杂物不被误收）。
+fn is_atomic_temp_name(name: &str, target_ok: &dyn Fn(&str) -> bool) -> bool {
+    let Some(body) = name.strip_prefix('.').and_then(|s| s.strip_suffix(".tmp")) else {
+        return false;
+    };
+    let Some((target, id)) = body.rsplit_once('.') else {
+        return false;
+    };
+    target_ok(target) && is_generated_temp_id(id)
+}
+/// projects/ 的原子写目标白名单（§10.2）：唯一目标是 `{项目 id}.json`
+/// （create/save）；AI 会话临时文件位于 `projects/{id}/` 会话目录，
+/// 不在本目录的清扫范围（记录边界）。
+pub(crate) fn is_project_temp_target(target: &str) -> bool {
+    target
+        .strip_suffix(".json")
+        .is_some_and(|id| validate_id(id).is_ok())
+}
+/// 清扫候选判定：归属可辨（目标白名单 + 生成器 id 形状）+ no-follow
+/// 归类为普通文件（符号链接/目录等异型条目只跳过、绝不跟随）+ mtime
+/// 超龄（读取失败或未来时刻的脏时间戳一律按未超龄保留）。`md` 须为
+/// lstat 语义（cap-std `DirEntry::metadata` 不跟随符号链接，与
+/// commands 删除路径同款前置）。
+fn is_sweep_candidate(
+    name: &str,
+    md: &cap_std::fs::Metadata,
+    now: std::time::SystemTime,
+    target_ok: &dyn Fn(&str) -> bool,
+) -> bool {
+    if !is_atomic_temp_name(name, target_ok) || !md.is_file() {
+        return false;
+    }
+    let Ok(modified) = md.modified() else {
+        return false;
+    };
+    matches!(now.duration_since(modified.into_std()), Ok(age) if age >= ORPHAN_TEMP_MIN_AGE)
+}
+/// 崩溃遗留孤儿临时文件清扫（§10.2 资源回收边界，issue #148）：扫描
+/// 已验证目录句柄，移除「归属可辨（目标白名单 + 生成器 id 形状）、
+/// no-follow 归类为普通文件、mtime 超龄」三条件同时成立的条目；
+/// `target_ok` 由调用方给出本目录的原子写目标白名单（projects/ 见
+/// [`is_project_temp_target`]，library/ 与 assets/ 见 library_fs）。
+/// 调用方须持有本目录的操作锁（projects/ 见 [`projects_op_lock`]，
+/// library/ 由 `library_journal::library_op_lock` 覆盖）——仅凭年龄
+/// 判孤儿时，挂起恢复/时钟前跳会让进行中写入的临时文件显得超龄
+/// （PR #217 第三轮评审）；锁保证清扫不在排他创建与 rename 之间插入。
+/// remove_file 只移除目录项自身，不跟随符号链接。尽力而为、fail-soft
+/// ——扫描/元数据/删除失败只留结构化诊断，不向调用方传播：清扫永不
+/// 阻断列表/启动，也不因单条坏数据中断其余条目的回收。只删除、不
+/// 读取内容：遗留临时文件不充当恢复副本（不扩大为新的恢复副本
+/// 协议）。返回移除计数（诊断与测试用）。
+pub(crate) fn sweep_orphan_temp_files(
+    dir: &CapDir,
+    label: &str,
+    target_ok: impl Fn(&str) -> bool,
+) -> usize {
+    let now = std::time::SystemTime::now();
+    let entries = match dir.entries() {
+        Ok(entries) => entries,
+        Err(e) => {
+            eprintln!("[store] {label}：扫描崩溃遗留临时文件失败（跳过清扫）：{e}");
+            return 0;
+        }
+    };
+    let mut removed = 0usize;
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => {
+                eprintln!("[store] {label}：遍历目录失败（跳过该条目）：{e}");
+                continue;
+            }
+        };
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        // 名字归属是纯字符串判定：先行过滤，非临时名的条目不做 metadata 调用
+        if !is_atomic_temp_name(name, &target_ok) {
+            continue;
+        }
+        // DirEntry::metadata 取 lstat 语义，不跟随符号链接
+        let md = match entry.metadata() {
+            Ok(md) => md,
+            Err(e) => {
+                eprintln!("[store] {label}：读取临时条目元数据失败（跳过 {name}）：{e}");
+                continue;
+            }
+        };
+        if !is_sweep_candidate(name, &md, now, &target_ok) {
+            continue;
+        }
+        match dir.remove_file(name) {
+            Ok(()) => {
+                removed += 1;
+                eprintln!("[store] {label}：已清理崩溃遗留临时文件：{name}");
+            }
+            Err(e) => eprintln!("[store] {label}：清理崩溃遗留临时文件失败（{name}）：{e}"),
+        }
+    }
+    removed
+}
 /// 目录条目持久化计划（§10.2，Unix）：`hosts` 为新条目宿主链——从
 /// `dir` 的最深已存在祖先（锚点，含 `dir` 本身）到其直接父目录的每一
 /// 级路径，新建目录的条目都落在这些宿主里；`created` 为本次调用预期
@@ -379,140 +527,4 @@ pub(crate) fn create_dir_all_durable(dir: &std::path::Path) -> Result<(), StoreE
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::store::testutil::{cap, cleanup_temp, temp_projects_dir};
-
-    #[cfg(unix)]
-    #[test]
-    fn entry_sync_plan_covers_hosts_and_rollback_scope_of_new_levels() {
-        let tmp = std::env::temp_dir().join(format!("pw-chain-{}", new_id()));
-        fs::create_dir(&tmp).expect("建临时根");
-        // 两级新建：宿主 = 锚点 tmp 与中间级 tmp/mid；回滚范围含 dir 本身
-        let plan = entry_sync_plan(&tmp.join("mid").join("leaf"))
-            .unwrap()
-            .unwrap();
-        assert_eq!(plan.hosts, vec![tmp.clone(), tmp.join("mid")]);
-        assert_eq!(
-            plan.created,
-            vec![tmp.join("mid"), tmp.join("mid").join("leaf")]
-        );
-        // 一级新建：宿主 = 既有父目录；回滚范围 = 目标本身
-        let plan = entry_sync_plan(&tmp.join("leaf")).unwrap().unwrap();
-        assert_eq!(plan.hosts, vec![tmp.clone()]);
-        assert_eq!(plan.created, vec![tmp.join("leaf")]);
-        // 目标已存在：仍同步直接父目录（单级兜底），无回滚范围
-        fs::create_dir(tmp.join("exists")).expect("预建目标");
-        let plan = entry_sync_plan(&tmp.join("exists")).unwrap().unwrap();
-        assert_eq!(plan.hosts, vec![tmp.clone()]);
-        assert!(plan.created.is_empty());
-        // 根目录无父级宿主
-        assert!(entry_sync_plan(std::path::Path::new("/"))
-            .unwrap()
-            .is_none());
-        fs::remove_dir_all(&tmp).expect("清理临时根");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn entry_sync_plan_fail_closed_on_transient_metadata_error() {
-        // PR #201 第四、五轮评审：注入非 NotFound 的元数据失败必须
-        // fail-closed 上抛，先于任何创建与清理（旧 is_ok 吞错实现会把
-        // 现存目录误判为本次新建并被失败清理拆除；该测试在探测站点
-        // 接入注入前必然失败——旧断言只走正常路径，吞错实现也能通过）。
-        let tmp = std::env::temp_dir().join(format!("pw-anchor-{}", new_id()));
-        fs::create_dir(&tmp).expect("建临时根");
-        fs::create_dir(tmp.join("parent")).expect("建已存在层级");
-        let target = tmp.join("parent").join("leaf");
-        let injection = faults::Injection::new(Some(faults::Stage::AnchorProbe), None);
-        let err = create_dir_all_durable(&target).unwrap_err();
-        assert!(
-            err.to_string().contains("injected AnchorProbe failure"),
-            "实际错误：{err}"
-        );
-        assert!(
-            err.to_string().contains("探测目录条目宿主失败"),
-            "实际错误：{err}"
-        );
-        drop(injection);
-        assert!(tmp.join("parent").is_dir(), "已存在层级不得被触碰");
-        assert!(!target.exists(), "探测失败不得产生任何新建");
-        fs::remove_dir_all(&tmp).expect("清理临时根");
-    }
-
-    #[test]
-    fn verify_control_file_requires_regular_file() {
-        let projects = temp_projects_dir();
-        let file = projects.join("p-1.json");
-        fs::write(&file, b"{}").expect("写项目文件");
-        assert!(verify_control_file(&cap(&projects), "p-1.json").is_ok());
-        // 目录占位：不是普通文件
-        let dir_as_file = projects.join("p-2.json");
-        fs::create_dir(&dir_as_file).expect("建目录占位");
-        let err = verify_control_file(&cap(&projects), "p-2.json").unwrap_err();
-        assert!(
-            matches!(err, StoreError::Refused { ref detail } if detail.contains("普通文件")),
-            "意外诊断：{err}"
-        );
-        // 缺失文件拒绝（读取前置）
-        assert!(verify_control_file(&cap(&projects), "p-3.json").is_err());
-        cleanup_temp(&projects);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn verify_control_file_rejects_symlinked_project_file() {
-        let projects = temp_projects_dir();
-        let outside = projects.parent().expect("临时根").join("evil.json");
-        fs::write(&outside, b"{}").expect("写根外文件");
-        std::os::unix::fs::symlink(&outside, projects.join("p-1.json")).expect("建符号链接");
-        let err = verify_control_file(&cap(&projects), "p-1.json").unwrap_err();
-        assert!(
-            matches!(err, StoreError::Refused { ref detail } if detail.contains("符号链接")),
-            "意外诊断：{err}"
-        );
-        cleanup_temp(&projects);
-    }
-
-    #[test]
-    fn atomic_write_rejects_path_like_file_name() {
-        let projects = temp_projects_dir();
-        // 句柄相对写入的最后边界：嵌套形态的文件名不得相对句柄逃出 projects/
-        let err = atomic_write(&cap(&projects), "../evil.json", "{}").unwrap_err();
-        assert!(
-            matches!(err, StoreError::Refused { ref detail } if detail.contains("路径分量")),
-            "意外诊断：{err}"
-        );
-        assert!(
-            fs::symlink_metadata(projects.parent().expect("临时根").join("evil.json")).is_err(),
-            "含路径分量的文件名不应写出 projects/"
-        );
-        cleanup_temp(&projects);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn atomic_write_fails_closed_on_target_metadata_errors() {
-        let projects = temp_projects_dir();
-        let root = cap(&projects);
-        // 收权让 symlink_metadata 报 EACCES（非 NotFound）：归类步骤必须
-        // 显式上抛，不得把错误当目标缺失放行后误报后续步骤
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&projects).unwrap().permissions();
-        perms.set_mode(0o000);
-        fs::set_permissions(&projects, perms).expect("收权");
-        let err = atomic_write(&root, "p-1.json", "{}").unwrap_err();
-        let mut perms = fs::metadata(&projects).unwrap().permissions();
-        perms.set_mode(0o755);
-        let _ = fs::set_permissions(&projects, perms);
-        assert!(
-            matches!(&err, StoreError::Io { context, .. } if context.contains("元数据")),
-            "意外诊断：{err}"
-        );
-        assert!(
-            std::error::Error::source(&err).is_some(),
-            "归类失败的 io 来源应保留"
-        );
-        cleanup_temp(&projects);
-    }
-}
+mod tests;

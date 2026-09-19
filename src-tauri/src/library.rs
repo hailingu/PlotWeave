@@ -65,6 +65,9 @@ pub fn list_library_assets(app: AppHandle) -> Result<Value, String> {
 pub(crate) fn list_assets_with(
     library: &cap_std::fs::Dir,
 ) -> Result<(Value, Vec<String>), LibraryError> {
+    // 崩溃遗留孤儿临时文件清扫（issue #148，§10.2 资源回收边界）：
+    // 库根 + assets/，fail-soft 不阻断列表，进行中写入不受影响
+    crate::library_fs::sweep_library_temp_files(library);
     let mut recovery = crate::library_journal::recover(library)?;
     let (mut index, mut warnings) = if recovery.read_only {
         let (idx, w) = crate::library_fs::read_index_normalized_readonly(library)?;
