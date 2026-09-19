@@ -56,6 +56,8 @@ impl std::error::Error for ReadBodyError {
 /// `Display` 统一转换为既有中文文案（与历史 `format!` 输出逐字一致）。
 #[derive(Debug)]
 pub(crate) enum ProxyError {
+    /// BYOK 端点或重定向违反传输策略；不含原始 URL 或凭据。
+    ProviderRefused { detail: String },
     /// HTTP 客户端构造失败：`context` 为操作阶段，`source` 保留底层错误。
     Client {
         context: String,
@@ -101,6 +103,7 @@ pub(crate) enum ProxyError {
 impl std::fmt::Display for ProxyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            ProxyError::ProviderRefused { detail } => write!(f, "{detail}"),
             ProxyError::Client { context, source } => write!(f, "{context}：{source}"),
             ProxyError::Send { context, source } => write!(f, "{context}：{source}"),
             ProxyError::SendTimeout { secs, source } => {
@@ -130,7 +133,8 @@ impl std::error::Error for ProxyError {
             ProxyError::Read(source) => Some(source),
             ProxyError::Body(e) => Some(e),
             ProxyError::InvalidJson { source, .. } => Some(source),
-            ProxyError::Status { .. }
+            ProxyError::ProviderRefused { .. }
+            | ProxyError::Status { .. }
             | ProxyError::DownloadStatus(_)
             | ProxyError::InvalidResponse { .. }
             | ProxyError::DownloadRefused { .. } => None,

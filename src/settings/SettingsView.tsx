@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import {
   defaultSettings,
   resolveChatModel,
@@ -282,6 +282,36 @@ function ProviderKeyField({
   )
 }
 
+/** 地址编辑与传输规则提示；保留存量值，由后端在每次请求时强制校验。 */
+function ProviderBaseUrlField({
+  value,
+  onChange,
+}: {
+  readonly value: string
+  readonly onChange: (value: string) => void
+}) {
+  const inputId = useId()
+  const hintId = `${inputId}-hint`
+  return (
+    <div className="pw-set-field">
+      <label className="pw-set-label" htmlFor={inputId}>
+        BASE URL（OpenAI 兼容）
+      </label>
+      <input
+        id={inputId}
+        className="pw-set-input"
+        value={value}
+        aria-describedby={hintId}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      <p id={hintId} className="settings-hint">
+        远程服务须使用 HTTPS；HTTP 仅支持 localhost、127.0.0.1 或 [::1]
+        等回环地址。
+      </p>
+    </div>
+  )
+}
+
 /** 单个 Provider 卡片（SettingsView 拆分，issue #99）：启用开关、Base
  * URL、API key 行（不存明文，keyEnc 密文落盘）与模型清单编辑。 */
 function ProviderCard({
@@ -319,14 +349,10 @@ function ProviderCard({
           {'启用'}
         </label>
       </div>
-      <label className="pw-set-field">
-        <span className="pw-set-label">BASE URL（OpenAI 兼容）</span>
-        <input
-          className="pw-set-input"
-          value={provider.baseUrl}
-          onChange={(e) => onPatch({ baseUrl: e.target.value })}
-        />
-      </label>
+      <ProviderBaseUrlField
+        value={provider.baseUrl}
+        onChange={(baseUrl) => onPatch({ baseUrl })}
+      />
       <ProviderKeyField
         provider={provider}
         keyConfigured={keyConfigured}
