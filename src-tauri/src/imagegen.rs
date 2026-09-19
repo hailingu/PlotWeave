@@ -309,6 +309,9 @@ pub async fn llm_image_generate(app: AppHandle, request: ImageGenRequest) -> Res
         other => other.to_string(),
     })?;
     let status = response.status();
+    // issue #149：状态摘录脱敏需要本次请求 URL——read_text_capped 消费
+    // response 前先取出
+    let response_url = response.url().clone();
     // 展示边界转换（issue #45 首片）：文案与历史 format! 输出逐字一致
     let text = read_text_capped(response, RESPONSE_BODY_MAX_BYTES)
         .await
@@ -318,7 +321,8 @@ pub async fn llm_image_generate(app: AppHandle, request: ImageGenRequest) -> Res
         return Err("已取消".into());
     }
     if !status.is_success() {
-        let head: String = text.chars().take(200).collect();
+        // 网关/代理回显请求 URL 或密钥时展示不泄露（issue #149）
+        let head = crate::http_util::redact_status_head(&text, &key, &response_url);
         return Err(format!("服务返回 {status}：{head}"));
     }
     let parsed: Value =
