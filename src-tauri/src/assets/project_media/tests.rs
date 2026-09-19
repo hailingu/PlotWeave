@@ -90,6 +90,7 @@ fn pending_registry_serves_import_before_doc_persists_it() {
         pid,
         "la-1",
         &pending,
+        &mut |_| {},
     )
     .expect("导入应成功");
     let asset_id = asset.get("id").and_then(Value::as_str).expect("id 缺失");
@@ -133,6 +134,7 @@ fn doc_hit_drains_pending_entry() {
         pid,
         "la-1",
         &pending,
+        &mut |_| {},
     )
     .expect("导入应成功");
     let asset_id = asset
@@ -182,6 +184,7 @@ fn pending_media_is_not_served_after_project_deletion() {
         pid,
         "la-1",
         &pending,
+        &mut |_| {},
     )
     .expect("导入应成功");
     let asset_id = asset.get("id").and_then(Value::as_str).expect("id 缺失");

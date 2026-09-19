@@ -76,13 +76,15 @@ fn corrupt_index_keeps_complete_records_and_media_without_rewriting() {
     let raw = damaged_index();
     fixture.write(&raw);
     fs::write(fixture.path.join("assets/a.png"), b"image-a").unwrap();
-    let (index, warnings) = list_assets_with(&fixture.dir).expect("局部损坏不阻断列表");
+    let (index, warnings) =
+        list_assets_with(&fixture.dir, &mut |_| {}).expect("局部损坏不阻断列表");
     assert_eq!(index["assets"]["byId"]["a"], asset("a"));
     assert_eq!(index["assets"]["byId"]["b"], asset("b"));
     assert!(index["assets"]["byId"].get("bad").is_none());
     assert_eq!(index["groups"]["byId"]["g"]["name"], "组");
     assert!(!warnings.is_empty());
-    let (mime, mut file) = crate::media_protocol::open_media_with(&fixture.dir, "a").unwrap();
+    let (mime, mut file) =
+        crate::media_protocol::open_media_with(&fixture.dir, "a", &mut |_| {}).unwrap();
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes).unwrap();
     assert_eq!(bytes, b"image-a");
@@ -96,14 +98,23 @@ fn later_edit_backs_up_original_and_retains_healthy_data_across_reload() {
     let fixture = LibraryFixture::new();
     let raw = damaged_index();
     fixture.write(&raw);
-    update_meta_with(&fixture.dir, "a", &json!({"name": "改名"})).unwrap();
+    update_meta_with(&fixture.dir, "a", &json!({"name": "改名"}), &mut |_| {}).unwrap();
     group_commands::upsert_group_with(
         &fixture.dir,
         &json!({"id":"g2","name":"新组","kind":"other"}),
+        &mut |_| {},
     )
     .unwrap();
-    let added = put_asset_with(&fixture.dir, "new.png", "image/png", "other", b"new").unwrap();
-    let (index, warnings) = list_assets_with(&fixture.dir).unwrap();
+    let added = put_asset_with(
+        &fixture.dir,
+        "new.png",
+        "image/png",
+        "other",
+        b"new",
+        &mut |_| {},
+    )
+    .unwrap();
+    let (index, warnings) = list_assets_with(&fixture.dir, &mut |_| {}).unwrap();
     assert_eq!(index["assets"]["byId"]["a"]["name"], "改名");
     assert_eq!(index["assets"]["byId"]["b"], asset("b"));
     assert!(index["assets"]["byId"]
@@ -122,7 +133,7 @@ fn truncated_index_keeps_finished_records_without_guessing_partial_record() {
         asset("a")
     );
     fixture.write(&raw);
-    let (index, warnings) = list_assets_with(&fixture.dir).unwrap();
+    let (index, warnings) = list_assets_with(&fixture.dir, &mut |_| {}).unwrap();
     assert_eq!(index["assets"]["byId"].as_object().unwrap().len(), 1);
     assert_eq!(index["assets"]["byId"]["a"], asset("a"));
     assert!(!warnings.is_empty());
@@ -135,13 +146,23 @@ fn wholly_unreadable_index_allows_new_import_and_preserves_raw_bytes() {
     let raw = b"broken\xff index";
     fixture.write(raw);
     fs::write(fixture.path.join("assets/original.png"), b"old").unwrap();
-    let (index, warnings) = list_assets_with(&fixture.dir).unwrap();
+    let (index, warnings) = list_assets_with(&fixture.dir, &mut |_| {}).unwrap();
     assert_eq!(index["assets"]["byId"], json!({}));
     assert!(!warnings.is_empty());
-    let added = put_asset_with(&fixture.dir, "new.png", "image/png", "other", b"new").unwrap();
-    assert!(list_assets_with(&fixture.dir).unwrap().0["assets"]["byId"]
-        .get(added["id"].as_str().unwrap())
-        .is_some());
+    let added = put_asset_with(
+        &fixture.dir,
+        "new.png",
+        "image/png",
+        "other",
+        b"new",
+        &mut |_| {},
+    )
+    .unwrap();
+    assert!(
+        list_assets_with(&fixture.dir, &mut |_| {}).unwrap().0["assets"]["byId"]
+            .get(added["id"].as_str().unwrap())
+            .is_some()
+    );
     assert_eq!(fixture.backups(), vec![raw.to_vec()]);
     assert_eq!(
         fs::read(fixture.path.join("assets/original.png")).unwrap(),
@@ -156,10 +177,18 @@ fn malformed_journal_still_blocks_writes_but_not_healthy_index_view() {
     fixture.write(&raw);
     fs::write(fixture.path.join("asset-delete-journal.json"), b"broken").unwrap();
     assert_eq!(
-        list_assets_with(&fixture.dir).unwrap().0["assets"]["byId"]["a"],
+        list_assets_with(&fixture.dir, &mut |_| {}).unwrap().0["assets"]["byId"]["a"],
         asset("a")
     );
-    assert!(put_asset_with(&fixture.dir, "new.png", "image/png", "other", b"new").is_err());
+    assert!(put_asset_with(
+        &fixture.dir,
+        "new.png",
+        "image/png",
+        "other",
+        b"new",
+        &mut |_| {}
+    )
+    .is_err());
     assert_eq!(fixture.original(), raw.as_bytes());
 }
 
@@ -181,11 +210,11 @@ fn unknown_delete_transaction_never_cleans_media_after_index_repair() {
         .to_string(),
     )
     .unwrap();
-    let (_, warnings) = list_assets_with(&fixture.dir).unwrap();
+    let (_, warnings) = list_assets_with(&fixture.dir, &mut |_| {}).unwrap();
     assert!(!warnings.is_empty());
     assert_eq!(fs::read(&path).unwrap(), b"keep");
-    update_meta_with(&fixture.dir, "a", &json!({"name":"新名称"})).unwrap();
-    list_assets_with(&fixture.dir).unwrap();
+    update_meta_with(&fixture.dir, "a", &json!({"name":"新名称"}), &mut |_| {}).unwrap();
+    list_assets_with(&fixture.dir, &mut |_| {}).unwrap();
     assert_eq!(fs::read(&path).unwrap(), b"keep");
     let saved: Value = serde_json::from_slice(&fs::read(journal).unwrap()).unwrap();
     assert_eq!(saved[0]["indexUncertain"], true);
@@ -199,12 +228,12 @@ fn failed_backup_blocks_index_replacement_and_retry_recovers() {
     let raw = damaged_index();
     fixture.write(&raw);
     fs::set_permissions(&fixture.path, fs::Permissions::from_mode(0o500)).unwrap();
-    let result = update_meta_with(&fixture.dir, "a", &json!({"name":"新名称"}));
+    let result = update_meta_with(&fixture.dir, "a", &json!({"name":"新名称"}), &mut |_| {});
     fs::set_permissions(&fixture.path, fs::Permissions::from_mode(0o700)).unwrap();
     assert!(result.is_err());
     assert_eq!(fixture.original(), raw.as_bytes());
     assert!(fixture.backups().is_empty());
-    update_meta_with(&fixture.dir, "a", &json!({"name":"新名称"})).unwrap();
+    update_meta_with(&fixture.dir, "a", &json!({"name":"新名称"}), &mut |_| {}).unwrap();
     assert_eq!(fixture.backups(), vec![raw.into_bytes()]);
 }
 
@@ -218,7 +247,7 @@ fn oversized_uncertainty_journal_is_not_written() {
     journal[0]["id"] = json!("t".repeat(padding + 1));
     let original = journal.to_string();
     fs::write(fixture.path.join("asset-delete-journal.json"), &original).unwrap();
-    assert!(list_assets_with(&fixture.dir).is_err());
+    assert!(list_assets_with(&fixture.dir, &mut |_| {}).is_err());
     assert_eq!(
         fs::read_to_string(fixture.path.join("asset-delete-journal.json")).unwrap(),
         original
@@ -234,8 +263,8 @@ fn healthy_asset_can_be_deleted_from_corrupt_index_without_losing_other_records(
         if media_exists {
             fs::write(fixture.path.join("assets/a.png"), b"image-a").unwrap();
         }
-        crate::library_journal::delete_asset_transacted(&fixture.dir, "a").unwrap();
-        let (index, _) = list_assets_with(&fixture.dir).unwrap();
+        crate::library_journal::delete_asset_transacted(&fixture.dir, "a", &mut |_| {}).unwrap();
+        let (index, _) = list_assets_with(&fixture.dir, &mut |_| {}).unwrap();
         assert!(index["assets"]["byId"].get("a").is_none());
         assert_eq!(index["assets"]["byId"]["b"], asset("b"));
         assert_eq!(fixture.backups(), vec![raw.into_bytes()]);
@@ -254,9 +283,15 @@ fn healthy_asset_imports_into_project_without_rewriting_corrupt_library() {
     fs::write(projects.join("p-1.json"), b"{}").unwrap();
     let project_dir = Dir::open_ambient_dir(&projects, ambient_authority()).unwrap();
     let pending = crate::assets::project_media::PendingProjectAssets::new();
-    let imported =
-        crate::assets::import_asset_from_library(&project_dir, &fixture.dir, "p-1", "a", &pending)
-            .unwrap();
+    let imported = crate::assets::import_asset_from_library(
+        &project_dir,
+        &fixture.dir,
+        "p-1",
+        "a",
+        &pending,
+        &mut |_| {},
+    )
+    .unwrap();
     let target = projects
         .join("p-1")
         .join(imported["relPath"].as_str().unwrap());
@@ -276,14 +311,20 @@ fn mismatched_member_cannot_expose_or_persist_nested_asset() {
     );
     fixture.write(&raw);
     fs::write(fixture.path.join("assets/fake.png"), b"unconfirmed").unwrap();
-    let (index, warnings) = list_assets_with(&fixture.dir).unwrap();
+    let (index, warnings) = list_assets_with(&fixture.dir, &mut |_| {}).unwrap();
     assert!(!warnings.is_empty());
     assert_eq!(index["assets"]["byId"], json!({"a":asset("a")}));
     assert_eq!(index["groups"]["byId"]["g"]["name"], "组");
-    assert!(crate::media_protocol::open_media_with(&fixture.dir, "fake").is_err());
+    assert!(crate::media_protocol::open_media_with(&fixture.dir, "fake", &mut |_| {}).is_err());
     assert_eq!(fixture.original(), raw.as_bytes());
-    update_meta_with(&fixture.dir, "a", &json!({"name":"保留的资产"})).unwrap();
-    let (saved, _) = list_assets_with(&fixture.dir).unwrap();
+    update_meta_with(
+        &fixture.dir,
+        "a",
+        &json!({"name":"保留的资产"}),
+        &mut |_| {},
+    )
+    .unwrap();
+    let (saved, _) = list_assets_with(&fixture.dir, &mut |_| {}).unwrap();
     assert_eq!(saved["assets"]["byId"].as_object().unwrap().len(), 1);
     assert_eq!(saved["assets"]["byId"]["a"]["name"], "保留的资产");
     assert_eq!(fixture.backups(), vec![raw.into_bytes()]);
@@ -306,8 +347,15 @@ fn failed_import_backup_leaves_no_media_across_retries() {
     fs::set_permissions(&fixture.path, fs::Permissions::from_mode(0o500)).unwrap();
     let attempts: Vec<_> = (0..3)
         .map(|_| {
-            let failed =
-                put_asset_with(&fixture.dir, "new.png", "image/png", "other", b"new").is_err();
+            let failed = put_asset_with(
+                &fixture.dir,
+                "new.png",
+                "image/png",
+                "other",
+                b"new",
+                &mut |_| {},
+            )
+            .is_err();
             (failed, fs::read_dir(&assets).unwrap().count())
         })
         .collect();
@@ -315,8 +363,16 @@ fn failed_import_backup_leaves_no_media_across_retries() {
     assert_eq!(attempts, vec![(true, 1); 3]);
     assert_eq!(fixture.original(), raw.as_bytes());
     assert!(fixture.backups().is_empty());
-    let added = put_asset_with(&fixture.dir, "new.png", "image/png", "other", b"new").unwrap();
-    let (index, _) = list_assets_with(&fixture.dir).unwrap();
+    let added = put_asset_with(
+        &fixture.dir,
+        "new.png",
+        "image/png",
+        "other",
+        b"new",
+        &mut |_| {},
+    )
+    .unwrap();
+    let (index, _) = list_assets_with(&fixture.dir, &mut |_| {}).unwrap();
     assert_eq!(index["assets"]["byId"]["a"], asset("a"));
     assert!(index["assets"]["byId"]
         .get(added["id"].as_str().unwrap())
@@ -338,8 +394,15 @@ fn failed_import_media_keeps_original_index_and_backup() {
     let attempts: Vec<_> = (0..3)
         .map(|_| {
             let reopened = Dir::open_ambient_dir(&fixture.path, ambient_authority()).unwrap();
-            let failed =
-                put_asset_with(&reopened, "new.png", "image/png", "other", b"new").is_err();
+            let failed = put_asset_with(
+                &reopened,
+                "new.png",
+                "image/png",
+                "other",
+                b"new",
+                &mut |_| {},
+            )
+            .is_err();
             (failed, fixture.backups().len())
         })
         .collect();
@@ -348,8 +411,16 @@ fn failed_import_media_keeps_original_index_and_backup() {
     assert_eq!(fixture.original(), raw.as_bytes());
     assert_eq!(fixture.backups(), vec![raw.as_bytes().to_vec()]);
     assert_eq!(fs::read_dir(&assets).unwrap().count(), 0);
-    let added = put_asset_with(&fixture.dir, "new.png", "image/png", "other", b"new").unwrap();
-    let (index, _) = list_assets_with(&fixture.dir).unwrap();
+    let added = put_asset_with(
+        &fixture.dir,
+        "new.png",
+        "image/png",
+        "other",
+        b"new",
+        &mut |_| {},
+    )
+    .unwrap();
+    let (index, _) = list_assets_with(&fixture.dir, &mut |_| {}).unwrap();
     assert!(index["assets"]["byId"]
         .get(added["id"].as_str().unwrap())
         .is_some());
@@ -364,7 +435,7 @@ fn index_commit_failure_after_media_preserves_recovery_evidence() {
     let fixture = LibraryFixture::new();
     let raw = damaged_index();
     fixture.write(&raw);
-    let (mut index, _) = list_assets_with(&fixture.dir).unwrap();
+    let (mut index, _) = list_assets_with(&fixture.dir, &mut |_| {}).unwrap();
     index["assets"]["byId"]["new"] = asset("new");
     let assets = assets_root(&fixture.dir).unwrap();
     let result = write_index_with(&fixture.dir, &index, || {
@@ -383,9 +454,11 @@ fn index_commit_failure_after_media_preserves_recovery_evidence() {
         fs::read(fixture.path.join("assets/new.png")).unwrap(),
         b"new"
     );
-    assert!(list_assets_with(&fixture.dir).unwrap().0["assets"]["byId"]
-        .get("new")
-        .is_none());
+    assert!(
+        list_assets_with(&fixture.dir, &mut |_| {}).unwrap().0["assets"]["byId"]
+            .get("new")
+            .is_none()
+    );
 }
 
 #[cfg(unix)]
@@ -401,8 +474,15 @@ fn changed_damaged_original_keeps_distinct_backups() {
         .into_iter()
         .map(|raw| {
             fixture.write(raw);
-            let failed =
-                put_asset_with(&fixture.dir, "new.png", "image/png", "other", b"new").is_err();
+            let failed = put_asset_with(
+                &fixture.dir,
+                "new.png",
+                "image/png",
+                "other",
+                b"new",
+                &mut |_| {},
+            )
+            .is_err();
             (failed, fixture.backups().len())
         })
         .collect();
@@ -423,19 +503,42 @@ fn mismatched_existing_backup_blocks_replacement() {
     fixture.write(&raw);
     let assets = fixture.path.join("assets");
     fs::set_permissions(&assets, fs::Permissions::from_mode(0o500)).unwrap();
-    let failed = put_asset_with(&fixture.dir, "new.png", "image/png", "other", b"new");
+    let failed = put_asset_with(
+        &fixture.dir,
+        "new.png",
+        "image/png",
+        "other",
+        b"new",
+        &mut |_| {},
+    );
     fs::set_permissions(&assets, fs::Permissions::from_mode(0o700)).unwrap();
     assert!(failed.is_err());
     let path = fixture.only_backup_path();
     let mut changed = raw.as_bytes().to_vec();
     changed[0] = b'[';
     fs::write(&path, &changed).unwrap();
-    assert!(put_asset_with(&fixture.dir, "new.png", "image/png", "other", b"new").is_err());
+    assert!(put_asset_with(
+        &fixture.dir,
+        "new.png",
+        "image/png",
+        "other",
+        b"new",
+        &mut |_| {}
+    )
+    .is_err());
     assert_eq!(fixture.original(), raw.as_bytes());
     assert_eq!(fixture.backups(), vec![changed]);
     assert_eq!(fs::read_dir(&assets).unwrap().count(), 0);
     fs::write(&path, &raw).unwrap();
-    put_asset_with(&fixture.dir, "new.png", "image/png", "other", b"new").unwrap();
+    put_asset_with(
+        &fixture.dir,
+        "new.png",
+        "image/png",
+        "other",
+        b"new",
+        &mut |_| {},
+    )
+    .unwrap();
     assert_eq!(fixture.backups(), vec![raw.into_bytes()]);
     assert_eq!(fs::read_dir(assets).unwrap().count(), 1);
 }
@@ -450,7 +553,14 @@ fn unsafe_existing_backup_blocks_replacement() {
         fixture.write(&raw);
         let assets = fixture.path.join("assets");
         fs::set_permissions(&assets, fs::Permissions::from_mode(0o500)).unwrap();
-        let failed = put_asset_with(&fixture.dir, "new.png", "image/png", "other", b"new");
+        let failed = put_asset_with(
+            &fixture.dir,
+            "new.png",
+            "image/png",
+            "other",
+            b"new",
+            &mut |_| {},
+        );
         fs::set_permissions(&assets, fs::Permissions::from_mode(0o700)).unwrap();
         assert!(failed.is_err());
         let path = fixture.only_backup_path();
@@ -462,7 +572,15 @@ fn unsafe_existing_backup_blocks_replacement() {
         } else {
             fs::create_dir(&path).unwrap();
         }
-        assert!(put_asset_with(&fixture.dir, "new.png", "image/png", "other", b"new").is_err());
+        assert!(put_asset_with(
+            &fixture.dir,
+            "new.png",
+            "image/png",
+            "other",
+            b"new",
+            &mut |_| {}
+        )
+        .is_err());
         assert_eq!(fixture.original(), raw.as_bytes());
         assert_eq!(fs::read(target).unwrap(), raw.as_bytes());
         assert_eq!(fs::read_dir(&assets).unwrap().count(), 0);

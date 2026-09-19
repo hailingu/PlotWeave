@@ -17,22 +17,32 @@ use crate::library_fs::{
 use crate::store::{asset_stat, new_id};
 
 /// 删除事务（§7.2 四步）：返回携带 warnings 与 cleanupPending 的响应负载。
-pub(crate) fn delete_asset_transacted(library: &CapDir, id: &str) -> Result<Value, LibraryError> {
+/// 先报告成功恢复的观察，后续拒绝或 I/O 失败由外层发布该诊断。
+pub(crate) fn delete_asset_transacted(
+    library: &CapDir,
+    id: &str,
+    report: &mut dyn FnMut(&Recovery),
+) -> Result<Value, LibraryError> {
     #[cfg(not(unix))]
     {
-        let _ = (library, id);
+        let _ = (library, id, report);
         return Err(LibraryError::refused("平台缺少文件身份能力，删除暂不可用"));
     }
     #[cfg(unix)]
     {
-        delete_asset_transacted_unix(library, id)
+        delete_asset_transacted_unix(library, id, report)
     }
 }
 
 #[cfg(unix)]
-fn delete_asset_transacted_unix(library: &CapDir, id: &str) -> Result<Value, LibraryError> {
+fn delete_asset_transacted_unix(
+    library: &CapDir,
+    id: &str,
+    report: &mut dyn FnMut(&Recovery),
+) -> Result<Value, LibraryError> {
     guard_journal_headroom(library)?;
     let mut recovery = recover(library)?;
+    report(&recovery);
     if recovery.read_only {
         return Err(LibraryError::refused(
             "删除日志异常，库写入/删除已暂停：须人工修复 asset-delete-journal.json",
@@ -304,14 +314,16 @@ fn quarantine_conflict_error(entry: &JournalEntry, verdict: &TrashVerdict) -> Li
     }
 }
 
-/// 导入前的冲突期隔离检查（§7.2）：日志只读态与冲突 assetId 均拒绝服务。
-/// 恢复/迁移诊断进结构化本机日志（评审修复，PR #33 第十一轮）：导入响应
-/// 无法携带 warnings，丢弃会让迁移落盘后的诊断永久丢失。
+/// 导入前的冲突期隔离检查（§7.2）：拒绝冲突 assetId，只读态仍允许读取。
+/// 成功恢复先经 report 交给外层事件发布，再做冲突判断；因此拒绝导入也
+/// 不丢诊断。返回同一恢复结果供索引读取使用，不二次恢复吞掉一次性警告。
 pub(crate) fn ensure_importable(
     library: &CapDir,
     library_asset_id: &str,
-) -> Result<(), LibraryError> {
+    report: &mut dyn FnMut(&super::Recovery),
+) -> Result<super::Recovery, LibraryError> {
     let recovery = recover(library)?;
+    report(&recovery);
     // 只读态只暂停写入/删除（§7.2），导入是读取路径——不阻断
     if recovery.conflicted.iter().any(|c| c == library_asset_id) {
         return Err(LibraryError::refused(format!(
@@ -321,5 +333,5 @@ pub(crate) fn ensure_importable(
     for w in &recovery.warnings {
         eprintln!("[library] 项目导入伴随迁移/恢复诊断：{w}");
     }
-    Ok(())
+    Ok(recovery)
 }

@@ -77,9 +77,15 @@ fn import_copies_file_and_returns_project_asset_ref() {
     let (projects, library, root) = temp_fixture();
     seed_project(&projects, "p-1");
     seed_library(&library, "la-1", "la-1.png", b"PNGDATA", "image/png");
-    let asset =
-        import_asset_from_library(&cap(&projects), &cap(&library), "p-1", "la-1", &pending())
-            .expect("导入应成功");
+    let asset = import_asset_from_library(
+        &cap(&projects),
+        &cap(&library),
+        "p-1",
+        "la-1",
+        &pending(),
+        &mut |_| {},
+    )
+    .expect("导入应成功");
     let asset_id = asset.get("id").and_then(Value::as_str).expect("id 缺失");
     assert!(asset_id.starts_with("pa-"), "意外 id 前缀：{asset_id}");
     assert_eq!(
@@ -118,11 +124,24 @@ fn import_twice_into_same_project_reuses_existing_dirs() {
     let (projects, library, root) = temp_fixture();
     seed_project(&projects, "p-1");
     seed_library(&library, "la-1", "la-1.png", b"A", "image/png");
-    import_asset_from_library(&cap(&projects), &cap(&library), "p-1", "la-1", &pending())
-        .expect("首次导入");
-    let second =
-        import_asset_from_library(&cap(&projects), &cap(&library), "p-1", "la-1", &pending())
-            .expect("现存资产目录下二次导入");
+    import_asset_from_library(
+        &cap(&projects),
+        &cap(&library),
+        "p-1",
+        "la-1",
+        &pending(),
+        &mut |_| {},
+    )
+    .expect("首次导入");
+    let second = import_asset_from_library(
+        &cap(&projects),
+        &cap(&library),
+        "p-1",
+        "la-1",
+        &pending(),
+        &mut |_| {},
+    )
+    .expect("现存资产目录下二次导入");
     let file_count = fs::read_dir(projects.join("p-1").join("assets"))
         .expect("读取资产目录")
         .count();
@@ -136,11 +155,25 @@ fn import_rejects_missing_project_and_unknown_library_asset() {
     let (projects, library, root) = temp_fixture();
     seed_project(&projects, "p-1");
     seed_library(&library, "la-1", "la-1.png", b"A", "image/png");
-    let err = import_asset_from_library(&cap(&projects), &cap(&library), "p-9", "la-1", &pending())
-        .expect_err("不存在的项目应拒绝");
+    let err = import_asset_from_library(
+        &cap(&projects),
+        &cap(&library),
+        "p-9",
+        "la-1",
+        &pending(),
+        &mut |_| {},
+    )
+    .expect_err("不存在的项目应拒绝");
     assert!(err.to_string().contains("项目不存在"), "意外诊断：{err}");
-    let err = import_asset_from_library(&cap(&projects), &cap(&library), "p-1", "la-9", &pending())
-        .expect_err("未知库资产应拒绝");
+    let err = import_asset_from_library(
+        &cap(&projects),
+        &cap(&library),
+        "p-1",
+        "la-9",
+        &pending(),
+        &mut |_| {},
+    )
+    .expect_err("未知库资产应拒绝");
     assert!(err.to_string().contains("库资产不存在"), "意外诊断：{err}");
     cleanup(&root);
 }
@@ -161,8 +194,15 @@ fn import_rejects_index_entry_with_escaping_rel_path() {
     .expect("写库索引");
     // 脏条目在共享索引读取处即被隔离（issue #17）：导入侧以"不存在"拒绝，
     // relPath 永不进入拷贝流程
-    let err = import_asset_from_library(&cap(&projects), &cap(&library), "p-1", "la-1", &pending())
-        .expect_err("越界 relPath 应拒绝");
+    let err = import_asset_from_library(
+        &cap(&projects),
+        &cap(&library),
+        "p-1",
+        "la-1",
+        &pending(),
+        &mut |_| {},
+    )
+    .expect_err("越界 relPath 应拒绝");
     assert!(err.to_string().contains("库资产不存在"), "意外诊断：{err}");
     cleanup(&root);
 }
@@ -187,8 +227,15 @@ fn import_rejects_symlinked_library_source() {
         serde_json::to_string(&index).expect("序列化"),
     )
     .expect("写库索引");
-    let err = import_asset_from_library(&cap(&projects), &cap(&library), "p-1", "la-1", &pending())
-        .expect_err("符号链接源应拒绝");
+    let err = import_asset_from_library(
+        &cap(&projects),
+        &cap(&library),
+        "p-1",
+        "la-1",
+        &pending(),
+        &mut |_| {},
+    )
+    .expect_err("符号链接源应拒绝");
     assert!(err.to_string().contains("符号链接"), "意外诊断：{err}");
     assert!(
         fs::symlink_metadata(projects.join("p-1").join("assets")).is_err()
@@ -289,8 +336,15 @@ fn import_rejects_missing_nested_parent_dir() {
         serde_json::to_string(&index).expect("序列化"),
     )
     .expect("写库索引");
-    let err = import_asset_from_library(&cap(&projects), &cap(&library), "p-1", "la-1", &pending())
-        .expect_err("父目录缺失应拒绝导入");
+    let err = import_asset_from_library(
+        &cap(&projects),
+        &cap(&library),
+        "p-1",
+        "la-1",
+        &pending(),
+        &mut |_| {},
+    )
+    .expect_err("父目录缺失应拒绝导入");
     assert!(
         err.to_string().contains("资产文件不存在"),
         "意外诊断：{err}"
@@ -391,9 +445,15 @@ fn import_read_does_not_persist_index_in_journal_read_only_mode() {
         b"{\"not\":\"array\"}",
     )
     .expect("写异型日志");
-    let asset =
-        import_asset_from_library(&cap(&projects), &cap(&library), "p-1", "la-1", &pending())
-            .expect("只读态导入（读取路径）仍应服务");
+    let asset = import_asset_from_library(
+        &cap(&projects),
+        &cap(&library),
+        "p-1",
+        "la-1",
+        &pending(),
+        &mut |_| {},
+    )
+    .expect("只读态导入（读取路径）仍应服务");
     assert!(asset.get("id").is_some(), "导入应返回项目资产");
     let after = fs::read(library.join("library.json")).expect("读落盘索引字节");
     assert_eq!(before, after, "只读态不得改写 library.json");

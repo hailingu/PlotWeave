@@ -71,8 +71,15 @@ fn put_on_dirty_index_returns_warnings() {
         &library,
         &json!({ "assets": by_id([entry("la-bad", "../escape.png")]), "groups": by_id([]) }),
     );
-    let e =
-        put_asset_with(&cap(&library), "a.png", "image/png", "other", b"A").expect("导入应成功");
+    let e = put_asset_with(
+        &cap(&library),
+        "a.png",
+        "image/png",
+        "other",
+        b"A",
+        &mut |_| {},
+    )
+    .expect("导入应成功");
     let warnings = e["warnings"].as_array().expect("warnings 应随响应返回");
     assert!(
         warnings
@@ -87,8 +94,15 @@ fn put_on_dirty_index_returns_warnings() {
 #[test]
 fn put_on_clean_index_omits_warnings() {
     let (library, root) = temp_fixture();
-    let e =
-        put_asset_with(&cap(&library), "a.png", "image/png", "other", b"A").expect("导入应成功");
+    let e = put_asset_with(
+        &cap(&library),
+        "a.png",
+        "image/png",
+        "other",
+        b"A",
+        &mut |_| {},
+    )
+    .expect("导入应成功");
     assert!(
         e.get("warnings").is_none(),
         "干净索引不得附加 warnings：{e}"
@@ -111,8 +125,13 @@ fn update_meta_on_dirty_index_returns_warnings() {
         }),
     );
     let library_dir = cap(&library);
-    let updated =
-        update_meta_with(&library_dir, "la-1", &json!({ "name": "改名" })).expect("更新应成功");
+    let updated = update_meta_with(
+        &library_dir,
+        "la-1",
+        &json!({ "name": "改名" }),
+        &mut |_| {},
+    )
+    .expect("更新应成功");
     let warnings = updated["warnings"]
         .as_array()
         .expect("warnings 应随响应返回");
@@ -139,8 +158,9 @@ fn delete_on_dirty_index_returns_warnings() {
             "groups": [],
         }),
     );
-    let result = crate::library_journal::delete_asset_transacted(&cap(&library), "la-1")
-        .expect("删除应成功");
+    let result =
+        crate::library_journal::delete_asset_transacted(&cap(&library), "la-1", &mut |_| {})
+            .expect("删除应成功");
     let warnings = result["warnings"].as_array().expect("warnings 应在响应中");
     assert!(
         warnings
@@ -171,7 +191,8 @@ fn list_read_does_not_persist_index_in_journal_read_only_mode() {
         b"{\"not\":\"array\"}",
     )
     .expect("写异型日志");
-    let (index, warnings) = list_assets_with(&cap(&library)).expect("只读态列表仍可读");
+    let (index, warnings) =
+        list_assets_with(&cap(&library), &mut |_| {}).expect("只读态列表仍可读");
     assert!(
         index["assets"]["byId"]["la-1"].is_object(),
         "条目应迁移进内存视图：{}",
@@ -205,8 +226,13 @@ fn update_meta_rejects_kind_change_conflicting_with_group() {
     });
     write_index_raw(&library, &index);
     let before = fs::read(library.join("library.json")).expect("读原始索引字节");
-    let err = update_meta_with(&cap(&library), "la-1", &json!({ "kind": "location" }))
-        .expect_err("与组 kind 冲突的更新应拒绝");
+    let err = update_meta_with(
+        &cap(&library),
+        "la-1",
+        &json!({ "kind": "location" }),
+        &mut |_| {},
+    )
+    .expect_err("与组 kind 冲突的更新应拒绝");
     assert!(
         err.to_string().contains("groupId") || err.to_string().contains("kind"),
         "意外诊断：{err}"
@@ -224,8 +250,13 @@ fn update_meta_kind_change_without_group_succeeds() {
         &library,
         &json!({ "assets": by_id([entry("la-1", "assets/la-1.png")]), "groups": by_id([]) }),
     );
-    let updated = update_meta_with(&cap(&library), "la-1", &json!({ "kind": "location" }))
-        .expect("无编组条目改 kind 应成功");
+    let updated = update_meta_with(
+        &cap(&library),
+        "la-1",
+        &json!({ "kind": "location" }),
+        &mut |_| {},
+    )
+    .expect("无编组条目改 kind 应成功");
     assert_eq!(updated["kind"], "location");
     cleanup(&root);
 }
@@ -254,7 +285,8 @@ fn update_meta_rejects_patch_fields_outside_value_domain() {
             "超长 tags 成员",
         ),
     ] {
-        let err = update_meta_with(&lib, "la-1", &patch).expect_err(&format!("{why} 应拒绝"));
+        let err = update_meta_with(&lib, "la-1", &patch, &mut |_| {})
+            .expect_err(&format!("{why} 应拒绝"));
         assert!(
             matches!(err, LibraryError::InvalidInput { .. }),
             "{why} 应为非法输入类别：{err}"
@@ -262,12 +294,17 @@ fn update_meta_rejects_patch_fields_outside_value_domain() {
     }
     // 超过 16 项拒绝（不得静默截断）
     let many = json!({ "tags": (0..17).map(|i| format!("t{i}")).collect::<Vec<_>>() });
-    update_meta_with(&lib, "la-1", &many).expect_err("超过 16 项 tags 应拒绝");
+    update_meta_with(&lib, "la-1", &many, &mut |_| {}).expect_err("超过 16 项 tags 应拒绝");
     // 对照：合法 tags 更新成功
-    let ok = update_meta_with(&lib, "la-1", &json!({ "tags": [" hero ", "hero"] }))
-        .expect_err("规范化后重复（hero）应拒绝");
+    let ok = update_meta_with(
+        &lib,
+        "la-1",
+        &json!({ "tags": [" hero ", "hero"] }),
+        &mut |_| {},
+    )
+    .expect_err("规范化后重复（hero）应拒绝");
     assert!(ok.to_string().contains("重复"), "规范化后重复应拒绝：{ok}");
-    let updated = update_meta_with(&lib, "la-1", &json!({ "tags": [" hero "] }))
+    let updated = update_meta_with(&lib, "la-1", &json!({ "tags": [" hero "] }), &mut |_| {})
         .expect("带空白的合法 tags 应成功");
     assert_eq!(updated["tags"], json!(["hero"]));
     cleanup(&root);
@@ -290,8 +327,13 @@ fn update_meta_rejects_padded_group_id_patch() {
         &json!({ "assets": by_id([member]), "groups": by_id([group]) }),
     );
     let before = fs::read(library.join("library.json")).expect("读原始索引字节");
-    let err = update_meta_with(&cap(&library), "la-1", &json!({ "groupId": " g-1 " }))
-        .expect_err("带空白 groupId 补丁应拒绝");
+    let err = update_meta_with(
+        &cap(&library),
+        "la-1",
+        &json!({ "groupId": " g-1 " }),
+        &mut |_| {},
+    )
+    .expect_err("带空白 groupId 补丁应拒绝");
     assert!(err.to_string().contains("groupId"), "意外诊断：{err}");
     let after = fs::read(library.join("library.json")).expect("读落盘索引字节");
     assert_eq!(before, after, "拒绝更新不得写盘");
@@ -304,10 +346,24 @@ fn update_meta_rejects_padded_group_id_patch() {
 #[test]
 fn put_twice_produces_distinct_ids_and_filenames() {
     let (library, root) = temp_fixture();
-    let e1 = put_asset_with(&cap(&library), "a.png", "image/png", "other", b"AA")
-        .expect("第一次导入应成功");
-    let e2 = put_asset_with(&cap(&library), "a.png", "image/png", "other", b"AA")
-        .expect("第二次导入应成功");
+    let e1 = put_asset_with(
+        &cap(&library),
+        "a.png",
+        "image/png",
+        "other",
+        b"AA",
+        &mut |_| {},
+    )
+    .expect("第一次导入应成功");
+    let e2 = put_asset_with(
+        &cap(&library),
+        "a.png",
+        "image/png",
+        "other",
+        b"AA",
+        &mut |_| {},
+    )
+    .expect("第二次导入应成功");
     let id1 = e1["id"].as_str().expect("id 缺失");
     let id2 = e2["id"].as_str().expect("id 缺失");
     assert_ne!(id1, id2, "同毫秒同大小导入不得产生重复 id");
@@ -335,7 +391,8 @@ fn readonly_recovery_reports_isolation_not_false_reissue() {
         b"{\"not\":\"array\"}",
     )
     .expect("写异型日志");
-    let (index, warnings) = list_assets_with(&cap(&library)).expect("只读态列表仍可读");
+    let (index, warnings) =
+        list_assets_with(&cap(&library), &mut |_| {}).expect("只读态列表仍可读");
     assert!(
         index["assets"]["byId"].as_object().unwrap().is_empty(),
         "只读态空白 id 条目应隔离：{}",
@@ -363,14 +420,19 @@ fn group_entry(id: &str, name: &str, kind: &str) -> Value {
 #[test]
 fn upsert_library_group_creates_and_updates() {
     let (library, root) = temp_fixture();
-    let g = upsert_group_with(&cap(&library), &group_entry("g-1", "女主", "character"))
-        .expect("新建组应成功");
+    let g = upsert_group_with(
+        &cap(&library),
+        &group_entry("g-1", "女主", "character"),
+        &mut |_| {},
+    )
+    .expect("新建组应成功");
     assert_eq!(g["id"], "g-1");
     assert_eq!(g["name"], "女主");
     // 同 id 改名
     let g2 = upsert_group_with(
         &cap(&library),
         &group_entry("g-1", "女主·林晚", "character"),
+        &mut |_| {},
     )
     .expect("更新组应成功");
     assert_eq!(g2["name"], "女主·林晚");
@@ -387,10 +449,13 @@ fn upsert_library_group_creates_and_updates() {
 fn upsert_library_group_rejects_invalid_shape() {
     let (library, root) = temp_fixture();
     let lib = cap(&library);
-    upsert_group_with(&lib, &json!("not an object")).expect_err("非对象应拒绝");
-    upsert_group_with(&lib, &json!({ "id": "g-1", "name": "x" })).expect_err("缺 kind 应拒绝");
-    upsert_group_with(&lib, &group_entry("g-1", "  ", "character")).expect_err("空白 name 应拒绝");
-    upsert_group_with(&lib, &group_entry("g-1", "x", "robot")).expect_err("非法 kind 应拒绝");
+    upsert_group_with(&lib, &json!("not an object"), &mut |_| {}).expect_err("非对象应拒绝");
+    upsert_group_with(&lib, &json!({ "id": "g-1", "name": "x" }), &mut |_| {})
+        .expect_err("缺 kind 应拒绝");
+    upsert_group_with(&lib, &group_entry("g-1", "  ", "character"), &mut |_| {})
+        .expect_err("空白 name 应拒绝");
+    upsert_group_with(&lib, &group_entry("g-1", "x", "robot"), &mut |_| {})
+        .expect_err("非法 kind 应拒绝");
     cleanup(&root);
 }
 
@@ -407,8 +472,12 @@ fn upsert_library_group_rejects_kind_change_conflicting_with_members() {
         &json!({ "assets": by_id([member]), "groups": by_id([group_entry("g-1", "女主", "character")]) }),
     );
     let before = fs::read(library.join("library.json")).expect("读原始索引");
-    let err = upsert_group_with(&cap(&library), &group_entry("g-1", "女主", "location"))
-        .expect_err("改 kind 与成员冲突应拒绝");
+    let err = upsert_group_with(
+        &cap(&library),
+        &group_entry("g-1", "女主", "location"),
+        &mut |_| {},
+    )
+    .expect_err("改 kind 与成员冲突应拒绝");
     assert!(
         err.to_string().contains("kind") || err.to_string().contains("冲突"),
         "意外诊断：{err}"
@@ -428,7 +497,7 @@ fn delete_library_group_removes_group_and_strips_members() {
         &library,
         &json!({ "assets": by_id([member]), "groups": by_id([group_entry("g-1", "女主", "character")]) }),
     );
-    delete_group_with(&cap(&library), "g-1").expect("删除组应成功");
+    delete_group_with(&cap(&library), "g-1", &mut |_| {}).expect("删除组应成功");
     let (index, _w, _s) = crate::library_fs::read_index_capped(&cap(&library)).expect("索引可读");
     assert!(
         index["groups"]["byId"].as_object().unwrap().is_empty(),
@@ -445,7 +514,7 @@ fn delete_library_group_removes_group_and_strips_members() {
 #[test]
 fn delete_library_group_rejects_missing_group() {
     let (library, root) = temp_fixture();
-    delete_group_with(&cap(&library), "g-ghost").expect_err("不存在的组应拒绝");
+    delete_group_with(&cap(&library), "g-ghost", &mut |_| {}).expect_err("不存在的组应拒绝");
     cleanup(&root);
 }
 
@@ -470,11 +539,58 @@ fn upsert_group_response_carries_cleanup_pending() {
     .expect("写日志");
     fs::create_dir_all(library.join("assets").join(".trash")).expect("建隔离目录");
     fs::write(library.join("assets").join(".trash").join("t-1"), b"X").expect("写隔离项");
-    let g = upsert_group_with(&cap(&library), &group_entry("g-1", "女主", "character"))
-        .expect("新建组应成功");
+    let g = upsert_group_with(
+        &cap(&library),
+        &group_entry("g-1", "女主", "character"),
+        &mut |_| {},
+    )
+    .expect("新建组应成功");
     assert!(
         g.get("cleanupPending").is_some(),
         "upsert 响应应携带 cleanupPending：{g}"
     );
+    cleanup(&root);
+}
+
+/// issue #148：`library/assets/` 缺失时列表清扫跳过该目录且不在读路径
+/// 创建它（创建副作用归导入等写入口），列表本身照常返回。
+#[test]
+fn list_sweep_skips_missing_assets_dir_without_creating() {
+    let (library, root) = temp_fixture();
+    fs::remove_dir(library.join("assets")).expect("移除 assets 目录");
+    write_index_raw(
+        &library,
+        &json!({ "assets": { "byId": {} }, "groups": { "byId": {} } }),
+    );
+    let (_index, _warnings) =
+        list_assets_with(&cap(&library), &mut |_| {}).expect("assets 缺失列表仍可读");
+    assert!(
+        !library.join("assets").exists(),
+        "读路径清扫不得创建 assets 目录"
+    );
+    cleanup(&root);
+}
+
+/// [issue #145](https://github.com/hailingu/PlotWeave/issues/145)：库操作
+/// 锁中毒恢复——持锁 panic 后库操作照常：磁盘一致性由 §7.2 日志可恢复
+/// 提交协议独立保证（panic 对盘上状态等价于崩溃，recover 在每个操作
+/// 起始照常执行），锁不守卫任何内存状态。静态锁此后保持中毒状态，
+/// 后续用例经同一恢复路径照常工作（透明恢复）。
+#[test]
+fn library_op_lock_recovers_after_poison() {
+    let (library, root) = temp_fixture();
+    write_index_raw(
+        &library,
+        &json!({ "assets": { "byId": {} }, "groups": { "byId": {} } }),
+    );
+    std::thread::spawn(|| {
+        let _guard = crate::library_journal::library_op_lock();
+        panic!("测试注入的持锁 panic");
+    })
+    .join()
+    .expect_err("注入 panic 应发生");
+    let (index, _warnings) =
+        list_assets_with(&cap(&library), &mut |_| {}).expect("中毒后列表应可用");
+    assert!(index["assets"]["byId"].is_object());
     cleanup(&root);
 }

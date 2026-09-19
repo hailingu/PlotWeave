@@ -37,15 +37,14 @@ fn new_asset_id() -> String {
 /// 大小上限 + 脏条目隔离，坏数据绝不进入拷贝流程）：返回 (relPath, 规范化
 /// mime, 文件名组件)。条目缺失/条目形状非法均为显式错误。删除日志只读
 /// 告警态用不落盘读取（评审修复，PR #33 第七轮：导入是读取路径照常服务，
-/// 但不得把迁移结果写回 library.json）。
+/// 但不得把迁移结果写回 library.json）。恢复结果由冲突检查共享，不再重复恢复。
 fn find_library_entry(
     library: &CapDir,
     library_asset_id: &str,
+    recovery: &crate::library_journal::Recovery,
 ) -> Result<(String, String, String), AssetsError> {
-    let recovery = crate::library_journal::recover(library)?;
     let read_only = recovery.read_only;
-    // 迁移/恢复诊断进结构化本机日志（评审修复，PR #33 第十一轮）：导入响应
-    // 无法携带 warnings，丢弃会让迁移落盘后的诊断永久丢失
+    // 恢复结果已报告给操作边界，随后经事件通知前端；本机日志继续保留明细
     for w in &recovery.warnings {
         eprintln!("[library] 项目导入伴随迁移/恢复诊断：{w}");
     }
@@ -160,11 +159,12 @@ pub(crate) fn import_asset_from_library(
     id: &str,
     library_asset_id: &str,
     pending: &project_media::PendingProjectAssets,
+    report: &mut dyn FnMut(&crate::library_journal::Recovery),
 ) -> Result<Value, AssetsError> {
     ensure_project_control(projects, id)?;
     // §7.2：冲突期条目不得为导入/收藏提供复制源
-    crate::library_journal::ensure_importable(library, library_asset_id)?;
-    let (rel_path, mime, name) = find_library_entry(library, library_asset_id)?;
+    let recovery = crate::library_journal::ensure_importable(library, library_asset_id, report)?;
+    let (rel_path, mime, name) = find_library_entry(library, library_asset_id, &recovery)?;
     let mut src = open_library_asset(library, &rel_path)?;
     let project_dir = ensure_child_dir(projects, id, "项目资产根")?;
     let assets_dir = ensure_child_dir(&project_dir, "assets", "项目资产目录")?;
@@ -298,12 +298,15 @@ pub fn import_project_asset_from_library(
     // 库操作互斥锁（issue #25 评审修复）：导入的恢复 + 读取 + 拷贝全链路
     // 与删除串行——import 在删除写入索引前恢复并把媒体移回原位，删除随后
     // 提交去项索引会把已恢复的媒体孤儿化
-    let _op = crate::library_journal::library_op_lock();
-    let _file_lock =
-        crate::library_journal::library_file_lock(&library).map_err(|e| e.to_string())?;
     let pending = app.state::<project_media::PendingProjectAssets>();
-    import_asset_from_library(&projects, &library, &id, &library_asset_id, &pending)
-        .map_err(|e| e.to_string())
+    crate::library::diagnostics::with_recovery_snapshot(
+        &library,
+        |library, report| {
+            import_asset_from_library(&projects, library, &id, &library_asset_id, &pending, report)
+        },
+        |snapshot| crate::library::diagnostics::publish_recovery(&app, snapshot),
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// set_asset 调度前的强制预检命令（§9.3）：形状 + 实路径复验，返回规范化

@@ -2,6 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { App } from './App'
 import { ErrorBoundary } from './ErrorBoundary'
+import { initializeLibraryDiagnostics } from './library/libraryDiagnosticTransport'
 import './index.css'
 
 /* Tauri 桌面端使用 macOS Overlay 标题栏（红绿灯悬浮在内容上），
@@ -13,10 +14,14 @@ if ('__TAURI_INTERNALS__' in window) {
   document.documentElement.classList.add('is-tauri')
 }
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <ErrorBoundary>
-      <App />
-    </ErrorBoundary>
-  </StrictMode>,
-)
+// 先建立恢复事件监听，再让组件发起库媒体/导入请求，消除启动丢诊断窗口。
+void initializeLibraryDiagnostics().then((unlisten) => {
+  if (unlisten) window.addEventListener('pagehide', unlisten, { once: true })
+  createRoot(document.getElementById('root')!).render(
+    <StrictMode>
+      <ErrorBoundary>
+        <App />
+      </ErrorBoundary>
+    </StrictMode>,
+  )
+})
