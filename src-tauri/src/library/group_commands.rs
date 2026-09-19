@@ -135,24 +135,30 @@ pub(crate) fn delete_group_with(
 
 /// 组写入命令：新建/更新编组；改 kind 与成员冲突即拒绝。
 #[tauri::command]
-pub fn upsert_library_group(app: AppHandle, group: Value) -> Result<Value, String> {
-    let library = library_root(&app).map_err(|e| e.to_string())?;
-    with_snapshot(
-        &library,
-        |library, report| upsert_group_with(library, &group, report),
-        |snapshot| super::diagnostics::publish_recovery(&app, snapshot),
-    )
-    .map_err(|e| e.to_string())
+pub async fn upsert_library_group(app: AppHandle, group: Value) -> Result<Value, String> {
+    crate::blocking::run("upsert_library_group", move || {
+        let library = library_root(&app).map_err(|e| e.to_string())?;
+        with_snapshot(
+            &library,
+            |library, report| upsert_group_with(library, &group, report),
+            |snapshot| super::diagnostics::publish_recovery(&app, snapshot),
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
 }
 
 /// 组删除命令：原子删除组并剥离成员资产的 groupId。
 #[tauri::command]
-pub fn delete_library_group(app: AppHandle, id: String) -> Result<Value, String> {
-    let library = library_root(&app).map_err(|e| e.to_string())?;
-    with_snapshot(
-        &library,
-        |library, report| delete_group_with(library, &id, report),
-        |snapshot| super::diagnostics::publish_recovery(&app, snapshot),
-    )
-    .map_err(|e| e.to_string())
+pub async fn delete_library_group(app: AppHandle, id: String) -> Result<Value, String> {
+    crate::blocking::run("delete_library_group", move || {
+        let library = library_root(&app).map_err(|e| e.to_string())?;
+        with_snapshot(
+            &library,
+            |library, report| delete_group_with(library, &id, report),
+            |snapshot| super::diagnostics::publish_recovery(&app, snapshot),
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
 }

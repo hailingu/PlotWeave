@@ -8,7 +8,7 @@ use tauri::AppHandle;
 use crate::store::error::{to_ipc_text, StoreError};
 #[cfg(unix)]
 use crate::store::persist::asset_identity;
-use crate::store::persist::{open_dir_bound, projects_dir};
+use crate::store::persist::{open_dir_bound, projects_dir, projects_op_lock};
 use crate::store::types::validate_id;
 /// §7.3 复制项目：整目录拷贝项目资产（当前扁平布局下 `projects/{fromId}/
 /// assets` → `projects/{toId}/assets`），供 §10.5 保存边界的实路径复验在
@@ -17,17 +17,59 @@ use crate::store::types::validate_id;
 /// 拒绝；目标目录已存在视为异常（新副本 id 刚分配）。任一失败整次报错
 /// 并回滚已拷贝的目标子树，不遗留半拷贝。
 #[tauri::command]
-pub fn copy_project_assets(app: AppHandle, from_id: String, to_id: String) -> Result<(), String> {
-    let root = projects_dir(&app).map_err(to_ipc_text)?;
-    copy_assets_tree(&root, &from_id, &to_id).map_err(to_ipc_text)
+pub async fn copy_project_assets(
+    app: AppHandle,
+    from_id: String,
+    to_id: String,
+) -> Result<(), String> {
+    crate::blocking::run("copy_project_assets", move || {
+        let root = projects_dir(&app).map_err(to_ipc_text)?;
+        copy_assets_tree(&root, &from_id, &to_id).map_err(to_ipc_text)
+    })
+    .await
 }
 /// copy_project_assets 的可测内核。全程相对已打开的 projects 根目录句柄
 /// 执行（§10.2 openat 语义，cap-std）：归类、目录打开、递归与文件创建
 /// 不再退回路径名拼接——源/目标子目录在元数据检查后被并发替换（含换成
 /// 符号链接）时，句柄相对解析仍不逃出 projects/，越界符号链接被沙箱拒绝。
 fn copy_assets_tree(root: &CapDir, from_id: &str, to_id: &str) -> Result<(), StoreError> {
+    // 复制与项目删除经 projects 操作锁串行（PR #224 第二轮评审：目标
+    // 项目在拷贝中途被删时不得重建其目录）
+    let _op = projects_op_lock();
     validate_id(from_id).map_err(StoreError::invalid)?;
     validate_id(to_id).map_err(StoreError::invalid)?;
+    match root.symlink_metadata(to_id) {
+        Ok(_) => {
+            return Err(StoreError::refused(format!(
+                "目标资产目录已存在，拒绝复制：{to_id}"
+            )))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(StoreError::io("读取目标资产目录元数据失败", e)),
+    }
+    // 目标校验先于一切源 no-op 早退（PR #224 第五轮评审：空源复制的
+    // Ok 会让 duplicate 流程照走 save_project 复活已删目标）——锁内复核
+    // 目标控制文件（第三轮评审）：copy 排队期间目标被删
+    // 时，上面的目录缺失检查必然通过——但 save_project 内核不要求控制
+    // 文件存在，仅凭目录缺失重建会让用户删除的副本经「copy 成功 + 保存」
+    // 复活。{to_id}.json 缺失即拒绝（删除意图不得被排队的复制复活）。
+    match root.symlink_metadata(format!("{to_id}.json")) {
+        Ok(md) if md.file_type().is_symlink() => {
+            return Err(StoreError::refused("目标项目控制文件是符号链接，拒绝复制"))
+        }
+        Ok(md) if !md.is_file() => {
+            return Err(StoreError::refused(
+                "目标项目控制文件不是普通文件，拒绝复制",
+            ))
+        }
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(StoreError::missing(format!(
+                "目标项目已被删除，拒绝复制：{to_id}"
+            )))
+        }
+        Err(e) => return Err(StoreError::io("读取目标控制文件元数据失败", e)),
+    }
     // 源项目目录先归类绑定（§10.2）：组合路径 `{from_id}/assets` 的
     // symlink_metadata 会跟随中间的 {from_id} 符号链接——projects/{from}
     // 被换成指向根内其他项目的链接时，归类与身份绑定都落在错误项目的
@@ -54,15 +96,6 @@ fn copy_assets_tree(root: &CapDir, from_id: &str, to_id: &str) -> Result<(), Sto
     }
     if !md.is_dir() {
         return Err(StoreError::refused("源资产路径不是目录，拒绝复制"));
-    }
-    match root.symlink_metadata(to_id) {
-        Ok(_) => {
-            return Err(StoreError::refused(format!(
-                "目标资产目录已存在，拒绝复制：{to_id}"
-            )))
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(StoreError::io("读取目标资产目录元数据失败", e)),
     }
     // 拷贝目标是 {to}/assets：与 relPath 首段（§7.1）及实路径复验的资产根一致
     let src_dir = open_dir_bound(&src_proj, "assets", &md, "源资产目录")?;
@@ -177,6 +210,7 @@ mod tests {
         fs::create_dir_all(src.join("sub")).expect("建源目录");
         fs::write(src.join("a.png"), b"A").expect("写资产");
         fs::write(src.join("sub").join("b.png"), b"B").expect("写子目录资产");
+        fs::write(projects.join("p-2.json"), b"{}").expect("建目标控制文件");
         copy_assets_tree(&cap(&projects), "p-1", "p-2").expect("拷贝项目资产");
         let dst = projects.join("p-2").join("assets");
         assert_eq!(fs::read(dst.join("a.png")).expect("副本文件缺失"), b"A");
@@ -190,6 +224,9 @@ mod tests {
     #[test]
     fn copy_assets_tree_noop_without_source_and_rejects_existing_destination() {
         let projects = temp_projects_dir();
+        // 目标控制文件（duplicate 流程的生产语义；目标校验前置后必需）
+        fs::write(projects.join("p-2.json"), b"{}").expect("建目标控制文件");
+        fs::write(projects.join("p-3.json"), b"{}").expect("建目标控制文件");
         // 源项目无资产目录：no-op 成功（无资产项目的复制路径）
         assert!(copy_assets_tree(&cap(&projects), "p-1", "p-2").is_ok());
         fs::create_dir_all(projects.join("p-1").join("assets")).expect("建源目录");
@@ -212,6 +249,7 @@ mod tests {
         let outside = projects.parent().expect("临时根").join("outside.png");
         fs::write(&outside, b"secret").expect("写根外文件");
         std::os::unix::fs::symlink(&outside, src.join("link.png")).expect("建符号链接");
+        fs::write(projects.join("p-2.json"), b"{}").expect("建目标控制文件");
         let err = copy_assets_tree(&cap(&projects), "p-1", "p-2").unwrap_err();
         assert!(
             matches!(err, StoreError::Refused { ref detail } if detail.contains("符号链接")),
@@ -219,6 +257,40 @@ mod tests {
         );
         // 失败回滚：不遗留半拷贝的目标目录
         assert!(fs::symlink_metadata(projects.join("p-2")).is_err());
+        cleanup_temp(&projects);
+    }
+
+    /// [PR #224 第五轮评审](https://github.com/hailingu/PlotWeave/pull/224)：
+    /// 源项目无资产目录（正常状态）时，目标校验不得被 no-op 早退绕过——
+    /// copy 排队期间目标被删后，空源复制仍须拒绝（save_project 内核可
+    /// 重建控制文件，复活删除意图）。
+    #[test]
+    fn copy_refuses_deleted_destination_even_with_asset_free_source() {
+        let projects = temp_projects_dir();
+        // 源项目：控制文件在、无 assets/ 目录（无资产项目的正常状态）
+        fs::write(projects.join("p-src.json"), b"{}").expect("建源控制文件");
+        // 目标在排队窗口内被删（控制文件+目录）
+        let gate = projects_op_lock();
+        let root = cap(&projects);
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            done_tx
+                .send(copy_assets_tree(&root, "p-src", "p-dst"))
+                .expect("报告复制结果");
+        });
+        assert!(
+            done_rx
+                .recv_timeout(std::time::Duration::from_millis(200))
+                .is_err(),
+            "复制应与 projects 操作锁串行"
+        );
+        fs::write(projects.join("p-dst.json"), b"{}").expect("预置目标控制文件");
+        fs::remove_file(projects.join("p-dst.json")).expect("排队期间删除目标");
+        drop(gate);
+        let result = done_rx.recv().expect("复制完成");
+        worker.join().expect("复制线程结束");
+        assert!(result.is_err(), "空源不得绕过目标校验：{result:?}");
+        assert!(!projects.join("p-dst").exists(), "不得重建已删目标目录");
         cleanup_temp(&projects);
     }
 
@@ -231,12 +303,72 @@ mod tests {
         let victim = projects.join("p-2").join("assets");
         fs::create_dir_all(&victim).expect("建资产目录");
         fs::write(victim.join("secret.png"), b"s").expect("写资产");
+        // 目标控制文件（duplicate 流程的生产语义，目标校验前置后必需）
+        fs::write(projects.join("p-3.json"), b"{}").expect("建目标控制文件");
         std::os::unix::fs::symlink(projects.join("p-2"), projects.join("p-1"))
             .expect("建项目符号链接");
         let err = copy_assets_tree(&cap(&projects), "p-1", "p-3").unwrap_err();
         assert!(
             matches!(err, StoreError::Refused { ref detail } if detail.contains("符号链接")),
             "意外诊断：{err}"
+        );
+        cleanup_temp(&projects);
+    }
+
+    /// [PR #224 第三轮评审](https://github.com/hailingu/PlotWeave/pull/224)：
+    /// 目标副本在 copy 排队期间被删——copy 拿到锁后不得只凭目录缺失重建：
+    /// 锁内复核 {to_id}.json 控制文件仍存在，缺失即拒绝（用户删除的意图
+    /// 不得被排队的复制复活；save_project 内核不要求控制文件存在，防线
+    /// 必须在 copy 侧）。
+    #[test]
+    fn copy_refuses_destination_deleted_before_acquiring_lock() {
+        let projects = temp_projects_dir();
+        crate::store::commands::persist_project(
+            &cap(&projects),
+            "p-src",
+            crate::store::testutil::valid_save_doc(),
+        )
+        .expect("建源项目");
+        fs::create_dir_all(projects.join("p-src").join("assets")).expect("建源资产目录");
+        fs::write(
+            projects.join("p-src").join("assets").join("a.png"),
+            b"\x89PNG",
+        )
+        .expect("写源媒体");
+        crate::store::commands::persist_project(
+            &cap(&projects),
+            "p-dst",
+            crate::store::testutil::valid_save_doc(),
+        )
+        .expect("建目标");
+        fs::create_dir_all(projects.join("p-dst").join("assets")).expect("建目标资产目录");
+        // 排队窗口：copy 在锁外等待期间，目标被用户删除（控制文件+目录）
+        let gate = projects_op_lock();
+        let root = cap(&projects);
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            done_tx
+                .send(copy_assets_tree(&root, "p-src", "p-dst"))
+                .expect("报告复制结果");
+        });
+        assert!(
+            done_rx
+                .recv_timeout(std::time::Duration::from_millis(200))
+                .is_err(),
+            "复制应与 projects 操作锁串行（持锁期间不得推进）"
+        );
+        fs::remove_dir_all(projects.join("p-dst")).expect("删目标资产树");
+        fs::remove_file(projects.join("p-dst.json")).expect("删目标控制文件");
+        drop(gate);
+        let result = done_rx.recv().expect("复制完成");
+        worker.join().expect("复制线程结束");
+        assert!(
+            result.is_err(),
+            "目标控制文件已删的复制不得成功：{result:?}"
+        );
+        assert!(
+            !projects.join("p-dst").exists(),
+            "不得重建用户已删除的目标目录"
         );
         cleanup_temp(&projects);
     }

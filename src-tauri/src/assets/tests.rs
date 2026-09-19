@@ -357,8 +357,15 @@ fn write_generated_asset_lands_bytes_and_generated_ref() {
     let (projects, _library, root) = temp_fixture();
     seed_project(&projects, "p-1");
     let bytes: &[u8] = &[0x89, b'P', b'N', b'G', 1, 2, 3];
-    let asset = write_generated_asset(&cap(&projects), "p-1", bytes, "image/png", &pending())
-        .expect("生成媒体落盘应成功");
+    let asset = write_generated_asset(
+        &cap(&projects),
+        "p-1",
+        bytes,
+        "image/png",
+        &pending(),
+        &|| false,
+    )
+    .expect("生成媒体落盘应成功");
     let asset_id = asset.get("id").and_then(Value::as_str).expect("id 缺失");
     assert!(asset_id.starts_with("pa-"), "意外 id 前缀：{asset_id}");
     assert_eq!(
@@ -394,8 +401,15 @@ fn write_generated_asset_lands_bytes_and_generated_ref() {
 fn write_generated_asset_rejects_missing_project() {
     let (projects, _library, root) = temp_fixture();
     seed_project(&projects, "p-1");
-    let err = write_generated_asset(&cap(&projects), "p-9", b"PNG", "image/png", &pending())
-        .expect_err("不存在的项目应拒绝");
+    let err = write_generated_asset(
+        &cap(&projects),
+        "p-9",
+        b"PNG",
+        "image/png",
+        &pending(),
+        &|| false,
+    )
+    .expect_err("不存在的项目应拒绝");
     assert!(err.to_string().contains("项目不存在"), "意外诊断：{err}");
     cleanup(&root);
 }
@@ -410,6 +424,7 @@ fn write_generated_asset_ext_follows_mime() {
         b"JPEGBYTES",
         "image/jpeg",
         &pending(),
+        &|| false,
     )
     .expect("jpeg 落盘应成功");
     let rel = asset
@@ -470,5 +485,54 @@ fn ensure_child_dir_tolerates_already_exists() {
     drop(first);
     let second = ensure_child_dir(&parent, "p-conc", "项目资产根").expect("已存在复用");
     drop(second);
+    cleanup(&root);
+}
+
+/// [PR #224 第四轮评审](https://github.com/hailingu/PlotWeave/pull/224)：
+/// 生成落盘在 projects 操作锁上等待期间用户取消——拿到锁后必须复验
+/// 取消状态：不写盘、不登记，返回「已取消」（前端已丢弃响应，继续
+/// 写盘只留下不可达的 ≤32 MiB 资产）。
+#[test]
+fn write_generated_asset_rechecks_cancellation_after_lock_wait() {
+    let (projects, _library, root) = temp_fixture();
+    seed_project(&projects, "p-1");
+    // 主线程持锁模拟「另一项目操作进行中」：落盘在锁外等待
+    let gate = crate::store::projects_op_lock();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let projects_handle = cap(&projects);
+    let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = cancelled.clone();
+    std::thread::spawn(move || {
+        let pending = crate::assets::project_media::PendingProjectAssets::new();
+        let result = write_generated_asset(
+            &projects_handle,
+            "p-1",
+            b"\x89PNG",
+            "image/png",
+            &pending,
+            &|| flag.load(std::sync::atomic::Ordering::SeqCst),
+        );
+        done_tx.send(result).expect("报告结果");
+    });
+    assert!(
+        done_rx
+            .recv_timeout(std::time::Duration::from_millis(200))
+            .is_err(),
+        "落盘应等待操作锁"
+    );
+    // 等待期间用户取消
+    cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
+    drop(gate);
+    let result = done_rx.recv().expect("落盘完成");
+    assert!(result.is_err(), "锁等待期取消后不得写盘：{result:?}");
+    // 取消后连 assets 目录都不应创建；若存在则必须为空
+    let dir = projects.join("p-1").join("assets");
+    assert!(
+        !dir.exists()
+            || std::fs::read_dir(&dir)
+                .map(|mut it| it.next().is_none())
+                .unwrap_or(true),
+        "不得留下不可达的生成资产：{dir:?}"
+    );
     cleanup(&root);
 }

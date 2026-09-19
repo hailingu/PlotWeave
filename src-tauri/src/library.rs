@@ -48,18 +48,21 @@ const VIEWS: [&str; 8] = [
 /// 删除日志中的未完成事务，脏索引条目由共享内核隔离，`warnings` 与
 /// `cleanupPending` 随索引返回，冲突期条目标记 `conflicted` 不可用。
 #[tauri::command]
-pub fn list_library_assets(app: AppHandle) -> Result<Value, String> {
-    let library = library_root(&app).map_err(|e| e.to_string())?;
-    diagnostics::with_snapshot(
-        &library,
-        |library, report| {
-            let (mut index, warnings) = list_assets_with(library, report)?;
-            index["warnings"] = json!(warnings);
-            Ok(index)
-        },
-        |snapshot| diagnostics::publish_recovery(&app, snapshot),
-    )
-    .map_err(|e| e.to_string())
+pub async fn list_library_assets(app: AppHandle) -> Result<Value, String> {
+    crate::blocking::run("list_library_assets", move || {
+        let library = library_root(&app).map_err(|e| e.to_string())?;
+        diagnostics::with_snapshot(
+            &library,
+            |library, report| {
+                let (mut index, warnings) = list_assets_with(library, report)?;
+                index["warnings"] = json!(warnings);
+                Ok(index)
+            },
+            |snapshot| diagnostics::publish_recovery(&app, snapshot),
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
 }
 
 /// 列表读取内核（句柄域，`list_library_assets` 与测试共用）：先恢复删除日志，
@@ -186,20 +189,23 @@ pub(crate) fn put_asset_with(
 
 /// 导入资产命令：媒体拷入 assets/（新 id，库自包含），索引追加并返回新条目。
 #[tauri::command]
-pub fn import_library_asset(
+pub async fn import_library_asset(
     app: AppHandle,
     name: String,
     mime: String,
     kind: String,
     bytes: Vec<u8>,
 ) -> Result<Value, String> {
-    let library = library_root(&app).map_err(|e| e.to_string())?;
-    diagnostics::with_snapshot(
-        &library,
-        |library, report| put_asset_with(library, &name, &mime, &kind, &bytes, report),
-        |snapshot| diagnostics::publish_recovery(&app, snapshot),
-    )
-    .map_err(|e| e.to_string())
+    crate::blocking::run("import_library_asset", move || {
+        let library = library_root(&app).map_err(|e| e.to_string())?;
+        diagnostics::with_snapshot(
+            &library,
+            |library, report| put_asset_with(library, &name, &mime, &kind, &bytes, report),
+            |snapshot| diagnostics::publish_recovery(&app, snapshot),
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
 }
 
 fn validate_name(name: &str) -> Result<(), String> {
@@ -359,15 +365,18 @@ fn apply_group_id(entry: &mut Value, g: &Value) -> Result<(), String> {
 /// 删除资产命令：日志驱动的身份绑定隔离事务（§7.2）——响应携带净化
 /// 诊断与 cleanupPending。移除索引项并把媒体隔离进 .trash/。
 #[tauri::command]
-pub fn delete_library_asset(app: AppHandle, id: String) -> Result<Value, String> {
-    validate_asset_id(&id)?;
-    let library = library_root(&app).map_err(|e| e.to_string())?;
-    diagnostics::with_snapshot(
-        &library,
-        |library, report| crate::library_journal::delete_asset_transacted(library, &id, report),
-        |snapshot| diagnostics::publish_recovery(&app, snapshot),
-    )
-    .map_err(|e| e.to_string())
+pub async fn delete_library_asset(app: AppHandle, id: String) -> Result<Value, String> {
+    crate::blocking::run("delete_library_asset", move || {
+        validate_asset_id(&id)?;
+        let library = library_root(&app).map_err(|e| e.to_string())?;
+        diagnostics::with_snapshot(
+            &library,
+            |library, report| crate::library_journal::delete_asset_transacted(library, &id, report),
+            |snapshot| diagnostics::publish_recovery(&app, snapshot),
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
 }
 
 /// 更新元信息内核（句柄域）：补丁值域校验（§7.2 在内核强制——绕过命令
@@ -456,15 +465,22 @@ fn update_meta_with(
 /// 更新条目元信息（改名/分类/视角/标签/编组）；id 与媒体文件不变。补丁
 /// 值域校验在内核 update_meta_with 内强制（命令层与原始 IPC 同一口径）。
 #[tauri::command]
-pub fn update_library_asset(app: AppHandle, id: String, patch: Value) -> Result<Value, String> {
-    validate_asset_id(&id)?;
-    let library = library_root(&app).map_err(|e| e.to_string())?;
-    diagnostics::with_snapshot(
-        &library,
-        |library, report| update_meta_with(library, &id, &patch, report),
-        |snapshot| diagnostics::publish_recovery(&app, snapshot),
-    )
-    .map_err(|e| e.to_string())
+pub async fn update_library_asset(
+    app: AppHandle,
+    id: String,
+    patch: Value,
+) -> Result<Value, String> {
+    crate::blocking::run("update_library_asset", move || {
+        validate_asset_id(&id)?;
+        let library = library_root(&app).map_err(|e| e.to_string())?;
+        diagnostics::with_snapshot(
+            &library,
+            |library, report| update_meta_with(library, &id, &patch, report),
+            |snapshot| diagnostics::publish_recovery(&app, snapshot),
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
 }
 
 pub(crate) mod diagnostics;
