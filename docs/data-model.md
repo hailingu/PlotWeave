@@ -123,6 +123,7 @@
 > 八十四轮修订（2026-09-19，[issue #149](https://github.com/hailingu/PlotWeave/issues/149)）：§10.4 补失败诊断的脱敏边界——凡经 `Display` 到达前端的 reqwest 错误一律把本次请求 URL 替换为脱敏形态（query/userinfo/fragment 剥离，路径与错误类别保留）；状态错误摘录先把本次 API key 替换为 `***`、请求 URL 替换为脱敏形态，再截断 200 字符。精确子串替换不覆盖 URL 的其它拼写形态与 key 局部片段，按记录边界。
 > 八十五轮修订（2026-09-19，[issue #145](https://github.com/hailingu/PlotWeave/issues/145)）：共享 Mutex 的中毒后行为统一为**可验证恢复**——库操作锁（§7.2）与 projects 操作锁（§10.2）不守卫内存状态、磁盘一致性分别由日志可恢复提交协议与原子写协议独立保证；项目媒体登记表、生成取消表与媒体读取闸门（§13/§10.5）是纯内存建议性状态，单项 infallible 操作不留结构损坏。全部锁站点经统一内核恢复并留结构化诊断，不传播 panic、不静默忽略；取消登记真实生效才报成功。规范条目见 docs/development/rust-standard.md。
 > 八十六轮修订（2026-09-19，[issue #141](https://github.com/hailingu/PlotWeave/issues/141)）：§10.5 `llm_image_generate` 补作业总时间预算 600s（自命令进入起算）——provider 凭据读取（阻塞线程池）、生成 POST（含响应体读取）与 url 回退下载链的逐跳 DNS 解析、请求、响应体读取的等待上界均为作业剩余预算，预算耗尽按阶段（读取凭据/生成请求/解析图像主机/下载图像/读取图像）给出诊断并放弃，不发出可能计费的请求、产物不写回；逐跳 120s 与生成 POST 300s 客户端上限保留为单阶段兜底。阻塞任务（凭据读取、DNS 解析）无法取消，超时只是放弃等待，任务返回后结果被丢弃、不持锁；其中 DNS 解析被隔离在严格并发上限（2）的专用线程边界内，不占用 Tokio 阻塞池、不遗留无限后台任务，额度随解析线程返回归还（可恢复）。
+> 八十七轮修订（2026-09-19，[issue #143](https://github.com/hailingu/PlotWeave/issues/143)）：§10.5 `llm_image_cancel` 的取消状态改为应用托管的有界注册表（Tauri managed state）——活动作业入口登记、RAII 守卫全出口清理（根治错误路径遗留标记）；未知/已结束 id 的取消进 64 容量 FIFO 墓碑（去重、不无界增长），登记时消费使预取消语义生效。复用墓碑窗口内的 id 按预取消语义继承取消（前端 uid 唯一发号，正常路径不触发），按记录边界。
 > 适用范围：画布文档模型、设定与资产模型、命令与撤销、本地存储体系、AI Agent 交互。
 > 明确不在范围内：用户体系、租户、余额/计费。PlotWeave 是单用户 BYOK 桌面工具；若未来出现此类需求，另起《服务端领域模型》文档。
 
@@ -1019,7 +1020,7 @@ provider 的 API key 以**密文 `keyEnc`** 存于 provider 配置：Rust `seal`
 | `set_provider_key(provider, key)` | 加密并返回 envelope 密文（由前端随 settings 落盘；解密走 `seal::open`，无独立读命令） |
 | `llm_chat(messages, tools)` | LLM 请求代理：key 由 settings 密文在 Rust 内存解密，绕开 webview CORS（见 12.2）；#15 已补 120 秒请求超时、16 MiB 响应体流式限读，与图像代理共用 `http_util`，发送/读取超时有明确诊断 |
 | `llm_image_generate(request)` | 文生图代理（§13 首版）：单对象载荷（projectId/jobId/provider 配置/model/prompt/size），key 解密同 `llm_chat`；请求 OpenAI 兼容 `/images/generations`（b64_json 优先，url 成员回退下载），响应体流式限读（主响应 64 MiB 文本 / url 回退 32 MiB 字节，超限即中止）；**作业总预算 600s 自命令进入起算**（[issue #141](https://github.com/hailingu/PlotWeave/issues/141)，已实现）：provider 凭据读取（同步阻塞访问挪入阻塞线程池）、生成 POST（含响应体读取）与 url 回退下载链的逐跳 DNS 解析、请求、响应体读取的等待上界**均为作业剩余预算**，预算耗尽按阶段（读取凭据/生成请求/解析图像主机/下载图像/读取图像）给出诊断并放弃——不发出可能计费的请求、产物不写回；逐跳 120s 与 POST 300s 客户端超时保留为单阶段兜底；阻塞任务（凭据读取、DNS 解析）不可取消，预算耗尽只是放弃等待、任务运行至系统返回后其结果被丢弃、不持有应用锁；其中 DNS 解析被隔离在严格并发上限（2）的专用线程边界内——挂起的解析线程不占用 Tokio 阻塞池、不蔓延到凭据读取等其他阻塞工作，泄漏上限为常量个线程，在途到顶即按「解析繁忙」fail-fast，额度随解析线程返回归还，等待侧经异步通道由 `timeout_at(绝对截止时间)` 约束（阻塞池排队不会把等待拖过 deadline）；资源生命周期已文档化，PR #220 评审修订；产物按字节魔数定型 MIME（PNG/JPEG/WebP/GIF，provider 声称的 content-type 不作为依据）、过 32 MiB 上限后经原子写内核落盘进项目 `assets/`，§9.3 预检（形状 + 实路径复验）在命令内、返回前完成，前端单次 IPC 直收已校验的 `source=generated` AssetRef 并入索引。请求返回后与落盘前各查一次取消标志：协作式取消即放弃结果 |
-| `llm_image_cancel(jobId)` | 协作式取消：登记取消标志；进行中的 `llm_image_generate` 会在检查点放弃结果（HTTP 请求本身不中断，由超时约束兜底） |
+| `llm_image_cancel(jobId)` | 协作式取消（[issue #143](https://github.com/hailingu/PlotWeave/issues/143)，已实现）：活动作业在 `llm_image_generate` 入口登记于应用托管的取消注册表（Tauri managed state，RAII 守卫）——成功/失败/取消/卸载全部出口随 Drop 清理，错误路径不再遗留标记；命中活动作业即标记取消，进行中的生成在检查点放弃结果（HTTP 请求本身不中断，由超时约束兜底）；命中未知/已结束 id 进有界墓碑（去重 + 64 容量 FIFO 淘汰——未知与迟到取消不无界增长），同 id 登记时消费墓碑使「先取消后登记」的预取消语义生效（复用墓碑窗口内的 id 按此语义继承取消） |
 
 ## 十一、加载与归一化
 
