@@ -418,10 +418,9 @@ mod tests {
     fn cancel_flags_register_and_clear() {
         let job = format!("job-{}", crate::store::new_id());
         assert!(!is_cancelled(&job));
-        cancelled_jobs()
-            .lock()
-            .expect("登记取消")
-            .insert(job.clone());
+        // 与并行的中毒恢复用例共存（PR #219 评审）：静态表可能被并行
+        // 用例注入中毒，本用例的直接访问同样走恢复路径，保持套件确定性
+        crate::lock::recover_guard(cancelled_jobs().lock(), "生成取消登记表").insert(job.clone());
         assert!(is_cancelled(&job));
         clear_cancel(&job);
         assert!(!is_cancelled(&job));
