@@ -1059,6 +1059,19 @@ describe('tauriCreate / delete / duplicate', () => {
     expect(calls[1]).toEqual({ cmd: 'delete_project', args: { id: 'new-1' } })
   })
 
+  it('duplicate 的后续保存带 expectExisting=true（PR #224 评审：copy 后目标被排队的删除移走时不复活）', async () => {
+    handlers.set('load_project', () => modernFile())
+    handlers.set('create_project', () => ({ ...meta('copy-9'), name: 'X 副本' }))
+    handlers.set('copy_project_assets', () => undefined)
+    let savedWith: unknown
+    handlers.set('save_project', (args) => {
+      savedWith = args
+    })
+    const { projectStore } = await load()
+    await projectStore.duplicate('p1')
+    expect((savedWith as { expectExisting?: boolean }).expectExisting).toBe(true)
+  })
+
   it('duplicate = load → create → copy_project_assets → save 全链路（副本名拼接）', async () => {
     handlers.set('load_project', () => modernFile())
     handlers.set('create_project', (args) => ({

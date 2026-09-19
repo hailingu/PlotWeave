@@ -234,15 +234,24 @@ export function notifyRetryPersisted(doc: ProjectContent): void {
 export async function tauriSave(
   id: string,
   doc: ProjectContent,
+  expectExisting = false,
 ): Promise<void> {
   const { invoke } = await import('@tauri-apps/api/core')
-  await invoke('save_project', { id, doc: serializeProject(doc, id) })
+  await invoke('save_project', {
+    id,
+    doc: serializeProject(doc, id),
+    expectExisting,
+  })
 }
 
 /** 保存入队（§3.1 协调入口）：删除墓碑期被吸收留存（删除失败回吐），
  * 否则自增代次排入该项目的串行链；落盘成功清除待重试登记并通知订阅，
  * 失败登记最新文档并按代次调度后台重试（详见模块头）。 */
-export function enqueueSave(id: string, doc: ProjectContent): Promise<void> {
+export function enqueueSave(
+  id: string,
+  doc: ProjectContent,
+  expectExisting = false,
+): Promise<void> {
   if (deletingIds.has(id)) {
     // 吸收但不丢弃：留存最新文档，删除失败时回吐（见 enqueueDelete）
     absorbedSaveDocs.set(id, doc)
@@ -254,7 +263,7 @@ export function enqueueSave(id: string, doc: ProjectContent): Promise<void> {
   const run = (saveChains.get(id) ?? Promise.resolve()).catch(() => undefined)
   const next = run.then(async () => {
     try {
-      await tauriSave(id, doc)
+      await tauriSave(id, doc, expectExisting)
       // 任何成功保存都取代并清除既有登记（陈旧登记不得残留）；仅当落盘的
       // 正是登记文档时通知订阅者并记忆落盘文档（画布闸据此清脏、冗余
       // 重写失败据此免登记，PR #174 评审）

@@ -533,3 +533,37 @@ fn delete_project_files_serializes_with_projects_op_lock() {
     );
     cleanup_temp(&projects);
 }
+
+/// [PR #224 第六轮评审](https://github.com/hailingu/PlotWeave/pull/224)：
+/// 副本后续保存的 expectExisting 前置——copy 释放锁后被排队的删除移除
+/// 目标时，该保存不得复活控制文件。默认保存（false）保持既有语义
+///（迟到重试复活由前端墓碑吸收治理，Rust 不越权）。
+#[test]
+fn persist_project_expect_existing_refuses_deleted_target() {
+    let projects = temp_projects_dir();
+    let doc = valid_save_doc();
+    // 默认语义不变：目标缺失时保存可创建（既有项目权威写路径）
+    assert!(
+        persist_project(&cap(&projects), "p-new", valid_save_doc()).is_ok(),
+        "默认保存不要求目标存在（既有语义）"
+    );
+    // 副本路径：目标被删（控制文件+目录）后，expectExisting 保存按
+    // 「项目不存在」拒绝——锁内前置，先于 atomic_write
+    let err = persist_project_expect_existing(&cap(&projects), "p-gone", doc, true).unwrap_err();
+    assert!(
+        matches!(err.root(), StoreError::NotFound { ref detail } if detail.contains("项目不存在")),
+        "意外诊断：{err}"
+    );
+    assert!(!projects.join("p-gone.json").exists(), "不得复活已删目标");
+    cleanup_temp(&projects);
+}
+
+/// PR #224 第六轮评审：expectExisting=true 且目标存在时照常保存。
+#[test]
+fn persist_project_expect_existing_saves_when_target_present() {
+    let projects = temp_projects_dir();
+    persist_project(&cap(&projects), "p-1", valid_save_doc()).expect("先建项目");
+    persist_project_expect_existing(&cap(&projects), "p-1", valid_save_doc(), true)
+        .expect("目标存在时 expectExisting 保存照常");
+    cleanup_temp(&projects);
+}

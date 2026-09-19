@@ -247,10 +247,15 @@ pub async fn save_project(
     app: AppHandle,
     id: String,
     doc: ProjectFile,
+    expect_existing: Option<bool>,
 ) -> Result<ProjectMeta, String> {
     crate::blocking::run("save_project", move || {
         let root = projects_dir(&app).map_err(to_ipc_text)?;
-        persist_project(&root, &id, doc).map_err(to_ipc_text)
+        match expect_existing.unwrap_or(false) {
+            false => persist_project(&root, &id, doc),
+            true => persist_project_expect_existing(&root, &id, doc, true),
+        }
+        .map_err(to_ipc_text)
     })
     .await
 }
@@ -262,9 +267,28 @@ pub(crate) fn persist_project(
     id: &str,
     doc: ProjectFile,
 ) -> Result<ProjectMeta, StoreError> {
+    persist_project_expect_existing(root, id, doc, false)
+}
+
+/// [`persist_project`] 的完整形态：`expect_existing` 为真时锁内前置校验
+/// 目标控制文件仍存在（PR #224 第六轮评审）——副本后续保存在 copy 释放
+/// 锁后可能遭遇排队的删除把目标移走，此时的保存不得复活控制文件
+///（atomic_write 支持新建目标）；默认 false 保持既有语义——迟到重试
+/// 保存的复活治理归前端删除墓碑（§10.2），Rust 不越权扩大拒绝面。
+pub(crate) fn persist_project_expect_existing(
+    root: &CapDir,
+    id: &str,
+    doc: ProjectFile,
+    expect_existing: bool,
+) -> Result<ProjectMeta, StoreError> {
     // 与列表清扫串行（PR #217 第三轮评审，同 create_project_file）
     let _op = projects_op_lock();
     validate_id(id).map_err(StoreError::invalid)?;
+    if expect_existing && root.symlink_metadata(format!("{id}.json")).is_err() {
+        return Err(StoreError::missing(format!(
+            "项目不存在，拒绝写入副本：{id}"
+        )));
+    }
     // 句柄持有至函数结束——复验过的实体覆盖整个保存决策
     let _verified_assets = verify_save_asset_files(root, id, &doc.assets)?;
     let file = prepare_save(id, &doc)?;
