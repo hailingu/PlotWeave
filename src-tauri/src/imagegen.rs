@@ -624,9 +624,15 @@ pub async fn llm_image_generate(app: AppHandle, request: ImageGenRequest) -> Res
     }
     let projects = crate::store::projects_dir(&app).map_err(crate::store::to_ipc_text)?;
     let pending = app.state::<crate::assets::project_media::PendingProjectAssets>();
-    let written =
-        crate::assets::write_generated_asset(&projects, &project_id, &bytes, mime, &pending)
-            .map_err(|e| e.to_string())?;
+    let written = crate::assets::write_generated_asset(
+        &projects,
+        &project_id,
+        &bytes,
+        mime,
+        &pending,
+        &|| registration.is_cancelled(),
+    )
+    .map_err(|e| e.to_string())?;
     // §9.3 预检并入命令内（同一根句柄）：返回的产物已完成形状+实路径校验
     let asset = crate::assets::validate_project_asset_with(&projects, &project_id, &written)
         .map_err(|e| e.to_string())?;

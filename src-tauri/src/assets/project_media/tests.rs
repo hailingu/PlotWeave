@@ -258,9 +258,15 @@ fn write_generated_asset_registers_pending_media() {
     let pid = "p-gen";
     let pending = PendingProjectAssets::new();
     write_project_doc_raw(&projects, pid, json!({}));
-    let asset =
-        crate::assets::write_generated_asset(&cap(&projects), pid, b"GEN", "image/png", &pending)
-            .expect("生成落盘应成功");
+    let asset = crate::assets::write_generated_asset(
+        &cap(&projects),
+        pid,
+        b"GEN",
+        "image/png",
+        &pending,
+        &|| false,
+    )
+    .expect("生成落盘应成功");
     let asset_id = asset.get("id").and_then(Value::as_str).expect("id 缺失");
     let (rel, mime) = resolve_project_media_entry(&cap(&projects), pid, asset_id, &pending)
         .expect("生成产物应经登记项可解析");

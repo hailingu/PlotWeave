@@ -204,8 +204,15 @@ pub(crate) fn write_generated_asset(
     bytes: &[u8],
     mime: &str,
     pending: &project_media::PendingProjectAssets,
+    cancelled: &dyn Fn() -> bool,
 ) -> Result<Value, AssetsError> {
     let _op = crate::store::projects_op_lock();
+    // 拿到锁后复验取消（PR #224 第四轮评审）：锁等待期间用户可取消——
+    // 前端已丢弃响应，此处继续写盘只会留下不可达资产（≤32 MiB）。旧
+    // check-to-write 窗口极小，操作锁把它放大到整个并发项目操作时长。
+    if cancelled() {
+        return Err(AssetsError::refused("已取消"));
+    }
     ensure_project_control(projects, id)?;
     let project_dir = ensure_child_dir(projects, id, "项目资产根")?;
     let assets_dir = ensure_child_dir(&project_dir, "assets", "项目资产目录")?;
