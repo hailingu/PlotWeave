@@ -60,3 +60,39 @@ describe('libraryDiagnostics：删除隔离区待清理状态（issue #135）', 
     expect(d.libraryWarningsSnapshot()).toEqual(['已隔离非法索引条目 #2：…'])
   })
 })
+
+describe('partitionCleanupPending：常规待释放与冲突证据分类（PR #222 评审）', () => {
+  it('已提交删除的保留项归 routine（可给清理指引）', async () => {
+    const d = await load()
+    const { routine, evidence } = d.partitionCleanupPending([
+      '媒体已隔离待清理：assets/la-1.png',
+      '隔离项保留（身份绑定清理不可用）：la-2 / .trash/t-x',
+    ])
+    expect(routine).toEqual([
+      '媒体已隔离待清理：assets/la-1.png',
+      '隔离项保留（身份绑定清理不可用）：la-2 / .trash/t-x',
+    ])
+    expect(evidence).toEqual([])
+  })
+
+  it('身份异常/不符/被占用与 indexUncertain 裸隔离名归 evidence（不得指引删除）', async () => {
+    const d = await load()
+    const { routine, evidence } = d.partitionCleanupPending([
+      '隔离项身份异常，保留现场待恢复：assets/la-3.png',
+      '隔离项保留（身份不符或被占用）：la-4 / .trash/t-y',
+      '.trash/t-indexuncertain-1',
+    ])
+    expect(routine).toEqual([])
+    expect(evidence).toHaveLength(3)
+  })
+
+  it('未识别形态默认归 evidence（fail-safe：不认识的一律不给删除指引）', async () => {
+    const d = await load()
+    const { routine, evidence } = d.partitionCleanupPending([
+      '未来新增的描述格式：whatever',
+      '媒体已隔离待清理：assets/la-1.png',
+    ])
+    expect(routine).toEqual(['媒体已隔离待清理：assets/la-1.png'])
+    expect(evidence).toEqual(['未来新增的描述格式：whatever'])
+  })
+})

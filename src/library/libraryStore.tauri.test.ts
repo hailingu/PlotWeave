@@ -468,3 +468,44 @@ describe('libraryStore Tauri 路径：upsertGroup', () => {
     ])
   })
 })
+
+describe('libraryStore Tauri 路径：导入/更新的 cleanupPending 上报（PR #222 评审 P2）', () => {
+  it('导入返回携带 cleanupPending 时进诊断通道', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    invoke.mockResolvedValue(
+      entry({
+        id: 'la-9',
+        cleanupPending: ['媒体已隔离待清理：assets/la-1.png'],
+      }),
+    )
+    const { libraryStore } = await load()
+    await libraryStore.put(
+      new File(['x'], 'a.png', { type: 'image/png' }),
+      'reference',
+    )
+    const diagnostics = await import('./libraryDiagnostics')
+    expect(diagnostics.cleanupPendingSnapshot()).toEqual([
+      '媒体已隔离待清理：assets/la-1.png',
+    ])
+    warn.mockRestore()
+  })
+
+  it('更新返回携带 cleanupPending 时进诊断通道；空快照按恢复后状态替换', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    invoke.mockResolvedValue(
+      entry({
+        id: 'la-1',
+        cleanupPending: ['媒体已隔离待清理：assets/la-1.png'],
+      }),
+    )
+    const { libraryStore } = await load()
+    await libraryStore.updateMeta('la-1', { name: '改名' })
+    const diagnostics = await import('./libraryDiagnostics')
+    expect(diagnostics.cleanupPendingSnapshot()).toHaveLength(1)
+    // 恢复/人工清理后的空快照：整体替换，积压显示消失
+    invoke.mockResolvedValue(entry({ id: 'la-1', cleanupPending: [] }))
+    await libraryStore.updateMeta('la-1', { name: '再改' })
+    expect(diagnostics.cleanupPendingSnapshot()).toEqual([])
+    warn.mockRestore()
+  })
+})

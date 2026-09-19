@@ -42,13 +42,48 @@ describe('LibraryWarnings 删除隔离区待清理展示（issue #135）', () =>
 
   it('关闭后隐藏本轮提示；待清理内容变化时重新显示', async () => {
     const { diagnostics, LibraryWarnings } = await load()
-    diagnostics.publishCleanupPending(['assets/la-1.png'])
+    diagnostics.publishCleanupPending(['媒体已隔离待清理：assets/la-1.png'])
     render(<LibraryWarnings />)
     fireEvent.click(screen.getByText('关闭图库提示'))
     expect(screen.queryByText(/删除隔离区待清理/)).toBeNull()
     act(() => {
-      diagnostics.publishCleanupPending(['assets/la-1.png', 'assets/la-2.png'])
+      diagnostics.publishCleanupPending([
+        '媒体已隔离待清理：assets/la-1.png',
+        '媒体已隔离待清理：assets/la-2.png',
+      ])
     })
     expect(screen.getByText(/删除隔离区待清理（2 项）/)).toBeTruthy()
+  })
+})
+
+describe('LibraryWarnings 冲突证据区（PR #222 评审 P1）', () => {
+  it('证据类条目单独成区：明示保留现场、不含删除指引', async () => {
+    const { diagnostics, LibraryWarnings } = await load()
+    diagnostics.publishCleanupPending([
+      '隔离项身份异常，保留现场待恢复：assets/la-3.png',
+      '.trash/t-indexuncertain-1',
+    ])
+    render(<LibraryWarnings />)
+    expect(screen.getByText(/待人工核对的删除事务（2 项）/)).toBeTruthy()
+    // 证据语义：仅存媒体与核对证据，禁止删除——不出现 .trash 清理指引
+    const section = screen
+      .getByText(/待人工核对的删除事务（2 项）/)
+      .closest('details')!
+    expect(section.textContent).toContain('请勿删除')
+    expect(section.textContent).not.toContain('删除应用数据目录下')
+    expect(section.textContent).not.toContain('恢复方式')
+    // 常规清理区不得因纯证据条目出现（不误指可释放空间）
+    expect(screen.queryByText(/删除隔离区待清理（/)).toBeNull()
+  })
+
+  it('常规与证据混合时两区并呈，指引各归其类', async () => {
+    const { diagnostics, LibraryWarnings } = await load()
+    diagnostics.publishCleanupPending([
+      '媒体已隔离待清理：assets/la-1.png',
+      '隔离项保留（身份不符或被占用）：la-4 / .trash/t-y',
+    ])
+    render(<LibraryWarnings />)
+    expect(screen.getByText(/删除隔离区待清理（1 项）/)).toBeTruthy()
+    expect(screen.getByText(/待人工核对的删除事务（1 项）/)).toBeTruthy()
   })
 })

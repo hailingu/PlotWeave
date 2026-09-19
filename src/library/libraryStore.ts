@@ -165,6 +165,11 @@ async function tauriPut(file: File, kind: LibraryKind): Promise<LibraryAsset> {
     bytes: Array.from(bytes),
   })
   reportLibraryWarnings((entry as { warnings?: unknown } | null)?.warnings)
+  // cleanupPending 随导入响应上报（PR #222 评审 P2）：导入路径发现的
+  // 积压与恢复后的空快照同样整体替换，不得只在删除类入口更新
+  reportCleanupPending(
+    (entry as { cleanupPending?: unknown } | null)?.cleanupPending,
+  )
   const normalized = normalizeAsset(entry)
   if (!normalized) throw new Error('导入返回了无效条目')
   return normalized
@@ -216,6 +221,10 @@ function applyUpdateMeta(
         patch,
       })
       reportLibraryWarnings((entry as { warnings?: unknown } | null)?.warnings)
+      // cleanupPending 随更新响应上报（PR #222 评审 P2，与导入同契约）
+      reportCleanupPending(
+        (entry as { cleanupPending?: unknown } | null)?.cleanupPending,
+      )
       const normalized = normalizeAsset(entry)
       if (!normalized) throw new Error('更新返回了无效条目')
       return normalized

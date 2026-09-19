@@ -46,6 +46,32 @@ export function cleanupPendingSnapshot(): readonly string[] {
   return cleanupPending
 }
 
+/** 待清理条目的语义分类（PR #222 评审 P1）：cleanupPending 混合两类
+ * 状态——索引已提交、仅能力保留的待释放项（可给清理指引）与冲突/待
+ * 核对的证据保留项（Rust 特意保留现场：身份异常/不符/被占用、
+ * indexUncertain 裸隔离名——删除即毁证，且可能让索引指向后来占位的
+ * 文件）。常规形态按生产者精确前缀显式识别（transaction.rs「媒体已
+ * 隔离待清理：」与 recover.rs「隔离项保留（身份绑定清理不可用）：」）；
+ * 其余一律归证据类（fail-safe——未识别形态不给删除指引）。 */
+export function partitionCleanupPending(entries: readonly string[]): {
+  routine: string[]
+  evidence: string[]
+} {
+  const routine: string[] = []
+  const evidence: string[] = []
+  for (const entry of entries) {
+    if (
+      entry.startsWith('媒体已隔离待清理：') ||
+      entry.startsWith('隔离项保留（身份绑定清理不可用）：')
+    ) {
+      routine.push(entry)
+    } else {
+      evidence.push(entry)
+    }
+  }
+  return { routine, evidence }
+}
+
 /** 返回稳定快照供 React 外部存储订阅；不暴露可变的诊断数组。 */
 export function libraryWarningsSnapshot(): readonly string[] {
   return warnings
