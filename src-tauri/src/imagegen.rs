@@ -10,9 +10,9 @@
 //! - `llm_image_cancel`：协作式取消——登记取消标志，进行中的生成在请求
 //!   返回后与落盘前检查并放弃结果。
 
-use std::collections::HashSet;
+use std::collections::{HashMap, VecDeque};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use base64::Engine as _;
@@ -74,23 +74,111 @@ fn image_url_of(resp: &Value) -> Option<String> {
     resp.pointer("/data/0/url")?.as_str().map(str::to_string)
 }
 
-/// 已取消 job id 的登记表（协作式取消标志）：取消即登记，生成流程在
-/// 请求返回后与落盘前消费查询；job 结束（成功或自身失败）清理自己的标志。
-/// 中毒后行为（issue #145）：可验证恢复——纯内存建议性状态，set 单项
-/// infallible 操作不会留下结构损坏；恢复经 `crate::lock::recover_guard`，
-/// 取消登记真实生效才报成功（不静默忽略），is_cancelled 如实回答。
-static CANCELLED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+/// 取消墓碑上限（issue #143）：未知/已结束 id 的预取消墓碑按 FIFO
+/// 淘汰——取消表不再无界增长。容量取 64：远覆盖一次会话的合理并发
+/// 生成数；墓碑只服务「先取消后登记」的短窗口（见 `register`）。
+const CANCEL_TOMBSTONE_CAP: usize = 64;
 
-fn cancelled_jobs() -> &'static Mutex<HashSet<String>> {
-    CANCELLED.get_or_init(|| Mutex::new(HashSet::new()))
+/// 生成作业取消注册表（issue #143，Tauri managed state——应用显式拥有
+/// 的生命周期（lib.rs `Builder::manage`），非进程级静态单例）：取消
+/// 状态归属有边界的活动作业注册。
+/// - 活动作业：命令入口 `register` 登记，返回 RAII 守卫——成功/失败/
+///   取消/卸载全部出口随 Drop 清理（错误路径不再依赖逐点 clear，
+///   根治「部分错误路径遗留标记」）；`cancel` 命中活动作业即标记，
+///   检查点经守卫 `is_cancelled` 查询。
+/// - 预取消墓碑：`cancel` 命中未知/已结束 id 进有界墓碑（去重 + FIFO
+///   淘汰——未知与迟到取消不无界增长）；`register` 消费同 id 墓碑使
+///   预取消生效。预取消语义保留：前端取消可早于命令登记，丢掉它会
+///   让已取消作业的付费产物落盘；复用墓碑窗口内的 id 按此语义继承
+///   取消（前端 uid 唯一发号，正常路径不触发）。
+///
+/// 中毒后行为（issue #145）：经 `crate::lock::recover_guard` 恢复。
+pub(crate) struct ImageJobRegistry {
+    state: Mutex<JobRegistryState>,
 }
 
-fn is_cancelled(job_id: &str) -> bool {
-    crate::lock::recover_guard(cancelled_jobs().lock(), "生成取消登记表").contains(job_id)
+#[derive(Default)]
+struct JobRegistryState {
+    /// 活动作业 id → 是否已被取消（登记入口/检查点查询）。
+    active: HashMap<String, bool>,
+    /// 预取消墓碑（去重、FIFO 淘汰、登记时消费）。
+    tombstones: VecDeque<String>,
 }
 
-fn clear_cancel(job_id: &str) {
-    crate::lock::recover_guard(cancelled_jobs().lock(), "生成取消登记表").remove(job_id);
+impl ImageJobRegistry {
+    pub(crate) fn new() -> Self {
+        Self {
+            state: Mutex::new(JobRegistryState::default()),
+        }
+    }
+
+    /// 命令入口登记：消费同 id 预取消墓碑（若有）并登记活动作业——
+    /// 返回的守卫在 Drop 时移除活动登记，全部出口统一清理。
+    fn register<'a>(&'a self, job_id: &str) -> JobRegistration<'a> {
+        crate::lock::recover_guard(self.state.lock(), "生成作业注册表").register(job_id);
+        JobRegistration {
+            registry: self,
+            job_id: job_id.to_string(),
+        }
+    }
+
+    /// 登记取消：活动作业标记取消；未知/已结束 id 进有界墓碑（去重 +
+    /// FIFO 淘汰，issue #143 验收：未知与迟到取消不无界增长）。
+    fn cancel(&self, job_id: &str) {
+        crate::lock::recover_guard(self.state.lock(), "生成作业注册表").cancel(job_id);
+    }
+}
+
+impl JobRegistryState {
+    fn register(&mut self, job_id: &str) {
+        let pre_cancelled = match self.tombstones.iter().position(|id| id == job_id) {
+            Some(pos) => {
+                self.tombstones.remove(pos);
+                true
+            }
+            None => false,
+        };
+        self.active.insert(job_id.to_string(), pre_cancelled);
+    }
+
+    fn cancel(&mut self, job_id: &str) {
+        if let Some(cancelled) = self.active.get_mut(job_id) {
+            *cancelled = true;
+            return;
+        }
+        if self.tombstones.iter().any(|id| id == job_id) {
+            return;
+        }
+        if self.tombstones.len() >= CANCEL_TOMBSTONE_CAP {
+            self.tombstones.pop_front();
+        }
+        self.tombstones.push_back(job_id.to_string());
+    }
+}
+
+/// 活动作业登记守卫（RAII）：`is_cancelled` 供检查点查询；Drop 清理
+/// 活动登记——成功/失败/取消/卸载出口统一，错误路径不再遗留标记。
+pub(crate) struct JobRegistration<'a> {
+    registry: &'a ImageJobRegistry,
+    job_id: String,
+}
+
+impl JobRegistration<'_> {
+    pub(crate) fn is_cancelled(&self) -> bool {
+        crate::lock::recover_guard(self.registry.state.lock(), "生成作业注册表")
+            .active
+            .get(&self.job_id)
+            .copied()
+            .unwrap_or(false)
+    }
+}
+
+impl Drop for JobRegistration<'_> {
+    fn drop(&mut self) {
+        crate::lock::recover_guard(self.registry.state.lock(), "生成作业注册表")
+            .active
+            .remove(&self.job_id);
+    }
 }
 
 /// url 回退下载的重定向上限：禁用客户端自动跟随、逐跳显式复验目标，
@@ -439,7 +527,7 @@ async fn generate_image_bytes(
     base_url: &str,
     key: &str,
     body: &Value,
-    job_id: &str,
+    registration: &JobRegistration<'_>,
     job_deadline: std::time::Instant,
 ) -> Result<Vec<u8>, String> {
     let (status, response_url, text) = with_stage_budget(job_deadline, "生成请求", async {
@@ -465,8 +553,7 @@ async fn generate_image_bytes(
         ProxyError::SendTimeout { source, .. } => format!("请求失败：{source}"),
         other => other.to_string(),
     })?;
-    if is_cancelled(job_id) {
-        clear_cancel(job_id);
+    if registration.is_cancelled() {
         return Err("已取消".into());
     }
     if !status.is_success() {
@@ -501,8 +588,12 @@ pub async fn llm_image_generate(app: AppHandle, request: ImageGenRequest) -> Res
         prompt,
         size,
     } = request;
-    if is_cancelled(&job_id) {
-        clear_cancel(&job_id);
+    // 活动作业登记（issue #143）：RAII 守卫覆盖全部出口——成功/失败/
+    // 取消/卸载随 Drop 清理，错误路径不再遗留标记；预取消墓碑在登记
+    // 时消费（先取消后登记的语义保留）
+    let registry = app.state::<ImageJobRegistry>();
+    let registration = registry.register(&job_id);
+    if registration.is_cancelled() {
         return Err("已取消".into());
     }
     let prompt = prompt.trim();
@@ -521,15 +612,14 @@ pub async fn llm_image_generate(app: AppHandle, request: ImageGenRequest) -> Res
     };
     let body = generation_request_body(&model, prompt, &size);
     // POST 与下载链（含预算耗尽）的失败经同一展示文案上浮
-    let bytes = generate_image_bytes(&base_url, &key, &body, &job_id, job_deadline).await?;
+    let bytes = generate_image_bytes(&base_url, &key, &body, &registration, job_deadline).await?;
     if bytes.len() > GENERATED_IMAGE_MAX_BYTES {
         return Err(format!(
             "生成图像超出大小上限（{GENERATED_IMAGE_MAX_BYTES} 字节）"
         ));
     }
     let mime = sniff_image_mime(&bytes).ok_or("生成内容不是支持的图像格式（PNG/JPEG/WebP/GIF）")?;
-    if is_cancelled(&job_id) {
-        clear_cancel(&job_id);
+    if registration.is_cancelled() {
         return Err("已取消".into());
     }
     let projects = crate::store::projects_dir(&app).map_err(crate::store::to_ipc_text)?;
@@ -540,15 +630,15 @@ pub async fn llm_image_generate(app: AppHandle, request: ImageGenRequest) -> Res
     // §9.3 预检并入命令内（同一根句柄）：返回的产物已完成形状+实路径校验
     let asset = crate::assets::validate_project_asset_with(&projects, &project_id, &written)
         .map_err(|e| e.to_string())?;
-    clear_cancel(&job_id);
     Ok(asset)
 }
 
-/// 协作式取消命令：登记取消标志（中毒恢复——登记真实生效才报成功，
-/// issue #145）；进行中的生成会在检查点放弃结果。
+/// 协作式取消命令（issue #143）：活动作业标记取消；未知/已结束 id 进
+/// 有界墓碑（去重 + FIFO 淘汰——未知与迟到取消不无界增长，登记时消费
+/// 使预取消生效）。中毒恢复——登记真实生效才报成功（issue #145）。
 #[tauri::command]
-pub fn llm_image_cancel(job_id: String) -> Result<(), String> {
-    crate::lock::recover_guard(cancelled_jobs().lock(), "生成取消登记表").insert(job_id);
+pub fn llm_image_cancel(app: AppHandle, job_id: String) -> Result<(), String> {
+    app.state::<ImageJobRegistry>().cancel(&job_id);
     Ok(())
 }
 

@@ -175,6 +175,9 @@ pub fn run() {
         // 会话新增项目资产登记表（pwmedia 项目 scope 的防抖落盘窗口，
         // issue #31 评审修复）：应用显式拥有的状态，非进程级可变全局单例
         .manage(assets::project_media::PendingProjectAssets::new())
+        // 生成作业取消注册表（issue #143）：有边界的活动作业注册 + 预取消
+        // 墓碑，同为应用显式拥有的状态
+        .manage(imagegen::ImageJobRegistry::new())
         // 启动间隙退出请求缓冲（issue #65）：原生屏障先于前端监听注册的
         // 窗口内暂存退出请求，确认就绪时重放
         .manage(QuitGate::default())

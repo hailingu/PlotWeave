@@ -54,35 +54,100 @@ fn image_url_reads_string_member() {
     assert_eq!(image_url_of(&json!({ "data": [{ "url": 42 }] })), None);
 }
 
-#[test]
-fn cancel_flags_register_and_clear() {
-    let job = format!("job-{}", crate::store::new_id());
-    assert!(!is_cancelled(&job));
-    // 与并行的中毒恢复用例共存（PR #219 评审）：静态表可能被并行
-    // 用例注入中毒，本用例的直接访问同样走恢复路径，保持套件确定性
-    crate::lock::recover_guard(cancelled_jobs().lock(), "生成取消登记表").insert(job.clone());
-    assert!(is_cancelled(&job));
-    clear_cancel(&job);
-    assert!(!is_cancelled(&job));
+/// [issue #143](https://github.com/hailingu/PlotWeave/issues/143) 注册表
+/// 状态观察夹具（子模块访问私有字段）。
+fn tombstones_of(registry: &ImageJobRegistry) -> Vec<String> {
+    crate::lock::recover_guard(registry.state.lock(), "生成作业注册表")
+        .tombstones
+        .iter()
+        .cloned()
+        .collect()
 }
 
+fn active_len_of(registry: &ImageJobRegistry) -> usize {
+    crate::lock::recover_guard(registry.state.lock(), "生成作业注册表")
+        .active
+        .len()
+}
+
+/// 验收：未知 id 取消不无界增长——有界墓碑按 FIFO 淘汰、重复取消去重。
 #[test]
-fn cancel_registry_recovers_after_poison() {
-    // [issue #145](https://github.com/hailingu/PlotWeave/issues/145)：
-    // 取消表中毒恢复——持锁 panic 后，取消登记真实生效才报成功
-    // （不静默忽略却报成功），is_cancelled 如实回答。静态表此后保持
-    // 中毒状态，后续用例经同一恢复路径照常工作（透明恢复）
-    let job = format!("job-{}", crate::store::new_id());
-    std::thread::spawn(|| {
-        let _guard = cancelled_jobs().lock().expect("先取得锁");
-        panic!("测试注入的持锁 panic");
-    })
-    .join()
-    .expect_err("注入 panic 应发生");
-    llm_image_cancel(job.clone()).expect("中毒后取消登记仍应成功");
-    assert!(is_cancelled(&job), "中毒后取消登记须真实生效");
-    clear_cancel(&job);
-    assert!(!is_cancelled(&job), "中毒后清理须照常");
+fn unknown_id_cancels_are_bounded_and_deduped() {
+    let registry = ImageJobRegistry::new();
+    for i in 0..(CANCEL_TOMBSTONE_CAP * 2) {
+        registry.cancel(&format!("ghost-{i}"));
+    }
+    let stones = tombstones_of(&registry);
+    assert_eq!(
+        stones.len(),
+        CANCEL_TOMBSTONE_CAP,
+        "墓碑按上限淘汰，不无界增长"
+    );
+    assert!(
+        !stones.contains(&"ghost-0".to_string()),
+        "最旧者被 FIFO 淘汰"
+    );
+    assert!(
+        stones.contains(&format!("ghost-{}", CANCEL_TOMBSTONE_CAP * 2 - 1)),
+        "最新者保留"
+    );
+    // 重复取消已在碑集的 id：去重，不产生第二份占位
+    registry.cancel(&format!("ghost-{}", CANCEL_TOMBSTONE_CAP * 2 - 1));
+    assert_eq!(tombstones_of(&registry).len(), CANCEL_TOMBSTONE_CAP);
+}
+
+/// 验收：预取消语义——先取消后登记在登记时生效（前端取消可早于命令
+/// 登记）；墓碑被一次性消费；守卫 Drop（含错误路径）清理活动登记。
+#[test]
+fn pre_cancelled_job_registers_as_cancelled_and_cleans_on_drop() {
+    let registry = ImageJobRegistry::new();
+    registry.cancel("job-a");
+    let registration = registry.register("job-a");
+    assert!(registration.is_cancelled(), "预取消在登记时生效");
+    assert!(
+        !tombstones_of(&registry).contains(&"job-a".to_string()),
+        "墓碑被登记消费"
+    );
+    drop(registration);
+    assert_eq!(active_len_of(&registry), 0, "出口清理活动登记");
+    let second = registry.register("job-a");
+    assert!(!second.is_cancelled(), "墓碑一次性消费，复用不受旧取消影响");
+}
+
+/// 验收：作业中取消标记→检查点可见；出口（含错误路径 RAII）清理；
+/// 迟到取消进有界墓碑并按预取消语义作用于复用 id；取消仍不能写回
+/// 过时结果（登记守卫清理前任何写回路径都已带检查点）。
+#[test]
+fn cancel_during_job_marks_finish_cleans_and_late_cancel_bounds() {
+    let registry = ImageJobRegistry::new();
+    let registration = registry.register("job-b");
+    assert!(!registration.is_cancelled());
+    registry.cancel("job-b");
+    assert!(registration.is_cancelled(), "作业中取消标记可见");
+    drop(registration);
+    assert_eq!(active_len_of(&registry), 0, "出口后活动表清空");
+    // 迟到取消（作业已结束）：进有界墓碑；复用 id 时按预取消语义消费
+    registry.cancel("job-b");
+    let third = registry.register("job-b");
+    assert!(third.is_cancelled(), "迟到取消按预取消语义作用于复用 id");
+}
+
+/// issue #145 中毒恢复在新注册表上保持：持锁 panic 后操作照常（恢复
+/// 路径统一经 recover_guard，登记真实生效）。
+#[test]
+fn registry_recovers_after_poison() {
+    let registry = ImageJobRegistry::new();
+    std::thread::scope(|s| {
+        s.spawn(|| {
+            let _guard = registry.state.lock().expect("先取得锁");
+            panic!("测试注入的持锁 panic");
+        })
+        .join()
+        .expect_err("注入 panic 应发生");
+    });
+    registry.cancel("job-p");
+    let registration = registry.register("job-p");
+    assert!(registration.is_cancelled(), "中毒后取消/登记照常");
 }
 
 #[test]
@@ -188,11 +253,13 @@ fn key_load_budget_gate_skips_blocking_access_when_expired() {
 fn generate_request_budget_gate_precedes_post_when_expired() {
     let deadline = std::time::Instant::now() - std::time::Duration::from_secs(1);
     let body = generation_request_body("m", "p", "1024x1024");
+    let registry = ImageJobRegistry::new();
+    let registration = registry.register("job-1");
     let err = tauri::async_runtime::block_on(generate_image_bytes(
         "not-a-url",
         "sk-FICTITIOUS",
         &body,
-        "job-1",
+        &registration,
         deadline,
     ))
     .expect_err("预算耗尽应在 POST 前拒绝");
