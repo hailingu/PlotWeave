@@ -13,6 +13,8 @@ scanner_bin=${PLOTWEAVE_SONAR_SCANNER_BIN:-sonar-scanner}
 curl_bin=${PLOTWEAVE_CURL_BIN:-curl}
 node_bin=${PLOTWEAVE_NODE_BIN:-node}
 coverage_report_path=${PLOTWEAVE_COVERAGE_REPORT_PATH:-$repository_root/coverage/lcov.info}
+rust_coverage_report_path=${PLOTWEAVE_RUST_COVERAGE_REPORT_PATH:-$repository_root/src-tauri/target/coverage/lcov-rust.info}
+llvm_cov_bin=${PLOTWEAVE_CARGO_LLVM_COV_BIN:-cargo-llvm-cov}
 lock_directory=${PLOTWEAVE_SONAR_LOCK_DIRECTORY:-$repository_root/.sonar-gate.lock}
 report_path=${PLOTWEAVE_SONAR_REPORT_PATH:-$repository_root/.scannerwork/report-task.txt}
 quality_gate_timeout=${SONAR_QUALITY_GATE_TIMEOUT:-300}
@@ -72,6 +74,7 @@ require_command "$npm_bin"
 require_command "$scanner_bin"
 require_command "$curl_bin"
 require_command "$node_bin"
+require_command "$llvm_cov_bin"
 
 mkdir "$lock_directory" 2>/dev/null ||
   fail '另一个 SonarQube 门禁正在运行；为保护共享覆盖率与扫描目录，本次操作已停止'
@@ -87,10 +90,17 @@ grep -q '^SF:' "$coverage_report_path" ||
 grep -Eq '^DA:[0-9]+,[1-9][0-9]*' "$coverage_report_path" ||
   fail "覆盖率报告没有任何已覆盖代码行：$coverage_report_path"
 
+# Rust 覆盖率（issue #169）：经 rust-coverage.sh 生成并校验（非空、有
+# 源文件记录、有已覆盖行），与前端 LCOV 一并导入质量报告——「存在 Rust
+# 测试」不等于「已度量覆盖率」，未度量与未覆盖由此可区分。
+printf '%s\n' '[SonarQube] 生成最新 Rust 覆盖率……'
+"$script_directory/rust-coverage.sh"
+
 printf '%s\n' '[SonarQube] 扫描并等待 Quality Gate……'
 "$scanner_bin" \
   "-Dsonar.host.url=$sonar_host_url" \
   "-Dsonar.javascript.lcov.reportPaths=$coverage_report_path" \
+  "-Dsonar.rust.lcov.reportPaths=$rust_coverage_report_path" \
   -Dsonar.qualitygate.wait=true \
   "-Dsonar.qualitygate.timeout=$quality_gate_timeout"
 

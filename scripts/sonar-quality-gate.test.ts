@@ -19,6 +19,7 @@ type GateOptions = {
   lockOccupied?: boolean
   npmExit?: number
   plotweaveSonarToken?: string
+  rustCoverageMode?: 'empty' | 'malformed' | 'missing' | 'uncovered' | 'valid'
   scannerExit?: number
   qualityGateStatus?: string
   sonarHostUrl?: string | null
@@ -49,11 +50,13 @@ interface GateStubPaths {
   readonly curlStdinPath: string
   readonly scannerTokenPath: string
   readonly coveragePath: string
+  readonly rustCoveragePath: string
   readonly lockPath: string
   readonly reportPath: string
   readonly npmPath: string
   readonly scannerPath: string
   readonly curlPath: string
+  readonly llvmCovPath: string
 }
 
 /** 外部命令替身（runGate 拆分，issue #99）：npm / sonar-scanner / curl 的
@@ -88,6 +91,26 @@ esac`,
   if (options.lockOccupied) {
     mkdirSync(paths.lockPath)
   }
+  // Rust 覆盖率替身（issue #169）：cargo-llvm-cov 的记录-并-受控返回
+  // 替身，按选项预置 LCOV 形态；missing 模式不创建文件（生成缺失）。
+  writeExecutable(
+    paths.llvmCovPath,
+    String.raw`printf 'cargo-llvm-cov %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
+case "$PLOTWEAVE_TEST_RUST_COVERAGE_MODE" in
+  valid)
+    printf '%s\n' 'TN:' 'SF:src-tauri/src/example.rs' 'DA:1,1' 'end_of_record' > "$PLOTWEAVE_RUST_COVERAGE_REPORT_PATH"
+    ;;
+  empty)
+    : > "$PLOTWEAVE_RUST_COVERAGE_REPORT_PATH"
+    ;;
+  malformed)
+    printf '%s\n' 'TN:' 'end_of_record' > "$PLOTWEAVE_RUST_COVERAGE_REPORT_PATH"
+    ;;
+  uncovered)
+    printf '%s\n' 'TN:' 'SF:src-tauri/src/example.rs' 'DA:1,0' 'end_of_record' > "$PLOTWEAVE_RUST_COVERAGE_REPORT_PATH"
+    ;;
+esac`,
+  )
   writeExecutable(
     paths.scannerPath,
     String.raw`printf 'sonar-scanner %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
@@ -128,8 +151,10 @@ function gateEnvironment(
 ): NodeJS.ProcessEnv {
   const environment: NodeJS.ProcessEnv = {
     ...process.env,
+    PLOTWEAVE_CARGO_LLVM_COV_BIN: paths.llvmCovPath,
     PLOTWEAVE_CURL_BIN: paths.curlPath,
     PLOTWEAVE_COVERAGE_REPORT_PATH: paths.coveragePath,
+    PLOTWEAVE_RUST_COVERAGE_REPORT_PATH: paths.rustCoveragePath,
     PLOTWEAVE_SONAR_LOCK_DIRECTORY: paths.lockPath,
     PLOTWEAVE_NODE_BIN: process.execPath,
     PLOTWEAVE_NPM_BIN: paths.npmPath,
@@ -139,6 +164,7 @@ function gateEnvironment(
     PLOTWEAVE_TEST_CURL_STDIN: paths.curlStdinPath,
     PLOTWEAVE_TEST_SCANNER_TOKEN: paths.scannerTokenPath,
     PLOTWEAVE_TEST_COVERAGE_MODE: options.coverageMode ?? 'valid',
+    PLOTWEAVE_TEST_RUST_COVERAGE_MODE: options.rustCoverageMode ?? 'valid',
     PLOTWEAVE_TEST_NPM_EXIT: String(options.npmExit ?? 0),
     PLOTWEAVE_TEST_QUALITY_GATE_STATUS: options.qualityGateStatus ?? 'OK',
     PLOTWEAVE_TEST_SCANNER_EXIT: String(options.scannerExit ?? 0),
@@ -169,11 +195,13 @@ function runGate(target: string, options: GateOptions = {}): GateRun {
     curlStdinPath: resolve(sandbox, 'curl-stdin.txt'),
     scannerTokenPath: resolve(sandbox, 'scanner-token.txt'),
     coveragePath: resolve(sandbox, 'coverage', 'lcov.info'),
+    rustCoveragePath: resolve(sandbox, 'rust-coverage', 'lcov-rust.info'),
     lockPath: resolve(sandbox, 'sonar-gate.lock'),
     reportPath: resolve(sandbox, '.scannerwork', 'report-task.txt'),
     npmPath: resolve(sandbox, 'bin', 'npm'),
     scannerPath: resolve(sandbox, 'bin', 'sonar-scanner'),
     curlPath: resolve(sandbox, 'bin', 'curl'),
+    llvmCovPath: resolve(sandbox, 'bin', 'cargo-llvm-cov'),
   }
 
   writeCommandStubs(paths, options)
@@ -210,7 +238,7 @@ afterEach(() => {
 // 单用例常超 vitest 默认 5s（实测 3.4–4.9s 贴边抖动，钩子内必超）——放宽
 // describe 级超时上限，不放宽断言。
 describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
-  it('先生成最新覆盖率，再等待 Quality Gate，并确认新增代码未解决问题为零', () => {
+  it('先生成前端与 Rust 覆盖率，再等待 Quality Gate，并确认新增代码未解决问题为零', () => {
     const result = runGate('scripts/sonar-quality-gate.sh')
 
     expect(result.status).toBe(0)
@@ -219,14 +247,30 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
         .split('\n')
         .filter(Boolean)
         .map((line) => line.split(' ')[0]),
-    ).toEqual(['npm', 'sonar-scanner', 'curl', 'curl'])
+    ).toEqual(['npm', 'cargo-llvm-cov', 'sonar-scanner', 'curl', 'curl'])
     expect(result.log).toContain('npm run test:coverage')
+    expect(result.log).toContain(
+      'cargo-llvm-cov llvm-cov --lib --test media_format_leaf --lcov',
+    )
     expect(result.log).toContain('-Dsonar.qualitygate.wait=true')
     expect(result.log).toContain('-Dsonar.host.url=http://sonar.test')
     expect(result.log).toContain('-Dsonar.javascript.lcov.reportPaths=')
     expect(result.log).toContain('/coverage/lcov.info')
+    // Rust 覆盖率（issue #169）：与前端一并导入质量报告
+    expect(result.log).toContain('-Dsonar.rust.lcov.reportPaths=')
+    expect(result.log).toContain('/lcov-rust.info')
     // 增量清零：issues 查询按 sinceLeakPeriod（New Code 周期）过滤
     expect(result.log).toContain('sinceLeakPeriod=true')
+  })
+
+  it('Rust 覆盖率生成缺失或没有任何已覆盖行时停止，不启动扫描（issue #169）', () => {
+    for (const rustCoverageMode of ['missing', 'empty', 'malformed', 'uncovered'] as const) {
+      const result = runGate('scripts/sonar-quality-gate.sh', { rustCoverageMode })
+
+      expect(result.status, `模式 ${rustCoverageMode}`).not.toBe(0)
+      expect(result.log, `模式 ${rustCoverageMode}`).toContain('cargo-llvm-cov')
+      expect(result.log, `模式 ${rustCoverageMode}`).not.toContain('sonar-scanner')
+    }
   })
 
   it('未显式配置 SonarQube 地址时阻止操作，避免误扫 SonarQube Cloud', () => {
