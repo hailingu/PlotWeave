@@ -23,13 +23,16 @@ fail() {
 command -v "$llvm_cov_bin" >/dev/null 2>&1 ||
   fail "缺少命令：$llvm_cov_bin（安装：cargo install cargo-llvm-cov）"
 
-printf '%s\n' '[coverage] 生成 Rust 语句覆盖率（LCOV，lib 目标，稳定版工具链无分支口径）……'
+printf '%s\n' '[coverage] 生成 Rust 语句覆盖率（LCOV，lib + media_format_leaf 目标，稳定版工具链无分支口径）……'
 # llvm-cov 不创建报告父目录：先建（首次运行 target/coverage 不存在）
 mkdir -p "$(dirname "$rust_coverage_report_path")"
-# --lib：度量产品库（src-tauri/src）由库测试套件执行的语句；--branch 需要
-# nightly 的 -Z coverage-options=branch（rust-toolchain.toml 钉死稳定版），
-# 故不启用——见 rust-standard 的记录边界。
-"$llvm_cov_bin" llvm-cov --lib --lcov --output-path "$rust_coverage_report_path" \
+# 目标选择（PR #223 评审）：--lib 度量产品库由库测试套件执行的语句，
+# --test media_format_leaf 纳入独立的叶子集成测试目标（media_format.rs
+# 的边界回归，issue #146）；native_quit 为 macOS 专属 AppKit 子进程
+# 夹具，不在此报告（记录边界）。--branch 需要 nightly 的
+# -Z coverage-options=branch（rust-toolchain.toml 钉死稳定版），故不启用。
+"$llvm_cov_bin" llvm-cov --lib --test media_format_leaf --lcov \
+  --output-path "$rust_coverage_report_path" \
   --manifest-path src-tauri/Cargo.toml
 
 [ -s "$rust_coverage_report_path" ] ||

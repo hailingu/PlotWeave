@@ -36,15 +36,19 @@ root `AGENTS.md`, this file is written in English for agent interoperability.
 
 Rust coverage is measured and imported into the quality report
 ([issue #169](https://github.com/hailingu/PlotWeave/issues/169)):
-`scripts/rust-coverage.sh` runs `cargo-llvm-cov --lib --lcov
---manifest-path src-tauri/Cargo.toml` and validates the report (non-empty,
+`scripts/rust-coverage.sh` runs `cargo-llvm-cov llvm-cov --lib
+--test media_format_leaf --lcov --manifest-path src-tauri/Cargo.toml` and
+validates the report (non-empty,
 has source records, has covered lines), and the quality gate regenerates it
 before every analysis so the report distinguishes measured-uncovered lines
 from unmeasured files. Metric and scope:
 
 - **口径**：LLVM source-based **line (statement) coverage**, exported as
   LCOV (`DA`/`LF`/`LH` per file) for the product library `src-tauri/src`
-  exercised by the library test suite (`--lib`).
+  exercised by the library test suite (`--lib`) **plus the
+  `media_format_leaf` integration target** (`--test media_format_leaf`,
+  the issue #146 module-boundary regression; PR #223 review — omitting it
+  left its executed paths invisible to the report).
 - **分支口径的记录边界**：LLVM branch coverage (`--branch` → LCOV `BRDA`)
   requires the nightly-only `-Z coverage-options=branch` flag; the
   repository pins the stable toolchain (issue #167), so branch coverage is
@@ -52,12 +56,14 @@ from unmeasured files. Metric and scope:
   decision.
 - **排除范围**：no source file is excluded. `#[cfg(test)]` inline test
   modules are measured as part of their host files (their lines execute
-  under the test suite). The `native_quit` integration fixture and the
-  frontend are outside this report (the frontend has its own LCOV
+  under the test suite). The `native_quit` integration fixture is excluded
+  (macOS-specific AppKit child-process scenario — platform-specific and
+  process-spawning, kept out of the coverage report deliberately). The
+  frontend is outside this report (the frontend has its own LCOV
   import).
-- **基线（2026-09-19）**：5619/6796 lines = 82.7% line coverage over 40
-  source files, established with `cargo-llvm-cov 0.9.0` on the pinned
-  stable toolchain. Coverage thresholds/conditions on the Quality Gate are
+- **基线（2026-09-19，含 media_format_leaf）**：5619/6803 lines = 82.6%
+  line coverage over 41 source files, established with
+  `cargo-llvm-cov 0.9.0` on the pinned stable toolchain. Coverage thresholds/conditions on the Quality Gate are
   a separate project decision and are intentionally not configured by the
   introduction change.
 - **工具链**：`llvm-tools` is pinned in `rust-toolchain.toml` (provides

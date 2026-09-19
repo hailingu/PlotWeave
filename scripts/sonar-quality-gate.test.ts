@@ -249,7 +249,9 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
         .map((line) => line.split(' ')[0]),
     ).toEqual(['npm', 'cargo-llvm-cov', 'sonar-scanner', 'curl', 'curl'])
     expect(result.log).toContain('npm run test:coverage')
-    expect(result.log).toContain('cargo-llvm-cov llvm-cov --lib --lcov')
+    expect(result.log).toContain(
+      'cargo-llvm-cov llvm-cov --lib --test media_format_leaf --lcov',
+    )
     expect(result.log).toContain('-Dsonar.qualitygate.wait=true')
     expect(result.log).toContain('-Dsonar.host.url=http://sonar.test')
     expect(result.log).toContain('-Dsonar.javascript.lcov.reportPaths=')
