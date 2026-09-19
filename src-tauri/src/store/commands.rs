@@ -209,6 +209,10 @@ pub(crate) fn save_ai_session_file(
     session: &serde_json::Value,
 ) -> Result<(), StoreError> {
     validate_ai_session(session).map_err(StoreError::invalid)?;
+    // 与项目删除共享 projects 操作锁（PR #224 第二轮评审）：
+    // require_project_record + 会话目录创建原子化，迟到保存不得重建
+    // 已删项目的目录（恢复 ai_session_dir 注释的既有文档意图）
+    let _op = projects_op_lock();
     require_project_record(root, id)?;
     let dir = ai_session_dir(root, id)?;
     let text = serde_json::to_string_pretty(session)
@@ -322,6 +326,10 @@ fn remove_dir_contents_bound(dir: &CapDir) -> Result<(), StoreError> {
 }
 fn delete_project_files(root: &CapDir, id: &str) -> Result<(), StoreError> {
     validate_id(id).map_err(StoreError::invalid)?;
+    // 删除与导入/生成/复制/会话创建/列表清扫共享 projects 操作锁
+    //（PR #224 第二轮评审）：写入路径的控制校验与资产提交不在删除
+    // 窗口中越过，已删目录不被重建
+    let _op = projects_op_lock();
     match root.symlink_metadata(id) {
         Ok(md) if md.is_dir() => {
             // 先绑定被归类目录的身份再删内容（§10.2）：remove_dir_all(id)

@@ -8,7 +8,7 @@ use tauri::AppHandle;
 use crate::store::error::{to_ipc_text, StoreError};
 #[cfg(unix)]
 use crate::store::persist::asset_identity;
-use crate::store::persist::{open_dir_bound, projects_dir};
+use crate::store::persist::{open_dir_bound, projects_dir, projects_op_lock};
 use crate::store::types::validate_id;
 /// §7.3 复制项目：整目录拷贝项目资产（当前扁平布局下 `projects/{fromId}/
 /// assets` → `projects/{toId}/assets`），供 §10.5 保存边界的实路径复验在
@@ -33,6 +33,9 @@ pub async fn copy_project_assets(
 /// 不再退回路径名拼接——源/目标子目录在元数据检查后被并发替换（含换成
 /// 符号链接）时，句柄相对解析仍不逃出 projects/，越界符号链接被沙箱拒绝。
 fn copy_assets_tree(root: &CapDir, from_id: &str, to_id: &str) -> Result<(), StoreError> {
+    // 复制与项目删除经 projects 操作锁串行（PR #224 第二轮评审：目标
+    // 项目在拷贝中途被删时不得重建其目录）
+    let _op = projects_op_lock();
     validate_id(from_id).map_err(StoreError::invalid)?;
     validate_id(to_id).map_err(StoreError::invalid)?;
     // 源项目目录先归类绑定（§10.2）：组合路径 `{from_id}/assets` 的

@@ -152,7 +152,10 @@ fn ensure_project_control(projects: &CapDir, id: &str) -> Result<(), AssetsError
 /// 库资产 → 项目资产的导入内核（给定已验证的 projects 与 library 根句柄）：
 /// 项目控制文件必须存在且通过归类校验（不替不存在的项目建资产目录）；
 /// 库条目形状校验 → 源文件身份绑定打开 → 目标目录确保 → 原子拷贝落盘 →
-/// 返回项目级 AssetRef（新 id、source=upload、规范 UTC createdAt）。
+/// 返回项目级 AssetRef（新 id、source=upload、规范 UTC createdAt）。控制
+/// 校验与资产提交经 projects 操作锁与项目删除串行（PR #224 第二轮评审：
+/// 删除持锁期间不得越过校验重建已删目录，锁序为 library→projects 单向，
+/// 本锁在调用方可能持有的库锁之后取得）。
 pub(crate) fn import_asset_from_library(
     projects: &CapDir,
     library: &CapDir,
@@ -161,6 +164,7 @@ pub(crate) fn import_asset_from_library(
     pending: &project_media::PendingProjectAssets,
     report: &mut dyn FnMut(&crate::library_journal::Recovery),
 ) -> Result<Value, AssetsError> {
+    let _op = crate::store::projects_op_lock();
     ensure_project_control(projects, id)?;
     // §7.2：冲突期条目不得为导入/收藏提供复制源
     let recovery = crate::library_journal::ensure_importable(library, library_asset_id, report)?;
@@ -192,7 +196,8 @@ pub(crate) fn import_asset_from_library(
 /// 生成媒体落盘内核（docs/data-model.md §13 outputs 槽位的媒体侧）：
 /// 字节经原子写入进项目 `assets/`，返回 `source=generated` 的项目级
 /// AssetRef（新 id、规范 UTC createdAt）。项目控制文件必须存在且通过
-/// 归类校验（不替不存在的项目建资产目录）。
+/// 归类校验（不替不存在的项目建资产目录）。控制校验与资产提交经
+/// projects 操作锁与项目删除串行（PR #224 第二轮评审，同导入内核）。
 pub(crate) fn write_generated_asset(
     projects: &CapDir,
     id: &str,
@@ -200,6 +205,7 @@ pub(crate) fn write_generated_asset(
     mime: &str,
     pending: &project_media::PendingProjectAssets,
 ) -> Result<Value, AssetsError> {
+    let _op = crate::store::projects_op_lock();
     ensure_project_control(projects, id)?;
     let project_dir = ensure_child_dir(projects, id, "项目资产根")?;
     let assets_dir = ensure_child_dir(&project_dir, "assets", "项目资产目录")?;
