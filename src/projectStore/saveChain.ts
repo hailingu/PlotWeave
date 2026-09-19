@@ -253,6 +253,12 @@ export function enqueueSave(
   expectExisting = false,
 ): Promise<void> {
   if (deletingIds.has(id)) {
+    if (expectExisting) {
+      // 副本后续保存（PR #224 第七轮评审）：墓碑活跃即目标删除在途——
+      // 吸收会让 duplicate 对不存在的项目报成功（flag 被墓碑分支丢弃）。
+      // 拒绝并抛出：调用方落入清理分支，墓碑解除后目标已被移除
+      return Promise.reject(new Error(`项目删除中，拒绝写入副本：${id}`))
+    }
     // 吸收但不丢弃：留存最新文档，删除失败时回吐（见 enqueueDelete）
     absorbedSaveDocs.set(id, doc)
     console.warn('[projectStore] 项目删除中，吸收本次保存排队', id)

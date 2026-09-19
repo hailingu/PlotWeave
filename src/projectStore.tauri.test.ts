@@ -1059,9 +1059,62 @@ describe('tauriCreate / delete / duplicate', () => {
     expect(calls[1]).toEqual({ cmd: 'delete_project', args: { id: 'new-1' } })
   })
 
+  it('副本保存遇活跃删除墓碑即拒绝，duplicate 报失败并清理（PR #224 第七轮评审：吸收会让 flag 被丢弃、复制报成功）', async () => {
+    handlers.set('load_project', () => modernFile())
+    handlers.set('list_projects', () => [meta('p1')])
+    handlers.set('create_project', (args) => ({
+      ...meta('copy-t'),
+      name: (args as { name: string }).name,
+    }))
+    handlers.set('copy_project_assets', () => undefined)
+    let saveReached = false
+    handlers.set('save_project', (args) => {
+      if ((args as { id: string }).id === 'copy-t') saveReached = true
+    })
+    const deletedIds: string[] = []
+    const releasers: Array<() => void> = []
+    handlers.set('delete_project', (args) => {
+      deletedIds.push((args as { id: string }).id)
+      return new Promise<void>((resolve) => {
+        releasers.push(resolve)
+      })
+    })
+    const { projectStore } = await load()
+    // 首个删除挂起：copy-t 的删除墓碑活跃
+    const deleting = projectStore.delete('copy-t')
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    // 墓碑窗口内发起 duplicate：load/create/copy 可进行，后续保存被拒绝
+    //（不得吸收报成功）→ catch 清理分支再排队一笔删除
+    // 立即挂 rejection 观察者（避免 50ms 窗口内的未处理拒绝）
+    const duplicating = projectStore.duplicate('p1')
+    const verdict = duplicating.then(
+      () => 'resolved',
+      (err: unknown) => `rejected:${String(err)}`,
+    )
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(saveReached).toBe(false)
+    // 放行全部挂起/后续入队的删除，两笔删除与 duplicate 全部落定
+    for (
+      let i = 0;
+      i < 50 && (deletedIds.length < 2 || releasers.length > 0);
+      i += 1
+    ) {
+      for (const release of releasers.splice(0)) release()
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    for (const release of releasers.splice(0)) release()
+    await expect(verdict).resolves.toMatch(/^rejected:/)
+    await expect(duplicating).rejects.toThrow(/删除中|不存在/)
+    await deleting
+    expect(deletedIds).toContain('copy-t')
+  })
+
   it('duplicate 的后续保存带 expectExisting=true（PR #224 评审：copy 后目标被排队的删除移走时不复活）', async () => {
     handlers.set('load_project', () => modernFile())
-    handlers.set('create_project', () => ({ ...meta('copy-9'), name: 'X 副本' }))
+    handlers.set('create_project', () => ({
+      ...meta('copy-9'),
+      name: 'X 副本',
+    }))
     handlers.set('copy_project_assets', () => undefined)
     let savedWith: unknown
     handlers.set('save_project', (args) => {
@@ -1069,7 +1122,9 @@ describe('tauriCreate / delete / duplicate', () => {
     })
     const { projectStore } = await load()
     await projectStore.duplicate('p1')
-    expect((savedWith as { expectExisting?: boolean }).expectExisting).toBe(true)
+    expect((savedWith as { expectExisting?: boolean }).expectExisting).toBe(
+      true,
+    )
   })
 
   it('duplicate = load → create → copy_project_assets → save 全链路（副本名拼接）', async () => {
