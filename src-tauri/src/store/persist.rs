@@ -276,14 +276,18 @@ const ORPHAN_TEMP_MIN_AGE: std::time::Duration = std::time::Duration::from_secs(
 /// 无法在排他创建与 rename 之间插入（库侧同型机制见
 /// `library_journal::library_op_lock`）。跨进程协同不在本锁范围：§10.2
 /// 单写者模型由前端保存链承担，两个应用实例并发写同一 projects/ 树
-/// 属记录边界。
+/// 属记录边界。中毒后行为（issue #145）：可验证恢复——本锁不守卫内存
+/// 状态，磁盘一致性由原子写协议独立保证（遗留临时文件由清扫承接），
+/// 经 `crate::lock::recover_guard` 恢复，不传播 panic。
 static PROJECTS_OP_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
 
 pub(crate) fn projects_op_lock() -> std::sync::MutexGuard<'static, ()> {
-    PROJECTS_OP_LOCK
-        .get_or_init(|| std::sync::Mutex::new(()))
-        .lock()
-        .expect("项目操作锁被污染")
+    crate::lock::recover_guard(
+        PROJECTS_OP_LOCK
+            .get_or_init(|| std::sync::Mutex::new(()))
+            .lock(),
+        "项目操作锁",
+    )
 }
 /// 随机 id 段的精确归属（PR #217 评审修复）：临时名的 id 段只可能来自
 /// `new_id()`，其唯一产出形状是 `p-{ms:x}{rnd:x}-{seq:x}`——`p-` 前缀加

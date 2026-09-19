@@ -76,6 +76,9 @@ fn image_url_of(resp: &Value) -> Option<String> {
 
 /// 已取消 job id 的登记表（协作式取消标志）：取消即登记，生成流程在
 /// 请求返回后与落盘前消费查询；job 结束（成功或自身失败）清理自己的标志。
+/// 中毒后行为（issue #145）：可验证恢复——纯内存建议性状态，set 单项
+/// infallible 操作不会留下结构损坏；恢复经 `crate::lock::recover_guard`，
+/// 取消登记真实生效才报成功（不静默忽略），is_cancelled 如实回答。
 static CANCELLED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
 fn cancelled_jobs() -> &'static Mutex<HashSet<String>> {
@@ -83,16 +86,11 @@ fn cancelled_jobs() -> &'static Mutex<HashSet<String>> {
 }
 
 fn is_cancelled(job_id: &str) -> bool {
-    cancelled_jobs()
-        .lock()
-        .map(|set| set.contains(job_id))
-        .unwrap_or(false)
+    crate::lock::recover_guard(cancelled_jobs().lock(), "生成取消登记表").contains(job_id)
 }
 
 fn clear_cancel(job_id: &str) {
-    if let Ok(mut set) = cancelled_jobs().lock() {
-        set.remove(job_id);
-    }
+    crate::lock::recover_guard(cancelled_jobs().lock(), "生成取消登记表").remove(job_id);
 }
 
 /// url 回退下载的重定向上限：禁用客户端自动跟随、逐跳显式复验目标，
@@ -356,12 +354,11 @@ pub async fn llm_image_generate(app: AppHandle, request: ImageGenRequest) -> Res
     Ok(asset)
 }
 
-/// 协作式取消命令：登记取消标志；进行中的生成会在检查点放弃结果。
+/// 协作式取消命令：登记取消标志（中毒恢复——登记真实生效才报成功，
+/// issue #145）；进行中的生成会在检查点放弃结果。
 #[tauri::command]
 pub fn llm_image_cancel(job_id: String) -> Result<(), String> {
-    if let Ok(mut set) = cancelled_jobs().lock() {
-        set.insert(job_id);
-    }
+    crate::lock::recover_guard(cancelled_jobs().lock(), "生成取消登记表").insert(job_id);
     Ok(())
 }
 
@@ -428,6 +425,25 @@ mod tests {
         assert!(is_cancelled(&job));
         clear_cancel(&job);
         assert!(!is_cancelled(&job));
+    }
+
+    #[test]
+    fn cancel_registry_recovers_after_poison() {
+        // [issue #145](https://github.com/hailingu/PlotWeave/issues/145)：
+        // 取消表中毒恢复——持锁 panic 后，取消登记真实生效才报成功
+        // （不静默忽略却报成功），is_cancelled 如实回答。静态表此后保持
+        // 中毒状态，后续用例经同一恢复路径照常工作（透明恢复）
+        let job = format!("job-{}", crate::store::new_id());
+        std::thread::spawn(|| {
+            let _guard = cancelled_jobs().lock().expect("先取得锁");
+            panic!("测试注入的持锁 panic");
+        })
+        .join()
+        .expect_err("注入 panic 应发生");
+        llm_image_cancel(job.clone()).expect("中毒后取消登记仍应成功");
+        assert!(is_cancelled(&job), "中毒后取消登记须真实生效");
+        clear_cancel(&job);
+        assert!(!is_cancelled(&job), "中毒后清理须照常");
     }
 
     #[test]

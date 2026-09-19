@@ -54,6 +54,17 @@ root `AGENTS.md`, this file is written in English for agent interoperability.
 - Prefer explicit ownership and message passing over shared mutable state.
   When shared state is necessary, document lock ownership, ordering,
   contention, cancellation, and poison or failure behavior.
+- Lock poisoning follows one domain policy (issue #145): default to
+  **verifiable recovery** through the shared `crate::lock::recover_guard`
+  kernel — never propagate the panic and never silently ignore it. Recovery
+  is permitted only with a documented per-lock justification recorded at the
+  lock site: on-disk consistency is owned by an independent protocol (the
+  §7.2 journal recoverable-commit protocol, the §10.2 atomic-write
+  protocol), or the guarded state is advisory in-memory data whose
+  individual operations are infallible (registries, cancel flags, the
+  counting gate). Choosing an explicit error or controlled termination
+  instead requires a documented rationale at the lock site; silently
+  ignoring a poisoned lock while reporting success is prohibited.
 - Error enums belong to the layer that can interpret the failure. Preserve
   sources when adding context and avoid a single unstructured error variant for
   unrelated failure classes.

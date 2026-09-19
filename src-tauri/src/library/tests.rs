@@ -773,3 +773,26 @@ fn list_sweep_skips_missing_assets_dir_without_creating() {
     );
     cleanup(&root);
 }
+
+/// [issue #145](https://github.com/hailingu/PlotWeave/issues/145)：库操作
+/// 锁中毒恢复——持锁 panic 后库操作照常：磁盘一致性由 §7.2 日志可恢复
+/// 提交协议独立保证（panic 对盘上状态等价于崩溃，recover 在每个操作
+/// 起始照常执行），锁不守卫任何内存状态。静态锁此后保持中毒状态，
+/// 后续用例经同一恢复路径照常工作（透明恢复）。
+#[test]
+fn library_op_lock_recovers_after_poison() {
+    let (library, root) = temp_fixture();
+    write_index_raw(
+        &library,
+        &json!({ "assets": { "byId": {} }, "groups": { "byId": {} } }),
+    );
+    std::thread::spawn(|| {
+        let _guard = crate::library_journal::library_op_lock();
+        panic!("测试注入的持锁 panic");
+    })
+    .join()
+    .expect_err("注入 panic 应发生");
+    let (index, _warnings) = list_assets_with(&cap(&library)).expect("中毒后列表应可用");
+    assert!(index["assets"]["byId"].is_object());
+    cleanup(&root);
+}
