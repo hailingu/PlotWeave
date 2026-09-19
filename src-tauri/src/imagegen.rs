@@ -115,10 +115,11 @@ fn remaining_budget(deadline: std::time::Instant) -> Option<std::time::Duration>
 }
 
 /// 统一作业预算内核（issue #141）：把剩余预算作为等待上界套在任一
-/// 阶段 future（DNS 解析 / 每跳请求 / 响应体读取）上——预算内完成则
-/// 结果与自身错误原样透传（不过度介入既有诊断），超时即放弃等待并
-/// 返回带阶段标签的 [`ProxyError::JobBudgetExhausted`]。诊断区分阶段，
-/// 满足验收「超时诊断区分阶段」。
+/// 阶段 future（生成 POST + 限读 / 每跳请求 / 响应体读取）上——预算
+/// 内完成则结果与自身错误原样透传（不过度介入既有诊断），超时即
+/// 放弃等待并返回带阶段标签的 [`ProxyError::JobBudgetExhausted`]。诊断
+/// 区分阶段，满足验收「超时诊断区分阶段」。DNS 解析不走本内核：不可
+/// 取消的阻塞解析由专用线程边界隔离（见 [`DNS_RESOLVE_MAX_IN_FLIGHT`]）。
 async fn with_stage_budget<T, F>(
     deadline: std::time::Instant,
     stage: &'static str,
@@ -140,6 +141,84 @@ where
             budget_secs: IMAGE_JOB_TOTAL_BUDGET_SECS,
         }),
     }
+}
+
+/// 不可取消 DNS 解析的并发上限（issue #141，PR #220 第四轮评审）：
+/// `to_socket_addrs` 无法取消——超时只是放弃等待，解析线程仍继续运行。
+/// 解析不占用 Tokio 阻塞池（连续挂起会耗尽池、饿死凭据读取等其他
+/// 阻塞工作），改投自带严格并发上限的专用线程：在途计数到顶即
+/// fail-fast（解析繁忙），线程返回即归还额度（可恢复）。上限取 2：
+/// 图像生成是低频用户操作余量充足，连续挂起的泄漏被钉死在本常量个
+/// 线程内，不蔓延到任何共享池。
+const DNS_RESOLVE_MAX_IN_FLIGHT: usize = 2;
+
+/// 在途解析计数（专用线程的额度账本）：fetch_add/sub 配对，线程返回
+/// 即归还；挂起只表现为计数暂不归零（fail-fast 隔离其他工作）。
+static DNS_RESOLVE_IN_FLIGHT: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// 解析阶段的预算耗尽错误（复用 [`ProxyError::JobBudgetExhausted`]）。
+fn dns_budget_error() -> ProxyError {
+    ProxyError::JobBudgetExhausted {
+        stage: "解析图像主机",
+        budget_secs: IMAGE_JOB_TOTAL_BUDGET_SECS,
+    }
+}
+
+/// 有界解析内核（生产与测试共用，`resolve` 注入以便夹具替换）：专用
+/// 线程跑不可取消的解析，等待者在 Tokio 阻塞池 `recv_timeout`（到点
+/// 退出、线程不泄漏）；预算耗尽先于一切（不占用额度），在途到顶
+/// fail-fast（解析繁忙），解析线程返回即归还额度（可恢复）。
+async fn resolve_host_bounded_with(
+    target: String,
+    host: &str,
+    deadline: std::time::Instant,
+    resolve: impl FnOnce(String) -> std::io::Result<Vec<std::net::SocketAddr>> + Send + 'static,
+) -> Result<Vec<std::net::SocketAddr>, ProxyError> {
+    use std::sync::atomic::Ordering;
+    if remaining_budget(deadline).is_none() {
+        return Err(dns_budget_error());
+    }
+    if DNS_RESOLVE_IN_FLIGHT.fetch_add(1, Ordering::SeqCst) >= DNS_RESOLVE_MAX_IN_FLIGHT {
+        DNS_RESOLVE_IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
+        return Err(ProxyError::DownloadRefused {
+            detail: "图像主机解析繁忙（并发解析已达上限），请稍后重试".into(),
+        });
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(resolve(target));
+        DNS_RESOLVE_IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
+    });
+    let remaining = remaining_budget(deadline).ok_or_else(dns_budget_error)?;
+    let host = host.to_string();
+    let outcome = tauri::async_runtime::spawn_blocking(move || rx.recv_timeout(remaining))
+        .await
+        .map_err(|e| ProxyError::DownloadRefused {
+            detail: format!("解析图像主机失败：{e}"),
+        })?;
+    match outcome {
+        Ok(Ok(addrs)) => Ok(addrs),
+        Ok(Err(io)) => Err(ProxyError::DownloadRefused {
+            detail: format!("解析图像主机 {host} 失败：{io}"),
+        }),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(dns_budget_error()),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(ProxyError::DownloadRefused {
+            detail: format!("解析图像主机 {host} 失败：解析线程异常终止"),
+        }),
+    }
+}
+
+/// 生产解析入口：std 阻塞解析器投到专用线程（有界隔离见常量文档）。
+async fn resolve_host_bounded(
+    target: String,
+    host: &str,
+    deadline: std::time::Instant,
+) -> Result<Vec<std::net::SocketAddr>, ProxyError> {
+    resolve_host_bounded_with(target, host, deadline, |t| {
+        t.to_socket_addrs().map(|i| i.collect())
+    })
+    .await
 }
 
 /// IPv4 公网判定：环回（127/8）、RFC1918 私有（10/8、172.16/12、
@@ -201,12 +280,11 @@ fn static_target_violation(url: &Url) -> Option<String> {
 /// 主机解析后要求全部地址为公网——`localhost` 等 DNS 名同样可能指向
 /// 环回/内网。注：本校验的解析与客户端连接各自解析存在固有的 DNS
 /// 再绑定窗口，此层为纵深防御而非绝对边界（威胁模型见 AGENTS.md）。
-/// 解析受作业剩余预算约束（issue #141）。超时后的资源生命周期：`to_
-/// socket_addrs` 是阻塞系统调用，进入阻塞线程池后无法取消——预算耗尽
-/// 只是放弃等待（join future 被丢弃），解析任务本身继续运行至系统
-/// 解析器返回，其结果随即被丢弃；该任务不持有任何应用锁或可变状态，
-/// 仅临时占用一个阻塞池线程，线程池在其返回后回收，不遗留无限后台
-/// 任务。
+/// 解析受作业剩余预算约束（issue #141），且不可取消的阻塞解析被
+/// 隔离在严格并发上限的专用线程边界内（PR #220 第四轮评审，见
+/// [`DNS_RESOLVE_MAX_IN_FLIGHT`]）：挂起的解析线程不占用 Tokio 阻塞
+/// 池、不蔓延到凭据读取等其他阻塞工作，泄漏上限为常量个线程；等待
+/// 者经 recv_timeout 有界退出，额度随解析线程返回归还（可恢复）。
 async fn ensure_public_download_target(
     url: &Url,
     deadline: std::time::Instant,
@@ -229,28 +307,16 @@ async fn ensure_public_download_target(
         .port_or_known_default()
         .ok_or_else(|| refused("图像 url 端口未知".into()))?;
     let target = format!("{host}:{port}");
-    // std 解析是阻塞调用：挪到阻塞线程池，不占异步工作线程；等待上界
-    // 为作业剩余预算（内核见 with_stage_budget——超时只放弃 join，
-    // 阻塞任务生命周期见函数文档）
-    with_stage_budget(deadline, "解析图像主机", async {
-        tauri::async_runtime::spawn_blocking(move || target.to_socket_addrs())
-            .await
-            .map_err(|e| refused(format!("解析图像主机失败：{e}")))?
-            .map_err(|e| refused(format!("解析图像主机 {host} 失败：{e}")))
-            .map(|addrs| addrs.collect::<Vec<std::net::SocketAddr>>())
-    })
-    .await
-    .and_then(|list| {
-        if list.is_empty() {
-            Err(refused(format!("图像主机 {host} 未解析到地址")))
-        } else if list.iter().any(|a| !is_public_ip(a.ip())) {
-            Err(refused(format!(
-                "图像主机 {host} 解析到非公网地址，已拒绝下载"
-            )))
-        } else {
-            Ok(())
-        }
-    })
+    let list = resolve_host_bounded(target, host, deadline).await?;
+    if list.is_empty() {
+        Err(refused(format!("图像主机 {host} 未解析到地址")))
+    } else if list.iter().any(|a| !is_public_ip(a.ip())) {
+        Err(refused(format!(
+            "图像主机 {host} 解析到非公网地址，已拒绝下载"
+        )))
+    } else {
+        Ok(())
+    }
 }
 
 /// url 成员回退下载：目标与每跳重定向均过公网边界校验（仅 http(s)、

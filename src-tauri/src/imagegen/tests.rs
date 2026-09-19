@@ -270,6 +270,142 @@ fn download_chain_rejects_expired_budget_before_any_request() {
     assert!(shown.contains("下载图像"), "诊断应标明阶段：{shown}");
 }
 
+/// DNS 计数用例串行锁：在途计数是共享静态，跨用例交错会互相
+/// 污染，本组用例串行执行（生产代码无此锁）。
+static DNS_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// 轮询在途计数到达目标值（有界等待，防沉睡线程拖住套件）。
+fn wait_in_flight(target: usize, timeout: std::time::Duration) -> bool {
+    let started = std::time::Instant::now();
+    while started.elapsed() < timeout {
+        if DNS_RESOLVE_IN_FLIGHT.load(std::sync::atomic::Ordering::SeqCst) == target {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    false
+}
+
+/// 有界解析（issue #141，PR #220 第四轮评审）：预算内解析通过在途
+/// 计数立即归还（额度可恢复）；全程不占用 Tokio 阻塞池。
+#[test]
+fn dns_resolution_within_budget_passes_and_returns_capacity() {
+    let _serial = crate::lock::recover_guard(DNS_TEST_LOCK.lock(), "DNS 测试锁");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let addrs = tauri::async_runtime::block_on(resolve_host_bounded_with(
+        "cdn.example.test:443".into(),
+        "cdn.example.test",
+        deadline,
+        |_t| {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            Ok(vec!["8.8.8.8:443".parse().expect("地址")])
+        },
+    ))
+    .expect("预算内解析应通过");
+    assert_eq!(addrs.len(), 1);
+    assert!(
+        wait_in_flight(0, std::time::Duration::from_secs(2)),
+        "解析返回即在途计数归还"
+    );
+}
+
+/// 超时即放弃等待且泄漏被钉死在专用线程上限内（评审核心）：慢解析
+/// 沉睡 200ms，50ms 预算超时返回；沉睡线程自行跑完并归还额度——
+/// 等待者（recv_timeout）有界退出，不泄漏。
+#[test]
+fn dns_resolution_timeout_abandons_wait_and_recovers() {
+    let _serial = crate::lock::recover_guard(DNS_TEST_LOCK.lock(), "DNS 测试锁");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(50);
+    let started = std::time::Instant::now();
+    let err = tauri::async_runtime::block_on(resolve_host_bounded_with(
+        "cdn.example.test:443".into(),
+        "cdn.example.test",
+        deadline,
+        |_t| {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            Ok(vec![])
+        },
+    ))
+    .expect_err("慢解析应超时");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(1),
+        "等待有界：{:?}",
+        started.elapsed()
+    );
+    assert!(
+        matches!(
+            err,
+            ProxyError::JobBudgetExhausted {
+                stage: "解析图像主机",
+                ..
+            }
+        ),
+        "实际错误：{err:?}"
+    );
+    assert!(
+        wait_in_flight(0, std::time::Duration::from_secs(2)),
+        "沉睡线程返回后额度归还"
+    );
+}
+
+/// 在途到顶 fail-fast 且可恢复（评审核心）：两个挂起解析占满额度
+/// （不再堆进共享阻塞池），第三个立即按「解析繁忙」拒绝、解析器
+/// 零调用；挂起线程返回后额度归还、解析能力恢复。
+#[test]
+fn dns_resolver_busy_fails_fast_at_inflight_cap_and_recovers() {
+    let _serial = crate::lock::recover_guard(DNS_TEST_LOCK.lock(), "DNS 测试锁");
+    let slow = |_t: String| -> std::io::Result<Vec<std::net::SocketAddr>> {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        Ok(vec![])
+    };
+    tauri::async_runtime::block_on(async {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let _h1 = tauri::async_runtime::spawn(resolve_host_bounded_with(
+            "a.example.test:443".into(),
+            "a.example.test",
+            deadline,
+            slow,
+        ));
+        let _h2 = tauri::async_runtime::spawn(resolve_host_bounded_with(
+            "b.example.test:443".into(),
+            "b.example.test",
+            deadline,
+            slow,
+        ));
+        assert!(
+            wait_in_flight(DNS_RESOLVE_MAX_IN_FLIGHT, std::time::Duration::from_secs(2)),
+            "额度应被占满"
+        );
+        let err = resolve_host_bounded_with(
+            "c.example.test:443".into(),
+            "c.example.test",
+            deadline,
+            |_t| -> std::io::Result<Vec<std::net::SocketAddr>> {
+                panic!("到顶 fail-fast 不得调用解析器")
+            },
+        )
+        .await
+        .expect_err("到顶应拒绝");
+        assert!(
+            matches!(err, ProxyError::DownloadRefused { .. }),
+            "繁忙诊断为拒绝且可行动：{err:?}"
+        );
+        assert!(err.to_string().contains("繁忙"), "实际诊断：{err}");
+        assert!(
+            wait_in_flight(0, std::time::Duration::from_secs(2)),
+            "挂起线程返回后额度归还"
+        );
+        resolve_host_bounded_with(
+            "d.example.test:443".into(),
+            "d.example.test",
+            deadline,
+            |_t| Ok(vec!["8.8.8.8:443".parse().expect("地址")]),
+        )
+        .await
+        .expect("额度归还后解析应恢复");
+    });
+}
+
 /// DNS 阶段预算门（issue #141）：预算耗尽时在解析器之前拒绝——
 /// 不发起 spawn_blocking 解析（域名主机，静态层不拒绝）；诊断标明
 /// 解析阶段。
