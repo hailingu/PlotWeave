@@ -15,7 +15,6 @@ use crate::library_fs::{
     assets_root, atomic_write_with, library_root, read_index_capped, validate_asset_id,
     write_index, write_index_with,
 };
-use crate::library_journal::{library_file_lock, library_op_lock};
 use crate::media_format::ext_for;
 use crate::store::is_canonical_mime;
 
@@ -51,11 +50,12 @@ const VIEWS: [&str; 8] = [
 #[tauri::command]
 pub fn list_library_assets(app: AppHandle) -> Result<Value, String> {
     let library = library_root(&app).map_err(|e| e.to_string())?;
-    let _op = library_op_lock();
-    let _file_lock = library_file_lock(&library).map_err(|e| e.to_string())?;
-    let (mut index, warnings) = list_assets_with(&library).map_err(|e| e.to_string())?;
-    index["warnings"] = json!(warnings);
-    Ok(index)
+    diagnostics::with_snapshot(&library, |library| {
+        let (mut index, warnings) = list_assets_with(library)?;
+        index["warnings"] = json!(warnings);
+        Ok(index)
+    })
+    .map_err(|e| e.to_string())
 }
 
 /// 列表读取内核（句柄域，`list_library_assets` 与测试共用）：先恢复删除日志，
@@ -186,9 +186,10 @@ pub fn import_library_asset(
     bytes: Vec<u8>,
 ) -> Result<Value, String> {
     let library = library_root(&app).map_err(|e| e.to_string())?;
-    let _op = library_op_lock();
-    let _file_lock = library_file_lock(&library).map_err(|e| e.to_string())?;
-    put_asset_with(&library, &name, &mime, &kind, &bytes).map_err(|e| e.to_string())
+    diagnostics::with_snapshot(&library, |library| {
+        put_asset_with(library, &name, &mime, &kind, &bytes)
+    })
+    .map_err(|e| e.to_string())
 }
 
 fn validate_name(name: &str) -> Result<(), String> {
@@ -351,9 +352,10 @@ fn apply_group_id(entry: &mut Value, g: &Value) -> Result<(), String> {
 pub fn delete_library_asset(app: AppHandle, id: String) -> Result<Value, String> {
     validate_asset_id(&id)?;
     let library = library_root(&app).map_err(|e| e.to_string())?;
-    let _op = library_op_lock();
-    let _file_lock = library_file_lock(&library).map_err(|e| e.to_string())?;
-    crate::library_journal::delete_asset_transacted(&library, &id).map_err(|e| e.to_string())
+    diagnostics::with_snapshot(&library, |library| {
+        crate::library_journal::delete_asset_transacted(library, &id)
+    })
+    .map_err(|e| e.to_string())
 }
 
 /// 更新元信息内核（句柄域）：补丁值域校验（§7.2 在内核强制——绕过命令
@@ -442,11 +444,11 @@ fn update_meta_with(
 pub fn update_library_asset(app: AppHandle, id: String, patch: Value) -> Result<Value, String> {
     validate_asset_id(&id)?;
     let library = library_root(&app).map_err(|e| e.to_string())?;
-    let _op = library_op_lock();
-    let _file_lock = library_file_lock(&library).map_err(|e| e.to_string())?;
-    update_meta_with(&library, &id, &patch).map_err(|e| e.to_string())
+    diagnostics::with_snapshot(&library, |library| update_meta_with(library, &id, &patch))
+        .map_err(|e| e.to_string())
 }
 
+mod diagnostics;
 pub(crate) mod error;
 pub(crate) mod group_commands;
 #[cfg(test)]

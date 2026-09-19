@@ -7,6 +7,8 @@ let cleanupBlocked = false
 /** 删除隔离区待清理状态（issue #135）：当前快照语义（非历史累积）——
  * 真实删除返回 cleanupPending 时对用户可见；空状态不显示（不误报）。 */
 let cleanupPending: readonly string[] = []
+/** 本前端会话已接受的最大后端序号；隐藏提示不重置它，失败响应不推进它。 */
+let cleanupRevision = 0n
 /** 用户关闭时的待清理快照引用：内容不变保持隐藏，变化（新数组）即重新
  * 显示（publish 内容不变不重建数组，见 publishCleanupPending）。 */
 let dismissedPending: readonly string[] | null = null
@@ -25,14 +27,31 @@ export function publishLibraryWarnings(input: unknown): void {
   for (const listener of listeners) listener()
 }
 
-/** 发布删除隔离区待清理状态（issue #135）：快照语义——新内容整体替换旧
- * 状态（不累积新旧两份）；内容不变即无操作（不重建数组、不重复打扰）。 */
-export function publishCleanupPending(input: unknown): void {
-  const next = Array.isArray(input)
-    ? input.filter(
-        (item): item is string => typeof item === 'string' && item !== '',
-      )
-    : []
+/** 校验 IPC 的规范十进制 u64 字符串，避免 JS number 丢失大整数顺序。 */
+function parseCleanupRevision(input: unknown): bigint | null {
+  if (typeof input !== 'string' || !/^[1-9]\d{0,19}$/.test(input)) return null
+  const revision = BigInt(input)
+  return revision <= 18446744073709551615n ? revision : null
+}
+
+/** 只接受后端持锁生成的更新快照；同内容也推进序号，但不重建数组或重显。
+ * 非法载荷保留当前状态并给出诊断，旧/重复序号不改变快照或关闭状态。 */
+export function publishCleanupPending(
+  input: unknown,
+  rawRevision: unknown,
+): void {
+  const revision = parseCleanupRevision(rawRevision)
+  if (revision === null || !Array.isArray(input)) {
+    console.warn('[Library] 无效待清理快照', {
+      code: 'LIBRARY_DIAGNOSTICS_SNAPSHOT_INVALID',
+    })
+    return
+  }
+  if (revision <= cleanupRevision) return
+  cleanupRevision = revision
+  const next = input.filter(
+    (item): item is string => typeof item === 'string' && item !== '',
+  )
   const unchanged =
     next.length === cleanupPending.length &&
     next.every((item, i) => item === cleanupPending[i])

@@ -6,10 +6,10 @@
 use serde_json::{json, Value};
 use tauri::AppHandle;
 
+use super::diagnostics::with_snapshot;
 use crate::library::error::LibraryError;
 use crate::library::library_root;
 use crate::library_fs::{read_index_capped, validate_asset_id, write_index};
-use crate::library_journal::{library_file_lock, library_op_lock};
 
 /// 组写入内核（句柄域，§7.2 库写边界）：完整形状校验 → 归一化读取基线 →
 /// 改 kind 冲突复核（成员资产 groupId 指向该组且 kind 不一致即拒绝）→
@@ -133,16 +133,12 @@ pub(crate) fn delete_group_with(
 #[tauri::command]
 pub fn upsert_library_group(app: AppHandle, group: Value) -> Result<Value, String> {
     let library = library_root(&app).map_err(|e| e.to_string())?;
-    let _op = library_op_lock();
-    let _file_lock = library_file_lock(&library).map_err(|e| e.to_string())?;
-    upsert_group_with(&library, &group).map_err(|e| e.to_string())
+    with_snapshot(&library, |library| upsert_group_with(library, &group)).map_err(|e| e.to_string())
 }
 
 /// 组删除命令：原子删除组并剥离成员资产的 groupId。
 #[tauri::command]
 pub fn delete_library_group(app: AppHandle, id: String) -> Result<Value, String> {
     let library = library_root(&app).map_err(|e| e.to_string())?;
-    let _op = library_op_lock();
-    let _file_lock = library_file_lock(&library).map_err(|e| e.to_string())?;
-    delete_group_with(&library, &id).map_err(|e| e.to_string())
+    with_snapshot(&library, |library| delete_group_with(library, &id)).map_err(|e| e.to_string())
 }

@@ -9,9 +9,11 @@ const invoke = vi.fn<(...args: unknown[]) => Promise<unknown>>()
 const conflict =
   '资产 la-conflict 删除事务冲突（原路径已被后来文件占用），标记为不可用'
 const routine = '媒体已隔离待清理：assets/la-deleted.png'
+let revision = 0
 
 beforeEach(() => {
   vi.resetModules()
+  revision = 0
   Object.defineProperty(window, '__TAURI_INTERNALS__', {
     configurable: true,
     value: { invoke },
@@ -28,7 +30,11 @@ afterEach(() => {
 
 /** 模拟各命令共同的恢复结果，保留列表、资产、组响应各自的载荷形状。 */
 function response(command: string, warnings: string[] = [conflict]) {
-  const diagnostics = { warnings, cleanupPending: [routine] }
+  const diagnostics = {
+    warnings,
+    cleanupPending: [routine],
+    diagnosticsRevision: String(++revision),
+  }
   const asset = {
     id: 'la-conflict',
     name: '原媒体',
@@ -127,4 +133,76 @@ it('新会话重新读取干净状态后，常规待清理项仍有清理指引'
   })
   expect(screen.getByRole('note', { name: '隔离区清理指引' })).toBeTruthy()
   expect(screen.queryByRole('note', { name: '隔离区清理暂停' })).toBeNull()
+})
+
+it.each(operations)('%s 的新快照不被较早列表空响应清除', async (_, run) => {
+  const { libraryStore } = await import('../../library/libraryStore')
+  const { LibraryWarnings } = await import('./LibraryWarnings')
+  const diagnostics = await import('../../library/libraryDiagnostics')
+  let releaseOld!: () => void
+  let markStarted!: () => void
+  const started = new Promise<void>((resolve) => {
+    markStarted = resolve
+  })
+  const old = {
+    assets: { byId: {} },
+    warnings: [],
+    cleanupPending: [],
+    diagnosticsRevision: '1',
+  }
+  invoke.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        releaseOld = () => resolve(old)
+        markStarted()
+      }),
+  )
+  const earlier = libraryStore.list()
+  await started
+  invoke.mockImplementationOnce(async (command) => ({
+    ...response(String(command), []),
+    diagnosticsRevision: '2',
+  }))
+  render(<LibraryWarnings />)
+  await act(async () => {
+    await run(libraryStore)
+  })
+  expect(diagnostics.libraryCleanupBlockedSnapshot()).toBe(false)
+  expect(screen.getByText(routine)).toBeTruthy()
+  await act(async () => {
+    releaseOld()
+    await earlier
+  })
+  expect(diagnostics.cleanupPendingSnapshot()).toEqual([routine])
+  expect(screen.getByText(routine)).toBeTruthy()
+})
+
+it('迟到快照中的警告仍建立保护，更新的空快照才清除待清理项', async () => {
+  const { libraryStore } = await import('../../library/libraryStore')
+  const { LibraryWarnings } = await import('./LibraryWarnings')
+  const diagnostics = await import('../../library/libraryDiagnostics')
+  const old = response('list_library_assets')
+  old.cleanupPending = []
+  const latest = response('delete_library_asset', [])
+  invoke.mockResolvedValueOnce(latest)
+  render(<LibraryWarnings />)
+  await act(async () => {
+    await libraryStore.remove('la-1')
+  })
+  invoke.mockResolvedValueOnce(old)
+  await act(async () => {
+    await libraryStore.list()
+  })
+  expect(diagnostics.cleanupPendingSnapshot()).toEqual([routine])
+  expect(screen.getByText(conflict)).toBeTruthy()
+  expect(screen.getByRole('note', { name: '隔离区清理暂停' })).toBeTruthy()
+  const recovered = response('list_library_assets', [])
+  recovered.cleanupPending = []
+  invoke.mockResolvedValueOnce(recovered)
+  await act(async () => {
+    await libraryStore.list()
+  })
+  expect(diagnostics.cleanupPendingSnapshot()).toEqual([])
+  expect(screen.queryByText(routine)).toBeNull()
+  expect(diagnostics.libraryCleanupBlockedSnapshot()).toBe(true)
 })

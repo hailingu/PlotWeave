@@ -96,7 +96,9 @@ describe('libraryStore Tauri 路径：list（normalizeAsset 归一化）', () =>
     invoke.mockResolvedValue({ assets: { byId: 'x' } })
     await expect(libraryStore.list()).resolves.toEqual([])
   })
+})
 
+describe('libraryStore Tauri 路径：警告诊断', () => {
   it('后端隔离警告逐条进 console.warn 诊断路径', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     invoke.mockResolvedValue({
@@ -121,12 +123,15 @@ describe('libraryStore Tauri 路径：list（normalizeAsset 归一化）', () =>
     expect(warn).not.toHaveBeenCalled()
     warn.mockRestore()
   })
+})
 
+describe('libraryStore Tauri 路径：待清理快照', () => {
   it('cleanupPending 进用户可见诊断通道并保留控制台明细（issue #135）', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     invoke.mockResolvedValue({
       assets: byId(entry()),
       cleanupPending: ['媒体已隔离待清理：assets/la-1.png'],
+      diagnosticsRevision: '1',
     })
     const { libraryStore } = await load()
     await libraryStore.list()
@@ -154,6 +159,7 @@ describe('libraryStore Tauri 路径：list（normalizeAsset 归一化）', () =>
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     invoke.mockResolvedValue({
       cleanupPending: ['媒体已隔离待清理：assets/la-1.png'],
+      diagnosticsRevision: '2',
     })
     const { libraryStore } = await load()
     await libraryStore.remove('la-1')
@@ -164,7 +170,9 @@ describe('libraryStore Tauri 路径：list（normalizeAsset 归一化）', () =>
     expect(warn).toHaveBeenCalledTimes(1)
     warn.mockRestore()
   })
+})
 
+describe('libraryStore Tauri 路径：写操作警告', () => {
   it('put 返回条目携带 warnings 时同样上报诊断', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     invoke.mockResolvedValue(
@@ -403,6 +411,7 @@ describe('libraryStore Tauri 路径：隔离区积压可见性（issue #25 评�
     invoke.mockResolvedValue({
       assets: byId(entry()),
       cleanupPending: ['媒体已隔离待清理：assets/la-9.png'],
+      diagnosticsRevision: '3',
     })
     const { libraryStore } = await load()
     await libraryStore.list()
@@ -414,7 +423,11 @@ describe('libraryStore Tauri 路径：隔离区积压可见性（issue #25 评�
 
   it('cleanupPending 缺失或为空数组不产生额外告警', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    invoke.mockResolvedValue({ assets: byId(entry()), cleanupPending: [] })
+    invoke.mockResolvedValue({
+      assets: byId(entry()),
+      cleanupPending: [],
+      diagnosticsRevision: '4',
+    })
     const { libraryStore } = await load()
     await libraryStore.list()
     expect(warn).not.toHaveBeenCalled()
@@ -431,6 +444,7 @@ describe('libraryStore Tauri 路径：listGroups', () => {
       groups: byId(entry()),
       warnings: ['条目 la-1 已隔离'],
       cleanupPending: ['assets/.trash/t-1'],
+      diagnosticsRevision: '5',
     })
     const { libraryStore } = await load()
     const groups = await libraryStore.listGroups()
@@ -456,6 +470,7 @@ describe('libraryStore Tauri 路径：upsertGroup', () => {
       name: '女主',
       kind: 'character',
       cleanupPending: ['assets/.trash/t-1'],
+      diagnosticsRevision: '6',
     })
     const { libraryStore } = await load()
     await libraryStore.upsertGroup({
@@ -476,6 +491,7 @@ describe('libraryStore Tauri 路径：导入/更新的 cleanupPending 上报（P
       entry({
         id: 'la-9',
         cleanupPending: ['媒体已隔离待清理：assets/la-1.png'],
+        diagnosticsRevision: '7',
       }),
     )
     const { libraryStore } = await load()
@@ -496,6 +512,7 @@ describe('libraryStore Tauri 路径：导入/更新的 cleanupPending 上报（P
       entry({
         id: 'la-1',
         cleanupPending: ['媒体已隔离待清理：assets/la-1.png'],
+        diagnosticsRevision: '8',
       }),
     )
     const { libraryStore } = await load()
@@ -503,7 +520,9 @@ describe('libraryStore Tauri 路径：导入/更新的 cleanupPending 上报（P
     const diagnostics = await import('./libraryDiagnostics')
     expect(diagnostics.cleanupPendingSnapshot()).toHaveLength(1)
     // 恢复/人工清理后的空快照：整体替换，积压显示消失
-    invoke.mockResolvedValue(entry({ id: 'la-1', cleanupPending: [] }))
+    invoke.mockResolvedValue(
+      entry({ id: 'la-1', cleanupPending: [], diagnosticsRevision: '9' }),
+    )
     await libraryStore.updateMeta('la-1', { name: '再改' })
     expect(diagnostics.cleanupPendingSnapshot()).toEqual([])
     warn.mockRestore()

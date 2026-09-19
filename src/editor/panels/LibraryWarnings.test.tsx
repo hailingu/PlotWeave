@@ -18,10 +18,13 @@ const load = async () => {
 describe('LibraryWarnings 删除隔离区待清理展示（issue #135）', () => {
   it('待清理状态可见：计数、影响（空间未释放）与恢复指引齐备', async () => {
     const { diagnostics, LibraryWarnings } = await load()
-    diagnostics.publishCleanupPending([
-      '媒体已隔离待清理：assets/la-1.png',
-      '媒体已隔离待清理：assets/la-2.png',
-    ])
+    diagnostics.publishCleanupPending(
+      [
+        '媒体已隔离待清理：assets/la-1.png',
+        '媒体已隔离待清理：assets/la-2.png',
+      ],
+      '1',
+    )
     render(<LibraryWarnings />)
     expect(screen.getByText(/删除隔离区待清理（2 项）/)).toBeTruthy()
     // 影响说明：不得把逻辑删除完成说成磁盘空间已回收
@@ -42,15 +45,21 @@ describe('LibraryWarnings 删除隔离区待清理展示（issue #135）', () =>
 
   it('关闭后隐藏本轮提示；待清理内容变化时重新显示', async () => {
     const { diagnostics, LibraryWarnings } = await load()
-    diagnostics.publishCleanupPending(['媒体已隔离待清理：assets/la-1.png'])
+    diagnostics.publishCleanupPending(
+      ['媒体已隔离待清理：assets/la-1.png'],
+      '2',
+    )
     render(<LibraryWarnings />)
     fireEvent.click(screen.getByText('关闭图库提示'))
     expect(screen.queryByText(/删除隔离区待清理/)).toBeNull()
     act(() => {
-      diagnostics.publishCleanupPending([
-        '媒体已隔离待清理：assets/la-1.png',
-        '媒体已隔离待清理：assets/la-2.png',
-      ])
+      diagnostics.publishCleanupPending(
+        [
+          '媒体已隔离待清理：assets/la-1.png',
+          '媒体已隔离待清理：assets/la-2.png',
+        ],
+        '3',
+      )
     })
     expect(screen.getByText(/删除隔离区待清理（2 项）/)).toBeTruthy()
   })
@@ -62,7 +71,10 @@ describe('LibraryWarnings 冲突证据区（PR #222 评审 P1）', () => {
     diagnostics.publishLibraryWarnings([
       '资产 la-conflict 删除事务冲突（原路径已被后来文件占用），标记为不可用',
     ])
-    diagnostics.publishCleanupPending(['媒体已隔离待清理：assets/la-1.png'])
+    diagnostics.publishCleanupPending(
+      ['媒体已隔离待清理：assets/la-1.png'],
+      '4',
+    )
     render(<LibraryWarnings />)
     expect(screen.queryByRole('note', { name: '隔离区清理指引' })).toBeNull()
     expect(screen.getByRole('note', { name: '隔离区清理暂停' })).toBeTruthy()
@@ -77,7 +89,10 @@ describe('LibraryWarnings 冲突证据区（PR #222 评审 P1）', () => {
     fireEvent.click(screen.getByRole('button', { name: '关闭图库提示' }))
     act(() => {
       diagnostics.publishLibraryWarnings([])
-      diagnostics.publishCleanupPending(['媒体已隔离待清理：assets/la-1.png'])
+      diagnostics.publishCleanupPending(
+        ['媒体已隔离待清理：assets/la-1.png'],
+        '5',
+      )
     })
     expect(screen.queryByRole('note', { name: '隔离区清理指引' })).toBeNull()
     expect(screen.getByRole('note', { name: '隔离区清理暂停' })).toBeTruthy()
@@ -85,10 +100,13 @@ describe('LibraryWarnings 冲突证据区（PR #222 评审 P1）', () => {
 
   it('证据类条目单独成区：明示保留现场、不含删除指引', async () => {
     const { diagnostics, LibraryWarnings } = await load()
-    diagnostics.publishCleanupPending([
-      '隔离项身份异常，保留现场待恢复：assets/la-3.png',
-      '.trash/t-indexuncertain-1',
-    ])
+    diagnostics.publishCleanupPending(
+      [
+        '隔离项身份异常，保留现场待恢复：assets/la-3.png',
+        '.trash/t-indexuncertain-1',
+      ],
+      '6',
+    )
     render(<LibraryWarnings />)
     expect(screen.getByText(/待人工核对的删除事务（2 项）/)).toBeTruthy()
     // 证据语义：仅存媒体与核对证据，禁止删除——不出现 .trash 清理指引
@@ -104,10 +122,13 @@ describe('LibraryWarnings 冲突证据区（PR #222 评审 P1）', () => {
 
   it('常规与证据混合时两区并呈：目录级删除指引暂缓（PR #222 第二轮评审 P1）', async () => {
     const { diagnostics, LibraryWarnings } = await load()
-    diagnostics.publishCleanupPending([
-      '媒体已隔离待清理：assets/la-1.png',
-      '隔离项保留（身份不符或被占用）：la-4 / .trash/t-y',
-    ])
+    diagnostics.publishCleanupPending(
+      [
+        '媒体已隔离待清理：assets/la-1.png',
+        '隔离项保留（身份不符或被占用）：la-4 / .trash/t-y',
+      ],
+      '7',
+    )
     render(<LibraryWarnings />)
     expect(screen.getByText(/删除隔离区待清理（1 项）/)).toBeTruthy()
     expect(screen.getByText(/待人工核对的删除事务（1 项）/)).toBeTruthy()

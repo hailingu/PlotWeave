@@ -60,7 +60,14 @@ export interface AssetGroup {
   kind: LibraryKind
 }
 
-interface RawAsset {
+/** 库命令的诊断信封：序号来自后端锁内执行顺序，不是前端请求顺序。 */
+interface LibraryDiagnostics {
+  warnings?: unknown
+  cleanupPending?: unknown
+  diagnosticsRevision?: unknown
+}
+
+interface RawAsset extends LibraryDiagnostics {
   id?: unknown
   name?: unknown
   kind?: unknown
@@ -120,11 +127,16 @@ function reportLibraryWarnings(warnings: unknown): void {
   }
 }
 
-/** 删除隔离区待清理（issue #135）：状态进用户可见的诊断通道（不再仅
- * 控制台——用户看得到未释放空间与恢复指引），原始条目保留在控制台供
- * 定位；空状态不发布（不误报）。 */
-function reportCleanupPending(cleanupPending: unknown): void {
-  publishCleanupPending(cleanupPending)
+/** 七个命令入口共用诊断边界；警告始终保留，待清理快照独立按版本收敛。
+ * 不携带诊断的响应不清除旧状态；显式快照缺少有效序号时由存储记录错误。 */
+function reportLibraryDiagnostics(
+  result: LibraryDiagnostics | null | undefined,
+): void {
+  reportLibraryWarnings(result?.warnings)
+  const cleanupPending = result?.cleanupPending
+  if (cleanupPending === undefined && result?.diagnosticsRevision === undefined)
+    return
+  publishCleanupPending(cleanupPending, result?.diagnosticsRevision)
   if (Array.isArray(cleanupPending) && cleanupPending.length > 0) {
     console.warn('[Library] 删除隔离区待清理：', cleanupPending)
   }
@@ -141,11 +153,9 @@ async function tauriList(): Promise<LibraryAsset[]> {
     assets?: { byId?: Record<string, unknown> }
     warnings?: unknown[]
     cleanupPending?: unknown[]
+    diagnosticsRevision?: unknown
   }>('list_library_assets')
-  reportLibraryWarnings(index.warnings)
-  // 隔离区积压（身份绑定清理不可用）：随列表进用户可见诊断通道
-  //（issue #135），不再静默累积
-  reportCleanupPending(index.cleanupPending)
+  reportLibraryDiagnostics(index)
   // §7.2 Record 形状：assets.byId 的值即条目（issue #29 PR 1，评审修复——
   // 旧数组形状已迁移，前端必须按 byId 读取，否则全部资产被隐藏）
   const byId = index.assets?.byId
@@ -164,12 +174,7 @@ async function tauriPut(file: File, kind: LibraryKind): Promise<LibraryAsset> {
     kind,
     bytes: Array.from(bytes),
   })
-  reportLibraryWarnings((entry as { warnings?: unknown } | null)?.warnings)
-  // cleanupPending 随导入响应上报（PR #222 评审 P2）：导入路径发现的
-  // 积压与恢复后的空快照同样整体替换，不得只在删除类入口更新
-  reportCleanupPending(
-    (entry as { cleanupPending?: unknown } | null)?.cleanupPending,
-  )
+  reportLibraryDiagnostics(entry)
   const normalized = normalizeAsset(entry)
   if (!normalized) throw new Error('导入返回了无效条目')
   return normalized
@@ -220,11 +225,7 @@ function applyUpdateMeta(
         id,
         patch,
       })
-      reportLibraryWarnings((entry as { warnings?: unknown } | null)?.warnings)
-      // cleanupPending 随更新响应上报（PR #222 评审 P2，与导入同契约）
-      reportCleanupPending(
-        (entry as { cleanupPending?: unknown } | null)?.cleanupPending,
-      )
+      reportLibraryDiagnostics(entry)
       const normalized = normalizeAsset(entry)
       if (!normalized) throw new Error('更新返回了无效条目')
       return normalized
@@ -268,12 +269,10 @@ const lastPersistedAssets = new Map<string, LibraryAsset>()
 async function applyRemove(id: string): Promise<void> {
   if (isTauri) {
     const { invoke } = await import('@tauri-apps/api/core')
-    const result = await invoke<{
-      warnings?: unknown
-      cleanupPending?: unknown[]
-    }>('delete_library_asset', { id })
-    reportLibraryWarnings(result?.warnings)
-    reportCleanupPending(result?.cleanupPending)
+    const result = await invoke<LibraryDiagnostics>('delete_library_asset', {
+      id,
+    })
+    reportLibraryDiagnostics(result)
   } else {
     memoryAssets.delete(id)
   }
@@ -363,9 +362,9 @@ export const libraryStore = {
           groups?: { byId?: Record<string, unknown> }
           warnings?: unknown[]
           cleanupPending?: unknown[]
+          diagnosticsRevision?: unknown
         }>('list_library_assets')
-        reportLibraryWarnings(index.warnings)
-        reportCleanupPending(index.cleanupPending)
+        reportLibraryDiagnostics(index)
         const byId = index.groups?.byId
         const entries =
           byId && typeof byId === 'object' ? Object.values(byId) : []
@@ -388,16 +387,11 @@ export const libraryStore = {
   upsertGroup: (group: AssetGroup): Promise<AssetGroup> => {
     if (isTauri) {
       return import('@tauri-apps/api/core').then(async ({ invoke }) => {
-        const result = await invoke<
-          AssetGroup & { cleanupPending?: unknown[] }
-        >('upsert_library_group', { group })
-        reportLibraryWarnings(
-          (result as { warnings?: unknown } | null)?.warnings,
+        const result = await invoke<AssetGroup & LibraryDiagnostics>(
+          'upsert_library_group',
+          { group },
         )
-        // cleanupPending 随 upsert 响应上报（评审修复，PR #36 第三轮）——
-        // 与 list/delete 同款，删除隔离区积压不得静默（issue #135 起进
-        // 用户可见诊断通道）
-        reportCleanupPending(result?.cleanupPending)
+        reportLibraryDiagnostics(result)
         return result
       })
     }
@@ -450,12 +444,11 @@ export const libraryStore = {
   deleteGroup: (id: string): Promise<void> => {
     if (isTauri) {
       return import('@tauri-apps/api/core').then(async ({ invoke }) => {
-        const result = await invoke<{
-          warnings?: unknown
-          cleanupPending?: unknown[]
-        }>('delete_library_group', { id })
-        reportLibraryWarnings(result?.warnings)
-        reportCleanupPending(result?.cleanupPending)
+        const result = await invoke<LibraryDiagnostics>(
+          'delete_library_group',
+          { id },
+        )
+        reportLibraryDiagnostics(result)
       })
     }
     // 内存回退同款存在性校验（评审修复，PR #36 第一轮）：stale/重复删除
