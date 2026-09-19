@@ -14,10 +14,11 @@ use tauri::{AppHandle, Manager};
 use crate::assets::project_media::{
     open_project_media_with, resolve_project_media_entry, PendingProjectAssets,
 };
+use crate::library::diagnostics::{publish_recovery, with_recovery_snapshot};
 use crate::library::error::LibraryError;
 use crate::library::ASSET_MAX_BYTES;
 use crate::library_fs::{library_root, open_library_asset, read_index_capped, validate_asset_id};
-use crate::library_journal::{library_file_lock, library_op_lock};
+use crate::library_journal::Recovery;
 use crate::store::{
     is_canonical_mime, is_valid_active_asset_rel_path, projects_dir, to_ipc_text, validate_id,
 };
@@ -172,13 +173,16 @@ pub(crate) fn parse_media_uri(uri: &tauri::http::Uri) -> Result<(MediaScope, Str
 
 /// 库 scope 的 id → (relPath, mime) 解析内核（句柄域，锁由调用方持有；每次
 /// 请求重新执行）：恢复流程复核冲突期 → 净化索引按 id 定位 → relPath 词法
-/// 复核。媒体字节读取与 URL 早反馈共用。
-fn resolve_media_entry_with(
+/// 复核。媒体字节读取与 URL 早反馈共用；成功恢复立即报告，后续拒绝服务
+/// 也由外层事件边界发布该诊断。
+pub(crate) fn resolve_media_entry_with(
     library: &cap_std::fs::Dir,
     id: &str,
+    report: &mut dyn FnMut(&Recovery),
 ) -> Result<(String, String), LibraryError> {
     validate_asset_id(id).map_err(LibraryError::invalid)?;
     let recovery = crate::library_journal::recover(library)?;
+    report(&recovery);
     if recovery.conflicted.iter().any(|c| c == id) {
         return Err(LibraryError::refused(format!(
             "资产 {id} 处于删除事务冲突期，媒体不可用"
@@ -234,8 +238,9 @@ fn resolve_media_entry_with(
 pub(crate) fn open_media_with(
     library: &cap_std::fs::Dir,
     id: &str,
+    report: &mut dyn FnMut(&Recovery),
 ) -> Result<(String, cap_std::fs::File), LibraryError> {
-    let (rel, mime) = resolve_media_entry_with(library, id)?;
+    let (rel, mime) = resolve_media_entry_with(library, id, report)?;
     let file = open_library_asset(library, &rel)?;
     Ok((mime, file))
 }
@@ -431,11 +436,12 @@ pub(crate) fn handle_media_request(app: &AppHandle, uri: &tauri::http::Uri) -> M
         MediaScope::Library => {
             let library = library_root(app).map_err(|e| e.to_string())?;
             // 锁内：恢复复核 + 净化索引解析 + 身份绑定打开；锁随打开结束
-            let opened = {
-                let _op = library_op_lock();
-                let _file_lock = library_file_lock(&library).map_err(|e| e.to_string())?;
-                open_media_with(&library, &id).map_err(|e| e.to_string())
-            };
+            let opened = with_recovery_snapshot(
+                &library,
+                |library, report| open_media_with(library, &id, report),
+                |snapshot| publish_recovery(app, snapshot),
+            )
+            .map_err(|e| e.to_string());
             // 锁外：消费已绑定句柄读取字节（评审修复，PR #32 第三轮）；成功
             // 时许可随结果返回，交由 MediaDelivery 持有到交付之后
             opened.and_then(|(mime, file)| {
@@ -484,9 +490,12 @@ pub fn get_asset_media_url(
     match &parsed {
         MediaScope::Library => {
             let library = library_root(&app).map_err(|e| e.to_string())?;
-            let _op = library_op_lock();
-            let _file_lock = library_file_lock(&library).map_err(|e| e.to_string())?;
-            resolve_media_entry_with(&library, &asset_id).map_err(|e| e.to_string())?;
+            with_recovery_snapshot(
+                &library,
+                |library, report| resolve_media_entry_with(library, &asset_id, report),
+                |snapshot| publish_recovery(&app, snapshot),
+            )
+            .map_err(|e| e.to_string())?;
         }
         MediaScope::Project { project_id } => {
             // 项目 assetId 是不透明契约（评审修复）：命令面按同域值域

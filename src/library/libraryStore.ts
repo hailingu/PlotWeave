@@ -8,10 +8,7 @@
  */
 
 import { uid } from '../uid'
-import {
-  publishCleanupPending,
-  publishLibraryWarnings,
-} from './libraryDiagnostics'
+import { reportLibraryDiagnostics } from './libraryDiagnosticTransport'
 
 /** 资产库分类（§7）：索引条目的 kind 域；中文标签/图标见 LIBRARY_KINDS。 */
 export type LibraryKind =
@@ -114,33 +111,6 @@ function normalizeAsset(raw: RawAsset | null): LibraryAsset | null {
 }
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
-
-/** 后端隔离/修复诊断同时进入日志与图库提示（#17/#137）：读取和变更
- * 共用上报入口，跨挂载保留至用户关闭，不因后续干净响应抹掉修复信息。 */
-function reportLibraryWarnings(warnings: unknown): void {
-  publishLibraryWarnings(warnings)
-  if (Array.isArray(warnings)) {
-    for (const w of warnings) {
-      if (typeof w === 'string' && w !== '')
-        console.warn('[Library] 索引条目隔离：', w)
-    }
-  }
-}
-
-/** 七个命令入口共用诊断边界；警告始终保留，待清理快照独立按版本收敛。
- * 不携带诊断的响应不清除旧状态；显式快照缺少有效序号时由存储记录错误。 */
-function reportLibraryDiagnostics(
-  result: LibraryDiagnostics | null | undefined,
-): void {
-  reportLibraryWarnings(result?.warnings)
-  const cleanupPending = result?.cleanupPending
-  if (cleanupPending === undefined && result?.diagnosticsRevision === undefined)
-    return
-  publishCleanupPending(cleanupPending, result?.diagnosticsRevision)
-  if (Array.isArray(cleanupPending) && cleanupPending.length > 0) {
-    console.warn('[Library] 删除隔离区待清理：', cleanupPending)
-  }
-}
 
 /** 内存回退：blob + object URL，会话内有效。 */
 const memoryAssets = new Map<string, { asset: LibraryAsset; blob: Blob }>()

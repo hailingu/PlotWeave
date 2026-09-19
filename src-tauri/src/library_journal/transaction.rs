@@ -304,14 +304,16 @@ fn quarantine_conflict_error(entry: &JournalEntry, verdict: &TrashVerdict) -> Li
     }
 }
 
-/// 导入前的冲突期隔离检查（§7.2）：日志只读态与冲突 assetId 均拒绝服务。
-/// 恢复/迁移诊断进结构化本机日志（评审修复，PR #33 第十一轮）：导入响应
-/// 无法携带 warnings，丢弃会让迁移落盘后的诊断永久丢失。
+/// 导入前的冲突期隔离检查（§7.2）：拒绝冲突 assetId，只读态仍允许读取。
+/// 成功恢复先经 report 交给外层事件发布，再做冲突判断；因此拒绝导入也
+/// 不丢诊断。返回同一恢复结果供索引读取使用，不二次恢复吞掉一次性警告。
 pub(crate) fn ensure_importable(
     library: &CapDir,
     library_asset_id: &str,
-) -> Result<(), LibraryError> {
+    report: &mut dyn FnMut(&super::Recovery),
+) -> Result<super::Recovery, LibraryError> {
     let recovery = recover(library)?;
+    report(&recovery);
     // 只读态只暂停写入/删除（§7.2），导入是读取路径——不阻断
     if recovery.conflicted.iter().any(|c| c == library_asset_id) {
         return Err(LibraryError::refused(format!(
@@ -321,5 +323,5 @@ pub(crate) fn ensure_importable(
     for w in &recovery.warnings {
         eprintln!("[library] 项目导入伴随迁移/恢复诊断：{w}");
     }
-    Ok(())
+    Ok(recovery)
 }

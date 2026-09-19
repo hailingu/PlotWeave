@@ -448,7 +448,7 @@ pub fn update_library_asset(app: AppHandle, id: String, patch: Value) -> Result<
         .map_err(|e| e.to_string())
 }
 
-mod diagnostics;
+pub(crate) mod diagnostics;
 pub(crate) mod error;
 pub(crate) mod group_commands;
 #[cfg(test)]

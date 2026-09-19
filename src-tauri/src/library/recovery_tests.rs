@@ -82,7 +82,8 @@ fn corrupt_index_keeps_complete_records_and_media_without_rewriting() {
     assert!(index["assets"]["byId"].get("bad").is_none());
     assert_eq!(index["groups"]["byId"]["g"]["name"], "组");
     assert!(!warnings.is_empty());
-    let (mime, mut file) = crate::media_protocol::open_media_with(&fixture.dir, "a").unwrap();
+    let (mime, mut file) =
+        crate::media_protocol::open_media_with(&fixture.dir, "a", &mut |_| {}).unwrap();
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes).unwrap();
     assert_eq!(bytes, b"image-a");
@@ -254,9 +255,15 @@ fn healthy_asset_imports_into_project_without_rewriting_corrupt_library() {
     fs::write(projects.join("p-1.json"), b"{}").unwrap();
     let project_dir = Dir::open_ambient_dir(&projects, ambient_authority()).unwrap();
     let pending = crate::assets::project_media::PendingProjectAssets::new();
-    let imported =
-        crate::assets::import_asset_from_library(&project_dir, &fixture.dir, "p-1", "a", &pending)
-            .unwrap();
+    let imported = crate::assets::import_asset_from_library(
+        &project_dir,
+        &fixture.dir,
+        "p-1",
+        "a",
+        &pending,
+        &mut |_| {},
+    )
+    .unwrap();
     let target = projects
         .join("p-1")
         .join(imported["relPath"].as_str().unwrap());
@@ -280,7 +287,7 @@ fn mismatched_member_cannot_expose_or_persist_nested_asset() {
     assert!(!warnings.is_empty());
     assert_eq!(index["assets"]["byId"], json!({"a":asset("a")}));
     assert_eq!(index["groups"]["byId"]["g"]["name"], "组");
-    assert!(crate::media_protocol::open_media_with(&fixture.dir, "fake").is_err());
+    assert!(crate::media_protocol::open_media_with(&fixture.dir, "fake", &mut |_| {}).is_err());
     assert_eq!(fixture.original(), raw.as_bytes());
     update_meta_with(&fixture.dir, "a", &json!({"name":"保留的资产"})).unwrap();
     let (saved, _) = list_assets_with(&fixture.dir).unwrap();

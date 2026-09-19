@@ -9,6 +9,9 @@ use serde_json::Value;
 use super::error::LibraryError;
 use crate::library_journal::{library_file_lock, library_op_lock};
 
+mod recovery_events;
+pub(crate) use recovery_events::{publish_recovery, with_recovery_snapshot};
+
 /// 与原生进程同寿命；所有诊断生产者共用。前端随原生进程重启建立新会话。
 static LAST_REVISION: AtomicU64 = AtomicU64::new(0);
 
