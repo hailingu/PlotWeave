@@ -8,7 +8,7 @@ use cap_std::{ambient_authority, fs::Dir as CapDir};
 use tauri::{AppHandle, Manager};
 
 use crate::store::error::StoreError;
-use crate::store::types::new_id;
+use crate::store::types::{new_id, validate_id};
 
 #[cfg(test)]
 pub(crate) mod faults;
@@ -290,25 +290,41 @@ fn is_generated_temp_id(id: &str) -> bool {
 }
 /// 原子写临时名的归属判定（§10.2 命名协议 `.{目标名}.{new_id()}.tmp`）：
 /// 隐藏点前缀 + `.tmp` 后缀，去掉首尾后按最后一个 `.` 分出目标名段与
-/// 随机 id 段（目标名段自身可含 `.`，如 `p-1.json`）——目标名段非空，
-/// id 段须匹配生成器实际产出形状（见 [`is_generated_temp_id`]）。不满足
-/// 任一条件的条目与本协议无关，永不进入清扫候选（用户放入应用数据
-/// 目录的 `.tmp` 杂物不被误收）。
-fn is_atomic_temp_name(name: &str) -> bool {
+/// 随机 id 段（目标名段自身可含 `.`，如 `p-1.json`）——目标名段须落在
+/// 调用方目录的原子写目标白名单内（`target_ok`，PR #217 第二轮评审：
+/// 仅非空会把 `.notes.p-18f-0.tmp` 之类「合成 id + 非法目标」的外来
+/// 文件误收误删），id 段须匹配生成器实际产出形状（见
+/// [`is_generated_temp_id`]）。不满足任一条件的条目与本协议无关，永不
+/// 进入清扫候选（用户放入应用数据目录的 `.tmp` 杂物不被误收）。
+fn is_atomic_temp_name(name: &str, target_ok: &dyn Fn(&str) -> bool) -> bool {
     let Some(body) = name.strip_prefix('.').and_then(|s| s.strip_suffix(".tmp")) else {
         return false;
     };
     let Some((target, id)) = body.rsplit_once('.') else {
         return false;
     };
-    !target.is_empty() && is_generated_temp_id(id)
+    target_ok(target) && is_generated_temp_id(id)
 }
-/// 清扫候选判定：归属可辨 + no-follow 归类为普通文件（符号链接/目录等
-/// 异型条目只跳过、绝不跟随）+ mtime 超龄（读取失败或未来时刻的脏时间
-/// 戳一律按未超龄保留）。`md` 须为 lstat 语义（cap-std `DirEntry::
-/// metadata` 不跟随符号链接，与 commands 删除路径同款前置）。
-fn is_sweep_candidate(name: &str, md: &cap_std::fs::Metadata, now: std::time::SystemTime) -> bool {
-    if !is_atomic_temp_name(name) || !md.is_file() {
+/// projects/ 的原子写目标白名单（§10.2）：唯一目标是 `{项目 id}.json`
+/// （create/save）；AI 会话临时文件位于 `projects/{id}/` 会话目录，
+/// 不在本目录的清扫范围（记录边界）。
+pub(crate) fn is_project_temp_target(target: &str) -> bool {
+    target
+        .strip_suffix(".json")
+        .is_some_and(|id| validate_id(id).is_ok())
+}
+/// 清扫候选判定：归属可辨（目标白名单 + 生成器 id 形状）+ no-follow
+/// 归类为普通文件（符号链接/目录等异型条目只跳过、绝不跟随）+ mtime
+/// 超龄（读取失败或未来时刻的脏时间戳一律按未超龄保留）。`md` 须为
+/// lstat 语义（cap-std `DirEntry::metadata` 不跟随符号链接，与
+/// commands 删除路径同款前置）。
+fn is_sweep_candidate(
+    name: &str,
+    md: &cap_std::fs::Metadata,
+    now: std::time::SystemTime,
+    target_ok: &dyn Fn(&str) -> bool,
+) -> bool {
+    if !is_atomic_temp_name(name, target_ok) || !md.is_file() {
         return false;
     }
     let Ok(modified) = md.modified() else {
@@ -317,13 +333,20 @@ fn is_sweep_candidate(name: &str, md: &cap_std::fs::Metadata, now: std::time::Sy
     matches!(now.duration_since(modified.into_std()), Ok(age) if age >= ORPHAN_TEMP_MIN_AGE)
 }
 /// 崩溃遗留孤儿临时文件清扫（§10.2 资源回收边界，issue #148）：扫描
-/// 已验证目录句柄，移除「归属可辨、no-follow 归类为普通文件、mtime
-/// 超龄」三条件同时成立的条目；remove_file 只移除目录项自身，不跟随
-/// 符号链接。尽力而为、fail-soft——扫描/元数据/删除失败只留结构化
-/// 诊断，不向调用方传播：清扫永不阻断列表/启动，也不因单条坏数据
-/// 中断其余条目的回收。只删除、不读取内容：遗留临时文件不充当恢复
-/// 副本（不扩大为新的恢复副本协议）。返回移除计数（诊断与测试用）。
-pub(crate) fn sweep_orphan_temp_files(dir: &CapDir, label: &str) -> usize {
+/// 已验证目录句柄，移除「归属可辨（目标白名单 + 生成器 id 形状）、
+/// no-follow 归类为普通文件、mtime 超龄」三条件同时成立的条目；
+/// `target_ok` 由调用方给出本目录的原子写目标白名单（projects/ 见
+/// [`is_project_temp_target`]，library/ 与 assets/ 见 library_fs）。
+/// remove_file 只移除目录项自身，不跟随符号链接。尽力而为、fail-soft
+/// ——扫描/元数据/删除失败只留结构化诊断，不向调用方传播：清扫永不
+/// 阻断列表/启动，也不因单条坏数据中断其余条目的回收。只删除、不
+/// 读取内容：遗留临时文件不充当恢复副本（不扩大为新的恢复副本
+/// 协议）。返回移除计数（诊断与测试用）。
+pub(crate) fn sweep_orphan_temp_files(
+    dir: &CapDir,
+    label: &str,
+    target_ok: impl Fn(&str) -> bool,
+) -> usize {
     let now = std::time::SystemTime::now();
     let entries = match dir.entries() {
         Ok(entries) => entries,
@@ -345,7 +368,8 @@ pub(crate) fn sweep_orphan_temp_files(dir: &CapDir, label: &str) -> usize {
         let Some(name) = name.to_str() else {
             continue;
         };
-        if !is_atomic_temp_name(name) {
+        // 名字归属是纯字符串判定：先行过滤，非临时名的条目不做 metadata 调用
+        if !is_atomic_temp_name(name, &target_ok) {
             continue;
         }
         // DirEntry::metadata 取 lstat 语义，不跟随符号链接
@@ -356,7 +380,7 @@ pub(crate) fn sweep_orphan_temp_files(dir: &CapDir, label: &str) -> usize {
                 continue;
             }
         };
-        if !is_sweep_candidate(name, &md, now) {
+        if !is_sweep_candidate(name, &md, now, &target_ok) {
             continue;
         }
         match dir.remove_file(name) {
@@ -484,287 +508,4 @@ pub(crate) fn create_dir_all_durable(dir: &std::path::Path) -> Result<(), StoreE
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::store::testutil::{cap, cleanup_temp, temp_projects_dir};
-
-    /// 回拨/前瞻 mtime 的夹具：原子写临时文件的正常生命周期以秒计，
-    /// 超龄条目只可能来自「创建与 rename 之间进程被终止」的遗留。
-    fn plant_file_with_mtime(dir: &std::path::Path, name: &str, mtime: std::time::SystemTime) {
-        let path = dir.join(name);
-        fs::write(&path, b"orphan").expect("写遗留临时文件");
-        let file = fs::OpenOptions::new()
-            .write(true)
-            .open(&path)
-            .expect("打开遗留临时文件");
-        file.set_modified(mtime).expect("设定 mtime");
-    }
-
-    #[test]
-    fn sweep_removes_only_aged_own_temp_files() {
-        let projects = temp_projects_dir();
-        let now = std::time::SystemTime::now();
-        let aged = now - std::time::Duration::from_secs(48 * 60 * 60);
-        // 超龄归属临时文件（崩溃遗留）：移除
-        plant_file_with_mtime(&projects, ".p-1.json.p-18f-0.tmp", aged);
-        // 同名模式但 mtime 新鲜（进行中的写入）：保留
-        plant_file_with_mtime(&projects, ".p-2.json.p-18f-1.tmp", now);
-        // 时钟回拨致的未来 mtime：保留（duration_since 失败按未超龄处理）
-        plant_file_with_mtime(
-            &projects,
-            ".p-3.json.p-18f-2.tmp",
-            now + std::time::Duration::from_secs(60 * 60),
-        );
-        // 与本协议无关的条目一律保留：项目文件、外来 tmp、无 id 段、非法 id 段
-        fs::write(projects.join("p-1.json"), b"{}").expect("写项目文件");
-        fs::write(projects.join("notes.tmp"), b"x").expect("写外来 tmp");
-        fs::write(projects.join(".no-sep.tmp"), b"x").expect("写无 id 段临时名");
-        fs::write(projects.join(".a.b$d.tmp"), b"x").expect("写非法 id 段临时名");
-        // 外来 id 形状（PR #217 评审）：即便超龄也不归属——生成器唯一产出
-        // 形状是 p-<小写十六进制>-<小写十六进制>，宽字符集会把
-        // `.notes.backup.tmp` 之类外来文件误收为「本协议临时文件」误删
-        for foreign in [
-            ".notes.backup.tmp",
-            ".x.q-18f-0.tmp",
-            ".x.p-18f.tmp",
-            ".x.p--0.tmp",
-            ".x.p-18g-0.tmp",
-            ".x.p-18F-0.tmp",
-        ] {
-            plant_file_with_mtime(&projects, foreign, aged);
-        }
-        let removed = sweep_orphan_temp_files(&cap(&projects), "测试目录");
-        assert_eq!(removed, 1);
-        assert!(
-            !projects.join(".p-1.json.p-18f-0.tmp").exists(),
-            "超龄归属临时文件应被清理"
-        );
-        for kept in [
-            ".p-2.json.p-18f-1.tmp",
-            ".p-3.json.p-18f-2.tmp",
-            "p-1.json",
-            "notes.tmp",
-            ".no-sep.tmp",
-            ".a.b$d.tmp",
-            ".notes.backup.tmp",
-            ".x.q-18f-0.tmp",
-            ".x.p-18f.tmp",
-            ".x.p--0.tmp",
-            ".x.p-18g-0.tmp",
-            ".x.p-18F-0.tmp",
-        ] {
-            assert!(projects.join(kept).exists(), "{kept} 不应被清理");
-        }
-        cleanup_temp(&projects);
-    }
-
-    #[test]
-    fn sweep_candidate_gates_name_type_and_age() {
-        let projects = temp_projects_dir();
-        let now = std::time::SystemTime::now();
-        plant_file_with_mtime(
-            &projects,
-            ".p-1.json.p-18f-0.tmp",
-            now - std::time::Duration::from_secs(48 * 60 * 60),
-        );
-        plant_file_with_mtime(&projects, ".p-2.json.p-18f-1.tmp", now);
-        let root = cap(&projects);
-        let aged_md = root
-            .symlink_metadata(".p-1.json.p-18f-0.tmp")
-            .expect("读元数据");
-        let fresh_md = root
-            .symlink_metadata(".p-2.json.p-18f-1.tmp")
-            .expect("读元数据");
-        assert!(is_sweep_candidate(".p-1.json.p-18f-0.tmp", &aged_md, now));
-        // 新鲜 mtime（进行中写入）：非候选
-        assert!(!is_sweep_candidate(".p-2.json.p-18f-1.tmp", &fresh_md, now));
-        // 名字不归属：即便超龄普通文件也非候选
-        assert!(!is_sweep_candidate("p-1.json", &aged_md, now));
-        // 外来 id 形状（PR #217 评审）：超龄普通文件同样非候选
-        assert!(!is_sweep_candidate(".notes.backup.tmp", &aged_md, now));
-        // 目录条目即便名字归属也非候选（no-follow 归类拒绝异型）：目录
-        // mtime 不可回拨，以远未来时刻旁路年龄门直接钉住归类门
-        fs::create_dir(projects.join(".p-4.json.p-18f-3.tmp")).expect("建占位目录");
-        let dir_md = root
-            .symlink_metadata(".p-4.json.p-18f-3.tmp")
-            .expect("读目录元数据");
-        let far_future = now + std::time::Duration::from_secs(10 * 365 * 24 * 60 * 60);
-        assert!(!is_sweep_candidate(
-            ".p-4.json.p-18f-3.tmp",
-            &dir_md,
-            far_future
-        ));
-        cleanup_temp(&projects);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn sweep_never_follows_symlink_temp_names() {
-        let projects = temp_projects_dir();
-        let outside = projects.parent().expect("临时根").join("victim.json");
-        fs::write(&outside, b"{}").expect("写根外文件");
-        std::os::unix::fs::symlink(&outside, projects.join(".p-1.json.p-18f-0.tmp"))
-            .expect("建同名符号链接");
-        let root = cap(&projects);
-        let md = root
-            .symlink_metadata(".p-1.json.p-18f-0.tmp")
-            .expect("读链接元数据");
-        // 符号链接自身 mtime 不可回拨：以远未来时刻旁路年龄门，钉住
-        // 「任意年龄下符号链接都不是候选」的 no-follow 归类门
-        let far_future =
-            std::time::SystemTime::now() + std::time::Duration::from_secs(10 * 365 * 24 * 60 * 60);
-        assert!(!is_sweep_candidate(
-            ".p-1.json.p-18f-0.tmp",
-            &md,
-            far_future
-        ));
-        let removed = sweep_orphan_temp_files(&root, "测试目录");
-        assert_eq!(removed, 0);
-        assert!(
-            projects
-                .join(".p-1.json.p-18f-0.tmp")
-                .symlink_metadata()
-                .is_ok(),
-            "链接自身保留"
-        );
-        assert_eq!(
-            fs::read(&outside).expect("读根外文件"),
-            b"{}",
-            "根外目标不受影响"
-        );
-        cleanup_temp(&projects);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn entry_sync_plan_covers_hosts_and_rollback_scope_of_new_levels() {
-        let tmp = std::env::temp_dir().join(format!("pw-chain-{}", new_id()));
-        fs::create_dir(&tmp).expect("建临时根");
-        // 两级新建：宿主 = 锚点 tmp 与中间级 tmp/mid；回滚范围含 dir 本身
-        let plan = entry_sync_plan(&tmp.join("mid").join("leaf"))
-            .unwrap()
-            .unwrap();
-        assert_eq!(plan.hosts, vec![tmp.clone(), tmp.join("mid")]);
-        assert_eq!(
-            plan.created,
-            vec![tmp.join("mid"), tmp.join("mid").join("leaf")]
-        );
-        // 一级新建：宿主 = 既有父目录；回滚范围 = 目标本身
-        let plan = entry_sync_plan(&tmp.join("leaf")).unwrap().unwrap();
-        assert_eq!(plan.hosts, vec![tmp.clone()]);
-        assert_eq!(plan.created, vec![tmp.join("leaf")]);
-        // 目标已存在：仍同步直接父目录（单级兜底），无回滚范围
-        fs::create_dir(tmp.join("exists")).expect("预建目标");
-        let plan = entry_sync_plan(&tmp.join("exists")).unwrap().unwrap();
-        assert_eq!(plan.hosts, vec![tmp.clone()]);
-        assert!(plan.created.is_empty());
-        // 根目录无父级宿主
-        assert!(entry_sync_plan(std::path::Path::new("/"))
-            .unwrap()
-            .is_none());
-        fs::remove_dir_all(&tmp).expect("清理临时根");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn entry_sync_plan_fail_closed_on_transient_metadata_error() {
-        // PR #201 第四、五轮评审：注入非 NotFound 的元数据失败必须
-        // fail-closed 上抛，先于任何创建与清理（旧 is_ok 吞错实现会把
-        // 现存目录误判为本次新建并被失败清理拆除；该测试在探测站点
-        // 接入注入前必然失败——旧断言只走正常路径，吞错实现也能通过）。
-        let tmp = std::env::temp_dir().join(format!("pw-anchor-{}", new_id()));
-        fs::create_dir(&tmp).expect("建临时根");
-        fs::create_dir(tmp.join("parent")).expect("建已存在层级");
-        let target = tmp.join("parent").join("leaf");
-        let injection = faults::Injection::new(Some(faults::Stage::AnchorProbe), None);
-        let err = create_dir_all_durable(&target).unwrap_err();
-        assert!(
-            err.to_string().contains("injected AnchorProbe failure"),
-            "实际错误：{err}"
-        );
-        assert!(
-            err.to_string().contains("探测目录条目宿主失败"),
-            "实际错误：{err}"
-        );
-        drop(injection);
-        assert!(tmp.join("parent").is_dir(), "已存在层级不得被触碰");
-        assert!(!target.exists(), "探测失败不得产生任何新建");
-        fs::remove_dir_all(&tmp).expect("清理临时根");
-    }
-
-    #[test]
-    fn verify_control_file_requires_regular_file() {
-        let projects = temp_projects_dir();
-        let file = projects.join("p-1.json");
-        fs::write(&file, b"{}").expect("写项目文件");
-        assert!(verify_control_file(&cap(&projects), "p-1.json").is_ok());
-        // 目录占位：不是普通文件
-        let dir_as_file = projects.join("p-2.json");
-        fs::create_dir(&dir_as_file).expect("建目录占位");
-        let err = verify_control_file(&cap(&projects), "p-2.json").unwrap_err();
-        assert!(
-            matches!(err, StoreError::Refused { ref detail } if detail.contains("普通文件")),
-            "意外诊断：{err}"
-        );
-        // 缺失文件拒绝（读取前置）
-        assert!(verify_control_file(&cap(&projects), "p-3.json").is_err());
-        cleanup_temp(&projects);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn verify_control_file_rejects_symlinked_project_file() {
-        let projects = temp_projects_dir();
-        let outside = projects.parent().expect("临时根").join("evil.json");
-        fs::write(&outside, b"{}").expect("写根外文件");
-        std::os::unix::fs::symlink(&outside, projects.join("p-1.json")).expect("建符号链接");
-        let err = verify_control_file(&cap(&projects), "p-1.json").unwrap_err();
-        assert!(
-            matches!(err, StoreError::Refused { ref detail } if detail.contains("符号链接")),
-            "意外诊断：{err}"
-        );
-        cleanup_temp(&projects);
-    }
-
-    #[test]
-    fn atomic_write_rejects_path_like_file_name() {
-        let projects = temp_projects_dir();
-        // 句柄相对写入的最后边界：嵌套形态的文件名不得相对句柄逃出 projects/
-        let err = atomic_write(&cap(&projects), "../evil.json", "{}").unwrap_err();
-        assert!(
-            matches!(err, StoreError::Refused { ref detail } if detail.contains("路径分量")),
-            "意外诊断：{err}"
-        );
-        assert!(
-            fs::symlink_metadata(projects.parent().expect("临时根").join("evil.json")).is_err(),
-            "含路径分量的文件名不应写出 projects/"
-        );
-        cleanup_temp(&projects);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn atomic_write_fails_closed_on_target_metadata_errors() {
-        let projects = temp_projects_dir();
-        let root = cap(&projects);
-        // 收权让 symlink_metadata 报 EACCES（非 NotFound）：归类步骤必须
-        // 显式上抛，不得把错误当目标缺失放行后误报后续步骤
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&projects).unwrap().permissions();
-        perms.set_mode(0o000);
-        fs::set_permissions(&projects, perms).expect("收权");
-        let err = atomic_write(&root, "p-1.json", "{}").unwrap_err();
-        let mut perms = fs::metadata(&projects).unwrap().permissions();
-        perms.set_mode(0o755);
-        let _ = fs::set_permissions(&projects, perms);
-        assert!(
-            matches!(&err, StoreError::Io { context, .. } if context.contains("元数据")),
-            "意外诊断：{err}"
-        );
-        assert!(
-            std::error::Error::source(&err).is_some(),
-            "归类失败的 io 来源应保留"
-        );
-        cleanup_temp(&projects);
-    }
-}
+mod tests;

@@ -710,31 +710,49 @@ fn list_sweeps_orphan_temp_files_in_library_and_assets() {
         &json!({ "assets": { "byId": {} }, "groups": { "byId": {} } }),
     );
     let aged = std::time::SystemTime::now() - std::time::Duration::from_secs(48 * 60 * 60);
-    for path in [
-        library.join(".library.json.p-18f-0.tmp"),
-        library.join("assets").join(".a.png.p-18f-1.tmp"),
-    ] {
-        fs::write(&path, b"partial").expect("写遗留临时文件");
+    let plant = |dir: &Path, name: &str| {
+        let path = dir.join(name);
+        fs::write(&path, b"x").expect("写临时条目");
         fs::OpenOptions::new()
             .write(true)
             .open(&path)
-            .expect("打开遗留临时文件")
+            .expect("打开临时条目")
             .set_modified(aged)
             .expect("回拨 mtime");
-    }
-    let fresh = library.join("assets").join(".b.png.p-18f-2.tmp");
+    };
+    let assets = library.join("assets");
+    // 合法目标（移除）：索引、损坏备份（64 位摘要名）、资产媒体——资产
+    // 目标兼容旧 la-{ms}-{size} id 方案的存量命名
+    let backup_tmp = format!(".library-corrupt-{}.bak.p-18f-3.tmp", "ab".repeat(32));
+    plant(&library, ".library.json.p-18f-0.tmp");
+    plant(&library, &backup_tmp);
+    plant(&assets, ".a.png.p-18f-1.tmp");
+    plant(&assets, ".la-1779000000000-12345.png.p-18f-6.tmp");
+    // 非法目标（保留，PR #217 第二轮评审）：合成 id 救不回非法目标名——
+    // 非控制文件、摘要名非法、资产 id 含点
+    plant(&library, ".evil.json.p-18f-4.tmp");
+    plant(&library, ".library-corrupt-zz.bak.p-18f-5.tmp");
+    plant(&assets, ".x.tar.gz.p-18f-7.tmp");
+    let fresh = assets.join(".b.png.p-18f-2.tmp");
     fs::write(&fresh, b"writing").expect("写进行中临时文件");
     let (index, _warnings) = list_assets_with(&cap(&library)).expect("列出资产");
     assert!(index["assets"]["byId"].is_object());
-    assert!(
-        !library.join(".library.json.p-18f-0.tmp").exists(),
-        "库根超龄临时文件应被清理"
-    );
-    assert!(
-        !library.join("assets").join(".a.png.p-18f-1.tmp").exists(),
-        "assets 超龄临时文件应被清理"
-    );
-    assert!(fresh.exists(), "进行中的临时文件不得被清理");
+    for gone in [
+        library.join(".library.json.p-18f-0.tmp"),
+        library.join(&backup_tmp),
+        assets.join(".a.png.p-18f-1.tmp"),
+        assets.join(".la-1779000000000-12345.png.p-18f-6.tmp"),
+    ] {
+        assert!(!gone.exists(), "超龄归属临时文件应被清理：{gone:?}");
+    }
+    for kept in [
+        library.join(".evil.json.p-18f-4.tmp"),
+        library.join(".library-corrupt-zz.bak.p-18f-5.tmp"),
+        assets.join(".x.tar.gz.p-18f-7.tmp"),
+        fresh,
+    ] {
+        assert!(kept.exists(), "外来/进行中条目不得被清理：{kept:?}");
+    }
     cleanup(&root);
 }
 
