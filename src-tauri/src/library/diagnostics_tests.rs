@@ -6,6 +6,9 @@ use cap_std::ambient_authority;
 use serde_json::json;
 use std::{fs, path::PathBuf, sync::mpsc, thread};
 
+#[path = "diagnostics/command_failure_tests.rs"]
+mod command_failures;
+
 /// 自持临时目录，允许多个线程打开同一真实库根，并在用例结束时清理。
 struct Fixture(PathBuf);
 
@@ -28,8 +31,8 @@ impl Drop for Fixture {
 }
 
 /// 使用真实列表内核的响应，模拟命令在序列化前仍持锁的诊断快照。
-fn list_response(library: &Dir) -> Result<Value, LibraryError> {
-    let (mut index, warnings) = list_assets_with(library)?;
+fn list_response(library: &Dir, report: &mut dyn FnMut(&Recovery)) -> Result<Value, LibraryError> {
+    let (mut index, warnings) = list_assets_with(library, report)?;
     index["warnings"] = json!(warnings);
     Ok(index)
 }
@@ -47,30 +50,48 @@ fn revision(value: &Value) -> u64 {
 fn successful_operations_keep_payloads_and_order_delete_after_old_list() {
     let fixture = Fixture::new();
     let library = fixture.open();
-    let imported = with_snapshot(&library, |dir| {
-        put_asset_with(dir, "a.png", "image/png", "reference", b"image")
-    })
+    let imported = with_snapshot(
+        &library,
+        |dir, report| put_asset_with(dir, "a.png", "image/png", "reference", b"image", report),
+        |_| {},
+    )
     .unwrap();
     let id = imported["id"].as_str().unwrap();
-    let group = with_snapshot(&library, |dir| {
-        group_commands::upsert_group_with(dir, &json!({"id":"g1","name":"组","kind":"reference"}))
-    })
+    let group = with_snapshot(
+        &library,
+        |dir, report| {
+            group_commands::upsert_group_with(
+                dir,
+                &json!({"id":"g1","name":"组","kind":"reference"}),
+                report,
+            )
+        },
+        |_| {},
+    )
     .unwrap();
-    let updated = with_snapshot(&library, |dir| {
-        update_meta_with(dir, id, &json!({"name":"新名","groupId":"g1"}))
-    })
+    let updated = with_snapshot(
+        &library,
+        |dir, report| update_meta_with(dir, id, &json!({"name":"新名","groupId":"g1"}), report),
+        |_| {},
+    )
     .unwrap();
-    let old_list = with_snapshot(&library, list_response).unwrap();
+    let old_list = with_snapshot(&library, list_response, |_| {}).unwrap();
     assert_eq!(old_list["assets"]["byId"][id]["name"], "新名");
     assert_eq!(old_list["cleanupPending"], json!([]));
-    let deleted = with_snapshot(&library, |dir| {
-        crate::library_journal::delete_asset_transacted(dir, id)
-    })
+    let deleted = with_snapshot(
+        &library,
+        |dir, report| crate::library_journal::delete_asset_transacted(dir, id, report),
+        |_| {},
+    )
     .unwrap();
     assert!(!deleted["cleanupPending"].as_array().unwrap().is_empty());
-    let ungrouped =
-        with_snapshot(&library, |dir| group_commands::delete_group_with(dir, "g1")).unwrap();
-    let latest = with_snapshot(&library, list_response).unwrap();
+    let ungrouped = with_snapshot(
+        &library,
+        |dir, report| group_commands::delete_group_with(dir, "g1", report),
+        |_| {},
+    )
+    .unwrap();
+    let latest = with_snapshot(&library, list_response, |_| {}).unwrap();
     assert!(latest["assets"]["byId"].get(id).is_none());
     assert!(latest["groups"]["byId"].get("g1").is_none());
     let ordered = [
@@ -92,15 +113,20 @@ fn concurrent_operations_stamp_snapshots_before_unlocking() {
     let (entered_tx, entered_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
     let first = thread::spawn(move || {
-        with_snapshot(&first_dir, |dir| {
-            let imported = put_asset_with(dir, "a.png", "image/png", "reference", b"image")?;
-            entered_tx.send(()).unwrap();
-            release_rx.recv().unwrap();
-            Ok(imported)
-        })
+        with_snapshot(
+            &first_dir,
+            |dir, report| {
+                let imported =
+                    put_asset_with(dir, "a.png", "image/png", "reference", b"image", report)?;
+                entered_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                Ok(imported)
+            },
+            |_| {},
+        )
     });
     entered_rx.recv().unwrap();
-    let second = thread::spawn(move || with_snapshot(&second_dir, list_response));
+    let second = thread::spawn(move || with_snapshot(&second_dir, list_response, |_| {}));
     release_tx.send(()).unwrap();
     let imported = first.join().unwrap().unwrap();
     let listed = second.join().unwrap().unwrap();
@@ -114,10 +140,15 @@ fn concurrent_operations_stamp_snapshots_before_unlocking() {
 fn failed_operation_releases_locks_without_fabricating_a_snapshot() {
     let fixture = Fixture::new();
     let library = fixture.open();
-    let before = with_snapshot(&library, list_response).unwrap();
-    let error = with_snapshot(&library, |_| Err(LibraryError::missing("injected"))).unwrap_err();
+    let before = with_snapshot(&library, list_response, |_| {}).unwrap();
+    let error = with_snapshot(
+        &library,
+        |_, _report| Err(LibraryError::missing("injected")),
+        |_| {},
+    )
+    .unwrap_err();
     assert!(matches!(error, LibraryError::NotFound { .. }));
-    let after = with_snapshot(&library, list_response).unwrap();
+    let after = with_snapshot(&library, list_response, |_| {}).unwrap();
     assert!(revision(&after) > revision(&before));
     assert_eq!(after["assets"], before["assets"]);
 }
@@ -137,7 +168,7 @@ fn counter_exhaustion_does_not_wrap_or_lose_precision() {
 fn invalid_response_is_reported_and_the_next_operation_can_recover() {
     let fixture = Fixture::new();
     let library = fixture.open();
-    let error = with_snapshot(&library, |_| Ok(Value::Null)).unwrap_err();
+    let error = with_snapshot(&library, |_, _report| Ok(Value::Null), |_| {}).unwrap_err();
     assert!(matches!(error, LibraryError::Corrupt { .. }));
-    assert!(revision(&with_snapshot(&library, list_response).unwrap()) > 0);
+    assert!(revision(&with_snapshot(&library, list_response, |_| {}).unwrap()) > 0);
 }

@@ -50,25 +50,31 @@ const VIEWS: [&str; 8] = [
 #[tauri::command]
 pub fn list_library_assets(app: AppHandle) -> Result<Value, String> {
     let library = library_root(&app).map_err(|e| e.to_string())?;
-    diagnostics::with_snapshot(&library, |library| {
-        let (mut index, warnings) = list_assets_with(library)?;
-        index["warnings"] = json!(warnings);
-        Ok(index)
-    })
+    diagnostics::with_snapshot(
+        &library,
+        |library, report| {
+            let (mut index, warnings) = list_assets_with(library, report)?;
+            index["warnings"] = json!(warnings);
+            Ok(index)
+        },
+        |snapshot| diagnostics::publish_recovery(&app, snapshot),
+    )
     .map_err(|e| e.to_string())
 }
 
 /// 列表读取内核（句柄域，`list_library_assets` 与测试共用）：先恢复删除日志，
 /// 再按只读态分流读取——日志异型（只读告警态）用不落盘读取，索引保持
 /// 原始字节（评审修复，PR #33 第五轮：只读态下迁移落盘会改写索引）；迁移
-/// 警告与冲突期标记随结果返回。
+/// 警告与冲突期标记随结果返回；完成恢复即报告，后续读取失败仍可发布。
 pub(crate) fn list_assets_with(
     library: &cap_std::fs::Dir,
+    report: &mut dyn FnMut(&crate::library_journal::Recovery),
 ) -> Result<(Value, Vec<String>), LibraryError> {
     // 崩溃遗留孤儿临时文件清扫（issue #148，§10.2 资源回收边界）：
     // 库根 + assets/，fail-soft 不阻断列表，进行中写入不受影响
     crate::library_fs::sweep_library_temp_files(library);
     let mut recovery = crate::library_journal::recover(library)?;
+    report(&recovery);
     let (mut index, mut warnings) = if recovery.read_only {
         let (idx, w) = crate::library_fs::read_index_normalized_readonly(library)?;
         (idx, w)
@@ -90,13 +96,14 @@ pub(crate) fn list_assets_with(
 
 /// 导入资产内核（句柄域）：mime 信任边界（trim + 小写后必须规范形）、媒体
 /// 经 `library/assets/` 专用根句柄原子落盘（新 id，库自包含），索引净化
-/// 读取后追加并落盘，返回新条目。
+/// 读取后追加并落盘，返回新条目；完成恢复即报告，业务失败也不吞诊断。
 pub(crate) fn put_asset_with(
     library: &cap_std::fs::Dir,
     name: &str,
     mime: &str,
     kind: &str,
     bytes: &[u8],
+    report: &mut dyn FnMut(&crate::library_journal::Recovery),
 ) -> Result<Value, LibraryError> {
     validate_name(name).map_err(LibraryError::invalid)?;
     validate_kind(kind).map_err(LibraryError::invalid)?;
@@ -113,6 +120,7 @@ pub(crate) fn put_asset_with(
         });
     }
     let recovery = crate::library_journal::recover(library)?;
+    report(&recovery);
     if recovery.read_only {
         return Err(LibraryError::refused(
             "删除日志异常，库写入/删除已暂停：须人工修复 asset-delete-journal.json",
@@ -186,9 +194,11 @@ pub fn import_library_asset(
     bytes: Vec<u8>,
 ) -> Result<Value, String> {
     let library = library_root(&app).map_err(|e| e.to_string())?;
-    diagnostics::with_snapshot(&library, |library| {
-        put_asset_with(library, &name, &mime, &kind, &bytes)
-    })
+    diagnostics::with_snapshot(
+        &library,
+        |library, report| put_asset_with(library, &name, &mime, &kind, &bytes, report),
+        |snapshot| diagnostics::publish_recovery(&app, snapshot),
+    )
     .map_err(|e| e.to_string())
 }
 
@@ -352,23 +362,28 @@ fn apply_group_id(entry: &mut Value, g: &Value) -> Result<(), String> {
 pub fn delete_library_asset(app: AppHandle, id: String) -> Result<Value, String> {
     validate_asset_id(&id)?;
     let library = library_root(&app).map_err(|e| e.to_string())?;
-    diagnostics::with_snapshot(&library, |library| {
-        crate::library_journal::delete_asset_transacted(library, &id)
-    })
+    diagnostics::with_snapshot(
+        &library,
+        |library, report| crate::library_journal::delete_asset_transacted(library, &id, report),
+        |snapshot| diagnostics::publish_recovery(&app, snapshot),
+    )
     .map_err(|e| e.to_string())
 }
 
 /// 更新元信息内核（句柄域）：补丁值域校验（§7.2 在内核强制——绕过命令
 /// 层的原始 IPC 同样不得绕过）→ 净化读取 → 定位条目 → 应用补丁 → 复验
 /// 合并结果 → 原子写回；返回条目随写回携带净化诊断（仅在非空时附加）。
+/// 完成恢复即报告给外层边界，后续目标缺失或冲突拒绝仍保留观察。
 fn update_meta_with(
     library: &cap_std::fs::Dir,
     id: &str,
     patch: &Value,
+    report: &mut dyn FnMut(&crate::library_journal::Recovery),
 ) -> Result<Value, LibraryError> {
     validate_meta_patch(patch).map_err(LibraryError::invalid)?;
     let tags = normalize_tags(patch.get("tags"));
     let recovery = crate::library_journal::recover(library)?;
+    report(&recovery);
     if recovery.read_only {
         return Err(LibraryError::refused(
             "删除日志异常，库写入/删除已暂停：须人工修复 asset-delete-journal.json",
@@ -444,8 +459,12 @@ fn update_meta_with(
 pub fn update_library_asset(app: AppHandle, id: String, patch: Value) -> Result<Value, String> {
     validate_asset_id(&id)?;
     let library = library_root(&app).map_err(|e| e.to_string())?;
-    diagnostics::with_snapshot(&library, |library| update_meta_with(library, &id, &patch))
-        .map_err(|e| e.to_string())
+    diagnostics::with_snapshot(
+        &library,
+        |library, report| update_meta_with(library, &id, &patch, report),
+        |snapshot| diagnostics::publish_recovery(&app, snapshot),
+    )
+    .map_err(|e| e.to_string())
 }
 
 pub(crate) mod diagnostics;

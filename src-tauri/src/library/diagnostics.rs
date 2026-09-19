@@ -7,10 +7,11 @@ use cap_std::fs::Dir;
 use serde_json::Value;
 
 use super::error::LibraryError;
-use crate::library_journal::{library_file_lock, library_op_lock};
+use crate::library_journal::Recovery;
 
 mod recovery_events;
 pub(crate) use recovery_events::{publish_recovery, with_recovery_snapshot};
+use recovery_events::{with_observations, RecoverySnapshot};
 
 /// 与原生进程同寿命；所有诊断生产者共用。前端随原生进程重启建立新会话。
 static LAST_REVISION: AtomicU64 = AtomicU64::new(0);
@@ -28,26 +29,34 @@ fn reserve_revision(counter: &AtomicU64) -> Result<u64, LibraryError> {
 }
 
 /// 六个诊断命令的共同执行边界（列表也供组列表消费）；锁内生成完整响应，
-/// 按实际库操作顺序标号。错误原样传播，不发布清空状态；序号以十进制字符串
-/// 传递，避免 JS number 超过安全整数后丢失顺序。文件锁仍覆盖操作全过程。
+/// 按实际库操作顺序标号。业务失败仍经事件发布已完成恢复；未完成恢复不
+/// 伪造快照。成功只返回最终响应，避免前置恢复事件覆盖删除等后续变更。
 pub(super) fn with_snapshot(
     library: &Dir,
-    operation: impl FnOnce(&Dir) -> Result<Value, LibraryError>,
+    operation: impl FnOnce(&Dir, &mut dyn FnMut(&Recovery)) -> Result<Value, LibraryError>,
+    publish: impl FnOnce(RecoverySnapshot),
 ) -> Result<Value, LibraryError> {
-    let _op = library_op_lock();
-    let _file_lock = library_file_lock(library)?;
-    let revision = reserve_revision(&LAST_REVISION)?;
-    let mut response = operation(library)?;
-    let object = response
-        .as_object_mut()
-        .ok_or_else(|| LibraryError::Corrupt {
-            detail: "图库诊断响应必须为对象".into(),
-        })?;
-    object.insert(
-        "diagnosticsRevision".into(),
-        Value::String(revision.to_string()),
-    );
-    Ok(response)
+    with_observations(
+        library,
+        |dir, report, revision| {
+            let mut response = operation(dir, report)?;
+            let object = response
+                .as_object_mut()
+                .ok_or_else(|| LibraryError::Corrupt {
+                    detail: "图库诊断响应必须为对象".into(),
+                })?;
+            object.insert(
+                "diagnosticsRevision".into(),
+                Value::String(revision.to_string()),
+            );
+            Ok(response)
+        },
+        |result, snapshot| {
+            if result.is_err() {
+                publish(snapshot);
+            }
+        },
+    )
 }
 
 #[cfg(test)]

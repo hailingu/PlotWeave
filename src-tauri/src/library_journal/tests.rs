@@ -15,7 +15,7 @@ fn delete_commits_index_and_quarantines_media() {
         &library,
         &json!({ "assets": by_id([entry("la-1", "assets/la-1.png")]), "groups": by_id([]) }),
     );
-    let out = delete_asset_transacted(&cap(&library), "la-1").expect("删除应成功");
+    let out = delete_asset_transacted(&cap(&library), "la-1", &mut |_| {}).expect("删除应成功");
     assert!(
         fs::metadata(library.join("assets").join("la-1.png")).is_err(),
         "原路径应清空"

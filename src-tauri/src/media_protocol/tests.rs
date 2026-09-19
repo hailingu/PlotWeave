@@ -214,6 +214,7 @@ fn media_bytes_serves_indexed_asset() {
         "image/png",
         "character",
         b"PNGDATA",
+        &mut |_| {},
     )
     .expect("导入应成功");
     let id = e["id"].as_str().expect("id 缺失");
@@ -227,7 +228,15 @@ fn media_bytes_serves_indexed_asset() {
 #[test]
 fn media_bytes_refuses_unknown_or_poisoned_entries() {
     let (library, root) = temp_fixture();
-    put_asset_with(&cap(&library), "a.png", "image/png", "other", b"A").expect("导入应成功");
+    put_asset_with(
+        &cap(&library),
+        "a.png",
+        "image/png",
+        "other",
+        b"A",
+        &mut |_| {},
+    )
+    .expect("导入应成功");
     assert!(media_read(&cap(&library), "la-missing").is_err());
     // relPath 指向索引自身的投毒条目在净化读取时被隔离 → 按不存在拒绝
     write_index_raw(
@@ -392,8 +401,15 @@ fn media_read_gate_bounds_concurrent_reads() {
 fn media_read_permit_survives_until_caller_releases() {
     let gate = MediaReadGate::new(1);
     let (library, root) = temp_fixture();
-    let e =
-        put_asset_with(&cap(&library), "a.png", "image/png", "other", b"A").expect("导入应成功");
+    let e = put_asset_with(
+        &cap(&library),
+        "a.png",
+        "image/png",
+        "other",
+        b"A",
+        &mut |_| {},
+    )
+    .expect("导入应成功");
     let id = e["id"].as_str().expect("id 缺失").to_string();
     let (mime, file) = open_media_with(&cap(&library), &id, &mut |_| {}).expect("锁内打开应成功");
     let (mime, bytes, permit) =
@@ -418,8 +434,15 @@ fn media_read_permit_survives_until_caller_releases() {
 #[test]
 fn media_read_consumes_identity_bound_handle_outside_locks() {
     let (library, root) = temp_fixture();
-    let e =
-        put_asset_with(&cap(&library), "a.png", "image/png", "other", b"A").expect("导入应成功");
+    let e = put_asset_with(
+        &cap(&library),
+        "a.png",
+        "image/png",
+        "other",
+        b"A",
+        &mut |_| {},
+    )
+    .expect("导入应成功");
     let id = e["id"].as_str().expect("id 缺失").to_string();
     let (mime, file) = open_media_with(&cap(&library), &id, &mut |_| {}).expect("锁内打开应成功");
     assert_eq!(mime, "image/png");
@@ -450,8 +473,15 @@ fn media_failure_diagnostic_carries_cause_with_label() {
 #[test]
 fn media_response_maps_hit_and_miss() {
     let (library, root) = temp_fixture();
-    let e =
-        put_asset_with(&cap(&library), "a.png", "image/png", "other", b"A").expect("导入应成功");
+    let e = put_asset_with(
+        &cap(&library),
+        "a.png",
+        "image/png",
+        "other",
+        b"A",
+        &mut |_| {},
+    )
+    .expect("导入应成功");
     let id = e["id"].as_str().expect("id 缺失");
     let hit = media_http_response(media_read(&cap(&library), id));
     assert_eq!(hit.status(), tauri::http::StatusCode::OK);

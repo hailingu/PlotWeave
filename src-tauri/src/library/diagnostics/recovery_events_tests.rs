@@ -28,25 +28,39 @@ impl Fixture {
     }
 
     fn put(&self, name: &str) -> Value {
-        with_snapshot(&self.library, |dir| {
-            put_asset_with(dir, name, "image/png", "reference", b"original")
-        })
+        with_snapshot(
+            &self.library,
+            |dir, report| put_asset_with(dir, name, "image/png", "reference", b"original", report),
+            |_| {},
+        )
         .unwrap()
     }
 
     fn list(&self) -> Value {
-        with_snapshot(&self.library, |dir| {
-            let (mut index, warnings) = list_assets_with(dir)?;
-            index["warnings"] = json!(warnings);
-            Ok(index)
-        })
+        with_snapshot(
+            &self.library,
+            |dir, report| {
+                let (mut index, warnings) = list_assets_with(dir, report)?;
+                index["warnings"] = json!(warnings);
+                Ok(index)
+            },
+            |_| {},
+        )
         .unwrap()
     }
 
     fn delete(&self, asset: &Value) -> PathBuf {
-        with_snapshot(&self.library, |dir| {
-            crate::library_journal::delete_asset_transacted(dir, asset["id"].as_str().unwrap())
-        })
+        with_snapshot(
+            &self.library,
+            |dir, report| {
+                crate::library_journal::delete_asset_transacted(
+                    dir,
+                    asset["id"].as_str().unwrap(),
+                    report,
+                )
+            },
+            |_| {},
+        )
         .unwrap();
         let journal: Value = serde_json::from_slice(
             &fs::read(self.root.join("library/asset-delete-journal.json")).unwrap(),

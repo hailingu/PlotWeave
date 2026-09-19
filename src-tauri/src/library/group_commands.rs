@@ -13,10 +13,11 @@ use crate::library_fs::{read_index_capped, validate_asset_id, write_index};
 
 /// 组写入内核（句柄域，§7.2 库写边界）：完整形状校验 → 归一化读取基线 →
 /// 改 kind 冲突复核（成员资产 groupId 指向该组且 kind 不一致即拒绝）→
-/// 原子写回；返回写入的组条目。
+/// 原子写回；返回写入的组条目，后续拒绝不影响已完成恢复的显式报告。
 pub(crate) fn upsert_group_with(
     library: &cap_std::fs::Dir,
     group: &Value,
+    report: &mut dyn FnMut(&crate::library_journal::Recovery),
 ) -> Result<Value, LibraryError> {
     let normalized_group =
         crate::library_index::validate_group_for_write(group).map_err(LibraryError::invalid)?;
@@ -26,6 +27,7 @@ pub(crate) fn upsert_group_with(
         .to_string();
     let gkind = normalized_group["kind"].as_str().expect("校验后 kind 必在");
     let recovery = crate::library_journal::recover(library)?;
+    report(&recovery);
     if recovery.read_only {
         return Err(LibraryError::refused(
             "删除日志异常，库写入/删除已暂停：须人工修复 asset-delete-journal.json",
@@ -81,13 +83,15 @@ pub(crate) fn upsert_group_with(
 }
 
 /// 组删除内核（句柄域，§7.2）：组存在 → 同次原子写删组并剥离成员资产的
-/// groupId（不留悬空编组引用）；返回响应带净化诊断。
+/// groupId（不留悬空编组引用）；返回响应带净化诊断，定位前先报告恢复观察。
 pub(crate) fn delete_group_with(
     library: &cap_std::fs::Dir,
     id: &str,
+    report: &mut dyn FnMut(&crate::library_journal::Recovery),
 ) -> Result<Value, LibraryError> {
     validate_asset_id(id).map_err(LibraryError::invalid)?;
     let recovery = crate::library_journal::recover(library)?;
+    report(&recovery);
     if recovery.read_only {
         return Err(LibraryError::refused(
             "删除日志异常，库写入/删除已暂停：须人工修复 asset-delete-journal.json",
@@ -133,12 +137,22 @@ pub(crate) fn delete_group_with(
 #[tauri::command]
 pub fn upsert_library_group(app: AppHandle, group: Value) -> Result<Value, String> {
     let library = library_root(&app).map_err(|e| e.to_string())?;
-    with_snapshot(&library, |library| upsert_group_with(library, &group)).map_err(|e| e.to_string())
+    with_snapshot(
+        &library,
+        |library, report| upsert_group_with(library, &group, report),
+        |snapshot| super::diagnostics::publish_recovery(&app, snapshot),
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// 组删除命令：原子删除组并剥离成员资产的 groupId。
 #[tauri::command]
 pub fn delete_library_group(app: AppHandle, id: String) -> Result<Value, String> {
     let library = library_root(&app).map_err(|e| e.to_string())?;
-    with_snapshot(&library, |library| delete_group_with(library, &id)).map_err(|e| e.to_string())
+    with_snapshot(
+        &library,
+        |library, report| delete_group_with(library, &id, report),
+        |snapshot| super::diagnostics::publish_recovery(&app, snapshot),
+    )
+    .map_err(|e| e.to_string())
 }

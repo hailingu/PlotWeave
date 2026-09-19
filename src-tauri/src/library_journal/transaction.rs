@@ -17,22 +17,32 @@ use crate::library_fs::{
 use crate::store::{asset_stat, new_id};
 
 /// 删除事务（§7.2 四步）：返回携带 warnings 与 cleanupPending 的响应负载。
-pub(crate) fn delete_asset_transacted(library: &CapDir, id: &str) -> Result<Value, LibraryError> {
+/// 先报告成功恢复的观察，后续拒绝或 I/O 失败由外层发布该诊断。
+pub(crate) fn delete_asset_transacted(
+    library: &CapDir,
+    id: &str,
+    report: &mut dyn FnMut(&Recovery),
+) -> Result<Value, LibraryError> {
     #[cfg(not(unix))]
     {
-        let _ = (library, id);
+        let _ = (library, id, report);
         return Err(LibraryError::refused("平台缺少文件身份能力，删除暂不可用"));
     }
     #[cfg(unix)]
     {
-        delete_asset_transacted_unix(library, id)
+        delete_asset_transacted_unix(library, id, report)
     }
 }
 
 #[cfg(unix)]
-fn delete_asset_transacted_unix(library: &CapDir, id: &str) -> Result<Value, LibraryError> {
+fn delete_asset_transacted_unix(
+    library: &CapDir,
+    id: &str,
+    report: &mut dyn FnMut(&Recovery),
+) -> Result<Value, LibraryError> {
     guard_journal_headroom(library)?;
     let mut recovery = recover(library)?;
+    report(&recovery);
     if recovery.read_only {
         return Err(LibraryError::refused(
             "删除日志异常，库写入/删除已暂停：须人工修复 asset-delete-journal.json",
