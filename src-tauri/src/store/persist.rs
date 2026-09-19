@@ -270,11 +270,30 @@ pub(crate) fn atomic_write(root: &CapDir, file_name: &str, text: &str) -> Result
 /// 创建与 rename 之间进程被终止」的遗留——阈值内一律保留，绝不触碰
 /// 进行中的写入。
 const ORPHAN_TEMP_MIN_AGE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+/// 随机 id 段的精确归属（PR #217 评审修复）：临时名的 id 段只可能来自
+/// `new_id()`，其唯一产出形状是 `p-{ms:x}{rnd:x}-{seq:x}`——`p-` 前缀加
+/// 两段非空小写十六进制。宽字符集（字母数字/`-`/`_`）会把
+/// `.notes.backup.tmp` 之类外来文件误判为本协议临时文件并在超龄后
+/// 误删；归属收紧为生成器实际形状——误收方向是数据丢失，误拒方向
+/// 仅是遗留文件暂不回收（fail-safe）。长度上限沿用 id 域 64 字符。
+fn is_generated_temp_id(id: &str) -> bool {
+    let Some(rest) = id.strip_prefix("p-") else {
+        return false;
+    };
+    let Some((body, seq)) = rest.rsplit_once('-') else {
+        return false;
+    };
+    let lowercase_hex = |s: &str| {
+        !s.is_empty() && s.len() <= 62 && s.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'))
+    };
+    id.len() <= 64 && lowercase_hex(body) && lowercase_hex(seq)
+}
 /// 原子写临时名的归属判定（§10.2 命名协议 `.{目标名}.{new_id()}.tmp`）：
 /// 隐藏点前缀 + `.tmp` 后缀，去掉首尾后按最后一个 `.` 分出目标名段与
-/// 随机 id 段（目标名段自身可含 `.`，如 `p-1.json`）——id 段非空且长度
-/// 与字符集同项目/资产 id 域。不满足任一条件的条目与本协议无关，永不
-/// 进入清扫候选（用户放入应用数据目录的 `.tmp` 杂物不被误收）。
+/// 随机 id 段（目标名段自身可含 `.`，如 `p-1.json`）——目标名段非空，
+/// id 段须匹配生成器实际产出形状（见 [`is_generated_temp_id`]）。不满足
+/// 任一条件的条目与本协议无关，永不进入清扫候选（用户放入应用数据
+/// 目录的 `.tmp` 杂物不被误收）。
 fn is_atomic_temp_name(name: &str) -> bool {
     let Some(body) = name.strip_prefix('.').and_then(|s| s.strip_suffix(".tmp")) else {
         return false;
@@ -282,12 +301,7 @@ fn is_atomic_temp_name(name: &str) -> bool {
     let Some((target, id)) = body.rsplit_once('.') else {
         return false;
     };
-    !target.is_empty()
-        && !id.is_empty()
-        && id.len() <= 64
-        && id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    !target.is_empty() && is_generated_temp_id(id)
 }
 /// 清扫候选判定：归属可辨 + no-follow 归类为普通文件（符号链接/目录等
 /// 异型条目只跳过、绝不跟随）+ mtime 超龄（读取失败或未来时刻的脏时间
@@ -506,6 +520,19 @@ mod tests {
         fs::write(projects.join("notes.tmp"), b"x").expect("写外来 tmp");
         fs::write(projects.join(".no-sep.tmp"), b"x").expect("写无 id 段临时名");
         fs::write(projects.join(".a.b$d.tmp"), b"x").expect("写非法 id 段临时名");
+        // 外来 id 形状（PR #217 评审）：即便超龄也不归属——生成器唯一产出
+        // 形状是 p-<小写十六进制>-<小写十六进制>，宽字符集会把
+        // `.notes.backup.tmp` 之类外来文件误收为「本协议临时文件」误删
+        for foreign in [
+            ".notes.backup.tmp",
+            ".x.q-18f-0.tmp",
+            ".x.p-18f.tmp",
+            ".x.p--0.tmp",
+            ".x.p-18g-0.tmp",
+            ".x.p-18F-0.tmp",
+        ] {
+            plant_file_with_mtime(&projects, foreign, aged);
+        }
         let removed = sweep_orphan_temp_files(&cap(&projects), "测试目录");
         assert_eq!(removed, 1);
         assert!(
@@ -519,6 +546,12 @@ mod tests {
             "notes.tmp",
             ".no-sep.tmp",
             ".a.b$d.tmp",
+            ".notes.backup.tmp",
+            ".x.q-18f-0.tmp",
+            ".x.p-18f.tmp",
+            ".x.p--0.tmp",
+            ".x.p-18g-0.tmp",
+            ".x.p-18F-0.tmp",
         ] {
             assert!(projects.join(kept).exists(), "{kept} 不应被清理");
         }
@@ -547,6 +580,8 @@ mod tests {
         assert!(!is_sweep_candidate(".p-2.json.p-18f-1.tmp", &fresh_md, now));
         // 名字不归属：即便超龄普通文件也非候选
         assert!(!is_sweep_candidate("p-1.json", &aged_md, now));
+        // 外来 id 形状（PR #217 评审）：超龄普通文件同样非候选
+        assert!(!is_sweep_candidate(".notes.backup.tmp", &aged_md, now));
         // 目录条目即便名字归属也非候选（no-follow 归类拒绝异型）：目录
         // mtime 不可回拨，以远未来时刻旁路年龄门直接钉住归类门
         fs::create_dir(projects.join(".p-4.json.p-18f-3.tmp")).expect("建占位目录");
