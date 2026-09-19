@@ -100,6 +100,47 @@ const DOWNLOAD_REDIRECT_LIMIT: usize = 5;
 /// url 回退下载超时：只拉一帧 ≤32MiB 的图像，远小于生成超时。
 const IMAGE_DOWNLOAD_TIMEOUT_SECS: u64 = 120;
 
+/// 一次生成作业的总时间预算（issue #141）：覆盖生成 POST（含响应体
+/// 读取，受既有 300s 客户端上限约束，必然落在总预算内）与 url 回退
+/// 下载链（逐跳 DNS 解析 + 请求 + 响应体读取，最多 5 跳重定向可发
+/// 6 次请求，此前只有各请求独立的 120s 上限，整链无统一上界）。作业
+/// 开始时刻起算，剩余预算经 [`with_stage_budget`] 传入各阶段；预算
+/// 耗尽即放弃并按阶段给出诊断，产物不写回。
+const IMAGE_JOB_TOTAL_BUDGET_SECS: u64 = 600;
+
+/// 作业剩余预算：截止时刻已过即 None（调用方按预算耗尽处置）。
+fn remaining_budget(deadline: std::time::Instant) -> Option<std::time::Duration> {
+    deadline.checked_duration_since(std::time::Instant::now())
+}
+
+/// 统一作业预算内核（issue #141）：把剩余预算作为等待上界套在任一
+/// 阶段 future（DNS 解析 / 每跳请求 / 响应体读取）上——预算内完成则
+/// 结果与自身错误原样透传（不过度介入既有诊断），超时即放弃等待并
+/// 返回带阶段标签的 [`ProxyError::JobBudgetExhausted`]。诊断区分阶段，
+/// 满足验收「超时诊断区分阶段」。
+async fn with_stage_budget<T, F>(
+    deadline: std::time::Instant,
+    stage: &'static str,
+    fut: F,
+) -> Result<T, ProxyError>
+where
+    F: std::future::Future<Output = Result<T, ProxyError>>,
+{
+    let Some(remaining) = remaining_budget(deadline) else {
+        return Err(ProxyError::JobBudgetExhausted {
+            stage,
+            budget_secs: IMAGE_JOB_TOTAL_BUDGET_SECS,
+        });
+    };
+    match tokio::time::timeout(remaining, fut).await {
+        Ok(result) => result,
+        Err(_elapsed) => Err(ProxyError::JobBudgetExhausted {
+            stage,
+            budget_secs: IMAGE_JOB_TOTAL_BUDGET_SECS,
+        }),
+    }
+}
+
 /// IPv4 公网判定：环回（127/8）、RFC1918 私有（10/8、172.16/12、
 /// 192.168/16）、链路本地（169.254/16，含云元数据端点）、CGNAT
 /// （100.64/10）、0/8、未指定、多播、广播均非公网。
@@ -159,7 +200,16 @@ fn static_target_violation(url: &Url) -> Option<String> {
 /// 主机解析后要求全部地址为公网——`localhost` 等 DNS 名同样可能指向
 /// 环回/内网。注：本校验的解析与客户端连接各自解析存在固有的 DNS
 /// 再绑定窗口，此层为纵深防御而非绝对边界（威胁模型见 AGENTS.md）。
-async fn ensure_public_download_target(url: &Url) -> Result<(), ProxyError> {
+/// 解析受作业剩余预算约束（issue #141）。超时后的资源生命周期：`to_
+/// socket_addrs` 是阻塞系统调用，进入阻塞线程池后无法取消——预算耗尽
+/// 只是放弃等待（join future 被丢弃），解析任务本身继续运行至系统
+/// 解析器返回，其结果随即被丢弃；该任务不持有任何应用锁或可变状态，
+/// 仅临时占用一个阻塞池线程，线程池在其返回后回收，不遗留无限后台
+/// 任务。
+async fn ensure_public_download_target(
+    url: &Url,
+    deadline: std::time::Instant,
+) -> Result<(), ProxyError> {
     if let Some(reason) = static_target_violation(url) {
         return Err(ProxyError::DownloadRefused { detail: reason });
     }
@@ -178,28 +228,38 @@ async fn ensure_public_download_target(url: &Url) -> Result<(), ProxyError> {
         .port_or_known_default()
         .ok_or_else(|| refused("图像 url 端口未知".into()))?;
     let target = format!("{host}:{port}");
-    // std 解析是阻塞调用：挪到阻塞线程池，不占异步工作线程；解析失败的
-    // 底层原因并入文案（JoinError/io 一次性来源，不另设变体）
-    let addrs = tauri::async_runtime::spawn_blocking(move || target.to_socket_addrs())
-        .await
-        .map_err(|e| refused(format!("解析图像主机失败：{e}")))?
-        .map_err(|e| refused(format!("解析图像主机 {host} 失败：{e}")))?;
-    let list: Vec<std::net::SocketAddr> = addrs.collect();
-    if list.is_empty() {
-        return Err(refused(format!("图像主机 {host} 未解析到地址")));
-    }
-    if list.iter().any(|a| !is_public_ip(a.ip())) {
-        return Err(refused(format!(
-            "图像主机 {host} 解析到非公网地址，已拒绝下载"
-        )));
-    }
-    Ok(())
+    // std 解析是阻塞调用：挪到阻塞线程池，不占异步工作线程；等待上界
+    // 为作业剩余预算（内核见 with_stage_budget——超时只放弃 join，
+    // 阻塞任务生命周期见函数文档）
+    with_stage_budget(deadline, "解析图像主机", async {
+        tauri::async_runtime::spawn_blocking(move || target.to_socket_addrs())
+            .await
+            .map_err(|e| refused(format!("解析图像主机失败：{e}")))?
+            .map_err(|e| refused(format!("解析图像主机 {host} 失败：{e}")))
+            .map(|addrs| addrs.collect::<Vec<std::net::SocketAddr>>())
+    })
+    .await
+    .and_then(|list| {
+        if list.is_empty() {
+            Err(refused(format!("图像主机 {host} 未解析到地址")))
+        } else if list.iter().any(|a| !is_public_ip(a.ip())) {
+            Err(refused(format!(
+                "图像主机 {host} 解析到非公网地址，已拒绝下载"
+            )))
+        } else {
+            Ok(())
+        }
+    })
 }
 
 /// url 成员回退下载：目标与每跳重定向均过公网边界校验（仅 http(s)、
 /// 环回/私网/链路本地/CGNAT 等一律拒绝）；禁用自动重定向、逐跳显式
 /// 复验（上限 DOWNLOAD_REDIRECT_LIMIT 跳）；字节仍按魔数定型 MIME。
-async fn fetch_image_url(url: &str) -> Result<Vec<u8>, ProxyError> {
+/// 整链受作业总预算约束（issue #141）：逐跳 DNS 解析、请求与响应体
+/// 读取的等待上界均为作业剩余预算（`deadline`，由命令在作业开始时
+/// 起算传入），预算耗尽按阶段给出诊断并放弃——各请求的
+/// IMAGE_DOWNLOAD_TIMEOUT_SECS 仍作单跳兜底。
+async fn fetch_image_url(url: &str, deadline: std::time::Instant) -> Result<Vec<u8>, ProxyError> {
     let refused = |detail: String| ProxyError::DownloadRefused { detail };
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(IMAGE_DOWNLOAD_TIMEOUT_SECS))
@@ -211,15 +271,18 @@ async fn fetch_image_url(url: &str) -> Result<Vec<u8>, ProxyError> {
         })?;
     let mut current: Url = url.parse().map_err(|_| refused("图像 url 非法".into()))?;
     for _ in 0..=DOWNLOAD_REDIRECT_LIMIT {
-        ensure_public_download_target(&current).await?;
-        let response = client
-            .get(current.clone())
-            .send()
-            .await
-            .map_err(|e| ProxyError::Send {
-                context: "下载图像失败".into(),
-                source: e,
-            })?;
+        ensure_public_download_target(&current, deadline).await?;
+        let response = with_stage_budget(deadline, "下载图像", async {
+            client
+                .get(current.clone())
+                .send()
+                .await
+                .map_err(|e| ProxyError::Send {
+                    context: "下载图像失败".into(),
+                    source: e,
+                })
+        })
+        .await?;
         if response.status().is_redirection() {
             let location = response
                 .headers()
@@ -232,7 +295,12 @@ async fn fetch_image_url(url: &str) -> Result<Vec<u8>, ProxyError> {
             continue;
         }
         let status = response.status();
-        let bytes = read_bytes_capped(response, GENERATED_IMAGE_MAX_BYTES).await?;
+        let bytes = with_stage_budget(
+            deadline,
+            "读取图像",
+            read_bytes_capped(response, GENERATED_IMAGE_MAX_BYTES),
+        )
+        .await?;
         if !status.is_success() {
             return Err(ProxyError::DownloadStatus(status));
         }
@@ -271,6 +339,9 @@ fn generation_request_body(model: &str, prompt: &str, size: &str) -> Value {
 /// 卸载丢结果窗口。
 #[tauri::command]
 pub async fn llm_image_generate(app: AppHandle, request: ImageGenRequest) -> Result<Value, String> {
+    // 作业总预算自命令进入时刻起算（issue #141）：覆盖 POST 与下载链
+    let job_deadline =
+        std::time::Instant::now() + std::time::Duration::from_secs(IMAGE_JOB_TOTAL_BUDGET_SECS);
     let ImageGenRequest {
         project_id,
         job_id,
@@ -329,7 +400,9 @@ pub async fn llm_image_generate(app: AppHandle, request: ImageGenRequest) -> Res
         Some(b) => b,
         None => {
             let url = image_url_of(&parsed).ok_or("服务未返回图像内容")?;
-            fetch_image_url(&url).await.map_err(|e| e.to_string())?
+            fetch_image_url(&url, job_deadline)
+                .await
+                .map_err(|e| e.to_string())?
         }
     };
     if bytes.len() > GENERATED_IMAGE_MAX_BYTES {
@@ -518,5 +591,127 @@ mod tests {
         assert!(
             static_target_violation(&"http://cdn.example.test/a.png".parse().unwrap()).is_none()
         );
+    }
+
+    #[test]
+    fn remaining_budget_bounds_job_stages() {
+        let future = std::time::Instant::now() + std::time::Duration::from_secs(600);
+        assert!(remaining_budget(future).is_some(), "未到期预算应可用");
+        let past = std::time::Instant::now() - std::time::Duration::from_secs(1);
+        assert!(remaining_budget(past).is_none(), "已过期预算应耗尽");
+    }
+
+    /// 受控慢响应（issue #141）：挂起 future 与剩余预算赛跑——统一预算
+    /// 内核必须在预算耗尽时放弃等待并保留阶段标签；预算内的快 future 与
+    /// 自身错误原样透传（不过度介入）。
+    #[test]
+    fn with_stage_budget_times_out_hanging_future_and_labels_stage() {
+        // 短预算（50ms）驱动超时路径：受控测试不等真实预算
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(50);
+        let started = std::time::Instant::now();
+        let err = tauri::async_runtime::block_on(with_stage_budget(
+            deadline,
+            "测试阶段",
+            std::future::pending::<Result<(), ProxyError>>(),
+        ))
+        .expect_err("挂起 future 应在预算耗尽时被放弃");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "预算内核应在短预算内放弃等待，实际等待 {:?}",
+            started.elapsed()
+        );
+        assert!(
+            matches!(
+                err,
+                ProxyError::JobBudgetExhausted {
+                    stage: "测试阶段",
+                    ..
+                }
+            ),
+            "实际错误：{err:?}"
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(600);
+        let ok = tauri::async_runtime::block_on(with_stage_budget(deadline, "测试阶段", async {
+            Ok::<_, ProxyError>(7)
+        }))
+        .expect("预算内完成应透传");
+        assert_eq!(ok, 7);
+        let inner =
+            tauri::async_runtime::block_on(with_stage_budget(deadline, "测试阶段", async {
+                Err::<(), _>(ProxyError::InvalidResponse {
+                    detail: "内部错误".into(),
+                })
+            }))
+            .expect_err("预算内的自身错误应原样透传");
+        assert!(
+            matches!(inner, ProxyError::InvalidResponse { .. }),
+            "实际错误：{inner:?}"
+        );
+    }
+
+    /// 作业总预算（issue #141）：预算已耗尽时，下载链在任何网络请求与
+    /// DNS 之前即拒绝（公网字面量目标，不触网）——产物无从产生，更不会
+    /// 写回；诊断标明阶段与总预算。
+    #[test]
+    fn download_chain_rejects_expired_budget_before_any_request() {
+        let deadline = std::time::Instant::now() - std::time::Duration::from_secs(1);
+        let err =
+            tauri::async_runtime::block_on(fetch_image_url("https://8.8.8.8/a.png", deadline))
+                .expect_err("预算耗尽应拒绝");
+        assert!(
+            matches!(
+                err,
+                ProxyError::JobBudgetExhausted {
+                    stage: "下载图像",
+                    ..
+                }
+            ),
+            "实际错误：{err:?}"
+        );
+        let shown = err.to_string();
+        assert!(shown.contains("总预算"), "实际诊断：{shown}");
+        assert!(shown.contains("下载图像"), "诊断应标明阶段：{shown}");
+    }
+
+    /// DNS 阶段预算门（issue #141）：预算耗尽时在解析器之前拒绝——
+    /// 不发起 spawn_blocking 解析（域名主机，静态层不拒绝）；诊断标明
+    /// 解析阶段。
+    #[test]
+    fn dns_budget_gate_precedes_resolver() {
+        let deadline = std::time::Instant::now() - std::time::Duration::from_secs(1);
+        let url: Url = "http://cdn.example.test/a.png".parse().expect("合法 url");
+        let err = tauri::async_runtime::block_on(ensure_public_download_target(&url, deadline))
+            .expect_err("预算耗尽应拒绝");
+        assert!(
+            matches!(
+                err,
+                ProxyError::JobBudgetExhausted {
+                    stage: "解析图像主机",
+                    ..
+                }
+            ),
+            "实际错误：{err:?}"
+        );
+        let shown = err.to_string();
+        assert!(shown.contains("解析图像主机"), "实际诊断：{shown}");
+    }
+
+    /// 超时诊断区分阶段（issue #141 验收）：三个阶段的预算耗尽诊断
+    /// 互不相同且都携带总预算。
+    #[test]
+    fn budget_exhausted_diagnostics_distinguish_stages() {
+        let mk = |stage: &'static str| ProxyError::JobBudgetExhausted {
+            stage,
+            budget_secs: IMAGE_JOB_TOTAL_BUDGET_SECS,
+        };
+        let texts: Vec<String> = ["解析图像主机", "下载图像", "读取图像"]
+            .iter()
+            .map(|s| mk(s).to_string())
+            .collect();
+        assert_ne!(texts[0], texts[1], "不同阶段不得共享同一诊断");
+        assert_ne!(texts[1], texts[2], "不同阶段不得共享同一诊断");
+        for t in &texts {
+            assert!(t.contains(&IMAGE_JOB_TOTAL_BUDGET_SECS.to_string()), "{t}");
+        }
     }
 }

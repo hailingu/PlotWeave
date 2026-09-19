@@ -100,6 +100,13 @@ pub(crate) enum ProxyError {
     /// 下载目标公网边界拒绝（协议/主机分类/解析/重定向形态）与下载路径
     /// 输入非法——决策类失败；解析失败的底层原因并入文案，不另设变体。
     DownloadRefused { detail: String },
+    /// 图像作业总预算耗尽（issue #141）：`stage` 标明预算耗尽的阶段
+    /// （解析图像主机／下载图像／读取图像），`budget_secs` 为一次作业的
+    /// 总预算秒数——诊断区分阶段，不再只有各请求独立超时。
+    JobBudgetExhausted {
+        stage: &'static str,
+        budget_secs: u64,
+    },
 }
 
 /// 展示边界契约：文案与历史 `format!` 输出逐字一致，前端可见诊断不变。
@@ -132,6 +139,12 @@ impl std::fmt::Display for ProxyError {
             ProxyError::InvalidJson { context, source } => write!(f, "{context}：{source}"),
             ProxyError::InvalidResponse { detail } => write!(f, "{detail}"),
             ProxyError::DownloadRefused { detail } => write!(f, "{detail}"),
+            ProxyError::JobBudgetExhausted { stage, budget_secs } => {
+                write!(
+                    f,
+                    "图像作业总预算（{budget_secs}s）已耗尽：{stage}阶段未能在剩余预算内完成"
+                )
+            }
         }
     }
 }
@@ -149,7 +162,8 @@ impl std::error::Error for ProxyError {
             | ProxyError::Status { .. }
             | ProxyError::DownloadStatus(_)
             | ProxyError::InvalidResponse { .. }
-            | ProxyError::DownloadRefused { .. } => None,
+            | ProxyError::DownloadRefused { .. }
+            | ProxyError::JobBudgetExhausted { .. } => None,
         }
     }
 }

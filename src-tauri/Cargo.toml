@@ -25,6 +25,9 @@ serde_json = "1.0.151"
 # 库/项目媒体均走 pwmedia 自定义协议（数据模型 §7.1）
 tauri = { version = "2", features = [] }
 cap-std = "4.0.3"
+# issue #141 作业总预算：tokio::time::timeout（tauri/reqwest 已引入同一
+# tokio 并启用 time——本依赖仅使其可直接引用，不新增编译产物）
+tokio = { version = "1", default-features = false, features = ["time"] }
 
 [[test]]
 name = "native_quit"
