@@ -100,6 +100,124 @@ const DOWNLOAD_REDIRECT_LIMIT: usize = 5;
 /// url 回退下载超时：只拉一帧 ≤32MiB 的图像，远小于生成超时。
 const IMAGE_DOWNLOAD_TIMEOUT_SECS: u64 = 120;
 
+/// 一次生成作业的总时间预算（issue #141）：覆盖 provider 凭据读取
+/// （阻塞线程池）、生成 POST（含响应体读取）与 url 回退下载链（逐跳
+/// DNS 解析 + 请求 + 响应体读取，最多 5 跳重定向可发 6 次请求）。作业
+/// 开始时刻起算，各阶段等待上界均为剩余预算（[`with_stage_budget`] /
+/// [`bounded_key_load`]）；预算耗尽即放弃并按阶段给出诊断，产物不写
+/// 回，也不发出可能计费的请求。逐跳 120s 与 POST 300s 客户端上限保留
+/// 为单阶段兜底。
+const IMAGE_JOB_TOTAL_BUDGET_SECS: u64 = 600;
+
+/// 作业剩余预算：截止时刻已过即 None（调用方按预算耗尽处置）。
+fn remaining_budget(deadline: std::time::Instant) -> Option<std::time::Duration> {
+    deadline.checked_duration_since(std::time::Instant::now())
+}
+
+/// 统一作业预算内核（issue #141）：把剩余预算作为等待上界套在任一
+/// 阶段 future（生成 POST + 限读 / 每跳请求 / 响应体读取）上——预算
+/// 内完成则结果与自身错误原样透传（不过度介入既有诊断），超时即
+/// 放弃等待并返回带阶段标签的 [`ProxyError::JobBudgetExhausted`]。诊断
+/// 区分阶段，满足验收「超时诊断区分阶段」。DNS 解析不走本内核：不可
+/// 取消的阻塞解析由专用线程边界隔离（见 [`DNS_RESOLVE_MAX_IN_FLIGHT`]）。
+async fn with_stage_budget<T, F>(
+    deadline: std::time::Instant,
+    stage: &'static str,
+    fut: F,
+) -> Result<T, ProxyError>
+where
+    F: std::future::Future<Output = Result<T, ProxyError>>,
+{
+    let Some(remaining) = remaining_budget(deadline) else {
+        return Err(ProxyError::JobBudgetExhausted {
+            stage,
+            budget_secs: IMAGE_JOB_TOTAL_BUDGET_SECS,
+        });
+    };
+    match tokio::time::timeout(remaining, fut).await {
+        Ok(result) => result,
+        Err(_elapsed) => Err(ProxyError::JobBudgetExhausted {
+            stage,
+            budget_secs: IMAGE_JOB_TOTAL_BUDGET_SECS,
+        }),
+    }
+}
+
+/// 不可取消 DNS 解析的并发上限（issue #141，PR #220 第四轮评审）：
+/// `to_socket_addrs` 无法取消——超时只是放弃等待，解析线程仍继续运行。
+/// 解析不占用 Tokio 阻塞池（连续挂起会耗尽池、饿死凭据读取等其他
+/// 阻塞工作），改投自带严格并发上限的专用线程：在途计数到顶即
+/// fail-fast（解析繁忙），线程返回即归还额度（可恢复）。上限取 2：
+/// 图像生成是低频用户操作余量充足，连续挂起的泄漏被钉死在本常量个
+/// 线程内，不蔓延到任何共享池。
+const DNS_RESOLVE_MAX_IN_FLIGHT: usize = 2;
+
+/// 在途解析计数（专用线程的额度账本）：fetch_add/sub 配对，线程返回
+/// 即归还；挂起只表现为计数暂不归零（fail-fast 隔离其他工作）。
+static DNS_RESOLVE_IN_FLIGHT: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// 解析阶段的预算耗尽错误（复用 [`ProxyError::JobBudgetExhausted`]）。
+fn dns_budget_error() -> ProxyError {
+    ProxyError::JobBudgetExhausted {
+        stage: "解析图像主机",
+        budget_secs: IMAGE_JOB_TOTAL_BUDGET_SECS,
+    }
+}
+
+/// 有界解析内核（生产与测试共用，`resolve` 注入以便夹具替换）：专用
+/// 线程跑不可取消的解析，结果经 tokio 异步通道回传（`blocking_send`
+/// 在接收端被丢弃时立即返回，线程不会卡死）；等待侧不经任何阻塞池
+/// 任务，由 `timeout_at(绝对截止时间)` 约束（PR #220 第五轮评审——
+/// 阻塞池排队不会把等待拖过 deadline，也不存在按入队前陈旧相对时长
+/// 计时的窗口）。预算耗尽先于一切（不占用额度），在途到顶 fail-fast
+/// （解析繁忙），解析线程返回即归还额度（可恢复）。
+async fn resolve_host_bounded_with(
+    target: String,
+    host: &str,
+    deadline: std::time::Instant,
+    resolve: impl FnOnce(String) -> std::io::Result<Vec<std::net::SocketAddr>> + Send + 'static,
+) -> Result<Vec<std::net::SocketAddr>, ProxyError> {
+    use std::sync::atomic::Ordering;
+    if remaining_budget(deadline).is_none() {
+        return Err(dns_budget_error());
+    }
+    if DNS_RESOLVE_IN_FLIGHT.fetch_add(1, Ordering::SeqCst) >= DNS_RESOLVE_MAX_IN_FLIGHT {
+        DNS_RESOLVE_IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
+        return Err(ProxyError::DownloadRefused {
+            detail: "图像主机解析繁忙（并发解析已达上限），请稍后重试".into(),
+        });
+    }
+    let (tx, mut rx) = tauri::async_runtime::channel(1);
+    std::thread::spawn(move || {
+        let _ = tx.blocking_send(resolve(target));
+        DNS_RESOLVE_IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
+    });
+    let host = host.to_string();
+    match tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), rx.recv()).await {
+        Ok(Some(Ok(addrs))) => Ok(addrs),
+        Ok(Some(Err(io))) => Err(ProxyError::DownloadRefused {
+            detail: format!("解析图像主机 {host} 失败：{io}"),
+        }),
+        Ok(None) => Err(ProxyError::DownloadRefused {
+            detail: format!("解析图像主机 {host} 失败：解析线程异常终止"),
+        }),
+        Err(_) => Err(dns_budget_error()),
+    }
+}
+
+/// 生产解析入口：std 阻塞解析器投到专用线程（有界隔离见常量文档）。
+async fn resolve_host_bounded(
+    target: String,
+    host: &str,
+    deadline: std::time::Instant,
+) -> Result<Vec<std::net::SocketAddr>, ProxyError> {
+    resolve_host_bounded_with(target, host, deadline, |t| {
+        t.to_socket_addrs().map(|i| i.collect())
+    })
+    .await
+}
+
 /// IPv4 公网判定：环回（127/8）、RFC1918 私有（10/8、172.16/12、
 /// 192.168/16）、链路本地（169.254/16，含云元数据端点）、CGNAT
 /// （100.64/10）、0/8、未指定、多播、广播均非公网。
@@ -159,7 +277,17 @@ fn static_target_violation(url: &Url) -> Option<String> {
 /// 主机解析后要求全部地址为公网——`localhost` 等 DNS 名同样可能指向
 /// 环回/内网。注：本校验的解析与客户端连接各自解析存在固有的 DNS
 /// 再绑定窗口，此层为纵深防御而非绝对边界（威胁模型见 AGENTS.md）。
-async fn ensure_public_download_target(url: &Url) -> Result<(), ProxyError> {
+/// 解析受作业剩余预算约束（issue #141），且不可取消的阻塞解析被
+/// 隔离在严格并发上限的专用线程边界内（PR #220 第四轮评审，见
+/// [`DNS_RESOLVE_MAX_IN_FLIGHT`]）：挂起的解析线程不占用 Tokio 阻塞
+/// 池、不蔓延到凭据读取等其他阻塞工作，泄漏上限为常量个线程；等待
+/// 侧经异步通道由 `timeout_at(绝对截止时间)` 约束（第五轮评审——
+/// 阻塞池排队不会把等待拖过 deadline），额度随解析线程返回归还
+/// （可恢复）。
+async fn ensure_public_download_target(
+    url: &Url,
+    deadline: std::time::Instant,
+) -> Result<(), ProxyError> {
     if let Some(reason) = static_target_violation(url) {
         return Err(ProxyError::DownloadRefused { detail: reason });
     }
@@ -178,28 +306,26 @@ async fn ensure_public_download_target(url: &Url) -> Result<(), ProxyError> {
         .port_or_known_default()
         .ok_or_else(|| refused("图像 url 端口未知".into()))?;
     let target = format!("{host}:{port}");
-    // std 解析是阻塞调用：挪到阻塞线程池，不占异步工作线程；解析失败的
-    // 底层原因并入文案（JoinError/io 一次性来源，不另设变体）
-    let addrs = tauri::async_runtime::spawn_blocking(move || target.to_socket_addrs())
-        .await
-        .map_err(|e| refused(format!("解析图像主机失败：{e}")))?
-        .map_err(|e| refused(format!("解析图像主机 {host} 失败：{e}")))?;
-    let list: Vec<std::net::SocketAddr> = addrs.collect();
+    let list = resolve_host_bounded(target, host, deadline).await?;
     if list.is_empty() {
-        return Err(refused(format!("图像主机 {host} 未解析到地址")));
-    }
-    if list.iter().any(|a| !is_public_ip(a.ip())) {
-        return Err(refused(format!(
+        Err(refused(format!("图像主机 {host} 未解析到地址")))
+    } else if list.iter().any(|a| !is_public_ip(a.ip())) {
+        Err(refused(format!(
             "图像主机 {host} 解析到非公网地址，已拒绝下载"
-        )));
+        )))
+    } else {
+        Ok(())
     }
-    Ok(())
 }
 
 /// url 成员回退下载：目标与每跳重定向均过公网边界校验（仅 http(s)、
 /// 环回/私网/链路本地/CGNAT 等一律拒绝）；禁用自动重定向、逐跳显式
 /// 复验（上限 DOWNLOAD_REDIRECT_LIMIT 跳）；字节仍按魔数定型 MIME。
-async fn fetch_image_url(url: &str) -> Result<Vec<u8>, ProxyError> {
+/// 整链受作业总预算约束（issue #141）：逐跳 DNS 解析、请求与响应体
+/// 读取的等待上界均为作业剩余预算（`deadline`，由命令在作业开始时
+/// 起算传入），预算耗尽按阶段给出诊断并放弃——各请求的
+/// IMAGE_DOWNLOAD_TIMEOUT_SECS 仍作单跳兜底。
+async fn fetch_image_url(url: &str, deadline: std::time::Instant) -> Result<Vec<u8>, ProxyError> {
     let refused = |detail: String| ProxyError::DownloadRefused { detail };
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(IMAGE_DOWNLOAD_TIMEOUT_SECS))
@@ -211,15 +337,18 @@ async fn fetch_image_url(url: &str) -> Result<Vec<u8>, ProxyError> {
         })?;
     let mut current: Url = url.parse().map_err(|_| refused("图像 url 非法".into()))?;
     for _ in 0..=DOWNLOAD_REDIRECT_LIMIT {
-        ensure_public_download_target(&current).await?;
-        let response = client
-            .get(current.clone())
-            .send()
-            .await
-            .map_err(|e| ProxyError::Send {
-                context: "下载图像失败".into(),
-                source: e,
-            })?;
+        ensure_public_download_target(&current, deadline).await?;
+        let response = with_stage_budget(deadline, "下载图像", async {
+            client
+                .get(current.clone())
+                .send()
+                .await
+                .map_err(|e| ProxyError::Send {
+                    context: "下载图像失败".into(),
+                    source: e,
+                })
+        })
+        .await?;
         if response.status().is_redirection() {
             let location = response
                 .headers()
@@ -232,7 +361,12 @@ async fn fetch_image_url(url: &str) -> Result<Vec<u8>, ProxyError> {
             continue;
         }
         let status = response.status();
-        let bytes = read_bytes_capped(response, GENERATED_IMAGE_MAX_BYTES).await?;
+        let bytes = with_stage_budget(
+            deadline,
+            "读取图像",
+            read_bytes_capped(response, GENERATED_IMAGE_MAX_BYTES),
+        )
+        .await?;
         if !status.is_success() {
             return Err(ProxyError::DownloadStatus(status));
         }
@@ -269,8 +403,95 @@ fn generation_request_body(model: &str, prompt: &str, size: &str) -> Value {
 /// 协作式取消即放弃结果；落盘后在**命令内**完成 §9.3 预检（形状 +
 /// 实路径复验）——生成后到返回前不再跨命令边界，消除前端二次 IPC 的
 /// 卸载丢结果窗口。
+/// provider API key 读取（provider_secret 为同步阻塞访问：设置文件读取
+/// 与系统钥匙串）挪入阻塞线程池并受作业剩余预算约束（issue #141 评审
+/// ——总预算自命令进入起算，前置阻塞不得在预算耗尽后仍发起计费请求）。
+/// 阻塞任务不可取消：预算耗尽只是放弃等待，任务返回后结果被丢弃、不
+/// 持有应用锁（同 DNS 解析的资源生命周期）。`load` 的错误文案原样
+/// 透传；预算耗尽诊断标明读取凭据阶段。
+async fn bounded_key_load(
+    deadline: std::time::Instant,
+    load: impl FnOnce() -> Result<String, String> + Send + 'static,
+) -> Result<String, String> {
+    let budget = || {
+        ProxyError::JobBudgetExhausted {
+            stage: "读取凭据",
+            budget_secs: IMAGE_JOB_TOTAL_BUDGET_SECS,
+        }
+        .to_string()
+    };
+    let Some(remaining) = remaining_budget(deadline) else {
+        return Err(budget());
+    };
+    match tokio::time::timeout(remaining, tauri::async_runtime::spawn_blocking(load)).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(join)) => Err(format!("读取 API key 失败：{join}")),
+        Err(_) => Err(budget()),
+    }
+}
+
+/// 生成请求 → 图像字节（自 llm_image_generate 提取，PR #220 评审：命令
+/// 体超出 80 代码行硬上限）：POST 与响应体限读共同消费作业剩余预算
+/// （issue #141 评审——预算被前置工作耗尽时在 POST 之前拒绝，不发出
+/// 可能计费的请求）→ 读取后取消检查点（保持提取前位置与语义）→ 解析
+/// b64 优先，url 成员回退预算化下载链。错误统一转既有展示文案。
+async fn generate_image_bytes(
+    base_url: &str,
+    key: &str,
+    body: &Value,
+    job_id: &str,
+    job_deadline: std::time::Instant,
+) -> Result<Vec<u8>, String> {
+    let (status, response_url, text) = with_stage_budget(job_deadline, "生成请求", async {
+        let response = crate::provider_transport::post_json(
+            base_url,
+            "images/generations",
+            key,
+            body,
+            IMAGE_REQUEST_TIMEOUT_SECS,
+        )
+        .await?;
+        let status = response.status();
+        let response_url = response.url().clone();
+        // 展示边界转换（issue #45 首片）：文案与历史 format! 输出逐字一致
+        let text = read_text_capped(response, RESPONSE_BODY_MAX_BYTES)
+            .await
+            .map_err(ProxyError::Body)?;
+        Ok((status, response_url, text))
+    })
+    .await
+    .map_err(|error| match error {
+        // 保留生成入口既有的超时展示文案；聊天入口保留 SendTimeout 分类。
+        ProxyError::SendTimeout { source, .. } => format!("请求失败：{source}"),
+        other => other.to_string(),
+    })?;
+    if is_cancelled(job_id) {
+        clear_cancel(job_id);
+        return Err("已取消".into());
+    }
+    if !status.is_success() {
+        // 网关/代理回显请求 URL 或密钥时展示不泄露（issue #149）
+        let head = crate::http_util::redact_status_head(&text, key, &response_url);
+        return Err(format!("服务返回 {status}：{head}"));
+    }
+    let parsed: Value =
+        serde_json::from_str(&text).map_err(|e| format!("响应不是有效 JSON：{e}"))?;
+    match decode_b64_image(&parsed) {
+        Some(b) => Ok(b),
+        None => {
+            let url = image_url_of(&parsed).ok_or("服务未返回图像内容")?;
+            fetch_image_url(&url, job_deadline)
+                .await
+                .map_err(|e| e.to_string())
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn llm_image_generate(app: AppHandle, request: ImageGenRequest) -> Result<Value, String> {
+    // 作业总预算自命令进入时刻起算（issue #141）：覆盖 POST 与下载链
+    let job_deadline =
+        std::time::Instant::now() + std::time::Duration::from_secs(IMAGE_JOB_TOTAL_BUDGET_SECS);
     let ImageGenRequest {
         project_id,
         job_id,
@@ -291,47 +512,16 @@ pub async fn llm_image_generate(app: AppHandle, request: ImageGenRequest) -> Res
     if model.trim().is_empty() {
         return Err("未选择模型".into());
     }
-    let key = crate::prefs::provider_secret(&app, &provider_id)?;
-    let body = generation_request_body(&model, prompt, &size);
-    let response = crate::provider_transport::post_json(
-        &base_url,
-        "images/generations",
-        &key,
-        &body,
-        IMAGE_REQUEST_TIMEOUT_SECS,
-    )
-    .await
-    .map_err(|error| match error {
-        // 保留生成入口既有的超时展示文案；聊天入口保留 SendTimeout 分类。
-        ProxyError::SendTimeout { source, .. } => format!("请求失败：{source}"),
-        other => other.to_string(),
-    })?;
-    let status = response.status();
-    // issue #149：状态摘录脱敏需要本次请求 URL——read_text_capped 消费
-    // response 前先取出
-    let response_url = response.url().clone();
-    // 展示边界转换（issue #45 首片）：文案与历史 format! 输出逐字一致
-    let text = read_text_capped(response, RESPONSE_BODY_MAX_BYTES)
-        .await
-        .map_err(|e| e.to_string())?;
-    if is_cancelled(&job_id) {
-        clear_cancel(&job_id);
-        return Err("已取消".into());
-    }
-    if !status.is_success() {
-        // 网关/代理回显请求 URL 或密钥时展示不泄露（issue #149）
-        let head = crate::http_util::redact_status_head(&text, &key, &response_url);
-        return Err(format!("服务返回 {status}：{head}"));
-    }
-    let parsed: Value =
-        serde_json::from_str(&text).map_err(|e| format!("响应不是有效 JSON：{e}"))?;
-    let bytes = match decode_b64_image(&parsed) {
-        Some(b) => b,
-        None => {
-            let url = image_url_of(&parsed).ok_or("服务未返回图像内容")?;
-            fetch_image_url(&url).await.map_err(|e| e.to_string())?
-        }
+    let key = {
+        let app = app.clone();
+        bounded_key_load(job_deadline, move || {
+            crate::prefs::provider_secret(&app, &provider_id)
+        })
+        .await?
     };
+    let body = generation_request_body(&model, prompt, &size);
+    // POST 与下载链（含预算耗尽）的失败经同一展示文案上浮
+    let bytes = generate_image_bytes(&base_url, &key, &body, &job_id, job_deadline).await?;
     if bytes.len() > GENERATED_IMAGE_MAX_BYTES {
         return Err(format!(
             "生成图像超出大小上限（{GENERATED_IMAGE_MAX_BYTES} 字节）"
@@ -363,160 +553,4 @@ pub fn llm_image_cancel(job_id: String) -> Result<(), String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn sniff_matches_known_magics() {
-        assert_eq!(
-            sniff_image_mime(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A]),
-            Some("image/png")
-        );
-        assert_eq!(
-            sniff_image_mime(&[0xFF, 0xD8, 0xFF, 0xE0]),
-            Some("image/jpeg")
-        );
-        assert_eq!(
-            sniff_image_mime(b"RIFF\x00\x00\x00\x00WEBPVP8 "),
-            Some("image/webp")
-        );
-        assert_eq!(sniff_image_mime(b"GIF89a\x01\x00"), Some("image/gif"));
-        assert_eq!(sniff_image_mime(b"GIF87a\x01\x00"), Some("image/gif"));
-        assert_eq!(sniff_image_mime(b"<html>not an image</html>"), None);
-        assert_eq!(sniff_image_mime(b""), None);
-    }
-
-    #[test]
-    fn decode_b64_reads_data_member() {
-        // "QUJD" = "ABC"
-        let resp = json!({ "data": [{ "b64_json": "QUJD" }] });
-        assert_eq!(decode_b64_image(&resp).as_deref(), Some(b"ABC".as_slice()));
-        assert_eq!(decode_b64_image(&json!({ "data": [] })), None);
-        assert_eq!(
-            decode_b64_image(&json!({ "data": [{ "b64_json": 7 }] })),
-            None
-        );
-        assert_eq!(
-            decode_b64_image(&json!({ "data": [{ "b64_json": "!!!not-base64!!!" }] })),
-            None
-        );
-    }
-
-    #[test]
-    fn image_url_reads_string_member() {
-        let resp = json!({ "data": [{ "url": "https://cdn.example.test/a.png" }] });
-        assert_eq!(
-            image_url_of(&resp).as_deref(),
-            Some("https://cdn.example.test/a.png")
-        );
-        assert_eq!(image_url_of(&json!({ "data": [{}] })), None);
-        assert_eq!(image_url_of(&json!({ "data": [{ "url": 42 }] })), None);
-    }
-
-    #[test]
-    fn cancel_flags_register_and_clear() {
-        let job = format!("job-{}", crate::store::new_id());
-        assert!(!is_cancelled(&job));
-        // 与并行的中毒恢复用例共存（PR #219 评审）：静态表可能被并行
-        // 用例注入中毒，本用例的直接访问同样走恢复路径，保持套件确定性
-        crate::lock::recover_guard(cancelled_jobs().lock(), "生成取消登记表").insert(job.clone());
-        assert!(is_cancelled(&job));
-        clear_cancel(&job);
-        assert!(!is_cancelled(&job));
-    }
-
-    #[test]
-    fn cancel_registry_recovers_after_poison() {
-        // [issue #145](https://github.com/hailingu/PlotWeave/issues/145)：
-        // 取消表中毒恢复——持锁 panic 后，取消登记真实生效才报成功
-        // （不静默忽略却报成功），is_cancelled 如实回答。静态表此后保持
-        // 中毒状态，后续用例经同一恢复路径照常工作（透明恢复）
-        let job = format!("job-{}", crate::store::new_id());
-        std::thread::spawn(|| {
-            let _guard = cancelled_jobs().lock().expect("先取得锁");
-            panic!("测试注入的持锁 panic");
-        })
-        .join()
-        .expect_err("注入 panic 应发生");
-        llm_image_cancel(job.clone()).expect("中毒后取消登记仍应成功");
-        assert!(is_cancelled(&job), "中毒后取消登记须真实生效");
-        clear_cancel(&job);
-        assert!(!is_cancelled(&job), "中毒后清理须照常");
-    }
-
-    #[test]
-    fn request_body_omits_response_format() {
-        // GPT Image 系（gpt-image-1 等）不接受 response_format（携带即
-        // 400 unsupported parameter，生成前的主路径直接失败）
-        let body = generation_request_body("gpt-image-1", "雨夜霓虹", "1024x1024");
-        assert_eq!(
-            body,
-            json!({ "model": "gpt-image-1", "prompt": "雨夜霓虹", "size": "1024x1024" })
-        );
-        assert!(body.get("response_format").is_none());
-    }
-
-    #[test]
-    fn public_ip_allows_global_addresses() {
-        for s in [
-            "8.8.8.8",
-            "1.1.1.1",
-            "172.32.0.1",
-            "100.128.0.1",
-            "2606:4700::1111",
-            "2400:cb00::1",
-        ] {
-            let ip: std::net::IpAddr = s.parse().expect(s);
-            assert!(is_public_ip(ip), "{s} 应判定为公网");
-        }
-    }
-
-    #[test]
-    fn public_ip_rejects_private_and_special_ranges() {
-        for s in [
-            "127.0.0.1",
-            "10.0.0.1",
-            "172.16.0.1",
-            "172.31.255.255",
-            "192.168.1.1",
-            "169.254.169.254",
-            "0.0.0.0",
-            "0.1.2.3",
-            "100.64.0.1",
-            "100.127.255.255",
-            "224.0.0.1",
-            "255.255.255.255",
-            "::1",
-            "fe80::1",
-            "fd00::1",
-            "fc00::1",
-            "ff02::1",
-            "::ffff:127.0.0.1",
-            "::ffff:192.168.0.1",
-        ] {
-            let ip: std::net::IpAddr = s.parse().expect(s);
-            assert!(!is_public_ip(ip), "{s} 应判定为非公网");
-        }
-    }
-
-    #[test]
-    fn download_target_static_checks_reject_nonpublic_literals() {
-        for s in [
-            "http://127.0.0.1/a.png",
-            "http://[::1]/a.png",
-            "http://169.254.169.254/meta",
-            "https://10.0.0.5/a.png",
-            "ftp://8.8.8.8/a.png",
-            "file:///etc/passwd",
-        ] {
-            let url: Url = s.parse().expect(s);
-            assert!(static_target_violation(&url).is_some(), "{s} 应被静态拒绝");
-        }
-        // 公网 IP 字面量与域名（域名走解析复验，不在静态层拒绝）
-        assert!(static_target_violation(&"https://8.8.8.8/a.png".parse().unwrap()).is_none());
-        assert!(
-            static_target_violation(&"http://cdn.example.test/a.png".parse().unwrap()).is_none()
-        );
-    }
-}
+mod tests;
