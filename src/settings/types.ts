@@ -13,7 +13,7 @@
 export interface ProviderConfig {
   id: string
   label: string
-  /** OpenAI 兼容 Base URL（不含 /chat/completions）。 */
+  /** OpenAI 兼容 Base URL（不含 /chat/completions）；远程须 HTTPS，HTTP 仅限回环。 */
   baseUrl: string
   enabled: boolean
   /** 该 provider 下可选的模型 id 列表（用户维护）。 */

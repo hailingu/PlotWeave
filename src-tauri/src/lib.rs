@@ -33,6 +33,7 @@ mod media_protocol;
 #[cfg(target_os = "macos")]
 mod native_quit;
 mod prefs;
+mod provider_transport;
 mod seal;
 mod store;
 

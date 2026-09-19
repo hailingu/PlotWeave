@@ -294,19 +294,20 @@ pub async fn llm_image_generate(app: AppHandle, request: ImageGenRequest) -> Res
         return Err("未选择模型".into());
     }
     let key = crate::prefs::provider_secret(&app, &provider_id)?;
-    let url = format!("{}/images/generations", base_url.trim_end_matches('/'));
     let body = generation_request_body(&model, prompt, &size);
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(IMAGE_REQUEST_TIMEOUT_SECS))
-        .build()
-        .map_err(|e| format!("构造 HTTP 客户端失败：{e}"))?;
-    let response = client
-        .post(&url)
-        .bearer_auth(key)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("请求失败：{e}"))?;
+    let response = crate::provider_transport::post_json(
+        &base_url,
+        "images/generations",
+        &key,
+        &body,
+        IMAGE_REQUEST_TIMEOUT_SECS,
+    )
+    .await
+    .map_err(|error| match error {
+        // 保留生成入口既有的超时展示文案；聊天入口保留 SendTimeout 分类。
+        ProxyError::SendTimeout { source, .. } => format!("请求失败：{source}"),
+        other => other.to_string(),
+    })?;
     let status = response.status();
     // 展示边界转换（issue #45 首片）：文案与历史 format! 输出逐字一致
     let text = read_text_capped(response, RESPONSE_BODY_MAX_BYTES)

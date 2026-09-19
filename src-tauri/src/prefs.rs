@@ -21,7 +21,6 @@ use std::fs;
 use std::io;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use tauri::{AppHandle, Manager};
 
@@ -147,6 +146,9 @@ fn save_prefs_in(dir: &Path, prefs: serde_json::Value) -> Result<(), String> {
 #[cfg(test)]
 mod save_tests;
 
+#[cfg(test)]
+mod transport_tests;
+
 /// provider id 约束：钥匙串账号安全字符集。
 fn validate_provider_id(id: &str) -> Result<(), String> {
     let ok = !id.is_empty()
@@ -223,7 +225,6 @@ async fn chat_completion(
     key: &str,
     timeout_secs: u64,
 ) -> Result<serde_json::Value, ProxyError> {
-    let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     let mut body = serde_json::json!({ "model": model, "messages": messages, "stream": false });
     if let Some(tools) = tools {
         if tools.is_array() && !tools.as_array().is_none_or(|t| t.is_empty()) {
@@ -231,32 +232,14 @@ async fn chat_completion(
             body["tool_choice"] = serde_json::json!("auto");
         }
     }
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(timeout_secs))
-        .build()
-        .map_err(|e| ProxyError::Client {
-            context: "构造 HTTP 客户端失败".into(),
-            source: e,
-        })?;
-    let response = client
-        .post(&url)
-        .bearer_auth(key)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| {
-            if e.is_timeout() {
-                ProxyError::SendTimeout {
-                    secs: timeout_secs,
-                    source: e,
-                }
-            } else {
-                ProxyError::Send {
-                    context: "请求失败".into(),
-                    source: e,
-                }
-            }
-        })?;
+    let response = crate::provider_transport::post_json(
+        base_url,
+        "chat/completions",
+        key,
+        &body,
+        timeout_secs,
+    )
+    .await?;
     let status = response.status();
     // 限读错误经 Body 透传（#45 首片类型）：文案与来源链原样保留
     let text = crate::http_util::read_text_capped(response, CHAT_RESPONSE_BODY_MAX_BYTES)

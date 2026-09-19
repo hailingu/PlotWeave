@@ -27,6 +27,34 @@ const openaiKeyInput = () =>
   screen.getByLabelText('OpenAI 兼容 API key') as HTMLInputElement
 
 describe('SettingsView Provider 分段', () => {
+  it('传输提示关联地址输入，修正旧 HTTP 配置时保留其他设置', async () => {
+    const stored = defaultSettings()
+    stored.providers[0].baseUrl = 'http://remote.example/v1'
+    stored.providers[0].keyEnc = 'pw1:test-envelope'
+    await settingsStore.save(stored)
+    render(<SettingsView onClose={vi.fn()} />)
+    await screen.findByText('OpenAI 兼容')
+    const input = screen.getAllByRole('textbox', {
+      name: /BASE URL/,
+    })[0] as HTMLInputElement
+    expect(input.value).toBe('http://remote.example/v1')
+    const description = input.getAttribute('aria-describedby')
+    expect(description).toBeTruthy()
+    expect(document.getElementById(description!)?.textContent).toContain(
+      'HTTPS',
+    )
+    vi.useFakeTimers()
+    fireEvent.change(input, { target: { value: 'http://localhost:8080/v1' } })
+    await act(async () => {
+      vi.advanceTimersByTime(600)
+    })
+    const saved = await settingsStore.load()
+    expect(saved.providers[0]).toEqual({
+      ...stored.providers[0],
+      baseUrl: 'http://localhost:8080/v1',
+    })
+  })
+
   it('加载默认设置：两个 provider 卡片、OpenAI 已启用、key 未配置', async () => {
     render(<SettingsView onClose={vi.fn()} />)
     await screen.findByText('OpenAI 兼容')
