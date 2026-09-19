@@ -325,3 +325,35 @@ fn atomic_write_fails_closed_on_target_metadata_errors() {
     );
     cleanup_temp(&projects);
 }
+
+/// [PR #224 评审](https://github.com/hailingu/PlotWeave/pull/224)：
+/// spawn_blocking 命令并行首用——多个入口同时发现 `projects/` 缺失时，
+/// 所有调用方都必须成功（create 容忍 AlreadyExists，归类校验与身份
+/// 绑定兜底；不得把「另一命令刚建好」报成虚假 IPC 失败）。
+#[test]
+fn ensure_projects_dir_tolerates_concurrent_first_use() {
+    for round in 0..3 {
+        let tmp = std::env::temp_dir().join(format!("pw-firstuse-{}", new_id()));
+        fs::create_dir(&tmp).expect("建临时应用根");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(32));
+        let mut handles = Vec::new();
+        for _ in 0..32 {
+            let barrier = barrier.clone();
+            let tmp = tmp.clone();
+            handles.push(std::thread::spawn(move || {
+                let root = CapDir::open_ambient_dir(&tmp, ambient_authority()).expect("打开应用根");
+                barrier.wait();
+                ensure_projects_dir(&root).map(|_| ())
+            }));
+        }
+        let results: Vec<_> = handles
+            .into_iter()
+            .map(|h| h.join().expect("线程结束"))
+            .collect();
+        assert!(
+            results.iter().all(|r| r.is_ok()),
+            "第 {round} 轮并发首用不得有 AlreadyExists 失败：{results:?}"
+        );
+        fs::remove_dir_all(&tmp).expect("清理临时根");
+    }
+}

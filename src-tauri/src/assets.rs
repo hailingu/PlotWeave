@@ -152,7 +152,10 @@ fn ensure_project_control(projects: &CapDir, id: &str) -> Result<(), AssetsError
 /// 库资产 → 项目资产的导入内核（给定已验证的 projects 与 library 根句柄）：
 /// 项目控制文件必须存在且通过归类校验（不替不存在的项目建资产目录）；
 /// 库条目形状校验 → 源文件身份绑定打开 → 目标目录确保 → 原子拷贝落盘 →
-/// 返回项目级 AssetRef（新 id、source=upload、规范 UTC createdAt）。
+/// 返回项目级 AssetRef（新 id、source=upload、规范 UTC createdAt）。控制
+/// 校验与资产提交经 projects 操作锁与项目删除串行（PR #224 第二轮评审：
+/// 删除持锁期间不得越过校验重建已删目录，锁序为 library→projects 单向，
+/// 本锁在调用方可能持有的库锁之后取得）。
 pub(crate) fn import_asset_from_library(
     projects: &CapDir,
     library: &CapDir,
@@ -161,6 +164,7 @@ pub(crate) fn import_asset_from_library(
     pending: &project_media::PendingProjectAssets,
     report: &mut dyn FnMut(&crate::library_journal::Recovery),
 ) -> Result<Value, AssetsError> {
+    let _op = crate::store::projects_op_lock();
     ensure_project_control(projects, id)?;
     // §7.2：冲突期条目不得为导入/收藏提供复制源
     let recovery = crate::library_journal::ensure_importable(library, library_asset_id, report)?;
@@ -192,14 +196,23 @@ pub(crate) fn import_asset_from_library(
 /// 生成媒体落盘内核（docs/data-model.md §13 outputs 槽位的媒体侧）：
 /// 字节经原子写入进项目 `assets/`，返回 `source=generated` 的项目级
 /// AssetRef（新 id、规范 UTC createdAt）。项目控制文件必须存在且通过
-/// 归类校验（不替不存在的项目建资产目录）。
+/// 归类校验（不替不存在的项目建资产目录）。控制校验与资产提交经
+/// projects 操作锁与项目删除串行（PR #224 第二轮评审，同导入内核）。
 pub(crate) fn write_generated_asset(
     projects: &CapDir,
     id: &str,
     bytes: &[u8],
     mime: &str,
     pending: &project_media::PendingProjectAssets,
+    cancelled: &dyn Fn() -> bool,
 ) -> Result<Value, AssetsError> {
+    let _op = crate::store::projects_op_lock();
+    // 拿到锁后复验取消（PR #224 第四轮评审）：锁等待期间用户可取消——
+    // 前端已丢弃响应，此处继续写盘只会留下不可达资产（≤32 MiB）。旧
+    // check-to-write 窗口极小，操作锁把它放大到整个并发项目操作时长。
+    if cancelled() {
+        return Err(AssetsError::refused("已取消"));
+    }
     ensure_project_control(projects, id)?;
     let project_dir = ensure_child_dir(projects, id, "项目资产根")?;
     let assets_dir = ensure_child_dir(&project_dir, "assets", "项目资产目录")?;
@@ -288,34 +301,51 @@ pub(crate) fn validate_project_asset_with(
 /// 库资产导入命令（§7.3 库资产进入项目 = 拷贝）：返回新 AssetRef 交前端
 /// 并入会话资产索引与引用位绑定。
 #[tauri::command]
-pub fn import_project_asset_from_library(
+pub async fn import_project_asset_from_library(
     app: AppHandle,
     id: String,
     library_asset_id: String,
 ) -> Result<Value, String> {
-    let projects = projects_dir(&app).map_err(to_ipc_text)?;
-    let library = library_root(&app).map_err(|e| e.to_string())?;
-    // 库操作互斥锁（issue #25 评审修复）：导入的恢复 + 读取 + 拷贝全链路
-    // 与删除串行——import 在删除写入索引前恢复并把媒体移回原位，删除随后
-    // 提交去项索引会把已恢复的媒体孤儿化
-    let pending = app.state::<project_media::PendingProjectAssets>();
-    crate::library::diagnostics::with_recovery_snapshot(
-        &library,
-        |library, report| {
-            import_asset_from_library(&projects, library, &id, &library_asset_id, &pending, report)
-        },
-        |snapshot| crate::library::diagnostics::publish_recovery(&app, snapshot),
-    )
-    .map_err(|e| e.to_string())
+    crate::blocking::run("import_project_asset_from_library", move || {
+        let projects = projects_dir(&app).map_err(to_ipc_text)?;
+        let library = library_root(&app).map_err(|e| e.to_string())?;
+        // 库操作互斥锁（issue #25 评审修复）：导入的恢复 + 读取 + 拷贝全链路
+        // 与删除串行——import 在删除写入索引前恢复并把媒体移回原位，删除随后
+        // 提交去项索引会把已恢复的媒体孤儿化
+        let pending = app.state::<project_media::PendingProjectAssets>();
+        crate::library::diagnostics::with_recovery_snapshot(
+            &library,
+            |library, report| {
+                import_asset_from_library(
+                    &projects,
+                    library,
+                    &id,
+                    &library_asset_id,
+                    &pending,
+                    report,
+                )
+            },
+            |snapshot| crate::library::diagnostics::publish_recovery(&app, snapshot),
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
 }
 
 /// set_asset 调度前的强制预检命令（§9.3）：形状 + 实路径复验，返回规范化
 /// AssetRef（分发器必须使用返回值而非调用方原值）。
 #[tauri::command]
-pub fn validate_project_asset(app: AppHandle, id: String, asset: Value) -> Result<Value, String> {
-    validate_id(&id)?;
-    let root = projects_dir(&app).map_err(to_ipc_text)?;
-    validate_project_asset_with(&root, &id, &asset).map_err(|e| e.to_string())
+pub async fn validate_project_asset(
+    app: AppHandle,
+    id: String,
+    asset: Value,
+) -> Result<Value, String> {
+    crate::blocking::run("validate_project_asset", move || {
+        validate_id(&id)?;
+        let root = projects_dir(&app).map_err(to_ipc_text)?;
+        validate_project_asset_with(&root, &id, &asset).map_err(|e| e.to_string())
+    })
+    .await
 }
 
 #[cfg(test)]

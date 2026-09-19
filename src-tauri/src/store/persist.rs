@@ -61,11 +61,25 @@ pub(crate) fn projects_dir(app: &AppHandle) -> Result<CapDir, StoreError> {
         .map_err(|e| StoreError::io("解析应用数据目录真实路径失败", e))?;
     let root = CapDir::open_ambient_dir(&root_path, ambient_authority())
         .map_err(|e| StoreError::io("打开应用数据根目录失败", e))?;
+    ensure_projects_dir(&root)
+}
+
+/// projects/ 确保内核（PR #224 评审，可测）：缺失即创建——并发首用容忍
+/// AlreadyExists（spawn_blocking 把项目命令移出 invoke 主线程后，多个
+/// 入口可同时发现目录缺失并双发 check-then-create；与 ensure_library_dir
+/// 同语义：总是尝试创建、失败方在另一命令刚建好时照常继续），现存必须
+/// 是非符号链接的真实目录并经 (dev, ino) 身份绑定打开——并发下失败方
+/// 重走归类与绑定，不读取他方替换出的实体。
+pub(crate) fn ensure_projects_dir(root: &CapDir) -> Result<CapDir, StoreError> {
     match root.symlink_metadata("projects") {
         Ok(_) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => root
-            .create_dir("projects")
-            .map_err(|e| StoreError::io("创建项目目录失败", e))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            if let Err(e) = root.create_dir("projects") {
+                if e.kind() != std::io::ErrorKind::AlreadyExists {
+                    return Err(StoreError::io("创建项目目录失败", e));
+                }
+            }
+        }
         Err(e) => return Err(StoreError::io("读取项目目录元数据失败", e)),
     }
     let md = root
@@ -77,7 +91,7 @@ pub(crate) fn projects_dir(app: &AppHandle) -> Result<CapDir, StoreError> {
     if !md.is_dir() {
         return Err(StoreError::refused("项目目录路径不是目录"));
     }
-    open_dir_bound(&root, "projects", &md, "项目目录")
+    open_dir_bound(root, "projects", &md, "项目目录")
 }
 /// 打开已归类为实际目录的子目录并绑定身份（§10.2）：cap-std 的 open_dir
 /// 在沙箱内跟随符号链接，Unix 上以打开句柄的 (dev, ino) 与归类时身份比对

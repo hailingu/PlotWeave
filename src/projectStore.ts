@@ -76,6 +76,8 @@ export const projectStore = {
       await enqueueSave(id, doc)
       return
     }
+    // 注：expectExisting（副本后续保存）经 saveExpectExisting 入口，
+    // 普通保存保持默认语义
     // 内存回退不经保存链：落定通知由门面补发，两环境行为不分叉（issue #101）
     await memorySave(id, doc)
     notifyProjectSaved(id)
@@ -121,7 +123,14 @@ export const projectStore = {
         const { invoke } = await import('@tauri-apps/api/core')
         await invoke('copy_project_assets', { fromId: id, toId: meta.id })
       }
-      await projectStore.save(meta.id, { ...doc, name, createdAt: undefined })
+      // 副本后续保存要求目标仍在（PR #224 评审）：copy 释放锁后被排队
+      // 的删除可能移走目标——expectExisting 使该保存按「项目不存在」拒绝
+      // 并落入下方清理分支，不复活用户删除的副本
+      if (isTauri) {
+        await enqueueSave(meta.id, { ...doc, name, createdAt: undefined }, true)
+      } else {
+        await projectStore.save(meta.id, { ...doc, name, createdAt: undefined })
+      }
     } catch (err) {
       console.warn('[projectStore] 复制项目失败，清理已建副本', err)
       // 清理完成后再抛：调用方看到失败时首页不会遗留空「副本」卡片；

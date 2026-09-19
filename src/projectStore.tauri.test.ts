@@ -1059,6 +1059,185 @@ describe('tauriCreate / delete / duplicate', () => {
     expect(calls[1]).toEqual({ cmd: 'delete_project', args: { id: 'new-1' } })
   })
 
+  it('重叠删除混合成败：成功笔已移除项目时，失败笔不得回吐重建（PR #224 第十轮评审）', async () => {
+    const savedIds: string[] = []
+    handlers.set('save_project', (args) => {
+      savedIds.push((args as { id: string }).id)
+    })
+    const releasers: Array<() => void> = []
+    const failSecond = { value: false }
+    handlers.set(
+      'delete_project',
+      () =>
+        new Promise<void>((resolve, reject) => {
+          if (failSecond.value) reject(new Error('瞬态删除失败'))
+          else releasers.push(resolve)
+        }),
+    )
+    const { projectStore } = await load()
+    // 首笔删除（将成功）；重叠的第二笔（将失败）
+    const first = projectStore.delete('p-x')
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    failSecond.value = true
+    const second = projectStore.delete('p-x')
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    // 放行首笔（成功移除项目）；第二笔随后失败——其回吐分支不得重放
+    // 任何吸收写入（组级已成功）
+    releasers.shift()?.()
+    await expect(Promise.all([first, second])).rejects.toThrow(/瞬态删除失败/)
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    // 重放会用 create-if-missing 复活已删项目：save_project 不得为 p-x 落盘
+    expect(savedIds.filter((id) => id === 'p-x')).toEqual([])
+  })
+
+  it('重叠删除收尾失败：组级成功须活到拒绝处理器判完（PR #224 第十一轮评审）', async () => {
+    const savedIds: string[] = []
+    handlers.set('save_project', (args) => {
+      savedIds.push((args as { id: string }).id)
+    })
+    // 首笔成功、第二笔挂起后失败（收尾失败序）
+    let resolveFirst!: () => void
+    let rejectSecond!: (e: Error) => void
+    let deleteCount = 0
+    handlers.set(
+      'delete_project',
+      () =>
+        new Promise<void>((resolve, reject) => {
+          deleteCount += 1
+          if (deleteCount === 1) resolveFirst = resolve
+          else rejectSecond = reject
+        }),
+    )
+    const { projectStore } = await load()
+    const first = projectStore.delete('p-x')
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    const second = projectStore.delete('p-x')
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    // 第二笔在途期间：普通保存被吸收（墓碑仍在）
+    await projectStore.save('p-x', {
+      name: '吸收稿',
+      nodes: [],
+      edges: [],
+      settings: { characters: [], locations: [] },
+    })
+    // 首笔成功落定 → 组级成功置位；第二笔失败 → 失败处理器判 group
+    //（红态：标记已被 finally/成功分支提前清除 → 误重放复活）
+    resolveFirst()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    rejectSecond(new Error('瞬态失败'))
+    await expect(Promise.allSettled([first, second])).resolves.toBeDefined()
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    // 吸收的文档不得被重放复活（save_project 零落盘）
+    expect(savedIds.filter((id) => id === 'p-x')).toEqual([])
+  })
+
+  it('重叠删除共享墓碑至最后一笔落定：间隙内的迟到普通保存仍被吸收（PR #224 第八轮评审）', async () => {
+    const savedIds: string[] = []
+    handlers.set('save_project', (args) => {
+      savedIds.push((args as { id: string }).id)
+    })
+    const releasers: Array<() => void> = []
+    handlers.set(
+      'delete_project',
+      () =>
+        new Promise<void>((resolve) => {
+          releasers.push(resolve)
+        }),
+    )
+    const { projectStore } = await load()
+    // 首笔删除挂起（墓碑计数=1）
+    const first = projectStore.delete('p-x')
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    // 重叠的第二笔删除（如 duplicate 清理分支）：同链排队，计数=2
+    const second = projectStore.delete('p-x')
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    // 放行首笔：墓碑不得随之解除（第二笔仍在途）
+    releasers.shift()?.()
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    // 首笔落定后的间隙：迟到普通保存必须被吸收（不得越顶重建）
+    const lateDoc = {
+      name: '迟到保存',
+      nodes: [],
+      edges: [],
+      settings: { characters: [], locations: [] },
+    }
+    const lateSave = projectStore.save('p-x', lateDoc)
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    // 放行第二笔并等待全部落定
+    releasers.shift()?.()
+    await Promise.all([first, second, lateSave])
+    // 保存被吸收（删除成功即丢弃）：save_project 不得为 p-x 落盘
+    expect(savedIds.filter((id) => id === 'p-x')).toEqual([])
+  })
+
+  it('副本保存遇活跃删除墓碑即拒绝，duplicate 报失败并清理（PR #224 第七轮评审：吸收会让 flag 被丢弃、复制报成功）', async () => {
+    handlers.set('load_project', () => modernFile())
+    handlers.set('list_projects', () => [meta('p1')])
+    handlers.set('create_project', (args) => ({
+      ...meta('copy-t'),
+      name: (args as { name: string }).name,
+    }))
+    handlers.set('copy_project_assets', () => undefined)
+    let saveReached = false
+    handlers.set('save_project', (args) => {
+      if ((args as { id: string }).id === 'copy-t') saveReached = true
+    })
+    const deletedIds: string[] = []
+    const releasers: Array<() => void> = []
+    handlers.set('delete_project', (args) => {
+      deletedIds.push((args as { id: string }).id)
+      return new Promise<void>((resolve) => {
+        releasers.push(resolve)
+      })
+    })
+    const { projectStore } = await load()
+    // 首个删除挂起：copy-t 的删除墓碑活跃
+    const deleting = projectStore.delete('copy-t')
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    // 墓碑窗口内发起 duplicate：load/create/copy 可进行，后续保存被拒绝
+    //（不得吸收报成功）→ catch 清理分支再排队一笔删除
+    // 立即挂 rejection 观察者（避免 50ms 窗口内的未处理拒绝）
+    const duplicating = projectStore.duplicate('p1')
+    const verdict = duplicating.then(
+      () => 'resolved',
+      (err: unknown) => `rejected:${String(err)}`,
+    )
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(saveReached).toBe(false)
+    // 放行全部挂起/后续入队的删除，两笔删除与 duplicate 全部落定
+    for (
+      let i = 0;
+      i < 50 && (deletedIds.length < 2 || releasers.length > 0);
+      i += 1
+    ) {
+      for (const release of releasers.splice(0)) release()
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    for (const release of releasers.splice(0)) release()
+    await expect(verdict).resolves.toMatch(/^rejected:/)
+    await expect(duplicating).rejects.toThrow(/删除中|不存在/)
+    await deleting
+    expect(deletedIds).toContain('copy-t')
+  })
+
+  it('duplicate 的后续保存带 expectExisting=true（PR #224 评审：copy 后目标被排队的删除移走时不复活）', async () => {
+    handlers.set('load_project', () => modernFile())
+    handlers.set('create_project', () => ({
+      ...meta('copy-9'),
+      name: 'X 副本',
+    }))
+    handlers.set('copy_project_assets', () => undefined)
+    let savedWith: unknown
+    handlers.set('save_project', (args) => {
+      savedWith = args
+    })
+    const { projectStore } = await load()
+    await projectStore.duplicate('p1')
+    expect((savedWith as { expectExisting?: boolean }).expectExisting).toBe(
+      true,
+    )
+  })
+
   it('duplicate = load → create → copy_project_assets → save 全链路（副本名拼接）', async () => {
     handlers.set('load_project', () => modernFile())
     handlers.set('create_project', (args) => ({
