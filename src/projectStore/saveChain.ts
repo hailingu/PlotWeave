@@ -50,11 +50,17 @@ const retryPersistedDocs = new Map<string, ProjectContent>()
  * create-if-missing 重建已删项目。 */
 const deletingIds = new Map<string, number>()
 
-/** 删除组级成功标记（PR #224 第十轮评审）：重叠删除中任一笔后端删除
- * 成功即置位——后续失败的回吐分支据此丢弃（而非重放）吸收的文档：
- * 项目已被成功笔移除，重放会以 create-if-missing 语义复活它，而保存
- * 调用方当初拿到的是「吸收为成功」。标记随墓碑计数归零一并清除。 */
-const deleteSucceededIds = new Set<string>()
+/** 删除组级状态（PR #224 第十/十一轮评审）：重叠删除共享一个组对象——
+ * 任一笔后端删除成功即置位 succeeded，后续失败的回吐分支据此丢弃（而非
+ * 重放）吸收的文档：项目已被成功笔移除，重放会以 create-if-missing 语义
+ * 复活它，而保存调用方当初拿到的是「吸收为成功」。
+ *
+ * 组对象与组同寿：各笔闭包持有组引用（不经 map 查询），finally 清除的
+ * 只是「是否新周期」的 map 入口——清除时序（finally 先于处理器）不影响
+ * 在途处理器的判定（第十一轮评审：Set 查询式标记会被 finally/成功分支
+ * 提前清除，导致失败处理器误判重放）。新一轮删除周期（计数归零后）从
+ * 干净组状态开始。 */
+const deleteGroups = new Map<string, { succeeded: boolean }>()
 /** 删除期间被吸收的迟到保存：留存最新文档——删除失败（项目仍在磁盘）时
  * 回吐重存，否则该次冲刷已被上游视为成功，最新编辑既没落盘也无重试
  * 登记；删除成功即随项目一并丢弃，绝不复活已删项目。 */
@@ -326,7 +332,13 @@ export function enqueueSave(
  * onProjectWriteReplayFailure 通知订阅者（画布回吐失败自带登记重试，
  * 不需此通道）。 */
 export function enqueueDelete(id: string): Promise<void> {
-  deletingIds.set(id, (deletingIds.get(id) ?? 0) + 1)
+  const outstanding = deletingIds.get(id) ?? 0
+  // 同一删除组：墓碑仍在（在途笔）或链上仍有该项目的未清空活动
+  //（首笔已落定时 saveChains 条目仍在）——组级成功状态跨笔共享；
+  // 完全无活动才是新一轮周期（干净组）
+  const group = deleteGroups.get(id) ?? { succeeded: false }
+  deleteGroups.set(id, group)
+  deletingIds.set(id, outstanding + 1)
   clearSaveRetryTimer(id)
   const run = (saveChains.get(id) ?? Promise.resolve()).catch(() => undefined)
   let retainedRetryDoc: ProjectContent | undefined
@@ -338,8 +350,8 @@ export function enqueueDelete(id: string): Promise<void> {
     const { invoke } = await import('@tauri-apps/api/core')
     await invoke('delete_project', { id })
     // 本笔删除已成功：项目在盘上已不存在——同组后续失败的回吐必须丢弃
-    // 吸收的写入（重放即复活），标记由墓碑归零统一清除
-    deleteSucceededIds.add(id)
+    // 吸收的写入（重放即复活），组级成功状态随组存活（见 deleteGroups）
+    group.succeeded = true
   })
   /** 删除失败时的回吐分支：重新登记保留/吸收的快照与附属写入。该链纳入
    * 未落定跟踪（PR #174 评审）：stored 只覆盖删除本身——按微任务续延排序
@@ -351,7 +363,7 @@ export function enqueueDelete(id: string): Promise<void> {
       const remaining = (deletingIds.get(id) ?? 1) - 1
       if (remaining <= 0) {
         deletingIds.delete(id)
-        deleteSucceededIds.delete(id)
+        deleteGroups.delete(id)
       } else deletingIds.set(id, remaining)
       retryPersistedDocs.delete(id)
     })
@@ -367,10 +379,7 @@ export function enqueueDelete(id: string): Promise<void> {
         const absorbedWrite = absorbedProjectWrites.get(id)
         absorbedSaveDocs.delete(id)
         absorbedProjectWrites.delete(id)
-        // 组级成功（PR #224 第十轮评审）：同组已有一笔删除成功——项目
-        // 在盘上已不存在，本笔失败不构成「项目仍在」的信号，重放吸收的
-        // 写入只会以 create-if-missing 复活它（保存调用方已按成功处理）
-        if (deleteSucceededIds.has(id)) return
+        if (group.succeeded) return
         if (retained !== undefined)
           void enqueueSave(id, retained).catch(() => undefined)
         if (absorbed !== undefined)

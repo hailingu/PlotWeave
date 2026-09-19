@@ -1090,6 +1090,47 @@ describe('tauriCreate / delete / duplicate', () => {
     expect(savedIds.filter((id) => id === 'p-x')).toEqual([])
   })
 
+  it('重叠删除收尾失败：组级成功须活到拒绝处理器判完（PR #224 第十一轮评审）', async () => {
+    const savedIds: string[] = []
+    handlers.set('save_project', (args) => {
+      savedIds.push((args as { id: string }).id)
+    })
+    // 首笔成功、第二笔挂起后失败（收尾失败序）
+    let resolveFirst!: () => void
+    let rejectSecond!: (e: Error) => void
+    let deleteCount = 0
+    handlers.set(
+      'delete_project',
+      () =>
+        new Promise<void>((resolve, reject) => {
+          deleteCount += 1
+          if (deleteCount === 1) resolveFirst = resolve
+          else rejectSecond = reject
+        }),
+    )
+    const { projectStore } = await load()
+    const first = projectStore.delete('p-x')
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    const second = projectStore.delete('p-x')
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    // 第二笔在途期间：普通保存被吸收（墓碑仍在）
+    await projectStore.save('p-x', {
+      name: '吸收稿',
+      nodes: [],
+      edges: [],
+      settings: { characters: [], locations: [] },
+    })
+    // 首笔成功落定 → 组级成功置位；第二笔失败 → 失败处理器判 group
+    //（红态：标记已被 finally/成功分支提前清除 → 误重放复活）
+    resolveFirst()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    rejectSecond(new Error('瞬态失败'))
+    await expect(Promise.allSettled([first, second])).resolves.toBeDefined()
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    // 吸收的文档不得被重放复活（save_project 零落盘）
+    expect(savedIds.filter((id) => id === 'p-x')).toEqual([])
+  })
+
   it('重叠删除共享墓碑至最后一笔落定：间隙内的迟到普通保存仍被吸收（PR #224 第八轮评审）', async () => {
     const savedIds: string[] = []
     handlers.set('save_project', (args) => {
