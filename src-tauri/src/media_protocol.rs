@@ -251,7 +251,9 @@ const MEDIA_READ_CONCURRENCY: usize = 4;
 
 /// 并发媒体读取闸门：Mutex + Condvar 的计数信号量（同步 spawn_blocking
 /// 上下文，不用 tokio::sync::Semaphore）。许可随 [`MediaReadPermit`] drop
-/// 释放。
+/// 释放。中毒后行为（issue #145）：可验证恢复——临界区只做计数增减与
+/// 唤醒（无会 panic 的代码），经 `crate::lock::recover_guard` 恢复，
+/// 不传播 panic。
 pub(crate) struct MediaReadGate {
     max: usize,
     held: Mutex<usize>,
@@ -263,7 +265,7 @@ static MEDIA_READ_GATE: OnceLock<MediaReadGate> = OnceLock::new();
 /// 释放许可：归还计数并唤醒一个等待者。
 impl Drop for MediaReadPermit<'_> {
     fn drop(&mut self) {
-        let mut held = self.0.held.lock().expect("媒体读取闸门被污染");
+        let mut held = crate::lock::recover_guard(self.0.held.lock(), "媒体读取闸门");
         *held -= 1;
         self.0.available.notify_one();
     }
@@ -288,7 +290,7 @@ impl MediaReadGate {
     /// 尝试获取许可：满额即返回 None（仅测试：确定性验证上限语义）。
     #[cfg(test)]
     fn try_acquire(&self) -> Option<MediaReadPermit<'_>> {
-        let mut held = self.held.lock().expect("媒体读取闸门被污染");
+        let mut held = crate::lock::recover_guard(self.held.lock(), "媒体读取闸门");
         if *held >= self.max {
             return None;
         }
@@ -298,9 +300,9 @@ impl MediaReadGate {
 
     /// 阻塞获取许可：满额时等待释放。
     fn acquire(&self) -> MediaReadPermit<'_> {
-        let mut held = self.held.lock().expect("媒体读取闸门被污染");
+        let mut held = crate::lock::recover_guard(self.held.lock(), "媒体读取闸门");
         while *held >= self.max {
-            held = self.available.wait(held).expect("媒体读取闸门被污染");
+            held = crate::lock::recover_guard(self.available.wait(held), "媒体读取闸门");
         }
         *held += 1;
         MediaReadPermit(self)

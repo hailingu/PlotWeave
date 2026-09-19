@@ -44,7 +44,9 @@ fn validate_project_asset_id(id: &str) -> Result<(), String> {
 ///   即按不存在拒绝，别名永不复活媒体。
 ///
 /// 生命周期随应用实例：撤销等未落盘条目的残留没有请求方，不影响正确性；
-/// 应用退出自然销毁。
+/// 应用退出自然销毁。中毒后行为（issue #145）：可验证恢复——纯内存建议性
+/// 登记（文档为权威并 opportunistic 清除），map 单项 infallible 操作不会
+/// 留下结构损坏，经 `crate::lock::recover_guard` 恢复，不传播 panic。
 pub(crate) struct PendingProjectAssets {
     entries: Mutex<HashMap<(String, String), (String, String)>>,
     aliases: Mutex<HashMap<(String, String), String>>,
@@ -61,7 +63,7 @@ impl PendingProjectAssets {
     /// 登记会话新增项目资产（导入/生成内核落盘成功后调用）：value 为刚
     /// 落盘媒体的 relPath 与规范 mime，解析时仍按同域词法/mime 校验兜底。
     fn register(&self, project_id: &str, asset_id: &str, rel_path: String, mime: String) {
-        self.entries.lock().expect("项目媒体登记表被污染").insert(
+        crate::lock::recover_guard(self.entries.lock(), "项目媒体登记表").insert(
             (project_id.to_string(), asset_id.to_string()),
             (rel_path, mime),
         );
@@ -70,7 +72,7 @@ impl PendingProjectAssets {
     /// 登记加载归一化空白键重发别名（仅空白键映射，见
     /// [`register_reissued_asset_alias`]）。
     fn register_alias(&self, project_id: &str, blank_key: &str, fresh_id: &str) {
-        self.aliases.lock().expect("项目媒体登记表被污染").insert(
+        crate::lock::recover_guard(self.aliases.lock(), "项目媒体登记表").insert(
             (project_id.to_string(), fresh_id.to_string()),
             blank_key.to_string(),
         );
@@ -78,18 +80,14 @@ impl PendingProjectAssets {
 
     /// 查询重发别名（不消费）：盘上条目缺失时别名同样不得复活媒体。
     fn alias_disk_key(&self, project_id: &str, fresh_id: &str) -> Option<String> {
-        self.aliases
-            .lock()
-            .expect("项目媒体登记表被污染")
+        crate::lock::recover_guard(self.aliases.lock(), "项目媒体登记表")
             .get(&(project_id.to_string(), fresh_id.to_string()))
             .cloned()
     }
 
     /// 取走登记项（仅文档权威命中时调用，清理已完成使命的条目）。
     fn take(&self, project_id: &str, asset_id: &str) -> Option<(String, String)> {
-        self.entries
-            .lock()
-            .expect("项目媒体登记表被污染")
+        crate::lock::recover_guard(self.entries.lock(), "项目媒体登记表")
             .remove(&(project_id.to_string(), asset_id.to_string()))
     }
 
@@ -97,9 +95,7 @@ impl PendingProjectAssets {
     /// （get_asset_media_url）与随后的协议媒体请求是两次独立解析，命中即
     /// 取走会让后者在文档落盘前 404。
     fn peek(&self, project_id: &str, asset_id: &str) -> Option<(String, String)> {
-        self.entries
-            .lock()
-            .expect("项目媒体登记表被污染")
+        crate::lock::recover_guard(self.entries.lock(), "项目媒体登记表")
             .get(&(project_id.to_string(), asset_id.to_string()))
             .cloned()
     }
@@ -107,13 +103,9 @@ impl PendingProjectAssets {
     /// 清空某项目的全部登记项与别名（项目控制文件缺失/异型时调用——已删
     /// 项目的登记项/别名不得让其媒体经回退路径复活）。
     fn drain_project(&self, project_id: &str) {
-        self.entries
-            .lock()
-            .expect("项目媒体登记表被污染")
+        crate::lock::recover_guard(self.entries.lock(), "项目媒体登记表")
             .retain(|(pid, _), _| pid != project_id);
-        self.aliases
-            .lock()
-            .expect("项目媒体登记表被污染")
+        crate::lock::recover_guard(self.aliases.lock(), "项目媒体登记表")
             .retain(|(pid, _), _| pid != project_id);
     }
 }

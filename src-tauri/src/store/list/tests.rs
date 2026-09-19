@@ -595,3 +595,23 @@ fn wrap_legacy_rejects_overflowing_numeric_timestamp() {
         "溢出时间戳应回退默认而非伪造"
     );
 }
+
+/// [issue #145](https://github.com/hailingu/PlotWeave/issues/145)：projects
+/// 操作锁中毒恢复——持锁 panic 后列表/保存照常：磁盘一致性由 §10.2
+/// 原子写协议独立保证（遗留临时文件由清扫承接），锁不守卫内存状态。
+/// 静态锁此后保持中毒状态，后续用例经同一恢复路径照常工作。
+#[test]
+fn projects_op_lock_recovers_after_poison() {
+    let projects = temp_projects_dir();
+    std::thread::spawn(|| {
+        let _guard = crate::store::persist::projects_op_lock();
+        panic!("测试注入的持锁 panic");
+    })
+    .join()
+    .expect_err("注入 panic 应发生");
+    let doc = new_project_file("p-1", "正常项目".into(), now_iso());
+    persist_project(&cap(&projects), "p-1", doc).expect("中毒后保存应可用");
+    let metas = list_project_metas(&cap(&projects)).expect("中毒后列表应可用");
+    assert_eq!(metas.len(), 1);
+    cleanup_temp(&projects);
+}

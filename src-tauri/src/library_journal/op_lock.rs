@@ -14,13 +14,17 @@ use crate::library::error::LibraryError;
 /// 更新的串行）+ 跨进程文件锁（flock on journal 文件——两个 Tauri 进程各自
 /// 持有独立内存锁，文件系统层串行化完整事务）。锁覆盖完整 read/recover/
 /// mutate/commit 边界，任一时刻至多一个库操作持有索引/日志/媒体的写侧。
+/// 中毒后行为（issue #145）：可验证恢复——本锁不守卫内存状态，磁盘一致性
+/// 由 §7.2 日志可恢复提交协议独立保证（持锁 panic 对盘上状态等价于崩溃，
+/// recover 在每个操作起始照常执行），经 `crate::lock::recover_guard` 恢复
+/// 并留诊断，不传播 panic。
 static LIBRARY_OP_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 pub(crate) fn library_op_lock() -> MutexGuard<'static, ()> {
-    LIBRARY_OP_LOCK
-        .get_or_init(|| Mutex::new(()))
-        .lock()
-        .expect("库操作锁被污染")
+    crate::lock::recover_guard(
+        LIBRARY_OP_LOCK.get_or_init(|| Mutex::new(())).lock(),
+        "库操作锁",
+    )
 }
 
 /// 跨进程文件锁：对 asset-delete-journal.json 持有排他 flock——两个并发

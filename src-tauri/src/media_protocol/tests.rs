@@ -671,3 +671,24 @@ fn project_media_serves_assets_across_persisted_contract_sizes() {
     assert!(err.contains("20 MiB"), "意外诊断：{err}");
     cleanup(&root);
 }
+
+/// [issue #145](https://github.com/hailingu/PlotWeave/issues/145)：媒体读取
+/// 闸门中毒恢复——持锁 panic 后许可获取/释放照常：临界区只做计数增减与
+/// 唤醒（无会 panic 的代码），许可 RAII 释放仍归还计数，防御性内存峰值
+/// 收敛语义不因中毒受损。
+#[test]
+fn media_read_gate_recovers_after_poison() {
+    let gate = MediaReadGate::new(1);
+    std::thread::scope(|s| {
+        s.spawn(|| {
+            let _guard = gate.held.lock().expect("先取得锁");
+            panic!("测试注入的持锁 panic");
+        })
+        .join()
+        .expect_err("注入 panic 应发生");
+    });
+    let permit = gate.try_acquire().expect("中毒后许可获取须照常");
+    assert!(gate.try_acquire().is_none(), "计数上限语义保持");
+    drop(permit);
+    assert!(gate.try_acquire().is_some(), "中毒后释放归还须照常");
+}
