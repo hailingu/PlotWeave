@@ -1059,6 +1059,37 @@ describe('tauriCreate / delete / duplicate', () => {
     expect(calls[1]).toEqual({ cmd: 'delete_project', args: { id: 'new-1' } })
   })
 
+  it('重叠删除混合成败：成功笔已移除项目时，失败笔不得回吐重建（PR #224 第十轮评审）', async () => {
+    const savedIds: string[] = []
+    handlers.set('save_project', (args) => {
+      savedIds.push((args as { id: string }).id)
+    })
+    const releasers: Array<() => void> = []
+    const failSecond = { value: false }
+    handlers.set(
+      'delete_project',
+      () =>
+        new Promise<void>((resolve, reject) => {
+          if (failSecond.value) reject(new Error('瞬态删除失败'))
+          else releasers.push(resolve)
+        }),
+    )
+    const { projectStore } = await load()
+    // 首笔删除（将成功）；重叠的第二笔（将失败）
+    const first = projectStore.delete('p-x')
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    failSecond.value = true
+    const second = projectStore.delete('p-x')
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    // 放行首笔（成功移除项目）；第二笔随后失败——其回吐分支不得重放
+    // 任何吸收写入（组级已成功）
+    releasers.shift()?.()
+    await expect(Promise.all([first, second])).rejects.toThrow(/瞬态删除失败/)
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    // 重放会用 create-if-missing 复活已删项目：save_project 不得为 p-x 落盘
+    expect(savedIds.filter((id) => id === 'p-x')).toEqual([])
+  })
+
   it('重叠删除共享墓碑至最后一笔落定：间隙内的迟到普通保存仍被吸收（PR #224 第八轮评审）', async () => {
     const savedIds: string[] = []
     handlers.set('save_project', (args) => {
