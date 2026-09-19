@@ -337,6 +337,60 @@ fn generation_request_body(model: &str, prompt: &str, size: &str) -> Value {
 /// 协作式取消即放弃结果；落盘后在**命令内**完成 §9.3 预检（形状 +
 /// 实路径复验）——生成后到返回前不再跨命令边界，消除前端二次 IPC 的
 /// 卸载丢结果窗口。
+/// 生成请求 → 图像字节（自 llm_image_generate 提取，PR #220 评审：命令
+/// 体超出 80 代码行硬上限）：POST（含响应体限读与状态摘录脱敏）→ 读取
+/// 后取消检查点（保持提取前位置与语义）→ 解析 b64 优先，url 成员回退
+/// 预算化下载链。错误统一转既有展示文案。
+async fn generate_image_bytes(
+    base_url: &str,
+    key: &str,
+    body: &Value,
+    job_id: &str,
+    job_deadline: std::time::Instant,
+) -> Result<Vec<u8>, String> {
+    let response = crate::provider_transport::post_json(
+        base_url,
+        "images/generations",
+        key,
+        body,
+        IMAGE_REQUEST_TIMEOUT_SECS,
+    )
+    .await
+    .map_err(|error| match error {
+        // 保留生成入口既有的超时展示文案；聊天入口保留 SendTimeout 分类。
+        ProxyError::SendTimeout { source, .. } => format!("请求失败：{source}"),
+        other => other.to_string(),
+    })?;
+    let status = response.status();
+    // issue #149：状态摘录脱敏需要本次请求 URL——read_text_capped 消费
+    // response 前先取出
+    let response_url = response.url().clone();
+    // 展示边界转换（issue #45 首片）：文案与历史 format! 输出逐字一致
+    let text = read_text_capped(response, RESPONSE_BODY_MAX_BYTES)
+        .await
+        .map_err(|e| e.to_string())?;
+    if is_cancelled(job_id) {
+        clear_cancel(job_id);
+        return Err("已取消".into());
+    }
+    if !status.is_success() {
+        // 网关/代理回显请求 URL 或密钥时展示不泄露（issue #149）
+        let head = crate::http_util::redact_status_head(&text, key, &response_url);
+        return Err(format!("服务返回 {status}：{head}"));
+    }
+    let parsed: Value =
+        serde_json::from_str(&text).map_err(|e| format!("响应不是有效 JSON：{e}"))?;
+    match decode_b64_image(&parsed) {
+        Some(b) => Ok(b),
+        None => {
+            let url = image_url_of(&parsed).ok_or("服务未返回图像内容")?;
+            fetch_image_url(&url, job_deadline)
+                .await
+                .map_err(|e| e.to_string())
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn llm_image_generate(app: AppHandle, request: ImageGenRequest) -> Result<Value, String> {
     // 作业总预算自命令进入时刻起算（issue #141）：覆盖 POST 与下载链
@@ -364,47 +418,8 @@ pub async fn llm_image_generate(app: AppHandle, request: ImageGenRequest) -> Res
     }
     let key = crate::prefs::provider_secret(&app, &provider_id)?;
     let body = generation_request_body(&model, prompt, &size);
-    let response = crate::provider_transport::post_json(
-        &base_url,
-        "images/generations",
-        &key,
-        &body,
-        IMAGE_REQUEST_TIMEOUT_SECS,
-    )
-    .await
-    .map_err(|error| match error {
-        // 保留生成入口既有的超时展示文案；聊天入口保留 SendTimeout 分类。
-        ProxyError::SendTimeout { source, .. } => format!("请求失败：{source}"),
-        other => other.to_string(),
-    })?;
-    let status = response.status();
-    // issue #149：状态摘录脱敏需要本次请求 URL——read_text_capped 消费
-    // response 前先取出
-    let response_url = response.url().clone();
-    // 展示边界转换（issue #45 首片）：文案与历史 format! 输出逐字一致
-    let text = read_text_capped(response, RESPONSE_BODY_MAX_BYTES)
-        .await
-        .map_err(|e| e.to_string())?;
-    if is_cancelled(&job_id) {
-        clear_cancel(&job_id);
-        return Err("已取消".into());
-    }
-    if !status.is_success() {
-        // 网关/代理回显请求 URL 或密钥时展示不泄露（issue #149）
-        let head = crate::http_util::redact_status_head(&text, &key, &response_url);
-        return Err(format!("服务返回 {status}：{head}"));
-    }
-    let parsed: Value =
-        serde_json::from_str(&text).map_err(|e| format!("响应不是有效 JSON：{e}"))?;
-    let bytes = match decode_b64_image(&parsed) {
-        Some(b) => b,
-        None => {
-            let url = image_url_of(&parsed).ok_or("服务未返回图像内容")?;
-            fetch_image_url(&url, job_deadline)
-                .await
-                .map_err(|e| e.to_string())?
-        }
-    };
+    // POST 与下载链（含预算耗尽）的失败经同一展示文案上浮
+    let bytes = generate_image_bytes(&base_url, &key, &body, &job_id, job_deadline).await?;
     if bytes.len() > GENERATED_IMAGE_MAX_BYTES {
         return Err(format!(
             "生成图像超出大小上限（{GENERATED_IMAGE_MAX_BYTES} 字节）"
