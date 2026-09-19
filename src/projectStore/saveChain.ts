@@ -43,7 +43,12 @@ const retryPersistedDocs = new Map<string, ProjectContent>()
 /** 删除墓碑：删除开始即立——之后为该项目排队的任何保存被吸收，迟到的
  * 合并冲刷/重试不得重建 JSON 复活用户刚删的项目；删除落定（成功或失败）
  * 后清除，失败时项目仍在、可继续保存。 */
-const deletingIds = new Set<string>()
+/** 删除墓碑（引用计数，PR #224 第八轮评审）：重叠的 enqueueDelete（如
+ * duplicate 清理分支在首个删除活跃期再排队一笔）共享同一墓碑——每笔
+ * 删除落定自减，计数归零才解除。Set 形态下第一笔的 finally 提前抹掉
+ * 墓碑，重叠窗口内的迟到普通保存不再被吸收、越过仍在排队的删除以
+ * create-if-missing 重建已删项目。 */
+const deletingIds = new Map<string, number>()
 /** 删除期间被吸收的迟到保存：留存最新文档——删除失败（项目仍在磁盘）时
  * 回吐重存，否则该次冲刷已被上游视为成功，最新编辑既没落盘也无重试
  * 登记；删除成功即随项目一并丢弃，绝不复活已删项目。 */
@@ -315,7 +320,7 @@ export function enqueueSave(
  * onProjectWriteReplayFailure 通知订阅者（画布回吐失败自带登记重试，
  * 不需此通道）。 */
 export function enqueueDelete(id: string): Promise<void> {
-  deletingIds.add(id)
+  deletingIds.set(id, (deletingIds.get(id) ?? 0) + 1)
   clearSaveRetryTimer(id)
   const run = (saveChains.get(id) ?? Promise.resolve()).catch(() => undefined)
   let retainedRetryDoc: ProjectContent | undefined
@@ -334,7 +339,9 @@ export function enqueueDelete(id: string): Promise<void> {
    * 依赖这一排序。 */
   const recovery = next
     .finally(() => {
-      deletingIds.delete(id)
+      const remaining = (deletingIds.get(id) ?? 1) - 1
+      if (remaining <= 0) deletingIds.delete(id)
+      else deletingIds.set(id, remaining)
       retryPersistedDocs.delete(id)
     })
     .then(

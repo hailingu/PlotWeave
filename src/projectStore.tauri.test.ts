@@ -1059,6 +1059,45 @@ describe('tauriCreate / delete / duplicate', () => {
     expect(calls[1]).toEqual({ cmd: 'delete_project', args: { id: 'new-1' } })
   })
 
+  it('重叠删除共享墓碑至最后一笔落定：间隙内的迟到普通保存仍被吸收（PR #224 第八轮评审）', async () => {
+    const savedIds: string[] = []
+    handlers.set('save_project', (args) => {
+      savedIds.push((args as { id: string }).id)
+    })
+    const releasers: Array<() => void> = []
+    handlers.set(
+      'delete_project',
+      () =>
+        new Promise<void>((resolve) => {
+          releasers.push(resolve)
+        }),
+    )
+    const { projectStore } = await load()
+    // 首笔删除挂起（墓碑计数=1）
+    const first = projectStore.delete('p-x')
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    // 重叠的第二笔删除（如 duplicate 清理分支）：同链排队，计数=2
+    const second = projectStore.delete('p-x')
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    // 放行首笔：墓碑不得随之解除（第二笔仍在途）
+    releasers.shift()?.()
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    // 首笔落定后的间隙：迟到普通保存必须被吸收（不得越顶重建）
+    const lateDoc = {
+      name: '迟到保存',
+      nodes: [],
+      edges: [],
+      settings: { characters: [], locations: [] },
+    }
+    const lateSave = projectStore.save('p-x', lateDoc)
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    // 放行第二笔并等待全部落定
+    releasers.shift()?.()
+    await Promise.all([first, second, lateSave])
+    // 保存被吸收（删除成功即丢弃）：save_project 不得为 p-x 落盘
+    expect(savedIds.filter((id) => id === 'p-x')).toEqual([])
+  })
+
   it('副本保存遇活跃删除墓碑即拒绝，duplicate 报失败并清理（PR #224 第七轮评审：吸收会让 flag 被丢弃、复制报成功）', async () => {
     handlers.set('load_project', () => modernFile())
     handlers.set('list_projects', () => [meta('p1')])
