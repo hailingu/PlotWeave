@@ -100,12 +100,13 @@ const DOWNLOAD_REDIRECT_LIMIT: usize = 5;
 /// url 回退下载超时：只拉一帧 ≤32MiB 的图像，远小于生成超时。
 const IMAGE_DOWNLOAD_TIMEOUT_SECS: u64 = 120;
 
-/// 一次生成作业的总时间预算（issue #141）：覆盖生成 POST（含响应体
-/// 读取，受既有 300s 客户端上限约束，必然落在总预算内）与 url 回退
-/// 下载链（逐跳 DNS 解析 + 请求 + 响应体读取，最多 5 跳重定向可发
-/// 6 次请求，此前只有各请求独立的 120s 上限，整链无统一上界）。作业
-/// 开始时刻起算，剩余预算经 [`with_stage_budget`] 传入各阶段；预算
-/// 耗尽即放弃并按阶段给出诊断，产物不写回。
+/// 一次生成作业的总时间预算（issue #141）：覆盖 provider 凭据读取
+/// （阻塞线程池）、生成 POST（含响应体读取）与 url 回退下载链（逐跳
+/// DNS 解析 + 请求 + 响应体读取，最多 5 跳重定向可发 6 次请求）。作业
+/// 开始时刻起算，各阶段等待上界均为剩余预算（[`with_stage_budget`] /
+/// [`bounded_key_load`]）；预算耗尽即放弃并按阶段给出诊断，产物不写
+/// 回，也不发出可能计费的请求。逐跳 120s 与 POST 300s 客户端上限保留
+/// 为单阶段兜底。
 const IMAGE_JOB_TOTAL_BUDGET_SECS: u64 = 600;
 
 /// 作业剩余预算：截止时刻已过即 None（调用方按预算耗尽处置）。
@@ -337,10 +338,38 @@ fn generation_request_body(model: &str, prompt: &str, size: &str) -> Value {
 /// 协作式取消即放弃结果；落盘后在**命令内**完成 §9.3 预检（形状 +
 /// 实路径复验）——生成后到返回前不再跨命令边界，消除前端二次 IPC 的
 /// 卸载丢结果窗口。
+/// provider API key 读取（provider_secret 为同步阻塞访问：设置文件读取
+/// 与系统钥匙串）挪入阻塞线程池并受作业剩余预算约束（issue #141 评审
+/// ——总预算自命令进入起算，前置阻塞不得在预算耗尽后仍发起计费请求）。
+/// 阻塞任务不可取消：预算耗尽只是放弃等待，任务返回后结果被丢弃、不
+/// 持有应用锁（同 DNS 解析的资源生命周期）。`load` 的错误文案原样
+/// 透传；预算耗尽诊断标明读取凭据阶段。
+async fn bounded_key_load(
+    deadline: std::time::Instant,
+    load: impl FnOnce() -> Result<String, String> + Send + 'static,
+) -> Result<String, String> {
+    let budget = || {
+        ProxyError::JobBudgetExhausted {
+            stage: "读取凭据",
+            budget_secs: IMAGE_JOB_TOTAL_BUDGET_SECS,
+        }
+        .to_string()
+    };
+    let Some(remaining) = remaining_budget(deadline) else {
+        return Err(budget());
+    };
+    match tokio::time::timeout(remaining, tauri::async_runtime::spawn_blocking(load)).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(join)) => Err(format!("读取 API key 失败：{join}")),
+        Err(_) => Err(budget()),
+    }
+}
+
 /// 生成请求 → 图像字节（自 llm_image_generate 提取，PR #220 评审：命令
-/// 体超出 80 代码行硬上限）：POST（含响应体限读与状态摘录脱敏）→ 读取
-/// 后取消检查点（保持提取前位置与语义）→ 解析 b64 优先，url 成员回退
-/// 预算化下载链。错误统一转既有展示文案。
+/// 体超出 80 代码行硬上限）：POST 与响应体限读共同消费作业剩余预算
+/// （issue #141 评审——预算被前置工作耗尽时在 POST 之前拒绝，不发出
+/// 可能计费的请求）→ 读取后取消检查点（保持提取前位置与语义）→ 解析
+/// b64 优先，url 成员回退预算化下载链。错误统一转既有展示文案。
 async fn generate_image_bytes(
     base_url: &str,
     key: &str,
@@ -348,27 +377,29 @@ async fn generate_image_bytes(
     job_id: &str,
     job_deadline: std::time::Instant,
 ) -> Result<Vec<u8>, String> {
-    let response = crate::provider_transport::post_json(
-        base_url,
-        "images/generations",
-        key,
-        body,
-        IMAGE_REQUEST_TIMEOUT_SECS,
-    )
+    let (status, response_url, text) = with_stage_budget(job_deadline, "生成请求", async {
+        let response = crate::provider_transport::post_json(
+            base_url,
+            "images/generations",
+            key,
+            body,
+            IMAGE_REQUEST_TIMEOUT_SECS,
+        )
+        .await?;
+        let status = response.status();
+        let response_url = response.url().clone();
+        // 展示边界转换（issue #45 首片）：文案与历史 format! 输出逐字一致
+        let text = read_text_capped(response, RESPONSE_BODY_MAX_BYTES)
+            .await
+            .map_err(ProxyError::Body)?;
+        Ok((status, response_url, text))
+    })
     .await
     .map_err(|error| match error {
         // 保留生成入口既有的超时展示文案；聊天入口保留 SendTimeout 分类。
         ProxyError::SendTimeout { source, .. } => format!("请求失败：{source}"),
         other => other.to_string(),
     })?;
-    let status = response.status();
-    // issue #149：状态摘录脱敏需要本次请求 URL——read_text_capped 消费
-    // response 前先取出
-    let response_url = response.url().clone();
-    // 展示边界转换（issue #45 首片）：文案与历史 format! 输出逐字一致
-    let text = read_text_capped(response, RESPONSE_BODY_MAX_BYTES)
-        .await
-        .map_err(|e| e.to_string())?;
     if is_cancelled(job_id) {
         clear_cancel(job_id);
         return Err("已取消".into());
@@ -416,7 +447,13 @@ pub async fn llm_image_generate(app: AppHandle, request: ImageGenRequest) -> Res
     if model.trim().is_empty() {
         return Err("未选择模型".into());
     }
-    let key = crate::prefs::provider_secret(&app, &provider_id)?;
+    let key = {
+        let app = app.clone();
+        bounded_key_load(job_deadline, move || {
+            crate::prefs::provider_secret(&app, &provider_id)
+        })
+        .await?
+    };
     let body = generation_request_body(&model, prompt, &size);
     // POST 与下载链（含预算耗尽）的失败经同一展示文案上浮
     let bytes = generate_image_bytes(&base_url, &key, &body, &job_id, job_deadline).await?;
@@ -614,6 +651,40 @@ mod tests {
         assert!(remaining_budget(future).is_some(), "未到期预算应可用");
         let past = std::time::Instant::now() - std::time::Duration::from_secs(1);
         assert!(remaining_budget(past).is_none(), "已过期预算应耗尽");
+    }
+
+    /// 前置阻塞消费预算（issue #141 评审）：凭据读取（同步阻塞访问）在
+    /// 预算耗尽后不得发起——过期截止时间下，阻塞闭包一次都不被调用，
+    /// 诊断标明读取凭据阶段。
+    #[test]
+    fn key_load_budget_gate_skips_blocking_access_when_expired() {
+        let deadline = std::time::Instant::now() - std::time::Duration::from_secs(1);
+        let err = tauri::async_runtime::block_on(bounded_key_load(deadline, || {
+            panic!("预算耗尽不得发起阻塞凭据访问")
+        }))
+        .expect_err("预算耗尽应拒绝");
+        assert!(err.contains("总预算"), "实际诊断：{err}");
+        assert!(err.contains("读取凭据"), "诊断应标明阶段：{err}");
+    }
+
+    /// 非零前置耗时后的过期用例（issue #141 评审）：预算已被前置工作
+    /// 耗尽时，生成 POST 不得发出（合法 URL 会产生计费请求，故以会快速
+    /// 失败的非法 URL 验证——修复前该用例落到 endpoint_url 解析错误，
+    /// 修复后在 POST 之前即按预算拒绝），诊断标明生成请求阶段。
+    #[test]
+    fn generate_request_budget_gate_precedes_post_when_expired() {
+        let deadline = std::time::Instant::now() - std::time::Duration::from_secs(1);
+        let body = generation_request_body("m", "p", "1024x1024");
+        let err = tauri::async_runtime::block_on(generate_image_bytes(
+            "not-a-url",
+            "sk-FICTITIOUS",
+            &body,
+            "job-1",
+            deadline,
+        ))
+        .expect_err("预算耗尽应在 POST 前拒绝");
+        assert!(err.contains("总预算"), "实际诊断：{err}");
+        assert!(err.contains("生成请求"), "诊断应标明阶段：{err}");
     }
 
     /// 受控慢响应（issue #141）：挂起 future 与剩余预算赛跑——统一预算
