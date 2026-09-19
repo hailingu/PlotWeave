@@ -342,6 +342,32 @@ fn list_project_metas_reads_only_verified_entries() {
     cleanup_temp(&projects);
 }
 
+/// [issue #148](https://github.com/hailingu/PlotWeave/issues/148)：列表
+/// 顺带清扫崩溃遗留的孤儿临时文件（归属可辨 + 超龄 + 普通文件三条件
+/// 同时成立）；进行中写入的新鲜临时文件与项目文件不受影响，清扫
+/// fail-soft 永不阻断列表。
+#[test]
+fn list_sweeps_crash_orphaned_temp_files() {
+    let projects = temp_projects_dir();
+    let doc = new_project_file("p-1", "正常项目".into(), now_iso());
+    persist_project(&cap(&projects), "p-1", doc).expect("先保存");
+    let aged_tmp = projects.join(".p-1.json.p-18f-0.tmp");
+    fs::write(&aged_tmp, b"partial").expect("写遗留临时文件");
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&aged_tmp)
+        .expect("打开遗留临时文件")
+        .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(48 * 60 * 60))
+        .expect("回拨 mtime");
+    let fresh_tmp = projects.join(".p-2.json.p-18f-1.tmp");
+    fs::write(&fresh_tmp, b"writing").expect("写进行中临时文件");
+    let metas = list_project_metas(&cap(&projects)).expect("列出项目");
+    assert_eq!(metas.len(), 1);
+    assert!(!aged_tmp.exists(), "超龄归属临时文件应随列表被清理");
+    assert!(fresh_tmp.exists(), "进行中的临时文件不得被清理");
+    cleanup_temp(&projects);
+}
+
 /// [issue #123](https://github.com/hailingu/PlotWeave/issues/123)：损坏或
 /// 不可读的项目不再从列表静默消失——以占位摘要（诊断 + 缺省统计/时间，
 /// 缺省时间排序最后）返回，正常项目不受影响；点击占位卡打开仍走

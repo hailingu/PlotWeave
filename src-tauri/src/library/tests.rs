@@ -697,3 +697,61 @@ fn unique_library_id_retries_on_collision_with_current_by_id() {
     assert_eq!(id, "fresh", "碰撞应重试直到未占用");
     assert_eq!(calls, 3);
 }
+
+/// [issue #148](https://github.com/hailingu/PlotWeave/issues/148)：库列表
+/// 顺带清扫 `library/` 与 `library/assets/` 内崩溃遗留的孤儿临时文件
+/// （归属可辨 + 超龄 + 普通文件）；进行中写入的新鲜临时文件保留，
+/// 清扫 fail-soft 永不阻断列表。
+#[test]
+fn list_sweeps_orphan_temp_files_in_library_and_assets() {
+    let (library, root) = temp_fixture();
+    write_index_raw(
+        &library,
+        &json!({ "assets": { "byId": {} }, "groups": { "byId": {} } }),
+    );
+    let aged = std::time::SystemTime::now() - std::time::Duration::from_secs(48 * 60 * 60);
+    for path in [
+        library.join(".library.json.p-18f-0.tmp"),
+        library.join("assets").join(".a.png.p-18f-1.tmp"),
+    ] {
+        fs::write(&path, b"partial").expect("写遗留临时文件");
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .expect("打开遗留临时文件")
+            .set_modified(aged)
+            .expect("回拨 mtime");
+    }
+    let fresh = library.join("assets").join(".b.png.p-18f-2.tmp");
+    fs::write(&fresh, b"writing").expect("写进行中临时文件");
+    let (index, _warnings) = list_assets_with(&cap(&library)).expect("列出资产");
+    assert!(index["assets"]["byId"].is_object());
+    assert!(
+        !library.join(".library.json.p-18f-0.tmp").exists(),
+        "库根超龄临时文件应被清理"
+    );
+    assert!(
+        !library.join("assets").join(".a.png.p-18f-1.tmp").exists(),
+        "assets 超龄临时文件应被清理"
+    );
+    assert!(fresh.exists(), "进行中的临时文件不得被清理");
+    cleanup(&root);
+}
+
+/// issue #148：`library/assets/` 缺失时列表清扫跳过该目录且不在读路径
+/// 创建它（创建副作用归导入等写入口），列表本身照常返回。
+#[test]
+fn list_sweep_skips_missing_assets_dir_without_creating() {
+    let (library, root) = temp_fixture();
+    fs::remove_dir(library.join("assets")).expect("移除 assets 目录");
+    write_index_raw(
+        &library,
+        &json!({ "assets": { "byId": {} }, "groups": { "byId": {} } }),
+    );
+    let (_index, _warnings) = list_assets_with(&cap(&library)).expect("assets 缺失列表仍可读");
+    assert!(
+        !library.join("assets").exists(),
+        "读路径清扫不得创建 assets 目录"
+    );
+    cleanup(&root);
+}
