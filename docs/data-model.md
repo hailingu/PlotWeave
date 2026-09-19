@@ -120,6 +120,7 @@
 > 八十一轮评审修订（2026-09-04）：三处收口——① §8.2 在途 save 迟到失败只在无更新快照时回填（不覆盖用户随后的新编辑），关闭冲刷对在途 save 的迟到失败不阻断（其快照已按序回填，由 pending 落盘统一收口）；② §9.3 资产目录创建改「总是尝试 + 容忍 AlreadyExists + 归类校验兜底」——并发首次落盘的 create_dir 竞态不再丢弃已付费结果；③ §12/§13 AI `delete_node` 对图片节点整批拒绝（与 create/update 同口径：批量模拟删除路径不走 deleteNodesByIds、会绕过产物回收留下永久索引的不可达资产）。
 > 八十二轮修订（2026-09-16，[issue #140](https://github.com/hailingu/PlotWeave/issues/140)）：§12 AI 入站命令的**列表成员**执行成员级自有键白名单（`lines` 行成员 id/kind/text/speaker/side/vo、`options` 对象成员 id/label、`refs` 引用位成员 id/kind/assetId/label、`relatedIds` 成员 kind/id）——与各 itemObject schema 的 `additionalProperties: false` 同口径（此前协议已声明、校验器只查已知字段形状，未知自有键随成员 spread 进文档）；违反按下标与键名点名、整批零变更。此收紧只作用于 AI 入站通道；加载归一化的成员级政策（未知字段随成员原样保留，前向兼容保真）不变——两层按「入站从严、落盘保真」区分。
 > 八十三轮修订（2026-09-19，[issue #148](https://github.com/hailingu/PlotWeave/issues/148)）：§10.2 补崩溃遗留随机临时文件的顺带清扫策略——归属可辨（`.{目标名}.{id}.tmp` 命名协议；id 段按 PR #217 评审收紧为生成器唯一产出形状 `p-<小写十六进制>-<小写十六进制>`，目标名按第二轮评审收紧为各目录原子写目标白名单）+ 超龄且不活动（24h 宽限期，且清扫与本目录原子写经进程内操作锁串行——第三轮评审补挂起恢复/时钟前跳窗口；库侧由既有库操作锁覆盖）+ no-follow 归类为普通文件三条件同时成立才移除，随 `list_projects`/`list_library_assets` 执行且 fail-soft 不阻断列表；遗留临时文件只删除不读取，不充当恢复副本。`projects/{id}/` 会话目录、`projects/{id}/assets/`、应用根设置临时文件与跨进程并发实例不在本轮范围，按记录边界留待后续。
+> 八十四轮修订（2026-09-19，[issue #149](https://github.com/hailingu/PlotWeave/issues/149)）：§10.4 补失败诊断的脱敏边界——凡经 `Display` 到达前端的 reqwest 错误一律把本次请求 URL 替换为脱敏形态（query/userinfo/fragment 剥离，路径与错误类别保留）；状态错误摘录先把本次 API key 替换为 `***`、请求 URL 替换为脱敏形态，再截断 200 字符。精确子串替换不覆盖 URL 的其它拼写形态与 key 局部片段，按记录边界。
 > 适用范围：画布文档模型、设定与资产模型、命令与撤销、本地存储体系、AI Agent 交互。
 > 明确不在范围内：用户体系、租户、余额/计费。PlotWeave 是单用户 BYOK 桌面工具；若未来出现此类需求，另起《服务端领域模型》文档。
 
@@ -985,6 +986,8 @@ interface ProviderSettings {
 provider 的 API key 以**密文 `keyEnc`** 存于 provider 配置：Rust `seal` 模块 AES-256-GCM 加密（密钥 = 应用常数 + IOPlatformUUID + 随机盐，封装于 envelope），明文只在加密/请求的进程内存中出现；历史钥匙串数据保留只读回退，不再写入。
 
 **带凭据请求的传输策略**（[issue #136](https://github.com/hailingu/PlotWeave/issues/136)，已实现）：聊天与生图的 provider POST 共用 Rust `provider_transport`，发送前校验最终端点。远程服务（含局域网）必须使用 HTTPS；HTTP 仅允许 URL 解析后明确为 `localhost`、IPv4 `127.0.0.0/8` 或 IPv6 `::1` 的回环目标，不通过 DNS 为其他域名授予例外。自定义 HTTPS 域名不绑定 provider id，沿用客户端的证书校验。每跳重定向重新执行相同检查，且任何 HTTPS → HTTP 降级均拒绝（包括回环目标）；保留 reqwest 的默认 10 跳限制及跨 host/port 敏感头剥离，不恢复已移除的 Bearer。拒绝通过既有请求错误展示，策略诊断不含原始 URL 或凭据。存量 HTTP 配置保留，用户可在设置页改为 HTTPS 或回环网关后重试；不改变 `settings.json` 格式，也不在加载/保存时替换地址。模型返回的图片下载 URL 仍执行 §13 的独立公网目标策略，不采用回环例外。
+
+**失败诊断的脱敏边界**（[issue #149](https://github.com/hailingu/PlotWeave/issues/149)，已实现）：reqwest 错误的 `Display` 会内嵌完整请求 URL（含 query），用户配置的敏感 query 或签名 URL 的签名参数会随之进入前端诊断；provider 错误正文（摘录 200 字符）也可能回显请求 URL 或 API key。统一脱敏策略：① 凡经 `Display` 到达前端的 reqwest 错误（发送/超时/客户端构造/响应体读取，含 §13 下载路径），把本次请求 URL 的每次出现替换为脱敏形态 `scheme://host[:port]/path`——userinfo、query 与 fragment 一律剥离，路径与错误类别/底层原因文本保留（可行动信息不丢）；② 状态错误摘录先把本次 API key 替换为 `***`、本次请求 URL 替换为脱敏形态，再截断 200 字符（脱敏先于截断，跨边界的 key 不留半截）。脱敏为精确子串替换：URL 的其它拼写形态（百分号编码差异等）与 key 的局部片段不在覆盖范围，属记录边界；主 key 经 Bearer header 发送、代码不直接格式化 header 的既有防线不变。
 
 ### 10.5 Rust 持久化命令（Tauri commands）
 

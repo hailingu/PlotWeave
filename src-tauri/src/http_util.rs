@@ -31,8 +31,11 @@ impl std::fmt::Display for ReadBodyError {
             ReadBodyError::ResponseTooLarge { limit } => {
                 write!(f, "响应体超过 {limit} 字节上限")
             }
-            ReadBodyError::ReadTimeout(e) => write!(f, "读取响应超时：{e}"),
-            ReadBodyError::Read(e) => write!(f, "读取响应失败：{e}"),
+            // issue #149：reqwest 错误的 URL 一律脱敏（query/userinfo 剥离）
+            ReadBodyError::ReadTimeout(e) => {
+                write!(f, "读取响应超时：{}", describe_reqwest_error(e))
+            }
+            ReadBodyError::Read(e) => write!(f, "读取响应失败：{}", describe_reqwest_error(e)),
             ReadBodyError::InvalidUtf8(e) => write!(f, "响应不是有效 UTF-8：{e}"),
         }
     }
@@ -100,16 +103,25 @@ pub(crate) enum ProxyError {
 }
 
 /// 展示边界契约：文案与历史 `format!` 输出逐字一致，前端可见诊断不变。
+/// issue #149 起唯一例外：内嵌在 reqwest 错误里的请求 URL 一律经
+/// [`describe_reqwest_error`] 脱敏（query/userinfo 剥离，路径保留），
+/// 状态摘录经 `redact_status_head` 脱敏（见调用点）。
 impl std::fmt::Display for ProxyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ProxyError::ProviderRefused { detail } => write!(f, "{detail}"),
-            ProxyError::Client { context, source } => write!(f, "{context}：{source}"),
-            ProxyError::Send { context, source } => write!(f, "{context}：{source}"),
-            ProxyError::SendTimeout { secs, source } => {
-                write!(f, "请求超时（{secs}s）：{source}")
+            ProxyError::Client { context, source } => {
+                write!(f, "{context}：{}", describe_reqwest_error(source))
             }
-            ProxyError::Read(source) => write!(f, "读取图像失败：{source}"),
+            ProxyError::Send { context, source } => {
+                write!(f, "{context}：{}", describe_reqwest_error(source))
+            }
+            ProxyError::SendTimeout { secs, source } => {
+                write!(f, "请求超时（{secs}s）：{}", describe_reqwest_error(source))
+            }
+            ProxyError::Read(source) => {
+                write!(f, "读取图像失败：{}", describe_reqwest_error(source))
+            }
             ProxyError::Body(e) => write!(f, "{e}"),
             ProxyError::Status {
                 context,
@@ -153,6 +165,50 @@ pub(crate) fn append_capped(
     }
     buf.extend_from_slice(chunk);
     Ok(())
+}
+
+/// URL 脱敏展示（issue #149 诊断脱敏边界）：仅保留
+/// `scheme://host[:port]/path`——userinfo、query 与 fragment 一律剥离
+/// （用户配置的敏感 query、内嵌凭据与签名 URL 的签名参数不进诊断与
+/// 日志），保留可行动信息（哪个服务的哪条路径失败）。
+pub(crate) fn redact_url_for_display(url: &reqwest::Url) -> String {
+    let mut redacted = url.clone();
+    let _ = redacted.set_username("");
+    let _ = redacted.set_password(None);
+    redacted.set_query(None);
+    redacted.set_fragment(None);
+    redacted.to_string()
+}
+
+/// reqwest 错误的脱敏描述（issue #149）：reqwest::Error 的 Display 会
+/// 内嵌完整请求 URL（`... for url (https://host/path?query)`）——用户
+/// 配置的敏感 query 或签名 URL 的签名参数会随之进入前端诊断。将本次
+/// 请求 URL 的每次出现替换为脱敏形态；URL 之外的底层原因文本（hyper/
+/// io/TLS 层）原样保留（可行动信息不丢）。error 不携带 URL 时（客户端
+/// 构造失败等）没有可替换形态，原文返回——该路径本就不含端点信息。
+pub(crate) fn describe_reqwest_error(error: &reqwest::Error) -> String {
+    let text = error.to_string();
+    match error.url() {
+        Some(url) => text.replace(url.as_str(), &redact_url_for_display(url)),
+        None => text,
+    }
+}
+
+/// provider 错误正文摘录的脱敏（issue #149）：先把本次 API key 的每次
+/// 出现替换为 `***`、把本次请求 URL 的每次出现替换为脱敏形态，再按
+/// 既有上限截断 200 字符——网关/代理在错误正文里回显请求 URL 或密钥
+/// 时，展示与日志不泄露；脱敏先于截断，跨边界的 key 不会留下半截。
+/// 正文其余内容保留（provider 自己的错误文案是可行动信息）。脱敏为
+/// 精确子串替换：URL 的其它拼写形态（百分号编码差异等）与 key 的
+/// 局部片段不在覆盖范围（记录边界）。空 key 不引入替换噪音。
+pub(crate) fn redact_status_head(text: &str, key: &str, url: &reqwest::Url) -> String {
+    let text = text.replace(url.as_str(), &redact_url_for_display(url));
+    let text = if key.is_empty() {
+        text
+    } else {
+        text.replace(key, "***")
+    };
+    text.chars().take(200).collect()
 }
 
 /// 有上限地流式读取响应体为 UTF-8 文本（非流式 JSON 主响应）。读取
@@ -407,5 +463,135 @@ mod tests {
             "透传应保留内层类型：{body:?}"
         );
         assert!(matches!(body, ProxyError::Body(_)));
+    }
+
+    /// [issue #149](https://github.com/hailingu/PlotWeave/issues/149) 的
+    /// 虚构 token：所有脱敏断言共用，绝不使用真实凭据形态之外的值。
+    const FICTITIOUS_TOKEN: &str = "sk-FICTITIOUS-SECRET";
+
+    #[test]
+    fn redact_url_strips_userinfo_query_and_fragment() {
+        let url = reqwest::Url::parse(&format!(
+            "https://user:pw@api.example.com:8443/v1/chat?key={FICTITIOUS_TOKEN}&x=1#frag"
+        ))
+        .expect("解析 URL");
+        let shown = redact_url_for_display(&url);
+        assert_eq!(shown, "https://api.example.com:8443/v1/chat");
+        // 无敏感成分时形态不变（不过度脱敏）；空路径的规范化斜线除外
+        let plain = reqwest::Url::parse("http://127.0.0.1:8080/v1/images").expect("解析 URL");
+        assert_eq!(
+            redact_url_for_display(&plain),
+            "http://127.0.0.1:8080/v1/images"
+        );
+    }
+
+    /// 连接已关闭端口（1 号端口无监听）快速取得携带完整 URL 的真实
+    /// reqwest 发送错误。
+    async fn send_err_with_query_url() -> reqwest::Error {
+        reqwest::Client::new()
+            .get(format!(
+                "http://127.0.0.1:1/v1/chat/completions?token={FICTITIOUS_TOKEN}"
+            ))
+            .send()
+            .await
+            .expect_err("连接已关闭端口应失败")
+    }
+
+    #[test]
+    fn describe_reqwest_error_redacts_sensitive_query() {
+        let err = tauri::async_runtime::block_on(send_err_with_query_url());
+        let shown = describe_reqwest_error(&err);
+        assert!(
+            !shown.contains(FICTITIOUS_TOKEN),
+            "敏感 query 不得进入诊断：{shown}"
+        );
+        assert!(!shown.contains("token="), "query 应整体剥离：{shown}");
+        assert!(shown.contains("127.0.0.1"), "主机可行动信息保留：{shown}");
+        assert!(shown.contains("/v1/chat/completions"), "路径保留：{shown}");
+    }
+
+    #[test]
+    fn send_and_read_displays_redact_sensitive_url_query() {
+        // 连接已关闭端口（1 号端口无监听）：快速取得携带完整 URL 的真实
+        // reqwest 发送错误（虚构 token，issue #149）
+        let err = tauri::async_runtime::block_on(
+            reqwest::Client::new()
+                .get(format!(
+                    "http://127.0.0.1:1/v1/chat/completions?token={FICTITIOUS_TOKEN}"
+                ))
+                .send(),
+        )
+        .expect_err("连接已关闭端口应失败");
+        let shown = ProxyError::Send {
+            context: "请求失败".into(),
+            source: err,
+        }
+        .to_string();
+        assert!(
+            !shown.contains(FICTITIOUS_TOKEN),
+            "敏感 query 不得进入诊断：{shown}"
+        );
+        assert!(!shown.contains("token="), "query 应整体剥离：{shown}");
+        assert!(shown.starts_with("请求失败："), "类别文案保留：{shown}");
+        assert!(
+            shown.contains("/v1/chat/completions"),
+            "路径可行动信息保留：{shown}"
+        );
+    }
+
+    #[test]
+    fn read_body_error_display_redacts_sensitive_url_query() {
+        // 头声明 64 字节但只发 10 字节即断开：读取阶段失败，错误携带
+        // 带敏感 query 的完整请求 URL（虚构 token）
+        let base_url = spawn_local_http(move |mut stream| {
+            drain_request(&mut stream);
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 64\r\n\r\n0123456789");
+        });
+        let url = format!("{base_url}/image?sig={FICTITIOUS_TOKEN}");
+        let err = tauri::async_runtime::block_on(async {
+            let response = reqwest::Client::new()
+                .get(&url)
+                .send()
+                .await
+                .expect("夹具请求应发出");
+            read_text_capped(response, 1024).await.unwrap_err()
+        });
+        let shown = err.to_string();
+        assert!(
+            !shown.contains(FICTITIOUS_TOKEN),
+            "敏感 query 不得进入诊断：{shown}"
+        );
+        assert!(!shown.contains("sig="), "query 应整体剥离：{shown}");
+        assert!(shown.starts_with("读取响应失败："), "类别文案保留：{shown}");
+    }
+
+    #[test]
+    fn redact_status_head_replaces_key_and_url_and_keeps_cap() {
+        let url = reqwest::Url::parse(&format!(
+            "https://api.example.com/v1/images?token={FICTITIOUS_TOKEN}"
+        ))
+        .expect("解析 URL");
+        let text = format!(
+            "error: invalid key sk-FICTITIOUS-KEY for https://api.example.com/v1/images?token={FICTITIOUS_TOKEN}"
+        );
+        let head = redact_status_head(&text, "sk-FICTITIOUS-KEY", &url);
+        assert!(
+            !head.contains("sk-FICTITIOUS"),
+            "密钥与 token 均脱敏：{head}"
+        );
+        assert!(head.contains("***"), "密钥替换为 ***：{head}");
+        assert!(
+            head.contains("https://api.example.com/v1/images"),
+            "路径可行动信息保留：{head}"
+        );
+        assert!(!head.contains("token="), "query 应整体剥离：{head}");
+        // 200 字符摘录上限不变（脱敏先于截断，跨边界的 key 不会半截泄露）
+        let long = format!("{} sk-FICTITIOUS-KEY", "x".repeat(500));
+        let head = redact_status_head(&long, "sk-FICTITIOUS-KEY", &url);
+        assert_eq!(head.chars().count(), 200, "摘录上限不变：{head}");
+        assert!(!head.contains("sk-FICTITIOUS"), "长正文同样脱敏：{head}");
+        // 空 key 不引入替换噪音
+        let head = redact_status_head("plain error", "", &url);
+        assert_eq!(head, "plain error");
     }
 }

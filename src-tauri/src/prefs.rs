@@ -241,12 +241,16 @@ async fn chat_completion(
     )
     .await?;
     let status = response.status();
+    // issue #149：状态摘录脱敏需要本次请求 URL——read_text_capped 消费
+    // response 前先取出
+    let response_url = response.url().clone();
     // 限读错误经 Body 透传（#45 首片类型）：文案与来源链原样保留
     let text = crate::http_util::read_text_capped(response, CHAT_RESPONSE_BODY_MAX_BYTES)
         .await
         .map_err(ProxyError::Body)?;
     if !status.is_success() {
-        let head: String = text.chars().take(200).collect();
+        // 网关/代理回显请求 URL 或密钥时展示不泄露（issue #149）
+        let head = crate::http_util::redact_status_head(&text, key, &response_url);
         return Err(ProxyError::Status {
             context: "服务返回".into(),
             code: status,
@@ -554,5 +558,42 @@ mod tests {
             "实际错误：{err:?}"
         );
         assert!(err.to_string().starts_with("请求超时"), "实际错误：{err}");
+    }
+
+    #[test]
+    fn chat_completion_redacts_key_echoed_in_status_body() {
+        // [issue #149](https://github.com/hailingu/PlotWeave/issues/149)：
+        // 网关/代理在错误正文回显请求密钥时，展示边界须把本次 API key
+        // 替换为 ***（虚构 token）；状态码/类别文案与 200 字符摘录上限保留
+        let key = "sk-FICTITIOUS-KEY";
+        let body = format!("{{\"error\": \"invalid key {key} for model test-model\"}}");
+        let base_url = spawn_local_http(move |mut stream| {
+            drain_request(&mut stream);
+            let response = format!(
+                "HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+        });
+        let result = tauri::async_runtime::block_on(chat_completion(
+            &base_url,
+            "test-model",
+            serde_json::json!([{ "role": "user", "content": "hi" }]),
+            None,
+            key,
+            30,
+        ));
+        let err = result.expect_err("500 应失败");
+        assert!(
+            matches!(err, ProxyError::Status { .. }),
+            "实际错误：{err:?}"
+        );
+        let shown = err.to_string();
+        assert!(
+            !shown.contains("sk-FICTITIOUS-KEY"),
+            "回显密钥不得进入诊断：{shown}"
+        );
+        assert!(shown.contains("***"), "密钥应替换为 ***：{shown}");
+        assert!(shown.contains("服务返回 500"), "状态码与类别保留：{shown}");
     }
 }
