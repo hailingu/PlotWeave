@@ -42,12 +42,22 @@ export function LibraryWarnings() {
           <p>
             磁盘空间尚未释放——当前平台缺少安全清理能力，不会自动删除这些文件；删除完成仅指图库不再引用，不代表空间已回收。
           </p>
-          <p>
-            恢复方式：在应用完全退出后，删除应用数据目录下
-            library/assets/.trash/ 中的内容，并同步移除
-            library/asset-delete-journal.json
-            中的对应条目后重启。请勿改动目录下其他文件。
-          </p>
+          {evidence.length === 0 ? (
+            <p>
+              恢复方式：在应用完全退出后，删除应用数据目录下
+              library/assets/.trash/ 中的内容，并同步移除
+              library/asset-delete-journal.json
+              中的对应条目后重启。请勿改动目录下其他文件。
+            </p>
+          ) : (
+            // P1（PR #222 第二轮评审）：混有证据项时 .trash 可能含仍需
+            // 保留的原媒体——目录级删除指引暂缓，待核对完成（证据区
+            // 消失）后再按恢复方式清理
+            <p>
+              存在待人工核对的删除事务：暂缓清理
+              .trash——其中可能混有仍需保留的原媒体；请先按「待人工核对的删除事务」区完成核对，本页不再显示该区后再按恢复方式清理。
+            </p>
+          )}
           {routine.map((item) => (
             <p key={item}>{item}</p>
           ))}

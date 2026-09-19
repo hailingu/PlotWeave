@@ -76,7 +76,7 @@ describe('LibraryWarnings 冲突证据区（PR #222 评审 P1）', () => {
     expect(screen.queryByText(/删除隔离区待清理（/)).toBeNull()
   })
 
-  it('常规与证据混合时两区并呈，指引各归其类', async () => {
+  it('常规与证据混合时两区并呈：目录级删除指引暂缓（PR #222 第二轮评审 P1）', async () => {
     const { diagnostics, LibraryWarnings } = await load()
     diagnostics.publishCleanupPending([
       '媒体已隔离待清理：assets/la-1.png',
@@ -85,5 +85,12 @@ describe('LibraryWarnings 冲突证据区（PR #222 评审 P1）', () => {
     render(<LibraryWarnings />)
     expect(screen.getByText(/删除隔离区待清理（1 项）/)).toBeTruthy()
     expect(screen.getByText(/待人工核对的删除事务（1 项）/)).toBeTruthy()
+    // 混合态下 .trash 可能混有仍需保留的原媒体：常规区不得再给目录级
+    // 删除指引，改为明示暂缓与恢复条件
+    const routine = screen
+      .getByText(/删除隔离区待清理（1 项）/)
+      .closest('details')!
+    expect(routine.textContent).not.toContain('删除应用数据目录下')
+    expect(routine.textContent).toContain('暂缓')
   })
 })
