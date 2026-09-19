@@ -122,6 +122,49 @@ describe('libraryStore Tauri 路径：list（normalizeAsset 归一化）', () =>
     warn.mockRestore()
   })
 
+  it('cleanupPending 进用户可见诊断通道并保留控制台明细（issue #135）', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    invoke.mockResolvedValue({
+      assets: byId(entry()),
+      cleanupPending: ['媒体已隔离待清理：assets/la-1.png'],
+    })
+    const { libraryStore } = await load()
+    await libraryStore.list()
+    const diagnostics = await import('./libraryDiagnostics')
+    expect(diagnostics.cleanupPendingSnapshot()).toEqual([
+      '媒体已隔离待清理：assets/la-1.png',
+    ])
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0][1]).toEqual(['媒体已隔离待清理：assets/la-1.png'])
+    warn.mockRestore()
+  })
+
+  it('cleanupPending 缺失时不发布也不告警（正常状态不误报，issue #135）', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    invoke.mockResolvedValue({ assets: byId(entry()) })
+    const { libraryStore } = await load()
+    await libraryStore.list()
+    const diagnostics = await import('./libraryDiagnostics')
+    expect(diagnostics.cleanupPendingSnapshot()).toEqual([])
+    expect(warn).not.toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
+  it('删除返回 cleanupPending 时同样进诊断通道（issue #135）', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    invoke.mockResolvedValue({
+      cleanupPending: ['媒体已隔离待清理：assets/la-1.png'],
+    })
+    const { libraryStore } = await load()
+    await libraryStore.remove('la-1')
+    const diagnostics = await import('./libraryDiagnostics')
+    expect(diagnostics.cleanupPendingSnapshot()).toEqual([
+      '媒体已隔离待清理：assets/la-1.png',
+    ])
+    expect(warn).toHaveBeenCalledTimes(1)
+    warn.mockRestore()
+  })
+
   it('put 返回条目携带 warnings 时同样上报诊断', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     invoke.mockResolvedValue(

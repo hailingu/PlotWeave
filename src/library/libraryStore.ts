@@ -8,7 +8,10 @@
  */
 
 import { uid } from '../uid'
-import { publishLibraryWarnings } from './libraryDiagnostics'
+import {
+  publishCleanupPending,
+  publishLibraryWarnings,
+} from './libraryDiagnostics'
 
 /** 资产库分类（§7）：索引条目的 kind 域；中文标签/图标见 LIBRARY_KINDS。 */
 export type LibraryKind =
@@ -117,6 +120,16 @@ function reportLibraryWarnings(warnings: unknown): void {
   }
 }
 
+/** 删除隔离区待清理（issue #135）：状态进用户可见的诊断通道（不再仅
+ * 控制台——用户看得到未释放空间与恢复指引），原始条目保留在控制台供
+ * 定位；空状态不发布（不误报）。 */
+function reportCleanupPending(cleanupPending: unknown): void {
+  publishCleanupPending(cleanupPending)
+  if (Array.isArray(cleanupPending) && cleanupPending.length > 0) {
+    console.warn('[Library] 删除隔离区待清理：', cleanupPending)
+  }
+}
+
 /** 内存回退：blob + object URL，会话内有效。 */
 const memoryAssets = new Map<string, { asset: LibraryAsset; blob: Blob }>()
 /** 内存回退的组存储（§7.2）。 */
@@ -130,10 +143,9 @@ async function tauriList(): Promise<LibraryAsset[]> {
     cleanupPending?: unknown[]
   }>('list_library_assets')
   reportLibraryWarnings(index.warnings)
-  // 隔离区积压（身份绑定清理不可用）：随列表上报为诊断，不再静默累积
-  if (Array.isArray(index.cleanupPending) && index.cleanupPending.length > 0) {
-    console.warn('[Library] 删除隔离区待清理：', index.cleanupPending)
-  }
+  // 隔离区积压（身份绑定清理不可用）：随列表进用户可见诊断通道
+  //（issue #135），不再静默累积
+  reportCleanupPending(index.cleanupPending)
   // §7.2 Record 形状：assets.byId 的值即条目（issue #29 PR 1，评审修复——
   // 旧数组形状已迁移，前端必须按 byId 读取，否则全部资产被隐藏）
   const byId = index.assets?.byId
@@ -252,9 +264,7 @@ async function applyRemove(id: string): Promise<void> {
       cleanupPending?: unknown[]
     }>('delete_library_asset', { id })
     reportLibraryWarnings(result?.warnings)
-    if (result?.cleanupPending?.length) {
-      console.warn('[Library] 删除隔离区待清理：', result.cleanupPending)
-    }
+    reportCleanupPending(result?.cleanupPending)
   } else {
     memoryAssets.delete(id)
   }
@@ -346,12 +356,7 @@ export const libraryStore = {
           cleanupPending?: unknown[]
         }>('list_library_assets')
         reportLibraryWarnings(index.warnings)
-        if (
-          Array.isArray(index.cleanupPending) &&
-          index.cleanupPending.length > 0
-        ) {
-          console.warn('[Library] 删除隔离区待清理：', index.cleanupPending)
-        }
+        reportCleanupPending(index.cleanupPending)
         const byId = index.groups?.byId
         const entries =
           byId && typeof byId === 'object' ? Object.values(byId) : []
@@ -381,10 +386,9 @@ export const libraryStore = {
           (result as { warnings?: unknown } | null)?.warnings,
         )
         // cleanupPending 随 upsert 响应上报（评审修复，PR #36 第三轮）——
-        // 与 list/delete 同款，删除隔离区积压不得静默
-        if (result?.cleanupPending?.length) {
-          console.warn('[Library] 删除隔离区待清理：', result.cleanupPending)
-        }
+        // 与 list/delete 同款，删除隔离区积压不得静默（issue #135 起进
+        // 用户可见诊断通道）
+        reportCleanupPending(result?.cleanupPending)
         return result
       })
     }
@@ -442,9 +446,7 @@ export const libraryStore = {
           cleanupPending?: unknown[]
         }>('delete_library_group', { id })
         reportLibraryWarnings(result?.warnings)
-        if (result?.cleanupPending?.length) {
-          console.warn('[Library] 删除隔离区待清理：', result.cleanupPending)
-        }
+        reportCleanupPending(result?.cleanupPending)
       })
     }
     // 内存回退同款存在性校验（评审修复，PR #36 第一轮）：stale/重复删除
