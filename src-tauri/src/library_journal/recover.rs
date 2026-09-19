@@ -424,11 +424,8 @@ fn re_quarantine(
         .map_err(|e| LibraryError::io(format!("重隔离失败（{}）", entry.asset_id), e))?;
     fsync_dir(&trash)?;
     fsync_dir(&parent)?;
-    if !try_bound_cleanup(&trash, &updated, recovery)? {
-        recovery
-            .cleanup_pending
-            .push(format!("重隔离项保留待清理：{}", entry.asset_id));
-    } else {
+    // 清理函数已按能力缺失或身份冲突报告唯一诊断；重隔离不再重复分类。
+    if try_bound_cleanup(&trash, &updated, recovery)? {
         retire_entry(current, &updated);
         write_journal(library, current)?;
     }

@@ -389,10 +389,16 @@ fn recover_requarantines_media_returned_to_original_path() {
         1,
         "清理不可用应保留日志"
     );
-    assert!(
-        !recovery.cleanup_pending.is_empty(),
-        "应报告 cleanupPending"
-    );
+    assert_eq!(recovery.cleanup_pending.len(), 1, "一个隔离项仅报告一次");
+    assert!(recovery.warnings.is_empty());
+    assert!(recovery.conflicted.is_empty());
+    assert!(!recovery.read_only);
+    let journal = read_journal_raw(&library);
+    let repeated = recover(&cap(&library)).expect("再次恢复应成功");
+    assert_eq!(repeated.cleanup_pending, recovery.cleanup_pending);
+    assert!(repeated.warnings.is_empty());
+    assert_eq!(read_journal_raw(&library), journal);
+    assert_eq!(fs::read(quarantined[0].path()).expect("保留内容"), b"PNG");
     cleanup(&root);
 }
 
