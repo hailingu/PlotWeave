@@ -12,6 +12,7 @@ import type { ProjectSettings } from '../settings'
 import { SCENE_SHOT_HANDLE } from '../graphRules'
 import { SceneNode } from './SceneNode'
 import type { SceneFlowNode, SceneNodeData } from './types'
+import type { PatchShape } from './patch'
 
 vi.mock('@xyflow/react', async (importOriginal) => {
   const orig = await importOriginal<typeof import('@xyflow/react')>()
@@ -48,7 +49,9 @@ const DATA: SceneNodeData = {
 }
 
 function setup(
-  data: Partial<SceneNodeData> = {},
+  // 覆盖补丁走 PatchShape 清除通道（issue #231）：{ locationId: undefined }
+  // = 清除地点引用，与产品补丁语义一致
+  data: PatchShape<SceneNodeData> = {},
   openSettingsId: string | null = null,
 ) {
   const api: NodeEditApi = {

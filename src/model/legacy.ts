@@ -73,7 +73,8 @@ interface MigrationCtx {
   settings: ProjectSettings
   characterRemap: Map<string, string>
   locationRemap: Map<string, string>
-  warnings?: string[]
+  /** 调用方可不传告警通道（string[] | undefined，issue #231）。 */
+  warnings?: string[] | undefined
   migrated: boolean
 }
 
@@ -369,13 +370,18 @@ export function migrateProjectDocument(
   const locations = reissueEntityIds(ctx, ctx.settings.locations, 'loc')
   ctx.settings.locations = locations.list as typeof ctx.settings.locations
   ctx.locationRemap = locations.remap
-  ctx.settings.props = reissueEntityIds(ctx, ctx.settings.props ?? [], 'prop')
-    .list as typeof ctx.settings.props
+  // EOPT 下 `as typeof ctx.settings.props` 会把显式 undefined 带进赋值
+  // （issue #231）；reissue 的 list 恒为数组，直接赋值即类型精确
+  ctx.settings.props = reissueEntityIds(
+    ctx,
+    ctx.settings.props ?? [],
+    'prop',
+  ).list
   ctx.settings.documents = reissueEntityIds(
     ctx,
     ctx.settings.documents ?? [],
     'doc',
-  ).list as typeof ctx.settings.documents
+  ).list
   rewriteDocumentRelatedIds(ctx)
 
   const nodes = doc.nodes.map((node) => {

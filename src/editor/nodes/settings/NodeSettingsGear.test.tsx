@@ -19,7 +19,7 @@ function setup(options?: { open?: boolean; light?: boolean }) {
         ariaLabel="节奏卡设置"
         open={options?.open ?? false}
         onToggle={onToggle}
-        light={options?.light}
+        {...(options?.light !== undefined && { light: options.light })}
       />
     </div>,
   )

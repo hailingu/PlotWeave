@@ -608,8 +608,9 @@ function AssetRow({
   onRequestRemove,
 }: {
   readonly asset: LibraryAsset
-  readonly url?: string
-  readonly thumbError?: string
+  // 可显式 undefined = 未加载/无失败（issue #231）
+  readonly url?: string | undefined
+  readonly thumbError?: string | undefined
   readonly onVisible: (asset: LibraryAsset) => void
   readonly onRename: (name: string) => void
   readonly onTagsBlur: (raw: string, intent: AssetTagsIntent) => void
@@ -658,8 +659,9 @@ function AssetThumb({
   onVisible,
 }: {
   readonly asset: LibraryAsset
-  readonly url?: string
-  readonly thumbError?: string
+  // 可显式 undefined = 未加载/无失败（issue #231）
+  readonly url?: string | undefined
+  readonly thumbError?: string | undefined
   readonly onVisible: (asset: LibraryAsset) => void
 }) {
   const ref = useRef<HTMLDivElement>(null)

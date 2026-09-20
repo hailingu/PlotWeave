@@ -309,7 +309,8 @@ export interface ProjectDocument {
   project: {
     id: string
     name: string
-    description?: string
+    /** 序列化层从会话透传（可能显式 undefined = 无描述；JSON 剥离）。 */
+    description?: string | undefined
     createdAt: string
     updatedAt: string
   }

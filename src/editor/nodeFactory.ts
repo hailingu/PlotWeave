@@ -59,7 +59,10 @@ const NODE_SEED_BUILDERS: Record<CreatableType, SeedBuilder> = {
         {
           id: uid('line'),
           kind: 'line',
-          speaker: ctx.characters[0]?.id,
+          // 无角色时不预填：键缺省（而非显式 undefined，issue #231）
+          ...(ctx.characters[0] !== undefined && {
+            speaker: ctx.characters[0].id,
+          }),
           side: 'left',
           text: '新台词…',
         },
@@ -110,7 +113,12 @@ const NODE_SEED_BUILDERS: Record<CreatableType, SeedBuilder> = {
 export function buildCanvasNode(
   type: CreatableType,
   opts:
-    | { at?: XYPosition; selected?: boolean; data?: Record<string, unknown> }
+    | {
+        // 选项缺省可显式 undefined（issue #231）
+        at?: XYPosition | undefined
+        selected?: boolean | undefined
+        data?: Record<string, unknown> | undefined
+      }
     | undefined,
   ctx: NodeFactoryCtx,
 ): CanvasNode {

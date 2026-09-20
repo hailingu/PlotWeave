@@ -50,6 +50,10 @@ fn local_server(responses: Vec<String>) -> (String, Receiver<String>) {
             loop {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
+                        // BSD/macOS：accept 出的流继承监听器的非阻塞标志，
+                        // CI 负载下首次 read 即可能 EAGAIN（WouldBlock）——
+                        // 显式切回阻塞式，让 read_request 的读超时语义成立
+                        stream.set_nonblocking(false).unwrap();
                         tx.send(read_request(&mut stream)).unwrap();
                         stream.write_all(response.as_bytes()).unwrap();
                         break;

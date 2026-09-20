@@ -46,7 +46,9 @@ export interface LibraryAsset {
   /** 创建时间（§7.2 UTC ISO 8601 字符串，issue #29）。 */
   createdAt: string
   /** 删除事务冲突期标记（§7.2）：媒体打开/导入拒绝服务（issue #25）。 */
-  conflicted?: boolean
+  /** 冲突期标记；可显式 undefined = 非冲突期（内存规范化产出的常态，
+   * issue #231）。 */
+  conflicted?: boolean | undefined
 }
 
 /** 资产组：同一主体（如某角色）的多张视图/变体的集合（§7.2）。 */
@@ -154,7 +156,9 @@ async function tauriPut(file: File, kind: LibraryKind): Promise<LibraryAsset> {
  * 按当前索引解析并返回 `pwmedia://` URL——relPath 与本机绝对路径不出
  * Rust，前端不再拼接。冲突期条目本地快路径先行拦截（issue #25）。 */
 async function tauriMediaUrl(
-  asset: Pick<LibraryAsset, 'id' | 'conflicted'>,
+  asset: Pick<LibraryAsset, 'id'> & {
+    readonly conflicted?: boolean | undefined
+  },
 ): Promise<string> {
   if (asset.conflicted) throw new Error('资产处于删除事务冲突期，媒体不可用')
   const { invoke } = await import('@tauri-apps/api/core')
@@ -312,7 +316,10 @@ export const libraryStore = {
    * 库资产 id 取源媒体建独立 URL（§7.3 拷贝语义）；冲突期条目拒绝服务
    * （issue #25）。 */
   mediaUrl: (
-    asset: Pick<LibraryAsset, 'id' | 'conflicted'>,
+    asset: Pick<LibraryAsset, 'id'> & {
+      // 可显式 undefined = 非冲突期（issue #231）
+      readonly conflicted?: boolean | undefined
+    },
   ): Promise<string> => {
     if (isTauri) return tauriMediaUrl(asset)
     if (asset.conflicted)

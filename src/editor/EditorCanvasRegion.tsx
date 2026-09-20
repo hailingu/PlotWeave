@@ -124,7 +124,9 @@ function EditorCanvasRegionImpl(props: EditorCanvasRegionProps) {
         /* 删除统一走命令栈（含连线清理），禁用内置 Delete 行为 */
         deleteKeyCode={null}
         /* 有持久化视口则恢复，否则首开 fitView（§3 视口随文档持久化） */
-        defaultViewport={project.viewport}
+        {...(project.viewport !== undefined && {
+          defaultViewport: project.viewport,
+        })}
         fitView={!project.viewport}
         onMoveEnd={onMoveEnd}
       >

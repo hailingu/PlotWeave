@@ -95,7 +95,8 @@ function normalizeProjectMeta(
 ): {
   id: string
   name: string
-  description?: string
+  /** 归一化产出可为显式 undefined（= 无描述；序列化剥离）。 */
+  description?: string | undefined
   createdAt: string
   updatedAt: string
 } {
@@ -335,8 +336,9 @@ function normalizeActiveNodes(
  * 形状校验）与三个透传容器的同版本扩展键（issue #100 字段演进策略，§11）
  * 一并收拢，避免装配签名参数继续膨胀。 */
 interface EnvelopeExtras {
-  viewport?: Viewport
-  aiRevision?: number
+  /** 归一化产出可为显式 undefined（= 缺省；序列化剥离，issue #231）。 */
+  viewport?: Viewport | undefined
+  aiRevision?: number | undefined
   extensions: {
     graph: Record<string, unknown>
     settings: Record<string, unknown>

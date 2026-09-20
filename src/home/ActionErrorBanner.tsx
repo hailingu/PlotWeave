@@ -44,7 +44,8 @@ export function ActionErrorBanner({
 }: {
   readonly error: HomeActionFailure
   readonly projects: readonly ProjectSummary[]
-  readonly onRetry?: () => void
+  // 可显式 undefined = 无同参重试（issue #231）
+  readonly onRetry?: (() => void) | undefined
 }) {
   return (
     <div className="home-open-error" role="alert">

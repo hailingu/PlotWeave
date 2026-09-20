@@ -85,9 +85,9 @@ export function hasAttachHost(
   edges: Iterable<{
     source: string
     target: string
-    sourceHandle?: string | null
-    className?: string
-    type?: string
+    sourceHandle?: string | null | undefined
+    className?: string | undefined
+    type?: string | undefined
   }>,
   target: string,
 ): boolean {
@@ -99,9 +99,10 @@ export function hasAttachHost(
 
 /** 按边的运行态字段归类连线语义；未知形态一律按剧情流处理。 */
 export function edgeKindOf(e: {
-  type?: string
-  className?: string
-  sourceHandle?: string | null
+  // xyflow Edge 库形状适配（issue #231）：可选成员显式含 undefined
+  type?: string | undefined
+  className?: string | undefined
+  sourceHandle?: string | null | undefined
 }): EdgeKind {
   if (e.type === 'branch') return 'branch'
   if (e.sourceHandle === SCENE_SHOT_HANDLE || e.className === 'pw-edge-attach')
@@ -164,8 +165,8 @@ export function connectEdgeExtras(
 
 /** 同端点重复边；sourceHandle 不同视为不同端口的不同边。 */
 export function isDuplicateEdge(
-  edges: Iterable<EndpointPair & { sourceHandle?: string | null }>,
-  conn: EndpointPair & { sourceHandle?: string | null },
+  edges: Iterable<EndpointPair & { sourceHandle?: string | null | undefined }>,
+  conn: EndpointPair & { sourceHandle?: string | null | undefined },
 ): boolean {
   for (const e of edges) {
     if (

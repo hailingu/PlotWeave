@@ -20,9 +20,11 @@ type SpliceEdge = {
   id: string
   source: string
   target: string
-  sourceHandle?: string | null
-  type?: string
-  className?: string
+  // xyflow Edge 库形状适配（issue #231）：库类型可选成员显式含
+  // undefined，本地边形状参数同款声明以保持接受库值
+  sourceHandle?: string | null | undefined
+  type?: string | undefined
+  className?: string | undefined
 }
 
 const pairSig = (pairs: Array<{ source: string; target: string }>): string =>

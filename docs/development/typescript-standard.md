@@ -36,36 +36,65 @@ written in English for agent interoperability.
   settings (`npm run build`); do not suppress errors with
   `@ts-ignore`/`@ts-expect-error` without an explanatory comment.
 
-### Strict Index Access
+### Strict Type Check Entry
 
-([issue #230](https://github.com/hailingu/PlotWeave/issues/230),
-implemented.) Record and array index reads carry `undefined` at the type
-level under `noUncheckedIndexedAccess`, enforced by an independent check
-entry: `npm run typecheck:strict-index` runs
-`tsc --noEmit -p tsconfig.strict-index.json`, and
-`scripts/check-static.sh` invokes it alongside Prettier and ESLint so both
-the local Git gate and the Sonar gate reject violations before coverage
-generation.
+(Issues [#230](https://github.com/hailingu/PlotWeave/issues/230) and
+[#231](https://github.com/hailingu/PlotWeave/issues/231), implemented.)
+Production source is checked beyond the `strict` baseline by an independent
+entry: `npm run typecheck:strict` runs `tsc --noEmit -p tsconfig.strict.json`
+with two additions, and `scripts/check-static.sh` invokes it alongside Prettier
+and ESLint so the local Git gate, the Sonar gate, and CI (`ci.yml`) all reject
+violations before coverage generation.
 
-- **Scope**: all production source under `src/` plus `vite.config.ts`.
-  **Out of scope**: `*.test.ts` / `*.test.tsx` — test fixtures build arrays
-  and records locally where indices are known by construction; the strictly
-  mechanical widening pass there is large and low-value, while production
-  reads are where dirty data and missing keys matter. Production code that
-  drifts around these rules fails the gate; test files stay on the plain
-  `strict` baseline of `tsconfig.json`.
-- **Satisfying the check**: for values that can genuinely be missing, handle
-  the missing case explicitly with the same dirty-data semantics the
-  surrounding code already uses. For locally proven invariants, express them
-  in the type system or control flow instead: finite-key `Record<Union, V>`
-  maps (`SettingsBuckets`, `AiWriteOp`, `AiNodeFieldType`), snapshot value
-  iteration (`Object.entries`) instead of key-then-index reads, and
-  extracting the single hit (`const hit = xs.length === 1 ? xs[0] :
-  undefined`) before use. Loop-bound-guarded index reads may use `?.` or a
-  fallback with a comment stating why the branch is unreachable. Do not
-  blanket-add `!` or `as` casts; the one accepted compensation is casting
-  `Object.keys` of a finite-key record back to its key union (single source
-  of truth for the key set), with a comment.
+- **`noUncheckedIndexedAccess`** (#230): Record and array index reads carry
+  `undefined` at the type level.
+- **`exactOptionalPropertyTypes`** (#231): an optional property declared
+  `?: T` no longer accepts an explicit `undefined` — "absent" and "explicitly
+  undefined" are distinct, so every optional field states which side of that
+  line it is on.
+- **Scope**: all production source under `src/` plus `vite.config.ts`, and
+  the compile-time contract probes `src/**/*.test-d.ts` (these are excluded
+  from the main build via `tsconfig.json` `exclude` and compiled only by the
+  strict entry — probe assertions evaluate differently under the flags).
+  **Out of scope**: `*.test.ts` / `*.test.tsx` — test fixtures build values
+  locally where shapes are known by construction; the strictly mechanical
+  widening pass there is large and low-value, while production code is where
+  dirty data and missing keys matter. Test files stay on the plain `strict`
+  baseline.
+
+**Satisfying the index-access check** (#230): for values that can genuinely be
+missing, handle the missing case explicitly with the same dirty-data
+semantics the surrounding code already uses. For locally proven invariants,
+express them in the type system or control flow instead: finite-key
+`Record<Union, V>` maps (`SettingsBuckets`, `AiWriteOp`, `AiNodeFieldType`),
+snapshot value iteration (`Object.entries`) instead of key-then-index reads,
+and extracting the single hit (`const hit = xs.length === 1 ? xs[0] :
+undefined`) before use. Loop-bound-guarded index reads may use `?.` or a
+fallback with a comment stating why the branch is unreachable. Do not
+blanket-add `!` or `as` casts; the one accepted compensation is casting
+`Object.keys` of a finite-key record back to its key union (single source of
+truth for the key set), with a comment.
+
+**Satisfing the optional-property check** (#231):
+
+- Forbidden-mirror fields (`label?: never` and friends on `ShotRef`,
+  `DerivedMeta`, `ShotMeta`, `ImageMeta`) must stay `?: never` with **no**
+  `undefined` added — rejecting explicit `undefined` is precisely their
+  contract, asserted by `src/model/typeContracts.test-d.ts`.
+- Legal clearing channels are typed explicitly instead of widening the domain
+  shape: `PatchShape` allows `T[K] | undefined` per field and drops
+  `never`-mirror keys from the patch surface; `LinePatch` does the same for
+  dialogue-line patches (`episodeNoPatch`, speaker/side clearing).
+- Construction sites that mean "field absent" use conditional spread
+  (`...(v !== undefined && { field: v })`) — e.g. new-node factories omit
+  `speaker` rather than writing `undefined` into a `DialogueLine`.
+- Optional fields that legitimately receive explicit `undefined` declare
+  `?: T | undefined` with a comment naming the meaning: UI callbacks
+  (undefined = not wired; React treats it as absent), passthrough/persistence
+  shapes (undefined = absent; serialization strips it), and library-shape
+  accommodations (xyflow `Edge`/`ReactFlowProps` members already carry
+  `| undefined`; call sites use conditional spread for props we cannot
+  widen).
 
 ## TypeScript Engineering Practices
 

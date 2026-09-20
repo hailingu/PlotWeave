@@ -567,7 +567,8 @@ function AppView({
   readonly openFailure: OpenProjectError | null
   readonly mutationFailure: {
     readonly error: HomeActionFailure
-    readonly retry?: () => void
+    // 可显式 undefined = 该失败无同参重试（issue #231）
+    readonly retry?: (() => void) | undefined
   } | null
   readonly onRetryMutation?: () => void
   readonly settingsOpen: boolean
@@ -628,7 +629,8 @@ function HomeScreen({
   readonly onRetryLoad: () => void
   readonly openError: OpenProjectError | null
   readonly mutationError: HomeActionFailure | null
-  readonly onRetryMutation?: () => void
+  // 可显式 undefined = 无同参重试（issue #231）
+  readonly onRetryMutation?: (() => void) | undefined
   readonly open: ReturnType<typeof useOpenProjectActions>
   readonly home: ReturnType<typeof useHomeProjectActions>
 }) {

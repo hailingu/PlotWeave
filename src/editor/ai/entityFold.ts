@@ -44,7 +44,7 @@ export interface EntityFoldHost {
   /** 既有文档 id → 标题与正文字数（issue 56）：upsert_document 的 entityId
    * 解析、预览标签与 body 全文替换的字数信号消费；文档不建虚拟投影
    * （无批内 ref 可指向文档）。 */
-  documents: Map<string, { title: string; bodyLength?: number }>
+  documents: Map<string, { title: string; bodyLength?: number | undefined }>
   /** 本批新建的虚拟投影 id：仅可经声明的 ref 别名解析，不得作为引用
    * token 直接命中桶位（执行层只解析别名表，直接放行会落盘悬空绑定）。
    * 显式集合而非前缀判断——持久化 id 可能与虚拟 id 同形。 */

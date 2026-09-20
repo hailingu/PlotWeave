@@ -205,7 +205,10 @@ function InspectorBody({
 function AiSessionContent({
   loadFailed,
   ...props
-}: ComponentProps<typeof AiThread> & { readonly loadFailed?: boolean }) {
+}: ComponentProps<typeof AiThread> & {
+  // 可显式 undefined = 会话读取未失败（issue #231）
+  readonly loadFailed?: boolean | undefined
+}) {
   if (loadFailed) {
     return (
       <>
@@ -231,13 +234,15 @@ interface RightPanelProps {
   /** 项目 id：AI 在途回合跨卸载归属的键（issue #63，见 ai/pendingTurns）。 */
   readonly projectId: string
   /** 画布当前选中节点；无选中时检查器显示空态。 */
-  readonly selectedNode?: CanvasNode
+  // 可显式 undefined = 无选中（issue #231）
+  readonly selectedNode?: CanvasNode | undefined
   /** 选中索引卡的 attach 下挂分镜数（§7.2 派生，检查器展示用）。 */
   readonly attachedShotCount?: number
   /** 项目设定集：检查器解析实体引用（§5）。 */
   readonly settings: ProjectSettings
   /** 打开设置页（§8.2 BYOK 配置入口）。 */
-  readonly onOpenSettings?: () => void
+  // 可显式 undefined = 未接线（issue #231）
+  readonly onOpenSettings?: (() => void) | undefined
   /** 画布上下文快照（§6「了解当前画布」）：附到 system prompt，并作为读工具返回。 */
   readonly canvasDigest?: string
   /** AI 执行卡的提交身份（§12.2 / issue #139）：批次计数必带、画布确认
@@ -258,10 +263,12 @@ interface RightPanelProps {
   /** 执行已确认的批次：整批为一条复合命令入栈，返回错误文案或 null。 */
   readonly onApplyAiBatch?: (commands: ValidatedCommand[]) => string | null
   /** 当前项目恢复的 AI 会话与其独立保存通道。 */
-  readonly aiSession?: AiSession
+  // 可显式 undefined = 无恢复快照（issue #231）
+  readonly aiSession?: AiSession | undefined
   readonly aiSessionError?: string | null
   /** 会话读取失败时阻止 AI 发送和执行，画布仍可使用。 */
-  readonly aiSessionLoadFailed?: boolean
+  // 可显式 undefined = 会话读取未失败（issue #231）
+  readonly aiSessionLoadFailed?: boolean | undefined
   /** 内存会话可否作为挂载重试的落盘内容；读取失败（空回退）时为 false。 */
   readonly aiSessionRetryable?: boolean
   readonly onSaveAiSession?: (session: AiSession) => Promise<void>
@@ -283,7 +290,8 @@ function AiPane({
   hidden,
   ...thread
 }: ComponentProps<typeof AiThread> & {
-  readonly loadFailed?: boolean
+  // 可显式 undefined = 会话读取未失败（issue #231）
+  readonly loadFailed?: boolean | undefined
   readonly hidden: boolean
 }) {
   return (

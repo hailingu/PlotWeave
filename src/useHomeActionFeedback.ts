@@ -11,7 +11,8 @@ import { onRetryPersisted } from './projectStore/saveChain'
 export function useHomeActionFeedback() {
   const [failure, setFailure] = useState<{
     readonly error: HomeActionFailure
-    readonly retry?: () => void
+    // 可显式 undefined = 该失败无同参重试（issue #231）
+    readonly retry?: (() => void) | undefined
   } | null>(null)
   const seqRef = useRef(0)
   const pendingSaveRef = useRef<{
@@ -28,7 +29,11 @@ export function useHomeActionFeedback() {
   }, [])
   /** 尝试失败（序号仍为最新才提交）：登记动作/目标/诊断与可选重试闭包。 */
   const fail = useCallback(
-    (seq: number, error: HomeActionFailure, retry?: () => void) => {
+    (
+      seq: number,
+      error: HomeActionFailure,
+      retry?: (() => void) | undefined,
+    ) => {
       if (seq === seqRef.current && !pendingSaveRef.current?.recovered)
         setFailure({ error, retry })
     },

@@ -47,7 +47,8 @@ function AiModelSelect({
 export function AiSettingsButton({
   onOpenSettings,
 }: {
-  readonly onOpenSettings?: () => void
+  // 可显式 undefined = 未接线（issue #231）
+  readonly onOpenSettings?: (() => void) | undefined
 }) {
   return (
     <button
@@ -71,7 +72,8 @@ function AiNewSessionButton({
   onNewSession,
 }: {
   readonly ready: boolean
-  readonly onNewSession?: () => void
+  // 可显式 undefined = 未接线（入口禁用，issue #231）
+  readonly onNewSession?: (() => void) | undefined
 }) {
   const [armed, setArmed] = useState(false)
   useEffect(() => {
@@ -117,11 +119,12 @@ export function AiTopbar({
   readonly activeKey: string | null
   readonly keyOkByProvider: Record<string, boolean>
   readonly onSelect: (key: string) => void
-  readonly onOpenSettings?: () => void
+  // 可选接线允许显式 undefined（undefined = 未接线，issue #231）
+  readonly onOpenSettings?: (() => void) | undefined
   /** 开新会话回调；缺省或 newSessionReady=false 时入口禁用（issue #89）。 */
-  readonly onNewSession?: () => void
+  readonly onNewSession?: (() => void) | undefined
   /** 可清空条件：非 busy 且线程非空（空会话无可清）。 */
-  readonly newSessionReady?: boolean
+  readonly newSessionReady?: boolean | undefined
 }) {
   return (
     <div className="pw-ai-topbar">

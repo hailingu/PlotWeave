@@ -11,7 +11,8 @@ export function EpisodeField({
 }: {
   readonly nodeType: 'scene' | 'beat' | 'dialogue' | 'branch'
   readonly nodeId: string
-  readonly episodeNo?: number
+  /** number | undefined：未分集（字段清除态）经此 prop 传递（issue #231）。 */
+  readonly episodeNo?: number | undefined
 }) {
   const { patchNode } = useNodeEdit()
   return (

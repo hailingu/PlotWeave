@@ -65,10 +65,12 @@ export function BranchEdge({
           <stop offset="1" stopColor="var(--accent)" />
         </linearGradient>
       </defs>
+      {/* xyflow 库 props（issue #231）：markerEnd 可显式 undefined（无端点
+          标记 = 缺省），条件展开而非传入以匹配库类型 */}
       <BaseEdge
         id={id}
         path={path}
-        markerEnd={markerEnd}
+        {...(markerEnd !== undefined && { markerEnd })}
         style={{ stroke: `url(#${gradientId})`, strokeWidth: 1.5 }}
       />
       {optionLabel && (

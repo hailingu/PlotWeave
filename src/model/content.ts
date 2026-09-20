@@ -14,25 +14,27 @@ import type { AssetRef } from './document'
 export interface ProjectContent {
   name: string
   /** 项目描述（§3 project.description，透传）。 */
-  description?: string
-  /** ISO 8601；新建项目缺省时首次落盘补盖。 */
-  createdAt?: string
+  description?: string | undefined
+  /** ISO 8601；新建项目缺省时首次落盘补盖（副本显式 undefined =
+   * 不继承创建时间，落盘补盖）。 */
+  createdAt?: string | undefined
   nodes: CanvasNode[]
   edges: Edge[]
   settings: ProjectSettings
-  /** 集 = 编号 + 大纲行内标题（§4.1，不建集实体表）；缺省视为无命名集。 */
-  episodeTitles?: Record<number, string>
+  /** 集 = 编号 + 大纲行内标题（§4.1，不建集实体表）；缺省/显式 undefined
+   * 视为无命名集（issue #231）。 */
+  episodeTitles?: Record<number, string> | undefined
   /** 视口随文档持久化（§3）；缺省时打开后 fitView。 */
-  viewport?: Viewport
+  viewport?: Viewport | undefined
   /** 已应用 AI 批次的单调计数（§12.2 提交身份）；缺省 = 0。 */
-  aiRevision?: number
-  /** 项目资产索引透传（缺省 = 无资产）。 */
-  assets?: { byId: Record<string, AssetRef> }
+  aiRevision?: number | undefined
+  /** 项目资产索引透传（缺省 = 无资产；可显式 undefined，issue #231）。 */
+  assets?: { byId: Record<string, AssetRef> } | undefined
   /** 同版本文档的容器级扩展字段透传（issue #100 字段演进策略，§11）：
    * schemaVersion 不变的未来字段增补出现在 graph/settings/assets 容器时
    * 按未知键原样保留——解析不修复、不警告、不回写，保存原样落盘。
    * 缺省 = 无扩展字段。顶层与 project 层是封闭契约，不在保留范围。 */
-  graphExtensions?: Record<string, unknown>
-  settingsExtensions?: Record<string, unknown>
-  assetsExtensions?: Record<string, unknown>
+  graphExtensions?: Record<string, unknown> | undefined
+  settingsExtensions?: Record<string, unknown> | undefined
+  assetsExtensions?: Record<string, unknown> | undefined
 }

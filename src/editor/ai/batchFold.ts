@@ -81,8 +81,9 @@ const isIntrinsicOptionIndex = (idx: unknown): idx is number =>
 
 /** 折叠校验的虚拟边：端点 + 源端口/连线类型（与 AiGraphSnapshot.edges 同形）。 */
 type VirtualEdge = EndpointPair & {
-  sourceHandle?: string | null
-  type?: string
+  // 快照边可选成员显式含 undefined（xyflow 运行态，issue #231）
+  sourceHandle?: string | null | undefined
+  type?: string | undefined
 }
 
 /** 折叠校验的虚拟图状态：随每条命令演进的最终态投影。

@@ -18,11 +18,12 @@ const DUPLICATE_OFFSET = { x: 48, y: 40 }
 
 /** buildNewNode 可选项：落点/选中/字段覆盖与编号基线。 */
 export interface NewNodeOptions {
-  at?: XYPosition
-  selected?: boolean
-  data?: Record<string, unknown>
+  // 可显式 undefined = 选项缺省（issue #231）
+  at?: XYPosition | undefined
+  selected?: boolean | undefined
+  data?: Record<string, unknown> | undefined
   /** 编号基线列表；批量连续创建时传模拟数组防止编号重复。 */
-  against?: CanvasNode[]
+  against?: CanvasNode[] | undefined
 }
 
 /** 节点创建动作组。 */
