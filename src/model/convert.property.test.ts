@@ -820,6 +820,10 @@ const cleanPayloadArb = fc.record({
     fc.record({ from: fc.nat(9), to: fc.nat(9), optionIdx: fc.nat(2) }),
     { maxLength: 2 },
   ),
+  // 组序布局（评审第十四轮）：branch 首位时 from<to 永远到不了 branch 目标
+  // ——运行态端点规则允许 branch 作 sequence/branch 边目标；布局交替后
+  // 两种排列的并集覆盖 branch 入向（beat/scene→branch）与出向全目标
+  branchLate: fc.boolean(),
   attachSpecs: fc.array(
     fc.record({ sceneIdx: fc.nat(3), shotIdx: fc.nat(1) }),
     { maxLength: 2 },
@@ -829,10 +833,12 @@ const cleanPayloadArb = fc.record({
 /** 干净内容的组装（评审第四轮保全预言机）：确定性唯一身份 + 下标
  * 引用落位 + from<to 的 DAG 前置；返回会话内容与集标题预期。 */
 /** 干净节点组装（保全预言机）：确定性唯一 id；数组序是边组装（from<to
- * 的 DAG 前置）的寻址基准，不得随意变更——组序 branch/beat/scene/dialogue
- * （评审第十三轮）使三类剧情流源（beat→scene/dialogue、scene→dialogue、
- * dialogue→dialogue 后位）与 branch→scene/dialogue/beat 目标均可生成；
- * 媒体面（shot/image）殿后。 */
+ * 的 DAG 前置）的寻址基准，不得随意变更。组序两态交替（评审第十四轮）：
+ * branch 首位（branch/beat/scene/dialogue）覆盖 branch 出向全目标；
+ * branch 后置（beat/scene/branch/dialogue）覆盖 branch 入向（beat/scene
+ * →branch 的 sequence 边）与组内 branch→branch——运行态端点规则
+ * （connectionEndpointIssue）允许 branch 作目标、仅禁其作 sequence 源；
+ * 媒体面（shot/image）恒殿后。 */
 function assembleCleanNodes(
   payload: ArbValue<typeof cleanPayloadArb>,
 ): Array<Record<string, unknown>> {
@@ -842,50 +848,59 @@ function assembleCleanNodes(
   ]
 }
 
-/** 干净节点组装 · 叙事面：branch/beat/scene/dialogue（组序即数组序），
- * 确定性唯一 id。 */
-function assembleNarrativeCleanNodes(
+/** 单组节点构造（assembleNarrativeCleanNodes 的分组成员，按组序回调）。 */
+function pushNarrativeGroup(
+  group: 'branch' | 'beat' | 'scene' | 'dialogue',
   payload: ArbValue<typeof cleanPayloadArb>,
-): Array<Record<string, unknown>> {
-  const nodes: Array<Record<string, unknown>> = []
-  payload.branchOptionLabels.forEach((labels, i) => {
-    if (labels.length === 0) return
-    nodes.push({
-      id: `b${i}`,
-      type: 'branch',
-      position: { x: 0, y: 0 },
-      data: {
-        prompt: `问${i}`,
-        options: labels.map((label, j) => ({ id: `opt${i}-${j}`, label })),
-      },
+  nodes: Array<Record<string, unknown>>,
+): void {
+  if (group === 'branch') {
+    payload.branchOptionLabels.forEach((labels, i) => {
+      if (labels.length === 0) return
+      nodes.push({
+        id: `b${i}`,
+        type: 'branch',
+        position: { x: 0, y: 0 },
+        data: {
+          prompt: `问${i}`,
+          options: labels.map((label, j) => ({ id: `opt${i}-${j}`, label })),
+        },
+      })
     })
-  })
-  payload.beatTones.forEach((tone, i) =>
-    nodes.push({
-      id: `t${i}`,
-      type: 'beat',
-      position: { x: 0, y: 0 },
-      data: { name: `节拍${i}`, tone },
-    }),
-  )
-  payload.sceneNames.forEach((name, i) =>
-    nodes.push({
-      id: `n${i}`,
-      type: 'scene',
-      position: { x: 0, y: 0 },
-      data: {
-        name,
-        sceneNo: 1,
-        interior: true,
-        synopsis: '',
-        // 关联引用（评审第九轮）：ch0/loc0 由保底非空的角色/地点桶供给
-        locationId: 'loc0',
-        characterIds: ['ch0'],
-        time: 't',
-        weather: 'w',
-      },
-    }),
-  )
+    return
+  }
+  if (group === 'beat') {
+    payload.beatTones.forEach((tone, i) =>
+      nodes.push({
+        id: `t${i}`,
+        type: 'beat',
+        position: { x: 0, y: 0 },
+        data: { name: `节拍${i}`, tone },
+      }),
+    )
+    return
+  }
+  if (group === 'scene') {
+    payload.sceneNames.forEach((name, i) =>
+      nodes.push({
+        id: `n${i}`,
+        type: 'scene',
+        position: { x: 0, y: 0 },
+        data: {
+          name,
+          sceneNo: 1,
+          interior: true,
+          synopsis: '',
+          // 关联引用（评审第九轮）：ch0/loc0 由保底非空的角色/地点桶供给
+          locationId: 'loc0',
+          characterIds: ['ch0'],
+          time: 't',
+          weather: 'w',
+        },
+      }),
+    )
+    return
+  }
   payload.dialogueTexts.forEach((text, i) =>
     nodes.push({
       id: `d${i}`,
@@ -897,6 +912,18 @@ function assembleNarrativeCleanNodes(
       },
     }),
   )
+}
+
+/** 干净节点组装 · 叙事面：组序按 branchLate 两态排列（见 assembleCleanNodes
+ * 文档），确定性唯一 id。 */
+function assembleNarrativeCleanNodes(
+  payload: ArbValue<typeof cleanPayloadArb>,
+): Array<Record<string, unknown>> {
+  const groups = payload.branchLate
+    ? (['beat', 'scene', 'branch', 'dialogue'] as const)
+    : (['branch', 'beat', 'scene', 'dialogue'] as const)
+  const nodes: Array<Record<string, unknown>> = []
+  for (const group of groups) pushNarrativeGroup(group, payload, nodes)
   return nodes
 }
 
@@ -946,6 +973,9 @@ function assembleCleanEdges(
   // 剧情流端点白名单（§4.2/§13）：shot/image 不参与横向剧情流
   const flowEndpoint = (t: unknown): boolean =>
     t === 'scene' || t === 'dialogue' || t === 'beat'
+  // 流边目标（评审第十四轮）：branch 可作 sequence/branch 边目标（运行态
+  // connectionEndpointIssue 仅禁其作 sequence 源），组内后位 branch 亦可
+  const flowTarget = (t: unknown): boolean => flowEndpoint(t) || t === 'branch'
   const edges: Array<Record<string, unknown>> = []
   let edgeNo = 0
   for (const pair of payload.flowPairs) {
@@ -954,7 +984,7 @@ function assembleCleanEdges(
     if (src === undefined || dst === undefined || pair.from >= pair.to) continue
     // 源取剧情流白名单任一类型（评审第十三轮：此前只认 scene，dialogue/
     // beat 的匿名输出边从未生成）——branch 无匿名端口，不在白名单内
-    if (!flowEndpoint(src.type) || !flowEndpoint(dst.type)) continue
+    if (!flowEndpoint(src.type) || !flowTarget(dst.type)) continue
     edges.push({ id: `e${edgeNo++}`, source: src.id, target: dst.id })
   }
   for (const spec of payload.branchEdgeSpecs) {
@@ -966,7 +996,7 @@ function assembleCleanEdges(
         : []
     if (src?.type !== 'branch' || dst === undefined) continue
     if (spec.from >= spec.to || options.length <= spec.optionIdx) continue
-    if (!flowEndpoint(dst.type)) continue
+    if (!flowTarget(dst.type)) continue
     edges.push({
       id: `e${edgeNo++}`,
       source: src.id,
@@ -1537,41 +1567,43 @@ function assembleV0Doc(v0: ArbValue<typeof v0EnvelopeArb>): {
 }
 
 /** v0 迁移的边保全断言：合法剧情流边全部存活；在界下标句柄精确改写为
- * option-opt<N>（确定性唯一选项 id，无重发改写）、越界句柄隔离、同
- * 元组逻辑重复首见胜——预期按端点元组去重比对。 */
+ * option-opt<N>（确定性唯一选项 id，无重发改写）、越界句柄隔离、同元组
+ * 逻辑重复首见胜。键为 `${id}:${tuple}`（评审第十四轮：只比元组会放行
+ * 「重发全部合法旧边 id」的迁移回归，稳定 id 是后续选择/删除/命令引用
+ * 的锚点），预期与实际均按元组去重首见胜。 */
 function assertV0EdgeMigration(
   content: ProjectContent,
   flowEdges: Array<Record<string, unknown>>,
   branchEdges: Array<Record<string, unknown>>,
   optionCount: number,
 ): void {
-  const expectedFlowTuples = [
-    ...new Set(flowEdges.map((e) => `${e.source}→${e.target}`)),
-  ].sort()
-  const outFlowTuples = [
-    ...new Set(
-      content.edges
-        .filter((e) => edgeKindOf(e) === 'sequence')
-        .map((e) => `${e.source}→${e.target}`),
-    ),
-  ].sort()
-  expect(outFlowTuples, '合法 v0 剧情流边全部存活').toEqual(expectedFlowTuples)
-  const expectedBranchTuples = new Set(
-    branchEdges
-      .map((e) => ({
-        target: e.target as string,
-        idx: Number(String(e.sourceHandle ?? '').slice('option-'.length)),
-      }))
-      .filter(({ idx }) => idx < optionCount)
-      .map(({ target, idx }) => `${target}→option-opt${idx}`),
+  const firstFlowByTuple = new Map<string, string>()
+  for (const e of flowEdges) {
+    const tuple = `${e.source}→${e.target}`
+    if (!firstFlowByTuple.has(tuple))
+      firstFlowByTuple.set(tuple, `${e.id}:${tuple}`)
+  }
+  const outFlowKeys = content.edges
+    .filter((e) => edgeKindOf(e) === 'sequence')
+    .map((e) => `${e.id}:${e.source}→${e.target}`)
+  expect(outFlowKeys.sort(), '合法 v0 剧情流边全部存活（稳定 id）').toEqual(
+    [...firstFlowByTuple.values()].sort(),
   )
-  const outBranchTuples = content.edges
+  const firstBranchByTuple = new Map<string, string>()
+  for (const e of branchEdges) {
+    const idx = Number(String(e.sourceHandle ?? '').slice('option-'.length))
+    if (idx >= optionCount) continue
+    const tuple = `${e.target}→option-opt${idx}`
+    if (!firstBranchByTuple.has(tuple))
+      firstBranchByTuple.set(tuple, `${e.id}:${tuple}`)
+  }
+  const outBranchKeys = content.edges
     .filter((e) => edgeKindOf(e) === 'branch' && e.source === 'br0')
-    .map((e) => `${e.target}→${e.sourceHandle}`)
+    .map((e) => `${e.id}:${e.target}→${e.sourceHandle}`)
   expect(
-    [...new Set(outBranchTuples)].sort(),
-    '在界下标句柄精确迁移并全部幸存',
-  ).toEqual([...expectedBranchTuples].sort())
+    outBranchKeys.sort(),
+    '在界下标句柄精确迁移并全部幸存（稳定 id）',
+  ).toEqual([...firstBranchByTuple.values()].sort())
 }
 
 /** v0 迁移的节点载荷比对（评审第十一轮）：迁移把合法 v0 载荷换成空/默认
