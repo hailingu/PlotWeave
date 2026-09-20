@@ -854,3 +854,52 @@ describe('AssetsPanel 导入', () => {
     expect(await screen.findByText(/磁盘满/)).toBeTruthy()
   })
 })
+
+describe('AssetsPanel 缩略图失败与重试（issue #142）', () => {
+  it('媒体不可读时显示失败与重试入口；重试成功清除错误并显示图像', async () => {
+    const store = mockStore([asset()])
+    store.mediaUrl
+      .mockRejectedValueOnce(new Error('媒体读取失败：磁盘错误'))
+      .mockResolvedValue('blob:mock-url')
+    render(<AssetsPanel />)
+    fireEvent.click(await screen.findByText('角色设定'))
+    // 失败可定位且有明确重试入口（issue #142 验收）
+    const retry = await screen.findByRole('button', { name: /重试/ })
+    expect(screen.getByTitle(/媒体读取失败：磁盘错误/)).toBeTruthy()
+    fireEvent.click(retry)
+    // 重试成功：清除错误并显示图像
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /重试/ })).toBeNull(),
+    )
+    await waitFor(() => expect(document.querySelector('img')).toBeTruthy())
+  })
+
+  it('一个资产失败不影响其他资产显示', async () => {
+    const store = mockStore([asset(), asset({ id: 'a2', name: '男主侧面' })])
+    store.mediaUrl.mockImplementation((a) =>
+      a.id === 'a1'
+        ? Promise.reject(new Error('坏'))
+        : Promise.resolve('blob:ok'),
+    )
+    render(<AssetsPanel />)
+    fireEvent.click(await screen.findByText('角色设定'))
+    await screen.findByRole('button', { name: /重试/ })
+    await waitFor(() =>
+      expect(document.querySelectorAll('img')).toHaveLength(1),
+    )
+  })
+
+  it('失败后普通父渲染不反复重试（稳定观察回调 + 错误态不观察）', async () => {
+    const store = mockStore([asset()])
+    const media = store.mediaUrl.mockRejectedValue(new Error('坏'))
+    const { rerender } = render(<AssetsPanel />)
+    fireEvent.click(await screen.findByText('角色设定'))
+    await screen.findByRole('button', { name: /重试/ })
+    const calls = media.mock.calls.length
+    rerender(<AssetsPanel />)
+    await new Promise((r) => setTimeout(r, 20))
+    rerender(<AssetsPanel />)
+    await new Promise((r) => setTimeout(r, 20))
+    expect(media.mock.calls).toHaveLength(calls)
+  })
+})
