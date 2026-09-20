@@ -396,6 +396,31 @@ function assertOutputInvariants(content: ProjectContent): void {
   expect(new Set(edgeIds).size, '边 id 唯一').toBe(edgeIds.length)
   const liveIds = new Set(nodeIds)
   const nodesById = new Map(content.nodes.map((n) => [n.id, n]))
+  // 生成器覆盖的全部身份域（评审修复：漏检桶的回归会被恒真断言放行）：
+  // 非空且唯一——props/documents 桶、资产索引、分镜引用位同查
+  const identityDomains: Array<[string, string[]]> = [
+    ['角色', content.settings.characters.map((e) => e.id)],
+    ['地点', content.settings.locations.map((e) => e.id)],
+    ['道具', (content.settings.props ?? []).map((e) => e.id)],
+    ['设定文档', (content.settings.documents ?? []).map((e) => e.id)],
+    ['资产索引', Object.values(content.assets?.byId ?? {}).map((a) => a.id)],
+  ]
+  for (const [label, ids] of identityDomains) {
+    expect(
+      ids.every((id) => id !== ''),
+      `${label} id 非空`,
+    ).toBe(true)
+    expect(new Set(ids).size, `${label} id 唯一`).toBe(ids.length)
+  }
+  // 资产记录键与值内 id 一致（记录键为权威 id 的键 id 一致性改写后置条件）
+  const assetKeys = Object.keys(content.assets?.byId ?? {})
+  const assetValueIds = Object.values(content.assets?.byId ?? {}).map(
+    (a) => a.id,
+  )
+  expect(
+    new Set([...assetKeys, ...assetValueIds]).size,
+    '资产索引键与值内 id 一致',
+  ).toBe(assetKeys.length)
   for (const e of content.edges) {
     expect(liveIds.has(e.source), `活动边 ${e.id} 的 source 指向存在节点`).toBe(
       true,
@@ -407,6 +432,7 @@ function assertOutputInvariants(content: ProjectContent): void {
     const src = nodesById.get(e.source)
     const dst = nodesById.get(e.target)
     const kind = edgeKindOf(e)
+    expect(e.source, `边 ${e.id} 非自环`).not.toBe(e.target)
     if (kind === 'attach') {
       expect(e.sourceHandle, `attach 边 ${e.id} 句柄为 shots 端口`).toBe(
         SCENE_SHOT_HANDLE,
@@ -437,23 +463,70 @@ function assertOutputInvariants(content: ProjectContent): void {
       ).not.toBe('branch')
     }
   }
-  for (const bucket of [
-    content.settings.characters,
-    content.settings.locations,
-  ]) {
-    const ids = bucket.map((entity) => entity.id)
-    expect(new Set(ids).size, '设定桶 id 唯一').toBe(ids.length)
-  }
   for (const n of content.nodes) {
     if (n.type === 'dialogue') {
       const lineIds = n.data.lines.map((line) => line.id)
+      expect(
+        lineIds.every((id) => id !== ''),
+        '对白行 id 非空',
+      ).toBe(true)
       expect(new Set(lineIds).size, '对白行 id 唯一').toBe(lineIds.length)
     }
     if (n.type === 'branch') {
       const optionIds = n.data.options.map((o) => o.id)
+      expect(
+        optionIds.every((id) => id !== ''),
+        '分支选项 id 非空',
+      ).toBe(true)
       expect(new Set(optionIds).size, '分支选项 id 唯一').toBe(optionIds.length)
     }
+    if (n.type === 'shot') {
+      const refIds = n.data.refs.map((r) => r.id)
+      expect(
+        refIds.every((id) => id !== ''),
+        '分镜引用位 id 非空',
+      ).toBe(true)
+      expect(new Set(refIds).size, '分镜引用位 id 唯一').toBe(refIds.length)
+    }
   }
+  // 逻辑重复边隔离后置条件（§11.3）：同 source/target/sourceHandle 唯一
+  const endpointKeys = content.edges.map((e) =>
+    JSON.stringify([e.source, e.target, e.sourceHandle ?? '']),
+  )
+  expect(
+    new Set(endpointKeys).size,
+    '活动边端点/句柄元组唯一（无逻辑重复）',
+  ).toBe(endpointKeys.length)
+  // attach 宿主唯一后置条件（§5）：同一 shot 至多一条入向 attach
+  const attachHosts = content.edges
+    .filter((e) => edgeKindOf(e) === 'attach')
+    .map((e) => e.target)
+  expect(new Set(attachHosts).size, 'attach 宿主唯一').toBe(attachHosts.length)
+  // 剧情流无环后置条件（§11.1 第 3 步：自环/成环边隔离；attach 不参与）
+  const flowAdj = new Map<string, string[]>()
+  for (const e of content.edges) {
+    if (edgeKindOf(e) === 'attach') continue
+    const list = flowAdj.get(e.source)
+    if (list) list.push(e.target)
+    else flowAdj.set(e.source, [e.target])
+  }
+  const flowSeen = new Set<string>()
+  const onPathNodes = new Set<string>()
+  const flowHasCycle = (node: string): boolean => {
+    if (onPathNodes.has(node)) return true
+    if (flowSeen.has(node)) return false
+    flowSeen.add(node)
+    onPathNodes.add(node)
+    for (const next of flowAdj.get(node) ?? []) {
+      if (flowHasCycle(next)) return true
+    }
+    onPathNodes.delete(node)
+    return false
+  }
+  expect(
+    [...flowAdj.keys()].every((start) => !flowHasCycle(start)),
+    '剧情流边构成有向无环图',
+  ).toBe(true)
   for (const [key, title] of Object.entries(content.episodeTitles ?? {})) {
     const episode = Number(key)
     expect(
@@ -489,19 +562,36 @@ describe('归一化不变量的生成式验证（issue #232）：v1 已支持信
           settings: Record<string, unknown>
           assets: Record<string, unknown>
         }
-        for (const [field, spot, ext] of [
-          ['futureGraphField', again.graph, round.content.graphExtensions],
-          [
-            'futureSettingsField',
-            again.settings,
-            round.content.settingsExtensions,
-          ],
-          ['futureAssetsField', again.assets, round.content.assetsExtensions],
-        ] as const) {
-          if (dirt[field as 'graphExt'] !== undefined) {
-            expect(ext?.[field]).toEqual(dirt[field as 'graphExt'])
-            expect(spot[field]).toEqual(dirt[field as 'graphExt'])
-          }
+        // 扩展键与脏标记键配对成组（评审修复：落盘字段名与 dirt 键不同名，
+        // 旧写法 dirt[field] 的查找恒为 undefined，断言从未执行——空转的性质）
+        const extensionPairs = [
+          {
+            injected: dirt.graphExt,
+            field: 'futureGraphField',
+            spot: again.graph,
+            extensions: round.content.graphExtensions,
+          },
+          {
+            injected: dirt.settingsExt,
+            field: 'futureSettingsField',
+            spot: again.settings,
+            extensions: round.content.settingsExtensions,
+          },
+          {
+            injected: dirt.assetsExt,
+            field: 'futureAssetsField',
+            spot: again.assets,
+            extensions: round.content.assetsExtensions,
+          },
+        ] as const
+        for (const { injected, field, spot, extensions } of extensionPairs) {
+          if (injected === undefined) continue
+          expect(extensions?.[field], `扩展键 ${field} 经解析保留`).toEqual(
+            injected,
+          )
+          expect(spot[field], `扩展键 ${field} 再序列化原样落盘`).toEqual(
+            injected,
+          )
         }
       }),
     )
