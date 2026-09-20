@@ -177,16 +177,19 @@ const rawEdgeArb = fc
     order: fc.option(fc.nat(9), { nil: undefined }),
   })
   .map((e) => {
-    const data: NodeSpecGen = { kind: e.kind }
-    if (e.order !== undefined) data.order = e.order
-    const edge: NodeSpecGen = {
-      id: e.id,
-      source: e.source,
-      target: e.target,
-      data,
+    // 运行态判别器（评审第三轮修复）：serializeProject 经 edgeKindOf 分类
+    // （branch 看 type === 'branch'、attach 看 className），不读 data.kind——
+    // 缺判别器的 branch 边会被序列化成 sequence，句柄归一化路径不被行使
+    const edge: NodeSpecGen = { id: e.id, source: e.source, target: e.target }
+    if (e.order !== undefined) edge.data = { order: e.order }
+    if (e.kind === 'branch') {
+      edge.type = 'branch'
+      edge.sourceHandle = `option-opt${e.optionNo}`
     }
-    if (e.kind === 'branch') edge.sourceHandle = `option-opt${e.optionNo}`
-    if (e.kind === 'attach') edge.sourceHandle = 'shots'
+    if (e.kind === 'attach') {
+      edge.className = 'pw-edge-attach'
+      edge.sourceHandle = 'shots'
+    }
     return edge
   })
 
@@ -333,20 +336,21 @@ function v1Envelope(
     }
   }
   if (dirt.collideBucketIds) {
-    // 评审修复（第二轮）：serializeProject 的 toDocSettings/keyedBy 会把
-    // 生成数组里的重复 id 折叠成单键 Record——「异键 + 值内 id 冲突」的脏
-    // 状态到不了归一化边界。此处注入直达：新记录键持有首条目的克隆
-    // （值内 id 与原条目相同），行使键 id 一致性改写与冲突修复路径
-    const firstChar = Object.keys(doc.settings.characters)[0]
-    if (firstChar !== undefined) {
-      doc.settings.characters['dup-key'] = structuredClone(
-        doc.settings.characters[firstChar],
-      )
-    }
-    const byId = doc.assets.byId as Record<string, unknown>
-    const firstAsset = Object.keys(byId)[0]
-    if (firstAsset !== undefined) {
-      byId['dup-key'] = structuredClone(byId[firstAsset])
+    // 评审修复（第二轮/第三轮）：toDocSettings/keyedBy 会把生成数组里的
+    // 重复 id 折叠成单键 Record——「异键 + 值内 id 冲突」到不了归一化边界。
+    // 注入直达：每个已填充桶都加一条独立记录键持有首条目的克隆（值内 id
+    // 与原条目相同），全部设定桶与资产索引的键 id 一致性改写路径均被行使
+    const buckets: Record<string, unknown>[] = [
+      doc.settings.characters,
+      doc.settings.locations as Record<string, unknown>,
+      doc.settings.props as Record<string, unknown>,
+      doc.settings.documents as Record<string, unknown>,
+      doc.assets.byId as Record<string, unknown>,
+    ]
+    for (const bucket of buckets) {
+      const first = Object.keys(bucket)[0]
+      if (first !== undefined)
+        bucket['dup-key'] = structuredClone(bucket[first])
     }
   }
   if (dirt.badUpdatedAt) doc.project.updatedAt = 'not-a-time'
@@ -418,13 +422,11 @@ function assertIdentityInvariants(content: ProjectContent): void {
     ).toBe(true)
     expect(new Set(ids).size, `${label} id 唯一`).toBe(ids.length)
   }
-  // 资产记录键与值内 id 一致（记录键为权威 id 的键 id 一致性改写后置条件）
-  const assetKeys = Object.keys(content.assets?.byId ?? {})
-  const assetIds = Object.values(content.assets?.byId ?? {}).map((a) => a.id)
-  expect(
-    new Set([...assetKeys, ...assetIds]).size,
-    '资产索引键与值内 id 一致',
-  ).toBe(assetKeys.length)
+  // 资产记录键与值内 id 逐项相等（评审第三轮修复：集合相等会放行键值
+  // 置换 {a: {id: 'b'}, b: {id: 'a'}}，违反记录键为权威 id 的不变量）
+  for (const [key, asset] of Object.entries(content.assets?.byId ?? {})) {
+    expect(asset.id, `资产 ${key} 的值内 id 与记录键一致`).toBe(key)
+  }
   for (const n of content.nodes) {
     if (n.type === 'dialogue') {
       const ids = n.data.lines.map((line) => line.id)
