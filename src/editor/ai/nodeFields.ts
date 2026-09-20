@@ -78,10 +78,13 @@ const shotRefItems = {
   ],
 }
 
+/** AI 可写节点类型联合（issue #230：协议表按键收窄，索引读取免缺失兜底）。 */
+export type AiNodeFieldType = 'scene' | 'dialogue' | 'beat' | 'branch' | 'shot'
+
 /** 各 AI 可写节点类型的字段协议表。episodeNo（§3.5 分集）：编剧侧四类
  * 可写；分镜卡随宿主场景，不可单独分集。图片节点（§13 首版 AI 只读）
  * 不在此表——白名单缺失类型一律整批拒绝。 */
-export const AI_NODE_FIELDS: Record<string, readonly AiFieldSpec[]> = {
+export const AI_NODE_FIELDS: Record<AiNodeFieldType, readonly AiFieldSpec[]> = {
   scene: [
     { key: 'name', type: 'string', desc: '场景名', schema: freeTextBudget },
     {

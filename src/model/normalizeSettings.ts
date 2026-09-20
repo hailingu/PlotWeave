@@ -15,6 +15,15 @@ const SETTINGS_BUCKETS = [
   'documents',
 ] as const
 
+/** 设定桶名联合。 */
+type SettingsBucket = (typeof SETTINGS_BUCKETS)[number]
+
+/** normalizeSettingsBuckets 的产出形状（issue #230 局部不变量的类型表达）：
+ * 四桶恒存在——下游按桶名读取（settings.documents 等）不需要运行时缺失
+ * 兜底；桶内条目仍为 unknown 值的 Record，成员普通性由 plainObjectEntries
+ * 过滤背书、消费点按需收窄。 */
+export type SettingsBuckets = Record<SettingsBucket, Record<string, unknown>>
+
 /** relatedIds 成员的非法原因（§6 的 {kind,id} 显式成对：kind ∈
  * character/location、id 字符串；(kind,id) 数组内唯一——重复关联会让
  * 反向索引/导航重复列出同一文档）；null 表示通过并登记首见。
@@ -62,8 +71,13 @@ function normalizeRelatedIds(
 export function normalizeSettingsBuckets(
   settingsRaw: Record<string, unknown>,
   warnings: string[],
-): Record<string, Record<string, unknown>> {
-  const settings: Record<string, Record<string, unknown>> = {}
+): SettingsBuckets {
+  const settings: SettingsBuckets = {
+    characters: {},
+    locations: {},
+    props: {},
+    documents: {},
+  }
   for (const bucket of SETTINGS_BUCKETS) {
     settings[bucket] = plainObjectEntries(
       settingsRaw[bucket],
@@ -132,11 +146,10 @@ export function reKeyBlankEntries(
   warnings: string[],
 ): Map<string, string> {
   const remap = new Map<string, string>()
-  for (const key of Object.keys(record)) {
+  for (const [key, entry] of Object.entries(record)) {
     if (key.trim()) continue
     let fresh = uid(prefix)
     while (fresh in record) fresh = uid(prefix)
-    const entry = record[key]
     delete record[key]
     record[fresh] = entry
     entry.id = fresh
@@ -183,11 +196,10 @@ export function reKeyUnsafeCharacterKeys(
   warnings: string[],
 ): Map<string, string> {
   const remap = new Map<string, string>()
-  for (const key of Object.keys(record)) {
+  for (const [key, entry] of Object.entries(record)) {
     if (!key.trim() || SAFE_CHARACTER_ID.test(key)) continue
     let fresh = uid('ch')
     while (fresh in record) fresh = uid('ch')
-    const entry = record[key]
     delete record[key]
     record[fresh] = entry
     entry.id = fresh
@@ -347,7 +359,7 @@ function replaceMentionLiterals(
 /** 设定文档 relatedIds 的空键改写（§11.1 第 3 步，六十六轮）：按 kind
  * 对应桶改写（禁止跨命名空间）；改写后仍指向空白 id 且无对应重发的项
  * 移除并警告。 */ function rewriteDocumentBlankRefs(
-  settings: Record<string, Record<string, unknown>>,
+  settings: SettingsBuckets,
   remaps: BlankKeyRemaps,
   warnings: string[],
 ): void {
@@ -394,7 +406,7 @@ function rewrittenDocumentRelations(
  * kind 对应桶）随重发改写到新 id 而非变悬空——脏写引用侧同样可出现空串。 */
 export function rewriteBlankKeyReferences(
   nodes: StoryNode[],
-  settings: Record<string, Record<string, unknown>>,
+  settings: SettingsBuckets,
   remaps: BlankKeyRemaps,
   warnings: string[],
 ): void {
@@ -465,21 +477,16 @@ function rewriteImageBlankRefs(
  * 既有引用按 §8.2.3 悬空标记；记录键为权威 id，内嵌 id 缺失或漂移以键改写
  * （与 assets.byId 同域）。documents 桶按 §6 判别必填 title/body。 */
 export function normalizeEntityShapes(
-  settings: Record<string, Record<string, unknown>>,
+  settings: SettingsBuckets,
   warnings: string[],
 ): void {
-  const optionalStringFields: Record<string, string[]> = {
+  const optionalStringFields: Record<SettingsBucket, string[]> = {
     characters: ['bio', 'avatarAssetId'],
     locations: ['note'],
     props: ['description'],
     documents: [],
   }
-  for (const bucket of [
-    'characters',
-    'locations',
-    'props',
-    'documents',
-  ] as const) {
+  for (const bucket of SETTINGS_BUCKETS) {
     const entries = settings[bucket]
     // 桶成员已经 plainObjectEntries/成员过滤保证为普通对象
     for (const [key, entry] of Object.entries(entries) as [

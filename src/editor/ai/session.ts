@@ -259,7 +259,8 @@ function capPersistedEntries(entries: ThreadEntry[]): ThreadEntry[] {
     i >= 0 && selected.size < PERSISTED_ENTRIES_MAX;
     i--
   ) {
-    const card = entries[i].card
+    // 逆向下标读取的缺失分支以 ?. 消解（issue #230）：循环边界已守卫
+    const card = entries[i]?.card
     if (card?.status === 'pending' && card.v.ok) selected.add(i)
   }
   for (

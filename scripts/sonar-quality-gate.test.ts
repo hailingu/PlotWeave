@@ -23,6 +23,7 @@ type GateOptions = {
   plotweaveSonarToken?: string
   rustCoverageMode?: 'empty' | 'malformed' | 'missing' | 'uncovered' | 'valid'
   scannerExit?: number
+  strictIndexExit?: number
   qualityGateStatus?: string
   sonarHostUrl?: string | null
   sonarToken?: string
@@ -74,6 +75,9 @@ if [ "$*" = "run format:check" ]; then
 fi
 if [ "$*" = "run lint -- --max-warnings=0" ]; then
   exit "$PLOTWEAVE_TEST_LINT_EXIT"
+fi
+if [ "$*" = "run typecheck:strict-index" ]; then
+  exit "$PLOTWEAVE_TEST_STRICT_INDEX_EXIT"
 fi
 if [ "$PLOTWEAVE_TEST_NPM_EXIT" -ne 0 ]; then
   exit "$PLOTWEAVE_TEST_NPM_EXIT"
@@ -183,6 +187,7 @@ function gateEnvironment(
     PLOTWEAVE_TEST_NPM_EXIT: String(options.npmExit ?? 0),
     PLOTWEAVE_TEST_QUALITY_GATE_STATUS: options.qualityGateStatus ?? 'OK',
     PLOTWEAVE_TEST_SCANNER_EXIT: String(options.scannerExit ?? 0),
+    PLOTWEAVE_TEST_STRICT_INDEX_EXIT: String(options.strictIndexExit ?? 0),
     PLOTWEAVE_TEST_UNRESOLVED_ISSUES: String(options.unresolvedIssues ?? 0),
     SONAR_HOST_URL: options.sonarHostUrl ?? 'http://sonar.test',
   }
@@ -266,6 +271,7 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
       'npm',
       'npm',
       'npm',
+      'npm',
       'cargo-llvm-cov',
       'sonar-scanner',
       'curl',
@@ -273,6 +279,7 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
     ])
     expect(result.log).toContain('npm run format:check')
     expect(result.log).toContain('npm run lint -- --max-warnings=0')
+    expect(result.log).toContain('npm run typecheck:strict-index')
     expect(result.log).toContain('npm run test:coverage')
     expect(result.log).toContain(
       'cargo-llvm-cov llvm-cov --lib --test media_format_leaf --lcov',
@@ -321,6 +328,17 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
 
     expect(result.status).not.toBe(0)
     expect(result.log).toContain('npm run lint -- --max-warnings=0')
+    expect(result.log).not.toContain('sonar-scanner')
+  })
+
+  it('严格索引类型检查失败时阻止操作，不生成覆盖率也不扫描（issue #230）', () => {
+    const result = runGate('scripts/sonar-quality-gate.sh', {
+      strictIndexExit: 1,
+    })
+
+    expect(result.status).not.toBe(0)
+    expect(result.log).toContain('npm run typecheck:strict-index')
+    expect(result.log).not.toContain('test:coverage')
     expect(result.log).not.toContain('sonar-scanner')
   })
 

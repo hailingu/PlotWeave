@@ -22,7 +22,12 @@ function lastFenceBody(text: string): string | null {
       continue
     }
     let bodyStart = afterTicks + 4
-    while (bodyStart < text.length && /\s/.test(text[bodyStart])) bodyStart++
+    // 越界字符（undefined）显式判非空白（issue #230）：与循环边界守卫一致
+    while (bodyStart < text.length) {
+      const ch = text[bodyStart]
+      if (ch === undefined || !/\s/.test(ch)) break
+      bodyStart++
+    }
     const close = text.indexOf('```', bodyStart)
     if (close === -1) break // 之后不再有 ```，自然也不再有可闭合的围栏
     last = text.slice(bodyStart, close)

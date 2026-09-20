@@ -39,13 +39,15 @@ function isSpineMember(seq: SpliceEdge[], id: string): boolean {
 /** 恰一条入边时返回唯一前邻；多入口返回 null（语义上不应发生）。 */
 function uniquePredecessor(seq: SpliceEdge[], id: string): string | null {
   const into = seq.filter((e) => e.target === id)
-  return into.length === 1 ? into[0].source : null
+  const only = into.length === 1 ? into[0] : undefined
+  return only === undefined ? null : only.source
 }
 
 /** 恰一条出边时返回唯一后继；多出口的分叉返回 null（不擅自直连）。 */
 function uniqueSuccessor(seq: SpliceEdge[], id: string): string | null {
   const out = seq.filter((e) => e.source === id)
-  return out.length === 1 ? out[0].target : null
+  const only = out.length === 1 ? out[0] : undefined
+  return only === undefined ? null : only.target
 }
 
 /** 拔出 dragged 后锚点前/后插入位的实际邻居：

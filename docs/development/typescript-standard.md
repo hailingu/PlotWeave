@@ -36,6 +36,37 @@ written in English for agent interoperability.
   settings (`npm run build`); do not suppress errors with
   `@ts-ignore`/`@ts-expect-error` without an explanatory comment.
 
+### Strict Index Access
+
+([issue #230](https://github.com/hailingu/PlotWeave/issues/230),
+implemented.) Record and array index reads carry `undefined` at the type
+level under `noUncheckedIndexedAccess`, enforced by an independent check
+entry: `npm run typecheck:strict-index` runs
+`tsc --noEmit -p tsconfig.strict-index.json`, and
+`scripts/check-static.sh` invokes it alongside Prettier and ESLint so both
+the local Git gate and the Sonar gate reject violations before coverage
+generation.
+
+- **Scope**: all production source under `src/` plus `vite.config.ts`.
+  **Out of scope**: `*.test.ts` / `*.test.tsx` — test fixtures build arrays
+  and records locally where indices are known by construction; the strictly
+  mechanical widening pass there is large and low-value, while production
+  reads are where dirty data and missing keys matter. Production code that
+  drifts around these rules fails the gate; test files stay on the plain
+  `strict` baseline of `tsconfig.json`.
+- **Satisfying the check**: for values that can genuinely be missing, handle
+  the missing case explicitly with the same dirty-data semantics the
+  surrounding code already uses. For locally proven invariants, express them
+  in the type system or control flow instead: finite-key `Record<Union, V>`
+  maps (`SettingsBuckets`, `AiWriteOp`, `AiNodeFieldType`), snapshot value
+  iteration (`Object.entries`) instead of key-then-index reads, and
+  extracting the single hit (`const hit = xs.length === 1 ? xs[0] :
+  undefined`) before use. Loop-bound-guarded index reads may use `?.` or a
+  fallback with a comment stating why the branch is unreachable. Do not
+  blanket-add `!` or `as` casts; the one accepted compensation is casting
+  `Object.keys` of a finite-key record back to its key union (single source
+  of truth for the key set), with a comment.
+
 ## TypeScript Engineering Practices
 
 - Organize frontend and service code by feature or domain capability. A feature

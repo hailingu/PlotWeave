@@ -3,6 +3,7 @@
  * batch 按 op 与创建类型区分成员。仅描述推荐输出，运行时仍由批次校验把关。
  */
 import {
+  type AiNodeFieldType,
   AI_NODE_FIELDS,
   nodeFieldTableText,
   type AiFieldSpec,
@@ -37,7 +38,9 @@ const token = (description: string) => ({
 })
 const reason = text('改动理由')
 const ref = token('本批临时别名；不是持久 id，供后续命令引用')
-const nodeTypes = Object.keys(AI_NODE_FIELDS)
+// 键源唯一（AI_NODE_FIELDS 的键即类型清单）；as 收窄是 Object.keys 的
+// 标准补偿，非逐点断言（issue #230）
+const nodeTypes = Object.keys(AI_NODE_FIELDS) as AiNodeFieldType[]
 
 /** 实体名称的通道化 schema：在协议表生成形状（含 issue #170 的 maxLength
  * 体积预算）上叠加非空白 pattern 与通道文案——整体替换会丢掉预算，
@@ -67,7 +70,7 @@ function fieldsSchema(fields: readonly AiFieldSpec[]): ObjectSchema {
   )
 }
 
-const nodeData = (type: string) => fieldsSchema(AI_NODE_FIELDS[type])
+const nodeData = (type: AiNodeFieldType) => fieldsSchema(AI_NODE_FIELDS[type])
 const nodeDataUnion = {
   anyOf: nodeTypes.map(nodeData),
   description: `根据 nodeType 选择字段对象；只写要定制的字段，其余用默认。\n${nodeFieldTableText()}`,
@@ -99,7 +102,9 @@ function entityParameters(kind: EntityKind): ObjectSchema {
  * ref。单写工具与批次变体共用同一对象，避免两条通道形状漂移。 */
 const relatedIdsSchema = {
   type: 'array',
-  description: AI_DOCUMENT_FIELDS[2].desc,
+  // relatedIds 条目按 key 定位（issue #230：数组下标读取的缺失分支以
+  // 查找表达；字段表若重组，描述随查找落空而非错位到别的字段）
+  description: AI_DOCUMENT_FIELDS.find((f) => f.key === 'relatedIds')?.desc,
   items: {
     type: 'object',
     properties: {
@@ -135,8 +140,20 @@ function documentParameters(): ObjectSchema {
   )
 }
 
+/** 单写工具/批次折叠共享的写操作名联合（issue #230：注册表按名收窄，
+ * 索引读取免缺失兜底）。 */
+export type AiWriteOp =
+  | 'create_node'
+  | 'update_node_spec'
+  | 'delete_node'
+  | 'connect_edge'
+  | 'disconnect_edge'
+  | 'upsert_character'
+  | 'upsert_location'
+  | 'upsert_document'
+
 /** 单写工具的参数 schema：与 batch 的对应 op 复用，避免两条通道形状漂移。 */
-export const WRITE_PARAMETERS: Record<string, ObjectSchema> = {
+export const WRITE_PARAMETERS: Record<AiWriteOp, ObjectSchema> = {
   create_node: objectSchema(
     {
       nodeType: { type: 'string', enum: nodeTypes },
@@ -215,7 +232,7 @@ function commandVariants(): ObjectSchema[] {
     'delete_node',
     'connect_edge',
     'disconnect_edge',
-  ]) {
+  ] as const) {
     variants.push(
       commandSchema(
         name === 'update_node_spec' ? 'update_node' : name,

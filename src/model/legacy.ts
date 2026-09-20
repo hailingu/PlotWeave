@@ -175,7 +175,8 @@ function ensureCharacter(
         (gradient === undefined || c.gradient === gradient) &&
         nameOf(c).startsWith(label),
     )
-    if (prefixHits.length === 1) return prefixHits[0].id
+    const prefixHit = prefixHits.length === 1 ? prefixHits[0] : undefined
+    if (prefixHit) return prefixHit.id
   }
   // 新建 id 避开本域已有键与本轮已分配 id（§11 兼容子步骤）
   let fresh = newEntityId('ch')

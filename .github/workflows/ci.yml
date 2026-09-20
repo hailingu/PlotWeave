@@ -34,6 +34,8 @@ jobs:
         run: npm run format:check
       - name: lint 零警告（src 行；与本地门禁同口径）
         run: npm run lint -- --max-warnings=0
+      - name: 严格索引类型检查（src 行，issue #230；与本地门禁同口径）
+        run: npm run typecheck:strict-index
       - name: build（src 行）
         run: npm run build
       - name: test（src 行）

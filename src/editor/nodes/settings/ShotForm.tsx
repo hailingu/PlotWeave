@@ -23,7 +23,7 @@ function assetMimeOf(
   const byId = assets?.byId
   if (byId === undefined || !Object.prototype.hasOwnProperty.call(byId, id))
     return undefined
-  const mime = byId[id].mime
+  const mime = byId[id]?.mime
   return typeof mime === 'string' ? mime : undefined
 }
 

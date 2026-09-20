@@ -10,9 +10,11 @@
  */
 
 /** 首尾空白判定：单字符属于 ECMAScript `\s` 集合，或为两端 trim 集合
- * 的差异字符 U+0085（NEL，Rust White_Space 成员）。 */
-const isEdgeWhitespace = (ch: string): boolean =>
-  /\s/u.test(ch) || ch === '\u0085'
+ * 的差异字符 U+0085（NEL，Rust White_Space 成员）。字符串索引在类型层
+ * 可为 undefined（越界）；调用点的双指针边界先于取字符成立，此处把
+ * undefined 显式判非空白（issue #230），语义与越界不可能发生一致。 */
+const isEdgeWhitespace = (ch: string | undefined): boolean =>
+  ch !== undefined && (/\s/u.test(ch) || ch === '\u0085')
 
 /** 裁剪标题首尾空白（含 U+0085），内部空白保留；线性双指针，不回溯。 */
 export const trimTitleWhitespace = (raw: string): string => {

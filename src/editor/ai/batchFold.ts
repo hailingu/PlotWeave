@@ -443,13 +443,16 @@ function edgePortOf(
     }
     const options = st.branchOptions.get(src)
     const idx = cmd.optionIndex
-    const idxValid =
-      isIntrinsicOptionIndex(idx) && idx < (options?.length ?? -1)
-    if (!idxValid || options === undefined) {
-      const pair = `${st.labels.get(src) ?? src} → ${st.labels.get(dst) ?? dst}`
-      return `optionIndex 必须是 0～${(options?.length ?? 1) - 1} 的整数：${pair}`
+    // 命中提取消解下标读取的缺失分支（issue #230）：option 同时承担
+    // 「options 存在且 idx 落界」的判定，与原 idxValid 语义等价
+    if (isIntrinsicOptionIndex(idx)) {
+      const option = options?.[idx]
+      if (option !== undefined) {
+        return { handle: branchOptionHandle(option.id), optionIndex: idx }
+      }
     }
-    return { handle: branchOptionHandle(options[idx].id), optionIndex: idx }
+    const pair = `${st.labels.get(src) ?? src} → ${st.labels.get(dst) ?? dst}`
+    return `optionIndex 必须是 0～${(options?.length ?? 1) - 1} 的整数：${pair}`
   }
   if (kind === 'attach') {
     if (st.types.get(src) !== 'scene' || st.types.get(dst) !== 'shot') {
@@ -698,7 +701,11 @@ export function validateAiBatch(
   if (st.issues.length === 0) {
     for (const [index, raw] of commands.entries()) {
       const cmd = raw as Record<string, unknown>
-      FOLDERS[cmd.op as string](st, cmd, index)
+      // 未知 op 已被阶段 A 形状校验整批拒绝（issue #230）：显式存在性
+      // 守卫替代不可达的 undefined 调用，命中即折叠
+      const folder = FOLDERS[cmd.op as string]
+      if (folder === undefined) break
+      folder(st, cmd, index)
       if (st.issues.length > 0) break
     }
   }

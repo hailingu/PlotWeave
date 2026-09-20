@@ -132,13 +132,11 @@ function historyMessage(entry: ThreadEntry): ChatMessage {
 function boundedHistory(thread: ThreadEntry[]): ChatMessage[] {
   const kept: ChatMessage[] = []
   let chars = 0
-  for (
-    let i = thread.length - 1;
-    i >= 0 && kept.length < HISTORY_MAX_MESSAGES;
-    i -= 1
-  ) {
-    if (thread[i].kind !== 'msg') continue
-    const message = historyMessage(thread[i])
+  // 逆序值迭代取代下标读取（issue #230）：语义与原逆向下标循环一致
+  for (const entry of [...thread].reverse()) {
+    if (kept.length >= HISTORY_MAX_MESSAGES) break
+    if (entry.kind !== 'msg') continue
+    const message = historyMessage(entry)
     chars += message.content.length
     if (chars > HISTORY_MAX_CHARS && kept.length > 0) break
     kept.unshift(message)
