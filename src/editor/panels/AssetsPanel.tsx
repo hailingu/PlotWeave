@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -44,6 +45,10 @@ function useLibraryAssetList() {
   const [error, setError] = useState<string | null>(null)
   /** 缩略图 URL 缓存（懒加载：进入类别才取）。 */
   const [urls, setUrls] = useState<Record<string, string>>({})
+  /** 缩略图读取失败（issue #142）：按资产记录可定位错误，重试成功后清除。 */
+  const [thumbErrors, setThumbErrors] = useState<Record<string, string>>({})
+  /** 在途请求去重：观察器重触发与显式重试不双发。 */
+  const inflightThumbs = useRef(new Set<string>())
   useEffect(() => {
     let alive = true
     libraryStore
@@ -54,13 +59,39 @@ function useLibraryAssetList() {
       alive = false
     }
   }, [])
-  const refreshUrl = (asset: LibraryAsset) => {
+  // useCallback 稳定引用（issue #142）：父渲染不再让 AssetThumb 的观察器
+  // 因回调换引用而重建；失败态由错误记录承接（显示 + 显式重试）
+  const refreshUrl = useCallback((asset: LibraryAsset) => {
+    if (inflightThumbs.current.has(asset.id)) return
+    inflightThumbs.current.add(asset.id)
     libraryStore
       .mediaUrl(asset)
-      .then((url) => setUrls((u) => ({ ...u, [asset.id]: url })))
-      .catch(() => {})
+      .then((url) => {
+        setUrls((u) => ({ ...u, [asset.id]: url }))
+        // 落定成功才清除错误（PR #226 评审：在途期间保留失败诊断与重试
+        // 入口——请求慢或永不落定时，行不得退化为无重试入口的惰性占位）
+        setThumbErrors((m) => {
+          if (!(asset.id in m)) return m
+          const next = { ...m }
+          delete next[asset.id]
+          return next
+        })
+      })
+      .catch((err) =>
+        setThumbErrors((m) => ({ ...m, [asset.id]: String(err) })),
+      )
+      .finally(() => inflightThumbs.current.delete(asset.id))
+  }, [])
+  return {
+    assets,
+    setAssets,
+    error,
+    setError,
+    urls,
+    setUrls,
+    thumbErrors,
+    refreshUrl,
   }
-  return { assets, setAssets, error, setError, urls, setUrls, refreshUrl }
 }
 
 /** 确认后执行删除（AssetsPanel 拆分，issue #99）：移除列表项并回收缩
@@ -190,6 +221,7 @@ function AssetKindList({
   kind,
   assets,
   urls,
+  thumbErrors,
   busy,
   onBack,
   onPick,
@@ -201,6 +233,7 @@ function AssetKindList({
   readonly kind: LibraryKind
   readonly assets: LibraryAsset[]
   readonly urls: Record<string, string>
+  readonly thumbErrors: Record<string, string>
   readonly busy: boolean
   readonly onBack: () => void
   readonly onPick: (kind: LibraryKind) => void
@@ -246,6 +279,7 @@ function AssetKindList({
           key={asset.id}
           asset={asset}
           url={urls[asset.id]}
+          thumbError={thumbErrors[asset.id]}
           onVisible={onVisible}
           onRename={(name) => onRename(asset, name)}
           onTagsBlur={(raw, intent) => onTagsBlur(asset, raw, intent)}
@@ -431,8 +465,16 @@ function joinAssetErrors(errors: Map<string, string>): string {
 /** 资产库面板（§8.1）：分类筛选、导入/删除与缩略图懒加载；
  * 删除走应用内确认框（不可逆），状态由 useLibraryAssetList 持有。 */
 export function AssetsPanel() {
-  const { assets, setAssets, error, setError, urls, setUrls, refreshUrl } =
-    useLibraryAssetList()
+  const {
+    assets,
+    setAssets,
+    error,
+    setError,
+    urls,
+    setUrls,
+    thumbErrors,
+    refreshUrl,
+  } = useLibraryAssetList()
   const [selectedKind, setSelectedKind] = useState<LibraryKind | null>(null)
   /** 待删除资产（非 null 时弹应用内确认框）。 */
   const [pendingRemove, setPendingRemove] = useState<LibraryAsset | null>(null)
@@ -480,6 +522,7 @@ export function AssetsPanel() {
           busy={busy}
           onBack={() => setSelectedKind(null)}
           onPick={onPick}
+          thumbErrors={thumbErrors}
           onVisible={refreshUrl}
           onRename={rename}
           onTagsBlur={commitTags}
@@ -558,6 +601,7 @@ function AssetTagsInput({
 function AssetRow({
   asset,
   url,
+  thumbError,
   onVisible,
   onRename,
   onTagsBlur,
@@ -565,6 +609,7 @@ function AssetRow({
 }: {
   readonly asset: LibraryAsset
   readonly url?: string
+  readonly thumbError?: string
   readonly onVisible: (asset: LibraryAsset) => void
   readonly onRename: (name: string) => void
   readonly onTagsBlur: (raw: string, intent: AssetTagsIntent) => void
@@ -572,7 +617,12 @@ function AssetRow({
 }) {
   return (
     <div className="pw-asset">
-      <AssetThumb asset={asset} url={url} onVisible={onVisible} />
+      <AssetThumb
+        asset={asset}
+        url={url}
+        thumbError={thumbError}
+        onVisible={onVisible}
+      />
       <div className="pw-asset-body">
         <EditableName
           value={asset.name}
@@ -604,15 +654,19 @@ function AssetRow({
 function AssetThumb({
   asset,
   url,
+  thumbError,
   onVisible,
 }: {
   readonly asset: LibraryAsset
   readonly url?: string
+  readonly thumbError?: string
   readonly onVisible: (asset: LibraryAsset) => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
-    if (url) return
+    // 已有 URL 或处于失败态时不观察（issue #142）：失败态的重试走显式
+    // 入口（点击重试按钮），不让观察器在父渲染中反复重发请求
+    if (url || thumbError) return
     const el = ref.current
     if (!el) return
     const io = new IntersectionObserver(
@@ -626,7 +680,7 @@ function AssetThumb({
     )
     io.observe(el)
     return () => io.disconnect()
-  }, [asset, onVisible, url])
+  }, [asset, onVisible, url, thumbError])
   return (
     <div
       ref={ref}
@@ -646,11 +700,21 @@ function AssetThumb({
         e.dataTransfer.effectAllowed = 'copy'
       }}
     >
-      {url ? (
-        <img src={url} alt={asset.name} loading="lazy" />
-      ) : (
-        <span aria-hidden>🖼</span>
-      )}
+      {(() => {
+        if (url) return <img src={url} alt={asset.name} loading="lazy" />
+        if (thumbError !== undefined)
+          return (
+            <button
+              type="button"
+              className="pw-asset-thumb-retry"
+              title={thumbError}
+              onClick={() => onVisible(asset)}
+            >
+              ⚠ 重试
+            </button>
+          )
+        return <span aria-hidden>🖼</span>
+      })()}
     </div>
   )
 }
