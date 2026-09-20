@@ -384,7 +384,7 @@ const v0SceneArb = fc.record({
  * 覆盖在界与越界（越界句柄按孤儿边隔离，属允许的修复）。 */
 const v0BranchEdgeArb = fc.record({
   id: idArb('be'),
-  target: idArb('n'),
+  targetIdx: fc.nat(4),
   optionIdx: fc.nat(3),
 })
 const v0EnvelopeArb = fc.record({
@@ -664,6 +664,9 @@ describe('归一化不变量的生成式验证（issue #232）：有效内容保
       maxLength: 2,
     }),
     assetRelPaths: fc.array(nonEmptyText, { minLength: 1, maxLength: 3 }),
+    characterNames: fc.array(nonEmptyText, { maxLength: 3 }),
+    locationNames: fc.array(nonEmptyText, { maxLength: 3 }),
+    documentTitles: fc.array(nonEmptyText, { maxLength: 3 }),
     titles: fc.array(
       fc.record({
         episode: fc.integer({ min: 1, max: 5 }),
@@ -682,12 +685,11 @@ describe('归一化不变量的生成式验证（issue #232）：有效内容保
 
   /** 干净内容的组装（评审第四轮保全预言机）：确定性唯一身份 + 下标
    * 引用落位 + from<to 的 DAG 前置；返回会话内容与集标题预期。 */
-  function assembleCleanContent(payload: ArbValue<typeof cleanPayloadArb>): {
-    content: ProjectContent
-    expectedTitles: Record<string, string>
-  } {
-    type CleanNode = Record<string, unknown>
-    const nodes: CleanNode[] = []
+  /** 干净节点组装（保全预言机）：scene/dialogue/branch，确定性唯一 id。 */
+  function assembleCleanNodes(
+    payload: ArbValue<typeof cleanPayloadArb>,
+  ): Array<Record<string, unknown>> {
+    const nodes: Array<Record<string, unknown>> = []
     payload.sceneNames.forEach((name, i) =>
       nodes.push({
         id: `n${i}`,
@@ -719,14 +721,23 @@ describe('归一化不变量的生成式验证（issue #232）：有效内容保
         },
       })
     })
-    const edges: CleanNode[] = []
+    return nodes
+  }
+
+  /** 干净边组装：from<to 的统一前向序（含 branch 边，评审第五轮——两段
+   * branch 边可闭合回路，环隔离会让预期失配）；端点类型约束外的下标
+   * 碰撞形态不计入保全预期。 */
+  function assembleCleanEdges(
+    payload: ArbValue<typeof cleanPayloadArb>,
+    nodes: Array<Record<string, unknown>>,
+  ): Array<Record<string, unknown>> {
+    const edges: Array<Record<string, unknown>> = []
     let edgeNo = 0
     for (const pair of payload.flowPairs) {
       const src = nodes[pair.from]
       const dst = nodes[pair.to]
       if (src === undefined || dst === undefined || pair.from >= pair.to)
         continue
-      // 下标碰撞出的非法形态（sequence 端点约束）不计入保全预期
       if (src.type !== 'scene' || dst.type === 'branch') continue
       edges.push({ id: `e${edgeNo++}`, source: src.id, target: dst.id })
     }
@@ -737,9 +748,8 @@ describe('归一化不变量的生成式验证（issue #232）：有效内容保
         src?.type === 'branch'
           ? (src.data as { options: Array<{ id: string }> }).options
           : []
-      if (src?.type !== 'branch' || dst === undefined || src.id === dst.id)
-        continue
-      if (options.length <= spec.optionIdx) continue
+      if (src?.type !== 'branch' || dst === undefined) continue
+      if (spec.from >= spec.to || options.length <= spec.optionIdx) continue
       edges.push({
         id: `e${edgeNo++}`,
         source: src.id,
@@ -748,6 +758,15 @@ describe('归一化不变量的生成式验证（issue #232）：有效内容保
         type: 'branch',
       })
     }
+    return edges
+  }
+
+  function assembleCleanContent(payload: ArbValue<typeof cleanPayloadArb>): {
+    content: ProjectContent
+    expectedTitles: Record<string, string>
+  } {
+    const nodes = assembleCleanNodes(payload)
+    const edges = assembleCleanEdges(payload, nodes)
     const assets = Object.fromEntries(
       payload.assetRelPaths.map((rel, i) => [
         `a${i}`,
@@ -768,7 +787,24 @@ describe('归一化不变量的生成式验证（issue #232）：有效内容保
         name: '保全',
         nodes: nodes as never,
         edges: edges as never,
-        settings: { characters: [], locations: [], props: [], documents: [] },
+        settings: {
+          characters: payload.characterNames.map((name, i) => ({
+            id: `ch${i}`,
+            name,
+            gradient: 'g',
+          })),
+          locations: payload.locationNames.map((name, i) => ({
+            id: `loc${i}`,
+            name,
+          })),
+          props: [],
+          documents: payload.documentTitles.map((title, i) => ({
+            id: `doc${i}`,
+            title,
+            body: '正文',
+            relatedIds: [],
+          })),
+        },
         episodeTitles: expectedTitles,
         assets: { byId: assets },
       },
@@ -819,6 +855,19 @@ describe('归一化不变量的生成式验证（issue #232）：有效内容保
     expect(Object.keys(out.assets?.byId ?? {}).sort(), '资产全部存活').toEqual(
       assetIds.sort(),
     )
+    // 设定桶保全（评审第五轮）：角色/地点名、文档标题逐条存活
+    expect(
+      out.settings.characters.map((c) => c.name).sort(),
+      '角色名保全',
+    ).toEqual([...payload.characterNames].sort())
+    expect(
+      out.settings.locations.map((l) => l.name).sort(),
+      '地点名保全',
+    ).toEqual([...payload.locationNames].sort())
+    expect(
+      (out.settings.documents ?? []).map((d) => d.title).sort(),
+      '设定文档标题保全',
+    ).toEqual([...payload.documentTitles].sort())
     expect(out.episodeTitles, '集标题保全').toEqual(expectedTitles)
     expect(out.name, '项目名保全').toBe('保全')
     // 逻辑重复键（source/target/handle，首见胜）去重后比对——同端点重复
@@ -874,12 +923,30 @@ describe('归一化不变量的生成式验证（issue #232）：v0 迁移与拒
             })),
           },
         }
-        const branchEdges = v0.branchEdges.map((e) => ({
-          id: e.id,
-          source: 'br0',
-          target: e.target,
-          sourceHandle: `option-${e.optionIdx}`,
-        }))
+        // 场景 id 确定性唯一化（s0..）：空白/重复 id 会触发重发，预期按
+        // 原始 id 对准就会失配
+        const docNodes = [
+          branchNode,
+          ...v0.scenes.map((sc, i) => ({ ...sc, id: `s${i}` })),
+        ]
+        // 运行态判别器（评审第五轮）：缺 type: 'branch' 时迁移后被分类为
+        // sequence、按「branch 节点不得引出匿名边」隔离，幸存环恒空转；
+        // 目标按下标引用真实节点（悬空目标会被端点守卫隔离，不构成迁移
+        // 预期），指向 br0 的自环边不生成
+        const branchEdges: Array<Record<string, unknown>> = []
+        v0.branchEdges.forEach((e) => {
+          const target = docNodes[e.targetIdx] as { id?: unknown } | undefined
+          if (target === undefined || target.id === 'br0') return
+          branchEdges.push({
+            // 确定性唯一 id（be0..）：空白/重复 id 会触发重发，按端点元组
+            // 对准的预期就会失配
+            id: `be${branchEdges.length}`,
+            type: 'branch' as const,
+            source: 'br0',
+            target: target.id,
+            sourceHandle: `option-${e.optionIdx}`,
+          })
+        })
         const doc = {
           schemaVersion: 0,
           project: {
@@ -889,7 +956,7 @@ describe('归一化不变量的生成式验证（issue #232）：v0 迁移与拒
             updatedAt: '2026-01-01T00:00:00.000Z',
           },
           graph: {
-            nodes: [branchNode, ...v0.scenes],
+            nodes: docNodes,
             edges: [...v0.edges, ...branchEdges],
           },
           settings: { characters: v0.characters, locations: [] },
@@ -899,22 +966,28 @@ describe('归一化不变量的生成式验证（issue #232）：v0 迁移与拒
         const migrated = parseProject(doc)
         expect(migrated.migrated).toBe(true)
         assertOutputInvariants(migrated.content)
-        // 下标句柄的迁移后置条件：幸存 branch 边的句柄解析到现存选项
-        // （在界句柄改写为选项 id；越界句柄按孤儿边隔离，不在此幸存）
-        const nodesById = new Map(migrated.content.nodes.map((n) => [n.id, n]))
-        for (const e of migrated.content.edges) {
-          if (edgeKindOf(e) !== 'branch') continue
-          const src = nodesById.get(e.source)
-          const optionId = e.sourceHandle?.startsWith('option-')
-            ? e.sourceHandle.slice('option-'.length)
-            : undefined
-          expect(
-            optionId !== undefined &&
-              src?.type === 'branch' &&
-              src.data.options.some((o) => o.id === optionId),
-            `迁移后 branch 边 ${e.id} 的句柄解析到现存选项`,
-          ).toBe(true)
-        }
+        // 下标句柄的迁移后置条件（评审第五轮）：在界 option-N 精确改写为
+        // 第 N 个选项的 id（选项 id 确定性唯一 optN，无重发改写）；越界
+        // 句柄按孤儿边隔离——幸存集合与句柄值都对准迁移意图
+        // 预期按端点元组（target + 改写后句柄）去重：同元组的重复边按逻辑
+        // 重复隔离属合法修复；在界句柄精确改写为 option-opt<N>
+        const optionCount = v0.branch.optionLabels.length
+        const expectedTuples = new Set(
+          branchEdges
+            .map((e) => ({
+              target: e.target as string,
+              idx: Number(String(e.sourceHandle ?? '').slice('option-'.length)),
+            }))
+            .filter(({ idx }) => idx < optionCount)
+            .map(({ target, idx }) => `${target}→option-opt${idx}`),
+        )
+        const outTuples = migrated.content.edges
+          .filter((e) => edgeKindOf(e) === 'branch' && e.source === 'br0')
+          .map((e) => `${e.target}→${e.sourceHandle}`)
+        expect(
+          [...new Set(outTuples)].sort(),
+          '在界下标句柄精确迁移并全部幸存',
+        ).toEqual([...expectedTuples].sort())
         const round2 = parseProject(
           serializeProject(migrated.content, PROJECT_ID, NOW),
         )
