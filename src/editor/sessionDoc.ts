@@ -13,15 +13,18 @@ import type { AssetRef } from '../model/document'
 export interface EditorProject {
   id: string
   name: string
-  description?: string
-  createdAt?: string
-  assets?: { byId: Record<string, AssetRef> }
+  /** 透传字段：上游可显式 undefined（= 缺省；构建原样携带后由序列化
+   * 剥离，issue #231）。 */
+  description?: string | undefined
+  createdAt?: string | undefined
+  assets?: { byId: Record<string, AssetRef> } | undefined
   /** 同版本文档的容器级扩展字段透传（issue #100 字段演进策略，§11）：
    * 与 name/description 同为编辑器不编辑的透传字段，每次构建必须原样
    * 携带，漏带即防抖保存丢数据（评审 P1）。 */
-  graphExtensions?: Record<string, unknown>
-  settingsExtensions?: Record<string, unknown>
-  assetsExtensions?: Record<string, unknown>
+  // 透传扩展字段可显式 undefined = 无扩展（issue #231）
+  graphExtensions?: Record<string, unknown> | undefined
+  settingsExtensions?: Record<string, unknown> | undefined
+  assetsExtensions?: Record<string, unknown> | undefined
 }
 
 /** 画布可变部分：节点/边/设定集/集标题/视口/资产索引来自编辑器状态。 */
@@ -29,10 +32,11 @@ export interface SessionDocPart {
   nodes: CanvasNode[]
   edges: Edge[]
   settings: ProjectSettings
-  episodeTitles?: Record<number, string>
-  viewport?: Viewport
+  /** 可显式 undefined（= 缺省；视口未落定/无命名集，issue #231）。 */
+  episodeTitles?: Record<number, string> | undefined
+  viewport?: Viewport | undefined
   /** 已应用 AI 批次计数（§12.2 提交身份）；0/缺省不落盘。 */
-  aiRevision?: number
+  aiRevision?: number | undefined
   /** 会话内资产索引（含本会话导入的条目）；undefined = 无资产桶。 */
   assets: EditorProject['assets']
 }

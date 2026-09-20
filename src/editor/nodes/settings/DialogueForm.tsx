@@ -4,12 +4,20 @@ import { useCompositionSafeValue } from './compositionValue'
 import { useNodeEdit } from '../../nodeEdit'
 import { uid } from '../../../uid'
 import type { ProjectSettings } from '../../settings'
-import type { DialogueLine, DialogueNodeData } from '../types'
+import type { DialogueLine, DialogueNodeData, LinePatch } from '../types'
 import type { PatchShape } from '../patch'
 import type { PanelNode } from './panelNode'
 
+/** 行合并（issue #231）：LinePatch 的显式 undefined 覆盖清除可选字段；
+ * undefined 键与缺省在运行时等价（归一化按字段读取、序列化剥离），
+ * cast 只表达这一等价，合并语义与历史 spread 逐字一致。 */
+function mergeLine(l: DialogueLine, linePatch: LinePatch): DialogueLine {
+  return { ...l, ...linePatch } as DialogueLine
+}
+
 /** 单行台词行（行类型切换、说话人、删除、文本）：DialogueForm 拆出的分区。
- * 行级补丁以 Partial<DialogueLine> 上报，列表装配留在表单内。 */
+ * 行级补丁以 LinePatch 上报（允许显式 undefined 清除可选字段，issue
+ * #231），列表装配留在表单内。 */
 function DialogueLineRow({
   line,
   defaultSpeaker,
@@ -18,9 +26,11 @@ function DialogueLineRow({
   onRemove,
 }: {
   readonly line: DialogueLine
-  readonly defaultSpeaker?: string
+  /** 上游持有 string | undefined（无默认说话人 = 不预填）；显式 undefined
+   * 与缺省在此 prop 上语义等价（issue #231）。 */
+  readonly defaultSpeaker?: string | undefined
   readonly characters: ProjectSettings['characters']
-  readonly onPatch: (patch: Partial<DialogueLine>) => void
+  readonly onPatch: (patch: LinePatch) => void
   readonly onRemove: () => void
 }) {
   const text = useCompositionSafeValue(line.text, (next) =>
@@ -93,9 +103,9 @@ export function DialogueForm({
   const patch = (p: PatchShape<DialogueNodeData>) =>
     patchNode(node.id, { nodeType: 'dialogue', patch: p })
   const name = useCompositionSafeValue(d.name, (next) => patch({ name: next }))
-  const patchLine = (i: number, linePatch: Partial<DialogueLine>) =>
+  const patchLine = (i: number, linePatch: LinePatch) =>
     patch({
-      lines: d.lines.map((l, idx) => (idx === i ? { ...l, ...linePatch } : l)),
+      lines: d.lines.map((l, idx) => (idx === i ? mergeLine(l, linePatch) : l)),
     })
   return (
     <>
@@ -125,7 +135,9 @@ export function DialogueForm({
               {
                 id: uid('line'),
                 kind: 'line',
-                speaker: defaultSpeaker,
+                ...(defaultSpeaker !== undefined && {
+                  speaker: defaultSpeaker,
+                }),
                 side: 'left',
                 text: '',
               },

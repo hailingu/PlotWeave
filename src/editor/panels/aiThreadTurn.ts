@@ -229,14 +229,14 @@ export interface UseAiTurnOpts {
   readonly append: (entries: ThreadEntry[]) => void
   readonly nextId: () => number
   readonly setArmedIdx: (idx: number | null) => void
-  readonly canvasDigest?: string
-  readonly onValidateAi?: (text: string) => BatchValidation | null
-  readonly onValidateCommands?: (
-    commands: AiCommand[],
-  ) => BatchValidation | null
-  readonly onReadNode?: (nodeId: string) => string | null
-  readonly onReadSettings?: () => string
-  readonly onReadDocument?: (documentId: string) => string | null
+  // 可选接线允许显式 undefined（undefined = 未接线，issue #231）
+  readonly canvasDigest?: string | undefined
+  readonly onValidateAi?: ((text: string) => BatchValidation | null) | undefined
+  readonly onValidateCommands?:
+    ((commands: AiCommand[]) => BatchValidation | null) | undefined
+  readonly onReadNode?: ((nodeId: string) => string | null) | undefined
+  readonly onReadSettings?: (() => string) | undefined
+  readonly onReadDocument?: ((documentId: string) => string | null) | undefined
 }
 
 /** 认领落定结果的交付（useAiTurn 拆分，issue #99）：条目映射见

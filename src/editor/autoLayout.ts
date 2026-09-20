@@ -19,9 +19,11 @@ export interface LayoutEdge {
   id: string
   source: string
   target: string
-  sourceHandle?: string | null
-  className?: string
-  type?: string
+  // xyflow Edge 库形状适配（issue #231）：库类型可选成员显式含
+  // undefined，本地边形状参数同款声明以保持接受库值
+  sourceHandle?: string | null | undefined
+  className?: string | undefined
+  type?: string | undefined
 }
 
 /** 节点包围盒尺寸（像素）。 */

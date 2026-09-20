@@ -76,7 +76,7 @@ fi
 if [ "$*" = "run lint -- --max-warnings=0" ]; then
   exit "$PLOTWEAVE_TEST_LINT_EXIT"
 fi
-if [ "$*" = "run typecheck:strict-index" ]; then
+if [ "$*" = "run typecheck:strict" ]; then
   exit "$PLOTWEAVE_TEST_STRICT_INDEX_EXIT"
 fi
 if [ "$PLOTWEAVE_TEST_NPM_EXIT" -ne 0 ]; then
@@ -279,7 +279,7 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
     ])
     expect(result.log).toContain('npm run format:check')
     expect(result.log).toContain('npm run lint -- --max-warnings=0')
-    expect(result.log).toContain('npm run typecheck:strict-index')
+    expect(result.log).toContain('npm run typecheck:strict')
     expect(result.log).toContain('npm run test:coverage')
     expect(result.log).toContain(
       'cargo-llvm-cov llvm-cov --lib --test media_format_leaf --lcov',
@@ -337,7 +337,7 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
     })
 
     expect(result.status).not.toBe(0)
-    expect(result.log).toContain('npm run typecheck:strict-index')
+    expect(result.log).toContain('npm run typecheck:strict')
     expect(result.log).not.toContain('test:coverage')
     expect(result.log).not.toContain('sonar-scanner')
   })

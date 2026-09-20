@@ -58,6 +58,13 @@ export interface DialogueLine {
   vo?: boolean
 }
 
+/** 行级补丁形状（issue #231 合法清除通道）：允许对可选字段显式
+ * undefined——kind 切换清空 speaker/side、说话人选择清空 speaker；合并为
+ * 逐键覆盖，序列化剥离 undefined 键。领域形状 DialogueLine 本身不放宽。 */
+export type LinePatch = {
+  [K in keyof DialogueLine]?: DialogueLine[K] | undefined
+}
+
 /** 对白节点（气泡流）：标题统计由 lines 派生（n 人 · m 句）。 */
 export interface DialogueNodeData extends Record<string, unknown> {
   name: string

@@ -175,8 +175,9 @@ function applyCardExecution(args: {
   readonly entry: ThreadEntry
   readonly idx: number
   readonly nextId: () => number
-  readonly onApplyAiBatch?: (commands: ValidatedCommand[]) => string | null
-  readonly identity?: AiCommitIdentity
+  readonly onApplyAiBatch?:
+    ((commands: ValidatedCommand[]) => string | null) | undefined
+  readonly identity?: AiCommitIdentity | undefined
 }): void {
   const { setThread, setArmedIdx, entry, idx, nextId } = args
   if (entry.card?.status !== 'pending' || !args.onApplyAiBatch) return
@@ -199,13 +200,14 @@ function applyCardExecution(args: {
 /** 会话线程域（逻辑 hook，issue #39 拆分）：条目追加、预览卡执行/忽略
  * 与危险批次的两步确认武装态；threadRef 供容器做滚动跟随。 */
 function useAiThreadMessages(opts: {
-  readonly onApplyAiBatch?: (commands: ValidatedCommand[]) => string | null
-  readonly initialSession?: AiSession
-  readonly onValidateCommands?: (
-    commands: AiCommand[],
-  ) => BatchValidation | null
+  // 可选接线全链允许显式 undefined（undefined = 未接线，issue #231）
+  readonly onApplyAiBatch?:
+    ((commands: ValidatedCommand[]) => string | null) | undefined
+  readonly initialSession?: AiSession | undefined
+  readonly onValidateCommands?:
+    ((commands: AiCommand[]) => BatchValidation | null) | undefined
   /** 提交身份（issue #139）：计数供恢复对账，等待器决定 executed 落盘推迟。 */
-  readonly identity?: AiCommitIdentity
+  readonly identity?: AiCommitIdentity | undefined
 }) {
   const [thread, setThread] = useState<ThreadEntry[]>(() =>
     restoreThreadEntries(
@@ -342,7 +344,8 @@ function AiGuide({
   onOpenSettings,
 }: {
   readonly hasModels: boolean
-  readonly onOpenSettings?: () => void
+  // 可显式 undefined = 未接线（issue #231）
+  readonly onOpenSettings?: (() => void) | undefined
 }) {
   return (
     <div className="pw-ai-guide">
@@ -478,26 +481,27 @@ function AiEntryBody({
 interface AiThreadProps {
   /** 项目 id：在途回合跨卸载归属的键（issue #63，见 ai/pendingTurns）。 */
   readonly projectId: string
-  readonly onOpenSettings?: () => void
-  readonly canvasDigest?: string
-  readonly onValidateAi?: (text: string) => BatchValidation | null
-  readonly onValidateCommands?: (
-    commands: AiCommand[],
-  ) => BatchValidation | null
-  readonly onReadNode?: (nodeId: string) => string | null
-  readonly onReadSettings?: () => string
+  // 可选接线允许显式 undefined（undefined = 未接线，issue #231）
+  readonly onOpenSettings?: (() => void) | undefined
+  readonly canvasDigest?: string | undefined
+  readonly onValidateAi?: ((text: string) => BatchValidation | null) | undefined
+  readonly onValidateCommands?:
+    ((commands: AiCommand[]) => BatchValidation | null) | undefined
+  readonly onReadNode?: ((nodeId: string) => string | null) | undefined
+  readonly onReadSettings?: (() => string) | undefined
   /** 读工具 get_document（issue 56）：按 id 返回文档全文 JSON。 */
-  readonly onReadDocument?: (documentId: string) => string | null
-  readonly onApplyAiBatch?: (commands: ValidatedCommand[]) => string | null
+  readonly onReadDocument?: ((documentId: string) => string | null) | undefined
+  readonly onApplyAiBatch?:
+    ((commands: ValidatedCommand[]) => string | null) | undefined
   /** 执行卡的提交身份（issue #139）：计数必带、等待器可选；见 AiCommitIdentity。 */
-  readonly commitIdentity?: AiCommitIdentity
+  readonly commitIdentity?: AiCommitIdentity | undefined
   /** 打开项目时恢复的独立会话快照。 */
-  readonly initialSession?: AiSession
-  readonly initialSessionError?: string | null
+  readonly initialSession?: AiSession | undefined
+  readonly initialSessionError?: string | null | undefined
   /** 内存会话可否作为挂载重试的落盘内容；读取失败（空回退）时为 false。 */
-  readonly initialSessionRetryable?: boolean
+  readonly initialSessionRetryable?: boolean | undefined
   /** 会话变更的独立持久化通道；失败不清空当前内存历史。 */
-  readonly onSaveSession?: (session: AiSession) => Promise<void>
+  readonly onSaveSession?: ((session: AiSession) => Promise<void>) | undefined
 }
 
 /** 装配会话三域（AiThread 拆分，issue #99）：模型选择、线程消息与回合

@@ -14,8 +14,9 @@ export interface OutlineRow {
   /** 缩进层级：节拍 0 / 场景 1 / 对白与分支 2 / 分镜 3。 */
   level: number
   label: string
-  /** 节拍行专属：兑现状态（§3.5，sequence 邻接派生）。 */
-  beat?: { pending: boolean; label?: string }
+  /** 节拍行专属：兑现状态（§3.5，sequence 邻接派生）；兑现场景名可显式
+   * undefined（= 无宿主场景名，issue #231）。 */
+  beat?: { pending: boolean; label?: string | undefined }
 }
 
 /** 节拍兑现状态（§3.5）：由 sequence 边邻接派生，不落镜像字段。

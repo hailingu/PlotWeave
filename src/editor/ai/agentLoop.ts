@@ -60,10 +60,11 @@ export interface AgentLoopResult {
 
 /** 双通道整批校验（由面板接线到 useAiBridge 的校验回调族）。 */
 export interface BatchValidators {
-  /** tool-calling 通道：命令数组校验；未接线视为不通过信息缺失（null）。 */
-  commands?: (cmds: AiCommand[]) => BatchValidation | null
+  /** tool-calling 通道：命令数组校验；未接线视为不通过信息缺失（null）。
+   * 可显式 undefined = 未接线（issue #231）。 */
+  commands?: ((cmds: AiCommand[]) => BatchValidation | null) | undefined
   /** 围栏通道：回复文本批次校验；无批次（纯讨论）返回 null。 */
-  prose?: (text: string) => BatchValidation | null
+  prose?: ((text: string) => BatchValidation | null) | undefined
 }
 
 /** 读工具执行器签名：同步返回回喂文本（读工具就地执行，不进命令通道）。 */

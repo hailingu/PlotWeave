@@ -52,10 +52,12 @@ interface LeftPanelProps {
   readonly contentNodes: CanvasNode[]
   /** 画布连线：下挂分镜的集归属随宿主场景派生（§7.2）。 */
   readonly edges: Edge[]
-  /** 大纲 ⇄ 画布联动（§3.5）：点击大纲行选中并居中该节点。 */
-  readonly onLocate?: (id: string) => void
-  /** 画布当前选中节点 id：大纲行反向高亮并滚动到可见。 */
-  readonly selectedId?: string
+  /** 大纲 ⇄ 画布联动（§3.5）：点击大纲行选中并居中该节点；可显式
+   * undefined = 未接线（issue #231）。 */
+  readonly onLocate?: ((id: string) => void) | undefined
+  /** 画布当前选中节点 id：大纲行反向高亮并滚动到可见；可显式
+   * undefined = 无选中（issue #231）。 */
+  readonly selectedId?: string | undefined
   /** 项目设定集（§5）：设定集分段的数据源。 */
   readonly settings: ProjectSettings
   /** 设定集条目编辑动作（§5）。 */

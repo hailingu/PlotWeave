@@ -18,7 +18,8 @@ function stack(opts?: { coalesceMs?: number; limit?: number }) {
 }
 
 const cmd = (key: string | undefined, tag = key ?? 'x'): HistoryCommand => ({
-  coalesceKey: key,
+  // 无合并键 = 键缺省（issue #231 规范形）
+  ...(key !== undefined && { coalesceKey: key }),
   undo: vi.fn(),
   redo: vi.fn(),
   ...(tag ? {} : {}),

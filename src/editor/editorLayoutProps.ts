@@ -26,7 +26,8 @@ export interface EditorLayoutProps {
   readonly project: EditorProjectContent
   readonly onBackHome: () => void
   readonly onRenameProject: (name: string) => void
-  readonly onOpenSettings?: () => void
+  // 可显式 undefined = 未接线（issue #231）
+  readonly onOpenSettings?: (() => void) | undefined
   /** 画布容器：新节点落点中心换算与拖放命中读它。 */
   readonly canvasRef: RefObject<HTMLDivElement>
   readonly doc: EditorDocument

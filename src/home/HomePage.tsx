@@ -16,13 +16,15 @@ interface HomePageProps {
    * 拒绝以非阻塞横幅呈现（动作 + 目标 + 诊断 + 重试）；新一次变更尝试
    * 即视为旧错误过时。null/缺省 = 无待展示错误。 */
   readonly mutationError?: HomeActionFailure | null
-  /** 变更失败横幅的重试入口（同参重发失败的动作）。 */
-  readonly onRetryMutation?: () => void
+  /** 变更失败横幅的重试入口（同参重发失败的动作）；可显式 undefined =
+   * 无同参重试（issue #231）。 */
+  readonly onRetryMutation?: (() => void) | undefined
   /** 列表读取失败诊断（issue #133）：无已知列表时以错误态代替首次使用
    * 引导；已有列表时保留卡片并显示刷新失败横幅。null/缺省 = 无错误。 */
   readonly loadError?: string | null
-  /** 错误态/横幅的重试入口（重新拉取列表）。 */
-  readonly onRetryLoad?: () => void
+  /** 错误态/横幅的重试入口（重新拉取列表）；可显式 undefined = 无重试
+   * 接线（issue #231）。 */
+  readonly onRetryLoad?: (() => void) | undefined
   /** 单击海报卡打开项目，窗口切换为编辑器（文档式双界面，§3.1；应用方修订：由双击改单击）。 */
   readonly onOpenProject: (id: string) => void
   /** 工具栏「＋ 新建项目」、网格末尾「＋ 新剧」与空状态引导共用此入口。 */
@@ -164,7 +166,8 @@ function ListErrorState({
   onRetry,
 }: {
   readonly loadError: string
-  readonly onRetry?: () => void
+  // 可显式 undefined = 无重试接线（issue #231）
+  readonly onRetry?: (() => void) | undefined
 }) {
   return (
     <div className="home-empty" role="alert">
@@ -188,7 +191,8 @@ function RefreshErrorBanner({
   onRetry,
 }: {
   readonly loadError: string
-  readonly onRetry?: () => void
+  // 可显式 undefined = 无重试接线（issue #231）
+  readonly onRetry?: (() => void) | undefined
 }) {
   return (
     <p className="home-refresh-error" role="alert">
@@ -218,7 +222,8 @@ function ProjectGrid({
   readonly visible: ProjectSummary[]
   readonly query: string
   readonly loadError: string | null
-  readonly onRetry?: () => void
+  // 可选接线允许显式 undefined（undefined = 无同参重试，issue #231）
+  readonly onRetry?: (() => void) | undefined
   readonly onCreate: () => void
   readonly onOpen: (id: string) => void
   readonly onMenu: (

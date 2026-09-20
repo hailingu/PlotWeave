@@ -19,7 +19,9 @@ export interface ProviderConfig {
   /** 该 provider 下可选的模型 id 列表（用户维护）。 */
   models: string[]
   /** API key 密文（`pw1:` envelope；缺省 = 未配置）。 */
-  keyEnc?: string
+  /** 凭据密文；可显式 undefined = 未配置/已清除（removeKey 以
+   * { keyEnc: undefined } 清除，issue #231 合法清除通道）。 */
+  keyEnc?: string | undefined
 }
 
 /** 应用设置（settings.json 结构）。 */

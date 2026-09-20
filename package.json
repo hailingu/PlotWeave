@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "typecheck:strict-index": "tsc --noEmit -p tsconfig.strict-index.json",
+    "typecheck:strict": "tsc --noEmit -p tsconfig.strict.json",
     "preview": "vite preview",
     "lint": "eslint .",
     "format": "prettier --write .",

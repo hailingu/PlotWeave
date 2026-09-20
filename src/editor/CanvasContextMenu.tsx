@@ -12,10 +12,10 @@ export interface CanvasContextMenuProps {
   /** 触发点视口坐标（左缘收敛在窗口内，防贴右缘溢出）。 */
   readonly x: number
   readonly y: number
-  /** 节点菜单形态：目标节点 id。 */
-  readonly nodeId?: string
-  /** 连线菜单形态：目标边 id。 */
-  readonly edgeId?: string
+  /** 节点菜单形态：目标节点 id；可显式 undefined = 非该形态（issue #231）。 */
+  readonly nodeId?: string | undefined
+  /** 连线菜单形态：目标边 id；可显式 undefined = 非该形态（issue #231）。 */
+  readonly edgeId?: string | undefined
   readonly onToggleSettings: (id: string) => void
   readonly onDuplicate: (id: string) => void
   readonly onDeleteNode: (id: string) => void

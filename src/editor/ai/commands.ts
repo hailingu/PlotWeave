@@ -147,8 +147,9 @@ export interface AiGraphSnapshot {
   edges: Array<{
     source: string
     target: string
-    sourceHandle?: string | null
-    type?: string
+    // 快照构建自 xyflow 运行态边（可选成员显式含 undefined，issue #231）
+    sourceHandle?: string | null | undefined
+    type?: string | undefined
   }>
   /** 项目资产索引（id → MIME）：shot.refs 引用位的资产存在性与用途匹配校验
    * （§7.1/§11.3 的批命令对等）。空索引 = 无资产，引用位一律拒绝。 */
@@ -165,7 +166,14 @@ export interface AiGraphSnapshot {
 export interface AiEntitySnapshot {
   characters: ReadonlyArray<{ id: string; name: string }>
   locations: ReadonlyArray<{ id: string; name: string }>
-  documents?: ReadonlyArray<{ id: string; title: string; bodyLength?: number }>
+  // 可显式 undefined = 无文档桶（issue #231）；bodyLength 同款
+  documents?:
+    | ReadonlyArray<{
+        id: string
+        title: string
+        bodyLength?: number | undefined
+      }>
+    | undefined
 }
 
 /** 预览卡的单行条目（§6：逐项列出受影响节点与变更类型；issue 44 增实体条目）。 */

@@ -83,8 +83,9 @@ function PreviewCardActions({
 interface PreviewCardProps {
   readonly v: BatchValidation
   readonly status: 'pending' | 'executed' | 'dismissed'
-  /** 跨会话恢复的历史执行卡：撤销栈已重建，不宣称 ⌘Z 可整批撤销。 */
-  readonly historical?: boolean
+  /** 跨会话恢复的历史执行卡：撤销栈已重建，不宣称 ⌘Z 可整批撤销。
+   * 可显式 undefined = 非历史卡（issue #231）。 */
+  readonly historical?: boolean | undefined
   readonly armed: boolean
   readonly busy: boolean
   readonly onArm: () => void

@@ -35,12 +35,26 @@ export type NodeDataPatch = {
 
 /** 补丁形状：剥离 *NodeData 因 React Flow 泛型约束（Node<Data extends
  * Record<string, unknown>>，见 types.ts）继承的字符串索引签名，只保留
- * 显式字段——否则宽索引会让任意键的跨类型补丁绕过编译检查（issue 16）。 */
-export type PatchShape<T> = Partial<ExplicitFields<T>>
+ * 显式字段——否则宽索引会让任意键的跨类型补丁绕过编译检查（issue 16）。
+ * 显式 undefined 是合法的字段清除语义（issue #231：episodeNoPatch 等以
+ * `{ 字段: undefined }` 清除可选字段，mergeNodeData 逐键覆盖、序列化剥离
+ * undefined 键）——清除与缺省的区分收口于此，不在领域形状上放宽；
+ * `?: never` 禁写镜像字段不进入补丁面（ExplicitFields 剔除）。 */
+export type PatchShape<T> = {
+  [K in keyof ExplicitFields<T>]?: ExplicitFields<T>[K] | undefined
+}
 
-/** 显式字段提取：key remapping 过滤索引签名键（string extends K 即索引键）。 */
+/** 显式字段提取：key remapping 过滤索引签名键（string extends K 即索引键）
+ * 与禁写镜像键（剔除 undefined 后为 never——`?: never` 字段不得出现在
+ * 补丁面，issue #231）。 */
 type ExplicitFields<T> = {
-  [K in keyof T as string extends K ? never : K]: T[K]
+  [
+    K in keyof T as string extends K
+      ? never
+      : Exclude<T[K], undefined> extends never
+        ? never
+        : K
+  ]: T[K]
 }
 
 /** 运行态 data 字段合并（EditorView.applyDataPatch 与 AI 批量模拟共用）：

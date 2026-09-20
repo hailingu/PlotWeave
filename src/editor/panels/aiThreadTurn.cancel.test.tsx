@@ -44,7 +44,11 @@ function pendingTurn() {
   runModelTurnMock.mockImplementation(
     (_p, _m, _msgs, _read, _validators, _nextId, signal) =>
       new Promise<ThreadEntry[]>((resolve, reject) => {
-        calls.push({ resolve, reject, signal })
+        calls.push({
+          resolve,
+          reject,
+          ...(signal !== undefined && { signal }),
+        })
       }),
   )
   return calls
