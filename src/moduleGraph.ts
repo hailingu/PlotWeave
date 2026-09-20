@@ -90,12 +90,14 @@ function edgeOfExport(node: ts.ExportDeclaration): RawEdge | null {
 
 /** 动态 import('...') 的原始边（恒为运行时边）。 */
 function edgeOfDynamicImport(node: ts.CallExpression): RawEdge | null {
+  const arg = node.arguments[0]
   if (
     node.expression.kind !== ts.SyntaxKind.ImportKeyword ||
-    !ts.isStringLiteral(node.arguments[0])
+    arg === undefined ||
+    !ts.isStringLiteral(arg)
   )
     return null
-  const spec = node.arguments[0].text
+  const spec = arg.text
   if (!spec.startsWith('.')) return null
   return { spec, typeOnly: false }
 }
@@ -233,6 +235,8 @@ function cyclePathOf(
 ): string[] {
   const members = new Set(scc)
   const start = scc[0]
+  // SCC 非空由 Tarjan 构造保证；空表防御直接退回成员清单（issue #230）
+  if (start === undefined) return [...scc]
   const path = [start]
   const onPath = new Set([start])
   const dfs = (cur: string): string[] | null => {
@@ -259,7 +263,7 @@ export function cyclesOf(edges: Map<string, ModuleEdge[]>): string[] {
     if (scc.length > 1) cycles.push(cyclePathOf(scc, edges).join(' → '))
     else {
       const v = scc[0]
-      if ((edges.get(v) ?? []).some((e) => e.target === v))
+      if (v !== undefined && (edges.get(v) ?? []).some((e) => e.target === v))
         cycles.push(`${v} → ${v}`)
     }
   }

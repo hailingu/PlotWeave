@@ -230,7 +230,9 @@ function foldCreateEntity(
   const normalized = normalizeEntityFields(kind, fields)
   const label = ENTITY_KIND_LABELS[kind]
   const virtualId = virtualEntityIdOf(st, index)
-  bucketOf(st, kind).set(virtualId, normalized.name)
+  // create 模式已由 entityFieldsIssue 保证 name 为非空字符串；?? 兜底仅
+  // 满足索引读取的缺失分支（issue #230），不可达
+  bucketOf(st, kind).set(virtualId, normalized.name ?? '')
   st.virtualEntityIds.add(virtualId)
   if (refName !== '') st.entityRefs.set(refName, { kind, id: virtualId })
   st.items.push({

@@ -72,7 +72,11 @@ export function newEntityId(prefix: string): string {
 
 /** 新建角色实体（名字去空白；渐变从调色板轮转）。 */
 export function createCharacter(name: string): CharacterEntity {
-  const gradient = AVATAR_GRADIENTS[paletteCursor++ % AVATAR_GRADIENTS.length]
+  // 调色板为模块级非空常量；?? 兜底只消解模运算下标的缺失分支（不可达）
+  const gradient =
+    AVATAR_GRADIENTS[paletteCursor++ % AVATAR_GRADIENTS.length] ??
+    AVATAR_GRADIENTS[0] ??
+    ''
   return { id: newEntityId('ch'), name: name.trim(), gradient }
 }
 

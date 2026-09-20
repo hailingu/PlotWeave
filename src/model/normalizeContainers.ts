@@ -22,6 +22,7 @@ import {
 import { normalizeEpisodeTitles } from './legacy'
 import {
   type BlankKeyRemaps,
+  type SettingsBuckets,
   normalizeEntityShapes,
   normalizeSettingsBuckets,
   reKeyBlankEntries,
@@ -265,7 +266,7 @@ function reKeyBucketIdentities(
  * 资产 AssetRef 完整校验、分镜 refs 的 targetId 兼容转换/隔离——均就地
  * 改写传入的桶与节点原始成员。 */
 function sanitizeBucketEntries(
-  settings: Record<string, Record<string, unknown>>,
+  settings: SettingsBuckets,
   byId: Record<string, Record<string, unknown>>,
   nodesRaw: unknown[],
   env: NormalizeEnv,
@@ -306,7 +307,7 @@ function sanitizeBucketEntries(
  * 句柄改写用的映射随管线带出。 */
 function normalizeActiveNodes(
   nodesRaw: unknown[],
-  settings: Record<string, Record<string, unknown>>,
+  settings: SettingsBuckets,
   blankRemaps: BlankKeyRemaps,
   warnings: string[],
 ): {

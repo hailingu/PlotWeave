@@ -98,7 +98,11 @@ function useContentNodes(nodes: CanvasNode[]): CanvasNode[] {
   const ref = useRef(nodes)
   if (
     ref.current.length !== nodes.length ||
-    ref.current.some((n, i) => !sameNodeContent(n, nodes[i]))
+    // 长度相等已由首条件保证；undefined 守卫消解下标读取的缺失分支
+    ref.current.some((n, i) => {
+      const next = nodes[i]
+      return next !== undefined && !sameNodeContent(n, next)
+    })
   ) {
     ref.current = nodes
   }

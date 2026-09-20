@@ -270,7 +270,8 @@ export function doomedImageAssets(
       continue
     }
     const asset = byId[id]
-    if (!doomed.some((a) => a.id === id)) doomed.push(asset)
+    if (asset !== undefined && !doomed.some((a) => a.id === id))
+      doomed.push(asset)
   }
   return doomed
 }
