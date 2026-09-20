@@ -93,6 +93,10 @@ npm run tauri dev  # 启动 Tauri 开发调试（Vite 前端 + Rust 壳）
 
 测试失败、覆盖率报告无效、扫描失败、Quality Gate 未通过、服务不可用或新增代码仍有未解决问题时，Git 操作会被阻止。同一工作树只允许一个门禁运行，以免并发扫描覆盖共享产物。应逐项修复新增问题并重复执行门禁，直到新增问题数归零；不得使用 `--no-verify` 绕过。
 
+### PR 持续集成（issue #228）
+
+推送到 `dev` 与面向 `dev` 的 PR 会自动运行 `.github/workflows/ci.yml`（macOS runner，与本机目标平台一致）：frontend（Prettier 格式、ESLint 零警告、构建、前端测试、scripts/.githooks 行测试）与 rust（fmt、clippy `-D warnings`、测试）两个 job 对应 AGENTS.md Scope Routing 各行——每个 PR 都有绑定提交 SHA 的检查记录与失败日志。SonarQube 扫描与覆盖率生成保留在本机门禁（服务在本机，托管 runner 不可达；本地门禁日志即证据保留），CI 不重复也不削弱它。分支保护是否要求这些检查由仓库设置另行决定。
+
 ## 文档与协作
 
 - AI 代理（ZCode / Codex 等）开始任何工作前，先阅读 [AGENTS.md](AGENTS.md)。
