@@ -14,6 +14,7 @@ import { CURRENT_SCHEMA_VERSION } from './document'
 import type { ProjectContent } from './content'
 import { NOW } from './convertFixtures'
 import { edgeKindOf, SCENE_SHOT_HANDLE } from '../editor/graphRules'
+import { trimTitleWhitespace } from './titleWhitespace'
 
 const PROJECT_ID = 'p-prop'
 
@@ -261,9 +262,19 @@ const contentArb = fc.record({
   assets: fc.array(assetArb, { maxLength: 4 }),
   name: shortText,
   createdAt: fc.option(isoText, { nil: undefined }),
-  titles: fc.array(fc.record({ episode: fc.nat(3), title: shortText }), {
-    maxLength: 3,
-  }),
+  titles: fc.array(
+    fc.record({
+      // 键覆盖规范与非规范书写（评审第十一轮）：'01'/'1e0'/' 1' 等会被
+      // 归一化删除或折叠，只生成规范键会让「保留脏键」的回归不可见
+      key: fc.oneof(
+        fc.nat(3).map(String),
+        fc.constantFrom('01', '1e0', ' 1', '-1', '1.5'),
+      ),
+      // 标题覆盖纯空白串（去空白后为空的删除路径）
+      title: fc.oneof(shortText, fc.constantFrom(' ', '  ', '\t')),
+    }),
+    { maxLength: 3 },
+  ),
   viewport: fc.option(
     fc.record({
       x: finiteNumber,
@@ -309,10 +320,7 @@ function v1Envelope(
       documents: c.documents as never,
     },
     episodeTitles: Object.fromEntries(
-      c.titles.map((t: { episode: number; title: string }) => [
-        String(t.episode),
-        t.title,
-      ]),
+      c.titles.map((t: { key: string; title: string }) => [t.key, t.title]),
     ),
     ...(c.viewport !== undefined ? { viewport: c.viewport } : {}),
     ...(c.aiRevision !== undefined ? { aiRevision: c.aiRevision } : {}),
@@ -351,8 +359,11 @@ function v1Envelope(
   if (dirt.collideBucketIds) {
     // 评审修复（第二轮/第三轮）：toDocSettings/keyedBy 会把生成数组里的
     // 重复 id 折叠成单键 Record——「异键 + 值内 id 冲突」到不了归一化边界。
-    // 注入直达：每个已填充桶都加一条独立记录键持有首条目的克隆（值内 id
-    // 与原条目相同），全部设定桶与资产索引的键 id 一致性改写路径均被行使
+    // 注入直达：每个已填充桶都加一条独立记录键持有源条目的克隆（值内 id
+    // 与源条目相同），全部设定桶与资产索引的键 id 一致性改写路径均被行使。
+    // 克隆源取首个非空白键条目（评审第十一轮）：非空白键经归一化原键存活，
+    // 输出中可按 id 锚定源条目做同载荷比对；空白键源会被重发为不可预测的
+    // 新键。全空白键桶不注入——空键重发本身已改写文档，repaired 保证不受影响
     const buckets: Record<string, unknown>[] = [
       doc.settings.characters,
       doc.settings.locations as Record<string, unknown>,
@@ -361,9 +372,9 @@ function v1Envelope(
       doc.assets.byId as Record<string, unknown>,
     ]
     for (const bucket of buckets) {
-      const first = Object.keys(bucket)[0]
-      if (first !== undefined)
-        bucket['dup-key'] = structuredClone(bucket[first])
+      const source = Object.keys(bucket).find((key) => key.trim())
+      if (source !== undefined)
+        bucket['dup-key'] = structuredClone(bucket[source])
     }
   }
   if (dirt.badUpdatedAt) doc.project.updatedAt = 'not-a-time'
@@ -555,16 +566,72 @@ function assertGraphLevelRules(content: ProjectContent): void {
   ).toBe(true)
 }
 
-/** 集标题契约（§4.1）：键为正整数、值为非空标题。 */
+/** 集标题契约（§4.1/§11.1）：键为规范十进制正整数（"01"/"1e0"/" 1" 等
+ * 非规范书写由归一化删除，折叠覆盖亦不被接受），标题去规范空白后非空——
+ * 判定复用生产侧 trimTitleWhitespace（与 Rust 保存边界对齐的超集裁剪）。 */
 function assertEpisodeTitles(content: ProjectContent): void {
   for (const [key, title] of Object.entries(content.episodeTitles ?? {})) {
-    const episode = Number(key)
     expect(
-      Number.isSafeInteger(episode) && episode > 0,
-      `集标题键 ${key} 为正整数`,
+      /^[1-9]\d*$/.test(key) && Number.isSafeInteger(Number(key)),
+      `集标题键 ${key} 为规范十进制正整数`,
     ).toBe(true)
-    expect(title, `集 ${key} 标题非空`).not.toBe('')
+    expect(title.trim().length > 0, `集 ${key} 标题非空白`).toBe(true)
+    expect(title, `集 ${key} 标题首尾无规范空白`).toBe(
+      trimTitleWhitespace(title),
+    )
   }
+}
+
+/** 碰撞注入存活断言（评审第十一轮）：collideBucketIds 向每个含非空白键
+ * 的桶注入 dup-key 克隆（值内 id 与源条目冲突）——契约是记录键为权威 id、
+ * 值内 id 改写为 dup-key、条目与其余载荷存活；删除克隆或另发任意身份的
+ * 冲突消解不再放行。实体形状判定是条目本地的（normalizeSettings），源条目
+ * 被隔离时同载荷克隆同被隔离。 */
+function assertCollisionClones(
+  c: GeneratedContent,
+  content: ProjectContent,
+): void {
+  const arrayBuckets: Array<
+    [string, Array<{ id: string }>, Array<{ id: string }>]
+  > = [
+    ['角色', content.settings.characters, c.characters],
+    ['地点', content.settings.locations, c.locations],
+    ['道具', content.settings.props ?? [], c.props],
+    ['设定文档', content.settings.documents ?? [], c.documents],
+  ]
+  for (const [label, outBucket, genBucket] of arrayBuckets) {
+    const sourceId = genBucket.find((e) => e.id.trim())?.id
+    if (sourceId === undefined) continue
+    const source = outBucket.find((e) => e.id === sourceId)
+    const dup = outBucket.find((e) => e.id === 'dup-key')
+    if (source === undefined) {
+      expect(
+        dup,
+        `${label}桶：源条目被形状隔离时同载荷碰撞克隆同被隔离`,
+      ).toBeUndefined()
+      continue
+    }
+    expect(
+      dup,
+      `${label}桶：碰撞克隆随权威键 dup-key 存活且载荷与源条目一致`,
+    ).toEqual({ ...source, id: 'dup-key' })
+  }
+  const assetSourceId = c.assets.find((a) => a.id.trim())?.id
+  if (assetSourceId === undefined) return
+  const byId = content.assets?.byId ?? {}
+  const source = byId[assetSourceId]
+  const dup = byId['dup-key']
+  if (source === undefined) {
+    expect(
+      dup,
+      '资产索引：源条目被形状隔离时同载荷碰撞克隆同被隔离',
+    ).toBeUndefined()
+    return
+  }
+  expect(
+    dup,
+    '资产索引：碰撞克隆随权威键 dup-key 存活且载荷与源条目一致',
+  ).toEqual({ ...source, id: 'dup-key' })
 }
 
 /** 输出不变量总装（issue #232）：身份唯一、活动边满足图规则、集标题契约。 */
@@ -582,9 +649,12 @@ describe('归一化不变量的生成式验证（issue #232）：v1 已支持信
         const doc = v1Envelope(c, dirt)
         const round = parseProject(doc)
         assertOutputInvariants(round.content)
+        // 碰撞克隆存活（评审第十一轮）：注入只落在含非空白键的桶
+        if (dirt.collideBucketIds) assertCollisionClones(c, round.content)
         // 保证脏注入的修复信号（评审第七/九轮）：这些注入必然改写文档，
         // repaired=false 会让调用方不回写、脏数据每次加载都重复修复；
-        // 键级注入按「至少一个可注入的已填充容器」人口感知判定
+        // 键级注入按「至少一个可注入的已填充容器」人口感知判定——全空白
+        // 键桶虽不接收碰撞克隆，空键重发同样必然改写文档，条件不受影响
         const bucketPopulated =
           c.characters.length > 0 ||
           c.locations.length > 0 ||
@@ -689,7 +759,13 @@ describe('归一化不变量的生成式验证（issue #232）：有效内容保
     characterNames: fc.array(preservedText, { minLength: 1, maxLength: 3 }),
     locationNames: fc.array(preservedText, { minLength: 1, maxLength: 3 }),
     propNames: fc.array(preservedText, { maxLength: 3 }),
-    documentTitles: fc.array(preservedText, { maxLength: 3 }),
+    documentSpecs: fc.array(
+      fc.record({
+        title: preservedText,
+        withLocation: fc.boolean(),
+      }),
+      { maxLength: 3 },
+    ),
     titles: fc.array(
       fc.record({
         episode: fc.integer({ min: 1, max: 5 }),
@@ -715,8 +791,20 @@ describe('归一化不变量的生成式验证（issue #232）：有效内容保
 
   /** 干净内容的组装（评审第四轮保全预言机）：确定性唯一身份 + 下标
    * 引用落位 + from<to 的 DAG 前置；返回会话内容与集标题预期。 */
-  /** 干净节点组装（保全预言机）：scene/dialogue/branch，确定性唯一 id。 */
+  /** 干净节点组装（保全预言机）：确定性唯一 id；按下标引用方/边组装的
+   * 数组序不得变（assembleCleanEdges 以位置下标寻址），拆分时叙事面
+   * （scene/dialogue/branch/beat）在前、媒体面（shot/image）在后。 */
   function assembleCleanNodes(
+    payload: ArbValue<typeof cleanPayloadArb>,
+  ): Array<Record<string, unknown>> {
+    return [
+      ...assembleNarrativeCleanNodes(payload),
+      ...assembleMediaCleanNodes(payload),
+    ]
+  }
+
+  /** 干净节点组装 · 叙事面：scene/dialogue/branch/beat，确定性唯一 id。 */
+  function assembleNarrativeCleanNodes(
     payload: ArbValue<typeof cleanPayloadArb>,
   ): Array<Record<string, unknown>> {
     const nodes: Array<Record<string, unknown>> = []
@@ -769,6 +857,14 @@ describe('归一化不变量的生成式验证（issue #232）：有效内容保
         data: { name: `节拍${i}`, tone },
       }),
     )
+    return nodes
+  }
+
+  /** 干净节点组装 · 媒体面：shot/image，确定性唯一 id。 */
+  function assembleMediaCleanNodes(
+    payload: ArbValue<typeof cleanPayloadArb>,
+  ): Array<Record<string, unknown>> {
+    const nodes: Array<Record<string, unknown>> = []
     payload.shotPictures.forEach((picture, i) =>
       nodes.push({
         id: `sh${i}`,
@@ -902,11 +998,18 @@ describe('归一化不变量的生成式验证（issue #232）：有效内容保
             id: `prop${i}`,
             name,
           })),
-          documents: payload.documentTitles.map((title, i) => ({
+          documents: payload.documentSpecs.map((doc, i) => ({
             id: `doc${i}`,
-            title,
+            title: doc.title,
             body: '正文',
-            relatedIds: [],
+            // 文档关系（评审第十一轮）：ch0 恒在、loc0 随生成标志——目标由
+            // 保底非桶供给；恒空数组会让「清空全部合法关系」的回归不可见
+            relatedIds: [
+              { kind: 'character' as const, id: 'ch0' },
+              ...(doc.withLocation
+                ? [{ kind: 'location' as const, id: 'loc0' }]
+                : []),
+            ],
           })),
         },
         episodeTitles: expectedTitles,
@@ -1085,7 +1188,24 @@ describe('归一化不变量的生成式验证（issue #232）：有效内容保
       (out.settings.documents ?? []).map((d) => `${d.id}:${d.title}`).sort(),
       '设定文档身份与标题保全',
     ).toEqual(
-      payload.documentTitles.map((title, i) => `doc${i}:${title}`).sort(),
+      payload.documentSpecs.map((doc, i) => `doc${i}:${doc.title}`).sort(),
+    )
+    // 文档关系逐条保全（评审第十一轮）：{kind,id} 对有序比对
+    expect(
+      (out.settings.documents ?? [])
+        .map(
+          (d) =>
+            `${d.id}:${d.relatedIds.map((r) => `${r.kind}=${r.id}`).join(',')}`,
+        )
+        .sort(),
+      '设定文档关系保全',
+    ).toEqual(
+      payload.documentSpecs
+        .map(
+          (doc, i) =>
+            `doc${i}:character=ch0${doc.withLocation ? ',location=loc0' : ''}`,
+        )
+        .sort(),
     )
     // 资产全记录比对（评审第八轮：只比键会放行元数据清空/损坏）
     const expectedAssets = Object.fromEntries(
@@ -1316,6 +1436,53 @@ describe('归一化不变量的生成式验证（issue #232）：v0 迁移与拒
     ).toEqual([...expectedBranchTuples].sort())
   }
 
+  /** v0 迁移的节点载荷比对（评审第十一轮）：迁移把合法 v0 载荷换成空/默认
+   * 值的回归此前不可见（输出不变量只管身份与图结构，边断言只管边）。分支
+   * 提示词/选项与场景名称/内外景/简介逐字存活；sceneNo 非法时按 §4.2 顺位
+   * 重发（文档序最小未占用正整数），预期按同一规则在夹具上现算。 */
+  function assertV0NodePayloads(
+    content: ProjectContent,
+    v0: ArbValue<typeof v0EnvelopeArb>,
+  ): void {
+    const branch = content.nodes.find((n) => n.id === 'br0')
+    expect(branch?.type, 'v0 分支节点存活').toBe('branch')
+    if (branch?.type === 'branch') {
+      expect(branch.data.prompt, 'v0 分支提示词保全').toBe(v0.branch.prompt)
+      expect(branch.data.options, 'v0 分支选项载荷保全').toEqual(
+        v0.branch.optionLabels.map((label, i) => ({ id: `opt${i}`, label })),
+      )
+    }
+    // sceneNo 顺位重发预期：合法编号（正安全整数）保留并占位（含重复），
+    // 非法编号按文档序取最小未占用正整数（与 renumberSeqFields 同一规则）
+    const used = new Set<number>()
+    const expectedSceneNos = v0.scenes.map((sc) => {
+      const cur = sc.data.sceneNo
+      if (Number.isSafeInteger(cur) && cur > 0) {
+        used.add(cur)
+        return cur
+      }
+      let next = 1
+      while (used.has(next)) next += 1
+      used.add(next)
+      return next
+    })
+    v0.scenes.forEach((sc, i) => {
+      const scene = content.nodes.find((n) => n.id === `s${i}`)
+      expect(scene?.type, `v0 场景 s${i} 存活`).toBe('scene')
+      if (scene?.type !== 'scene') return
+      expect(scene.data.name, `v0 场景 s${i} 名称保全`).toBe(sc.data.name)
+      expect(scene.data.sceneNo, `v0 场景 s${i} 编号保全/顺位重发`).toBe(
+        expectedSceneNos[i],
+      )
+      expect(scene.data.interior, `v0 场景 s${i} 内外景保全`).toBe(
+        sc.data.interior,
+      )
+      expect(scene.data.synopsis, `v0 场景 s${i} 简介保全`).toBe(
+        sc.data.synopsis,
+      )
+    })
+  }
+
   it('任意 v0 信封：迁移成功、输出满足不变量、迁移产物幂等', () => {
     fc.assert(
       fc.property(v0EnvelopeArb, (v0) => {
@@ -1330,6 +1497,7 @@ describe('归一化不变量的生成式验证（issue #232）：v0 迁移与拒
           'v0 角色迁移存活',
         ).toEqual(v0.characterNames.map((name, i) => `ch${i}:${name}`).sort())
         assertOutputInvariants(migrated.content)
+        assertV0NodePayloads(migrated.content, v0)
         assertV0EdgeMigration(
           migrated.content,
           flowEdges,
