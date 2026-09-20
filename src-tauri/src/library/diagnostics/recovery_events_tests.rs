@@ -3,6 +3,7 @@
 use super::*;
 use crate::assets::{error::AssetsError, project_media::PendingProjectAssets};
 use crate::library::{diagnostics::with_snapshot, list_assets_with, put_asset_with};
+use crate::library_journal::CleanupPendingItem;
 use cap_std::ambient_authority;
 use serde_json::{json, Value};
 use std::{fs, path::PathBuf};
@@ -204,7 +205,7 @@ fn repeated_observations_keep_warnings_and_latest_state_in_one_event() {
         |_, report| {
             report(&Recovery {
                 warnings: vec!["repair".into()],
-                cleanup_pending: vec!["pending".into()],
+                cleanup_pending: vec![CleanupPendingItem::routine("pending")],
                 ..Recovery::default()
             });
             report(&Recovery::default());

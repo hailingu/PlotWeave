@@ -71,7 +71,8 @@ beforeEach(() => {
   handlers.set('list_projects', () => [...documents.values()].map(metadata))
   handlers.set('load_project', ({ id }) => {
     const document = documents.get(String(id))
-    if (!document) throw new Error(`项目不存在：${String(id)}`)
+    if (!document)
+      throw new Error(`[project_not_found] 项目不存在：${String(id)}`)
     return structuredClone(document)
   })
   handlers.set('verify_project_assets', () => [])

@@ -22,6 +22,7 @@ import {
   useCreateFamilyAttempts,
 } from './useCreateFamilyAttempts'
 import { useExitFlush } from './useExitFlush'
+import { displayIpcError } from './ipcError'
 import { useProjectSummaries } from './useProjectSummaries'
 import { projectStore, type ProjectContent } from './projectStore'
 import type { ProjectSummary } from './home/projects'
@@ -129,11 +130,10 @@ type LatestAiSessionRef = { current: LatestAiSession | null }
 type LatestDocRef = { current: LatestDoc | null }
 
 /** 打开失败原因的可读化（issue #98）：Error 取 message（避免「Error: 」
- * 前缀上屏），Tauri IPC 常见的字符串拒绝原样保留，其余形态 String() 兜底。 */
+ * 前缀上屏），Tauri IPC 常见的字符串拒绝原样保留，其余形态 String() 兜底；
+ * IPC 机器码前缀（issue #229）只服务程序判定，一律剥离不上屏。 */
 function openFailureDetail(err: unknown): string {
-  if (err instanceof Error) return err.message
-  if (typeof err === 'string') return err
-  return String(err)
+  return displayIpcError(err)
 }
 
 /** 应用级会话生命周期：持有跨页面快照，订阅共享保存链结果，并在卸载时

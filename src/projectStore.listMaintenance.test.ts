@@ -256,7 +256,11 @@ describe('tauriList 维护写：成功维护写不得清除更新的重试登记
       saved.size > 0 ? [meta('sample-du-shi-qi-yuan')] : [],
     )
     handlers.set('load_project', (args) =>
-      Promise.reject(new Error(`项目不存在：${(args as { id: string }).id}`)),
+      Promise.reject(
+        new Error(
+          `[project_not_found] 项目不存在：${(args as { id: string }).id}`,
+        ),
+      ),
     )
     handlers.set('save_project', (args) => {
       saveCalls += 1
@@ -309,7 +313,7 @@ describe('tauriList 维护写：播种与在途保存定序（PR #198 评审）'
           project: { ...modernFile().project, id },
         })
       }
-      return Promise.reject(new Error(`项目不存在：${id}`))
+      return Promise.reject(new Error(`[project_not_found] 项目不存在：${id}`))
     })
     const { projectStore } = await load()
     // 用户保存先行在途（慢盘）；空库列表随后启动播种
@@ -345,10 +349,11 @@ describe('tauriList 维护写：播种不覆盖既有内容（issue #134）', ()
       if (!probed) {
         probed = true
         return new Promise((_res, rej) => {
-          releaseProbe = () => rej(new Error('项目不存在：'))
+          releaseProbe = () =>
+            rej(new Error('[project_not_found] 项目不存在：'))
         })
       }
-      return Promise.reject(new Error('项目不存在'))
+      return Promise.reject(new Error('[project_not_found] 项目不存在'))
     })
     handlers.set(
       'delete_project',
@@ -385,10 +390,11 @@ describe('tauriList 维护写：播种不覆盖既有内容（issue #134）', ()
       if ((args as { id: string }).id === DSID && !probed) {
         probed = true
         return new Promise((_res, rej) => {
-          releaseProbe = () => rej(new Error('项目不存在：'))
+          releaseProbe = () =>
+            rej(new Error('[project_not_found] 项目不存在：'))
         })
       }
-      return Promise.reject(new Error('项目不存在'))
+      return Promise.reject(new Error('[project_not_found] 项目不存在'))
     })
     handlers.set('save_project', () => undefined)
     const { projectStore } = await load()

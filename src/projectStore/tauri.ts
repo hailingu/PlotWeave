@@ -6,6 +6,7 @@
  */
 import { parseProject } from '../model/convert'
 import type { ProjectContent } from '../model/content'
+import { ipcErrorCode } from '../ipcError'
 import { memoryNormalize } from './memory'
 import {
   enqueueSave,
@@ -47,19 +48,18 @@ function toSummary(m: {
  * issue #123 起以占位摘要进入列表（metas 为空即目录确无项目文件），
  * 但占位与探测之间存在时序窗口（文件在列表后、探测前损坏/不可读）：
  * 播种仍为 no-replace 语义——仅当 load_project 确证「项目不存在」才写
- * 种子，文件存在（含不可读）一律跳过并留痕，不用硬编码种子原子覆盖
- * 可能可恢复的用户文件。种子写经保存链（issue #134）：与普通保存统一
- * 排序与失败登记，删除墓碑期被吸收——探测窗口内被删除的示例不被种子
- * 复活；探测先等该 id 在途保存落定（在途链落定不改身份，守卫看不见，
- * 等落定后保存所建文件经「项目已存在」自然跳过）；目标存在待重试的
- * 失败保存（登记比磁盘/空目录新）或探测窗口内排入新写入（链身份变化，
- * 探测结果已过时）同样跳过（PR #198 评审）——成功的种子写会清除该
- * 登记，用户最新内容被永久丢弃。返回是否写入了任一种子。 */
+ * 种子（issue #229：按 `[project_not_found]` 机器码判定，不经中文文案，
+ * 展示措辞/本地化调整不改变播种行为），文件存在（含不可读）一律跳过并
+ * 留痕，不用硬编码种子原子覆盖可能可恢复的用户文件。种子写经保存链
+ * （issue #134）：与普通保存统一排序与失败登记，删除墓碑期被吸收——
+ * 探测窗口内被删除的示例不被种子复活；探测先等该 id 在途保存落定（在途
+ * 链落定不改身份，守卫看不见，等落定后保存所建文件经「项目已存在」自然
+ * 跳过）；目标存在待重试的失败保存（登记比磁盘/空目录新）或探测窗口内
+ * 排入新写入（链身份变化，探测结果已过时）同样跳过（PR #198 评审）——
+ * 成功的种子写会清除该登记，用户最新内容被永久丢弃。返回是否写入了任一
+ * 种子。 */
 async function seedFirstRun(): Promise<boolean> {
   const { invoke } = await import('@tauri-apps/api/core')
-  const notFound = (e: unknown) =>
-    (typeof e === 'string' || e instanceof Error) &&
-    String(e).includes('项目不存在')
   let seeded = false
   for (const seed of seedProjects()) {
     // 先等该 id 在途保存落定再探测（PR #198 评审）：预先存在的在途链
@@ -71,7 +71,7 @@ async function seedFirstRun(): Promise<boolean> {
       await invoke<unknown>('load_project', { id: seed.meta.id })
       console.warn('[projectStore] 播种跳过：项目已存在', seed.meta.id)
     } catch (err) {
-      if (!notFound(err)) {
+      if (ipcErrorCode(err) !== 'project_not_found') {
         console.warn(
           '[projectStore] 播种跳过：项目文件不可读，不覆盖可能可恢复的内容',
           seed.meta.id,

@@ -1,6 +1,7 @@
 //! 库删除恢复回归测试（issue #25）：中断恢复四分支、只读态、硬链接残留、
 //! 上限守卫；索引/Record 适配类用例见 recover_index_tests.rs。
 
+use super::recover::CleanupKind;
 use super::*;
 use crate::library::put_asset_with;
 use crate::store::new_id;
@@ -301,8 +302,8 @@ fn recover_retains_journal_on_trash_identity_mismatch() {
         recovery
             .cleanup_pending
             .iter()
-            .any(|p| p.contains("身份不符")),
-        "应报告 cleanupPending：{:?}",
+            .any(|p| p.kind == CleanupKind::Evidence),
+        "身份不符应报告 evidence 类 cleanupPending：{:?}",
         recovery.cleanup_pending
     );
     assert!(
@@ -398,6 +399,11 @@ fn recover_requarantines_media_returned_to_original_path() {
         "清理不可用应保留日志"
     );
     assert_eq!(recovery.cleanup_pending.len(), 1, "一个隔离项仅报告一次");
+    assert_eq!(
+        recovery.cleanup_pending[0].kind,
+        CleanupKind::Routine,
+        "仅能力保留的待释放项归 routine（可给清理指引，issue #229）"
+    );
     assert!(recovery.warnings.is_empty());
     assert!(recovery.conflicted.is_empty());
     assert!(!recovery.read_only);
@@ -620,4 +626,25 @@ fn recover_cleans_hard_link_residue_same_identity() {
         b"PNG"
     );
     cleanup(&root);
+}
+
+/// issue #229 契约：cleanupPending 条目序列化为结构化 `{ kind, message }`——
+/// 前端按机器码 kind 分类（routine 才可给 .trash 清理指引），不经中文文案
+/// 前缀推导；展示措辞/本地化调整不改变分类。
+#[test]
+fn cleanup_pending_serializes_machine_kind_alongside_message() {
+    let recovery = Recovery {
+        cleanup_pending: vec![
+            CleanupPendingItem::routine("媒体已隔离待清理：assets/la-1.png"),
+            CleanupPendingItem::evidence("隔离项保留（身份不符或被占用）：la-4 / t-y"),
+        ],
+        ..Recovery::default()
+    };
+    assert_eq!(
+        serde_json::to_value(&recovery.cleanup_pending).expect("序列化"),
+        json!([
+            { "kind": "routine", "message": "媒体已隔离待清理：assets/la-1.png" },
+            { "kind": "evidence", "message": "隔离项保留（身份不符或被占用）：la-4 / t-y" }
+        ])
+    );
 }

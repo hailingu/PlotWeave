@@ -6,7 +6,7 @@ use cap_std::fs::Dir as CapDir;
 use tauri::AppHandle;
 
 use crate::isotime::now_iso;
-use crate::store::error::{to_ipc_text, StoreError};
+use crate::store::error::{load_project_ipc_text, to_ipc_text, StoreError};
 use crate::store::list::{parse_file, read_meta};
 #[cfg(unix)]
 use crate::store::persist::asset_identity;
@@ -48,11 +48,13 @@ fn create_project_file(root: &CapDir, name: &str) -> Result<ProjectMeta, StoreEr
 }
 /// 读取项目完整内容（含画布）；旧扁平格式包装为 v0 信封返回。读取相对
 /// projects_dir 的受信根锚定句柄解析（§10.2），不按路径名重开。
+/// NotFound 出口携带 `[project_not_found] ` 机器码前缀（issue #229）——
+/// 前端空库播种按码分支，不经中文文案；码不上屏，展示层剥离。
 #[tauri::command]
 pub async fn load_project(app: AppHandle, id: String) -> Result<ProjectFile, String> {
     crate::blocking::run("load_project", move || {
         let root = projects_dir(&app).map_err(to_ipc_text)?;
-        load_project_file(&root, &id).map_err(to_ipc_text)
+        load_project_file(&root, &id).map_err(load_project_ipc_text)
     })
     .await
 }

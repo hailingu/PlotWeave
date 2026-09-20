@@ -8,7 +8,10 @@ import type { libraryStore } from '../../library/libraryStore'
 const invoke = vi.fn<(...args: unknown[]) => Promise<unknown>>()
 const conflict =
   '资产 la-conflict 删除事务冲突（原路径已被后来文件占用），标记为不可用'
-const routine = '媒体已隔离待清理：assets/la-deleted.png'
+const routine = {
+  kind: 'routine',
+  message: '媒体已隔离待清理：assets/la-deleted.png',
+}
 let revision = 0
 
 beforeEach(() => {
@@ -85,7 +88,7 @@ it.each(operations)(
       await run(libraryStore)
     })
     expect(screen.getByText(conflict)).toBeTruthy()
-    expect(screen.getByText(routine)).toBeTruthy()
+    expect(screen.getByText(routine.message)).toBeTruthy()
     expect(screen.getByRole('note', { name: '隔离区清理暂停' })).toBeTruthy()
     expect(screen.queryByRole('note', { name: '隔离区清理指引' })).toBeNull()
   },
@@ -112,7 +115,10 @@ it('关闭和重新挂载后，失败及迟到的干净响应不能解除会话�
   invoke.mockRejectedValueOnce(new Error('IPC 失败'))
   await expect(libraryStore.list()).rejects.toThrow('IPC 失败')
   const clean = response('list_library_assets', [])
-  clean.cleanupPending = [routine, '媒体已隔离待清理：assets/la-new.png']
+  clean.cleanupPending = [
+    routine,
+    { kind: 'routine', message: '媒体已隔离待清理：assets/la-new.png' },
+  ]
   await act(async () => {
     finishEarlier(clean)
     await earlier
@@ -168,13 +174,13 @@ it.each(operations)('%s 的新快照不被较早列表空响应清除', async (_
     await run(libraryStore)
   })
   expect(diagnostics.libraryCleanupBlockedSnapshot()).toBe(false)
-  expect(screen.getByText(routine)).toBeTruthy()
+  expect(screen.getByText(routine.message)).toBeTruthy()
   await act(async () => {
     releaseOld()
     await earlier
   })
   expect(diagnostics.cleanupPendingSnapshot()).toEqual([routine])
-  expect(screen.getByText(routine)).toBeTruthy()
+  expect(screen.getByText(routine.message)).toBeTruthy()
 })
 
 it('迟到快照中的警告仍建立保护，更新的空快照才清除待清理项', async () => {
@@ -203,6 +209,6 @@ it('迟到快照中的警告仍建立保护，更新的空快照才清除待清�
     await libraryStore.list()
   })
   expect(diagnostics.cleanupPendingSnapshot()).toEqual([])
-  expect(screen.queryByText(routine)).toBeNull()
+  expect(screen.queryByText(routine.message)).toBeNull()
   expect(diagnostics.libraryCleanupBlockedSnapshot()).toBe(true)
 })
