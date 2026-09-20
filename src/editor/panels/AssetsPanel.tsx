@@ -64,16 +64,19 @@ function useLibraryAssetList() {
   const refreshUrl = useCallback((asset: LibraryAsset) => {
     if (inflightThumbs.current.has(asset.id)) return
     inflightThumbs.current.add(asset.id)
-    // 重试前先清除旧错误（成功或新失败都会覆盖；成功路径同时写 url）
-    setThumbErrors((m) => {
-      if (!(asset.id in m)) return m
-      const next = { ...m }
-      delete next[asset.id]
-      return next
-    })
     libraryStore
       .mediaUrl(asset)
-      .then((url) => setUrls((u) => ({ ...u, [asset.id]: url })))
+      .then((url) => {
+        setUrls((u) => ({ ...u, [asset.id]: url }))
+        // 落定成功才清除错误（PR #226 评审：在途期间保留失败诊断与重试
+        // 入口——请求慢或永不落定时，行不得退化为无重试入口的惰性占位）
+        setThumbErrors((m) => {
+          if (!(asset.id in m)) return m
+          const next = { ...m }
+          delete next[asset.id]
+          return next
+        })
+      })
       .catch((err) =>
         setThumbErrors((m) => ({ ...m, [asset.id]: String(err) })),
       )

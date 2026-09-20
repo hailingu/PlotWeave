@@ -874,6 +874,32 @@ describe('AssetsPanel 缩略图失败与重试（issue #142）', () => {
     await waitFor(() => expect(document.querySelector('img')).toBeTruthy())
   })
 
+  it('重试在途期间保留失败诊断与重试入口，落定成功才清除（PR #226 评审）', async () => {
+    const store = mockStore([asset()])
+    let releaseRetry: (() => void) | undefined
+    store.mediaUrl
+      .mockRejectedValueOnce(new Error('媒体读取失败：磁盘错误'))
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseRetry = () => resolve('blob:ok')
+          }),
+      )
+    render(<AssetsPanel />)
+    fireEvent.click(await screen.findByText('角色设定'))
+    fireEvent.click(await screen.findByRole('button', { name: /重试/ }))
+    // 在途期间：失败诊断与重试入口保留——不得提前消失成惰性占位
+    await new Promise((r) => setTimeout(r, 30))
+    expect(screen.getByRole('button', { name: /重试/ })).toBeTruthy()
+    expect(screen.getByTitle(/媒体读取失败：磁盘错误/)).toBeTruthy()
+    // 落定成功后清除
+    releaseRetry?.()
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /重试/ })).toBeNull(),
+    )
+    await waitFor(() => expect(document.querySelector('img')).toBeTruthy())
+  })
+
   it('一个资产失败不影响其他资产显示', async () => {
     const store = mockStore([asset(), asset({ id: 'a2', name: '男主侧面' })])
     store.mediaUrl.mockImplementation((a) =>
