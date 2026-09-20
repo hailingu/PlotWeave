@@ -578,9 +578,22 @@ describe('归一化不变量的生成式验证（issue #232）：v1 已支持信
         const doc = v1Envelope(c, dirt)
         const round = parseProject(doc)
         assertOutputInvariants(round.content)
-        // 保证脏输入的修复信号（评审第七轮）：这些注入必然改写文档，
-        // repaired=false 会让调用方不回写、脏数据每次加载都重复修复
-        if (dirt.nullGraph || dirt.pushNullMembers || dirt.badUpdatedAt) {
+        // 保证脏注入的修复信号（评审第七/九轮）：这些注入必然改写文档，
+        // repaired=false 会让调用方不回写、脏数据每次加载都重复修复；
+        // 键级注入按「至少一个可注入的已填充容器」人口感知判定
+        const bucketPopulated =
+          c.characters.length > 0 ||
+          c.locations.length > 0 ||
+          c.props.length > 0 ||
+          c.documents.length > 0 ||
+          c.assets.length > 0
+        if (
+          dirt.nullGraph ||
+          dirt.pushNullMembers ||
+          dirt.badUpdatedAt ||
+          (dirt.blankCharacterKey && c.characters.length > 0) ||
+          (dirt.collideBucketIds && bucketPopulated)
+        ) {
           expect(round.repaired, '保证脏注入必须报告 repaired').toBe(true)
         }
       }),
@@ -668,8 +681,9 @@ describe('归一化不变量的生成式验证（issue #232）：有效内容保
       maxLength: 2,
     }),
     assetRelPaths: fc.array(preservedText, { minLength: 1, maxLength: 3 }),
-    characterNames: fc.array(preservedText, { maxLength: 3 }),
-    locationNames: fc.array(preservedText, { maxLength: 3 }),
+    // 引用目标桶保底非空（评审第九轮：跨记录引用需确定存在的目标）
+    characterNames: fc.array(preservedText, { minLength: 1, maxLength: 3 }),
+    locationNames: fc.array(preservedText, { minLength: 1, maxLength: 3 }),
     propNames: fc.array(preservedText, { maxLength: 3 }),
     documentTitles: fc.array(preservedText, { maxLength: 3 }),
     titles: fc.array(
@@ -707,7 +721,17 @@ describe('归一化不变量的生成式验证（issue #232）：有效内容保
         id: `n${i}`,
         type: 'scene',
         position: { x: 0, y: 0 },
-        data: { name, sceneNo: 1, interior: true, synopsis: '' },
+        data: {
+          name,
+          sceneNo: 1,
+          interior: true,
+          synopsis: '',
+          // 关联引用（评审第九轮）：ch0/loc0 由保底非空的角色/地点桶供给
+          locationId: 'loc0',
+          characterIds: ['ch0'],
+          time: 't',
+          weather: 'w',
+        },
       }),
     )
     payload.dialogueTexts.forEach((text, i) =>
@@ -717,7 +741,7 @@ describe('归一化不变量的生成式验证（issue #232）：有效内容保
         position: { x: 0, y: 0 },
         data: {
           name: `对白${i}`,
-          lines: [{ id: `l${i}`, kind: 'line', text }],
+          lines: [{ id: `l${i}`, kind: 'line', text, speaker: 'ch0' }],
         },
       }),
     )
@@ -751,7 +775,8 @@ describe('归一化不变量的生成式验证（issue #232）：有效内容保
           size: '中景',
           picture,
           prompt: `分镜${i}`,
-          refs: [],
+          // 引用位（评审第九轮）：a0 由保底非空的资产桶供给（image/*）
+          refs: [{ id: `r${i}`, kind: 'character', assetId: 'a0' }],
         },
       }),
     )
@@ -760,7 +785,12 @@ describe('归一化不变量的生成式验证（issue #232）：有效内容保
         id: `img${i}`,
         type: 'image',
         position: { x: 0, y: 0 },
-        data: { prompt, model: 'm', size: 's', outputs: {} },
+        data: {
+          prompt,
+          model: 'm',
+          size: 's',
+          outputs: { primary: { assetId: 'a0' } },
+        },
       }),
     )
     return nodes
@@ -949,6 +979,48 @@ describe('归一化不变量的生成式验证（issue #232）：有效内容保
     expect(out.name, '项目名保全').toBe('保全')
   }
 
+  /** 保全断言 · 引用面（评审第九轮）：跨记录引用逐条存活。 */
+  function assertReferencesPreserved(out: ProjectContent): void {
+    expect(
+      out.nodes
+        .filter((n) => n.type === 'scene')
+        .every(
+          (n) =>
+            n.type === 'scene' &&
+            n.data.locationId === 'loc0' &&
+            n.data.characterIds.includes('ch0'),
+        ),
+      '场景关联引用保全',
+    ).toBe(true)
+    expect(
+      out.nodes
+        .filter((n) => n.type === 'dialogue')
+        .every(
+          (n) =>
+            n.type === 'dialogue' &&
+            n.data.lines.every((l) => l.speaker === 'ch0'),
+        ),
+      '对白说话人引用保全',
+    ).toBe(true)
+    expect(
+      out.nodes
+        .filter((n) => n.type === 'shot')
+        .every(
+          (n) =>
+            n.type === 'shot' && n.data.refs.some((r) => r.assetId === 'a0'),
+        ),
+      '分镜引用位保全',
+    ).toBe(true)
+    expect(
+      out.nodes
+        .filter((n) => n.type === 'image')
+        .every(
+          (n) => n.type === 'image' && n.data.outputs.primary?.assetId === 'a0',
+        ),
+      '图片产物链接保全',
+    ).toBe(true)
+  }
+
   /** 保全断言 · 设定与资产面：四桶身份+名称/标题、资产全记录、集标题。 */
   function assertSettingsPreserved(
     payload: ArbValue<typeof cleanPayloadArb>,
@@ -990,31 +1062,39 @@ describe('归一化不变量的生成式验证（issue #232）：有效内容保
     expect(out.episodeTitles, '集标题保全').toEqual(expectedTitles)
   }
 
-  /** 保全断言 · 边面：逻辑重复键去重后按端点元组比对（attach 单列）。 */
+  /** 保全断言 · 边面（评审第九轮：稳定 id + 元组联合比对）：幸存边按
+   * `${id}:${source}→${target}:${handle}` 全量比对——id 被重发（后续选择/
+   * 删除/命令引用随之失效）不再放行；预期按元组去重首见胜。 */
   function assertEdgesPreserved(
     out: ProjectContent,
     edgeKeys: string[],
-    attachTuples: string[],
+    attachKeys: string[],
   ): void {
-    const outEdgeKeys = [
-      ...new Set(
-        out.edges
-          .filter((e) => edgeKindOf(e) !== 'attach')
-          .map((e) =>
-            JSON.stringify([e.source, e.target, e.sourceHandle ?? '']),
-          ),
-      ),
-    ]
-    expect(outEdgeKeys.sort(), '有效边全部存活').toEqual(edgeKeys.sort())
-    const outAttach = [
-      ...new Set(
-        out.edges
-          .filter((e) => edgeKindOf(e) === 'attach')
-          .map((e) => `${e.source}→${e.target}`),
-      ),
-    ]
-    expect(outAttach.sort(), 'attach 下挂边全部存活').toEqual(
-      attachTuples.sort(),
+    const outEdges = out.edges.map(
+      (e) => `${e.id}:${e.source}→${e.target}:${e.sourceHandle ?? ''}`,
+    )
+    const flowEdges = outEdges.filter(
+      (key) =>
+        !key.includes(':') === false &&
+        edgeKindOf(
+          out.edges.find(
+            (e) =>
+              `${e.id}:${e.source}→${e.target}:${e.sourceHandle ?? ''}` === key,
+          ) ?? {},
+        ) !== 'attach',
+    )
+    expect(flowEdges.sort(), '有效边稳定存活').toEqual(edgeKeys.sort())
+    const attachEdges = outEdges.filter(
+      (key) =>
+        edgeKindOf(
+          out.edges.find(
+            (e) =>
+              `${e.id}:${e.source}→${e.target}:${e.sourceHandle ?? ''}` === key,
+          ) ?? {},
+        ) === 'attach',
+    )
+    expect(attachEdges.sort(), 'attach 下挂边稳定存活').toEqual(
+      attachKeys.sort(),
     )
   }
 
@@ -1026,30 +1106,37 @@ describe('归一化不变量的生成式验证（issue #232）：有效内容保
         // 手工拼 v0 扁平 data 塞进 v1 信封会被嵌套容器守卫正确隔离
         const round1 = parseProject(serializeProject(content, PROJECT_ID, NOW))
         assertNodesPreserved(payload, round1.content)
+        assertReferencesPreserved(round1.content)
         assertSettingsPreserved(payload, round1.content, expectedTitles)
-        const flowKeys = [
-          ...new Set(
-            content.edges
-              .filter(
-                (e) =>
-                  (e as { className?: string }).className !== 'pw-edge-attach',
-              )
-              .map((e) =>
-                JSON.stringify([e.source, e.target, e.sourceHandle ?? '']),
-              ),
-          ),
-        ]
-        const attachTuples = [
-          ...new Set(
-            content.edges
-              .filter(
-                (e) =>
-                  (e as { className?: string }).className === 'pw-edge-attach',
-              )
-              .map((e) => `${e.source}→${e.target}`),
-          ),
-        ]
-        assertEdgesPreserved(round1.content, flowKeys, attachTuples)
+        // 预期键 `${id}:${source}→${target}:${handle}`，按元组去重首见胜
+        // xyflow Edge 的 sourceHandle 显式含 undefined（库形状，issue #231）
+        const tupleOf = (e: {
+          source: string
+          target: string
+          sourceHandle?: string | null | undefined
+        }) => `${e.source}→${e.target}:${e.sourceHandle ?? ''}`
+        const firstEdgeByTuple = new Map<string, string>()
+        for (const e of content.edges) {
+          const tuple = tupleOf(e)
+          const key = `${e.id}:${tuple}`
+          if (!firstEdgeByTuple.has(tuple)) firstEdgeByTuple.set(tuple, key)
+        }
+        const allKeys = [...firstEdgeByTuple.values()]
+        const attachTuples = new Set(
+          content.edges
+            .filter(
+              (e) =>
+                (e as { className?: string }).className === 'pw-edge-attach',
+            )
+            .map((e) => tupleOf(e)),
+        )
+        const flowKeys = allKeys.filter(
+          (key) => !attachTuples.has(key.slice(key.indexOf(':') + 1)),
+        )
+        const attachKeys = allKeys.filter((key) =>
+          attachTuples.has(key.slice(key.indexOf(':') + 1)),
+        )
+        assertEdgesPreserved(round1.content, flowKeys, attachKeys)
       }),
     )
   })
