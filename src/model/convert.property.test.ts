@@ -679,7 +679,7 @@ function assertOutputInvariants(content: ProjectContent): void {
   assertEpisodeTitles(content)
 }
 
-describe('归一化不变量的生成式验证（issue #232）：v1 已支持信封', () => {
+describe('归一化不变量的生成式验证（issue #232）：v1 脏信封不变量与幂等', () => {
   it('任意脏 v1 信封：解析不抛错且输出满足身份/边/集标题不变量', () => {
     fc.assert(
       fc.property(contentArb, dirtFlagsArb, (c, dirt) => {
@@ -710,7 +710,27 @@ describe('归一化不变量的生成式验证（issue #232）：v1 已支持信
       }),
     )
   })
+  it('规范化幂等：修复产物落盘后再解析不再修复，内容到达不动点', () => {
+    fc.assert(
+      fc.property(contentArb, dirtFlagsArb, (c, dirt) => {
+        const round1 = parseProject(v1Envelope(c, dirt))
+        const round2 = parseProject(
+          serializeProject(round1.content, PROJECT_ID, NOW),
+        )
+        expect(round2.migrated, '第二轮不再迁移').toBe(false)
+        expect(round2.repaired, '第二轮不再修复').toBe(false)
+        const round3 = parseProject(
+          serializeProject(round2.content, PROJECT_ID, NOW),
+        )
+        expect(round3.migrated).toBe(false)
+        expect(round3.repaired).toBe(false)
+        expect(round3.content, '内容到达不动点').toEqual(round2.content)
+      }),
+    )
+  })
+})
 
+describe('归一化不变量的生成式验证（issue #232）：v1 扩展字段保全', () => {
   it('容器级扩展字段按契约保留：未知键经解析进 content、再序列化原样落盘', () => {
     fc.assert(
       fc.property(contentArb, dirtFlagsArb, (c, dirt) => {
@@ -759,544 +779,526 @@ describe('归一化不变量的生成式验证（issue #232）：v1 已支持信
       }),
     )
   })
-
-  it('规范化幂等：修复产物落盘后再解析不再修复，内容到达不动点', () => {
-    fc.assert(
-      fc.property(contentArb, dirtFlagsArb, (c, dirt) => {
-        const round1 = parseProject(v1Envelope(c, dirt))
-        const round2 = parseProject(
-          serializeProject(round1.content, PROJECT_ID, NOW),
-        )
-        expect(round2.migrated, '第二轮不再迁移').toBe(false)
-        expect(round2.repaired, '第二轮不再修复').toBe(false)
-        const round3 = parseProject(
-          serializeProject(round2.content, PROJECT_ID, NOW),
-        )
-        expect(round3.migrated).toBe(false)
-        expect(round3.repaired).toBe(false)
-        expect(round3.content, '内容到达不动点').toEqual(round2.content)
-      }),
-    )
-  })
 })
 
-describe('归一化不变量的生成式验证（issue #232）：有效内容保全', () => {
-  /** 干净生成器（评审第四轮：结构不变量放行「静默清空」回归，需要保全
-   * 预言机）——身份确定性唯一（n0..、ch0..），下标引用保证端点/句柄落在
-   * 真实节点与选项，边只从低下标指向高下标（DAG 前置）。合法记录与其
-   * 内容经解析-序列化必须存活。 */
-  const cleanPayloadArb = fc.record({
-    sceneNames: fc.array(preservedText, { maxLength: 4 }),
-    dialogueTexts: fc.array(preservedText, { maxLength: 2 }),
-    branchOptionLabels: fc.array(fc.array(preservedText, { maxLength: 3 }), {
-      maxLength: 2,
+/** 干净生成器（评审第四轮：结构不变量放行「静默清空」回归，需要保全
+ * 预言机）——身份确定性唯一（n0..、ch0..），下标引用保证端点/句柄落在
+ * 真实节点与选项，边只从低下标指向高下标（DAG 前置）。合法记录与其
+ * 内容经解析-序列化必须存活。 */
+const cleanPayloadArb = fc.record({
+  sceneNames: fc.array(preservedText, { maxLength: 4 }),
+  dialogueTexts: fc.array(preservedText, { maxLength: 2 }),
+  branchOptionLabels: fc.array(fc.array(preservedText, { maxLength: 3 }), {
+    maxLength: 2,
+  }),
+  assetRelPaths: fc.array(preservedText, { minLength: 1, maxLength: 3 }),
+  // 引用目标桶保底非空（评审第九轮：跨记录引用需确定存在的目标）
+  characterNames: fc.array(preservedText, { minLength: 1, maxLength: 3 }),
+  locationNames: fc.array(preservedText, { minLength: 1, maxLength: 3 }),
+  propNames: fc.array(preservedText, { maxLength: 3 }),
+  documentSpecs: fc.array(
+    fc.record({
+      title: preservedText,
+      withLocation: fc.boolean(),
     }),
-    assetRelPaths: fc.array(preservedText, { minLength: 1, maxLength: 3 }),
-    // 引用目标桶保底非空（评审第九轮：跨记录引用需确定存在的目标）
-    characterNames: fc.array(preservedText, { minLength: 1, maxLength: 3 }),
-    locationNames: fc.array(preservedText, { minLength: 1, maxLength: 3 }),
-    propNames: fc.array(preservedText, { maxLength: 3 }),
-    documentSpecs: fc.array(
-      fc.record({
-        title: preservedText,
-        withLocation: fc.boolean(),
-      }),
-      { maxLength: 3 },
-    ),
-    titles: fc.array(
-      fc.record({
-        episode: fc.integer({ min: 1, max: 5 }),
-        title: preservedText,
-      }),
-      { maxLength: 3 },
-    ),
-    beatTones: fc.array(preservedText, { maxLength: 2 }),
-    shotPictures: fc.array(preservedText, { maxLength: 2 }),
-    imagePrompts: fc.array(preservedText, { maxLength: 2 }),
-    flowPairs: fc.array(fc.record({ from: fc.nat(9), to: fc.nat(9) }), {
-      maxLength: 4,
+    { maxLength: 3 },
+  ),
+  titles: fc.array(
+    fc.record({
+      episode: fc.integer({ min: 1, max: 5 }),
+      title: preservedText,
     }),
-    branchEdgeSpecs: fc.array(
-      fc.record({ from: fc.nat(9), to: fc.nat(9), optionIdx: fc.nat(2) }),
-      { maxLength: 2 },
-    ),
-    attachSpecs: fc.array(
-      fc.record({ sceneIdx: fc.nat(3), shotIdx: fc.nat(1) }),
-      { maxLength: 2 },
-    ),
-  })
+    { maxLength: 3 },
+  ),
+  beatTones: fc.array(preservedText, { maxLength: 2 }),
+  shotPictures: fc.array(preservedText, { maxLength: 2 }),
+  imagePrompts: fc.array(preservedText, { maxLength: 2 }),
+  flowPairs: fc.array(fc.record({ from: fc.nat(9), to: fc.nat(9) }), {
+    maxLength: 4,
+  }),
+  branchEdgeSpecs: fc.array(
+    fc.record({ from: fc.nat(9), to: fc.nat(9), optionIdx: fc.nat(2) }),
+    { maxLength: 2 },
+  ),
+  attachSpecs: fc.array(
+    fc.record({ sceneIdx: fc.nat(3), shotIdx: fc.nat(1) }),
+    { maxLength: 2 },
+  ),
+})
 
-  /** 干净内容的组装（评审第四轮保全预言机）：确定性唯一身份 + 下标
-   * 引用落位 + from<to 的 DAG 前置；返回会话内容与集标题预期。 */
-  /** 干净节点组装（保全预言机）：确定性唯一 id；按下标引用方/边组装的
-   * 数组序不得变（assembleCleanEdges 以位置下标寻址），拆分时叙事面
-   * （scene/dialogue/branch/beat）在前、媒体面（shot/image）在后。 */
-  function assembleCleanNodes(
-    payload: ArbValue<typeof cleanPayloadArb>,
-  ): Array<Record<string, unknown>> {
-    return [
-      ...assembleNarrativeCleanNodes(payload),
-      ...assembleMediaCleanNodes(payload),
-    ]
-  }
+/** 干净内容的组装（评审第四轮保全预言机）：确定性唯一身份 + 下标
+ * 引用落位 + from<to 的 DAG 前置；返回会话内容与集标题预期。 */
+/** 干净节点组装（保全预言机）：确定性唯一 id；数组序是边组装（from<to
+ * 的 DAG 前置）的寻址基准，不得随意变更——组序 branch/beat/scene/dialogue
+ * （评审第十三轮）使三类剧情流源（beat→scene/dialogue、scene→dialogue、
+ * dialogue→dialogue 后位）与 branch→scene/dialogue/beat 目标均可生成；
+ * 媒体面（shot/image）殿后。 */
+function assembleCleanNodes(
+  payload: ArbValue<typeof cleanPayloadArb>,
+): Array<Record<string, unknown>> {
+  return [
+    ...assembleNarrativeCleanNodes(payload),
+    ...assembleMediaCleanNodes(payload),
+  ]
+}
 
-  /** 干净节点组装 · 叙事面：scene/dialogue/branch/beat，确定性唯一 id。 */
-  function assembleNarrativeCleanNodes(
-    payload: ArbValue<typeof cleanPayloadArb>,
-  ): Array<Record<string, unknown>> {
-    const nodes: Array<Record<string, unknown>> = []
-    payload.sceneNames.forEach((name, i) =>
-      nodes.push({
-        id: `n${i}`,
-        type: 'scene',
-        position: { x: 0, y: 0 },
-        data: {
-          name,
-          sceneNo: 1,
-          interior: true,
-          synopsis: '',
-          // 关联引用（评审第九轮）：ch0/loc0 由保底非空的角色/地点桶供给
-          locationId: 'loc0',
-          characterIds: ['ch0'],
-          time: 't',
-          weather: 'w',
-        },
-      }),
-    )
-    payload.dialogueTexts.forEach((text, i) =>
-      nodes.push({
-        id: `d${i}`,
-        type: 'dialogue',
-        position: { x: 0, y: 0 },
-        data: {
-          name: `对白${i}`,
-          lines: [{ id: `l${i}`, kind: 'line', text, speaker: 'ch0' }],
-        },
-      }),
-    )
-    payload.branchOptionLabels.forEach((labels, i) => {
-      if (labels.length === 0) return
-      nodes.push({
-        id: `b${i}`,
-        type: 'branch',
-        position: { x: 0, y: 0 },
-        data: {
-          prompt: `问${i}`,
-          options: labels.map((label, j) => ({ id: `opt${i}-${j}`, label })),
-        },
-      })
-    })
-    payload.beatTones.forEach((tone, i) =>
-      nodes.push({
-        id: `t${i}`,
-        type: 'beat',
-        position: { x: 0, y: 0 },
-        data: { name: `节拍${i}`, tone },
-      }),
-    )
-    return nodes
-  }
-
-  /** 干净节点组装 · 媒体面：shot/image，确定性唯一 id。 */
-  function assembleMediaCleanNodes(
-    payload: ArbValue<typeof cleanPayloadArb>,
-  ): Array<Record<string, unknown>> {
-    const nodes: Array<Record<string, unknown>> = []
-    payload.shotPictures.forEach((picture, i) =>
-      nodes.push({
-        id: `sh${i}`,
-        type: 'shot',
-        position: { x: 0, y: 0 },
-        data: {
-          shotNo: i + 1,
-          size: '中景',
-          picture,
-          prompt: `分镜${i}`,
-          // 引用位（评审第九轮）：a0 由保底非空的资产桶供给（image/*）
-          refs: [{ id: `r${i}`, kind: 'character', assetId: 'a0' }],
-        },
-      }),
-    )
-    payload.imagePrompts.forEach((prompt, i) =>
-      nodes.push({
-        id: `img${i}`,
-        type: 'image',
-        position: { x: 0, y: 0 },
-        data: {
-          prompt,
-          model: 'm',
-          size: 's',
-          outputs: { primary: { assetId: 'a0' } },
-        },
-      }),
-    )
-    return nodes
-  }
-
-  /** 干净边组装：from<to 的统一前向序（含 branch 边，评审第五轮——两段
-   * branch 边可闭合回路，环隔离会让预期失配）；端点类型约束外的下标
-   * 碰撞形态不计入保全预期。 */
-  function assembleCleanEdges(
-    payload: ArbValue<typeof cleanPayloadArb>,
-    nodes: Array<Record<string, unknown>>,
-  ): Array<Record<string, unknown>> {
-    // 剧情流端点白名单（§4.2/§13）：shot/image 不参与横向剧情流
-    const flowEndpoint = (t: unknown): boolean =>
-      t === 'scene' || t === 'dialogue' || t === 'beat'
-    const edges: Array<Record<string, unknown>> = []
-    let edgeNo = 0
-    for (const pair of payload.flowPairs) {
-      const src = nodes[pair.from]
-      const dst = nodes[pair.to]
-      if (src === undefined || dst === undefined || pair.from >= pair.to)
-        continue
-      if (src.type !== 'scene' || !flowEndpoint(dst.type)) continue
-      edges.push({ id: `e${edgeNo++}`, source: src.id, target: dst.id })
-    }
-    for (const spec of payload.branchEdgeSpecs) {
-      const src = nodes[spec.from]
-      const dst = nodes[spec.to]
-      const options =
-        src?.type === 'branch'
-          ? (src.data as { options: Array<{ id: string }> }).options
-          : []
-      if (src?.type !== 'branch' || dst === undefined) continue
-      if (spec.from >= spec.to || options.length <= spec.optionIdx) continue
-      if (!flowEndpoint(dst.type)) continue
-      edges.push({
-        id: `e${edgeNo++}`,
-        source: src.id,
-        target: dst.id,
-        sourceHandle: `option-${options[spec.optionIdx]?.id}`,
-        type: 'branch',
-      })
-    }
-    // attach（scene→shots 端口→shot）：同 shot 至多一条（宿主唯一），按
-    // shot 目标去重首见胜
-    const attachedShots = new Set<string>()
-    for (const spec of payload.attachSpecs) {
-      const src = nodes.find(
-        (n) => n.id === `n${spec.sceneIdx}` && n.type === 'scene',
-      )
-      const dst = nodes.find(
-        (n) => n.id === `sh${spec.shotIdx}` && n.type === 'shot',
-      )
-      if (src === undefined || dst === undefined) continue
-      if (attachedShots.has(dst.id as string)) continue
-      attachedShots.add(dst.id as string)
-      edges.push({
-        id: `e${edgeNo++}`,
-        source: src.id,
-        target: dst.id,
-        sourceHandle: 'shots',
-        className: 'pw-edge-attach',
-      })
-    }
-    return edges
-  }
-
-  function assembleCleanContent(payload: ArbValue<typeof cleanPayloadArb>): {
-    content: ProjectContent
-    expectedTitles: Record<string, string>
-  } {
-    const nodes = assembleCleanNodes(payload)
-    const edges = assembleCleanEdges(payload, nodes)
-    const assets = Object.fromEntries(
-      payload.assetRelPaths.map((rel, i) => [
-        `a${i}`,
-        {
-          id: `a${i}`,
-          relPath: `assets/${rel}`,
-          mime: 'image/png',
-          source: 'upload' as const,
-          createdAt: '2026-01-01T00:00:00.000Z',
-        },
-      ]),
-    )
-    const expectedTitles = Object.fromEntries(
-      new Map(payload.titles.map((t) => [String(t.episode), t.title])),
-    )
-    return {
-      content: {
-        name: '保全',
-        nodes: nodes as never,
-        edges: edges as never,
-        settings: {
-          characters: payload.characterNames.map((name, i) => ({
-            id: `ch${i}`,
-            name,
-            gradient: 'g',
-          })),
-          locations: payload.locationNames.map((name, i) => ({
-            id: `loc${i}`,
-            name,
-          })),
-          props: payload.propNames.map((name, i) => ({
-            id: `prop${i}`,
-            name,
-          })),
-          documents: payload.documentSpecs.map((doc, i) => ({
-            id: `doc${i}`,
-            title: doc.title,
-            body: '正文',
-            // 文档关系（评审第十一轮）：ch0 恒在、loc0 随生成标志——目标由
-            // 保底非桶供给；恒空数组会让「清空全部合法关系」的回归不可见
-            relatedIds: [
-              { kind: 'character' as const, id: 'ch0' },
-              ...(doc.withLocation
-                ? [{ kind: 'location' as const, id: 'loc0' }]
-                : []),
-            ],
-          })),
-        },
-        episodeTitles: expectedTitles,
-        assets: { byId: assets },
+/** 干净节点组装 · 叙事面：branch/beat/scene/dialogue（组序即数组序），
+ * 确定性唯一 id。 */
+function assembleNarrativeCleanNodes(
+  payload: ArbValue<typeof cleanPayloadArb>,
+): Array<Record<string, unknown>> {
+  const nodes: Array<Record<string, unknown>> = []
+  payload.branchOptionLabels.forEach((labels, i) => {
+    if (labels.length === 0) return
+    nodes.push({
+      id: `b${i}`,
+      type: 'branch',
+      position: { x: 0, y: 0 },
+      data: {
+        prompt: `问${i}`,
+        options: labels.map((label, j) => ({ id: `opt${i}-${j}`, label })),
       },
-      expectedTitles,
-    }
-  }
+    })
+  })
+  payload.beatTones.forEach((tone, i) =>
+    nodes.push({
+      id: `t${i}`,
+      type: 'beat',
+      position: { x: 0, y: 0 },
+      data: { name: `节拍${i}`, tone },
+    }),
+  )
+  payload.sceneNames.forEach((name, i) =>
+    nodes.push({
+      id: `n${i}`,
+      type: 'scene',
+      position: { x: 0, y: 0 },
+      data: {
+        name,
+        sceneNo: 1,
+        interior: true,
+        synopsis: '',
+        // 关联引用（评审第九轮）：ch0/loc0 由保底非空的角色/地点桶供给
+        locationId: 'loc0',
+        characterIds: ['ch0'],
+        time: 't',
+        weather: 'w',
+      },
+    }),
+  )
+  payload.dialogueTexts.forEach((text, i) =>
+    nodes.push({
+      id: `d${i}`,
+      type: 'dialogue',
+      position: { x: 0, y: 0 },
+      data: {
+        name: `对白${i}`,
+        lines: [{ id: `l${i}`, kind: 'line', text, speaker: 'ch0' }],
+      },
+    }),
+  )
+  return nodes
+}
 
-  /** 保全断言 · 节点面：全部节点 id 与各类型的关键内容逐条存活。 */
-  function assertNodesPreserved(
-    payload: ArbValue<typeof cleanPayloadArb>,
-    out: ProjectContent,
-  ): void {
-    expect(out.nodes.map((n) => n.id).sort(), '节点全部存活').toEqual(
-      [
-        ...payload.sceneNames.map((_, i) => `n${i}`),
-        ...payload.dialogueTexts.map((_, i) => `d${i}`),
-        ...payload.branchOptionLabels
-          .map((labels, i) => (labels.length > 0 ? `b${i}` : null))
-          .filter((id): id is string => id !== null),
-        ...payload.beatTones.map((_, i) => `t${i}`),
-        ...payload.shotPictures.map((_, i) => `sh${i}`),
-        ...payload.imagePrompts.map((_, i) => `img${i}`),
-      ].sort(),
-    )
-    const labelsOf = (type: string): string[] =>
-      out.nodes
-        .filter((n) => n.type === type)
-        .map((n) => (n.data as { name?: string }).name ?? '')
-    expect(labelsOf('scene').sort(), '场景名保全').toEqual(
-      [...payload.sceneNames].sort(),
-    )
-    expect(labelsOf('beat').sort(), '节拍名保全').toEqual(
-      payload.beatTones.map((_, i) => `节拍${i}`).sort(),
-    )
-    const lineTexts = out.nodes
-      .filter((n) => n.type === 'dialogue')
-      .flatMap((n) =>
-        n.type === 'dialogue' ? n.data.lines.map((l) => l.text) : [],
-      )
-    expect(lineTexts.sort(), '台词文本保全').toEqual(
-      [...payload.dialogueTexts].sort(),
-    )
-    const optionLabels = out.nodes
-      .filter((n) => n.type === 'branch')
-      .flatMap((n) =>
-        n.type === 'branch' ? n.data.options.map((o) => o.label) : [],
-      )
-    expect(optionLabels.sort(), '分支选项文案保全').toEqual(
-      payload.branchOptionLabels.flat().sort(),
-    )
-    expect(
-      out.nodes
-        .filter((n) => n.type === 'beat')
-        .map((n) => (n.data as { tone?: string }).tone)
-        .sort(),
-      '节拍基调保全',
-    ).toEqual([...payload.beatTones].sort())
-    expect(
-      out.nodes
-        .filter((n) => n.type === 'shot')
-        .map((n) => (n.data as { picture?: string }).picture)
-        .sort(),
-      '分镜画面描述保全',
-    ).toEqual([...payload.shotPictures].sort())
-    expect(
-      out.nodes
-        .filter((n) => n.type === 'image')
-        .map((n) => (n.data as { prompt?: string }).prompt)
-        .sort(),
-      '图片节点 Prompt 保全',
-    ).toEqual([...payload.imagePrompts].sort())
-    expect(out.name, '项目名保全').toBe('保全')
-  }
+/** 干净节点组装 · 媒体面：shot/image，确定性唯一 id。 */
+function assembleMediaCleanNodes(
+  payload: ArbValue<typeof cleanPayloadArb>,
+): Array<Record<string, unknown>> {
+  const nodes: Array<Record<string, unknown>> = []
+  payload.shotPictures.forEach((picture, i) =>
+    nodes.push({
+      id: `sh${i}`,
+      type: 'shot',
+      position: { x: 0, y: 0 },
+      data: {
+        shotNo: i + 1,
+        size: '中景',
+        picture,
+        prompt: `分镜${i}`,
+        // 引用位（评审第九轮）：a0 由保底非空的资产桶供给（image/*）
+        refs: [{ id: `r${i}`, kind: 'character', assetId: 'a0' }],
+      },
+    }),
+  )
+  payload.imagePrompts.forEach((prompt, i) =>
+    nodes.push({
+      id: `img${i}`,
+      type: 'image',
+      position: { x: 0, y: 0 },
+      data: {
+        prompt,
+        model: 'm',
+        size: 's',
+        outputs: { primary: { assetId: 'a0' } },
+      },
+    }),
+  )
+  return nodes
+}
 
-  /** 保全断言 · 引用面（评审第九轮）：跨记录引用逐条存活。 */
-  function assertReferencesPreserved(out: ProjectContent): void {
-    expect(
-      out.nodes
-        .filter((n) => n.type === 'scene')
-        .every(
-          (n) =>
-            n.type === 'scene' &&
-            n.data.locationId === 'loc0' &&
-            n.data.characterIds.includes('ch0'),
-        ),
-      '场景关联引用保全',
-    ).toBe(true)
-    expect(
-      out.nodes
-        .filter((n) => n.type === 'dialogue')
-        .every(
-          (n) =>
-            n.type === 'dialogue' &&
-            n.data.lines.every((l) => l.speaker === 'ch0'),
-        ),
-      '对白说话人引用保全',
-    ).toBe(true)
-    expect(
-      out.nodes
-        .filter((n) => n.type === 'shot')
-        .every(
-          (n) =>
-            n.type === 'shot' && n.data.refs.some((r) => r.assetId === 'a0'),
-        ),
-      '分镜引用位保全',
-    ).toBe(true)
-    expect(
-      out.nodes
-        .filter((n) => n.type === 'image')
-        .every(
-          (n) => n.type === 'image' && n.data.outputs.primary?.assetId === 'a0',
-        ),
-      '图片产物链接保全',
-    ).toBe(true)
+/** 干净边组装：from<to 的统一前向序（含 branch 边，评审第五轮——两段
+ * branch 边可闭合回路，环隔离会让预期失配）；端点类型约束外的下标
+ * 碰撞形态不计入保全预期。 */
+function assembleCleanEdges(
+  payload: ArbValue<typeof cleanPayloadArb>,
+  nodes: Array<Record<string, unknown>>,
+): Array<Record<string, unknown>> {
+  // 剧情流端点白名单（§4.2/§13）：shot/image 不参与横向剧情流
+  const flowEndpoint = (t: unknown): boolean =>
+    t === 'scene' || t === 'dialogue' || t === 'beat'
+  const edges: Array<Record<string, unknown>> = []
+  let edgeNo = 0
+  for (const pair of payload.flowPairs) {
+    const src = nodes[pair.from]
+    const dst = nodes[pair.to]
+    if (src === undefined || dst === undefined || pair.from >= pair.to) continue
+    // 源取剧情流白名单任一类型（评审第十三轮：此前只认 scene，dialogue/
+    // beat 的匿名输出边从未生成）——branch 无匿名端口，不在白名单内
+    if (!flowEndpoint(src.type) || !flowEndpoint(dst.type)) continue
+    edges.push({ id: `e${edgeNo++}`, source: src.id, target: dst.id })
   }
+  for (const spec of payload.branchEdgeSpecs) {
+    const src = nodes[spec.from]
+    const dst = nodes[spec.to]
+    const options =
+      src?.type === 'branch'
+        ? (src.data as { options: Array<{ id: string }> }).options
+        : []
+    if (src?.type !== 'branch' || dst === undefined) continue
+    if (spec.from >= spec.to || options.length <= spec.optionIdx) continue
+    if (!flowEndpoint(dst.type)) continue
+    edges.push({
+      id: `e${edgeNo++}`,
+      source: src.id,
+      target: dst.id,
+      sourceHandle: `option-${options[spec.optionIdx]?.id}`,
+      type: 'branch',
+    })
+  }
+  // attach（scene→shots 端口→shot）：同 shot 至多一条（宿主唯一），按
+  // shot 目标去重首见胜
+  const attachedShots = new Set<string>()
+  for (const spec of payload.attachSpecs) {
+    const src = nodes.find(
+      (n) => n.id === `n${spec.sceneIdx}` && n.type === 'scene',
+    )
+    const dst = nodes.find(
+      (n) => n.id === `sh${spec.shotIdx}` && n.type === 'shot',
+    )
+    if (src === undefined || dst === undefined) continue
+    if (attachedShots.has(dst.id as string)) continue
+    attachedShots.add(dst.id as string)
+    edges.push({
+      id: `e${edgeNo++}`,
+      source: src.id,
+      target: dst.id,
+      sourceHandle: 'shots',
+      className: 'pw-edge-attach',
+    })
+  }
+  return edges
+}
 
-  /** 保全断言 · 嵌套身份面（评审第十轮）：对白行/分支选项/分镜引用位的
-   * 合法 id 按所属节点逐组有序比对——只比文本/标签会放行「同载荷换 id」
-   * 与同组 id 互换，而这些嵌套 id 驱动列表 reconcile 与 branch 句柄引用。 */
-  function assertNestedIdsPreserved(
-    payload: ArbValue<typeof cleanPayloadArb>,
-    out: ProjectContent,
-  ): void {
-    const actual: Array<[string, string[]]> = []
-    for (const n of out.nodes) {
-      if (n.type === 'dialogue')
-        actual.push([n.id, n.data.lines.map((l) => l.id)])
-      else if (n.type === 'branch')
-        actual.push([n.id, n.data.options.map((o) => o.id)])
-      else if (n.type === 'shot')
-        actual.push([n.id, n.data.refs.map((r) => r.id)])
-    }
-    const expected: Array<[string, string[]]> = [
-      ...payload.dialogueTexts.map((_, i): [string, string[]] => [
-        `d${i}`,
-        [`l${i}`],
-      ]),
-      ...payload.branchOptionLabels.flatMap(
-        (labels, i): Array<[string, string[]]> =>
-          labels.length > 0
-            ? [[`b${i}`, labels.map((_, j) => `opt${i}-${j}`)]]
-            : [],
+function assembleCleanContent(payload: ArbValue<typeof cleanPayloadArb>): {
+  content: ProjectContent
+  expectedTitles: Record<string, string>
+} {
+  const nodes = assembleCleanNodes(payload)
+  const edges = assembleCleanEdges(payload, nodes)
+  const assets = Object.fromEntries(
+    payload.assetRelPaths.map((rel, i) => [
+      `a${i}`,
+      {
+        id: `a${i}`,
+        relPath: `assets/${rel}`,
+        mime: 'image/png',
+        source: 'upload' as const,
+        createdAt: '2026-01-01T00:00:00.000Z',
+      },
+    ]),
+  )
+  const expectedTitles = Object.fromEntries(
+    new Map(payload.titles.map((t) => [String(t.episode), t.title])),
+  )
+  return {
+    content: {
+      name: '保全',
+      nodes: nodes as never,
+      edges: edges as never,
+      settings: {
+        characters: payload.characterNames.map((name, i) => ({
+          id: `ch${i}`,
+          name,
+          gradient: 'g',
+        })),
+        locations: payload.locationNames.map((name, i) => ({
+          id: `loc${i}`,
+          name,
+        })),
+        props: payload.propNames.map((name, i) => ({
+          id: `prop${i}`,
+          name,
+        })),
+        documents: payload.documentSpecs.map((doc, i) => ({
+          id: `doc${i}`,
+          title: doc.title,
+          body: '正文',
+          // 文档关系（评审第十一轮）：ch0 恒在、loc0 随生成标志——目标由
+          // 保底非桶供给；恒空数组会让「清空全部合法关系」的回归不可见
+          relatedIds: [
+            { kind: 'character' as const, id: 'ch0' },
+            ...(doc.withLocation
+              ? [{ kind: 'location' as const, id: 'loc0' }]
+              : []),
+          ],
+        })),
+      },
+      episodeTitles: expectedTitles,
+      assets: { byId: assets },
+    },
+    expectedTitles,
+  }
+}
+
+/** 保全断言 · 节点面：全部节点 id 与各类型的关键内容逐条存活。 */
+function assertNodesPreserved(
+  payload: ArbValue<typeof cleanPayloadArb>,
+  out: ProjectContent,
+): void {
+  expect(out.nodes.map((n) => n.id).sort(), '节点全部存活').toEqual(
+    [
+      ...payload.sceneNames.map((_, i) => `n${i}`),
+      ...payload.dialogueTexts.map((_, i) => `d${i}`),
+      ...payload.branchOptionLabels
+        .map((labels, i) => (labels.length > 0 ? `b${i}` : null))
+        .filter((id): id is string => id !== null),
+      ...payload.beatTones.map((_, i) => `t${i}`),
+      ...payload.shotPictures.map((_, i) => `sh${i}`),
+      ...payload.imagePrompts.map((_, i) => `img${i}`),
+    ].sort(),
+  )
+  const labelsOf = (type: string): string[] =>
+    out.nodes
+      .filter((n) => n.type === type)
+      .map((n) => (n.data as { name?: string }).name ?? '')
+  expect(labelsOf('scene').sort(), '场景名保全').toEqual(
+    [...payload.sceneNames].sort(),
+  )
+  expect(labelsOf('beat').sort(), '节拍名保全').toEqual(
+    payload.beatTones.map((_, i) => `节拍${i}`).sort(),
+  )
+  const lineTexts = out.nodes
+    .filter((n) => n.type === 'dialogue')
+    .flatMap((n) =>
+      n.type === 'dialogue' ? n.data.lines.map((l) => l.text) : [],
+    )
+  expect(lineTexts.sort(), '台词文本保全').toEqual(
+    [...payload.dialogueTexts].sort(),
+  )
+  const optionLabels = out.nodes
+    .filter((n) => n.type === 'branch')
+    .flatMap((n) =>
+      n.type === 'branch' ? n.data.options.map((o) => o.label) : [],
+    )
+  expect(optionLabels.sort(), '分支选项文案保全').toEqual(
+    payload.branchOptionLabels.flat().sort(),
+  )
+  expect(
+    out.nodes
+      .filter((n) => n.type === 'beat')
+      .map((n) => (n.data as { tone?: string }).tone)
+      .sort(),
+    '节拍基调保全',
+  ).toEqual([...payload.beatTones].sort())
+  expect(
+    out.nodes
+      .filter((n) => n.type === 'shot')
+      .map((n) => (n.data as { picture?: string }).picture)
+      .sort(),
+    '分镜画面描述保全',
+  ).toEqual([...payload.shotPictures].sort())
+  expect(
+    out.nodes
+      .filter((n) => n.type === 'image')
+      .map((n) => (n.data as { prompt?: string }).prompt)
+      .sort(),
+    '图片节点 Prompt 保全',
+  ).toEqual([...payload.imagePrompts].sort())
+  expect(out.name, '项目名保全').toBe('保全')
+}
+
+/** 保全断言 · 引用面（评审第九轮）：跨记录引用逐条存活。 */
+function assertReferencesPreserved(out: ProjectContent): void {
+  expect(
+    out.nodes
+      .filter((n) => n.type === 'scene')
+      .every(
+        (n) =>
+          n.type === 'scene' &&
+          n.data.locationId === 'loc0' &&
+          n.data.characterIds.includes('ch0'),
       ),
-      ...payload.shotPictures.map((_, i): [string, string[]] => [
-        `sh${i}`,
-        [`r${i}`],
-      ]),
-    ]
-    expect(
-      Object.fromEntries(actual),
-      '嵌套身份（对白行/分支选项/分镜引用位 id）逐节点保全',
-    ).toEqual(Object.fromEntries(expected))
-  }
+    '场景关联引用保全',
+  ).toBe(true)
+  expect(
+    out.nodes
+      .filter((n) => n.type === 'dialogue')
+      .every(
+        (n) =>
+          n.type === 'dialogue' &&
+          n.data.lines.every((l) => l.speaker === 'ch0'),
+      ),
+    '对白说话人引用保全',
+  ).toBe(true)
+  expect(
+    out.nodes
+      .filter((n) => n.type === 'shot')
+      .every(
+        (n) => n.type === 'shot' && n.data.refs.some((r) => r.assetId === 'a0'),
+      ),
+    '分镜引用位保全',
+  ).toBe(true)
+  expect(
+    out.nodes
+      .filter((n) => n.type === 'image')
+      .every(
+        (n) => n.type === 'image' && n.data.outputs.primary?.assetId === 'a0',
+      ),
+    '图片产物链接保全',
+  ).toBe(true)
+}
 
-  /** 保全断言 · 设定与资产面：四桶身份+名称/标题、资产全记录、集标题。 */
-  function assertSettingsPreserved(
-    payload: ArbValue<typeof cleanPayloadArb>,
-    out: ProjectContent,
-    expectedTitles: Record<string, string>,
-  ): void {
-    expect(
-      out.settings.characters.map((c) => `${c.id}:${c.name}`).sort(),
-      '角色身份与名保全',
-    ).toEqual(payload.characterNames.map((name, i) => `ch${i}:${name}`).sort())
-    expect(
-      out.settings.locations.map((l) => `${l.id}:${l.name}`).sort(),
-      '地点身份与名保全',
-    ).toEqual(payload.locationNames.map((name, i) => `loc${i}:${name}`).sort())
-    expect(
-      (out.settings.props ?? []).map((e) => `${e.id}:${e.name}`).sort(),
-      '道具身份与名保全',
-    ).toEqual(payload.propNames.map((name, i) => `prop${i}:${name}`).sort())
-    expect(
-      (out.settings.documents ?? []).map((d) => `${d.id}:${d.title}`).sort(),
-      '设定文档身份与标题保全',
-    ).toEqual(
-      payload.documentSpecs.map((doc, i) => `doc${i}:${doc.title}`).sort(),
-    )
-    // 文档关系逐条保全（评审第十一轮）：{kind,id} 对有序比对
-    expect(
-      (out.settings.documents ?? [])
-        .map(
-          (d) =>
-            `${d.id}:${d.relatedIds.map((r) => `${r.kind}=${r.id}`).join(',')}`,
-        )
-        .sort(),
-      '设定文档关系保全',
-    ).toEqual(
-      payload.documentSpecs
-        .map(
-          (doc, i) =>
-            `doc${i}:character=ch0${doc.withLocation ? ',location=loc0' : ''}`,
-        )
-        .sort(),
-    )
-    // 资产全记录比对（评审第八轮：只比键会放行元数据清空/损坏）
-    const expectedAssets = Object.fromEntries(
-      payload.assetRelPaths.map((rel, i) => [
-        `a${i}`,
-        {
-          id: `a${i}`,
-          relPath: `assets/${rel}`,
-          mime: 'image/png',
-          source: 'upload',
-          createdAt: '2026-01-01T00:00:00.000Z',
-        },
-      ]),
-    )
-    expect(out.assets?.byId, '资产全记录保全').toEqual(expectedAssets)
-    expect(out.episodeTitles, '集标题保全').toEqual(expectedTitles)
+/** 保全断言 · 嵌套身份面（评审第十轮）：对白行/分支选项/分镜引用位的
+ * 合法 id 按所属节点逐组有序比对——只比文本/标签会放行「同载荷换 id」
+ * 与同组 id 互换，而这些嵌套 id 驱动列表 reconcile 与 branch 句柄引用。 */
+function assertNestedIdsPreserved(
+  payload: ArbValue<typeof cleanPayloadArb>,
+  out: ProjectContent,
+): void {
+  const actual: Array<[string, string[]]> = []
+  for (const n of out.nodes) {
+    if (n.type === 'dialogue')
+      actual.push([n.id, n.data.lines.map((l) => l.id)])
+    else if (n.type === 'branch')
+      actual.push([n.id, n.data.options.map((o) => o.id)])
+    else if (n.type === 'shot')
+      actual.push([n.id, n.data.refs.map((r) => r.id)])
   }
+  const expected: Array<[string, string[]]> = [
+    ...payload.dialogueTexts.map((_, i): [string, string[]] => [
+      `d${i}`,
+      [`l${i}`],
+    ]),
+    ...payload.branchOptionLabels.flatMap(
+      (labels, i): Array<[string, string[]]> =>
+        labels.length > 0
+          ? [[`b${i}`, labels.map((_, j) => `opt${i}-${j}`)]]
+          : [],
+    ),
+    ...payload.shotPictures.map((_, i): [string, string[]] => [
+      `sh${i}`,
+      [`r${i}`],
+    ]),
+  ]
+  expect(
+    Object.fromEntries(actual),
+    '嵌套身份（对白行/分支选项/分镜引用位 id）逐节点保全',
+  ).toEqual(Object.fromEntries(expected))
+}
 
-  /** 保全断言 · 边面（评审第九轮：稳定 id + 元组联合比对）：幸存边按
-   * `${id}:${source}→${target}:${handle}` 全量比对——id 被重发（后续选择/
-   * 删除/命令引用随之失效）不再放行；预期按元组去重首见胜。 */
-  function assertEdgesPreserved(
-    out: ProjectContent,
-    edgeKeys: string[],
-    attachKeys: string[],
-  ): void {
-    const outEdges = out.edges.map(
-      (e) => `${e.id}:${e.source}→${e.target}:${e.sourceHandle ?? ''}`,
-    )
-    const flowEdges = outEdges.filter(
-      (key) =>
-        !key.includes(':') === false &&
-        edgeKindOf(
-          out.edges.find(
-            (e) =>
-              `${e.id}:${e.source}→${e.target}:${e.sourceHandle ?? ''}` === key,
-          ) ?? {},
-        ) !== 'attach',
-    )
-    expect(flowEdges.sort(), '有效边稳定存活').toEqual(edgeKeys.sort())
-    const attachEdges = outEdges.filter(
-      (key) =>
-        edgeKindOf(
-          out.edges.find(
-            (e) =>
-              `${e.id}:${e.source}→${e.target}:${e.sourceHandle ?? ''}` === key,
-          ) ?? {},
-        ) === 'attach',
-    )
-    expect(attachEdges.sort(), 'attach 下挂边稳定存活').toEqual(
-      attachKeys.sort(),
-    )
-  }
+/** 保全断言 · 设定与资产面：四桶身份+名称/标题、资产全记录、集标题。 */
+function assertSettingsPreserved(
+  payload: ArbValue<typeof cleanPayloadArb>,
+  out: ProjectContent,
+  expectedTitles: Record<string, string>,
+): void {
+  expect(
+    out.settings.characters.map((c) => `${c.id}:${c.name}`).sort(),
+    '角色身份与名保全',
+  ).toEqual(payload.characterNames.map((name, i) => `ch${i}:${name}`).sort())
+  expect(
+    out.settings.locations.map((l) => `${l.id}:${l.name}`).sort(),
+    '地点身份与名保全',
+  ).toEqual(payload.locationNames.map((name, i) => `loc${i}:${name}`).sort())
+  expect(
+    (out.settings.props ?? []).map((e) => `${e.id}:${e.name}`).sort(),
+    '道具身份与名保全',
+  ).toEqual(payload.propNames.map((name, i) => `prop${i}:${name}`).sort())
+  expect(
+    (out.settings.documents ?? []).map((d) => `${d.id}:${d.title}`).sort(),
+    '设定文档身份与标题保全',
+  ).toEqual(
+    payload.documentSpecs.map((doc, i) => `doc${i}:${doc.title}`).sort(),
+  )
+  // 文档关系逐条保全（评审第十一轮）：{kind,id} 对有序比对
+  expect(
+    (out.settings.documents ?? [])
+      .map(
+        (d) =>
+          `${d.id}:${d.relatedIds.map((r) => `${r.kind}=${r.id}`).join(',')}`,
+      )
+      .sort(),
+    '设定文档关系保全',
+  ).toEqual(
+    payload.documentSpecs
+      .map(
+        (doc, i) =>
+          `doc${i}:character=ch0${doc.withLocation ? ',location=loc0' : ''}`,
+      )
+      .sort(),
+  )
+  // 资产全记录比对（评审第八轮：只比键会放行元数据清空/损坏）
+  const expectedAssets = Object.fromEntries(
+    payload.assetRelPaths.map((rel, i) => [
+      `a${i}`,
+      {
+        id: `a${i}`,
+        relPath: `assets/${rel}`,
+        mime: 'image/png',
+        source: 'upload',
+        createdAt: '2026-01-01T00:00:00.000Z',
+      },
+    ]),
+  )
+  expect(out.assets?.byId, '资产全记录保全').toEqual(expectedAssets)
+  expect(out.episodeTitles, '集标题保全').toEqual(expectedTitles)
+}
 
+/** 保全断言 · 边面（评审第九轮：稳定 id + 元组联合比对）：幸存边按
+ * `${id}:${source}→${target}:${handle}` 全量比对——id 被重发（后续选择/
+ * 删除/命令引用随之失效）不再放行；预期按元组去重首见胜。 */
+function assertEdgesPreserved(
+  out: ProjectContent,
+  edgeKeys: string[],
+  attachKeys: string[],
+): void {
+  const outEdges = out.edges.map(
+    (e) => `${e.id}:${e.source}→${e.target}:${e.sourceHandle ?? ''}`,
+  )
+  const flowEdges = outEdges.filter(
+    (key) =>
+      !key.includes(':') === false &&
+      edgeKindOf(
+        out.edges.find(
+          (e) =>
+            `${e.id}:${e.source}→${e.target}:${e.sourceHandle ?? ''}` === key,
+        ) ?? {},
+      ) !== 'attach',
+  )
+  expect(flowEdges.sort(), '有效边稳定存活').toEqual(edgeKeys.sort())
+  const attachEdges = outEdges.filter(
+    (key) =>
+      edgeKindOf(
+        out.edges.find(
+          (e) =>
+            `${e.id}:${e.source}→${e.target}:${e.sourceHandle ?? ''}` === key,
+        ) ?? {},
+      ) === 'attach',
+  )
+  expect(attachEdges.sort(), 'attach 下挂边稳定存活').toEqual(attachKeys.sort())
+}
+
+describe('归一化不变量的生成式验证（issue #232）：有效内容保全', () => {
   it('合法生成记录经归一化全部存活：节点/设定/资产/集标题/有效边不丢', () => {
     fc.assert(
       fc.property(cleanPayloadArb, (payload) => {
@@ -1342,382 +1344,378 @@ describe('归一化不变量的生成式验证（issue #232）：有效内容保
   })
 })
 
-describe('归一化不变量的生成式验证（issue #232）：v0 迁移与拒绝边界', () => {
-  /** v0 边组装（评审第七轮拆分）：普通剧情流边按下标引用真实节点（评审
-   * 第六轮：n* 池端点与组装后节点恒不相遇、全部被端点守卫隔离，保全路径
-   * 空转）；前向序 + 源非 branch（sequence 端点约束），碰撞出的非法形态
-   * 不生成。branch 边带运行态判别器（评审第五轮：缺 type: 'branch' 时迁移
-   * 后被分类为 sequence、按「branch 节点不得引出匿名边」隔离，幸存环恒
-   * 空转）；目标按下标引用真实节点，指向 br0 的自环边不生成。 */
-  function assembleV0Edges(
-    v0: ArbValue<typeof v0EnvelopeArb>,
-    docNodes: Array<Record<string, unknown>>,
-  ): {
-    flowEdges: Array<Record<string, unknown>>
-    branchEdges: Array<Record<string, unknown>>
-  } {
-    const flowEdges: Array<Record<string, unknown>> = []
-    v0.flowEdgeSpecs.forEach((spec) => {
-      const src = docNodes[spec.sourceIdx] as
-        { id?: unknown; type?: unknown } | undefined
-      const dst = docNodes[spec.targetIdx] as { id?: unknown } | undefined
-      if (src === undefined || dst === undefined) return
-      if (spec.sourceIdx >= spec.targetIdx) return
-      if (src.id === dst.id || src.type === 'branch') return
-      flowEdges.push({
-        id: `fe${flowEdges.length}`,
-        source: src.id,
-        target: dst.id,
-      })
+/** v0 边组装（评审第七轮拆分）：普通剧情流边按下标引用真实节点（评审
+ * 第六轮：n* 池端点与组装后节点恒不相遇、全部被端点守卫隔离，保全路径
+ * 空转）；前向序 + 源非 branch（sequence 端点约束），碰撞出的非法形态
+ * 不生成。branch 边带运行态判别器（评审第五轮：缺 type: 'branch' 时迁移
+ * 后被分类为 sequence、按「branch 节点不得引出匿名边」隔离，幸存环恒
+ * 空转）；目标按下标引用真实节点，指向 br0 的自环边不生成。 */
+function assembleV0Edges(
+  v0: ArbValue<typeof v0EnvelopeArb>,
+  docNodes: Array<Record<string, unknown>>,
+): {
+  flowEdges: Array<Record<string, unknown>>
+  branchEdges: Array<Record<string, unknown>>
+} {
+  const flowEdges: Array<Record<string, unknown>> = []
+  v0.flowEdgeSpecs.forEach((spec) => {
+    const src = docNodes[spec.sourceIdx] as
+      { id?: unknown; type?: unknown } | undefined
+    const dst = docNodes[spec.targetIdx] as { id?: unknown } | undefined
+    if (src === undefined || dst === undefined) return
+    if (spec.sourceIdx >= spec.targetIdx) return
+    if (src.id === dst.id || src.type === 'branch') return
+    flowEdges.push({
+      id: `fe${flowEdges.length}`,
+      source: src.id,
+      target: dst.id,
     })
-    const branchEdges: Array<Record<string, unknown>> = []
-    v0.branchEdges.forEach((e) => {
-      const target = docNodes[e.targetIdx] as { id?: unknown } | undefined
-      if (target === undefined || target.id === 'br0') return
-      branchEdges.push({
-        id: `be${branchEdges.length}`,
-        type: 'branch' as const,
-        source: 'br0',
-        target: target.id,
-        sourceHandle: `option-${e.optionIdx}`,
-      })
+  })
+  const branchEdges: Array<Record<string, unknown>> = []
+  v0.branchEdges.forEach((e) => {
+    const target = docNodes[e.targetIdx] as { id?: unknown } | undefined
+    if (target === undefined || target.id === 'br0') return
+    branchEdges.push({
+      id: `be${branchEdges.length}`,
+      type: 'branch' as const,
+      source: 'br0',
+      target: target.id,
+      sourceHandle: `option-${e.optionIdx}`,
     })
-    return { flowEdges, branchEdges }
-  }
+  })
+  return { flowEdges, branchEdges }
+}
 
-  /** v0 对白/分镜节点组装（评审第十二轮）：追加在 docNodes 之后——下标边
-   * 寻址数组恒为 [br0, s0..]，新增节点不影响既有边组装语义；两类节点不
-   * 连边，专注迁移载荷与身份断言。speaker 对象形态的标签取自角色桶
-   * （gradient 全 'g'，ensureCharacter 精确匹配首见胜），解析结果确定可
-   * 断言。 */
-  function assembleV0ListNodes(
-    v0: ArbValue<typeof v0EnvelopeArb>,
-  ): Array<Record<string, unknown>> {
-    const dialogueNodes = v0.dialogues.map((d, i) => ({
-      id: `dl${i}`,
-      type: 'dialogue',
-      position: { x: 0, y: 0 },
-      data: {
-        name: d.name,
-        lines: d.lines.map((l, j) => ({
-          id: `dl${i}-${j}`,
-          kind: 'line',
-          text: l.text,
-          ...(l.speaker === 'object'
-            ? {
-                speaker: {
-                  label:
-                    v0.characterNames[
-                      l.speakerNameIdx % v0.characterNames.length
-                    ],
-                  gradient: 'g',
-                },
-              }
-            : {}),
-          ...(l.speaker === 'string' ? { speaker: 'ch0' } : {}),
-        })),
-      },
-    }))
-    const shotNodes = v0.shots.map((s, i) => ({
-      id: `sh${i}`,
-      type: 'shot',
-      position: { x: 0, y: 0 },
-      data: {
-        shotNo: i + 1,
-        size: '中景',
-        picture: s.picture,
-        prompt: `分镜${i}`,
-        refs: [
-          s.withAssetRef
-            ? { id: `sr${i}`, kind: 'character', assetId: 'a0' }
-            : { id: `sr${i}`, kind: 'audio', label: s.picture },
-        ],
-      },
-    }))
-    return [...dialogueNodes, ...shotNodes]
-  }
+/** v0 对白/分镜节点组装（评审第十二轮）：追加在 docNodes 之后——下标边
+ * 寻址数组恒为 [br0, s0..]，新增节点不影响既有边组装语义；两类节点不
+ * 连边，专注迁移载荷与身份断言。speaker 对象形态的标签取自角色桶
+ * （gradient 全 'g'，ensureCharacter 精确匹配首见胜），解析结果确定可
+ * 断言。 */
+function assembleV0ListNodes(
+  v0: ArbValue<typeof v0EnvelopeArb>,
+): Array<Record<string, unknown>> {
+  const dialogueNodes = v0.dialogues.map((d, i) => ({
+    id: `dl${i}`,
+    type: 'dialogue',
+    position: { x: 0, y: 0 },
+    data: {
+      name: d.name,
+      lines: d.lines.map((l, j) => ({
+        id: `dl${i}-${j}`,
+        kind: 'line',
+        text: l.text,
+        ...(l.speaker === 'object'
+          ? {
+              speaker: {
+                label:
+                  v0.characterNames[
+                    l.speakerNameIdx % v0.characterNames.length
+                  ],
+                gradient: 'g',
+              },
+            }
+          : {}),
+        ...(l.speaker === 'string' ? { speaker: 'ch0' } : {}),
+      })),
+    },
+  }))
+  const shotNodes = v0.shots.map((s, i) => ({
+    id: `sh${i}`,
+    type: 'shot',
+    position: { x: 0, y: 0 },
+    data: {
+      shotNo: i + 1,
+      size: '中景',
+      picture: s.picture,
+      prompt: `分镜${i}`,
+      refs: [
+        s.withAssetRef
+          ? { id: `sr${i}`, kind: 'character', assetId: 'a0' }
+          : { id: `sr${i}`, kind: 'audio', label: s.picture },
+      ],
+    },
+  }))
+  return [...dialogueNodes, ...shotNodes]
+}
 
-  /** v0 设定桶组装（评审第十二轮）：数组形态四桶全部生成——空白 id 角色
-   * 行使数组期重发，其空白原值在文档 relatedIds 中的引用经映射改写。 */
-  function assembleV0Settings(
-    v0: ArbValue<typeof v0EnvelopeArb>,
-  ): Record<string, unknown> {
-    return {
-      characters: [
-        ...v0.characterNames.map((name, i) => ({
-          id: `ch${i}`,
-          name,
-          gradient: 'g',
-        })),
+/** v0 设定桶组装（评审第十二轮）：数组形态四桶全部生成——空白 id 角色
+ * 行使数组期重发，其空白原值在文档 relatedIds 中的引用经映射改写。 */
+function assembleV0Settings(
+  v0: ArbValue<typeof v0EnvelopeArb>,
+): Record<string, unknown> {
+  return {
+    characters: [
+      ...v0.characterNames.map((name, i) => ({
+        id: `ch${i}`,
+        name,
+        gradient: 'g',
+      })),
+      ...(v0.blankCharacter !== undefined
+        ? [{ id: '', name: v0.blankCharacter, gradient: 'g' }]
+        : []),
+    ],
+    locations: v0.locationNames.map((name, i) => ({
+      id: `loc${i}`,
+      name,
+    })),
+    props: v0.propNames.map((name, i) => ({ id: `prop${i}`, name })),
+    documents: v0.documentSpecs.map((d, i) => ({
+      id: `doc${i}`,
+      title: d.title,
+      body: '正文',
+      relatedIds: [
+        { kind: 'character', id: 'ch0' },
+        ...(d.withLocation ? [{ kind: 'location', id: 'loc0' }] : []),
         ...(v0.blankCharacter !== undefined
-          ? [{ id: '', name: v0.blankCharacter, gradient: 'g' }]
+          ? [{ kind: 'character', id: '' }]
           : []),
       ],
-      locations: v0.locationNames.map((name, i) => ({
-        id: `loc${i}`,
-        name,
-      })),
-      props: v0.propNames.map((name, i) => ({ id: `prop${i}`, name })),
-      documents: v0.documentSpecs.map((d, i) => ({
-        id: `doc${i}`,
-        title: d.title,
-        body: '正文',
-        relatedIds: [
-          { kind: 'character', id: 'ch0' },
-          ...(d.withLocation ? [{ kind: 'location', id: 'loc0' }] : []),
-          ...(v0.blankCharacter !== undefined
-            ? [{ kind: 'character', id: '' }]
-            : []),
-        ],
-      })),
-    }
+    })),
   }
+}
 
-  /** v0 夹具组装（评审第七轮拆分）：首节点恒为 branch（选项 id 确定性
-   * 唯一化）；场景 id 确定性唯一化（s0..——空白/重复 id 会触发重发，按
-   * 原始 id 对准的预期就会失配）；边/对白分镜/设定的组装委托给各聚焦
-   * helper。 */
-  function assembleV0Doc(v0: ArbValue<typeof v0EnvelopeArb>): {
-    doc: Record<string, unknown>
-    flowEdges: Array<Record<string, unknown>>
-    branchEdges: Array<Record<string, unknown>>
-    optionCount: number
-  } {
-    const branchNode = {
-      id: 'br0',
-      type: 'branch',
-      position: { x: 0, y: 0 },
-      data: {
-        prompt: v0.branch.prompt,
-        options: v0.branch.optionLabels.map((label, i) => ({
-          id: `opt${i}`,
-          label,
-        })),
-      },
-    }
-    const docNodes = [
-      branchNode,
-      ...v0.scenes.map((sc, i) => ({ ...sc, id: `s${i}` })),
-    ]
-    const { flowEdges, branchEdges } = assembleV0Edges(v0, docNodes)
-    const doc = {
-      schemaVersion: 0,
-      project: {
-        id: 'p-old',
-        name: '旧剧',
-        createdAt: '',
-        updatedAt: '2026-01-01T00:00:00.000Z',
-      },
-      graph: {
-        nodes: [...docNodes, ...assembleV0ListNodes(v0)],
-        edges: [...flowEdges, ...branchEdges],
-      },
-      settings: assembleV0Settings(v0),
-      episodeTitles: {},
-      // a0 供分镜 assetId 引用位（空资产桶会让引用成为悬空脏数据）
-      assets: {
-        byId: {
-          a0: {
-            id: 'a0',
-            relPath: 'assets/f0.png',
-            mime: 'image/png',
-            source: 'upload',
-            createdAt: '2026-01-01T00:00:00.000Z',
-          },
+/** v0 夹具组装（评审第七轮拆分）：首节点恒为 branch（选项 id 确定性
+ * 唯一化）；场景 id 确定性唯一化（s0..——空白/重复 id 会触发重发，按
+ * 原始 id 对准的预期就会失配）；边/对白分镜/设定的组装委托给各聚焦
+ * helper。 */
+function assembleV0Doc(v0: ArbValue<typeof v0EnvelopeArb>): {
+  doc: Record<string, unknown>
+  flowEdges: Array<Record<string, unknown>>
+  branchEdges: Array<Record<string, unknown>>
+  optionCount: number
+} {
+  const branchNode = {
+    id: 'br0',
+    type: 'branch',
+    position: { x: 0, y: 0 },
+    data: {
+      prompt: v0.branch.prompt,
+      options: v0.branch.optionLabels.map((label, i) => ({
+        id: `opt${i}`,
+        label,
+      })),
+    },
+  }
+  const docNodes = [
+    branchNode,
+    ...v0.scenes.map((sc, i) => ({ ...sc, id: `s${i}` })),
+  ]
+  const { flowEdges, branchEdges } = assembleV0Edges(v0, docNodes)
+  const doc = {
+    schemaVersion: 0,
+    project: {
+      id: 'p-old',
+      name: '旧剧',
+      createdAt: '',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    },
+    graph: {
+      nodes: [...docNodes, ...assembleV0ListNodes(v0)],
+      edges: [...flowEdges, ...branchEdges],
+    },
+    settings: assembleV0Settings(v0),
+    episodeTitles: {},
+    // a0 供分镜 assetId 引用位（空资产桶会让引用成为悬空脏数据）
+    assets: {
+      byId: {
+        a0: {
+          id: 'a0',
+          relPath: 'assets/f0.png',
+          mime: 'image/png',
+          source: 'upload',
+          createdAt: '2026-01-01T00:00:00.000Z',
         },
       },
-    }
-    return {
-      doc,
-      flowEdges,
-      branchEdges,
-      optionCount: v0.branch.optionLabels.length,
-    }
+    },
   }
+  return {
+    doc,
+    flowEdges,
+    branchEdges,
+    optionCount: v0.branch.optionLabels.length,
+  }
+}
 
-  /** v0 迁移的边保全断言：合法剧情流边全部存活；在界下标句柄精确改写为
-   * option-opt<N>（确定性唯一选项 id，无重发改写）、越界句柄隔离、同
-   * 元组逻辑重复首见胜——预期按端点元组去重比对。 */
-  function assertV0EdgeMigration(
-    content: ProjectContent,
-    flowEdges: Array<Record<string, unknown>>,
-    branchEdges: Array<Record<string, unknown>>,
-    optionCount: number,
-  ): void {
-    const expectedFlowTuples = [
-      ...new Set(flowEdges.map((e) => `${e.source}→${e.target}`)),
-    ].sort()
-    const outFlowTuples = [
-      ...new Set(
-        content.edges
-          .filter((e) => edgeKindOf(e) === 'sequence')
-          .map((e) => `${e.source}→${e.target}`),
+/** v0 迁移的边保全断言：合法剧情流边全部存活；在界下标句柄精确改写为
+ * option-opt<N>（确定性唯一选项 id，无重发改写）、越界句柄隔离、同
+ * 元组逻辑重复首见胜——预期按端点元组去重比对。 */
+function assertV0EdgeMigration(
+  content: ProjectContent,
+  flowEdges: Array<Record<string, unknown>>,
+  branchEdges: Array<Record<string, unknown>>,
+  optionCount: number,
+): void {
+  const expectedFlowTuples = [
+    ...new Set(flowEdges.map((e) => `${e.source}→${e.target}`)),
+  ].sort()
+  const outFlowTuples = [
+    ...new Set(
+      content.edges
+        .filter((e) => edgeKindOf(e) === 'sequence')
+        .map((e) => `${e.source}→${e.target}`),
+    ),
+  ].sort()
+  expect(outFlowTuples, '合法 v0 剧情流边全部存活').toEqual(expectedFlowTuples)
+  const expectedBranchTuples = new Set(
+    branchEdges
+      .map((e) => ({
+        target: e.target as string,
+        idx: Number(String(e.sourceHandle ?? '').slice('option-'.length)),
+      }))
+      .filter(({ idx }) => idx < optionCount)
+      .map(({ target, idx }) => `${target}→option-opt${idx}`),
+  )
+  const outBranchTuples = content.edges
+    .filter((e) => edgeKindOf(e) === 'branch' && e.source === 'br0')
+    .map((e) => `${e.target}→${e.sourceHandle}`)
+  expect(
+    [...new Set(outBranchTuples)].sort(),
+    '在界下标句柄精确迁移并全部幸存',
+  ).toEqual([...expectedBranchTuples].sort())
+}
+
+/** v0 迁移的节点载荷比对（评审第十一轮）：迁移把合法 v0 载荷换成空/默认
+ * 值的回归此前不可见（输出不变量只管身份与图结构，边断言只管边）。分支
+ * 提示词/选项与场景名称/内外景/简介逐字存活；sceneNo 非法时按 §4.2 顺位
+ * 重发（文档序最小未占用正整数），预期按同一规则在夹具上现算。 */
+function assertV0NodePayloads(
+  content: ProjectContent,
+  v0: ArbValue<typeof v0EnvelopeArb>,
+): void {
+  const branch = content.nodes.find((n) => n.id === 'br0')
+  expect(branch?.type, 'v0 分支节点存活').toBe('branch')
+  if (branch?.type === 'branch') {
+    expect(branch.data.prompt, 'v0 分支提示词保全').toBe(v0.branch.prompt)
+    expect(branch.data.options, 'v0 分支选项载荷保全').toEqual(
+      v0.branch.optionLabels.map((label, i) => ({ id: `opt${i}`, label })),
+    )
+  }
+  // sceneNo 顺位重发预期：合法编号（正安全整数）保留并占位（含重复），
+  // 非法编号按文档序取最小未占用正整数（与 renumberSeqFields 同一规则）
+  const used = new Set<number>()
+  const expectedSceneNos = v0.scenes.map((sc) => {
+    const cur = sc.data.sceneNo
+    if (Number.isSafeInteger(cur) && cur > 0) {
+      used.add(cur)
+      return cur
+    }
+    let next = 1
+    while (used.has(next)) next += 1
+    used.add(next)
+    return next
+  })
+  v0.scenes.forEach((sc, i) => {
+    const scene = content.nodes.find((n) => n.id === `s${i}`)
+    expect(scene?.type, `v0 场景 s${i} 存活`).toBe('scene')
+    if (scene?.type !== 'scene') return
+    expect(scene.data.name, `v0 场景 s${i} 名称保全`).toBe(sc.data.name)
+    expect(scene.data.sceneNo, `v0 场景 s${i} 编号保全/顺位重发`).toBe(
+      expectedSceneNos[i],
+    )
+    expect(scene.data.interior, `v0 场景 s${i} 内外景保全`).toBe(
+      sc.data.interior,
+    )
+    expect(scene.data.synopsis, `v0 场景 s${i} 简介保全`).toBe(sc.data.synopsis)
+  })
+}
+
+/** v0 迁移的对白/分镜载荷比对（评审第十二轮）：台词行身份/类型/文本/
+ * 说话人逐行有序存活——对象 speaker（头像标签）经 ensureCharacter 解析为
+ * 首个同名角色的 id（角色 gradient 全 'g'，精确匹配首见胜），字符串直引
+ * 原样存活；分镜引用位的 id/kind/assetId 或 label 存活、不被重发。 */
+function assertV0ListNodePayloads(
+  content: ProjectContent,
+  v0: ArbValue<typeof v0EnvelopeArb>,
+): void {
+  v0.dialogues.forEach((d, i) => {
+    const node = content.nodes.find((n) => n.id === `dl${i}`)
+    expect(node?.type, `v0 对白 dl${i} 存活`).toBe('dialogue')
+    if (node?.type !== 'dialogue') return
+    expect(node.data.name, `v0 对白 dl${i} 名称保全`).toBe(d.name)
+    const expectedLines = d.lines.map((l, j) => {
+      const speaker =
+        l.speaker === 'object'
+          ? `ch${v0.characterNames.indexOf(
+              v0.characterNames[l.speakerNameIdx % v0.characterNames.length],
+            )}`
+          : l.speaker === 'string'
+            ? 'ch0'
+            : ''
+      return `dl${i}-${j}:line:${l.text}:${speaker}`
+    })
+    expect(
+      node.data.lines.map(
+        (l) => `${l.id}:${l.kind}:${l.text}:${l.speaker ?? ''}`,
       ),
-    ].sort()
-    expect(outFlowTuples, '合法 v0 剧情流边全部存活').toEqual(
-      expectedFlowTuples,
-    )
-    const expectedBranchTuples = new Set(
-      branchEdges
-        .map((e) => ({
-          target: e.target as string,
-          idx: Number(String(e.sourceHandle ?? '').slice('option-'.length)),
-        }))
-        .filter(({ idx }) => idx < optionCount)
-        .map(({ target, idx }) => `${target}→option-opt${idx}`),
-    )
-    const outBranchTuples = content.edges
-      .filter((e) => edgeKindOf(e) === 'branch' && e.source === 'br0')
-      .map((e) => `${e.target}→${e.sourceHandle}`)
+      `v0 对白 dl${i} 台词行逐行保全（对象 speaker 解析到首见同名角色）`,
+    ).toEqual(expectedLines)
+  })
+  v0.shots.forEach((s, i) => {
+    const node = content.nodes.find((n) => n.id === `sh${i}`)
+    expect(node?.type, `v0 分镜 sh${i} 存活`).toBe('shot')
+    if (node?.type !== 'shot') return
+    expect(node.data.shotNo, `v0 分镜 sh${i} 编号保全`).toBe(i + 1)
+    expect(node.data.picture, `v0 分镜 sh${i} 画面保全`).toBe(s.picture)
     expect(
-      [...new Set(outBranchTuples)].sort(),
-      '在界下标句柄精确迁移并全部幸存',
-    ).toEqual([...expectedBranchTuples].sort())
-  }
+      node.data.refs.map(
+        (r) => `${r.id}:${r.kind}:${'assetId' in r ? r.assetId : r.label}`,
+      ),
+      `v0 分镜 sh${i} 引用位保全（id 不被重发）`,
+    ).toEqual([
+      s.withAssetRef ? `sr${i}:character:a0` : `sr${i}:audio:${s.picture}`,
+    ])
+  })
+}
 
-  /** v0 迁移的节点载荷比对（评审第十一轮）：迁移把合法 v0 载荷换成空/默认
-   * 值的回归此前不可见（输出不变量只管身份与图结构，边断言只管边）。分支
-   * 提示词/选项与场景名称/内外景/简介逐字存活；sceneNo 非法时按 §4.2 顺位
-   * 重发（文档序最小未占用正整数），预期按同一规则在夹具上现算。 */
-  function assertV0NodePayloads(
-    content: ProjectContent,
-    v0: ArbValue<typeof v0EnvelopeArb>,
-  ): void {
-    const branch = content.nodes.find((n) => n.id === 'br0')
-    expect(branch?.type, 'v0 分支节点存活').toBe('branch')
-    if (branch?.type === 'branch') {
-      expect(branch.data.prompt, 'v0 分支提示词保全').toBe(v0.branch.prompt)
-      expect(branch.data.options, 'v0 分支选项载荷保全').toEqual(
-        v0.branch.optionLabels.map((label, i) => ({ id: `opt${i}`, label })),
-      )
-    }
-    // sceneNo 顺位重发预期：合法编号（正安全整数）保留并占位（含重复），
-    // 非法编号按文档序取最小未占用正整数（与 renumberSeqFields 同一规则）
-    const used = new Set<number>()
-    const expectedSceneNos = v0.scenes.map((sc) => {
-      const cur = sc.data.sceneNo
-      if (Number.isSafeInteger(cur) && cur > 0) {
-        used.add(cur)
-        return cur
-      }
-      let next = 1
-      while (used.has(next)) next += 1
-      used.add(next)
-      return next
-    })
-    v0.scenes.forEach((sc, i) => {
-      const scene = content.nodes.find((n) => n.id === `s${i}`)
-      expect(scene?.type, `v0 场景 s${i} 存活`).toBe('scene')
-      if (scene?.type !== 'scene') return
-      expect(scene.data.name, `v0 场景 s${i} 名称保全`).toBe(sc.data.name)
-      expect(scene.data.sceneNo, `v0 场景 s${i} 编号保全/顺位重发`).toBe(
-        expectedSceneNos[i],
-      )
-      expect(scene.data.interior, `v0 场景 s${i} 内外景保全`).toBe(
-        sc.data.interior,
-      )
-      expect(scene.data.synopsis, `v0 场景 s${i} 简介保全`).toBe(
-        sc.data.synopsis,
-      )
-    })
+/** v0 迁移的设定桶比对（评审第十二轮）：地点/道具/文档桶的身份与载荷
+ * 逐条存活；空白 id 角色经数组期重发恰增一件（不塌缩、不丢件），文档
+ * relatedIds 的空白引用经「空白原值 → 新 id」映射改写指向该角色。 */
+function assertV0SettingsMigration(
+  content: ProjectContent,
+  v0: ArbValue<typeof v0EnvelopeArb>,
+): void {
+  const cleanCharIds = new Set(v0.characterNames.map((_, i) => `ch${i}`))
+  const charsOut = content.settings.characters
+  for (const [i, name] of v0.characterNames.entries()) {
+    expect(
+      charsOut.some((c) => c.id === `ch${i}` && c.name === name),
+      `v0 角色 ch${i} 迁移存活`,
+    ).toBe(true)
   }
+  const extras = charsOut.filter((c) => !cleanCharIds.has(c.id))
+  expect(
+    extras.map((c) => c.name),
+    'v0 空白 id 角色数组期重发（恰增一件，不塌缩不丢件）',
+  ).toEqual(v0.blankCharacter !== undefined ? [v0.blankCharacter] : [])
+  expect(
+    content.settings.locations.map((l) => `${l.id}:${l.name}`).sort(),
+    'v0 地点迁移存活',
+  ).toEqual(v0.locationNames.map((name, i) => `loc${i}:${name}`).sort())
+  expect(
+    (content.settings.props ?? []).map((p) => `${p.id}:${p.name}`).sort(),
+    'v0 道具迁移存活',
+  ).toEqual(v0.propNames.map((name, i) => `prop${i}:${name}`).sort())
+  const reissuedId = extras[0]?.id
+  const expectedDocs = v0.documentSpecs.map((d, i) => {
+    const rels = [
+      'character=ch0',
+      ...(d.withLocation ? ['location=loc0'] : []),
+      ...(v0.blankCharacter !== undefined ? [`character=${reissuedId}`] : []),
+    ]
+    return `doc${i}:${d.title}:${rels.join(',')}`
+  })
+  expect(
+    (content.settings.documents ?? [])
+      .map(
+        (d) =>
+          `${d.id}:${d.title}:${d.relatedIds.map((r) => `${r.kind}=${r.id}`).join(',')}`,
+      )
+      .sort(),
+    'v0 文档迁移存活（relatedIds 空白引用随重发改写）',
+  ).toEqual(expectedDocs.sort())
+}
 
-  /** v0 迁移的对白/分镜载荷比对（评审第十二轮）：台词行身份/类型/文本/
-   * 说话人逐行有序存活——对象 speaker（头像标签）经 ensureCharacter 解析为
-   * 首个同名角色的 id（角色 gradient 全 'g'，精确匹配首见胜），字符串直引
-   * 原样存活；分镜引用位的 id/kind/assetId 或 label 存活、不被重发。 */
-  function assertV0ListNodePayloads(
-    content: ProjectContent,
-    v0: ArbValue<typeof v0EnvelopeArb>,
-  ): void {
-    v0.dialogues.forEach((d, i) => {
-      const node = content.nodes.find((n) => n.id === `dl${i}`)
-      expect(node?.type, `v0 对白 dl${i} 存活`).toBe('dialogue')
-      if (node?.type !== 'dialogue') return
-      expect(node.data.name, `v0 对白 dl${i} 名称保全`).toBe(d.name)
-      const expectedLines = d.lines.map((l, j) => {
-        const speaker =
-          l.speaker === 'object'
-            ? `ch${v0.characterNames.indexOf(
-                v0.characterNames[l.speakerNameIdx % v0.characterNames.length],
-              )}`
-            : l.speaker === 'string'
-              ? 'ch0'
-              : ''
-        return `dl${i}-${j}:line:${l.text}:${speaker}`
-      })
-      expect(
-        node.data.lines.map(
-          (l) => `${l.id}:${l.kind}:${l.text}:${l.speaker ?? ''}`,
-        ),
-        `v0 对白 dl${i} 台词行逐行保全（对象 speaker 解析到首见同名角色）`,
-      ).toEqual(expectedLines)
-    })
-    v0.shots.forEach((s, i) => {
-      const node = content.nodes.find((n) => n.id === `sh${i}`)
-      expect(node?.type, `v0 分镜 sh${i} 存活`).toBe('shot')
-      if (node?.type !== 'shot') return
-      expect(node.data.shotNo, `v0 分镜 sh${i} 编号保全`).toBe(i + 1)
-      expect(node.data.picture, `v0 分镜 sh${i} 画面保全`).toBe(s.picture)
-      expect(
-        node.data.refs.map(
-          (r) => `${r.id}:${r.kind}:${'assetId' in r ? r.assetId : r.label}`,
-        ),
-        `v0 分镜 sh${i} 引用位保全（id 不被重发）`,
-      ).toEqual([
-        s.withAssetRef ? `sr${i}:character:a0` : `sr${i}:audio:${s.picture}`,
-      ])
-    })
-  }
-
-  /** v0 迁移的设定桶比对（评审第十二轮）：地点/道具/文档桶的身份与载荷
-   * 逐条存活；空白 id 角色经数组期重发恰增一件（不塌缩、不丢件），文档
-   * relatedIds 的空白引用经「空白原值 → 新 id」映射改写指向该角色。 */
-  function assertV0SettingsMigration(
-    content: ProjectContent,
-    v0: ArbValue<typeof v0EnvelopeArb>,
-  ): void {
-    const cleanCharIds = new Set(v0.characterNames.map((_, i) => `ch${i}`))
-    const charsOut = content.settings.characters
-    for (const [i, name] of v0.characterNames.entries()) {
-      expect(
-        charsOut.some((c) => c.id === `ch${i}` && c.name === name),
-        `v0 角色 ch${i} 迁移存活`,
-      ).toBe(true)
-    }
-    const extras = charsOut.filter((c) => !cleanCharIds.has(c.id))
-    expect(
-      extras.map((c) => c.name),
-      'v0 空白 id 角色数组期重发（恰增一件，不塌缩不丢件）',
-    ).toEqual(v0.blankCharacter !== undefined ? [v0.blankCharacter] : [])
-    expect(
-      content.settings.locations.map((l) => `${l.id}:${l.name}`).sort(),
-      'v0 地点迁移存活',
-    ).toEqual(v0.locationNames.map((name, i) => `loc${i}:${name}`).sort())
-    expect(
-      (content.settings.props ?? []).map((p) => `${p.id}:${p.name}`).sort(),
-      'v0 道具迁移存活',
-    ).toEqual(v0.propNames.map((name, i) => `prop${i}:${name}`).sort())
-    const reissuedId = extras[0]?.id
-    const expectedDocs = v0.documentSpecs.map((d, i) => {
-      const rels = [
-        'character=ch0',
-        ...(d.withLocation ? ['location=loc0'] : []),
-        ...(v0.blankCharacter !== undefined ? [`character=${reissuedId}`] : []),
-      ]
-      return `doc${i}:${d.title}:${rels.join(',')}`
-    })
-    expect(
-      (content.settings.documents ?? [])
-        .map(
-          (d) =>
-            `${d.id}:${d.title}:${d.relatedIds.map((r) => `${r.kind}=${r.id}`).join(',')}`,
-        )
-        .sort(),
-      'v0 文档迁移存活（relatedIds 空白引用随重发改写）',
-    ).toEqual(expectedDocs.sort())
-  }
-
+describe('归一化不变量的生成式验证（issue #232）：v0 迁移与拒绝边界', () => {
   it('任意 v0 信封：迁移成功、输出满足不变量、迁移产物幂等', () => {
     fc.assert(
       fc.property(v0EnvelopeArb, (v0) => {
@@ -1744,7 +1742,6 @@ describe('归一化不变量的生成式验证（issue #232）：v0 迁移与拒
       }),
     )
   })
-
   it('允许拒绝的版本边界：过新版本显式拒绝，非法版本按损坏拒绝', () => {
     fc.assert(
       fc.property(
