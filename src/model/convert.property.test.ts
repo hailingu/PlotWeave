@@ -36,10 +36,13 @@ const preservedText = fc
   })
   .map((chars) => chars.join(''))
 
-/** 小池身份（0–4）：天然产生重复/碰撞（归一化重发路径的脏输入源），
- * 尾号 9（约 1/10）映射为空白串（空键重发路径）。 */
+/** 小池身份（0–4）：天然产生重复/碰撞（归一化重发路径的脏输入源）；
+ * 尾号 8/9（约 2/10）落入空白族身份——空串与纯空白串均属 §8.1 共同
+ * 值域（trim 后非空）之外的非法 id，空键/空白键重发路径均被行使。 */
 const idArb = (prefix: string) =>
-  fc.nat(9).map((n) => (n === 9 ? '' : `${prefix}${n}`))
+  fc
+    .tuple(fc.nat(9), fc.constantFrom('', ' ', ' \t', '\u3000'))
+    .map(([n, blank]) => (n >= 8 ? blank : `${prefix}${n}`))
 
 const shortText = fc.string({ minLength: 0, maxLength: 8 })
 const finiteNumber = fc.double({ min: -1000, max: 1000, noNaN: true })
@@ -411,7 +414,8 @@ const v0EnvelopeArb = fc.record({
 })
 
 /** 输出不变量（issue #232：身份唯一 + 活动边满足图规则 + 集标题契约）。 */
-/** 身份唯一不变量（issue #232）：全部生成身份域非空且唯一 + 资产索引
+/** 身份唯一不变量（issue #232）：全部生成身份域按 §8.1 共同值域判定
+ * 非空白（`trim()` 后非空——纯空白串与空串同属非法 id）且唯一 + 资产索引
  * 键与值内 id 一致。 */
 function assertIdentityInvariants(content: ProjectContent): void {
   const domains: Array<[string, string[]]> = [
@@ -425,8 +429,8 @@ function assertIdentityInvariants(content: ProjectContent): void {
   ]
   for (const [label, ids] of domains) {
     expect(
-      ids.every((id) => id !== ''),
-      `${label} id 非空`,
+      ids.every((id) => id.trim().length > 0),
+      `${label} id 非空白`,
     ).toBe(true)
     expect(new Set(ids).size, `${label} id 唯一`).toBe(ids.length)
   }
@@ -439,24 +443,24 @@ function assertIdentityInvariants(content: ProjectContent): void {
     if (n.type === 'dialogue') {
       const ids = n.data.lines.map((line) => line.id)
       expect(
-        ids.every((id) => id !== ''),
-        '对白行 id 非空',
+        ids.every((id) => id.trim().length > 0),
+        '对白行 id 非空白',
       ).toBe(true)
       expect(new Set(ids).size, '对白行 id 唯一').toBe(ids.length)
     }
     if (n.type === 'branch') {
       const ids = n.data.options.map((o) => o.id)
       expect(
-        ids.every((id) => id !== ''),
-        '分支选项 id 非空',
+        ids.every((id) => id.trim().length > 0),
+        '分支选项 id 非空白',
       ).toBe(true)
       expect(new Set(ids).size, '分支选项 id 唯一').toBe(ids.length)
     }
     if (n.type === 'shot') {
       const ids = n.data.refs.map((r) => r.id)
       expect(
-        ids.every((id) => id !== ''),
-        '分镜引用位 id 非空',
+        ids.every((id) => id.trim().length > 0),
+        '分镜引用位 id 非空白',
       ).toBe(true)
       expect(new Set(ids).size, '分镜引用位 id 唯一').toBe(ids.length)
     }
@@ -1021,6 +1025,44 @@ describe('归一化不变量的生成式验证（issue #232）：有效内容保
     ).toBe(true)
   }
 
+  /** 保全断言 · 嵌套身份面（评审第十轮）：对白行/分支选项/分镜引用位的
+   * 合法 id 按所属节点逐组有序比对——只比文本/标签会放行「同载荷换 id」
+   * 与同组 id 互换，而这些嵌套 id 驱动列表 reconcile 与 branch 句柄引用。 */
+  function assertNestedIdsPreserved(
+    payload: ArbValue<typeof cleanPayloadArb>,
+    out: ProjectContent,
+  ): void {
+    const actual: Array<[string, string[]]> = []
+    for (const n of out.nodes) {
+      if (n.type === 'dialogue')
+        actual.push([n.id, n.data.lines.map((l) => l.id)])
+      else if (n.type === 'branch')
+        actual.push([n.id, n.data.options.map((o) => o.id)])
+      else if (n.type === 'shot')
+        actual.push([n.id, n.data.refs.map((r) => r.id)])
+    }
+    const expected: Array<[string, string[]]> = [
+      ...payload.dialogueTexts.map((_, i): [string, string[]] => [
+        `d${i}`,
+        [`l${i}`],
+      ]),
+      ...payload.branchOptionLabels.flatMap(
+        (labels, i): Array<[string, string[]]> =>
+          labels.length > 0
+            ? [[`b${i}`, labels.map((_, j) => `opt${i}-${j}`)]]
+            : [],
+      ),
+      ...payload.shotPictures.map((_, i): [string, string[]] => [
+        `sh${i}`,
+        [`r${i}`],
+      ]),
+    ]
+    expect(
+      Object.fromEntries(actual),
+      '嵌套身份（对白行/分支选项/分镜引用位 id）逐节点保全',
+    ).toEqual(Object.fromEntries(expected))
+  }
+
   /** 保全断言 · 设定与资产面：四桶身份+名称/标题、资产全记录、集标题。 */
   function assertSettingsPreserved(
     payload: ArbValue<typeof cleanPayloadArb>,
@@ -1107,6 +1149,7 @@ describe('归一化不变量的生成式验证（issue #232）：有效内容保
         const round1 = parseProject(serializeProject(content, PROJECT_ID, NOW))
         assertNodesPreserved(payload, round1.content)
         assertReferencesPreserved(round1.content)
+        assertNestedIdsPreserved(payload, round1.content)
         assertSettingsPreserved(payload, round1.content, expectedTitles)
         // 预期键 `${id}:${source}→${target}:${handle}`，按元组去重首见胜
         // xyflow Edge 的 sourceHandle 显式含 undefined（库形状，issue #231）
