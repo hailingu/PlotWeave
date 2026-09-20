@@ -390,12 +390,8 @@ const v0BranchEdgeArb = fc.record({
 const v0EnvelopeArb = fc.record({
   branch: v0BranchSpecArb,
   scenes: fc.array(v0SceneArb, { maxLength: 4 }),
-  edges: fc.array(
-    fc.record({
-      id: idArb('e'),
-      source: idArb('n'),
-      target: idArb('n'),
-    }),
+  flowEdgeSpecs: fc.array(
+    fc.record({ sourceIdx: fc.nat(4), targetIdx: fc.nat(4) }),
     { maxLength: 4 },
   ),
   branchEdges: fc.array(v0BranchEdgeArb, { maxLength: 3 }),
@@ -666,6 +662,7 @@ describe('归一化不变量的生成式验证（issue #232）：有效内容保
     assetRelPaths: fc.array(nonEmptyText, { minLength: 1, maxLength: 3 }),
     characterNames: fc.array(nonEmptyText, { maxLength: 3 }),
     locationNames: fc.array(nonEmptyText, { maxLength: 3 }),
+    propNames: fc.array(nonEmptyText, { maxLength: 3 }),
     documentTitles: fc.array(nonEmptyText, { maxLength: 3 }),
     titles: fc.array(
       fc.record({
@@ -797,7 +794,10 @@ describe('归一化不变量的生成式验证（issue #232）：有效内容保
             id: `loc${i}`,
             name,
           })),
-          props: [],
+          props: payload.propNames.map((name, i) => ({
+            id: `prop${i}`,
+            name,
+          })),
           documents: payload.documentTitles.map((title, i) => ({
             id: `doc${i}`,
             title,
@@ -864,6 +864,10 @@ describe('归一化不变量的生成式验证（issue #232）：有效内容保
       out.settings.locations.map((l) => l.name).sort(),
       '地点名保全',
     ).toEqual([...payload.locationNames].sort())
+    expect(
+      (out.settings.props ?? []).map((e) => e.name).sort(),
+      '道具名保全',
+    ).toEqual([...payload.propNames].sort())
     expect(
       (out.settings.documents ?? []).map((d) => d.title).sort(),
       '设定文档标题保全',
@@ -947,6 +951,23 @@ describe('归一化不变量的生成式验证（issue #232）：v0 迁移与拒
             sourceHandle: `option-${e.optionIdx}`,
           })
         })
+        // 普通剧情流边按下标引用真实节点（评审第六轮：n* 池端点与组装后
+        // 节点恒不相遇、全部被端点守卫隔离，保全路径空转）；前向序 + 源
+        // 非 branch（sequence 端点约束），碰撞出的非法形态不生成
+        const flowEdges: Array<Record<string, unknown>> = []
+        v0.flowEdgeSpecs.forEach((spec) => {
+          const src = docNodes[spec.sourceIdx] as
+            { id?: unknown; type?: unknown } | undefined
+          const dst = docNodes[spec.targetIdx] as { id?: unknown } | undefined
+          if (src === undefined || dst === undefined) return
+          if (spec.sourceIdx >= spec.targetIdx) return
+          if (src.id === dst.id || src.type === 'branch') return
+          flowEdges.push({
+            id: `fe${flowEdges.length}`,
+            source: src.id,
+            target: dst.id,
+          })
+        })
         const doc = {
           schemaVersion: 0,
           project: {
@@ -957,7 +978,7 @@ describe('归一化不变量的生成式验证（issue #232）：v0 迁移与拒
           },
           graph: {
             nodes: docNodes,
-            edges: [...v0.edges, ...branchEdges],
+            edges: [...flowEdges, ...branchEdges],
           },
           settings: { characters: v0.characters, locations: [] },
           episodeTitles: {},
@@ -969,6 +990,21 @@ describe('归一化不变量的生成式验证（issue #232）：v0 迁移与拒
         // 下标句柄的迁移后置条件（评审第五轮）：在界 option-N 精确改写为
         // 第 N 个选项的 id（选项 id 确定性唯一 optN，无重发改写）；越界
         // 句柄按孤儿边隔离——幸存集合与句柄值都对准迁移意图
+        // 普通剧情流边保全（评审第六轮）：合法前向序边全部幸存，端点
+        // 元组按逻辑重复键去重后比对
+        const expectedFlowTuples = [
+          ...new Set(flowEdges.map((e) => `${e.source}→${e.target}`)),
+        ].sort()
+        const outFlowTuples = [
+          ...new Set(
+            migrated.content.edges
+              .filter((e) => edgeKindOf(e) === 'sequence')
+              .map((e) => `${e.source}→${e.target}`),
+          ),
+        ].sort()
+        expect(outFlowTuples, '合法 v0 剧情流边全部存活').toEqual(
+          expectedFlowTuples,
+        )
         // 预期按端点元组（target + 改写后句柄）去重：同元组的重复边按逻辑
         // 重复隔离属合法修复；在界句柄精确改写为 option-opt<N>
         const optionCount = v0.branch.optionLabels.length
