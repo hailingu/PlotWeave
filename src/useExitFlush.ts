@@ -46,55 +46,76 @@ export function useExitFlush(): string | null {
     let disposed = false
     const unlistens: Array<() => void> = []
     void (async () => {
-      const [{ getCurrentWindow }, { listen }, { invoke }] = await Promise.all([
-        import('@tauri-apps/api/window'),
-        import('@tauri-apps/api/event'),
-        import('@tauri-apps/api/core'),
-      ])
-      if (disposed) return
-      const appWindow = getCurrentWindow()
-      /** 排空到固定点后执行 onClean；仍有阻断项则不执行并显示诊断。三源
-       * 全部成功才重查——冲刷期间的新编辑/新保存进下一轮，静止才放行。 */
-      const drainAndThen = async (
-        onClean: () => Promise<void>,
-      ): Promise<void> => {
-        for (;;) {
-          // 画布先冲刷：最新编辑先行入链，其失败登记由项目冲刷接管并计失败
-          await flushPendingCanvasSaves()
-          const failedProjects = await flushPendingProjectSaves()
-          const failedSessions = await flushPendingAiSessionSaves()
-          if (failedProjects.length > 0 || failedSessions.length > 0) {
-            setBlocked(
-              blockedMessage(failedProjects.length, failedSessions.length),
-            )
-            return
+      // 初始化失败的可见诊断（issue #159）：动态模块加载、监听注册或
+      // acknowledge_quit_listener 失败不再成为未处理拒绝；部分完成的
+      // 屏障保留至组件卸载（PR #225 评审——回收已就绪的 close 屏障会让
+      // 用户按指引点关闭时绕过冲刷直关窗口），缓冲的退出请求不静默丢弃
+      //（诊断明示用户重试或重启）。
+      try {
+        const [{ getCurrentWindow }, { listen }, { invoke }] =
+          await Promise.all([
+            import('@tauri-apps/api/window'),
+            import('@tauri-apps/api/event'),
+            import('@tauri-apps/api/core'),
+          ])
+        if (disposed) return
+        const appWindow = getCurrentWindow()
+        /** 排空到固定点后执行 onClean；仍有阻断项则不执行并显示诊断。三源
+         * 全部成功才重查——冲刷期间的新编辑/新保存进下一轮，静止才放行。 */
+        const drainAndThen = async (
+          onClean: () => Promise<void>,
+        ): Promise<void> => {
+          for (;;) {
+            // 画布先冲刷：最新编辑先行入链，其失败登记由项目冲刷接管并计失败
+            await flushPendingCanvasSaves()
+            const failedProjects = await flushPendingProjectSaves()
+            const failedSessions = await flushPendingAiSessionSaves()
+            if (failedProjects.length > 0 || failedSessions.length > 0) {
+              setBlocked(
+                blockedMessage(failedProjects.length, failedSessions.length),
+              )
+              return
+            }
+            if (!hasPendingSaves()) break
           }
-          if (!hasPendingSaves()) break
+          setBlocked(null)
+          await onClean()
         }
-        setBlocked(null)
-        await onClean()
-      }
-      const [unlistenClose, unlistenQuit] = await Promise.all([
-        appWindow.onCloseRequested(async (event) => {
-          if (!hasPendingSaves()) return
-          event.preventDefault()
-          await drainAndThen(() => appWindow.destroy())
-        }),
+        // 监听注册逐项即登记（issue #159）：Promise.all 一项失败时，已成功
+        // 的监听函数若未登记则无从回收——先登记入数组再汇总，保证 catch 的
+        // 回收覆盖所有部分完成项
+        const unlistenClose = await appWindow.onCloseRequested(
+          async (event) => {
+            if (!hasPendingSaves()) return
+            event.preventDefault()
+            await drainAndThen(() => appWindow.destroy())
+          },
+        )
+        unlistens.push(unlistenClose)
         // ⌘Q（Rust 侧菜单接管，lib.rs install_quit_barrier_menu）：同一道
         // 冲刷屏障；无待保存直接受控退出
-        listen('app-quit-requested', async () => {
+        const unlistenQuit = await listen('app-quit-requested', async () => {
           if (!hasPendingSaves()) {
             await invoke('app_exit')
             return
           }
           await drainAndThen(() => invoke('app_exit'))
-        }),
-      ])
-      unlistens.push(unlistenClose, unlistenQuit)
-      // 监听注册完成后确认就绪（issue #65）：后端消费启动间隙（原生屏障
-      // 已装、本监听未注册）缓冲的退出请求并重放 app-quit-requested——
-      // 确认必须晚于注册，保证重放必有接收者且走同一冲刷屏障
-      await invoke('acknowledge_quit_listener')
+        })
+        unlistens.push(unlistenQuit)
+        // 监听注册完成后确认就绪（issue #65）：后端消费启动间隙（原生屏障
+        // 已装、本监听未注册）缓冲的退出请求并重放 app-quit-requested——
+        // 确认必须晚于注册，保证重放必有接收者且走同一冲刷屏障
+        await invoke('acknowledge_quit_listener')
+      } catch (err) {
+        // 失败仅诊断，不回收已就绪的监听（PR #225 评审）：close/quit 屏障
+        // 各自独立可用——回收已注册的 close 屏障会让用户按指引点关闭按钮
+        // 时绕过冲刷直关窗口、丢失未落盘编辑。屏障留至组件卸载，由 effect
+        // cleanup 统一回收（卸载语义不变）；模块加载失败时 unlistens 为空，
+        // 无资源遗留。
+        setBlocked(
+          `退出冲刷初始化失败：${String(err)}。已缓冲的退出请求未丢弃，请重试退出或重启应用`,
+        )
+      }
     })()
     return () => {
       disposed = true
