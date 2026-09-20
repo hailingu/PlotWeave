@@ -47,8 +47,11 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-      # rust-toolchain.toml 固定 1.95.0（含 rustfmt/clippy/llvm-tools 组件）
-      - uses: dtolnay/rust-toolchain@master
+      # rustup 按 rust-toolchain.toml 自动解析并安装钉版工具链（1.95.0 +
+      # rustfmt/clippy/llvm-tools 组件）——单一事实源在 rust-toolchain.toml，
+      # 不在此重复（macos-15 runner 预装 rustup）
+      - name: 安装钉版 Rust 工具链（rust-toolchain.toml）
+        run: rustup show
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
