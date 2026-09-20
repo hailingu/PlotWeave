@@ -265,6 +265,7 @@ const dirtFlagsArb = fc.record({
   nullGraph: fc.boolean(),
   pushNullMembers: fc.boolean(),
   blankCharacterKey: fc.boolean(),
+  collideBucketIds: fc.boolean(),
   badUpdatedAt: fc.boolean(),
   graphExt: fc.option(extensionValue, { nil: undefined }),
   settingsExt: fc.option(extensionValue, { nil: undefined }),
@@ -311,7 +312,7 @@ function v1Envelope(
     settings: Record<string, unknown> & {
       characters: Record<string, unknown>
     }
-    assets: Record<string, unknown>
+    assets: Record<string, unknown> & { byId: Record<string, unknown> }
     project: Record<string, unknown>
   }
   if (dirt.nullGraph) {
@@ -329,6 +330,23 @@ function v1Envelope(
       doc.settings.characters[''] = structuredClone(
         doc.settings.characters[first],
       )
+    }
+  }
+  if (dirt.collideBucketIds) {
+    // 评审修复（第二轮）：serializeProject 的 toDocSettings/keyedBy 会把
+    // 生成数组里的重复 id 折叠成单键 Record——「异键 + 值内 id 冲突」的脏
+    // 状态到不了归一化边界。此处注入直达：新记录键持有首条目的克隆
+    // （值内 id 与原条目相同），行使键 id 一致性改写与冲突修复路径
+    const firstChar = Object.keys(doc.settings.characters)[0]
+    if (firstChar !== undefined) {
+      doc.settings.characters['dup-key'] = structuredClone(
+        doc.settings.characters[firstChar],
+      )
+    }
+    const byId = doc.assets.byId as Record<string, unknown>
+    const firstAsset = Object.keys(byId)[0]
+    if (firstAsset !== undefined) {
+      byId['dup-key'] = structuredClone(byId[firstAsset])
     }
   }
   if (dirt.badUpdatedAt) doc.project.updatedAt = 'not-a-time'
@@ -381,31 +399,19 @@ const v0EnvelopeArb = fc.record({
 })
 
 /** 输出不变量（issue #232：身份唯一 + 活动边满足图规则 + 集标题契约）。 */
-function assertOutputInvariants(content: ProjectContent): void {
-  const nodeIds = content.nodes.map((n) => n.id)
-  expect(
-    nodeIds.every((id) => id !== ''),
-    '节点 id 非空',
-  ).toBe(true)
-  expect(new Set(nodeIds).size, '节点 id 唯一').toBe(nodeIds.length)
-  const edgeIds = content.edges.map((e) => e.id)
-  expect(
-    edgeIds.every((id) => id !== ''),
-    '边 id 非空',
-  ).toBe(true)
-  expect(new Set(edgeIds).size, '边 id 唯一').toBe(edgeIds.length)
-  const liveIds = new Set(nodeIds)
-  const nodesById = new Map(content.nodes.map((n) => [n.id, n]))
-  // 生成器覆盖的全部身份域（评审修复：漏检桶的回归会被恒真断言放行）：
-  // 非空且唯一——props/documents 桶、资产索引、分镜引用位同查
-  const identityDomains: Array<[string, string[]]> = [
+/** 身份唯一不变量（issue #232）：全部生成身份域非空且唯一 + 资产索引
+ * 键与值内 id 一致。 */
+function assertIdentityInvariants(content: ProjectContent): void {
+  const domains: Array<[string, string[]]> = [
+    ['节点', content.nodes.map((n) => n.id)],
+    ['边', content.edges.map((e) => e.id)],
     ['角色', content.settings.characters.map((e) => e.id)],
     ['地点', content.settings.locations.map((e) => e.id)],
     ['道具', (content.settings.props ?? []).map((e) => e.id)],
     ['设定文档', (content.settings.documents ?? []).map((e) => e.id)],
     ['资产索引', Object.values(content.assets?.byId ?? {}).map((a) => a.id)],
   ]
-  for (const [label, ids] of identityDomains) {
+  for (const [label, ids] of domains) {
     expect(
       ids.every((id) => id !== ''),
       `${label} id 非空`,
@@ -414,13 +420,44 @@ function assertOutputInvariants(content: ProjectContent): void {
   }
   // 资产记录键与值内 id 一致（记录键为权威 id 的键 id 一致性改写后置条件）
   const assetKeys = Object.keys(content.assets?.byId ?? {})
-  const assetValueIds = Object.values(content.assets?.byId ?? {}).map(
-    (a) => a.id,
-  )
+  const assetIds = Object.values(content.assets?.byId ?? {}).map((a) => a.id)
   expect(
-    new Set([...assetKeys, ...assetValueIds]).size,
+    new Set([...assetKeys, ...assetIds]).size,
     '资产索引键与值内 id 一致',
   ).toBe(assetKeys.length)
+  for (const n of content.nodes) {
+    if (n.type === 'dialogue') {
+      const ids = n.data.lines.map((line) => line.id)
+      expect(
+        ids.every((id) => id !== ''),
+        '对白行 id 非空',
+      ).toBe(true)
+      expect(new Set(ids).size, '对白行 id 唯一').toBe(ids.length)
+    }
+    if (n.type === 'branch') {
+      const ids = n.data.options.map((o) => o.id)
+      expect(
+        ids.every((id) => id !== ''),
+        '分支选项 id 非空',
+      ).toBe(true)
+      expect(new Set(ids).size, '分支选项 id 唯一').toBe(ids.length)
+    }
+    if (n.type === 'shot') {
+      const ids = n.data.refs.map((r) => r.id)
+      expect(
+        ids.every((id) => id !== ''),
+        '分镜引用位 id 非空',
+      ).toBe(true)
+      expect(new Set(ids).size, '分镜引用位 id 唯一').toBe(ids.length)
+    }
+  }
+}
+
+/** 逐边图规则（§4.4/§5，判定复用运行态 edgeKindOf——孤儿边隔离的后置
+ * 条件）：端点存在、非自环、attach/branch/sequence 形态与句柄契约。 */
+function assertPerEdgeRules(content: ProjectContent): void {
+  const liveIds = new Set(content.nodes.map((n) => n.id))
+  const nodesById = new Map(content.nodes.map((n) => [n.id, n]))
   for (const e of content.edges) {
     expect(liveIds.has(e.source), `活动边 ${e.id} 的 source 指向存在节点`).toBe(
       true,
@@ -428,11 +465,10 @@ function assertOutputInvariants(content: ProjectContent): void {
     expect(liveIds.has(e.target), `活动边 ${e.id} 的 target 指向存在节点`).toBe(
       true,
     )
-    // 图规则（§4.4/§5，判定复用运行态 edgeKindOf——孤儿边隔离的后置条件）
+    expect(e.source, `边 ${e.id} 非自环`).not.toBe(e.target)
     const src = nodesById.get(e.source)
     const dst = nodesById.get(e.target)
     const kind = edgeKindOf(e)
-    expect(e.source, `边 ${e.id} 非自环`).not.toBe(e.target)
     if (kind === 'attach') {
       expect(e.sourceHandle, `attach 边 ${e.id} 句柄为 shots 端口`).toBe(
         SCENE_SHOT_HANDLE,
@@ -463,33 +499,11 @@ function assertOutputInvariants(content: ProjectContent): void {
       ).not.toBe('branch')
     }
   }
-  for (const n of content.nodes) {
-    if (n.type === 'dialogue') {
-      const lineIds = n.data.lines.map((line) => line.id)
-      expect(
-        lineIds.every((id) => id !== ''),
-        '对白行 id 非空',
-      ).toBe(true)
-      expect(new Set(lineIds).size, '对白行 id 唯一').toBe(lineIds.length)
-    }
-    if (n.type === 'branch') {
-      const optionIds = n.data.options.map((o) => o.id)
-      expect(
-        optionIds.every((id) => id !== ''),
-        '分支选项 id 非空',
-      ).toBe(true)
-      expect(new Set(optionIds).size, '分支选项 id 唯一').toBe(optionIds.length)
-    }
-    if (n.type === 'shot') {
-      const refIds = n.data.refs.map((r) => r.id)
-      expect(
-        refIds.every((id) => id !== ''),
-        '分镜引用位 id 非空',
-      ).toBe(true)
-      expect(new Set(refIds).size, '分镜引用位 id 唯一').toBe(refIds.length)
-    }
-  }
-  // 逻辑重复边隔离后置条件（§11.3）：同 source/target/sourceHandle 唯一
+}
+
+/** 全图边规则（§11.1 第 3 步/§11.3 隔离的后置条件）：逻辑重复元组唯一、
+ * attach 宿主唯一、剧情流有向无环（attach 垂直从属不参与环检测）。 */
+function assertGraphLevelRules(content: ProjectContent): void {
   const endpointKeys = content.edges.map((e) =>
     JSON.stringify([e.source, e.target, e.sourceHandle ?? '']),
   )
@@ -497,12 +511,10 @@ function assertOutputInvariants(content: ProjectContent): void {
     new Set(endpointKeys).size,
     '活动边端点/句柄元组唯一（无逻辑重复）',
   ).toBe(endpointKeys.length)
-  // attach 宿主唯一后置条件（§5）：同一 shot 至多一条入向 attach
   const attachHosts = content.edges
     .filter((e) => edgeKindOf(e) === 'attach')
     .map((e) => e.target)
   expect(new Set(attachHosts).size, 'attach 宿主唯一').toBe(attachHosts.length)
-  // 剧情流无环后置条件（§11.1 第 3 步：自环/成环边隔离；attach 不参与）
   const flowAdj = new Map<string, string[]>()
   for (const e of content.edges) {
     if (edgeKindOf(e) === 'attach') continue
@@ -510,23 +522,27 @@ function assertOutputInvariants(content: ProjectContent): void {
     if (list) list.push(e.target)
     else flowAdj.set(e.source, [e.target])
   }
-  const flowSeen = new Set<string>()
-  const onPathNodes = new Set<string>()
-  const flowHasCycle = (node: string): boolean => {
-    if (onPathNodes.has(node)) return true
-    if (flowSeen.has(node)) return false
-    flowSeen.add(node)
-    onPathNodes.add(node)
+  const visited = new Set<string>()
+  const onPath = new Set<string>()
+  const hasCycle = (node: string): boolean => {
+    if (onPath.has(node)) return true
+    if (visited.has(node)) return false
+    visited.add(node)
+    onPath.add(node)
     for (const next of flowAdj.get(node) ?? []) {
-      if (flowHasCycle(next)) return true
+      if (hasCycle(next)) return true
     }
-    onPathNodes.delete(node)
+    onPath.delete(node)
     return false
   }
   expect(
-    [...flowAdj.keys()].every((start) => !flowHasCycle(start)),
+    [...flowAdj.keys()].every((start) => !hasCycle(start)),
     '剧情流边构成有向无环图',
   ).toBe(true)
+}
+
+/** 集标题契约（§4.1）：键为正整数、值为非空标题。 */
+function assertEpisodeTitles(content: ProjectContent): void {
   for (const [key, title] of Object.entries(content.episodeTitles ?? {})) {
     const episode = Number(key)
     expect(
@@ -535,6 +551,14 @@ function assertOutputInvariants(content: ProjectContent): void {
     ).toBe(true)
     expect(title, `集 ${key} 标题非空`).not.toBe('')
   }
+}
+
+/** 输出不变量总装（issue #232）：身份唯一、活动边满足图规则、集标题契约。 */
+function assertOutputInvariants(content: ProjectContent): void {
+  assertIdentityInvariants(content)
+  assertPerEdgeRules(content)
+  assertGraphLevelRules(content)
+  assertEpisodeTitles(content)
 }
 
 describe('归一化不变量的生成式验证（issue #232）：v1 已支持信封', () => {
