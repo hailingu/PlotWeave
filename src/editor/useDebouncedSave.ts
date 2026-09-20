@@ -220,13 +220,14 @@ function useExitFlushAction(
 /** 提交内容是否已被持久化覆盖（PR #174 评审）：链上重存成功登记的水位
  * 与本次提交的水位一致且未卸载——冗余重复保存失败据此静默处理。 */
 function isCoveredByPersistedWatermark(
-  gates: ReturnType<typeof useSaveGateRefs>,
+  unmountedRef: { current: boolean },
+  persistedSeqRef: { current: number | null },
   submittedSeq: number,
 ): boolean {
   return (
-    !gates.unmountedRef.current &&
-    gates.persistedSeqRef.current !== null &&
-    submittedSeq === gates.persistedSeqRef.current
+    !unmountedRef.current &&
+    persistedSeqRef.current !== null &&
+    submittedSeq === persistedSeqRef.current
   )
 }
 
@@ -250,6 +251,11 @@ function useFlushSave(
     editSeqRef,
     failedEditSeqRef,
   } = gates
+  // 解构为普通局部变量以满足 exhaustive-deps（issue #227）：gates 对象
+  // 每渲染换引用（useSaveGateRefs 返回新对象），成员本身是稳定 ref——
+  // 依赖列成员表达式会把 gates 误判为缺失依赖，而直接列 gates 会让
+  // 回调每渲染重建（值不变、语义不变但浪费）。解构语义已核实不变。
+  const { inFlightPromiseRef, persistedSeqRef } = gates
   const flushSave = useCallback(async () => {
     if (inFlightRef.current) return // 在途：本轮跳过，新脏数据由在途循环接力
     await startTrackedSaveRun(
@@ -268,7 +274,14 @@ function useFlushSave(
             // 链上重存已确认同一提交水位的内容落盘（PR #174 评审）：排队
             // 中的冗余重复保存失败属于无数据风险的重写失败——静默返回，
             // 不重新置脏/上浮/再排程，避免对已落盘文档的循环重试
-            if (isCoveredByPersistedWatermark(gates, submittedSeq)) return
+            if (
+              isCoveredByPersistedWatermark(
+                unmountedRef,
+                persistedSeqRef,
+                submittedSeq,
+              )
+            )
+              return
             onSaveResult?.(err)
             if (!unmountedRef.current) {
               // 失败不丢数据：重新置脏，按防抖节律自动重试（不紧循环）；
@@ -295,7 +308,7 @@ function useFlushSave(
           if (unmountedRef.current && !dirtyRef.current) return
         }
       })(),
-      gates.inFlightPromiseRef,
+      inFlightPromiseRef,
     )
   }, [
     onSave,
@@ -306,11 +319,11 @@ function useFlushSave(
     saveTimer,
     unmountedRef,
     inFlightRef,
-    gates.inFlightPromiseRef,
+    inFlightPromiseRef,
     lastFailedDocRef,
     editSeqRef,
     failedEditSeqRef,
-    gates.persistedSeqRef,
+    persistedSeqRef,
   ])
   return flushSave
 }

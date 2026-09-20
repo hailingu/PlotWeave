@@ -81,6 +81,11 @@ mkdir "$lock_directory" 2>/dev/null ||
 trap release_lock 0 1 2 15
 
 printf '%s\n' '[SonarQube] 生成最新前端覆盖率……'
+# 静态检查先行（issue #227）：格式 + lint 零警告——fail-fast 在覆盖率与
+# 扫描之前；与手动检查同一入口（scripts/check-static.sh），不分叉
+printf '%s\n' '[SonarQube] 静态检查（格式 + lint 零警告）……'
+"$script_directory/check-static.sh"
+
 "$npm_bin" run test:coverage
 
 [ -s "$coverage_report_path" ] ||

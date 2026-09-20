@@ -16,6 +16,8 @@ const temporaryDirectories: string[] = []
 
 type GateOptions = {
   coverageMode?: 'empty' | 'malformed' | 'missing' | 'uncovered' | 'valid'
+  formatExit?: number
+  lintExit?: number
   lockOccupied?: boolean
   npmExit?: number
   plotweaveSonarToken?: string
@@ -65,8 +67,19 @@ function writeCommandStubs(paths: GateStubPaths, options: GateOptions): void {
   writeExecutable(
     paths.npmPath,
     String.raw`printf 'npm %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
+# 静态检查子命令（issue #227）：格式/lint 可独立注入失败；覆盖率只在
+# test:coverage 生成（避免格式调用顺带写出报告，掩盖失败路径）
+if [ "$*" = "run format:check" ]; then
+  exit "$PLOTWEAVE_TEST_FORMAT_EXIT"
+fi
+if [ "$*" = "run lint -- --max-warnings=0" ]; then
+  exit "$PLOTWEAVE_TEST_LINT_EXIT"
+fi
 if [ "$PLOTWEAVE_TEST_NPM_EXIT" -ne 0 ]; then
   exit "$PLOTWEAVE_TEST_NPM_EXIT"
+fi
+if [ "$*" != "run test:coverage" ]; then
+  exit 0
 fi
 case "$PLOTWEAVE_TEST_COVERAGE_MODE" in
   valid)
@@ -164,6 +177,8 @@ function gateEnvironment(
     PLOTWEAVE_TEST_CURL_STDIN: paths.curlStdinPath,
     PLOTWEAVE_TEST_SCANNER_TOKEN: paths.scannerTokenPath,
     PLOTWEAVE_TEST_COVERAGE_MODE: options.coverageMode ?? 'valid',
+    PLOTWEAVE_TEST_FORMAT_EXIT: String(options.formatExit ?? 0),
+    PLOTWEAVE_TEST_LINT_EXIT: String(options.lintExit ?? 0),
     PLOTWEAVE_TEST_RUST_COVERAGE_MODE: options.rustCoverageMode ?? 'valid',
     PLOTWEAVE_TEST_NPM_EXIT: String(options.npmExit ?? 0),
     PLOTWEAVE_TEST_QUALITY_GATE_STATUS: options.qualityGateStatus ?? 'OK',
@@ -247,7 +262,17 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
         .split('\n')
         .filter(Boolean)
         .map((line) => line.split(' ')[0]),
-    ).toEqual(['npm', 'cargo-llvm-cov', 'sonar-scanner', 'curl', 'curl'])
+    ).toEqual([
+      'npm',
+      'npm',
+      'npm',
+      'cargo-llvm-cov',
+      'sonar-scanner',
+      'curl',
+      'curl',
+    ])
+    expect(result.log).toContain('npm run format:check')
+    expect(result.log).toContain('npm run lint -- --max-warnings=0')
     expect(result.log).toContain('npm run test:coverage')
     expect(result.log).toContain(
       'cargo-llvm-cov llvm-cov --lib --test media_format_leaf --lcov',
@@ -264,13 +289,39 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
   })
 
   it('Rust 覆盖率生成缺失或没有任何已覆盖行时停止，不启动扫描（issue #169）', () => {
-    for (const rustCoverageMode of ['missing', 'empty', 'malformed', 'uncovered'] as const) {
-      const result = runGate('scripts/sonar-quality-gate.sh', { rustCoverageMode })
+    for (const rustCoverageMode of [
+      'missing',
+      'empty',
+      'malformed',
+      'uncovered',
+    ] as const) {
+      const result = runGate('scripts/sonar-quality-gate.sh', {
+        rustCoverageMode,
+      })
 
       expect(result.status, `模式 ${rustCoverageMode}`).not.toBe(0)
       expect(result.log, `模式 ${rustCoverageMode}`).toContain('cargo-llvm-cov')
-      expect(result.log, `模式 ${rustCoverageMode}`).not.toContain('sonar-scanner')
+      expect(result.log, `模式 ${rustCoverageMode}`).not.toContain(
+        'sonar-scanner',
+      )
     }
+  })
+
+  it('格式检查失败时阻止操作，不生成覆盖率也不扫描（issue #227）', () => {
+    const result = runGate('scripts/sonar-quality-gate.sh', { formatExit: 1 })
+
+    expect(result.status).not.toBe(0)
+    expect(result.log).toContain('npm run format:check')
+    expect(result.log).not.toContain('test:coverage')
+    expect(result.log).not.toContain('sonar-scanner')
+  })
+
+  it('lint 零警告失败时阻止操作，不进入扫描（issue #227）', () => {
+    const result = runGate('scripts/sonar-quality-gate.sh', { lintExit: 1 })
+
+    expect(result.status).not.toBe(0)
+    expect(result.log).toContain('npm run lint -- --max-warnings=0')
+    expect(result.log).not.toContain('sonar-scanner')
   })
 
   it('未显式配置 SonarQube 地址时阻止操作，避免误扫 SonarQube Cloud', () => {

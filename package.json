@@ -17,7 +17,8 @@
     "tauri": "tauri",
     "test:coverage": "vitest run --coverage",
     "hooks:install": "git config core.hooksPath .githooks",
-    "sonar:gate": "sh scripts/sonar-quality-gate.sh"
+    "sonar:gate": "sh scripts/sonar-quality-gate.sh",
+    "check:static": "sh scripts/check-static.sh"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

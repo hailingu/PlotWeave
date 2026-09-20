@@ -83,10 +83,11 @@ npm run tauri dev  # 启动 Tauri 开发调试（Vite 前端 + Rust 壳）
 
 仓库使用同一套 `pre-commit` 和 `pre-push` 门禁。启用 hooks 后，每次提交和推送都会依次：
 
-1. 运行 `npm run test:coverage`，生成最新的 `coverage/lcov.info`，并确认报告非空、包含源文件和实际命中行。
-2. 运行 `scripts/rust-coverage.sh`（cargo-llvm-cov），生成最新的 `src-tauri/target/coverage/lcov-rust.info`（Rust 语句覆盖率），并确认报告非空、包含源文件和实际命中行。
-3. 运行 `sonar-scanner` 并等待 SonarQube Quality Gate 完成。
-4. 确认 Quality Gate 为 `OK`，且**新增代码**的未解决问题为 `0`（增量清零：按 SonarQube New Code 周期过滤，即 `sinceLeakPeriod`；存量历史问题另行治理，不阻塞提交）。
+1. 运行 `scripts/check-static.sh`（`npm run check:static`）：Prettier 格式检查 + ESLint 零警告（`--max-warnings=0`），失败即阻止（fail-fast 在覆盖率与扫描之前）。
+2. 运行 `npm run test:coverage`，生成最新的 `coverage/lcov.info`，并确认报告非空、包含源文件和实际命中行。
+3. 运行 `scripts/rust-coverage.sh`（cargo-llvm-cov），生成最新的 `src-tauri/target/coverage/lcov-rust.info`（Rust 语句覆盖率），并确认报告非空、包含源文件和实际命中行。
+4. 运行 `sonar-scanner` 并等待 SonarQube Quality Gate 完成。
+5. 确认 Quality Gate 为 `OK`，且**新增代码**的未解决问题为 `0`（增量清零：按 SonarQube New Code 周期过滤，即 `sinceLeakPeriod`；存量历史问题另行治理，不阻塞提交）。
 
 本机需安装 `sonar-scanner` 与 `cargo-llvm-cov`（`cargo install cargo-llvm-cov`；`llvm-tools` 组件由 rust-toolchain.toml 自动提供），并在执行 Git 操作的终端环境中显式设置 `SONAR_HOST_URL`；这样可以避免新版扫描器在地址缺失时误连 SonarQube Cloud。服务需要认证时，通过本机环境变量 `SONAR_TOKEN` 提供令牌；未设置 `SONAR_TOKEN` 时回退读取 `PLOTWEAVE_SONAR_TOKEN`（可导出在 `~/.zshrc` 中，Git 钩子继承调用方终端的环境）。地址按本机环境配置，令牌禁止写入仓库。也可以用 `npm run sonar:gate` 手动执行完整门禁。
 
