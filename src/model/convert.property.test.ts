@@ -26,6 +26,16 @@ beforeAll(() => {
   })
 })
 
+/** 受限字母表保全值（非空、无空白、非标点）：空名/空白名/空文件名是
+ * 归一化修复的合法目标，不在「原样存活」预期内（保全预言机与 v0 迁移
+ * 存活断言共用）。 */
+const preservedText = fc
+  .array(fc.constantFrom('a', 'b', 'c', '1', '2', '丹'), {
+    minLength: 1,
+    maxLength: 6,
+  })
+  .map((chars) => chars.join(''))
+
 /** 小池身份（0–4）：天然产生重复/碰撞（归一化重发路径的脏输入源），
  * 尾号 9（约 1/10）映射为空白串（空键重发路径）。 */
 const idArb = (prefix: string) =>
@@ -395,7 +405,9 @@ const v0EnvelopeArb = fc.record({
     { maxLength: 4 },
   ),
   branchEdges: fc.array(v0BranchEdgeArb, { maxLength: 3 }),
-  characters: fc.array(characterArb, { maxLength: 3 }),
+  // 角色（评审第八轮）：确定性唯一身份 + 保全值，迁移存活可精确断言；
+  // 脏角色路径已由 v1 性质覆盖
+  characterNames: fc.array(preservedText, { maxLength: 3 }),
 })
 
 /** 输出不变量（issue #232：身份唯一 + 活动边满足图规则 + 集标题契约）。 */
@@ -649,38 +661,36 @@ describe('归一化不变量的生成式验证（issue #232）：有效内容保
    * 预言机）——身份确定性唯一（n0..、ch0..），下标引用保证端点/句柄落在
    * 真实节点与选项，边只从低下标指向高下标（DAG 前置）。合法记录与其
    * 内容经解析-序列化必须存活。 */
-  // 保全值用受限字母表（非空、无空白、非标点）：空名/空白名/空文件名
-  // 是归一化修复的合法目标，不在「原样存活」预期内（首跑即抓到
-  // assets/ 空文件名与 ' ' 空白文件名被词法校验隔离）
-  const nonEmptyText = fc
-    .array(fc.constantFrom('a', 'b', 'c', '1', '2', '丹'), {
-      minLength: 1,
-      maxLength: 6,
-    })
-    .map((chars) => chars.join(''))
   const cleanPayloadArb = fc.record({
-    sceneNames: fc.array(nonEmptyText, { maxLength: 4 }),
-    dialogueTexts: fc.array(nonEmptyText, { maxLength: 2 }),
-    branchOptionLabels: fc.array(fc.array(nonEmptyText, { maxLength: 3 }), {
+    sceneNames: fc.array(preservedText, { maxLength: 4 }),
+    dialogueTexts: fc.array(preservedText, { maxLength: 2 }),
+    branchOptionLabels: fc.array(fc.array(preservedText, { maxLength: 3 }), {
       maxLength: 2,
     }),
-    assetRelPaths: fc.array(nonEmptyText, { minLength: 1, maxLength: 3 }),
-    characterNames: fc.array(nonEmptyText, { maxLength: 3 }),
-    locationNames: fc.array(nonEmptyText, { maxLength: 3 }),
-    propNames: fc.array(nonEmptyText, { maxLength: 3 }),
-    documentTitles: fc.array(nonEmptyText, { maxLength: 3 }),
+    assetRelPaths: fc.array(preservedText, { minLength: 1, maxLength: 3 }),
+    characterNames: fc.array(preservedText, { maxLength: 3 }),
+    locationNames: fc.array(preservedText, { maxLength: 3 }),
+    propNames: fc.array(preservedText, { maxLength: 3 }),
+    documentTitles: fc.array(preservedText, { maxLength: 3 }),
     titles: fc.array(
       fc.record({
         episode: fc.integer({ min: 1, max: 5 }),
-        title: nonEmptyText,
+        title: preservedText,
       }),
       { maxLength: 3 },
     ),
-    flowPairs: fc.array(fc.record({ from: fc.nat(5), to: fc.nat(5) }), {
+    beatTones: fc.array(preservedText, { maxLength: 2 }),
+    shotPictures: fc.array(preservedText, { maxLength: 2 }),
+    imagePrompts: fc.array(preservedText, { maxLength: 2 }),
+    flowPairs: fc.array(fc.record({ from: fc.nat(9), to: fc.nat(9) }), {
       maxLength: 4,
     }),
     branchEdgeSpecs: fc.array(
-      fc.record({ from: fc.nat(1), to: fc.nat(5), optionIdx: fc.nat(2) }),
+      fc.record({ from: fc.nat(9), to: fc.nat(9), optionIdx: fc.nat(2) }),
+      { maxLength: 2 },
+    ),
+    attachSpecs: fc.array(
+      fc.record({ sceneIdx: fc.nat(3), shotIdx: fc.nat(1) }),
       { maxLength: 2 },
     ),
   })
@@ -723,6 +733,36 @@ describe('归一化不变量的生成式验证（issue #232）：有效内容保
         },
       })
     })
+    payload.beatTones.forEach((tone, i) =>
+      nodes.push({
+        id: `t${i}`,
+        type: 'beat',
+        position: { x: 0, y: 0 },
+        data: { name: `节拍${i}`, tone },
+      }),
+    )
+    payload.shotPictures.forEach((picture, i) =>
+      nodes.push({
+        id: `sh${i}`,
+        type: 'shot',
+        position: { x: 0, y: 0 },
+        data: {
+          shotNo: i + 1,
+          size: '中景',
+          picture,
+          prompt: `分镜${i}`,
+          refs: [],
+        },
+      }),
+    )
+    payload.imagePrompts.forEach((prompt, i) =>
+      nodes.push({
+        id: `img${i}`,
+        type: 'image',
+        position: { x: 0, y: 0 },
+        data: { prompt, model: 'm', size: 's', outputs: {} },
+      }),
+    )
     return nodes
   }
 
@@ -733,6 +773,9 @@ describe('归一化不变量的生成式验证（issue #232）：有效内容保
     payload: ArbValue<typeof cleanPayloadArb>,
     nodes: Array<Record<string, unknown>>,
   ): Array<Record<string, unknown>> {
+    // 剧情流端点白名单（§4.2/§13）：shot/image 不参与横向剧情流
+    const flowEndpoint = (t: unknown): boolean =>
+      t === 'scene' || t === 'dialogue' || t === 'beat'
     const edges: Array<Record<string, unknown>> = []
     let edgeNo = 0
     for (const pair of payload.flowPairs) {
@@ -740,7 +783,7 @@ describe('归一化不变量的生成式验证（issue #232）：有效内容保
       const dst = nodes[pair.to]
       if (src === undefined || dst === undefined || pair.from >= pair.to)
         continue
-      if (src.type !== 'scene' || dst.type === 'branch') continue
+      if (src.type !== 'scene' || !flowEndpoint(dst.type)) continue
       edges.push({ id: `e${edgeNo++}`, source: src.id, target: dst.id })
     }
     for (const spec of payload.branchEdgeSpecs) {
@@ -752,12 +795,34 @@ describe('归一化不变量的生成式验证（issue #232）：有效内容保
           : []
       if (src?.type !== 'branch' || dst === undefined) continue
       if (spec.from >= spec.to || options.length <= spec.optionIdx) continue
+      if (!flowEndpoint(dst.type)) continue
       edges.push({
         id: `e${edgeNo++}`,
         source: src.id,
         target: dst.id,
         sourceHandle: `option-${options[spec.optionIdx]?.id}`,
         type: 'branch',
+      })
+    }
+    // attach（scene→shots 端口→shot）：同 shot 至多一条（宿主唯一），按
+    // shot 目标去重首见胜
+    const attachedShots = new Set<string>()
+    for (const spec of payload.attachSpecs) {
+      const src = nodes.find(
+        (n) => n.id === `n${spec.sceneIdx}` && n.type === 'scene',
+      )
+      const dst = nodes.find(
+        (n) => n.id === `sh${spec.shotIdx}` && n.type === 'shot',
+      )
+      if (src === undefined || dst === undefined) continue
+      if (attachedShots.has(dst.id as string)) continue
+      attachedShots.add(dst.id as string)
+      edges.push({
+        id: `e${edgeNo++}`,
+        source: src.id,
+        target: dst.id,
+        sourceHandle: 'shots',
+        className: 'pw-edge-attach',
       })
     }
     return edges
@@ -817,14 +882,10 @@ describe('归一化不变量的生成式验证（issue #232）：有效内容保
     }
   }
 
-  /** 保全断言：合法记录与内容经解析-序列化全部存活（记录数 + 逐条内容，
-   * 边按逻辑重复键去重后比对）。 */
-  function assertCleanPreserved(
+  /** 保全断言 · 节点面：全部节点 id 与各类型的关键内容逐条存活。 */
+  function assertNodesPreserved(
     payload: ArbValue<typeof cleanPayloadArb>,
     out: ProjectContent,
-    expectedTitles: Record<string, string>,
-    assetIds: string[],
-    edgeKeys: string[],
   ): void {
     expect(out.nodes.map((n) => n.id).sort(), '节点全部存活').toEqual(
       [
@@ -833,13 +894,20 @@ describe('归一化不变量的生成式验证（issue #232）：有效内容保
         ...payload.branchOptionLabels
           .map((labels, i) => (labels.length > 0 ? `b${i}` : null))
           .filter((id): id is string => id !== null),
+        ...payload.beatTones.map((_, i) => `t${i}`),
+        ...payload.shotPictures.map((_, i) => `sh${i}`),
+        ...payload.imagePrompts.map((_, i) => `img${i}`),
       ].sort(),
     )
-    const sceneLabels = out.nodes
-      .filter((n) => n.type === 'scene')
-      .map((n) => (n.type === 'scene' ? n.data.name : ''))
-    expect(sceneLabels.sort(), '场景名保全').toEqual(
+    const labelsOf = (type: string): string[] =>
+      out.nodes
+        .filter((n) => n.type === type)
+        .map((n) => (n.data as { name?: string }).name ?? '')
+    expect(labelsOf('scene').sort(), '场景名保全').toEqual(
       [...payload.sceneNames].sort(),
+    )
+    expect(labelsOf('beat').sort(), '节拍名保全').toEqual(
+      payload.beatTones.map((_, i) => `节拍${i}`).sort(),
     )
     const lineTexts = out.nodes
       .filter((n) => n.type === 'dialogue')
@@ -857,11 +925,36 @@ describe('归一化不变量的生成式验证（issue #232）：有效内容保
     expect(optionLabels.sort(), '分支选项文案保全').toEqual(
       payload.branchOptionLabels.flat().sort(),
     )
-    expect(Object.keys(out.assets?.byId ?? {}).sort(), '资产全部存活').toEqual(
-      assetIds.sort(),
-    )
-    // 设定桶保全（评审第五/七轮）：名称与确定性身份都逐条存活——id 被
-    // 重发或互换会破坏引用解析，仅比名称放行
+    expect(
+      out.nodes
+        .filter((n) => n.type === 'beat')
+        .map((n) => (n.data as { tone?: string }).tone)
+        .sort(),
+      '节拍基调保全',
+    ).toEqual([...payload.beatTones].sort())
+    expect(
+      out.nodes
+        .filter((n) => n.type === 'shot')
+        .map((n) => (n.data as { picture?: string }).picture)
+        .sort(),
+      '分镜画面描述保全',
+    ).toEqual([...payload.shotPictures].sort())
+    expect(
+      out.nodes
+        .filter((n) => n.type === 'image')
+        .map((n) => (n.data as { prompt?: string }).prompt)
+        .sort(),
+      '图片节点 Prompt 保全',
+    ).toEqual([...payload.imagePrompts].sort())
+    expect(out.name, '项目名保全').toBe('保全')
+  }
+
+  /** 保全断言 · 设定与资产面：四桶身份+名称/标题、资产全记录、集标题。 */
+  function assertSettingsPreserved(
+    payload: ArbValue<typeof cleanPayloadArb>,
+    out: ProjectContent,
+    expectedTitles: Record<string, string>,
+  ): void {
     expect(
       out.settings.characters.map((c) => `${c.id}:${c.name}`).sort(),
       '角色身份与名保全',
@@ -880,38 +973,83 @@ describe('归一化不变量的生成式验证（issue #232）：有效内容保
     ).toEqual(
       payload.documentTitles.map((title, i) => `doc${i}:${title}`).sort(),
     )
+    // 资产全记录比对（评审第八轮：只比键会放行元数据清空/损坏）
+    const expectedAssets = Object.fromEntries(
+      payload.assetRelPaths.map((rel, i) => [
+        `a${i}`,
+        {
+          id: `a${i}`,
+          relPath: `assets/${rel}`,
+          mime: 'image/png',
+          source: 'upload',
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
+      ]),
+    )
+    expect(out.assets?.byId, '资产全记录保全').toEqual(expectedAssets)
     expect(out.episodeTitles, '集标题保全').toEqual(expectedTitles)
-    expect(out.name, '项目名保全').toBe('保全')
-    // 逻辑重复键（source/target/handle，首见胜）去重后比对——同端点重复
-    // 边被隔离属合法修复
+  }
+
+  /** 保全断言 · 边面：逻辑重复键去重后按端点元组比对（attach 单列）。 */
+  function assertEdgesPreserved(
+    out: ProjectContent,
+    edgeKeys: string[],
+    attachTuples: string[],
+  ): void {
     const outEdgeKeys = [
       ...new Set(
-        out.edges.map((e) =>
-          JSON.stringify([e.source, e.target, e.sourceHandle ?? '']),
-        ),
+        out.edges
+          .filter((e) => edgeKindOf(e) !== 'attach')
+          .map((e) =>
+            JSON.stringify([e.source, e.target, e.sourceHandle ?? '']),
+          ),
       ),
     ]
     expect(outEdgeKeys.sort(), '有效边全部存活').toEqual(edgeKeys.sort())
+    const outAttach = [
+      ...new Set(
+        out.edges
+          .filter((e) => edgeKindOf(e) === 'attach')
+          .map((e) => `${e.source}→${e.target}`),
+      ),
+    ]
+    expect(outAttach.sort(), 'attach 下挂边全部存活').toEqual(
+      attachTuples.sort(),
+    )
   }
 
   it('合法生成记录经归一化全部存活：节点/设定/资产/集标题/有效边不丢', () => {
     fc.assert(
       fc.property(cleanPayloadArb, (payload) => {
         const { content, expectedTitles } = assembleCleanContent(payload)
-        const assetIds = Object.keys(content.assets?.byId ?? {})
-        const edgeKeys = content.edges.map((e) =>
-          JSON.stringify([e.source, e.target, e.sourceHandle ?? '']),
-        )
         // 经 serializeProject 构造合法 v1 信封（与生产同款落盘路径）；
         // 手工拼 v0 扁平 data 塞进 v1 信封会被嵌套容器守卫正确隔离
         const round1 = parseProject(serializeProject(content, PROJECT_ID, NOW))
-        assertCleanPreserved(
-          payload,
-          round1.content,
-          expectedTitles,
-          assetIds,
-          [...new Set(edgeKeys)],
-        )
+        assertNodesPreserved(payload, round1.content)
+        assertSettingsPreserved(payload, round1.content, expectedTitles)
+        const flowKeys = [
+          ...new Set(
+            content.edges
+              .filter(
+                (e) =>
+                  (e as { className?: string }).className !== 'pw-edge-attach',
+              )
+              .map((e) =>
+                JSON.stringify([e.source, e.target, e.sourceHandle ?? '']),
+              ),
+          ),
+        ]
+        const attachTuples = [
+          ...new Set(
+            content.edges
+              .filter(
+                (e) =>
+                  (e as { className?: string }).className === 'pw-edge-attach',
+              )
+              .map((e) => `${e.source}→${e.target}`),
+          ),
+        ]
+        assertEdgesPreserved(round1.content, flowKeys, attachTuples)
       }),
     )
   })
@@ -989,7 +1127,14 @@ describe('归一化不变量的生成式验证（issue #232）：v0 迁移与拒
         nodes: docNodes,
         edges: [...flowEdges, ...branchEdges],
       },
-      settings: { characters: v0.characters, locations: [] },
+      settings: {
+        characters: v0.characterNames.map((name, i) => ({
+          id: `ch${i}`,
+          name,
+          gradient: 'g',
+        })),
+        locations: [],
+      },
       episodeTitles: {},
       assets: { byId: {} },
     }
@@ -1047,6 +1192,13 @@ describe('归一化不变量的生成式验证（issue #232）：v0 迁移与拒
         const { doc, flowEdges, branchEdges, optionCount } = assembleV0Doc(v0)
         const migrated = parseProject(doc)
         expect(migrated.migrated).toBe(true)
+        // 角色迁移存活（评审第八轮）：确定性身份与名称逐条保留
+        expect(
+          migrated.content.settings.characters
+            .map((c) => `${c.id}:${c.name}`)
+            .sort(),
+          'v0 角色迁移存活',
+        ).toEqual(v0.characterNames.map((name, i) => `ch${i}:${name}`).sort())
         assertOutputInvariants(migrated.content)
         assertV0EdgeMigration(
           migrated.content,
