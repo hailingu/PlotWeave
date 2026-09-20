@@ -102,7 +102,9 @@ function assertIdentityInvariants(content: ProjectContent): void {
 }
 
 /** 逐边图规则（§4.4/§5，判定复用运行态 edgeKindOf——孤儿边隔离的后置
- * 条件）：端点存在、非自环、attach/branch/sequence 形态与句柄契约。 */
+ * 条件）：端点存在、非自环、attach/branch/sequence 形态与句柄契约——
+ * 含 §5 匿名端口契约（评审第十六轮）：targetHandle 不可绑定（任何边
+ * 种类，归一化须剥离）、sequence 边不得携带 sourceHandle。 */
 function assertPerEdgeRules(content: ProjectContent): void {
   const liveIds = new Set(content.nodes.map((n) => n.id))
   const nodesById = new Map(content.nodes.map((n) => [n.id, n]))
@@ -113,10 +115,20 @@ function assertPerEdgeRules(content: ProjectContent): void {
     expect(liveIds.has(e.target), `活动边 ${e.id} 的 target 指向存在节点`).toBe(
       true,
     )
+    expect(
+      e.targetHandle,
+      `边 ${e.id} 的 targetHandle 已剥离（匿名端口不可绑定）`,
+    ).toBeUndefined()
     expect(e.source, `边 ${e.id} 非自环`).not.toBe(e.target)
     const src = nodesById.get(e.source)
     const dst = nodesById.get(e.target)
     const kind = edgeKindOf(e)
+    if (kind === 'sequence') {
+      expect(
+        e.sourceHandle,
+        `sequence 边 ${e.id} 的 sourceHandle 已剥离（匿名端口不可绑定）`,
+      ).toBeUndefined()
+    }
     if (kind === 'attach') {
       expect(e.sourceHandle, `attach 边 ${e.id} 句柄为 shots 端口`).toBe(
         SCENE_SHOT_HANDLE,

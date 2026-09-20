@@ -424,52 +424,56 @@ function assertV0ListNodePayloads(
   })
 }
 
-/** v0 迁移的设定桶比对（评审第十二轮）：地点/道具/文档桶的身份与载荷
- * 逐条存活；空白 id 角色经数组期重发恰增一件（不塌缩、不丢件），文档
- * relatedIds 的空白引用经「空白原值 → 新 id」映射改写指向该角色。 */
+/** v0 迁移的设定桶比对（评审第十六轮改为全记录）：干净角色（含
+ * gradient）/地点/道具/文档（含 body 与完整 relatedIds）逐条与夹具记录
+ * deep-equal——只比 id+名称投影会放行 gradient/body 被清空；空白 id 角色
+ * 的重发身份单独断言（新 id 不可预测，比 name+gradient），其被文档
+ * relatedIds 引用的改写值以「干净 id 集合外的重发 id」嵌入全记录预期。 */
 function assertV0SettingsMigration(
   content: ProjectContent,
   v0: ArbValue<typeof v0EnvelopeArb>,
 ): void {
   const cleanCharIds = new Set(v0.characterNames.map((_, i) => `ch${i}`))
   const charsOut = content.settings.characters
-  for (const [i, name] of v0.characterNames.entries()) {
-    expect(
-      charsOut.some((c) => c.id === `ch${i}` && c.name === name),
-      `v0 角色 ch${i} 迁移存活`,
-    ).toBe(true)
-  }
+  expect(
+    charsOut.filter((c) => cleanCharIds.has(c.id)),
+    'v0 角色全记录迁移存活（含 gradient）',
+  ).toEqual(
+    v0.characterNames.map((name, i) => ({ id: `ch${i}`, name, gradient: 'g' })),
+  )
   const extras = charsOut.filter((c) => !cleanCharIds.has(c.id))
   expect(
-    extras.map((c) => c.name),
-    'v0 空白 id 角色数组期重发（恰增一件，不塌缩不丢件）',
-  ).toEqual(v0.blankCharacter !== undefined ? [v0.blankCharacter] : [])
-  expect(
-    content.settings.locations.map((l) => `${l.id}:${l.name}`).sort(),
-    'v0 地点迁移存活',
-  ).toEqual(v0.locationNames.map((name, i) => `loc${i}:${name}`).sort())
-  expect(
-    (content.settings.props ?? []).map((p) => `${p.id}:${p.name}`).sort(),
-    'v0 道具迁移存活',
-  ).toEqual(v0.propNames.map((name, i) => `prop${i}:${name}`).sort())
+    extras.map((c) => ({ name: c.name, gradient: c.gradient })),
+    'v0 空白 id 角色数组期重发（恰增一件，不塌缩不丢件，gradient 保全）',
+  ).toEqual(
+    v0.blankCharacter !== undefined
+      ? [{ name: v0.blankCharacter, gradient: 'g' }]
+      : [],
+  )
+  expect(content.settings.locations, 'v0 地点全记录迁移存活').toEqual(
+    v0.locationNames.map((name, i) => ({ id: `loc${i}`, name })),
+  )
+  expect(content.settings.props ?? [], 'v0 道具全记录迁移存活').toEqual(
+    v0.propNames.map((name, i) => ({ id: `prop${i}`, name })),
+  )
   const reissuedId = extras[0]?.id
-  const expectedDocs = v0.documentSpecs.map((d, i) => {
-    const rels = [
-      'character=ch0',
-      ...(d.withLocation ? ['location=loc0'] : []),
-      ...(v0.blankCharacter !== undefined ? [`character=${reissuedId}`] : []),
-    ]
-    return `doc${i}:${d.title}:${rels.join(',')}`
-  })
   expect(
-    (content.settings.documents ?? [])
-      .map(
-        (d) =>
-          `${d.id}:${d.title}:${d.relatedIds.map((r) => `${r.kind}=${r.id}`).join(',')}`,
-      )
-      .sort(),
-    'v0 文档迁移存活（relatedIds 空白引用随重发改写）',
-  ).toEqual(expectedDocs.sort())
+    content.settings.documents ?? [],
+    'v0 文档全记录迁移存活（含 body，relatedIds 空白引用随重发改写）',
+  ).toEqual(
+    v0.documentSpecs.map((d, i) => ({
+      id: `doc${i}`,
+      title: d.title,
+      body: '正文',
+      relatedIds: [
+        { kind: 'character', id: 'ch0' },
+        ...(d.withLocation ? [{ kind: 'location', id: 'loc0' }] : []),
+        ...(v0.blankCharacter !== undefined
+          ? [{ kind: 'character', id: reissuedId }]
+          : []),
+      ],
+    })),
+  )
 }
 
 describe('归一化不变量的生成式验证（issue #232）：v0 迁移与拒绝边界', () => {

@@ -271,6 +271,9 @@ const dirtFlagsArb = fc.record({
   blankCharacterKey: fc.boolean(),
   collideBucketIds: fc.boolean(),
   badUpdatedAt: fc.boolean(),
+  // 异型句柄（评审第十六轮）：targetHandle（任何边）与 sequence 边的
+  // sourceHandle 均无法绑定匿名端口，§5 契约要求归一化剥离并告警
+  alienEdgeHandles: fc.boolean(),
   graphExt: fc.option(extensionValue, { nil: undefined }),
   settingsExt: fc.option(extensionValue, { nil: undefined }),
   assetsExt: fc.option(extensionValue, { nil: undefined }),
@@ -353,6 +356,23 @@ function v1Envelope(
     }
   }
   if (dirt.badUpdatedAt) doc.project.updatedAt = 'not-a-time'
+  if (dirt.alienEdgeHandles) {
+    // 异型句柄直达注入（评审第十六轮）：序列化正常产物不会携带这些形态，
+    // 生成器侧构造到不了 parseProject；落在首个对象边与首个 sequence 边上
+    const edges = doc.graph.edges as unknown[]
+    const anyEdge = edges.find(
+      (e): e is Record<string, unknown> =>
+        e !== null && typeof e === 'object' && !Array.isArray(e),
+    )
+    if (anyEdge !== undefined) anyEdge.targetHandle = 'alien-target'
+    const seqEdge = edges.find(
+      (e): e is Record<string, unknown> =>
+        e !== null &&
+        typeof e === 'object' &&
+        (e as { data?: { kind?: unknown } }).data?.kind === 'sequence',
+    )
+    if (seqEdge !== undefined) seqEdge.sourceHandle = 'alien-anon'
+  }
   if (dirt.graphExt !== undefined) doc.graph.futureGraphField = dirt.graphExt
   if (dirt.settingsExt !== undefined)
     doc.settings.futureSettingsField = dirt.settingsExt
@@ -439,6 +459,7 @@ describe('归一化不变量的生成式验证（issue #232）：v1 脏信封不
           dirt.nullGraph ||
           dirt.pushNullMembers ||
           dirt.badUpdatedAt ||
+          (dirt.alienEdgeHandles && c.edges.length > 0) ||
           (dirt.blankCharacterKey && c.characters.length > 0) ||
           (dirt.collideBucketIds && bucketPopulated)
         ) {
@@ -1031,7 +1052,26 @@ describe('归一化不变量的生成式验证（issue #232）：有效内容保
         const { content, expectedTitles } = assembleCleanContent(payload)
         // 经 serializeProject 构造合法 v1 信封（与生产同款落盘路径）；
         // 手工拼 v0 扁平 data 塞进 v1 信封会被嵌套容器守卫正确隔离
-        const round1 = parseProject(serializeProject(content, PROJECT_ID, NOW))
+        const doc = serializeProject(content, PROJECT_ID, NOW) as unknown as {
+          graph: { edges: Array<Record<string, unknown>> }
+        }
+        // 异型句柄注入（评审第十六轮）：保全性质的边按构造必然幸存，
+        // §5 剥离契约在此才有咬合面——脏信封性质里的同类注入几乎总随
+        // 孤儿边隔离到不了输出（实测 100 样本幸存边恒 0）。注入全部边：
+        // targetHandle（任何种类）与 sequence 边的 sourceHandle，断言经
+        // 剥离后边仍全部存活（§5：剥离不隔离）且句柄不残留（shared 逐边
+        // 断言 + 预期键的 handle 位）
+        const alienInjected = content.edges.length > 0
+        if (alienInjected) {
+          for (const e of doc.graph.edges) {
+            e.targetHandle = 'alien-target'
+            if ((e.data as { kind?: unknown } | undefined)?.kind === 'sequence')
+              e.sourceHandle = 'alien-anon'
+          }
+        }
+        const round1 = parseProject(doc)
+        if (alienInjected)
+          expect(round1.repaired, '异型句柄注入必须报告 repaired').toBe(true)
         assertNodesPreserved(payload, round1.content)
         assertReferencesPreserved(round1.content)
         assertNestedIdsPreserved(payload, round1.content)
