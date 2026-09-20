@@ -566,6 +566,11 @@ describe('归一化不变量的生成式验证（issue #232）：v1 已支持信
         const doc = v1Envelope(c, dirt)
         const round = parseProject(doc)
         assertOutputInvariants(round.content)
+        // 保证脏输入的修复信号（评审第七轮）：这些注入必然改写文档，
+        // repaired=false 会让调用方不回写、脏数据每次加载都重复修复
+        if (dirt.nullGraph || dirt.pushNullMembers || dirt.badUpdatedAt) {
+          expect(round.repaired, '保证脏注入必须报告 repaired').toBe(true)
+        }
       }),
     )
   })
@@ -855,23 +860,26 @@ describe('归一化不变量的生成式验证（issue #232）：有效内容保
     expect(Object.keys(out.assets?.byId ?? {}).sort(), '资产全部存活').toEqual(
       assetIds.sort(),
     )
-    // 设定桶保全（评审第五轮）：角色/地点名、文档标题逐条存活
+    // 设定桶保全（评审第五/七轮）：名称与确定性身份都逐条存活——id 被
+    // 重发或互换会破坏引用解析，仅比名称放行
     expect(
-      out.settings.characters.map((c) => c.name).sort(),
-      '角色名保全',
-    ).toEqual([...payload.characterNames].sort())
+      out.settings.characters.map((c) => `${c.id}:${c.name}`).sort(),
+      '角色身份与名保全',
+    ).toEqual(payload.characterNames.map((name, i) => `ch${i}:${name}`).sort())
     expect(
-      out.settings.locations.map((l) => l.name).sort(),
-      '地点名保全',
-    ).toEqual([...payload.locationNames].sort())
+      out.settings.locations.map((l) => `${l.id}:${l.name}`).sort(),
+      '地点身份与名保全',
+    ).toEqual(payload.locationNames.map((name, i) => `loc${i}:${name}`).sort())
     expect(
-      (out.settings.props ?? []).map((e) => e.name).sort(),
-      '道具名保全',
-    ).toEqual([...payload.propNames].sort())
+      (out.settings.props ?? []).map((e) => `${e.id}:${e.name}`).sort(),
+      '道具身份与名保全',
+    ).toEqual(payload.propNames.map((name, i) => `prop${i}:${name}`).sort())
     expect(
-      (out.settings.documents ?? []).map((d) => d.title).sort(),
-      '设定文档标题保全',
-    ).toEqual([...payload.documentTitles].sort())
+      (out.settings.documents ?? []).map((d) => `${d.id}:${d.title}`).sort(),
+      '设定文档身份与标题保全',
+    ).toEqual(
+      payload.documentTitles.map((title, i) => `doc${i}:${title}`).sort(),
+    )
     expect(out.episodeTitles, '集标题保全').toEqual(expectedTitles)
     expect(out.name, '项目名保全').toBe('保全')
     // 逻辑重复键（source/target/handle，首见胜）去重后比对——同端点重复
@@ -910,120 +918,142 @@ describe('归一化不变量的生成式验证（issue #232）：有效内容保
 })
 
 describe('归一化不变量的生成式验证（issue #232）：v0 迁移与拒绝边界', () => {
+  /** v0 夹具组装（评审第七轮拆分）：首节点恒为 branch（选项 id 确定性
+   * 唯一化）；普通边与下标句柄 branch 边都按下标引用真实节点、确定性
+   * 唯一 id、前向序与端点类型约束，只生成合法形态。 */
+  function assembleV0Doc(v0: ArbValue<typeof v0EnvelopeArb>): {
+    doc: Record<string, unknown>
+    flowEdges: Array<Record<string, unknown>>
+    branchEdges: Array<Record<string, unknown>>
+    optionCount: number
+  } {
+    const branchNode = {
+      id: 'br0',
+      type: 'branch',
+      position: { x: 0, y: 0 },
+      data: {
+        prompt: v0.branch.prompt,
+        options: v0.branch.optionLabels.map((label, i) => ({
+          id: `opt${i}`,
+          label,
+        })),
+      },
+    }
+    // 场景 id 确定性唯一化（s0..）：空白/重复 id 会触发重发，按原始 id
+    // 对准的预期就会失配
+    const docNodes = [
+      branchNode,
+      ...v0.scenes.map((sc, i) => ({ ...sc, id: `s${i}` })),
+    ]
+    // 普通剧情流边按下标引用真实节点（评审第六轮：n* 池端点与组装后
+    // 节点恒不相遇、全部被端点守卫隔离，保全路径空转）；前向序 + 源
+    // 非 branch（sequence 端点约束），碰撞出的非法形态不生成
+    const flowEdges: Array<Record<string, unknown>> = []
+    v0.flowEdgeSpecs.forEach((spec) => {
+      const src = docNodes[spec.sourceIdx] as
+        { id?: unknown; type?: unknown } | undefined
+      const dst = docNodes[spec.targetIdx] as { id?: unknown } | undefined
+      if (src === undefined || dst === undefined) return
+      if (spec.sourceIdx >= spec.targetIdx) return
+      if (src.id === dst.id || src.type === 'branch') return
+      flowEdges.push({
+        id: `fe${flowEdges.length}`,
+        source: src.id,
+        target: dst.id,
+      })
+    })
+    // 运行态判别器（评审第五轮）：缺 type: 'branch' 时迁移后被分类为
+    // sequence、按「branch 节点不得引出匿名边」隔离，幸存环恒空转；
+    // 目标按下标引用真实节点，指向 br0 的自环边不生成
+    const branchEdges: Array<Record<string, unknown>> = []
+    v0.branchEdges.forEach((e) => {
+      const target = docNodes[e.targetIdx] as { id?: unknown } | undefined
+      if (target === undefined || target.id === 'br0') return
+      branchEdges.push({
+        id: `be${branchEdges.length}`,
+        type: 'branch' as const,
+        source: 'br0',
+        target: target.id,
+        sourceHandle: `option-${e.optionIdx}`,
+      })
+    })
+    const doc = {
+      schemaVersion: 0,
+      project: {
+        id: 'p-old',
+        name: '旧剧',
+        createdAt: '',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+      graph: {
+        nodes: docNodes,
+        edges: [...flowEdges, ...branchEdges],
+      },
+      settings: { characters: v0.characters, locations: [] },
+      episodeTitles: {},
+      assets: { byId: {} },
+    }
+    return {
+      doc,
+      flowEdges,
+      branchEdges,
+      optionCount: v0.branch.optionLabels.length,
+    }
+  }
+
+  /** v0 迁移的边保全断言：合法剧情流边全部存活；在界下标句柄精确改写为
+   * option-opt<N>（确定性唯一选项 id，无重发改写）、越界句柄隔离、同
+   * 元组逻辑重复首见胜——预期按端点元组去重比对。 */
+  function assertV0EdgeMigration(
+    content: ProjectContent,
+    flowEdges: Array<Record<string, unknown>>,
+    branchEdges: Array<Record<string, unknown>>,
+    optionCount: number,
+  ): void {
+    const expectedFlowTuples = [
+      ...new Set(flowEdges.map((e) => `${e.source}→${e.target}`)),
+    ].sort()
+    const outFlowTuples = [
+      ...new Set(
+        content.edges
+          .filter((e) => edgeKindOf(e) === 'sequence')
+          .map((e) => `${e.source}→${e.target}`),
+      ),
+    ].sort()
+    expect(outFlowTuples, '合法 v0 剧情流边全部存活').toEqual(
+      expectedFlowTuples,
+    )
+    const expectedBranchTuples = new Set(
+      branchEdges
+        .map((e) => ({
+          target: e.target as string,
+          idx: Number(String(e.sourceHandle ?? '').slice('option-'.length)),
+        }))
+        .filter(({ idx }) => idx < optionCount)
+        .map(({ target, idx }) => `${target}→option-opt${idx}`),
+    )
+    const outBranchTuples = content.edges
+      .filter((e) => edgeKindOf(e) === 'branch' && e.source === 'br0')
+      .map((e) => `${e.target}→${e.sourceHandle}`)
+    expect(
+      [...new Set(outBranchTuples)].sort(),
+      '在界下标句柄精确迁移并全部幸存',
+    ).toEqual([...expectedBranchTuples].sort())
+  }
+
   it('任意 v0 信封：迁移成功、输出满足不变量、迁移产物幂等', () => {
     fc.assert(
       fc.property(v0EnvelopeArb, (v0) => {
-        // 首节点恒为 branch（选项 id 确定性唯一化），branchEdges 携带旧版
-        // option-N 下标句柄从它引出（评审第四轮：下标句柄迁移路径须被行使）
-        const branchNode = {
-          id: 'br0',
-          type: 'branch',
-          position: { x: 0, y: 0 },
-          data: {
-            prompt: v0.branch.prompt,
-            options: v0.branch.optionLabels.map((label, i) => ({
-              id: `opt${i}`,
-              label,
-            })),
-          },
-        }
-        // 场景 id 确定性唯一化（s0..）：空白/重复 id 会触发重发，预期按
-        // 原始 id 对准就会失配
-        const docNodes = [
-          branchNode,
-          ...v0.scenes.map((sc, i) => ({ ...sc, id: `s${i}` })),
-        ]
-        // 运行态判别器（评审第五轮）：缺 type: 'branch' 时迁移后被分类为
-        // sequence、按「branch 节点不得引出匿名边」隔离，幸存环恒空转；
-        // 目标按下标引用真实节点（悬空目标会被端点守卫隔离，不构成迁移
-        // 预期），指向 br0 的自环边不生成
-        const branchEdges: Array<Record<string, unknown>> = []
-        v0.branchEdges.forEach((e) => {
-          const target = docNodes[e.targetIdx] as { id?: unknown } | undefined
-          if (target === undefined || target.id === 'br0') return
-          branchEdges.push({
-            // 确定性唯一 id（be0..）：空白/重复 id 会触发重发，按端点元组
-            // 对准的预期就会失配
-            id: `be${branchEdges.length}`,
-            type: 'branch' as const,
-            source: 'br0',
-            target: target.id,
-            sourceHandle: `option-${e.optionIdx}`,
-          })
-        })
-        // 普通剧情流边按下标引用真实节点（评审第六轮：n* 池端点与组装后
-        // 节点恒不相遇、全部被端点守卫隔离，保全路径空转）；前向序 + 源
-        // 非 branch（sequence 端点约束），碰撞出的非法形态不生成
-        const flowEdges: Array<Record<string, unknown>> = []
-        v0.flowEdgeSpecs.forEach((spec) => {
-          const src = docNodes[spec.sourceIdx] as
-            { id?: unknown; type?: unknown } | undefined
-          const dst = docNodes[spec.targetIdx] as { id?: unknown } | undefined
-          if (src === undefined || dst === undefined) return
-          if (spec.sourceIdx >= spec.targetIdx) return
-          if (src.id === dst.id || src.type === 'branch') return
-          flowEdges.push({
-            id: `fe${flowEdges.length}`,
-            source: src.id,
-            target: dst.id,
-          })
-        })
-        const doc = {
-          schemaVersion: 0,
-          project: {
-            id: 'p-old',
-            name: '旧剧',
-            createdAt: '',
-            updatedAt: '2026-01-01T00:00:00.000Z',
-          },
-          graph: {
-            nodes: docNodes,
-            edges: [...flowEdges, ...branchEdges],
-          },
-          settings: { characters: v0.characters, locations: [] },
-          episodeTitles: {},
-          assets: { byId: {} },
-        }
+        const { doc, flowEdges, branchEdges, optionCount } = assembleV0Doc(v0)
         const migrated = parseProject(doc)
         expect(migrated.migrated).toBe(true)
         assertOutputInvariants(migrated.content)
-        // 下标句柄的迁移后置条件（评审第五轮）：在界 option-N 精确改写为
-        // 第 N 个选项的 id（选项 id 确定性唯一 optN，无重发改写）；越界
-        // 句柄按孤儿边隔离——幸存集合与句柄值都对准迁移意图
-        // 普通剧情流边保全（评审第六轮）：合法前向序边全部幸存，端点
-        // 元组按逻辑重复键去重后比对
-        const expectedFlowTuples = [
-          ...new Set(flowEdges.map((e) => `${e.source}→${e.target}`)),
-        ].sort()
-        const outFlowTuples = [
-          ...new Set(
-            migrated.content.edges
-              .filter((e) => edgeKindOf(e) === 'sequence')
-              .map((e) => `${e.source}→${e.target}`),
-          ),
-        ].sort()
-        expect(outFlowTuples, '合法 v0 剧情流边全部存活').toEqual(
-          expectedFlowTuples,
+        assertV0EdgeMigration(
+          migrated.content,
+          flowEdges,
+          branchEdges,
+          optionCount,
         )
-        // 预期按端点元组（target + 改写后句柄）去重：同元组的重复边按逻辑
-        // 重复隔离属合法修复；在界句柄精确改写为 option-opt<N>
-        const optionCount = v0.branch.optionLabels.length
-        const expectedTuples = new Set(
-          branchEdges
-            .map((e) => ({
-              target: e.target as string,
-              idx: Number(String(e.sourceHandle ?? '').slice('option-'.length)),
-            }))
-            .filter(({ idx }) => idx < optionCount)
-            .map(({ target, idx }) => `${target}→option-opt${idx}`),
-        )
-        const outTuples = migrated.content.edges
-          .filter((e) => edgeKindOf(e) === 'branch' && e.source === 'br0')
-          .map((e) => `${e.target}→${e.sourceHandle}`)
-        expect(
-          [...new Set(outTuples)].sort(),
-          '在界下标句柄精确迁移并全部幸存',
-        ).toEqual([...expectedTuples].sort())
         const round2 = parseProject(
           serializeProject(migrated.content, PROJECT_ID, NOW),
         )
