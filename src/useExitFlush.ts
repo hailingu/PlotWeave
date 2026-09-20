@@ -48,8 +48,9 @@ export function useExitFlush(): string | null {
     void (async () => {
       // 初始化失败的可见诊断（issue #159）：动态模块加载、监听注册或
       // acknowledge_quit_listener 失败不再成为未处理拒绝；部分完成的
-      // 监听注册按其登记顺序回收，缓冲的退出请求不静默丢弃（诊断明示
-      // 用户重试或重启）。
+      // 屏障保留至组件卸载（PR #225 评审——回收已就绪的 close 屏障会让
+      // 用户按指引点关闭时绕过冲刷直关窗口），缓冲的退出请求不静默丢弃
+      //（诊断明示用户重试或重启）。
       try {
         const [{ getCurrentWindow }, { listen }, { invoke }] =
           await Promise.all([
@@ -106,14 +107,11 @@ export function useExitFlush(): string | null {
         // 确认必须晚于注册，保证重放必有接收者且走同一冲刷屏障
         await invoke('acknowledge_quit_listener')
       } catch (err) {
-        // 回收已登记的监听（部分完成不遗留），并给出可见诊断
-        for (const unlisten of unlistens.splice(0)) {
-          try {
-            unlisten()
-          } catch (unlistenErr) {
-            console.error('[useExitFlush] 回收监听失败', unlistenErr)
-          }
-        }
+        // 失败仅诊断，不回收已就绪的监听（PR #225 评审）：close/quit 屏障
+        // 各自独立可用——回收已注册的 close 屏障会让用户按指引点关闭按钮
+        // 时绕过冲刷直关窗口、丢失未落盘编辑。屏障留至组件卸载，由 effect
+        // cleanup 统一回收（卸载语义不变）；模块加载失败时 unlistens 为空，
+        // 无资源遗留。
         setBlocked(
           `退出冲刷初始化失败：${String(err)}。已缓冲的退出请求未丢弃，请重试退出或重启应用`,
         )

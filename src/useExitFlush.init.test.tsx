@@ -63,7 +63,7 @@ beforeEach(() => {
 })
 
 describe('useExitFlush 初始化失败（issue #159）', () => {
-  it('quit 监听注册失败：部分完成的 close 监听被回收，诊断可见', async () => {
+  it('quit 监听注册失败：已就绪的 close 屏障保留至卸载（PR #225 评审），诊断可见', async () => {
     let closeUnlistened = false
     await renderWith({
       failQuit: true,
@@ -73,11 +73,14 @@ describe('useExitFlush 初始化失败（issue #159）', () => {
     })
     // 无未处理拒绝（vitest 会把未处理拒绝计入 Errors 并失败门禁）
     await screen.findByText(/退出冲刷初始化失败/)
-    expect(closeUnlistened).toBe(true)
+    // close 屏障保留：用户按指引点关闭按钮仍走冲刷屏障，不丢未落盘编辑
+    expect(closeUnlistened).toBe(false)
     await screen.findByText(/quit 监听注册失败/)
+    cleanup()
+    expect(closeUnlistened).toBe(true)
   })
 
-  it('acknowledge 失败：两个监听都被回收，诊断标明阶段', async () => {
+  it('acknowledge 失败：两个监听都保留至卸载（PR #225 评审），诊断标明阶段', async () => {
     let closeUnlistened = false
     let quitUnlistened = false
     await renderWith({
@@ -90,11 +93,14 @@ describe('useExitFlush 初始化失败（issue #159）', () => {
       },
     })
     expect(await screen.findByText(/acknowledge/)).toBeTruthy()
+    expect(closeUnlistened).toBe(false)
+    expect(quitUnlistened).toBe(false)
+    cleanup()
     expect(closeUnlistened).toBe(true)
     expect(quitUnlistened).toBe(true)
   })
 
-  it('close 监听注册失败：无已登记监听可回收（不产生泄漏），诊断可见', async () => {
+  it('close 监听注册失败：无已登记监听可保留（不产生泄漏），诊断可见', async () => {
     await renderWith({ failClose: true })
     expect(await screen.findByText(/close 监听注册失败/)).toBeTruthy()
   })
