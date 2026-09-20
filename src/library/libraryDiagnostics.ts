@@ -4,14 +4,54 @@ let warnings: readonly string[] = []
  * 会话内收到有效警告即保守暂停目录级指引；关闭提示、干净或迟到响应
  * 均不能证明现场已核对。完全重启后由新一轮恢复诊断重新判定。 */
 let cleanupBlocked = false
+
+/** 待清理条目的语义分类（issue #229）：机器可读 kind 由后端生产点给出，
+ * 前端不经中文文案推导——展示措辞/本地化调整不改变分类。
+ * routine：索引已提交、仅能力保留的待释放项（可给 .trash 清理指引）；
+ * evidence：冲突/待核对的证据保留项（绝不附删除指引）。 */
+export interface CleanupPendingEntry {
+  kind: 'routine' | 'evidence'
+  message: string
+}
+
+/** 条目归一化 fail-safe：未知/缺失 kind、裸字符串（旧形态或脏数据）一律
+ * 归证据类（不给删除指引）；缺/空 message 的条目无法展示，丢弃。 */
+function normalizePendingEntry(item: unknown): CleanupPendingEntry | null {
+  if (typeof item === 'string') return item === '' ? null : evidenceEntry(item)
+  if (item === null || typeof item !== 'object') return null
+  const o = item as Record<string, unknown>
+  if (typeof o.message !== 'string' || o.message === '') return null
+  return o.kind === 'routine'
+    ? { kind: 'routine', message: o.message }
+    : evidenceEntry(o.message)
+}
+
+function evidenceEntry(message: string): CleanupPendingEntry {
+  return { kind: 'evidence', message }
+}
+
+/** 内容相等（kind + message 逐条相同）——结构化对象按值比较，新载荷的
+ * 新对象引用不得被误判为内容变化（关闭状态的保持依赖此判定）。 */
+function samePendingContent(
+  a: readonly CleanupPendingEntry[],
+  b: readonly CleanupPendingEntry[],
+): boolean {
+  return (
+    a.length === b.length &&
+    a.every(
+      (item, i) => item.kind === b[i]!.kind && item.message === b[i]!.message,
+    )
+  )
+}
+
 /** 删除隔离区待清理状态（issue #135）：当前快照语义（非历史累积）——
  * 真实删除返回 cleanupPending 时对用户可见；空状态不显示（不误报）。 */
-let cleanupPending: readonly string[] = []
+let cleanupPending: readonly CleanupPendingEntry[] = []
 /** 本前端会话已接受的最大后端序号；隐藏提示不重置它，失败响应不推进它。 */
 let cleanupRevision = 0n
 /** 用户关闭时的待清理快照引用：内容不变保持隐藏，变化（新数组）即重新
  * 显示（publish 内容不变不重建数组，见 publishCleanupPending）。 */
-let dismissedPending: readonly string[] | null = null
+let dismissedPending: readonly CleanupPendingEntry[] | null = null
 const listeners = new Set<() => void>()
 
 /** 接收后端诊断并去重；干净响应不抹掉尚未阅读的一次性修复提示。 */
@@ -35,7 +75,8 @@ function parseCleanupRevision(input: unknown): bigint | null {
 }
 
 /** 只接受后端持锁生成的更新快照；同内容也推进序号，但不重建数组或重显。
- * 非法载荷保留当前状态并给出诊断，旧/重复序号不改变快照或关闭状态。 */
+ * 非法载荷保留当前状态并给出诊断，旧/重复序号不改变快照或关闭状态。
+ * 条目经 normalizePendingEntry 归一化（未知形态 fail-safe 归证据类）。 */
 export function publishCleanupPending(
   input: unknown,
   rawRevision: unknown,
@@ -49,13 +90,10 @@ export function publishCleanupPending(
   }
   if (revision <= cleanupRevision) return
   cleanupRevision = revision
-  const next = input.filter(
-    (item): item is string => typeof item === 'string' && item !== '',
-  )
-  const unchanged =
-    next.length === cleanupPending.length &&
-    next.every((item, i) => item === cleanupPending[i])
-  if (unchanged) return
+  const next = input
+    .map(normalizePendingEntry)
+    .filter((item): item is CleanupPendingEntry => item !== null)
+  if (samePendingContent(next, cleanupPending)) return
   cleanupPending = next
   for (const listener of listeners) listener()
 }
@@ -63,34 +101,29 @@ export function publishCleanupPending(
 /** 待清理快照：用户已关闭本轮（数组引用未变）时隐藏。隐藏态返回共享
  * 冻结空数组——useSyncExternalStore 依赖引用稳定性，逐次新建空数组会
  * 造成无限重渲染。 */
-const EMPTY_PENDING: readonly string[] = Object.freeze([])
+const EMPTY_PENDING: readonly CleanupPendingEntry[] = Object.freeze([])
 
-export function cleanupPendingSnapshot(): readonly string[] {
+export function cleanupPendingSnapshot(): readonly CleanupPendingEntry[] {
   if (dismissedPending === cleanupPending) return EMPTY_PENDING
   return cleanupPending
 }
 
-/** 待清理条目的语义分类（PR #222 评审 P1）：cleanupPending 混合两类
- * 状态——索引已提交、仅能力保留的待释放项（可给清理指引）与冲突/待
- * 核对的证据保留项（Rust 特意保留现场：身份异常/不符/被占用、
- * indexUncertain 裸隔离名——删除即毁证，且可能让索引指向后来占位的
- * 文件）。常规形态按生产者精确前缀显式识别（transaction.rs「媒体已
- * 隔离待清理：」与 recover.rs「隔离项保留（身份绑定清理不可用）：」）；
- * 其余一律归证据类（fail-safe——未识别形态不给删除指引）。 */
-export function partitionCleanupPending(entries: readonly string[]): {
+/** 待清理条目的呈现分区（issue #229）：按机器码 kind 分类——routine 项
+ * 可附 .trash 清理指引，其余一律归证据区（fail-safe：运行期绕过类型的
+ * 未知 kind 同样不给删除指引）。返回展示文案列表。 */
+export function partitionCleanupPending(
+  entries: readonly CleanupPendingEntry[],
+): {
   routine: string[]
   evidence: string[]
 } {
   const routine: string[] = []
   const evidence: string[] = []
   for (const entry of entries) {
-    if (
-      entry.startsWith('媒体已隔离待清理：') ||
-      entry.startsWith('隔离项保留（身份绑定清理不可用）：')
-    ) {
-      routine.push(entry)
+    if (entry.kind === 'routine') {
+      routine.push(entry.message)
     } else {
-      evidence.push(entry)
+      evidence.push(entry.message)
     }
   }
   return { routine, evidence }

@@ -21,7 +21,7 @@ mod trash;
 // 与测试可见；单一事实源仍在 journal_io
 pub(crate) use journal_io::JOURNAL_FILE_NAME;
 pub(crate) use op_lock::{library_file_lock, library_op_lock};
-pub(crate) use recover::{recover, Recovery};
+pub(crate) use recover::{recover, CleanupPendingItem, Recovery};
 
 // 供兄弟子模块（transaction）与测试经既有 `use super::{…}` 路径消费；
 // 私有 use 仅对 library_journal 域内可见，不放大对外契约。

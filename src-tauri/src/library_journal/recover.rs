@@ -15,13 +15,49 @@ use super::trash::{
     restore_from_trash, verify_trash_identity, PathIdentity, TrashVerdict, TRASH_DIR,
 };
 
+/// cleanupPending 条目的机器可读分类（issue #229）：前端按 kind 决定
+/// 呈现分区（routine 才可附 .trash 清理指引），不经中文文案前缀推导——
+/// 展示措辞/本地化调整不改变分类。serde 序列化为小写蛇形字符串。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum CleanupKind {
+    /// 索引已提交、仅能力保留的待释放项——可给 .trash 目录级清理指引。
+    Routine,
+    /// 冲突/待核对的证据保留项（身份异常/不符/被占用、indexUncertain）——
+    /// 绝不附删除指引。
+    Evidence,
+}
+
+/// cleanupPending 条目（issue #229）：程序可判定的 kind + 展示文案。
+/// 前端对未知/缺失 kind fail-safe 归证据类（不给删除指引）。
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub(crate) struct CleanupPendingItem {
+    pub(crate) kind: CleanupKind,
+    pub(crate) message: String,
+}
+
+impl CleanupPendingItem {
+    pub(crate) fn routine(message: impl Into<String>) -> Self {
+        Self {
+            kind: CleanupKind::Routine,
+            message: message.into(),
+        }
+    }
+    pub(crate) fn evidence(message: impl Into<String>) -> Self {
+        Self {
+            kind: CleanupKind::Evidence,
+            message: message.into(),
+        }
+    }
+}
+
 /// 恢复结果：warnings 为恢复过程产生的诊断；cleanup_pending 为保留在隔离
 /// 区的未清理项；conflicted 为冲突期不可用的 assetId（列表标记 + 导入拒绝
 /// 服务）；read_only 表示日志异型、所有库写入/删除暂停。
 #[derive(Default, Debug)]
 pub(crate) struct Recovery {
     pub warnings: Vec<String>,
-    pub cleanup_pending: Vec<String>,
+    pub cleanup_pending: Vec<CleanupPendingItem>,
     pub conflicted: Vec<String>,
     pub read_only: bool,
 }
@@ -77,20 +113,24 @@ fn try_bound_cleanup(
                 Ok(true)
             }
             Err(_) => {
-                recovery.cleanup_pending.push(format!(
-                    "隔离项保留（身份绑定清理不可用）：{} / {}",
-                    entry.asset_id, entry.trash_name
-                ));
+                recovery
+                    .cleanup_pending
+                    .push(CleanupPendingItem::routine(format!(
+                        "隔离项保留（身份绑定清理不可用）：{} / {}",
+                        entry.asset_id, entry.trash_name
+                    )));
                 Ok(false)
             }
         },
         TrashVerdict::Missing => Ok(true), // 隔离项不存在：日志条目可清除
         TrashVerdict::Mismatch => {
             // 身份不符/被占用：保留现场与日志（评审修复：不得静默清除证据）
-            recovery.cleanup_pending.push(format!(
-                "隔离项保留（身份不符或被占用）：{} / {}",
-                entry.asset_id, entry.trash_name
-            ));
+            recovery
+                .cleanup_pending
+                .push(CleanupPendingItem::evidence(format!(
+                    "隔离项保留（身份不符或被占用）：{} / {}",
+                    entry.asset_id, entry.trash_name
+                )));
             Ok(false)
         }
     }
@@ -186,7 +226,9 @@ fn recover_entry(
     changed: &mut bool,
 ) -> Result<(), LibraryError> {
     if entry.index_uncertain {
-        recovery.cleanup_pending.push(entry.trash_name.clone());
+        recovery
+            .cleanup_pending
+            .push(CleanupPendingItem::evidence(entry.trash_name.clone()));
         mark_conflict(
             entry,
             recovery,
@@ -357,18 +399,22 @@ fn recover_index_committed(
                 *changed = true;
             }
             Err(_) => {
-                recovery.cleanup_pending.push(format!(
-                    "隔离项保留（身份绑定清理不可用）：{} / {}",
-                    entry.asset_id, entry.trash_name
-                ));
+                recovery
+                    .cleanup_pending
+                    .push(CleanupPendingItem::routine(format!(
+                        "隔离项保留（身份绑定清理不可用）：{} / {}",
+                        entry.asset_id, entry.trash_name
+                    )));
             }
         },
         // 身份不符/被占用：保留现场与日志（不得静默清除证据）
         Some(TrashVerdict::Mismatch) => {
-            recovery.cleanup_pending.push(format!(
-                "隔离项保留（身份不符或被占用）：{} / {}",
-                entry.asset_id, entry.trash_name
-            ));
+            recovery
+                .cleanup_pending
+                .push(CleanupPendingItem::evidence(format!(
+                    "隔离项保留（身份不符或被占用）：{} / {}",
+                    entry.asset_id, entry.trash_name
+                )));
         }
         // 隔离项缺失（无隔离目录或该条目不存在）：复查原路径——仍绑定预期
         // 身份则重新隔离，否则清理完成（评审修复：此前 Missing 直接清日志，

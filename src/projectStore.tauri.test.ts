@@ -822,6 +822,25 @@ describe('tauriList：空库播种与示例升级', () => {
     expect(list.map((x) => x.id)).toEqual([])
   })
 
+  it('无码的「项目不存在」文案不触发播种：程序判定只认机器码（issue #229）', async () => {
+    // 不存在/不可读/未知三类可区分：无 [project_not_found] 码的错误
+    // （旧后端裸文案、Io、损坏）一律按「存在但不可读」保守跳过——
+    // 改变/本地化展示文案不得改变播种行为
+    let listCalls = 0
+    handlers.set('list_projects', () => {
+      listCalls += 1
+      return listCalls === 1 ? [] : [meta('sample-wu-ye-chu-zu-che')]
+    })
+    handlers.set('load_project', () => {
+      throw new Error('项目不存在：sample-wu-ye-chu-zu-che')
+    })
+    handlers.set('save_project', () => undefined)
+    const { projectStore } = await load()
+    const list = await projectStore.list()
+    expect(calls.filter((c) => c.cmd === 'save_project')).toHaveLength(0)
+    expect(list.map((x) => x.id)).toEqual([])
+  })
+
   it('示例为未来版本（schemaVersion 高于当前）：升级检查单例隔离，list 不中止、摘要原样', async () => {
     handlers.set('list_projects', () => [
       meta('sample-wu-ye-chu-zu-che'),
@@ -851,14 +870,17 @@ describe('tauriList：空库播种与示例升级', () => {
       return []
     })
     handlers.set('save_project', () => undefined)
-    // 播种是 no-replace：探测期（文件未写）返回「项目不存在」，播种后
-    // 重列的升级检查读到各自携带匹配 project.id 的干净 v1 信封 → 无需
-    // 覆盖（id 与受信路径不一致会被 §11.1 受信 id 覆盖修复改写并触发回写）
+    // 播种是 no-replace：探测期（文件未写）返回带机器码的「项目不存在」
+    // （issue #229：程序判定只认 [project_not_found] 码，不经中文文案），
+    // 播种后重列的升级检查读到各自携带匹配 project.id 的干净 v1 信封 →
+    // 无需覆盖（id 与受信路径不一致会被 §11.1 受信 id 覆盖修复改写并触发回写）
     let loadCalls = 0
     handlers.set('load_project', (args) => {
       loadCalls += 1
       if (loadCalls <= 2)
-        throw new Error(`项目不存在：${(args as { id: string }).id}`)
+        throw new Error(
+          `[project_not_found] 项目不存在：${(args as { id: string }).id}`,
+        )
       return {
         ...modernFile(),
         project: { ...modernFile().project, id: (args as { id: string }).id },

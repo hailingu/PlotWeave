@@ -1,6 +1,8 @@
 // @vitest-environment happy-dom
 /** LibraryWarnings 展示（issue #135）：删除隔离区待清理状态对用户可见
- * （计数 + 影响 + 恢复指引），正常状态不误报，关闭后内容不变保持隐藏。 */
+ * （计数 + 影响 + 恢复指引），正常状态不误报，关闭后内容不变保持隐藏。
+ * 待清理条目为结构化 { kind, message } 载荷（issue #229），呈现分区按
+ * kind 而非文案。 */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 
@@ -15,13 +17,16 @@ const load = async () => {
   return { diagnostics, LibraryWarnings }
 }
 
+const routine = (message: string) => ({ kind: 'routine', message })
+const evidence = (message: string) => ({ kind: 'evidence', message })
+
 describe('LibraryWarnings 删除隔离区待清理展示（issue #135）', () => {
   it('待清理状态可见：计数、影响（空间未释放）与恢复指引齐备', async () => {
     const { diagnostics, LibraryWarnings } = await load()
     diagnostics.publishCleanupPending(
       [
-        '媒体已隔离待清理：assets/la-1.png',
-        '媒体已隔离待清理：assets/la-2.png',
+        routine('媒体已隔离待清理：assets/la-1.png'),
+        routine('媒体已隔离待清理：assets/la-2.png'),
       ],
       '1',
     )
@@ -46,7 +51,7 @@ describe('LibraryWarnings 删除隔离区待清理展示（issue #135）', () =>
   it('关闭后隐藏本轮提示；待清理内容变化时重新显示', async () => {
     const { diagnostics, LibraryWarnings } = await load()
     diagnostics.publishCleanupPending(
-      ['媒体已隔离待清理：assets/la-1.png'],
+      [routine('媒体已隔离待清理：assets/la-1.png')],
       '2',
     )
     render(<LibraryWarnings />)
@@ -55,8 +60,8 @@ describe('LibraryWarnings 删除隔离区待清理展示（issue #135）', () =>
     act(() => {
       diagnostics.publishCleanupPending(
         [
-          '媒体已隔离待清理：assets/la-1.png',
-          '媒体已隔离待清理：assets/la-2.png',
+          routine('媒体已隔离待清理：assets/la-1.png'),
+          routine('媒体已隔离待清理：assets/la-2.png'),
         ],
         '3',
       )
@@ -72,7 +77,7 @@ describe('LibraryWarnings 冲突证据区（PR #222 评审 P1）', () => {
       '资产 la-conflict 删除事务冲突（原路径已被后来文件占用），标记为不可用',
     ])
     diagnostics.publishCleanupPending(
-      ['媒体已隔离待清理：assets/la-1.png'],
+      [routine('媒体已隔离待清理：assets/la-1.png')],
       '4',
     )
     render(<LibraryWarnings />)
@@ -90,7 +95,7 @@ describe('LibraryWarnings 冲突证据区（PR #222 评审 P1）', () => {
     act(() => {
       diagnostics.publishLibraryWarnings([])
       diagnostics.publishCleanupPending(
-        ['媒体已隔离待清理：assets/la-1.png'],
+        [routine('媒体已隔离待清理：assets/la-1.png')],
         '5',
       )
     })
@@ -102,8 +107,8 @@ describe('LibraryWarnings 冲突证据区（PR #222 评审 P1）', () => {
     const { diagnostics, LibraryWarnings } = await load()
     diagnostics.publishCleanupPending(
       [
-        '隔离项身份异常，保留现场待恢复：assets/la-3.png',
-        '.trash/t-indexuncertain-1',
+        evidence('隔离项身份异常，保留现场待恢复：assets/la-3.png'),
+        evidence('.trash/t-indexuncertain-1'),
       ],
       '6',
     )
@@ -124,8 +129,8 @@ describe('LibraryWarnings 冲突证据区（PR #222 评审 P1）', () => {
     const { diagnostics, LibraryWarnings } = await load()
     diagnostics.publishCleanupPending(
       [
-        '媒体已隔离待清理：assets/la-1.png',
-        '隔离项保留（身份不符或被占用）：la-4 / .trash/t-y',
+        routine('媒体已隔离待清理：assets/la-1.png'),
+        evidence('隔离项保留（身份不符或被占用）：la-4 / .trash/t-y'),
       ],
       '7',
     )
@@ -134,10 +139,23 @@ describe('LibraryWarnings 冲突证据区（PR #222 评审 P1）', () => {
     expect(screen.getByText(/待人工核对的删除事务（1 项）/)).toBeTruthy()
     // 混合态下 .trash 可能混有仍需保留的原媒体：常规区不得再给目录级
     // 删除指引，改为明示暂缓与恢复条件
-    const routine = screen
+    const routineSection = screen
       .getByText(/删除隔离区待清理（1 项）/)
       .closest('details')!
-    expect(routine.textContent).not.toContain('删除应用数据目录下')
-    expect(routine.textContent).toContain('暂缓')
+    expect(routineSection.textContent).not.toContain('删除应用数据目录下')
+    expect(routineSection.textContent).toContain('暂缓')
+  })
+
+  it('分类不经文案（issue #229）：措辞/本地化变化不改变呈现分区', async () => {
+    const { diagnostics, LibraryWarnings } = await load()
+    // 验收：「媒体已隔离待清理：…」这一历史上的 routine 文案带 evidence
+    // kind 时必须进入证据区——分类只读 kind，不推导自然语言
+    diagnostics.publishCleanupPending(
+      [evidence('媒体已隔离待清理：assets/la-1.png')],
+      '8',
+    )
+    render(<LibraryWarnings />)
+    expect(screen.getByText(/待人工核对的删除事务（1 项）/)).toBeTruthy()
+    expect(screen.queryByText(/删除隔离区待清理（/)).toBeNull()
   })
 })

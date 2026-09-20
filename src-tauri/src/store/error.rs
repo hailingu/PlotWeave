@@ -146,6 +146,20 @@ pub(crate) fn to_ipc_text(e: StoreError) -> String {
     e.to_string()
 }
 
+/// `load_project` 出口的 IPC 文案（issue #229）：NotFound 根因携带稳定机器
+/// 码前缀 `[project_not_found] `——前端程序判定（空库播种的存在性分支）按码
+/// 分支，不经中文文案，展示措辞/本地化调整不改变行为；码不上屏，前端展示层
+/// 剥离前缀。其余类别（Io/损坏/拒绝）不带码，前端对无码错误保守视为「存在
+/// 但不可读」，绝不以示例覆盖。与 issue #144 保留的 `Result<_, String>` 出口
+/// 契约兼容；新增需要程序判定的错误时在此登记码值。
+pub(crate) fn load_project_ipc_text(e: StoreError) -> String {
+    if matches!(e.root(), StoreError::NotFound { .. }) {
+        format!("[project_not_found] {e}")
+    } else {
+        e.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,5 +270,30 @@ mod tests {
                 "决策类失败不应伪造来源：{e}"
             );
         }
+    }
+
+    /// issue #229 契约：`load_project` 的 NotFound 出口携带稳定机器码前缀
+    /// `[project_not_found] `——前端播种按码分支，不经中文文案（文案可
+    /// 本地化/改写而行为不变）；其余类别（Io/损坏/拒绝）不带码，前端对
+    /// 无码错误保守视为「存在但不可读」，绝不以示例覆盖。
+    #[test]
+    fn load_project_ipc_text_codes_only_not_found_root() {
+        assert_eq!(
+            load_project_ipc_text(StoreError::missing("项目不存在：p-1")),
+            "[project_not_found] 项目不存在：p-1"
+        );
+        // 包装链按根因类别判定（root() 越过 Contextual）
+        let wrapped = StoreError::missing("项目不存在：p-2").prefixed("读取失败");
+        assert_eq!(
+            load_project_ipc_text(wrapped),
+            "[project_not_found] 读取失败：项目不存在：p-2"
+        );
+        // 非 NotFound 类别不带码：不可读/未知错误前端保守跳过播种
+        let io = StoreError::io("读取项目文件失败", io::Error::other("denied"));
+        assert_eq!(load_project_ipc_text(io), "读取项目文件失败：denied");
+        assert_eq!(
+            load_project_ipc_text(StoreError::CorruptEnvelope("信封矛盾")),
+            "信封矛盾"
+        );
     }
 }

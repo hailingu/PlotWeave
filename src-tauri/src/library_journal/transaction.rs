@@ -7,7 +7,8 @@ use serde_json::{json, Value};
 
 use super::{
     ensure_trash_dir, fsync_dir, identity_bound_unlink, read_journal, recover,
-    verify_trash_identity, write_journal, JournalEntry, Recovery, TrashVerdict, TRASH_DIR,
+    verify_trash_identity, write_journal, CleanupPendingItem, JournalEntry, Recovery, TrashVerdict,
+    TRASH_DIR,
 };
 use crate::library::error::LibraryError;
 use crate::library_fs::{
@@ -284,11 +285,15 @@ fn commit_quarantined_delete(
                 entries.retain(|e| e.id != txn);
                 write_journal(library, &entries)?;
             } else {
-                cleanup_pending.push(format!("媒体已隔离待清理：{rel}"));
+                cleanup_pending.push(CleanupPendingItem::routine(format!(
+                    "媒体已隔离待清理：{rel}"
+                )));
             }
         }
         TrashVerdict::Missing | TrashVerdict::Mismatch => {
-            cleanup_pending.push(format!("隔离项身份异常，保留现场待恢复：{rel}"));
+            cleanup_pending.push(CleanupPendingItem::evidence(format!(
+                "隔离项身份异常，保留现场待恢复：{rel}"
+            )));
         }
     }
     Ok(json!({ "warnings": warnings, "cleanupPending": cleanup_pending }))

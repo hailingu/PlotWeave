@@ -2,6 +2,8 @@
 /** PR #222：启动监听屏障及原生恢复事件的快照顺序；事件合同见数据模型 §7.2。 */
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
+const routine = (message: string) => ({ kind: 'routine' as const, message })
+
 const { listen, renderApp } = vi.hoisted(() => ({
   listen: vi.fn(),
   renderApp: vi.fn(),
@@ -53,16 +55,16 @@ it('恢复事件更新快照，迟到列表不能回退，迟到警告仍建立�
   await vi.waitFor(() => expect(listen).toHaveBeenCalledOnce())
   const d = await import('./library/libraryDiagnostics')
   const deliver = listen.mock.calls[0][1]
-  d.publishCleanupPending(['old'], '1')
+  d.publishCleanupPending([routine('old')], '1')
   deliver({
     payload: { warnings: [], cleanupPending: [], diagnosticsRevision: '3' },
   })
-  d.publishCleanupPending(['old'], '2')
+  d.publishCleanupPending([routine('old')], '2')
   expect(d.cleanupPendingSnapshot()).toEqual([])
   deliver({
     payload: {
       warnings: ['冲突'],
-      cleanupPending: ['old'],
+      cleanupPending: [routine('old')],
       diagnosticsRevision: '2',
     },
   })
@@ -89,9 +91,9 @@ it('非法事件保留当前状态，后续合法事件仍能恢复更新', asyn
   await vi.waitFor(() => expect(listen).toHaveBeenCalledOnce())
   const d = await import('./library/libraryDiagnostics')
   const deliver = listen.mock.calls[0][1]
-  d.publishCleanupPending(['pending'], '1')
+  d.publishCleanupPending([routine('pending')], '1')
   deliver({ payload: null })
-  expect(d.cleanupPendingSnapshot()).toEqual(['pending'])
+  expect(d.cleanupPendingSnapshot()).toEqual([routine('pending')])
   deliver({
     payload: { warnings: [], cleanupPending: [], diagnosticsRevision: '2' },
   })

@@ -7,15 +7,17 @@ use tauri::{AppHandle, Emitter};
 
 use super::{reserve_revision, LAST_REVISION};
 use crate::library::error::LibraryError;
-use crate::library_journal::{library_file_lock, library_op_lock, Recovery};
+use crate::library_journal::{library_file_lock, library_op_lock, CleanupPendingItem, Recovery};
 
 /// 与命令响应共用的诊断信封；没有成功恢复时不构造伪空快照。
+/// cleanupPending 为结构化条目（issue #229）：kind 为机器可读分类，
+/// 前端按 kind 分区呈现，不经中文文案推导。
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RecoverySnapshot {
     diagnostics_revision: String,
     warnings: Vec<String>,
-    cleanup_pending: Vec<String>,
+    cleanup_pending: Vec<CleanupPendingItem>,
 }
 
 impl RecoverySnapshot {
