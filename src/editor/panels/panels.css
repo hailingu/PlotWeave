@@ -303,7 +303,7 @@
 }
 
 .pw-outline-ep-btn.on {
-  color: #fff;
+  color: var(--on-brand);
   background: var(--brand-gradient);
 }
 
@@ -420,7 +420,7 @@
 /* 删除类批次：确认按钮 danger 色，执行是显式动作（§6 不设自动执行） */
 .pw-ai-btn.primary.danger {
   background: var(--danger);
-  color: #fff;
+  color: var(--on-danger);
 }
 
 /* ---- ✦AI 对话（§6：气泡、引导卡、输入区） ---- */
@@ -551,7 +551,7 @@
 
 .pw-settings-x:hover {
   background: var(--danger);
-  color: #fff;
+  color: var(--on-danger);
 }
 
 .pw-settings-add {
