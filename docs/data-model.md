@@ -516,7 +516,7 @@ interface AssetGroup {
 | 项目 | `rename_project` | 改 `project.name`；name 在命令边界按 §9.3 项目名校验口径校验并保存规范化结果，索引同步由持久化层负责 | `App` 改名链经 `projectStore.save`（name 校验与索引同步由 §10.5 `save_project` 边界完成）；**尚未接入撤销栈**——改名不可撤销，首页/编辑器两条链均只写状态并保存（`HistoryCommand` 不涉及） |
 | 资产 | `set_asset` / `remove_asset` | set 为 upsert 语义（id 已存在 = 覆盖），但必须经公开 dispatcher 的 Rust 实路径预检后才交给内部 reducer；inverse 视新增/覆盖而定（见 9.3） | `useAssetIndex`（索引增删写通道，由各命令包进撤销单元）；预检实际落点见 §9.3 实施对照 |
 | 视口 | `update_viewport` | 不进撤销栈；过程帧 transient 不落盘，交互结束帧置脏随防抖持久化（§9.4） | `useEditorPersistence.onMoveEnd`（更新视口 ref + 显式标脏，衔接 `useDebouncedSave` 防抖落盘；不经命令） |
-| 批量 | `batch` | 一等命令，整批作为单个撤销单元；整批原子——预校验任一子命令失败即整批拒绝、零变更（见 9.3） | AI 批量经 `ai/commands.ts` 契约层与 `ai/batchFold.ts` 的 `validateAiBatch` 校验后由 `ai/batchSim.ts` 在虚拟终态折叠，forward/backward 闭包整体入栈为一条复合命令（§12） |
+| 批量 | `batch` | 一等命令，整批作为单个撤销单元；整批原子——预校验任一子命令失败即整批拒绝、零变更（见 9.3） | 通用 `batch` dispatcher 未落地；已交付的手工复合命令：AI 批量经 `ai/commands.ts` 契约层与 `ai/batchFold.ts` 的 `validateAiBatch` 校验后由 `ai/batchSim.ts` 在虚拟终态折叠，forward/backward 闭包整体入栈为一条复合命令（§12）；`useOutlineDrop` 把 sequence 边手术 + episodeNo 补丁组合为一条命令（§3.5，一次 undo/redo 整体回滚/重放） |
 
 ### 9.3 命令数据模型
 
