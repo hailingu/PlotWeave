@@ -139,7 +139,7 @@ const edgeIds = (h: Harness) => h.result.current.doc.edges.map((e) => e.id)
 const assetIds = (h: Harness) =>
   Object.keys(h.result.current.doc.assets?.byId ?? {})
 
-describe('useNodeDeletion（§4.3/§7.3 删除与资产级联可撤销）', () => {
+describe('useNodeDeletion（§4.3 删除级联可撤销）', () => {
   it('删除选中节点并清理相邻边；幸存者间连线保留，收起设定面板', () => {
     const h = setup({
       nodes: [sceneNode('s1'), sceneNode('s2'), imageNode('img1')],
@@ -167,7 +167,9 @@ describe('useNodeDeletion（§4.3/§7.3 删除与资产级联可撤销）', () =
     expect(h.pushHistory).not.toHaveBeenCalled()
     expect(h.closeSettings).not.toHaveBeenCalled()
   })
+})
 
+describe('useNodeDeletion（§7.3 产物资产级联与命令往返）', () => {
   it('独占产物移出索引；仍被分镜引用或角色头像占用的资产保留', () => {
     const h = setup({
       nodes: [
