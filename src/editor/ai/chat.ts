@@ -1,7 +1,8 @@
 /**
  * LLM 对话通道（docs/ui-design.md §6、数据模型 §12.2 tool-calling 循环）。
- * 请求由 Rust 端 `llm_chat` 代理——API key 只在钥匙串与 Rust 内存中流转，
- * 不出后端（§8.2）；浏览器预览无 IPC，调用抛错由界面显示引导。
+ * 请求由 Rust 端 `llm_chat` 代理——API key 以 `provider.keyEnc` 密文随设置
+ * 落盘，Rust 解密使用（历史钥匙串仅只读回退），明文只在 Rust 进程内存中
+ * 出现，不出后端（§8.2/§10.4）；浏览器预览无 IPC，调用抛错由界面显示引导。
  * 非流式；tools 为 OpenAI 兼容工具定义（可缺省），返回 assistant message
  * 原文（content + 可选 tool_calls），写调用映射为预览卡命令、读调用就地回喂。
  */
