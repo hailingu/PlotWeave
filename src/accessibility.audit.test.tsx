@@ -7,7 +7,7 @@
  * 计算，合成 DOM 中结果不可信，禁用并保留人工验收；自动扫描亦不覆盖
  * 真实 WebView 行为与屏幕阅读器播报（见 PR 说明）。
  */
-import { cleanup, render } from '@testing-library/react'
+import { cleanup, render, screen } from '@testing-library/react'
 import axe from 'axe-core'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { HomePage } from './home/HomePage'
@@ -137,6 +137,9 @@ describe('无障碍审计（首页与设置页）', () => {
 
   it('设置页：Provider 配置与模型表单无规则违例', async () => {
     const { container } = render(<SettingsView onClose={vi.fn()} />)
+    // 表单在异步 settingsStore.load() 完成后才挂载：等待就绪态再审计，
+    // 避免快照停在「正在加载设置…」占位
+    await screen.findByText('OpenAI 兼容')
     await audit(container, '设置页')
   })
 })

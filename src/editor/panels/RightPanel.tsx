@@ -313,7 +313,7 @@ export function RightPanel(props: RightPanelProps) {
     <aside
       className={`pw-panel pw-panel-right${props.open ? '' : ' pw-panel-closed'}`}
       style={{ width: props.open ? props.width : 0 }}
-      aria-label="检查器"
+      aria-label={props.tab === 'ai' ? '✦ AI' : '检查器'}
       aria-hidden={!props.open}
     >
       {props.open && (
