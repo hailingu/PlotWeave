@@ -493,7 +493,7 @@ interface AssetGroup {
 
 数据与引用规则定义完毕，本节定义它们的唯一变更入口（原则 3）。
 
-> **就地实施状态（2026-09-21 核对，issue #237）**：本节的命令信封（`GraphCommand`/`inverse`）与统一入口（`applyCommand`/`dispatchCommand`）为**目标设计**——`src` 中无同名可导入符号（§2 的全局声明同样适用）。当前实现以等价语义交付，各小节就地标注：§9.1 信封对照 `HistoryCommand`（`src/editor/history.ts`），§9.2 清单附「当前实现入口」列，§9.3 撤销捕获与资产预检附实际落点，§9.4 已注明栈容量与合并差异。除入口形态外，本节的不变量（边界校验、整批原子、撤销完整恢复）目标与实现共同遵守；历史或未来的目标接口不可直接 invoke/import。
+> **就地实施状态（2026-09-21 核对，issue #237）**：本节的命令信封（`GraphCommand`/`inverse`）与统一入口（`applyCommand`/`dispatchCommand`）为**目标设计**——`src` 中无同名可导入符号（§2 的全局声明同样适用）。当前实现以等价语义交付，各小节就地标注：§9.1 信封对照 `HistoryCommand`（`src/editor/history.ts`），§9.2 清单附「当前实现入口」列，§9.3 撤销捕获与资产预检附实际落点，§9.4 已注明栈容量与合并差异。除入口形态外，本节的不变量（边界校验、整批原子、撤销完整恢复）目标与实现共同遵守，已标注的例外除外（如 §9.2 `rename_project` 尚未接入撤销栈）；历史或未来的目标接口不可直接 invoke/import。
 
 ### 9.1 命令结构
 
@@ -507,16 +507,16 @@ interface AssetGroup {
 
 | 类别 | 命令 | 说明 | 当前实现入口（等价语义，§9 就地实施状态） |
 | --- | --- | --- | --- |
-| 节点 | `create_node` / `delete_node` / `move_node` / `resize_node` | delete 连带删除关联边，inverse 一并恢复 | `useNodeCreation`；`useNodeDeletion`（节点+连线+产物回收同一撤销单元）；`move_node` = `useNodeDragHistory`（拖拽整段一步，过程帧不入栈）；`resize_node` 为目标设计，画布未交付 |
+| 节点 | `create_node` / `delete_node` / `move_node` / `resize_node` | delete 连带删除关联边，inverse 一并恢复 | `useNodeCreation`；`useNodeDeletion`（节点+连线+产物回收同一撤销单元）；`move_node` = `useNodeDragHistory`（拖拽整段一步，过程帧不入栈）与 `useAutoLayout.onAutoLayout`（整图位置 before/after 快照为一步撤销，issue #94）；`resize_node` 为目标设计，画布未交付 |
 | 节点数据 | `update_node_spec` / `update_node_meta` / `update_node_ui` | | `useNodePatch.patchNode`（编辑即命令、同键合并撤销；分支选项级联内置同一撤销单元）；`ui` 态为运行态不经命令通道 |
 | 连接 | `connect_edge` / `disconnect_edge` | | `useConnectionRules`（实时校验 + 落线入栈，与 AI 校验共用 `graphRules`）；`useEdgeDeletion` |
 | 设定 | `upsert_character` / `delete_character`（地点、道具同构） | | `useSettingsActions`（角色/地点整桶 before/after 可撤销）；道具（props）CRUD 为目标设计，当前仅透传保真（§6 契约桶） |
 | 设定文档 | `upsert_document` / `delete_document` | | `useSettingsActions`（documents 桶，issue 56） |
 | 集标题 | `set_episode_title` | title 为空串 = 删除该集的标题键 | `useEpisodeEditing`（连续输入同键合并） |
-| 项目 | `rename_project` | 改 `project.name`；name 在命令边界按 §9.3 项目名校验口径校验并保存规范化结果，索引同步由持久化层负责 | `App` 改名链经 `projectStore.save`（name 校验与索引同步由 §10.5 `save_project` 边界完成） |
+| 项目 | `rename_project` | 改 `project.name`；name 在命令边界按 §9.3 项目名校验口径校验并保存规范化结果，索引同步由持久化层负责 | `App` 改名链经 `projectStore.save`（name 校验与索引同步由 §10.5 `save_project` 边界完成）；**尚未接入撤销栈**——改名不可撤销，首页/编辑器两条链均只写状态并保存（`HistoryCommand` 不涉及） |
 | 资产 | `set_asset` / `remove_asset` | set 为 upsert 语义（id 已存在 = 覆盖），但必须经公开 dispatcher 的 Rust 实路径预检后才交给内部 reducer；inverse 视新增/覆盖而定（见 9.3） | `useAssetIndex`（索引增删写通道，由各命令包进撤销单元）；预检实际落点见 §9.3 实施对照 |
 | 视口 | `update_viewport` | 不进撤销栈；过程帧 transient 不落盘，交互结束帧置脏随防抖持久化（§9.4） | `useEditorPersistence.onMoveEnd`（更新视口 ref + 显式标脏，衔接 `useDebouncedSave` 防抖落盘；不经命令） |
-| 批量 | `batch` | 一等命令，整批作为单个撤销单元；整批原子——预校验任一子命令失败即整批拒绝、零变更（见 9.3） | AI 批量经 `ai/batchSim.ts` 在虚拟终态折叠，forward/backward 闭包整体入栈为一条复合命令（§12） |
+| 批量 | `batch` | 一等命令，整批作为单个撤销单元；整批原子——预校验任一子命令失败即整批拒绝、零变更（见 9.3） | AI 批量经 `ai/commands.ts` 契约层与 `ai/batchFold.ts` 的 `validateAiBatch` 校验后由 `ai/batchSim.ts` 在虚拟终态折叠，forward/backward 闭包整体入栈为一条复合命令（§12） |
 
 ### 9.3 命令数据模型
 
@@ -981,7 +981,7 @@ provider 的 API key 以**密文 `keyEnc`** 存于 provider 配置：Rust `seal`
 
 ### 12.1 核心决策：Agent 是命令的另一个生产者
 
-Agent 不直接触碰文档状态，只产出 `GraphCommand`（`actor: 'agent'`），经同一条 applyCommand 链路执行（目标形态；当前实现为 Agent 命令经 `ai/commands.ts` 校验后由 `ai/batchSim.ts` 折叠执行、整批一步撤销，见 §9 就地实施状态）。由此免费获得：
+Agent 不直接触碰文档状态，只产出 `GraphCommand`（`actor: 'agent'`），经同一条 applyCommand 链路执行（目标形态；当前实现为 Agent 命令经 `ai/batchFold.ts` 的 `validateAiBatch` 校验——契约层 `ai/commands.ts`——后由 `ai/batchSim.ts` 折叠执行、整批一步撤销，见 §9 就地实施状态）。由此免费获得：
 
 - 撤销/重做天然覆盖 AI 操作，误操作一键回滚；
 - 持久化、归一化、悬空引用检测不需要为 Agent 写第二套；
