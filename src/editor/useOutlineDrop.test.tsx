@@ -145,16 +145,26 @@ describe('useOutlineDrop（§3.5 同集重排与拒绝路径）', () => {
   })
 
   it('拒绝分镜卡与图片节点：不入栈不写状态', () => {
-    const nodes = [
-      sceneNode('s1', 1, 0),
-      looseShotNode('sh1'),
-      looseImageNode('img1'),
-    ]
-    const h = setup(nodes, [seq('e1', 's1', 's1')])
+    const h = setup(
+      [
+        sceneNode('s1', 1, 0),
+        sceneNode('s2', 1, 100),
+        looseShotNode('sh1'),
+        looseImageNode('img1'),
+      ],
+      [seq('e1', 's1', 's2')],
+    )
+    // 锚点在真实无环剧情流中：若类型守卫失效，游离节点会被真实接入
+    // （s1→sh1→s2）改写图——拒绝语义由本用例独立拥有，不被环检测代劳
     act(() => dropRow(h, 'sh1', 's1', 'after'))
     act(() => dropRow(h, 'img1', 's1', 'after'))
-    expect(h.result.current.doc.nodes).toHaveLength(3)
-    expect(seqPairs(h)).toEqual(['s1->s1'])
+    expect(h.result.current.doc.nodes.map((n) => n.id)).toEqual([
+      's1',
+      's2',
+      'sh1',
+      'img1',
+    ])
+    expect(seqPairs(h)).toEqual(['s1->s2'])
     expect(h.pushHistory).not.toHaveBeenCalled()
   })
 
