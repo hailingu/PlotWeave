@@ -304,7 +304,10 @@
 
 .pw-outline-ep-btn.on {
   color: var(--on-brand);
-  background: var(--brand-gradient);
+  /* 底经 --edge-label-bg：more 对比度下随其近实色收敛，黑字全程 ≥ 4.5:1
+   * （PR #256 评审 4063743839）；基线解析 == var(--brand-gradient)，
+   * 视觉零变化 */
+  background: var(--edge-label-bg);
 }
 
 .pw-outline-ep-count {

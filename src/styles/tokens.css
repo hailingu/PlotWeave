@@ -92,9 +92,11 @@
    * 记录（issue #240 明示不宣称对比度违约），不在 more 对比度契约内。 */
   --on-danger: #ffffff;
 
-  /* 连线选项胶囊底：基线走品牌渐变；more 下按 §2.6「背景近实色」收敛为
+  /* 品牌渐变胶囊底（branch 连线选项胶囊、大纲集选中胶囊；issue #240 起
+   * 面板侧复用）：基线走品牌渐变；more 下按 §2.6「背景近实色」收敛为
    * 实色 accent——渐变内部中段因 sRGB 伽马凸性对黑字会跌到 ~3.7:1（两端
-   * 达标不代表内部达标，见 nodeTokens.test.ts 渐变采样用例）。 */
+   * 达标不代表内部达标，见 nodeTokens.test.ts 渐变采样用例与
+   * panelsTokens.test.ts 配对采样用例）。 */
   --edge-label-bg: var(--brand-gradient);
 
   /* 失效引用角标斜纹（§4.3） */

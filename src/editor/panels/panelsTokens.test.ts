@@ -19,7 +19,8 @@
  * | 状态/前提 | 动作/过渡 | 可观测结果 | 不变量 | 验证 |
  * | --- | --- | --- | --- | --- |
  * | 浅/深外观，常态 | 渲染三处前景 | 计算色 == 重构前字面量 #fff（视觉零变化） | 令牌化不改基线观感 | 黄金表 |
- * | 大纲集进入选中态 | .on 挂类 | 前景经 --on-brand：基线白、more 翻黑 | 品牌底前景全应用同一令牌行为（tokens.css 既有契约） | 黄金表 |
+ * | 大纲集进入选中态 | .on 挂类 | 前景经 --on-brand：基线白、more 翻黑；底经 --edge-label-bg | 品牌底前景全应用同一令牌行为（tokens.css 既有契约） | 黄金表 |
+ * | 大纲集选中态 × more | 系统开增强对比度 | 前景/背景配对全程 ≥ 4.5:1（底随 --edge-label-bg 近实色收敛） | on-brand 的 ≥4.5 承诺依赖 edge.label.bg 配对（PR #256 评审 4063743839） | 配对采样断言 |
  * | danger 确认/删除悬停 | :hover / danger 挂类 | 前景经 --on-danger 恒定白 | 危险动作前景与其底色（--danger）成对经令牌进入 | 黄金表 |
  * | 浅 ↔ 深 ↔ more 切换 | 系统偏好切换 | 三处前景解析值 == 黄金基准 | 前景只随所属令牌变，不残留硬编码 | 黄金表（4 环境） |
  * | 令牌接线 | 渲染任意面板 | 三条规则引用的 var() 全部可解析 | 无失效 var（静默回落） | 接线测试 |
@@ -30,9 +31,7 @@
  * danger 底（#ff6961）上的对比度约 2.8:1，与重构前逐位相同——按 issue #240
  * 口径「本次未实测它们的对比度，不宣称已违反特定对比度比例」作为已知边界
  * 记录（tokens.css 令牌注释与本测试黄金值共同钉住现状， remediation 归
- * 后续单）；--on-brand 翻黑后与品牌渐变内部中段的对比度凹陷同 edge-label
- * 契约（见 tokens.css --edge-label-bg 注释），由该令牌族既有用例管辖。
- * 已知边界：panels.css 其余 var() 接线（如 .pw-ai-cancel:hover 的
+ * 后续单）。已知边界：panels.css 其余 var() 接线（如 .pw-ai-cancel:hover 的
  * --fill-tertiary 悬空引用）是本单之前既有的独立缺陷，接线测试只覆盖
  * 本单引入的三条规则，避免越权扩大契约。
  */
@@ -125,6 +124,102 @@ function ruleOf(selector: string): postcss.Rule {
   })
   if (!found) throw new Error(`未找到规则 ${selector}`)
   return found
+}
+
+interface Rgb {
+  r: number
+  g: number
+  b: number
+}
+
+/** 解析 #rgb/#rrggbb/#rrggbbaa；其余形式返回 null。 */
+function parseColor(input: string): (Rgb & { a: number }) | null {
+  const hex = input.trim().match(/^#([0-9a-fA-F]{3,8})$/)
+  if (!hex) return null
+  let digits = hex[1]!
+  if (digits.length === 3 || digits.length === 4) {
+    digits = [...digits].map((ch) => ch + ch).join('')
+  }
+  if (digits.length !== 6 && digits.length !== 8) return null
+  return {
+    r: parseInt(digits.slice(0, 2), 16),
+    g: parseInt(digits.slice(2, 4), 16),
+    b: parseInt(digits.slice(4, 6), 16),
+    a: digits.length === 8 ? parseInt(digits.slice(6, 8), 16) / 255 : 1,
+  }
+}
+
+/** WCAG 2.x 相对亮度与对比度（输入 0–255 sRGB）。 */
+function luminance({ r, g, b }: Rgb): number {
+  const channel = (v: number): number => {
+    const srgb = v / 255
+    return srgb <= 0.04045 ? srgb / 12.92 : ((srgb + 0.055) / 1.055) ** 2.4
+  }
+  return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+}
+
+function contrastRatio(fg: Rgb, bg: Rgb): number {
+  const l1 = luminance(fg)
+  const l2 = luminance(bg)
+  return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05)
+}
+
+/** 顶层逗号分割（忽略括号内逗号），用于展开渐变参数列表。 */
+function splitTopLevel(text: string): string[] {
+  const parts: string[] = []
+  let depth = 0
+  let current = ''
+  for (const ch of text) {
+    if (ch === '(') depth += 1
+    else if (ch === ')') depth -= 1
+    if (ch === ',' && depth === 0) {
+      parts.push(current)
+      current = ''
+    } else {
+      current += ch
+    }
+  }
+  parts.push(current)
+  return parts
+}
+
+/**
+ * 解析纯色或 linear-gradient 色标并沿 sRGB 插值采样（与 nodeTokens.test.ts
+ * 同口径）：纯色返回单点；渐变按色标分段插值采样 9 点——两端达标不代表
+ * 内部达标（sRGB 伽马凸性，见 tokens.css --edge-label-bg 注释）。
+ */
+function backgroundSamples(resolved: string, steps = 9): Rgb[] {
+  const value = resolved.trim()
+  const colors: Rgb[] = []
+  if (value.toLowerCase().startsWith('linear-gradient')) {
+    const inner = value.slice(value.indexOf('(') + 1, value.lastIndexOf(')'))
+    for (const part of splitTopLevel(inner)) {
+      const trimmed = part.trim()
+      if (/^(-?[\d.]+(deg|turn|rad|grad)|to\s)/i.test(trimmed)) continue
+      const color = parseColor(trimmed)
+      if (!color) throw new Error(`无法解析渐变色标: ${trimmed}`)
+      colors.push(color)
+    }
+  } else {
+    const single = parseColor(value)
+    if (!single) throw new Error(`无法解析背景色: ${value}`)
+    colors.push(single)
+  }
+  if (colors.length <= 1) return colors
+  const samples: Rgb[] = []
+  for (let i = 0; i < steps; i += 1) {
+    const t = (i / (steps - 1)) * (colors.length - 1)
+    const seg = Math.min(Math.floor(t), colors.length - 2)
+    const local = t - seg
+    const a = colors[seg]!
+    const b = colors[seg + 1]!
+    samples.push({
+      r: a.r + (b.r - a.r) * local,
+      g: a.g + (b.g - a.g) * local,
+      b: a.b + (b.b - a.b) * local,
+    })
+  }
+  return samples
 }
 
 /** 规则内指定声明的原值；缺失抛错（防止声明被改名后测试静默空过）。 */
@@ -229,9 +324,11 @@ describe('三处前景的语义接线与黄金基准（issue #240）', () => {
     }
   })
 
-  it('品牌选中态前景经 --on-brand：基线双外观 #ffffff（视觉零变化），more 翻黑', () => {
+  it('品牌选中态前景经 --on-brand、底经 --edge-label-bg：基线双外观 #ffffff（视觉零变化），more 翻黑', () => {
     const rule = ruleOf('.pw-outline-ep-btn.on')
-    expect(declOf(rule, 'background')).toBe('var(--brand-gradient)')
+    // 底必须经会随 more 近实色收敛的胶囊底令牌，不得直挂渐变（PR #256
+    // 评审 4063743839：黑字对未收敛渐变内部最低 3.69:1，违背 ≥4.5 契约）
+    expect(declOf(rule, 'background')).toBe('var(--edge-label-bg)')
     for (const [name, env] of BASELINE_ENVS) {
       expect(
         resolveChain(declOf(rule, 'color'), tokenValues(env)),
@@ -243,6 +340,25 @@ describe('三处前景的语义接线与黄金基准（issue #240）', () => {
         resolveChain(declOf(rule, 'color'), tokenValues(env)),
         `${name} more（on-brand 既有契约：more 翻黑）`,
       ).toBe('#000000')
+    }
+  })
+
+  it('more 对比度下选中胶囊前景/背景配对全程（含渐变内部采样）≥ 4.5:1（浅/深）', () => {
+    const rule = ruleOf('.pw-outline-ep-btn.on')
+    for (const [name, env] of MORE_ENVS) {
+      const tokens = tokenValues(env)
+      const fg = parseColor(resolveChain(declOf(rule, 'color'), tokens))
+      if (!fg) throw new Error('前景非颜色值')
+      const samples = backgroundSamples(
+        resolveChain(declOf(rule, 'background'), tokens),
+      )
+      expect(samples.length, `${name} 背景采样点数`).toBeGreaterThan(0)
+      for (const [i, bg] of samples.entries()) {
+        expect(
+          contrastRatio(fg, bg),
+          `${name} 背景采样 ${i} = ${contrastRatio(fg, bg).toFixed(2)}:1`,
+        ).toBeGreaterThanOrEqual(4.5)
+      }
     }
   })
 
