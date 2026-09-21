@@ -493,32 +493,40 @@ interface AssetGroup {
 
 数据与引用规则定义完毕，本节定义它们的唯一变更入口（原则 3）。
 
+> **就地实施状态（2026-09-21 核对，issue #237）**：本节的命令信封（`GraphCommand`/`inverse`）与统一入口（`applyCommand`/`dispatchCommand`）为**目标设计**——`src` 中无同名可导入符号（§2 的全局声明同样适用）。当前实现以等价语义交付，各小节就地标注：§9.1 信封对照 `HistoryCommand`（`src/editor/history.ts`），§9.2 清单附「当前实现入口」列，§9.3 撤销捕获与资产预检附实际落点，§9.4 已注明栈容量与合并差异。除入口形态外，本节的不变量（边界校验、整批原子、撤销完整恢复）目标与实现共同遵守，已标注的例外除外（如 §9.2 `rename_project` 尚未接入撤销栈）；历史或未来的目标接口不可直接 invoke/import。
+
 ### 9.1 命令结构
 
 单写者场景无需并发基线与路径级补丁。命令信封固定为六个字段：`id` / `type` / `actor`（变更来源：用户操作或 AI Agent，用于审计与 UI 标记，见十二节）/ `patch`（正向补丁）/ `inverse`（逆向补丁，执行时自动捕获）/ `timestamp`；另有可选的 `transient` 标记（瞬时 UI 命令，仅供拖拽/缩放等手势的过程帧使用：不进撤销栈、不置脏不落盘）。「不进撤销栈」与「不持久化」是两个独立维度——前者由 §9.4 按命令类型裁定，后者仅 transient 过程帧成立；需要持久化但不进栈的变更（如视口终帧）以非 transient 命令提交、按 §9.4 排除出栈，见 §9.4。
 
 `patch` 的具体形状由 `type` 决定，完整定义见 9.3。
 
+> **实施对照**：目标信封未落地。当前命令形状为 `HistoryCommand`（`src/editor/history.ts`）：`undo`/`redo` 闭包、可选 `coalesceKey`（800ms 内同键合并为一步撤销）、`redoGuard`（资产恢复类命令重做前的异步复验，issue #10）与 `timestamp`；无 `actor`/`id`/`patch`/`inverse` 字段——命令来源（actor）审计未实现，`aiRevision` 仅承载 AI 批次的持久提交身份（§12.2：单调计数、撤销不回退，不记录逐命令来源）；不入栈与不落盘两类变更按 §9.4 由非命令路径处理（如视口）。
+
 ### 9.2 命令清单
 
-| 类别 | 命令 | 说明 |
-| --- | --- | --- |
-| 节点 | `create_node` / `delete_node` / `move_node` / `resize_node` | delete 连带删除关联边，inverse 一并恢复 |
-| 节点数据 | `update_node_spec` / `update_node_meta` / `update_node_ui` | |
-| 连接 | `connect_edge` / `disconnect_edge` | |
-| 设定 | `upsert_character` / `delete_character`（地点、道具同构） |
-| 设定文档 | `upsert_document` / `delete_document` | | |
-| 集标题 | `set_episode_title` | title 为空串 = 删除该集的标题键 |
-| 项目 | `rename_project` | 改 `project.name`；name 在命令边界按 §9.3 项目名校验口径校验并保存规范化结果，索引同步由持久化层负责 |
-| 资产 | `set_asset` / `remove_asset` | set 为 upsert 语义（id 已存在 = 覆盖），但必须经公开 dispatcher 的 Rust 实路径预检后才交给内部 reducer；inverse 视新增/覆盖而定（见 9.3） |
-| 视口 | `update_viewport` | 不进撤销栈；过程帧 transient 不落盘，交互结束帧置脏随防抖持久化（§9.4） |
-| 批量 | `batch` | 一等命令，整批作为单个撤销单元；整批原子——预校验任一子命令失败即整批拒绝、零变更（见 9.3） |
+| 类别 | 命令 | 说明 | 当前实现入口（等价语义，§9 就地实施状态） |
+| --- | --- | --- | --- |
+| 节点 | `create_node` / `delete_node` / `move_node` / `resize_node` | delete 连带删除关联边，inverse 一并恢复 | `useNodeCreation`；`useNodeDeletion`（节点+连线+产物回收同一撤销单元）；`move_node` = `useNodeDragHistory`（拖拽整段一步，过程帧不入栈）与 `useAutoLayout.onAutoLayout`（整图位置 before/after 快照为一步撤销，issue #94）；`resize_node` 为目标设计，画布未交付 |
+| 节点数据 | `update_node_spec` / `update_node_meta` / `update_node_ui` | | `useNodePatch.patchNode`（编辑即命令、同键合并撤销；分支选项级联内置同一撤销单元）；`ui` 态为运行态不经命令通道 |
+| 连接 | `connect_edge` / `disconnect_edge` | | `useConnectionRules`（实时校验 + 落线入栈，与 AI 校验共用 `graphRules`）；`useEdgeDeletion` |
+| 设定 | `upsert_character` / `delete_character`（地点、道具同构） | | `useSettingsActions`（角色/地点整桶 before/after 可撤销）；道具（props）CRUD 为目标设计，当前仅透传保真（§6 契约桶） |
+| 设定文档 | `upsert_document` / `delete_document` | | `useSettingsActions`（documents 桶，issue 56） |
+| 集标题 | `set_episode_title` | title 为空串 = 删除该集的标题键 | `useEpisodeEditing`（连续输入同键合并） |
+| 项目 | `rename_project` | 改 `project.name`；name 在命令边界按 §9.3 项目名校验口径校验并保存规范化结果，索引同步由持久化层负责 | `App` 改名链经 `projectStore.save`（name 校验与索引同步由 §10.5 `save_project` 边界完成）；**尚未接入撤销栈**——改名不可撤销，首页/编辑器两条链均只写状态并保存（`HistoryCommand` 不涉及） |
+| 资产 | `set_asset` / `remove_asset` | set 为 upsert 语义（id 已存在 = 覆盖），但必须经公开 dispatcher 的 Rust 实路径预检后才交给内部 reducer；inverse 视新增/覆盖而定（见 9.3） | `useAssetIndex`（索引增删写通道，由各命令包进撤销单元）；预检实际落点见 §9.3 实施对照 |
+| 视口 | `update_viewport` | 不进撤销栈；过程帧 transient 不落盘，交互结束帧置脏随防抖持久化（§9.4） | `useEditorPersistence.onMoveEnd`（更新视口 ref + 显式标脏，衔接 `useDebouncedSave` 防抖落盘；不经命令） |
+| 批量 | `batch` | 一等命令，整批作为单个撤销单元；整批原子——预校验任一子命令失败即整批拒绝、零变更（见 9.3） | 通用 `batch` dispatcher 未落地；已交付的手工复合命令**列举主要入口、并非穷举**（逐项映射见各命令行的「当前实现入口」列）：AI 批量经 `ai/commands.ts` 契约层与 `ai/batchFold.ts` 的 `validateAiBatch` 校验后由 `ai/batchSim.ts` 在虚拟终态折叠为一条复合命令（§12）；`useOutlineDrop`（sequence 边手术 + episodeNo 补丁，§3.5）；`useLibraryAssetDrop`（图库资产拖入分镜：资产入索引 + 引用位绑定一条命令，含 redoGuard）；`imagegen/state.ts`（生成产物落位：新旧资产切换 + outputs 补丁同栈撤销/重做） |
 
 ### 9.3 命令数据模型
 
 命令创建时只携带**变更意图**（目标值）；`inverse` 不由创建者填写，而是 `applyCommand` 执行时从变更前文档（docBefore）自动捕获。这保证 undo 数据永远与文档真实旧值一致，创建者不可能填错。
 
+> **实施对照**：自动捕获未以集中 reducer 落地，「创建者不可能填错」的结构性保证**尚未成立**——各生产点自行编写回退闭包（`useNodePatch.patchNode` 手工枚举补丁键构造 before、`useSettingsActions.patchSettings` 的 before 快照由调用方提供、`useNodeDeletion`/`useEdgeDeletion`/`ai/batchSim.ts` 各自构造撤销闭包），遗漏旧值或快照错误的窗口由各入口的单测守护，而非结构排除。
+
 **文件系统依赖命令的入口约束**：Store 对 UI、Agent、MCP 与导入器只公开异步 `dispatchCommand`；纯 TS 的 `applyCommand` reducer 是模块私有实现，外部不得直接调用。dispatcher 遇到任意正向、撤销、重做或 batch 内的 `set_asset` 时，必须先把活动会话由 `load_project` 返回的受信 `projectId`（不得取自命令/Agent 负载）与完整 `AssetRef` 交给 Rust `validate_project_asset`，只将 Rust 原样返回的规范化 AssetRef 送入 reducer；真实路径预检失败时文档、undo/redo 栈与脏标记均保持不变。batch 在建立虚拟演进文档前完成全部 `set_asset` 预检，任一失败整批零变更；预检结果不得缓存或被另一条命令复用。`save_project` 仍按 §10.5 在每次落盘前复验完整 `assets.byId`，用于封住预检后文件被替换或删除的窗口；预检不是保存授权。
+
+> **实施对照**：统一 `dispatchCommand` 未落地，预检语义部分交付——画布拖入导入经 `src/editor/projectAssets.ts` 调 Rust `validate_project_asset`（`useCanvasDrop` 消费）；图库拖入（`useLibraryAssetDrop`）与生成产物（`imagegen/state.ts`）以 `HistoryCommand.redoGuard` 在重做前复验落盘状态（issue #10）；`save_project` 落盘前复验完整 `assets.byId`（§10.5 已实现）。**已知差异：撤销恢复资产尚未预检**——目标要求覆盖「任意正向、撤销、重做」，而 `HistoryCommand` 只有 `redoGuard` 无 undo 守卫：`useNodeDeletion` 的 undo 直接 `addAsset` 恢复被回收产物、`imagegen` 替换产物的 undo 直接恢复旧产物；撤销窗口内文件被外部删改时失效条目会回到索引，由 `save_project` 全量复验在落盘边界拒绝（known boundary，design-sync #10 已记录）。
 
 ```ts
 type Point = { x: number; y: number }
@@ -973,7 +981,7 @@ provider 的 API key 以**密文 `keyEnc`** 存于 provider 配置：Rust `seal`
 
 ### 12.1 核心决策：Agent 是命令的另一个生产者
 
-Agent 不直接触碰文档状态，只产出 `GraphCommand`（`actor: 'agent'`），经同一条 applyCommand 链路执行。由此免费获得：
+Agent 不直接触碰文档状态，只产出 `GraphCommand`（`actor: 'agent'`），经同一条 applyCommand 链路执行（目标形态；当前实现为 Agent 命令经 `ai/batchFold.ts` 的 `validateAiBatch` 校验——契约层 `ai/commands.ts`——后由 `ai/batchSim.ts` 折叠执行、整批一步撤销，见 §9 就地实施状态）。由此免费获得：
 
 - 撤销/重做天然覆盖 AI 操作，误操作一键回滚；
 - 持久化、归一化、悬空引用检测不需要为 Agent 写第二套；
