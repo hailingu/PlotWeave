@@ -1,11 +1,11 @@
 // @vitest-environment happy-dom
 /**
  * 大纲拖拽落点 hook 测试（issue #235）：真实文档状态 + 补丁写通道 +
- * 命令栈的集成 harness（与 useEditorGraphActions 生产装配同构）。
- * 断言拖放后的完整图状态与历史操作结果：同集重排（缝合缺口）、
- * 跨集与未分集移动的 episodeNo 补丁、非编剧四类/不存在节点拒绝、
- * 无变化不入栈，以及边手术 + episodeNo 一步 undo/redo——不以 mock
- * 被调用代替图状态证据。
+ * 真实 CommandStack 的集成 harness（与 useEditorGraphActions 生产装配
+ * 同构，撤销经栈的 LIFO 行使）。断言拖放后的完整图状态与历史操作结果：
+ * 同集重排（缝合缺口）、跨集与未分集移动的 episodeNo 补丁、非编剧
+ * 四类/不存在节点拒绝、无变化不入栈，以及边手术 + episodeNo 单命令
+ * 一步 undo/redo——不以 mock 被调用代替图状态证据。
  */
 import { act, renderHook } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
@@ -16,7 +16,7 @@ import {
 } from './useEditorDocument'
 import { useNodePatch } from './useNodePatch'
 import { useOutlineDrop } from './useOutlineDrop'
-import type { HistoryCommand } from './history'
+import { CommandStack, type HistoryCommand } from './history'
 import type {
   CanvasNode,
   ImageFlowNode,
@@ -80,8 +80,10 @@ function setup(nodes: CanvasNode[], edges: Edge[]) {
     edges,
     settings: { characters: [], locations: [] },
   }
-  const commands: HistoryCommand[] = []
-  const pushHistory = vi.fn((cmd: HistoryCommand) => commands.push(cmd))
+  // 真实命令栈行使 LIFO 撤销（一步撤销在其持有边界验证），spy 记录入栈
+  // 计数供拒绝/单命令断言
+  const stack = new CommandStack()
+  const pushHistory = vi.fn((cmd: HistoryCommand) => stack.push(cmd))
   const { result } = renderHook(() => {
     const doc = useEditorDocument(project)
     const patch = useNodePatch(doc, pushHistory)
@@ -95,7 +97,7 @@ function setup(nodes: CanvasNode[], edges: Edge[]) {
     })
     return { doc, outlineDrop }
   })
-  return { result, commands, pushHistory }
+  return { result, stack, pushHistory }
 }
 
 type Harness = ReturnType<typeof setup>
@@ -138,9 +140,9 @@ describe('useOutlineDrop（§3.5 同集重排与拒绝路径）', () => {
     const moved = h.result.current.doc.edges.find((e) => e.source === 's3')
     expect(moved?.className).toBe('pw-edge-sequence')
 
-    act(() => h.commands[0].undo())
+    act(() => h.stack.undo())
     expect(seqPairs(h)).toEqual(['s1->s2', 's2->s3'])
-    act(() => h.commands[0].redo())
+    act(() => h.stack.redo())
     expect(seqPairs(h)).toEqual(['s1->s3', 's3->s2'])
   })
 
@@ -202,11 +204,12 @@ describe('useOutlineDrop（§3.5 跨集与未分集移动单命令）', () => {
     act(() => dropRow(h, 'x', 's2', 'after'))
     expect(seqPairs(h)).toEqual(['s1->s2', 's2->x'])
     expect(episodeNoOf(h, 'x')).toBe(1)
+    expect(h.pushHistory).toHaveBeenCalledTimes(1)
 
-    act(() => h.commands[0].undo())
+    act(() => h.stack.undo())
     expect(seqPairs(h)).toEqual(['s1->s2'])
     expect(episodeNoOf(h, 'x')).toBe(2)
-    act(() => h.commands[0].redo())
+    act(() => h.stack.redo())
     expect(seqPairs(h)).toEqual(['s1->s2', 's2->x'])
     expect(episodeNoOf(h, 'x')).toBe(1)
   })
@@ -225,8 +228,9 @@ describe('useOutlineDrop（§3.5 跨集与未分集移动单命令）', () => {
     )
     expect(seqPairs(h)).toEqual(['s1->s2', 's2->u'])
     expect(episodeNoOf(h, 'u')).toBe(1)
+    expect(h.pushHistory).toHaveBeenCalledTimes(1)
 
-    act(() => h.commands[0].undo())
+    act(() => h.stack.undo())
     expect(seqPairs(h)).toEqual(['s1->s2'])
     expect(episodeNoOf(h, 'u')).toBeUndefined()
   })
@@ -245,8 +249,9 @@ describe('useOutlineDrop（§3.5 跨集与未分集移动单命令）', () => {
     )
     expect(seqPairs(h)).toEqual(['u1->u2', 'u2->s1'])
     expect(episodeNoOf(h, 's1')).toBeUndefined()
+    expect(h.pushHistory).toHaveBeenCalledTimes(1)
 
-    act(() => h.commands[0].undo())
+    act(() => h.stack.undo())
     expect(seqPairs(h)).toEqual(['u1->u2', 's1->u1'])
     expect(episodeNoOf(h, 's1')).toBe(1)
   })
