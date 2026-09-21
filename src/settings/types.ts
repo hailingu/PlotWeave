@@ -194,8 +194,8 @@ export interface ChatModelOption {
 
 /**
  * 三层过滤的可用模型枚举（§6 模型选择器）：模型在 provider 清单中 →
- * provider 启用且 Base URL 就绪；第三层（API key 已配置）依赖钥匙串
- * 异步查询，由调用方按 providerId 叠加置灰。
+ * provider 启用且 Base URL 就绪；第三层（API key 已配置）由调用方按
+ * provider 的 `keyEnc` 密文是否在场同步判定（不查钥匙串），叠加置灰。
  */
 export function listChatModels(settings: AppSettings): ChatModelOption[] {
   const out: ChatModelOption[] = []
