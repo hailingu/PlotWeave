@@ -282,6 +282,45 @@ const dirtFlagsArb = fc.record({
 type DirtFlags = ArbValue<typeof dirtFlagsArb>
 type GeneratedContent = ArbValue<typeof contentArb>
 
+/** 空白族身份判定（§8.1 共同值域之外的非法 id，与 idArb 的空白族一致）。 */
+const isBlankGeneratedId = (id: string): boolean => id.trim().length === 0
+
+/** 身份域脏数据判定：空白 id 或域内重复（数组序直达信封，两者均触发
+ * 归一化重发并改写文档）。 */
+function hasDirtyGeneratedIds(ids: string[]): boolean {
+  const seen = new Set<string>()
+  for (const id of ids) {
+    if (isBlankGeneratedId(id)) return true
+    if (seen.has(id)) return true
+    seen.add(id)
+  }
+  return false
+}
+
+/** 生成器级脏数据判定（评审第十八轮）：dirt 标志之外，基础生成器自身
+ * 产生的脏形态同样必然改写文档（repaired 由原始↔归一化产物的规范化
+ * JSON 差异决定）——空白/重复的节点/边/键控列表成员 id 触发重发、
+ * 非规范十进制集标题键与去空白后为空的标题触发删除。修复而漏报
+ * repaired=false 会让调用方不回写、脏数据每次加载都重复修复。 */
+function generatedContentIsDirty(c: GeneratedContent): boolean {
+  if (hasDirtyGeneratedIds(c.nodes.map((n) => n.id))) return true
+  if (hasDirtyGeneratedIds(c.edges.map((e) => e.id as string))) return true
+  for (const n of c.nodes) {
+    const memberIds: string[] =
+      n.type === 'dialogue'
+        ? n.data.lines.map((l) => l.id)
+        : n.type === 'branch'
+          ? n.data.options.map((o) => o.id)
+          : n.type === 'shot'
+            ? n.data.refs.map((r) => r.id)
+            : []
+    if (hasDirtyGeneratedIds(memberIds)) return true
+  }
+  return c.titles.some(
+    (t) => !/^[1-9]\d*$/.test(t.key) || t.title.trim().length === 0,
+  )
+}
+
 /** v1 落盘信封的注入操作面（dirt 注入 helper 的最小结构）：nodes 允许
  * 注入字符串异型（nullGraph），edges 保持可 push。 */
 interface EnvelopeDoc {
@@ -468,7 +507,8 @@ describe('归一化不变量的生成式验证（issue #232）：v1 脏信封不
           dirt.badUpdatedAt ||
           (dirt.alienEdgeHandles && c.edges.length > 0) ||
           (dirt.blankCharacterKey && c.characters.length > 0) ||
-          (dirt.collideBucketIds && bucketPopulated)
+          (dirt.collideBucketIds && bucketPopulated) ||
+          generatedContentIsDirty(c)
         ) {
           expect(round.repaired, '保证脏注入必须报告 repaired').toBe(true)
         }
@@ -481,6 +521,12 @@ describe('归一化不变量的生成式验证（issue #232）：v1 脏信封不
         const round1 = parseProject(v1Envelope(c, dirt))
         const round2 = parseProject(
           serializeProject(round1.content, PROJECT_ID, NOW),
+        )
+        // 保存边界无损（评审第十八轮）：首轮修复产物落盘-重载不得再丢
+        // 字段——只比 round3↔round2 会放行「序列化丢字段、round2 读到的
+        // 已是缺失文档且 repaired=false、round3 同样缺失」的回归
+        expect(round2.content, '修复产物经落盘-重载内容不变').toEqual(
+          round1.content,
         )
         expect(round2.migrated, '第二轮不再迁移').toBe(false)
         expect(round2.repaired, '第二轮不再修复').toBe(false)
