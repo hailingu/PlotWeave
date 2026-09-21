@@ -282,6 +282,57 @@ const dirtFlagsArb = fc.record({
 type DirtFlags = ArbValue<typeof dirtFlagsArb>
 type GeneratedContent = ArbValue<typeof contentArb>
 
+/** v1 落盘信封的注入操作面（dirt 注入 helper 的最小结构）：nodes 允许
+ * 注入字符串异型（nullGraph），edges 保持可 push。 */
+interface EnvelopeDoc {
+  graph: { nodes: unknown; edges: unknown[] } & Record<string, unknown>
+  settings: Record<string, unknown> & { characters: Record<string, unknown> }
+  assets: Record<string, unknown> & { byId: Record<string, unknown> }
+  project: Record<string, unknown>
+}
+
+/** 键 id 碰撞注入（评审第二/三轮起，评审第十七轮自 v1Envelope 拆出）：
+ * toDocSettings/keyedBy 会把生成数组里的重复 id 折叠成单键 Record——
+ * 「异键 + 值内 id 冲突」到不了归一化边界。注入直达：每个已填充桶都加
+ * 一条独立记录键持有源条目的克隆（值内 id 与源条目相同），全部设定桶与
+ * 资产索引的键 id 一致性改写路径均被行使。克隆源取首个非空白键条目
+ * （评审第十一轮）：非空白键经归一化原键存活，输出中可按 id 锚定源条目
+ * 做同载荷比对；空白键源会被重发为不可预测的新键。全空白键桶不注入——
+ * 空键重发本身已改写文档，repaired 保证不受影响。 */
+function injectBucketCollisionClones(doc: EnvelopeDoc): void {
+  const buckets: Record<string, unknown>[] = [
+    doc.settings.characters,
+    doc.settings.locations as Record<string, unknown>,
+    doc.settings.props as Record<string, unknown>,
+    doc.settings.documents as Record<string, unknown>,
+    doc.assets.byId as Record<string, unknown>,
+  ]
+  for (const bucket of buckets) {
+    const source = Object.keys(bucket).find((key) => key.trim())
+    if (source !== undefined)
+      bucket['dup-key'] = structuredClone(bucket[source])
+  }
+}
+
+/** 异型句柄注入（评审第十六轮，第十七轮自 v1Envelope 拆出）：序列化正常
+ * 产物不会携带这些形态，生成器侧构造到不了 parseProject；落在首个对象边
+ * 与首个 sequence 边上。 */
+function injectAlienEdgeHandles(doc: EnvelopeDoc): void {
+  const edges = doc.graph.edges as unknown[]
+  const anyEdge = edges.find(
+    (e): e is Record<string, unknown> =>
+      e !== null && typeof e === 'object' && !Array.isArray(e),
+  )
+  if (anyEdge !== undefined) anyEdge.targetHandle = 'alien-target'
+  const seqEdge = edges.find(
+    (e): e is Record<string, unknown> =>
+      e !== null &&
+      typeof e === 'object' &&
+      (e as { data?: { kind?: unknown } }).data?.kind === 'sequence',
+  )
+  if (seqEdge !== undefined) seqEdge.sourceHandle = 'alien-anon'
+}
+
 function v1Envelope(
   c: GeneratedContent,
   dirt: DirtFlags,
@@ -308,15 +359,7 @@ function v1Envelope(
   // 克隆隔绝对生成器样例的污染，失败样例的打印保持输入原貌
   const doc = structuredClone(
     serializeProject(content, PROJECT_ID, NOW),
-  ) as unknown as {
-    // nodes 允许注入字符串异型（nullGraph 脏注入），edges 保持可 push
-    graph: { nodes: unknown; edges: unknown[] } & Record<string, unknown>
-    settings: Record<string, unknown> & {
-      characters: Record<string, unknown>
-    }
-    assets: Record<string, unknown> & { byId: Record<string, unknown> }
-    project: Record<string, unknown>
-  }
+  ) as unknown as EnvelopeDoc
   if (dirt.nullGraph) {
     doc.graph.nodes = 'oops'
   }
@@ -334,45 +377,9 @@ function v1Envelope(
       )
     }
   }
-  if (dirt.collideBucketIds) {
-    // 评审修复（第二轮/第三轮）：toDocSettings/keyedBy 会把生成数组里的
-    // 重复 id 折叠成单键 Record——「异键 + 值内 id 冲突」到不了归一化边界。
-    // 注入直达：每个已填充桶都加一条独立记录键持有源条目的克隆（值内 id
-    // 与源条目相同），全部设定桶与资产索引的键 id 一致性改写路径均被行使。
-    // 克隆源取首个非空白键条目（评审第十一轮）：非空白键经归一化原键存活，
-    // 输出中可按 id 锚定源条目做同载荷比对；空白键源会被重发为不可预测的
-    // 新键。全空白键桶不注入——空键重发本身已改写文档，repaired 保证不受影响
-    const buckets: Record<string, unknown>[] = [
-      doc.settings.characters,
-      doc.settings.locations as Record<string, unknown>,
-      doc.settings.props as Record<string, unknown>,
-      doc.settings.documents as Record<string, unknown>,
-      doc.assets.byId as Record<string, unknown>,
-    ]
-    for (const bucket of buckets) {
-      const source = Object.keys(bucket).find((key) => key.trim())
-      if (source !== undefined)
-        bucket['dup-key'] = structuredClone(bucket[source])
-    }
-  }
+  if (dirt.collideBucketIds) injectBucketCollisionClones(doc)
   if (dirt.badUpdatedAt) doc.project.updatedAt = 'not-a-time'
-  if (dirt.alienEdgeHandles) {
-    // 异型句柄直达注入（评审第十六轮）：序列化正常产物不会携带这些形态，
-    // 生成器侧构造到不了 parseProject；落在首个对象边与首个 sequence 边上
-    const edges = doc.graph.edges as unknown[]
-    const anyEdge = edges.find(
-      (e): e is Record<string, unknown> =>
-        e !== null && typeof e === 'object' && !Array.isArray(e),
-    )
-    if (anyEdge !== undefined) anyEdge.targetHandle = 'alien-target'
-    const seqEdge = edges.find(
-      (e): e is Record<string, unknown> =>
-        e !== null &&
-        typeof e === 'object' &&
-        (e as { data?: { kind?: unknown } }).data?.kind === 'sequence',
-    )
-    if (seqEdge !== undefined) seqEdge.sourceHandle = 'alien-anon'
-  }
+  if (dirt.alienEdgeHandles) injectAlienEdgeHandles(doc)
   if (dirt.graphExt !== undefined) doc.graph.futureGraphField = dirt.graphExt
   if (dirt.settingsExt !== undefined)
     doc.settings.futureSettingsField = dirt.settingsExt
@@ -582,6 +589,20 @@ const cleanPayloadArb = fc.record({
   // ——运行态端点规则允许 branch 作 sequence/branch 边目标；布局交替后
   // 两种排列的并集覆盖 branch 入向（beat/scene→branch）与出向全目标
   branchLate: fc.boolean(),
+  // 会话级元数据（评审第十七轮）：description/createdAt/viewport/aiRevision
+  // 的合法值——此前只在脏信封生成而不做保全比对，静默丢弃不可见；合法域
+  // 依生产契约（viewport 有限数 + zoom>0、aiRevision 非负安全整数）
+  description: fc.option(shortText, { nil: undefined }),
+  metaCreatedAt: fc.option(isoText, { nil: undefined }),
+  viewport: fc.option(
+    fc.record({
+      x: finiteNumber,
+      y: finiteNumber,
+      zoom: fc.double({ min: 0.1, max: 4, noNaN: true }),
+    }),
+    { nil: undefined },
+  ),
+  aiRevision: fc.option(fc.nat(9), { nil: undefined }),
   attachSpecs: fc.array(
     fc.record({ sceneIdx: fc.nat(3), shotIdx: fc.nat(1) }),
     { maxLength: 2 },
@@ -811,6 +832,12 @@ function assembleCleanContent(payload: ArbValue<typeof cleanPayloadArb>): {
   return {
     content: {
       name: '保全',
+      ...(payload.description !== undefined
+        ? { description: payload.description }
+        : {}),
+      ...(payload.metaCreatedAt !== undefined
+        ? { createdAt: payload.metaCreatedAt }
+        : {}),
       nodes: nodes as never,
       edges: edges as never,
       settings: {
@@ -842,10 +869,34 @@ function assembleCleanContent(payload: ArbValue<typeof cleanPayloadArb>): {
         })),
       },
       episodeTitles: expectedTitles,
+      ...(payload.viewport !== undefined ? { viewport: payload.viewport } : {}),
+      ...(payload.aiRevision !== undefined
+        ? { aiRevision: payload.aiRevision }
+        : {}),
       assets: { byId: assets },
     },
     expectedTitles,
   }
+}
+
+/** 保全断言 · 会话级元数据面（评审第十七轮）：description/createdAt/
+ * viewport/aiRevision 的语义保全——description 逐字、createdAt 缺省时
+ * 落盘补盖序列化时钟（NOW）、viewport 深比对、aiRevision 按「缺省 = 0」
+ * 等价类比对（0 不落盘是 §12.2 契约，非丢失）。 */
+function assertMetaPreserved(
+  payload: ArbValue<typeof cleanPayloadArb>,
+  out: ProjectContent,
+): void {
+  expect(out.description ?? '', '项目描述保全').toBe(payload.description ?? '')
+  expect(out.createdAt, '创建时间保全（缺省补盖序列化时钟）').toBe(
+    payload.metaCreatedAt ?? NOW.toISOString(),
+  )
+  expect(out.viewport ?? undefined, '视口保全').toEqual(
+    payload.viewport ?? undefined,
+  )
+  expect(out.aiRevision ?? 0, 'AI 批次计数语义保全（缺省 = 0 等价类）').toBe(
+    payload.aiRevision ?? 0,
+  )
 }
 
 /** 保全断言 · 节点面（评审第十五轮重写为完整记录比对）：以夹具组装
@@ -1073,6 +1124,7 @@ describe('归一化不变量的生成式验证（issue #232）：有效内容保
         if (alienInjected)
           expect(round1.repaired, '异型句柄注入必须报告 repaired').toBe(true)
         assertNodesPreserved(payload, round1.content)
+        assertMetaPreserved(payload, round1.content)
         assertReferencesPreserved(round1.content)
         assertNestedIdsPreserved(payload, round1.content)
         assertSettingsPreserved(payload, round1.content, expectedTitles)
