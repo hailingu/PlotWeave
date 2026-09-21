@@ -230,7 +230,10 @@ describe('useNodeDeletion（§7.3 产物资产级联与命令往返）', () => {
     act(() => h.result.current.deleteNodesByIds(['img1']))
     expect(nodeIds(h)).toEqual(['s1'])
     expect(h.pushHistory).toHaveBeenCalledTimes(1)
+    // 缺失索引不得物化为空索引：删除与 undo 都不改写 doc.assets
+    expect(h.result.current.doc.assets).toBeUndefined()
     act(() => h.commands[0].undo())
     expect(nodeIds(h)).toEqual(['s1', 'img1'])
+    expect(h.result.current.doc.assets).toBeUndefined()
   })
 })
