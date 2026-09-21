@@ -526,7 +526,7 @@ interface AssetGroup {
 
 **文件系统依赖命令的入口约束**：Store 对 UI、Agent、MCP 与导入器只公开异步 `dispatchCommand`；纯 TS 的 `applyCommand` reducer 是模块私有实现，外部不得直接调用。dispatcher 遇到任意正向、撤销、重做或 batch 内的 `set_asset` 时，必须先把活动会话由 `load_project` 返回的受信 `projectId`（不得取自命令/Agent 负载）与完整 `AssetRef` 交给 Rust `validate_project_asset`，只将 Rust 原样返回的规范化 AssetRef 送入 reducer；真实路径预检失败时文档、undo/redo 栈与脏标记均保持不变。batch 在建立虚拟演进文档前完成全部 `set_asset` 预检，任一失败整批零变更；预检结果不得缓存或被另一条命令复用。`save_project` 仍按 §10.5 在每次落盘前复验完整 `assets.byId`，用于封住预检后文件被替换或删除的窗口；预检不是保存授权。
 
-> **实施对照**：统一 `dispatchCommand` 未落地，预检语义以既有入口交付——画布拖入导入经 `src/editor/projectAssets.ts` 调 Rust `validate_project_asset`（`useCanvasDrop` 消费）；图库拖入（`useLibraryAssetDrop`）与生成产物（`imagegen/state.ts`）以 `HistoryCommand.redoGuard` 在重做前复验落盘状态（issue #10）；`save_project` 落盘前复验完整 `assets.byId`（§10.5 已实现）。「预检失败零变更」由各入口自身的拒绝/回滚路径保证，非集中 dispatcher。
+> **实施对照**：统一 `dispatchCommand` 未落地，预检语义部分交付——画布拖入导入经 `src/editor/projectAssets.ts` 调 Rust `validate_project_asset`（`useCanvasDrop` 消费）；图库拖入（`useLibraryAssetDrop`）与生成产物（`imagegen/state.ts`）以 `HistoryCommand.redoGuard` 在重做前复验落盘状态（issue #10）；`save_project` 落盘前复验完整 `assets.byId`（§10.5 已实现）。**已知差异：撤销恢复资产尚未预检**——目标要求覆盖「任意正向、撤销、重做」，而 `HistoryCommand` 只有 `redoGuard` 无 undo 守卫：`useNodeDeletion` 的 undo 直接 `addAsset` 恢复被回收产物、`imagegen` 替换产物的 undo 直接恢复旧产物；撤销窗口内文件被外部删改时失效条目会回到索引，由 `save_project` 全量复验在落盘边界拒绝（known boundary，design-sync #10 已记录）。
 
 ```ts
 type Point = { x: number; y: number }
