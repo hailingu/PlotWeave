@@ -448,6 +448,7 @@ export function LeftPanel({
     <aside
       className={`pw-panel pw-panel-left${open ? '' : ' pw-panel-closed'}`}
       style={{ width: open ? width : 0 }}
+      aria-label="边栏"
       aria-hidden={!open}
     >
       <div className="pw-panel-inner" style={{ width }}>
