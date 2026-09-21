@@ -169,10 +169,15 @@ describe('useOutlineDrop（§3.5 同集重排与拒绝路径）', () => {
   })
 
   it('不存在的节点 id：不入栈不写状态', () => {
-    const h = setup([sceneNode('s1', 1, 0)], [])
+    const h = setup(
+      [sceneNode('s1', 1, 0), sceneNode('s2', 1, 100)],
+      [seq('e1', 's1', 's2')],
+    )
+    // 锚点在真实剧情流中：若缺失守卫失效，幽灵 id 会经计划真实改写图
     act(() => dropRow(h, 'ghost', 's1', 'after'))
     expect(h.pushHistory).not.toHaveBeenCalled()
-    expect(h.result.current.doc.nodes).toHaveLength(1)
+    expect(h.result.current.doc.nodes.map((n) => n.id)).toEqual(['s1', 's2'])
+    expect(seqPairs(h)).toEqual(['s1->s2'])
   })
 
   it('原位重放（无可执行变化）：不入栈不写状态', () => {
