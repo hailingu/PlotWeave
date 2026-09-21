@@ -9,9 +9,10 @@
  * 范围界定（issue #240 验收标准）：
  * - 三处展示前景色（大纲集选中、AI 批次删除确认、设定集条目删除悬停）由
  *   语义令牌决定：品牌底复用 --on-brand，danger 底走 --on-danger。
- * - 遮罩行为不变：.pw-panel-scroll 的 mask 渐隐 #000 止点属透明度遮罩的
- *   实现色，不是展示用主题色（issue #240 明示不为其造令牌），由结构测试
- *   钉住既有形态防回退。
+ * - 遮罩行为不变：.pw-panel-scroll 的渐隐遮罩是透明度遮罩，渲染只消费
+ *   alpha 通道——止点用色属实现色而非展示主题色（issue #240 明示不为其
+ *   造令牌），语义断言只校验「边缘全透明、中段全不透明」，不钉色值书写
+ *   形式与声明对（PR #256 评审 4063923436）。
  * - 节点样式 #107 保证不回退：本文件不触碰 nodes.css，nodeTokens.test.ts
  *   全量用例继续通过即为其回归防线。
  *
@@ -25,7 +26,7 @@
  * | 浅 ↔ 深 ↔ more 切换 | 系统偏好切换 | 三处前景解析值 == 黄金基准 | 前景只随所属令牌变，不残留硬编码 | 黄金表（4 环境） |
  * | 令牌接线 | 渲染任意面板 | 三条规则引用的 var() 全部可解析 | 无失效 var（静默回落） | 接线测试 |
  * | 结构回归 | 新增面板样式 | color 声明零硬编码色值 | 新前景必须经 tokens.css 进入 | 结构测试 |
- * | 遮罩非回退 | 任意环境 | mask 渐隐仍为双前缀 linear-gradient #000 止点 | 遮罩实现色豁免不被扩大为展示色通行证 | 结构测试 |
+ * | 遮罩非回退 | 任意环境 | mask 渐隐语义保持：首末色标全透明、内部全不透明 | 遮罩行为不变（issue #240 验收），断言与色值书写形式/声明对无关 | 语义断言（alpha 剖析） |
  *
  * 未覆盖维度：并发/时序不适用（静态样式表）；--on-danger 白字在深色外观
  * danger 底（#ff6961）上的对比度约 2.8:1，与重构前逐位相同——按 issue #240
@@ -222,6 +223,66 @@ function backgroundSamples(resolved: string, steps = 9): Rgb[] {
   return samples
 }
 
+/** 提取色标中的颜色部分：函数形式（含空格语法的 rgb(0 0 0)）取到配对
+ * 右括号，其余取首个空白分隔词；色标的位置偏移属布局数值，不参与断言。 */
+function colorTokenOf(part: string): string {
+  if (!/^[\w-]+\(/.test(part)) return part.split(/\s+/)[0]!
+  let depth = 0
+  for (let i = 0; i < part.length; i += 1) {
+    if (part[i] === '(') depth += 1
+    else if (part[i] === ')') {
+      depth -= 1
+      if (depth === 0) return part.slice(0, i + 1)
+    }
+  }
+  throw new Error(`色标函数未闭合: ${part}`)
+}
+
+/**
+ * 遮罩色标 alpha 剖析：渐隐遮罩渲染只消费 alpha 通道，与色相书写形式
+ * 无关（#000 / black / rgb(0 0 0) / rgb(0,0,0) 等价）。建模 hex /
+ * rgb() / rgba()（逗号与空格语法）/ 具名色（CSS 具名色除 transparent 外
+ * 均不透明）；其余形式（var()、color-mix() 等）抛错——超出本契约的改法
+ * 须同步更新用例而非静默通过（PR #256 评审 4063923436）。
+ */
+function stopAlpha(token: string): number {
+  const value = token.trim()
+  const percent = (raw: string): number =>
+    raw.endsWith('%') ? Number(raw.slice(0, -1)) / 100 : Number(raw)
+  if (/^transparent$/i.test(value)) return 0
+  const hex = value.match(/^#([0-9a-fA-F]{3,8})$/)
+  if (hex) {
+    let digits = hex[1]!
+    if (digits.length === 3 || digits.length === 4) {
+      digits = [...digits].map((ch) => ch + ch).join('')
+    }
+    if (digits.length === 6) return 1
+    if (digits.length === 8) return parseInt(digits.slice(6, 8), 16) / 255
+    throw new Error(`未建模的 hex 形式: ${value}`)
+  }
+  const comma = value.match(
+    /^rgba?\(\s*([\d.]+%?)\s*,\s*([\d.]+%?)\s*,\s*([\d.]+%?)\s*(?:,\s*([\d.]+%?)\s*)?\)$/,
+  )
+  if (comma) return comma[4] === undefined ? 1 : percent(comma[4])
+  const space = value.match(
+    /^rgba?\(\s*([\d.]+%?)\s+([\d.]+%?)\s+([\d.]+%?)(?:\s*\/\s*([\d.%]+))?\)$/,
+  )
+  if (space) return space[4] === undefined ? 1 : percent(space[4])
+  if (/^[\w-]+$/.test(value)) return 1
+  throw new Error(`未建模的遮罩色标形式: ${value}`)
+}
+
+/** linear-gradient 遮罩的色标 alpha 序列（方向段跳过）。 */
+function maskStopAlphas(value: string): number[] {
+  const inner = value
+    .trim()
+    .slice(value.indexOf('(') + 1, value.lastIndexOf(')'))
+  return splitTopLevel(inner)
+    .map((part) => part.trim())
+    .filter((part) => !/^(-?[\d.]+(deg|turn|rad|grad)|to\s)/i.test(part))
+    .map((part) => stopAlpha(colorTokenOf(part)))
+}
+
 /** 规则内指定声明的原值；缺失抛错（防止声明被改名后测试静默空过）。 */
 function declOf(rule: postcss.Rule, prop: string): string {
   const decl = rule.nodes.find(
@@ -294,23 +355,31 @@ describe('panels.css 前景色结构（issue #240）', () => {
     expect(offenders).toEqual([])
   })
 
-  it('遮罩实现色豁免保持既有形态：#000 止点仅在双前缀 mask 渐隐声明内', () => {
+  it('面板滚动遮罩语义：上下边缘全透明、中段全不透明（与色值书写形式无关）', () => {
+    // 渐隐遮罩渲染只消费 alpha：断言首末色标全透明、内部色标全不透明这一
+    // 可观测语义；#000/black/rgb(0 0 0) 等书写等价不误报，声明条数与
+    // 前缀形态（一条或多条、标准或 -webkit-）不钉（评审 4063923436）
     let scroll: postcss.Rule | undefined
     panelsCss.walkRules((rule) => {
       if (rule.selector === '.pw-panel-scroll') scroll = rule
     })
     expect(scroll, '未找到 .pw-panel-scroll 规则').toBeDefined()
-    const masked = (scroll!.nodes ?? []).filter(
+    const masks = (scroll!.nodes ?? []).filter(
       (node): node is postcss.Declaration =>
         node.type === 'decl' && node.prop.endsWith('mask-image'),
     )
-    const props = masked.map((decl) => decl.prop).sort()
-    expect(props).toEqual(['-webkit-mask-image', 'mask-image'])
-    for (const decl of masked) {
-      expect(decl.value).toContain('#000 ')
-      // 展示色不得借遮罩豁免回流：mask 声明里只允许实现黑一种色字面量
-      const hexes = decl.value.match(/#[0-9a-fA-F]{3,8}\b/g) ?? []
-      expect([...new Set(hexes)]).toEqual(['#000'])
+    expect(masks.length, '至少一条 mask-image 声明承载渐隐').toBeGreaterThan(0)
+    for (const decl of masks) {
+      if (!/^linear-gradient\(/i.test(decl.value.trim())) {
+        throw new Error(`${decl.prop} 非 linear-gradient 形式，未建模`)
+      }
+      const alphas = maskStopAlphas(decl.value)
+      expect(alphas.length, `${decl.prop} 色标数`).toBeGreaterThanOrEqual(3)
+      expect(alphas[0], `${decl.prop} 顶边全透明`).toBe(0)
+      expect(alphas[alphas.length - 1], `${decl.prop} 底边全透明`).toBe(0)
+      for (const [i, alpha] of alphas.slice(1, -1).entries()) {
+        expect(alpha, `${decl.prop} 内部色标 ${i} 须全不透明`).toBe(1)
+      }
     }
   })
 })
