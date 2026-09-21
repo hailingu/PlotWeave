@@ -5,6 +5,7 @@ import {
   useState,
   useSyncExternalStore,
   type ChangeEvent as ReactChangeEvent,
+  type RefObject,
 } from 'react'
 import {
   libraryStore,
@@ -169,6 +170,30 @@ function useAssetImport(
     fileRef.current?.click()
   }
   return { busy, fileRef, importFiles, onPick }
+}
+
+/** 隐藏文件输入（AssetsPanel 拆分，issue #241）：useAssetImport 的视图
+ * 侧——分类选取（onPick）经隐藏 input 触发系统选择器，多选图片；
+ * 导入完成后由 hook 清空 value，允许重复选择同一文件。 */
+function AssetImportInput({
+  fileRef,
+  onFiles,
+}: {
+  readonly fileRef: RefObject<HTMLInputElement>
+  readonly onFiles: (files: FileList | null) => void
+}) {
+  return (
+    <input
+      ref={fileRef}
+      type="file"
+      accept="image/*"
+      multiple
+      hidden
+      onChange={(e: ReactChangeEvent<HTMLInputElement>) => {
+        onFiles(e.target.files)
+      }}
+    />
+  )
 }
 
 /** 分类网格（AssetsPanel 拆分，issue #99）：分类入口 + 计数 + 导入。 */
@@ -497,16 +522,7 @@ export function AssetsPanel() {
   return (
     <div className="pw-assets">
       <LibraryWarnings />
-      <input
-        ref={fileRef}
-        type="file"
-        accept="image/*"
-        multiple
-        hidden
-        onChange={(e: ReactChangeEvent<HTMLInputElement>) =>
-          void importFiles(e.target.files)
-        }
-      />
+      <AssetImportInput fileRef={fileRef} onFiles={importFiles} />
       {selectedKind === null ? (
         <AssetKindGrid
           busy={busy}
