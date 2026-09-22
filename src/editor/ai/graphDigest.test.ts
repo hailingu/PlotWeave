@@ -202,3 +202,97 @@ describe('buildGraphDigest 旁白/动作摘要（issue 73）', () => {
     },
   )
 })
+
+describe('buildGraphDigest 连线端点查找（issue #276：索引一次，随边数线性）', () => {
+  const emptyResolvers = {
+    characters: [],
+    locations: [],
+    characterName: () => null,
+    locationName: () => null,
+  }
+
+  /** 场景链：N 个场景、N-1 条 sequence 边；节点 `id` 为计数访问器。 */
+  function chain(n: number): {
+    nodes: CanvasNode[]
+    edges: Edge[]
+    idReads: () => number
+  } {
+    let reads = 0
+    const nodes = Array.from({ length: n }, (_, i) => {
+      const id = `s${i}`
+      return node({
+        get id() {
+          reads += 1
+          return id
+        },
+        type: 'scene',
+        position: { x: i, y: 0 },
+        data: {
+          name: `场${i}`,
+          sceneNo: i + 1,
+          interior: true,
+          time: '日',
+          synopsis: '',
+          characterIds: [],
+        },
+      })
+    })
+    const edges: Edge[] = Array.from({ length: n - 1 }, (_, i) => ({
+      id: `e${i}`,
+      source: `s${i}`,
+      target: `s${i + 1}`,
+    }))
+    return { nodes, edges, idReads: () => reads }
+  }
+
+  it('节点 id 访问量随 N+E 线性增长，不随 N×E 增长（确定性访问量）', () => {
+    const small = chain(100)
+    buildGraphDigest(small.nodes, small.edges, emptyResolvers)
+    const large = chain(400)
+    buildGraphDigest(large.nodes, large.edges, emptyResolvers)
+    // 每节点固定次数（行文本 + 各索引构造）：O(N×E) 实现下 400 节点
+    // 的读数量级为 8 万，线性实现为 N 的小常数倍
+    expect(large.idReads()).toBeLessThanOrEqual(8 * 400)
+    // 4 倍输入 → 读次数不超过约 4 倍（允许常数项）
+    expect(large.idReads()).toBeLessThanOrEqual(4 * small.idReads() + 16)
+  })
+
+  it('重复 id：端点标签沿用首个匹配节点（既有 find 语义）', () => {
+    const dup: CanvasNode[] = [
+      node({
+        id: 'x',
+        type: 'beat',
+        position: { x: 0, y: 0 },
+        data: { name: '先到', tone: '' },
+      }),
+      node({
+        id: 'x',
+        type: 'beat',
+        position: { x: 0, y: 0 },
+        data: { name: '后到', tone: '' },
+      }),
+      node({
+        id: 'y',
+        type: 'beat',
+        position: { x: 0, y: 0 },
+        data: { name: '终点', tone: '' },
+      }),
+    ]
+    const digest = buildGraphDigest(
+      dup,
+      [{ id: 'e', source: 'x', target: 'y' }],
+      emptyResolvers,
+    )
+    expect(digest).toContain('sequence: x → y（节拍·先到 → 节拍·终点）')
+    expect(digest).not.toContain('节拍·后到 → ')
+  })
+
+  it('缺失端点：标签为 ?，不抛错', () => {
+    const digest = buildGraphDigest(
+      [],
+      [{ id: 'e', source: 'ghost', target: 'nobody' }],
+      emptyResolvers,
+    )
+    expect(digest).toContain('sequence: ghost → nobody（? → ?）')
+  })
+})
