@@ -135,8 +135,23 @@ export function episodeOfNode(
   return null
 }
 
+/** 压暗投影缓存（issue #273）：以源节点对象为键——源节点不可变（React
+ * Flow 以新对象表达变化），同一源节点恒得同一投影对象，React Flow 的
+ * `adoptUserNodes`（userNode 身份不变即复用内部节点）便不会因无关节点
+ * 移动而重建全部非成员。WeakMap 随源节点回收，不持有已替换节点。 */
+const DIM_PROJECTION = new WeakMap<CanvasNode, CanvasNode>()
+
+function dimmedOf(n: CanvasNode): CanvasNode {
+  const cached = DIM_PROJECTION.get(n)
+  if (cached !== undefined) return cached
+  const dim = { ...n, className: 'pw-node-dim' } as CanvasNode
+  DIM_PROJECTION.set(n, dim)
+  return dim
+}
+
 /** 集聚焦的画布投影（§3.5）：成员保持原样，非成员加降透明度类（~30%）。
- * className 是运行态样式（落盘时由模型层序列化剥离），不入持久化。 */
+ * className 是运行态样式（落盘时由模型层序列化剥离），不入持久化。
+ * 未变化的非成员复用同一投影对象（issue #273）。 */
 export function applyEpisodeFocus(
   nodes: CanvasNode[],
   edges: Edge[],
@@ -145,9 +160,7 @@ export function applyEpisodeFocus(
   if (focused === null) return nodes
   const sceneByShot = hostSceneMap(nodes, edges)
   return nodes.map((n) =>
-    episodeOfNode(n, (id) => sceneByShot.get(id)) === focused
-      ? n
-      : ({ ...n, className: 'pw-node-dim' } as CanvasNode),
+    episodeOfNode(n, (id) => sceneByShot.get(id)) === focused ? n : dimmedOf(n),
   )
 }
 
