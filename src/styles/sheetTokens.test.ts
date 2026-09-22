@@ -15,17 +15,24 @@
  *   字面色含 hex、函数色与 CSS 具名色；transparent（仅 alpha=0 无色相）与
  *   currentcolor（继承而非字面）不计。box-shadow 是层级投影非主题展示色、
  *   mask-image 只消费 alpha 通道（遮罩语义另断言），两者不在字面色禁用范围。
- * - 接线断言中，样式表内的局部自定义属性只对定义规则自身及其后代规则
- *   可达（:root/html/body 视为全局），且定义需无条件或与引用处于同一
- *   at-rule 条件链（仅在某媒体块内的定义不覆盖块外引用）；不可达的局部
- *   变量引用按悬空处理。
+ *   经展示色属性传递消费的局部自定义属性同样受禁：`.b { --fg: #fff; color:
+ *   var(--fg) }` 不得绕过契约（消费关系沿局部属性值链传递闭包计算；仅被
+ *   非展示属性消费的局部属性——如 React Flow 控件变量——不在展示色契约内）。
+ * - 接线断言按「引用点活跃的全部支持环境」逐一验证：tokens.css 值链与局部
+ *   定义值链均递归消解——令牌/局部变量自身引用缺失名、或仅在部分环境定义
+ *   （如仅浅色媒体块内）而引用点无条件，均为悬空。带 fallback 的
+ *   var(--x, v) 运行时不悬空，不计入接线违例（其中的字面色仍归结构契约）。
+ *   样式表内的局部自定义属性只对定义规则自身及其后代规则可达
+ *   （:root/html/body 视为全局）。
  * - 已接受的例外不当作违例：用户内容色（海报压字/织线兜底/损坏占位，承
  *   载面依赖海报内容，同 tokens.css --on-saturated 理由）、遮罩（压字
  *   scrim / 模态压暗）、声明自洽状态对（settings.css 文件内记录决策）。
- *   每条例外是具名注册表项（表 + 选择器 + 属性 + 已审计字面值 + 理由 +
- *   引用），非广泛排除；豁免绑定到具体值，同属性换写其他字面色或新增第二
- *   条字面声明均为新违例。注册表双向校验——新违例进不来，已修复的表项必须
- *   删除（防藏）。
+ *   每条例外是具名注册表项（表 + 选择器 + 属性 + 已审计字面值 + 条数 +
+ *   理由 + 引用），非广泛排除；豁免绑定到具体值与出现条数，同属性换写其他
+ *   字面色、新增第二条字面声明或超出已审计条数均为新违例。注册表双向校验
+ *   ——新违例进不来，已修复或条数变动的表项必须更新（防藏）。
+ * - 危险动作黄金接线断言取规则内该属性的**最后一条**声明（CSS 生效值），
+ *   同属性前置声明不再遮蔽生效值。
  * - 开放缺陷以跟踪单号入表：#262（品牌底固定白字 ×2）、#265（悬空
  *   --fill-tertiary ×1）；其修复落地时注册表同步收缩。
  * - 不重开 #240 危险色决策：--on-danger 恒白，深色底 ≈2.8:1 为已记录
@@ -37,14 +44,15 @@
  * | --- | --- | --- | --- | --- |
  * | 新增组件样式表 | glob 发现 | 自动进入全部契约，无登记清单 | 布线不全不可悄然发生 | 发现测试 |
  * | 新增展示色字面声明（hex/函数/具名色；含 fill/stroke 与 border 全部简写/长形） | 结构扫描 | 非注册表项即失败（点名表/选择器/声明） | 展示色必须经 tokens.css 或具名例外 | 结构测试 |
- * | 注册表项同属性换写其他字面色 / 新增第二条字面声明 | 结构扫描 | 按新违例点名（豁免绑定到已审计值） | 例外不覆盖未审计的值 | 结构测试 |
- * | 注册表项对应声明被修复或换值 | 结构反向校验 | 表项失配即失败 | 例外表不藏已修复项 | 结构测试 |
- * | 引用未定义 var() | 接线扫描 | 失败点名（D38 类悬空引用） | 无失效 var 静默回落 | 接线测试 |
+ * | 局部自定义属性被展示色属性（传递）消费且值含字面色 | 结构扫描 | 按违例点名（同注册表豁免） | 字面色不得经局部变量别名进入展示位 | 结构测试 |
+ * | 注册表项同属性换写其他字面色 / 新增第二条同值字面声明 / 超出已审计条数 | 结构扫描 | 按新违例点名（豁免绑定到值与条数） | 例外不覆盖未审计的值或条数 | 结构测试 |
+ * | 注册表项对应声明被修复、换值或条数变动 | 结构反向校验 | 表项失配即失败 | 例外表不藏已修复项 | 结构测试 |
+ * | 引用未定义 var()，或令牌/局部定义的值链引用缺失名（传递） | 接线扫描 | 失败点名（D38 类悬空引用） | 无失效 var 静默回落 | 接线测试 |
  * | 引用仅在无关选择器下定义的局部 var() | 接线扫描（作用域可达性） | 失败点名 | 局部定义只对自身/后代规则生效 | 接线测试 |
- * | 引用仅在某媒体块内定义的局部 var()，引用在块外或异条件 | 接线扫描（at-rule 条件链） | 失败点名 | 条件定义不覆盖其他环境 | 接线测试 |
- * | 浅/深 × 基线/more | 配对矩阵 | primary 全环境 ≥4.5、secondary more 升档 ≥4.5（§2.6） | 原则 2 按语义令牌配对成立 | 配对测试 |
+ * | 引用点在某环境活跃而定义仅在其他环境成立（如仅浅色媒体块内定义） | 接线扫描（全部支持环境逐一） | 失败点名该环境 | 定义须覆盖引用活跃的每个环境 | 接线测试 |
+ * | 浅/深 × 基线/more | 配对矩阵 | primary 全环境 ≥4.5、secondary more 升档 ≥4.5（§2.6） | 原则 2 按令牌配对成立 | 配对测试 |
  * | 悬停态换填充 | 配对矩阵 | text-primary 于 fill-quaternary 承载面 ≥4.5 | hover 配对按既有契约 | 配对测试 |
- * | 危险动作 hover/确认 | 黄金接线 | 前景四环境恒 #ffffff（#240 决策） | 危险前景经 --on-danger | 黄金测试 |
+ * | 危险动作 hover/确认 | 黄金接线（生效值 = 属性最后一条声明） | 前景四环境恒 #ffffff（#240 决策） | 危险前景经 --on-danger 且生效值不被后声明改写 | 黄金测试 |
  * | 遮罩渐变 | alpha 剖析 | 首末色标全透明、内部全不透明 | 遮罩只消费 alpha | 遮罩测试 |
  *
  * 未覆盖维度：真实 WebView 像素实测未运行；品牌底两处配对归 #262、悬空
@@ -84,12 +92,14 @@ type Env = {
   scheme: 'light' | 'dark'
   contrast: 'no-preference' | 'more'
   transparency: 'no-preference' | 'reduce'
+  motion: 'no-reduce' | 'reduce'
 }
 
 const MEDIA_FEATURES = {
   'prefers-color-scheme': 'scheme',
   'prefers-contrast': 'contrast',
   'prefers-reduced-transparency': 'transparency',
+  'prefers-reduced-motion': 'motion',
 } as const
 
 /** 求 @media 前置值真伪（逗号组相或、and 相与；嵌套块由调用方递归）。 */
@@ -111,6 +121,10 @@ function mediaMatches(prelude: string, env: Env): boolean {
 
 /** env 下 :root 自定义属性最终值（媒体块按 env 进入，后写覆盖先写）。 */
 function tokenValues(env: Env): Map<string, string> {
+  return tokenValuesOf(postcss.parse(read(TOKEN_SHEET)), env)
+}
+
+function tokenValuesOf(root: postcss.Root, env: Env): Map<string, string> {
   const out = new Map<string, string>()
   const walk = (container: postcss.Container): void => {
     for (const node of container.nodes ?? []) {
@@ -129,7 +143,7 @@ function tokenValues(env: Env): Map<string, string> {
       }
     }
   }
-  walk(postcss.parse(read(TOKEN_SHEET)))
+  walk(root)
   return out
 }
 
@@ -338,11 +352,22 @@ function hasColorLiteral(value: string): boolean {
   return false
 }
 
+/** 值内全部 var() 引用名（含带 fallback 者；用于消费关系闭包）。 */
+function allVarRefs(value: string): string[] {
+  return [...value.matchAll(/var\(\s*(--[\w-]+)/g)].map((m) => m[1]!)
+}
+
+/** 值内无 fallback 的 var() 引用名（带 fallback 者运行时不悬空，不入接线）。 */
+function noFallbackRefs(value: string): string[] {
+  return [...value.matchAll(/var\(\s*(--[\w-]+)\s*\)/g)].map((m) => m[1]!)
+}
+
 /**
- * 展示色例外注册表（issue #278）：每项 = 表 + 选择器 + 属性 + 已审计的字面值 + 理由
- * + 引用。豁免绑定到具体值：同一属性换写其他字面色或新增第二条字面声明均为新
- * 违例。双向校验：命中违例必须在表内；表项必须仍命中一条字面声明（修复落地后
- * 删除表项，防例外表藏已修复/不存在的项）。开放缺陷以跟踪单号为引用。
+ * 展示色例外注册表（issue #278）：每项 = 表 + 选择器 + 属性 + 已审计的字面值
+ * + 条数（默认 1）+ 理由 + 引用。豁免绑定到具体值与出现条数：同一属性换写
+ * 其他字面色、新增第二条同值字面声明或超出已审计条数均为新违例。双向校验：
+ * 命中违例必须在表内且不超条数；表项必须仍按已审计条数命中字面声明（修复
+ * 落地或条数变动后更新表项，防例外表藏项）。开放缺陷以跟踪单号为引用。
  */
 const STRUCTURE_EXCEPTIONS: Readonly<
   {
@@ -350,6 +375,7 @@ const STRUCTURE_EXCEPTIONS: Readonly<
     selector: string
     prop: string
     value: string
+    count?: number
     reason: string
   }[]
 > = [
@@ -565,50 +591,113 @@ describe('展示色结构契约（issue #278）', () => {
     expect(hasColorLiteral('1px solid var(--border-hairline)')).toBe(false)
   })
 
-  it('全部组件样式表的展示色声明不硬编码色值（具名例外注册表内且值一致者除外）', () => {
-    const allowed = new Set(
-      STRUCTURE_EXCEPTIONS.map((e) =>
+  it('全部组件样式表的展示色声明不硬编码色值（具名例外注册表内、值一致且不超已审计条数）', () => {
+    const audited = new Map(
+      STRUCTURE_EXCEPTIONS.map((e) => [
         structureKey(e.sheet, e.selector, e.prop, e.value),
-      ),
+        e.count ?? 1,
+      ]),
     )
     const offenders: string[] = []
-    for (const [sheet, root] of sheets) {
-      if (sheet === TOKEN_SHEET) continue
-      for (const decl of sheetDecls(root)) {
-        if (
-          isDisplayColorProp(decl.prop) &&
-          hasColorLiteral(decl.value) &&
-          !allowed.has(
-            structureKey(sheet, decl.selector, decl.prop, decl.value),
-          )
-        ) {
-          offenders.push(
-            `${sheet} ${decl.selector} ${decl.prop}: ${decl.value.trim()}`,
-          )
-        }
+    for (const [key, hit] of literalOccurrences()) {
+      const audit = audited.get(key)
+      if (audit === undefined) {
+        offenders.push(`${hit.label}（${hit.count} 条，未审计）`)
+      } else if (hit.count > audit) {
+        offenders.push(`${hit.label}（${hit.count} 条 > 已审计 ${audit} 条）`)
       }
     }
     expect(offenders).toEqual([])
   })
 
-  it('注册表每项仍命中一条值一致的真实字面声明（修复或换值后删/改表项，防例外藏项）', () => {
-    const live = new Set<string>()
-    for (const [sheet, root] of sheets) {
-      for (const decl of sheetDecls(root)) {
-        if (isDisplayColorProp(decl.prop) && hasColorLiteral(decl.value)) {
-          live.add(structureKey(sheet, decl.selector, decl.prop, decl.value))
-        }
-      }
-    }
-    const stale = STRUCTURE_EXCEPTIONS.filter(
-      (e) => !live.has(structureKey(e.sheet, e.selector, e.prop, e.value)),
+  it('经展示色传递消费的局部自定义属性不引入字面色（消费闭包按名计算，含间接消费）', () => {
+    const root = postcss.parse(
+      '.a { --fg: #fff; color: var(--fg); }\n' +
+        '.b { --mid: var(--fg); background: var(--mid); }\n' +
+        '.c { --shadow: 0 2px 8px rgba(0, 0, 0, 0.2); box-shadow: var(--shadow); }\n' +
+        '.d { --unused: #fff; }',
     )
+    const consumed = displayConsumedProps(root)
+    expect(consumed.has('--fg'), '直接消费').toBe(true)
+    expect(consumed.has('--mid'), '间接消费（经 --mid 值链）').toBe(true)
+    expect(consumed.has('--shadow'), '仅被 box-shadow 消费不入展示色契约').toBe(
+      false,
+    )
+    expect(consumed.has('--unused'), '未被消费').toBe(false)
+  })
+
+  it('注册表每项仍按已审计条数命中值一致的真实字面声明（修复/换值/条数变动后更新表项，防例外藏项）', () => {
+    const live = literalOccurrences()
+    const stale = STRUCTURE_EXCEPTIONS.filter((e) => {
+      const key = structureKey(e.sheet, e.selector, e.prop, e.value)
+      return (live.get(key)?.count ?? 0) !== (e.count ?? 1)
+    })
     expect(
-      stale.map((e) => `${e.sheet} ${e.selector} ${e.prop}: ${e.value}`),
-      '以下注册表项已不再命中任何值一致的字面声明，应删除或重审：',
+      stale.map(
+        (e) =>
+          `${e.sheet} ${e.selector} ${e.prop}: ${e.value}（期望 ${e.count ?? 1} 条，实际 ${live.get(structureKey(e.sheet, e.selector, e.prop, e.value))?.count ?? 0} 条）`,
+      ),
+      '以下注册表项已不再按已审计条数命中字面声明，应更新或删除：',
     ).toEqual([])
   })
 })
+
+/**
+ * 经展示色属性（沿局部属性值链传递）消费的局部自定义属性名集合：从全部
+ * 展示色声明的 var() 引用起做传递闭包。仅被非展示属性（如 box-shadow）消
+ * 费的局部属性不在展示色契约内。
+ */
+function displayConsumedProps(root: postcss.Root): Set<string> {
+  const locals = localDefinitions(root)
+  const consumed = new Set<string>()
+  const queue = [...sheetDecls(root)]
+    .filter((decl) => isDisplayColorProp(decl.prop))
+    .flatMap((decl) => allVarRefs(decl.value))
+  while (queue.length > 0) {
+    const name = queue.pop()!
+    if (consumed.has(name)) continue
+    consumed.add(name)
+    for (const def of locals.get(name) ?? []) {
+      queue.push(...allVarRefs(def.value))
+    }
+  }
+  return consumed
+}
+
+/**
+ * 全部组件样式表的字面展示色出现点（键 → 可读标签与条数）：展示色声明本
+ * 身，加上经展示色传递消费的局部自定义属性声明；条数参与注册表双向比对。
+ */
+function literalOccurrences(): Map<string, { label: string; count: number }> {
+  const out = new Map<string, { label: string; count: number }>()
+  const bump = (sheet: string, decl: SheetDecl): void => {
+    const key = structureKey(sheet, decl.selector, decl.prop, decl.value)
+    const hit = out.get(key)
+    if (hit) hit.count += 1
+    else {
+      out.set(key, {
+        label: `${sheet} ${decl.selector} ${decl.prop}: ${decl.value.trim()}`,
+        count: 1,
+      })
+    }
+  }
+  for (const [sheet, root] of sheets) {
+    if (sheet === TOKEN_SHEET) continue
+    const consumed = displayConsumedProps(root)
+    for (const decl of sheetDecls(root)) {
+      if (isDisplayColorProp(decl.prop) && hasColorLiteral(decl.value)) {
+        bump(sheet, decl)
+      } else if (
+        decl.prop.startsWith('--') &&
+        consumed.has(decl.prop) &&
+        hasColorLiteral(decl.value)
+      ) {
+        bump(sheet, decl)
+      }
+    }
+  }
+  return out
+}
 
 /** 全局作用域选择器：其上的自定义属性对文档内任何规则可达。 */
 const GLOBAL_SCOPES = new Set([':root', 'html', 'body', '*'])
@@ -622,82 +711,165 @@ function selectorReaches(definer: string, referencer: string): boolean {
   return /^[:.[#]/.test(rest) || /^(\s*>|\s+(?![+~]))/.test(rest)
 }
 
-/** 局部自定义属性的定义点：选择器 + 外层 at-rule 条件。 */
+/** 局部自定义属性的定义点：选择器 + 外层 at-rule 条件 + 声明值。 */
 interface LocalDef {
   selector: string
   condition: string
+  value: string
 }
 
 /**
- * 定义点列表是否可达引用点：选择器覆盖（任一定义选择器 × 任一引用选择器），
- * 且定义无条件或与引用处于同一 at-rule 条件链（仅在某媒体块内的定义不覆盖块外引用）。
+ * at-rule 条件链在 env 下是否成立（空串无条件恒真）。条件链由 sheetDecls
+ * 拼接为 `@media <params>;` 序列；仅 @media 段参与环境求值，其余 at-rule
+ * （@keyframes/@supports 等）不随建模的环境维度变化，视为恒活跃。
+ */
+function conditionActive(condition: string, env: Env): boolean {
+  if (condition === '') return true
+  return condition
+    .split(';')
+    .map((seg) => seg.trim())
+    .filter((seg) => seg.startsWith('@media '))
+    .every((seg) => mediaMatches(seg.replace(/^@media\s+/, ''), env))
+}
+
+/**
+ * 定义点列表是否选择器覆盖引用点（任一定义选择器 × 任一引用选择器）。
+ * at-rule 条件与环境可达性由调用方按 env 判定（定义点须在 env 下活跃）。
  */
 function scopeReaches(
   definers: readonly LocalDef[],
-  referencer: LocalDef,
+  referencer: { selector: string },
 ): boolean {
   const refs = referencer.selector.split(',').map((s) => s.trim())
-  return definers.some(
-    (def) =>
-      (def.condition === '' || def.condition === referencer.condition) &&
-      def.selector
-        .split(',')
-        .map((s) => s.trim())
-        .some((d) => refs.some((r) => selectorReaches(d, r))),
+  return definers.some((def) =>
+    def.selector
+      .split(',')
+      .map((s) => s.trim())
+      .some((d) => refs.some((r) => selectorReaches(d, r))),
   )
 }
 
-/** 本表局部自定义属性 → 全部定义点（含媒体块内，条件随定义点保留）。 */
+/** 本表局部自定义属性 → 全部定义点（含媒体块内，条件与声明值随定义点保留）。 */
 function localDefinitions(root: postcss.Root): Map<string, LocalDef[]> {
   const out = new Map<string, LocalDef[]>()
   for (const decl of sheetDecls(root)) {
     if (!decl.prop.startsWith('--')) continue
     const list = out.get(decl.prop) ?? []
-    list.push({ selector: decl.selector, condition: decl.condition })
+    list.push({
+      selector: decl.selector,
+      condition: decl.condition,
+      value: decl.value,
+    })
     out.set(decl.prop, list)
   }
   return out
 }
 
+/** 单个环境的接线上下文：env 生效的令牌值 + 本表局部定义。 */
+interface WiringCtx {
+  env: Env
+  tokens: Map<string, string>
+  locals: Map<string, LocalDef[]>
+}
+
 /**
- * 表内全部悬空 var() 引用：既不在 tokens.css :root，也无本表可达的局部定义
- * （选择器与 at-rule 条件均需可达，见 scopeReaches）。
+ * tokens.css 内某令牌的值链在 env 下是否完整可解析：值内无 fallback 的
+ * var() 引用须均为 env 下已定义令牌且递归完整（环按 CSS 计算值时刻无效判
+ * 断为断链）。tokens.css 被排除在组件表扫描外，其内部断链由本函数兜住。
+ */
+function tokenChainResolves(
+  name: string,
+  ctx: WiringCtx,
+  seen: ReadonlySet<string>,
+): boolean {
+  const value = ctx.tokens.get(name)
+  if (value === undefined) return false
+  return noFallbackRefs(value).every(
+    (ref) =>
+      ctx.tokens.has(ref) &&
+      !seen.has(ref) &&
+      tokenChainResolves(ref, ctx, new Set([...seen, ref])),
+  )
+}
+
+/**
+ * 引用名在指定上下文（选择器 + 条件）与 env 下是否完整可解析：全局令牌
+ * 走令牌值链；局部定义须 env 活跃 + 选择器可达，且其值链在该定义点上下文
+ * 递归完整（任一可达定义点完整即放行——级联特异性未建模，见文件尾注）。
+ */
+function refResolves(
+  name: string,
+  at: { selector: string; condition: string },
+  ctx: WiringCtx,
+  seen: ReadonlySet<string>,
+): boolean {
+  if (seen.has(name)) return false
+  if (ctx.tokens.has(name)) {
+    return tokenChainResolves(name, ctx, new Set([name]))
+  }
+  const next = new Set([...seen, name])
+  return (ctx.locals.get(name) ?? []).some(
+    (def) =>
+      conditionActive(def.condition, ctx.env) &&
+      scopeReaches([def], at) &&
+      noFallbackRefs(def.value).every((ref) =>
+        refResolves(ref, def, ctx, next),
+      ),
+  )
+}
+
+/**
+ * 表内在 env 下活跃声明的全部悬空 var() 引用：引用未定义名、令牌/局部
+ * 定义值链断裂、或定义仅在引用不活跃的其他环境成立，均按悬空点名。
  */
 function danglingRefs(
   root: postcss.Root,
-  tokenDefs: Map<string, string>,
+  env: Env,
 ): { selector: string; ref: string }[] {
-  const locals = localDefinitions(root)
+  const ctx: WiringCtx = {
+    env,
+    tokens: tokenValues(env),
+    locals: localDefinitions(root),
+  }
   const out: { selector: string; ref: string }[] = []
   for (const decl of sheetDecls(root)) {
-    for (const match of decl.value.matchAll(/var\(\s*(--[\w-]+)/g)) {
-      const ref = match[1]!
-      if (tokenDefs.has(ref)) continue
-      const definers = locals.get(ref)
-      if (definers && scopeReaches(definers, decl)) continue
-      out.push({ selector: decl.selector, ref })
+    if (!conditionActive(decl.condition, env)) continue
+    for (const ref of noFallbackRefs(decl.value)) {
+      if (!refResolves(ref, decl, ctx, new Set())) {
+        out.push({ selector: decl.selector, ref })
+      }
     }
   }
   return out
 }
 
 describe('令牌接线契约（issue #278）', () => {
-  const tokenDefs = tokenValues({
-    scheme: 'light',
-    contrast: 'no-preference',
-    transparency: 'no-preference',
-  })
+  /** 接线验证环境全集：外观 × 对比度 × 透明度 × 动效（引用点活跃的全部支持环境）。 */
+  const WIRING_ENVS: Readonly<[string, Env][]> = (
+    ['light', 'dark'] as const
+  ).flatMap((scheme) =>
+    (['no-preference', 'more'] as const).flatMap((contrast) =>
+      (['no-preference', 'reduce'] as const).flatMap((transparency) =>
+        (['no-reduce', 'reduce'] as const).map((motion): [string, Env] => [
+          `${scheme}/${contrast}/${transparency}/${motion}`,
+          { scheme, contrast, transparency, motion },
+        ]),
+      ),
+    ),
+  )
 
-  it('组件样式表引用的 var() 全部在 tokens.css 或本表作用域可达处有定义（无悬空回落）', () => {
+  it('组件样式表引用的 var() 在全部支持环境完整可解析（含令牌/局部定义值链，无悬空回落）', () => {
     const allowed = new Set(
       WIRING_EXCEPTIONS.map((e) => `${e.sheet}|${e.selector}|${e.ref}`),
     )
     const offenders: string[] = []
     for (const [sheet, root] of sheets) {
       if (sheet === TOKEN_SHEET) continue
-      for (const { selector, ref } of danglingRefs(root, tokenDefs)) {
-        if (!allowed.has(`${sheet}|${selector}|${ref}`)) {
-          offenders.push(`${sheet} ${selector} 引用 ${ref}`)
+      for (const [envName, env] of WIRING_ENVS) {
+        for (const { selector, ref } of danglingRefs(root, env)) {
+          if (!allowed.has(`${sheet}|${selector}|${ref}`)) {
+            offenders.push(`${sheet} ${selector} 引用 ${ref}（${envName}）`)
+          }
         }
       }
     }
@@ -705,8 +877,13 @@ describe('令牌接线契约（issue #278）', () => {
   })
 
   it('局部自定义属性仅对定义规则自身/后代可达，无关选择器与兄弟组合器不可达', () => {
-    const definers = [{ selector: '.react-flow__controls', condition: '' }]
-    const at = (selector: string): LocalDef => ({ selector, condition: '' })
+    const def = (selector: string): LocalDef => ({
+      selector,
+      condition: '',
+      value: '#000',
+    })
+    const definers = [def('.react-flow__controls')]
+    const at = (selector: string) => ({ selector })
     expect(scopeReaches(definers, at('.react-flow__controls'))).toBe(true)
     expect(scopeReaches(definers, at('.react-flow__controls:hover'))).toBe(true)
     expect(scopeReaches(definers, at('.react-flow__controls > button'))).toBe(
@@ -715,7 +892,7 @@ describe('令牌接线契约（issue #278）', () => {
     expect(scopeReaches(definers, at('.react-flow__controls .x, .y'))).toBe(
       true,
     )
-    expect(scopeReaches([at(':root')], at('.anything'))).toBe(true)
+    expect(scopeReaches([def(':root')], at('.anything'))).toBe(true)
     expect(scopeReaches(definers, at('.react-flow__controls-button'))).toBe(
       false,
     )
@@ -723,41 +900,114 @@ describe('令牌接线契约（issue #278）', () => {
     expect(scopeReaches(definers, at('.unrelated'))).toBe(false)
   })
 
-  it('仅在媒体块内的局部定义不覆盖块外或异条件引用；无条件定义覆盖任何条件下的引用', () => {
+  it('at-rule 条件链按环境求值：无条件恒真，单特性与多特性链按 env 逐一判定', () => {
     const dark = '@media (prefers-color-scheme: dark);'
-    const light = '@media (prefers-color-scheme: light);'
-    const darkDef = [{ selector: '.card', condition: dark }]
-    expect(scopeReaches(darkDef, { selector: '.card', condition: '' })).toBe(
-      false,
-    )
-    expect(scopeReaches(darkDef, { selector: '.card', condition: light })).toBe(
-      false,
-    )
-    expect(scopeReaches(darkDef, { selector: '.card', condition: dark })).toBe(
-      true,
-    )
-    const plainDef = [{ selector: '.card', condition: '' }]
-    expect(
-      scopeReaches(plainDef, { selector: '.card p', condition: dark }),
-    ).toBe(true)
+    const darkMore = `${dark}@media (prefers-contrast: more);`
+    const motion = '@media (prefers-reduced-motion: reduce);'
+    const light: Env = {
+      scheme: 'light',
+      contrast: 'no-preference',
+      transparency: 'no-preference',
+      motion: 'no-reduce',
+    }
+    const darkEnv: Env = { ...light, scheme: 'dark' }
+    const darkMoreEnv: Env = { ...darkEnv, contrast: 'more' }
+    const reduceMotionEnv: Env = { ...light, motion: 'reduce' }
+    expect(conditionActive('', light)).toBe(true)
+    expect(conditionActive(dark, light)).toBe(false)
+    expect(conditionActive(dark, darkEnv)).toBe(true)
+    expect(conditionActive(darkMore, darkEnv), '链上 AND 语义').toBe(false)
+    expect(conditionActive(darkMore, darkMoreEnv)).toBe(true)
+    expect(conditionActive(motion, light)).toBe(false)
+    expect(conditionActive(motion, reduceMotionEnv)).toBe(true)
   })
 
-  it('媒体块内的定义与引用在真实解析中带各自的 at-rule 条件（块外引用判悬空）', () => {
+  it('值链断裂的局部定义在消费点也判悬空（递归消解，不只查名存在）', () => {
+    const root = postcss.parse(
+      '.b { --chain: var(--missing); color: var(--chain); }',
+    )
+    const env: Env = {
+      scheme: 'light',
+      contrast: 'no-preference',
+      transparency: 'no-preference',
+      motion: 'no-reduce',
+    }
+    expect(danglingRefs(root, env)).toEqual([
+      { selector: '.b', ref: '--missing' },
+      { selector: '.b', ref: '--chain' },
+    ])
+  })
+
+  it('tokens.css 值链断裂的令牌在其消费点判悬空（定义源不在组件扫描内，由链消解兜住）', () => {
+    const env: Env = {
+      scheme: 'light',
+      contrast: 'no-preference',
+      transparency: 'no-preference',
+      motion: 'no-reduce',
+    }
+    const broken: WiringCtx = {
+      env,
+      tokens: tokenValuesOf(postcss.parse(':root { --a: var(--b); }'), env),
+      locals: new Map(),
+    }
+    const intact: WiringCtx = {
+      env,
+      tokens: tokenValuesOf(
+        postcss.parse(':root { --a: var(--b); --b: #fff; }'),
+        env,
+      ),
+      locals: new Map(),
+    }
+    const at = { selector: '.x', condition: '' }
+    expect(refResolves('--a', at, broken, new Set()), '链断裂').toBe(false)
+    expect(refResolves('--a', at, intact, new Set()), '链完整').toBe(true)
+  })
+
+  it('仅在部分环境成立的定义对其他环境下的活跃引用判悬空（逐环境验证）', () => {
+    const root = postcss.parse(
+      '@media (prefers-color-scheme: light) { .card { --only-light: #000 } }\n' +
+        '.card { color: var(--only-light) }',
+    )
+    const envOf = (scheme: 'light' | 'dark'): Env => ({
+      scheme,
+      contrast: 'no-preference',
+      transparency: 'no-preference',
+      motion: 'no-reduce',
+    })
+    expect(danglingRefs(root, envOf('light')), '浅色下定义活跃且可达').toEqual(
+      [],
+    )
+    expect(danglingRefs(root, envOf('dark')), '深色下定义不成立').toEqual([
+      { selector: '.card', ref: '--only-light' },
+    ])
+  })
+
+  it('媒体块内定义/引用在真实解析中按环境判定（无条件引用在浅色悬空，同块引用仅深色可解析）', () => {
     const root = postcss.parse(
       '@media (prefers-color-scheme: dark) { .card { --local: #000; } }\n' +
         '.card { color: var(--local); }\n' +
         '@media (prefers-color-scheme: dark) { .card p { color: var(--local); } }',
     )
-    expect(danglingRefs(root, new Map())).toEqual([
+    const envOf = (scheme: 'light' | 'dark'): Env => ({
+      scheme,
+      contrast: 'no-preference',
+      transparency: 'no-preference',
+      motion: 'no-reduce',
+    })
+    expect(danglingRefs(root, envOf('dark'))).toEqual([])
+    expect(danglingRefs(root, envOf('light'))).toEqual([
       { selector: '.card', ref: '--local' },
     ])
   })
 
-  it('接线注册表每项仍命中一条真实悬空引用（#265 修复落地后删表项）', () => {
+  it('接线注册表每项仍在至少一个环境命中真实悬空引用（#265 修复落地后删表项）', () => {
     const dangling = new Set<string>()
     for (const [sheet, root] of sheets) {
-      for (const { selector, ref } of danglingRefs(root, tokenDefs)) {
-        dangling.add(`${sheet}|${selector}|${ref}`)
+      if (sheet === TOKEN_SHEET) continue
+      for (const [, env] of WIRING_ENVS) {
+        for (const { selector, ref } of danglingRefs(root, env)) {
+          dangling.add(`${sheet}|${selector}|${ref}`)
+        }
       }
     }
     const stale = WIRING_EXCEPTIONS.filter(
@@ -770,7 +1020,7 @@ describe('令牌接线契约（issue #278）', () => {
   })
 })
 
-/** 配对环境：浅/深 × 基线/more（§2.6 文本对比度升一档）。 */
+/** 配对环境：浅/深 × 基线/more（§2.6 文本对比度升一档；动效不影响取色）。 */
 const PAIR_ENVS: Readonly<[string, Env][]> = [
   [
     'light',
@@ -778,6 +1028,7 @@ const PAIR_ENVS: Readonly<[string, Env][]> = [
       scheme: 'light',
       contrast: 'no-preference',
       transparency: 'no-preference',
+      motion: 'no-reduce',
     },
   ],
   [
@@ -786,15 +1037,26 @@ const PAIR_ENVS: Readonly<[string, Env][]> = [
       scheme: 'dark',
       contrast: 'no-preference',
       transparency: 'no-preference',
+      motion: 'no-reduce',
     },
   ],
   [
     'light+more',
-    { scheme: 'light', contrast: 'more', transparency: 'no-preference' },
+    {
+      scheme: 'light',
+      contrast: 'more',
+      transparency: 'no-preference',
+      motion: 'no-reduce',
+    },
   ],
   [
     'dark+more',
-    { scheme: 'dark', contrast: 'more', transparency: 'no-preference' },
+    {
+      scheme: 'dark',
+      contrast: 'more',
+      transparency: 'no-preference',
+      motion: 'no-reduce',
+    },
   ],
 ]
 
@@ -940,13 +1202,15 @@ function ruleOf(sheet: string, selector: string): postcss.Rule {
   return found
 }
 
+/** 规则内该属性的最后一条声明（CSS 生效值）；缺失抛错防测试静默空过。 */
 function declOf(rule: postcss.Rule, prop: string): string {
-  const decl = rule.nodes.find(
+  const decls = rule.nodes.filter(
     (node): node is postcss.Declaration =>
       node.type === 'decl' && node.prop === prop,
   )
-  if (!decl) throw new Error(`${rule.selector} 缺少 ${prop} 声明`)
-  return decl.value
+  const last = decls[decls.length - 1]
+  if (!last) throw new Error(`${rule.selector} 缺少 ${prop} 声明`)
+  return last.value
 }
 
 describe('危险动作前景接线（#240 决策补齐，issue #278）', () => {
@@ -961,6 +1225,13 @@ describe('危险动作前景接线（#240 决策补齐，issue #278）', () => {
         `${sheet} ${selector} background`,
       ).toBe('var(--danger)')
     }
+  })
+
+  it('黄金接线取生效值：同属性后置声明不被前置声明遮蔽（CSS 最后声明生效）', () => {
+    const rule = postcss.parse(
+      '.x { color: var(--on-danger); color: var(--text-primary); }',
+    ).first as postcss.Rule
+    expect(declOf(rule, 'color')).toBe('var(--text-primary)')
   })
 
   it('--on-danger 四环境消解恒 #ffffff（视觉零变化；深色底 ≈2.8:1 为 #240 已记录边界，不重开）', () => {
