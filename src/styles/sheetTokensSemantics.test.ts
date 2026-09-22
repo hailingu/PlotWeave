@@ -19,6 +19,8 @@
  * | 同选择器同条件内多条局部定义含 !important | 局部取胜扫描 | 重要声明优先于普通声明，无论源序 | 局部自定义属性也遵循重要性优先级 | 接线与类型集成语义用例 |
  * | 根令牌（tokens.css :root）同名声明含 !important，跨基线与媒体条件 | 令牌取值再消费 | 活跃重要声明优先，同重要性取后位，无效颜色被拒绝 | 根令牌与局部自定义属性同一重要性规则，非活跃声明不参与 | 令牌取值及消费正反用例 |
  * | 重要根值为 initial 或断链，消费点有 fallback | 选胜值失效后递归回退 | 有效回退恢复，无效颜色报错 | 重要性不绕过既有失败/恢复规则 | 根值 fallback 消费用例 |
+ * | 自身与祖先同名定义共存，含媒体/逗号分支及失效值 | 先选最近定义元素再比较重要性 | 自身指定值不被祖先重要值覆盖；失效时按消费点回退 | 继承层级先于同元素级联，接线与类型共享选择 | 指定/继承、环境与恢复用例 |
+ * | 根令牌置于非 media at-rule，含嵌套与非活跃媒体 | 根上下文预检 | 显式拒绝未知上下文，不默默返回旧值 | 根定义入口必须完整建模或明确失败 | TOKEN_ROOT_AT_RULE_UNMODELED 正反用例 |
  * | 基线定义、媒体块定义、后续基线定义三者同名依次出现 | 取胜排序 | 按真实源序选中最后一条，不因 Map 键插入位置误判 | 同名定义的胜出位置按真实源序，非分组首次插入位置 | 接线集成语义用例 |
  * | 媒体块内 !important 定义与无条件后位普通定义跨活跃条件分组共存 | 跨分组取胜 | 重要声明仍胜出，不因其条件分组位置在无条件后位定义之前而被覆盖 | 接线与类型集成语义用例 |
  * | 引用仅在无关选择器下定义的局部 var() | 接线扫描（作用域可达性） | 失败点名 | 局部定义只对自身/后代规则生效 | 接线测试 |
@@ -112,6 +114,154 @@ describe('展示色结构：属性与字面探测分类（issue #278）', () => 
     const root = postcss.parse('.x { Color: #fff; Background: none; }')
     const decls = [...sheetDecls(root)]
     expect(decls.map((d) => d.prop)).toEqual(['color', 'background'])
+  })
+})
+
+describe('指定值先于继承值（review 5279748560）', () => {
+  it.each([
+    ['.parent', '.parent .child'],
+    ['.parent', '.parent > .child'],
+    ['.parent', '.parent>.child'],
+    [':root', '.parent .child'],
+    ['body', '.parent .child'],
+    ['html', '.parent .child'],
+    ['.parent, .unrelated', '.parent .child'],
+  ])('%s 的重要值不能覆盖 %s 自身的指定值', (ancestor, child) => {
+    for (const reverse of [false, true]) {
+      const rules = [
+        `${child} { --fg: 4px; color: var(--fg); }`,
+        `${ancestor} { --fg: var(--text-primary) !important; }`,
+      ]
+      if (reverse) rules.reverse()
+      expect(
+        displayTypeErrors(postcss.parse(rules.join('\n')), LIGHT_ENV),
+      ).toEqual([`${child} color: 4px`])
+    }
+  })
+
+  it.each([
+    ['.parent .middle { --fg: 4px; }', '.parent .middle .child'],
+    ['* { --fg: 4px; }', '.parent .child'],
+  ])('最近祖先或通配指定值先于远祖先：%s', (nearest, consumer) => {
+    const root = postcss.parse(
+      `${nearest} .parent { --fg: var(--text-primary) !important; } ${consumer} { color: var(--fg); }`,
+    )
+    expect(displayTypeErrors(root, LIGHT_ENV)).toEqual([
+      `${consumer} color: 4px`,
+    ])
+  })
+
+  it('复合选择器延续仍是同一元素，继续比较重要性', () => {
+    const root = postcss.parse(
+      '.parent .child { --fg: 4px !important; } .parent .child.active { --fg: var(--text-primary); color: var(--fg); }',
+    )
+    expect(displayTypeErrors(root, LIGHT_ENV)).toEqual([
+      '.parent .child.active color: 4px',
+    ])
+  })
+
+  it('有效自身值不被祖先无效值污染', () => {
+    const root = postcss.parse(
+      '.parent .child { --fg: var(--text-primary); color: var(--fg); } .parent { --fg: initial !important; }',
+    )
+    expect(displayTypeErrors(root, LIGHT_ENV)).toEqual([])
+    expect(danglingRefs(root, LIGHT_ENV)).toEqual([])
+  })
+})
+
+describe('继承选择的环境与恢复（review 5279748560）', () => {
+  it('按媒体环境和逗号分支独立选择，缺少自身定义时继承', () => {
+    const root = postcss.parse(
+      '@media (prefers-color-scheme: dark) { .parent .a { --fg: 4px; } }' +
+        '.parent { --fg: var(--text-primary) !important; } .parent .a, .parent .b { color: var(--fg); }',
+    )
+    expect(displayTypeErrors(root, LIGHT_ENV)).toEqual([])
+    expect(displayTypeErrors(root, { ...LIGHT_ENV, scheme: 'dark' })).toEqual([
+      '.parent .a color: 4px',
+    ])
+  })
+
+  it.each(['initial', 'var(--missing)'])(
+    '最近定义 %s 失效不能回头使用祖先同名值',
+    (value) => {
+      const root = postcss.parse(
+        `.parent .child { --fg: ${value}; color: var(--fg); } .parent { --fg: var(--text-primary) !important; }`,
+      )
+      expect(danglingRefs(root, LIGHT_ENV)).toContainEqual({
+        selector: '.parent .child',
+        ref: '--fg',
+      })
+    },
+  )
+
+  it.each([
+    ['initial', 'currentcolor', false],
+    ['initial', '4px', true],
+    ['var(--missing)', 'currentcolor', false],
+    ['var(--missing)', '4px', true],
+  ])('最近定义 %s 使用回退 %s', (value, fallback, invalid) => {
+    const root = postcss.parse(
+      `.parent .child { --fg: ${value}; color: var(--fg, ${fallback}); } .parent { --fg: var(--text-primary) !important; }`,
+    )
+    const ctx: WiringCtx = {
+      env: LIGHT_ENV,
+      tokens: new Map([['--text-primary', '#fff']]),
+      locals: localDefinitions(root),
+    }
+    const consumer = [...sheetDecls(root)].find(
+      (decl) => decl.prop === 'color',
+    )!
+    expect(displayValueIn(consumer, ctx)).toBe(fallback)
+    expect(displayTypeErrors(root, LIGHT_ENV)).toEqual(
+      invalid ? ['.parent .child color: 4px'] : [],
+    )
+  })
+})
+
+describe('根令牌上下文边界（review 5279748560）', () => {
+  it.each([
+    '@supports (display: grid)',
+    '@layer theme',
+    '@container (width > 400px)',
+    '@media (prefers-color-scheme: dark) { @supports (display: grid)',
+  ])('%s 中的根令牌显式拒绝，不返回跳过入口的值', (context) => {
+    const closing = context.includes('{') ? '} }' : '}'
+    const root = postcss.parse(
+      `:root { --fg: #fff; } ${context} { :root { --fg: 4px; } ${closing}`,
+    )
+    // 错误码契约：docs/reviews/pr-288-review-5279748560.md 的根上下文矩阵。
+    expect(() => tokenValuesOf(root, LIGHT_ENV)).toThrow(
+      /TOKEN_ROOT_AT_RULE_UNMODELED/,
+    )
+  })
+
+  it('根规则内部嵌套未知条件的自定义属性同样拒绝', () => {
+    const root = postcss.parse(
+      ':root { --fg: #fff; @supports (display: grid) { --fg: 4px; } }',
+    )
+    // 错误码契约同本组：不能通过改变根规则与条件块的嵌套方向绕过上下文检查。
+    expect(() => tokenValuesOf(root, LIGHT_ENV)).toThrow(
+      /TOKEN_ROOT_AT_RULE_UNMODELED/,
+    )
+  })
+
+  it.each([
+    '@supports (display: grid) { .other { --fg: 4px; } }',
+    '@supports (display: grid) { :root { color: #fff; } }',
+    '@layer theme;',
+  ])('不含根令牌的其他上下文不改变根值：%s', (extra) => {
+    const root = postcss.parse(`:root { --fg: #fff; } ${extra}`)
+    expect(tokenValuesOf(root, LIGHT_ENV).get('--fg')).toBe('#fff')
+  })
+
+  it.each(['media', 'MEDIA'])('已支持的 @%s 按环境取值', (name) => {
+    const root = postcss.parse(
+      `:root { --fg: #fff; } @${name} (prefers-color-scheme: dark) { :root { --fg: 4px; } }`,
+    )
+    expect(tokenValuesOf(root, LIGHT_ENV).get('--fg')).toBe('#fff')
+    expect(
+      tokenValuesOf(root, { ...LIGHT_ENV, scheme: 'dark' }).get('--fg'),
+    ).toBe('4px')
   })
 })
 

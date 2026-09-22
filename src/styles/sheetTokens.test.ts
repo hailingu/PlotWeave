@@ -46,10 +46,14 @@
  *   性再取源序后位；组在输出中的位置按该组最后一次出现的源序排列，不因
  *   Map 键首次插入位置而提前——后续基线定义不被先前同选择器异条件定义错误
  *   遮盖，且该重要性优先规则跨活跃条件分组仍然成立。跨选择器特异性未建模。
+ *   已支持的简单后代/子代选择器先选最近定义元素：自身指定值先于祖先继承值，
+ *   然后仅在同元素候选中比较重要性/源序；不同逗号分支与媒体环境独立选择。
  *   根令牌（tokens.css :root）同名声明同样先按重要性再按源序取胜，与局部
  *   自定义属性同一规则。声明值为保证无效形态（initial，及全局作用域上退化
  *   为 initial 的 unset）的局部定义与令牌按断链处理；inherit/revert 静态
  *   不可判定，不在判定内（见未覆盖维度）。
+ *   根令牌在未知非 media at-rule 内时明确报 TOKEN_ROOT_AT_RULE_UNMODELED，
+ *   不再静默跳过该定义入口；不含根令牌的其他上下文不受此限制。
  * - 已接受的例外不当作违例：用户内容色（海报压字/织线兜底/损坏占位，承
  *   载面依赖海报内容，同 tokens.css --on-saturated 理由）、遮罩（压字
  *   scrim / 模态压暗）、声明自洽状态对（settings.css 文件内记录决策）。
@@ -95,7 +99,7 @@
  * 非文本 3:1 未断言——无既有决策，不在本单开新前沿（PR 披露）。
  * 值解析仍为静态子集，非完整 CSS 文法/层叠引擎；复杂选择器及跨选择器
  * 特异性与颜色函数内部参数未建模。审查处理记录见
- * docs/reviews/pr-288-review-5277799858.md；纯值校验由 cssColorContract.ts 负责。
+ * docs/reviews/pr-288-review-5279748560.md；纯值校验由 cssColorContract.ts 负责。
  */
 import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'

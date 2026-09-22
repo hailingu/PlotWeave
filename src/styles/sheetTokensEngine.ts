@@ -91,19 +91,39 @@ function applyRootRule(
   }
 }
 
+/** 根令牌的未知 at-rule 上下文必须显式失败，不能静默忽略可能胜出的声明。 */
+function assertRootContexts(root: postcss.Root): void {
+  root.walkDecls(/^--/, (decl) => {
+    let rule: postcss.AnyNode | undefined = decl.parent
+    while (rule?.type === 'atrule') rule = rule.parent
+    if (rule?.type !== 'rule' || rule.selector !== ':root') return
+    let context: postcss.AnyNode | undefined = decl.parent
+    while (context) {
+      if (context.type === 'atrule' && context.name.toLowerCase() !== 'media') {
+        throw new Error(
+          `TOKEN_ROOT_AT_RULE_UNMODELED: @${context.name} ${context.params}`,
+        )
+      }
+      context = context.parent
+    }
+  })
+}
+
 /**
  * env 下给定根节点 :root 自定义属性最终值（媒体块按 env 进入）：同名声明
  * 先按重要性（!important 优先于普通声明）再按源序取胜——重要声明不因其后
- * 出现普通声明而被覆盖，同重要性仍后写覆盖先写。
+ * 出现普通声明而被覆盖，同重要性仍后写覆盖先写。未建模的根 at-rule 上下文
+ * 以 TOKEN_ROOT_AT_RULE_UNMODELED 显式拒绝，包括非活跃 media 内的未知块。
  */
 export function tokenValuesOf(
   root: postcss.Root,
   env: Env,
 ): Map<string, string> {
+  assertRootContexts(root)
   const entries = new Map<string, { value: string; important: boolean }>()
   const walk = (container: postcss.Container): void => {
     for (const node of container.nodes ?? []) {
-      if (node.type === 'atrule' && node.name === 'media') {
+      if (node.type === 'atrule' && node.name.toLowerCase() === 'media') {
         if (mediaMatches(node.params, env)) walk(node)
         continue
       }
@@ -298,7 +318,7 @@ export function localDefinitions(root: postcss.Root): Map<string, LocalDef[]> {
 }
 
 /**
- * 重要性优先于源序的取胜：非空列表中若存在重要声明/定义，只在其中取源序最后一项；
+ * 同一元素内重要性优先于源序的取胜：若存在重要声明/定义，只在其中取源序最后一项；
  * 否则退回全部项取最后一项。CSS 重要性优先于源序，且跨条件分组仍成立——
  * 媒体块内的 !important 不因其条件在无条件后位定义之前而被覆盖。
  */
@@ -309,6 +329,34 @@ function pickWinner<T extends { important: boolean }>(
   const important = list.filter((item) => item.important)
   const pool = important.length > 0 ? important : list
   return pool[pool.length - 1]
+}
+
+/** 已建模的简单后代/子代链中，定义元素到消费元素的距离；复合延续仍在同元素。 */
+function inheritanceDistance(definer: string, referencer: string): number {
+  if (!selectorReaches(definer, referencer)) return Infinity
+  if (definer === '*' || definer === referencer) return 0
+  if (referencer.startsWith(definer)) {
+    return referencer.slice(definer.length).split(/[\s>]+/).length - 1
+  }
+  // 全局根定义是简单局部选择器链之外的继承来源；body 比文档根更近。
+  const localDepth = referencer.split(/[\s>]+/).length
+  return localDepth + (definer === 'body' ? 0 : 1)
+}
+
+/** 先限定最近定义元素，再让调用方在同元素的候选间应用重要性与源序。 */
+function nearestDefinitions(defs: LocalDef[], referencer: string): LocalDef[] {
+  const candidates = defs.map((def) => ({
+    def,
+    distance: Math.min(
+      ...def.selector
+        .split(',')
+        .map((branch) => inheritanceDistance(branch.trim(), referencer)),
+    ),
+  }))
+  const nearest = Math.min(...candidates.map(({ distance }) => distance))
+  return candidates
+    .filter(({ distance }) => distance === nearest)
+    .map(({ def }) => def)
 }
 
 /**
@@ -402,8 +450,8 @@ export function danglingRefs(
 
 /**
  * 单个选择器分支在 env 下的具体值：根令牌被该分支可达且活跃的局部定义
- * 遮蔽；跨活跃条件分组仍先按重要性再取源序（媒体块内的 !important 不因
- * 条件在无条件后位定义之前而被覆盖）。保证无效的自定义属性进入 fallback。
+ * 遮蔽；先定位最近定义元素，使指定值优先于祖先继承值，然后在同元素的
+ * 活跃定义之间按重要性和源序取胜。保证无效的自定义属性进入 fallback。
  */
 function valueScopeIn(decl: SheetDecl, ctx: WiringCtx): Map<string, string> {
   const scope = new Map(
@@ -417,7 +465,7 @@ function valueScopeIn(decl: SheetDecl, ctx: WiringCtx): Map<string, string> {
       (def) =>
         conditionActive(def.condition, ctx.env) && scopeReaches([def], decl),
     )
-    const winner = pickWinner(usable)
+    const winner = pickWinner(nearestDefinitions(usable, decl.selector))
     if (winner)
       scope.set(
         name,
