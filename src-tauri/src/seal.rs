@@ -5,6 +5,12 @@
 //! 威胁模型：防 settings.json 明文泄露/云同步/拷贝到其它机器解密；
 //! 不敌能以同一用户身份读取本机标识的恶意程序——这是无钥匙串前提下的
 //! 务实折中，属加密静态存储而非交互式秘密保管。
+//!
+//! 机器标识不可用即硬失败（issue #260）：ioreg 执行失败或输出不可解析时
+//! `seal`/`open` 直接拒绝，不得静默回退用户名等可猜材料充当机器绑定；
+//! 失败结果不缓存，下次调用重新探测可恢复；诊断不含用户名/机器标识/密钥/密文。
+//! 历史弱材料密文（修复前在 ioreg 失败窗口以用户名回退封装）不提供恢复
+//! 通道，正常环境下按非本机数据同款拒绝，用户在设置页重新录入 key。
 
 use aes_gcm::aead::{Aead, AeadCore, KeyInit, OsRng};
 use aes_gcm::{Aes256Gcm, Nonce};
@@ -30,45 +36,71 @@ pub fn new_salt() -> String {
     hex_encode(&bytes)
 }
 
-/// 本机标识：macOS 取 IOPlatformUUID（结果缓存）；失败回退用户名。
-pub fn machine_material() -> String {
-    static CACHE: OnceLock<String> = OnceLock::new();
-    CACHE
-        .get_or_init(|| {
-            #[cfg(target_os = "macos")]
-            {
-                if let Ok(out) = std::process::Command::new("/usr/sbin/ioreg")
-                    .args(["-rd1", "-c", "IOPlatformExpertDevice"])
-                    .output()
-                {
-                    let text = String::from_utf8_lossy(&out.stdout);
-                    if let Some(idx) = text.find("IOPlatformUUID") {
-                        let tail = &text[idx..];
-                        if let (Some(a), Some(b)) = (tail.find('"'), tail.rfind('"')) {
-                            if b > a + 1 {
-                                return tail[a + 1..b].to_string();
-                            }
-                        }
-                    }
-                }
-            }
-            std::env::var("USER").unwrap_or_else(|_| "plotweave-local".into())
-        })
-        .clone()
+/// 从 ioreg 输出提取机器材料。提取结果是既有密文的密钥派生输入，
+/// 属稳定契约：保持历史提取语义不变，否则存量密文不可解。
+fn extract_platform_uuid(text: &str) -> Option<String> {
+    let idx = text.find("IOPlatformUUID")?;
+    let tail = &text[idx..];
+    let a = tail.find('"')?;
+    let b = tail.rfind('"')?;
+    if b > a + 1 {
+        Some(tail[a + 1..b].to_string())
+    } else {
+        None
+    }
 }
 
-fn derive_key(salt: &str) -> [u8; 32] {
+/// 探测本机标识：macOS 取 IOPlatformUUID；失败返回诊断（不含敏感值）。
+#[cfg(target_os = "macos")]
+fn probe_machine_id() -> Result<String, String> {
+    let out = std::process::Command::new("/usr/sbin/ioreg")
+        .args(["-rd1", "-c", "IOPlatformExpertDevice"])
+        .output()
+        .map_err(|e| format!("本机标识不可用（ioreg 执行失败：{}）", e.kind()))?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    extract_platform_uuid(&text).ok_or_else(|| "本机标识不可用（ioreg 输出无法解析）".into())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn probe_machine_id() -> Result<String, String> {
+    Err("本机标识不可用（当前平台未实现机器标识获取）".into())
+}
+
+/// 缓存内核（可注入探测，便于测试）：只缓存成功结果，失败不入缓存，
+/// 后续调用重新探测得以恢复（issue #260：失败不得被永久固化）。
+fn cached_machine_material(
+    cache: &OnceLock<String>,
+    probe: impl FnOnce() -> Result<String, String>,
+) -> Result<String, String> {
+    if let Some(v) = cache.get() {
+        return Ok(v.clone());
+    }
+    let id = probe()?;
+    Ok(cache.get_or_init(|| id).clone())
+}
+
+/// 本机标识：不可用时返回可诊断错误，绝不回退用户名等可猜材料。
+pub fn machine_material() -> Result<String, String> {
+    static CACHE: OnceLock<String> = OnceLock::new();
+    cached_machine_material(&CACHE, probe_machine_id)
+}
+
+fn derive_key(material: &str, salt: &str) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(PEPPER);
-    hasher.update(machine_material().as_bytes());
+    hasher.update(material.as_bytes());
     hasher.update(salt.as_bytes());
     hasher.finalize().into()
 }
 
-/// 加密：返回 `pw1:<salt_hex>:<nonce+ct_hex>`。
+/// 加密：返回 `pw1:<salt_hex>:<nonce+ct_hex>`；机器标识不可用时拒绝封装。
 pub fn seal(plaintext: &str) -> Result<String, String> {
+    seal_with(&machine_material()?, plaintext)
+}
+
+fn seal_with(material: &str, plaintext: &str) -> Result<String, String> {
     let salt = new_salt();
-    let cipher = Aes256Gcm::new_from_slice(&derive_key(&salt))
+    let cipher = Aes256Gcm::new_from_slice(&derive_key(material, &salt))
         .map_err(|e| format!("密钥初始化失败：{e}"))?;
     let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
     let ct = cipher
@@ -81,8 +113,13 @@ pub fn seal(plaintext: &str) -> Result<String, String> {
     ))
 }
 
-/// 解密 envelope；任何篡改/环境不匹配都返回 Err，绝不输出明文碎片。
+/// 解密 envelope；任何篡改/环境不匹配/机器标识不可用都返回 Err，
+/// 绝不输出明文碎片，也不尝试弱材料兼容解密。
 pub fn open(envelope: &str) -> Result<String, String> {
+    open_with(&machine_material()?, envelope)
+}
+
+fn open_with(material: &str, envelope: &str) -> Result<String, String> {
     let body = envelope
         .strip_prefix(ENVELOPE_PREFIX)
         .ok_or_else(|| "密文格式未知（缺少版本前缀）".to_string())?;
@@ -95,8 +132,8 @@ pub fn open(envelope: &str) -> Result<String, String> {
         return Err("密文负载过短".into());
     }
     let (nonce, ct) = bytes.split_at(NONCE_LEN);
-    let cipher =
-        Aes256Gcm::new_from_slice(&derive_key(salt)).map_err(|e| format!("密钥初始化失败：{e}"))?;
+    let cipher = Aes256Gcm::new_from_slice(&derive_key(material, salt))
+        .map_err(|e| format!("密钥初始化失败：{e}"))?;
     let plain = cipher
         .decrypt(Nonce::from_slice(nonce), ct)
         .map_err(|_| "解密失败：密文被篡改或非本机数据".to_string())?;
@@ -129,8 +166,11 @@ fn hex_decode(s: &str) -> Option<Vec<u8>> {
 mod tests {
     use super::*;
 
+    const MATERIAL: &str = "test-machine-uuid-0000";
+
     #[test]
     fn roundtrip_preserves_plaintext() {
+        // 公开 API 走真实 machine_material：成功路径 + 加解密集成
         let secret = "sk-kimi-测试-🔑-1234567890";
         let envelope = seal(secret).unwrap();
         assert!(envelope.starts_with(ENVELOPE_PREFIX));
@@ -140,30 +180,73 @@ mod tests {
 
     #[test]
     fn each_seal_uses_fresh_salt_and_nonce() {
-        let a = seal("same-secret").unwrap();
-        let b = seal("same-secret").unwrap();
+        let a = seal_with(MATERIAL, "same-secret").unwrap();
+        let b = seal_with(MATERIAL, "same-secret").unwrap();
         assert_ne!(a, b);
-        assert_eq!(open(&a).unwrap(), "same-secret");
-        assert_eq!(open(&b).unwrap(), "same-secret");
+        assert_eq!(open_with(MATERIAL, &a).unwrap(), "same-secret");
+        assert_eq!(open_with(MATERIAL, &b).unwrap(), "same-secret");
     }
 
     #[test]
     fn tampered_payload_is_rejected() {
-        let envelope = seal("secret").unwrap();
+        let envelope = seal_with(MATERIAL, "secret").unwrap();
         let mut chars: Vec<char> = envelope.chars().collect();
         let last = chars.len() - 1;
         chars[last] = if chars[last] == '0' { '1' } else { '0' };
         let tampered: String = chars.into_iter().collect();
-        assert!(open(&tampered).is_err());
+        assert!(open_with(MATERIAL, &tampered).is_err());
     }
 
     #[test]
     fn malformed_envelopes_are_rejected() {
-        assert!(open("").is_err());
-        assert!(open("xx:00:00").is_err());
-        assert!(open("pw1:short:00").is_err());
-        assert!(open("pw1:0123456789abcdef0123456789abcdef:zz").is_err());
-        assert!(open("pw1:0123456789abcdef0123456789abcdef:00").is_err());
+        assert!(open_with(MATERIAL, "").is_err());
+        assert!(open_with(MATERIAL, "xx:00:00").is_err());
+        assert!(open_with(MATERIAL, "pw1:short:00").is_err());
+        assert!(open_with(MATERIAL, "pw1:0123456789abcdef0123456789abcdef:zz").is_err());
+        assert!(open_with(MATERIAL, "pw1:0123456789abcdef0123456789abcdef:00").is_err());
+    }
+
+    #[test]
+    fn envelope_sealed_with_different_material_is_rejected() {
+        // 历史弱材料密文兼容策略（issue #260）：材料不匹配即拒绝，
+        // 不提供弱材料恢复通道，用户重新录入 key
+        let weak = seal_with("guessable-username", "secret").unwrap();
+        assert!(open_with(MATERIAL, &weak).is_err());
+    }
+
+    #[test]
+    fn extract_platform_uuid_matches_legacy_semantics() {
+        // 提取语义是既有密文的派生输入，属稳定契约：不得随重构漂移
+        let text =
+            "  +-o X  <class IOPlatformExpertDevice>\n    \"IOPlatformUUID\" = \"AAAA-BBBB\"\n";
+        assert_eq!(extract_platform_uuid(text).unwrap(), " = \"AAAA-BBBB");
+        assert!(extract_platform_uuid("no uuid here").is_none());
+        assert!(extract_platform_uuid("IOPlatformUUID").is_none());
+        assert!(extract_platform_uuid("IOPlatformUUID\"\"").is_none());
+    }
+
+    #[test]
+    fn failed_probe_is_not_cached_and_recovery_succeeds() {
+        let cache = OnceLock::new();
+        let err = cached_machine_material(&cache, || Err("探测失败".into()));
+        assert!(err.is_err());
+        assert!(cache.get().is_none(), "失败结果不得缓存");
+        let ok = cached_machine_material(&cache, || Ok("uuid-1".into()));
+        assert_eq!(ok.unwrap(), "uuid-1");
+        let cached = cached_machine_material(&cache, || panic!("成功后不得再探测"));
+        assert_eq!(cached.unwrap(), "uuid-1");
+    }
+
+    #[test]
+    fn probe_failure_diagnostics_do_not_leak_secrets() {
+        let cache = OnceLock::new();
+        let err = cached_machine_material(&cache, || Err("本机标识不可用：ioreg 执行失败".into()))
+            .unwrap_err();
+        let user = std::env::var("USER").unwrap_or_default();
+        assert!(
+            user.is_empty() || !err.contains(&user),
+            "诊断不得泄露用户名"
+        );
     }
 
     #[test]
