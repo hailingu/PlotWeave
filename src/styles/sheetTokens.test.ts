@@ -25,17 +25,21 @@
  *   var(--x, v) 运行时不悬空，不计入接线违例（其中的字面色仍归结构契约）。
  *   样式表内的局部自定义属性只对定义规则自身及其后代规则可达
  *   （:root/html/body 视为全局）；逗号选择器逐分支判定——任一引用分支
- *   无可达定义即整条判悬空（该分支运行时计算色失效）。
+ *   无可达定义即整条判悬空（该分支运行时计算色失效）。声明值为保证无效
+ *   形态（initial，及全局作用域上退化为 initial 的 unset）的局部定义与
+ *   令牌按断链处理；inherit/revert 静态不可判定，不在判定内（见未覆盖维度）。
  * - 已接受的例外不当作违例：用户内容色（海报压字/织线兜底/损坏占位，承
  *   载面依赖海报内容，同 tokens.css --on-saturated 理由）、遮罩（压字
  *   scrim / 模态压暗）、声明自洽状态对（settings.css 文件内记录决策）。
  *   每条例外是具名注册表项（表 + 选择器 + 属性/引用 + 已审计字面值 + 条数
  *   + 理由 + 引用），非广泛排除；结构例外绑定到具体值与出现条数，接线例外
- *   绑定到出现条数——同属性换写其他字面色、新增第二条同值字面声明、超出
- *   已审计条数或为已豁免悬空引用新增第二条声明，均为新违例。注册表双向
- *   校验——新违例进不来，已修复或条数变动的表项必须更新（防藏）。
+ *   绑定到承载属性与出现条数——同属性换写其他字面色、新增第二条同值字面
+ *   声明、超出已审计条数、为已豁免悬空引用换属性承载或新增第二条声明，
+ *   均为新违例。注册表双向校验——新违例进不来，已修复或条数变动的表项
+ *   必须更新（防藏）。
  * - 危险动作黄金接线断言取规则内该属性的**最后一条**声明（CSS 生效值），
- *   同属性前置声明不再遮蔽生效值。
+ *   同属性前置声明不再遮蔽生效值；目标规则须唯一且无条件——媒体块内
+ *   同名规则会使生效值随环境分叉，违背 #240 恒白决策的接线前提。
  * - 开放缺陷以跟踪单号入表：#262（品牌底固定白字 ×2）、#265（悬空
  *   --fill-tertiary ×1）；其修复落地时注册表同步收缩。
  * - 不重开 #240 危险色决策：--on-danger 恒白，深色底 ≈2.8:1 为已记录
@@ -50,14 +54,14 @@
  * | 局部自定义属性被展示色属性（传递）消费且值含字面色 | 结构扫描 | 按违例点名（同注册表豁免） | 字面色不得经局部变量别名进入展示位 | 结构测试 |
  * | 注册表项同属性换写其他字面色 / 新增第二条同值字面声明 / 超出已审计条数 | 结构扫描 | 按新违例点名（豁免绑定到值与条数） | 例外不覆盖未审计的值或条数 | 结构测试 |
  * | 注册表项对应声明被修复、换值或条数变动 | 结构反向校验 | 表项失配即失败 | 例外表不藏已修复项 | 结构测试 |
- * | 引用未定义 var()，或令牌/局部定义的值链引用缺失名（传递） | 接线扫描 | 失败点名（D38 类悬空引用） | 无失效 var 静默回落 | 接线测试 |
+ * | 引用未定义 var()、令牌/局部定义值链引用缺失名（传递）、或定义为保证无效值（initial / 全局作用域 unset） | 接线扫描 | 失败点名（D38 类悬空引用） | 无失效 var 静默回落 | 接线测试 |
  * | 引用仅在无关选择器下定义的局部 var() | 接线扫描（作用域可达性） | 失败点名 | 局部定义只对自身/后代规则生效 | 接线测试 |
  * | 逗号选择器的任一引用分支无可达定义 | 接线扫描（逐分支可达） | 失败点名 | 每一分支运行时均须取得有效计算色 | 接线测试 |
  * | 引用点在某环境活跃而定义仅在其他环境成立（如仅浅色媒体块内定义） | 接线扫描（全部支持环境逐一） | 失败点名该环境 | 定义须覆盖引用活跃的每个环境 | 接线测试 |
- * | 为已豁免悬空引用新增第二条声明 | 接线扫描（条数比对） | 按新违例点名 | 接线豁免不扩张已知缺陷 | 接线测试 |
- * | 浅/深 × 基线/more | 配对矩阵 | primary 全环境 ≥4.5、secondary more 升档 ≥4.5（§2.6） | 原则 2 按令牌配对成立 | 配对测试 |
+ * | 已豁免悬空引用换属性承载或新增第二条声明 | 接线扫描（属性 + 条数比对） | 按新违例点名 | 接线豁免不扩张已知缺陷 | 接线测试 |
+ * | 浅/深 × 基线/more × 基线/降透明度（8 环境） | 配对矩阵 | primary 全环境 ≥4.5、secondary more 升档 ≥4.5（§2.6） | 原则 2 按令牌配对成立（含 reduce-transparency 实色材质） | 配对测试 |
  * | 悬停态换填充 | 配对矩阵 | text-primary 于 fill-quaternary 承载面 ≥4.5 | hover 配对按既有契约 | 配对测试 |
- * | 危险动作 hover/确认 | 黄金接线（生效值 = 属性最后一条声明） | 前景四环境恒 #ffffff（#240 决策） | 危险前景经 --on-danger 且生效值不被后声明改写 | 黄金测试 |
+ * | 危险动作 hover/确认 | 黄金接线（规则唯一无条件；生效值 = 属性最后一条声明） | 前景全部配对环境恒 #ffffff（#240 决策） | 危险前景经 --on-danger，生效值不随环境分叉 | 黄金测试 |
  * | 遮罩渐变 | alpha 剖析 | 首末色标全透明、内部全不透明 | 遮罩只消费 alpha | 遮罩测试 |
  *
  * 未覆盖维度：真实 WebView 像素实测未运行；品牌底两处配对归 #262、悬空
@@ -499,14 +503,16 @@ function structureKey(
 }
 
 /**
- * 接线例外注册表：悬空 var() 引用按开放缺陷跟踪（#265）。条数绑定与结构
- * 例外同口径——为已豁免引用新增第二条声明（实际条数 > 已审计）按新违例
- * 点名，已知缺陷不因豁免而悄然扩张；条数变动后须更新表项。
+ * 接线例外注册表：悬空 var() 引用按开放缺陷跟踪（#265）。绑定到承载属性
+ * 与条数——已豁免引用换属性承载（如 background 改 color）或新增第二条同
+ * 属性声明（实际条数 > 已审计）均按新违例点名，已知缺陷不因豁免而换位或
+ * 扩张；属性或条数变动后须更新表项。
  */
 const WIRING_EXCEPTIONS: Readonly<
   {
     sheet: string
     selector: string
+    prop: string
     ref: string
     count?: number
     reason: string
@@ -515,6 +521,7 @@ const WIRING_EXCEPTIONS: Readonly<
   {
     sheet: 'src/editor/panels/panels.css',
     selector: '.pw-ai-cancel:hover',
+    prop: 'background',
     ref: '--fill-tertiary',
     count: 1,
     reason: '开放缺陷：未定义变量致悬停背景失效，归 #265',
@@ -738,6 +745,23 @@ function literalOccurrences(): Map<string, { label: string; count: number }> {
 /** 全局作用域选择器：其上的自定义属性对文档内任何规则可达。 */
 const GLOBAL_SCOPES = new Set([':root', 'html', 'body', '*'])
 
+/**
+ * 自定义属性声明值是否为「保证无效」形态：initial 恒为保证无效值；unset
+ * 在全局作用域（无父级可继承）上退化为 initial，同为保证无效。inherit /
+ * revert 静态不可判定（取决于运行时父级与层叠），不在本判定内。
+ */
+function isGuaranteedInvalid(value: string, selector: string): boolean {
+  const keyword = value.trim().toLowerCase()
+  if (keyword === 'initial') return true
+  if (keyword === 'unset') {
+    return selector
+      .split(',')
+      .map((s) => s.trim())
+      .every((s) => GLOBAL_SCOPES.has(s))
+  }
+  return false
+}
+
 /** 单个选择器 definer 是否覆盖 referencer 自身或其后代（兄弟组合器不算）。 */
 function selectorReaches(definer: string, referencer: string): boolean {
   if (GLOBAL_SCOPES.has(definer) || definer === referencer) return true
@@ -810,9 +834,10 @@ interface WiringCtx {
 }
 
 /**
- * tokens.css 内某令牌的值链在 env 下是否完整可解析：值内无 fallback 的
- * var() 引用须均为 env 下已定义令牌且递归完整（环按 CSS 计算值时刻无效判
- * 断为断链）。tokens.css 被排除在组件表扫描外，其内部断链由本函数兜住。
+ * tokens.css 内某令牌的值链在 env 下是否完整可解析：值为保证无效形态
+ * （initial / :root 上 unset）直接判断链；值内无 fallback 的 var() 引用须
+ * 均为 env 下已定义令牌且递归完整（环按 CSS 计算值时刻无效判断为断链）。
+ * tokens.css 被排除在组件表扫描外，其内部断链由本函数兜住。
  */
 function tokenChainResolves(
   name: string,
@@ -821,6 +846,7 @@ function tokenChainResolves(
 ): boolean {
   const value = ctx.tokens.get(name)
   if (value === undefined) return false
+  if (isGuaranteedInvalid(value, ':root')) return false
   return noFallbackRefs(value).every(
     (ref) =>
       ctx.tokens.has(ref) &&
@@ -831,8 +857,9 @@ function tokenChainResolves(
 
 /**
  * 引用名在指定上下文（选择器 + 条件）与 env 下是否完整可解析：全局令牌
- * 走令牌值链；局部定义须 env 活跃且值链在该定义点上下文递归完整，再要求
- * 引用的**每一分支**被某个完整定义分支覆盖（级联特异性未建模，见头注）。
+ * 走令牌值链；局部定义须 env 活跃、非保证无效值且值链在该定义点上下文
+ * 递归完整，再要求引用的**每一分支**被某个完整定义分支覆盖（级联特异性
+ * 未建模，见头注）。
  */
 function refResolves(
   name: string,
@@ -848,6 +875,7 @@ function refResolves(
   const resolvable = (ctx.locals.get(name) ?? []).filter(
     (def) =>
       conditionActive(def.condition, ctx.env) &&
+      !isGuaranteedInvalid(def.value, def.selector) &&
       noFallbackRefs(def.value).every((ref) =>
         refResolves(ref, def, ctx, next),
       ),
@@ -883,8 +911,8 @@ function danglingRefs(
 
 /**
  * 全部组件样式表在至少一个支持环境悬空的 var() 引用出现点（键 → 可读标
- * 签与条数）：同一声明跨环境悬空只计一次，第二条同位声明计为新出现；条数
- * 参与接线注册表双向比对。
+ * 签与条数）：键绑定到承载属性；同一声明跨环境悬空只计一次，第二条同位
+ * 声明计为新出现；条数参与接线注册表双向比对。
  */
 function danglingOccurrences(): Map<string, { label: string; count: number }> {
   const out = new Map<string, { label: string; count: number }>()
@@ -903,12 +931,12 @@ function danglingOccurrences(): Map<string, { label: string; count: number }> {
             !refResolves(ref, decl, ctx, new Set()),
         )
         if (!dangles) continue
-        const key = `${sheet}|${decl.selector}|${ref}`
+        const key = `${sheet}|${decl.selector}|${decl.prop}|${ref}`
         const hit = out.get(key)
         if (hit) hit.count += 1
         else {
           out.set(key, {
-            label: `${sheet} ${decl.selector} 引用 ${ref}`,
+            label: `${sheet} ${decl.selector} ${decl.prop} 引用 ${ref}`,
             count: 1,
           })
         }
@@ -919,10 +947,10 @@ function danglingOccurrences(): Map<string, { label: string; count: number }> {
 }
 
 describe('令牌接线契约（issue #278）', () => {
-  it('组件样式表引用的 var() 在全部支持环境完整可解析（含值链与逐分支可达；接线条数不超已审计）', () => {
+  it('组件样式表引用的 var() 在全部支持环境完整可解析（含值链与逐分支可达；接线属性与条数不超已审计）', () => {
     const audited = new Map(
       WIRING_EXCEPTIONS.map((e) => [
-        `${e.sheet}|${e.selector}|${e.ref}`,
+        `${e.sheet}|${e.selector}|${e.prop}|${e.ref}`,
         e.count ?? 1,
       ]),
     )
@@ -1049,6 +1077,24 @@ describe('令牌接线契约（issue #278）', () => {
     expect(refResolves('--a', at, intact, new Set()), '链完整').toBe(true)
   })
 
+  it('保证无效形态的定义在消费点判悬空（initial 恒无效；全局作用域 unset 退化同判）', () => {
+    const root = postcss.parse(
+      '.a { --fg-init: initial; color: var(--fg-init); }\n' +
+        '.b { --fg-ok: #fff; color: var(--fg-ok); }\n' +
+        ':root { --root-unset: unset; }\n.c { color: var(--root-unset); }',
+    )
+    const env: Env = {
+      scheme: 'light',
+      contrast: 'no-preference',
+      transparency: 'no-preference',
+      motion: 'no-reduce',
+    }
+    expect(danglingRefs(root, env)).toEqual([
+      { selector: '.a', ref: '--fg-init' },
+      { selector: '.c', ref: '--root-unset' },
+    ])
+  })
+
   it('仅在部分环境成立的定义对其他环境下的活跃引用判悬空（逐环境验证）', () => {
     const root = postcss.parse(
       '@media (prefers-color-scheme: light) { .card { --only-light: #000 } }\n' +
@@ -1086,61 +1132,39 @@ describe('令牌接线契约（issue #278）', () => {
     ])
   })
 
-  it('接线注册表每项仍按已审计条数命中真实悬空引用（#265 修复或条数变动后更新/删表项）', () => {
+  it('接线注册表每项仍按已审计属性与条数命中真实悬空引用（#265 修复、换属性或条数变动后更新/删表项）', () => {
     const live = danglingOccurrences()
     const stale = WIRING_EXCEPTIONS.filter((e) => {
-      const hit = live.get(`${e.sheet}|${e.selector}|${e.ref}`)
+      const hit = live.get(`${e.sheet}|${e.selector}|${e.prop}|${e.ref}`)
       return (hit?.count ?? 0) !== (e.count ?? 1)
     })
     expect(
       stale.map(
         (e) =>
-          `${e.sheet} ${e.selector} ${e.ref}（期望 ${e.count ?? 1} 条，实际 ${live.get(`${e.sheet}|${e.selector}|${e.ref}`)?.count ?? 0} 条）`,
+          `${e.sheet} ${e.selector} ${e.prop} ${e.ref}（期望 ${e.count ?? 1} 条，实际 ${live.get(`${e.sheet}|${e.selector}|${e.prop}|${e.ref}`)?.count ?? 0} 条）`,
       ),
-      '以下接线注册表项已不再按已审计条数命中悬空引用，应更新或删除：',
+      '以下接线注册表项已不再按已审计属性与条数命中悬空引用，应更新或删除：',
     ).toEqual([])
   })
 })
 
-/** 配对环境：浅/深 × 基线/more（§2.6 文本对比度升一档；动效不影响取色）。 */
-const PAIR_ENVS: Readonly<[string, Env][]> = [
-  [
-    'light',
-    {
-      scheme: 'light',
-      contrast: 'no-preference',
-      transparency: 'no-preference',
-      motion: 'no-reduce',
-    },
-  ],
-  [
-    'dark',
-    {
-      scheme: 'dark',
-      contrast: 'no-preference',
-      transparency: 'no-preference',
-      motion: 'no-reduce',
-    },
-  ],
-  [
-    'light+more',
-    {
-      scheme: 'light',
-      contrast: 'more',
-      transparency: 'no-preference',
-      motion: 'no-reduce',
-    },
-  ],
-  [
-    'dark+more',
-    {
-      scheme: 'dark',
-      contrast: 'more',
-      transparency: 'no-preference',
-      motion: 'no-reduce',
-    },
-  ],
-]
+/**
+ * 配对环境全集：浅/深 × 基线/more × 基线/降透明度（§2.6 全部变体组合，
+ * 8 环境；动效不影响取色）。reduce-transparency 下材质令牌退化为实色
+ * （tokens.css 提供独立取值），配对承诺须在实色材质上同样成立。
+ */
+const PAIR_ENVS: Readonly<[string, Env][]> = (
+  ['light', 'dark'] as const
+).flatMap((scheme) =>
+  (['no-preference', 'more'] as const).flatMap((contrast) =>
+    (['no-preference', 'reduce'] as const).map(
+      (transparency): [string, Env] => [
+        `${scheme}${contrast === 'more' ? '+more' : ''}${transparency === 'reduce' ? '+reduce' : ''}`,
+        { scheme, contrast, transparency, motion: 'no-reduce' },
+      ],
+    ),
+  ),
+)
 
 /** 承载面链：自底向顶逐层合成（底面全不透明，半透明层按 alpha 叠加）。 */
 const SURFACES: Readonly<{ name: string; chain: string[] }[]> = [
@@ -1274,14 +1298,28 @@ const DANGER_RULES: Readonly<{ sheet: string; selector: string }[]> = [
   },
 ]
 
-/** 表内按完整选择器找规则（含媒体块；缺失抛错防测试静默空过）。 */
+/**
+ * 表内按完整选择器找规则：须**唯一且无条件**（不处于任何 at-rule 内）——
+ * 媒体块内同名规则会使生效值随环境分叉，违背黄金接线「恒值」前提；同名
+ * 重复规则使文本序后位遮蔽先位，定位失真。缺失/重复/条件化均抛错防测试
+ * 静默空过。
+ */
 function ruleOf(sheet: string, selector: string): postcss.Rule {
-  let found: postcss.Rule | undefined
+  const matches: postcss.Rule[] = []
   sheets.get(sheet)!.walkRules((rule) => {
-    if (rule.selector === selector) found = rule
+    if (rule.selector === selector) matches.push(rule)
   })
-  if (!found) throw new Error(`未找到规则 ${sheet} ${selector}`)
-  return found
+  if (matches.length === 0) throw new Error(`未找到规则 ${sheet} ${selector}`)
+  if (matches.length > 1) {
+    throw new Error(
+      `${sheet} ${selector} 有 ${matches.length} 条同名规则，须唯一`,
+    )
+  }
+  const rule = matches[0]!
+  if (rule.parent?.type !== 'root') {
+    throw new Error(`${sheet} ${selector} 处于 at-rule 内，须无条件规则`)
+  }
+  return rule
 }
 
 /** 规则内该属性的最后一条声明（CSS 生效值）；缺失抛错防测试静默空过。 */
@@ -1316,7 +1354,7 @@ describe('危险动作前景接线（#240 决策补齐，issue #278）', () => {
     expect(declOf(rule, 'color')).toBe('var(--text-primary)')
   })
 
-  it('--on-danger 四环境消解恒 #ffffff（视觉零变化；深色底 ≈2.8:1 为 #240 已记录边界，不重开）', () => {
+  it('--on-danger 全部配对环境（含 more × reduce 组合）消解恒 #ffffff（视觉零变化；深色底 ≈2.8:1 为 #240 已记录边界，不重开）', () => {
     for (const [envName, env] of PAIR_ENVS) {
       expect(resolveChain('var(--on-danger)', tokenValues(env)), envName).toBe(
         '#ffffff',
