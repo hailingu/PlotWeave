@@ -91,7 +91,7 @@ function applyRootRule(
   }
 }
 
-/** 根令牌的未知 at-rule 上下文必须显式失败，不能静默忽略可能胜出的声明。 */
+/** 根令牌未建模的 at-rule 上下文/声明布局必须显式失败，不能静默忽略胜出声明。 */
 function assertRootContexts(root: postcss.Root): void {
   root.walkDecls(/^--/, (decl) => {
     let rule: postcss.AnyNode | undefined = decl.parent
@@ -99,7 +99,10 @@ function assertRootContexts(root: postcss.Root): void {
     if (rule?.type !== 'rule' || rule.selector !== ':root') return
     let context: postcss.AnyNode | undefined = decl.parent
     while (context) {
-      if (context.type === 'atrule' && context.name.toLowerCase() !== 'media') {
+      if (
+        context.type === 'atrule' &&
+        (context.name.toLowerCase() !== 'media' || context === decl.parent)
+      ) {
         throw new Error(
           `TOKEN_ROOT_AT_RULE_UNMODELED: @${context.name} ${context.params}`,
         )
@@ -114,6 +117,7 @@ function assertRootContexts(root: postcss.Root): void {
  * 先按重要性（!important 优先于普通声明）再按源序取胜——重要声明不因其后
  * 出现普通声明而被覆盖，同重要性仍后写覆盖先写。未建模的根 at-rule 上下文
  * 以 TOKEN_ROOT_AT_RULE_UNMODELED 显式拒绝，包括非活跃 media 内的未知块。
+ * 支持 media 包住根规则；反向内嵌 at-rule 的声明布局尚未建模，同样拒绝。
  */
 export function tokenValuesOf(
   root: postcss.Root,

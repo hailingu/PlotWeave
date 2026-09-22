@@ -52,7 +52,7 @@
  *   自定义属性同一规则。声明值为保证无效形态（initial，及全局作用域上退化
  *   为 initial 的 unset）的局部定义与令牌按断链处理；inherit/revert 静态
  *   不可判定，不在判定内（见未覆盖维度）。
- *   根令牌在未知非 media at-rule 内时明确报 TOKEN_ROOT_AT_RULE_UNMODELED，
+ *   根令牌处于未知外层 at-rule 或根规则内嵌 at-rule 时明确报 TOKEN_ROOT_AT_RULE_UNMODELED，
  *   不再静默跳过该定义入口；不含根令牌的其他上下文不受此限制。
  * - 已接受的例外不当作违例：用户内容色（海报压字/织线兜底/损坏占位，承
  *   载面依赖海报内容，同 tokens.css --on-saturated 理由）、遮罩（压字

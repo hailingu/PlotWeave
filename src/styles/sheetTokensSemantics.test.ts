@@ -20,7 +20,7 @@
  * | 根令牌（tokens.css :root）同名声明含 !important，跨基线与媒体条件 | 令牌取值再消费 | 活跃重要声明优先，同重要性取后位，无效颜色被拒绝 | 根令牌与局部自定义属性同一重要性规则，非活跃声明不参与 | 令牌取值及消费正反用例 |
  * | 重要根值为 initial 或断链，消费点有 fallback | 选胜值失效后递归回退 | 有效回退恢复，无效颜色报错 | 重要性不绕过既有失败/恢复规则 | 根值 fallback 消费用例 |
  * | 自身与祖先同名定义共存，含媒体/逗号分支及失效值 | 先选最近定义元素再比较重要性 | 自身指定值不被祖先重要值覆盖；失效时按消费点回退 | 继承层级先于同元素级联，接线与类型共享选择 | 指定/继承、环境与恢复用例 |
- * | 根令牌置于非 media at-rule，含嵌套与非活跃媒体 | 根上下文预检 | 显式拒绝未知上下文，不默默返回旧值 | 根定义入口必须完整建模或明确失败 | TOKEN_ROOT_AT_RULE_UNMODELED 正反用例 |
+ * | 根令牌置于非 media at-rule 或根规则内部内嵌 at-rule | 根上下文预检 | 显式拒绝未知上下文/布局，不默默返回旧值 | 根定义入口必须完整建模或明确失败 | TOKEN_ROOT_AT_RULE_UNMODELED 正反用例 |
  * | 基线定义、媒体块定义、后续基线定义三者同名依次出现 | 取胜排序 | 按真实源序选中最后一条，不因 Map 键插入位置误判 | 同名定义的胜出位置按真实源序，非分组首次插入位置 | 接线集成语义用例 |
  * | 媒体块内 !important 定义与无条件后位普通定义跨活跃条件分组共存 | 跨分组取胜 | 重要声明仍胜出，不因其条件分组位置在无条件后位定义之前而被覆盖 | 接线与类型集成语义用例 |
  * | 引用仅在无关选择器下定义的局部 var() | 接线扫描（作用域可达性） | 失败点名 | 局部定义只对自身/后代规则生效 | 接线测试 |
@@ -235,15 +235,18 @@ describe('根令牌上下文边界（review 5279748560）', () => {
     )
   })
 
-  it('根规则内部嵌套未知条件的自定义属性同样拒绝', () => {
-    const root = postcss.parse(
-      ':root { --fg: #fff; @supports (display: grid) { --fg: 4px; } }',
-    )
-    // 错误码契约同本组：不能通过改变根规则与条件块的嵌套方向绕过上下文检查。
-    expect(() => tokenValuesOf(root, LIGHT_ENV)).toThrow(
-      /TOKEN_ROOT_AT_RULE_UNMODELED/,
-    )
-  })
+  it.each(['supports (display: grid)', 'media (prefers-color-scheme: dark)'])(
+    '根规则内部嵌套 @%s 的声明布局同样显式拒绝',
+    (context) => {
+      const root = postcss.parse(
+        `:root { --fg: #fff; @${context} { --fg: 4px; } }`,
+      )
+      // 错误码契约同本组：不能通过改变根规则与条件块的嵌套方向绕过上下文检查。
+      expect(() => tokenValuesOf(root, LIGHT_ENV)).toThrow(
+        /TOKEN_ROOT_AT_RULE_UNMODELED/,
+      )
+    },
+  )
 
   it.each([
     '@supports (display: grid) { .other { --fg: 4px; } }',
