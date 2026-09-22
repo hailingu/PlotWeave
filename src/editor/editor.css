@@ -134,7 +134,7 @@
 
 .editor-menu-danger:hover {
   background: var(--danger);
-  color: #fff;
+  color: var(--on-danger);
 }
 
 /* 右键上下文菜单：fixed 定位在指针处（§4.3） */
@@ -224,7 +224,7 @@
 .pw-dialog-danger {
   border-color: transparent;
   background: var(--danger);
-  color: #fff;
+  color: var(--on-danger);
 }
 
 .pw-dialog-danger:hover {
