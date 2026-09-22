@@ -19,17 +19,19 @@
  *   经展示色属性传递消费的局部自定义属性同样受禁：`.b { --fg: #fff; color:
  *   var(--fg) }` 不得绕过契约（消费关系沿局部属性值链传递闭包计算；仅被
  *   非展示属性消费的局部属性——如 React Flow 控件变量——不在展示色契约内）。
- *   展示色引用的解析值须类型相容——非颜色令牌叶子（把 --radius-sm 的
- *   尺寸值或 --weight 的裸数值 600 用进 color）运行时使声明被丢弃，按违例
- *   点名；既无颜色成分也无尺寸量/裸数值、全部词形在非颜色关键字表内的
- *   形态（none/underline/solid 等及 url() 图像）不误报。
+ *   展示色引用的解析值须按属性文法相容——非颜色令牌叶子（把 --radius-sm
+ *   的尺寸值或 --weight 的裸数值 600 用进 color）与纯着色属性上的图像形态
+ *   （color: var(--brand-gradient)）运行时使声明被丢弃，按违例点名；简写
+ *   与 background-image 允许渐变/url()，纯关键字形态（none/underline/
+ *   solid 等）不误报。
  * - 接线断言按「引用点活跃的全部支持环境」逐一验证：tokens.css 值链与局部
  *   定义值链均递归消解——令牌/局部变量自身引用缺失名、或仅在部分环境定义
  *   （如仅浅色媒体块内）而引用点无条件，均为悬空。带 fallback 的
  *   var(--x, v) 运行时不悬空，不计入接线违例（其中的字面色仍归结构契约）。
  *   样式表内的局部自定义属性只对定义规则自身及其后代规则可达
- *   （:root/html/body 视为全局）；逗号选择器逐分支判定——任一引用分支
- *   无可达定义即整条判悬空（该分支运行时计算色失效）。同选择器同条件的
+ *   （:root/html/body 视为全局），且**遮蔽同名根令牌**——分支被可达局
+ *   部定义覆盖时按局部值判定，保证无效的遮蔽不因根令牌存在而放行；逗号
+ *   选择器逐分支判定——任一引用分支无可达定义即整条判悬空。同选择器同条件的
  *   重复定义按层叠取后位（源序后写覆盖；跨选择器特异性未建模）。声明值
  *   为保证无效形态（initial，及全局作用域上退化为 initial 的 unset）的
  *   局部定义与令牌按断链处理；inherit/revert 静态不可判定，不在判定内
@@ -58,13 +60,14 @@
  * | 新增组件样式表 | glob 发现 | 自动进入全部契约，无登记清单 | 布线不全不可悄然发生 | 发现测试 |
  * | 新增展示色字面声明（hex/大小写不敏感函数色/具名色；含 fill/stroke、background-image 与 border 全部简写/长形） | 结构扫描 | 非注册表项即失败（点名表/选择器/声明） | 展示色必须经 tokens.css 或具名例外 | 结构测试 |
  * | 局部自定义属性被展示色属性（传递）消费且值含字面色 | 结构扫描 | 按违例点名（同注册表豁免） | 字面色不得经局部变量别名进入展示位 | 结构测试 |
- * | 展示色 var() 引用解析为类型不兼容值（尺寸令牌/裸数值等非颜色叶子） | 结构扫描（类型校验，全部环境） | 按违例点名 | 展示色消费点不得引用非颜色令牌 | 结构测试 |
+ * | 展示色 var() 引用解析为文法不相容值（尺寸/裸数值叶子；纯着色属性上的渐变/图像） | 结构扫描（按属性文法校验，全部环境） | 按违例点名 | 展示色消费点须按属性文法取值 | 结构测试 |
  * | 注册表项同属性换写其他字面色 / 新增第二条同值字面声明 / 超出已审计条数 | 结构扫描 | 按新违例点名（豁免绑定到值与条数） | 例外不覆盖未审计的值或条数 | 结构测试 |
  * | 注册表项对应声明被修复、换值或条数变动 | 结构反向校验 | 表项失配即失败 | 例外表不藏已修复项 | 结构测试 |
  * | 引用未定义 var()、令牌/局部定义值链引用缺失名（传递）、或定义为保证无效值（initial / 全局作用域 unset） | 接线扫描 | 失败点名（D38 类悬空引用） | 无失效 var 静默回落 | 接线测试 |
  * | 引用仅在无关选择器下定义的局部 var() | 接线扫描（作用域可达性） | 失败点名 | 局部定义只对自身/后代规则生效 | 接线测试 |
  * | 逗号选择器的任一引用分支无可达定义 | 接线扫描（逐分支可达） | 失败点名 | 每一分支运行时均须取得有效计算色 | 接线测试 |
  * | 同选择器同条件的后位定义为保证无效值 | 接线扫描（层叠取后位） | 失败点名 | 生效定义按源序后位判定，先位有效定义不遮蔽 | 接线测试 |
+ * | 可达局部定义与根令牌同名且保证无效 | 接线扫描（局部遮蔽优先） | 失败点名 | 遮蔽分支按局部值判定，根令牌不救 | 接线测试 |
  * | 引用点在某环境活跃而定义仅在其他环境成立（如仅浅色媒体块内定义） | 接线扫描（全部支持环境逐一） | 失败点名该环境 | 定义须覆盖引用活跃的每个环境 | 接线测试 |
  * | 已豁免悬空引用换属性承载或新增第二条声明 | 接线扫描（属性 + 条数比对） | 按新违例点名 | 接线豁免不扩张已知缺陷 | 接线测试 |
  * | 浅/深 × 基线/more × 基线/降透明度（8 环境） | 配对矩阵 | primary 全环境 ≥4.5、secondary more 升档 ≥4.5（§2.6） | 原则 2 按令牌配对成立（含 reduce-transparency 实色材质） | 配对测试 |
@@ -665,7 +668,7 @@ describe('展示色结构：全表扫描与注册表（issue #278）', () => {
     expect(offenders).toEqual([])
   })
 
-  it('展示色属性的 var() 引用解析后类型相容：非颜色令牌叶子（如 --radius-sm 的尺寸值）在全部环境点名', () => {
+  it('展示色属性的 var() 引用解析后按属性文法相容：非颜色叶子与纯着色属性上的图像形态在全部环境点名', () => {
     const offenders: string[] = []
     for (const [sheet, root] of sheets) {
       if (sheet === TOKEN_SHEET) continue
@@ -676,15 +679,14 @@ describe('展示色结构：全表扫描与注册表（issue #278）', () => {
       }))
       for (const decl of sheetDecls(root)) {
         if (!isDisplayColorProp(decl.prop)) continue
-        const bad = ctxs.find(
-          (ctx) =>
-            conditionActive(decl.condition, ctx.env) &&
-            displayValueIn(decl, ctx) !== null &&
-            !colorTypeOk(displayValueIn(decl, ctx)!),
-        )
+        const bad = ctxs.find((ctx) => {
+          if (!conditionActive(decl.condition, ctx.env)) return false
+          const resolved = displayValueIn(decl, ctx)
+          return resolved !== null && !colorTypeOk(decl.prop, resolved)
+        })
         if (bad) {
           offenders.push(
-            `${sheet} ${decl.selector} ${decl.prop} 解析为非颜色值: ${displayValueIn(decl, bad)!.trim()}`,
+            `${sheet} ${decl.selector} ${decl.prop} 解析为类型不相容值: ${displayValueIn(decl, bad)!.trim()}`,
           )
         }
       }
@@ -906,10 +908,10 @@ function tokenChainResolves(
 }
 
 /**
- * 引用名在指定上下文（选择器 + 条件）与 env 下是否完整可解析：全局令牌
- * 走令牌值链；局部定义须 env 活跃、非保证无效值且值链在该定义点上下文
- * 递归完整，再要求引用的**每一分支**被某个完整定义分支覆盖（级联特异性
- * 未建模，见头注）。
+ * 引用名在指定上下文（选择器 + 条件）与 env 下是否完整可解析——按引用的
+ * **每一分支**独立判定：分支被某可达且 env 活跃的局部定义遮蔽时走局部值
+ * （局部同名定义优先于 :root 令牌，且保证无效形态按断链）；无遮蔽的分支
+ * 回落全局令牌值链。级联特异性未建模，见头注。
  */
 function refResolves(
   name: string,
@@ -918,19 +920,33 @@ function refResolves(
   seen: ReadonlySet<string>,
 ): boolean {
   if (seen.has(name)) return false
-  if (ctx.tokens.has(name)) {
-    return tokenChainResolves(name, ctx, new Set([name]))
-  }
   const next = new Set([...seen, name])
-  const resolvable = effectiveDefs(ctx.locals.get(name) ?? []).filter(
-    (def) =>
-      conditionActive(def.condition, ctx.env) &&
-      !isGuaranteedInvalid(def.value, def.selector) &&
-      noFallbackRefs(def.value).every((ref) =>
-        refResolves(ref, def, ctx, next),
-      ),
-  )
-  return resolvable.length > 0 && scopeReaches(resolvable, at)
+  return at.selector
+    .split(',')
+    .map((s) => s.trim())
+    .every((branch) => {
+      const shadowing = effectiveDefs(ctx.locals.get(name) ?? []).filter(
+        (def) =>
+          conditionActive(def.condition, ctx.env) &&
+          def.selector
+            .split(',')
+            .map((s) => s.trim())
+            .some((d) => selectorReaches(d, branch)),
+      )
+      if (shadowing.length > 0) {
+        return shadowing.some(
+          (def) =>
+            !isGuaranteedInvalid(def.value, def.selector) &&
+            noFallbackRefs(def.value).every((ref) =>
+              refResolves(ref, def, ctx, next),
+            ),
+        )
+      }
+      if (ctx.tokens.has(name)) {
+        return tokenChainResolves(name, ctx, new Set([name]))
+      }
+      return false
+    })
 }
 
 /**
@@ -1025,13 +1041,37 @@ const NON_COLOR_KEYWORDS = new Set([
 ])
 
 /**
- * 展示色声明解析值是否类型相容：含颜色成分（hex/函数色/具名色/渐变/
- * transparent/currentcolor）或 url() 图像即真；否则须为「无尺寸量、无裸
- * 数值、全部词形在非颜色关键字表内」的纯关键字形态（none/underline/
- * solid 等）——尺寸量（--radius-sm 的 4px）、裸数值（--weight 的 600）
- * 及未识别词形均按类型不相容点名，运行时该声明会被浏览器丢弃。
+ * 只接受 <color>（不接受图像/渐变）的属性：前景与着色长形；`-color` 后缀
+ * 覆盖 background-/outline-/border- 系着色长形。简写（background/border/
+ * outline/text-decoration/column-rule/text-shadow）与 background-image 允许
+ * 渐变与 url() 图像。
  */
-function colorTypeOk(resolved: string): boolean {
+function isColorOnlyProp(prop: string): boolean {
+  return (
+    prop === 'color' ||
+    prop === 'caret-color' ||
+    prop === 'accent-color' ||
+    prop === 'fill' ||
+    prop === 'stroke' ||
+    prop.endsWith('-color')
+  )
+}
+
+/**
+ * 展示色声明解析值对该属性是否类型相容：纯着色属性拒渐变/图像形态（如
+ * `color: var(--brand-gradient)` 运行时被丢弃）；其余属性含颜色成分（hex/
+ * 函数色/具名色/渐变/transparent/currentcolor）或 url() 图像即真；否则须
+ * 为「无尺寸量、无裸数值、全部词形在非颜色关键字表内」的纯关键字形态
+ * （none/underline/solid 等）——尺寸量（--radius-sm 的 4px）、裸数值
+ * （--weight 的 600）及未识别词形均按类型不相容点名。
+ */
+function colorTypeOk(prop: string, resolved: string): boolean {
+  if (
+    isColorOnlyProp(prop) &&
+    /(?:linear|radial|conic)-gradient\(|url\(/i.test(resolved)
+  ) {
+    return false
+  }
   if (COLOR_FUNCTION_OR_HEX.test(resolved)) return true
   if (/(?:linear|radial|conic)-gradient\(|url\(/i.test(resolved)) return true
   if (/transparent|currentcolor/i.test(resolved)) return true
@@ -1163,6 +1203,19 @@ describe('接线语义：作用域与分支可达（issue #278）', () => {
     expect(danglingRefs(root, LIGHT_ENV)).toEqual([
       { selector: '.card', ref: '--fg' },
     ])
+  })
+
+  it('局部同名定义遮蔽根令牌：遮蔽定义保证无效即悬空，有效遮蔽按局部值放行', () => {
+    const invalid = postcss.parse(
+      '.card { --text-primary: initial; color: var(--text-primary); }',
+    )
+    expect(danglingRefs(invalid, LIGHT_ENV)).toEqual([
+      { selector: '.card', ref: '--text-primary' },
+    ])
+    const valid = postcss.parse(
+      '.card { --text-primary: var(--danger); color: var(--text-primary); }',
+    )
+    expect(danglingRefs(valid, LIGHT_ENV)).toEqual([])
   })
 })
 
