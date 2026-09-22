@@ -57,7 +57,18 @@ fn probe_machine_id() -> Result<String, String> {
         .args(["-rd1", "-c", "IOPlatformExpertDevice"])
         .output()
         .map_err(|e| format!("本机标识不可用（ioreg 执行失败：{}）", e.kind()))?;
-    let text = String::from_utf8_lossy(&out.stdout);
+    interpret_probe_output(out.status.success(), &out.stdout)
+}
+
+/// 解读 ioreg 结果：非零退出先于 stdout 解析拒绝——被终止的进程可能留下
+/// 截断的 `IOPlatformUUID" = "...`，宽松提取器会把它当作材料缓存并封装出
+/// 重启后不可解的密文（PR #283 评审）。
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn interpret_probe_output(exit_ok: bool, stdout: &[u8]) -> Result<String, String> {
+    if !exit_ok {
+        return Err("本机标识不可用（ioreg 非零退出）".into());
+    }
+    let text = String::from_utf8_lossy(stdout);
     extract_platform_uuid(&text).ok_or_else(|| "本机标识不可用（ioreg 输出无法解析）".into())
 }
 
@@ -223,6 +234,18 @@ mod tests {
         assert!(extract_platform_uuid("no uuid here").is_none());
         assert!(extract_platform_uuid("IOPlatformUUID").is_none());
         assert!(extract_platform_uuid("IOPlatformUUID\"\"").is_none());
+    }
+
+    #[test]
+    fn non_zero_ioreg_exit_is_rejected_before_parsing_partial_stdout() {
+        // 截断输出在宽松提取器下仍能产出材料，退出码必须先拒绝
+        let partial = b"    \"IOPlatformUUID\" = \"AAAA-BB";
+        assert!(extract_platform_uuid(&String::from_utf8_lossy(partial)).is_some());
+        let err = interpret_probe_output(false, partial).unwrap_err();
+        assert!(!err.contains("AAAA"), "诊断不得回显材料");
+        // 退出成功时沿用历史提取语义（截断输出下产出的是无意义材料，正是要拒绝的原因）
+        assert_eq!(interpret_probe_output(true, partial).unwrap(), " = ");
+        assert!(interpret_probe_output(true, b"nothing").is_err());
     }
 
     #[test]
