@@ -20,14 +20,15 @@
  *   var(--fg) }` 不得绕过契约（消费关系沿局部属性值链传递闭包计算；仅被
  *   非展示属性消费的局部属性——如 React Flow 控件变量——不在展示色契约内）。
  *   展示色引用的解析值须按属性文法相容——非颜色令牌叶子（把 --radius-sm
- *   的尺寸值或 --weight 的裸数值 600 用进 color）与纯着色属性上的图像形态
- *   （color: var(--brand-gradient)）运行时使声明被丢弃，按违例点名；简写
- *   与 background-image 允许渐变/url()，纯关键字形态（none/underline/
- *   solid 等）不误报。
+ *   的尺寸值或 --weight 的裸数值 600 用进 color）与不支持图像的属性上
+ *   的渐变/url() 均按违例点名。background/background-image 接受图像；
+ *   SVG fill/stroke 仅额外接受 URL 绘制引用。逐选择器分支解析局部遮蔽与
+ *   fallback，空回退值不能独立作为展示色声明；纯关键字形态不误报。
  * - 接线断言按「引用点活跃的全部支持环境」逐一验证：tokens.css 值链与局部
  *   定义值链均递归消解——令牌/局部变量自身引用缺失名、或仅在部分环境定义
  *   （如仅浅色媒体块内）而引用点无条件，均为悬空。带 fallback 的
- *   var(--x, v) 运行时不悬空，不计入接线违例（其中的字面色仍归结构契约）。
+ *   var(--x, v) 沿用既有接线规则；展示色类型校验递归解析实际选中的主值或
+ *   fallback（包括 initial/断链/循环后的回退，其中的字面色仍归结构契约）。
  *   样式表内的局部自定义属性只对定义规则自身及其后代规则可达
  *   （:root/html/body 视为全局），且**遮蔽同名根令牌**——分支被可达局
  *   部定义覆盖时按局部值判定，保证无效的遮蔽不因根令牌存在而放行；逗号
@@ -60,7 +61,9 @@
  * | 新增组件样式表 | glob 发现 | 自动进入全部契约，无登记清单 | 布线不全不可悄然发生 | 发现测试 |
  * | 新增展示色字面声明（hex/大小写不敏感函数色/具名色；含 fill/stroke、background-image 与 border 全部简写/长形） | 结构扫描 | 非注册表项即失败（点名表/选择器/声明） | 展示色必须经 tokens.css 或具名例外 | 结构测试 |
  * | 局部自定义属性被展示色属性（传递）消费且值含字面色 | 结构扫描 | 按违例点名（同注册表豁免） | 字面色不得经局部变量别名进入展示位 | 结构测试 |
- * | 展示色 var() 引用解析为文法不相容值（尺寸/裸数值叶子；纯着色属性上的渐变/图像） | 结构扫描（按属性文法校验，全部环境） | 按违例点名 | 展示色消费点须按属性文法取值 | 结构测试 |
+ * | 展示色引用解析为不相容值（尺寸/裸数值叶子；不接受图像的属性上的渐变/URL） | 逐环境校验属性 | 按违例点名；合法背景图像及 SVG URL 通过 | 图像必须由支持该语法的属性消费 | 结构与图像文法测试 |
+ * | 缺失/initial/断链/循环变量带 fallback，或有效主值带无效 fallback | 解析实际生效值（含嵌套回退） | 无效值及独立空值报错，有效主值/回退通过 | fallback 不绕过消费属性类型校验，主值有效时不消费回退 | fallback 取值测试 |
+ * | 逗号选择器各分支的局部同名定义不同，或仅部分环境活跃 | 逐分支、逐环境解析遮蔽值 | 仅无效分支报错，无局部定义的分支取根令牌 | 各分支只消费自身可达活跃的定义 | 分支取值测试 |
  * | 注册表项同属性换写其他字面色 / 新增第二条同值字面声明 / 超出已审计条数 | 结构扫描 | 按新违例点名（豁免绑定到值与条数） | 例外不覆盖未审计的值或条数 | 结构测试 |
  * | 注册表项对应声明被修复、换值或条数变动 | 结构反向校验 | 表项失配即失败 | 例外表不藏已修复项 | 结构测试 |
  * | 引用未定义 var()、令牌/局部定义值链引用缺失名（传递）、或定义为保证无效值（initial / 全局作用域 unset） | 接线扫描 | 失败点名（D38 类悬空引用） | 无失效 var 静默回落 | 接线测试 |
@@ -78,6 +81,8 @@
  * 未覆盖维度：真实 WebView 像素实测未运行；品牌底两处配对归 #262、悬空
  * 变量归 #265 跟踪；accent-alt 焦点描边/青 wash（.pw-ai-ctx-toggle.on）的
  * 非文本 3:1 未断言——无既有决策，不在本单开新前沿（PR 披露）。
+ * 值解析仍为静态子集，非完整 CSS 文法/层叠引擎；复杂选择器及跨选择器
+ * 特异性未建模。审查与验证记录见 docs/reviews/pr-288-review-5275666509.md。
  */
 import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -668,27 +673,16 @@ describe('展示色结构：全表扫描与注册表（issue #278）', () => {
     expect(offenders).toEqual([])
   })
 
-  it('展示色属性的 var() 引用解析后按属性文法相容：非颜色叶子与纯着色属性上的图像形态在全部环境点名', () => {
+  it('展示色属性的 var() 引用解析后按属性文法相容：逐环境与选择器分支点名无效值', () => {
     const offenders: string[] = []
     for (const [sheet, root] of sheets) {
       if (sheet === TOKEN_SHEET) continue
-      const ctxs = WIRING_ENVS.map(([, env]) => ({
-        env,
-        tokens: tokenValues(env),
-        locals: localDefinitions(root),
-      }))
-      for (const decl of sheetDecls(root)) {
-        if (!isDisplayColorProp(decl.prop)) continue
-        const bad = ctxs.find((ctx) => {
-          if (!conditionActive(decl.condition, ctx.env)) return false
-          const resolved = displayValueIn(decl, ctx)
-          return resolved !== null && !colorTypeOk(decl.prop, resolved)
-        })
-        if (bad) {
-          offenders.push(
-            `${sheet} ${decl.selector} ${decl.prop} 解析为类型不相容值: ${displayValueIn(decl, bad)!.trim()}`,
-          )
-        }
+      for (const [envName, env] of WIRING_ENVS) {
+        offenders.push(
+          ...displayTypeErrors(root, env).map(
+            (error) => `${sheet} [${envName}] 解析为类型不相容值: ${error}`,
+          ),
+        )
       }
     }
     expect(offenders).toEqual([])
@@ -1041,39 +1035,20 @@ const NON_COLOR_KEYWORDS = new Set([
 ])
 
 /**
- * 只接受 <color>（不接受图像/渐变）的属性：前景与着色长形；`-color` 后缀
- * 覆盖 background-/outline-/border- 系着色长形。简写（background/border/
- * outline/text-decoration/column-rule/text-shadow）与 background-image 允许
- * 渐变与 url() 图像。
- */
-function isColorOnlyProp(prop: string): boolean {
-  return (
-    prop === 'color' ||
-    prop === 'caret-color' ||
-    prop === 'accent-color' ||
-    prop === 'fill' ||
-    prop === 'stroke' ||
-    prop.endsWith('-color')
-  )
-}
-
-/**
- * 展示色声明解析值对该属性是否类型相容：纯着色属性拒渐变/图像形态（如
- * `color: var(--brand-gradient)` 运行时被丢弃）；其余属性含颜色成分（hex/
- * 函数色/具名色/渐变/transparent/currentcolor）或 url() 图像即真；否则须
+ * 展示色声明解析值对该属性是否类型相容：仅 background/background-image
+ * 接受渐变，URL 还可用于 SVG fill/stroke 绘制引用；其他属性先拒图像，
+ * 再检查颜色成分（hex/函数色/具名色/transparent/currentcolor）；否则须
  * 为「无尺寸量、无裸数值、全部词形在非颜色关键字表内」的纯关键字形态
  * （none/underline/solid 等）——尺寸量（--radius-sm 的 4px）、裸数值
  * （--weight 的 600）及未识别词形均按类型不相容点名。
  */
 function colorTypeOk(prop: string, resolved: string): boolean {
-  if (
-    isColorOnlyProp(prop) &&
-    /(?:linear|radial|conic)-gradient\(|url\(/i.test(resolved)
-  ) {
-    return false
-  }
+  if (resolved.trim() === '') return false
+  const background = prop === 'background' || prop === 'background-image'
+  if (/(?:linear|radial|conic)-gradient\(/i.test(resolved)) return background
+  if (/url\(/i.test(resolved))
+    return background || prop === 'fill' || prop === 'stroke'
   if (COLOR_FUNCTION_OR_HEX.test(resolved)) return true
-  if (/(?:linear|radial|conic)-gradient\(|url\(/i.test(resolved)) return true
   if (/transparent|currentcolor/i.test(resolved)) return true
   for (const match of resolved.matchAll(BARE_IDENT)) {
     if (NAMED_COLORS.has(match[0].toLowerCase())) return true
@@ -1085,27 +1060,77 @@ function colorTypeOk(prop: string, resolved: string): boolean {
 }
 
 /**
- * 展示色声明值在 env 下解析后的具体值：tokens ∪ 可达活跃局部定义（同
- * 选择器同条件取层叠后位）迭代消解（深度限 8）；仍含 var()（悬空或嵌套
- * 过深）返回 null——悬空归接线契约，此处只判类型相容。
+ * 单个选择器分支在 env 下的具体值：根令牌被该分支可达且活跃的局部定义
+ * 遮蔽，同选择器同条件取层叠后位。保证无效的自定义属性进入 fallback。
  */
 function displayValueIn(decl: SheetDecl, ctx: WiringCtx): string | null {
-  const scope = new Map(ctx.tokens)
+  const scope = new Map(
+    [...ctx.tokens].map(([name, value]) => [
+      name,
+      isGuaranteedInvalid(value, ':root') ? 'initial' : value,
+    ]),
+  )
   for (const [name, defs] of ctx.locals) {
     const usable = effectiveDefs(defs).filter(
       (def) =>
         conditionActive(def.condition, ctx.env) && scopeReaches([def], decl),
     )
-    if (usable.length > 0) scope.set(name, usable[usable.length - 1]!.value)
+    const last = usable[usable.length - 1]
+    if (last)
+      scope.set(
+        name,
+        isGuaranteedInvalid(last.value, last.selector) ? 'initial' : last.value,
+      )
   }
-  let value = decl.value
-  for (let i = 0; i < 8 && value.includes('var('); i += 1) {
-    value = value.replace(
-      /var\(\s*(--[\w-]+)\s*(?:,\s*[^()]*\s*)?\)/g,
-      (whole, name: string) => scope.get(name) ?? whole,
-    )
-  }
-  return value.includes('var(') ? null : value
+  return resolveDisplayValue(decl.value, scope)
+}
+
+/** 依赖图含回到自身的路径时该变量无效；fallback 内的依赖也参与 CSS 环检测。 */
+function variableCycles(
+  origin: string,
+  name: string,
+  scope: Map<string, string>,
+  seen = new Set<string>(),
+): boolean {
+  if (seen.has(name)) return false
+  const next = new Set([...seen, name])
+  return allVarRefs(scope.get(name) ?? '').some(
+    (ref) => ref === origin || variableCycles(origin, ref, scope, next),
+  )
+}
+
+/** 按最外层 var() 选择主值或 fallback，再递归消解嵌套函数；无可用值返回 null。 */
+function resolveDisplayValue(
+  value: string,
+  scope: Map<string, string>,
+  depth = 0,
+): string | null {
+  const start = value.indexOf('var(')
+  if (start < 0) return value
+  if (depth >= 32) return null
+  const call = colorTokenOf(value.slice(start))
+  const args = call.slice(4, -1)
+  const comma = args.indexOf(',')
+  const name = (comma < 0 ? args : args.slice(0, comma)).trim()
+  const raw = scope.get(name)
+  const primary =
+    raw === undefined ||
+    raw.trim().toLowerCase() === 'initial' ||
+    variableCycles(name, name, scope)
+      ? null
+      : resolveDisplayValue(raw, scope, depth + 1)
+  const replacement =
+    primary ??
+    (comma < 0
+      ? null
+      : resolveDisplayValue(args.slice(comma + 1).trim(), scope, depth + 1))
+  if (replacement === null) return null
+  const rest = resolveDisplayValue(
+    value.slice(start + call.length),
+    scope,
+    depth + 1,
+  )
+  return rest === null ? null : value.slice(0, start) + replacement + rest
 }
 
 /** 语义用例共享的浅色基线环境（按需覆写单维度）。 */
@@ -1115,6 +1140,135 @@ const LIGHT_ENV: Env = {
   transparency: 'no-preference',
   motion: 'no-reduce',
 }
+
+/** 真实样式表和夹具共用的类型扫描入口：逐活跃环境、逐选择器分支报告实际无效值。 */
+function displayTypeErrors(root: postcss.Root, env: Env): string[] {
+  const ctx: WiringCtx = {
+    env,
+    tokens: tokenValues(env),
+    locals: localDefinitions(root),
+  }
+  return [...sheetDecls(root)].flatMap((decl) => {
+    if (
+      !isDisplayColorProp(decl.prop) ||
+      !conditionActive(decl.condition, env)
+    ) {
+      return []
+    }
+    return decl.selector.split(',').flatMap((branch) => {
+      const selector = branch.trim()
+      const value = displayValueIn({ ...decl, selector }, ctx)
+      return value !== null && !colorTypeOk(decl.prop, value)
+        ? [`${selector} ${decl.prop}: ${value.trim()}`]
+        : []
+    })
+  })
+}
+
+describe('展示色类型：图像属性文法（review 5275666509）', () => {
+  it.each([
+    'border',
+    'border-inline-start',
+    'outline',
+    'text-decoration',
+    'column-rule',
+    'text-shadow',
+  ])('%s 拒绝渐变和 URL，不能借图像中的颜色成分通过校验', (prop) => {
+    for (const value of ['var(--brand-gradient)', 'url("fixture.svg")']) {
+      const root = postcss.parse(
+        `.a { --image: ${value}; ${prop}: var(--image) }`,
+      )
+      expect(displayTypeErrors(root, LIGHT_ENV)).toHaveLength(1)
+    }
+  })
+  it('背景接受图像，SVG paint 接受 URL 引用但拒绝 CSS 渐变', () => {
+    for (const prop of ['background', 'background-image', 'fill', 'stroke']) {
+      const root = postcss.parse(
+        `.a { --paint: url("#paint"); ${prop}: var(--paint) }`,
+      )
+      expect(displayTypeErrors(root, LIGHT_ENV)).toEqual([])
+    }
+    for (const prop of ['background', 'background-image']) {
+      expect(
+        displayTypeErrors(
+          postcss.parse(`.a { ${prop}: var(--brand-gradient) }`),
+          LIGHT_ENV,
+        ),
+      ).toEqual([])
+    }
+    for (const prop of ['color', 'fill', 'stroke']) {
+      expect(
+        displayTypeErrors(
+          postcss.parse(`.a { ${prop}: var(--brand-gradient) }`),
+          LIGHT_ENV,
+        ),
+      ).toHaveLength(1)
+    }
+  })
+})
+
+describe('展示色类型：fallback 取值（review 5275666509）', () => {
+  it.each([
+    ['', 'var(--missing, 4px)'],
+    ['', 'var(--missing,)'],
+    ['', 'var(--missing, var(--also-missing, 600))'],
+    ['--provided: 4px;', 'var(--provided, var(--text-primary))'],
+    ['--invalid: initial;', 'var(--invalid, 4px)'],
+    ['--alias: var(--missing);', 'var(--alias, 4px)'],
+    ['--loop: var(--loop);', 'var(--loop, 4px)'],
+    ['--loop: var(--loop, var(--text-primary));', 'var(--loop, 4px)'],
+    ['--a: var(--b, var(--text-primary)); --b: var(--a);', 'var(--a, 4px)'],
+  ])(
+    '无效变量选择的 fallback 仍须符合消费属性：%s %s',
+    (definitions, value) => {
+      const root = postcss.parse(`.a { ${definitions} color: ${value} }`)
+      expect(displayTypeErrors(root, LIGHT_ENV)).toHaveLength(1)
+    },
+  )
+  it.each([
+    ['', 'var(--missing, var(--text-primary))'],
+    ['', 'var(--missing, rgb(1, 2, 3))'],
+    ['', 'var(--text-primary, 4px)'],
+    ['--invalid: initial;', 'var(--invalid, var(--text-primary))'],
+    ['--loop: var(--loop);', 'var(--loop, var(--text-primary))'],
+  ])(
+    '只校验生效值，有效主值或 fallback 继续通过：%s %s',
+    (definitions, value) => {
+      const root = postcss.parse(`.a { ${definitions} color: ${value} }`)
+      const decl = [...sheetDecls(root)].find(
+        (entry) => entry.prop === 'color',
+      )!
+      const ctx = {
+        env: LIGHT_ENV,
+        tokens: tokenValues(LIGHT_ENV),
+        locals: localDefinitions(root),
+      }
+      expect(displayValueIn(decl, ctx)).not.toBeNull()
+      expect(displayTypeErrors(root, LIGHT_ENV)).toEqual([])
+    },
+  )
+})
+
+describe('展示色类型：逐选择器分支取值（review 5275666509）', () => {
+  it('同名局部变量分别遮蔽根令牌，逐分支报告实际无效值', () => {
+    const root = postcss.parse(
+      '.a { --text-primary: 4px } .b { --text-primary: 600 } .a, .b { color: var(--text-primary) }',
+    )
+    expect(displayTypeErrors(root, LIGHT_ENV)).toEqual([
+      '.a color: 4px',
+      '.b color: 600',
+    ])
+  })
+  it('保留有效局部分支和根令牌回退，只报告当前环境的无效分支', () => {
+    const root = postcss.parse(
+      '.a { --text-primary: var(--danger) } @media (prefers-color-scheme: dark) { .b { --text-primary: 600 } } .a, .b, .c { color: var(--text-primary) }',
+    )
+    expect(displayTypeErrors(root, LIGHT_ENV)).toEqual([])
+    expect(displayTypeErrors(root, { ...LIGHT_ENV, scheme: 'dark' })).toEqual([
+      '.b color: 600',
+    ])
+  })
+})
 
 describe('令牌接线契约：全表扫描与注册表（issue #278）', () => {
   it('组件样式表引用的 var() 在全部支持环境完整可解析（含值链与逐分支可达；接线属性与条数不超已审计）', () => {
