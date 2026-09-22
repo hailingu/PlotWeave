@@ -52,10 +52,13 @@
  *   声明、超出已审计条数、为已豁免悬空引用换属性承载或新增第二条声明，
  *   均为新违例。注册表双向校验——新违例进不来，已修复或条数变动的表项
  *   必须更新（防藏）。
- * - 危险动作黄金接线断言取规则内该属性的**生效值**：!important 声明优先
+ * - 危险动作黄金接线断言取规则内该属性的**生效值**：属性名先按标准大
+ *   小写归一再比较（与展示色分类同一归一点），!important 声明优先
  *   于普通声明，同重要性取源序最后一条——前置 !important 不被其后的普通
  *   声明覆盖；目标规则须唯一且无条件——媒体块内同名规则会使生效值随环境
- *   分叉，违背 #240 恒白决策的接线前提。
+ *   分叉，违背 #240 恒白决策的接线前提。唯一性判定按选择器列表逐分支：后续
+ *   规则若在逗号分支中含目标选择器（如 `.other, .pw-dialog-danger { ... }`）仍能
+ *   以同等特异性覆盖，也计入命中，不按整选择器字符串相等。
  * - 开放缺陷以跟踪单号入表：#262（品牌底固定白字 ×2）、#265（悬空
  *   --fill-tertiary ×1）；其修复落地时注册表同步收缩。
  * - 不重开 #240 危险色决策：--on-danger 恒白，深色底 ≈2.8:1 为已记录
@@ -79,6 +82,7 @@
  * | 引用未定义 var()、令牌/局部定义值链引用缺失名（传递）、或定义为保证无效值（initial / 全局作用域 unset） | 接线扫描 | 失败点名（D38 类悬空引用） | 无失效 var 静默回落 | 接线测试 |
  * | 同选择器同条件内多条局部定义含 !important | 局部取胜扫描 | 重要声明优先于普通声明，无论源序 | 局部自定义属性也遵循重要性优先级 | 接线与类型集成语义用例 |
  * | 基线定义、媒体块定义、后续基线定义三者同名依次出现 | 取胜排序 | 按真实源序选中最后一条，不因 Map 键插入位置误判 | 同名定义的胜出位置按真实源序，非分组首次插入位置 | 接线集成语义用例 |
+ * | 媒体块内 !important 定义与无条件后位普通定义跨活跃条件分组共存 | 跨分组取胜 | 重要声明仍胜出，不因其条件分组位置在无条件后位定义之前而被覆盖 | 接线与类型集成语义用例 |
  * | 引用仅在无关选择器下定义的局部 var() | 接线扫描（作用域可达性） | 失败点名 | 局部定义只对自身/后代规则生效 | 接线测试 |
  * | 逗号选择器的任一引用分支无可达定义 | 接线扫描（逐分支可达） | 失败点名 | 每一分支运行时均须取得有效计算色 | 接线测试 |
  * | 同选择器同条件的后位定义为保证无效值 | 接线扫描（层叠取后位） | 失败点名 | 生效定义按源序后位判定，先位有效定义不遮蔽 | 接线测试 |
@@ -87,7 +91,7 @@
  * | 已豁免悬空引用换属性承载或新增第二条声明 | 接线扫描（属性 + 条数比对） | 按新违例点名 | 接线豁免不扩张已知缺陷 | 接线测试 |
  * | 浅/深 × 基线/more × 基线/降透明度（8 环境） | 配对矩阵 | primary 全环境 ≥4.5、secondary more 升档 ≥4.5（§2.6） | 原则 2 按令牌配对成立（含 reduce-transparency 实色材质） | 配对测试 |
  * | 悬停态换填充 | 配对矩阵 | text-primary 于 fill-quaternary 承载面 ≥4.5 | hover 配对按既有契约 | 配对测试 |
- * | 危险动作 hover/确认 | 黄金接线（规则唯一无条件；生效值按重要性再取源序最后一条） | 前景全部配对环境恒 #ffffff（#240 决策） | 危险前景经 --on-danger，生效值不随环境分叉且不被普通声明逆转 | 黄金测试 |
+ * | 危险动作 hover/确认 | 黄金接线（规则唯一无条件——包括逗号分支内的同分支覆盖；属性名归一；生效值按重要性再取源序最后一条） | 前景全部配对环境恒 #ffffff（#240 决策） | 危险前景经 --on-danger，生效值不随环境分叉且不被普通声明/大小写变体/同等特异性分支逆转 | 黄金测试 |
  * | 遮罩渐变 | alpha 剖析 | 首末色标全透明、内部全不透明 | 遮罩只消费 alpha | 遮罩测试 |
  *
  * 未覆盖维度：真实 WebView 像素实测未运行；品牌底两处配对归 #262、悬空
@@ -830,6 +834,20 @@ function localDefinitions(root: postcss.Root): Map<string, LocalDef[]> {
 }
 
 /**
+ * 重要性优先于源序的取胜：非空列表中若存在重要声明/定义，只在其中取源序最后一项；
+ * 否则退回全部项取最后一项。CSS 重要性优先于源序，且跨条件分组仍成立——
+ * 媒体块内的 !important 不因其条件在无条件后位定义之前而被覆盖。
+ */
+function pickWinner<T extends { important: boolean }>(
+  list: readonly T[],
+): T | undefined {
+  if (list.length === 0) return undefined
+  const important = list.filter((item) => item.important)
+  const pool = important.length > 0 ? important : list
+  return pool[pool.length - 1]
+}
+
+/**
  * 同选择器同条件的重复定义按层叠取胜出处：同一组内 !important 声明优先于
  * 普通声明，同重要性再取源序后位（`.a { --fg: 4px !important; --fg: var(--x) }`
  * 生效的是前位的 `4px`）。组在输出中的位置按该组**最后一次出现**的源序
@@ -846,11 +864,7 @@ function effectiveDefs(defs: readonly LocalDef[]): LocalDef[] {
     groups.delete(key)
     groups.set(key, list)
   }
-  return [...groups.values()].map((list) => {
-    const important = list.filter((def) => def.important)
-    const winners = important.length > 0 ? important : list
-    return winners[winners.length - 1]!
-  })
+  return [...groups.values()].map((list) => pickWinner(list)!)
 }
 
 /** 单个环境的接线上下文：env 生效的令牌值 + 本表局部定义。 */
@@ -956,7 +970,8 @@ function danglingOccurrences(): Map<string, { label: string; count: number }> {
 
 /**
  * 单个选择器分支在 env 下的具体值：根令牌被该分支可达且活跃的局部定义
- * 遮蔽，同选择器同条件取层叠后位。保证无效的自定义属性进入 fallback。
+ * 遮蔽；跨活跃条件分组仍先按重要性再取源序（媒体块内的 !important 不因
+ * 条件在无条件后位定义之前而被覆盖）。保证无效的自定义属性进入 fallback。
  */
 function valueScopeIn(decl: SheetDecl, ctx: WiringCtx): Map<string, string> {
   const scope = new Map(
@@ -970,11 +985,13 @@ function valueScopeIn(decl: SheetDecl, ctx: WiringCtx): Map<string, string> {
       (def) =>
         conditionActive(def.condition, ctx.env) && scopeReaches([def], decl),
     )
-    const last = usable[usable.length - 1]
-    if (last)
+    const winner = pickWinner(usable)
+    if (winner)
       scope.set(
         name,
-        isGuaranteedInvalid(last.value, last.selector) ? 'initial' : last.value,
+        isGuaranteedInvalid(winner.value, winner.selector)
+          ? 'initial'
+          : winner.value,
       )
   }
   return scope
@@ -1362,6 +1379,22 @@ describe('接线语义：作用域与分支可达（issue #278）', () => {
     expect(danglingRefs(root, { ...LIGHT_ENV, scheme: 'dark' })).toEqual([])
   })
 
+  it('跨活跃条件分组仍按重要性优先于源序取胜：媒体块内 !important 不因条件早于无条件后位定义而被覆盖', () => {
+    const root = postcss.parse(
+      '@media (prefers-color-scheme: dark) { .a { --fg: 4px !important; } }\n' +
+        '.a { --fg: var(--text-primary); color: var(--fg) }',
+    )
+    const darkEnv: Env = { ...LIGHT_ENV, scheme: 'dark' }
+    expect(
+      displayTypeErrors(root, darkEnv),
+      '暗色下 4px 生效且类型不相容',
+    ).toEqual(['.a color: 4px'])
+    expect(
+      displayTypeErrors(root, LIGHT_ENV),
+      '浅色下媒体块不活跃，回退到无条件普通定义',
+    ).toEqual([])
+  })
+
   it('局部同名定义遮蔽根令牌：遮蔽定义保证无效即悬空，有效遮蔽按局部值放行', () => {
     const invalid = postcss.parse(
       '.card { --text-primary: initial; color: var(--text-primary); }',
@@ -1630,20 +1663,28 @@ const DANGER_RULES: Readonly<{ sheet: string; selector: string }[]> = [
 ]
 
 /**
- * 表内按完整选择器找规则：须**唯一且无条件**（不处于任何 at-rule 内）——
- * 媒体块内同名规则会使生效值随环境分叉，违背黄金接线「恒值」前提；同名
- * 重复规则使文本序后位遮蔽先位，定位失真。缺失/重复/条件化均抛错防测试
- * 静默空过。
+ * 在给定根节点内按完整选择器找规则：须**唯一且无条件**（不处于任何
+ * at-rule 内）——媒体块内同名规则会使生效值随环境分叉，违背黄金接线
+ * 「恒值」前提；同名重复规则使文本序后位遮蔽先位，定位失真。选择器
+ * 列表逐分支匹配：后续规则若在逗号分支中含目标选择器（如
+ * `.other, .pw-dialog-danger { ... }`）仍能以同等特异性覆盖目标规则，
+ * 也计入命中——不按整选择器字符串相等。sheet 仅用于错误信息；缺失/
+ * 重复/条件化均抛错防测试静默空过。
  */
-function ruleOf(sheet: string, selector: string): postcss.Rule {
+function ruleIn(
+  root: postcss.Root,
+  sheet: string,
+  selector: string,
+): postcss.Rule {
   const matches: postcss.Rule[] = []
-  sheets.get(sheet)!.walkRules((rule) => {
-    if (rule.selector === selector) matches.push(rule)
+  root.walkRules((rule) => {
+    const branches = rule.selector.split(',').map((branch) => branch.trim())
+    if (branches.includes(selector)) matches.push(rule)
   })
   if (matches.length === 0) throw new Error(`未找到规则 ${sheet} ${selector}`)
   if (matches.length > 1) {
     throw new Error(
-      `${sheet} ${selector} 有 ${matches.length} 条同名规则，须唯一`,
+      `${sheet} ${selector} 有 ${matches.length} 条包含该分支的规则，须唯一`,
     )
   }
   const rule = matches[0]!
@@ -1653,11 +1694,17 @@ function ruleOf(sheet: string, selector: string): postcss.Rule {
   return rule
 }
 
-/** 规则内该属性的生效值：!important 声明优先于普通声明，同重要性取源序最后一条。 */
+/** 真实组件样式表内按完整选择器找规则，见 ruleIn。 */
+function ruleOf(sheet: string, selector: string): postcss.Rule {
+  return ruleIn(sheets.get(sheet)!, sheet, selector)
+}
+
+/** 规则内该属性的生效值：属性名先按标准大小写归一，!important 声明优先于普通声明，同重要性取源序最后一条。 */
 function declOf(rule: postcss.Rule, prop: string): string {
+  const target = normalizeProp(prop)
   const decls = rule.nodes.filter(
     (node): node is postcss.Declaration =>
-      node.type === 'decl' && node.prop === prop,
+      node.type === 'decl' && normalizeProp(node.prop) === target,
   )
   if (decls.length === 0) throw new Error(`${rule.selector} 缺少 ${prop} 声明`)
   const important = decls.filter((decl) => decl.important)
@@ -1679,18 +1726,30 @@ describe('危险动作前景接线（#240 决策补齐，issue #278）', () => {
     }
   })
 
-  it('黄金接线取生效值：同属性后置声明不被前置声明遮蔽（CSS 最后声明生效）', () => {
-    const rule = postcss.parse(
+  it.each([
+    [
+      '同属性后置声明不被前置声明遮蔽（CSS 最后声明生效）',
       '.x { color: var(--on-danger); color: var(--text-primary); }',
-    ).first as postcss.Rule
+    ],
+    [
+      '!important 声明优先于其后的普通声明（源序不再单独决定）',
+      '.x { color: var(--text-primary) !important; color: var(--on-danger); }',
+    ],
+    [
+      '属性名大小写不敏感（后续非标准大小写声明仍被识别为同属性）',
+      '.x { color: var(--on-danger); Color: var(--text-primary); }',
+    ],
+  ])('黄金接线按生效值规则取值：%s', (_label, css) => {
+    const rule = postcss.parse(css).first as postcss.Rule
     expect(declOf(rule, 'color')).toBe('var(--text-primary)')
   })
 
-  it('黄金接线按重要性取生效值：!important 声明优先于其后的普通声明（源序不再单独决定）', () => {
-    const rule = postcss.parse(
-      '.x { color: var(--text-primary) !important; color: var(--on-danger); }',
-    ).first as postcss.Rule
-    expect(declOf(rule, 'color')).toBe('var(--text-primary)')
+  it('目标选择器被后续逗号分支规则覆盖时判重复（不按整选择器字符串相等，须唯一）', () => {
+    const root = postcss.parse(
+      '.pw-dialog-danger { color: var(--on-danger); }\n' +
+        '.other, .pw-dialog-danger { color: var(--text-primary); }',
+    )
+    expect(() => ruleIn(root, 'fixture', '.pw-dialog-danger')).toThrow(/须唯一/)
   })
 
   it('--on-danger 全部配对环境（含 more × reduce 组合）消解恒 #ffffff（视觉零变化；深色底 ≈2.8:1 为 #240 已记录边界，不重开）', () => {
