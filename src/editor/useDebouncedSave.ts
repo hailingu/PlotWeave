@@ -7,7 +7,13 @@
  * 保存失败不丢数据：重新置脏并按防抖节律自动重试，错误经 onSaveResult
  * 上浮给调用方做用户可见诊断（磁盘满/只读/保存边界拒收等）。
  */
-import { useCallback, useEffect, useRef, type MutableRefObject } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  type MutableRefObject,
+} from 'react'
 import { graphSignature } from './graphSignature'
 import { registerCanvasFlushGate } from '../canvasSaveRegistry'
 import { onRetryPersisted } from '../projectStore/saveChain'
@@ -15,16 +21,29 @@ import type { ProjectContent } from '../model/content'
 
 /** 持久化签名（§9.4）：剥离 React Flow 会话态（selected/dragging/measured/
  * className）后序列化参与置脏判定的字段——与序列化层（convert.ts 只存
- * 语义字段、运行态样式类落盘剥离）同口径。纯选择/拖拽过程帧与纯样式类
- * 注入/剥离（集聚焦 pw-node-dim、fromStoryEdge 派生重建带来的 className
+ * 语义字段、运行态样式类落盘剔离）同口径。纯选择帧与纯样式类
+ * 注入/剔离（集聚焦 pw-node-dim、fromStoryEdge 派生重建带来的 className
  * 差异）只改这些字段，签名不变即不置脏——update_node_ui 语义：不落盘、
- * 不刷新 updatedAt 改变首页排序。集标题（§3.5 renameEpisode）无独立
+ * 不刷新 updatedAt 改变首页排序。拖拽过程帧改变 position（持久字段），
+ * 签名逐帧变化并由防抖合并到终帧落盘；逐项缓存（issue #272）使每帧
+ * 只重新序列化被拖节点。集标题（§3.5 renameEpisode）无独立
  * 脏标记通道，纳入签名随 effect 置脏。画布部分复用 graphSignature：
  * AI 执行卡恢复对账消费同一语义签名。 */
 /** 持久字段域（单一契约，issue #155）：签名与置脏监听共用本元组——
- * persistSignature 序列化它，useSignatureSaveWatch 的 effect 依赖展开它；
- * 新增持久字段两处自动同步，杜绝「签名含字段而变更监听遗漏」的漂移。 */
-function persistFields(doc: ProjectContent): readonly unknown[] {
+ * persistSignature 序列化它，usePersistSignature 的记忆依赖列与它一一对应；
+ * 新增持久字段两处同步，杜绝「签名含字段而变更监听遗漏」的漂移。 */
+type PersistFields = Pick<
+  ProjectContent,
+  | 'name'
+  | 'nodes'
+  | 'edges'
+  | 'settings'
+  | 'aiRevision'
+  | 'episodeTitles'
+  | 'assets'
+>
+
+function persistFields(doc: PersistFields): readonly unknown[] {
   return [
     doc.name,
     graphSignature(doc.nodes, doc.edges, doc.settings),
@@ -36,8 +55,29 @@ function persistFields(doc: ProjectContent): readonly unknown[] {
   ]
 }
 
-function persistSignature(doc: ProjectContent): string {
+function persistSignature(doc: PersistFields): string {
   return JSON.stringify(persistFields(doc))
+}
+
+/** 签名按持久字段引用记忆（issue #272）：宿主每渲染重新组装会话文档对象，
+ * 但字段本身仅在真实变化时换引用——AI 面板/聚焦等无关重渲染不再重算
+ * O(图大小) 的序列化。 */
+function usePersistSignature(doc: ProjectContent): string {
+  const { name, nodes, edges, settings, aiRevision, episodeTitles, assets } =
+    doc
+  return useMemo(
+    () =>
+      persistSignature({
+        name,
+        nodes,
+        edges,
+        settings,
+        aiRevision,
+        episodeTitles,
+        assets,
+      }),
+    [name, nodes, edges, settings, aiRevision, episodeTitles, assets],
+  )
 }
 
 /** 画布变化防抖落盘：doc 任意片段变化后 delayMs 内无新变化才写入；
@@ -376,9 +416,9 @@ export function useDebouncedSave(
   onSaveResult?: (err: unknown) => void,
   onRetryPersistedSuccess?: () => void,
 ): (doc: ProjectContent) => void {
-  // 持久化签名每渲染计算一次（PR #191 评审）：gate refs 初值与置脏监听
-  // 共用——重复计算会把 O(图大小) 的签名+序列化开销按调用点翻倍
-  const sig = persistSignature(doc)
+  // 持久化签名每渲染至多计算一次（PR #191 评审）且按字段引用记忆
+  // （issue #272）：gate refs 初值与置脏监听共用
+  const sig = usePersistSignature(doc)
   const gates = useSaveGateRefs(doc, sig)
   const { dirtyRef, inFlightRef } = gates
   const { flushSave, markDirty, flushOnUnmount, flushForExit } = useSaveFlush(
