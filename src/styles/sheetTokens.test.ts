@@ -19,15 +19,20 @@
  *   经展示色属性传递消费的局部自定义属性同样受禁：`.b { --fg: #fff; color:
  *   var(--fg) }` 不得绕过契约（消费关系沿局部属性值链传递闭包计算；仅被
  *   非展示属性消费的局部属性——如 React Flow 控件变量——不在展示色契约内）。
+ *   展示色引用的解析值须类型相容——非颜色令牌叶子（如把 --radius-sm 的
+ *   尺寸值用进 color）运行时使声明被丢弃，按违例点名；既无颜色成分也无
+ *   尺寸量的关键字/线型形态（none/underline 等）不误报。
  * - 接线断言按「引用点活跃的全部支持环境」逐一验证：tokens.css 值链与局部
  *   定义值链均递归消解——令牌/局部变量自身引用缺失名、或仅在部分环境定义
  *   （如仅浅色媒体块内）而引用点无条件，均为悬空。带 fallback 的
  *   var(--x, v) 运行时不悬空，不计入接线违例（其中的字面色仍归结构契约）。
  *   样式表内的局部自定义属性只对定义规则自身及其后代规则可达
  *   （:root/html/body 视为全局）；逗号选择器逐分支判定——任一引用分支
- *   无可达定义即整条判悬空（该分支运行时计算色失效）。声明值为保证无效
- *   形态（initial，及全局作用域上退化为 initial 的 unset）的局部定义与
- *   令牌按断链处理；inherit/revert 静态不可判定，不在判定内（见未覆盖维度）。
+ *   无可达定义即整条判悬空（该分支运行时计算色失效）。同选择器同条件的
+ *   重复定义按层叠取后位（源序后写覆盖；跨选择器特异性未建模）。声明值
+ *   为保证无效形态（initial，及全局作用域上退化为 initial 的 unset）的
+ *   局部定义与令牌按断链处理；inherit/revert 静态不可判定，不在判定内
+ *   （见未覆盖维度）。
  * - 已接受的例外不当作违例：用户内容色（海报压字/织线兜底/损坏占位，承
  *   载面依赖海报内容，同 tokens.css --on-saturated 理由）、遮罩（压字
  *   scrim / 模态压暗）、声明自洽状态对（settings.css 文件内记录决策）。
@@ -52,11 +57,13 @@
  * | 新增组件样式表 | glob 发现 | 自动进入全部契约，无登记清单 | 布线不全不可悄然发生 | 发现测试 |
  * | 新增展示色字面声明（hex/大小写不敏感函数色/具名色；含 fill/stroke、background-image 与 border 全部简写/长形） | 结构扫描 | 非注册表项即失败（点名表/选择器/声明） | 展示色必须经 tokens.css 或具名例外 | 结构测试 |
  * | 局部自定义属性被展示色属性（传递）消费且值含字面色 | 结构扫描 | 按违例点名（同注册表豁免） | 字面色不得经局部变量别名进入展示位 | 结构测试 |
+ * | 展示色 var() 引用解析为类型不兼容值（如尺寸令牌 --radius-sm） | 结构扫描（类型校验，全部环境） | 按违例点名 | 展示色消费点不得引用非颜色令牌 | 结构测试 |
  * | 注册表项同属性换写其他字面色 / 新增第二条同值字面声明 / 超出已审计条数 | 结构扫描 | 按新违例点名（豁免绑定到值与条数） | 例外不覆盖未审计的值或条数 | 结构测试 |
  * | 注册表项对应声明被修复、换值或条数变动 | 结构反向校验 | 表项失配即失败 | 例外表不藏已修复项 | 结构测试 |
  * | 引用未定义 var()、令牌/局部定义值链引用缺失名（传递）、或定义为保证无效值（initial / 全局作用域 unset） | 接线扫描 | 失败点名（D38 类悬空引用） | 无失效 var 静默回落 | 接线测试 |
  * | 引用仅在无关选择器下定义的局部 var() | 接线扫描（作用域可达性） | 失败点名 | 局部定义只对自身/后代规则生效 | 接线测试 |
  * | 逗号选择器的任一引用分支无可达定义 | 接线扫描（逐分支可达） | 失败点名 | 每一分支运行时均须取得有效计算色 | 接线测试 |
+ * | 同选择器同条件的后位定义为保证无效值 | 接线扫描（层叠取后位） | 失败点名 | 生效定义按源序后位判定，先位有效定义不遮蔽 | 接线测试 |
  * | 引用点在某环境活跃而定义仅在其他环境成立（如仅浅色媒体块内定义） | 接线扫描（全部支持环境逐一） | 失败点名该环境 | 定义须覆盖引用活跃的每个环境 | 接线测试 |
  * | 已豁免悬空引用换属性承载或新增第二条声明 | 接线扫描（属性 + 条数比对） | 按新违例点名 | 接线豁免不扩张已知缺陷 | 接线测试 |
  * | 浅/深 × 基线/more × 基线/降透明度（8 环境） | 配对矩阵 | primary 全环境 ≥4.5、secondary more 升档 ≥4.5（§2.6） | 原则 2 按令牌配对成立（含 reduce-transparency 实色材质） | 配对测试 |
@@ -590,7 +597,7 @@ describe('样式表发现（issue #278：契约覆盖全部组件样式表）', 
   })
 })
 
-describe('展示色结构契约（issue #278）', () => {
+describe('展示色结构：属性与字面探测分类（issue #278）', () => {
   it('展示色属性分类覆盖 border 全部简写/长形（四向与逻辑方向）、SVG fill/stroke 与 background-image；box-shadow 与尺寸类不算', () => {
     for (const prop of [
       'border',
@@ -633,7 +640,9 @@ describe('展示色结构契约（issue #278）', () => {
     expect(hasColorLiteral('var(--danger-red)')).toBe(false)
     expect(hasColorLiteral('1px solid var(--border-hairline)')).toBe(false)
   })
+})
 
+describe('展示色结构：全表扫描与注册表（issue #278）', () => {
   it('全部组件样式表的展示色声明不硬编码色值（具名例外注册表内、值一致且不超已审计条数）', () => {
     const audited = new Map(
       STRUCTURE_EXCEPTIONS.map((e) => [
@@ -648,6 +657,33 @@ describe('展示色结构契约（issue #278）', () => {
         offenders.push(`${hit.label}（${hit.count} 条，未审计）`)
       } else if (hit.count > audit) {
         offenders.push(`${hit.label}（${hit.count} 条 > 已审计 ${audit} 条）`)
+      }
+    }
+    expect(offenders).toEqual([])
+  })
+
+  it('展示色属性的 var() 引用解析后类型相容：非颜色令牌叶子（如 --radius-sm 的尺寸值）在全部环境点名', () => {
+    const offenders: string[] = []
+    for (const [sheet, root] of sheets) {
+      if (sheet === TOKEN_SHEET) continue
+      const ctxs = WIRING_ENVS.map(([, env]) => ({
+        env,
+        tokens: tokenValues(env),
+        locals: localDefinitions(root),
+      }))
+      for (const decl of sheetDecls(root)) {
+        if (!isDisplayColorProp(decl.prop)) continue
+        const bad = ctxs.find(
+          (ctx) =>
+            conditionActive(decl.condition, ctx.env) &&
+            displayValueIn(decl, ctx) !== null &&
+            !colorTypeOk(displayValueIn(decl, ctx)!),
+        )
+        if (bad) {
+          offenders.push(
+            `${sheet} ${decl.selector} ${decl.prop} 解析为非颜色值: ${displayValueIn(decl, bad)!.trim()}`,
+          )
+        }
       }
     }
     expect(offenders).toEqual([])
@@ -826,6 +862,17 @@ function localDefinitions(root: postcss.Root): Map<string, LocalDef[]> {
   return out
 }
 
+/**
+ * 同选择器同条件的重复定义按层叠取后位：同特异性下源序后写覆盖先写
+ * （`.card { --fg: var(--x) } .card { --fg: initial }` 生效的是后位
+ * initial）。跨选择器的特异性/顺序胜负未建模，见头注未覆盖维度。
+ */
+function effectiveDefs(defs: readonly LocalDef[]): LocalDef[] {
+  const last = new Map<string, LocalDef>()
+  for (const def of defs) last.set(`${def.selector}|${def.condition}`, def)
+  return [...last.values()]
+}
+
 /** 单个环境的接线上下文：env 生效的令牌值 + 本表局部定义。 */
 interface WiringCtx {
   env: Env
@@ -872,7 +919,7 @@ function refResolves(
     return tokenChainResolves(name, ctx, new Set([name]))
   }
   const next = new Set([...seen, name])
-  const resolvable = (ctx.locals.get(name) ?? []).filter(
+  const resolvable = effectiveDefs(ctx.locals.get(name) ?? []).filter(
     (def) =>
       conditionActive(def.condition, ctx.env) &&
       !isGuaranteedInvalid(def.value, def.selector) &&
@@ -946,7 +993,57 @@ function danglingOccurrences(): Map<string, { label: string; count: number }> {
   return out
 }
 
-describe('令牌接线契约（issue #278）', () => {
+const DIMENSION = /\b\d+(?:\.\d+)?(?:px|em|rem|%|pt|vw|vh|ch|ex)\b/
+
+/**
+ * 展示色声明解析值是否类型相容：含颜色成分（hex/函数色/具名色/渐变/
+ * transparent/currentcolor）即真；无颜色成分但含尺寸量（如把 --radius-sm
+ * 的 4px 用进 color）说明引用了类型不兼容令牌，运行时声明被丢弃——按违例；
+ * 既无颜色也无尺寸的形态（none/underline/solid 等关键字与线型）不误报。
+ */
+function colorTypeOk(resolved: string): boolean {
+  if (COLOR_FUNCTION_OR_HEX.test(resolved)) return true
+  if (/(?:linear|radial|conic)-gradient\(/i.test(resolved)) return true
+  if (/transparent|currentcolor/i.test(resolved)) return true
+  for (const match of resolved.matchAll(BARE_IDENT)) {
+    if (NAMED_COLORS.has(match[0].toLowerCase())) return true
+  }
+  return !DIMENSION.test(resolved)
+}
+
+/**
+ * 展示色声明值在 env 下解析后的具体值：tokens ∪ 可达活跃局部定义（同
+ * 选择器同条件取层叠后位）迭代消解（深度限 8）；仍含 var()（悬空或嵌套
+ * 过深）返回 null——悬空归接线契约，此处只判类型相容。
+ */
+function displayValueIn(decl: SheetDecl, ctx: WiringCtx): string | null {
+  const scope = new Map(ctx.tokens)
+  for (const [name, defs] of ctx.locals) {
+    const usable = effectiveDefs(defs).filter(
+      (def) =>
+        conditionActive(def.condition, ctx.env) && scopeReaches([def], decl),
+    )
+    if (usable.length > 0) scope.set(name, usable[usable.length - 1]!.value)
+  }
+  let value = decl.value
+  for (let i = 0; i < 8 && value.includes('var('); i += 1) {
+    value = value.replace(
+      /var\(\s*(--[\w-]+)\s*(?:,\s*[^()]*\s*)?\)/g,
+      (whole, name: string) => scope.get(name) ?? whole,
+    )
+  }
+  return value.includes('var(') ? null : value
+}
+
+/** 语义用例共享的浅色基线环境（按需覆写单维度）。 */
+const LIGHT_ENV: Env = {
+  scheme: 'light',
+  contrast: 'no-preference',
+  transparency: 'no-preference',
+  motion: 'no-reduce',
+}
+
+describe('令牌接线契约：全表扫描与注册表（issue #278）', () => {
   it('组件样式表引用的 var() 在全部支持环境完整可解析（含值链与逐分支可达；接线属性与条数不超已审计）', () => {
     const audited = new Map(
       WIRING_EXCEPTIONS.map((e) => [
@@ -966,6 +1063,23 @@ describe('令牌接线契约（issue #278）', () => {
     expect(offenders).toEqual([])
   })
 
+  it('接线注册表每项仍按已审计属性与条数命中真实悬空引用（#265 修复、换属性或条数变动后更新/删表项）', () => {
+    const live = danglingOccurrences()
+    const stale = WIRING_EXCEPTIONS.filter((e) => {
+      const hit = live.get(`${e.sheet}|${e.selector}|${e.prop}|${e.ref}`)
+      return (hit?.count ?? 0) !== (e.count ?? 1)
+    })
+    expect(
+      stale.map(
+        (e) =>
+          `${e.sheet} ${e.selector} ${e.prop} ${e.ref}（期望 ${e.count ?? 1} 条，实际 ${live.get(`${e.sheet}|${e.selector}|${e.prop}|${e.ref}`)?.count ?? 0} 条）`,
+      ),
+      '以下接线注册表项已不再按已审计属性与条数命中悬空引用，应更新或删除：',
+    ).toEqual([])
+  })
+})
+
+describe('接线语义：作用域与分支可达（issue #278）', () => {
   it('局部自定义属性仅对定义规则自身/后代可达；逗号选择器逐分支判定，任一分支不可达即假', () => {
     const def = (selector: string): LocalDef => ({
       selector,
@@ -1003,96 +1117,37 @@ describe('令牌接线契约（issue #278）', () => {
       '.parent { --local: var(--text-primary); }\n' +
         '.parent .child, .orphan { color: var(--local); }',
     )
-    const env: Env = {
-      scheme: 'light',
-      contrast: 'no-preference',
-      transparency: 'no-preference',
-      motion: 'no-reduce',
-    }
-    expect(danglingRefs(root, env)).toEqual([
+    expect(danglingRefs(root, LIGHT_ENV)).toEqual([
       { selector: '.parent .child, .orphan', ref: '--local' },
     ])
   })
 
+  it('同选择器同条件的重复定义按层叠取后位：后位 initial 生效即悬空（先位有效定义不遮蔽）', () => {
+    const root = postcss.parse(
+      '.card { --fg: var(--text-primary); }\n' +
+        '.card { --fg: initial; color: var(--fg); }',
+    )
+    expect(danglingRefs(root, LIGHT_ENV)).toEqual([
+      { selector: '.card', ref: '--fg' },
+    ])
+  })
+})
+
+describe('接线语义：条件环境（issue #278）', () => {
   it('at-rule 条件链按环境求值：无条件恒真，单特性与多特性链按 env 逐一判定', () => {
     const dark = '@media (prefers-color-scheme: dark);'
     const darkMore = `${dark}@media (prefers-contrast: more);`
     const motion = '@media (prefers-reduced-motion: reduce);'
-    const light: Env = {
-      scheme: 'light',
-      contrast: 'no-preference',
-      transparency: 'no-preference',
-      motion: 'no-reduce',
-    }
-    const darkEnv: Env = { ...light, scheme: 'dark' }
+    const darkEnv: Env = { ...LIGHT_ENV, scheme: 'dark' }
     const darkMoreEnv: Env = { ...darkEnv, contrast: 'more' }
-    const reduceMotionEnv: Env = { ...light, motion: 'reduce' }
-    expect(conditionActive('', light)).toBe(true)
-    expect(conditionActive(dark, light)).toBe(false)
+    const reduceMotionEnv: Env = { ...LIGHT_ENV, motion: 'reduce' }
+    expect(conditionActive('', LIGHT_ENV)).toBe(true)
+    expect(conditionActive(dark, LIGHT_ENV)).toBe(false)
     expect(conditionActive(dark, darkEnv)).toBe(true)
     expect(conditionActive(darkMore, darkEnv), '链上 AND 语义').toBe(false)
     expect(conditionActive(darkMore, darkMoreEnv)).toBe(true)
-    expect(conditionActive(motion, light)).toBe(false)
+    expect(conditionActive(motion, LIGHT_ENV)).toBe(false)
     expect(conditionActive(motion, reduceMotionEnv)).toBe(true)
-  })
-
-  it('值链断裂的局部定义在消费点也判悬空（递归消解，不只查名存在）', () => {
-    const root = postcss.parse(
-      '.b { --chain: var(--missing); color: var(--chain); }',
-    )
-    const env: Env = {
-      scheme: 'light',
-      contrast: 'no-preference',
-      transparency: 'no-preference',
-      motion: 'no-reduce',
-    }
-    expect(danglingRefs(root, env)).toEqual([
-      { selector: '.b', ref: '--missing' },
-      { selector: '.b', ref: '--chain' },
-    ])
-  })
-
-  it('tokens.css 值链断裂的令牌在其消费点判悬空（定义源不在组件扫描内，由链消解兜住）', () => {
-    const env: Env = {
-      scheme: 'light',
-      contrast: 'no-preference',
-      transparency: 'no-preference',
-      motion: 'no-reduce',
-    }
-    const broken: WiringCtx = {
-      env,
-      tokens: tokenValuesOf(postcss.parse(':root { --a: var(--b); }'), env),
-      locals: new Map(),
-    }
-    const intact: WiringCtx = {
-      env,
-      tokens: tokenValuesOf(
-        postcss.parse(':root { --a: var(--b); --b: #fff; }'),
-        env,
-      ),
-      locals: new Map(),
-    }
-    const at = { selector: '.x', condition: '' }
-    expect(refResolves('--a', at, broken, new Set()), '链断裂').toBe(false)
-    expect(refResolves('--a', at, intact, new Set()), '链完整').toBe(true)
-  })
-
-  it('保证无效形态的定义在消费点判悬空（initial 恒无效；全局作用域 unset 退化同判）', () => {
-    const root = postcss.parse(
-      '.a { --fg-init: initial; color: var(--fg-init); }\n' +
-        '.b { --fg-ok: #fff; color: var(--fg-ok); }\n' +
-        ':root { --root-unset: unset; }\n.c { color: var(--root-unset); }',
-    )
-    const env: Env = {
-      scheme: 'light',
-      contrast: 'no-preference',
-      transparency: 'no-preference',
-      motion: 'no-reduce',
-    }
-    expect(danglingRefs(root, env)).toEqual([
-      { selector: '.a', ref: '--fg-init' },
-      { selector: '.c', ref: '--root-unset' },
-    ])
   })
 
   it('仅在部分环境成立的定义对其他环境下的活跃引用判悬空（逐环境验证）', () => {
@@ -1101,10 +1156,8 @@ describe('令牌接线契约（issue #278）', () => {
         '.card { color: var(--only-light) }',
     )
     const envOf = (scheme: 'light' | 'dark'): Env => ({
+      ...LIGHT_ENV,
       scheme,
-      contrast: 'no-preference',
-      transparency: 'no-preference',
-      motion: 'no-reduce',
     })
     expect(danglingRefs(root, envOf('light')), '浅色下定义活跃且可达').toEqual(
       [],
@@ -1121,30 +1174,59 @@ describe('令牌接线契约（issue #278）', () => {
         '@media (prefers-color-scheme: dark) { .card p { color: var(--local); } }',
     )
     const envOf = (scheme: 'light' | 'dark'): Env => ({
+      ...LIGHT_ENV,
       scheme,
-      contrast: 'no-preference',
-      transparency: 'no-preference',
-      motion: 'no-reduce',
     })
     expect(danglingRefs(root, envOf('dark'))).toEqual([])
     expect(danglingRefs(root, envOf('light'))).toEqual([
       { selector: '.card', ref: '--local' },
     ])
   })
+})
 
-  it('接线注册表每项仍按已审计属性与条数命中真实悬空引用（#265 修复、换属性或条数变动后更新/删表项）', () => {
-    const live = danglingOccurrences()
-    const stale = WIRING_EXCEPTIONS.filter((e) => {
-      const hit = live.get(`${e.sheet}|${e.selector}|${e.prop}|${e.ref}`)
-      return (hit?.count ?? 0) !== (e.count ?? 1)
-    })
-    expect(
-      stale.map(
-        (e) =>
-          `${e.sheet} ${e.selector} ${e.prop} ${e.ref}（期望 ${e.count ?? 1} 条，实际 ${live.get(`${e.sheet}|${e.selector}|${e.prop}|${e.ref}`)?.count ?? 0} 条）`,
+describe('接线语义：值链与无效形态（issue #278）', () => {
+  it('值链断裂的局部定义在消费点也判悬空（递归消解，不只查名存在）', () => {
+    const root = postcss.parse(
+      '.b { --chain: var(--missing); color: var(--chain); }',
+    )
+    expect(danglingRefs(root, LIGHT_ENV)).toEqual([
+      { selector: '.b', ref: '--missing' },
+      { selector: '.b', ref: '--chain' },
+    ])
+  })
+
+  it('tokens.css 值链断裂的令牌在其消费点判悬空（定义源不在组件扫描内，由链消解兜住）', () => {
+    const broken: WiringCtx = {
+      env: LIGHT_ENV,
+      tokens: tokenValuesOf(
+        postcss.parse(':root { --a: var(--b); }'),
+        LIGHT_ENV,
       ),
-      '以下接线注册表项已不再按已审计属性与条数命中悬空引用，应更新或删除：',
-    ).toEqual([])
+      locals: new Map(),
+    }
+    const intact: WiringCtx = {
+      env: LIGHT_ENV,
+      tokens: tokenValuesOf(
+        postcss.parse(':root { --a: var(--b); --b: #fff; }'),
+        LIGHT_ENV,
+      ),
+      locals: new Map(),
+    }
+    const at = { selector: '.x', condition: '' }
+    expect(refResolves('--a', at, broken, new Set()), '链断裂').toBe(false)
+    expect(refResolves('--a', at, intact, new Set()), '链完整').toBe(true)
+  })
+
+  it('保证无效形态的定义在消费点判悬空（initial 恒无效；全局作用域 unset 退化同判）', () => {
+    const root = postcss.parse(
+      '.a { --fg-init: initial; color: var(--fg-init); }\n' +
+        '.b { --fg-ok: #fff; color: var(--fg-ok); }\n' +
+        ':root { --root-unset: unset; }\n.c { color: var(--root-unset); }',
+    )
+    expect(danglingRefs(root, LIGHT_ENV)).toEqual([
+      { selector: '.a', ref: '--fg-init' },
+      { selector: '.c', ref: '--root-unset' },
+    ])
   })
 })
 
@@ -1240,9 +1322,9 @@ describe('语义令牌配对契约（issue #278：原则 2 + §2.6）', () => {
     }
   })
 
-  it('次级文本于全部承载面在 more 对比度下升档 ≥ 4.5:1（基线为既有设计，§2.6）', () => {
-    for (const [envName, env] of PAIR_ENVS.filter(([name]) =>
-      name.endsWith('more'),
+  it('次级文本于全部承载面在 more 对比度下升档 ≥ 4.5:1（含 more × reduce 组合；基线为既有设计，§2.6）', () => {
+    for (const [envName, env] of PAIR_ENVS.filter(
+      ([, e]) => e.contrast === 'more',
     )) {
       const tokens = tokenValues(env)
       for (const surface of SURFACES) {
