@@ -12,10 +12,12 @@
  * 范围界定（issue #278 验收标准）：
  * - 结构断言覆盖展示色属性（前景 color、背景与 background-image 长形、
  *   轮廓、text-shadow、SVG fill/stroke，以及 border 全部简写/长形——总体、
- *   四向、逻辑方向，按结构式分类而非枚举）；字面色含 hex、大小写不敏感的颜色函数与 CSS
- *   具名色；transparent（仅 alpha=0 无色相）与 currentcolor（继承而非字面）
- *   不计。box-shadow 是层级投影非主题展示色、mask-image 只消费 alpha 通道
- *   （遮罩语义另断言），两者不在字面色禁用范围。
+ *   四向、逻辑方向，按结构式分类而非枚举；标准属性名先按 ASCII 大小写不
+ *   敏感归一再分类，自定义属性名大小写保持原样）；字面色含 hex、大小写
+ *   不敏感的颜色函数与 CSS 具名色；transparent（仅 alpha=0 无色相）与
+ *   currentcolor（继承而非字面）不计。box-shadow 是层级投影非主题展示
+ *   色、mask-image 只消费 alpha 通道（遮罩语义另断言），两者不在字面色
+ *   禁用范围。
  *   经展示色属性传递消费的局部自定义属性同样受禁：`.b { --fg: #fff; color:
  *   var(--fg) }` 不得绕过契约（消费关系沿局部属性值链传递闭包计算；仅被
  *   非展示属性消费的局部属性——如 React Flow 控件变量——不在展示色契约内）。
@@ -48,9 +50,10 @@
  *   声明、超出已审计条数、为已豁免悬空引用换属性承载或新增第二条声明，
  *   均为新违例。注册表双向校验——新违例进不来，已修复或条数变动的表项
  *   必须更新（防藏）。
- * - 危险动作黄金接线断言取规则内该属性的**最后一条**声明（CSS 生效值），
- *   同属性前置声明不再遮蔽生效值；目标规则须唯一且无条件——媒体块内
- *   同名规则会使生效值随环境分叉，违背 #240 恒白决策的接线前提。
+ * - 危险动作黄金接线断言取规则内该属性的**生效值**：!important 声明优先
+ *   于普通声明，同重要性取源序最后一条——前置 !important 不被其后的普通
+ *   声明覆盖；目标规则须唯一且无条件——媒体块内同名规则会使生效值随环境
+ *   分叉，违背 #240 恒白决策的接线前提。
  * - 开放缺陷以跟踪单号入表：#262（品牌底固定白字 ×2）、#265（悬空
  *   --fill-tertiary ×1）；其修复落地时注册表同步收缩。
  * - 不重开 #240 危险色决策：--on-danger 恒白，深色底 ≈2.8:1 为已记录
@@ -62,6 +65,7 @@
  * | --- | --- | --- | --- | --- |
  * | 新增组件样式表（包括仅布局/动画或空表） | glob 发现 | 自动进入全部契约，无登记清单或展示色条数要求 | 布线不全不可悄然发生 | 发现探针与无展示色夹具 |
  * | 新增展示色字面声明（hex/大小写不敏感函数色/具名色；含 fill/stroke、background-image 与 border 全部简写/长形） | 结构扫描 | 非注册表项即失败（点名表/选择器/声明） | 展示色必须经 tokens.css 或具名例外 | 结构测试 |
+ * | 展示色属性名为非标准大小写（如 `Color`） | 分类前归一 | 仍按标准属性分类，字面色不因大小写绕过 | 标准属性名 ASCII 大小写不敏感 | 分类与集成语义用例 |
  * | 局部自定义属性被展示色属性（传递）消费且值含字面色 | 结构扫描 | 按违例点名（同注册表豁免） | 字面色不得经局部变量别名进入展示位 | 结构测试 |
  * | 展示色引用解析为不相容值（尺寸/裸数值叶子；不接受图像的属性上的渐变/URL） | 逐环境校验属性 | 按违例点名；合法背景图像及 SVG URL 通过 | 图像必须由支持该语法的属性消费 | 结构与图像文法测试 |
  * | 缺失/initial/断链/循环变量带 fallback，或有效主值带无效 fallback | 解析实际生效值（含嵌套回退） | 无效值及独立空值报错，有效主值/回退通过 | fallback 不绕过消费属性类型校验，主值有效时不消费回退 | fallback 取值测试 |
@@ -79,14 +83,14 @@
  * | 已豁免悬空引用换属性承载或新增第二条声明 | 接线扫描（属性 + 条数比对） | 按新违例点名 | 接线豁免不扩张已知缺陷 | 接线测试 |
  * | 浅/深 × 基线/more × 基线/降透明度（8 环境） | 配对矩阵 | primary 全环境 ≥4.5、secondary more 升档 ≥4.5（§2.6） | 原则 2 按令牌配对成立（含 reduce-transparency 实色材质） | 配对测试 |
  * | 悬停态换填充 | 配对矩阵 | text-primary 于 fill-quaternary 承载面 ≥4.5 | hover 配对按既有契约 | 配对测试 |
- * | 危险动作 hover/确认 | 黄金接线（规则唯一无条件；生效值 = 属性最后一条声明） | 前景全部配对环境恒 #ffffff（#240 决策） | 危险前景经 --on-danger，生效值不随环境分叉 | 黄金测试 |
+ * | 危险动作 hover/确认 | 黄金接线（规则唯一无条件；生效值按重要性再取源序最后一条） | 前景全部配对环境恒 #ffffff（#240 决策） | 危险前景经 --on-danger，生效值不随环境分叉且不被普通声明逆转 | 黄金测试 |
  * | 遮罩渐变 | alpha 剖析 | 首末色标全透明、内部全不透明 | 遮罩只消费 alpha | 遮罩测试 |
  *
  * 未覆盖维度：真实 WebView 像素实测未运行；品牌底两处配对归 #262、悬空
  * 变量归 #265 跟踪；accent-alt 焦点描边/青 wash（.pw-ai-ctx-toggle.on）的
  * 非文本 3:1 未断言——无既有决策，不在本单开新前沿（PR 披露）。
  * 值解析仍为静态子集，非完整 CSS 文法/层叠引擎；复杂选择器及跨选择器
- * 特异性与颜色函数内部参数未建模。最新审查记录见
+ * 特异性与颜色函数内部参数未建模。审查处理记录见
  * docs/reviews/pr-288-review-5275978899.md；纯值校验由 cssColorContract.ts 负责。
  */
 import { readFileSync, readdirSync } from 'node:fs'
@@ -510,6 +514,11 @@ interface SheetDecl {
   value: string
 }
 
+/** 标准属性名 ASCII 大小写不敏感，归一为小写；自定义属性名保持大小写敏感。 */
+function normalizeProp(prop: string): string {
+  return prop.startsWith('--') ? prop : prop.toLowerCase()
+}
+
 /** 组件样式表的全部声明（含媒体块内），带选择器与 at-rule 条件上下文。 */
 function* sheetDecls(root: postcss.Root): Generator<SheetDecl> {
   for (const node of root.nodes ?? []) yield* walkContainer(node, '')
@@ -528,7 +537,7 @@ function* walkContainer(
         yield {
           selector: node.selector,
           condition,
-          prop: child.prop,
+          prop: normalizeProp(child.prop),
           value: child.value,
         }
       }
@@ -587,6 +596,15 @@ describe('展示色结构：属性与字面探测分类（issue #278）', () => 
     expect(hasColorLiteral('inherit')).toBe(false)
     expect(hasColorLiteral('var(--danger-red)')).toBe(false)
     expect(hasColorLiteral('1px solid var(--border-hairline)')).toBe(false)
+  })
+
+  it('标准属性名 ASCII 大小写不敏感地归一分类；自定义属性名大小写保持原样不被归一', () => {
+    expect(normalizeProp('Color')).toBe('color')
+    expect(normalizeProp('BACKGROUND-Color')).toBe('background-color')
+    expect(normalizeProp('--My-Token')).toBe('--My-Token')
+    const root = postcss.parse('.x { Color: #fff; Background: none; }')
+    const decls = [...sheetDecls(root)]
+    expect(decls.map((d) => d.prop)).toEqual(['color', 'background'])
   })
 })
 
@@ -1579,15 +1597,16 @@ function ruleOf(sheet: string, selector: string): postcss.Rule {
   return rule
 }
 
-/** 规则内该属性的最后一条声明（CSS 生效值）；缺失抛错防测试静默空过。 */
+/** 规则内该属性的生效值：!important 声明优先于普通声明，同重要性取源序最后一条。 */
 function declOf(rule: postcss.Rule, prop: string): string {
   const decls = rule.nodes.filter(
     (node): node is postcss.Declaration =>
       node.type === 'decl' && node.prop === prop,
   )
-  const last = decls[decls.length - 1]
-  if (!last) throw new Error(`${rule.selector} 缺少 ${prop} 声明`)
-  return last.value
+  if (decls.length === 0) throw new Error(`${rule.selector} 缺少 ${prop} 声明`)
+  const important = decls.filter((decl) => decl.important)
+  const winners = important.length > 0 ? important : decls
+  return winners[winners.length - 1]!.value
 }
 
 describe('危险动作前景接线（#240 决策补齐，issue #278）', () => {
@@ -1607,6 +1626,13 @@ describe('危险动作前景接线（#240 决策补齐，issue #278）', () => {
   it('黄金接线取生效值：同属性后置声明不被前置声明遮蔽（CSS 最后声明生效）', () => {
     const rule = postcss.parse(
       '.x { color: var(--on-danger); color: var(--text-primary); }',
+    ).first as postcss.Rule
+    expect(declOf(rule, 'color')).toBe('var(--text-primary)')
+  })
+
+  it('黄金接线按重要性取生效值：!important 声明优先于其后的普通声明（源序不再单独决定）', () => {
+    const rule = postcss.parse(
+      '.x { color: var(--text-primary) !important; color: var(--on-danger); }',
     ).first as postcss.Rule
     expect(declOf(rule, 'color')).toBe('var(--text-primary)')
   })
