@@ -2,7 +2,8 @@
  * 令牌契约的 CSS 层叠/取值引擎（issue #278）：媒体环境求值、声明遍历、
  * 局部自定义属性解析（含重要性/条件分组取胜）、悬空引用扫描、展示色类型
  * 校验、黄金规则生效值取值。供全表契约测试（真实样式表扫描，
- * sheetTokens.test.ts）与语义/夹具测试（sheetTokensSemantics.test.ts）
+ * sheetTokens.test.ts）与语义/夹具测试（sheetTokensSemantics.test.ts、
+ * sheetTokenReferences.test.ts）
  * 共用，避免两处逻辑分叉。纯值校验（字面色探测、颜色成分/文法）由
  * cssColorContract.ts 负责。
  */
@@ -11,6 +12,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import postcss from 'postcss'
 import { colorTokenOf, colorTypeOk } from './cssColorContract'
+import { maskCssOpaque } from './cssValueSyntax'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../..')
 
@@ -143,19 +145,27 @@ export function tokenValuesOf(
   return new Map([...entries].map(([name, entry]) => [name, entry.value]))
 }
 
-/** 迭代消解 var() 引用链至无引用（深度限 12，防循环）。 */
+/** 仅定位不透明内容之外的 var()，返回的偏移可直接用于原始值切片。 */
+function variableStart(value: string): number {
+  return maskCssOpaque(value).indexOf('var(')
+}
+
+/** 迭代消解真实 var() 引用链（深度限 12，防循环），字符串/URL 保持原样。 */
 export function resolveChain(
   value: string,
   tokens: Map<string, string>,
 ): string {
   let current = value
-  for (let i = 0; i < 12 && current.includes('var('); i += 1) {
-    current = current.replace(/var\(\s*(--[\w-]+)\s*\)/g, (whole, name) => {
-      const resolved = tokens.get(name as string)
-      return resolved ?? whole
-    })
+  for (let i = 0; i < 12 && variableStart(current) >= 0; i += 1) {
+    const syntax = maskCssOpaque(current)
+    current = current.replace(
+      /var\(\s*(--[\w-]+)\s*\)/g,
+      (whole, name: string, offset: number) =>
+        syntax.startsWith('var(', offset) ? (tokens.get(name) ?? whole) : whole,
+    )
   }
-  if (current.includes('var(')) throw new Error(`var() 链过深或悬空: ${value}`)
+  if (variableStart(current) >= 0)
+    throw new Error(`var() 链过深或悬空: ${value}`)
   return current
 }
 
@@ -189,9 +199,11 @@ export function isDisplayColorProp(prop: string): boolean {
   return DISPLAY_PROPS.has(prop) || BORDER_COLOR_PROP.test(prop)
 }
 
-/** 值内全部 var() 引用名（含带 fallback 者；用于消费关系闭包）。 */
+/** 值内真实 var() 引用名（含 fallback，排除字符串/URL；用于依赖图及消费闭包）。 */
 export function allVarRefs(value: string): string[] {
-  return [...value.matchAll(/var\(\s*(--[\w-]+)/g)].map((m) => m[1]!)
+  return [...maskCssOpaque(value).matchAll(/var\(\s*(--[\w-]+)/g)].map(
+    (m) => m[1]!,
+  )
 }
 
 /** 带上下文的声明：condition 为外层 at-rule 链（名 + 前置，空串 = 无条件）；important 供局部自定义属性按重要性选胜。 */
@@ -424,8 +436,11 @@ function unresolvedValueRefs(
 ): string[] {
   const refs: string[] = []
   let rest = value
-  while (rest.includes('var(')) {
-    const start = rest.indexOf('var(')
+  for (
+    let start = variableStart(rest);
+    start >= 0;
+    start = variableStart(rest)
+  ) {
     const call = colorTokenOf(rest.slice(start))
     const args = call.slice(4, -1)
     const comma = args.indexOf(',')
@@ -533,7 +548,7 @@ function resolveDisplayValue(
   scope: Map<string, string>,
   depth = 0,
 ): string | null {
-  const start = value.indexOf('var(')
+  const start = variableStart(value)
   if (start < 0) return value
   if (depth >= 32) return null
   const call = colorTokenOf(value.slice(start))
