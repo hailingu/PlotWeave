@@ -10,18 +10,19 @@
  * D33 根因。
  *
  * 范围界定（issue #278 验收标准）：
- * - 结构断言覆盖展示色属性（前景 color、背景与 background-image 长形、轮
- *   廓、SVG fill/stroke，以及 border 全部简写/长形——总体、四向、逻辑方向，
- *   按结构式分类而非枚举）；字面色含 hex、大小写不敏感的颜色函数与 CSS
+ * - 结构断言覆盖展示色属性（前景 color、背景与 background-image 长形、
+ *   轮廓、text-shadow、SVG fill/stroke，以及 border 全部简写/长形——总体、
+ *   四向、逻辑方向，按结构式分类而非枚举）；字面色含 hex、大小写不敏感的颜色函数与 CSS
  *   具名色；transparent（仅 alpha=0 无色相）与 currentcolor（继承而非字面）
  *   不计。box-shadow 是层级投影非主题展示色、mask-image 只消费 alpha 通道
  *   （遮罩语义另断言），两者不在字面色禁用范围。
  *   经展示色属性传递消费的局部自定义属性同样受禁：`.b { --fg: #fff; color:
  *   var(--fg) }` 不得绕过契约（消费关系沿局部属性值链传递闭包计算；仅被
  *   非展示属性消费的局部属性——如 React Flow 控件变量——不在展示色契约内）。
- *   展示色引用的解析值须类型相容——非颜色令牌叶子（如把 --radius-sm 的
- *   尺寸值用进 color）运行时使声明被丢弃，按违例点名；既无颜色成分也无
- *   尺寸量的关键字/线型形态（none/underline 等）不误报。
+ *   展示色引用的解析值须类型相容——非颜色令牌叶子（把 --radius-sm 的
+ *   尺寸值或 --weight 的裸数值 600 用进 color）运行时使声明被丢弃，按违例
+ *   点名；既无颜色成分也无尺寸量/裸数值、全部词形在非颜色关键字表内的
+ *   形态（none/underline/solid 等及 url() 图像）不误报。
  * - 接线断言按「引用点活跃的全部支持环境」逐一验证：tokens.css 值链与局部
  *   定义值链均递归消解——令牌/局部变量自身引用缺失名、或仅在部分环境定义
  *   （如仅浅色媒体块内）而引用点无条件，均为悬空。带 fallback 的
@@ -57,7 +58,7 @@
  * | 新增组件样式表 | glob 发现 | 自动进入全部契约，无登记清单 | 布线不全不可悄然发生 | 发现测试 |
  * | 新增展示色字面声明（hex/大小写不敏感函数色/具名色；含 fill/stroke、background-image 与 border 全部简写/长形） | 结构扫描 | 非注册表项即失败（点名表/选择器/声明） | 展示色必须经 tokens.css 或具名例外 | 结构测试 |
  * | 局部自定义属性被展示色属性（传递）消费且值含字面色 | 结构扫描 | 按违例点名（同注册表豁免） | 字面色不得经局部变量别名进入展示位 | 结构测试 |
- * | 展示色 var() 引用解析为类型不兼容值（如尺寸令牌 --radius-sm） | 结构扫描（类型校验，全部环境） | 按违例点名 | 展示色消费点不得引用非颜色令牌 | 结构测试 |
+ * | 展示色 var() 引用解析为类型不兼容值（尺寸令牌/裸数值等非颜色叶子） | 结构扫描（类型校验，全部环境） | 按违例点名 | 展示色消费点不得引用非颜色令牌 | 结构测试 |
  * | 注册表项同属性换写其他字面色 / 新增第二条同值字面声明 / 超出已审计条数 | 结构扫描 | 按新违例点名（豁免绑定到值与条数） | 例外不覆盖未审计的值或条数 | 结构测试 |
  * | 注册表项对应声明被修复、换值或条数变动 | 结构反向校验 | 表项失配即失败 | 例外表不藏已修复项 | 结构测试 |
  * | 引用未定义 var()、令牌/局部定义值链引用缺失名（传递）、或定义为保证无效值（initial / 全局作用域 unset） | 接线扫描 | 失败点名（D38 类悬空引用） | 无失效 var 静默回落 | 接线测试 |
@@ -309,6 +310,7 @@ const DISPLAY_PROPS = new Set([
   'outline-color',
   'text-decoration',
   'text-decoration-color',
+  'text-shadow',
   'caret-color',
   'accent-color',
   'column-rule',
@@ -598,7 +600,7 @@ describe('样式表发现（issue #278：契约覆盖全部组件样式表）', 
 })
 
 describe('展示色结构：属性与字面探测分类（issue #278）', () => {
-  it('展示色属性分类覆盖 border 全部简写/长形（四向与逻辑方向）、SVG fill/stroke 与 background-image；box-shadow 与尺寸类不算', () => {
+  it('展示色属性分类覆盖 border 全部简写/长形（四向与逻辑方向）、SVG fill/stroke、background-image 与 text-shadow；box-shadow 与尺寸类不算', () => {
     for (const prop of [
       'border',
       'border-top',
@@ -610,6 +612,7 @@ describe('展示色结构：属性与字面探测分类（issue #278）', () => 
       'fill',
       'stroke',
       'background-image',
+      'text-shadow',
     ]) {
       expect(isDisplayColorProp(prop), prop).toBe(true)
     }
@@ -995,20 +998,50 @@ function danglingOccurrences(): Map<string, { label: string; count: number }> {
 
 const DIMENSION = /\b\d+(?:\.\d+)?(?:px|em|rem|%|pt|vw|vh|ch|ex)\b/
 
+/** 不带单位/百分号的裸数值（如字重 600）——对展示色属性必为类型不相容。 */
+const BARE_NUMBER = /(?<![\w.])\d+(?:\.\d+)?(?![\w.%])/
+
+/** 展示色属性合法的非颜色关键字形态（背景/边框/线型的关键字与通用关键字）。 */
+const NON_COLOR_KEYWORDS = new Set([
+  'none',
+  'inherit',
+  'initial',
+  'unset',
+  'revert',
+  'transparent',
+  'currentcolor',
+  'solid',
+  'dashed',
+  'dotted',
+  'double',
+  'wavy',
+  'underline',
+  'overline',
+  'line-through',
+  'blink',
+  'thick',
+  'thin',
+  'medium',
+])
+
 /**
  * 展示色声明解析值是否类型相容：含颜色成分（hex/函数色/具名色/渐变/
- * transparent/currentcolor）即真；无颜色成分但含尺寸量（如把 --radius-sm
- * 的 4px 用进 color）说明引用了类型不兼容令牌，运行时声明被丢弃——按违例；
- * 既无颜色也无尺寸的形态（none/underline/solid 等关键字与线型）不误报。
+ * transparent/currentcolor）或 url() 图像即真；否则须为「无尺寸量、无裸
+ * 数值、全部词形在非颜色关键字表内」的纯关键字形态（none/underline/
+ * solid 等）——尺寸量（--radius-sm 的 4px）、裸数值（--weight 的 600）
+ * 及未识别词形均按类型不相容点名，运行时该声明会被浏览器丢弃。
  */
 function colorTypeOk(resolved: string): boolean {
   if (COLOR_FUNCTION_OR_HEX.test(resolved)) return true
-  if (/(?:linear|radial|conic)-gradient\(/i.test(resolved)) return true
+  if (/(?:linear|radial|conic)-gradient\(|url\(/i.test(resolved)) return true
   if (/transparent|currentcolor/i.test(resolved)) return true
   for (const match of resolved.matchAll(BARE_IDENT)) {
     if (NAMED_COLORS.has(match[0].toLowerCase())) return true
   }
-  return !DIMENSION.test(resolved)
+  if (DIMENSION.test(resolved) || BARE_NUMBER.test(resolved)) return false
+  return [...resolved.matchAll(BARE_IDENT)].every((match) =>
+    NON_COLOR_KEYWORDS.has(match[0].toLowerCase()),
+  )
 }
 
 /**
@@ -1446,8 +1479,7 @@ describe('危险动作前景接线（#240 决策补齐，issue #278）', () => {
 })
 
 describe('遮罩语义契约（issue #278：遮罩只消费 alpha）', () => {
-  it('全部组件样式表的 linear-gradient 遮罩首末色标全透明、内部全不透明', () => {
-    const checked: string[] = []
+  it('全部组件样式表发现的 linear-gradient 遮罩首末色标全透明、内部全不透明（语义断言，不锚定出现条数）', () => {
     for (const [sheet, root] of sheets) {
       if (sheet === TOKEN_SHEET) continue
       for (const decl of sheetDecls(root)) {
@@ -1457,7 +1489,6 @@ describe('遮罩语义契约（issue #278：遮罩只消费 alpha）', () => {
         }
         const alphas = maskStopAlphas(decl.value)
         const label = `${sheet} ${decl.selector} ${decl.prop}`
-        checked.push(label)
         expect(alphas.length, `${label} 色标数`).toBeGreaterThanOrEqual(3)
         expect(alphas[0], `${label} 顶边全透明`).toBe(0)
         expect(alphas[alphas.length - 1], `${label} 底边全透明`).toBe(0)
@@ -1466,9 +1497,23 @@ describe('遮罩语义契约（issue #278：遮罩只消费 alpha）', () => {
         }
       }
     }
+  })
+
+  it('遮罩 alpha 剖析机器（夹具钉住非空覆盖）：合规渐隐为真，内部半透明/端点不透明为假', () => {
     expect(
-      checked.length,
-      '至少覆盖 panels/settings 两处既有遮罩',
-    ).toBeGreaterThanOrEqual(4)
+      maskStopAlphas(
+        'linear-gradient(to bottom, transparent 0, #000 12px, #000 calc(100% - 14px), transparent 100%)',
+      ),
+    ).toEqual([0, 1, 1, 0])
+    expect(
+      maskStopAlphas(
+        'linear-gradient(to bottom, transparent 0, rgba(0, 0, 0, 0.5) 12px, transparent 100%)',
+      ),
+      '内部色标半透明即不合规',
+    ).toEqual([0, 0.5, 0])
+    expect(
+      maskStopAlphas('linear-gradient(to bottom, #000 0, transparent 100%)'),
+      '首色标不透明即不合规',
+    ).toEqual([1, 0])
   })
 })
