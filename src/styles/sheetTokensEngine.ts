@@ -233,6 +233,31 @@ function assertLocalContext(decl: postcss.Declaration): void {
   }
 }
 
+/** 单一全局复合选择器；带后代/子代等组合器的局部选择器不归入此所有权限制。 */
+function isGlobalCompound(selector: string): boolean {
+  return (
+    postcss.list.split(selector, [' ', '\n', '\t', '>', '+', '~'], false)
+      .length === 1 && /^(?::root|html|body|\*)(?=$|[.:[#])/i.test(selector)
+  )
+}
+
+/** 带文件来源的组件表不得另定义全局令牌；无来源语义夹具仍可模拟独立级联。 */
+function assertGlobalTokenSource(root: postcss.Root): void {
+  const file = root.source?.input.file
+  if (!file || file === join(repoRoot, TOKEN_SHEET)) return
+  root.walkRules((rule) => {
+    if (!postcss.list.comma(rule.selector).some(isGlobalCompound)) return
+    const definition = rule.nodes.find(
+      (node) => node.type === 'decl' && node.prop.startsWith('--'),
+    )
+    if (definition?.type === 'decl') {
+      throw new Error(
+        `TOKEN_GLOBAL_OUTSIDE_SOURCE: ${file} ${rule.selector} ${definition.prop}`,
+      )
+    }
+  })
+}
+
 /** 枚举前验证整表布局，防止嵌套规则或未建模局部定义从任何扫描入口漏过。 */
 function assertSheetContexts(root: postcss.Root): void {
   root.walkRules((rule) => {
@@ -242,10 +267,11 @@ function assertSheetContexts(root: postcss.Root): void {
       throw new Error(`TOKEN_SHEET_NESTING_UNMODELED: ${rule.selector}`)
     }
   })
+  assertGlobalTokenSource(root)
   root.walkDecls(/^--/, assertLocalContext)
 }
 
-/** 组件样式表的声明及上下文；嵌套布局和非 media 局部定义以稳定错误码拒绝。 */
+/** 声明及上下文；真实组件输入须带 from 来源，未建模布局/定义以稳定错误码拒绝。 */
 export function* sheetDecls(root: postcss.Root): Generator<SheetDecl> {
   assertSheetContexts(root)
   for (const node of root.nodes ?? []) yield* walkContainer(node, '')
@@ -277,18 +303,21 @@ function* walkContainer(
 const GLOBAL_SCOPES = new Set([':root', 'html', 'body', '*'])
 
 /**
- * 自定义属性声明值是否为「保证无效」形态：initial 恒为保证无效值；unset
- * 在全局作用域（无父级可继承）上退化为 initial，同为保证无效。inherit /
- * revert 静态不可判定（取决于运行时父级与层叠），不在本判定内。
+ * 自定义属性 initial 与文档根 unset 为保证无效值；其余 CSS-wide 继承/回滚
+ * 尚未建模，明确拒绝，不能将原关键字误当作消费属性的合法取值。
  */
 function isGuaranteedInvalid(value: string, selector: string): boolean {
   const keyword = value.trim().toLowerCase()
   if (keyword === 'initial') return true
   if (keyword === 'unset') {
-    return selector
+    const documentRoot = selector
       .split(',')
       .map((s) => s.trim())
-      .every((s) => GLOBAL_SCOPES.has(s))
+      .every((s) => s === ':root' || s === 'html')
+    if (documentRoot) return true
+  }
+  if (/^(unset|inherit|revert|revert-layer)$/.test(keyword)) {
+    throw new Error(`TOKEN_CSS_WIDE_UNMODELED: ${selector} ${keyword}`)
   }
   return false
 }

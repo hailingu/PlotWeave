@@ -826,7 +826,7 @@ describe('接线语义：值链与无效形态（issue #278）', () => {
     )
   })
 
-  it('保证无效形态的定义在消费点判悬空（initial 恒无效；全局作用域 unset 退化同判）', () => {
+  it('保证无效形态的定义在消费点判悬空（initial 恒无效；文档根 unset 退化同判）', () => {
     const root = postcss.parse(
       '.a { --fg-init: initial; color: var(--fg-init); }\n' +
         '.b { --fg-ok: #fff; color: var(--fg-ok); }\n' +

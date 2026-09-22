@@ -49,9 +49,11 @@
  *   已支持的简单后代/子代选择器先选最近定义元素：自身指定值先于祖先继承值，
  *   然后仅在同元素候选中比较重要性/源序；不同逗号分支与媒体环境独立选择。
  *   根令牌（tokens.css :root）同名声明同样先按重要性再按源序取胜，与局部
- *   自定义属性同一规则。声明值为保证无效形态（initial，及全局作用域上退化
- *   为 initial 的 unset）的局部定义与令牌按断链处理；inherit/revert 静态
- *   不可判定，不在判定内（见未覆盖维度）。
+ *   自定义属性同一规则。initial 与文档根 :root/html 的 unset 按保证无效值处理；
+ *   非根 unset、inherit、revert/revert-layer 的自定义属性胜出值明确拒绝，
+ *   报 TOKEN_CSS_WIDE_UNMODELED，不能当作消费属性的合法关键字透传。
+ *   真实表带 from 来源，组件全局自定义属性报 TOKEN_GLOBAL_OUTSIDE_SOURCE，
+ *   即使本表没有消费者也不能覆盖唯一定义源 tokens.css；局部定义仍可遮蔽。
  *   根令牌处于未知外层 at-rule 或根规则内嵌 at-rule 时明确报 TOKEN_ROOT_AT_RULE_UNMODELED，
  *   不再静默跳过该定义入口；不含根令牌的其他上下文不受此限制。
  *   组件规则内嵌规则/at-rule 报 TOKEN_SHEET_NESTING_UNMODELED；非 media
@@ -91,7 +93,7 @@
  * | 展示色引用解析为不相容值（尺寸/裸数值叶子；不接受图像的属性上的渐变/URL） | 逐环境校验属性 | 按违例点名；合法背景图像及 SVG URL 通过 | 图像必须由支持该语法的属性消费 | 结构测试 |
  * | 注册表项同属性换写其他字面色 / 新增第二条同值字面声明 / 超出已审计条数 | 结构扫描 | 按新违例点名（豁免绑定到值与条数） | 例外不覆盖未审计的值或条数 | 结构测试 |
  * | 注册表项对应声明被修复、换值或条数变动 | 结构反向校验 | 表项失配即失败 | 例外表不藏已修复项 | 结构测试 |
- * | 引用未定义 var()、令牌/局部定义值链引用缺失名（传递）、或定义为保证无效值（initial / 全局作用域 unset） | 接线扫描 | 失败点名（D38 类悬空引用） | 无失效 var 静默回落 | 接线测试 |
+ * | 引用未定义 var()、令牌/局部定义值链引用缺失名（传递）、或定义为保证无效值（initial / 文档根 unset） | 接线扫描 | 失败点名（D38 类悬空引用） | 无失效 var 静默回落 | 接线测试 |
  * | 根令牌（tokens.css :root）同名声明含 !important | 令牌取值 | 重要声明优先于普通声明，无论源序 | 根令牌与局部自定义属性同一重要性规则 | 接线测试（间接经真实 tokens.css 解析），单元用例见 sheetTokensSemantics.test.ts |
  * | 已豁免悬空引用换属性承载或新增第二条声明 | 接线扫描（属性 + 条数比对） | 按新违例点名 | 接线豁免不扩张已知缺陷 | 接线测试 |
  * | 浅/深 × 基线/more × 基线/降透明度（8 环境） | 配对矩阵 | primary 全环境 ≥4.5、secondary more 升档 ≥4.5（§2.6） | 原则 2 按令牌配对成立（含 reduce-transparency 实色材质） | 配对测试 |
@@ -104,7 +106,7 @@
  * 非文本 3:1 未断言——无既有决策，不在本单开新前沿（PR 披露）。
  * 值解析仍为静态子集，非完整 CSS 文法/层叠引擎；复杂选择器及跨选择器
  * 特异性与颜色函数内部参数未建模。审查处理记录见
- * docs/reviews/pr-288-review-5280334884.md；纯值校验由 cssColorContract.ts 负责。
+ * docs/reviews/pr-288-review-5280542926.md；纯值校验由 cssColorContract.ts 负责。
  */
 import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -145,7 +147,10 @@ function discoverCssSheets(): string[] {
 }
 
 const sheets = new Map(
-  discoverCssSheets().map((path) => [path, postcss.parse(read(path))]),
+  discoverCssSheets().map((path) => [
+    path,
+    postcss.parse(read(path), { from: join(repoRoot, path) }),
+  ]),
 )
 
 /** 接线验证环境全集：外观 × 对比度 × 透明度 × 动效（引用点活跃的全部支持环境）。 */
