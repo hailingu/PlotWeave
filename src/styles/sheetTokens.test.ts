@@ -10,19 +10,22 @@
  * D33 根因。
  *
  * 范围界定（issue #278 验收标准）：
- * - 结构断言覆盖展示色属性（前景 color、背景、描边、轮廓、SVG fill/
- *   stroke）；字面色含 hex、函数色与 CSS 具名色；transparent（仅 alpha=0
- *   无色相）与 currentcolor（继承而非字面）不计。box-shadow 是层级投影非
- *   主题展示色、mask-image 只消费 alpha 通道（遮罩语义另断言），两者不在
- *   字面色禁用范围。
+ * - 结构断言覆盖展示色属性（前景 color、背景、轮廓、SVG fill/stroke，以及
+ *   border 全部简写/长形——总体、四向、逻辑方向，按结构式分类而非枚举）；
+ *   字面色含 hex、函数色与 CSS 具名色；transparent（仅 alpha=0 无色相）与
+ *   currentcolor（继承而非字面）不计。box-shadow 是层级投影非主题展示色、
+ *   mask-image 只消费 alpha 通道（遮罩语义另断言），两者不在字面色禁用范围。
  * - 接线断言中，样式表内的局部自定义属性只对定义规则自身及其后代规则
- *   可达（:root/html/body 视为全局）；引用仅在无关选择器下定义的局部变
- *   量按悬空处理。
+ *   可达（:root/html/body 视为全局），且定义需无条件或与引用处于同一
+ *   at-rule 条件链（仅在某媒体块内的定义不覆盖块外引用）；不可达的局部
+ *   变量引用按悬空处理。
  * - 已接受的例外不当作违例：用户内容色（海报压字/织线兜底/损坏占位，承
  *   载面依赖海报内容，同 tokens.css --on-saturated 理由）、遮罩（压字
  *   scrim / 模态压暗）、声明自洽状态对（settings.css 文件内记录决策）。
- *   每条例外是具名注册表项（表 + 选择器 + 属性 + 理由 + 引用），非广泛
- *   排除；注册表双向校验——新违例进不来，已修复的表项必须删除（防藏）。
+ *   每条例外是具名注册表项（表 + 选择器 + 属性 + 已审计字面值 + 理由 +
+ *   引用），非广泛排除；豁免绑定到具体值，同属性换写其他字面色或新增第二
+ *   条字面声明均为新违例。注册表双向校验——新违例进不来，已修复的表项必须
+ *   删除（防藏）。
  * - 开放缺陷以跟踪单号入表：#262（品牌底固定白字 ×2）、#265（悬空
  *   --fill-tertiary ×1）；其修复落地时注册表同步收缩。
  * - 不重开 #240 危险色决策：--on-danger 恒白，深色底 ≈2.8:1 为已记录
@@ -33,10 +36,12 @@
  * | 状态/前提 | 动作/过渡 | 可观测结果 | 不变量 | 验证 |
  * | --- | --- | --- | --- | --- |
  * | 新增组件样式表 | glob 发现 | 自动进入全部契约，无登记清单 | 布线不全不可悄然发生 | 发现测试 |
- * | 新增展示色字面声明（hex/函数/具名色，含 fill/stroke） | 结构扫描 | 非注册表项即失败（点名表/选择器/声明） | 展示色必须经 tokens.css 或具名例外 | 结构测试 |
- * | 注册表项对应声明被修复 | 结构反向校验 | 表项失配即失败 | 例外表不藏已修复项 | 结构测试 |
+ * | 新增展示色字面声明（hex/函数/具名色；含 fill/stroke 与 border 全部简写/长形） | 结构扫描 | 非注册表项即失败（点名表/选择器/声明） | 展示色必须经 tokens.css 或具名例外 | 结构测试 |
+ * | 注册表项同属性换写其他字面色 / 新增第二条字面声明 | 结构扫描 | 按新违例点名（豁免绑定到已审计值） | 例外不覆盖未审计的值 | 结构测试 |
+ * | 注册表项对应声明被修复或换值 | 结构反向校验 | 表项失配即失败 | 例外表不藏已修复项 | 结构测试 |
  * | 引用未定义 var() | 接线扫描 | 失败点名（D38 类悬空引用） | 无失效 var 静默回落 | 接线测试 |
  * | 引用仅在无关选择器下定义的局部 var() | 接线扫描（作用域可达性） | 失败点名 | 局部定义只对自身/后代规则生效 | 接线测试 |
+ * | 引用仅在某媒体块内定义的局部 var()，引用在块外或异条件 | 接线扫描（at-rule 条件链） | 失败点名 | 条件定义不覆盖其他环境 | 接线测试 |
  * | 浅/深 × 基线/more | 配对矩阵 | primary 全环境 ≥4.5、secondary more 升档 ≥4.5（§2.6） | 原则 2 按语义令牌配对成立 | 配对测试 |
  * | 悬停态换填充 | 配对矩阵 | text-primary 于 fill-quaternary 承载面 ≥4.5 | hover 配对按既有契约 | 配对测试 |
  * | 危险动作 hover/确认 | 黄金接线 | 前景四环境恒 #ffffff（#240 决策） | 危险前景经 --on-danger | 黄金测试 |
@@ -264,24 +269,31 @@ function maskStopAlphas(value: string): number[] {
     .map((part) => stopAlpha(colorTokenOf(part)))
 }
 
-/** 展示色属性：这些属性的字面色值必须经注册表豁免（box-shadow/遮罩除外）。 */
+/** 展示色属性（非 border 系）：字面色值必须经注册表豁免（box-shadow/遮罩除外）。 */
 const DISPLAY_PROPS = new Set([
   'color',
   'background',
   'background-color',
-  'border',
-  'border-color',
   'outline',
   'outline-color',
-  'border-top-color',
-  'border-right-color',
-  'border-bottom-color',
-  'border-left-color',
+  'text-decoration',
   'text-decoration-color',
   'caret-color',
+  'accent-color',
+  'column-rule',
+  'column-rule-color',
   'fill',
   'stroke',
 ])
+
+/** border 系结构式分类：总体/四向/逻辑方向 × 简写或 -color 长形。 */
+const BORDER_COLOR_PROP =
+  /^border(-(top|right|bottom|left|block|inline)(-(start|end))?)?(-color)?$/
+
+/** 属性是否承载展示色（构造中的 border 字面色同样受禁）。 */
+function isDisplayColorProp(prop: string): boolean {
+  return DISPLAY_PROPS.has(prop) || BORDER_COLOR_PROP.test(prop)
+}
 
 const COLOR_FUNCTION_OR_HEX =
   /#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(|\bhwb\(|\blab\(|\blch\(|\boklab\(|\boklch\(|\bcolor\(/
@@ -327,53 +339,67 @@ function hasColorLiteral(value: string): boolean {
 }
 
 /**
- * 展示色例外注册表（issue #278）：每项 = 表 + 选择器 + 属性 + 理由 + 引用。
- * 双向校验：命中违例必须在表内；表项必须仍命中一条字面声明（修复落地后
+ * 展示色例外注册表（issue #278）：每项 = 表 + 选择器 + 属性 + 已审计的字面值 + 理由
+ * + 引用。豁免绑定到具体值：同一属性换写其他字面色或新增第二条字面声明均为新
+ * 违例。双向校验：命中违例必须在表内；表项必须仍命中一条字面声明（修复落地后
  * 删除表项，防例外表藏已修复/不存在的项）。开放缺陷以跟踪单号为引用。
  */
 const STRUCTURE_EXCEPTIONS: Readonly<
-  { sheet: string; selector: string; prop: string; reason: string }[]
+  {
+    sheet: string
+    selector: string
+    prop: string
+    value: string
+    reason: string
+  }[]
 > = [
   {
     sheet: 'src/home/home.css',
     selector: '.project-poster--weave',
     prop: 'background',
+    value: '#1a1a1e',
     reason: '用户内容层：织线兜底恒深底（homeTokens.test.ts 未覆盖维度注）',
   },
   {
     sheet: 'src/home/home.css',
     selector: '.project-poster--broken',
     prop: 'background',
+    value: '#232326',
     reason: '用户内容层：损坏占位恒深底（issue #123）',
   },
   {
     sheet: 'src/home/home.css',
     selector: '.project-poster--broken',
     prop: 'border',
+    value: '1px dashed rgba(255, 255, 255, 0.28)',
     reason: '用户内容层：损坏占位虚线框',
   },
   {
     sheet: 'src/home/home.css',
     selector: '.project-poster--broken .project-poster-name',
     prop: 'color',
+    value: 'rgba(255, 255, 255, 0.85)',
     reason: '用户内容层：损坏占位文本',
   },
   {
     sheet: 'src/home/home.css',
     selector: '.project-poster--broken .project-poster-stats',
     prop: 'color',
+    value: 'rgba(255, 176, 122, 0.92)',
     reason: '用户内容层：损坏占位统计文本',
   },
   {
     sheet: 'src/home/home.css',
     selector: '.project-poster-caption',
     prop: 'background',
+    value: 'linear-gradient(transparent, rgba(0, 0, 0, 0.68))',
     reason: '遮罩：海报压字渐变 scrim（§3.2，只承载 alpha）',
   },
   {
     sheet: 'src/home/home.css',
     selector: '.project-poster-name',
     prop: 'color',
+    value: '#fff',
     reason:
       '用户内容前景：承载面依赖海报内容，无确定性对比面（同 tokens.css --on-saturated 理由）',
   },
@@ -381,46 +407,63 @@ const STRUCTURE_EXCEPTIONS: Readonly<
     sheet: 'src/home/home.css',
     selector: '.project-poster-stats',
     prop: 'color',
+    value: 'rgba(255, 255, 255, 0.78)',
     reason: '用户内容前景：同 .project-poster-name',
   },
   {
     sheet: 'src/editor/editor.css',
     selector: '.pw-overlay',
     prop: 'background',
+    value: 'rgba(0, 0, 0, 0.32)',
     reason: '遮罩：模态压暗 scrim（只承载 alpha）',
   },
   {
     sheet: 'src/editor/editor.css',
     selector: '.editor-tbtn-ai.on',
     prop: 'color',
+    value: '#fff',
     reason: '开放缺陷：品牌底固定白字，配对修复归 #262',
   },
   {
     sheet: 'src/settings/settings.css',
     selector: '.settings-key-state.ok',
     prop: 'background',
+    value: '#1e4629',
     reason: '声明自洽状态对（≈6.7:1，settings.css 文件内记录决策 S7924）',
   },
   {
     sheet: 'src/settings/settings.css',
     selector: '.settings-key-state.ok',
     prop: 'color',
+    value: '#7ce69a',
     reason: '声明自洽状态对（同上）',
   },
   {
     sheet: 'src/settings/settings.css',
     selector: '.pw-ai-msg-user',
     prop: 'color',
+    value: '#fff',
     reason: '开放缺陷：品牌底固定白字，配对修复归 #262',
   },
   {
     sheet: 'src/settings/settings.css',
     selector: '.pw-ai-ctx-toggle.on',
     prop: 'background',
+    value: 'rgba(0, 179, 216, 0.12)',
     reason:
       '已知边界：accent-alt 浅色 wash 字面量未随外观切换（P3，#278 PR 披露，未跟踪）',
   },
 ]
+
+/** 结构例外的唯一键：表|选择器|属性|字面值（值去首尾空白）。 */
+function structureKey(
+  sheet: string,
+  selector: string,
+  prop: string,
+  value: string,
+): string {
+  return `${sheet}|${selector}|${prop}|${value.trim()}`
+}
 
 /** 接线例外注册表：悬空 var() 引用按开放缺陷跟踪（#265）。 */
 const WIRING_EXCEPTIONS: Readonly<
@@ -434,23 +477,32 @@ const WIRING_EXCEPTIONS: Readonly<
   },
 ]
 
-/** 组件样式表的全部声明（含媒体块内），带选择器上下文。 */
-function* sheetDecls(
-  root: postcss.Root,
-): Generator<{ selector: string; prop: string; value: string }> {
-  for (const node of root.nodes ?? []) yield* walkContainer(node)
+/** 带上下文的声明：condition 为外层 at-rule 链（名 + 前置，空串 = 无条件）。 */
+interface SheetDecl {
+  selector: string
+  condition: string
+  prop: string
+  value: string
+}
+
+/** 组件样式表的全部声明（含媒体块内），带选择器与 at-rule 条件上下文。 */
+function* sheetDecls(root: postcss.Root): Generator<SheetDecl> {
+  for (const node of root.nodes ?? []) yield* walkContainer(node, '')
 }
 
 function* walkContainer(
   node: postcss.ChildNode,
-): Generator<{ selector: string; prop: string; value: string }> {
+  condition: string,
+): Generator<SheetDecl> {
   if (node.type === 'atrule') {
-    for (const child of node.nodes ?? []) yield* walkContainer(child)
+    const nested = `${condition}@${node.name} ${node.params};`
+    for (const child of node.nodes ?? []) yield* walkContainer(child, nested)
   } else if (node.type === 'rule') {
     for (const child of node.nodes ?? []) {
       if (child.type === 'decl') {
         yield {
           selector: node.selector,
+          condition,
           prop: child.prop,
           value: child.value,
         }
@@ -466,7 +518,7 @@ describe('样式表发现（issue #278：契约覆盖全部组件样式表）', 
     expect(components.length).toBeGreaterThan(0)
     for (const [sheet, root] of components) {
       const displayDecls = [...sheetDecls(root)].filter((decl) =>
-        DISPLAY_PROPS.has(decl.prop),
+        isDisplayColorProp(decl.prop),
       )
       expect(displayDecls.length, `${sheet} 无展示色声明`).toBeGreaterThan(0)
     }
@@ -474,6 +526,31 @@ describe('样式表发现（issue #278：契约覆盖全部组件样式表）', 
 })
 
 describe('展示色结构契约（issue #278）', () => {
+  it('展示色属性分类覆盖 border 全部简写/长形（四向与逻辑方向）与 SVG fill/stroke；box-shadow 与尺寸类不算', () => {
+    for (const prop of [
+      'border',
+      'border-top',
+      'border-left',
+      'border-inline-start',
+      'border-block-end-color',
+      'border-color',
+      'outline',
+      'fill',
+      'stroke',
+    ]) {
+      expect(isDisplayColorProp(prop), prop).toBe(true)
+    }
+    for (const prop of [
+      'box-shadow',
+      'border-width',
+      'border-radius',
+      'border-top-width',
+      'mask-image',
+      'padding',
+    ]) {
+      expect(isDisplayColorProp(prop), prop).toBe(false)
+    }
+  })
   it('字面色探测覆盖 hex/函数色/具名色；transparent、currentcolor、none、var() 名内的色词不算', () => {
     expect(hasColorLiteral('#fff')).toBe(true)
     expect(hasColorLiteral('rgba(0, 0, 0, 0.68)')).toBe(true)
@@ -488,18 +565,22 @@ describe('展示色结构契约（issue #278）', () => {
     expect(hasColorLiteral('1px solid var(--border-hairline)')).toBe(false)
   })
 
-  it('全部组件样式表的展示色声明不硬编码色值（具名例外注册表内除外）', () => {
+  it('全部组件样式表的展示色声明不硬编码色值（具名例外注册表内且值一致者除外）', () => {
     const allowed = new Set(
-      STRUCTURE_EXCEPTIONS.map((e) => `${e.sheet}|${e.selector}|${e.prop}`),
+      STRUCTURE_EXCEPTIONS.map((e) =>
+        structureKey(e.sheet, e.selector, e.prop, e.value),
+      ),
     )
     const offenders: string[] = []
     for (const [sheet, root] of sheets) {
       if (sheet === TOKEN_SHEET) continue
       for (const decl of sheetDecls(root)) {
         if (
-          DISPLAY_PROPS.has(decl.prop) &&
+          isDisplayColorProp(decl.prop) &&
           hasColorLiteral(decl.value) &&
-          !allowed.has(`${sheet}|${decl.selector}|${decl.prop}`)
+          !allowed.has(
+            structureKey(sheet, decl.selector, decl.prop, decl.value),
+          )
         ) {
           offenders.push(
             `${sheet} ${decl.selector} ${decl.prop}: ${decl.value.trim()}`,
@@ -510,21 +591,21 @@ describe('展示色结构契约（issue #278）', () => {
     expect(offenders).toEqual([])
   })
 
-  it('注册表每项仍命中一条真实字面声明（修复落地后删表项，防例外藏项）', () => {
+  it('注册表每项仍命中一条值一致的真实字面声明（修复或换值后删/改表项，防例外藏项）', () => {
     const live = new Set<string>()
     for (const [sheet, root] of sheets) {
       for (const decl of sheetDecls(root)) {
-        if (DISPLAY_PROPS.has(decl.prop) && hasColorLiteral(decl.value)) {
-          live.add(`${sheet}|${decl.selector}|${decl.prop}`)
+        if (isDisplayColorProp(decl.prop) && hasColorLiteral(decl.value)) {
+          live.add(structureKey(sheet, decl.selector, decl.prop, decl.value))
         }
       }
     }
     const stale = STRUCTURE_EXCEPTIONS.filter(
-      (e) => !live.has(`${e.sheet}|${e.selector}|${e.prop}`),
+      (e) => !live.has(structureKey(e.sheet, e.selector, e.prop, e.value)),
     )
     expect(
-      stale.map((e) => `${e.sheet} ${e.selector} ${e.prop}`),
-      '以下注册表项已不再命中任何字面声明，应删除：',
+      stale.map((e) => `${e.sheet} ${e.selector} ${e.prop}: ${e.value}`),
+      '以下注册表项已不再命中任何值一致的字面声明，应删除或重审：',
     ).toEqual([])
   })
 })
@@ -541,27 +622,38 @@ function selectorReaches(definer: string, referencer: string): boolean {
   return /^[:.[#]/.test(rest) || /^(\s*>|\s+(?![+~]))/.test(rest)
 }
 
-/** 选择器列表间的可达性：任一定义选择器覆盖任一引用选择器即成立。 */
+/** 局部自定义属性的定义点：选择器 + 外层 at-rule 条件。 */
+interface LocalDef {
+  selector: string
+  condition: string
+}
+
+/**
+ * 定义点列表是否可达引用点：选择器覆盖（任一定义选择器 × 任一引用选择器），
+ * 且定义无条件或与引用处于同一 at-rule 条件链（仅在某媒体块内的定义不覆盖块外引用）。
+ */
 function scopeReaches(
-  definers: readonly string[],
-  referencer: string,
+  definers: readonly LocalDef[],
+  referencer: LocalDef,
 ): boolean {
-  const refs = referencer.split(',').map((s) => s.trim())
-  return definers.some((definer) =>
-    definer
-      .split(',')
-      .map((s) => s.trim())
-      .some((d) => refs.some((r) => selectorReaches(d, r))),
+  const refs = referencer.selector.split(',').map((s) => s.trim())
+  return definers.some(
+    (def) =>
+      (def.condition === '' || def.condition === referencer.condition) &&
+      def.selector
+        .split(',')
+        .map((s) => s.trim())
+        .some((d) => refs.some((r) => selectorReaches(d, r))),
   )
 }
 
-/** 本表局部自定义属性 → 定义它的选择器列表（含媒体块内）。 */
-function localDefinitions(root: postcss.Root): Map<string, string[]> {
-  const out = new Map<string, string[]>()
+/** 本表局部自定义属性 → 全部定义点（含媒体块内，条件随定义点保留）。 */
+function localDefinitions(root: postcss.Root): Map<string, LocalDef[]> {
+  const out = new Map<string, LocalDef[]>()
   for (const decl of sheetDecls(root)) {
     if (!decl.prop.startsWith('--')) continue
     const list = out.get(decl.prop) ?? []
-    list.push(decl.selector)
+    list.push({ selector: decl.selector, condition: decl.condition })
     out.set(decl.prop, list)
   }
   return out
@@ -569,7 +661,7 @@ function localDefinitions(root: postcss.Root): Map<string, string[]> {
 
 /**
  * 表内全部悬空 var() 引用：既不在 tokens.css :root，也无本表可达的局部定义
- * （局部定义只对定义规则自身与后代规则生效，见 selectorReaches）。
+ * （选择器与 at-rule 条件均需可达，见 scopeReaches）。
  */
 function danglingRefs(
   root: postcss.Root,
@@ -582,7 +674,7 @@ function danglingRefs(
       const ref = match[1]!
       if (tokenDefs.has(ref)) continue
       const definers = locals.get(ref)
-      if (definers && scopeReaches(definers, decl.selector)) continue
+      if (definers && scopeReaches(definers, decl)) continue
       out.push({ selector: decl.selector, ref })
     }
   }
@@ -613,15 +705,52 @@ describe('令牌接线契约（issue #278）', () => {
   })
 
   it('局部自定义属性仅对定义规则自身/后代可达，无关选择器与兄弟组合器不可达', () => {
-    const definers = ['.react-flow__controls']
-    expect(scopeReaches(definers, '.react-flow__controls')).toBe(true)
-    expect(scopeReaches(definers, '.react-flow__controls:hover')).toBe(true)
-    expect(scopeReaches(definers, '.react-flow__controls > button')).toBe(true)
-    expect(scopeReaches(definers, '.react-flow__controls .x, .y')).toBe(true)
-    expect(scopeReaches([':root'], '.anything')).toBe(true)
-    expect(scopeReaches(definers, '.react-flow__controls-button')).toBe(false)
-    expect(scopeReaches(definers, '.react-flow__controls + .x')).toBe(false)
-    expect(scopeReaches(definers, '.unrelated')).toBe(false)
+    const definers = [{ selector: '.react-flow__controls', condition: '' }]
+    const at = (selector: string): LocalDef => ({ selector, condition: '' })
+    expect(scopeReaches(definers, at('.react-flow__controls'))).toBe(true)
+    expect(scopeReaches(definers, at('.react-flow__controls:hover'))).toBe(true)
+    expect(scopeReaches(definers, at('.react-flow__controls > button'))).toBe(
+      true,
+    )
+    expect(scopeReaches(definers, at('.react-flow__controls .x, .y'))).toBe(
+      true,
+    )
+    expect(scopeReaches([at(':root')], at('.anything'))).toBe(true)
+    expect(scopeReaches(definers, at('.react-flow__controls-button'))).toBe(
+      false,
+    )
+    expect(scopeReaches(definers, at('.react-flow__controls + .x'))).toBe(false)
+    expect(scopeReaches(definers, at('.unrelated'))).toBe(false)
+  })
+
+  it('仅在媒体块内的局部定义不覆盖块外或异条件引用；无条件定义覆盖任何条件下的引用', () => {
+    const dark = '@media (prefers-color-scheme: dark);'
+    const light = '@media (prefers-color-scheme: light);'
+    const darkDef = [{ selector: '.card', condition: dark }]
+    expect(scopeReaches(darkDef, { selector: '.card', condition: '' })).toBe(
+      false,
+    )
+    expect(scopeReaches(darkDef, { selector: '.card', condition: light })).toBe(
+      false,
+    )
+    expect(scopeReaches(darkDef, { selector: '.card', condition: dark })).toBe(
+      true,
+    )
+    const plainDef = [{ selector: '.card', condition: '' }]
+    expect(
+      scopeReaches(plainDef, { selector: '.card p', condition: dark }),
+    ).toBe(true)
+  })
+
+  it('媒体块内的定义与引用在真实解析中带各自的 at-rule 条件（块外引用判悬空）', () => {
+    const root = postcss.parse(
+      '@media (prefers-color-scheme: dark) { .card { --local: #000; } }\n' +
+        '.card { color: var(--local); }\n' +
+        '@media (prefers-color-scheme: dark) { .card p { color: var(--local); } }',
+    )
+    expect(danglingRefs(root, new Map())).toEqual([
+      { selector: '.card', ref: '--local' },
+    ])
   })
 
   it('接线注册表每项仍命中一条真实悬空引用（#265 修复落地后删表项）', () => {
