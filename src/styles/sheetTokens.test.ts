@@ -6,12 +6,18 @@
  * 与 issue #107（nodes.css）/ #240（panels.css）/ #261（home.css 菜单钮）
  * 的分表契约同一验证口径（postcss 解析真实样式表），本文件把结构、接线、
  * 配对三类断言推广到 src 下全部组件样式表：按 glob 自动发现，新增样式表
- * 必须先进入本契约的期望清单才能通过，消除「布线不全」这一 D33 根因。
+ * 无需登记即进入全部契约（不维护文件布局清单），消除「布线不全」这一
+ * D33 根因。
  *
  * 范围界定（issue #278 验收标准）：
- * - 结构断言覆盖展示色属性（前景 color、背景、描边、轮廓）；box-shadow
- *   是层级投影非主题展示色、mask-image 只消费 alpha 通道（遮罩语义另断
- *   言），两者不在字面色禁用范围。
+ * - 结构断言覆盖展示色属性（前景 color、背景、描边、轮廓、SVG fill/
+ *   stroke）；字面色含 hex、函数色与 CSS 具名色；transparent（仅 alpha=0
+ *   无色相）与 currentcolor（继承而非字面）不计。box-shadow 是层级投影非
+ *   主题展示色、mask-image 只消费 alpha 通道（遮罩语义另断言），两者不在
+ *   字面色禁用范围。
+ * - 接线断言中，样式表内的局部自定义属性只对定义规则自身及其后代规则
+ *   可达（:root/html/body 视为全局）；引用仅在无关选择器下定义的局部变
+ *   量按悬空处理。
  * - 已接受的例外不当作违例：用户内容色（海报压字/织线兜底/损坏占位，承
  *   载面依赖海报内容，同 tokens.css --on-saturated 理由）、遮罩（压字
  *   scrim / 模态压暗）、声明自洽状态对（settings.css 文件内记录决策）。
@@ -26,10 +32,11 @@
  * Key State And Invariant Matrix（外观 × 对比度 × 交互态 × 布线）：
  * | 状态/前提 | 动作/过渡 | 可观测结果 | 不变量 | 验证 |
  * | --- | --- | --- | --- | --- |
- * | 新增组件样式表 | glob 发现 | 期望清单失配即失败，新表进入全部契约 | 布线不全不可悄然发生 | 发现测试 |
- * | 新增展示色字面声明 | 结构扫描 | 非注册表项即失败（点名表/选择器/声明） | 展示色必须经 tokens.css 或具名例外 | 结构测试 |
+ * | 新增组件样式表 | glob 发现 | 自动进入全部契约，无登记清单 | 布线不全不可悄然发生 | 发现测试 |
+ * | 新增展示色字面声明（hex/函数/具名色，含 fill/stroke） | 结构扫描 | 非注册表项即失败（点名表/选择器/声明） | 展示色必须经 tokens.css 或具名例外 | 结构测试 |
  * | 注册表项对应声明被修复 | 结构反向校验 | 表项失配即失败 | 例外表不藏已修复项 | 结构测试 |
  * | 引用未定义 var() | 接线扫描 | 失败点名（D38 类悬空引用） | 无失效 var 静默回落 | 接线测试 |
+ * | 引用仅在无关选择器下定义的局部 var() | 接线扫描（作用域可达性） | 失败点名 | 局部定义只对自身/后代规则生效 | 接线测试 |
  * | 浅/深 × 基线/more | 配对矩阵 | primary 全环境 ≥4.5、secondary more 升档 ≥4.5（§2.6） | 原则 2 按语义令牌配对成立 | 配对测试 |
  * | 悬停态换填充 | 配对矩阵 | text-primary 于 fill-quaternary 承载面 ≥4.5 | hover 配对按既有契约 | 配对测试 |
  * | 危险动作 hover/确认 | 黄金接线 | 前景四环境恒 #ffffff（#240 决策） | 危险前景经 --on-danger | 黄金测试 |
@@ -51,19 +58,6 @@ const read = (path: string): string =>
 
 /** 令牌定义源：作为唯一定义方排除在组件样式表契约外。 */
 const TOKEN_SHEET = 'src/styles/tokens.css'
-
-/** 期望的组件样式表全集（发现测试失配即提示先接入契约）。 */
-const EXPECTED_SHEETS: readonly string[] = [
-  'src/editor/editor.css',
-  'src/editor/nodes/nodes.css',
-  'src/editor/nodes/settings/settings.css',
-  'src/editor/panels/documents.css',
-  'src/editor/panels/panels.css',
-  'src/editor/panels/settings-detail.css',
-  'src/home/home.css',
-  'src/index.css',
-  'src/settings/settings.css',
-]
 
 /** glob 发现 src 下全部 CSS（posix 相对路径，含 tokens.css）。 */
 function discoverCssSheets(): string[] {
@@ -285,10 +279,52 @@ const DISPLAY_PROPS = new Set([
   'border-left-color',
   'text-decoration-color',
   'caret-color',
+  'fill',
+  'stroke',
 ])
 
-const COLOR_LITERAL =
+const COLOR_FUNCTION_OR_HEX =
   /#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(|\bhwb\(|\blab\(|\blch\(|\boklab\(|\boklch\(|\bcolor\(/
+
+/** CSS Color 4 全部具名色（148）；transparent/currentcolor 为关键字，不在此列。 */
+const NAMED_COLORS = new Set(
+  (
+    'aliceblue antiquewhite aqua aquamarine azure beige bisque black ' +
+    'blanchedalmond blue blueviolet brown burlywood cadetblue chartreuse ' +
+    'chocolate coral cornflowerblue cornsilk crimson cyan darkblue darkcyan ' +
+    'darkgoldenrod darkgray darkgreen darkgrey darkkhaki darkmagenta ' +
+    'darkolivegreen darkorange darkorchid darkred darksalmon darkseagreen ' +
+    'darkslateblue darkslategray darkslategrey darkturquoise darkviolet ' +
+    'deeppink deepskyblue dimgray dimgrey dodgerblue firebrick floralwhite ' +
+    'forestgreen fuchsia gainsboro ghostwhite gold goldenrod gray green ' +
+    'greenyellow grey honeydew hotpink indianred indigo ivory khaki lavender ' +
+    'lavenderblush lawngreen lemonchiffon lightblue lightcoral lightcyan ' +
+    'lightgoldenrodyellow lightgray lightgreen lightgrey lightpink ' +
+    'lightsalmon lightseagreen lightskyblue lightslategray lightslategrey ' +
+    'lightsteelblue lightyellow lime limegreen linen magenta maroon ' +
+    'mediumaquamarine mediumblue mediumorchid mediumpurple mediumseagreen ' +
+    'mediumslateblue mediumspringgreen mediumturquoise mediumvioletred ' +
+    'midnightblue mintcream mistyrose moccasin navajowhite navy oldlace ' +
+    'olive olivedrab orange orangered orchid palegoldenrod palegreen ' +
+    'paleturquoise palevioletred papayawhip peachpuff peru pink plum ' +
+    'powderblue purple rebeccapurple red rosybrown royalblue saddlebrown ' +
+    'salmon sandybrown seagreen seashell sienna silver skyblue slateblue ' +
+    'slategray slategrey snow springgreen steelblue tan teal thistle tomato ' +
+    'turquoise violet wheat white whitesmoke yellow yellowgreen'
+  ).split(' '),
+)
+
+/** 独立标识符（非 var(--name) 片段、非函数名、非带单位数字）。 */
+const BARE_IDENT = /(?<![\w-])[a-zA-Z]+(?![\w-(])/g
+
+/** 声明值是否含字面色：hex / 颜色函数 / CSS 具名色（transparent 不计）。 */
+function hasColorLiteral(value: string): boolean {
+  if (COLOR_FUNCTION_OR_HEX.test(value)) return true
+  for (const match of value.matchAll(BARE_IDENT)) {
+    if (NAMED_COLORS.has(match[0].toLowerCase())) return true
+  }
+  return false
+}
 
 /**
  * 展示色例外注册表（issue #278）：每项 = 表 + 选择器 + 属性 + 理由 + 引用。
@@ -424,12 +460,34 @@ function* walkContainer(
 }
 
 describe('样式表发现（issue #278：契约覆盖全部组件样式表）', () => {
-  it('src 下 CSS 全集 = 令牌定义源 + 期望组件表清单（新增样式表须先接入契约）', () => {
-    expect(discoverCssSheets()).toEqual([...EXPECTED_SHEETS, TOKEN_SHEET])
+  it('发现集含令牌定义源与至少一张组件表，且每张组件表解析出展示色声明（新表自动入契约）', () => {
+    expect(sheets.has(TOKEN_SHEET)).toBe(true)
+    const components = [...sheets].filter(([sheet]) => sheet !== TOKEN_SHEET)
+    expect(components.length).toBeGreaterThan(0)
+    for (const [sheet, root] of components) {
+      const displayDecls = [...sheetDecls(root)].filter((decl) =>
+        DISPLAY_PROPS.has(decl.prop),
+      )
+      expect(displayDecls.length, `${sheet} 无展示色声明`).toBeGreaterThan(0)
+    }
   })
 })
 
 describe('展示色结构契约（issue #278）', () => {
+  it('字面色探测覆盖 hex/函数色/具名色；transparent、currentcolor、none、var() 名内的色词不算', () => {
+    expect(hasColorLiteral('#fff')).toBe(true)
+    expect(hasColorLiteral('rgba(0, 0, 0, 0.68)')).toBe(true)
+    expect(hasColorLiteral('white')).toBe(true)
+    expect(hasColorLiteral('1px solid Red')).toBe(true)
+    expect(hasColorLiteral('linear-gradient(transparent, black)')).toBe(true)
+    expect(hasColorLiteral('2px solid transparent')).toBe(false)
+    expect(hasColorLiteral('currentcolor')).toBe(false)
+    expect(hasColorLiteral('none')).toBe(false)
+    expect(hasColorLiteral('inherit')).toBe(false)
+    expect(hasColorLiteral('var(--danger-red)')).toBe(false)
+    expect(hasColorLiteral('1px solid var(--border-hairline)')).toBe(false)
+  })
+
   it('全部组件样式表的展示色声明不硬编码色值（具名例外注册表内除外）', () => {
     const allowed = new Set(
       STRUCTURE_EXCEPTIONS.map((e) => `${e.sheet}|${e.selector}|${e.prop}`),
@@ -440,7 +498,7 @@ describe('展示色结构契约（issue #278）', () => {
       for (const decl of sheetDecls(root)) {
         if (
           DISPLAY_PROPS.has(decl.prop) &&
-          COLOR_LITERAL.test(decl.value) &&
+          hasColorLiteral(decl.value) &&
           !allowed.has(`${sheet}|${decl.selector}|${decl.prop}`)
         ) {
           offenders.push(
@@ -456,7 +514,7 @@ describe('展示色结构契约（issue #278）', () => {
     const live = new Set<string>()
     for (const [sheet, root] of sheets) {
       for (const decl of sheetDecls(root)) {
-        if (DISPLAY_PROPS.has(decl.prop) && COLOR_LITERAL.test(decl.value)) {
+        if (DISPLAY_PROPS.has(decl.prop) && hasColorLiteral(decl.value)) {
           live.add(`${sheet}|${decl.selector}|${decl.prop}`)
         }
       }
@@ -471,55 +529,106 @@ describe('展示色结构契约（issue #278）', () => {
   })
 })
 
+/** 全局作用域选择器：其上的自定义属性对文档内任何规则可达。 */
+const GLOBAL_SCOPES = new Set([':root', 'html', 'body', '*'])
+
+/** 单个选择器 definer 是否覆盖 referencer 自身或其后代（兄弟组合器不算）。 */
+function selectorReaches(definer: string, referencer: string): boolean {
+  if (GLOBAL_SCOPES.has(definer) || definer === referencer) return true
+  if (!referencer.startsWith(definer)) return false
+  const rest = referencer.slice(definer.length)
+  // 复合选择器延续（同一元素）或后代组合器（空白 / >）；兄弟组合器 + ~ 不可达。
+  return /^[:.[#]/.test(rest) || /^(\s*>|\s+(?![+~]))/.test(rest)
+}
+
+/** 选择器列表间的可达性：任一定义选择器覆盖任一引用选择器即成立。 */
+function scopeReaches(
+  definers: readonly string[],
+  referencer: string,
+): boolean {
+  const refs = referencer.split(',').map((s) => s.trim())
+  return definers.some((definer) =>
+    definer
+      .split(',')
+      .map((s) => s.trim())
+      .some((d) => refs.some((r) => selectorReaches(d, r))),
+  )
+}
+
+/** 本表局部自定义属性 → 定义它的选择器列表（含媒体块内）。 */
+function localDefinitions(root: postcss.Root): Map<string, string[]> {
+  const out = new Map<string, string[]>()
+  for (const decl of sheetDecls(root)) {
+    if (!decl.prop.startsWith('--')) continue
+    const list = out.get(decl.prop) ?? []
+    list.push(decl.selector)
+    out.set(decl.prop, list)
+  }
+  return out
+}
+
+/**
+ * 表内全部悬空 var() 引用：既不在 tokens.css :root，也无本表可达的局部定义
+ * （局部定义只对定义规则自身与后代规则生效，见 selectorReaches）。
+ */
+function danglingRefs(
+  root: postcss.Root,
+  tokenDefs: Map<string, string>,
+): { selector: string; ref: string }[] {
+  const locals = localDefinitions(root)
+  const out: { selector: string; ref: string }[] = []
+  for (const decl of sheetDecls(root)) {
+    for (const match of decl.value.matchAll(/var\(\s*(--[\w-]+)/g)) {
+      const ref = match[1]!
+      if (tokenDefs.has(ref)) continue
+      const definers = locals.get(ref)
+      if (definers && scopeReaches(definers, decl.selector)) continue
+      out.push({ selector: decl.selector, ref })
+    }
+  }
+  return out
+}
+
 describe('令牌接线契约（issue #278）', () => {
-  it('组件样式表引用的 var() 全部在 tokens.css 或本表有定义（无悬空回落）', () => {
+  const tokenDefs = tokenValues({
+    scheme: 'light',
+    contrast: 'no-preference',
+    transparency: 'no-preference',
+  })
+
+  it('组件样式表引用的 var() 全部在 tokens.css 或本表作用域可达处有定义（无悬空回落）', () => {
     const allowed = new Set(
       WIRING_EXCEPTIONS.map((e) => `${e.sheet}|${e.selector}|${e.ref}`),
     )
     const offenders: string[] = []
     for (const [sheet, root] of sheets) {
       if (sheet === TOKEN_SHEET) continue
-      const localDefs = new Set<string>()
-      for (const decl of sheetDecls(root)) {
-        if (decl.prop.startsWith('--')) localDefs.add(decl.prop)
-      }
-      const tokenDefs = tokenValues({
-        scheme: 'light',
-        contrast: 'no-preference',
-        transparency: 'no-preference',
-      })
-      for (const decl of sheetDecls(root)) {
-        for (const match of decl.value.matchAll(/var\(\s*(--[\w-]+)/g)) {
-          const ref = match[1]!
-          if (tokenDefs.has(ref) || localDefs.has(ref)) continue
-          if (!allowed.has(`${sheet}|${decl.selector}|${ref}`)) {
-            offenders.push(`${sheet} ${decl.selector} 引用 ${ref}`)
-          }
+      for (const { selector, ref } of danglingRefs(root, tokenDefs)) {
+        if (!allowed.has(`${sheet}|${selector}|${ref}`)) {
+          offenders.push(`${sheet} ${selector} 引用 ${ref}`)
         }
       }
     }
     expect(offenders).toEqual([])
   })
 
+  it('局部自定义属性仅对定义规则自身/后代可达，无关选择器与兄弟组合器不可达', () => {
+    const definers = ['.react-flow__controls']
+    expect(scopeReaches(definers, '.react-flow__controls')).toBe(true)
+    expect(scopeReaches(definers, '.react-flow__controls:hover')).toBe(true)
+    expect(scopeReaches(definers, '.react-flow__controls > button')).toBe(true)
+    expect(scopeReaches(definers, '.react-flow__controls .x, .y')).toBe(true)
+    expect(scopeReaches([':root'], '.anything')).toBe(true)
+    expect(scopeReaches(definers, '.react-flow__controls-button')).toBe(false)
+    expect(scopeReaches(definers, '.react-flow__controls + .x')).toBe(false)
+    expect(scopeReaches(definers, '.unrelated')).toBe(false)
+  })
+
   it('接线注册表每项仍命中一条真实悬空引用（#265 修复落地后删表项）', () => {
     const dangling = new Set<string>()
     for (const [sheet, root] of sheets) {
-      const localDefs = new Set<string>()
-      for (const decl of sheetDecls(root)) {
-        if (decl.prop.startsWith('--')) localDefs.add(decl.prop)
-      }
-      const tokenDefs = tokenValues({
-        scheme: 'light',
-        contrast: 'no-preference',
-        transparency: 'no-preference',
-      })
-      for (const decl of sheetDecls(root)) {
-        for (const match of decl.value.matchAll(/var\(\s*(--[\w-]+)/g)) {
-          const ref = match[1]!
-          if (!tokenDefs.has(ref) && !localDefs.has(ref)) {
-            dangling.add(`${sheet}|${decl.selector}|${ref}`)
-          }
-        }
+      for (const { selector, ref } of danglingRefs(root, tokenDefs)) {
+        dangling.add(`${sheet}|${selector}|${ref}`)
       }
     }
     const stale = WIRING_EXCEPTIONS.filter(
