@@ -170,3 +170,33 @@ describe('成员白名单不误拒协议内全键成员（issue #140）', () => 
     expect(good.ok).toBe(true)
   })
 })
+
+/** Object.prototype 自有成员名：模型可产出的合法字符串，但不是注册表自有键。 */
+const PROTO_MEMBER_NAMES = Object.getOwnPropertyNames(Object.prototype)
+
+describe('op 注册表自有键白名单（issue #258）', () => {
+  it.each(PROTO_MEMBER_NAMES)(
+    'op=%s 按未知操作拒绝：不抛异常、ok=false、commands 空',
+    (op) => {
+      const res = validateAiBatch([{ op }], snap())
+      expect(res.ok).toBe(false)
+      expect(res.commands).toEqual([])
+      expect(res.issues.map((i) => i.message).join('\n')).toContain('未知操作')
+    },
+  )
+
+  it('原型名 op 与合法命令同批：整批拒绝且按下标点名', () => {
+    const res = validateAiBatch(
+      [
+        { op: 'create_node', nodeType: 'scene', ref: 'a', data: { name: 'x' } },
+        { op: 'constructor' },
+      ],
+      snap(),
+    )
+    expect(res.ok).toBe(false)
+    expect(res.commands).toEqual([])
+    expect(res.issues).toEqual([
+      { index: 1, message: expect.stringContaining('未知操作') },
+    ])
+  })
+})

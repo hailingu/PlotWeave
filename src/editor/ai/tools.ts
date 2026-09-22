@@ -268,6 +268,15 @@ const WRITE_MAPPERS: Record<
   }),
 }
 
+/** 写工具注册表自有键查找（issue #258）：原型成员名不得命中继承属性充当工具。 */
+function writeMapperOf(
+  name: string,
+): ((args: Record<string, unknown>) => AiCommand) | undefined {
+  return Object.prototype.hasOwnProperty.call(WRITE_MAPPERS, name)
+    ? WRITE_MAPPERS[name]
+    : undefined
+}
+
 /** batch 内单条命令归一：模型常把工具名当 op 写进批次
  * （update_node_spec）——在此归一为命令词表。 */
 function normalizeBatchCommand(cmd: unknown): AiCommand {
@@ -361,7 +370,7 @@ export function toolCallsToCommands(calls: ToolCall[]): ToolCallParse {
       readRequests.push({ id: c.id, name, args })
       continue
     }
-    const mapper = WRITE_MAPPERS[name]
+    const mapper = writeMapperOf(name)
     if (mapper) {
       commands.push(mapper(args))
       continue

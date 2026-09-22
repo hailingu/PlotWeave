@@ -619,6 +619,19 @@ const FOLDERS: Record<
   upsert_document: foldUpsertDocument,
 }
 
+/** 注册表自有键查找（issue #258）：`__proto__`/`constructor` 等原型成员名是模型可
+ * 产出的合法字符串，索引读会命中继承属性，不得视为已注册。 */
+function folderOf(
+  op: unknown,
+):
+  | ((st: FoldState, cmd: Record<string, unknown>, index: number) => void)
+  | undefined {
+  return typeof op === 'string' &&
+    Object.prototype.hasOwnProperty.call(FOLDERS, op)
+    ? FOLDERS[op]
+    : undefined
+}
+
 /** 阶段 A：全量形状校验（validateAiBatch 拆出，S3776）——一次收集、一次
  * 回喂。被 delete_node 点名过的 token 归属可变（快照类型过期）：仅这些
  * token 的 update 降级为全局键判定，类型专属检查让位阶段 B；无关 update
@@ -631,7 +644,7 @@ function collectShapeIssues(st: FoldState, commands: unknown[]): void {
       continue
     }
     const cmd = raw as Record<string, unknown>
-    const folder = FOLDERS[cmd.op as string]
+    const folder = folderOf(cmd.op)
     if (!folder) {
       st.fail(index, `未知操作：${String(cmd.op)}`)
       continue
@@ -704,7 +717,7 @@ export function validateAiBatch(
       const cmd = raw as Record<string, unknown>
       // 未知 op 已被阶段 A 形状校验整批拒绝（issue #230）：显式存在性
       // 守卫替代不可达的 undefined 调用，命中即折叠
-      const folder = FOLDERS[cmd.op as string]
+      const folder = folderOf(cmd.op)
       if (folder === undefined) break
       folder(st, cmd, index)
       if (st.issues.length > 0) break

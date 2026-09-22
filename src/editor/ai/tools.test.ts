@@ -372,3 +372,17 @@ describe('toolCallsShapeDiagnostic（provider 回复的信任边界形状守卫�
     ).toMatch(/arguments/)
   })
 })
+
+describe('工具名注册表自有键白名单（issue #258）', () => {
+  it.each(Object.getOwnPropertyNames(Object.prototype))(
+    '工具名 %s 按未知工具进 errors：不抛异常、命令零产出',
+    (name) => {
+      const { commands, readRequests, errors } = toolCallsToCommands([
+        call(name, {}),
+      ])
+      expect(commands).toEqual([])
+      expect(readRequests).toEqual([])
+      expect(errors).toEqual([expect.stringContaining('未知工具')])
+    },
+  )
+})
