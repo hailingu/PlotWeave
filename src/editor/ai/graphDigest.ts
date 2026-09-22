@@ -142,10 +142,14 @@ export function buildGraphDigest(
   r: DigestResolvers,
 ): string {
   const nodeLines = nodes.map((n) => nodeLine(n, r))
+  // 端点索引一次构造（issue #276）：首个匹配优先，保持原 nodes.find 的
+  // 重复 id 语义（spineLines 的 Map 为后者覆盖，两处口径独立、不合并）
+  const firstById = new Map<string, CanvasNode>()
+  for (const n of nodes) if (!firstById.has(n.id)) firstById.set(n.id, n)
   const edgeLines = edges.map((e) => {
     const kind = edgeKindOf(e)
-    const src = nodes.find((n) => n.id === e.source)
-    const dst = nodes.find((n) => n.id === e.target)
+    const src = firstById.get(e.source)
+    const dst = firstById.get(e.target)
     const endLabel = (n?: CanvasNode): string => {
       if (!n) return '?'
       if (n.type === 'scene') return sceneLabel(n.data.sceneNo, n.data.name)
