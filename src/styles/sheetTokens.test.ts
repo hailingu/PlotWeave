@@ -6,8 +6,8 @@
  * 与 issue #107（nodes.css）/ #240（panels.css）/ #261（home.css 菜单钮）
  * 的分表契约同一验证口径（postcss 解析真实样式表），本文件把结构、接线、
  * 配对三类断言推广到 src 下全部组件样式表：按 glob 自动发现，新增样式表
- * 无需登记即进入全部契约（不维护文件布局清单），消除「布线不全」这一
- * D33 根因。
+ * 无需登记即进入全部契约（不维护文件布局清单，不要求每张表包含展示色），
+ * 消除「布线不全」这一 D33 根因。
  *
  * 范围界定（issue #278 验收标准）：
  * - 结构断言覆盖展示色属性（前景 color、背景与 background-image 长形、
@@ -23,12 +23,14 @@
  *   的尺寸值或 --weight 的裸数值 600 用进 color）与不支持图像的属性上
  *   的渐变/url() 均按违例点名。background/background-image 接受图像；
  *   SVG fill/stroke 仅额外接受 URL 绘制引用。逐选择器分支解析局部遮蔽与
- *   fallback，空回退值不能独立作为展示色声明；纯关键字形态不误报。
+ *   fallback，空回退值不能独立作为展示色声明。纯颜色属性校验完整顶层值，
+ *   不允许颜色前后夹带尺寸/数值/多余词形；边框颜色保留合法多值列表。
  * - 接线断言按「引用点活跃的全部支持环境」逐一验证：tokens.css 值链与局部
  *   定义值链均递归消解——令牌/局部变量自身引用缺失名、或仅在部分环境定义
  *   （如仅浅色媒体块内）而引用点无条件，均为悬空。带 fallback 的
- *   var(--x, v) 沿用既有接线规则；展示色类型校验递归解析实际选中的主值或
- *   fallback（包括 initial/断链/循环后的回退，其中的字面色仍归结构契约）。
+ *   var(--x, v) 与展示色类型扫描共用取值规则，只诊断实际选中路径的悬空名；
+ *   主值有效时不检查备用路径，失效时递归进入 fallback。环检测仍包含备用
+ *   路径的依赖，其中的字面色仍归结构契约。
  *   样式表内的局部自定义属性只对定义规则自身及其后代规则可达
  *   （:root/html/body 视为全局），且**遮蔽同名根令牌**——分支被可达局
  *   部定义覆盖时按局部值判定，保证无效的遮蔽不因根令牌存在而放行；逗号
@@ -58,11 +60,13 @@
  * Key State And Invariant Matrix（外观 × 对比度 × 交互态 × 布线）：
  * | 状态/前提 | 动作/过渡 | 可观测结果 | 不变量 | 验证 |
  * | --- | --- | --- | --- | --- |
- * | 新增组件样式表 | glob 发现 | 自动进入全部契约，无登记清单 | 布线不全不可悄然发生 | 发现测试 |
+ * | 新增组件样式表（包括仅布局/动画或空表） | glob 发现 | 自动进入全部契约，无登记清单或展示色条数要求 | 布线不全不可悄然发生 | 发现探针与无展示色夹具 |
  * | 新增展示色字面声明（hex/大小写不敏感函数色/具名色；含 fill/stroke、background-image 与 border 全部简写/长形） | 结构扫描 | 非注册表项即失败（点名表/选择器/声明） | 展示色必须经 tokens.css 或具名例外 | 结构测试 |
  * | 局部自定义属性被展示色属性（传递）消费且值含字面色 | 结构扫描 | 按违例点名（同注册表豁免） | 字面色不得经局部变量别名进入展示位 | 结构测试 |
  * | 展示色引用解析为不相容值（尺寸/裸数值叶子；不接受图像的属性上的渐变/URL） | 逐环境校验属性 | 按违例点名；合法背景图像及 SVG URL 通过 | 图像必须由支持该语法的属性消费 | 结构与图像文法测试 |
  * | 缺失/initial/断链/循环变量带 fallback，或有效主值带无效 fallback | 解析实际生效值（含嵌套回退） | 无效值及独立空值报错，有效主值/回退通过 | fallback 不绕过消费属性类型校验，主值有效时不消费回退 | fallback 取值测试 |
+ * | 主变量有效而备用路径悬空，或主值按环境/分支失效 | 接线仅遍历被选中的路径 | 未选备用路径通过，选中的缺失名被点名 | 接线与类型扫描使用相同作用域和取值规则 | 接线实际取值路径测试 |
+ * | 纯颜色值含颜色与多余尺寸/数值/词形，或边框/阴影合法含多个成分 | 校验完整顶层颜色值并区分属性类别 | 纯颜色混合值报错，合法简写/列表通过 | 一个颜色成分不能使整条无效纯颜色值通过 | 完整纯颜色值测试 |
  * | 逗号选择器各分支的局部同名定义不同，或仅部分环境活跃 | 逐分支、逐环境解析遮蔽值 | 仅无效分支报错，无局部定义的分支取根令牌 | 各分支只消费自身可达活跃的定义 | 分支取值测试 |
  * | 注册表项同属性换写其他字面色 / 新增第二条同值字面声明 / 超出已审计条数 | 结构扫描 | 按新违例点名（豁免绑定到值与条数） | 例外不覆盖未审计的值或条数 | 结构测试 |
  * | 注册表项对应声明被修复、换值或条数变动 | 结构反向校验 | 表项失配即失败 | 例外表不藏已修复项 | 结构测试 |
@@ -82,13 +86,15 @@
  * 变量归 #265 跟踪；accent-alt 焦点描边/青 wash（.pw-ai-ctx-toggle.on）的
  * 非文本 3:1 未断言——无既有决策，不在本单开新前沿（PR 披露）。
  * 值解析仍为静态子集，非完整 CSS 文法/层叠引擎；复杂选择器及跨选择器
- * 特异性未建模。审查与验证记录见 docs/reviews/pr-288-review-5275666509.md。
+ * 特异性与颜色函数内部参数未建模。最新审查记录见
+ * docs/reviews/pr-288-review-5275978899.md；纯值校验由 cssColorContract.ts 负责。
  */
 import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import postcss from 'postcss'
 import { describe, expect, it } from 'vitest'
+import { colorTokenOf, colorTypeOk, hasColorLiteral } from './cssColorContract'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../..')
 const read = (path: string): string =>
@@ -248,20 +254,6 @@ function contrastRatio(fg: Rgb, bg: Rgb): number {
   return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05)
 }
 
-/** 渐变遮罩色标提取：函数形式取到配对右括号，其余取首个空白分隔词。 */
-function colorTokenOf(part: string): string {
-  if (!/^[\w-]+\(/.test(part)) return part.split(/\s+/)[0]!
-  let depth = 0
-  for (let i = 0; i < part.length; i += 1) {
-    if (part[i] === '(') depth += 1
-    else if (part[i] === ')') {
-      depth -= 1
-      if (depth === 0) return part.slice(0, i + 1)
-    }
-  }
-  throw new Error(`色标函数未闭合: ${part}`)
-}
-
 /** 顶层逗号分割（忽略括号内逗号），用于展开渐变参数列表。 */
 function splitTopLevel(text: string): string[] {
   const parts: string[] = []
@@ -336,58 +328,9 @@ function isDisplayColorProp(prop: string): boolean {
   return DISPLAY_PROPS.has(prop) || BORDER_COLOR_PROP.test(prop)
 }
 
-/** CSS 函数名大小写不敏感（`RGB(...)` 与 `rgb(...)` 同为字面函数色）。 */
-const COLOR_FUNCTION_OR_HEX =
-  /#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(|\bhwb\(|\blab\(|\blch\(|\boklab\(|\boklch\(|\bcolor\(/i
-
-/** CSS Color 4 全部具名色（148）；transparent/currentcolor 为关键字，不在此列。 */
-const NAMED_COLORS = new Set(
-  (
-    'aliceblue antiquewhite aqua aquamarine azure beige bisque black ' +
-    'blanchedalmond blue blueviolet brown burlywood cadetblue chartreuse ' +
-    'chocolate coral cornflowerblue cornsilk crimson cyan darkblue darkcyan ' +
-    'darkgoldenrod darkgray darkgreen darkgrey darkkhaki darkmagenta ' +
-    'darkolivegreen darkorange darkorchid darkred darksalmon darkseagreen ' +
-    'darkslateblue darkslategray darkslategrey darkturquoise darkviolet ' +
-    'deeppink deepskyblue dimgray dimgrey dodgerblue firebrick floralwhite ' +
-    'forestgreen fuchsia gainsboro ghostwhite gold goldenrod gray green ' +
-    'greenyellow grey honeydew hotpink indianred indigo ivory khaki lavender ' +
-    'lavenderblush lawngreen lemonchiffon lightblue lightcoral lightcyan ' +
-    'lightgoldenrodyellow lightgray lightgreen lightgrey lightpink ' +
-    'lightsalmon lightseagreen lightskyblue lightslategray lightslategrey ' +
-    'lightsteelblue lightyellow lime limegreen linen magenta maroon ' +
-    'mediumaquamarine mediumblue mediumorchid mediumpurple mediumseagreen ' +
-    'mediumslateblue mediumspringgreen mediumturquoise mediumvioletred ' +
-    'midnightblue mintcream mistyrose moccasin navajowhite navy oldlace ' +
-    'olive olivedrab orange orangered orchid palegoldenrod palegreen ' +
-    'paleturquoise palevioletred papayawhip peachpuff peru pink plum ' +
-    'powderblue purple rebeccapurple red rosybrown royalblue saddlebrown ' +
-    'salmon sandybrown seagreen seashell sienna silver skyblue slateblue ' +
-    'slategray slategrey snow springgreen steelblue tan teal thistle tomato ' +
-    'turquoise violet wheat white whitesmoke yellow yellowgreen'
-  ).split(' '),
-)
-
-/** 独立标识符（非 var(--name) 片段、非函数名、非带单位数字）。 */
-const BARE_IDENT = /(?<![\w-])[a-zA-Z]+(?![\w-(])/g
-
-/** 声明值是否含字面色：hex / 颜色函数 / CSS 具名色（transparent 不计）。 */
-function hasColorLiteral(value: string): boolean {
-  if (COLOR_FUNCTION_OR_HEX.test(value)) return true
-  for (const match of value.matchAll(BARE_IDENT)) {
-    if (NAMED_COLORS.has(match[0].toLowerCase())) return true
-  }
-  return false
-}
-
 /** 值内全部 var() 引用名（含带 fallback 者；用于消费关系闭包）。 */
 function allVarRefs(value: string): string[] {
   return [...value.matchAll(/var\(\s*(--[\w-]+)/g)].map((m) => m[1]!)
-}
-
-/** 值内无 fallback 的 var() 引用名（带 fallback 者运行时不悬空，不入接线）。 */
-function noFallbackRefs(value: string): string[] {
-  return [...value.matchAll(/var\(\s*(--[\w-]+)\s*\)/g)].map((m) => m[1]!)
 }
 
 /**
@@ -594,16 +537,10 @@ function* walkContainer(
 }
 
 describe('样式表发现（issue #278：契约覆盖全部组件样式表）', () => {
-  it('发现集含令牌定义源与至少一张组件表，且每张组件表解析出展示色声明（新表自动入契约）', () => {
+  it('发现集含令牌定义源与组件表，新表自动进入扫描且不要求展示色声明数量', () => {
     expect(sheets.has(TOKEN_SHEET)).toBe(true)
     const components = [...sheets].filter(([sheet]) => sheet !== TOKEN_SHEET)
     expect(components.length).toBeGreaterThan(0)
-    for (const [sheet, root] of components) {
-      const displayDecls = [...sheetDecls(root)].filter((decl) =>
-        isDisplayColorProp(decl.prop),
-      )
-      expect(displayDecls.length, `${sheet} 无展示色声明`).toBeGreaterThan(0)
-    }
   })
 })
 
@@ -879,68 +816,43 @@ interface WiringCtx {
   locals: Map<string, LocalDef[]>
 }
 
-/**
- * tokens.css 内某令牌的值链在 env 下是否完整可解析：值为保证无效形态
- * （initial / :root 上 unset）直接判断链；值内无 fallback 的 var() 引用须
- * 均为 env 下已定义令牌且递归完整（环按 CSS 计算值时刻无效判断为断链）。
- * tokens.css 被排除在组件表扫描外，其内部断链由本函数兜住。
- */
-function tokenChainResolves(
-  name: string,
-  ctx: WiringCtx,
-  seen: ReadonlySet<string>,
-): boolean {
-  const value = ctx.tokens.get(name)
-  if (value === undefined) return false
-  if (isGuaranteedInvalid(value, ':root')) return false
-  return noFallbackRefs(value).every(
-    (ref) =>
-      ctx.tokens.has(ref) &&
-      !seen.has(ref) &&
-      tokenChainResolves(ref, ctx, new Set([...seen, ref])),
-  )
+/** 当前值只访问实际选中的 var() 路径；未选中的 fallback 不形成悬空诊断。 */
+function unresolvedValueRefs(
+  value: string,
+  scope: Map<string, string>,
+): string[] {
+  const refs: string[] = []
+  let rest = value
+  while (rest.includes('var(')) {
+    const start = rest.indexOf('var(')
+    const call = colorTokenOf(rest.slice(start))
+    const args = call.slice(4, -1)
+    const comma = args.indexOf(',')
+    const name = (comma < 0 ? args : args.slice(0, comma)).trim()
+    if (resolveDisplayValue(`var(${name})`, scope) === null) {
+      if (comma < 0) refs.push(name)
+      else refs.push(...unresolvedValueRefs(args.slice(comma + 1), scope))
+    }
+    rest = rest.slice(start + call.length)
+  }
+  return refs
 }
 
-/**
- * 引用名在指定上下文（选择器 + 条件）与 env 下是否完整可解析——按引用的
- * **每一分支**独立判定：分支被某可达且 env 活跃的局部定义遮蔽时走局部值
- * （局部同名定义优先于 :root 令牌，且保证无效形态按断链）；无遮蔽的分支
- * 回落全局令牌值链。级联特异性未建模，见头注。
- */
-function refResolves(
-  name: string,
-  at: { selector: string; condition: string },
-  ctx: WiringCtx,
-  seen: ReadonlySet<string>,
-): boolean {
-  if (seen.has(name)) return false
-  const next = new Set([...seen, name])
-  return at.selector
-    .split(',')
-    .map((s) => s.trim())
-    .every((branch) => {
-      const shadowing = effectiveDefs(ctx.locals.get(name) ?? []).filter(
-        (def) =>
-          conditionActive(def.condition, ctx.env) &&
-          def.selector
-            .split(',')
-            .map((s) => s.trim())
-            .some((d) => selectorReaches(d, branch)),
-      )
-      if (shadowing.length > 0) {
-        return shadowing.some(
-          (def) =>
-            !isGuaranteedInvalid(def.value, def.selector) &&
-            noFallbackRefs(def.value).every((ref) =>
-              refResolves(ref, def, ctx, next),
-            ),
-        )
-      }
-      if (ctx.tokens.has(name)) {
-        return tokenChainResolves(name, ctx, new Set([name]))
-      }
-      return false
-    })
+/** 活跃环境内逐选择器分支解析，合并同一声明的悬空名，保持注册表按声明计数。 */
+function unresolvedRefsIn(decl: SheetDecl, ctx: WiringCtx): string[] {
+  if (!conditionActive(decl.condition, ctx.env)) return []
+  return [
+    ...new Set(
+      decl.selector
+        .split(',')
+        .flatMap((branch) =>
+          unresolvedValueRefs(
+            decl.value,
+            valueScopeIn({ ...decl, selector: branch.trim() }, ctx),
+          ),
+        ),
+    ),
+  ]
 }
 
 /**
@@ -959,11 +871,8 @@ function danglingRefs(
   }
   const out: { selector: string; ref: string }[] = []
   for (const decl of sheetDecls(root)) {
-    if (!conditionActive(decl.condition, env)) continue
-    for (const ref of noFallbackRefs(decl.value)) {
-      if (!refResolves(ref, decl, ctx, new Set())) {
-        out.push({ selector: decl.selector, ref })
-      }
+    for (const ref of unresolvedRefsIn(decl, ctx)) {
+      out.push({ selector: decl.selector, ref })
     }
   }
   return out
@@ -984,13 +893,8 @@ function danglingOccurrences(): Map<string, { label: string; count: number }> {
       locals: localDefinitions(root),
     }))
     for (const decl of sheetDecls(root)) {
-      for (const ref of noFallbackRefs(decl.value)) {
-        const dangles = ctxs.some(
-          (ctx) =>
-            conditionActive(decl.condition, ctx.env) &&
-            !refResolves(ref, decl, ctx, new Set()),
-        )
-        if (!dangles) continue
+      const refs = new Set(ctxs.flatMap((ctx) => unresolvedRefsIn(decl, ctx)))
+      for (const ref of refs) {
         const key = `${sheet}|${decl.selector}|${decl.prop}|${ref}`
         const hit = out.get(key)
         if (hit) hit.count += 1
@@ -1006,64 +910,11 @@ function danglingOccurrences(): Map<string, { label: string; count: number }> {
   return out
 }
 
-const DIMENSION = /\b\d+(?:\.\d+)?(?:px|em|rem|%|pt|vw|vh|ch|ex)\b/
-
-/** 不带单位/百分号的裸数值（如字重 600）——对展示色属性必为类型不相容。 */
-const BARE_NUMBER = /(?<![\w.])\d+(?:\.\d+)?(?![\w.%])/
-
-/** 展示色属性合法的非颜色关键字形态（背景/边框/线型的关键字与通用关键字）。 */
-const NON_COLOR_KEYWORDS = new Set([
-  'none',
-  'inherit',
-  'initial',
-  'unset',
-  'revert',
-  'transparent',
-  'currentcolor',
-  'solid',
-  'dashed',
-  'dotted',
-  'double',
-  'wavy',
-  'underline',
-  'overline',
-  'line-through',
-  'blink',
-  'thick',
-  'thin',
-  'medium',
-])
-
-/**
- * 展示色声明解析值对该属性是否类型相容：仅 background/background-image
- * 接受渐变，URL 还可用于 SVG fill/stroke 绘制引用；其他属性先拒图像，
- * 再检查颜色成分（hex/函数色/具名色/transparent/currentcolor）；否则须
- * 为「无尺寸量、无裸数值、全部词形在非颜色关键字表内」的纯关键字形态
- * （none/underline/solid 等）——尺寸量（--radius-sm 的 4px）、裸数值
- * （--weight 的 600）及未识别词形均按类型不相容点名。
- */
-function colorTypeOk(prop: string, resolved: string): boolean {
-  if (resolved.trim() === '') return false
-  const background = prop === 'background' || prop === 'background-image'
-  if (/(?:linear|radial|conic)-gradient\(/i.test(resolved)) return background
-  if (/url\(/i.test(resolved))
-    return background || prop === 'fill' || prop === 'stroke'
-  if (COLOR_FUNCTION_OR_HEX.test(resolved)) return true
-  if (/transparent|currentcolor/i.test(resolved)) return true
-  for (const match of resolved.matchAll(BARE_IDENT)) {
-    if (NAMED_COLORS.has(match[0].toLowerCase())) return true
-  }
-  if (DIMENSION.test(resolved) || BARE_NUMBER.test(resolved)) return false
-  return [...resolved.matchAll(BARE_IDENT)].every((match) =>
-    NON_COLOR_KEYWORDS.has(match[0].toLowerCase()),
-  )
-}
-
 /**
  * 单个选择器分支在 env 下的具体值：根令牌被该分支可达且活跃的局部定义
  * 遮蔽，同选择器同条件取层叠后位。保证无效的自定义属性进入 fallback。
  */
-function displayValueIn(decl: SheetDecl, ctx: WiringCtx): string | null {
+function valueScopeIn(decl: SheetDecl, ctx: WiringCtx): Map<string, string> {
   const scope = new Map(
     [...ctx.tokens].map(([name, value]) => [
       name,
@@ -1082,7 +933,12 @@ function displayValueIn(decl: SheetDecl, ctx: WiringCtx): string | null {
         isGuaranteedInvalid(last.value, last.selector) ? 'initial' : last.value,
       )
   }
-  return resolveDisplayValue(decl.value, scope)
+  return scope
+}
+
+/** 单分支展示色求值：与接线扫描使用同一作用域及主值/fallback 选择规则。 */
+function displayValueIn(decl: SheetDecl, ctx: WiringCtx): string | null {
+  return resolveDisplayValue(decl.value, valueScopeIn(decl, ctx))
 }
 
 /** 依赖图含回到自身的路径时该变量无效；fallback 内的依赖也参与 CSS 环检测。 */
@@ -1270,6 +1126,80 @@ describe('展示色类型：逐选择器分支取值（review 5275666509）', ()
   })
 })
 
+describe('接线实际取值路径（review 5275978899）', () => {
+  it.each([
+    ['', 'var(--text-primary, var(--missing))', []],
+    ['--alias: var(--text-primary, var(--missing));', 'var(--alias)', []],
+    ['', 'var(--missing, var(--text-primary, var(--other)))', []],
+    [
+      '--text-primary: initial;',
+      'var(--text-primary, var(--missing))',
+      ['--missing'],
+    ],
+    ['', 'var(--missing, var(--other))', ['--other']],
+    [
+      '--cycle: var(--cycle, var(--text-primary));',
+      'var(--cycle, currentcolor)',
+      [],
+    ],
+  ])('只校验选中路径：%s %s', (definitions, value, expected) => {
+    const root = postcss.parse(
+      `:root { ${definitions} } .target { color: ${value} }`,
+    )
+    const errors = danglingRefs(root, LIGHT_ENV).filter(
+      (hit) => hit.selector === '.target',
+    )
+    expect(errors.map((hit) => hit.ref)).toEqual(expected)
+  })
+  it('主值按媒体环境和选择器分支切换时，fallback 随实际生效状态选择', () => {
+    const root = postcss.parse(
+      '@media (prefers-color-scheme: dark) { .a { --text-primary: initial } } .a, .b { color: var(--text-primary, var(--missing)) }',
+    )
+    expect(danglingRefs(root, LIGHT_ENV)).toEqual([])
+    expect(danglingRefs(root, { ...LIGHT_ENV, scheme: 'dark' })).toEqual([
+      { selector: '.a, .b', ref: '--missing' },
+    ])
+  })
+})
+
+describe('完整纯颜色值（review 5275978899）', () => {
+  it.each([
+    ['color', '#fff 4px', false],
+    ['color', '4px #fff', false],
+    ['color', 'rgb(1, 2, 3) 600', false],
+    ['color', 'red invalid', false],
+    ['color', '#fff #000', false],
+    ['background-color', 'currentcolor 4px', false],
+    ['outline-color', 'transparent 600', false],
+    ['stroke', '#fff 4px', false],
+    ['color', 'rgb(1, 2, 3)', true],
+    ['color', 'inherit', true],
+    ['border-color', '#fff rgb(1, 2, 3) transparent currentcolor', true],
+    ['border-inline-color', '#fff #000', true],
+    ['fill', 'none', true],
+    ['border', '1px solid #fff', true],
+    ['text-shadow', '0 1px 2px #fff', true],
+  ])('%s: %s 的完整类型结果为 %s', (prop, value, expected) => {
+    expect(colorTypeOk(prop, value)).toBe(expected)
+  })
+  it('根级别名的颜色与多余尺寸一起到达消费点时仍报错', () => {
+    const root = postcss.parse(
+      ':root { --bad: var(--text-primary) 4px } .target { color: var(--bad) }',
+    )
+    expect(displayTypeErrors(root, LIGHT_ENV)).toHaveLength(1)
+  })
+  it('没有展示色的布局、动画或空样式表仍可被扫描', () => {
+    for (const css of [
+      '',
+      '.layout { display: grid }',
+      '@keyframes move { to { transform: translateX(1px) } }',
+    ]) {
+      expect(displayTypeErrors(postcss.parse(css), LIGHT_ENV)).toEqual([])
+      expect(danglingRefs(postcss.parse(css), LIGHT_ENV)).toEqual([])
+    }
+  })
+})
+
 describe('令牌接线契约：全表扫描与注册表（issue #278）', () => {
   it('组件样式表引用的 var() 在全部支持环境完整可解析（含值链与逐分支可达；接线属性与条数不超已审计）', () => {
     const audited = new Map(
@@ -1452,9 +1382,14 @@ describe('接线语义：值链与无效形态（issue #278）', () => {
       ),
       locals: new Map(),
     }
-    const at = { selector: '.x', condition: '' }
-    expect(refResolves('--a', at, broken, new Set()), '链断裂').toBe(false)
-    expect(refResolves('--a', at, intact, new Set()), '链完整').toBe(true)
+    const at = {
+      selector: '.x',
+      condition: '',
+      prop: 'color',
+      value: 'var(--a)',
+    }
+    expect(unresolvedRefsIn(at, broken), '链断裂').toEqual(['--a'])
+    expect(unresolvedRefsIn(at, intact), '链完整').toEqual([])
   })
 
   it('保证无效形态的定义在消费点判悬空（initial 恒无效；全局作用域 unset 退化同判）', () => {
