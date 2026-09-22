@@ -91,19 +91,23 @@ const NON_COLOR_KEYWORDS = new Set([
 ])
 
 /**
- * 展示色声明解析值对该属性是否类型相容：仅 background/background-image
- * 接受渐变，URL 还可用于 SVG fill/stroke 绘制引用；其他属性先拒图像，
- * 纯颜色属性随后检查完整顶层值，其他简写检查颜色成分；无颜色成分时须
- * 为「无尺寸量、无裸数值、全部词形在非颜色关键字表内」的纯关键字形态
- * （none/underline/solid 等）——尺寸量（--radius-sm 的 4px）、裸数值
- * （--weight 的 600）及未识别词形均按类型不相容点名。
+ * 展示色声明解析值对该属性是否类型相容：仅 background/background-image/
+ * border-image(-source) 接受渐变，URL 还可用于 SVG fill/stroke 绘制引用；
+ * 其他属性先拒图像，纯颜色属性随后检查完整顶层值，其他简写检查颜色成分；
+ * 无颜色成分时须为「无尺寸量、无裸数值、全部词形在非颜色关键字表内」的
+ * 纯关键字形态（none/underline/solid 等）——尺寸量（--radius-sm 的 4px）、
+ * 裸数值（--weight 的 600）及未识别词形均按类型不相容点名。
  */
 export function colorTypeOk(prop: string, resolved: string): boolean {
   if (resolved.trim() === '') return false
-  const background = prop === 'background' || prop === 'background-image'
-  if (/(?:linear|radial|conic)-gradient\(/i.test(resolved)) return background
+  const acceptsImage =
+    prop === 'background' ||
+    prop === 'background-image' ||
+    prop === 'border-image' ||
+    prop === 'border-image-source'
+  if (/(?:linear|radial|conic)-gradient\(/i.test(resolved)) return acceptsImage
   if (/url\(/i.test(resolved))
-    return background || prop === 'fill' || prop === 'stroke'
+    return acceptsImage || prop === 'fill' || prop === 'stroke'
   if (
     prop === 'color' ||
     prop.endsWith('-color') ||

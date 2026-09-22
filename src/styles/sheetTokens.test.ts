@@ -12,19 +12,19 @@
  * 范围界定（issue #278 验收标准）：
  * - 结构断言覆盖展示色属性（前景 color、背景与 background-image 长形、
  *   轮廓、text-shadow、SVG fill/stroke，以及 border 全部简写/长形——总体、
- *   四向、逻辑方向，按结构式分类而非枚举；标准属性名先按 ASCII 大小写不
- *   敏感归一再分类，自定义属性名大小写保持原样）；字面色含 hex、大小写
- *   不敏感的颜色函数与 CSS 具名色；transparent（仅 alpha=0 无色相）与
- *   currentcolor（继承而非字面）不计。box-shadow 是层级投影非主题展示
- *   色、mask-image 只消费 alpha 通道（遮罩语义另断言），两者不在字面色
- *   禁用范围。
+ *   四向、逻辑方向与 border-image(-source) 长形，按结构式分类而非枚举；
+ *   标准属性名先按 ASCII 大小写不敏感归一再分类，自定义属性名大
+ *   小写保持原样）；字面色含 hex、大小写不敏感的颜色函数与 CSS 具名色；
+ *   transparent（仅 alpha=0 无色相）与 currentcolor（继承而非字面）不计。
+ *   box-shadow 是层级投影非主题展示色、mask-image 只消费 alpha 通道（遮罩
+ *   语义另断言），两者不在字面色禁用范围。
  *   经展示色属性传递消费的局部自定义属性同样受禁：`.b { --fg: #fff; color:
  *   var(--fg) }` 不得绕过契约（消费关系沿局部属性值链传递闭包计算；仅被
  *   非展示属性消费的局部属性——如 React Flow 控件变量——不在展示色契约内）。
  *   展示色引用的解析值须按属性文法相容——非颜色令牌叶子（把 --radius-sm
  *   的尺寸值或 --weight 的裸数值 600 用进 color）与不支持图像的属性上
- *   的渐变/url() 均按违例点名。background/background-image 接受图像；
- *   SVG fill/stroke 仅额外接受 URL 绘制引用。逐选择器分支解析局部遮蔽与
+ *   的渐变/url() 均按违例点名。background/background-image/border-image(-source)
+ *   接受图像；SVG fill/stroke 仅额外接受 URL 绘制引用。逐选择器分支解析局部遮蔽与
  *   fallback，空回退值不能独立作为展示色声明。纯颜色属性校验完整顶层值，
  *   不允许颜色前后夹带尺寸/数值/多余词形；边框颜色保留合法多值列表。
  * - 接线断言按「引用点活跃的全部支持环境」逐一验证：tokens.css 值链与局部
@@ -37,10 +37,12 @@
  *   （:root/html/body 视为全局），且**遮蔽同名根令牌**——分支被可达局
  *   部定义覆盖时按局部值判定，保证无效的遮蔽不因根令牌存在而放行；逗号
  *   选择器逐分支判定——任一引用分支无可达定义即整条判悬空。同选择器同条件的
- *   重复定义按层叠取后位（源序后写覆盖；跨选择器特异性未建模）。声明值
- *   为保证无效形态（initial，及全局作用域上退化为 initial 的 unset）的
- *   局部定义与令牌按断链处理；inherit/revert 静态不可判定，不在判定内
- *   （见未覆盖维度）。
+ *   重复定义按层叠取胜出处：同一组内 !important 声明优先于普通声明，同重要
+ *   性再取源序后位；组在输出中的位置按该组最后一次出现的源序排列，不因
+ *   Map 键首次插入位置而提前——后续基线定义不被先前同选择器异条件定义错误
+ *   遠盖。跨选择器特异性未建模。声明值为保证无效形态（initial，及全局作用
+ *   域上退化为 initial 的 unset）的局部定义与令牌按断链处理；inherit/revert
+ *   静态不可判定，不在判定内（见未覆盖维度）。
  * - 已接受的例外不当作违例：用户内容色（海报压字/织线兜底/损坏占位，承
  *   载面依赖海报内容，同 tokens.css --on-saturated 理由）、遮罩（压字
  *   scrim / 模态压暗）、声明自洽状态对（settings.css 文件内记录决策）。
@@ -64,7 +66,7 @@
  * | 状态/前提 | 动作/过渡 | 可观测结果 | 不变量 | 验证 |
  * | --- | --- | --- | --- | --- |
  * | 新增组件样式表（包括仅布局/动画或空表） | glob 发现 | 自动进入全部契约，无登记清单或展示色条数要求 | 布线不全不可悄然发生 | 发现探针与无展示色夹具 |
- * | 新增展示色字面声明（hex/大小写不敏感函数色/具名色；含 fill/stroke、background-image 与 border 全部简写/长形） | 结构扫描 | 非注册表项即失败（点名表/选择器/声明） | 展示色必须经 tokens.css 或具名例外 | 结构测试 |
+ * | 新增展示色字面声明（hex/大小写不敏感函数色/具名色；含 fill/stroke、background-image、border-image(-source) 与 border 全部简写/长形） | 结构扫描 | 非注册表项即失败（点名表/选择器/声明） | 展示色必须经 tokens.css 或具名例外 | 结构测试 |
  * | 展示色属性名为非标准大小写（如 `Color`） | 分类前归一 | 仍按标准属性分类，字面色不因大小写绕过 | 标准属性名 ASCII 大小写不敏感 | 分类与集成语义用例 |
  * | 局部自定义属性被展示色属性（传递）消费且值含字面色 | 结构扫描 | 按违例点名（同注册表豁免） | 字面色不得经局部变量别名进入展示位 | 结构测试 |
  * | 展示色引用解析为不相容值（尺寸/裸数值叶子；不接受图像的属性上的渐变/URL） | 逐环境校验属性 | 按违例点名；合法背景图像及 SVG URL 通过 | 图像必须由支持该语法的属性消费 | 结构与图像文法测试 |
@@ -75,6 +77,8 @@
  * | 注册表项同属性换写其他字面色 / 新增第二条同值字面声明 / 超出已审计条数 | 结构扫描 | 按新违例点名（豁免绑定到值与条数） | 例外不覆盖未审计的值或条数 | 结构测试 |
  * | 注册表项对应声明被修复、换值或条数变动 | 结构反向校验 | 表项失配即失败 | 例外表不藏已修复项 | 结构测试 |
  * | 引用未定义 var()、令牌/局部定义值链引用缺失名（传递）、或定义为保证无效值（initial / 全局作用域 unset） | 接线扫描 | 失败点名（D38 类悬空引用） | 无失效 var 静默回落 | 接线测试 |
+ * | 同选择器同条件内多条局部定义含 !important | 局部取胜扫描 | 重要声明优先于普通声明，无论源序 | 局部自定义属性也遵循重要性优先级 | 接线与类型集成语义用例 |
+ * | 基线定义、媒体块定义、后续基线定义三者同名依次出现 | 取胜排序 | 按真实源序选中最后一条，不因 Map 键插入位置误判 | 同名定义的胜出位置按真实源序，非分组首次插入位置 | 接线集成语义用例 |
  * | 引用仅在无关选择器下定义的局部 var() | 接线扫描（作用域可达性） | 失败点名 | 局部定义只对自身/后代规则生效 | 接线测试 |
  * | 逗号选择器的任一引用分支无可达定义 | 接线扫描（逐分支可达） | 失败点名 | 每一分支运行时均须取得有效计算色 | 接线测试 |
  * | 同选择器同条件的后位定义为保证无效值 | 接线扫描（层叠取后位） | 失败点名 | 生效定义按源序后位判定，先位有效定义不遮蔽 | 接线测试 |
@@ -304,11 +308,10 @@ function maskStopAlphas(value: string): number[] {
     .map((part) => stopAlpha(colorTokenOf(part)))
 }
 
-/** 展示色属性（非 border 系）：字面色值必须经注册表豁免（box-shadow/遮罩除外）。 */
+/** 展示色属性（非 border-color 系）：字面色值必须经注册表豁免（box-shadow/遮罩除外）。 */
 const DISPLAY_PROPS = new Set([
   'color',
   'background',
-  'background-color',
   'background-image',
   'outline',
   'outline-color',
@@ -321,6 +324,8 @@ const DISPLAY_PROPS = new Set([
   'column-rule-color',
   'fill',
   'stroke',
+  'border-image',
+  'border-image-source',
 ])
 
 /** border 系结构式分类：总体/四向/逻辑方向 × 简写或 -color 长形。 */
@@ -506,12 +511,13 @@ const WIRING_ENVS: Readonly<[string, Env][]> = (
   ),
 )
 
-/** 带上下文的声明：condition 为外层 at-rule 链（名 + 前置，空串 = 无条件）。 */
+/** 带上下文的声明：condition 为外层 at-rule 链（名 + 前置，空串 = 无条件）；important 供局部自定义属性按重要性选胜。 */
 interface SheetDecl {
   selector: string
   condition: string
   prop: string
   value: string
+  important: boolean
 }
 
 /** 标准属性名 ASCII 大小写不敏感，归一为小写；自定义属性名保持大小写敏感。 */
@@ -539,6 +545,7 @@ function* walkContainer(
           condition,
           prop: normalizeProp(child.prop),
           value: child.value,
+          important: child.important === true,
         }
       }
     }
@@ -554,7 +561,7 @@ describe('样式表发现（issue #278：契约覆盖全部组件样式表）', 
 })
 
 describe('展示色结构：属性与字面探测分类（issue #278）', () => {
-  it('展示色属性分类覆盖 border 全部简写/长形（四向与逻辑方向）、SVG fill/stroke、background-image 与 text-shadow；box-shadow 与尺寸类不算', () => {
+  it('展示色属性分类覆盖 border 全部简写/长形（四向与逻辑方向）、border-image、SVG fill/stroke、background-image 与 text-shadow；box-shadow 与尺寸类不算', () => {
     for (const prop of [
       'border',
       'border-top',
@@ -562,6 +569,8 @@ describe('展示色结构：属性与字面探测分类（issue #278）', () => 
       'border-inline-start',
       'border-block-end-color',
       'border-color',
+      'border-image',
+      'border-image-source',
       'outline',
       'fill',
       'stroke',
@@ -575,6 +584,8 @@ describe('展示色结构：属性与字面探测分类（issue #278）', () => 
       'border-width',
       'border-radius',
       'border-top-width',
+      'border-image-width',
+      'border-image-slice',
       'mask-image',
       'padding',
     ]) {
@@ -761,11 +772,12 @@ function selectorReaches(definer: string, referencer: string): boolean {
   return /^[:.[#]/.test(rest) || /^(\s*>|\s+(?![+~]))/.test(rest)
 }
 
-/** 局部自定义属性的定义点：选择器 + 外层 at-rule 条件 + 声明值。 */
+/** 局部自定义属性的定义点：选择器 + 外层 at-rule 条件 + 声明值 + 重要性。 */
 interface LocalDef {
   selector: string
   condition: string
   value: string
+  important: boolean
 }
 
 /**
@@ -800,7 +812,7 @@ function scopeReaches(
     .every((r) => defs.some((d) => selectorReaches(d, r)))
 }
 
-/** 本表局部自定义属性 → 全部定义点（含媒体块内，条件与声明值随定义点保留）。 */
+/** 本表局部自定义属性 → 全部定义点（含媒体块内，条件、声明值与重要性随定义点保留）。 */
 function localDefinitions(root: postcss.Root): Map<string, LocalDef[]> {
   const out = new Map<string, LocalDef[]>()
   for (const decl of sheetDecls(root)) {
@@ -810,6 +822,7 @@ function localDefinitions(root: postcss.Root): Map<string, LocalDef[]> {
       selector: decl.selector,
       condition: decl.condition,
       value: decl.value,
+      important: decl.important,
     })
     out.set(decl.prop, list)
   }
@@ -817,14 +830,27 @@ function localDefinitions(root: postcss.Root): Map<string, LocalDef[]> {
 }
 
 /**
- * 同选择器同条件的重复定义按层叠取后位：同特异性下源序后写覆盖先写
- * （`.card { --fg: var(--x) } .card { --fg: initial }` 生效的是后位
- * initial）。跨选择器的特异性/顺序胜负未建模，见头注未覆盖维度。
+ * 同选择器同条件的重复定义按层叠取胜出处：同一组内 !important 声明优先于
+ * 普通声明，同重要性再取源序后位（`.a { --fg: 4px !important; --fg: var(--x) }`
+ * 生效的是前位的 `4px`）。组在输出中的位置按该组**最后一次出现**的源序
+ * 排列（先 delete 再 set 把键移至 Map 末尾），避免后续基线定义覆盖先前媒体块
+ * 定义时被错误识为“早于”媒体块定义。跨选择器的特异性/顺序胜负
+ * 未建模，见头注未覆盖维度。
  */
 function effectiveDefs(defs: readonly LocalDef[]): LocalDef[] {
-  const last = new Map<string, LocalDef>()
-  for (const def of defs) last.set(`${def.selector}|${def.condition}`, def)
-  return [...last.values()]
+  const groups = new Map<string, LocalDef[]>()
+  for (const def of defs) {
+    const key = `${def.selector}|${def.condition}`
+    const list = groups.get(key) ?? []
+    list.push(def)
+    groups.delete(key)
+    groups.set(key, list)
+  }
+  return [...groups.values()].map((list) => {
+    const important = list.filter((def) => def.important)
+    const winners = important.length > 0 ? important : list
+    return winners[winners.length - 1]!
+  })
 }
 
 /** 单个环境的接线上下文：env 生效的令牌值 + 本表局部定义。 */
@@ -1055,14 +1081,26 @@ describe('展示色类型：图像属性文法（review 5275666509）', () => {
       expect(displayTypeErrors(root, LIGHT_ENV)).toHaveLength(1)
     }
   })
-  it('背景接受图像，SVG paint 接受 URL 引用但拒绝 CSS 渐变', () => {
-    for (const prop of ['background', 'background-image', 'fill', 'stroke']) {
+  it('背景与 border-image 接受图像，SVG paint 接受 URL 引用但拒绝 CSS 渐变', () => {
+    for (const prop of [
+      'background',
+      'background-image',
+      'border-image',
+      'border-image-source',
+      'fill',
+      'stroke',
+    ]) {
       const root = postcss.parse(
         `.a { --paint: url("#paint"); ${prop}: var(--paint) }`,
       )
       expect(displayTypeErrors(root, LIGHT_ENV)).toEqual([])
     }
-    for (const prop of ['background', 'background-image']) {
+    for (const prop of [
+      'background',
+      'background-image',
+      'border-image',
+      'border-image-source',
+    ]) {
       expect(
         displayTypeErrors(
           postcss.parse(`.a { ${prop}: var(--brand-gradient) }`),
@@ -1260,6 +1298,7 @@ describe('接线语义：作用域与分支可达（issue #278）', () => {
       selector,
       condition: '',
       value: '#000',
+      important: false,
     })
     const definers = [def('.react-flow__controls')]
     const at = (selector: string) => ({ selector })
@@ -1305,6 +1344,22 @@ describe('接线语义：作用域与分支可达（issue #278）', () => {
     expect(danglingRefs(root, LIGHT_ENV)).toEqual([
       { selector: '.card', ref: '--fg' },
     ])
+  })
+
+  it('同选择器同条件内 !important 局部定义优先于其后的普通定义（源序不再单独决定生效值）', () => {
+    const root = postcss.parse(
+      '.a { --fg: 4px !important; --fg: var(--text-primary); color: var(--fg) }',
+    )
+    expect(displayTypeErrors(root, LIGHT_ENV)).toEqual(['.a color: 4px'])
+  })
+
+  it('后续基线定义按其源序位置生效，不被同名媒体块定义按 Map 键插入位置错误提前', () => {
+    const root = postcss.parse(
+      '.a { --fg: red; }\n' +
+        '@media (prefers-color-scheme: dark) { .a { --fg: initial; } }\n' +
+        '.a { --fg: var(--text-primary); color: var(--fg) }',
+    )
+    expect(danglingRefs(root, { ...LIGHT_ENV, scheme: 'dark' })).toEqual([])
   })
 
   it('局部同名定义遮蔽根令牌：遮蔽定义保证无效即悬空，有效遮蔽按局部值放行', () => {
@@ -1405,6 +1460,7 @@ describe('接线语义：值链与无效形态（issue #278）', () => {
       condition: '',
       prop: 'color',
       value: 'var(--a)',
+      important: false,
     }
     expect(unresolvedRefsIn(at, broken), '链断裂').toEqual(['--a'])
     expect(unresolvedRefsIn(at, intact), '链完整').toEqual([])
