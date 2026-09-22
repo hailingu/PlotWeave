@@ -117,6 +117,157 @@ describe('展示色结构：属性与字面探测分类（issue #278）', () => 
   })
 })
 
+describe('组件声明上下文拒绝边界（review 5280077466）', () => {
+  it.each([
+    '.card { &:hover { color: #fff; } }',
+    '.card { .child { color: var(--missing); } }',
+    '.card { @media (prefers-color-scheme: dark) { color: 4px; } }',
+    '.card { @supports (display: grid) { --fg: 4px; } }',
+    '@media (prefers-color-scheme: dark) { .card { & { color: #fff; } } }',
+  ])('嵌套布局在所有扫描入口明确失败：%s', (css) => {
+    const root = postcss.parse(css)
+    // 错误码契约：docs/reviews/pr-288-review-5280077466.md 的状态矩阵。
+    for (const scan of [
+      () => [...sheetDecls(root)],
+      () => localDefinitions(root),
+      () => danglingRefs(root, LIGHT_ENV),
+      () => displayTypeErrors(root, LIGHT_ENV),
+    ]) {
+      expect(scan).toThrow(/TOKEN_SHEET_NESTING_UNMODELED/)
+    }
+  })
+
+  it.each([
+    '@supports (display: unsupported)',
+    '@container (width > 400px)',
+    '@layer theme',
+    '@keyframes pulse',
+    '@media (prefers-color-scheme: dark) { @supports (display: grid)',
+  ])('未知局部定义上下文不能成为无条件值：%s', (context) => {
+    const closing = context.includes('{') ? '} }' : '}'
+    const root = postcss.parse(
+      `${context} { .card { --fg: var(--text-primary); } ${closing}
+       .card { color: var(--fg, currentcolor); }`,
+    )
+    // 错误码契约同上；即使消费有回退或未知块不活跃，也不能静默接受。
+    for (const scan of [
+      () => [...sheetDecls(root)],
+      () => localDefinitions(root),
+      () => danglingRefs(root, LIGHT_ENV),
+      () => displayTypeErrors(root, LIGHT_ENV),
+    ]) {
+      expect(scan).toThrow(/TOKEN_LOCAL_AT_RULE_UNMODELED/)
+    }
+  })
+})
+
+describe('已支持组件上下文保持生效（review 5280077466）', () => {
+  it('平铺、外层媒体及动画声明保留原上下文', () => {
+    const root = postcss.parse(`
+      .card { color: currentcolor !important; }
+      @media (prefers-color-scheme: dark) { .card { color: transparent; } }
+      @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+    `)
+    expect([...sheetDecls(root)]).toEqual([
+      {
+        selector: '.card',
+        condition: '',
+        prop: 'color',
+        value: 'currentcolor',
+        important: true,
+      },
+      {
+        selector: '.card',
+        condition: '@media (prefers-color-scheme: dark);',
+        prop: 'color',
+        value: 'transparent',
+        important: false,
+      },
+      {
+        selector: 'from',
+        condition: '@keyframes fade;',
+        prop: 'opacity',
+        value: '0',
+        important: false,
+      },
+      {
+        selector: 'to',
+        condition: '@keyframes fade;',
+        prop: 'opacity',
+        value: '1',
+        important: false,
+      },
+    ])
+  })
+})
+
+describe('局部上下文的条件与恢复（review 5280077466）', () => {
+  it.each(['media', 'MEDIA'])('局部 @%s 定义按环境选值及回退', (name) => {
+    const root = postcss.parse(`
+      @${name} (prefers-color-scheme: dark) { .card { --fg: 4px; } }
+      .card { color: var(--fg, currentcolor); }
+    `)
+    expect(danglingRefs(root, LIGHT_ENV)).toEqual([])
+    expect(displayTypeErrors(root, LIGHT_ENV)).toEqual([])
+    expect(displayTypeErrors(root, { ...LIGHT_ENV, scheme: 'dark' })).toEqual([
+      '.card color: 4px',
+    ])
+    const invalidFallback = postcss.parse(
+      root.toString().replace('currentcolor', '8px'),
+    )
+    expect(displayTypeErrors(invalidFallback, LIGHT_ENV)).toEqual([
+      '.card color: 8px',
+    ])
+  })
+
+  it('未知局部上下文即使未消费也拒绝，无局部定义时可枚举', () => {
+    const root = postcss.parse(
+      '@supports (display: grid) { .card { --unused: 4px; } }',
+    )
+    expect(() => localDefinitions(root)).toThrow(
+      /TOKEN_LOCAL_AT_RULE_UNMODELED/,
+    )
+    expect([
+      ...sheetDecls(
+        postcss.parse(
+          '@supports (display: grid) { .card { color: currentcolor; } }',
+        ),
+      ),
+    ]).toHaveLength(1)
+  })
+})
+
+describe('字面色检测忽略 URL 与字符串内容（review 5280077466）', () => {
+  it.each([
+    "url('/assets/white-logo.svg')",
+    "url('/assets/white.svg')",
+    'url(/assets/red.svg)',
+    'URL("/assets/blue.svg#fff")',
+    'url("data:image/svg+xml,<svg fill=\'#fff\'/>")',
+    'url("/assets/rgb(0,0,0).svg")',
+    '"white #fff rgb(0,0,0)"',
+    String.raw`url("/assets/escaped\"white).svg")`,
+    String.raw`url(/assets/escaped\)white.svg)`,
+    String.raw`"escaped\" white"`,
+    'image-set("/white.svg" 1x, url(/red.svg) 2x)',
+    'url(/white.svg), linear-gradient(transparent, currentcolor)',
+  ])('不把不透明内容当颜色：%s', (value) => {
+    expect(hasColorLiteral(value)).toBe(false)
+  })
+
+  it.each([
+    'url(/white.svg), linear-gradient(transparent, black)',
+    'url("/red.svg") #fff',
+    '"white" rgb(0,0,0)',
+    String.raw`url("/escaped\"white).svg") blue`,
+    String.raw`url(/escaped\)white.svg) red`,
+    'var(--image, linear-gradient(white, transparent))',
+    'image-set(url(/white.svg) 1x, linear-gradient(red, transparent) 2x)',
+  ])('仍检查 URL 或字符串之外的真实颜色：%s', (value) => {
+    expect(hasColorLiteral(value)).toBe(true)
+  })
+})
+
 describe('指定值先于继承值（review 5279748560）', () => {
   it.each([
     ['.parent', '.parent .child'],

@@ -208,8 +208,34 @@ export function normalizeProp(prop: string): string {
   return prop.startsWith('--') ? prop : prop.toLowerCase()
 }
 
-/** 组件样式表的全部声明（含媒体块内），带选择器与 at-rule 条件上下文。 */
+/** 局部定义仅支持外层 media；其他上下文须明确拒绝，不能假定其总是生效。 */
+function assertLocalContext(decl: postcss.Declaration): void {
+  let context: postcss.AnyNode | undefined = decl.parent
+  while (context) {
+    if (context.type === 'atrule' && context.name.toLowerCase() !== 'media') {
+      throw new Error(
+        `TOKEN_LOCAL_AT_RULE_UNMODELED: @${context.name} ${context.params}`,
+      )
+    }
+    context = context.parent
+  }
+}
+
+/** 枚举前验证整表布局，防止嵌套规则或未建模局部定义从任何扫描入口漏过。 */
+function assertSheetContexts(root: postcss.Root): void {
+  root.walkRules((rule) => {
+    if (
+      rule.nodes.some((node) => node.type === 'rule' || node.type === 'atrule')
+    ) {
+      throw new Error(`TOKEN_SHEET_NESTING_UNMODELED: ${rule.selector}`)
+    }
+  })
+  root.walkDecls(/^--/, assertLocalContext)
+}
+
+/** 组件样式表的声明及上下文；嵌套布局和非 media 局部定义以稳定错误码拒绝。 */
 export function* sheetDecls(root: postcss.Root): Generator<SheetDecl> {
+  assertSheetContexts(root)
   for (const node of root.nodes ?? []) yield* walkContainer(node, '')
 }
 
@@ -275,15 +301,16 @@ export interface LocalDef {
 /**
  * at-rule 条件链在 env 下是否成立（空串无条件恒真）。条件链由 sheetDecls
  * 拼接为 `@media <params>;` 序列；仅 @media 段参与环境求值，其余 at-rule
- * （@keyframes/@supports 等）不随建模的环境维度变化，视为恒活跃。
+ * （@keyframes/@supports 等）对普通声明保留扫描；这些上下文中的局部定义
+ * 已由 sheetDecls 拒绝，不能借此分支成为无条件可用值。
  */
 export function conditionActive(condition: string, env: Env): boolean {
   if (condition === '') return true
   return condition
     .split(';')
     .map((seg) => seg.trim())
-    .filter((seg) => seg.startsWith('@media '))
-    .every((seg) => mediaMatches(seg.replace(/^@media\s+/, ''), env))
+    .filter((seg) => /^@media\s/i.test(seg))
+    .every((seg) => mediaMatches(seg.replace(/^@media\s+/i, ''), env))
 }
 
 /**

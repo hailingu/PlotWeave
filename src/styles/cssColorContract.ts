@@ -53,10 +53,46 @@ const NAMED_COLORS = new Set(
 /** 独立标识符（非 var(--name) 片段、非函数名、非带单位数字）。 */
 const BARE_IDENT = /(?<![\w-])[a-zA-Z]+(?![\w-(])/g
 
-/** 声明值是否含字面色：hex / 颜色函数 / CSS 具名色（transparent 不计）。 */
+/** 跳过引号字符串或 URL 内容，保留转义字符和 URL 内引号的边界语义。 */
+function opaqueEnd(value: string, start: number, closing: string): number {
+  let i = start
+  while (i < value.length) {
+    const char = value[i]
+    if (char === '\\') i += 2
+    else if (char === closing) return i + 1
+    else if (closing === ')' && (char === '"' || char === "'")) {
+      i = opaqueEnd(value, i + 1, char)
+    } else i += 1
+  }
+  return value.length
+}
+
+/** 只保留可包含颜色语法的区段；空格占位避免删除不透明内容后拼成新标识符。 */
+function colorSyntaxOf(value: string): string {
+  const lower = value.toLowerCase()
+  let syntax = ''
+  for (let i = 0; i < value.length;) {
+    const char = value[i] ?? ''
+    const url = lower.startsWith('url(', i) && !/[\w-]/.test(value[i - 1] ?? '')
+    if (char === '"' || char === "'") {
+      i = opaqueEnd(value, i + 1, char)
+    } else if (url) {
+      i = opaqueEnd(value, i + 4, ')')
+    } else {
+      syntax += char
+      i += 1
+      continue
+    }
+    syntax += ' '
+  }
+  return syntax
+}
+
+/** 声明是否含字面色（transparent 不计）；URL/字符串内容不属于颜色语法。 */
 export function hasColorLiteral(value: string): boolean {
-  if (COLOR_FUNCTION_OR_HEX.test(value)) return true
-  for (const match of value.matchAll(BARE_IDENT)) {
+  const syntax = colorSyntaxOf(value)
+  if (COLOR_FUNCTION_OR_HEX.test(syntax)) return true
+  for (const match of syntax.matchAll(BARE_IDENT)) {
     if (NAMED_COLORS.has(match[0].toLowerCase())) return true
   }
   return false
