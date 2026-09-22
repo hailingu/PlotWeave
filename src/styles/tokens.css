@@ -31,6 +31,17 @@
   --control-primary-bg: #1d1d1f;
   --control-primary-fg: #ffffff;
 
+  /* 海报悬浮菜单钮配对令牌（issue #261，§3.2 悬停 ⋯ 与右键同源）：浮于
+   * 海报内容层之上的窗口层控件，前景走 --text-primary，背景/描边配对随
+   * 外观切换——此前背景恒白而前景随外观，暗色下 hover 对比度仅 1.12:1。
+   * 浅色基线与修复前字面量逐位相同（视觉零变化）；暗色面与 --surface-card
+   * 深色变体同源，白系描边承载与恒深底海报（织线兜底 #1a1a1e / 损坏占位
+   * #232326）的分离。半透明面在任意明暗海报上的对比度按纯黑/纯白最劣
+   * 合成 ≥ 4.5:1（homeTokens.test.ts 最劣合成用例钉住）。 */
+  --poster-menu-bg: rgba(255, 255, 255, 0.82);
+  --poster-menu-bg-hover: #ffffff;
+  --poster-menu-border: transparent;
+
   /* 节点家族材质（§4.1，issue #107）：内容层恒定令牌，浅/深外观不切换——
    * 纸面 = 编剧侧案头物件，石板 = 生成侧监视器质感，是「形态即语义」的
    * 家族标识；不得改引随系统外观变化的窗口色。 */
@@ -151,6 +162,11 @@
     --control-primary-bg: #f2f2f7;
     --control-primary-fg: #1d1d1f;
 
+    /* 海报悬浮菜单钮（issue #261）：深色面 + 白系描边，hover 实色提亮 */
+    --poster-menu-bg: rgba(38, 38, 44, 0.94);
+    --poster-menu-bg-hover: #3a3a40;
+    --poster-menu-border: rgba(255, 255, 255, 0.14);
+
     /* 分支家族跟随画布外观切到深色画布变体（issue #107） */
     --branch-bg: transparent;
     --branch-text: #f5f5f7;
@@ -189,6 +205,11 @@
     --edge-label-bg: var(--accent); /* 实色底：黑字浅 4.55 / 深 5.77:1 */
     --branch-frame: rgba(0, 0, 0, 0.6);
     --branch-addopt-border: rgba(0, 0, 0, 0.55);
+
+    /* 海报悬浮菜单钮（issue #261）：§2.6 背景近实色 + 明确描边（hover
+     * 值本身已实色，不重声明） */
+    --poster-menu-bg: #ffffff;
+    --poster-menu-border: rgba(0, 0, 0, 0.35);
   }
 
   @media (prefers-color-scheme: dark) {
@@ -202,6 +223,10 @@
       --branch-frame: rgba(235, 235, 245, 0.7);
       --branch-addopt-border: rgba(235, 235, 245, 0.65);
       --branch-dim: rgba(235, 235, 245, 0.6);
+
+      /* 海报悬浮菜单钮（issue #261）：近实色 + 描边随外观分块加强 */
+      --poster-menu-bg: #26262c;
+      --poster-menu-border: rgba(255, 255, 255, 0.4);
     }
   }
 }
@@ -213,6 +238,9 @@
     --surface-card: #ffffff;
     --material-titlebar: #f8f8fa;
     --material-sidebar: #f0f0f5;
+
+    /* 海报悬浮菜单钮（issue #261）：半透明面退化为实色（hover 值已实色） */
+    --poster-menu-bg: #ffffff;
   }
 
   @media (prefers-color-scheme: dark) {
@@ -220,6 +248,8 @@
       --surface-card: #26262c;
       --material-titlebar: #1c1c20;
       --material-sidebar: #1a1a1f;
+
+      --poster-menu-bg: #26262c;
     }
   }
 
