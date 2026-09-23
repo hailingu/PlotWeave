@@ -1,5 +1,5 @@
 /**
- * CSS 变量引用的词法边界与消费回归（review 5280334884）。
+ * CSS 变量引用的词法边界与消费回归（reviews 5280334884、5287535185）。
  * 状态矩阵见 docs/css-token-contract.md F5；通过真实 PostCSS
  * 声明与共享引擎验证依赖、接线、替换及恢复，不读取源文件文本断言布局。
  */
@@ -146,5 +146,67 @@ describe('字面与真实 fallback 依赖（review 5280334884）', () => {
       '--valid',
       '--label',
     ])
+  })
+})
+
+describe('F5-b：var 函数名大小写与自定义属性原样匹配', () => {
+  it.each(['VAR', 'VaR', 'vAr'])(
+    '函数名 %s 的缺失引用会进入真实声明接线检查',
+    (fn) => {
+      const value = `${fn}(--missing)`
+      expect(allVarRefs(value)).toEqual(['--missing'])
+      expect(
+        danglingRefs(postcss.parse(`.a { width: ${value} }`), LIGHT_ENV),
+      ).toEqual([{ selector: '.a', ref: '--missing' }])
+      expect(() => resolveChain(value, new Map())).toThrow()
+    },
+  )
+
+  it('合法混合大小写函数经局部定义求值并进入展示色类型检查', () => {
+    const css = '.a { --Color: #fff; color: VaR(--Color) }'
+    const root = postcss.parse(css)
+    expect(danglingRefs(root, LIGHT_ENV)).toEqual([])
+    expect(consume(css)).toBe('#fff')
+    expect(displayTypeErrors(root, LIGHT_ENV)).toEqual([])
+    expect(resolveChain('VaR(--Color)', new Map([['--Color', '#fff']]))).toBe(
+      '#fff',
+    )
+  })
+
+  it('函数名可变大小写，自定义属性名仍严格区分大小写', () => {
+    const css = '.a { --Color: #fff; color: VAR(--color) }'
+    expect(danglingRefs(postcss.parse(css), LIGHT_ENV)).toEqual([
+      { selector: '.a', ref: '--color' },
+    ])
+    expect(resolveChain('VAR(--Color)', new Map([['--Color', '#fff']]))).toBe(
+      '#fff',
+    )
+  })
+
+  it.each([
+    ['VAR(--missing, vAr(--Color))', ['--missing', '--Color']],
+    ['VAR(--Color, vAr(--missing))', ['--Color', '--missing']],
+  ])('主值与备用路径按是否选中求值：%s', (value, expectedRefs) => {
+    const css = `.a { --Color: #fff; color: ${value} }`
+    expect(allVarRefs(value)).toEqual(expectedRefs)
+    expect(danglingRefs(postcss.parse(css), LIGHT_ENV)).toEqual([])
+    expect(consume(css)).toBe('#fff')
+  })
+
+  it('大写函数名在字符串、URL 与其他函数名内仍不是变量引用', () => {
+    const value =
+      '"VAR(--missing)" URL("/VAR(--missing).svg") notVAR(--missing)'
+    expect(allVarRefs(value)).toEqual([])
+    expect(
+      danglingRefs(postcss.parse(`.a { content: ${value} }`), LIGHT_ENV),
+    ).toEqual([])
+    expect(resolveChain(value, new Map())).toBe(value)
+  })
+
+  it('大小写混用的备用依赖仍可形成变量环并选回退值', () => {
+    const css =
+      '.a { --left: VAR(--right); --right: vAr(--left); color: VAR(--left, #fff) }'
+    expect(allVarRefs('vAr(--left)')).toEqual(['--left'])
+    expect(consume(css)).toBe('#fff')
   })
 })
