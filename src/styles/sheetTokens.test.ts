@@ -101,7 +101,7 @@ function parsePaint(input: string): Paint | null {
     }
   }
   const fn = value.match(
-    /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+)\s*)?\)$/,
+    /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+)\s*)?\)$/i,
   )
   if (fn) {
     return {
@@ -166,7 +166,7 @@ function stopAlpha(token: string): number {
   const paint = parsePaint(value)
   if (paint) return paint.a
   const space = value.match(
-    /^rgba?\(\s*([\d.]+%?)\s+([\d.]+%?)\s+([\d.]+%?)(?:\s*\/\s*([\d.%]+))?\)$/,
+    /^rgba?\(\s*([\d.]+%?)\s+([\d.]+%?)\s+([\d.]+%?)(?:\s*\/\s*([\d.%]+))?\)$/i,
   )
   if (space) return space[4] === undefined ? 1 : percent(space[4])
   if (isNamedColor(value)) return 1
@@ -457,6 +457,18 @@ describe('F6 可达消费闭包与例外反向校验', () => {
         localKey('.p', '', '--fg', '#fff'),
         localKey('.p', '', '--mid', 'var(--fg)'),
         localKey('.p', dark, '--fg', '#000'),
+      ].sort(),
+    )
+  })
+
+  it('F5-c 未转义非 ASCII 局部别名的字面色沿展示消费闭包传播', () => {
+    const root = postcss.parse(
+      '.a { --前景: #fff; --中间: var(--前景); color: VAR(--中间) }',
+    )
+    expect([...displayConsumedDefs(root)].sort()).toEqual(
+      [
+        localKey('.a', '', '--前景', '#fff'),
+        localKey('.a', '', '--中间', 'var(--前景)'),
       ].sort(),
     )
   })
@@ -1098,7 +1110,11 @@ describe('F4 遮罩 alpha：只接受可确定透明度的静态色标', () => {
     'rebeccapurple',
     '#000',
     'rgb(0, 0, 0)',
+    'RGB(0, 0, 0)',
+    'RgBa(0, 0, 0, 1)',
     'rgb(0 0 0 / 100%)',
+    'RGB(0 0 0 / 100%)',
+    'RgBa(0 0 0 / 1)',
   ])('F4-b 已知静态不透明色标 %s 保持通过', (stop) =>
     expect(() =>
       expectMaskFade('F4-b', {
@@ -1116,6 +1132,18 @@ describe('F4 遮罩 alpha：只接受可确定透明度的静态色标', () => {
       }),
     ).toThrow(/须全不透明/)
   })
+
+  it.each(['RGBA(0, 0, 0, 0.5)', 'RGB(0 0 0 / 50%)'])(
+    'F4-c 大小写变体的半透明色标 %s 仍违反渐隐约束',
+    (stop) => {
+      expect(() =>
+        expectMaskFade('F4-c', {
+          prop: '-webkit-mask-image',
+          value: `LINEAR-GRADIENT(transparent, ${stop}, transparent)`,
+        }),
+      ).toThrow(/须全不透明/)
+    },
+  )
 
   it.each([
     'linear-gradient(transparent, black, transparent) junk',

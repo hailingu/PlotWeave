@@ -2,7 +2,7 @@
 
 本页是 [PR #288](https://github.com/hailingu/PlotWeave/pull/288) 的支持范围与问题族矩阵入口，承接 [issue #278](https://github.com/hailingu/PlotWeave/issues/278)；分轮审查记录已从当前文档树移除，历史事实保留在 Git 中，不再各自定义当前范围。产品配色决策仍以 [UI 设计 §2.1](ui-design.md#21-三层结构) 和 §2.3、§2.6 为准。
 
-修订 `f90cbf5` 修复审查 [5286363682](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5286363682) 的三个 P2 漏检。`99b0ba9` 修复其首轮后续审查 [5286571379](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5286571379)：根令牌嵌套样式规则漏检、含图像背景简写经长形重置后的误报，均为 F2 已承诺范围的新触发条件。`0516b47` 处理审查 [5286675799](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5286675799) 首次针对整理提交 `65be8cd`：图像长形误收颜色属于 F3 的 P2 缺陷；滤镜颜色检查是此前属性集合之外的 P3 范围扩展建议，记录边界、不扩充解析器。审查 [5286812629](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5286812629) 首次针对 `0516b47`，补充 F2-c 的透明色简写经颜色长形覆盖这一真实 P2 误报。审查 [5287145315](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5287145315) 首次针对 `50d63e0`，指出 F2 的子代组合器空白差异与条件组胜出源序两条新触发条件；均为既有简单选择器/层叠契约内的 P2 缺陷。审查 [5287311461](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5287311461) 首次针对 `682e3ff`，补充 F4 单个完整渐变和 F3 `border-image` 简写成分类型两条既有范围内的 P2 漏检。最新审查 [5287535185](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5287535185) 首次针对 `a21d3e5`，指出 F5 中 `var()` 函数名大小写变体绕过真实引用入口的 P2 漏检。review 轮次与预算规则不变。
+修订 `f90cbf5` 修复审查 [5286363682](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5286363682) 的三个 P2 漏检。`99b0ba9` 修复其首轮后续审查 [5286571379](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5286571379)：根令牌嵌套样式规则漏检、含图像背景简写经长形重置后的误报，均为 F2 已承诺范围的新触发条件。`0516b47` 处理审查 [5286675799](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5286675799) 首次针对整理提交 `65be8cd`：图像长形误收颜色属于 F3 的 P2 缺陷；滤镜颜色检查是此前属性集合之外的 P3 范围扩展建议，记录边界、不扩充解析器。审查 [5286812629](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5286812629) 首次针对 `0516b47`，补充 F2-c 的透明色简写经颜色长形覆盖这一真实 P2 误报。审查 [5287145315](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5287145315) 首次针对 `50d63e0`，指出 F2 的子代组合器空白差异与条件组胜出源序两条新触发条件；均为既有简单选择器/层叠契约内的 P2 缺陷。审查 [5287311461](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5287311461) 首次针对 `682e3ff`，补充 F4 单个完整渐变和 F3 `border-image` 简写成分类型两条既有范围内的 P2 漏检。审查 [5287535185](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5287535185) 首次针对 `a21d3e5`，指出 F5 中 `var()` 函数名大小写变体绕过真实引用入口的 P2 漏检。最新审查 [5287668653](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5287668653) 首次针对 `8456bdb`，指出 F5 未转义非 ASCII 自定义属性名与 F4 遮罩 RGB 函数名大小写的两个 P2 新触发条件。review 轮次与预算规则不变。
 
 ## 支持、拒绝和保留边界
 
@@ -13,8 +13,8 @@
 | F1 全局所有权 | 带 PostCSS `from` 的真实组件表逐表扫描；`tokens.css` 是全局定义源。检查选择器列表、媒体内无消费者的定义；简单组合器链终点为 `html`/`body`/`:root`，或全局链终点为通配的定义均受约束 | 组件全局定义 `TOKEN_GLOBAL_OUTSIDE_SOURCE`；`@property` 注册；根源中非 `:root` 的已识别文档选择器 `TOKEN_ROOT_SELECTOR_UNMODELED` | 完整选择器匹配、函数伪类/转义/命名空间以及跨文件局部级联未建模；全局限制是本表静态防线，不宣称覆盖所有可匹配 DOM 的表达式。无来源夹具只模拟独立级联 |
 | F2 层叠取胜 | 外观 light/dark × 对比度 no-preference/more × 透明度 no-preference/reduce × 动效 no-preference/reduce；简单同元素/后代/子代、逗号分支，子代组合器可有或无空白；先最近定义元素，再重要性，再以实际胜出声明源序决定跨条件组取胜。根、局部、跨媒体组、黄金接线均按此适用规则 | 未建模媒体特性/值；根或局部定义的未知 at-rule；根相关样式规则嵌套 `TOKEN_ROOT_NESTING_UNMODELED`、组件内部嵌套；未建模 CSS-wide 自定义属性取值；黄金规则重复或条件化；黄金背景域外简写 `TOKEN_BACKGROUND_SHORTHAND_UNMODELED` | 完整特异性、DOM 祖先匹配、跨文件局部定义、继承前别名计算、级联层/作用域及运行时动画不由此模型证明；黄金背景仅支持单层至多一个颜色成分和一个图像成分（none/URL/渐变），颜色成分复用 F3 的完整颜色识别（含 transparent、具名色和 currentColor），不要求数值 RGBA 转换；未指定成分取 transparent/none；不以字符串前缀关系代替完整选择器算法 |
 | F3 完整值校验 | 纯颜色属性完整顶层值及边框颜色列表；`-webkit-text-stroke` 的宽度/颜色；其余简写逐个消费完整顶层成分，颜色、图像、长度（0、px/em/rem/pt/ch/ex/vw/vh）和关键字不能掩盖未知词形。`background-image` 只接受非空图像/none 列表，`border-image-source` 只接受单个图像/none，`border-image` 简写接受已识别图像成分或单独 none，不接受颜色或其他通用简写关键字；图像限 URL 与 linear/radial/conic 渐变（含 repeating），SVG paint 只额外接受 URL | 空值、未知或残余词形（含连字符、下划线、引号、标点）、不相容纯颜色、图像长形上的颜色/尺寸/简写关键字、空图像列表项及 source 多项、`border-image` 简写中的普通颜色、通用边框关键字或与图像混用的 none、非图像属性上的图像；无颜色/图像的尺寸或裸数值叶子 | 函数内部参数、完整简写的顺序/个数/互斥关系未建模。已识别顶层成分不等于整条浏览器文法合法；只支持当前静态成分集合，合法但域外语法也可能被拒绝 |
-| F4 遮罩 alpha | `mask-image`/`-webkit-mask-image` 的单个完整且括号平衡的 linear-gradient；静态 hex、rgb/rgba 与具名色、transparent；首末 alpha=0、内部 alpha=1 | 动态 `currentColor`、未知标识符/色标形式 `MASK_STOP_UNMODELED`；遮罩简写、边框遮罩、其他图像形式、多图层及渐变后的尾随内容 `MASK_IMAGE_UNMODELED`；透明度不满足渐隐不变量 | 不解析元素计算色、继承/媒体动态色标、完整渐变位置/插值及像素。多图层直接拒绝，不推断其合成后的 alpha |
-| F5 引用与词法 | PostCSS `decl.value`；字符串/URL 不透明；`var()` 函数名按 ASCII 不区分大小写，自定义属性名保持大小写敏感；选中主值或 fallback 的递归求值、环检测、逐环境/分支悬空检查；输出保留字面内容 | 无可用主值且无有效 fallback 的引用，包括函数名大小写变体；值链过深；展示消费处不相容的选中值 | 不是完整 CSS tokenizer；转义函数/标识符、任意函数语法和完整继承计算保留边界。环图保留备用路径依赖，不能与只检查选中消费路径混淆 |
+| F4 遮罩 alpha | `mask-image`/`-webkit-mask-image` 的单个完整且括号平衡的 linear-gradient；静态 hex、逗号/空格 RGB(A)（函数名 ASCII 大小写不敏感）与具名色、transparent；首末 alpha=0、内部 alpha=1 | 动态 `currentColor`、未知标识符/色标形式 `MASK_STOP_UNMODELED`；遮罩简写、边框遮罩、其他图像形式、多图层及渐变后的尾随内容 `MASK_IMAGE_UNMODELED`；透明度不满足渐隐不变量 | 不解析元素计算色、继承/媒体动态色标、完整 RGB 参数文法、渐变位置/插值及像素。多图层直接拒绝，不推断其合成后的 alpha |
+| F5 引用与词法 | PostCSS `decl.value`；字符串/URL 不透明；`var()` 函数名按 ASCII 不区分大小写，未转义非 ASCII 自定义属性名完整保留且大小写敏感；选中主值或 fallback 的递归求值、环检测、逐环境/分支悬空检查；输出保留字面内容 | 无可用主值且无有效 fallback 的引用，包括函数名大小写变体；值链过深；展示消费处不相容的选中值 | 不是完整 CSS tokenizer；转义函数/标识符、任意函数语法和完整继承计算保留边界。环图保留备用路径依赖，不能与只检查选中消费路径混淆 |
 | F6 发现、结构与配对 | glob 自动发现全部 src CSS，布局/动画/空表不设条数门槛；展示色及可达局部别名字面色禁用；例外绑定表/选择器/属性/值/条数并反向校验；8 个配对环境；危险底色颜色/图像成分各自层叠 | 非注册字面色、过期或扩大的例外；配对阈值不达标；危险前景或背景有效接线变化 | box-shadow 层级投影不在展示色禁用范围；#240 恒白危险前景及深色约 2.8:1、#262 品牌配对、#265 悬空引用和非文本对比度观察项沿用既有处置；不新增产品配色决策 |
 
 展示色入口由 `isDisplayColorProp` 统一分类：`color`、标准 `-color` 长形（含厂商前缀）、`background`/`background-image`、`outline`、`text-decoration`、`text-emphasis`、`text-shadow`、`column-rule`、`fill`/`stroke`、`-webkit-text-stroke`、border 总体/四向/逻辑方向简写及颜色长形、`border-image`/`border-image-source`。标准属性名先按 ASCII 大小写归一，自定义属性名保持大小写敏感；`box-shadow`、`filter`/`backdrop-filter`（含厂商前缀）与遮罩不进入展示色字面值禁用，遮罩另走 F4。滤镜中的 `drop-shadow()` 颜色、变量类型与函数链未建模；全表发现不等于覆盖所有 CSS 属性。此处显式列出既有属性集合之外的边界，不把滤镜用例宣称为已验证。
@@ -41,8 +41,10 @@ F2 上下文拒绝使用稳定错误码：根未知 at-rule 或根内嵌 at-rule
 | F3-d | `border-image` 简写收到颜色别名、通用边框关键字或与图像混用的 none，经根/局部/媒体选中；背景简写收到同一颜色 | 变量求值后按属性判定已识别颜色与通用关键字，再检查剩余顶层成分 | border-image 拒绝颜色、solid 等通用边框关键字和 image+none，保留单图像、单独 none 与整值 CSS-wide；background 的合法颜色保持通过 | 图像边框没有颜色源，通用关键字集合不能跨属性兜底；`shorthandLayerOk` → `colorTypeOk` → `displayTypeErrors`/真实 glob | F3-d 最小失败、合法对照与选中 fallback/媒体组合；border-image 完整 slice/width/repeat 文法仍为已知边界 |
 | F4-a | 透明前景，内部遮罩色标为 currentColor | `sheetDecls` → 遮罩分类 → alpha 校验 | 显式拒绝动态色标，不返回 [0,1,0] | alpha 只能由已建模静态值确定；`expectMaskFade`/`maskStopAlphas`/`stopAlpha` | F4 最小反例，含厂商前缀、媒体、大小写及未知词形 |
 | F4-b | 合法静态渐隐、内部半透明、完整渐变后尾随垃圾或第二层、括号不平衡、简写/非图像长形 | 先验证整个值恰为一个平衡 linear-gradient，再剖析色标并断言 alpha | 合法静态值通过；尾随、多层或括号错误报 `MASK_IMAGE_UNMODELED`，alpha 错误与域外图像失败；尺寸类跳过 | 分类、剖析、断言不能各有缺口；`expectMaskFade` → `maskStopAlphas`/真实 glob | F4 完整值最小反例、合法嵌套函数与厂商前缀组合；完整渐变位置语法、动态计算色与像素未运行 |
+| F4-c | 单层合法遮罩的内部色标使用 `RGB`/`RgBa` 逗号或空格语法，或含半透明 alpha | 渐变与色标函数按 ASCII 不区分大小写分类，再分别解析两种 RGB 语法并断言 alpha | 大小写变体与小写合法色标同样通过；半透明内部色标仍失败 | 函数名写法不得改变静态 alpha 判定；`parsePaint`/`stopAlpha` → `maskStopAlphas` → `expectMaskFade`/真实 glob | `sheetTokens.test.ts` 正反例先失败后通过；真实 glob 合法 83/83、半透明 1 失败/82 通过；完整 RGB 参数文法与 WebView 像素仍保留边界 |
 | F5-a | 字符串/URL/注释混合真实引用；主值有效、缺失、initial、断链或循环 | PostCSS 解析，再构图/选路径/类型验证 | 不透明内容保留；选中路径恢复或报告；真实备用依赖仍入环图 | 词法边界与求值一致；`maskCssOpaque`、`allVarRefs`、`resolveChain`、引用/类型入口 | `sheetTokenReferences.test.ts` 及语义套件；PostCSS 注释误报的既有回归保留 |
 | F5-b | 函数名为 `VAR`/混合大小写、属性名 `--Foo`/`--foo` 并存；引用位于普通声明、根/局部别名、选中或未选 fallback、字符串/URL | 保持原值和偏移，仅以 ASCII 不区分大小写识别函数名；按原样查找自定义属性名，再构图、选择主值或 fallback 并作类型/悬空检查 | 缺失的真实引用被点名；合法别名与选中 fallback 正确求值；未选路径不误报，字符串/URL 不构成引用；大小写不同的属性名不互认 | 函数识别在 `variableStart`、`allVarRefs`、`resolveChain`、`unresolvedValueRefs`、`resolveDisplayValue` 间一致，属性名始终区分大小写；`sheetTokensEngine.ts` 的引用入口负责 | `sheetTokenReferences.test.ts` 红灯 8 项/绿灯 35 项、真实 glob 正反探针及样式 431 项；CSS 转义函数名与完整 tokenizer 保留边界 |
+| F5-c | 未转义非 ASCII 自定义属性名用于展示色局部别名、间接别名、备用引用或普通接线；相邻标识符内含 `var(` 或 `URL(` 字样 | 在不透明内容外按已支持标识符边界提取完整引用名，保留原样并沿可达定义闭包、求值和类型入口传播；CSS 空白分隔与非 ASCII 名称码点不混淆 | 字面展示色别名进入结构禁用；合法令牌/选中备用值通过；缺失名被点名；字符串/真实 URL 不误认，更长的非 ASCII 函数名不误遮蔽内部引用 | `maskCssOpaque` 的 URL 边界与 `allVarRefs`、`variableStart`/`resolveChain` 对未转义非 ASCII 标识符一致；`displayConsumedDefs`、`unresolvedRefsIn` 和类型入口不能分叉 | 两文件定点测试先 6 项失败后通过；真实 glob 字面别名 1 失败/82 通过、合法别名 83/83；提交前复核新加 `前URL(var(--missing))` 用例先失败后通过，最终样式 446/446；转义标识符和完整 tokenizer 保留边界 |
 | F6-a | 新 CSS、局部字面别名或例外改值/条数/属性 | 发现 → 可达消费闭包 → 结构/接线与例外反向检查 | 新表自动检查；未审计变化报错；失效例外须删除 | 覆盖和豁免不依赖偶然文件布局；真实 glob、`displayConsumedDefs` 和两张例外表 | `sheetTokens.test.ts`；真实 glob 临时探针，运行后删除 |
 | F6-b | 浅深、more、降透明度及 hover 配对 | 固定令牌承载面对比度与黄金接线 | primary ≥4.5，secondary more ≥4.5；危险恒白按 #240 | 配对与产品已接受决策一致；配对/危险契约 | 8 环境既有测试；非文本对比度、#262/#265 仍按既有处置 |
 
@@ -61,9 +63,11 @@ F2 上下文拒绝使用稳定错误码：根未知 at-rule 或根内嵌 at-rule
 - F3-c：[background-image](https://www.w3.org/TR/css-backgrounds-3/#background-image) 的 `<bg-image>#`、`<bg-image> = <image> | none` 与 [border-image-source](https://www.w3.org/TR/css-backgrounds-3/#border-image-source) 的 `none | <image>` 独立确定长形类型、列表项及个数。图像函数参数不在本次证明范围。
 - F3-d：[border-image 简写](https://www.w3.org/TR/css-backgrounds-3/#border-image) 由图像源、切片、宽度、外扩和重复成分组成；普通 `<color>` 不在该文法内。这里仅拒绝已识别颜色成分，不宣称完整简写文法校验。
 - F5-b：[CSS Syntax 的语法匹配](https://www.w3.org/TR/css-syntax-3/) 默认按 ASCII 不区分大小写，因此 `VAR(` 与 `var(` 匹配同一函数；[CSS Variables 的自定义属性名](https://www.w3.org/TR/css-variables-1/#defining-variables) 则只有码点序列相同才相等。手工据此确定正反例，不从被测匹配器反推预期。
+- F5-c：[CSS Syntax 3 的 ident 码点分类](https://www.w3.org/TR/css-syntax-3/) 将非 ASCII 码点纳入标识符，CSS 空白仅为空格、制表符、换行、回车与换页；[CSS Variables 1](https://www.w3.org/TR/css-variables-1/#defining-variables) 规定自定义属性名按原始码点序列匹配。因此未转义的 `--前景`、`--café` 等须完整保留，`前URL(` 也不能按独立 `URL(` 函数遮蔽内容；转义标识符仍按上表留界。
 - 滤镜边界：[drop-shadow()](https://www.w3.org/TR/filter-effects-1/#funcdef-filter-drop-shadow) 确实允许颜色，审查现象成立；[审查前的属性范围](https://github.com/hailingu/PlotWeave/blob/65be8cdc66ae656b5160bf388261f617150d0806/docs/css-token-contract.md#支持拒绝和保留边界) 已列明展示色集合，不包含滤镜。当前真实 CSS 仅使用 blur/none，无 drop-shadow；本次按既有 P3 范围扩展规则记录，不以无消费者推断未来安全。
 - F4：[currentColor](https://www.w3.org/TR/css-color-4/#currentcolor-color) 取同一元素的 color；transparent 的 alpha 为 0。动态色标必须求值或拒绝，本 PR 采用拒绝。
 - F4-b：[mask-image](https://www.w3.org/TR/css-masking-1/#the-mask-image) 的值可以是多图层列表；本契约只接受其中的单个完整 linear-gradient，尾随内容或额外图层不能被剖析器忽略。
+- F4-c：[CSS Syntax 3](https://www.w3.org/TR/css-syntax-3/) 的语法匹配默认 ASCII 不区分大小写，故已支持的 `rgb()`/`rgba()` 色标不能仅因函数名写成 `RGB()`/`RgBa()` 而改变 alpha 判定。
 - F5 的环、主值/fallback、词法不透明依据 [CSS Variables](https://www.w3.org/TR/css-variables-1/#cycles) 与 PostCSS 实际解析入口；F6 的阈值及配色例外依据 UI 设计 §2.3、§2.6，产品阈值不由实现反推。
 
 `f90cbf5` 红绿记录（Node 24.18.0，仓库根目录；本次验证另记）：
@@ -75,6 +79,34 @@ F2 上下文拒绝使用稳定错误码：根未知 at-rule 或根内嵌 at-rule
 - 完整路由：`npm run format:check && npm run lint && npm run typecheck:strict && npm run build && npm test` 通过，152 文件 / 2149 项；构建产物 `dist/` 在完成前删除。首次验证发现 ES 目标不支持 `Array.at`/`replaceAll`，已改用索引/正则替换，未修改目标库或依赖。
 - `git diff --check` 通过。文件/最长函数代码行：值模块 229/26、引擎 745/32、真实契约测试 960/70、语义测试 954/70、边界测试 319/58、新问题族测试 176/57；均满足 800/1800/80 硬上限。F6 原有长测试分组按全表扫描与闭包/反向校验拆开，断言保留。引擎超过 600 行讨论阈值，保留原因是本轮仅更换两个既有入口共享的文档选择器判定，没有扩展完整层叠职责；由仓库维护者在下一次修改该引擎时复核。既有 70 行分组为同一契约的并列案例，未扩张。圈复杂度未配置工具，以函数跨度和控制流人工复核。
 - 文档路径没有配置自动行为检查；已结构化核对统一矩阵、设计 §2.1、代码头注、错误码、历史记录映射和外部规范依据。数据模型、产品配色、review 预算及治理文件不变。Rust 源码未改，Rust 变更路由不适用；提交/推送钩子仍须生成新鲜前端/Rust 覆盖率并通过 Sonar，结果以 PR 当前修订的验证记录为准。
+
+## 审查 5287668653 的验证与处置
+
+这次审查首次针对 `8456bdb` 提出两条新的 P2 触发条件，分别落在既有 F5 引用词法与 F4 静态遮罩 alpha 范围。`allVarRefs` 只匹配 ASCII 属性名，导致 `--前景` 等合法未转义名称在消费闭包中漏检，`--café` 被截断；`variableStart` 与简易替换入口也须保持同一词法边界。遮罩的逗号和空格两种 RGB 色标解析各自用区分大小写的正则，令合法 `RGB()` 被错误拒绝。review 预算规则不变。
+
+- **F5-c 相邻入口**：`variableStart`、`allVarRefs` 与 `resolveChain` 统一识别未转义非 ASCII 标识符及完整自定义属性名，保留原值、大小写敏感和字符串/真实 URL 不透明边界；`maskCssOpaque` 不再把 `前URL(` 当成独立 URL 函数，内部真实引用仍可见。`resolveChain` 和 `allVarRefs` 用 CSS 空白码点分隔参数，避免与非 ASCII 名称码点重叠。`displayConsumedDefs` 经 `allVarRefs` 跟随间接别名；真实接线、选中 fallback 和展示色类型经共享求值入口验证。转义标识符与完整 tokenizer 未扩展。
+- **F4-c 相邻入口**：遮罩测试的 `parsePaint`（逗号语法）和 `stopAlpha`（空格语法）均按 ASCII 大小写不敏感匹配 RGB(A) 函数名，静态 alpha 规则不变；半透明内部色标仍按渐隐不变量拒绝。
+- **Red → Green**：Node 24.18.0，在修改入口前新增最小失败、合法对照及组合用例，`npm test -- src/styles/sheetTokenReferences.test.ts src/styles/sheetTokens.test.ts` 为 12 失败 / 112 通过；首轮修复后为 124/124 通过，`npm test -- src/styles` 为 444/444 通过。新增的非 ASCII 属性名大小写对照在 Red 阶段已通过。提交钩子的 Sonar 新代码规则 S8786 随后报告新正则可能因 Unicode 名称与 `\s` 重叠而超线性回溯；提交前 review 加入 `前URL(var(--missing))` 用例，先失败 / 41 通过，再修正相邻入口。最终两文件定点回归 126/126 通过，另以 `--a\u00a0b` 保留合法非 ASCII 码点对照。
+- **真实 glob**：临时 CSS 的 `--前景: #fff; color: var(--前景)` 被结构全表拒绝（1 失败 / 82 通过）；改成 `--前景: var(--text-primary)` 后 83/83 通过。大写 `RGB(0 0 0 / 100%)` 的单层遮罩 83/83 通过；`RGB(0 0 0 / 50%)` 被 alpha 约束拒绝（1 失败 / 82 通过），并非 `MASK_STOP_UNMODELED`。临时 CSS 已删除。
+- **完整路由**：仓库根目录 `npm run format:check && npm run lint && npm run typecheck:strict && npm run build && npm test` 首轮修复后 152 文件 / 2286 项通过；定点 Prettier 格式化修正了首次格式检查指出的格式问题。提交前补充修复后，同一完整路由在非沙箱执行为 152 文件 / 2288 项通过。沙箱内的门禁替身测试因多层 `spawnSync` 进程启动异常缓慢而有 2 项超过 30 秒；同一测试在非沙箱原命令 22/22 通过，未改测试超时或仓库配置。构建产物在提交前删除。文档无配置自动行为检查，按支持表、F4-c/F5-c 矩阵、设计 §2.1 和规范做结构化核对。没有运行浏览器/WebView 像素探针，不将静态测试称为渲染证明。
+- **独立依据**：上列 CSS Syntax 3 的非 ASCII ident 分类与默认 ASCII 不区分大小写的函数文法，以及 CSS Variables 1 的名称逐码点匹配，先于实现确定正反预期；测试不读取源文档文本断言措辞或布局。
+- **提交前 review**：以 `8456bdb` 为基准复核六文件 diff、变量词法、遮罩色标、真实 glob 正反探针及 F4/F5 矩阵与设计的一致性。首轮 review 后门禁指出上述 S8786；复核又发现 URL 词法边界的独立漏口，已在提交前补红绿用例并修复。最新 `git diff --check` 通过；引擎 795 行、值词法模块 43 行、真实契约测试 1169 行、引用测试 255 行，变更函数与新增测试均未超过 80 代码行。本轮范围内无剩余 P0/P1/P2 问题；转义名称、完整 RGB 文法和 WebView 像素仍按已知边界披露。无并发、重试、持久化或数据模型变更。
+
+以下为两个[原审查](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5287668653)线程的四字段回复草稿；本文不等于已在原线程发帖或标记 resolved。提交、门禁与 CI 结果以 PR 当前修订证据为准。
+
+### [未转义非 ASCII 变量引用](https://github.com/hailingu/PlotWeave/pull/288#discussion_r4079695324)
+
+1. **处置** — 本地修复，真实 P2 引用词法漏检。
+2. **理由与变更** — F5-c 的 `variableStart`、`allVarRefs`、`resolveChain` 统一识别未转义非 ASCII 标识符，完整保留原名；`maskCssOpaque` 也不误遮蔽更长的 Unicode 函数名。结构闭包、接线和求值入口共用该结果。解析边界、矩阵和设计 §2.1 已同步；提交号见 PR 当前修订。
+3. **验证** — 定点 Red → Green 与首轮 444 项样式测试通过；提交前相邻 URL 用例又先失败后通过；真实 glob 字面别名拒绝、合法别名通过；独立依据为 CSS Syntax 3 与 CSS Variables 1。最终全量及门禁结果见 PR；浏览器像素未运行。
+4. **后续** — 本条实现完成；转义标识符及完整 tokenizer 保留为已知边界，原线程发布状态见 PR。
+
+### [遮罩 RGB 函数名大小写](https://github.com/hailingu/PlotWeave/pull/288#discussion_r4079695329)
+
+1. **处置** — 本地修复，真实 P2 静态遮罩误拒。
+2. **理由与变更** — F4-c 两条 RGB 色标解析路径统一按 ASCII 不区分大小写匹配函数名；合法不透明 `RGB()` 通过，半透明 `RGB()` 仍违反 alpha 约束。矩阵和设计 §2.1 已同步；提交号见 PR 当前修订。
+3. **验证** — 定点 Red → Green 与首轮 444 项样式测试通过；真实 glob 合法色标通过、半透明色标被 alpha 断言拒绝；独立依据为 CSS Syntax 3。最终全量及门禁结果见 PR；浏览器像素未运行。
+4. **后续** — 本条实现完成；完整 RGB 参数文法与 WebView 像素仍为已知边界，原线程发布状态见 PR。
 
 ## 审查 5287535185 的验证与处置
 

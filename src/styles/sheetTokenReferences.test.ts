@@ -1,5 +1,5 @@
 /**
- * CSS 变量引用的词法边界与消费回归（reviews 5280334884、5287535185）。
+ * CSS 变量引用的词法边界与消费回归（reviews 5280334884、5287535185、5287668653）。
  * 状态矩阵见 docs/css-token-contract.md F5；通过真实 PostCSS
  * 声明与共享引擎验证依赖、接线、替换及恢复，不读取源文件文本断言布局。
  */
@@ -208,5 +208,48 @@ describe('F5-b：var 函数名大小写与自定义属性原样匹配', () => {
       '.a { --left: VAR(--right); --right: vAr(--left); color: VAR(--left, #fff) }'
     expect(allVarRefs('vAr(--left)')).toEqual(['--left'])
     expect(consume(css)).toBe('#fff')
+  })
+})
+
+describe('F5-c：未转义非 ASCII 自定义属性名', () => {
+  it.each(['--前景', '--café', '--🎨', '--a\u00a0b'])(
+    '真实引用名 %s 在依赖与简易替换入口保持完整',
+    (name) => {
+      expect(allVarRefs(`var(${name})`)).toEqual([name])
+      expect(resolveChain(`VAR(${name})`, new Map([[name, '#fff']]))).toBe(
+        '#fff',
+      )
+    },
+  )
+
+  it('混合大小写函数的缺失主值选中非 ASCII 备用引用', () => {
+    const value = 'VAR(--缺失, vAr(--前景))'
+    expect(allVarRefs(value)).toEqual(['--缺失', '--前景'])
+    expect(consume(`.a { --前景: #fff; color: ${value} }`)).toBe('#fff')
+  })
+
+  it('非 ASCII 名称仍逐字匹配，缺失名称进入真实接线诊断', () => {
+    const css = '.a { --前景: #fff; color: VAR(--前景A) }'
+    expect(danglingRefs(postcss.parse(css), LIGHT_ENV)).toEqual([
+      { selector: '.a', ref: '--前景A' },
+    ])
+  })
+
+  it('更长的非 ASCII 函数名及字符串、URL 内容不构成引用', () => {
+    const value = '前VAR(--missing) "var(--前景)" URL("/var(--前景).svg")'
+    expect(allVarRefs(value)).toEqual([])
+    expect(
+      danglingRefs(postcss.parse(`.a { content: ${value} }`), LIGHT_ENV),
+    ).toEqual([])
+    expect(resolveChain(value, new Map())).toBe(value)
+  })
+
+  it('非 ASCII 前缀的 URL 字样仍让内部真实引用进入接线检查', () => {
+    const value = '前URL(var(--missing))'
+    expect(allVarRefs(value)).toEqual(['--missing'])
+    expect(
+      danglingRefs(postcss.parse(`.a { content: ${value} }`), LIGHT_ENV),
+    ).toEqual([{ selector: '.a', ref: '--missing' }])
+    expect(() => resolveChain(value, new Map())).toThrow()
   })
 })

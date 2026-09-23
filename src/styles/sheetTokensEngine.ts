@@ -208,9 +208,9 @@ export function tokenValuesOf(
   return new Map([...entries].map(([name, entry]) => [name, entry.value]))
 }
 
-/** 仅定位不透明内容之外的 var()（函数名 ASCII 不区分大小写），返回原值偏移。 */
+/** 仅定位不透明内容之外的 var()（未转义非 ASCII 标识符边界），返回原值偏移。 */
 function variableStart(value: string): number {
-  return /(?<![\w-])var\(/i.exec(maskCssOpaque(value))?.index ?? -1
+  return /(?<![\w\u0080-\uFFFF-])var\(/i.exec(maskCssOpaque(value))?.index ?? -1
 }
 
 /** 迭代消解真实 var() 引用链（深度限 12，防循环），字符串/URL 保持原样。 */
@@ -222,7 +222,7 @@ export function resolveChain(
   for (let i = 0; i < 12 && variableStart(current) >= 0; i += 1) {
     const syntax = maskCssOpaque(current)
     current = current.replace(
-      /(?<![\w-])var\(\s*(--[\w-]+)\s*\)/gi,
+      /(?<![\w\u0080-\uFFFF-])var\([ \t\n\r\f]*(--[\w\u0080-\uFFFF-]+)[ \t\n\r\f]*\)/gi,
       (whole, name: string, offset: number) =>
         syntax.slice(offset, offset + 4).toLowerCase() === 'var('
           ? (tokens.get(name) ?? whole)
@@ -266,10 +266,12 @@ export function isDisplayColorProp(prop: string): boolean {
   )
 }
 
-/** 值内真实 var() 引用名（函数名不区分大小写，属性名保持原样；含 fallback）。 */
+/** 值内真实 var() 引用名（含未转义非 ASCII 名称与 fallback，属性名保持原样）。 */
 export function allVarRefs(value: string): string[] {
   return [
-    ...maskCssOpaque(value).matchAll(/(?<![\w-])var\(\s*(--[\w-]+)/gi),
+    ...maskCssOpaque(value).matchAll(
+      /(?<![\w\u0080-\uFFFF-])var\([ \t\n\r\f]*(--[\w\u0080-\uFFFF-]+)/gi,
+    ),
   ].map((m) => m[1]!)
 }
 

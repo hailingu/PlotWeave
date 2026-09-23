@@ -26,7 +26,7 @@ export function maskCssOpaque(value: string): string {
     const char = value[i] ?? ''
     const url =
       value.slice(i, i + 4).toLowerCase() === 'url(' &&
-      !/[\w-]/.test(value[i - 1] ?? '')
+      !/[\w\u0080-\uFFFF-]/.test(value[i - 1] ?? '')
     const start = i
     if (char === '"' || char === "'") {
       i = opaqueEnd(value, i + 1, char)
