@@ -301,6 +301,37 @@ describe('findNodesText（issue #275 评审：被节选条目的可发现读取�
     expect(none).toContain('没有 id 以')
   })
 
+  it('id:<前缀>#序号 直达碰撞候选的完整 id 分段（PR #294 评审）', () => {
+    // 两个合法 id 前 100 字符相同：只能按名称发现目标
+    const shared = 's'.repeat(100)
+    const a: CanvasNode = node({
+      id: `${shared}AAA`,
+      type: 'beat',
+      position: { x: 0, y: 0 },
+      data: { name: '甲', tone: 'x' },
+    })
+    const b: CanvasNode = node({
+      id: `${shared}BBB`,
+      type: 'beat',
+      position: { x: 0, y: 0 },
+      data: { name: '乙', tone: 'x' },
+    })
+    // idHint 的 80 前缀进入碰撞分支：候选项缩写后文本相同，须编号消歧
+    const collide = findNodesText([a, b], [], `id:${shared.slice(0, 80)}`)
+    expect(collide).toContain('候选按画布顺序编号')
+    expect(collide).toContain('- #1 s')
+    expect(collide).toContain('- #2 s')
+    expect(collide).toMatch(/id:s{80}#/)
+    // 直达 #2 的完整 id 分段并端到端无损拼回
+    const full = `${shared}BBB`
+    const first = findNodesText([a, b], [], `id:${shared.slice(0, 80)}#2`, 0)
+    expect(first).toContain(`第 1/1 段（总长 ${full.length} 字符）`)
+    expect(first).toContain(full)
+    // 序号超界给出明确文案
+    const out = findNodesText([a, b], [], `id:${shared.slice(0, 80)}#9`)
+    expect(out).toContain('序号超界')
+  })
+
   it('精确 id 命中优先进入单节点视图：id 子串碰撞不阻连续线枚举（PR #294 评审）', () => {
     // 合法旧项目可同时存在 n1 与 n10：查询 n1 时 includes 也会命中 n10
     const hub: CanvasNode = node({

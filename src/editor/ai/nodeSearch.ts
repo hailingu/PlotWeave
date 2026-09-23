@@ -58,19 +58,40 @@ function idSegments(
   offset: number,
 ): string {
   const matches = nodes.filter((n) => n.id.startsWith(prefix))
-  if (matches.length === 0) {
-    return `没有 id 以「${cut(prefix, ECHO_MAX)}」开头的节点；请使用检索结果中给出的前缀。`
-  }
   if (matches.length > 1) {
+    // 候选缩写后可能文本相同（共同前缀 ≥ ID_MAX）：按画布顺序编号消歧，
+    // 「id:<前缀>#<序号>」直达该候选的完整 id 分段（位置句柄在同一
+    // 画布状态内稳定，PR #294 评审）
     return [
-      `id 前缀命中 ${matches.length} 个节点，前缀不足定位；请加长前缀后重试：`,
-      ...matches.slice(0, FIND_NODES_MAX).map((n) => `- ${idOf(n.id)}`),
+      `id 前缀命中 ${matches.length} 个节点，前缀不足定位。候选按画布顺序编号：`,
+      ...matches
+        .slice(0, FIND_NODES_MAX)
+        .map((n, i) => `- #${i + 1} ${idOf(n.id)}`),
       ...(matches.length > FIND_NODES_MAX
-        ? [`（另有 ${matches.length - FIND_NODES_MAX} 个命中未列出）`]
+        ? [
+            `（另有 ${matches.length - FIND_NODES_MAX} 个命中未列出，请加长前缀缩小范围）`,
+          ]
         : []),
+      `（find_nodes("id:${prefix.slice(0, ID_MAX)}#<序号>", offset=段号) 直达该候选完整 id；或加长前缀）`,
     ].join('\n')
   }
-  const id = matches[0]!.id
+  if (matches.length === 0) {
+    const hashAt = prefix.lastIndexOf('#')
+    const ordinal = /^\d+$/.exec(prefix.slice(hashAt + 1))
+    if (hashAt >= 0 && ordinal) {
+      const base = prefix.slice(0, hashAt)
+      const candidates = nodes.filter((n) => n.id.startsWith(base))
+      const target = candidates[Number(ordinal[0]) - 1]
+      if (target) return segmentsOf(target.id, offset)
+      return `序号超界：前缀「${cut(base, ECHO_MAX)}」命中 ${candidates.length} 个候选，无第 ${ordinal[0]} 个；请使用碰撞列表给出的序号。`
+    }
+    return `没有 id 以「${cut(prefix, ECHO_MAX)}」开头的节点；请使用检索结果中给出的前缀（或「前缀#序号」直达句柄）。`
+  }
+  return segmentsOf(matches[0]!.id, offset)
+}
+
+/** 单个完整 id 的分段读取（offset=段号，1 起）。 */
+function segmentsOf(id: string, offset: number): string {
   const parts = Math.ceil(id.length / ID_SEGMENT)
   const part = Math.min(Math.max(offset, 1), parts)
   const segment = id.slice((part - 1) * ID_SEGMENT, part * ID_SEGMENT)
