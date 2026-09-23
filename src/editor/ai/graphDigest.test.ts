@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Edge } from '@xyflow/react'
-import { buildGraphDigest } from './graphDigest'
+import { GRAPH_DIGEST_MAX_CHARS, buildGraphDigest } from './graphDigest'
 import type { CanvasNode, DialogueLine } from '../nodes/types'
 
 /** 构造最小节点（只带被测字段）。 */
@@ -294,5 +294,106 @@ describe('buildGraphDigest 连线端点查找（issue #276：索引一次，随�
       emptyResolvers,
     )
     expect(digest).toContain('sequence: ghost → nobody（? → ?）')
+  })
+})
+
+describe('摘要总量预算与节选降级（issue #275：每轮画布摘要不再无界）', () => {
+  const resolvers = (
+    characters = 0,
+    locations = 0,
+  ): Parameters<typeof buildGraphDigest>[2] => ({
+    characters: Array.from({ length: characters }, (_, i) => ({
+      id: `c${i + 1}`,
+      name: `角色${i + 1}`,
+    })),
+    locations: Array.from({ length: locations }, (_, i) => ({
+      id: `l${i + 1}`,
+      name: `地点${i + 1}`,
+    })),
+    characterName: (id) => `角色${id.slice(1)}`,
+    locationName: (id) => `地点${id.slice(1)}`,
+  })
+
+  /** issue #275 病态夹具：N 个 40 字梗概场景 + N-1 条剧情流边。 */
+  function bigCanvas(n: number): { nodes: CanvasNode[]; edges: Edge[] } {
+    const nodes: CanvasNode[] = Array.from({ length: n }, (_, i) =>
+      node({
+        id: `s${i + 1}`,
+        type: 'scene',
+        position: { x: 0, y: 0 },
+        data: {
+          name: `场${i + 1}`,
+          sceneNo: i + 1,
+          interior: true,
+          time: '夜',
+          synopsis: '雨'.repeat(40),
+          characterIds: [],
+        },
+      }),
+    )
+    const edges: Edge[] = nodes.slice(1).map((target, i) => ({
+      id: `e${i + 1}`,
+      source: `s${i + 1}`,
+      target: target.id,
+      className: 'pw-edge-sequence',
+    }))
+    return { nodes, edges }
+  }
+
+  it('病态大画布（1200 节点/1199 边）被总量预算钉住，不再无界灌入上下文', () => {
+    const { nodes, edges } = bigCanvas(1200)
+    const digest = buildGraphDigest(nodes, edges, resolvers())
+    expect(digest.length).toBeLessThanOrEqual(GRAPH_DIGEST_MAX_CHARS)
+  })
+
+  it('数量超限的节选可识别：计数标记声明未列出量，已列条目保留稳定 id', () => {
+    const { nodes, edges } = bigCanvas(1200)
+    const digest = buildGraphDigest(nodes, edges, resolvers())
+    // 首个节点完整在列（稳定 id 保留，get_node 可按 id 补读）
+    expect(digest).toContain('- s1 场01·场1')
+    // 未列出量有明确计数，不无提示删除
+    expect(digest).toMatch(/另有 \d+ 个节点未列出/)
+    expect(digest).toMatch(/另有 \d+ 条连线未列出/)
+    expect(digest).toContain('get_node')
+    // 被节选条目有可发现的补读路径（issue #275 评审）：标记指向 find_nodes
+    expect(digest).toContain('find_nodes')
+  })
+
+  it('设定集清单同样按上限节选并带计数标记', () => {
+    const digest = buildGraphDigest([], [], resolvers(300, 300))
+    expect(digest).toContain('- 角色 c1 角色1')
+    expect(digest).toMatch(/另有 \d+ 个角色未列出/)
+    expect(digest).toMatch(/另有 \d+ 个地点未列出/)
+    expect(digest).toContain('get_settings_snapshot')
+  })
+
+  it('预算内的画布不产生节选标记（既有行为不变）', () => {
+    const { nodes, edges } = bigCanvas(8)
+    const digest = buildGraphDigest(nodes, edges, resolvers(3, 3))
+    expect(digest).not.toContain('未列出')
+    expect(digest).not.toContain('已截断')
+    expect(digest).toContain('- s8 场08·场8')
+  })
+
+  it('条数在上限内但拼接超总量时按字符硬上限截断并带截断标记', () => {
+    const long: CanvasNode[] = Array.from({ length: 96 }, (_, i) =>
+      node({
+        id: `s${i + 1}`,
+        type: 'scene',
+        position: { x: 0, y: 0 },
+        data: {
+          name: `巨${'名'.repeat(500)}${i + 1}`,
+          sceneNo: i + 1,
+          interior: true,
+          time: '',
+          synopsis: '',
+          characterIds: [],
+        },
+      }),
+    )
+    const digest = buildGraphDigest(long, [], resolvers())
+    expect(digest.length).toBeLessThanOrEqual(GRAPH_DIGEST_MAX_CHARS)
+    expect(digest).toMatch(/已截断约 \d+ 字符/)
+    expect(digest).toContain('get_node')
   })
 })

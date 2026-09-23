@@ -7,6 +7,7 @@
 import { useCallback, useMemo } from 'react'
 import type { Edge } from '@xyflow/react'
 import { buildGraphDigest, sceneLabel, shotLabel } from './ai/graphDigest'
+import { findNodesText } from './ai/nodeSearch'
 import { extractBatchJson } from './ai/batchText'
 import { settingsSnapshotText } from './ai/entityFields'
 import {
@@ -88,6 +89,9 @@ export interface AiBridge {
   readSettings: () => string
   /** 读工具 get_document（issue 56）：按 id 返回文档全文 JSON；不存在返回 null。 */
   readDocument: (documentId: string) => string | null
+  /** 读工具 find_nodes（issue #275 评审）：按名称/文案检索全部节点（含摘要
+   * 未列出条目）及其关联连线，节选后的可发现补读路径。 */
+  findNodes: (query: string, offset?: number, cursor?: string) => string
   /** ✦AI 改动落地：整批作为一条复合命令入栈；返回错误文案或 null。
    * 入参为整批校验通过的执行命令（预览卡的合法子集，issue 16）。 */
   applyAiBatch: (batch: ValidatedCommand[]) => string | null
@@ -255,6 +259,12 @@ function useAiReadTools(deps: AiReadToolsDeps) {
     [settingsRef],
   )
 
+  const findNodes = useCallback(
+    (query: string, offset?: number, cursor?: string): string =>
+      findNodesText(nodesRef.current, edgesRef.current, query, offset, cursor),
+    [nodesRef, edgesRef],
+  )
+
   /** 读工具 get_document（issue 56）：按需返回文档全文（正文不进快照，
    * 只经此工具拉取）；不存在返回 null，由调用方给 not found 文案。 */
   const readDocument = useCallback(
@@ -280,6 +290,7 @@ function useAiReadTools(deps: AiReadToolsDeps) {
     readNode,
     readSettings,
     readDocument,
+    findNodes,
   }
 }
 
@@ -307,6 +318,7 @@ export function useAiBridge(deps: AiBridgeDeps): AiBridge {
     readNode,
     readSettings,
     readDocument,
+    findNodes,
   } = useAiReadTools(deps)
 
   /** ✦AI 改动落地：整批作为一条复合命令入栈；返回错误文案或 null。
@@ -347,6 +359,7 @@ export function useAiBridge(deps: AiBridgeDeps): AiBridge {
     readNode,
     readSettings,
     readDocument,
+    findNodes,
     applyAiBatch,
   }
 }

@@ -57,6 +57,33 @@ export const AI_TOOLS: ToolSpec[] = [
   {
     type: 'function',
     function: {
+      name: 'find_nodes',
+      description:
+        '按 id/名称/提示词/选项/台词检索全部节点（含画布摘要因体积预算未列出的条目），' +
+        '命中条目附其关联连线；摘要被节选后按用户提到的名称定位目标或查连线用此工具。' +
+        '结果分页：多命中按节点翻页、单节点命中按该节点连线翻页，截断标记给出下一页 offset；单节点续页还必须原样带回 cursor，连线集合变化时要求从 offset=0 重新枚举；' +
+        '查询串恰为某节点 id 时直接进入该节点的连线分页视图（不受 id 子串碰撞影响）；' +
+        '查询串形如 "id:<前缀>#<序号>~<ID指纹>" 时按原始 ID 定位候选并分段返回完整 id' +
+        '（offset=段号，按序拼接；画布增删后仍定位原节点或明确失效）；旧的无指纹序号句柄不再接受。' +
+        '无 # 后缀时按唯一前缀匹配；超长 id 的连线续页使用 "node:<前缀>#<序号>~<ID指纹>" 句柄',
+      parameters: obj(
+        {
+          query: str('检索关键词（节点名称/文案/id 片段）'),
+          offset: {
+            type: 'integer',
+            minimum: 0,
+            description:
+              '分页偏移（多命中=节点序，单命中=该节点连线序；默认 0）',
+          },
+          cursor: str('单节点连线续页游标；只在截断提示给出时原样带回'),
+        },
+        ['query'],
+      ),
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'get_settings_snapshot',
       description:
         '读取设定集清单：全部角色/地点的 id、名称与小传/备注，文档只列 id 与标题' +
@@ -179,6 +206,7 @@ export const AI_TOOLS: ToolSpec[] = [
 export const READ_TOOL_NAMES = new Set([
   'get_graph_snapshot',
   'get_node',
+  'find_nodes',
   'get_settings_snapshot',
   'get_document',
 ])

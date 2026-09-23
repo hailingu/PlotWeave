@@ -227,11 +227,19 @@ describe('issue 44 通道映射：upsert_* 写工具与 get_settings_snapshot �
 })
 
 describe('工具表定义', () => {
+  it('find_nodes 暴露单节点连线续页的 cursor 参数（PR #294 评审）', () => {
+    const tool = AI_TOOLS.find((t) => t.function.name === 'find_nodes')
+    const properties = tool?.function.parameters.properties as
+      Record<string, unknown> | undefined
+    expect(properties?.cursor).toMatchObject({ type: 'string' })
+  })
+
   it('包含数据模型 §12.2 的读三写八工具（issue 44 增设定集通道），参数均为对象 schema', () => {
     const names = AI_TOOLS.map((t) => t.function.name)
     for (const expected of [
       'get_graph_snapshot',
       'get_node',
+      'find_nodes',
       'get_settings_snapshot',
       'create_node',
       'delete_node',
@@ -252,6 +260,8 @@ describe('工具表定义', () => {
     expect(WRITE_TOOL_NAMES.has('upsert_character')).toBe(true)
     expect(WRITE_TOOL_NAMES.has('get_node')).toBe(false)
     expect(WRITE_TOOL_NAMES.has('get_settings_snapshot')).toBe(false)
+    expect(READ_TOOL_NAMES.has('find_nodes')).toBe(true)
+    expect(WRITE_TOOL_NAMES.has('find_nodes')).toBe(false)
   })
 
   it('issue 56 增补文档通道：get_document 读 + upsert_document 写，读写真名分域', () => {

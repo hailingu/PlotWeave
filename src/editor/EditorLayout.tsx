@@ -159,6 +159,7 @@ export function EditorLayout(props: EditorLayoutProps) {
           onValidateAi={ai.validateAiReply}
           onValidateCommands={ai.validateCommands}
           onReadNode={ai.readNode}
+          onFindNodes={ai.findNodes}
           onReadSettings={ai.readSettings}
           onReadDocument={ai.readDocument}
           onApplyAiBatch={ai.applyAiBatch}

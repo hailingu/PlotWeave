@@ -6,6 +6,7 @@ import {
 } from './actionIntent'
 import { rewriteActionQuery } from './queryRewrite'
 import { extractBatchJson } from './batchText'
+import { GRAPH_DIGEST_MAX_CHARS } from './graphDigest'
 import {
   batchIssueText,
   type AiCommand,
@@ -40,6 +41,8 @@ const READ_ROUNDS = 3
 const WRITE_ATTEMPTS = 4
 const READ_LIMIT_MESSAGE =
   '读取轮数已达上限，请使用已有信息；信息不足时请向用户澄清。'
+const FIND_NODES_BUDGET_MESSAGE =
+  '本轮 find_nodes 读取预算不足，未返回本次结果；请缩小查询，或在下一次用户请求中继续读取。'
 const MISSING_BATCH_FEEDBACK =
   '本轮没有可确认的合法改动批次，操作说明不能代替预览。' +
   '若用户要求修改且信息足够，请参照系统提示中的完整批次示例和工具参数 schema，' +
@@ -92,6 +95,19 @@ export class TurnCancelledError extends Error {
 /** 取消检查点：置位即抛出，停止后续循环（含读回喂与纠错重试）。 */
 function throwIfCancelled(signal: TurnCancelSignal | undefined): void {
   if (signal?.isCancelled()) throw new TurnCancelledError()
+}
+
+/** 一次 Agent 回合内共享 find_nodes 回喂预算，拒绝超额结果而不伪装成完整页。 */
+function withFindNodesBudget(readTool: ReadToolExecutor): ReadToolExecutor {
+  let remaining = GRAPH_DIGEST_MAX_CHARS
+  return (name, args) => {
+    if (name !== 'find_nodes') return readTool(name, args)
+    if (remaining === 0) return FIND_NODES_BUDGET_MESSAGE
+    const result = readTool(name, args)
+    if (result.length > remaining) return FIND_NODES_BUDGET_MESSAGE
+    remaining -= result.length
+    return result
+  }
 }
 
 /** 校验失败清单的人读文本（回喂与上屏共用同一编号口径，issue #150 起
@@ -250,6 +266,7 @@ export async function runAgentLoop(
 ): Promise<AgentLoopResult> {
   let readRounds = 0
   let writeAttempts = 0
+  const budgetedRead = withFindNodesBudget(readTool)
   const initialText =
     [...messages].reverse().find((m) => m.role === 'user')?.content ?? ''
   // 取消点：改写归一化也消耗一次请求——用户在改写期间取消应同样生效
@@ -287,7 +304,7 @@ export async function runAgentLoop(
       !attempted && errors.length === 0 && readRequests.length > 0
     if (readsOnly && readRounds < READ_ROUNDS) {
       readRounds += 1
-      pushFeedback(messages, calls, prose, '', readTool, readRequests)
+      pushFeedback(messages, calls, prose, '', budgetedRead, readRequests)
       continue
     }
     result = resultForReply(
@@ -301,7 +318,7 @@ export async function runAgentLoop(
     const feedback = correctionText(result)
     if (feedback === null || writeAttempts >= WRITE_ATTEMPTS) break
     const boundedRead =
-      readRounds < READ_ROUNDS ? readTool : () => READ_LIMIT_MESSAGE
+      readRounds < READ_ROUNDS ? budgetedRead : () => READ_LIMIT_MESSAGE
     if (readRequests.length > 0 && readRounds < READ_ROUNDS) readRounds += 1
     pushFeedback(messages, calls, prose, feedback, boundedRead, readRequests)
   }
