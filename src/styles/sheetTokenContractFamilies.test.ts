@@ -117,6 +117,37 @@ describe('F2 层叠取胜：重要性规则覆盖全部拥有者', () => {
   )
 })
 
+describe('F2-d 根令牌的嵌套规则在取值前拒绝', () => {
+  it.each([
+    ':root { --fg: #fff; & { --fg: 4px; } }',
+    ':root { & { --fg: 4px; } }',
+    '.other, :root { &:hover, & { --fg: 4px !important; } }',
+    ':root { & { & { --fg: 4px; } } }',
+    ':root { @media (prefers-color-scheme: dark) { & { --fg: 4px; } } }',
+    '@media (prefers-color-scheme: dark) { :root { & { --fg: 4px; } } }',
+    ':root { & { @media (prefers-color-scheme: dark) { --fg: 4px; } } }',
+    '.other { :root { --fg: 4px; } }',
+  ])('嵌套根定义拒绝：%s', (css) => {
+    const root = postcss.parse(css, { from: TOKEN_SHEET })
+    // 错误码契约：docs/css-token-contract.md F2-d，不随媒体活跃性/消费者变化。
+    for (const env of [LIGHT_ENV, { ...LIGHT_ENV, scheme: 'dark' as const }])
+      expect(() => tokenValuesOf(root, env)).toThrow(
+        /TOKEN_ROOT_NESTING_UNMODELED/,
+      )
+  })
+
+  it('平铺根/外层媒体按环境取值，无根令牌的嵌套不改变范围', () => {
+    const root = postcss.parse(
+      ':root { --fg: #fff; & { color: red; } } @media (prefers-color-scheme: dark) { .other, :root { --fg: #000; } } .other { & { --local: 4px; } }',
+      { from: TOKEN_SHEET },
+    )
+    expect(tokenValuesOf(root, LIGHT_ENV).get('--fg')).toBe('#fff')
+    expect(
+      tokenValuesOf(root, { ...LIGHT_ENV, scheme: 'dark' }).get('--fg'),
+    ).toBe('#000')
+  })
+})
+
 describe('F3 完整顶层值：未知词形不能被其他成分掩盖', () => {
   it.each([
     'not-a-color',

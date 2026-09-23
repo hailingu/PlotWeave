@@ -12,7 +12,12 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import postcss from 'postcss'
 import { describe, expect, it } from 'vitest'
-import { colorTokenOf, hasColorLiteral, isNamedColor } from './cssColorContract'
+import {
+  colorTokenOf,
+  hasColorLiteral,
+  imageKind,
+  isNamedColor,
+} from './cssColorContract'
 import {
   allVarRefs,
   declOf,
@@ -762,16 +767,38 @@ function ruleOf(sheet: string, selector: string): postcss.Rule {
   return ruleIn(sheets.get(sheet)!, sheet, selector)
 }
 
-/** 简写在全部配对环境都消解为单一颜色时，只贡献颜色层，图像成分为初始值 none。 */
+/** 一个顶层成分在全部配对环境都消解为单一静态颜色时，归为颜色成分。 */
 function isColorOnlyShorthand(value: string): boolean {
   return PAIR_ENVS.every(
     ([, env]) => parsePaint(resolveChain(value, tokenValues(env))) !== null,
   )
 }
 
+/** 黄金接线只投影单层颜色/图像；未知成分、多层和重复成分显式失败，不部分提取。 */
+function shorthandPaint(value: string): { color: string; image: string } {
+  const parts = postcss.list.space(value)
+  const colors = parts.filter(isColorOnlyShorthand)
+  const images = parts.filter(
+    (part) => /^none$/i.test(part) || imageKind(part) !== null,
+  )
+  if (
+    parts.length === 0 ||
+    colors.length > 1 ||
+    images.length > 1 ||
+    parts.length !== colors.length + images.length
+  ) {
+    throw new Error(`TOKEN_BACKGROUND_SHORTHAND_UNMODELED: ${value}`)
+  }
+  return { color: colors[0] ?? 'transparent', image: images[0] ?? 'none' }
+}
+
 /** 规则内底色绘制的有效颜色与图像成分：background 简写展开到两条长形，各成分独立层叠。 */
 function backgroundPaint(rule: postcss.Rule): { color: string; image: string } {
-  const color = winningDecl(rule, ['background', 'background-color']).value
+  const colorDecl = winningDecl(rule, ['background', 'background-color'])
+  const color =
+    normalizeProp(colorDecl.prop) === 'background'
+      ? shorthandPaint(colorDecl.value).color
+      : colorDecl.value
   const hasImage = rule.nodes.some(
     (node) =>
       node.type === 'decl' &&
@@ -779,11 +806,12 @@ function backgroundPaint(rule: postcss.Rule): { color: string; image: string } {
   )
   if (!hasImage) return { color, image: 'none' }
   const image = winningDecl(rule, ['background', 'background-image'])
-  const fromShorthand = normalizeProp(image.prop) === 'background'
   return {
     color,
     image:
-      fromShorthand && isColorOnlyShorthand(image.value) ? 'none' : image.value,
+      normalizeProp(image.prop) === 'background'
+        ? shorthandPaint(image.value).image
+        : image.value,
   }
 }
 
@@ -848,7 +876,7 @@ describe('危险动作前景接线（#240 决策补齐，issue #278）', () => {
         '.d { background: url(a.png) var(--danger); background-color: var(--danger) }',
       ),
       '含图像的简写不被当作纯色层',
-    ).toEqual({ color: 'var(--danger)', image: 'url(a.png) var(--danger)' })
+    ).toEqual({ color: 'var(--danger)', image: 'url(a.png)' })
   })
 
   it('--on-danger 全部配对环境（含 more × reduce 组合）消解恒 #ffffff（视觉零变化；深色底 ≈2.8:1 为 #240 已记录边界，不重开）', () => {
@@ -858,6 +886,59 @@ describe('危险动作前景接线（#240 决策补齐，issue #278）', () => {
       )
     }
   })
+})
+
+describe('F2-c 含图像简写的成分提取与相邻长形覆盖', () => {
+  it.each([
+    'background: url(a.png) var(--danger); background-image: none',
+    'background: var(--danger) url(a.png); BACKGROUND-IMAGE: none',
+    'background-image: none !important; background: url(a.png) var(--danger)',
+    'background: linear-gradient(#000, #000) var(--danger); background-image: none',
+    'background: url("a b.png") var(--danger); background-image: none',
+  ])('图像被长形重置后保留危险颜色：%s', (decls) => {
+    const rule = postcss.parse(`.d { ${decls} }`).first as postcss.Rule
+    expect(backgroundPaint(rule)).toEqual(DANGER_PAINT)
+  })
+
+  it.each([
+    ['background: var(--danger)', DANGER_PAINT],
+    ['background: none', { color: 'transparent', image: 'none' }],
+    [
+      'background-color: var(--danger); background: url(a.png)',
+      { color: 'transparent', image: 'url(a.png)' },
+    ],
+    [
+      'background: url(a.png) var(--danger); background-color: var(--surface-card)',
+      { color: 'var(--surface-card)', image: 'url(a.png)' },
+    ],
+    [
+      'background: url(a.png) var(--danger) !important; background-image: none',
+      { color: 'var(--danger)', image: 'url(a.png)' },
+    ],
+    [
+      'background-image: none; background: url(a.png) var(--danger)',
+      { color: 'var(--danger)', image: 'url(a.png)' },
+    ],
+    [
+      'background: url(a.png) var(--danger); background: var(--danger)',
+      DANGER_PAINT,
+    ],
+  ])('未重置或其他成分取胜时按各自长形结果判断：%s', (decls, expected) => {
+    const rule = postcss.parse(`.d { ${decls} }`).first as postcss.Rule
+    expect(backgroundPaint(rule)).toEqual(expected)
+  })
+
+  it.each(['url(a.png) var(--danger) unknown', 'url(a.png), var(--danger)'])(
+    '域外黄金简写不能被部分提取成合法配对：%s',
+    (value) => {
+      const rule = postcss.parse(
+        `.d { background: ${value}; background-image: none; }`,
+      ).first as postcss.Rule
+      expect(() => backgroundPaint(rule)).toThrow(
+        /TOKEN_BACKGROUND_SHORTHAND_UNMODELED/,
+      )
+    },
+  )
 })
 
 describe('遮罩语义契约（issue #278：遮罩只消费 alpha）', () => {

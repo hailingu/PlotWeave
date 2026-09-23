@@ -123,12 +123,33 @@ function isUnmodeledRootBranch(branch: string): boolean {
   )
 }
 
-/** 根令牌未建模的 at-rule 上下文/声明布局必须显式失败，不能静默忽略胜出声明。 */
+/** 根相关自定义属性不支持原生规则嵌套；沿整条祖先链判定，不能只看最近的 &。 */
+function assertRootNesting(decl: postcss.Declaration): void {
+  const rules: postcss.Rule[] = []
+  let context: postcss.AnyNode | undefined = decl.parent
+  while (context) {
+    if (context.type === 'rule') rules.push(context)
+    context = context.parent
+  }
+  if (
+    rules.length > 1 &&
+    rules.some(
+      (rule) =>
+        hasRootBranch(rule.selector) ||
+        postcss.list.comma(rule.selector).some(isUnmodeledRootBranch),
+    )
+  ) {
+    throw new Error(`TOKEN_ROOT_NESTING_UNMODELED: ${decl.prop}`)
+  }
+}
+
+/** 根令牌未建模的规则嵌套、at-rule 上下文/声明布局必须显式失败。 */
 function assertRootContexts(root: postcss.Root): void {
   root.walkAtRules(/^property$/i, (rule) => {
     throw new Error(`TOKEN_ROOT_AT_RULE_UNMODELED: @property ${rule.params}`)
   })
   root.walkDecls(/^--/, (decl) => {
+    assertRootNesting(decl)
     let rule: postcss.AnyNode | undefined = decl.parent
     while (rule?.type === 'atrule') rule = rule.parent
     if (rule?.type !== 'rule') return
@@ -158,7 +179,8 @@ function assertRootContexts(root: postcss.Root): void {
  * 先按重要性（!important 优先于普通声明）再按源序取胜——重要声明不因其后
  * 出现普通声明而被覆盖，同重要性仍后写覆盖先写。未建模的根 at-rule 上下文
  * 以 TOKEN_ROOT_AT_RULE_UNMODELED 显式拒绝，包括非活跃 media 内的未知块。
- * 支持 media 包住根规则；反向内嵌 at-rule 的声明布局尚未建模，同样拒绝。
+ * 支持 media 包住根规则；反向内嵌 at-rule 同样拒绝；根相关样式规则嵌套
+ * 报 TOKEN_ROOT_NESTING_UNMODELED，包括媒体中间层及未活跃分支。
  * 选择器列表中的 `:root` 分支按根规则取值；其他可能命中文档根的选择器上的
  * 自定义属性以 TOKEN_ROOT_SELECTOR_UNMODELED 拒绝。
  */

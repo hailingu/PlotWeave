@@ -2,7 +2,7 @@
 
 本页是 [PR #288](https://github.com/hailingu/PlotWeave/pull/288) 的支持范围与问题族矩阵入口，承接 [issue #278](https://github.com/hailingu/PlotWeave/issues/278)；分轮审查记录保留为历史证据，不再各自定义当前范围。产品配色决策仍以 [UI 设计 §2.1](ui-design.md#21-三层结构) 和 §2.3、§2.6 为准。
 
-本轮实现：修复审查 [5286363682](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5286363682) 的三个 P2 漏检；下表反例已先失败，再修复通过。review 轮次与预算规则不变。
+上一修订 `f90cbf5` 修复审查 [5286363682](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5286363682) 的三个 P2 漏检。本次处理其首轮后续审查 [5286571379](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5286571379)：根令牌嵌套样式规则漏检、含图像背景简写经长形重置后的误报，均为 F2 已承诺范围的新触发条件。review 轮次与预算规则不变。
 
 ## 支持、拒绝和保留边界
 
@@ -11,7 +11,7 @@
 | 问题族 | 支持的静态性质 | 明确拒绝 | 保留边界与理由 |
 | --- | --- | --- | --- |
 | F1 全局所有权 | 带 PostCSS `from` 的真实组件表逐表扫描；`tokens.css` 是全局定义源。检查选择器列表、媒体内无消费者的定义；简单组合器链终点为 `html`/`body`/`:root`，或全局链终点为通配的定义均受约束 | 组件全局定义 `TOKEN_GLOBAL_OUTSIDE_SOURCE`；`@property` 注册；根源中非 `:root` 的已识别文档选择器 `TOKEN_ROOT_SELECTOR_UNMODELED` | 完整选择器匹配、函数伪类/转义/命名空间以及跨文件局部级联未建模；全局限制是本表静态防线，不宣称覆盖所有可匹配 DOM 的表达式。无来源夹具只模拟独立级联 |
-| F2 层叠取胜 | 外观 light/dark × 对比度 no-preference/more × 透明度 no-preference/reduce × 动效 no-preference/reduce；简单同元素/后代/子代、逗号分支；先最近定义元素，再重要性，再源序。根、局部、跨媒体组、黄金接线均按此适用规则 | 未建模媒体特性/值；根或局部定义的未知 at-rule；规则内部嵌套；未建模 CSS-wide 自定义属性取值；黄金规则重复或条件化 | 完整特异性、DOM 祖先匹配、跨文件局部定义、继承前别名计算、级联层/作用域及运行时动画不由此模型证明；不以字符串前缀关系代替完整选择器算法 |
+| F2 层叠取胜 | 外观 light/dark × 对比度 no-preference/more × 透明度 no-preference/reduce × 动效 no-preference/reduce；简单同元素/后代/子代、逗号分支；先最近定义元素，再重要性，再源序。根、局部、跨媒体组、黄金接线均按此适用规则 | 未建模媒体特性/值；根或局部定义的未知 at-rule；根相关样式规则嵌套 `TOKEN_ROOT_NESTING_UNMODELED`、组件内部嵌套；未建模 CSS-wide 自定义属性取值；黄金规则重复或条件化；黄金背景域外简写 `TOKEN_BACKGROUND_SHORTHAND_UNMODELED` | 完整特异性、DOM 祖先匹配、跨文件局部定义、继承前别名计算、级联层/作用域及运行时动画不由此模型证明；黄金背景仅支持单层至多一个颜色成分和一个图像成分（none/URL/渐变），未指定成分取 transparent/none；不以字符串前缀关系代替完整选择器算法 |
 | F3 完整值校验 | 纯颜色属性完整顶层值及边框颜色列表；`-webkit-text-stroke` 的宽度/颜色；其余简写逐个消费完整顶层成分，颜色、图像、长度（0、px/em/rem/pt/ch/ex/vw/vh）和关键字不能掩盖未知词形。图像限背景/边框图像，SVG paint 只额外接受 URL | 空值、未知或残余词形（含连字符、下划线、引号、标点）、不相容纯颜色、非图像属性上的图像；无颜色/图像的尺寸或裸数值叶子 | 函数内部参数、完整简写的顺序/个数/互斥关系未建模。已识别顶层成分不等于整条浏览器文法合法；只支持当前静态成分集合，合法但域外语法也可能被拒绝 |
 | F4 遮罩 alpha | `mask-image`/`-webkit-mask-image` 的单个 linear-gradient；静态 hex、rgb/rgba 与具名色、transparent；首末 alpha=0、内部 alpha=1 | 动态 `currentColor`、未知标识符/色标形式 `MASK_STOP_UNMODELED`；遮罩简写、边框遮罩和其他图像形式 `MASK_IMAGE_UNMODELED`；透明度不满足渐隐不变量 | 不解析元素计算色、继承/媒体动态色标、完整渐变位置/插值/多图层及像素。直接拒绝动态色标，不假定它不透明 |
 | F5 引用与词法 | PostCSS `decl.value`；字符串/URL 不透明；选中主值或 fallback 的递归求值、环检测、逐环境/分支悬空检查；输出保留字面内容 | 无可用主值且无有效 fallback 的引用；值链过深；展示消费处不相容的选中值 | 不是完整 CSS tokenizer；转义标识符、任意函数语法和完整继承计算保留边界。环图保留备用路径依赖，不能与只检查选中消费路径混淆 |
@@ -31,7 +31,8 @@
 | F1-b | 根源、组件局部定义、全局普通属性 | 相同入口扫描；根源中的非根选择器走根取值入口 | 保留合法局部/普通属性；根源文档组合器定义明确拒绝 | 定义源例外不能掩盖根解析遗漏；`tokenValuesOf`/`assertRootContexts` | F1 对照与根入口测试；完整复杂选择器为上表边界 |
 | F2-a | 根、局部或黄金声明先重要后普通；局部定义跨活跃媒体组 | 按环境筛选，再按同元素重要性与源序选胜 | 重要值在每个入口胜出；交换顺序不使普通值获胜 | 重要性规则在全部拥有者一致；`applyRootDecl`、`pickWinner`、`winningDecl` | F2 跨入口对照；`sheetTokensSemantics.test.ts` 根/局部/跨组/黄金用例 |
 | F2-b | 自身/近祖先/远祖先定义同名，最近定义失效 | 先最近元素，后同元素级联，再 fallback | 自身优先于祖先重要性；有效回退恢复、无效回退报错 | 失败不能借被遮蔽值恢复；`nearestDefinitions` → `valueScopeIn` → `displayValueIn`/`unresolvedRefsIn` | 既有继承、逐选择器、fallback 用例；完整 DOM 继承未验证 |
-| F2-c | 危险背景简写与颜色/图像长形前后交错，含重要性/大小写 | 简写映射到两个成分，分别选胜 | 后位 image:none 保留颜色；叠图或改色破坏配对 | 长形只覆盖自身成分；`backgroundPaint`/`winningDecl` | `sheetTokens.test.ts` 危险底色 9 个既有场景；其他背景长形不承诺 |
+| F2-c | 危险背景为纯色、仅图像、图像+颜色或 none；颜色/图像长形前后交错，含重要性/大小写 | 先按各成分选胜出声明，再展开所选简写；未指定成分重置为 transparent/none | image:none 仅清除图像并保留简写颜色；color 长形仅换色并保留图像；重要简写不被普通长形覆盖 | 长形只覆盖自身成分；`backgroundPaint`/`winningDecl` | `sheetTokens.test.ts` F2-c 既有用例及图像+颜色最小例、合法对照、顺序/重要性组合；黄金接线只投影单层颜色/图像成分，完整背景文法和其他长形不承诺，域外简写显式拒绝 |
+| F2-d | 根令牌内含嵌套样式规则，含 &、列表、多层或媒体中间层；可无直接令牌/消费者 | 在媒体筛选及值提取前检查自定义属性的整条规则祖先链 | 根相关嵌套声明报 TOKEN_ROOT_NESTING_UNMODELED，失活媒体也不能掩盖；平铺根和外层媒体根保留 | 不得以未解析嵌套覆盖的旧根值验证消费者；`assertRootContexts` → `tokenValuesOf`/真实 `tokenValues` | `sheetTokenContractFamilies.test.ts` F2-d 最小例、组合和正常对照；组件入口沿用既有 TOKEN_SHEET_NESTING_UNMODELED；不含根令牌的无关规则保持原范围 |
 | F3-a | 未知连字符值、引号或残余词形，单独或与合法颜色/图像组合 | 原值/别名/选中 fallback 到达属性校验 | 拒绝整个值；不能空集合通过，也不能见一个颜色即通过 | 所有顶层成分必须完整识别；`colorTypeOk` → `displayTypeErrors` | F3 最小反例、合法对照、颜色/图像混合反例 |
 | F3-b | 根别名/局部值/重要媒体值切换；消费点为选择器列表 | 先求胜出值，再检查实际选中路径 | 仅错误环境/分支报告；有效主值的未选 fallback 不误报 | 类型与接线共用求值，边界不能因入口不同失效 | F3 组合场景与既有纯色/图像/fallback 套件 |
 | F4-a | 透明前景，内部遮罩色标为 currentColor | `sheetDecls` → 遮罩分类 → alpha 校验 | 显式拒绝动态色标，不返回 [0,1,0] | alpha 只能由已建模静态值确定；`expectMaskFade`/`maskStopAlphas`/`stopAlpha` | F4 最小反例，含厂商前缀、媒体、大小写及未知词形 |
@@ -48,11 +49,12 @@
 
 - F1：[自定义属性继承](https://www.w3.org/TR/css-variables-1/#defining-variables) 与 [样式表导入](https://www.w3.org/TR/css-cascade-5/#at-import) 说明，另表定义在 body 的变量仍影响后代；所有权拒绝是项目为避免跨表模拟采用的约束。
 - F2：[级联顺序](https://www.w3.org/TR/css-cascade-5/#cascade-sort)、[继承](https://www.w3.org/TR/css-cascade-5/#inheriting) 与 [简写](https://www.w3.org/TR/css-cascade-5/#shorthand) 分别支撑重要性、指定/继承优先与长形独立覆盖。
+- F2-d：[CSS Nesting 的 & 选择器](https://www.w3.org/TR/css-nesting-1/#nest-selector)（工作草案）解释嵌套声明为何仍能命中父规则元素；本契约采用拒绝方案。F2-c：[background 简写](https://www.w3.org/TR/css-backgrounds-3/#background) 将颜色/图像分别设置为指定值或初始值，后续长形只覆盖对应属性；手工预期不使用被测投影函数生成。
 - F3：[变量替换后的文法检查](https://www.w3.org/TR/css-variables-1/#invalid-variables) 说明，变量存在不代表消费属性合法；[值语法](https://www.w3.org/TR/css-values-4/#value-defs) 支撑完整成分识别。简写完整文法与函数内部参数仍按上表披露。
 - F4：[currentColor](https://www.w3.org/TR/css-color-4/#currentcolor-color) 取同一元素的 color；transparent 的 alpha 为 0。动态色标必须求值或拒绝，本 PR 采用拒绝。
 - F5 的环、主值/fallback、词法不透明依据 [CSS Variables](https://www.w3.org/TR/css-variables-1/#cycles) 与 PostCSS 实际解析入口；F6 的阈值及配色例外依据 UI 设计 §2.3、§2.6，产品阈值不由实现反推。
 
-本轮红绿记录（Node 24.18.0，仓库根目录）：
+`f90cbf5` 红绿记录（Node 24.18.0，仓库根目录；本次验证另记）：
 
 - `npm test -- src/styles`：Red 为 25 失败 / 282 通过。F1 文档覆盖 10 项、F3 词形与组合 11 项、F4 动态/未知色标 4 项均因预期漏检失败；F2 跨入口对照直接通过，未虚构该路径的新缺陷。
 - 第一次 Green 检查保住了合法对照：既有 `filled double-circle` 暴露关键字集合遗漏，补入完整关键词后 `npm test -- src/styles` 为 307/307 通过。原先该词恰好依靠连字符漏扫描通过，本次按完整语法成分识别。
@@ -61,6 +63,33 @@
 - 完整路由：`npm run format:check && npm run lint && npm run typecheck:strict && npm run build && npm test` 通过，152 文件 / 2149 项；构建产物 `dist/` 在完成前删除。首次验证发现 ES 目标不支持 `Array.at`/`replaceAll`，已改用索引/正则替换，未修改目标库或依赖。
 - `git diff --check` 通过。文件/最长函数代码行：值模块 229/26、引擎 745/32、真实契约测试 960/70、语义测试 954/70、边界测试 319/58、新问题族测试 176/57；均满足 800/1800/80 硬上限。F6 原有长测试分组按全表扫描与闭包/反向校验拆开，断言保留。引擎超过 600 行讨论阈值，保留原因是本轮仅更换两个既有入口共享的文档选择器判定，没有扩展完整层叠职责；由仓库维护者在下一次修改该引擎时复核。既有 70 行分组为同一契约的并列案例，未扩张。圈复杂度未配置工具，以函数跨度和控制流人工复核。
 - 文档路径没有配置自动行为检查；已结构化核对统一矩阵、设计 §2.1、代码头注、错误码、历史记录映射和外部规范依据。数据模型、产品配色、review 预算及治理文件不变。Rust 源码未改，Rust 变更路由不适用；提交/推送钩子仍须生成新鲜前端/Rust 覆盖率并通过 Sonar，结果以 PR 当前修订的验证记录为准。
+
+## 审查 5286571379 的验证与处置
+
+两条均为真实 P2 契约缺陷，触发条件不同于前轮，不是重复意见；本轮是 `f90cbf5` 的首次后续审查，没有调整预算或把完整 CSS 文法纳入范围。所有测试追加至上面的 F2-c/F2-d，不另建分轮矩阵。
+
+- **F2-d**：根嵌套最小例、无直接根声明、选择器列表、重要性、多层嵌套、媒体位于规则内/外/中间层共 8 个反例，在 light/dark 两环境均显式拒绝；平铺根/外层媒体、无关局部嵌套与根下普通属性保持原范围。真实 `tokens.css` 注入 `:root { & { --text-primary: 4px } }` 时，全表测试报 `TOKEN_ROOT_NESTING_UNMODELED`，原文件已原样恢复。
+- **F2-c**：5 个图像+颜色经长形清图的合法场景，7 个纯色/none/初始重置/颜色覆盖/重要性/源序对照，2 个域外输入拒绝；既有图像保留断言更新为真正独立的图像成分。图像成分分类复用 `cssColorContract.imageKind`，没有复制图像语法。真实危险规则注入 `url(a.png) var(--danger)` 后追加 `background-image: none` 时全表通过；不追加重置时仍因图像存在失败，原文件已原样恢复。
+- **Red → Green**：`npm test -- src/styles/sheetTokenContractFamilies.test.ts src/styles/sheetTokens.test.ts` 修复前 21 失败 / 73 通过，失败包含 20 个新增反例和 1 个既有图像分量预期；新增测试总计 23 项。修复后 `npm test -- src/styles` 为 330/330 通过。
+- **完整路由**：Node 24.18.0，仓库根目录执行 `npm run format:check && npm run lint && npm run typecheck:strict && npm run build && npm test` 全通过，152 文件 / 2172 项。`git diff --check` 通过；临时探针已恢复，本次 `dist/` 在完成前删除。Git 门禁最终结果记录于 PR 当前修订。
+- **结构复核**：值模块 229 行、根引擎 767 行、真实契约测试 1041 行、问题族测试 207 行；最长函数分别为 26/32/70/57 代码行，符合硬上限。引擎和真实测试超过 600/1000 行讨论阈值，根预检仍归根取值入口，背景投影与真实黄金断言共同演进；本次保留内聚文件以避免把测试私有能力变成跨模块接口，风险为继续增长。补偿为 F2-c/F2-d 与真实入口探针；责任人为仓库维护者，下次实质修改对应文件时复核拆分。既有 70 行分组未扩张；圈复杂度无配置工具，以 AST 函数跨度和控制流人工复核。
+- **缺口**：无新增浏览器/WebView 实测，独立预期使用上列 Nesting 工作草案与 Backgrounds 规范。完整背景文法、函数参数、复杂选择器仍按支持表保留；产品配色、数据模型及治理预算不变。文档没有自动行为检查，已结构化复核范围、矩阵、设计和错误码。
+
+以下两条为待发布回复草稿；未获线程发帖指令，尚未回复或标记 resolved，提交后由 PR 记录补充提交和 Git 门禁证据。
+
+### [根令牌原生嵌套](https://github.com/hailingu/PlotWeave/pull/288#discussion_r4078777166)
+
+1. **处置** — 本地已修复，真实 P2 缺陷，接受新的根嵌套触发证据。
+2. **理由与变更** — `assertRootNesting` 在环境筛选前沿自定义属性完整规则祖先链识别根相关嵌套，报 `TOKEN_ROOT_NESTING_UNMODELED`；不再把最近的 `&` 当作与根无关的规则而返回旧值。组件原有拒绝边界不变。
+3. **验证** — F2-d 8 个反例先失败后通过，两环境、正常对照及真实 tokens.css 注入均符合预期；样式 330 项、完整前端 2172 项通过。
+4. **后续** — 本条实现完成；保持不支持完整 CSS 嵌套解析的边界，提交与发布状态以最终 PR 记录为准。
+
+### [含图像简写的颜色成分](https://github.com/hailingu/PlotWeave/pull/288#discussion_r4078777172)
+
+1. **处置** — 本地已修复，真实 P2 误报，接受图像随后被长形重置的新触发条件。
+2. **理由与变更** — `backgroundPaint` 分别选胜出声明，`shorthandPaint` 从已建模单层简写提取颜色和图像并补齐初始值；保留重要性、源序和另一成分。域外简写明确报错，不以部分提取放行。
+3. **验证** — F2-c 14 个新场景及既有回归通过；真实危险规则清图时通过、保留图像时失败。规范依据为 CSS Backgrounds 的简写展开规则；完整前端 2172 项通过。
+4. **后续** — 本条实现完成；多层和完整背景文法仍保留边界，提交与发布状态以最终 PR 记录为准。
 
 ## 历史矩阵归并索引
 
@@ -71,27 +100,27 @@
 | F3 / F6 | [5280837519](reviews/pr-288-review-5280837519.md)、[5285927947](reviews/pr-288-review-5285927947.md) |
 | F4 / F5 | [5280334884](reviews/pr-288-review-5280334884.md)、[5286221158](reviews/pr-288-review-5286221158.md) |
 
-## 最新审查的线程回复草稿
+## 审查 5286363682 的线程回复草稿
 
 以下为原线程的待发布处置，发布前需绑定修复提交和最终门禁证据；文档记录不等于已在 GitHub 线程回复。
 
 ### [文档级组合器覆盖](https://github.com/hailingu/PlotWeave/pull/288#discussion_r4078604751)
 
-1. **处置** — 已在本地修复，真实 P2 漏检。
+1. **处置** — 已由 `f90cbf5` 修复并推送，真实 P2 漏检。
 2. **理由与变更** — `isDocumentTokenSelector` 按简单链终点判断文档级覆盖，组件所有权和根选择器预检共用；`html > body`、列表/媒体及全局通配链不能依靠无消费者漏过。完整复杂选择器仍为明确保留边界。
 3. **验证** — F1 的 10 个反例先失败后通过；四个组件扫描入口、根取值入口和合法局部/全局普通属性对照均覆盖；真实 glob 探针拒绝。
 4. **后续** — 本条实现完成；提交、门禁和原线程发布状态以最终 PR 记录为准。
 
 ### [未知连字符值](https://github.com/hailingu/PlotWeave/pull/288#discussion_r4078604755)
 
-1. **处置** — 已在本地修复，真实 P2 漏检。
+1. **处置** — 已由 `f90cbf5` 修复并推送，真实 P2 漏检。
 2. **理由与变更** — `colorTypeOk` 对简写逐个检查完整顶层成分，取消空匹配集合通过和发现任一颜色/图像即通过；合法连字符关键字显式识别。函数内部参数和完整简写顺序/互斥保留边界，不宣称完成浏览器文法验证。
 3. **验证** — F3 的 11 个反例/组合先失败后通过；未知值单独或混入颜色/图像、根/局部/媒体/重要性/选中 fallback 均覆盖；合法对照与真实 glob 探针通过预期判断。
 4. **后续** — 本条实现完成；提交、门禁和原线程发布状态以最终 PR 记录为准。
 
 ### [currentColor 遮罩透明度](https://github.com/hailingu/PlotWeave/pull/288#discussion_r4078604758)
 
-1. **处置** — 已在本地修复，真实 P2 漏检，采用明确拒绝动态色标的方案。
+1. **处置** — 已由 `f90cbf5` 修复并推送，真实 P2 漏检，采用明确拒绝动态色标的方案。
 2. **理由与变更** — `stopAlpha` 只对静态具名色返回 1；`currentColor`、系统色、未知标识符均报 `MASK_STOP_UNMODELED`。静态颜色名单与结构探测共用 `isNamedColor`，不复制颜色表。
 3. **验证** — F4 的 4 个反例先失败后通过；厂商前缀、媒体、大小写及静态正反例保留；真实 glob 拒绝。独立预期来自 CSS Color 4；浏览器探针被安全策略阻止，未声称像素验证。
 4. **后续** — 本条实现完成；动态计算色/完整渐变文法仍为披露边界，提交、门禁和原线程发布状态以最终 PR 记录为准。

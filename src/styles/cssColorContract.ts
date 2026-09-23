@@ -135,8 +135,8 @@ export function colorTypeOk(prop: string, resolved: string): boolean {
     .every((layer) => shorthandLayerOk(prop, layer))
 }
 
-/** 图像函数必须占满一个成分；其内部 URL/色标参数保留既有文法边界。 */
-function imageKind(value: string): 'url' | 'gradient' | null {
+/** 完整图像成分分类，供类型检查与黄金背景投影共用；函数参数保留既有边界。 */
+export function imageKind(value: string): 'url' | 'gradient' | null {
   const match =
     /^(url|(?:repeating-)?(?:linear|radial|conic)-gradient)\(/i.exec(value)
   if (!match || colorTokenOf(value) !== value) return null
