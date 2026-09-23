@@ -405,3 +405,63 @@ describe.each(['background-image', 'border-image-source'])(
     })
   },
 )
+
+describe('F3-d border-image 简写的已识别成分类型', () => {
+  it.each([
+    '#fff',
+    'red',
+    'transparent',
+    'currentColor',
+    'rgb(255 255 255)',
+    'url(a.png) #fff',
+    '#fff url(a.png)',
+  ])('拒绝独立或混入图像的普通颜色：%s', (value) => {
+    expect(colorTypeOk('border-image', value)).toBe(false)
+    const root = postcss.parse(
+      `.a { --paint: ${value}; border-image: var(--paint); }`,
+    )
+    expect(displayTypeErrors(root, LIGHT_ENV)).toEqual([
+      `.a border-image: ${value}`,
+    ])
+  })
+
+  it.each(['solid', 'url(a.png) solid', 'url(a.png) none', 'none url(a.png)'])(
+    '拒绝通用边框关键字或互斥图像源：%s',
+    (value) => {
+      expect(colorTypeOk('border-image', value)).toBe(false)
+      const root = postcss.parse(
+        `.a { --paint: ${value}; border-image: var(--paint); }`,
+      )
+      expect(displayTypeErrors(root, LIGHT_ENV)).toEqual([
+        `.a border-image: ${value}`,
+      ])
+    },
+  )
+
+  it.each([
+    'url(a.png)',
+    'url("data:image/svg+xml,red")',
+    'url(a.png) 0',
+    'linear-gradient(red, blue)',
+    'none',
+    'initial',
+  ])('保留已支持图像源和整值关键字：%s', (value) =>
+    expect(colorTypeOk('border-image', value)).toBe(true),
+  )
+
+  it('背景简写仍接受颜色；border-image 只检查选中值与活跃媒体', () => {
+    expect(colorTypeOk('background', '#fff')).toBe(true)
+    const root = postcss.parse(
+      '.a { --paint: url(a.png); border-image: var(--paint, #fff); }' +
+        '@media (prefers-color-scheme: dark) { .a { --paint: #fff !important; } }' +
+        '.b { border-image: var(--missing, #fff); }',
+    )
+    expect(displayTypeErrors(root, LIGHT_ENV)).toEqual([
+      '.b border-image: #fff',
+    ])
+    expect(displayTypeErrors(root, { ...LIGHT_ENV, scheme: 'dark' })).toEqual([
+      '.a border-image: #fff',
+      '.b border-image: #fff',
+    ])
+  })
+})

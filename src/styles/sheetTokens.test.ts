@@ -175,13 +175,26 @@ function stopAlpha(token: string): number {
 
 /** linear-gradient 遮罩的色标 alpha 序列（方向段跳过）。 */
 function maskStopAlphas(value: string): number[] {
-  const inner = value
-    .trim()
-    .slice(value.indexOf('(') + 1, value.lastIndexOf(')'))
+  const trimmed = value.trim()
+  const inner = trimmed.slice(
+    trimmed.indexOf('(') + 1,
+    trimmed.lastIndexOf(')'),
+  )
   return splitTopLevel(inner)
     .map((part) => part.trim())
     .filter((part) => !/^(-?[\d.]+(deg|turn|rad|grad)|to\s)/i.test(part))
     .map((part) => stopAlpha(colorTokenOf(part)))
+}
+
+/** 判定整个值恰为一个括号平衡的 linear-gradient，不接受尾随内容或第二层。 */
+function isCompleteLinearGradient(value: string): boolean {
+  const trimmed = value.trim()
+  if (!/^linear-gradient\(/i.test(trimmed)) return false
+  try {
+    return colorTokenOf(trimmed) === trimmed
+  } catch {
+    return false
+  }
 }
 
 /** 承载遮罩图像的属性（长形、简写与边框遮罩）；尺寸/模式等长形不承载图像。 */
@@ -198,7 +211,7 @@ function expectMaskFade(
 ): void {
   if (
     !/mask-image$/i.test(decl.prop) ||
-    !/^linear-gradient\(/i.test(decl.value.trim())
+    !isCompleteLinearGradient(decl.value)
   ) {
     throw new Error(`MASK_IMAGE_UNMODELED: ${label}`)
   }
@@ -1102,5 +1115,27 @@ describe('F4 遮罩 alpha：只接受可确定透明度的静态色标', () => {
         value: 'linear-gradient(transparent, #0008, transparent)',
       }),
     ).toThrow(/须全不透明/)
+  })
+
+  it.each([
+    'linear-gradient(transparent, black, transparent) junk',
+    'linear-gradient(transparent, black, transparent), none',
+    'linear-gradient(transparent, black, transparent), linear-gradient(transparent, black, transparent)',
+    'linear-gradient(transparent, black, transparent))',
+    'linear-gradient(transparent, black, transparent',
+  ])('F4-b 拒绝不完整、尾随或多层遮罩：%s', (value) => {
+    expect(() => expectMaskFade('F4-b', { prop: 'mask-image', value })).toThrow(
+      /MASK_IMAGE_UNMODELED/,
+    )
+  })
+
+  it('F4-b 单层完整渐变保留大小写、空白及嵌套颜色函数', () => {
+    expect(() =>
+      expectMaskFade('F4-b', {
+        prop: '-webkit-mask-image',
+        value:
+          '  LINEAR-GRADIENT(transparent, rgb(0 0 0 / 100%), transparent)  ',
+      }),
+    ).not.toThrow()
   })
 })

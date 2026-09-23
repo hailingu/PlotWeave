@@ -169,6 +169,13 @@ function imageValueOk(prop: string, value: string): boolean {
 /** 简写的一层须消费全部顶层成分；图像的属性归属与未知词形在同一入口判定。 */
 function shorthandLayerOk(prop: string, layer: string): boolean {
   const parts = postcss.list.space(layer)
+  if (prop === 'border-image') {
+    // 图像源没有颜色类型；通用简写关键字仅允许独立 none，不能掩盖错误成分。
+    if (parts.some(completeColorAtom)) return false
+    if (parts.some((part) => NON_COLOR_KEYWORDS.has(part.toLowerCase()))) {
+      return parts.length === 1 && /^none$/i.test(parts[0]!)
+    }
+  }
   const acceptsImage = prop === 'background' || prop === 'border-image'
   const isPaint = (part: string): boolean =>
     completeColorAtom(part) || (acceptsImage && imageKind(part) !== null)
