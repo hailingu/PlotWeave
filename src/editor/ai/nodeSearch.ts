@@ -57,6 +57,23 @@ function idSegments(
   prefix: string,
   offset: number,
 ): string {
+  // 序号句柄优先（PR #294 评审）：「#<纯数字>」结尾一律按序号解释——
+  // id 字面以「#数字」开头时不被前缀匹配劫持；指向真实含 # 的 id 用
+  // 非纯数字结尾的前缀查询（如完整 id 本身）。
+  const hashAt = prefix.lastIndexOf('#')
+  if (hashAt >= 0 && /^\d+$/.test(prefix.slice(hashAt + 1))) {
+    const base = prefix.slice(0, hashAt)
+    const candidates = nodes.filter((n) => n.id.startsWith(base))
+    const target = candidates[Number(prefix.slice(hashAt + 1)) - 1]
+    if (!target) {
+      return `序号超界：前缀「${cut(base, ECHO_MAX)}」命中 ${candidates.length} 个候选，无第 ${prefix.slice(hashAt + 1)} 个；请使用碰撞列表给出的序号。`
+    }
+    return segmentsOf(
+      target.id,
+      `${base.slice(0, ID_MAX)}#${prefix.slice(hashAt + 1)}`,
+      offset,
+    )
+  }
   const matches = nodes.filter((n) => n.id.startsWith(prefix))
   if (matches.length > 1) {
     // 候选缩写后可能文本相同（共同前缀 ≥ ID_MAX）：按画布顺序编号消歧，
@@ -76,22 +93,14 @@ function idSegments(
     ].join('\n')
   }
   if (matches.length === 0) {
-    const hashAt = prefix.lastIndexOf('#')
-    const ordinal = /^\d+$/.exec(prefix.slice(hashAt + 1))
-    if (hashAt >= 0 && ordinal) {
-      const base = prefix.slice(0, hashAt)
-      const candidates = nodes.filter((n) => n.id.startsWith(base))
-      const target = candidates[Number(ordinal[0]) - 1]
-      if (target) return segmentsOf(target.id, offset)
-      return `序号超界：前缀「${cut(base, ECHO_MAX)}」命中 ${candidates.length} 个候选，无第 ${ordinal[0]} 个；请使用碰撞列表给出的序号。`
-    }
     return `没有 id 以「${cut(prefix, ECHO_MAX)}」开头的节点；请使用检索结果中给出的前缀（或「前缀#序号」直达句柄）。`
   }
-  return segmentsOf(matches[0]!.id, offset)
+  return segmentsOf(matches[0]!.id, ordinalRef(matches[0]!.id, nodes), offset)
 }
 
-/** 单个完整 id 的分段读取（offset=段号，1 起）。 */
-function segmentsOf(id: string, offset: number): string {
+/** 单个完整 id 的分段读取（offset=段号，1 起）；ref 为续读句柄
+ *（含序号），各段提示一致携带，多段恢复不退化为碰撞列表。 */
+function segmentsOf(id: string, ref: string, offset: number): string {
   const parts = Math.ceil(id.length / ID_SEGMENT)
   const part = Math.min(Math.max(offset, 1), parts)
   const segment = id.slice((part - 1) * ID_SEGMENT, part * ID_SEGMENT)
@@ -101,7 +110,7 @@ function segmentsOf(id: string, offset: number): string {
   ]
   if (part < parts) {
     lines.push(
-      `（find_nodes("id:${id.slice(0, ID_MAX)}", offset=${
+      `（find_nodes("id:${ref}", offset=${
         part + 1
       }) 读下一段；各段按序拼接为完整 id）`,
     )
@@ -109,11 +118,20 @@ function segmentsOf(id: string, offset: number): string {
   return lines.join('\n')
 }
 
-/** 缩写 id 的恢复提示行：给出直达「id:<前缀>」分段读取的入口。 */
-function idHint(id: string): string[] {
+/** 节点的序号直达句柄：80 前缀 + 该节点在共前缀候选（画布顺序）中的
+ * 序号——所有提示统一经此句柄，解析端按同一口径还原（PR #294 评审）。 */
+function ordinalRef(id: string, nodes: CanvasNode[]): string {
+  const base = id.slice(0, ID_MAX)
+  const ordinal =
+    nodes.filter((n) => n.id.startsWith(base)).findIndex((n) => n.id === id) + 1
+  return `${base}#${ordinal}`
+}
+
+/** 缩写 id 的恢复提示行：直达「id:<前缀>#<序号>」分段读取入口。 */
+function idHint(id: string, nodes: CanvasNode[]): string[] {
   return id.length > ID_MAX
     ? [
-        `  （id 超长已缩写；完整 id 分段读取：find_nodes("id:${id.slice(0, ID_MAX)}", offset=1)）`,
+        `  （id 超长已缩写；完整 id 分段读取：find_nodes("id:${ordinalRef(id, nodes)}", offset=1)）`,
       ]
     : []
 }
@@ -176,7 +194,7 @@ function nodeBlock(
   const hit = edges.filter((e) => e.source === n.id || e.target === n.id)
   return [
     `- ${idOf(n.id)} ${cut(spineNodeLabel(n), LINE_MAX)}（${n.type}）`,
-    ...idHint(n.id),
+    ...idHint(n.id, nodes),
     ...hit.slice(0, EDGES_PER_NODE_MAX).map((e) => edgeLine(e, nodes)),
     ...(hit.length > EDGES_PER_NODE_MAX
       ? [
@@ -200,7 +218,7 @@ function singleNodeLines(
   const lines = [
     `匹配「${cut(query, ECHO_MAX)}」的节点（含摘要未列出的条目）：`,
     `- ${idOf(target.id)} ${cut(spineNodeLabel(target), LINE_MAX)}（${target.type}）`,
-    ...idHint(target.id),
+    ...idHint(target.id, nodes),
   ]
   let used = lines.reduce((sum, l) => sum + l.length + 1, 0)
   let listed = 0

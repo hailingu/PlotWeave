@@ -261,7 +261,7 @@ describe('findNodesText（issue #275 评审：被节选条目的可发现读取�
     // 按名称发现（完整 id 从未出现在任何上下文）
     const found = findNodesText([byName], [], '按名称找')
     expect(found).toContain('id 已缩写')
-    expect(found).toMatch(/find_nodes\("id:i{80}", offset=1\)/)
+    expect(found).toMatch(/find_nodes\("id:i{80}#\d+", offset=1\)/)
     // 依提示分段读回完整 id 并无损拼接
     const parts: string[] = []
     let offset = 0
@@ -330,6 +330,58 @@ describe('findNodesText（issue #275 评审：被节选条目的可发现读取�
     // 序号超界给出明确文案
     const out = findNodesText([a, b], [], `id:${shared.slice(0, 80)}#9`)
     expect(out).toContain('序号超界')
+  })
+
+  it('多段续读提示保留序号句柄：第二段不再退化为碰撞列表（PR #294 评审）', () => {
+    const shared = 's'.repeat(100)
+    const giant = 'B'.repeat(8_200)
+    const a: CanvasNode = node({
+      id: `${shared}AAA`,
+      type: 'beat',
+      position: { x: 0, y: 0 },
+      data: { name: '甲', tone: 'x' },
+    })
+    const b: CanvasNode = node({
+      id: `${shared}${giant}`,
+      type: 'beat',
+      position: { x: 0, y: 0 },
+      data: { name: '乙', tone: 'x' },
+    })
+    const seg1 = findNodesText([a, b], [], `id:${shared.slice(0, 80)}#2`, 1)
+    expect(seg1).toContain('第 1/2 段')
+    // 续读提示必须保留 #2，否则 offset=2 只会再次返回碰撞列表
+    expect(seg1).toMatch(/id:s{80}#2", offset=2/)
+    const seg2 = findNodesText([a, b], [], `id:${shared.slice(0, 80)}#2`, 2)
+    expect(seg2).toContain('第 2/2 段')
+    expect(seg2).toContain(giant.slice(0, 200))
+  })
+
+  it('序号句柄优先于前缀匹配：id 以 #数字 开头不劫持直达（PR #294 评审）', () => {
+    const p1: CanvasNode = node({
+      id: 'P+A',
+      type: 'beat',
+      position: { x: 0, y: 0 },
+      data: { name: '甲', tone: 'x' },
+    })
+    const p2: CanvasNode = node({
+      id: 'P+B',
+      type: 'beat',
+      position: { x: 0, y: 0 },
+      data: { name: '乙', tone: 'x' },
+    })
+    const tricky: CanvasNode = node({
+      id: 'P#2abc',
+      type: 'beat',
+      position: { x: 0, y: 0 },
+      data: { name: '丙', tone: 'x' },
+    })
+    // id:P#2 应定位候选 #2（P+B），不得被 P+#2-tail 的前缀匹配劫持
+    const second = findNodesText([p1, p2, tricky], [], 'id:P#2')
+    expect(second).toContain('P+B')
+    expect(second).not.toContain('P#2abc')
+    // 真实含 # 前缀仍可经非纯数字结尾查询
+    const literal = findNodesText([p1, p2, tricky], [], 'id:P#2abc')
+    expect(literal).toContain('P#2abc')
   })
 
   it('精确 id 命中优先进入单节点视图：id 子串碰撞不阻连续线枚举（PR #294 评审）', () => {
