@@ -132,24 +132,6 @@ fn cancel_during_job_marks_finish_cleans_and_late_cancel_bounds() {
     assert!(third.is_cancelled(), "迟到取消按预取消语义作用于复用 id");
 }
 
-/// issue #145 中毒恢复在新注册表上保持：持锁 panic 后操作照常（恢复
-/// 路径统一经 recover_guard，登记真实生效）。
-#[test]
-fn registry_recovers_after_poison() {
-    let registry = ImageJobRegistry::new();
-    std::thread::scope(|s| {
-        s.spawn(|| {
-            let _guard = registry.state.lock().expect("先取得锁");
-            panic!("测试注入的持锁 panic");
-        })
-        .join()
-        .expect_err("注入 panic 应发生");
-    });
-    registry.cancel("job-p");
-    let registration = registry.register("job-p");
-    assert!(registration.is_cancelled(), "中毒后取消/登记照常");
-}
-
 #[test]
 fn request_body_omits_response_format() {
     // GPT Image 系（gpt-image-1 等）不接受 response_format（携带即

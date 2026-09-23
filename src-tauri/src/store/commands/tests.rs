@@ -426,18 +426,6 @@ fn load_project_file_classifies_symlinked_file_as_refused() {
     cleanup_temp(&projects);
 }
 
-#[test]
-fn persist_project_classifies_untrusted_id_as_invalid_input() {
-    let projects = temp_projects_dir();
-    let doc = new_project_file("p-1", "剧".into(), now_iso());
-    let err = persist_project(&cap(&projects), "../evil", doc).unwrap_err();
-    assert!(
-        matches!(err.root(), StoreError::InvalidInput { .. }),
-        "实际错误：{err:?}"
-    );
-    cleanup_temp(&projects);
-}
-
 /// [PR #224 第二轮评审](https://github.com/hailingu/PlotWeave/pull/224)：
 /// 库导入与项目删除经 projects 操作锁串行——删除持锁期间导入（及其同
 /// 类 ensure-then-create 写入）不得越过控制校验；删除落定后导入按

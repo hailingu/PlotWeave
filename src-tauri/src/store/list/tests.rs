@@ -476,79 +476,68 @@ fn list_returns_broken_placeholder_for_corrupt_project() {
     cleanup_temp(&projects);
 }
 
-/// 信封两族矛盾（不可判型）同样产出占位而非跳过（issue #123）。
+/// 信封两族矛盾（不可判型）与非 UTF-8 不可读同样产出占位而非跳过（issue
+/// #123）。不可读触发取非 UTF-8 字节而非 mode 000 收权（PR #196 评审）：
+/// root/CAP_DAC_OVERRIDE（容器 CI 常态）下收权不拦读取；read_to_string
+/// 的 UTF-8 校验与特权无关，同一 Io 分派分支随处触发。两形态共用「坏
+/// 文件 → 占位 + 判型诊断」模板（issue #291 参数化；损坏 JSON 的完整
+/// 占位行为——正常项目排序与 IPC wire 形状——由上方用例覆盖）。
 #[test]
-fn list_returns_broken_placeholder_for_unclassifiable_envelope() {
-    let projects = temp_projects_dir();
-    fs::write(
-        projects.join("p-mixed.json"),
-        r#"{"schemaVersion":0,"project":{"name":"伪装旧版"},"graph":{"nodes":[]},"assets":{"byId":{}}}"#,
-    )
-    .expect("写信封矛盾文件");
-    let metas = list_project_metas(&cap(&projects)).expect("列出项目");
-    assert_eq!(metas.len(), 1);
-    assert_eq!(metas[0].id, "p-mixed");
-    assert!(
-        metas[0]
-            .diagnostic
-            .as_deref()
-            .is_some_and(|d| d.contains("信封")),
-        "占位须带判型诊断：{:?}",
-        metas[0].diagnostic
-    );
-    cleanup_temp(&projects);
+fn list_returns_broken_placeholder_for_unclassifiable_or_unreadable() {
+    let cases: [(&str, Vec<u8>, &str); 2] = [
+        (
+            "信封两族矛盾（不可判型）",
+            r#"{"schemaVersion":0,"project":{"name":"伪装旧版"},"graph":{"nodes":[]},"assets":{"byId":{}}}"#
+                .as_bytes()
+                .to_vec(),
+            "信封",
+        ),
+        ("非 UTF-8 字节", vec![0xff, 0xfe, b'{'], "不可读"),
+    ];
+    for (label, bytes, keyword) in cases {
+        let projects = temp_projects_dir();
+        fs::write(projects.join("p-bad.json"), bytes).expect("写坏项目文件");
+        let metas = list_project_metas(&cap(&projects)).expect("列出项目");
+        assert_eq!(metas.len(), 1, "{label}：坏项目不得静默消失");
+        assert_eq!(metas[0].id, "p-bad");
+        assert!(
+            metas[0]
+                .diagnostic
+                .as_deref()
+                .is_some_and(|d| d.contains(keyword)),
+            "{label}：占位须带判型诊断：{:?}",
+            metas[0].diagnostic
+        );
+        cleanup_temp(&projects);
+    }
 }
 
-/// 底层 I/O 读取失败产出「不可读」占位（issue #123）。触发机制取非 UTF-8
-/// 字节而非 mode 000 收权（PR #196 评审）：root/CAP_DAC_OVERRIDE（容器 CI
-/// 常态）下收权不拦读取，`{}` 会被解析成「损坏」占位而误报；read_to_string
-/// 的 UTF-8 校验与特权无关，同一 Io 分派分支（kind ≠ NotFound）随处触发。
+/// 名称域外（超 64 字符，§9.3）与空白名称：列表回退「未命名项目」占位
+/// （打开时由前端归一化替换/修复，§11.1）；两形态共用回退模板（issue
+/// #291 参数化）。
 #[test]
-fn list_returns_broken_placeholder_for_unreadable_file() {
-    let projects = temp_projects_dir();
-    fs::write(projects.join("p-locked.json"), [0xff, 0xfe, b'{']).expect("写项目文件");
-    let metas = list_project_metas(&cap(&projects)).expect("列出项目");
-    assert_eq!(metas.len(), 1);
-    assert!(
-        metas[0]
-            .diagnostic
-            .as_deref()
-            .is_some_and(|d| d.contains("不可读")),
-        "占位须带不可读诊断：{:?}",
-        metas[0].diagnostic
-    );
-    cleanup_temp(&projects);
-}
-
-#[test]
-fn list_projects_falls_back_to_placeholder_for_overlong_name() {
-    let projects = temp_projects_dir();
+fn list_projects_fall_back_to_placeholder_for_out_of_range_names() {
     let long = "剧".repeat(65);
-    fs::write(
-    projects.join("p-1.json"),
-    format!(
-        r#"{{"schemaVersion":1,"project":{{"id":"p-1","name":"{long}","createdAt":"","updatedAt":""}},"graph":{{"nodes":[],"edges":[]}}}}"#
-    ),
-)
-.expect("写项目文件");
-    let metas = list_project_metas(&cap(&projects)).expect("列出项目");
-    // 超 64 字符在 §9.3 名称域外（打开时会被前端归一化替换）：列表同款占位
-    assert_eq!(metas[0].name, "未命名项目");
-    cleanup_temp(&projects);
-}
-
-#[test]
-fn list_projects_falls_back_to_placeholder_for_blank_name() {
-    let projects = temp_projects_dir();
-    // project.name 空白：列表回退占位，修复留待 §11.1 加载归一化
-    fs::write(
-        projects.join("p-1.json"),
-        r#"{"schemaVersion":1,"project":{"id":"p-1","name":""},"graph":{"nodes":[],"edges":[]}}"#,
-    )
-    .expect("写项目文件");
-    let metas = list_project_metas(&cap(&projects)).expect("列出项目");
-    assert_eq!(metas[0].name, "未命名项目");
-    cleanup_temp(&projects);
+    let cases: [(&str, String); 2] = [
+        (
+            "超长名称",
+            format!(
+                r#"{{"schemaVersion":1,"project":{{"id":"p-1","name":"{long}","createdAt":"","updatedAt":""}},"graph":{{"nodes":[],"edges":[]}}}}"#
+            ),
+        ),
+        (
+            "空白名称",
+            r#"{"schemaVersion":1,"project":{"id":"p-1","name":""},"graph":{"nodes":[],"edges":[]}}"#
+                .to_string(),
+        ),
+    ];
+    for (label, content) in cases {
+        let projects = temp_projects_dir();
+        fs::write(projects.join("p-1.json"), content).expect("写项目文件");
+        let metas = list_project_metas(&cap(&projects)).expect("列出项目");
+        assert_eq!(metas[0].name, "未命名项目", "{label}：应回退占位名");
+        cleanup_temp(&projects);
+    }
 }
 #[test]
 fn load_and_list_read_anchored_tree_after_dir_replacement() {

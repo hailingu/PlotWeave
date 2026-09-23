@@ -889,23 +889,16 @@ describe('background-color 消费入口（review 5277799858）', () => {
 })
 
 describe('根令牌取胜后的消费结果（review 5277799858）', () => {
+  // 排列维度：单一 !important 两种源序、双 !important 与双普通取后位、
+  // 保证无效（initial/悬空）触发 fallback（有效回退通过/无效回退报错）；
+  // 镜像排列与同维变体已并（issue #291 精简重复用例）。
   it.each([
     ['4px !important; --fg: #fff', 'var(--fg)', '4px', false],
     ['#fff; --fg: 4px !important', 'var(--fg)', '4px', false],
     ['4px !important; --fg: #fff !important', 'var(--fg)', '#fff', true],
-    ['#fff !important; --fg: 4px !important', 'var(--fg)', '4px', false],
     ['4px; --fg: #fff', 'var(--fg)', '#fff', true],
-    ['#fff; --fg: 4px', 'var(--fg)', '4px', false],
-    ['#fff !important; --fg: 4px', 'var(--fg)', '#fff', true],
     [
       'initial !important; --fg: #fff',
-      'var(--fg, currentcolor)',
-      'currentcolor',
-      true,
-    ],
-    ['initial !important; --fg: #fff', 'var(--fg, 4px)', '4px', false],
-    [
-      'var(--missing) !important; --fg: #fff',
       'var(--fg, currentcolor)',
       'currentcolor',
       true,

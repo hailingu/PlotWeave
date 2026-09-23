@@ -57,23 +57,27 @@ describe('issue #170 · 节点自由文本字段的体积预算', () => {
     )
   })
 
-  it('update_node 的 patch 同域：超长 picture 拒绝', () => {
-    const { over } = around(FREE_TEXT_MAX_CHARS)
-    const bad = validateAiBatch(
-      [{ op: 'update_node', nodeId: 'sh1', patch: { picture: over } }],
+  // 同构「超一字符 → 整批拒绝并点名」家族参数化（issue #291 精简重复用例）；
+  // synopsis 保留顶格通过与归一化原样保留的正向断言。
+  it.each<[string, unknown[], AiGraphSnapshot, string]>([
+    [
+      'update_node 的 patch 同域：超长 picture',
+      [
+        {
+          op: 'update_node',
+          nodeId: 'sh1',
+          patch: { picture: '字'.repeat(FREE_TEXT_MAX_CHARS + 1) },
+        },
+      ],
       {
         nodes: [{ id: 'sh1', type: 'shot', label: 'SHOT01' }],
         edges: [],
         assets: new Map(),
       },
-    )
-    expect(bad.ok).toBe(false)
-    expect(bad.issues.map((i) => i.message).join('\n')).toContain('picture')
-  })
-
-  it('对白行 lines[].text 超限拒绝并点名行下标', () => {
-    const { over } = around(FREE_TEXT_MAX_CHARS)
-    const bad = validateAiBatch(
+      'picture',
+    ],
+    [
+      '对白行 lines[].text 超限（点名行下标）',
       [
         {
           op: 'create_node',
@@ -82,52 +86,68 @@ describe('issue #170 · 节点自由文本字段的体积预算', () => {
             name: '对白',
             lines: [
               { kind: 'line', text: '短句' },
-              { kind: 'line', text: over },
+              { kind: 'line', text: '字'.repeat(FREE_TEXT_MAX_CHARS + 1) },
             ],
           },
         },
       ],
       entGraph(),
-    )
-    expect(bad.ok).toBe(false)
-    expect(bad.issues.map((i) => i.message).join('\n')).toContain('lines[1]')
-  })
-
-  it('分支选项文案（字符串与对象两种形态）超限拒绝', () => {
-    const { over } = around(FREE_TEXT_MAX_CHARS)
-    for (const options of [[over], [{ label: over }]]) {
-      const bad = validateAiBatch(
-        [
-          {
-            op: 'create_node',
-            nodeType: 'branch',
-            data: { prompt: '？', options },
+      'lines[1]',
+    ],
+    [
+      '分支选项文案（字符串形态）超限',
+      [
+        {
+          op: 'create_node',
+          nodeType: 'branch',
+          data: {
+            prompt: '？',
+            options: ['字'.repeat(FREE_TEXT_MAX_CHARS + 1)],
           },
-        ],
-        snap(),
-      )
-      expect(bad.ok).toBe(false)
-      expect(bad.issues.map((i) => i.message).join('\n')).toContain('options')
-    }
-  })
-
-  it('分镜引用位的自由文案 label 超限拒绝', () => {
-    const { over } = around(FREE_TEXT_MAX_CHARS)
-    const bad = validateAiBatch(
+        },
+      ],
+      snap(),
+      'options',
+    ],
+    [
+      '分支选项文案（对象形态）超限',
+      [
+        {
+          op: 'create_node',
+          nodeType: 'branch',
+          data: {
+            prompt: '？',
+            options: [{ label: '字'.repeat(FREE_TEXT_MAX_CHARS + 1) }],
+          },
+        },
+      ],
+      snap(),
+      'options',
+    ],
+    [
+      '分镜引用位的自由文案 label 超限',
       [
         {
           op: 'create_node',
           nodeType: 'shot',
           data: {
             shotNo: 1,
-            refs: [{ kind: 'character', label: over }],
+            refs: [
+              {
+                kind: 'character',
+                label: '字'.repeat(FREE_TEXT_MAX_CHARS + 1),
+              },
+            ],
           },
         },
       ],
       snap(),
-    )
+      'refs[0]',
+    ],
+  ])('%s：整批拒绝并点名', (_label, batch, snapshot, field) => {
+    const bad = validateAiBatch(batch, snapshot)
     expect(bad.ok).toBe(false)
-    expect(bad.issues.map((i) => i.message).join('\n')).toContain('refs[0]')
+    expect(bad.issues.map((i) => i.message).join('\n')).toContain(field)
   })
 })
 

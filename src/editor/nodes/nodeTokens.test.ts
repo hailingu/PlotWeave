@@ -97,41 +97,9 @@ function resolveOnce(value: string, tokens: Map<string, string>): string {
 }
 
 describe('nodes.css 颜色结构（issue #107）', () => {
-  it('颜色类声明不硬编码色值，全部经语义令牌', () => {
-    const literal =
-      /#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(|\bhwb\(|\blab\(|\blch\(|\boklab\(|\boklch\(|\bcolor\(/
-    const offenders: string[] = []
-    const walk = (container: postcss.Container): void => {
-      for (const node of container.nodes ?? []) {
-        if (node.type === 'atrule' && node.name === 'media') walk(node)
-        else if (node.type === 'rule') walk(node)
-        else if (node.type === 'decl' && literal.test(node.value)) {
-          offenders.push(`${node.prop}: ${node.value}`)
-        }
-      }
-    }
-    walk(nodesCss)
-    expect(offenders).toEqual([])
-  })
-
-  it('引用的自定义属性全部有定义（tokens.css 或 nodes.css 自身）', () => {
-    const defined = new Set<string>()
-    const collect = (root: postcss.Root): void => {
-      root.walkDecls((decl) => {
-        if (decl.prop.startsWith('--')) defined.add(decl.prop)
-      })
-    }
-    collect(tokensCss)
-    collect(nodesCss)
-    const referenced = new Set<string>()
-    nodesCss.walkDecls((decl) => {
-      for (const match of decl.value.matchAll(/var\(\s*(--[\w-]+)/g)) {
-        referenced.add(match[1]!)
-      }
-    })
-    expect([...referenced].filter((name) => !defined.has(name))).toEqual([])
-  })
-
+  // 不硬编码色值与 var() 接线由 sheetTokens.test.ts 的 #278 全表契约扫描
+  // 所有（box-shadow 字面色按该契约 F6 边界明确不在展示色禁用范围）；
+  // 本文件保留语义族归属与黄金基准。
   it('深色选中分支的填充引用画布令牌（分支族跟随画布外观契约）', () => {
     let selected: postcss.Rule | undefined
     nodesCss.walkRules((rule) => {

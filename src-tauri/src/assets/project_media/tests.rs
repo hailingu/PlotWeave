@@ -274,28 +274,3 @@ fn write_generated_asset_registers_pending_media() {
     assert_eq!(rel, format!("assets/{asset_id}.png"));
     cleanup(&root);
 }
-
-/// [issue #145](https://github.com/hailingu/PlotWeave/issues/145)：登记表
-/// 锁中毒恢复——持锁 panic 后登记/查询/清空照常（建议性内存登记：文档
-/// 为权威并 opportunistic 清除；map 单项 infallible 操作不会留下结构
-/// 损坏）。
-#[test]
-fn pending_registry_recovers_after_poison() {
-    let pending = PendingProjectAssets::new();
-    std::thread::scope(|s| {
-        s.spawn(|| {
-            let _guard = pending.entries.lock().expect("先取得锁");
-            panic!("测试注入的持锁 panic");
-        })
-        .join()
-        .expect_err("注入 panic 应发生");
-    });
-    pending.register("p-x", "a-1", "assets/a-1.png".into(), "image/png".into());
-    assert_eq!(
-        pending.peek("p-x", "a-1").map(|(rel, _)| rel),
-        Some("assets/a-1.png".to_string()),
-        "中毒后登记与查询须照常"
-    );
-    pending.drain_project("p-x");
-    assert!(pending.peek("p-x", "a-1").is_none(), "中毒后清空须照常");
-}

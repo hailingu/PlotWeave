@@ -238,31 +238,53 @@ fn malformed_journal_blocks_library_writes() {
     cleanup(&root);
 }
 
-/// 日志路径越界（relPath 不在 assets/ 基准内）同样进入只读态。
+/// 日志异型家族共用同一不变量：恢复入口不失败并进入只读告警态。
+/// 覆盖 relPath 越界（不在 assets/ 基准内）、重复 transaction id、
+/// relPath 含 `..` 词法、trashName 嵌套子段（须为 assets/.trash/ 单一
+/// 子项）与超限日志（受限读取截断后解析失败，不物化超大文件）；
+/// 后四类为历次评审修复引入的触发形态。
 #[test]
-fn journal_entry_with_escaping_path_blocks_writes() {
-    let (library, root) = temp_fixture();
-    write_journal_raw(
-        &library,
-        json!([{
-            "id": "t-1", "assetId": "la-1", "relPath": "settings.json",
-            "identity": { "dev": 1, "ino": 1 }, "trashName": "assets/.trash/t-x",
-        }]),
-    );
-    let recovery = recover(&cap(&library)).expect("恢复入口不失败");
-    assert!(recovery.read_only, "越界路径应只读告警态");
-    cleanup(&root);
-}
-
-/// 重复 transaction id → 只读告警态。
-#[test]
-fn journal_with_duplicate_ids_blocks_writes() {
-    let (library, root) = temp_fixture();
-    let e = journal_entry_json("t-1", "la-1", "assets/la-1.png", "assets/.trash/t-a", 1, 1);
-    write_journal_raw(&library, json!([e, e]));
-    let recovery = recover(&cap(&library)).expect("恢复入口不失败");
-    assert!(recovery.read_only, "重复 id 应只读告警态");
-    cleanup(&root);
+fn malformed_journal_variants_enter_read_only_mode() {
+    let duplicate = {
+        let e = journal_entry_json("t-1", "la-1", "assets/la-1.png", "assets/.trash/t-a", 1, 1);
+        json!([e, e]).to_string()
+    };
+    let pad = "a".repeat(crate::library_fs::INDEX_MAX_BYTES + 1);
+    let variants: [(&str, String); 5] = [
+        (
+            "relPath 越界",
+            json!([{
+                "id": "t-1", "assetId": "la-1", "relPath": "settings.json",
+                "identity": { "dev": 1, "ino": 1 }, "trashName": "assets/.trash/t-x",
+            }])
+            .to_string(),
+        ),
+        ("重复 transaction id", duplicate),
+        (
+            "relPath 含 .. 词法",
+            json!([{
+                "id": "t-1", "assetId": "la-1", "relPath": "assets/../library.json",
+                "identity": { "dev": 1, "ino": 1 }, "trashName": "assets/.trash/t-x",
+            }])
+            .to_string(),
+        ),
+        (
+            "trashName 嵌套子段",
+            json!([{
+                "id": "t-1", "assetId": "la-1", "relPath": "assets/la-1.png",
+                "identity": { "dev": 1, "ino": 1 }, "trashName": "assets/.trash/sub/t-x",
+            }])
+            .to_string(),
+        ),
+        ("超限日志", format!("[\"{pad}\"]")),
+    ];
+    for (label, raw) in variants {
+        let (library, root) = temp_fixture();
+        fs::write(library.join(JOURNAL_FILE_NAME), raw).expect("写异型日志");
+        let recovery = recover(&cap(&library)).expect("恢复入口不失败");
+        assert!(recovery.read_only, "{label} 应只读告警态");
+        cleanup(&root);
+    }
 }
 
 /// 清理分支三态判别（评审修复）：隔离项身份不符时保留现场与日志——
@@ -310,50 +332,6 @@ fn recover_retains_journal_on_trash_identity_mismatch() {
         fs::metadata(library.join("assets").join(".trash").join("t-x")).is_ok(),
         "占用者文件应保留现场"
     );
-    cleanup(&root);
-}
-
-/// 日志 relPath 含 `..` 词法（评审修复）：进入只读态而非恢复整体失败。
-#[test]
-fn journal_entry_with_traversal_lexeme_blocks_writes() {
-    let (library, root) = temp_fixture();
-    write_journal_raw(
-        &library,
-        json!([{
-            "id": "t-1", "assetId": "la-1", "relPath": "assets/../library.json",
-            "identity": { "dev": 1, "ino": 1 }, "trashName": "assets/.trash/t-x",
-        }]),
-    );
-    let recovery = recover(&cap(&library)).expect("恢复入口不失败");
-    assert!(recovery.read_only, "越界词法应只读告警态");
-    cleanup(&root);
-}
-
-/// trashName 含嵌套子段（评审修复）：必须是 assets/.trash/ 单一子项。
-#[test]
-fn journal_entry_with_nested_trash_name_blocks_writes() {
-    let (library, root) = temp_fixture();
-    write_journal_raw(
-        &library,
-        json!([{
-            "id": "t-1", "assetId": "la-1", "relPath": "assets/la-1.png",
-            "identity": { "dev": 1, "ino": 1 }, "trashName": "assets/.trash/sub/t-x",
-        }]),
-    );
-    let recovery = recover(&cap(&library)).expect("恢复入口不失败");
-    assert!(recovery.read_only, "嵌套 trash 名应只读告警态");
-    cleanup(&root);
-}
-
-/// 超限日志（评审修复）：受限读取在上限处截断后解析失败 → 只读态，
-/// 不物化超大文件。
-#[test]
-fn oversized_journal_blocks_writes() {
-    let (library, root) = temp_fixture();
-    let pad = "a".repeat(crate::library_fs::INDEX_MAX_BYTES + 1);
-    fs::write(library.join(JOURNAL_FILE_NAME), format!("[\"{pad}\"]")).expect("写超限日志");
-    let recovery = recover(&cap(&library)).expect("恢复入口不失败");
-    assert!(recovery.read_only, "超限日志应只读告警态");
     cleanup(&root);
 }
 

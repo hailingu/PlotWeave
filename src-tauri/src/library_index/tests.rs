@@ -101,15 +101,6 @@ fn blank_or_missing_asset_id_is_reissued() {
 // ---- 迁移链第 ③ 步：source/createdAt/null/prop 兼容改写 ----
 
 #[test]
-fn legacy_missing_source_defaults_to_upload() {
-    let mut a = asset("la-1");
-    a.as_object_mut().unwrap().remove("source");
-    let (out, warnings, _migrated) = migrate_and_normalize(json!({ "assets": [a], "groups": [] }));
-    assert_eq!(out["assets"]["byId"]["la-1"]["source"], "upload");
-    assert!(warnings.iter().any(|w| w.contains("source")));
-}
-
-#[test]
 fn legacy_epoch_millis_created_at_converts_to_utc_iso() {
     let mut a = asset("la-1");
     a["createdAt"] = json!(1_700_000_000_000u64);

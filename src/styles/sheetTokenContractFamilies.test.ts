@@ -189,11 +189,11 @@ describe('F2-a 失活条件与无效值恢复', () => {
 })
 
 describe('F2-b 简单子代链的空白写法不改变局部可达性', () => {
+  // 子代组合器的空白书写（含多空格与 :hover 后缀）不影响两侧归一后的
+  // 可达判定；两个方向各留一代表（issue #291 精简镜像排列）。
   it.each([
     ['.parent > .child', '.parent>.child .grand'],
-    ['.parent>.child', '.parent > .child .grand'],
-    ['.parent  >  .child', '.parent>.child'],
-    ['.parent > .child', '.parent>.child:hover .grand'],
+    ['.parent  >  .child', '.parent > .child:hover .grand'],
   ])('%s 定义可达 %s 的类型与引用入口', (definer, consumer) => {
     const root = postcss.parse(
       `${definer} { --fg: 4px; } ${consumer} { color: var(--fg, var(--text-primary)); }`,

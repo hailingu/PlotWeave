@@ -7,11 +7,15 @@
  */
 import { describe, expect, it } from 'vitest'
 import { validateAiBatch } from './batchFold'
+import type { AiGraphSnapshot } from './commands'
 import { entSnap, richSnap, snap } from './testGraphs'
 
-describe('lines 成员未知自有键白名单（issue #140）', () => {
-  it('成员携带协议外自有键（evil）：整批拒绝，按下标与键名点名，命令零产出', () => {
-    const bad = validateAiBatch(
+describe('列表成员未知自有键白名单（issue #140：lines/options/refs/relatedIds）', () => {
+  // 四个成员族共用「协议外自有键 → 整批零变更 + 按下标与键名点名」模板，
+  // 与协议 schema 的 additionalProperties:false 同口径（issue #291 参数化）。
+  it.each<[string, unknown[], () => AiGraphSnapshot, string, string]>([
+    [
+      'lines 成员携带协议外自有键（evil）',
       [
         {
           op: 'create_node',
@@ -30,13 +34,66 @@ describe('lines 成员未知自有键白名单（issue #140）', () => {
           },
         },
       ],
-      entSnap(),
-    )
+      entSnap,
+      'lines[1]',
+      'evil',
+    ],
+    [
+      'options 对象成员携带协议外自有键（extra）',
+      [
+        {
+          op: 'update_node',
+          nodeId: 'b1',
+          patch: {
+            options: [{ id: 'ob-a', label: '追', extra: 'x' }],
+          },
+        },
+      ],
+      richSnap,
+      'options[0]',
+      'extra',
+    ],
+    [
+      'refs 引用位成员携带协议外自有键（note）',
+      [
+        {
+          op: 'create_node',
+          nodeType: 'shot',
+          data: {
+            shotNo: 1,
+            size: '特写',
+            picture: '',
+            prompt: '',
+            refs: [{ kind: 'audio', assetId: 'a-aud', note: '自定义' }],
+          },
+        },
+      ],
+      richSnap,
+      'refs[0]',
+      'note',
+    ],
+    [
+      'relatedIds 成员携带协议外自有键（tag；upsert_document 同一政策）',
+      [
+        {
+          op: 'upsert_document',
+          fields: {
+            title: '世界观',
+            relatedIds: [{ kind: 'character', id: 'ch-1', tag: '主角' }],
+          },
+        },
+      ],
+      entSnap,
+      'relatedIds[0]',
+      'tag',
+    ],
+  ])('%s：整批拒绝并点名', (_label, batch, snapshot, index, key) => {
+    const bad = validateAiBatch(batch, snapshot())
     expect(bad.ok).toBe(false)
     expect(bad.commands).toEqual([])
     const msg = bad.issues.map((i) => i.message).join('\n')
-    expect(msg).toContain('lines[1]')
-    expect(msg).toContain('evil')
+    expect(msg).toContain(index)
+    expect(msg).toContain(key)
   })
 
   it('成员携带自有 __proto__ 键（JSON 数据形态）：同样按未知键拒绝', () => {
@@ -58,28 +115,8 @@ describe('lines 成员未知自有键白名单（issue #140）', () => {
     expect(bad.ok).toBe(false)
     expect(bad.issues.map((i) => i.message).join('\n')).toContain('lines[0]')
   })
-})
 
-describe('options 成员未知自有键白名单（issue #140）', () => {
-  it('对象成员携带协议外自有键：整批拒绝并点名；字符串与合法成员照常通过', () => {
-    const bad = validateAiBatch(
-      [
-        {
-          op: 'update_node',
-          nodeId: 'b1',
-          patch: {
-            options: [{ id: 'ob-a', label: '追', extra: 'x' }],
-          },
-        },
-      ],
-      richSnap(),
-    )
-    expect(bad.ok).toBe(false)
-    expect(bad.commands).toEqual([])
-    const msg = bad.issues.map((i) => i.message).join('\n')
-    expect(msg).toContain('options[0]')
-    expect(msg).toContain('extra')
-
+  it('options 字符串与合法成员照常通过', () => {
     const good = validateAiBatch(
       [
         {
@@ -91,54 +128,6 @@ describe('options 成员未知自有键白名单（issue #140）', () => {
       richSnap(),
     )
     expect(good.ok).toBe(true)
-  })
-})
-
-describe('refs 成员未知自有键白名单（issue #140）', () => {
-  it('引用位成员携带协议外自有键：整批拒绝并点名', () => {
-    const bad = validateAiBatch(
-      [
-        {
-          op: 'create_node',
-          nodeType: 'shot',
-          data: {
-            shotNo: 1,
-            size: '特写',
-            picture: '',
-            prompt: '',
-            refs: [{ kind: 'audio', assetId: 'a-aud', note: '自定义' }],
-          },
-        },
-      ],
-      richSnap(),
-    )
-    expect(bad.ok).toBe(false)
-    expect(bad.commands).toEqual([])
-    const msg = bad.issues.map((i) => i.message).join('\n')
-    expect(msg).toContain('refs[0]')
-    expect(msg).toContain('note')
-  })
-})
-
-describe('relatedIds 成员未知自有键白名单（issue #140）', () => {
-  it('成员携带协议外自有键：整批拒绝并点名（upsert_document 同一政策）', () => {
-    const bad = validateAiBatch(
-      [
-        {
-          op: 'upsert_document',
-          fields: {
-            title: '世界观',
-            relatedIds: [{ kind: 'character', id: 'ch-1', tag: '主角' }],
-          },
-        },
-      ],
-      entSnap(),
-    )
-    expect(bad.ok).toBe(false)
-    expect(bad.commands).toEqual([])
-    const msg = bad.issues.map((i) => i.message).join('\n')
-    expect(msg).toContain('relatedIds[0]')
-    expect(msg).toContain('tag')
   })
 })
 

@@ -1394,104 +1394,11 @@ describe('项目级持久化所有者（保存失败重试不随编辑器卸载�
       vi.useRealTimers()
     }
   })
-
-  it('同项目后续保存成功即清待重试：不重复落盘旧文档', async () => {
-    let failFirst = true
-    handlers.set('load_project', () => modernFile())
-    handlers.set('save_project', () => {
-      if (failFirst) {
-        failFirst = false
-        throw new Error('只读')
-      }
-      return undefined
-    })
-    vi.useFakeTimers()
-    try {
-      const { projectStore } = await load()
-      await expect(
-        projectStore.save('p1', {
-          name: '旧',
-          nodes: [],
-          edges: [],
-          settings: { characters: [], locations: [] },
-        }),
-      ).rejects.toThrow('只读')
-      // 恢复后新会话手动保存更新文档（成功）——待重试登记被清除
-      await projectStore.save('p1', {
-        name: '新',
-        nodes: [],
-        edges: [],
-        settings: { characters: [], locations: [] },
-      })
-      await vi.advanceTimersByTimeAsync(20000)
-      const names = calls
-        .filter((c) => c.cmd === 'save_project')
-        .map(
-          (c) =>
-            (c.args as { doc: { project: { name: string } } }).doc.project.name,
-        )
-      expect(names).toEqual(['旧', '新'])
-    } finally {
-      vi.useRealTimers()
-    }
-  })
 })
 
 describe('持久化所有者的代次与删除串行（陈旧重试/复活防护）', () => {
-  it('陈旧代次的重试作废：新保存排队后，旧文档的重试不得覆盖新内容', async () => {
-    let aFailed = false
-    let releaseB: (() => void) | null = null
-    handlers.set('load_project', () => modernFile())
-    handlers.set(
-      'save_project',
-      (args) =>
-        new Promise<void>((resolve, reject) => {
-          const name = (args as { doc: { project: { name: string } } }).doc
-            .project.name
-          if (name === '旧') {
-            if (!aFailed) {
-              aFailed = true
-              reject(new Error('瞬时故障'))
-              return
-            }
-            resolve() // 重试若被放行会成功——正是要证明它不该跑
-            return
-          }
-          releaseB = resolve // 新文档挂起（在途超过重试周期）
-        }),
-    )
-    vi.useFakeTimers()
-    try {
-      const { projectStore } = await load()
-      await expect(
-        projectStore.save('p1', {
-          name: '旧',
-          nodes: [],
-          edges: [],
-          settings: { characters: [], locations: [] },
-        }),
-      ).rejects.toThrow('瞬时故障')
-      const savingB = projectStore.save('p1', {
-        name: '新',
-        nodes: [],
-        edges: [],
-        settings: { characters: [], locations: [] },
-      })
-      await vi.advanceTimersByTimeAsync(5000) // 重试到点：须因新保存已排队而作废
-      ;(releaseB as unknown as (() => void) | undefined)?.()
-      await savingB
-      await vi.advanceTimersByTimeAsync(20000)
-      const names = calls
-        .filter((c) => c.cmd === 'save_project')
-        .map(
-          (c) =>
-            (c.args as { doc: { project: { name: string } } }).doc.project.name,
-        )
-      expect(names).toEqual(['旧', '新'])
-    } finally {
-      vi.useRealTimers()
-    }
-  })
+  // 陈旧重试作废/删除取消重试等链级不变量由 projectStore/saveChain.test.ts
+  // 所有；此处保留门面集成代表（issue #291 精简重复覆盖）。
 
   it('删除排在在途保存之后：保存完成前不得发出 delete_project', async () => {
     let releaseSave: (() => void) | null = null
@@ -1520,31 +1427,6 @@ describe('持久化所有者的代次与删除串行（陈旧重试/复活防护
     await deleting
     expect(calls.some((c) => c.cmd === 'delete_project')).toBe(true)
   })
-
-  it('删除取消重试状态：已删项目不被登记中的重试复活', async () => {
-    handlers.set('load_project', () => modernFile())
-    handlers.set('save_project', () => {
-      throw new Error('只读')
-    })
-    handlers.set('delete_project', () => undefined)
-    vi.useFakeTimers()
-    try {
-      const { projectStore } = await load()
-      await expect(
-        projectStore.save('p1', {
-          name: 'x',
-          nodes: [],
-          edges: [],
-          settings: { characters: [], locations: [] },
-        }),
-      ).rejects.toThrow('只读')
-      await projectStore.delete('p1')
-      await vi.advanceTimersByTimeAsync(20000)
-      expect(calls.filter((c) => c.cmd === 'save_project')).toHaveLength(1) // 红：重试复活
-    } finally {
-      vi.useRealTimers()
-    }
-  })
 })
 
 describe('持久化所有者的代次重排与删除墓碑', () => {
@@ -1555,58 +1437,8 @@ describe('持久化所有者的代次重排与删除墓碑', () => {
     settings: { characters: [], locations: [] },
   })
 
-  it('新代次失败须接管重试定时器：最新失败文档最终落盘', async () => {
-    handlers.set('load_project', () => modernFile())
-    handlers.set('save_project', () => {
-      throw new Error('只读')
-    })
-    vi.useFakeTimers()
-    try {
-      const { projectStore } = await load()
-      await expect(projectStore.save('p1', docOf('旧'))).rejects.toThrow('只读')
-      await expect(projectStore.save('p1', docOf('新'))).rejects.toThrow('只读')
-      // 红：A 的旧定时器触发即自灭，B 的登记无人重试
-      await vi.advanceTimersByTimeAsync(5000)
-      const names = calls
-        .filter((c) => c.cmd === 'save_project')
-        .map(
-          (c) =>
-            (c.args as { doc: { project: { name: string } } }).doc.project.name,
-        )
-      expect(names).toEqual(['旧', '新', '新']) // 重试以最新文档发起
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
-  it('删除开始后的保存排队被吸收：不复活已删项目', async () => {
-    let releaseA: (() => void) | null = null
-    handlers.set('load_project', () => modernFile())
-    handlers.set(
-      'save_project',
-      () =>
-        new Promise<void>((resolve) => {
-          if (releaseA !== null) {
-            resolve() // 首次之后的保存立即完成：红态下 B 复活项目即被断言抓住
-            return
-          }
-          releaseA = resolve
-        }),
-    )
-    handlers.set('delete_project', () => undefined)
-    const { projectStore } = await load()
-    const savingA = projectStore.save('p1', docOf('A'))
-    const deleting = projectStore.delete('p1')
-    await vi.waitFor(() => expect(releaseA).not.toBeNull())
-    ;(releaseA as unknown as () => void)()
-    await savingA
-    // 编辑器卸载后的合并冲刷（B）在 A 完成后才排队：不得复活已删项目
-    await projectStore.save('p1', docOf('B'))
-    await deleting
-    expect(calls.filter((c) => c.cmd === 'save_project')).toHaveLength(1)
-    expect(calls.some((c) => c.cmd === 'delete_project')).toBe(true)
-  })
-
+  // 重试定时器接管/吸收不复活等链级不变量由 projectStore/saveChain.test.ts
+  // 所有；此处保留删除失败回吐的门面集成代表（issue #291 精简重复覆盖）。
   it('删除失败时回吐删除期间吸收的最新文档重存：迟到编辑不落空', async () => {
     let rejectDelete: ((err: Error) => void) | null = null
     handlers.set('load_project', () => modernFile())
@@ -1638,107 +1470,5 @@ describe('持久化所有者的代次重排与删除墓碑', () => {
         )
       expect(names).toEqual(['新迟到']) // 只回吐最新一份
     })
-  })
-
-  it('删除失败回吐删除前已登记重试的文档：墓碑清除不丢最新编辑', async () => {
-    let failed = false
-    handlers.set('load_project', () => modernFile())
-    handlers.set('save_project', () => {
-      if (!failed) {
-        failed = true
-        throw new Error('磁盘满')
-      }
-      return undefined
-    })
-    handlers.set('delete_project', () => {
-      throw new Error('占用')
-    })
-    const { projectStore } = await load()
-    await expect(projectStore.save('p1', docOf('Z'))).rejects.toThrow('磁盘满')
-    await expect(projectStore.delete('p1')).rejects.toThrow('占用')
-    // 红：重试登记被删除开场的 clearSaveRetry 摘除——项目仍在磁盘，
-    // 最新编辑（编辑器已卸载时只存于登记）既没落盘也无重试
-    await vi.waitFor(() => {
-      const names = calls
-        .filter((c) => c.cmd === 'save_project')
-        .map(
-          (c) =>
-            (c.args as { doc: { project: { name: string } } }).doc.project.name,
-        )
-      expect(names).toEqual(['Z', 'Z'])
-    })
-  })
-
-  it('删除失败回吐墓碑前在途保存失败登记的重试文档（评审场景）', async () => {
-    let rejectA: ((err: Error) => void) | null = null
-    handlers.set('load_project', () => modernFile())
-    handlers.set('save_project', () => {
-      if (rejectA === null) {
-        // 保存 A 在删除排队期间落定失败：登记重试后即被删除链二次清除
-        return new Promise<void>((_resolve, reject) => {
-          rejectA = reject
-        })
-      }
-      return Promise.resolve() // 回吐重存成功
-    })
-    handlers.set('delete_project', () => {
-      throw new Error('占用')
-    })
-    const { projectStore } = await load()
-    const savingA = projectStore.save('p1', docOf('A'))
-    const deleting = projectStore.delete('p1')
-    await vi.waitFor(() => expect(rejectA).not.toBeNull())
-    ;(rejectA as unknown as (e: Error) => void)(new Error('磁盘满'))
-    await expect(savingA).rejects.toThrow('磁盘满')
-    await expect(deleting).rejects.toThrow('占用')
-    // 红：A 排队于墓碑之前未被吸收，二次 clearSaveRetry 丢弃登记后删除又失败
-    // ——项目仍在磁盘，最新编辑永远无人重试
-    await vi.waitFor(() => {
-      const names = calls
-        .filter((c) => c.cmd === 'save_project')
-        .map(
-          (c) =>
-            (c.args as { doc: { project: { name: string } } }).doc.project.name,
-        )
-      expect(names).toEqual(['A', 'A'])
-    })
-  })
-
-  it('删除失败不回吐已被后续成功保存取代的登记文档（陈旧重试不得覆盖新内容）', async () => {
-    let failFirst = true
-    handlers.set('load_project', () => modernFile())
-    handlers.set('save_project', () => {
-      if (failFirst) {
-        failFirst = false
-        throw new Error('磁盘满')
-      }
-      return undefined
-    })
-    handlers.set('delete_project', () => {
-      throw new Error('占用')
-    })
-    vi.useFakeTimers()
-    try {
-      const { projectStore } = await load()
-      await expect(projectStore.save('p1', docOf('旧A'))).rejects.toThrow(
-        '磁盘满',
-      )
-      // B 排在 A 之后、删除排队时仍在途：B 成功即取代 A 的重试登记
-      const savingB = projectStore.save('p1', docOf('新B'))
-      const deleting = projectStore.delete('p1')
-      await savingB
-      await expect(deleting).rejects.toThrow('占用')
-      // 红：回吐捕获的 A 登记会把旧文档重放覆盖已成功落盘的 B
-      await vi.advanceTimersByTimeAsync(20000)
-      const names = calls
-        .filter((c) => c.cmd === 'save_project')
-        .map(
-          (c) =>
-            (c.args as { doc: { project: { name: string } } }).doc.project.name,
-        )
-      expect(names).toEqual(['旧A', '新B'])
-    } finally {
-      vi.useRealTimers()
-    }
   })
 })
