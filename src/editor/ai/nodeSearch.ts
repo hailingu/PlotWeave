@@ -29,6 +29,19 @@ const EDGES_PER_NODE_MAX = 12
 /** 结果行级截断：单个合法字段可达 65,536 字符，不逐行携带全文。 */
 const LINE_MAX = 200
 
+/** 查询回显上限：页头不原样回显模型给出的超长检索串。 */
+const ECHO_MAX = 60
+
+/** id 展示上限：超长 id（运行态原样保留的脏数据）缩写展示并声明，
+ * 完整 id 以其原始来源（用户消息/原上下文）为准——结果总量预算由此
+ * 对页头与节点身份同样成立（PR #294 评审）。 */
+const ID_MAX = 80
+
+/** id 的有界展示：超长时缩写并附带声明。 */
+function idOf(id: string): string {
+  return id.length > ID_MAX ? `${id.slice(0, ID_MAX)}…（id 已缩写）` : id
+}
+
 /** 条目累积预算：为页尾游标标记预留头寸，保证总长不超过总量预算。 */
 const PAGE_BUDGET = GRAPH_DIGEST_MAX_CHARS - 200
 
@@ -61,7 +74,7 @@ function searchBody(n: CanvasNode): string {
  */
 function edgeLine(e: Edge, nodes: CanvasNode[]): string {
   const kind = edgeKindOf(e)
-  const endpoints = `${e.source} → ${e.target}`
+  const endpoints = `${idOf(e.source)} → ${idOf(e.target)}`
   if (kind === 'branch') {
     const src = nodes.find((n) => n.id === e.source)
     const optId = branchOptionIdOf(e.sourceHandle)
@@ -86,7 +99,7 @@ function nodeBlock(
 ): string[] {
   const hit = edges.filter((e) => e.source === n.id || e.target === n.id)
   return [
-    `- ${n.id} ${spineNodeLabel(n)}（${n.type}）`,
+    `- ${idOf(n.id)} ${cut(spineNodeLabel(n), LINE_MAX)}（${n.type}）`,
     ...hit.slice(0, EDGES_PER_NODE_MAX).map((e) => edgeLine(e, nodes)),
     ...(hit.length > EDGES_PER_NODE_MAX
       ? [
@@ -108,8 +121,8 @@ function singleNodeLines(
     (e) => e.source === target.id || e.target === target.id,
   )
   const lines = [
-    `匹配「${query}」的节点（含摘要未列出的条目）：`,
-    `- ${target.id} ${cut(spineNodeLabel(target), LINE_MAX)}（${target.type}）`,
+    `匹配「${cut(query, ECHO_MAX)}」的节点（含摘要未列出的条目）：`,
+    `- ${idOf(target.id)} ${cut(spineNodeLabel(target), LINE_MAX)}（${target.type}）`,
   ]
   let used = lines.reduce((sum, l) => sum + l.length + 1, 0)
   let listed = 0
@@ -123,7 +136,7 @@ function singleNodeLines(
   const rest = hit.length - offset - listed
   if (rest > 0) {
     lines.push(
-      `  （另有 ${rest} 条连线未列出；find_nodes("${target.id}", offset=${
+      `  （另有 ${rest} 条连线未列出；find_nodes("${idOf(target.id)}", offset=${
         offset + listed
       }) 继续枚举）`,
     )
@@ -139,7 +152,7 @@ function pageLines(
   offset: number,
   query: string,
 ): string[] {
-  const header = `匹配「${query}」的节点（含摘要未列出的条目）：`
+  const header = `匹配「${cut(query, ECHO_MAX)}」的节点（含摘要未列出的条目）：`
   const lines = [header]
   let used = header.length + 1
   let consumed = 0
@@ -160,7 +173,9 @@ function pageLines(
     lines.push(
       `（${hitBudget ? '本页已达字符预算，' : ''}另有 ${rest} 个匹配未列出，已列到第 ${
         offset + consumed
-      } 个；find_nodes("${query.trim()}", offset=${offset + consumed}) 继续）`,
+      } 个；find_nodes("${cut(query.trim(), ECHO_MAX)}", offset=${
+        offset + consumed
+      }) 继续）`,
     )
   }
   return lines
@@ -190,7 +205,7 @@ export function findNodesText(
   const q = trimmed.toLowerCase()
   const matched = nodes.filter((n) => searchBody(n).includes(q))
   if (matched.length === 0) {
-    return `未找到匹配「${query}」的节点；可换关键词重试（大小写不敏感），或改用精确节点 id。`
+    return `未找到匹配「${cut(trimmed, ECHO_MAX)}」的节点；可换关键词重试（大小写不敏感），或改用精确节点 id。`
   }
   const lines =
     matched.length === 1

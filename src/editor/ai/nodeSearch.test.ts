@@ -233,6 +233,23 @@ describe('findNodesText（issue #275 评审：被节选条目的可发现读取�
     expect(line).toContain('…')
   })
 
+  it('查询回显与节点 id 计入总量预算：超长 id 不击穿预算并声明缩写（PR #294 评审）', () => {
+    const giantId = 'i'.repeat(30_000)
+    const giant: CanvasNode = node({
+      id: giantId,
+      type: 'beat',
+      position: { x: 0, y: 0 },
+      data: { name: '超长 id 节点', tone: 'x' },
+    })
+    // 零条连线：页头回显与节点身份自身不得突破预算
+    const text = findNodesText([giant], [], giantId)
+    expect(text.length).toBeLessThanOrEqual(GRAPH_DIGEST_MAX_CHARS)
+    expect(text).toContain('已缩写')
+    // 模糊路径同样有界：以同量级长文案检索不得原样回显
+    const fuzzy = findNodesText([giant], [], '长'.repeat(30_000))
+    expect(fuzzy.length).toBeLessThanOrEqual(GRAPH_DIGEST_MAX_CHARS)
+  })
+
   it('精确 id 命中优先进入单节点视图：id 子串碰撞不阻连续线枚举（PR #294 评审）', () => {
     // 合法旧项目可同时存在 n1 与 n10：查询 n1 时 includes 也会命中 n10
     const hub: CanvasNode = node({
