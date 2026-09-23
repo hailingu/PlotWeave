@@ -42,6 +42,61 @@ function idOf(id: string): string {
   return id.length > ID_MAX ? `${id.slice(0, ID_MAX)}…（id 已缩写）` : id
 }
 
+/** id 分段段长：单段远低于预算；段本身不做行级截断（各段按序拼接
+ * 无损还原完整 id）。 */
+const ID_SEGMENT = 8_000
+
+/**
+ * 「id:<前缀>」模式：被缩写展示的超长 id（按名称发现时完整 id 不在
+ * 任何上下文中，PR #294 评审）的无损恢复句柄——唯一前缀命中的节点
+ * 按 offset（=段号，1 起）分段返回完整 id；多命中要求加长前缀。供
+ * get_node 与精确 nodeId 写回使用。
+ */
+function idSegments(
+  nodes: CanvasNode[],
+  prefix: string,
+  offset: number,
+): string {
+  const matches = nodes.filter((n) => n.id.startsWith(prefix))
+  if (matches.length === 0) {
+    return `没有 id 以「${cut(prefix, ECHO_MAX)}」开头的节点；请使用检索结果中给出的前缀。`
+  }
+  if (matches.length > 1) {
+    return [
+      `id 前缀命中 ${matches.length} 个节点，前缀不足定位；请加长前缀后重试：`,
+      ...matches.slice(0, FIND_NODES_MAX).map((n) => `- ${idOf(n.id)}`),
+      ...(matches.length > FIND_NODES_MAX
+        ? [`（另有 ${matches.length - FIND_NODES_MAX} 个命中未列出）`]
+        : []),
+    ].join('\n')
+  }
+  const id = matches[0]!.id
+  const parts = Math.ceil(id.length / ID_SEGMENT)
+  const part = Math.min(Math.max(offset, 1), parts)
+  const segment = id.slice((part - 1) * ID_SEGMENT, part * ID_SEGMENT)
+  const lines = [
+    `节点 ${idOf(id)} 完整 id 第 ${part}/${parts} 段（总长 ${id.length} 字符）：`,
+    segment,
+  ]
+  if (part < parts) {
+    lines.push(
+      `（find_nodes("id:${id.slice(0, ID_MAX)}", offset=${
+        part + 1
+      }) 读下一段；各段按序拼接为完整 id）`,
+    )
+  }
+  return lines.join('\n')
+}
+
+/** 缩写 id 的恢复提示行：给出直达「id:<前缀>」分段读取的入口。 */
+function idHint(id: string): string[] {
+  return id.length > ID_MAX
+    ? [
+        `  （id 超长已缩写；完整 id 分段读取：find_nodes("id:${id.slice(0, ID_MAX)}", offset=1)）`,
+      ]
+    : []
+}
+
 /** 条目累积预算：为页尾游标标记预留头寸，保证总长不超过总量预算。 */
 const PAGE_BUDGET = GRAPH_DIGEST_MAX_CHARS - 200
 
@@ -100,6 +155,7 @@ function nodeBlock(
   const hit = edges.filter((e) => e.source === n.id || e.target === n.id)
   return [
     `- ${idOf(n.id)} ${cut(spineNodeLabel(n), LINE_MAX)}（${n.type}）`,
+    ...idHint(n.id),
     ...hit.slice(0, EDGES_PER_NODE_MAX).map((e) => edgeLine(e, nodes)),
     ...(hit.length > EDGES_PER_NODE_MAX
       ? [
@@ -123,6 +179,7 @@ function singleNodeLines(
   const lines = [
     `匹配「${cut(query, ECHO_MAX)}」的节点（含摘要未列出的条目）：`,
     `- ${idOf(target.id)} ${cut(spineNodeLabel(target), LINE_MAX)}（${target.type}）`,
+    ...idHint(target.id),
   ]
   let used = lines.reduce((sum, l) => sum + l.length + 1, 0)
   let listed = 0
@@ -198,6 +255,9 @@ export function findNodesText(
     )
   }
   const trimmed = query.trim()
+  if (trimmed.startsWith('id:')) {
+    return idSegments(nodes, trimmed.slice(3), offset)
+  }
   const exact = nodes.find((n) => n.id === trimmed)
   if (exact) {
     return singleNodeLines(exact, nodes, edges, offset, trimmed).join('\n')

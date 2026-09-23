@@ -250,6 +250,57 @@ describe('findNodesText（issue #275 评审：被节选条目的可发现读取�
     expect(fuzzy.length).toBeLessThanOrEqual(GRAPH_DIGEST_MAX_CHARS)
   })
 
+  it('id:<前缀> 分段返回完整 id：按名称发现的超长 id 节点可无损恢复（PR #294 评审）', () => {
+    const giantId = 'i'.repeat(30_000)
+    const byName: CanvasNode = node({
+      id: giantId,
+      type: 'beat',
+      position: { x: 0, y: 0 },
+      data: { name: '按名称找', tone: 'x' },
+    })
+    // 按名称发现（完整 id 从未出现在任何上下文）
+    const found = findNodesText([byName], [], '按名称找')
+    expect(found).toContain('id 已缩写')
+    expect(found).toMatch(/find_nodes\("id:i{80}", offset=1\)/)
+    // 依提示分段读回完整 id 并无损拼接
+    const parts: string[] = []
+    let offset = 0
+    for (let guard = 0; guard < 8; guard += 1) {
+      const text = findNodesText([byName], [], `id:${'i'.repeat(80)}`, offset)
+      const m = text.match(/第 (\d+)\/(\d+) 段（总长 (\d+) 字符）：\n([^\n]+)/)
+      expect(m, text).toBeTruthy()
+      parts.push(m![4]!)
+      const total = Number(m![2]!)
+      const cur = Number(m![1]!)
+      if (cur >= total) break
+      offset = cur + 1
+    }
+    expect(parts.join('')).toBe(giantId)
+  })
+
+  it('id:<前缀> 前缀碰撞时列候选并要求加长；无命中给明确文案（PR #294 评审）', () => {
+    const a: CanvasNode = node({
+      id: 'x'.repeat(100) + 'a',
+      type: 'beat',
+      position: { x: 0, y: 0 },
+      data: { name: '甲', tone: 'x' },
+    })
+    const b: CanvasNode = node({
+      id: 'x'.repeat(100) + 'b',
+      type: 'beat',
+      position: { x: 0, y: 0 },
+      data: { name: '乙', tone: 'x' },
+    })
+    const collide = findNodesText([a, b], [], `id:${'x'.repeat(90)}`)
+    expect(collide).toContain('前缀不足定位')
+    expect(collide).toContain('加长前缀')
+    const unique = findNodesText([a, b], [], `id:${'x'.repeat(100)}a`)
+    expect(unique).toContain('第 1/1 段')
+    expect(unique).toContain('xa')
+    const none = findNodesText([a], [], 'id:zzz')
+    expect(none).toContain('没有 id 以')
+  })
+
   it('精确 id 命中优先进入单节点视图：id 子串碰撞不阻连续线枚举（PR #294 评审）', () => {
     // 合法旧项目可同时存在 n1 与 n10：查询 n1 时 includes 也会命中 n10
     const hub: CanvasNode = node({
