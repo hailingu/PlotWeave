@@ -146,7 +146,10 @@ function boundedHistory(thread: ThreadEntry[]): ChatMessage[] {
 
 /** 组装本次请求的消息序列：系统提示 + 画布快照（可选）+ 会话历史
  * （正文与批次状态一同双界截断，见 boundedHistory）+ 新输入。
- * 完整命令与独立回执不重复喂回，避免上下文膨胀及回执失去归属。 */
+ * 画布快照自带总量预算（graphDigest 的 GRAPH_DIGEST_MAX_CHARS 计数
+ * 节选 + 字符硬上限，issue #275）：历史双界之外的摘要不再无界，每轮
+ * 模型可见上下文有硬上界。完整命令与独立回执不重复喂回，避免上下文
+ * 膨胀及回执失去归属。 */
 export function buildMessages(
   thread: ThreadEntry[],
   text: string,
