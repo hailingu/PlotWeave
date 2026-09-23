@@ -356,6 +356,40 @@ describe('findNodesText（issue #275 评审：被节选条目的可发现读取�
     expect(seg2).toContain(giant.slice(0, 200))
   })
 
+  it('长基前缀的序号续读仍定位原节点（PR #294 评审）', () => {
+    const short = 's'.repeat(80)
+    const base = `${short}${'b'.repeat(20)}`
+    const distractor = node({
+      id: `${short}a`,
+      type: 'beat',
+      data: { name: '旁支', tone: 'x' },
+    })
+    const first = node({
+      id: `${base}A`,
+      type: 'beat',
+      data: { name: '甲', tone: 'x' },
+    })
+    const targetId = `${base}${'B'.repeat(8_200)}`
+    const target = node({
+      id: targetId,
+      type: 'beat',
+      data: { name: '乙', tone: 'x' },
+    })
+    const nodes = [distractor, first, target]
+    const page1 = findNodesText(nodes, [], `id:${base}#2`, 1)
+    expect(page1).toContain('第 1/2 段')
+    const next = page1.match(/find_nodes\("(id:[^"]+)", offset=(\d+)\)/)
+    expect(next).toBeTruthy()
+    const page2 = findNodesText(nodes, [], next![1]!, Number(next![2]!))
+    expect(page2).toContain('第 2/2 段')
+    const segments = [
+      page1.match(/字符）：\n([^\n]+)/)?.[1],
+      page2.match(/字符）：\n([^\n]+)/)?.[1],
+    ]
+    expect(segments.every((segment) => segment !== undefined)).toBe(true)
+    expect(segments.join('')).toBe(targetId)
+  })
+
   it('序号句柄优先于前缀匹配：id 以 #数字 开头不劫持直达（PR #294 评审）', () => {
     const p1: CanvasNode = node({
       id: 'P+A',
@@ -416,6 +450,68 @@ describe('findNodesText（issue #275 评审：被节选条目的可发现读取�
     expect(text).toContain('branch(选项出口13): n1 → t13')
     expect(text).toContain('branch(选项出口14): n1 → t14')
     expect(text).not.toContain('单查该节点 id')
+  })
+
+  it('合法的 id: 前缀精确 ID 优先进入连线视图（PR #294 评审）', () => {
+    const exact = node({
+      id: 'id:foo',
+      type: 'beat',
+      data: { name: '目标', tone: 'x' },
+    })
+    const other = node({
+      id: 'foo',
+      type: 'beat',
+      data: { name: '旁支', tone: 'x' },
+    })
+    const edges: Edge[] = Array.from({ length: 14 }, (_, i) => ({
+      id: `e${i}`,
+      source: 'id:foo',
+      target: `t${i}`,
+    }))
+    const text = findNodesText([exact, other], edges, 'id:foo')
+    expect(text).toContain('- id:foo')
+    expect(text).toContain('sequence: id:foo → t13')
+    expect(text).not.toContain('完整 id 第')
+  })
+
+  it('长查询续页沿用原始匹配集，不重复或跳过目标（PR #294 评审）', () => {
+    const query = 'q'.repeat(61)
+    const prefixOnly = node({
+      id: 'prefix-only',
+      type: 'beat',
+      data: { name: query.slice(0, 60), tone: 'x' },
+    })
+    const matches = Array.from({ length: 25 }, (_, i) =>
+      node({
+        id: `hit-${i}`,
+        type: 'beat',
+        data: { name: `${query}-${i}`, tone: 'x' },
+      }),
+    )
+    const nodes = [prefixOnly, ...matches]
+    const page1 = findNodesText(nodes, [], query)
+    const next = page1.match(/find_nodes\("([^"]+)", offset=(\d+)\)/)
+    expect(next).toBeTruthy()
+    const page2 = findNodesText(nodes, [], next![1]!, Number(next![2]!))
+    expect(page1).toContain('- hit-23')
+    expect(page2).toContain('- hit-24')
+    expect(page2).not.toContain('- hit-23')
+    expect(page2).not.toContain('- prefix-only')
+  })
+
+  it('超长查询续页提示保持预算并要求复用原始 query（PR #294 评审）', () => {
+    const query = 'q'.repeat(30_000)
+    const nodes = Array.from({ length: 25 }, (_, i) =>
+      node({
+        id: `hit-${i}`,
+        type: 'beat',
+        data: { name: query, tone: 'x' },
+      }),
+    )
+    const page1 = findNodesText(nodes, [], query)
+    expect(page1.length).toBeLessThanOrEqual(GRAPH_DIGEST_MAX_CHARS)
+    expect(page1).toContain('原始 query 和 offset=24')
+    expect(findNodesText(nodes, [], query, 24)).toContain('- hit-24')
   })
 
   it('无匹配与空关键词给出明确文案，不抛异常', () => {

@@ -68,11 +68,7 @@ function idSegments(
     if (!target) {
       return `序号超界：前缀「${cut(base, ECHO_MAX)}」命中 ${candidates.length} 个候选，无第 ${prefix.slice(hashAt + 1)} 个；请使用碰撞列表给出的序号。`
     }
-    return segmentsOf(
-      target.id,
-      `${base.slice(0, ID_MAX)}#${prefix.slice(hashAt + 1)}`,
-      offset,
-    )
+    return segmentsOf(target.id, ordinalRef(target.id, nodes), offset)
   }
   const matches = nodes.filter((n) => n.id.startsWith(prefix))
   if (matches.length > 1) {
@@ -250,6 +246,10 @@ function pageLines(
 ): string[] {
   const header = `匹配「${cut(query, ECHO_MAX)}」的节点（含摘要未列出的条目）：`
   const lines = [header]
+  // 续页必须保持原查询语义；过长查询由调用方复用原始 query，避免提示突破预算。
+  const serializedQuery = JSON.stringify(query.trim())
+  const nextQuery = serializedQuery.length <= 1_000 ? serializedQuery : null
+  const pageBudget = PAGE_BUDGET - (nextQuery?.length ?? 0)
   let used = header.length + 1
   let consumed = 0
   const pageEnd = Math.min(matched.length, offset + FIND_NODES_MAX)
@@ -258,7 +258,7 @@ function pageLines(
       cut(l, LINE_MAX),
     )
     const cost = block.reduce((sum, l) => sum + l.length + 1, 0)
-    if (used + cost > PAGE_BUDGET && consumed > 0) break
+    if (used + cost > pageBudget && consumed > 0) break
     lines.push(...block)
     used += cost
     consumed += 1
@@ -269,9 +269,11 @@ function pageLines(
     lines.push(
       `（${hitBudget ? '本页已达字符预算，' : ''}另有 ${rest} 个匹配未列出，已列到第 ${
         offset + consumed
-      } 个；find_nodes("${cut(query.trim(), ECHO_MAX)}", offset=${
-        offset + consumed
-      }) 继续）`,
+      } 个；${
+        nextQuery
+          ? `find_nodes(${nextQuery}, offset=${offset + consumed}) 继续`
+          : `请以本次原始 query 和 offset=${offset + consumed} 调用 find_nodes 继续`
+      }）`,
     )
   }
   return lines
@@ -294,12 +296,12 @@ export function findNodesText(
     )
   }
   const trimmed = query.trim()
-  if (trimmed.startsWith('id:')) {
-    return idSegments(nodes, trimmed.slice(3), offset)
-  }
   const exact = nodes.find((n) => n.id === trimmed)
   if (exact) {
     return singleNodeLines(exact, nodes, edges, offset, trimmed).join('\n')
+  }
+  if (trimmed.startsWith('id:')) {
+    return idSegments(nodes, trimmed.slice(3), offset)
   }
   const q = trimmed.toLowerCase()
   const matched = nodes.filter((n) => searchBody(n).includes(q))
