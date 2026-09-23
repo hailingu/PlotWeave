@@ -5,10 +5,12 @@
  * 省略的连线关系。本模块按 id/名称/提示词/选项/台词检索**全部**节点
  * （含未列入摘要的条目），命中条目附其关联连线（sequence/branch 选项/
  * attach），配合 get_node（按 id 读全文）补齐「裁剪可识别且可按需补读」
- * 的闭环。工具结果自身同受总量预算约束（PR #294 评审）：行级截断 +
- * 24,000 字符硬上限，多命中翻节点页（24/页）、单节点命中翻连线页
- * （64/页），截断处均给出 offset 续读入口。纯函数，标签与截断复用
- * graphDigest 的 spineNodeLabel / cut（同一格式，不做第二实现）。
+ * 的闭环。工具结果自身同受总量预算约束（PR #294 评审）：预算按**整条目**
+ * （节点块或单条连线）消费，游标始终等于实际已列数——截断标记给出的
+ * offset 续读不会跳过或重复任何条目；行级截断（200/行）防单个合法长
+ * 字段（上限 65,536 字符）携带全文。精确 id 命中优先进入单节点连线
+ * 分页视图：合法 id 子串碰撞（n1 命中 n10）不阻连续线枚举。纯函数，
+ * 标签与截断复用 graphDigest 的 spineNodeLabel / cut。
  */
 import type { Edge } from '@xyflow/react'
 import { SCENE_SHOT_HANDLE, branchOptionIdOf, edgeKindOf } from '../graphRules'
@@ -18,7 +20,7 @@ import type { CanvasNode } from '../nodes/types'
 /** 多命中时的节点页大小：与 FIND_NODES_MAX 同值。 */
 export const FIND_NODES_MAX = 24
 
-/** 单节点命中的连线页大小：行短（端点 id + 选项文案），可容纳更大页。 */
+/** 单节点命中的连线页大小上限：预算内尽量多列，实际以字符预算为准。 */
 const EDGES_PAGE = 64
 
 /** 多命中视图里单节点连线展示上限：更大全集用单查该节点 id 翻页枚举。 */
@@ -26,6 +28,9 @@ const EDGES_PER_NODE_MAX = 12
 
 /** 结果行级截断：单个合法字段可达 65,536 字符，不逐行携带全文。 */
 const LINE_MAX = 200
+
+/** 条目累积预算：为页尾游标标记预留头寸，保证总长不超过总量预算。 */
+const PAGE_BUDGET = GRAPH_DIGEST_MAX_CHARS - 200
 
 /** 各类型的可检索文本（小写）：id（已知 id 查其关联连线）+ 用户会提到
  * 的名称/提示词/选项/台词。 */
@@ -66,45 +71,25 @@ function edgeLine(e: Edge, nodes: CanvasNode[]): string {
   return `  - sequence: ${e.source} → ${e.target}`
 }
 
-/** 字符硬上限：截断并声明未发送量与续读入口。 */
-function clampResult(text: string): string {
-  if (text.length <= GRAPH_DIGEST_MAX_CHARS) return text
-  const marker = `（结果超出 ${GRAPH_DIGEST_MAX_CHARS} 字符预算，已截断约 ${
-    text.length - GRAPH_DIGEST_MAX_CHARS
-  } 字符；用更具体的关键词或 offset 分页读取）`
-  const keep = GRAPH_DIGEST_MAX_CHARS - marker.length - 1
-  return `${text.slice(0, keep)}\n${marker}`
-}
-
-/** find_nodes 检索结果：多命中翻节点页（offset 起的 24 个），每节点附
- * 前 12 条连线；单节点命中翻连线页（offset 起的 64 条）——枢纽节点的
- * 全部出口可枚举。 */
-export function findNodesText(
+/** 节点在多命中视图中的展示块：节点行 + 前若干条连线 + 连线溢出指引。 */
+function nodeBlock(
+  n: CanvasNode,
   nodes: CanvasNode[],
   edges: Edge[],
-  query: string,
-  offset = 0,
-): string {
-  if (typeof query !== 'string' || query.trim() === '') {
-    return (
-      'find_nodes 需要 query 参数：按 id/名称/提示词/选项/台词检索全部节点' +
-      '（含画布摘要因体积预算未列出的条目），命中条目附其关联连线；' +
-      'offset 分页（多命中按节点、单命中按该节点连线）。'
-    )
-  }
-  const q = query.trim().toLowerCase()
-  const matched = nodes.filter((n) => searchBody(n).includes(q))
-  if (matched.length === 0) {
-    return `未找到匹配「${query}」的节点；可换关键词重试（大小写不敏感）。`
-  }
-  const lines =
-    matched.length === 1
-      ? singleNodeLines(matched[0]!, nodes, edges, offset, query)
-      : pageLines(matched, nodes, edges, offset, query)
-  return clampResult(lines.map((l) => cut(l, LINE_MAX)).join('\n'))
+): string[] {
+  const hit = edges.filter((e) => e.source === n.id || e.target === n.id)
+  return [
+    `- ${n.id} ${spineNodeLabel(n)}（${n.type}）`,
+    ...hit.slice(0, EDGES_PER_NODE_MAX).map((e) => edgeLine(e, nodes)),
+    ...(hit.length > EDGES_PER_NODE_MAX
+      ? [
+          `  （另有 ${hit.length - EDGES_PER_NODE_MAX} 条连线未列出；单查该节点 id 可翻页枚举全部）`,
+        ]
+      : []),
+  ]
 }
 
-/** 单节点命中：该节点 + 其连线分页（offset 起的 EDGES_PAGE 条）。 */
+/** 单节点命中的连线分页视图：按字符预算逐条列入，游标 = 实际已列数。 */
 function singleNodeLines(
   target: CanvasNode,
   nodes: CanvasNode[],
@@ -115,24 +100,31 @@ function singleNodeLines(
   const hit = edges.filter(
     (e) => e.source === target.id || e.target === target.id,
   )
-  const page = hit.slice(offset, offset + EDGES_PAGE)
-  const rest = hit.length - offset - page.length
-  return [
+  const lines = [
     `匹配「${query}」的节点（含摘要未列出的条目）：`,
-    `- ${target.id} ${spineNodeLabel(target)}（${target.type}）`,
-    ...page.map((e) => edgeLine(e, nodes)),
-    ...(rest > 0
-      ? [
-          `  （另有 ${rest} 条连线未列出；find_nodes("${target.id}", offset=${
-            offset + EDGES_PAGE
-          }) 继续枚举）`,
-        ]
-      : []),
+    `- ${target.id} ${cut(spineNodeLabel(target), LINE_MAX)}（${target.type}）`,
   ]
+  let used = lines.reduce((sum, l) => sum + l.length + 1, 0)
+  let listed = 0
+  for (const e of hit.slice(offset, offset + EDGES_PAGE)) {
+    const line = cut(edgeLine(e, nodes), LINE_MAX)
+    if (used + line.length + 1 > PAGE_BUDGET && listed > 0) break
+    lines.push(line)
+    used += line.length + 1
+    listed += 1
+  }
+  const rest = hit.length - offset - listed
+  if (rest > 0) {
+    lines.push(
+      `  （另有 ${rest} 条连线未列出；find_nodes("${target.id}", offset=${
+        offset + listed
+      }) 继续枚举）`,
+    )
+  }
+  return lines
 }
 
-/** 多命中：节点分页（offset 起的 FIND_NODES_MAX 个），每节点附前
- * EDGES_PER_NODE_MAX 条连线；剩余连线以单查 id 的翻页入口声明。 */
+/** 多命中的节点分页视图：按字符预算整块列入节点，游标 = 实际已列数。 */
 function pageLines(
   matched: CanvasNode[],
   nodes: CanvasNode[],
@@ -140,29 +132,62 @@ function pageLines(
   offset: number,
   query: string,
 ): string[] {
-  const page = matched.slice(offset, offset + FIND_NODES_MAX)
-  const rest = matched.length - offset - page.length
-  const lines: string[] = [
-    `匹配「${query}」的节点（含摘要未列出的条目）：`,
-    ...page.flatMap((n) => {
-      const hit = edges.filter((e) => e.source === n.id || e.target === n.id)
-      return [
-        `- ${n.id} ${spineNodeLabel(n)}（${n.type}）`,
-        ...hit.slice(0, EDGES_PER_NODE_MAX).map((e) => edgeLine(e, nodes)),
-        ...(hit.length > EDGES_PER_NODE_MAX
-          ? [
-              `  （另有 ${hit.length - EDGES_PER_NODE_MAX} 条连线未列出；单查该节点 id 可翻页枚举全部）`,
-            ]
-          : []),
-      ]
-    }),
-    ...(rest > 0
-      ? [
-          `（另有 ${rest} 个匹配未列出；find_nodes("${query.trim()}", offset=${
-            offset + FIND_NODES_MAX
-          }) 继续）`,
-        ]
-      : []),
-  ]
+  const header = `匹配「${query}」的节点（含摘要未列出的条目）：`
+  const lines = [header]
+  let used = header.length + 1
+  let consumed = 0
+  const pageEnd = Math.min(matched.length, offset + FIND_NODES_MAX)
+  for (let i = offset; i < pageEnd; i += 1) {
+    const block = nodeBlock(matched[i]!, nodes, edges).map((l) =>
+      cut(l, LINE_MAX),
+    )
+    const cost = block.reduce((sum, l) => sum + l.length + 1, 0)
+    if (used + cost > PAGE_BUDGET && consumed > 0) break
+    lines.push(...block)
+    used += cost
+    consumed += 1
+  }
+  const rest = matched.length - offset - consumed
+  if (rest > 0) {
+    const hitBudget = consumed > 0 && offset + consumed < pageEnd
+    lines.push(
+      `（${hitBudget ? '本页已达字符预算，' : ''}另有 ${rest} 个匹配未列出，已列到第 ${
+        offset + consumed
+      } 个；find_nodes("${query.trim()}", offset=${offset + consumed}) 继续）`,
+    )
+  }
   return lines
+}
+
+/** find_nodes 检索结果：精确 id 命中优先进入单节点连线分页视图；否则
+ * 模糊检索（多命中按节点翻页，每节点附前 12 条连线）。 */
+export function findNodesText(
+  nodes: CanvasNode[],
+  edges: Edge[],
+  query: string,
+  offset = 0,
+): string {
+  if (typeof query !== 'string' || query.trim() === '') {
+    return (
+      'find_nodes 需要 query 参数：按 id/名称/提示词/选项/台词检索全部节点' +
+      '（含画布摘要因体积预算未列出的条目），命中条目附其关联连线；' +
+      '精确 id 直接进入该节点连线分页视图，offset 分页（多命中按节点、' +
+      '单命中按该节点连线）。'
+    )
+  }
+  const trimmed = query.trim()
+  const exact = nodes.find((n) => n.id === trimmed)
+  if (exact) {
+    return singleNodeLines(exact, nodes, edges, offset, trimmed).join('\n')
+  }
+  const q = trimmed.toLowerCase()
+  const matched = nodes.filter((n) => searchBody(n).includes(q))
+  if (matched.length === 0) {
+    return `未找到匹配「${query}」的节点；可换关键词重试（大小写不敏感），或改用精确节点 id。`
+  }
+  const lines =
+    matched.length === 1
+      ? singleNodeLines(matched[0]!, nodes, edges, offset, trimmed)
+      : pageLines(matched, nodes, edges, offset, trimmed)
+  return lines.join('\n')
 }

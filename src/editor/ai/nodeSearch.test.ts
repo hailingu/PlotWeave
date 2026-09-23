@@ -183,10 +183,56 @@ describe('findNodesText（issue #275 评审：被节选条目的可发现读取�
         sourceHandle: `option-o${j + 1}`,
       })),
     )
-    const text = findNodesText(nodes, edges, '枢纽')
-    expect(text.length).toBeLessThanOrEqual(GRAPH_DIGEST_MAX_CHARS)
-    expect(text).toMatch(/已截断约 \d+ 字符/)
-    expect(text).toContain('offset')
+    const page1 = findNodesText(nodes, edges, '枢纽')
+    expect(page1.length).toBeLessThanOrEqual(GRAPH_DIGEST_MAX_CHARS)
+    // 预算在整节点边界停止（不任意截断），游标 = 实际已列数
+    expect(page1).toContain('已达字符预算')
+    const cursor = Number(page1.match(/offset=(\d+)/)?.[1])
+    expect(Number.isInteger(cursor)).toBe(true)
+    expect(cursor).toBeGreaterThan(0)
+    expect(cursor).toBeLessThan(24)
+    // 续读页含第一页未出现的节点——offset=0 不再重复同一前缀
+    const page2 = findNodesText(nodes, edges, '枢纽', cursor)
+    const page1Node = page1.match(/- b(\d+) /)?.[1]
+    const page2Nodes = [...page2.matchAll(/- b(\d+) /g)].map((m) => m[1])
+    expect(page2Nodes.length).toBeGreaterThan(0)
+    for (const n of page2Nodes) {
+      expect(n).not.toBe(page1Node)
+    }
+  })
+
+  it('精确 id 命中优先进入单节点视图：id 子串碰撞不阻连续线枚举（PR #294 评审）', () => {
+    // 合法旧项目可同时存在 n1 与 n10：查询 n1 时 includes 也会命中 n10
+    const hub: CanvasNode = node({
+      id: 'n1',
+      type: 'branch',
+      position: { x: 0, y: 0 },
+      data: {
+        prompt: '枢纽',
+        options: Array.from({ length: 14 }, (_, i) => ({
+          id: `o${i + 1}`,
+          label: `出口${i + 1}`,
+        })),
+      },
+    })
+    const colliding: CanvasNode = node({
+      id: 'n10',
+      type: 'beat',
+      position: { x: 0, y: 0 },
+      data: { name: '旁支', tone: 'x' },
+    })
+    const edges: Edge[] = Array.from({ length: 14 }, (_, i) => ({
+      id: `e${i + 1}`,
+      source: 'n1',
+      target: `t${i + 1}`,
+      type: 'branch',
+      sourceHandle: `option-o${i + 1}`,
+    }))
+    const text = findNodesText([hub, colliding], edges, 'n1')
+    // 单节点视图：第 13/14 条出口仍在本页（64/页）可枚举，不再只有前 12 条
+    expect(text).toContain('branch(选项出口13): n1 → t13')
+    expect(text).toContain('branch(选项出口14): n1 → t14')
+    expect(text).not.toContain('单查该节点 id')
   })
 
   it('无匹配与空关键词给出明确文案，不抛异常', () => {
