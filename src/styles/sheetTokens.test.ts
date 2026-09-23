@@ -1,130 +1,18 @@
 /**
- * 全部组件样式表对令牌体系的遵循契约（issue #278）。
- *
- * 契约来源：docs/ui-design.md 原则 2「语义色令牌，不硬编码颜色；文本与
- * 背景对比度 ≥ 4.5:1」、§2.1「组件只引用语义令牌」与 §2.6 三无障碍变体。
- * 与 issue #107（nodes.css）/ #240（panels.css）/ #261（home.css 菜单钮）
- * 的分表契约同一验证口径（postcss 解析真实样式表），本文件把结构、接线、
- * 配对三类断言推广到 src 下全部组件样式表：按 glob 自动发现，新增样式表
- * 无需登记即进入全部契约（不维护文件布局清单，不要求每张表包含展示色），
- * 消除「布线不全」这一 D33 根因。CSS 层叠/取值引擎（媒体环境求值、声明
- * 遍历、局部自定义属性解析、悬空引用扫描、类型校验）抽至
- * `sheetTokensEngine.ts`，与语义/夹具测试 `sheetTokensSemantics.test.ts`
- * 共用同一实现；本文件保留对真实样式表的扫描断言（发现/结构/接线/配对/
- * 黄金接线/遮罩），控制在测试文件行数上限内（语义/夹具用例矩阵行与探测
- * 器的单元用例见 sheetTokensSemantics.test.ts 头注）。
- *
- * 范围界定（issue #278 验收标准）：
- * - 结构断言覆盖展示色属性（前景 color 与全部标准 `-color` 长形——含
- *   text-emphasis-color、scrollbar-color 及厂商前缀长形，按结构式分类；背景与
- *   background-image 长形、轮廓、text-emphasis/text-shadow、-webkit-text-stroke（宽度 || 颜色）、SVG fill/stroke，以及 border 全部简写/长形——总体、
- *   四向、逻辑方向与 border-image(-source) 长形，按结构式分类而非枚举；
- *   标准属性名先按 ASCII 大小写不敏感归一再分类，自定义属性名大
- *   小写保持原样）；字面色含 hex、大小写不敏感的颜色函数与 CSS 具名色；
- *   transparent（仅 alpha=0 无色相）与 currentcolor（继承而非字面）不计。
- *   box-shadow 是层级投影非主题展示色、遮罩图像属性只消费 alpha 通道（遮罩
- *   语义另断言：仅 mask-image 长形的 linear-gradient 已建模，mask/-webkit-mask
- *   简写与边框遮罩报 MASK_IMAGE_UNMODELED），两者不在字面色禁用范围。
- *   经展示色属性传递消费的局部自定义属性同样受禁：`.b { --fg: #fff; color:
- *   var(--fg) }` 不得绕过契约（消费关系沿局部属性值链传递闭包计算，只跟随
- *   选择器可达展示消费分支的定义——不可达的同名局部复用不入契约；仅被
- *   非展示属性消费的局部属性——如 React Flow 控件变量——不在展示色契约内）。
- *   展示色引用的解析值须按属性文法相容——非颜色令牌叶子（把 --radius-sm
- *   的尺寸值或 --weight 的裸数值 600 用进 color）与不支持图像的属性上
- *   的渐变/url() 均按违例点名。background/background-image/border-image(-source)
- *   接受图像；SVG fill/stroke 仅额外接受 URL 绘制引用。逐选择器分支解析局部遮蔽与
- *   fallback，空回退值不能独立作为展示色声明。纯颜色属性校验完整顶层值，
- *   不允许颜色前后夹带尺寸/数值/多余词形；边框颜色保留合法多值列表。
- * - 接线断言按「引用点活跃的全部支持环境」逐一验证：tokens.css 值链与局部
- *   定义值链均递归消解——令牌/局部变量自身引用缺失名、或仅在部分环境定义
- *   （如仅浅色媒体块内）而引用点无条件，均为悬空。带 fallback 的
- *   var(--x, v) 与展示色类型扫描共用取值规则，只诊断实际选中路径的悬空名；
- *   主值有效时不检查备用路径，失效时递归进入 fallback。环检测仍包含备用
- *   路径的依赖，其中的字面色仍归结构契约。
- *   样式表内的局部自定义属性只对定义规则自身及其后代规则可达
- *   （:root/html/body 视为全局），且**遮蔽同名根令牌**——分支被可达局
- *   部定义覆盖时按局部值判定，保证无效的遮蔽不因根令牌存在而放行；逗号
- *   选择器逐分支判定——任一引用分支无可达定义即整条判悬空。同选择器同条件的
- *   重复定义按层叠取胜出处：同一组内 !important 声明优先于普通声明，同重要
- *   性再取源序后位；组在输出中的位置按该组最后一次出现的源序排列，不因
- *   Map 键首次插入位置而提前——后续基线定义不被先前同选择器异条件定义错误
- *   遮盖，且该重要性优先规则跨活跃条件分组仍然成立。跨选择器特异性未建模。
- *   已支持的简单后代/子代选择器先选最近定义元素：自身指定值先于祖先继承值，
- *   然后仅在同元素候选中比较重要性/源序；不同逗号分支与媒体环境独立选择。
- *   根令牌（tokens.css :root）同名声明同样先按重要性再按源序取胜，与局部
- *   自定义属性同一规则。initial 与文档根 :root/html 的 unset 按保证无效值处理；
- *   非根 unset、inherit、revert/revert-layer 的自定义属性胜出值明确拒绝，
- *   报 TOKEN_CSS_WIDE_UNMODELED，不能当作消费属性的合法关键字透传。
- *   真实表带 from 来源，组件全局自定义属性报 TOKEN_GLOBAL_OUTSIDE_SOURCE，
- *   即使本表没有消费者也不能覆盖唯一定义源 tokens.css；局部定义仍可遮蔽。
- *   `@property` 注册总是全局生效：组件表或无来源夹具中报
- *   TOKEN_GLOBAL_OUTSIDE_SOURCE，令牌源内尚未建模报 TOKEN_ROOT_AT_RULE_UNMODELED。
- *   根令牌处于未知外层 at-rule 或根规则内嵌 at-rule 时明确报 TOKEN_ROOT_AT_RULE_UNMODELED，
- *   不再静默跳过该定义入口；不含根令牌的其他上下文不受此限制。选择器列表的
- *   `:root` 分支按根规则取值，其他可能命中文档根的选择器上的定义报
- *   TOKEN_ROOT_SELECTOR_UNMODELED。
- *   组件规则内嵌规则/at-rule 报 TOKEN_SHEET_NESTING_UNMODELED；非 media
- *   上下文中的局部定义报 TOKEN_LOCAL_AT_RULE_UNMODELED，不当作恒活跃定义。
- *   字面色检测跳过 URL/引号字符串的内容，仍检查外部渐变与 fallback 中的颜色。
- *   变量依赖、悬空检查及取值同样跳过这些不透明内容，字面 var() 不构成依赖或替换点；
- *   实际取值保留原内容，真实 fallback 引用仍参与环检测，见 sheetTokenReferences.test.ts。
- * - 已接受的例外不当作违例：用户内容色（海报压字/织线兜底/损坏占位，承
- *   载面依赖海报内容，同 tokens.css --on-saturated 理由）、遮罩（压字
- *   scrim / 模态压暗）、声明自洽状态对（settings.css 文件内记录决策）。
- *   每条例外是具名注册表项（表 + 选择器 + 属性/引用 + 已审计字面值 + 条数
- *   + 理由 + 引用），非广泛排除；结构例外绑定到具体值与出现条数，接线例外
- *   绑定到承载属性与出现条数——同属性换写其他字面色、新增第二条同值字面
- *   声明、超出已审计条数、为已豁免悬空引用换属性承载或新增第二条声明，
- *   均为新违例。注册表双向校验——新违例进不来，已修复或条数变动的表项
- *   必须更新（防藏）。
- * - 危险动作黄金接线断言取规则内该属性的**生效值**：属性名先按标准大
- *   小写归一再比较（与展示色分类同一归一点），!important 声明优先
- *   于普通声明，同重要性取源序最后一条——前置 !important 不被其后的普通
- *   声明覆盖；危险底色把 background 简写展开到 background-color 与
- *   background-image，颜色与图像成分各自层叠——有效颜色须为 var(--danger)、图像须为
- *   none，后位 `background-image: none` 不改变颜色；目标规则须唯一且无条件——媒体块内同名规则会使生效值随环境
- *   分叉，违背 #240 恒白决策的接线前提。唯一性判定按选择器列表逐分支：后续
- *   规则若在逗号分支中含目标选择器（如 `.other, .pw-dialog-danger { ... }`）仍能
- *   以同等特异性覆盖，也计入命中，不按整选择器字符串相等。
- * - 开放缺陷以跟踪单号入表：#262（品牌底固定白字 ×2）、#265（悬空
- *   --fill-tertiary ×1）；其修复落地时注册表同步收缩。
- * - 不重开 #240 危险色决策：--on-danger 恒白，深色底 ≈2.8:1 为已记录
- *   已知边界，不做对比度断言；本单只把该决策接线到 editor/nodes-settings
- *   四处字面 #fff（令牌恒值 #ffffff，视觉零变化）。
- *
- * Key State And Invariant Matrix（外观 × 对比度 × 交互态 × 布线；语义/
- * 夹具用例矩阵行见 sheetTokensSemantics.test.ts 头注）：
- * | 状态/前提 | 动作/过渡 | 可观测结果 | 不变量 | 验证 |
- * | --- | --- | --- | --- | --- |
- * | 新增组件样式表（包括仅布局/动画或空表） | glob 发现 | 自动进入全部契约，无登记清单或展示色条数要求 | 布线不全不可悄然发生 | 发现探针与无展示色夹具 |
- * | 新增展示色字面声明（hex/大小写不敏感函数色/具名色；含 fill/stroke、background-image、border-image(-source) 与 border 全部简写/长形） | 结构扫描 | 非注册表项即失败（点名表/选择器/声明） | 展示色必须经 tokens.css 或具名例外 | 结构测试 |
- * | 局部自定义属性被展示色属性（传递）消费且值含字面色 | 结构扫描 | 按违例点名（同注册表豁免）；不可达的同名局部复用不点名 | 字面色不得经局部变量别名进入展示位；闭包与接线同一可达性 | 结构测试 |
- * | 展示色引用解析为不相容值（尺寸/裸数值叶子；不接受图像的属性上的渐变/URL） | 逐环境校验属性 | 按违例点名；合法背景图像及 SVG URL 通过 | 图像必须由支持该语法的属性消费 | 结构测试 |
- * | 注册表项同属性换写其他字面色 / 新增第二条同值字面声明 / 超出已审计条数 | 结构扫描 | 按新违例点名（豁免绑定到值与条数） | 例外不覆盖未审计的值或条数 | 结构测试 |
- * | 注册表项对应声明被修复、换值或条数变动 | 结构反向校验 | 表项失配即失败 | 例外表不藏已修复项 | 结构测试 |
- * | 引用未定义 var()、令牌/局部定义值链引用缺失名（传递）、或定义为保证无效值（initial / 文档根 unset） | 接线扫描 | 失败点名（D38 类悬空引用） | 无失效 var 静默回落 | 接线测试 |
- * | 根令牌（tokens.css :root）同名声明含 !important | 令牌取值 | 重要声明优先于普通声明，无论源序 | 根令牌与局部自定义属性同一重要性规则 | 接线测试（间接经真实 tokens.css 解析），单元用例见 sheetTokensSemantics.test.ts |
- * | 已豁免悬空引用换属性承载或新增第二条声明 | 接线扫描（属性 + 条数比对） | 按新违例点名 | 接线豁免不扩张已知缺陷 | 接线测试 |
- * | 浅/深 × 基线/more × 基线/降透明度（8 环境） | 配对矩阵 | primary 全环境 ≥4.5、secondary more 升档 ≥4.5（§2.6） | 原则 2 按令牌配对成立（含 reduce-transparency 实色材质） | 配对测试 |
- * | 悬停态换填充 | 配对矩阵 | text-primary 于 fill-quaternary 承载面 ≥4.5 | hover 配对按既有契约 | 配对测试 |
- * | 危险动作 hover/确认 | 黄金接线（规则唯一无条件——包括逗号分支内的同分支覆盖；属性名归一；生效值按重要性再取源序最后一条；底色的颜色与图像成分各自层叠） | 前景全部配对环境恒 #ffffff（#240 决策） | 危险前景经 --on-danger，生效值不随环境分叉且不被普通声明/大小写变体/同等特异性分支/背景长形逆转；只改图像的长形不误报颜色 | 黄金测试 |
- * | 遮罩渐变 | alpha 剖析 | 首末色标全透明、内部全不透明 | 遮罩只消费 alpha | 遮罩测试 |
- *
- * 未覆盖维度：真实 WebView 像素实测未运行；品牌底两处配对归 #262、悬空
- * 变量归 #265 跟踪；accent-alt 焦点描边/青 wash（.pw-ai-ctx-toggle.on）的
- * 非文本 3:1 未断言——无既有决策，不在本单开新前沿（PR 披露）。
- * 值解析仍为静态子集，非完整 CSS 文法/层叠引擎；复杂选择器及跨选择器
- * 特异性与颜色函数内部参数未建模。审查处理记录见
- * docs/reviews/pr-288-review-5280542926.md、pr-288-review-5280837519.md、
- * pr-288-review-5285788301.md 与 pr-288-review-5285927947.md；
- * 纯值校验由 cssColorContract.ts 负责。
+ * 全表 CSS 令牌契约（issue #278）：真实 glob 的发现、展示色结构/例外、接线、
+ * 配对、危险动作黄金接线与遮罩 alpha。语义取值复用 sheetTokensEngine。
+ * 当前支持/拒绝/保留边界与唯一问题族矩阵见 docs/css-token-contract.md；
+ * 分轮记录仅作历史证据，不在测试头注另维护一套范围。
+ * F6 产品边界：#240 恒白危险前景及深色约 2.8:1 沿用既有决策；
+ * #262 品牌配对、#265 悬空引用仍由具名注册表挂账；box-shadow 不禁字面色。
+ * F4 仅静态 linear-gradient 遮罩：动态 currentColor、未知色标与图像入口显式拒绝。
  */
 import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import postcss from 'postcss'
 import { describe, expect, it } from 'vitest'
-import { colorTokenOf, hasColorLiteral } from './cssColorContract'
+import { colorTokenOf, hasColorLiteral, isNamedColor } from './cssColorContract'
 import {
   allVarRefs,
   declOf,
@@ -275,8 +163,8 @@ function stopAlpha(token: string): number {
     /^rgba?\(\s*([\d.]+%?)\s+([\d.]+%?)\s+([\d.]+%?)(?:\s*\/\s*([\d.%]+))?\)$/,
   )
   if (space) return space[4] === undefined ? 1 : percent(space[4])
-  if (/^[\w-]+$/.test(value)) return 1
-  throw new Error(`未建模的遮罩色标形式: ${value}`)
+  if (isNamedColor(value)) return 1
+  throw new Error(`MASK_STOP_UNMODELED: ${value}`)
 }
 
 /** linear-gradient 遮罩的色标 alpha 序列（方向段跳过）。 */
@@ -514,7 +402,9 @@ describe('展示色结构：全表扫描与注册表（issue #278）', () => {
     }
     expect(offenders).toEqual([])
   })
+})
 
+describe('F6 可达消费闭包与例外反向校验', () => {
   it('经展示色传递消费的局部自定义属性不引入字面色（消费闭包含间接消费）', () => {
     const root = postcss.parse(
       '.a { --fg: #fff; color: var(--fg); }\n' +
@@ -1028,4 +918,43 @@ describe('遮罩语义契约（issue #278：遮罩只消费 alpha）', () => {
   ])('不承载图像的 %s 不进入遮罩契约', (prop) =>
     expect(isMaskImageProp(prop)).toBe(false),
   )
+})
+
+describe('F4 遮罩 alpha：只接受可确定透明度的静态色标', () => {
+  it.each(['currentColor', 'CURRENTCOLOR', 'not-a-color', 'CanvasText'])(
+    'F4-a 内部色标 %s 不能被当作不透明常量',
+    (stop) => {
+      const root = postcss.parse(
+        `@media (prefers-color-scheme: dark) { .a { color: transparent; -webkit-mask-image: linear-gradient(transparent, ${stop}, transparent); } }`,
+      )
+      const decl = [...sheetDecls(root)].find((item) =>
+        isMaskImageProp(item.prop),
+      )!
+      expect(() => expectMaskFade('F4-a', decl)).toThrow(/MASK_STOP_UNMODELED/)
+    },
+  )
+
+  it.each([
+    'black',
+    'rebeccapurple',
+    '#000',
+    'rgb(0, 0, 0)',
+    'rgb(0 0 0 / 100%)',
+  ])('F4-b 已知静态不透明色标 %s 保持通过', (stop) =>
+    expect(() =>
+      expectMaskFade('F4-b', {
+        prop: 'mask-image',
+        value: `linear-gradient(transparent, ${stop}, transparent)`,
+      }),
+    ).not.toThrow(),
+  )
+
+  it('F4-b 静态半透明内部色标仍违反渐隐约束', () => {
+    expect(() =>
+      expectMaskFade('F4-b', {
+        prop: 'mask-image',
+        value: 'linear-gradient(transparent, #0008, transparent)',
+      }),
+    ).toThrow(/须全不透明/)
+  })
 })

@@ -1,0 +1,176 @@
+/**
+ * PR #288 问题族回归：入口与相邻转换共用一份矩阵，见 docs/css-token-contract.md。
+ * 期望值来自该文档所列 CSS 规范，不由被测解析器生成；真实 glob 另由 sheetTokens 覆盖。
+ */
+import postcss from 'postcss'
+import { describe, expect, it } from 'vitest'
+import { colorTypeOk } from './cssColorContract'
+import {
+  danglingRefs,
+  declOf,
+  displayTypeErrors,
+  displayValueIn,
+  LIGHT_ENV,
+  localDefinitions,
+  sheetDecls,
+  tokenValuesOf,
+  TOKEN_SHEET,
+} from './sheetTokensEngine'
+
+describe('F1 全局所有权：文档组合器与全部扫描入口', () => {
+  it.each([
+    'html > body',
+    'html>body',
+    ':root body',
+    'HTML > BODY[data-theme="dark"]',
+    '.unused, html > body',
+    ':root > *',
+    'html > body > *',
+    'html[data-note="a > b"] > body',
+  ])('F1-a 无消费者的 %s 在所有入口被拒绝', (selector) => {
+    const root = postcss.parse(
+      `@media (prefers-color-scheme: dark) { ${selector} { --text-primary: 4px; } }`,
+      { from: 'src/styles/family-fixture.css' },
+    )
+    for (const scan of [
+      () => [...sheetDecls(root)],
+      () => localDefinitions(root),
+      () => danglingRefs(root, LIGHT_ENV),
+      () => displayTypeErrors(root, LIGHT_ENV),
+    ])
+      expect(scan).toThrow(/TOKEN_GLOBAL_OUTSIDE_SOURCE/)
+  })
+
+  it('F1-b 文档普通样式与局部后代定义保持可用', () => {
+    const root = postcss.parse(
+      'html > body { color: var(--text-primary); } html .card { --local: var(--text-primary); color: var(--local); } .card > * { --space: 4px; }',
+      { from: 'src/styles/family-fixture.css' },
+    )
+    expect(danglingRefs(root, LIGHT_ENV)).toEqual([])
+    expect(displayTypeErrors(root, LIGHT_ENV)).toEqual([])
+  })
+
+  it.each(['html > body', 'html > body > *'])(
+    'F1-b 令牌源也拒绝未建模的文档组合器 %s',
+    (selector) => {
+      const root = postcss.parse(
+        `:root { --fg: #fff; } ${selector} { --fg: 4px; }`,
+        { from: TOKEN_SHEET },
+      )
+      expect(() => tokenValuesOf(root, LIGHT_ENV)).toThrow(
+        /TOKEN_ROOT_SELECTOR_UNMODELED/,
+      )
+    },
+  )
+})
+
+describe('F2 层叠取胜：重要性规则覆盖全部拥有者', () => {
+  it.each([false, true])(
+    'F2-a 重要声明在前=%s 不改变四个入口的胜出值',
+    (first) => {
+      const values = first
+        ? '--fg: #123456 !important; --fg: #ffffff;'
+        : '--fg: #ffffff; --fg: #123456 !important;'
+      const tokens = tokenValuesOf(
+        postcss.parse(`:root { ${values} }`),
+        LIGHT_ENV,
+      )
+      expect(tokens.get('--fg')).toBe('#123456')
+      const root = postcss.parse(`.a { ${values} color: var(--fg); }`)
+      const consumer = [...sheetDecls(root)].find(
+        (decl) => decl.prop === 'color',
+      )!
+      expect(
+        displayValueIn(consumer, {
+          env: LIGHT_ENV,
+          tokens,
+          locals: localDefinitions(root),
+        }),
+      ).toBe('#123456')
+      const rule = postcss.parse(`.a { ${values.replace(/--fg/g, 'color')} }`)
+        .first as postcss.Rule
+      expect(declOf(rule, 'color')).toBe('#123456')
+      const important =
+        '@media (prefers-color-scheme: dark) { .a { --fg: #123456 !important; } }'
+      const ordinary = '.a { --fg: #ffffff; color: var(--fg); }'
+      const mixed = postcss.parse(
+        first ? important + ordinary : ordinary + important,
+      )
+      const target = [...sheetDecls(mixed)].find(
+        (decl) => decl.prop === 'color',
+      )!
+      expect(
+        displayValueIn(target, {
+          env: { ...LIGHT_ENV, scheme: 'dark' },
+          tokens: new Map(),
+          locals: localDefinitions(mixed),
+        }),
+      ).toBe('#123456')
+      expect(
+        displayValueIn(target, {
+          env: LIGHT_ENV,
+          tokens: new Map(),
+          locals: localDefinitions(mixed),
+        }),
+      ).toBe('#ffffff')
+    },
+  )
+})
+
+describe('F3 完整顶层值：未知词形不能被其他成分掩盖', () => {
+  it.each([
+    'not-a-color',
+    'bad_value',
+    '"solid"',
+    'solid???',
+    'solid not-a-color',
+    'red not-a-color',
+    'rgb(1, 2, 3) not-a-color',
+    'transparent-junk',
+    'url(a.svg) not-a-color',
+    'linear-gradient(red, blue) not-a-color',
+  ])('F3-a background 拒绝完整值 %s', (value) => {
+    expect(colorTypeOk('background', value)).toBe(false)
+    const root = postcss.parse(
+      `.a { --paint: ${value}; background: var(--paint); }`,
+    )
+    expect(displayTypeErrors(root, LIGHT_ENV)).toEqual([
+      `.a background: ${value}`,
+    ])
+  })
+
+  it.each([
+    ['background', 'none'],
+    ['background', 'rgb(1, 2, 3)'],
+    ['background', 'linear-gradient(red, blue) padding-box, #fff border-box'],
+    ['background-image', 'repeating-linear-gradient(red, transparent)'],
+    ['border', '1px solid currentcolor'],
+    ['text-shadow', '0 1px 2px #fff'],
+    ['text-decoration', 'line-through'],
+    ['text-emphasis', 'filled sesame'],
+    ['fill', 'url("#paint")'],
+  ])('F3-a 合法对照 %s: %s', (prop, value) => {
+    expect(colorTypeOk(prop, value)).toBe(true)
+  })
+
+  it('F3-b 媒体、重要性、根/局部别名和选中 fallback 共用完整值检查', () => {
+    const root = postcss.parse(
+      ':root { --paint: not-a-color; } .a { --paint: initial; } @media (prefers-color-scheme: dark) { .a { --paint: not-a-color !important; } } .a, .b { background: var(--paint, none); }',
+    )
+    expect(displayTypeErrors(root, LIGHT_ENV)).toEqual([
+      '.b background: not-a-color',
+    ])
+    expect(displayTypeErrors(root, { ...LIGHT_ENV, scheme: 'dark' })).toEqual([
+      '.a background: not-a-color',
+      '.b background: not-a-color',
+    ])
+    expect(
+      displayTypeErrors(
+        postcss.parse(
+          '.a { background: var(--missing, not-a-color); } .b { background: var(--text-primary, not-a-color); }',
+        ),
+        LIGHT_ENV,
+      ),
+    ).toEqual(['.a background: not-a-color'])
+  })
+})

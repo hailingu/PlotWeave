@@ -56,22 +56,22 @@ const NAMED_COLORS = new Set(
 /** 独立标识符（非 var(--name) 片段、非函数名、非带单位数字）。 */
 const BARE_IDENT = /(?<![\w-])[a-zA-Z]+(?![\w-(])/g
 
+/** CSS 静态具名色；currentColor 与系统色依赖环境，不能用于确定遮罩 alpha。 */
+export function isNamedColor(value: string): boolean {
+  return NAMED_COLORS.has(value.toLowerCase())
+}
+
 /** 声明是否含字面色（transparent 不计）；URL/字符串内容不属于颜色语法。 */
 export function hasColorLiteral(value: string): boolean {
   const syntax = maskCssOpaque(value)
   if (COLOR_FUNCTION_OR_HEX.test(syntax)) return true
   for (const match of syntax.matchAll(BARE_IDENT)) {
-    if (NAMED_COLORS.has(match[0].toLowerCase())) return true
+    if (isNamedColor(match[0])) return true
   }
   return false
 }
 
-const DIMENSION = /\b\d+(?:\.\d+)?(?:px|em|rem|%|pt|vw|vh|ch|ex)\b/
-
-/** 不带单位/百分号的裸数值（如字重 600）——对展示色属性必为类型不相容。 */
-const BARE_NUMBER = /(?<![\w.])\d+(?:\.\d+)?(?![\w.%])/
-
-/** 展示色属性合法的非颜色关键字形态（背景/边框/线型的关键字与通用关键字）。 */
+/** 已建模的简写关键字成分；完整简写顺序/互斥文法不由该集合证明。 */
 const NON_COLOR_KEYWORDS = new Set([
   'none',
   'inherit',
@@ -96,55 +96,78 @@ const NON_COLOR_KEYWORDS = new Set([
   'open',
   'dot',
   'circle',
+  'double-circle',
   'triangle',
   'sesame',
+  'padding-box',
+  'border-box',
+  'content-box',
 ])
 
 /**
- * 展示色声明解析值对该属性是否类型相容：仅 background/background-image/
- * border-image(-source) 接受渐变，URL 还可用于 SVG fill/stroke 绘制引用；
- * 其他属性先拒图像，纯颜色属性随后检查完整顶层值，其他简写检查颜色成分；
- * 无颜色成分时须为「无尺寸量、无裸数值、全部词形在非颜色关键字表内」的
- * 纯关键字形态（none/underline/solid 等）——尺寸量（--radius-sm 的 4px）、
- * 裸数值（--weight 的 600）及未识别词形均按类型不相容点名。
+ * 按 docs/css-token-contract.md F3 验证完整顶层值：纯色/描边有专门文法，
+ * 其余简写逐成分检查，未知词形不能被颜色/图像掩盖；无绘制成分须为纯关键字。
+ * 函数内部参数与完整简写顺序/互斥规则保留边界，不宣称等价于浏览器文法校验。
  */
 export function colorTypeOk(prop: string, resolved: string): boolean {
-  if (resolved.trim() === '') return false
-  if (prop === '-webkit-text-stroke') return textStrokeOk(resolved.trim())
-  const acceptsImage =
-    prop === 'background' ||
-    prop === 'background-image' ||
-    prop === 'border-image' ||
-    prop === 'border-image-source'
-  if (/(?:linear|radial|conic)-gradient\(/i.test(resolved)) return acceptsImage
-  if (/url\(/i.test(resolved))
-    return acceptsImage || prop === 'fill' || prop === 'stroke'
+  const value = resolved.trim()
+  if (value === '') return false
+  if (/^(inherit|initial|unset|revert|revert-layer)$/i.test(value)) return true
+  if (prop === '-webkit-text-stroke') return textStrokeOk(value)
+  if ((prop === 'fill' || prop === 'stroke') && /^url\(/i.test(value)) {
+    const parts = postcss.list.space(value)
+    return (
+      imageKind(parts[0]!) === 'url' &&
+      (parts.length === 1 ||
+        (parts.length === 2 && completeColorAtom(parts[1]!)))
+    )
+  }
   if (
     prop === 'color' ||
     prop.endsWith('-color') ||
     prop === 'fill' ||
     prop === 'stroke'
   ) {
-    return completeColorValueOk(prop, resolved.trim())
+    return completeColorValueOk(prop, value)
   }
-  if (COLOR_FUNCTION_OR_HEX.test(resolved)) return true
-  if (/transparent|currentcolor/i.test(resolved)) return true
-  for (const match of resolved.matchAll(BARE_IDENT)) {
-    if (NAMED_COLORS.has(match[0].toLowerCase())) return true
-  }
-  if (DIMENSION.test(resolved) || BARE_NUMBER.test(resolved)) return false
-  return [...resolved.matchAll(BARE_IDENT)].every((match) =>
-    NON_COLOR_KEYWORDS.has(match[0].toLowerCase()),
+  return postcss.list
+    .comma(value)
+    .every((layer) => shorthandLayerOk(prop, layer))
+}
+
+/** 图像函数必须占满一个成分；其内部 URL/色标参数保留既有文法边界。 */
+function imageKind(value: string): 'url' | 'gradient' | null {
+  const match =
+    /^(url|(?:repeating-)?(?:linear|radial|conic)-gradient)\(/i.exec(value)
+  if (!match || colorTokenOf(value) !== value) return null
+  return match[1]!.toLowerCase() === 'url' ? 'url' : 'gradient'
+}
+
+/** 简写的一层须消费全部顶层成分；图像的属性归属与未知词形在同一入口判定。 */
+function shorthandLayerOk(prop: string, layer: string): boolean {
+  const parts = postcss.list.space(layer)
+  const acceptsImage = [
+    'background',
+    'background-image',
+    'border-image',
+    'border-image-source',
+  ].includes(prop)
+  const isPaint = (part: string): boolean =>
+    completeColorAtom(part) || (acceptsImage && imageKind(part) !== null)
+  const isKeyword = (part: string): boolean =>
+    NON_COLOR_KEYWORDS.has(part.toLowerCase())
+  const known = parts.every(
+    (part) => isPaint(part) || isKeyword(part) || isLineWidth(part),
+  )
+  return (
+    parts.length > 0 && known && (parts.some(isPaint) || parts.every(isKeyword))
   )
 }
 
 /** 单个颜色成分须完整匹配；函数内部参数仍交给既有静态模型边界。 */
 function completeColorAtom(value: string): boolean {
   if (/^#(?:[\da-f]{3,4}|[\da-f]{6}|[\da-f]{8})$/i.test(value)) return true
-  if (
-    NAMED_COLORS.has(value.toLowerCase()) ||
-    /^(transparent|currentcolor)$/i.test(value)
-  )
+  if (isNamedColor(value) || /^(transparent|currentcolor)$/i.test(value))
     return true
   const prefix = COLOR_FUNCTION_OR_HEX.exec(value)
   return (

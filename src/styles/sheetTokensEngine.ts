@@ -119,7 +119,7 @@ function hasRootBranch(selector: string): boolean {
 function isUnmodeledRootBranch(branch: string): boolean {
   return (
     branch.toLowerCase() !== ':root' &&
-    (isGlobalCompound(branch) || /:root(?![\w-])/i.test(branch))
+    (isDocumentTokenSelector(branch) || /:root(?![\w-])/i.test(branch))
   )
 }
 
@@ -276,11 +276,20 @@ function assertLocalContext(decl: postcss.Declaration): void {
   }
 }
 
-/** 单一全局复合选择器；带后代/子代等组合器的局部选择器不归入此所有权限制。 */
-function isGlobalCompound(selector: string): boolean {
+/** 文档元素的复合选择器起始形态；函数伪类、转义与命名空间按契约保留边界。 */
+const DOCUMENT_TARGET = /^(?::root|html|body|\*)(?=$|[.:[#])/i
+
+/** 简单组合器链按终点判断文档覆盖；通配终点仅在全局链中受限，保留 `.card > *` 局部定义。 */
+function isDocumentTokenSelector(selector: string): boolean {
+  const parts = postcss.list.split(
+    selector,
+    [' ', '\n', '\t', '\r', '\f', '>', '+', '~'],
+    false,
+  )
+  const target = parts[parts.length - 1] ?? ''
+  if (!DOCUMENT_TARGET.test(target)) return false
   return (
-    postcss.list.split(selector, [' ', '\n', '\t', '>', '+', '~'], false)
-      .length === 1 && /^(?::root|html|body|\*)(?=$|[.:[#])/i.test(selector)
+    !target.startsWith('*') || parts.every((part) => DOCUMENT_TARGET.test(part))
   )
 }
 
@@ -297,7 +306,7 @@ function assertGlobalTokenSource(root: postcss.Root): void {
   })
   if (!file || isSource) return
   root.walkRules((rule) => {
-    if (!postcss.list.comma(rule.selector).some(isGlobalCompound)) return
+    if (!postcss.list.comma(rule.selector).some(isDocumentTokenSelector)) return
     const definition = rule.nodes.find(
       (node) => node.type === 'decl' && node.prop.startsWith('--'),
     )

@@ -1,7 +1,6 @@
 /**
- * 全局令牌所有权、@property 注册、根选择器列表、颜色属性分类与自定义属性
- * CSS-wide 取值边界（review 5280542926、5280837519、5285788301）。错误码
- * 契约及状态矩阵见 docs/reviews/pr-288-review-<审查号>.md。
+ * F1 全局所有权、注册与根选择器，F2 CSS-wide 边界，F6 属性分类的既有回归。
+ * 当前契约和问题族矩阵统一见 docs/css-token-contract.md；审查记录仅作历史证据。
  */
 import postcss from 'postcss'
 import { describe, expect, it } from 'vitest'
