@@ -340,6 +340,79 @@ describe('runAgentLoop 读工具循环（既有行为保持）', () => {
     expect(toolMsg?.content).toBe('SNAP')
     expect(result).toMatchObject({ prose: '画布为空。', validation: null })
   })
+
+  it('同轮多个 find_nodes 回喂共享字符预算，超额结果用明确诊断代替（PR #294 评审）', async () => {
+    llmChatMock
+      .mockResolvedValueOnce(reply({ content: '{"action":false}' }))
+      .mockResolvedValueOnce(
+        reply({
+          tool_calls: [
+            {
+              id: 'f1',
+              type: 'function',
+              function: {
+                name: 'find_nodes',
+                arguments: '{"query":"甲"}',
+              },
+            },
+            {
+              id: 'f2',
+              type: 'function',
+              function: {
+                name: 'find_nodes',
+                arguments: '{"query":"乙"}',
+              },
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(reply({ content: '继续缩小查询。' }))
+
+    await runAgentLoop(
+      PROVIDER,
+      'm',
+      [{ role: 'user', content: '查找节点' }],
+      (_name, args) => String(args.query).repeat(20_000),
+      validators({}),
+    )
+
+    const feedback = llmChatMock.mock.calls[2][2].filter(
+      (m) => m.role === 'tool',
+    )
+    expect(feedback).toHaveLength(2)
+    expect(feedback[0]?.content).toBe('甲'.repeat(20_000))
+    expect(feedback[1]?.content).toContain('读取预算')
+    expect(feedback[1]?.content).not.toContain('乙'.repeat(100))
+  })
+
+  it('跨读取轮次的 find_nodes 回喂沿用同一预算', async () => {
+    const findCall = (id: string, query: string) => ({
+      id,
+      type: 'function' as const,
+      function: { name: 'find_nodes', arguments: JSON.stringify({ query }) },
+    })
+    llmChatMock
+      .mockResolvedValueOnce(reply({ content: '{"action":false}' }))
+      .mockResolvedValueOnce(reply({ tool_calls: [findCall('f1', '甲')] }))
+      .mockResolvedValueOnce(reply({ tool_calls: [findCall('f2', '乙')] }))
+      .mockResolvedValueOnce(reply({ content: '继续缩小查询。' }))
+
+    await runAgentLoop(
+      PROVIDER,
+      'm',
+      [{ role: 'user', content: '查找节点' }],
+      (_name, args) => String(args.query).repeat(20_000),
+      validators({}),
+    )
+
+    const feedback = llmChatMock.mock.calls[3][2].filter(
+      (m) => m.role === 'tool',
+    )
+    expect(feedback).toHaveLength(2)
+    expect(feedback[0]?.content.length).toBe(20_000)
+    expect(feedback[1]?.content.length).toBeLessThan(1_000)
+    expect(feedback[1]?.content).toContain('读取预算')
+  })
 })
 
 describe('runAgentLoop 形状错误不进纠错（#127 所有者裁决）', () => {
