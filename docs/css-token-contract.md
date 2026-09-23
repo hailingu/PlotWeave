@@ -2,7 +2,7 @@
 
 本页是 [PR #288](https://github.com/hailingu/PlotWeave/pull/288) 的支持范围与问题族矩阵入口，承接 [issue #278](https://github.com/hailingu/PlotWeave/issues/278)；分轮审查记录已从当前文档树移除，历史事实保留在 Git 中，不再各自定义当前范围。产品配色决策仍以 [UI 设计 §2.1](ui-design.md#21-三层结构) 和 §2.3、§2.6 为准。
 
-修订 `f90cbf5` 修复审查 [5286363682](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5286363682) 的三个 P2 漏检。`99b0ba9` 修复其首轮后续审查 [5286571379](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5286571379)：根令牌嵌套样式规则漏检、含图像背景简写经长形重置后的误报，均为 F2 已承诺范围的新触发条件。`0516b47` 处理审查 [5286675799](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5286675799) 首次针对整理提交 `65be8cd`：图像长形误收颜色属于 F3 的 P2 缺陷；滤镜颜色检查是此前属性集合之外的 P3 范围扩展建议，记录边界、不扩充解析器。当前审查 [5286812629](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5286812629) 首次针对 `0516b47`，补充 F2-c 的透明色简写经颜色长形覆盖这一真实 P2 误报。review 轮次与预算规则不变。
+修订 `f90cbf5` 修复审查 [5286363682](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5286363682) 的三个 P2 漏检。`99b0ba9` 修复其首轮后续审查 [5286571379](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5286571379)：根令牌嵌套样式规则漏检、含图像背景简写经长形重置后的误报，均为 F2 已承诺范围的新触发条件。`0516b47` 处理审查 [5286675799](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5286675799) 首次针对整理提交 `65be8cd`：图像长形误收颜色属于 F3 的 P2 缺陷；滤镜颜色检查是此前属性集合之外的 P3 范围扩展建议，记录边界、不扩充解析器。审查 [5286812629](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5286812629) 首次针对 `0516b47`，补充 F2-c 的透明色简写经颜色长形覆盖这一真实 P2 误报。最新审查 [5287145315](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5287145315) 首次针对 `50d63e0`，指出 F2 的子代组合器空白差异与条件组胜出源序两条新触发条件；均为既有简单选择器/层叠契约内的 P2 缺陷。review 轮次与预算规则不变。
 
 ## 支持、拒绝和保留边界
 
@@ -11,7 +11,7 @@
 | 问题族 | 支持的静态性质 | 明确拒绝 | 保留边界与理由 |
 | --- | --- | --- | --- |
 | F1 全局所有权 | 带 PostCSS `from` 的真实组件表逐表扫描；`tokens.css` 是全局定义源。检查选择器列表、媒体内无消费者的定义；简单组合器链终点为 `html`/`body`/`:root`，或全局链终点为通配的定义均受约束 | 组件全局定义 `TOKEN_GLOBAL_OUTSIDE_SOURCE`；`@property` 注册；根源中非 `:root` 的已识别文档选择器 `TOKEN_ROOT_SELECTOR_UNMODELED` | 完整选择器匹配、函数伪类/转义/命名空间以及跨文件局部级联未建模；全局限制是本表静态防线，不宣称覆盖所有可匹配 DOM 的表达式。无来源夹具只模拟独立级联 |
-| F2 层叠取胜 | 外观 light/dark × 对比度 no-preference/more × 透明度 no-preference/reduce × 动效 no-preference/reduce；简单同元素/后代/子代、逗号分支；先最近定义元素，再重要性，再源序。根、局部、跨媒体组、黄金接线均按此适用规则 | 未建模媒体特性/值；根或局部定义的未知 at-rule；根相关样式规则嵌套 `TOKEN_ROOT_NESTING_UNMODELED`、组件内部嵌套；未建模 CSS-wide 自定义属性取值；黄金规则重复或条件化；黄金背景域外简写 `TOKEN_BACKGROUND_SHORTHAND_UNMODELED` | 完整特异性、DOM 祖先匹配、跨文件局部定义、继承前别名计算、级联层/作用域及运行时动画不由此模型证明；黄金背景仅支持单层至多一个颜色成分和一个图像成分（none/URL/渐变），颜色成分复用 F3 的完整颜色识别（含 transparent、具名色和 currentColor），不要求数值 RGBA 转换；未指定成分取 transparent/none；不以字符串前缀关系代替完整选择器算法 |
+| F2 层叠取胜 | 外观 light/dark × 对比度 no-preference/more × 透明度 no-preference/reduce × 动效 no-preference/reduce；简单同元素/后代/子代、逗号分支，子代组合器可有或无空白；先最近定义元素，再重要性，再以实际胜出声明源序决定跨条件组取胜。根、局部、跨媒体组、黄金接线均按此适用规则 | 未建模媒体特性/值；根或局部定义的未知 at-rule；根相关样式规则嵌套 `TOKEN_ROOT_NESTING_UNMODELED`、组件内部嵌套；未建模 CSS-wide 自定义属性取值；黄金规则重复或条件化；黄金背景域外简写 `TOKEN_BACKGROUND_SHORTHAND_UNMODELED` | 完整特异性、DOM 祖先匹配、跨文件局部定义、继承前别名计算、级联层/作用域及运行时动画不由此模型证明；黄金背景仅支持单层至多一个颜色成分和一个图像成分（none/URL/渐变），颜色成分复用 F3 的完整颜色识别（含 transparent、具名色和 currentColor），不要求数值 RGBA 转换；未指定成分取 transparent/none；不以字符串前缀关系代替完整选择器算法 |
 | F3 完整值校验 | 纯颜色属性完整顶层值及边框颜色列表；`-webkit-text-stroke` 的宽度/颜色；其余简写逐个消费完整顶层成分，颜色、图像、长度（0、px/em/rem/pt/ch/ex/vw/vh）和关键字不能掩盖未知词形。`background-image` 只接受非空图像/none 列表，`border-image-source` 只接受单个图像/none；图像限 URL 与 linear/radial/conic 渐变（含 repeating），SVG paint 只额外接受 URL | 空值、未知或残余词形（含连字符、下划线、引号、标点）、不相容纯颜色、图像长形上的颜色/尺寸/简写关键字、空图像列表项及 source 多项、非图像属性上的图像；无颜色/图像的尺寸或裸数值叶子 | 函数内部参数、完整简写的顺序/个数/互斥关系未建模。已识别顶层成分不等于整条浏览器文法合法；只支持当前静态成分集合，合法但域外语法也可能被拒绝 |
 | F4 遮罩 alpha | `mask-image`/`-webkit-mask-image` 的单个 linear-gradient；静态 hex、rgb/rgba 与具名色、transparent；首末 alpha=0、内部 alpha=1 | 动态 `currentColor`、未知标识符/色标形式 `MASK_STOP_UNMODELED`；遮罩简写、边框遮罩和其他图像形式 `MASK_IMAGE_UNMODELED`；透明度不满足渐隐不变量 | 不解析元素计算色、继承/媒体动态色标、完整渐变位置/插值/多图层及像素。直接拒绝动态色标，不假定它不透明 |
 | F5 引用与词法 | PostCSS `decl.value`；字符串/URL 不透明；选中主值或 fallback 的递归求值、环检测、逐环境/分支悬空检查；输出保留字面内容 | 无可用主值且无有效 fallback 的引用；值链过深；展示消费处不相容的选中值 | 不是完整 CSS tokenizer；转义标识符、任意函数语法和完整继承计算保留边界。环图保留备用路径依赖，不能与只检查选中消费路径混淆 |
@@ -31,8 +31,8 @@ F2 上下文拒绝使用稳定错误码：根未知 at-rule 或根内嵌 at-rule
 | --- | --- | --- | --- | --- | --- |
 | F1-a | 新组件表无消费者；文档选择器包含组合器、列表或失活媒体 | 先验证来源/定义，再做声明、局部、接线、类型扫描 | 所有入口拒绝，不能依靠同表消费发现覆盖 | 全局定义所有权不随消费者位置/导入顺序变化；`assertGlobalTokenSource` → `sheetDecls`、`localDefinitions`、`danglingRefs`、`displayTypeErrors` | `sheetTokenContractFamilies.test.ts` F1 最小例、组合例；既有边界套件 |
 | F1-b | 根源、组件局部定义、全局普通属性 | 相同入口扫描；根源中的非根选择器走根取值入口 | 保留合法局部/普通属性；根源文档组合器定义明确拒绝 | 定义源例外不能掩盖根解析遗漏；`tokenValuesOf`/`assertRootContexts` | F1 对照与根入口测试；完整复杂选择器为上表边界 |
-| F2-a | 根、局部或黄金声明先重要后普通；局部定义跨活跃媒体组 | 按环境筛选，再按同元素重要性与源序选胜 | 重要值在每个入口胜出；交换顺序不使普通值获胜 | 重要性规则在全部拥有者一致；`applyRootDecl`、`pickWinner`、`winningDecl` | F2 跨入口对照；`sheetTokensSemantics.test.ts` 根/局部/跨组/黄金用例 |
-| F2-b | 自身/近祖先/远祖先定义同名，最近定义失效 | 先最近元素，后同元素级联，再 fallback | 自身优先于祖先重要性；有效回退恢复、无效回退报错 | 失败不能借被遮蔽值恢复；`nearestDefinitions` → `valueScopeIn` → `displayValueIn`/`unresolvedRefsIn` | 既有继承、逐选择器、fallback 用例；完整 DOM 继承未验证 |
+| F2-a | 根、局部或黄金声明先重要后普通；局部定义跨活跃媒体组，某组后续普通声明晚于另一组重要声明 | 按环境筛选；同组先选实际胜出声明，跨组按胜出声明的源序与重要性取胜 | 后续普通声明不能把该组较早的重要赢家挪到另一组重要赢家之后；后续重要声明可移动赢家；仅活跃组参与 | 同一声明的优先级和源序在组内/跨组一致；`effectiveDefs` → `pickWinner` → `valueScopeIn`，根/黄金入口维持既有规则 | F2 跨入口及 `sheetTokensSemantics.test.ts` 两媒体重叠、先后重要性、失活对照与 fallback 恢复；完整特异性仍保留边界 |
+| F2-b | 自身/近祖先/远祖先定义同名，最近定义失效；定义和消费者对子代组合器空白写法不同 | 对简单选择器规范化空白，再检查可达、计算距离、按最近元素选值，最后处理 fallback | `.parent > .child` 与 `.parent>.child .grand` 正确继承子代定义；兄弟、词头近似及不可达分支保持拒绝；近定义优先于远祖先重要声明 | 相同简单选择器的写法不影响可达性、距离和选中值；`selectorReaches`/`inheritanceDistance` → `scopeReaches`/`nearestDefinitions` → 接线与类型入口 | F2-b 正反例、选择器列表、最近定义/重要性组合及 fallback；函数伪类、转义和完整 DOM 匹配仍为既有边界 |
 | F2-c | 危险背景为纯色、透明/具名/动态颜色成分、仅图像、图像+颜色或 none；长形前后交错，含重要性/大小写 | 先按各成分选胜出声明，再用 F3 完整颜色识别展开简写；未指定成分重置为 transparent/none | image:none 仅清图；color 长形仅换色；transparent 后接 danger 颜色长形得到 danger/none，反序或重要透明简写仍为 transparent/none，不误当危险底色 | 长形只覆盖自身成分，成分识别不得被 RGBA 数值求值能力限制；`backgroundPaint`/`winningDecl`/`completeColorAtom` | `sheetTokens.test.ts` F2-c 图像与透明色最小例、既有数值色对照、具名色/currentColor/函数色、顺序/重要性/图像组合及未知/重复成分拒绝；真实危险规则探针；完整背景文法与运行时色值计算仍不承诺 |
 | F2-d | 根令牌内含嵌套样式规则，含 &、列表、多层或媒体中间层；可无直接令牌/消费者 | 在媒体筛选及值提取前检查自定义属性的整条规则祖先链 | 根相关嵌套声明报 TOKEN_ROOT_NESTING_UNMODELED，失活媒体也不能掩盖；平铺根和外层媒体根保留 | 不得以未解析嵌套覆盖的旧根值验证消费者；`assertRootContexts` → `tokenValuesOf`/真实 `tokenValues` | `sheetTokenContractFamilies.test.ts` F2-d 最小例、组合和正常对照；组件入口沿用既有 TOKEN_SHEET_NESTING_UNMODELED；不含根令牌的无关规则保持原范围 |
 | F3-a | 未知连字符值、引号或残余词形，单独或与合法颜色/图像组合 | 原值/别名/选中 fallback 到达属性校验 | 拒绝整个值；不能空集合通过，也不能见一个颜色即通过 | 所有顶层成分必须完整识别；`colorTypeOk` → `displayTypeErrors` | F3 最小反例、合法对照、颜色/图像混合反例 |
@@ -51,6 +51,8 @@ F2 上下文拒绝使用稳定错误码：根未知 at-rule 或根内嵌 at-rule
 期望值依据规范手工确定，不使用被测引擎生成预期结果：
 
 - F1：[自定义属性继承](https://www.w3.org/TR/css-variables-1/#defining-variables) 与 [样式表导入](https://www.w3.org/TR/css-cascade-5/#at-import) 说明，另表定义在 body 的变量仍影响后代；所有权拒绝是项目为避免跨表模拟采用的约束。
+- F2-b：[Selectors 4 子代组合器](https://www.w3.org/TR/selectors-4/#child-combinators) 允许 `>` 两侧空白省略；静态模型中同一简单链写法应有相同可达结果，兄弟组合器依然不是后代。
+- F2-a：[Cascade 5 重要性与源序](https://www.w3.org/TR/css-cascade-5/#cascade-sort) 说明重要声明先于普通声明；同级冲突时比较声明自身出现顺序，不能按所在条件组的最后一条普通声明移动。
 - F2：[级联顺序](https://www.w3.org/TR/css-cascade-5/#cascade-sort)、[继承](https://www.w3.org/TR/css-cascade-5/#inheriting) 与 [简写](https://www.w3.org/TR/css-cascade-5/#shorthand) 分别支撑重要性、指定/继承优先与长形独立覆盖。
 - F2-d：[CSS Nesting 的 & 选择器](https://www.w3.org/TR/css-nesting-1/#nest-selector)（工作草案）解释嵌套声明为何仍能命中父规则元素；本契约采用拒绝方案。F2-c：[background 简写](https://www.w3.org/TR/css-backgrounds-3/#background) 将颜色/图像分别设置为指定值或初始值，后续长形只覆盖对应属性；手工预期不使用被测投影函数生成。[CSS Color 的 transparent](https://www.w3.org/TR/css-color-4/#transparent-color) 与 [currentcolor](https://www.w3.org/TR/css-color-4/#currentcolor-color) 均属于颜色类型；识别颜色成分不要求计算其最终 RGBA。黄金接线仍比较胜出成分的令牌字面接线，不把未覆盖的透明/动态色视为 danger。
 - F3：[变量替换后的文法检查](https://www.w3.org/TR/css-variables-1/#invalid-variables) 说明，变量存在不代表消费属性合法；[值语法](https://www.w3.org/TR/css-values-4/#value-defs) 支撑完整成分识别。简写完整文法与函数内部参数仍按上表披露。
@@ -68,6 +70,33 @@ F2 上下文拒绝使用稳定错误码：根未知 at-rule 或根内嵌 at-rule
 - 完整路由：`npm run format:check && npm run lint && npm run typecheck:strict && npm run build && npm test` 通过，152 文件 / 2149 项；构建产物 `dist/` 在完成前删除。首次验证发现 ES 目标不支持 `Array.at`/`replaceAll`，已改用索引/正则替换，未修改目标库或依赖。
 - `git diff --check` 通过。文件/最长函数代码行：值模块 229/26、引擎 745/32、真实契约测试 960/70、语义测试 954/70、边界测试 319/58、新问题族测试 176/57；均满足 800/1800/80 硬上限。F6 原有长测试分组按全表扫描与闭包/反向校验拆开，断言保留。引擎超过 600 行讨论阈值，保留原因是本轮仅更换两个既有入口共享的文档选择器判定，没有扩展完整层叠职责；由仓库维护者在下一次修改该引擎时复核。既有 70 行分组为同一契约的并列案例，未扩张。圈复杂度未配置工具，以函数跨度和控制流人工复核。
 - 文档路径没有配置自动行为检查；已结构化核对统一矩阵、设计 §2.1、代码头注、错误码、历史记录映射和外部规范依据。数据模型、产品配色、review 预算及治理文件不变。Rust 源码未改，Rust 变更路由不适用；提交/推送钩子仍须生成新鲜前端/Rust 覆盖率并通过 Sonar，结果以 PR 当前修订的验证记录为准。
+
+## 审查 5287145315 的验证与处置
+
+两条均为既有 F2 静态子集内的新 P2 触发条件。多轮遗漏的直接原因分别是可达性用原始选择器字符串前缀代替等价简单链判断，以及条件组排序跟随最后出现的声明而非真正胜出声明；此前对照覆盖了同写法和组内重要性，却未组合空白变体、最近定义、重叠媒体组及后续普通声明。修复仍限于已承诺的简单选择器与层叠范围，不扩展完整选择器引擎或预算。
+
+- **F2-a 层叠**：`effectiveDefs` 在同选择器/条件组内只在新声明真正胜出时更新组顺序；较晚普通声明不能挪动较早的重要赢家，较晚同级或重要赢家仍按自身源序参与跨组取胜。对照含相反顺序、失活媒体、无效值 fallback 和另一活跃组恢复。
+- **F2-b 可达性**：`selectorReaches` 与 `inheritanceDistance` 共用简单链规范化，将顶层 `>` 两侧可选空白归一；属性值/函数内部内容不改。覆盖同元素、子代/后代、伪类延续、最近定义覆盖远祖先重要值，以及兄弟、词头相似、选择器列表、属性引号内容的拒绝对照。
+- **Red → Green**：仓库根目录、Node 24.18.0，先加 10 个问题族用例；`npm test -- src/styles/sheetTokenContractFamilies.test.ts` 为 8 项预期失败 / 83 项通过。修复后 `npm test -- src/styles` 为 398/398 通过。预期值由上方 Selectors 4 与 Cascade 5 规范独立确定，未声称浏览器/WebView 实测。
+- **真实 glob**：临时 CSS 中 `.parent > .child` 定义的 `4px` 被 `.parent>.child .grand` 消费，完整 `sheetTokens.test.ts` 在 16 个环境报告类型不相容；重叠 dark/more 组的后位重要 `4px` 在 8 个匹配环境报告类型不相容，两次均为 1 失败 / 69 通过。合法组合对照 70/70 通过；初版对照没有给仅媒体内定义加 fallback，按既有 F5 接线规则正确报悬空，补齐后通过。临时 CSS 均已删除。
+- **完整路由**：`npm run format:check && npm run lint && npm run typecheck:strict && npm run build` 均通过。首次 `npm test` 有 2239/2240 项通过，唯一失败为现有 `scripts/sonar-quality-gate.test.ts` 的 30 秒超时；单独重跑该文件 22/22 通过，再跑 `npm test` 为 152 文件 / 2240 项全通过。`git diff --check` 通过；文档无配置自动行为检查，已核对支持表、F2-a/F2-b 矩阵、设计 §2.1、测试和规范链接。提交/推送钩子仍须刷新前端/Rust 覆盖率并运行 Sonar，结果以 PR 当前修订为准。
+- **结构与边界**：引擎 791 行、最长函数 32 行；问题族测试 407 行、最长回调不超过 60 行，满足 800/1800/80 硬上限。引擎已超过 600 行讨论阈值，本次只修改原有 F2 私有判定与排序，未增添模型维度；维护者下次实质修改时复核拆分。完整特异性、DOM 匹配、跨表局部级联、函数伪类/转义仍按支持表保留；Rust 源码、产品配色与治理预算不变。
+
+以下为两个[原审查](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5287145315)线程的四字段回复草稿；本文不等于已在原线程发帖或标记 resolved。提交、完整路由、钩子和 CI 的结果以 PR 当前修订证据为准。
+
+### [子代组合器空白差异](https://github.com/hailingu/PlotWeave/pull/288#discussion_r4079248605)
+
+1. **处置** — 已在本次修订修复，真实 P2 可达性漏检。
+2. **理由与变更** — `normalizeSimpleSelector` 对已支持简单链的顶层 `>` 空白做归一，`selectorReaches` 和 `inheritanceDistance` 共用；属性值不改，兄弟与词头相似选择器仍不可达。矩阵 F2-b 和设计 §2.1 已同步。
+3. **验证** — 4 种空白写法、最近定义及负对照通过；Red 复现、Green 样式 398 项通过，真实 glob 在 16 环境点名 `4px`，依据 Selectors 4 子代组合器规则。
+4. **后续** — 本条实现完成；完整 DOM/复杂选择器仍为已知边界，提交/推送门禁与原线程发布状态见 PR 验证记录。
+
+### [跨条件组按赢家源序排序](https://github.com/hailingu/PlotWeave/pull/288#discussion_r4079248609)
+
+1. **处置** — 已在本次修订修复，真实 P2 层叠取胜漏检。
+2. **理由与变更** — `effectiveDefs` 只在组内声明取胜时移动该组；后续普通声明不改变较早重要赢家的位置，跨活跃组仍由赢家重要性和源序比较。矩阵 F2-a 和设计 §2.1 已同步。
+3. **验证** — 两种顺序、后续重要对照、失活条件与无效值恢复通过；Red 复现、Green 样式 398 项通过，真实 glob 在匹配的 8 环境点名 `4px`，依据 Cascade 5 重要性/源序规则。
+4. **后续** — 本条实现完成；完整特异性和复杂条件仍为已知边界，提交/推送门禁与原线程发布状态见 PR 验证记录。
 
 ## 审查 5286812629 的验证与处置
 

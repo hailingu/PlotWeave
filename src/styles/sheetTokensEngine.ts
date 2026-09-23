@@ -384,6 +384,26 @@ function* walkContainer(
 /** 全局作用域选择器：其上的自定义属性对文档内任何规则可达。 */
 const GLOBAL_SCOPES = new Set([':root', 'html', 'body', '*'])
 
+/** 仅规范化简单链顶层空白和 `>`；属性值/函数内文本保持原样，不解析完整选择器。 */
+function normalizeSimpleSelector(selector: string): string {
+  const syntax = maskCssOpaque(selector)
+  let depth = 0
+  let out = ''
+  for (let i = 0; i < selector.length; i += 1) {
+    const marker = syntax[i] ?? ''
+    const raw = selector[i] ?? ''
+    if (marker === '[' || marker === '(') depth += 1
+    if (depth > 0) {
+      out += raw
+      if (marker === ']' || marker === ')') depth -= 1
+    } else if (marker === '>') out = out.trimEnd() + '>'
+    else if (/\s/.test(marker)) {
+      if (out && !out.endsWith(' ') && !out.endsWith('>')) out += ' '
+    } else out += raw
+  }
+  return out.trim()
+}
+
 /**
  * 自定义属性 initial 与文档根 unset 为保证无效值；其余 CSS-wide 继承/回滚
  * 尚未建模，明确拒绝，不能将原关键字误当作消费属性的合法取值。
@@ -406,9 +426,11 @@ function isGuaranteedInvalid(value: string, selector: string): boolean {
 
 /** 单个选择器 definer 是否覆盖 referencer 自身或其后代（兄弟组合器不算）。 */
 function selectorReaches(definer: string, referencer: string): boolean {
-  if (GLOBAL_SCOPES.has(definer) || definer === referencer) return true
-  if (!referencer.startsWith(definer)) return false
-  const rest = referencer.slice(definer.length)
+  const def = normalizeSimpleSelector(definer)
+  const ref = normalizeSimpleSelector(referencer)
+  if (GLOBAL_SCOPES.has(def) || def === ref) return true
+  if (!ref.startsWith(def)) return false
+  const rest = ref.slice(def.length)
   // 复合选择器延续（同一元素）或后代组合器（空白 / >）；兄弟组合器 + ~ 不可达。
   return /^[:.[#]/.test(rest) || /^(\s*>|\s+(?![+~]))/.test(rest)
 }
@@ -487,14 +509,16 @@ function pickWinner<T extends { important: boolean }>(
 
 /** 已建模的简单后代/子代链中，定义元素到消费元素的距离；复合延续仍在同元素。 */
 function inheritanceDistance(definer: string, referencer: string): number {
-  if (!selectorReaches(definer, referencer)) return Infinity
-  if (definer === '*' || definer === referencer) return 0
-  if (referencer.startsWith(definer)) {
-    return referencer.slice(definer.length).split(/[\s>]+/).length - 1
+  const def = normalizeSimpleSelector(definer)
+  const ref = normalizeSimpleSelector(referencer)
+  if (!selectorReaches(def, ref)) return Infinity
+  if (def === '*' || def === ref) return 0
+  if (ref.startsWith(def)) {
+    return ref.slice(def.length).split(/[\s>]+/).length - 1
   }
   // 全局根定义是简单局部选择器链之外的继承来源；body 比文档根更近。
-  const localDepth = referencer.split(/[\s>]+/).length
-  return localDepth + (definer === 'body' ? 0 : 1)
+  const localDepth = ref.split(/[\s>]+/).length
+  return localDepth + (def === 'body' ? 0 : 1)
 }
 
 /** 先限定最近定义元素，再让调用方在同元素的候选间应用重要性与源序。 */
@@ -516,21 +540,21 @@ function nearestDefinitions(defs: LocalDef[], referencer: string): LocalDef[] {
 /**
  * 同选择器同条件的重复定义按层叠取胜出处：同一组内 !important 声明优先于
  * 普通声明，同重要性再取源序后位（`.a { --fg: 4px !important; --fg: var(--x) }`
- * 生效的是前位的 `4px`）。组在输出中的位置按该组**最后一次出现**的源序
- * 排列（先 delete 再 set 把键移至 Map 末尾），避免后续基线定义覆盖先前媒体块
- * 定义时被错误识为“早于”媒体块定义。跨选择器的特异性/顺序胜负
+ * 生效的是前位的 `4px`）。组在输出中的位置按**胜出声明**的源序排列；
+ * 后位普通声明不移动较早的重要赢家，后位同级赢家则移动 Map 键。
+ * 跨选择器的特异性/顺序胜负
  * 未建模，见头注未覆盖维度。
  */
 function effectiveDefs(defs: readonly LocalDef[]): LocalDef[] {
-  const groups = new Map<string, LocalDef[]>()
+  const groups = new Map<string, LocalDef>()
   for (const def of defs) {
     const key = `${def.selector}|${def.condition}`
-    const list = groups.get(key) ?? []
-    list.push(def)
+    const current = groups.get(key)
+    if (current && pickWinner([current, def]) === current) continue
     groups.delete(key)
-    groups.set(key, list)
+    groups.set(key, def)
   }
-  return [...groups.values()].map((list) => pickWinner(list)!)
+  return [...groups.values()]
 }
 
 /** 单个环境的接线上下文：env 生效的令牌值 + 本表局部定义。 */

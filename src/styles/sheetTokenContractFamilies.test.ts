@@ -12,6 +12,7 @@ import {
   displayValueIn,
   LIGHT_ENV,
   localDefinitions,
+  scopeReaches,
   sheetDecls,
   tokenValuesOf,
   TOKEN_SHEET,
@@ -115,6 +116,135 @@ describe('F2 层叠取胜：重要性规则覆盖全部拥有者', () => {
       ).toBe('#ffffff')
     },
   )
+})
+
+describe('F2-a 跨条件组按胜出声明的源序排序', () => {
+  it.each([
+    [
+      '@media (prefers-color-scheme: dark) { .a { --fg: #fff !important; } }',
+      '@media (prefers-contrast: more) { .a { --fg: 4px !important; } }',
+      '@media (prefers-color-scheme: dark) { .a { --fg: #000; } }',
+      '4px',
+    ],
+    [
+      '@media (prefers-contrast: more) { .a { --fg: 4px !important; } }',
+      '@media (prefers-color-scheme: dark) { .a { --fg: #fff !important; } }',
+      '@media (prefers-contrast: more) { .a { --fg: #000; } }',
+      '#fff',
+    ],
+    [
+      '@media (prefers-color-scheme: dark) { .a { --fg: #fff !important; } }',
+      '@media (prefers-contrast: more) { .a { --fg: 4px !important; } }',
+      '@media (prefers-color-scheme: dark) { .a { --fg: #000 !important; } }',
+      '#000',
+    ],
+  ])('跨条件组胜出值为 %s / %s / %s', (first, second, third, expected) => {
+    const root = postcss.parse(
+      `${first}${second}${third}.a { color: var(--fg) }`,
+    )
+    const env = {
+      ...LIGHT_ENV,
+      scheme: 'dark' as const,
+      contrast: 'more' as const,
+    }
+    const color = [...sheetDecls(root)].find((decl) => decl.prop === 'color')!
+    expect(
+      displayValueIn(color, {
+        env,
+        tokens: new Map(),
+        locals: localDefinitions(root),
+      }),
+    ).toBe(expected)
+    expect(displayTypeErrors(root, env)).toEqual(
+      expected === '4px' ? ['.a color: 4px'] : [],
+    )
+  })
+})
+
+describe('F2-a 失活条件与无效值恢复', () => {
+  it('失活媒体不挪动赢家；保证无效的旧赢家可由另一活跃条件恢复', () => {
+    const root = postcss.parse(
+      '@media (prefers-color-scheme: dark) { .a { --fg: initial !important; } }' +
+        '@media (prefers-contrast: more) { .a { --fg: 4px !important; } }' +
+        '@media (prefers-color-scheme: dark) { .a { --fg: #fff; } }' +
+        '.a { color: var(--fg, var(--text-primary)); }',
+    )
+    expect(
+      displayTypeErrors(root, {
+        ...LIGHT_ENV,
+        scheme: 'dark',
+        contrast: 'more',
+      }),
+    ).toEqual(['.a color: 4px'])
+    expect(displayTypeErrors(root, { ...LIGHT_ENV, scheme: 'dark' })).toEqual(
+      [],
+    )
+    expect(displayTypeErrors(root, { ...LIGHT_ENV, contrast: 'more' })).toEqual(
+      ['.a color: 4px'],
+    )
+    expect(
+      danglingRefs(root, { ...LIGHT_ENV, scheme: 'dark', contrast: 'more' }),
+    ).toEqual([])
+  })
+})
+
+describe('F2-b 简单子代链的空白写法不改变局部可达性', () => {
+  it.each([
+    ['.parent > .child', '.parent>.child .grand'],
+    ['.parent>.child', '.parent > .child .grand'],
+    ['.parent  >  .child', '.parent>.child'],
+    ['.parent > .child', '.parent>.child:hover .grand'],
+  ])('%s 定义可达 %s 的类型与引用入口', (definer, consumer) => {
+    const root = postcss.parse(
+      `${definer} { --fg: 4px; } ${consumer} { color: var(--fg, var(--text-primary)); }`,
+    )
+    expect(
+      scopeReaches(localDefinitions(root).get('--fg')!, { selector: consumer }),
+    ).toBe(true)
+    expect(danglingRefs(root, LIGHT_ENV)).toEqual([])
+    expect(displayTypeErrors(root, LIGHT_ENV)).toEqual([
+      `${consumer} color: 4px`,
+    ])
+  })
+
+  it('最近子代定义优先于远祖先重要声明，列表与兄弟仍各自判定', () => {
+    const root = postcss.parse(
+      '.parent { --fg: var(--text-primary) !important; }' +
+        '.parent > .child { --fg: 4px; }' +
+        '.parent>.child .grand { color: var(--fg); }',
+    )
+    expect(displayTypeErrors(root, LIGHT_ENV)).toEqual([
+      '.parent>.child .grand color: 4px',
+    ])
+    const defs = localDefinitions(root).get('--fg')!
+    const child = defs.filter((def) => def.selector.includes('>'))
+    expect(
+      scopeReaches(child, { selector: '.parent>.child .grand, .orphan' }),
+    ).toBe(false)
+    expect(scopeReaches(child, { selector: '.parent>.child + .grand' })).toBe(
+      false,
+    )
+    expect(scopeReaches(child, { selector: '.parent>.childish .grand' })).toBe(
+      false,
+    )
+  })
+
+  it('属性值内的 > 原样保留，仅规范化外部子代组合器', () => {
+    const root = postcss.parse(
+      '.parent[data-note="a > b"] > .child { --fg: 4px; }',
+    )
+    const defs = localDefinitions(root).get('--fg')!
+    expect(
+      scopeReaches(defs, {
+        selector: '.parent[data-note="a > b"]>.child .grand',
+      }),
+    ).toBe(true)
+    expect(
+      scopeReaches(defs, {
+        selector: '.parent[data-note="a>b"]>.child .grand',
+      }),
+    ).toBe(false)
+  })
 })
 
 describe('F2-d 根令牌的嵌套规则在取值前拒绝', () => {
