@@ -53,9 +53,15 @@ function searchBody(n: CanvasNode): string {
   }
 }
 
-/** 单条关联连线行：kind + 端点 id（branch 带选项文案）。 */
+/**
+ * 单条关联连线行：kind + 端点 id（branch 带选项文案）。端点是补读路径
+ * 的连线可发现性所在（get_node 不返回连线、摘要侧连线另有条数节选），
+ * 属不可裁剪部分——选项文案按行预算余量裁剪（PR #294 评审），不整行
+ * 截断到端点之前。
+ */
 function edgeLine(e: Edge, nodes: CanvasNode[]): string {
   const kind = edgeKindOf(e)
+  const endpoints = `${e.source} → ${e.target}`
   if (kind === 'branch') {
     const src = nodes.find((n) => n.id === e.source)
     const optId = branchOptionIdOf(e.sourceHandle)
@@ -63,12 +69,13 @@ function edgeLine(e: Edge, nodes: CanvasNode[]): string {
       src?.type === 'branch'
         ? src.data.options.find((o) => o.id === optId)
         : undefined
-    return `  - branch(选项${opt?.label ?? '?'}): ${e.source} → ${e.target}`
+    const labelBudget = Math.max(0, LINE_MAX - endpoints.length - 24)
+    return `  - branch(选项${cut(opt?.label ?? '?', labelBudget)}): ${endpoints}`
   }
   if (kind === 'attach' || e.sourceHandle === SCENE_SHOT_HANDLE) {
-    return `  - attach: ${e.source} → ${e.target}`
+    return `  - attach: ${endpoints}`
   }
-  return `  - sequence: ${e.source} → ${e.target}`
+  return `  - sequence: ${endpoints}`
 }
 
 /** 节点在多命中视图中的展示块：节点行 + 前若干条连线 + 连线溢出指引。 */

@@ -201,6 +201,38 @@ describe('findNodesText（issue #275 评审：被节选条目的可发现读取�
     }
   })
 
+  it('选项文案超长时只裁剪文案：连线端点不被截断（PR #294 评审）', () => {
+    const hub: CanvasNode = node({
+      id: 'hub',
+      type: 'branch',
+      position: { x: 0, y: 0 },
+      data: {
+        prompt: '枢纽',
+        options: [
+          { id: 'o1', label: '长'.repeat(300) },
+          { id: 'o2', label: '出口二' },
+        ],
+      },
+    })
+    const edges: Edge[] = [
+      {
+        id: 'e1',
+        source: 'hub',
+        target: 'far-target-1',
+        type: 'branch',
+        sourceHandle: 'option-o1',
+      },
+    ]
+    const text = findNodesText([hub], edges, 'hub')
+    // 端点是不可裁剪部分：完整 source → target 必须在场（get_node 不返回连线）
+    expect(text).toContain(': hub → far-target-1')
+    // 文案按预算裁剪并以省略号声明
+    expect(text).toContain('选项长')
+    const line = text.split('\n').find((l) => l.includes('far-target-1'))!
+    expect(line.length).toBeLessThanOrEqual(200)
+    expect(line).toContain('…')
+  })
+
   it('精确 id 命中优先进入单节点视图：id 子串碰撞不阻连续线枚举（PR #294 评审）', () => {
     // 合法旧项目可同时存在 n1 与 n10：查询 n1 时 includes 也会命中 n10
     const hub: CanvasNode = node({
