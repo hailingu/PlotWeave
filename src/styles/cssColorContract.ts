@@ -105,7 +105,7 @@ const NON_COLOR_KEYWORDS = new Set([
 ])
 
 /**
- * 按 docs/css-token-contract.md F3 验证完整顶层值：纯色/描边有专门文法，
+ * 按 docs/css-token-contract.md F3 验证完整顶层值：纯色/图像长形/描边有专门文法，
  * 其余简写逐成分检查，未知词形不能被颜色/图像掩盖；无绘制成分须为纯关键字。
  * 函数内部参数与完整简写顺序/互斥规则保留边界，不宣称等价于浏览器文法校验。
  */
@@ -113,6 +113,8 @@ export function colorTypeOk(prop: string, resolved: string): boolean {
   const value = resolved.trim()
   if (value === '') return false
   if (/^(inherit|initial|unset|revert|revert-layer)$/i.test(value)) return true
+  if (prop === 'background-image' || prop === 'border-image-source')
+    return imageValueOk(prop, value)
   if (prop === '-webkit-text-stroke') return textStrokeOk(value)
   if ((prop === 'fill' || prop === 'stroke') && /^url\(/i.test(value)) {
     const parts = postcss.list.space(value)
@@ -143,15 +145,31 @@ export function imageKind(value: string): 'url' | 'gradient' | null {
   return match[1]!.toLowerCase() === 'url' ? 'url' : 'gradient'
 }
 
+/** 图像长形只接受完整图像/none；保留空列表项以拒绝无效逗号，URL/函数内部逗号不分层。 */
+function imageValueOk(prop: string, value: string): boolean {
+  const syntax = maskCssOpaque(value)
+  const images: string[] = []
+  let depth = 0
+  let start = 0
+  for (let i = 0; i < syntax.length; i += 1) {
+    if (syntax[i] === '(') depth += 1
+    else if (syntax[i] === ')') depth -= 1
+    else if (syntax[i] === ',' && depth === 0) {
+      images.push(value.slice(start, i).trim())
+      start = i + 1
+    }
+  }
+  images.push(value.slice(start).trim())
+  return (
+    (prop === 'background-image' || images.length === 1) &&
+    images.every((image) => /^none$/i.test(image) || imageKind(image) !== null)
+  )
+}
+
 /** 简写的一层须消费全部顶层成分；图像的属性归属与未知词形在同一入口判定。 */
 function shorthandLayerOk(prop: string, layer: string): boolean {
   const parts = postcss.list.space(layer)
-  const acceptsImage = [
-    'background',
-    'background-image',
-    'border-image',
-    'border-image-source',
-  ].includes(prop)
+  const acceptsImage = prop === 'background' || prop === 'border-image'
   const isPaint = (part: string): boolean =>
     completeColorAtom(part) || (acceptsImage && imageKind(part) !== null)
   const isKeyword = (part: string): boolean =>

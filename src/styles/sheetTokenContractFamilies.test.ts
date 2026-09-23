@@ -205,3 +205,73 @@ describe('F3 完整顶层值：未知词形不能被其他成分掩盖', () => {
     ).toEqual(['.a background: not-a-color'])
   })
 })
+
+describe.each(['background-image', 'border-image-source'])(
+  'F3-c 图像长形 %s 的完整值',
+  (prop) => {
+    it.each([
+      '#fff',
+      'red',
+      'rgb(255 255 255)',
+      'transparent',
+      'currentColor',
+      'url(a.png) #fff',
+      'none padding-box',
+      '1px',
+      'solid',
+      ',url(a.png)',
+      'url(a.png),,none',
+      'url(a.png),',
+    ])('拒绝非图像或空列表项：%s', (value) => {
+      expect(colorTypeOk(prop, value)).toBe(false)
+      const root = postcss.parse(
+        `.a { --paint: ${value}; ${prop}: var(--paint); }`,
+      )
+      expect(displayTypeErrors(root, LIGHT_ENV)).toEqual([
+        `.a ${prop}: ${value}`,
+      ])
+    })
+
+    it.each([
+      'none',
+      'url("data:image/svg+xml,a,,b")',
+      'repeating-radial-gradient(red, transparent)',
+      'initial',
+      'revert-layer',
+    ])('保留合法单项或整值关键字：%s', (value) => {
+      expect(colorTypeOk(prop, value)).toBe(true)
+    })
+
+    it.each(['url(a.png), none', 'linear-gradient(red, blue),url(b.png)'])(
+      '列表个数由属性决定：%s',
+      (value) => {
+        expect(colorTypeOk(prop, value)).toBe(prop === 'background-image')
+      },
+    )
+  },
+)
+
+describe.each(['background-image', 'border-image-source'])(
+  'F3-c 图像长形 %s 的求值组合',
+  (prop) => {
+    it('局部别名、媒体重要性与 fallback 切换不改变图像类型', () => {
+      const root = postcss.parse(
+        `.a { --paint: url(a.png); --alias: var(--paint); ${prop}: var(--alias, #fff); }
+         @media (prefers-color-scheme: dark) { .a { --paint: #fff !important; } }
+         .b { ${prop}: var(--missing, #fff); }
+         .c { ${prop}: var(--text-primary); }`,
+      )
+      expect(displayTypeErrors(root, LIGHT_ENV)).toEqual([
+        `.b ${prop}: #fff`,
+        expect.stringMatching(`^\\.c ${prop}: `),
+      ])
+      expect(displayTypeErrors(root, { ...LIGHT_ENV, scheme: 'dark' })).toEqual(
+        [
+          `.a ${prop}: #fff`,
+          `.b ${prop}: #fff`,
+          expect.stringMatching(`^\\.c ${prop}: `),
+        ],
+      )
+    })
+  },
+)

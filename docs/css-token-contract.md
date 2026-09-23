@@ -2,7 +2,7 @@
 
 本页是 [PR #288](https://github.com/hailingu/PlotWeave/pull/288) 的支持范围与问题族矩阵入口，承接 [issue #278](https://github.com/hailingu/PlotWeave/issues/278)；分轮审查记录已从当前文档树移除，历史事实保留在 Git 中，不再各自定义当前范围。产品配色决策仍以 [UI 设计 §2.1](ui-design.md#21-三层结构) 和 §2.3、§2.6 为准。
 
-上一修订 `f90cbf5` 修复审查 [5286363682](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5286363682) 的三个 P2 漏检。本次处理其首轮后续审查 [5286571379](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5286571379)：根令牌嵌套样式规则漏检、含图像背景简写经长形重置后的误报，均为 F2 已承诺范围的新触发条件。review 轮次与预算规则不变。
+修订 `f90cbf5` 修复审查 [5286363682](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5286363682) 的三个 P2 漏检。`99b0ba9` 修复其首轮后续审查 [5286571379](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5286571379)：根令牌嵌套样式规则漏检、含图像背景简写经长形重置后的误报，均为 F2 已承诺范围的新触发条件。当前审查 [5286675799](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5286675799) 首次针对整理提交 `65be8cd`：图像长形误收颜色属于 F3 的 P2 缺陷；滤镜颜色检查是此前属性集合之外的 P3 范围扩展建议，记录边界、不扩充解析器。review 轮次与预算规则不变。
 
 ## 支持、拒绝和保留边界
 
@@ -12,12 +12,12 @@
 | --- | --- | --- | --- |
 | F1 全局所有权 | 带 PostCSS `from` 的真实组件表逐表扫描；`tokens.css` 是全局定义源。检查选择器列表、媒体内无消费者的定义；简单组合器链终点为 `html`/`body`/`:root`，或全局链终点为通配的定义均受约束 | 组件全局定义 `TOKEN_GLOBAL_OUTSIDE_SOURCE`；`@property` 注册；根源中非 `:root` 的已识别文档选择器 `TOKEN_ROOT_SELECTOR_UNMODELED` | 完整选择器匹配、函数伪类/转义/命名空间以及跨文件局部级联未建模；全局限制是本表静态防线，不宣称覆盖所有可匹配 DOM 的表达式。无来源夹具只模拟独立级联 |
 | F2 层叠取胜 | 外观 light/dark × 对比度 no-preference/more × 透明度 no-preference/reduce × 动效 no-preference/reduce；简单同元素/后代/子代、逗号分支；先最近定义元素，再重要性，再源序。根、局部、跨媒体组、黄金接线均按此适用规则 | 未建模媒体特性/值；根或局部定义的未知 at-rule；根相关样式规则嵌套 `TOKEN_ROOT_NESTING_UNMODELED`、组件内部嵌套；未建模 CSS-wide 自定义属性取值；黄金规则重复或条件化；黄金背景域外简写 `TOKEN_BACKGROUND_SHORTHAND_UNMODELED` | 完整特异性、DOM 祖先匹配、跨文件局部定义、继承前别名计算、级联层/作用域及运行时动画不由此模型证明；黄金背景仅支持单层至多一个颜色成分和一个图像成分（none/URL/渐变），未指定成分取 transparent/none；不以字符串前缀关系代替完整选择器算法 |
-| F3 完整值校验 | 纯颜色属性完整顶层值及边框颜色列表；`-webkit-text-stroke` 的宽度/颜色；其余简写逐个消费完整顶层成分，颜色、图像、长度（0、px/em/rem/pt/ch/ex/vw/vh）和关键字不能掩盖未知词形。图像限背景/边框图像，SVG paint 只额外接受 URL | 空值、未知或残余词形（含连字符、下划线、引号、标点）、不相容纯颜色、非图像属性上的图像；无颜色/图像的尺寸或裸数值叶子 | 函数内部参数、完整简写的顺序/个数/互斥关系未建模。已识别顶层成分不等于整条浏览器文法合法；只支持当前静态成分集合，合法但域外语法也可能被拒绝 |
+| F3 完整值校验 | 纯颜色属性完整顶层值及边框颜色列表；`-webkit-text-stroke` 的宽度/颜色；其余简写逐个消费完整顶层成分，颜色、图像、长度（0、px/em/rem/pt/ch/ex/vw/vh）和关键字不能掩盖未知词形。`background-image` 只接受非空图像/none 列表，`border-image-source` 只接受单个图像/none；图像限 URL 与 linear/radial/conic 渐变（含 repeating），SVG paint 只额外接受 URL | 空值、未知或残余词形（含连字符、下划线、引号、标点）、不相容纯颜色、图像长形上的颜色/尺寸/简写关键字、空图像列表项及 source 多项、非图像属性上的图像；无颜色/图像的尺寸或裸数值叶子 | 函数内部参数、完整简写的顺序/个数/互斥关系未建模。已识别顶层成分不等于整条浏览器文法合法；只支持当前静态成分集合，合法但域外语法也可能被拒绝 |
 | F4 遮罩 alpha | `mask-image`/`-webkit-mask-image` 的单个 linear-gradient；静态 hex、rgb/rgba 与具名色、transparent；首末 alpha=0、内部 alpha=1 | 动态 `currentColor`、未知标识符/色标形式 `MASK_STOP_UNMODELED`；遮罩简写、边框遮罩和其他图像形式 `MASK_IMAGE_UNMODELED`；透明度不满足渐隐不变量 | 不解析元素计算色、继承/媒体动态色标、完整渐变位置/插值/多图层及像素。直接拒绝动态色标，不假定它不透明 |
 | F5 引用与词法 | PostCSS `decl.value`；字符串/URL 不透明；选中主值或 fallback 的递归求值、环检测、逐环境/分支悬空检查；输出保留字面内容 | 无可用主值且无有效 fallback 的引用；值链过深；展示消费处不相容的选中值 | 不是完整 CSS tokenizer；转义标识符、任意函数语法和完整继承计算保留边界。环图保留备用路径依赖，不能与只检查选中消费路径混淆 |
 | F6 发现、结构与配对 | glob 自动发现全部 src CSS，布局/动画/空表不设条数门槛；展示色及可达局部别名字面色禁用；例外绑定表/选择器/属性/值/条数并反向校验；8 个配对环境；危险底色颜色/图像成分各自层叠 | 非注册字面色、过期或扩大的例外；配对阈值不达标；危险前景或背景有效接线变化 | box-shadow 层级投影不在展示色禁用范围；#240 恒白危险前景及深色约 2.8:1、#262 品牌配对、#265 悬空引用和非文本对比度观察项沿用既有处置；不新增产品配色决策 |
 
-展示色入口由 `isDisplayColorProp` 统一分类：`color`、标准 `-color` 长形（含厂商前缀）、`background`/`background-image`、`outline`、`text-decoration`、`text-emphasis`、`text-shadow`、`column-rule`、`fill`/`stroke`、`-webkit-text-stroke`、border 总体/四向/逻辑方向简写及颜色长形、`border-image`/`border-image-source`。标准属性名先按 ASCII 大小写归一，自定义属性名保持大小写敏感；box-shadow 与遮罩不进入展示色字面值禁用，遮罩另走 F4。
+展示色入口由 `isDisplayColorProp` 统一分类：`color`、标准 `-color` 长形（含厂商前缀）、`background`/`background-image`、`outline`、`text-decoration`、`text-emphasis`、`text-shadow`、`column-rule`、`fill`/`stroke`、`-webkit-text-stroke`、border 总体/四向/逻辑方向简写及颜色长形、`border-image`/`border-image-source`。标准属性名先按 ASCII 大小写归一，自定义属性名保持大小写敏感；`box-shadow`、`filter`/`backdrop-filter`（含厂商前缀）与遮罩不进入展示色字面值禁用，遮罩另走 F4。滤镜中的 `drop-shadow()` 颜色、变量类型与函数链未建模；全表发现不等于覆盖所有 CSS 属性。此处显式列出既有属性集合之外的边界，不把滤镜用例宣称为已验证。
 
 结构分类与值校验是不同契约：结构禁止组件自行写展示色，类型检查只判解析后的值是否落在上述静态子集。颜色函数/渐变内部会做字面色扫描，但不会因此证明参数文法。
 
@@ -37,6 +37,7 @@ F2 上下文拒绝使用稳定错误码：根未知 at-rule 或根内嵌 at-rule
 | F2-d | 根令牌内含嵌套样式规则，含 &、列表、多层或媒体中间层；可无直接令牌/消费者 | 在媒体筛选及值提取前检查自定义属性的整条规则祖先链 | 根相关嵌套声明报 TOKEN_ROOT_NESTING_UNMODELED，失活媒体也不能掩盖；平铺根和外层媒体根保留 | 不得以未解析嵌套覆盖的旧根值验证消费者；`assertRootContexts` → `tokenValuesOf`/真实 `tokenValues` | `sheetTokenContractFamilies.test.ts` F2-d 最小例、组合和正常对照；组件入口沿用既有 TOKEN_SHEET_NESTING_UNMODELED；不含根令牌的无关规则保持原范围 |
 | F3-a | 未知连字符值、引号或残余词形，单独或与合法颜色/图像组合 | 原值/别名/选中 fallback 到达属性校验 | 拒绝整个值；不能空集合通过，也不能见一个颜色即通过 | 所有顶层成分必须完整识别；`colorTypeOk` → `displayTypeErrors` | F3 最小反例、合法对照、颜色/图像混合反例 |
 | F3-b | 根别名/局部值/重要媒体值切换；消费点为选择器列表 | 先求胜出值，再检查实际选中路径 | 仅错误环境/分支报告；有效主值的未选 fallback 不误报 | 类型与接线共用求值，边界不能因入口不同失效 | F3 组合场景与既有纯色/图像/fallback 套件 |
+| F3-c | 图像长形收到颜色别名、选中 fallback、混合成分、空列表项或多图层 | 变量/媒体/重要性求值后按消费属性检查完整列表 | 颜色等非图像成分拒绝；background-image 保留图像/none 多层，border-image-source 限单项；恢复合法变量后通过 | 消费属性决定成分类型与个数，不能继承 background 简写的颜色许可；`colorTypeOk` → `displayTypeErrors` → 真实 glob | `sheetTokenContractFamilies.test.ts` F3-c 最小反例、合法对照和组合；函数内部参数及完整 border-image 简写文法仍为上表边界 |
 | F4-a | 透明前景，内部遮罩色标为 currentColor | `sheetDecls` → 遮罩分类 → alpha 校验 | 显式拒绝动态色标，不返回 [0,1,0] | alpha 只能由已建模静态值确定；`expectMaskFade`/`maskStopAlphas`/`stopAlpha` | F4 最小反例，含厂商前缀、媒体、大小写及未知词形 |
 | F4-b | 合法静态渐隐、内部半透明、简写/非图像长形 | 通过相同遮罩入口 | 合法静态值通过；alpha 错误或域外图像失败；尺寸类跳过 | 分类、剖析、断言不能各有缺口 | 既有遮罩用例 + F4 静态具名色对照；动态计算色与像素未运行 |
 | F5-a | 字符串/URL/注释混合真实引用；主值有效、缺失、initial、断链或循环 | PostCSS 解析，再构图/选路径/类型验证 | 不透明内容保留；选中路径恢复或报告；真实备用依赖仍入环图 | 词法边界与求值一致；`maskCssOpaque`、`allVarRefs`、`resolveChain`、引用/类型入口 | `sheetTokenReferences.test.ts` 及语义套件；PostCSS 注释误报的既有回归保留 |
@@ -53,6 +54,8 @@ F2 上下文拒绝使用稳定错误码：根未知 at-rule 或根内嵌 at-rule
 - F2：[级联顺序](https://www.w3.org/TR/css-cascade-5/#cascade-sort)、[继承](https://www.w3.org/TR/css-cascade-5/#inheriting) 与 [简写](https://www.w3.org/TR/css-cascade-5/#shorthand) 分别支撑重要性、指定/继承优先与长形独立覆盖。
 - F2-d：[CSS Nesting 的 & 选择器](https://www.w3.org/TR/css-nesting-1/#nest-selector)（工作草案）解释嵌套声明为何仍能命中父规则元素；本契约采用拒绝方案。F2-c：[background 简写](https://www.w3.org/TR/css-backgrounds-3/#background) 将颜色/图像分别设置为指定值或初始值，后续长形只覆盖对应属性；手工预期不使用被测投影函数生成。
 - F3：[变量替换后的文法检查](https://www.w3.org/TR/css-variables-1/#invalid-variables) 说明，变量存在不代表消费属性合法；[值语法](https://www.w3.org/TR/css-values-4/#value-defs) 支撑完整成分识别。简写完整文法与函数内部参数仍按上表披露。
+- F3-c：[background-image](https://www.w3.org/TR/css-backgrounds-3/#background-image) 的 `<bg-image>#`、`<bg-image> = <image> | none` 与 [border-image-source](https://www.w3.org/TR/css-backgrounds-3/#border-image-source) 的 `none | <image>` 独立确定长形类型、列表项及个数。图像函数参数不在本次证明范围。
+- 滤镜边界：[drop-shadow()](https://www.w3.org/TR/filter-effects-1/#funcdef-filter-drop-shadow) 确实允许颜色，审查现象成立；[审查前的属性范围](https://github.com/hailingu/PlotWeave/blob/65be8cdc66ae656b5160bf388261f617150d0806/docs/css-token-contract.md#支持拒绝和保留边界) 已列明展示色集合，不包含滤镜。当前真实 CSS 仅使用 blur/none，无 drop-shadow；本次按既有 P3 范围扩展规则记录，不以无消费者推断未来安全。
 - F4：[currentColor](https://www.w3.org/TR/css-color-4/#currentcolor-color) 取同一元素的 color；transparent 的 alpha 为 0。动态色标必须求值或拒绝，本 PR 采用拒绝。
 - F5 的环、主值/fallback、词法不透明依据 [CSS Variables](https://www.w3.org/TR/css-variables-1/#cycles) 与 PostCSS 实际解析入口；F6 的阈值及配色例外依据 UI 设计 §2.3、§2.6，产品阈值不由实现反推。
 
@@ -65,6 +68,33 @@ F2 上下文拒绝使用稳定错误码：根未知 at-rule 或根内嵌 at-rule
 - 完整路由：`npm run format:check && npm run lint && npm run typecheck:strict && npm run build && npm test` 通过，152 文件 / 2149 项；构建产物 `dist/` 在完成前删除。首次验证发现 ES 目标不支持 `Array.at`/`replaceAll`，已改用索引/正则替换，未修改目标库或依赖。
 - `git diff --check` 通过。文件/最长函数代码行：值模块 229/26、引擎 745/32、真实契约测试 960/70、语义测试 954/70、边界测试 319/58、新问题族测试 176/57；均满足 800/1800/80 硬上限。F6 原有长测试分组按全表扫描与闭包/反向校验拆开，断言保留。引擎超过 600 行讨论阈值，保留原因是本轮仅更换两个既有入口共享的文档选择器判定，没有扩展完整层叠职责；由仓库维护者在下一次修改该引擎时复核。既有 70 行分组为同一契约的并列案例，未扩张。圈复杂度未配置工具，以函数跨度和控制流人工复核。
 - 文档路径没有配置自动行为检查；已结构化核对统一矩阵、设计 §2.1、代码头注、错误码、历史记录映射和外部规范依据。数据模型、产品配色、review 预算及治理文件不变。Rust 源码未改，Rust 变更路由不适用；提交/推送钩子仍须生成新鲜前端/Rust 覆盖率并通过 Sonar，结果以 PR 当前修订的验证记录为准。
+
+## 审查 5286675799 的验证与处置
+
+本次将 40 个用例加入既有 F3 问题族的 F3-c 条目，未再建立分轮矩阵。两条意见先去重分类：图像长形是已承诺消费属性的真实 P2 类型漏检；滤镜现象成立，但属于此前明确属性集合之外的 P3 扩展建议，按现有策略记录、不修复，不改变 review 预算。
+
+- **Red → Green**：仓库根目录、Node 24.18.0，`npm test -- src/styles/sheetTokenContractFamilies.test.ts` 修复前 24 失败 / 58 通过；失败覆盖颜色误收、空项漏检、source 多项和求值组合。修复后 `npm test -- src/styles` 为 370/370 通过。合法单项、多图层、URL/渐变内部逗号、整值 CSS-wide 关键字及 background 简写旧对照保留。
+- **相邻入口**：`colorTypeOk` 的图像长形分支复用 `imageKind`，在不透明词法视图上仅切顶层逗号并保留空项；不再共用简写的颜色许可。`displayTypeErrors` 覆盖局部别名、根令牌、媒体重要性、选中/未选 fallback。完整 `border-image` 简写语法仍是既有边界，没有借长形修复宣称全语法校验。
+- **真实 glob**：临时 CSS 让两个图像长形消费 `var(--text-primary)`，`npm test -- src/styles/sheetTokens.test.ts` 在 16 个环境逐一报告类型不相容（1 失败 / 51 通过）；替换为带逗号 URL、渐变及 none 的合法组合后 52/52 通过，探针已删除。
+- **完整路由**：`npm run format:check && npm run lint && npm run typecheck:strict && npm run build && npm test` 全通过，152 文件 / 2212 项。首次检查与临时探针清理重叠，Prettier 报该文件 ENOENT；探针清理完成后从格式检查起完整重跑成功。未更改格式器或忽略规则，本次构建产物在完成前删除。
+- **结构复核**：`git diff --check` 通过。值模块 247 行 / 最长函数 27 代码行，问题族测试 277/57，根引擎 767/32（仅一行说明更新，未增大）；均满足 800/1800/80 硬上限。引擎超讨论阈值的既有处置继续适用，无新增职责。文档无配置自动行为检查，已核对代码分类、设计 §2.1、统一范围、矩阵、规范和原线程草稿。
+- **验证缺口**：独立依据采用上列 CSS Backgrounds 的两个长形文法，未新增浏览器/WebView 实测。滤镜颜色与函数链未验证，也不为这个边界添加“漏检应通过”的测试。Rust 源码未改，Rust 变更路由不适用；提交/推送仍由已启用钩子运行新鲜前端/Rust 覆盖率及 Sonar，最终证据绑定 PR 修订。
+
+以下为原线程的四字段回复草稿；本文不会代替发帖或标记 resolved，发布状态与本次提交编号以 PR 验证记录为准。
+
+### [图像长形误收颜色](https://github.com/hailingu/PlotWeave/pull/288#discussion_r4078873543)
+
+1. **处置** — 已在本次修订修复，真实 P2 类型漏检。
+2. **理由与变更** — `colorTypeOk` 在简写入口前调用 `imageValueOk`；`background-image` 仅接收非空图像/none 列表，`border-image-source` 限单项，颜色、尺寸和简写关键字均拒绝。继续复用 `imageKind` 与 `maskCssOpaque`，不把 URL/函数内部逗号当作图层边界。
+3. **验证** — F3-c 的 40 个反例/对照/组合用例与真实 glob 探针覆盖两属性；Red 24 项预期失败，Green 样式 370 项、完整前端 2212 项通过；规范依据为 CSS Backgrounds 的长形文法。
+4. **后续** — 本条实现完成；函数参数和完整简写文法继续保留边界，提交/推送门禁结果见 PR 验证记录。
+
+### [滤镜 drop-shadow 颜色](https://github.com/hailingu/PlotWeave/pull/288#discussion_r4078873545)
+
+1. **处置** — 不修改实现，记录为 P3 范围扩展建议；审查所述未扫描现象成立，不称为已修复或误报。
+2. **理由与变更** — 审查前 `65be8cd` 的统一契约已列出 `isDisplayColorProp` 的有限属性集合，其中没有 filter/backdrop-filter。纳入 drop-shadow 需新增滤镜函数链及颜色类型契约；本轮依既有 P3 策略不扩展。现已在范围、设计与分类注释显式披露此边界。
+3. **验证** — Filter Effects 规范确认 drop-shadow 接受颜色；`rg -n 'drop-shadow|backdrop-filter|(^|[ ;])filter\s*:' src --glob '*.css'` 显示真实样式仅有 blur/none。未测试或宣称滤镜颜色被保护；现有展示色套件保持通过。
+4. **后续** — 若产品以后需要将滤镜纳入展示色治理，应单独定义函数链、颜色/长度、变量和 fallback 范围；本 PR 保留该边界，无待执行的滤镜代码修复。
 
 ## 审查 5286571379 的验证与处置
 

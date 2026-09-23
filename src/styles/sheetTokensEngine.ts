@@ -232,7 +232,7 @@ export function resolveChain(
   return current
 }
 
-/** 展示色简写及图像属性：字面色值必须经注册表豁免（box-shadow/遮罩除外）。 */
+/** 展示色简写及图像属性：字面色值须注册豁免；box-shadow/滤镜/遮罩边界见统一契约。 */
 const DISPLAY_PROPS = new Set([
   'background',
   'background-image',
