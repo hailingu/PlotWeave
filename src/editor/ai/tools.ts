@@ -57,6 +57,18 @@ export const AI_TOOLS: ToolSpec[] = [
   {
     type: 'function',
     function: {
+      name: 'find_nodes',
+      description:
+        '按名称/提示词/选项/台词检索全部节点（含画布摘要因体积预算未列出的条目），' +
+        '命中条目附其全部关联连线；摘要被节选后按用户提到的名称定位目标或查连线用此工具',
+      parameters: obj({ query: str('检索关键词（节点名称/文案片段）') }, [
+        'query',
+      ]),
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'get_settings_snapshot',
       description:
         '读取设定集清单：全部角色/地点的 id、名称与小传/备注，文档只列 id 与标题' +
@@ -179,6 +191,7 @@ export const AI_TOOLS: ToolSpec[] = [
 export const READ_TOOL_NAMES = new Set([
   'get_graph_snapshot',
   'get_node',
+  'find_nodes',
   'get_settings_snapshot',
   'get_document',
 ])

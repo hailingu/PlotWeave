@@ -232,6 +232,7 @@ describe('工具表定义', () => {
     for (const expected of [
       'get_graph_snapshot',
       'get_node',
+      'find_nodes',
       'get_settings_snapshot',
       'create_node',
       'delete_node',
@@ -252,6 +253,8 @@ describe('工具表定义', () => {
     expect(WRITE_TOOL_NAMES.has('upsert_character')).toBe(true)
     expect(WRITE_TOOL_NAMES.has('get_node')).toBe(false)
     expect(WRITE_TOOL_NAMES.has('get_settings_snapshot')).toBe(false)
+    expect(READ_TOOL_NAMES.has('find_nodes')).toBe(true)
+    expect(WRITE_TOOL_NAMES.has('find_nodes')).toBe(false)
   })
 
   it('issue 56 增补文档通道：get_document 读 + upsert_document 写，读写真名分域', () => {

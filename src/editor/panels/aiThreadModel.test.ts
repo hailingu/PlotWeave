@@ -259,6 +259,21 @@ describe('readToolOf · 读工具分发（issue 56 增 get_document）', () => {
     )
   })
 
+  it('find_nodes 按关键词分发到检索器；未接线时给出占位文案（issue #275 评审）', () => {
+    const onFindNodes = (q: string) => `匹配「${q}」的节点：…`
+    const tool = readToolOf(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      onFindNodes,
+    )
+    expect(tool('find_nodes', args({ query: '天台' }))).toContain('天台')
+    expect(
+      readToolOf(undefined, undefined)('find_nodes', args({ query: 'x' })),
+    ).toContain('未找到匹配「x」')
+  })
+
   it('未接线文档读取器时给出占位文案，不抛异常', () => {
     const tool = readToolOf(undefined, undefined)
     expect(tool('get_document', args({ documentId: 'doc-1' }))).toBe(

@@ -355,6 +355,8 @@ describe('摘要总量预算与节选降级（issue #275：每轮画布摘要不
     expect(digest).toMatch(/另有 \d+ 个节点未列出/)
     expect(digest).toMatch(/另有 \d+ 条连线未列出/)
     expect(digest).toContain('get_node')
+    // 被节选条目有可发现的补读路径（issue #275 评审）：标记指向 find_nodes
+    expect(digest).toContain('find_nodes')
   })
 
   it('设定集清单同样按上限节选并带计数标记', () => {

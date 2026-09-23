@@ -140,8 +140,9 @@ function nodeLine(n: CanvasNode, r: DigestResolvers): string {
  * 从没有 sequence 入边的节点出发，沿 sequence 边按边序走；被分支
  * 甩出或游离的节点不进脊线。
  */
-/** 脊线行的节点标签：按类型取最具辨识度的字段（独立函数替代嵌套三元，S3358）。 */
-function spineNodeLabel(n: CanvasNode): string {
+/** 脊线行的节点标签：按类型取最具辨识度的字段（独立函数替代嵌套三元，
+ * S3358）；find_nodes 检索结果同用此标签（issue #275 评审，同一格式）。 */
+export function spineNodeLabel(n: CanvasNode): string {
   switch (n.type) {
     case 'scene':
       return sceneLabel(n.data.sceneNo, n.data.name)
@@ -234,7 +235,7 @@ export function buildGraphDigest(
       '（空画布）',
       NODE_DETAIL_MAX,
       '个节点',
-      '已列出节点用 get_node 按 id 读取详情',
+      '已列出节点用 get_node 按 id 读取详情；按名称检索全部节点（含未列出）用 find_nodes',
     ),
     `连线（类型: source → target）：`,
     ...sectionLines(
@@ -242,7 +243,7 @@ export function buildGraphDigest(
       '（无）',
       EDGE_DETAIL_MAX,
       '条连线',
-      '连线语义可由节点与剧情流顺序推断',
+      '目标节点的全部连线（含未列出）用 find_nodes 查询',
     ),
     `剧情流顺序（大纲投影）：`,
     ...sectionLines(
@@ -250,7 +251,7 @@ export function buildGraphDigest(
       '（尚未连成剧情流）',
       SPINE_DETAIL_MAX,
       '行剧情流',
-      '已列出节点用 get_node 按 id 读取详情',
+      '已列出节点用 get_node 按 id 读取详情；按名称检索全部节点用 find_nodes',
     ),
     `设定集（id 名称，AI 写回 characterIds/locationId 用）：`,
     ...sectionLines(

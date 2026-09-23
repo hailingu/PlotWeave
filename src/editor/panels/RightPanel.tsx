@@ -142,6 +142,7 @@ type RightAiPaneProps = Pick<
   | 'onValidateAi'
   | 'onValidateCommands'
   | 'onReadNode'
+  | 'onFindNodes'
   | 'onReadSettings'
   | 'onReadDocument'
   | 'onApplyAiBatch'
@@ -166,6 +167,7 @@ function RightAiPane(props: RightAiPaneProps) {
       onValidateAi={props.onValidateAi}
       onValidateCommands={props.onValidateCommands}
       onReadNode={props.onReadNode}
+      onFindNodes={props.onFindNodes}
       onReadSettings={props.onReadSettings}
       onReadDocument={props.onReadDocument}
       onApplyAiBatch={props.onApplyAiBatch}
@@ -260,6 +262,8 @@ interface RightPanelProps {
   readonly onReadSettings?: () => string
   /** 读工具 get_document（issue 56）：按 id 返回文档全文 JSON，不存在返回 null。 */
   readonly onReadDocument?: (documentId: string) => string | null
+  /** 读工具 find_nodes（issue #275 评审）：按名称检索全部节点与关联连线。 */
+  readonly onFindNodes?: (query: string) => string
   /** 执行已确认的批次：整批为一条复合命令入栈，返回错误文案或 null。 */
   readonly onApplyAiBatch?: (commands: ValidatedCommand[]) => string | null
   /** 当前项目恢复的 AI 会话与其独立保存通道。 */
