@@ -307,6 +307,35 @@ describe('项目删除与保存协调：留存登记分支（PR #292 评审迁�
   })
 })
 
+// 成功删除对既有重试登记的清除（PR #292 评审迁移自门面层删除的用例）：
+// 事件顺序是「保存失败已登记重试 → 删除成功 → 重试定时器到点」——与墓碑
+// 吸收分支及上方留存登记的失败回吐分支均不同；若墓碑不再清除登记/定时器，
+// 已删项目会被后台保存重新创建且既有用例不失败。
+describe('项目删除与保存协调：删除成功清除重试登记（PR #292 评审迁移）', () => {
+  afterEach(() => vi.clearAllMocks())
+
+  it('删除成功后重试定时器到点不复活已删项目', async () => {
+    const id = 'delete-success-clears-retry-test'
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'save_project') throw new Error('只读')
+      return undefined
+    })
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.useFakeTimers()
+    try {
+      // 删除开始前：一次失败保存已登记重试并排定 5s 后台定时器
+      await expect(enqueueSave(id, DOC)).rejects.toThrow('只读')
+      await enqueueDelete(id)
+      // 重试周期（含余量）推进到点：登记与定时器应已随墓碑清除
+      await vi.advanceTimersByTimeAsync(20000)
+      expect(savedNames()).toEqual(['项目'])
+    } finally {
+      vi.useRealTimers()
+      error.mockRestore()
+    }
+  })
+})
+
 describe('退出冲刷：就绪探针与立即重存（issue #119）', () => {
   afterEach(() => vi.clearAllMocks())
 
