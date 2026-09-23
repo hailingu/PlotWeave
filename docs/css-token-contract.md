@@ -1,6 +1,6 @@
 # CSS 令牌静态契约
 
-本页是 [PR #288](https://github.com/hailingu/PlotWeave/pull/288) 的支持范围与问题族矩阵入口，承接 [issue #278](https://github.com/hailingu/PlotWeave/issues/278)；分轮审查记录保留为历史证据，不再各自定义当前范围。产品配色决策仍以 [UI 设计 §2.1](ui-design.md#21-三层结构) 和 §2.3、§2.6 为准。
+本页是 [PR #288](https://github.com/hailingu/PlotWeave/pull/288) 的支持范围与问题族矩阵入口，承接 [issue #278](https://github.com/hailingu/PlotWeave/issues/278)；分轮审查记录已从当前文档树移除，历史事实保留在 Git 中，不再各自定义当前范围。产品配色决策仍以 [UI 设计 §2.1](ui-design.md#21-三层结构) 和 §2.3、§2.6 为准。
 
 上一修订 `f90cbf5` 修复审查 [5286363682](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5286363682) 的三个 P2 漏检。本次处理其首轮后续审查 [5286571379](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5286571379)：根令牌嵌套样式规则漏检、含图像背景简写经长形重置后的误报，均为 F2 已承诺范围的新触发条件。review 轮次与预算规则不变。
 
@@ -20,6 +20,8 @@
 展示色入口由 `isDisplayColorProp` 统一分类：`color`、标准 `-color` 长形（含厂商前缀）、`background`/`background-image`、`outline`、`text-decoration`、`text-emphasis`、`text-shadow`、`column-rule`、`fill`/`stroke`、`-webkit-text-stroke`、border 总体/四向/逻辑方向简写及颜色长形、`border-image`/`border-image-source`。标准属性名先按 ASCII 大小写归一，自定义属性名保持大小写敏感；box-shadow 与遮罩不进入展示色字面值禁用，遮罩另走 F4。
 
 结构分类与值校验是不同契约：结构禁止组件自行写展示色，类型检查只判解析后的值是否落在上述静态子集。颜色函数/渐变内部会做字面色扫描，但不会因此证明参数文法。
+
+F2 上下文拒绝使用稳定错误码：根未知 at-rule 或根内嵌 at-rule 为 `TOKEN_ROOT_AT_RULE_UNMODELED`；根相关样式规则嵌套为 `TOKEN_ROOT_NESTING_UNMODELED`；组件规则内嵌规则/at-rule 为 `TOKEN_SHEET_NESTING_UNMODELED`；局部定义位于非 media 上下文为 `TOKEN_LOCAL_AT_RULE_UNMODELED`。这些检查在环境筛选前执行，失活分支不能隐藏未建模布局。
 
 ## 合并后的关键状态与不变量矩阵
 
@@ -75,30 +77,25 @@
 - **结构复核**：值模块 229 行、根引擎 767 行、真实契约测试 1041 行、问题族测试 207 行；最长函数分别为 26/32/70/57 代码行，符合硬上限。引擎和真实测试超过 600/1000 行讨论阈值，根预检仍归根取值入口，背景投影与真实黄金断言共同演进；本次保留内聚文件以避免把测试私有能力变成跨模块接口，风险为继续增长。补偿为 F2-c/F2-d 与真实入口探针；责任人为仓库维护者，下次实质修改对应文件时复核拆分。既有 70 行分组未扩张；圈复杂度无配置工具，以 AST 函数跨度和控制流人工复核。
 - **缺口**：无新增浏览器/WebView 实测，独立预期使用上列 Nesting 工作草案与 Backgrounds 规范。完整背景文法、函数参数、复杂选择器仍按支持表保留；产品配色、数据模型及治理预算不变。文档没有自动行为检查，已结构化复核范围、矩阵、设计和错误码。
 
-以下两条为待发布回复草稿；未获线程发帖指令，尚未回复或标记 resolved，提交后由 PR 记录补充提交和 Git 门禁证据。
+以下两条为待发布回复草稿；修复已随 `99b0ba9` 推送，提交/推送门禁及 [CI #109](https://github.com/hailingu/PlotWeave/actions/runs/35815107384) 均通过。未获线程发帖指令，尚未回复或标记 resolved。
 
 ### [根令牌原生嵌套](https://github.com/hailingu/PlotWeave/pull/288#discussion_r4078777166)
 
-1. **处置** — 本地已修复，真实 P2 缺陷，接受新的根嵌套触发证据。
+1. **处置** — 已由 `99b0ba9` 修复并推送，真实 P2 缺陷，接受新的根嵌套触发证据。
 2. **理由与变更** — `assertRootNesting` 在环境筛选前沿自定义属性完整规则祖先链识别根相关嵌套，报 `TOKEN_ROOT_NESTING_UNMODELED`；不再把最近的 `&` 当作与根无关的规则而返回旧值。组件原有拒绝边界不变。
 3. **验证** — F2-d 8 个反例先失败后通过，两环境、正常对照及真实 tokens.css 注入均符合预期；样式 330 项、完整前端 2172 项通过。
 4. **后续** — 本条实现完成；保持不支持完整 CSS 嵌套解析的边界，提交与发布状态以最终 PR 记录为准。
 
 ### [含图像简写的颜色成分](https://github.com/hailingu/PlotWeave/pull/288#discussion_r4078777172)
 
-1. **处置** — 本地已修复，真实 P2 误报，接受图像随后被长形重置的新触发条件。
+1. **处置** — 已由 `99b0ba9` 修复并推送，真实 P2 误报，接受图像随后被长形重置的新触发条件。
 2. **理由与变更** — `backgroundPaint` 分别选胜出声明，`shorthandPaint` 从已建模单层简写提取颜色和图像并补齐初始值；保留重要性、源序和另一成分。域外简写明确报错，不以部分提取放行。
 3. **验证** — F2-c 14 个新场景及既有回归通过；真实危险规则清图时通过、保留图像时失败。规范依据为 CSS Backgrounds 的简写展开规则；完整前端 2172 项通过。
 4. **后续** — 本条实现完成；多层和完整背景文法仍保留边界，提交与发布状态以最终 PR 记录为准。
 
-## 历史矩阵归并索引
+## 历史证据
 
-| 当前问题族 | 原审查矩阵（保留当轮事实，当前范围以上文为准） |
-| --- | --- |
-| F1 / F2 | [5279748560](reviews/pr-288-review-5279748560.md)、[5280077466](reviews/pr-288-review-5280077466.md)、[5280542926](reviews/pr-288-review-5280542926.md)、[5285788301](reviews/pr-288-review-5285788301.md)、[5286056434](reviews/pr-288-review-5286056434.md) |
-| F2 / F3 / F5 | [5275666509](reviews/pr-288-review-5275666509.md)、[5275978899](reviews/pr-288-review-5275978899.md)、[5277799858](reviews/pr-288-review-5277799858.md) |
-| F3 / F6 | [5280837519](reviews/pr-288-review-5280837519.md)、[5285927947](reviews/pr-288-review-5285927947.md) |
-| F4 / F5 | [5280334884](reviews/pr-288-review-5280334884.md)、[5286221158](reviews/pr-288-review-5286221158.md) |
+12 份分轮审查记录已归并到 F1–F6，按仓库所有者要求删除当前文件；原始记录可从 [整理前的 Git 修订](https://github.com/hailingu/PlotWeave/tree/99b0ba9eca558a4e3e4ac721cee8a627d59a534f/docs/reviews) 查阅。当前测试与设计只引用本页的契约和矩阵，避免继续维护多份状态说明。此次整理只删除历史记录并更新引用，没有改变代码行为或 review 预算；没有为文档删除制造行为测试，按文档路由结构化复核，并因测试注释路径更新运行前端路由。
 
 ## 审查 5286363682 的线程回复草稿
 

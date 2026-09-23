@@ -32,7 +32,7 @@ gray-900 #131316  →  surface.canvas        →  canvas.background
 
 组件只引用语义令牌。浅色/深色/增强对比度是同一令牌的不同取值；`prefers-reduced-transparency` 时材质令牌退化为不透明实色。
 
-「组件只引用语义令牌」由全表静态契约验证（[issue #278](https://github.com/hailingu/PlotWeave/issues/278)、[PR #288](https://github.com/hailingu/PlotWeave/pull/288)）。当前支持范围、明确拒绝、保留边界及合并后的问题族矩阵统一见 [CSS 令牌静态契约](css-token-contract.md)，分轮记录作为历史证据保留。`sheetTokens.test.ts` 按 glob 发现全部 src CSS（布局、动画和空表同样进入扫描），结构、接线、配对及遮罩检查共享 `sheetTokensEngine.ts` 与值校验模块；分表契约继续并存。
+「组件只引用语义令牌」由全表静态契约验证（[issue #278](https://github.com/hailingu/PlotWeave/issues/278)、[PR #288](https://github.com/hailingu/PlotWeave/pull/288)）。当前支持范围、明确拒绝、保留边界及合并后的问题族矩阵统一见 [CSS 令牌静态契约](css-token-contract.md)，分轮记录仅在 Git 历史保留。`sheetTokens.test.ts` 按 glob 发现全部 src CSS（布局、动画和空表同样进入扫描），结构、接线、配对及遮罩检查共享 `sheetTokensEngine.ts` 与值校验模块；分表契约继续并存。
 
 - **全局所有权与层叠**：真实输入携带文件来源，组件表不得通过已识别的文档选择器另定义全局令牌；`html > body`、全局链的通配终点、选择器列表及媒体内无消费者定义均受限制。根源仅支持 `:root` 分支的已建模上下文。简单作用域内先最近定义元素，再重要性与源序；根、局部、跨媒体组和黄金接线路径分别有回归。未知上下文与未建模 CSS-wide 取值显式拒绝；根令牌预检沿完整规则祖先链拒绝原生样式嵌套，含 `&`、多层及媒体中间层。
 - **结构、引用与类型**：展示色及可达局部别名不得字面硬编码，具名例外绑定值和条数且反向校验。引用按 16 个偏好环境和选择器分支求值，主值/fallback 与环检测共用词法边界。纯颜色校验完整值，其余简写逐个识别顶层成分，未知连字符词形或残余内容不能被合法颜色/图像掩盖；合法 `line-through`、`double-circle` 等完整关键字保留。

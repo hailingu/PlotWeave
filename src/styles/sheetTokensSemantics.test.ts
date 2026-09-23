@@ -99,7 +99,7 @@ describe('组件声明上下文拒绝边界（review 5280077466）', () => {
     '@media (prefers-color-scheme: dark) { .card { & { color: #fff; } } }',
   ])('嵌套布局在所有扫描入口明确失败：%s', (css) => {
     const root = postcss.parse(css)
-    // 错误码契约：docs/reviews/pr-288-review-5280077466.md 的状态矩阵。
+    // 错误码契约：docs/css-token-contract.md F2 上下文拒绝边界。
     for (const scan of [
       () => [...sheetDecls(root)],
       () => localDefinitions(root),
@@ -353,7 +353,7 @@ describe('根令牌上下文边界（review 5279748560）', () => {
     const root = postcss.parse(
       `:root { --fg: #fff; } ${context} { :root { --fg: 4px; } ${closing}`,
     )
-    // 错误码契约：docs/reviews/pr-288-review-5279748560.md 的根上下文矩阵。
+    // 错误码契约：docs/css-token-contract.md F2 根上下文拒绝边界。
     expect(() => tokenValuesOf(root, LIGHT_ENV)).toThrow(
       /TOKEN_ROOT_AT_RULE_UNMODELED/,
     )

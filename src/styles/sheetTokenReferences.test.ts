@@ -1,6 +1,6 @@
 /**
  * CSS 变量引用的词法边界与消费回归（review 5280334884）。
- * 状态矩阵见 docs/reviews/pr-288-review-5280334884.md；通过真实 PostCSS
+ * 状态矩阵见 docs/css-token-contract.md F5；通过真实 PostCSS
  * 声明与共享引擎验证依赖、接线、替换及恢复，不读取源文件文本断言布局。
  */
 import postcss from 'postcss'
