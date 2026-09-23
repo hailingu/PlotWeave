@@ -261,12 +261,13 @@ describe('findNodesText（issue #275 评审：被节选条目的可发现读取�
     // 按名称发现（完整 id 从未出现在任何上下文）
     const found = findNodesText([byName], [], '按名称找')
     expect(found).toContain('id 已缩写')
-    expect(found).toMatch(/find_nodes\("id:i{80}#\d+", offset=1\)/)
+    const handle = found.match(/find_nodes\("(id:[^"]+)", offset=1\)/)?.[1]
+    expect(handle).toMatch(/id:i{80}#1~[0-9a-f]{32}$/)
     // 依提示分段读回完整 id 并无损拼接
     const parts: string[] = []
     let offset = 0
     for (let guard = 0; guard < 8; guard += 1) {
-      const text = findNodesText([byName], [], `id:${'i'.repeat(80)}`, offset)
+      const text = findNodesText([byName], [], handle!, offset)
       const m = text.match(/第 (\d+)\/(\d+) 段（总长 (\d+) 字符）：\n([^\n]+)/)
       expect(m, text).toBeTruthy()
       parts.push(m![4]!)
@@ -301,7 +302,7 @@ describe('findNodesText（issue #275 评审：被节选条目的可发现读取�
     expect(none).toContain('没有 id 以')
   })
 
-  it('id:<前缀>#序号 直达碰撞候选的完整 id 分段（PR #294 评审）', () => {
+  it('带 ID 指纹的句柄直达碰撞候选完整 id 分段（PR #294 评审）', () => {
     // 两个合法 id 前 100 字符相同：只能按名称发现目标
     const shared = 's'.repeat(100)
     const a: CanvasNode = node({
@@ -321,15 +322,17 @@ describe('findNodesText（issue #275 评审：被节选条目的可发现读取�
     expect(collide).toContain('候选按画布顺序编号')
     expect(collide).toContain('- #1 s')
     expect(collide).toContain('- #2 s')
-    expect(collide).toMatch(/id:s{80}#/)
-    // 直达 #2 的完整 id 分段并端到端无损拼回
+    const handle = collide.match(
+      /- #2 [^\n]+find_nodes\("(id:[^"]+)", offset=1\)/,
+    )?.[1]
+    expect(handle).toMatch(/id:s{80}#2~[0-9a-f]{32}$/)
+    // 候选 #2 的句柄读取完整 id
     const full = `${shared}BBB`
-    const first = findNodesText([a, b], [], `id:${shared.slice(0, 80)}#2`, 0)
+    const first = findNodesText([a, b], [], handle!, 0)
     expect(first).toContain(`第 1/1 段（总长 ${full.length} 字符）`)
     expect(first).toContain(full)
-    // 序号超界给出明确文案
-    const out = findNodesText([a, b], [], `id:${shared.slice(0, 80)}#9`)
-    expect(out).toContain('序号超界')
+    const out = findNodesText([a], [], handle!, 0)
+    expect(out).toContain('句柄目标不在当前画布')
   })
 
   it('多段续读提示保留序号句柄：第二段不再退化为碰撞列表（PR #294 评审）', () => {
@@ -347,11 +350,14 @@ describe('findNodesText（issue #275 评审：被节选条目的可发现读取�
       position: { x: 0, y: 0 },
       data: { name: '乙', tone: 'x' },
     })
-    const seg1 = findNodesText([a, b], [], `id:${shared.slice(0, 80)}#2`, 1)
+    const found = findNodesText([a, b], [], '乙')
+    const handle = found.match(/find_nodes\("(id:[^"]+)", offset=1\)/)?.[1]
+    expect(handle).toBeTruthy()
+    const seg1 = findNodesText([a, b], [], handle!, 1)
     expect(seg1).toContain('第 1/2 段')
-    // 续读提示必须保留 #2，否则 offset=2 只会再次返回碰撞列表
-    expect(seg1).toMatch(/id:s{80}#2", offset=2/)
-    const seg2 = findNodesText([a, b], [], `id:${shared.slice(0, 80)}#2`, 2)
+    const next = seg1.match(/find_nodes\("(id:[^"]+)", offset=2\)/)?.[1]
+    expect(next).toMatch(/id:s{80}#2~[0-9a-f]{32}$/)
+    const seg2 = findNodesText([a, b], [], next!, 2)
     expect(seg2).toContain('第 2/2 段')
     expect(seg2).toContain(giant.slice(0, 200))
   })
@@ -376,7 +382,11 @@ describe('findNodesText（issue #275 评审：被节选条目的可发现读取�
       data: { name: '乙', tone: 'x' },
     })
     const nodes = [distractor, first, target]
-    const page1 = findNodesText(nodes, [], `id:${base}#2`, 1)
+    const found = findNodesText(nodes, [], '乙')
+    const emitted = found.match(/find_nodes\("(id:[^"]+)", offset=1\)/)?.[1]
+    const fingerprint = emitted?.match(/~[0-9a-f]{32}$/)?.[0]
+    expect(fingerprint).toBeTruthy()
+    const page1 = findNodesText(nodes, [], `id:${base}#2${fingerprint}`, 1)
     expect(page1).toContain('第 1/2 段')
     const next = page1.match(/find_nodes\("(id:[^"]+)", offset=(\d+)\)/)
     expect(next).toBeTruthy()
@@ -409,8 +419,13 @@ describe('findNodesText（issue #275 评审：被节选条目的可发现读取�
       position: { x: 0, y: 0 },
       data: { name: '丙', tone: 'x' },
     })
-    // id:P#2 应定位候选 #2（P+B），不得被 P+#2-tail 的前缀匹配劫持
-    const second = findNodesText([p1, p2, tricky], [], 'id:P#2')
+    // 候选 #2 的新句柄须定位 P+B，不得被 P#2abc 前缀匹配劫持
+    const collide = findNodesText([p1, p2, tricky], [], 'id:P')
+    const handle = collide.match(
+      /- #2 [^\n]+find_nodes\("(id:[^"]+)", offset=1\)/,
+    )?.[1]
+    expect(handle).toBeTruthy()
+    const second = findNodesText([p1, p2, tricky], [], handle!)
     expect(second).toContain('P+B')
     expect(second).not.toContain('P#2abc')
     // 真实含 # 前缀仍可经非纯数字结尾查询
@@ -512,6 +527,118 @@ describe('findNodesText（issue #275 评审：被节选条目的可发现读取�
     expect(page1.length).toBeLessThanOrEqual(GRAPH_DIGEST_MAX_CHARS)
     expect(page1).toContain('原始 query 和 offset=24')
     expect(findNodesText(nodes, [], query, 24)).toContain('- hit-24')
+  })
+
+  it('跨工具调用增删同前缀节点时，恢复句柄仍绑定原 ID 或明确失效（PR #294 评审）', () => {
+    const prefix = 's'.repeat(80)
+    const earlier = node({
+      id: `${prefix}A`,
+      type: 'beat',
+      data: { name: '甲', tone: 'x' },
+    })
+    const targetId = `${prefix}${'B'.repeat(8_200)}`
+    const target = node({
+      id: targetId,
+      type: 'beat',
+      data: { name: '目标', tone: 'x' },
+    })
+    const added = node({
+      id: `${prefix}0`,
+      type: 'beat',
+      data: { name: '新增', tone: 'x' },
+    })
+    const found = findNodesText([earlier, target], [], '目标')
+    const handle = found.match(/find_nodes\("(id:[^"]+)", offset=1\)/)?.[1]
+    expect(handle).toMatch(/#2~[0-9a-f]{32}$/)
+    const firstAfterAdd = findNodesText(
+      [added, earlier, target],
+      [],
+      handle!,
+      1,
+    )
+    expect(firstAfterAdd).toContain('第 1/2 段')
+    expect(firstAfterAdd).toContain('B'.repeat(200))
+    const page1 = findNodesText([earlier, target], [], handle!, 1)
+    const next = page1.match(/find_nodes\("(id:[^"]+)", offset=2\)/)?.[1]
+    expect(next).toBeTruthy()
+    const page2 = findNodesText([added, earlier, target], [], next!, 2)
+    expect(page2).toContain('第 2/2 段')
+    expect(page2).toContain('B'.repeat(200))
+    const removed = findNodesText([added, earlier], [], next!, 2)
+    expect(removed).toContain('句柄目标不在当前画布')
+    expect(removed).not.toContain('完整 id 第')
+  })
+
+  it('超长 ID 的连线续页使用可解析句柄并保持目标（PR #294 评审）', () => {
+    const targetId = 'z'.repeat(100)
+    const target = node({
+      id: targetId,
+      type: 'beat',
+      data: { name: '枢纽', tone: 'x' },
+    })
+    const added = node({
+      id: `${'z'.repeat(80)}a`,
+      type: 'beat',
+      data: { name: '新增', tone: 'x' },
+    })
+    const edges: Edge[] = Array.from({ length: 70 }, (_, i) => ({
+      id: `e${i}`,
+      source: targetId,
+      target: `t${i}`,
+    }))
+    const page1 = findNodesText([target], edges, '枢纽')
+    const next = page1.match(/find_nodes\("(node:[^"]+)", offset=(\d+)\)/)
+    expect(next?.[1]).toMatch(/~[0-9a-f]{32}$/)
+    const page2 = findNodesText(
+      [added, target],
+      edges,
+      next![1]!,
+      Number(next![2]!),
+    )
+    expect(page2).toContain('→ t64')
+    expect(page2).toContain('→ t69')
+    expect(page2).not.toContain('→ t63')
+    const removed = findNodesText([added], edges, next![1]!, Number(next![2]!))
+    expect(removed).toContain('句柄目标不在当前画布')
+    expect(removed).not.toContain('→ t64')
+  })
+
+  it('句柄提示转义合法 ID 中的引号与换行（PR #294 评审）', () => {
+    const id = `q"\n${'x'.repeat(100)}`
+    const target = node({
+      id,
+      type: 'beat',
+      data: { name: '特殊 ID', tone: 'x' },
+    })
+    const found = findNodesText([target], [], '特殊 ID')
+    const encoded = found.match(
+      /find_nodes\(("(?:\\.|[^"\\])*"), offset=1\)/,
+    )?.[1]
+    expect(encoded).toBeTruthy()
+    const query = JSON.parse(encoded!) as string
+    expect(findNodesText([target], [], query)).toContain(id)
+  })
+
+  it('旧位置句柄不再静默解析到可能变化的节点（PR #294 评审）', () => {
+    const a = node({ id: 'P-A', type: 'beat', data: { name: '甲', tone: 'x' } })
+    const b = node({ id: 'P-B', type: 'beat', data: { name: '乙', tone: 'x' } })
+    const text = findNodesText([a, b], [], 'id:P-#2')
+    expect(text).toContain('旧序号句柄')
+    expect(text).not.toContain('P-B')
+  })
+
+  it('损坏的句柄明确失败，不退回模糊检索（PR #294 评审）', () => {
+    const target = node({
+      id: 'n1',
+      type: 'beat',
+      data: { name: 'node:broken#2~bad', tone: 'x' },
+    })
+    expect(findNodesText([target], [], 'node:broken#2~bad', 64)).toContain(
+      '无效节点句柄',
+    )
+    expect(findNodesText([target], [], 'id:broken#2~bad')).toContain(
+      '无效或过期句柄',
+    )
   })
 
   it('无匹配与空关键词给出明确文案，不抛异常', () => {

@@ -32,9 +32,8 @@ const LINE_MAX = 200
 /** 查询回显上限：页头不原样回显模型给出的超长检索串。 */
 const ECHO_MAX = 60
 
-/** id 展示上限：超长 id（运行态原样保留的脏数据）缩写展示并声明，
- * 完整 id 以其原始来源（用户消息/原上下文）为准——结果总量预算由此
- * 对页头与节点身份同样成立（PR #294 评审）。 */
+/** id 展示上限：超长 id（运行态原样保留的脏数据）缩写展示并声明；
+ * 完整 id 可经绑定原始 ID 的句柄分段读取。 */
 const ID_MAX = 80
 
 /** id 的有界展示：超长时缩写并附带声明。 */
@@ -47,45 +46,43 @@ function idOf(id: string): string {
 const ID_SEGMENT = 8_000
 
 /**
- * 「id:<前缀>」模式：被缩写展示的超长 id（按名称发现时完整 id 不在
- * 任何上下文中，PR #294 评审）的无损恢复句柄——唯一前缀命中的节点
- * 按 offset（=段号，1 起）分段返回完整 id；多命中要求加长前缀。供
- * get_node 与精确 nodeId 写回使用。
+ * 「id:<前缀>」模式：唯一前缀搜索或绑定原始 ID 指纹的稳定句柄，
+ * 按 offset（=段号，1 起）分段返回完整 id；多命中列出候选句柄。
+ * 无指纹的旧位置句柄拒绝解析，避免画布增删后指向错误节点。
  */
 function idSegments(
   nodes: CanvasNode[],
   prefix: string,
   offset: number,
 ): string {
-  // 序号句柄优先（PR #294 评审）：「#<纯数字>」结尾一律按序号解释——
-  // id 字面以「#数字」开头时不被前缀匹配劫持；指向真实含 # 的 id 用
-  // 非纯数字结尾的前缀查询（如完整 id 本身）。
-  const hashAt = prefix.lastIndexOf('#')
-  if (hashAt >= 0 && /^\d+$/.test(prefix.slice(hashAt + 1))) {
-    const base = prefix.slice(0, hashAt)
-    const candidates = nodes.filter((n) => n.id.startsWith(base))
-    const target = candidates[Number(prefix.slice(hashAt + 1)) - 1]
-    if (!target) {
-      return `序号超界：前缀「${cut(base, ECHO_MAX)}」命中 ${candidates.length} 个候选，无第 ${prefix.slice(hashAt + 1)} 个；请使用碰撞列表给出的序号。`
-    }
+  if (STABLE_REF.test(prefix)) {
+    const target = handleTarget(nodes, prefix)
+    if (!target) return '句柄目标不在当前画布或句柄冲突；请重新检索节点。'
     return segmentsOf(target.id, ordinalRef(target.id, nodes), offset)
+  }
+  if (/#\d+$/.test(prefix)) {
+    return '旧序号句柄不再支持；请重新按名称或前缀检索，使用绑定节点 ID 的新句柄。'
+  }
+  if (/#\d+~/.test(prefix)) {
+    return '无效或过期句柄；请重新检索节点。'
   }
   const matches = nodes.filter((n) => n.id.startsWith(prefix))
   if (matches.length > 1) {
-    // 候选缩写后可能文本相同（共同前缀 ≥ ID_MAX）：按画布顺序编号消歧，
-    // 「id:<前缀>#<序号>」直达该候选的完整 id 分段（位置句柄在同一
-    // 画布状态内稳定，PR #294 评审）
+    // 列表序号只供辨认；实际句柄携带原始 ID 指纹，画布增删后仍定位原节点。
     return [
       `id 前缀命中 ${matches.length} 个节点，前缀不足定位。候选按画布顺序编号：`,
       ...matches
         .slice(0, FIND_NODES_MAX)
-        .map((n, i) => `- #${i + 1} ${idOf(n.id)}`),
+        .map(
+          (n, i) =>
+            `- #${i + 1} ${idOf(n.id)}；find_nodes(${idHandleQuery(n.id, nodes)}, offset=1)`,
+        ),
       ...(matches.length > FIND_NODES_MAX
         ? [
             `（另有 ${matches.length - FIND_NODES_MAX} 个命中未列出，请加长前缀缩小范围）`,
           ]
         : []),
-      `（find_nodes("id:${prefix.slice(0, ID_MAX)}#<序号>", offset=段号) 直达该候选完整 id；或加长前缀）`,
+      '（使用候选行的句柄读取完整 id；或加长前缀）',
     ].join('\n')
   }
   if (matches.length === 0) {
@@ -94,8 +91,8 @@ function idSegments(
   return segmentsOf(matches[0]!.id, ordinalRef(matches[0]!.id, nodes), offset)
 }
 
-/** 单个完整 id 的分段读取（offset=段号，1 起）；ref 为续读句柄
- *（含序号），各段提示一致携带，多段恢复不退化为碰撞列表。 */
+/** 单个完整 id 的分段读取（offset=段号，1 起）；ref 绑定原始 ID，
+ * 各段提示一致携带，多段恢复不退化为碰撞列表。 */
 function segmentsOf(id: string, ref: string, offset: number): string {
   const parts = Math.ceil(id.length / ID_SEGMENT)
   const part = Math.min(Math.max(offset, 1), parts)
@@ -105,29 +102,64 @@ function segmentsOf(id: string, ref: string, offset: number): string {
     segment,
   ]
   if (part < parts) {
+    const query = JSON.stringify('id:' + ref)
     lines.push(
-      `（find_nodes("id:${ref}", offset=${
-        part + 1
-      }) 读下一段；各段按序拼接为完整 id）`,
+      `（find_nodes(${query}, offset=${part + 1}) 读下一段；各段按序拼接为完整 id）`,
     )
   }
   return lines.join('\n')
 }
 
-/** 节点的序号直达句柄：80 前缀 + 该节点在共前缀候选（画布顺序）中的
- * 序号——所有提示统一经此句柄，解析端按同一口径还原（PR #294 评审）。 */
+/** 固定长 ID 指纹只用于本地句柄身份匹配，不承担鉴权。 */
+function idFingerprint(id: string): string {
+  let a = 0x811c9dc5
+  let b = 0x9e3779b9
+  let c = 0x85ebca6b
+  let d = 0xc2b2ae35
+  for (let i = 0; i < id.length; i += 1) {
+    // i < id.length 保证这里必有码点；指纹按固定索引扫描原始字符串。
+    const code = id.codePointAt(i)!
+    a = Math.imul(a ^ code, 0x01000193)
+    b = Math.imul(b ^ code, 0x27d4eb2d)
+    c = Math.imul(c ^ code, 0x165667b1)
+    d = Math.imul(d ^ code, 0x9e3779b1)
+  }
+  return [a, b, c, d]
+    .map((value) => (value >>> 0).toString(16).padStart(8, '0'))
+    .join('')
+}
+
+/** 句柄语法：序号供阅读，指纹绑定原始 ID；前缀可含任意字符。 */
+const STABLE_REF = /^([\s\S]*)#([1-9]\d*)~([0-9a-f]{32})$/
+
+/** 仅在指纹与前缀共同唯一定位时接受句柄；删除与碰撞均显式失效。 */
+function handleTarget(nodes: CanvasNode[], ref: string): CanvasNode | null {
+  const match = STABLE_REF.exec(ref)
+  if (!match) return null
+  const hits = nodes.filter(
+    (n) => n.id.startsWith(match[1]!) && idFingerprint(n.id) === match[3],
+  )
+  return hits.length === 1 ? hits[0]! : null
+}
+
+/** 节点句柄：80 字符前缀 + 展示序号 + 原始 ID 指纹。 */
 function ordinalRef(id: string, nodes: CanvasNode[]): string {
   const base = id.slice(0, ID_MAX)
   const ordinal =
     nodes.filter((n) => n.id.startsWith(base)).findIndex((n) => n.id === id) + 1
-  return `${base}#${ordinal}`
+  return `${base}#${ordinal}~${idFingerprint(id)}`
 }
 
-/** 缩写 id 的恢复提示行：直达「id:<前缀>#<序号>」分段读取入口。 */
+/** 供工具提示使用的 JSON 编码 ID 句柄查询。 */
+function idHandleQuery(id: string, nodes: CanvasNode[]): string {
+  return JSON.stringify('id:' + ordinalRef(id, nodes))
+}
+
+/** 缩写 id 的恢复提示行：使用绑定原始 ID 的分段读取句柄。 */
 function idHint(id: string, nodes: CanvasNode[]): string[] {
   return id.length > ID_MAX
     ? [
-        `  （id 超长已缩写；完整 id 分段读取：find_nodes("id:${ordinalRef(id, nodes)}", offset=1)）`,
+        `  （id 超长已缩写；完整 id 分段读取：find_nodes(${idHandleQuery(id, nodes)}, offset=1)）`,
       ]
     : []
 }
@@ -216,11 +248,17 @@ function singleNodeLines(
     `- ${idOf(target.id)} ${cut(spineNodeLabel(target), LINE_MAX)}（${target.type}）`,
     ...idHint(target.id, nodes),
   ]
+  const continuationQuery = JSON.stringify(
+    target.id.length > ID_MAX
+      ? `node:${ordinalRef(target.id, nodes)}`
+      : target.id,
+  )
+  const pageBudget = PAGE_BUDGET - continuationQuery.length
   let used = lines.reduce((sum, l) => sum + l.length + 1, 0)
   let listed = 0
   for (const e of hit.slice(offset, offset + EDGES_PAGE)) {
     const line = cut(edgeLine(e, nodes), LINE_MAX)
-    if (used + line.length + 1 > PAGE_BUDGET && listed > 0) break
+    if (used + line.length + 1 > pageBudget && listed > 0) break
     lines.push(line)
     used += line.length + 1
     listed += 1
@@ -228,9 +266,7 @@ function singleNodeLines(
   const rest = hit.length - offset - listed
   if (rest > 0) {
     lines.push(
-      `  （另有 ${rest} 条连线未列出；find_nodes("${idOf(target.id)}", offset=${
-        offset + listed
-      }) 继续枚举）`,
+      `  （另有 ${rest} 条连线未列出；find_nodes(${continuationQuery}, offset=${offset + listed}) 继续枚举）`,
     )
   }
   return lines
@@ -302,6 +338,15 @@ export function findNodesText(
   }
   if (trimmed.startsWith('id:')) {
     return idSegments(nodes, trimmed.slice(3), offset)
+  }
+  if (trimmed.startsWith('node:')) {
+    if (!STABLE_REF.test(trimmed.slice(5))) {
+      return '无效节点句柄；请重新检索节点。'
+    }
+    const target = handleTarget(nodes, trimmed.slice(5))
+    return target
+      ? singleNodeLines(target, nodes, edges, offset, trimmed).join('\n')
+      : '句柄目标不在当前画布或句柄冲突；请重新检索节点。'
   }
   const q = trimmed.toLowerCase()
   const matched = nodes.filter((n) => searchBody(n).includes(q))
