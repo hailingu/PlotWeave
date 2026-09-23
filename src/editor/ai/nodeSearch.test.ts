@@ -132,10 +132,66 @@ describe('findNodesText（issue #275 评审：被节选条目的可发现读取�
     expect(page1).not.toContain('→ t65')
     expect(page1).toMatch(/另有 6 条连线未列出/)
     expect(page1).toContain('offset=64')
-    const page2 = findNodesText([hub, ...targets], edges, 'hub', 64)
+    const cursor = page1.match(/cursor="([0-9a-f]+)"/)?.[1]
+    expect(cursor).toBeTruthy()
+    const page2 = findNodesText([hub, ...targets], edges, 'hub', 64, cursor)
     expect(page2).toContain('→ t65')
     expect(page2).toContain('→ t70')
     expect(page2).not.toMatch(/另有 \d+ 条连线未列出/)
+  })
+
+  it('删除前页连线后旧位置续页必须明确失效，不能漏掉原第 65 条（PR #294 评审）', () => {
+    const hub = node({
+      id: 'hub',
+      type: 'beat',
+      data: { name: '枢纽', tone: 'x' },
+    })
+    const edges: Edge[] = Array.from({ length: 70 }, (_, i) => ({
+      id: `e${i}`,
+      source: 'hub',
+      target: `t${i}`,
+    }))
+    expect(findNodesText([hub], edges, 'hub')).toContain('offset=64')
+
+    const stale = findNodesText([hub], edges.slice(1), 'hub', 64)
+    expect(stale).toContain('重新枚举')
+    expect(stale).not.toContain('→ t65')
+    expect(findNodesText([hub], edges.slice(1), 'hub')).toContain('→ t64')
+  })
+
+  it('连线续页游标只在原连线顺序下继续，增删或重排后要求重新枚举（PR #294 评审）', () => {
+    const hub = node({
+      id: 'hub',
+      type: 'beat',
+      data: { name: '枢纽', tone: 'x' },
+    })
+    const edges: Edge[] = Array.from({ length: 70 }, (_, i) => ({
+      id: `e${i}`,
+      source: 'hub',
+      target: `t${i}`,
+    }))
+    const first = findNodesText([hub], edges, 'hub')
+    const next = first.match(
+      /find_nodes\("hub", offset=(\d+), cursor="([0-9a-f]+)"\)/,
+    )
+    expect(next).toBeTruthy()
+    const offset = Number(next![1]!)
+    const cursor = next![2]!
+
+    const unchanged = findNodesText([hub], edges, 'hub', offset, cursor)
+    expect(unchanged).toContain('→ t64')
+    expect(unchanged).not.toContain('→ t63')
+
+    const added: Edge = { id: 'added', source: 'hub', target: 'new-target' }
+    for (const changed of [
+      edges.slice(1),
+      [added, ...edges],
+      [edges[1]!, edges[0]!, ...edges.slice(2)],
+    ]) {
+      const stale = findNodesText([hub], changed, 'hub', offset, cursor)
+      expect(stale).toContain('重新枚举')
+      expect(stale).not.toContain('→ t64')
+    }
   })
 
   it('行级截断：单命中 6.5 万字符名称不原样携带（issue #275 评审）', () => {
@@ -614,18 +670,27 @@ describe('findNodesText（issue #275 评审：被节选条目的可发现读取�
       target: `t${i}`,
     }))
     const page1 = findNodesText([target], edges, '枢纽')
-    const next = page1.match(/find_nodes\("(node:[^"]+)", offset=(\d+)\)/)
+    const next = page1.match(
+      /find_nodes\("(node:[^"]+)", offset=(\d+), cursor="([0-9a-f]+)"\)/,
+    )
     expect(next?.[1]).toMatch(/~[0-9a-f]{32}$/)
     const page2 = findNodesText(
       [added, target],
       edges,
       next![1]!,
       Number(next![2]!),
+      next![3]!,
     )
     expect(page2).toContain('→ t64')
     expect(page2).toContain('→ t69')
     expect(page2).not.toContain('→ t63')
-    const removed = findNodesText([added], edges, next![1]!, Number(next![2]!))
+    const removed = findNodesText(
+      [added],
+      edges,
+      next![1]!,
+      Number(next![2]!),
+      next![3]!,
+    )
     expect(removed).toContain('句柄目标不在当前画布')
     expect(removed).not.toContain('→ t64')
   })

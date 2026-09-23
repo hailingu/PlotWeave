@@ -244,6 +244,23 @@ export async function runModelTurn(
   }
 }
 
+/** 解析 find_nodes 参数：保持 query 原文，拒绝无效位置与非字符串游标。 */
+function findNodeQueryArgs(args: Record<string, unknown>): {
+  query: string
+  offset: number
+  cursor?: string
+} {
+  const query = typeof args.query === 'string' ? args.query : ''
+  const offset =
+    typeof args.offset === 'number' &&
+    Number.isInteger(args.offset) &&
+    args.offset >= 0
+      ? args.offset
+      : 0
+  const cursor = typeof args.cursor === 'string' ? args.cursor : undefined
+  return { query, offset, ...(cursor !== undefined && { cursor }) }
+}
+
 /** 读工具就地执行（send 拆出）：快照来自常驻快照 prop，节点详情按 id 现查，
  * 设定集清单（issue 44）与文档全文（issue 56）来自常驻读取器。 */
 export function readToolOf(
@@ -251,19 +268,15 @@ export function readToolOf(
   onReadNode: ((nodeId: string) => string | null) | undefined,
   onReadSettings?: () => string,
   onReadDocument?: (documentId: string) => string | null,
-  onFindNodes?: (query: string, offset?: number) => string,
+  onFindNodes?: (query: string, offset?: number, cursor?: string) => string,
 ): ReadToolExecutor {
   return (name, args) => {
     if (name === 'get_graph_snapshot') return canvasDigest ?? '（画布为空）'
     if (name === 'find_nodes') {
-      const query = typeof args.query === 'string' ? args.query : ''
-      const offset =
-        typeof args.offset === 'number' &&
-        Number.isInteger(args.offset) &&
-        args.offset >= 0
-          ? args.offset
-          : 0
-      return onFindNodes?.(query, offset) ?? `未找到匹配「${query}」的节点`
+      const { query, offset, cursor } = findNodeQueryArgs(args)
+      return (
+        onFindNodes?.(query, offset, cursor) ?? `未找到匹配「${query}」的节点`
+      )
     }
     if (name === 'get_node') {
       const id = typeof args.nodeId === 'string' ? args.nodeId : ''

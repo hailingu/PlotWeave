@@ -5,10 +5,13 @@
  * 用于界面展示）。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { Edge } from '@xyflow/react'
 import { buildMessages, readToolOf, runModelTurn } from './aiThreadModel'
 import { TurnCancelledError } from '../ai/agentLoop'
 import { runAgentLoop } from '../ai/agentLoop'
+import { findNodesText } from '../ai/nodeSearch'
 import type { ThreadEntry } from '../ai/session'
+import type { CanvasNode } from '../nodes/types'
 import type { ProviderConfig } from '../../settings/types'
 
 vi.mock('../ai/agentLoop', async (importOriginal) => {
@@ -279,6 +282,37 @@ describe('readToolOf · 读工具分发（issue 56 增 get_document）', () => {
     expect(
       readToolOf(undefined, undefined)('find_nodes', args({ query: 'x' })),
     ).toContain('未找到匹配「x」')
+  })
+
+  it('find_nodes 工具调用把连线续页游标传到真实检索器（PR #294 评审）', () => {
+    const hub = {
+      id: 'hub',
+      type: 'beat',
+      data: { name: '枢纽', tone: 'x' },
+    } as CanvasNode
+    const edges: Edge[] = Array.from({ length: 70 }, (_, i) => ({
+      id: `e${i}`,
+      source: 'hub',
+      target: `t${i}`,
+    }))
+    const tool = readToolOf(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      (query, offset, cursor) =>
+        findNodesText([hub], edges, query, offset, cursor),
+    )
+    const first = tool('find_nodes', { query: 'hub' })
+    const next = first.match(/offset=(\d+), cursor="([0-9a-f]+)"/)
+    expect(next).toBeTruthy()
+    const second = tool('find_nodes', {
+      query: 'hub',
+      offset: Number(next![1]!),
+      cursor: next![2]!,
+    })
+    expect(second).toContain('→ t64')
+    expect(second).not.toContain('重新枚举')
   })
 
   it('未接线文档读取器时给出占位文案，不抛异常', () => {

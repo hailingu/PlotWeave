@@ -7,8 +7,9 @@
  * attach），配合 get_node（按 id 读全文）补齐「裁剪可识别且可按需补读」
  * 的闭环。工具结果自身同受总量预算约束（PR #294 评审）：预算按**整条目**
  * （节点块或单条连线）消费，游标始终等于实际已列数——截断标记给出的
- * offset 续读不会跳过或重复任何条目；行级截断（200/行）防单个合法长
- * 字段（上限 65,536 字符）携带全文。精确 id 命中优先进入单节点连线
+ * 同一连线集合下 offset 续读不会跳过或重复条目，集合变化时游标失效；
+ * 行级截断（200/行）防单个合法长字段（上限 65,536 字符）携带全文。
+ * 精确 id 命中优先进入单节点连线
  * 分页视图：合法 id 子串碰撞（n1 命中 n10）不阻连续线枚举。纯函数，
  * 标签与截断复用 graphDigest 的 spineNodeLabel / cut。
  */
@@ -129,6 +130,14 @@ function idFingerprint(id: string): string {
     .join('')
 }
 
+/** 连线分页版本绑定目标身份及关联边的身份和顺序；内容文案变化不影响枚举位置。 */
+function edgePageVersion(targetId: string, edges: Edge[]): string {
+  const edgeKeys = edges.map((e) =>
+    idFingerprint(JSON.stringify([e.id, e.source, e.target])),
+  )
+  return idFingerprint(JSON.stringify([targetId, edgeKeys]))
+}
+
 /** 句柄语法：序号供阅读，指纹绑定原始 ID；前缀可含任意字符。 */
 const STABLE_REF = /^([\s\S]*)#([1-9]\d*)~([0-9a-f]{32})$/
 
@@ -232,17 +241,24 @@ function nodeBlock(
   ]
 }
 
-/** 单节点命中的连线分页视图：按字符预算逐条列入，游标 = 实际已列数。 */
+/** 单节点连线分页：游标绑定当前关联边集合，变化后要求从头枚举。 */
 function singleNodeLines(
   target: CanvasNode,
   nodes: CanvasNode[],
   edges: Edge[],
   offset: number,
   query: string,
+  cursor?: string,
 ): string[] {
   const hit = edges.filter(
     (e) => e.source === target.id || e.target === target.id,
   )
+  const version = edgePageVersion(target.id, hit)
+  if ((offset > 0 || cursor !== undefined) && cursor !== version) {
+    return [
+      '连线分页已失效：连线已变化或续页游标缺失；请从 offset=0 重新枚举。',
+    ]
+  }
   const lines = [
     `匹配「${cut(query, ECHO_MAX)}」的节点（含摘要未列出的条目）：`,
     `- ${idOf(target.id)} ${cut(spineNodeLabel(target), LINE_MAX)}（${target.type}）`,
@@ -253,7 +269,8 @@ function singleNodeLines(
       ? `node:${ordinalRef(target.id, nodes)}`
       : target.id,
   )
-  const pageBudget = PAGE_BUDGET - continuationQuery.length
+  const pageBudget =
+    PAGE_BUDGET - continuationQuery.length - version.length - 16
   let used = lines.reduce((sum, l) => sum + l.length + 1, 0)
   let listed = 0
   for (const e of hit.slice(offset, offset + EDGES_PAGE)) {
@@ -266,7 +283,7 @@ function singleNodeLines(
   const rest = hit.length - offset - listed
   if (rest > 0) {
     lines.push(
-      `  （另有 ${rest} 条连线未列出；find_nodes(${continuationQuery}, offset=${offset + listed}) 继续枚举）`,
+      `  （另有 ${rest} 条连线未列出；find_nodes(${continuationQuery}, offset=${offset + listed}, cursor="${version}") 继续枚举）`,
     )
   }
   return lines
@@ -322,6 +339,7 @@ export function findNodesText(
   edges: Edge[],
   query: string,
   offset = 0,
+  cursor?: string,
 ): string {
   if (typeof query !== 'string' || query.trim() === '') {
     return (
@@ -333,7 +351,9 @@ export function findNodesText(
   }
   const exact = nodes.find((n) => n.id === query)
   if (exact) {
-    return singleNodeLines(exact, nodes, edges, offset, query).join('\n')
+    return singleNodeLines(exact, nodes, edges, offset, query, cursor).join(
+      '\n',
+    )
   }
   const trimmed = query.trim()
   if (trimmed.startsWith('id:')) {
@@ -345,7 +365,9 @@ export function findNodesText(
     }
     const target = handleTarget(nodes, trimmed.slice(5))
     return target
-      ? singleNodeLines(target, nodes, edges, offset, trimmed).join('\n')
+      ? singleNodeLines(target, nodes, edges, offset, trimmed, cursor).join(
+          '\n',
+        )
       : '句柄目标不在当前画布或句柄冲突；请重新检索节点。'
   }
   const q = trimmed.toLowerCase()
@@ -355,7 +377,7 @@ export function findNodesText(
   }
   const lines =
     matched.length === 1
-      ? singleNodeLines(matched[0]!, nodes, edges, offset, trimmed)
+      ? singleNodeLines(matched[0]!, nodes, edges, offset, trimmed, cursor)
       : pageLines(matched, nodes, edges, offset, trimmed)
   return lines.join('\n')
 }
