@@ -489,6 +489,33 @@ describe('findNodesText（issue #275 评审：被节选条目的可发现读取�
     expect(text).not.toContain('完整 id 第')
   })
 
+  it('原样精确 ID 优先于首尾空白裁剪，避免读取另一节点的连线（PR #294 评审）', () => {
+    const plain = node({
+      id: 'n1',
+      type: 'beat',
+      data: { name: '普通', tone: 'x' },
+    })
+    const padded = node({
+      id: ' n1 ',
+      type: 'beat',
+      data: { name: '带空白', tone: 'x' },
+    })
+    const edges: Edge[] = [
+      { id: 'plain-edge', source: 'n1', target: 'plain-target' },
+      { id: 'padded-edge', source: ' n1 ', target: 'padded-target' },
+    ]
+    const paddedText = findNodesText([plain, padded], edges, ' n1 ')
+    expect(paddedText).toContain('sequence:  n1  → padded-target')
+    expect(paddedText).not.toContain('plain-target')
+
+    const plainText = findNodesText([plain, padded], edges, 'n1')
+    expect(plainText).toContain('sequence: n1 → plain-target')
+    expect(plainText).not.toContain('padded-target')
+
+    const fallbackText = findNodesText([plain], edges.slice(0, 1), ' n1 ')
+    expect(fallbackText).toContain('sequence: n1 → plain-target')
+  })
+
   it('长查询续页沿用原始匹配集，不重复或跳过目标（PR #294 评审）', () => {
     const query = 'q'.repeat(61)
     const prefixOnly = node({

@@ -331,11 +331,11 @@ export function findNodesText(
       '单命中按该节点连线）。'
     )
   }
-  const trimmed = query.trim()
-  const exact = nodes.find((n) => n.id === trimmed)
+  const exact = nodes.find((n) => n.id === query)
   if (exact) {
-    return singleNodeLines(exact, nodes, edges, offset, trimmed).join('\n')
+    return singleNodeLines(exact, nodes, edges, offset, query).join('\n')
   }
+  const trimmed = query.trim()
   if (trimmed.startsWith('id:')) {
     return idSegments(nodes, trimmed.slice(3), offset)
   }
