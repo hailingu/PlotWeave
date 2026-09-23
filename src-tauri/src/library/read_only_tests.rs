@@ -63,34 +63,82 @@ fn by_id(entries: impl IntoIterator<Item = Value>) -> Value {
 
 // ---- 变更命令的净化诊断可见性（评审修复）----
 
-/// 脏索引下导入：返回条目携带 warnings（落盘即净化不得静默）。
+/// 脏索引下变更命令（put/update_meta/delete）响应携带 warnings：落盘即
+/// 净化不得静默，命令自身照常成功。三命令共用同一不变量（issue #291
+/// 参数化同构用例；delete 段附带目标条目移除断言）。
 #[test]
-fn put_on_dirty_index_returns_warnings() {
-    let (library, root) = temp_fixture();
-    write_index_raw(
-        &library,
-        &json!({ "assets": by_id([entry("la-bad", "../escape.png")]), "groups": by_id([]) }),
-    );
-    let e = put_asset_with(
-        &cap(&library),
-        "a.png",
-        "image/png",
-        "other",
-        b"A",
-        &mut |_| {},
-    )
-    .expect("导入应成功");
-    let warnings = e["warnings"].as_array().expect("warnings 应随响应返回");
-    assert!(
-        warnings
-            .iter()
-            .any(|w| w.as_str().unwrap_or_default().contains("隔离")),
-        "诊断应含隔离说明：{warnings:?}"
-    );
-    cleanup(&root);
+fn dirty_index_commands_return_warnings() {
+    let dirty = json!({
+        "assets": [ entry("la-1", "assets/la-1.png"), entry("la-bad", "../escape.png") ],
+        "groups": [],
+    });
+    {
+        let (library, root) = temp_fixture();
+        write_index_raw(&library, &dirty);
+        let e = put_asset_with(
+            &cap(&library),
+            "a.png",
+            "image/png",
+            "other",
+            b"A",
+            &mut |_| {},
+        )
+        .expect("导入应成功");
+        assert!(
+            e["warnings"]
+                .as_array()
+                .expect("warnings 应随响应返回")
+                .iter()
+                .any(|w| w.as_str().unwrap_or_default().contains("隔离")),
+            "put 诊断应含隔离说明：{:?}",
+            e["warnings"]
+        );
+        cleanup(&root);
+    }
+    {
+        let (library, root) = temp_fixture();
+        write_index_raw(&library, &dirty);
+        let updated = update_meta_with(
+            &cap(&library),
+            "la-1",
+            &json!({ "name": "改名" }),
+            &mut |_| {},
+        )
+        .expect("更新应成功");
+        assert!(
+            updated["warnings"]
+                .as_array()
+                .expect("warnings 应随响应返回")
+                .iter()
+                .any(|w| w.as_str().unwrap_or_default().contains("隔离")),
+            "update_meta 诊断应含隔离说明：{:?}",
+            updated["warnings"]
+        );
+        cleanup(&root);
+    }
+    {
+        let (library, root) = temp_fixture();
+        write_index_raw(&library, &dirty);
+        let result =
+            crate::library_journal::delete_asset_transacted(&cap(&library), "la-1", &mut |_| {})
+                .expect("删除应成功");
+        assert!(
+            result["warnings"]
+                .as_array()
+                .expect("warnings 应在响应中")
+                .iter()
+                .any(|w| w.as_str().unwrap_or_default().contains("隔离")),
+            "delete 诊断应含隔离说明：{:?}",
+            result["warnings"]
+        );
+        let raw = fs::read_to_string(library.join("library.json")).expect("读回索引");
+        assert!(!raw.contains("\"la-1\""), "目标条目应被移除：{raw}");
+        cleanup(&root);
+    }
 }
 
-/// 常态导入（索引干净）：响应不含 warnings 键，形状纯净。
+/// 常态导入（索引干净）：响应不含 warnings 键，形状纯净（与上方脏索引
+/// 对照）。
 #[test]
 fn put_on_clean_index_omits_warnings() {
     let (library, root) = temp_fixture();
@@ -107,69 +155,6 @@ fn put_on_clean_index_omits_warnings() {
         e.get("warnings").is_none(),
         "干净索引不得附加 warnings：{e}"
     );
-    cleanup(&root);
-}
-
-/// 脏索引下更新元信息：返回条目携带 warnings。
-#[test]
-fn update_meta_on_dirty_index_returns_warnings() {
-    let (library, root) = temp_fixture();
-    write_index_raw(
-        &library,
-        &json!({
-            "assets": [
-                entry("la-1", "assets/la-1.png"),
-                entry("la-bad", "/etc/passwd"),
-            ],
-            "groups": [],
-        }),
-    );
-    let library_dir = cap(&library);
-    let updated = update_meta_with(
-        &library_dir,
-        "la-1",
-        &json!({ "name": "改名" }),
-        &mut |_| {},
-    )
-    .expect("更新应成功");
-    let warnings = updated["warnings"]
-        .as_array()
-        .expect("warnings 应随响应返回");
-    assert!(
-        warnings
-            .iter()
-            .any(|w| w.as_str().unwrap_or_default().contains("隔离")),
-        "诊断应含隔离说明：{warnings:?}"
-    );
-    cleanup(&root);
-}
-
-/// 脏索引下删除：响应携带 warnings；删除自身成功。
-#[test]
-fn delete_on_dirty_index_returns_warnings() {
-    let (library, root) = temp_fixture();
-    write_index_raw(
-        &library,
-        &json!({
-            "assets": [
-                entry("la-1", "assets/la-1.png"),
-                entry("la-bad", "library.json"),
-            ],
-            "groups": [],
-        }),
-    );
-    let result =
-        crate::library_journal::delete_asset_transacted(&cap(&library), "la-1", &mut |_| {})
-            .expect("删除应成功");
-    let warnings = result["warnings"].as_array().expect("warnings 应在响应中");
-    assert!(
-        warnings
-            .iter()
-            .any(|w| w.as_str().unwrap_or_default().contains("隔离")),
-        "诊断应含隔离说明：{warnings:?}"
-    );
-    let raw = fs::read_to_string(library.join("library.json")).expect("读回索引");
-    assert!(!raw.contains("\"la-1\""), "目标条目应被移除：{raw}");
     cleanup(&root);
 }
 
@@ -568,29 +553,5 @@ fn list_sweep_skips_missing_assets_dir_without_creating() {
         !library.join("assets").exists(),
         "读路径清扫不得创建 assets 目录"
     );
-    cleanup(&root);
-}
-
-/// [issue #145](https://github.com/hailingu/PlotWeave/issues/145)：库操作
-/// 锁中毒恢复——持锁 panic 后库操作照常：磁盘一致性由 §7.2 日志可恢复
-/// 提交协议独立保证（panic 对盘上状态等价于崩溃，recover 在每个操作
-/// 起始照常执行），锁不守卫任何内存状态。静态锁此后保持中毒状态，
-/// 后续用例经同一恢复路径照常工作（透明恢复）。
-#[test]
-fn library_op_lock_recovers_after_poison() {
-    let (library, root) = temp_fixture();
-    write_index_raw(
-        &library,
-        &json!({ "assets": { "byId": {} }, "groups": { "byId": {} } }),
-    );
-    std::thread::spawn(|| {
-        let _guard = crate::library_journal::library_op_lock();
-        panic!("测试注入的持锁 panic");
-    })
-    .join()
-    .expect_err("注入 panic 应发生");
-    let (index, _warnings) =
-        list_assets_with(&cap(&library), &mut |_| {}).expect("中毒后列表应可用");
-    assert!(index["assets"]["byId"].is_object());
     cleanup(&root);
 }

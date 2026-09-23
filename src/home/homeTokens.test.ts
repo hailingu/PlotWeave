@@ -281,12 +281,8 @@ const ALL_ENVS: Readonly<[string, Env][]> = [
 ]
 
 describe('菜单按钮配色结构（issue #261）', () => {
-  it('常态与 hover 的前景/背景声明不硬编码色值，全部经 var() 令牌', () => {
-    expect(declOf(ruleOf(BTN), 'color')).toMatch(/^var\(--[\w-]+\)$/)
-    expect(declOf(ruleOf(BTN), 'background')).toMatch(/^var\(--[\w-]+\)$/)
-    expect(declOf(ruleOf(BTN_HOVER), 'background')).toMatch(/^var\(--[\w-]+\)$/)
-  })
-
+  // 结构（不硬编码色值）与 var() 接线由 sheetTokens.test.ts 的 #278 全表
+  // 契约扫描所有（含例外注册表双向校验）；本文件只保留配对/焦点/黄金基准。
   it('常态描边经配对令牌进入（暗色系白描边承载悬浮面与深底海报的分离）', () => {
     expect(declOf(ruleOf(BTN), 'border')).toMatch(
       /^1px solid var\(--poster-menu-border\)$/,
@@ -297,22 +293,6 @@ describe('菜单按钮配色结构（issue #261）', () => {
     const rules = rulesWithSelectorPart('.project-menu-btn:focus-visible')
     expect(rules.length, '含 :focus-visible 的规则').toBeGreaterThan(0)
     expect(rules.some((rule) => declOf(rule, 'opacity') === '1')).toBe(true)
-  })
-
-  it('目标声明引用的 var() 全部在 tokens.css 有定义（无悬空回落）', () => {
-    const defined = new Set<string>()
-    tokensCss.walkDecls((decl) => {
-      if (decl.prop.startsWith('--')) defined.add(decl.prop)
-    })
-    for (const selector of [BTN, BTN_HOVER]) {
-      for (const match of ruleOf(selector)
-        .toString()
-        .matchAll(/var\(\s*(--[\w-]+)/g)) {
-        expect(defined.has(match[1]!), `${selector} 引用 ${match[1]}`).toBe(
-          true,
-        )
-      }
-    }
   })
 })
 

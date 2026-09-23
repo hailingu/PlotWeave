@@ -22,11 +22,11 @@
  * | 浅/深外观，常态 | 渲染三处前景 | 计算色 == 重构前字面量 #fff（视觉零变化） | 令牌化不改基线观感 | 黄金表 |
  * | 大纲集进入选中态 | .on 挂类 | 前景经 --on-brand：基线白、more 翻黑；底经 --edge-label-bg | 品牌底前景全应用同一令牌行为（tokens.css 既有契约） | 黄金表 |
  * | 大纲集选中态 × more | 系统开增强对比度 | 前景/背景配对全程 ≥ 4.5:1（底随 --edge-label-bg 近实色收敛） | on-brand 的 ≥4.5 承诺依赖 edge.label.bg 配对（PR #256 评审 4063743839） | 配对采样断言 |
- * | danger 确认/删除悬停 | :hover / danger 挂类 | 前景经 --on-danger 恒定白 | 危险动作前景与其底色（--danger）成对经令牌进入 | 黄金表 |
+ * | danger 确认/删除悬停 | :hover / danger 挂类 | 前景经 --on-danger 恒定白 | 危险动作前景与其底色（--danger）成对经令牌进入 | sheetTokens.test.ts 的 DANGER_RULES 黄金表（issue #291 并入） |
  * | 浅 ↔ 深 ↔ more 切换 | 系统偏好切换 | 三处前景解析值 == 黄金基准 | 前景只随所属令牌变，不残留硬编码 | 黄金表（4 环境） |
- * | 令牌接线 | 渲染任意面板 | 三条规则引用的 var() 全部可解析 | 无失效 var（静默回落） | 接线测试 |
- * | 结构回归 | 新增面板样式 | color 声明零硬编码色值 | 新前景必须经 tokens.css 进入 | 结构测试 |
- * | 遮罩非回退 | 任意环境 | mask 渐隐语义保持：首末色标全透明、内部全不透明 | 遮罩行为不变（issue #240 验收），断言与色值书写形式/声明对无关 | 语义断言（alpha 剖析） |
+ * | 令牌接线 | 渲染任意面板 | 三条规则引用的 var() 全部可解析 | 无失效 var（静默回落） | #278 全表接线扫描（sheetTokens.test.ts） |
+ * | 结构回归 | 新增面板样式 | color 声明零硬编码色值 | 新前景必须经 tokens.css 进入 | #278 全表结构扫描（sheetTokens.test.ts） |
+ * | 遮罩非回退 | 任意环境 | mask 渐隐语义保持：首末色标全透明、内部全不透明 | 遮罩行为不变（issue #240 验收），断言与色值书写形式/声明对无关 | #278 全表遮罩语义扫描（sheetTokens.test.ts） |
  *
  * 未覆盖维度：并发/时序不适用（静态样式表）；--on-danger 白字在深色外观
  * danger 底（#ff6961）上的对比度约 2.8:1，与重构前逐位相同——按 issue #240
@@ -223,66 +223,6 @@ function backgroundSamples(resolved: string, steps = 9): Rgb[] {
   return samples
 }
 
-/** 提取色标中的颜色部分：函数形式（含空格语法的 rgb(0 0 0)）取到配对
- * 右括号，其余取首个空白分隔词；色标的位置偏移属布局数值，不参与断言。 */
-function colorTokenOf(part: string): string {
-  if (!/^[\w-]+\(/.test(part)) return part.split(/\s+/)[0]!
-  let depth = 0
-  for (let i = 0; i < part.length; i += 1) {
-    if (part[i] === '(') depth += 1
-    else if (part[i] === ')') {
-      depth -= 1
-      if (depth === 0) return part.slice(0, i + 1)
-    }
-  }
-  throw new Error(`色标函数未闭合: ${part}`)
-}
-
-/**
- * 遮罩色标 alpha 剖析：渐隐遮罩渲染只消费 alpha 通道，与色相书写形式
- * 无关（#000 / black / rgb(0 0 0) / rgb(0,0,0) 等价）。建模 hex /
- * rgb() / rgba()（逗号与空格语法）/ 具名色（CSS 具名色除 transparent 外
- * 均不透明）；其余形式（var()、color-mix() 等）抛错——超出本契约的改法
- * 须同步更新用例而非静默通过（PR #256 评审 4063923436）。
- */
-function stopAlpha(token: string): number {
-  const value = token.trim()
-  const percent = (raw: string): number =>
-    raw.endsWith('%') ? Number(raw.slice(0, -1)) / 100 : Number(raw)
-  if (/^transparent$/i.test(value)) return 0
-  const hex = value.match(/^#([0-9a-fA-F]{3,8})$/)
-  if (hex) {
-    let digits = hex[1]!
-    if (digits.length === 3 || digits.length === 4) {
-      digits = [...digits].map((ch) => ch + ch).join('')
-    }
-    if (digits.length === 6) return 1
-    if (digits.length === 8) return parseInt(digits.slice(6, 8), 16) / 255
-    throw new Error(`未建模的 hex 形式: ${value}`)
-  }
-  const comma = value.match(
-    /^rgba?\(\s*([\d.]+%?)\s*,\s*([\d.]+%?)\s*,\s*([\d.]+%?)\s*(?:,\s*([\d.]+%?)\s*)?\)$/,
-  )
-  if (comma) return comma[4] === undefined ? 1 : percent(comma[4])
-  const space = value.match(
-    /^rgba?\(\s*([\d.]+%?)\s+([\d.]+%?)\s+([\d.]+%?)(?:\s*\/\s*([\d.%]+))?\)$/,
-  )
-  if (space) return space[4] === undefined ? 1 : percent(space[4])
-  if (/^[\w-]+$/.test(value)) return 1
-  throw new Error(`未建模的遮罩色标形式: ${value}`)
-}
-
-/** linear-gradient 遮罩的色标 alpha 序列（方向段跳过）。 */
-function maskStopAlphas(value: string): number[] {
-  const inner = value
-    .trim()
-    .slice(value.indexOf('(') + 1, value.lastIndexOf(')'))
-  return splitTopLevel(inner)
-    .map((part) => part.trim())
-    .filter((part) => !/^(-?[\d.]+(deg|turn|rad|grad)|to\s)/i.test(part))
-    .map((part) => stopAlpha(colorTokenOf(part)))
-}
-
 /** 规则内指定声明的原值；缺失抛错（防止声明被改名后测试静默空过）。 */
 function declOf(rule: postcss.Rule, prop: string): string {
   const decl = rule.nodes.find(
@@ -292,13 +232,6 @@ function declOf(rule: postcss.Rule, prop: string): string {
   if (!decl) throw new Error(`${rule.selector} 缺少 ${prop} 声明`)
   return decl.value
 }
-
-/** issue #240 三处前景所在规则 → 各自的前景/背景声明。 */
-const TARGETS: Readonly<{ selector: string; fg: string; bg: string }[]> = [
-  { selector: '.pw-outline-ep-btn.on', fg: 'color', bg: 'background' },
-  { selector: '.pw-ai-btn.primary.danger', fg: 'color', bg: 'background' },
-  { selector: '.pw-settings-x:hover', fg: 'color', bg: 'background' },
-]
 
 const BASELINE_ENVS: Readonly<[string, Env][]> = [
   [
@@ -342,57 +275,11 @@ const MORE_ENVS: Readonly<[string, Env][]> = [
   ],
 ]
 
-describe('panels.css 前景色结构（issue #240）', () => {
-  it('文本前景 color 声明不硬编码色值，全部经语义令牌', () => {
-    const literal =
-      /#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(|\bhwb\(|\blab\(|\blch\(|\boklab\(|\boklch\(|\bcolor\(/
-    const offenders: string[] = []
-    panelsCss.walkDecls((decl) => {
-      if (decl.prop === 'color' && literal.test(decl.value)) {
-        offenders.push(`${decl.prop}: ${decl.value}`)
-      }
-    })
-    expect(offenders).toEqual([])
-  })
-
-  it('面板滚动遮罩语义：上下边缘全透明、中段全不透明（与色值书写形式无关）', () => {
-    // 渐隐遮罩渲染只消费 alpha：断言首末色标全透明、内部色标全不透明这一
-    // 可观测语义；#000/black/rgb(0 0 0) 等书写等价不误报，声明条数与
-    // 前缀形态（一条或多条、标准或 -webkit-）不钉（评审 4063923436）
-    let scroll: postcss.Rule | undefined
-    panelsCss.walkRules((rule) => {
-      if (rule.selector === '.pw-panel-scroll') scroll = rule
-    })
-    expect(scroll, '未找到 .pw-panel-scroll 规则').toBeDefined()
-    const masks = (scroll!.nodes ?? []).filter(
-      (node): node is postcss.Declaration =>
-        node.type === 'decl' && node.prop.endsWith('mask-image'),
-    )
-    expect(masks.length, '至少一条 mask-image 声明承载渐隐').toBeGreaterThan(0)
-    for (const decl of masks) {
-      if (!/^linear-gradient\(/i.test(decl.value.trim())) {
-        throw new Error(`${decl.prop} 非 linear-gradient 形式，未建模`)
-      }
-      const alphas = maskStopAlphas(decl.value)
-      expect(alphas.length, `${decl.prop} 色标数`).toBeGreaterThanOrEqual(3)
-      expect(alphas[0], `${decl.prop} 顶边全透明`).toBe(0)
-      expect(alphas[alphas.length - 1], `${decl.prop} 底边全透明`).toBe(0)
-      for (const [i, alpha] of alphas.slice(1, -1).entries()) {
-        expect(alpha, `${decl.prop} 内部色标 ${i} 须全不透明`).toBe(1)
-      }
-    }
-  })
-})
+// 结构（不硬编码色值）、遮罩渐隐语义与 var() 接线由 sheetTokens.test.ts
+// 的 #278 全表契约扫描所有；danger 前景接线并入其 DANGER_RULES 黄金表
+// （issue #291 分层收拢）。本文件保留品牌选中态的黄金基准与配对采样。
 
 describe('三处前景的语义接线与黄金基准（issue #240）', () => {
-  it('三条规则的前景/背景声明均经 var() 令牌引用，不残留字面量', () => {
-    for (const { selector, fg, bg } of TARGETS) {
-      const rule = ruleOf(selector)
-      expect(declOf(rule, fg), `${selector} ${fg}`).toMatch(/^var\(--[\w-]+\)$/)
-      expect(declOf(rule, bg), `${selector} ${bg}`).toMatch(/^var\(--[\w-]+\)$/)
-    }
-  })
-
   it('品牌选中态前景经 --on-brand、底经 --edge-label-bg：基线双外观 #ffffff（视觉零变化），more 翻黑', () => {
     const rule = ruleOf('.pw-outline-ep-btn.on')
     // 底必须经会随 more 近实色收敛的胶囊底令牌，不得直挂渐变（PR #256
@@ -427,37 +314,6 @@ describe('三处前景的语义接线与黄金基准（issue #240）', () => {
           contrastRatio(fg, bg),
           `${name} 背景采样 ${i} = ${contrastRatio(fg, bg).toFixed(2)}:1`,
         ).toBeGreaterThanOrEqual(4.5)
-      }
-    }
-  })
-
-  it('危险动作前景经 --on-danger：四环境恒定 #ffffff（视觉零变化）', () => {
-    for (const { selector } of TARGETS.slice(1)) {
-      const rule = ruleOf(selector)
-      expect(declOf(rule, 'background')).toBe('var(--danger)')
-      for (const [name, env] of [...BASELINE_ENVS, ...MORE_ENVS]) {
-        expect(
-          resolveChain(declOf(rule, 'color'), tokenValues(env)),
-          `${selector} ${name}`,
-        ).toBe('#ffffff')
-      }
-    }
-  })
-})
-
-describe('令牌接线（issue #240）', () => {
-  it('三条规则引用的 var() 全部在 tokens.css 有定义（无悬空回落）', () => {
-    const defined = new Set<string>()
-    tokensCss.walkDecls((decl) => {
-      if (decl.prop.startsWith('--')) defined.add(decl.prop)
-    })
-    for (const { selector } of TARGETS) {
-      for (const match of ruleOf(selector)
-        .toString()
-        .matchAll(/var\(\s*(--[\w-]+)/g)) {
-        expect(defined.has(match[1]!), `${selector} 引用 ${match[1]}`).toBe(
-          true,
-        )
       }
     }
   })

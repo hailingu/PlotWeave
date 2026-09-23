@@ -22,6 +22,98 @@ function entGraph(): AiGraphSnapshot {
   return { ...entSnap(), edges: [] }
 }
 
+// 同构「超一字符 → 整批拒绝并点名」家族参数化（issue #291 精简重复用例）；
+// 表置于模块级以符合套件回调 80 代码行上限。synopsis 的顶格通过与归一化
+// 原样保留正向断言保留在 describe 内。
+const FIELD_BUDGET_CASES: ReadonlyArray<
+  [string, unknown[], AiGraphSnapshot, string]
+> = [
+  [
+    'update_node 的 patch 同域：超长 picture',
+    [
+      {
+        op: 'update_node',
+        nodeId: 'sh1',
+        patch: { picture: '字'.repeat(FREE_TEXT_MAX_CHARS + 1) },
+      },
+    ],
+    {
+      nodes: [{ id: 'sh1', type: 'shot', label: 'SHOT01' }],
+      edges: [],
+      assets: new Map(),
+    },
+    'picture',
+  ],
+  [
+    '对白行 lines[].text 超限（点名行下标）',
+    [
+      {
+        op: 'create_node',
+        nodeType: 'dialogue',
+        data: {
+          name: '对白',
+          lines: [
+            { kind: 'line', text: '短句' },
+            { kind: 'line', text: '字'.repeat(FREE_TEXT_MAX_CHARS + 1) },
+          ],
+        },
+      },
+    ],
+    entGraph(),
+    'lines[1]',
+  ],
+  [
+    '分支选项文案（字符串形态）超限',
+    [
+      {
+        op: 'create_node',
+        nodeType: 'branch',
+        data: {
+          prompt: '？',
+          options: ['字'.repeat(FREE_TEXT_MAX_CHARS + 1)],
+        },
+      },
+    ],
+    snap(),
+    'options',
+  ],
+  [
+    '分支选项文案（对象形态）超限',
+    [
+      {
+        op: 'create_node',
+        nodeType: 'branch',
+        data: {
+          prompt: '？',
+          options: [{ label: '字'.repeat(FREE_TEXT_MAX_CHARS + 1) }],
+        },
+      },
+    ],
+    snap(),
+    'options',
+  ],
+  [
+    '分镜引用位的自由文案 label 超限',
+    [
+      {
+        op: 'create_node',
+        nodeType: 'shot',
+        data: {
+          shotNo: 1,
+          refs: [
+            {
+              kind: 'character',
+              label: '字'.repeat(FREE_TEXT_MAX_CHARS + 1),
+            },
+          ],
+        },
+      },
+    ],
+    snap(),
+    'refs[0]',
+  ],
+]
+
 describe('issue #170 · 节点自由文本字段的体积预算', () => {
   it('synopsis 顶格通过且归一化原样保留（不截断）；超一字符整批拒绝', () => {
     const { fit, over } = around(FREE_TEXT_MAX_CHARS)
@@ -57,78 +149,14 @@ describe('issue #170 · 节点自由文本字段的体积预算', () => {
     )
   })
 
-  it('update_node 的 patch 同域：超长 picture 拒绝', () => {
-    const { over } = around(FREE_TEXT_MAX_CHARS)
-    const bad = validateAiBatch(
-      [{ op: 'update_node', nodeId: 'sh1', patch: { picture: over } }],
-      {
-        nodes: [{ id: 'sh1', type: 'shot', label: 'SHOT01' }],
-        edges: [],
-        assets: new Map(),
-      },
-    )
-    expect(bad.ok).toBe(false)
-    expect(bad.issues.map((i) => i.message).join('\n')).toContain('picture')
-  })
-
-  it('对白行 lines[].text 超限拒绝并点名行下标', () => {
-    const { over } = around(FREE_TEXT_MAX_CHARS)
-    const bad = validateAiBatch(
-      [
-        {
-          op: 'create_node',
-          nodeType: 'dialogue',
-          data: {
-            name: '对白',
-            lines: [
-              { kind: 'line', text: '短句' },
-              { kind: 'line', text: over },
-            ],
-          },
-        },
-      ],
-      entGraph(),
-    )
-    expect(bad.ok).toBe(false)
-    expect(bad.issues.map((i) => i.message).join('\n')).toContain('lines[1]')
-  })
-
-  it('分支选项文案（字符串与对象两种形态）超限拒绝', () => {
-    const { over } = around(FREE_TEXT_MAX_CHARS)
-    for (const options of [[over], [{ label: over }]]) {
-      const bad = validateAiBatch(
-        [
-          {
-            op: 'create_node',
-            nodeType: 'branch',
-            data: { prompt: '？', options },
-          },
-        ],
-        snap(),
-      )
+  it.each(FIELD_BUDGET_CASES)(
+    '%s：整批拒绝并点名',
+    (_label, batch, snapshot, field) => {
+      const bad = validateAiBatch(batch, snapshot)
       expect(bad.ok).toBe(false)
-      expect(bad.issues.map((i) => i.message).join('\n')).toContain('options')
-    }
-  })
-
-  it('分镜引用位的自由文案 label 超限拒绝', () => {
-    const { over } = around(FREE_TEXT_MAX_CHARS)
-    const bad = validateAiBatch(
-      [
-        {
-          op: 'create_node',
-          nodeType: 'shot',
-          data: {
-            shotNo: 1,
-            refs: [{ kind: 'character', label: over }],
-          },
-        },
-      ],
-      snap(),
-    )
-    expect(bad.ok).toBe(false)
-    expect(bad.issues.map((i) => i.message).join('\n')).toContain('refs[0]')
-  })
+      expect(bad.issues.map((i) => i.message).join('\n')).toContain(field)
+    },
+  )
 })
 
 describe('issue #170 · 设定实体与文档的体积预算', () => {

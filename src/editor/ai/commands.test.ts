@@ -1137,8 +1137,9 @@ describe('validateAiBatch：分支 options 级联簿记前的成员形状校验�
 })
 
 describe('AI 批量命令的逐类型载荷形状校验（信任边界：字段键白名单之外的值形状）', () => {
-  it('shot 的 picture 非字符串 / refs 含 null：整批拒绝并给出字段级诊断', () => {
-    const bad = validateAiBatch(
+  it.each<[string, unknown[], string[]]>([
+    [
+      'shot 的 picture 非字符串 / refs 含 null',
       [
         {
           op: 'create_node',
@@ -1152,16 +1153,10 @@ describe('AI 批量命令的逐类型载荷形状校验（信任边界：字段�
           },
         },
       ],
-      snap(),
-    )
-    expect(bad.ok).toBe(false)
-    const msg = bad.issues.map((i) => i.message).join('\n')
-    expect(msg).toContain('picture')
-    expect(msg).toContain('refs')
-  })
-
-  it('scene 的标量/列表形状：interior 非布尔、characterIds 含非字符串成员均拒绝', () => {
-    const bad = validateAiBatch(
+      ['picture', 'refs'],
+    ],
+    [
+      'scene 的标量/列表形状：interior 非布尔、characterIds 含非字符串成员',
       [
         {
           op: 'create_node',
@@ -1174,16 +1169,10 @@ describe('AI 批量命令的逐类型载荷形状校验（信任边界：字段�
           },
         },
       ],
-      snap(),
-    )
-    expect(bad.ok).toBe(false)
-    const msg = bad.issues.map((i) => i.message).join('\n')
-    expect(msg).toContain('interior')
-    expect(msg).toContain('characterIds')
-  })
-
-  it('dialogue 的 lines 成员须为带字符串 text 的对象；update patch 同域校验', () => {
-    const badCreate = validateAiBatch(
+      ['interior', 'characterIds'],
+    ],
+    [
+      'dialogue 的 lines 成员须为带字符串 text 的对象',
       [
         {
           op: 'create_node',
@@ -1194,23 +1183,15 @@ describe('AI 批量命令的逐类型载荷形状校验（信任边界：字段�
           },
         },
       ],
-      snap(),
-    )
-    expect(badCreate.ok).toBe(false)
-    expect(badCreate.issues.map((i) => i.message).join('\n')).toContain('lines')
-
-    const badUpdate = validateAiBatch(
+      ['lines'],
+    ],
+    [
+      'update patch 同域校验（synopsis 形状）',
       [{ op: 'update_node', nodeId: 'n1', patch: { synopsis: {} } }],
-      snap(),
-    )
-    expect(badUpdate.ok).toBe(false)
-    expect(badUpdate.issues.map((i) => i.message).join('\n')).toContain(
-      'synopsis',
-    )
-  })
-
-  it('action 台词行携带 speaker：拒绝（隐藏引用不得进活动文档并持久化）', () => {
-    const bad = validateAiBatch(
+      ['synopsis'],
+    ],
+    [
+      'action 台词行携带 speaker（隐藏引用不得进活动文档并持久化）',
       [
         {
           op: 'create_node',
@@ -1223,14 +1204,10 @@ describe('AI 批量命令的逐类型载荷形状校验（信任边界：字段�
           },
         },
       ],
-      snap(),
-    )
-    expect(bad.ok).toBe(false)
-    expect(bad.issues.map((i) => i.message).join('\n')).toContain('lines')
-  })
-
-  it('shot refs 成员违反引用位联合（kind 未知 / assetId 与 label 并存）：拒绝', () => {
-    const bad = validateAiBatch(
+      ['lines'],
+    ],
+    [
+      'shot refs 违反引用位联合：kind 未知 / assetId 与字符串 label 并存（§4.2）',
       [
         {
           op: 'create_node',
@@ -1247,14 +1224,30 @@ describe('AI 批量命令的逐类型载荷形状校验（信任边界：字段�
           },
         },
       ],
-      snap(),
-    )
-    expect(bad.ok).toBe(false)
-    expect(bad.issues.map((i) => i.message).join('\n')).toContain('refs')
-  })
-
-  it('shot refs 的 assetId 为空白字符串：拒绝（空串是 string 但不可解析，装上即永久悬空引用）', () => {
-    const bad = validateAiBatch(
+      ['refs'],
+    ],
+    [
+      // 单独批次钉住键在场判定：非字符串 label 只要与 assetId 同时在场也拒绝，
+      // 不得混入其他必然非法成员而掩盖该分支（PR #292 评审 5289105130）
+      'shot refs 的 assetId 与非字符串 label 并存：同样拒绝（不得交给加载侧静默删除字段）',
+      [
+        {
+          op: 'create_node',
+          nodeType: 'shot',
+          data: {
+            shotNo: 1,
+            size: '特写',
+            picture: '',
+            prompt: '',
+            refs: [{ kind: 'audio', assetId: 'a1', label: 5 }],
+          },
+        },
+      ],
+      ['refs'],
+    ],
+    [
+      // 空串是 string 但不可解析，装上即永久悬空引用
+      'shot refs 的 assetId 为空白字符串',
       [
         {
           op: 'create_node',
@@ -1271,10 +1264,15 @@ describe('AI 批量命令的逐类型载荷形状校验（信任边界：字段�
           },
         },
       ],
-      snap(),
-    )
+      ['refs'],
+    ],
+  ])('%s：整批拒绝并给出字段级诊断', (_label, batch, fields) => {
+    const bad = validateAiBatch(batch, snap())
     expect(bad.ok).toBe(false)
-    expect(bad.issues.map((i) => i.message).join('\n')).toContain('refs')
+    const msg = bad.issues.map((i) => i.message).join('\n')
+    for (const field of fields) {
+      expect(msg, field).toContain(field)
+    }
   })
 
   it('shot refs 引用位：assetId 须命中快照资产且 MIME 家族匹配用途（§7.1/§11.3 对等）', () => {
@@ -1637,29 +1635,6 @@ describe('attach 宿主唯一（§5：交互/AI 侧对等，不留「重开即�
   })
 })
 
-describe('ShotRef 双字段并存（§4.2 联合的键在场判定）', () => {
-  it('assetId 与 label 同时在场（即使 label 非字符串）：拒绝，不得交给加载侧静默删除', () => {
-    const bad = validateAiBatch(
-      [
-        {
-          op: 'create_node',
-          nodeType: 'shot',
-          data: {
-            shotNo: 1,
-            size: '特写',
-            picture: '',
-            prompt: '',
-            refs: [{ kind: 'audio', assetId: 'a1', label: 5 }],
-          },
-        },
-      ],
-      snap(),
-    )
-    expect(bad.ok).toBe(false)
-    expect(bad.issues.map((i) => i.message).join('\n')).toContain('refs')
-  })
-})
-
 describe('AI 数值域（§9.3 命令边界：正安全整数，加载不静默改写）', () => {
   it('sceneNo 1.5 / shotNo -2 / episodeNo 0 均拒绝', () => {
     const bad1 = validateAiBatch(
@@ -1696,37 +1671,23 @@ describe('AI 数值域（§9.3 命令边界：正安全整数，加载不静默�
 })
 
 describe('图片节点的 AI 命令边界（§13 首版：快照只读可见、不创建/不修改）', () => {
-  it('update_node 目标为图片节点：整批拒绝', () => {
-    const s: AiGraphSnapshot = {
-      nodes: [
-        { id: 'n1', type: 'scene', label: '场 01 · 天台' },
-        { id: 'img1', type: 'image', label: '图片 · 雨夜霓虹' },
-      ],
-      edges: [],
-      assets: new Map(),
-    }
-    const bad = validateAiBatch(
+  it.each<[string, unknown[], string]>([
+    [
+      'update_node 目标为图片节点',
       [{ op: 'update_node', nodeId: 'img1', patch: { prompt: {} } }],
-      s,
-    )
-    expect(bad.ok).toBe(false)
-    expect(bad.issues.map((i) => i.message).join('\n')).toContain(
       '暂不支持 AI 命令修改',
-    )
-  })
-
-  it('create_node 声明 image 类型：按未知节点类型拒绝（类型标签表未含）', () => {
-    const bad = validateAiBatch(
+    ],
+    [
+      'create_node 声明 image 类型（类型标签表未含）',
       [{ op: 'create_node', nodeType: 'image', data: { prompt: 'x' } }],
-      snap(),
-    )
-    expect(bad.ok).toBe(false)
-    expect(bad.issues.map((i) => i.message).join('\n')).toContain(
       '未知节点类型',
-    )
-  })
-
-  it('delete_node 目标为图片节点：整批拒绝（与 create/update 同口径）', () => {
+    ],
+    [
+      'delete_node 目标为图片节点（与 create/update 同口径）',
+      [{ op: 'delete_node', nodeId: 'img1' }],
+      '暂不支持 AI 命令删除',
+    ],
+  ])('%s：整批拒绝', (_label, batch, expected) => {
     const s: AiGraphSnapshot = {
       nodes: [
         { id: 'n1', type: 'scene', label: '场 01 · 天台' },
@@ -1735,10 +1696,8 @@ describe('图片节点的 AI 命令边界（§13 首版：快照只读可见、�
       edges: [],
       assets: new Map(),
     }
-    const bad = validateAiBatch([{ op: 'delete_node', nodeId: 'img1' }], s)
+    const bad = validateAiBatch(batch, s)
     expect(bad.ok).toBe(false)
-    expect(bad.issues.map((i) => i.message).join('\n')).toContain(
-      '暂不支持 AI 命令删除',
-    )
+    expect(bad.issues.map((i) => i.message).join('\n')).toContain(expected)
   })
 })
