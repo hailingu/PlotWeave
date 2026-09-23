@@ -93,6 +93,21 @@ function applyRootRule(
   }
 }
 
+/** 选择器列表是否含 `:root` 分支（伪类名 ASCII 大小写不敏感）。 */
+function hasRootBranch(selector: string): boolean {
+  return postcss.list
+    .comma(selector)
+    .some((branch) => branch.toLowerCase() === ':root')
+}
+
+/** 可能命中或覆盖文档根、但取值未建模的分支（html、`:root.dark`、`:is(:root)` 等）。 */
+function isUnmodeledRootBranch(branch: string): boolean {
+  return (
+    branch.toLowerCase() !== ':root' &&
+    (isGlobalCompound(branch) || /:root(?![\w-])/i.test(branch))
+  )
+}
+
 /** 根令牌未建模的 at-rule 上下文/声明布局必须显式失败，不能静默忽略胜出声明。 */
 function assertRootContexts(root: postcss.Root): void {
   root.walkAtRules(/^property$/i, (rule) => {
@@ -101,7 +116,13 @@ function assertRootContexts(root: postcss.Root): void {
   root.walkDecls(/^--/, (decl) => {
     let rule: postcss.AnyNode | undefined = decl.parent
     while (rule?.type === 'atrule') rule = rule.parent
-    if (rule?.type !== 'rule' || rule.selector !== ':root') return
+    if (rule?.type !== 'rule') return
+    if (postcss.list.comma(rule.selector).some(isUnmodeledRootBranch)) {
+      throw new Error(
+        `TOKEN_ROOT_SELECTOR_UNMODELED: ${rule.selector} ${decl.prop}`,
+      )
+    }
+    if (!hasRootBranch(rule.selector)) return
     let context: postcss.AnyNode | undefined = decl.parent
     while (context) {
       if (
@@ -123,6 +144,8 @@ function assertRootContexts(root: postcss.Root): void {
  * 出现普通声明而被覆盖，同重要性仍后写覆盖先写。未建模的根 at-rule 上下文
  * 以 TOKEN_ROOT_AT_RULE_UNMODELED 显式拒绝，包括非活跃 media 内的未知块。
  * 支持 media 包住根规则；反向内嵌 at-rule 的声明布局尚未建模，同样拒绝。
+ * 选择器列表中的 `:root` 分支按根规则取值；其他可能命中文档根的选择器上的
+ * 自定义属性以 TOKEN_ROOT_SELECTOR_UNMODELED 拒绝。
  */
 export function tokenValuesOf(
   root: postcss.Root,
@@ -137,7 +160,7 @@ export function tokenValuesOf(
         continue
       }
       if (node.type !== 'rule') continue
-      if (node.selector !== ':root') {
+      if (!hasRootBranch(node.selector)) {
         walk(node)
         continue
       }

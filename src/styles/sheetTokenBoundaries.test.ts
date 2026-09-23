@@ -1,7 +1,7 @@
 /**
- * 全局令牌所有权、@property 注册、颜色属性分类与自定义属性 CSS-wide 取值边界
- * （review 5280542926、5280837519）。错误码契约及状态矩阵见
- * docs/reviews/pr-288-review-5280542926.md 与 pr-288-review-5280837519.md。
+ * 全局令牌所有权、@property 注册、根选择器列表、颜色属性分类与自定义属性
+ * CSS-wide 取值边界（review 5280542926、5280837519、5285788301）。错误码
+ * 契约及状态矩阵见 docs/reviews/pr-288-review-<审查号>.md。
  */
 import postcss from 'postcss'
 import { describe, expect, it } from 'vitest'
@@ -96,6 +96,51 @@ describe('@property 注册不能在令牌源之外改写全局令牌', () => {
     expect(() => [...sheetDecls(source)]).toThrow(
       /TOKEN_ROOT_AT_RULE_UNMODELED/,
     )
+  })
+})
+
+/** 令牌源夹具：基线根值后追加一条待测规则。 */
+const rootTokens = (extra: string, env = LIGHT_ENV): Map<string, string> =>
+  tokenValuesOf(postcss.parse(`:root { --fg: #fff; } ${extra}`), env)
+
+describe('令牌源选择器列表中的根分支（review 5285788301）', () => {
+  it.each([':root, :host', ':host, :root', ':ROOT, .x'])(
+    '%s 的 :root 分支参与根令牌取胜',
+    (selector) =>
+      expect(rootTokens(`${selector} { --fg: 4px; }`).get('--fg')).toBe('4px'),
+  )
+
+  it('列表中的根分支同样受媒体环境与上下文约束', () => {
+    const media =
+      '@media (prefers-color-scheme: dark) { :root, :host { --fg: 4px; } }'
+    expect(rootTokens(media).get('--fg')).toBe('#fff')
+    expect(
+      rootTokens(media, { ...LIGHT_ENV, scheme: 'dark' }).get('--fg'),
+    ).toBe('4px')
+    expect(() =>
+      rootTokens('@supports (display: grid) { :host, :root { --fg: 4px; } }'),
+    ).toThrow(/TOKEN_ROOT_AT_RULE_UNMODELED/)
+  })
+
+  it.each([
+    'html',
+    'body',
+    '*',
+    ':root.dark',
+    ':root, html',
+    ':is(:root)',
+    ':root .child',
+  ])('%s 上的自定义属性可能命中文档根但未建模，明确拒绝', (selector) =>
+    expect(() => rootTokens(`${selector} { --fg: 4px; }`)).toThrow(
+      /TOKEN_ROOT_SELECTOR_UNMODELED/,
+    ),
+  )
+
+  it('非根选择器与全局普通属性保持原行为', () => {
+    const tokens = rootTokens(
+      '.other, :host { --fg: 4px; } * { backdrop-filter: none } html { color: red }',
+    )
+    expect(tokens.get('--fg')).toBe('#fff')
   })
 })
 

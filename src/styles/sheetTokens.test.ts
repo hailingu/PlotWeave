@@ -59,7 +59,9 @@
  *   `@property` 注册总是全局生效：组件表或无来源夹具中报
  *   TOKEN_GLOBAL_OUTSIDE_SOURCE，令牌源内尚未建模报 TOKEN_ROOT_AT_RULE_UNMODELED。
  *   根令牌处于未知外层 at-rule 或根规则内嵌 at-rule 时明确报 TOKEN_ROOT_AT_RULE_UNMODELED，
- *   不再静默跳过该定义入口；不含根令牌的其他上下文不受此限制。
+ *   不再静默跳过该定义入口；不含根令牌的其他上下文不受此限制。选择器列表的
+ *   `:root` 分支按根规则取值，其他可能命中文档根的选择器上的定义报
+ *   TOKEN_ROOT_SELECTOR_UNMODELED。
  *   组件规则内嵌规则/at-rule 报 TOKEN_SHEET_NESTING_UNMODELED；非 media
  *   上下文中的局部定义报 TOKEN_LOCAL_AT_RULE_UNMODELED，不当作恒活跃定义。
  *   字面色检测跳过 URL/引号字符串的内容，仍检查外部渐变与 fallback 中的颜色。
@@ -111,7 +113,8 @@
  * 非文本 3:1 未断言——无既有决策，不在本单开新前沿（PR 披露）。
  * 值解析仍为静态子集，非完整 CSS 文法/层叠引擎；复杂选择器及跨选择器
  * 特异性与颜色函数内部参数未建模。审查处理记录见
- * docs/reviews/pr-288-review-5280542926.md 与 pr-288-review-5280837519.md；
+ * docs/reviews/pr-288-review-5280542926.md、pr-288-review-5280837519.md 与
+ * pr-288-review-5285788301.md；
  * 纯值校验由 cssColorContract.ts 负责。
  */
 import { readFileSync, readdirSync } from 'node:fs'
