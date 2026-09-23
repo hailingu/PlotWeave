@@ -17,7 +17,7 @@
  * 范围界定（issue #278 验收标准）：
  * - 结构断言覆盖展示色属性（前景 color 与全部标准 `-color` 长形——含
  *   text-emphasis-color、scrollbar-color 及厂商前缀长形，按结构式分类；背景与
- *   background-image 长形、轮廓、text-emphasis/text-shadow、SVG fill/stroke，以及 border 全部简写/长形——总体、
+ *   background-image 长形、轮廓、text-emphasis/text-shadow、-webkit-text-stroke（宽度 || 颜色）、SVG fill/stroke，以及 border 全部简写/长形——总体、
  *   四向、逻辑方向与 border-image(-source) 长形，按结构式分类而非枚举；
  *   标准属性名先按 ASCII 大小写不敏感归一再分类，自定义属性名大
  *   小写保持原样）；字面色含 hex、大小写不敏感的颜色函数与 CSS 具名色；
@@ -79,8 +79,9 @@
  * - 危险动作黄金接线断言取规则内该属性的**生效值**：属性名先按标准大
  *   小写归一再比较（与展示色分类同一归一点），!important 声明优先
  *   于普通声明，同重要性取源序最后一条——前置 !important 不被其后的普通
- *   声明覆盖；危险底色把 background 与 background-color/background-image
- *   同组取胜，后位或重要长形覆盖简写即点名；目标规则须唯一且无条件——媒体块内同名规则会使生效值随环境
+ *   声明覆盖；危险底色把 background 简写展开到 background-color 与
+ *   background-image，颜色与图像成分各自层叠——有效颜色须为 var(--danger)、图像须为
+ *   none，后位 `background-image: none` 不改变颜色；目标规则须唯一且无条件——媒体块内同名规则会使生效值随环境
  *   分叉，违背 #240 恒白决策的接线前提。唯一性判定按选择器列表逐分支：后续
  *   规则若在逗号分支中含目标选择器（如 `.other, .pw-dialog-danger { ... }`）仍能
  *   以同等特异性覆盖，也计入命中，不按整选择器字符串相等。
@@ -105,7 +106,7 @@
  * | 已豁免悬空引用换属性承载或新增第二条声明 | 接线扫描（属性 + 条数比对） | 按新违例点名 | 接线豁免不扩张已知缺陷 | 接线测试 |
  * | 浅/深 × 基线/more × 基线/降透明度（8 环境） | 配对矩阵 | primary 全环境 ≥4.5、secondary more 升档 ≥4.5（§2.6） | 原则 2 按令牌配对成立（含 reduce-transparency 实色材质） | 配对测试 |
  * | 悬停态换填充 | 配对矩阵 | text-primary 于 fill-quaternary 承载面 ≥4.5 | hover 配对按既有契约 | 配对测试 |
- * | 危险动作 hover/确认 | 黄金接线（规则唯一无条件——包括逗号分支内的同分支覆盖；属性名归一；生效值按重要性再取源序最后一条；底色与背景长形同组取胜） | 前景全部配对环境恒 #ffffff（#240 决策） | 危险前景经 --on-danger，生效值不随环境分叉且不被普通声明/大小写变体/同等特异性分支/背景长形逆转 | 黄金测试 |
+ * | 危险动作 hover/确认 | 黄金接线（规则唯一无条件——包括逗号分支内的同分支覆盖；属性名归一；生效值按重要性再取源序最后一条；底色的颜色与图像成分各自层叠） | 前景全部配对环境恒 #ffffff（#240 决策） | 危险前景经 --on-danger，生效值不随环境分叉且不被普通声明/大小写变体/同等特异性分支/背景长形逆转；只改图像的长形不误报颜色 | 黄金测试 |
  * | 遮罩渐变 | alpha 剖析 | 首末色标全透明、内部全不透明 | 遮罩只消费 alpha | 遮罩测试 |
  *
  * 未覆盖维度：真实 WebView 像素实测未运行；品牌底两处配对归 #262、悬空
@@ -113,8 +114,8 @@
  * 非文本 3:1 未断言——无既有决策，不在本单开新前沿（PR 披露）。
  * 值解析仍为静态子集，非完整 CSS 文法/层叠引擎；复杂选择器及跨选择器
  * 特异性与颜色函数内部参数未建模。审查处理记录见
- * docs/reviews/pr-288-review-5280542926.md、pr-288-review-5280837519.md 与
- * pr-288-review-5285788301.md；
+ * docs/reviews/pr-288-review-5280542926.md、pr-288-review-5280837519.md、
+ * pr-288-review-5285788301.md 与 pr-288-review-5285927947.md；
  * 纯值校验由 cssColorContract.ts 负责。
  */
 import { readFileSync, readdirSync } from 'node:fs'
@@ -843,18 +844,32 @@ function ruleOf(sheet: string, selector: string): postcss.Rule {
   return ruleIn(sheets.get(sheet)!, sheet, selector)
 }
 
-/** 背景简写与可覆盖其绘制结果的长形同组取胜。 */
-const BACKGROUND_PAINT_PROPS = [
-  'background',
-  'background-color',
-  'background-image',
-] as const
-
-/** 规则内底色绘制的实际胜出声明，形如 `background: var(--danger)`。 */
-function backgroundPaint(rule: postcss.Rule): string {
-  const decl = winningDecl(rule, BACKGROUND_PAINT_PROPS)
-  return `${normalizeProp(decl.prop)}: ${decl.value}`
+/** 简写在全部配对环境都消解为单一颜色时，只贡献颜色层，图像成分为初始值 none。 */
+function isColorOnlyShorthand(value: string): boolean {
+  return PAIR_ENVS.every(
+    ([, env]) => parsePaint(resolveChain(value, tokenValues(env))) !== null,
+  )
 }
+
+/** 规则内底色绘制的有效颜色与图像成分：background 简写展开到两条长形，各成分独立层叠。 */
+function backgroundPaint(rule: postcss.Rule): { color: string; image: string } {
+  const color = winningDecl(rule, ['background', 'background-color']).value
+  const hasImage = rule.nodes.some(
+    (node) =>
+      node.type === 'decl' &&
+      ['background', 'background-image'].includes(normalizeProp(node.prop)),
+  )
+  if (!hasImage) return { color, image: 'none' }
+  const image = winningDecl(rule, ['background', 'background-image'])
+  const fromShorthand = normalizeProp(image.prop) === 'background'
+  return {
+    color,
+    image:
+      fromShorthand && isColorOnlyShorthand(image.value) ? 'none' : image.value,
+  }
+}
+
+const DANGER_PAINT = { color: 'var(--danger)', image: 'none' }
 
 describe('危险动作前景接线（#240 决策补齐，issue #278）', () => {
   it('四处危险前景经 --on-danger、底经 --danger（字面接线，不残留 #fff）', () => {
@@ -863,34 +878,59 @@ describe('危险动作前景接线（#240 决策补齐，issue #278）', () => {
       expect(declOf(rule, 'color'), `${sheet} ${selector} color`).toBe(
         'var(--on-danger)',
       )
-      expect(backgroundPaint(rule), `${sheet} ${selector} background`).toBe(
-        'background: var(--danger)',
+      expect(backgroundPaint(rule), `${sheet} ${selector} background`).toEqual(
+        DANGER_PAINT,
       )
     }
   })
 
-  it('危险底色按背景简写与长形的实际胜出声明判定：后位或重要长形覆盖即点名', () => {
-    const paint = (css: string): string =>
+  it('危险底色按颜色与图像成分各自层叠：简写展开到两条长形，长形只覆盖其自身成分', () => {
+    const paint = (css: string): { color: string; image: string } =>
       backgroundPaint(postcss.parse(css).first as postcss.Rule)
     expect(
       paint('.d { background-color: #000; background: var(--danger) }'),
       '简写重置先位长形',
-    ).toBe('background: var(--danger)')
+    ).toEqual(DANGER_PAINT)
     expect(
       paint(
         '.d { background: var(--danger); BACKGROUND-COLOR: var(--surface-card) }',
       ),
-    ).toBe('background-color: var(--surface-card)')
+    ).toEqual({ color: 'var(--surface-card)', image: 'none' })
     expect(
       paint(
         '.d { background-image: linear-gradient(#000, #000) !important; background: var(--danger) }',
       ),
-    ).toBe('background-image: linear-gradient(#000, #000)')
+    ).toEqual({
+      color: 'var(--danger)',
+      image: 'linear-gradient(#000, #000)',
+    })
     expect(
       paint(
         '.d { background: var(--danger) !important; background-color: var(--surface-card) }',
       ),
-    ).toBe('background: var(--danger)')
+    ).toEqual(DANGER_PAINT)
+    expect(
+      paint('.d { background: var(--danger); background-image: none }'),
+      '后位图像长形不改变颜色成分',
+    ).toEqual(DANGER_PAINT)
+    expect(
+      paint('.d { background: var(--danger); background-image: url(a.png) }'),
+    ).toEqual({ color: 'var(--danger)', image: 'url(a.png)' })
+    expect(paint('.d { background-color: var(--danger) }')).toEqual(
+      DANGER_PAINT,
+    )
+    expect(
+      paint(
+        '.d { background: var(--surface-card); background-color: var(--danger) }',
+      ),
+      '纯色简写只贡献颜色层',
+    ).toEqual(DANGER_PAINT)
+    expect(
+      paint(
+        '.d { background: url(a.png) var(--danger); background-color: var(--danger) }',
+      ),
+      '含图像的简写不被当作纯色层',
+    ).toEqual({ color: 'var(--danger)', image: 'url(a.png) var(--danger)' })
   })
 
   it('--on-danger 全部配对环境（含 more × reduce 组合）消解恒 #ffffff（视觉零变化；深色底 ≈2.8:1 为 #240 已记录边界，不重开）', () => {

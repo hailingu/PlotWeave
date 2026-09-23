@@ -110,6 +110,7 @@ const NON_COLOR_KEYWORDS = new Set([
  */
 export function colorTypeOk(prop: string, resolved: string): boolean {
   if (resolved.trim() === '') return false
+  if (prop === '-webkit-text-stroke') return textStrokeOk(resolved.trim())
   const acceptsImage =
     prop === 'background' ||
     prop === 'background-image' ||
@@ -178,5 +179,28 @@ function completeColorValueOk(prop: string, value: string): boolean {
   const colors = postcss.list.space(value)
   return (
     colors.length > 0 && colors.length <= max && colors.every(completeColorAtom)
+  )
+}
+
+const LENGTH = /^(?:\d+(?:\.\d+)?|\.\d+)(?:px|r?em|pt|ch|ex|v[wh])$/i
+
+/** 线宽：0、常用长度单位或 thin/medium/thick。 */
+function isLineWidth(part: string): boolean {
+  return (
+    part === '0' || /^(?:thin|medium|thick)$/i.test(part) || LENGTH.test(part)
+  )
+}
+
+/** `-webkit-text-stroke: <line-width> || <color>`：至多一个宽度与一个完整颜色成分，无其他词形。 */
+function textStrokeOk(value: string): boolean {
+  if (/^(inherit|initial|unset|revert|revert-layer)$/i.test(value)) return true
+  const parts = postcss.list.space(value)
+  const widths = parts.filter(isLineWidth).length
+  const colors = parts.filter(completeColorAtom).length
+  return (
+    parts.length > 0 &&
+    widths <= 1 &&
+    colors <= 1 &&
+    widths + colors === parts.length
   )
 }

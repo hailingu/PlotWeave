@@ -151,13 +151,33 @@ describe('颜色属性按结构分类进入展示色契约', () => {
     'scrollbar-color',
     '-webkit-text-fill-color',
     'stop-color',
+    '-webkit-text-stroke',
   ])('%s 承载展示色', (prop) => expect(isDisplayColorProp(prop)).toBe(true))
 
   it.each([
     '--xy-controls-button-color',
     'color-scheme',
     'text-emphasis-style',
+    '-webkit-text-stroke-width',
   ])('%s 不承载展示色', (prop) => expect(isDisplayColorProp(prop)).toBe(false))
+
+  it('-webkit-text-stroke 按「宽度 || 颜色」文法校验（review 5285927947）', () => {
+    const root = postcss.parse(
+      '.a { -webkit-text-stroke: 1px var(--radius-sm) }\n' +
+        '.b { -webkit-text-stroke: var(--text-primary) 1px 2px }\n' +
+        '.c { -webkit-text-stroke: 1px linear-gradient(#000, #fff) }\n' +
+        '.d { -webkit-text-stroke: 1px var(--text-primary) }\n' +
+        '.e { -webkit-text-stroke: var(--text-primary) thin }\n' +
+        '.f { -webkit-text-stroke: 0.5px; -webkit-text-stroke: inherit }',
+    )
+    expect(
+      displayTypeErrors(root, LIGHT_ENV).map((e) => e.split(':')[0]),
+    ).toEqual([
+      '.a -webkit-text-stroke',
+      '.b -webkit-text-stroke',
+      '.c -webkit-text-stroke',
+    ])
+  })
 
   it('强调标记色消费尺寸令牌被点名，合法颜色与关键字形态通过', () => {
     const root = postcss.parse(

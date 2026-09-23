@@ -206,6 +206,7 @@ const DISPLAY_PROPS = new Set([
   'column-rule',
   'fill',
   'stroke',
+  '-webkit-text-stroke',
   'border-image',
   'border-image-source',
 ])
