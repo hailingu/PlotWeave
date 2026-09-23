@@ -167,6 +167,52 @@ describe('schemaVersion 0 迁移：设定集数组键控身份的语义保全（
   })
 })
 
+/** 容器/成员异型用例的场景节点（模块级供 GRAPH_CONTAINER_CASES 使用）。 */
+const sceneNode = (id: string) => ({
+  id,
+  type: 'scene',
+  position: { x: 0, y: 0 },
+  data: { name: id, sceneNo: 1, interior: true, synopsis: '' },
+})
+
+// 容器/成员损坏家族共用「按损坏范围收敛 + 容器名警告 + 项目照常打开」
+// 模板（issue #291 参数化；表置于模块级以符合套件回调 80 代码行上限）。
+const GRAPH_CONTAINER_CASES: ReadonlyArray<
+  [string, { nodes: unknown; edges: unknown }, string[], string[], string]
+> = [
+  [
+    'graph.nodes 为字符串容器',
+    { nodes: 'oops', edges: [] },
+    [],
+    [],
+    'graph.nodes',
+  ],
+  [
+    'graph.nodes 含 null 成员',
+    { nodes: [null, sceneNode('s1')], edges: [] },
+    ['s1'],
+    [],
+    'graph.nodes',
+  ],
+  [
+    'graph.edges 为数字容器',
+    { nodes: [sceneNode('s1')], edges: 42 },
+    ['s1'],
+    [],
+    'graph.edges',
+  ],
+  [
+    'graph.edges 含字符串成员',
+    {
+      nodes: [sceneNode('s1'), sceneNode('s2')],
+      edges: [{ id: 'e1', source: 's1', target: 's2' }, 'garbage'],
+    },
+    ['s1', 's2'],
+    ['e1'],
+    'graph.edges',
+  ],
+]
+
 describe('归一化：v0 图形容器/成员异型先修复再迁移（§11.1，损坏旧档仍可打开）', () => {
   const v0Base = (graph: unknown) => ({
     schemaVersion: 0,
@@ -181,50 +227,8 @@ describe('归一化：v0 图形容器/成员异型先修复再迁移（§11.1，
     episodeTitles: {},
     assets: { byId: {} },
   })
-  const scene = (id: string) => ({
-    id,
-    type: 'scene',
-    position: { x: 0, y: 0 },
-    data: { name: id, sceneNo: 1, interior: true, synopsis: '' },
-  })
 
-  // 容器/成员损坏家族共用「按损坏范围收敛 + 容器名警告 + 项目照常打开」
-  // 模板（issue #291 参数化）。
-  it.each<
-    [string, { nodes: unknown; edges: unknown }, string[], string[], string]
-  >([
-    [
-      'graph.nodes 为字符串容器',
-      { nodes: 'oops', edges: [] },
-      [],
-      [],
-      'graph.nodes',
-    ],
-    [
-      'graph.nodes 含 null 成员',
-      { nodes: [null, scene('s1')], edges: [] },
-      ['s1'],
-      [],
-      'graph.nodes',
-    ],
-    [
-      'graph.edges 为数字容器',
-      { nodes: [scene('s1')], edges: 42 },
-      ['s1'],
-      [],
-      'graph.edges',
-    ],
-    [
-      'graph.edges 含字符串成员',
-      {
-        nodes: [scene('s1'), scene('s2')],
-        edges: [{ id: 'e1', source: 's1', target: 's2' }, 'garbage'],
-      },
-      ['s1', 's2'],
-      ['e1'],
-      'graph.edges',
-    ],
-  ])(
+  it.each(GRAPH_CONTAINER_CASES)(
     '%s：按范围收敛并警告，项目照常打开',
     (_label, graph, nodeIds, edgeIds, warn) => {
       const round = parseProject(v0Base(graph))
@@ -235,6 +239,104 @@ describe('归一化：v0 图形容器/成员异型先修复再迁移（§11.1，
     },
   )
 })
+
+// 节点嵌套形状损坏家族共用「损坏按节点/字段点名 + 项目照常打开」模板，
+// 行级 verify 保留各自的存活/成员保留断言（issue #291 参数化；表置于模块
+// 级以符合套件回调 80 代码行上限）。
+const NESTED_SHAPE_CASES: ReadonlyArray<
+  [
+    string,
+    unknown[],
+    string,
+    string,
+    string[],
+    (round: ReturnType<typeof parseProject>) => void,
+  ]
+> = [
+  [
+    'dialogue 节点 data 为 null：重置为空对象、lines 置空',
+    [
+      { id: 'd1', type: 'dialogue', position: { x: 0, y: 0 }, data: null },
+      {
+        id: 's1',
+        type: 'scene',
+        position: { x: 0, y: 0 },
+        data: { name: '场一', sceneNo: 1, interior: true, synopsis: '' },
+      },
+    ],
+    'd1',
+    'data',
+    ['s1'],
+    () => {},
+  ],
+  [
+    'dialogue 的 lines 为字符串：重置为空数组，不因 map 崩溃',
+    [
+      {
+        id: 'd1',
+        type: 'dialogue',
+        position: { x: 0, y: 0 },
+        data: { lines: 'oops', name: '对白' },
+      },
+    ],
+    'd1',
+    'lines',
+    ['d1'],
+    () => {},
+  ],
+  [
+    'branch 的 options 含 null 成员：丢弃，合法选项与下标句柄改写不受影响',
+    [
+      {
+        id: 'br1',
+        type: 'branch',
+        position: { x: 0, y: 0 },
+        data: {
+          prompt: '去哪',
+          options: [{ id: 'opt-a', label: '左' }, null],
+        },
+      },
+    ],
+    'br1',
+    'options',
+    ['br1'],
+    (round) => {
+      const br = round.content.nodes.find((n) => n.id === 'br1')
+      const options = (
+        br?.data as { options: Array<{ id: string; label: string }> }
+      ).options
+      expect(options.map((o) => o.id)).toEqual(['opt-a'])
+    },
+  ],
+  [
+    'shot 的 refs 含字符串成员：丢弃，对象成员保留',
+    [
+      {
+        id: 'sh1',
+        type: 'shot',
+        position: { x: 0, y: 0 },
+        data: {
+          shotNo: 1,
+          size: '特写',
+          picture: '',
+          prompt: '',
+          refs: ['garbage', { kind: 'character' as const, label: '图' }],
+        },
+      },
+    ],
+    'sh1',
+    'refs',
+    ['sh1'],
+    (round) => {
+      const refs = (
+        round.content.nodes.find((n) => n.id === 'sh1')?.data as {
+          refs: unknown[]
+        }
+      ).refs
+      expect(refs).toHaveLength(1)
+    },
+  ],
+]
 
 describe('归一化：v0 节点嵌套形状预归一化（迁移器解引用前置，损坏单节点不阻断整档）', () => {
   const v0Base = (nodes: unknown[]) => ({
@@ -251,102 +353,7 @@ describe('归一化：v0 节点嵌套形状预归一化（迁移器解引用前�
     assets: { byId: {} },
   })
 
-  // 节点嵌套形状损坏家族共用「损坏按节点/字段点名 + 项目照常打开」模板，
-  // 行级 verify 保留各自的存活/成员保留断言（issue #291 参数化）。
-  it.each<
-    [
-      string,
-      unknown[],
-      string,
-      string,
-      string[],
-      (round: ReturnType<typeof parseProject>) => void,
-    ]
-  >([
-    [
-      'dialogue 节点 data 为 null：重置为空对象、lines 置空',
-      [
-        { id: 'd1', type: 'dialogue', position: { x: 0, y: 0 }, data: null },
-        {
-          id: 's1',
-          type: 'scene',
-          position: { x: 0, y: 0 },
-          data: { name: '场一', sceneNo: 1, interior: true, synopsis: '' },
-        },
-      ],
-      'd1',
-      'data',
-      ['s1'],
-      () => {},
-    ],
-    [
-      'dialogue 的 lines 为字符串：重置为空数组，不因 map 崩溃',
-      [
-        {
-          id: 'd1',
-          type: 'dialogue',
-          position: { x: 0, y: 0 },
-          data: { lines: 'oops', name: '对白' },
-        },
-      ],
-      'd1',
-      'lines',
-      ['d1'],
-      () => {},
-    ],
-    [
-      'branch 的 options 含 null 成员：丢弃，合法选项与下标句柄改写不受影响',
-      [
-        {
-          id: 'br1',
-          type: 'branch',
-          position: { x: 0, y: 0 },
-          data: {
-            prompt: '去哪',
-            options: [{ id: 'opt-a', label: '左' }, null],
-          },
-        },
-      ],
-      'br1',
-      'options',
-      ['br1'],
-      (round) => {
-        const br = round.content.nodes.find((n) => n.id === 'br1')
-        const options = (
-          br?.data as { options: Array<{ id: string; label: string }> }
-        ).options
-        expect(options.map((o) => o.id)).toEqual(['opt-a'])
-      },
-    ],
-    [
-      'shot 的 refs 含字符串成员：丢弃，对象成员保留',
-      [
-        {
-          id: 'sh1',
-          type: 'shot',
-          position: { x: 0, y: 0 },
-          data: {
-            shotNo: 1,
-            size: '特写',
-            picture: '',
-            prompt: '',
-            refs: ['garbage', { kind: 'character' as const, label: '图' }],
-          },
-        },
-      ],
-      'sh1',
-      'refs',
-      ['sh1'],
-      (round) => {
-        const refs = (
-          round.content.nodes.find((n) => n.id === 'sh1')?.data as {
-            refs: unknown[]
-          }
-        ).refs
-        expect(refs).toHaveLength(1)
-      },
-    ],
-  ])(
+  it.each(NESTED_SHAPE_CASES)(
     '%s：损坏按节点/字段点名并警告，项目照常打开',
     (_label, nodes, id, field, survivors, verify) => {
       const round = parseProject(v0Base(nodes))
