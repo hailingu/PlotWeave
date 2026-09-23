@@ -5,6 +5,7 @@
  */
 import postcss from 'postcss'
 import { describe, expect, it } from 'vitest'
+import { hasColorLiteral } from './cssColorContract'
 import {
   danglingRefs,
   displayTypeErrors,
@@ -301,5 +302,19 @@ describe('既有 CSS-wide 正常与恢复路径', () => {
         locals: localDefinitions(root),
       }),
     ).toBe('"inherit"')
+  })
+})
+
+describe('声明值内的 CSS 注释（review 5286221158）', () => {
+  it('PostCSS 已从 decl.value 剥离注释，注释内的变量与具名色不进入扫描', () => {
+    const root = postcss.parse(
+      '.a { color: var(--text-primary /* var(--old) */) }\n' +
+        '.b { color: /* white */ var(--text-primary) }',
+    )
+    expect(danglingRefs(root, LIGHT_ENV)).toEqual([])
+    expect(displayTypeErrors(root, LIGHT_ENV)).toEqual([])
+    for (const decl of sheetDecls(root)) {
+      expect(hasColorLiteral(decl.value), decl.selector).toBe(false)
+    }
   })
 })

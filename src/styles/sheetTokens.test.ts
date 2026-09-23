@@ -22,8 +22,9 @@
  *   标准属性名先按 ASCII 大小写不敏感归一再分类，自定义属性名大
  *   小写保持原样）；字面色含 hex、大小写不敏感的颜色函数与 CSS 具名色；
  *   transparent（仅 alpha=0 无色相）与 currentcolor（继承而非字面）不计。
- *   box-shadow 是层级投影非主题展示色、mask-image 只消费 alpha 通道（遮罩
- *   语义另断言），两者不在字面色禁用范围。
+ *   box-shadow 是层级投影非主题展示色、遮罩图像属性只消费 alpha 通道（遮罩
+ *   语义另断言：仅 mask-image 长形的 linear-gradient 已建模，mask/-webkit-mask
+ *   简写与边框遮罩报 MASK_IMAGE_UNMODELED），两者不在字面色禁用范围。
  *   经展示色属性传递消费的局部自定义属性同样受禁：`.b { --fg: #fff; color:
  *   var(--fg) }` 不得绕过契约（消费关系沿局部属性值链传递闭包计算，只跟随
  *   选择器可达展示消费分支的定义——不可达的同名局部复用不入契约；仅被
@@ -287,6 +288,33 @@ function maskStopAlphas(value: string): number[] {
     .map((part) => part.trim())
     .filter((part) => !/^(-?[\d.]+(deg|turn|rad|grad)|to\s)/i.test(part))
     .map((part) => stopAlpha(colorTokenOf(part)))
+}
+
+/** 承载遮罩图像的属性（长形、简写与边框遮罩）；尺寸/模式等长形不承载图像。 */
+function isMaskImageProp(prop: string): boolean {
+  return /^(-webkit-)?mask(-image|-border(-source)?|-box-image(-source)?)?$/i.test(
+    prop,
+  )
+}
+
+/** 仅 mask-image 长形的 linear-gradient 已建模：首末色标全透明、内部全不透明；其余形态失败。 */
+function expectMaskFade(
+  label: string,
+  decl: { prop: string; value: string },
+): void {
+  if (
+    !/mask-image$/i.test(decl.prop) ||
+    !/^linear-gradient\(/i.test(decl.value.trim())
+  ) {
+    throw new Error(`MASK_IMAGE_UNMODELED: ${label}`)
+  }
+  const alphas = maskStopAlphas(decl.value)
+  expect(alphas.length, `${label} 色标数`).toBeGreaterThanOrEqual(3)
+  expect(alphas[0], `${label} 顶边全透明`).toBe(0)
+  expect(alphas[alphas.length - 1], `${label} 底边全透明`).toBe(0)
+  for (const [i, alpha] of alphas.slice(1, -1).entries()) {
+    expect(alpha, `${label} 内部色标 ${i} 须全不透明`).toBe(1)
+  }
 }
 
 /** 结构例外的唯一键：表|选择器|属性|字面值（值去首尾空白）。 */
@@ -947,18 +975,8 @@ describe('遮罩语义契约（issue #278：遮罩只消费 alpha）', () => {
     for (const [sheet, root] of sheets) {
       if (sheet === TOKEN_SHEET) continue
       for (const decl of sheetDecls(root)) {
-        if (!decl.prop.endsWith('mask-image')) continue
-        if (!/^linear-gradient\(/i.test(decl.value.trim())) {
-          throw new Error(`${sheet} ${decl.prop} 非 linear-gradient，未建模`)
-        }
-        const alphas = maskStopAlphas(decl.value)
-        const label = `${sheet} ${decl.selector} ${decl.prop}`
-        expect(alphas.length, `${label} 色标数`).toBeGreaterThanOrEqual(3)
-        expect(alphas[0], `${label} 顶边全透明`).toBe(0)
-        expect(alphas[alphas.length - 1], `${label} 底边全透明`).toBe(0)
-        for (const [i, alpha] of alphas.slice(1, -1).entries()) {
-          expect(alpha, `${label} 内部色标 ${i} 须全不透明`).toBe(1)
-        }
+        if (!isMaskImageProp(decl.prop)) continue
+        expectMaskFade(`${sheet} ${decl.selector} ${decl.prop}`, decl)
       }
     }
   })
@@ -980,4 +998,34 @@ describe('遮罩语义契约（issue #278：遮罩只消费 alpha）', () => {
       '首色标不透明即不合规',
     ).toEqual([1, 0])
   })
+
+  it.each([
+    'mask',
+    '-webkit-mask',
+    'mask-border',
+    'mask-border-source',
+    '-webkit-mask-box-image',
+    '-webkit-mask-box-image-source',
+  ])(
+    '承载遮罩图像的 %s 进入契约且未建模即失败（review 5286221158）',
+    (prop) => {
+      expect(isMaskImageProp(prop)).toBe(true)
+      expect(() =>
+        expectMaskFade(prop, {
+          prop,
+          value: 'linear-gradient(#000, #000)',
+        }),
+      ).toThrow(/MASK_IMAGE_UNMODELED/)
+    },
+  )
+
+  it.each([
+    'mask-size',
+    'mask-mode',
+    'mask-type',
+    'mask-border-width',
+    '-webkit-mask-box-image-slice',
+  ])('不承载图像的 %s 不进入遮罩契约', (prop) =>
+    expect(isMaskImageProp(prop)).toBe(false),
+  )
 })
