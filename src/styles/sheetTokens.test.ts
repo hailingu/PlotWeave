@@ -14,6 +14,7 @@ import postcss from 'postcss'
 import { describe, expect, it } from 'vitest'
 import {
   colorTokenOf,
+  completeColorAtom,
   hasColorLiteral,
   imageKind,
   isNamedColor,
@@ -767,10 +768,10 @@ function ruleOf(sheet: string, selector: string): postcss.Rule {
   return ruleIn(sheets.get(sheet)!, sheet, selector)
 }
 
-/** 一个顶层成分在全部配对环境都消解为单一静态颜色时，归为颜色成分。 */
+/** 各环境的单个完整颜色成分复用类型识别；成分提取不要求数值 RGBA 转换。 */
 function isColorOnlyShorthand(value: string): boolean {
-  return PAIR_ENVS.every(
-    ([, env]) => parsePaint(resolveChain(value, tokenValues(env))) !== null,
+  return PAIR_ENVS.every(([, env]) =>
+    completeColorAtom(resolveChain(value, tokenValues(env))),
   )
 }
 
@@ -939,6 +940,70 @@ describe('F2-c 含图像简写的成分提取与相邻长形覆盖', () => {
       )
     },
   )
+})
+
+describe('F2-c 颜色成分识别与颜色长形覆盖', () => {
+  it.each([
+    'transparent',
+    'TRANSPARENT',
+    'rebeccapurple',
+    'currentColor',
+    'rgb(0 0 0 / 0)',
+    'hsl(0 0% 0%)',
+    '#0000',
+    'var(--text-primary)',
+  ])('颜色 %s 被长形覆盖后保留 none 图像', (color) => {
+    const rule = postcss.parse(
+      `.d { background: ${color}; background-color: var(--danger); }`,
+    ).first as postcss.Rule
+    expect(backgroundPaint(rule)).toEqual(DANGER_PAINT)
+  })
+})
+
+describe('F2-c 透明色简写的相邻转换与拒绝边界', () => {
+  it.each([
+    [
+      'background-color: var(--danger) !important; background: transparent',
+      DANGER_PAINT,
+    ],
+    [
+      'background-color: var(--danger); background: transparent',
+      { color: 'transparent', image: 'none' },
+    ],
+    [
+      'background: transparent !important; background-color: var(--danger)',
+      { color: 'transparent', image: 'none' },
+    ],
+    [
+      'background: transparent url(a.png); background-color: var(--danger)',
+      { color: 'var(--danger)', image: 'url(a.png)' },
+    ],
+    [
+      'background: url(a.png) transparent; background-image: none',
+      { color: 'transparent', image: 'none' },
+    ],
+    [
+      'background: transparent; background-image: url(a.png)',
+      { color: 'transparent', image: 'url(a.png)' },
+    ],
+  ])('相邻顺序、重要性与图像保留：%s', (decls, expected) => {
+    const rule = postcss.parse(`.d { ${decls} }`).first as postcss.Rule
+    expect(backgroundPaint(rule)).toEqual(expected)
+  })
+
+  it.each([
+    'transparent-junk',
+    'transparent currentColor',
+    'transparent inherit',
+    'CanvasText',
+  ])('颜色长形不能掩盖域外/重复成分：%s', (value) => {
+    const rule = postcss.parse(
+      `.d { background: ${value}; background-color: var(--danger); }`,
+    ).first as postcss.Rule
+    expect(() => backgroundPaint(rule)).toThrow(
+      /TOKEN_BACKGROUND_SHORTHAND_UNMODELED/,
+    )
+  })
 })
 
 describe('遮罩语义契约（issue #278：遮罩只消费 alpha）', () => {

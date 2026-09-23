@@ -182,8 +182,8 @@ function shorthandLayerOk(prop: string, layer: string): boolean {
   )
 }
 
-/** 单个颜色成分须完整匹配；函数内部参数仍交给既有静态模型边界。 */
-function completeColorAtom(value: string): boolean {
+/** 类型检查与背景投影共用的完整颜色成分识别；不计算 RGBA，函数参数仍保留边界。 */
+export function completeColorAtom(value: string): boolean {
   if (/^#(?:[\da-f]{3,4}|[\da-f]{6}|[\da-f]{8})$/i.test(value)) return true
   if (isNamedColor(value) || /^(transparent|currentcolor)$/i.test(value))
     return true
