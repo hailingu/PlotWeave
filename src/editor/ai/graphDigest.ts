@@ -73,7 +73,8 @@ function clampDigest(text: string): string {
   return `${text.slice(0, keep)}\n${marker}`
 }
 
-function cut(s: string, max = CUT): string {
+/** 字段级截断（摘要行与 find_nodes 检索结果共用，issue #275 评审）。 */
+export function cut(s: string, max = CUT): string {
   return s.length > max ? `${s.slice(0, max)}…` : s
 }
 

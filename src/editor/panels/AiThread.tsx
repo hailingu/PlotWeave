@@ -492,7 +492,8 @@ interface AiThreadProps {
   /** 读工具 get_document（issue 56）：按 id 返回文档全文 JSON。 */
   readonly onReadDocument?: ((documentId: string) => string | null) | undefined
   /** 读工具 find_nodes（issue #275 评审）：按名称检索全部节点与关联连线。 */
-  readonly onFindNodes?: ((query: string) => string) | undefined
+  readonly onFindNodes?:
+    ((query: string, offset?: number) => string) | undefined
   readonly onApplyAiBatch?:
     ((commands: ValidatedCommand[]) => string | null) | undefined
   /** 执行卡的提交身份（issue #139）：计数必带、等待器可选；见 AiCommitIdentity。 */

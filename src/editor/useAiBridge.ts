@@ -91,7 +91,7 @@ export interface AiBridge {
   readDocument: (documentId: string) => string | null
   /** 读工具 find_nodes（issue #275 评审）：按名称/文案检索全部节点（含摘要
    * 未列出条目）及其关联连线，节选后的可发现补读路径。 */
-  findNodes: (query: string) => string
+  findNodes: (query: string, offset?: number) => string
   /** ✦AI 改动落地：整批作为一条复合命令入栈；返回错误文案或 null。
    * 入参为整批校验通过的执行命令（预览卡的合法子集，issue 16）。 */
   applyAiBatch: (batch: ValidatedCommand[]) => string | null
@@ -260,8 +260,8 @@ function useAiReadTools(deps: AiReadToolsDeps) {
   )
 
   const findNodes = useCallback(
-    (query: string): string =>
-      findNodesText(nodesRef.current, edgesRef.current, query),
+    (query: string, offset?: number): string =>
+      findNodesText(nodesRef.current, edgesRef.current, query, offset),
     [nodesRef, edgesRef],
   )
 

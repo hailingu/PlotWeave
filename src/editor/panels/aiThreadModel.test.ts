@@ -260,7 +260,8 @@ describe('readToolOf · 读工具分发（issue 56 增 get_document）', () => {
   })
 
   it('find_nodes 按关键词分发到检索器；未接线时给出占位文案（issue #275 评审）', () => {
-    const onFindNodes = (q: string) => `匹配「${q}」的节点：…`
+    const onFindNodes = (q: string, offset?: number) =>
+      `匹配「${q}」的节点（offset=${offset ?? 0}）：…`
     const tool = readToolOf(
       undefined,
       undefined,
@@ -269,6 +270,12 @@ describe('readToolOf · 读工具分发（issue 56 增 get_document）', () => {
       onFindNodes,
     )
     expect(tool('find_nodes', args({ query: '天台' }))).toContain('天台')
+    expect(tool('find_nodes', args({ query: '天台', offset: 24 }))).toContain(
+      'offset=24',
+    )
+    expect(tool('find_nodes', args({ query: '天台', offset: 24 }))).toContain(
+      'offset=24',
+    )
     expect(
       readToolOf(undefined, undefined)('find_nodes', args({ query: 'x' })),
     ).toContain('未找到匹配「x」')

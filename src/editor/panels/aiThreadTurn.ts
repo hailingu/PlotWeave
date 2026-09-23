@@ -238,7 +238,8 @@ export interface UseAiTurnOpts {
   readonly onReadNode?: ((nodeId: string) => string | null) | undefined
   readonly onReadSettings?: (() => string) | undefined
   readonly onReadDocument?: ((documentId: string) => string | null) | undefined
-  readonly onFindNodes?: ((query: string) => string) | undefined
+  readonly onFindNodes?:
+    ((query: string, offset?: number) => string) | undefined
 }
 
 /** 认领落定结果的交付（useAiTurn 拆分，issue #99）：条目映射见
