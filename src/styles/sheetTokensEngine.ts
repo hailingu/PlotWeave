@@ -24,7 +24,7 @@ export type Env = {
   scheme: 'light' | 'dark'
   contrast: 'no-preference' | 'more'
   transparency: 'no-preference' | 'reduce'
-  motion: 'no-reduce' | 'reduce'
+  motion: 'no-preference' | 'reduce'
 }
 
 /** 语义用例共享的浅色基线环境（按需覆写单维度）。 */
@@ -32,7 +32,7 @@ export const LIGHT_ENV: Env = {
   scheme: 'light',
   contrast: 'no-preference',
   transparency: 'no-preference',
-  motion: 'no-reduce',
+  motion: 'no-preference',
 }
 
 const MEDIA_FEATURES = {
@@ -42,22 +42,37 @@ const MEDIA_FEATURES = {
   'prefers-reduced-motion': 'motion',
 } as const
 
-/** 求 @media 前置值真伪（逗号组相或、and 相与；嵌套块由调用方递归）。 */
+/** 各维度已建模的 CSS 关键字；域外取值（含合法的 `less` 等）不能静默失活。 */
+const MEDIA_VALUES: Record<keyof Env, readonly string[]> = {
+  scheme: ['light', 'dark'],
+  contrast: ['no-preference', 'more'],
+  transparency: ['no-preference', 'reduce'],
+  motion: ['no-preference', 'reduce'],
+}
+
 const MEDIA_FEATURE_PATTERN = /^\(([\w-]+):\s*([\w-]+)\)$/
 
+/** 单个 `(特性: 值)` 在 env 下的真伪；未建模特性或取值明确失败。 */
+function featureMatches(raw: string, env: Env): boolean {
+  const feature = MEDIA_FEATURE_PATTERN.exec(raw.trim())
+  const key = feature?.[1] as keyof typeof MEDIA_FEATURES | undefined
+  if (!feature || !key || !(key in MEDIA_FEATURES)) {
+    throw new Error(`令牌模型未建模的 media 特性: ${raw.trim()}`)
+  }
+  const field = MEDIA_FEATURES[key]
+  if (!MEDIA_VALUES[field].includes(feature[2]!)) {
+    throw new Error(`TOKEN_MEDIA_VALUE_UNMODELED: ${raw.trim()}`)
+  }
+  return env[field] === feature[2]
+}
+
+/** 求 @media 前置值真伪（逗号组相或、and 相与；嵌套块由调用方递归）。 */
 function mediaMatches(prelude: string, env: Env): boolean {
   return prelude
     .toLowerCase()
     .split(',')
     .some((group) =>
-      group.split(' and ').every((raw) => {
-        const feature = MEDIA_FEATURE_PATTERN.exec(raw.trim())
-        const key = feature?.[1] as keyof typeof MEDIA_FEATURES | undefined
-        if (!feature || !key || !(key in MEDIA_FEATURES)) {
-          throw new Error(`令牌模型未建模的 media 特性: ${raw.trim()}`)
-        }
-        return env[MEDIA_FEATURES[key]] === feature[2]
-      }),
+      group.split(' and ').every((raw) => featureMatches(raw, env)),
     )
 }
 

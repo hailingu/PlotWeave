@@ -634,6 +634,9 @@ describe('接线语义：作用域与分支可达（issue #278）', () => {
     expect(scopeReaches(definers, at('.react-flow__controls > button'))).toBe(
       true,
     )
+    expect(scopeReaches(definers, at('.react-flow__controls>button'))).toBe(
+      true,
+    )
     expect(
       scopeReaches(
         definers,
@@ -719,6 +722,17 @@ describe('接线语义：局部定义的级联取胜（issue #278）', () => {
     )
     expect(danglingRefs(valid, LIGHT_ENV)).toEqual([])
   })
+
+  it('无空白子代组合器与带空白形式同样继承祖先遮蔽（review 5286056434）', () => {
+    for (const child of ['.parent>.child', '.parent > .child']) {
+      const root = postcss.parse(
+        `.parent { --text-primary: 4px } ${child} { color: var(--text-primary) }`,
+      )
+      expect(displayTypeErrors(root, LIGHT_ENV)).toEqual([
+        `${child} color: 4px`,
+      ])
+    }
+  })
 })
 
 describe('接线语义：条件环境（issue #278）', () => {
@@ -737,6 +751,26 @@ describe('接线语义：条件环境（issue #278）', () => {
     expect(conditionActive(motion, LIGHT_ENV)).toBe(false)
     expect(conditionActive(motion, reduceMotionEnv)).toBe(true)
   })
+
+  it('基线动效按 CSS 关键字 no-preference 生效，块内违例被扫描（review 5286056434）', () => {
+    const root = postcss.parse(
+      '@media (prefers-reduced-motion: no-preference) { .a { color: var(--radius-sm) } }',
+    )
+    expect(displayTypeErrors(root, LIGHT_ENV)).toHaveLength(1)
+    expect(displayTypeErrors(root, { ...LIGHT_ENV, motion: 'reduce' })).toEqual(
+      [],
+    )
+  })
+
+  it.each([
+    'prefers-reduced-motion: no-reduce',
+    'prefers-contrast: less',
+    'prefers-color-scheme: sepia',
+  ])('未建模的媒体取值 (%s) 明确拒绝，不静默失活', (feature) =>
+    expect(() => conditionActive(`@media (${feature});`, LIGHT_ENV)).toThrow(
+      /TOKEN_MEDIA_VALUE_UNMODELED/,
+    ),
+  )
 
   it('仅在部分环境成立的定义对其他环境下的活跃引用判悬空（逐环境验证）', () => {
     const root = postcss.parse(

@@ -172,7 +172,7 @@ const WIRING_ENVS: Readonly<[string, Env][]> = (
 ).flatMap((scheme) =>
   (['no-preference', 'more'] as const).flatMap((contrast) =>
     (['no-preference', 'reduce'] as const).flatMap((transparency) =>
-      (['no-reduce', 'reduce'] as const).map((motion): [string, Env] => [
+      (['no-preference', 'reduce'] as const).map((motion): [string, Env] => [
         `${scheme}/${contrast}/${transparency}/${motion}`,
         { scheme, contrast, transparency, motion },
       ]),
@@ -701,7 +701,7 @@ const PAIR_ENVS: Readonly<[string, Env][]> = (
     (['no-preference', 'reduce'] as const).map(
       (transparency): [string, Env] => [
         `${scheme}${contrast === 'more' ? '+more' : ''}${transparency === 'reduce' ? '+reduce' : ''}`,
-        { scheme, contrast, transparency, motion: 'no-reduce' },
+        { scheme, contrast, transparency, motion: 'no-preference' },
       ],
     ),
   ),
