@@ -1,6 +1,7 @@
 /**
- * 全局令牌所有权与自定义属性 CSS-wide 取值边界（review 5280542926）。
- * 错误码契约及状态矩阵见 docs/reviews/pr-288-review-5280542926.md。
+ * 全局令牌所有权、@property 注册、颜色属性分类与自定义属性 CSS-wide 取值边界
+ * （review 5280542926、5280837519）。错误码契约及状态矩阵见
+ * docs/reviews/pr-288-review-5280542926.md 与 pr-288-review-5280837519.md。
  */
 import postcss from 'postcss'
 import { describe, expect, it } from 'vitest'
@@ -8,6 +9,7 @@ import {
   danglingRefs,
   displayTypeErrors,
   displayValueIn,
+  isDisplayColorProp,
   LIGHT_ENV,
   localDefinitions,
   sheetDecls,
@@ -56,6 +58,72 @@ describe('组件表不得另定义全局令牌', () => {
     )
     expect([...sheetDecls(root)]).toHaveLength(4)
     expect(displayTypeErrors(root, LIGHT_ENV)).toEqual(['.card color: 4px'])
+  })
+})
+
+const PROPERTY_RULE =
+  '@property --text-primary { syntax: "<length>"; inherits: true; initial-value: 4px; }'
+
+describe('@property 注册不能在令牌源之外改写全局令牌', () => {
+  it.each([
+    ['组件表', { from: 'src/styles/fixture-component.css' }],
+    ['无来源夹具', {}],
+  ])('%s 的注册即使无消费者也拒绝', (_label, opts) => {
+    for (const css of [
+      PROPERTY_RULE,
+      PROPERTY_RULE.replace('@property', '@PROPERTY'),
+      `@media (prefers-color-scheme: dark) { ${PROPERTY_RULE} }`,
+    ]) {
+      const root = postcss.parse(
+        `${css} .a { color: var(--text-primary) }`,
+        opts,
+      )
+      for (const scan of [
+        () => [...sheetDecls(root)],
+        () => danglingRefs(root, LIGHT_ENV),
+        () => displayTypeErrors(root, LIGHT_ENV),
+      ])
+        expect(scan).toThrow(/TOKEN_GLOBAL_OUTSIDE_SOURCE/)
+    }
+  })
+
+  it('令牌源内的注册尚未建模，取值与枚举入口均明确拒绝', () => {
+    const css = `${PROPERTY_RULE} :root { --text-primary: #111; }`
+    expect(() => tokenValuesOf(postcss.parse(css), LIGHT_ENV)).toThrow(
+      /TOKEN_ROOT_AT_RULE_UNMODELED/,
+    )
+    const source = postcss.parse(css, { from: TOKEN_SHEET })
+    expect(() => [...sheetDecls(source)]).toThrow(
+      /TOKEN_ROOT_AT_RULE_UNMODELED/,
+    )
+  })
+})
+
+describe('颜色属性按结构分类进入展示色契约', () => {
+  it.each([
+    'text-emphasis-color',
+    'text-emphasis',
+    'scrollbar-color',
+    '-webkit-text-fill-color',
+    'stop-color',
+  ])('%s 承载展示色', (prop) => expect(isDisplayColorProp(prop)).toBe(true))
+
+  it.each([
+    '--xy-controls-button-color',
+    'color-scheme',
+    'text-emphasis-style',
+  ])('%s 不承载展示色', (prop) => expect(isDisplayColorProp(prop)).toBe(false))
+
+  it('强调标记色消费尺寸令牌被点名，合法颜色与关键字形态通过', () => {
+    const root = postcss.parse(
+      '.a { text-emphasis-color: var(--radius-sm) }\n' +
+        '.b { text-emphasis: filled var(--radius-sm) }\n' +
+        '.c { text-emphasis-color: var(--text-primary); text-emphasis: open sesame var(--text-primary) }\n' +
+        '.d { text-emphasis: filled double-circle; scrollbar-color: var(--text-primary) var(--surface-window) }',
+    )
+    expect(
+      displayTypeErrors(root, LIGHT_ENV).map((e) => e.split(':')[0]),
+    ).toEqual(['.a text-emphasis-color', '.b text-emphasis'])
   })
 })
 

@@ -92,6 +92,12 @@ const NON_COLOR_KEYWORDS = new Set([
   'thick',
   'thin',
   'medium',
+  'filled',
+  'open',
+  'dot',
+  'circle',
+  'triangle',
+  'sesame',
 ])
 
 /**
@@ -156,13 +162,19 @@ function completeColorValueOk(prop: string, value: string): boolean {
   )
     return true
   if (
-    (prop === 'caret-color' || prop === 'accent-color') &&
+    (prop === 'caret-color' ||
+      prop === 'accent-color' ||
+      prop === 'scrollbar-color') &&
     /^auto$/i.test(value)
   )
     return true
   let max = 1
   if (prop === 'border-color') max = 4
-  else if (/^border-(inline|block)-color$/.test(prop)) max = 2
+  else if (
+    prop === 'scrollbar-color' ||
+    /^border-(inline|block)-color$/.test(prop)
+  )
+    max = 2
   const colors = postcss.list.space(value)
   return (
     colors.length > 0 && colors.length <= max && colors.every(completeColorAtom)

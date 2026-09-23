@@ -15,8 +15,9 @@
  * 器的单元用例见 sheetTokensSemantics.test.ts 头注）。
  *
  * 范围界定（issue #278 验收标准）：
- * - 结构断言覆盖展示色属性（前景 color、背景与 background-color/background-image 长形、
- *   轮廓、text-shadow、SVG fill/stroke，以及 border 全部简写/长形——总体、
+ * - 结构断言覆盖展示色属性（前景 color 与全部标准 `-color` 长形——含
+ *   text-emphasis-color、scrollbar-color 及厂商前缀长形，按结构式分类；背景与
+ *   background-image 长形、轮廓、text-emphasis/text-shadow、SVG fill/stroke，以及 border 全部简写/长形——总体、
  *   四向、逻辑方向与 border-image(-source) 长形，按结构式分类而非枚举；
  *   标准属性名先按 ASCII 大小写不敏感归一再分类，自定义属性名大
  *   小写保持原样）；字面色含 hex、大小写不敏感的颜色函数与 CSS 具名色；
@@ -24,7 +25,8 @@
  *   box-shadow 是层级投影非主题展示色、mask-image 只消费 alpha 通道（遮罩
  *   语义另断言），两者不在字面色禁用范围。
  *   经展示色属性传递消费的局部自定义属性同样受禁：`.b { --fg: #fff; color:
- *   var(--fg) }` 不得绕过契约（消费关系沿局部属性值链传递闭包计算；仅被
+ *   var(--fg) }` 不得绕过契约（消费关系沿局部属性值链传递闭包计算，只跟随
+ *   选择器可达展示消费分支的定义——不可达的同名局部复用不入契约；仅被
  *   非展示属性消费的局部属性——如 React Flow 控件变量——不在展示色契约内）。
  *   展示色引用的解析值须按属性文法相容——非颜色令牌叶子（把 --radius-sm
  *   的尺寸值或 --weight 的裸数值 600 用进 color）与不支持图像的属性上
@@ -54,6 +56,8 @@
  *   报 TOKEN_CSS_WIDE_UNMODELED，不能当作消费属性的合法关键字透传。
  *   真实表带 from 来源，组件全局自定义属性报 TOKEN_GLOBAL_OUTSIDE_SOURCE，
  *   即使本表没有消费者也不能覆盖唯一定义源 tokens.css；局部定义仍可遮蔽。
+ *   `@property` 注册总是全局生效：组件表或无来源夹具中报
+ *   TOKEN_GLOBAL_OUTSIDE_SOURCE，令牌源内尚未建模报 TOKEN_ROOT_AT_RULE_UNMODELED。
  *   根令牌处于未知外层 at-rule 或根规则内嵌 at-rule 时明确报 TOKEN_ROOT_AT_RULE_UNMODELED，
  *   不再静默跳过该定义入口；不含根令牌的其他上下文不受此限制。
  *   组件规则内嵌规则/at-rule 报 TOKEN_SHEET_NESTING_UNMODELED；非 media
@@ -73,7 +77,8 @@
  * - 危险动作黄金接线断言取规则内该属性的**生效值**：属性名先按标准大
  *   小写归一再比较（与展示色分类同一归一点），!important 声明优先
  *   于普通声明，同重要性取源序最后一条——前置 !important 不被其后的普通
- *   声明覆盖；目标规则须唯一且无条件——媒体块内同名规则会使生效值随环境
+ *   声明覆盖；危险底色把 background 与 background-color/background-image
+ *   同组取胜，后位或重要长形覆盖简写即点名；目标规则须唯一且无条件——媒体块内同名规则会使生效值随环境
  *   分叉，违背 #240 恒白决策的接线前提。唯一性判定按选择器列表逐分支：后续
  *   规则若在逗号分支中含目标选择器（如 `.other, .pw-dialog-danger { ... }`）仍能
  *   以同等特异性覆盖，也计入命中，不按整选择器字符串相等。
@@ -89,7 +94,7 @@
  * | --- | --- | --- | --- | --- |
  * | 新增组件样式表（包括仅布局/动画或空表） | glob 发现 | 自动进入全部契约，无登记清单或展示色条数要求 | 布线不全不可悄然发生 | 发现探针与无展示色夹具 |
  * | 新增展示色字面声明（hex/大小写不敏感函数色/具名色；含 fill/stroke、background-image、border-image(-source) 与 border 全部简写/长形） | 结构扫描 | 非注册表项即失败（点名表/选择器/声明） | 展示色必须经 tokens.css 或具名例外 | 结构测试 |
- * | 局部自定义属性被展示色属性（传递）消费且值含字面色 | 结构扫描 | 按违例点名（同注册表豁免） | 字面色不得经局部变量别名进入展示位 | 结构测试 |
+ * | 局部自定义属性被展示色属性（传递）消费且值含字面色 | 结构扫描 | 按违例点名（同注册表豁免）；不可达的同名局部复用不点名 | 字面色不得经局部变量别名进入展示位；闭包与接线同一可达性 | 结构测试 |
  * | 展示色引用解析为不相容值（尺寸/裸数值叶子；不接受图像的属性上的渐变/URL） | 逐环境校验属性 | 按违例点名；合法背景图像及 SVG URL 通过 | 图像必须由支持该语法的属性消费 | 结构测试 |
  * | 注册表项同属性换写其他字面色 / 新增第二条同值字面声明 / 超出已审计条数 | 结构扫描 | 按新违例点名（豁免绑定到值与条数） | 例外不覆盖未审计的值或条数 | 结构测试 |
  * | 注册表项对应声明被修复、换值或条数变动 | 结构反向校验 | 表项失配即失败 | 例外表不藏已修复项 | 结构测试 |
@@ -98,7 +103,7 @@
  * | 已豁免悬空引用换属性承载或新增第二条声明 | 接线扫描（属性 + 条数比对） | 按新违例点名 | 接线豁免不扩张已知缺陷 | 接线测试 |
  * | 浅/深 × 基线/more × 基线/降透明度（8 环境） | 配对矩阵 | primary 全环境 ≥4.5、secondary more 升档 ≥4.5（§2.6） | 原则 2 按令牌配对成立（含 reduce-transparency 实色材质） | 配对测试 |
  * | 悬停态换填充 | 配对矩阵 | text-primary 于 fill-quaternary 承载面 ≥4.5 | hover 配对按既有契约 | 配对测试 |
- * | 危险动作 hover/确认 | 黄金接线（规则唯一无条件——包括逗号分支内的同分支覆盖；属性名归一；生效值按重要性再取源序最后一条） | 前景全部配对环境恒 #ffffff（#240 决策） | 危险前景经 --on-danger，生效值不随环境分叉且不被普通声明/大小写变体/同等特异性分支逆转 | 黄金测试 |
+ * | 危险动作 hover/确认 | 黄金接线（规则唯一无条件——包括逗号分支内的同分支覆盖；属性名归一；生效值按重要性再取源序最后一条；底色与背景长形同组取胜） | 前景全部配对环境恒 #ffffff（#240 决策） | 危险前景经 --on-danger，生效值不随环境分叉且不被普通声明/大小写变体/同等特异性分支/背景长形逆转 | 黄金测试 |
  * | 遮罩渐变 | alpha 剖析 | 首末色标全透明、内部全不透明 | 遮罩只消费 alpha | 遮罩测试 |
  *
  * 未覆盖维度：真实 WebView 像素实测未运行；品牌底两处配对归 #262、悬空
@@ -106,7 +111,8 @@
  * 非文本 3:1 未断言——无既有决策，不在本单开新前沿（PR 披露）。
  * 值解析仍为静态子集，非完整 CSS 文法/层叠引擎；复杂选择器及跨选择器
  * 特异性与颜色函数内部参数未建模。审查处理记录见
- * docs/reviews/pr-288-review-5280542926.md；纯值校验由 cssColorContract.ts 负责。
+ * docs/reviews/pr-288-review-5280542926.md 与 pr-288-review-5280837519.md；
+ * 纯值校验由 cssColorContract.ts 负责。
  */
 import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -120,12 +126,15 @@ import {
   displayTypeErrors,
   isDisplayColorProp,
   localDefinitions,
+  normalizeProp,
   resolveChain,
   ruleIn,
+  scopeReaches,
   sheetDecls,
   tokenValues,
   TOKEN_SHEET,
   unresolvedRefsIn,
+  winningDecl,
   type Env,
   type SheetDecl,
 } from './sheetTokensEngine'
@@ -474,20 +483,41 @@ describe('展示色结构：全表扫描与注册表（issue #278）', () => {
     expect(offenders).toEqual([])
   })
 
-  it('经展示色传递消费的局部自定义属性不引入字面色（消费闭包按名计算，含间接消费）', () => {
+  it('经展示色传递消费的局部自定义属性不引入字面色（消费闭包含间接消费）', () => {
     const root = postcss.parse(
       '.a { --fg: #fff; color: var(--fg); }\n' +
         '.b { --mid: var(--fg); background: var(--mid); }\n' +
         '.c { --shadow: 0 2px 8px rgba(0, 0, 0, 0.2); box-shadow: var(--shadow); }\n' +
         '.d { --unused: #fff; }',
     )
-    const consumed = displayConsumedProps(root)
-    expect(consumed.has('--fg'), '直接消费').toBe(true)
-    expect(consumed.has('--mid'), '间接消费（经 --mid 值链）').toBe(true)
-    expect(consumed.has('--shadow'), '仅被 box-shadow 消费不入展示色契约').toBe(
-      false,
+    const consumed = displayConsumedDefs(root)
+    expect(consumed.has(localKey('.a', '', '--fg', '#fff')), '直接消费').toBe(
+      true,
     )
-    expect(consumed.has('--unused'), '未被消费').toBe(false)
+    expect(
+      consumed.has(localKey('.b', '', '--mid', 'var(--fg)')),
+      '间接消费（经 --mid 值链）',
+    ).toBe(true)
+    expect(consumed.size, '仅被 box-shadow 消费或未被消费的不入契约').toBe(2)
+  })
+
+  it('消费闭包只跟随可达定义：不可达的同名局部复用不入展示色契约', () => {
+    const dark = '@media (prefers-color-scheme: dark);'
+    const root = postcss.parse(
+      '.a { color: var(--text-primary) }\n' +
+        '.b { --text-primary: rgba(0, 0, 0, 0.2); box-shadow: 0 0 4px var(--text-primary) }\n' +
+        '.p { --fg: #fff; --mid: var(--fg); }\n' +
+        '.p .x { background: var(--mid) }\n' +
+        '@media (prefers-color-scheme: dark) { .p { --fg: #000; } }\n' +
+        '.q { --fg: red; }',
+    )
+    expect([...displayConsumedDefs(root)].sort()).toEqual(
+      [
+        localKey('.p', '', '--fg', '#fff'),
+        localKey('.p', '', '--mid', 'var(--fg)'),
+        localKey('.p', dark, '--fg', '#000'),
+      ].sort(),
+    )
   })
 
   it('注册表每项仍按已审计条数命中值一致的真实字面声明（修复/换值/条数变动后更新表项，防例外藏项）', () => {
@@ -506,23 +536,45 @@ describe('展示色结构：全表扫描与注册表（issue #278）', () => {
   })
 })
 
+/** 局部定义身份：选择器 + 条件 + 属性 + 值，与 sheetDecls 枚举的声明对齐。 */
+function localKey(
+  selector: string,
+  condition: string,
+  prop: string,
+  value: string,
+): string {
+  return `${selector}|${condition}|${prop}|${value}`
+}
+
 /**
- * 经展示色属性（沿局部属性值链传递）消费的局部自定义属性名集合：从全部
- * 展示色声明的 var() 引用起做传递闭包。仅被非展示属性（如 box-shadow）消
- * 费的局部属性不在展示色契约内。
+ * 经展示色属性（沿局部属性值链传递）消费的局部定义身份集合：只跟随选择器
+ * 可达消费分支的定义（任一环境条件），与接线/类型扫描同一可达性。仅被
+ * 非展示属性（如 box-shadow）消费或无法到达展示消费点的同名定义不在契约内。
  */
-function displayConsumedProps(root: postcss.Root): Set<string> {
+function displayConsumedDefs(root: postcss.Root): Set<string> {
   const locals = localDefinitions(root)
   const consumed = new Set<string>()
+  const seen = new Set<string>()
   const queue = [...sheetDecls(root)]
     .filter((decl) => isDisplayColorProp(decl.prop))
-    .flatMap((decl) => allVarRefs(decl.value))
+    .flatMap((decl) =>
+      decl.selector.split(',').flatMap((branch) =>
+        allVarRefs(decl.value).map((name) => ({
+          selector: branch.trim(),
+          name,
+        })),
+      ),
+    )
   while (queue.length > 0) {
-    const name = queue.pop()!
-    if (consumed.has(name)) continue
-    consumed.add(name)
+    const { selector, name } = queue.pop()!
+    if (seen.has(`${selector}#${name}`)) continue
+    seen.add(`${selector}#${name}`)
     for (const def of locals.get(name) ?? []) {
-      queue.push(...allVarRefs(def.value))
+      if (!scopeReaches([def], { selector })) continue
+      consumed.add(localKey(def.selector, def.condition, name, def.value))
+      queue.push(
+        ...allVarRefs(def.value).map((ref) => ({ selector, name: ref })),
+      )
     }
   }
   return consumed
@@ -547,13 +599,15 @@ function literalOccurrences(): Map<string, { label: string; count: number }> {
   }
   for (const [sheet, root] of sheets) {
     if (sheet === TOKEN_SHEET) continue
-    const consumed = displayConsumedProps(root)
+    const consumed = displayConsumedDefs(root)
     for (const decl of sheetDecls(root)) {
       if (isDisplayColorProp(decl.prop) && hasColorLiteral(decl.value)) {
         bump(sheet, decl)
       } else if (
         decl.prop.startsWith('--') &&
-        consumed.has(decl.prop) &&
+        consumed.has(
+          localKey(decl.selector, decl.condition, decl.prop, decl.value),
+        ) &&
         hasColorLiteral(decl.value)
       ) {
         bump(sheet, decl)
@@ -786,6 +840,19 @@ function ruleOf(sheet: string, selector: string): postcss.Rule {
   return ruleIn(sheets.get(sheet)!, sheet, selector)
 }
 
+/** 背景简写与可覆盖其绘制结果的长形同组取胜。 */
+const BACKGROUND_PAINT_PROPS = [
+  'background',
+  'background-color',
+  'background-image',
+] as const
+
+/** 规则内底色绘制的实际胜出声明，形如 `background: var(--danger)`。 */
+function backgroundPaint(rule: postcss.Rule): string {
+  const decl = winningDecl(rule, BACKGROUND_PAINT_PROPS)
+  return `${normalizeProp(decl.prop)}: ${decl.value}`
+}
+
 describe('危险动作前景接线（#240 决策补齐，issue #278）', () => {
   it('四处危险前景经 --on-danger、底经 --danger（字面接线，不残留 #fff）', () => {
     for (const { sheet, selector } of DANGER_RULES) {
@@ -793,11 +860,34 @@ describe('危险动作前景接线（#240 决策补齐，issue #278）', () => {
       expect(declOf(rule, 'color'), `${sheet} ${selector} color`).toBe(
         'var(--on-danger)',
       )
-      expect(
-        declOf(rule, 'background'),
-        `${sheet} ${selector} background`,
-      ).toBe('var(--danger)')
+      expect(backgroundPaint(rule), `${sheet} ${selector} background`).toBe(
+        'background: var(--danger)',
+      )
     }
+  })
+
+  it('危险底色按背景简写与长形的实际胜出声明判定：后位或重要长形覆盖即点名', () => {
+    const paint = (css: string): string =>
+      backgroundPaint(postcss.parse(css).first as postcss.Rule)
+    expect(
+      paint('.d { background-color: #000; background: var(--danger) }'),
+      '简写重置先位长形',
+    ).toBe('background: var(--danger)')
+    expect(
+      paint(
+        '.d { background: var(--danger); BACKGROUND-COLOR: var(--surface-card) }',
+      ),
+    ).toBe('background-color: var(--surface-card)')
+    expect(
+      paint(
+        '.d { background-image: linear-gradient(#000, #000) !important; background: var(--danger) }',
+      ),
+    ).toBe('background-image: linear-gradient(#000, #000)')
+    expect(
+      paint(
+        '.d { background: var(--danger) !important; background-color: var(--surface-card) }',
+      ),
+    ).toBe('background: var(--danger)')
   })
 
   it('--on-danger 全部配对环境（含 more × reduce 组合）消解恒 #ffffff（视觉零变化；深色底 ≈2.8:1 为 #240 已记录边界，不重开）', () => {

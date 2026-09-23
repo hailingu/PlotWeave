@@ -95,6 +95,9 @@ function applyRootRule(
 
 /** 根令牌未建模的 at-rule 上下文/声明布局必须显式失败，不能静默忽略胜出声明。 */
 function assertRootContexts(root: postcss.Root): void {
+  root.walkAtRules(/^property$/i, (rule) => {
+    throw new Error(`TOKEN_ROOT_AT_RULE_UNMODELED: @property ${rule.params}`)
+  })
   root.walkDecls(/^--/, (decl) => {
     let rule: postcss.AnyNode | undefined = decl.parent
     while (rule?.type === 'atrule') rule = rule.parent
@@ -169,21 +172,15 @@ export function resolveChain(
   return current
 }
 
-/** 展示色属性（非 border-color 系）：字面色值必须经注册表豁免（box-shadow/遮罩除外）。 */
+/** 展示色简写及图像属性：字面色值必须经注册表豁免（box-shadow/遮罩除外）。 */
 const DISPLAY_PROPS = new Set([
-  'color',
   'background',
-  'background-color',
   'background-image',
   'outline',
-  'outline-color',
   'text-decoration',
-  'text-decoration-color',
+  'text-emphasis',
   'text-shadow',
-  'caret-color',
-  'accent-color',
   'column-rule',
-  'column-rule-color',
   'fill',
   'stroke',
   'border-image',
@@ -194,9 +191,16 @@ const DISPLAY_PROPS = new Set([
 const BORDER_COLOR_PROP =
   /^border(-(top|right|bottom|left|block|inline)(-(start|end))?)?(-color)?$/
 
+/** color 与全部标准 `-color` 长形（含厂商前缀）；自定义属性不匹配。 */
+const COLOR_LONGHAND = /^(?:-[a-z]+-)?(?:[a-z]+-)*color$/
+
 /** 属性是否承载展示色（构造中的 border 字面色同样受禁）。 */
 export function isDisplayColorProp(prop: string): boolean {
-  return DISPLAY_PROPS.has(prop) || BORDER_COLOR_PROP.test(prop)
+  return (
+    DISPLAY_PROPS.has(prop) ||
+    BORDER_COLOR_PROP.test(prop) ||
+    COLOR_LONGHAND.test(prop)
+  )
 }
 
 /** 值内真实 var() 引用名（含 fallback，排除字符串/URL；用于依赖图及消费闭包）。 */
@@ -244,7 +248,15 @@ function isGlobalCompound(selector: string): boolean {
 /** 带文件来源的组件表不得另定义全局令牌；无来源语义夹具仍可模拟独立级联。 */
 function assertGlobalTokenSource(root: postcss.Root): void {
   const file = root.source?.input.file
-  if (!file || file === join(repoRoot, TOKEN_SHEET)) return
+  const isSource = file === join(repoRoot, TOKEN_SHEET)
+  // @property 注册总是全局生效，夹具也无法把它限定在局部级联内。
+  root.walkAtRules(/^property$/i, (rule) => {
+    const code = isSource
+      ? 'TOKEN_ROOT_AT_RULE_UNMODELED'
+      : 'TOKEN_GLOBAL_OUTSIDE_SOURCE'
+    throw new Error(`${code}: ${file ?? '<fixture>'} @property ${rule.params}`)
+  })
+  if (!file || isSource) return
   root.walkRules((rule) => {
     if (!postcss.list.comma(rule.selector).some(isGlobalCompound)) return
     const definition = rule.nodes.find(
@@ -663,13 +675,23 @@ export function ruleIn(
 
 /** 规则内该属性的生效值：属性名先按标准大小写归一，!important 声明优先于普通声明，同重要性取源序最后一条。 */
 export function declOf(rule: postcss.Rule, prop: string): string {
-  const target = normalizeProp(prop)
+  return winningDecl(rule, [prop]).value
+}
+
+/** 一组互相覆盖的属性（如简写与长形）在规则内的胜出声明，取胜规则同 declOf。 */
+export function winningDecl(
+  rule: postcss.Rule,
+  props: readonly string[],
+): postcss.Declaration {
+  const targets = new Set(props.map(normalizeProp))
   const decls = rule.nodes.filter(
     (node): node is postcss.Declaration =>
-      node.type === 'decl' && normalizeProp(node.prop) === target,
+      node.type === 'decl' && targets.has(normalizeProp(node.prop)),
   )
-  if (decls.length === 0) throw new Error(`${rule.selector} 缺少 ${prop} 声明`)
+  if (decls.length === 0) {
+    throw new Error(`${rule.selector} 缺少 ${props.join('/')} 声明`)
+  }
   const important = decls.filter((decl) => decl.important)
   const winners = important.length > 0 ? important : decls
-  return winners[winners.length - 1]!.value
+  return winners[winners.length - 1]!
 }
