@@ -10,6 +10,10 @@ use serde_json::{json, Value};
 use tauri::ipc::{CallbackFn, InvokeBody, InvokeResponse};
 use tauri::{AppHandle, Manager};
 
+mod cleanup;
+
+use cleanup::OwnedAppDataDir;
+
 const WAIT: Duration = Duration::from_secs(10);
 const HOLD: Duration = Duration::from_millis(400);
 const RESPONSIVE: Duration = Duration::from_millis(150);
@@ -21,8 +25,10 @@ pub fn run() {
     context.config_mut().app.windows.clear();
     let app = plotweave_lib::app_builder().build(context).unwrap();
     let dir = app.path().app_data_dir().unwrap();
-    assert!(!dir.exists(), "测试目录必须是新的");
-    fs::create_dir_all(&dir).unwrap();
+    // 建窗/启动失败会展开栈，绕过 run_return 之后的顺序清理：守卫以 RAII
+    // 接管本次新建目录（issue #277），Drop 兜底清理且保留主失败诊断；
+    // 成功与断言失败路径仍走显式强清理，此后守卫退化为空操作。
+    let mut owned_dir = OwnedAppDataDir::create_new(dir.clone());
     tauri::WebviewWindowBuilder::new(
         &app,
         "main",
@@ -48,7 +54,7 @@ pub fn run() {
             });
         }
     });
-    fs::remove_dir_all(dir).unwrap();
+    owned_dir.remove_now();
     if let Err(panic) = result.recv_timeout(WAIT).unwrap() {
         std::panic::resume_unwind(panic);
     }
