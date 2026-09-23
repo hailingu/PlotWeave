@@ -1207,7 +1207,7 @@ describe('AI 批量命令的逐类型载荷形状校验（信任边界：字段�
       ['lines'],
     ],
     [
-      'shot refs 违反引用位联合：kind 未知 / assetId 与 label 并存（label 为字符串或非字符串同样拒绝，§4.2）',
+      'shot refs 违反引用位联合：kind 未知 / assetId 与字符串 label 并存（§4.2）',
       [
         {
           op: 'create_node',
@@ -1220,8 +1220,26 @@ describe('AI 批量命令的逐类型载荷形状校验（信任边界：字段�
             refs: [
               { id: 'r1', kind: 'ghost', label: '异灵' },
               { id: 'r2', kind: 'audio', assetId: 'a-1', label: '并存' },
-              { kind: 'audio', assetId: 'a1', label: 5 },
             ],
+          },
+        },
+      ],
+      ['refs'],
+    ],
+    [
+      // 单独批次钉住键在场判定：非字符串 label 只要与 assetId 同时在场也拒绝，
+      // 不得混入其他必然非法成员而掩盖该分支（PR #292 评审 5289105130）
+      'shot refs 的 assetId 与非字符串 label 并存：同样拒绝（不得交给加载侧静默删除字段）',
+      [
+        {
+          op: 'create_node',
+          nodeType: 'shot',
+          data: {
+            shotNo: 1,
+            size: '特写',
+            picture: '',
+            prompt: '',
+            refs: [{ kind: 'audio', assetId: 'a1', label: 5 }],
           },
         },
       ],
