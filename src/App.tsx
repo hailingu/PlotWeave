@@ -672,7 +672,8 @@ export function App() {
   const actionFeedback = useHomeActionFeedback()
   const attempts = useCreateFamilyAttempts(readProjects)
 
-  // ⌘, 打开设置（macOS 惯例，§8.2）；输入控件聚焦时不触发
+  // ⌘,/Ctrl+, 打开设置（macOS 惯例，§8.2）：文档级监听只判键值与修饰
+  // 键，不按焦点目标过滤——输入控件聚焦时同样触发（issue #274）
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === ',' && (e.metaKey || e.ctrlKey)) {
