@@ -327,7 +327,8 @@ export function RightPanel(props: RightPanelProps) {
       {props.open && (
         <PanelResizer
           direction={-1}
-          startWidth={props.width}
+          label="调整右栏宽度"
+          width={props.width}
           onResize={props.onResize}
         />
       )}

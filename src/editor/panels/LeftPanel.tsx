@@ -492,7 +492,12 @@ export function LeftPanel({
         onSave={settingsActions.updateDocument}
       />
       {open && (
-        <PanelResizer direction={1} startWidth={width} onResize={onResize} />
+        <PanelResizer
+          direction={1}
+          label="调整左栏宽度"
+          width={width}
+          onResize={onResize}
+        />
       )}
     </aside>
   )
