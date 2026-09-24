@@ -74,7 +74,7 @@ const dragFrame = (
     )
   })
 
-describe('useNodeDragHistory（issue #269：一步撤销与无位移分支）', () => {
+describe('useNodeDragHistory（issue #269：整段拖拽只入栈一步）', () => {
   it('多帧拖拽只入栈一步：undo 恢复起点、redo 恢复落点', async () => {
     const h = setup([sceneNode('s1', 0), sceneNode('s2', 100)])
     const dragged = () => h.result.current.doc.nodes
@@ -145,7 +145,9 @@ describe('useNodeDragHistory（issue #269：一步撤销与无位移分支）', 
     expect(posOf(h, 'b').x).toBe(60)
     expect(JSON.stringify(posOf(h, 'c'))).toBe(untouchedBefore)
   })
+})
 
+describe('useNodeDragHistory（issue #269：无位移与缺失 start 不入栈）', () => {
   it('无实际位移的拖拽不入栈（click/未拖动）', () => {
     const h = setup([sceneNode('s1', 0)])
     const nodes = h.result.current.doc.nodes
