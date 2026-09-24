@@ -78,6 +78,40 @@ describe('useEditorPersistence（§3/§10.2 装配：视口与诊断横幅）', 
   })
 })
 
+describe('useEditorPersistence（保存失败横幅的非 Error 拒绝原因，issue #270）', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it('拒绝原因为对象时横幅给出可读 JSON，错误字段不丢失', async () => {
+    const { result, onSave } = setup()
+    onSave.mockRejectedValueOnce({ code: 'EACCES', path: '/tmp/p1.json' })
+    act(() =>
+      result.current.persistence.onMoveEnd(null, { x: 0, y: 0, zoom: 1 }),
+    )
+    await flush()
+    const banner = result.current.persistence.saveError
+    expect(typeof banner).toBe('string')
+    expect(banner).toContain('EACCES')
+    expect(banner).toContain('/tmp/p1.json')
+  })
+
+  it('拒绝原因不可序列化（BigInt/循环引用）时横幅落到非空兜底，不二次抛出', async () => {
+    const circular: Record<string, unknown> = {}
+    circular.self = circular
+    for (const bad of [{ bytes: 2n }, circular]) {
+      const { result, onSave } = setup()
+      onSave.mockRejectedValueOnce(bad)
+      act(() =>
+        result.current.persistence.onMoveEnd(null, { x: 0, y: 0, zoom: 1 }),
+      )
+      await flush()
+      const banner = result.current.persistence.saveError
+      expect(typeof banner).toBe('string')
+      expect(banner?.trim().length, '兜底横幅必须非空').toBeGreaterThan(0)
+    }
+  })
+})
+
 describe('useEditorPersistence（whenCanvasCommitted 持久化闸门）', () => {
   beforeEach(() => vi.useFakeTimers())
   afterEach(() => vi.useRealTimers())
