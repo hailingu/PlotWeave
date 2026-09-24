@@ -117,13 +117,23 @@ function edgeOfExport(node: ts.ExportDeclaration): RawEdge | null {
   return { spec: node.moduleSpecifier.text, typeOnly }
 }
 
-/** 动态 import('...') 的原始边（恒为运行时边）。 */
+/** 静态说明符判定（PR #305 三轮评审）：字符串或**无替换**模板字面量——
+ * import(`react`) 是合法且静态可解析的动态导入，须采集；带替换的模板
+ * 是真动态（运行时才定目标），不采集。 */
+function isStaticSpecifier(
+  node: ts.Node,
+): node is ts.StringLiteral | ts.NoSubstitutionTemplateLiteral {
+  return ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)
+}
+
+/** 动态 import('...') 的原始边（恒为运行时边；PR #305 三轮评审：
+ * 无替换模板字面量同属静态可解析说明符）。 */
 function edgeOfDynamicImport(node: ts.CallExpression): RawEdge | null {
   const arg = node.arguments[0]
   if (
     node.expression.kind !== ts.SyntaxKind.ImportKeyword ||
     arg === undefined ||
-    !ts.isStringLiteral(arg)
+    !isStaticSpecifier(arg)
   )
     return null
   return { spec: arg.text, typeOnly: false }
@@ -134,7 +144,7 @@ function edgeOfDynamicImport(node: ts.CallExpression): RawEdge | null {
  * 反向类型环对编译期断言隐形）。 */
 function edgeOfImportType(node: ts.ImportTypeNode): RawEdge | null {
   if (!ts.isLiteralTypeNode(node.argument)) return null
-  if (!ts.isStringLiteral(node.argument.literal)) return null
+  if (!isStaticSpecifier(node.argument.literal)) return null
   return { spec: node.argument.literal.text, typeOnly: true }
 }
 
@@ -340,16 +350,17 @@ const MODEL_EDITOR_RUNTIME_ALLOWLIST = new Set([
   'editor/settings.ts',
 ])
 
-/** 模型层 → editor 的运行时依赖越界（issue #266）：值依赖只允许白名单
- * 纯叶子，其余 editor 模块（组件/hook/面板等）仅 type-only。返回
- * `文件 → 目标` 违规清单，空 = 通过。 */
+/** 模型层 → editor 的运行时依赖越界（issue #266；PR #305 三轮评审升级
+ * 为闭包口径）：运行时可达闭包内**任何**模块的 editor/ 值依赖只允许
+ * 白名单纯叶子，其余 editor 模块（组件/hook/面板等）仅 type-only——
+ * 经共享模块间接触达 editor 实现同样违规。返回 `文件 → 目标` 违规
+ * 清单，空 = 通过。 */
 export function modelEditorRuntimeViolations(
   graph: Map<string, ModuleEdge[]>,
 ): string[] {
   const offenders: string[] = []
-  for (const [file, list] of graph) {
-    if (!file.startsWith('model/')) continue
-    for (const e of list) {
+  for (const file of modelRuntimeClosure(graph)) {
+    for (const e of graph.get(file) ?? []) {
       if (!e.target.startsWith('editor/')) continue
       if (!e.typeOnly && !MODEL_EDITOR_RUNTIME_ALLOWLIST.has(e.target))
         offenders.push(`${file} → ${e.target}`)

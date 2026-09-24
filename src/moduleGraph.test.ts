@@ -272,3 +272,24 @@ describe('模型层运行时闭包（PR #305 二轮评审）', () => {
     ])
   })
 })
+
+describe('静态模板字面量与闭包 editor 越界（PR #305 三轮评审）', () => {
+  it('反例：无替换模板字面量动态导入计入边集；带替换模板是真动态不采集', () => {
+    const external = externalEdgesOfSource('const m = import(`react`)')
+    expect(external).toEqual([{ spec: 'react', typeOnly: false }])
+    const relative = relativeEdgesOfSource('const m = import(`./lazy`)')
+    expect(relative).toEqual([{ spec: './lazy', typeOnly: false }])
+    const substituted = relativeEdgesOfSource('const m = import(`./${name}`)')
+    expect(substituted).toEqual([])
+  })
+
+  it('反例：经共享模块间接触达非白名单 editor 模块被识别（闭包口径）', () => {
+    const graph = new Map<string, ModuleEdge[]>([
+      ['model/a.ts', [{ target: 'shared.ts', typeOnly: false }]],
+      ['shared.ts', [{ target: 'editor/SomePanel.tsx', typeOnly: false }]],
+    ])
+    expect(modelEditorRuntimeViolations(graph)).toEqual([
+      'shared.ts → editor/SomePanel.tsx',
+    ])
+  })
+})
