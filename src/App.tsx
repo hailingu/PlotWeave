@@ -673,10 +673,13 @@ export function App() {
   const attempts = useCreateFamilyAttempts(readProjects)
 
   // ⌘,/Ctrl+, 打开设置（macOS 惯例，§8.2）：文档级监听只判键值与修饰
-  // 键，不按焦点目标过滤——输入控件聚焦时同样触发（issue #274）
+  // 键，不按焦点目标过滤——输入控件聚焦时同样触发（issue #274）；
+  // aria-modal 弹窗打开时挂起（issue #263 评审）：应用级入口同样服从
+  // 键盘模态边界，编辑器与弹窗不被静默卸载，弹窗关闭后恢复
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === ',' && (e.metaKey || e.ctrlKey)) {
+        if (document.querySelector('dialog[aria-modal="true"]')) return
         e.preventDefault()
         startTransition(() => setSettingsOpen(true))
       }

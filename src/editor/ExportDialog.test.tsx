@@ -421,6 +421,60 @@ describe('ExportDialog（复制回执与关闭）', () => {
   })
 })
 
+describe('ExportDialog（模态键盘边界，issue #263）', () => {
+  /** 弹窗内可聚焦控件按 DOM 序：✕ 关闭、大纲开关、复制全文、下载 .md。 */
+  const firstFocusable = () => screen.getByRole('button', { name: '关闭' })
+  const lastFocusable = () => screen.getByRole('button', { name: '下载 .md' })
+  const dialogEl = () => screen.getByRole('dialog', { name: '导出剧本' })
+  /** 弹窗外追加一个背景控件并聚焦，模拟焦点逸出（键盘隔离断言入口）。 */
+  function focusedOutside(tag = 'button') {
+    const outside = document.createElement(tag)
+    outside.textContent = '背景控件'
+    document.body.appendChild(outside)
+    act(() => {
+      outside.focus()
+    })
+    return outside
+  }
+
+  it('打开即把焦点移入弹窗首控件', () => {
+    setup()
+    expect(dialogEl().contains(document.activeElement)).toBe(true)
+    expect(document.activeElement).toBe(firstFocusable())
+  })
+
+  it('Tab 在弹窗内首尾环绕：末控件 Tab 回首控件，首控件 Shift+Tab 回末控件', () => {
+    setup()
+    act(() => {
+      lastFocusable().focus()
+    })
+    fireEvent.keyDown(lastFocusable(), { key: 'Tab' })
+    expect(document.activeElement).toBe(firstFocusable())
+    fireEvent.keyDown(firstFocusable(), { key: 'Tab', shiftKey: true })
+    expect(document.activeElement).toBe(lastFocusable())
+  })
+
+  it.each([
+    ['Tab', false],
+    ['Shift+Tab', true],
+  ] as const)('焦点逸出到背景元素后，%s 把焦点拉回弹窗内', (_, shiftKey) => {
+    setup()
+    const outside = focusedOutside()
+    fireEvent.keyDown(outside, { key: 'Tab', shiftKey })
+    expect(dialogEl().contains(document.activeElement)).toBe(true)
+    outside.remove()
+  })
+
+  it('卸载（任一关闭路径）后焦点归还打开时的触发元素', () => {
+    const trigger = focusedOutside('button')
+    const { unmount } = setup()
+    expect(dialogEl().contains(document.activeElement)).toBe(true)
+    unmount()
+    expect(document.activeElement).toBe(trigger)
+    trigger.remove()
+  })
+})
+
 describe('ExportDialog（剪贴板回退与下载）', () => {
   it('复制成功 → 按钮进入「✓ 已复制」态并限时恢复', async () => {
     vi.useFakeTimers()

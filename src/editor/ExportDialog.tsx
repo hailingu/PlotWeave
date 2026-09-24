@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState, type RefObject } from 'react'
 import type { ScriptExportModel } from './exportScript'
 import { useScriptExportActions } from './useScriptExportActions'
 
@@ -66,6 +66,73 @@ function bodyHint(
   return '正文 = 场景 + 对白；分镜卡见附录'
 }
 
+/** 键盘边界收集弹窗内可聚焦控件的选择器（控件与正序 tabindex）。 */
+const FOCUSABLE_SELECTOR =
+  'button, input, select, textarea, a[href], [tabindex]:not([tabindex="-1"])'
+
+/**
+ * 导出对话框的模态键盘边界（issue #263）：打开即把焦点移入弹窗首控件；
+ * Tab/Shift+Tab 在弹窗内首尾环绕，焦点逸出到背景元素时按方向拉回；
+ * Escape 关闭；卸载（Esc/遮罩/✕/父层状态任一路径）把焦点归还打开前
+ * 最后聚焦的元素——键盘打开即触发控件；macOS WebKit 指针打开不聚焦
+ * 按钮，归还打开前焦点所在（通常 body，指针流无键盘上下文可归还），
+ * 与 issue #263「恢复到合理触发位置」的语义一致。视觉与指针遮罩之外
+ * 补齐键盘模态语义（dialog 标注 aria-modal 配合；背景全局快捷键的挂起
+ * 在 useEditorHotkeys）。onClose 经 latest-ref 消费：父层（EditorOverlays）
+ * 每渲染传新内联闭包，边界不得因闭包标识变化重挂（重挂会把焦点闪归还）。
+ */
+function useExportModalKeyboard(
+  dialogRef: RefObject<HTMLDialogElement | null>,
+  onClose: () => void,
+) {
+  const onCloseRef = useRef(onClose)
+  useEffect(() => {
+    onCloseRef.current = onClose
+  })
+  useEffect(() => {
+    const dialog = dialogRef.current
+    if (!dialog) return
+    const trigger =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null
+    const focusables = () =>
+      Array.from(
+        dialog.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR),
+      ).filter((el) => !el.hasAttribute('disabled'))
+    focusables()[0]?.focus()
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onCloseRef.current()
+        return
+      }
+      if (e.key !== 'Tab') return
+      const items = focusables()
+      const first = items[0]
+      const last = items[items.length - 1]
+      if (!first || !last) return
+      const active = document.activeElement
+      if (!dialog.contains(active)) {
+        e.preventDefault()
+        ;(e.shiftKey ? last : first).focus()
+        return
+      }
+      if (e.shiftKey && active === first) {
+        e.preventDefault()
+        last.focus()
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault()
+        first.focus()
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      trigger?.focus()
+    }
+  }, [dialogRef])
+}
+
 /**
  * 剧本导出对话框（docs/ui-design.md §3.3 导出、§3.5 剧本导出）。
  * 预览生成的正文（场景 + 对白，节拍/分支不进正文）与附录；
@@ -80,26 +147,23 @@ export function ExportDialog({
   onClose,
 }: ExportDialogProps) {
   const [showOutline, setShowOutline] = useState(false)
+  const dialogRef = useRef<HTMLDialogElement>(null)
+  useExportModalKeyboard(dialogRef, onClose)
   const { copyAll, copied, resetCopied, download } = useScriptExportActions(
     showOutline ? model.outline : model.plain,
     `${projectName}-剧本`,
   )
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [onClose])
-
   return (
     <div className="pw-overlay" onPointerDown={onClose}>
-      {/* 原生 dialog 承载对话框语义（S6819）；非模态，Esc/遮罩关闭为手动处理 */}
+      {/* 原生 dialog 承载对话框语义（S6819）；非模态 open 标记 + aria-modal，
+          键盘模态边界（焦点移入/Tab 循环/关闭归还/Esc）见 useExportModalKeyboard */}
       <dialog
+        ref={dialogRef}
         open
         className="pw-dialog"
         aria-label="导出剧本"
+        aria-modal="true"
         onPointerDown={(e) => e.stopPropagation()}
       >
         <div className="pw-dialog-head">
