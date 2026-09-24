@@ -14,15 +14,21 @@ use crate::store::types::{new_id, validate_id};
 pub(crate) mod faults;
 
 /// 故障注入仅在测试中替换单个系统 I/O；发布构建直接执行原表达式。
+/// `$crate` 绝对路径使其可在定义模块外（如 store::copy）经
+/// `pub(crate) use atomic_io` 导入后展开。
 macro_rules! atomic_io {
     ($stage:ident, $operation:expr) => {{
         #[cfg(test)]
-        let result = faults::run(faults::Stage::$stage, || $operation);
+        let result = $crate::store::persist::faults::run(
+            $crate::store::persist::faults::Stage::$stage,
+            || $operation,
+        );
         #[cfg(not(test))]
         let result = $operation;
         result
     }};
 }
+pub(crate) use atomic_io;
 /// 资产路径组件的 no-follow 元数据（相对锚定句柄），缺失映射为「资产文件不存在」。
 pub(crate) fn asset_stat(
     dir: &CapDir,
