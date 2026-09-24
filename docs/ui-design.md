@@ -38,7 +38,7 @@ gray-900 #131316  →  surface.canvas        →  canvas.background
 - **结构、引用与类型**：展示色及可达局部别名不得字面硬编码，具名例外绑定值和条数且反向校验。引用按 16 个偏好环境和选择器分支求值，主值/fallback 与环检测共用词法边界。`var()` 函数名按 ASCII 不区分大小写识别，`--Foo` 与 `--foo` 等自定义属性名仍须原样匹配；大写函数名的悬空引用不能绕过检查（[审查 5287535185](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5287535185)）。未转义非 ASCII 名称（如 `--前景`）沿引用与可达消费闭包完整保留；转义标识符仍为已知边界（[审查 5287668653](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5287668653)）。纯颜色校验完整值，其余简写逐个识别顶层成分，未知连字符词形或残余内容不能被合法颜色/图像掩盖；合法 `line-through`、`double-circle` 等完整关键字保留。图像长形单独验证：`background-image` 接受非空图像/none 列表，`border-image-source` 只接受单个图像/none，均不接受颜色；`border-image` 简写接受图像源或单独 none，不接受普通颜色及通用边框关键字，完整切片/宽度/重复文法仍未建模（[审查 5287311461](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5287311461)）；URL/渐变内部逗号不分层。
 - **配对与遮罩**：8 个配对环境中 primary ≥4.5:1、secondary 在 more 下 ≥4.5:1；危险动作按 #240 保持恒白前景与既定底色，背景颜色/图像成分各自层叠：单层简写分别提取颜色和图像；颜色识别与类型检查共用完整成分规则，包含 transparent、具名色和 currentColor，不要求数值 RGBA 转换。`background: transparent; background-color: var(--danger)` 的有效颜色/图像为 danger/none，反序或透明简写重要性更高时仍为透明（[审查 5286812629](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5286812629)）。后位 `background-image: none` 只清图像，缺省颜色/图像重置为 transparent/none；黄金接线的其他简写形态显式拒绝（[审查 5286571379](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5286571379)）。遮罩仅支持单个完整、括号平衡的静态 linear-gradient，首末全透明、内部全不透明；逗号/空格 RGB(A) 色标的函数名按 ASCII 大小写不敏感，内部半透明仍拒绝（[审查 5287668653](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5287668653)）；尾随内容或额外图层显式拒绝（[审查 5287311461](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5287311461)）。`currentColor`、系统色和未知标识符无法确定静态 alpha，明确拒绝（[审查 5286363682](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5286363682)）。
 
-这组测试不证明完整 CSS 渲染正确：完整选择器/跨表局部级联、函数内部参数、完整简写顺序与互斥关系、动态遮罩和 WebView 像素仍是保留边界。`filter`/`backdrop-filter`（含厂商前缀）未列入展示色属性集合，`drop-shadow()` 的颜色和类型不在此契约证明范围。#240 的已知危险色对比度、#262 注册表挂账以及非文本对比度观察项不在本次重开（#265 悬空引用已修复移出例外表）；具体入口、错误码、独立规范依据与验证证据见统一契约。
+这组测试不证明完整 CSS 渲染正确：完整选择器/跨表局部级联、函数内部参数、完整简写顺序与互斥关系、动态遮罩和 WebView 像素仍是保留边界。`filter`/`backdrop-filter`（含厂商前缀）未列入展示色属性集合，`drop-shadow()` 的颜色和类型不在此契约证明范围。#240 的已知危险色对比度以及非文本对比度观察项不在本次重开（#262 品牌配对与 #265 悬空引用均已修复移出例外表）；具体入口、错误码、独立规范依据与验证证据见统一契约。
 
 ### 2.2 品牌色与渐变
 
@@ -72,9 +72,9 @@ gray-900 #131316  →  surface.canvas        →  canvas.background
 | `port.body` / `port.ring` / `connection.valid.glow` | 端口圆点主体/描边/可连发光 | `#3A3A3E` / `#55555A` / `rgba(52,199,89,.8)`，恒定 |
 | `shadow.node.paper/note/beat/slate`、`shadow.edge-label`、`shadow.controls` | 节点家族与连线胶囊投影（家族恒定故投影恒定） | 见 tokens.css |
 | `on.saturated` | 用户内容色底上的前景（角色头像字；配色为应用指派的用户内容，无确定性承载面） | `#FFFFFF`，恒定，不在对比度契约内 |
-| `on.brand` | 品牌渐变连线胶囊、✓ 徽标、大纲集选中胶囊的前景（确定性品牌底，issue #240 起面板侧同走此令牌；底须配 `edge.label.bg`，见下） | `#FFFFFF`；`prefers-contrast: more` 翻黑（配合 `edge.label.bg` 近实色处理全程 ≥ 4.5:1） |
+| `on.brand` | 品牌渐变连线胶囊、✓ 徽标、大纲集选中胶囊与 AI 工具栏开关选中态/用户消息胶囊的前景（确定性品牌底，issue #240 起面板侧同走此令牌，issue #262 起后两处补齐；底须配 `edge.label.bg`，见下） | `#FFFFFF`；`prefers-contrast: more` 翻黑（配合 `edge.label.bg` 近实色处理全程 ≥ 4.5:1） |
 | `on.danger` | `danger` 实底上的动作前景（AI 批次删除确认按钮、设定集/资产条目删除悬停、菜单删除项悬停、删除确认对话框按钮、节点设置删除悬停；issue #240，#278 把该决策接线补齐至 editor/节点设置四处原字面 `#fff`） | `#FFFFFF`，恒定（浅色底 ≈ 5.4:1；深色底 ≈ 2.8:1 为已记录已知边界，不在对比度契约内） |
-| `edge.label.bg` | 品牌渐变胶囊底（branch 连线选项胶囊、大纲集选中胶囊；issue #240 起面板侧复用） | 基线品牌渐变；`prefers-contrast: more` 收敛为实色 `accent`（§2.6 背景近实色——渐变内部中段因 sRGB 伽马凸性对黑字跌破 4.5:1，采样用例钉住） |
+| `edge.label.bg` | 品牌渐变胶囊底（branch 连线选项胶囊、大纲集选中胶囊、AI 工具栏开关选中态、AI 用户消息胶囊；issue #240 起面板侧复用，issue #262 补齐后两处） | 基线品牌渐变；`prefers-contrast: more` 收敛为实色 `accent`（§2.6 背景近实色——渐变内部中段因 sRGB 伽马凸性对黑字跌破 4.5:1，采样用例钉住） |
 | `poster.menu.bg` / `poster.menu.bg-hover` / `poster.menu.border` | 首页海报悬浮 ⋯ 菜单钮的配对面与描边（前景走 `text.primary`；issue #261） | 浅色 `rgba(255,255,255,.82)` / `#FFFFFF` / 透明（与修复前逐位相同，视觉零变化）；深色 `rgba(38,38,44,.94)` / `#3A3A40` / `rgba(255,255,255,.14)`；`more` 背景近实色（`#FFFFFF` / `#26262C`）+ 描边加强，`reduce-transparency` 退化实色。半透明面在任意明暗海报上按纯黑/纯白最劣合成 ≥ 4.5:1（homeTokens.test.ts） |
 | `invalid.stripe` | 失效引用角标的灰斜纹 | `rgba(142,142,147,.35)`，恒定 |
 

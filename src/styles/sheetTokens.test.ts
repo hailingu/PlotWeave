@@ -4,7 +4,9 @@
  * 当前支持/拒绝/保留边界与唯一问题族矩阵见 docs/css-token-contract.md；
  * 分轮记录仅在 Git 历史保留，不在测试头注另维护一套范围。
  * F6 产品边界：#240 恒白危险前景及深色约 2.8:1 沿用既有决策；
- * #262 品牌配对、#265 悬空引用仍由具名注册表挂账；box-shadow 不禁字面色。
+ * #262 品牌配对（BRAND_RULES 黄金接线持有）与 #265 悬空引用均已修复
+ * 移出例外表（接线表随之为空；结构表仅余既有已审计的结构例外，如
+ * 海报用户内容层与遮罩 scrim）；box-shadow 不禁字面色。
  * F4 仅静态 linear-gradient 遮罩：动态 currentColor、未知色标与图像入口显式拒绝。
  */
 import { readFileSync, readdirSync } from 'node:fs'
@@ -316,13 +318,6 @@ const STRUCTURE_EXCEPTIONS: Readonly<
     reason: '遮罩：模态压暗 scrim（只承载 alpha）',
   },
   {
-    sheet: 'src/editor/editor.css',
-    selector: '.editor-tbtn-ai.on',
-    prop: 'color',
-    value: '#fff',
-    reason: '开放缺陷：品牌底固定白字，配对修复归 #262',
-  },
-  {
     sheet: 'src/settings/settings.css',
     selector: '.settings-key-state.ok',
     prop: 'background',
@@ -338,13 +333,6 @@ const STRUCTURE_EXCEPTIONS: Readonly<
   },
   {
     sheet: 'src/settings/settings.css',
-    selector: '.pw-ai-msg-user',
-    prop: 'color',
-    value: '#fff',
-    reason: '开放缺陷：品牌底固定白字，配对修复归 #262',
-  },
-  {
-    sheet: 'src/settings/settings.css',
     selector: '.pw-ai-ctx-toggle.on',
     prop: 'background',
     value: 'rgba(0, 179, 216, 0.12)',
@@ -357,8 +345,9 @@ const STRUCTURE_EXCEPTIONS: Readonly<
  * 接线例外注册表：悬空 var() 引用按开放缺陷跟踪。绑定到承载属性与条数——
  * 已豁免引用换属性承载（如 background 改 color）或新增第二条同属性声明
  * （实际条数 > 已审计）均按新违例点名，已知缺陷不因豁免而换位或扩张；
- * 属性或条数变动后须更新表项。当前为空：#265 的 --fill-tertiary 悬空已
- * 在 tokens.css 定义四环境令牌后修复并移出本表。
+ * 属性或条数变动后须更新表项。当前为空：#265 的 --fill-tertiary 悬空
+ * 已在 tokens.css 定义四环境令牌后修复移出本表（#262 的两处品牌底
+ * 固定白字属 STRUCTURE_EXCEPTIONS 结构侧，同轮修复移出结构表）。
  */
 const WIRING_EXCEPTIONS: Readonly<
   {
@@ -1011,6 +1000,46 @@ describe('F2-c 透明色简写的相邻转换与拒绝边界', () => {
       )
     },
   )
+})
+
+/** 品牌底消费点（issue #262）：AI 开关选中态与用户消息胶囊——前景统一
+ * 经 --on-brand、底经 --edge-label-bg（基线即品牌渐变，视觉零变化；more
+ * 下随 edge.label.bg 近实色收敛 + on-brand 翻黑，配对全程 ≥ 4.5:1）。 */
+const BRAND_RULES: Readonly<{ sheet: string; selector: string }[]> = [
+  { sheet: 'src/editor/editor.css', selector: '.editor-tbtn-ai.on' },
+  { sheet: 'src/settings/settings.css', selector: '.pw-ai-msg-user' },
+]
+
+describe('品牌底消费点配对（issue #262：more 对比度确定性前景/背景）', () => {
+  it('两处品牌底前景经 --on-brand、底经 --edge-label-bg（不得回退固定白字或裸渐变）', () => {
+    for (const { sheet, selector } of BRAND_RULES) {
+      const rule = ruleOf(sheet, selector)
+      expect(declOf(rule, 'color'), `${sheet} ${selector} color`).toBe(
+        'var(--on-brand)',
+      )
+      // 底经 edge-label-bg（基线解析为品牌渐变，简写色成分机器不建模
+      // 渐变 var——此处钉令牌引用本身，简写机器由危险规则族继续覆盖）
+      expect(
+        winningDecl(rule, ['background']).value,
+        `${sheet} ${selector} background`,
+      ).toBe('var(--edge-label-bg)')
+    }
+  })
+
+  it('more 对比度下前景/背景配对（实色收敛后的 accent 底）≥ 4.5:1（浅/深）', () => {
+    for (const [envName, env] of PAIR_ENVS.filter(
+      ([, e]) => e.contrast === 'more',
+    )) {
+      const tokens = tokenValues(env)
+      const fg = tokenPaint('--on-brand', tokens)
+      const bg = parsePaint(resolveChain('var(--edge-label-bg)', tokens))
+      if (!bg) throw new Error(`${envName} 品牌底非颜色值`)
+      expect(
+        contrastRatio(fg, bg),
+        `${envName} on-brand × edge-label-bg = ${contrastRatio(fg, bg).toFixed(2)}:1`,
+      ).toBeGreaterThanOrEqual(4.5)
+    }
+  })
 })
 
 describe('遮罩语义契约（issue #278：遮罩只消费 alpha）', () => {

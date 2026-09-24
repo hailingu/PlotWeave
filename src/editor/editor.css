@@ -320,8 +320,8 @@
 }
 
 .editor-tbtn-ai.on {
-  background: var(--brand-gradient);
+  background: var(--edge-label-bg);
   -webkit-background-clip: border-box;
   background-clip: border-box;
-  color: #fff;
+  color: var(--on-brand);
 }
