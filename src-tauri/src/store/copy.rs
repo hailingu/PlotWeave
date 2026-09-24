@@ -1,6 +1,9 @@
 //! 跨项目资产复制（数据模型 §7.3 项目复制 = 文档级复制 + 媒体整目录
 //! 拷贝）：全程句柄相对、逐项 no-follow，符号链接与异型条目拒绝，
-//! 失败回滚不遗留半拷贝。
+//! 失败回滚不遗留半拷贝。持久性屏障（issue #259）：每个副本文件内容
+//! fsync，接收条目的每个目标目录（含新建层级宿主）在条目就位后 fsync
+//! ——复制成功先于副本文档保存引用，媒体与目录条目须与导入的原子写
+//! 同级持久，同步失败上浮不粉饰成功。
 
 use cap_std::fs::Dir as CapDir;
 use tauri::AppHandle;
@@ -8,8 +11,28 @@ use tauri::AppHandle;
 use crate::store::error::{to_ipc_text, StoreError};
 #[cfg(unix)]
 use crate::store::persist::asset_identity;
+use crate::store::persist::atomic_io;
 use crate::store::persist::{open_dir_bound, projects_dir, projects_op_lock};
 use crate::store::types::validate_id;
+
+/// 目标目录的持久性屏障（§10.2，Unix）：fsync 目录句柄使本次在其内
+/// 创建的文件/子目录条目与已同步的文件内容同为持久；非 Unix 平台目录
+/// 句柄无法 fsync，沿用 `create_dir_all_durable` 的平台现状不设屏障。
+fn sync_dir_entries(dir: &CapDir, label: &str) -> Result<(), StoreError> {
+    #[cfg(unix)]
+    {
+        atomic_io!(
+            DirectorySync,
+            dir.open_dir(".").and_then(|d| d.into_std_file().sync_all())
+        )
+        .map_err(|e| StoreError::io(format!("同步目标资产目录失败（{label}）"), e))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (dir, label);
+        Ok(())
+    }
+}
 /// §7.3 复制项目：整目录拷贝项目资产（当前扁平布局下 `projects/{fromId}/
 /// assets` → `projects/{toId}/assets`），供 §10.5 保存边界的实路径复验在
 /// 副本侧通过。源资产目录缺失视为无资产（no-op）；存在时源根必须为非
@@ -99,24 +122,35 @@ fn copy_assets_tree(root: &CapDir, from_id: &str, to_id: &str) -> Result<(), Sto
     }
     // 拷贝目标是 {to}/assets：与 relPath 首段（§7.1）及实路径复验的资产根一致
     let src_dir = open_dir_bound(&src_proj, "assets", &md, "源资产目录")?;
-    root.create_dir_all(to_id)
-        .map_err(|e| StoreError::io("创建目标项目目录失败", e))?;
-    let dst_root = root
-        .open_dir(to_id)
-        .map_err(|e| StoreError::io("打开目标项目目录失败", e))?;
-    dst_root
-        .create_dir("assets")
-        .map_err(|e| StoreError::io("创建目标资产目录失败", e))?;
-    let dst_assets = dst_root
-        .open_dir("assets")
-        .map_err(|e| StoreError::io("打开目标资产目录失败", e))?;
-    if let Err(e) = copy_dir_handles(&src_dir, &dst_assets) {
+    if let Err(e) = copy_into_new_project(root, to_id, &src_dir) {
         // 回滚清理同款句柄相对删除（§10.2）：dst_root 被并发换成符号链接时
         // remove_dir_all 只移除链接自身，不进入其指向的外部树
         let _ = root.remove_dir_all(to_id);
         return Err(e);
     }
     Ok(())
+}
+/// 目标侧落盘段（copy_assets_tree 收尾，issue #259）：创建 {to_id} 与
+/// assets、逐级宿主屏障（§10.2：宿主先于内容同步，失败时目录内尚无内容
+/// 产生）与递归拷贝。任一失败由调用方统一回滚 {to_id} 整树——同步失败
+/// 不得提前返回成功，也不得遗留半拷贝。
+fn copy_into_new_project(root: &CapDir, to_id: &str, src_dir: &CapDir) -> Result<(), StoreError> {
+    root.create_dir_all(to_id)
+        .map_err(|e| StoreError::io("创建目标项目目录失败", e))?;
+    // {to_id} 新目录条目的宿主屏障：projects 根
+    sync_dir_entries(root, "projects 根")?;
+    let dst_root = root
+        .open_dir(to_id)
+        .map_err(|e| StoreError::io("打开目标项目目录失败", e))?;
+    dst_root
+        .create_dir("assets")
+        .map_err(|e| StoreError::io("创建目标资产目录失败", e))?;
+    // assets 新目录条目的宿主屏障：{to_id} 目录
+    sync_dir_entries(&dst_root, to_id)?;
+    let dst_assets = dst_root
+        .open_dir("assets")
+        .map_err(|e| StoreError::io("打开目标资产目录失败", e))?;
+    copy_dir_handles(src_dir, &dst_assets, "assets")
 }
 /// 递归拷贝目录树（句柄相对 + 逐项 no-follow，§10.2）：目录对应创建，
 /// 普通文件逐个拷贝，符号链接与异型条目拒绝——副本绝不携带根外内容。
@@ -126,7 +160,7 @@ fn copy_assets_tree(root: &CapDir, from_id: &str, to_id: &str) -> Result<(), Sto
 /// 文件以 create_new 排他创建，预置在目标路径上的符号链接无法截获写入；
 /// 目标子目录 create_dir 排他创建后立即打开，残余窗口内的替换也被 cap-std
 /// 沙箱限定在 projects/ 树内。
-fn copy_dir_handles(src: &CapDir, dst: &CapDir) -> Result<(), StoreError> {
+fn copy_dir_handles(src: &CapDir, dst: &CapDir, dst_label: &str) -> Result<(), StoreError> {
     let entries = src
         .entries()
         .map_err(|e| StoreError::io("扫描源资产目录失败", e))?;
@@ -151,7 +185,7 @@ fn copy_dir_handles(src: &CapDir, dst: &CapDir) -> Result<(), StoreError> {
             let child_dst = dst
                 .open_dir(&name)
                 .map_err(|e| StoreError::io(format!("打开目标资产子目录失败（{shown}）"), e))?;
-            copy_dir_handles(&child_src, &child_dst)?;
+            copy_dir_handles(&child_src, &child_dst, &shown)?;
         } else if ft.is_file() {
             copy_file_bound(src, &name, &md, dst)?;
         } else {
@@ -160,7 +194,9 @@ fn copy_dir_handles(src: &CapDir, dst: &CapDir) -> Result<(), StoreError> {
             )));
         }
     }
-    Ok(())
+    // 条目就位后的目录持久性屏障（issue #259）：本目录内新建的文件与
+    // 子目录条目 fsync（子目录各自的屏障已在递归内完成）
+    sync_dir_entries(dst, dst_label)
 }
 /// 单文件绑定拷贝（句柄相对）：源从句柄读（身份与归类时一致），目标排他创建。
 fn copy_file_bound(
@@ -193,15 +229,111 @@ fn copy_file_bound(
         )
         .map_err(|e| StoreError::io(format!("创建目标资产失败（{shown}）"), e))?;
     std::io::copy(&mut src, &mut dst_file)
-        .map(|_| ())
-        .map_err(|e| StoreError::io(format!("拷贝资产文件失败（{shown}）"), e))
+        .map_err(|e| StoreError::io(format!("拷贝资产文件失败（{shown}）"), e))?;
+    // 文件内容持久性屏障（issue #259）：失败上浮，不得提前返回成功
+    atomic_io!(FileSync, dst_file.sync_all())
+        .map_err(|e| StoreError::io(format!("同步资产文件失败（{shown}）"), e))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::persist::faults::{Injection, Stage};
     use crate::store::testutil::{cap, cleanup_temp, temp_projects_dir};
     use std::fs;
+
+    /// 复制夹具（issue #259 屏障测试共用）：源含两个文件与一个子目录，
+    /// 目标控制文件就位。
+    fn copy_fixture(projects: &std::path::Path) {
+        let src = projects.join("p-1").join("assets");
+        fs::create_dir_all(src.join("sub")).expect("建源目录");
+        fs::write(src.join("a.png"), b"A").expect("写资产");
+        fs::write(src.join("sub").join("b.png"), b"B").expect("写子目录资产");
+        fs::write(projects.join("p-2.json"), b"{}").expect("建目标控制文件");
+    }
+
+    #[test]
+    fn copy_surfaces_file_sync_failure_and_rolls_back() {
+        let projects = temp_projects_dir();
+        copy_fixture(&projects);
+        let _inj = Injection::new(Some(Stage::FileSync), None);
+        let err = copy_assets_tree(&cap(&projects), "p-1", "p-2").unwrap_err();
+        assert!(
+            matches!(err, StoreError::Io { ref context, .. } if context.contains("同步资产文件失败")),
+            "意外诊断：{err}"
+        );
+        // 失败回滚：不遗留半拷贝目标；源资产不受损
+        assert!(!projects.join("p-2").exists(), "同步失败后不得遗留目标目录");
+        assert_eq!(
+            fs::read(projects.join("p-1").join("assets").join("a.png")).unwrap(),
+            b"A"
+        );
+        cleanup_temp(&projects);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_surfaces_dir_sync_failure_and_rolls_back() {
+        let projects = temp_projects_dir();
+        copy_fixture(&projects);
+        let _inj = Injection::new(Some(Stage::DirectorySync), None);
+        let err = copy_assets_tree(&cap(&projects), "p-1", "p-2").unwrap_err();
+        assert!(
+            matches!(err, StoreError::Io { ref context, .. } if context.contains("同步目标资产目录失败")),
+            "意外诊断：{err}"
+        );
+        assert!(!projects.join("p-2").exists(), "屏障失败后不得遗留目标目录");
+        assert_eq!(
+            fs::read(projects.join("p-1").join("assets").join("a.png")).unwrap(),
+            b"A"
+        );
+        cleanup_temp(&projects);
+    }
+
+    /// 成功路径必须抵达文件与目录同步屏障（§10.2，对齐导入的原子写）：
+    /// 宿主目录条目先于内容文件同步，每个接收条目的目标目录在条目
+    /// 就位后同步。
+    #[cfg(unix)]
+    #[test]
+    fn copy_reaches_sync_stages_before_success() {
+        let projects = temp_projects_dir();
+        copy_fixture(&projects);
+        let inj = Injection::new(None, None);
+        copy_assets_tree(&cap(&projects), "p-1", "p-2").expect("拷贝项目资产");
+        let stages = inj.stages();
+        drop(inj);
+        assert_eq!(
+            stages
+                .iter()
+                .filter(|s| matches!(s, Stage::FileSync))
+                .count(),
+            2,
+            "两个源文件各自的 fsync 均须抵达：{stages:?}"
+        );
+        // 屏障点位：projects 根（{to_id} 条目）、{to_id}（assets 条目）、
+        // assets 与 sub（各自接收的文件/子目录条目）
+        assert!(
+            stages
+                .iter()
+                .filter(|s| matches!(s, Stage::DirectorySync))
+                .count()
+                >= 4,
+            "目标目录屏障缺失：{stages:?}"
+        );
+        let first_dir_sync = stages
+            .iter()
+            .position(|s| matches!(s, Stage::DirectorySync))
+            .expect("存在目录屏障");
+        let first_file_sync = stages
+            .iter()
+            .position(|s| matches!(s, Stage::FileSync))
+            .expect("存在文件同步");
+        assert!(
+            first_dir_sync < first_file_sync,
+            "宿主目录屏障须先于内容文件同步：{stages:?}"
+        );
+        cleanup_temp(&projects);
+    }
 
     #[test]
     fn copy_assets_tree_copies_regular_files_recursively() {

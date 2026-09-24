@@ -79,7 +79,9 @@ impl Drop for Injection {
 /// 包住单个真实系统调用；模拟磁盘/同步失败，保留其余阶段的副作用。
 /// 抵达挂有探针的阶段时先执行探针（探针可观察/修改真实文件系统状态、
 /// 参与跨线程协同），再按注入判定失败或执行原操作。
-pub(super) fn run<T>(stage: Stage, operation: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
+/// `pub(crate)`：`atomic_io!` 宏经 `$crate` 路径在 store::persist 之外
+/// 展开（如 store::copy 的持久性屏障），调用方需与其同可见。
+pub(crate) fn run<T>(stage: Stage, operation: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
     let (fail, probe) = STATE.with(|slot| {
         let mut slot = slot.borrow_mut();
         let Some(state) = slot.as_mut() else {
