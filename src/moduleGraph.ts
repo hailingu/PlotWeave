@@ -9,13 +9,22 @@ import * as ts from 'typescript'
  * 用 TypeScript AST 解析维护模块（src 下非测试 .ts/.tsx）的相对边：
  * import / re-export / 动态 import() / import('…').Type 类型查询
  * （PR #116 评审 4000329365 补录——类型查询只存在于编译期，漏采会让
- * 反向类型环对编译期断言隐形）。外部包说明符不参与构图；资源导入
+ * 反向类型环对编译期断言隐形）。外部包说明符不参与环构图，但由
+ * buildSrcExternalEdges 单独采集（issue #266 的模型纯度守卫输入——
+ * 无环是比分层纯度更弱的性质，框架运行时依赖须另查）；资源导入
  * （css/svg 等）在解析层显式分类而非静默跳过；无法解析的相对 TS 导入
  * 抛错——构图不健全比漏检更危险。
  */
 /** 参与构图的关系边：target = 解析后的模块键，typeOnly = 是否仅类型边。 */
 export interface ModuleEdge {
   target: string
+  typeOnly: boolean
+}
+
+/** 外部包说明符边（issue #266 守卫输入）：spec = 源码原始说明符
+ * （如 '@xyflow/react'、'react/jsx-runtime'），typeOnly = 是否仅编译期。 */
+export interface ExternalEdge {
+  spec: string
   typeOnly: boolean
 }
 
@@ -67,25 +76,21 @@ function resolveEdgeTarget(
   return existsSync(base) ? { kind: 'asset' } : { kind: 'unresolved' }
 }
 
-/** 单条 import 的原始边（null = 非相对说明符，外部依赖不参与构图）。 */
+/** 单条 import 的原始边（外部包说明符同样返回，由调用方按需筛选；
+ * null = 非字符串说明符）。仅类型整体导入（import type {...}）擦除后
+ * 不产生运行时边；isTypeOnly 已废弃，相位修饰以 phaseModifier 为准（S1874） */
 function edgeOfImport(node: ts.ImportDeclaration): RawEdge | null {
   if (!ts.isStringLiteral(node.moduleSpecifier)) return null
-  const spec = node.moduleSpecifier.text
-  if (!spec.startsWith('.')) return null
   const clause = node.importClause
-  // 仅类型整体导入（import type {...}）擦除后不产生运行时边；
-  // isTypeOnly 已废弃，相位修饰以 phaseModifier 为准（S1874）
   const typeOnly = clause?.phaseModifier === ts.SyntaxKind.TypeKeyword
-  return { spec, typeOnly }
+  return { spec: node.moduleSpecifier.text, typeOnly }
 }
 
 /** export ... from '...' 的原始边：具名重导出在运行时仍执行目标模块。 */
 function edgeOfExport(node: ts.ExportDeclaration): RawEdge | null {
   if (!node.moduleSpecifier || !ts.isStringLiteral(node.moduleSpecifier))
     return null
-  const spec = node.moduleSpecifier.text
-  if (!spec.startsWith('.')) return null
-  return { spec, typeOnly: node.isTypeOnly === true }
+  return { spec: node.moduleSpecifier.text, typeOnly: node.isTypeOnly === true }
 }
 
 /** 动态 import('...') 的原始边（恒为运行时边）。 */
@@ -97,9 +102,7 @@ function edgeOfDynamicImport(node: ts.CallExpression): RawEdge | null {
     !ts.isStringLiteral(arg)
   )
     return null
-  const spec = arg.text
-  if (!spec.startsWith('.')) return null
-  return { spec, typeOnly: false }
+  return { spec: arg.text, typeOnly: false }
 }
 
 /** import('...').Type 类型查询的原始边（恒为编译期边；PR #116 评审
@@ -108,13 +111,11 @@ function edgeOfDynamicImport(node: ts.CallExpression): RawEdge | null {
 function edgeOfImportType(node: ts.ImportTypeNode): RawEdge | null {
   if (!ts.isLiteralTypeNode(node.argument)) return null
   if (!ts.isStringLiteral(node.argument.literal)) return null
-  const spec = node.argument.literal.text
-  if (!spec.startsWith('.')) return null
-  return { spec, typeOnly: true }
+  return { spec: node.argument.literal.text, typeOnly: true }
 }
 
-/** 遍历 AST 收集单文件的原始边集（typeof import('…') 内层的
- * ImportTypeNode 经递归子节点同样命中）。 */
+/** 遍历 AST 收集单文件的原始边集（相对与外部包说明符都在内；
+ * typeof import('…') 内层的 ImportTypeNode 经递归子节点同样命中）。 */
 function edgesOfSourceFile(sf: ts.SourceFile): RawEdge[] {
   const edges: RawEdge[] = []
   const visit = (node: ts.Node): void => {
@@ -150,24 +151,49 @@ export function relativeEdgesOfSource(
     true,
     kind,
   )
-  return edgesOfSourceFile(sf)
+  return edgesOfSourceFile(sf).filter((e) => e.spec.startsWith('.'))
 }
 
-/** 解析失败的相对 TS 导入属构图不健全（可能掩盖环），直接报错而非跳过。 */
-function resolveEdgeKeys(
-  file: string,
-  keyOf: (p: string) => string,
-): ModuleEdge[] {
-  const kind = file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS
+/** 夹具解析入口：从内存源码文本提取外部包边（issue #266 守卫的反例
+ * 验证入口，不落盘）。 */
+export function externalEdgesOfSource(
+  code: string,
+  kind: ts.ScriptKind = ts.ScriptKind.TS,
+): ExternalEdge[] {
   const sf = ts.createSourceFile(
+    'fixture.ts',
+    code,
+    ts.ScriptTarget.Latest,
+    true,
+    kind,
+  )
+  return edgesOfSourceFile(sf)
+    .filter((e) => !e.spec.startsWith('.'))
+    .map(({ spec, typeOnly }) => ({ spec, typeOnly }))
+}
+
+/** 单文件的已解析 AST（环构图与外部边采集共用）。 */
+function parseSourceFile(file: string): ts.SourceFile {
+  const kind = file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS
+  return ts.createSourceFile(
     file,
     readFileSync(file, 'utf8'),
     ts.ScriptTarget.Latest,
     true,
     kind,
   )
+}
+
+/** 解析失败的相对 TS 导入属构图不健全（可能掩盖环），直接报错而非跳过。
+ * 外部包说明符不参与环构图（由 buildSrcExternalEdges 单独采集）。 */
+function resolveEdgeKeys(
+  file: string,
+  keyOf: (p: string) => string,
+): ModuleEdge[] {
+  const sf = parseSourceFile(file)
   const out: ModuleEdge[] = []
   for (const e of edgesOfSourceFile(sf)) {
+    if (!e.spec.startsWith('.')) continue
     const resolved = resolveEdgeTarget(file, e.spec)
     if (resolved.kind === 'asset') continue
     if (resolved.kind === 'unresolved')
@@ -189,6 +215,69 @@ export function buildSrcModuleGraph(
     edges.set(key, resolveEdgeKeys(file, keyOf))
   }
   return edges
+}
+
+/** 全图的外部包边（issue #266 守卫输入）：键与 buildSrcModuleGraph 同
+ * 口径，值为该模块的外部包说明符边（spec 保持源码原样，不解析）。 */
+export function buildSrcExternalEdges(
+  srcRoot: string,
+): Map<string, ExternalEdge[]> {
+  const keyOf = (p: string): string => relative(srcRoot, p).split(sep).join('/')
+  const edges = new Map<string, ExternalEdge[]>()
+  for (const file of listModules(srcRoot)) {
+    const external = edgesOfSourceFile(parseSourceFile(file))
+      .filter((e) => !e.spec.startsWith('.'))
+      .map(({ spec, typeOnly }) => ({ spec, typeOnly }))
+    edges.set(keyOf(file), external)
+  }
+  return edges
+}
+
+/** 模型层框架运行时依赖的判定口径（issue #266）：react 家族与
+ * React Flow 视为框架包，`import type` 的编译期依赖合法（对齐运行态
+ * 形状），运行时值导入违规。契约所有者：docs/data-model.md §2。 */
+const FRAMEWORK_PACKAGE = /^(react|react-dom|@xyflow\/react)/
+
+/** 模型层框架运行时依赖违规（issue #266）：src/model 生产模块对框架包
+ * 只允许编译期依赖。返回 `文件 → 包` 违规清单，空 = 通过。 */
+export function modelFrameworkRuntimeViolations(
+  external: Map<string, ExternalEdge[]>,
+): string[] {
+  const offenders: string[] = []
+  for (const [file, list] of external) {
+    if (!file.startsWith('model/')) continue
+    for (const e of list) {
+      if (FRAMEWORK_PACKAGE.test(e.spec) && !e.typeOnly)
+        offenders.push(`${file} → ${e.spec}`)
+    }
+  }
+  return offenders
+}
+
+/** model → editor 运行时值依赖的白名单（issue #266）：登记的纯叶子
+ * 规则模块（自身零导入）——graphRules（边/端口字面量与判别）与
+ * settings（设定集默认值/归一化）。type-only 依赖不受限。 */
+const MODEL_EDITOR_RUNTIME_ALLOWLIST = new Set([
+  'editor/graphRules.ts',
+  'editor/settings.ts',
+])
+
+/** 模型层 → editor 的运行时依赖越界（issue #266）：值依赖只允许白名单
+ * 纯叶子，其余 editor 模块（组件/hook/面板等）仅 type-only。返回
+ * `文件 → 目标` 违规清单，空 = 通过。 */
+export function modelEditorRuntimeViolations(
+  graph: Map<string, ModuleEdge[]>,
+): string[] {
+  const offenders: string[] = []
+  for (const [file, list] of graph) {
+    if (!file.startsWith('model/')) continue
+    for (const e of list) {
+      if (!e.target.startsWith('editor/')) continue
+      if (!e.typeOnly && !MODEL_EDITOR_RUNTIME_ALLOWLIST.has(e.target))
+        offenders.push(`${file} → ${e.target}`)
+    }
+  }
+  return offenders
 }
 
 /** Tarjan 强连通分量：仅类型边（typeOnly）也会成环，构图时不剔除。 */
