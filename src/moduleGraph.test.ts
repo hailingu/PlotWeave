@@ -1,9 +1,17 @@
 import { fileURLToPath } from 'node:url'
+import * as ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 import {
+  allowlistRuntimeLeafViolations,
+  buildSrcExternalEdges,
   buildSrcModuleGraph,
   cyclesOf,
+  externalEdgesOfSource,
+  modelEditorRuntimeViolations,
+  modelFrameworkRuntimeViolations,
+  modelRuntimeClosure,
   relativeEdgesOfSource,
+  type ExternalEdge,
   type ModuleEdge,
 } from './moduleGraph'
 
@@ -20,6 +28,10 @@ import {
  * 边采集的语法形态覆盖（PR #116 评审 4000329365）由夹具单测直接验证：
  * import('…').Type 类型查询在 AST 中是 ImportTypeNode 而非
  * CallExpression，漏采会让反向类型环对编译期断言隐形。
+ *
+ * 模型层纯度守卫（issue #266）：无环是比分层纯度更弱的性质，二者不可
+ * 互替——框架运行时依赖禁止与 model → editor 运行时值依赖白名单由
+ * 专用判定函数另行检查，判定契约经合成图反例验证（合法依赖不误报）。
  */
 
 /** src 根目录：测试文件位于 src/ 下，直接锚定自身位置。 */
@@ -86,5 +98,245 @@ describe('模块依赖图无环（issue 106，Dependency Design）', () => {
 
   it('编译期图（含 import type 的反向类型边）无环', () => {
     expect(cyclesOf(edges)).toEqual([])
+  })
+})
+
+describe('模型层纯度守卫（issue #266）', () => {
+  it('反例：框架包值导入是运行时外边，import type 是编译期外边', () => {
+    const edges = externalEdgesOfSource(
+      "import { Edge } from '@xyflow/react'\n" +
+        "import type { Viewport } from '@xyflow/react'\n" +
+        "import { useState } from 'react'",
+    )
+    expect(edges).toContainEqual({ spec: '@xyflow/react', typeOnly: false })
+    expect(edges).toContainEqual({ spec: '@xyflow/react', typeOnly: true })
+    expect(edges).toContainEqual({ spec: 'react', typeOnly: false })
+  })
+
+  it('反例：框架运行时依赖与 editor 值依赖越界被守卫识别，合法依赖不误报', () => {
+    const external = new Map<string, ExternalEdge[]>([
+      ['model/x.ts', [{ spec: '@xyflow/react', typeOnly: false }]],
+      ['model/ok.ts', [{ spec: '@xyflow/react', typeOnly: true }]],
+      // editor 值导入 react 是组件层的正常形态，不在模型闭包内即不标记
+      ['editor/x.tsx', [{ spec: 'react', typeOnly: false }]],
+    ])
+    const graph = new Map<string, ModuleEdge[]>([
+      // 无运行时出边：model 根闭包只含自身
+      ['model/x.ts', []],
+      ['model/ok.ts', []],
+      ['editor/x.tsx', []],
+    ])
+    expect(modelFrameworkRuntimeViolations(graph, external)).toEqual([
+      'model/x.ts → @xyflow/react',
+    ])
+
+    const layered = new Map<string, ModuleEdge[]>([
+      [
+        'model/a.ts',
+        [
+          // 登记的纯叶子值依赖与任意 type-only 依赖均合法
+          { target: 'editor/graphRules.ts', typeOnly: false },
+          { target: 'editor/settings.ts', typeOnly: false },
+          { target: 'editor/nodes/types.ts', typeOnly: true },
+          { target: 'editor/SomePanel.tsx', typeOnly: false },
+        ],
+      ],
+      // editor → model 是正常依赖方向，不受限
+      ['editor/b.tsx', [{ target: 'model/document.ts', typeOnly: false }]],
+    ])
+    expect(modelEditorRuntimeViolations(layered)).toEqual([
+      'model/a.ts → editor/SomePanel.tsx',
+    ])
+  })
+
+  it('src/model 生产模块无框架运行时依赖（框架类型仅 import type）', () => {
+    expect(
+      modelFrameworkRuntimeViolations(
+        buildSrcModuleGraph(SRC_ROOT),
+        buildSrcExternalEdges(SRC_ROOT),
+      ),
+    ).toEqual([])
+  })
+
+  it('src/model → editor 的运行时值依赖限于登记的纯叶子规则', () => {
+    expect(modelEditorRuntimeViolations(buildSrcModuleGraph(SRC_ROOT))).toEqual(
+      [],
+    )
+  })
+})
+
+describe('模型层纯度守卫的边界完整性（PR #305 评审）', () => {
+  it('反例：逐说明符 type-only（import { type Edge }）整条边为编译期，混合值绑定仍为运行时边', () => {
+    const allType = externalEdgesOfSource(
+      "import { type Edge } from '@xyflow/react'",
+    )
+    expect(allType).toEqual([{ spec: '@xyflow/react', typeOnly: true }])
+
+    const mixed = externalEdgesOfSource(
+      "import { type Edge, applyNodeChanges } from '@xyflow/react'",
+    )
+    expect(mixed).toEqual([{ spec: '@xyflow/react', typeOnly: false }])
+
+    const reexport = relativeEdgesOfSource("export { type Shape } from './t'")
+    expect(reexport).toEqual([{ spec: './t', typeOnly: true }])
+  })
+
+  it('反例：JSX 隐式引入 react/jsx-runtime 运行时边（jsx: react-jsx），计入守卫①', () => {
+    const withJsx = externalEdgesOfSource(
+      'export const A = () => <div />',
+      ts.ScriptKind.TSX,
+    )
+    expect(withJsx).toContainEqual({
+      spec: 'react/jsx-runtime',
+      typeOnly: false,
+    })
+    const noJsx = externalEdgesOfSource('export const A = 1', ts.ScriptKind.TSX)
+    expect(noJsx.some((e) => e.spec.startsWith('react/'))).toBe(false)
+
+    const synthetic = new Map<string, ExternalEdge[]>([
+      ['model/x.tsx', [{ spec: 'react/jsx-runtime', typeOnly: false }]],
+    ])
+    const graph = new Map<string, ModuleEdge[]>([['model/x.tsx', []]])
+    expect(modelFrameworkRuntimeViolations(graph, synthetic)).toEqual([
+      'model/x.tsx → react/jsx-runtime',
+    ])
+  })
+
+  it('反例：白名单目标的运行时出边破例（相对值边与外部运行时边）被识别', () => {
+    const graph = new Map<string, ModuleEdge[]>([
+      [
+        'editor/graphRules.ts',
+        [
+          { target: 'model/document.ts', typeOnly: false },
+          { target: 'editor/other.ts', typeOnly: true },
+        ],
+      ],
+      [
+        'editor/settings.ts',
+        [{ target: 'editor/graphRules.ts', typeOnly: true }],
+      ],
+    ])
+    const external = new Map<string, ExternalEdge[]>([
+      ['editor/settings.ts', [{ spec: 'lodash', typeOnly: false }]],
+      ['editor/graphRules.ts', [{ spec: '@xyflow/react', typeOnly: true }]],
+    ])
+    expect(allowlistRuntimeLeafViolations(graph, external)).toEqual([
+      'editor/graphRules.ts → model/document.ts',
+      'editor/settings.ts → lodash（外部）',
+    ])
+  })
+
+  it('真图：白名单目标保持运行时叶子，模型层无 JSX/框架运行时依赖', () => {
+    expect(
+      allowlistRuntimeLeafViolations(
+        buildSrcModuleGraph(SRC_ROOT),
+        buildSrcExternalEdges(SRC_ROOT),
+      ),
+    ).toEqual([])
+    expect(
+      modelFrameworkRuntimeViolations(
+        buildSrcModuleGraph(SRC_ROOT),
+        buildSrcExternalEdges(SRC_ROOT),
+      ),
+    ).toEqual([])
+  })
+})
+
+describe('模型层运行时闭包（PR #305 二轮评审）', () => {
+  it('闭包含共享叶子与 editor 纯叶子，不含不可达的组件层', () => {
+    const closure = modelRuntimeClosure(buildSrcModuleGraph(SRC_ROOT))
+    // 评审引用的具体传递路径：model/normalize*.ts → src/uid.ts（运行时边）
+    expect(closure.has('uid.ts')).toBe(true)
+    expect(closure.has('editor/graphRules.ts')).toBe(true)
+    expect(closure.has('editor/settings.ts')).toBe(true)
+    // 组件层不可达：editor 面板/视图不在 model 运行时闭包内
+    expect([...closure].some((k) => k.startsWith('editor/panels/'))).toBe(false)
+    expect(closure.has('home/HomePage.tsx')).toBe(false)
+  })
+
+  it('反例：闭包内共享叶子的框架运行时边被识别，不可达组件不误报', () => {
+    const graph = new Map<string, ModuleEdge[]>([
+      ['model/a.ts', [{ target: 'shared.ts', typeOnly: false }]],
+      ['shared.ts', [{ target: 'deeper.ts', typeOnly: false }]],
+      ['deeper.ts', []],
+      // 不可达组件：其 react 运行时边不在闭包口径内
+      ['editor/SomePanel.tsx', []],
+    ])
+    const external = new Map<string, ExternalEdge[]>([
+      ['shared.ts', [{ spec: 'react', typeOnly: false }]],
+      ['deeper.ts', [{ spec: '@xyflow/react', typeOnly: true }]],
+      ['editor/SomePanel.tsx', [{ spec: 'react', typeOnly: false }]],
+    ])
+    expect(modelFrameworkRuntimeViolations(graph, external)).toEqual([
+      'shared.ts → react',
+    ])
+  })
+})
+
+describe('静态模板字面量与闭包 editor 越界（PR #305 三轮评审）', () => {
+  it('反例：无替换模板字面量动态导入计入边集', () => {
+    const external = externalEdgesOfSource('const m = import(`react`)')
+    expect(external).toEqual([{ spec: 'react', typeOnly: false }])
+    const relative = relativeEdgesOfSource('const m = import(`./lazy`)')
+    expect(relative).toEqual([{ spec: './lazy', typeOnly: false }])
+  })
+
+  it('反例：经共享模块间接触达非白名单 editor 模块被识别（闭包口径）', () => {
+    const graph = new Map<string, ModuleEdge[]>([
+      ['model/a.ts', [{ target: 'shared.ts', typeOnly: false }]],
+      ['shared.ts', [{ target: 'editor/SomePanel.tsx', typeOnly: false }]],
+    ])
+    expect(modelEditorRuntimeViolations(graph)).toEqual([
+      'shared.ts → editor/SomePanel.tsx',
+    ])
+  })
+})
+
+describe('动态不可解析导入的 fail-closed（PR #305 四轮评审）', () => {
+  it('带替换模板的动态导入采集为 dynamic 边（相对与外部），不进环构图', () => {
+    const relative = relativeEdgesOfSource('const m = import(`./x/${n}`)')
+    expect(relative).toEqual([
+      { spec: './x/${n}', typeOnly: false, dynamic: true },
+    ])
+    const external = externalEdgesOfSource('const m = import(`pkg-${n}`)')
+    expect(external).toEqual([
+      { spec: 'pkg-${n}', typeOnly: false, dynamic: true },
+    ])
+    // 环构图只收可静态定目标的边：dynamic 边不参与（fixture 路径无法解析）
+    const edges = buildSrcModuleGraph(SRC_ROOT)
+    expect(cyclesOf(edges)).toEqual([])
+  })
+
+  it('守卫②：闭包内相对动态导入视为违规（运行时可达任意模块，白名单不可静态验证）', () => {
+    const graph = new Map<string, ModuleEdge[]>([
+      ['model/a.ts', [{ target: 'shared.ts', typeOnly: false }]],
+      [
+        'shared.ts',
+        [
+          { target: './x/${n}', typeOnly: false, dynamic: true },
+          { target: 'editor/graphRules.ts', typeOnly: false },
+        ],
+      ],
+    ])
+    expect(modelEditorRuntimeViolations(graph)).toEqual([
+      'shared.ts → 动态导入（不可静态解析）：./x/${n}',
+    ])
+  })
+
+  it('守卫①：闭包内外部动态导入视为违规（目标包运行时才定）', () => {
+    const graph = new Map<string, ModuleEdge[]>([['model/a.ts', []]])
+    const external = new Map<string, ExternalEdge[]>([
+      ['model/a.ts', [{ spec: 'pkg-${n}', typeOnly: false, dynamic: true }]],
+    ])
+    expect(modelFrameworkRuntimeViolations(graph, external)).toEqual([
+      'model/a.ts → 动态导入（不可静态解析）：pkg-${n}',
+    ])
+  })
+
+  it('真图：无动态不可解析导入，两守卫维持全空', () => {
+    const graph = buildSrcModuleGraph(SRC_ROOT)
+    const external = buildSrcExternalEdges(SRC_ROOT)
+    expect(modelEditorRuntimeViolations(graph)).toEqual([])
+    expect(modelFrameworkRuntimeViolations(graph, external)).toEqual([])
   })
 })
