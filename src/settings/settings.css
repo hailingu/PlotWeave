@@ -157,8 +157,8 @@
 
 .pw-ai-msg-user {
   align-self: flex-end;
-  background: var(--brand-gradient);
-  color: #fff;
+  background: var(--edge-label-bg);
+  color: var(--on-brand);
   border-bottom-right-radius: 4px;
 }
 
