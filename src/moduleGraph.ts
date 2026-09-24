@@ -284,20 +284,47 @@ export function buildSrcExternalEdges(
   return edges
 }
 
-/** 模型层框架运行时依赖的判定口径（issue #266）：react 家族与
- * React Flow 视为框架包，`import type` 的编译期依赖合法（对齐运行态
- * 形状），运行时值导入违规。契约所有者：docs/data-model.md §2。 */
+/** 框架包说明符（运行时依赖禁止，issue #266）：react 家族与 React Flow。 */
 const FRAMEWORK_PACKAGE = /^(react|react-dom|@xyflow\/react)/
 
-/** 模型层框架运行时依赖违规（issue #266）：src/model 生产模块对框架包
- * 只允许编译期依赖。返回 `文件 → 包` 违规清单，空 = 通过。 */
+/** 模型层运行时可达闭包（PR #305 二轮评审）：自 model/ 模块沿非
+ * type-only 相对边可达的全部模块（含根）——model 经共享叶子（如
+ * `src/uid.ts`，normalize*.ts 的运行时依赖）传递可达的模块都在闭包内；
+ * 不可达的组件层（editor 面板/视图等）不在其中。 */
+export function modelRuntimeClosure(
+  graph: Map<string, ModuleEdge[]>,
+): Set<string> {
+  const closure = new Set<string>()
+  const queue: string[] = []
+  for (const key of graph.keys()) {
+    if (!key.startsWith('model/')) continue
+    closure.add(key)
+    queue.push(key)
+  }
+  while (queue.length > 0) {
+    const current = queue.pop()!
+    for (const e of graph.get(current) ?? []) {
+      if (e.typeOnly || closure.has(e.target)) continue
+      closure.add(e.target)
+      queue.push(e.target)
+    }
+  }
+  return closure
+}
+
+/** 模型层框架运行时依赖违规（issue #266；PR #305 二轮评审升级为闭包
+ * 口径）：自 model 沿运行时边可达闭包内的**任何**模块对框架包
+ * （react / react-dom / @xyflow/react*）只允许 `import type` 编译期
+ * 依赖——model 经共享叶子（uid.ts 等）传递引入框架同样破坏「运行时
+ * 不依赖框架」。返回 `文件 → 包` 违规清单，空 = 通过；不可达组件层的
+ * 框架值导入不误报。契约所有者：docs/data-model.md §2。 */
 export function modelFrameworkRuntimeViolations(
+  graph: Map<string, ModuleEdge[]>,
   external: Map<string, ExternalEdge[]>,
 ): string[] {
   const offenders: string[] = []
-  for (const [file, list] of external) {
-    if (!file.startsWith('model/')) continue
-    for (const e of list) {
+  for (const file of modelRuntimeClosure(graph)) {
+    for (const e of external.get(file) ?? []) {
       if (FRAMEWORK_PACKAGE.test(e.spec) && !e.typeOnly)
         offenders.push(`${file} → ${e.spec}`)
     }

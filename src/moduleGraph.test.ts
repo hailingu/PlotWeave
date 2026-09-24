@@ -9,6 +9,7 @@ import {
   externalEdgesOfSource,
   modelEditorRuntimeViolations,
   modelFrameworkRuntimeViolations,
+  modelRuntimeClosure,
   relativeEdgesOfSource,
   type ExternalEdge,
   type ModuleEdge,
@@ -116,14 +117,20 @@ describe('模型层纯度守卫（issue #266）', () => {
     const external = new Map<string, ExternalEdge[]>([
       ['model/x.ts', [{ spec: '@xyflow/react', typeOnly: false }]],
       ['model/ok.ts', [{ spec: '@xyflow/react', typeOnly: true }]],
-      // editor 值导入 react 是组件层的正常形态，不在模型守卫范围
+      // editor 值导入 react 是组件层的正常形态，不在模型闭包内即不标记
       ['editor/x.tsx', [{ spec: 'react', typeOnly: false }]],
     ])
-    expect(modelFrameworkRuntimeViolations(external)).toEqual([
+    const graph = new Map<string, ModuleEdge[]>([
+      // 无运行时出边：model 根闭包只含自身
+      ['model/x.ts', []],
+      ['model/ok.ts', []],
+      ['editor/x.tsx', []],
+    ])
+    expect(modelFrameworkRuntimeViolations(graph, external)).toEqual([
       'model/x.ts → @xyflow/react',
     ])
 
-    const graph = new Map<string, ModuleEdge[]>([
+    const layered = new Map<string, ModuleEdge[]>([
       [
         'model/a.ts',
         [
@@ -137,14 +144,17 @@ describe('模型层纯度守卫（issue #266）', () => {
       // editor → model 是正常依赖方向，不受限
       ['editor/b.tsx', [{ target: 'model/document.ts', typeOnly: false }]],
     ])
-    expect(modelEditorRuntimeViolations(graph)).toEqual([
+    expect(modelEditorRuntimeViolations(layered)).toEqual([
       'model/a.ts → editor/SomePanel.tsx',
     ])
   })
 
   it('src/model 生产模块无框架运行时依赖（框架类型仅 import type）', () => {
     expect(
-      modelFrameworkRuntimeViolations(buildSrcExternalEdges(SRC_ROOT)),
+      modelFrameworkRuntimeViolations(
+        buildSrcModuleGraph(SRC_ROOT),
+        buildSrcExternalEdges(SRC_ROOT),
+      ),
     ).toEqual([])
   })
 
@@ -186,7 +196,8 @@ describe('模型层纯度守卫的边界完整性（PR #305 评审）', () => {
     const synthetic = new Map<string, ExternalEdge[]>([
       ['model/x.tsx', [{ spec: 'react/jsx-runtime', typeOnly: false }]],
     ])
-    expect(modelFrameworkRuntimeViolations(synthetic)).toEqual([
+    const graph = new Map<string, ModuleEdge[]>([['model/x.tsx', []]])
+    expect(modelFrameworkRuntimeViolations(graph, synthetic)).toEqual([
       'model/x.tsx → react/jsx-runtime',
     ])
   })
@@ -223,7 +234,41 @@ describe('模型层纯度守卫的边界完整性（PR #305 评审）', () => {
       ),
     ).toEqual([])
     expect(
-      modelFrameworkRuntimeViolations(buildSrcExternalEdges(SRC_ROOT)),
+      modelFrameworkRuntimeViolations(
+        buildSrcModuleGraph(SRC_ROOT),
+        buildSrcExternalEdges(SRC_ROOT),
+      ),
     ).toEqual([])
+  })
+})
+
+describe('模型层运行时闭包（PR #305 二轮评审）', () => {
+  it('闭包含共享叶子与 editor 纯叶子，不含不可达的组件层', () => {
+    const closure = modelRuntimeClosure(buildSrcModuleGraph(SRC_ROOT))
+    // 评审引用的具体传递路径：model/normalize*.ts → src/uid.ts（运行时边）
+    expect(closure.has('uid.ts')).toBe(true)
+    expect(closure.has('editor/graphRules.ts')).toBe(true)
+    expect(closure.has('editor/settings.ts')).toBe(true)
+    // 组件层不可达：editor 面板/视图不在 model 运行时闭包内
+    expect([...closure].some((k) => k.startsWith('editor/panels/'))).toBe(false)
+    expect(closure.has('home/HomePage.tsx')).toBe(false)
+  })
+
+  it('反例：闭包内共享叶子的框架运行时边被识别，不可达组件不误报', () => {
+    const graph = new Map<string, ModuleEdge[]>([
+      ['model/a.ts', [{ target: 'shared.ts', typeOnly: false }]],
+      ['shared.ts', [{ target: 'deeper.ts', typeOnly: false }]],
+      ['deeper.ts', []],
+      // 不可达组件：其 react 运行时边不在闭包口径内
+      ['editor/SomePanel.tsx', []],
+    ])
+    const external = new Map<string, ExternalEdge[]>([
+      ['shared.ts', [{ spec: 'react', typeOnly: false }]],
+      ['deeper.ts', [{ spec: '@xyflow/react', typeOnly: true }]],
+      ['editor/SomePanel.tsx', [{ spec: 'react', typeOnly: false }]],
+    ])
+    expect(modelFrameworkRuntimeViolations(graph, external)).toEqual([
+      'shared.ts → react',
+    ])
   })
 })
