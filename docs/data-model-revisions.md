@@ -1,6 +1,6 @@
 # 数据模型设计：历轮评审修订记录
 
-> 性质：历史归档。本文是[数据模型设计](data-model.md)定稿过程中历轮评审修订的逐轮记录（含 v1 相对草案的初版差异），自正文头部移入独立档案（issue #236）；内容原样保留，整理时不改写设计。现行契约以[数据模型设计](data-model.md)正文为准，已关闭 issue 的逐项结论与合并依据见[设计同步记录](design-sync.md)。
+> 性质：历史归档。本文是[数据模型设计](data-model.md)定稿过程中历轮评审修订的逐轮记录（含 v1 相对草案的初版差异），自正文头部移入独立档案（issue #236）；内容原样保留，整理时不改写设计。现行契约以[数据模型主题正文](data-model/README.md)为准，旧章节由[迁移对照](data-model.md)定位；已关闭 issue 的逐项结论与合并依据见[设计同步记录](design-sync.md)。
 > 轮次说明：以下记录按原归档顺序保留（其中八十八至九十一轮以 91、90、89、88 的倒序排列在八十七轮之后），属历史事实，不作重排。
 
 > 本版相对草案的修订：ProjectDocument 补 `episodeTitles` 字段；§4.2 各 spec 字段对齐 UI 设计已实现的节点形态（场景卡 sceneNo/interior/weather、对白行 kind/side/vo、分支 options 入 spec）；§5 分支边不再持久化 label 拷贝；§6 Character/Location 字段对齐运行态实体（gradient/bio/note，长篇自由文本由 SettingsDocument 承载）；§11 明确归一化管线位于前端模型层，并登记 schemaVersion 0（旧扁平存储格式）→ 1 的迁移。

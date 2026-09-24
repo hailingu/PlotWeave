@@ -63,7 +63,7 @@ Before changing production code for a feature or reproducible defect fix, agents
 4. Search for existing internal capabilities and choose the smallest coherent change that meets the request.
 5. For source-code features and reproducible defect fixes, record the Key State And Invariant Matrix before production-code changes. Implement only the approved scope and preserve unrelated worktree changes.
 6. Run the narrowest relevant non-interactive checks, then the broader checks required by the affected Scope Routing rows. Delete disposable verification output before task completion and report the result.
-7. Update every document, index, or cross-reference the change makes stale. When an issue's resolution differs from the existing design, the same change MUST update the affected design documents (including `docs/data-model.md` and `docs/ui-design.md` where applicable) to reflect the accepted outcome. Update the relevant design sections, distinguish implemented behavior from planned work and retained boundaries, and link the issue or resolving PR; an issue comment or change log alone does not replace updating the design itself. This synchronization MUST be complete before declaring the issue resolved or closing it.
+7. Update every document, index, or cross-reference the change makes stale. When an issue's resolution differs from the existing design, the same change MUST update the affected design documents (including the relevant topic under `docs/data-model/` and `docs/ui-design.md` where applicable) to reflect the accepted outcome. Update the relevant design sections, distinguish implemented behavior from planned work and retained boundaries, and link the issue or resolving PR; an issue comment or change log alone does not replace updating the design itself. This synchronization MUST be complete before declaring the issue resolved or closing it.
 8. Report changed files, verification results, known limitations, and stable evidence. Do not claim completion while required work remains.
 
 ## Scope Routing
@@ -241,6 +241,7 @@ structure per issue kind.
 | Concern | Authoritative path or discovery command |
 | --- | --- |
 | Product vision, stack overview, and branch model | `README.md` |
+| Data-model topics and legacy chapter mapping | `docs/data-model/README.md` and `docs/data-model.md` |
 | Engineering standards: size/complexity, boundaries, patterns, testing | `docs/development/software-engineering-standard.md` (+ language standards alongside) |
 | Issue tracker conventions: severity, titles, labels, body structure | `docs/development/issue-standard.md` |
 | Versioned source, configuration, and implementation evidence | Git commit and pull-request revisions |

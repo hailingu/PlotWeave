@@ -17,7 +17,7 @@
 - [x] 剧本导出（Markdown 纯文本，含分镜附录）
 - [ ] 画布对齐与吸附
 - [ ] 剧本导出：结构化格式（JSON）
-- [x] 画布内 AI 图像生成（文生图首版）：图片节点生成角色垫图 / 场景底图 / 分镜关键帧，产物落项目资产（媒体节点 + 输入签名守护 + 协作式取消，详见 `docs/data-model.md` §13；图生图引用边、视频节点与 job 落盘恢复随演进）
+- [x] 画布内 AI 图像生成（文生图首版）：图片节点生成角色垫图 / 场景底图 / 分镜关键帧，产物落项目资产（媒体节点 + 输入签名守护 + 协作式取消，详见[数据模型 §13](docs/data-model/overview.md#十三后续演进预留)；图生图引用边、视频节点与 job 落盘恢复随演进）
 - [ ] macOS 原生界面质感：窗口级毛玻璃（Tauri `windowEffects`）+ 无头组件（Radix）承载弹层交互 + 设计令牌扩展，实现路径详见 `docs/ui-design.md` §12
 
 ## 技术栈
@@ -101,7 +101,7 @@ npm run tauri dev  # 启动 Tauri 开发调试（Vite 前端 + Rust 壳）
 
 - AI 代理（ZCode / Codex 等）开始任何工作前，先阅读 [AGENTS.md](AGENTS.md)。
 - 项目文档使用中文。
-- 设计文档：[数据模型](docs/data-model.md)、[UI 规格](docs/ui-design.md)；已关闭 issue 的落地结论与保留边界见[设计同步记录](docs/design-sync.md)。
+- 设计文档：[数据模型主题索引](docs/data-model/README.md)、[UI 规格](docs/ui-design.md)；旧章节与链接见[数据模型迁移对照](docs/data-model.md)，已关闭 issue 的落地结论与保留边界见[设计同步记录](docs/design-sync.md)。
 
 ## 许可证
 
