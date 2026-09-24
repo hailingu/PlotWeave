@@ -496,3 +496,79 @@ fn budget_exhausted_diagnostics_distinguish_stages() {
         assert!(t.contains(&IMAGE_JOB_TOTAL_BUDGET_SECS.to_string()), "{t}");
     }
 }
+
+/// issue #308 的虚构标记：仅用于断言脱敏边界，绝不使用真实凭据形态。
+const FICTITIOUS_QUERY_TOKEN: &str = "sk-FICTITIOUS-QUERY-MARKER";
+
+/// 生图发送超时的最终错误出口（issue #308）：夹具接收连接后不回响应头，
+/// post_json 以 1s 客户端超时（生产 300s 同一分类的缩短形态）取得真实
+/// reqwest 发送超时，再经生成入口的出口映射转为前端诊断——自定义端点
+/// base_url 带敏感 query 时，裸 reqwest Display 内嵌完整请求 URL，
+/// #149 脱敏契约必须在生图出口同样成立：虚构标记与 query 整体剥离，
+/// 类别前缀与主机可行动信息保留。
+#[test]
+fn generate_exit_send_timeout_redacts_sensitive_query() {
+    let base_url = crate::testhttp::spawn_local_http(move |mut stream| {
+        crate::testhttp::drain_request(&mut stream);
+        std::thread::sleep(std::time::Duration::from_secs(10));
+    });
+    let url = format!("{base_url}/v1?token={FICTITIOUS_QUERY_TOKEN}");
+    let body = generation_request_body("m", "p", "1024x1024");
+    let error = tauri::async_runtime::block_on(crate::provider_transport::post_json(
+        &url,
+        "images/generations",
+        "sk-FICTITIOUS",
+        &body,
+        1,
+    ))
+    .expect_err("发送超时应失败");
+    assert!(
+        matches!(error, ProxyError::SendTimeout { secs: 1, .. }),
+        "应分类为发送超时：{error:?}"
+    );
+    let text = generate_exit_text(error);
+    assert!(
+        !text.contains(FICTITIOUS_QUERY_TOKEN),
+        "敏感 query 不得进入生图诊断：{text}"
+    );
+    assert!(!text.contains("token="), "query 应整体剥离：{text}");
+    assert!(
+        text.starts_with("请求失败："),
+        "生图超时类别文案保留：{text}"
+    );
+    assert!(text.contains("127.0.0.1"), "主机可行动信息保留：{text}");
+    assert!(
+        text.contains("error sending request"),
+        "发送阶段类别保留：{text}"
+    );
+}
+
+/// 生图发送超时的无 query 对照（issue #308）：端点不含敏感成分时文本
+/// 形态不变——脱敏不过度介入，主机与路径照常可见。
+#[test]
+fn generate_exit_send_timeout_keeps_plain_url_shape() {
+    let base_url = crate::testhttp::spawn_local_http(move |mut stream| {
+        crate::testhttp::drain_request(&mut stream);
+        std::thread::sleep(std::time::Duration::from_secs(10));
+    });
+    let url = format!("{base_url}/v1");
+    let body = generation_request_body("m", "p", "1024x1024");
+    let error = tauri::async_runtime::block_on(crate::provider_transport::post_json(
+        &url,
+        "images/generations",
+        "sk-FICTITIOUS",
+        &body,
+        1,
+    ))
+    .expect_err("发送超时应失败");
+    let text = generate_exit_text(error);
+    assert!(
+        text.starts_with("请求失败："),
+        "生图超时类别文案保留：{text}"
+    );
+    assert!(
+        text.contains("/v1/images/generations"),
+        "路径可行动信息保留：{text}"
+    );
+    assert!(text.contains("127.0.0.1"), "主机可行动信息保留：{text}");
+}

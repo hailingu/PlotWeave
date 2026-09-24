@@ -518,6 +518,25 @@ async fn bounded_key_load(
     }
 }
 
+/// 生图出口的错误展示转换（聊天入口保留 SendTimeout 分类）：SendTimeout
+/// 保留生成入口既有的「请求失败：」超时文案，其余类别统一 Display。
+/// 裸 reqwest 错误的 Display 内嵌完整请求 URL（issue #308：SendTimeout
+/// 特判绕开 [`ProxyError`] 的 Display 脱敏，敏感 query 随之进入前端
+/// 诊断）——「请求失败：」前缀经 [`describe_reqwest_error`] 脱敏，
+/// 与 #149「reqwest 展示路径统一脱敏」契约对齐（query/userinfo/fragment
+/// 剥离，scheme/host/path 与错误类别保留）。
+fn generate_exit_text(error: ProxyError) -> String {
+    match error {
+        ProxyError::SendTimeout { source, .. } => {
+            format!(
+                "请求失败：{}",
+                crate::http_util::describe_reqwest_error(&source)
+            )
+        }
+        other => other.to_string(),
+    }
+}
+
 /// 生成请求 → 图像字节（自 llm_image_generate 提取，PR #220 评审：命令
 /// 体超出 80 代码行硬上限）：POST 与响应体限读共同消费作业剩余预算
 /// （issue #141 评审——预算被前置工作耗尽时在 POST 之前拒绝，不发出
@@ -548,11 +567,7 @@ async fn generate_image_bytes(
         Ok((status, response_url, text))
     })
     .await
-    .map_err(|error| match error {
-        // 保留生成入口既有的超时展示文案；聊天入口保留 SendTimeout 分类。
-        ProxyError::SendTimeout { source, .. } => format!("请求失败：{source}"),
-        other => other.to_string(),
-    })?;
+    .map_err(generate_exit_text)?;
     if registration.is_cancelled() {
         return Err("已取消".into());
     }
