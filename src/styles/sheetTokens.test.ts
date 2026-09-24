@@ -4,7 +4,8 @@
  * 当前支持/拒绝/保留边界与唯一问题族矩阵见 docs/css-token-contract.md；
  * 分轮记录仅在 Git 历史保留，不在测试头注另维护一套范围。
  * F6 产品边界：#240 恒白危险前景及深色约 2.8:1 沿用既有决策；
- * #262 品牌配对、#265 悬空引用仍由具名注册表挂账；box-shadow 不禁字面色。
+ * #262 品牌配对（BRAND_RULES 黄金接线持有）与 #265 悬空引用均已修复，
+ * 两张例外表当前为空；box-shadow 不禁字面色。
  * F4 仅静态 linear-gradient 遮罩：动态 currentColor、未知色标与图像入口显式拒绝。
  */
 import { readFileSync, readdirSync } from 'node:fs'
@@ -343,8 +344,9 @@ const STRUCTURE_EXCEPTIONS: Readonly<
  * 接线例外注册表：悬空 var() 引用按开放缺陷跟踪。绑定到承载属性与条数——
  * 已豁免引用换属性承载（如 background 改 color）或新增第二条同属性声明
  * （实际条数 > 已审计）均按新违例点名，已知缺陷不因豁免而换位或扩张；
- * 属性或条数变动后须更新表项。当前为空：#265 的 --fill-tertiary 悬空与
- * #262 的两处品牌底固定白字均已修复移出本表。
+ * 属性或条数变动后须更新表项。当前为空：#265 的 --fill-tertiary 悬空
+ * 已在 tokens.css 定义四环境令牌后修复移出本表（#262 的两处品牌底
+ * 固定白字属 STRUCTURE_EXCEPTIONS 结构侧，同轮修复移出结构表）。
  */
 const WIRING_EXCEPTIONS: Readonly<
   {
