@@ -15,23 +15,30 @@ import * as ts from 'typescript'
  * （css/svg 等）在解析层显式分类而非静默跳过；无法解析的相对 TS 导入
  * 抛错——构图不健全比漏检更危险。
  */
-/** 参与构图的关系边：target = 解析后的模块键，typeOnly = 是否仅类型边。 */
+/** 参与构图的关系边：target = 解析后的模块键，typeOnly = 是否仅类型边；
+ * dynamic = 动态导入且说明符不可静态解析（PR #305 四轮评审：带替换模板
+ * 等——运行时可加载任意模块，不进环构图，由模型纯度守卫 fail-closed）。 */
 export interface ModuleEdge {
   target: string
   typeOnly: boolean
+  dynamic?: boolean
 }
 
 /** 外部包说明符边（issue #266 守卫输入）：spec = 源码原始说明符
- * （如 '@xyflow/react'、'react/jsx-runtime'），typeOnly = 是否仅编译期。 */
+ * （如 '@xyflow/react'、'react/jsx-runtime'），typeOnly = 是否仅编译期；
+ * dynamic 含义同 ModuleEdge。 */
 export interface ExternalEdge {
   spec: string
   typeOnly: boolean
+  dynamic?: boolean
 }
 
-/** 解析前的原始边：spec = 源文件中的相对说明符。 */
+/** 解析前的原始边：spec = 源文件中的说明符原文；dynamic = 动态导入且
+ * 说明符不可静态解析（带替换模板等，spec 为表达式原文）。 */
 export interface RawEdge {
   spec: string
   typeOnly: boolean
+  dynamic?: boolean
 }
 
 /** 维护模块 = src 下的 .ts/.tsx 且非测试、非声明文件（与审计口径一致）。 */
@@ -126,17 +133,30 @@ function isStaticSpecifier(
   return ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)
 }
 
-/** 动态 import('...') 的原始边（恒为运行时边；PR #305 三轮评审：
- * 无替换模板字面量同属静态可解析说明符）。 */
+/** 动态 import(…) 的原始边（恒为运行时边；PR #305 三轮评审：无替换
+ * 模板字面量同属静态可解析说明符。PR #305 四轮评审：带替换模板等不可
+ * 静态解析的动态导入采集为 dynamic 边——spec 为表达式原文，运行时可
+ * 加载任意模块，不得静默丢弃）。 */
 function edgeOfDynamicImport(node: ts.CallExpression): RawEdge | null {
   const arg = node.arguments[0]
-  if (
-    node.expression.kind !== ts.SyntaxKind.ImportKeyword ||
-    arg === undefined ||
-    !isStaticSpecifier(arg)
-  )
+  if (node.expression.kind !== ts.SyntaxKind.ImportKeyword || arg === undefined)
     return null
-  return { spec: arg.text, typeOnly: false }
+  if (isStaticSpecifier(arg)) return { spec: arg.text, typeOnly: false }
+  // spec 剥掉定界符（引号/反引号），与静态边同形态——相对边筛选按首
+  // 字符判相对/外部，带定界符会被误滤（PR #305 四轮评审）
+  const raw = arg.getText(sfOfNode(node))
+  return {
+    spec: raw.length >= 2 ? raw.slice(1, -1) : raw,
+    typeOnly: false,
+    dynamic: true,
+  }
+}
+
+/** 表达式所属源文件（动态边原文提取用）。 */
+const sfOfNode = (node: ts.Node): ts.SourceFile => {
+  let current: ts.Node = node
+  while (current.parent !== undefined) current = current.parent
+  return current as ts.SourceFile
 }
 
 /** import('...').Type 类型查询的原始边（恒为编译期边；PR #116 评审
@@ -210,7 +230,9 @@ export function externalEdgesOfSource(
 function externalEdgesOfAst(sf: ts.SourceFile): ExternalEdge[] {
   const out: ExternalEdge[] = edgesOfSourceFile(sf)
     .filter((e) => !e.spec.startsWith('.'))
-    .map(({ spec, typeOnly }) => ({ spec, typeOnly }))
+    .map(({ spec, typeOnly, dynamic }) =>
+      dynamic === true ? { spec, typeOnly, dynamic } : { spec, typeOnly },
+    )
   if (containsJsx(sf)) out.push({ spec: 'react/jsx-runtime', typeOnly: false })
   return out
 }
@@ -248,7 +270,9 @@ function parseSourceFile(file: string): ts.SourceFile {
 }
 
 /** 解析失败的相对 TS 导入属构图不健全（可能掩盖环），直接报错而非跳过。
- * 外部包说明符不参与环构图（由 buildSrcExternalEdges 单独采集）。 */
+ * 外部包说明符不参与环构图（由 buildSrcExternalEdges 单独采集）；
+ * dynamic 边（PR #305 四轮评审）目标运行时才定、无法静态解析，同样
+ * 不进环构图——由模型纯度守卫 fail-closed。 */
 function resolveEdgeKeys(
   file: string,
   keyOf: (p: string) => string,
@@ -256,12 +280,16 @@ function resolveEdgeKeys(
   const sf = parseSourceFile(file)
   const out: ModuleEdge[] = []
   for (const e of edgesOfSourceFile(sf)) {
-    if (!e.spec.startsWith('.')) continue
-    const resolved = resolveEdgeTarget(file, e.spec)
-    if (resolved.kind === 'asset') continue
-    if (resolved.kind === 'unresolved')
-      throw new Error(`无法解析相对导入：${file} → ${e.spec}`)
-    out.push({ target: keyOf(resolved.path), typeOnly: e.typeOnly })
+    if (e.dynamic === true)
+      out.push({ target: e.spec, typeOnly: false, dynamic: true })
+    else if (!e.spec.startsWith('.')) continue
+    else {
+      const resolved = resolveEdgeTarget(file, e.spec)
+      if (resolved.kind === 'asset') continue
+      if (resolved.kind === 'unresolved')
+        throw new Error(`无法解析相对导入：${file} → ${e.spec}`)
+      out.push({ target: keyOf(resolved.path), typeOnly: e.typeOnly })
+    }
   }
   return out
 }
@@ -314,7 +342,9 @@ export function modelRuntimeClosure(
   while (queue.length > 0) {
     const current = queue.pop()!
     for (const e of graph.get(current) ?? []) {
-      if (e.typeOnly || closure.has(e.target)) continue
+      // dynamic 边目标运行时才定，无法静态确定可达性——不计入闭包，
+      // 由两守卫对边本身 fail-closed（PR #305 四轮评审）
+      if (e.typeOnly || e.dynamic === true || closure.has(e.target)) continue
       closure.add(e.target)
       queue.push(e.target)
     }
@@ -335,6 +365,12 @@ export function modelFrameworkRuntimeViolations(
   const offenders: string[] = []
   for (const file of modelRuntimeClosure(graph)) {
     for (const e of external.get(file) ?? []) {
+      // 动态不可解析导入（PR #305 四轮评审）：目标包运行时才定，
+      // 框架依赖无法静态验证——fail-closed
+      if (e.dynamic === true) {
+        offenders.push(`${file} → 动态导入（不可静态解析）：${e.spec}`)
+        continue
+      }
       if (FRAMEWORK_PACKAGE.test(e.spec) && !e.typeOnly)
         offenders.push(`${file} → ${e.spec}`)
     }
@@ -361,6 +397,12 @@ export function modelEditorRuntimeViolations(
   const offenders: string[] = []
   for (const file of modelRuntimeClosure(graph)) {
     for (const e of graph.get(file) ?? []) {
+      // 动态不可解析导入（PR #305 四轮评审）优先于目标前缀判定：运行时
+      // 可加载任意模块（含非白名单 editor 实现），白名单无法静态验证
+      if (e.dynamic === true) {
+        offenders.push(`${file} → 动态导入（不可静态解析）：${e.target}`)
+        continue
+      }
       if (!e.target.startsWith('editor/')) continue
       if (!e.typeOnly && !MODEL_EDITOR_RUNTIME_ALLOWLIST.has(e.target))
         offenders.push(`${file} → ${e.target}`)

@@ -274,13 +274,11 @@ describe('模型层运行时闭包（PR #305 二轮评审）', () => {
 })
 
 describe('静态模板字面量与闭包 editor 越界（PR #305 三轮评审）', () => {
-  it('反例：无替换模板字面量动态导入计入边集；带替换模板是真动态不采集', () => {
+  it('反例：无替换模板字面量动态导入计入边集', () => {
     const external = externalEdgesOfSource('const m = import(`react`)')
     expect(external).toEqual([{ spec: 'react', typeOnly: false }])
     const relative = relativeEdgesOfSource('const m = import(`./lazy`)')
     expect(relative).toEqual([{ spec: './lazy', typeOnly: false }])
-    const substituted = relativeEdgesOfSource('const m = import(`./${name}`)')
-    expect(substituted).toEqual([])
   })
 
   it('反例：经共享模块间接触达非白名单 editor 模块被识别（闭包口径）', () => {
@@ -291,5 +289,54 @@ describe('静态模板字面量与闭包 editor 越界（PR #305 三轮评审）
     expect(modelEditorRuntimeViolations(graph)).toEqual([
       'shared.ts → editor/SomePanel.tsx',
     ])
+  })
+})
+
+describe('动态不可解析导入的 fail-closed（PR #305 四轮评审）', () => {
+  it('带替换模板的动态导入采集为 dynamic 边（相对与外部），不进环构图', () => {
+    const relative = relativeEdgesOfSource('const m = import(`./x/${n}`)')
+    expect(relative).toEqual([
+      { spec: './x/${n}', typeOnly: false, dynamic: true },
+    ])
+    const external = externalEdgesOfSource('const m = import(`pkg-${n}`)')
+    expect(external).toEqual([
+      { spec: 'pkg-${n}', typeOnly: false, dynamic: true },
+    ])
+    // 环构图只收可静态定目标的边：dynamic 边不参与（fixture 路径无法解析）
+    const edges = buildSrcModuleGraph(SRC_ROOT)
+    expect(cyclesOf(edges)).toEqual([])
+  })
+
+  it('守卫②：闭包内相对动态导入视为违规（运行时可达任意模块，白名单不可静态验证）', () => {
+    const graph = new Map<string, ModuleEdge[]>([
+      ['model/a.ts', [{ target: 'shared.ts', typeOnly: false }]],
+      [
+        'shared.ts',
+        [
+          { target: './x/${n}', typeOnly: false, dynamic: true },
+          { target: 'editor/graphRules.ts', typeOnly: false },
+        ],
+      ],
+    ])
+    expect(modelEditorRuntimeViolations(graph)).toEqual([
+      'shared.ts → 动态导入（不可静态解析）：./x/${n}',
+    ])
+  })
+
+  it('守卫①：闭包内外部动态导入视为违规（目标包运行时才定）', () => {
+    const graph = new Map<string, ModuleEdge[]>([['model/a.ts', []]])
+    const external = new Map<string, ExternalEdge[]>([
+      ['model/a.ts', [{ spec: 'pkg-${n}', typeOnly: false, dynamic: true }]],
+    ])
+    expect(modelFrameworkRuntimeViolations(graph, external)).toEqual([
+      'model/a.ts → 动态导入（不可静态解析）：pkg-${n}',
+    ])
+  })
+
+  it('真图：无动态不可解析导入，两守卫维持全空', () => {
+    const graph = buildSrcModuleGraph(SRC_ROOT)
+    const external = buildSrcExternalEdges(SRC_ROOT)
+    expect(modelEditorRuntimeViolations(graph)).toEqual([])
+    expect(modelFrameworkRuntimeViolations(graph, external)).toEqual([])
   })
 })
