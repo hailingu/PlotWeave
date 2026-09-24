@@ -1,6 +1,8 @@
 import { fileURLToPath } from 'node:url'
+import * as ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 import {
+  allowlistRuntimeLeafViolations,
   buildSrcExternalEdges,
   buildSrcModuleGraph,
   cyclesOf,
@@ -150,5 +152,78 @@ describe('模型层纯度守卫（issue #266）', () => {
     expect(modelEditorRuntimeViolations(buildSrcModuleGraph(SRC_ROOT))).toEqual(
       [],
     )
+  })
+})
+
+describe('模型层纯度守卫的边界完整性（PR #305 评审）', () => {
+  it('反例：逐说明符 type-only（import { type Edge }）整条边为编译期，混合值绑定仍为运行时边', () => {
+    const allType = externalEdgesOfSource(
+      "import { type Edge } from '@xyflow/react'",
+    )
+    expect(allType).toEqual([{ spec: '@xyflow/react', typeOnly: true }])
+
+    const mixed = externalEdgesOfSource(
+      "import { type Edge, applyNodeChanges } from '@xyflow/react'",
+    )
+    expect(mixed).toEqual([{ spec: '@xyflow/react', typeOnly: false }])
+
+    const reexport = relativeEdgesOfSource("export { type Shape } from './t'")
+    expect(reexport).toEqual([{ spec: './t', typeOnly: true }])
+  })
+
+  it('反例：JSX 隐式引入 react/jsx-runtime 运行时边（jsx: react-jsx），计入守卫①', () => {
+    const withJsx = externalEdgesOfSource(
+      'export const A = () => <div />',
+      ts.ScriptKind.TSX,
+    )
+    expect(withJsx).toContainEqual({
+      spec: 'react/jsx-runtime',
+      typeOnly: false,
+    })
+    const noJsx = externalEdgesOfSource('export const A = 1', ts.ScriptKind.TSX)
+    expect(noJsx.some((e) => e.spec.startsWith('react/'))).toBe(false)
+
+    const synthetic = new Map<string, ExternalEdge[]>([
+      ['model/x.tsx', [{ spec: 'react/jsx-runtime', typeOnly: false }]],
+    ])
+    expect(modelFrameworkRuntimeViolations(synthetic)).toEqual([
+      'model/x.tsx → react/jsx-runtime',
+    ])
+  })
+
+  it('反例：白名单目标的运行时出边破例（相对值边与外部运行时边）被识别', () => {
+    const graph = new Map<string, ModuleEdge[]>([
+      [
+        'editor/graphRules.ts',
+        [
+          { target: 'model/document.ts', typeOnly: false },
+          { target: 'editor/other.ts', typeOnly: true },
+        ],
+      ],
+      [
+        'editor/settings.ts',
+        [{ target: 'editor/graphRules.ts', typeOnly: true }],
+      ],
+    ])
+    const external = new Map<string, ExternalEdge[]>([
+      ['editor/settings.ts', [{ spec: 'lodash', typeOnly: false }]],
+      ['editor/graphRules.ts', [{ spec: '@xyflow/react', typeOnly: true }]],
+    ])
+    expect(allowlistRuntimeLeafViolations(graph, external)).toEqual([
+      'editor/graphRules.ts → model/document.ts',
+      'editor/settings.ts → lodash（外部）',
+    ])
+  })
+
+  it('真图：白名单目标保持运行时叶子，模型层无 JSX/框架运行时依赖', () => {
+    expect(
+      allowlistRuntimeLeafViolations(
+        buildSrcModuleGraph(SRC_ROOT),
+        buildSrcExternalEdges(SRC_ROOT),
+      ),
+    ).toEqual([])
+    expect(
+      modelFrameworkRuntimeViolations(buildSrcExternalEdges(SRC_ROOT)),
+    ).toEqual([])
   })
 })

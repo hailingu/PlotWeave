@@ -77,20 +77,44 @@ function resolveEdgeTarget(
 }
 
 /** 单条 import 的原始边（外部包说明符同样返回，由调用方按需筛选；
- * null = 非字符串说明符）。仅类型整体导入（import type {...}）擦除后
- * 不产生运行时边；isTypeOnly 已废弃，相位修饰以 phaseModifier 为准（S1874） */
+ * null = 非字符串说明符）。编译期判定（PR #305 评审补强）：整句
+ * import type，或无默认绑定且具名绑定全部 inline type（import
+ * { type A, type B } 同样整条擦除）；混合值绑定仍是运行时边。
+ * isTypeOnly 已废弃，相位修饰以 phaseModifier 为准（S1874） */
 function edgeOfImport(node: ts.ImportDeclaration): RawEdge | null {
   if (!ts.isStringLiteral(node.moduleSpecifier)) return null
   const clause = node.importClause
-  const typeOnly = clause?.phaseModifier === ts.SyntaxKind.TypeKeyword
+  const typeOnly =
+    clause?.phaseModifier === ts.SyntaxKind.TypeKeyword ||
+    allNamedBindingsTypeOnly(clause)
   return { spec: node.moduleSpecifier.text, typeOnly }
 }
 
-/** export ... from '...' 的原始边：具名重导出在运行时仍执行目标模块。 */
+/** 具名绑定全部 inline type 且无默认/命名空间绑定（PR #305 评审）：
+ * 整条导入编译期擦除；空子句（import 'x'）与命名空间导入是运行时边。 */
+function allNamedBindingsTypeOnly(
+  clause: ts.ImportClause | undefined,
+): boolean {
+  if (clause === undefined || clause.name !== undefined) return false
+  const named = clause.namedBindings
+  if (named === undefined || !ts.isNamedImports(named)) return false
+  return named.elements.length > 0 && named.elements.every((e) => e.isTypeOnly)
+}
+
+/** export ... from '...' 的原始边：具名重导出在运行时仍执行目标模块；
+ * 具名重导出全部 inline type（export { type A } from …）整条编译期
+ * 擦除（PR #305 评审）。 */
 function edgeOfExport(node: ts.ExportDeclaration): RawEdge | null {
   if (!node.moduleSpecifier || !ts.isStringLiteral(node.moduleSpecifier))
     return null
-  return { spec: node.moduleSpecifier.text, typeOnly: node.isTypeOnly === true }
+  const clause = node.exportClause
+  const typeOnly =
+    node.isTypeOnly === true ||
+    (clause !== undefined &&
+      ts.isNamedExports(clause) &&
+      clause.elements.length > 0 &&
+      clause.elements.every((e) => e.isTypeOnly))
+  return { spec: node.moduleSpecifier.text, typeOnly }
 }
 
 /** 动态 import('...') 的原始边（恒为运行时边）。 */
@@ -161,15 +185,44 @@ export function externalEdgesOfSource(
   kind: ts.ScriptKind = ts.ScriptKind.TS,
 ): ExternalEdge[] {
   const sf = ts.createSourceFile(
-    'fixture.ts',
+    'fixture.tsx',
     code,
     ts.ScriptTarget.Latest,
     true,
     kind,
   )
-  return edgesOfSourceFile(sf)
+  return externalEdgesOfAst(sf)
+}
+
+/** AST → 外部包边集：显式说明符 + JSX 隐式运行时边（PR #305 评审：
+ * tsconfig jsx: react-jsx 下编译器为 JSX 合成 react/jsx-runtime 导入，
+ * 源码 AST 不可见——不合成则模型层 JSX 会绕过框架运行时守卫）。 */
+function externalEdgesOfAst(sf: ts.SourceFile): ExternalEdge[] {
+  const out: ExternalEdge[] = edgesOfSourceFile(sf)
     .filter((e) => !e.spec.startsWith('.'))
     .map(({ spec, typeOnly }) => ({ spec, typeOnly }))
+  if (containsJsx(sf)) out.push({ spec: 'react/jsx-runtime', typeOnly: false })
+  return out
+}
+
+/** JSX 语法存在性：三种 JSX 子树根覆盖全部形态（.ts 文件不容 JSX，
+ * 仅 .tsx 夹具与维护文件可能命中）。 */
+function containsJsx(sf: ts.SourceFile): boolean {
+  let found = false
+  const visit = (node: ts.Node): void => {
+    if (found) return
+    if (
+      ts.isJsxElement(node) ||
+      ts.isJsxSelfClosingElement(node) ||
+      ts.isJsxFragment(node)
+    ) {
+      found = true
+      return
+    }
+    ts.forEachChild(node, visit)
+  }
+  ts.forEachChild(sf, visit)
+  return found
 }
 
 /** 单文件的已解析 AST（环构图与外部边采集共用）。 */
@@ -218,17 +271,15 @@ export function buildSrcModuleGraph(
 }
 
 /** 全图的外部包边（issue #266 守卫输入）：键与 buildSrcModuleGraph 同
- * 口径，值为该模块的外部包说明符边（spec 保持源码原样，不解析）。 */
+ * 口径，值为该模块的外部包说明符边（spec 保持源码原样，不解析；含
+ * JSX 隐式 react/jsx-runtime 运行时边，见 externalEdgesOfAst）。 */
 export function buildSrcExternalEdges(
   srcRoot: string,
 ): Map<string, ExternalEdge[]> {
   const keyOf = (p: string): string => relative(srcRoot, p).split(sep).join('/')
   const edges = new Map<string, ExternalEdge[]>()
   for (const file of listModules(srcRoot)) {
-    const external = edgesOfSourceFile(parseSourceFile(file))
-      .filter((e) => !e.spec.startsWith('.'))
-      .map(({ spec, typeOnly }) => ({ spec, typeOnly }))
-    edges.set(keyOf(file), external)
+    edges.set(keyOf(file), externalEdgesOfAst(parseSourceFile(file)))
   }
   return edges
 }
@@ -275,6 +326,26 @@ export function modelEditorRuntimeViolations(
       if (!e.target.startsWith('editor/')) continue
       if (!e.typeOnly && !MODEL_EDITOR_RUNTIME_ALLOWLIST.has(e.target))
         offenders.push(`${file} → ${e.target}`)
+    }
+  }
+  return offenders
+}
+
+/** 白名单目标的运行时叶子校验（PR #305 评审）：值依赖白名单成立的
+ * 前提是目标自身无运行时出边（相对值边与任何外部包运行时边都算）——
+ * 否则 model 经白名单获得传递性运行时依赖而守卫仍为空。type-only
+ * 出边不破例。返回 `目标 → 边` 清单，空 = 通过。 */
+export function allowlistRuntimeLeafViolations(
+  graph: Map<string, ModuleEdge[]>,
+  external: Map<string, ExternalEdge[]>,
+): string[] {
+  const offenders: string[] = []
+  for (const target of MODEL_EDITOR_RUNTIME_ALLOWLIST) {
+    for (const e of graph.get(target) ?? []) {
+      if (!e.typeOnly) offenders.push(`${target} → ${e.target}`)
+    }
+    for (const e of external.get(target) ?? []) {
+      if (!e.typeOnly) offenders.push(`${target} → ${e.spec}（外部）`)
     }
   }
   return offenders
