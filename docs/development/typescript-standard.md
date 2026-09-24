@@ -96,6 +96,27 @@ truth for the key set), with a comment.
   `| undefined`; call sites use conditional spread for props we cannot
   widen).
 
+### Quality Report Classification
+
+(Issue [#311](https://github.com/hailingu/PlotWeave/issues/311),
+implemented.) Sonar analysis and frontend coverage report **production
+code**; test infrastructure stays analyzed but outside the product
+statistics. `sonar-project.properties` classifies code through the
+officially supported combination of source exclusion plus test inclusion:
+`sonar.test.inclusions` covers `*.test.ts` / `*.test.tsx`, the compile-time
+contract probes `*.test-d.ts` (still compile-checked by the strict entry),
+and modules that exist only for tests — `src/moduleGraph.ts` (architecture
+guard), `src/styles/cssColorContract.ts`, `src/styles/cssValueSyntax.ts`,
+and `src/styles/sheetTokensEngine.ts` (CSS contract engine),
+`src/model/convertFixtures.ts` and `src/editor/ai/testGraphs.ts` (shared
+test fixtures). The same list is mirrored into `sonar.exclusions` — moving
+these files out of product-source statistics while they remain analyzed as
+test code, not a blanket exclusion that hides findings — and into the
+vitest coverage `exclude` in `vite.config.ts`, so `coverage/lcov.info`
+contains product files only. `scripts/sonar-test-scope.test.ts` guards
+this classification contract by applying SonarQube path-pattern semantics
+to the properties file.
+
 ## TypeScript Engineering Practices
 
 - Organize frontend and service code by feature or domain capability. A feature
