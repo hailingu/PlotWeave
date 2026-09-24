@@ -137,17 +137,6 @@ describe('projectStore 内存门面（浏览器回退）', () => {
     expect(loaded.edges[0].selected).toBeUndefined()
   })
 
-  it('saveQuiet 吞掉异常不打断调用方', async () => {
-    await expect(
-      projectStore.saveQuiet('ghost-id-不校验', {
-        name: 'x',
-        nodes: [],
-        edges: [],
-        settings: { characters: [], locations: [] },
-      }),
-    ).resolves.toBeUndefined()
-  })
-
   it('list 的 endingCount 由「无出边场景数」派发（>1 才携带）', async () => {
     const meta = await projectStore.create('双结局剧')
     const sceneNoOut = (id: string, no: number) =>

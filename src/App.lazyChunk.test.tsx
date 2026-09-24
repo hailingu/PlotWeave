@@ -32,7 +32,6 @@ vi.mock('./projectStore', () => ({
     loadAiSession: vi.fn(),
     saveAiSession: vi.fn(),
     save: vi.fn(),
-    saveQuiet: vi.fn(),
     duplicate: vi.fn(),
     delete: vi.fn(),
     onAiSessionSaved: () => () => undefined,

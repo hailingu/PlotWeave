@@ -150,13 +150,4 @@ export const projectStore = {
     }
     return { ...meta, sceneCount: meta.sceneCount }
   },
-
-  /** 静默吞掉持久化错误：画布交互不因落盘失败中断，仅控制台留痕。 */
-  saveQuiet: async (id: string, doc: ProjectContent): Promise<void> => {
-    try {
-      await projectStore.save(id, doc)
-    } catch (err) {
-      console.warn('[projectStore] 保存失败', err)
-    }
-  },
 }
