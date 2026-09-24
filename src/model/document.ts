@@ -6,6 +6,12 @@
 /** 当前文档版本；旧扁平存储格式视为 0，由 §11 迁移链升级。 */
 export const CURRENT_SCHEMA_VERSION = 1
 
+/** 当前文档格式的版本字面量类型（issue #312）：随 CURRENT_SCHEMA_VERSION
+ * 演进。ProjectDocument 表示「当前归一化文档」，版本成员收窄到此字面量，
+ * 编译期即拒绝 0/2 等非当前版本的静态构造；未信任/旧版本输入的判型收口
+ * 在 parseProject 的 unknown 原始边界（§11.1），不经本类型。 */
+export type CurrentSchemaVersion = typeof CURRENT_SCHEMA_VERSION
+
 /** 画布坐标点（像素）。 */
 export interface Point {
   x: number
@@ -305,7 +311,9 @@ export interface AssetRef {
 
 /** 项目文档：画布数据的序列化真源（单文件 project.json）。 */
 export interface ProjectDocument {
-  schemaVersion: number
+  /** 恒为当前版本字面量（CurrentSchemaVersion，issue #312）：本类型只描述
+   * 归一化后的当前格式；任意版本号的原始输入走 parseProject 边界。 */
+  schemaVersion: CurrentSchemaVersion
   project: {
     id: string
     name: string
