@@ -378,8 +378,10 @@ describe('App（导航与编辑器回调）', () => {
     fireEvent.click(screen.getByTestId('settings'))
     expect(await screen.findByTestId('home')).toBeTruthy()
   })
+})
 
-  it('aria-modal 弹窗打开时 ⌘, 挂起，弹窗关闭后恢复（issue #263 评审）', async () => {
+describe('App ✦⌘, 应用级模态挂起（issue #263 评审）', () => {
+  it('aria-modal 弹窗打开时 ⌘, 挂起，弹窗关闭后恢复', async () => {
     await openEditor()
     // 夹具：编辑器内打开的 aria-modal 弹窗（真实渲染与 aria-modal 标注由
     // ExportDialog 组件测试覆盖，此处覆盖 App 级监听的存在性挂起链路）

@@ -71,23 +71,6 @@ describe('useEditorHotkeys（全局快捷键 + 失焦收起）', () => {
     expect(a.onEscape).toHaveBeenCalledTimes(1)
   })
 
-  it('导出弹窗打开（issue #263 评审）：非输入焦点挂起撤销/重做/删除，仅 Escape 放行', () => {
-    const a = mkActions({
-      exportDialogOpen: true,
-      selectedNodeIds: () => ['n1'],
-    })
-    renderHook(() => useEditorHotkeys(a))
-    fireEvent.keyDown(document.body, { key: 'z', metaKey: true })
-    fireEvent.keyDown(document.body, { key: 'y', metaKey: true })
-    fireEvent.keyDown(document.body, { key: 'Delete' })
-    expect(a.onUndo).not.toHaveBeenCalled()
-    expect(a.onRedo).not.toHaveBeenCalled()
-    expect(a.onDeleteNodes).not.toHaveBeenCalled()
-    expect(a.onDeleteEdges).not.toHaveBeenCalled()
-    fireEvent.keyDown(document.body, { key: 'Escape' })
-    expect(a.onEscape).toHaveBeenCalledTimes(1)
-  })
-
   it('Delete 删除选中：节点优先于连线；无选中不动作', () => {
     const a = mkActions({
       selectedNodeIds: () => ['n1', 'n2'],
@@ -134,5 +117,24 @@ describe('useEditorHotkeys（全局快捷键 + 失焦收起）', () => {
     unmount()
     fireEvent.keyDown(document.body, { key: 'z', metaKey: true })
     expect(a.onUndo).not.toHaveBeenCalled()
+  })
+})
+
+describe('useEditorHotkeys（导出弹窗挂起，issue #263 评审）', () => {
+  it('导出弹窗打开：非输入焦点挂起撤销/重做/删除，仅 Escape 放行', () => {
+    const a = mkActions({
+      exportDialogOpen: true,
+      selectedNodeIds: () => ['n1'],
+    })
+    renderHook(() => useEditorHotkeys(a))
+    fireEvent.keyDown(document.body, { key: 'z', metaKey: true })
+    fireEvent.keyDown(document.body, { key: 'y', metaKey: true })
+    fireEvent.keyDown(document.body, { key: 'Delete' })
+    expect(a.onUndo).not.toHaveBeenCalled()
+    expect(a.onRedo).not.toHaveBeenCalled()
+    expect(a.onDeleteNodes).not.toHaveBeenCalled()
+    expect(a.onDeleteEdges).not.toHaveBeenCalled()
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(a.onEscape).toHaveBeenCalledTimes(1)
   })
 })
