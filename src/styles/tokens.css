@@ -19,8 +19,10 @@
   --danger: #d70015;
   --brand-gradient: linear-gradient(120deg, var(--accent-alt), var(--accent));
 
-  /* 填充与描边 */
+  /* 填充与描边（tertiary 比 quaternary 更实一档，组件悬停提亮用，
+   * issue #265） */
   --fill-quaternary: rgba(0, 0, 0, 0.06);
+  --fill-tertiary: rgba(0, 0, 0, 0.1);
   --border-hairline: rgba(0, 0, 0, 0.12);
 
   /* 画布：网点与 sequence 连线（§4.4 中性灰贝塞尔） */
@@ -155,6 +157,7 @@
     --danger: #ff6961;
 
     --fill-quaternary: rgba(255, 255, 255, 0.1);
+    --fill-tertiary: rgba(255, 255, 255, 0.16);
     --border-hairline: rgba(255, 255, 255, 0.14);
 
     --canvas-dot: rgba(255, 255, 255, 0.1);
@@ -187,6 +190,7 @@
     --material-sidebar: var(--surface-window);
     --text-secondary: #48484d;
     --fill-quaternary: rgba(0, 0, 0, 0.12);
+    --fill-tertiary: rgba(0, 0, 0, 0.18);
     --border-hairline: rgba(0, 0, 0, 0.35);
     --canvas-dot: rgba(0, 0, 0, 0.2);
 
@@ -216,6 +220,7 @@
     :root {
       --text-secondary: #d2d2d7;
       --fill-quaternary: rgba(255, 255, 255, 0.18);
+      --fill-tertiary: rgba(255, 255, 255, 0.26);
       --border-hairline: rgba(255, 255, 255, 0.4);
       --canvas-dot: rgba(255, 255, 255, 0.22);
 

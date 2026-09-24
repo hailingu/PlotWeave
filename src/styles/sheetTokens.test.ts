@@ -354,10 +354,11 @@ const STRUCTURE_EXCEPTIONS: Readonly<
 ]
 
 /**
- * 接线例外注册表：悬空 var() 引用按开放缺陷跟踪（#265）。绑定到承载属性
- * 与条数——已豁免引用换属性承载（如 background 改 color）或新增第二条同
- * 属性声明（实际条数 > 已审计）均按新违例点名，已知缺陷不因豁免而换位或
- * 扩张；属性或条数变动后须更新表项。
+ * 接线例外注册表：悬空 var() 引用按开放缺陷跟踪。绑定到承载属性与条数——
+ * 已豁免引用换属性承载（如 background 改 color）或新增第二条同属性声明
+ * （实际条数 > 已审计）均按新违例点名，已知缺陷不因豁免而换位或扩张；
+ * 属性或条数变动后须更新表项。当前为空：#265 的 --fill-tertiary 悬空已
+ * 在 tokens.css 定义四环境令牌后修复并移出本表。
  */
 const WIRING_EXCEPTIONS: Readonly<
   {
@@ -368,16 +369,7 @@ const WIRING_EXCEPTIONS: Readonly<
     count?: number
     reason: string
   }[]
-> = [
-  {
-    sheet: 'src/editor/panels/panels.css',
-    selector: '.pw-ai-cancel:hover',
-    prop: 'background',
-    ref: '--fill-tertiary',
-    count: 1,
-    reason: '开放缺陷：未定义变量致悬停背景失效，归 #265',
-  },
-]
+> = []
 
 describe('样式表发现（issue #278：契约覆盖全部组件样式表）', () => {
   it('发现集含令牌定义源与组件表，新表自动进入扫描且不要求展示色声明数量', () => {

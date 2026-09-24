@@ -318,3 +318,25 @@ describe('三处前景的语义接线与黄金基准（issue #240）', () => {
     }
   })
 })
+
+describe('AI 取消按钮悬停背景（issue #265：悬空 --fill-tertiary 修复）', () => {
+  // 基线双外观即可覆盖：--fill-tertiary 在 tokens.css 随外观成对定义，
+  // more/reduce 由接线扫描（sheetTokens.test.ts）全环境验证。
+  it('悬停背景经 --fill-tertiary 定义且四环境可解析，较常态填充更实（视觉反馈加深）', () => {
+    const rule = ruleOf('.pw-ai-cancel')
+    const hover = ruleOf('.pw-ai-cancel:hover')
+    expect(declOf(hover, 'background')).toBe('var(--fill-tertiary)')
+    for (const [name, env] of BASELINE_ENVS) {
+      const tokens = tokenValues(env)
+      const hoverFill = resolveChain(declOf(hover, 'background'), tokens)
+      expect(hoverFill, `${name} 悬停背景应解析为有效颜色`).toMatch(/^rgba?\(/)
+      const restFill = resolveChain(declOf(rule, 'background'), tokens)
+      // 更实的填充：alpha 通道严格大于常态（交互反馈语义，issue #265）
+      const alphaOf = (v: string): number =>
+        Number(v.match(/,\s*([\d.]+)\)$/)?.[1] ?? 1)
+      expect(alphaOf(hoverFill), `${name} 悬停应比常态更实`).toBeGreaterThan(
+        alphaOf(restFill),
+      )
+    }
+  })
+})
