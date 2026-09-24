@@ -57,7 +57,9 @@ function fixture(): { nodes: CanvasNode[]; edges: Edge[] } {
   return { nodes, edges }
 }
 
-describe('findNodesText（issue #275 评审：被节选条目的可发现读取路径）', () => {
+/** 分组按检索职责拆分（issue #313）：单组回调不超 80 代码行上限；
+ * 用例文本与覆盖自原单一分组原样保留（含 #275/#294 评审各例）。 */
+describe('findNodesText · 名称/文案检索与关联边', () => {
   it('按名称/文案跨类型检索，大小写不敏感', () => {
     const { nodes, edges } = fixture()
     const text = findNodesText(nodes, edges, '追凶')
@@ -73,6 +75,14 @@ describe('findNodesText（issue #275 评审：被节选条目的可发现读取�
     expect(text).toContain('branch(选项追凶): br1 → d1')
   })
 
+  it('无匹配与空关键词给出明确文案，不抛异常', () => {
+    const { nodes, edges } = fixture()
+    expect(findNodesText(nodes, edges, '不存在')).toContain('未找到匹配')
+    expect(findNodesText(nodes, edges, '')).toContain('query')
+  })
+})
+
+describe('findNodesText · 多命中分页与单节点连线枚举', () => {
   it('多命中按 offset 翻页：页大小上限 + 计数标记带下一页偏移（issue #275 评审）', () => {
     const nodes: CanvasNode[] = Array.from({ length: 30 }, (_, i) =>
       node({
@@ -139,7 +149,9 @@ describe('findNodesText（issue #275 评审：被节选条目的可发现读取�
     expect(page2).toContain('→ t70')
     expect(page2).not.toMatch(/另有 \d+ 条连线未列出/)
   })
+})
 
+describe('findNodesText · 续页游标稳定性（陈旧位置句柄）', () => {
   it('删除前页连线后旧位置续页必须明确失效，不能漏掉原第 65 条（PR #294 评审）', () => {
     const hub = node({
       id: 'hub',
@@ -193,7 +205,9 @@ describe('findNodesText（issue #275 评审：被节选条目的可发现读取�
       expect(stale).not.toContain('→ t64')
     }
   })
+})
 
+describe('findNodesText · 输出预算与行级截断', () => {
   it('行级截断：单命中 6.5 万字符名称不原样携带（issue #275 评审）', () => {
     const giant: CanvasNode = node({
       id: 'g1',
@@ -256,7 +270,9 @@ describe('findNodesText（issue #275 评审：被节选条目的可发现读取�
       expect(n).not.toBe(page1Node)
     }
   })
+})
 
+describe('findNodesText · 文案裁剪与超长 id 缩写', () => {
   it('选项文案超长时只裁剪文案：连线端点不被截断（PR #294 评审）', () => {
     const hub: CanvasNode = node({
       id: 'hub',
@@ -305,7 +321,9 @@ describe('findNodesText（issue #275 评审：被节选条目的可发现读取�
     const fuzzy = findNodesText([giant], [], '长'.repeat(30_000))
     expect(fuzzy.length).toBeLessThanOrEqual(GRAPH_DIGEST_MAX_CHARS)
   })
+})
 
+describe('findNodesText · id: 前缀分段读回与前缀碰撞', () => {
   it('id:<前缀> 分段返回完整 id：按名称发现的超长 id 节点可无损恢复（PR #294 评审）', () => {
     const giantId = 'i'.repeat(30_000)
     const byName: CanvasNode = node({
@@ -357,7 +375,9 @@ describe('findNodesText（issue #275 评审：被节选条目的可发现读取�
     const none = findNodesText([a], [], 'id:zzz')
     expect(none).toContain('没有 id 以')
   })
+})
 
+describe('findNodesText · 指纹句柄消歧与多段续读', () => {
   it('带 ID 指纹的句柄直达碰撞候选完整 id 分段（PR #294 评审）', () => {
     // 两个合法 id 前 100 字符相同：只能按名称发现目标
     const shared = 's'.repeat(100)
@@ -417,7 +437,9 @@ describe('findNodesText（issue #275 评审：被节选条目的可发现读取�
     expect(seg2).toContain('第 2/2 段')
     expect(seg2).toContain(giant.slice(0, 200))
   })
+})
 
+describe('findNodesText · 长基前缀与序号句柄优先级', () => {
   it('长基前缀的序号续读仍定位原节点（PR #294 评审）', () => {
     const short = 's'.repeat(80)
     const base = `${short}${'b'.repeat(20)}`
@@ -488,7 +510,9 @@ describe('findNodesText（issue #275 评审：被节选条目的可发现读取�
     const literal = findNodesText([p1, p2, tricky], [], 'id:P#2abc')
     expect(literal).toContain('P#2abc')
   })
+})
 
+describe('findNodesText · 精确 ID 优先与 id: 前缀连线视图', () => {
   it('精确 id 命中优先进入单节点视图：id 子串碰撞不阻连续线枚举（PR #294 评审）', () => {
     // 合法旧项目可同时存在 n1 与 n10：查询 n1 时 includes 也会命中 n10
     const hub: CanvasNode = node({
@@ -544,7 +568,9 @@ describe('findNodesText（issue #275 评审：被节选条目的可发现读取�
     expect(text).toContain('sequence: id:foo → t13')
     expect(text).not.toContain('完整 id 第')
   })
+})
 
+describe('findNodesText · 原样空白语义与长查询续页', () => {
   it('原样精确 ID 优先于首尾空白裁剪，避免读取另一节点的连线（PR #294 评审）', () => {
     const plain = node({
       id: 'n1',
@@ -611,7 +637,9 @@ describe('findNodesText（issue #275 评审：被节选条目的可发现读取�
     expect(page1).toContain('原始 query 和 offset=24')
     expect(findNodesText(nodes, [], query, 24)).toContain('- hit-24')
   })
+})
 
+describe('findNodesText · 跨调用句柄绑定与提示转义', () => {
   it('跨工具调用增删同前缀节点时，恢复句柄仍绑定原 ID 或明确失效（PR #294 评审）', () => {
     const prefix = 's'.repeat(80)
     const earlier = node({
@@ -652,6 +680,24 @@ describe('findNodesText（issue #275 评审：被节选条目的可发现读取�
     expect(removed).not.toContain('完整 id 第')
   })
 
+  it('句柄提示转义合法 ID 中的引号与换行（PR #294 评审）', () => {
+    const id = `q"\n${'x'.repeat(100)}`
+    const target = node({
+      id,
+      type: 'beat',
+      data: { name: '特殊 ID', tone: 'x' },
+    })
+    const found = findNodesText([target], [], '特殊 ID')
+    const encoded = found.match(
+      /find_nodes\(("(?:\\.|[^"\\])*"), offset=1\)/,
+    )?.[1]
+    expect(encoded).toBeTruthy()
+    const query = JSON.parse(encoded!) as string
+    expect(findNodesText([target], [], query)).toContain(id)
+  })
+})
+
+describe('findNodesText · 句柄目标一致性与失效路径', () => {
   it('超长 ID 的连线续页使用可解析句柄并保持目标（PR #294 评审）', () => {
     const targetId = 'z'.repeat(100)
     const target = node({
@@ -695,22 +741,6 @@ describe('findNodesText（issue #275 评审：被节选条目的可发现读取�
     expect(removed).not.toContain('→ t64')
   })
 
-  it('句柄提示转义合法 ID 中的引号与换行（PR #294 评审）', () => {
-    const id = `q"\n${'x'.repeat(100)}`
-    const target = node({
-      id,
-      type: 'beat',
-      data: { name: '特殊 ID', tone: 'x' },
-    })
-    const found = findNodesText([target], [], '特殊 ID')
-    const encoded = found.match(
-      /find_nodes\(("(?:\\.|[^"\\])*"), offset=1\)/,
-    )?.[1]
-    expect(encoded).toBeTruthy()
-    const query = JSON.parse(encoded!) as string
-    expect(findNodesText([target], [], query)).toContain(id)
-  })
-
   it('旧位置句柄不再静默解析到可能变化的节点（PR #294 评审）', () => {
     const a = node({ id: 'P-A', type: 'beat', data: { name: '甲', tone: 'x' } })
     const b = node({ id: 'P-B', type: 'beat', data: { name: '乙', tone: 'x' } })
@@ -731,11 +761,5 @@ describe('findNodesText（issue #275 评审：被节选条目的可发现读取�
     expect(findNodesText([target], [], 'id:broken#2~bad')).toContain(
       '无效或过期句柄',
     )
-  })
-
-  it('无匹配与空关键词给出明确文案，不抛异常', () => {
-    const { nodes, edges } = fixture()
-    expect(findNodesText(nodes, edges, '不存在')).toContain('未找到匹配')
-    expect(findNodesText(nodes, edges, '')).toContain('query')
   })
 })
