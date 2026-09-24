@@ -569,10 +569,12 @@ use crate::store::persist::faults::{Injection, Stage};
 
 /// 主保存失败后的临时文件清扫断言：projects 根不得遗留 .tmp 条目
 ///（失败清理只在取得临时文件所有权后生效，排他创建失败无可清理）。
+/// 单条目读取失败直接失败（PR #306 评审）：静默跳过会让扫描不完整时
+/// 漏报残留，回归测试虚假通过——测试助手同样 fail-closed。
 fn assert_no_temp_left(projects: &std::path::Path) {
     let orphans: Vec<_> = fs::read_dir(projects)
         .expect("扫描 projects 根")
-        .filter_map(|e| e.ok())
+        .map(|e| e.expect("读取目录条目失败（不得静默跳过）"))
         .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
         .collect();
     assert!(
