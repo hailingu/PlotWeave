@@ -5,9 +5,9 @@
  * 节点键盘聚焦（xyflow nodesFocusable）与 Enter 选中、工具栏项目名纯
  * 键盘改名、应用级 Delete 删除选中节点与 ⌘Z 撤销（仓库已禁用库内建
  * deleteKeyCode，删除走 useEditorHotkeys）、导出弹窗 Escape 关闭。
- * 两个属实发现按 issue #238「实际发现的缺陷另行评定」以断言固化现状
- * 并在 PR 披露，修复时翻转对应断言：① 弹窗打开后焦点不移入弹窗；
- * ② 键盘单选节点无方向键移动——xyflow 12.11.3 的方向键移动仅绑定在
+ * 发现①（弹窗打开后焦点不移入弹窗）已由 issue #263 修复并翻转断言：
+ * 打开即移入焦点、Escape 关闭后归还触发按钮。发现②仍固化现状：
+ * 键盘单选节点无方向键移动——xyflow 12.11.3 的方向键移动仅绑定在
  * 框选手势挂载的选择框（nodesSelectionActive），单选不产生该框。
  */
 import {
@@ -133,15 +133,20 @@ describe('编辑器键盘流程（issue #238）', () => {
     expect(outlineRow()).toBeTruthy()
   })
 
-  it('导出弹窗：Escape 关闭；打开时焦点未移入弹窗（现状固化，见披露）', () => {
+  it('导出弹窗：打开焦点移入弹窗，Escape 关闭后归还触发按钮（issue #263）', () => {
     renderEditor()
-    fireEvent.click(screen.getByLabelText('导出剧本'))
+    const exportButton = screen.getByLabelText('导出剧本')
+    act(() => {
+      exportButton.focus()
+    })
+    fireEvent.click(exportButton)
     const dialog = screen.getByRole('dialog', { name: '导出剧本' })
     expect(dialog).toBeTruthy()
-    // 实际发现（另行评定）：dialog open 后焦点仍留在触发按钮，未移入弹窗；
-    // 此断言固化现状防止无声变化，修复焦点移入时翻转为 toBe(true)
-    expect(dialog.contains(document.activeElement)).toBe(false)
+    // issue #263 修复：打开即把焦点移入弹窗（翻转自 issue #238 的现状固化）
+    expect(dialog.contains(document.activeElement)).toBe(true)
     fireEvent.keyDown(document.body, { key: 'Escape' })
     expect(screen.queryByRole('dialog')).toBeNull()
+    // 关闭后焦点归还打开时的触发按钮
+    expect(document.activeElement).toBe(exportButton)
   })
 })
