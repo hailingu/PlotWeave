@@ -187,63 +187,17 @@ function applyValidatedBatch(
   return null
 }
 
-/** 校验与读工具族（useAiBridge 拆出的回调子域）：反应式画布 → 快照 digest；
- * ref 镜像 → 整批校验快照与 get_node / get_settings_snapshot 读工具。
- * aiSnapshot 一并回传供落地重校验复用。 */
-/** useAiReadTools 的依赖：反应式画布状态 + ref 镜像（与 useAiBridge 同源）。 */
-interface AiReadToolsDeps {
-  contentNodes: CanvasNode[]
-  edges: Edge[]
-  settings: ProjectSettings
+/** 读工具回调装配（issue #315 自 useAiReadTools 拆出）：get_node /
+ * get_settings_snapshot / get_document / find_nodes 四个读工具全部经 ref
+ * 读「当前态」，回调身份只随镜像引用变化。 */
+interface AiEntityReadsDeps {
   nodesRef: { current: CanvasNode[] }
   edgesRef: { current: Edge[] }
   settingsRef: { current: ProjectSettings }
-  assetsRef: { current: ProjectContent['assets'] }
 }
 
-function useAiReadTools(deps: AiReadToolsDeps) {
-  const {
-    contentNodes,
-    edges,
-    settings,
-    nodesRef,
-    edgesRef,
-    settingsRef,
-    assetsRef,
-  } = deps
-
-  // 摘要是纯内容派生（不含位置）：消费内容稳定投影，拖拽过程帧不重建
-  const canvasDigest = useMemo(
-    () =>
-      buildGraphDigest(contentNodes, edges, {
-        characters: settings.characters,
-        locations: settings.locations,
-        characterName: (id) => resolveCharacterName(settings, id),
-        locationName: (id) => resolveLocationName(settings, id),
-      }),
-    [contentNodes, edges, settings],
-  )
-
-  /** AI 校验用的图快照（§12.2）：装配见 graphSnapshotOf。 */
-  const aiSnapshot = useCallback(
-    () => graphSnapshotOf(nodesRef, edgesRef, settingsRef, assetsRef),
-    [nodesRef, edgesRef, settingsRef, assetsRef],
-  )
-
-  const validateAiReply = useCallback(
-    (text: string): BatchValidation | null => {
-      const parsed = extractBatchJson(text)
-      if (!parsed) return null
-      return validateAiBatch(parsed.commands, aiSnapshot())
-    },
-    [aiSnapshot],
-  )
-
-  const validateCommands = useCallback(
-    (commands: AiCommand[]): BatchValidation | null =>
-      validateAiBatch(commands, aiSnapshot()),
-    [aiSnapshot],
-  )
+function useAiEntityReads(deps: AiEntityReadsDeps) {
+  const { nodesRef, edgesRef, settingsRef } = deps
 
   const readNode = useCallback(
     (nodeId: string): string | null => {
@@ -280,6 +234,72 @@ function useAiReadTools(deps: AiReadToolsDeps) {
         : null
     },
     [settingsRef],
+  )
+
+  return { readNode, readSettings, readDocument, findNodes }
+}
+
+/** 校验与读工具族（useAiBridge 拆出的回调子域）：反应式画布 → 快照 digest；
+ * ref 镜像 → 整批校验快照；读工具回调装配见 useAiEntityReads。
+ * aiSnapshot 一并回传供落地重校验复用。 */
+/** useAiReadTools 的依赖：反应式画布状态 + ref 镜像（与 useAiBridge 同源）。 */
+interface AiReadToolsDeps {
+  contentNodes: CanvasNode[]
+  edges: Edge[]
+  settings: ProjectSettings
+  nodesRef: { current: CanvasNode[] }
+  edgesRef: { current: Edge[] }
+  settingsRef: { current: ProjectSettings }
+  assetsRef: { current: ProjectContent['assets'] }
+}
+
+function useAiReadTools(deps: AiReadToolsDeps) {
+  const {
+    contentNodes,
+    edges,
+    settings,
+    nodesRef,
+    edgesRef,
+    settingsRef,
+    assetsRef,
+  } = deps
+  const { readNode, readSettings, readDocument, findNodes } = useAiEntityReads({
+    nodesRef,
+    edgesRef,
+    settingsRef,
+  })
+
+  // 摘要是纯内容派生（不含位置）：消费内容稳定投影，拖拽过程帧不重建
+  const canvasDigest = useMemo(
+    () =>
+      buildGraphDigest(contentNodes, edges, {
+        characters: settings.characters,
+        locations: settings.locations,
+        characterName: (id) => resolveCharacterName(settings, id),
+        locationName: (id) => resolveLocationName(settings, id),
+      }),
+    [contentNodes, edges, settings],
+  )
+
+  /** AI 校验用的图快照（§12.2）：装配见 graphSnapshotOf。 */
+  const aiSnapshot = useCallback(
+    () => graphSnapshotOf(nodesRef, edgesRef, settingsRef, assetsRef),
+    [nodesRef, edgesRef, settingsRef, assetsRef],
+  )
+
+  const validateAiReply = useCallback(
+    (text: string): BatchValidation | null => {
+      const parsed = extractBatchJson(text)
+      if (!parsed) return null
+      return validateAiBatch(parsed.commands, aiSnapshot())
+    },
+    [aiSnapshot],
+  )
+
+  const validateCommands = useCallback(
+    (commands: AiCommand[]): BatchValidation | null =>
+      validateAiBatch(commands, aiSnapshot()),
+    [aiSnapshot],
   )
 
   return {
