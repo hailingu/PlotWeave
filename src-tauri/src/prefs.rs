@@ -186,6 +186,9 @@ pub async fn set_provider_key(provider_id: String, key: String) -> Result<String
 /// 解析 provider 当前可用的 key：优先 settings.json 的 `keyEnc` 密文；
 /// 密文缺失时只读回退历史钥匙串数据（不再写入钥匙串）。
 /// crate 内共享：图像生成代理（imagegen）与对话代理（llm_chat）同域。
+/// 同步阻塞访问（目录确保、文件读取、密文解析，可能触发机器标识子进程
+/// 或历史钥匙串）：调用方必须把它作为完整同步工作交由阻塞调度
+/// （issue #279），不得在异步工作线程上直调。
 pub(crate) fn provider_secret(app: &AppHandle, provider_id: &str) -> Result<String, String> {
     validate_provider_id(provider_id)?;
     let path = prefs_path(app)?;
@@ -219,6 +222,18 @@ pub(crate) fn provider_secret(app: &AppHandle, provider_id: &str) -> Result<Stri
         Err(keyring::Error::NoEntry) => Err("未配置 API key，请在设置页填写".to_string()),
         Err(e) => Err(format!("读取 key 失败：{e}")),
     }
+}
+
+/// 对话命令的凭据阶段（issue #279）：`provider_secret` 是完整同步工作
+/// （数据目录确保、cap+1 受限读取、密文解析、必要时机器标识子进程与
+/// 历史钥匙串回退），经既有 `blocking::run` 交由阻塞线程池——不在首次
+/// await 前占用异步工作线程。领域错误原样上浮；密钥留在后端；HTTP
+/// 只在凭据成功后由 chat_completion 发出。`load` 由调用方注入：生产
+/// 绑定 provider_secret，测试注入受控延迟以验证兄弟任务响应性。
+async fn chat_credential(
+    load: impl FnOnce() -> Result<String, String> + Send + 'static,
+) -> Result<String, String> {
+    crate::blocking::run("llm_chat", load).await
 }
 
 /// 对话补全传输内核（不含 AppHandle 与密文解析，便于对接本地 HTTP
@@ -284,6 +299,9 @@ async fn chat_completion(
 /// 请求前在 Rust 内存中解密——明文不出后端；前端只传 provider 配置、
 /// 消息列表与可选工具表。OpenAI 兼容 chat completions，非流式；
 /// 返回 choices[0].message 原文（content 字符串 + 可选 tool_calls 数组）。
+/// 凭据读取经 chat_credential 离开异步工作线程（issue #279）：同步的
+/// 目录确保/受限读取/密文解析/钥匙串回退占用阻塞线程池，HTTP 只在其
+/// 完成后发出。
 #[tauri::command]
 pub async fn llm_chat(
     app: AppHandle,
@@ -297,7 +315,7 @@ pub async fn llm_chat(
     if model.trim().is_empty() {
         return Err("未选择模型".into());
     }
-    let key = provider_secret(&app, &provider_id)?;
+    let key = chat_credential(move || provider_secret(&app, &provider_id)).await?;
     chat_completion(
         &base_url,
         &model,
@@ -442,6 +460,52 @@ mod tests {
             }
             other => panic!("非法 UTF-8 应归类为读取失败，实际：{other:?}"),
         }
+    }
+
+    // ---- issue #279：凭据阶段离开异步工作线程 ----
+
+    #[test]
+    fn slow_credential_phase_keeps_async_siblings_responsive() {
+        // 凭据准备（目录确保、受限读取、密文解析、历史钥匙串回退）是
+        // 完整同步工作，须离开异步工作线程：受控 400ms 延迟模拟慢凭据
+        // 来源，单线程异步运行时上的兄弟任务（计时器 + 经阻塞调度的
+        // 同步读）必须在凭据阶段保持响应；凭据未完成前不得提前报告
+        // 结果；领域错误原样上浮。HTTP 只在凭据成功后发出，本测试以
+        // 错误终止，不触网。
+        let dir = temp_prefs_dir("slow-credential");
+        let sibling_target = dir.join("sibling.json");
+        fs::write(&sibling_target, r#"{"providers":[]}"#).expect("写入兄弟读取目标");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("构建单线程运行时");
+        let start = std::time::Instant::now();
+        let credential = runtime.spawn(chat_credential(|| {
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            Err("未配置 API key，请在设置页填写".to_string())
+        }));
+        let (latency, sibling_text, finished) = runtime.block_on(async {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            let sibling_text = crate::blocking::run("sibling-read", move || {
+                fs::read_to_string(&sibling_target).map_err(|e| e.to_string())
+            })
+            .await
+            .expect("兄弟同步读应成功");
+            (start.elapsed(), sibling_text, credential.is_finished())
+        });
+        let error = runtime
+            .block_on(credential)
+            .expect("凭据任务应完成")
+            .expect_err("受控延迟后应携带领域错误");
+        let _ = fs::remove_dir_all(&dir);
+        println!("slow-credential: sibling latency={latency:?}, delay=400ms");
+        assert!(
+            latency < std::time::Duration::from_millis(200),
+            "兄弟任务被凭据阶段阻塞：{latency:?}"
+        );
+        assert!(!finished, "凭据未完成前不得提前报告结果");
+        assert_eq!(sibling_text, r#"{"providers":[]}"#);
+        assert_eq!(error, "未配置 API key，请在设置页填写");
     }
 
     #[test]
