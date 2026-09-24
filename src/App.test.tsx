@@ -34,7 +34,6 @@ vi.mock('./projectStore', () => ({
     loadAiSession: vi.fn(),
     saveAiSession: vi.fn(),
     save: vi.fn(),
-    saveQuiet: vi.fn(),
     duplicate: vi.fn(),
     delete: vi.fn(),
     onAiSessionSaved: (listener: (id: string) => void) => {
@@ -144,7 +143,6 @@ const store = projectStore as unknown as {
   loadAiSession: ReturnType<typeof vi.fn>
   saveAiSession: ReturnType<typeof vi.fn>
   save: ReturnType<typeof vi.fn>
-  saveQuiet: ReturnType<typeof vi.fn>
   duplicate: ReturnType<typeof vi.fn>
   delete: ReturnType<typeof vi.fn>
 }
@@ -1253,7 +1251,7 @@ describe('App ✦AI 会话回吐重排失败恢复', () => {
 })
 
 describe('App ✦首页项目变更失败反馈：重命名与删除/复制（issue #132）', () => {
-  it('重命名失败（saveQuiet 生产契约吞错，须走拒绝式 save）：横幅点名动作、目标与诊断；重试成功后横幅消失', async () => {
+  it('重命名失败：横幅点名动作、目标与诊断；重试成功后横幅消失', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     store.load.mockResolvedValue(structuredClone(DOC))
     store.save.mockRejectedValueOnce(new Error('只读目录'))
