@@ -250,18 +250,22 @@ describe('useSettingsActions（issue 271 文档更新/删除：完整文档与�
     expect(h.result.current.doc.settings.documents).toEqual(after.documents)
   })
 
-  it('deleteDocument 仅移除目标：undo 恢复完整文档（含关联），redo 再删', async () => {
+  it('deleteDocument 仅移除目标：undo 恢复完整文档（含成对关联），redo 再删', async () => {
     const h = setupStateful(withDocs)
-    await act(async () => h.result.current.settingsActions.deleteDocument('d2'))
+    // 删除携带成对关联的 d1：恢复若丢失关联，完整值断言将点名
+    await act(async () => h.result.current.settingsActions.deleteDocument('d1'))
     expect(h.result.current.doc.settings.documents?.map((d) => d.id)).toEqual([
-      'd1',
+      'd2',
     ])
     expect(h.result.current.doc.settings.characters).toBe(withDocs.characters)
     await act(async () => h.stack.undo())
     expect(h.result.current.doc.settings.documents).toEqual(withDocs.documents)
+    expect(h.result.current.doc.settings.documents![0]).toEqual(
+      withDocs.documents![0],
+    )
     await act(async () => h.stack.redo())
     expect(h.result.current.doc.settings.documents?.map((d) => d.id)).toEqual([
-      'd1',
+      'd2',
     ])
   })
 })
@@ -269,11 +273,14 @@ describe('useSettingsActions（issue 271 文档更新/删除：完整文档与�
 describe('useSettingsActions（issue 271 文档守卫：零派发不改语义）', () => {
   it('目标缺失与 documents 桶缺省：settings 引用不变、命令栈为空', async () => {
     const h = setupStateful(withDocs)
-    await act(async () =>
+    await act(async () => {
       h.result.current.settingsActions.updateDocument('ghost', {
         title: 'x',
-      }),
-    )
+      })
+      // 桶存在但 id 过期：删除同样零派发（与 updateDocument 同族守卫，
+      // PR #298 评审——不得替换 settings 对象或入栈空操作命令）
+      h.result.current.settingsActions.deleteDocument('ghost')
+    })
     expect(h.result.current.doc.settings).toBe(withDocs)
     expect(h.stack.canUndo).toBe(false)
 
