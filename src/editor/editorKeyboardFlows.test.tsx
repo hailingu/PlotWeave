@@ -149,4 +149,20 @@ describe('编辑器键盘流程（issue #238）', () => {
     // 关闭后焦点归还打开时的触发按钮
     expect(document.activeElement).toBe(exportButton)
   })
+
+  it('导出弹窗打开期间 Delete 不改写背景，关闭后恢复生效（issue #263 评审）', () => {
+    renderEditor()
+    selectNodeByKeyboard()
+    fireEvent.click(screen.getByLabelText('导出剧本'))
+    expect(screen.getByRole('dialog', { name: '导出剧本' })).toBeTruthy()
+    // 弹窗打开 + 节点保持选中：Delete 不得穿透遮罩删除背景节点
+    fireEvent.keyDown(document.body, { key: 'Delete' })
+    expect(outlineRow()).toBeTruthy()
+    expect(document.querySelector('[data-testid="rf__node-sc1"]')).toBeTruthy()
+    // 关闭弹窗后守卫解除，Delete 恢复删除选中节点
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).toBeNull()
+    fireEvent.keyDown(document.body, { key: 'Delete' })
+    expect(outlineRow()).toBeNull()
+  })
 })

@@ -13,6 +13,7 @@ function mkActions(
     onUndo: vi.fn(),
     onRedo: vi.fn(),
     modalEditingOpen: false,
+    exportDialogOpen: false,
     selectedNodeIds: () => [],
     selectedEdgeIds: () => [],
     onDeleteNodes: vi.fn(),
@@ -60,6 +61,23 @@ describe('useEditorHotkeys（全局快捷键 + 失焦收起）', () => {
       metaKey: true,
       shiftKey: true,
     })
+    fireEvent.keyDown(document.body, { key: 'y', metaKey: true })
+    fireEvent.keyDown(document.body, { key: 'Delete' })
+    expect(a.onUndo).not.toHaveBeenCalled()
+    expect(a.onRedo).not.toHaveBeenCalled()
+    expect(a.onDeleteNodes).not.toHaveBeenCalled()
+    expect(a.onDeleteEdges).not.toHaveBeenCalled()
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(a.onEscape).toHaveBeenCalledTimes(1)
+  })
+
+  it('导出弹窗打开（issue #263 评审）：非输入焦点挂起撤销/重做/删除，仅 Escape 放行', () => {
+    const a = mkActions({
+      exportDialogOpen: true,
+      selectedNodeIds: () => ['n1'],
+    })
+    renderHook(() => useEditorHotkeys(a))
+    fireEvent.keyDown(document.body, { key: 'z', metaKey: true })
     fireEvent.keyDown(document.body, { key: 'y', metaKey: true })
     fireEvent.keyDown(document.body, { key: 'Delete' })
     expect(a.onUndo).not.toHaveBeenCalled()

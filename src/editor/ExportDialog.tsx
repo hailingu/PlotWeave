@@ -73,10 +73,13 @@ const FOCUSABLE_SELECTOR =
 /**
  * 导出对话框的模态键盘边界（issue #263）：打开即把焦点移入弹窗首控件；
  * Tab/Shift+Tab 在弹窗内首尾环绕，焦点逸出到背景元素时按方向拉回；
- * Escape 关闭；卸载（Esc/遮罩/✕/父层状态任一路径）把焦点归还打开时的
- * 触发元素——视觉与指针遮罩之外补齐键盘模态语义（dialog 标注 aria-modal
- * 配合）。onClose 经 latest-ref 消费：父层（EditorOverlays）每渲染传新
- * 内联闭包，边界不得因闭包标识变化重挂（重挂会把焦点闪归还触发元素）。
+ * Escape 关闭；卸载（Esc/遮罩/✕/父层状态任一路径）把焦点归还打开前
+ * 最后聚焦的元素——键盘打开即触发控件；macOS WebKit 指针打开不聚焦
+ * 按钮，归还打开前焦点所在（通常 body，指针流无键盘上下文可归还），
+ * 与 issue #263「恢复到合理触发位置」的语义一致。视觉与指针遮罩之外
+ * 补齐键盘模态语义（dialog 标注 aria-modal 配合；背景全局快捷键的挂起
+ * 在 useEditorHotkeys）。onClose 经 latest-ref 消费：父层（EditorOverlays）
+ * 每渲染传新内联闭包，边界不得因闭包标识变化重挂（重挂会把焦点闪归还）。
  */
 function useExportModalKeyboard(
   dialogRef: RefObject<HTMLDialogElement | null>,
