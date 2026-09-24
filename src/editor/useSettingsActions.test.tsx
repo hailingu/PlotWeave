@@ -141,3 +141,117 @@ describe('useSettingsActions（issue 95 人工详情编辑）', () => {
     expect(setSettings).not.toHaveBeenCalled()
   })
 })
+
+describe('useSettingsActions（issue 56/271 文档桶：真实状态与撤销路径）', () => {
+  const withDocs: ProjectSettings = {
+    ...base,
+    props: [{ id: 'p1', name: '道具' }],
+    documents: [
+      {
+        id: 'd1',
+        title: '世界观',
+        body: '霓虹都市。',
+        relatedIds: [
+          { kind: 'character', id: 'c1' },
+          { kind: 'location', id: 'l1' },
+        ],
+      },
+      { id: 'd2', title: '术语表', body: '', relatedIds: [] },
+    ],
+  }
+
+  it('addDocument：追加占位文档；桶缺省时新建；其他桶与既有文档透传；undo 还原完整 before', () => {
+    // 桶缺省：documents 为 undefined 时新建单元素桶
+    const bare = setup()
+    bare.result.current.settingsActions.addDocument()
+    expect(bare.setSettings).toHaveBeenCalledTimes(1)
+    const created = bare.setSettings.mock.calls[0][0] as ProjectSettings
+    expect(created.documents).toHaveLength(1)
+    expect(created.documents![0]).toMatchObject({
+      title: '新文档',
+      body: '',
+      relatedIds: [],
+    })
+    bare.commands[0].undo()
+    expect(bare.setSettings).toHaveBeenLastCalledWith(base)
+    bare.commands[0].redo()
+    expect(bare.setSettings).toHaveBeenLastCalledWith(created)
+
+    // 桶存在：追加占位，既有文档与 characters/locations/props 引用透传
+    const h = setup(withDocs)
+    h.result.current.settingsActions.addDocument()
+    const after = h.setSettings.mock.calls[0][0] as ProjectSettings
+    expect(after.documents).toHaveLength(3)
+    expect(after.documents![0]).toEqual(withDocs.documents![0])
+    expect(after.characters).toBe(withDocs.characters)
+    expect(after.locations).toBe(withDocs.locations)
+    expect(after.props).toBe(withDocs.props)
+    h.commands[0].undo()
+    expect(
+      (h.setSettings.mock.calls[1][0] as ProjectSettings).documents,
+    ).toEqual(withDocs.documents)
+  })
+
+  it('updateDocument：标题/正文/关联整体替换，兄弟文档与其他桶不动；undo/redo 还原完整文档', () => {
+    const h = setup(withDocs)
+    const related = [{ kind: 'location' as const, id: 'l1' }]
+    h.result.current.settingsActions.updateDocument('d1', {
+      title: '世界观·修订',
+      body: '暴雨将至。',
+      relatedIds: related,
+    })
+    expect(h.setSettings).toHaveBeenCalledTimes(1)
+    const after = h.setSettings.mock.calls[0][0] as ProjectSettings
+    expect(after.documents![0]).toEqual({
+      id: 'd1',
+      title: '世界观·修订',
+      body: '暴雨将至。',
+      relatedIds: related,
+    })
+    expect(after.documents![1]).toBe(withDocs.documents![1])
+    expect(after.characters).toBe(withDocs.characters)
+    expect(after.props).toBe(withDocs.props)
+    // undo 恢复原完整文档（含原 relatedIds 成对关联），redo 回到修订
+    h.commands[0].undo()
+    expect(
+      (h.setSettings.mock.calls[1][0] as ProjectSettings).documents,
+    ).toEqual(withDocs.documents)
+    h.commands[0].redo()
+    expect(
+      (h.setSettings.mock.calls[2][0] as ProjectSettings).documents,
+    ).toEqual(after.documents)
+  })
+
+  it('deleteDocument：仅移除目标；undo 恢复完整文档（含关联），redo 再删', () => {
+    const h = setup(withDocs)
+    h.result.current.settingsActions.deleteDocument('d2')
+    const after = h.setSettings.mock.calls[0][0] as ProjectSettings
+    expect(after.documents?.map((d) => d.id)).toEqual(['d1'])
+    expect(after.characters).toBe(withDocs.characters)
+    h.commands[0].undo()
+    expect(
+      (h.setSettings.mock.calls[1][0] as ProjectSettings).documents,
+    ).toEqual(withDocs.documents)
+    h.commands[0].redo()
+    expect(
+      (h.setSettings.mock.calls[2][0] as ProjectSettings).documents,
+    ).toEqual(after.documents)
+  })
+
+  it('守卫不改状态/历史：缺失目标与 documents 桶缺省零派发（既有守卫，不改语义）', () => {
+    // 桶存在但目标缺失（update）；桶缺省（update/delete）
+    const h = setup(withDocs)
+    h.result.current.settingsActions.updateDocument('ghost', {
+      title: 'x',
+    })
+    expect(h.setSettings).not.toHaveBeenCalled()
+    expect(h.pushHistory).not.toHaveBeenCalled()
+
+    const bare = setup(base)
+    bare.result.current.settingsActions.updateDocument('d1', { title: 'x' })
+    bare.result.current.settingsActions.deleteDocument('d1')
+    expect(bare.setSettings).not.toHaveBeenCalled()
+    expect(bare.pushHistory).not.toHaveBeenCalled()
+    expect(base.documents).toBeUndefined()
+  })
+})
