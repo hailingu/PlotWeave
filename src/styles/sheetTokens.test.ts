@@ -4,8 +4,9 @@
  * 当前支持/拒绝/保留边界与唯一问题族矩阵见 docs/css-token-contract.md；
  * 分轮记录仅在 Git 历史保留，不在测试头注另维护一套范围。
  * F6 产品边界：#240 恒白危险前景及深色约 2.8:1 沿用既有决策；
- * #262 品牌配对（BRAND_RULES 黄金接线持有）与 #265 悬空引用均已修复，
- * 两张例外表当前为空；box-shadow 不禁字面色。
+ * #262 品牌配对（BRAND_RULES 黄金接线持有）与 #265 悬空引用均已修复
+ * 移出例外表（接线表随之为空；结构表仅余既有已审计的结构例外，如
+ * 海报用户内容层与遮罩 scrim）；box-shadow 不禁字面色。
  * F4 仅静态 linear-gradient 遮罩：动态 currentColor、未知色标与图像入口显式拒绝。
  */
 import { readFileSync, readdirSync } from 'node:fs'
