@@ -556,6 +556,123 @@ fn persist_project_expect_existing_saves_when_target_present() {
     cleanup_temp(&projects);
 }
 
+// ---- issue #267：主保存入口的逐阶段写盘故障回归 ----
+//
+// 复用 atomic_write 的既有故障注入 seam，把创建/写入/文件同步/rename/
+// 目录同步五个真实失败转换施加到主保存内核，断言回执类别、磁盘状态、
+// 临时文件所有权与重试收敛——读取真实产物与错误类别，不断言措辞之外
+// 的调用记录。写后资产复验失败路径需保存期间并发替换资产文件；主入口
+// 全程持 projects 操作锁，真实系统行为下同线程之外无法替换（本地并发
+// 攻击者替换树不在威胁模型），按 issue 口径不纳入并以本注释披露。
+
+use crate::store::persist::faults::{Injection, Stage};
+
+/// 主保存失败后的临时文件清扫断言：projects 根不得遗留 .tmp 条目
+///（失败清理只在取得临时文件所有权后生效，排他创建失败无可清理）。
+fn assert_no_temp_left(projects: &std::path::Path) {
+    let orphans: Vec<_> = fs::read_dir(projects)
+        .expect("扫描 projects 根")
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+        .collect();
+    assert!(
+        orphans.is_empty(),
+        "失败保存不得遗留临时文件：{:?}",
+        orphans.iter().map(|e| e.file_name()).collect::<Vec<_>>()
+    );
+}
+
+/// 提交前四阶段（创建/写入/文件同步/rename）注入失败：Err 上浮、磁盘
+/// 保持旧文档、无临时文件残留，重试收敛为新文档——注入以抵达阶段记录
+/// 自证（未命中注入时保存会照常成功，断言失败即暴露守卫失效）。
+#[test]
+fn save_pre_commit_stage_failures_keep_old_doc_and_retry_converges() {
+    let projects = temp_projects_dir();
+    let root = cap(&projects);
+    let mut old = valid_save_doc();
+    old.project.name = "改前".into();
+    persist_project(&root, "p-1", old).expect("预置旧文档");
+    let mut revised = valid_save_doc();
+    revised.project.name = "改后".into();
+    for stage in [Stage::Create, Stage::Write, Stage::FileSync, Stage::Rename] {
+        let inj = Injection::new(Some(stage), None);
+        let err = persist_project(&root, "p-1", revised.clone()).unwrap_err();
+        let stages = inj.stages();
+        drop(inj);
+        assert!(
+            stages.contains(&stage),
+            "注入阶段 {stage:?} 未抵达（守卫失效）：{stages:?}"
+        );
+        assert!(
+            matches!(err.root(), StoreError::Io { .. }),
+            "阶段 {stage:?} 失败应保留 I/O 诊断：{err}"
+        );
+        let on_disk = load_project_file(&root, "p-1").expect("旧文档可读");
+        assert_eq!(
+            on_disk.project.name, "改前",
+            "阶段 {stage:?} 在 rename 提交前失败，磁盘必须保持旧文档"
+        );
+        assert_no_temp_left(&projects);
+    }
+    // 注入撤除后重试收敛：无残留状态阻碍，一次成功即新文档
+    persist_project(&root, "p-1", revised).expect("重试保存");
+    assert_eq!(
+        load_project_file(&root, "p-1")
+            .expect("重试后可读")
+            .project
+            .name,
+        "改后"
+    );
+    cleanup_temp(&projects);
+}
+
+/// 提交后阶段失败（rename 成功后的 Unix 目录持久性屏障）：错误如实
+/// 返回、磁盘状态可说明（新文档已提交——「已提交仍报错」不只发生在
+/// 写后资产复验），重试幂等收敛；持久性屏障缺失不得粉饰为保存成功。
+#[cfg(unix)]
+#[test]
+fn save_directory_sync_failure_reports_error_with_new_doc_committed() {
+    let projects = temp_projects_dir();
+    let root = cap(&projects);
+    let mut old = valid_save_doc();
+    old.project.name = "改前".into();
+    persist_project(&root, "p-1", old).expect("预置旧文档");
+    let mut revised = valid_save_doc();
+    revised.project.name = "改后".into();
+    let inj = Injection::new(Some(Stage::DirectorySync), None);
+    let err = persist_project(&root, "p-1", revised.clone()).unwrap_err();
+    let stages = inj.stages();
+    drop(inj);
+    assert!(
+        stages.contains(&Stage::DirectorySync),
+        "目录屏障阶段未抵达（守卫失效）：{stages:?}"
+    );
+    assert!(
+        matches!(err.root(), StoreError::Io { ref context, .. } if context.contains("同步项目目录")),
+        "目录屏障失败应如实报错：{err}"
+    );
+    // rename 已成功：新文档已提交（与提交前失败的可观察状态相区分）
+    assert_eq!(
+        load_project_file(&root, "p-1")
+            .expect("已提交文档可读")
+            .project
+            .name,
+        "改后",
+        "目录屏障在 rename 之后失败，新文档应已在磁盘"
+    );
+    assert_no_temp_left(&projects);
+    // 重试幂等收敛：屏障重走成功，文档不变
+    persist_project(&root, "p-1", revised).expect("重试保存");
+    assert_eq!(
+        load_project_file(&root, "p-1")
+            .expect("重试后可读")
+            .project
+            .name,
+        "改后"
+    );
+    cleanup_temp(&projects);
+}
+
 /// [PR #224 第九轮评审](https://github.com/hailingu/PlotWeave/pull/224)：
 /// expectExisting 前置的元数据失败（非 NotFound，如权限错误）不得误判为
 /// 「项目不存在」——保留底层 I/O 诊断（可行动），不谎报契约状态。
