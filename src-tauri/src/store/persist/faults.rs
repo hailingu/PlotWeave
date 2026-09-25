@@ -17,6 +17,9 @@ pub(crate) enum Stage {
     EntrySync,
     #[cfg(unix)]
     AnchorProbe,
+    /// 句柄相对新建子目录条目的宿主同步（issue #309，store/library 接入）。
+    #[cfg(unix)]
+    ChildHostSync,
 }
 
 #[derive(Default)]

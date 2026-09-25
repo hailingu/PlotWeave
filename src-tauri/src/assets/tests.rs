@@ -536,3 +536,30 @@ fn write_generated_asset_rechecks_cancellation_after_lock_wait() {
     );
     cleanup(&root);
 }
+
+/// ensure_child_dir 首次创建的宿主同步失败（issue #309）：注入宿主同步
+/// 失败后必须返回错误并拆除本次新建层级，不得以成功返回掩盖屏障缺失；
+/// 重试（无注入）重新创建并同步成功。
+#[cfg(unix)]
+#[test]
+fn ensure_child_dir_host_sync_failure_removes_created_dir_and_retries() {
+    let (projects, _library, root) = temp_fixture();
+    seed_project(&projects, "p-1");
+    let parent = cap(&projects);
+    {
+        let _injection = crate::store::atomic_write_faults::Injection::new(
+            Some(crate::store::atomic_write_faults::Stage::ChildHostSync),
+            None,
+        );
+        let err = ensure_child_dir(&parent, "p-1", "项目资产根").unwrap_err();
+        assert!(
+            err.to_string().contains("injected ChildHostSync failure"),
+            "实际错误：{err}"
+        );
+    }
+    assert!(!projects.join("p-1").exists(), "同步失败应拆除本次新建层级");
+    let dir = ensure_child_dir(&parent, "p-1", "项目资产根").expect("重试应重新创建并同步");
+    drop(dir);
+    assert!(projects.join("p-1").is_dir(), "重试后目录应存在");
+    cleanup(&root);
+}

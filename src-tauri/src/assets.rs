@@ -96,11 +96,14 @@ fn find_library_entry(
 fn ensure_child_dir(parent: &CapDir, name: &str, label: &str) -> Result<CapDir, AssetsError> {
     // 总是尝试创建、容忍 AlreadyExists：先查再建留有竞态窗口——两个并发
     // 首次落盘同时观察到目录缺失时，其一的 create_dir 会撞上另一者刚建的
-    // 目录；该作业的付费生成结果不应因此丢弃。归类校验照常兜底。
+    // 目录；该作业的付费生成结果不应因此丢弃。归类校验照常兜底。本次真实
+    // 创建的条目同步宿主（issue #309）：失败拆除重建，重试重新创建并同步。
     if let Err(e) = parent.create_dir(name) {
         if e.kind() != std::io::ErrorKind::AlreadyExists {
             return Err(AssetsError::io(format!("创建{label}失败"), e));
         }
+    } else {
+        crate::store::sync_new_child_dir_host(parent, name).map_err(AssetsError::Store)?;
     }
     let md = parent
         .symlink_metadata(name)

@@ -4,7 +4,6 @@
 //! 与 assets.rs 导入路径共用同一实现，全程句柄相对操作，杜绝 ambient
 //! `PathBuf` 拼接（issue #17：脏索引可越界删除、索引读取无校验无上限）。
 
-use std::fs;
 use std::io::Read;
 
 use cap_std::ambient_authority;
@@ -57,6 +56,11 @@ pub(crate) fn ensure_library_dir(root: &CapDir) -> Result<CapDir, LibraryError> 
                 if e.kind() != std::io::ErrorKind::AlreadyExists {
                     return Err(LibraryError::io("创建资产库目录失败", e));
                 }
+            } else {
+                // 本次调用真实创建了条目（issue #309）：同步宿主使新目录
+                // 项与后续写入同持久；失败拆除重建，重试重新创建并同步
+                crate::store::sync_new_child_dir_host(root, "library")
+                    .map_err(LibraryError::from)?;
             }
         }
         Err(e) => return Err(LibraryError::io("读取资产库目录元数据失败", e)),
@@ -81,7 +85,9 @@ pub(crate) fn library_root(app: &AppHandle) -> Result<CapDir, LibraryError> {
         .path()
         .app_data_dir()
         .map_err(|e| LibraryError::AppDataDir { source: e })?;
-    fs::create_dir_all(&root_path).map_err(|e| LibraryError::io("创建应用数据目录失败", e))?;
+    // 应用数据根的首次创建走持久化内核（issue #309）：新建层级条目在
+    // 写入内容前逐级同步宿主，失败拆除重建
+    crate::store::create_dir_all_durable(&root_path).map_err(LibraryError::from)?;
     let root_path = root_path
         .canonicalize()
         .map_err(|e| LibraryError::io("解析应用数据目录真实路径失败", e))?;
@@ -102,6 +108,11 @@ pub(crate) fn assets_root(library: &CapDir) -> Result<CapDir, LibraryError> {
                 if e.kind() != std::io::ErrorKind::AlreadyExists {
                     return Err(LibraryError::io("创建资产目录失败", e));
                 }
+            } else {
+                // 本次调用真实创建了条目（issue #309）：同步宿主使新目录
+                // 项与后续写入同持久；失败拆除重建，重试重新创建并同步
+                crate::store::sync_new_child_dir_host(library, "assets")
+                    .map_err(LibraryError::from)?;
             }
         }
         Err(e) => return Err(LibraryError::io("读取资产目录元数据失败", e)),

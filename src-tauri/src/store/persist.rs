@@ -61,7 +61,9 @@ pub(crate) fn projects_dir(app: &AppHandle) -> Result<CapDir, StoreError> {
         .path()
         .app_data_dir()
         .map_err(|e| StoreError::AppDataDir { source: e })?;
-    fs::create_dir_all(&root_path).map_err(|e| StoreError::io("创建应用数据目录失败", e))?;
+    // 应用数据根的首次创建走持久化内核（issue #309）：新建层级条目在
+    // 写入内容前逐级同步宿主，失败拆除重建
+    create_dir_all_durable(&root_path)?;
     let root_path = root_path
         .canonicalize()
         .map_err(|e| StoreError::io("解析应用数据目录真实路径失败", e))?;
@@ -84,6 +86,10 @@ pub(crate) fn ensure_projects_dir(root: &CapDir) -> Result<CapDir, StoreError> {
                 if e.kind() != std::io::ErrorKind::AlreadyExists {
                     return Err(StoreError::io("创建项目目录失败", e));
                 }
+            } else {
+                // 本次调用真实创建了条目（issue #309）：同步宿主使新目录
+                // 项与后续写入同持久；失败拆除重建，重试重新创建并同步
+                sync_new_child_dir_host(root, "projects")?;
             }
         }
         Err(e) => return Err(StoreError::io("读取项目目录元数据失败", e)),
@@ -443,9 +449,9 @@ pub(crate) fn sweep_orphan_temp_files(
 /// 清理的回滚范围。`dir` 已存在时 hosts 退化为仅含直接父目录：这是
 /// 单级未同步创建的兜底（宿主链在创建时刻已不可考），多级兜底由
 /// 「每个创建入口都用 [`create_dir_all_durable`] 在创建时刻同步、失败
-/// 即拆除新建层级让重试重新探测锚点」承担——store/library 侧入口
-/// 尚未接入该助手，属已记录的后续事项（PR #201 评审）。根目录无父级
-/// 宿主，返回 None。
+/// 即拆除新建层级让重试重新探测锚点」承担——store/library 侧入口已接入
+/// 该助手与句柄相对宿主同步（issue #309）：路径入口走本助手，句柄相对
+/// 入口走 [`sync_new_child_dir_host`]。根目录无父级宿主，返回 None。
 #[cfg(unix)]
 struct EntrySyncPlan {
     hosts: Vec<std::path::PathBuf>,
@@ -547,6 +553,38 @@ pub(crate) fn create_dir_all_durable(dir: &std::path::Path) -> Result<(), StoreE
             return Err(e);
         }
     }
+    Ok(())
+}
+
+/// 句柄相对的「新目录条目宿主同步」（issue #309，store/library 接入
+/// `EntrySyncPlan` 同款契约）：锚定句柄内**本次真实创建**的子目录条目，
+/// 其持久性由宿主（parent 自身）的 fsync 保证——宿主经句柄相对
+/// `open_dir(".")` 转标准句柄同步（同 `write_tmp_and_rename` 的父目录
+/// 屏障惯用法），不按绝对路径重开（ambient 重开会把并发替换后的目录
+/// 当表面宿主，破坏 §10.2 信任链）。失败即尽力拆除本次新建层级（仅空
+/// 目录可拆），重试重新创建并同步而非退化为「目录已存在」单级兜底
+/// （与 [`create_dir_all_durable`] 同语义）；拆除失败不掩盖原始错误。
+/// 仅限创建成功路径调用：已存在目录（AlreadyExists 容忍路径）的条目
+/// 持久性归创建时刻的调用方负责。非 Unix 不执行目录 fsync（Windows
+/// 目录句柄无法 fsync），沿用共享内核现状。
+#[cfg(unix)]
+pub(crate) fn sync_new_child_dir_host(parent: &CapDir, name: &str) -> Result<(), StoreError> {
+    let synced = atomic_io!(
+        ChildHostSync,
+        parent
+            .open_dir(".")
+            .and_then(|dir| dir.into_std_file().sync_all())
+    )
+    .map_err(|e| StoreError::io("同步新目录条目宿主失败（持久性屏障缺失）", e));
+    if synced.is_err() {
+        let _ = parent.remove_dir(name);
+    }
+    synced
+}
+/// 非 Unix：Windows 目录句柄无法 fsync，沿用共享内核现状不执行宿主同步。
+#[cfg(not(unix))]
+pub(crate) fn sync_new_child_dir_host(parent: &CapDir, name: &str) -> Result<(), StoreError> {
+    let _ = (parent, name);
     Ok(())
 }
 

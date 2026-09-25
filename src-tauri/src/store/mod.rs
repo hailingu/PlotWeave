@@ -50,7 +50,7 @@ pub(crate) use persist::asset_identity;
 pub(crate) use persist::faults as atomic_write_faults;
 pub(crate) use persist::{
     asset_stat, atomic_write, create_dir_all_durable, open_dir_bound, projects_dir,
-    projects_op_lock, sweep_orphan_temp_files,
+    projects_op_lock, sweep_orphan_temp_files, sync_new_child_dir_host,
 };
 pub(crate) use validate::{
     is_canonical_mime, is_valid_active_asset_rel_path, is_valid_asset_rel_path,
