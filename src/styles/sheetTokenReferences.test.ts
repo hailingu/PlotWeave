@@ -131,6 +131,22 @@ describe('fallback 与保证无效主值的消解（issue #290）', () => {
     expect(() => resolveChain(dangling, tokens)).toThrow(/var\(\) 链过深或悬空/)
   })
 
+  it('深依赖链仍受链深预算约束（issue #349）：40 层依赖抛「链过深或悬空」', () => {
+    const tokens = new Map<string, string>()
+    for (let i = 1; i < 40; i += 1) tokens.set(`--v${i}`, `var(--v${i + 1})`)
+    tokens.set('--v40', '#fff')
+    expect(() => resolveChain('var(--v1)', tokens)).toThrow(
+      /var\(\) 链过深或悬空/,
+    )
+  })
+
+  it('同级 var() 数量不受 JS 栈深约束（issue #349）：8000 个并列引用迭代消解', () => {
+    const tokens = new Map([['--c', '#123']])
+    const value = Array.from({ length: 8000 }, () => 'var(--c)').join(' ')
+    const expected = Array.from({ length: 8000 }, () => '#123').join(' ')
+    expect(resolveChain(value, tokens)).toBe(expected)
+  })
+
   it('根令牌 unset 为保证无效：选择 fallback（issue #290 评审修复）', () => {
     expect(
       resolveChain('var(--surface, #fff)', new Map([['--surface', 'unset']])),

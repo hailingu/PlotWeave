@@ -5,20 +5,31 @@
 import postcss from 'postcss'
 import { maskCssOpaque } from './cssValueSyntax'
 
+/**
+ * 在等长语法视图上从开括号后的偏移定位平衡闭合括号；未闭合返回 -1。
+ * 供 `colorTokenOf` 与 `sheetTokensEngine` 的同级游标扫描共用同一括号
+ * 配对口径，避免引用入口分叉（issue #349）。
+ */
+export function balancedCloseFrom(syntax: string, opening: number): number {
+  let depth = 1
+  for (let i = opening; i < syntax.length; i += 1) {
+    if (syntax[i] === '(') depth += 1
+    else if (syntax[i] === ')') {
+      depth -= 1
+      if (depth === 0) return i
+    }
+  }
+  return -1
+}
+
 /** 取完整 CSS 函数或首个空白分隔成分，供颜色、遮罩及 var() 解析共用。 */
 export function colorTokenOf(part: string): string {
   if (!/^[\w-]+\(/.test(part)) return part.split(/\s+/)[0]!
   const opening = part.indexOf('(') + 1
   const syntax = part.slice(0, opening) + maskCssOpaque(part.slice(opening))
-  let depth = 0
-  for (let i = 0; i < part.length; i += 1) {
-    if (syntax[i] === '(') depth += 1
-    else if (syntax[i] === ')') {
-      depth -= 1
-      if (depth === 0) return part.slice(0, i + 1)
-    }
-  }
-  throw new Error(`色标函数未闭合: ${part}`)
+  const close = balancedCloseFrom(syntax, opening)
+  if (close < 0) throw new Error(`色标函数未闭合: ${part}`)
+  return part.slice(0, close + 1)
 }
 
 /** CSS 函数名大小写不敏感（`RGB(...)` 与 `rgb(...)` 同为字面函数色）。 */
