@@ -115,6 +115,30 @@ describe('混合值仅解析真实引用（review 5280334884）', () => {
     ).toBe('#000')
   })
 
+  it('主值保证无效时改选 fallback（issue #290 评审修复）', () => {
+    // initial：保证无效，取 fallback
+    expect(
+      resolveChain('var(--surface, #fff)', new Map([['--surface', 'initial']])),
+    ).toBe('#fff')
+    // 断裂链：主值引用缺失令牌且无自身 fallback，取 fallback
+    expect(
+      resolveChain(
+        'var(--surface, #fff)',
+        new Map([['--surface', 'var(--missing)']]),
+      ),
+    ).toBe('#fff')
+    // 环：主值链回到自身，取 fallback
+    expect(
+      resolveChain(
+        'var(--surface, #fff)',
+        new Map([
+          ['--surface', 'var(--other)'],
+          ['--other', 'var(--surface)'],
+        ]),
+      ),
+    ).toBe('#fff')
+  })
+
   it('无 fallback 的悬空引用仍按悬空抛错（issue #290 对照）', () => {
     expect(() => resolveChain('var(--missing)', new Map())).toThrow(
       /var\(\) 链过深或悬空/,

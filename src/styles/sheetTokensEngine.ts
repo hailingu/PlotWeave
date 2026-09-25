@@ -214,46 +214,20 @@ function variableStart(value: string): number {
 }
 
 /**
- * 迭代消解真实 var() 引用链（深度限 12，防循环），字符串/URL 保持原样。
- * 支持 fallback（issue #290）：已定义主值选主值，缺失主值选 fallback
- * （fallback 内的引用由后续迭代继续消解），无 fallback 且缺失保持原值
- * 并最终按悬空抛错——深度保护不变；fallback 以最外层平衡括号切分，
- * 嵌套函数/嵌套 var() 不截断。
+ * 迭代消解真实 var() 引用链（字符串/URL 保持原样）：委托
+ * [`resolveDisplayValue`] 的主值/fallback 选择与环、深度保护（issue
+ * #290 及其评审修复）——已定义主值选主值；主值保证无效（缺失、
+ * `initial`、断裂链或环）时选 fallback；无 fallback 且不可消解按既有
+ * 契约抛「链过深或悬空」。
  */
 export function resolveChain(
   value: string,
   tokens: Map<string, string>,
 ): string {
-  let current = value
-  for (let i = 0; i < 12 && variableStart(current) >= 0; i += 1) {
-    let out = ''
-    let rest = current
-    for (;;) {
-      const start = variableStart(rest)
-      if (start < 0) {
-        out += rest
-        break
-      }
-      out += rest.slice(0, start)
-      const call = colorTokenOf(rest.slice(start))
-      const args = call.slice(4, -1)
-      const comma = args.indexOf(',')
-      const name = (comma < 0 ? args : args.slice(0, comma)).trim()
-      const primary = tokens.get(name)
-      if (primary !== undefined) {
-        out += primary
-      } else if (comma >= 0) {
-        out += args.slice(comma + 1).trim()
-      } else {
-        out += call
-      }
-      rest = rest.slice(start + call.length)
-    }
-    current = out
-  }
-  if (variableStart(current) >= 0)
-    throw new Error(`var() 链过深或悬空: ${value}`)
-  return current
+  if (variableStart(value) < 0) return value
+  const resolved = resolveDisplayValue(value, tokens)
+  if (resolved === null) throw new Error(`var() 链过深或悬空: ${value}`)
+  return resolved
 }
 
 /** 展示色简写及图像属性：字面色值须注册豁免；box-shadow/滤镜/遮罩边界见统一契约。 */
@@ -761,57 +735,4 @@ export function displayTypeErrors(root: postcss.Root, env: Env): string[] {
   })
 }
 
-/**
- * 在给定根节点内按完整选择器找规则：须**唯一且无条件**（不处于任何
- * at-rule 内）——媒体块内同名规则会使生效值随环境分叉，违背黄金接线
- * 「恒值」前提；同名重复规则使文本序后位遮蔽先位，定位失真。选择器
- * 列表逐分支匹配：后续规则若在逗号分支中含目标选择器（如
- * `.other, .pw-dialog-danger { ... }`）仍能以同等特异性覆盖目标规则，
- * 也计入命中——不按整选择器字符串相等。sheet 仅用于错误信息；缺失/
- * 重复/条件化均抛错防测试静默空过。
- */
-export function ruleIn(
-  root: postcss.Root,
-  sheet: string,
-  selector: string,
-): postcss.Rule {
-  const matches: postcss.Rule[] = []
-  root.walkRules((rule) => {
-    const branches = rule.selector.split(',').map((branch) => branch.trim())
-    if (branches.includes(selector)) matches.push(rule)
-  })
-  if (matches.length === 0) throw new Error(`未找到规则 ${sheet} ${selector}`)
-  if (matches.length > 1) {
-    throw new Error(
-      `${sheet} ${selector} 有 ${matches.length} 条包含该分支的规则，须唯一`,
-    )
-  }
-  const rule = matches[0]!
-  if (rule.parent?.type !== 'root') {
-    throw new Error(`${sheet} ${selector} 处于 at-rule 内，须无条件规则`)
-  }
-  return rule
-}
-
-/** 规则内该属性的生效值：属性名先按标准大小写归一，!important 声明优先于普通声明，同重要性取源序最后一条。 */
-export function declOf(rule: postcss.Rule, prop: string): string {
-  return winningDecl(rule, [prop]).value
-}
-
-/** 一组互相覆盖的属性（如简写与长形）在规则内的胜出声明，取胜规则同 declOf。 */
-export function winningDecl(
-  rule: postcss.Rule,
-  props: readonly string[],
-): postcss.Declaration {
-  const targets = new Set(props.map(normalizeProp))
-  const decls = rule.nodes.filter(
-    (node): node is postcss.Declaration =>
-      node.type === 'decl' && targets.has(normalizeProp(node.prop)),
-  )
-  if (decls.length === 0) {
-    throw new Error(`${rule.selector} 缺少 ${props.join('/')} 声明`)
-  }
-  const important = decls.filter((decl) => decl.important)
-  const winners = important.length > 0 ? important : decls
-  return winners[winners.length - 1]!
-}
+export { ruleIn, declOf, winningDecl } from './sheetRuleQuery'
