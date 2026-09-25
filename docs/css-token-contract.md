@@ -2,7 +2,7 @@
 
 本页是 [PR #288](https://github.com/hailingu/PlotWeave/pull/288) 的支持范围与问题族矩阵入口，承接 [issue #278](https://github.com/hailingu/PlotWeave/issues/278)；分轮审查记录已从当前文档树移除，历史事实保留在 Git 中，不再各自定义当前范围。产品配色决策仍以 [UI 设计 §2.1](ui-design.md#21-三层结构) 和 §2.3、§2.6 为准。
 
-当前实施状态以 F1–F6 支持边界表与合并不变量矩阵为准；PR #288 各后续审查轮次、修复提交与问题族的对应关系见文末「审查轮次索引」，未解决边界见下方登记。
+当前实施状态以 F1–F6 支持边界表与合并不变量矩阵为准；PR #288 后期八轮审查（5286363682–5287668653）的修复落点对应关系见文末「审查轮次索引」，更早十二轮的记录入口亦在该节，未解决边界见下方登记。
 
 ## 支持、拒绝和保留边界
 
@@ -74,11 +74,13 @@ F2 上下文拒绝使用稳定错误码：根未知 at-rule 或根内嵌 at-rule
 
 ## 审查轮次索引（历史归档）
 
-PR #288 的后续审查按轮处理：本页不再保留分轮叙述、运行记录或线程回复草稿，各轮的验证过程与门禁证据属于对应 Git 修订与 PR 历史运行记录；各审查线程的回复与 resolved 状态以 GitHub 原线程为准——本页删除回复草稿既不表示相应线程已回复或已解决，也不表示未回复。分轮审查记录文件此前已归并到 F1–F6 并按仓库所有者要求删除，可从[整理前的 Git 修订](https://github.com/hailingu/PlotWeave/tree/99b0ba9eca558a4e3e4ac721cee8a627d59a534f/docs/reviews)查阅。
+PR #288 的审查按轮处理：本页不再保留分轮叙述、运行记录或线程回复草稿，各轮的验证过程与门禁证据属于对应 Git 修订与 PR 历史运行记录；各审查线程的回复与 resolved 状态以 GitHub 原线程为准——本页删除回复草稿既不表示相应线程已回复或已解决，也不表示未回复。
 
-| 审查（固定链接） | 问题族与要点（均已并入上方矩阵；括注为修复落点） |
+下表为后期八轮（各轮曾是本页内联章节）的审查链接、针对修订与修复落点。更早的十二轮处理记录为独立文件，已按仓库所有者要求从文档树删除，仅在[整理前的 Git 修订](https://github.com/hailingu/PlotWeave/tree/99b0ba9eca558a4e3e4ac721cee8a627d59a534f/docs/reviews)保留（各轮的修复落点与验证详情以该处归档文件为准）：[5275666509](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5275666509)（基准 `7a0f8e0`）、[5275978899](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5275978899)（`039d78d`）、[5277799858](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5277799858)（`1978ea6`）、[5279748560](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5279748560)（`21fd2ac`）、[5280077466](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5280077466)（`40a63a6`）、[5280334884](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5280334884)（`7e3a2e5`；`sheetTokenReferences.test.ts` 头注引用本轮）、[5280542926](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5280542926)（`6bf4c78`）、[5280837519](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5280837519)（`9df32c9`）、[5285788301](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5285788301)（`0b80601`）、[5285927947](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5285927947)（`06924ed`）、[5286056434](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5286056434)（`d775389`）、[5286221158](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5286221158)（`8d53a7f`）。
+
+| 后期八轮审查（固定链接） | 问题族与要点（均已并入上方矩阵；括注为修复落点） |
 | --- | --- |
-| [5286363682](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5286363682) | F1 文档级选择器所有权（`TOKEN_GLOBAL_OUTSIDE_SOURCE`）；F3 完整顶层成分校验；F4 动态色标显式拒绝（修复 `f90cbf5`） |
+| [5286363682](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5286363682)（首轮） | F1 文档级选择器所有权（`TOKEN_GLOBAL_OUTSIDE_SOURCE`）；F3 完整顶层成分校验；F4 动态色标显式拒绝（修复 `f90cbf5`） |
 | [5286571379](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5286571379) | F2-d 根嵌套拒绝（`TOKEN_ROOT_NESTING_UNMODELED`）；F2-c 含图像简写的成分提取与长形重置（修复 `99b0ba9`） |
 | [5286675799](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5286675799) | F3-c 图像长形类型与列表个数；滤镜颜色记录为 P3 保留边界、不建模（针对整理提交 `65be8cd`，修复落地 `0516b47`） |
 | [5286812629](https://github.com/hailingu/PlotWeave/pull/288#pullrequestreview-5286812629) | F2-c 颜色成分识别统一 `completeColorAtom`：transparent/具名色/currentColor 经颜色长形覆盖后不冒充 danger（针对 `0516b47`，修复 `50d63e0`） |
