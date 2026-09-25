@@ -696,7 +696,7 @@ function expectReadable(
   expect(ratio, `${label} = ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5)
 }
 
-describe('语义令牌配对契约（issue #278：原则 2 + §2.6）', () => {
+describe('语义令牌配对契约：文本于承载面（issue #278：原则 2 + §2.6）', () => {
   it('带 fallback 的令牌定义经配对助手取实际生效颜色（issue #290）', () => {
     const tokens = new Map([
       ['--surface-card', 'var(--brand-surface, #fff)'],
@@ -748,7 +748,9 @@ describe('语义令牌配对契约（issue #278：原则 2 + §2.6）', () => {
       }
     }
   })
+})
 
+describe('语义令牌配对契约：控件、横幅与 danger（issue #278）', () => {
   it('关键操作按钮前景/背景配对四环境 ≥ 4.5:1（确定性配对令牌）', () => {
     for (const [envName, env] of PAIR_ENVS) {
       const tokens = tokenValues(env)

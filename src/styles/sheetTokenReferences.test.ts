@@ -94,7 +94,9 @@ describe('混合值仅解析真实引用（review 5280334884）', () => {
     ).toEqual([{ selector: '.a', ref: '--missing' }])
     expect(() => resolveChain(value, new Map())).toThrow(/var\(\) 链过深或悬空/)
   })
+})
 
+describe('fallback 与保证无效主值的消解（issue #290）', () => {
   it('带 fallback 的引用：已定义主值选主值，缺失主值选 fallback（issue #290）', () => {
     expect(
       resolveChain('var(--surface, #fff)', new Map([['--surface', '#123']])),
@@ -168,7 +170,9 @@ describe('混合值仅解析真实引用（review 5280334884）', () => {
       /var\(\) 链过深或悬空/,
     )
   })
+})
 
+describe('求值与展示入口的字面边界（review 5280334884）', () => {
   it('简易链入口保留被替换结果中的字面 var 文本', () => {
     const tokens = new Map([
       ['--label', 'var(--text)'],
