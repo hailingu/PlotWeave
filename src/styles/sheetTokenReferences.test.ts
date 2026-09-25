@@ -327,3 +327,42 @@ describe('F5-c：未转义非 ASCII 自定义属性名', () => {
     expect(() => resolveChain(value, new Map())).toThrow()
   })
 })
+
+describe('非 ASCII 名称末端的 CSS 空白边界（issue #289）', () => {
+  // 名称末端为 U+00A0 NBSP：属于名称码点，不是 CSS 空白（F5-c 原样匹配）
+  const NBSP = '\u00A0'
+
+  it('定义与引用同名（名称末端 NBSP）正常消解，不误报悬空', () => {
+    const root = postcss.parse(
+      `.a { --tone${NBSP}: #fff; color: var(--tone${NBSP}) }`,
+    )
+    expect(danglingRefs(root, LIGHT_ENV)).toEqual([])
+    expect(displayTypeErrors(root, LIGHT_ENV)).toEqual([])
+  })
+
+  it('引用取名不裁剪名称末端 NBSP（resolveChain 消解为定义值）', () => {
+    expect(
+      resolveChain(`var(--tone${NBSP})`, new Map([[`--tone${NBSP}`, '"ok"']])),
+    ).toBe('"ok"')
+    expect(
+      consume(`.a { --tone${NBSP}: "ok"; content: var(--tone${NBSP}) }`),
+    ).toBe('"ok"')
+  })
+
+  it('普通 CSS 空白对照：名称后的普通空格仍按分隔符处理', () => {
+    expect(consume(`.a { --tone : "ok"; content: var(--tone ) }`)).toBe('"ok"')
+  })
+
+  it('fallback 组合：主值末端 NBSP 缺失时选择 fallback', () => {
+    expect(consume(`.a { content: var(--missing${NBSP}, "fb") }`)).toBe('"fb"')
+  })
+
+  it('JS trim 误裁对照：NBSP 末端名称与无 NBSP 名称是不同变量', () => {
+    // 定义 --tone（无 NBSP），引用 --tone${NBSP}：引用确属悬空，
+    // 不得因 JS trim 误匹配到无 NBSP 的定义
+    const root = postcss.parse(`.a { --tone: #fff; color: var(--tone${NBSP}) }`)
+    expect(danglingRefs(root, LIGHT_ENV)).toEqual([
+      { selector: '.a', ref: `--tone${NBSP}` },
+    ])
+  })
+})

@@ -214,6 +214,15 @@ function variableStart(value: string): number {
 }
 
 /**
+ * CSS 空白集（空格/制表/换行/回车/换页）裁剪。不用 JS `.trim()`：其空白
+ * 集更大，会把名称末端的 NBSP 等有效非 ASCII 码点误当空白移除，违反
+ * F5-c「自定义属性名按原始码点序列匹配」（issue #289）。
+ */
+function trimCssWhitespace(value: string): string {
+  return value.replace(/^[ \t\n\r\f]+/, '').replace(/[ \t\n\r\f]+$/, '')
+}
+
+/**
  * 迭代消解真实 var() 引用链（字符串/URL 保持原样）：委托
  * [`resolveDisplayValue`] 的主值/fallback 选择与环、深度保护（issue
  * #290 及其评审修复）——已定义主值选主值；主值保证无效（缺失、
@@ -588,7 +597,7 @@ function unresolvedValueRefs(
     const call = colorTokenOf(rest.slice(start))
     const args = call.slice(4, -1)
     const comma = args.indexOf(',')
-    const name = (comma < 0 ? args : args.slice(0, comma)).trim()
+    const name = trimCssWhitespace(comma < 0 ? args : args.slice(0, comma))
     if (resolveDisplayValue(`var(${name})`, scope) === null) {
       if (comma < 0) refs.push(name)
       else refs.push(...unresolvedValueRefs(args.slice(comma + 1), scope))
@@ -698,11 +707,11 @@ function resolveDisplayValue(
   const call = colorTokenOf(value.slice(start))
   const args = call.slice(4, -1)
   const comma = args.indexOf(',')
-  const name = (comma < 0 ? args : args.slice(0, comma)).trim()
+  const name = trimCssWhitespace(comma < 0 ? args : args.slice(0, comma))
   const raw = scope.get(name)
   const primary =
     raw === undefined ||
-    raw.trim().toLowerCase() === 'initial' ||
+    trimCssWhitespace(raw).toLowerCase() === 'initial' ||
     variableCycles(name, name, scope)
       ? null
       : resolveDisplayValue(raw, scope, depth + 1)
@@ -710,7 +719,11 @@ function resolveDisplayValue(
     primary ??
     (comma < 0
       ? null
-      : resolveDisplayValue(args.slice(comma + 1).trim(), scope, depth + 1))
+      : resolveDisplayValue(
+          trimCssWhitespace(args.slice(comma + 1)),
+          scope,
+          depth + 1,
+        ))
   if (replacement === null) return null
   // 同级余串不递增深度（issue #290 评审修复）：链深度只沿依赖与 fallback
   // 嵌套累计——并列引用的数量不受 32 层预算约束；余串严格缩短保证终止。
