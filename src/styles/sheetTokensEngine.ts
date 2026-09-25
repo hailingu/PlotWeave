@@ -224,8 +224,17 @@ export function resolveChain(
   value: string,
   tokens: Map<string, string>,
 ): string {
+  // 根令牌作用域与 valueScopeIn 同语义：保证无效值（initial/根 unset）
+  // 归一为 initial——resolveDisplayValue 据此选择 fallback（issue #290
+  // 评审修复：根 unset 不得作为字面值返回）。
+  const scope = new Map(
+    [...tokens].map(([name, v]) => [
+      name,
+      isGuaranteedInvalid(v, ':root') ? 'initial' : v,
+    ]),
+  )
   if (variableStart(value) < 0) return value
-  const resolved = resolveDisplayValue(value, tokens)
+  const resolved = resolveDisplayValue(value, scope)
   if (resolved === null) throw new Error(`var() 链过深或悬空: ${value}`)
   return resolved
 }

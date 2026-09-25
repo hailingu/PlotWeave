@@ -129,6 +129,16 @@ describe('混合值仅解析真实引用（review 5280334884）', () => {
     expect(() => resolveChain(dangling, tokens)).toThrow(/var\(\) 链过深或悬空/)
   })
 
+  it('根令牌 unset 为保证无效：选择 fallback（issue #290 评审修复）', () => {
+    expect(
+      resolveChain('var(--surface, #fff)', new Map([['--surface', 'unset']])),
+    ).toBe('#fff')
+    // 无 fallback 的 unset 同样按悬空抛错（归一后主值无效且无回退）
+    expect(() =>
+      resolveChain('var(--surface)', new Map([['--surface', 'unset']])),
+    ).toThrow(/var\(\) 链过深或悬空/)
+  })
+
   it('主值保证无效时改选 fallback（issue #290 评审修复）', () => {
     // initial：保证无效，取 fallback
     expect(
