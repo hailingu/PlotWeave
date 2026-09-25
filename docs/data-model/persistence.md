@@ -84,14 +84,17 @@
 ### 10.5 Rust 持久化命令（Tauri commands）
 
 **执行线程（[issue #138](https://github.com/hailingu/PlotWeave/issues/138)，已实现）**：
-项目／AI 会话、设置与密钥封装、资产库／编组、项目资产导入／预检以及媒体 URL
-校验的同步工作，由异步命令通过 `blocking::run` 整体交给 `spawn_blocking`。
+项目／AI 会话、设置与密钥封装、资产库／编组、项目资产导入／预检、媒体 URL
+校验以及生图产物落盘与校验（[issue #310](https://github.com/hailingu/PlotWeave/issues/310)）
+的同步工作，由异步命令通过 `blocking::run` 整体交给 `spawn_blocking`。
 目录准备、锁等待、序列化、文件操作和持久性屏障均在闭包内完成；IPC 成功仅在
 完整内核结束后返回，领域错误保持原样，线程任务异常显式失败。事务锁与恢复
 诊断序号仍由同步内核拥有，不跨 await 持有。相关操作的先后关系继续由前端
 项目／会话共享保存链、设置保存链及库变更队列保证；独立并发请求不承诺 FIFO。
 `pwmedia` 协议继续使用已有阻塞线程池，退出确认／取消登记等短时内存操作保留
-原入口。[验证矩阵与延迟测量](../development/invoke-responsiveness.md) 记录实际范围和缺口。
+原入口。生图落盘的锁内取消复验经托管作业注册表在阻塞线程查询，作业登记
+守卫生命周期保留在命令侧（详见上文验证矩阵文档的 #310 记录）。
+[验证矩阵与延迟测量](../development/invoke-responsiveness.md) 记录实际范围和缺口。
 
 下表按领域职责描述参数；实际 IPC 注册与参数名以 `src-tauri/src/lib.rs` 和相应函数签名为准。库的 `list_library_assets` / `import_library_asset` / `update_library_asset` / `delete_library_asset` 与两个组命令已在 #29 对齐。尚未对齐的目标接口显式标注如下，不能直接作为当前 invoke 名称。
 

@@ -70,3 +70,20 @@ Tauri 持久化命令的执行线程；不改 IPC 载荷、磁盘格式、事务
 阻塞调度（`prefs::chat_credential` 经 `blocking::run`），并以单线程异步
 运行时上的受控延迟兄弟任务响应性测试单独验证。未新增崩溃恢复、取消或跨
 进程排序保证。
+
+生图产物落盘与校验（`llm_image_generate` 的目录准备、项目操作锁等待、
+写入与 §9.3 预检）当时仍在异步命令内联执行，是本系列最后一段剩余路径，
+由 [issue #310](https://github.com/hailingu/PlotWeave/issues/310) 以同一
+`blocking::run` 调度移交（`persist_generated_asset`，落盘单元内核
+`write_and_validate_generated_asset` 生产与测试共用）。锁内取消复验经托管
+作业注册表在阻塞线程按 job id 查询（`ImageJobRegistry::is_cancelled`），
+登记守卫生命周期保留在命令侧并显式持有至持久化完成，不提前释放登记；
+锁等待期间取消不落盘、项目删除与写入串行（已删项目不被重建）语义不变。
+行为验证：真实操作锁竞争（他者持锁 400 ms、32 个并发落盘单元）下兄弟
+异步任务在锁仍被持有时推进（`imagegen::tests::
+lock_contention_persist_leaves_async_workers_free`），另覆盖
+`cancel_during_lock_wait_skips_disk_write` 与
+`deleted_project_during_lock_wait_is_not_recreated`。保留限制：阻塞任务
+不可取消（慢磁盘场景下写入仍在阻塞池完成，等待者放弃只丢弃结果不中断
+工作）；未测量 worker 饥饿或 UI 帧率——兄弟任务推进为行为级断言，
+不以「调用了 spawn_blocking」的 mock 代替。
