@@ -115,6 +115,20 @@ describe('混合值仅解析真实引用（review 5280334884）', () => {
     ).toBe('#000')
   })
 
+  it('同级 var() 数量不计入链深度（issue #290 评审修复）：33 个并列引用正常消解', () => {
+    const tokens = new Map([['--c', '#123']])
+    const value = `linear-gradient(${Array.from({ length: 33 }, () => 'var(--c)').join(', ')})`
+    expect(resolveChain(value, tokens)).toBe(
+      `linear-gradient(${Array.from({ length: 33 }, () => '#123').join(', ')})`,
+    )
+    // 同级余串中一个悬空引用仍整体按悬空抛错
+    const dangling = `linear-gradient(${[
+      'var(--missing)',
+      ...Array.from({ length: 32 }, () => 'var(--c)'),
+    ].join(', ')})`
+    expect(() => resolveChain(dangling, tokens)).toThrow(/var\(\) 链过深或悬空/)
+  })
+
   it('主值保证无效时改选 fallback（issue #290 评审修复）', () => {
     // initial：保证无效，取 fallback
     expect(

@@ -703,10 +703,12 @@ function resolveDisplayValue(
       ? null
       : resolveDisplayValue(args.slice(comma + 1).trim(), scope, depth + 1))
   if (replacement === null) return null
+  // 同级余串不递增深度（issue #290 评审修复）：链深度只沿依赖与 fallback
+  // 嵌套累计——并列引用的数量不受 32 层预算约束；余串严格缩短保证终止。
   const rest = resolveDisplayValue(
     value.slice(start + call.length),
     scope,
-    depth + 1,
+    depth,
   )
   return rest === null ? null : value.slice(0, start) + replacement + rest
 }
