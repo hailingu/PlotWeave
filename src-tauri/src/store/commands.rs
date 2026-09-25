@@ -144,7 +144,12 @@ fn ai_session_dir(root: &CapDir, id: &str) -> Result<CapDir, StoreError> {
             }
             Ok(md) => return open_dir_bound(root, id, &md, "项目会话目录"),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => match root.create_dir(id) {
-                Ok(()) => continue,
+                // 本次真实创建的条目同步宿主（issue #309）：失败拆除重建，
+                // 重试重新创建并同步
+                Ok(()) => {
+                    crate::store::sync_new_child_dir_host(root, id)?;
+                    continue;
+                }
                 Err(create_err) if create_err.kind() == std::io::ErrorKind::AlreadyExists => {
                     continue
                 }

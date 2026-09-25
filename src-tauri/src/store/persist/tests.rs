@@ -357,3 +357,54 @@ fn ensure_projects_dir_tolerates_concurrent_first_use() {
         fs::remove_dir_all(&tmp).expect("清理临时根");
     }
 }
+
+/// 首次创建 projects/ 的宿主同步失败（issue #309）：注入宿主同步失败后
+/// 必须返回错误并拆除本次新建层级（重试得以重新创建并全链同步），不得
+/// 以成功返回掩盖屏障缺失；重试（无注入）重新创建并同步成功。
+#[cfg(unix)]
+#[test]
+fn ensure_projects_dir_host_sync_failure_removes_created_dir_and_retries() {
+    let projects = temp_projects_dir();
+    let root = cap(&projects);
+    {
+        let _injection = faults::Injection::new(Some(faults::Stage::ChildHostSync), None);
+        let err = ensure_projects_dir(&root).unwrap_err();
+        assert!(
+            err.to_string().contains("injected ChildHostSync failure"),
+            "实际错误：{err}"
+        );
+        assert!(
+            err.to_string().contains("同步新目录条目宿主失败"),
+            "屏障缺失应显式上抛：{err}"
+        );
+    }
+    assert!(
+        !projects.join("projects").exists(),
+        "同步失败应拆除本次新建层级"
+    );
+    let dir = ensure_projects_dir(&root).expect("重试应重新创建并同步");
+    drop(dir);
+    assert!(projects.join("projects").is_dir(), "重试后目录应存在");
+    cleanup_temp(&projects);
+}
+
+/// 已有 projects/ 目录（本次调用未创建条目）不得触发宿主同步——条目的
+/// 持久性归创建时刻的调用方负责，与 create_dir_all_durable 的单级兜底
+/// 分工一致（issue #309）。
+#[cfg(unix)]
+#[test]
+fn ensure_projects_dir_existing_dir_skips_entry_sync() {
+    let projects = temp_projects_dir();
+    let root = cap(&projects);
+    fs::create_dir(projects.join("projects")).expect("预置 projects 目录");
+    let injection = faults::Injection::new(None, None);
+    let dir = ensure_projects_dir(&root).expect("已存在目录应直接归类打开");
+    drop(dir);
+    assert!(
+        !injection.stages().contains(&faults::Stage::ChildHostSync),
+        "已存在目录不得触发宿主同步，实际阶段：{:?}",
+        injection.stages()
+    );
+    drop(injection);
+    cleanup_temp(&projects);
+}
