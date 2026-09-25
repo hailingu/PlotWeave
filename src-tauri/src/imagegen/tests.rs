@@ -572,3 +572,6 @@ fn generate_exit_send_timeout_keeps_plain_url_shape() {
     );
     assert!(text.contains("127.0.0.1"), "主机可行动信息保留：{text}");
 }
+
+/// 生图产物落盘的阻塞调度测试（issue #310），见 tests/persist.rs。
+mod persist;

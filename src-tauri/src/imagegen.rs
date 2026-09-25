@@ -16,6 +16,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use base64::Engine as _;
+use cap_std::fs::Dir as CapDir;
 use reqwest::Url;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
@@ -112,6 +113,30 @@ impl ImageJobRegistry {
         }
     }
 
+    /// 查询作业取消状态（命令侧检查点）：登记缺失视为未取消——检查点
+    /// 均在登记守卫存活的语句序列内执行。阻塞线程上落盘单元的锁内复验
+    /// 走 [`ImageJobRegistry::writable`]（登记缺失同样拒绝）。
+    pub(crate) fn is_cancelled(&self, job_id: &str) -> bool {
+        crate::lock::recover_guard(self.state.lock(), "生成作业注册表")
+            .active
+            .get(job_id)
+            .copied()
+            .unwrap_or(false)
+    }
+
+    /// 落盘单元的锁内复验（issue #310 评审修复）：作业仍处活动登记且
+    /// 未被取消才允许写盘。spawn_blocking 不随等待者取消中断——命令
+    /// future 被丢弃（如运行时关闭）时登记守卫先行 Drop 移除活动条目，
+    /// 登记缺失同样拒绝：响应已无人接收，继续写盘只会留下不可达资产，
+    /// 此前已登记的取消也不得被守卫释放抹去。
+    pub(crate) fn writable(&self, job_id: &str) -> bool {
+        crate::lock::recover_guard(self.state.lock(), "生成作业注册表")
+            .active
+            .get(job_id)
+            .copied()
+            == Some(false)
+    }
+
     /// 命令入口登记：消费同 id 预取消墓碑（若有）并登记活动作业——
     /// 返回的守卫在 Drop 时移除活动登记，全部出口统一清理。
     fn register<'a>(&'a self, job_id: &str) -> JobRegistration<'a> {
@@ -165,11 +190,7 @@ pub(crate) struct JobRegistration<'a> {
 
 impl JobRegistration<'_> {
     pub(crate) fn is_cancelled(&self) -> bool {
-        crate::lock::recover_guard(self.registry.state.lock(), "生成作业注册表")
-            .active
-            .get(&self.job_id)
-            .copied()
-            .unwrap_or(false)
+        self.registry.is_cancelled(&self.job_id)
     }
 }
 
@@ -589,6 +610,57 @@ async fn generate_image_bytes(
     }
 }
 
+/// 生图落盘同步内核（生产与测试共用，依赖注入以便夹具替换）：操作锁
+/// 内写入 + §9.3 预检。锁内复验经 [`ImageJobRegistry::writable`]——
+/// 已取消**或登记缺失**（命令 future 已被丢弃，评审修复）均拒绝；登记
+/// 守卫生命周期由调用方持有。
+fn write_and_validate_generated_asset(
+    projects: &CapDir,
+    pending: &crate::assets::project_media::PendingProjectAssets,
+    registry: &ImageJobRegistry,
+    job_id: &str,
+    project_id: &str,
+    bytes: &[u8],
+    mime: &'static str,
+) -> Result<Value, String> {
+    let written =
+        crate::assets::write_generated_asset(projects, project_id, bytes, mime, pending, &|| {
+            !registry.writable(job_id)
+        })
+        .map_err(|e| e.to_string())?;
+    // §9.3 预检并入同一工作单元（同一根句柄）：返回的产物已完成形状+实路径校验
+    crate::assets::validate_project_asset_with(projects, project_id, &written)
+        .map_err(|e| e.to_string())
+}
+
+/// 生成产物落盘调度（issue #310，#138/#279 之后剩余的生图阻塞路径）：
+/// 目录准备、操作锁等待（与项目删除串行）、写入与 §9.3 预检作为单一
+/// 同步工作单元移入阻塞执行——慢磁盘或锁竞争不再占用异步工作线程。
+/// 取消复验经托管注册表在锁内进行；登记守卫生命周期仍在命令侧（调用方
+/// 显式持有到本调用完成，见 `llm_image_generate`），不提前释放登记。
+async fn persist_generated_asset(
+    app: AppHandle,
+    project_id: String,
+    bytes: Vec<u8>,
+    mime: &'static str,
+    job_id: String,
+) -> Result<Value, String> {
+    crate::blocking::run("llm_image_generate", move || {
+        let projects = crate::store::projects_dir(&app).map_err(crate::store::to_ipc_text)?;
+        let pending = app.state::<crate::assets::project_media::PendingProjectAssets>();
+        write_and_validate_generated_asset(
+            &projects,
+            &pending,
+            &app.state::<ImageJobRegistry>(),
+            &job_id,
+            &project_id,
+            &bytes,
+            mime,
+        )
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn llm_image_generate(app: AppHandle, request: ImageGenRequest) -> Result<Value, String> {
     // 作业总预算自命令进入时刻起算（issue #141）：覆盖 POST 与下载链
@@ -637,20 +709,12 @@ pub async fn llm_image_generate(app: AppHandle, request: ImageGenRequest) -> Res
     if registration.is_cancelled() {
         return Err("已取消".into());
     }
-    let projects = crate::store::projects_dir(&app).map_err(crate::store::to_ipc_text)?;
-    let pending = app.state::<crate::assets::project_media::PendingProjectAssets>();
-    let written = crate::assets::write_generated_asset(
-        &projects,
-        &project_id,
-        &bytes,
-        mime,
-        &pending,
-        &|| registration.is_cancelled(),
-    )
-    .map_err(|e| e.to_string())?;
-    // §9.3 预检并入命令内（同一根句柄）：返回的产物已完成形状+实路径校验
-    let asset = crate::assets::validate_project_asset_with(&projects, &project_id, &written)
-        .map_err(|e| e.to_string())?;
+    // 落盘与校验移入阻塞执行（issue #310）：慢磁盘/锁竞争不占用异步
+    // 工作线程；显式 drop 把登记守卫生命周期延到持久化完成——锁内取消
+    // 复验（阻塞线程经托管注册表查询）全程有效，Drop 清理语义不变。
+    // 守卫借用原句柄，持久化用克隆句柄（同一托管注册表实例）。
+    let asset = persist_generated_asset(app.clone(), project_id, bytes, mime, job_id).await?;
+    drop(registration);
     Ok(asset)
 }
 
