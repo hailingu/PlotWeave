@@ -697,6 +697,28 @@ function expectReadable(
 }
 
 describe('语义令牌配对契约（issue #278：原则 2 + §2.6）', () => {
+  it('带 fallback 的令牌定义经配对助手取实际生效颜色（issue #290）', () => {
+    const tokens = new Map([
+      ['--surface-card', 'var(--brand-surface, #fff)'],
+      ['--text-on-card', '#111'],
+    ])
+    // 主值 --brand-surface 缺失：fallback #fff 生效（修复前 resolveChain
+    // 不识别 fallback 形态，配对助手直接抛「链过深或悬空」）
+    expectReadable(
+      '--text-on-card',
+      ['--surface-card'],
+      tokens,
+      '#290 fallback',
+    )
+    expect(tokenPaint('--surface-card', tokens)).toEqual(parsePaint('#fff'))
+    // 主值已定义：选主值而非 fallback
+    const primary = new Map([
+      ['--surface-card', 'var(--brand-surface, #fff)'],
+      ['--brand-surface', '#111'],
+    ])
+    expect(tokenPaint('--surface-card', primary)).toEqual(parsePaint('#111'))
+  })
+
   it('一级文本于全部承载面（窗口/画布/卡片/材质/悬停填充）四环境 ≥ 4.5:1', () => {
     for (const [envName, env] of PAIR_ENVS) {
       const tokens = tokenValues(env)

@@ -213,21 +213,43 @@ function variableStart(value: string): number {
   return /(?<![\w\u0080-\uFFFF-])var\(/i.exec(maskCssOpaque(value))?.index ?? -1
 }
 
-/** 迭代消解真实 var() 引用链（深度限 12，防循环），字符串/URL 保持原样。 */
+/**
+ * 迭代消解真实 var() 引用链（深度限 12，防循环），字符串/URL 保持原样。
+ * 支持 fallback（issue #290）：已定义主值选主值，缺失主值选 fallback
+ * （fallback 内的引用由后续迭代继续消解），无 fallback 且缺失保持原值
+ * 并最终按悬空抛错——深度保护不变；fallback 以最外层平衡括号切分，
+ * 嵌套函数/嵌套 var() 不截断。
+ */
 export function resolveChain(
   value: string,
   tokens: Map<string, string>,
 ): string {
   let current = value
   for (let i = 0; i < 12 && variableStart(current) >= 0; i += 1) {
-    const syntax = maskCssOpaque(current)
-    current = current.replace(
-      /(?<![\w\u0080-\uFFFF-])var\([ \t\n\r\f]*(--[\w\u0080-\uFFFF-]+)[ \t\n\r\f]*\)/gi,
-      (whole, name: string, offset: number) =>
-        syntax.slice(offset, offset + 4).toLowerCase() === 'var('
-          ? (tokens.get(name) ?? whole)
-          : whole,
-    )
+    let out = ''
+    let rest = current
+    for (;;) {
+      const start = variableStart(rest)
+      if (start < 0) {
+        out += rest
+        break
+      }
+      out += rest.slice(0, start)
+      const call = colorTokenOf(rest.slice(start))
+      const args = call.slice(4, -1)
+      const comma = args.indexOf(',')
+      const name = (comma < 0 ? args : args.slice(0, comma)).trim()
+      const primary = tokens.get(name)
+      if (primary !== undefined) {
+        out += primary
+      } else if (comma >= 0) {
+        out += args.slice(comma + 1).trim()
+      } else {
+        out += call
+      }
+      rest = rest.slice(start + call.length)
+    }
+    current = out
   }
   if (variableStart(current) >= 0)
     throw new Error(`var() 链过深或悬空: ${value}`)

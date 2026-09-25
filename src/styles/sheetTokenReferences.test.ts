@@ -95,6 +95,32 @@ describe('混合值仅解析真实引用（review 5280334884）', () => {
     expect(() => resolveChain(value, new Map())).toThrow(/var\(\) 链过深或悬空/)
   })
 
+  it('带 fallback 的引用：已定义主值选主值，缺失主值选 fallback（issue #290）', () => {
+    expect(
+      resolveChain('var(--surface, #fff)', new Map([['--surface', '#123']])),
+    ).toBe('#123')
+    expect(resolveChain('var(--surface, #fff)', new Map())).toBe('#fff')
+    expect(resolveChain('var(--surface , #fff )', new Map())).toBe('#fff')
+  })
+
+  it('fallback 内的引用由后续迭代继续消解（issue #290）', () => {
+    expect(
+      resolveChain(
+        'var(--missing, var(--b, #000))',
+        new Map([['--b', '#0f0']]),
+      ),
+    ).toBe('#0f0')
+    expect(
+      resolveChain('var(--missing, var(--also-missing, #000))', new Map()),
+    ).toBe('#000')
+  })
+
+  it('无 fallback 的悬空引用仍按悬空抛错（issue #290 对照）', () => {
+    expect(() => resolveChain('var(--missing)', new Map())).toThrow(
+      /var\(\) 链过深或悬空/,
+    )
+  })
+
   it('简易链入口保留被替换结果中的字面 var 文本', () => {
     const tokens = new Map([
       ['--label', 'var(--text)'],
