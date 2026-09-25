@@ -11,7 +11,11 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import postcss from 'postcss'
-import { colorTokenOf, colorTypeOk } from './cssColorContract'
+import {
+  balancedCloseFrom,
+  colorTokenOf,
+  colorTypeOk,
+} from './cssColorContract'
 import { maskCssOpaque } from './cssValueSyntax'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../..')
@@ -695,44 +699,56 @@ function variableCycles(
   )
 }
 
-/** 按最外层 var() 选择主值或 fallback，再递归消解嵌套函数；无可用值返回 null。 */
+/**
+ * 按最外层 var() 选择主值或 fallback，再递归消解嵌套函数；无可用值返回 null。
+ * 依赖与 fallback 嵌套递归并递增链深（32 层预算不变）；同级余串在本值内以
+ * 游标线性推进、栈深恒定（issue #349）——并列引用不递增深度（issue #290 评
+ * 审修复语义保留），数量不受链深预算、也不受 JS 调用栈深度约束。
+ */
 function resolveDisplayValue(
   value: string,
   scope: Map<string, string>,
   depth = 0,
 ): string | null {
-  const start = variableStart(value)
-  if (start < 0) return value
-  if (depth >= 32) return null
-  const call = colorTokenOf(value.slice(start))
-  const args = call.slice(4, -1)
-  const comma = args.indexOf(',')
-  const name = trimCssWhitespace(comma < 0 ? args : args.slice(0, comma))
-  const raw = scope.get(name)
-  const primary =
-    raw === undefined ||
-    trimCssWhitespace(raw).toLowerCase() === 'initial' ||
-    variableCycles(name, name, scope)
-      ? null
-      : resolveDisplayValue(raw, scope, depth + 1)
-  const replacement =
-    primary ??
-    (comma < 0
-      ? null
-      : resolveDisplayValue(
-          trimCssWhitespace(args.slice(comma + 1)),
-          scope,
-          depth + 1,
-        ))
-  if (replacement === null) return null
-  // 同级余串不递增深度（issue #290 评审修复）：链深度只沿依赖与 fallback
-  // 嵌套累计——并列引用的数量不受 32 层预算约束；余串严格缩短保证终止。
-  const rest = resolveDisplayValue(
-    value.slice(start + call.length),
-    scope,
-    depth,
-  )
-  return rest === null ? null : value.slice(0, start) + replacement + rest
+  const masked = maskCssOpaque(value)
+  const finder = /(?<![\w\u0080-\uFFFF-])var\(/gi
+  let resolved = ''
+  let cursor = 0
+  while (true) {
+    finder.lastIndex = cursor
+    const match = finder.exec(masked)
+    if (!match) return resolved + value.slice(cursor)
+    if (depth >= 32) return null
+    const start = match.index
+    const close = balancedCloseFrom(masked, start + 4)
+    // 未闭合时 colorTokenOf 以同一括号口径抛既有「色标函数未闭合」契约错误。
+    const call =
+      close >= 0
+        ? value.slice(start, close + 1)
+        : colorTokenOf(value.slice(start))
+    const args = call.slice(4, -1)
+    const comma = args.indexOf(',')
+    const name = trimCssWhitespace(comma < 0 ? args : args.slice(0, comma))
+    const raw = scope.get(name)
+    const primary =
+      raw === undefined ||
+      trimCssWhitespace(raw).toLowerCase() === 'initial' ||
+      variableCycles(name, name, scope)
+        ? null
+        : resolveDisplayValue(raw, scope, depth + 1)
+    const replacement =
+      primary ??
+      (comma < 0
+        ? null
+        : resolveDisplayValue(
+            trimCssWhitespace(args.slice(comma + 1)),
+            scope,
+            depth + 1,
+          ))
+    if (replacement === null) return null
+    resolved += value.slice(cursor, start) + replacement
+    cursor = start + call.length
+  }
 }
 
 /** 真实样式表和夹具共用的类型扫描入口：逐活跃环境、逐选择器分支报告实际无效值。 */
