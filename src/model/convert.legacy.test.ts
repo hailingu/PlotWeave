@@ -761,3 +761,79 @@ describe('schemaVersion 0 迁移：重复节点 id 的旧下标句柄归属（is
     ).toBe('option-opt-a')
   })
 })
+
+/** issue #335 复现信封：单条 line 行携带调用方给定的 speaker（模块级夹具，
+ * 使回归 describe 不超 80 行）。 */
+const malformedSpeakerEnvelope = (speaker: unknown) => ({
+  schemaVersion: 0,
+  project: {
+    id: 'p-old',
+    name: 'probe',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  },
+  graph: {
+    nodes: [
+      {
+        id: 'd1',
+        type: 'dialogue',
+        position: { x: 0, y: 0 },
+        data: {
+          name: '对白',
+          lines: [{ id: 'l1', kind: 'line', speaker, text: 'hello' }],
+        },
+      },
+    ],
+    edges: [],
+  },
+  settings: { characters: [], locations: [] },
+  episodeTitles: {},
+  assets: { byId: {} },
+})
+
+describe('schemaVersion 0 迁移：异型对白 speaker 的安全预检（issue #335，§11 v0 兼容子步骤）', () => {
+  const lineOf = (round: ReturnType<typeof parseProject>) =>
+    (
+      (round.content.nodes[0].data as { lines: unknown[] }).lines as Array<{
+        id: string
+        speaker: unknown
+        text: string
+      }>
+    ).find((l) => l.id === 'l1')!
+
+  it('数组型 speaker 置空并告警：text 保留，整档可解析，parseProject 不抛错', () => {
+    const round = parseProject(malformedSpeakerEnvelope([]))
+    expect(lineOf(round).speaker).toBeNull()
+    expect(lineOf(round).text).toBe('hello')
+    expect(
+      round.warnings.some(
+        (w) => w.includes('d1') && w.includes('speaker') && w.includes('异型'),
+      ),
+    ).toBe(true)
+  })
+
+  it('标量异型 speaker（数值/布尔）同样在 v0 预检置空并告警', () => {
+    for (const speaker of [5, false]) {
+      const round = parseProject(malformedSpeakerEnvelope(speaker))
+      expect(lineOf(round).speaker).toBeNull()
+      expect(lineOf(round).text).toBe('hello')
+      expect(
+        round.warnings.some(
+          (w) =>
+            w.includes('d1') && w.includes('speaker') && w.includes('异型'),
+        ),
+      ).toBe(true)
+    }
+  })
+
+  it('合法形态对照：字符串引用、null 与缺失 speaker 不受预检影响', () => {
+    const ref = parseProject(malformedSpeakerEnvelope('ch-1'))
+    expect(lineOf(ref).speaker).toBe('ch-1')
+    expect(lineOf(ref).text).toBe('hello')
+    const none = parseProject(malformedSpeakerEnvelope(null))
+    expect(lineOf(none).speaker ?? null).toBeNull()
+    const absent = parseProject(malformedSpeakerEnvelope(undefined))
+    expect(lineOf(absent).speaker ?? null).toBeNull()
+    expect(lineOf(absent).text).toBe('hello')
+  })
+})
