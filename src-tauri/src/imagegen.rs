@@ -113,14 +113,28 @@ impl ImageJobRegistry {
         }
     }
 
-    /// 查询作业取消状态（issue #310：阻塞线程上的落盘单元经本入口查询
-    /// 托管注册表——登记守卫留在命令侧，锁内取消复验语义不变）。
+    /// 查询作业取消状态（命令侧检查点）：登记缺失视为未取消——检查点
+    /// 均在登记守卫存活的语句序列内执行。阻塞线程上落盘单元的锁内复验
+    /// 走 [`ImageJobRegistry::writable`]（登记缺失同样拒绝）。
     pub(crate) fn is_cancelled(&self, job_id: &str) -> bool {
         crate::lock::recover_guard(self.state.lock(), "生成作业注册表")
             .active
             .get(job_id)
             .copied()
             .unwrap_or(false)
+    }
+
+    /// 落盘单元的锁内复验（issue #310 评审修复）：作业仍处活动登记且
+    /// 未被取消才允许写盘。spawn_blocking 不随等待者取消中断——命令
+    /// future 被丢弃（如运行时关闭）时登记守卫先行 Drop 移除活动条目，
+    /// 登记缺失同样拒绝：响应已无人接收，继续写盘只会留下不可达资产，
+    /// 此前已登记的取消也不得被守卫释放抹去。
+    pub(crate) fn writable(&self, job_id: &str) -> bool {
+        crate::lock::recover_guard(self.state.lock(), "生成作业注册表")
+            .active
+            .get(job_id)
+            .copied()
+            == Some(false)
     }
 
     /// 命令入口登记：消费同 id 预取消墓碑（若有）并登记活动作业——
@@ -597,8 +611,9 @@ async fn generate_image_bytes(
 }
 
 /// 生图落盘同步内核（生产与测试共用，依赖注入以便夹具替换）：操作锁
-/// 内写入 + §9.3 预检。取消经注册表按 job id 查询（阻塞线程上的锁内
-/// 复验与命令侧检查点同一事实源），登记守卫生命周期由调用方持有。
+/// 内写入 + §9.3 预检。锁内复验经 [`ImageJobRegistry::writable`]——
+/// 已取消**或登记缺失**（命令 future 已被丢弃，评审修复）均拒绝；登记
+/// 守卫生命周期由调用方持有。
 fn write_and_validate_generated_asset(
     projects: &CapDir,
     pending: &crate::assets::project_media::PendingProjectAssets,
@@ -610,7 +625,7 @@ fn write_and_validate_generated_asset(
 ) -> Result<Value, String> {
     let written =
         crate::assets::write_generated_asset(projects, project_id, bytes, mime, pending, &|| {
-            registry.is_cancelled(job_id)
+            !registry.writable(job_id)
         })
         .map_err(|e| e.to_string())?;
     // §9.3 预检并入同一工作单元（同一根句柄）：返回的产物已完成形状+实路径校验

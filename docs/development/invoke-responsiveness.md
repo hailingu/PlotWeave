@@ -76,9 +76,12 @@ Tauri 持久化命令的执行线程；不改 IPC 载荷、磁盘格式、事务
 由 [issue #310](https://github.com/hailingu/PlotWeave/issues/310) 以同一
 `blocking::run` 调度移交（`persist_generated_asset`，落盘单元内核
 `write_and_validate_generated_asset` 生产与测试共用）。锁内取消复验经托管
-作业注册表在阻塞线程按 job id 查询（`ImageJobRegistry::is_cancelled`），
+作业注册表在阻塞线程按 job id 查询（`ImageJobRegistry::writable`），
 登记守卫生命周期保留在命令侧并显式持有至持久化完成，不提前释放登记；
-锁等待期间取消不落盘、项目删除与写入串行（已删项目不被重建）语义不变。
+命令 future 在持久化期间被丢弃（如运行时关闭，守卫先行 Drop 移除活动
+条目）时，锁内复验因登记缺失同样拒绝写入（评审修复），已登记的取消
+不因守卫释放被抹去。锁等待期间取消不落盘、项目删除与写入串行（已删
+项目不被重建）语义不变。
 行为验证：真实操作锁竞争（他者持锁 400 ms、32 个并发落盘单元）下兄弟
 异步任务在锁仍被持有时推进（`imagegen::tests::
 lock_contention_persist_leaves_async_workers_free`），另覆盖

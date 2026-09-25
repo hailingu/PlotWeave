@@ -621,12 +621,18 @@ fn lock_contention_persist_leaves_async_workers_free() {
     let registry = std::sync::Arc::new(ImageJobRegistry::new());
     let registration = registry.register("job-0");
 
-    let holder = std::thread::spawn(|| {
+    // 持锁确认栅栏（评审修复）：栅栏之后才启动单元，锁竞争真实成立
+    let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+    let holder = std::thread::spawn(move || {
         let _op = crate::store::projects_op_lock();
+        locked_tx.send(()).expect("通知持锁");
         std::thread::sleep(std::time::Duration::from_millis(400));
         // 先记录后释放：该时刻 ≤ 真实释放时刻，比较方向保守安全
         std::time::Instant::now()
     });
+    locked_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("持锁者应取得操作锁");
 
     let sibling_done = std::sync::Arc::new(std::sync::Mutex::new(None::<std::time::Instant>));
     let (units_ok, sibling_at) = tauri::async_runtime::block_on(async {
@@ -682,10 +688,17 @@ fn cancel_during_lock_wait_skips_disk_write() {
     let registry = std::sync::Arc::new(ImageJobRegistry::new());
     let registration = registry.register("job-1");
 
-    let holder = std::thread::spawn(|| {
+    // 持锁确认栅栏（评审修复）：单元启动时锁必然已被持有，50ms 处的
+    // 取消必然落在锁等待窗口内
+    let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+    let holder = std::thread::spawn(move || {
         let _op = crate::store::projects_op_lock();
+        locked_tx.send(()).expect("通知持锁");
         std::thread::sleep(std::time::Duration::from_millis(300));
     });
+    locked_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("持锁者应取得操作锁");
 
     let unit_registry = registry.clone();
     let result = tauri::async_runtime::block_on(async {
@@ -725,10 +738,16 @@ fn deleted_project_during_lock_wait_is_not_recreated() {
     let registry = std::sync::Arc::new(ImageJobRegistry::new());
     let registration = registry.register("job-1");
 
-    let holder = std::thread::spawn(|| {
+    // 持锁确认栅栏（评审修复）：删除必然落在单元的锁等待窗口内
+    let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+    let holder = std::thread::spawn(move || {
         let _op = crate::store::projects_op_lock();
+        locked_tx.send(()).expect("通知持锁");
         std::thread::sleep(std::time::Duration::from_millis(300));
     });
+    locked_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("持锁者应取得操作锁");
 
     let result = tauri::async_runtime::block_on(async {
         let unit = tauri::async_runtime::spawn(persist_unit(
@@ -749,5 +768,54 @@ fn deleted_project_during_lock_wait_is_not_recreated() {
     assert!(
         !root.join("p-1").exists(),
         "不得替已删项目创建资产目录：{root:?}"
+    );
+}
+
+/// 命令 future 被丢弃后的挂起写入仍被拒绝（issue #310 评审修复）：
+/// spawn_blocking 不随等待者取消中断——运行时关闭等场景下命令 future
+/// 在持久化单元等锁期间被丢弃，登记守卫先行 Drop 移除活动条目。锁内
+/// 复验必须因登记缺失拒绝写入（响应已无人接收，不留不可达资产）；
+/// 此前已登记的取消也不得被守卫释放抹去。
+#[test]
+fn dropped_command_registration_rejects_pending_write() {
+    let (root, projects_path) = temp_projects_fixture("p-1");
+    let registry = std::sync::Arc::new(ImageJobRegistry::new());
+    let registration = registry.register("job-1");
+
+    // 持锁确认栅栏：单元必然在锁等待中被丢弃
+    let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+    let holder = std::thread::spawn(move || {
+        let _op = crate::store::projects_op_lock();
+        locked_tx.send(()).expect("通知持锁");
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    });
+    locked_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("持锁者应取得操作锁");
+
+    let result = tauri::async_runtime::block_on(async {
+        let unit = tauri::async_runtime::spawn(persist_unit(
+            projects_path.clone(),
+            registry.clone(),
+            "job-1".to_string(),
+        ));
+        // 单元在锁等待中；此刻命令 future 被丢弃（守卫先行 Drop 移除
+        // 活动条目），阻塞任务自身继续运行
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        drop(registration);
+        unit.await.expect("落盘单元不应 panic")
+    });
+    holder.join().expect("持锁线程应正常结束");
+
+    let err = result.expect_err("登记已移除的挂起写入应拒绝");
+    assert!(err.contains("已取消"), "实际诊断：{err}");
+    let dir = root.join("p-1").join("assets");
+    assert!(
+        !dir.exists()
+            || std::fs::read_dir(&dir)
+                .expect("读取 assets 目录")
+                .next()
+                .is_none(),
+        "结果无人接收时不得写盘：{root:?}"
     );
 }
