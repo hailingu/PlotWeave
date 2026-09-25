@@ -400,16 +400,20 @@ export function migrateProjectDocument(
 
 /** 旧运行态的分支边按数组下标定位出口（option-N）；v1 绑稳定选项 id（§4.2 修订）。
  * 须在 migrateProjectDocument 之后调用（此时选项已带稳定 id）；
- * 能解析的下标就地改写。规范 0 基句柄（0|[1-9]\d*）之外与越界/指向已删
- * 槽位的数字句柄都在迁移期直接隔离并警告（§11.1 ②）：数字字面量可能碰巧
- * 等于某选项的数值型稳定 id，原样保留会被 v1 当稳定句柄解释而静默改接到
- * 该选项；非规范书写（option-01 等）同样不得按其数值解释——Number('01')
- * 会静默改接选项归属，且 v0 选项 id 恒为 opt- 前缀，纯数字只能是旧式句柄。 */
+ * 能解析的下标就地改写。节点查表按文档序首见归属（§11：重复合法节点 id
+ * 的引用解析到首见节点，issue #334）——末见同 id 节点不得改接或挤掉
+ * 既有连线的选项绑定，后续通用去重同样保首见、归属一致。规范 0 基句柄
+ * （0|[1-9]\d*）之外与越界/指向已删槽位的数字句柄都在迁移期直接隔离并
+ * 警告（§11.1 ②）：数字字面量可能碰巧等于某选项的数值型稳定 id，原样
+ * 保留会被 v1 当稳定句柄解释而静默改接到该选项；非规范书写（option-01 等）
+ * 同样不得按其数值解释——Number('01') 会静默改接选项归属，且 v0 选项 id
+ * 恒为 opt- 前缀，纯数字只能是旧式句柄。 */
 export function rewriteIndexOptionHandles(
   doc: ProjectContent,
   warnings?: string[],
 ): ProjectContent {
-  const nodesById = new Map(doc.nodes.map((n) => [n.id, n]))
+  const nodesById = new Map<string, CanvasNode>()
+  for (const n of doc.nodes) if (!nodesById.has(n.id)) nodesById.set(n.id, n)
   const edges = doc.edges
     .map((e): Edge | null => {
       const optionId = branchOptionIdOf(e.sourceHandle)

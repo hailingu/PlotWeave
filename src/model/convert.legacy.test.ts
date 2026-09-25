@@ -4,7 +4,8 @@
  * 槽位保序、v0 字段优先级与头像预过滤——损坏旧档按可修复数据对待。
  */
 import { describe, expect, it } from 'vitest'
-import { parseProject } from './convert'
+import { parseProject, serializeProject } from './convert'
+import { NOW } from './convertFixtures'
 
 describe('schemaVersion 0 迁移：分支选项键控身份的数组语义保全（§11.1 迁移链，重复/空白 id 先于句柄改写修复）', () => {
   it('分支选项重复/空白 id 在迁移期重发，下标句柄仍绑定原数组位的选项', () => {
@@ -662,5 +663,99 @@ describe('v0 迁移的字段优先级与头像预过滤（迁移链 ④ 前置�
     expect(
       round.warnings.some((w) => w.includes('d1') && w.includes('speaker')),
     ).toBe(true)
+  })
+})
+
+describe('schemaVersion 0 迁移：重复节点 id 的旧下标句柄归属（issue #334，§11 首见身份）', () => {
+  const envelope = (first: unknown[], second: unknown[]) => ({
+    schemaVersion: 0,
+    project: {
+      id: 'p-old',
+      name: 'probe',
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    },
+    graph: {
+      nodes: [
+        {
+          id: 'dup',
+          type: 'branch',
+          position: { x: 0, y: 0 },
+          data: { prompt: 'choose', options: first },
+        },
+        {
+          id: 'dup',
+          type: 'branch',
+          position: { x: 0, y: 0 },
+          data: { prompt: 'choose', options: second },
+        },
+        {
+          id: 's1',
+          type: 'scene',
+          position: { x: 0, y: 0 },
+          data: {
+            name: 's1',
+            sceneNo: 1,
+            interior: true,
+            time: 'day',
+            synopsis: '',
+            characterIds: [],
+          },
+        },
+      ],
+      edges: [
+        {
+          id: 'e1',
+          source: 'dup',
+          target: 's1',
+          sourceHandle: 'option-0',
+          type: 'branch',
+        },
+      ],
+    },
+    settings: { characters: [], locations: [] },
+    assets: { byId: {} },
+    episodeTitles: {},
+  })
+
+  it('末见节点与首见共享选项 id：e1 绑定首见节点的 opt-a，不改接末见的同名选项', () => {
+    const round = parseProject(
+      envelope(
+        [
+          { id: 'opt-a', label: 'first' },
+          { id: 'opt-b', label: 'second' },
+        ],
+        [{ id: 'opt-b', label: 'later' }],
+      ),
+    )
+    const e1 = round.content.edges.find((e) => e.id === 'e1')
+    expect(e1).toBeDefined()
+    expect(e1?.sourceHandle).toBe('option-opt-a')
+    // 加载/保存边界（issue #334）：migrated/repaired 产物经 enqueueSave
+    // 回写——保存载荷经 JSON 边界再解析后绑定不得回退
+    const reloaded = parseProject(
+      JSON.parse(JSON.stringify(serializeProject(round.content, 'p-old', NOW))),
+    )
+    expect(
+      reloaded.content.edges.find((e) => e.id === 'e1')?.sourceHandle,
+    ).toBe('option-opt-a')
+  })
+
+  it('末见节点选项集不同：e1 保留并绑定 opt-a，不因末见节点被错误隔离', () => {
+    const round = parseProject(
+      envelope(
+        [{ id: 'opt-a', label: 'first' }],
+        [{ id: 'opt-z', label: 'later' }],
+      ),
+    )
+    const e1 = round.content.edges.find((e) => e.id === 'e1')
+    expect(e1).toBeDefined()
+    expect(e1?.sourceHandle).toBe('option-opt-a')
+    const reloaded = parseProject(
+      JSON.parse(JSON.stringify(serializeProject(round.content, 'p-old', NOW))),
+    )
+    expect(
+      reloaded.content.edges.find((e) => e.id === 'e1')?.sourceHandle,
+    ).toBe('option-opt-a')
   })
 })
