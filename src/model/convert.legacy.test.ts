@@ -666,61 +666,63 @@ describe('v0 迁移的字段优先级与头像预过滤（迁移链 ④ 前置�
   })
 })
 
-describe('schemaVersion 0 迁移：重复节点 id 的旧下标句柄归属（issue #334，§11 首见身份）', () => {
-  const envelope = (first: unknown[], second: unknown[]) => ({
-    schemaVersion: 0,
-    project: {
-      id: 'p-old',
-      name: 'probe',
-      createdAt: '2026-01-01T00:00:00Z',
-      updatedAt: '2026-01-01T00:00:00Z',
-    },
-    graph: {
-      nodes: [
-        {
-          id: 'dup',
-          type: 'branch',
-          position: { x: 0, y: 0 },
-          data: { prompt: 'choose', options: first },
+/** issue #334 复现信封：两个同 id 分支节点（选项集由调用方给定）+ 场景 +
+ * 一条 option-0 旧下标句柄分支边（模块级夹具，使回归 describe 不超 80 行）。 */
+const dupNodeEnvelope = (first: unknown[], second: unknown[]) => ({
+  schemaVersion: 0,
+  project: {
+    id: 'p-old',
+    name: 'probe',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  },
+  graph: {
+    nodes: [
+      {
+        id: 'dup',
+        type: 'branch',
+        position: { x: 0, y: 0 },
+        data: { prompt: 'choose', options: first },
+      },
+      {
+        id: 'dup',
+        type: 'branch',
+        position: { x: 0, y: 0 },
+        data: { prompt: 'choose', options: second },
+      },
+      {
+        id: 's1',
+        type: 'scene',
+        position: { x: 0, y: 0 },
+        data: {
+          name: 's1',
+          sceneNo: 1,
+          interior: true,
+          time: 'day',
+          synopsis: '',
+          characterIds: [],
         },
-        {
-          id: 'dup',
-          type: 'branch',
-          position: { x: 0, y: 0 },
-          data: { prompt: 'choose', options: second },
-        },
-        {
-          id: 's1',
-          type: 'scene',
-          position: { x: 0, y: 0 },
-          data: {
-            name: 's1',
-            sceneNo: 1,
-            interior: true,
-            time: 'day',
-            synopsis: '',
-            characterIds: [],
-          },
-        },
-      ],
-      edges: [
-        {
-          id: 'e1',
-          source: 'dup',
-          target: 's1',
-          sourceHandle: 'option-0',
-          type: 'branch',
-        },
-      ],
-    },
-    settings: { characters: [], locations: [] },
-    assets: { byId: {} },
-    episodeTitles: {},
-  })
+      },
+    ],
+    edges: [
+      {
+        id: 'e1',
+        source: 'dup',
+        target: 's1',
+        sourceHandle: 'option-0',
+        type: 'branch',
+      },
+    ],
+  },
+  settings: { characters: [], locations: [] },
+  assets: { byId: {} },
+  episodeTitles: {},
+})
 
+describe('schemaVersion 0 迁移：重复节点 id 的旧下标句柄归属（issue #334，§11 首见身份）', () => {
   it('末见节点与首见共享选项 id：e1 绑定首见节点的 opt-a，不改接末见的同名选项', () => {
     const round = parseProject(
-      envelope(
+      dupNodeEnvelope(
         [
           { id: 'opt-a', label: 'first' },
           { id: 'opt-b', label: 'second' },
@@ -743,7 +745,7 @@ describe('schemaVersion 0 迁移：重复节点 id 的旧下标句柄归属（is
 
   it('末见节点选项集不同：e1 保留并绑定 opt-a，不因末见节点被错误隔离', () => {
     const round = parseProject(
-      envelope(
+      dupNodeEnvelope(
         [{ id: 'opt-a', label: 'first' }],
         [{ id: 'opt-z', label: 'later' }],
       ),

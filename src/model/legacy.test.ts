@@ -482,33 +482,40 @@ describe('rewriteIndexOptionHandles（旧下标句柄改写，§11.1 ②）', ()
       warnings.some((w) => w.includes('e-nc') && w.includes('非规范')),
     ).toBe(true)
   })
+})
 
-  it('重复分支节点 id 按文档序首见节点解析下标句柄（issue #334）：末见节点不得改接归属', () => {
+describe('rewriteIndexOptionHandles · 重复节点 id 首见归属（issue #334，§11）', () => {
+  const dupBranch = (options: unknown[]) =>
+    node({
+      id: 'dup',
+      type: 'branch',
+      position: { x: 0, y: 0 },
+      data: { prompt: 'choose', options },
+    } as unknown as CanvasNode)
+  const target = node({
+    id: 't1',
+    type: 'scene',
+    position: { x: 0, y: 0 },
+    data: {
+      name: '目标',
+      sceneNo: 1,
+      interior: true,
+      time: '',
+      synopsis: '',
+      characterIds: [],
+    },
+  } as unknown as CanvasNode)
+
+  it('重复分支节点 id 按文档序首见节点解析下标句柄：末见节点不得改接归属', () => {
     const { doc } = migrateProjectDocument({
       name: 'x',
       nodes: [
-        node({
-          id: 'dup',
-          type: 'branch',
-          position: { x: 0, y: 0 },
-          data: {
-            prompt: 'choose',
-            options: [
-              { id: 'opt-a', label: 'first' },
-              { id: 'opt-b', label: 'second' },
-            ],
-          },
-        } as unknown as CanvasNode),
-        node({
-          id: 'dup',
-          type: 'branch',
-          position: { x: 0, y: 0 },
-          data: {
-            prompt: 'choose',
-            options: [{ id: 'opt-b', label: 'later' }],
-          },
-        } as unknown as CanvasNode),
-        scene,
+        dupBranch([
+          { id: 'opt-a', label: 'first' },
+          { id: 'opt-b', label: 'second' },
+        ]),
+        dupBranch([{ id: 'opt-b', label: 'later' }]),
+        target,
       ],
       edges: [],
       settings: { characters: [], locations: [] },
