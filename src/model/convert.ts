@@ -211,12 +211,28 @@ function normalizeV0NodeShape(
       break
     case 'dialogue': {
       v0List(data, 'lines', nid, isObjectMember, true, warnings)
-      // 台词 speaker 头像与场景头像同一谓词（isUsableAvatar）：对象形态
-      // speaker 的 label 空白/缺失会让迁移的 ensureCharacter 以
-      // startsWith('') 命中首个既有角色（静默错关联）——不可用头像置空；
-      // 字符串 id 引用不在此处置，交由空键重发/悬空引用规则处理
+      // 台词 speaker 域预检（§11 v0 兼容子步骤：异型 speaker 删除并警告，
+      // issue #335）：字符串 id 引用与 null/缺失不在此处置，交由空键重发/
+      // 悬空引用规则；对象头像走 isUsableAvatar——label 空白/缺失会让迁移
+      // 的 ensureCharacter 以 startsWith('') 命中首个既有角色（静默错关联）
+      // ——不可用头像置空；其余异型（数组等 truthy object 会让迁移的
+      // ensureCharacter 对 label 调 trim 时崩溃，数值/布尔会被 v1 的
+      // speaker 域剥离）同样置空，单字段损坏不得放大为整档不可解析
       for (const line of data.lines as Record<string, unknown>[]) {
-        if (isPlainObject(line.speaker) && !isUsableAvatar(line.speaker)) {
+        if (
+          line.speaker !== null &&
+          line.speaker !== undefined &&
+          typeof line.speaker !== 'string' &&
+          !isPlainObject(line.speaker)
+        ) {
+          warnings.push(
+            `节点 ${nid} 的对白行 speaker 异型（须字符串 id、对象头像或 null），已置空`,
+          )
+          line.speaker = null
+        } else if (
+          isPlainObject(line.speaker) &&
+          !isUsableAvatar(line.speaker)
+        ) {
           warnings.push(
             `节点 ${nid} 的对白行 speaker 头像不可用（label 缺失/空白或 gradient 异型），已置空`,
           )
