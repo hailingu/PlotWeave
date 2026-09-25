@@ -739,6 +739,18 @@ describe('语义令牌配对契约（issue #278：原则 2 + §2.6）', () => {
     }
   })
 
+  it('错误横幅前景/背景配对四环境 ≥ 4.5:1（issue #318：横幅配色进入令牌契约）', () => {
+    for (const [envName, env] of PAIR_ENVS) {
+      const tokens = tokenValues(env)
+      expectReadable(
+        '--error-banner-fg',
+        ['--error-banner-bg'],
+        tokens,
+        `${envName} error-banner`,
+      )
+    }
+  })
+
   it('danger 作为文本色于窗口/卡片承载面四环境 ≥ 4.5:1（错误横幅/键态错误文案）', () => {
     for (const [envName, env] of PAIR_ENVS) {
       const tokens = tokenValues(env)
