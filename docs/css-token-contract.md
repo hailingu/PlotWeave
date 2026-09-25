@@ -46,7 +46,7 @@ F2 上下文拒绝使用稳定错误码：根未知 at-rule 或根内嵌 at-rule
 | F5-b | 函数名为 `VAR`/混合大小写、属性名 `--Foo`/`--foo` 并存；引用位于普通声明、根/局部别名、选中或未选 fallback、字符串/URL | 保持原值和偏移，仅以 ASCII 不区分大小写识别函数名；按原样查找自定义属性名，再构图、选择主值或 fallback 并作类型/悬空检查 | 缺失的真实引用被点名；合法别名与选中 fallback 正确求值；未选路径不误报，字符串/URL 不构成引用；大小写不同的属性名不互认 | 函数识别在 `variableStart`、`allVarRefs`、`resolveChain`、`unresolvedValueRefs`、`resolveDisplayValue` 间一致，属性名始终区分大小写；`sheetTokensEngine.ts` 的引用入口负责 | `sheetTokenReferences.test.ts` 红灯 8 项/绿灯 35 项、真实 glob 正反探针及样式 431 项；CSS 转义函数名与完整 tokenizer 保留边界 |
 | F5-c | 未转义非 ASCII 自定义属性名用于展示色局部别名、间接别名、备用引用或普通接线；相邻标识符内含 `var(` 或 `URL(` 字样 | 在不透明内容外按已支持标识符边界提取完整引用名，保留原样并沿可达定义闭包、求值和类型入口传播；CSS 空白分隔与非 ASCII 名称码点不混淆 | 字面展示色别名进入结构禁用；合法令牌/选中备用值通过；缺失名被点名；字符串/真实 URL 不误认，更长的非 ASCII 函数名不误遮蔽内部引用 | `maskCssOpaque` 的 URL 边界与 `allVarRefs`、`variableStart`/`resolveChain` 对未转义非 ASCII 标识符一致；`displayConsumedDefs`、`unresolvedRefsIn` 和类型入口不能分叉 | 两文件定点测试先 6 项失败后通过；真实 glob 字面别名 1 失败/82 通过、合法别名 83/83；提交前复核新加 `前URL(var(--missing))` 用例先失败后通过，最终样式 446/446；转义标识符和完整 tokenizer 保留边界 |
 | F6-a | 新 CSS、局部字面别名或例外改值/条数/属性 | 发现 → 可达消费闭包 → 结构/接线与例外反向检查 | 新表自动检查；未审计变化报错；失效例外须删除 | 覆盖和豁免不依赖偶然文件布局；真实 glob、`displayConsumedDefs` 和两张例外表 | `sheetTokens.test.ts`；真实 glob 临时探针，运行后删除 |
-| F6-b | 浅深、more、降透明度及 hover 配对 | 固定令牌承载面对比度与黄金接线 | primary ≥4.5，secondary more ≥4.5；危险恒白按 #240 | 配对与产品已接受决策一致；配对/危险契约 | 8 环境既有测试；非文本对比度仍按既有处置（#262/#265 已修复移出例外表，品牌底消费点配对由 sheetTokens BRAND_RULES 黄金接线与 more 配对采样持有） |
+| F6-b | 浅深、more、降透明度及 hover 配对 | 固定令牌承载面对比度与黄金接线 | primary ≥4.5，secondary more ≥4.5；错误横幅 fg/bg 四环境 ≥4.5 且接线绑定消费点（换任一声明接线即失败，issue #318）；危险恒白按 #240 | 配对与产品已接受决策一致；配对/危险契约 | 8 环境既有测试；非文本对比度仍按既有处置（#262/#265 已修复移出例外表，品牌底消费点配对由 sheetTokens BRAND_RULES 黄金接线与 more 配对采样持有） |
 
 无应用生命周期、并发、重试、持久化或数据模型变更，这些维度不适用。
 

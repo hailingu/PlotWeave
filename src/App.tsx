@@ -22,6 +22,7 @@ import {
   useCreateFamilyAttempts,
 } from './useCreateFamilyAttempts'
 import { useExitFlush } from './useExitFlush'
+import { ErrorBanner } from './editor/ErrorBanner'
 import { displayIpcError } from './ipcError'
 import { useProjectSummaries } from './useProjectSummaries'
 import { projectStore, type ProjectContent } from './projectStore'
@@ -707,19 +708,7 @@ export function App() {
   const exitBlocked = useExitFlush()
   return (
     <>
-      {exitBlocked !== null && (
-        <div
-          role="alert"
-          style={{
-            padding: '6px 16px',
-            background: '#5c1d1d',
-            color: '#ffe3e3',
-            fontSize: 13,
-          }}
-        >
-          {exitBlocked}
-        </div>
-      )}
+      {exitBlocked !== null && <ErrorBanner message={exitBlocked} />}
       <AppView
         projects={projects}
         loading={loading}

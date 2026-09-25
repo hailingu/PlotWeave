@@ -74,6 +74,7 @@ gray-900 #131316  →  surface.canvas        →  canvas.background
 | `on.saturated` | 用户内容色底上的前景（角色头像字；配色为应用指派的用户内容，无确定性承载面） | `#FFFFFF`，恒定，不在对比度契约内 |
 | `on.brand` | 品牌渐变连线胶囊、✓ 徽标、大纲集选中胶囊与 AI 工具栏开关选中态/用户消息胶囊的前景（确定性品牌底，issue #240 起面板侧同走此令牌，issue #262 起后两处补齐；底须配 `edge.label.bg`，见下） | `#FFFFFF`；`prefers-contrast: more` 翻黑（配合 `edge.label.bg` 近实色处理全程 ≥ 4.5:1） |
 | `on.danger` | `danger` 实底上的动作前景（AI 批次删除确认按钮、设定集/资产条目删除悬停、菜单删除项悬停、删除确认对话框按钮、节点设置删除悬停；issue #240，#278 把该决策接线补齐至 editor/节点设置四处原字面 `#fff`） | `#FFFFFF`，恒定（浅色底 ≈ 5.4:1；深色底 ≈ 2.8:1 为已记录已知边界，不在对比度契约内） |
+| `error.banner.bg` / `error.banner.fg` | 错误横幅承载面/前景：App 退出冲刷横幅与编辑器保存/导入/生成失败横幅共用 `.pw-error-banner`（issue #318） | `#5C1D1D` / `#FFE3E3`，双外观恒定（与既有字面色逐位一致，视觉零变化；横幅不随外观/对比度变体切换为保留边界；配对 ≈ 10.5:1 进入配对契约） |
 | `edge.label.bg` | 品牌渐变胶囊底（branch 连线选项胶囊、大纲集选中胶囊、AI 工具栏开关选中态、AI 用户消息胶囊；issue #240 起面板侧复用，issue #262 补齐后两处） | 基线品牌渐变；`prefers-contrast: more` 收敛为实色 `accent`（§2.6 背景近实色——渐变内部中段因 sRGB 伽马凸性对黑字跌破 4.5:1，采样用例钉住） |
 | `poster.menu.bg` / `poster.menu.bg-hover` / `poster.menu.border` | 首页海报悬浮 ⋯ 菜单钮的配对面与描边（前景走 `text.primary`；issue #261） | 浅色 `rgba(255,255,255,.82)` / `#FFFFFF` / 透明（与修复前逐位相同，视觉零变化）；深色 `rgba(38,38,44,.94)` / `#3A3A40` / `rgba(255,255,255,.14)`；`more` 背景近实色（`#FFFFFF` / `#26262C`）+ 描边加强，`reduce-transparency` 退化实色。半透明面在任意明暗海报上按纯黑/纯白最劣合成 ≥ 4.5:1（homeTokens.test.ts） |
 | `invalid.stripe` | 失效引用角标的灰斜纹 | `rgba(142,142,147,.35)`，恒定 |

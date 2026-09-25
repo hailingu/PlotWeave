@@ -739,6 +739,28 @@ describe('语义令牌配对契约（issue #278：原则 2 + §2.6）', () => {
     }
   })
 
+  it('错误横幅前景/背景配对四环境 ≥ 4.5:1（issue #318：横幅配色进入令牌契约）', () => {
+    for (const [envName, env] of PAIR_ENVS) {
+      const tokens = tokenValues(env)
+      expectReadable(
+        '--error-banner-fg',
+        ['--error-banner-bg'],
+        tokens,
+        `${envName} error-banner`,
+      )
+    }
+  })
+
+  it('错误横幅接线：.pw-error-banner 的 color/background 恰用横幅令牌（评审修复：配对断言绑定消费点，换接线即失败）', () => {
+    const rule = ruleOf('src/index.css', '.pw-error-banner')
+    expect(declOf(rule, 'color'), '.pw-error-banner color 接线').toBe(
+      'var(--error-banner-fg)',
+    )
+    expect(declOf(rule, 'background'), '.pw-error-banner background 接线').toBe(
+      'var(--error-banner-bg)',
+    )
+  })
+
   it('danger 作为文本色于窗口/卡片承载面四环境 ≥ 4.5:1（错误横幅/键态错误文案）', () => {
     for (const [envName, env] of PAIR_ENVS) {
       const tokens = tokenValues(env)
