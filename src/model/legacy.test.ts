@@ -484,6 +484,58 @@ describe('rewriteIndexOptionHandles（旧下标句柄改写，§11.1 ②）', ()
   })
 })
 
+describe('rewriteIndexOptionHandles · 重复节点 id 首见归属（issue #334，§11）', () => {
+  const dupBranch = (options: unknown[]) =>
+    node({
+      id: 'dup',
+      type: 'branch',
+      position: { x: 0, y: 0 },
+      data: { prompt: 'choose', options },
+    } as unknown as CanvasNode)
+  const target = node({
+    id: 't1',
+    type: 'scene',
+    position: { x: 0, y: 0 },
+    data: {
+      name: '目标',
+      sceneNo: 1,
+      interior: true,
+      time: '',
+      synopsis: '',
+      characterIds: [],
+    },
+  } as unknown as CanvasNode)
+
+  it('重复分支节点 id 按文档序首见节点解析下标句柄：末见节点不得改接归属', () => {
+    const { doc } = migrateProjectDocument({
+      name: 'x',
+      nodes: [
+        dupBranch([
+          { id: 'opt-a', label: 'first' },
+          { id: 'opt-b', label: 'second' },
+        ]),
+        dupBranch([{ id: 'opt-b', label: 'later' }]),
+        target,
+      ],
+      edges: [],
+      settings: { characters: [], locations: [] },
+    })
+    const edges = [
+      {
+        id: 'e1',
+        source: 'dup',
+        target: 't1',
+        sourceHandle: 'option-0',
+        type: 'branch',
+      },
+    ] as unknown as ProjectContent['edges']
+    const warnings: string[] = []
+    const out = rewriteIndexOptionHandles({ ...doc, edges }, warnings)
+    expect(out.edges).toHaveLength(1)
+    expect(out.edges[0].sourceHandle).toBe('option-opt-a')
+  })
+})
+
 describe('normalizeEpisodeTitles（与保存边界同域的标题裁剪）', () => {
   it('剥 U+0085（NEL）边缘标题：加载归一化的 repaired 载荷须能通过保存（#122）', () => {
     const warnings: string[] = []
