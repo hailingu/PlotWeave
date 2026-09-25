@@ -41,6 +41,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import postcss from 'postcss'
 import { describe, expect, it } from 'vitest'
+import { resolveChain } from '../../styles/sheetTokensEngine'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../../..')
 const read = (path: string): string =>
@@ -102,19 +103,6 @@ function tokenValues(env: Env): Map<string, string> {
   }
   walk(tokensCss)
   return out
-}
-
-/** 迭代消解 var() 引用链至无引用（深度限 12，防循环）。 */
-function resolveChain(value: string, tokens: Map<string, string>): string {
-  let current = value
-  for (let i = 0; i < 12 && current.includes('var('); i += 1) {
-    current = current.replace(/var\(\s*(--[\w-]+)\s*\)/g, (whole, name) => {
-      const resolved = tokens.get(name as string)
-      return resolved === undefined ? whole : resolved
-    })
-  }
-  if (current.includes('var(')) throw new Error(`var() 链过深或悬空: ${value}`)
-  return current
 }
 
 /** 按选择器找 panels.css 顶层规则（本文件目标规则均在顶层）。 */

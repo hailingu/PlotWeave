@@ -25,6 +25,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import postcss from 'postcss'
 import { describe, expect, it } from 'vitest'
+import { resolveChain } from '../../styles/sheetTokensEngine'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../../..')
 const read = (path: string): string =>
@@ -311,16 +312,6 @@ function effectiveBg(
   const surface = tokenColor(surfaceName, tokens)
   if (!bg || !surface) throw new Error('背景/承载面令牌非颜色值')
   return bg.a >= 1 ? bg : blendOver(bg, surface)
-}
-
-/** 迭代消解 var() 引用链至无引用（深度限 12，防循环）。 */
-function resolveChain(value: string, tokens: Map<string, string>): string {
-  let current = value
-  for (let i = 0; i < 12 && current.includes('var('); i += 1) {
-    current = resolveOnce(current, tokens)
-  }
-  if (current.includes('var(')) throw new Error(`var() 链过深: ${value}`)
-  return current
 }
 
 /** 顶层逗号分割（忽略括号内逗号），用于展开渐变参数列表。 */

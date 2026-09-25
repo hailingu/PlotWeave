@@ -95,6 +95,80 @@ describe('混合值仅解析真实引用（review 5280334884）', () => {
     expect(() => resolveChain(value, new Map())).toThrow(/var\(\) 链过深或悬空/)
   })
 
+  it('带 fallback 的引用：已定义主值选主值，缺失主值选 fallback（issue #290）', () => {
+    expect(
+      resolveChain('var(--surface, #fff)', new Map([['--surface', '#123']])),
+    ).toBe('#123')
+    expect(resolveChain('var(--surface, #fff)', new Map())).toBe('#fff')
+    expect(resolveChain('var(--surface , #fff )', new Map())).toBe('#fff')
+  })
+
+  it('fallback 内的引用由后续迭代继续消解（issue #290）', () => {
+    expect(
+      resolveChain(
+        'var(--missing, var(--b, #000))',
+        new Map([['--b', '#0f0']]),
+      ),
+    ).toBe('#0f0')
+    expect(
+      resolveChain('var(--missing, var(--also-missing, #000))', new Map()),
+    ).toBe('#000')
+  })
+
+  it('同级 var() 数量不计入链深度（issue #290 评审修复）：33 个并列引用正常消解', () => {
+    const tokens = new Map([['--c', '#123']])
+    const value = `linear-gradient(${Array.from({ length: 33 }, () => 'var(--c)').join(', ')})`
+    expect(resolveChain(value, tokens)).toBe(
+      `linear-gradient(${Array.from({ length: 33 }, () => '#123').join(', ')})`,
+    )
+    // 同级余串中一个悬空引用仍整体按悬空抛错
+    const dangling = `linear-gradient(${[
+      'var(--missing)',
+      ...Array.from({ length: 32 }, () => 'var(--c)'),
+    ].join(', ')})`
+    expect(() => resolveChain(dangling, tokens)).toThrow(/var\(\) 链过深或悬空/)
+  })
+
+  it('根令牌 unset 为保证无效：选择 fallback（issue #290 评审修复）', () => {
+    expect(
+      resolveChain('var(--surface, #fff)', new Map([['--surface', 'unset']])),
+    ).toBe('#fff')
+    // 无 fallback 的 unset 同样按悬空抛错（归一后主值无效且无回退）
+    expect(() =>
+      resolveChain('var(--surface)', new Map([['--surface', 'unset']])),
+    ).toThrow(/var\(\) 链过深或悬空/)
+  })
+
+  it('主值保证无效时改选 fallback（issue #290 评审修复）', () => {
+    // initial：保证无效，取 fallback
+    expect(
+      resolveChain('var(--surface, #fff)', new Map([['--surface', 'initial']])),
+    ).toBe('#fff')
+    // 断裂链：主值引用缺失令牌且无自身 fallback，取 fallback
+    expect(
+      resolveChain(
+        'var(--surface, #fff)',
+        new Map([['--surface', 'var(--missing)']]),
+      ),
+    ).toBe('#fff')
+    // 环：主值链回到自身，取 fallback
+    expect(
+      resolveChain(
+        'var(--surface, #fff)',
+        new Map([
+          ['--surface', 'var(--other)'],
+          ['--other', 'var(--surface)'],
+        ]),
+      ),
+    ).toBe('#fff')
+  })
+
+  it('无 fallback 的悬空引用仍按悬空抛错（issue #290 对照）', () => {
+    expect(() => resolveChain('var(--missing)', new Map())).toThrow(
+      /var\(\) 链过深或悬空/,
+    )
+  })
+
   it('简易链入口保留被替换结果中的字面 var 文本', () => {
     const tokens = new Map([
       ['--label', 'var(--text)'],
