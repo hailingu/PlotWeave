@@ -62,8 +62,10 @@ pub(crate) fn projects_dir(app: &AppHandle) -> Result<CapDir, StoreError> {
         .app_data_dir()
         .map_err(|e| StoreError::AppDataDir { source: e })?;
     // 应用数据根的首次创建走持久化内核（issue #309）：新建层级条目在
-    // 写入内容前逐级同步宿主，失败拆除重建
-    create_dir_all_durable(&root_path)?;
+    // 写入内容前逐级同步宿主，失败拆除重建。内核错误经 prefixed 保留
+    // 既定 IPC 诊断上下文「创建应用数据目录失败」（评审修复：文案契约
+    // 不因内核接入而漂移，来源链原样保留）。
+    create_dir_all_durable(&root_path).map_err(|e| e.prefixed("创建应用数据目录失败"))?;
     let root_path = root_path
         .canonicalize()
         .map_err(|e| StoreError::io("解析应用数据目录真实路径失败", e))?;
