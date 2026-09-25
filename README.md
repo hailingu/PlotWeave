@@ -24,10 +24,10 @@
 
 | 层 | 技术 |
 | --- | --- |
-| 前端 | Tauri + React + React Flow（`@xyflow/react`）+ TypeScript |
-| 后端 | Rust（Tauri 进程内 commands：数据模型、持久化、剧本解析与导出） |
+| 前端 | Tauri + React + React Flow（`@xyflow/react`）+ TypeScript：画布交互、文档模型编辑与剧本导出生成 |
+| 后端 | Rust（Tauri 进程内 commands：项目 / AI 会话持久化、偏好设置、素材库、媒体协议、AI 图像生成桥接） |
 
-桌面端由 Tauri 打包，前端负责画布交互，业务逻辑与文件读写下沉到 Rust 侧。
+桌面端由 Tauri 打包。前端承载画布交互与文档模型，剧本导出（Markdown 纯文本，含分镜附录）由前端生成并经 WebView 下载 / 剪贴板交付——生成器为 `src/editor/exportScript.ts`（大纲附录在 `src/editor/exportOutline.ts`），设计见 [UI 规格 §五](docs/ui-design.md#五全局联动设定集--节点--成片)；Rust 侧负责持久化与原生桥接（文件读写、退出屏障、媒体协议），当前不参与剧本导出。
 
 ## 仓库结构
 
@@ -35,8 +35,8 @@
 PlotWeave/
 ├── .githooks/      # 版本化的提交 / 推送质量门禁
 ├── scripts/        # SonarQube 门禁及其行为测试
-├── src/            # React + React Flow 前端
-├── src-tauri/      # Rust 后端与 Tauri 壳（commands、持久化、导出）
+├── src/            # React + React Flow 前端（画布编辑、剧本导出生成）
+├── src-tauri/      # Rust 后端与 Tauri 壳（commands、持久化、原生桥接）
 ├── docs/           # 项目文档（数据模型设计等）
 ├── AGENTS.md       # AI 代理协作规范
 ├── README.md
