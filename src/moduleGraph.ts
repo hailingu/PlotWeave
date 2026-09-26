@@ -57,12 +57,14 @@ function listModules(dir: string): string[] {
 }
 
 /** 相对说明符的解析结论（判别联合）：module = 命中的 TS 模块路径；
- * asset = 资源导入（css/svg 等，非模块边）；unresolved = 无法解析。 */
-type EdgeTargetResolution =
+ * asset = 资源导入（css/svg 等，非模块边）；unresolved = 无法解析。
+ * 导出供测试设施分类守卫复用同一解析语义（issue #343）。 */
+export type EdgeTargetResolution =
   { kind: 'module'; path: string } | { kind: 'asset' } | { kind: 'unresolved' }
 
-/** 相对说明符 → 解析结论：兼容显式扩展名与目录 index 两种形态。 */
-function resolveEdgeTarget(
+/** 相对说明符 → 解析结论：兼容显式扩展名与目录 index 两种形态。导出
+ * 供测试设施分类守卫解析测试文件导入（issue #343），与构图共用语义。 */
+export function resolveEdgeTarget(
   fromFile: string,
   spec: string,
 ): EdgeTargetResolution {

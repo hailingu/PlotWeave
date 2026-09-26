@@ -1,7 +1,11 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { join, relative, resolve, sep } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { buildSrcModuleGraph } from '../src/moduleGraph'
+import {
+  buildSrcModuleGraph,
+  relativeEdgesOfSource,
+  resolveEdgeTarget,
+} from '../src/moduleGraph'
 import config from '../vite.config'
 
 // 测试设施分类契约（issue #311，issue #343 补录 sheetRuleQuery 并扩展
@@ -36,6 +40,10 @@ const productionSentinels = [
   'src/model/legacy.ts',
   'src/model/titleWhitespace.ts',
 ] as const
+
+/** 产品入口哨兵：入口模块被 index.html 直接加载、在 src 内零导入者，
+ * 不因「仅被测试导入」误判为测试设施（issue #343 守卫的构成性豁免）。 */
+const productionEntryFiles = ['src/main.tsx'] as const
 
 /** 解析 .properties 格式：# 注释与空行忽略，键值以首个 = 分割。 */
 function readSonarProperties(path: string): Map<string, string> {
@@ -137,25 +145,55 @@ describe('Sonar 测试设施分类契约（issue #311）', () => {
     }
   })
 
-  it('运行时导入者全为测试设施的模块必须已按设施分类（issue #343，拆分防遗漏）', () => {
-    const graph = buildSrcModuleGraph(resolve(repositoryRoot, 'src'))
+  it('运行时导入者全为测试设施/测试文件的模块必须已按设施分类（issue #343，拆分防遗漏）', () => {
+    const srcRoot = resolve(repositoryRoot, 'src')
+    const graph = buildSrcModuleGraph(srcRoot)
     const facilityKeys = new Set(
       testFacilityFiles.map((file) => file.slice('src/'.length)),
     )
+    const entryKeys = new Set(
+      productionEntryFiles.map((file) => file.slice('src/'.length)),
+    )
     const runtimeImporters = new Map<string, string[]>()
+    const record = (target: string, source: string): void => {
+      if (!graph.has(target)) return
+      const list = runtimeImporters.get(target) ?? []
+      list.push(source)
+      runtimeImporters.set(target, list)
+    }
     for (const [source, edges] of graph) {
       for (const edge of edges) {
         if (edge.typeOnly || edge.dynamic === true) continue
-        const list = runtimeImporters.get(edge.target) ?? []
-        list.push(source)
-        runtimeImporters.set(edge.target, list)
+        record(edge.target, source)
+      }
+    }
+    // 普通测试文件 (*.test.ts(x)) 的运行时相对导入同样进入反向图
+    // （issue #343）：只被测试导入而未分类的辅助模块不得漏检。解析与
+    // 构图共用 resolveEdgeTarget 语义；动态导入无法静态定位，不采集。
+    for (const rel of listTestFiles(srcRoot)) {
+      const testFile = resolve(repositoryRoot, rel)
+      for (const edge of relativeEdgesOfSource(
+        readFileSync(testFile, 'utf8'),
+      )) {
+        if (edge.typeOnly || edge.dynamic === true) continue
+        const resolved = resolveEdgeTarget(testFile, edge.spec)
+        if (resolved.kind === 'asset') continue
+        if (resolved.kind === 'unresolved') {
+          throw new Error(
+            `测试文件存在无法解析的相对导入：${rel} → ${edge.spec}`,
+          )
+        }
+        record(relative(srcRoot, resolved.path).split(sep).join('/'), rel)
       }
     }
     for (const [target, sources] of runtimeImporters) {
-      if (facilityKeys.has(target)) continue
+      if (facilityKeys.has(target) || entryKeys.has(target)) continue
       expect(
-        sources.some((source) => !facilityKeys.has(source)),
-        `模块 ${target} 仅被测试设施导入却未按测试设施分类：${sources.join(', ')}`,
+        sources.some(
+          (source) =>
+            !facilityKeys.has(source) && !/\.test\.tsx?$/.test(source),
+        ),
+        `模块 ${target} 仅被测试设施/测试文件导入却未按测试设施分类：${sources.join(', ')}`,
       ).toBe(true)
     }
   })
