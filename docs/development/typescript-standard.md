@@ -147,11 +147,14 @@ blanket exclusion that hides findings — and into the vitest coverage
 files only. `scripts/sonar-test-scope.test.ts` guards this classification
 contract by applying SonarQube path-pattern semantics to the properties
 file, mirroring the list against the vitest coverage `exclude`, and —
-since issue #343 — failing when a maintained module whose runtime
-importers are all test facilities or test files is left unclassified: the
-reverse import graph reuses `moduleGraph`'s AST edge resolution and
-includes `*.test.ts(x)` runtime imports, with the zero-importer production
-entry `src/main.tsx` exempted as a product root, so splitting a support
+since issue #343 — failing when a maintained module whose importers are
+all test facilities or test files is left unclassified: the reverse import
+graph reuses `moduleGraph`'s AST edge resolution, includes `*.test.ts(x)`
+imports, and treats both value and type-only edges as evidence — any
+production-side import (value or type) anchors a module in product source,
+while a module whose entire importer set is test facilities or test files
+(type or value) must be classified. The zero-importer production entry
+`src/main.tsx` is exempted as a product root, so splitting a support
 module out of a test facility can no longer escape classification.
 
 ## TypeScript Engineering Practices

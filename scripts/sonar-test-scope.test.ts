@@ -147,7 +147,7 @@ describe('Sonar 测试设施分类契约（issue #311）', () => {
 })
 
 describe('测试设施导入者侧分类守卫（issue #343，拆分防遗漏）', () => {
-  it('运行时导入者全为测试设施/测试文件的模块必须已按设施分类', () => {
+  it('导入者全为测试设施/测试文件的未分类模块即失败，类型边作产品证据', () => {
     const srcRoot = resolve(repositoryRoot, 'src')
     const graph = buildSrcModuleGraph(srcRoot)
     const facilityKeys = new Set(
@@ -156,28 +156,28 @@ describe('测试设施导入者侧分类守卫（issue #343，拆分防遗漏）
     const entryKeys = new Set(
       productionEntryFiles.map((file) => file.slice('src/'.length)),
     )
-    const runtimeImporters = new Map<string, string[]>()
+    const importers = new Map<string, string[]>()
     const record = (target: string, source: string): void => {
       if (!graph.has(target)) return
-      const list = runtimeImporters.get(target) ?? []
+      const list = importers.get(target) ?? []
       list.push(source)
-      runtimeImporters.set(target, list)
+      importers.set(target, list)
     }
+    // 类型边与值边同采（issue #343 评审）：生产模块仅经 import type 使用
+    // 的模块仍是产品类型载体，不得因测试侧值导入被误判为测试设施；测试
+    // 侧类型导入同样作为测试侧证据纳入。仅动态导入无法静态定位，不采集。
     for (const [source, edges] of graph) {
       for (const edge of edges) {
-        if (edge.typeOnly || edge.dynamic === true) continue
+        if (edge.dynamic === true) continue
         record(edge.target, source)
       }
     }
-    // 普通测试文件 (*.test.ts(x)) 的运行时相对导入同样进入反向图
-    // （issue #343）：只被测试导入而未分类的辅助模块不得漏检。解析与
-    // 构图共用 resolveEdgeTarget 语义；动态导入无法静态定位，不采集。
     for (const rel of listTestFiles(srcRoot)) {
       const testFile = resolve(repositoryRoot, rel)
       for (const edge of relativeEdgesOfSource(
         readFileSync(testFile, 'utf8'),
       )) {
-        if (edge.typeOnly || edge.dynamic === true) continue
+        if (edge.dynamic === true) continue
         const resolved = resolveEdgeTarget(testFile, edge.spec)
         if (resolved.kind === 'asset') continue
         if (resolved.kind === 'unresolved') {
@@ -188,8 +188,10 @@ describe('测试设施导入者侧分类守卫（issue #343，拆分防遗漏）
         record(relative(srcRoot, resolved.path).split(sep).join('/'), rel)
       }
     }
-    for (const [target, sources] of runtimeImporters) {
+    for (const [target, sources] of importers) {
       if (facilityKeys.has(target) || entryKeys.has(target)) continue
+      // 产品证据 = 任一导入者来自非设施维护模块（值或类型边均可）；
+      // 导入者全部为测试设施/测试文件时，未分类即失败。
       expect(
         sources.some(
           (source) =>
