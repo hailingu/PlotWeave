@@ -381,7 +381,7 @@ const mkProps = (nodes: CanvasNode[], contentNodes: CanvasNode[]) =>
   }) as Parameters<typeof LeftPanel>[0]
 
 describe('大纲行序的拖拽跟随（issue #157 评审 4027623775）', () => {
-  it('同 x 相等帧保持数组序；越过 A 后行序翻转为真实 x 序', () => {
+  it('同 x 相等帧切换 id 决胜；越过 A 后行序翻转为真实 x 序', () => {
     const A = beat('n-a', '节拍A', 100) // id 字典序小于 n-b
     const B = beat('n-b', '节拍B', 0)
     // contentNodes 引用恒定（位置帧不换内容引用——与运行时投影语义一致）
@@ -391,18 +391,46 @@ describe('大纲行序的拖拽跟随（issue #157 评审 4027623775）', () => 
     )
     expect(rowTexts()[0]).toContain('节拍B') // B.x 更小，行序 B 在前
 
-    // 相等帧：B 拖到与 A 相同 x——稳定排序保持数组序（B 仍在前）
+    // 相等帧：B 拖到与 A 相同 x——剧情流回退序按 id 决胜（A 在前），
+    // 面板必须与导出正文同序（issue #340 评审三轮：x-only 缓存键会让
+    // 相等帧滞留数组序，与导出分歧）
     rerender(
       <LeftPanel
         {...mkProps([{ ...B, position: { x: 100, y: 0 } }, A], contentNodes)}
       />,
     )
-    expect(rowTexts()[0]).toContain('节拍B')
+    expect(rowTexts()[0]).toContain('节拍A')
 
-    // 越过 A：真实 x 序翻转为 A 在前——序键语义须与大纲一致才能失效缓存
+    // 越过 A：真实 x 序仍为 A 在前——行序保持
     rerender(
       <LeftPanel
         {...mkProps([{ ...B, position: { x: 200, y: 0 } }, A], contentNodes)}
+      />,
+    )
+    expect(rowTexts()[0]).toContain('节拍A')
+  })
+
+  it('x 相等落点且原 x 序与 id 序相反：缓存键切换 id 决胜，面板跟随导出序（issue #340 评审三轮）', () => {
+    // 初始 x 序 [B(100), A(200)] 与 id 序相反；两节点落到相等 x 后
+    // 剧情流回退序切换为 id 决胜 [A, B]——x-only 稳定键仍读数组序 [B, A]
+    // 不失效缓存，面板滞留旧序而导出已是新序
+    const A = beat('n-a', '节拍A', 200)
+    const B = beat('n-b', '节拍B', 100)
+    const contentNodes = [B, A]
+    const { rerender } = render(
+      <LeftPanel {...mkProps([B, A], contentNodes)} />,
+    )
+    expect(rowTexts()[0]).toContain('节拍B')
+
+    rerender(
+      <LeftPanel
+        {...mkProps(
+          [
+            { ...B, position: { x: 100, y: 0 } },
+            { ...A, position: { x: 100, y: 0 } },
+          ],
+          contentNodes,
+        )}
       />,
     )
     expect(rowTexts()[0]).toContain('节拍A')

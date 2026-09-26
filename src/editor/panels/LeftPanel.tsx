@@ -152,24 +152,26 @@ function useOutlineDnD(
 
 type OutlineDnD = ReturnType<typeof useOutlineDnD>
 
-/** 大纲派生的「内容 + x 序」键控缓存（issue #157）：大纲行序按画布 x 排序，
- * 依赖位置——但拖拽过程帧绝大多数不改变相对 x 序。仅当业务内容
- * （contentNodes 换引用）或 x 序（跨节点拖动）变化时才换输入引用重算，
- * 同向小幅位移帧复用上次结果。 */
+/** 大纲派生的「内容 + 剧情流回退序」键控缓存（issue #157）：行序按剧情流
+ * 分区线性序（storylineGroups，issue #340），位置只影响无前驱约束节点
+ * 的回退交织。缓存键用与 storylineGroups 完全同款的 x/id 比较器（issue
+ * #340 评审三轮）：键序不变则行序必然不变，键序变化即失效——旧「仅按
+ * x 稳定排序」的键在两节点落到相等 x 时读数组序、不随 id 决胜切换，面板
+ * 会滞留旧序而导出已是新序。PR #194 当年移除次级键的理由（相等帧的序
+ * 先于真实行序变化）已随 #340 的确定性回退序失效：相等帧的 id 键序就是
+ * 当帧真实行序，不存在超前错位。缓存直接持有 id 数组并逐元素比较（评审
+ * 4027732274）：id 契约仅要求非空唯一，join('|') 等分隔符编码对 'a' 与
+ * 'a|a' 这类合法脏档 id 有歧义（两种顺序同串）。连线重排不经过此缓存
+ * ——edges 变化直接触发 useMemo 重算。 */
 function useOutlineGroups(
   nodes: CanvasNode[],
   contentNodes: CanvasNode[],
   edges: Edge[],
   episodeTitles: Record<number, string>,
 ): OutlineGroup[] {
-  // 序与 buildOutlineGroups 同语义（PR #194 评审 4027623775）：仅按 x 稳定
-  // 排序（同 x 保持数组序），不带 id 次级键——次级键会让相等帧的序先于
-  // 真实行序变化，越序后序不变、缓存不失效。缓存直接持有 id 数组并逐元素
-  // 比较（评审 4027732274）：id 契约仅要求非空唯一，join('|') 等分隔符
-  // 编码对 'a' 与 'a|a' 这类合法脏档 id 有歧义（两种顺序同串）。
   const order = nodes
     .slice()
-    .sort((a, b) => a.position.x - b.position.x)
+    .sort((a, b) => a.position.x - b.position.x || (a.id < b.id ? -1 : 1))
     .map((n) => n.id)
   const cacheRef = useRef<{
     content: CanvasNode[]
