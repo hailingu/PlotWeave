@@ -144,8 +144,10 @@ describe('Sonar 测试设施分类契约（issue #311）', () => {
       ).toBe(false)
     }
   })
+})
 
-  it('运行时导入者全为测试设施/测试文件的模块必须已按设施分类（issue #343，拆分防遗漏）', () => {
+describe('测试设施导入者侧分类守卫（issue #343，拆分防遗漏）', () => {
+  it('运行时导入者全为测试设施/测试文件的模块必须已按设施分类', () => {
     const srcRoot = resolve(repositoryRoot, 'src')
     const graph = buildSrcModuleGraph(srcRoot)
     const facilityKeys = new Set(
@@ -197,8 +199,10 @@ describe('Sonar 测试设施分类契约（issue #311）', () => {
       ).toBe(true)
     }
   })
+})
 
-  it('vite 覆盖率排除与设施清单同源（issue #343）', () => {
+describe('vite 覆盖率排除与设施清单同源（issue #343）', () => {
+  it('全部测试设施被 coverage.exclude 覆盖', () => {
     const exclude = config.test?.coverage?.exclude ?? []
     for (const file of testFacilityFiles) {
       expect(
