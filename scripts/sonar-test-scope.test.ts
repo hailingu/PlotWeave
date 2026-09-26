@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { join, relative, resolve, sep } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { ScriptKind } from 'typescript'
 import {
   buildSrcModuleGraph,
   relativeEdgesOfSource,
@@ -147,7 +148,7 @@ describe('Sonar 测试设施分类契约（issue #311）', () => {
 })
 
 describe('测试设施导入者侧分类守卫（issue #343，拆分防遗漏）', () => {
-  it('导入者全为测试设施/测试文件的未分类模块即失败，类型边作产品证据', () => {
+  it('分类双向判定：未分类仅测试导入即失败，设施现产品导入者也失败', () => {
     const srcRoot = resolve(repositoryRoot, 'src')
     const graph = buildSrcModuleGraph(srcRoot)
     const facilityKeys = new Set(
@@ -174,8 +175,12 @@ describe('测试设施导入者侧分类守卫（issue #343，拆分防遗漏）
     }
     for (const rel of listTestFiles(srcRoot)) {
       const testFile = resolve(repositoryRoot, rel)
+      // .tsx 按其语法解析（issue #343 评审）：以默认 TS 解析 JSX 之后的
+      // 导入依赖错误恢复，漏采会让仅被该类边引用的模块逃过守卫。
+      const kind = testFile.endsWith('.tsx') ? ScriptKind.TSX : ScriptKind.TS
       for (const edge of relativeEdgesOfSource(
         readFileSync(testFile, 'utf8'),
+        kind,
       )) {
         if (edge.dynamic === true) continue
         const resolved = resolveEdgeTarget(testFile, edge.spec)
@@ -189,16 +194,24 @@ describe('测试设施导入者侧分类守卫（issue #343，拆分防遗漏）
       }
     }
     for (const [target, sources] of importers) {
-      if (facilityKeys.has(target) || entryKeys.has(target)) continue
-      // 产品证据 = 任一导入者来自非设施维护模块（值或类型边均可）；
-      // 导入者全部为测试设施/测试文件时，未分类即失败。
+      const productSources = sources.filter(
+        (source) => !facilityKeys.has(source) && !/\.test\.tsx?$/.test(source),
+      )
+      if (facilityKeys.has(target)) {
+        // 已分类设施不得出现产品导入者（issue #343 评审）：应用侧一旦
+        // 导入设施，应将其移出清单回归产品统计，而非继续靠排除配置
+        // 跳过统计。
+        expect(
+          productSources,
+          `已分类测试设施出现产品侧导入者，应移出设施清单：${target} ← ${productSources.join(', ')}`,
+        ).toEqual([])
+        continue
+      }
+      if (entryKeys.has(target)) continue
       expect(
-        sources.some(
-          (source) =>
-            !facilityKeys.has(source) && !/\.test\.tsx?$/.test(source),
-        ),
+        productSources.length,
         `模块 ${target} 仅被测试设施/测试文件导入却未按测试设施分类：${sources.join(', ')}`,
-      ).toBe(true)
+      ).toBeGreaterThan(0)
     }
   })
 })
