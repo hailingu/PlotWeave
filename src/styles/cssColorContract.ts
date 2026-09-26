@@ -2,8 +2,12 @@
  * 样式令牌契约的 CSS 值校验：字面色探测、完整颜色成分与已建模属性类型。
  * 供全表契约和语义夹具共用，不解析完整 CSS 文法或运行时层叠。
  */
-import postcss from 'postcss'
-import { maskCssOpaque, trimCssWhitespace } from './cssValueSyntax'
+import {
+  maskCssOpaque,
+  splitCssComma,
+  splitCssSpace,
+  trimCssWhitespace,
+} from './cssValueSyntax'
 
 /**
  * 在等长语法视图上从开括号后的偏移定位平衡闭合括号；未闭合返回 -1。
@@ -132,7 +136,7 @@ export function colorTypeOk(prop: string, resolved: string): boolean {
     return imageValueOk(prop, value)
   if (prop === '-webkit-text-stroke') return textStrokeOk(value)
   if ((prop === 'fill' || prop === 'stroke') && /^url\(/i.test(value)) {
-    const parts = postcss.list.space(value)
+    const parts = splitCssSpace(value)
     return (
       imageKind(parts[0]!) === 'url' &&
       (parts.length === 1 ||
@@ -147,9 +151,7 @@ export function colorTypeOk(prop: string, resolved: string): boolean {
   ) {
     return completeColorValueOk(prop, value)
   }
-  return postcss.list
-    .comma(value)
-    .every((layer) => shorthandLayerOk(prop, layer))
+  return splitCssComma(value).every((layer) => shorthandLayerOk(prop, layer))
 }
 
 /** 完整图像成分分类，供类型检查与黄金背景投影共用；函数参数保留既有边界。 */
@@ -183,7 +185,7 @@ function imageValueOk(prop: string, value: string): boolean {
 
 /** 简写的一层须消费全部顶层成分；图像的属性归属与未知词形在同一入口判定。 */
 function shorthandLayerOk(prop: string, layer: string): boolean {
-  const parts = postcss.list.space(layer)
+  const parts = splitCssSpace(layer)
   if (prop === 'border-image') {
     // 图像源没有颜色类型；通用简写关键字仅允许独立 none，不能掩盖错误成分。
     if (parts.some(completeColorAtom)) return false
@@ -239,7 +241,7 @@ function completeColorValueOk(prop: string, value: string): boolean {
     /^border-(inline|block)-color$/.test(prop)
   )
     max = 2
-  const colors = postcss.list.space(value)
+  const colors = splitCssSpace(value)
   return (
     colors.length > 0 && colors.length <= max && colors.every(completeColorAtom)
   )
@@ -257,7 +259,7 @@ function isLineWidth(part: string): boolean {
 /** `-webkit-text-stroke: <line-width> || <color>`：至多一个宽度与一个完整颜色成分，无其他词形。 */
 function textStrokeOk(value: string): boolean {
   if (/^(inherit|initial|unset|revert|revert-layer)$/i.test(value)) return true
-  const parts = postcss.list.space(value)
+  const parts = splitCssSpace(value)
   const widths = parts.filter(isLineWidth).length
   const colors = parts.filter(completeColorAtom).length
   return (

@@ -972,4 +972,30 @@ describe('CSS 空白与 NBSP 的关键字判定边界（issue #339）', () => {
       '.a color: \u00a0unset',
     ])
   })
+
+  it.each(['background', 'outline', 'text-decoration'])(
+    '简写取值 NBSP unset：切分按 CSS 空白语义保留成分，类型检查拒绝（issue #339 评审）',
+    (prop) => {
+      // colorTypeOk 入口裁剪已保住 NBSP，但 postcss.list 的成分裁剪用
+      // JS trim：'\u00a0unset' 被折算回 'unset' 命中 NON_COLOR_KEYWORDS
+      // 而放行——切分必须同用 CSS 空白语义（issue #339 评审）
+      const root = postcss.parse(
+        `:root { --s: \u00a0unset; } .a { ${prop}: var(--s); }`,
+      )
+      expect(danglingRefs(root, LIGHT_ENV)).toEqual([])
+      expect(displayTypeErrors(root, LIGHT_ENV)).toEqual([
+        `.a ${prop}: \u00a0unset`,
+      ])
+    },
+  )
+
+  it('切分保留 NBSP：成分不折算成关键字或完整颜色，普通空白对照不变', () => {
+    // 简写层：'\u00a0unset' 是未知标识符成分，不得命中关键字集合
+    expect(colorTypeOk('background', '\u00a0unset')).toBe(false)
+    expect(colorTypeOk('outline', 'unset\u00a0')).toBe(false)
+    // 颜色列表：'#fff\u00a0' 是 hash + 标识符两个 token，非完整颜色成分
+    expect(colorTypeOk('border-color', '#fff\u00a0')).toBe(false)
+    // 对照：普通 CSS 空白包围的关键字仍是合法属性值
+    expect(colorTypeOk('background', ' unset ')).toBe(true)
+  })
 })
