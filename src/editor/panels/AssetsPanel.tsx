@@ -522,7 +522,10 @@ export function AssetsPanel() {
   return (
     <div className="pw-assets">
       <LibraryWarnings />
-      <AssetImportInput fileRef={fileRef} onFiles={importFiles} />
+      <AssetImportInput
+        fileRef={fileRef}
+        onFiles={(files) => void importFiles(files)}
+      />
       {selectedKind === null ? (
         <AssetKindGrid
           busy={busy}

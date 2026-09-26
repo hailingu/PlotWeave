@@ -265,7 +265,9 @@ function useProjectOpenAttempt(
             targetName: '未命名短剧',
             detail: createFamilyFailureDetail(outcome, 'create'),
           },
-          outcome.commitState === 'absent' ? handleCreateProject : undefined,
+          outcome.commitState === 'absent'
+            ? () => void handleCreateProject()
+            : undefined,
         )
       }
       return
@@ -643,7 +645,7 @@ function HomeScreen({
       openError={openError}
       mutationError={mutationError}
       onRetryMutation={onRetryMutation}
-      onOpenProject={open.handleOpenProject}
+      onOpenProject={(id) => void open.handleOpenProject(id)}
       onCreateProject={() => void open.handleCreateProject()}
       onRenameProject={(id, name) => void home.handleRenameProject(id, name)}
       onDuplicateProject={(id) => void home.handleDuplicateProject(id)}

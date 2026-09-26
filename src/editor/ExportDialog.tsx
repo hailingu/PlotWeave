@@ -205,7 +205,7 @@ export function ExportDialog({
             model.summary.branches,
           )}
           copied={copied}
-          copyAll={copyAll}
+          copyAll={() => void copyAll()}
           download={download}
         />
       </dialog>

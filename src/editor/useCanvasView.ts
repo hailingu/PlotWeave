@@ -84,7 +84,11 @@ export function useCanvasView(
   const locateNode = useCallback(
     (id: string) => {
       setNodes((nds) => nds.map((n) => ({ ...n, selected: n.id === id })))
-      fitView({ nodes: [{ id }], duration: LOCATE_DURATION_MS, maxZoom: 1 })
+      void fitView({
+        nodes: [{ id }],
+        duration: LOCATE_DURATION_MS,
+        maxZoom: 1,
+      })
     },
     [fitView, setNodes],
   )

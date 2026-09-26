@@ -4,7 +4,7 @@
 (`src/**` and root frontend manifests). Like the root `AGENTS.md`, this file is
 written in English for agent interoperability.
 
-**Last reviewed**: 2026-09-13
+**Last reviewed**: 2026-09-26
 
 ## Required Reading
 
@@ -95,6 +95,33 @@ truth for the key set), with a comment.
   accommodations (xyflow `Edge`/`ReactFlowProps` members already carry
   `| undefined`; call sites use conditional spread for props we cannot
   widen).
+
+### Type-Aware Lint Entry
+
+(Issue [#357](https://github.com/hailingu/PlotWeave/issues/357),
+implemented.) ESLint parses production source with full type information
+(`parserOptions.projectService` bound to `tsconfig.json`) and enforces
+`@typescript-eslint/no-floating-promises` and
+`@typescript-eslint/no-misused-promises` — the fire-and-forget convention
+below is executed by the linter instead of review alone. `npm run lint` and
+`scripts/check-static.sh` run it with zero-warning semantics, so the local
+Git gate, the Sonar gate, and CI all reject violations.
+
+- **Fire-and-forget marking**: an intentionally unhandled promise is marked
+  with the `void` operator at the call site (`void store.save()`), and only
+  when the callee owns an internal error channel (try/catch, `.catch`
+  fallback, or outcome-object return) so silence cannot swallow a failure.
+  Any other promise must be awaited or carry a rejection handler.
+- **Void-return boundaries**: an async function must not be passed where a
+  `() => void` callback is expected (React props, event listeners without a
+  promise-returning contract, retry closures); wrap it in a sync function
+  that void-marks the call, e.g. `onClick={() => void save()}`.
+- **Scope**: production source under `src/`. Out of scope for now —
+  `*.test.ts` / `*.test.tsx` and the `*.test-d.ts` contract probes stay on
+  the non-type-aware baseline (same shape as the strict type check entry
+  above; enabling there is a separate batch, issue #357).
+- The wider type-aware families (`recommendedTypeChecked`, `no-unsafe-*`)
+  stay un-enabled pending a zero-warning evaluation (issue #357).
 
 ### Quality Report Classification
 
