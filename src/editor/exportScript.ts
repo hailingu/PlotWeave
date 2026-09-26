@@ -33,6 +33,8 @@ import type {
  * 节点的稳定回退）。
  * 可选「大纲注释」附录（issue #48）：创作大纲恒为独立附录，开关只决定是否并入，
  * 预览、复制与下载消费同一次生成结果。
+ * 生成器不读系统时钟（issue #360）：导出日期为显式入参，未注入时头部只保留
+ * 出处行——同一输入恒产出逐字节相同的文本。
  */
 
 /** 说话人 id → 设定集全名（失效引用标注，§4.3）。 */
@@ -151,8 +153,9 @@ function dialogueBlockLines(
 /** 生成整部剧本的 Markdown 文本。assets 为项目资产索引（缺省视为无资产，
  * 引用位全部按悬空标注）。headerNote 为可选头部注记（issue #361）：给出时
  * 以第二段引块并入文件头，随预览、复制与下载的全文一同输出。exportedAt 为
- * 可选导出日期文案（review #376）：同一生成模型分多个变体输出时，调用方
- * 传入一次求值的结果保证各变体头部时间戳一致；缺省由本函数现场求值。 */
+ * 可选导出日期文案（issue #360）：显式入参，未注入时头部只保留出处行、
+ * 不写日期——生成器不读系统时钟，同一输入恒产出逐字节相同的文本；
+ * 同一模型的多个变体共用同一入参，头部时间戳天然一致。 */
 export function buildScriptMarkdown(
   projectName: string,
   nodes: CanvasNode[],
@@ -168,7 +171,9 @@ export function buildScriptMarkdown(
   ])
   const lines: string[] = [`# ${projectName}`, '']
   lines.push(
-    `> 由 PlotWeave 导出 · ${exportedAt ?? new Date().toLocaleDateString('zh-CN')}`,
+    exportedAt === undefined
+      ? '> 由 PlotWeave 导出'
+      : `> 由 PlotWeave 导出 · ${exportedAt}`,
     '',
   )
   if (headerNote) lines.push('>', `> ${headerNote}`, '')
@@ -266,7 +271,9 @@ function branchHeaderNote(
 }
 
 /** 生成一次导出（issue #48）：正文 + 分镜附录恒在，创作大纲作为可并入的附录。
- * 含分支项目（issue #361）在两个变体的正文头部写入按变体措辞的分支未包含注记。 */
+ * 含分支项目（issue #361）在两个变体的正文头部写入按变体措辞的分支未包含注记。
+ * 导出日期为显式入参（issue #360）：生成器不读系统时钟，同一输入恒产出
+ * 逐字节相同的文本，由调用方决定是否标注导出日期。 */
 export function buildScriptExport(input: {
   projectName: string
   nodes: CanvasNode[]
@@ -275,12 +282,10 @@ export function buildScriptExport(input: {
   /** 项目资产索引；显式传 undefined = 无资产（引用位按悬空标注）。 */
   assets: ProjectContent['assets'] | undefined
   episodeTitles: Record<number, string>
+  /** 导出日期文案；未注入时头部不写日期（确定性默认，issue #360）。 */
+  exportedAt?: string
 }): ScriptExportModel {
   const summary = summariseExportOutline(input.nodes)
-  // 两变体共享同一次求值的导出日期（review #376）：按变体两次生成时各自
-  // 现场求值会在跨本地零点的窗口内让 plain 与 outline 头部日期分叉——
-  // 同一生成模型只应有一个导出时间戳，故在此求值一次后传入两次生成。
-  const exportedAt = new Date().toLocaleDateString('zh-CN')
   const markdown = (appendixIncluded: boolean) =>
     buildScriptMarkdown(
       input.projectName,
@@ -289,7 +294,7 @@ export function buildScriptExport(input: {
       input.settings,
       input.assets,
       branchHeaderNote(summary.branches, appendixIncluded),
-      exportedAt,
+      input.exportedAt,
     )
   const appendix = outlineAppendixLines(
     buildExportOutline(input.nodes, input.edges, input.episodeTitles),
