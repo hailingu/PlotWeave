@@ -263,10 +263,15 @@ describe('buildScriptExport（issue #48 导出模型）', () => {
     expect(draft.hasNarrative).toBe(true)
   })
 
-  it('注记同入大纲开启变体的头部：正文界定的告知与附录结构并存（issue #361）', () => {
-    expect(draft.outline).toContain('未包含 1 处分支的问句与选项去向')
-    expect(draft.outline).toContain('## 附录 · 创作大纲')
-    // 注记描述的是正文；附录自身的「不是剧情正文」界言保持不冲突
+  it('注记按变体措辞：默认变体不引用其不含的附录，开启态指向文末附录（review #376）', () => {
+    // 默认（无附录）文件不得把结构说成在「附录」中——指引开启后再导出
+    expect(draft.plain).toContain('未包含 1 处分支的问句与选项去向')
+    expect(draft.plain).toContain('可在导出时开启「创作大纲」附录')
+    expect(draft.plain).not.toContain('见文末')
+    // 开启态：注记指向文末附录，且不再建议重复开启
+    expect(draft.outline).toContain('见文末「创作大纲」附录')
+    expect(draft.outline).not.toContain('可在导出时开启')
+    // 注记仍在正文之前、附录之前；附录自身的「不是剧情正文」界言不冲突
     expect(draft.outline.indexOf('未包含 1 处分支')).toBeLessThan(
       draft.outline.indexOf('## 附录 · 创作大纲'),
     )
@@ -297,9 +302,12 @@ describe('buildScriptExport（issue #48 导出模型）', () => {
     expect(outline).toContain('分支 · 要不要坦白？')
     expect(outline).toContain('坦白 → 场 02 · 旧公寓')
     expect(outline).toContain('隐瞒 → （未连线）')
-    // 正文与分镜附录保持：正文在前，大纲附录在后
+    // 正文与分镜附录保持：正文在前，大纲附录在后；注记按变体措辞
+    // （review #376）后，两变体自首个场景标题起的正文仍逐字一致
     expect(outline).toContain('对白 · 摊牌')
-    expect(outline).toContain(draft.plain)
+    expect(outline).toContain(
+      draft.plain.slice(draft.plain.indexOf('## 场 01')),
+    )
     expect(outline.indexOf('## 场 01')).toBeLessThan(
       outline.indexOf('## 附录 · 创作大纲'),
     )

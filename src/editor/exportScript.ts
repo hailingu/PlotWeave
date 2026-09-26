@@ -26,7 +26,8 @@ import type {
  * 正文只由场景 + 对白生成，节拍与分支不出现；分镜卡以附录按宿主场分组输出
  * （含镜头 Prompt 与引用位）。含分支项目的正文不展开分支问句与选项去向，
  * 导出头部写入「分支未包含」注记（issue #361），默认导出路径不静默丢弃
- * 分支/多结局结构；注记以「正文」为界，大纲附录开启与否均成立。
+ * 分支/多结局结构；注记后段按变体措辞（review #376）：默认正文指引开启
+ * 「创作大纲」附录后导出、不引用其不含的附录，开启态指向文末附录。
  * 场景顺序 = 剧情流线性序（storylineOrder，issue #340：与大纲列表、
  * 创作大纲附录一致，拖拽重排连线后随之更新；画布 x 序仅作无前驱约束
  * 节点的稳定回退）。
@@ -246,14 +247,23 @@ function scopeLineOf(summary: ExportOutlineSummary): string {
 
 /** 分支未包含的头部注记（issue #361）：正文按剧情流线性展开场景与对白，
  * 分支问句、选项去向与结局归属不进正文；注记写入导出文件头，使含分支/
- * 多结局项目的默认导出不静默。措辞以「正文」为界并指向大纲附录——
- * 「创作大纲」开关两个态下同一段文字均成立（开启态的附录就在文末）。 */
-function branchHeaderNote(branches: number): string {
-  return `注：正文为线性场景与对白，未包含 ${branches} 处分支的问句与选项去向；完整分支结构以「创作大纲」附录为准。`
+ * 多结局项目的默认导出不静默。后段按变体措辞（review #376）：默认正文
+ * 不含创作大纲附录，写「可在导出时开启」指引导出者，不引用该文件中
+ * 不存在的附录；开启态正文写「见文末」指向随附的附录。无分支返回
+ * undefined，输出与既有契约逐字一致。 */
+function branchHeaderNote(
+  branches: number,
+  appendixIncluded: boolean,
+): string | undefined {
+  if (branches <= 0) return undefined
+  const where = appendixIncluded
+    ? '完整分支结构见文末「创作大纲」附录。'
+    : '如需完整分支结构，可在导出时开启「创作大纲」附录。'
+  return `注：正文为线性场景与对白，未包含 ${branches} 处分支的问句与选项去向；${where}`
 }
 
 /** 生成一次导出（issue #48）：正文 + 分镜附录恒在，创作大纲作为可并入的附录。
- * 含分支项目（issue #361）在共用的正文基座头部写入分支未包含注记。 */
+ * 含分支项目（issue #361）在两个变体的正文头部写入按变体措辞的分支未包含注记。 */
 export function buildScriptExport(input: {
   projectName: string
   nodes: CanvasNode[]
@@ -264,20 +274,21 @@ export function buildScriptExport(input: {
   episodeTitles: Record<number, string>
 }): ScriptExportModel {
   const summary = summariseExportOutline(input.nodes)
-  const base = buildScriptMarkdown(
-    input.projectName,
-    input.nodes,
-    input.edges,
-    input.settings,
-    input.assets,
-    summary.branches > 0 ? branchHeaderNote(summary.branches) : undefined,
-  )
+  const markdown = (appendixIncluded: boolean) =>
+    buildScriptMarkdown(
+      input.projectName,
+      input.nodes,
+      input.edges,
+      input.settings,
+      input.assets,
+      branchHeaderNote(summary.branches, appendixIncluded),
+    )
   const appendix = outlineAppendixLines(
     buildExportOutline(input.nodes, input.edges, input.episodeTitles),
   )
   return {
-    plain: base,
-    outline: `${base}\n${appendix.join('\n')}`,
+    plain: markdown(false),
+    outline: `${markdown(true)}\n${appendix.join('\n')}`,
     hasNarrative: input.nodes.some(
       (n) => n.type === 'scene' || n.type === 'dialogue',
     ),
