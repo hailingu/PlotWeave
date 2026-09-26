@@ -1,17 +1,23 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { join, relative, resolve, sep } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { buildSrcModuleGraph } from '../src/moduleGraph'
+import config from '../vite.config'
 
-// 测试设施分类契约（issue #311）：sonar-project.properties 以「源码
-// 排除 + 测试纳入」组合（SonarQube 官方支持的机制）把仅服务测试的
-// 模块与编译期类型探针归入测试范围——仍被 Sonar 分析为测试代码，
-// 不计入生产源码统计；既有测试不整体失去分析，生产源码不被误分类。
+// 测试设施分类契约（issue #311，issue #343 补录 sheetRuleQuery 并扩展
+// 一致性守卫）：sonar-project.properties 以「源码排除 + 测试纳入」组合
+// （SonarQube 官方支持的机制）把仅服务测试的模块与编译期类型探针归入
+// 测试范围——仍被 Sonar 分析为测试代码，不计入生产源码统计；既有测试
+// 不整体失去分析，生产源码不被误分类。issue #343 起另以导入者侧守卫
+// 防拆分遗漏——运行时导入者全为测试设施的未分类模块即失败（复用
+// moduleGraph 的 AST 边解析），并与 vite coverage.exclude 同源核验。
 // 断言以 SonarQube 路径通配符语义展开配置，不读取文档文字。
 
 const repositoryRoot = resolve(import.meta.dirname, '..')
 const propertiesPath = resolve(repositoryRoot, 'sonar-project.properties')
 
-/** 仅服务测试的模块与编译期探针（issue #311 核实清单，仓库相对路径）。 */
+/** 仅服务测试的模块与编译期探针（issue #311 核实清单，issue #343 补录
+ * sheetRuleQuery，仓库相对路径）。 */
 const testFacilityFiles = [
   'src/editor/ai/testGraphs.ts',
   'src/model/convertFixtures.ts',
@@ -19,6 +25,7 @@ const testFacilityFiles = [
   'src/moduleGraph.ts',
   'src/styles/cssColorContract.ts',
   'src/styles/cssValueSyntax.ts',
+  'src/styles/sheetRuleQuery.ts',
   'src/styles/sheetTokensEngine.ts',
 ] as const
 
@@ -97,7 +104,7 @@ describe('Sonar 测试设施分类契约（issue #311）', () => {
   const matchesAny = (patterns: readonly string[], path: string): boolean =>
     patterns.some((pattern) => sonarPatternToRegExp(pattern).test(path))
 
-  it('七类测试设施命中测试纳入并被排除出生产源码统计（仍按测试分析）', () => {
+  it('全部测试设施命中测试纳入并被排除出生产源码统计（仍按测试分析）', () => {
     for (const file of testFacilityFiles) {
       expect(
         matchesAny(testInclusions, file),
@@ -127,6 +134,39 @@ describe('Sonar 测试设施分类契约（issue #311）', () => {
         matchesAny(testInclusions, file),
         `生产文件不应进入测试范围：${file}`,
       ).toBe(false)
+    }
+  })
+
+  it('运行时导入者全为测试设施的模块必须已按设施分类（issue #343，拆分防遗漏）', () => {
+    const graph = buildSrcModuleGraph(resolve(repositoryRoot, 'src'))
+    const facilityKeys = new Set(
+      testFacilityFiles.map((file) => file.slice('src/'.length)),
+    )
+    const runtimeImporters = new Map<string, string[]>()
+    for (const [source, edges] of graph) {
+      for (const edge of edges) {
+        if (edge.typeOnly || edge.dynamic === true) continue
+        const list = runtimeImporters.get(edge.target) ?? []
+        list.push(source)
+        runtimeImporters.set(edge.target, list)
+      }
+    }
+    for (const [target, sources] of runtimeImporters) {
+      if (facilityKeys.has(target)) continue
+      expect(
+        sources.some((source) => !facilityKeys.has(source)),
+        `模块 ${target} 仅被测试设施导入却未按测试设施分类：${sources.join(', ')}`,
+      ).toBe(true)
+    }
+  })
+
+  it('vite 覆盖率排除与设施清单同源（issue #343）', () => {
+    const exclude = config.test?.coverage?.exclude ?? []
+    for (const file of testFacilityFiles) {
+      expect(
+        exclude.some((pattern) => sonarPatternToRegExp(pattern).test(file)),
+        `vite coverage.exclude 未覆盖测试设施：${file}`,
+      ).toBe(true)
     }
   })
 })

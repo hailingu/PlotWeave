@@ -15,9 +15,11 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['lcov', 'text'],
       include: ['src/**'],
-      // 测试设施不计入产品覆盖率（issue #311）：与 sonar-project.properties
-      // 的测试纳入清单同源——仅服务测试的模块无产品运行时形态，编译期
-      // 类型探针是纯类型文件（v8 all 模式下计 0% 空条目）。
+      // 测试设施不计入产品覆盖率（issue #311，issue #343 补录
+      // sheetRuleQuery 并由 scripts/sonar-test-scope.test.ts 同源核验）：
+      // 与 sonar-project.properties 的测试纳入清单同源——仅服务测试的
+      // 模块无产品运行时形态，编译期类型探针是纯类型文件（v8 all 模式下
+      // 计 0% 空条目）。
       exclude: [
         'src/**/*.test-d.ts',
         'src/moduleGraph.ts',
@@ -25,6 +27,7 @@ export default defineConfig({
         'src/editor/ai/testGraphs.ts',
         'src/styles/cssColorContract.ts',
         'src/styles/cssValueSyntax.ts',
+        'src/styles/sheetRuleQuery.ts',
         'src/styles/sheetTokensEngine.ts',
       ],
     },
