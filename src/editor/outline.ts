@@ -175,28 +175,37 @@ export interface StorylineGroup<T extends CanvasNode = CanvasNode> {
   detached: T[]
 }
 
-/** 组内分区与路由（storylineGroups 内核）：约束边 = 两端均在组内、非自环
- * （成员集含分镜时 attach 承载随宿主约束）；「接入剧情流」按调用方给定的
- * 全量范围判定，跨集连接的节点在本组作无组内前驱的根参与路由。成环残留
- * 按 x/id 补齐——列表不得丢行（会话图经加载管线隔离，运行态防御）。 */
-function partitionGroup<T extends CanvasNode>(
+/** 组内叙事约束边的前驱表：两端须同组、非自环；attach 不参与拓扑
+ * （分镜以宿主块插放，见 shotsByHost）。 */
+function narrativeParents<T extends CanvasNode>(
   members: T[],
   edges: Edge[],
-  inFlow: ReadonlySet<string>,
-): { routed: T[]; detached: T[] } {
+): Map<string, Set<string>> {
   const member = new Set(members.map((n) => n.id))
   const parents = new Map<string, Set<string>>()
   for (const e of edges) {
-    if (e.source === e.target || !member.has(e.source) || !member.has(e.target))
+    if (
+      e.source === e.target ||
+      edgeKindOf(e) === 'attach' ||
+      !member.has(e.source) ||
+      !member.has(e.target)
+    )
       continue
     const set = parents.get(e.target) ?? new Set<string>()
     set.add(e.source)
     parents.set(e.target, set)
   }
-  const byXId = (list: T[]): T[] =>
-    [...list].sort(
-      (a, b) => a.position.x - b.position.x || (a.id < b.id ? -1 : 1),
-    )
+  return parents
+}
+
+/** 拓扑路由（仅叙事流成员）：就绪节点按 x/id 稳定交织；成环残留按 x/id
+ * 补齐——列表不得丢行（会话图经加载管线隔离，运行态防御）。 */
+function topoRoute<T extends CanvasNode>(
+  members: T[],
+  parents: Map<string, Set<string>>,
+  inFlow: ReadonlySet<string>,
+  byXId: (list: T[]) => T[],
+): { routed: T[]; routedIds: Set<string> } {
   const routed: T[] = []
   const routedIds = new Set<string>()
   let ready = byXId(
@@ -214,11 +223,57 @@ function partitionGroup<T extends CanvasNode>(
   }
   for (const node of byXId(members))
     if (inFlow.has(node.id) && !routedIds.has(node.id)) routed.push(node)
-  // 未接入分区 = 其余成员（attach 随宿主解锁路由的分镜不重复计入）
-  return {
-    routed,
-    detached: byXId(members.filter((n) => !routedIds.has(n.id))),
+  return { routed, routedIds }
+}
+
+/** 分镜块归集（attach 派生从属，issue #340 评审二轮）：分镜行紧随宿主
+ * （块内 x/id 序），不与就绪/未接入的一般排序竞争 x——否则宿主解锁后
+ * 下一叙事节点（x 更小）会把 level-3 行越到别的场景之下。宿主不在本组
+ * （跨集归属或悬空 attach）的分镜留在 x/id 序。 */
+function shotsByHost<T extends CanvasNode>(
+  members: T[],
+  edges: Edge[],
+  routedIds: ReadonlySet<string>,
+  byXId: (list: T[]) => T[],
+): { blocks: Map<string, T[]>; free: T[] } {
+  const blocks = new Map<string, T[]>()
+  const free: T[] = []
+  for (const node of byXId(members)) {
+    if (routedIds.has(node.id)) continue
+    const host = edges.find(
+      (e) =>
+        edgeKindOf(e) === 'attach' &&
+        e.target === node.id &&
+        members.some((m) => m.id === e.source),
+    )?.source
+    if (host === undefined) free.push(node)
+    else {
+      const list = blocks.get(host)
+      if (list) list.push(node)
+      else blocks.set(host, [node])
+    }
   }
+  return { blocks, free }
+}
+
+/** 组内分区与路由（storylineGroups 内核）：叙事边拓扑路由 + 分镜块插放；
+ * 「接入剧情流」按调用方给定的全量范围判定，跨集连接的节点在本组作无
+ * 组内前驱的根参与路由。 */
+function partitionGroup<T extends CanvasNode>(
+  members: T[],
+  edges: Edge[],
+  inFlow: ReadonlySet<string>,
+): { routed: T[]; detached: T[] } {
+  const byXId = (list: T[]): T[] =>
+    [...list].sort(
+      (a, b) => a.position.x - b.position.x || (a.id < b.id ? -1 : 1),
+    )
+  const parents = narrativeParents(members, edges)
+  const { routed, routedIds } = topoRoute(members, parents, inFlow, byXId)
+  const { blocks, free } = shotsByHost(members, edges, routedIds, byXId)
+  const withBlocks = (list: T[]): T[] =>
+    list.flatMap((n) => [n, ...(blocks.get(n.id) ?? [])])
+  return { routed: withBlocks(routed), detached: withBlocks(free) }
 }
 
 /**
@@ -226,9 +281,9 @@ function partitionGroup<T extends CanvasNode>(
  * 升序、未分集殿底；组内先路由后未接入分区。「接入剧情流」按叙事边
  * （非 attach）端点在全量成员范围判定——跨集边计入，跨集连接的节点在本组
  * 作无组内前驱的根参与路由，与附录既有口径一致；约束边只取组内两端
- * （跨集路径不把依赖带入集内行序），attach 额外承载分镜随宿主的排序约束
- * （宿主未接入时分镜一并留在未接入分区）。左侧大纲列表、剧本导出正文与
- * 创作大纲附录共用。
+ * （跨集路径不把依赖带入集内行序）。attach 派生从属以宿主块承载：分镜行
+ * 紧随宿主（块内 x/id 序），宿主未接入时分镜一并留在未接入分区。左侧
+ * 大纲列表、剧本导出正文与创作大纲附录共用。
  */
 export function storylineGroups<T extends CanvasNode>(
   nodes: T[],

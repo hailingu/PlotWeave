@@ -225,6 +225,64 @@ describe('剧情流线性序（issue #340：拖拽重排连线后列表与导出
     expect(rowsOf(nodes, edges)).toEqual(['s3', 's1', 'sh1', 's2', 'loose'])
   })
 
+  it('分镜以宿主块插放：不与下一叙事节点竞争 x 序（issue #340 评审二轮）', () => {
+    // s1→s2 且 s2.x=100、分镜 x=300：宿主解锁后分镜若参与就绪 x 竞争
+    // 会被 s2 越过，level-3 行脱离宿主视觉归属——必须紧随宿主输出
+    const nodes: CanvasNode[] = [
+      node({
+        id: 's1',
+        type: 'scene',
+        position: { x: 0, y: 0 },
+        data: { name: 's1', sceneNo: 1 },
+      }),
+      node({
+        id: 's2',
+        type: 'scene',
+        position: { x: 100, y: 0 },
+        data: { name: 's2', sceneNo: 2 },
+      }),
+      node({
+        id: 'sh1',
+        type: 'shot',
+        position: { x: 300, y: 40 },
+        data: { shotNo: 1, size: '特写' },
+      }),
+    ]
+    const edges: Edge[] = [
+      seq('e1', 's1', 's2'),
+      { id: 'a1', source: 's1', target: 'sh1', className: 'pw-edge-attach' },
+    ]
+    expect(rowsOf(nodes, edges)).toEqual(['s1', 'sh1', 's2'])
+  })
+
+  it('未接入宿主的分镜同样以宿主块插放，不按 x 独立排序（issue #340 评审二轮）', () => {
+    const nodes: CanvasNode[] = [
+      node({
+        id: 'loose',
+        type: 'scene',
+        position: { x: 300, y: 0 },
+        data: { name: '孤立', sceneNo: 9 },
+      }),
+      node({
+        id: 'host2',
+        type: 'scene',
+        position: { x: 400, y: 0 },
+        data: { name: '宿主2', sceneNo: 10 },
+      }),
+      node({
+        id: 'sh2',
+        type: 'shot',
+        position: { x: 50, y: 40 },
+        data: { shotNo: 1, size: '全景' },
+      }),
+    ]
+    const edges: Edge[] = [
+      { id: 'a2', source: 'host2', target: 'sh2', className: 'pw-edge-attach' },
+    ]
+    // detached 内 host2 的分镜若独立按 x 序会跑到最前——按宿主块插放
+    expect(rowsOf(nodes, edges)).toEqual(['loose', 'host2', 'sh2'])
+  })
+
   it('跨集路径不把依赖带入集内行序（附录同款集内边范围）', () => {
     // issue #340 评审：s1(ep1)→s2(ep2)→s3(ep1) 的路径端点跨集，集 1 组内
     // 无约束边——两成员按 x 序输出（s3 x100 先于 s1 x200），与附录一致
