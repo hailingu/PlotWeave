@@ -1,6 +1,6 @@
-//! 列表读取与多版本封套解析（数据模型 §11 第 0 步）：信封判型（显式
-//! 版本家族一致性 / 无版本形状判型）、旧扁平 v0 包装、宽容提取与
-//! 列表摘要派生（graph 统计、排序、占位名）。
+//! 列表读取与多版本封套解析（数据模型 §11 第 0 步）：信封判型（数值版本
+//! 主张家族一致性 / 主张缺失或异型时的形状判型）、旧扁平 v0 包装、宽容
+//! 提取与列表摘要派生（graph 统计、排序、占位名）。
 
 use std::collections::HashSet;
 
@@ -246,47 +246,78 @@ fn parse_v1_envelope(value: &serde_json::Value) -> ProjectFile {
             .unwrap_or(serde_json::Value::Null),
     }
 }
-/// 显式 schemaVersion 的家族一致性校验与解析（§11 第 0 步）：0 属旧扁平
-/// 家族、≥1 属 v1 家族，版本号与信封形状两族矛盾即拒绝并保留原文件——
-/// 否则 v1 StoryNode 会被送进旧版迁移器，且每次 v0 加载都被视为已迁移
-/// 并回写，可能摧毁节点字段；显式 0 且保持扁平形状时包装为 v0 信封。
+/// 规范十进制整数字符串判定（§11 第 0 步字符串条款）：可选负号 + 无前导
+/// 零的 ASCII 数字串。命中即构成带内版本主张——字符串不是信封契约的版本
+/// 载体，主张一律拒绝而非按形状降级；非规范数字串（"01"/"1.0"/" 1" 等）
+/// 与 null/布尔/容器同属无法表达受支持/未来版本的异型值，走形状判型。
+fn is_canonical_integer_string(s: &str) -> bool {
+    let digits = s.strip_prefix('-').unwrap_or(s);
+    let bytes = digits.as_bytes();
+    if bytes.is_empty() || !bytes.iter().all(u8::is_ascii_digit) {
+        return false;
+    }
+    bytes.len() == 1 || bytes[0] != b'0'
+}
+/// 显式 schemaVersion 键的判型（§11 第 0 步）：按值是否构成版本主张分派——
+/// 数值主张定族：0 属旧扁平家族、≥1 属 v1 家族，版本号与信封形状两族矛盾
+/// 即拒绝并保留原文件——否则 v1 StoryNode 会被送进旧版迁移器，且每次 v0
+/// 加载都被视为已迁移并回写，可能摧毁节点字段；显式 0 且保持扁平形状时
+/// 包装为 v0 信封。number 但非法（负数/小数/越界）直接拒绝，不得按形状
+/// 降级；规范整数字符串主张非契约载体，一律拒绝（未来串按形状降级会在
+/// 回写中丢失升级判据）；其余无法表达受支持/未来版本的异型值（null/布尔/
+/// 容器/非规范数字串）不构成主张，与缺失版本号同款按唯一信封形状判型
+/// （issue #338）。
 fn parse_explicit_envelope(
     id: &str,
     value: serde_json::Value,
     v1_keys: usize,
     legacy_keys: usize,
+    has_legacy_list: bool,
 ) -> Result<ProjectFile, StoreError> {
-    let Some(version) = value.get("schemaVersion").and_then(|sv| sv.as_u64()) else {
-        return Err(StoreError::CorruptEnvelope(
-            "schemaVersion 不是非负整数，无法判别文档信封（已保留原文件）",
-        ));
-    };
-    if version == 0 {
-        if v1_keys > 0 {
-            return Err(StoreError::CorruptEnvelope(
-                "文档信封自相矛盾：schemaVersion 0 却携带 v1 专属键（已保留原文件）",
-            ));
+    match value.get("schemaVersion") {
+        Some(serde_json::Value::Number(n)) => {
+            let Some(version) = n.as_u64() else {
+                return Err(StoreError::CorruptEnvelope(
+                    "schemaVersion 是非法数值（负数/小数/越界），无法判别文档信封（已保留原文件）",
+                ));
+            };
+            if version == 0 {
+                if v1_keys > 0 {
+                    return Err(StoreError::CorruptEnvelope(
+                        "文档信封自相矛盾：schemaVersion 0 却携带 v1 专属键（已保留原文件）",
+                    ));
+                }
+                return Ok(wrap_legacy(id, &value));
+            }
+            if legacy_keys > 0 {
+                return Err(StoreError::CorruptEnvelope(
+                    "文档信封自相矛盾：schemaVersion ≥ 1 却携带旧扁平特征键（已保留原文件）",
+                ));
+            }
+            if version > u64::from(u32::MAX) {
+                // 超出 u32 的版本号无法无损载入信封：截断回退会把未来文档当作当前
+                // v1 交付，保存时按 v1 回写并丢弃未知字段——拒绝加载并保留原文件
+                return Err(StoreError::CorruptEnvelope(
+                    "schemaVersion 超出可表示范围（疑似未来版本），拒绝加载并保留原文件",
+                ));
+            }
+            Ok(parse_v1_envelope(&value))
         }
-        return Ok(wrap_legacy(id, &value));
+        Some(serde_json::Value::String(s)) if is_canonical_integer_string(s) => {
+            Err(StoreError::CorruptEnvelope(
+                "schemaVersion 是规范整数字符串而非数值版本号（已保留原文件）",
+            ))
+        }
+        _ => classify_versionless(id, value, v1_keys, legacy_keys, has_legacy_list),
     }
-    if legacy_keys > 0 {
-        return Err(StoreError::CorruptEnvelope(
-            "文档信封自相矛盾：schemaVersion ≥ 1 却携带旧扁平特征键（已保留原文件）",
-        ));
-    }
-    if version > u64::from(u32::MAX) {
-        // 超出 u32 的版本号无法无损载入信封：截断回退会把未来文档当作当前
-        // v1 交付，保存时按 v1 回写并丢弃未知字段——拒绝加载并保留原文件
-        return Err(StoreError::CorruptEnvelope(
-            "schemaVersion 超出可表示范围（疑似未来版本），拒绝加载并保留原文件",
-        ));
-    }
-    Ok(parse_v1_envelope(&value))
 }
-/// 无版本号信封的形状判型（§11 第 0 步）：v1 专属键（project/graph/assets）
-/// 独占时赋予待修复的有效版本 1；旧扁平特征键（≥2 个且含 nodes/edges）独占
-/// 时包装为 v0 信封；混合或两组特征均不足的损坏文档拒绝加载并保留原文件——
-/// 绝不把保持 v1 形状的文档误包装成空 v0 图后回写摧毁原画布。
+/// 无版本主张信封的形状判型（§11 第 0 步，键缺失与异型版本值共用）：
+/// v1 专属键（project/graph/assets）独占时赋予待修复的有效版本 1；旧扁平
+/// 特征键（≥2 个且含 nodes/edges）独占时包装为 v0 信封；混合或两组特征均
+/// 不足的损坏文档拒绝加载并保留原文件——绝不把保持 v1 形状的文档误包装成
+/// 空 v0 图后回写摧毁原画布。两族判型产物都打 versionless 标记：形状判型
+/// 的文档本就缺有效版本主张，前端据此记录判型警告（评审修复，§11 第 0 步
+/// 「均记录警告」，issue #338）——v0 迁移回写本身即落定，标记只承载警告。
 fn classify_versionless(
     id: &str,
     value: serde_json::Value,
@@ -300,14 +331,18 @@ fn classify_versionless(
         return Ok(file);
     }
     if v1_keys == 0 && legacy_keys >= 2 && has_legacy_list {
-        return Ok(wrap_legacy(id, &value));
+        let mut file = wrap_legacy(id, &value);
+        file.versionless = true;
+        return Ok(file);
     }
     Err(StoreError::CorruptEnvelope(
         "无法判别文档信封：v1 与旧扁平特征键混合或均不足（已保留原文件）",
     ))
 }
-/// 解析项目文件（§11 第 0 步信封判型）：显式 `schemaVersion` 定族并经
-/// 家族一致性校验（parse_explicit_envelope），缺失时按顶层键形状特征判型
+/// 解析项目文件（§11 第 0 步信封判型）：显式 `schemaVersion` 按值构成的主张
+/// 判型——数值定族并经家族一致性校验（parse_explicit_envelope），非法数值/
+/// 规范整数字符串拒绝；版本主张缺失（键缺失）或无法表达受支持/未来版本的
+/// 异型值（null/布尔/容器/非规范数字串）按顶层键形状特征判型
 /// （classify_versionless）；两族矛盾或不可判型一律拒绝并保留原文件。
 /// 缺失/异型的 project 元数据（id/时间戳等）以空串**原样透传**，不在读取
 /// 侧预合成——预合成会让前端 repaired 检测看不见缺陷（载荷已是修好的
@@ -327,7 +362,7 @@ pub(crate) fn parse_file(id: &str, text: &str) -> Result<ProjectFile, StoreError
         .count();
     let has_legacy_list = value.get("nodes").is_some() || value.get("edges").is_some();
     Ok(match value.get("schemaVersion") {
-        Some(_) => parse_explicit_envelope(id, value, v1_keys, legacy_keys)?,
+        Some(_) => parse_explicit_envelope(id, value, v1_keys, legacy_keys, has_legacy_list)?,
         None => classify_versionless(id, value, v1_keys, legacy_keys, has_legacy_list)?,
     })
 }

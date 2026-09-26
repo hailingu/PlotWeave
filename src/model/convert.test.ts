@@ -1165,3 +1165,63 @@ describe('同版本文档扩展字段的分层边界（issue #100，§11）', ()
     expect((again.graph as Record<string, unknown>).futureGraphNote).toBe(1)
   })
 })
+
+describe('信封形状判型警告（issue #338 评审，§11 第 0 步「均记录警告」）', () => {
+  const shapeWarning = (warnings: string[]) =>
+    warnings.some((w) => w.includes('信封形状判型'))
+
+  it('v1 形状判型（versionless 标记）：交付会话前记录判型警告', () => {
+    // Rust 判型在异型版本键/缺失版本号时按 v1 形状交付并打 versionless
+    // 标记（IPC 顶层额外键）——修复不得静默，警告须解释保存时的补盖
+    const doc = {
+      ...serializeProject(mkContent(), 'p-1', NOW),
+      versionless: true,
+    }
+    const round = parseProject(doc)
+    expect(shapeWarning(round.warnings)).toBe(true)
+  })
+
+  it('v0 形状判型（versionless 标记）：迁移交付同样记录判型警告', () => {
+    const v0 = {
+      versionless: true,
+      schemaVersion: 0,
+      project: {
+        id: 'p-old',
+        name: '旧剧',
+        createdAt: '',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+      graph: { nodes: [], edges: [] },
+      settings: { characters: [], locations: [], props: [], documents: [] },
+      episodeTitles: {},
+      assets: { byId: {} },
+    }
+    const round = parseProject(v0)
+    expect(round.migrated).toBe(true)
+    expect(shapeWarning(round.warnings)).toBe(true)
+  })
+
+  it('显式版本号（无标记）：不产生判型警告', () => {
+    expect(
+      shapeWarning(
+        parseProject(serializeProject(mkContent(), 'p-1', NOW)).warnings,
+      ),
+    ).toBe(false)
+    const v0Explicit = {
+      schemaVersion: 0,
+      project: {
+        id: 'p-old',
+        name: '旧剧',
+        createdAt: '',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+      graph: { nodes: [], edges: [] },
+      settings: { characters: [], locations: [], props: [], documents: [] },
+      episodeTitles: {},
+      assets: { byId: {} },
+    }
+    const round = parseProject(v0Explicit)
+    expect(round.migrated).toBe(true)
+    expect(shapeWarning(round.warnings)).toBe(false)
+  })
+})

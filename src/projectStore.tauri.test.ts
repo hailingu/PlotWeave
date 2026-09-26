@@ -992,6 +992,43 @@ describe('tauriList：空库播种与示例升级', () => {
     expect(list.map((x) => x.id)).toContain('sample-wu-ye-chu-zu-che')
   })
 
+  it('示例形状判型（versionless 标记）：升级回写前逐条记录判型警告，不静默改写版本号（issue #338 评审二轮）', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    handlers.set('list_projects', () => [meta('sample-wu-ye-chu-zu-che')])
+    let loadCalls = 0
+    handlers.set('load_project', () => {
+      loadCalls += 1
+      if (loadCalls === 1) {
+        // Rust 形状判型产物：版本主张缺失/异型按 v1 形状交付并打标记
+        return {
+          ...modernFile(),
+          versionless: true,
+          project: {
+            ...modernFile().project,
+            id: 'sample-wu-ye-chu-zu-che',
+          },
+        }
+      }
+      // 回写后的净本：重列的升级检查不再触发写
+      return {
+        ...modernFile(),
+        project: { ...modernFile().project, id: 'sample-wu-ye-chu-zu-che' },
+      }
+    })
+    handlers.set('save_project', () => undefined)
+    const { projectStore } = await load()
+    await projectStore.list()
+    // 升级路径与 tauriLoad 同款逐条留痕——判型警告不能只在打开时可见
+    expect(
+      warnSpy.mock.calls.some((args) =>
+        args.some((a) => typeof a === 'string' && a.includes('信封形状判型')),
+      ),
+    ).toBe(true)
+    // 标记触发修复回写（版本号被显式补盖）——正因要回写才必须留痕
+    expect(calls.filter((c) => c.cmd === 'save_project')).toHaveLength(1)
+    warnSpy.mockRestore()
+  })
+
   it('示例迁移/修复回写前先过加载侧资产复验：不可验证键隔离后再回写，坏资产不再让 list 中止、首页清空', async () => {
     handlers.set('list_projects', () => [
       meta('sample-wu-ye-chu-zu-che'),

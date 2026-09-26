@@ -355,12 +355,20 @@ function assembleLegacyContent(
   }
 }
 
+/** 形状判型警告（issue #338 评审，§11 第 0 步「均记录警告」）：Rust 对
+ * 版本主张缺失/异型的信封按唯一形状判型交付并打 versionless 标记，判型
+ * 修复必须可向用户解释——保存时标记随类型化重建消失、显式版本号补盖。 */
+const SHAPE_CLASSIFIED_WARNING =
+  '文件缺少有效的 schemaVersion（缺失或为无法表达版本的异型值），已按信封形状判型，保存时将补盖显式版本号'
+
 function parseLegacyProject(
   raw: Record<string, unknown>,
   env: NormalizeEnv,
+  shapeClassified: boolean,
 ): ParseResult {
   const env0 = raw as Parameters<typeof assembleLegacyContent>[0]
   const v0Warnings: string[] = []
+  if (shapeClassified) v0Warnings.push(SHAPE_CLASSIFIED_WARNING)
   const legacy = assembleLegacyContent(env0, v0Warnings)
   const migrated = migrateProjectDocument(legacy, v0Warnings)
   const legacyAtMs = Date.parse(
@@ -397,6 +405,7 @@ function parseLegacyProject(
  * 归一化管线入口（§11）：schemaVersion 校验与迁移 → 归一化 → 会话文档。
  * v0 信封（旧扁平格式经 Rust 包装）先走节点字段迁移，再按 v1 解析。
  * env 携带加载路径的受信事实（projectId / 索引名），供元数据修复使用。
+ * Rust 形状判型标记（versionless）在入口消费为判型警告（issue #338 评审）。
  *
  * 输入所有权契约（issue #102）：归一化/迁移**就地改写**传入的 raw 及其
  * 嵌套成员（v1 键控桶内嵌 id 以记录键改写、字段剥离/补默认；v0 预归一化
@@ -427,8 +436,19 @@ export function parseProject(
     throw new Error(`文档版本过新（schemaVersion ${version}），请升级应用`)
   }
 
+  // Rust 形状判型标记（versionless，§10.5/§11 第 0 步）：版本主张缺失或
+  // 异型时按唯一信封形状判型交付（v1/v0 两族都打标记），判型修复记录
+  // 警告（issue #338 评审）。该键经 Rust 类型化信封跨 IPC 携带，磁盘文件
+  // 中的同名顶层键在反序列化时即被剥离，不会从文件内容误触发。
+  const shapeClassified =
+    (raw as { versionless?: unknown }).versionless === true
+
   if (version === 0) {
-    return parseLegacyProject(raw as Record<string, unknown>, env)
+    return parseLegacyProject(
+      raw as Record<string, unknown>,
+      env,
+      shapeClassified,
+    )
   }
 
   // 原始文档先克隆：归一化就地改写（id 重发/字段剥离/隔离，输入所有权
@@ -444,7 +464,9 @@ export function parseProject(
     content: fromDocument(normalized, warnings),
     migrated: false,
     repaired: !sameCanonicalJson(pristine, normalized),
-    warnings,
+    warnings: shapeClassified
+      ? [SHAPE_CLASSIFIED_WARNING, ...warnings]
+      : warnings,
     reissuedAssetAliases,
   }
 }

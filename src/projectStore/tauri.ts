@@ -121,6 +121,7 @@ async function upgradeKnownSamples(metas: { id: string }[]): Promise<boolean> {
  * 读盘/复验窗口内该示例排入新保存或删除（链身份变化）即跳过本次
  * 回写——迟到修复不得覆盖较新内容或复活已删对象，下次列表/打开重查；
  * 回写失败由链登记重试。任何步骤失败按单例隔离（只留痕不中止列表）。
+ * 归一化警告逐条留痕，与 tauriLoad 同款（issue #338 评审二轮）。
  * 返回是否实际回写。 */
 async function tryUpgradeSample(id: string): Promise<boolean> {
   const { invoke } = await import('@tauri-apps/api/core')
@@ -139,10 +140,13 @@ async function tryUpgradeSample(id: string): Promise<boolean> {
       id,
       assets: (file as { assets?: unknown }).assets ?? {},
     })
-    const { content, migrated, repaired } = parseProject(file, {
+    const { content, migrated, repaired, warnings } = parseProject(file, {
       projectId: id,
       invalidAssetKeys,
     })
+    // 归一化/判型警告逐条留痕（与 tauriLoad 同款）：形状判型等修复型回写
+    // 不得静默改写版本号等内容（issue #338 评审二轮）
+    for (const w of warnings) console.warn(`[projectStore] ${w}`)
     if (!(migrated || repaired)) return false
     if (saveChainTokenOf(id) !== chainBefore) {
       console.warn(
