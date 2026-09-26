@@ -196,6 +196,93 @@ fn explicit_version_conflicting_with_envelope_family_is_rejected() {
     .is_err());
 }
 
+/// [issue #338]（§11 第 0 步）：schemaVersion 键存在但为无法表达受支持/
+/// 未来版本的异型值（null/布尔/容器/非规范数字串）时不构成版本主张——
+/// 与缺失版本号同款按唯一信封形状判型：唯一匹配 v1 → versionless 标记
+/// 交付前端修复回写补盖显式版本号，graph 内容原样透传，不整份拒绝。
+#[test]
+fn heterogeneous_version_value_falls_back_to_v1_shape() {
+    let cases = [
+        ("null", "null"),
+        ("布尔", "true"),
+        ("对象", r#"{"future":true}"#),
+        ("数组", "[2]"),
+        ("非规范数字串", r#""01""#),
+    ];
+    for (label, raw) in cases {
+        let text = format!(
+            r#"{{"schemaVersion":{raw},"project":{{"id":"p-1","name":"异型版本"}},"graph":{{"nodes":[{{"id":"s1","type":"scene"}}],"edges":[]}},"assets":{{"byId":{{}}}}}}"#
+        );
+        let file =
+            parse_file("p-1", &text).unwrap_or_else(|e| panic!("{label}：应按 v1 形状判型：{e}"));
+        assert_eq!(file.schema_version, 1, "{label}：判型赋予待修复有效版本 1");
+        assert!(file.versionless, "{label}：应打 versionless 修复标记");
+        assert_eq!(
+            file.graph["nodes"][0]["id"],
+            json!("s1"),
+            "{label}：graph 原样透传不丢内容"
+        );
+    }
+}
+
+/// [issue #338]：异型版本值 + 唯一旧扁平形状 → 与缺失版本号同款包装 v0
+/// 信封（迁移本身回写落定，不依赖 versionless 标记）。
+#[test]
+fn heterogeneous_version_value_with_legacy_shape_wraps_as_v0() {
+    let legacy = json!({
+        "schemaVersion": null,
+        "name": "旧项目",
+        "updated_at": 1_700_000_000_000u64,
+        "nodes": [{ "id": "a", "type": "scene", "data": {} }],
+        "edges": [],
+    });
+    let file = parse_file("p-old", &legacy.to_string()).unwrap();
+    assert_eq!(file.schema_version, 0);
+    assert!(!file.versionless);
+    assert_eq!(file.project.name, "旧项目");
+}
+
+/// [issue #338]：异型版本值不放宽混合/不足形状的拒绝——形状不足以单独
+/// 判型时仍拒绝并保留原文件，绝不猜测家族回退空 v0 图。
+#[test]
+fn heterogeneous_version_value_with_mixed_or_insufficient_shape_is_rejected() {
+    let mixed = json!({
+        "schemaVersion": true,
+        "project": { "name": "混合信封" },
+        "name": "旧名",
+        "nodes": [],
+        "edges": [],
+    });
+    assert!(parse_file("p-1", &mixed.to_string()).is_err());
+    // 仅一个异型版本键、无任何家族特征：两组特征均不足
+    assert!(parse_file("p-1", r#"{"schemaVersion": null}"#).is_err());
+}
+
+/// [issue #338]（§11 第 0 步）：带内版本主张非法或非契约载体时直接拒绝，
+/// 不得按形状降级——number 但负数/小数、规范整数字符串（含表达受支持/
+/// 未来版本者，数字才是版本载体；未来串按形状降级会在回写中丢失升级判据）。
+#[test]
+fn illegal_version_claims_rejected_without_shape_downgrade() {
+    let cases = [
+        ("负数", "-1"),
+        ("小数", "1.5"),
+        ("未来规范数字串", r#""2""#),
+        ("负数规范数字串", r#""-1""#),
+    ];
+    for (label, raw) in cases {
+        let text = format!(
+            r#"{{"schemaVersion":{raw},"project":{{"id":"p-1","name":"非法主张"}},"graph":{{"nodes":[],"edges":[]}}}}"#
+        );
+        let err = parse_file("p-1", &text)
+            .err()
+            .unwrap_or_else(|| panic!("{label}：非法版本主张应拒绝"));
+        assert!(
+            matches!(err.root(), StoreError::CorruptEnvelope(_)),
+            "{label}：应为信封判型拒绝：{err:?}"
+        );
+    }
+}
+
 #[test]
 fn explicit_v0_with_legacy_shape_wraps_as_v0_envelope() {
     // 显式 0 = 旧扁平家族：信封保持扁平形状时与无版本号路径一致包装
