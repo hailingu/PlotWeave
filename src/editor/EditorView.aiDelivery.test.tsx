@@ -161,9 +161,15 @@ describe('明确操作先交付预览，再由用户确认', () => {
       expect(doc.edges).toMatchObject([{ source: 'n2', target: added.id }])
       expect(edgeKindOf(doc.edges[0])).toBe('sequence')
       expect(doc.aiRevision).toBe(1)
+      // 执行卡提示只保留回执：不承诺 ⌘Z 当前可整批撤销（issue #347）
+      expect(screen.getAllByText('✓ 已执行')).toHaveLength(1)
+      expect(screen.queryByText(/⌘Z 可整批撤销/)).toBeNull()
       fireEvent.click(screen.getByLabelText('撤销'))
       expect(h.outline.queryByText('场 03 · 吞并计划')).toBeNull()
       await waitFor(() => expect(h.flow.queryByText('吞并计划')).toBeNull())
+      // 撤销改变栈顶后提示仍不得误导：卡片保持回执语义、无当前撤销宣称
+      expect(screen.getAllByText('✓ 已执行')).toHaveLength(1)
+      expect(screen.queryByText(/⌘Z 可整批撤销/)).toBeNull()
       await send('解释一下动机')
       await waitFor(() => expect(h.document()?.nodes).toHaveLength(4))
       expect(h.document()?.edges).toEqual([])

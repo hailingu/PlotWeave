@@ -454,8 +454,10 @@ describe('RightPanel ✦AI 改动预览卡', () => {
       expect.objectContaining({ op: 'create_node' }),
     ])
     expect(await screen.findByText(/✓ 已执行 1 项改动/)).toBeTruthy()
-    // 当前会话内执行的卡才宣称 ⌘Z 整批撤销；回执作为持久历史不携带该宣称
-    expect(screen.getAllByText(/⌘Z 可整批撤销/)).toHaveLength(1)
+    // 执行卡提示只陈述「曾执行成功」回执：撤销不回写卡片，撤销/重做或
+    // 后续编辑都会改变栈顶，提示不得承诺 ⌘Z 当前可整批撤销（issue #347）
+    expect(screen.getAllByText('✓ 已执行')).toHaveLength(1)
+    expect(screen.queryByText(/⌘Z 可整批撤销/)).toBeNull()
   })
 
   it('含删除批次：执行按钮两步武装确认', async () => {

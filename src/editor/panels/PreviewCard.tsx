@@ -21,7 +21,9 @@ function executeLabel(v: BatchValidation, armed: boolean): string {
 /** 卡片操作区（PreviewCard 拆分，issue #99）：已执行回执，或忽略 +
  * 两步确认执行（含删除时先武装再执行）。忽略只受 busy 并发约束——校验
  * 失败卡不可执行，但用户可逐张忽略其处置（issue #151，状态随会话
- * 落盘并回喂模型，ui-design §6）；执行仍要求批次通过校验。 */
+ * 落盘并回喂模型，ui-design §6）；执行仍要求批次通过校验。已执行提示
+ * 只陈述「曾执行成功」：撤销不回写卡片，撤销/重做或后续编辑都会改变
+ * 撤销栈顶，提示不承诺 ⌘Z 当前可撤销本批次（issue #347）。 */
 function PreviewCardActions({
   v,
   status,
@@ -46,7 +48,7 @@ function PreviewCardActions({
     <div className="pw-ai-actions">
       {status === 'executed' ? (
         <span className="pw-ai-note">
-          {historical ? '✓ 已执行（历史改动）' : '✓ 已执行，⌘Z 可整批撤销'}
+          {historical ? '✓ 已执行（历史改动）' : '✓ 已执行'}
         </span>
       ) : (
         <>
@@ -83,8 +85,10 @@ function PreviewCardActions({
 interface PreviewCardProps {
   readonly v: BatchValidation
   readonly status: 'pending' | 'executed' | 'dismissed'
-  /** 跨会话恢复的历史执行卡：撤销栈已重建，不宣称 ⌘Z 可整批撤销。
-   * 可显式 undefined = 非历史卡（issue #231）。 */
+  /** 跨会话恢复的历史执行卡（issue #231）：撤销栈已重建，显示「历史改动」
+   * 区分于当前会话回执。可显式 undefined = 非历史卡；两类已执行卡都不
+   * 承诺 ⌘Z 当前可整批撤销——会话内撤销/重做或后续编辑同样使该宣称
+   * 失真，撤销不回写卡片（issue #347）。 */
   readonly historical?: boolean | undefined
   readonly armed: boolean
   readonly busy: boolean

@@ -90,7 +90,8 @@ function reconcilePendingCard(
 
 /** 用当前画布重建原先合法卡片的预览，拒绝信任落盘的确认元数据；
  * 校验拒绝卡没有完整原始批次，不能把空命令或合法子集重新判成合法整批。
- * 历史执行卡标注 historical——撤销栈不跨会话存活，不得宣称可撤销。
+ * 历史执行卡标注 historical——恢复的执行卡显示「历史改动」区分于当前
+ * 会话回执；两类执行卡都不宣称 ⌘Z 当前可撤销（issue #347）。
  * 条目 id 重定基为 1..n 有界序列：落盘 id 不受信，防止自增越过
  * MAX_SAFE_INTEGER 产生重复 key 与下次加载被归一化丢弃的条目。 */
 function restoreThreadEntries(
