@@ -128,12 +128,6 @@
   gap: 8px;
 }
 
-.pw-index-name {
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-}
-
 .pw-index-no {
   font-size: 11px;
   color: var(--node-paper-text-secondary);
@@ -482,16 +476,6 @@
   border: 2px solid var(--accent);
 }
 
-.pw-branch-addopt {
-  margin-top: 8px;
-  border: 1px dashed var(--branch-addopt-border);
-  border-radius: 8px;
-  padding: 6px 10px;
-  font-size: 12px;
-  color: var(--branch-dim);
-  text-align: center;
-}
-
 @media (prefers-color-scheme: dark) {
   .pw-branch {
     background: transparent;
@@ -515,11 +499,6 @@
   .react-flow__handle.pw-branch-port {
     background: var(--accent);
     border-color: var(--accent);
-  }
-
-  .pw-branch-addopt {
-    border-color: var(--branch-addopt-border);
-    color: var(--branch-dim);
   }
 
   /* 深色画布下分支虚线框上的齿轮用深色系。 */

@@ -139,8 +139,6 @@
   --branch-frame: rgba(0, 0, 0, 0.3); /* 虚线「未定」框 */
   --branch-opt-bg: rgba(0, 0, 0, 0.05);
   --branch-opt-text: #3a3a3c;
-  --branch-addopt-border: rgba(0, 0, 0, 0.22);
-  --branch-dim: var(--text-secondary);
 
   /* 圆角（§2.5） */
   --radius-sm: 4px;
@@ -186,8 +184,6 @@
     --branch-frame: rgba(235, 235, 245, 0.35);
     --branch-opt-bg: rgba(255, 255, 255, 0.08);
     --branch-opt-text: rgba(245, 245, 247, 0.92);
-    --branch-addopt-border: rgba(235, 235, 245, 0.3);
-    --branch-dim: rgba(235, 235, 245, 0.45);
 
     color-scheme: dark;
   }
@@ -218,7 +214,6 @@
     --on-brand: #000000; /* 黑在渐变两端与徽标色上均 ≥ 4.5:1（最紧 4.52:1） */
     --edge-label-bg: var(--accent); /* 实色底：黑字浅 4.55 / 深 5.77:1 */
     --branch-frame: rgba(0, 0, 0, 0.6);
-    --branch-addopt-border: rgba(0, 0, 0, 0.55);
 
     /* 海报悬浮菜单钮（issue #261）：§2.6 背景近实色 + 明确描边（hover
      * 值本身已实色，不重声明） */
@@ -236,8 +231,6 @@
 
       /* 分支族跟随画布外观：仅分支令牌随外观分块升档（石板已在上方外块处理） */
       --branch-frame: rgba(235, 235, 245, 0.7);
-      --branch-addopt-border: rgba(235, 235, 245, 0.65);
-      --branch-dim: rgba(235, 235, 245, 0.6);
 
       /* 海报悬浮菜单钮（issue #261）：近实色 + 描边随外观分块加强 */
       --poster-menu-bg: #26262c;
