@@ -4,6 +4,11 @@
 
 import postcss from 'postcss'
 
+/** 标准属性名 ASCII 大小写不敏感，归一为小写；自定义属性名保持大小写敏感。 */
+export function normalizeProp(prop: string): string {
+  return prop.startsWith('--') ? prop : prop.toLowerCase()
+}
+
 /**
  * 在给定根节点内按完整选择器找规则：须**唯一且无条件**（不处于任何
  * at-rule 内）——媒体块内同名规则会使生效值随环境分叉，违背黄金接线
@@ -13,11 +18,6 @@ import postcss from 'postcss'
  * 也计入命中——不按整选择器字符串相等。sheet 仅用于错误信息；缺失/
  * 重复/条件化均抛错防测试静默空过。
  */
-/** 标准属性名 ASCII 大小写不敏感，归一为小写；自定义属性名保持大小写敏感。 */
-export function normalizeProp(prop: string): string {
-  return prop.startsWith('--') ? prop : prop.toLowerCase()
-}
-
 export function ruleIn(
   root: postcss.Root,
   sheet: string,
