@@ -12,8 +12,9 @@
  * 调用不会触发 unhandledrejection（引擎语义），因此正常路径零新增噪声。
  */
 
-/** 诊断机器码（UPPER_SNAKE）：区分两类全局失败通道。 */
-export type GlobalErrorCode = 'UNHANDLED_REJECTION' | 'UNCAUGHT_ERROR'
+/** 诊断机器码（UPPER_SNAKE）：区分三类全局失败通道。 */
+export type GlobalErrorCode =
+  'UNHANDLED_REJECTION' | 'UNCAUGHT_ERROR' | 'BOOTSTRAP_LOAD_FAILED'
 
 /** 结构化诊断：消费方（devtools / 日志采集）按字段判定，不解析自由文本。 */
 export interface GlobalErrorDiagnostic {
@@ -96,6 +97,21 @@ export function handleErrorEvent(event: ErrorEventLike): void {
       : {}),
   }
   report('未捕获的脚本错误', diagnostic)
+}
+
+/** 引导加载失败 → 结构化诊断并输出（bootstrap 对应用本体的动态导入
+ * 失败：chunk 拉取失败或应用导入图求值期抛错）。这是被调方自有通道
+ * （typescript-standard 的 fire-and-forget 约定：void 标记的承诺须由
+ * 被调方持有 .catch 通道，评审 4111703397）——附加 catch 后该失败不再
+ * 触发 unhandledrejection 全局兜底，由本函数保证可见诊断。 */
+export function reportBootstrapFailure(reason: unknown): void {
+  report('应用引导加载失败', {
+    code: 'BOOTSTRAP_LOAD_FAILED',
+    message: describe(reason),
+    ...(reason instanceof Error && typeof reason.stack === 'string'
+      ? { stack: reason.stack }
+      : {}),
+  })
 }
 
 /** 在目标（缺省 window）上安装两个全局兜底监听；仅在应用引导入口

@@ -4,11 +4,18 @@
  * ErrorBoundary、libraryDiagnosticTransport 及其传递依赖）顶层求值期
  * 的抛错会发生在守卫安装之前，引导失败拿不到承诺的结构化诊断。
  * 本模块自身仅依赖 globalErrorGuard（纯定义无传递边），先安装全局
- * 兜底，再动态加载应用本体；动态导入的求值失败以未处理拒绝形态被
- * 同一守卫捕获。index.html 直接加载本文件。
+ * 兜底，再动态加载应用本体。index.html 直接加载本文件。
  */
-import { installGlobalErrorGuard } from './globalErrorGuard'
+import {
+  installGlobalErrorGuard,
+  reportBootstrapFailure,
+} from './globalErrorGuard'
 
 installGlobalErrorGuard()
 
-void import('./main')
+// 被调方自有错误通道（typescript-standard fire-and-forget 约定，
+// 评审 4111703397）：chunk 拉取失败或应用导入图求值期抛错在此结构化
+// 上报；附加 catch 后该失败不再触发 unhandledrejection 全局兜底。
+void import('./main').catch((reason: unknown) => {
+  reportBootstrapFailure(reason)
+})
