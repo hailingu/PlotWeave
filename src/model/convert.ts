@@ -312,6 +312,32 @@ function assembleLegacyContent(
     })
     return out
   }
+  // v0 安全预检（§11 第 0 步，issue #336）：settings 容器异型或设定数组桶
+  // 缺失/非数组时重置并记录「无法机械恢复内容」警告——重置不得静默清洗，
+  // 否则修复回写把内容丢失固化为无诊断的空设定集（下游 repaired=true 却
+  // 无从知晓丢了什么）。合法数组与其余键原样交给迁移器 normalizeSettings；
+  // settings 键缺失时无内容可失，按既有行为静默补空对象、不告警。
+  const settingsRaw: unknown = env0.settings
+  let settings: ProjectContent['settings']
+  if (settingsRaw === undefined) {
+    settings = {} as ProjectContent['settings']
+  } else if (!isPlainObject(settingsRaw)) {
+    warnings.push('settings 非普通对象，无法机械恢复内容，已重置为空对象')
+    settings = {} as ProjectContent['settings']
+  } else {
+    const record = settingsRaw as Record<string, unknown>
+    for (const bucket of ['characters', 'locations'] as const) {
+      if (!Array.isArray(record[bucket])) {
+        warnings.push(
+          record[bucket] === undefined
+            ? `settings.${bucket} 缺失，无法机械恢复内容，已重置为空数组`
+            : `settings.${bucket} 非数组，无法机械恢复内容，已重置为空数组`,
+        )
+        record[bucket] = []
+      }
+    }
+    settings = record as unknown as ProjectContent['settings']
+  }
   return {
     name: env0.project?.name ?? '',
     createdAt: env0.project?.createdAt || undefined,
@@ -323,7 +349,7 @@ function assembleLegacyContent(
       asArray(graphRaw.edges, 'graph.edges'),
       'graph.edges',
     ) as Edge[],
-    settings: (env0.settings ?? {}) as ProjectContent['settings'],
+    settings,
     episodeTitles: normalizeEpisodeTitles(env0.episodeTitles, warnings),
     viewport: graphRaw.viewport as Viewport | undefined,
   }

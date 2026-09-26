@@ -837,3 +837,74 @@ describe('schemaVersion 0 迁移：异型对白 speaker 的安全预检（issue 
     expect(lineOf(absent).text).toBe('hello')
   })
 })
+
+/** issue #336 复现信封：settings 由调用方给定（模块级夹具，使回归 describe
+ * 不超 80 行）。 */
+const legacySettingsEnvelope = (settings: unknown) => ({
+  schemaVersion: 0,
+  project: {
+    id: 'p-old',
+    name: 'probe',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  },
+  graph: { nodes: [], edges: [] },
+  settings,
+  episodeTitles: {},
+  assets: { byId: {} },
+})
+
+describe('schemaVersion 0 迁移：异型设定桶的预检诊断（issue #336，§11 第 0 步）', () => {
+  it('characters/locations 为 Record（非数组）：重置空数组并记录不可恢复警告', () => {
+    const round = parseProject(
+      legacySettingsEnvelope({
+        characters: { c1: { id: 'c1', name: 'Alice', gradient: 'red' } },
+        locations: { l1: { id: 'l1', name: 'room' } },
+      }),
+    )
+    expect(round.content.settings.characters).toEqual([])
+    expect(round.content.settings.locations).toEqual([])
+    expect(round.repaired).toBe(true)
+    expect(
+      round.warnings.some(
+        (w) => w.includes('settings.characters') && w.includes('非数组'),
+      ),
+    ).toBe(true)
+    expect(
+      round.warnings.some(
+        (w) => w.includes('settings.locations') && w.includes('非数组'),
+      ),
+    ).toBe(true)
+  })
+
+  it('settings 非普通对象：重置空对象并记录不可恢复警告', () => {
+    const round = parseProject(legacySettingsEnvelope('junk'))
+    expect(round.content.settings.characters).toEqual([])
+    expect(round.content.settings.locations).toEqual([])
+    expect(
+      round.warnings.some(
+        (w) => w.includes('settings') && w.includes('非普通对象'),
+      ),
+    ).toBe(true)
+  })
+
+  it('设定桶缺失记录警告；合法旧数组保持且无设定桶诊断', () => {
+    const missing = parseProject(legacySettingsEnvelope({ characters: [] }))
+    expect(missing.content.settings.locations).toEqual([])
+    expect(
+      missing.warnings.some(
+        (w) => w.includes('settings.locations') && w.includes('缺失'),
+      ),
+    ).toBe(true)
+    const legal = parseProject(
+      legacySettingsEnvelope({
+        characters: [{ id: 'c1', name: 'Alice', gradient: 'red' }],
+        locations: [{ id: 'l1', name: 'room' }],
+      }),
+    )
+    expect(legal.content.settings.characters).toHaveLength(1)
+    expect(legal.content.settings.characters[0]?.name).toBe('Alice')
+    expect(legal.content.settings.locations).toHaveLength(1)
+    expect(legal.warnings.some((w) => w.includes('settings.'))).toBe(false)
+  })
+})
