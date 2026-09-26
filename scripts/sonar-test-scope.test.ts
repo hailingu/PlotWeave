@@ -201,7 +201,8 @@ describe('测试设施导入者侧分类守卫（issue #343，拆分防遗漏）
     }
     for (const [target, sources] of importers) {
       const productSources = sources.filter(
-        (source) => !facilityKeys.has(source) && !/\.test\.tsx?$/.test(source),
+        (source) =>
+          !facilityKeys.has(source) && !/\.test(?:-d)?\.tsx?$/.test(source),
       )
       if (facilityKeys.has(target)) {
         // 已分类设施不得出现产品导入者（issue #343 评审）：应用侧一旦
@@ -242,6 +243,9 @@ describe('vite 覆盖率排除与设施清单同源（issue #343）', () => {
     const offenders: string[] = []
     for (const key of graph.keys()) {
       const repoPath = `src/${key}`
+      // 编译期类型探针 *.test-d.ts 由既有 glob（issue #231/#311）自动
+      // 归类，反向核验只针对产品模块（issue #343 评审）。
+      if (/\.test-d\.tsx?$/.test(key)) continue
       if (
         !facilityKeys.has(key) &&
         exclude.some((pattern) => sonarPatternToRegExp(pattern).test(repoPath))

@@ -157,7 +157,8 @@ reverse import graph reuses `moduleGraph`'s AST edge resolution, includes
 `.tsx`), and treats both value and type-only edges as evidence — any
 production-side import (value or type) anchors a module in product source,
 while a module whose entire importer set is test facilities or test files
-(type or value) must be classified. The vitest coverage `exclude` is
+(type or value, `*.test-d.ts` probes included) must be classified. The
+vitest coverage `exclude` is
 additionally checked in reverse: no exclude pattern may match a maintained
 module outside the facility list, so a broad pattern cannot silently drop
 product coverage. The zero-importer production entry
