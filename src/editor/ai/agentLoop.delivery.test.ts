@@ -510,6 +510,33 @@ describe('纯讨论不触发无改动纠正循环（issue #341）', () => {
     expect(result.completionError).toEqual(expect.any(String))
     expect(chat).toHaveBeenCalledTimes(4) // 首次 + 3 次纠正，配额不变
   })
+
+  it('未闭合围栏内的坏批次仍是交付尝试（issue #341 评审）', async () => {
+    // 截断/漏写闭合围栏：呈交信封不完整但形态可辨——改写判非动作后
+    // 回复形态是唯一信号，不得当普通讨论放行
+    chat
+      .mockResolvedValueOnce({ role: 'assistant', content: '{"action":false}' })
+      .mockResolvedValue({
+        role: 'assistant',
+        content: '```json\n{"commands": [bad]',
+      })
+    const result = await run('继续')
+    expect(result.completionError).toEqual(expect.any(String))
+    expect(chat).toHaveBeenCalledTimes(5) // 改写 + 首次 + 3 次纠正
+  })
+
+  it('美化排版的裸 JSON 批次仍是交付尝试（issue #341 评审）', async () => {
+    // 非 {\"commands\" 紧凑前缀的开括号形态：同样构成呈交信封
+    chat
+      .mockResolvedValueOnce({ role: 'assistant', content: '{"action":false}' })
+      .mockResolvedValue({
+        role: 'assistant',
+        content: '{\n  "commands": [bad]',
+      })
+    const result = await run('继续')
+    expect(result.completionError).toEqual(expect.any(String))
+    expect(chat).toHaveBeenCalledTimes(5)
+  })
 })
 
 describe('解析失败属于整批交付失败', () => {
