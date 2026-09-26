@@ -63,3 +63,14 @@ export function extractBatchJson(
   }
   return undefined
 }
+
+/** 批次呈交形态探测（issue #341）：模型呈交批次的词法形态——```json 围栏
+ * 内含 commands 字段，或以裸 {"commands" 前缀开头，与 extractBatchJson 的
+ * 提取视野一致。命中表示本轮呈交了批次形态的内容，可解析性另由
+ * extractBatchJson 判定；无围栏的行内字段解释、引用与代码示例不构成呈交
+ * ——纯讨论不得据此锁存交付期待并烧纠正预算。 */
+export function looksLikeBatchAttempt(text: string): boolean {
+  const last = lastFenceBody(text)
+  if (last !== null && /"commands"\s*:/.test(last)) return true
+  return text.trim().startsWith('{"commands"')
+}

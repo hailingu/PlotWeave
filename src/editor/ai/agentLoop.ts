@@ -5,7 +5,7 @@ import {
   needsActionRewrite,
 } from './actionIntent'
 import { rewriteActionQuery } from './queryRewrite'
-import { extractBatchJson } from './batchText'
+import { extractBatchJson, looksLikeBatchAttempt } from './batchText'
 import { GRAPH_DIGEST_MAX_CHARS } from './graphDigest'
 import {
   batchIssueText,
@@ -298,7 +298,10 @@ export async function runAgentLoop(
     const attempted =
       calls.length > readRequests.length ||
       validation !== null ||
-      /"commands"\s*:/.test(prose)
+      // 呈交形态（围栏内 commands 字段/裸批次前缀）才算词法级尝试：
+      // 无围栏的行内字段解释、引用与代码示例是纯讨论，不得烧纠正预算
+      // （issue #341）
+      looksLikeBatchAttempt(prose)
     expectsPreview ||= attempted || claimsActionPreview(prose)
     const readsOnly =
       !attempted && errors.length === 0 && readRequests.length > 0
