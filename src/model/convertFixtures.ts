@@ -2,8 +2,8 @@
  * convert 测试族的共享夹具：固定时钟与覆盖五类节点 + 三种边 + 设定集 +
  * 视口的完整会话文档，供 convert*.test.ts 各契约分文件共用。
  */
-import type { Edge } from '@xyflow/react'
-import type { CanvasNode } from '../editor/nodes/types'
+import type { SessionEdge } from './session'
+import type { SessionNode } from './session'
 import type { ProjectContent } from './content'
 
 /** 断言用固定时钟：序列化盖戳的可重复基线（不取真实当前时刻）。 */
@@ -11,7 +11,7 @@ export const NOW = new Date('2026-08-28T12:00:00.000Z')
 
 /** 完整会话文档的五类样例节点：scene（s1，携带运行态字段与可选布局/
  * 分集字段）/ beat（b1）/ dialogue（d1）/ branch（br1，双选项）/ shot（sh1）。 */
-function mkSampleNodes(): CanvasNode[] {
+function mkSampleNodes(): SessionNode[] {
   return [
     {
       id: 's1',
@@ -30,13 +30,13 @@ function mkSampleNodes(): CanvasNode[] {
         characterIds: ['ch-1'],
         episodeNo: 2,
       },
-    } as unknown as CanvasNode,
+    } as unknown as SessionNode,
     {
       id: 'b1',
       type: 'beat',
       position: { x: 0, y: 0 },
       data: { name: '转折', tone: '压抑', episodeNo: 2 },
-    } as unknown as CanvasNode,
+    } as unknown as SessionNode,
     {
       id: 'd1',
       type: 'dialogue',
@@ -54,7 +54,7 @@ function mkSampleNodes(): CanvasNode[] {
           },
         ],
       },
-    } as unknown as CanvasNode,
+    } as unknown as SessionNode,
     {
       id: 'br1',
       type: 'branch',
@@ -67,7 +67,7 @@ function mkSampleNodes(): CanvasNode[] {
         ],
         episodeNo: 2,
       },
-    } as unknown as CanvasNode,
+    } as unknown as SessionNode,
     {
       id: 'sh1',
       type: 'shot',
@@ -79,13 +79,13 @@ function mkSampleNodes(): CanvasNode[] {
         prompt: ' cinematic rain ',
         refs: [{ id: 'ref-1', kind: 'character', label: '林晚' }],
       },
-    } as unknown as CanvasNode,
+    } as unknown as SessionNode,
   ]
 }
 
 /** 三种边形态的样例：sequence（e1）/ branch（e2，绑定 opt-2 选项）/
  * attach（e3，scene → shot）。 */
-function mkSampleEdges(): Edge[] {
+function mkSampleEdges(): SessionEdge[] {
   return [
     {
       id: 'e1',
@@ -93,21 +93,21 @@ function mkSampleEdges(): Edge[] {
       target: 'd1',
       className: 'pw-edge-sequence',
       selected: true,
-    } as Edge,
+    } as SessionEdge,
     {
       id: 'e2',
       source: 'br1',
       sourceHandle: 'option-opt-2',
       target: 'd1',
       type: 'branch',
-    } as Edge,
+    } as SessionEdge,
     {
       id: 'e3',
       source: 's1',
       sourceHandle: 'shots',
       target: 'sh1',
       className: 'pw-edge-attach',
-    } as Edge,
+    } as SessionEdge,
   ]
 }
 

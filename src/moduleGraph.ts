@@ -380,19 +380,11 @@ export function modelFrameworkRuntimeViolations(
   return offenders
 }
 
-/** model → editor 运行时值依赖的白名单（issue #266）：登记的纯叶子
- * 规则模块（自身零导入）——graphRules（边/端口字面量与判别）与
- * settings（设定集默认值/归一化）。type-only 依赖不受限。 */
-const MODEL_EDITOR_RUNTIME_ALLOWLIST = new Set([
-  'editor/graphRules.ts',
-  'editor/settings.ts',
-])
-
-/** 模型层 → editor 的运行时依赖越界（issue #266；PR #305 三轮评审升级
- * 为闭包口径）：运行时可达闭包内**任何**模块的 editor/ 值依赖只允许
- * 白名单纯叶子，其余 editor 模块（组件/hook/面板等）仅 type-only——
- * 经共享模块间接触达 editor 实现同样违规。返回 `文件 → 目标` 违规
- * 清单，空 = 通过。 */
+/** model → editor 的运行时值依赖越界（issue #266；issue #353 方向一收紧：
+ * 原「登记纯叶子白名单」随模型层会话类型自有化一并移除——model 不再持有
+ * 任何 editor 运行时依赖，运行时可达闭包内**任何**模块的 editor/ 值依赖
+ * 一律违规；editor 模块仅允许 type-only 编译期引用。经共享模块间接触达
+ * editor 实现同样违规。返回 `文件 → 目标` 违规清单，空 = 通过。 */
 export function modelEditorRuntimeViolations(
   graph: Map<string, ModuleEdge[]>,
 ): string[] {
@@ -400,34 +392,39 @@ export function modelEditorRuntimeViolations(
   for (const file of modelRuntimeClosure(graph)) {
     for (const e of graph.get(file) ?? []) {
       // 动态不可解析导入（PR #305 四轮评审）优先于目标前缀判定：运行时
-      // 可加载任意模块（含非白名单 editor 实现），白名单无法静态验证
+      // 可加载任意模块（含 editor 实现），纯度无法静态验证
       if (e.dynamic === true) {
         offenders.push(`${file} → 动态导入（不可静态解析）：${e.target}`)
         continue
       }
       if (!e.target.startsWith('editor/')) continue
-      if (!e.typeOnly && !MODEL_EDITOR_RUNTIME_ALLOWLIST.has(e.target))
-        offenders.push(`${file} → ${e.target}`)
+      if (!e.typeOnly) offenders.push(`${file} → ${e.target}`)
     }
   }
   return offenders
 }
 
-/** 白名单目标的运行时叶子校验（PR #305 评审）：值依赖白名单成立的
- * 前提是目标自身无运行时出边（相对值边与任何外部包运行时边都算）——
- * 否则 model 经白名单获得传递性运行时依赖而守卫仍为空。type-only
- * 出边不破例。返回 `目标 → 边` 清单，空 = 通过。 */
-export function allowlistRuntimeLeafViolations(
+/** 模型层编译期独立性违规（issue #353 方向一）：model 是落盘 schema 的
+ * 所有者，其运行时可达闭包内**任何**模块不得编译期依赖 UI 层与画布库
+ * ——指向 editor/ 的任何边（含 import type）与指向 @xyflow/* 的任何
+ * 外部边（含 import type）都使「编辑器节点形状变更」等价于「持久化
+ * schema 变更」，即类型所有权倒置复发。闭包口径与运行时守卫一致
+ * （经共享叶子的传递依赖同论）；不可静态解析的动态导入目标运行时才定、
+ * 无法判定编译期目标，由两个运行时守卫 fail-closed，不在此重复计违规。
+ * 返回 `文件 → 目标` 违规清单，空 = 通过。 */
+export function modelCompileTimeInversionViolations(
   graph: Map<string, ModuleEdge[]>,
   external: Map<string, ExternalEdge[]>,
 ): string[] {
   const offenders: string[] = []
-  for (const target of MODEL_EDITOR_RUNTIME_ALLOWLIST) {
-    for (const e of graph.get(target) ?? []) {
-      if (!e.typeOnly) offenders.push(`${target} → ${e.target}`)
+  for (const file of modelRuntimeClosure(graph)) {
+    for (const e of graph.get(file) ?? []) {
+      if (e.target.startsWith('editor/'))
+        offenders.push(`${file} → ${e.target}`)
     }
-    for (const e of external.get(target) ?? []) {
-      if (!e.typeOnly) offenders.push(`${target} → ${e.spec}（外部）`)
+    for (const e of external.get(file) ?? []) {
+      if (e.dynamic === true) continue
+      if (e.spec.startsWith('@xyflow/')) offenders.push(`${file} → ${e.spec}`)
     }
   }
   return offenders

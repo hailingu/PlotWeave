@@ -3,22 +3,20 @@
  * （tsconfig.strict.json——主构建与测试排除 *.test-d.ts），断言
  * 「字段不得存在」的判别联合成员拒绝显式 undefined、合法的字段清除
  * 语义保留。断言以条件类型的静态求值表达：契约被破坏时探针类型
- * 不再满足约束，严格检查非零退出。
+ * 不再满足约束，严格检查非零退出。本文件只引用 model 自有类型
+ * （issue #353：模型层编译期不依赖 editor/）；编辑器运行态与补丁面的
+ * 同款探针见 src/editor/nodes/sessionCompat.test-d.ts。
  */
 import type {
   DerivedMeta,
   ImageMeta,
   ProjectDocument,
+  SceneSpec,
   ShotMeta,
   ShotRef,
 } from './document'
 import { CURRENT_SCHEMA_VERSION } from './document'
-import type { PatchShape } from '../editor/nodes/patch'
-import type {
-  LinePatch,
-  SceneNodeData,
-  ShotRef as RuntimeShotRef,
-} from '../editor/nodes/types'
+import type { SceneSessionData, SessionNode } from './session'
 
 type Extends<A, B> = A extends B ? true : false
 type Expect<T extends true> = T
@@ -51,20 +49,6 @@ export type ShotRefFreeArmAccepts = Expect<
   Extends<{ id: string; kind: 'location'; label: 'L' }, ShotRef>
 >
 
-/** 运行态 ShotRef（editor/nodes/types）同款互斥契约。 */
-export type RuntimeShotRefReferenceArmRejectsLabel = Reject<
-  Extends<
-    { id: string; kind: 'character'; assetId: string; label: undefined },
-    RuntimeShotRef
-  >
->
-export type RuntimeShotRefFreeArmRejectsAssetId = Reject<
-  Extends<
-    { id: string; kind: 'location'; label: string; assetId: undefined },
-    RuntimeShotRef
-  >
->
-
 /** 派生/分镜/图片 meta 的禁写字段拒绝显式 undefined。 */
 export type DerivedMetaRejectsLabel = Reject<
   Extends<{ episodeNo: number; label: undefined }, DerivedMeta>
@@ -76,17 +60,38 @@ export type ImageMetaRejectsLabelAndEpisodeNo = Reject<
   Extends<{ label: undefined; episodeNo: undefined }, ImageMeta>
 >
 
-/** 合法的字段清除语义保留（issue #231 验收）：补丁面允许对可选字段显式
- * undefined（mergeNodeData 逐键覆盖、序列化剥离 undefined 键）——清除与
- * 缺省的区分收口在补丁类型，不在领域形状。 */
-export type ScenePatchAllowsClearingEpisodeNo = Expect<
-  Extends<{ episodeNo: number | undefined }, PatchShape<SceneNodeData>>
+/** 会话侧场景 data（model/session，issue #353）：name/time 为会话必填
+ * （存储 spec 的 time 可选、加载归一化兜底空串），缺失形状被拒绝。 */
+export type SceneSessionDataRejectsMissingTime = Reject<
+  Extends<
+    Omit<SceneSpec, 'time'> & { name: string; episodeNo?: number },
+    SceneSessionData
+  >
+>
+export type SceneSessionDataAcceptsFlattenedShape = Expect<
+  Extends<
+    // 匿名对象字面量类型（带隐式索引签名）——与 fromStoryNode 的展开构造
+    // 同构；接口别名无隐式索引签名，不能作为本探针的源形状
+    {
+      sceneNo: number
+      interior: boolean
+      locationId?: string
+      time: string
+      weather?: string
+      synopsis: string
+      characterIds: string[]
+      name: string
+      episodeNo?: number
+    },
+    SceneSessionData
+  >
 >
 
-/** 对白行级补丁同款清除通道（kind 切换清空 speaker/side、说话人选择清空
- * speaker），领域形状 DialogueLine 本身不放宽。 */
-export type LinePatchAllowsClearingSpeaker = Expect<
-  Extends<{ speaker: undefined }, LinePatch>
+/** 会话节点按 type 判别（model/session）：scene 成员的 data 精确为
+ * SceneSessionData，编辑器运行态经结构兼容进入（sessionCompat.test-d）。 */
+type SessionSceneMember = Extract<SessionNode, { type: 'scene' }>
+export type SessionNodeDiscriminatesByType = Expect<
+  Equal<SessionSceneMember['data'], SceneSessionData>
 >
 
 /** 当前文档 schemaVersion 的编译期判别（issue #312）：ProjectDocument 表示

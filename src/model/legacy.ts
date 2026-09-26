@@ -4,14 +4,13 @@
  * 本模块把它升级为当前运行态形状，再由 convert.ts 包装为 v1 信封。
  */
 import { trimTitleWhitespace } from './titleWhitespace'
-import type { Edge } from '@xyflow/react'
-import type { CanvasNode } from '../editor/nodes/types'
-import { branchOptionHandle, branchOptionIdOf } from '../editor/graphRules'
+import { branchOptionHandle, branchOptionIdOf } from './graphSemantics'
 import {
   newEntityId,
   normalizeSettings,
   type ProjectSettings,
-} from '../editor/settings'
+} from './settings'
+import type { SessionEdge, SessionNode } from './session'
 import { uid } from '../uid'
 import type { ProjectContent } from './content'
 
@@ -276,7 +275,7 @@ function migrateSceneLocation(
  * toStoryNode 会把它摊进 v1 spec，归一化按键存在剥离并误报「非字符串」；
  * 输入显式携带的异型 locationId（null 等）仍原样保留，交由 v1 剥离并警告
  * （真实输入缺陷的剥离诊断不丢失）。 */
-function migrateSceneNode(ctx: MigrationCtx, node: CanvasNode): CanvasNode {
+function migrateSceneNode(ctx: MigrationCtx, node: SessionNode): SessionNode {
   if (node.type !== 'scene') return node
   const d = { ...(node.data as Record<string, unknown>) }
   const avatars = d.characters
@@ -304,12 +303,15 @@ function migrateSceneNode(ctx: MigrationCtx, node: CanvasNode): CanvasNode {
   const locationId = migrateSceneLocation(ctx, String(node.id), d)
   const nextData: Record<string, unknown> = { ...d, characterIds }
   if (locationId !== undefined) nextData.locationId = locationId
-  return { ...node, data: nextData } as CanvasNode
+  return { ...node, data: nextData } as SessionNode
 }
 
 /** 对白节点的 v0 字段迁移：对象 speaker（头像标签）解析为角色实体 id；
  * 字符串 speaker 随空白 id 重发改写（⑤）；台词行 id 非字符串就地重发。 */
-function migrateDialogueNode(ctx: MigrationCtx, node: CanvasNode): CanvasNode {
+function migrateDialogueNode(
+  ctx: MigrationCtx,
+  node: SessionNode,
+): SessionNode {
   if (node.type !== 'dialogue') return node
   const d = node.data
   const lines = d.lines.map((line) => {
@@ -338,13 +340,13 @@ function migrateDialogueNode(ctx: MigrationCtx, node: CanvasNode): CanvasNode {
     }
     return next
   })
-  return { ...node, data: { ...d, lines } } as CanvasNode
+  return { ...node, data: { ...d, lines } } as SessionNode
 }
 
 /** 分支节点的 v0 字段迁移：字符串选项补稳定 id；空白或与首见重复的 id
  * 保首见重发（下标句柄改写与 v1 键控列表修复都以「选项 id 唯一非空」为
  * 前提，否则重复 id 会被归一化二次重发、连线静默滑向首见选项）。 */
-function migrateBranchNode(ctx: MigrationCtx, node: CanvasNode): CanvasNode {
+function migrateBranchNode(ctx: MigrationCtx, node: SessionNode): SessionNode {
   if (node.type !== 'branch') return node
   const d = node.data
   const seen = new Set<string>()
@@ -366,11 +368,11 @@ function migrateBranchNode(ctx: MigrationCtx, node: CanvasNode): CanvasNode {
     seen.add(id)
     return o
   })
-  return { ...node, data: { ...d, options } } as CanvasNode
+  return { ...node, data: { ...d, options } } as SessionNode
 }
 
 /** 分镜节点的 v0 字段迁移：引用位 id 非字符串就地重发。 */
-function migrateShotNode(ctx: MigrationCtx, node: CanvasNode): CanvasNode {
+function migrateShotNode(ctx: MigrationCtx, node: SessionNode): SessionNode {
   if (node.type !== 'shot') return node
   const d = node.data
   const refs = d.refs.map((r) => {
@@ -380,7 +382,7 @@ function migrateShotNode(ctx: MigrationCtx, node: CanvasNode): CanvasNode {
     }
     return r
   })
-  return { ...node, data: { ...d, refs } } as CanvasNode
+  return { ...node, data: { ...d, refs } } as SessionNode
 }
 
 /** v0 → v1 迁移链主入口（docs/data-model.md §11）：先修设定集实体 id（重发
@@ -450,10 +452,10 @@ export function rewriteIndexOptionHandles(
   doc: ProjectContent,
   warnings?: string[],
 ): ProjectContent {
-  const nodesById = new Map<string, CanvasNode>()
+  const nodesById = new Map<string, SessionNode>()
   for (const n of doc.nodes) if (!nodesById.has(n.id)) nodesById.set(n.id, n)
   const edges = doc.edges
-    .map((e): Edge | null => {
+    .map((e): SessionEdge | null => {
       const optionId = branchOptionIdOf(e.sourceHandle)
       if (optionId === undefined) return e
       const src = nodesById.get(e.source)
@@ -471,6 +473,6 @@ export function rewriteIndexOptionHandles(
       )
       return null
     })
-    .filter((e): e is Edge => e !== null)
+    .filter((e): e is SessionEdge => e !== null)
   return { ...doc, edges }
 }

@@ -4,7 +4,7 @@
  * 数值型稳定 id 与越界旧下标句柄的歧义隔离。
  */
 import { describe, expect, it } from 'vitest'
-import type { Edge } from '@xyflow/react'
+import type { SessionEdge } from './session'
 import { parseProject, serializeProject } from './convert'
 import type { ProjectDocument } from './document'
 import { NOW, mkContent } from './convertFixtures'
@@ -16,8 +16,11 @@ describe('边句柄规范（§5：匿名端口句柄必须省略）', () => {
       ...content.edges[0],
       sourceHandle: 'stale-option',
       targetHandle: 't-in',
-    } as Edge
-    content.edges[2] = { ...content.edges[2], targetHandle: 't-in' } as Edge
+    } as SessionEdge
+    content.edges[2] = {
+      ...content.edges[2],
+      targetHandle: 't-in',
+    } as SessionEdge
     const doc = serializeProject(content, 'p-1', NOW)
     expect(doc.graph.edges[0]).toEqual({
       id: 'e1',

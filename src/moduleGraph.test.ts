@@ -2,11 +2,11 @@ import { fileURLToPath } from 'node:url'
 import * as ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 import {
-  allowlistRuntimeLeafViolations,
   buildSrcExternalEdges,
   buildSrcModuleGraph,
   cyclesOf,
   externalEdgesOfSource,
+  modelCompileTimeInversionViolations,
   modelEditorRuntimeViolations,
   modelFrameworkRuntimeViolations,
   modelRuntimeClosure,
@@ -29,9 +29,11 @@ import {
  * import('…').Type 类型查询在 AST 中是 ImportTypeNode 而非
  * CallExpression，漏采会让反向类型环对编译期断言隐形。
  *
- * 模型层纯度守卫（issue #266）：无环是比分层纯度更弱的性质，二者不可
- * 互替——框架运行时依赖禁止与 model → editor 运行时值依赖白名单由
- * 专用判定函数另行检查，判定契约经合成图反例验证（合法依赖不误报）。
+ * 模型层纯度守卫（issue #266、issue #353）：无环是比分层纯度更弱的性质，
+ * 二者不可互替——框架运行时依赖禁止、model → editor 运行时值依赖禁止
+ * （#353 方向一后原登记纯叶子白名单已随模型层类型自有化移除）与模型层
+ * 编译期独立性由专用判定函数另行检查，判定契约经合成图反例验证（合法
+ * 依赖不误报）。
  */
 
 /** src 根目录：测试文件位于 src/ 下，直接锚定自身位置。 */
@@ -134,9 +136,8 @@ describe('模型层纯度守卫（issue #266）', () => {
       [
         'model/a.ts',
         [
-          // 登记的纯叶子值依赖与任意 type-only 依赖均合法
-          { target: 'editor/graphRules.ts', typeOnly: false },
-          { target: 'editor/settings.ts', typeOnly: false },
+          // type-only 依赖合法（编译期擦除）；任何 editor 值依赖均越界
+          // （issue #353 方向一后白名单已移除，graphRules/settings 同论）
           { target: 'editor/nodes/types.ts', typeOnly: true },
           { target: 'editor/SomePanel.tsx', typeOnly: false },
         ],
@@ -158,7 +159,7 @@ describe('模型层纯度守卫（issue #266）', () => {
     ).toEqual([])
   })
 
-  it('src/model → editor 的运行时值依赖限于登记的纯叶子规则', () => {
+  it('src/model 运行时闭包无 editor 值依赖（issue #353 后无白名单）', () => {
     expect(modelEditorRuntimeViolations(buildSrcModuleGraph(SRC_ROOT))).toEqual(
       [],
     )
@@ -202,37 +203,7 @@ describe('模型层纯度守卫的边界完整性（PR #305 评审）', () => {
     ])
   })
 
-  it('反例：白名单目标的运行时出边破例（相对值边与外部运行时边）被识别', () => {
-    const graph = new Map<string, ModuleEdge[]>([
-      [
-        'editor/graphRules.ts',
-        [
-          { target: 'model/document.ts', typeOnly: false },
-          { target: 'editor/other.ts', typeOnly: true },
-        ],
-      ],
-      [
-        'editor/settings.ts',
-        [{ target: 'editor/graphRules.ts', typeOnly: true }],
-      ],
-    ])
-    const external = new Map<string, ExternalEdge[]>([
-      ['editor/settings.ts', [{ spec: 'lodash', typeOnly: false }]],
-      ['editor/graphRules.ts', [{ spec: '@xyflow/react', typeOnly: true }]],
-    ])
-    expect(allowlistRuntimeLeafViolations(graph, external)).toEqual([
-      'editor/graphRules.ts → model/document.ts',
-      'editor/settings.ts → lodash（外部）',
-    ])
-  })
-
-  it('真图：白名单目标保持运行时叶子，模型层无 JSX/框架运行时依赖', () => {
-    expect(
-      allowlistRuntimeLeafViolations(
-        buildSrcModuleGraph(SRC_ROOT),
-        buildSrcExternalEdges(SRC_ROOT),
-      ),
-    ).toEqual([])
+  it('真图：模型层无 JSX/框架运行时依赖', () => {
     expect(
       modelFrameworkRuntimeViolations(
         buildSrcModuleGraph(SRC_ROOT),
@@ -242,15 +213,64 @@ describe('模型层纯度守卫的边界完整性（PR #305 评审）', () => {
   })
 })
 
+describe('模型层编译期独立性（issue #353，方向一）', () => {
+  /** model 是落盘 schema 的所有者：闭包内对 editor/ 的任何编译期边
+   * （类型或运行时）与对 @xyflow/* 的任何编译期边都是类型所有权倒置
+   * ——编辑器节点形状变更不得等价于持久化 schema 变更。 */
+  it('反例：editor/ 类型边、@xyflow 类型边被识别；合法依赖与 editor→model 不误报', () => {
+    const graph = new Map<string, ModuleEdge[]>([
+      [
+        'model/a.ts',
+        [
+          { target: 'editor/nodes/types.ts', typeOnly: true },
+          { target: 'shared.ts', typeOnly: false },
+        ],
+      ],
+      // 经共享叶子的传递类型边同论（闭包口径）
+      ['shared.ts', [{ target: 'editor/settings.ts', typeOnly: true }]],
+      // editor → model 是正常依赖方向
+      ['editor/b.tsx', [{ target: 'model/session.ts', typeOnly: false }]],
+    ])
+    const external = new Map<string, ExternalEdge[]>([
+      [
+        'model/a.ts',
+        [
+          { spec: '@xyflow/react', typeOnly: true },
+          // react 类型依赖不在本守卫口径（框架运行时由守卫①另行约束）
+          { spec: 'react', typeOnly: true },
+        ],
+      ],
+      ['shared.ts', [{ spec: 'lodash', typeOnly: false }]],
+      ['editor/b.tsx', [{ spec: '@xyflow/react', typeOnly: false }]],
+    ])
+    expect(modelCompileTimeInversionViolations(graph, external)).toEqual([
+      'model/a.ts → editor/nodes/types.ts',
+      'model/a.ts → @xyflow/react',
+      'shared.ts → editor/settings.ts',
+    ])
+  })
+
+  it('真图：model 闭包无 editor/ 编译期边、无 @xyflow 编译期边', () => {
+    expect(
+      modelCompileTimeInversionViolations(
+        buildSrcModuleGraph(SRC_ROOT),
+        buildSrcExternalEdges(SRC_ROOT),
+      ),
+    ).toEqual([])
+  })
+})
+
 describe('模型层运行时闭包（PR #305 二轮评审）', () => {
-  it('闭包含共享叶子与 editor 纯叶子，不含不可达的组件层', () => {
+  it('闭包含共享叶子，不含 editor 纯叶子与不可达的组件层（issue #353 后 model 无 editor 依赖）', () => {
     const closure = modelRuntimeClosure(buildSrcModuleGraph(SRC_ROOT))
     // 评审引用的具体传递路径：model/normalize*.ts → src/uid.ts（运行时边）
     expect(closure.has('uid.ts')).toBe(true)
-    expect(closure.has('editor/graphRules.ts')).toBe(true)
-    expect(closure.has('editor/settings.ts')).toBe(true)
+    // issue #353 方向一：model 改为自有 graphSemantics/settings，白名单
+    // 叶子不再是 model 的依赖，闭包不含任何 editor 模块
+    expect(closure.has('editor/graphRules.ts')).toBe(false)
+    expect(closure.has('editor/settings.ts')).toBe(false)
     // 组件层不可达：editor 面板/视图不在 model 运行时闭包内
-    expect([...closure].some((k) => k.startsWith('editor/panels/'))).toBe(false)
+    expect([...closure].some((k) => k.startsWith('editor/'))).toBe(false)
     expect(closure.has('home/HomePage.tsx')).toBe(false)
   })
 
@@ -307,19 +327,21 @@ describe('动态不可解析导入的 fail-closed（PR #305 四轮评审）', ()
     expect(cyclesOf(edges)).toEqual([])
   })
 
-  it('守卫②：闭包内相对动态导入视为违规（运行时可达任意模块，白名单不可静态验证）', () => {
+  it('守卫②：闭包内相对动态导入视为违规（运行时可达任意模块，纯度不可静态验证）', () => {
     const graph = new Map<string, ModuleEdge[]>([
       ['model/a.ts', [{ target: 'shared.ts', typeOnly: false }]],
       [
         'shared.ts',
         [
           { target: './x/${n}', typeOnly: false, dynamic: true },
+          // issue #353 后白名单移除：editor 值依赖（原登记叶子同论）一并违规
           { target: 'editor/graphRules.ts', typeOnly: false },
         ],
       ],
     ])
     expect(modelEditorRuntimeViolations(graph)).toEqual([
       'shared.ts → 动态导入（不可静态解析）：./x/${n}',
+      'shared.ts → editor/graphRules.ts',
     ])
   })
 

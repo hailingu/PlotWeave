@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest'
 import { parseProject, serializeProject } from './convert'
 import type { ProjectContent } from './content'
 import { CURRENT_SCHEMA_VERSION, type ProjectDocument } from './document'
-import type { CanvasNode } from '../editor/nodes/types'
+import type { SessionNode } from './session'
 import { NOW, mkContent } from './convertFixtures'
 
 describe('serializeProject（会话文档 → ProjectDocument 落盘格式）', () => {
@@ -579,7 +579,7 @@ describe('parseProject（ProjectDocument → 会话文档，§11 归一化）', 
         position: { x: 0, y: 0 },
         selected: false,
         data: { name: `节拍 ${id}`, tone: 't' },
-      }) as unknown as CanvasNode
+      }) as unknown as SessionNode
     const content: ProjectContent = {
       name: 'x',
       nodes: [beat('a'), beat('a\u0000b'), beat('b\u0000c'), beat('c')],

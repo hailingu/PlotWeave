@@ -10,15 +10,10 @@ import type {
   ShotMeta,
   ShotSpec,
 } from './document'
-import type {
-  BranchFlowNode,
-  SceneFlowNode,
-  SceneNodeData,
-  ShotFlowNode,
-} from '../editor/nodes/types'
+import type { SceneSessionData, SessionNode } from './session'
 
-/** 场景运行态节点（§4.2 字段）。 */
-function sceneFlowNode(): SceneFlowNode {
+/** 场景会话节点（§4.2 字段；issue #353：会话类型为 model 自有）。 */
+function sceneFlowNode(): SessionNode {
   return {
     id: 's1',
     type: 'scene',
@@ -101,8 +96,8 @@ describe('toStoryNode（issue 16：按节点类型精确构造落盘联合成员
     >().toEqualTypeOf<string>()
   })
 
-  it('分镜卡：data 即 ShotSpec（ShotNodeData 与落盘 spec 同构）', () => {
-    const shot: ShotFlowNode = {
+  it('分镜卡：data 即 ShotSpec（会话 data 与落盘 spec 同构）', () => {
+    const shot: SessionNode = {
       id: 'sh1',
       type: 'shot',
       position: { x: 0, y: 0 },
@@ -123,9 +118,9 @@ describe('toStoryNode（issue 16：按节点类型精确构造落盘联合成员
 
   it('分镜卡落盘剥离运行态混入的过期 episodeNo/name（随宿主场景分集，§3.5）', () => {
     // v1 文档残留的 spec.episodeNo 经归一化透传、fromStoryNode 拍平后可混入
-    // 运行态 shot data（Record 索引签名允许）；落盘必须剥离——否则写回 spec
-    // 后 episodeOfNode 优先读它而非宿主场景，错集归属永远无法被保存修复
-    const shot: ShotFlowNode = {
+    // 会话 data（索引签名允许）；落盘必须剥离——否则写回 spec 后
+    // episodeOfNode 优先读它而非宿主场景，错集归属永远无法被保存修复
+    const shot: SessionNode = {
       id: 'sh1',
       type: 'shot',
       position: { x: 0, y: 0 },
@@ -153,10 +148,10 @@ describe('toStoryNode（issue 16：按节点类型精确构造落盘联合成员
   })
 
   it('分支节点落盘剥离运行态混入的过期 name（派生标题不落镜像，§4.1）', () => {
-    // v1 残留的 spec.name 经归一化透传、fromStoryNode 拍平后可混入运行态
+    // v1 残留的 spec.name 经归一化透传、fromStoryNode 拍平后可混入会话
     // branch data；BranchSpec 无 name（标题从 options 派生），落盘须剥离，
     // 否则禁写镜像被无限写回（与分镜卡 episodeNo 同域）
-    const branch: BranchFlowNode = {
+    const branch: SessionNode = {
       id: 'b1',
       type: 'branch',
       position: { x: 0, y: 0 },
@@ -177,10 +172,10 @@ describe('toStoryNode（issue 16：按节点类型精确构造落盘联合成员
 })
 
 describe('fromStoryNode（issue 16：落盘 → 运行态按类型构造）', () => {
-  it('场景节点 data 精确还原 SceneNodeData：spec 拍平 + meta.label→name', () => {
+  it('场景节点 data 精确还原 SceneSessionData：spec 拍平 + meta.label→name', () => {
     const flow = fromStoryNode(sceneDocNode())
     if (flow.type !== 'scene') throw new Error('判别失败')
-    expectTypeOf(flow.data).toEqualTypeOf<SceneNodeData>()
+    expectTypeOf(flow.data).toEqualTypeOf<SceneSessionData>()
     expect(flow.data).toEqual({
       name: '天台',
       sceneNo: 3,

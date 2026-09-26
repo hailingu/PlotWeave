@@ -5,9 +5,9 @@ import {
   rewriteIndexOptionHandles,
 } from './legacy'
 import type { ProjectContent } from './content'
-import type { CanvasNode } from '../editor/nodes/types'
+import type { SessionNode } from './session'
 
-const node = (n: CanvasNode): CanvasNode => n
+const node = (n: SessionNode): SessionNode => n
 
 /** 旧 schema 场景：characters 是头像对象数组、location 是字符串。 */
 const legacyScene = node({
@@ -27,7 +27,7 @@ const legacyScene = node({
     ],
     location: '天台',
   },
-} as unknown as CanvasNode)
+} as unknown as SessionNode)
 
 const legacyDialogue = node({
   id: 'd1',
@@ -47,7 +47,7 @@ const legacyDialogue = node({
       },
     ],
   },
-} as unknown as CanvasNode)
+} as unknown as SessionNode)
 
 describe('migrateProjectDocument（旧 schema → 引用 id 化）', () => {
   it('头像对象 → characterIds 并就地建实体；地点字符串 → locationId 并建地点实体', () => {
@@ -87,7 +87,7 @@ describe('migrateProjectDocument（旧 schema → 引用 id 化）', () => {
         synopsis: '',
         location: 42,
       },
-    } as unknown as CanvasNode)
+    } as unknown as SessionNode)
     const { doc, migrated } = migrateProjectDocument(
       {
         name: 'x',
@@ -140,7 +140,7 @@ describe('migrateProjectDocument（旧 schema → 引用 id 化）', () => {
         synopsis: '',
         characterIds: ['ch1'],
       },
-    } as unknown as CanvasNode)
+    } as unknown as SessionNode)
     const { doc, migrated } = migrateProjectDocument({
       name: 'x',
       nodes: [modern],
@@ -169,7 +169,7 @@ describe('migrateProjectDocument（旧 schema → 引用 id 化）', () => {
         time: '🌙 夜',
         synopsis: '',
       },
-    } as unknown as CanvasNode)
+    } as unknown as SessionNode)
     const { doc, migrated } = migrateProjectDocument({
       name: 'x',
       nodes: [bare],
@@ -199,9 +199,9 @@ describe('migrateProjectDocument · v0 头像兼容子步骤（§11：合并去�
         synopsis: '',
         ...extra,
       },
-    } as unknown as CanvasNode)
+    } as unknown as SessionNode)
   const run = (
-    scene: CanvasNode,
+    scene: SessionNode,
     characters: ProjectContent['settings']['characters'],
   ) =>
     migrateProjectDocument({
@@ -305,7 +305,7 @@ describe('migrateProjectDocument · v0 头像兼容子步骤（§11：合并去�
           synopsis: '',
           location,
         },
-      } as unknown as CanvasNode)
+      } as unknown as SessionNode)
     const { doc } = migrateProjectDocument({
       name: 'x',
       nodes: [sceneAt('  厨房 ')],
@@ -333,7 +333,7 @@ describe('migrateProjectDocument · v0 头像兼容子步骤（§11：合并去�
           synopsis: '',
           location: '   ',
         },
-      } as unknown as CanvasNode)
+      } as unknown as SessionNode)
     const warnings: string[] = []
     const { doc } = migrateProjectDocument(
       {
@@ -365,7 +365,7 @@ describe('migrateProjectDocument · 列表项稳定 id 回填（S6479）', () =>
         prompt: '？',
         options: ['坦白', { label: '隐瞒' }, { id: 'opt-keep', label: '沉默' }],
       },
-    } as unknown as CanvasNode)
+    } as unknown as SessionNode)
     const { doc, migrated } = migrateProjectDocument({
       name: 'x',
       nodes: [branch],
@@ -388,7 +388,7 @@ describe('migrateProjectDocument · 列表项稳定 id 回填（S6479）', () =>
       type: 'dialogue',
       position: { x: 0, y: 0 },
       data: { name: '对白', lines: [{ kind: 'action', text: '雨停' }] },
-    } as unknown as CanvasNode)
+    } as unknown as SessionNode)
     const shot = node({
       id: 'sh1',
       type: 'shot',
@@ -400,7 +400,7 @@ describe('migrateProjectDocument · 列表项稳定 id 回填（S6479）', () =>
         prompt: '',
         refs: [{ kind: 'audio', label: '雨声' }],
       },
-    } as unknown as CanvasNode)
+    } as unknown as SessionNode)
     const { doc, migrated } = migrateProjectDocument({
       name: 'x',
       nodes: [dialogue, shot],
@@ -430,7 +430,7 @@ describe('rewriteIndexOptionHandles（旧下标句柄改写，§11.1 ②）', ()
       type: 'branch',
       position: { x: 0, y: 0 },
       data: { prompt: '？', options },
-    } as unknown as CanvasNode)
+    } as unknown as SessionNode)
   const scene = node({
     id: 't1',
     type: 'scene',
@@ -443,7 +443,7 @@ describe('rewriteIndexOptionHandles（旧下标句柄改写，§11.1 ②）', ()
       synopsis: '',
       characterIds: [],
     },
-  } as unknown as CanvasNode)
+  } as unknown as SessionNode)
 
   it('规范 0 基下标改写到稳定选项 id；越界句柄隔离', () => {
     const { doc } = migrateProjectDocument({
@@ -491,7 +491,7 @@ describe('rewriteIndexOptionHandles · 重复节点 id 首见归属（issue #334
       type: 'branch',
       position: { x: 0, y: 0 },
       data: { prompt: 'choose', options },
-    } as unknown as CanvasNode)
+    } as unknown as SessionNode)
   const target = node({
     id: 't1',
     type: 'scene',
@@ -504,7 +504,7 @@ describe('rewriteIndexOptionHandles · 重复节点 id 首见归属（issue #334
       synopsis: '',
       characterIds: [],
     },
-  } as unknown as CanvasNode)
+  } as unknown as SessionNode)
 
   it('重复分支节点 id 按文档序首见节点解析下标句柄：末见节点不得改接归属', () => {
     const { doc } = migrateProjectDocument({
