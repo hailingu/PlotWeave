@@ -165,8 +165,52 @@ export function applyEpisodeFocus(
 }
 
 /**
- * 派生大纲分组：按集号升序，未分集殿底；组内保持原有 x 序与缩进层级。
- * 完全没有 episodeNo 时退化为单个未分集组（与旧大纲视图等价）。
+ * 剧情流线性序（§3.5 故事脊线的线性投影；issue #340）：叙事边拓扑序——
+ * 边（sequence/branch/attach，自环除外）约束先后，叙事前驱先行；attach
+ * 为派生从属（分镜行随宿主场景）。无前驱约束的节点（孤立节点、断链分量、
+ * 分支并列出口）与当前就绪节点按画布 x 序、再按 id 稳定交织——与创作大纲
+ * 附录 routeNodes 的线性化同语义。左侧大纲列表与剧本导出正文共用此序，
+ * 使拖拽重排 sequence 连线后列表、导出正文与附录一致；成环残留（会话图
+ * 经加载管线隔离，此处为运行态防御）按 x/id 补齐——列表不得丢行。
+ */
+export function storylineOrder(
+  nodes: CanvasNode[],
+  edges: Edge[],
+): CanvasNode[] {
+  const byId = new Map(nodes.map((n) => [n.id, n]))
+  const parents = new Map<string, Set<string>>()
+  for (const e of edges) {
+    if (e.source === e.target || !byId.has(e.source) || !byId.has(e.target))
+      continue
+    const set = parents.get(e.target) ?? new Set<string>()
+    set.add(e.source)
+    parents.set(e.target, set)
+  }
+  const byXId = (list: CanvasNode[]): CanvasNode[] =>
+    [...list].sort(
+      (a, b) => a.position.x - b.position.x || (a.id < b.id ? -1 : 1),
+    )
+  const ordered: CanvasNode[] = []
+  const done = new Set<string>()
+  let ready = byXId(nodes.filter((n) => !parents.has(n.id)))
+  while (ready.length > 0) {
+    const node = ready.shift()!
+    ordered.push(node)
+    done.add(node.id)
+    for (const candidate of nodes) {
+      const sources = parents.get(candidate.id)
+      if (sources?.delete(node.id) && sources.size === 0) ready.push(candidate)
+    }
+    ready = byXId(ready)
+  }
+  for (const node of byXId(nodes)) if (!done.has(node.id)) ordered.push(node)
+  return ordered
+}
+
+/**
+ * 派生大纲分组：按集号升序，未分集殿底；组内保持剧情流线性序与缩进层级
+ * （storylineOrder，issue #340：拖拽重排连线后列表随之更新，不再沿用
+ * 画布 x 序）。完全没有 episodeNo 时退化为单个未分集组（与旧大纲视图等价）。
  */
 export function buildOutlineGroups(
   nodes: CanvasNode[],
@@ -176,7 +220,7 @@ export function buildOutlineGroups(
   const sceneByShot = hostSceneMap(nodes, edges)
   const fulfillment = beatFulfillmentMap(nodes, edges)
   const byEpisode = new Map<number | null, OutlineRow[]>()
-  for (const n of [...nodes].sort((a, b) => a.position.x - b.position.x)) {
+  for (const n of storylineOrder(nodes, edges)) {
     // 图片节点不进大纲（生成产物非叙事单元，§13）
     if (n.type === 'image') continue
     const row = rowOf(n)

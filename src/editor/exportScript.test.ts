@@ -310,3 +310,57 @@ describe('buildScriptExport（issue #48 导出模型）', () => {
     expect(noBody.outline).toContain('分支 · 要不要坦白？')
   })
 })
+
+describe('剧情流序一致性（issue #340：拖拽重排连线后正文与附录一致）', () => {
+  const sceneOf = (id: string, x: number, sceneNo: number): CanvasNode =>
+    mk({
+      id,
+      type: 'scene',
+      position: { x, y: 0 },
+      data: {
+        name: id,
+        sceneNo,
+        interior: false,
+        time: '🌙 夜',
+        weather: '',
+        synopsis: '',
+        characterIds: [],
+      },
+      selected: false,
+    })
+  const seq = (id: string, source: string, target: string): Edge => ({
+    id,
+    source,
+    target,
+    className: 'pw-edge-sequence',
+  })
+
+  it('导出正文按连线序输出场景，与创作大纲附录一致（issue #340 三场景例）', () => {
+    // x 序 s1(100)/s2(200)/s3(300)，拖 s3 到 s1 前后连线 s3→s1→s2：
+    // 正文（含分镜附录分组）不得沿用画布 x 序（原按场 01/02/03 输出）
+    const nodes = [
+      sceneOf('s1', 100, 1),
+      sceneOf('s2', 200, 2),
+      sceneOf('s3', 300, 3),
+    ]
+    const edges = [seq('e1', 's3', 's1'), seq('e2', 's1', 's2')]
+    const md = buildScriptMarkdown('剧', nodes, edges, settings, undefined)
+    const bodyOrder = [...md.matchAll(/^## 场 (\d{2})/gm)].map((m) => m[1])
+    expect(bodyOrder).toEqual(['03', '01', '02'])
+
+    // 创作大纲附录本就按连线序：正文与之对齐后两处一致
+    const draft = buildScriptExport({
+      projectName: '剧',
+      nodes,
+      edges,
+      settings,
+      assets: undefined,
+      episodeTitles: {},
+    })
+    const appendixOrder = draft.outline
+      .split('\n')
+      .filter((l) => l.startsWith('- 场 '))
+      .map((l) => l.slice(4, 6))
+    expect(appendixOrder).toEqual(['03', '01', '02'])
+  })
+})

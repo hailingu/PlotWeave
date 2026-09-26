@@ -4,6 +4,7 @@ import {
   summariseExportOutline,
   type ExportOutlineSummary,
 } from './exportOutline'
+import { storylineOrder } from './outline'
 import { SCENE_SHOT_HANDLE } from './graphRules'
 import {
   resolveCharacterName,
@@ -24,7 +25,9 @@ import type {
  * 剧本导出生成器（docs/ui-design.md §3.5/§5）。
  * 正文只由场景 + 对白生成，节拍与分支不出现；
  * 分镜卡以附录按宿主场分组输出（含镜头 Prompt 与引用位）。
- * 场景顺序 = 画布横向剧情流（position.x 排序）。
+ * 场景顺序 = 剧情流线性序（storylineOrder，issue #340：与大纲列表、
+ * 创作大纲附录一致，拖拽重排连线后随之更新；画布 x 序仅作无前驱约束
+ * 节点的稳定回退）。
  * 可选「大纲注释」附录（issue #48）：创作大纲恒为独立附录，开关只决定是否并入，
  * 预览、复制与下载消费同一次生成结果。
  */
@@ -151,7 +154,7 @@ export function buildScriptMarkdown(
   settings: ProjectSettings,
   assets?: ProjectContent['assets'],
 ): string {
-  const ordered = [...nodes].sort((a, b) => a.position.x - b.position.x)
+  const ordered = storylineOrder(nodes, edges)
   const lines: string[] = [`# ${projectName}`, '']
   lines.push(
     `> 由 PlotWeave 导出 · ${new Date().toLocaleDateString('zh-CN')}`,

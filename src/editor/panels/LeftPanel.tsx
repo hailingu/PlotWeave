@@ -152,21 +152,23 @@ function useOutlineDnD(
 
 type OutlineDnD = ReturnType<typeof useOutlineDnD>
 
-/** 大纲派生的「内容 + x 序」键控缓存（issue #157）：大纲行序按画布 x 排序，
- * 依赖位置——但拖拽过程帧绝大多数不改变相对 x 序。仅当业务内容
+/** 大纲派生的「内容 + x 序」键控缓存（issue #157）：行序现按剧情流线性序
+ * （storylineOrder，issue #340），位置只影响无前驱约束节点的回退交织——
+ * 拖拽过程帧绝大多数不改变相对 x 序，也就不改变回退交织。仅当业务内容
  * （contentNodes 换引用）或 x 序（跨节点拖动）变化时才换输入引用重算，
- * 同向小幅位移帧复用上次结果。 */
+ * 同向小幅位移帧复用上次结果；连线重排不经过此缓存——edges 变化直接
+ * 触发 useMemo 重算。 */
 function useOutlineGroups(
   nodes: CanvasNode[],
   contentNodes: CanvasNode[],
   edges: Edge[],
   episodeTitles: Record<number, string>,
 ): OutlineGroup[] {
-  // 序与 buildOutlineGroups 同语义（PR #194 评审 4027623775）：仅按 x 稳定
-  // 排序（同 x 保持数组序），不带 id 次级键——次级键会让相等帧的序先于
-  // 真实行序变化，越序后序不变、缓存不失效。缓存直接持有 id 数组并逐元素
-  // 比较（评审 4027732274）：id 契约仅要求非空唯一，join('|') 等分隔符
-  // 编码对 'a' 与 'a|a' 这类合法脏档 id 有歧义（两种顺序同串）。
+  // 缓存键仍以「全量 x 序」近似位置驱动变化（PR #194 评审 4027623775 的
+  // 启发式保留）：x 序不变则回退交织不变、约束序与位置无关，行序不变。
+  // 缓存直接持有 id 数组并逐元素比较（评审 4027732274）：id 契约仅要求
+  // 非空唯一，join('|') 等分隔符编码对 'a' 与 'a|a' 这类合法脏档 id 有
+  // 歧义（两种顺序同串）。
   const order = nodes
     .slice()
     .sort((a, b) => a.position.x - b.position.x)
