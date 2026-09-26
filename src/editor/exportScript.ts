@@ -23,8 +23,11 @@ import type {
 
 /**
  * 剧本导出生成器（docs/ui-design.md §3.5/§5）。
- * 正文只由场景 + 对白生成，节拍与分支不出现；
- * 分镜卡以附录按宿主场分组输出（含镜头 Prompt 与引用位）。
+ * 正文只由场景 + 对白生成，节拍与分支不出现；分镜卡以附录按宿主场分组输出
+ * （含镜头 Prompt 与引用位）。含分支项目的正文不展开分支问句与选项去向，
+ * 导出头部写入「分支未包含」注记（issue #361），默认导出路径不静默丢弃
+ * 分支/多结局结构；注记后段按变体措辞（review #376）：默认正文指引开启
+ * 「创作大纲」附录后导出、不引用其不含的附录，开启态指向文末附录。
  * 场景顺序 = 剧情流线性序（storylineOrder，issue #340：与大纲列表、
  * 创作大纲附录一致，拖拽重排连线后随之更新；画布 x 序仅作无前驱约束
  * 节点的稳定回退）。
@@ -146,13 +149,18 @@ function dialogueBlockLines(
 }
 
 /** 生成整部剧本的 Markdown 文本。assets 为项目资产索引（缺省视为无资产，
- * 引用位全部按悬空标注）。 */
+ * 引用位全部按悬空标注）。headerNote 为可选头部注记（issue #361）：给出时
+ * 以第二段引块并入文件头，随预览、复制与下载的全文一同输出。exportedAt 为
+ * 可选导出日期文案（review #376）：同一生成模型分多个变体输出时，调用方
+ * 传入一次求值的结果保证各变体头部时间戳一致；缺省由本函数现场求值。 */
 export function buildScriptMarkdown(
   projectName: string,
   nodes: CanvasNode[],
   edges: Edge[],
   settings: ProjectSettings,
   assets?: ProjectContent['assets'],
+  headerNote?: string,
+  exportedAt?: string,
 ): string {
   const ordered = storylineGroups(nodes, edges).flatMap((g) => [
     ...g.routed,
@@ -160,9 +168,10 @@ export function buildScriptMarkdown(
   ])
   const lines: string[] = [`# ${projectName}`, '']
   lines.push(
-    `> 由 PlotWeave 导出 · ${new Date().toLocaleDateString('zh-CN')}`,
+    `> 由 PlotWeave 导出 · ${exportedAt ?? new Date().toLocaleDateString('zh-CN')}`,
     '',
   )
+  if (headerNote) lines.push('>', `> ${headerNote}`, '')
 
   for (const node of ordered) {
     if (node.type === 'scene') lines.push(...sceneBlockLines(node, settings))
@@ -239,7 +248,25 @@ function scopeLineOf(summary: ExportOutlineSummary): string {
   return counts.join(' · ')
 }
 
-/** 生成一次导出（issue #48）：正文 + 分镜附录恒在，创作大纲作为可并入的附录。 */
+/** 分支未包含的头部注记（issue #361）：正文按剧情流线性展开场景与对白，
+ * 分支问句、选项去向与结局归属不进正文；注记写入导出文件头，使含分支/
+ * 多结局项目的默认导出不静默。后段按变体措辞（review #376）：默认正文
+ * 不含创作大纲附录，写「可在导出时开启」指引导出者，不引用该文件中
+ * 不存在的附录；开启态正文写「见文末」指向随附的附录。无分支返回
+ * undefined，输出与既有契约逐字一致。 */
+function branchHeaderNote(
+  branches: number,
+  appendixIncluded: boolean,
+): string | undefined {
+  if (branches <= 0) return undefined
+  const where = appendixIncluded
+    ? '完整分支结构见文末「创作大纲」附录。'
+    : '如需完整分支结构，可在导出时开启「创作大纲」附录。'
+  return `注：正文为线性场景与对白，未包含 ${branches} 处分支的问句与选项去向；${where}`
+}
+
+/** 生成一次导出（issue #48）：正文 + 分镜附录恒在，创作大纲作为可并入的附录。
+ * 含分支项目（issue #361）在两个变体的正文头部写入按变体措辞的分支未包含注记。 */
 export function buildScriptExport(input: {
   projectName: string
   nodes: CanvasNode[]
@@ -249,20 +276,27 @@ export function buildScriptExport(input: {
   assets: ProjectContent['assets'] | undefined
   episodeTitles: Record<number, string>
 }): ScriptExportModel {
-  const base = buildScriptMarkdown(
-    input.projectName,
-    input.nodes,
-    input.edges,
-    input.settings,
-    input.assets,
-  )
   const summary = summariseExportOutline(input.nodes)
+  // 两变体共享同一次求值的导出日期（review #376）：按变体两次生成时各自
+  // 现场求值会在跨本地零点的窗口内让 plain 与 outline 头部日期分叉——
+  // 同一生成模型只应有一个导出时间戳，故在此求值一次后传入两次生成。
+  const exportedAt = new Date().toLocaleDateString('zh-CN')
+  const markdown = (appendixIncluded: boolean) =>
+    buildScriptMarkdown(
+      input.projectName,
+      input.nodes,
+      input.edges,
+      input.settings,
+      input.assets,
+      branchHeaderNote(summary.branches, appendixIncluded),
+      exportedAt,
+    )
   const appendix = outlineAppendixLines(
     buildExportOutline(input.nodes, input.edges, input.episodeTitles),
   )
   return {
-    plain: base,
-    outline: `${base}\n${appendix.join('\n')}`,
+    plain: markdown(false),
+    outline: `${markdown(true)}\n${appendix.join('\n')}`,
     hasNarrative: input.nodes.some(
       (n) => n.type === 'scene' || n.type === 'dialogue',
     ),

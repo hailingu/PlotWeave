@@ -1,5 +1,5 @@
 import type { Edge } from '@xyflow/react'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { branchOptionHandle } from './graphRules'
 import { buildScriptExport, buildScriptMarkdown } from './exportScript'
 import type { CanvasNode } from './nodes/types'
@@ -252,13 +252,82 @@ describe('buildScriptExport（issue #48 导出模型）', () => {
     episodeTitles: { 1: '立势', 2: '汇合' },
   })
 
-  it('默认关闭大纲：正文仍只由场景 + 对白生成，不含节奏与分支', () => {
+  it('默认关闭大纲：正文只由场景 + 对白生成，不含节奏与分支；头部注记披露分支未包含（issue #361）', () => {
     expect(draft.plain).toContain('## 场 01 · 天台夜话')
     expect(draft.plain).not.toContain('立势')
     expect(draft.plain).not.toContain('要不要坦白？')
+    // issue #361：默认正文不展开分支结构，但不得静默——注记随导出文件携带
+    expect(draft.plain).toContain('未包含 1 处分支的问句与选项去向')
     expect(draft.outline).not.toBe('')
     expect(draft.outline).toContain('要不要坦白？')
     expect(draft.hasNarrative).toBe(true)
+  })
+
+  it('注记按变体措辞：默认变体不引用其不含的附录，开启态指向文末附录（review #376）', () => {
+    // 默认（无附录）文件不得把结构说成在「附录」中——指引开启后再导出
+    expect(draft.plain).toContain('未包含 1 处分支的问句与选项去向')
+    expect(draft.plain).toContain('可在导出时开启「创作大纲」附录')
+    expect(draft.plain).not.toContain('见文末')
+    // 开启态：注记指向文末附录，且不再建议重复开启
+    expect(draft.outline).toContain('见文末「创作大纲」附录')
+    expect(draft.outline).not.toContain('可在导出时开启')
+    // 注记仍在正文之前、附录之前；附录自身的「不是剧情正文」界言不冲突
+    expect(draft.outline.indexOf('未包含 1 处分支')).toBeLessThan(
+      draft.outline.indexOf('## 附录 · 创作大纲'),
+    )
+  })
+
+  it('无分支的线性项目不带分支注记，输出与既有契约逐字一致（issue #361 不回归）', () => {
+    const linear = buildScriptExport({
+      projectName: '线性',
+      nodes,
+      edges,
+      settings,
+      assets: undefined,
+      episodeTitles: {},
+    })
+    expect(linear.summary.branches).toBe(0)
+    expect(linear.plain).not.toContain('未包含')
+    expect(linear.plain).toBe(
+      buildScriptMarkdown('线性', nodes, edges, settings, undefined),
+    )
+  })
+
+  it('显式传入导出日期时头部使用该日期（review #376）', () => {
+    const dated = buildScriptMarkdown(
+      '剧',
+      nodes,
+      edges,
+      settings,
+      undefined,
+      undefined,
+      '2026/1/2',
+    )
+    expect(dated).toContain('> 由 PlotWeave 导出 · 2026/1/2')
+  })
+
+  it('两个变体共享同一次求值的导出日期：跨零点不再分叉（review #376）', () => {
+    // 同一模型只应有一个导出时间戳：让连续两次 toLocaleDateString 返回
+    // 不同日期，模拟生成恰好跨本地零点；plain 与 outline 头部日期必须一致
+    const dates = ['2026/9/26', '2026/9/27']
+    const spy = vi
+      .spyOn(Date.prototype, 'toLocaleDateString')
+      .mockImplementation(() => dates.shift() ?? '2026/9/27')
+    try {
+      const crossing = buildScriptExport({
+        projectName: '跨零点',
+        nodes: mixNodes,
+        edges: mixEdgesTyped,
+        settings,
+        assets: undefined,
+        episodeTitles: {},
+      })
+      const dateOf = (text: string): string =>
+        text.match(/^> 由 PlotWeave 导出 · (.+)$/m)?.[1] ?? ''
+      expect(dateOf(crossing.plain)).toBe(dateOf(crossing.outline))
+    } finally {
+      spy.mockRestore()
+    }
   })
 
   it('开启大纲：并入同一生成结果的 Markdown，含集标题、基调、分支与去向', () => {
@@ -270,9 +339,12 @@ describe('buildScriptExport（issue #48 导出模型）', () => {
     expect(outline).toContain('分支 · 要不要坦白？')
     expect(outline).toContain('坦白 → 场 02 · 旧公寓')
     expect(outline).toContain('隐瞒 → （未连线）')
-    // 正文与分镜附录保持：正文在前，大纲附录在后
+    // 正文与分镜附录保持：正文在前，大纲附录在后；注记按变体措辞
+    // （review #376）后，两变体自首个场景标题起的正文仍逐字一致
     expect(outline).toContain('对白 · 摊牌')
-    expect(outline).toContain(draft.plain)
+    expect(outline).toContain(
+      draft.plain.slice(draft.plain.indexOf('## 场 01')),
+    )
     expect(outline.indexOf('## 场 01')).toBeLessThan(
       outline.indexOf('## 附录 · 创作大纲'),
     )
