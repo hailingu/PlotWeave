@@ -161,8 +161,12 @@ while a module whose entire importer set is test facilities or test files
 vitest coverage `exclude` is
 additionally checked in reverse: no exclude pattern may match a maintained
 module outside the facility list, so a broad pattern cannot silently drop
-product coverage. The zero-importer production entry
-`src/main.tsx` is exempted as a product root, so splitting a support
+product coverage. The zero-importer production entries
+`src/bootstrap.ts` and `src/main.tsx` are exempted as product roots —
+`index.html` loads bootstrap directly, and bootstrap pulls in the
+application via a dynamic import, so the dynamic edge is by design
+outside the static importer graph (issue #358 review 4111703403) — so
+splitting a support
 module out of a test facility can no longer escape classification, and a
 facility absorbed back into product code can no longer stay excluded from
 product statistics.
