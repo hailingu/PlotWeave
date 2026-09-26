@@ -454,9 +454,7 @@ describe('RightPanel ✦AI 改动预览卡', () => {
       expect.objectContaining({ op: 'create_node' }),
     ])
     expect(await screen.findByText(/✓ 已执行 1 项改动/)).toBeTruthy()
-    // 执行卡提示只陈述「曾执行成功」回执：撤销不回写卡片，撤销/重做或
-    // 后续编辑都会改变栈顶，提示不得承诺 ⌘Z 当前可整批撤销（issue #347）
-    expect(screen.getAllByText('✓ 已执行')).toHaveLength(1)
+    // 执行卡提示不承诺 ⌘Z 当前可撤销（issue #347）；回执详测见独立套件
     expect(screen.queryByText(/⌘Z 可整批撤销/)).toBeNull()
   })
 
@@ -1043,5 +1041,24 @@ describe('RightPanel 会话读取失败', () => {
     expect(spies.onTabChange).toHaveBeenCalledWith('inspector')
     expect(llmChatMock).not.toHaveBeenCalled()
     expect(onSaveAiSession).not.toHaveBeenCalled()
+  })
+})
+
+/** issue #347 执行卡回执语义：已执行卡提示只陈述「曾执行成功」，不承诺
+ * ⌘Z 当前可整批撤销——撤销/重做或后续编辑都会改变栈顶，撤销不回写卡片。
+ * 独立有界套件：既有改动预览卡 describe 闭包超限受 grandfathering 保护，
+ * 不得增长（AGENTS.md 尺寸上限）。 */
+describe('RightPanel ✦AI 执行卡回执语义（issue #347）', () => {
+  it('当前会话执行卡提示为纯回执，无 ⌘Z 撤销宣称', async () => {
+    const spies = await toAiTab(APP_WITH_KEY)
+    spies.onValidateCommands.mockReturnValue(validationOf())
+    llmChatMock.mockResolvedValue(batchReply())
+    send('加一场戏')
+    expect(await screen.findByText('✦ 改动预览 · 1 项')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '✓ 执行改动' }))
+    expect(await screen.findByText(/✓ 已执行 1 项改动/)).toBeTruthy()
+    // 精确匹配卡片提示，区别于回执 note「✓ 已执行 1 项改动。」
+    expect(screen.getAllByText('✓ 已执行')).toHaveLength(1)
+    expect(screen.queryByText(/⌘Z 可整批撤销/)).toBeNull()
   })
 })
