@@ -126,23 +126,46 @@ Git gate, the Sonar gate, and CI all reject violations.
 ### Quality Report Classification
 
 (Issue [#311](https://github.com/hailingu/PlotWeave/issues/311),
-implemented.) Sonar analysis and frontend coverage report **production
-code**; test infrastructure stays analyzed but outside the product
-statistics. `sonar-project.properties` classifies code through the
-officially supported combination of source exclusion plus test inclusion:
-`sonar.test.inclusions` covers `*.test.ts` / `*.test.tsx`, the compile-time
-contract probes `*.test-d.ts` (still compile-checked by the strict entry),
-and modules that exist only for tests — `src/moduleGraph.ts` (architecture
-guard), `src/styles/cssColorContract.ts`, `src/styles/cssValueSyntax.ts`,
-and `src/styles/sheetTokensEngine.ts` (CSS contract engine),
-`src/model/convertFixtures.ts` and `src/editor/ai/testGraphs.ts` (shared
-test fixtures). The same list is mirrored into `sonar.exclusions` — moving
-these files out of product-source statistics while they remain analyzed as
-test code, not a blanket exclusion that hides findings — and into the
-vitest coverage `exclude` in `vite.config.ts`, so `coverage/lcov.info`
-contains product files only. `scripts/sonar-test-scope.test.ts` guards
-this classification contract by applying SonarQube path-pattern semantics
-to the properties file.
+implemented; extended by issue
+[#343](https://github.com/hailingu/PlotWeave/issues/343).) Sonar analysis
+and frontend coverage report **production code**; test infrastructure
+stays analyzed but outside the product statistics.
+`sonar-project.properties` classifies code through the officially
+supported combination of source exclusion plus test inclusion:
+`sonar.test.inclusions` covers `*.test.ts` / `*.test.tsx`, the
+compile-time contract probes `*.test-d.ts` (still compile-checked by the
+strict entry), and modules that exist only for tests — `src/moduleGraph.ts`
+(architecture guard), `src/styles/cssColorContract.ts`,
+`src/styles/cssValueSyntax.ts`, `src/styles/sheetRuleQuery.ts`, and
+`src/styles/sheetTokensEngine.ts` (CSS contract engine; `sheetRuleQuery.ts`
+added by issue #343 after the engine split), `src/model/convertFixtures.ts`
+and `src/editor/ai/testGraphs.ts` (shared test fixtures). The same list is
+mirrored into `sonar.exclusions` — moving these files out of
+product-source statistics while they remain analyzed as test code, not a
+blanket exclusion that hides findings — and into the vitest coverage
+`exclude` in `vite.config.ts`, so `coverage/lcov.info` contains product
+files only. `scripts/sonar-test-scope.test.ts` guards this classification
+contract by applying SonarQube path-pattern semantics to the properties
+file, mirroring the list against the vitest coverage `exclude`, and —
+since issue #343 — enforcing the classification in both directions: a
+maintained module whose importers are all test facilities or test files
+must be classified, and a classified facility that gains a
+production-side importer must be removed from the facility list. The
+reverse import graph reuses `moduleGraph`'s AST edge resolution, includes
+`*.test.ts(x)` imports across the vitest test directories (`src/` and
+`scripts/`) parsed with each file's own syntax (`ScriptKind.TSX` for
+`.tsx`), and treats both value and type-only edges as evidence — any
+production-side import (value or type) anchors a module in product source,
+while a module whose entire importer set is test facilities or test files
+(type or value, `*.test-d.ts` probes included) must be classified. The
+vitest coverage `exclude` is
+additionally checked in reverse: no exclude pattern may match a maintained
+module outside the facility list, so a broad pattern cannot silently drop
+product coverage. The zero-importer production entry
+`src/main.tsx` is exempted as a product root, so splitting a support
+module out of a test facility can no longer escape classification, and a
+facility absorbed back into product code can no longer stay excluded from
+product statistics.
 
 ## TypeScript Engineering Practices
 
