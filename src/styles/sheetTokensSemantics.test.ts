@@ -945,3 +945,82 @@ describe('根令牌取胜后的消费结果（review 5277799858）', () => {
     },
   )
 })
+
+describe('CSS 空白与 NBSP 的关键字判定边界（issue #339）', () => {
+  it('局部定义 NBSP unset：共享显示值路径交付原值，不进 fallback', () => {
+    const root = postcss.parse(
+      '.a { --fg: \u00a0unset; color: var(--fg, #fff); }',
+    )
+    const ctx: WiringCtx = {
+      env: LIGHT_ENV,
+      tokens: new Map(),
+      locals: localDefinitions(root),
+    }
+    const consumer = [...sheetDecls(root)].find((d) => d.prop === 'color')!
+    expect(displayValueIn(consumer, ctx)).toBe('\u00a0unset')
+  })
+
+  it('根令牌 NBSP unset：不作保证无效归一，消费点按颜色语义拒绝非法值', () => {
+    // 引擎侧不得把 '\u00a0unset' 误判为 unset 关键字（否则归一 initial /
+    // 悬空）；类型检查侧同样不得按 JS trim 认作 CSS-wide 关键字而放行——
+    // 该值是非法颜色，须按颜色语义拒绝（issue #339）
+    const root = postcss.parse(
+      ':root { --s: \u00a0unset; } .a { color: var(--s); }',
+    )
+    expect(danglingRefs(root, LIGHT_ENV)).toEqual([])
+    expect(displayTypeErrors(root, LIGHT_ENV)).toEqual([
+      '.a color: \u00a0unset',
+    ])
+  })
+
+  it.each(['background', 'outline', 'text-decoration'])(
+    '简写取值 NBSP unset：切分按 CSS 空白语义保留成分，类型检查拒绝（issue #339 评审）',
+    (prop) => {
+      // colorTypeOk 入口裁剪已保住 NBSP，但 postcss.list 的成分裁剪用
+      // JS trim：'\u00a0unset' 被折算回 'unset' 命中 NON_COLOR_KEYWORDS
+      // 而放行——切分必须同用 CSS 空白语义（issue #339 评审）
+      const root = postcss.parse(
+        `:root { --s: \u00a0unset; } .a { ${prop}: var(--s); }`,
+      )
+      expect(danglingRefs(root, LIGHT_ENV)).toEqual([])
+      expect(displayTypeErrors(root, LIGHT_ENV)).toEqual([
+        `.a ${prop}: \u00a0unset`,
+      ])
+    },
+  )
+
+  it('切分保留 NBSP：成分不折算成关键字或完整颜色，普通空白对照不变', () => {
+    // 简写层：'\u00a0unset' 是未知标识符成分，不得命中关键字集合
+    expect(colorTypeOk('background', '\u00a0unset')).toBe(false)
+    expect(colorTypeOk('outline', 'unset\u00a0')).toBe(false)
+    // 颜色列表：'#fff\u00a0' 是 hash + 标识符两个 token，非完整颜色成分
+    expect(colorTypeOk('border-color', '#fff\u00a0')).toBe(false)
+    // 对照：普通 CSS 空白包围的关键字仍是合法属性值
+    expect(colorTypeOk('background', ' unset ')).toBe(true)
+  })
+
+  it.each([
+    ['background-image', '\u00a0none'],
+    ['border-image-source', '\u00a0url(a.png)'],
+  ])(
+    '图像长形 %s 的 NBSP 不得折算成合法图像 token（issue #339 评审二轮）',
+    (prop, value) => {
+      // imageValueOk 自带逗号切分的入列裁剪也是 JS trim：'\u00a0none' 被
+      // 折算成 'none'、'\u00a0url(...)' 被折算成完整 url() 图像——必须与
+      // 其他入口同用 CSS 空白集裁剪（issue #339 评审二轮）
+      expect(colorTypeOk(prop, value)).toBe(false)
+    },
+  )
+
+  it('图像长形端到端：NBSP none 按非法值报错，普通空白对照不变（issue #339 评审二轮）', () => {
+    const root = postcss.parse(
+      ':root { --s: \u00a0none; } .a { background-image: var(--s); }',
+    )
+    expect(danglingRefs(root, LIGHT_ENV)).toEqual([])
+    expect(displayTypeErrors(root, LIGHT_ENV)).toEqual([
+      '.a background-image: \u00a0none',
+    ])
+    // 对照：普通 CSS 空白包围的 none 仍是合法图像长形取值
+    expect(colorTypeOk('background-image', ' none ')).toBe(true)
+  })
+})

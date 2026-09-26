@@ -2,8 +2,12 @@
  * 样式令牌契约的 CSS 值校验：字面色探测、完整颜色成分与已建模属性类型。
  * 供全表契约和语义夹具共用，不解析完整 CSS 文法或运行时层叠。
  */
-import postcss from 'postcss'
-import { maskCssOpaque } from './cssValueSyntax'
+import {
+  maskCssOpaque,
+  splitCssComma,
+  splitCssSpace,
+  trimCssWhitespace,
+} from './cssValueSyntax'
 
 /**
  * 在等长语法视图上从开括号后的偏移定位平衡闭合括号；未闭合返回 -1。
@@ -121,14 +125,18 @@ const NON_COLOR_KEYWORDS = new Set([
  * 函数内部参数与完整简写顺序/互斥规则保留边界，不宣称等价于浏览器文法校验。
  */
 export function colorTypeOk(prop: string, resolved: string): boolean {
-  const value = resolved.trim()
+  // 关键字与空值判定按 CSS 空白集裁剪（与引擎保证无效判定同语义，
+  // issue #339）：NBSP 不是 CSS 空白，'\u00a0unset' 是普通标识符，不得
+  // 按 JS trim 认作 CSS-wide 关键字而放行为合法属性值——后续按颜色
+  // 文法拒绝非法值。
+  const value = trimCssWhitespace(resolved)
   if (value === '') return false
   if (/^(inherit|initial|unset|revert|revert-layer)$/i.test(value)) return true
   if (prop === 'background-image' || prop === 'border-image-source')
     return imageValueOk(prop, value)
   if (prop === '-webkit-text-stroke') return textStrokeOk(value)
   if ((prop === 'fill' || prop === 'stroke') && /^url\(/i.test(value)) {
-    const parts = postcss.list.space(value)
+    const parts = splitCssSpace(value)
     return (
       imageKind(parts[0]!) === 'url' &&
       (parts.length === 1 ||
@@ -143,9 +151,7 @@ export function colorTypeOk(prop: string, resolved: string): boolean {
   ) {
     return completeColorValueOk(prop, value)
   }
-  return postcss.list
-    .comma(value)
-    .every((layer) => shorthandLayerOk(prop, layer))
+  return splitCssComma(value).every((layer) => shorthandLayerOk(prop, layer))
 }
 
 /** 完整图像成分分类，供类型检查与黄金背景投影共用；函数参数保留既有边界。 */
@@ -156,7 +162,9 @@ export function imageKind(value: string): 'url' | 'gradient' | null {
   return match[1]!.toLowerCase() === 'url' ? 'url' : 'gradient'
 }
 
-/** 图像长形只接受完整图像/none；保留空列表项以拒绝无效逗号，URL/函数内部逗号不分层。 */
+/** 图像长形只接受完整图像/none；保留空列表项以拒绝无效逗号，URL/函数内部逗号不分层。
+ * 入列裁剪与切分/关键字入口同用 CSS 空白集（issue #339 评审二轮）：JS trim 会把
+ * NBSP 包围的 '\u00a0none'/'\u00a0url(...)' 折算成合法图像 token 而放行。 */
 function imageValueOk(prop: string, value: string): boolean {
   const syntax = maskCssOpaque(value)
   const images: string[] = []
@@ -166,11 +174,11 @@ function imageValueOk(prop: string, value: string): boolean {
     if (syntax[i] === '(') depth += 1
     else if (syntax[i] === ')') depth -= 1
     else if (syntax[i] === ',' && depth === 0) {
-      images.push(value.slice(start, i).trim())
+      images.push(trimCssWhitespace(value.slice(start, i)))
       start = i + 1
     }
   }
-  images.push(value.slice(start).trim())
+  images.push(trimCssWhitespace(value.slice(start)))
   return (
     (prop === 'background-image' || images.length === 1) &&
     images.every((image) => /^none$/i.test(image) || imageKind(image) !== null)
@@ -179,7 +187,7 @@ function imageValueOk(prop: string, value: string): boolean {
 
 /** 简写的一层须消费全部顶层成分；图像的属性归属与未知词形在同一入口判定。 */
 function shorthandLayerOk(prop: string, layer: string): boolean {
-  const parts = postcss.list.space(layer)
+  const parts = splitCssSpace(layer)
   if (prop === 'border-image') {
     // 图像源没有颜色类型；通用简写关键字仅允许独立 none，不能掩盖错误成分。
     if (parts.some(completeColorAtom)) return false
@@ -235,7 +243,7 @@ function completeColorValueOk(prop: string, value: string): boolean {
     /^border-(inline|block)-color$/.test(prop)
   )
     max = 2
-  const colors = postcss.list.space(value)
+  const colors = splitCssSpace(value)
   return (
     colors.length > 0 && colors.length <= max && colors.every(completeColorAtom)
   )
@@ -253,7 +261,7 @@ function isLineWidth(part: string): boolean {
 /** `-webkit-text-stroke: <line-width> || <color>`：至多一个宽度与一个完整颜色成分，无其他词形。 */
 function textStrokeOk(value: string): boolean {
   if (/^(inherit|initial|unset|revert|revert-layer)$/i.test(value)) return true
-  const parts = postcss.list.space(value)
+  const parts = splitCssSpace(value)
   const widths = parts.filter(isLineWidth).length
   const colors = parts.filter(completeColorAtom).length
   return (

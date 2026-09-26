@@ -16,7 +16,7 @@ import {
   colorTokenOf,
   colorTypeOk,
 } from './cssColorContract'
-import { maskCssOpaque } from './cssValueSyntax'
+import { maskCssOpaque, trimCssWhitespace } from './cssValueSyntax'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../..')
 
@@ -215,15 +215,6 @@ export function tokenValuesOf(
 /** 仅定位不透明内容之外的 var()（未转义非 ASCII 标识符边界），返回原值偏移。 */
 function variableStart(value: string): number {
   return /(?<![\w\u0080-\uFFFF-])var\(/i.exec(maskCssOpaque(value))?.index ?? -1
-}
-
-/**
- * CSS 空白集（空格/制表/换行/回车/换页）裁剪。不用 JS `.trim()`：其空白
- * 集更大，会把名称末端的 NBSP 等有效非 ASCII 码点误当空白移除，违反
- * F5-c「自定义属性名按原始码点序列匹配」（issue #289）。
- */
-function trimCssWhitespace(value: string): string {
-  return value.replace(/^[ \t\n\r\f]+/, '').replace(/[ \t\n\r\f]+$/, '')
 }
 
 /**
@@ -429,9 +420,12 @@ function normalizeSimpleSelector(selector: string): string {
 /**
  * 自定义属性 initial 与文档根 unset 为保证无效值；其余 CSS-wide 继承/回滚
  * 尚未建模，明确拒绝，不能将原关键字误当作消费属性的合法取值。
+ * 关键字判定按 CSS 空白集裁剪（issue #339）：NBSP 等非 ASCII 码点不是
+ * CSS 空白而是有效标识符成分，`\u00a0unset` 是普通标识符，两分支都不得
+ * 触发；JS `.trim()` 的空白集更大，会误判。
  */
 function isGuaranteedInvalid(value: string, selector: string): boolean {
-  const keyword = value.trim().toLowerCase()
+  const keyword = trimCssWhitespace(value).toLowerCase()
   if (keyword === 'initial') return true
   if (keyword === 'unset') {
     const documentRoot = selector
@@ -768,8 +762,11 @@ export function displayTypeErrors(root: postcss.Root, env: Env): string[] {
     return decl.selector.split(',').flatMap((branch) => {
       const selector = branch.trim()
       const value = displayValueIn({ ...decl, selector }, ctx)
+      // 诊断消息按 CSS 空白集裁剪（与关键字判定同语义，issue #339）：
+      // 普通声明空白照常整洁，NBSP 等非 CSS 空白码点是值的内容，逐字
+      // 保留——裁掉会让报错值看起来像本应合法的关键字
       return value !== null && !colorTypeOk(decl.prop, value)
-        ? [`${selector} ${decl.prop}: ${value.trim()}`]
+        ? [`${selector} ${decl.prop}: ${trimCssWhitespace(value)}`]
         : []
     })
   })
