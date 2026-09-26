@@ -236,6 +236,19 @@ describe('vite 覆盖率排除与设施清单同源（issue #343）', () => {
 
   it('coverage.exclude 反向核验：不命中清单外的维护模块', () => {
     const exclude = config.test?.coverage?.exclude ?? []
+    // 排除模式必须落在本守卫转换器支持的 glob 子集（**、*、? 与字面
+    // 字符）：brace 展开、extglob 与否定模式按 Vitest 实际语义与转换器
+    // 分叉，会让反向核验静默失效——显式拒绝而非误通过（issue #343）。
+    for (const pattern of exclude) {
+      const unsupported =
+        pattern.startsWith('!') ||
+        /[{}]/.test(pattern) ||
+        /[?*+!@]\(/.test(pattern)
+      expect(
+        unsupported,
+        `coverage.exclude 使用了本守卫不支持的模式（brace/extglob/否定），须改用简单 glob 或扩展匹配器：${pattern}`,
+      ).toBe(false)
+    }
     const graph = buildSrcModuleGraph(resolve(repositoryRoot, 'src'))
     const facilityKeys = new Set(
       testFacilityFiles.map((file) => file.slice('src/'.length)),
