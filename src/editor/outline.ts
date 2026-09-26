@@ -164,53 +164,115 @@ export function applyEpisodeFocus(
   )
 }
 
-/**
- * 剧情流线性序（§3.5 故事脊线的线性投影；issue #340）：叙事边拓扑序——
- * 边（sequence/branch/attach，自环除外）约束先后，叙事前驱先行；attach
- * 为派生从属（分镜行随宿主场景）。无前驱约束的节点（孤立节点、断链分量、
- * 分支并列出口）与当前就绪节点按画布 x 序、再按 id 稳定交织——与创作大纲
- * 附录 routeNodes 的线性化同语义。左侧大纲列表与剧本导出正文共用此序，
- * 使拖拽重排 sequence 连线后列表、导出正文与附录一致；成环残留（会话图
- * 经加载管线隔离，此处为运行态防御）按 x/id 补齐——列表不得丢行。
- */
-export function storylineOrder(
-  nodes: CanvasNode[],
+/** 剧情流分组：一集一组（集号升序、未分集殿底），组内先剧情流路由序、
+ * 后未接入成员——左侧大纲列表、剧本导出正文与创作大纲附录三投影共用
+ * 的规范分区（issue #340 评审：单一实现，杜绝投影间语义漂移）。 */
+export interface StorylineGroup<T extends CanvasNode = CanvasNode> {
+  episode: number | null
+  /** 接入剧情流的成员：组内叙事边拓扑序（就绪节点按 x/id 稳定交织）。 */
+  routed: T[]
+  /** 未接入剧情流的成员（无任何叙事边端点），x/id 序殿后。 */
+  detached: T[]
+}
+
+/** 组内分区与路由（storylineGroups 内核）：约束边 = 两端均在组内、非自环
+ * （成员集含分镜时 attach 承载随宿主约束）；「接入剧情流」按调用方给定的
+ * 全量范围判定，跨集连接的节点在本组作无组内前驱的根参与路由。成环残留
+ * 按 x/id 补齐——列表不得丢行（会话图经加载管线隔离，运行态防御）。 */
+function partitionGroup<T extends CanvasNode>(
+  members: T[],
   edges: Edge[],
-): CanvasNode[] {
-  const byId = new Map(nodes.map((n) => [n.id, n]))
+  inFlow: ReadonlySet<string>,
+): { routed: T[]; detached: T[] } {
+  const member = new Set(members.map((n) => n.id))
   const parents = new Map<string, Set<string>>()
   for (const e of edges) {
-    if (e.source === e.target || !byId.has(e.source) || !byId.has(e.target))
+    if (e.source === e.target || !member.has(e.source) || !member.has(e.target))
       continue
     const set = parents.get(e.target) ?? new Set<string>()
     set.add(e.source)
     parents.set(e.target, set)
   }
-  const byXId = (list: CanvasNode[]): CanvasNode[] =>
+  const byXId = (list: T[]): T[] =>
     [...list].sort(
       (a, b) => a.position.x - b.position.x || (a.id < b.id ? -1 : 1),
     )
-  const ordered: CanvasNode[] = []
-  const done = new Set<string>()
-  let ready = byXId(nodes.filter((n) => !parents.has(n.id)))
+  const routed: T[] = []
+  const routedIds = new Set<string>()
+  let ready = byXId(
+    members.filter((n) => inFlow.has(n.id) && !parents.has(n.id)),
+  )
   while (ready.length > 0) {
     const node = ready.shift()!
-    ordered.push(node)
-    done.add(node.id)
-    for (const candidate of nodes) {
+    routed.push(node)
+    routedIds.add(node.id)
+    for (const candidate of members) {
       const sources = parents.get(candidate.id)
       if (sources?.delete(node.id) && sources.size === 0) ready.push(candidate)
     }
     ready = byXId(ready)
   }
-  for (const node of byXId(nodes)) if (!done.has(node.id)) ordered.push(node)
-  return ordered
+  for (const node of byXId(members))
+    if (inFlow.has(node.id) && !routedIds.has(node.id)) routed.push(node)
+  // 未接入分区 = 其余成员（attach 随宿主解锁路由的分镜不重复计入）
+  return {
+    routed,
+    detached: byXId(members.filter((n) => !routedIds.has(n.id))),
+  }
 }
 
 /**
- * 派生大纲分组：按集号升序，未分集殿底；组内保持剧情流线性序与缩进层级
- * （storylineOrder，issue #340：拖拽重排连线后列表随之更新，不再沿用
- * 画布 x 序）。完全没有 episodeNo 时退化为单个未分集组（与旧大纲视图等价）。
+ * 剧情流分组排序（§3.5 故事脊线的线性投影；issue #340 及其评审）：集号
+ * 升序、未分集殿底；组内先路由后未接入分区。「接入剧情流」按叙事边
+ * （非 attach）端点在全量成员范围判定——跨集边计入，跨集连接的节点在本组
+ * 作无组内前驱的根参与路由，与附录既有口径一致；约束边只取组内两端
+ * （跨集路径不把依赖带入集内行序），attach 额外承载分镜随宿主的排序约束
+ * （宿主未接入时分镜一并留在未接入分区）。左侧大纲列表、剧本导出正文与
+ * 创作大纲附录共用。
+ */
+export function storylineGroups<T extends CanvasNode>(
+  nodes: T[],
+  edges: Edge[],
+): StorylineGroup<T>[] {
+  const sceneByShot = hostSceneMap(nodes, edges)
+  const byEpisode = new Map<number | null, T[]>()
+  for (const n of nodes) {
+    const ep = episodeOfNode(n, (id) => sceneByShot.get(id))
+    const list = byEpisode.get(ep)
+    if (list) list.push(n)
+    else byEpisode.set(ep, [n])
+  }
+  const ids = new Set(nodes.map((n) => n.id))
+  const inFlow = new Set<string>()
+  for (const e of edges) {
+    if (
+      e.source === e.target ||
+      edgeKindOf(e) === 'attach' ||
+      !ids.has(e.source) ||
+      !ids.has(e.target)
+    )
+      continue
+    inFlow.add(e.source)
+    inFlow.add(e.target)
+  }
+  const groupOf = (members: T[], episode: number | null) => ({
+    episode,
+    ...partitionGroup(members, edges, inFlow),
+  })
+  const groups = [...byEpisode.keys()]
+    .filter((k): k is number => k !== null)
+    .sort((a, b) => a - b)
+    .map((ep) => groupOf(byEpisode.get(ep)!, ep))
+  const ungrouped = byEpisode.get(null)
+  if (ungrouped) groups.push(groupOf(ungrouped, null))
+  return groups
+}
+
+/**
+ * 派生大纲分组：按集号升序，未分集殿底；组内按剧情流分区序（
+ * storylineGroups，issue #340：拖拽重排连线后列表随之更新，不再沿用
+ * 画布 x 序）。图片节点不进大纲（生成产物非叙事单元，§13）。
+ * 完全没有 episodeNo 时退化为单个未分集组（与旧大纲视图等价）。
  */
 export function buildOutlineGroups(
   nodes: CanvasNode[],
@@ -220,9 +282,11 @@ export function buildOutlineGroups(
   const sceneByShot = hostSceneMap(nodes, edges)
   const fulfillment = beatFulfillmentMap(nodes, edges)
   const byEpisode = new Map<number | null, OutlineRow[]>()
-  for (const n of storylineOrder(nodes, edges)) {
-    // 图片节点不进大纲（生成产物非叙事单元，§13）
-    if (n.type === 'image') continue
+  const ordered = storylineGroups(
+    nodes.filter((n) => n.type !== 'image'),
+    edges,
+  ).flatMap((g) => [...g.routed, ...g.detached])
+  for (const n of ordered) {
     const row = rowOf(n)
     if (n.type === 'beat') {
       const f = fulfillment.get(n.id)

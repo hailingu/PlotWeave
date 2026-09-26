@@ -4,7 +4,7 @@ import {
   summariseExportOutline,
   type ExportOutlineSummary,
 } from './exportOutline'
-import { storylineOrder } from './outline'
+import { storylineGroups } from './outline'
 import { SCENE_SHOT_HANDLE } from './graphRules'
 import {
   resolveCharacterName,
@@ -154,7 +154,10 @@ export function buildScriptMarkdown(
   settings: ProjectSettings,
   assets?: ProjectContent['assets'],
 ): string {
-  const ordered = storylineOrder(nodes, edges)
+  const ordered = storylineGroups(nodes, edges).flatMap((g) => [
+    ...g.routed,
+    ...g.detached,
+  ])
   const lines: string[] = [`# ${projectName}`, '']
   lines.push(
     `> 由 PlotWeave 导出 · ${new Date().toLocaleDateString('zh-CN')}`,

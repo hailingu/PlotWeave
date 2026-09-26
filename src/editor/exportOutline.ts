@@ -2,10 +2,10 @@ import type { Edge } from '@xyflow/react'
 import { branchOptionIdOf, edgeKindOf } from './graphRules'
 import {
   beatFulfillmentMap,
-  episodeOfNode,
-  hostSceneMap,
   sceneLabel,
+  storylineGroups,
   type BeatFulfillment,
+  type StorylineGroup,
 } from './outline'
 import type { BranchFlowNode, CanvasNode } from './nodes/types'
 
@@ -161,45 +161,6 @@ function narrativeEdgesWithin(
   )
 }
 
-/** 每个节点的入边来源集合（组内剧情流；自环不计入）。 */
-function parentSources(flow: Edge[]): Map<string, Set<string>> {
-  const parents = new Map<string, Set<string>>()
-  for (const e of flow) {
-    if (e.source === e.target) continue
-    const set = parents.get(e.target) ?? new Set<string>()
-    set.add(e.source)
-    parents.set(e.target, set)
-  }
-  return parents
-}
-
-/** 组内节点按画布 x 序（并列再按 id）；x 序只做同级确定性排序，
- * 不用于推断分支去向。 */
-function byCanvasX(nodes: OutlineNode[]): OutlineNode[] {
-  return [...nodes].sort(
-    (a, b) => a.position.x - b.position.x || (a.id < b.id ? -1 : 1),
-  )
-}
-
-/** 对经边界校验的组内 DAG 排序：所有叙事前驱都已输出的节点才可进入队列，
- * 当前可输出节点按 x/id 排序。每节点只入队一次，汇合点等待各条路径的前驱；
- * 分支问句与选项仍由 nodeRows 成组输出，不把选项之间解释为顺序边。 */
-function routeNodes(flow: Edge[], memberNodes: OutlineNode[]): OutlineNode[] {
-  const parents = parentSources(flow)
-  const visits: OutlineNode[] = []
-  let ready = byCanvasX(memberNodes.filter((n) => !parents.has(n.id)))
-  while (ready.length > 0) {
-    const node = ready.shift()!
-    visits.push(node)
-    for (const candidate of memberNodes) {
-      const sources = parents.get(candidate.id)
-      if (sources?.delete(node.id) && sources.size === 0) ready.push(candidate)
-    }
-    ready = byCanvasX(ready)
-  }
-  return visits
-}
-
 /** 节点行的后缀标注：叙事入口 / 分支汇合；均不适用时为空串。
  * 「入口」只在组内存在叙事入边时标注——整组都无连线时不逐行重复。 */
 function nodeSuffix(
@@ -230,15 +191,15 @@ function nodeRows(
   return rows
 }
 
-/** 单组的行集合：以全图叙事端点区分连通/孤立，排序与汇合计数仅使用组内边。 */
+/** 单组的行集合：分区与排序来自 storylineGroups 规范实现（issue #340 评审，
+ * 与大纲列表/导出正文共用），汇合计数仅使用组内叙事边。 */
 function groupRows(
-  memberNodes: OutlineNode[],
+  group: StorylineGroup<OutlineNode>,
   edges: Edge[],
   byId: ReadonlyMap<string, CanvasNode>,
   fulfillment: ReadonlyMap<string, BeatFulfillment>,
-  inFlow: ReadonlySet<string>,
 ): ExportOutlineRow[] {
-  const member = new Set(memberNodes.map((n) => n.id))
+  const member = new Set([...group.routed, ...group.detached].map((n) => n.id))
   const flow = narrativeEdgesWithin(edges, member)
   const incomingPaths = new Map<string, number>()
   const inbound = new Set<string>()
@@ -249,12 +210,8 @@ function groupRows(
       incomingPaths.set(e.target, (incomingPaths.get(e.target) ?? 0) + 1)
     }
   }
-  const routes = routeNodes(
-    flow,
-    memberNodes.filter((n) => inFlow.has(n.id)),
-  )
   const rows: ExportOutlineRow[] = []
-  for (const node of routes) {
+  for (const node of group.routed) {
     const merge = incomingPaths.get(node.id) ?? 0
     rows.push(
       ...nodeRows(
@@ -266,17 +223,17 @@ function groupRows(
       ),
     )
   }
-  const detached = byCanvasX(memberNodes.filter((n) => !inFlow.has(n.id)))
   // 全组没有任何叙事边端点时按 x 序列出即可，不贴分段标题。
-  if (routes.length > 0 && detached.length > 0) {
+  if (group.routed.length > 0 && group.detached.length > 0) {
     rows.push({ kind: 'marker', level: 1, text: '（未接入剧情流）' })
   }
-  for (const n of detached)
+  for (const n of group.detached)
     rows.push(...nodeRows(n, edges, byId, fulfillment, ''))
   return rows
 }
 
-/** 导出大纲分组：集号升序、未分集殿底；组内按剧情流展开。 */
+/** 导出大纲分组：集号升序、未分集殿底；组内按剧情流展开（分区与排序
+ * 共用 storylineGroups 规范实现）。 */
 export function buildExportOutline(
   nodes: CanvasNode[],
   edges: Edge[],
@@ -284,40 +241,13 @@ export function buildExportOutline(
 ): ExportOutlineGroup[] {
   const narrative = nodes.filter(isOutlineNode)
   const byId = new Map(narrative.map((n) => [n.id, n as CanvasNode]))
-  const narrativeEdges = narrativeEdgesWithin(edges, new Set(byId.keys()))
-  const inFlow = new Set(narrativeEdges.flatMap((e) => [e.source, e.target]))
-  const sceneByShot = hostSceneMap(nodes, edges)
   const fulfillment = beatFulfillmentMap(nodes, edges)
-  const byEpisode = new Map<number | null, OutlineNode[]>()
-  for (const n of narrative) {
-    const ep = episodeOfNode(n, (id) => sceneByShot.get(id))
-    const list = byEpisode.get(ep)
-    if (list) list.push(n)
-    else byEpisode.set(ep, [n])
-  }
-  const ordered = [...byEpisode.keys()]
-    .filter((k): k is number => k !== null)
-    .sort((a, b) => a - b)
-  const groups: ExportOutlineGroup[] = ordered.map((ep) => ({
-    episode: ep,
-    title: text(episodeTitles[ep]),
-    rows: groupRows(
-      byCanvasX(byEpisode.get(ep)!),
-      edges,
-      byId,
-      fulfillment,
-      inFlow,
-    ),
+  return storylineGroups(narrative, edges).map((group) => ({
+    episode: group.episode,
+    // 未分集组无标题；episodeNo 索引仅在非空组执行（noUncheckedIndexedAccess）
+    title: group.episode === null ? '' : text(episodeTitles[group.episode]),
+    rows: groupRows(group, edges, byId, fulfillment),
   }))
-  const ungrouped = byEpisode.get(null)
-  if (ungrouped) {
-    groups.push({
-      episode: null,
-      title: '',
-      rows: groupRows(byCanvasX(ungrouped), edges, byId, fulfillment, inFlow),
-    })
-  }
-  return groups
 }
 
 /** 导出范围概要：只统计画布实际内容，不从文案反推。 */

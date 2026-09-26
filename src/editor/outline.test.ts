@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Edge } from '@xyflow/react'
 import { beatFulfillmentMap, buildOutlineGroups } from './outline'
+import { buildExportOutline } from './exportOutline'
 import { outlineSplicePlan, spliceEdgesWith } from './outlineDrop'
 import type { CanvasNode } from './nodes/types'
 
@@ -195,7 +196,9 @@ describe('剧情流线性序（issue #340：拖拽重排连线后列表与导出
     expect(rowsOf(nodes, edges)).toEqual(['s3', 's1', 's2'])
   })
 
-  it('孤立节点按 x/id 稳定回退，分镜行随宿主场景（attach 派生从属）', () => {
+  it('未接入剧情流的节点分区殿后（与附录一致），分镜行随宿主场景', () => {
+    // issue #340 评审：与创作大纲附录同分区——先剧情流路由序，
+    // 未接入成员（无任何叙事边）殿后按 x/id 稳定回退，不按 x 交织
     const nodes: CanvasNode[] = [
       scene('s1', 100, 1),
       scene('s2', 200, 2),
@@ -218,13 +221,13 @@ describe('剧情流线性序（issue #340：拖拽重排连线后列表与导出
       seq('e2', 's1', 's2'),
       { id: 'a1', source: 's1', target: 'sh1', className: 'pw-edge-attach' },
     ]
-    // 无前驱约束的节点与剧情流就绪节点按 x 交织（与创作大纲附录
-    // routeNodes 同语义）；sh1 被宿主 s1 约束，重排后仍紧随其后
-    expect(rowsOf(nodes, edges)).toEqual(['loose', 's3', 's1', 'sh1', 's2'])
+    // attach 派生从属：sh1 被宿主 s1 约束，重排后仍紧随其后
+    expect(rowsOf(nodes, edges)).toEqual(['s3', 's1', 'sh1', 's2', 'loose'])
   })
 
-  it('分集画布：全局剧情流序分桶后组内相对序保持', () => {
-    // x 序与连线序相反：剧情流 s1→s2→s3，x 序 s3(100)/s1(200)/s2(300)
+  it('跨集路径不把依赖带入集内行序（附录同款集内边范围）', () => {
+    // issue #340 评审：s1(ep1)→s2(ep2)→s3(ep1) 的路径端点跨集，集 1 组内
+    // 无约束边——两成员按 x 序输出（s3 x100 先于 s1 x200），与附录一致
     const nodes = [
       scene('s3', 100, 3, 1),
       scene('s1', 200, 1, 1),
@@ -233,11 +236,39 @@ describe('剧情流线性序（issue #340：拖拽重排连线后列表与导出
     const edges = [seq('e1', 's1', 's2'), seq('e2', 's2', 's3')]
     const groups = buildOutlineGroups(nodes, edges, {})
     expect(groups.find((g) => g.episode === 1)?.rows.map((r) => r.id)).toEqual([
-      's1',
       's3',
+      's1',
     ])
     expect(groups.find((g) => g.episode === 2)?.rows.map((r) => r.id)).toEqual([
       's2',
+    ])
+  })
+
+  it('部分接线画布：列表行序与创作大纲附录分区一致（issue #340 评审）', () => {
+    const nodes: CanvasNode[] = [
+      scene('s1', 100, 1),
+      scene('s2', 200, 2),
+      scene('s3', 300, 3),
+      node({
+        id: 'loose',
+        type: 'scene',
+        position: { x: 50, y: 0 },
+        data: { name: '孤立', sceneNo: 9 },
+      }),
+    ]
+    const edges = [seq('e1', 's3', 's1'), seq('e2', 's1', 's2')]
+    // 列表：路由序在前、未接入殿后
+    expect(rowsOf(nodes, edges)).toEqual(['s3', 's1', 's2', 'loose'])
+    // 附录：同分区（标记行除外），行序一致（「入口」等后缀标注不影响序）
+    const appendixRows = buildExportOutline(nodes, edges, {})
+      .flatMap((g) => g.rows)
+      .filter((r) => r.text.startsWith('场 '))
+      .map((r) => r.text.split(' · ').slice(0, 2).join(' · '))
+    expect(appendixRows).toEqual([
+      '场 03 · s3',
+      '场 01 · s1',
+      '场 02 · s2',
+      '场 09 · 孤立',
     ])
   })
 
