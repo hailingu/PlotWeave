@@ -152,11 +152,15 @@ maintained module whose importers are all test facilities or test files
 must be classified, and a classified facility that gains a
 production-side importer must be removed from the facility list. The
 reverse import graph reuses `moduleGraph`'s AST edge resolution, includes
-`*.test.ts(x)` imports (parsed with each file's own syntax, `ScriptKind.TSX`
-for `.tsx`), and treats both value and type-only edges as evidence — any
+`*.test.ts(x)` imports across the vitest test directories (`src/` and
+`scripts/`) parsed with each file's own syntax (`ScriptKind.TSX` for
+`.tsx`), and treats both value and type-only edges as evidence — any
 production-side import (value or type) anchors a module in product source,
 while a module whose entire importer set is test facilities or test files
-(type or value) must be classified. The zero-importer production entry
+(type or value) must be classified. The vitest coverage `exclude` is
+additionally checked in reverse: no exclude pattern may match a maintained
+module outside the facility list, so a broad pattern cannot silently drop
+product coverage. The zero-importer production entry
 `src/main.tsx` is exempted as a product root, so splitting a support
 module out of a test facility can no longer escape classification, and a
 facility absorbed back into product code can no longer stay excluded from

@@ -173,24 +173,30 @@ describe('测试设施导入者侧分类守卫（issue #343，拆分防遗漏）
         record(edge.target, source)
       }
     }
-    for (const rel of listTestFiles(srcRoot)) {
-      const testFile = resolve(repositoryRoot, rel)
-      // .tsx 按其语法解析（issue #343 评审）：以默认 TS 解析 JSX 之后的
-      // 导入依赖错误恢复，漏采会让仅被该类边引用的模块逃过守卫。
-      const kind = testFile.endsWith('.tsx') ? ScriptKind.TSX : ScriptKind.TS
-      for (const edge of relativeEdgesOfSource(
-        readFileSync(testFile, 'utf8'),
-        kind,
-      )) {
-        if (edge.dynamic === true) continue
-        const resolved = resolveEdgeTarget(testFile, edge.spec)
-        if (resolved.kind === 'asset') continue
-        if (resolved.kind === 'unresolved') {
-          throw new Error(
-            `测试文件存在无法解析的相对导入：${rel} → ${edge.spec}`,
-          )
+    // 反向图覆盖仓库内全部 vitest 测试目录（issue #343 评审）：src 之外
+    // 的 scripts/*.test.ts(x) 也会导入 src 辅助模块（如本守卫导入
+    // moduleGraph），只扫 src 会漏掉仅被 scripts 测试导入的目标。
+    const testRoots = ['src', 'scripts']
+    for (const root of testRoots) {
+      for (const rel of listTestFiles(resolve(repositoryRoot, root))) {
+        const testFile = resolve(repositoryRoot, rel)
+        // .tsx 按其语法解析（issue #343 评审）：以默认 TS 解析 JSX 之后的
+        // 导入依赖错误恢复，漏采会让仅被该类边引用的模块逃过守卫。
+        const kind = testFile.endsWith('.tsx') ? ScriptKind.TSX : ScriptKind.TS
+        for (const edge of relativeEdgesOfSource(
+          readFileSync(testFile, 'utf8'),
+          kind,
+        )) {
+          if (edge.dynamic === true) continue
+          const resolved = resolveEdgeTarget(testFile, edge.spec)
+          if (resolved.kind === 'asset') continue
+          if (resolved.kind === 'unresolved') {
+            throw new Error(
+              `测试文件存在无法解析的相对导入：${rel} → ${edge.spec}`,
+            )
+          }
+          record(relative(srcRoot, resolved.path).split(sep).join('/'), rel)
         }
-        record(relative(srcRoot, resolved.path).split(sep).join('/'), rel)
       }
     }
     for (const [target, sources] of importers) {
@@ -225,5 +231,27 @@ describe('vite 覆盖率排除与设施清单同源（issue #343）', () => {
         `vite coverage.exclude 未覆盖测试设施：${file}`,
       ).toBe(true)
     }
+  })
+
+  it('coverage.exclude 反向核验：不命中清单外的维护模块', () => {
+    const exclude = config.test?.coverage?.exclude ?? []
+    const graph = buildSrcModuleGraph(resolve(repositoryRoot, 'src'))
+    const facilityKeys = new Set(
+      testFacilityFiles.map((file) => file.slice('src/'.length)),
+    )
+    const offenders: string[] = []
+    for (const key of graph.keys()) {
+      const repoPath = `src/${key}`
+      if (
+        !facilityKeys.has(key) &&
+        exclude.some((pattern) => sonarPatternToRegExp(pattern).test(repoPath))
+      ) {
+        offenders.push(repoPath)
+      }
+    }
+    expect(
+      offenders,
+      'coverage.exclude 命中测试设施清单之外的维护模块，产品覆盖率将被静默丢弃',
+    ).toEqual([])
   })
 })
