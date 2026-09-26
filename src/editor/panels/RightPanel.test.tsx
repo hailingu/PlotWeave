@@ -1061,4 +1061,25 @@ describe('RightPanel ✦AI 执行卡回执语义（issue #347）', () => {
     expect(screen.getAllByText('✓ 已执行')).toHaveLength(1)
     expect(screen.queryByText(/⌘Z 可整批撤销/)).toBeNull()
   })
+
+  it('恢复会话剥除旧版回执的 ⌘Z 宣称，非回执 note 逐字保留', async () => {
+    await toAiTab(APP_WITH_KEY, {
+      aiSession: {
+        schemaVersion: 1,
+        entries: [
+          { id: 1, kind: 'note', text: '✓ 已执行 2 项改动，⌘Z 可整批撤销。' },
+          {
+            id: 2,
+            kind: 'note',
+            text: '✓ 已执行 2 项改动，用户继续手动调整。',
+          },
+        ],
+      },
+    })
+    expect(screen.getByText('✓ 已执行 2 项改动。')).toBeTruthy()
+    expect(
+      screen.getByText('✓ 已执行 2 项改动，用户继续手动调整。'),
+    ).toBeTruthy()
+    expect(screen.queryByText(/⌘Z 可整批撤销/)).toBeNull()
+  })
 })
