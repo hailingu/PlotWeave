@@ -1,9 +1,10 @@
 /**
  * 全局未处理拒绝与错误事件兜底（issue #358）：React 错误边界不捕获
  * 异步 Promise 拒绝与事件处理器抛出的异常，这类失败此前没有任何用户
- * 可见或日志可见的信号。入口（main.tsx）在挂载前注册 window 级监听，
- * 为两类失败输出结构化控制台诊断（机器码 + 上下文字段，风格对齐
- * libraryDiagnosticTransport 的 `{ code }` 形态），补齐纵深防御层。
+ * 可见或日志可见的信号。引导入口（bootstrap.ts，先于应用静态导入图
+ * 求值——评审 5326220397）安装 window 级监听，为两类失败输出结构化
+ * 控制台诊断（机器码 + 上下文字段，风格对齐 libraryDiagnosticTransport
+ * 的 `{ code }` 形态），补齐纵深防御层。
  *
  * 不吞错硬约束：监听器不调用 preventDefault / stopPropagation——浏览器
  * 对未处理拒绝与未捕获错误的默认上报原样保留，本层只追加诊断，绝不把
@@ -97,8 +98,9 @@ export function handleErrorEvent(event: ErrorEventLike): void {
   report('未捕获的脚本错误', diagnostic)
 }
 
-/** 在目标（缺省 window）上安装两个全局兜底监听；仅在应用入口调用一次
- * （main.tsx），不在库/组件层重复安装。注册即返回，不阻塞启动。 */
+/** 在目标（缺省 window）上安装两个全局兜底监听；仅在应用引导入口
+ * （bootstrap.ts）调用一次，不在库/组件层重复安装。注册即返回，
+ * 不阻塞启动。 */
 export function installGlobalErrorGuard(target: EventTarget = window): void {
   target.addEventListener('unhandledrejection', (event) => {
     // DOM 事件子类型向下转换：真实事件携带 reason（测试经结构形状直调）

@@ -2,13 +2,8 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { App } from './App'
 import { ErrorBoundary } from './ErrorBoundary'
-import { installGlobalErrorGuard } from './globalErrorGuard'
 import { initializeLibraryDiagnostics } from './library/libraryDiagnosticTransport'
 import './index.css'
-
-// 全局兜底最先安装（issue #358）：错误边界不捕获异步拒绝与事件处理器
-// 异常，引导期失败也须留结构化诊断；监听不吞错，仅追加可见诊断。
-installGlobalErrorGuard()
 
 /* Tauri 桌面端使用 macOS Overlay 标题栏（红绿灯悬浮在内容上），
  * 根元素打上 is-tauri 标记，让应用外壳为原生控件留出安全区；
