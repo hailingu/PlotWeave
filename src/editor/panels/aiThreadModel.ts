@@ -303,8 +303,9 @@ export function readToolOf(
 }
 
 /** 预览卡执行回执条目（executeCard 拆出）：失败 → 错误回执（批次未动，
- * 保持 pending）；成功 → 已执行回执。回执随会话持久化，不携带 ⌘Z
- * 撤销宣称——撤销栈不跨会话存活，该提示只在当前会话的卡片上呈现。 */
+ * 保持 pending）；成功 → 已执行回执。回执随会话持久化；已执行卡提示
+ * 一律只陈述回执，不携带也不承诺 ⌘Z 撤销宣称——撤销/重做或后续编辑
+ * 都会改变撤销栈顶，撤销不回写卡片（issue #347）。 */
 export function cardResultEntry(
   err: string | null,
   count: number,

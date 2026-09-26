@@ -378,3 +378,26 @@ describe('发送给模型的完整角色与对白创建示例', () => {
     expect(h.outline.queryByText('对白 · 收购交锋')).toBeNull()
   })
 })
+
+/** issue #347 执行卡回执语义：执行后与整批撤销后，卡片提示都只保留回执、
+ * 不承诺 ⌘Z 当前可整批撤销——撤销不回写卡片。独立有界套件：既有交付
+ * describe 闭包超限受 grandfathering 保护，不得增长（AGENTS.md 尺寸上限）。 */
+describe('执行卡回执语义（issue #347）', () => {
+  it('执行后与整批撤销后，提示都只保留回执、无当前撤销宣称', async () => {
+    const h = await setup()
+    ipc
+      .mockResolvedValueOnce({ role: 'assistant', content: '将创建场景。' })
+      .mockResolvedValueOnce(proposal(false))
+    await send('在第二个节奏卡，创建场景')
+    expect(screen.getByLabelText('AI 改动预览')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '✓ 执行改动' }))
+    await waitFor(() => expect(h.flow.getByText('吞并计划')).toBeTruthy())
+    expect(screen.getAllByText('✓ 已执行')).toHaveLength(1)
+    expect(screen.queryByText(/⌘Z 可整批撤销/)).toBeNull()
+    fireEvent.click(screen.getByLabelText('撤销'))
+    await waitFor(() => expect(h.flow.queryByText('吞并计划')).toBeNull())
+    // 撤销改变栈顶后提示仍不得误导：卡片保持回执语义、无当前撤销宣称
+    expect(screen.getAllByText('✓ 已执行')).toHaveLength(1)
+    expect(screen.queryByText(/⌘Z 可整批撤销/)).toBeNull()
+  })
+})
