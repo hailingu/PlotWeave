@@ -193,18 +193,6 @@
   min-width: 0;
 }
 
-.pw-settings-item-name {
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.pw-settings-item-note {
-  font-size: 11px;
-  line-height: 1.5;
-  color: var(--text-secondary);
-}
-
 /* ---- 资产库（§8.1 六分类） ---- */
 .pw-assets-hint {
   font-size: 10.5px;

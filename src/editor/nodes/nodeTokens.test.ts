@@ -89,7 +89,7 @@ function tokenValues(env: Env): Map<string, string> {
   return out
 }
 
-/** 消解一层 var() 引用（--branch-dim: var(--text-secondary) 形态）。 */
+/** 消解一层 var() 引用（--branch-text: var(--text-primary) 形态）。 */
 function resolveOnce(value: string, tokens: Map<string, string>): string {
   return value.replace(
     /var\(\s*(--[\w-]+)\s*\)/g,
@@ -189,14 +189,6 @@ const BRANCH_TOKENS: Readonly<Record<string, { light: string; dark: string }>> =
     '--branch-opt-text': {
       light: '#3a3a3c',
       dark: 'rgba(245, 245, 247, 0.92)',
-    },
-    '--branch-addopt-border': {
-      light: 'rgba(0, 0, 0, 0.22)',
-      dark: 'rgba(235, 235, 245, 0.3)',
-    },
-    '--branch-dim': {
-      light: 'var(--text-secondary)',
-      dark: 'rgba(235, 235, 245, 0.45)',
     },
   }
 
@@ -443,17 +435,8 @@ describe('增强对比度：家族文本 ≥ 4.5:1（§2 原则 2）', () => {
       const surface = on === '--branch-opt-bg' ? '--branch-bg' : on
       expectContrast(token, on, surface, lightMore, 4.5)
     }
-    // branch-dim 是 var 链，消解后同样须达标（浅外观 = text-secondary more 变体）
-    expectContrast('--branch-dim', '--branch-bg', '--branch-bg', lightMore, 4.5)
-    // 分支族跟随画布外观：深外观下 dim/opt-text 同样须达标。分支深色底为
-    // transparent，addopt 文字实际画在画布底色上（PR #114 评审 4000027706）
-    expectContrast(
-      '--branch-dim',
-      '--surface-canvas',
-      '--surface-canvas',
-      darkMore,
-      4.5,
-    )
+    // 分支族跟随画布外观：深外观下 opt-text 同样须达标。分支深色底为
+    // transparent，opt 文字实际画在画布底色上（PR #114 评审 4000027706）
     expectContrast(
       '--branch-opt-text',
       '--branch-opt-bg',
@@ -516,14 +499,9 @@ describe('增强对比度：家族文本 ≥ 4.5:1（§2 原则 2）', () => {
 })
 
 describe('增强对比度：UI 组件 ≥ 3:1（非文本）', () => {
-  it('分支虚线框/添加行边、画外音徽标边在 more 对比度下达标', () => {
+  it('分支虚线框、画外音徽标边在 more 对比度下达标', () => {
     const uiTargetsLight = [
       { token: '--branch-frame', bg: '--branch-bg', surface: '--branch-bg' },
-      {
-        token: '--branch-addopt-border',
-        bg: '--branch-bg',
-        surface: '--branch-bg',
-      },
       {
         token: '--node-paper-voiceover-border',
         bg: '--node-paper-note',
@@ -534,7 +512,7 @@ describe('增强对比度：UI 组件 ≥ 3:1（非文本）', () => {
       expectContrast(token, bg, surface, lightMore, 3)
     }
     // 深色下分支底透明，虚线框实际画在画布底色上
-    for (const token of ['--branch-frame', '--branch-addopt-border']) {
+    for (const token of ['--branch-frame']) {
       expectContrast(token, '--surface-canvas', '--surface-canvas', darkMore, 3)
     }
   })
