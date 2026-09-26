@@ -131,7 +131,9 @@ fn versionless_v1_envelope_classifies_as_v1_and_keeps_graph() {
     assert!(file.versionless);
     let ipc = serde_json::to_value(&file).unwrap();
     assert_eq!(ipc["versionless"], json!(true));
-    // 显式版本与 v0 包装不打标记（v0 迁移本身即回写）
+    // 显式版本不打标记；形状判型（无论判为 v1 还是 v0）都打标记——
+    // 版本主张缺失/异型的判型修复必须可向前端解释（§11 第 0 步「均记录
+    // 警告」，issue #338 评审：v0 迁移回写本身即落定，标记只承载警告）
     let explicit = json!({
         "schemaVersion": 1,
         "project": { "id": "p-1", "name": "显式" },
@@ -146,7 +148,7 @@ fn versionless_v1_envelope_classifies_as_v1_and_keeps_graph() {
         "name": "旧项目", "updated_at": 1_700_000_000_000u64,
         "nodes": [], "edges": [],
     });
-    assert!(!parse_file("p-1", &v0.to_string()).unwrap().versionless);
+    assert!(parse_file("p-1", &v0.to_string()).unwrap().versionless);
 }
 
 #[test]
@@ -226,7 +228,8 @@ fn heterogeneous_version_value_falls_back_to_v1_shape() {
 }
 
 /// [issue #338]：异型版本值 + 唯一旧扁平形状 → 与缺失版本号同款包装 v0
-/// 信封（迁移本身回写落定，不依赖 versionless 标记）。
+/// 信封并打 versionless 标记——形状判型的 v0 同样缺有效版本主张，标记
+/// 供前端记录判型警告（评审修复：§11 第 0 步「均记录警告」）。
 #[test]
 fn heterogeneous_version_value_with_legacy_shape_wraps_as_v0() {
     let legacy = json!({
@@ -238,7 +241,7 @@ fn heterogeneous_version_value_with_legacy_shape_wraps_as_v0() {
     });
     let file = parse_file("p-old", &legacy.to_string()).unwrap();
     assert_eq!(file.schema_version, 0);
-    assert!(!file.versionless);
+    assert!(file.versionless);
     assert_eq!(file.project.name, "旧项目");
 }
 

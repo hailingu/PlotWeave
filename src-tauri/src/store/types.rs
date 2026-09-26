@@ -43,10 +43,12 @@ pub struct ProjectInfo {
 pub struct ProjectFile {
     #[serde(rename = "schemaVersion")]
     pub schema_version: u32,
-    /// 信封判型发现文件缺 schemaVersion（按形状判为 v1，§11 第 0 步）：
-    /// IPC 标记由前端 repaired 检测消费（载荷额外键使规范化比较必然不等，
-    /// 触发回写补盖版本号）——否则文件永久无版本，违反 §10.5/§11.1 收敛
-    /// 契约；持久化输出恒为 false（保存必盖显式版本）。
+    /// 信封形状判型标记（§11 第 0 步）：文件缺 schemaVersion 或版本字段为
+    /// 无法表达受支持/未来版本的异型值（issue #338）时按唯一信封形状判型
+    /// 交付，v1/v0 两族判型产物都打本标记。前端 repaired 检测消费（载荷
+    /// 额外键使规范化比较必然不等，触发回写补盖版本号——否则脏版本键长留
+    /// 磁盘，违反 §10.5/§11.1 收敛契约），并据以记录判型警告（「均记录
+    /// 警告」，issue #338 评审）；持久化输出恒为 false（保存必盖显式版本）。
     #[serde(default, skip_serializing_if = "is_false")]
     pub versionless: bool,
     pub project: ProjectInfo,

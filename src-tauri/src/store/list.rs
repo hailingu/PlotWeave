@@ -315,7 +315,9 @@ fn parse_explicit_envelope(
 /// v1 专属键（project/graph/assets）独占时赋予待修复的有效版本 1；旧扁平
 /// 特征键（≥2 个且含 nodes/edges）独占时包装为 v0 信封；混合或两组特征均
 /// 不足的损坏文档拒绝加载并保留原文件——绝不把保持 v1 形状的文档误包装成
-/// 空 v0 图后回写摧毁原画布。
+/// 空 v0 图后回写摧毁原画布。两族判型产物都打 versionless 标记：形状判型
+/// 的文档本就缺有效版本主张，前端据此记录判型警告（评审修复，§11 第 0 步
+/// 「均记录警告」，issue #338）——v0 迁移回写本身即落定，标记只承载警告。
 fn classify_versionless(
     id: &str,
     value: serde_json::Value,
@@ -329,7 +331,9 @@ fn classify_versionless(
         return Ok(file);
     }
     if v1_keys == 0 && legacy_keys >= 2 && has_legacy_list {
-        return Ok(wrap_legacy(id, &value));
+        let mut file = wrap_legacy(id, &value);
+        file.versionless = true;
+        return Ok(file);
     }
     Err(StoreError::CorruptEnvelope(
         "无法判别文档信封：v1 与旧扁平特征键混合或均不足（已保留原文件）",
