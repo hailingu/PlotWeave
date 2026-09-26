@@ -998,4 +998,29 @@ describe('CSS 空白与 NBSP 的关键字判定边界（issue #339）', () => {
     // 对照：普通 CSS 空白包围的关键字仍是合法属性值
     expect(colorTypeOk('background', ' unset ')).toBe(true)
   })
+
+  it.each([
+    ['background-image', '\u00a0none'],
+    ['border-image-source', '\u00a0url(a.png)'],
+  ])(
+    '图像长形 %s 的 NBSP 不得折算成合法图像 token（issue #339 评审二轮）',
+    (prop, value) => {
+      // imageValueOk 自带逗号切分的入列裁剪也是 JS trim：'\u00a0none' 被
+      // 折算成 'none'、'\u00a0url(...)' 被折算成完整 url() 图像——必须与
+      // 其他入口同用 CSS 空白集裁剪（issue #339 评审二轮）
+      expect(colorTypeOk(prop, value)).toBe(false)
+    },
+  )
+
+  it('图像长形端到端：NBSP none 按非法值报错，普通空白对照不变（issue #339 评审二轮）', () => {
+    const root = postcss.parse(
+      ':root { --s: \u00a0none; } .a { background-image: var(--s); }',
+    )
+    expect(danglingRefs(root, LIGHT_ENV)).toEqual([])
+    expect(displayTypeErrors(root, LIGHT_ENV)).toEqual([
+      '.a background-image: \u00a0none',
+    ])
+    // 对照：普通 CSS 空白包围的 none 仍是合法图像长形取值
+    expect(colorTypeOk('background-image', ' none ')).toBe(true)
+  })
 })

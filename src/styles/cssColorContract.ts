@@ -162,7 +162,9 @@ export function imageKind(value: string): 'url' | 'gradient' | null {
   return match[1]!.toLowerCase() === 'url' ? 'url' : 'gradient'
 }
 
-/** 图像长形只接受完整图像/none；保留空列表项以拒绝无效逗号，URL/函数内部逗号不分层。 */
+/** 图像长形只接受完整图像/none；保留空列表项以拒绝无效逗号，URL/函数内部逗号不分层。
+ * 入列裁剪与切分/关键字入口同用 CSS 空白集（issue #339 评审二轮）：JS trim 会把
+ * NBSP 包围的 '\u00a0none'/'\u00a0url(...)' 折算成合法图像 token 而放行。 */
 function imageValueOk(prop: string, value: string): boolean {
   const syntax = maskCssOpaque(value)
   const images: string[] = []
@@ -172,11 +174,11 @@ function imageValueOk(prop: string, value: string): boolean {
     if (syntax[i] === '(') depth += 1
     else if (syntax[i] === ')') depth -= 1
     else if (syntax[i] === ',' && depth === 0) {
-      images.push(value.slice(start, i).trim())
+      images.push(trimCssWhitespace(value.slice(start, i)))
       start = i + 1
     }
   }
-  images.push(value.slice(start).trim())
+  images.push(trimCssWhitespace(value.slice(start)))
   return (
     (prop === 'background-image' || images.length === 1) &&
     images.every((image) => /^none$/i.test(image) || imageKind(image) !== null)
