@@ -25,4 +25,21 @@ export default tseslint.config(
       ],
     },
   },
+  {
+    // Type-aware lint entry (issue #357): enforces the `void`-prefixed
+    // fire-and-forget convention automatically. Scoped to production source
+    // under src/ — test files and *.test-d.ts contract probes stay on the
+    // non-type-aware baseline (issue #357 defers them to a separate batch).
+    files: ['src/**/*.{ts,tsx}'],
+    ignores: ['**/*.test.{ts,tsx}', '**/*.test-d.ts'],
+    languageOptions: {
+      parserOptions: {
+        projectService: { defaultProject: './tsconfig.json' },
+      },
+    },
+    rules: {
+      '@typescript-eslint/no-floating-promises': 'error',
+      '@typescript-eslint/no-misused-promises': 'error',
+    },
+  },
 )

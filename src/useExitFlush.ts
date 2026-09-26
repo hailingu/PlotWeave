@@ -94,12 +94,15 @@ export function useExitFlush(): string | null {
         unlistens.push(unlistenClose)
         // ⌘Q（Rust 侧菜单接管，lib.rs install_quit_barrier_menu）：同一道
         // 冲刷屏障；无待保存直接受控退出
-        const unlistenQuit = await listen('app-quit-requested', async () => {
+        const handleQuitRequested = async (): Promise<void> => {
           if (!hasPendingSaves()) {
             await invoke('app_exit')
             return
           }
           await drainAndThen(() => invoke('app_exit'))
+        }
+        const unlistenQuit = await listen('app-quit-requested', () => {
+          void handleQuitRequested()
         })
         unlistens.push(unlistenQuit)
         // 监听注册完成后确认就绪（issue #65）：后端消费启动间隙（原生屏障
