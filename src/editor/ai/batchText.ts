@@ -63,3 +63,36 @@ export function extractBatchJson(
   }
   return undefined
 }
+
+/** 未闭合 ```json 围栏的正文（最后一个 ``` 开标记无闭合时其后的剩余
+ * 文本）：截断或漏写闭合围栏的呈交形态。最后一个开标记非 JSON、或无
+ * 未闭合围栏时返回 null。 */
+function pendingFenceBody(text: string): string | null {
+  let from = 0
+  for (;;) {
+    const open = text.indexOf('```', from)
+    if (open === -1) return null
+    const afterTicks = open + 3
+    const isJson =
+      text.slice(afterTicks, afterTicks + 4).toLowerCase() === 'json'
+    const bodyStart = afterTicks + (isJson ? 4 : 0)
+    const close = text.indexOf('```', bodyStart)
+    if (close === -1) return isJson ? text.slice(bodyStart) : null
+    from = close + 3
+  }
+}
+
+/** 批次呈交形态探测（issue #341）：模型呈交批次的词法形态，与
+ * extractBatchJson 的提取视野互补——可解析的批次由其判为校验对象，
+ * 解析不到但呈交信封可辨的（围栏内含 commands 字段、未闭合围栏、
+ * 裸 JSON 开头）仍是交付尝试，按既有配额纠正。无围栏的行内字段解释、
+ * 引用与代码示例（散文开头的行内片段）不构成呈交——纯讨论不得据此
+ * 锁存交付期待并烧纠正预算。 */
+export function looksLikeBatchAttempt(text: string): boolean {
+  const last = lastFenceBody(text)
+  if (last !== null && /"commands"\s*:/.test(last)) return true
+  const pending = pendingFenceBody(text)
+  if (pending !== null && /"commands"\s*:/.test(pending)) return true
+  const trimmed = text.trim()
+  return trimmed.startsWith('{') && /"commands"\s*:/.test(trimmed)
+}
