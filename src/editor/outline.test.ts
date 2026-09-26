@@ -330,6 +330,38 @@ describe('剧情流线性序（issue #340：拖拽重排连线后列表与导出
     ])
   })
 
+  it('成环残留补齐进路由分区一次：不重复、不误触未接入分段（issue #340 评审四轮）', () => {
+    // 成环节点经拓扑循环无法就绪，由 x/id 补齐兜底——补齐时必须登记
+    // routedIds，否则 shotsByHost 把它们当未路由成员再收进 detached，
+    // 每个成环节点（连同其分镜块）输出两遍并误触「未接入剧情流」标记
+    const nodes: CanvasNode[] = [
+      node({
+        id: 's1',
+        type: 'scene',
+        position: { x: 100, y: 0 },
+        data: { name: 's1', sceneNo: 1 },
+      }),
+      node({
+        id: 's2',
+        type: 'scene',
+        position: { x: 200, y: 0 },
+        data: { name: 's2', sceneNo: 2 },
+      }),
+      node({
+        id: 'sh1',
+        type: 'shot',
+        position: { x: 105, y: 40 },
+        data: { shotNo: 1, size: '特写' },
+      }),
+    ]
+    const edges: Edge[] = [
+      seq('e1', 's1', 's2'),
+      seq('e2', 's2', 's1'),
+      { id: 'a1', source: 's1', target: 'sh1', className: 'pw-edge-attach' },
+    ]
+    expect(rowsOf(nodes, edges)).toEqual(['s1', 'sh1', 's2'])
+  })
+
   it('拖拽计划的 undo 恢复列表连线序（issue #340 验收：undo 一致）', () => {
     // 与 issue 复现同构：真实 outlineSplicePlan + spliceEdgesWith 应用重排
     const nodes = [

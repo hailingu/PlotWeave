@@ -222,7 +222,11 @@ function topoRoute<T extends CanvasNode>(
     ready = byXId(ready)
   }
   for (const node of byXId(members))
-    if (inFlow.has(node.id) && !routedIds.has(node.id)) routed.push(node)
+    if (inFlow.has(node.id) && !routedIds.has(node.id)) {
+      routed.push(node)
+      // 补齐必须同步登记，否则 shotsByHost 将同一节点再收进 detached
+      routedIds.add(node.id)
+    }
   return { routed, routedIds }
 }
 
