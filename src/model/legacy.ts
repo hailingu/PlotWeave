@@ -210,15 +210,72 @@ function ensureLocation(ctx: MigrationCtx, name: string): string {
   return entity.id
 }
 
+/** 场景地点镜像迁移（migrateSceneNode 拆分）：地点镜像按 trim 规范化
+ * （§11 v0 兼容子步骤）——规范化后为空或非字符串（null/数字/对象）均删除
+ * 并警告、不建实体（否则建出的空白名实体必被 v1 归一化隔离，场景徒留悬空
+ * locationId；非字符串镜像残留会被 toStoryNode 摊进 v1 spec 且归一化不删
+ * 未知键）；结构化 locationId 有效时胜过过时的字符串镜像（合法 id 优先）：
+ * 一致性以 ID 指向实体的名称为基准——镜像名称与之 trim() 一致为一致镜像
+ * 静默删除，不一致或无法确认一致（ID 无对应实体/名称异型）删除镜像并警
+ * 告（§11 v0 地点兼容，issue #337；评审 5324079068：同名多地点不按首见
+ * 命中判定）。返回消解后的 locationId（未定时不写入 data，见
+ * migrateSceneNode）。 */
+function migrateSceneLocation(
+  ctx: MigrationCtx,
+  nid: string,
+  d: Record<string, unknown>,
+): string | undefined {
+  let locationId = d.locationId as string | undefined
+  if (typeof locationId === 'string' && ctx.locationRemap.has(locationId)) {
+    locationId = ctx.locationRemap.get(locationId)
+  }
+  if (typeof d.location === 'string') {
+    const locationName = d.location.trim()
+    if (!locationName) {
+      ctx.warnings?.push(`节点 ${nid} 的旧地点镜像为空白，已删除（不建实体）`)
+    } else if (!(typeof locationId === 'string' && locationId.trim())) {
+      locationId = ensureLocation(ctx, locationName)
+    } else {
+      // 合法 locationId 与非空名称镜像并存（issue #337，§11 v0 地点兼容
+      // 「以其为准并删除旧镜像，名称冲突记录警告」）：一致性以 ID 指向
+      // 实体的名称为基准——镜像名称经同一 trim() 规范化与该实体名称一致
+      // 即一致镜像，静默删除；不一致、ID 无对应实体或其名称异型（无法
+      // 确认一致）为名称冲突，按 ID 保留并删除镜像、记录警告。不按名称
+      // 首见命中判定：设定桶不强制名称唯一（addLocation/renameLocation
+      // 不查重），同名池中 ID 可指向非首见实体，首见比对会误报冲突
+      // （评审 5324079068）。
+      const targeted = ctx.settings.locations.find((l) => l.id === locationId)
+      if (
+        targeted === undefined ||
+        typeof targeted.name !== 'string' ||
+        targeted.name.trim() !== locationName
+      ) {
+        ctx.warnings?.push(
+          `节点 ${nid} 的旧地点名称镜像「${locationName}」与结构化 locationId 冲突，已按 ID 保留并删除镜像`,
+        )
+      }
+    }
+    delete d.location
+    ctx.migrated = true
+  } else if ('location' in d) {
+    // 非字符串镜像（null/数字/对象等）同样删除并警告：留着会被 toStoryNode
+    // 摊进 v1 spec 且归一化不删未知键——迁移成功却把异型镜像永久写回
+    ctx.warnings?.push(`节点 ${nid} 的旧地点镜像非字符串，已删除`)
+    delete d.location
+    ctx.migrated = true
+  }
+  return locationId
+}
+
 /** 场景节点的 v0 字段迁移（迁移链 ④ 内核）：头像列解析为角色 id 后与已有
  * 合法 characterIds（仅字符串成员，随空白 id 重发改写（⑤））按原顺序合并
  * 去重（§11 v0 兼容子步骤：两来源并存不得互斥覆盖——空头像列也不清空
  * 结构化引用），成功转换后才删除 characters；只有两种来源都不存在时才
- * 补空数组。地点镜像按 trim 规范化（§11 v0 兼容子步骤）：规范化后为空
- * 或非字符串（null/数字/对象）均删除并警告、不建实体（否则建出的空白名
- * 实体必被 v1 归一化隔离，场景徒留悬空 locationId；非字符串镜像残留会被
- * toStoryNode 摊进 v1 spec 且归一化不删未知键）；结构化 locationId 有效
- * 时胜过过时的字符串镜像（合法 id 优先、废弃镜像删除）。 */
+ * 补空数组。地点镜像迁移见 migrateSceneLocation；locationId 键仅在确定值
+ * 时写入（issue #337）：无地点的合法场景不得凭空合成 undefined 键——
+ * toStoryNode 会把它摊进 v1 spec，归一化按键存在剥离并误报「非字符串」；
+ * 输入显式携带的异型 locationId（null 等）仍原样保留，交由 v1 剥离并警告
+ * （真实输入缺陷的剥离诊断不丢失）。 */
 function migrateSceneNode(ctx: MigrationCtx, node: CanvasNode): CanvasNode {
   if (node.type !== 'scene') return node
   const d = { ...(node.data as Record<string, unknown>) }
@@ -244,29 +301,10 @@ function migrateSceneNode(ctx: MigrationCtx, node: CanvasNode): CanvasNode {
     characterIds = []
     ctx.migrated = true
   }
-  let locationId = d.locationId as string | undefined
-  if (typeof locationId === 'string' && ctx.locationRemap.has(locationId)) {
-    locationId = ctx.locationRemap.get(locationId)
-  }
-  if (typeof d.location === 'string') {
-    const locationName = d.location.trim()
-    if (!locationName) {
-      ctx.warnings?.push(
-        `节点 ${String(node.id)} 的旧地点镜像为空白，已删除（不建实体）`,
-      )
-    } else if (!(typeof locationId === 'string' && locationId.trim())) {
-      locationId = ensureLocation(ctx, locationName)
-    }
-    delete d.location
-    ctx.migrated = true
-  } else if ('location' in d) {
-    // 非字符串镜像（null/数字/对象等）同样删除并警告：留着会被 toStoryNode
-    // 摊进 v1 spec 且归一化不删未知键——迁移成功却把异型镜像永久写回
-    ctx.warnings?.push(`节点 ${String(node.id)} 的旧地点镜像非字符串，已删除`)
-    delete d.location
-    ctx.migrated = true
-  }
-  return { ...node, data: { ...d, characterIds, locationId } } as CanvasNode
+  const locationId = migrateSceneLocation(ctx, String(node.id), d)
+  const nextData: Record<string, unknown> = { ...d, characterIds }
+  if (locationId !== undefined) nextData.locationId = locationId
+  return { ...node, data: nextData } as CanvasNode
 }
 
 /** 对白节点的 v0 字段迁移：对象 speaker（头像标签）解析为角色实体 id；

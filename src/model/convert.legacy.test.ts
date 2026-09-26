@@ -908,3 +908,101 @@ describe('schemaVersion 0 迁移：异型设定桶的预检诊断（issue #336�
     expect(legal.warnings.some((w) => w.includes('settings.'))).toBe(false)
   })
 })
+
+/** issue #337 四状态信封：单场景（data 由调用方给定）+ 设定地点桶（模块级
+ * 夹具，使回归 describe 不超 80 行）。 */
+const legacySceneEnvelope = (
+  sceneData: Record<string, unknown>,
+  locations: unknown[] = [],
+) => ({
+  schemaVersion: 0,
+  project: {
+    id: 'p-old',
+    name: 'probe',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  },
+  graph: {
+    nodes: [
+      { id: 's1', type: 'scene', position: { x: 0, y: 0 }, data: sceneData },
+    ],
+  },
+  edges: undefined,
+  settings: { characters: [], locations },
+  episodeTitles: {},
+  assets: { byId: {} },
+})
+
+const sceneBaseData = {
+  name: 's1',
+  sceneNo: 1,
+  interior: true,
+  time: 'day',
+  synopsis: '',
+  characterIds: [],
+}
+
+describe('schemaVersion 0 迁移：场景地点镜像的诊断一致性（issue #337，§11 v0 地点兼容）', () => {
+  const specOf = (round: ReturnType<typeof parseProject>) =>
+    round.content.nodes[0].data as { locationId?: unknown }
+  const conflictWarningOf = (round: ReturnType<typeof parseProject>) =>
+    round.warnings.some((w) => w.includes('s1') && w.includes('冲突'))
+
+  it('缺失地点：不合成 locationId 键，无「非字符串」误报', () => {
+    const round = parseProject(legacySceneEnvelope({ ...sceneBaseData }))
+    expect('locationId' in specOf(round)).toBe(false)
+    expect(
+      round.warnings.some((w) => w.includes('s1') && w.includes('locationId')),
+    ).toBe(false)
+  })
+
+  it('合法旧名称恢复：location 镜像复用既有实体写入 locationId（对照不变）', () => {
+    const round = parseProject(
+      legacySceneEnvelope({ ...sceneBaseData, location: 'Room' }, [
+        { id: 'loc-1', name: 'Room' },
+      ]),
+    )
+    expect(specOf(round).locationId).toBe('loc-1')
+    expect(conflictWarningOf(round)).toBe(false)
+  })
+
+  it('相同镜像：location 命名 ID 指向的同一实体——按 ID 保留、镜像静默删除', () => {
+    const round = parseProject(
+      legacySceneEnvelope(
+        { ...sceneBaseData, locationId: 'loc-1', location: 'Room' },
+        [{ id: 'loc-1', name: 'Room' }],
+      ),
+    )
+    expect(specOf(round).locationId).toBe('loc-1')
+    expect(conflictWarningOf(round)).toBe(false)
+  })
+
+  it('冲突镜像：location 与 ID 指向实体不一致——按 ID 保留并记录冲突警告', () => {
+    const round = parseProject(
+      legacySceneEnvelope(
+        { ...sceneBaseData, locationId: 'loc-1', location: 'Other' },
+        [{ id: 'loc-1', name: 'Room' }],
+      ),
+    )
+    expect(specOf(round).locationId).toBe('loc-1')
+    expect(
+      round.warnings.some(
+        (w) => w.includes('s1') && w.includes('Other') && w.includes('冲突'),
+      ),
+    ).toBe(true)
+  })
+
+  it('同名多地点：镜像命名 ID 指向的非首见实体——一致镜像不误报冲突', () => {
+    const round = parseProject(
+      legacySceneEnvelope(
+        { ...sceneBaseData, locationId: 'loc-2', location: 'Room' },
+        [
+          { id: 'loc-1', name: 'Room' },
+          { id: 'loc-2', name: 'Room' },
+        ],
+      ),
+    )
+    expect(specOf(round).locationId).toBe('loc-2')
+    expect(conflictWarningOf(round)).toBe(false)
+  })
+})
