@@ -991,4 +991,18 @@ describe('schemaVersion 0 迁移：场景地点镜像的诊断一致性（issue 
       ),
     ).toBe(true)
   })
+
+  it('同名多地点：镜像命名 ID 指向的非首见实体——一致镜像不误报冲突', () => {
+    const round = parseProject(
+      legacySceneEnvelope(
+        { ...sceneBaseData, locationId: 'loc-2', location: 'Room' },
+        [
+          { id: 'loc-1', name: 'Room' },
+          { id: 'loc-2', name: 'Room' },
+        ],
+      ),
+    )
+    expect(specOf(round).locationId).toBe('loc-2')
+    expect(conflictWarningOf(round)).toBe(false)
+  })
 })

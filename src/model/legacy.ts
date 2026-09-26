@@ -215,9 +215,11 @@ function ensureLocation(ctx: MigrationCtx, name: string): string {
  * 并警告、不建实体（否则建出的空白名实体必被 v1 归一化隔离，场景徒留悬空
  * locationId；非字符串镜像残留会被 toStoryNode 摊进 v1 spec 且归一化不删
  * 未知键）；结构化 locationId 有效时胜过过时的字符串镜像（合法 id 优先）：
- * 镜像名称解析到同一实体为一致镜像静默删除，名称冲突（指向其他实体或无
- * 命中）删除镜像并警告（§11 v0 地点兼容，issue #337）。返回消解后的
- * locationId（未定时不写入 data，见 migrateSceneNode）。 */
+ * 一致性以 ID 指向实体的名称为基准——镜像名称与之 trim() 一致为一致镜像
+ * 静默删除，不一致或无法确认一致（ID 无对应实体/名称异型）删除镜像并警
+ * 告（§11 v0 地点兼容，issue #337；评审 5324079068：同名多地点不按首见
+ * 命中判定）。返回消解后的 locationId（未定时不写入 data，见
+ * migrateSceneNode）。 */
 function migrateSceneLocation(
   ctx: MigrationCtx,
   nid: string,
@@ -235,14 +237,19 @@ function migrateSceneLocation(
       locationId = ensureLocation(ctx, locationName)
     } else {
       // 合法 locationId 与非空名称镜像并存（issue #337，§11 v0 地点兼容
-      // 「以其为准并删除旧镜像，名称冲突记录警告」）：镜像名称经同一 trim()
-      // 规范化解析既有实体（与 ensureLocation 同一口径）——命中 ID 指向的
-      // 同一实体为一致镜像，静默删除；命中其他实体或无命中（按名称恢复
-      // 将改接别处）为名称冲突，按 ID 保留并删除镜像、记录警告。
-      const hit = ctx.settings.locations.find(
-        (l) => typeof l.name === 'string' && l.name.trim() === locationName,
-      )
-      if (hit?.id !== locationId) {
+      // 「以其为准并删除旧镜像，名称冲突记录警告」）：一致性以 ID 指向
+      // 实体的名称为基准——镜像名称经同一 trim() 规范化与该实体名称一致
+      // 即一致镜像，静默删除；不一致、ID 无对应实体或其名称异型（无法
+      // 确认一致）为名称冲突，按 ID 保留并删除镜像、记录警告。不按名称
+      // 首见命中判定：设定桶不强制名称唯一（addLocation/renameLocation
+      // 不查重），同名池中 ID 可指向非首见实体，首见比对会误报冲突
+      // （评审 5324079068）。
+      const targeted = ctx.settings.locations.find((l) => l.id === locationId)
+      if (
+        targeted === undefined ||
+        typeof targeted.name !== 'string' ||
+        targeted.name.trim() !== locationName
+      ) {
         ctx.warnings?.push(
           `节点 ${nid} 的旧地点名称镜像「${locationName}」与结构化 locationId 冲突，已按 ID 保留并删除镜像`,
         )
