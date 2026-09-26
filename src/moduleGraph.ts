@@ -404,20 +404,47 @@ export function modelEditorRuntimeViolations(
   return offenders
 }
 
+/** 模型层编译期可达闭包（issue #353 评审 5326092395）：自 model/ 模块沿
+ * **全部可静态定目标的相对边（含 type-only）**可达的模块（含根）。类型链
+ * 同为编译期依赖——model 经 import type 触达的共享模块再引用 editor/ 或
+ * @xyflow/* 时，模型编译面已依赖 UI，须一并扫描。运行时闭包跳过类型边、
+ * 会漏掉这条路径，故编译期守卫专用本闭包。动态边目标运行时才定、无法
+ * 静态解析，不进闭包（不可解析的动态导入由两个运行时守卫 fail-closed）。 */
+export function modelCompileTimeClosure(
+  graph: Map<string, ModuleEdge[]>,
+): Set<string> {
+  const closure = new Set<string>()
+  const queue: string[] = []
+  for (const key of graph.keys()) {
+    if (!key.startsWith('model/')) continue
+    closure.add(key)
+    queue.push(key)
+  }
+  while (queue.length > 0) {
+    const current = queue.pop()!
+    for (const e of graph.get(current) ?? []) {
+      if (e.dynamic === true || closure.has(e.target)) continue
+      closure.add(e.target)
+      queue.push(e.target)
+    }
+  }
+  return closure
+}
+
 /** 模型层编译期独立性违规（issue #353 方向一）：model 是落盘 schema 的
- * 所有者，其运行时可达闭包内**任何**模块不得编译期依赖 UI 层与画布库
- * ——指向 editor/ 的任何边（含 import type）与指向 @xyflow/* 的任何
- * 外部边（含 import type）都使「编辑器节点形状变更」等价于「持久化
- * schema 变更」，即类型所有权倒置复发。闭包口径与运行时守卫一致
- * （经共享叶子的传递依赖同论）；不可静态解析的动态导入目标运行时才定、
- * 无法判定编译期目标，由两个运行时守卫 fail-closed，不在此重复计违规。
- * 返回 `文件 → 目标` 违规清单，空 = 通过。 */
+ * 所有者，其**编译期可达闭包**（含 type-only 边，评审 5326092395）内
+ * **任何**模块不得依赖 UI 层与画布库——指向 editor/ 的任何边（含
+ * import type）与指向 @xyflow/* 的任何外部边（含 import type）都使
+ * 「编辑器节点形状变更」等价于「持久化 schema 变更」，即类型所有权倒置
+ * 复发。不可静态解析的动态导入目标运行时才定、无法判定编译期目标，由
+ * 两个运行时守卫 fail-closed，不在此重复计违规。返回 `文件 → 目标` 违规
+ * 清单，空 = 通过。 */
 export function modelCompileTimeInversionViolations(
   graph: Map<string, ModuleEdge[]>,
   external: Map<string, ExternalEdge[]>,
 ): string[] {
   const offenders: string[] = []
-  for (const file of modelRuntimeClosure(graph)) {
+  for (const file of modelCompileTimeClosure(graph)) {
     for (const e of graph.get(file) ?? []) {
       if (e.target.startsWith('editor/'))
         offenders.push(`${file} → ${e.target}`)

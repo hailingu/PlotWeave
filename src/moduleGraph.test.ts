@@ -6,6 +6,7 @@ import {
   buildSrcModuleGraph,
   cyclesOf,
   externalEdgesOfSource,
+  modelCompileTimeClosure,
   modelCompileTimeInversionViolations,
   modelEditorRuntimeViolations,
   modelFrameworkRuntimeViolations,
@@ -223,10 +224,12 @@ describe('模型层编译期独立性（issue #353，方向一）', () => {
         'model/a.ts',
         [
           { target: 'editor/nodes/types.ts', typeOnly: true },
-          { target: 'shared.ts', typeOnly: false },
+          // 传递链首段同为 type-only（评审 5326092395）：编译期闭包须含
+          // 类型边，运行时闭包跳过类型边会漏扫 shared.ts
+          { target: 'shared.ts', typeOnly: true },
         ],
       ],
-      // 经共享叶子的传递类型边同论（闭包口径）
+      // 经共享叶子的传递类型边同论（编译期可达 = 含类型边的闭包口径）
       ['shared.ts', [{ target: 'editor/settings.ts', typeOnly: true }]],
       // editor → model 是正常依赖方向
       ['editor/b.tsx', [{ target: 'model/session.ts', typeOnly: false }]],
@@ -248,6 +251,18 @@ describe('模型层编译期独立性（issue #353，方向一）', () => {
       'model/a.ts → @xyflow/react',
       'shared.ts → editor/settings.ts',
     ])
+  })
+
+  it('编译期闭包含类型链传递模块；运行时闭包跳过类型边（评审 5326092395）', () => {
+    const graph = new Map<string, ModuleEdge[]>([
+      ['model/a.ts', [{ target: 'shared.ts', typeOnly: true }]],
+      ['shared.ts', []],
+    ])
+    expect(modelCompileTimeClosure(graph)).toEqual(
+      new Set(['model/a.ts', 'shared.ts']),
+    )
+    // 运行时闭包的既有口径不变：类型边不构成运行时可达
+    expect(modelRuntimeClosure(graph)).toEqual(new Set(['model/a.ts']))
   })
 
   it('真图：model 闭包无 editor/ 编译期边、无 @xyflow 编译期边', () => {
