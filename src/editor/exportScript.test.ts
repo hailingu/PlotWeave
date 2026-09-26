@@ -252,13 +252,40 @@ describe('buildScriptExport（issue #48 导出模型）', () => {
     episodeTitles: { 1: '立势', 2: '汇合' },
   })
 
-  it('默认关闭大纲：正文仍只由场景 + 对白生成，不含节奏与分支', () => {
+  it('默认关闭大纲：正文只由场景 + 对白生成，不含节奏与分支；头部注记披露分支未包含（issue #361）', () => {
     expect(draft.plain).toContain('## 场 01 · 天台夜话')
     expect(draft.plain).not.toContain('立势')
     expect(draft.plain).not.toContain('要不要坦白？')
+    // issue #361：默认正文不展开分支结构，但不得静默——注记随导出文件携带
+    expect(draft.plain).toContain('未包含 1 处分支的问句与选项去向')
     expect(draft.outline).not.toBe('')
     expect(draft.outline).toContain('要不要坦白？')
     expect(draft.hasNarrative).toBe(true)
+  })
+
+  it('注记同入大纲开启变体的头部：正文界定的告知与附录结构并存（issue #361）', () => {
+    expect(draft.outline).toContain('未包含 1 处分支的问句与选项去向')
+    expect(draft.outline).toContain('## 附录 · 创作大纲')
+    // 注记描述的是正文；附录自身的「不是剧情正文」界言保持不冲突
+    expect(draft.outline.indexOf('未包含 1 处分支')).toBeLessThan(
+      draft.outline.indexOf('## 附录 · 创作大纲'),
+    )
+  })
+
+  it('无分支的线性项目不带分支注记，输出与既有契约逐字一致（issue #361 不回归）', () => {
+    const linear = buildScriptExport({
+      projectName: '线性',
+      nodes,
+      edges,
+      settings,
+      assets: undefined,
+      episodeTitles: {},
+    })
+    expect(linear.summary.branches).toBe(0)
+    expect(linear.plain).not.toContain('未包含')
+    expect(linear.plain).toBe(
+      buildScriptMarkdown('线性', nodes, edges, settings, undefined),
+    )
   })
 
   it('开启大纲：并入同一生成结果的 Markdown，含集标题、基调、分支与去向', () => {

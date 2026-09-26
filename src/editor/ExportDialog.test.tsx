@@ -121,6 +121,28 @@ describe('ExportDialog（无故事内容，review #81）', () => {
   )
 })
 
+describe('ExportDialog（含分支项目的告知，issue #361）', () => {
+  it('既有叙事又有分支时，默认（大纲关）明示分支未包含；开启大纲后提示随态更新', () => {
+    const draft = generatedModel(['scene', 'branch'])
+    expect(draft.summary.branches).toBe(1)
+    setup({ model: draft })
+    expect(screen.getByText(/处分支未包含在正文中/)).toBeTruthy()
+    expect(preview()).toBe(draft.plain)
+    fireEvent.click(outlineToggle())
+    expect(
+      screen.getByText('正文 = 场景 + 对白；创作大纲与分镜卡为附录'),
+    ).toBeTruthy()
+    expect(preview()).toBe(draft.outline)
+  })
+
+  it('线性单结局项目（无分支）默认提示不出现分支告知（issue #361 不回归）', () => {
+    const draft = generatedModel(['scene', 'dialogue'])
+    expect(draft.summary.branches).toBe(0)
+    setup({ model: draft })
+    expect(screen.getByText('正文 = 场景 + 对白；分镜卡见附录')).toBeTruthy()
+  })
+})
+
 describe('ExportDialog（内容可用性变化，review #81）', () => {
   it('新增内容、开启大纲、清空和恢复正文后，提示始终跟随当前模型', () => {
     const { rerender, onClose } = setup({ model: generatedModel([]) })

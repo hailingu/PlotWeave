@@ -53,16 +53,21 @@ function ExportDialogFoot({
   )
 }
 
-/** 根据实际内容与开关态提示：仅有节拍/分支时引导开启大纲，无故事内容则说明空态。 */
+/** 根据实际内容与开关态提示：仅有节拍/分支时引导开启大纲，无故事内容则说明
+ * 空态；既有叙事又有分支且大纲关闭时明示分支未包含并引导并入（issue #361，
+ * 默认导出路径不允许静默丢弃分支结构）。 */
 function bodyHint(
   showOutline: boolean,
   hasNarrative: boolean,
   hasOutline: boolean,
+  branches: number,
 ): string {
   if (!hasNarrative && !hasOutline) return '暂无可导出的场景、对白、节奏或分支'
   if (showOutline) return '正文 = 场景 + 对白；创作大纲与分镜卡为附录'
   if (!hasNarrative)
     return '正文为空（尚无场景与对白）；开启「创作大纲」可查看节奏与分支'
+  if (branches > 0)
+    return `正文 = 场景 + 对白；${branches} 处分支未包含在正文中，开启「创作大纲」附录可并入`
   return '正文 = 场景 + 对白；分镜卡见附录'
 }
 
@@ -138,7 +143,9 @@ function useExportModalKeyboard(
  * 预览生成的正文（场景 + 对白，节拍/分支不进正文）与附录；
  * 「创作大纲」开关默认关闭，开启后在文末并入大纲附录（节奏名称/基调、分支问句
  * 与选项去向）——开关只切换同一生成结果的文本，不改动画布或项目实体，并清除
- * 上一变体的复制回执。预览、复制与下载消费同一全文。Esc / 点击遮罩关闭。
+ * 上一变体的复制回执。含分支项目在大纲关闭时明示「分支未包含在正文中」
+ * （issue #361，注记同时写入导出文件头），默认导出路径不静默。
+ * 预览、复制与下载消费同一全文。Esc / 点击遮罩关闭。
  * 文件保存对话框随后续 Tauri 集成升级。
  */
 export function ExportDialog({
@@ -195,6 +202,7 @@ export function ExportDialog({
             showOutline,
             model.hasNarrative,
             model.summary.hasOutline,
+            model.summary.branches,
           )}
           copied={copied}
           copyAll={copyAll}
