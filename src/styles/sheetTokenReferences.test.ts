@@ -188,6 +188,46 @@ describe('fallback 与保证无效主值的消解（issue #290）', () => {
   })
 })
 
+describe('CSS 空白与 NBSP 的关键字判定边界（issue #339）', () => {
+  it('NBSP 前缀/尾随的 unset 是普通标识符：不判保证无效，不选 fallback', () => {
+    // U+00A0 不是 CSS 空白（空格/制表/换行/回车/换页），而是有效标识符
+    // 码点（≥ U+0080）：'\u00a0unset' 是单个标识符而非 unset 关键字，
+    // JS trim() 的空白集更大，会把它误判为关键字（issue #339）
+    expect(
+      resolveChain('var(--s, #fff)', new Map([['--s', '\u00a0unset']])),
+    ).toBe('\u00a0unset')
+    expect(
+      resolveChain('var(--s, #fff)', new Map([['--s', 'unset\u00a0']])),
+    ).toBe('unset\u00a0')
+  })
+
+  it.each(['initial', 'inherit', 'revert', 'revert-layer'])(
+    'NBSP 包围的 %s 不触发关键字分支：不换 fallback 也不按未建模拒绝',
+    (keyword) => {
+      // 无 NBSP 时 inherit/revert/revert-layer 走 TOKEN_CSS_WIDE_UNMODELED
+      // 显式拒绝、initial 判保证无效；NBSP 使其为普通标识符，两分支都不得触发
+      expect(
+        resolveChain(
+          'var(--s, #fff)',
+          new Map([['--s', `\u00a0${keyword}\u00a0`]]),
+        ),
+      ).toBe(`\u00a0${keyword}\u00a0`)
+    },
+  )
+
+  it('普通 CSS 空白与大小写规范继续成立（对照）', () => {
+    expect(
+      resolveChain('var(--s, #fff)', new Map([['--s', ' \tunset\n']])),
+    ).toBe('#fff')
+    expect(resolveChain('var(--s, #fff)', new Map([['--s', ' UNSET ']]))).toBe(
+      '#fff',
+    )
+    expect(
+      resolveChain('var(--s, #fff)', new Map([['--s', ' initial ']])),
+    ).toBe('#fff')
+  })
+})
+
 describe('求值与展示入口的字面边界（review 5280334884）', () => {
   it('简易链入口保留被替换结果中的字面 var 文本', () => {
     const tokens = new Map([

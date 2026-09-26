@@ -41,3 +41,14 @@ export function maskCssOpaque(value: string): string {
   }
   return syntax
 }
+
+/**
+ * CSS 空白集（空格/制表/换行/回车/换页）裁剪，供名称/关键字等词法入口
+ * 共用同一空白语义。不用 JS `.trim()`：其空白集更大，会把名称末端的
+ * NBSP 等有效非 ASCII 码点误当空白移除（F5-c「自定义属性名按原始码点
+ * 序列匹配」，issue #289），也会把 NBSP 包围的关键字取值误判为 CSS-wide
+ * 关键字（issue #339）。
+ */
+export function trimCssWhitespace(value: string): string {
+  return value.replace(/^[ \t\n\r\f]+/, '').replace(/[ \t\n\r\f]+$/, '')
+}

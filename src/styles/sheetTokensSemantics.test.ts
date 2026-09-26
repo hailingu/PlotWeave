@@ -945,3 +945,31 @@ describe('根令牌取胜后的消费结果（review 5277799858）', () => {
     },
   )
 })
+
+describe('CSS 空白与 NBSP 的关键字判定边界（issue #339）', () => {
+  it('局部定义 NBSP unset：共享显示值路径交付原值，不进 fallback', () => {
+    const root = postcss.parse(
+      '.a { --fg: \u00a0unset; color: var(--fg, #fff); }',
+    )
+    const ctx: WiringCtx = {
+      env: LIGHT_ENV,
+      tokens: new Map(),
+      locals: localDefinitions(root),
+    }
+    const consumer = [...sheetDecls(root)].find((d) => d.prop === 'color')!
+    expect(displayValueIn(consumer, ctx)).toBe('\u00a0unset')
+  })
+
+  it('根令牌 NBSP unset：不作保证无效归一，消费点按颜色语义拒绝非法值', () => {
+    // 引擎侧不得把 '\u00a0unset' 误判为 unset 关键字（否则归一 initial /
+    // 悬空）；类型检查侧同样不得按 JS trim 认作 CSS-wide 关键字而放行——
+    // 该值是非法颜色，须按颜色语义拒绝（issue #339）
+    const root = postcss.parse(
+      ':root { --s: \u00a0unset; } .a { color: var(--s); }',
+    )
+    expect(danglingRefs(root, LIGHT_ENV)).toEqual([])
+    expect(displayTypeErrors(root, LIGHT_ENV)).toEqual([
+      '.a color: \u00a0unset',
+    ])
+  })
+})

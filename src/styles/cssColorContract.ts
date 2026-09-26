@@ -3,7 +3,7 @@
  * 供全表契约和语义夹具共用，不解析完整 CSS 文法或运行时层叠。
  */
 import postcss from 'postcss'
-import { maskCssOpaque } from './cssValueSyntax'
+import { maskCssOpaque, trimCssWhitespace } from './cssValueSyntax'
 
 /**
  * 在等长语法视图上从开括号后的偏移定位平衡闭合括号；未闭合返回 -1。
@@ -121,7 +121,11 @@ const NON_COLOR_KEYWORDS = new Set([
  * 函数内部参数与完整简写顺序/互斥规则保留边界，不宣称等价于浏览器文法校验。
  */
 export function colorTypeOk(prop: string, resolved: string): boolean {
-  const value = resolved.trim()
+  // 关键字与空值判定按 CSS 空白集裁剪（与引擎保证无效判定同语义，
+  // issue #339）：NBSP 不是 CSS 空白，'\u00a0unset' 是普通标识符，不得
+  // 按 JS trim 认作 CSS-wide 关键字而放行为合法属性值——后续按颜色
+  // 文法拒绝非法值。
+  const value = trimCssWhitespace(resolved)
   if (value === '') return false
   if (/^(inherit|initial|unset|revert|revert-layer)$/i.test(value)) return true
   if (prop === 'background-image' || prop === 'border-image-source')
