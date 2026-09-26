@@ -3,10 +3,9 @@
  * 序列化只存语义字段：React Flow 运行态（selected/className/measured…）
  * 在此剥离；fromDocument 在归一化完成后把落盘文档还原进会话。
  */
-import type { Edge } from '@xyflow/react'
-import type { CanvasNode, NodeMetaPassthrough } from '../editor/nodes/types'
-import { edgeKindOf, SCENE_SHOT_HANDLE } from '../editor/graphRules'
-import type { ProjectSettings } from '../editor/settings'
+import { edgeKindOf, SCENE_SHOT_HANDLE } from './graphSemantics'
+import type { NodeMetaPassthrough, SessionEdge, SessionNode } from './session'
+import type { ProjectSettings } from './settings'
 import type { ProjectContent } from './content'
 import {
   CURRENT_SCHEMA_VERSION,
@@ -36,7 +35,7 @@ function episodeNoOf(ep: number | undefined): { episodeNo?: number } {
 
 /** 运行态 → 落盘 layout（§4.1）：位置必填；size/zIndex 携带才写（React Flow
  * 的 width/height/zIndex 合法才搬运，缺省不伪造）。 */
-function layoutOf(n: CanvasNode): StoryNode['layout'] {
+function layoutOf(n: SessionNode): StoryNode['layout'] {
   return {
     position: { x: n.position.x, y: n.position.y },
     ...(typeof n.width === 'number' && typeof n.height === 'number'
@@ -72,7 +71,7 @@ function flowMetaOf(m: NodeMetaPassthrough['meta']): NodeMetaPassthrough {
 }
 
 type NamedFlowNode = Extract<
-  CanvasNode,
+  SessionNode,
   { type: 'scene' | 'beat' | 'dialogue' }
 >
 
@@ -101,7 +100,7 @@ function namedStoryNode(n: NamedFlowNode): StoryNode {
  * （scene/beat/dialogue）name/episodeNo 上移 meta.label/episodeNo，其余字段
  * 进 spec；branch 派生标题不落 meta.label 镜像；分镜卡随宿主场景分集、
  * 图片节点非叙事单元不进大纲分组，均不落独立 episodeNo（§3.5/§13）。 */
-export function toStoryNode(n: CanvasNode): StoryNode {
+export function toStoryNode(n: SessionNode): StoryNode {
   const base = {
     id: n.id,
     layout: layoutOf(n),
@@ -154,7 +153,7 @@ export function toStoryNode(n: CanvasNode): StoryNode {
  * *NodeData（issue 16）；ui.selected 恒为 false（§11.2）；可选 layout.size/
  * zIndex 恢复为 React Flow 的 width/height/zIndex；meta.createdAt/updatedAt
  * （§4.1 演进占位）经顶层 meta 透传，非字符串值不带（下游不落盘即剥离）。 */
-export function fromStoryNode(n: StoryNode): CanvasNode {
+export function fromStoryNode(n: StoryNode): SessionNode {
   switch (n.type) {
     case 'scene': {
       const { spec, meta } = n.data
@@ -231,7 +230,7 @@ export function fromStoryNode(n: StoryNode): CanvasNode {
 /** 边 → 落盘形态：kind 显式化；branch 胶囊文案是分支选项的派生物，不落拷贝。
  * §5 匿名端口唯一：targetHandle 与 sequence 的 sourceHandle 无法绑定真实
  * 端口（命令层拒绝、加载归一化剥离同域），落盘一律省略。 */
-export function toStoryEdge(e: Edge): StoryEdge {
+export function toStoryEdge(e: SessionEdge): StoryEdge {
   const base = { id: e.id, source: e.source, target: e.target }
   const order = (e.data as { order?: number } | undefined)?.order
   const optionalOrder = order !== undefined ? { order } : {}
@@ -259,8 +258,8 @@ export function toStoryEdge(e: Edge): StoryEdge {
 /** 落盘边 → 运行态：恢复 type/className；branch 边运行态 data 仅保留
  * 可选 order——胶囊文案由 BranchEdge 按 sourceHandle 从源节点实时派生，
  * 不落镜像（issue #18）。 */
-export function fromStoryEdge(e: StoryEdge): Edge {
-  const out: Edge = { id: e.id, source: e.source, target: e.target }
+export function fromStoryEdge(e: StoryEdge): SessionEdge {
+  const out: SessionEdge = { id: e.id, source: e.source, target: e.target }
   if (e.sourceHandle) out.sourceHandle = e.sourceHandle
   if (e.targetHandle) out.targetHandle = e.targetHandle
   const order = e.data.order

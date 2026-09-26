@@ -3,54 +3,30 @@
  * 节点只存实体 id、渲染时经 settings 解析——改设定集一处，
  * 全部节点引用同时生效；实体被删时节点按「失效引用」展示（§4.3），
  * 不自动清除（§8.2.3），撤销删除即恢复。
+ *
+ * 类型所有权（issue #353 方向一）：实体/桶类型、空集常量与归一化由
+ * 磁盘格式所有者 src/model/settings.ts 单点定义，本模块再导出保持编辑器
+ * 消费面稳定，并保留 UI 专属的创建（调色板/默认值）与解析（头像/名称）
+ * 助手。
  */
+import { newEntityId } from '../model/settings'
+import type {
+  CharacterEntity,
+  DocumentEntity,
+  LocationEntity,
+  ProjectSettings,
+} from '../model/settings'
 
-/** 角色实体：项目内设定集条目。 */
-export interface CharacterEntity {
-  id: string
-  name: string
-  /** 头像渐变（新增时从调色板轮转取用）。 */
-  gradient: string
-  /** 一句小传（可选）。 */
-  bio?: string
-}
-
-/** 地点实体：对应索引卡的地点引用。 */
-export interface LocationEntity {
-  id: string
-  name: string
-  note?: string
-}
-
-/** 道具实体：契约桶（数据模型 §6）。首版 UI 未开放道具编辑，
- * 会话仅透传保真——漏带即保存丢实体。 */
-export interface PropEntity {
-  id: string
-  name: string
-  description?: string
-}
-
-/** 设定文档实体：长篇自由文本（人物小传/世界观/术语表，数据模型 §6）。
- * 首版 UI 未开放编辑，会话仅透传保真——漏带即保存丢文档。 */
-export interface DocumentEntity {
-  id: string
-  title: string
-  body: string
-  /** 关联的 Character / Location 条目：kind + id 显式成对（§6）。 */
-  relatedIds: Array<{ kind: 'character' | 'location'; id: string }>
-}
-
-/** 项目设定集：随 ProjectDocument 持久化。props/documents 首版只透传不编辑。 */
-export interface ProjectSettings {
-  characters: CharacterEntity[]
-  locations: LocationEntity[]
-  props?: PropEntity[]
-  documents?: DocumentEntity[]
-}
-
-/** 空设定集常量：新建项目与无设定快照的缺省值；消费方不得就地进行
- * 数组改写（共享引用）。 */
-export const EMPTY_SETTINGS: ProjectSettings = { characters: [], locations: [] }
+export {
+  EMPTY_SETTINGS,
+  newEntityId,
+  normalizeSettings,
+  type CharacterEntity,
+  type DocumentEntity,
+  type LocationEntity,
+  type PropEntity,
+  type ProjectSettings,
+} from '../model/settings'
 
 /** 新增角色/地点的默认头像渐变调色板（轮转取用）。 */
 const AVATAR_GRADIENTS = [
@@ -63,12 +39,6 @@ const AVATAR_GRADIENTS = [
 ]
 
 let paletteCursor = 0
-
-/** 新实体 id：类型前缀 + 时间戳 36 进制 + 随机尾（同毫秒防碰撞）。
- * 前缀随桶扩展（ch/loc/prop/doc），调用方按域选用。 */
-export function newEntityId(prefix: string): string {
-  return `${prefix}-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`
-}
 
 /** 新建角色实体（名字去空白；渐变从调色板轮转）。 */
 export function createCharacter(name: string): CharacterEntity {
@@ -125,17 +95,4 @@ export function resolveLocationName(
   id: string,
 ): string | null {
   return settings.locations.find((l) => l.id === id)?.name ?? null
-}
-
-/** 项目文档缺省合并：旧文件无 settings 或字段缺失时补空集（向后兼容）。
- * props/documents 为契约透传桶：存在即原样保留（漏带即保存/迁移回写丢失）。 */
-export function normalizeSettings(raw: unknown): ProjectSettings {
-  if (typeof raw !== 'object' || raw === null) return { ...EMPTY_SETTINGS }
-  const obj = raw as Partial<ProjectSettings>
-  return {
-    characters: Array.isArray(obj.characters) ? obj.characters : [],
-    locations: Array.isArray(obj.locations) ? obj.locations : [],
-    ...(Array.isArray(obj.props) ? { props: obj.props } : {}),
-    ...(Array.isArray(obj.documents) ? { documents: obj.documents } : {}),
-  }
 }

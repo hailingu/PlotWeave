@@ -9,8 +9,7 @@
  * graph/settings/assets 容器级未知键按扩展字段无损保留（§11），不参与
  * 修复判定；顶层与 project 层是类型化封闭契约，演进须升级 schemaVersion。
  */
-import type { Edge } from '@xyflow/react'
-import type { CanvasNode } from '../editor/nodes/types'
+import type { SessionEdge, SessionNode } from './session'
 import { isPlainObject, sameCanonicalJson } from './jsonGuards'
 import { fromDocument, serializeProject } from './serialize'
 import { normalizeContainers } from './normalizeContainers'
@@ -287,7 +286,11 @@ function normalizeV0Options(
 function assembleLegacyContent(
   env0: Partial<ProjectDocument> & {
     project?: Partial<ProjectDocument['project']>
-    graph?: { nodes?: CanvasNode[]; edges?: Edge[]; viewport?: Viewport }
+    graph?: {
+      nodes?: SessionNode[]
+      edges?: SessionEdge[]
+      viewport?: Viewport
+    }
     settings?: unknown
     episodeTitles?: unknown
   },
@@ -344,11 +347,11 @@ function assembleLegacyContent(
     nodes: normalizeV0NodeShapes(
       members(asArray(graphRaw.nodes, 'graph.nodes'), 'graph.nodes'),
       warnings,
-    ) as unknown as CanvasNode[],
+    ) as unknown as SessionNode[],
     edges: members(
       asArray(graphRaw.edges, 'graph.edges'),
       'graph.edges',
-    ) as Edge[],
+    ) as unknown as SessionEdge[],
     settings,
     episodeTitles: normalizeEpisodeTitles(env0.episodeTitles, warnings),
     viewport: graphRaw.viewport as Viewport | undefined,

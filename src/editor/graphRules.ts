@@ -2,34 +2,32 @@
  * 连线规则的纯函数（docs/ui-design.md §4.3 连线实时校验）。
  * 画布交互（EditorView.isValidConnection）与 AI 批量命令校验
  * （ai/commands.ts）共用同一套语义，避免两处判定分叉。
+ *
+ * 类型所有权（issue #353 方向一）：端口字面量、选项句柄编码与连线语义
+ * 判别是落盘格式的一部分，由 src/model/graphSemantics.ts 单点定义，本模块
+ * 再导出对接交互层；连接校验等交互专属规则保留在此。
  */
+import {
+  branchOptionHandle,
+  branchOptionIdOf,
+  edgeKindOf,
+  SCENE_SHOT_HANDLE,
+  type EdgeKind,
+} from '../model/graphSemantics'
+
+export {
+  BRANCH_OPTION_HANDLE_PREFIX,
+  SCENE_SHOT_HANDLE,
+  branchOptionHandle,
+  branchOptionIdOf,
+  edgeKindOf,
+  type EdgeKind,
+} from '../model/graphSemantics'
 
 /** 最小边形状：只需端点，兼容 React Flow Edge 与批量校验的虚拟边。 */
 export interface EndpointPair {
   source: string
   target: string
-}
-
-/** 索引卡底部端口：attach 下挂分镜卡（§4.4 垂直 = 派生从属）。 */
-export const SCENE_SHOT_HANDLE = 'shots'
-
-/** 分支选项出口端口前缀：option-<选项 id>。绑定稳定 id 而非数组下标，
- * 删除任一选项不会位移其余出口的连线归属（docs/data-model.md §4.2/§5）。 */
-export const BRANCH_OPTION_HANDLE_PREFIX = 'option-'
-
-/** 选项 id → 出口端口名（option-<id>）：连线与句柄改写的统一构造器，
- * 消费方不得手拼前缀（口径与 BRANCH_OPTION_HANDLE_PREFIX 单点维护）。 */
-export function branchOptionHandle(optionId: string): string {
-  return `${BRANCH_OPTION_HANDLE_PREFIX}${optionId}`
-}
-
-/** 逆解析端口名中的选项 id；非选项端口返回 undefined。
- * JSON 边界会擦除类型（句柄可能是数字/对象），非字符串一律视为非选项端口，
- * 不得对非字符串调用字符串方法。 */
-export function branchOptionIdOf(handle?: string | null): string | undefined {
-  if (typeof handle !== 'string') return undefined
-  if (!handle.startsWith(BRANCH_OPTION_HANDLE_PREFIX)) return undefined
-  return handle.slice(BRANCH_OPTION_HANDLE_PREFIX.length)
 }
 
 /** 删选项级联（§8.2.2）：返回「前态有、新态无」选项的出口句柄，
@@ -43,9 +41,6 @@ export function removedOptionHandles(
     .filter((o) => !kept.has(o.id))
     .map((o) => branchOptionHandle(o.id))
 }
-
-/** 连线语义（§4.4）：横向剧情流 / 分支选项出口 / 分镜下挂。 */
-export type EdgeKind = 'sequence' | 'branch' | 'attach'
 
 /** 连线端点类型约束（§5 端口归属，§13 图片节点）：与加载归一化的孤儿边
  * 规则对等——交互/AI 侧放行一条「保存后下次加载即被静默删除」的连线是
@@ -95,19 +90,6 @@ export function hasAttachHost(
     if (e.target === target && edgeKindOf(e) === 'attach') return true
   }
   return false
-}
-
-/** 按边的运行态字段归类连线语义；未知形态一律按剧情流处理。 */
-export function edgeKindOf(e: {
-  // xyflow Edge 库形状适配（issue #231）：可选成员显式含 undefined
-  type?: string | undefined
-  className?: string | undefined
-  sourceHandle?: string | null | undefined
-}): EdgeKind {
-  if (e.type === 'branch') return 'branch'
-  if (e.sourceHandle === SCENE_SHOT_HANDLE || e.className === 'pw-edge-attach')
-    return 'attach'
-  return 'sequence'
 }
 
 /** 拖线瞬间的连线语义归类：React Flow 的 Connection 不带 type/className，

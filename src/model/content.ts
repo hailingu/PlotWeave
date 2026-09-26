@@ -1,12 +1,12 @@
 /**
  * 会话文档：编辑器运行态的项目内容（docs/data-model.md v1 §2——画布状态
  * 唯一真源在编辑器会话内，ProjectDocument 只是它的序列化形态）。
- * 与落盘格式的互转见 convert.ts；类型引用 React Flow 仅为对齐运行态形状。
+ * 与落盘格式的互转见 convert.ts；节点/边/设定集类型为本域自有
+ * （session.ts/settings.ts，issue #353 方向一），编辑器运行态与之结构兼容。
  */
-import type { Edge, Viewport } from '@xyflow/react'
-import type { CanvasNode } from '../editor/nodes/types'
-import type { ProjectSettings } from '../editor/settings'
-import type { AssetRef } from './document'
+import type { AssetRef, Viewport } from './document'
+import type { SessionEdge, SessionNode } from './session'
+import type { ProjectSettings } from './settings'
 
 /** 项目会话内容：名称 + 创建时间 + 画布两数组 + 设定集 + 集标题 + 视口。
  * description / assets 为编辑器首版不编辑的透传字段：解析进会话、
@@ -18,8 +18,8 @@ export interface ProjectContent {
   /** ISO 8601；新建项目缺省时首次落盘补盖（副本显式 undefined =
    * 不继承创建时间，落盘补盖）。 */
   createdAt?: string | undefined
-  nodes: CanvasNode[]
-  edges: Edge[]
+  nodes: SessionNode[]
+  edges: SessionEdge[]
   settings: ProjectSettings
   /** 集 = 编号 + 大纲行内标题（§4.1，不建集实体表）；缺省/显式 undefined
    * 视为无命名集（issue #231）。 */
