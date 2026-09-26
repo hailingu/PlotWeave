@@ -1,5 +1,5 @@
 import type { Edge } from '@xyflow/react'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { branchOptionHandle } from './graphRules'
 import { buildScriptExport, buildScriptMarkdown } from './exportScript'
 import type { CanvasNode } from './nodes/types'
@@ -291,6 +291,43 @@ describe('buildScriptExport（issue #48 导出模型）', () => {
     expect(linear.plain).toBe(
       buildScriptMarkdown('线性', nodes, edges, settings, undefined),
     )
+  })
+
+  it('显式传入导出日期时头部使用该日期（review #376）', () => {
+    const dated = buildScriptMarkdown(
+      '剧',
+      nodes,
+      edges,
+      settings,
+      undefined,
+      undefined,
+      '2026/1/2',
+    )
+    expect(dated).toContain('> 由 PlotWeave 导出 · 2026/1/2')
+  })
+
+  it('两个变体共享同一次求值的导出日期：跨零点不再分叉（review #376）', () => {
+    // 同一模型只应有一个导出时间戳：让连续两次 toLocaleDateString 返回
+    // 不同日期，模拟生成恰好跨本地零点；plain 与 outline 头部日期必须一致
+    const dates = ['2026/9/26', '2026/9/27']
+    const spy = vi
+      .spyOn(Date.prototype, 'toLocaleDateString')
+      .mockImplementation(() => dates.shift() ?? '2026/9/27')
+    try {
+      const crossing = buildScriptExport({
+        projectName: '跨零点',
+        nodes: mixNodes,
+        edges: mixEdgesTyped,
+        settings,
+        assets: undefined,
+        episodeTitles: {},
+      })
+      const dateOf = (text: string): string =>
+        text.match(/^> 由 PlotWeave 导出 · (.+)$/m)?.[1] ?? ''
+      expect(dateOf(crossing.plain)).toBe(dateOf(crossing.outline))
+    } finally {
+      spy.mockRestore()
+    }
   })
 
   it('开启大纲：并入同一生成结果的 Markdown，含集标题、基调、分支与去向', () => {

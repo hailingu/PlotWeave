@@ -150,7 +150,9 @@ function dialogueBlockLines(
 
 /** 生成整部剧本的 Markdown 文本。assets 为项目资产索引（缺省视为无资产，
  * 引用位全部按悬空标注）。headerNote 为可选头部注记（issue #361）：给出时
- * 以第二段引块并入文件头，随预览、复制与下载的全文一同输出。 */
+ * 以第二段引块并入文件头，随预览、复制与下载的全文一同输出。exportedAt 为
+ * 可选导出日期文案（review #376）：同一生成模型分多个变体输出时，调用方
+ * 传入一次求值的结果保证各变体头部时间戳一致；缺省由本函数现场求值。 */
 export function buildScriptMarkdown(
   projectName: string,
   nodes: CanvasNode[],
@@ -158,6 +160,7 @@ export function buildScriptMarkdown(
   settings: ProjectSettings,
   assets?: ProjectContent['assets'],
   headerNote?: string,
+  exportedAt?: string,
 ): string {
   const ordered = storylineGroups(nodes, edges).flatMap((g) => [
     ...g.routed,
@@ -165,7 +168,7 @@ export function buildScriptMarkdown(
   ])
   const lines: string[] = [`# ${projectName}`, '']
   lines.push(
-    `> 由 PlotWeave 导出 · ${new Date().toLocaleDateString('zh-CN')}`,
+    `> 由 PlotWeave 导出 · ${exportedAt ?? new Date().toLocaleDateString('zh-CN')}`,
     '',
   )
   if (headerNote) lines.push('>', `> ${headerNote}`, '')
@@ -274,6 +277,10 @@ export function buildScriptExport(input: {
   episodeTitles: Record<number, string>
 }): ScriptExportModel {
   const summary = summariseExportOutline(input.nodes)
+  // 两变体共享同一次求值的导出日期（review #376）：按变体两次生成时各自
+  // 现场求值会在跨本地零点的窗口内让 plain 与 outline 头部日期分叉——
+  // 同一生成模型只应有一个导出时间戳，故在此求值一次后传入两次生成。
+  const exportedAt = new Date().toLocaleDateString('zh-CN')
   const markdown = (appendixIncluded: boolean) =>
     buildScriptMarkdown(
       input.projectName,
@@ -282,6 +289,7 @@ export function buildScriptExport(input: {
       input.settings,
       input.assets,
       branchHeaderNote(summary.branches, appendixIncluded),
+      exportedAt,
     )
   const appendix = outlineAppendixLines(
     buildExportOutline(input.nodes, input.edges, input.episodeTitles),
