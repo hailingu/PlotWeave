@@ -49,6 +49,10 @@ export function EditorOverlays(props: EditorOverlaysProps) {
             settings: doc.settings,
             assets: doc.assets,
             episodeTitles: doc.episodeTitles,
+            // 导出日期为显式入参（issue #360）：生成器不读系统时钟，日期在
+            // 模型重建时取当天——与既有缓存语义一致（打开期间内容不变则
+            // 模型与日期均冻结，内容变化重建时更新）
+            exportedAt: new Date().toLocaleDateString('zh-CN'),
           })
         : null,
     [

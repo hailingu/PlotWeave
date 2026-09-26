@@ -306,28 +306,51 @@ describe('buildScriptExport（issue #48 导出模型）', () => {
     expect(dated).toContain('> 由 PlotWeave 导出 · 2026/1/2')
   })
 
-  it('两个变体共享同一次求值的导出日期：跨零点不再分叉（review #376）', () => {
-    // 同一模型只应有一个导出时间戳：让连续两次 toLocaleDateString 返回
-    // 不同日期，模拟生成恰好跨本地零点；plain 与 outline 头部日期必须一致
-    const dates = ['2026/9/26', '2026/9/27']
+  it('生成器不读系统时钟：同一输入的两次导出逐字节相同（issue #360）', () => {
+    // 让时钟读取在不同调用间返回不同日期：生成器若仍隐式读时钟，
+    // 两次导出将在头部日期上分叉；确定性契约要求输出是输入的纯函数
+    const input = {
+      projectName: '雨夜',
+      nodes: mixNodes,
+      edges: mixEdgesTyped,
+      settings,
+      assets: undefined as undefined,
+      episodeTitles: {},
+    }
     const spy = vi
       .spyOn(Date.prototype, 'toLocaleDateString')
-      .mockImplementation(() => dates.shift() ?? '2026/9/27')
+      .mockImplementation(() => '2026/9/26')
     try {
-      const crossing = buildScriptExport({
-        projectName: '跨零点',
-        nodes: mixNodes,
-        edges: mixEdgesTyped,
-        settings,
-        assets: undefined,
-        episodeTitles: {},
-      })
-      const dateOf = (text: string): string =>
-        text.match(/^> 由 PlotWeave 导出 · (.+)$/m)?.[1] ?? ''
-      expect(dateOf(crossing.plain)).toBe(dateOf(crossing.outline))
+      const first = buildScriptExport(input)
+      spy.mockImplementation(() => '2026/9/27')
+      const second = buildScriptExport(input)
+      expect(second.plain).toBe(first.plain)
+      expect(second.outline).toBe(first.outline)
     } finally {
       spy.mockRestore()
     }
+  })
+
+  it('未注入导出日期时头部不写日期，只保留出处行（issue #360）', () => {
+    expect(draft.plain).toContain('> 由 PlotWeave 导出')
+    expect(draft.plain).not.toContain('由 PlotWeave 导出 ·')
+    expect(draft.outline).not.toContain('由 PlotWeave 导出 ·')
+  })
+
+  it('注入的导出日期进入两个变体头部且一致（issue #360）', () => {
+    const dated = buildScriptExport({
+      projectName: '雨夜',
+      nodes: mixNodes,
+      edges: mixEdgesTyped,
+      settings,
+      assets: undefined,
+      episodeTitles: {},
+      exportedAt: '2026/1/2',
+    })
+    const dateOf = (text: string): string =>
+      text.match(/^> 由 PlotWeave 导出(?: · (.+))?$/m)?.[1] ?? ''
+    expect(dateOf(dated.plain)).toBe('2026/1/2')
+    expect(dateOf(dated.outline)).toBe('2026/1/2')
   })
 
   it('开启大纲：并入同一生成结果的 Markdown，含集标题、基调、分支与去向', () => {
