@@ -153,6 +153,10 @@ fn public_ip_allows_global_addresses() {
         "100.128.0.1",
         "2606:4700::1111",
         "2400:cb00::1",
+        // 转换地址解码内嵌公网 IPv4 后按公网放行（issue #352：解码委托
+        // 策略，不一刀切视为私网）：NAT64 内嵌 8.8.8.8 / 6to4 内嵌 8.8.8.8
+        "64:ff9b::808:808",
+        "2002:808:808::1",
     ] {
         let ip: std::net::IpAddr = s.parse().expect(s);
         assert!(is_public_ip(ip), "{s} 应判定为公网");
@@ -181,6 +185,16 @@ fn public_ip_rejects_private_and_special_ranges() {
         "ff02::1",
         "::ffff:127.0.0.1",
         "::ffff:192.168.0.1",
+        // 已废弃 site-local（fec0::/10，IANA 保留，无全局路由语义）
+        "fec0::1",
+        "febf::1",
+        // NAT64/6to4 内嵌私有或环回 IPv4：解码后委托 IPv4 分类拒绝
+        "64:ff9b::a00:1",
+        "64:ff9b::7f00:1",
+        "2002:a00:1::1",
+        "2002:c0a8:101::1",
+        // NAT64 本地用前缀（64:ff9b:1::/48，RFC 8215）仅限本地域内
+        "64:ff9b:1::1",
     ] {
         let ip: std::net::IpAddr = s.parse().expect(s);
         assert!(!is_public_ip(ip), "{s} 应判定为非公网");
@@ -194,6 +208,9 @@ fn download_target_static_checks_reject_nonpublic_literals() {
         "http://[::1]/a.png",
         "http://169.254.169.254/meta",
         "https://10.0.0.5/a.png",
+        // issue #352：新增拒绝范围同样在 URL 静态入口生效
+        "http://[fec0::1]/a.png",
+        "http://[64:ff9b::a00:1]/a.png",
         "ftp://8.8.8.8/a.png",
         "file:///etc/passwd",
     ] {

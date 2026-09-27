@@ -342,16 +342,43 @@ fn is_public_ipv4(ip: Ipv4Addr) -> bool {
         || (o[0] == 100 && (o[1] & 0xC0) == 0x40))
 }
 
-/// IPv6 公网判定：环回、唯一本地（fc00::/7）、链路本地（fe80::/10）、
-/// 未指定、多播均非公网；IPv4 映射/兼容地址按内嵌 IPv4 复验。
+/// IPv6 公网判定（issue #352）：环回、唯一本地（fc00::/7）、链路本地
+/// （fe80::/10）、未指定、多播，以及已废弃 site-local（fec0::/10——IANA
+/// 保留、无全局路由语义，目标只能是本地站点）均非公网。转换地址取
+/// **解码委托**策略而非无区别视为私网：6to4 `2002::/16` 与 NAT64 已知
+/// 前缀 `64:ff9b::/96` 按内嵌 IPv4 委托 [`is_public_ipv4`] 分类——内嵌
+/// 私网/环回等拒绝，内嵌公网放行（可达语义等同该公网 IPv4）；NAT64
+/// 本地用前缀 `64:ff9b:1::/48`（RFC 8215，仅限本地域内使用）一律拒绝。
+/// IPv4 映射/兼容地址按内嵌 IPv4 复验。Terledo 等其余过渡网段维持
+/// 现状不特判（无端到端利用证据，按已知边界记录，issue #352）。
 fn is_public_ipv6(ip: Ipv6Addr) -> bool {
     let s = ip.segments();
-    !(ip.is_loopback()
+    if ip.is_loopback()
         || ip.is_unspecified()
         || ip.is_multicast()
         || ip.is_unique_local()
         || (s[0] & 0xFFC0) == 0xFE80
-        || ip.to_ipv4().is_some_and(|v4| !is_public_ipv4(v4)))
+        || (s[0] & 0xFFC0) == 0xFEC0
+    {
+        return false;
+    }
+    if s[0] == 0x2002 {
+        // 6to4：内嵌 IPv4 占第 16–47 位
+        let v4 = Ipv4Addr::new((s[1] >> 8) as u8, s[1] as u8, (s[2] >> 8) as u8, s[2] as u8);
+        return is_public_ipv4(v4);
+    }
+    if s[0] == 0x0064 && s[1] == 0xFF9B {
+        if s[2] == 0 && s[3] == 0 && s[4] == 0 && s[5] == 0 {
+            // NAT64 已知前缀 /96：内嵌 IPv4 占最后 32 位
+            let v4 = Ipv4Addr::new((s[6] >> 8) as u8, s[6] as u8, (s[7] >> 8) as u8, s[7] as u8);
+            return is_public_ipv4(v4);
+        }
+        if s[2] == 0x0001 {
+            // NAT64 本地用前缀 /48：仅限本地域内，非公网
+            return false;
+        }
+    }
+    ip.to_ipv4().is_none_or(is_public_ipv4)
 }
 
 fn is_public_ip(ip: IpAddr) -> bool {
