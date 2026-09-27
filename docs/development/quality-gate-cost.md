@@ -22,7 +22,7 @@ written in English for agent interoperability.
 
 **The gate stays a single, uniform cost. There is no fast lane.**
 
-Every commit and every push runs the same complete sequence:
+`git commit` and `git push` each run the same complete sequence:
 
 1. `scripts/check-static.sh` — Prettier format check, ESLint with zero
    warnings, `typecheck:strict`. Fail-fast, ahead of all coverage work.
@@ -31,6 +31,11 @@ Every commit and every push runs the same complete sequence:
    `media_format_leaf` test target.
 4. `sonar-scanner` publishing the analysis, then waiting for the Quality Gate,
    then a separate check that new-code unresolved issues are zero.
+
+There is no cheaper or faster variant of that sequence, and no configuration
+that selects one. Which commit-producing commands actually reach it — and which
+currently do not — is recorded precisely in
+[What The Gate Actually Enforces](#what-the-gate-actually-enforces).
 
 This is option C of issue #356. The issue did not argue for lower quality
 requirements; it argued that the "cost tier" question deserved one explicit
@@ -66,9 +71,12 @@ total gate time.
 
 A review of this record caught exactly that mislabelling; the figure above is
 the corrected one. Note that option B would *not* weaken the gate's coverage —
-`check-static.sh` still runs on every commit, and SonarQube analysis plus the
-Quality Gate still run before anything reaches the remote. What it changes is
-the guarantee that no commit is ever created without the full gate having run.
+`check-static.sh` still runs on every `git commit`, and SonarQube analysis plus
+the Quality Gate still run before anything reaches the remote. Within the scope
+the gate actually covers (see
+[What The Gate Actually Enforces](#what-the-gate-actually-enforces)), what option
+B changes is that a commit can be created locally before the coverage and
+scanner phases have run for it.
 
 Declining A and B is a statement about today's numbers, not a permanent
 refusal. See [Reconsideration Triggers](#reconsideration-triggers).
@@ -92,6 +100,54 @@ and measurement change only. The following remain in force exactly as written in
 
 Anyone reading a faster local workflow elsewhere in this repository should treat
 it as a defect in that workflow, not as sanctioned by this decision.
+
+## What The Gate Actually Enforces
+
+The bullets above describe intent. This section records the verified
+*enforcement* boundary, so that no reader overstates the guarantee. It was
+measured on 2026-09-27 against git 2.48.1 with `core.hooksPath` set to a
+directory containing every candidate hook, recording which ones fire.
+
+This repository wires exactly two: `.githooks/pre-commit` and
+`.githooks/pre-push`. There is no `pre-merge-commit`, `commit-msg`,
+`prepare-commit-msg`, `post-commit`, or `post-merge`.
+
+| Command that creates a commit | Hooks that actually fire | Gate runs? |
+| --- | --- | :---: |
+| `git commit` | `pre-commit`, `prepare-commit-msg`, `commit-msg` | yes |
+| `git merge` producing a merge commit (non-fast-forward) | `pre-merge-commit`, `prepare-commit-msg`, `commit-msg` | **no** |
+| `git revert` (automatic commit) | `prepare-commit-msg`, `commit-msg` | **no** |
+| `git cherry-pick` (automatic commit) | `prepare-commit-msg`, `commit-msg` | **no** |
+| `git merge --squash` / `--no-commit` followed by `git commit` | `pre-commit`, … | yes |
+| any of the above with `--no-verify` | `prepare-commit-msg`, `commit-msg` | **no** |
+
+So the accurate statement of the invariant is:
+
+> The gate runs on `git commit` and on `git push`. It does **not** currently run
+> for commits produced automatically by `git merge`, `git revert`, or
+> `git cherry-pick`, nor for any operation passed `--no-verify`.
+
+An earlier revision of this file claimed that no commit is ever created without
+the full gate having run. That claim was false; review on PR #403 caught it, and
+the three bypass paths above are the corrected scope.
+
+`revert` and `cherry-pick` have no pre-commit-equivalent hook at all — the only
+hooks they share are `prepare-commit-msg` and `commit-msg` — so closing this gap
+is a hook-design decision, not a one-line addition. It is recorded as a finding
+below and is deliberately **not** fixed here: doing so would change gate
+behavior, which this decision explicitly does not do.
+
+## Known Finding: Uncovered Commit-Creation Paths
+
+The three uncovered paths above mean a local merge, revert, or cherry-pick can
+land on a branch with no static checks, no coverage, and no SonarQube analysis
+for the resulting commit. SonarQube will still see the commit once it is pushed
+— the analysis happens at push time, not at commit time — so the practical
+exposure is that a commit can exist locally, and be pushed, without its own
+gate run. Whether to wire `pre-merge-commit` and a `commit-msg`-based path is a
+governance decision with a real cost attached (merge, revert, and cherry-pick
+would each become a gate run), and it is out of scope for #356. Raise it as its
+own issue if the gap is considered unintended.
 
 ## Measured Baseline
 
@@ -197,6 +253,10 @@ these becomes true:
 - Any option A or B proposal appears: it must come with a fresh baseline and an
   explicit statement of its effect on gate strength, and must preserve every
   invariant in the section above.
+- The uncovered commit-creation paths are closed, or the merge/revert/cherry-pick
+  workflow changes to route through `git commit`. Either way, update
+  [What The Gate Actually Enforces](#what-the-gate-actually-enforces) in the same
+  change — that table is a measurement, and a stale one is worse than none.
 
 ## How To Re-measure
 
