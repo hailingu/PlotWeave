@@ -1345,11 +1345,30 @@ function objectLiteralOccurrences(
     const texts = staticTextsOf(p.initializer)
     return staticPropertyNameTexts(p.name).map((name) => ({ name, texts }))
   })
-  const consumedNames = new Set(
+  const directRefs = new Set(
     pairs
       .filter(({ name }) => displayColorKeyOf(name) !== null)
       .flatMap(({ texts }) => texts.flatMap((t) => allVarRefs(t))),
   )
+  // 消费闭包沿别名链递归展开（评审 4114228857）：--alias 被 color 引用、
+  // 其定义又引用 --tone 时，--tone 的字面同入登记口径；seen 防环，
+  // 镜像 CSS 侧 displayConsumedDefs 的可达闭包语义。
+  const defs = new Map(
+    pairs
+      .filter(({ name }) => name.startsWith('--'))
+      .map(({ name, texts }) => [name, texts]),
+  )
+  const consumedNames = new Set(directRefs)
+  const queue = [...directRefs]
+  while (queue.length > 0) {
+    const refs = (defs.get(queue.pop()!) ?? []).flatMap((t) => allVarRefs(t))
+    for (const ref of refs) {
+      if (!consumedNames.has(ref)) {
+        consumedNames.add(ref)
+        queue.push(ref)
+      }
+    }
+  }
   const out: JsxColorOccurrence[] = []
   for (const { name, texts } of pairs) {
     const key = displayColorKeyOf(name)
@@ -1690,6 +1709,26 @@ describe('TSX/SVG 内联别名与增量赋值（issue #362，评审补强）', (
       "export const b = <div style={{ '--tone': '#fff' }} />;",
     )
     expect(unused).toEqual([])
+  })
+
+  it('内联别名递归追踪：多跳链的源头定义侧字面进入登记（评审 4114228857）', () => {
+    const occurrences = colorOccurrencesOfSource(
+      'fixture.tsx',
+      "export const a = <div style={{ '--tone': '#fff', '--alias': 'var(--tone)', color: 'var(--alias)' }} />;",
+    )
+    // 消费闭包沿 --alias 的定义追到 --tone：源头字面以 --tone 上下文
+    // 进入登记；--alias 值无字面不发射
+    expect(occurrences).toEqual([
+      { file: 'fixture.tsx', context: '--tone', value: '#fff' },
+    ])
+    // 环保护：互相引用的别名不致穷举，链上字面仍登记
+    const cyclic = colorOccurrencesOfSource(
+      'fixture.tsx',
+      "export const c = <div style={{ '--a': '#fff', '--b': 'var(--a)', color: 'var(--b)' }} />;",
+    )
+    expect(cyclic).toEqual([
+      { file: 'fixture.tsx', context: '--a', value: '#fff' },
+    ])
   })
 
   it('增量样式属性赋值：属性访问与字符串下标赋值被点名（评审 4114047062）', () => {
