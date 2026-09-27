@@ -110,7 +110,8 @@ directory containing every candidate hook, recording which ones fire.
 
 This repository wires exactly two: `.githooks/pre-commit` and
 `.githooks/pre-push`. There is no `pre-merge-commit`, `commit-msg`,
-`prepare-commit-msg`, `post-commit`, or `post-merge`.
+`prepare-commit-msg`, `post-commit`, `post-merge`, `pre-rebase`,
+`pre-applypatch`, or `applypatch-msg`.
 
 | Command that creates a commit | Hooks that actually fire | Gate runs? |
 | --- | --- | :---: |
@@ -118,6 +119,8 @@ This repository wires exactly two: `.githooks/pre-commit` and
 | `git merge` producing a merge commit (non-fast-forward) | `pre-merge-commit`, `prepare-commit-msg`, `commit-msg` | **no** |
 | `git revert` (automatic commit) | `prepare-commit-msg` only | **no** |
 | `git cherry-pick` (automatic commit) | `prepare-commit-msg` only | **no** |
+| `git rebase` replaying commits onto a new base | `pre-rebase` once, then `prepare-commit-msg` + `post-commit` per replayed commit | **no** |
+| `git am` applying a patch series | `applypatch-msg`, `pre-applypatch`, `post-applypatch` — none wired | **no** |
 | `git merge --squash` / `--no-commit` followed by `git commit` | `pre-commit`, … | yes |
 | `git commit --no-verify` / `git merge --no-verify` | `prepare-commit-msg`, `commit-msg` | **no** |
 
@@ -127,11 +130,20 @@ absent from the last row rather than bypassable through it. Their automatic
 commits run `prepare-commit-msg` and nothing else — **not** `commit-msg`, which
 `githooks(5)` documents as applying to `git commit` and `git merge`.
 
+`git rebase` and `git am` were measured on 2026-09-27 (git 2.48.1, isolated
+hook log, two commits replayed / one patch applied) with this repository's
+wiring absent, so the rows above record which hooks *would* fire: a
+commit-producing rebase runs `pre-rebase` once and then `prepare-commit-msg`
+and `post-commit` per replayed commit — **`pre-commit` and `commit-msg` never
+fire** — while `git am` runs only the applypatch-family hooks, none of which
+this repository wires. Either path therefore creates commits with no gate.
+
 So the accurate statement of the invariant is:
 
-> The gate runs on `git commit` and on `git push` of the checked-out branch. It
-> does **not** run for commits produced automatically by `git merge`,
-> `git revert`, or `git cherry-pick`, and it can be skipped outright with
+> The gate runs on `git commit` and on `git push` of the checked-out branch
+> with a clean working tree. It does **not** run for commits produced
+> automatically by `git merge`, `git revert`, `git cherry-pick`, `git rebase`
+> (replayed commits), or `git am`, and it can be skipped outright with
 > `--no-verify` on `git commit` and `git merge`.
 
 An earlier revision of this file claimed that no commit is ever created without
@@ -151,13 +163,14 @@ behavior, which this decision explicitly does not do.
 
 ## Known Finding: Uncovered Commit-Creation Paths
 
-The three uncovered paths above mean a local merge, revert, or cherry-pick can
-land on a branch with no static checks, no coverage, and no SonarQube analysis
-for the resulting commit.
+The five uncovered paths above mean a local merge, revert, cherry-pick, rebase,
+or am can land commits on a branch with no static checks, no coverage, and no
+SonarQube analysis for the resulting commit.
 
 Push-time analysis is a *partial* safety net, and only in the common case: when
-the pushed ref is the checked-out branch, the `pre-push` gate does analyze the
-commit that is being pushed. For any other ref it does not — see
+the pushed ref is the checked-out branch **and the working tree is clean**, the
+`pre-push` gate analyzes the checked-out tree, which is the state being pushed.
+For any other ref it does not — see
 [Known Finding: Push Scans The Checked-Out Tree, Not The Pushed
 Ref](#known-finding-push-scans-the-checked-out-tree-not-the-pushed-ref).
 Whether to wire `pre-merge-commit` is a governance decision with a real cost
@@ -173,6 +186,13 @@ pushes a ref other than the checked-out branch — `git push origin other-branch
 several refs at once, or `--all` — the gate analyzes and passes on the
 **checked-out** tree, and the commit actually pushed may never have been
 analyzed at all.
+
+Branch identity is not sufficient either. The hook scans the **working tree**,
+not the pushed commit: after committing state A on the checked-out branch, an
+uncommitted change B means `git push` sends A while the gate's tests and
+scanner inspect B. The gate can pass on B and A reaches the remote never
+analyzed — matching the pushed branch to the checked-out branch does not close
+this variant, so it belongs to the same finding.
 
 Verified on 2026-09-27 with a local bare remote and a hook that logs both the
 stdin refs and `HEAD`:
@@ -293,8 +313,9 @@ these becomes true:
 - Any option A or B proposal appears: it must come with a fresh baseline and an
   explicit statement of its effect on gate strength, and must preserve every
   invariant in the section above.
-- The uncovered commit-creation paths are closed, or the merge/revert/cherry-pick
-  workflow changes to route through `git commit`. Either way, update
+- The uncovered commit-creation paths are closed, or the
+  merge/revert/cherry-pick/rebase/am workflow changes to route through
+  `git commit`. Either way, update
   [What The Gate Actually Enforces](#what-the-gate-actually-enforces) in the same
   change — that table is a measurement, and a stale one is worse than none.
 - `pre-push` starts reading its stdin so the analyzed ref matches the pushed
