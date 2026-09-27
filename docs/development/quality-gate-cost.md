@@ -148,7 +148,8 @@ This repository wires exactly two: `.githooks/pre-commit` and
 | `git fast-import` (`commit <ref>` stream) | `reference-transaction`; no commit-creation hooks | **no** * |
 | `git filter-branch` (history rewrite) | none measured here (see note) | **no** * |
 | `git subtree split --prefix=<dir> --branch <branch>` | `reference-transaction`; no commit-creation hooks | **no** * |
-| `git subtree push --prefix=<prefix> <repository> <refspec>` | `pre-push` receives split tip; gate scans working tree; no commit-creation or local ref-update hook | **no** (for generated split commits) |
+| `git subtree push --prefix=<prefix> <repository> <refspec>` | `pre-push` receives split tip; `reference-transaction` may update `refs/remotes/origin/*` after the push; no commit-creation or checked-out-branch ref-update hook | **no** (for generated split commits) |
+| `git subtree push --rejoin --prefix=<prefix> <repository> <refspec>` | rejoin merge: `post-index-change`, `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `reference-transaction` on the checked-out branch, `post-merge`; then `pre-push` receives split tip | **no** (for rejoin merge and generated split commits) |
 | `git subtree add --prefix=<prefix> <commit>` | `post-index-change` on index writes; `reference-transaction`; no commit-creation hooks | **no** |
 | `git merge --squash` / `--no-commit` followed by `git commit` | `pre-commit`, … | yes |
 | `git commit --no-verify` (without `--amend`) | `post-index-change` on index writes; `prepare-commit-msg`, `post-commit` | **no** |
@@ -327,13 +328,29 @@ the hook scans the checked-out tree is the #405 push-side gap.
 `git subtree push --prefix=<prefix> <repository> <refspec>` also creates a
 rewritten split chain, but pushes its tip directly without leaving a local
 split branch. Measured on git 2.48.1 with a two-commit fixture, it created a
-two-commit split history and fired no commit-creation or local
-`reference-transaction` hook. `pre-push` did run and received the split tip
-OID, while `HEAD` remained the different full-project commit; the push
-installed the split tip on the bare remote. The command therefore bypasses
-the commit gate and the current push hook analyzes the wrong tree. Since no
-local ref transaction occurs, its local closure is not available through the
-#404 ref-hook option; analyzing the pushed split tip is the #405 disposition.
+two-commit split history and fired no commit-creation hook or checked-out
+branch ref update. `pre-push` received the split tip OID while `HEAD` remained
+the different full-project commit; the push installed the split tip on the
+bare remote. The local `reference-transaction` callback observed in that probe
+was for `refs/remotes/origin/<refspec>` after the remote accepted the push, so
+it cannot block that outbound update. The command bypasses the commit gate and
+the current push hook analyzes the wrong tree. The ordinary form has no
+pre-push local ref transaction that can close #404 before the split is pushed;
+analyzing the pushed split tip is the #405 disposition.
+
+`git subtree push --rejoin --prefix=<prefix> <repository> <refspec>` is a
+different path. When the subtree has new commits, `--rejoin` merges the
+generated split tip back into the checked-out branch before pushing. In a
+Git 2.48.1 fixture with a new subtree commit after an earlier rejoin, the
+resulting two-parent merge fired `pre-merge-commit`, `prepare-commit-msg`,
+`commit-msg`, `post-merge`, and `reference-transaction` for the checked-out
+branch; `pre-push` then received the generated split-tip OID, not the new
+rejoin `HEAD`. The Git 2.43 probe reported by review 4115812068 observed the
+same key hooks. This makes the rejoin branch update a #404 hook-design
+candidate (`reference-transaction` can reject the branch update, and a wired
+`pre-merge-commit` could gate the merge). The split commit itself is still not
+analyzed by the current gate, and `pre-push` still scans the rejoin working
+tree rather than the pushed split tip, so #405 remains.
 
 `git subtree add --prefix=<prefix> <commit>` is another distinct operation:
 it installs a merge commit on the checked-out branch. In a Git 2.48.1 fixture
@@ -341,9 +358,9 @@ with diverged source and target commits, the command created a two-parent
 merge commit containing the prefixed tree. The measured hooks were shared
 `post-index-change` and `reference-transaction` callbacks; neither
 `pre-commit` nor `pre-merge-commit` ran. This branch-history path belongs in
-#404's hook-design inventory; unlike `stash create` and `subtree push`, it
-updates a local ref, so `reference-transaction` is a possible closure to
-evaluate there.
+#404's hook-design inventory; unlike `stash create` and ordinary `subtree
+push`, it updates the checked-out branch, so `reference-transaction` is a
+possible closure to evaluate there.
 
 `reference-transaction` does **not** close every `commit-tree` path,
 though: `update-ref` is optional. A commit object can be pushed directly by
@@ -426,9 +443,10 @@ So the accurate statement of the invariant is:
 > `git fast-import` (`commit <ref>` stream commands), `git filter-branch`
 > (rewritten history), `git subtree split --branch` (rewritten commits under
 > the requested branch), `git subtree add` (an unchecked merge commit), or
-> `git subtree push` (generated split commits pushed
-> directly). For `git subtree push`, `pre-push` runs but scans the checked-out
-> tree instead of the generated split tip. The gate can also be skipped
+> `git subtree push` / `git subtree push --rejoin` (generated split commits
+> pushed directly). For both forms, `pre-push` runs but scans the checked-out
+> tree instead of the generated split tip; `--rejoin` additionally creates an
+> unchecked merge on the checked-out branch. The gate can also be skipped
 > outright with
 > `--no-verify` on
 > `git commit`, `git merge`, and `git push` (which bypasses `pre-push`;
@@ -457,12 +475,19 @@ behavior, which this decision explicitly does not do.
 The uncovered commit-producing paths and replacement-object paths —
 `git merge`, `git revert`, `git cherry-pick`, `git rebase`, `git am`,
 `git commit-tree` plus `git update-ref`, `git fast-import`, `git filter-branch`,
-`git subtree split --branch`, `git subtree push`, `git subtree add`,
+`git subtree split --branch`, `git subtree push` (with or without
+`--rejoin`), `git subtree add`,
 `git stash create`, and `git replace --graft` / `--edit` — can produce or
 replace commits without the gate analyzing the resulting commit (评审
 4115477920, 4115606416, 4115639629, 4115682292, 4115710587, 4115748220,
-4115748226). `git subtree push` does run `pre-push`, but that hook scans the
-checked-out tree rather than its generated split tip, as described below.
+4115748226, 4115812068). `git subtree push` does run `pre-push`, but that hook
+scans the checked-out tree rather than its generated split tip. With
+`--rejoin`, the generated split is also merged into the checked-out branch;
+that merge fires `pre-merge-commit` and updates the branch through
+`reference-transaction`, making both #404 hook options relevant to the merge
+while leaving the #405 pushed-tip mismatch intact. `git subtree add` is a
+separate unchecked merge path with a `reference-transaction` callback, as
+measured above (评审 4115748226).
 `git stash push` is not counted here because its commits stay under
 `refs/stash`; `git stash create` is included because it produces a ref-less
 object. The `reference-transaction` options for stash push and notes are #404
@@ -539,13 +564,22 @@ pushed-ref remedy below can close this one.
 `git subtree push --prefix=<prefix> <repository> <refspec>` has the same
 push-side mismatch, while also creating the commits it pushes. In a Git
 2.48.1 two-commit fixture, the command created a rewritten split chain and
-pushed its tip directly: no commit-creation or local `reference-transaction`
-hook fired. `pre-push` did fire and received the split-tip OID, but `HEAD`
-remained the distinct full-project commit scanned by the gate; the bare remote
-received the split-tip OID. This commit-generation path belongs in #404's
-inventory, but unlike `split --branch` it provides no local ref-update
-callback for a local hook to intercept. The push-side mismatch is tracked
-separately in #405 and requires analyzing the pushed split tip.
+pushed its tip directly without updating the checked-out branch. `pre-push`
+received the split-tip OID while `HEAD` remained the distinct full-project
+commit scanned by the gate. A `reference-transaction` callback updated the
+local remote-tracking ref only after the bare remote accepted the push, too
+late to block it. The push-side mismatch is tracked in #405 and requires
+analyzing the pushed split tip.
+
+Adding `--rejoin` changes the local history transition but not the pushed-tip
+identity. In a Git 2.48.1 fixture with new subtree content, `git subtree push
+--rejoin` created a two-parent merge on the checked-out branch; its
+`reference-transaction` callback covered `refs/heads/main` before the push,
+and `pre-merge-commit` fired. Then `pre-push` received the generated split-tip
+OID while `HEAD` was the different rejoin merge commit. The merge therefore
+has a possible local #404 closure, but the current gate does not wire either
+hook, and the #405 wrong-tree scan still applies to the pushed split commit
+(评审 4115812068).
 
 Verified on 2026-09-27 with a local bare remote and a hook that logs both the
 stdin refs and `HEAD`:
@@ -691,7 +725,8 @@ these becomes true:
 - The uncovered commit-creation paths are closed, or a `merge`, `revert`,
   `cherry-pick`, `rebase`, `am`, `stash push/create`, `notes`, `commit-tree`,
   `replace`, `fast-import`, `filter-branch`, or `subtree add/split/push`
-  workflow changes to route through `git commit`. Either way,
+  workflow (including `subtree push --rejoin`) changes to route through
+  `git commit`. Either way,
   update
   [What The Gate Actually Enforces](#what-the-gate-actually-enforces) in the same
   change — that table is a measurement, and a stale one is worse than none.
