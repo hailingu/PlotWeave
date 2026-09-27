@@ -143,7 +143,7 @@ This repository wires exactly two: `.githooks/pre-commit` and
 | `git stash push` (tracked changes) | `reference-transaction`; no commit-creation hooks | **no** * |
 | `git notes add` / `append` / `edit` | `reference-transaction`; no commit-creation hooks | **no** * |
 | `git commit-tree` + `git update-ref` (plumbing) | `reference-transaction`; no commit-creation hooks | **no** * |
-| `git replace --graft <commit> [<parent>…]` | `reference-transaction`; no commit-creation hooks | **no** * |
+| `git replace --graft <commit> [<parent>…]` / `git replace --edit <commit>` | `reference-transaction`; no commit-creation hooks | **no** * |
 | `git fast-import` (`commit <ref>` stream) | `reference-transaction`; no commit-creation hooks | **no** * |
 | `git filter-branch` (history rewrite) | none measured here (see note) | **no** * |
 | `git subtree split --prefix=<dir> --branch <branch>` | `reference-transaction`; no commit-creation hooks | **no** * |
@@ -269,6 +269,15 @@ remote. The local closure is therefore the same #404
 `reference-transaction` design question as the other ref-backed paths, and
 the explicit-push exposure belongs to #405.
 
+`git replace --edit <commit>` creates the same kind of replacement ref after
+editing the commit object in the configured editor. Measured on git 2.48.1
+with an isolated commit fixture, changing its message created a distinct
+replacement commit under `refs/replace/<target-oid>` and fired only
+`reference-transaction` (`prepared` and `committed`); no commit-creation hook
+fired. Explicitly pushing that ref to a local bare remote succeeded. Its local
+and push-side dispositions are therefore the same #404 and #405 paths as
+`--graft`.
+
 The plumbing path is uncovered too: `git commit-tree <tree>` creates a
 commit object directly, and `git update-ref refs/heads/<branch> <commit>`
 places it on branch history, without any commit-creation hook — measured on
@@ -377,9 +386,10 @@ So the accurate statement of the invariant is:
 > (replayed commits), `git am`, `git stash push` (entry commits under
 > `refs/stash`), `git notes` mutations (commits under `refs/notes/*`),
 > `git commit-tree` (commit objects placed on history via `update-ref`),
-> `git replace --graft` (replacement commits under `refs/replace/*`),
-> `git fast-import` (`commit <ref>` stream commands), or `git
-> filter-branch` (rewritten history), or `git subtree split --branch`
+> `git replace --graft` / `--edit` (replacement commits under
+> `refs/replace/*`),
+> `git fast-import` (`commit <ref>` stream commands), `git filter-branch`
+> (rewritten history), or `git subtree split --branch`
 > (rewritten commits under the requested branch), and it can be skipped
 > outright with
 > `--no-verify` on
@@ -409,9 +419,9 @@ behavior, which this decision explicitly does not do.
 The nine uncovered branch-history paths plus the replacement-object path —
 `git merge`, `git revert`, `git cherry-pick`, `git rebase`, `git am`,
 `git commit-tree` plus `git update-ref`, `git fast-import`, `git filter-branch`,
-`git subtree split --branch`, and `git replace --graft` — can produce or replace
-commits without running the gate for the resulting commit
-(评审 4115477920, 4115606416, 4115639629). The stash row is not counted
+`git subtree split --branch`, and `git replace --graft` / `--edit` — can produce
+or replace commits without running the gate for the resulting commit
+(评审 4115477920, 4115606416, 4115639629, 4115682292). The stash row is not counted
 here: its commits stay under `refs/stash`, off branch history; the
 `reference-transaction` option noted with that row is a #404 question, not a
 branch-history gap (see the table); the notes row shares that same
