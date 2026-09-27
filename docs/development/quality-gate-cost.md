@@ -125,6 +125,7 @@ This repository wires exactly two: `.githooks/pre-commit` and
 | `git stash push` (tracked changes) | `reference-transaction` only — no commit-creation hooks | **no** * |
 | `git notes add` / `append` / `edit` | `reference-transaction` only — no commit-creation hooks | **no** * |
 | `git commit-tree` + `git update-ref` (plumbing) | `reference-transaction` only — no commit-creation hooks | **no** * |
+| `git fast-import` (`commit <ref>` stream) | `reference-transaction` only — no commit-creation hooks | **no** * |
 | `git merge --squash` / `--no-commit` followed by `git commit` | `pre-commit`, … | yes |
 | `git commit --no-verify` / `git merge --no-verify` | `prepare-commit-msg` + `post-commit` / `post-merge` respectively | **no** |
 
@@ -204,7 +205,13 @@ places it on branch history, without any commit-creation hook — measured on
 git 2.48.1, only `reference-transaction` fired during the ref update
 (评审 4115165667). This is the lowest-level way to land a commit with no gate,
 and like the other off-hook paths its closure is the same #404
-`reference-transaction` question.
+`reference-transaction` question. `git fast-import` reaches the same place
+from a stream: its `commit <ref>` command creates the commit and updates the
+branch in one step — measured on git 2.48.1, importing one commit into
+`refs/heads/imported` fired only `reference-transaction` (prepared +
+committed, twice) and no commit-creation hook (评审 4115220196). Because this
+repository does not wire that hook, such an import bypasses the gate on the
+commit side entirely.
 
 One qualification applies to the `git commit` row itself: the gate script
 always scans the working tree, while the created commit contains the index.
@@ -239,8 +246,9 @@ So the accurate statement of the invariant is:
 > branch with a clean working tree. It does **not** run for commits produced
 > automatically by `git merge`, `git revert`, `git cherry-pick`, `git rebase`
 > (replayed commits), `git am`, `git stash push` (entry commits under
-> `refs/stash`), `git notes` mutations (commits under `refs/notes/*`), or
-> `git commit-tree` (commit objects placed on history via `update-ref`), and
+> `refs/stash`), `git notes` mutations (commits under `refs/notes/*`),
+> `git commit-tree` (commit objects placed on history via `update-ref`), or
+> `git fast-import` (`commit <ref>` stream commands), and
 > it can be skipped outright with `--no-verify` on
 > `git commit`, `git merge`, and `git push` (which bypasses `pre-push`;
 > `git push -h` documents it as "bypass pre-push hook").
@@ -437,8 +445,8 @@ these becomes true:
   explicit statement of its effect on gate strength, and must preserve every
   invariant in the section above.
 - The uncovered commit-creation paths are closed, or the
-  merge/revert/cherry-pick/rebase/am/stash/notes/commit-tree workflow
-  changes to route through `git commit`. Either way, update
+  merge/revert/cherry-pick/rebase/am/stash/notes/commit-tree/fast-import
+  workflow changes to route through `git commit`. Either way, update
   [What The Gate Actually Enforces](#what-the-gate-actually-enforces) in the same
   change — that table is a measurement, and a stale one is worse than none.
 - `pre-push` starts reading its stdin **and the gate analyzes the pushed
