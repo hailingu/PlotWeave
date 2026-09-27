@@ -98,8 +98,22 @@ and measurement change only. The following remain in force exactly as written in
   issues must be zero, while historical issues on overall code stay triaged
   separately.
 
-Anyone reading a faster local workflow elsewhere in this repository should treat
-it as a defect in that workflow, not as sanctioned by this decision.
+The "no environment variable reduces the check set" claim above has one
+documented boundary: the gate scripts intentionally expose
+`PLOTWEAVE_NPM_BIN`, `PLOTWEAVE_SONAR_SCANNER_BIN`,
+`PLOTWEAVE_CARGO_LLVM_COV_BIN`, and the report-path overrides
+(`PLOTWEAVE_COVERAGE_REPORT_PATH`, `PLOTWEAVE_RUST_COVERAGE_REPORT_PATH`,
+`PLOTWEAVE_SONAR_REPORT_PATH`) as **test-only injection points**, and the
+hooks `exec` the gate script so those variables are inherited (评审
+4115318775). A shell that exports them can point the gate at substitute
+executables or pre-written reports and thereby skip real checks. These
+overrides exist for the gate's own test suite; using them to bypass the
+gate is the same class of explicit evasion as `--no-verify`, which
+`AGENTS.md` prohibits. Closing the injection points in hook invocations is
+a hardening change to gate behavior and out of scope for this record.
+
+Anyone reading a faster local workflow elsewhere in this repository should
+treat it as a defect in that workflow, not as sanctioned by this decision.
 
 ## What The Gate Actually Enforces
 
@@ -126,6 +140,7 @@ This repository wires exactly two: `.githooks/pre-commit` and
 | `git notes add` / `append` / `edit` | `reference-transaction` only — no commit-creation hooks | **no** * |
 | `git commit-tree` + `git update-ref` (plumbing) | `reference-transaction` only — no commit-creation hooks | **no** * |
 | `git fast-import` (`commit <ref>` stream) | `reference-transaction` only — no commit-creation hooks | **no** * |
+| `git filter-branch` (history rewrite) | none — no hooks at all | **no** * |
 | `git merge --squash` / `--no-commit` followed by `git commit` | `pre-commit`, … | yes |
 | `git commit --no-verify` / `git merge --no-verify` | `prepare-commit-msg` + `post-commit` / `post-merge` respectively | **no** |
 
@@ -213,7 +228,12 @@ updates the branch in one step — measured on git 2.48.1, importing one
 commit into `refs/heads/imported` fired only `reference-transaction`
 (prepared + committed, twice) and no commit-creation hook (评审 4115220196).
 Because this repository does not wire that hook, such an import bypasses the
-gate on the commit side entirely.
+gate on the commit side entirely. `git filter-branch` is the one measured
+path with **no hooks at all**: rewriting two commits produced an empty hook
+log — no commit-creation hook and not even `reference-transaction`
+(评审 4115318769). It is recorded here as a boundary with no hook-side
+closure; its result commits still reach the remote only through the push
+paths this file already covers.
 
 `reference-transaction` does **not** close every `commit-tree` path,
 though: `update-ref` is optional. A commit object can be pushed directly by
@@ -263,9 +283,10 @@ So the accurate statement of the invariant is:
 > automatically by `git merge`, `git revert`, `git cherry-pick`, `git rebase`
 > (replayed commits), `git am`, `git stash push` (entry commits under
 > `refs/stash`), `git notes` mutations (commits under `refs/notes/*`),
-> `git commit-tree` (commit objects placed on history via `update-ref`), or
-> `git fast-import` (`commit <ref>` stream commands), and
-> it can be skipped outright with `--no-verify` on
+> `git commit-tree` (commit objects placed on history via `update-ref`),
+> `git fast-import` (`commit <ref>` stream commands), or `git
+> filter-branch` (rewritten history), and it can be skipped outright with
+> `--no-verify` on
 > `git commit`, `git merge`, and `git push` (which bypasses `pre-push`;
 > `git push -h` documents it as "bypass pre-push hook").
 
@@ -419,11 +440,15 @@ amended, rebased, or dropped no longer appear in `rev-list`, so retained
 history cannot lower- or upper-bound actual invocations (评审 4115135529).
 The daily figures below are therefore **estimates from retained history,
 uncertain in both directions**, not measured invocation rates: pre-commit
-alone is roughly 36 minutes per day at the retained ~30 commits/day, and
-with pushes roughly 73 minutes per day; under option B the total would be
-about 44 minutes per day. Treat these as order-of-magnitude context only —
-a real comparison requires measuring hook invocations, not inferring them
-from history.
+alone is roughly 36 minutes per day at the retained ~30 commits/day. The
+push-inclusive figures make a further, explicit assumption — about one
+`pre-push` invocation per commit (评审 4115318779): batching several commits
+into one push lowers it, retrying failed pushes raises it, and push
+frequency is independent of retained history. Under that assumption the
+total is roughly 73 minutes per day, and under option B about 44 minutes
+per day. Treat all of these as order-of-magnitude context only — a real
+comparison requires measuring hook invocations, not inferring them from
+history.
 
 ### Environment
 
@@ -479,8 +504,9 @@ these becomes true:
   explicit statement of its effect on gate strength, and must preserve every
   invariant in the section above.
 - The uncovered commit-creation paths are closed, or the
-  merge/revert/cherry-pick/rebase/am/stash/notes/commit-tree/fast-import
-  workflow changes to route through `git commit`. Either way, update
+  merge/revert/cherry-pick/rebase/am/stash/notes/commit-tree/fast-import/
+  filter-branch workflow changes to route through `git commit`. Either way,
+  update
   [What The Gate Actually Enforces](#what-the-gate-actually-enforces) in the same
   change — that table is a measurement, and a stale one is worse than none.
 - `pre-push` starts reading its stdin **and the gate analyzes the pushed
