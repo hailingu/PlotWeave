@@ -43,8 +43,10 @@ const productionSentinels = [
 ] as const
 
 /** 产品入口哨兵：入口模块被 index.html 直接加载、在 src 内零导入者，
- * 不因「仅被测试导入」误判为测试设施（issue #343 守卫的构成性豁免）。 */
-const productionEntryFiles = ['src/main.tsx'] as const
+ * 不因「仅被测试导入」误判为测试设施（issue #343 守卫的构成性豁免）。
+ * bootstrap 先装全局兜底再动态加载 main（issue #358 评审 5326220397），
+ * 对 main 的动态边不进静态导入者图，故两个入口都需登记。 */
+const productionEntryFiles = ['src/bootstrap.ts', 'src/main.tsx'] as const
 
 /** 解析 .properties 格式：# 注释与空行忽略，键值以首个 = 分割。 */
 function readSonarProperties(path: string): Map<string, string> {
