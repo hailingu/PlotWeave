@@ -1331,6 +1331,39 @@ function discoverTsSvgSources(): { path: string; content: string }[] {
     .map((path) => ({ path, content: read(path) }))
 }
 
+/**
+ * 对象字面量的显示色出现点：显示键承载的字面，加上同对象内被显示键经
+ * var() 消费的内联自定义属性定义侧字面（评审 4113994776——镜像 CSS 侧
+ * 可达局部别名检查，消除「定义并消费」别名对的入口分叉）；未被显示键
+ * 消费的自定义属性不入契约（与 CSS 侧可达性同口径）。
+ */
+function objectLiteralOccurrences(
+  file: string,
+  obj: ts.ObjectLiteralExpression,
+): JsxColorOccurrence[] {
+  const pairs = obj.properties.filter(ts.isPropertyAssignment).flatMap((p) => {
+    const texts = staticTextsOf(p.initializer)
+    return staticPropertyNameTexts(p.name).map((name) => ({ name, texts }))
+  })
+  const consumedNames = new Set(
+    pairs
+      .filter(({ name }) => displayColorKeyOf(name) !== null)
+      .flatMap(({ texts }) => texts.flatMap((t) => allVarRefs(t))),
+  )
+  const out: JsxColorOccurrence[] = []
+  for (const { name, texts } of pairs) {
+    const key = displayColorKeyOf(name)
+    const consumed = name.startsWith('--') && consumedNames.has(name)
+    if (key === null && !consumed) continue
+    for (const value of texts) {
+      if (hasColorLiteral(value)) {
+        out.push({ file, context: key ?? name, value })
+      }
+    }
+  }
+  return out
+}
+
 /** 单个 TS/TSX 源的显示色字面出现点：JSX 属性与对象属性的字符串字面量。 */
 function colorOccurrencesOfSource(
   file: string,
@@ -1354,15 +1387,9 @@ function colorOccurrencesOfSource(
           out.push({ file, context: key, value })
         }
       }
-    } else if (ts.isPropertyAssignment(node)) {
-      for (const name of staticPropertyNameTexts(node.name)) {
-        const key = displayColorKeyOf(name)
-        for (const value of staticTextsOf(node.initializer)) {
-          if (key !== null && hasColorLiteral(value)) {
-            out.push({ file, context: key, value })
-          }
-        }
-      }
+    } else if (ts.isObjectLiteralExpression(node)) {
+      // 对象属性统一在对象层级处理（含内联自定义属性别名分析）
+      out.push(...objectLiteralOccurrences(file, node))
     }
     ts.forEachChild(node, visit)
   }
@@ -1605,5 +1632,23 @@ describe('TSX/SVG 等价静态语法与解包（issue #362，评审补强）', (
       { file: 'fixture.tsx', context: 'fill', value: '#fff' },
       { file: 'fixture.tsx', context: 'stop-color', value: '#f00' },
     ])
+  })
+
+  it('内联自定义属性别名：定义并被显示键经 var() 消费的字面进入登记（评审 4113994776）', () => {
+    const occurrences = colorOccurrencesOfSource(
+      'fixture.tsx',
+      "export const a = <div style={{ '--tone': '#fff', color: 'var(--tone)' }} />;",
+    )
+    // 定义侧字面以自定义属性名为上下文进入登记（镜像 CSS 侧可达局部
+    // 别名检查），消费侧 var() 引用本身不重复点名
+    expect(occurrences).toEqual([
+      { file: 'fixture.tsx', context: '--tone', value: '#fff' },
+    ])
+    // 未被显示键消费的内联自定义属性不入契约（与 CSS 侧可达性同口径）
+    const unused = colorOccurrencesOfSource(
+      'fixture.tsx',
+      "export const b = <div style={{ '--tone': '#fff' }} />;",
+    )
+    expect(unused).toEqual([])
   })
 })
