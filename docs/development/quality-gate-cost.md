@@ -101,7 +101,8 @@ and measurement change only. The following remain in force exactly as written in
 The "no environment variable reduces the check set" claim above has one
 documented boundary: the gate scripts intentionally expose
 `PLOTWEAVE_NPM_BIN`, `PLOTWEAVE_SONAR_SCANNER_BIN`,
-`PLOTWEAVE_CARGO_LLVM_COV_BIN`, and the report-path overrides
+`PLOTWEAVE_CARGO_LLVM_COV_BIN`, `PLOTWEAVE_CURL_BIN`, `PLOTWEAVE_NODE_BIN`,
+and the report-path overrides
 (`PLOTWEAVE_COVERAGE_REPORT_PATH`, `PLOTWEAVE_RUST_COVERAGE_REPORT_PATH`,
 `PLOTWEAVE_SONAR_REPORT_PATH`) as **test-only injection points**, and the
 hooks `exec` the gate script so those variables are inherited (评审
@@ -140,7 +141,7 @@ This repository wires exactly two: `.githooks/pre-commit` and
 | `git notes add` / `append` / `edit` | `reference-transaction` only — no commit-creation hooks | **no** * |
 | `git commit-tree` + `git update-ref` (plumbing) | `reference-transaction` only — no commit-creation hooks | **no** * |
 | `git fast-import` (`commit <ref>` stream) | `reference-transaction` only — no commit-creation hooks | **no** * |
-| `git filter-branch` (history rewrite) | none — no hooks at all | **no** * |
+| `git filter-branch` (history rewrite) | none measured here (see note) | **no** * |
 | `git merge --squash` / `--no-commit` followed by `git commit` | `pre-commit`, … | yes |
 | `git commit --no-verify` / `git merge --no-verify` | `prepare-commit-msg` + `post-commit` / `post-merge` respectively | **no** |
 
@@ -228,12 +229,15 @@ updates the branch in one step — measured on git 2.48.1, importing one
 commit into `refs/heads/imported` fired only `reference-transaction`
 (prepared + committed, twice) and no commit-creation hook (评审 4115220196).
 Because this repository does not wire that hook, such an import bypasses the
-gate on the commit side entirely. `git filter-branch` is the one measured
-path with **no hooks at all**: rewriting two commits produced an empty hook
-log — no commit-creation hook and not even `reference-transaction`
-(评审 4115318769). It is recorded here as a boundary with no hook-side
-closure; its result commits still reach the remote only through the push
-paths this file already covers.
+gate on the commit side entirely. `git filter-branch` produced an empty
+hook log in our measurement — no commit-creation hook and no
+`reference-transaction` (git 2.48.1, `--env-filter` forcing a real rewrite).
+The reviewer reports `reference-transaction` firing on Git 2.43 (评审
+4115347192); we could not reproduce that here, so we record our measured
+result and note the discrepancy rather than assert either way. This
+repository does not wire `reference-transaction` regardless, so the gate
+does not run for filter-branch; whether the hook is available as a closure
+is a #404 question the two measurements leave open.
 
 `reference-transaction` does **not** close every `commit-tree` path,
 though: `update-ref` is optional. A commit object can be pushed directly by
