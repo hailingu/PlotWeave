@@ -141,6 +141,7 @@ This repository wires exactly two: `.githooks/pre-commit` and
 | `git rebase` replaying commits onto a new base | `pre-rebase` once, then `prepare-commit-msg` + `post-commit` per replayed commit, `post-rewrite` once at the end | **no** |
 | `git am` applying a patch series | `applypatch-msg`, `pre-applypatch`, `post-applypatch` — none wired | **no** |
 | `git stash push` (tracked changes) | `reference-transaction`; no commit-creation hooks | **no** * |
+| `git stash create [<message>]` (tracked changes) | `post-index-change` on index writes; no commit-creation or ref-update hooks | **no** |
 | `git notes add` / `append` / `edit` | `reference-transaction`; no commit-creation hooks | **no** * |
 | `git commit-tree` + `git update-ref` (plumbing) | `reference-transaction`; no commit-creation hooks | **no** * |
 | `git replace --graft <commit> [<parent>…]` / `git replace --edit <commit>` | `reference-transaction`; no commit-creation hooks | **no** * |
@@ -148,6 +149,7 @@ This repository wires exactly two: `.githooks/pre-commit` and
 | `git filter-branch` (history rewrite) | none measured here (see note) | **no** * |
 | `git subtree split --prefix=<dir> --branch <branch>` | `reference-transaction`; no commit-creation hooks | **no** * |
 | `git subtree push --prefix=<prefix> <repository> <refspec>` | `pre-push` receives split tip; gate scans working tree; no commit-creation or local ref-update hook | **no** (for generated split commits) |
+| `git subtree add --prefix=<prefix> <commit>` | `post-index-change` on index writes; `reference-transaction`; no commit-creation hooks | **no** |
 | `git merge --squash` / `--no-commit` followed by `git commit` | `pre-commit`, … | yes |
 | `git commit --no-verify` (without `--amend`) | `post-index-change` on index writes; `prepare-commit-msg`, `post-commit` | **no** |
 | `git merge --no-verify` | `prepare-commit-msg`, `post-merge` | **no** |
@@ -239,6 +241,18 @@ in the `prepared` state does prevent the entry — measured: with such a hook
 already written by then (评审 4114992022). Stash therefore remains within
 #404's hook-design scope rather than being excluded as unwireable.
 
+`git stash create [<message>]` is a separate, ref-less path. With modified
+tracked content, it returns the new stash commit's OID without changing
+`HEAD`, `refs/stash`, or another local ref. A Git 2.48.1 probe recorded only
+shared `post-index-change` callbacks (four index writes); no commit-creation
+hook or `reference-transaction` fired. That callback cannot block the object
+creation. If the returned OID is pushed directly, `pre-push` receives that
+OID while the gate scans the checked-out tree. In the probe, an untracked
+source file remained in the working tree but was absent from the stash commit
+tree, demonstrating the #405 mismatch. A local `reference-transaction` hook
+cannot close the creation path unless the object is first installed in a ref, so that
+limitation belongs in #404's hook-design inventory as well.
+
 The stash commits are also pushable: an explicit refspec such as
 `git push <remote> refs/stash:refs/heads/…`, or `--mirror`, copies the stash
 commit to the remote while `pre-push` analyzes the unrelated checked-out
@@ -321,6 +335,16 @@ the commit gate and the current push hook analyzes the wrong tree. Since no
 local ref transaction occurs, its local closure is not available through the
 #404 ref-hook option; analyzing the pushed split tip is the #405 disposition.
 
+`git subtree add --prefix=<prefix> <commit>` is another distinct operation:
+it installs a merge commit on the checked-out branch. In a Git 2.48.1 fixture
+with diverged source and target commits, the command created a two-parent
+merge commit containing the prefixed tree. The measured hooks were shared
+`post-index-change` and `reference-transaction` callbacks; neither
+`pre-commit` nor `pre-merge-commit` ran. This branch-history path belongs in
+#404's hook-design inventory; unlike `stash create` and `subtree push`, it
+updates a local ref, so `reference-transaction` is a possible closure to
+evaluate there.
+
 `reference-transaction` does **not** close every `commit-tree` path,
 though: `update-ref` is optional. A commit object can be pushed directly by
 OID — `git push <remote> <oid>:refs/heads/…` — while no local ref ever
@@ -391,16 +415,18 @@ So the accurate statement of the invariant is:
 > commit** — no tracked differences, including ones hidden by index flags,
 > and no additional untracked or ignored inputs the gate reads. A clean
 > `git status` does not prove that equality.
-> It does **not** analyze the commits produced automatically by `git merge`,
+> It does **not** analyze the commits produced by `git merge`,
 > `git revert`, `git cherry-pick`, `git rebase`
 > (replayed commits), `git am`, `git stash push` (entry commits under
-> `refs/stash`), `git notes` mutations (commits under `refs/notes/*`),
+> `refs/stash`), `git stash create` (a ref-less stash commit object),
+> `git notes` mutations (commits under `refs/notes/*`),
 > `git commit-tree` (commit objects placed on history via `update-ref`),
 > `git replace --graft` / `--edit` (replacement commits under
 > `refs/replace/*`),
 > `git fast-import` (`commit <ref>` stream commands), `git filter-branch`
 > (rewritten history), `git subtree split --branch` (rewritten commits under
-> the requested branch), or `git subtree push` (generated split commits pushed
+> the requested branch), `git subtree add` (an unchecked merge commit), or
+> `git subtree push` (generated split commits pushed
 > directly). For `git subtree push`, `pre-push` runs but scans the checked-out
 > tree instead of the generated split tip. The gate can also be skipped
 > outright with
@@ -431,16 +457,16 @@ behavior, which this decision explicitly does not do.
 The uncovered commit-producing paths and replacement-object paths —
 `git merge`, `git revert`, `git cherry-pick`, `git rebase`, `git am`,
 `git commit-tree` plus `git update-ref`, `git fast-import`, `git filter-branch`,
-`git subtree split --branch`, `git subtree push`, and `git replace --graft` /
-`--edit` — can produce or replace commits without the gate analyzing the
-resulting commit (评审 4115477920, 4115606416, 4115639629, 4115682292,
-4115710587). `git subtree push` does run `pre-push`, but that hook scans the
-checked-out tree rather than its generated split tip, as described below. The
-stash row is not counted
-here: its commits stay under `refs/stash`, off branch history; the
-`reference-transaction` option noted with that row is a #404 question, not a
-branch-history gap (see the table); the notes row shares that same
-disposition. Separately, `git push --no-verify`
+`git subtree split --branch`, `git subtree push`, `git subtree add`,
+`git stash create`, and `git replace --graft` / `--edit` — can produce or
+replace commits without the gate analyzing the resulting commit (评审
+4115477920, 4115606416, 4115639629, 4115682292, 4115710587, 4115748220,
+4115748226). `git subtree push` does run `pre-push`, but that hook scans the
+checked-out tree rather than its generated split tip, as described below.
+`git stash push` is not counted here because its commits stay under
+`refs/stash`; `git stash create` is included because it produces a ref-less
+object. The `reference-transaction` options for stash push and notes are #404
+hook-design questions, not branch-history gaps (see the table). Separately, `git push --no-verify`
 bypasses the push-time `pre-push` rerun entirely (评审 4115110181,
 4115477925). It does not undo an earlier `pre-commit` gate run: if the
 commit was created through ordinary `git commit`, that gate already ran,
@@ -662,10 +688,10 @@ these becomes true:
 - Any option A or B proposal appears: it must come with a fresh baseline and an
   explicit statement of its effect on gate strength, and must preserve every
   invariant in the section above.
-- The uncovered commit-creation paths are closed, or the
-  merge/revert/cherry-pick/rebase/am/stash/notes/commit-tree/replace/
-  fast-import/filter-branch/subtree split or push workflow changes to route
-  through `git commit`. Either way,
+- The uncovered commit-creation paths are closed, or a `merge`, `revert`,
+  `cherry-pick`, `rebase`, `am`, `stash push/create`, `notes`, `commit-tree`,
+  `replace`, `fast-import`, `filter-branch`, or `subtree add/split/push`
+  workflow changes to route through `git commit`. Either way,
   update
   [What The Gate Actually Enforces](#what-the-gate-actually-enforces) in the same
   change — that table is a measurement, and a stale one is worse than none.
