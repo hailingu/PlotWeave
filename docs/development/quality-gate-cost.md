@@ -111,7 +111,7 @@ directory containing every candidate hook, recording which ones fire.
 This repository wires exactly two: `.githooks/pre-commit` and
 `.githooks/pre-push`. There is no `pre-merge-commit`, `commit-msg`,
 `prepare-commit-msg`, `post-commit`, `post-merge`, `pre-rebase`,
-`pre-applypatch`, or `applypatch-msg`.
+`post-rewrite`, `pre-applypatch`, or `applypatch-msg`.
 
 | Command that creates a commit | Hooks that actually fire | Gate runs? |
 | --- | --- | :---: |
@@ -119,7 +119,7 @@ This repository wires exactly two: `.githooks/pre-commit` and
 | `git merge` producing a merge commit (non-fast-forward) | `pre-merge-commit`, `prepare-commit-msg`, `commit-msg` | **no** |
 | `git revert` (automatic commit) | `prepare-commit-msg` only | **no** |
 | `git cherry-pick` (automatic commit) | `prepare-commit-msg` only | **no** |
-| `git rebase` replaying commits onto a new base | `pre-rebase` once, then `prepare-commit-msg` + `post-commit` per replayed commit | **no** |
+| `git rebase` replaying commits onto a new base | `pre-rebase` once, then `prepare-commit-msg` + `post-commit` per replayed commit, `post-rewrite` once at the end | **no** |
 | `git am` applying a patch series | `applypatch-msg`, `pre-applypatch`, `post-applypatch` — none wired | **no** |
 | `git merge --squash` / `--no-commit` followed by `git commit` | `pre-commit`, … | yes |
 | `git commit --no-verify` / `git merge --no-verify` | `prepare-commit-msg` only | **no** |
@@ -135,7 +135,9 @@ hook log, two commits replayed / one patch applied) with this repository's
 wiring absent, so the rows above record which hooks *would* fire: a
 commit-producing rebase runs `pre-rebase` once and then `prepare-commit-msg`
 and `post-commit` per replayed commit — **`pre-commit` and `commit-msg` never
-fire** — while `git am` runs only the applypatch-family hooks, none of which
+fire** — and `post-rewrite` once after the replay, whose exit status git
+ignores, so it cannot implement a blocking gate either (评审 4114827177);
+`git am` runs only the applypatch-family hooks, none of which
 this repository wires. Either path therefore creates commits with no gate.
 
 So the accurate statement of the invariant is:
