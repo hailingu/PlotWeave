@@ -123,6 +123,7 @@ This repository wires exactly two: `.githooks/pre-commit` and
 | `git rebase` replaying commits onto a new base | `pre-rebase` once, then `prepare-commit-msg` + `post-commit` per replayed commit, `post-rewrite` once at the end | **no** |
 | `git am` applying a patch series | `applypatch-msg`, `pre-applypatch`, `post-applypatch` — none wired | **no** |
 | `git stash push` (tracked changes) | `reference-transaction` only — no commit-creation hooks | **no** |
+| `git notes add` / `append` / `edit` | `reference-transaction` only — no commit-creation hooks | **no** |
 | `git merge --squash` / `--no-commit` followed by `git commit` | `pre-commit`, … | yes |
 | `git commit --no-verify` / `git merge --no-verify` | `prepare-commit-msg` + `post-commit` / `post-merge` respectively | **no** |
 
@@ -171,6 +172,15 @@ in the `prepared` state does prevent the entry — measured: with such a hook
 already written by then (评审 4114992022). Stash therefore remains within
 #404's hook-design scope rather than being excluded as unwireable.
 
+`git notes add` / `append` / `edit` likewise create commits under
+`refs/notes/*` (by default `refs/notes/commits`) without any
+commit-creation hook — measured on git 2.48.1, only `reference-transaction`
+fires (评审 4115135524). Unlike `refs/stash`, notes refs are pushable
+(`git push origin refs/notes/*`), so this row is remote-facing in the same
+sense the push finding is; it is recorded here as a boundary and its
+closure — `reference-transaction` in `prepared` state — is the same #404
+option noted for stash, not a separate remedy.
+
 One qualification applies to the `git commit` row itself: the gate script
 always scans the working tree, while the created commit contains the index.
 Working-tree state beyond the index is therefore analyzed but never
@@ -196,8 +206,9 @@ So the accurate statement of the invariant is:
 > are still scanned); at push time, the pushed ref is the checked-out branch
 > with a clean working tree. It does **not** run for commits produced
 > automatically by `git merge`, `git revert`, `git cherry-pick`, `git rebase`
-> (replayed commits), `git am`, or `git stash push` (entry commits under
-> `refs/stash`), and it can be skipped outright with `--no-verify` on
+> (replayed commits), `git am`, `git stash push` (entry commits under
+> `refs/stash`), or `git notes` mutations (commits under `refs/notes/*`),
+> and it can be skipped outright with `--no-verify` on
 > `git commit`, `git merge`, and `git push` (which bypasses `pre-push`;
 > `git push -h` documents it as "bypass pre-push hook").
 
@@ -225,7 +236,8 @@ or am can land commits on a branch with no static checks, no coverage, and no
 SonarQube analysis for the resulting commit. The stash row is not counted
 here: its commits stay under `refs/stash`, off branch history; the
 `reference-transaction` option noted with that row is a #404 question, not a
-branch-history gap (see the table). Separately, `git push --no-verify`
+branch-history gap (see the table); the notes row shares that same
+disposition. Separately, `git push --no-verify`
 bypasses `pre-push` entirely (评审 4115110181): even a clean push of the
 checked-out branch then reaches the remote with no gate at all — a
 remote-facing variant of the documented `--no-verify` bypass that the
@@ -325,12 +337,18 @@ is bounded at 23%.
 The repository has 1120 commits spanning 2026-08-21 to 2026-09-27 — 37 days.
 That count includes 196 merge commits, of which 194 are GitHub PR merges
 made remotely and 2 local — the former never invoked the local `pre-commit`
-gate at all (评审 4115110183). The true invocation rate is therefore lower
-than ~30/day, and the daily figures below are **upper bounds**: pre-commit
-alone costs at most about 36 minutes per day, and with pushes at most ~73
-minutes per day; under option B the total would fall to about 44 minutes per
-day. Treat these as order-of-magnitude context, not measured figures —
-actual push frequency varies with batching.
+gate at all (评审 4115110183). Neither direction of the conversion from
+retained history to hook invocations is sound, though: a failed commit
+attempt can run the full hook without creating a commit, and commits later
+amended, rebased, or dropped no longer appear in `rev-list`, so retained
+history cannot lower- or upper-bound actual invocations (评审 4115135529).
+The daily figures below are therefore **estimates from retained history,
+uncertain in both directions**, not measured invocation rates: pre-commit
+alone is roughly 36 minutes per day at the retained ~30 commits/day, and
+with pushes roughly 73 minutes per day; under option B the total would be
+about 44 minutes per day. Treat these as order-of-magnitude context only —
+a real comparison requires measuring hook invocations, not inferring them
+from history.
 
 ### Environment
 
@@ -386,8 +404,8 @@ these becomes true:
   explicit statement of its effect on gate strength, and must preserve every
   invariant in the section above.
 - The uncovered commit-creation paths are closed, or the
-  merge/revert/cherry-pick/rebase/am/stash workflow changes to route through
-  `git commit`. Either way, update
+  merge/revert/cherry-pick/rebase/am/stash/notes workflow changes to route
+  through `git commit`. Either way, update
   [What The Gate Actually Enforces](#what-the-gate-actually-enforces) in the same
   change — that table is a measurement, and a stale one is worse than none.
 - `pre-push` starts reading its stdin **and the gate analyzes the pushed
