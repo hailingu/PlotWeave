@@ -120,32 +120,35 @@ treat it as a defect in that workflow, not as sanctioned by this decision.
 
 The bullets above describe intent. This section records the verified
 *enforcement* boundary, so that no reader overstates the guarantee. It was
-measured on 2026-09-27 against git 2.48.1 with `core.hooksPath` set to a
-directory containing every candidate hook, recording which ones fire.
+measured on 2026-09-27 against git 2.48.1 with isolated logging hooks selected
+through `core.hooksPath`. The table records command-related observations in
+the tested modes; shared index-write and ref-update callbacks are explained
+below, rather than claiming an exhaustive trace for every command variant.
 
 This repository wires exactly two: `.githooks/pre-commit` and
 `.githooks/pre-push`. There is no `pre-merge-commit`, `commit-msg`,
 `prepare-commit-msg`, `post-commit`, `post-merge`, `pre-rebase`,
-`post-rewrite`, `pre-applypatch`, `applypatch-msg`, or
-`reference-transaction`.
+`post-rewrite`, `pre-applypatch`, `applypatch-msg`,
+`reference-transaction`, or `post-index-change`.
 
-| Command that creates a commit | Hooks that actually fire | Gate runs? |
+| Command that creates a commit | Observed hooks (shared callbacks also described below) | Gate runs? |
 | --- | --- | :---: |
-| `git commit` (without `--amend`) | `pre-commit`, `prepare-commit-msg`, `commit-msg`, `post-commit` | yes |
-| `git commit --amend` | `pre-commit`, `prepare-commit-msg`, `commit-msg`, `post-commit`, then `post-rewrite amend` unless `--no-post-rewrite` | yes |
+| `git commit` (without `--amend`) | `post-index-change` on index writes; `pre-commit`, `prepare-commit-msg`, `commit-msg`, `post-commit` | yes |
+| `git commit --amend` | `post-index-change` on index writes; `pre-commit`, `prepare-commit-msg`, `commit-msg`, `post-commit`, then `post-rewrite amend` unless `--no-post-rewrite` | yes |
 | `git merge` producing a merge commit (non-fast-forward) | `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `post-merge` | **no** |
 | `git revert` (automatic commit) | `prepare-commit-msg` + `post-commit` | **no** |
 | `git cherry-pick` (automatic commit) | `prepare-commit-msg` + `post-commit` | **no** |
 | `git rebase` replaying commits onto a new base | `pre-rebase` once, then `prepare-commit-msg` + `post-commit` per replayed commit, `post-rewrite` once at the end | **no** |
 | `git am` applying a patch series | `applypatch-msg`, `pre-applypatch`, `post-applypatch` — none wired | **no** |
-| `git stash push` (tracked changes) | `reference-transaction` only — no commit-creation hooks | **no** * |
-| `git notes add` / `append` / `edit` | `reference-transaction` only — no commit-creation hooks | **no** * |
-| `git commit-tree` + `git update-ref` (plumbing) | `reference-transaction` only — no commit-creation hooks | **no** * |
-| `git fast-import` (`commit <ref>` stream) | `reference-transaction` only — no commit-creation hooks | **no** * |
+| `git stash push` (tracked changes) | `reference-transaction`; no commit-creation hooks | **no** * |
+| `git notes add` / `append` / `edit` | `reference-transaction`; no commit-creation hooks | **no** * |
+| `git commit-tree` + `git update-ref` (plumbing) | `reference-transaction`; no commit-creation hooks | **no** * |
+| `git fast-import` (`commit <ref>` stream) | `reference-transaction`; no commit-creation hooks | **no** * |
 | `git filter-branch` (history rewrite) | none measured here (see note) | **no** * |
 | `git merge --squash` / `--no-commit` followed by `git commit` | `pre-commit`, … | yes |
-| `git commit --no-verify` (without `--amend`) / `git merge --no-verify` | `prepare-commit-msg` + `post-commit` / `post-merge` respectively | **no** |
-| `git commit --amend --no-verify` | `prepare-commit-msg`, `post-commit`, then `post-rewrite amend` unless `--no-post-rewrite` | **no** |
+| `git commit --no-verify` (without `--amend`) | `post-index-change` on index writes; `prepare-commit-msg`, `post-commit` | **no** |
+| `git merge --no-verify` | `prepare-commit-msg`, `post-merge` | **no** |
+| `git commit --amend --no-verify` | `post-index-change` on index writes; `prepare-commit-msg`, `post-commit`, then `post-rewrite amend` unless `--no-post-rewrite` | **no** |
 
 \* These rows produce commits under refs that are **pushable by explicit
 refspec** — `git push <remote> refs/stash:refs/heads/…`, `refs/notes/*`,
@@ -158,6 +161,20 @@ Ref](#known-finding-push-scans-the-checked-out-tree-not-the-pushed-ref):
 direct-OID push variant that causes no local `reference-transaction`;
 `pre-push` still receives the OID and can block the push. See the commit-tree
 paragraph below.
+
+`post-index-change` is a shared index-write callback, as specified by its
+[Git contract](https://git-scm.com/docs/githooks#_post_index_change), rather
+than a commit-creation gate (评审 4115577716). Any command that reaches that
+index-writing path can invoke it; its occurrence and count depend on the
+index writes performed. Git 2.48.1 probes of ordinary commit, amend, both
+corresponding `--no-verify` forms, and `commit --only A` all invoked it.
+When `pre-commit` was enabled, the observed index callbacks preceded it;
+`--only A` produced two index callbacks rather than one. All five commands
+committed the expected tree and exited 0 with `post-index-change` configured
+to exit 1, so it cannot supply a blocking gate. Other rows do not enumerate
+every shared index callback; their index-write traces were not remeasured
+here, and omission from a row does not mean the callback cannot fire.
+This repository does not wire it, so the Gate column remains unchanged.
 
 Every command in this table also fires `reference-transaction` on the ref
 updates it performs — measured on git 2.48.1 for `git commit`
@@ -201,15 +218,16 @@ commit-producing rebase runs `pre-rebase` once and then `prepare-commit-msg`
 and `post-commit` per replayed commit — **`pre-commit` and `commit-msg` never
 fire** — and `post-rewrite` once after the replay, whose exit status git
 ignores, so it cannot implement a blocking gate either (评审 4114827177);
-`git am` runs only the applypatch-family hooks, none of which
-this repository wires. Either path therefore creates commits with no gate.
+the command-specific hooks for `git am` are the applypatch family, none of
+which this repository wires. Shared index/ref callbacks are covered above.
+Either path therefore creates commits with no gate.
 
 `git stash push` with tracked changes creates its entry commits under
 `refs/stash` — the stash commit plus its index parent — without running any
 commit-creation hook (评审 4114895001); the `git-stash` documentation likewise
 describes a stash entry as a commit. Stashed work normally re-enters the tree
 through `git stash pop` / `apply`, which create no commits, and becomes
-commits only through the paths this table already records. Its one hook is
+commits only through the paths this table already records. Its ref-update hook is
 `reference-transaction` on the `refs/stash` update, and aborting that update
 in the `prepared` state does prevent the entry — measured: with such a hook
 `git stash push` fails with exit 128 ("ref updates aborted by hook") and
@@ -346,9 +364,10 @@ commands, which also means the `commit-msg`-based remedy that revision proposed
 would not have closed the gap at all — see below.
 
 `revert` and `cherry-pick` have no pre-commit-equivalent hook, and no
-`commit-msg` either. `prepare-commit-msg` is the only hook they run before the
-commit exists, and it receives the commit message at that point, which is why
-it is not a suitable place to run a gate; their one other hook, `post-commit`,
+`commit-msg` either. `prepare-commit-msg` is their pre-creation message hook;
+the shared index-write callback above cannot block the operation. The message
+hook receives the commit message at that point, which is why this record
+does not select it as a gate; their `post-commit` hook
 runs only after the commit exists and cannot block it, as recorded above.
 Closing this gap is a hook-design decision rather
 than a one-line addition, and no remedy is proposed here. It is recorded as a
