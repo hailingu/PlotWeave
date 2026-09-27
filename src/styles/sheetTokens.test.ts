@@ -13,6 +13,7 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import postcss from 'postcss'
+import * as ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 import {
   colorTokenOf,
@@ -1217,5 +1218,240 @@ describe('F4 遮罩 alpha：只接受可确定透明度的静态色标', () => {
           '  LINEAR-GRADIENT(transparent, rgb(0 0 0 / 100%), transparent)  ',
       }),
     ).not.toThrow()
+  })
+})
+
+/**
+ * TSX/TS/SVG 显示色扫描（issue #362：守卫范围从 CSS 扩展到组件与种子
+ * 源码）。以 TypeScript AST 抽取生产源码中显示色承载点的字符串字面量
+ * ——JSX 显示色属性与显示色对象键（含 gradient，覆盖持久化种子数据）；
+ * SVG 无 AST，按 fill/stroke/stop-color 属性文本扫描。注释与无关字符串
+ * （issue 编号引用等）不进 AST 字面量位点，天然不可见。扫描键集不包含
+ * 用户内容数组（如头像渐变色板），维持 #262 的既有范围区别。
+ */
+const JSX_COLOR_SCAN_SKIP = [
+  'src/styles/cssColorContract.ts',
+  'src/styles/cssValueSyntax.ts',
+  'src/styles/sheetRuleQuery.ts',
+  'src/styles/sheetTokensEngine.ts',
+  'src/moduleGraph.ts',
+  'src/model/convertFixtures.ts',
+  'src/editor/ai/testGraphs.ts',
+]
+
+/** 承载显示色的 JSX 属性名与对象键（小写比较；camelCase 归一）。 */
+const TSX_DISPLAY_COLOR_KEYS = new Set([
+  'color',
+  'fill',
+  'stroke',
+  'stopcolor',
+  'stop-color',
+  'background',
+  'backgroundcolor',
+  'bordercolor',
+  'gradient',
+])
+
+/** SVG 文本扫描的显示色属性（值以双引号序列化）。 */
+const SVG_COLOR_ATTR = /\b(fill|stroke|stop-color)\s*=\s*"([^"]*)"/gi
+
+interface JsxColorOccurrence {
+  file: string
+  context: string
+  value: string
+}
+
+function discoverTsSvgSources(): { path: string; content: string }[] {
+  const entries = readdirSync(join(repoRoot, 'src'), {
+    encoding: 'utf8',
+    recursive: true,
+  })
+  return entries
+    .map((name) => `src/${name.replace(/\\/g, '/')}`)
+    .filter((path) => /\.(tsx?|svg)$/.test(path))
+    .filter(
+      (path) => !/\.test\.tsx?$/.test(path) && !path.endsWith('.test-d.ts'),
+    )
+    .filter((path) => !JSX_COLOR_SCAN_SKIP.includes(path))
+    .sort()
+    .map((path) => ({ path, content: read(path) }))
+}
+
+/** 单个 TS/TSX 源的显示色字面出现点：JSX 属性与对象属性的字符串字面量。 */
+function colorOccurrencesOfSource(
+  file: string,
+  content: string,
+): JsxColorOccurrence[] {
+  const out: JsxColorOccurrence[] = []
+  const sf = ts.createSourceFile(
+    file,
+    content,
+    ts.ScriptTarget.Latest,
+    true,
+    file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+  )
+  const literalOf = (init: ts.Expression | undefined): string | undefined => {
+    if (init === undefined) return undefined
+    if (ts.isStringLiteral(init)) return init.text
+    if (
+      ts.isJsxExpression(init) &&
+      init.expression !== undefined &&
+      ts.isStringLiteral(init.expression)
+    ) {
+      return init.expression.text
+    }
+    return undefined
+  }
+  const visit = (node: ts.Node): void => {
+    if (ts.isJsxAttribute(node)) {
+      const key = node.name.getText(sf).toLowerCase()
+      const value = literalOf(node.initializer)
+      if (
+        TSX_DISPLAY_COLOR_KEYS.has(key) &&
+        value !== undefined &&
+        hasColorLiteral(value)
+      ) {
+        out.push({ file, context: key, value })
+      }
+    } else if (
+      ts.isPropertyAssignment(node) &&
+      ts.isIdentifier(node.name) &&
+      ts.isStringLiteral(node.initializer)
+    ) {
+      const key = node.name.text.toLowerCase()
+      const { text } = node.initializer
+      if (TSX_DISPLAY_COLOR_KEYS.has(key) && hasColorLiteral(text)) {
+        out.push({ file, context: key, value: text })
+      }
+    }
+    ts.forEachChild(node, visit)
+  }
+  ts.forEachChild(sf, visit)
+  return out
+}
+
+/** SVG 属性文本扫描（无 AST）：只认双引号形态的显示色属性。 */
+function svgColorOccurrences(
+  content: string,
+): { context: string; value: string }[] {
+  return [...content.matchAll(SVG_COLOR_ATTR)]
+    .map((m) => ({ context: m[1]!.toLowerCase(), value: m[2]! }))
+    .filter((occ) => hasColorLiteral(occ.value))
+}
+
+/** 全部生产 TSX/TS/SVG 的显示色字面出现点（键 → 标签与条数）。 */
+function tsxLiteralOccurrences(): Map<
+  string,
+  { label: string; count: number }
+> {
+  const out = new Map<string, { label: string; count: number }>()
+  for (const source of discoverTsSvgSources()) {
+    const occurrences = source.path.endsWith('.svg')
+      ? svgColorOccurrences(source.content).map((occ) => ({
+          file: source.path,
+          ...occ,
+        }))
+      : colorOccurrencesOfSource(source.path, source.content)
+    for (const occ of occurrences) {
+      const key = `${occ.file}|${occ.context}|${occ.value}`
+      const hit = out.get(key)
+      if (hit) hit.count += 1
+      else
+        out.set(key, {
+          label: `${occ.file} ${occ.context}: ${occ.value.trim()}`,
+          count: 1,
+        })
+    }
+  }
+  return out
+}
+
+/**
+ * TSX/SVG 显示色例外注册表（issue #362）：与 CSS 侧 STRUCTURE_EXCEPTIONS
+ * 同款双向校验——新增未登记字面失败；条目过期或条数扩大也失败。
+ * 用户内容种子（#262 边界）与无既有令牌的装饰色在此登记，不藏项。
+ */
+const TSX_COLOR_EXCEPTIONS: Readonly<
+  {
+    file: string
+    context: string
+    value: string
+    count?: number
+    reason: string
+  }[]
+> = [
+  {
+    file: 'src/editor/sampleData.ts',
+    context: 'gradient',
+    value: 'linear-gradient(135deg,#e0176e,#7f6cf0)',
+    reason:
+      '用户内容种子（#262 边界）：持久化头像渐变写入用户项目，令牌变更不回写既有数据',
+  },
+  {
+    file: 'src/editor/sampleData.ts',
+    context: 'gradient',
+    value: 'linear-gradient(135deg,#00b3d8,#5e5ce6)',
+    reason: '用户内容种子（#262 边界）：同上',
+  },
+  {
+    file: 'src/home/WeaveCover.tsx',
+    context: 'fill',
+    value: '#7f6cf0',
+    count: 2,
+    reason:
+      '装饰图案中间节点色：无既有令牌（新增令牌属设计决策，暂以例外登记，issue #362）',
+  },
+]
+
+function tsxOccurrenceKey(
+  file: string,
+  context: string,
+  value: string,
+): string {
+  return `${file}|${context}|${value}`
+}
+
+describe('TSX/SVG 显示色扫描与注册表（issue #362：守卫范围覆盖组件与种子源码）', () => {
+  it('生产 TSX/TS/SVG 显示色承载点不硬编码色值（登记表内、值一致且不超已审计条数）', () => {
+    const audited = new Map(
+      TSX_COLOR_EXCEPTIONS.map((e) => [
+        tsxOccurrenceKey(e.file, e.context, e.value),
+        e.count ?? 1,
+      ]),
+    )
+    const offenders: string[] = []
+    for (const [key, hit] of tsxLiteralOccurrences()) {
+      const audit = audited.get(key)
+      if (audit === undefined) {
+        offenders.push(`${hit.label}（${hit.count} 条，未审计）`)
+      } else if (hit.count > audit) {
+        offenders.push(`${hit.label}（${hit.count} 条 > 已审计 ${audit} 条）`)
+      }
+    }
+    expect(offenders).toEqual([])
+  })
+
+  it('登记表每项仍按已审计条数命中值一致的真实字面（修复/换值/条数变动后更新表项，防例外藏项）', () => {
+    const live = tsxLiteralOccurrences()
+    const stale = TSX_COLOR_EXCEPTIONS.filter((e) => {
+      const key = tsxOccurrenceKey(e.file, e.context, e.value)
+      return (live.get(key)?.count ?? 0) !== (e.count ?? 1)
+    })
+    expect(
+      stale.map(
+        (e) =>
+          `${e.file} ${e.context}: ${e.value}（期望 ${e.count ?? 1} 条，实际 ${live.get(tsxOccurrenceKey(e.file, e.context, e.value))?.count ?? 0} 条）`,
+      ),
+      '以下 TSX/SVG 注册表项已不再按已审计条数命中字面，应更新或删除：',
+    ).toEqual([])
+  })
+
+  it('扫描覆盖面非空且 SVG 文本入口语义正确（字面色命中，var()/none 不命中）', () => {
+    expect(discoverTsSvgSources().length).toBeGreaterThan(0)
+    expect(
+      svgColorOccurrences(
+        '<circle fill="#fff"/><path stroke="var(--x)"/><rect fill="none" stop-color="url(#g)"/>',
+      ),
+    ).toEqual([{ context: 'fill', value: '#fff' }])
   })
 })

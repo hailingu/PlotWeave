@@ -4,6 +4,9 @@ import { useId } from 'react'
  * 「织线」兜底封面：项目未选定封面时，用发光节点与分叉线的抽象图
  * 呼应 PlotWeave 之名（docs/ui-design.md §3.2）。
  * 纯展示组件，随海报尺寸缩放。
+ * 配色读语义令牌（issue #362，同 BranchEdge 的 var() 先例）——渐变即
+ * 品牌渐变（accent-alt → accent），双外观跟随令牌；中间节点紫为无
+ * 令牌的装饰色，经 sheetTokens TSX 例外表登记。
  */
 export function WeaveCover() {
   const gradientId = useId()
@@ -16,8 +19,8 @@ export function WeaveCover() {
     >
       <defs>
         <linearGradient id={gradientId} x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stopColor="#21d4fd" />
-          <stop offset="1" stopColor="#ff2e88" />
+          <stop offset="0" stopColor="var(--accent-alt)" />
+          <stop offset="1" stopColor="var(--accent)" />
         </linearGradient>
       </defs>
       <path
@@ -27,10 +30,10 @@ export function WeaveCover() {
         fill="none"
         opacity="0.9"
       />
-      <circle cx="8" cy="40" r="2.4" fill="#21d4fd" />
+      <circle cx="8" cy="40" r="2.4" fill="var(--accent-alt)" />
       <circle cx="40" cy="18" r="2" fill="#7f6cf0" />
       <circle cx="40" cy="62" r="2" fill="#7f6cf0" />
-      <circle cx="54" cy="40" r="2.4" fill="#ff2e88" />
+      <circle cx="54" cy="40" r="2.4" fill="var(--accent)" />
     </svg>
   )
 }
