@@ -12,6 +12,7 @@
 import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { Window } from 'happy-dom'
 import postcss from 'postcss'
 import * as ts from 'typescript'
 import { describe, expect, it } from 'vitest'
@@ -1243,39 +1244,67 @@ const JSX_COLOR_SCAN_SKIP = [
  * 承载显示色的 JSX 属性名与对象键判定（评审 4113805575）：camelCase 转
  * CSS 连字符形后复用 CSS 侧 `isDisplayColorProp` 分类——单一事实源，覆盖
  * background-image、四向/逻辑边框颜色等全部长形，键集不得自行枚举产生
- * 绕过面。前导大写按 React 厂商前缀约定保留前导连字符（`WebkitTextStroke`
- * → `-webkit-text-stroke`，评审 4113846195）；`gradient` 是种子数据的
- * 对象键扩展（sampleData），不在 CSS 属性分类内。
+ * 绕过面。前导大写按 React 厂商前缀约定保留前导 `-`（`WebkitTextStroke`
+ * → `-webkit-text-stroke`，评审 4113846195）；`gradient`/`cover` 是用户
+ * 内容通道的对象键扩展（种子头像渐变与封面，#262 边界，issue #362），
+ * 不在 CSS 属性分类内。非显示键不产生出现点。
  */
 function displayColorKeyOf(name: string): string | null {
   const kebab = name.replace(/([A-Z])/g, '-$1').toLowerCase()
-  if (kebab === 'gradient') return kebab
+  if (kebab === 'gradient' || kebab === 'cover') return kebab
   return isDisplayColorProp(kebab) ? kebab : null
 }
 
-/** 静态字符串值：字符串字面量与无替换模板字面量等价（评审 4113846198）。 */
-function staticTextOf(node: ts.Expression | undefined): string | undefined {
-  if (node === undefined) return undefined
+/**
+ * 静态字符串值递归抽取（评审 4113886895）：字符串/无替换模板字面量、
+ * 包装表达式（as const/括号/非空断言/satisfies）解包、`??`/`||` 两侧与
+ * 三元分支的静态字面都进入登记口径——等价静态入口不得因节点形态绕过；
+ * 动态表达式不产生静态文本。
+ */
+function staticTextsOf(node: ts.Expression | undefined): string[] {
+  if (node === undefined) return []
   if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
-    return node.text
+    return [node.text]
   }
-  return undefined
+  if (
+    ts.isAsExpression(node) ||
+    ts.isParenthesizedExpression(node) ||
+    ts.isNonNullExpression(node) ||
+    ts.isSatisfiesExpression(node)
+  ) {
+    return staticTextsOf(node.expression)
+  }
+  if (
+    ts.isBinaryExpression(node) &&
+    (node.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken ||
+      node.operatorToken.kind === ts.SyntaxKind.BarBarToken)
+  ) {
+    return [...staticTextsOf(node.left), ...staticTextsOf(node.right)]
+  }
+  if (ts.isConditionalExpression(node)) {
+    return [...staticTextsOf(node.whenTrue), ...staticTextsOf(node.whenFalse)]
+  }
+  return []
 }
 
-/** 静态属性名文本：标识符、字符串名与数字名等价（评审 4113846198）。 */
-function staticPropertyNameOf(name: ts.PropertyName): string | undefined {
+/** 静态属性名候选：标识符/字符串名/数字名直取；计算属性名递归抽取
+ * 静态文本（`{ ['color']: … }`，评审 4113886895）。 */
+function staticPropertyNameTexts(name: ts.PropertyName): string[] {
   if (
     ts.isIdentifier(name) ||
     ts.isStringLiteral(name) ||
     ts.isNumericLiteral(name)
   ) {
-    return name.text
+    return [name.text]
   }
-  return undefined
+  if (ts.isComputedPropertyName(name)) return staticTextsOf(name.expression)
+  return []
 }
 
-/** SVG 文本扫描的显示色属性（值以双引号序列化）。 */
-const SVG_COLOR_ATTR = /\b(fill|stroke|stop-color)\s*=\s*"([^"]*)"/gi
+/** SVG 经 happy-dom 解析为 XML 文档后按元素属性检查——不匹配原始
+ * 文本：注释、引号风格与排版不影响判定（评审 4113886903，AGENTS.md
+ * 「经语言解析器或验证器验证语义」）。 */
+const svgDomParser = new new Window().DOMParser()
 
 interface JsxColorOccurrence {
   file: string
@@ -1312,33 +1341,24 @@ function colorOccurrencesOfSource(
     true,
     file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
   )
-  const literalOf = (init: ts.Expression | undefined): string | undefined => {
-    if (init === undefined) return undefined
-    const direct = staticTextOf(init)
-    if (direct !== undefined) return direct
-    if (
-      ts.isJsxExpression(init) &&
-      init.expression !== undefined &&
-      (ts.isStringLiteral(init.expression) ||
-        ts.isNoSubstitutionTemplateLiteral(init.expression))
-    ) {
-      return init.expression.text
-    }
-    return undefined
-  }
   const visit = (node: ts.Node): void => {
     if (ts.isJsxAttribute(node)) {
       const key = displayColorKeyOf(node.name.getText(sf))
-      const value = literalOf(node.initializer)
-      if (key !== null && value !== undefined && hasColorLiteral(value)) {
-        out.push({ file, context: key, value })
+      for (const value of staticTextsOf(node.initializer)) {
+        // key 非显示键只抑制发射，不抑制下探——style 对象的内层属性
+        // （backgroundImage 等）仍须被访问
+        if (key !== null && hasColorLiteral(value)) {
+          out.push({ file, context: key, value })
+        }
       }
     } else if (ts.isPropertyAssignment(node)) {
-      const name = staticPropertyNameOf(node.name)
-      const key = name === undefined ? null : displayColorKeyOf(name)
-      const value = staticTextOf(node.initializer)
-      if (key !== null && value !== undefined && hasColorLiteral(value)) {
-        out.push({ file, context: key, value })
+      for (const name of staticPropertyNameTexts(node.name)) {
+        const key = displayColorKeyOf(name)
+        for (const value of staticTextsOf(node.initializer)) {
+          if (key !== null && hasColorLiteral(value)) {
+            out.push({ file, context: key, value })
+          }
+        }
       }
     }
     ts.forEachChild(node, visit)
@@ -1351,9 +1371,17 @@ function colorOccurrencesOfSource(
 function svgColorOccurrences(
   content: string,
 ): { context: string; value: string }[] {
-  return [...content.matchAll(SVG_COLOR_ATTR)]
-    .map((m) => ({ context: m[1]!.toLowerCase(), value: m[2]! }))
-    .filter((occ) => hasColorLiteral(occ.value))
+  const doc = svgDomParser.parseFromString(content, 'image/svg+xml')
+  const out: { context: string; value: string }[] = []
+  for (const element of doc.querySelectorAll('*')) {
+    for (const attr of ['fill', 'stroke', 'stop-color']) {
+      const value = element.getAttribute(attr)
+      if (value !== null && hasColorLiteral(value)) {
+        out.push({ context: attr, value })
+      }
+    }
+  }
+  return out
 }
 
 /** 全部生产 TSX/TS/SVG 的显示色字面出现点（键 → 标签与条数）。 */
@@ -1417,6 +1445,27 @@ const TSX_COLOR_EXCEPTIONS: Readonly<
     count: 2,
     reason:
       '装饰图案中间节点色：无既有令牌（新增令牌属设计决策，暂以例外登记，issue #362）',
+  },
+  {
+    file: 'src/model/legacy.ts',
+    context: 'gradient',
+    value: 'linear-gradient(135deg,#8e8e93,#636366)',
+    reason:
+      '用户内容默认头像渐变：v0 迁移补建实体的兜底配色，持久化为用户数据（#262 边界，评审 4113886895）',
+  },
+  {
+    file: 'src/home/projects.ts',
+    context: 'cover',
+    value: 'linear-gradient(160deg, #2b2f4c, #e0176e)',
+    reason:
+      '用户内容：示例项目的封面渐变（用户选定封面的内容通道，#262 边界，评审 4113886895）',
+  },
+  {
+    file: 'src/projectStore/seeds.ts',
+    context: 'cover',
+    value: 'linear-gradient(160deg, #2b2f4c, #e0176e)',
+    reason:
+      '用户内容种子：首次播种写入用户项目的示例封面（#262 边界，同 home/projects.ts）',
   },
 ]
 
@@ -1510,5 +1559,32 @@ describe('TSX/SVG 显示色扫描与注册表（issue #362：守卫范围覆盖�
       { file: 'fixture.ts', context: 'background-color', value: '#fff' },
       { file: 'fixture.ts', context: 'color', value: '#f00' },
     ])
+  })
+
+  it('静态抽取递归解包：计算属性名、as const 包装与 ?? 兜底字面量（评审 4113886895）', () => {
+    const occurrences = colorOccurrencesOfSource(
+      'fixture.ts',
+      "export const a = { ['color']: '#fff' };\n" +
+        "export const b = { fill: '#f00' as const };\n" +
+        "export const c = { gradient: g ?? 'linear-gradient(135deg,#8e8e93,#636366)' };",
+    )
+    expect(occurrences).toEqual([
+      { file: 'fixture.ts', context: 'color', value: '#fff' },
+      { file: 'fixture.ts', context: 'fill', value: '#f00' },
+      {
+        file: 'fixture.ts',
+        context: 'gradient',
+        value: 'linear-gradient(135deg,#8e8e93,#636366)',
+      },
+    ])
+  })
+
+  it('SVG 经解析器检查属性：单引号命中、注释不误报（评审 4113886903）', () => {
+    // 注释与属性用不同颜色判别：正则匹配会命中注释里的 #000（假来源）
+    expect(
+      svgColorOccurrences(
+        "<!-- fill=\"#000\" --><rect fill='#fff' stroke='none'/>",
+      ),
+    ).toEqual([{ context: 'fill', value: '#fff' }])
   })
 })

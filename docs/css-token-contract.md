@@ -19,7 +19,7 @@
 
 展示色入口由 `isDisplayColorProp` 统一分类：`color`、标准 `-color` 长形（含厂商前缀）、`background`/`background-image`、`outline`、`text-decoration`、`text-emphasis`、`text-shadow`、`column-rule`、`fill`/`stroke`、`-webkit-text-stroke`、border 总体/四向/逻辑方向简写及颜色长形、`border-image`/`border-image-source`。标准属性名先按 ASCII 大小写归一，自定义属性名保持大小写敏感；`box-shadow`、`filter`/`backdrop-filter`（含厂商前缀）与遮罩不进入展示色字面值禁用，遮罩另走 F4。滤镜中的 `drop-shadow()` 颜色、变量类型与函数链未建模；全表发现不等于覆盖所有 CSS 属性。此处显式列出既有属性集合之外的边界，不把滤镜用例宣称为已验证。
 
-组件源码侧（issue #362）：生产 TSX/TS 的显示色承载点为 JSX 显示色属性与显示色对象键（`color`/`fill`/`stroke`/`stopColor`/`background*`/`borderColor`/`gradient`，camelCase 归一比较）的字符串字面量，以 TypeScript AST 抽取——注释与无关字符串（issue 编号引用等）不可见；SVG 无 AST，按 `fill`/`stroke`/`stop-color` 双引号属性文本扫描。键集不包含用户内容数组（如头像渐变色板），维持 #262 的既有范围区别；例外登记表（文件/键/值/条数）与 CSS 侧同款双向校验，登记项为用户内容种子（sampleData）与无既有令牌的装饰色（WeaveCover 中间节点紫）。错误横幅另有渲染产物级消费点绑定（`ErrorBanner.test.tsx`：不得出现内联 style 与颜色字面）。
+组件源码侧（issue #362）：生产 TSX/TS 的显示色承载点为 JSX 显示色属性与显示色对象键的字符串值——键经 camelCase 转连字符后复用 CSS 侧 `isDisplayColorProp` 分类（`color`/`fill`/`stroke`/`stopColor`/`background*`/`border*`/`outline` 等，单一事实源不自行枚举），另含用户内容通道键 `gradient`/`cover`（种子头像渐变与封面，#262 边界）。静态抽取递归解包包装表达式（`as const`/括号/非空断言/satisfies）、`??`/`||` 两侧、三元分支与计算属性名内的静态字面（评审 4113886895：`gradient: x ?? '…'` 等价入口不得因节点形态绕过）；动态表达式（带替换模板、计算键的非常量分支、spread）不产生静态文本。SVG 经 happy-dom 解析为 XML 文档后按元素属性检查 `fill`/`stroke`/`stop-color`（评审 4113886903：不匹配原始文本，注释与引号风格不影响判定）。注释与 issue 编号引用不可见；用户内容数组（如头像渐变色板）不在扫描键集。例外登记表（文件/键/值/条数）与 CSS 侧同款双向校验，登记项为用户内容种子与默认渐变（sampleData、legacy、projects/seeds 的 gradient/cover）、无既有令牌的装饰色（WeaveCover 中间节点紫）。错误横幅另有渲染产物级消费点绑定（`ErrorBanner.test.tsx`：不得出现内联 style 与颜色字面）。
 
 结构分类与值校验是不同契约：结构禁止组件自行写展示色，类型检查只判解析后的值是否落在上述静态子集。颜色函数/渐变内部会做字面色扫描，但不会因此证明参数文法。
 
