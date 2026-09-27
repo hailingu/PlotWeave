@@ -121,6 +121,7 @@ This repository wires exactly two: `.githooks/pre-commit` and
 | `git cherry-pick` (automatic commit) | `prepare-commit-msg` + `post-commit` | **no** |
 | `git rebase` replaying commits onto a new base | `pre-rebase` once, then `prepare-commit-msg` + `post-commit` per replayed commit, `post-rewrite` once at the end | **no** |
 | `git am` applying a patch series | `applypatch-msg`, `pre-applypatch`, `post-applypatch` — none wired | **no** |
+| `git stash push` (tracked changes) | none | **no** |
 | `git merge --squash` / `--no-commit` followed by `git commit` | `pre-commit`, … | yes |
 | `git commit --no-verify` / `git merge --no-verify` | `prepare-commit-msg` + `post-commit` / `post-merge` respectively | **no** |
 
@@ -144,13 +145,26 @@ ignores, so it cannot implement a blocking gate either (评审 4114827177);
 `git am` runs only the applypatch-family hooks, none of which
 this repository wires. Either path therefore creates commits with no gate.
 
+`git stash push` with tracked changes creates its entry commits under
+`refs/stash` — the stash commit plus its index parent — without invoking any
+candidate hook at all (评审 4114895001); the `git-stash` documentation likewise
+describes a stash entry as a commit. These commits never sit on branch
+history and `git push` does not send `refs/stash`, so this path adds no
+remote-facing surface beyond the findings below: stashed work re-enters the
+tree through `git stash pop` / `apply`, which create no commits, and becomes
+commits only through the paths this table already records. Git runs no hooks
+during stash creation, so no hook can be wired to close this row; it is
+recorded as a boundary of this inventory and deliberately left out of #404's
+hook-design scope.
+
 So the accurate statement of the invariant is:
 
 > The gate runs on `git commit` and on `git push` of the checked-out branch
 > with a clean working tree. It does **not** run for commits produced
 > automatically by `git merge`, `git revert`, `git cherry-pick`, `git rebase`
-> (replayed commits), or `git am`, and it can be skipped outright with
-> `--no-verify` on `git commit` and `git merge`.
+> (replayed commits), `git am`, or `git stash push` (entry commits under
+> `refs/stash`), and it can be skipped outright with `--no-verify` on
+> `git commit` and `git merge`.
 
 An earlier revision of this file claimed that no commit is ever created without
 the full gate having run, and that the only shared hook for `revert` and
@@ -173,7 +187,9 @@ behavior, which this decision explicitly does not do.
 
 The five uncovered paths above mean a local merge, revert, cherry-pick, rebase,
 or am can land commits on a branch with no static checks, no coverage, and no
-SonarQube analysis for the resulting commit.
+SonarQube analysis for the resulting commit. The stash row is not counted
+here: its commits stay under `refs/stash`, off branch history, and git runs no
+hooks during stash creation, so there is nothing to wire (see the table).
 
 Push-time analysis is a *partial* safety net, and only in the common case: when
 the pushed ref is the checked-out branch **and the working tree is clean**, the
@@ -322,7 +338,7 @@ these becomes true:
   explicit statement of its effect on gate strength, and must preserve every
   invariant in the section above.
 - The uncovered commit-creation paths are closed, or the
-  merge/revert/cherry-pick/rebase/am workflow changes to route through
+  merge/revert/cherry-pick/rebase/am/stash workflow changes to route through
   `git commit`. Either way, update
   [What The Gate Actually Enforces](#what-the-gate-actually-enforces) in the same
   change — that table is a measurement, and a stale one is worse than none.
