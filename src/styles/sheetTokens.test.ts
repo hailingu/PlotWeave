@@ -1620,7 +1620,7 @@ describe('TSX/SVG 扫描入口与键归一（issue #362，评审补强）', () =
   })
 })
 
-describe('TSX/SVG 等价静态语法与解包（issue #362，评审补强）', () => {
+describe('TSX/SVG 静态抽取与解析检查（issue #362，评审补强）', () => {
   it('等价静态键/值语法（字符串属性名与无替换模板字面量）同样进入扫描（评审 4113846198）', () => {
     const occurrences = colorOccurrencesOfSource(
       'fixture.ts',
@@ -1671,7 +1671,9 @@ describe('TSX/SVG 等价静态语法与解包（issue #362，评审补强）', (
       { file: 'fixture.tsx', context: 'stop-color', value: '#f00' },
     ])
   })
+})
 
+describe('TSX/SVG 内联别名与增量赋值（issue #362，评审补强）', () => {
   it('内联自定义属性别名：定义并被显示键经 var() 消费的字面进入登记（评审 4113994776）', () => {
     const occurrences = colorOccurrencesOfSource(
       'fixture.tsx',
