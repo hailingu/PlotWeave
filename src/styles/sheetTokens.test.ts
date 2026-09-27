@@ -1239,18 +1239,21 @@ const JSX_COLOR_SCAN_SKIP = [
   'src/editor/ai/testGraphs.ts',
 ]
 
-/** 承载显示色的 JSX 属性名与对象键（小写比较；camelCase 归一）。 */
-const TSX_DISPLAY_COLOR_KEYS = new Set([
-  'color',
-  'fill',
-  'stroke',
-  'stopcolor',
-  'stop-color',
-  'background',
-  'backgroundcolor',
-  'bordercolor',
-  'gradient',
-])
+/**
+ * 承载显示色的 JSX 属性名与对象键判定（评审 4113805575）：camelCase 转
+ * CSS 连字符形后复用 CSS 侧 `isDisplayColorProp` 分类——单一事实源，覆盖
+ * background-image、四向/逻辑边框颜色等全部长形，键集不得自行枚举产生
+ * 绕过面。`gradient` 是种子数据的对象键扩展（sampleData），不在 CSS 属性
+ * 分类内。
+ */
+function displayColorKeyOf(name: string): string | null {
+  const kebab = name
+    .replace(/([A-Z])/g, '-$1')
+    .replace(/^-/, '')
+    .toLowerCase()
+  if (kebab === 'gradient') return kebab
+  return isDisplayColorProp(kebab) ? kebab : null
+}
 
 /** SVG 文本扫描的显示色属性（值以双引号序列化）。 */
 const SVG_COLOR_ATTR = /\b(fill|stroke|stop-color)\s*=\s*"([^"]*)"/gi
@@ -1304,13 +1307,9 @@ function colorOccurrencesOfSource(
   }
   const visit = (node: ts.Node): void => {
     if (ts.isJsxAttribute(node)) {
-      const key = node.name.getText(sf).toLowerCase()
+      const key = displayColorKeyOf(node.name.getText(sf))
       const value = literalOf(node.initializer)
-      if (
-        TSX_DISPLAY_COLOR_KEYS.has(key) &&
-        value !== undefined &&
-        hasColorLiteral(value)
-      ) {
+      if (key !== null && value !== undefined && hasColorLiteral(value)) {
         out.push({ file, context: key, value })
       }
     } else if (
@@ -1318,9 +1317,9 @@ function colorOccurrencesOfSource(
       ts.isIdentifier(node.name) &&
       ts.isStringLiteral(node.initializer)
     ) {
-      const key = node.name.text.toLowerCase()
+      const key = displayColorKeyOf(node.name.text)
       const { text } = node.initializer
-      if (TSX_DISPLAY_COLOR_KEYS.has(key) && hasColorLiteral(text)) {
+      if (key !== null && hasColorLiteral(text)) {
         out.push({ file, context: key, value: text })
       }
     }
@@ -1453,5 +1452,19 @@ describe('TSX/SVG 显示色扫描与注册表（issue #362：守卫范围覆盖�
         '<circle fill="#fff"/><path stroke="var(--x)"/><rect fill="none" stop-color="url(#g)"/>',
       ),
     ).toEqual([{ context: 'fill', value: '#fff' }])
+  })
+
+  it('背景图像长形键 camelCase 归一进入扫描：style 对象 backgroundImage 字面被点名（评审 4113805575）', () => {
+    const occurrences = colorOccurrencesOfSource(
+      'fixture.tsx',
+      "export const a = <div style={{ backgroundImage: 'linear-gradient(#fff, #000)' }} />",
+    )
+    expect(occurrences).toEqual([
+      {
+        file: 'fixture.tsx',
+        context: 'background-image',
+        value: 'linear-gradient(#fff, #000)',
+      },
+    ])
   })
 })
