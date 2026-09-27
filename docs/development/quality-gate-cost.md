@@ -173,23 +173,27 @@ already written by then (评审 4114992022). Stash therefore remains within
 
 One qualification applies to the `git commit` row itself: the gate script
 always scans the working tree, while the created commit contains the index.
-With partially staged changes — state A staged, further state B left
-unstaged — `pre-commit` runs the checks against A+B and the commit records A
-alone, so the committed tree itself was never analyzed (评审 4114992019).
+Working-tree state beyond the index is therefore analyzed but never
+committed. With partially staged changes — state A staged, further state B
+left unstaged — `pre-commit` runs the checks against A+B and the commit
+records A alone (评审 4114992019); the same holds for untracked files, which
+are absent from the index yet still scanned by the gate — Prettier, ESLint,
+and the TypeScript compiler all read the working tree (评审 4115036983).
 Measured on git 2.48.1: a `pre-commit` hook observed an unstaged definition
-that the resulting commit did not contain. B can, for example, supply a
-definition A depends on, letting the gate pass while the commit alone does
-not build. This is the commit-side analog of the push-path finding below —
-same root cause, the gate scans the working tree — recorded here as a
-boundary rather than fixed.
+and, in a second run, an untracked one that the resulting commit did not
+contain. That state can, for example, supply a definition A depends on,
+letting the gate pass while the commit alone does not build. This is the
+commit-side analog of the push-path finding below — same root cause, the
+gate scans the working tree — recorded here as a boundary rather than fixed.
 
 So the accurate statement of the invariant is:
 
 > The gate always analyzes the **working tree**. It runs on `git commit` and
 > on `git push` of the checked-out branch, and the tree it passes is the tree
 > actually recorded only when the working tree matches that tree: at commit
-> time, no unstaged tracked changes (the commit contains the index, the gate
-> scans the worktree); at push time, the pushed ref is the checked-out branch
+> time, nothing beyond the index — no unstaged tracked changes and no
+> untracked non-ignored files (untracked files never enter the commit but
+> are still scanned); at push time, the pushed ref is the checked-out branch
 > with a clean working tree. It does **not** run for commits produced
 > automatically by `git merge`, `git revert`, `git cherry-pick`, `git rebase`
 > (replayed commits), `git am`, or `git stash push` (entry commits under
@@ -263,8 +267,8 @@ this way can reach the remote without any SonarQube pass for that state. This
 is a separate problem from the commit-creation gaps above, with a different
 trigger and a different remedy, so it is tracked separately rather than folded
 into #404: [#405](https://github.com/hailingu/PlotWeave/issues/405).
-The commit-side counterpart — a partially staged commit analyzed on worktree
-state it does not contain — is recorded in
+The commit-side counterpart — a commit analyzed on working-tree state it
+does not contain (unstaged or untracked) — is recorded in
 [What The Gate Actually Enforces](#what-the-gate-actually-enforces) as a
 boundary of this inventory.
 
