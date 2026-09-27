@@ -153,8 +153,9 @@ remote-facing gap tracked in
 Ref](#known-finding-push-scans-the-checked-out-tree-not-the-pushed-ref):
 `pre-push` analyzes the checked-out tree, not the pushed ref (评审
 4115165662, 4115165667). The `commit-tree` row additionally has a
-direct-OID push variant that no local hook can gate at all; see the
-commit-tree paragraph below.
+direct-OID push variant that causes no local `reference-transaction`;
+`pre-push` still receives the OID and can block the push. See the commit-tree
+paragraph below.
 
 Every command in this table also fires `reference-transaction` on the ref
 updates it performs — measured on git 2.48.1 for `git commit`
@@ -251,7 +252,12 @@ but analyzes the unrelated checked-out tree (评审 4115241708). Measured on
 git 2.48.1: such a push installed the object on the remote
 (`refs/heads/direct`) while the local hook log shows only `pre-push`
 reading the pushed OID from stdin and no `reference-transaction` entry. The
-plumbing path therefore splits: the local-ref variant is a #404
+absence of that ref-update hook does not prevent `pre-push` from blocking
+the operation: a separate Git 2.48.1 probe with `pre-push` exiting 1 rejected
+the direct-OID push and left the remote ref absent; with exit 0 the remote
+ref received the exact OID. This matches the
+[documented pre-push contract](https://git-scm.com/docs/githooks#_pre_push)
+(评审 4115477917). The plumbing path therefore splits: the local-ref variant is a #404
 `reference-transaction` question; the direct-OID variant is a push-side gap
 that only the #405 remedy (analyze the pushed ref) can close.
 
@@ -317,18 +323,23 @@ behavior, which this decision explicitly does not do.
 
 ## Known Finding: Uncovered Commit-Creation Paths
 
-The five uncovered paths above mean a local merge, revert, cherry-pick, rebase,
-or am can land commits on a branch with no static checks, no coverage, and no
-SonarQube analysis for the resulting commit. The stash row is not counted
+The eight uncovered branch-history paths above — `git merge`, `git revert`,
+`git cherry-pick`, `git rebase`, `git am`, `git commit-tree` plus
+`git update-ref`, `git fast-import`, and `git filter-branch` — can produce or
+replace branch-history commits without running the gate for the resulting
+commit (评审 4115477920). The stash row is not counted
 here: its commits stay under `refs/stash`, off branch history; the
 `reference-transaction` option noted with that row is a #404 question, not a
 branch-history gap (see the table); the notes row shares that same
 disposition. Separately, `git push --no-verify`
-bypasses `pre-push` entirely (评审 4115110181): even a clean push of the
-checked-out branch then reaches the remote with no gate at all — a
-remote-facing variant of the documented `--no-verify` bypass that the
-prohibition in `AGENTS.md` covers but this section's bypass list had
-omitted.
+bypasses the push-time `pre-push` rerun entirely (评审 4115110181,
+4115477925). It does not undo an earlier `pre-commit` gate run: if the
+commit was created through ordinary `git commit`, that gate already ran,
+subject to the index/working-tree mismatch described above. A push with no
+analysis of the pushed state is possible when no earlier gate analyzed
+that state, for example after one of the uncovered creation paths. The
+prohibition in `AGENTS.md` covers this push-time bypass regardless of any
+earlier analysis.
 
 Push-time analysis is a *partial* safety net, and only in a narrow case:
 when the pushed ref is the checked-out branch **and the working tree is
@@ -368,7 +379,7 @@ the ignored `src/local.ts`. So even a push that matches the checked-out
 branch with no reported changes can analyze a tree the pushed commit does
 not contain.
 
-The plumbing path also has a push-side variant with no local hook at all:
+The plumbing path also has a push-side variant with no local ref update:
 `git push <remote> <oid>:refs/heads/…` sends a commit object that no local
 ref points at, so no local `reference-transaction` fires and `pre-push`
 again analyzes the unrelated checked-out tree (评审 4115241708). Measured on
@@ -387,11 +398,13 @@ HEAD (what the gate scans):  7db139eda9f2… (main)
 
 Because CI does not run SonarQube (see the Scope Routing row for `.github/**`),
 the push-time gate is the only SonarQube path on the push side; the same
-script also runs on `git commit`, so a commit produced through the covered
-path has already been analyzed. A ref pushed
-this way can reach the remote without any SonarQube pass for that state — and
-so can any ref pushed with `--no-verify`, which bypasses `pre-push` outright. This
-is a separate problem from the commit-creation gaps above, with a different
+script also runs on `git commit`, so the covered creation path has an earlier
+analysis, subject to the index/working-tree mismatch described above. If no
+earlier gate analyzed the pushed state, pushing a different ref can let it
+reach the remote without any SonarQube pass for that state. Using
+`--no-verify` likewise skips the push-time gate; it does not erase any
+earlier analysis. This is a separate problem from the commit-creation gaps
+above, with a different
 trigger and a different remedy, so it is tracked separately rather than folded
 into #404: [#405](https://github.com/hailingu/PlotWeave/issues/405).
 The commit-side counterpart — a commit analyzed on working-tree state it
@@ -530,7 +543,9 @@ these becomes true:
   is a gate-strength change, not a cost change, and needs its own decision —
   but until it happens, every enforcement statement in this file is
   conditional on the pushed ref being the checked-out branch **with a clean
-  working tree**.
+  working tree and no ignored inputs the gate reads**. Git-clean status alone
+  does not establish that the analyzed inputs match the pushed commit
+  (评审 4115477929).
 - The gate starts analyzing the committed tree itself at commit time (for
   example by scanning a checkout of the index) instead of the working tree.
   Until then, the `git commit` row's "yes" means the gate runs when the
