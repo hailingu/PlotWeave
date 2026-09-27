@@ -111,7 +111,8 @@ directory containing every candidate hook, recording which ones fire.
 This repository wires exactly two: `.githooks/pre-commit` and
 `.githooks/pre-push`. There is no `pre-merge-commit`, `commit-msg`,
 `prepare-commit-msg`, `post-commit`, `post-merge`, `pre-rebase`,
-`post-rewrite`, `pre-applypatch`, or `applypatch-msg`.
+`post-rewrite`, `pre-applypatch`, `applypatch-msg`, or
+`reference-transaction`.
 
 | Command that creates a commit | Hooks that actually fire | Gate runs? |
 | --- | --- | :---: |
@@ -121,9 +122,19 @@ This repository wires exactly two: `.githooks/pre-commit` and
 | `git cherry-pick` (automatic commit) | `prepare-commit-msg` + `post-commit` | **no** |
 | `git rebase` replaying commits onto a new base | `pre-rebase` once, then `prepare-commit-msg` + `post-commit` per replayed commit, `post-rewrite` once at the end | **no** |
 | `git am` applying a patch series | `applypatch-msg`, `pre-applypatch`, `post-applypatch` — none wired | **no** |
-| `git stash push` (tracked changes) | none | **no** |
+| `git stash push` (tracked changes) | `reference-transaction` only — no commit-creation hooks | **no** |
 | `git merge --squash` / `--no-commit` followed by `git commit` | `pre-commit`, … | yes |
 | `git commit --no-verify` / `git merge --no-verify` | `prepare-commit-msg` + `post-commit` / `post-merge` respectively | **no** |
+
+Every command in this table also fires `reference-transaction` on the ref
+updates it performs — measured on git 2.48.1 for `git commit`
+(`refs/heads/*`), `git merge`, `git cherry-pick`, and `git stash push`
+(`refs/stash`) — and the per-row hook lists omit it because it is not
+commit-creation-specific (评审 4114992022). This repository does not wire it,
+so the Gate column is unaffected. Note that a nonzero exit in its `prepared`
+state aborts the ref update, which makes it the one hook type that could in
+principle gate these paths; whether to do so is a #404 hook-design question,
+not part of this decision.
 
 `git revert` and `git cherry-pick` do not accept `--no-verify` at all
 (`git revert -h` / `git cherry-pick -h` list no such option), so they are
@@ -146,20 +157,39 @@ ignores, so it cannot implement a blocking gate either (评审 4114827177);
 this repository wires. Either path therefore creates commits with no gate.
 
 `git stash push` with tracked changes creates its entry commits under
-`refs/stash` — the stash commit plus its index parent — without invoking any
-candidate hook at all (评审 4114895001); the `git-stash` documentation likewise
+`refs/stash` — the stash commit plus its index parent — without running any
+commit-creation hook (评审 4114895001); the `git-stash` documentation likewise
 describes a stash entry as a commit. These commits never sit on branch
 history and `git push` does not send `refs/stash`, so this path adds no
 remote-facing surface beyond the findings below: stashed work re-enters the
 tree through `git stash pop` / `apply`, which create no commits, and becomes
-commits only through the paths this table already records. Git runs no hooks
-during stash creation, so no hook can be wired to close this row; it is
-recorded as a boundary of this inventory and deliberately left out of #404's
-hook-design scope.
+commits only through the paths this table already records. Its one hook is
+`reference-transaction` on the `refs/stash` update, and aborting that update
+in the `prepared` state does prevent the entry — measured: with such a hook
+`git stash push` fails with exit 128 ("ref updates aborted by hook") and
+`refs/stash` keeps its previous value — though the entry's objects are
+already written by then (评审 4114992022). Stash therefore remains within
+#404's hook-design scope rather than being excluded as unwireable.
+
+One qualification applies to the `git commit` row itself: the gate script
+always scans the working tree, while the created commit contains the index.
+With partially staged changes — state A staged, further state B left
+unstaged — `pre-commit` runs the checks against A+B and the commit records A
+alone, so the committed tree itself was never analyzed (评审 4114992019).
+Measured on git 2.48.1: a `pre-commit` hook observed an unstaged definition
+that the resulting commit did not contain. B can, for example, supply a
+definition A depends on, letting the gate pass while the commit alone does
+not build. This is the commit-side analog of the push-path finding below —
+same root cause, the gate scans the working tree — recorded here as a
+boundary rather than fixed.
 
 So the accurate statement of the invariant is:
 
-> The gate runs on `git commit` and on `git push` of the checked-out branch
+> The gate always analyzes the **working tree**. It runs on `git commit` and
+> on `git push` of the checked-out branch, and the tree it passes is the tree
+> actually recorded only when the working tree matches that tree: at commit
+> time, no unstaged tracked changes (the commit contains the index, the gate
+> scans the worktree); at push time, the pushed ref is the checked-out branch
 > with a clean working tree. It does **not** run for commits produced
 > automatically by `git merge`, `git revert`, `git cherry-pick`, `git rebase`
 > (replayed commits), `git am`, or `git stash push` (entry commits under
@@ -188,8 +218,9 @@ behavior, which this decision explicitly does not do.
 The five uncovered paths above mean a local merge, revert, cherry-pick, rebase,
 or am can land commits on a branch with no static checks, no coverage, and no
 SonarQube analysis for the resulting commit. The stash row is not counted
-here: its commits stay under `refs/stash`, off branch history, and git runs no
-hooks during stash creation, so there is nothing to wire (see the table).
+here: its commits stay under `refs/stash`, off branch history; the
+`reference-transaction` option noted with that row is a #404 question, not a
+branch-history gap (see the table).
 
 Push-time analysis is a *partial* safety net, and only in the common case: when
 the pushed ref is the checked-out branch **and the working tree is clean**, the
@@ -232,6 +263,10 @@ this way can reach the remote without any SonarQube pass for that state. This
 is a separate problem from the commit-creation gaps above, with a different
 trigger and a different remedy, so it is tracked separately rather than folded
 into #404: [#405](https://github.com/hailingu/PlotWeave/issues/405).
+The commit-side counterpart — a partially staged commit analyzed on worktree
+state it does not contain — is recorded in
+[What The Gate Actually Enforces](#what-the-gate-actually-enforces) as a
+boundary of this inventory.
 
 ## Measured Baseline
 
@@ -352,6 +387,10 @@ these becomes true:
   but until it happens, every enforcement statement in this file is
   conditional on the pushed ref being the checked-out branch **with a clean
   working tree**.
+- The gate starts analyzing the committed tree itself at commit time (for
+  example by scanning a checkout of the index) instead of the working tree.
+  Until then, the `git commit` row's "yes" means the gate runs when the
+  commit is created, not that the committed tree was the state analyzed.
 
 ## How To Re-measure
 
