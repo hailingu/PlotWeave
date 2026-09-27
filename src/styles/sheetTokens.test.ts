@@ -1369,11 +1369,23 @@ function objectLiteralOccurrences(
  * `style['backgroundColor'] = '…'` 的静态字面与对象键同口径受检——
  * 合法且静态的显示色硬编码不因逐步构造而绕过。
  */
+/**
+ * 能写入右值静态字面的赋值运算符：普通等号与三种逻辑赋值（`??=`/`||=`/
+ * `&&=` 写入静态回退值，评审 4114116865）。复合算术赋值（`+=` 等）是
+ * 对既有值的修改而非整值写入，不在口径内。
+ */
+const WRITING_ASSIGNMENT_OPS = new Set([
+  ts.SyntaxKind.EqualsToken,
+  ts.SyntaxKind.QuestionQuestionEqualsToken,
+  ts.SyntaxKind.BarBarEqualsToken,
+  ts.SyntaxKind.AmpersandAmpersandEqualsToken,
+])
+
 function assignmentOccurrences(
   file: string,
   node: ts.BinaryExpression,
 ): JsxColorOccurrence[] {
-  if (node.operatorToken.kind !== ts.SyntaxKind.EqualsToken) return []
+  if (!WRITING_ASSIGNMENT_OPS.has(node.operatorToken.kind)) return []
   let name: string | undefined
   if (ts.isPropertyAccessExpression(node.left)) name = node.left.name.text
   else if (ts.isElementAccessExpression(node.left)) {
@@ -1413,10 +1425,8 @@ function colorOccurrencesOfSource(
     } else if (ts.isObjectLiteralExpression(node)) {
       // 对象属性统一在对象层级处理（含内联自定义属性别名分析）
       out.push(...objectLiteralOccurrences(file, node))
-    } else if (
-      ts.isBinaryExpression(node) &&
-      node.operatorToken.kind === ts.SyntaxKind.EqualsToken
-    ) {
+    } else if (ts.isBinaryExpression(node)) {
+      // 赋值类二元表达式（普通等号与逻辑赋值）由助手按运算符过滤
       out.push(...assignmentOccurrences(file, node))
     }
     ts.forEachChild(node, visit)
@@ -1686,6 +1696,23 @@ describe('TSX/SVG 等价静态语法与解包（issue #362，评审补强）', (
       'export function f(style: { color?: string }) {\n' +
         "  style.color = '#fff';\n" +
         "  style['backgroundColor'] = '#000';\n" +
+        '}',
+    )
+    expect(occurrences).toEqual([
+      { file: 'fixture.tsx', context: 'color', value: '#fff' },
+      { file: 'fixture.tsx', context: 'background-color', value: '#000' },
+    ])
+  })
+
+  it('逻辑赋值运算符：??= 与 ||= 写入的静态回退色被点名（评审 4114116865）', () => {
+    const occurrences = colorOccurrencesOfSource(
+      'fixture.tsx',
+      'export function f(style: {\n' +
+        '  color?: string;\n' +
+        '  backgroundColor?: string;\n' +
+        '}) {\n' +
+        "  style.color ??= '#fff';\n" +
+        "  style.backgroundColor ||= '#000';\n" +
         '}',
     )
     expect(occurrences).toEqual([
