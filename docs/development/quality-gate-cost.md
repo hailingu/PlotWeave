@@ -43,9 +43,32 @@ here as **considered and declined**, not as pending work.
 
 | Option | Change | Measured upside | Why declined |
 | --- | --- | ---: | --- |
-| A | Make Rust coverage reuse build artifacts | ≤16.6s of 72.9s (23%) | The cost has no single hotspot — the four phases are near-evenly split, so the best-case saving is bounded and small relative to the risk of changing `cargo-llvm-cov` report semantics. |
-| B | Tier the check set between pre-commit and pre-push | ≤14.4s per commit | This is the only lever that materially changes total cost, but it is a governance change: it decides *when* checks run rather than making them cheaper or fewer. The uniform gate is worth more than the seconds. |
+| A | Make Rust coverage reuse build artifacts | ≤16.6s per run (23% of one gate run) | The cost has no single hotspot — the four phases are near-evenly split, so the best-case saving is bounded and small relative to the risk of changing `cargo-llvm-cov` report semantics. |
+| B | Tier the check set between pre-commit and pre-push | **58.5s per commit** (80% of the pre-commit phase) | The largest lever by a wide margin, and a governance change rather than an optimization: it decides *when* checks run, and leaves an interval in which a commit exists locally without SonarQube having run. The uniform gate was judged worth that cost. |
 | C | Accept the cost, record the decision and a baseline | none (by design) | Adopted. |
+
+### What option B would actually mean
+
+B is only coherent in one variant that preserves the "Sonar runs on the push
+path" invariant, and the upside depends entirely on reading that variant
+correctly. The stage allocation is:
+
+- **before** — pre-commit runs the complete gate (72.9s), pre-push runs the
+  complete gate (72.9s): 145.8s per commit-and-push cycle;
+- **after (option B)** — pre-commit runs `scripts/check-static.sh` only
+  (14.4s), pre-push runs the complete gate unchanged (72.9s): 87.3s per cycle.
+
+The saving is therefore **72.9 − 14.4 = 58.5s per commit**, not 14.4s. The
+14.4s figure is the *remaining* pre-commit cost after the split, and quoting it
+as the saving understates option B by roughly a factor of four. At the
+~30 commits/day below that is about 29 minutes per day, a ~40% reduction in
+total gate time.
+
+A review of this record caught exactly that mislabelling; the figure above is
+the corrected one. Note that option B would *not* weaken the gate's coverage —
+`check-static.sh` still runs on every commit, and SonarQube analysis plus the
+Quality Gate still run before anything reaches the remote. What it changes is
+the guarantee that no commit is ever created without the full gate having run.
 
 Declining A and B is a statement about today's numbers, not a permanent
 refusal. See [Reconsideration Triggers](#reconsideration-triggers).
@@ -116,9 +139,10 @@ is bounded at 23%.
 The repository has 1120 commits spanning 2026-08-21 to 2026-09-27 — 37 days at
 roughly 30 commits per day. At 72.87s per run, the pre-commit hook alone costs
 about 36 minutes per day. If each of those commits is also pushed, the
-pre-commit and pre-push runs together cost roughly 73 minutes per day. Treat
-these as order-of-magnitude context, not measured figures — actual push
-frequency varies with batching.
+pre-commit and pre-push runs together cost roughly 73 minutes per day. Under
+option B that total would fall to about 44 minutes per day. Treat these as
+order-of-magnitude context, not measured figures — actual push frequency varies
+with batching.
 
 ### Environment
 
@@ -163,7 +187,10 @@ these becomes true:
   equivalent) deserves a real design.
 - The commit rate rises materially above the ~30/day this baseline assumes, or
   the gate is reported as a recurring source of blocked or abandoned work. The
-  argument for accepting a fixed cost weakens with frequency.
+  argument for accepting a fixed cost weakens with frequency. Because option B
+  removes the coverage and scanner phases from the per-commit path, it scales
+  with commit count in a way option A does not — a rising commit rate is the
+  strongest argument for reopening B.
 - CI gains the ability to run SonarQube, which would move the cost off the
   local critical path entirely. That changes the premise — the issue notes the
   cost cannot be unloaded to CI today precisely because CI does not carry Sonar.
