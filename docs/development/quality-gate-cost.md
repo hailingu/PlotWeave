@@ -160,7 +160,11 @@ Every command in this table also fires `reference-transaction` on the ref
 updates it performs — measured on git 2.48.1 for `git commit`
 (`refs/heads/*`), `git merge`, `git cherry-pick`, and `git stash push`
 (`refs/stash`) — and the per-row hook lists omit it because it is not
-commit-creation-specific (评审 4114992022). This repository does not wire it,
+commit-creation-specific (评审 4114992022). The `git filter-branch` row is
+the exception: its entry here is unverified because our Git 2.48.1
+measurement fired no hook at all while a Git 2.43 run reported it (评审
+4115347192), so do not treat `reference-transaction` as a verified closure
+for that path. This repository does not wire it,
 so the Gate column is unaffected. Note that a nonzero exit in its `prepared`
 state aborts the ref update, which makes it the one hook type that could in
 principle gate these paths; whether to do so is a #404 hook-design question,
@@ -326,10 +330,12 @@ remote-facing variant of the documented `--no-verify` bypass that the
 prohibition in `AGENTS.md` covers but this section's bypass list had
 omitted.
 
-Push-time analysis is a *partial* safety net, and only in the common case: when
-the pushed ref is the checked-out branch **and the working tree is clean**, the
-`pre-push` gate analyzes the checked-out tree, which is the state being pushed.
-For any other ref it does not — see
+Push-time analysis is a *partial* safety net, and only in a narrow case:
+when the pushed ref is the checked-out branch **and the working tree is
+clean with no ignored inputs the gate reads**, the `pre-push` gate analyzes
+the checked-out tree, which is the state being pushed. An ignored file can
+otherwise be analyzed without being pushed (评审 4115241706). For any other
+ref it does not — see
 [Known Finding: Push Scans The Checked-Out Tree, Not The Pushed
 Ref](#known-finding-push-scans-the-checked-out-tree-not-the-pushed-ref).
 Whether to wire `pre-merge-commit` is a governance decision with a real cost
@@ -380,7 +386,9 @@ HEAD (what the gate scans):  7db139eda9f2… (main)
 ```
 
 Because CI does not run SonarQube (see the Scope Routing row for `.github/**`),
-the push-time gate is the only SonarQube path in this repository. A ref pushed
+the push-time gate is the only SonarQube path on the push side; the same
+script also runs on `git commit`, so a commit produced through the covered
+path has already been analyzed. A ref pushed
 this way can reach the remote without any SonarQube pass for that state — and
 so can any ref pushed with `--no-verify`, which bypasses `pre-push` outright. This
 is a separate problem from the commit-creation gaps above, with a different
