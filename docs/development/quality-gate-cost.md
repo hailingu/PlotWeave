@@ -274,9 +274,11 @@ ref received the exact OID. This matches the
 `reference-transaction` question; the direct-OID variant is a push-side gap
 that only the #405 remedy (analyze the pushed ref) can close.
 
-One qualification applies to the `git commit` row itself: the gate script
-always scans the working tree, while the created commit contains the index.
-Working-tree state beyond the index is therefore analyzed but never
+One qualification applies to the `git commit` rows themselves: the gate
+script scans the working tree, while Git records the tree selected for that
+invocation. Ordinary index-based commits use the staged contents; pathspecs
+and content-selection flags can select a different tree. For an ordinary
+index-based commit, working-tree state beyond the index is analyzed but not
 committed. With partially staged changes — state A staged, further state B
 left unstaged — `pre-commit` runs the checks against A+B and the commit
 records A alone (评审 4114992019); the same holds for any untracked file,
@@ -295,16 +297,32 @@ letting the gate pass while the commit alone does not build. This is the
 commit-side analog of the push-path finding below — same root cause, the
 gate scans the working tree — recorded here as a boundary rather than fixed.
 
+Matching the original index is insufficient for path-limited commits
+(评审 4115548805). With both A and B modified and staged, `git commit
+--only A` and the implicit pathspec form `git commit A` record new A plus
+old B, while the gate reads new A plus new B. In Git 2.48.1 isolated probes,
+the working tree matched the original index before both commands, and that
+index retained both staged versions afterward. `git commit --amend --only`
+without paths likewise omitted the staged changes and retained the previous
+tree; ordinary `git commit` and `git commit --include A` recorded both
+staged versions in the same fixture. These results match Git's
+[content-selection contract](https://git-scm.com/docs/git-commit#Documentation/git-commit.txt--o).
+In all five cases, the effective index exposed to `pre-commit` through Git's
+environment matched the resulting commit tree, but the gate's checks read
+working-tree files independently of that index. An analysis of the original
+index alone would therefore not close this boundary.
+
 So the accurate statement of the invariant is:
 
 > The gate always analyzes the **working tree**. It runs on `git commit` and
 > on `git push` of the checked-out branch, and the tree it passes is the tree
-> actually recorded only when the working tree matches that tree: at commit
-> time, nothing beyond the index — no unstaged tracked changes (including
-> changes hidden by `skip-worktree` or `assume-unchanged`) and no
-> untracked files at all, including ones excluded by ignore rules such as
-> `.git/info/exclude` (untracked and ignored files never enter the commit
-> but are still scanned); at push time, the pushed ref is the checked-out
+> actually recorded only when the analyzed contents match that tree: at
+> commit time, they must match the **actual tree selected for that invocation**,
+> after pathspecs and content-selection flags are applied. Matching the
+> original index alone is insufficient: this excludes staged changes omitted
+> by `--only` or a pathspec, unstaged tracked changes (including ones hidden
+> by `skip-worktree` or `assume-unchanged`), and additional untracked or
+> ignored inputs the gate reads. At push time, the pushed ref is the checked-out
 > branch **and the analyzed working-tree contents actually match the pushed
 > commit** — no tracked differences, including ones hidden by index flags,
 > and no additional untracked or ignored inputs the gate reads. A clean
@@ -351,7 +369,7 @@ disposition. Separately, `git push --no-verify`
 bypasses the push-time `pre-push` rerun entirely (评审 4115110181,
 4115477925). It does not undo an earlier `pre-commit` gate run: if the
 commit was created through ordinary `git commit`, that gate already ran,
-subject to the index/working-tree mismatch described above. A push with no
+subject to the commit-tree/working-tree mismatch described above. A push with no
 analysis of the pushed state is possible when no earlier gate analyzed
 that state, for example after one of the uncovered creation paths. The
 prohibition in `AGENTS.md` covers this push-time bypass regardless of any
@@ -406,7 +424,7 @@ version failed it, with no ignored input involved. These flags have
 [different documented purposes](https://git-scm.com/docs/git-update-index#_skip_worktree_bit);
 neither makes clean status proof that the analyzed contents match the
 pushed commit. The same hidden tracked difference can affect the
-index/working-tree comparison at commit time.
+comparison with the selected commit tree at commit time.
 
 The plumbing path also has a push-side variant with no local ref update:
 `git push <remote> <oid>:refs/heads/…` sends a commit object that no local
@@ -428,7 +446,7 @@ HEAD (what the gate scans):  7db139eda9f2… (main)
 Because CI does not run SonarQube (see the Scope Routing row for `.github/**`),
 the push-time gate is the only SonarQube path on the push side; the same
 script also runs on `git commit`, so the covered creation path has an earlier
-analysis, subject to the index/working-tree mismatch described above. If no
+analysis, subject to the commit-tree/working-tree mismatch described above. If no
 earlier gate analyzed the pushed state, pushing a different ref can let it
 reach the remote without any SonarQube pass for that state. Using
 `--no-verify` likewise skips the push-time gate; it does not erase any
@@ -437,7 +455,8 @@ above, with a different
 trigger and a different remedy, so it is tracked separately rather than folded
 into #404: [#405](https://github.com/hailingu/PlotWeave/issues/405).
 The commit-side counterpart — a commit analyzed on working-tree state it
-does not contain (unstaged, untracked, or ignored) — is recorded in
+does not contain (omitted staged changes, unstaged tracked changes, or
+untracked/ignored inputs) — is recorded in
 [What The Gate Actually Enforces](#what-the-gate-actually-enforces) as a
 boundary of this inventory.
 
@@ -576,10 +595,12 @@ these becomes true:
   no tracked differences, including index-hidden ones, and no extra
   untracked or ignored inputs the gate reads. Git-clean status alone does
   not establish this equality (评审 4115477929, 4115510915).
-- The gate starts analyzing the committed tree itself at commit time (for
-  example by scanning a checkout of the index) instead of the working tree.
-  Until then, the `git commit` row's "yes" means the gate runs when the
-  commit is created, not that the committed tree was the state analyzed.
+- The gate starts analyzing the prospective commit tree selected by Git for
+  that invocation, respecting pathspecs and content-selection flags, instead
+  of the working tree. Scanning the original index alone is insufficient for
+  `--only` or pathspec commits. Until then, the `git commit` rows' "yes" mean
+  the gate runs when the commit is created, not that the committed tree was
+  the state analyzed.
 
 ## How To Re-measure
 
