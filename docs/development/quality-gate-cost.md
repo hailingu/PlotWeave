@@ -131,7 +131,8 @@ This repository wires exactly two: `.githooks/pre-commit` and
 
 | Command that creates a commit | Hooks that actually fire | Gate runs? |
 | --- | --- | :---: |
-| `git commit` | `pre-commit`, `prepare-commit-msg`, `commit-msg`, `post-commit` | yes |
+| `git commit` (without `--amend`) | `pre-commit`, `prepare-commit-msg`, `commit-msg`, `post-commit` | yes |
+| `git commit --amend` | `pre-commit`, `prepare-commit-msg`, `commit-msg`, `post-commit`, then `post-rewrite amend` unless `--no-post-rewrite` | yes |
 | `git merge` producing a merge commit (non-fast-forward) | `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `post-merge` | **no** |
 | `git revert` (automatic commit) | `prepare-commit-msg` + `post-commit` | **no** |
 | `git cherry-pick` (automatic commit) | `prepare-commit-msg` + `post-commit` | **no** |
@@ -143,7 +144,8 @@ This repository wires exactly two: `.githooks/pre-commit` and
 | `git fast-import` (`commit <ref>` stream) | `reference-transaction` only — no commit-creation hooks | **no** * |
 | `git filter-branch` (history rewrite) | none measured here (see note) | **no** * |
 | `git merge --squash` / `--no-commit` followed by `git commit` | `pre-commit`, … | yes |
-| `git commit --no-verify` / `git merge --no-verify` | `prepare-commit-msg` + `post-commit` / `post-merge` respectively | **no** |
+| `git commit --no-verify` (without `--amend`) / `git merge --no-verify` | `prepare-commit-msg` + `post-commit` / `post-merge` respectively | **no** |
+| `git commit --amend --no-verify` | `prepare-commit-msg`, `post-commit`, then `post-rewrite amend` unless `--no-post-rewrite` | **no** |
 
 \* These rows produce commits under refs that are **pushable by explicit
 refspec** — `git push <remote> refs/stash:refs/heads/…`, `refs/notes/*`,
@@ -171,9 +173,20 @@ state aborts the ref update, which makes it the one hook type that could in
 principle gate these paths; whether to do so is a #404 hook-design question,
 not part of this decision.
 
+`git commit --amend` also calls `post-rewrite` with argument `amend` after
+`post-commit`, as the [post-rewrite contract](https://git-scm.com/docs/githooks#_post_rewrite)
+specifies (评审 4115510916). Measured on Git 2.48.1: both ordinary amend and
+amend with `--no-verify` invoked it with the old/new commit OIDs on stdin;
+both completed and changed `HEAD` even when that hook exited 1. It therefore
+cannot block the rewrite. `--no-verify` skips `pre-commit` and `commit-msg`,
+not `post-rewrite`; the separate `--no-post-rewrite` option suppresses the
+latter, also confirmed by the probe. These variants leave the gate column
+unchanged: ordinary amend reaches the existing `pre-commit` gate, while
+amend with `--no-verify` bypasses it.
+
 `git revert` and `git cherry-pick` do not accept `--no-verify` at all
 (`git revert -h` / `git cherry-pick -h` list no such option), so they are
-absent from the last row rather than bypassable through it. Their automatic
+absent from the bypass rows rather than bypassable through them. Their automatic
 commits run `prepare-commit-msg` and `post-commit` — **not** `commit-msg`, which
 `githooks(5)` documents as applying to `git commit` and `git merge`
 (评审 4114854376). Like the rebase row, `post-commit` fires only once the commit
@@ -287,12 +300,15 @@ So the accurate statement of the invariant is:
 > The gate always analyzes the **working tree**. It runs on `git commit` and
 > on `git push` of the checked-out branch, and the tree it passes is the tree
 > actually recorded only when the working tree matches that tree: at commit
-> time, nothing beyond the index — no unstaged tracked changes and no
+> time, nothing beyond the index — no unstaged tracked changes (including
+> changes hidden by `skip-worktree` or `assume-unchanged`) and no
 > untracked files at all, including ones excluded by ignore rules such as
 > `.git/info/exclude` (untracked and ignored files never enter the commit
 > but are still scanned); at push time, the pushed ref is the checked-out
-> branch **and the working tree is clean with no ignored inputs the gate
-> reads** (an ignored file can otherwise be analyzed without being pushed).
+> branch **and the analyzed working-tree contents actually match the pushed
+> commit** — no tracked differences, including ones hidden by index flags,
+> and no additional untracked or ignored inputs the gate reads. A clean
+> `git status` does not prove that equality.
 > It does **not** run for commits produced
 > automatically by `git merge`, `git revert`, `git cherry-pick`, `git rebase`
 > (replayed commits), `git am`, `git stash push` (entry commits under
@@ -342,11 +358,13 @@ prohibition in `AGENTS.md` covers this push-time bypass regardless of any
 earlier analysis.
 
 Push-time analysis is a *partial* safety net, and only in a narrow case:
-when the pushed ref is the checked-out branch **and the working tree is
-clean with no ignored inputs the gate reads**, the `pre-push` gate analyzes
-the checked-out tree, which is the state being pushed. An ignored file can
-otherwise be analyzed without being pushed (评审 4115241706). For any other
-ref it does not — see
+when the pushed ref is the checked-out branch **and the analyzed working-tree
+contents actually match the pushed commit**, the `pre-push` gate analyzes
+the state being pushed. This excludes tracked differences hidden by
+`skip-worktree` or `assume-unchanged`, as well as extra untracked or ignored
+inputs the gate reads; clean status alone is insufficient (评审 4115241706,
+4115510915). For a different ref or differing inputs, that correspondence
+is not established — see
 [Known Finding: Push Scans The Checked-Out Tree, Not The Pushed
 Ref](#known-finding-push-scans-the-checked-out-tree-not-the-pushed-ref).
 Whether to wire `pre-merge-commit` is a governance decision with a real cost
@@ -378,6 +396,17 @@ plus the ignored file B (评审 4115241706). Measured on git 2.48.1:
 the ignored `src/local.ts`. So even a push that matches the checked-out
 branch with no reported changes can analyze a tree the pushed commit does
 not contain.
+
+Tracked changes can also be invisible to `git status`: in isolated Git
+2.48.1 probes, marking `src/local.ts` with `skip-worktree` or
+`assume-unchanged` and then changing its contents left `git status
+--porcelain` empty while the file differed from `HEAD` (评审 4115510915).
+The working-tree version passed TypeScript checking while the committed
+version failed it, with no ignored input involved. These flags have
+[different documented purposes](https://git-scm.com/docs/git-update-index#_skip_worktree_bit);
+neither makes clean status proof that the analyzed contents match the
+pushed commit. The same hidden tracked difference can affect the
+index/working-tree comparison at commit time.
 
 The plumbing path also has a push-side variant with no local ref update:
 `git push <remote> <oid>:refs/heads/…` sends a commit object that no local
@@ -542,10 +571,11 @@ these becomes true:
   branch, the scanner would still inspect B while A is what was pushed. That
   is a gate-strength change, not a cost change, and needs its own decision —
   but until it happens, every enforcement statement in this file is
-  conditional on the pushed ref being the checked-out branch **with a clean
-  working tree and no ignored inputs the gate reads**. Git-clean status alone
-  does not establish that the analyzed inputs match the pushed commit
-  (评审 4115477929).
+  conditional on the pushed ref being the checked-out branch **and the
+  analyzed working-tree contents actually matching the pushed commit**:
+  no tracked differences, including index-hidden ones, and no extra
+  untracked or ignored inputs the gate reads. Git-clean status alone does
+  not establish this equality (评审 4115477929, 4115510915).
 - The gate starts analyzing the committed tree itself at commit time (for
   example by scanning a checkout of the index) instead of the working tree.
   Until then, the `git commit` row's "yes" means the gate runs when the
