@@ -122,7 +122,7 @@ This repository wires exactly two: `.githooks/pre-commit` and
 | `git rebase` replaying commits onto a new base | `pre-rebase` once, then `prepare-commit-msg` + `post-commit` per replayed commit | **no** |
 | `git am` applying a patch series | `applypatch-msg`, `pre-applypatch`, `post-applypatch` — none wired | **no** |
 | `git merge --squash` / `--no-commit` followed by `git commit` | `pre-commit`, … | yes |
-| `git commit --no-verify` / `git merge --no-verify` | `prepare-commit-msg`, `commit-msg` | **no** |
+| `git commit --no-verify` / `git merge --no-verify` | `prepare-commit-msg` only | **no** |
 
 `git revert` and `git cherry-pick` do not accept `--no-verify` at all
 (`git revert -h` / `git cherry-pick -h` list no such option), so they are
@@ -318,10 +318,16 @@ these becomes true:
   `git commit`. Either way, update
   [What The Gate Actually Enforces](#what-the-gate-actually-enforces) in the same
   change — that table is a measurement, and a stale one is worse than none.
-- `pre-push` starts reading its stdin so the analyzed ref matches the pushed
-  ref. That is a gate-strength change, not a cost change, and needs its own
-  decision — but until it happens, every enforcement statement in this file is
-  conditional on the pushed ref being the checked-out branch.
+- `pre-push` starts reading its stdin **and the gate analyzes the pushed
+  commit** (for example by checking out the pushed ref into a temporary
+  worktree for the scan) instead of the current working tree. Reading stdin
+  alone identifies the pushed ref but does not close the dirty-worktree
+  mismatch recorded above — with uncommitted change B on the checked-out
+  branch, the scanner would still inspect B while A is what was pushed. That
+  is a gate-strength change, not a cost change, and needs its own decision —
+  but until it happens, every enforcement statement in this file is
+  conditional on the pushed ref being the checked-out branch **with a clean
+  working tree**.
 
 ## How To Re-measure
 
