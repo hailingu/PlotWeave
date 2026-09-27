@@ -136,7 +136,9 @@ remote-facing gap tracked in
 [Known Finding: Push Scans The Checked-Out Tree, Not The Pushed
 Ref](#known-finding-push-scans-the-checked-out-tree-not-the-pushed-ref):
 `pre-push` analyzes the checked-out tree, not the pushed ref (评审
-4115165662, 4115165667).
+4115165662, 4115165667). The `commit-tree` row additionally has a
+direct-OID push variant that no local hook can gate at all; see the
+commit-tree paragraph below.
 
 Every command in this table also fires `reference-transaction` on the ref
 updates it performs — measured on git 2.48.1 for `git commit`
@@ -204,14 +206,26 @@ commit object directly, and `git update-ref refs/heads/<branch> <commit>`
 places it on branch history, without any commit-creation hook — measured on
 git 2.48.1, only `reference-transaction` fired during the ref update
 (评审 4115165667). This is the lowest-level way to land a commit with no gate,
-and like the other off-hook paths its closure is the same #404
-`reference-transaction` question. `git fast-import` reaches the same place
-from a stream: its `commit <ref>` command creates the commit and updates the
-branch in one step — measured on git 2.48.1, importing one commit into
-`refs/heads/imported` fired only `reference-transaction` (prepared +
-committed, twice) and no commit-creation hook (评审 4115220196). Because this
-repository does not wire that hook, such an import bypasses the gate on the
-commit side entirely.
+and like the other off-hook paths its local ref-update closure is the same
+#404 `reference-transaction` question. `git fast-import` reaches the same
+place from a stream: its `commit <ref>` command creates the commit and
+updates the branch in one step — measured on git 2.48.1, importing one
+commit into `refs/heads/imported` fired only `reference-transaction`
+(prepared + committed, twice) and no commit-creation hook (评审 4115220196).
+Because this repository does not wire that hook, such an import bypasses the
+gate on the commit side entirely.
+
+`reference-transaction` does **not** close every `commit-tree` path,
+though: `update-ref` is optional. A commit object can be pushed directly by
+OID — `git push <remote> <oid>:refs/heads/…` — while no local ref ever
+points at it, so no local `reference-transaction` fires; `pre-push` runs
+but analyzes the unrelated checked-out tree (评审 4115241708). Measured on
+git 2.48.1: such a push installed the object on the remote
+(`refs/heads/direct`) while the local hook log shows only `pre-push`
+reading the pushed OID from stdin and no `reference-transaction` entry. The
+plumbing path therefore splits: the local-ref variant is a #404
+`reference-transaction` question; the direct-OID variant is a push-side gap
+that only the #405 remedy (analyze the pushed ref) can close.
 
 One qualification applies to the `git commit` row itself: the gate script
 always scans the working tree, while the created commit contains the index.
@@ -243,7 +257,9 @@ So the accurate statement of the invariant is:
 > untracked files at all, including ones excluded by ignore rules such as
 > `.git/info/exclude` (untracked and ignored files never enter the commit
 > but are still scanned); at push time, the pushed ref is the checked-out
-> branch with a clean working tree. It does **not** run for commits produced
+> branch **and the working tree is clean with no ignored inputs the gate
+> reads** (an ignored file can otherwise be analyzed without being pushed).
+> It does **not** run for commits produced
 > automatically by `git merge`, `git revert`, `git cherry-pick`, `git rebase`
 > (replayed commits), `git am`, `git stash push` (entry commits under
 > `refs/stash`), `git notes` mutations (commits under `refs/notes/*`),
@@ -306,11 +322,29 @@ several refs at once, or `--all` — the gate analyzes and passes on the
 analyzed at all.
 
 Branch identity is not sufficient either. The hook scans the **working tree**,
-not the pushed commit: after committing state A on the checked-out branch, an
-uncommitted change B means `git push` sends A while the gate's tests and
-scanner inspect B. The gate can pass on B and A reaches the remote never
-analyzed — matching the pushed branch to the checked-out branch does not close
-this variant, so it belongs to the same finding.
+not the pushed commit, so a push can pass on state the pushed commit does
+not contain. The first variant is uncommitted work: after committing state A
+on the checked-out branch, an uncommitted change B means `git push` sends A
+while the gate's tests and scanner inspect B, so the gate can pass on B and
+A reaches the remote never analyzed. The second is ignored files: "clean"
+does not exclude them, because `.git/info/exclude` (or any ignore rule)
+hides a file from `git status` yet not from the gate. With `src/local.ts`
+excluded and this repository's `tsconfig.json` including all of `src`, a
+push of HEAD state A leaves `git status` clean while `pre-push` analyzes A
+plus the ignored file B (评审 4115241706). Measured on git 2.48.1:
+`git status --porcelain` was empty, the push sent only A, and the hook read
+the ignored `src/local.ts`. So even a push that matches the checked-out
+branch with no reported changes can analyze a tree the pushed commit does
+not contain.
+
+The plumbing path also has a push-side variant with no local hook at all:
+`git push <remote> <oid>:refs/heads/…` sends a commit object that no local
+ref points at, so no local `reference-transaction` fires and `pre-push`
+again analyzes the unrelated checked-out tree (评审 4115241708). Measured on
+git 2.48.1: such a push installed the object on the remote
+(`refs/heads/direct`) while the local hook log shows only `pre-push` reading
+the pushed OID from stdin and no `reference-transaction` entry. Only the
+pushed-ref remedy below can close this one.
 
 Verified on 2026-09-27 with a local bare remote and a hook that logs both the
 stdin refs and `HEAD`:
