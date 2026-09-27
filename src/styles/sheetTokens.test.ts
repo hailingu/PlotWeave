@@ -1364,6 +1364,29 @@ function objectLiteralOccurrences(
   return out
 }
 
+/**
+ * 增量属性赋值入口（评审 4114047062）：`style.color = '…'` 与
+ * `style['backgroundColor'] = '…'` 的静态字面与对象键同口径受检——
+ * 合法且静态的显示色硬编码不因逐步构造而绕过。
+ */
+function assignmentOccurrences(
+  file: string,
+  node: ts.BinaryExpression,
+): JsxColorOccurrence[] {
+  if (node.operatorToken.kind !== ts.SyntaxKind.EqualsToken) return []
+  let name: string | undefined
+  if (ts.isPropertyAccessExpression(node.left)) name = node.left.name.text
+  else if (ts.isElementAccessExpression(node.left)) {
+    name = staticTextsOf(node.left.argumentExpression)[0]
+  }
+  if (name === undefined) return []
+  const key = displayColorKeyOf(name)
+  if (key === null) return []
+  return staticTextsOf(node.right)
+    .filter((value) => hasColorLiteral(value))
+    .map((value) => ({ file, context: key, value }))
+}
+
 /** 单个 TS/TSX 源的显示色字面出现点：JSX 属性与对象属性的字符串字面量。 */
 function colorOccurrencesOfSource(
   file: string,
@@ -1390,6 +1413,11 @@ function colorOccurrencesOfSource(
     } else if (ts.isObjectLiteralExpression(node)) {
       // 对象属性统一在对象层级处理（含内联自定义属性别名分析）
       out.push(...objectLiteralOccurrences(file, node))
+    } else if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind === ts.SyntaxKind.EqualsToken
+    ) {
+      out.push(...assignmentOccurrences(file, node))
     }
     ts.forEachChild(node, visit)
   }
@@ -1650,5 +1678,19 @@ describe('TSX/SVG 等价静态语法与解包（issue #362，评审补强）', (
       "export const b = <div style={{ '--tone': '#fff' }} />;",
     )
     expect(unused).toEqual([])
+  })
+
+  it('增量样式属性赋值：属性访问与字符串下标赋值被点名（评审 4114047062）', () => {
+    const occurrences = colorOccurrencesOfSource(
+      'fixture.tsx',
+      'export function f(style: { color?: string }) {\n' +
+        "  style.color = '#fff';\n" +
+        "  style['backgroundColor'] = '#000';\n" +
+        '}',
+    )
+    expect(occurrences).toEqual([
+      { file: 'fixture.tsx', context: 'color', value: '#fff' },
+      { file: 'fixture.tsx', context: 'background-color', value: '#000' },
+    ])
   })
 })
