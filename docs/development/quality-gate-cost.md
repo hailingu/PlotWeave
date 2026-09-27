@@ -122,10 +122,20 @@ This repository wires exactly two: `.githooks/pre-commit` and
 | `git cherry-pick` (automatic commit) | `prepare-commit-msg` + `post-commit` | **no** |
 | `git rebase` replaying commits onto a new base | `pre-rebase` once, then `prepare-commit-msg` + `post-commit` per replayed commit, `post-rewrite` once at the end | **no** |
 | `git am` applying a patch series | `applypatch-msg`, `pre-applypatch`, `post-applypatch` — none wired | **no** |
-| `git stash push` (tracked changes) | `reference-transaction` only — no commit-creation hooks | **no** |
-| `git notes add` / `append` / `edit` | `reference-transaction` only — no commit-creation hooks | **no** |
+| `git stash push` (tracked changes) | `reference-transaction` only — no commit-creation hooks | **no** * |
+| `git notes add` / `append` / `edit` | `reference-transaction` only — no commit-creation hooks | **no** * |
+| `git commit-tree` + `git update-ref` (plumbing) | `reference-transaction` only — no commit-creation hooks | **no** * |
 | `git merge --squash` / `--no-commit` followed by `git commit` | `pre-commit`, … | yes |
 | `git commit --no-verify` / `git merge --no-verify` | `prepare-commit-msg` + `post-commit` / `post-merge` respectively | **no** |
+
+\* These rows produce commits under refs that are **pushable by explicit
+refspec** — `git push <remote> refs/stash:refs/heads/…`, `refs/notes/*`,
+or the branch `update-ref` just created — so each carries the same
+remote-facing gap tracked in
+[Known Finding: Push Scans The Checked-Out Tree, Not The Pushed
+Ref](#known-finding-push-scans-the-checked-out-tree-not-the-pushed-ref):
+`pre-push` analyzes the checked-out tree, not the pushed ref (评审
+4115165662, 4115165667).
 
 Every command in this table also fires `reference-transaction` on the ref
 updates it performs — measured on git 2.48.1 for `git commit`
@@ -160,10 +170,8 @@ this repository wires. Either path therefore creates commits with no gate.
 `git stash push` with tracked changes creates its entry commits under
 `refs/stash` — the stash commit plus its index parent — without running any
 commit-creation hook (评审 4114895001); the `git-stash` documentation likewise
-describes a stash entry as a commit. These commits never sit on branch
-history and `git push` does not send `refs/stash`, so this path adds no
-remote-facing surface beyond the findings below: stashed work re-enters the
-tree through `git stash pop` / `apply`, which create no commits, and becomes
+describes a stash entry as a commit. Stashed work normally re-enters the tree
+through `git stash pop` / `apply`, which create no commits, and becomes
 commits only through the paths this table already records. Its one hook is
 `reference-transaction` on the `refs/stash` update, and aborting that update
 in the `prepared` state does prevent the entry — measured: with such a hook
@@ -172,26 +180,49 @@ in the `prepared` state does prevent the entry — measured: with such a hook
 already written by then (评审 4114992022). Stash therefore remains within
 #404's hook-design scope rather than being excluded as unwireable.
 
+The stash commits are also pushable: an explicit refspec such as
+`git push <remote> refs/stash:refs/heads/…`, or `--mirror`, copies the stash
+commit to the remote while `pre-push` analyzes the unrelated checked-out
+tree (评审 4115165662) — measured on git 2.48.1, `git push <remote>
+refs/stash:refs/heads/stashed` created a new remote branch holding the exact
+stash commit. So stash does not, after all, stay purely local; its push-side
+exposure is the push finding below, tracked there rather than re-counted
+here.
+
 `git notes add` / `append` / `edit` likewise create commits under
 `refs/notes/*` (by default `refs/notes/commits`) without any
 commit-creation hook — measured on git 2.48.1, only `reference-transaction`
-fires (评审 4115135524). Unlike `refs/stash`, notes refs are pushable
-(`git push origin refs/notes/*`), so this row is remote-facing in the same
-sense the push finding is; it is recorded here as a boundary and its
-closure — `reference-transaction` in `prepared` state — is the same #404
-option noted for stash, not a separate remedy.
+fires (评审 4115135524). Notes refs are pushable (`git push origin
+refs/notes/*`), so this row is remote-facing in the same sense the push
+finding is; it is recorded here as a boundary and its closure —
+`reference-transaction` in `prepared` state — is the same #404 option noted
+for stash, not a separate remedy.
+
+The plumbing path is uncovered too: `git commit-tree <tree>` creates a
+commit object directly, and `git update-ref refs/heads/<branch> <commit>`
+places it on branch history, without any commit-creation hook — measured on
+git 2.48.1, only `reference-transaction` fired during the ref update
+(评审 4115165667). This is the lowest-level way to land a commit with no gate,
+and like the other off-hook paths its closure is the same #404
+`reference-transaction` question.
 
 One qualification applies to the `git commit` row itself: the gate script
 always scans the working tree, while the created commit contains the index.
 Working-tree state beyond the index is therefore analyzed but never
 committed. With partially staged changes — state A staged, further state B
 left unstaged — `pre-commit` runs the checks against A+B and the commit
-records A alone (评审 4114992019); the same holds for untracked files, which
-are absent from the index yet still scanned by the gate — Prettier, ESLint,
-and the TypeScript compiler all read the working tree (评审 4115036983).
+records A alone (评审 4114992019); the same holds for any untracked file,
+whether or not git lists it — untracked files are absent from the index yet
+still scanned by the gate, because Prettier, ESLint, and the TypeScript
+compiler all read the working tree, and compiler inclusion is independent
+of git's ignore rules. An untracked file excluded through `.git/info/exclude`
+leaves `git status` clean apart from the staged entry, yet this repository's
+`tsconfig.json` includes all of `src`, so `typecheck:strict` sees that
+ignored definition (评审 4115165665) (评审 4115036983).
 Measured on git 2.48.1: a `pre-commit` hook observed an unstaged definition
 and, in a second run, an untracked one that the resulting commit did not
-contain. That state can, for example, supply a definition A depends on,
+contain; a third run confirmed an ignored (`info/exclude`) file is likewise
+invisible to `git status` yet visible to the hook. That state can, for example, supply a definition A depends on,
 letting the gate pass while the commit alone does not build. This is the
 commit-side analog of the push-path finding below — same root cause, the
 gate scans the working tree — recorded here as a boundary rather than fixed.
@@ -202,13 +233,15 @@ So the accurate statement of the invariant is:
 > on `git push` of the checked-out branch, and the tree it passes is the tree
 > actually recorded only when the working tree matches that tree: at commit
 > time, nothing beyond the index — no unstaged tracked changes and no
-> untracked non-ignored files (untracked files never enter the commit but
-> are still scanned); at push time, the pushed ref is the checked-out branch
-> with a clean working tree. It does **not** run for commits produced
+> untracked files at all, including ones excluded by ignore rules such as
+> `.git/info/exclude` (untracked and ignored files never enter the commit
+> but are still scanned); at push time, the pushed ref is the checked-out
+> branch with a clean working tree. It does **not** run for commits produced
 > automatically by `git merge`, `git revert`, `git cherry-pick`, `git rebase`
 > (replayed commits), `git am`, `git stash push` (entry commits under
-> `refs/stash`), or `git notes` mutations (commits under `refs/notes/*`),
-> and it can be skipped outright with `--no-verify` on
+> `refs/stash`), `git notes` mutations (commits under `refs/notes/*`), or
+> `git commit-tree` (commit objects placed on history via `update-ref`), and
+> it can be skipped outright with `--no-verify` on
 > `git commit`, `git merge`, and `git push` (which bypasses `pre-push`;
 > `git push -h` documents it as "bypass pre-push hook").
 
@@ -287,7 +320,7 @@ is a separate problem from the commit-creation gaps above, with a different
 trigger and a different remedy, so it is tracked separately rather than folded
 into #404: [#405](https://github.com/hailingu/PlotWeave/issues/405).
 The commit-side counterpart — a commit analyzed on working-tree state it
-does not contain (unstaged or untracked) — is recorded in
+does not contain (unstaged, untracked, or ignored) — is recorded in
 [What The Gate Actually Enforces](#what-the-gate-actually-enforces) as a
 boundary of this inventory.
 
@@ -404,8 +437,8 @@ these becomes true:
   explicit statement of its effect on gate strength, and must preserve every
   invariant in the section above.
 - The uncovered commit-creation paths are closed, or the
-  merge/revert/cherry-pick/rebase/am/stash/notes workflow changes to route
-  through `git commit`. Either way, update
+  merge/revert/cherry-pick/rebase/am/stash/notes/commit-tree workflow
+  changes to route through `git commit`. Either way, update
   [What The Gate Actually Enforces](#what-the-gate-actually-enforces) in the same
   change — that table is a measurement, and a stale one is worse than none.
 - `pre-push` starts reading its stdin **and the gate analyzes the pushed
