@@ -7,7 +7,9 @@ import type { BranchOption } from '../types'
 import type { PanelNode } from './panelNode'
 
 /** 单个分支选项行（编号、删除、文案输入）：BranchForm 拆出的分区，
- * 文案输入经 useCompositionSafeValue 缓冲中文组合输入（issue #42）。 */
+ * 文案输入经 useCompositionSafeValue 缓冲中文组合输入（issue #42）。
+ * 文案输入的 aria-label 复用行内可见的编号字母（issue #363：裸输入框
+ * 无可访问名，axe label 规则 critical 违例，屏幕阅读器只报「文本框」）。 */
 function BranchOptionRow({
   option,
   index,
@@ -20,10 +22,11 @@ function BranchOptionRow({
   readonly onRemove: () => void
 }) {
   const label = useCompositionSafeValue(option.label, onLabel)
+  const optionNo = String.fromCodePoint(65 + index)
   return (
     <div className="pw-set-line">
       <div className="pw-set-line-bar">
-        <span className="pw-set-optno">{String.fromCodePoint(65 + index)}</span>
+        <span className="pw-set-optno">{optionNo}</span>
         <span className="pw-sp" />
         <button
           type="button"
@@ -34,7 +37,11 @@ function BranchOptionRow({
           ✕
         </button>
       </div>
-      <input className="pw-set-input" {...label} />
+      <input
+        className="pw-set-input"
+        aria-label={`选项 ${optionNo}`}
+        {...label}
+      />
     </div>
   )
 }
