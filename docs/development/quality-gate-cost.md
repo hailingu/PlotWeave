@@ -116,38 +116,78 @@ This repository wires exactly two: `.githooks/pre-commit` and
 | --- | --- | :---: |
 | `git commit` | `pre-commit`, `prepare-commit-msg`, `commit-msg` | yes |
 | `git merge` producing a merge commit (non-fast-forward) | `pre-merge-commit`, `prepare-commit-msg`, `commit-msg` | **no** |
-| `git revert` (automatic commit) | `prepare-commit-msg`, `commit-msg` | **no** |
-| `git cherry-pick` (automatic commit) | `prepare-commit-msg`, `commit-msg` | **no** |
+| `git revert` (automatic commit) | `prepare-commit-msg` only | **no** |
+| `git cherry-pick` (automatic commit) | `prepare-commit-msg` only | **no** |
 | `git merge --squash` / `--no-commit` followed by `git commit` | `pre-commit`, … | yes |
-| any of the above with `--no-verify` | `prepare-commit-msg`, `commit-msg` | **no** |
+| `git commit --no-verify` / `git merge --no-verify` | `prepare-commit-msg`, `commit-msg` | **no** |
+
+`git revert` and `git cherry-pick` do not accept `--no-verify` at all
+(`git revert -h` / `git cherry-pick -h` list no such option), so they are
+absent from the last row rather than bypassable through it. Their automatic
+commits run `prepare-commit-msg` and nothing else — **not** `commit-msg`, which
+`githooks(5)` documents as applying to `git commit` and `git merge`.
 
 So the accurate statement of the invariant is:
 
-> The gate runs on `git commit` and on `git push`. It does **not** currently run
-> for commits produced automatically by `git merge`, `git revert`, or
-> `git cherry-pick`, nor for any operation passed `--no-verify`.
+> The gate runs on `git commit` and on `git push` of the checked-out branch. It
+> does **not** run for commits produced automatically by `git merge`,
+> `git revert`, or `git cherry-pick`, and it can be skipped outright with
+> `--no-verify` on `git commit` and `git merge`.
 
 An earlier revision of this file claimed that no commit is ever created without
-the full gate having run. That claim was false; review on PR #403 caught it, and
-the three bypass paths above are the corrected scope.
+the full gate having run, and that the only shared hook for `revert` and
+`cherry-pick` was `prepare-commit-msg` *and* `commit-msg`. Both claims were
+false; review on PR #403 caught them. `commit-msg` never fires for those two
+commands, which also means the `commit-msg`-based remedy that revision proposed
+would not have closed the gap at all — see below.
 
-`revert` and `cherry-pick` have no pre-commit-equivalent hook at all — the only
-hooks they share are `prepare-commit-msg` and `commit-msg` — so closing this gap
-is a hook-design decision, not a one-line addition. It is recorded as a finding
-below and is deliberately **not** fixed here: doing so would change gate
+`revert` and `cherry-pick` have no pre-commit-equivalent hook, and no
+`commit-msg` either. `prepare-commit-msg` is the only hook they run, and it
+receives the commit message before the commit exists, which is why it is not a
+suitable place to run a gate. Closing this gap is a hook-design decision rather
+than a one-line addition, and no remedy is proposed here. It is recorded as a
+finding below and is deliberately **not** fixed here: doing so would change gate
 behavior, which this decision explicitly does not do.
 
 ## Known Finding: Uncovered Commit-Creation Paths
 
 The three uncovered paths above mean a local merge, revert, or cherry-pick can
 land on a branch with no static checks, no coverage, and no SonarQube analysis
-for the resulting commit. SonarQube will still see the commit once it is pushed
-— the analysis happens at push time, not at commit time — so the practical
-exposure is that a commit can exist locally, and be pushed, without its own
-gate run. Whether to wire `pre-merge-commit` and a `commit-msg`-based path is a
-governance decision with a real cost attached (merge, revert, and cherry-pick
-would each become a gate run), and it is out of scope for #356. Raise it as its
-own issue if the gap is considered unintended.
+for the resulting commit.
+
+Push-time analysis is a *partial* safety net, and only in the common case: when
+the pushed ref is the checked-out branch, the `pre-push` gate does analyze the
+commit that is being pushed. For any other ref it does not — see
+[Known Finding: Push Scans The Checked-Out Tree, Not The Pushed
+Ref](#known-finding-push-scans-the-checked-out-tree-not-the-pushed-ref).
+Whether to wire `pre-merge-commit` is a governance decision with a real cost
+attached (every merge would become a gate run), and it is out of scope for
+#356. Tracked as [#404](https://github.com/hailingu/PlotWeave/issues/404).
+
+## Known Finding: Push Scans The Checked-Out Tree, Not The Pushed Ref
+
+`.githooks/pre-push` reads no input. Git hands the hook the refs about to be
+pushed on standard input; the hook ignores it and runs
+`sonar-quality-gate.sh` against the current working tree. So when a developer
+pushes a ref other than the checked-out branch — `git push origin other-branch`,
+several refs at once, or `--all` — the gate analyzes and passes on the
+**checked-out** tree, and the commit actually pushed may never have been
+analyzed at all.
+
+Verified on 2026-09-27 with a local bare remote and a hook that logs both the
+stdin refs and `HEAD`:
+
+```
+stdin (ref actually pushed): refs/heads/other 384b7636aea2…
+HEAD (what the gate scans):  7db139eda9f2… (main)
+```
+
+Because CI does not run SonarQube (see the Scope Routing row for `.github/**`),
+the push-time gate is the only SonarQube path in this repository. A ref pushed
+this way can reach the remote without any SonarQube pass for that state. This
+is a separate problem from the commit-creation gaps above, with a different
+trigger and a different remedy, so it is tracked separately rather than folded
+into #404.
 
 ## Measured Baseline
 
@@ -257,6 +297,10 @@ these becomes true:
   workflow changes to route through `git commit`. Either way, update
   [What The Gate Actually Enforces](#what-the-gate-actually-enforces) in the same
   change — that table is a measurement, and a stale one is worse than none.
+- `pre-push` starts reading its stdin so the analyzed ref matches the pushed
+  ref. That is a gate-strength change, not a cost change, and needs its own
+  decision — but until it happens, every enforcement statement in this file is
+  conditional on the pushed ref being the checked-out branch.
 
 ## How To Re-measure
 
