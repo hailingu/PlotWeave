@@ -1257,9 +1257,10 @@ function displayColorKeyOf(name: string): string | null {
 
 /**
  * 静态字符串值递归抽取（评审 4113886895）：字符串/无替换模板字面量、
- * JSX 表达式容器（评审 4113927266）、包装表达式（as const/括号/非空
- * 断言/satisfies）解包、`??`/`||` 两侧与三元分支的静态字面都进入登记
- * 口径——等价静态入口不得因节点形态绕过；动态表达式不产生静态文本。
+ * JSX 表达式容器（评审 4113927266）、包装表达式（as const/尖括号断言/
+ * 括号/非空断言/satisfies）解包、`??`/`||` 两侧与三元分支的静态字面都
+ * 进入登记口径——等价静态入口不得因节点形态绕过（尖括号断言仅 .ts
+ * 合法，评审 4114274468）；动态表达式不产生静态文本。
  */
 function staticTextsOf(node: ts.Expression | undefined): string[] {
   if (node === undefined) return []
@@ -1271,6 +1272,7 @@ function staticTextsOf(node: ts.Expression | undefined): string[] {
   }
   if (
     ts.isAsExpression(node) ||
+    ts.isTypeAssertionExpression(node) ||
     ts.isParenthesizedExpression(node) ||
     ts.isNonNullExpression(node) ||
     ts.isSatisfiesExpression(node)
@@ -1728,6 +1730,18 @@ describe('TSX/SVG 内联别名与增量赋值（issue #362，评审补强）', (
     )
     expect(cyclic).toEqual([
       { file: 'fixture.tsx', context: '--a', value: '#fff' },
+    ])
+  })
+
+  it('尖括号类型断言解包：<const> 值与计算键被点名（评审 4114274468）', () => {
+    const occurrences = colorOccurrencesOfSource(
+      'fixture.ts',
+      "export const a = { color: <const>'#fff' };\n" +
+        "export const b = { [<const>'backgroundColor']: '#000' };",
+    )
+    expect(occurrences).toEqual([
+      { file: 'fixture.ts', context: 'color', value: '#fff' },
+      { file: 'fixture.ts', context: 'background-color', value: '#000' },
     ])
   })
 
