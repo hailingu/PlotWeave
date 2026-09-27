@@ -198,7 +198,8 @@ So the accurate statement of the invariant is:
 > automatically by `git merge`, `git revert`, `git cherry-pick`, `git rebase`
 > (replayed commits), `git am`, or `git stash push` (entry commits under
 > `refs/stash`), and it can be skipped outright with `--no-verify` on
-> `git commit` and `git merge`.
+> `git commit`, `git merge`, and `git push` (which bypasses `pre-push`;
+> `git push -h` documents it as "bypass pre-push hook").
 
 An earlier revision of this file claimed that no commit is ever created without
 the full gate having run, and that the only shared hook for `revert` and
@@ -224,7 +225,12 @@ or am can land commits on a branch with no static checks, no coverage, and no
 SonarQube analysis for the resulting commit. The stash row is not counted
 here: its commits stay under `refs/stash`, off branch history; the
 `reference-transaction` option noted with that row is a #404 question, not a
-branch-history gap (see the table).
+branch-history gap (see the table). Separately, `git push --no-verify`
+bypasses `pre-push` entirely (评审 4115110181): even a clean push of the
+checked-out branch then reaches the remote with no gate at all — a
+remote-facing variant of the documented `--no-verify` bypass that the
+prohibition in `AGENTS.md` covers but this section's bypass list had
+omitted.
 
 Push-time analysis is a *partial* safety net, and only in the common case: when
 the pushed ref is the checked-out branch **and the working tree is clean**, the
@@ -263,7 +269,8 @@ HEAD (what the gate scans):  7db139eda9f2… (main)
 
 Because CI does not run SonarQube (see the Scope Routing row for `.github/**`),
 the push-time gate is the only SonarQube path in this repository. A ref pushed
-this way can reach the remote without any SonarQube pass for that state. This
+this way can reach the remote without any SonarQube pass for that state — and
+so can any ref pushed with `--no-verify`, which bypasses `pre-push` outright. This
 is a separate problem from the commit-creation gaps above, with a different
 trigger and a different remedy, so it is tracked separately rather than folded
 into #404: [#405](https://github.com/hailingu/PlotWeave/issues/405).
@@ -315,13 +322,15 @@ is bounded at 23%.
 
 ### Commit frequency context
 
-The repository has 1120 commits spanning 2026-08-21 to 2026-09-27 — 37 days at
-roughly 30 commits per day. At 72.87s per run, the pre-commit hook alone costs
-about 36 minutes per day. If each of those commits is also pushed, the
-pre-commit and pre-push runs together cost roughly 73 minutes per day. Under
-option B that total would fall to about 44 minutes per day. Treat these as
-order-of-magnitude context, not measured figures — actual push frequency varies
-with batching.
+The repository has 1120 commits spanning 2026-08-21 to 2026-09-27 — 37 days.
+That count includes 196 merge commits, of which 194 are GitHub PR merges
+made remotely and 2 local — the former never invoked the local `pre-commit`
+gate at all (评审 4115110183). The true invocation rate is therefore lower
+than ~30/day, and the daily figures below are **upper bounds**: pre-commit
+alone costs at most about 36 minutes per day, and with pushes at most ~73
+minutes per day; under option B the total would fall to about 44 minutes per
+day. Treat these as order-of-magnitude context, not measured figures —
+actual push frequency varies with batching.
 
 ### Environment
 
