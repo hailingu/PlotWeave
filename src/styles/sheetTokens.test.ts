@@ -1480,7 +1480,7 @@ function tsxOccurrenceKey(
   return `${file}|${context}|${value}`
 }
 
-describe('TSX/SVG 显示色扫描与注册表（issue #362：守卫范围覆盖组件与种子源码）', () => {
+describe('TSX/SVG 显示色扫描与登记表（issue #362：双向校验同 CSS 侧语义）', () => {
   it('生产 TSX/TS/SVG 显示色承载点不硬编码色值（登记表内、值一致且不超已审计条数）', () => {
     const audited = new Map(
       TSX_COLOR_EXCEPTIONS.map((e) => [
@@ -1514,7 +1514,9 @@ describe('TSX/SVG 显示色扫描与注册表（issue #362：守卫范围覆盖�
       '以下 TSX/SVG 注册表项已不再按已审计条数命中字面，应更新或删除：',
     ).toEqual([])
   })
+})
 
+describe('TSX/SVG 扫描入口与键归一（issue #362，评审补强）', () => {
   it('扫描覆盖面非空且 SVG 文本入口语义正确（字面色命中，var()/none 不命中）', () => {
     expect(discoverTsSvgSources().length).toBeGreaterThan(0)
     expect(
@@ -1551,7 +1553,9 @@ describe('TSX/SVG 显示色扫描与注册表（issue #362：守卫范围覆盖�
       },
     ])
   })
+})
 
+describe('TSX/SVG 等价静态语法与解包（issue #362，评审补强）', () => {
   it('等价静态键/值语法（字符串属性名与无替换模板字面量）同样进入扫描（评审 4113846198）', () => {
     const occurrences = colorOccurrencesOfSource(
       'fixture.ts',
