@@ -115,20 +115,24 @@ This repository wires exactly two: `.githooks/pre-commit` and
 
 | Command that creates a commit | Hooks that actually fire | Gate runs? |
 | --- | --- | :---: |
-| `git commit` | `pre-commit`, `prepare-commit-msg`, `commit-msg` | yes |
-| `git merge` producing a merge commit (non-fast-forward) | `pre-merge-commit`, `prepare-commit-msg`, `commit-msg` | **no** |
-| `git revert` (automatic commit) | `prepare-commit-msg` only | **no** |
-| `git cherry-pick` (automatic commit) | `prepare-commit-msg` only | **no** |
+| `git commit` | `pre-commit`, `prepare-commit-msg`, `commit-msg`, `post-commit` | yes |
+| `git merge` producing a merge commit (non-fast-forward) | `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `post-merge` | **no** |
+| `git revert` (automatic commit) | `prepare-commit-msg` + `post-commit` | **no** |
+| `git cherry-pick` (automatic commit) | `prepare-commit-msg` + `post-commit` | **no** |
 | `git rebase` replaying commits onto a new base | `pre-rebase` once, then `prepare-commit-msg` + `post-commit` per replayed commit, `post-rewrite` once at the end | **no** |
 | `git am` applying a patch series | `applypatch-msg`, `pre-applypatch`, `post-applypatch` — none wired | **no** |
 | `git merge --squash` / `--no-commit` followed by `git commit` | `pre-commit`, … | yes |
-| `git commit --no-verify` / `git merge --no-verify` | `prepare-commit-msg` only | **no** |
+| `git commit --no-verify` / `git merge --no-verify` | `prepare-commit-msg` + `post-commit` / `post-merge` respectively | **no** |
 
 `git revert` and `git cherry-pick` do not accept `--no-verify` at all
 (`git revert -h` / `git cherry-pick -h` list no such option), so they are
 absent from the last row rather than bypassable through it. Their automatic
-commits run `prepare-commit-msg` and nothing else — **not** `commit-msg`, which
-`githooks(5)` documents as applying to `git commit` and `git merge`.
+commits run `prepare-commit-msg` and `post-commit` — **not** `commit-msg`, which
+`githooks(5)` documents as applying to `git commit` and `git merge`
+(评审 4114854376). Like the rebase row, `post-commit` fires only once the commit
+exists and git ignores its exit status, so it cannot implement a blocking gate
+either. `post-merge` on the merge rows is likewise after the fact: it fires
+after the merge has completed and cannot block it.
 
 `git rebase` and `git am` were measured on 2026-09-27 (git 2.48.1, isolated
 hook log, two commits replayed / one patch applied) with this repository's
@@ -156,9 +160,11 @@ commands, which also means the `commit-msg`-based remedy that revision proposed
 would not have closed the gap at all — see below.
 
 `revert` and `cherry-pick` have no pre-commit-equivalent hook, and no
-`commit-msg` either. `prepare-commit-msg` is the only hook they run, and it
-receives the commit message before the commit exists, which is why it is not a
-suitable place to run a gate. Closing this gap is a hook-design decision rather
+`commit-msg` either. `prepare-commit-msg` is the only hook they run before the
+commit exists, and it receives the commit message at that point, which is why
+it is not a suitable place to run a gate; their one other hook, `post-commit`,
+runs only after the commit exists and cannot block it, as recorded above.
+Closing this gap is a hook-design decision rather
 than a one-line addition, and no remedy is proposed here. It is recorded as a
 finding below and is deliberately **not** fixed here: doing so would change gate
 behavior, which this decision explicitly does not do.
