@@ -1257,14 +1257,17 @@ function displayColorKeyOf(name: string): string | null {
 
 /**
  * 静态字符串值递归抽取（评审 4113886895）：字符串/无替换模板字面量、
- * 包装表达式（as const/括号/非空断言/satisfies）解包、`??`/`||` 两侧与
- * 三元分支的静态字面都进入登记口径——等价静态入口不得因节点形态绕过；
- * 动态表达式不产生静态文本。
+ * JSX 表达式容器（评审 4113927266）、包装表达式（as const/括号/非空
+ * 断言/satisfies）解包、`??`/`||` 两侧与三元分支的静态字面都进入登记
+ * 口径——等价静态入口不得因节点形态绕过；动态表达式不产生静态文本。
  */
 function staticTextsOf(node: ts.Expression | undefined): string[] {
   if (node === undefined) return []
   if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
     return [node.text]
+  }
+  if (ts.isJsxExpression(node)) {
+    return staticTextsOf(node.expression)
   }
   if (
     ts.isAsExpression(node) ||
@@ -1586,5 +1589,17 @@ describe('TSX/SVG 显示色扫描与注册表（issue #362：守卫范围覆盖�
         "<!-- fill=\"#000\" --><rect fill='#fff' stroke='none'/>",
       ),
     ).toEqual([{ context: 'fill', value: '#fff' }])
+  })
+
+  it('JSX 表达式容器解包：fill={…} 与 as const 经容器均被点名（评审 4113927266）', () => {
+    const occurrences = colorOccurrencesOfSource(
+      'fixture.tsx',
+      "export const a = <circle fill={'#fff'} />;\n" +
+        "export const b = <stop stopColor={'#f00' as const} />;",
+    )
+    expect(occurrences).toEqual([
+      { file: 'fixture.tsx', context: 'fill', value: '#fff' },
+      { file: 'fixture.tsx', context: 'stop-color', value: '#f00' },
+    ])
   })
 })
