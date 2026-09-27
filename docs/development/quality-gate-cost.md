@@ -146,6 +146,7 @@ This repository wires exactly two: `.githooks/pre-commit` and
 | `git replace --graft <commit> [<parent>…]` | `reference-transaction`; no commit-creation hooks | **no** * |
 | `git fast-import` (`commit <ref>` stream) | `reference-transaction`; no commit-creation hooks | **no** * |
 | `git filter-branch` (history rewrite) | none measured here (see note) | **no** * |
+| `git subtree split --prefix=<dir> --branch <branch>` | `reference-transaction`; no commit-creation hooks | **no** * |
 | `git merge --squash` / `--no-commit` followed by `git commit` | `pre-commit`, … | yes |
 | `git commit --no-verify` (without `--amend`) | `post-index-change` on index writes; `prepare-commit-msg`, `post-commit` | **no** |
 | `git merge --no-verify` | `prepare-commit-msg`, `post-merge` | **no** |
@@ -153,7 +154,8 @@ This repository wires exactly two: `.githooks/pre-commit` and
 
 \* These rows produce commits under refs that are **pushable by explicit
 refspec** — `git push <remote> refs/stash:refs/heads/…`, `refs/notes/*`,
-`refs/replace/*`, or the branch `update-ref` just created — so each carries the same
+`refs/replace/*`, `refs/heads/<branch>` from the subtree split, or the branch
+`update-ref` just created — so each carries the same
 remote-facing gap tracked in
 [Known Finding: Push Scans The Checked-Out Tree, Not The Pushed
 Ref](#known-finding-push-scans-the-checked-out-tree-not-the-pushed-ref):
@@ -289,6 +291,17 @@ repository does not wire `reference-transaction` regardless, so the gate
 does not run for filter-branch; whether the hook is available as a closure
 is a #404 question the two measurements leave open.
 
+`git subtree split --prefix=<dir> --branch <branch>` creates a rewritten
+commit chain for the selected subtree and places its tip on the requested
+branch. Measured on git 2.48.1 with a two-commit fixture, the split produced
+two commits and fired only `reference-transaction` (`prepared` and
+`committed`); no commit-creation hook fired. Explicitly pushing the resulting
+branch to a local bare remote succeeded. The local ref-update closure is a
+#404 `reference-transaction` design question, and pushing that branch while
+the hook scans the checked-out tree is the #405 push-side gap. This documents
+the measured `split --branch` path; other subtree commands are not inferred
+from this probe.
+
 `reference-transaction` does **not** close every `commit-tree` path,
 though: `update-ref` is optional. A commit object can be pushed directly by
 OID — `git push <remote> <oid>:refs/heads/…` — while no local ref ever
@@ -366,7 +379,9 @@ So the accurate statement of the invariant is:
 > `git commit-tree` (commit objects placed on history via `update-ref`),
 > `git replace --graft` (replacement commits under `refs/replace/*`),
 > `git fast-import` (`commit <ref>` stream commands), or `git
-> filter-branch` (rewritten history), and it can be skipped outright with
+> filter-branch` (rewritten history), or `git subtree split --branch`
+> (rewritten commits under the requested branch), and it can be skipped
+> outright with
 > `--no-verify` on
 > `git commit`, `git merge`, and `git push` (which bypasses `pre-push`;
 > `git push -h` documents it as "bypass pre-push hook").
@@ -391,11 +406,12 @@ behavior, which this decision explicitly does not do.
 
 ## Known Finding: Uncovered Commit-Creation Paths
 
-The eight uncovered branch-history paths plus the replacement-object path —
+The nine uncovered branch-history paths plus the replacement-object path —
 `git merge`, `git revert`, `git cherry-pick`, `git rebase`, `git am`,
 `git commit-tree` plus `git update-ref`, `git fast-import`, `git filter-branch`,
-and `git replace --graft` — can produce or replace commits without running the
-gate for the resulting commit (评审 4115477920, 4115606416). The stash row is not counted
+`git subtree split --branch`, and `git replace --graft` — can produce or replace
+commits without running the gate for the resulting commit
+(评审 4115477920, 4115606416, 4115639629). The stash row is not counted
 here: its commits stay under `refs/stash`, off branch history; the
 `reference-transaction` option noted with that row is a #404 question, not a
 branch-history gap (see the table); the notes row shares that same
@@ -612,7 +628,8 @@ these becomes true:
   invariant in the section above.
 - The uncovered commit-creation paths are closed, or the
   merge/revert/cherry-pick/rebase/am/stash/notes/commit-tree/replace/
-  fast-import/filter-branch workflow changes to route through `git commit`. Either way,
+  fast-import/filter-branch/subtree workflow changes to route through
+  `git commit`. Either way,
   update
   [What The Gate Actually Enforces](#what-the-gate-actually-enforces) in the same
   change — that table is a measurement, and a stale one is worse than none.
