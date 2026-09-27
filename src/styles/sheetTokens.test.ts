@@ -1408,17 +1408,26 @@ function assignmentOccurrences(
   node: ts.BinaryExpression,
 ): JsxColorOccurrence[] {
   if (!WRITING_ASSIGNMENT_OPS.has(node.operatorToken.kind)) return []
-  let name: string | undefined
-  if (ts.isPropertyAccessExpression(node.left)) name = node.left.name.text
+  // 键候选全部遍历（评审 4114362293）：多候选计算键（如三元下标）逐候选
+  // 分类，非显示键候选不得遮蔽同表达式中的显示键候选
+  let names: string[]
+  if (ts.isPropertyAccessExpression(node.left)) names = [node.left.name.text]
   else if (ts.isElementAccessExpression(node.left)) {
-    name = staticTextsOf(node.left.argumentExpression)[0]
+    names = staticTextsOf(node.left.argumentExpression)
+  } else {
+    names = []
   }
-  if (name === undefined) return []
-  const key = displayColorKeyOf(name)
-  if (key === null) return []
-  return staticTextsOf(node.right)
-    .filter((value) => hasColorLiteral(value))
-    .map((value) => ({ file, context: key, value }))
+  const out: JsxColorOccurrence[] = []
+  for (const name of names) {
+    const key = displayColorKeyOf(name)
+    if (key === null) continue
+    for (const value of staticTextsOf(node.right)) {
+      if (hasColorLiteral(value)) {
+        out.push({ file, context: key, value })
+      }
+    }
+  }
+  return out
 }
 
 /** 单个 TS/TSX 源的显示色字面出现点：JSX 属性与对象属性的字符串字面量。 */
@@ -1793,6 +1802,22 @@ describe('TSX/SVG 增量赋值与断言语法（issue #362，评审补强）', (
     expect(occurrences).toEqual([
       { file: 'fixture.tsx', context: 'color', value: '#fff' },
       { file: 'fixture.tsx', context: 'background-color', value: '#000' },
+    ])
+  })
+
+  it('增量赋值的多候选计算键：全部分别分类，非显示键不遮蔽（评审 4114362293）', () => {
+    const occurrences = colorOccurrencesOfSource(
+      'fixture.tsx',
+      'export function f(\n' +
+        '  style: { width?: string; color?: string },\n' +
+        '  flag: boolean,\n' +
+        ') {\n' +
+        "  style[flag ? 'width' : 'color'] = '#fff';\n" +
+        '}',
+    )
+    // 首候选 width 非显示键不得遮蔽次候选 color：全部候选分别分类
+    expect(occurrences).toEqual([
+      { file: 'fixture.tsx', context: 'color', value: '#fff' },
     ])
   })
 })
