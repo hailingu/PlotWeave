@@ -1695,7 +1695,7 @@ describe('TSX/SVG 静态抽取与解析检查（issue #362，评审补强）', (
   })
 })
 
-describe('TSX/SVG 内联别名与增量赋值（issue #362，评审补强）', () => {
+describe('TSX/SVG 内联别名与多跳追踪（issue #362，评审补强）', () => {
   it('内联自定义属性别名：定义并被显示键经 var() 消费的字面进入登记（评审 4113994776）', () => {
     const occurrences = colorOccurrencesOfSource(
       'fixture.tsx',
@@ -1733,7 +1733,9 @@ describe('TSX/SVG 内联别名与增量赋值（issue #362，评审补强）', (
       { file: 'fixture.tsx', context: '--a', value: '#fff' },
     ])
   })
+})
 
+describe('TSX/SVG 增量赋值与断言语法（issue #362，评审补强）', () => {
   it('尖括号类型断言解包：<const> 值与计算键被点名（评审 4114274468）', () => {
     const occurrences = colorOccurrencesOfSource(
       'fixture.ts',
