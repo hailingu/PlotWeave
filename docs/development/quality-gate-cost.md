@@ -187,7 +187,7 @@ the push-time gate is the only SonarQube path in this repository. A ref pushed
 this way can reach the remote without any SonarQube pass for that state. This
 is a separate problem from the commit-creation gaps above, with a different
 trigger and a different remedy, so it is tracked separately rather than folded
-into #404.
+into #404: [#405](https://github.com/hailingu/PlotWeave/issues/405).
 
 ## Measured Baseline
 
