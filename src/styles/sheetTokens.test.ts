@@ -1243,16 +1243,35 @@ const JSX_COLOR_SCAN_SKIP = [
  * 承载显示色的 JSX 属性名与对象键判定（评审 4113805575）：camelCase 转
  * CSS 连字符形后复用 CSS 侧 `isDisplayColorProp` 分类——单一事实源，覆盖
  * background-image、四向/逻辑边框颜色等全部长形，键集不得自行枚举产生
- * 绕过面。`gradient` 是种子数据的对象键扩展（sampleData），不在 CSS 属性
- * 分类内。
+ * 绕过面。前导大写按 React 厂商前缀约定保留前导连字符（`WebkitTextStroke`
+ * → `-webkit-text-stroke`，评审 4113846195）；`gradient` 是种子数据的
+ * 对象键扩展（sampleData），不在 CSS 属性分类内。
  */
 function displayColorKeyOf(name: string): string | null {
-  const kebab = name
-    .replace(/([A-Z])/g, '-$1')
-    .replace(/^-/, '')
-    .toLowerCase()
+  const kebab = name.replace(/([A-Z])/g, '-$1').toLowerCase()
   if (kebab === 'gradient') return kebab
   return isDisplayColorProp(kebab) ? kebab : null
+}
+
+/** 静态字符串值：字符串字面量与无替换模板字面量等价（评审 4113846198）。 */
+function staticTextOf(node: ts.Expression | undefined): string | undefined {
+  if (node === undefined) return undefined
+  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+    return node.text
+  }
+  return undefined
+}
+
+/** 静态属性名文本：标识符、字符串名与数字名等价（评审 4113846198）。 */
+function staticPropertyNameOf(name: ts.PropertyName): string | undefined {
+  if (
+    ts.isIdentifier(name) ||
+    ts.isStringLiteral(name) ||
+    ts.isNumericLiteral(name)
+  ) {
+    return name.text
+  }
+  return undefined
 }
 
 /** SVG 文本扫描的显示色属性（值以双引号序列化）。 */
@@ -1295,11 +1314,13 @@ function colorOccurrencesOfSource(
   )
   const literalOf = (init: ts.Expression | undefined): string | undefined => {
     if (init === undefined) return undefined
-    if (ts.isStringLiteral(init)) return init.text
+    const direct = staticTextOf(init)
+    if (direct !== undefined) return direct
     if (
       ts.isJsxExpression(init) &&
       init.expression !== undefined &&
-      ts.isStringLiteral(init.expression)
+      (ts.isStringLiteral(init.expression) ||
+        ts.isNoSubstitutionTemplateLiteral(init.expression))
     ) {
       return init.expression.text
     }
@@ -1312,15 +1333,12 @@ function colorOccurrencesOfSource(
       if (key !== null && value !== undefined && hasColorLiteral(value)) {
         out.push({ file, context: key, value })
       }
-    } else if (
-      ts.isPropertyAssignment(node) &&
-      ts.isIdentifier(node.name) &&
-      ts.isStringLiteral(node.initializer)
-    ) {
-      const key = displayColorKeyOf(node.name.text)
-      const { text } = node.initializer
-      if (key !== null && hasColorLiteral(text)) {
-        out.push({ file, context: key, value: text })
+    } else if (ts.isPropertyAssignment(node)) {
+      const name = staticPropertyNameOf(node.name)
+      const key = name === undefined ? null : displayColorKeyOf(name)
+      const value = staticTextOf(node.initializer)
+      if (key !== null && value !== undefined && hasColorLiteral(value)) {
+        out.push({ file, context: key, value })
       }
     }
     ts.forEachChild(node, visit)
@@ -1465,6 +1483,32 @@ describe('TSX/SVG 显示色扫描与注册表（issue #362：守卫范围覆盖�
         context: 'background-image',
         value: 'linear-gradient(#fff, #000)',
       },
+    ])
+  })
+
+  it('React 厂商前缀键保留前导连字符：WebkitTextStroke 字面被点名（评审 4113846195）', () => {
+    const occurrences = colorOccurrencesOfSource(
+      'fixture.tsx',
+      "export const a = <div style={{ WebkitTextStroke: '1px #fff' }} />",
+    )
+    expect(occurrences).toEqual([
+      {
+        file: 'fixture.tsx',
+        context: '-webkit-text-stroke',
+        value: '1px #fff',
+      },
+    ])
+  })
+
+  it('等价静态键/值语法（字符串属性名与无替换模板字面量）同样进入扫描（评审 4113846198）', () => {
+    const occurrences = colorOccurrencesOfSource(
+      'fixture.ts',
+      "export const a = { 'backgroundColor': '#fff' };\n" +
+        'export const b = { color: `#f00` };',
+    )
+    expect(occurrences).toEqual([
+      { file: 'fixture.ts', context: 'background-color', value: '#fff' },
+      { file: 'fixture.ts', context: 'color', value: '#f00' },
     ])
   })
 })
