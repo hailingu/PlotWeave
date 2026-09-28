@@ -160,6 +160,7 @@ This repository wires exactly two: `.githooks/pre-commit` and
 | `git subtree push --prefix=<prefix> <repository> <refspec>` | `pre-push` receives split tip; `reference-transaction` may update `refs/remotes/origin/*` after the push; no commit-creation or checked-out-branch ref-update hook | **no** (for generated split commits) |
 | `git subtree push --rejoin --prefix=<prefix> <repository> <refspec>` (automatic conflict-free rejoin) | rejoin merge: `post-index-change`, `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `reference-transaction` on the checked-out branch, `post-merge`; then `pre-push` receives split tip | **no** (for rejoin merge and generated split commits) |
 | `git subtree add --prefix=<prefix> <commit>` | `post-index-change` on index writes; `reference-transaction`; no commit-creation hooks | **no** |
+| `git subtree add --prefix=<prefix> --squash <commit>` | `post-index-change` on index writes; `reference-transaction`; no commit-creation hooks; additionally creates a ref-less synthetic squash commit | **no** |
 | `git merge --squash` / `--no-commit` followed by `git commit` | `pre-commit`, … | yes |
 | `git commit --no-verify` (without `--amend`) | `post-index-change` on index writes; `prepare-commit-msg`, `post-commit` | **no** |
 | `git merge --no-verify` | `prepare-commit-msg`, `post-merge` | **no** |
@@ -423,7 +424,14 @@ merge commit containing the prefixed tree. The measured hooks were shared
 `pre-commit` nor `pre-merge-commit` ran. This branch-history path belongs in
 #404's hook-design inventory; unlike `stash create` and ordinary `subtree
 push`, it updates the checked-out branch, so `reference-transaction` is a
-possible closure to evaluate there.
+possible closure to evaluate there. With `--squash`, the command additionally
+creates a ref-less synthetic squash commit before the merge (评审 4117804224):
+measured on git 2.48.1, `git subtree add --prefix=<prefix> --squash <commit>`
+produced both a `Squashed '<prefix>/' content` commit and the merge commit,
+with only `post-index-change` and `reference-transaction` firing. The
+synthetic commit already exists before the branch transaction and can be
+pushed directly by OID, so `reference-transaction` cannot close the squash
+commit itself; its push-side exposure is the same #405 remedy.
 
 `reference-transaction` does **not** close every `commit-tree` path,
 though: `update-ref` is optional. A commit object can be pushed directly by
