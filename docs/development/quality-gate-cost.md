@@ -1,14 +1,19 @@
 # Quality Gate Cost Decision
 
 **Applies to**: the versioned local Git hooks (`.githooks/pre-commit`,
-`.githooks/pre-push`) and `scripts/sonar-quality-gate.sh`. Like the root
+`.githooks/pre-merge-commit`, `.githooks/prepare-commit-msg`,
+`.githooks/pre-push`), `scripts/sonar-quality-gate.sh`, and the gate-run
+dedup marker helper `scripts/gate-tree-marker.sh` (issue #404). Like the root
 `AGENTS.md` and the other standards under `docs/development/`, this file is
 written in English for agent interoperability.
 
-**Last reviewed**: 2026-09-27
+**Last reviewed**: 2026-09-28
 
 **Status**: Active — accepted decision. Recorded 2026-09-27, resolving
-[issue #356](https://github.com/hailingu/PlotWeave/issues/356).
+[issue #356](https://github.com/hailingu/PlotWeave/issues/356); extended
+2026-09-28 by the issue #404 commit-creation wiring (same complete gate,
+more commands routed through it — see
+[What The Gate Actually Enforces](#what-the-gate-actually-enforces)).
 
 ## Required Reading
 
@@ -22,7 +27,7 @@ written in English for agent interoperability.
 
 **The gate stays a single, uniform cost. There is no fast lane.**
 
-`git commit` and `git push` each run the same complete sequence:
+Every gated command runs the same complete sequence:
 
 1. `scripts/check-static.sh` — Prettier format check, ESLint with zero
    warnings, `typecheck:strict`. Fail-fast, ahead of all coverage work.
@@ -31,6 +36,19 @@ written in English for agent interoperability.
    `media_format_leaf` test target.
 4. `sonar-scanner` publishing the analysis, then waiting for the Quality Gate,
    then a separate check that new-code unresolved issues are zero.
+
+Since the issue #404 wiring, the gated commands are `git commit` and
+`git push` as before, plus every other commit-creating porcelain that has a
+wireable pre-creation hook: non-fast-forward merges (`pre-merge-commit`), and
+`git revert` / `git cherry-pick` / rebase replays
+(`prepare-commit-msg`). The commit-creating hooks record the just-gated index
+tree through `scripts/gate-tree-marker.sh`, and `prepare-commit-msg` skips a
+run only when that exact tree was gated within the same operation moments
+earlier — an ordinary `git commit` still pays exactly one gate run, and a
+merge pays exactly one (`pre-merge-commit` gates, `prepare-commit-msg`
+deduplicates). Commands with no wireable hook (see the table) remain
+ungated. The marker is a dedup hint, not a trust boundary: any mismatch,
+expiry, or corruption resolves to running the gate.
 
 There is no cheaper or faster variant of that sequence, and no configuration
 that selects one. Which commit-producing commands actually reach it — and which
@@ -87,7 +105,10 @@ refusal. See [Reconsideration Triggers](#reconsideration-triggers).
 and measurement change only. The following remain in force exactly as written in
 `AGENTS.md`, and nothing in this file is an exception to them:
 
-- Both hooks stay enabled and both run the complete `sonar-quality-gate.sh`.
+- All four hooks stay enabled (`pre-commit`, `pre-merge-commit`,
+  `prepare-commit-msg`, `pre-push`) and each runs the complete
+  `sonar-quality-gate.sh`; the tree marker only deduplicates within one
+  commit-creating operation and never selects a cheaper check set.
 - `--no-verify` remains prohibited, and `core.hooksPath` remains pointed at the
   versioned `.githooks/` directory.
 - No new skip, allowlist, or "fast" path is introduced. There is no environment
@@ -105,13 +126,19 @@ documented boundary: the gate scripts intentionally expose
 and the report-path overrides
 (`PLOTWEAVE_COVERAGE_REPORT_PATH`, `PLOTWEAVE_RUST_COVERAGE_REPORT_PATH`,
 `PLOTWEAVE_SONAR_REPORT_PATH`) as **test-only injection points**, and the
-hooks `exec` the gate script so those variables are inherited (评审
+hooks invoke the gate script with the environment inherited so those
+variables are passed through (评审
 4115318775). A shell that exports them can point the gate at substitute
 executables or pre-written reports and thereby skip real checks. These
 overrides exist for the gate's own test suite; using them to bypass the
 gate is the same class of explicit evasion as `--no-verify`, which
 `AGENTS.md` prohibits. Closing the injection points in hook invocations is
 a hardening change to gate behavior and out of scope for this record.
+`PLOTWEAVE_GATE_MARKER_PATH` and `PLOTWEAVE_GATE_MARKER_TTL`
+(`scripts/gate-tree-marker.sh`, issue #404) belong to the same class: they
+steer the dedup marker and its expiry, so exporting a pre-written matching
+marker can suppress the `prepare-commit-msg` gate run. Same disposition —
+test-only injection, explicit evasion to use it that way.
 
 Anyone reading a faster local workflow elsewhere in this repository should
 treat it as a defect in that workflow, not as sanctioned by this decision.
@@ -125,29 +152,37 @@ through `core.hooksPath`. The table records command-related observations in
 the tested modes; shared index-write and ref-update callbacks are explained
 below, rather than claiming an exhaustive trace for every command variant.
 
-This repository wires exactly two: `.githooks/pre-commit` and
-`.githooks/pre-push`. There is no `pre-merge-commit`, `commit-msg`,
-`prepare-commit-msg`, `post-commit`, `post-merge`, `pre-rebase`,
-`post-rewrite`, `pre-applypatch`, `applypatch-msg`,
-`reference-transaction`, or `post-index-change`.
+Since the issue #404 wiring this repository wires four hooks:
+`.githooks/pre-commit`, `.githooks/pre-merge-commit`,
+`.githooks/prepare-commit-msg`, and `.githooks/pre-push`, plus the shared
+dedup helper `scripts/gate-tree-marker.sh`. There is no `commit-msg`,
+`post-commit`, `post-merge`, `pre-rebase`, `post-rewrite`,
+`pre-applypatch`, `applypatch-msg`, `reference-transaction`, or
+`post-index-change`. The table below was measured on 2026-09-27 against
+git 2.48.1 with only `pre-commit` and `pre-push` wired; the "Gate analyzes
+this commit?" column has been updated for the new wiring where the measured
+hook set determines it, and the hook lists themselves are unchanged
+measurements — the wired hooks now make the automatic merge / revert /
+cherry-pick / rebase-replay / commit-side `--no-verify` paths reach the
+gate.
 
 | Command that creates a commit | Observed hooks (shared callbacks also described below) | Gate analyzes this commit? |
 | --- | --- | :---: |
 | `git commit` (without `--amend`) | `post-index-change` on index writes; `pre-commit`, `prepare-commit-msg`, `commit-msg`, `post-commit` | yes |
 | `git commit --amend` | `post-index-change` on index writes; `pre-commit`, `prepare-commit-msg`, `commit-msg`, `post-commit`, then `post-rewrite amend` unless `--no-post-rewrite` | yes |
-| `git merge` (automatic, conflict-free non-fast-forward merge commit) | `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `post-merge` | **no** |
-| `git merge --autostash` (dirty tracked worktree) | merge hooks above; autostash creates ref-less stash commits with no hook | **no** |
-| `git pull` (default merge mode, diverged upstream) | `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `post-merge`; `reference-transaction` on fetch | **no** |
-| `git pull --autostash` (default merge mode, dirty tracked worktree) | pull merge hooks above; autostash creates ref-less stash commits with no hook | **no** |
+| `git merge` (automatic, conflict-free non-fast-forward merge commit) | `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `post-merge` | **yes** (issue #404: wired `pre-merge-commit`) |
+| `git merge --autostash` (dirty tracked worktree) | merge hooks above; autostash creates ref-less stash commits with no hook | **yes** for the merge commit; the autostash objects stay ungated |
+| `git pull` (default merge mode, diverged upstream) | `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `post-merge`; `reference-transaction` on fetch | **yes** (issue #404: wired `pre-merge-commit`) |
+| `git pull --autostash` (default merge mode, dirty tracked worktree) | pull merge hooks above; autostash creates ref-less stash commits with no hook | **yes** for the merge commit; the autostash objects stay ungated |
 | `git merge --continue` after resolving conflicts | `post-index-change`; `pre-commit`, `prepare-commit-msg`, `commit-msg`, `post-commit` | yes |
-| `git revert` (automatic, conflict-free commit) | `prepare-commit-msg` + `post-commit` | **no** |
+| `git revert` (automatic, conflict-free commit) | `prepare-commit-msg` + `post-commit` | **yes** (issue #404: wired `prepare-commit-msg`) |
 | `git revert --continue` after resolving conflicts | `post-index-change`; `pre-commit`, `prepare-commit-msg`, `commit-msg`, `post-commit` | yes |
-| `git cherry-pick` (automatic, conflict-free commit) | `prepare-commit-msg` + `post-commit` | **no** |
+| `git cherry-pick` (automatic, conflict-free commit) | `prepare-commit-msg` + `post-commit` | **yes** (issue #404: wired `prepare-commit-msg`) |
 | `git cherry-pick --continue` after resolving conflicts | `post-index-change`; `pre-commit`, `prepare-commit-msg`, `commit-msg`, `post-commit` | yes |
-| `git rebase` replaying commits onto a new base | `pre-rebase` once, then `prepare-commit-msg` + `post-commit` per replayed commit, `post-rewrite` once at the end | **no** |
-| `git rebase --autostash` (dirty tracked worktree) | rebase hooks above; autostash creates ref-less stash commits with no hook | **no** |
-| `git rebase --update-refs` (other branches in the rebased range) | rebase hooks above; secondary branches move via `reference-transaction` only — no gate for their new tips | **no** * |
-| `git rebase --continue` after resolving a conflict | `post-index-change`, `prepare-commit-msg`, `post-commit`, `post-rewrite`; no `pre-commit` | **no** |
+| `git rebase` replaying commits onto a new base | `pre-rebase` once, then `prepare-commit-msg` + `post-commit` per replayed commit, `post-rewrite` once at the end | **yes** (issue #404: wired `prepare-commit-msg`, one full gate per replayed commit) |
+| `git rebase --autostash` (dirty tracked worktree) | rebase hooks above; autostash creates ref-less stash commits with no hook | **yes** for replayed commits; the autostash objects stay ungated |
+| `git rebase --update-refs` (other branches in the rebased range) | rebase hooks above; secondary branches move via `reference-transaction` only — no gate for their new tips | **yes** for replayed commits; secondary tips **no** * |
+| `git rebase --continue` after resolving a conflict | `post-index-change`, `prepare-commit-msg`, `post-commit`, `post-rewrite`; no `pre-commit` | **yes** (issue #404: wired `prepare-commit-msg`) |
 | `git am` applying a patch series | `applypatch-msg`, `pre-applypatch`, `post-applypatch` — none wired | **no** |
 | `git stash push` / `git stash` / `git stash save` (tracked changes) | `reference-transaction`; no commit-creation hooks | **no** * |
 | `git stash push -u` / `--all` | `reference-transaction`; no commit-creation hooks; additionally creates an ungated third "untracked files" parent commit | **no** * |
@@ -162,22 +197,22 @@ This repository wires exactly two: `.githooks/pre-commit` and
 | `git lfs migrate import` / `export` / `import --no-rewrite` (extension) | reviewer probe only (git-lfs 3.4.1): shared index/ref/checkout callbacks, no commit-creation hooks; not measured here (git-lfs absent) | **no** * |
 | `git subtree split --prefix=<dir> --branch <branch>` | `reference-transaction`; no commit-creation hooks | **no** * |
 | `git subtree split --prefix=<dir> [<commit>]` (no `--branch`) | none measured here; no ref updated | **no** ** |
-| `git subtree merge --prefix=<prefix> <commit>` (automatic non-fast-forward merge) | `post-index-change`; `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `post-merge`; shared `reference-transaction` | **no** |
+| `git subtree merge --prefix=<prefix> <commit>` (automatic non-fast-forward merge) | `post-index-change`; `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `post-merge`; shared `reference-transaction` | **yes** (issue #404: wired `pre-merge-commit`) |
 | `git subtree merge --prefix=<prefix> --squash <commit>` | `post-index-change`; `reference-transaction`; no commit-creation hooks; additionally creates a ref-less synthetic squash commit | **no** |
-| `git subtree pull --prefix=<prefix> <repository> <ref>` (automatic non-fast-forward merge) | `reference-transaction` on fetch; then the subtree merge hooks above | **no** |
+| `git subtree pull --prefix=<prefix> <repository> <ref>` (automatic non-fast-forward merge) | `reference-transaction` on fetch; then the subtree merge hooks above | **yes** (issue #404: wired `pre-merge-commit`) |
 | `git subtree pull --prefix=<prefix> <repository> <ref> --squash` | `reference-transaction` on fetch; then the subtree merge `--squash` hooks above | **no** |
-| `git subtree split --rejoin --prefix=<prefix>` | split commits have no commit hook; automatic rejoin merge fires `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `post-merge`; shared index/ref callbacks | **no** |
+| `git subtree split --rejoin --prefix=<prefix>` | split commits have no commit hook; automatic rejoin merge fires `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `post-merge`; shared index/ref callbacks | **yes** for the rejoin merge (issue #404: wired `pre-merge-commit`); split commits **no** |
 | `git subtree split --rejoin --squash --prefix=<prefix>` | `post-index-change`; `reference-transaction`; no commit-creation hooks; additionally creates a ref-less synthetic squash commit | **no** |
 | `git subtree push --prefix=<prefix> <repository> <refspec>` | `pre-push` receives split tip; `reference-transaction` may update `refs/remotes/origin/*` after the push; no commit-creation or checked-out-branch ref-update hook | **no** (for generated split commits) |
 | `git subtree push --prefix=<prefix> --branch <branch> <repository> <refspec>` | `reference-transaction` on the new local branch; then `pre-push` receives split tip | **no** (for generated split commits; branch creation is a #404 closure candidate) |
-| `git subtree push --rejoin --prefix=<prefix> <repository> <refspec>` (automatic conflict-free rejoin) | rejoin merge: `post-index-change`, `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `reference-transaction` on the checked-out branch, `post-merge`; then `pre-push` receives split tip | **no** (for rejoin merge and generated split commits) |
+| `git subtree push --rejoin --prefix=<prefix> <repository> <refspec>` (automatic conflict-free rejoin) | rejoin merge: `post-index-change`, `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `reference-transaction` on the checked-out branch, `post-merge`; then `pre-push` receives split tip | **yes** for the rejoin merge (issue #404: wired `pre-merge-commit`); generated split commits **no** |
 | `git subtree push --rejoin --squash --prefix=<prefix> <repository> <refspec>` | rejoin merge with `--squash` hooks; additionally creates a ref-less synthetic squash commit; then `pre-push` receives split tip | **no** (for rejoin merge, synthetic squash commit, and generated split commits) |
 | `git subtree add --prefix=<prefix> <commit>` | `post-index-change` on index writes; `reference-transaction`; no commit-creation hooks | **no** |
 | `git subtree add --prefix=<prefix> --squash <commit>` | `post-index-change` on index writes; `reference-transaction`; no commit-creation hooks; additionally creates a ref-less synthetic squash commit | **no** |
 | `git merge --squash` / `--no-commit` followed by `git commit` | `pre-commit`, … | yes |
-| `git commit --no-verify` (without `--amend`) | `post-index-change` on index writes; `prepare-commit-msg`, `post-commit` | **no** |
-| `git merge --no-verify` | `prepare-commit-msg`, `post-merge` | **no** |
-| `git commit --amend --no-verify` | `post-index-change` on index writes; `prepare-commit-msg`, `post-commit`, then `post-rewrite amend` unless `--no-post-rewrite` | **no** |
+| `git commit --no-verify` (without `--amend`) | `post-index-change` on index writes; `prepare-commit-msg`, `post-commit` | **yes** (issue #404: `--no-verify` skips `pre-commit` but not `prepare-commit-msg`) |
+| `git merge --no-verify` | `prepare-commit-msg`, `post-merge` | **yes** (issue #404: wired `prepare-commit-msg` still fires) |
+| `git commit --amend --no-verify` | `post-index-change` on index writes; `prepare-commit-msg`, `post-commit`, then `post-rewrite amend` unless `--no-post-rewrite` | **yes** (issue #404: wired `prepare-commit-msg` still fires) |
 
 \* These rows produce commits under refs that are **pushable by explicit
 refspec** — `git push <remote> refs/stash:refs/heads/…`, `refs/notes/*`,
@@ -600,7 +635,16 @@ index alone would therefore not close this boundary.
 So the accurate statement of the invariant is:
 
 > The gate always analyzes the **working tree**. It runs on `git commit` and
-> on `git push` of the checked-out branch, and the tree it passes is the tree
+> on `git push` of the checked-out branch, and — since the issue #404 wiring —
+> also on every commit-creating porcelain with a wireable pre-creation hook:
+> automatic conflict-free `git merge` and `git pull` (default merge mode)
+> through `pre-merge-commit`, automatic conflict-free `git revert` and
+> `git cherry-pick`, every replayed `git rebase` commit (including
+> conflict-resolved `git rebase --continue`), the automatic rejoin/merge
+> commits of `git subtree merge` / `pull` / `split --rejoin` /
+> `push --rejoin`, and commit-side `--no-verify` on `git commit` /
+> `git merge` (whose `prepare-commit-msg` still fires), all through
+> `prepare-commit-msg`. The tree it passes is the tree
 > actually recorded only when the analyzed contents match that tree: at
 > commit time, they must match the **actual tree selected for that invocation**,
 > after pathspecs and content-selection flags are applied. Matching the
@@ -612,16 +656,12 @@ So the accurate statement of the invariant is:
 > commit** — no tracked differences, including ones hidden by index flags,
 > and no additional untracked or ignored inputs the gate reads. A clean
 > `git status` does not prove that equality.
-> For automatic, conflict-free operations, it does **not** analyze the commits
-> produced by `git merge`, `git pull` (default merge mode), `git revert`, or
-> `git cherry-pick`; it also does not
-> analyze replayed `git rebase` commits (including conflict-resolved
-> `git rebase --continue`; and, with `--update-refs`, the replayed tips of
-> other local branches moved by `reference-transaction` alone), `git am`, `git stash` in any entry-creating form
+> For automatic, conflict-free operations, it does **not** analyze:
+> `git am`, `git stash` in any entry-creating form
 > (`push`, shorthand, `save`, `-u`/`--all`; entry commits under
 > `refs/stash`), `git stash create` (a ref-less stash commit object),
 > `--autostash` on `merge`/`pull`/`rebase` (ref-less temporary stash
-> commits),
+> commits; the merge/rebase commits they wrap are gated),
 > `git notes` mutations (commits under `refs/notes/*`),
 > `git commit-tree` (commit objects placed on history via `update-ref`),
 > `git hash-object -t commit -w` (commit objects written directly, then
@@ -634,25 +674,19 @@ So the accurate statement of the invariant is:
 > (rewritten history), `git lfs migrate` (extension history rewrite /
 > no-rewrite commit; reviewer probe, see note), `git subtree split --branch` (rewritten commits under
 > the requested branch), `git subtree split` without `--branch` (a ref-less
-> split commit publishable by direct-OID push), automatic conflict-free
-> `git subtree merge` / `pull`
-> (unchecked merge commits), `git subtree split --rejoin` (split commits plus
-> its automatic unchecked rejoin merge), `git subtree add` (an unchecked merge
-> commit), or
-> `git subtree push` / `git subtree push --rejoin` (generated split commits
-> pushed directly). For both push forms, `pre-push` runs but scans the
-> checked-out tree instead of the generated split tip; `--rejoin` additionally
-> creates an unchecked automatic merge on the checked-out branch. The
+> split commit publishable by direct-OID push), the generated
+> split commits of `subtree split --rejoin` / `push` / `push --rejoin` and
+> the `git subtree add` merge commit, or the `--squash` variants' synthetic
+> commits. For both `subtree push` forms, `pre-push` runs but scans the
+> checked-out tree instead of the generated split tip. The
 > `--squash` variants of `subtree add`, `merge`, `pull`, `split --rejoin`,
 > and `push --rejoin` additionally create a ref-less synthetic squash commit
-> that no local hook can gate. Conflict-resolved
-> `git merge --continue`, `git revert --continue`, and
-> `git cherry-pick --continue` do run `pre-commit`; conflict-resolved
-> `git rebase --continue` does not. The gate can also be skipped
-> outright with
-> `--no-verify` on
-> `git commit`, `git merge`, and `git push` (which bypasses `pre-push`;
-> `git push -h` documents it as "bypass pre-push hook").
+> that no local hook can gate. With `rebase --update-refs`, the replayed
+> tips of other local branches move by `reference-transaction` alone and are
+> not gated. `git push --no-verify` still bypasses the push-time
+> `pre-push` rerun entirely (`git push -h` documents it as "bypass pre-push
+> hook"); commit-side `--no-verify` no longer bypasses the local gate since
+> issue #404.
 
 An earlier revision of this file claimed that no commit is ever created without
 the full gate having run, and that the only shared hook for `revert` and
@@ -664,34 +698,46 @@ would not have closed the gap at all — see below.
 Automatic conflict-free `revert` and `cherry-pick` commits have no
 pre-commit-equivalent hook, and no `commit-msg` either. `prepare-commit-msg` is
 their pre-creation message hook; the shared index-write callback above cannot
-block the operation. The message hook receives the commit message at that
-point, which is why this record does not select it as a gate; their
-`post-commit` hook runs only after the commit exists and cannot block it, as
-recorded above. Conflict-resolved `--continue` variants do run the regular
-`pre-commit` gate, as measured above. Closing the remaining automatic-commit
-gaps is a hook-design decision rather than a one-line addition, and no remedy
-is proposed here. It is recorded as a finding below and is deliberately **not**
-fixed here: doing so would change gate behavior, which this decision explicitly
-does not do.
+block the operation. The issue #404 wiring nevertheless selects
+`prepare-commit-msg` as the gate point for exactly these paths: a measured
+probe (git 2.48.1) confirmed its non-zero exit aborts `git revert` and
+`git cherry-pick` before the commit exists, and the automated probe in
+`scripts/gate-tree-marker.test.ts` pins that behavior. Because
+`prepare-commit-msg` also fires for ordinary `git commit` and merge commits —
+where `pre-commit` / `pre-merge-commit` have already gated the same index tree
+— the tree marker (`scripts/gate-tree-marker.sh`) deduplicates: an ordinary
+commit or merge still pays exactly one complete gate run, while
+revert / cherry-pick / rebase replays (and `--no-verify` commits) find no
+fresh matching marker and run the complete gate. The earlier record declined
+to propose this remedy because closing the gaps "would change gate behavior",
+which the #356 decision explicitly did not do; issue #404 is precisely the
+follow-up decision that authorizes the behavior change, and this section now
+records its outcome.
 
 ## Known Finding: Uncovered Commit-Creation Paths
 
+**Update 2026-09-28 (issue #404 wiring)**: conflict-free `git merge`,
+`git pull` (default merge mode), `git revert`, `git cherry-pick`, replayed
+`git rebase` commits (including conflict-resolved `--continue`), the
+automatic subtree merge/rejoin commits, and commit-side `--no-verify` are
+**no longer uncovered** — they are gated through the wired
+`pre-merge-commit` / `prepare-commit-msg` hooks with tree-marker dedup (see
+[What The Gate Actually Enforces](#what-the-gate-actually-enforces)). The
+original finding text below is retained for the paths that remain uncovered.
+
 The uncovered automatic commit-producing paths and replacement-object paths —
-conflict-free `git merge`, `git pull` (default merge mode), `git revert`, and
-`git cherry-pick`, replayed
-`git rebase` commits (including conflict-resolved `--continue`, and with
-`--update-refs` the replayed tips of other local branches), `git am`,
+`git am`,
 `git commit-tree` plus `git update-ref`, `git hash-object -t commit -w`
 plus `git update-ref` or direct-OID push, `git fast-import`,
 `git quiltimport`, `git filter-branch`, `git lfs migrate` (extension;
 reviewer probe, not measured here),
 `git subtree split --branch`, `git subtree split` without `--branch` (a
-ref-less split commit publishable by direct-OID push), automatic
-conflict-free `git subtree merge` and
-`git subtree pull` commits, split commits and the automatic rejoin from
-`git subtree split --rejoin`, `git subtree push` (with or without `--rejoin`),
-`git subtree add`,
-`git stash create`, `--autostash` on `merge`/`pull`/`rebase`, and
+ref-less split commit publishable by direct-OID push), the generated
+split commits of `git subtree split --rejoin` and `git subtree push`
+(with or without `--rejoin`), `git subtree add`,
+`git stash create`, `--autostash` on `merge`/`pull`/`rebase` (the wrapped
+merge/rebase commits are gated; the temporary stash objects are not), with
+`rebase --update-refs` the replayed tips of other local branches, and
 `git replace` in any form (ordinary, `--graft`, `--edit`,
 `--convert-graft-file`) — can produce or replace commits without the gate
 analyzing the resulting commit (评审
@@ -700,27 +746,30 @@ analyzing the resulting commit (评审
 4117872584, 4117983619). The `--squash` variants of `subtree add`, `merge`, `pull`,
 `split --rejoin`, and `push --rejoin` additionally create a ref-less
 synthetic squash commit that no local hook can gate (评审 4117804224,
-4117843430, 4117872586). The conflict-resolved
-`merge --continue`, `revert --continue`, and `cherry-pick --continue` paths
-are covered by `pre-commit`; the tested `rebase --continue` path is not.
+4117843430, 4117872586).
 `git subtree push` does run `pre-push`, but that hook
 scans the checked-out tree rather than its generated split tip. With
 `--rejoin`, the generated split is also merged into the checked-out branch;
-that merge fires `pre-merge-commit` and updates the branch through
-`reference-transaction`, making both #404 hook options relevant to the merge
-while leaving the #405 pushed-tip mismatch intact. `git subtree add` is a
+that merge is now gated by the wired `pre-merge-commit` (issue #404), while
+the #405 pushed-tip mismatch stays intact. `git subtree add` is a
 separate unchecked merge path with a `reference-transaction` callback, as
-measured above (评审 4115748226). `subtree merge` and `pull` likewise create
-unchecked merge commits with a `reference-transaction` callback. For
+measured above (评审 4115748226). For
 `split --rejoin`, only the rejoin merge updates the checked-out branch; in the
 automatic conflict-free path, split commits are generated without commit
-hooks and the rejoin does not invoke the wired `pre-commit` hook. If the
+hooks while the rejoin is now gated. If the
 rejoin conflicts and is continued through `git merge --continue`, `pre-commit`
 runs for that merge while split generation remains ungated (评审 4115865920).
 `git stash push` is not counted here because its commits stay under
 `refs/stash`; `git stash create` is included because it produces a ref-less
-object. The `reference-transaction` options for stash push and notes are #404
-hook-design questions, not branch-history gaps (see the table). Separately, `git push --no-verify`
+object. The `reference-transaction` options for stash push and notes are
+deliberately **not wired** by the issue #404 fix: that hook fires on every
+ref update — including fetch, push remote-tracking updates, branch
+create/delete, reset, and tag — so gating it with the complete gate would
+tax routine non-committing ref operations, and aborting `prepared` states
+can break ordinary workflows; the remote-facing exposure of stash/notes
+objects is the [#405](https://github.com/hailingu/PlotWeave/issues/405)
+push-side gap (push scans the checked-out tree). Revisit as an owner
+decision if those paths see real use. Separately, `git push --no-verify`
 bypasses the push-time `pre-push` rerun entirely (评审 4115110181,
 4115477925). It does not undo an earlier `pre-commit` gate run: if the
 commit was created through ordinary `git commit`, that gate already ran,
@@ -740,9 +789,12 @@ inputs the gate reads; clean status alone is insufficient (评审 4115241706,
 is not established — see
 [Known Finding: Push Scans The Checked-Out Tree, Not The Pushed
 Ref](#known-finding-push-scans-the-checked-out-tree-not-the-pushed-ref).
-Whether to wire `pre-merge-commit` is a governance decision with a real cost
-attached (every merge would become a gate run), and it is out of scope for
-#356. Tracked as [#404](https://github.com/hailingu/PlotWeave/issues/404).
+Whether to wire `pre-merge-commit` was a governance decision with a real cost
+attached (every merge became a gate run); it was out of scope for #356 and
+has since been decided and implemented by
+[#404](https://github.com/hailingu/PlotWeave/issues/404) (2026-09-28), which
+wired `pre-merge-commit` and `prepare-commit-msg` with tree-marker dedup so
+each commit-creating operation pays exactly one complete gate run.
 
 ## Known Finding: Push Scans The Checked-Out Tree, Not The Pushed Ref
 
@@ -952,14 +1004,15 @@ these becomes true:
 - Any option A or B proposal appears: it must come with a fresh baseline and an
   explicit statement of its effect on gate strength, and must preserve every
   invariant in the section above.
-- The uncovered commit-creation paths are closed, or a `merge`, `revert`,
-  `cherry-pick`, `rebase`, `am`, `stash` (all forms: `push`, shorthand,
-  `save`, `-u`/`--all`, `create`), `notes`, `commit-tree`,
-  `replace`, `fast-import`, `quiltimport`, `filter-branch`, `lfs migrate`
-  (and other history-rewriting extensions such as `filter-repo` /
-  `git-annex`), or `subtree add/merge/pull/split/push`
-  workflow (including `split --rejoin` and `push --rejoin`) changes to route
-  through `git commit`. Either way,
+- The uncovered commit-creation paths are closed, or an `am`, `stash` (all
+  forms: `push`, shorthand, `save`, `-u`/`--all`, `create`), `notes`,
+  `commit-tree`, `replace`, `fast-import`, `quiltimport`, `filter-branch`,
+  `lfs migrate` (and other history-rewriting extensions such as
+  `filter-repo` / `git-annex`), or `subtree add/split/push`
+  workflow (including `split --rejoin` and `push --rejoin`) path changes to
+  route through `git commit` or gains a wired hook. (`merge`, `revert`,
+  `cherry-pick`, `rebase` replays, and the subtree merge/rejoin commits were
+  closed by the issue #404 wiring on 2026-09-28.) Either way,
   update
   [What The Gate Actually Enforces](#what-the-gate-actually-enforces) in the same
   change — that table is a measurement, and a stale one is worse than none.

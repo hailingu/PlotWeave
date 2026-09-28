@@ -1,0 +1,39 @@
+#!/bin/sh
+# 门禁树标记（issue #404）：记录「最近一次通过完整门禁的索引树」。
+# pre-commit / pre-merge-commit 在门禁通过后 write；prepare-commit-msg
+# 先 check——同一提交操作内刚过检的树跳过重复门禁（普通 git commit 由
+# pre-commit 保证、合并由 pre-merge-commit 保证，仍各恰一次），revert /
+# cherry-pick / rebase 重放等没有 pre-commit 等价钩子的路径由此触发完整
+# 门禁。标记仅是去重提示而非信任边界：任何错配的最坏情形是对与近期刚
+# 过检完全相同的树少跑一次门禁，所有不确定情形（缺失/过期/损坏/索引
+# 不可写树）一律判定为需要执行门禁。
+set -eu
+
+marker_path=${PLOTWEAVE_GATE_MARKER_PATH:-$(git rev-parse --git-path plotweave-gate-tree.marker)}
+ttl_seconds=${PLOTWEAVE_GATE_MARKER_TTL:-600}
+
+# 索引树是标记的键：钩子触发时索引即本次将提交的树（含 revert /
+# cherry-pick / merge 已应用的结果）。
+current_tree=$(git write-tree 2>/dev/null) || current_tree=
+
+case ${1:-} in
+  write)
+    # 标记是提示：写入失败不得阻塞门禁已通过的操作（下次照常执行门禁）
+    if [ -n "$current_tree" ]; then
+      printf '%s\n%s\n' "$current_tree" "$(date +%s)" > "$marker_path"
+    fi
+    ;;
+  check)
+    [ -n "$current_tree" ] || exit 1
+    [ -f "$marker_path" ] || exit 1
+    marked_tree=$(sed -n 1p "$marker_path" 2>/dev/null || true)
+    marked_at=$(sed -n 2p "$marker_path" 2>/dev/null || true)
+    [ "$marked_tree" = "$current_tree" ] || exit 1
+    case "$marked_at" in '' | *[!0-9]*) exit 1 ;; esac
+    [ "$(($(date +%s) - marked_at))" -le "$ttl_seconds" ] || exit 1
+    ;;
+  *)
+    printf '用法：gate-tree-marker.sh write|check\n' >&2
+    exit 2
+    ;;
+esac
