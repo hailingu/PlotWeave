@@ -152,6 +152,7 @@ This repository wires exactly two: `.githooks/pre-commit` and
 | `git fast-import` (`commit <ref>` stream) | `reference-transaction`; no commit-creation hooks | **no** * |
 | `git filter-branch` (history rewrite) | none measured here (see note) | **no** * |
 | `git subtree split --prefix=<dir> --branch <branch>` | `reference-transaction`; no commit-creation hooks | **no** * |
+| `git subtree split --prefix=<dir> [<commit>]` (no `--branch`) | none measured here; no ref updated | **no** * |
 | `git subtree merge --prefix=<prefix> <commit>` (automatic non-fast-forward merge) | `post-index-change`; `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `post-merge`; shared `reference-transaction` | **no** |
 | `git subtree pull --prefix=<prefix> <repository> <ref>` (automatic non-fast-forward merge) | `reference-transaction` on fetch; then the subtree merge hooks above | **no** |
 | `git subtree split --rejoin --prefix=<prefix>` | split commits have no commit hook; automatic rejoin merge fires `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `post-merge`; shared index/ref callbacks | **no** |
@@ -342,6 +343,16 @@ two commits and fired only `reference-transaction` (`prepared` and
 branch to a local bare remote succeeded. The local ref-update closure is a
 #404 `reference-transaction` design question, and pushing that branch while
 the hook scans the checked-out tree is the #405 push-side gap.
+
+`git subtree split --prefix=<dir> [<commit>]` without `--branch` is the
+ref-less variant: it creates the same rewritten commit chain but prints only
+its tip OID without updating any ref, and fires no hook at all (评审
+4115953696). Measured on git 2.48.1, an isolated probe returned a new OID
+with an empty hook log and `for-each-ref` unchanged. That OID is then
+publishable by direct-OID push (`git push <remote> <oid>:refs/heads/…`),
+which likewise runs no local hook against the pushed content; the push-side
+gap is the same #405 remedy, and no local `reference-transaction` can
+intercept the creation before that push.
 
 `git subtree merge --prefix=<prefix> <commit>` and
 `git subtree pull --prefix=<prefix> <repository> <ref>` both create a merge
