@@ -8,8 +8,8 @@
 # 门禁。标记是单次消费的：check 命中即删除，只服务产生它的那次操作，
 # 后续操作（含同树 --no-verify 提交）不得复用（评审 4120128545）。标记
 # 仅是去重提示而非信任边界：任何错配的最坏情形是对与近期刚过检完全
-# 相同的树少跑一次门禁，所有不确定情形（缺失/过期/损坏/索引不可写树）
-# 一律判定为需要执行门禁。
+# 相同的树少跑一次门禁，所有不确定情形（缺失/过期/未来时间戳/损坏/
+# 索引不可写树）一律判定为需要执行门禁。
 set -eu
 
 marker_path=${PLOTWEAVE_GATE_MARKER_PATH:-$(git rev-parse --git-path plotweave-gate-tree.marker)}
@@ -35,7 +35,12 @@ case ${1:-} in
     marked_at=$(sed -n 2p "$marker_path" 2>/dev/null || true)
     [ "$marked_tree" = "$current_tree" ] || exit 1
     case "$marked_at" in '' | *[!0-9]*) exit 1 ;; esac
-    [ "$(($(date +%s) - marked_at))" -le "$ttl_seconds" ] || exit 1
+    # 年龄双侧界定：负年龄（时钟回拨后遗留的未来时间戳）与超时同样判
+    # 为需门禁——任何负值都 ≤ TTL，不拒绝会让标记在整个回拨区间内保持
+    # 「新鲜」（评审 4120428509）
+    marker_age=$(($(date +%s) - marked_at))
+    [ "$marker_age" -ge 0 ] || exit 1
+    [ "$marker_age" -le "$ttl_seconds" ] || exit 1
     # 单次消费：命中即删除，防止后续操作复用（rm 失败不阻塞——标记
     # 残留只影响下次多跑一次门禁）
     rm -f "$marker_path" 2>/dev/null || true

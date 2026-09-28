@@ -281,6 +281,12 @@ describe(
       writeFileSync(markerPath, `${tree}\n1\n`)
       expect(run('check').status).toBe(1)
 
+      // 未来时间戳（时钟回拨后遗留）是异常态：负年龄不得判为新鲜
+      // （评审 4120428509），否则整个回拨区间内标记都可被消费
+      const future = String(Math.floor(Date.now() / 1000) + 3600)
+      writeFileSync(markerPath, `${tree}\n${future}\n`)
+      expect(run('check').status).toBe(1)
+
       writeFileSync(markerPath, 'not-a-tree\nnot-a-number\n')
       expect(run('check').status).toBe(1)
     })
