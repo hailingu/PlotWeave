@@ -136,6 +136,7 @@ This repository wires exactly two: `.githooks/pre-commit` and
 | `git commit` (without `--amend`) | `post-index-change` on index writes; `pre-commit`, `prepare-commit-msg`, `commit-msg`, `post-commit` | yes |
 | `git commit --amend` | `post-index-change` on index writes; `pre-commit`, `prepare-commit-msg`, `commit-msg`, `post-commit`, then `post-rewrite amend` unless `--no-post-rewrite` | yes |
 | `git merge` (automatic, conflict-free non-fast-forward merge commit) | `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `post-merge` | **no** |
+| `git pull` (default merge mode, diverged upstream) | `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `post-merge`; `reference-transaction` on fetch | **no** |
 | `git merge --continue` after resolving conflicts | `post-index-change`; `pre-commit`, `prepare-commit-msg`, `commit-msg`, `post-commit` | yes |
 | `git revert` (automatic, conflict-free commit) | `prepare-commit-msg` + `post-commit` | **no** |
 | `git revert --continue` after resolving conflicts | `post-index-change`; `pre-commit`, `prepare-commit-msg`, `commit-msg`, `post-commit` | yes |
@@ -155,11 +156,14 @@ This repository wires exactly two: `.githooks/pre-commit` and
 | `git subtree split --prefix=<dir> --branch <branch>` | `reference-transaction`; no commit-creation hooks | **no** * |
 | `git subtree split --prefix=<dir> [<commit>]` (no `--branch`) | none measured here; no ref updated | **no** * |
 | `git subtree merge --prefix=<prefix> <commit>` (automatic non-fast-forward merge) | `post-index-change`; `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `post-merge`; shared `reference-transaction` | **no** |
+| `git subtree merge --prefix=<prefix> --squash <commit>` | `post-index-change`; `reference-transaction`; no commit-creation hooks; additionally creates a ref-less synthetic squash commit | **no** |
 | `git subtree pull --prefix=<prefix> <repository> <ref>` (automatic non-fast-forward merge) | `reference-transaction` on fetch; then the subtree merge hooks above | **no** |
+| `git subtree pull --prefix=<prefix> <repository> <ref> --squash` | `reference-transaction` on fetch; then the subtree merge `--squash` hooks above | **no** |
 | `git subtree split --rejoin --prefix=<prefix>` | split commits have no commit hook; automatic rejoin merge fires `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `post-merge`; shared index/ref callbacks | **no** |
 | `git subtree split --rejoin --squash --prefix=<prefix>` | `post-index-change`; `reference-transaction`; no commit-creation hooks; additionally creates a ref-less synthetic squash commit | **no** |
 | `git subtree push --prefix=<prefix> <repository> <refspec>` | `pre-push` receives split tip; `reference-transaction` may update `refs/remotes/origin/*` after the push; no commit-creation or checked-out-branch ref-update hook | **no** (for generated split commits) |
 | `git subtree push --rejoin --prefix=<prefix> <repository> <refspec>` (automatic conflict-free rejoin) | rejoin merge: `post-index-change`, `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `reference-transaction` on the checked-out branch, `post-merge`; then `pre-push` receives split tip | **no** (for rejoin merge and generated split commits) |
+| `git subtree push --rejoin --squash --prefix=<prefix> <repository> <refspec>` | rejoin merge with `--squash` hooks; additionally creates a ref-less synthetic squash commit; then `pre-push` receives split tip | **no** (for rejoin merge, synthetic squash commit, and generated split commits) |
 | `git subtree add --prefix=<prefix> <commit>` | `post-index-change` on index writes; `reference-transaction`; no commit-creation hooks | **no** |
 | `git subtree add --prefix=<prefix> --squash <commit>` | `post-index-change` on index writes; `reference-transaction`; no commit-creation hooks; additionally creates a ref-less synthetic squash commit | **no** |
 | `git merge --squash` / `--no-commit` followed by `git commit` | `pre-commit`, … | yes |
@@ -228,6 +232,14 @@ commits run `prepare-commit-msg` and `post-commit` — **not** `commit-msg`, whi
 exists and git ignores its exit status, so it cannot implement a blocking gate
 either. `post-merge` on the merge rows is likewise after the fact: it fires
 after the merge has completed and cannot block it.
+
+`git pull` in its default merge mode is the same unchecked merge commit as
+`git merge` plus a fetch: measured on git 2.48.1 with a diverged upstream, it
+fired `reference-transaction` on the fetch, then `pre-merge-commit`,
+`prepare-commit-msg`, `commit-msg`, and `post-merge` — no `pre-commit`
+(评审 4117872584). Its `--rebase` modes enter the already-documented rebase
+path. `git pull` is the commonest entry point for the merge gap, so it is
+listed separately rather than folded into the `git merge` row.
 
 The conflict path is different for merge, revert, and cherry-pick. In Git
 2.48.1 fixtures, each automatic command stopped on a content conflict; after
@@ -376,7 +388,12 @@ index callbacks, and `reference-transaction`, but neither fired `pre-commit`.
 `pre-merge-commit` and the branch ref transaction are #404 closure candidates;
 these commands do not themselves push a ref. If a conflicting merge is
 continued with `git merge --continue`, that continuation follows the
-`pre-commit` path documented above.
+`pre-commit` path documented above. With `--squash`, both commands
+additionally create a ref-less synthetic squash commit before the merge
+(评审 4117872586): `git subtree -h` documents `--squash` for `merge` and
+`pull` as well, and the synthetic commit already exists before the branch
+transaction, so `reference-transaction` cannot close its creation; its
+push-side exposure is the same #405 remedy.
 
 `git subtree split --rejoin --prefix=<prefix>` combines a ref-less split with
 a merge back into the current branch. In the automatic, conflict-free path of
@@ -424,7 +441,11 @@ same key hooks. This makes the rejoin branch update a #404 hook-design
 candidate (`reference-transaction` can reject the branch update, and a wired
 `pre-merge-commit` could gate the merge). The split commit itself is still not
 analyzed by the current gate, and `pre-push` still scans the rejoin working
-tree rather than the pushed split tip, so #405 remains.
+tree rather than the pushed split tip, so #405 remains. With `--squash`, the
+rejoin additionally creates a ref-less synthetic squash commit before the
+merge (评审 4117872586): the synthetic commit already exists before the
+branch transaction, so `reference-transaction` cannot close its creation;
+its push-side exposure is the same #405 remedy.
 
 `git subtree add --prefix=<prefix> <commit>` is another distinct operation:
 it installs a merge commit on the checked-out branch. In a Git 2.48.1 fixture
@@ -514,7 +535,8 @@ So the accurate statement of the invariant is:
 > and no additional untracked or ignored inputs the gate reads. A clean
 > `git status` does not prove that equality.
 > For automatic, conflict-free operations, it does **not** analyze the commits
-> produced by `git merge`, `git revert`, or `git cherry-pick`; it also does not
+> produced by `git merge`, `git pull` (default merge mode), `git revert`, or
+> `git cherry-pick`; it also does not
 > analyze replayed `git rebase` commits (including conflict-resolved
 > `git rebase --continue`), `git am`, `git stash push` (entry commits under
 > `refs/stash`), `git stash create` (a ref-less stash commit object),
@@ -528,11 +550,15 @@ So the accurate statement of the invariant is:
 > (rewritten history), `git subtree split --branch` (rewritten commits under
 > the requested branch), automatic conflict-free `git subtree merge` / `pull`
 > (unchecked merge commits), `git subtree split --rejoin` (split commits plus
-> its automatic unchecked rejoin merge), `git subtree add` (an unchecked merge commit), or
+> its automatic unchecked rejoin merge), `git subtree add` (an unchecked merge
+> commit), or
 > `git subtree push` / `git subtree push --rejoin` (generated split commits
 > pushed directly). For both push forms, `pre-push` runs but scans the
 > checked-out tree instead of the generated split tip; `--rejoin` additionally
-> creates an unchecked automatic merge on the checked-out branch. Conflict-resolved
+> creates an unchecked automatic merge on the checked-out branch. The
+> `--squash` variants of `subtree add`, `merge`, `pull`, `split --rejoin`,
+> and `push --rejoin` additionally create a ref-less synthetic squash commit
+> that no local hook can gate. Conflict-resolved
 > `git merge --continue`, `git revert --continue`, and
 > `git cherry-pick --continue` do run `pre-commit`; conflict-resolved
 > `git rebase --continue` does not. The gate can also be skipped
@@ -564,7 +590,8 @@ does not do.
 ## Known Finding: Uncovered Commit-Creation Paths
 
 The uncovered automatic commit-producing paths and replacement-object paths —
-conflict-free `git merge`, `git revert`, and `git cherry-pick`, replayed
+conflict-free `git merge`, `git pull` (default merge mode), `git revert`, and
+`git cherry-pick`, replayed
 `git rebase` commits (including conflict-resolved `--continue`), `git am`,
 `git commit-tree` plus `git update-ref`, `git hash-object -t commit -w`
 plus `git update-ref` or direct-OID push, `git fast-import`,
@@ -577,7 +604,11 @@ plus `git update-ref` or direct-OID push, `git fast-import`,
 `--convert-graft-file` — can produce or replace commits without the gate
 analyzing the resulting commit (评审
 4115477920, 4115606416, 4115639629, 4115682292, 4115710587, 4115748220,
-4115748226, 4115812068, 4115865920, 4115865924, 4117675224, 4117675234). The conflict-resolved
+4115748226, 4115812068, 4115865920, 4115865924, 4117675224, 4117675234,
+4117872584). The `--squash` variants of `subtree add`, `merge`, `pull`,
+`split --rejoin`, and `push --rejoin` additionally create a ref-less
+synthetic squash commit that no local hook can gate (评审 4117804224,
+4117843430, 4117872586). The conflict-resolved
 `merge --continue`, `revert --continue`, and `cherry-pick --continue` paths
 are covered by `pre-commit`; the tested `rebase --continue` path is not.
 `git subtree push` does run `pre-push`, but that hook
