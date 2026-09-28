@@ -571,7 +571,9 @@ So the accurate statement of the invariant is:
 > commits under `refs/replace/*`),
 > `git fast-import` (`commit <ref>` stream commands), `git filter-branch`
 > (rewritten history), `git subtree split --branch` (rewritten commits under
-> the requested branch), automatic conflict-free `git subtree merge` / `pull`
+> the requested branch), `git subtree split` without `--branch` (a ref-less
+> split commit publishable by direct-OID push), automatic conflict-free
+> `git subtree merge` / `pull`
 > (unchecked merge commits), `git subtree split --rejoin` (split commits plus
 > its automatic unchecked rejoin merge), `git subtree add` (an unchecked merge
 > commit), or
@@ -619,7 +621,9 @@ conflict-free `git merge`, `git pull` (default merge mode), `git revert`, and
 `git commit-tree` plus `git update-ref`, `git hash-object -t commit -w`
 plus `git update-ref` or direct-OID push, `git fast-import`,
 `git filter-branch`,
-`git subtree split --branch`, automatic conflict-free `git subtree merge` and
+`git subtree split --branch`, `git subtree split` without `--branch` (a
+ref-less split commit publishable by direct-OID push), automatic
+conflict-free `git subtree merge` and
 `git subtree pull` commits, split commits and the automatic rejoin from
 `git subtree split --rejoin`, `git subtree push` (with or without `--rejoin`),
 `git subtree add`,
