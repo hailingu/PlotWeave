@@ -157,6 +157,7 @@ This repository wires exactly two: `.githooks/pre-commit` and
 | `git subtree merge --prefix=<prefix> <commit>` (automatic non-fast-forward merge) | `post-index-change`; `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `post-merge`; shared `reference-transaction` | **no** |
 | `git subtree pull --prefix=<prefix> <repository> <ref>` (automatic non-fast-forward merge) | `reference-transaction` on fetch; then the subtree merge hooks above | **no** |
 | `git subtree split --rejoin --prefix=<prefix>` | split commits have no commit hook; automatic rejoin merge fires `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `post-merge`; shared index/ref callbacks | **no** |
+| `git subtree split --rejoin --squash --prefix=<prefix>` | `post-index-change`; `reference-transaction`; no commit-creation hooks; additionally creates a ref-less synthetic squash commit | **no** |
 | `git subtree push --prefix=<prefix> <repository> <refspec>` | `pre-push` receives split tip; `reference-transaction` may update `refs/remotes/origin/*` after the push; no commit-creation or checked-out-branch ref-update hook | **no** (for generated split commits) |
 | `git subtree push --rejoin --prefix=<prefix> <repository> <refspec>` (automatic conflict-free rejoin) | rejoin merge: `post-index-change`, `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `reference-transaction` on the checked-out branch, `post-merge`; then `pre-push` receives split tip | **no** (for rejoin merge and generated split commits) |
 | `git subtree add --prefix=<prefix> <commit>` | `post-index-change` on index writes; `reference-transaction`; no commit-creation hooks | **no** |
@@ -387,7 +388,16 @@ but not `pre-commit`. The branch
 transaction is a #404 candidate for preventing the rejoin from entering local
 history, while `pre-merge-commit` could gate the merge if wired. It does not
 make the generated split tree the gate's input; if the split tip is pushed
-directly, the #405 pushed-ref mismatch applies.
+directly, the #405 pushed-ref mismatch applies. With `--squash`, the command
+additionally creates a ref-less synthetic squash commit before the rejoin
+(评审 4117843430): measured on git 2.48.1, `git subtree split --rejoin
+--squash --prefix=<prefix>` produced both a `Squashed '<prefix>/' content`
+commit and the rejoin commit, with only `post-index-change` and
+`reference-transaction` firing — the `pre-merge-commit` sequence recorded
+for the non-squash rejoin did not run. The synthetic commit already exists
+before the branch transaction and can be pushed directly by OID, so
+`reference-transaction` cannot close its creation; its push-side exposure is
+the same #405 remedy.
 
 `git subtree push --prefix=<prefix> <repository> <refspec>` also creates a
 rewritten split chain, but pushes its tip directly without leaving a local
