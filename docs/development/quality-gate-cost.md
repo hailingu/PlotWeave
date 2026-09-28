@@ -157,6 +157,7 @@ This repository wires exactly two: `.githooks/pre-commit` and
 | `git fast-import` (`commit <ref>` stream) | `reference-transaction`; no commit-creation hooks | **no** * |
 | `git quiltimport` (applies a quilt patchset to the current branch) | `post-index-change`; `reference-transaction`; no commit-creation hooks | **no** |
 | `git filter-branch` (history rewrite) | none measured here (see note) | **no** * |
+| `git lfs migrate import` / `export` / `import --no-rewrite` (extension) | reviewer probe only (git-lfs 3.4.1): shared index/ref/checkout callbacks, no commit-creation hooks; not measured here (git-lfs absent) | **no** |
 | `git subtree split --prefix=<dir> --branch <branch>` | `reference-transaction`; no commit-creation hooks | **no** * |
 | `git subtree split --prefix=<dir> [<commit>]` (no `--branch`) | none measured here; no ref updated | **no** ** |
 | `git subtree merge --prefix=<prefix> <commit>` (automatic non-fast-forward merge) | `post-index-change`; `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `post-merge`; shared `reference-transaction` | **no** |
@@ -397,6 +398,20 @@ repository does not wire `reference-transaction` regardless, so the gate
 does not run for filter-branch; whether the hook is available as a closure
 is a #404 question the two measurements leave open.
 
+`git lfs migrate` is the first **extension** path in this inventory rather
+than a git built-in. Reviewer probes on Git 2.43 with git-lfs 3.4.1 report
+that `import` / `export` (which "rewrite your Git history" per
+`git lfs migrate --help`) and `import --no-rewrite` (which creates a new
+commit) all changed `HEAD` while firing only shared
+index/ref/checkout callbacks — never `pre-commit` (评审 4118866986).
+git-lfs is not installed in this measurement environment, so the row
+records the reviewer's probe rather than a local measurement. The same
+class boundary extends to other third-party history rewriters —
+`git filter-repo`, `git-annex` — which operate below the porcelain commit
+path like the built-in rewriters above; they have not been probed here
+either, so verify a given tool's hook behavior before relying on this
+class statement.
+
 `git subtree split --prefix=<dir> --branch <branch>` creates a rewritten
 commit chain for the selected subtree and places its tip on the requested
 branch. Measured on git 2.48.1 with a two-commit fixture, the split produced
@@ -599,7 +614,8 @@ So the accurate statement of the invariant is:
 > commits under `refs/replace/*`),
 > `git fast-import` (`commit <ref>` stream commands), `git quiltimport`
 > (quilt patchset commits), `git filter-branch`
-> (rewritten history), `git subtree split --branch` (rewritten commits under
+> (rewritten history), `git lfs migrate` (extension history rewrite /
+> no-rewrite commit; reviewer probe, see note), `git subtree split --branch` (rewritten commits under
 > the requested branch), `git subtree split` without `--branch` (a ref-less
 > split commit publishable by direct-OID push), automatic conflict-free
 > `git subtree merge` / `pull`
@@ -649,7 +665,8 @@ conflict-free `git merge`, `git pull` (default merge mode), `git revert`, and
 `git rebase` commits (including conflict-resolved `--continue`), `git am`,
 `git commit-tree` plus `git update-ref`, `git hash-object -t commit -w`
 plus `git update-ref` or direct-OID push, `git fast-import`,
-`git quiltimport`, `git filter-branch`,
+`git quiltimport`, `git filter-branch`, `git lfs migrate` (extension;
+reviewer probe, not measured here),
 `git subtree split --branch`, `git subtree split` without `--branch` (a
 ref-less split commit publishable by direct-OID push), automatic
 conflict-free `git subtree merge` and
@@ -920,7 +937,9 @@ these becomes true:
 - The uncovered commit-creation paths are closed, or a `merge`, `revert`,
   `cherry-pick`, `rebase`, `am`, `stash` (all forms: `push`, shorthand,
   `save`, `-u`/`--all`, `create`), `notes`, `commit-tree`,
-  `replace`, `fast-import`, `quiltimport`, `filter-branch`, or `subtree add/merge/pull/split/push`
+  `replace`, `fast-import`, `quiltimport`, `filter-branch`, `lfs migrate`
+  (and other history-rewriting extensions such as `filter-repo` /
+  `git-annex`), or `subtree add/merge/pull/split/push`
   workflow (including `split --rejoin` and `push --rejoin`) changes to route
   through `git commit`. Either way,
   update
