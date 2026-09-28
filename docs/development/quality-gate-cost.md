@@ -162,6 +162,7 @@ This repository wires exactly two: `.githooks/pre-commit` and
 | `git subtree split --rejoin --prefix=<prefix>` | split commits have no commit hook; automatic rejoin merge fires `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `post-merge`; shared index/ref callbacks | **no** |
 | `git subtree split --rejoin --squash --prefix=<prefix>` | `post-index-change`; `reference-transaction`; no commit-creation hooks; additionally creates a ref-less synthetic squash commit | **no** |
 | `git subtree push --prefix=<prefix> <repository> <refspec>` | `pre-push` receives split tip; `reference-transaction` may update `refs/remotes/origin/*` after the push; no commit-creation or checked-out-branch ref-update hook | **no** (for generated split commits) |
+| `git subtree push --prefix=<prefix> --branch <branch> <repository> <refspec>` | `reference-transaction` on the new local branch; then `pre-push` receives split tip | **no** (for generated split commits; branch creation is a #404 closure candidate) |
 | `git subtree push --rejoin --prefix=<prefix> <repository> <refspec>` (automatic conflict-free rejoin) | rejoin merge: `post-index-change`, `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `reference-transaction` on the checked-out branch, `post-merge`; then `pre-push` receives split tip | **no** (for rejoin merge and generated split commits) |
 | `git subtree push --rejoin --squash --prefix=<prefix> <repository> <refspec>` | rejoin merge with `--squash` hooks; additionally creates a ref-less synthetic squash commit; then `pre-push` receives split tip | **no** (for rejoin merge, synthetic squash commit, and generated split commits) |
 | `git subtree add --prefix=<prefix> <commit>` | `post-index-change` on index writes; `reference-transaction`; no commit-creation hooks | **no** |
@@ -428,6 +429,15 @@ it cannot block that outbound update. The command bypasses the commit gate and
 the current push hook analyzes the wrong tree. The ordinary form has no
 pre-push local ref transaction that can close #404 before the split is pushed;
 analyzing the pushed split tip is the #405 disposition.
+
+`git subtree push --prefix=<prefix> --branch <branch> <repository> <refspec>`
+differs: it installs the generated split tip on a local branch before
+pushing. Measured on git 2.48.1, the command created `refs/heads/<branch>`
+with `reference-transaction` (`prepared` and `committed`) before `pre-push`
+ran (评审 4117947441). That local ref update is a #404 closure candidate —
+`reference-transaction` can reject the branch creation — while the push
+itself still scans the checked-out tree, so #405 remains for the pushed
+content.
 
 `git subtree push --rejoin --prefix=<prefix> <repository> <refspec>` is a
 different path. When the subtree has new commits, `--rejoin` merges the
