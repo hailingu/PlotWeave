@@ -227,13 +227,21 @@ unlike pre-#355 practice, the claim no longer depends on the executor's word.
 - *Success-only.* Failed or blocked runs append nothing: no Git operation
   results from them, so there is nothing to justify later. The log therefore
   proves "this tree passed", never "this tree was the only thing examined".
-- *Best-effort writes.* A pending-append failure (permissions, disk) prints a
-  warning to stderr and does not block the already-passing gate — the same
-  philosophy as the tree marker. A materialize failure warns and does not
-  block the push; pending lines survive for the next push. If the append
-  into the versioned file succeeds but the pending-file truncation fails,
-  the next materialize can duplicate lines — benign under log semantics.
-  Evidence must not become a new way to fail a clean gate or push.
+- *Best-effort writes, drain under the gate lock.* A pending-append failure
+  (permissions, disk) prints a warning to stderr and does not block the
+  already-passing gate — the same philosophy as the tree marker.
+  `materialize` waits for the **same mutex the gate holds** (second-granularity
+  polling of the `.sonar-gate.lock` directory) and drains
+  pending → versioned while holding it: record appends happen only under
+  that lock, so a concurrently passing gate cannot have its record truncated
+  away in the drain window (PR #415 评审 5339243902). A lock-wait timeout —
+  or a malformed timeout configuration — warns and leaves the lines pending
+  for the next push; materialize never blocks or fails the push. If the
+  append into the versioned file succeeds but the pending-file truncation
+  fails, the next materialize can duplicate lines — benign under log
+  semantics — and a materialize killed with SIGKILL can leave the stale lock
+  that gates already treat as requiring cleanup. Evidence must not become a
+  new way to fail a clean gate or push.
 - *Materialize-at-push, one-commit lag.* Commit-creating paths write only to
   the pending file inside `.git`, so they never dirty the tracked file and
   never interfere with subsequent Git steps; the versioned file is touched
