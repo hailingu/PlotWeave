@@ -15,13 +15,17 @@ const repositoryRoot = resolve(import.meta.dirname, '..')
 const temporaryDirectories: string[] = []
 
 type GateOptions = {
-  coverageMode?: 'empty' | 'malformed' | 'missing' | 'uncovered' | 'valid'
+  coverageMode?:
+    'empty' | 'malformed' | 'missing' | 'partial' | 'uncovered' | 'valid'
   formatExit?: number
   lintExit?: number
   lockOccupied?: boolean
   npmExit?: number
+  pendingBlocked?: boolean
+  pendingSeed?: string
   plotweaveSonarToken?: string
-  rustCoverageMode?: 'empty' | 'malformed' | 'missing' | 'uncovered' | 'valid'
+  rustCoverageMode?:
+    'empty' | 'malformed' | 'missing' | 'partial' | 'uncovered' | 'valid'
   scannerExit?: number
   strictIndexExit?: number
   qualityGateStatus?: string
@@ -32,7 +36,9 @@ type GateOptions = {
 
 type GateRun = {
   curlStdin: string
+  history: string
   log: string
+  pending: string
   scannerToken: string
   status: number | null
   stderr: string
@@ -46,6 +52,16 @@ function writeExecutable(path: string, body: string): void {
   chmodSync(path, 0o755)
 }
 
+/** 尽力读取沙箱输出文件：路径缺失或被目录占据（不可写注入形态）时返回
+ * 空串——目录占位对 root 也无条件不可追加（PR #415 评审 5339054039）。 */
+function readTextFileBestEffort(path: string): string {
+  try {
+    return readFileSync(path, { encoding: 'utf8' })
+  } catch {
+    return ''
+  }
+}
+
 /** 在隔离的外部依赖边界下执行真实门禁脚本或 Git hook。 */
 /** runGate 的命令替身路径集（sandbox 内固定布局）。 */
 interface GateStubPaths {
@@ -54,6 +70,8 @@ interface GateStubPaths {
   readonly scannerTokenPath: string
   readonly coveragePath: string
   readonly rustCoveragePath: string
+  readonly historyPath: string
+  readonly pendingPath: string
   readonly lockPath: string
   readonly reportPath: string
   readonly npmPath: string
@@ -62,9 +80,11 @@ interface GateStubPaths {
   readonly llvmCovPath: string
 }
 
-/** 外部命令替身（runGate 拆分，issue #99）：npm / sonar-scanner / curl 的
- * 记录-并-受控返回替身脚本，按选项预置锁与覆盖率形态。 */
-function writeCommandStubs(paths: GateStubPaths, options: GateOptions): void {
+/** npm 替身（writeCommandStubs 拆分，PR #415 评审 5339054039）：记录
+ * 调用并按环境注入静态检查/覆盖率生成结果——格式/lint 可独立注入失败
+ *（issue #227）；覆盖率只在 test:coverage 生成（避免格式调用顺带写出
+ * 报告，掩盖失败路径），形态见 PLOTWEAVE_TEST_COVERAGE_MODE。 */
+function writeNpmStub(paths: GateStubPaths): void {
   writeExecutable(
     paths.npmPath,
     String.raw`printf 'npm %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
@@ -90,6 +110,10 @@ case "$PLOTWEAVE_TEST_COVERAGE_MODE" in
     mkdir -p "$(dirname "$PLOTWEAVE_COVERAGE_REPORT_PATH")"
     printf '%s\n' 'TN:' 'SF:src/example.ts' 'DA:1,1' 'end_of_record' > "$PLOTWEAVE_COVERAGE_REPORT_PATH"
     ;;
+  partial)
+    mkdir -p "$(dirname "$PLOTWEAVE_COVERAGE_REPORT_PATH")"
+    printf '%s\n' 'TN:' 'SF:src/example.ts' 'DA:1,1' 'DA:2,0' 'DA:3,1' 'end_of_record' > "$PLOTWEAVE_COVERAGE_REPORT_PATH"
+    ;;
   empty)
     mkdir -p "$(dirname "$PLOTWEAVE_COVERAGE_REPORT_PATH")"
     : > "$PLOTWEAVE_COVERAGE_REPORT_PATH"
@@ -104,18 +128,21 @@ case "$PLOTWEAVE_TEST_COVERAGE_MODE" in
     ;;
 esac`,
   )
+}
 
-  if (options.lockOccupied) {
-    mkdirSync(paths.lockPath)
-  }
-  // Rust 覆盖率替身（issue #169）：cargo-llvm-cov 的记录-并-受控返回
-  // 替身，按选项预置 LCOV 形态；missing 模式不创建文件（生成缺失）。
+/** Rust 覆盖率替身（writeCommandStubs 拆分；issue #169）：cargo-llvm-cov
+ * 的记录-并-受控返回替身，按选项预置 LCOV 形态；missing 模式不创建
+ * 文件（生成缺失）。 */
+function writeRustCoverageStub(paths: GateStubPaths): void {
   writeExecutable(
     paths.llvmCovPath,
     String.raw`printf 'cargo-llvm-cov %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
 case "$PLOTWEAVE_TEST_RUST_COVERAGE_MODE" in
   valid)
     printf '%s\n' 'TN:' 'SF:src-tauri/src/example.rs' 'DA:1,1' 'end_of_record' > "$PLOTWEAVE_RUST_COVERAGE_REPORT_PATH"
+    ;;
+  partial)
+    printf '%s\n' 'TN:' 'SF:src-tauri/src/example.rs' 'DA:1,1' 'DA:2,0' 'DA:3,1' 'end_of_record' > "$PLOTWEAVE_RUST_COVERAGE_REPORT_PATH"
     ;;
   empty)
     : > "$PLOTWEAVE_RUST_COVERAGE_REPORT_PATH"
@@ -128,6 +155,11 @@ case "$PLOTWEAVE_TEST_RUST_COVERAGE_MODE" in
     ;;
 esac`,
   )
+}
+
+/** sonar-scanner 替身（writeCommandStubs 拆分）：记录调用与令牌接收形
+ * 态，受控退出，并写出 report-task.txt 供门禁读取。 */
+function writeScannerStub(paths: GateStubPaths): void {
   writeExecutable(
     paths.scannerPath,
     String.raw`printf 'sonar-scanner %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
@@ -141,6 +173,11 @@ printf '%s\n' \
   'serverUrl=http://sonar.test' \
   > "$PLOTWEAVE_SONAR_REPORT_PATH"`,
   )
+}
+
+/** curl 替身（writeCommandStubs 拆分）：记录调用并按 URL 返回受控的
+ * Quality Gate 状态与新增未解决问题数，stdin 捕获认证头下发形态。 */
+function writeCurlStub(paths: GateStubPaths): void {
   writeExecutable(
     paths.curlPath,
     String.raw`printf 'curl %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
@@ -160,6 +197,19 @@ esac`,
   )
 }
 
+/** 外部命令替身总装（runGate 拆分，issue #99）：npm / cargo-llvm-cov /
+ * sonar-scanner / curl 的记录-并-受控返回替身，按选项预置锁形态。 */
+function writeCommandStubs(paths: GateStubPaths, options: GateOptions): void {
+  writeNpmStub(paths)
+  writeRustCoverageStub(paths)
+  writeScannerStub(paths)
+  writeCurlStub(paths)
+
+  if (options.lockOccupied) {
+    mkdirSync(paths.lockPath)
+  }
+}
+
 /** 门禁运行环境（runGate 拆分，issue #99）：替身路径 + 受控选项；令牌不
  * 继承宿主环境（默认无令牌，按用例显式注入）。 */
 function gateEnvironment(
@@ -171,6 +221,8 @@ function gateEnvironment(
     PLOTWEAVE_CARGO_LLVM_COV_BIN: paths.llvmCovPath,
     PLOTWEAVE_CURL_BIN: paths.curlPath,
     PLOTWEAVE_COVERAGE_REPORT_PATH: paths.coveragePath,
+    PLOTWEAVE_GATE_HISTORY_PATH: paths.historyPath,
+    PLOTWEAVE_GATE_PENDING_PATH: paths.pendingPath,
     PLOTWEAVE_RUST_COVERAGE_REPORT_PATH: paths.rustCoveragePath,
     PLOTWEAVE_SONAR_LOCK_DIRECTORY: paths.lockPath,
     PLOTWEAVE_NODE_BIN: process.execPath,
@@ -216,6 +268,8 @@ function runGate(target: string, options: GateOptions = {}): GateRun {
     scannerTokenPath: resolve(sandbox, 'scanner-token.txt'),
     coveragePath: resolve(sandbox, 'coverage', 'lcov.info'),
     rustCoveragePath: resolve(sandbox, 'rust-coverage', 'lcov-rust.info'),
+    historyPath: resolve(sandbox, 'gate-history.jsonl'),
+    pendingPath: resolve(sandbox, 'gate-pending.jsonl'),
     lockPath: resolve(sandbox, 'sonar-gate.lock'),
     reportPath: resolve(sandbox, '.scannerwork', 'report-task.txt'),
     npmPath: resolve(sandbox, 'bin', 'npm'),
@@ -225,6 +279,20 @@ function runGate(target: string, options: GateOptions = {}): GateRun {
   }
 
   writeCommandStubs(paths, options)
+
+  // 版本化与待物化文件预置：待物化默认为空（失败路径不追加时读到空
+  // 串），可种子验证追加不覆盖；blocked 形态以目录占位使追加无条件失败
+  // （root 亦然），验证「写不进不阻塞门禁」（issue #355，PR #415 评审
+  // 5339054039）。版本化文件保持空串以断言门禁运行绝不直接触碰它。
+  writeFileSync(paths.historyPath, '')
+  if (options.pendingBlocked) {
+    mkdirSync(paths.pendingPath)
+  } else {
+    writeFileSync(paths.pendingPath, '')
+    if (options.pendingSeed !== undefined) {
+      writeFileSync(paths.pendingPath, `${options.pendingSeed}\n`)
+    }
+  }
 
   const result = spawnSync('sh', [resolve(repositoryRoot, target)], {
     cwd: repositoryRoot,
@@ -237,7 +305,9 @@ function runGate(target: string, options: GateOptions = {}): GateRun {
       encoding: 'utf8',
       flag: 'a+',
     }),
+    history: readFileSync(paths.historyPath, { encoding: 'utf8' }),
     log: readFileSync(paths.logPath, { encoding: 'utf8', flag: 'a+' }),
+    pending: readTextFileBestEffort(paths.pendingPath),
     scannerToken: readFileSync(paths.scannerTokenPath, {
       encoding: 'utf8',
       flag: 'a+',
@@ -468,6 +538,112 @@ describe.each(['.githooks/pre-commit', '.githooks/pre-push'])(
       expect(result.status).not.toBe(0)
       expect(result.log).toContain('npm run test:coverage')
       expect(`${result.stdout}${result.stderr}`).toContain('1')
+    })
+  },
+)
+
+describe(
+  '门禁结论摘要记录（issue #355：完整通过后写入待物化文件，推送时并入版本化凭据）',
+  { timeout: 30_000 },
+  () => {
+    it('完整通过后向待物化文件追加一行合法 JSON，且绝不直接触碰版本化文件（PR #415 评审 5338815626）', () => {
+      const result = runGate('scripts/sonar-quality-gate.sh')
+
+      expect(result.status).toBe(0)
+      const lines = result.pending.split('\n').filter(Boolean)
+      expect(lines).toHaveLength(1)
+      const record = JSON.parse(lines[0] ?? '')
+      expect(record.timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/)
+      expect(record.tree).toMatch(/^[0-9a-f]{40}$/)
+      expect(record.head).toMatch(/^[0-9a-f]{40}$/)
+      expect(record.qualityGate).toBe('OK')
+      expect(record.newCodeUnresolvedIssues).toBe(0)
+      expect(record.frontendLineCoveragePercent).toBe(100)
+      expect(record.rustLineCoveragePercent).toBe(100)
+      // 门禁运行只写 .git 内待物化文件：提交创建路径不得给被跟踪的
+      // 版本化文件留下未暂存改动（否则重放/检出/合并会被打断）
+      expect(result.history).toBe('')
+    })
+
+    it('行覆盖率按本次 LCOV 的 DA 命中统计（2/3 覆盖 → 66.67）', () => {
+      const result = runGate('scripts/sonar-quality-gate.sh', {
+        coverageMode: 'partial',
+        rustCoverageMode: 'partial',
+      })
+
+      expect(result.status).toBe(0)
+      const [line] = result.pending.split('\n').filter(Boolean)
+      const record = JSON.parse(line ?? '')
+      expect(record.frontendLineCoveragePercent).toBe(66.67)
+      expect(record.rustLineCoveragePercent).toBe(66.67)
+    })
+
+    it('门禁任一环节失败时不追加记录——记录只描述完整通过的运行', () => {
+      const failureOptions: GateOptions[] = [
+        { formatExit: 1 },
+        { scannerExit: 2 },
+        { qualityGateStatus: 'ERROR' },
+        { unresolvedIssues: 3 },
+      ]
+      for (const options of failureOptions) {
+        const result = runGate('scripts/sonar-quality-gate.sh', options)
+
+        expect(result.status, JSON.stringify(options)).not.toBe(0)
+        expect(result.pending, JSON.stringify(options)).toBe('')
+      }
+    })
+
+    it('追加而非覆盖：既有待物化行保留，新记录续在其后', () => {
+      const seed =
+        '{"timestamp":"2026-01-01T00:00:00Z","tree":"seed-tree","head":"seed-head",' +
+        '"qualityGate":"OK","newCodeUnresolvedIssues":0,' +
+        '"frontendLineCoveragePercent":1,"rustLineCoveragePercent":1}'
+      const result = runGate('scripts/sonar-quality-gate.sh', {
+        pendingSeed: seed,
+      })
+
+      expect(result.status).toBe(0)
+      const lines = result.pending.split('\n').filter(Boolean)
+      expect(lines).toHaveLength(2)
+      expect(JSON.parse(lines[0] ?? '')).toEqual(JSON.parse(seed))
+      expect(JSON.parse(lines[1] ?? '').qualityGate).toBe('OK')
+    })
+
+    it('待物化文件不可写（目录占位，root 下亦然）只警告、不阻塞已通过的门禁', () => {
+      const result = runGate('scripts/sonar-quality-gate.sh', {
+        pendingBlocked: true,
+      })
+
+      expect(result.status).toBe(0)
+      expect(result.pending).toBe('')
+      expect(`${result.stdout}${result.stderr}`).toContain('无法写入门禁记录')
+    })
+
+    it('记录不携带令牌：摘要只入结论，凭据不入库', () => {
+      const result = runGate('scripts/sonar-quality-gate.sh', {
+        sonarToken: 'sqp_token-a.1',
+      })
+
+      expect(result.status).toBe(0)
+      expect(result.pending).not.toContain('sqp_token-a.1')
+    })
+
+    it('pre-commit 完整通过只写待物化文件：不物化、不弄脏版本化文件', () => {
+      const result = runGate('.githooks/pre-commit')
+
+      expect(result.status).toBe(0)
+      expect(result.pending.split('\n').filter(Boolean)).toHaveLength(1)
+      expect(result.history).toBe('')
+    })
+
+    it('pre-push 完整通过后把待物化行物化进版本化文件并清空待物化文件', () => {
+      const result = runGate('.githooks/pre-push')
+
+      expect(result.status).toBe(0)
+      const lines = result.history.split('\n').filter(Boolean)
+      expect(lines).toHaveLength(1)
+      expect(JSON.parse(lines[0] ?? '').qualityGate).toBe('OK')
+      expect(result.pending).toBe('')
     })
   },
 )

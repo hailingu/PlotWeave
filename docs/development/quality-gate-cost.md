@@ -13,7 +13,11 @@ written in English for agent interoperability.
 [issue #356](https://github.com/hailingu/PlotWeave/issues/356); extended
 2026-09-28 by the issue #404 commit-creation wiring (same complete gate,
 more commands routed through it — see
-[What The Gate Actually Enforces](#what-the-gate-actually-enforces)).
+[What The Gate Actually Enforces](#what-the-gate-actually-enforces)) and by
+the issue #355 evidence record (one summary line per fully passing run,
+written to a pending file inside `.git` and materialized into the versioned
+file after a passing push — see
+[Gate Run Evidence Record](#gate-run-evidence-record-issue-355)).
 
 ## Required Reading
 
@@ -36,6 +40,12 @@ Every gated command runs the same complete sequence:
    `media_format_leaf` test target.
 4. `sonar-scanner` publishing the analysis, then waiting for the Quality Gate,
    then a separate check that new-code unresolved issues are zero.
+5. Since issue #355, a fully passing run appends one summary record to a
+   pending file inside `.git`, and the `pre-push` hook materializes pending
+   lines into the versioned `docs/development/gate-history.jsonl` after its
+   gate passes (see
+   [Gate Run Evidence Record](#gate-run-evidence-record-issue-355)). This step
+   observes and records; it checks nothing and adds no variant of the gate.
 
 Since the issue #404 wiring, the gated commands are `git commit` and
 `git push` as before, plus every other commit-creating porcelain that has a
@@ -163,9 +173,98 @@ a hardening change to gate behavior and out of scope for this record.
 steer the dedup marker and its expiry, so exporting a pre-written matching
 marker can suppress the `prepare-commit-msg` gate run. Same disposition —
 test-only injection, explicit evasion to use it that way.
+`PLOTWEAVE_GATE_HISTORY_PATH` and `PLOTWEAVE_GATE_PENDING_PATH`
+(`scripts/sonar-quality-gate.sh` / `scripts/gate-history.sh`, issue #355)
+also belong to the test-only injection class: they redirect only where the
+evidence record is written, so they cannot skip any check, but pointing them
+elsewhere does remove the in-repository evidence for that run.
 
 Anyone reading a faster local workflow elsewhere in this repository should
 treat it as a defect in that workflow, not as sanctioned by this decision.
+
+## Gate Run Evidence Record (issue #355)
+
+Before issue #355, every artifact behind a passing gate conclusion —
+`coverage/`, `.scannerwork/`, `src-tauri/target/` — was local-only and
+gitignored, and `.github/workflows/ci.yml` deliberately does not run Sonar.
+The repository therefore held no durable, third-party-verifiable credential
+that any given commit had passed the Quality Gate with zero new-code
+unresolved issues. Issue #355 offered three drafts; this repository adopted
+**option A** (a versioned summary record). Option B cannot work for the core
+claim because hosted CI cannot reach the local SonarQube server, so its
+artifacts would only ever prove the reachable subset; option C would register
+the gap without closing it.
+
+**What is recorded.** After a run passes the *complete* sequence — static
+checks, both coverage reports, the scanner, Quality Gate `OK`, and zero
+new-code unresolved issues — `scripts/sonar-quality-gate.sh` appends exactly
+one JSON line to a pending file inside `.git`
+(`plotweave-gate-history.pending`), never to the tracked file mid-operation
+(PR #415 评审 5338815626: a commit-side write to the tracked file leaves an
+unstaged change that aborts the next rebase replay, checkout, or merge
+updating that file). After the `pre-push` gate passes, the hook runs
+`scripts/gate-history.sh materialize`, which folds the pending lines into the
+versioned `docs/development/gate-history.jsonl` and clears the pending file.
+Each record line:
+
+| Field | Meaning |
+| --- | --- |
+| `timestamp` | UTC ISO-8601 time of the record append, second precision. |
+| `tree` | The gated **index tree** (`git write-tree`) — the same key the dedup marker uses, and the value a reader compares against `git rev-parse <commit>^{tree}` to verify that a commit's content passed a complete gate run. |
+| `head` | The commit `HEAD` pointed at during the run — the parent of the commit being created on pre-commit-style paths, the tip being pushed on `pre-push`. Provenance context, not the verification key. |
+| `qualityGate` | The Quality Gate status for this run's analysis (`OK`; only fully passing runs are recorded). |
+| `newCodeUnresolvedIssues` | Unresolved issue count on new code for this run (`0`; only fully passing runs are recorded). |
+| `frontendLineCoveragePercent` / `rustLineCoveragePercent` | Line coverage computed from the same LCOV reports this run submitted (`DA` records with execution count > 0 count as covered). |
+
+**Verification recipe.** To check that commit `C` passed a complete gate run,
+compute `git rev-parse C^{tree}` and find a record whose `tree` equals it with
+`qualityGate` `OK` and `newCodeUnresolvedIssues` `0`. The record is a durable
+claim made by the gate tooling itself at gate time, versioned in git history;
+unlike pre-#355 practice, the claim no longer depends on the executor's word.
+
+**Deliberate properties and boundaries.**
+
+- *Success-only.* Failed or blocked runs append nothing: no Git operation
+  results from them, so there is nothing to justify later. The log therefore
+  proves "this tree passed", never "this tree was the only thing examined".
+- *Best-effort writes, drain under the gate lock.* A pending-append failure
+  (permissions, disk) prints a warning to stderr and does not block the
+  already-passing gate — the same philosophy as the tree marker.
+  `materialize` waits for the **same mutex the gate holds** (second-granularity
+  polling of the `.sonar-gate.lock` directory) and drains
+  pending → versioned while holding it: record appends happen only under
+  that lock, so a concurrently passing gate cannot have its record truncated
+  away in the drain window (PR #415 评审 5339243902). A lock-wait timeout —
+  or a malformed timeout configuration — warns and leaves the lines pending
+  for the next push; materialize never blocks or fails the push. If the
+  append into the versioned file succeeds but the pending-file truncation
+  fails, the next materialize can duplicate lines — benign under log
+  semantics — and a materialize killed with SIGKILL can leave the stale lock
+  that gates already treat as requiring cleanup. Evidence must not become a
+  new way to fail a clean gate or push.
+- *Materialize-at-push, one-commit lag.* Commit-creating paths write only to
+  the pending file inside `.git`, so they never dirty the tracked file and
+  never interfere with subsequent Git steps; the versioned file is touched
+  only after a passing `pre-push`, at which no further tree operation is
+  pending in that command. Because the evidence file must itself pass the
+  gate, materialized lines are unstaged until the next commit stages them —
+  stage them together with the next change; committing the file alone burns
+  a full gate run on a record-only commit. Records for commit-side runs of
+  commits that are never pushed stay in the local pending file: nothing
+  leaves the machine, so there is no external claim to verify.
+- *Working tree vs. index key.* The gate analyzes the working tree (see
+  [Known Finding: Push Scans The Checked-Out Tree, Not The Pushed
+  Ref](#known-finding-push-scans-the-checked-out-tree-not-the-pushed-ref)),
+  while `tree` records the index tree, matching the marker's key. With
+  unstaged or untracked differences the run validated more (or different)
+  content than the key identifies; the caveats of that known finding apply
+  to records unchanged.
+- *Append-only growth.* One line per fully passing run, no rotation; the
+  file is a log of runs, not a derived state that can be rebuilt.
+- *No secrets.* Records carry hashes, counts, and percentages only. Tokens
+  never reach the record path (the gate passes them via stdin/environment
+  exclusively), and raw scan artifacts stay unversioned — the issue #355
+  acceptance criteria require both.
 
 ## What The Gate Actually Enforces
 

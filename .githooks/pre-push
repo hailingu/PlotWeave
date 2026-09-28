@@ -1,7 +1,11 @@
 #!/bin/sh
-# 每次推送前再次执行仓库统一的 SonarQube 零问题门禁，防止漏检提交离开本机。
+# 每次推送前再次执行仓库统一的 SonarQube 零问题门禁，防止漏检提交离开
+# 本机；门禁通过后把累积的门禁结论摘要物化进版本化 gate-history.jsonl
+#（issue #355；PR #415 评审 5338815626：提交创建路径只写 .git 内待物化
+# 文件、不弄脏被跟踪文件，重放/检出/合并不被打断）。
 
 set -eu
 
 hook_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-exec "$hook_directory/../scripts/sonar-quality-gate.sh"
+"$hook_directory/../scripts/sonar-quality-gate.sh"
+"$hook_directory/../scripts/gate-history.sh" materialize
