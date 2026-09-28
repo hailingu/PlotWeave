@@ -109,16 +109,20 @@ Apply the guardrails as follows:
   the runtime graph (after type erasure) stay acyclic. Routing a cycle through
   an `import type` edge is a violation, not a loophole.
 - Tauri IPC command names have a single frontend source of truth:
-  `src/ipc/commands.ts` (issue #394). Every `invoke`-family call site
-  references `IPC_COMMANDS.<key>` (named import, no namespace two-level
-  access); a command-name string literal may appear only in that table and in
-  the `generate_handler!` registration list of `src-tauri/src/lib.rs`. The
-  contract guard (`src/ipc/commands.test.ts`) parses the registration list
-  and asserts bidirectional consistency — no constant without a registration
-  (the frontend cannot invoke an unregistered command), no registration
-  without a frontend consumer, no duplicate values, and no string literal in
-  invoke-call position. Renaming or removing a command must update both sides
-  in the same change; a silent one-sided edit fails the guard.
+  `src/ipc/commands.ts` (issue #394). Call sites go through the typed entry
+  `ipcInvoke` (`src/ipc/invoke.ts`), whose `cmd` parameter is narrowed to the
+  `IPC_COMMANDS` value union — a misspelled literal, an aliased import, or a
+  literal routed through a variable is rejected at compile time (PR #416
+  review 5339899090). `src/ipc/invoke.ts` is the only maintained module
+  allowed to import `@tauri-apps/api/core`; every binding shape (alias,
+  destructuring, `Promise.all`, `.then`) must write that specifier, so the
+  guard's specifier-exclusivity assertion cannot be bypassed. The contract
+  guard (`src/ipc/commands.test.ts`) parses the `generate_handler!`
+  registration list and asserts bidirectional consistency — no constant
+  without a registration, no registration without a frontend consumer, no
+  duplicate values, and no string literal in invoke-call position. Renaming
+  or removing a command must update both sides in the same change; a silent
+  one-sided edit fails the compiler or the guard.
 - Cross-module calls must use the owning module's public API. Do not import its
   internal persistence models, framework objects, mutable state, or private
   helpers.

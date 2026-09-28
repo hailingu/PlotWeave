@@ -11,6 +11,7 @@
  */
 import type { ProjectContent } from './model/content'
 import { IPC_COMMANDS } from './ipc/commands'
+import { ipcInvoke } from './ipc/invoke'
 import {
   memoryCreate,
   memoryDelete,
@@ -121,8 +122,7 @@ export const projectStore = {
     const meta = await projectStore.create(name)
     try {
       if (isTauri) {
-        const { invoke } = await import('@tauri-apps/api/core')
-        await invoke(IPC_COMMANDS.copyProjectAssets, {
+        await ipcInvoke(IPC_COMMANDS.copyProjectAssets, {
           fromId: id,
           toId: meta.id,
         })

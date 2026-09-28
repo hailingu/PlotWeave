@@ -6,6 +6,7 @@
  */
 import { defaultSettings, normalizeSettings, type AppSettings } from './types'
 import { IPC_COMMANDS } from '../ipc/commands'
+import { ipcInvoke } from '../ipc/invoke'
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
@@ -13,14 +14,12 @@ const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 let memorySettings: AppSettings | null = null
 
 async function tauriLoad(): Promise<AppSettings> {
-  const { invoke } = await import('@tauri-apps/api/core')
-  const raw = await invoke<unknown>(IPC_COMMANDS.loadPrefs)
+  const raw = await ipcInvoke<unknown>(IPC_COMMANDS.loadPrefs)
   return normalizeSettings(raw)
 }
 
 async function tauriSave(settings: AppSettings): Promise<void> {
-  const { invoke } = await import('@tauri-apps/api/core')
-  await invoke(IPC_COMMANDS.savePrefs, { prefs: settings })
+  await ipcInvoke(IPC_COMMANDS.savePrefs, { prefs: settings })
 }
 
 /** 统一门面。 */
@@ -57,8 +56,7 @@ export const settingsStore = {
   ): Promise<AppSettings> => {
     let keyEnc: string
     if (isTauri) {
-      const { invoke } = await import('@tauri-apps/api/core')
-      keyEnc = await invoke<string>(IPC_COMMANDS.setProviderKey, {
+      keyEnc = await ipcInvoke<string>(IPC_COMMANDS.setProviderKey, {
         providerId,
         key,
       })

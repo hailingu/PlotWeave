@@ -8,6 +8,7 @@
  */
 import type { ProviderConfig } from '../../settings/types'
 import { IPC_COMMANDS } from '../../ipc/commands'
+import { ipcInvoke } from '../../ipc/invoke'
 import type { ToolSpec } from './tools'
 
 /** OpenAI 兼容对话消息（模块头：经 Rust llm_chat 代理的非流式通道）：
@@ -41,8 +42,7 @@ export async function llmChat(
   messages: ChatMessage[],
   tools?: ToolSpec[],
 ): Promise<AssistantMessage> {
-  const { invoke } = await import('@tauri-apps/api/core')
-  return invoke<AssistantMessage>(IPC_COMMANDS.llmChat, {
+  return ipcInvoke<AssistantMessage>(IPC_COMMANDS.llmChat, {
     providerId: provider.id,
     baseUrl: provider.baseUrl,
     model,

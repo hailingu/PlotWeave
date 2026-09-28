@@ -9,6 +9,7 @@ import {
   type AiSession,
 } from './editor/ai/session'
 import { IPC_COMMANDS } from './ipc/commands'
+import { ipcInvoke } from './ipc/invoke'
 import {
   enqueueProjectWrite,
   onProjectWriteReplayFailure,
@@ -72,8 +73,7 @@ export async function loadAiSession(id: string): Promise<AiSessionLoadResult> {
       repairError: null,
     }
   }
-  const { invoke } = await import('@tauri-apps/api/core')
-  const result = await invoke<{ session: unknown; corrupt: boolean }>(
+  const result = await ipcInvoke<{ session: unknown; corrupt: boolean }>(
     IPC_COMMANDS.loadAiSession,
     { id },
   )
@@ -102,8 +102,7 @@ export async function saveAiSession(
   const pending = { session }
   pendingSessions.set(id, pending)
   const write = enqueueProjectWrite(id, async () => {
-    const { invoke } = await import('@tauri-apps/api/core')
-    await invoke(IPC_COMMANDS.saveAiSession, {
+    await ipcInvoke(IPC_COMMANDS.saveAiSession, {
       id,
       session: diskSessionOf(session),
     })

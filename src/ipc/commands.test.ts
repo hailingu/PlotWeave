@@ -1,13 +1,19 @@
 /**
  * IPC 命令名契约守卫（issue #394）：Rust `generate_handler!` 注册的命令与
- * 前端 `IPC_COMMANDS`（src/ipc/commands.ts，命令名单一事实源）的三条
+ * 前端 `IPC_COMMANDS`（src/ipc/commands.ts，命令名单一事实源）的四条
  * 双向断言——
  * 1. 常量集与注册集一致：不漏（注册命令必有常量，前端才可引用）、
  *    不多（常量必已注册且值不重复）；
- * 2. 前端 invoke 系调用点（标识符含 invoke 者，如 invoke / tauriInvoke）
- *    的首参不得是字符串字面量——命令名字面量只允许出现在常量表与
- *    generate_handler! 两侧，调用点一律引用共享常量；
- * 3. 每个常量都有前端消费者（IPC_COMMANDS.<key> 被至少一个维护模块
+ * 2. 类型化入口排他（issue #394 评审 5339899090）：'@tauri-apps/api/core'
+ *    的 import 说明符（静态或动态）只允许出现在 src/ipc/invoke.ts——
+ *    ipcInvoke 以 IpcCommandName 收窄 cmd 参数，字符串字面量、别名导入
+ *    与变量中转都在编译期拒绝；其余维护模块出现该说明符即守卫失败，
+ *    而别名/解构/Promise.all/.then 等一切绑定形态都必写该说明符，
+ *    无从绕过；
+ * 3. invoke 系调用点（标识符含 invoke 者，如 ipcInvoke / tauriInvoke）的
+ *    首参不得是字符串字面量——命令名字面量只允许出现在常量表与
+ *    generate_handler! 两侧（纵深防线，类型收窄之外的兜底）；
+ * 4. 每个常量都有前端消费者（IPC_COMMANDS.<key> 被至少一个维护模块
  *    引用）——注册而无人消费的命令同样视为契约漂移。
  * 扫描口径与 moduleGraph 一致：src 下非测试 .ts/.tsx，AST 解析（注释与
  * 事件名 listen/emit 不误报）；lib.rs 解析剥行注释，令牌形态异常即抛错
@@ -25,6 +31,8 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../..')
 const registeredSourcePath = join(repoRoot, 'src-tauri/src/lib.rs')
 const srcRoot = join(repoRoot, 'src')
 const commandsModulePath = join(srcRoot, 'ipc/commands.ts')
+const invokeModulePath = join(srcRoot, 'ipc/invoke.ts')
+const coreSpecifier = '@tauri-apps/api/core'
 
 /** 维护模块 = src 下非测试 .ts/.tsx（与 moduleGraph 口径一致）。 */
 const isMaintainedModule = (p: string): boolean =>
@@ -113,12 +121,15 @@ function commandBindingNamesOf(sf: ts.SourceFile, file: string): Set<string> {
   return names
 }
 
-/** 前端维护模块的 IPC 使用面：字面量调用点（应为空）与被引用的命令键。 */
+/** 前端维护模块的 IPC 使用面：字面量调用点（应为空）、core 说明符越界
+ * 引用（应为空）与被引用的命令键。 */
 function scanFrontendIpcUsage(): {
   literalCalls: string[]
+  coreImportsOutsideWrapper: string[]
   accessedCommandKeys: Set<string>
 } {
   const literalCalls: string[] = []
+  const coreImportsOutsideWrapper: string[] = []
   const accessedCommandKeys = new Set<string>()
   for (const file of listMaintainedModules(srcRoot)) {
     const kind = file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS
@@ -134,8 +145,34 @@ function scanFrontendIpcUsage(): {
       file === commandsModulePath
         ? new Set<string>()
         : commandBindingNamesOf(sf, file)
+    const recordCoreImport = (specifier: string): void => {
+      // 类型化入口模块是唯一豁免：它持有全仓唯一的原始 invoke 绑定
+      if (file !== invokeModulePath) {
+        coreImportsOutsideWrapper.push(
+          `${relative(srcRoot, file)} → ${specifier}`,
+        )
+      }
+    }
     const visit = (node: ts.Node): void => {
+      if (
+        ts.isImportDeclaration(node) &&
+        ts.isStringLiteral(node.moduleSpecifier) &&
+        node.moduleSpecifier.text === coreSpecifier
+      ) {
+        recordCoreImport(node.moduleSpecifier.text)
+      }
       if (ts.isCallExpression(node)) {
+        const spec =
+          node.expression.kind === ts.SyntaxKind.ImportKeyword
+            ? node.arguments[0]
+            : undefined
+        if (
+          spec !== undefined &&
+          ts.isStringLiteral(spec) &&
+          spec.text === coreSpecifier
+        ) {
+          recordCoreImport(spec.text)
+        }
         const callee = invokeCalleeName(node.expression)
         const first = node.arguments[0]
         if (
@@ -161,7 +198,7 @@ function scanFrontendIpcUsage(): {
     }
     ts.forEachChild(sf, visit)
   }
-  return { literalCalls, accessedCommandKeys }
+  return { literalCalls, coreImportsOutsideWrapper, accessedCommandKeys }
 }
 
 describe('IPC 命令名契约（issue #394）', () => {
@@ -174,6 +211,10 @@ describe('IPC 命令名契约（issue #394）', () => {
     expect(missing).toEqual([])
     expect(extra).toEqual([])
     expect(new Set(values).size).toBe(values.length)
+  })
+
+  it('原始 invoke 入口排他：core 说明符只允许出现在 src/ipc/invoke.ts', () => {
+    expect(scanFrontendIpcUsage().coreImportsOutsideWrapper).toEqual([])
   })
 
   it('前端 invoke 系调用点的首参不得是字符串字面量', () => {

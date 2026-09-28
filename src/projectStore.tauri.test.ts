@@ -18,8 +18,12 @@ beforeEach(() => {
   // duplicate 命名先查现存名（§7.3）：默认返回非空列表——空表会触发
   // tauriList 的空库播种递归，mock 恒空即无限循环
   handlers.set('list_projects', () => [meta('p1')])
-  vi.doMock('@tauri-apps/api/core', () => ({
-    invoke: async (cmd: string, args: unknown) => {
+  // 拦截点在类型化入口（issue #394 评审 5339899090）：本文件编排的保存
+  // 重试级联下，vitest 4 对 invoke.ts 集中式动态导入的 core mock 会失稳
+  // （部分调用落到真实模块）；在 ipcInvoke 入口拦截后行为与迁移前逐调用
+  // 点动态导入时完全一致，包装转发语义另由 src/ipc/invoke.test.ts 覆盖
+  vi.doMock('./ipc/invoke', () => ({
+    ipcInvoke: async (cmd: string, args?: unknown) => {
       calls.push({ cmd, args })
       const h = handlers.get(cmd)
       if (!h) throw new Error(`未编排的命令：${cmd}`)

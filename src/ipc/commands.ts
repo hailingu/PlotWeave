@@ -13,9 +13,9 @@
  *   禁用字面量、每个常量都有前端消费者。值变更等同契约变更（Rust 侧须
  *   同步），本表只做等值替换、不改任何命令名。
  * - 本模块是纯数据叶子：不导入任何 Tauri / 框架模块，静态导入不破坏
- *   浏览器预览（预览路径仍由各调用点的动态 `import('@tauri-apps/api/core')`
- *   守门）。命令语义契约见 docs/data-model/ 各主题（持久化 §10、资产
- *   §7、设置 §8.2、AI §12 等）。
+ *   浏览器预览（预览路径仍由类型化入口 src/ipc/invoke.ts 内部的动态
+ *   `import('@tauri-apps/api/core')` 守门）。命令语义契约见
+ *   docs/data-model/ 各主题（持久化 §10、资产 §7、设置 §8.2、AI §12 等）。
  */
 export const IPC_COMMANDS = {
   // ── store：项目与 AI 会话持久化（docs/data-model/persistence.md）──
@@ -53,3 +53,9 @@ export const IPC_COMMANDS = {
   appExit: 'app_exit',
   acknowledgeQuitListener: 'acknowledge_quit_listener',
 } as const
+
+/** 前端可 invoke 的命令名联合：值域 = IPC_COMMANDS 的全部值。类型化入口
+ * ipcInvoke（src/ipc/invoke.ts）以此收窄 cmd 参数——字符串字面量、拼写
+ * 错误与变量中转都在编译期拒绝，不依赖守卫的词法扫描（issue #394 评审
+ * 5339899090）。 */
+export type IpcCommandName = (typeof IPC_COMMANDS)[keyof typeof IPC_COMMANDS]
