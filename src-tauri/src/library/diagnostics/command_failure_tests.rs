@@ -2,10 +2,29 @@
 
 use super::*;
 
-/// 以旧列表提供常规积压，再还原未提交索引和占用者，制造 warning-only 冲突。
+/// 先以一笔常规删除提供折叠摘要积压（旧快照 cleanupPending 非空），再以
+/// 第二笔删除构造「还原未提交索引 + 原路径占用」的 warning-only 冲突——
+/// 冲突条目保守驻留日志、不被折叠（issue #359）。
 fn conflict_fixture() -> (Fixture, Value, PathBuf, PathBuf) {
     let fixture = Fixture::new();
     let library = fixture.open();
+    let routine = put_asset_with(
+        &library,
+        "routine.png",
+        "image/png",
+        "reference",
+        b"routine",
+        &mut |_| {},
+    )
+    .unwrap();
+    crate::library_journal::delete_asset_transacted(
+        &library,
+        routine["id"].as_str().unwrap(),
+        &mut |_| {},
+    )
+    .unwrap();
+    let old = with_snapshot(&library, list_response, |_| {}).unwrap();
+    assert_eq!(old["cleanupPending"].as_array().unwrap().len(), 1);
     let asset = put_asset_with(
         &library,
         "a.png",
@@ -22,8 +41,6 @@ fn conflict_fixture() -> (Fixture, Value, PathBuf, PathBuf) {
         &mut |_| {},
     )
     .unwrap();
-    let old = with_snapshot(&library, list_response, |_| {}).unwrap();
-    assert_eq!(old["cleanupPending"].as_array().unwrap().len(), 1);
     let journal: Value =
         serde_json::from_slice(&fs::read(fixture.0.join("asset-delete-journal.json")).unwrap())
             .unwrap();
@@ -60,7 +77,16 @@ fn failed_commands_publish_warning_only_recovery_and_preserve_evidence() {
         assert!(matches!(error, LibraryError::NotFound { .. }));
         assert_eq!(events.len(), 1, "{command}: 已完成恢复须可见");
         assert!(!events[0]["warnings"].as_array().unwrap().is_empty());
-        assert_eq!(events[0]["cleanupPending"], json!([]));
+        // warning-only 冲突不产生证据类 pending；仅携带折叠摘要（routine 项）
+        assert!(
+            events[0]["cleanupPending"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|p| p["kind"] == json!("routine")),
+            "冲突分支不得产生证据类 pending：{}",
+            events[0]["cleanupPending"]
+        );
         assert!(revision(&events[0]) > revision(&old));
         assert_eq!(fs::read(trash).unwrap(), b"original");
         assert_eq!(fs::read(original).unwrap(), b"occupant");
@@ -80,7 +106,8 @@ fn failed_commands_publish_completed_cleanup_without_reviving_old_pending() {
             br#"{"assets":{"byId":{}},"groups":{"byId":{}}}"#,
         )
         .unwrap();
-        fs::remove_file(trash).unwrap();
+        // 人工整体清理隔离区（issue #359 恢复指引）：条目退役 + 归档计数归零
+        fs::remove_dir_all(trash.parent().unwrap()).unwrap();
         fs::remove_file(original).unwrap();
         let mut events = Vec::new();
         assert!(matches!(

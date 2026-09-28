@@ -34,8 +34,8 @@ function CleanupPendingWarnings({
       ) : (
         <p role="note" aria-label="隔离区清理指引">
           恢复方式：在应用完全退出后，删除应用数据目录下 library/assets/.trash/
-          中的内容，并同步移除 library/asset-delete-journal.json
-          中的对应条目后重启。请勿改动目录下其他文件。
+          目录（连同内容）后重启；已核验的待清理项已从删除日志折叠退役，清理计数随下次启动自动归零，无需再编辑
+          asset-delete-journal.json。请勿改动目录下其他文件。
         </p>
       )}
       {entries.map((item) => (

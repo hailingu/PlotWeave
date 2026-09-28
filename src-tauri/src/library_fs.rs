@@ -131,11 +131,13 @@ pub(crate) fn assets_root(library: &CapDir) -> Result<CapDir, LibraryError> {
     open_dir_bound(library, "assets", &md, "资产目录").map_err(LibraryError::from)
 }
 
-/// library/ 根的原子写目标白名单（§7.2/§10.2）：索引、删除日志与损坏
-/// 备份（摘要命名）——除此之外库根不产生原子写临时文件。
+/// library/ 根的原子写目标白名单（§7.2/§10.2）：索引、删除日志、清理
+/// 归档计数（issue #359）与损坏备份（摘要命名）——除此之外库根不产生
+/// 原子写临时文件。
 fn is_library_control_temp_target(target: &str) -> bool {
     target == INDEX_FILE_NAME
         || target == crate::library_journal::JOURNAL_FILE_NAME
+        || target == crate::library_journal::ARCHIVE_FILE_NAME
         || is_corrupt_backup_temp_target(target)
 }
 

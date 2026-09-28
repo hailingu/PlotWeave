@@ -34,10 +34,14 @@ describe('LibraryWarnings 删除隔离区待清理展示（issue #135）', () =>
     expect(screen.getByText(/删除隔离区待清理（2 项）/)).toBeTruthy()
     // 影响说明：不得把逻辑删除完成说成磁盘空间已回收
     expect(screen.getByText(/磁盘空间尚未释放/)).toBeTruthy()
-    // 恢复指引：受限操作的恢复方式（清理 .trash + 同步日志）
+    // 恢复指引：受限操作的恢复方式（整体清理 .trash；已核验项折叠退役后
+    // 计数自动归零，无需同步日志——issue #359）
     const guidance = screen.getByText(/恢复方式/)
     expect(guidance.textContent).toContain('.trash')
-    expect(guidance.textContent).toContain('asset-delete-journal.json')
+    expect(guidance.textContent).toContain('自动归零')
+    expect(guidance.textContent).toContain(
+      '无需再编辑 asset-delete-journal.json',
+    )
     // 明细条目随 details 可见
     expect(screen.getByText('媒体已隔离待清理：assets/la-1.png')).toBeTruthy()
   })
