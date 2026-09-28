@@ -51,12 +51,41 @@ function displayColorKeyOf(name: string): string | null {
   return isDisplayColorProp(kebab) ? kebab : null
 }
 
+/** 包装表达式的联合节点形态（issue #396）：解包目标类型守卫的收窄类型。 */
+type WrapperExpression =
+  | ts.ParenthesizedExpression
+  | ts.AsExpression
+  | ts.TypeAssertion
+  | ts.NonNullExpression
+  | ts.SatisfiesExpression
+
+/**
+ * 包装表达式判定（issue #396）：括号/as/尖括号断言/非空断言/satisfies
+ * 只改变节点形态不改变语义——值侧静态抽取与赋值目标分类共用同一
+ * 解包口径，等价合法形态不得因包装绕过登记。
+ */
+function isWrapperExpression(node: ts.Expression): node is WrapperExpression {
+  return (
+    ts.isParenthesizedExpression(node) ||
+    ts.isAsExpression(node) ||
+    ts.isTypeAssertionExpression(node) ||
+    ts.isNonNullExpression(node) ||
+    ts.isSatisfiesExpression(node)
+  )
+}
+
+/** 包装表达式递归解包（issue #396）：多层包装（嵌套括号等）一并剥离。 */
+function unwrapExpression(node: ts.Expression): ts.Expression {
+  return isWrapperExpression(node) ? unwrapExpression(node.expression) : node
+}
+
 /**
  * 静态字符串值递归抽取（评审 4113886895）：字符串/无替换模板字面量、
  * JSX 表达式容器（评审 4113927266）、包装表达式（as const/尖括号断言/
  * 括号/非空断言/satisfies）解包、`??`/`||`/`&&` 两侧与三元分支的静态
  * 字面都进入登记口径——等价静态入口不得因节点形态绕过（尖括号断言仅
- * .ts 合法，评审 4114274468）；动态表达式不产生静态文本。
+ * .ts 合法，评审 4114274468）；动态表达式不产生静态文本。包装判定与
+ * 赋值目标解包共用 isWrapperExpression/unwrapExpression（issue #396）。
  */
 function staticTextsOf(node: ts.Expression | undefined): string[] {
   if (node === undefined) return []
@@ -66,13 +95,7 @@ function staticTextsOf(node: ts.Expression | undefined): string[] {
   if (ts.isJsxExpression(node)) {
     return staticTextsOf(node.expression)
   }
-  if (
-    ts.isAsExpression(node) ||
-    ts.isTypeAssertionExpression(node) ||
-    ts.isParenthesizedExpression(node) ||
-    ts.isNonNullExpression(node) ||
-    ts.isSatisfiesExpression(node)
-  ) {
+  if (isWrapperExpression(node)) {
     return staticTextsOf(node.expression)
   }
   if (
@@ -185,7 +208,9 @@ function objectLiteralOccurrences(
 /**
  * 增量属性赋值入口（评审 4114047062）：`style.color = '…'` 与
  * `style['backgroundColor'] = '…'` 的静态字面与对象键同口径受检——
- * 合法且静态的显示色硬编码不因逐步构造而绕过。
+ * 合法且静态的显示色硬编码不因逐步构造而绕过。左值分类前先递归解包
+ * 包装表达式（issue #396）：`(style.color) = '…'` 等括号（含嵌套）
+ * 与断言包装的合法形态按同一键口径受检。
  */
 /**
  * 能写入右值静态字面的赋值运算符：普通等号与三种逻辑赋值（`??=`/`||=`/
@@ -204,12 +229,15 @@ function assignmentOccurrences(
   node: ts.BinaryExpression,
 ): JsxColorOccurrence[] {
   if (!WRITING_ASSIGNMENT_OPS.has(node.operatorToken.kind)) return []
+  // 左值先解包（issue #396）：括号/断言包装改变节点形态，解包后与直
+  // 赋值同口径分类
+  const target = unwrapExpression(node.left)
   // 键候选全部遍历（评审 4114362293）：多候选计算键（如三元下标）逐候选
   // 分类，非显示键候选不得遮蔽同表达式中的显示键候选
   let names: string[]
-  if (ts.isPropertyAccessExpression(node.left)) names = [node.left.name.text]
-  else if (ts.isElementAccessExpression(node.left)) {
-    names = staticTextsOf(node.left.argumentExpression)
+  if (ts.isPropertyAccessExpression(target)) names = [target.name.text]
+  else if (ts.isElementAccessExpression(target)) {
+    names = staticTextsOf(target.argumentExpression)
   } else {
     names = []
   }
@@ -614,6 +642,27 @@ describe('TSX/SVG 增量赋值与断言语法（issue #362，评审补强）', (
     // 首候选 width 非显示键不得遮蔽次候选 color：全部候选分别分类
     expect(occurrences).toEqual([
       { file: 'fixture.tsx', context: 'color', value: '#fff' },
+    ])
+  })
+
+  it('括号包装的赋值目标：递归解包后与直赋值同口径受检（issue #396）', () => {
+    const occurrences = colorOccurrencesOfSource(
+      'fixture.tsx',
+      'export function f(style: {\n' +
+        '  color?: string;\n' +
+        '  backgroundColor?: string;\n' +
+        '}) {\n' +
+        "  (style.color) = '#fff';\n" +
+        "  (style['backgroundColor']) = '#000';\n" +
+        "  ((style.color)) = '#f00';\n" +
+        '}',
+    )
+    // 包装只改变节点形态不改变语义：括号（含嵌套）包裹的属性访问与
+    // 下标目标解包后按既有键分类登记
+    expect(occurrences).toEqual([
+      { file: 'fixture.tsx', context: 'color', value: '#fff' },
+      { file: 'fixture.tsx', context: 'background-color', value: '#000' },
+      { file: 'fixture.tsx', context: 'color', value: '#f00' },
     ])
   })
 })
