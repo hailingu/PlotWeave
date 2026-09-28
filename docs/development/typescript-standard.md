@@ -4,7 +4,7 @@
 (`src/**` and root frontend manifests). Like the root `AGENTS.md`, this file is
 written in English for agent interoperability.
 
-**Last reviewed**: 2026-09-26
+**Last reviewed**: 2026-09-28
 
 ## Required Reading
 
@@ -41,10 +41,15 @@ written in English for agent interoperability.
 (Issues [#230](https://github.com/hailingu/PlotWeave/issues/230) and
 [#231](https://github.com/hailingu/PlotWeave/issues/231), implemented.)
 Production source is checked beyond the `strict` baseline by an independent
-entry: `npm run typecheck:strict` runs `tsc --noEmit -p tsconfig.strict.json`
-with two additions, and `scripts/check-static.sh` invokes it alongside Prettier
-and ESLint so the local Git gate, the Sonar gate, and CI (`ci.yml`) all reject
-violations before coverage generation.
+entry: `npm run typecheck:strict` runs `tsc --noEmit -p tsconfig.strict.json`,
+which `extends` the base `tsconfig.json` and adds exactly one flag on top of
+it — `noUncheckedIndexedAccess`. The other flag discussed below,
+`exactOptionalPropertyTypes`, is not an increment of `tsconfig.strict.json`:
+it is enabled in the base `tsconfig.json` itself, so it applies to the main
+build and to every entry derived from that base. `scripts/check-static.sh`
+invokes the strict entry alongside Prettier and ESLint so the local Git gate,
+the Sonar gate, and CI (`ci.yml`) all reject violations before coverage
+generation.
 
 - **`noUncheckedIndexedAccess`** (#230): Record and array index reads carry
   `undefined` at the type level.
