@@ -1,9 +1,10 @@
 #!/bin/sh
 # 门禁树标记（issue #404）：记录「最近一次通过完整门禁的索引树」。
-# pre-commit / pre-merge-commit 在门禁通过后 write；prepare-commit-msg
-# 先 check——同一提交操作内刚过检的树跳过重复门禁（普通 git commit 由
-# pre-commit 保证、合并由 pre-merge-commit 保证，仍各恰一次），revert /
-# cherry-pick / rebase 重放等没有 pre-commit 等价钩子的路径由此触发完整
+# 只有 pre-commit / pre-merge-commit 在门禁通过后 write（同操作内的
+# 消费者是后触发的 prepare-commit-msg）；prepare-commit-msg 自身的回退
+# 门禁通过后不写标记——同操作内没有下游消费者，写了只会让后续操作
+# 复用（评审 4120239723）。revert / cherry-pick / rebase 重放等没有
+# pre-commit 等价钩子的路径由 prepare-commit-msg 的回退门禁触发完整
 # 门禁。标记是单次消费的：check 命中即删除，只服务产生它的那次操作，
 # 后续操作（含同树 --no-verify 提交）不得复用（评审 4120128545）。标记
 # 仅是去重提示而非信任边界：任何错配的最坏情形是对与近期刚过检完全

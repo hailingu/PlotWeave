@@ -378,6 +378,29 @@ describe(
       expect(scenario.scannerRuns()).toBe(2)
     })
 
+    it('回退门禁后不写标记：连续两次同树 --no-verify 提交各执行门禁（评审 4120239723）', () => {
+      const scenario = prepareHookScenario()
+      // 回退门禁（prepare-commit-msg 直接执行）的同操作内没有标记消费
+      // 者：不得写标记，否则第二次同树 --no-verify 提交复用它跳过门禁
+      const first = scenario.git([
+        'commit',
+        '--allow-empty',
+        '--no-verify',
+        '-m',
+        'x',
+      ])
+      expect(first.status).toBe(0)
+      const second = scenario.git([
+        'commit',
+        '--allow-empty',
+        '--no-verify',
+        '-m',
+        'y',
+      ])
+      expect(second.status).toBe(0)
+      expect(scenario.scannerRuns()).toBe(2)
+    })
+
     it('门禁失败（Quality Gate 非 OK）时 revert 被阻止且不产生提交', () => {
       const scenario = prepareHookScenario('ERROR')
       const before = scenario.git(['rev-list', '--count', 'HEAD'])

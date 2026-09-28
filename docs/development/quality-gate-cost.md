@@ -41,12 +41,17 @@ Since the issue #404 wiring, the gated commands are `git commit` and
 `git push` as before, plus every other commit-creating porcelain that has a
 wireable pre-creation hook: non-fast-forward merges (`pre-merge-commit`), and
 `git revert` / `git cherry-pick` / rebase replays
-(`prepare-commit-msg`). The commit-creating hooks record the just-gated index
-tree through `scripts/gate-tree-marker.sh`, and `prepare-commit-msg` skips a
-run only when that exact tree was gated within the same operation moments
-earlier — an ordinary `git commit` still pays exactly one gate run, and a
-merge pays exactly one (`pre-merge-commit` gates, `prepare-commit-msg`
-deduplicates). Commands with no wireable hook (see the table) remain
+(`prepare-commit-msg`). Only `pre-commit` and `pre-merge-commit` record the
+just-gated index tree through `scripts/gate-tree-marker.sh` — its sole
+same-operation consumer is the `prepare-commit-msg` that follows them — and
+`prepare-commit-msg` skips a run only when that exact tree was gated within
+the same operation moments earlier: an ordinary `git commit` still pays
+exactly one gate run, and a merge pays exactly one (`pre-merge-commit` gates,
+`prepare-commit-msg` deduplicates). A fallback gate run in
+`prepare-commit-msg` (revert / cherry-pick / rebase replay / `--no-verify`)
+writes **no** marker: nothing downstream in that operation could consume it,
+so writing it would only enable reuse by a later operation (评审 4120239723).
+Commands with no wireable hook (see the table) remain
 ungated. The marker is **single-use** (评审 4120128545): a successful
 `check` consumes it, so a later operation — including a same-tree
 `--no-verify` commit — cannot reuse it. The marker is a dedup hint, not a
@@ -718,7 +723,9 @@ commit or merge still pays exactly one complete gate run, while
 revert / cherry-pick / rebase replays (and `--no-verify` commits) find no
 fresh matching marker and run the complete gate. The marker is consumed on a
 successful check (评审 4120128545), so it serves exactly the operation that
-wrote it and cannot be reused by a later same-tree operation. The earlier
+wrote it and cannot be reused by a later same-tree operation; the fallback
+gate run itself writes no marker (评审 4120239723) — two consecutive
+same-tree `--no-verify` commits therefore each pay the complete gate. The earlier
 record declined
 to propose this remedy because closing the gaps "would change gate behavior",
 which the #356 decision explicitly did not do; issue #404 is precisely the
