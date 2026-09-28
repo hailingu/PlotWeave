@@ -81,6 +81,21 @@
 验证记录（2026-09-18，[PR #201](https://github.com/hailingu/PlotWeave/pull/201) 第四轮评审修复）：锚点探测 `existing_anchor` 改为 `NotFound` 视为缺失、其余 I/O 失败按 fail-closed 上抛（探测失败优先于任何回滚计划），消除「瞬态元数据错误使现存目录被误判为本次新建、进而被失败清理拆除」的窗口。`cargo test --lib prefs::save_tests` 17 项通过；320 项单元测试全绿。
 
 验证记录（2026-09-18，[PR #201](https://github.com/hailingu/PlotWeave/pull/201) 第五轮评审修复）：第四轮的 fail-closed 回归测试此前只走正常路径（`leaf` 缺失、`tmp` 父目录正常，旧 `is_ok` 吞错实现同样通过），未真正覆盖所声称分支。现经 `faults::fail_at(Stage::AnchorProbe)`（仅判定注入、不进入协议序记录）在探测站点注入非 NotFound 失败，`persist::tests::entry_sync_plan_fail_closed_on_transient_metadata_error` 在接入注入前红、接入后绿，断言错误上抛且无任何创建／清理副作用。
+
+#### 设置读取边界状态与不变量（issue #391）
+
+[issue #391](https://github.com/hailingu/PlotWeave/issues/391) 已实现：`load_prefs`／`provider_secret` 的读取路径与保存路径采用同一套文件系统边界——经共用的 `ensure_data_dir` 定位并持久化确保数据目录后，以共用的 `open_prefs_root`（canonicalize + `open_ambient_dir`）锚定受信句柄，对 `settings.json` 先做 no-follow 归类（符号链接与非普通文件在打开前拒绝——FIFO／目录等异型条目不会阻塞 blocking 池线程，符号链接不被跟随读取），再相对句柄打开并做身份绑定（Unix 按 (dev, ino) 与归类元数据比对，与 `store::persist::read_verified_file` 同法；非 Unix 无身份可比，打开后重走归类复核），最后经既有 cap+1 流式限读（issue #147）物化。归类拒绝与替换拒绝都不是 NotFound，不落入首启空对象语义（issue #120）；`provider_secret` 对二者维持读取失败的钥匙串只读回退（超限仍硬拒绝）。缺失／损坏／超限的读取失败分类语义不变。
+
+| 前置状态 | 动作／时序 | 预期可观察结果 | 跨转换不变量及所有者 | 验证结果（`prefs::read_boundary_tests` 等） |
+| --- | --- | --- | --- | --- |
+| `settings.json` 为符号链接（指向根内或根外） | `load_prefs`／`provider_secret` 读取 | Err「设置文件是符号链接或非普通文件，拒绝读取」；不读取目标内容，条目与目标保持原状；`provider_secret` 落入钥匙串只读回退 | 读取层：no-follow 归类先于打开——与保存路径、journal 读取同一信任链；拒绝不落入首启语义 | `read_prefs_rejects_symlink_settings_without_following` 先红后绿（红相：目标 JSON 被跟随读出） |
+| `settings.json` 为 FIFO | `load_prefs` 读取 | 打开前以同一归类诊断拒绝返回，不无限期阻塞 blocking 池 worker | 读取层：异型条目在打开前拒绝——阻塞只可能来自对 FIFO 的 open/read | `read_prefs_rejects_fifo_settings_without_blocking` 先红后绿（红相：5 秒看门狗超时） |
+| `settings.json` 为目录 | `load_prefs` 读取 | 同一归类拒绝诊断，不降级为空对象 | 读取层：首启空对象语义专属 NotFound（issue #120） | `read_prefs_in_rejects_directory_settings`（沿用「非 NotFound 不降级」守护） |
+| 普通文件（缺失／合法／损坏／超限） | 读取 | 与既有语义一致：缺失→空对象、合法→解析、损坏／超限→既有诊断 | 读取层：#120 分类与 #147 cap+1 限读不变 | `read_prefs_in_missing_file_is_first_launch_empty_object`、`read_prefs_in_reads_valid_file`、`read_prefs_in_rejects_corrupt_json`、`read_prefs_in_rejects_oversize_file` |
+| 归类与打开之间条目被替换 | 归类为普通文件后被换名／换成符号链接 | 打开句柄身份 ≠ 归类身份 → Err「设置文件在读取前被替换」，不读取（非 Unix 打开后复核归类） | 读取层：身份绑定与 `store::persist::read_verified_file` 同法 | 无确定性触发手段（竞态窗口），记录缺口——与 persist／journal 同层未覆盖 |
+| 保存路径（对照） | `save_prefs` | 行为不变；目录锚定与读取共用 `open_prefs_root`、文件名共用常量 | 读写边界对称：同一锚定助手，不按路径名重解析 | `prefs::save_tests` 全量回归通过 |
+
+验证记录（2026-09-28）：先红后绿——红相（修复前）：符号链接用例跟随读出目标 JSON（`Ok({"defaultChat":"leaked"})`）、FIFO 用例 5 秒看门狗超时，`cargo test --lib prefs::read_boundary_tests` 2 项失败；绿相：同命令 2 项通过，`src-tauri` 下 `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` 全量通过（lib 426 项与集成夹具）。非 Unix 打开后复核分支沿用 `store::persist::read_verified_file` 同法，本仓库无 Windows 构建验证，属既有平台边界。
 ### 10.5 Rust 持久化命令（Tauri commands）
 
 **执行线程（[issue #138](https://github.com/hailingu/PlotWeave/issues/138)，已实现）**：
@@ -119,7 +134,7 @@
 | `delete_library_group(groupId)` | 要求组存在；原子删除组并剥离成员资产的 groupId，不留下悬空编组引用 |
 | `delete_library_asset(assetId)` | 按 §7.2 从本次受信规范化索引解析 id：若新索引仍有其他条目引用同一已打开文件身份，仅耐久提交去项索引；否则先耐久写 `asset-delete-journal.json`，再把身份核验后的原目录项通过受信句柄原子移入 `assets/.trash/` 随机名并复核移动后身份，隔离与目录 fsync 成功后才提交去项索引。提交后只用绑定已打开身份的平台原语清理隔离项；普通按名称 unlink 禁止。身份冲突、平台能力不足、清理或 fsync 失败均按阶段回迁或返回 `cleanupPending`，由启动/列表/后续写入按日志恢复；不得回滚已提交索引，也不得覆盖原名处后来出现的文件 |
 | `collect_library_asset(projectId, projectAssetId, meta)`（待实现） | #29 明确保留项目 → 库收藏链路；以下为目标职责。按 §7.1 分别以受信项目/库资产根句柄 no-follow 读取与写入，把项目资产完成文件 flush/fsync、原子落位与资产父目录 fsync 后才耐久提交新增库索引（「收藏」）；索引失败只留下可诊断孤儿文件 |
-| `get_settings()` / `update_settings(patch)`（目标名称） | 当前 IPC 为 `load_prefs()` / `save_prefs(prefs)`，读取/保存整份设置；不可把目标 patch 接口当作现有协议。`load_prefs` 仅在设置文件缺失（首次启动）返回空对象；损坏、超限或其余读取失败返回 Err 上抛，前端设置页展示可重试错误并阻止以默认值全量覆盖原配置（[issue #120](https://github.com/hailingu/PlotWeave/issues/120)）。`save_prefs` 在 1 MiB 序列化上限校验后，经受信应用根句柄执行 §10.2 原子写及持久性屏障；保存各阶段错误均上抛（[issue #121](https://github.com/hailingu/PlotWeave/issues/121)） |
+| `get_settings()` / `update_settings(patch)`（目标名称） | 当前 IPC 为 `load_prefs()` / `save_prefs(prefs)`，读取/保存整份设置；不可把目标 patch 接口当作现有协议。`load_prefs` 仅在设置文件缺失（首次启动）返回空对象；损坏、超限或其余读取失败返回 Err 上抛，前端设置页展示可重试错误并阻止以默认值全量覆盖原配置（[issue #120](https://github.com/hailingu/PlotWeave/issues/120)）。读取经与保存同一套边界（§10.2 锚定句柄 + no-follow 归类 + 身份绑定）：符号链接与非普通文件（含 FIFO）在打开前拒绝、不跟随、不阻塞（[issue #391](https://github.com/hailingu/PlotWeave/issues/391)）。`save_prefs` 在 1 MiB 序列化上限校验后，经受信应用根句柄执行 §10.2 原子写及持久性屏障；保存各阶段错误均上抛（[issue #121](https://github.com/hailingu/PlotWeave/issues/121)） |
 | `set_provider_key(provider, key)` | 加密并返回 envelope 密文（由前端随 settings 落盘；解密走 `seal::open`，无独立读命令） |
 | `llm_chat(messages, tools)` | LLM 请求代理：key 由 settings 密文在 Rust 内存解密，绕开 webview CORS（见 12.2）；#15 已补 120 秒请求超时、16 MiB 响应体流式限读，与图像代理共用 `http_util`，发送/读取超时有明确诊断 |
 | `llm_image_generate(request)` | 文生图代理（§13 首版）：单对象载荷（projectId/jobId/provider 配置/model/prompt/size），key 解密同 `llm_chat`；请求 OpenAI 兼容 `/images/generations`（b64_json 优先，url 成员回退下载），响应体流式限读（主响应 64 MiB 文本 / url 回退 32 MiB 字节，超限即中止）；**作业总预算 600s 自命令进入起算**（[issue #141](https://github.com/hailingu/PlotWeave/issues/141)，已实现）：provider 凭据读取（同步阻塞访问挪入阻塞线程池）、生成 POST（含响应体读取）与 url 回退下载链的逐跳 DNS 解析、请求、响应体读取的等待上界**均为作业剩余预算**，预算耗尽按阶段（读取凭据/生成请求/解析图像主机/下载图像/读取图像）给出诊断并放弃——不发出可能计费的请求、产物不写回；逐跳 120s 与 POST 300s 客户端超时保留为单阶段兜底；阻塞任务（凭据读取、DNS 解析）不可取消，预算耗尽只是放弃等待、任务运行至系统返回后其结果被丢弃、不持有应用锁；其中 DNS 解析被隔离在严格并发上限（2）的专用线程边界内——挂起的解析线程不占用 Tokio 阻塞池、不蔓延到凭据读取等其他阻塞工作，泄漏上限为常量个线程，在途到顶即按「解析繁忙」fail-fast，额度随解析线程返回归还，等待侧经异步通道由 `timeout_at(绝对截止时间)` 约束（阻塞池排队不会把等待拖过 deadline）；资源生命周期已文档化，PR #220 评审修订；产物按字节魔数定型 MIME（PNG/JPEG/WebP/GIF，provider 声称的 content-type 不作为依据）、过 32 MiB 上限后经原子写内核落盘进项目 `assets/`，§9.3 预检（形状 + 实路径复验）在命令内、返回前完成，前端单次 IPC 直收已校验的 `source=generated` AssetRef 并入索引。请求返回后与落盘前各查一次取消标志：协作式取消即放弃结果 |
