@@ -18,11 +18,11 @@ type GateOptions = {
   coverageMode?:
     'empty' | 'malformed' | 'missing' | 'partial' | 'uncovered' | 'valid'
   formatExit?: number
-  historyReadOnly?: boolean
-  historySeed?: string
   lintExit?: number
   lockOccupied?: boolean
   npmExit?: number
+  pendingReadOnly?: boolean
+  pendingSeed?: string
   plotweaveSonarToken?: string
   rustCoverageMode?:
     'empty' | 'malformed' | 'missing' | 'partial' | 'uncovered' | 'valid'
@@ -38,6 +38,7 @@ type GateRun = {
   curlStdin: string
   history: string
   log: string
+  pending: string
   scannerToken: string
   status: number | null
   stderr: string
@@ -60,6 +61,7 @@ interface GateStubPaths {
   readonly coveragePath: string
   readonly rustCoveragePath: string
   readonly historyPath: string
+  readonly pendingPath: string
   readonly lockPath: string
   readonly reportPath: string
   readonly npmPath: string
@@ -185,6 +187,7 @@ function gateEnvironment(
     PLOTWEAVE_CURL_BIN: paths.curlPath,
     PLOTWEAVE_COVERAGE_REPORT_PATH: paths.coveragePath,
     PLOTWEAVE_GATE_HISTORY_PATH: paths.historyPath,
+    PLOTWEAVE_GATE_PENDING_PATH: paths.pendingPath,
     PLOTWEAVE_RUST_COVERAGE_REPORT_PATH: paths.rustCoveragePath,
     PLOTWEAVE_SONAR_LOCK_DIRECTORY: paths.lockPath,
     PLOTWEAVE_NODE_BIN: process.execPath,
@@ -231,6 +234,7 @@ function runGate(target: string, options: GateOptions = {}): GateRun {
     coveragePath: resolve(sandbox, 'coverage', 'lcov.info'),
     rustCoveragePath: resolve(sandbox, 'rust-coverage', 'lcov-rust.info'),
     historyPath: resolve(sandbox, 'gate-history.jsonl'),
+    pendingPath: resolve(sandbox, 'gate-pending.jsonl'),
     lockPath: resolve(sandbox, 'sonar-gate.lock'),
     reportPath: resolve(sandbox, '.scannerwork', 'report-task.txt'),
     npmPath: resolve(sandbox, 'bin', 'npm'),
@@ -241,14 +245,16 @@ function runGate(target: string, options: GateOptions = {}): GateRun {
 
   writeCommandStubs(paths, options)
 
-  // 记录文件预置为空（或种子行 / 只读形态）：失败路径不追加时读到空串，
-  // 只读形态验证「写不进不阻塞门禁」（issue #355）
+  // 版本化与待物化文件预置为空（待物化可种子/只读）：失败路径不追加时
+  // 读到空串；只读形态验证「写不进不阻塞门禁」（issue #355）。版本化
+  // 文件保持空串以断言门禁运行绝不直接触碰它（PR #415 评审 5338815626）
   writeFileSync(paths.historyPath, '')
-  if (options.historySeed !== undefined) {
-    writeFileSync(paths.historyPath, `${options.historySeed}\n`)
+  writeFileSync(paths.pendingPath, '')
+  if (options.pendingSeed !== undefined) {
+    writeFileSync(paths.pendingPath, `${options.pendingSeed}\n`)
   }
-  if (options.historyReadOnly) {
-    chmodSync(paths.historyPath, 0o444)
+  if (options.pendingReadOnly) {
+    chmodSync(paths.pendingPath, 0o444)
   }
 
   const result = spawnSync('sh', [resolve(repositoryRoot, target)], {
@@ -264,6 +270,7 @@ function runGate(target: string, options: GateOptions = {}): GateRun {
     }),
     history: readFileSync(paths.historyPath, { encoding: 'utf8' }),
     log: readFileSync(paths.logPath, { encoding: 'utf8', flag: 'a+' }),
+    pending: readFileSync(paths.pendingPath, { encoding: 'utf8' }),
     scannerToken: readFileSync(paths.scannerTokenPath, {
       encoding: 'utf8',
       flag: 'a+',
@@ -499,14 +506,14 @@ describe.each(['.githooks/pre-commit', '.githooks/pre-push'])(
 )
 
 describe(
-  '门禁结论摘要记录（issue #355：完整通过后写入版本化可他验凭据）',
+  '门禁结论摘要记录（issue #355：完整通过后写入待物化文件，推送时并入版本化凭据）',
   { timeout: 30_000 },
   () => {
-    it('完整通过后追加一行合法 JSON：时间、被检树、运行时 HEAD、门禁结论与两侧行覆盖率', () => {
+    it('完整通过后向待物化文件追加一行合法 JSON，且绝不直接触碰版本化文件（PR #415 评审 5338815626）', () => {
       const result = runGate('scripts/sonar-quality-gate.sh')
 
       expect(result.status).toBe(0)
-      const lines = result.history.split('\n').filter(Boolean)
+      const lines = result.pending.split('\n').filter(Boolean)
       expect(lines).toHaveLength(1)
       const record = JSON.parse(lines[0] ?? '')
       expect(record.timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/)
@@ -516,6 +523,9 @@ describe(
       expect(record.newCodeUnresolvedIssues).toBe(0)
       expect(record.frontendLineCoveragePercent).toBe(100)
       expect(record.rustLineCoveragePercent).toBe(100)
+      // 门禁运行只写 .git 内待物化文件：提交创建路径不得给被跟踪的
+      // 版本化文件留下未暂存改动（否则重放/检出/合并会被打断）
+      expect(result.history).toBe('')
     })
 
     it('行覆盖率按本次 LCOV 的 DA 命中统计（2/3 覆盖 → 66.67）', () => {
@@ -525,7 +535,7 @@ describe(
       })
 
       expect(result.status).toBe(0)
-      const [line] = result.history.split('\n').filter(Boolean)
+      const [line] = result.pending.split('\n').filter(Boolean)
       const record = JSON.parse(line ?? '')
       expect(record.frontendLineCoveragePercent).toBe(66.67)
       expect(record.rustLineCoveragePercent).toBe(66.67)
@@ -542,33 +552,33 @@ describe(
         const result = runGate('scripts/sonar-quality-gate.sh', options)
 
         expect(result.status, JSON.stringify(options)).not.toBe(0)
-        expect(result.history, JSON.stringify(options)).toBe('')
+        expect(result.pending, JSON.stringify(options)).toBe('')
       }
     })
 
-    it('追加而非覆盖：既有记录行保留，新记录续在其后', () => {
+    it('追加而非覆盖：既有待物化行保留，新记录续在其后', () => {
       const seed =
         '{"timestamp":"2026-01-01T00:00:00Z","tree":"seed-tree","head":"seed-head",' +
         '"qualityGate":"OK","newCodeUnresolvedIssues":0,' +
         '"frontendLineCoveragePercent":1,"rustLineCoveragePercent":1}'
       const result = runGate('scripts/sonar-quality-gate.sh', {
-        historySeed: seed,
+        pendingSeed: seed,
       })
 
       expect(result.status).toBe(0)
-      const lines = result.history.split('\n').filter(Boolean)
+      const lines = result.pending.split('\n').filter(Boolean)
       expect(lines).toHaveLength(2)
       expect(JSON.parse(lines[0] ?? '')).toEqual(JSON.parse(seed))
       expect(JSON.parse(lines[1] ?? '').qualityGate).toBe('OK')
     })
 
-    it('记录写入失败只警告、不阻塞已通过的门禁（尽力而为，同树标记哲学）', () => {
+    it('待物化文件写入失败只警告、不阻塞已通过的门禁（尽力而为，同树标记哲学）', () => {
       const result = runGate('scripts/sonar-quality-gate.sh', {
-        historyReadOnly: true,
+        pendingReadOnly: true,
       })
 
       expect(result.status).toBe(0)
-      expect(result.history).toBe('')
+      expect(result.pending).toBe('')
       expect(`${result.stdout}${result.stderr}`).toContain('无法写入门禁记录')
     })
 
@@ -578,7 +588,25 @@ describe(
       })
 
       expect(result.status).toBe(0)
-      expect(result.history).not.toContain('sqp_token-a.1')
+      expect(result.pending).not.toContain('sqp_token-a.1')
+    })
+
+    it('pre-commit 完整通过只写待物化文件：不物化、不弄脏版本化文件', () => {
+      const result = runGate('.githooks/pre-commit')
+
+      expect(result.status).toBe(0)
+      expect(result.pending.split('\n').filter(Boolean)).toHaveLength(1)
+      expect(result.history).toBe('')
+    })
+
+    it('pre-push 完整通过后把待物化行物化进版本化文件并清空待物化文件', () => {
+      const result = runGate('.githooks/pre-push')
+
+      expect(result.status).toBe(0)
+      const lines = result.history.split('\n').filter(Boolean)
+      expect(lines).toHaveLength(1)
+      expect(JSON.parse(lines[0] ?? '').qualityGate).toBe('OK')
+      expect(result.pending).toBe('')
     })
   },
 )

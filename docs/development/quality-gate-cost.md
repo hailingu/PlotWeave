@@ -14,8 +14,9 @@ written in English for agent interoperability.
 2026-09-28 by the issue #404 commit-creation wiring (same complete gate,
 more commands routed through it — see
 [What The Gate Actually Enforces](#what-the-gate-actually-enforces)) and by
-the issue #355 evidence record (one appended summary line per fully passing
-run — see
+the issue #355 evidence record (one summary line per fully passing run,
+written to a pending file inside `.git` and materialized into the versioned
+file after a passing push — see
 [Gate Run Evidence Record](#gate-run-evidence-record-issue-355)).
 
 ## Required Reading
@@ -39,8 +40,10 @@ Every gated command runs the same complete sequence:
    `media_format_leaf` test target.
 4. `sonar-scanner` publishing the analysis, then waiting for the Quality Gate,
    then a separate check that new-code unresolved issues are zero.
-5. Since issue #355, a fully passing run appends one summary record to the
-   versioned `docs/development/gate-history.jsonl` (see
+5. Since issue #355, a fully passing run appends one summary record to a
+   pending file inside `.git`, and the `pre-push` hook materializes pending
+   lines into the versioned `docs/development/gate-history.jsonl` after its
+   gate passes (see
    [Gate Run Evidence Record](#gate-run-evidence-record-issue-355)). This step
    observes and records; it checks nothing and adds no variant of the gate.
 
@@ -170,9 +173,10 @@ a hardening change to gate behavior and out of scope for this record.
 steer the dedup marker and its expiry, so exporting a pre-written matching
 marker can suppress the `prepare-commit-msg` gate run. Same disposition —
 test-only injection, explicit evasion to use it that way.
-`PLOTWEAVE_GATE_HISTORY_PATH` (`scripts/sonar-quality-gate.sh`, issue #355)
-also belongs to the test-only injection class: it redirects only where the
-evidence record is written, so it cannot skip any check, but pointing it
+`PLOTWEAVE_GATE_HISTORY_PATH` and `PLOTWEAVE_GATE_PENDING_PATH`
+(`scripts/sonar-quality-gate.sh` / `scripts/gate-history.sh`, issue #355)
+also belong to the test-only injection class: they redirect only where the
+evidence record is written, so they cannot skip any check, but pointing them
 elsewhere does remove the in-repository evidence for that run.
 
 Anyone reading a faster local workflow elsewhere in this repository should
@@ -194,7 +198,14 @@ the gap without closing it.
 **What is recorded.** After a run passes the *complete* sequence — static
 checks, both coverage reports, the scanner, Quality Gate `OK`, and zero
 new-code unresolved issues — `scripts/sonar-quality-gate.sh` appends exactly
-one JSON line to `docs/development/gate-history.jsonl`:
+one JSON line to a pending file inside `.git`
+(`plotweave-gate-history.pending`), never to the tracked file mid-operation
+(PR #415 评审 5338815626: a commit-side write to the tracked file leaves an
+unstaged change that aborts the next rebase replay, checkout, or merge
+updating that file). After the `pre-push` gate passes, the hook runs
+`scripts/gate-history.sh materialize`, which folds the pending lines into the
+versioned `docs/development/gate-history.jsonl` and clears the pending file.
+Each record line:
 
 | Field | Meaning |
 | --- | --- |
@@ -216,16 +227,23 @@ unlike pre-#355 practice, the claim no longer depends on the executor's word.
 - *Success-only.* Failed or blocked runs append nothing: no Git operation
   results from them, so there is nothing to justify later. The log therefore
   proves "this tree passed", never "this tree was the only thing examined".
-- *Best-effort write.* A record append failure (permissions, disk) prints a
+- *Best-effort writes.* A pending-append failure (permissions, disk) prints a
   warning to stderr and does not block the already-passing gate — the same
-  philosophy as the tree marker. Evidence must not become a new way to fail
-  a clean gate.
-- *One-run lag is inherent.* The evidence file must itself pass the gate, so
-  the record for run *N* sits in the working tree until the next commit
-  stages it; a push-time record stays local until the next local commit. The
-  log converges with history rather than leading it. Agents and humans stage
-  pending record lines together with their next change; committing the file
-  alone burns a full gate run on a record-only commit.
+  philosophy as the tree marker. A materialize failure warns and does not
+  block the push; pending lines survive for the next push. If the append
+  into the versioned file succeeds but the pending-file truncation fails,
+  the next materialize can duplicate lines — benign under log semantics.
+  Evidence must not become a new way to fail a clean gate or push.
+- *Materialize-at-push, one-commit lag.* Commit-creating paths write only to
+  the pending file inside `.git`, so they never dirty the tracked file and
+  never interfere with subsequent Git steps; the versioned file is touched
+  only after a passing `pre-push`, at which no further tree operation is
+  pending in that command. Because the evidence file must itself pass the
+  gate, materialized lines are unstaged until the next commit stages them —
+  stage them together with the next change; committing the file alone burns
+  a full gate run on a record-only commit. Records for commit-side runs of
+  commits that are never pushed stay in the local pending file: nothing
+  leaves the machine, so there is no external claim to verify.
 - *Working tree vs. index key.* The gate analyzes the working tree (see
   [Known Finding: Push Scans The Checked-Out Tree, Not The Pushed
   Ref](#known-finding-push-scans-the-checked-out-tree-not-the-pushed-ref)),

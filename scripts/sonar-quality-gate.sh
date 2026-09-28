@@ -17,7 +17,6 @@ rust_coverage_report_path=${PLOTWEAVE_RUST_COVERAGE_REPORT_PATH:-$repository_roo
 llvm_cov_bin=${PLOTWEAVE_CARGO_LLVM_COV_BIN:-cargo-llvm-cov}
 lock_directory=${PLOTWEAVE_SONAR_LOCK_DIRECTORY:-$repository_root/.sonar-gate.lock}
 report_path=${PLOTWEAVE_SONAR_REPORT_PATH:-$repository_root/.scannerwork/report-task.txt}
-gate_history_path=${PLOTWEAVE_GATE_HISTORY_PATH:-$repository_root/docs/development/gate-history.jsonl}
 quality_gate_timeout=${SONAR_QUALITY_GATE_TIMEOUT:-300}
 sonar_host_url=${SONAR_HOST_URL:-}
 # 认证令牌：SONAR_TOKEN 优先；未设时回退到 PLOTWEAVE_SONAR_TOKEN
@@ -25,6 +24,10 @@ sonar_host_url=${SONAR_HOST_URL:-}
 sonar_token=${SONAR_TOKEN:-${PLOTWEAVE_SONAR_TOKEN:-}}
 
 cd "$repository_root"
+
+# 待物化路径在 cd 之后解析（PR #415 评审 5338815626）：git-path 的输出
+# 相对当前目录，须在仓库根下取值；非仓库环境回退到仓库根下的 .git。
+gate_pending_path=${PLOTWEAVE_GATE_PENDING_PATH:-$(git rev-parse --git-path plotweave-gate-history.pending 2>/dev/null || printf '%s' "$repository_root/.git/plotweave-gate-history.pending")}
 
 # 输出一致的阻塞原因并终止当前 Git 操作。
 fail() {
@@ -53,13 +56,14 @@ lcov_line_coverage_percent() {
   ' "$1" 2>/dev/null || printf '0'
 }
 
-# 门禁结论摘要记录（issue #355）：完整通过后把关键结论追加为版本化
-# docs/development/gate-history.jsonl 的一行 JSON——UTC 时间、被检索引树
-# （与 gate-tree-marker 同键）、运行时 HEAD、Quality Gate 状态、新增代码
-# 未解决问题数、前端与 Rust 行覆盖率。只记结论：令牌与原始扫描产物均不
-# 入库。写入尽力而为：任一步失败只向标准错误警告、不阻塞已通过的门禁
-# （与树标记同哲学）；刚写入的记录行停留在工作树、随下一次提交入库——
-# 记录文件本身也要过门禁，滞后一次运行是该机制的固有属性。
+# 门禁结论摘要记录（issue #355）：完整通过后把关键结论——UTC 时间、被检
+# 索引树（与 gate-tree-marker 同键）、运行时 HEAD、Quality Gate 状态、新
+# 增代码未解决问题数、前端与 Rust 行覆盖率——追加为 .git 内待物化文件的
+# 一行 JSON。只记结论：令牌与原始扫描产物均不入库。提交创建路径绝不直
+# 接改动被跟踪的版本化 gate-history.jsonl（PR #415 评审 5338815626：那样
+# 会给重放/检出/合并留下未暂存改动而中止操作）；待物化行由 pre-push 门禁
+# 通过后的 scripts/gate-history.sh materialize 并入版本化文件。写入尽力而
+# 为：任一步失败只向标准错误警告、不阻塞已通过的门禁（与树标记同哲学）。
 append_gate_history_record() {
   gate_tree=$(git write-tree 2>/dev/null) || gate_tree=
   gate_head=$(git rev-parse HEAD 2>/dev/null) || gate_head=
@@ -73,11 +77,11 @@ append_gate_history_record() {
     "$new_issues" \
     "$frontend_percent" \
     "$rust_percent" \
-    >> "$gate_history_path" 2>/dev/null; then
-    printf '[SonarQube] 门禁结论已追加到 %s。\n' "$gate_history_path"
+    >> "$gate_pending_path" 2>/dev/null; then
+    printf '[SonarQube] 门禁结论已记录，待推送时并入版本化 gate-history.jsonl。\n'
   else
     printf 'SonarQube 警告：无法写入门禁记录 %s；本次结论未入库，不阻塞已通过的操作。\n' \
-      "$gate_history_path" >&2
+      "$gate_pending_path" >&2
   fi
 }
 
