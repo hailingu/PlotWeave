@@ -1,8 +1,8 @@
 /**
  * 首页片库的数据模型与纯逻辑。
- * ProjectSummary 是首页海报卡的展示模型；数据未来由 Rust 端
- * `list_projects` 命令从 index.json 提供（docs/ui-design.md §3.2），
- * 本文件在项目持久化落地前提供占位数据，搜索过滤按设计走内存过滤。
+ * ProjectSummary 是首页海报卡的展示模型；数据由 Rust 端 `list_projects`
+ * 命令提供（当前直接扫描受信项目目录，index.json 缓存属规划中，见
+ * docs/data-model/persistence.md §10.2），搜索过滤按设计走内存过滤。
  */
 
 /** 项目摘要：首页海报卡的展示模型，统计字段均可从画布节点计数派生。 */
@@ -72,8 +72,8 @@ export function formatRelativeTime(
 }
 
 /**
- * 占位项目数据：让首页在持久化命令（list_projects）落地前即可预览
- * 真实排版——一张带封面、一张走织线兜底。接入后端后删除。
+ * 样例项目数据：一张带封面、一张走织线兜底。首页数据已由
+ * `list_projects` 提供，本函数仅作为 projects.test.ts 的确定性夹具保留。
  */
 export function createSampleProjects(now: Date = new Date()): ProjectSummary[] {
   const hoursAgo = (h: number) =>
