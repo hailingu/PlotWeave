@@ -123,9 +123,104 @@ function commandBindingNamesOf(sf: ts.SourceFile, file: string): Set<string> {
   return names
 }
 
-/** 前端维护模块的 IPC 使用面：字面量调用点（应为空）、core 说明符越界
- * 引用（应为空）、计算式动态导入（应为空，fail-closed）与被引用的
- * 命令键。 */
+/** 单文件采集的 IPC 使用面：字面量调用点、core 说明符越界引用、计算式
+ * 动态导入与被引用的命令键（条目以相对 src 的路径标注）。 */
+interface FileIpcUsage {
+  literalCalls: string[]
+  coreImportsOutsideWrapper: string[]
+  computedImports: string[]
+  accessedCommandKeys: Set<string>
+}
+
+/** 单文件的 IPC 使用面扫描（scanFrontendIpcUsage 的每文件内核，评审
+ * 5340494949 拆分）：AST 遍历收集四类信号；豁免判定按文件——常量表
+ * 自身不构成消费（不扫描键访问），类型化入口模块是唯一允许绑定原始
+ * invoke 的位置（core 说明符与计算式导入均豁免记录）。 */
+function scanFileIpcUsage(file: string): FileIpcUsage {
+  const kind = file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS
+  const sf = ts.createSourceFile(
+    file,
+    readFileSync(file, 'utf8'),
+    ts.ScriptTarget.Latest,
+    true,
+    kind,
+  )
+  const bindingNames =
+    file === commandsModulePath
+      ? new Set<string>()
+      : commandBindingNamesOf(sf, file)
+  const rel = relative(srcRoot, file)
+  const usage: FileIpcUsage = {
+    literalCalls: [],
+    coreImportsOutsideWrapper: [],
+    computedImports: [],
+    accessedCommandKeys: new Set<string>(),
+  }
+  const recordCoreImport = (specifier: string): void => {
+    if (file !== invokeModulePath) {
+      usage.coreImportsOutsideWrapper.push(`${rel} → ${specifier}`)
+    }
+  }
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isImportDeclaration(node) &&
+      ts.isStringLiteral(node.moduleSpecifier) &&
+      node.moduleSpecifier.text === coreSpecifier
+    ) {
+      recordCoreImport(node.moduleSpecifier.text)
+    }
+    if (ts.isCallExpression(node)) {
+      recordImportCallUsage(node, file, sf, recordCoreImport, usage, rel)
+      const callee = invokeCalleeName(node.expression)
+      const first = node.arguments[0]
+      if (
+        callee !== null &&
+        /invoke/i.test(callee) &&
+        first !== undefined &&
+        (ts.isStringLiteral(first) || ts.isNoSubstitutionTemplateLiteral(first))
+      ) {
+        usage.literalCalls.push(`${rel} → ${callee}('${first.text}')`)
+      }
+    }
+    if (
+      ts.isPropertyAccessExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      bindingNames.has(node.expression.text)
+    ) {
+      usage.accessedCommandKeys.add(node.name.text)
+    }
+    ts.forEachChild(node, visit)
+  }
+  ts.forEachChild(sf, visit)
+  return usage
+}
+
+/** 动态 import() 调用的说明符检查（scanFileIpcUsage 内核拆分）：静态
+ * 说明符（字符串或无替换模板，与 moduleGraph isStaticSpecifier 同口径）
+ * 命中 core 即记录越界；计算式说明符 fail-closed（评审 5340318886）——
+ * 运行时可求值为任意模块（含 core）、无法静态排除，类型化入口模块之外
+ * 一律失败，与 moduleGraph 对不可静态解析动态导入的口径一致。 */
+function recordImportCallUsage(
+  node: ts.CallExpression,
+  file: string,
+  sf: ts.SourceFile,
+  recordCoreImport: (specifier: string) => void,
+  usage: FileIpcUsage,
+  rel: string,
+): void {
+  if (node.expression.kind !== ts.SyntaxKind.ImportKeyword) return
+  const spec = node.arguments[0]
+  if (spec === undefined) return
+  if (ts.isStringLiteral(spec) || ts.isNoSubstitutionTemplateLiteral(spec)) {
+    if (spec.text === coreSpecifier) recordCoreImport(spec.text)
+  } else if (file !== invokeModulePath) {
+    usage.computedImports.push(`${rel} → ${spec.getText(sf)}`)
+  }
+}
+
+/** 前端维护模块的 IPC 使用面（跨文件聚合）：字面量调用点（应为空）、
+ * core 说明符越界引用（应为空）、计算式动态导入（应为空，fail-closed）
+ * 与被引用的命令键。 */
 function scanFrontendIpcUsage(): {
   literalCalls: string[]
   coreImportsOutsideWrapper: string[]
@@ -137,79 +232,13 @@ function scanFrontendIpcUsage(): {
   const computedImports: string[] = []
   const accessedCommandKeys = new Set<string>()
   for (const file of listMaintainedModules(srcRoot)) {
-    const kind = file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS
-    const sf = ts.createSourceFile(
-      file,
-      readFileSync(file, 'utf8'),
-      ts.ScriptTarget.Latest,
-      true,
-      kind,
-    )
-    // 常量表自身不构成消费：定义处不扫描键访问
-    const bindingNames =
-      file === commandsModulePath
-        ? new Set<string>()
-        : commandBindingNamesOf(sf, file)
-    const recordCoreImport = (specifier: string): void => {
-      // 类型化入口模块是唯一豁免：它持有全仓唯一的原始 invoke 绑定
-      if (file !== invokeModulePath) {
-        coreImportsOutsideWrapper.push(
-          `${relative(srcRoot, file)} → ${specifier}`,
-        )
-      }
+    const usage = scanFileIpcUsage(file)
+    literalCalls.push(...usage.literalCalls)
+    coreImportsOutsideWrapper.push(...usage.coreImportsOutsideWrapper)
+    computedImports.push(...usage.computedImports)
+    for (const key of usage.accessedCommandKeys) {
+      accessedCommandKeys.add(key)
     }
-    const visit = (node: ts.Node): void => {
-      if (
-        ts.isImportDeclaration(node) &&
-        ts.isStringLiteral(node.moduleSpecifier) &&
-        node.moduleSpecifier.text === coreSpecifier
-      ) {
-        recordCoreImport(node.moduleSpecifier.text)
-      }
-      if (ts.isCallExpression(node)) {
-        if (node.expression.kind === ts.SyntaxKind.ImportKeyword) {
-          const spec = node.arguments[0]
-          if (
-            spec !== undefined &&
-            (ts.isStringLiteral(spec) ||
-              ts.isNoSubstitutionTemplateLiteral(spec))
-          ) {
-            // 静态可解析说明符：无替换模板与字符串同形（与 moduleGraph
-            // isStaticSpecifier 同口径）
-            if (spec.text === coreSpecifier) recordCoreImport(spec.text)
-          } else if (spec !== undefined && file !== invokeModulePath) {
-            // 计算式说明符 fail-closed（评审 5340318886）：运行时可求值
-            // 为任意模块（含 core），无法静态排除——与 moduleGraph 对不可
-            // 静态解析动态导入的口径一致；类型化入口模块豁免同前
-            computedImports.push(
-              `${relative(srcRoot, file)} → ${spec.getText(sf)}`,
-            )
-          }
-        }
-        const callee = invokeCalleeName(node.expression)
-        const first = node.arguments[0]
-        if (
-          callee !== null &&
-          /invoke/i.test(callee) &&
-          first !== undefined &&
-          (ts.isStringLiteral(first) ||
-            ts.isNoSubstitutionTemplateLiteral(first))
-        ) {
-          literalCalls.push(
-            `${relative(srcRoot, file)} → ${callee}('${first.text}')`,
-          )
-        }
-      }
-      if (
-        ts.isPropertyAccessExpression(node) &&
-        ts.isIdentifier(node.expression) &&
-        bindingNames.has(node.expression.text)
-      ) {
-        accessedCommandKeys.add(node.name.text)
-      }
-      ts.forEachChild(node, visit)
-    }
-    ts.forEachChild(sf, visit)
   }
   return {
     literalCalls,
