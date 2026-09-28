@@ -20,6 +20,9 @@ serde = { version = "1.0.229", features = ["derive"] }
 aes-gcm = "0.10"
 base64 = "0.22"
 sha2 = "0.10"
+# issue #392：keyEnc envelope v2 的密钥派生改用 PBKDF2-HMAC-SHA256
+#（迭代拉伸替代单次 SHA-256）；与既有 sha2 0.10 同 RustCrypto 家族。
+pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
 serde_json = "1.0.151"
 # protocol-asset feature 已随 issue #31 停用 assetProtocol 一并移除：
 # 库/项目媒体均走 pwmedia 自定义协议（数据模型 §7.1）
