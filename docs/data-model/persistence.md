@@ -104,10 +104,14 @@
 的同步工作，由异步命令通过 `blocking::run` 整体交给 `spawn_blocking`。
 目录准备、锁等待、序列化、文件操作和持久性屏障均在闭包内完成；IPC 成功仅在
 完整内核结束后返回，领域错误保持原样，线程任务异常显式失败。worker
-panic／未完成折叠为单一返回文案（不打印 panic 载荷或命令参数——载荷可能
-含项目内容／密钥），stderr 诊断行按稳定诊断码区分两类来源：
-`code=worker-panicked`（领域代码 panic）与 `code=worker-incomplete`
-（取消／饱和／进程级资源异常），登记为已知边界（[issue #400](https://github.com/hailingu/PlotWeave/issues/400)）。
+panic／未完成折叠为单一返回文案（`blocking` 层自身不打印 panic 载荷或
+命令参数——载荷可能含项目内容／密钥），stderr 诊断行按稳定诊断码区分
+两类来源：`code=worker-panicked`（领域代码 panic）与
+`code=worker-incomplete`（取消／饱和／进程级资源异常），登记为已知边界
+（[issue #400](https://github.com/hailingu/PlotWeave/issues/400)）。该
+无泄露保证仅覆盖 `blocking` 层自身输出：worker 线程 panic 时 Rust 默认
+panic hook 先于 join 错误运行，仍会按默认格式把 panic 载荷写入 stderr
+（进程级残留边界，PR #408 评审修订；压制 hook 属全局诊断取舍，另行登记）。
 事务锁与恢复
 诊断序号仍由同步内核拥有，不跨 await 持有。相关操作的先后关系继续由前端
 项目／会话共享保存链、设置保存链及库变更队列保证；独立并发请求不承诺 FIFO。

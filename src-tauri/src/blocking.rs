@@ -2,10 +2,14 @@
 //!
 //! 已知边界（issue #400）：worker panic 折叠为单一返回文案——不打印
 //! panic 载荷或命令参数是有意取舍（载荷可能含项目内容／密钥，落日志即
-//! 泄露面），代价是返回错误不含领域上下文。stderr 诊断行按稳定诊断码
-//! 区分 panic 与 worker 未完成（`code=worker-panicked`／
-//! `code=worker-incomplete`），使「不变量被破坏」与「未交付结果」可
-//! 分诊；二者之外的分类（载荷、参数、密钥）不进入任何输出。
+//! 泄露面），代价是返回错误不含领域上下文。本调度层**自身输出**
+//! （stderr 诊断行与返回文案）按稳定诊断码区分 panic 与 worker 未完成
+//! （`code=worker-panicked`／`code=worker-incomplete`），使「不变量被
+//! 破坏」与「未交付结果」可分诊，且不含载荷、参数或密钥——无泄露保证
+//! 仅覆盖本层输出。进程级残留边界（PR #408 评审修订）：worker 线程
+//! panic 时 Rust 默认 panic hook 先于 join 错误运行，仍会按默认格式把
+//! panic 载荷写入 stderr；压制该 hook 是影响全应用诊断的全局取舍，
+//! 不由本层单方面决定，另行登记处置。
 
 /// 等待整个同步内核结束后再返回结果；锁须在闭包内取得、释放，业务错误原样上浮。
 /// 已开始的工作不随等待者取消而中断；依赖操作仍由调用方 await 串联。
@@ -18,7 +22,8 @@ pub(crate) async fn run<T: Send + 'static>(
     tauri::async_runtime::spawn_blocking(operation)
         .await
         .map_err(|e| {
-            // 不打印 panic 载荷或命令参数，避免把项目内容／密钥写入诊断。
+            // 本层不打印 panic 载荷或命令参数，避免把项目内容／密钥写入
+            // 诊断（worker 线程默认 panic hook 的进程级行为见模块文档）。
             eprintln!("{}", worker_failure_line(command, &e));
             format!("{command} 后台任务异常退出")
         })?
