@@ -4,12 +4,14 @@
  * 双向断言——
  * 1. 常量集与注册集一致：不漏（注册命令必有常量，前端才可引用）、
  *    不多（常量必已注册且值不重复）；
- * 2. 类型化入口排他（issue #394 评审 5339899090）：'@tauri-apps/api/core'
- *    的 import 说明符（静态或动态）只允许出现在 src/ipc/invoke.ts——
- *    ipcInvoke 以 IpcCommandName 收窄 cmd 参数，字符串字面量、别名导入
- *    与变量中转都在编译期拒绝；其余维护模块出现该说明符即守卫失败，
- *    而别名/解构/Promise.all/.then 等一切绑定形态都必写该说明符，
- *    无从绕过；
+ * 2. 类型化入口排他（issue #394 评审 5339899090、5340318886）：
+ *    '@tauri-apps/api/core' 的 import 说明符（静态或动态）只允许出现在
+ *    src/ipc/invoke.ts——ipcInvoke 以 IpcCommandName 收窄 cmd 参数，字符
+ *    串字面量、别名导入与变量中转都在编译期拒绝；其余维护模块出现该
+ *    说明符即守卫失败，而别名/解构/Promise.all/.then 等一切绑定形态都
+ *    必写该说明符，无从绕过。计算式（非静态）动态导入说明符无法静态
+ *    排除 core（运行时可求值为任意模块），一律 fail-closed——与
+ *    moduleGraph 对不可静态解析动态导入的口径一致；
  * 3. invoke 系调用点（标识符含 invoke 者，如 ipcInvoke / tauriInvoke）的
  *    首参不得是字符串字面量——命令名字面量只允许出现在常量表与
  *    generate_handler! 两侧（纵深防线，类型收窄之外的兜底）；
@@ -122,14 +124,17 @@ function commandBindingNamesOf(sf: ts.SourceFile, file: string): Set<string> {
 }
 
 /** 前端维护模块的 IPC 使用面：字面量调用点（应为空）、core 说明符越界
- * 引用（应为空）与被引用的命令键。 */
+ * 引用（应为空）、计算式动态导入（应为空，fail-closed）与被引用的
+ * 命令键。 */
 function scanFrontendIpcUsage(): {
   literalCalls: string[]
   coreImportsOutsideWrapper: string[]
+  computedImports: string[]
   accessedCommandKeys: Set<string>
 } {
   const literalCalls: string[] = []
   const coreImportsOutsideWrapper: string[] = []
+  const computedImports: string[] = []
   const accessedCommandKeys = new Set<string>()
   for (const file of listMaintainedModules(srcRoot)) {
     const kind = file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS
@@ -162,16 +167,24 @@ function scanFrontendIpcUsage(): {
         recordCoreImport(node.moduleSpecifier.text)
       }
       if (ts.isCallExpression(node)) {
-        const spec =
-          node.expression.kind === ts.SyntaxKind.ImportKeyword
-            ? node.arguments[0]
-            : undefined
-        if (
-          spec !== undefined &&
-          ts.isStringLiteral(spec) &&
-          spec.text === coreSpecifier
-        ) {
-          recordCoreImport(spec.text)
+        if (node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+          const spec = node.arguments[0]
+          if (
+            spec !== undefined &&
+            (ts.isStringLiteral(spec) ||
+              ts.isNoSubstitutionTemplateLiteral(spec))
+          ) {
+            // 静态可解析说明符：无替换模板与字符串同形（与 moduleGraph
+            // isStaticSpecifier 同口径）
+            if (spec.text === coreSpecifier) recordCoreImport(spec.text)
+          } else if (spec !== undefined && file !== invokeModulePath) {
+            // 计算式说明符 fail-closed（评审 5340318886）：运行时可求值
+            // 为任意模块（含 core），无法静态排除——与 moduleGraph 对不可
+            // 静态解析动态导入的口径一致；类型化入口模块豁免同前
+            computedImports.push(
+              `${relative(srcRoot, file)} → ${spec.getText(sf)}`,
+            )
+          }
         }
         const callee = invokeCalleeName(node.expression)
         const first = node.arguments[0]
@@ -198,7 +211,12 @@ function scanFrontendIpcUsage(): {
     }
     ts.forEachChild(sf, visit)
   }
-  return { literalCalls, coreImportsOutsideWrapper, accessedCommandKeys }
+  return {
+    literalCalls,
+    coreImportsOutsideWrapper,
+    computedImports,
+    accessedCommandKeys,
+  }
 }
 
 describe('IPC 命令名契约（issue #394）', () => {
@@ -215,6 +233,10 @@ describe('IPC 命令名契约（issue #394）', () => {
 
   it('原始 invoke 入口排他：core 说明符只允许出现在 src/ipc/invoke.ts', () => {
     expect(scanFrontendIpcUsage().coreImportsOutsideWrapper).toEqual([])
+  })
+
+  it('计算式动态导入说明符 fail-closed：无法静态排除 core 即失败', () => {
+    expect(scanFrontendIpcUsage().computedImports).toEqual([])
   })
 
   it('前端 invoke 系调用点的首参不得是字符串字面量', () => {

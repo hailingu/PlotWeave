@@ -116,7 +116,10 @@ Apply the guardrails as follows:
   review 5339899090). `src/ipc/invoke.ts` is the only maintained module
   allowed to import `@tauri-apps/api/core`; every binding shape (alias,
   destructuring, `Promise.all`, `.then`) must write that specifier, so the
-  guard's specifier-exclusivity assertion cannot be bypassed. The contract
+  guard's specifier-exclusivity assertion cannot be bypassed. A computed
+  (non-static) dynamic import specifier cannot be statically ruled out from
+  loading the core module and fails closed, mirroring the module-graph
+  guard's posture for unresolvable dynamic imports (review 5340318886). The contract
   guard (`src/ipc/commands.test.ts`) parses the `generate_handler!`
   registration list and asserts bidirectional consistency — no constant
   without a registration, no registration without a frontend consumer, no
