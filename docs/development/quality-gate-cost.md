@@ -294,9 +294,10 @@ amend with `--no-verify` invoked it with the old/new commit OIDs on stdin;
 both completed and changed `HEAD` even when that hook exited 1. It therefore
 cannot block the rewrite. `--no-verify` skips `pre-commit` and `commit-msg`,
 not `post-rewrite`; the separate `--no-post-rewrite` option suppresses the
-latter, also confirmed by the probe. These variants leave the gate column
-unchanged: ordinary amend reaches the existing `pre-commit` gate, while
-amend with `--no-verify` bypasses it.
+latter, also confirmed by the probe. Ordinary amend reaches the existing
+`pre-commit` gate; since the issue #404 wiring, amend with `--no-verify` is
+still gated, because `--no-verify` does not skip `prepare-commit-msg`, which
+finds no reusable marker and runs the complete gate.
 
 `git revert` and `git cherry-pick` do not accept `--no-verify` at all
 (`git revert -h` / `git cherry-pick -h` list no such option), so they are
@@ -308,13 +309,15 @@ exists and git ignores its exit status, so it cannot implement a blocking gate
 either. `post-merge` on the merge rows is likewise after the fact: it fires
 after the merge has completed and cannot block it.
 
-`git pull` in its default merge mode is the same unchecked merge commit as
+`git pull` in its default merge mode is the same automatic merge commit as
 `git merge` plus a fetch: measured on git 2.48.1 with a diverged upstream, it
 fired `reference-transaction` on the fetch, then `pre-merge-commit`,
 `prepare-commit-msg`, `commit-msg`, and `post-merge` — no `pre-commit`
-(评审 4117872584). Its `--rebase` modes enter the already-documented rebase
-path. `git pull` is the commonest entry point for the merge gap, so it is
-listed separately rather than folded into the `git merge` row.
+(评审 4117872584). Since the issue #404 wiring the wired `pre-merge-commit`
+gates that merge commit like `git merge` itself. Its `--rebase` modes enter
+the rebase path, whose replayed commits are gated per pick through
+`prepare-commit-msg`. `git pull` is the commonest entry point for merges, so
+it is listed separately rather than folded into the `git merge` row.
 
 `--autostash` on `merge`, `pull`, or `rebase` adds another ref-less path:
 the option stashes dirty tracked changes before the operation and pops them
@@ -330,8 +333,11 @@ The conflict path is different for merge, revert, and cherry-pick. In Git
 resolving and staging the file, its documented `--continue` command invoked
 `pre-commit` before creating the resulting commit. That runs this repository's
 gate, subject to the working-tree-versus-commit-tree boundary above. These
-continuations are therefore covered by `pre-commit`, unlike their automatic,
-conflict-free commit paths (评审 4115865924). A conflict-resolved
+continuations are therefore covered by `pre-commit` (评审 4115865924); since
+the issue #404 wiring, their automatic conflict-free commit paths are covered
+as well — merges through `pre-merge-commit`, revert and cherry-pick through
+`prepare-commit-msg` — so both paths of these commands are now gated. A
+conflict-resolved
 `git rebase --continue` was also measured: it ran `prepare-commit-msg`,
 `post-commit`, and `post-rewrite`, but not `pre-commit`; since the issue #404
 wiring, `prepare-commit-msg` runs the gate, so the continuation is covered
