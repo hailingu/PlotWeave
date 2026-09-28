@@ -156,7 +156,7 @@ This repository wires exactly two: `.githooks/pre-commit` and
 | `git fast-import` (`commit <ref>` stream) | `reference-transaction`; no commit-creation hooks | **no** * |
 | `git filter-branch` (history rewrite) | none measured here (see note) | **no** * |
 | `git subtree split --prefix=<dir> --branch <branch>` | `reference-transaction`; no commit-creation hooks | **no** * |
-| `git subtree split --prefix=<dir> [<commit>]` (no `--branch`) | none measured here; no ref updated | **no** * |
+| `git subtree split --prefix=<dir> [<commit>]` (no `--branch`) | none measured here; no ref updated | **no** ** |
 | `git subtree merge --prefix=<prefix> <commit>` (automatic non-fast-forward merge) | `post-index-change`; `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `post-merge`; shared `reference-transaction` | **no** |
 | `git subtree merge --prefix=<prefix> --squash <commit>` | `post-index-change`; `reference-transaction`; no commit-creation hooks; additionally creates a ref-less synthetic squash commit | **no** |
 | `git subtree pull --prefix=<prefix> <repository> <ref>` (automatic non-fast-forward merge) | `reference-transaction` on fetch; then the subtree merge hooks above | **no** |
@@ -186,6 +186,10 @@ Ref](#known-finding-push-scans-the-checked-out-tree-not-the-pushed-ref):
 direct-OID push variant that causes no local `reference-transaction`;
 `pre-push` still receives the OID and can block the push. See the commit-tree
 paragraph below.
+
+\*\* This row produces a commit object without updating any ref, so no local
+`reference-transaction` fires for it; the commit is publishable only by
+direct-OID push, which is the same #405 push-side gap.
 
 `post-index-change` is a shared index-write callback, as specified by its
 [Git contract](https://git-scm.com/docs/githooks#_post_index_change), rather
