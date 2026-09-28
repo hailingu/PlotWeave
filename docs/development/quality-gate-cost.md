@@ -157,7 +157,7 @@ This repository wires exactly two: `.githooks/pre-commit` and
 | `git fast-import` (`commit <ref>` stream) | `reference-transaction`; no commit-creation hooks | **no** * |
 | `git quiltimport` (applies a quilt patchset to the current branch) | `post-index-change`; `reference-transaction`; no commit-creation hooks | **no** |
 | `git filter-branch` (history rewrite) | none measured here (see note) | **no** * |
-| `git lfs migrate import` / `export` / `import --no-rewrite` (extension) | reviewer probe only (git-lfs 3.4.1): shared index/ref/checkout callbacks, no commit-creation hooks; not measured here (git-lfs absent) | **no** |
+| `git lfs migrate import` / `export` / `import --no-rewrite` (extension) | reviewer probe only (git-lfs 3.4.1): shared index/ref/checkout callbacks, no commit-creation hooks; not measured here (git-lfs absent) | **no** * |
 | `git subtree split --prefix=<dir> --branch <branch>` | `reference-transaction`; no commit-creation hooks | **no** * |
 | `git subtree split --prefix=<dir> [<commit>]` (no `--branch`) | none measured here; no ref updated | **no** ** |
 | `git subtree merge --prefix=<prefix> <commit>` (automatic non-fast-forward merge) | `post-index-change`; `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `post-merge`; shared `reference-transaction` | **no** |
@@ -405,7 +405,14 @@ that `import` / `export` (which "rewrite your Git history" per
 commit) all changed `HEAD` while firing only shared
 index/ref/checkout callbacks — never `pre-commit` (评审 4118866986).
 git-lfs is not installed in this measurement environment, so the row
-records the reviewer's probe rather than a local measurement. The same
+records the reviewer's probe rather than a local measurement. The reviewer's
+probe covered the HEAD-only default; the documented multi-ref modes —
+`--everything` (migrate commits reachable from all refs) and
+`--include-ref` selections — can additionally rewrite **non-checked-out**
+branches and tags (评审 4118919110). Those rewritten refs are pushable while
+`pre-push` scans only the checked-out tree, so the multi-ref modes carry the
+same pushed-ref mismatch as multi-ref `filter-branch`: the #405 push-side
+gap, marked `*` in the table. The same
 class boundary extends to other third-party history rewriters —
 `git filter-repo`, `git-annex` — which operate below the porcelain commit
 path like the built-in rewriters above; they have not been probed here
