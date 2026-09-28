@@ -18,7 +18,7 @@ export interface ProviderConfig {
   enabled: boolean
   /** 该 provider 下可选的模型 id 列表（用户维护）。 */
   models: string[]
-  /** API key 密文（`pw1:` envelope；缺省 = 未配置）。 */
+  /** API key 密文（`pw1:`/`pw2:` envelope；缺省 = 未配置）。 */
   /** 凭据密文；可显式 undefined = 未配置/已清除（removeKey 以
    * { keyEnc: undefined } 清除，issue #231 合法清除通道）。 */
   keyEnc?: string | undefined
@@ -78,10 +78,12 @@ function strArrayOf(v: unknown): string[] {
     : []
 }
 
-/** stored 条目里读取可透传的 keyEnc envelope（非 pw1: 前缀丢弃）。 */
+/** stored 条目里读取可透传的 keyEnc envelope（`pw1:`/`pw2:` 前缀外
+ * 丢弃；v2 = 迭代派生 + provider AAD 绑定，issue #392）。 */
 function keyEncOf(found: unknown): string | undefined {
   const v = (found as { keyEnc?: unknown } | null)?.keyEnc
-  return typeof v === 'string' && v.startsWith('pw1:') ? v : undefined
+  if (typeof v !== 'string') return undefined
+  return v.startsWith('pw1:') || v.startsWith('pw2:') ? v : undefined
 }
 
 /** 内置 provider 与存量配置合并：存量缺席时补回内置默认（S3776 拆分）。 */

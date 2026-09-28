@@ -199,7 +199,8 @@ pub async fn save_prefs(app: AppHandle, prefs: serde_json::Value) -> Result<(), 
 
 /// 设置保存的文件系统边界：先持久化创建数据目录（§10.2 条目宿主屏障，
 /// Unix），再经与读取入口共用的 `open_prefs_root` 锚定句柄（issue #391），
-/// 后续创建、替换与同步均相对该句柄执行；序列化超限时不触盘。
+/// 后续创建、替换与同步均相对该句柄执行；序列化超限时不触盘。写盘前
+/// 取设置写互斥（见 [`settings_write_guard`]），与旧密文迁移写回串行。
 fn save_prefs_in(dir: &Path, prefs: serde_json::Value) -> Result<(), String> {
     let text = serde_json::to_string_pretty(&prefs).map_err(|e| format!("序列化失败：{e}"))?;
     if text.len() > PREFS_MAX_BYTES {
@@ -207,8 +208,20 @@ fn save_prefs_in(dir: &Path, prefs: serde_json::Value) -> Result<(), String> {
     }
     ensure_data_dir(dir)?;
     let root = open_prefs_root(dir)?;
+    let _guard = settings_write_guard();
     crate::store::atomic_write(&root, SETTINGS_FILE_NAME, &text)
         .map_err(|e| format!("保存设置失败：{e}"))
+}
+
+/// 设置文件写互斥：save_prefs 全量写与 key_migration 就地迁移写共用，
+/// 串行化本进程内 settings.json 的两条写路径（前端保存经 save_prefs
+/// 命令同在本进程），消除「迁移基于旧快照覆盖并发保存」的编辑丢失
+/// 窗口（issue #392）。中毒恢复论证（rust-standard 锁策略）：磁盘一致
+/// 性由 §10.2 原子写协议独立保证，本锁仅序列化读-改-写顺序，恢复继续
+/// 不破坏文件系统一致性。
+fn settings_write_guard() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    crate::lock::recover_guard(LOCK.lock(), "settings-write")
 }
 
 #[cfg(test)]
@@ -219,6 +232,11 @@ mod read_boundary_tests;
 
 #[cfg(test)]
 mod transport_tests;
+
+mod key_migration;
+
+#[cfg(test)]
+mod key_migration_tests;
 
 /// provider id 约束：钥匙串账号安全字符集。
 fn validate_provider_id(id: &str) -> Result<(), String> {
@@ -234,8 +252,9 @@ fn validate_provider_id(id: &str) -> Result<(), String> {
     }
 }
 
-/// 加密 provider API key：返回 envelope 密文，由前端随 settings.json 落盘。
-/// 明文只在本次调用的进程内存中出现，不落盘、不回显、不入钥匙串。
+/// 加密 provider API key：返回 envelope 密文（v2：迭代派生 + provider
+/// AAD 绑定，issue #392），由前端随 settings.json 落盘。明文只在本次
+/// 调用的进程内存中出现，不落盘、不回显、不入钥匙串。
 #[tauri::command]
 pub async fn set_provider_key(provider_id: String, key: String) -> Result<String, String> {
     crate::blocking::run("set_provider_key", move || {
@@ -243,9 +262,39 @@ pub async fn set_provider_key(provider_id: String, key: String) -> Result<String
         if key.trim().is_empty() {
             return Err("API key 不能为空".into());
         }
-        crate::seal::seal(key.trim())
+        crate::seal::seal_for(&provider_id, key.trim())
     })
     .await
+}
+
+/// 从设置文本解析并解密 provider 的 `keyEnc` 密文：None = 无可用密文
+///（损坏 JSON/条目缺失，落入钥匙串只读回退）；Some(Err) = 密文在场但
+/// 解不开（原样上抛，不降级回退）。旧版 `pw1:` 密文在成功解开后触发
+/// 就地迁移重封装（issue #392，best-effort）。
+fn open_key_from_text(
+    root: &CapDir,
+    text: &str,
+    provider_id: &str,
+) -> Option<Result<String, String>> {
+    let envelope = serde_json::from_str::<serde_json::Value>(text)
+        .ok()?
+        .get("providers")
+        .and_then(|p| p.as_array())
+        .and_then(|arr| {
+            arr.iter()
+                .find(|p| p.get("id").and_then(|x| x.as_str()) == Some(provider_id))
+        })
+        .and_then(|p| p.get("keyEnc"))
+        .and_then(|x| x.as_str())?
+        .to_string();
+    let secret = match crate::seal::open_for(provider_id, &envelope) {
+        Ok(secret) => secret,
+        Err(e) => return Some(Err(e)),
+    };
+    if crate::seal::is_legacy_envelope(&envelope) {
+        key_migration::migrate_legacy_envelope(root, provider_id, &envelope, &secret);
+    }
+    Some(Ok(secret))
 }
 
 /// 解析 provider 当前可用的 key：优先 settings.json 的 `keyEnc` 密文；
@@ -264,19 +313,8 @@ pub(crate) fn provider_secret(app: &AppHandle, provider_id: &str) -> Result<Stri
     // 原语义落入钥匙串只读回退——被拒绝的条目无法携带 keyEnc
     match read_prefs_text_capped(&root) {
         Ok(text) => {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
-                let enc = v
-                    .get("providers")
-                    .and_then(|p| p.as_array())
-                    .and_then(|arr| {
-                        arr.iter()
-                            .find(|p| p.get("id").and_then(|x| x.as_str()) == Some(provider_id))
-                    })
-                    .and_then(|p| p.get("keyEnc"))
-                    .and_then(|x| x.as_str());
-                if let Some(envelope) = enc {
-                    return crate::seal::open(envelope);
-                }
+            if let Some(outcome) = open_key_from_text(&root, &text, provider_id) {
+                return outcome;
             }
         }
         Err(PrefsReadError::TooLarge) => return Err("设置文件过大，拒绝读取密文".into()),

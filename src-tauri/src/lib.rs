@@ -3,7 +3,8 @@
 //! - `store`：项目持久化命令（list/create/load/save/delete_project）。
 //! - `prefs`：应用设置与 provider 密钥（设置 JSON 落盘；key 经 `seal`
 //!   加密后随配置落盘，LLM 代理在 Rust 内存中解密，§6/§8.2）。
-//! - `seal`：API key 加密封装（AES-256-GCM，绑定本机）。
+//! - `seal`：API key 加密封装（AES-256-GCM，PBKDF2 迭代派生绑定本机，
+//!   provider id 作 AAD 绑定条目；旧版 `pw1:` 兼容解密，issue #392）。
 //! - `library`：个人资产库（应用级 library/ 目录，索引 + 媒体文件，§8.1）。
 //! - `media_protocol`：`pwmedia` opaque asset URL 媒体协议（库 scope 按净化
 //!   索引、项目 scope 按项目文档索引逐请求解析 id，§7.1/§10.5，issue #26/#31）。
