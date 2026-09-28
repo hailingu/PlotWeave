@@ -3,6 +3,7 @@
 use super::*;
 use crate::store::atomic_write_faults::{Injection, Stage};
 use serde_json::json;
+use std::fs;
 
 /// 自动回收本测试拥有的目录，包括失败断言留下的临时文件。
 struct PrefsDir(PathBuf);
@@ -15,7 +16,7 @@ impl PrefsDir {
     }
 
     fn read(&self) -> serde_json::Value {
-        read_prefs_at(&self.0.join("settings.json")).unwrap()
+        read_prefs_in(&self.0).unwrap()
     }
 
     fn entries(&self) -> Vec<String> {
@@ -219,7 +220,7 @@ fn save_syncs_entry_host_when_data_dir_newly_created() {
     let injection = Injection::new(None, None);
     save_prefs_in(&target, json!({"defaultChat": "new"})).unwrap();
     assert_eq!(
-        read_prefs_at(&target.join("settings.json")).unwrap(),
+        read_prefs_in(&target).unwrap(),
         json!({"defaultChat": "new"})
     );
     let stages = injection.stages();

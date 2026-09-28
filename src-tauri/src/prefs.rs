@@ -7,6 +7,12 @@
 //!   超限或其余读取失败一律 Err——未知原配置不得降级为默认值后被
 //!   全量保存覆盖。内容读取经 cap+1 流式限读（issue #147），超限在
 //!   物化全文件前拒绝。
+//! - 读取边界（issue #391）：与保存路径同一套文件系统边界——读取入口
+//!   同样锚定应用数据根句柄（canonicalize + open_ambient_dir），对
+//!   `settings.json` 先做 no-follow 归类（符号链接与非普通文件在打开前
+//!   拒绝，FIFO 不会阻塞 blocking 池线程），打开后做身份绑定（Unix 按
+//!   (dev, ino) 与归类元数据比对，非 Unix 打开后复核归类），与图库
+//!   journal 读取及 store 控制文件信任链语义一致。
 //! - 保存（issue #121）复用受信目录句柄下的控制文件原子写：随机排他
 //!   临时文件、文件同步、改名与 Unix 父目录同步全部成功后才返回成功；
 //!   数据目录的创建（读取与保存入口）经 `store::create_dir_all_durable`
@@ -17,11 +23,11 @@
 //!   明文只在加密/请求的进程内存中出现，不落盘、不回显。
 //!   历史钥匙串数据保留只读回退，不再写入。
 
-use std::fs;
 use std::io;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+use cap_std::fs::Dir as CapDir;
 use tauri::{AppHandle, Manager};
 
 use crate::http_util::ProxyError;
@@ -43,13 +49,22 @@ const KEYCHAIN_SERVICE: &str = "com.plotweave.app";
 /// 设置文件大小上限（1 MiB），防异常输入撑爆读写。
 const PREFS_MAX_BYTES: usize = 1024 * 1024;
 
+/// 设置文件名（应用数据目录下的相对名，读取与保存入口共用）。
+const SETTINGS_FILE_NAME: &str = "settings.json";
+
 /// 设置受限读取的错误分野（issue #147）：超限是硬拒绝（与读取失败不同
 /// 诊断、不回退），IO/UTF-8 失败原样携带供调用方按 issue #120 语义分类
 /// ——UTF-8 失败映射为 io InvalidData，与 fs::read_to_string 同分类。
+/// no-follow 归类拒绝与归类后身份比对失败（issue #391）各自独立成变体：
+/// 二者都不是 NotFound，不得落入首启空对象语义。
 #[derive(Debug)]
 enum PrefsReadError {
     Io(io::Error),
     TooLarge,
+    /// 条目是符号链接或非普通文件（FIFO/目录等）——在打开前拒绝。
+    NotRegularFile,
+    /// 归类与打开之间条目被替换（Unix 身份比对失败/非 Unix 复核失败）。
+    Replaced,
 }
 
 /// 设置文本的受限读取内核（复用 library_fs::read_index_text_capped 的
@@ -68,10 +83,42 @@ fn capped_prefs_text(reader: impl io::Read) -> Result<String, PrefsReadError> {
         .map_err(|e| PrefsReadError::Io(io::Error::new(io::ErrorKind::InvalidData, e)))
 }
 
-/// 设置文件的受限读取入口：打开失败（含首次启动的 NotFound）原样上抛，
-/// 内容读取经 cap+1 限读内核。
-fn read_prefs_text_capped(path: &Path) -> Result<String, PrefsReadError> {
-    let file = fs::File::open(path).map_err(PrefsReadError::Io)?;
+/// 设置文件的受限读取入口（issue #391 读取边界）：相对锚定句柄先做
+/// no-follow 归类——符号链接与非普通文件（FIFO/目录等）在打开前拒绝，
+/// 不跟随、不阻塞；再打开并做身份绑定（Unix 按 (dev, ino) 与归类元数据
+/// 比对，与 store::persist::read_verified_file 同法；非 Unix 无身份可比，
+/// 打开后重走归类复核）；内容读取经 cap+1 限读内核。NotFound 原样上抛
+/// 供调用方区分首启语义。
+fn read_prefs_text_capped(root: &CapDir) -> Result<String, PrefsReadError> {
+    let md = root
+        .symlink_metadata(SETTINGS_FILE_NAME)
+        .map_err(PrefsReadError::Io)?;
+    if md.file_type().is_symlink() || !md.is_file() {
+        return Err(PrefsReadError::NotRegularFile);
+    }
+    let file = root.open(SETTINGS_FILE_NAME).map_err(PrefsReadError::Io)?;
+    #[cfg(unix)]
+    {
+        let fm = file.metadata().map_err(PrefsReadError::Io)?;
+        if crate::store::asset_identity(&fm) != crate::store::asset_identity(&md) {
+            return Err(PrefsReadError::Replaced);
+        }
+    }
+    // 非 Unix 无 (dev, ino) 可比：打开后重走 no-follow 归类复核（与
+    // store::persist::read_verified_file 同法），换成符号链接/异型即拒绝
+    #[cfg(not(unix))]
+    {
+        let recheck = root
+            .symlink_metadata(SETTINGS_FILE_NAME)
+            .map_err(PrefsReadError::Io)?;
+        if recheck.file_type().is_symlink() || !recheck.is_file() {
+            return Err(PrefsReadError::Replaced);
+        }
+        match file.metadata() {
+            Ok(fm) if fm.is_file() => {}
+            _ => return Err(PrefsReadError::Replaced),
+        }
+    }
     capped_prefs_text(file)
 }
 
@@ -83,27 +130,46 @@ fn ensure_data_dir(dir: &Path) -> Result<(), String> {
     crate::store::create_dir_all_durable(dir).map_err(|e| format!("创建数据目录失败：{e}"))
 }
 
-fn prefs_path(app: &AppHandle) -> Result<PathBuf, String> {
+/// 定位并持久化确保应用数据目录（读取与保存入口共用的第一步）。
+fn prefs_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app
         .path()
         .app_data_dir()
         .map_err(|e| format!("无法定位应用数据目录：{e}"))?;
     ensure_data_dir(&dir)?;
-    Ok(dir.join("settings.json"))
+    Ok(dir)
+}
+
+/// 锚定设置根的受信句柄（读/写共用的文件系统边界，issue #391）：读取与
+/// 保存入口对 `settings.json` 的归类、打开、读取/原子写均相对该句柄执行，
+/// 不按路径名重解析。
+fn open_prefs_root(dir: &Path) -> Result<CapDir, String> {
+    let dir = dir
+        .canonicalize()
+        .map_err(|e| format!("解析设置目录真实路径失败：{e}"))?;
+    CapDir::open_ambient_dir(&dir, cap_std::ambient_authority())
+        .map_err(|e| format!("打开设置目录失败：{e}"))
 }
 
 /// 读取设置内核（issue #120）：文件不存在 = 首次启动，返回空对象；
 /// 其余读取失败（权限/IO 异常）与损坏、超限一律 Err 上抛——把未知
 /// 原配置降级为空对象，会被前端默认值经全量保存覆盖原文件。
-/// 读取经 cap+1 流式限读（issue #147）：超限文件在物化全量内容前被拒。
-fn read_prefs_at(path: &Path) -> Result<serde_json::Value, String> {
-    let text = match read_prefs_text_capped(path) {
+/// 读取经 cap+1 流式限读（issue #147）；读取边界为锚定句柄下的
+/// no-follow 归类 + 身份绑定（issue #391）：符号链接/非普通文件与
+/// 归类后被替换均拒绝，不落入首启语义。
+fn read_prefs_in(dir: &Path) -> Result<serde_json::Value, String> {
+    let root = open_prefs_root(dir)?;
+    let text = match read_prefs_text_capped(&root) {
         Ok(text) => text,
         Err(PrefsReadError::Io(e)) if e.kind() == io::ErrorKind::NotFound => {
             return Ok(serde_json::json!({}))
         }
         Err(PrefsReadError::Io(e)) => return Err(format!("读取设置失败：{e}")),
         Err(PrefsReadError::TooLarge) => return Err("设置文件过大".into()),
+        Err(PrefsReadError::NotRegularFile) => {
+            return Err("设置文件是符号链接或非普通文件，拒绝读取".into())
+        }
+        Err(PrefsReadError::Replaced) => return Err("设置文件在读取前被替换，拒绝读取".into()),
     };
     serde_json::from_str(&text).map_err(|e| format!("设置文件损坏：{e}"))
 }
@@ -112,8 +178,8 @@ fn read_prefs_at(path: &Path) -> Result<serde_json::Value, String> {
 #[tauri::command]
 pub async fn load_prefs(app: AppHandle) -> Result<serde_json::Value, String> {
     crate::blocking::run("load_prefs", move || {
-        let path = prefs_path(&app)?;
-        read_prefs_at(&path)
+        let dir = prefs_data_dir(&app)?;
+        read_prefs_in(&dir)
     })
     .await
 }
@@ -132,25 +198,24 @@ pub async fn save_prefs(app: AppHandle, prefs: serde_json::Value) -> Result<(), 
 }
 
 /// 设置保存的文件系统边界：先持久化创建数据目录（§10.2 条目宿主屏障，
-/// Unix），再 canonicalize 应用数据根后锚定句柄，后续创建、替换与同步
-/// 均相对该句柄执行；序列化超限时不触盘。
+/// Unix），再经与读取入口共用的 `open_prefs_root` 锚定句柄（issue #391），
+/// 后续创建、替换与同步均相对该句柄执行；序列化超限时不触盘。
 fn save_prefs_in(dir: &Path, prefs: serde_json::Value) -> Result<(), String> {
     let text = serde_json::to_string_pretty(&prefs).map_err(|e| format!("序列化失败：{e}"))?;
     if text.len() > PREFS_MAX_BYTES {
         return Err("设置内容过大".into());
     }
     ensure_data_dir(dir)?;
-    let dir = dir
-        .canonicalize()
-        .map_err(|e| format!("解析设置目录真实路径失败：{e}"))?;
-    let root = cap_std::fs::Dir::open_ambient_dir(&dir, cap_std::ambient_authority())
-        .map_err(|e| format!("打开设置目录失败：{e}"))?;
-    crate::store::atomic_write(&root, "settings.json", &text)
+    let root = open_prefs_root(dir)?;
+    crate::store::atomic_write(&root, SETTINGS_FILE_NAME, &text)
         .map_err(|e| format!("保存设置失败：{e}"))
 }
 
 #[cfg(test)]
 mod save_tests;
+
+#[cfg(all(test, unix))]
+mod read_boundary_tests;
 
 #[cfg(test)]
 mod transport_tests;
@@ -191,11 +256,13 @@ pub async fn set_provider_key(provider_id: String, key: String) -> Result<String
 /// （issue #279），不得在异步工作线程上直调。
 pub(crate) fn provider_secret(app: &AppHandle, provider_id: &str) -> Result<String, String> {
     validate_provider_id(provider_id)?;
-    let path = prefs_path(app)?;
-    // 信任边界：与 load_prefs 同一大小上限（同经 cap+1 限读内核，
-    // issue #147）——超限硬拒绝；读取失败（含缺失/UTF-8 失败）维持
-    // 原语义落入钥匙串只读回退
-    match read_prefs_text_capped(&path) {
+    let dir = prefs_data_dir(app)?;
+    let root = open_prefs_root(&dir)?;
+    // 信任边界：与 load_prefs 同一读取边界（锚定句柄 + no-follow 归类 +
+    // 身份绑定，issue #391）与大小上限（cap+1 限读，issue #147）——超限
+    // 硬拒绝；读取失败（含缺失/UTF-8 失败/异型条目拒绝/替换拒绝）维持
+    // 原语义落入钥匙串只读回退——被拒绝的条目无法携带 keyEnc
+    match read_prefs_text_capped(&root) {
         Ok(text) => {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
                 let enc = v
@@ -214,6 +281,7 @@ pub(crate) fn provider_secret(app: &AppHandle, provider_id: &str) -> Result<Stri
         }
         Err(PrefsReadError::TooLarge) => return Err("设置文件过大，拒绝读取密文".into()),
         Err(PrefsReadError::Io(_)) => {}
+        Err(PrefsReadError::NotRegularFile) | Err(PrefsReadError::Replaced) => {}
     }
     let entry = keyring::Entry::new(KEYCHAIN_SERVICE, provider_id)
         .map_err(|e| format!("钥匙串不可用：{e}"))?;
@@ -332,6 +400,7 @@ pub async fn llm_chat(
 mod tests {
     use super::*;
     use crate::testhttp::{drain_request, spawn_local_http};
+    use std::fs;
     use std::io::Write;
 
     #[test]
@@ -365,53 +434,54 @@ mod tests {
     }
 
     #[test]
-    fn read_prefs_at_missing_file_is_first_launch_empty_object() {
+    fn read_prefs_in_missing_file_is_first_launch_empty_object() {
         // 首次启动语义仅此一例：文件不存在 → Ok 空对象（前端补默认）
         let dir = temp_prefs_dir("missing");
-        let v = read_prefs_at(&dir.join("settings.json")).expect("缺文件应 Ok 空对象");
+        let v = read_prefs_in(&dir).expect("缺文件应 Ok 空对象");
         assert_eq!(v, serde_json::json!({}));
         let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn read_prefs_at_reads_valid_file() {
+    fn read_prefs_in_reads_valid_file() {
         let dir = temp_prefs_dir("valid");
         fs::write(
             dir.join("settings.json"),
             r#"{"defaultChat":"openai:gpt-4o"}"#,
         )
         .expect("写入设置");
-        let v = read_prefs_at(&dir.join("settings.json")).expect("合法文件应 Ok");
+        let v = read_prefs_in(&dir).expect("合法文件应 Ok");
         assert_eq!(v["defaultChat"], "openai:gpt-4o");
         let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn read_prefs_at_rejects_corrupt_json() {
+    fn read_prefs_in_rejects_corrupt_json() {
         let dir = temp_prefs_dir("corrupt");
         fs::write(dir.join("settings.json"), "{ not json").expect("写入损坏设置");
-        let err = read_prefs_at(&dir.join("settings.json")).expect_err("损坏 JSON 应 Err");
+        let err = read_prefs_in(&dir).expect_err("损坏 JSON 应 Err");
         assert!(err.contains("设置文件损坏"), "实际错误：{err}");
         let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn read_prefs_at_rejects_oversize_file() {
+    fn read_prefs_in_rejects_oversize_file() {
         let dir = temp_prefs_dir("oversize");
         fs::write(dir.join("settings.json"), vec![b'x'; PREFS_MAX_BYTES + 1])
             .expect("写入超限设置");
-        let err = read_prefs_at(&dir.join("settings.json")).expect_err("超限应 Err");
+        let err = read_prefs_in(&dir).expect_err("超限应 Err");
         assert!(err.contains("设置文件过大"), "实际错误：{err}");
         let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn read_prefs_at_rejects_read_failure_beyond_not_found() {
-        // 以目录当读取目标：稳定产生 NotFound 之外的读取失败（权限/异型
-        // 同类），不得降级为空对象——那是首次启动专属语义（issue #120）
+    fn read_prefs_in_rejects_directory_settings() {
+        // settings.json 为目录（issue #391 非普通条目之一）：归类拒绝且
+        // 不得降级为空对象——首启语义专属 NotFound（issue #120）
         let dir = temp_prefs_dir("dir-target");
-        let err = read_prefs_at(&dir).expect_err("非 NotFound 读取失败应 Err");
-        assert!(err.contains("读取设置失败"), "实际错误：{err}");
+        fs::create_dir(dir.join("settings.json")).expect("创建目录条目");
+        let err = read_prefs_in(&dir).expect_err("非 NotFound 读取失败应 Err");
+        assert!(err.contains("非普通文件"), "实际错误：{err}");
         let _ = fs::remove_dir_all(&dir);
     }
 
