@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  avatarGradientOf,
   createCharacter,
   createLocation,
   newEntityId,
@@ -25,10 +26,21 @@ describe('实体创建', () => {
     expect(ids.size).toBe(50)
   })
 
-  it('头像渐变按调色板轮转，第 7 个回到第 1 个', () => {
-    const grads = Array.from({ length: 7 }, () => createCharacter('x').gradient)
-    expect(grads[0]).not.toBe(grads[1])
-    expect(grads[6]).toBe(grads[0])
+  it('头像渐变由实体 id 确定性派生：同一 id 恒得同一渐变（issue #395）', () => {
+    const ch = createCharacter('x')
+    expect(ch.gradient).toBe(avatarGradientOf(ch.id))
+    expect(avatarGradientOf('ch-lx1-1a2b3c4d')).toBe(
+      avatarGradientOf('ch-lx1-1a2b3c4d'),
+    )
+    expect(ch.gradient).not.toBe('')
+  })
+
+  it('头像渐变派生非退化：连续新建命中多个调色板条目（issue #395）', () => {
+    const grads = new Set(
+      Array.from({ length: 20 }, () => createCharacter('x').gradient),
+    )
+    // 游标轮转移除后，分布由 id 的随机尾保证——退化为单一取值即缺陷
+    expect(grads.size).toBeGreaterThan(1)
   })
 })
 

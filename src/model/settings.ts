@@ -9,7 +9,7 @@
 export interface CharacterEntity {
   id: string
   name: string
-  /** 头像渐变（新增时从调色板轮转取用）。 */
+  /** 头像渐变（新增时由编辑器工厂按实体 id 确定性派生，issue #395）。 */
   gradient: string
   /** 一句小传（可选）。 */
   bio?: string
