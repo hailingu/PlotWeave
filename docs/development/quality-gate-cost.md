@@ -138,6 +138,7 @@ This repository wires exactly two: `.githooks/pre-commit` and
 | `git merge` (automatic, conflict-free non-fast-forward merge commit) | `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `post-merge` | **no** |
 | `git merge --autostash` (dirty tracked worktree) | merge hooks above; autostash creates ref-less stash commits with no hook | **no** |
 | `git pull` (default merge mode, diverged upstream) | `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `post-merge`; `reference-transaction` on fetch | **no** |
+| `git pull --autostash` (default merge mode, dirty tracked worktree) | pull merge hooks above; autostash creates ref-less stash commits with no hook | **no** |
 | `git merge --continue` after resolving conflicts | `post-index-change`; `pre-commit`, `prepare-commit-msg`, `commit-msg`, `post-commit` | yes |
 | `git revert` (automatic, conflict-free commit) | `prepare-commit-msg` + `post-commit` | **no** |
 | `git revert --continue` after resolving conflicts | `post-index-change`; `pre-commit`, `prepare-commit-msg`, `commit-msg`, `post-commit` | yes |
