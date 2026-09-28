@@ -184,10 +184,11 @@ remote-facing gap tracked in
 [Known Finding: Push Scans The Checked-Out Tree, Not The Pushed
 Ref](#known-finding-push-scans-the-checked-out-tree-not-the-pushed-ref):
 `pre-push` analyzes the checked-out tree, not the pushed ref (评审
-4115165662, 4115165667). The `commit-tree` row additionally has a
-direct-OID push variant that causes no local `reference-transaction`;
-`pre-push` still receives the OID and can block the push. See the commit-tree
-paragraph below.
+4115165662, 4115165667). The `commit-tree` and `hash-object` rows
+additionally have a direct-OID push variant that causes no local
+`reference-transaction` — `update-ref` is optional for both, and the
+returned OID can be pushed as-is; `pre-push` still receives the OID and can
+block the push. See the commit-tree paragraph below.
 
 \*\* This row produces a commit object without updating any ref, so no local
 `reference-transaction` fires for it. The commit can be published in two
