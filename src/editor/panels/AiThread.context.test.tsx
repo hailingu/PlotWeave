@@ -167,25 +167,27 @@ async function setup(
     width: 320,
     tab: 'ai' as const,
     settings: EMPTY_SETTINGS,
-    projectId: options.projectId ?? 'p-context',
     onResize: () => undefined,
     onTabChange: () => undefined,
-    onOpenSettings: options.onOpenSettings,
-    aiSessionLoadFailed: options.loadFailed,
-    canvasDigest: canvas.hook.result.current.canvasDigest,
-    onValidateCommands: canvas.hook.result.current.validateCommands,
-    onValidateAi: canvas.hook.result.current.validateAiReply,
-    onApplyAiBatch: canvas.hook.result.current.applyAiBatch,
-    onReadNode: canvas.hook.result.current.readNode,
-    aiSession: options.session,
-    commitIdentity: {
-      aiRevision: canvas.state.aiRevision,
-      ...(options.whenCanvasCommitted
-        ? { whenCanvasCommitted: options.whenCanvasCommitted }
-        : {}),
-    },
-    onSaveAiSession: async (session: AiSession) => {
-      saved.push(JSON.parse(JSON.stringify(session)) as AiSession)
+    ai: {
+      projectId: options.projectId ?? 'p-context',
+      onOpenSettings: options.onOpenSettings,
+      sessionLoadFailed: options.loadFailed,
+      canvasDigest: canvas.hook.result.current.canvasDigest,
+      onValidateCommands: canvas.hook.result.current.validateCommands,
+      onValidateAi: canvas.hook.result.current.validateAiReply,
+      onApplyAiBatch: canvas.hook.result.current.applyAiBatch,
+      onReadNode: canvas.hook.result.current.readNode,
+      session: options.session,
+      commitIdentity: {
+        aiRevision: canvas.state.aiRevision,
+        ...(options.whenCanvasCommitted
+          ? { whenCanvasCommitted: options.whenCanvasCommitted }
+          : {}),
+      },
+      onSaveSession: async (session: AiSession) => {
+        saved.push(JSON.parse(JSON.stringify(session)) as AiSession)
+      },
     },
   })
   const view = render(<RightPanel {...props()} />)
