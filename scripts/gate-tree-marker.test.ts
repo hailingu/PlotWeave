@@ -219,6 +219,38 @@ afterEach(() => {
   }
 })
 
+/** 标记单测场景：临时 git 仓库 + 隔离标记路径，run 以给定参数执行真实
+ * 助手（可覆盖标记路径与 TTL）。 */
+function prepareMarkerUnit(): {
+  markerPath: string
+  root: string
+  run: (
+    argument: string,
+    options?: { markerPath?: string; ttl?: string },
+  ) => { status: number | null }
+} {
+  const sandbox = mkdtempSync(resolve(tmpdir(), 'plotweave-gate-marker-'))
+  temporaryDirectories.push(sandbox)
+  initScratchRepository(sandbox)
+  const markerPath = resolve(sandbox, 'gate-tree.marker')
+  const helper = resolve(repositoryRoot, 'scripts', 'gate-tree-marker.sh')
+  const run = (
+    argument: string,
+    options?: { markerPath?: string; ttl?: string },
+  ) =>
+    spawnSync('sh', [helper, argument], {
+      cwd: sandbox,
+      env: {
+        ...process.env,
+        PLOTWEAVE_GATE_MARKER_PATH: options?.markerPath ?? markerPath,
+        ...(options?.ttl === undefined
+          ? {}
+          : { PLOTWEAVE_GATE_MARKER_TTL: options.ttl }),
+      },
+    })
+  return { markerPath, root: sandbox, run }
+}
+
 // 用例逐个 spawnSync 真实钩子与门禁脚本（多级 shell/git 替身），全量套件
 // 并发负载下常超 vitest 默认 5s——与 sonar-quality-gate.test.ts 同款放宽
 // describe 级超时上限，不放宽断言。
@@ -227,53 +259,20 @@ describe(
   { timeout: 30_000 },
   () => {
     it('write 后同树 check 通过（跳过门禁），换树 check 失败（执行门禁）', () => {
-      const sandbox = mkdtempSync(resolve(tmpdir(), 'plotweave-gate-marker-'))
-      temporaryDirectories.push(sandbox)
-      initScratchRepository(sandbox)
-      const markerPath = resolve(sandbox, 'gate-tree.marker')
-      const helper = resolve(repositoryRoot, 'scripts', 'gate-tree-marker.sh')
-      const env: NodeJS.ProcessEnv = {
-        ...process.env,
-        PLOTWEAVE_GATE_MARKER_PATH: markerPath,
-      }
-      const write = spawnSync('sh', [helper, 'write'], {
-        cwd: sandbox,
-        encoding: 'utf8',
-        env,
-      })
-      expect(write.status).toBe(0)
-      expect(
-        spawnSync('sh', [helper, 'check'], { cwd: sandbox, env }).status,
-      ).toBe(0)
+      const { root, run } = prepareMarkerUnit()
+      expect(run('write').status).toBe(0)
+      expect(run('check').status).toBe(0)
       // 单次消费（评审 4120128545）：命中的标记即删除，同树第二次 check
       // 判为需门禁
-      expect(
-        spawnSync('sh', [helper, 'check'], { cwd: sandbox, env }).status,
-      ).toBe(1)
+      expect(run('check').status).toBe(1)
 
-      writeFileSync(resolve(sandbox, 'f.txt'), 'changed\n')
-      spawnSync('git', ['add', '.'], { cwd: sandbox })
-      expect(
-        spawnSync('sh', [helper, 'check'], { cwd: sandbox, env }).status,
-      ).toBe(1)
+      writeFileSync(resolve(root, 'f.txt'), 'changed\n')
+      spawnSync('git', ['add', '.'], { cwd: root })
+      expect(run('check').status).toBe(1)
     })
 
-    it('标记缺失、过期（TTL=0）或内容损坏时 check 失败（执行门禁）', () => {
-      const sandbox = mkdtempSync(resolve(tmpdir(), 'plotweave-gate-marker-'))
-      temporaryDirectories.push(sandbox)
-      initScratchRepository(sandbox)
-      const markerPath = resolve(sandbox, 'gate-tree.marker')
-      const helper = resolve(repositoryRoot, 'scripts', 'gate-tree-marker.sh')
-      const run = (argument: string, ttl?: string) =>
-        spawnSync('sh', [helper, argument], {
-          cwd: sandbox,
-          env: {
-            ...process.env,
-            PLOTWEAVE_GATE_MARKER_PATH: markerPath,
-            ...(ttl === undefined ? {} : { PLOTWEAVE_GATE_MARKER_TTL: ttl }),
-          },
-        })
-
+    it('标记缺失、过期、未来时间戳或内容损坏时 check 失败（执行门禁）', () => {
+      const { markerPath, run } = prepareMarkerUnit()
       expect(run('check').status).toBe(1)
       expect(run('write').status).toBe(0)
       // 回拨标记时间戳至 epoch 1：超出默认时效（600s）即过期，需重新门禁
@@ -292,24 +291,11 @@ describe(
     })
 
     it('标记路径不可写时 write 静默失败，不阻塞门禁已通过的操作（评审 4120128565）', () => {
-      const sandbox = mkdtempSync(resolve(tmpdir(), 'plotweave-gate-marker-'))
-      temporaryDirectories.push(sandbox)
-      initScratchRepository(sandbox)
+      const { root, run } = prepareMarkerUnit()
       // 路径被目录占据：标记重定向必然失败，write 仍须以 0 退出
-      const markerPath = resolve(sandbox, 'marker-as-directory')
-      mkdirSync(markerPath)
-      const write = spawnSync(
-        'sh',
-        [resolve(repositoryRoot, 'scripts', 'gate-tree-marker.sh'), 'write'],
-        {
-          cwd: sandbox,
-          env: {
-            ...process.env,
-            PLOTWEAVE_GATE_MARKER_PATH: markerPath,
-          },
-        },
-      )
-      expect(write.status).toBe(0)
+      const blockedPath = resolve(root, 'marker-as-directory')
+      mkdirSync(blockedPath)
+      expect(run('write', { markerPath: blockedPath }).status).toBe(0)
     })
   },
 )
@@ -353,7 +339,13 @@ describe(
       expect(result.status).toBe(0)
       expect(scenario.scannerRuns()).toBe(1)
     })
+  },
+)
 
+describe(
+  '门禁绕过与失败路径（--no-verify、标记消费、失败阻止、rebase）',
+  { timeout: 30_000 },
+  () => {
     it('git commit --no-verify：pre-commit 被跳过但 prepare-commit-msg 仍执行门禁（1 次）', () => {
       const scenario = prepareHookScenario()
       const result = scenario.git([

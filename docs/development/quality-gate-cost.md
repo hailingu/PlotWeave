@@ -333,8 +333,9 @@ gate, subject to the working-tree-versus-commit-tree boundary above. These
 continuations are therefore covered by `pre-commit`, unlike their automatic,
 conflict-free commit paths (评审 4115865924). A conflict-resolved
 `git rebase --continue` was also measured: it ran `prepare-commit-msg`,
-`post-commit`, and `post-rewrite`, but not `pre-commit`, so the rebase gap
-remains.
+`post-commit`, and `post-rewrite`, but not `pre-commit`; since the issue #404
+wiring, `prepare-commit-msg` runs the gate, so the continuation is covered
+like every other replayed rebase commit.
 
 `git rebase` and `git am` were measured on 2026-09-27 (git 2.48.1, isolated
 hook log, two commits replayed / one patch applied) with this repository's
@@ -345,7 +346,10 @@ fire** — and `post-rewrite` once after the replay, whose exit status git
 ignores, so it cannot implement a blocking gate either (评审 4114827177);
 the command-specific hooks for `git am` are the applypatch family, none of
 which this repository wires. Shared index/ref callbacks are covered above.
-Either path therefore creates commits with no gate. With `--update-refs`,
+Since the issue #404 wiring these two paths diverge: the wired
+`prepare-commit-msg` gates each replayed rebase commit, while `git am`
+remains the ungated path — none of the applypatch family is wired. With
+`--update-refs`,
 rebase additionally moves other local branches that point into the rebased
 range: measured on git 2.48.1, `git rebase --update-refs --onto <newbase>
 HEAD~2` moved a secondary branch to the replayed intermediate commit via
