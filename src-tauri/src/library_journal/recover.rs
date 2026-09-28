@@ -176,7 +176,13 @@ pub(crate) fn recover(library: &CapDir) -> Result<Recovery, LibraryError> {
     let mut changed = false;
     let view = IndexView {
         value: &index,
-        intact: !normalized.damaged,
+        authority: if normalized.damaged {
+            Authority::Damaged
+        } else if normalized.suspended {
+            Authority::Suspended
+        } else {
+            Authority::Intact
+        },
     };
     for entry in &entries {
         recover_entry(
@@ -195,13 +201,24 @@ pub(crate) fn recover(library: &CapDir) -> Result<Recovery, LibraryError> {
     Ok(recovery)
 }
 
-/// 本次恢复所依据的索引视图及其权威性（issue #389）：`intact` 为真表示
-/// 索引可解析、按权威视图判定；为假表示损坏后的局部视图——indexUncertain
-/// 条目据此区分「索引损坏期间」（保持冲突保守）与「索引已恢复」（复位
-/// 闩锁并按当前索引重新判定）。
+/// 本次恢复所依据的索引视图的权威性（issue #389）：
+/// - [`Authority::Intact`]：可解析且迁移可落盘——按权威视图判定，
+///   indexUncertain 条目复位闩锁并走正常收敛分支；
+/// - [`Authority::Damaged`]：语法/编码损坏后的局部视图——保持冲突保守
+///   并给修复指引；
+/// - [`Authority::Suspended`]：可解析但迁移产物超限的只读局部视图
+///   （PR #413 评审 4121700018）——写路径拒绝同一视图以防抹掉被隔离的
+///   待重发条目，恢复判定同样不得以其为权威，保持冲突保守直至迁移可落盘。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Authority {
+    Intact,
+    Damaged,
+    Suspended,
+}
+
 struct IndexView<'a> {
     value: &'a Value,
-    intact: bool,
+    authority: Authority,
 }
 
 /// 在任何索引修复/媒体操作之前耐久标记无法判定的事务，防修复后误删媒体。
@@ -229,10 +246,10 @@ fn retire_entry(current: &mut Vec<JournalEntry>, entry: &JournalEntry) {
 }
 
 /// 单条日志恢复。分支次序对齐 §7.2：共享引用 → 索引仍引用 → 索引已去项。
-/// `view.intact` 为真表示当前索引是可解析的权威视图：indexUncertain 条目
-/// 仅在索引仍损坏时保持冲突保守（issue #389）——索引已恢复时复位闩锁并
-/// 按当前索引走正常收敛分支（仍引用 → 回迁/未开始；已去项 → 按已提交），
-/// 资产不再因历史损坏永久 conflicted。
+/// `view.authority` 为 [`Authority::Intact`] 时当前索引是权威视图：indexUncertain
+/// 条目复位闩锁并按当前索引走正常收敛分支（仍引用 → 回迁/未开始；已去项 →
+/// 按已提交），资产不再因历史损坏永久 conflicted；损坏/迁移挂起期间保持
+/// 冲突保守并按子态给出对应修复指引（issue #389）。
 fn recover_entry(
     library: &CapDir,
     assets: &CapDir,
@@ -243,23 +260,29 @@ fn recover_entry(
     changed: &mut bool,
 ) -> Result<(), LibraryError> {
     let re_adjudicated;
-    let entry = if entry.index_uncertain && !view.intact {
-        recovery
-            .cleanup_pending
-            .push(CleanupPendingItem::evidence(entry.trash_name.clone()));
-        mark_conflict(
-            entry,
-            recovery,
-            "索引曾损坏且尚未修复，删除结果无法确认；须先修复 library.json 为可解析 \
-             JSON（人工修整，或经任意图库写入自动替换为修复视图），修复后的图库操作\
-             将按当前索引自动重新判定",
-        );
-        return Ok(());
-    } else if entry.index_uncertain {
+    let entry = if !entry.index_uncertain {
+        entry
+    } else if view.authority == Authority::Intact {
         re_adjudicated = release_uncertain_latch(current, entry, changed);
         &re_adjudicated
     } else {
-        entry
+        let why = match view.authority {
+            Authority::Suspended => {
+                "索引迁移挂起（迁移结果超大小上限，库写入已暂停），只读视图隔离了\
+                 待重发条目、无法权威判定删除结果；须人工修整 library.json 条目使\
+                 迁移结果可落盘，恢复后的图库操作将自动重新判定"
+            }
+            _ => {
+                "索引曾损坏且尚未修复，删除结果无法确认；须先修复 library.json 为可解析 \
+                 JSON（人工修整，或经任意图库写入自动替换为修复视图），修复后的图库操作\
+                 将按当前索引自动重新判定"
+            }
+        };
+        recovery
+            .cleanup_pending
+            .push(CleanupPendingItem::evidence(entry.trash_name.clone()));
+        mark_conflict(entry, recovery, why);
+        return Ok(());
     };
     let refs = index_refs(view.value, entry);
     let trash = open_trash_dir(assets)?;

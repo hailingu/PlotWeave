@@ -1,5 +1,6 @@
 //! indexUncertain 闩锁回归测试（issue #389）：索引恢复后的两个收敛方向、
-//! 损坏期间的保守保持与修复指引、收敛后再次损坏的重新置位。
+//! 损坏期间的保守保持与修复指引、收敛后再次损坏的重新置位、迁移挂起
+//! （suspended）只读视图的非权威性（PR #413 评审 4121700018）。
 //! 共享 helper 经 `use super::recover_tests::*` 复用（tests.rs 同款惯例）。
 
 use super::recover::CleanupKind;
@@ -178,6 +179,95 @@ fn uncertain_entry_warning_carries_repair_guidance_while_index_damaged() {
         saved[0]["indexUncertain"],
         json!(true),
         "损坏期间置位并耐久"
+    );
+    cleanup(&root);
+}
+
+/// 构造「可解析旧数组索引 + 迁移产物超 1 MiB」的挂起态索引：3300 条
+/// 41 字符 id 的条目序列化约 1,013,124 字节（读上限内），键化迁移产物
+/// 约 1,158,342 字节（越过写上限）——`read_index_normalized` 进入
+/// damaged=false / suspended=true 的只读局部视图（PR #413 评审 4121700018）。
+fn suspended_legacy_index() -> Value {
+    let name = "x".repeat(80);
+    let legacy: Vec<Value> = (0..3300)
+        .map(|i| {
+            let id = format!("la-{i:038}");
+            json!({"id": id, "name": name, "kind": "other", "mime": "image/png",
+                "relPath": format!("assets/{id}.png"), "source": "upload",
+                "createdAt": "2026-01-01T00:00:00.000Z", "tags": []})
+        })
+        .collect();
+    json!({ "assets": legacy, "groups": [] })
+}
+
+/// PR #413 评审 4121700018：迁移挂起的只读局部视图不得作为闩锁重判依据
+/// ——写路径拒绝同一视图以防抹掉被隔离条目，恢复判定同样不得以其为权威；
+/// 条目保持冲突保守且媒体不动，索引恢复权威（迁移可落盘）后才收敛。
+#[test]
+fn uncertain_entry_holds_latch_while_migration_suspended() {
+    let (library, root) = temp_fixture();
+    fs::write(library.join("assets").join("la-1.png"), b"PNG").expect("写媒体");
+    write_index_raw(&library, &suspended_legacy_index());
+    let (dev, ino) = file_identity(&library.join("assets").join("la-1.png"));
+    write_journal_raw(
+        &library,
+        json!([uncertain_entry_json(
+            "t-1",
+            "la-1",
+            "assets/la-1.png",
+            "assets/.trash/t-x",
+            dev,
+            ino
+        )]),
+    );
+    // 前置 sanity：本夹具确实进入迁移挂起态（否则用例失效）
+    let recovery = recover(&cap(&library)).expect("恢复应成功");
+    assert!(
+        recovery.warnings.iter().any(|w| w.contains("迁移挂起")),
+        "夹具应产生迁移挂起警告：{:?}",
+        recovery.warnings
+    );
+    assert!(
+        recovery.conflicted.contains(&"la-1".to_string()),
+        "挂起态只读视图非权威：应保持冲突保守"
+    );
+    assert_eq!(
+        fs::read(library.join("assets").join("la-1.png")).expect("挂起期间不动媒体"),
+        b"PNG"
+    );
+    let saved = read_journal_raw(&library);
+    assert_eq!(
+        saved[0]["indexUncertain"],
+        json!(true),
+        "挂起期间闩锁不得复位"
+    );
+    // 索引恢复权威（小体量 Record 形状、无迁移）：收敛恢复，按已提交判定
+    write_index_raw(
+        &library,
+        &json!({ "assets": by_id([]), "groups": by_id([]) }),
+    );
+    let converged = recover(&cap(&library)).expect("权威视图下恢复应成功");
+    assert!(
+        converged.conflicted.is_empty(),
+        "恢复权威后应解除冲突：{:?}",
+        converged.conflicted
+    );
+    let saved = read_journal_raw(&library);
+    assert!(
+        saved[0].get("indexUncertain").is_none(),
+        "权威视图下闩锁应复位"
+    );
+    let recorded = saved[0]["trashName"]
+        .as_str()
+        .expect("trashName")
+        .to_string();
+    assert_eq!(
+        fs::read(library.join(&recorded)).expect("媒体字节保留在隔离名下"),
+        b"PNG"
+    );
+    assert!(
+        !library.join("assets").join("la-1.png").exists(),
+        "按已提交收敛后媒体应离开活动路径"
     );
     cleanup(&root);
 }
