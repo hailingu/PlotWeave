@@ -146,9 +146,10 @@ This repository wires exactly two: `.githooks/pre-commit` and
 | `git am` applying a patch series | `applypatch-msg`, `pre-applypatch`, `post-applypatch` — none wired | **no** |
 | `git stash push` (tracked changes) | `reference-transaction`; no commit-creation hooks | **no** * |
 | `git stash create [<message>]` (tracked changes) | `post-index-change` on index writes; no commit-creation or ref-update hooks | **no** |
-| `git notes add` / `append` / `edit` | `reference-transaction`; no commit-creation hooks | **no** * |
+| `git notes add` / `append` / `edit` / `copy` / `remove` | `reference-transaction`; no commit-creation hooks | **no** * |
 | `git commit-tree` + `git update-ref` (plumbing) | `reference-transaction`; no commit-creation hooks | **no** * |
-| `git replace --graft <commit> [<parent>…]` / `git replace --edit <commit>` | `reference-transaction`; no commit-creation hooks | **no** * |
+| `git hash-object -t commit -w --stdin` + `git update-ref` (plumbing) | `reference-transaction` on ref update only; `hash-object` itself fires no hook | **no** * |
+| `git replace --graft <commit> [<parent>…]` / `git replace --edit <commit>` / `git replace --convert-graft-file` | `reference-transaction`; no commit-creation hooks | **no** * |
 | `git fast-import` (`commit <ref>` stream) | `reference-transaction`; no commit-creation hooks | **no** * |
 | `git filter-branch` (history rewrite) | none measured here (see note) | **no** * |
 | `git subtree split --prefix=<dir> --branch <branch>` | `reference-transaction`; no commit-creation hooks | **no** * |
@@ -282,12 +283,12 @@ stash commit. So stash does not, after all, stay purely local; its push-side
 exposure is the push finding below, tracked there rather than re-counted
 here.
 
-`git notes add` / `append` / `edit` likewise create commits under
-`refs/notes/*` (by default `refs/notes/commits`) without any
+`git notes add` / `append` / `edit` / `copy` / `remove` likewise create
+commits under `refs/notes/*` (by default `refs/notes/commits`) without any
 commit-creation hook — measured on git 2.48.1, only `reference-transaction`
-fires (评审 4115135524). Notes refs are pushable (`git push origin
-refs/notes/*`), so this row is remote-facing in the same sense the push
-finding is; it is recorded here as a boundary and its closure —
+fires (评审 4115135524, 4117675234). Notes refs are pushable (`git push
+origin refs/notes/*`), so this row is remote-facing in the same sense the
+push finding is; it is recorded here as a boundary and its closure —
 `reference-transaction` in `prepared` state — is the same #404 option noted
 for stash, not a separate remedy.
 
@@ -311,15 +312,24 @@ replacement commit under `refs/replace/<target-oid>` and fired only
 `reference-transaction` (`prepared` and `committed`); no commit-creation hook
 fired. Explicitly pushing that ref to a local bare remote succeeded. Its local
 and push-side dispositions are therefore the same #404 and #405 paths as
-`--graft`.
+`--graft`. `git replace --convert-graft-file` converts legacy
+`.git/info/grafts` entries into `refs/replace/*` refs; measured on git
+2.48.1 with a valid graft, it created the replacement commit and fired only
+`reference-transaction` (`prepared` and `committed`), no commit-creation
+hook (评审 4117675234). Its local and push-side dispositions are the same
+#404 and #405 paths as `--graft` and `--edit`.
 
 The plumbing path is uncovered too: `git commit-tree <tree>` creates a
 commit object directly, and `git update-ref refs/heads/<branch> <commit>`
 places it on branch history, without any commit-creation hook — measured on
 git 2.48.1, only `reference-transaction` fired during the ref update
-(评审 4115165667). This is the lowest-level way to land a commit with no gate,
-and like the other off-hook paths its local ref-update closure is the same
-#404 `reference-transaction` question. `git fast-import` reaches the same
+(评审 4115165667). One level lower, `git hash-object -t commit -w --stdin`
+writes the commit object itself; measured on git 2.48.1, piping a valid
+commit payload created the object with an empty hook log (评审 4117675224).
+The resulting OID can then be installed with `update-ref` or pushed
+directly, so `commit-tree` is not the lowest-level route after all. Like
+the other off-hook paths their local ref-update closure is the same #404
+`reference-transaction` question. `git fast-import` reaches the same
 place from a stream: its `commit <ref>` command creates the commit and
 updates the branch in one step — measured on git 2.48.1, importing one
 commit into `refs/heads/imported` fired only `reference-transaction`
