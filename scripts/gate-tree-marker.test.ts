@@ -284,6 +284,27 @@ describe(
       writeFileSync(markerPath, 'not-a-tree\nnot-a-number\n')
       expect(run('check').status).toBe(1)
     })
+
+    it('标记路径不可写时 write 静默失败，不阻塞门禁已通过的操作（评审 4120128565）', () => {
+      const sandbox = mkdtempSync(resolve(tmpdir(), 'plotweave-gate-marker-'))
+      temporaryDirectories.push(sandbox)
+      initScratchRepository(sandbox)
+      // 路径被目录占据：标记重定向必然失败，write 仍须以 0 退出
+      const markerPath = resolve(sandbox, 'marker-as-directory')
+      mkdirSync(markerPath)
+      const write = spawnSync(
+        'sh',
+        [resolve(repositoryRoot, 'scripts', 'gate-tree-marker.sh'), 'write'],
+        {
+          cwd: sandbox,
+          env: {
+            ...process.env,
+            PLOTWEAVE_GATE_MARKER_PATH: markerPath,
+          },
+        },
+      )
+      expect(write.status).toBe(0)
+    })
   },
 )
 
