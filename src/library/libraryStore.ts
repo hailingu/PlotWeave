@@ -8,6 +8,8 @@
  */
 
 import { uid } from '../uid'
+import { IPC_COMMANDS } from '../ipc/commands'
+import { ipcInvoke } from '../ipc/invoke'
 import { reportLibraryDiagnostics } from './libraryDiagnosticTransport'
 
 /** 资产库分类（§7）：索引条目的 kind 域；中文标签/图标见 LIBRARY_KINDS。 */
@@ -120,13 +122,12 @@ const memoryAssets = new Map<string, { asset: LibraryAsset; blob: Blob }>()
 const memoryGroups = new Map<string, AssetGroup>()
 
 async function tauriList(): Promise<LibraryAsset[]> {
-  const { invoke } = await import('@tauri-apps/api/core')
-  const index = await invoke<{
+  const index = await ipcInvoke<{
     assets?: { byId?: Record<string, unknown> }
     warnings?: unknown[]
     cleanupPending?: unknown[]
     diagnosticsRevision?: unknown
-  }>('list_library_assets')
+  }>(IPC_COMMANDS.listLibraryAssets)
   reportLibraryDiagnostics(index)
   // §7.2 Record 形状：assets.byId 的值即条目（issue #29 PR 1，评审修复——
   // 旧数组形状已迁移，前端必须按 byId 读取，否则全部资产被隐藏）
@@ -138,9 +139,8 @@ async function tauriList(): Promise<LibraryAsset[]> {
 }
 
 async function tauriPut(file: File, kind: LibraryKind): Promise<LibraryAsset> {
-  const { invoke } = await import('@tauri-apps/api/core')
   const bytes = new Uint8Array(await file.arrayBuffer())
-  const entry = await invoke<RawAsset>('import_library_asset', {
+  const entry = await ipcInvoke<RawAsset>(IPC_COMMANDS.importLibraryAsset, {
     name: file.name,
     mime: file.type || 'application/octet-stream',
     kind,
@@ -161,8 +161,7 @@ async function tauriMediaUrl(
   },
 ): Promise<string> {
   if (asset.conflicted) throw new Error('资产处于删除事务冲突期，媒体不可用')
-  const { invoke } = await import('@tauri-apps/api/core')
-  return invoke<string>('get_asset_media_url', {
+  return ipcInvoke<string>(IPC_COMMANDS.getAssetMediaUrl, {
     scope: { kind: 'library' },
     assetId: asset.id,
   })
@@ -194,8 +193,8 @@ function applyUpdateMeta(
   patch: Partial<Pick<LibraryAsset, 'name' | 'tags' | 'groupId' | 'view'>>,
 ): Promise<LibraryAsset> {
   if (isTauri) {
-    return import('@tauri-apps/api/core').then(async ({ invoke }) => {
-      const entry = await invoke<RawAsset>('update_library_asset', {
+    return (async () => {
+      const entry = await ipcInvoke<RawAsset>(IPC_COMMANDS.updateLibraryAsset, {
         id,
         patch,
       })
@@ -203,7 +202,7 @@ function applyUpdateMeta(
       const normalized = normalizeAsset(entry)
       if (!normalized) throw new Error('更新返回了无效条目')
       return normalized
-    })
+    })()
   }
   const hit = memoryAssets.get(id)
   if (!hit) return Promise.reject(new Error(`资产不存在：${id}`))
@@ -242,10 +241,12 @@ const lastPersistedAssets = new Map<string, LibraryAsset>()
  * 并交由调用方呈现错误；Tauri 返回的隔离区诊断继续上报。 */
 async function applyRemove(id: string): Promise<void> {
   if (isTauri) {
-    const { invoke } = await import('@tauri-apps/api/core')
-    const result = await invoke<LibraryDiagnostics>('delete_library_asset', {
-      id,
-    })
+    const result = await ipcInvoke<LibraryDiagnostics>(
+      IPC_COMMANDS.deleteLibraryAsset,
+      {
+        id,
+      },
+    )
     reportLibraryDiagnostics(result)
   } else {
     memoryAssets.delete(id)
@@ -332,15 +333,15 @@ export const libraryStore = {
   /** 组列表：Tauri 读 library.json 的 groups.byId；内存回退读内存组。 */
   listGroups: (): Promise<AssetGroup[]> => {
     if (isTauri) {
-      return import('@tauri-apps/api/core').then(async ({ invoke }) => {
+      return (async () => {
         // 完整响应信封（评审修复，PR #36 第一轮）：warnings/cleanupPending
         // 与 tauriList 同款上报——只读组视图不得隐藏修复/隔离诊断
-        const index = await invoke<{
+        const index = await ipcInvoke<{
           groups?: { byId?: Record<string, unknown> }
           warnings?: unknown[]
           cleanupPending?: unknown[]
           diagnosticsRevision?: unknown
-        }>('list_library_assets')
+        }>(IPC_COMMANDS.listLibraryAssets)
         reportLibraryDiagnostics(index)
         const byId = index.groups?.byId
         const entries =
@@ -354,7 +355,7 @@ export const libraryStore = {
               typeof g.kind === 'string' &&
               KIND_SET.has(g.kind),
           )
-      })
+      })()
     }
     // 克隆返回（评审修复，PR #36 第六轮）：调用方 mutate 返回值不得改存储
     return Promise.resolve([...memoryGroups.values()].map((g) => ({ ...g })))
@@ -363,14 +364,14 @@ export const libraryStore = {
   /** 组写入：新建/更新编组；改 kind 与成员冲突即拒绝（§7.2）。 */
   upsertGroup: (group: AssetGroup): Promise<AssetGroup> => {
     if (isTauri) {
-      return import('@tauri-apps/api/core').then(async ({ invoke }) => {
-        const result = await invoke<AssetGroup & LibraryDiagnostics>(
-          'upsert_library_group',
+      return (async () => {
+        const result = await ipcInvoke<AssetGroup & LibraryDiagnostics>(
+          IPC_COMMANDS.upsertLibraryGroup,
           { group },
         )
         reportLibraryDiagnostics(result)
         return result
-      })
+      })()
     }
     // 内存回退同款形状校验（评审修复，PR #36 第三/四轮）：id 镜像 Rust
     // validate_asset_id（1–64 ASCII 字母数字/_/-）、name 去空白 1–128（合法
@@ -420,13 +421,13 @@ export const libraryStore = {
   /** 组删除：原子删除组并剥离成员资产的 groupId（§7.2）。 */
   deleteGroup: (id: string): Promise<void> => {
     if (isTauri) {
-      return import('@tauri-apps/api/core').then(async ({ invoke }) => {
-        const result = await invoke<LibraryDiagnostics>(
-          'delete_library_group',
+      return (async () => {
+        const result = await ipcInvoke<LibraryDiagnostics>(
+          IPC_COMMANDS.deleteLibraryGroup,
           { id },
         )
         reportLibraryDiagnostics(result)
-      })
+      })()
     }
     // 内存回退同款存在性校验（评审修复，PR #36 第一轮）：stale/重复删除
     // 不得静默成功

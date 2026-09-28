@@ -108,6 +108,26 @@ Apply the guardrails as follows:
   asserts that both the compile-time graph (type-only imports included) and
   the runtime graph (after type erasure) stay acyclic. Routing a cycle through
   an `import type` edge is a violation, not a loophole.
+- Tauri IPC command names have a single frontend source of truth:
+  `src/ipc/commands.ts` (issue #394). Call sites go through the typed entry
+  `ipcInvoke` (`src/ipc/invoke.ts`), whose `cmd` parameter is narrowed to the
+  `IPC_COMMANDS` value union — a misspelled literal, an aliased import, or a
+  literal routed through a variable is rejected at compile time (PR #416
+  review 5339899090). `src/ipc/invoke.ts` is the only maintained module
+  allowed to import or re-export `@tauri-apps/api/core`; every binding shape
+  (alias, destructuring, `Promise.all`, `.then`, `export { invoke as … } from`,
+  `export * from`) must write that specifier, so the guard's
+  specifier-exclusivity assertion cannot be bypassed (review 5340648995). A
+  computed
+  (non-static) dynamic import specifier cannot be statically ruled out from
+  loading the core module and fails closed, mirroring the module-graph
+  guard's posture for unresolvable dynamic imports (review 5340318886). The contract
+  guard (`src/ipc/commands.test.ts`) parses the `generate_handler!`
+  registration list and asserts bidirectional consistency — no constant
+  without a registration, no registration without a frontend consumer, no
+  duplicate values, and no string literal in invoke-call position. Renaming
+  or removing a command must update both sides in the same change; a silent
+  one-sided edit fails the compiler or the guard.
 - Cross-module calls must use the owning module's public API. Do not import its
   internal persistence models, framework objects, mutable state, or private
   helpers.

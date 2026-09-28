@@ -10,8 +10,12 @@ import type { ProjectDocument } from './model/document'
 
 const documents = new Map<string, ProjectDocument>()
 const unavailable = new Set<string>()
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: async (
+// 拦截点在类型化入口（issue #394 评审 5339899090）：自动重试级联下，
+// vitest 4 对 invoke.ts 集中式动态导入的 core mock 会失稳（部分调用落到
+// 真实模块）；在 ipcInvoke 入口拦截后行为稳定，包装转发语义另由
+// src/ipc/invoke.test.ts 覆盖
+vi.mock('./ipc/invoke', () => ({
+  ipcInvoke: async (
     command: string,
     args: { id: string; doc: ProjectDocument },
   ) => {

@@ -7,6 +7,8 @@
  * 原文（content + 可选 tool_calls），写调用映射为预览卡命令、读调用就地回喂。
  */
 import type { ProviderConfig } from '../../settings/types'
+import { IPC_COMMANDS } from '../../ipc/commands'
+import { ipcInvoke } from '../../ipc/invoke'
 import type { ToolSpec } from './tools'
 
 /** OpenAI 兼容对话消息（模块头：经 Rust llm_chat 代理的非流式通道）：
@@ -40,8 +42,7 @@ export async function llmChat(
   messages: ChatMessage[],
   tools?: ToolSpec[],
 ): Promise<AssistantMessage> {
-  const { invoke } = await import('@tauri-apps/api/core')
-  return invoke<AssistantMessage>('llm_chat', {
+  return ipcInvoke<AssistantMessage>(IPC_COMMANDS.llmChat, {
     providerId: provider.id,
     baseUrl: provider.baseUrl,
     model,

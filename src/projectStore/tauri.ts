@@ -6,6 +6,8 @@
  */
 import { parseProject } from '../model/convert'
 import type { ProjectContent } from '../model/content'
+import { IPC_COMMANDS } from '../ipc/commands'
+import { ipcInvoke } from '../ipc/invoke'
 import { ipcErrorCode } from '../ipcError'
 import { memoryNormalize } from './memory'
 import {
@@ -59,7 +61,6 @@ function toSummary(m: {
  * 成功的种子写会清除该登记，用户最新内容被永久丢弃。返回是否写入了任一
  * 种子。 */
 async function seedFirstRun(): Promise<boolean> {
-  const { invoke } = await import('@tauri-apps/api/core')
   let seeded = false
   for (const seed of seedProjects()) {
     // 先等该 id 在途保存落定再探测（PR #198 评审）：预先存在的在途链
@@ -68,7 +69,7 @@ async function seedFirstRun(): Promise<boolean> {
     await waitForSaveChainIdle(seed.meta.id)
     const chainBefore = saveChainTokenOf(seed.meta.id)
     try {
-      await invoke<unknown>('load_project', { id: seed.meta.id })
+      await ipcInvoke<unknown>(IPC_COMMANDS.loadProject, { id: seed.meta.id })
       console.warn('[projectStore] 播种跳过：项目已存在', seed.meta.id)
     } catch (err) {
       if (ipcErrorCode(err) !== 'project_not_found') {
@@ -124,7 +125,6 @@ async function upgradeKnownSamples(metas: { id: string }[]): Promise<boolean> {
  * 归一化警告逐条留痕，与 tauriLoad 同款（issue #338 评审二轮）。
  * 返回是否实际回写。 */
 async function tryUpgradeSample(id: string): Promise<boolean> {
-  const { invoke } = await import('@tauri-apps/api/core')
   try {
     await waitForSaveChainIdle(id)
     if (pendingRetryDocOf(id) !== undefined) {
@@ -135,11 +135,14 @@ async function tryUpgradeSample(id: string): Promise<boolean> {
       return false
     }
     const chainBefore = saveChainTokenOf(id)
-    const file = await invoke<unknown>('load_project', { id })
-    const invalidAssetKeys = await invoke<string[]>('verify_project_assets', {
-      id,
-      assets: (file as { assets?: unknown }).assets ?? {},
-    })
+    const file = await ipcInvoke<unknown>(IPC_COMMANDS.loadProject, { id })
+    const invalidAssetKeys = await ipcInvoke<string[]>(
+      IPC_COMMANDS.verifyProjectAssets,
+      {
+        id,
+        assets: (file as { assets?: unknown }).assets ?? {},
+      },
+    )
     const { content, migrated, repaired, warnings } = parseProject(file, {
       projectId: id,
       invalidAssetKeys,
@@ -175,11 +178,10 @@ async function tryUpgradeSample(id: string): Promise<boolean> {
 /** 项目列表门面：空库先播种、已知示例先升级回写（回写后重列以返回
  * 净本摘要）；损坏条目以占位摘要进列表（toSummary）。 */
 export async function tauriList(): Promise<ProjectSummary[]> {
-  const { invoke } = await import('@tauri-apps/api/core')
   // 回写改写了名称/统计并盖戳 updatedAt：metas 是写前快照，直接返回会让
   // 首页滞留旧名旧序——重列直到无回写（回写后的净本不再触发写，循环有界）
   for (;;) {
-    const metas = await invoke<
+    const metas = await ipcInvoke<
       {
         id: string
         name: string
@@ -188,7 +190,7 @@ export async function tauriList(): Promise<ProjectSummary[]> {
         ending_count: number
         diagnostic?: string
       }[]
-    >('list_projects')
+    >(IPC_COMMANDS.listProjects)
     if (metas.length === 0) {
       if (!(await seedFirstRun())) return metas.map(toSummary)
       continue
@@ -200,15 +202,14 @@ export async function tauriList(): Promise<ProjectSummary[]> {
 
 /** 新建项目门面：委托 Rust create_project（空文档落盘）并返回摘要。 */
 export async function tauriCreate(name: string): Promise<ProjectSummary> {
-  const { invoke } = await import('@tauri-apps/api/core')
   return toSummary(
-    await invoke<{
+    await ipcInvoke<{
       id: string
       name: string
       updated_at: string
       scene_count: number
       ending_count: number
-    }>('create_project', { name }),
+    }>(IPC_COMMANDS.createProject, { name }),
   )
 }
 
@@ -221,8 +222,7 @@ async function verifiedPendingRetryDoc(
 ): Promise<ProjectContent | 'restart' | null> {
   const pending = pendingRetryDocOf(id)
   if (pending === undefined) return null
-  const { invoke } = await import('@tauri-apps/api/core')
-  const invalid = await invoke<string[]>('verify_project_assets', {
+  const invalid = await ipcInvoke<string[]>(IPC_COMMANDS.verifyProjectAssets, {
     id,
     assets: pending.assets ?? {},
   })
@@ -242,7 +242,6 @@ async function verifiedPendingRetryDoc(
  * 优先交付 → 磁盘读取带链身份守卫），段内窗口期出现新写入即回到循环顶；
  * 迁移/修复写回走保存链，失败由重试登记接管（详见循环上方分段注释）。 */
 export async function tauriLoad(id: string): Promise<ProjectContent> {
-  const { invoke } = await import('@tauri-apps/api/core')
   // 单循环三段：链静止 → 失败登记复验（优先）→ 磁盘读取（链身份守卫）。
   // 任何段的重启都回到循环顶——尤其磁盘段读取期间排队的保存若失败，其
   // 失败登记（比磁盘新）必须在下一轮的登记复验段被优先交付，不得只在
@@ -268,14 +267,17 @@ export async function tauriLoad(id: string): Promise<ProjectContent> {
     if (pending === 'restart') continue
     if (pending !== null) return pending
     const chainBefore = saveChainTokenOf(id)
-    const file = await invoke<unknown>('load_project', { id })
+    const file = await ipcInvoke<unknown>(IPC_COMMANDS.loadProject, { id })
     // §7.1/§10.5 加载侧资产实路径复验：Rust 以受信资产根 no-follow 验证
     // （前端无法访问文件系统），不可验证键交归一化层隔离、引用位标记悬空
     // ——否则下一次保存会被保存边界拒收而防抖吞错，用户编辑永不落盘
-    const invalidAssetKeys = await invoke<string[]>('verify_project_assets', {
-      id,
-      assets: (file as { assets?: unknown }).assets ?? {},
-    })
+    const invalidAssetKeys = await ipcInvoke<string[]>(
+      IPC_COMMANDS.verifyProjectAssets,
+      {
+        id,
+        assets: (file as { assets?: unknown }).assets ?? {},
+      },
+    )
     if (saveChainTokenOf(id) !== chainBefore) continue
     // §11 归一化管线：迁移 + 孤儿边隔离 + 悬空引用标记；
     // projectId 为路径给定的受信 id，供 §11.1 元数据修复覆盖 project.id
@@ -315,10 +317,13 @@ async function registerAssetAliases(
   aliases: [string, string][],
 ): Promise<void> {
   if (aliases.length === 0) return
-  const { invoke } = await import('@tauri-apps/api/core')
   for (const [blankKey, freshId] of aliases) {
     try {
-      await invoke('register_project_asset_alias', { id, blankKey, freshId })
+      await ipcInvoke(IPC_COMMANDS.registerProjectAssetAlias, {
+        id,
+        blankKey,
+        freshId,
+      })
     } catch (err) {
       console.warn(
         '[projectStore] 资产别名登记失败（媒体在修复回写落盘前暂不可见）',

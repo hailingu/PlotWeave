@@ -13,6 +13,8 @@
  */
 import type { AssetRef } from '../model/document'
 import { libraryStore } from '../library/libraryStore'
+import { IPC_COMMANDS, type IpcCommandName } from '../ipc/commands'
+import { ipcInvoke } from '../ipc/invoke'
 import { uid } from '../uid'
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -78,16 +80,15 @@ async function tauriImport(
   projectId: string,
   libraryAssetId: string,
 ): Promise<AssetRef> {
-  const { invoke } = await import('@tauri-apps/api/core')
   const imported = normalizeAssetRef(
-    await invoke<RawAssetRef>('import_project_asset_from_library', {
+    await ipcInvoke<RawAssetRef>(IPC_COMMANDS.importProjectAssetFromLibrary, {
       id: projectId,
       libraryAssetId,
     }),
   )
   // §9.3：入索引前过 Rust 预检，使用预检返回的规范化条目
   return normalizeAssetRef(
-    await invoke<RawAssetRef>('validate_project_asset', {
+    await ipcInvoke<RawAssetRef>(IPC_COMMANDS.validateProjectAsset, {
       id: projectId,
       asset: imported,
     }),
@@ -125,23 +126,20 @@ async function tauriMediaUrl(
   projectId: string,
   assetId: string,
 ): Promise<string> {
-  const { invoke } = await import('@tauri-apps/api/core')
-  return invoke<string>('get_asset_media_url', {
+  return ipcInvoke<string>(IPC_COMMANDS.getAssetMediaUrl, {
     scope: { kind: 'project', projectId },
     assetId,
   })
 }
 
-/** IPC 直调助手（仅桌面端；动态导入避免浏览器预览加载 Tauri 模块）：
- * 生成命令等新增 Rust 管线的复用入口。 */
+/** IPC 直调助手（生成命令等新增 Rust 管线的复用入口）：委托类型化入口
+ * ipcInvoke 并同等收窄 cmd（IpcCommandName）——保留本导出以维持
+ * imagegen 域的既有 mock 面，语义与直接调用 ipcInvoke 完全一致。 */
 export function tauriInvoke<T>(
-  cmd: string,
+  cmd: IpcCommandName,
   args: Record<string, unknown>,
 ): Promise<T> {
-  return (async () => {
-    const { invoke } = await import('@tauri-apps/api/core')
-    return invoke<T>(cmd, args)
-  })()
+  return ipcInvoke<T>(cmd, args)
 }
 
 /** 统一门面：两种环境同签名。 */
@@ -177,7 +175,7 @@ export const projectAssets = {
    * validate_project_asset；浏览器预览内存态无盘上文件，恒通过。 */
   revalidate: (projectId: string, asset: AssetRef): Promise<void> => {
     if (!isTauri) return Promise.resolve()
-    return tauriInvoke<RawAssetRef>('validate_project_asset', {
+    return tauriInvoke<RawAssetRef>(IPC_COMMANDS.validateProjectAsset, {
       id: projectId,
       asset,
     }).then((raw) => {
