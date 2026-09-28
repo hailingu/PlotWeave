@@ -587,7 +587,8 @@ So the accurate statement of the invariant is:
 > `git commit-tree` (commit objects placed on history via `update-ref`),
 > `git hash-object -t commit -w` (commit objects written directly, then
 > installed via `update-ref` or pushed by OID),
-> `git replace --graft` / `--edit` / `--convert-graft-file` (replacement
+> `git replace` in any form (ordinary `[-f] <object> <replacement>`,
+> `--graft`, `--edit`, `--convert-graft-file`; replacement
 > commits under `refs/replace/*`),
 > `git fast-import` (`commit <ref>` stream commands), `git filter-branch`
 > (rewritten history), `git subtree split --branch` (rewritten commits under
@@ -648,8 +649,8 @@ conflict-free `git subtree merge` and
 `git subtree split --rejoin`, `git subtree push` (with or without `--rejoin`),
 `git subtree add`,
 `git stash create`, `--autostash` on `merge`/`pull`/`rebase`, and
-`git replace --graft` / `--edit` /
-`--convert-graft-file` — can produce or replace commits without the gate
+`git replace` in any form (ordinary, `--graft`, `--edit`,
+`--convert-graft-file`) — can produce or replace commits without the gate
 analyzing the resulting commit (评审
 4115477920, 4115606416, 4115639629, 4115682292, 4115710587, 4115748220,
 4115748226, 4115812068, 4115865920, 4115865924, 4117675224, 4117675234,
