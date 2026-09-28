@@ -21,6 +21,7 @@
 
 mod commands;
 mod copy;
+mod damaged_backup;
 pub(crate) mod error;
 mod list;
 mod persist;
@@ -34,6 +35,8 @@ pub use commands::{
     create_project, delete_project, load_ai_session, load_project, save_ai_session, save_project,
 };
 pub use copy::copy_project_assets;
+// 损坏控制文件覆盖前的耐久备份共用内核（#137 图库先例，#390 接入 prefs）
+pub(crate) use damaged_backup::{backup_damaged_file, DamagedFileBackup};
 pub use list::list_projects;
 // 展示边界转换（issue #144 store 分片）：store 内核返回类型化的
 // store::error::StoreError，跨域调用方与 Tauri 命令出口经 to_ipc_text

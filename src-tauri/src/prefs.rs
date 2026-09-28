@@ -197,10 +197,25 @@ pub async fn save_prefs(app: AppHandle, prefs: serde_json::Value) -> Result<(), 
     .await
 }
 
+/// 设置文件（settings.json）的损坏备份规格（issue #390）：与图库索引同款
+/// 内核——覆盖前判定既有文件是否为健康 JSON 对象，损坏（含合法 JSON 但
+/// 非对象、非法 UTF-8）则按原字节摘要耐久备份 `settings-corrupt-<sha256>.bak`
+/// 后才放行覆盖，使 keyEnc 密文等不可重建数据可事后取证；备份异常阻止
+/// 本次保存（fail-closed）。成功加载之后的编辑会话期间文件被外部破坏是
+/// 本保护的残余窗口（加载期由 issue #120 的 ready 门控承接）。
+const SETTINGS_BACKUP: crate::store::DamagedFileBackup = crate::store::DamagedFileBackup {
+    file_name: SETTINGS_FILE_NAME,
+    backup_prefix: "settings-corrupt-",
+    max_bytes: PREFS_MAX_BYTES,
+    source_label: "设置文件",
+    backup_label: "设置文件",
+};
+
 /// 设置保存的文件系统边界：先持久化创建数据目录（§10.2 条目宿主屏障，
 /// Unix），再经与读取入口共用的 `open_prefs_root` 锚定句柄（issue #391），
 /// 后续创建、替换与同步均相对该句柄执行；序列化超限时不触盘。写盘前
-/// 取设置写互斥（见 [`settings_write_guard`]），与旧密文迁移写回串行。
+/// 取设置写互斥（见 [`settings_write_guard`]），与旧密文迁移写回串行，
+/// 并在锁内先完成损坏原件备份（issue #390，见 [`SETTINGS_BACKUP`]）。
 fn save_prefs_in(dir: &Path, prefs: serde_json::Value) -> Result<(), String> {
     let text = serde_json::to_string_pretty(&prefs).map_err(|e| format!("序列化失败：{e}"))?;
     if text.len() > PREFS_MAX_BYTES {
@@ -209,6 +224,8 @@ fn save_prefs_in(dir: &Path, prefs: serde_json::Value) -> Result<(), String> {
     ensure_data_dir(dir)?;
     let root = open_prefs_root(dir)?;
     let _guard = settings_write_guard();
+    crate::store::backup_damaged_file(&root, &SETTINGS_BACKUP)
+        .map_err(|e| format!("备份损坏设置原件失败：{e}"))?;
     crate::store::atomic_write(&root, SETTINGS_FILE_NAME, &text)
         .map_err(|e| format!("保存设置失败：{e}"))
 }
@@ -223,6 +240,9 @@ fn settings_write_guard() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     crate::lock::recover_guard(LOCK.lock(), "settings-write")
 }
+
+#[cfg(test)]
+mod backup_tests;
 
 #[cfg(test)]
 mod save_tests;
