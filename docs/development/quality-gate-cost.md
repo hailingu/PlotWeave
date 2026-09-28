@@ -47,8 +47,15 @@ run only when that exact tree was gated within the same operation moments
 earlier — an ordinary `git commit` still pays exactly one gate run, and a
 merge pays exactly one (`pre-merge-commit` gates, `prepare-commit-msg`
 deduplicates). Commands with no wireable hook (see the table) remain
-ungated. The marker is a dedup hint, not a trust boundary: any mismatch,
-expiry, or corruption resolves to running the gate.
+ungated. The marker is **single-use** (评审 4120128545): a successful
+`check` consumes it, so a later operation — including a same-tree
+`--no-verify` commit — cannot reuse it. The marker is a dedup hint, not a
+trust boundary: any mismatch, expiry, or corruption resolves to running the
+gate. One narrow residue remains: a gate pass whose commit never reaches
+`prepare-commit-msg` (for example an editor abort) leaves an unconsumed
+marker that one later same-tree operation within the TTL could consume;
+closing it fully would require an operation identity shared across the two
+hooks, which Git does not provide.
 
 There is no cheaper or faster variant of that sequence, and no configuration
 that selects one. Which commit-producing commands actually reach it — and which
@@ -685,8 +692,9 @@ So the accurate statement of the invariant is:
 > tips of other local branches move by `reference-transaction` alone and are
 > not gated. `git push --no-verify` still bypasses the push-time
 > `pre-push` rerun entirely (`git push -h` documents it as "bypass pre-push
-> hook"); commit-side `--no-verify` no longer bypasses the local gate since
-> issue #404.
+> hook"); commit-side `--no-verify` runs the gate through the wired
+> `prepare-commit-msg` since issue #404 (single-use marker; the editor-abort
+> residue noted in the Decision section bounds the claim).
 
 An earlier revision of this file claimed that no commit is ever created without
 the full gate having run, and that the only shared hook for `revert` and
@@ -708,7 +716,10 @@ where `pre-commit` / `pre-merge-commit` have already gated the same index tree
 — the tree marker (`scripts/gate-tree-marker.sh`) deduplicates: an ordinary
 commit or merge still pays exactly one complete gate run, while
 revert / cherry-pick / rebase replays (and `--no-verify` commits) find no
-fresh matching marker and run the complete gate. The earlier record declined
+fresh matching marker and run the complete gate. The marker is consumed on a
+successful check (评审 4120128545), so it serves exactly the operation that
+wrote it and cannot be reused by a later same-tree operation. The earlier
+record declined
 to propose this remedy because closing the gaps "would change gate behavior",
 which the #356 decision explicitly did not do; issue #404 is precisely the
 follow-up decision that authorizes the behavior change, and this section now

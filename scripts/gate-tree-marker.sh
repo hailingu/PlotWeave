@@ -4,9 +4,11 @@
 # 先 check——同一提交操作内刚过检的树跳过重复门禁（普通 git commit 由
 # pre-commit 保证、合并由 pre-merge-commit 保证，仍各恰一次），revert /
 # cherry-pick / rebase 重放等没有 pre-commit 等价钩子的路径由此触发完整
-# 门禁。标记仅是去重提示而非信任边界：任何错配的最坏情形是对与近期刚
-# 过检完全相同的树少跑一次门禁，所有不确定情形（缺失/过期/损坏/索引
-# 不可写树）一律判定为需要执行门禁。
+# 门禁。标记是单次消费的：check 命中即删除，只服务产生它的那次操作，
+# 后续操作（含同树 --no-verify 提交）不得复用（评审 4120128545）。标记
+# 仅是去重提示而非信任边界：任何错配的最坏情形是对与近期刚过检完全
+# 相同的树少跑一次门禁，所有不确定情形（缺失/过期/损坏/索引不可写树）
+# 一律判定为需要执行门禁。
 set -eu
 
 marker_path=${PLOTWEAVE_GATE_MARKER_PATH:-$(git rev-parse --git-path plotweave-gate-tree.marker)}
@@ -18,9 +20,11 @@ current_tree=$(git write-tree 2>/dev/null) || current_tree=
 
 case ${1:-} in
   write)
-    # 标记是提示：写入失败不得阻塞门禁已通过的操作（下次照常执行门禁）
+    # 标记是提示：写入失败不得阻塞门禁已通过的操作（下次照常执行门禁，
+    # 评审 4120128565）
     if [ -n "$current_tree" ]; then
-      printf '%s\n%s\n' "$current_tree" "$(date +%s)" > "$marker_path"
+      printf '%s\n%s\n' "$current_tree" "$(date +%s)" \
+        > "$marker_path" 2>/dev/null || true
     fi
     ;;
   check)
@@ -31,6 +35,9 @@ case ${1:-} in
     [ "$marked_tree" = "$current_tree" ] || exit 1
     case "$marked_at" in '' | *[!0-9]*) exit 1 ;; esac
     [ "$(($(date +%s) - marked_at))" -le "$ttl_seconds" ] || exit 1
+    # 单次消费：命中即删除，防止后续操作复用（rm 失败不阻塞——标记
+    # 残留只影响下次多跑一次门禁）
+    rm -f "$marker_path" 2>/dev/null || true
     ;;
   *)
     printf '用法：gate-tree-marker.sh write|check\n' >&2

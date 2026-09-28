@@ -91,7 +91,7 @@ npm run tauri dev  # 启动 Tauri 开发调试（Vite 前端 + Rust 壳）
 
 本机需安装 `sonar-scanner` 与 `cargo-llvm-cov`（`cargo install cargo-llvm-cov`；`llvm-tools` 组件由 rust-toolchain.toml 自动提供），并在执行 Git 操作的终端环境中显式设置 `SONAR_HOST_URL`；这样可以避免新版扫描器在地址缺失时误连 SonarQube Cloud。服务需要认证时，通过本机环境变量 `SONAR_TOKEN` 提供令牌；未设置 `SONAR_TOKEN` 时回退读取 `PLOTWEAVE_SONAR_TOKEN`（可导出在 `~/.zshrc` 中，Git 钩子继承调用方终端的环境）。地址按本机环境配置，令牌禁止写入仓库。也可以用 `npm run sonar:gate` 手动执行完整门禁。
 
-测试失败、覆盖率报告无效、扫描失败、Quality Gate 未通过、服务不可用或新增代码仍有未解决问题时，Git 操作会被阻止。同一工作树只允许一个门禁运行，以免并发扫描覆盖共享产物。同一提交操作内经 `scripts/gate-tree-marker.sh`（树标记）去重：普通 `git commit` 与合并仍各恰一次完整门禁，`--no-verify` 跳过 `pre-commit` 时由 `prepare-commit-msg` 兜底（提交侧无法再绕过；推送侧 `--no-verify` 仍被禁止）。应逐项修复新增问题并重复执行门禁，直到新增问题数归零。
+测试失败、覆盖率报告无效、扫描失败、Quality Gate 未通过、服务不可用或新增代码仍有未解决问题时，Git 操作会被阻止。同一工作树只允许一个门禁运行，以免并发扫描覆盖共享产物。同一提交操作内经 `scripts/gate-tree-marker.sh`（单次消费的树标记）去重：普通 `git commit` 与合并仍各恰一次完整门禁，`--no-verify` 跳过 `pre-commit` 时由 `prepare-commit-msg` 兜底（标记不可跨操作复用；推送侧 `--no-verify` 仍被禁止）。应逐项修复新增问题并重复执行门禁，直到新增问题数归零。
 
 ### PR 持续集成（issue #228）
 

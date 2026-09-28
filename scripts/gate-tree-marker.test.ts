@@ -77,15 +77,9 @@ function seedHistory(sandbox: string): void {
   spawnSync('git', ['checkout', '-q', 'main'], { cwd: sandbox })
 }
 
-/** 安装真实钩子与门禁脚本（复制进沙箱，门禁在沙箱根运行）并接线替身。 */
-function prepareHookScenario(qualityGateStatus = 'OK'): HookScenario {
-  const sandbox = mkdtempSync(resolve(tmpdir(), 'plotweave-gate-hooks-'))
-  temporaryDirectories.push(sandbox)
-  initScratchRepository(sandbox)
-  seedHistory(sandbox)
-
+/** 复制真实钩子与门禁脚本进沙箱（门禁在沙箱根运行），返回替身目录。 */
+function copyScenarioFiles(sandbox: string): string {
   const bin = resolve(sandbox, 'bin')
-  const logPath = resolve(sandbox, 'calls.log')
   mkdirSync(bin, { recursive: true })
   mkdirSync(resolve(sandbox, 'scripts'), { recursive: true })
   mkdirSync(resolve(sandbox, '.githooks'), { recursive: true })
@@ -106,7 +100,12 @@ function prepareHookScenario(qualityGateStatus = 'OK'): HookScenario {
       resolve(sandbox, '.githooks', hook),
     )
   }
+  return bin
+}
 
+/** 安装记录并受控返回的外部命令替身（npm / cargo-llvm-cov / 扫描器 /
+ * curl），门禁调用次数以 sonar-scanner 替身日志行计。 */
+function writeScenarioStubs(bin: string): void {
   writeExecutable(
     resolve(bin, 'npm'),
     String.raw`printf 'npm %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
@@ -141,7 +140,15 @@ case "$*" in
     ;;
 esac`,
   )
+}
 
+/** 场景环境：替身路径 + 标记与日志覆盖；令牌不继承宿主环境。 */
+function scenarioEnvironment(
+  sandbox: string,
+  bin: string,
+  logPath: string,
+  qualityGateStatus: string,
+): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     PLOTWEAVE_CARGO_LLVM_COV_BIN: resolve(bin, 'cargo-llvm-cov'),
@@ -168,6 +175,20 @@ esac`,
   }
   delete env.SONAR_TOKEN
   delete env.PLOTWEAVE_SONAR_TOKEN
+  return env
+}
+
+/** 安装真实钩子与门禁脚本（复制进沙箱，门禁在沙箱根运行）并接线替身。 */
+function prepareHookScenario(qualityGateStatus = 'OK'): HookScenario {
+  const sandbox = mkdtempSync(resolve(tmpdir(), 'plotweave-gate-hooks-'))
+  temporaryDirectories.push(sandbox)
+  initScratchRepository(sandbox)
+  seedHistory(sandbox)
+
+  const logPath = resolve(sandbox, 'calls.log')
+  const bin = copyScenarioFiles(sandbox)
+  writeScenarioStubs(bin)
+  const env = scenarioEnvironment(sandbox, bin, logPath, qualityGateStatus)
 
   const wire = spawnSync(
     'git',
@@ -224,6 +245,11 @@ describe(
       expect(
         spawnSync('sh', [helper, 'check'], { cwd: sandbox, env }).status,
       ).toBe(0)
+      // 单次消费（评审 4120128545）：命中的标记即删除，同树第二次 check
+      // 判为需门禁
+      expect(
+        spawnSync('sh', [helper, 'check'], { cwd: sandbox, env }).status,
+      ).toBe(1)
 
       writeFileSync(resolve(sandbox, 'f.txt'), 'changed\n')
       spawnSync('git', ['add', '.'], { cwd: sandbox })
@@ -312,6 +338,23 @@ describe(
       ])
       expect(result.status).toBe(0)
       expect(scenario.scannerRuns()).toBe(1)
+    })
+
+    it('标记单次消费：过检提交后的同树 --no-verify 提交不得复用标记（评审 4120128545）', () => {
+      const scenario = prepareHookScenario()
+      const first = scenario.git(['commit', '--allow-empty', '-m', 'x'])
+      expect(first.status).toBe(0)
+      // 首笔提交消费了自己写入的标记：紧随的同树（空提交）--no-verify
+      // 提交找不到可复用标记，prepare-commit-msg 执行完整门禁
+      const second = scenario.git([
+        'commit',
+        '--allow-empty',
+        '--no-verify',
+        '-m',
+        'y',
+      ])
+      expect(second.status).toBe(0)
+      expect(scenario.scannerRuns()).toBe(2)
     })
 
     it('门禁失败（Quality Gate 非 OK）时 revert 被阻止且不产生提交', () => {
