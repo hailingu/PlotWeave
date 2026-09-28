@@ -146,6 +146,7 @@ This repository wires exactly two: `.githooks/pre-commit` and
 | `git cherry-pick --continue` after resolving conflicts | `post-index-change`; `pre-commit`, `prepare-commit-msg`, `commit-msg`, `post-commit` | yes |
 | `git rebase` replaying commits onto a new base | `pre-rebase` once, then `prepare-commit-msg` + `post-commit` per replayed commit, `post-rewrite` once at the end | **no** |
 | `git rebase --autostash` (dirty tracked worktree) | rebase hooks above; autostash creates ref-less stash commits with no hook | **no** |
+| `git rebase --update-refs` (other branches in the rebased range) | rebase hooks above; secondary branches move via `reference-transaction` only — no gate for their new tips | **no** * |
 | `git rebase --continue` after resolving a conflict | `post-index-change`, `prepare-commit-msg`, `post-commit`, `post-rewrite`; no `pre-commit` | **no** |
 | `git am` applying a patch series | `applypatch-msg`, `pre-applypatch`, `post-applypatch` — none wired | **no** |
 | `git stash push` / `git stash` / `git stash save` (tracked changes) | `reference-transaction`; no commit-creation hooks | **no** * |
@@ -285,7 +286,14 @@ fire** — and `post-rewrite` once after the replay, whose exit status git
 ignores, so it cannot implement a blocking gate either (评审 4114827177);
 the command-specific hooks for `git am` are the applypatch family, none of
 which this repository wires. Shared index/ref callbacks are covered above.
-Either path therefore creates commits with no gate.
+Either path therefore creates commits with no gate. With `--update-refs`,
+rebase additionally moves other local branches that point into the rebased
+range: measured on git 2.48.1, `git rebase --update-refs --onto <newbase>
+HEAD~2` moved a secondary branch to the replayed intermediate commit via
+`reference-transaction` only (评审 4119009208). That branch's tree can
+differ from the checked-out rebased tip, so pushing it makes `pre-push`
+scan the checked-out tree rather than the branch being published — the same
+#405 pushed-ref mismatch, marked `*` in the table.
 
 `git stash push` with tracked changes creates its entry commits under
 `refs/stash` — the stash commit plus its index parent — without running any
@@ -608,7 +616,8 @@ So the accurate statement of the invariant is:
 > produced by `git merge`, `git pull` (default merge mode), `git revert`, or
 > `git cherry-pick`; it also does not
 > analyze replayed `git rebase` commits (including conflict-resolved
-> `git rebase --continue`), `git am`, `git stash` in any entry-creating form
+> `git rebase --continue`; and, with `--update-refs`, the replayed tips of
+> other local branches moved by `reference-transaction` alone), `git am`, `git stash` in any entry-creating form
 > (`push`, shorthand, `save`, `-u`/`--all`; entry commits under
 > `refs/stash`), `git stash create` (a ref-less stash commit object),
 > `--autostash` on `merge`/`pull`/`rebase` (ref-less temporary stash
@@ -670,7 +679,8 @@ does not do.
 The uncovered automatic commit-producing paths and replacement-object paths —
 conflict-free `git merge`, `git pull` (default merge mode), `git revert`, and
 `git cherry-pick`, replayed
-`git rebase` commits (including conflict-resolved `--continue`), `git am`,
+`git rebase` commits (including conflict-resolved `--continue`, and with
+`--update-refs` the replayed tips of other local branches), `git am`,
 `git commit-tree` plus `git update-ref`, `git hash-object -t commit -w`
 plus `git update-ref` or direct-OID push, `git fast-import`,
 `git quiltimport`, `git filter-branch`, `git lfs migrate` (extension;
