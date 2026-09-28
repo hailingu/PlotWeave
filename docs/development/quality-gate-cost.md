@@ -113,9 +113,21 @@ refusal. See [Reconsideration Triggers](#reconsideration-triggers).
 
 ## Impact On Gate Strength
 
-**None. This decision changes no gate behavior at all.** It is a documentation
-and measurement change only. The following remain in force exactly as written in
-`AGENTS.md`, and nothing in this file is an exception to them:
+Two records live in this file and must not be conflated (评审 4120364296):
+
+- The original **#356 decision (2026-09-27) changed no gate behavior at
+  all** — it was a documentation and measurement change only.
+- The **issue #404 extension (2026-09-28) deliberately changes gate
+  behavior**: it adds the complete gate to previously-ungated commit-creation
+  paths — automatic non-fast-forward merges, `git revert`, `git cherry-pick`,
+  rebase replays, and commit-side `--no-verify`. Within the paths #356 already
+  gated (ordinary `git commit` and `git push`), behavior and per-operation
+  cost are unchanged: exactly one gate run of the same complete sequence. The
+  extension only strengthens coverage; it introduces no weaker variant, skip,
+  or fast path.
+
+The following remain in force exactly as written in `AGENTS.md`, and nothing
+in this file is an exception to them:
 
 - All four hooks stay enabled (`pre-commit`, `pre-merge-commit`,
   `prepare-commit-msg`, `pre-push`) and each runs the complete
