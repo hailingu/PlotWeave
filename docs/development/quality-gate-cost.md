@@ -152,7 +152,7 @@ This repository wires exactly two: `.githooks/pre-commit` and
 | `git notes add` / `append` / `edit` / `copy` / `remove` / `merge` / `prune` | `reference-transaction`; no commit-creation hooks | **no** * |
 | `git commit-tree` + `git update-ref` (plumbing) | `reference-transaction`; no commit-creation hooks | **no** * |
 | `git hash-object -t commit -w --stdin` + `git update-ref` (plumbing) | `reference-transaction` on ref update only; `hash-object` itself fires no hook | **no** * |
-| `git replace --graft <commit> [<parent>…]` / `git replace --edit <commit>` / `git replace --convert-graft-file` | `reference-transaction`; no commit-creation hooks | **no** * |
+| `git replace [-f] <object> <replacement>` / `git replace --graft <commit> [<parent>…]` / `git replace --edit <commit>` / `git replace --convert-graft-file` | `reference-transaction`; no commit-creation hooks | **no** * |
 | `git fast-import` (`commit <ref>` stream) | `reference-transaction`; no commit-creation hooks | **no** * |
 | `git filter-branch` (history rewrite) | none measured here (see note) | **no** * |
 | `git subtree split --prefix=<dir> --branch <branch>` | `reference-transaction`; no commit-creation hooks | **no** * |
@@ -188,8 +188,11 @@ direct-OID push variant that causes no local `reference-transaction`;
 paragraph below.
 
 \*\* This row produces a commit object without updating any ref, so no local
-`reference-transaction` fires for it; the commit is publishable only by
-direct-OID push, which is the same #405 push-side gap.
+`reference-transaction` fires for it. The commit can be published in two
+ways: installed on a local branch first (`git update-ref refs/heads/…
+<oid>`), which fires `reference-transaction` and is a #404 closure
+candidate, then pushed normally; or pushed directly by OID (`git push
+<remote> <oid>:refs/heads/…`), which is the #405 push-side gap.
 
 `post-index-change` is a shared index-write callback, as specified by its
 [Git contract](https://git-scm.com/docs/githooks#_post_index_change), rather
@@ -321,6 +324,12 @@ Notes refs are pushable (`git push origin refs/notes/*`), so this row is
 remote-facing in the same sense the push finding is; it is recorded here as
 a boundary and its closure — `reference-transaction` in `prepared` state —
 is the same #404 option noted for stash, not a separate remedy.
+
+`git replace [-f] <object> <replacement>` points the target at an existing
+replacement object, creating `refs/replace/<target-oid>` without any
+commit-creation hook — measured on git 2.48.1, only `reference-transaction`
+fired (评审 4118343207). The ordinary form shares the same ref-backed
+exposure and #404/#405 disposition as the specialized forms below.
 
 `git replace --graft <commit> [<parent>…]` creates a replacement commit with
 the target commit's tree and the supplied parent list, then stores it under
