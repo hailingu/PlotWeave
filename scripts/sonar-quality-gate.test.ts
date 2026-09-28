@@ -15,13 +15,17 @@ const repositoryRoot = resolve(import.meta.dirname, '..')
 const temporaryDirectories: string[] = []
 
 type GateOptions = {
-  coverageMode?: 'empty' | 'malformed' | 'missing' | 'uncovered' | 'valid'
+  coverageMode?:
+    'empty' | 'malformed' | 'missing' | 'partial' | 'uncovered' | 'valid'
   formatExit?: number
+  historyReadOnly?: boolean
+  historySeed?: string
   lintExit?: number
   lockOccupied?: boolean
   npmExit?: number
   plotweaveSonarToken?: string
-  rustCoverageMode?: 'empty' | 'malformed' | 'missing' | 'uncovered' | 'valid'
+  rustCoverageMode?:
+    'empty' | 'malformed' | 'missing' | 'partial' | 'uncovered' | 'valid'
   scannerExit?: number
   strictIndexExit?: number
   qualityGateStatus?: string
@@ -32,6 +36,7 @@ type GateOptions = {
 
 type GateRun = {
   curlStdin: string
+  history: string
   log: string
   scannerToken: string
   status: number | null
@@ -54,6 +59,7 @@ interface GateStubPaths {
   readonly scannerTokenPath: string
   readonly coveragePath: string
   readonly rustCoveragePath: string
+  readonly historyPath: string
   readonly lockPath: string
   readonly reportPath: string
   readonly npmPath: string
@@ -90,6 +96,10 @@ case "$PLOTWEAVE_TEST_COVERAGE_MODE" in
     mkdir -p "$(dirname "$PLOTWEAVE_COVERAGE_REPORT_PATH")"
     printf '%s\n' 'TN:' 'SF:src/example.ts' 'DA:1,1' 'end_of_record' > "$PLOTWEAVE_COVERAGE_REPORT_PATH"
     ;;
+  partial)
+    mkdir -p "$(dirname "$PLOTWEAVE_COVERAGE_REPORT_PATH")"
+    printf '%s\n' 'TN:' 'SF:src/example.ts' 'DA:1,1' 'DA:2,0' 'DA:3,1' 'end_of_record' > "$PLOTWEAVE_COVERAGE_REPORT_PATH"
+    ;;
   empty)
     mkdir -p "$(dirname "$PLOTWEAVE_COVERAGE_REPORT_PATH")"
     : > "$PLOTWEAVE_COVERAGE_REPORT_PATH"
@@ -116,6 +126,9 @@ esac`,
 case "$PLOTWEAVE_TEST_RUST_COVERAGE_MODE" in
   valid)
     printf '%s\n' 'TN:' 'SF:src-tauri/src/example.rs' 'DA:1,1' 'end_of_record' > "$PLOTWEAVE_RUST_COVERAGE_REPORT_PATH"
+    ;;
+  partial)
+    printf '%s\n' 'TN:' 'SF:src-tauri/src/example.rs' 'DA:1,1' 'DA:2,0' 'DA:3,1' 'end_of_record' > "$PLOTWEAVE_RUST_COVERAGE_REPORT_PATH"
     ;;
   empty)
     : > "$PLOTWEAVE_RUST_COVERAGE_REPORT_PATH"
@@ -171,6 +184,7 @@ function gateEnvironment(
     PLOTWEAVE_CARGO_LLVM_COV_BIN: paths.llvmCovPath,
     PLOTWEAVE_CURL_BIN: paths.curlPath,
     PLOTWEAVE_COVERAGE_REPORT_PATH: paths.coveragePath,
+    PLOTWEAVE_GATE_HISTORY_PATH: paths.historyPath,
     PLOTWEAVE_RUST_COVERAGE_REPORT_PATH: paths.rustCoveragePath,
     PLOTWEAVE_SONAR_LOCK_DIRECTORY: paths.lockPath,
     PLOTWEAVE_NODE_BIN: process.execPath,
@@ -216,6 +230,7 @@ function runGate(target: string, options: GateOptions = {}): GateRun {
     scannerTokenPath: resolve(sandbox, 'scanner-token.txt'),
     coveragePath: resolve(sandbox, 'coverage', 'lcov.info'),
     rustCoveragePath: resolve(sandbox, 'rust-coverage', 'lcov-rust.info'),
+    historyPath: resolve(sandbox, 'gate-history.jsonl'),
     lockPath: resolve(sandbox, 'sonar-gate.lock'),
     reportPath: resolve(sandbox, '.scannerwork', 'report-task.txt'),
     npmPath: resolve(sandbox, 'bin', 'npm'),
@@ -225,6 +240,16 @@ function runGate(target: string, options: GateOptions = {}): GateRun {
   }
 
   writeCommandStubs(paths, options)
+
+  // 记录文件预置为空（或种子行 / 只读形态）：失败路径不追加时读到空串，
+  // 只读形态验证「写不进不阻塞门禁」（issue #355）
+  writeFileSync(paths.historyPath, '')
+  if (options.historySeed !== undefined) {
+    writeFileSync(paths.historyPath, `${options.historySeed}\n`)
+  }
+  if (options.historyReadOnly) {
+    chmodSync(paths.historyPath, 0o444)
+  }
 
   const result = spawnSync('sh', [resolve(repositoryRoot, target)], {
     cwd: repositoryRoot,
@@ -237,6 +262,7 @@ function runGate(target: string, options: GateOptions = {}): GateRun {
       encoding: 'utf8',
       flag: 'a+',
     }),
+    history: readFileSync(paths.historyPath, { encoding: 'utf8' }),
     log: readFileSync(paths.logPath, { encoding: 'utf8', flag: 'a+' }),
     scannerToken: readFileSync(paths.scannerTokenPath, {
       encoding: 'utf8',
@@ -468,6 +494,91 @@ describe.each(['.githooks/pre-commit', '.githooks/pre-push'])(
       expect(result.status).not.toBe(0)
       expect(result.log).toContain('npm run test:coverage')
       expect(`${result.stdout}${result.stderr}`).toContain('1')
+    })
+  },
+)
+
+describe(
+  '门禁结论摘要记录（issue #355：完整通过后写入版本化可他验凭据）',
+  { timeout: 30_000 },
+  () => {
+    it('完整通过后追加一行合法 JSON：时间、被检树、运行时 HEAD、门禁结论与两侧行覆盖率', () => {
+      const result = runGate('scripts/sonar-quality-gate.sh')
+
+      expect(result.status).toBe(0)
+      const lines = result.history.split('\n').filter(Boolean)
+      expect(lines).toHaveLength(1)
+      const record = JSON.parse(lines[0] ?? '')
+      expect(record.timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/)
+      expect(record.tree).toMatch(/^[0-9a-f]{40}$/)
+      expect(record.head).toMatch(/^[0-9a-f]{40}$/)
+      expect(record.qualityGate).toBe('OK')
+      expect(record.newCodeUnresolvedIssues).toBe(0)
+      expect(record.frontendLineCoveragePercent).toBe(100)
+      expect(record.rustLineCoveragePercent).toBe(100)
+    })
+
+    it('行覆盖率按本次 LCOV 的 DA 命中统计（2/3 覆盖 → 66.67）', () => {
+      const result = runGate('scripts/sonar-quality-gate.sh', {
+        coverageMode: 'partial',
+        rustCoverageMode: 'partial',
+      })
+
+      expect(result.status).toBe(0)
+      const [line] = result.history.split('\n').filter(Boolean)
+      const record = JSON.parse(line ?? '')
+      expect(record.frontendLineCoveragePercent).toBe(66.67)
+      expect(record.rustLineCoveragePercent).toBe(66.67)
+    })
+
+    it('门禁任一环节失败时不追加记录——记录只描述完整通过的运行', () => {
+      const failureOptions: GateOptions[] = [
+        { formatExit: 1 },
+        { scannerExit: 2 },
+        { qualityGateStatus: 'ERROR' },
+        { unresolvedIssues: 3 },
+      ]
+      for (const options of failureOptions) {
+        const result = runGate('scripts/sonar-quality-gate.sh', options)
+
+        expect(result.status, JSON.stringify(options)).not.toBe(0)
+        expect(result.history, JSON.stringify(options)).toBe('')
+      }
+    })
+
+    it('追加而非覆盖：既有记录行保留，新记录续在其后', () => {
+      const seed =
+        '{"timestamp":"2026-01-01T00:00:00Z","tree":"seed-tree","head":"seed-head",' +
+        '"qualityGate":"OK","newCodeUnresolvedIssues":0,' +
+        '"frontendLineCoveragePercent":1,"rustLineCoveragePercent":1}'
+      const result = runGate('scripts/sonar-quality-gate.sh', {
+        historySeed: seed,
+      })
+
+      expect(result.status).toBe(0)
+      const lines = result.history.split('\n').filter(Boolean)
+      expect(lines).toHaveLength(2)
+      expect(JSON.parse(lines[0] ?? '')).toEqual(JSON.parse(seed))
+      expect(JSON.parse(lines[1] ?? '').qualityGate).toBe('OK')
+    })
+
+    it('记录写入失败只警告、不阻塞已通过的门禁（尽力而为，同树标记哲学）', () => {
+      const result = runGate('scripts/sonar-quality-gate.sh', {
+        historyReadOnly: true,
+      })
+
+      expect(result.status).toBe(0)
+      expect(result.history).toBe('')
+      expect(`${result.stdout}${result.stderr}`).toContain('无法写入门禁记录')
+    })
+
+    it('记录不携带令牌：摘要只入结论，凭据不入库', () => {
+      const result = runGate('scripts/sonar-quality-gate.sh', {
+        sonarToken: 'sqp_token-a.1',
+      })
+
+      expect(result.status).toBe(0)
+      expect(result.history).not.toContain('sqp_token-a.1')
     })
   },
 )

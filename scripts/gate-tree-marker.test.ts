@@ -154,6 +154,7 @@ function scenarioEnvironment(
     PLOTWEAVE_CARGO_LLVM_COV_BIN: resolve(bin, 'cargo-llvm-cov'),
     PLOTWEAVE_CURL_BIN: resolve(bin, 'curl'),
     PLOTWEAVE_COVERAGE_REPORT_PATH: resolve(sandbox, 'coverage', 'lcov.info'),
+    PLOTWEAVE_GATE_HISTORY_PATH: resolve(sandbox, 'gate-history.jsonl'),
     PLOTWEAVE_RUST_COVERAGE_REPORT_PATH: resolve(
       sandbox,
       'rust-coverage',
@@ -338,6 +339,30 @@ describe(
       const result = scenario.git(['commit', '-m', 'squashed'])
       expect(result.status).toBe(0)
       expect(scenario.scannerRuns()).toBe(1)
+    })
+
+    it('门禁通过的提交在版本化记录中留下可他验条目：记录树等于提交树（issue #355）', () => {
+      const scenario = prepareHookScenario()
+      const result = scenario.git(['commit', '--allow-empty', '-m', 'x'])
+      expect(result.status).toBe(0)
+
+      const lines = readFileSync(
+        resolve(scenario.root, 'gate-history.jsonl'),
+        'utf8',
+      )
+        .split('\n')
+        .filter(Boolean)
+      expect(lines).toHaveLength(1)
+      const record = JSON.parse(lines[0] ?? '')
+      // 核验路径：读者用 git rev-parse <commit>^{tree} 对照记录的 tree 即可
+      // 复核「该提交内容通过过完整门禁」
+      const commitTree = scenario
+        .git(['rev-parse', 'HEAD^{tree}'])
+        .stdout.trim()
+      expect(record.tree).toBe(commitTree)
+      expect(record.head).toMatch(/^[0-9a-f]{40}$/)
+      expect(record.qualityGate).toBe('OK')
+      expect(record.newCodeUnresolvedIssues).toBe(0)
     })
   },
 )

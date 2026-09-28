@@ -17,6 +17,7 @@ rust_coverage_report_path=${PLOTWEAVE_RUST_COVERAGE_REPORT_PATH:-$repository_roo
 llvm_cov_bin=${PLOTWEAVE_CARGO_LLVM_COV_BIN:-cargo-llvm-cov}
 lock_directory=${PLOTWEAVE_SONAR_LOCK_DIRECTORY:-$repository_root/.sonar-gate.lock}
 report_path=${PLOTWEAVE_SONAR_REPORT_PATH:-$repository_root/.scannerwork/report-task.txt}
+gate_history_path=${PLOTWEAVE_GATE_HISTORY_PATH:-$repository_root/docs/development/gate-history.jsonl}
 quality_gate_timeout=${SONAR_QUALITY_GATE_TIMEOUT:-300}
 sonar_host_url=${SONAR_HOST_URL:-}
 # 认证令牌：SONAR_TOKEN 优先；未设时回退到 PLOTWEAVE_SONAR_TOKEN
@@ -39,6 +40,45 @@ require_command() {
 # 从本次扫描生成的 report-task.txt 中读取指定属性。
 read_report_value() {
   awk -F= -v key="$1" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' "$report_path"
+}
+
+# 从 LCOV 报告计算行覆盖率百分比：DA 记录按执行次数 > 0 计为已覆盖。
+# 报告在调用前已通过非空与已覆盖校验；awk 异常时按 0 兜底，不让摘要
+# 计算失败外溢为门禁失败。
+lcov_line_coverage_percent() {
+  awk -F, '
+    BEGIN { covered = 0; total = 0 }
+    /^DA:/ { total += 1; if ($2 + 0 > 0) covered += 1 }
+    END { printf "%.2f", (total > 0 ? 100 * covered / total : 0) }
+  ' "$1" 2>/dev/null || printf '0'
+}
+
+# 门禁结论摘要记录（issue #355）：完整通过后把关键结论追加为版本化
+# docs/development/gate-history.jsonl 的一行 JSON——UTC 时间、被检索引树
+# （与 gate-tree-marker 同键）、运行时 HEAD、Quality Gate 状态、新增代码
+# 未解决问题数、前端与 Rust 行覆盖率。只记结论：令牌与原始扫描产物均不
+# 入库。写入尽力而为：任一步失败只向标准错误警告、不阻塞已通过的门禁
+# （与树标记同哲学）；刚写入的记录行停留在工作树、随下一次提交入库——
+# 记录文件本身也要过门禁，滞后一次运行是该机制的固有属性。
+append_gate_history_record() {
+  gate_tree=$(git write-tree 2>/dev/null) || gate_tree=
+  gate_head=$(git rev-parse HEAD 2>/dev/null) || gate_head=
+  frontend_percent=$(lcov_line_coverage_percent "$coverage_report_path")
+  rust_percent=$(lcov_line_coverage_percent "$rust_coverage_report_path")
+  if printf '{"timestamp":"%s","tree":"%s","head":"%s","qualityGate":"%s","newCodeUnresolvedIssues":%s,"frontendLineCoveragePercent":%s,"rustLineCoveragePercent":%s}\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    "$gate_tree" \
+    "$gate_head" \
+    "$quality_gate_status" \
+    "$new_issues" \
+    "$frontend_percent" \
+    "$rust_percent" \
+    >> "$gate_history_path" 2>/dev/null; then
+    printf '[SonarQube] 门禁结论已追加到 %s。\n' "$gate_history_path"
+  else
+    printf 'SonarQube 警告：无法写入门禁记录 %s；本次结论未入库，不阻塞已通过的操作。\n' \
+      "$gate_history_path" >&2
+  fi
 }
 
 # 调用 SonarQube API；令牌只通过 curl 标准输入传入，避免出现在参数或日志中。
@@ -155,5 +195,7 @@ new_issues=$(printf '%s' "$issues_json" | "$node_bin" -e '
 
 [ "$new_issues" -eq 0 ] ||
   fail "新增代码仍有 $new_issues 个未解决问题；修复后重新运行，禁止绕过"
+
+append_gate_history_record
 
 printf '%s\n' '[SonarQube] Quality Gate 已通过，新增代码未解决问题为 0。'
