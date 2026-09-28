@@ -10,6 +10,7 @@
  * 复制命名规则与统一门面。
  */
 import type { ProjectContent } from './model/content'
+import { IPC_COMMANDS } from './ipc/commands'
 import {
   memoryCreate,
   memoryDelete,
@@ -121,7 +122,10 @@ export const projectStore = {
     try {
       if (isTauri) {
         const { invoke } = await import('@tauri-apps/api/core')
-        await invoke('copy_project_assets', { fromId: id, toId: meta.id })
+        await invoke(IPC_COMMANDS.copyProjectAssets, {
+          fromId: id,
+          toId: meta.id,
+        })
       }
       // 副本后续保存要求目标仍在（PR #224 评审）：copy 释放锁后被排队
       // 的删除可能移走目标——expectExisting 使该保存按「项目不存在」拒绝

@@ -17,6 +17,7 @@ import {
   type SetStateAction,
 } from 'react'
 import type { AssetRef } from '../../model/document'
+import { IPC_COMMANDS } from '../../ipc/commands'
 import { settingsStore } from '../../settings/settingsStore'
 import type { AppSettings } from '../../settings/types'
 import { uid } from '../../uid'
@@ -75,7 +76,7 @@ async function runGeneration(
     size: string
   },
 ): Promise<AssetRef> {
-  const raw = await tauriInvoke<unknown>('llm_image_generate', {
+  const raw = await tauriInvoke<unknown>(IPC_COMMANDS.llmImageGenerate, {
     request: {
       projectId,
       jobId,
@@ -296,17 +297,17 @@ function useJobWriteGuard(
       pendingCancellations.clear()
       for (const job of Object.values(readJobs())) {
         if (job?.status === 'running') {
-          void tauriInvoke('llm_image_cancel', { jobId: job.jobId }).catch(
-            (err: unknown) => {
-              // 卸载后无 UI 宿主（issue #160）：控制台留痕即可定位——
-              // 文案诚实：协作式取消未送达，不承诺已停止远端付费请求
-              console.error(
-                '[imagegen] 卸载取消请求失败（协作式取消未送达，远端生成可能继续并计费）',
-                job.jobId,
-                err,
-              )
-            },
-          )
+          void tauriInvoke(IPC_COMMANDS.llmImageCancel, {
+            jobId: job.jobId,
+          }).catch((err: unknown) => {
+            // 卸载后无 UI 宿主（issue #160）：控制台留痕即可定位——
+            // 文案诚实：协作式取消未送达，不承诺已停止远端付费请求
+            console.error(
+              '[imagegen] 卸载取消请求失败（协作式取消未送达，远端生成可能继续并计费）',
+              job.jobId,
+              err,
+            )
+          })
         }
       }
     }
@@ -340,17 +341,17 @@ function useNodeDeletionWatch(
     for (const [nodeId, job] of Object.entries(jobsRef.current)) {
       if (alive.has(nodeId)) continue
       if (job?.status === 'running') {
-        void tauriInvoke('llm_image_cancel', { jobId: job.jobId }).catch(
-          (err: unknown) => {
-            // 宿主已删无节点级 UI 宿主（issue #160）：控制台留痕定位；
-            // 结果到达时 jobAlive 已清，仍按取消语义丢弃
-            console.error(
-              '[imagegen] 宿主节点已删除，取消请求失败（远端生成可能继续并计费，结果将被丢弃）',
-              job.jobId,
-              err,
-            )
-          },
-        )
+        void tauriInvoke(IPC_COMMANDS.llmImageCancel, {
+          jobId: job.jobId,
+        }).catch((err: unknown) => {
+          // 宿主已删无节点级 UI 宿主（issue #160）：控制台留痕定位；
+          // 结果到达时 jobAlive 已清，仍按取消语义丢弃
+          console.error(
+            '[imagegen] 宿主节点已删除，取消请求失败（远端生成可能继续并计费，结果将被丢弃）',
+            job.jobId,
+            err,
+          )
+        })
       }
       clearJob(nodeId)
     }
@@ -483,7 +484,7 @@ function useImageCancel(
       pendingCancellationsRef.current.set(nodeId, jobId)
       const ownsDiagnostic = () =>
         pendingCancellationsRef.current.get(nodeId) === jobId
-      void tauriInvoke('llm_image_cancel', { jobId })
+      void tauriInvoke(IPC_COMMANDS.llmImageCancel, { jobId })
         .catch((err: unknown) => {
           if (
             ownsDiagnostic() &&

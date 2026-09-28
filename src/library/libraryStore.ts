@@ -8,6 +8,7 @@
  */
 
 import { uid } from '../uid'
+import { IPC_COMMANDS } from '../ipc/commands'
 import { reportLibraryDiagnostics } from './libraryDiagnosticTransport'
 
 /** 资产库分类（§7）：索引条目的 kind 域；中文标签/图标见 LIBRARY_KINDS。 */
@@ -126,7 +127,7 @@ async function tauriList(): Promise<LibraryAsset[]> {
     warnings?: unknown[]
     cleanupPending?: unknown[]
     diagnosticsRevision?: unknown
-  }>('list_library_assets')
+  }>(IPC_COMMANDS.listLibraryAssets)
   reportLibraryDiagnostics(index)
   // §7.2 Record 形状：assets.byId 的值即条目（issue #29 PR 1，评审修复——
   // 旧数组形状已迁移，前端必须按 byId 读取，否则全部资产被隐藏）
@@ -140,7 +141,7 @@ async function tauriList(): Promise<LibraryAsset[]> {
 async function tauriPut(file: File, kind: LibraryKind): Promise<LibraryAsset> {
   const { invoke } = await import('@tauri-apps/api/core')
   const bytes = new Uint8Array(await file.arrayBuffer())
-  const entry = await invoke<RawAsset>('import_library_asset', {
+  const entry = await invoke<RawAsset>(IPC_COMMANDS.importLibraryAsset, {
     name: file.name,
     mime: file.type || 'application/octet-stream',
     kind,
@@ -162,7 +163,7 @@ async function tauriMediaUrl(
 ): Promise<string> {
   if (asset.conflicted) throw new Error('资产处于删除事务冲突期，媒体不可用')
   const { invoke } = await import('@tauri-apps/api/core')
-  return invoke<string>('get_asset_media_url', {
+  return invoke<string>(IPC_COMMANDS.getAssetMediaUrl, {
     scope: { kind: 'library' },
     assetId: asset.id,
   })
@@ -195,7 +196,7 @@ function applyUpdateMeta(
 ): Promise<LibraryAsset> {
   if (isTauri) {
     return import('@tauri-apps/api/core').then(async ({ invoke }) => {
-      const entry = await invoke<RawAsset>('update_library_asset', {
+      const entry = await invoke<RawAsset>(IPC_COMMANDS.updateLibraryAsset, {
         id,
         patch,
       })
@@ -243,9 +244,12 @@ const lastPersistedAssets = new Map<string, LibraryAsset>()
 async function applyRemove(id: string): Promise<void> {
   if (isTauri) {
     const { invoke } = await import('@tauri-apps/api/core')
-    const result = await invoke<LibraryDiagnostics>('delete_library_asset', {
-      id,
-    })
+    const result = await invoke<LibraryDiagnostics>(
+      IPC_COMMANDS.deleteLibraryAsset,
+      {
+        id,
+      },
+    )
     reportLibraryDiagnostics(result)
   } else {
     memoryAssets.delete(id)
@@ -340,7 +344,7 @@ export const libraryStore = {
           warnings?: unknown[]
           cleanupPending?: unknown[]
           diagnosticsRevision?: unknown
-        }>('list_library_assets')
+        }>(IPC_COMMANDS.listLibraryAssets)
         reportLibraryDiagnostics(index)
         const byId = index.groups?.byId
         const entries =
@@ -365,7 +369,7 @@ export const libraryStore = {
     if (isTauri) {
       return import('@tauri-apps/api/core').then(async ({ invoke }) => {
         const result = await invoke<AssetGroup & LibraryDiagnostics>(
-          'upsert_library_group',
+          IPC_COMMANDS.upsertLibraryGroup,
           { group },
         )
         reportLibraryDiagnostics(result)
@@ -422,7 +426,7 @@ export const libraryStore = {
     if (isTauri) {
       return import('@tauri-apps/api/core').then(async ({ invoke }) => {
         const result = await invoke<LibraryDiagnostics>(
-          'delete_library_group',
+          IPC_COMMANDS.deleteLibraryGroup,
           { id },
         )
         reportLibraryDiagnostics(result)

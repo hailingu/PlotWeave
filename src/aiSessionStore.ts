@@ -8,6 +8,7 @@ import {
   normalizeAiSession,
   type AiSession,
 } from './editor/ai/session'
+import { IPC_COMMANDS } from './ipc/commands'
 import {
   enqueueProjectWrite,
   onProjectWriteReplayFailure,
@@ -73,7 +74,7 @@ export async function loadAiSession(id: string): Promise<AiSessionLoadResult> {
   }
   const { invoke } = await import('@tauri-apps/api/core')
   const result = await invoke<{ session: unknown; corrupt: boolean }>(
-    'load_ai_session',
+    IPC_COMMANDS.loadAiSession,
     { id },
   )
   const { session, repaired } = normalizeAiSession(result.session)
@@ -102,7 +103,10 @@ export async function saveAiSession(
   pendingSessions.set(id, pending)
   const write = enqueueProjectWrite(id, async () => {
     const { invoke } = await import('@tauri-apps/api/core')
-    await invoke('save_ai_session', { id, session: diskSessionOf(session) })
+    await invoke(IPC_COMMANDS.saveAiSession, {
+      id,
+      session: diskSessionOf(session),
+    })
     if (pendingSessions.get(id) === pending) {
       pendingSessions.delete(id)
       savedListeners.forEach((listener) => listener(id))

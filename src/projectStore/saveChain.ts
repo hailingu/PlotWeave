@@ -18,6 +18,7 @@
  */
 import { serializeProject } from '../model/convert'
 import type { ProjectContent } from '../model/content'
+import { IPC_COMMANDS } from '../ipc/commands'
 
 const SAVE_RETRY_DELAY_MS = 5000
 /** 项目 id → 保存链尾 Promise（模块私有，issue #162）：外部经
@@ -254,7 +255,7 @@ export async function tauriSave(
   expectExisting = false,
 ): Promise<void> {
   const { invoke } = await import('@tauri-apps/api/core')
-  await invoke('save_project', {
+  await invoke(IPC_COMMANDS.saveProject, {
     id,
     doc: serializeProject(doc, id),
     expectExisting,
@@ -348,7 +349,7 @@ export function enqueueDelete(id: string): Promise<void> {
     retainedRetryDoc = pendingRetryDocs.get(id)
     clearSaveRetry(id)
     const { invoke } = await import('@tauri-apps/api/core')
-    await invoke('delete_project', { id })
+    await invoke(IPC_COMMANDS.deleteProject, { id })
     // 本笔删除已成功：项目在盘上已不存在——同组后续失败的回吐必须丢弃
     // 吸收的写入（重放即复活），组级成功状态随组存活（见 deleteGroups）
     group.succeeded = true

@@ -15,6 +15,7 @@ import {
   flushPendingProjectSaves,
   hasPendingProjectSaves,
 } from './projectStore/saveChain'
+import { IPC_COMMANDS } from './ipc/commands'
 
 /** 仍有任一未落盘数据源（画布防抖、项目保存链、AI 会话）。 */
 function hasPendingSaves(): boolean {
@@ -96,10 +97,10 @@ export function useExitFlush(): string | null {
         // 冲刷屏障；无待保存直接受控退出
         const handleQuitRequested = async (): Promise<void> => {
           if (!hasPendingSaves()) {
-            await invoke('app_exit')
+            await invoke(IPC_COMMANDS.appExit)
             return
           }
-          await drainAndThen(() => invoke('app_exit'))
+          await drainAndThen(() => invoke(IPC_COMMANDS.appExit))
         }
         const unlistenQuit = await listen('app-quit-requested', () => {
           void handleQuitRequested()
@@ -108,7 +109,7 @@ export function useExitFlush(): string | null {
         // 监听注册完成后确认就绪（issue #65）：后端消费启动间隙（原生屏障
         // 已装、本监听未注册）缓冲的退出请求并重放 app-quit-requested——
         // 确认必须晚于注册，保证重放必有接收者且走同一冲刷屏障
-        await invoke('acknowledge_quit_listener')
+        await invoke(IPC_COMMANDS.acknowledgeQuitListener)
       } catch (err) {
         // 失败仅诊断，不回收已就绪的监听（PR #225 评审）：close/quit 屏障
         // 各自独立可用——回收已注册的 close 屏障会让用户按指引点关闭按钮

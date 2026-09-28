@@ -13,6 +13,7 @@
  */
 import type { AssetRef } from '../model/document'
 import { libraryStore } from '../library/libraryStore'
+import { IPC_COMMANDS } from '../ipc/commands'
 import { uid } from '../uid'
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -80,14 +81,14 @@ async function tauriImport(
 ): Promise<AssetRef> {
   const { invoke } = await import('@tauri-apps/api/core')
   const imported = normalizeAssetRef(
-    await invoke<RawAssetRef>('import_project_asset_from_library', {
+    await invoke<RawAssetRef>(IPC_COMMANDS.importProjectAssetFromLibrary, {
       id: projectId,
       libraryAssetId,
     }),
   )
   // §9.3：入索引前过 Rust 预检，使用预检返回的规范化条目
   return normalizeAssetRef(
-    await invoke<RawAssetRef>('validate_project_asset', {
+    await invoke<RawAssetRef>(IPC_COMMANDS.validateProjectAsset, {
       id: projectId,
       asset: imported,
     }),
@@ -126,7 +127,7 @@ async function tauriMediaUrl(
   assetId: string,
 ): Promise<string> {
   const { invoke } = await import('@tauri-apps/api/core')
-  return invoke<string>('get_asset_media_url', {
+  return invoke<string>(IPC_COMMANDS.getAssetMediaUrl, {
     scope: { kind: 'project', projectId },
     assetId,
   })
@@ -177,7 +178,7 @@ export const projectAssets = {
    * validate_project_asset；浏览器预览内存态无盘上文件，恒通过。 */
   revalidate: (projectId: string, asset: AssetRef): Promise<void> => {
     if (!isTauri) return Promise.resolve()
-    return tauriInvoke<RawAssetRef>('validate_project_asset', {
+    return tauriInvoke<RawAssetRef>(IPC_COMMANDS.validateProjectAsset, {
       id: projectId,
       asset,
     }).then((raw) => {

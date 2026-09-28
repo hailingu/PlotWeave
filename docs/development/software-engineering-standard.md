@@ -108,6 +108,17 @@ Apply the guardrails as follows:
   asserts that both the compile-time graph (type-only imports included) and
   the runtime graph (after type erasure) stay acyclic. Routing a cycle through
   an `import type` edge is a violation, not a loophole.
+- Tauri IPC command names have a single frontend source of truth:
+  `src/ipc/commands.ts` (issue #394). Every `invoke`-family call site
+  references `IPC_COMMANDS.<key>` (named import, no namespace two-level
+  access); a command-name string literal may appear only in that table and in
+  the `generate_handler!` registration list of `src-tauri/src/lib.rs`. The
+  contract guard (`src/ipc/commands.test.ts`) parses the registration list
+  and asserts bidirectional consistency — no constant without a registration
+  (the frontend cannot invoke an unregistered command), no registration
+  without a frontend consumer, no duplicate values, and no string literal in
+  invoke-call position. Renaming or removing a command must update both sides
+  in the same change; a silent one-sided edit fails the guard.
 - Cross-module calls must use the owning module's public API. Do not import its
   internal persistence models, framework objects, mutable state, or private
   helpers.
