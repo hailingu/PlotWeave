@@ -13,7 +13,10 @@ written in English for agent interoperability.
 [issue #356](https://github.com/hailingu/PlotWeave/issues/356); extended
 2026-09-28 by the issue #404 commit-creation wiring (same complete gate,
 more commands routed through it — see
-[What The Gate Actually Enforces](#what-the-gate-actually-enforces)).
+[What The Gate Actually Enforces](#what-the-gate-actually-enforces)) and by
+the issue #355 evidence record (one appended summary line per fully passing
+run — see
+[Gate Run Evidence Record](#gate-run-evidence-record-issue-355)).
 
 ## Required Reading
 
@@ -36,6 +39,10 @@ Every gated command runs the same complete sequence:
    `media_format_leaf` test target.
 4. `sonar-scanner` publishing the analysis, then waiting for the Quality Gate,
    then a separate check that new-code unresolved issues are zero.
+5. Since issue #355, a fully passing run appends one summary record to the
+   versioned `docs/development/gate-history.jsonl` (see
+   [Gate Run Evidence Record](#gate-run-evidence-record-issue-355)). This step
+   observes and records; it checks nothing and adds no variant of the gate.
 
 Since the issue #404 wiring, the gated commands are `git commit` and
 `git push` as before, plus every other commit-creating porcelain that has a
@@ -163,9 +170,75 @@ a hardening change to gate behavior and out of scope for this record.
 steer the dedup marker and its expiry, so exporting a pre-written matching
 marker can suppress the `prepare-commit-msg` gate run. Same disposition —
 test-only injection, explicit evasion to use it that way.
+`PLOTWEAVE_GATE_HISTORY_PATH` (`scripts/sonar-quality-gate.sh`, issue #355)
+also belongs to the test-only injection class: it redirects only where the
+evidence record is written, so it cannot skip any check, but pointing it
+elsewhere does remove the in-repository evidence for that run.
 
 Anyone reading a faster local workflow elsewhere in this repository should
 treat it as a defect in that workflow, not as sanctioned by this decision.
+
+## Gate Run Evidence Record (issue #355)
+
+Before issue #355, every artifact behind a passing gate conclusion —
+`coverage/`, `.scannerwork/`, `src-tauri/target/` — was local-only and
+gitignored, and `.github/workflows/ci.yml` deliberately does not run Sonar.
+The repository therefore held no durable, third-party-verifiable credential
+that any given commit had passed the Quality Gate with zero new-code
+unresolved issues. Issue #355 offered three drafts; this repository adopted
+**option A** (a versioned summary record). Option B cannot work for the core
+claim because hosted CI cannot reach the local SonarQube server, so its
+artifacts would only ever prove the reachable subset; option C would register
+the gap without closing it.
+
+**What is recorded.** After a run passes the *complete* sequence — static
+checks, both coverage reports, the scanner, Quality Gate `OK`, and zero
+new-code unresolved issues — `scripts/sonar-quality-gate.sh` appends exactly
+one JSON line to `docs/development/gate-history.jsonl`:
+
+| Field | Meaning |
+| --- | --- |
+| `timestamp` | UTC ISO-8601 time of the record append, second precision. |
+| `tree` | The gated **index tree** (`git write-tree`) — the same key the dedup marker uses, and the value a reader compares against `git rev-parse <commit>^{tree}` to verify that a commit's content passed a complete gate run. |
+| `head` | The commit `HEAD` pointed at during the run — the parent of the commit being created on pre-commit-style paths, the tip being pushed on `pre-push`. Provenance context, not the verification key. |
+| `qualityGate` | The Quality Gate status for this run's analysis (`OK`; only fully passing runs are recorded). |
+| `newCodeUnresolvedIssues` | Unresolved issue count on new code for this run (`0`; only fully passing runs are recorded). |
+| `frontendLineCoveragePercent` / `rustLineCoveragePercent` | Line coverage computed from the same LCOV reports this run submitted (`DA` records with execution count > 0 count as covered). |
+
+**Verification recipe.** To check that commit `C` passed a complete gate run,
+compute `git rev-parse C^{tree}` and find a record whose `tree` equals it with
+`qualityGate` `OK` and `newCodeUnresolvedIssues` `0`. The record is a durable
+claim made by the gate tooling itself at gate time, versioned in git history;
+unlike pre-#355 practice, the claim no longer depends on the executor's word.
+
+**Deliberate properties and boundaries.**
+
+- *Success-only.* Failed or blocked runs append nothing: no Git operation
+  results from them, so there is nothing to justify later. The log therefore
+  proves "this tree passed", never "this tree was the only thing examined".
+- *Best-effort write.* A record append failure (permissions, disk) prints a
+  warning to stderr and does not block the already-passing gate — the same
+  philosophy as the tree marker. Evidence must not become a new way to fail
+  a clean gate.
+- *One-run lag is inherent.* The evidence file must itself pass the gate, so
+  the record for run *N* sits in the working tree until the next commit
+  stages it; a push-time record stays local until the next local commit. The
+  log converges with history rather than leading it. Agents and humans stage
+  pending record lines together with their next change; committing the file
+  alone burns a full gate run on a record-only commit.
+- *Working tree vs. index key.* The gate analyzes the working tree (see
+  [Known Finding: Push Scans The Checked-Out Tree, Not The Pushed
+  Ref](#known-finding-push-scans-the-checked-out-tree-not-the-pushed-ref)),
+  while `tree` records the index tree, matching the marker's key. With
+  unstaged or untracked differences the run validated more (or different)
+  content than the key identifies; the caveats of that known finding apply
+  to records unchanged.
+- *Append-only growth.* One line per fully passing run, no rotation; the
+  file is a log of runs, not a derived state that can be rebuilt.
+- *No secrets.* Records carry hashes, counts, and percentages only. Tokens
+  never reach the record path (the gate passes them via stdin/environment
+  exclusively), and raw scan artifacts stay unversioned — the issue #355
+  acceptance criteria require both.
 
 ## What The Gate Actually Enforces
 
