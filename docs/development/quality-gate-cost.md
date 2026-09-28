@@ -147,7 +147,8 @@ This repository wires exactly two: `.githooks/pre-commit` and
 | `git rebase --autostash` (dirty tracked worktree) | rebase hooks above; autostash creates ref-less stash commits with no hook | **no** |
 | `git rebase --continue` after resolving a conflict | `post-index-change`, `prepare-commit-msg`, `post-commit`, `post-rewrite`; no `pre-commit` | **no** |
 | `git am` applying a patch series | `applypatch-msg`, `pre-applypatch`, `post-applypatch` — none wired | **no** |
-| `git stash push` (tracked changes) | `reference-transaction`; no commit-creation hooks | **no** * |
+| `git stash push` / `git stash` / `git stash save` (tracked changes) | `reference-transaction`; no commit-creation hooks | **no** * |
+| `git stash push -u` / `--all` | `reference-transaction`; no commit-creation hooks; additionally creates an ungated third "untracked files" parent commit | **no** * |
 | `git stash create [<message>]` (tracked changes) | `post-index-change` on index writes; no commit-creation or ref-update hooks | **no** |
 | `git notes add` / `append` / `edit` / `copy` / `remove` / `merge` / `prune` | `reference-transaction`; no commit-creation hooks | **no** * |
 | `git commit-tree` + `git update-ref` (plumbing) | `reference-transaction`; no commit-creation hooks | **no** * |
@@ -285,7 +286,12 @@ Either path therefore creates commits with no gate.
 `git stash push` with tracked changes creates its entry commits under
 `refs/stash` — the stash commit plus its index parent — without running any
 commit-creation hook (评审 4114895001); the `git-stash` documentation likewise
-describes a stash entry as a commit. Stashed work normally re-enters the tree
+describes a stash entry as a commit. The bare `git stash` shorthand and the
+legacy `git stash save` form behave identically — measured on git 2.48.1,
+each created the stash and index-parent commits with only shared index/ref
+callbacks firing (评审 4118565852). With `-u` / `--all`, the stash commit
+gains a third "untracked files" parent commit that is likewise created
+ungated. Stashed work normally re-enters the tree
 through `git stash pop` / `apply`, which create no commits, and becomes
 commits only through the paths this table already records. Its ref-update hook is
 `reference-transaction` on the `refs/stash` update, and aborting that update
@@ -572,7 +578,8 @@ So the accurate statement of the invariant is:
 > produced by `git merge`, `git pull` (default merge mode), `git revert`, or
 > `git cherry-pick`; it also does not
 > analyze replayed `git rebase` commits (including conflict-resolved
-> `git rebase --continue`), `git am`, `git stash push` (entry commits under
+> `git rebase --continue`), `git am`, `git stash` in any entry-creating form
+> (`push`, shorthand, `save`, `-u`/`--all`; entry commits under
 > `refs/stash`), `git stash create` (a ref-less stash commit object),
 > `--autostash` on `merge`/`pull`/`rebase` (ref-less temporary stash
 > commits),
@@ -902,7 +909,8 @@ these becomes true:
   explicit statement of its effect on gate strength, and must preserve every
   invariant in the section above.
 - The uncovered commit-creation paths are closed, or a `merge`, `revert`,
-  `cherry-pick`, `rebase`, `am`, `stash push/create`, `notes`, `commit-tree`,
+  `cherry-pick`, `rebase`, `am`, `stash` (all forms: `push`, shorthand,
+  `save`, `-u`/`--all`, `create`), `notes`, `commit-tree`,
   `replace`, `fast-import`, `filter-branch`, or `subtree add/merge/pull/split/push`
   workflow (including `split --rejoin` and `push --rejoin`) changes to route
   through `git commit`. Either way,
