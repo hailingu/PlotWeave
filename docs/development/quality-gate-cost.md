@@ -146,7 +146,7 @@ This repository wires exactly two: `.githooks/pre-commit` and
 | `git am` applying a patch series | `applypatch-msg`, `pre-applypatch`, `post-applypatch` — none wired | **no** |
 | `git stash push` (tracked changes) | `reference-transaction`; no commit-creation hooks | **no** * |
 | `git stash create [<message>]` (tracked changes) | `post-index-change` on index writes; no commit-creation or ref-update hooks | **no** |
-| `git notes add` / `append` / `edit` / `copy` / `remove` | `reference-transaction`; no commit-creation hooks | **no** * |
+| `git notes add` / `append` / `edit` / `copy` / `remove` / `merge` / `prune` | `reference-transaction`; no commit-creation hooks | **no** * |
 | `git commit-tree` + `git update-ref` (plumbing) | `reference-transaction`; no commit-creation hooks | **no** * |
 | `git hash-object -t commit -w --stdin` + `git update-ref` (plumbing) | `reference-transaction` on ref update only; `hash-object` itself fires no hook | **no** * |
 | `git replace --graft <commit> [<parent>…]` / `git replace --edit <commit>` / `git replace --convert-graft-file` | `reference-transaction`; no commit-creation hooks | **no** * |
@@ -283,14 +283,14 @@ stash commit. So stash does not, after all, stay purely local; its push-side
 exposure is the push finding below, tracked there rather than re-counted
 here.
 
-`git notes add` / `append` / `edit` / `copy` / `remove` likewise create
-commits under `refs/notes/*` (by default `refs/notes/commits`) without any
-commit-creation hook — measured on git 2.48.1, only `reference-transaction`
-fires (评审 4115135524, 4117675234). Notes refs are pushable (`git push
-origin refs/notes/*`), so this row is remote-facing in the same sense the
-push finding is; it is recorded here as a boundary and its closure —
-`reference-transaction` in `prepared` state — is the same #404 option noted
-for stash, not a separate remedy.
+`git notes add` / `append` / `edit` / `copy` / `remove` / `merge` / `prune`
+likewise create commits under `refs/notes/*` (by default `refs/notes/commits`)
+without any commit-creation hook — measured on git 2.48.1, only
+`reference-transaction` fires (评审 4115135524, 4117675234, 4117735042).
+Notes refs are pushable (`git push origin refs/notes/*`), so this row is
+remote-facing in the same sense the push finding is; it is recorded here as
+a boundary and its closure — `reference-transaction` in `prepared` state —
+is the same #404 option noted for stash, not a separate remedy.
 
 `git replace --graft <commit> [<parent>…]` creates a replacement commit with
 the target commit's tree and the supplied parent list, then stores it under
@@ -502,8 +502,10 @@ So the accurate statement of the invariant is:
 > `refs/stash`), `git stash create` (a ref-less stash commit object),
 > `git notes` mutations (commits under `refs/notes/*`),
 > `git commit-tree` (commit objects placed on history via `update-ref`),
-> `git replace --graft` / `--edit` (replacement commits under
-> `refs/replace/*`),
+> `git hash-object -t commit -w` (commit objects written directly, then
+> installed via `update-ref` or pushed by OID),
+> `git replace --graft` / `--edit` / `--convert-graft-file` (replacement
+> commits under `refs/replace/*`),
 > `git fast-import` (`commit <ref>` stream commands), `git filter-branch`
 > (rewritten history), `git subtree split --branch` (rewritten commits under
 > the requested branch), automatic conflict-free `git subtree merge` / `pull`
@@ -546,15 +548,18 @@ does not do.
 The uncovered automatic commit-producing paths and replacement-object paths —
 conflict-free `git merge`, `git revert`, and `git cherry-pick`, replayed
 `git rebase` commits (including conflict-resolved `--continue`), `git am`,
-`git commit-tree` plus `git update-ref`, `git fast-import`, `git filter-branch`,
+`git commit-tree` plus `git update-ref`, `git hash-object -t commit -w`
+plus `git update-ref` or direct-OID push, `git fast-import`,
+`git filter-branch`,
 `git subtree split --branch`, automatic conflict-free `git subtree merge` and
 `git subtree pull` commits, split commits and the automatic rejoin from
 `git subtree split --rejoin`, `git subtree push` (with or without `--rejoin`),
 `git subtree add`,
-`git stash create`, and `git replace --graft` / `--edit` — can produce or
-replace commits without the gate analyzing the resulting commit (评审
+`git stash create`, and `git replace --graft` / `--edit` /
+`--convert-graft-file` — can produce or replace commits without the gate
+analyzing the resulting commit (评审
 4115477920, 4115606416, 4115639629, 4115682292, 4115710587, 4115748220,
-4115748226, 4115812068, 4115865920, 4115865924). The conflict-resolved
+4115748226, 4115812068, 4115865920, 4115865924, 4117675224, 4117675234). The conflict-resolved
 `merge --continue`, `revert --continue`, and `cherry-pick --continue` paths
 are covered by `pre-commit`; the tested `rebase --continue` path is not.
 `git subtree push` does run `pre-push`, but that hook
