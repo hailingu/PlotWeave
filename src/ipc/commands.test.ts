@@ -4,14 +4,15 @@
  * 双向断言——
  * 1. 常量集与注册集一致：不漏（注册命令必有常量，前端才可引用）、
  *    不多（常量必已注册且值不重复）；
- * 2. 类型化入口排他（issue #394 评审 5339899090、5340318886）：
- *    '@tauri-apps/api/core' 的 import 说明符（静态或动态）只允许出现在
- *    src/ipc/invoke.ts——ipcInvoke 以 IpcCommandName 收窄 cmd 参数，字符
- *    串字面量、别名导入与变量中转都在编译期拒绝；其余维护模块出现该
- *    说明符即守卫失败，而别名/解构/Promise.all/.then 等一切绑定形态都
- *    必写该说明符，无从绕过。计算式（非静态）动态导入说明符无法静态
- *    排除 core（运行时可求值为任意模块），一律 fail-closed——与
- *    moduleGraph 对不可静态解析动态导入的口径一致；
+ * 2. 类型化入口排他（issue #394 评审 5339899090、5340318886、5340648995）：
+ *    '@tauri-apps/api/core' 的 import / export 说明符（静态、动态或再导出）
+ *    只允许出现在 src/ipc/invoke.ts——ipcInvoke 以 IpcCommandName 收窄
+ *    cmd 参数，字符串字面量、别名导入与变量中转都在编译期拒绝；其余维护
+ *    模块出现该说明符即守卫失败，而别名/解构/Promise.all/.then/再导出
+ *    （export { invoke as x } from / export * from）等一切绑定形态都必写
+ *    该说明符，无从绕过。计算式（非静态）动态导入说明符无法静态排除
+ *    core（运行时可求值为任意模块），一律 fail-closed——与 moduleGraph
+ *    对不可静态解析动态导入的口径一致；
  * 3. invoke 系调用点（标识符含 invoke 者，如 ipcInvoke / tauriInvoke）的
  *    首参不得是字符串字面量——命令名字面量只允许出现在常量表与
  *    generate_handler! 两侧（纵深防线，类型收窄之外的兜底）；
@@ -164,6 +165,17 @@ function scanFileIpcUsage(file: string): FileIpcUsage {
   const visit = (node: ts.Node): void => {
     if (
       ts.isImportDeclaration(node) &&
+      ts.isStringLiteral(node.moduleSpecifier) &&
+      node.moduleSpecifier.text === coreSpecifier
+    ) {
+      recordCoreImport(node.moduleSpecifier.text)
+    }
+    // 再导出（评审 5340648995）：export { invoke as x } from core 或
+    // export * from core 同样向消费方暴露原始入口——消费模块不含 core
+    // 说明符，唯有在再导出源处拦截；与 moduleGraph 采集 export 边同口径
+    if (
+      ts.isExportDeclaration(node) &&
+      node.moduleSpecifier !== undefined &&
       ts.isStringLiteral(node.moduleSpecifier) &&
       node.moduleSpecifier.text === coreSpecifier
     ) {

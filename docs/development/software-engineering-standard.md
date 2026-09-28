@@ -114,9 +114,11 @@ Apply the guardrails as follows:
   `IPC_COMMANDS` value union — a misspelled literal, an aliased import, or a
   literal routed through a variable is rejected at compile time (PR #416
   review 5339899090). `src/ipc/invoke.ts` is the only maintained module
-  allowed to import `@tauri-apps/api/core`; every binding shape (alias,
-  destructuring, `Promise.all`, `.then`) must write that specifier, so the
-  guard's specifier-exclusivity assertion cannot be bypassed. A computed
+  allowed to import or re-export `@tauri-apps/api/core`; every binding shape
+  (alias, destructuring, `Promise.all`, `.then`, `export { invoke as … } from`,
+  `export * from`) must write that specifier, so the guard's
+  specifier-exclusivity assertion cannot be bypassed (review 5340648995). A
+  computed
   (non-static) dynamic import specifier cannot be statically ruled out from
   loading the core module and fails closed, mirroring the module-graph
   guard's posture for unresolvable dynamic imports (review 5340318886). The contract
