@@ -66,8 +66,8 @@ correctly. The stage allocation is:
 The saving is therefore **72.9 − 14.4 = 58.5s per commit**, not 14.4s. The
 14.4s figure is the *remaining* pre-commit cost after the split, and quoting it
 as the saving understates option B by roughly a factor of four. At the
-~30 commits/day below that is about 29 minutes per day, a ~40% reduction in
-total gate time.
+~25 eligible commits/day below that is about 24 minutes per day, a ~40%
+reduction in total gate time.
 
 A review of this record caught exactly that mislabelling; the figure above is
 the corrected one. Note that option B would *not* weaken the gate's coverage —
@@ -136,6 +136,7 @@ This repository wires exactly two: `.githooks/pre-commit` and
 | `git commit` (without `--amend`) | `post-index-change` on index writes; `pre-commit`, `prepare-commit-msg`, `commit-msg`, `post-commit` | yes |
 | `git commit --amend` | `post-index-change` on index writes; `pre-commit`, `prepare-commit-msg`, `commit-msg`, `post-commit`, then `post-rewrite amend` unless `--no-post-rewrite` | yes |
 | `git merge` (automatic, conflict-free non-fast-forward merge commit) | `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `post-merge` | **no** |
+| `git merge --autostash` (dirty tracked worktree) | merge hooks above; autostash creates ref-less stash commits with no hook | **no** |
 | `git pull` (default merge mode, diverged upstream) | `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `post-merge`; `reference-transaction` on fetch | **no** |
 | `git merge --continue` after resolving conflicts | `post-index-change`; `pre-commit`, `prepare-commit-msg`, `commit-msg`, `post-commit` | yes |
 | `git revert` (automatic, conflict-free commit) | `prepare-commit-msg` + `post-commit` | **no** |
@@ -143,6 +144,7 @@ This repository wires exactly two: `.githooks/pre-commit` and
 | `git cherry-pick` (automatic, conflict-free commit) | `prepare-commit-msg` + `post-commit` | **no** |
 | `git cherry-pick --continue` after resolving conflicts | `post-index-change`; `pre-commit`, `prepare-commit-msg`, `commit-msg`, `post-commit` | yes |
 | `git rebase` replaying commits onto a new base | `pre-rebase` once, then `prepare-commit-msg` + `post-commit` per replayed commit, `post-rewrite` once at the end | **no** |
+| `git rebase --autostash` (dirty tracked worktree) | rebase hooks above; autostash creates ref-less stash commits with no hook | **no** |
 | `git rebase --continue` after resolving a conflict | `post-index-change`, `prepare-commit-msg`, `post-commit`, `post-rewrite`; no `pre-commit` | **no** |
 | `git am` applying a patch series | `applypatch-msg`, `pre-applypatch`, `post-applypatch` — none wired | **no** |
 | `git stash push` (tracked changes) | `reference-transaction`; no commit-creation hooks | **no** * |
@@ -241,6 +243,15 @@ fired `reference-transaction` on the fetch, then `pre-merge-commit`,
 (评审 4117872584). Its `--rebase` modes enter the already-documented rebase
 path. `git pull` is the commonest entry point for the merge gap, so it is
 listed separately rather than folded into the `git merge` row.
+
+`--autostash` on `merge`, `pull`, or `rebase` adds another ref-less path:
+the option stashes dirty tracked changes before the operation and pops them
+after, creating stash commit objects without any commit-creation hook or
+`reference-transaction` for those objects (评审 4117983619). Measured on git
+2.48.1, `git merge --autostash` printed the temporary stash OID and created
+both the stash and index-parent commits with no hook firing for them; the
+printed OID remains directly pushable, giving these variants the same
+ref-less #404/#405 boundary already documented for `stash create`.
 
 The conflict path is different for merge, revert, and cherry-pick. In Git
 2.48.1 fixtures, each automatic command stopped on a content conflict; after
@@ -550,6 +561,8 @@ So the accurate statement of the invariant is:
 > analyze replayed `git rebase` commits (including conflict-resolved
 > `git rebase --continue`), `git am`, `git stash push` (entry commits under
 > `refs/stash`), `git stash create` (a ref-less stash commit object),
+> `--autostash` on `merge`/`pull`/`rebase` (ref-less temporary stash
+> commits),
 > `git notes` mutations (commits under `refs/notes/*`),
 > `git commit-tree` (commit objects placed on history via `update-ref`),
 > `git hash-object -t commit -w` (commit objects written directly, then
@@ -610,12 +623,13 @@ plus `git update-ref` or direct-OID push, `git fast-import`,
 `git subtree pull` commits, split commits and the automatic rejoin from
 `git subtree split --rejoin`, `git subtree push` (with or without `--rejoin`),
 `git subtree add`,
-`git stash create`, and `git replace --graft` / `--edit` /
+`git stash create`, `--autostash` on `merge`/`pull`/`rebase`, and
+`git replace --graft` / `--edit` /
 `--convert-graft-file` — can produce or replace commits without the gate
 analyzing the resulting commit (评审
 4115477920, 4115606416, 4115639629, 4115682292, 4115710587, 4115748220,
 4115748226, 4115812068, 4115865920, 4115865924, 4117675224, 4117675234,
-4117872584). The `--squash` variants of `subtree add`, `merge`, `pull`,
+4117872584, 4117983619). The `--squash` variants of `subtree add`, `merge`, `pull`,
 `split --rejoin`, and `push --rejoin` additionally create a ref-less
 synthetic squash commit that no local hook can gate (评审 4117804224,
 4117843430, 4117872586). The conflict-resolved
@@ -806,12 +820,13 @@ amended, rebased, or dropped no longer appear in `rev-list`, so retained
 history cannot lower- or upper-bound actual invocations (评审 4115135529).
 The daily figures below are therefore **estimates from retained history,
 uncertain in both directions**, not measured invocation rates: pre-commit
-alone is roughly 36 minutes per day at the retained ~30 commits/day. The
+alone is roughly 30 minutes per day at the retained ~25 eligible commits/day
+(194 remote PR merges excluded). The
 push-inclusive figures make a further, explicit assumption — about one
-`pre-push` invocation per commit (评审 4115318779): batching several commits
+`pre-push` invocation per eligible commit (评审 4115318779): batching several commits
 into one push lowers it, retrying failed pushes raises it, and push
 frequency is independent of retained history. Under that assumption the
-total is roughly 73 minutes per day, and under option B about 44 minutes
+total is roughly 61 minutes per day, and under option B about 37 minutes
 per day. Treat all of these as order-of-magnitude context only — a real
 comparison requires measuring hook invocations, not inferring them from
 history.
@@ -857,7 +872,7 @@ these becomes true:
 - A phase's share stops being evenly split. If one phase grows past roughly 40%
   of the total, that phase becomes the thing to optimize, and option A (or an
   equivalent) deserves a real design.
-- The commit rate rises materially above the ~30/day this baseline assumes, or
+- The commit rate rises materially above the ~25/day this baseline assumes, or
   the gate is reported as a recurring source of blocked or abandoned work. The
   argument for accepting a fixed cost weakens with frequency. Because option B
   removes the coverage and scanner phases from the per-commit path, it scales
