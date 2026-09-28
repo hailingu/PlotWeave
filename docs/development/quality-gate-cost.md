@@ -155,6 +155,7 @@ This repository wires exactly two: `.githooks/pre-commit` and
 | `git hash-object -t commit -w --stdin` + `git update-ref` (plumbing) | `reference-transaction` on ref update only; `hash-object` itself fires no hook | **no** * |
 | `git replace [-f] <object> <replacement>` / `git replace --graft <commit> [<parent>…]` / `git replace --edit <commit>` / `git replace --convert-graft-file` | `reference-transaction`; no commit-creation hooks | **no** * |
 | `git fast-import` (`commit <ref>` stream) | `reference-transaction`; no commit-creation hooks | **no** * |
+| `git quiltimport` (applies a quilt patchset to the current branch) | `post-index-change`; `reference-transaction`; no commit-creation hooks | **no** |
 | `git filter-branch` (history rewrite) | none measured here (see note) | **no** * |
 | `git subtree split --prefix=<dir> --branch <branch>` | `reference-transaction`; no commit-creation hooks | **no** * |
 | `git subtree split --prefix=<dir> [<commit>]` (no `--branch`) | none measured here; no ref updated | **no** ** |
@@ -380,7 +381,12 @@ updates the branch in one step — measured on git 2.48.1, importing one
 commit into `refs/heads/imported` fired only `reference-transaction`
 (prepared + committed, twice) and no commit-creation hook (评审 4115220196).
 Because this repository does not wire that hook, such an import bypasses the
-gate on the commit side entirely. `git filter-branch` produced an empty
+gate on the commit side entirely. `git quiltimport` is the user-facing
+counterpart: it applies a quilt patchset onto the current branch, creating
+each commit via the same `commit-tree` + `update-ref` plumbing — measured on
+git 2.48.1 with a one-patch series, it landed the commit on branch history
+with only `post-index-change` and `reference-transaction` firing, no
+commit-creation hook (评审 4118728971). `git filter-branch` produced an empty
 hook log in our measurement — no commit-creation hook and no
 `reference-transaction` (git 2.48.1, `--env-filter` forcing a real rewrite).
 The reviewer reports `reference-transaction` firing on Git 2.43 (评审
@@ -590,7 +596,8 @@ So the accurate statement of the invariant is:
 > `git replace` in any form (ordinary `[-f] <object> <replacement>`,
 > `--graft`, `--edit`, `--convert-graft-file`; replacement
 > commits under `refs/replace/*`),
-> `git fast-import` (`commit <ref>` stream commands), `git filter-branch`
+> `git fast-import` (`commit <ref>` stream commands), `git quiltimport`
+> (quilt patchset commits), `git filter-branch`
 > (rewritten history), `git subtree split --branch` (rewritten commits under
 > the requested branch), `git subtree split` without `--branch` (a ref-less
 > split commit publishable by direct-OID push), automatic conflict-free
@@ -641,7 +648,7 @@ conflict-free `git merge`, `git pull` (default merge mode), `git revert`, and
 `git rebase` commits (including conflict-resolved `--continue`), `git am`,
 `git commit-tree` plus `git update-ref`, `git hash-object -t commit -w`
 plus `git update-ref` or direct-OID push, `git fast-import`,
-`git filter-branch`,
+`git quiltimport`, `git filter-branch`,
 `git subtree split --branch`, `git subtree split` without `--branch` (a
 ref-less split commit publishable by direct-OID push), automatic
 conflict-free `git subtree merge` and
@@ -912,7 +919,7 @@ these becomes true:
 - The uncovered commit-creation paths are closed, or a `merge`, `revert`,
   `cherry-pick`, `rebase`, `am`, `stash` (all forms: `push`, shorthand,
   `save`, `-u`/`--all`, `create`), `notes`, `commit-tree`,
-  `replace`, `fast-import`, `filter-branch`, or `subtree add/merge/pull/split/push`
+  `replace`, `fast-import`, `quiltimport`, `filter-branch`, or `subtree add/merge/pull/split/push`
   workflow (including `split --rejoin` and `push --rejoin`) changes to route
   through `git commit`. Either way,
   update
