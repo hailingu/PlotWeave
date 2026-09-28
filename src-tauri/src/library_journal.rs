@@ -39,4 +39,6 @@ mod recover_index_tests;
 #[cfg(test)]
 mod recover_tests;
 #[cfg(test)]
+mod recover_uncertain_tests;
+#[cfg(test)]
 mod tests;

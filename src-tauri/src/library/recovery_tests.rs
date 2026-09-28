@@ -194,7 +194,7 @@ fn malformed_journal_still_blocks_writes_but_not_healthy_index_view() {
 
 #[cfg(unix)]
 #[test]
-fn unknown_delete_transaction_never_cleans_media_after_index_repair() {
+fn unknown_delete_transaction_converges_after_index_repair_keeping_media_bytes() {
     use std::os::unix::fs::MetadataExt;
     let fixture = LibraryFixture::new();
     fixture.write(damaged_index());
@@ -210,14 +210,40 @@ fn unknown_delete_transaction_never_cleans_media_after_index_repair() {
         .to_string(),
     )
     .unwrap();
+    // 损坏期间：置位 indexUncertain 并保持冲突保守，媒体原位不动
     let (_, warnings) = list_assets_with(&fixture.dir, &mut |_| {}).unwrap();
     assert!(!warnings.is_empty());
     assert_eq!(fs::read(&path).unwrap(), b"keep");
-    update_meta_with(&fixture.dir, "a", &json!({"name":"新名称"}), &mut |_| {}).unwrap();
-    list_assets_with(&fixture.dir, &mut |_| {}).unwrap();
-    assert_eq!(fs::read(&path).unwrap(), b"keep");
-    let saved: Value = serde_json::from_slice(&fs::read(journal).unwrap()).unwrap();
+    let saved: Value = serde_json::from_slice(&fs::read(&journal).unwrap()).unwrap();
     assert_eq!(saved[0]["indexUncertain"], true);
+    // 索引经任一写入修复（备份损坏原件 + 保存修复视图）
+    update_meta_with(&fixture.dir, "a", &json!({"name": "新名称"}), &mut |_| {}).unwrap();
+    // 修复后的图库操作：闩锁复位并按「删除已生效」收敛——媒体重隔离进
+    // .trash（字节保留、不再留在活动路径），条目不再标记冲突（issue #389）
+    let (_, warnings) = list_assets_with(&fixture.dir, &mut |_| {}).unwrap();
+    assert!(
+        !warnings
+            .iter()
+            .any(|w| w.contains("unknown") && w.contains("冲突")),
+        "索引修复后不得继续冲突：{warnings:?}"
+    );
+    assert!(!path.exists(), "权威索引已去项的媒体应离开活动路径");
+    let saved: Value = serde_json::from_slice(&fs::read(&journal).unwrap()).unwrap();
+    let entries = saved.as_array().expect("清理原语缺失时日志保留");
+    assert_eq!(entries.len(), 1);
+    assert!(
+        saved[0].get("indexUncertain").is_none(),
+        "闩锁应复位（false 不序列化）"
+    );
+    let recorded = saved[0]["trashName"]
+        .as_str()
+        .expect("trashName")
+        .to_string();
+    assert_eq!(
+        fs::read(fixture.path.join(&recorded)).unwrap(),
+        b"keep",
+        "媒体字节须保留在日志记录的隔离名下"
+    );
 }
 
 #[cfg(unix)]

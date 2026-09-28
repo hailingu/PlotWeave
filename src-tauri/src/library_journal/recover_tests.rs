@@ -1,5 +1,6 @@
 //! 库删除恢复回归测试（issue #25）：中断恢复四分支、只读态、硬链接残留、
-//! 上限守卫；索引/Record 适配类用例见 recover_index_tests.rs。
+//! 上限守卫；索引/Record 适配类用例见 recover_index_tests.rs，indexUncertain
+//! 闩锁收敛类用例见 recover_uncertain_tests.rs。
 
 use super::recover::CleanupKind;
 use super::*;
