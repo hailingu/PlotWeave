@@ -174,11 +174,15 @@ pub(crate) fn recover(library: &CapDir) -> Result<Recovery, LibraryError> {
     let assets = assets_root(library)?;
     let mut current = entries.clone();
     let mut changed = false;
+    let view = IndexView {
+        value: &index,
+        intact: !normalized.damaged,
+    };
     for entry in &entries {
         recover_entry(
             library,
             &assets,
-            &index,
+            &view,
             entry,
             &mut recovery,
             &mut current,
@@ -189,6 +193,15 @@ pub(crate) fn recover(library: &CapDir) -> Result<Recovery, LibraryError> {
         write_journal(library, &current)?;
     }
     Ok(recovery)
+}
+
+/// 本次恢复所依据的索引视图及其权威性（issue #389）：`intact` 为真表示
+/// 索引可解析、按权威视图判定；为假表示损坏后的局部视图——indexUncertain
+/// 条目据此区分「索引损坏期间」（保持冲突保守）与「索引已恢复」（复位
+/// 闩锁并按当前索引重新判定）。
+struct IndexView<'a> {
+    value: &'a Value,
+    intact: bool,
 }
 
 /// 在任何索引修复/媒体操作之前耐久标记无法判定的事务，防修复后误删媒体。
@@ -216,27 +229,39 @@ fn retire_entry(current: &mut Vec<JournalEntry>, entry: &JournalEntry) {
 }
 
 /// 单条日志恢复。分支次序对齐 §7.2：共享引用 → 索引仍引用 → 索引已去项。
+/// `view.intact` 为真表示当前索引是可解析的权威视图：indexUncertain 条目
+/// 仅在索引仍损坏时保持冲突保守（issue #389）——索引已恢复时复位闩锁并
+/// 按当前索引走正常收敛分支（仍引用 → 回迁/未开始；已去项 → 按已提交），
+/// 资产不再因历史损坏永久 conflicted。
 fn recover_entry(
     library: &CapDir,
     assets: &CapDir,
-    index: &Value,
+    view: &IndexView<'_>,
     entry: &JournalEntry,
     recovery: &mut Recovery,
     current: &mut Vec<JournalEntry>,
     changed: &mut bool,
 ) -> Result<(), LibraryError> {
-    if entry.index_uncertain {
+    let re_adjudicated;
+    let entry = if entry.index_uncertain && !view.intact {
         recovery
             .cleanup_pending
             .push(CleanupPendingItem::evidence(entry.trash_name.clone()));
         mark_conflict(
             entry,
             recovery,
-            "索引曾损坏，删除结果无法确认；媒体与日志保留待核对",
+            "索引曾损坏且尚未修复，删除结果无法确认；须先修复 library.json 为可解析 \
+             JSON（人工修整，或经任意图库写入自动替换为修复视图），修复后的图库操作\
+             将按当前索引自动重新判定",
         );
         return Ok(());
-    }
-    let refs = index_refs(index, entry);
+    } else if entry.index_uncertain {
+        re_adjudicated = release_uncertain_latch(current, entry, changed);
+        &re_adjudicated
+    } else {
+        entry
+    };
+    let refs = index_refs(view.value, entry);
     let trash = open_trash_dir(assets)?;
     // 共享引用须以身份复核为准（评审修复）：relPath 字符串相等但占用者
     // 身份不符时，替换文件不得被当作共享引用方放行——继续走证据分支
@@ -247,6 +272,23 @@ fn recover_entry(
         return recover_index_still_references(assets, entry, trash, recovery, current, changed);
     }
     recover_index_committed(library, assets, entry, trash, recovery, current, changed)
+}
+
+/// 索引已恢复为可解析权威视图（issue #389）：复位 indexUncertain 闩锁并
+/// 返回复位后的条目供分支使用（重隔离的新映射不得携带旧闩锁）。复位随
+/// 本条目的分支变更一并落盘；中断后下次恢复按当前索引重新判定，不丢证据。
+fn release_uncertain_latch(
+    current: &mut [JournalEntry],
+    entry: &JournalEntry,
+    changed: &mut bool,
+) -> JournalEntry {
+    let mut released = entry.clone();
+    released.index_uncertain = false;
+    if let Some(e) = current.iter_mut().find(|e| e.id == entry.id) {
+        e.index_uncertain = false;
+    }
+    *changed = true;
+    released
 }
 
 /// 其他条目引用同一文件位置：不得移动/删除其当前目录项；隔离项存在时仅

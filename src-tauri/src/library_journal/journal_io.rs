@@ -26,6 +26,8 @@ pub(super) struct JournalEntry {
     pub(super) ino: u64,
     pub(super) trash_name: String,
     /// 索引损坏时无法证明删除已提交；持久保留现场，不从缺失项推断清理。
+    /// 存活期只覆盖索引损坏期间：索引恢复为可解析权威视图后由恢复复位，
+    /// 条目按当前索引重新判定（issue #389）。
     pub(super) index_uncertain: bool,
 }
 
