@@ -1,5 +1,5 @@
 import {
-  chmodSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -14,7 +14,7 @@ const repositoryRoot = resolve(import.meta.dirname, '..')
 const temporaryDirectories: string[] = []
 
 type MaterializeOptions = {
-  historyReadOnly?: boolean
+  historyBlocked?: boolean
   pending?: string
 }
 
@@ -26,6 +26,16 @@ type MaterializeRun = {
   stdout: string
 }
 
+/** 尽力读取沙箱输出文件：路径缺失或被目录占据（不可写注入形态）时返回
+ * 空串——目录占位对 root 也无条件不可追加（PR #415 评审 5339054039）。 */
+function readTextFileBestEffort(path: string): string {
+  try {
+    return readFileSync(path, { encoding: 'utf8' })
+  } catch {
+    return ''
+  }
+}
+
 /** 在隔离路径下执行真实物化脚本（issue #355，PR #415 评审 5338815626）。 */
 function runMaterialize(options: MaterializeOptions = {}): MaterializeRun {
   const sandbox = mkdtempSync(resolve(tmpdir(), 'plotweave-gate-history-'))
@@ -33,12 +43,14 @@ function runMaterialize(options: MaterializeOptions = {}): MaterializeRun {
 
   const historyPath = resolve(sandbox, 'gate-history.jsonl')
   const pendingPath = resolve(sandbox, 'gate-pending.jsonl')
-  writeFileSync(historyPath, '')
+  if (options.historyBlocked) {
+    // 目录占位使并入无条件失败（root 亦然），替代权限位注入
+    mkdirSync(historyPath)
+  } else {
+    writeFileSync(historyPath, '')
+  }
   if (options.pending !== undefined) {
     writeFileSync(pendingPath, options.pending)
-  }
-  if (options.historyReadOnly) {
-    chmodSync(historyPath, 0o444)
   }
 
   const result = spawnSync(
@@ -56,7 +68,7 @@ function runMaterialize(options: MaterializeOptions = {}): MaterializeRun {
   )
 
   return {
-    history: readFileSync(historyPath, { encoding: 'utf8' }),
+    history: readTextFileBestEffort(historyPath),
     pending: readFileSync(pendingPath, { encoding: 'utf8', flag: 'a+' }),
     status: result.status,
     stderr: result.stderr,
@@ -90,9 +102,9 @@ describe('门禁结论物化（gate-history.sh materialize，issue #355）', () 
     }
   })
 
-  it('版本化文件不可写时只警告、保留待物化行，不阻塞推送（尽力而为）', () => {
+  it('版本化文件不可写（目录占位，root 下亦然）时只警告、保留待物化行，不阻塞推送', () => {
     const pending = '{"qualityGate":"OK"}\n'
-    const result = runMaterialize({ historyReadOnly: true, pending })
+    const result = runMaterialize({ historyBlocked: true, pending })
 
     expect(result.status).toBe(0)
     expect(result.pending).toBe(pending)
