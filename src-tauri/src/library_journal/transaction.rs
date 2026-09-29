@@ -5,10 +5,11 @@
 use cap_std::fs::Dir as CapDir;
 use serde_json::{json, Value};
 
-use super::{
-    ensure_trash_dir, fsync_dir, identity_bound_unlink, read_journal, recover,
-    verify_trash_identity, write_journal, CleanupPendingItem, JournalEntry, Recovery, TrashVerdict,
-    TRASH_DIR,
+use super::fsync::fsync_dir;
+use super::journal_io::{journal_entry_value, read_journal, write_journal, JournalEntry};
+use super::recover::{recover, CleanupPendingItem, Recovery};
+use super::trash::{
+    ensure_trash_dir, identity_bound_unlink, verify_trash_identity, TrashVerdict, TRASH_DIR,
 };
 use crate::library::error::LibraryError;
 use crate::library_fs::{
@@ -156,21 +157,6 @@ fn check_same_fs(trash: &CapDir, identity: (u64, u64)) -> Result<(), LibraryErro
         ));
     }
     Ok(())
-}
-
-/// 单条事务 → journal JSON 形状（write_journal 与上限投影共用）。
-pub(super) fn journal_entry_value(e: &JournalEntry) -> Value {
-    let mut value = json!({
-        "id": e.id,
-        "assetId": e.asset_id,
-        "relPath": e.rel_path,
-        "identity": { "dev": e.dev, "ino": e.ino },
-        "trashName": e.trash_name,
-    });
-    if e.index_uncertain {
-        value["indexUncertain"] = json!(true);
-    }
-    value
 }
 
 /// 删除入口守卫：读取磁盘日志并检查追加投影大小（先于 recover，避免

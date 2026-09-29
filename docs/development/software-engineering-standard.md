@@ -107,7 +107,24 @@ Apply the guardrails as follows:
   relative import graph of non-test `src` modules from the TypeScript AST and
   asserts that both the compile-time graph (type-only imports included) and
   the runtime graph (after type erasure) stay acyclic. Routing a cycle through
-  an `import type` edge is a violation, not a loophole.
+  an `import type` edge is a violation, not a loophole. The Rust backend
+  carries the counterpart acyclicity guard (`src-tauri/src/module_graph.rs`,
+  issue #399), so the invariant is cross-language; see
+  [rust-standard.md](rust-standard.md) "Module Boundary Guards".
+- The shell must not depend on runtime values of `editor/**` internals
+  (issue #399): `shellEditorRuntimeViolations` in `src/moduleGraph.test.ts`
+  flags any runtime edge from a non-editor module into `editor/**` and fails
+  closed on non-static dynamic imports, mirroring the model-side purity
+  guards in the opposite direction. Persisted contracts shared by the shell
+  and the editor — the AI session schema (`src/ai/session.ts`) — live in a
+  dedicated leaf module; its type-only reference to the AI batch command
+  contract (`editor/ai/commands.ts`, the issue #39 contract layer) is a
+  recorded boundary (compile-time erased, no runtime coupling). Registered
+  carve-outs, each requiring an ownership disposition or tracking issue for
+  any new entry: the composition root `App.tsx` (mounting the editor UI is
+  its job) and the demo-seed path `projectStore/seeds.ts` (sample-canvas
+  content and handle policy are editor-owned; extraction to model-shaped
+  seeds is follow-up material recorded with the issue #399 disposition).
 - Tauri IPC command names have a single frontend source of truth:
   `src/ipc/commands.ts` (issue #394). Call sites go through the typed entry
   `ipcInvoke` (`src/ipc/invoke.ts`), whose `cmd` parameter is narrowed to the

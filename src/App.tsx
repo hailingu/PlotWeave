@@ -27,7 +27,7 @@ import { displayIpcError } from './ipcError'
 import { useProjectSummaries } from './useProjectSummaries'
 import { projectStore, type ProjectContent } from './projectStore'
 import type { ProjectSummary } from './home/projects'
-import type { AiSession } from './editor/ai/session'
+import type { AiSession } from './ai/session'
 
 /** 编辑器视图按域惰性加载：React Flow 的运行时引用全部封闭在编辑器域内，
  * 拆出入口 chunk 后冷启动只解析首页所需代码（issue #34）。

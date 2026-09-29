@@ -17,7 +17,7 @@ import {
 import { invoke } from '@tauri-apps/api/core'
 import type { ChatMessage, AssistantMessage } from '../ai/chat'
 import type { AiCommand } from '../ai/commands'
-import { normalizeAiSession, type AiSession } from '../ai/session'
+import { normalizeAiSession, type AiSession } from '../../ai/session'
 import { useAiBridge, type AiBridgeDeps } from '../useAiBridge'
 import { CommandStack } from '../history'
 import { EMPTY_SETTINGS } from '../settings'

@@ -45,6 +45,10 @@ mod store;
 #[cfg(test)]
 mod conf;
 
+/// Rust 模块依赖图无环守卫（issue #399；仅测试构建参与编译，见模块文档）。
+#[cfg(test)]
+mod module_graph;
+
 /// 本地 HTTP 环回夹具（仅测试构建参与编译，见模块文档）。
 #[cfg(test)]
 mod testhttp;

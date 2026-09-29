@@ -59,7 +59,7 @@ import { NodeEditContext, type NodeEditApi } from './editor/nodeEdit'
 import { ImageGenContext, type ImageGenApi } from './editor/imagegen/context'
 import { ErrorBanner } from './editor/ErrorBanner'
 import { ErrorBoundary } from './ErrorBoundary'
-import type { AiSession } from './editor/ai/session'
+import type { AiSession } from './ai/session'
 import type { BatchValidation } from './editor/ai/commands'
 import type { DocumentEntity } from './editor/settings'
 

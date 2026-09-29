@@ -13,9 +13,9 @@ import {
 } from '../ai/entityFields'
 import { nodeFieldTableText } from '../ai/nodeFields'
 import type { ProviderConfig } from '../../settings/types'
-import type { ThreadEntry } from '../ai/session'
+import type { ThreadEntry } from '../../ai/session'
 
-export type { ThreadEntry } from '../ai/session'
+export type { ThreadEntry } from '../../ai/session'
 
 /**
  * ✦AI 会话的模型域（RightPanel.tsx 拆分，issue #39）：系统提示、请求

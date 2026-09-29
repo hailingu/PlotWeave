@@ -14,10 +14,11 @@ use crate::library_fs::{assets_root, open_parent_dir};
 use crate::store::new_id;
 
 use super::archive::{read_archive, write_archive, ARCHIVE_COUNT_MAX};
+use super::fsync::fsync_dir;
 use super::journal_io::{read_journal, write_journal, JournalEntry};
 use super::trash::{
-    ensure_trash_dir, fsync_dir, identity_bound_unlink, open_trash_dir, path_identity,
-    restore_from_trash, verify_trash_identity, PathIdentity, TrashVerdict, TRASH_DIR,
+    ensure_trash_dir, identity_bound_unlink, open_trash_dir, path_identity, restore_from_trash,
+    verify_trash_identity, PathIdentity, TrashVerdict, TRASH_DIR,
 };
 
 /// cleanupPending 条目的机器可读分类（issue #229）：前端按 kind 决定

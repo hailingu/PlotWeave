@@ -15,7 +15,7 @@ import {
 import { TurnCancelledError } from '../ai/agentLoop'
 import { runAgentLoop } from '../ai/agentLoop'
 import { findNodesText } from '../ai/nodeSearch'
-import type { ThreadEntry } from '../ai/session'
+import type { ThreadEntry } from '../../ai/session'
 import type { CanvasNode } from '../nodes/types'
 import type { ProviderConfig } from '../../settings/types'
 

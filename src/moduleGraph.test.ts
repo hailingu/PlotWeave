@@ -12,6 +12,7 @@ import {
   modelFrameworkRuntimeViolations,
   modelRuntimeClosure,
   relativeEdgesOfSource,
+  shellEditorRuntimeViolations,
   type ExternalEdge,
   type ModuleEdge,
 } from './moduleGraph'
@@ -375,5 +376,67 @@ describe('动态不可解析导入的 fail-closed（PR #305 四轮评审）', ()
     const external = buildSrcExternalEdges(SRC_ROOT)
     expect(modelEditorRuntimeViolations(graph)).toEqual([])
     expect(modelFrameworkRuntimeViolations(graph, external)).toEqual([])
+  })
+})
+
+describe('外壳→功能方向守卫（issue #399 缺口二）', () => {
+  /** 方向与 model 侧守卫（issue #353）互为镜像：model 是功能层不得反向
+   * 依赖的落盘 schema 所有者；editor/** 是功能层，外壳/共享层不得以
+   * 运行期值依赖其内部实现——会话等两侧共用的落盘契约应提取到叶子
+   * 模块（src/ai/session.ts），而非放在 UI 目录下由外壳运行期引用。 */
+  it('反例：非 editor 模块的 editor 运行期值依赖被识别，类型依赖不误报', () => {
+    const graph = new Map<string, ModuleEdge[]>([
+      // 违规形态（issue #399 原始证据）：外壳 store 运行期引用 editor 内部
+      [
+        'aiSessionStore.ts',
+        [{ target: 'editor/ai/session.ts', typeOnly: false }],
+      ],
+      // 契约叶子的类型级引用合法（编译期擦除，无运行期耦合）
+      ['ai/session.ts', [{ target: 'editor/ai/commands.ts', typeOnly: true }]],
+      ['projectStore.ts', [{ target: 'ai/session.ts', typeOnly: false }]],
+    ])
+    expect(shellEditorRuntimeViolations(graph)).toEqual([
+      'aiSessionStore.ts → editor/ai/session.ts',
+    ])
+  })
+
+  it('反例：登记边界不标记；editor 自身与 editor→model 方向不受限', () => {
+    const graph = new Map<string, ModuleEdge[]>([
+      // 组合根本职：挂载编辑器 UI（ErrorBanner、懒加载 EditorView）
+      ['App.tsx', [{ target: 'editor/ErrorBanner.tsx', typeOnly: false }]],
+      // 演示种子边界（issue #399 登记）：示例画布内容属编辑器域
+      [
+        'projectStore/seeds.ts',
+        [{ target: 'editor/sampleGraph.ts', typeOnly: false }],
+      ],
+      // editor 内部互相引用与 editor → model 是正常依赖方向
+      [
+        'editor/EditorView.tsx',
+        [{ target: 'editor/ErrorBanner.tsx', typeOnly: false }],
+      ],
+      [
+        'editor/graphRules.ts',
+        [{ target: 'model/document.ts', typeOnly: false }],
+      ],
+    ])
+    expect(shellEditorRuntimeViolations(graph)).toEqual([])
+  })
+
+  it('反例：不可静态解析的动态导入 fail-closed（目标运行时才定）', () => {
+    const graph = new Map<string, ModuleEdge[]>([
+      [
+        'library/libraryStore.ts',
+        [{ target: './x/${n}', typeOnly: false, dynamic: true }],
+      ],
+    ])
+    expect(shellEditorRuntimeViolations(graph)).toEqual([
+      'library/libraryStore.ts → 动态导入（不可静态解析）：./x/${n}',
+    ])
+  })
+
+  it('真图：外壳层无 editor 运行期值依赖（会话契约已提取至 src/ai）', () => {
+    expect(shellEditorRuntimeViolations(buildSrcModuleGraph(SRC_ROOT))).toEqual(
+      [],
+    )
   })
 })

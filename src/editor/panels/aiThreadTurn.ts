@@ -26,7 +26,7 @@ import {
 import { type AppSettings, type ChatModelOption } from '../../settings/types'
 import { buildMessages, readToolOf, runModelTurn } from './aiThreadModel'
 import { TurnCancelledError } from '../ai/agentLoop'
-import { type ThreadEntry } from '../ai/session'
+import { type ThreadEntry } from '../../ai/session'
 
 /** 回合世代守卫与取消信号（issue #154）：send 时 beginTurn 推进世代、
  * 重置信号；cancelTurn 置位并推进世代。回合 settle 时只有 generation 与
