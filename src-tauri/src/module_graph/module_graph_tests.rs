@@ -224,6 +224,46 @@ fn file_mod_inside_inline_module_resolves_nested_directory() {
 }
 
 #[test]
+fn cfg_test_statement_attributes_do_not_leak_gating() {
+    // 评审 5349970852：#[cfg(test)] let 语句门控不得泄漏到其后的生产
+    // use（漏采会让依赖该边的真环对守卫隐形）
+    let graph = edges(&[
+        ("lib.rs", "mod a;\nmod b;\n"),
+        (
+            "a.rs",
+            concat!(
+                "fn probe() {\n",
+                "    #[cfg(test)]\n",
+                "    let marker = 1;\n",
+                "    use crate::b::B;\n",
+                "}\n",
+            ),
+        ),
+        ("b.rs", "pub struct B;\n"),
+    ]);
+    assert!(
+        graph["a.rs"].contains("b.rs"),
+        "门控语句之后的生产 use 必须照常入图：{:?}",
+        graph["a.rs"]
+    );
+}
+
+#[test]
+fn raw_identifier_module_names_resolve_normalized() {
+    // 评审 5349970852：mod r#type 的文件是 type.rs；use crate::r#type::T
+    // 须按裸名匹配模块树，不得对合法 Rust fail-closed
+    let graph = edges(&[
+        ("lib.rs", "mod r#type;\nuse crate::r#type::Thing;\n"),
+        ("type.rs", "pub struct Thing;\n"),
+    ]);
+    assert!(
+        graph["lib.rs"].contains("type.rs"),
+        "裸标识符模块名应归一化解析：{:?}",
+        graph["lib.rs"]
+    );
+}
+
+#[test]
 #[should_panic(expected = "找不到对应文件")]
 fn missing_mod_file_fails_closed() {
     cycles(&[("lib.rs", "mod ghost;\n")]);

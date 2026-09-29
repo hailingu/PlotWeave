@@ -175,23 +175,14 @@ fn skip_braced(tokens: &[&str], open: usize) -> usize {
     k
 }
 
-/// 消费挂起 cfg(test) 标记的项关键字；`pub` 等修饰符不消费（后者仍被门控）。
+/// 带属性项的开头判定（消费挂起 cfg(test) 并整条跳过）。
 fn item_keyword(tok: &str) -> bool {
-    matches!(
-        tok,
-        "fn" | "struct"
-            | "enum"
-            | "union"
-            | "impl"
-            | "trait"
-            | "const"
-            | "static"
-            | "type"
-            | "extern"
-            | "macro"
-            | "auto"
-            | "default"
-    )
+    // pub/unsafe/async 是修饰符而非项首——不消费，等真项关键字到来
+    //（`#[cfg(test)] pub mod` 仍须被门控）；其余任何 token（含 let、
+    // 表达式语句首）都视为带属性项的开头并整条跳过（评审 5349970852：
+    // 只认固定清单会让 `#[cfg(test)] let …;` 的门控泄漏到其后的生产
+    // use/mod，真环隐形）
+    !matches!(tok, "pub" | "unsafe" | "async")
 }
 
 /// 跳过 cfg(test) 项的剩余部分：签名推进到首个 "{"（跳过其块）或 ";"。
@@ -268,7 +259,7 @@ fn scan_mod_decl(
     inline: &mut Vec<(String, usize)>,
     depth: &mut usize,
 ) -> usize {
-    let name = tokens.get(i + 1).copied().unwrap_or("");
+    let name = strip_raw_ident(tokens.get(i + 1).copied().unwrap_or(""));
     let stack: Vec<String> = inline.iter().map(|(n, _)| n.clone()).collect();
     match tokens.get(i + 2) {
         Some(&";") => {
@@ -328,13 +319,20 @@ fn scan_use_stmt(
 
 /// use 树元素是否为路径段（标识符/关键字；`as` 与标点不是）。
 fn is_path_seg(tok: &str) -> bool {
-    let mut chars = tok.chars();
+    let mut chars = strip_raw_ident(tok).chars();
     match chars.next() {
         Some(c) if c.is_ascii_alphabetic() || c == '_' => {
             chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
         }
         _ => false,
     }
+}
+
+/// 剥掉裸标识符的 `r#` 前缀：`mod r#type;` 的文件是 `type.rs`，use 路径
+/// 段与声明统一按裸名参与模块树匹配（评审 5349970852：拒绝 `#` 会让
+/// `use crate::r#type::Thing` 对合法 Rust fail-closed panic）。
+fn strip_raw_ident(tok: &str) -> &str {
+    tok.strip_prefix("r#").unwrap_or(tok)
 }
 
 /// 解析一个 use 树元素追加到 paths：组内 `self` 指前缀模块、`as` 剥除、`*` 按前缀计。
@@ -352,7 +350,7 @@ fn parse_use_tree(
                     && path.len() == prefix.len()
                     && tokens.get(*i + 1).map(String::as_str) != Some("::");
                 if !bare_self {
-                    path.push(t.clone());
+                    path.push(strip_raw_ident(t).to_string());
                 }
                 *i += 1;
             }
