@@ -185,11 +185,23 @@ fn item_keyword(tok: &str) -> bool {
     !matches!(tok, "pub" | "unsafe" | "async")
 }
 
-/// 跳过 cfg(test) 项的剩余部分：签名推进到首个 "{"（跳过其块）或 ";"。
+/// 跳过 cfg(test) 项/语句的完整剩余部分：签名或条件表达式推进到首个
+/// "{"（跳过其块）或 ";"；块后若还有 else/else if 复合臂或结尾分号，
+/// 一并消费（评审 5350168645：只跳首个块会把 else 臂当生产代码误采）。
 fn skip_test_item(tokens: &[&str], mut k: usize) -> usize {
     while k < tokens.len() {
         match tokens[k] {
-            "{" => return skip_braced(tokens, k),
+            "{" => {
+                k = skip_braced(tokens, k);
+                if tokens.get(k) == Some(&"else") {
+                    k += 1;
+                    continue;
+                }
+                if tokens.get(k) == Some(&";") {
+                    k += 1;
+                }
+                return k;
+            }
             ";" => return k + 1,
             _ => {}
         }
@@ -508,7 +520,12 @@ impl ModuleTree {
                     .entry(mod_path.clone())
                     .or_default()
                     .insert(decl.name.clone());
+                // inline 模块的「文件」= 声明文件（评审 5350168645：use
+                // 目标是 inline 模块时须解析回所在文件，否则该边漏采、
+                // 真环隐形）；不入队——该文件本就按自身路径扫描
                 if !decl.file_backed {
+                    mod_path.push(decl.name.clone());
+                    tree.file_of.insert(mod_path, key.clone());
                     continue;
                 }
                 // 外部文件子模块的目录 = 声明文件子目录 + inline 栈各段
@@ -517,13 +534,16 @@ impl ModuleTree {
                 let child_key = child_file_key(files, &child_dir, &decl.name);
                 let mut child_path = mod_path;
                 child_path.push(decl.name.clone());
-                if tree
-                    .file_of
-                    .insert(child_path.clone(), child_key.clone())
-                    .is_some()
-                {
-                    panic!("模块路径重复声明：{}", child_path.join("::"));
+                if let Some(existing) = tree.file_of.get(&child_path) {
+                    // 平台并集下互斥 cfg 的同名声明指向同一文件 → 合并
+                    //（评审 5350168645：判重复会拒合法跨平台代码）；
+                    // 首次声明已入队，不必重复
+                    if existing != &child_key {
+                        panic!("模块路径重复声明：{}", child_path.join("::"));
+                    }
+                    continue;
                 }
+                tree.file_of.insert(child_path.clone(), child_key.clone());
                 queue.push((child_path, child_key));
             }
         }

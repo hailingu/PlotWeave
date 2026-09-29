@@ -264,6 +264,74 @@ fn raw_identifier_module_names_resolve_normalized() {
 }
 
 #[test]
+fn imports_targeting_inline_modules_resolve_to_containing_file() {
+    // 评审 5350168645：use crate::foo::inner::T 的目标是 inline 模块，
+    // 其身份 = 声明文件 foo.rs——漏采该边会让 foo → b → foo 的环隐形
+    let found = cycles(&[
+        ("lib.rs", "mod foo;\nmod b;\n"),
+        ("foo.rs", "mod inner { pub struct T; }\nuse crate::b::B;\n"),
+        ("b.rs", "use crate::foo::inner::T;\n"),
+    ]);
+    assert_eq!(
+        found.len(),
+        1,
+        "指向 inline 模块的依赖应成边构成环：{found:?}"
+    );
+    assert!(
+        found[0].contains("foo.rs") && found[0].contains("b.rs"),
+        "环路径应定位到声明文件：{found:?}"
+    );
+}
+
+#[test]
+fn cfg_test_if_else_statement_skips_all_arms() {
+    // 评审 5350168645：#[cfg(test)] if/else 只跳首个块会把 else 臂当
+    // 生产代码误采（测试专属依赖可能制造假环阻断 cargo test）
+    let graph = edges(&[
+        ("lib.rs", "mod a;\nmod b;\nmod c;\n"),
+        (
+            "a.rs",
+            concat!(
+                "#[cfg(test)]\n",
+                "if flag { let x = 1; } else { use crate::c::C2; }\n",
+                "use crate::b::B;\n",
+            ),
+        ),
+        ("b.rs", "pub struct B;\n"),
+        ("c.rs", "pub struct C2;\n"),
+    ]);
+    assert!(
+        graph["a.rs"].contains("b.rs"),
+        "else 臂之后的生产 use 必须照常入图：{:?}",
+        graph["a.rs"]
+    );
+    assert!(
+        !graph["a.rs"].contains("c.rs"),
+        "else 臂内 cfg(test) 的 use 不得入生产图：{:?}",
+        graph["a.rs"]
+    );
+}
+
+#[test]
+fn mutually_exclusive_platform_declarations_coalesce() {
+    // 评审 5350168645：#[cfg(unix)] 与 #[cfg(windows)] 声明同一模块是
+    // 合法跨平台形态，平台并集口径应合并而非判重复 panic
+    let graph = edges(&[
+        (
+            "lib.rs",
+            "#[cfg(unix)]\nmod platform;\n#[cfg(windows)]\nmod platform;\nmod user;\n",
+        ),
+        ("platform.rs", "pub struct P;\n"),
+        ("user.rs", "use crate::platform::P;\n"),
+    ]);
+    assert!(
+        graph["user.rs"].contains("platform.rs"),
+        "合并后的平台模块应正常解析：{:?}",
+        graph["user.rs"]
+    );
+}
+
+#[test]
 #[should_panic(expected = "找不到对应文件")]
 fn missing_mod_file_fails_closed() {
     cycles(&[("lib.rs", "mod ghost;\n")]);
