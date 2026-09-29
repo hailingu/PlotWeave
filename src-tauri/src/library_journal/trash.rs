@@ -104,24 +104,6 @@ pub(super) fn open_trash_dir(assets: &CapDir) -> Result<Option<CapDir>, LibraryE
     }
 }
 
-/// 隔离区顶层普通文件的合计字节（issue #427）：经锚定句柄 no-follow 遍历，
-/// 符号链接（其大小属于目标文件）与子目录（隔离项必为普通文件）不计入、
-/// 不递归。咨询性量级按 fail-soft 处理：目录缺失/任何读取失败返回 None
-/// （「未知」），不得放大为告警或恢复失败。
-pub(super) fn trash_total_bytes(assets: &CapDir) -> Option<u64> {
-    let trash = open_trash_dir(assets).ok()??;
-    let entries = trash.entries().ok()?;
-    let mut total = 0u64;
-    for entry in entries {
-        let md = entry.ok()?.metadata().ok()?;
-        if md.file_type().is_symlink() || !md.is_file() {
-            continue;
-        }
-        total = total.saturating_add(md.len());
-    }
-    Some(total)
-}
-
 /// 在已验证资产根句柄下确保 .trash 为真实目录并 fsync 资产根。
 #[cfg(unix)]
 pub(super) fn ensure_trash_dir(assets: &CapDir) -> Result<CapDir, LibraryError> {
