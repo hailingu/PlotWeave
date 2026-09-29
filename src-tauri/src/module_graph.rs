@@ -652,20 +652,7 @@ fn use_targets_of(
     let mut targets = Vec::new();
     for (inline, use_toks) in &scan.uses {
         for segs in use_tree_of(use_toks).paths {
-            // 裸首段命中本地别名 → 以别名目标路径展开（单层；链式别名
-            // 极罕见，登记不展开）
-            let segs = match scan
-                .renames
-                .iter()
-                .find(|(n, _)| Some(n.as_str()) == segs.first().map(String::as_str))
-            {
-                Some((_, bound)) => {
-                    let mut expanded = bound.clone();
-                    expanded.extend(segs[1..].iter().cloned());
-                    expanded
-                }
-                None => segs,
-            };
+            let segs = expand_segments(tree, scan, path, inline, segs);
             for target in resolve_use(tree, path, inline, &segs) {
                 if &target != key {
                     targets.push(target);
@@ -674,6 +661,39 @@ fn use_targets_of(
         }
     }
     targets
+}
+
+/// 一条 use 路径的裸首段处置（use_targets_of 的内层）：子模块优先于
+/// 别名（评审 5351722665：块内 use … as child 的遮蔽不得替换掉更早的
+/// use child::X 的正确解析——别名是替换不是叠加，误展开会让真环隐形）；
+/// 未命中子模块才按本地别名展开（单层；链式别名极罕见，登记不展开）。
+fn expand_segments(
+    tree: &ModuleTree,
+    scan: &FileScan,
+    path: &[String],
+    inline: &[String],
+    segs: Vec<String>,
+) -> Vec<String> {
+    let first_is_child = segs.first().is_some_and(|f| {
+        let mut ctx = path.to_vec();
+        ctx.extend(inline.iter().cloned());
+        tree.children.get(&ctx).is_some_and(|c| c.contains(f))
+    });
+    if first_is_child {
+        return segs;
+    }
+    match scan
+        .renames
+        .iter()
+        .find(|(n, _)| Some(n.as_str()) == segs.first().map(String::as_str))
+    {
+        Some((_, bound)) => {
+            let mut expanded = bound.clone();
+            expanded.extend(segs[1..].iter().cloned());
+            expanded
+        }
+        None => segs,
+    }
 }
 
 /// 递归读取 dir 下全部 .rs 文件（键 = 相对 posix 路径）。main.rs 与测试

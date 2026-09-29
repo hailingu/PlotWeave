@@ -579,6 +579,44 @@ fn bare_imports_through_local_aliases_resolve() {
 }
 
 #[test]
+fn block_scoped_aliases_do_not_shadow_module_children() {
+    // 评审 5351722665：fn 内 use crate::other as child 不得改写更早的
+    // 模块级 use child::X——别名展开是替换而非叠加，误替换会让
+    // host ↔ child 的真环对守卫隐形；子模块优先于别名
+    let found = cycles(&[
+        ("lib.rs", "mod host;\n"),
+        (
+            "host/mod.rs",
+            concat!(
+                "mod child;\n",
+                "use child::X;\n",
+                "fn f() { use crate::other::O as child; let _ = child::PATH; }\n",
+            ),
+        ),
+        ("host/child.rs", "use crate::host::H;\n"),
+    ]);
+    assert_eq!(
+        found.len(),
+        1,
+        "子模块 child 的边不得被块内别名替换丢失：{found:?}"
+    );
+    // 块内别名先声明后使用（别名名非子模块）仍照常展开
+    let graph = edges(&[
+        ("lib.rs", "mod a;\nmod user;\n"),
+        ("a.rs", "pub struct T;\n"),
+        (
+            "user.rs",
+            "fn f() { use crate::a as alias; use alias::T; }\n",
+        ),
+    ]);
+    assert!(
+        graph["user.rs"].contains("a.rs"),
+        "块内别名+块内使用按原能力展开：{:?}",
+        graph["user.rs"]
+    );
+}
+
+#[test]
 #[should_panic(expected = "找不到对应文件")]
 fn missing_mod_file_fails_closed() {
     cycles(&[("lib.rs", "mod ghost;\n")]);
