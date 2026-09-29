@@ -77,6 +77,11 @@ fn recover_folds_bulk_verified_completed_entries() {
         recovery.cleanup_pending[0].message
     );
     assert_eq!(
+        recovery.cleanup_pending[0].count,
+        Some(500),
+        "摘要应携带结构化计数（前端标题按 count 之和展示，评审 5342513010）"
+    );
+    assert_eq!(
         read_archive_raw(&library)["retainedCleanupCount"],
         json!(500),
         "折叠计数应持久进归档"

@@ -8,10 +8,21 @@ let cleanupBlocked = false
 /** 待清理条目的语义分类（issue #229）：机器可读 kind 由后端生产点给出，
  * 前端不经中文文案推导——展示措辞/本地化调整不改变分类。
  * routine：索引已提交、仅能力保留的待释放项（可给 .trash 清理指引）；
- * evidence：冲突/待核对的证据保留项（绝不附删除指引）。 */
+ * evidence：冲突/待核对的证据保留项（绝不给删除指引）。
+ * 折叠摘要条目（issue #359）额外携带可选 count：该条目代表的累计保留
+ * 数，待清理分区标题按各 routine 条目 count 之和展示（缺省按 1）。 */
 export interface CleanupPendingEntry {
   kind: 'routine' | 'evidence'
   message: string
+  count?: number | undefined
+}
+
+/** count 归一化（issue #359）：仅接受 ≥1 的安全整数——异型/越界按缺省 1
+ * 展示，不把脏数据放大为展示失败。 */
+function normalizePendingCount(input: unknown): number | undefined {
+  return typeof input === 'number' && Number.isSafeInteger(input) && input >= 1
+    ? input
+    : undefined
 }
 
 /** 条目归一化 fail-safe：未知/缺失 kind、裸字符串（旧形态或脏数据）一律
@@ -21,17 +32,21 @@ function normalizePendingEntry(item: unknown): CleanupPendingEntry | null {
   if (item === null || typeof item !== 'object') return null
   const o = item as Record<string, unknown>
   if (typeof o.message !== 'string' || o.message === '') return null
-  return o.kind === 'routine'
-    ? { kind: 'routine', message: o.message }
-    : evidenceEntry(o.message)
+  if (o.kind !== 'routine') return evidenceEntry(o.message)
+  return {
+    kind: 'routine',
+    message: o.message,
+    count: normalizePendingCount(o.count),
+  }
 }
 
 function evidenceEntry(message: string): CleanupPendingEntry {
   return { kind: 'evidence', message }
 }
 
-/** 内容相等（kind + message 逐条相同）——结构化对象按值比较，新载荷的
- * 新对象引用不得被误判为内容变化（关闭状态的保持依赖此判定）。 */
+/** 内容相等（kind + message + count 逐条相同）——结构化对象按值比较，
+ * 新载荷的新对象引用不得被误判为内容变化（关闭状态的保持依赖此判定；
+ * count 参与比较：摘要计数变化即内容变化，issue #359）。 */
 function samePendingContent(
   a: readonly CleanupPendingEntry[],
   b: readonly CleanupPendingEntry[],
@@ -39,7 +54,10 @@ function samePendingContent(
   return (
     a.length === b.length &&
     a.every(
-      (item, i) => item.kind === b[i]!.kind && item.message === b[i]!.message,
+      (item, i) =>
+        item.kind === b[i]!.kind &&
+        item.message === b[i]!.message &&
+        item.count === b[i]!.count,
     )
   )
 }
@@ -110,23 +128,28 @@ export function cleanupPendingSnapshot(): readonly CleanupPendingEntry[] {
 
 /** 待清理条目的呈现分区（issue #229）：按机器码 kind 分类——routine 项
  * 可附 .trash 清理指引，其余一律归证据区（fail-safe：运行期绕过类型的
- * 未知 kind 同样不给删除指引）。返回展示文案列表。 */
+ * 未知 kind 同样不给删除指引）。返回展示文案列表与 routine 侧的计数
+ * 总和（issue #359：折叠摘要携带结构化 count，普通条目缺省按 1——
+ * 分区标题按该总和展示待清理项数，不从文案推导）。 */
 export function partitionCleanupPending(
   entries: readonly CleanupPendingEntry[],
 ): {
   routine: string[]
   evidence: string[]
+  routineTotal: number
 } {
   const routine: string[] = []
   const evidence: string[] = []
+  let routineTotal = 0
   for (const entry of entries) {
     if (entry.kind === 'routine') {
       routine.push(entry.message)
+      routineTotal += entry.count ?? 1
     } else {
       evidence.push(entry.message)
     }
   }
-  return { routine, evidence }
+  return { routine, evidence, routineTotal }
 }
 
 /** 返回稳定快照供 React 外部存储订阅；不暴露可变的诊断数组。 */

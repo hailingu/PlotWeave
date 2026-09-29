@@ -33,12 +33,16 @@ pub(crate) enum CleanupKind {
     Evidence,
 }
 
-/// cleanupPending 条目（issue #229）：程序可判定的 kind + 展示文案。
-/// 前端对未知/缺失 kind fail-safe 归证据类（不给删除指引）。
+/// cleanupPending 条目（issue #229）：程序可判定的 kind + 展示文案；
+/// 折叠摘要额外携带可选结构化 `count`（issue #359：该条目代表的累计
+/// 保留数，前端待清理计数取各条目 count 之和、缺省按 1——不经文案推导，
+/// 旧前端忽略该字段仍按单条展示）。
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub(crate) struct CleanupPendingItem {
     pub(crate) kind: CleanupKind,
     pub(crate) message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) count: Option<u64>,
 }
 
 impl CleanupPendingItem {
@@ -46,12 +50,23 @@ impl CleanupPendingItem {
         Self {
             kind: CleanupKind::Routine,
             message: message.into(),
+            count: None,
+        }
+    }
+    /// 折叠摘要条目（issue #359）：kind 仍为 routine（可给清理指引），
+    /// `count` 为该摘要代表的已核验保留项累计数。
+    pub(crate) fn routine_counted(count: u64, message: impl Into<String>) -> Self {
+        Self {
+            kind: CleanupKind::Routine,
+            message: message.into(),
+            count: Some(count),
         }
     }
     pub(crate) fn evidence(message: impl Into<String>) -> Self {
         Self {
             kind: CleanupKind::Evidence,
             message: message.into(),
+            count: None,
         }
     }
 }
@@ -249,12 +264,13 @@ fn finalize_cleanup_summary(
         }
     }
     if *count > 0 {
-        recovery
-            .cleanup_pending
-            .push(CleanupPendingItem::routine(format!(
-            "隔离区累计保留 {} 个已核验清理项（可人工清理 assets/.trash；整体移除后计数自动归零）",
-            *count
-        )));
+        recovery.cleanup_pending.push(CleanupPendingItem::routine_counted(
+            *count,
+            format!(
+                "隔离区累计保留 {} 个已核验清理项（可人工清理 assets/.trash；整体移除后计数自动归零）",
+                *count
+            ),
+        ));
     }
 }
 

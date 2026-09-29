@@ -46,6 +46,29 @@ describe('LibraryWarnings 删除隔离区待清理展示（issue #135）', () =>
     expect(screen.getByText('媒体已隔离待清理：assets/la-1.png')).toBeTruthy()
   })
 
+  it('折叠摘要计数进标题：单条摘要按结构化 count 展示待清理总数（issue #359，评审 5342513010）', async () => {
+    const { diagnostics, LibraryWarnings } = await load()
+    const summary = (count: number) => ({
+      kind: 'routine' as const,
+      message: `隔离区累计保留 ${count} 个已核验清理项（可人工清理 assets/.trash；整体移除后计数自动归零）`,
+      count,
+    })
+    diagnostics.publishCleanupPending([summary(500)], '1')
+    render(<LibraryWarnings />)
+    // 标题按 count 之和展示，不得显示「（1 项）」与详情的 500 矛盾
+    expect(screen.getByText(/删除隔离区待清理（500 项）/)).toBeTruthy()
+    expect(screen.queryByText(/删除隔离区待清理（1 项）/)).toBeNull()
+    // 摘要 + 新删除的普通条目混合：count 之和 + 缺省 1
+    await act(async () => {
+      diagnostics.publishCleanupPending(
+        [summary(500), routine('媒体已隔离待清理：assets/la-new.png')],
+        '2',
+      )
+    })
+    expect(screen.getByText(/删除隔离区待清理（501 项）/)).toBeTruthy()
+    expect(screen.getByText('媒体已隔离待清理：assets/la-new.png')).toBeTruthy()
+  })
+
   it('无警告且无待清理时不渲染任何提示（正常状态不误报）', async () => {
     const { LibraryWarnings } = await load()
     const { container } = render(<LibraryWarnings />)

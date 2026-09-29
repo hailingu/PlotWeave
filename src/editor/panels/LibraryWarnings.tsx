@@ -9,19 +9,23 @@ import {
   subscribeLibraryWarnings,
 } from '../../library/libraryDiagnostics'
 
-/** 常规待清理项的影响与指引；任何证据或会话警告均暂停目录级清理。 */
+/** 常规待清理项的影响与指引；任何证据或会话警告均暂停目录级清理。
+ * 标题计数取折叠摘要携带的结构化 count 之和（issue #359：摘要代表
+ * N 个已核验保留项，普通条目缺省按 1——不从文案推导）。 */
 function CleanupPendingWarnings({
   entries,
+  total,
   blocked,
 }: Readonly<{
   entries: readonly string[]
+  total: number
   blocked: boolean
 }>) {
   if (entries.length === 0) return null
   return (
     <details>
       <summary>
-        <output>删除隔离区待清理（{entries.length} 项）</output>
+        <output>删除隔离区待清理（{total} 项）</output>
       </summary>
       <p>
         磁盘空间尚未释放——当前平台缺少安全清理能力，不会自动删除这些文件；删除完成仅指图库不再引用，不代表空间已回收。
@@ -61,7 +65,7 @@ export function LibraryWarnings() {
   )
   // P1（PR #222 评审）：已提交删除的待释放项与冲突/待核对的证据保留项
   // 分区呈现——证据项绝不附删除指引
-  const { routine, evidence } = partitionCleanupPending(pending)
+  const { routine, evidence, routineTotal } = partitionCleanupPending(pending)
   if (warnings.length === 0 && pending.length === 0) return null
   return (
     <div className="pw-assets-hint">
@@ -77,6 +81,7 @@ export function LibraryWarnings() {
       )}
       <CleanupPendingWarnings
         entries={routine}
+        total={routineTotal}
         blocked={cleanupBlocked || evidence.length > 0}
       />
       {evidence.length > 0 && (

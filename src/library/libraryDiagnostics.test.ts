@@ -111,6 +111,74 @@ describe('libraryDiagnostics：删除隔离区待清理状态（issue #135）', 
       evidence('媒体已隔离待清理：assets/la-9.png'),
     ])
   })
+
+  it('折叠摘要的结构化 count 保留进快照：计数变化即内容变化（issue #359）', async () => {
+    const d = await load()
+    d.publishCleanupPending(
+      [
+        {
+          kind: 'routine',
+          message: '隔离区累计保留 500 个已核验清理项',
+          count: 500,
+        },
+      ],
+      '20',
+    )
+    expect(d.cleanupPendingSnapshot()).toEqual([
+      {
+        kind: 'routine',
+        message: '隔离区累计保留 500 个已核验清理项',
+        count: 500,
+      },
+    ])
+    // 同 message 不同 count → 内容变化，快照更新（关闭重显依赖此判定）
+    d.publishCleanupPending(
+      [
+        {
+          kind: 'routine',
+          message: '隔离区累计保留 500 个已核验清理项',
+          count: 501,
+        },
+      ],
+      '21',
+    )
+    expect(d.cleanupPendingSnapshot()).toEqual([
+      {
+        kind: 'routine',
+        message: '隔离区累计保留 500 个已核验清理项',
+        count: 501,
+      },
+    ])
+  })
+
+  it('count 归一化 fail-safe（issue #359）：非安全整数/小于 1 的脏值按缺省 1 展示', async () => {
+    const d = await load()
+    d.publishCleanupPending(
+      [
+        { kind: 'routine', message: '零', count: 0 },
+        { kind: 'routine', message: '负数', count: -3 },
+        { kind: 'routine', message: '小数', count: 1.5 },
+        { kind: 'routine', message: 'NaN', count: Number.NaN },
+        {
+          kind: 'routine',
+          message: '溢出',
+          count: Number.MAX_SAFE_INTEGER + 1,
+        },
+        { kind: 'routine', message: '字符串', count: '7' },
+        { kind: 'routine', message: '合法', count: 7 },
+      ],
+      '30',
+    )
+    expect(d.cleanupPendingSnapshot()).toEqual([
+      { kind: 'routine', message: '零' },
+      { kind: 'routine', message: '负数' },
+      { kind: 'routine', message: '小数' },
+      { kind: 'routine', message: 'NaN' },
+      { kind: 'routine', message: '溢出' },
+      { kind: 'routine', message: '字符串' },
+      { kind: 'routine', message: '合法', count: 7 },
+    ])
+  })
 })
 
 describe('partitionCleanupPending：按机器码 kind 分类（issue #229）', () => {
@@ -152,5 +220,26 @@ describe('partitionCleanupPending：按机器码 kind 分类（issue #229）', (
     const { routine: r, evidence: e } = d.partitionCleanupPending([dirty])
     expect(r).toEqual([])
     expect(e).toEqual(['whatever'])
+  })
+
+  it('routineTotal 取结构化 count 之和，缺省按 1（issue #359，不从文案推导）', async () => {
+    const d = await load()
+    const {
+      routine: r,
+      evidence: e,
+      routineTotal,
+    } = d.partitionCleanupPending([
+      {
+        kind: 'routine',
+        message:
+          '隔离区累计保留 500 个已核验清理项（可人工清理 assets/.trash）',
+        count: 500,
+      },
+      routine('媒体已隔离待清理：assets/la-new.png'),
+      evidence('隔离项保留（身份不符或被占用）：la-4 / .trash/t-y'),
+    ])
+    expect(routineTotal).toBe(501)
+    expect(r).toHaveLength(2)
+    expect(e).toHaveLength(1)
   })
 })
