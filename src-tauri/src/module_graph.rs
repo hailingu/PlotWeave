@@ -28,7 +28,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+mod cycles;
 mod lexer;
+use cycles::cycles_of;
 use lexer::{strip_comments_and_literals, tokenize};
 
 /// 图节点键 = 相对 src 根的 posix 路径（失败信息可读，与前端守卫口径一致）。
@@ -50,18 +52,21 @@ struct ModDecl {
     file_backed: bool,
 }
 
-/// 解析自 tokens[i] == "#" 起的属性（含 `#!` 形态），返回消费后下标与
+/// 解析自 tokens[i] == "#" 起的属性（`#!` 为内属性，另行返回标志），返回
+/// 消费后下标、是否 cfg(test) 门控与是否内属性。门控语义：cfg(…) 组
 /// 是否 cfg(test) 门控：cfg(…) 组**蕴含** test 才门控（裸 `test` 或
 /// `all(test, …)`；`any(test, feature)` 不蕴含，按并集保守计入。评审
 /// 5347759049：此前只认深度 1 裸 test，`all(test, unix)` 被漏判）。组内
 /// 字符串已在清洗层抹除，不产生假 token。
-fn parse_attr(tokens: &[&str], i: usize) -> (usize, bool) {
+fn parse_attr(tokens: &[&str], i: usize) -> (usize, bool, bool) {
     let mut j = i + 1;
+    let mut is_inner = false;
     if tokens.get(j) == Some(&"!") {
+        is_inner = true;
         j += 1;
     }
     if tokens.get(j) != Some(&"[") {
-        return (j, false);
+        return (j, false, is_inner);
     }
     j += 1;
     let mut depth = 1usize;
@@ -81,7 +86,7 @@ fn parse_attr(tokens: &[&str], i: usize) -> (usize, bool) {
         }
         j += 1;
     }
-    (j, is_test)
+    (j, is_test, is_inner)
 }
 
 /// 自开括号下标起找配对闭括号（含嵌套）；未闭合返回 None。
@@ -170,6 +175,52 @@ fn skip_braced(tokens: &[&str], open: usize) -> usize {
     k
 }
 
+/// 深度回落到栈顶 entry 时弹出该 inline 模块（scan_tokens 的 } 臂）。
+fn pop_inline(inline: &mut Vec<(String, usize)>, depth: usize) {
+    if inline.last().is_some_and(|(_, d)| *d == depth) {
+        inline.pop();
+    }
+}
+
+/// 蕴含 test 的内属性（`#![cfg(test)]`）处置：作用于整个外层模块——
+/// inline 模块体内 → Some(跳至该模块闭合的下标)；文件级 → None（整文件
+/// 视为测试代码）；块内（fn 体等罕见形态）→ Some(原下标) 退化为挂起。
+fn inner_test_gate(
+    tokens: &[&str],
+    next: usize,
+    depth: usize,
+    inline: &[(String, usize)],
+) -> Option<usize> {
+    if let Some(entry) = inline.last().map(|(_, d)| *d) {
+        return Some(skip_to_module_close(tokens, next, depth, entry));
+    }
+    if depth == 0 {
+        None
+    } else {
+        Some(next)
+    }
+}
+
+/// 跳到「进入深度为 entry 的 inline 模块」的闭合 "}" 之前（不消费该括号，
+/// 交回主循环弹栈）：以 k 为起点、depth 为当前全局深度做局部平衡扫描。
+fn skip_to_module_close(tokens: &[&str], mut k: usize, depth: usize, entry: usize) -> usize {
+    let mut delta = 0usize;
+    while k < tokens.len() {
+        match tokens[k] {
+            "{" => delta += 1,
+            "}" => {
+                if depth + delta == entry {
+                    return k;
+                }
+                delta = delta.saturating_sub(1);
+            }
+            _ => {}
+        }
+        k += 1;
+    }
+    k
+}
+
 /// 带属性项的开头判定（消费挂起 cfg(test) 并整条跳过）。
 fn item_keyword(tok: &str) -> bool {
     // pub/unsafe/async 是修饰符而非项首——不消费，等真项关键字到来
@@ -216,7 +267,23 @@ fn scan_tokens(tokens: &[&str]) -> FileScan {
     while i < tokens.len() {
         match tokens[i] {
             "#" => {
-                let (next, is_test) = parse_attr(tokens, i);
+                let (next, is_test, is_inner) = parse_attr(tokens, i);
+                // 内属性作用于整个外层模块（评审 5350627153）：只挂起会给
+                // 首项消费后泄漏，其余测试声明误入生产图（假环方向）。
+                // 文件级（无 inline 栈且不在块内）→ 整文件视为测试代码；
+                // inline 模块体内 → 跳至该模块闭合
+                if is_inner && is_test {
+                    match inner_test_gate(tokens, next, depth, &inline) {
+                        Some(resumed) => i = resumed,
+                        None => {
+                            return FileScan {
+                                mods: Vec::new(),
+                                uses: Vec::new(),
+                            }
+                        }
+                    }
+                    continue;
+                }
                 cfg_test |= is_test;
                 i = next;
             }
@@ -225,9 +292,7 @@ fn scan_tokens(tokens: &[&str]) -> FileScan {
                 i += 1;
             }
             "}" => {
-                if inline.last().is_some_and(|(_, d)| *d == depth) {
-                    inline.pop();
-                }
+                pop_inline(&mut inline, depth);
                 depth = depth.saturating_sub(1);
                 i += 1;
             }
@@ -425,6 +490,13 @@ fn parse_use_group(
 fn use_tree_paths(tokens: &[String]) -> Vec<Vec<String>> {
     let mut paths = Vec::new();
     let mut i = 0;
+    // 根级花括号（`use {crate::a::A, crate::b::B};`）同样是合法 use 树
+    //（评审 5350627153）：入口先判组再要求路径段
+    if tokens.first().map(String::as_str) == Some("{") {
+        i = 1;
+        parse_use_group(&[], tokens, &mut i, &mut paths);
+        return paths;
+    }
     parse_use_tree(&[], tokens, &mut i, &mut paths);
     paths
 }
@@ -641,132 +713,6 @@ fn use_targets_of(
         }
     }
     targets
-}
-
-/// Tarjan 状态机（strong_components 的载体，模块级定义——嵌套函数的
-/// 复杂度会计入外层）。
-struct Tarjan<'a> {
-    edges: &'a BTreeMap<ModuleKey, BTreeSet<ModuleKey>>,
-    index: BTreeMap<ModuleKey, usize>,
-    low: BTreeMap<ModuleKey, usize>,
-    on_stack: BTreeSet<ModuleKey>,
-    stack: Vec<ModuleKey>,
-    sccs: Vec<Vec<ModuleKey>>,
-    counter: usize,
-}
-
-impl Tarjan<'_> {
-    /// 标准 Tarjan 递归体：入栈 v、下钻未访问邻居、回填 low，根节点弹栈。
-    fn strongconnect(&mut self, v: &ModuleKey) {
-        self.index.insert(v.clone(), self.counter);
-        self.low.insert(v.clone(), self.counter);
-        self.counter += 1;
-        self.stack.push(v.clone());
-        self.on_stack.insert(v.clone());
-        let neighbors: Vec<ModuleKey> = self.edges[v].iter().cloned().collect();
-        for w in neighbors {
-            if !self.index.contains_key(&w) {
-                self.strongconnect(&w);
-                let lifted = self.low[&w].min(self.low[v]);
-                self.low.insert(v.clone(), lifted);
-            } else if self.on_stack.contains(&w) {
-                let lifted = self.index[&w].min(self.low[v]);
-                self.low.insert(v.clone(), lifted);
-            }
-        }
-        if self.low[v] == self.index[v] {
-            let mut scc: Vec<ModuleKey> = Vec::new();
-            while let Some(top) = self.stack.pop() {
-                self.on_stack.remove(&top);
-                scc.push(top.clone());
-                if &top == v {
-                    break;
-                }
-            }
-            if scc.len() > 1 {
-                self.sccs.push(scc);
-            }
-        }
-    }
-}
-
-/// Tarjan 强连通分量（递归；图仅数十节点无栈风险）：仅产出非平凡 SCC。
-fn strong_components(edges: &BTreeMap<ModuleKey, BTreeSet<ModuleKey>>) -> Vec<Vec<ModuleKey>> {
-    let mut tarjan = Tarjan {
-        edges,
-        index: BTreeMap::new(),
-        low: BTreeMap::new(),
-        on_stack: BTreeSet::new(),
-        stack: Vec::new(),
-        sccs: Vec::new(),
-        counter: 0,
-    };
-    let roots: Vec<ModuleKey> = edges.keys().cloned().collect();
-    for root in roots {
-        if !tarjan.index.contains_key(&root) {
-            tarjan.strongconnect(&root);
-        }
-    }
-    tarjan.sccs
-}
-
-/// 全图中的环：每个非平凡 SCC 给一条可读环路径（成员内 DFS 找回路）。
-fn cycles_of(edges: &BTreeMap<ModuleKey, BTreeSet<ModuleKey>>) -> Vec<String> {
-    let mut cycles = Vec::new();
-    for scc in strong_components(edges) {
-        let members: BTreeSet<ModuleKey> = scc.iter().cloned().collect();
-        let start = scc[0].clone();
-        cycles.push(cycle_path(&start, &members, edges).join(" → "));
-    }
-    cycles.sort();
-    cycles
-}
-
-/// 在 SCC 成员内部自 start 找一条回到起点的具体路径。
-fn cycle_path(
-    start: &ModuleKey,
-    members: &BTreeSet<ModuleKey>,
-    edges: &BTreeMap<ModuleKey, BTreeSet<ModuleKey>>,
-) -> Vec<ModuleKey> {
-    let mut path = vec![start.clone()];
-    let mut visited: BTreeSet<ModuleKey> = BTreeSet::from([start.clone()]);
-    match dfs_cycle(start, start, members, edges, &mut path, &mut visited) {
-        Some(closed) => closed,
-        None => members.iter().cloned().collect(),
-    }
-}
-
-/// cycle_path 的递归体：沿成员内边推进，回到 start 即闭合成环。
-fn dfs_cycle(
-    start: &ModuleKey,
-    node: &ModuleKey,
-    members: &BTreeSet<ModuleKey>,
-    edges: &BTreeMap<ModuleKey, BTreeSet<ModuleKey>>,
-    path: &mut Vec<ModuleKey>,
-    visited: &mut BTreeSet<ModuleKey>,
-) -> Option<Vec<ModuleKey>> {
-    let neighbors: Vec<ModuleKey> = edges[node].iter().cloned().collect();
-    for next in neighbors {
-        if !members.contains(&next) {
-            continue;
-        }
-        if &next == start {
-            let mut closed = path.clone();
-            closed.push(start.clone());
-            return Some(closed);
-        }
-        if visited.contains(&next) {
-            continue;
-        }
-        visited.insert(next.clone());
-        path.push(next.clone());
-        let found = dfs_cycle(start, &next, members, edges, path, visited);
-        if found.is_some() {
-            return found;
-        }
-        path.pop();
-    }
-    None
 }
 
 /// 递归读取 dir 下全部 .rs 文件（键 = 相对 posix 路径）。main.rs 与测试

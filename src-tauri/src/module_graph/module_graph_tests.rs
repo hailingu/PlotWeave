@@ -405,6 +405,73 @@ fn mixed_inline_and_file_backed_platform_variants_coexist() {
 }
 
 #[test]
+fn inner_cfg_test_attribute_gates_the_whole_file() {
+    // 评审 5350627153：#![cfg(test)] 是内属性，作用于整个外层模块——
+    // 只挂起给首项会泄漏，同文件其余测试声明误入生产图（假环方向）
+    let graph = edges(&[
+        ("lib.rs", "mod a;\nmod b;\n"),
+        (
+            "a.rs",
+            "#![cfg(test)]\nuse crate::b::B;\nfn helper() {}\nuse crate::b::C;\n",
+        ),
+        ("b.rs", "pub struct B;\npub struct C;\n"),
+    ]);
+    assert!(
+        graph["a.rs"].is_empty(),
+        "内属性门控的文件内容整体不入生产图：{:?}",
+        graph["a.rs"]
+    );
+}
+
+#[test]
+fn inner_cfg_test_attribute_in_inline_module_gates_its_body() {
+    // 评审 5350627153 的 inline 形态：mod 体首的内属性门控该模块体，
+    // 其后的生产声明照常入图
+    let graph = edges(&[
+        ("lib.rs", "mod a;\nmod b;\nmod c;\n"),
+        (
+            "a.rs",
+            concat!(
+                "mod gated {\n",
+                "    #![cfg(test)]\n",
+                "    use crate::c::C;\n",
+                "}\n",
+                "use crate::b::B;\n",
+            ),
+        ),
+        ("b.rs", "pub struct B;\n"),
+        ("c.rs", "pub struct C;\n"),
+    ]);
+    assert!(
+        graph["a.rs"].contains("b.rs"),
+        "门控 inline 模块之后的生产 use 照常入图：{:?}",
+        graph["a.rs"]
+    );
+    assert!(
+        !graph["a.rs"].contains("c.rs"),
+        "内属性门控的 inline 模块体内的 use 不得入图：{:?}",
+        graph["a.rs"]
+    );
+}
+
+#[test]
+fn brace_rooted_use_trees_expand() {
+    // 评审 5350627153：`use {crate::a::A, crate::b::B};` 是合法 use 树，
+    // 根级花括号须展开而非对首 token fail-closed panic
+    let graph = edges(&[
+        ("lib.rs", "mod a;\nmod b;\nmod c;\n"),
+        ("a.rs", "use {crate::b::B, crate::c::C};\n"),
+        ("b.rs", "pub struct B;\n"),
+        ("c.rs", "pub struct C;\n"),
+    ]);
+    assert!(
+        graph["a.rs"].contains("b.rs") && graph["a.rs"].contains("c.rs"),
+        "根级分组应展开为两条边：{:?}",
+        graph["a.rs"]
+    );
+}
+
+#[test]
 #[should_panic(expected = "找不到对应文件")]
 fn missing_mod_file_fails_closed() {
     cycles(&[("lib.rs", "mod ghost;\n")]);
