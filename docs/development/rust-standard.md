@@ -130,7 +130,9 @@ from unmeasured files. Metric and scope:
   (`src/module_graph.rs`, `#[cfg(test)]`-gated, issue #399): it text-scans the
   `mod` declarations and `use` paths (`crate::`/`super::`/`self::` prefixes,
   brace groups expanded) of every production module reachable from `lib.rs`
-  through non-`#[cfg(test)]` declarations, and asserts the resulting
+  through non-`#[cfg(test)]` declarations (a cfg group gates as test-only
+  when it *implies* `test` — bare `test` or `all(test, …)`; `any(test,
+  feature = …)` stays in as production-capable), and asserts the resulting
   dependency graph is acyclic. `NAME.rs` and `NAME/mod.rs` forms are both
   supported; test-only files (`tests.rs`, `*_tests.rs`, `testutil.rs`, `conf`,
   `testhttp`) and the binary entry `main.rs` stay out of the graph by

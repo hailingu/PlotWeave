@@ -75,11 +75,21 @@ fn legal_layering_super_edges_and_brace_groups_pass() {
             concat!(
                 "pub(crate) mod diagnostics;\npub(crate) mod error;\npub(crate) mod group_commands;\n",
                 "#[cfg(test)]\nmod helper;\n",
+                "#[cfg(all(test, unix))]\nmod unix_only_tests;\n",
+                "#[cfg(any(test, feature = \"diag\"))]\nmod diag_extras;\n",
                 "#[cfg(test)]\nmod tests {\n    use super::*;\n    use crate::store::persist::P;\n}\n",
                 "use crate::library_fs::{read_index_capped, self};\n",
             ),
         ),
         ("library/helper.rs", "use crate::store::persist::P;\n"),
+        (
+            "library/unix_only_tests.rs",
+            "use crate::store::persist::P;\n",
+        ),
+        (
+            "library/diag_extras.rs",
+            "use crate::isotime::now_iso;\n",
+        ),
         (
             "library/group_commands.rs",
             "use super::diagnostics::with_snapshot;\nuse crate::library_fs::write_index as wi;\n",
@@ -118,6 +128,17 @@ fn legal_layering_super_edges_and_brace_groups_pass() {
         !graph.contains_key("library/helper.rs"),
         "cfg(test) 文件 mod 不入图"
     );
+    // 评审 5347759049：all(test, unix) 蕴含 test → 不入图；any(test,
+    // feature) 不蕴含（feature 成立时仍生产）→ 保守计入并保留其边
+    assert!(
+        !graph.contains_key("library/unix_only_tests.rs"),
+        "cfg(all(test, unix)) 蕴含 test，不得入图"
+    );
+    assert!(
+        graph["library/diag_extras.rs"].contains("isotime.rs"),
+        "cfg(any(test, feature)) 按平台并集保守计入：{:?}",
+        graph["library/diag_extras.rs"]
+    );
     assert!(
         !graph["library.rs"].contains("store/persist.rs"),
         "cfg(test) inline 块内的 use 不计边"
@@ -129,6 +150,36 @@ fn legal_layering_super_edges_and_brace_groups_pass() {
     assert!(
         graph["store/persist.rs"].is_empty(),
         "macro_rules 体整块跳过（登记盲区），re-export 宏是裸路径不计边"
+    );
+}
+
+#[test]
+fn raw_identifiers_do_not_swallow_following_uses() {
+    // 评审 5347759049：r#type 是裸标识符而非 raw string 起点，此前被
+    // 误判后整段抹到文件尾，后续 mod/use 静默失采（漏环比误报危险）；
+    // 真 raw string 内容中的 mod/use 文本仍须被抹除、不产生假边
+    let graph = edges(&[
+        ("lib.rs", "mod a;\nmod b;\n"),
+        (
+            "a.rs",
+            concat!(
+                "fn f() { let r#type = 1; }\n",
+                "use crate::b::B;\n",
+                "let s = r#\"mod ghost; use crate::ghost::G;\"#;\n",
+            ),
+        ),
+        ("b.rs", "pub struct B;\n"),
+    ]);
+    assert!(
+        graph["a.rs"].contains("b.rs"),
+        "裸标识符后的 use 必须仍被采集：{:?}",
+        graph["a.rs"]
+    );
+    assert_eq!(
+        graph["a.rs"].len(),
+        1,
+        "raw string 内容中的 mod/use 文本不得产生边：{:?}",
+        graph["a.rs"]
     );
 }
 
@@ -165,7 +216,14 @@ fn real_repository_module_graph_is_acyclic() {
         "group_commands → diagnostics 的 super:: 边缺失（扫描器漏采？）"
     );
     // 测试设施与二进制入口不入图
-    for excluded in ["main.rs", "conf.rs", "testhttp.rs", "library/tests.rs"] {
+    for excluded in [
+        "main.rs",
+        "conf.rs",
+        "testhttp.rs",
+        "library/tests.rs",
+        // 评审 5347759049 的活触发点：cfg(all(test, unix)) 蕴含 test
+        "prefs/read_boundary_tests.rs",
+    ] {
         assert!(!graph.contains_key(excluded), "{excluded} 不应在生产图中");
     }
     let found = cycles_of(&graph);

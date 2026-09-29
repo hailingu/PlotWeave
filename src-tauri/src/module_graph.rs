@@ -44,8 +44,11 @@ struct FileScan {
 }
 
 /// 解析自 tokens[i] == "#" 起的属性（含 `#!` 形态），返回消费后下标与
-/// 是否 cfg(test) 门控：cfg(…) 组内出现裸 `test` token 即视为门控
-/// （组内字符串已在清洗层抹除，不产生假 token）。
+/// 是否 cfg(test) 门控：cfg(…) 组**蕴含** test 才门控（裸 `test` 或
+/// `all(test, …)` 等；`any(test, feature)` 不蕴含——其余条件成立时仍进入
+/// 生产构建，按平台并集口径保守计入。评审 5347759049：此前只认深度 1
+/// 的裸 test，`all(test, unix)` 被漏判、prefs/read_boundary_tests 误入图）。
+/// 组内字符串已在清洗层抹除，不产生假 token。
 fn parse_attr(tokens: &[&str], i: usize) -> (usize, bool) {
     let mut j = i + 1;
     if tokens.get(j) == Some(&"!") {
@@ -61,12 +64,12 @@ fn parse_attr(tokens: &[&str], i: usize) -> (usize, bool) {
         match tokens[j] {
             "[" | "(" => depth += 1,
             "]" | ")" => depth -= 1,
-            "cfg"
-                if depth == 1
-                    && tokens.get(j + 1) == Some(&"(")
-                    && cfg_group_has_test(tokens, j + 2) =>
-            {
-                is_test = true;
+            "cfg" if depth == 1 && tokens.get(j + 1) == Some(&"(") => {
+                if let Some(close) = find_group_close(tokens, j + 2) {
+                    if cfg_implies_test(&tokens[j + 2..close]) {
+                        is_test = true;
+                    }
+                }
             }
             _ => {}
         }
@@ -75,19 +78,73 @@ fn parse_attr(tokens: &[&str], i: usize) -> (usize, bool) {
     (j, is_test)
 }
 
-/// 自 cfg 组左括号后的下标起，判定组内（含嵌套）是否出现裸 `test` token。
-fn cfg_group_has_test(tokens: &[&str], mut k: usize) -> bool {
-    let mut inner = 1usize;
-    while k < tokens.len() && inner > 0 {
+/// 自开括号下标起找配对闭括号（含嵌套）；未闭合返回 None。
+fn find_group_close(tokens: &[&str], open: usize) -> Option<usize> {
+    let mut depth = 1usize;
+    let mut k = open;
+    while k < tokens.len() {
         match tokens[k] {
-            "(" => inner += 1,
-            ")" => inner -= 1,
-            "test" if inner == 1 => return true,
+            "(" => depth += 1,
+            ")" => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(k);
+                }
+            }
             _ => {}
         }
         k += 1;
     }
-    false
+    None
+}
+
+/// cfg(…) 组是否蕴含 test（即绝不出现在生产构建）：裸 `test`；`all(…)`
+/// 的某个合取项蕴含；`any(…)` 的全部析取项都蕴含。其他谓词（feature、
+/// target_os、not(test) 等）不蕴含——判不蕴含时保守计入生产图，宁可
+/// 多检（可能误报环）也不漏检（漏环比误报危险）。
+fn cfg_implies_test(tokens: &[&str]) -> bool {
+    if tokens == ["test"] {
+        return true;
+    }
+    let is_all = tokens.first() == Some(&"all");
+    let is_any = tokens.first() == Some(&"any");
+    if !(is_all || is_any) || tokens.get(1) != Some(&"(") {
+        return false;
+    }
+    let Some(close) = find_group_close(tokens, 2) else {
+        return false;
+    };
+    let parts = split_top_level_commas(&tokens[2..close]);
+    if parts.is_empty() {
+        return false;
+    }
+    let implied: Vec<bool> = parts.iter().map(|p| cfg_implies_test(p)).collect();
+    if is_all {
+        implied.iter().any(|b| *b)
+    } else {
+        implied.iter().all(|b| *b)
+    }
+}
+
+/// 顶层（括号深度 0）逗号切分；尾逗号产生的空段被忽略。
+fn split_top_level_commas<'a>(tokens: &'a [&'a str]) -> Vec<&'a [&'a str]> {
+    let mut parts = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0usize;
+    for (k, tok) in tokens.iter().enumerate() {
+        match *tok {
+            "(" | "[" => depth += 1,
+            ")" | "]" => depth = depth.saturating_sub(1),
+            "," if depth == 0 => {
+                parts.push(&tokens[start..k]);
+                start = k + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&tokens[start..]);
+    parts.retain(|p| !p.is_empty());
+    parts
 }
 
 /// 自 tokens[open] == "{" 起跳过整块（含嵌套），返回闭合 "}" 之后的下标。

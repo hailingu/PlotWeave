@@ -124,13 +124,23 @@ fn hash_run_len(b: &[u8], from: usize) -> usize {
     n
 }
 
-/// `r"`/`r#"`/`br"` 起点判定（`b` 前缀仅在紧随 `r` 时成立）。
+/// `r"`/`r#"`/`br#"` 起点判定：`r` 后须为 `#`* 再跟**开引号**才构成 raw
+/// string——只认 `r#` 前缀会把裸标识符 `r#type` 误判为 raw string 并把
+/// 其后整段抹到文件尾、令后续 mod/use 静默失采（评审 5347759049）。
+/// `b` 前缀仅在紧随 `r` 时成立。
 fn is_raw_string_start(b: &[u8], i: usize) -> bool {
-    if b[i] == b'r' {
-        matches!(b.get(i + 1), Some(b'"') | Some(b'#'))
+    let start = if b[i] == b'r' {
+        i
+    } else if b.get(i + 1) == Some(&b'r') {
+        i + 1
     } else {
-        b.get(i + 1) == Some(&b'r') && matches!(b.get(i + 2), Some(b'"') | Some(b'#'))
+        return false;
+    };
+    let mut j = start + 1;
+    while j < b.len() && b[j] == b'#' {
+        j += 1;
     }
+    b.get(j) == Some(&b'"')
 }
 
 /// 字符字面量（`'x'`、`'\n'`、`'\''`）抹除；生命周期不闭合，仅前进一字节。
