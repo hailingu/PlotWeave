@@ -19,7 +19,7 @@ import {
   stripExecutionRuntime,
   type AiSession,
   type ThreadEntry,
-} from '../ai/session'
+} from '../../ai/session'
 import type { AiCommitIdentity } from '../ai/commitIdentity'
 
 import { useAiSessionPersistence } from '../ai/useAiSessionPersistence'

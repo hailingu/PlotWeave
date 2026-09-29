@@ -124,6 +124,37 @@ from unmeasured files. Metric and scope:
   sources when adding context and avoid a single unstructured error variant for
   unrelated failure classes.
 
+## Module Boundary Guards
+
+- `cargo test` enforces the file-granularity module-graph acyclicity guard
+  (`src/module_graph.rs`, `#[cfg(test)]`-gated, issue #399): it text-scans the
+  `mod` declarations and `use` paths (`crate::`/`super::`/`self::` prefixes,
+  brace groups expanded) of every production module reachable from `lib.rs`
+  through non-`#[cfg(test)]` declarations (a cfg group gates as test-only
+  when it *implies* `test` — bare `test` or `all(test, …)`; `any(test,
+  feature = …)` stays in as production-capable), and asserts the resulting
+  dependency graph is acyclic. `NAME.rs` and `NAME/mod.rs` forms are both
+  supported; test-only files (`tests.rs`, `*_tests.rs`, `testutil.rs`, `conf`,
+  `testhttp`) and the binary entry `main.rs` stay out of the graph by
+  reachability; platform-gated modules count as a union over targets. The
+  guard fails closed — a `mod` declaration without a matching file, a
+  `super::` past the crate root, or a malformed `use` tree fails the test —
+  and carries counterexample fixtures (an issue #146-shaped mutual dependency
+  must be reported) so it proves its own detection. One registered blind
+  spot: `macro_rules!` bodies are skipped wholesale, so a `use` that exists
+  only inside a macro definition is not collected.
+- This is the Rust counterpart of the frontend guard
+  (`src/moduleGraph.test.ts`, issue #106); together they form the
+  cross-language acyclic invariant, and `media_format_leaf.rs` (issue #146)
+  additionally pins the media-format leaf boundary. Cyclic `use` edges between
+  modules are a defect: resolve them by ownership clarification, contract
+  extraction, or moving shared policy to a leaf owner — the issue #399 guard's
+  first finding (the `library_journal` strongly-connected cluster) was
+  resolved exactly that way: `fsync_dir` moved to the `library_journal/fsync.rs`
+  leaf, `journal_entry_value` moved to its shape owner `journal_io`, and
+  sibling modules import each other directly instead of through the parent's
+  re-export hub.
+
 ## Before Writing Code
 
 Read this file, then inspect the target crate for existing state/config

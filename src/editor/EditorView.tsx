@@ -17,7 +17,7 @@ import { useEditorController } from './useEditorController'
 import type { EditorProjectContent } from './useEditorDocument'
 import type { ProjectContent } from '../model/content'
 import type { AiCommitIdentity } from './ai/commitIdentity'
-import type { AiSession } from './ai/session'
+import type { AiSession } from '../ai/session'
 
 interface EditorViewProps {
   /** 打开的项目：id 用于持久化，doc 为已加载的会话文档（含名称/画布/设定集/集标题/视口）。 */

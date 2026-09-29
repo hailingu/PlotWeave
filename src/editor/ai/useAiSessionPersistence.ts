@@ -6,8 +6,8 @@
  * 失败上浮为面板可见错误（不清空内存历史）。
  */
 import { useEffect, useRef, useState } from 'react'
-import type { AiSession, ThreadEntry } from './session'
-import { persistedEntries } from './session'
+import type { AiSession, ThreadEntry } from '../../ai/session'
+import { persistedEntries } from '../../ai/session'
 
 /** 面板会话的「编辑即保存」状态族：条目变更即落盘；保存失败上浮为可见
  * 错误且不清空内存历史。带错误挂载时按 initialSessionRetryable 决定是否

@@ -11,7 +11,7 @@ import { resolveCharacterName, resolveLocationName } from '../settings'
 import { AiThread, AiSettingsButton } from './AiThread'
 import type { AiCommitIdentity } from '../ai/commitIdentity'
 import type { CanvasNode } from '../nodes/types'
-import type { AiSession } from '../ai/session'
+import type { AiSession } from '../../ai/session'
 
 /** 右栏分段（docs/ui-design.md §3.4）：检查器 = 选中节点的字段视图；✦AI = 对话面板。 */
 export type RightTab = 'inspector' | 'ai'

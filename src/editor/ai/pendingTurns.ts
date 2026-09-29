@@ -10,7 +10,7 @@
  * 迟到响应不写入其他项目。busy 门闸保证每项目至多一轮在途，注册表
  * 槽位为单盒子。
  */
-import type { ThreadEntry } from './session'
+import type { ThreadEntry } from '../../ai/session'
 
 /** 一轮模型回合的落定结果：成功条目或失败原因，二选一。 */
 export interface TurnResult {

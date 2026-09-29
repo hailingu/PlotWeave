@@ -10,8 +10,7 @@ use crate::library::error::LibraryError;
 use crate::library_fs::INDEX_MAX_BYTES;
 use crate::store::{atomic_write, is_valid_asset_rel_path};
 
-use super::transaction::journal_entry_value;
-use super::trash::fsync_dir;
+use super::fsync::fsync_dir;
 
 pub(crate) const JOURNAL_FILE_NAME: &str = "asset-delete-journal.json";
 
@@ -144,6 +143,23 @@ pub(super) fn read_journal(
             (Vec::new(), true)
         }
     }
+}
+
+/// 单条事务 → journal JSON 形状（write_journal 与 transaction 的上限投影
+/// 共用；issue #399 自 transaction 收编——日志条目的序列化形状归日志
+/// 解析与读写所有者，避免 journal_io 反向依赖事务主体成环）。
+pub(super) fn journal_entry_value(e: &JournalEntry) -> Value {
+    let mut value = json!({
+        "id": e.id,
+        "assetId": e.asset_id,
+        "relPath": e.rel_path,
+        "identity": { "dev": e.dev, "ino": e.ino },
+        "trashName": e.trash_name,
+    });
+    if e.index_uncertain {
+        value["indexUncertain"] = json!(true);
+    }
+    value
 }
 
 /// 日志原子落盘（library/ 句柄相对）并 fsync 所在目录。

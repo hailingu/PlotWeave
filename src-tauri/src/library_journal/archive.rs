@@ -18,7 +18,7 @@ use serde_json::json;
 use crate::library::error::LibraryError;
 use crate::store::atomic_write;
 
-use super::trash::fsync_dir;
+use super::fsync::fsync_dir;
 
 /// 折叠计数旁路归档文件名（library/ 句柄相对）。
 pub(crate) const ARCHIVE_FILE_NAME: &str = "asset-delete-archive.json";

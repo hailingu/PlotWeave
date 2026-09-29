@@ -34,7 +34,7 @@ import {
   onAiSessionSaveFailed,
   saveAiSession,
 } from './aiSessionStore'
-import type { AiSession } from './editor/ai/session'
+import type { AiSession } from './ai/session'
 
 export type { ProjectContent }
 

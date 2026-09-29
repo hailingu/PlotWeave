@@ -11,7 +11,7 @@ import { useAiTurn, type UseAiTurnOpts } from './aiThreadTurn'
 import { runModelTurn } from './aiThreadModel'
 import { takeTurn } from '../ai/pendingTurns'
 import { TurnCancelledError } from '../ai/agentLoop'
-import type { ThreadEntry } from '../ai/session'
+import type { ThreadEntry } from '../../ai/session'
 import type { ProviderConfig } from '../../settings/types'
 
 vi.mock('./aiThreadModel', async (importOriginal) => {

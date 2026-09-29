@@ -3,11 +3,7 @@
  * 落盘边界施加条数容量（issue #64）：调用方与进程内快照持全量落盘形态
  * （设置页重挂载种子、保存失败保留、退出冲刷重试），写入主文件或浏览器
  * 内存回退等价物时才裁剪到容量内。 */
-import {
-  diskSessionOf,
-  normalizeAiSession,
-  type AiSession,
-} from './editor/ai/session'
+import { diskSessionOf, normalizeAiSession, type AiSession } from './ai/session'
 import { IPC_COMMANDS } from './ipc/commands'
 import { ipcInvoke } from './ipc/invoke'
 import {

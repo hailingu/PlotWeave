@@ -14,7 +14,7 @@ import type { EditorGraphActions } from './useEditorGraphActions'
 import type { EditorPanels } from './useEditorPanels'
 import type { EditorPersistence } from './useEditorPersistence'
 import type { AiCommitIdentity } from './ai/commitIdentity'
-import type { AiSession } from './ai/session'
+import type { AiSession } from '../ai/session'
 
 /** 命令栈 hook 的返回值（撤销/重做可用态与入口）。 */
 export type CommandHistory = ReturnType<typeof useCommandHistory>

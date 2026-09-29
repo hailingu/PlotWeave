@@ -1,9 +1,11 @@
 //! PR #222 诊断顺序回归：真实库锁、文件锁与临时图库；不触碰用户目录。
 
+use super::revision::reserve_revision;
 use super::*;
 use crate::library::{group_commands, list_assets_with, put_asset_with, update_meta_with};
 use cap_std::ambient_authority;
 use serde_json::json;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::{fs, path::PathBuf, sync::mpsc, thread};
 
 #[path = "diagnostics/command_failure_tests.rs"]

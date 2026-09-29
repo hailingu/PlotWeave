@@ -1,6 +1,17 @@
-import type { BatchValidation } from './commands'
+import type { BatchValidation } from '../editor/ai/commands'
 
-/** 项目级 AI 会话的独立落盘格式；不进入画布 ProjectDocument。 */
+/**
+ * 项目级 AI 会话的独立落盘格式；不进入画布 ProjectDocument。
+ *
+ * 归属地（issue #399 缺口二处置）：会话 schema 是外壳 store
+ * （aiSessionStore）与编辑器面板两侧共用的落盘契约，提取为本叶子模块，
+ * 不再放在 UI 目录下由外壳以运行期值引用——外壳→功能方向的运行期依赖
+ * 由 moduleGraph 的方向守卫禁止。登记边界：卡片载荷的批次校验契约
+ * （BatchValidation）所有者仍是 editor/ai/commands.ts（issue #39 划定的
+ * 命令契约层），本模块对其仅持**类型级**引用（编译期擦除，无运行期
+ * 耦合、无打包环风险）；编辑器侧消费面（useAiSessionPersistence 等）
+ * 直接从本模块导入。
+ */
 export interface AiSession {
   schemaVersion: 1
   entries: ThreadEntry[]

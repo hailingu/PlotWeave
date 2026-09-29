@@ -10,10 +10,14 @@
 //!
 //! 域拆分（issue #39）：op_lock（操作互斥锁）、journal_io（日志解析与
 //! 读写）、trash（隔离区与身份原语）、recover（恢复分支）、transaction
-//! （删除事务步骤）、archive（已完成清理项的折叠计数归档，issue #359）。
-//! 对外契约保持 `crate::library_journal::{…}` 不变。
+//! （删除事务步骤）、archive（已完成清理项的折叠计数归档，issue #359）、
+//! fsync（目录持久性屏障叶子，issue #399 解环拆出）。对外契约保持
+//! `crate::library_journal::{…}` 不变；子模块间依赖单向（transaction →
+//! recover → trash → journal_io → fsync，模块图无环守卫见
+//! src/module_graph.rs），兄弟模块直接互引、不经父级转口。
 
 mod archive;
+mod fsync;
 mod journal_io;
 mod op_lock;
 mod recover;
@@ -26,14 +30,6 @@ pub(crate) use journal_io::JOURNAL_FILE_NAME;
 pub(crate) use archive::ARCHIVE_FILE_NAME;
 pub(crate) use op_lock::{library_file_lock, library_op_lock};
 pub(crate) use recover::{recover, CleanupPendingItem, Recovery};
-
-// 供兄弟子模块（transaction）与测试经既有 `use super::{…}` 路径消费；
-// 私有 use 仅对 library_journal 域内可见，不放大对外契约。
-use journal_io::{read_journal, write_journal, JournalEntry};
-use trash::{
-    ensure_trash_dir, fsync_dir, identity_bound_unlink, verify_trash_identity, TrashVerdict,
-    TRASH_DIR,
-};
 
 mod transaction;
 pub(crate) use transaction::{delete_asset_transacted, ensure_importable};

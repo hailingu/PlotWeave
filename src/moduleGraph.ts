@@ -457,6 +457,46 @@ export function modelCompileTimeInversionViolations(
   return offenders
 }
 
+/** 外壳→功能方向守卫（issue #399 缺口二）的登记边界：这些非 editor 模块
+ * 允许以运行期值依赖 editor/**，各自附登记理由；新增条目必须有对应的
+ * 归属处置或跟踪议题，不得作为静默豁免累积。 */
+const SHELL_EDITOR_RUNTIME_BOUNDARIES = new Set([
+  // 组合根：挂载编辑器 UI（ErrorBanner、懒加载 EditorView）是其本职
+  'App.tsx',
+  // 演示种子边界（issue #399 登记）：示例画布的形状与句柄策略属编辑器域
+  // （sampleGraph 运行期引用 graphRules，类型取 nodes/types 与 xyflow），
+  // 全量提取为 model 形态是后续归属处置；当前仅播种路径加载期使用、
+  // 无环，见 PR 描述的跟踪事项
+  'projectStore/seeds.ts',
+])
+
+/** 非 editor 模块对 editor/** 的运行期值依赖越界（issue #399 缺口二）：
+ * 外壳/共享层不得以运行期值依赖功能层（editor/**）的内部实现——两侧
+ * 共用的落盘契约（AI 会话 schema，src/ai/session.ts）提取到叶子模块，
+ * 契约叶子对 editor 契约层（editor/ai/commands.ts）仅允许类型级引用。
+ * 与 model 侧守卫（issue #353）互为镜像：那边管功能层不反向依赖落盘
+ * schema，这边管外壳不正向依赖功能层运行期值。不可静态解析的动态导入
+ * 目标运行时才定，fail-closed 计违规。返回 `文件 → 目标` 违规清单，
+ * 空 = 通过。 */
+export function shellEditorRuntimeViolations(
+  graph: Map<string, ModuleEdge[]>,
+): string[] {
+  const offenders: string[] = []
+  for (const [file, list] of graph) {
+    if (file.startsWith('editor/') || SHELL_EDITOR_RUNTIME_BOUNDARIES.has(file))
+      continue
+    for (const e of list) {
+      if (e.dynamic === true) {
+        offenders.push(`${file} → 动态导入（不可静态解析）：${e.target}`)
+        continue
+      }
+      if (!e.target.startsWith('editor/')) continue
+      if (!e.typeOnly) offenders.push(`${file} → ${e.target}`)
+    }
+  }
+  return offenders
+}
+
 /** Tarjan 强连通分量：仅类型边（typeOnly）也会成环，构图时不剔除。 */
 function tarjanSccs(edges: Map<string, ModuleEdge[]>): string[][] {
   const index = new Map<string, number>()

@@ -7,6 +7,7 @@ use cap_std::fs::Dir as CapDir;
 use crate::library::error::LibraryError;
 use crate::store::open_dir_bound;
 
+use super::fsync::fsync_dir;
 use super::journal_io::JournalEntry;
 
 pub(super) const TRASH_DIR: &str = "assets/.trash";
@@ -18,19 +19,6 @@ pub(super) const TRASH_DIR: &str = "assets/.trash";
 /// 不回滚；未来接入等价原语（如内核提供的 funlink）时在此收口。
 pub(super) fn identity_bound_unlink(_file: &cap_std::fs::File) -> Result<(), LibraryError> {
     Err(LibraryError::refused("平台缺少身份绑定删除原语"))
-}
-
-/// 目录持久性屏障（Unix）。
-#[cfg(unix)]
-pub(super) fn fsync_dir(dir: &CapDir) -> Result<(), LibraryError> {
-    dir.open_dir(".")
-        .and_then(|d| d.into_std_file().sync_all())
-        .map_err(|e| LibraryError::io("同步目录失败（持久性屏障缺失）", e))
-}
-
-#[cfg(not(unix))]
-pub(super) fn fsync_dir(_dir: &CapDir) -> Result<(), String> {
-    Ok(())
 }
 
 /// 相对锚定句柄读取路径身份：缺失/占用/异型分别处置（§7.2 恢复分支）。
