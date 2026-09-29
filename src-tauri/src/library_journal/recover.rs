@@ -313,10 +313,19 @@ fn finalize_cleanup_summary(
         // 饱和点；防御性算术保证咨询性计数永不 panic（debug）或回绕隐藏
         // 保留项（release），且写入侧不得产出自己下次读取会判异型的值
         // ——上限处的合法折叠把计数钉在上限持续报告，而非归零失联
+        let prior_count = *count;
         *count = count.saturating_add(conv.folded).min(ARCHIVE_COUNT_MAX);
-        // 字节同款饱和累加（issue #427）：旧格式归档的未知（None）自本笔
-        // 折叠起补全为已知
-        *bytes = Some(bytes.unwrap_or(0).saturating_add(conv.folded_bytes));
+        // 字节同款饱和累加（issue #427），但未知（None）不得被折叠改写为
+        // 已知（评审 5355849137）：旧格式/异型归档的历史份额不可测，把
+        // 数 GB 的未知总量悄悄替换为仅新增的几 MB 会伪报增长已缓解——
+        // 未知保持到用户整体清理（归零写入 Some(0)）后才重新可知。仅当
+        // 折叠前计数为 0（全新或已归零，历史份额为空）或字节已知时，
+        // 折叠才产生已知字节。
+        *bytes = match (*bytes, prior_count == 0) {
+            (Some(b), _) => Some(b.saturating_add(conv.folded_bytes)),
+            (None, true) => Some(conv.folded_bytes),
+            (None, false) => None,
+        };
         if let Err(e) = write_archive(library, *count, *bytes) {
             recovery
                 .warnings

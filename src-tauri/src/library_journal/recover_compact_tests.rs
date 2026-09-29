@@ -659,16 +659,85 @@ fn invalid_trash_bytes_field_is_advisory() {
         recovery.warnings
     );
     assert_eq!(read_journal_raw(&library), json!([]), "折叠照常完成");
+    // 评审 5355849137：计数 2 的历史份额不可知，折叠不得把总量重新标注为
+    // 仅新增字节——脏值按未知重计并跨折叠保持，覆写后字段缺省（非脏值）
     assert_eq!(
-        read_archive_raw(&library)["trashBytes"],
-        json!(1),
-        "本轮折叠应覆写修复异型字节数（0 + 1）"
+        read_archive_raw(&library).get("trashBytes"),
+        None,
+        "覆写应清除异型字节数（按未知缺省，而非伪已知）：{}",
+        read_archive_raw(&library)
     );
     assert_eq!(
-        recovery.cleanup_pending[0].bytes,
-        Some(1),
-        "摘要按重计后的已知量级报告：{:?}",
+        recovery.cleanup_pending[0].count,
+        Some(3),
+        "计数照常累计（2 + 1）：{:?}",
         recovery.cleanup_pending[0]
+    );
+    assert_eq!(
+        recovery.cleanup_pending[0].bytes, None,
+        "历史份额未知的总量保持未知，不猜数"
+    );
+    assert!(
+        recovery.cleanup_pending[0].message.contains("大小未知"),
+        "message 应明示量级未知：{}",
+        recovery.cleanup_pending[0].message
+    );
+    cleanup(&root);
+}
+
+/// 旧格式归档的未知量级跨折叠保持（评审 5355849137）：已有累计计数的
+/// 历史份额（落地前删除的字节）不可测——折叠不得把数 GB 的未知总量悄悄
+/// 改写为仅新增的几 MB「已知」值；未知保持到用户整体清理（归零）后，
+/// 后续折叠才从零重新可知。计数本身照常累计不受影响。
+#[test]
+fn legacy_archive_keeps_unknown_bytes_until_trash_cleared() {
+    let (library, root) = temp_fixture();
+    write_index_raw(
+        &library,
+        &json!({ "assets": by_id([]), "groups": by_id([]) }),
+    );
+    // 升级前已累计 2500 项（历史字节不可知）
+    foldable_journal(&library, 1);
+    fs::write(
+        library.join(ARCHIVE_FILE_NAME),
+        br#"{"retainedCleanupCount":2500}"#,
+    )
+    .expect("写旧格式归档");
+    let folded = recover(&cap(&library)).expect("恢复应成功");
+    assert_eq!(folded.cleanup_pending[0].count, Some(2501));
+    assert_eq!(
+        folded.cleanup_pending[0].bytes, None,
+        "未知的历史份额不得被仅新增字节改写为已知"
+    );
+    assert!(folded.cleanup_pending[0].message.contains("大小未知"));
+    let archived = read_archive_raw(&library);
+    assert_eq!(archived["retainedCleanupCount"], json!(2501));
+    assert_eq!(
+        archived.get("trashBytes"),
+        None,
+        "归档不得持久化伪已知量级：{archived}"
+    );
+    // 再折叠一笔：未知保持，不得随时间「自愈」为部分值
+    foldable_journal(&library, 1);
+    let again = recover(&cap(&library)).expect("再次恢复应成功");
+    assert_eq!(again.cleanup_pending[0].count, Some(2502));
+    assert_eq!(again.cleanup_pending[0].bytes, None);
+    // 用户整体清理后归零重置为已知，此后折叠从零累计
+    fs::remove_dir_all(library.join("assets").join(".trash")).expect("整体清理隔离区");
+    let zeroed = recover(&cap(&library)).expect("归零恢复应成功");
+    assert!(zeroed.cleanup_pending.is_empty(), "计数归零、摘要消失");
+    assert_eq!(
+        read_archive_raw(&library)["trashBytes"],
+        json!(0),
+        "归零把量级重置为已知 0"
+    );
+    foldable_journal(&library, 1);
+    let fresh = recover(&cap(&library)).expect("清理后折叠应成功");
+    assert_eq!(
+        fresh.cleanup_pending[0].bytes,
+        Some(1),
+        "整体清理后的折叠从零重新可知：{:?}",
+        fresh.cleanup_pending[0]
     );
     cleanup(&root);
 }
