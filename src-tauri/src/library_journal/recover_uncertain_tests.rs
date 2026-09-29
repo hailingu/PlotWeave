@@ -74,12 +74,14 @@ fn uncertain_entry_restores_media_after_index_repaired() {
     cleanup(&root);
 }
 
-/// issue #389 收敛方向②：索引恢复后不含 assetId → 闩锁复位并按「删除已
-/// 生效」正常收敛（隔离项保留待清理 + routine cleanupPending，不再标记
-/// 冲突）；索引再次损坏且局部视图缺该 id 时按损坏规则重新置位——保守
-/// 方向不随收敛路径丢失。
+/// issue #389 收敛方向② + issue #359 修订：索引恢复后不含 assetId →
+/// 闩锁复位并按「删除已生效」正常收敛；隔离项身份核验一致后**折叠退役**
+/// （日志退场、计数归档、单条 routine 摘要，不再标记冲突）。折叠仅在
+/// 权威视图下发生、提交已被证明——事务就此闭合，索引再次损坏时**不再
+/// 重新置闩**；隔离项字节保留为证据。置闩保守机制对仍驻留日志的证据
+/// 条目不变（损坏期置位由下方告警指引用例覆盖）。
 #[test]
-fn uncertain_entry_converges_committed_then_rearms_when_index_damages_again() {
+fn uncertain_committed_entry_folds_and_stays_closed_across_index_damage() {
     let (library, root) = temp_fixture();
     fs::create_dir_all(library.join("assets").join(".trash")).expect("建隔离目录");
     fs::write(library.join("assets").join(".trash").join("t-x"), b"PNG").expect("写隔离项");
@@ -105,35 +107,41 @@ fn uncertain_entry_converges_committed_then_rearms_when_index_damages_again() {
         "已提交收敛不应标记冲突：{:?}",
         recovery.conflicted
     );
-    assert_eq!(recovery.cleanup_pending.len(), 1, "一个隔离项仅报告一次");
+    assert_eq!(
+        recovery.cleanup_pending.len(),
+        1,
+        "折叠为单条摘要：{:?}",
+        recovery.cleanup_pending
+    );
     assert_eq!(
         recovery.cleanup_pending[0].kind,
         CleanupKind::Routine,
-        "清理原语缺失的保留项归 routine"
+        "清理原语缺失的折叠摘要归 routine"
     );
-    let saved = read_journal_raw(&library);
     assert_eq!(
-        saved.as_array().expect("日志").len(),
-        1,
-        "清理不可用应保留日志"
-    );
-    assert!(
-        saved[0].get("indexUncertain").is_none(),
-        "闩锁应复位（false 不序列化）"
+        read_journal_raw(&library),
+        json!([]),
+        "闩锁复位按已提交收敛后应折叠退场（issue #359）"
     );
     assert_eq!(
         fs::read(library.join("assets").join(".trash").join("t-x")).expect("隔离项保留"),
         b"PNG"
     );
-    // 索引再次损坏且局部视图缺该 id：重新置位并回到冲突保守态
+    // 索引再次损坏：折叠条目已闭合（提交在权威视图下已证明），无条目可
+    // 重新置闩；证据字节保留，归档摘要照常报告
     fs::write(library.join("library.json"), damaged_index_raw()).expect("写损坏索引");
     let rearmed = recover(&cap(&library)).expect("再次恢复应成功");
     assert!(
-        rearmed.conflicted.contains(&"la-1".to_string()),
-        "损坏期间应重新进入保守态"
+        !rearmed.conflicted.contains(&"la-1".to_string()),
+        "闭合事务不再重新进入冲突保守态：{:?}",
+        rearmed.conflicted
     );
-    let saved = read_journal_raw(&library);
-    assert_eq!(saved[0]["indexUncertain"], json!(true), "闩锁应重新置位");
+    assert_eq!(read_journal_raw(&library), json!([]));
+    assert_eq!(
+        rearmed.cleanup_pending.len(),
+        1,
+        "归档计数驱动的摘要照常报告"
+    );
     assert_eq!(
         fs::read(library.join("assets").join(".trash").join("t-x")).expect("媒体不动"),
         b"PNG"
@@ -252,17 +260,19 @@ fn uncertain_entry_holds_latch_while_migration_suspended() {
         "恢复权威后应解除冲突：{:?}",
         converged.conflicted
     );
-    let saved = read_journal_raw(&library);
-    assert!(
-        saved[0].get("indexUncertain").is_none(),
-        "权威视图下闩锁应复位"
-    );
-    let recorded = saved[0]["trashName"]
-        .as_str()
-        .expect("trashName")
-        .to_string();
     assert_eq!(
-        fs::read(library.join(&recorded)).expect("媒体字节保留在隔离名下"),
+        read_journal_raw(&library),
+        json!([]),
+        "权威视图下闩锁复位、按已提交收敛并折叠退场（issue #359）"
+    );
+    // 重隔离的媒体字节保留在隔离名下（折叠只退役日志条目，不动隔离项）
+    let quarantined: Vec<_> = fs::read_dir(library.join("assets").join(".trash"))
+        .expect("读隔离目录")
+        .map(|e| e.expect("目录项"))
+        .collect();
+    assert_eq!(quarantined.len(), 1, "重隔离媒体应恰好一项");
+    assert_eq!(
+        fs::read(quarantined[0].path()).expect("媒体字节保留在隔离名下"),
         b"PNG"
     );
     assert!(

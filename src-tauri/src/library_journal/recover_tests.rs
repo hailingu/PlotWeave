@@ -337,7 +337,9 @@ fn recover_retains_journal_on_trash_identity_mismatch() {
 }
 
 /// 隔离项缺失但媒体回到原位（脏数据）：复查原路径身份后重新隔离
-/// （评审修复：此前 Missing 直接清日志，遗漏该状态）。
+/// （评审修复：此前 Missing 直接清日志，遗漏该状态）；重隔离后身份核验
+/// 一致但清理原语不可用 → 折叠退役（issue #359）：日志退场、计数归档、
+/// cleanupPending 折叠为单条 routine 摘要，隔离项字节保留。
 #[test]
 fn recover_requarantines_media_returned_to_original_path() {
     let (library, root) = temp_fixture();
@@ -370,14 +372,19 @@ fn recover_requarantines_media_returned_to_original_path() {
         .collect();
     assert_eq!(quarantined.len(), 1);
     assert_eq!(fs::read(quarantined[0].path()).expect("内容"), b"PNG");
-    // 受支持平台均无身份绑定删除原语：按契约保留隔离项与日志并报告
-    // cleanupPending（评审修复：Linux 分支伪装修复路径的断言残留）
+    // 受支持平台均无身份绑定删除原语：重隔离项身份核验一致后折叠退役
+    // （issue #359），隔离项与字节保留为证据
     assert_eq!(
-        read_journal_raw(&library).as_array().expect("日志").len(),
-        1,
-        "清理不可用应保留日志"
+        read_journal_raw(&library),
+        json!([]),
+        "已核验的重隔离项应折叠退场"
     );
-    assert_eq!(recovery.cleanup_pending.len(), 1, "一个隔离项仅报告一次");
+    assert_eq!(
+        recovery.cleanup_pending.len(),
+        1,
+        "折叠为单条摘要：{:?}",
+        recovery.cleanup_pending
+    );
     assert_eq!(
         recovery.cleanup_pending[0].kind,
         CleanupKind::Routine,
@@ -386,11 +393,13 @@ fn recover_requarantines_media_returned_to_original_path() {
     assert!(recovery.warnings.is_empty());
     assert!(recovery.conflicted.is_empty());
     assert!(!recovery.read_only);
-    let journal = read_journal_raw(&library);
     let repeated = recover(&cap(&library)).expect("再次恢复应成功");
-    assert_eq!(repeated.cleanup_pending, recovery.cleanup_pending);
+    assert_eq!(
+        repeated.cleanup_pending, recovery.cleanup_pending,
+        "归档计数驱动的摘要应跨恢复一致"
+    );
     assert!(repeated.warnings.is_empty());
-    assert_eq!(read_journal_raw(&library), journal);
+    assert_eq!(read_journal_raw(&library), json!([]));
     assert_eq!(fs::read(quarantined[0].path()).expect("保留内容"), b"PNG");
     cleanup(&root);
 }
@@ -492,8 +501,9 @@ fn delete_rejected_when_journal_near_cap() {
     cleanup(&root);
 }
 
-/// 重隔离的新映射先于 rename 落盘（评审修复）：恢复后日志 trashName 与
-/// 隔离区实际文件一致，中断不会孤儿化新隔离项。
+/// 重隔离的新映射先于 rename 落盘（评审修复）：rename 前日志已耐久记录
+/// 新隔离名，中断不会孤儿化新隔离项；本路径终点为折叠退役（issue #359）
+/// ——收敛后日志退场，重隔离的媒体字节保留在隔离区为证据。
 #[test]
 fn recover_requarantine_persists_mapping_before_rename() {
     let (library, root) = temp_fixture();
@@ -517,15 +527,21 @@ fn recover_requarantine_persists_mapping_before_rename() {
     );
     let recovery = recover(&cap(&library)).expect("恢复应成功");
     let _ = recovery;
-    // 日志 trashName 与隔离区实际文件一致
-    let journal = read_journal_raw(&library);
-    let arr = journal.as_array().expect("日志数组");
-    assert_eq!(arr.len(), 1, "非清理平台保留一条日志");
-    let recorded = arr[0]["trashName"].as_str().expect("trashName").to_string();
-    let leaf = recorded.rsplit('/').next().expect("隔离名");
-    assert!(
-        fs::metadata(library.join("assets").join(".trash").join(leaf)).is_ok(),
-        "日志记录的隔离名应指向实际文件：{recorded}"
+    // 收敛终点：折叠退役（日志退场），重隔离的媒体字节留在隔离区
+    assert_eq!(
+        read_journal_raw(&library),
+        json!([]),
+        "重隔离后身份核验一致应折叠退场（issue #359）"
+    );
+    let quarantined: Vec<_> = fs::read_dir(library.join("assets").join(".trash"))
+        .expect("读隔离目录")
+        .map(|e| e.expect("目录项"))
+        .collect();
+    assert_eq!(quarantined.len(), 1, "重隔离媒体应恰好一项");
+    assert_eq!(
+        fs::read(quarantined[0].path()).expect("媒体字节"),
+        b"PNG",
+        "重隔离的媒体字节保留在隔离名下"
     );
     cleanup(&root);
 }
@@ -609,12 +625,18 @@ fn recover_cleans_hard_link_residue_same_identity() {
 
 /// issue #229 契约：cleanupPending 条目序列化为结构化 `{ kind, message }`——
 /// 前端按机器码 kind 分类（routine 才可给 .trash 清理指引），不经中文文案
-/// 前缀推导；展示措辞/本地化调整不改变分类。
+/// 前缀推导；展示措辞/本地化调整不改变分类。折叠摘要（issue #359）额外
+/// 携带可选 `count`（该条目代表的累计保留数），普通/证据条目不序列化该
+/// 字段——旧前端忽略 count 仍按单条展示，形状向后兼容。
 #[test]
 fn cleanup_pending_serializes_machine_kind_alongside_message() {
     let recovery = Recovery {
         cleanup_pending: vec![
             CleanupPendingItem::routine("媒体已隔离待清理：assets/la-1.png"),
+            CleanupPendingItem::routine_counted(
+                500,
+                "隔离区累计保留 500 个已核验清理项（可人工清理 assets/.trash；整体移除后计数自动归零）",
+            ),
             CleanupPendingItem::evidence("隔离项保留（身份不符或被占用）：la-4 / t-y"),
         ],
         ..Recovery::default()
@@ -623,6 +645,7 @@ fn cleanup_pending_serializes_machine_kind_alongside_message() {
         serde_json::to_value(&recovery.cleanup_pending).expect("序列化"),
         json!([
             { "kind": "routine", "message": "媒体已隔离待清理：assets/la-1.png" },
+            { "kind": "routine", "message": "隔离区累计保留 500 个已核验清理项（可人工清理 assets/.trash；整体移除后计数自动归零）", "count": 500 },
             { "kind": "evidence", "message": "隔离项保留（身份不符或被占用）：la-4 / t-y" }
         ])
     );

@@ -128,8 +128,9 @@ fn alternate_recovery_retires_missing_quarantine_and_supersedes_old_list() {
         let trash = f.delete(&removed);
         let old = f.list();
         assert_eq!(old["cleanupPending"].as_array().unwrap().len(), 1);
-        // 既有恢复分支：隔离项已不存在，下一入口清除对应日志；不模拟自动 unlink。
-        fs::remove_file(trash).unwrap();
+        // 人工整体清理隔离区（issue #359 恢复指引）：下一入口把归档计数
+        // 归零、摘要随事件退场；不模拟自动 unlink。
+        fs::remove_dir_all(trash.parent().unwrap()).unwrap();
         let mut events = Vec::new();
         run_entry(&f, entry, active["id"].as_str().unwrap(), &mut events).unwrap();
         assert_eq!(events.len(), 1, "{entry}");
@@ -151,14 +152,15 @@ fn conflict_is_published_even_when_each_entry_refuses_the_requested_asset() {
         let asset = f.put("asset.png");
         let original_index = fs::read(f.root.join("library/library.json")).unwrap();
         let trash = f.delete(&asset);
-        let old = f.list();
         // 未提交索引的事务 + 原路径被占用：恢复应拒绝服务并保留两份现场。
+        // 脏状态先于旧快照就位——冲突条目保守驻留日志、不被折叠（issue #359）。
         fs::write(f.root.join("library/library.json"), original_index).unwrap();
         let original_path = f
             .root
             .join("library")
             .join(asset["relPath"].as_str().unwrap());
         fs::write(&original_path, b"occupant").unwrap();
+        let old = f.list();
         let mut events = Vec::new();
         assert!(run_entry(&f, entry, asset["id"].as_str().unwrap(), &mut events).is_err());
         assert_eq!(events.len(), 1, "{entry}");
@@ -176,7 +178,8 @@ fn completed_recovery_is_published_when_subsequent_lookup_fails() {
         let asset = f.put("asset.png");
         let trash = f.delete(&asset);
         let old = f.list();
-        fs::remove_file(trash).unwrap();
+        // 人工整体清理隔离区（issue #359 恢复指引）：计数归零、摘要退场
+        fs::remove_dir_all(trash.parent().unwrap()).unwrap();
         let mut events = Vec::new();
         assert!(run_entry(&f, entry, "la-missing", &mut events).is_err());
         assert_eq!(events.len(), 1, "{entry}");

@@ -219,7 +219,9 @@ fn unknown_delete_transaction_converges_after_index_repair_keeping_media_bytes()
     // 索引经任一写入修复（备份损坏原件 + 保存修复视图）
     update_meta_with(&fixture.dir, "a", &json!({"name": "新名称"}), &mut |_| {}).unwrap();
     // 修复后的图库操作：闩锁复位并按「删除已生效」收敛——媒体重隔离进
-    // .trash（字节保留、不再留在活动路径），条目不再标记冲突（issue #389）
+    // .trash（字节保留、不再留在活动路径），条目不再标记冲突（issue #389）；
+    // 重隔离项身份核验一致但清理原语不可用 → 折叠退役（issue #359）：
+    // 日志退场、计数归档，媒体字节保留在隔离名下
     let (_, warnings) = list_assets_with(&fixture.dir, &mut |_| {}).unwrap();
     assert!(
         !warnings
@@ -229,20 +231,16 @@ fn unknown_delete_transaction_converges_after_index_repair_keeping_media_bytes()
     );
     assert!(!path.exists(), "权威索引已去项的媒体应离开活动路径");
     let saved: Value = serde_json::from_slice(&fs::read(&journal).unwrap()).unwrap();
-    let entries = saved.as_array().expect("清理原语缺失时日志保留");
-    assert_eq!(entries.len(), 1);
-    assert!(
-        saved[0].get("indexUncertain").is_none(),
-        "闩锁应复位（false 不序列化）"
-    );
-    let recorded = saved[0]["trashName"]
-        .as_str()
-        .expect("trashName")
-        .to_string();
+    assert_eq!(saved, json!([]), "已核验的重隔离项应折叠退场（issue #359）");
+    let quarantined: Vec<_> = fs::read_dir(fixture.path.join("assets/.trash"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    assert_eq!(quarantined.len(), 1, "重隔离媒体应恰好一项");
     assert_eq!(
-        fs::read(fixture.path.join(&recorded)).unwrap(),
+        fs::read(&quarantined[0]).unwrap(),
         b"keep",
-        "媒体字节须保留在日志记录的隔离名下"
+        "媒体字节须保留在隔离名下"
     );
 }
 

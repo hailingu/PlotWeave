@@ -1,6 +1,10 @@
 //! 删除事务的恢复内核（§7.2，issue #39 自 library_journal.rs 拆出）：恢复
 //! 入口逐条消费日志，按「共享引用 → 索引仍引用 → 索引已去项」分支收敛——
 //! 回迁/清理只动媒体与日志，不改 library.json 的权威索引状态。
+//! 「索引已去项 + 隔离项身份核验一致 + 清理原语不可用」的终态条目在恢复
+//! 时折叠退役并计入归档（issue #359）：隔离项与字节原样保留，日志条目
+//! 退场，cleanupPending 折叠为单条摘要——恢复成本与响应大小不随历史
+//! 删除总数线性增长；证据类条目与非权威视图期间不折叠（保守方向不变）。
 
 use cap_std::fs::Dir as CapDir;
 use serde_json::Value;
@@ -9,6 +13,7 @@ use crate::library::error::LibraryError;
 use crate::library_fs::{assets_root, open_parent_dir};
 use crate::store::new_id;
 
+use super::archive::{read_archive, write_archive, ARCHIVE_COUNT_MAX};
 use super::journal_io::{read_journal, write_journal, JournalEntry};
 use super::trash::{
     ensure_trash_dir, fsync_dir, identity_bound_unlink, open_trash_dir, path_identity,
@@ -28,12 +33,16 @@ pub(crate) enum CleanupKind {
     Evidence,
 }
 
-/// cleanupPending 条目（issue #229）：程序可判定的 kind + 展示文案。
-/// 前端对未知/缺失 kind fail-safe 归证据类（不给删除指引）。
+/// cleanupPending 条目（issue #229）：程序可判定的 kind + 展示文案；
+/// 折叠摘要额外携带可选结构化 `count`（issue #359：该条目代表的累计
+/// 保留数，前端待清理计数取各条目 count 之和、缺省按 1——不经文案推导，
+/// 旧前端忽略该字段仍按单条展示）。
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub(crate) struct CleanupPendingItem {
     pub(crate) kind: CleanupKind,
     pub(crate) message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) count: Option<u64>,
 }
 
 impl CleanupPendingItem {
@@ -41,12 +50,23 @@ impl CleanupPendingItem {
         Self {
             kind: CleanupKind::Routine,
             message: message.into(),
+            count: None,
+        }
+    }
+    /// 折叠摘要条目（issue #359）：kind 仍为 routine（可给清理指引），
+    /// `count` 为该摘要代表的已核验保留项累计数。
+    pub(crate) fn routine_counted(count: u64, message: impl Into<String>) -> Self {
+        Self {
+            kind: CleanupKind::Routine,
+            message: message.into(),
+            count: Some(count),
         }
     }
     pub(crate) fn evidence(message: impl Into<String>) -> Self {
         Self {
             kind: CleanupKind::Evidence,
             message: message.into(),
+            count: None,
         }
     }
 }
@@ -99,30 +119,51 @@ fn index_refs(index: &Value, entry: &JournalEntry) -> IndexRefs {
     refs
 }
 
-/// 隔离项按身份绑定能力清理：成功返回 true（日志条目可移除）；失败（能力
-/// 缺失/身份不符）按契约保留现场并记录 cleanupPending。
+/// 单次恢复的日志收敛状态：`changed` 标记日志需要落盘的退役/闩锁复位，
+/// `folded` 累计「身份核验一致但清理原语不可用」的折叠笔数（收尾时并入
+/// 归档计数，issue #359）；`folded_ids` 为本趟已折叠、**延迟到收尾单次
+/// 写盘**统一退役的条目（评审 5346509928：中途的重隔离预 rename 中间写
+/// 不得把先前折叠的退役持久化——后续失败会让「条目已退役、计数未归档」
+/// 跨条目复现；收尾写失败时这些条目仍在磁盘，下次恢复重新折叠）。
+#[derive(Default)]
+struct Convergence {
+    changed: bool,
+    folded: u64,
+    folded_ids: Vec<String>,
+}
+
+/// 记录一笔折叠：条目保留在 `current` 中，退役延迟到收尾单次写盘。
+fn record_fold(conv: &mut Convergence, entry: &JournalEntry) {
+    conv.changed = true;
+    conv.folded += 1;
+    conv.folded_ids.push(entry.id.clone());
+}
+
+/// 身份绑定清理的三态结局（issue #359）：清理成功或隔离项缺失 → 日志条目
+/// 退场；原语不可用但隔离项身份已核验 → 折叠退场（计入归档计数，不再
+/// 逐条驻留日志/响应）；身份不符/被占用 → 保留现场与日志并记录证据项。
+enum BoundCleanup {
+    Retired,
+    Folded,
+    RetainedEvidence,
+}
+
+/// 隔离项按身份绑定能力清理，返回三态结局（见 [`BoundCleanup`]）。
 fn try_bound_cleanup(
     trash: &CapDir,
     entry: &JournalEntry,
     recovery: &mut Recovery,
-) -> Result<bool, LibraryError> {
+) -> Result<BoundCleanup, LibraryError> {
     match verify_trash_identity(trash, entry)? {
         TrashVerdict::IdentityOk(f) => match identity_bound_unlink(&f) {
             Ok(()) => {
                 fsync_dir(trash)?;
-                Ok(true)
+                Ok(BoundCleanup::Retired)
             }
-            Err(_) => {
-                recovery
-                    .cleanup_pending
-                    .push(CleanupPendingItem::routine(format!(
-                        "隔离项保留（身份绑定清理不可用）：{} / {}",
-                        entry.asset_id, entry.trash_name
-                    )));
-                Ok(false)
-            }
+            // 唯一剩余步骤（§7.2 ④）无原语可执行且身份已核验：折叠退场
+            Err(_) => Ok(BoundCleanup::Folded),
         },
-        TrashVerdict::Missing => Ok(true), // 隔离项不存在：日志条目可清除
+        TrashVerdict::Missing => Ok(BoundCleanup::Retired), // 隔离项不存在：日志条目可清除
         TrashVerdict::Mismatch => {
             // 身份不符/被占用：保留现场与日志（评审修复：不得静默清除证据）
             recovery
@@ -131,7 +172,7 @@ fn try_bound_cleanup(
                     "隔离项保留（身份不符或被占用）：{} / {}",
                     entry.asset_id, entry.trash_name
                 )));
-            Ok(false)
+            Ok(BoundCleanup::RetainedEvidence)
         }
     }
 }
@@ -168,12 +209,15 @@ pub(crate) fn recover(library: &CapDir) -> Result<Recovery, LibraryError> {
     if migrated {
         crate::library_fs::write_index(library, &index)?;
     }
+    // 折叠计数为咨询性旁路（issue #359）：读取异型只告警并按 0 继续
+    let mut archive_count = read_archive(library, &mut recovery.warnings);
+    let mut conv = Convergence::default();
     if entries.is_empty() {
+        finalize_cleanup_summary(library, conv.folded, &mut archive_count, &mut recovery);
         return Ok(recovery);
     }
     let assets = assets_root(library)?;
     let mut current = entries.clone();
-    let mut changed = false;
     let view = IndexView {
         value: &index,
         authority: if normalized.damaged {
@@ -192,13 +236,74 @@ pub(crate) fn recover(library: &CapDir) -> Result<Recovery, LibraryError> {
             entry,
             &mut recovery,
             &mut current,
-            &mut changed,
+            &mut conv,
         )?;
     }
-    if changed {
+    // 折叠退役只发生在收尾单次写盘（评审 5346397307/5346509928）：整趟
+    // 期间折叠条目保留在 current——同趟后续条目的重隔离预 rename 中间写
+    // 不得把先前折叠的退役持久化（那会让后续失败留下「条目已退役、计数
+    // 未归档」的不可恢复窗口）；收尾写失败时全部折叠条目仍在磁盘，下次
+    // 恢复重新折叠。退役先落日志、后落归档计数（issue #359）：崩溃窗口
+    // 只会少计、不会重复计
+    if conv.changed {
+        current.retain(|e| !conv.folded_ids.contains(&e.id));
         write_journal(library, &current)?;
     }
+    finalize_cleanup_summary(library, conv.folded, &mut archive_count, &mut recovery);
     Ok(recovery)
+}
+
+/// 折叠归档收尾（issue #359）：先持久化累计计数（fail-soft——日志退役已
+/// 落盘，归档失败只告警、不回滚恢复结果）；计数 > 0 时复查隔离目录，
+/// 整体不存在（用户已按指引清理 assets/.trash）即归零，仍 > 0 则折叠为
+/// 单条 routine 摘要——cleanupPending 响应大小与历史删除总数无关。
+/// 目录打开失败按「未知」处理并保留计数（fail-soft，计数为咨询性指标）。
+fn finalize_cleanup_summary(
+    library: &CapDir,
+    folded: u64,
+    count: &mut u64,
+    recovery: &mut Recovery,
+) {
+    if folded > 0 {
+        // 饱和累加并收敛进读取上限（评审 5346397307/5346909203）：读取侧
+        // 已把脏计数截到合理上限、本笔折叠又受日志条数约束，正常不可达
+        // 饱和点；防御性算术保证咨询性计数永不 panic（debug）或回绕隐藏
+        // 保留项（release），且写入侧不得产出自己下次读取会判异型的值
+        // ——上限处的合法折叠把计数钉在上限持续报告，而非归零失联
+        *count = count.saturating_add(folded).min(ARCHIVE_COUNT_MAX);
+        if let Err(e) = write_archive(library, *count) {
+            recovery
+                .warnings
+                .push(format!("清理归档计数落盘失败（下次恢复按旧计数继续）：{e}"));
+        }
+    }
+    if *count > 0 && trash_dir_absent(library) {
+        *count = 0;
+        if let Err(e) = write_archive(library, 0) {
+            recovery
+                .warnings
+                .push(format!("清理归档计数归零落盘失败（下次恢复重试归零）：{e}"));
+        }
+    }
+    if *count > 0 {
+        recovery.cleanup_pending.push(CleanupPendingItem::routine_counted(
+            *count,
+            format!(
+                "隔离区累计保留 {} 个已核验清理项（可人工清理 assets/.trash；整体移除后计数自动归零）",
+                *count
+            ),
+        ));
+    }
+}
+
+/// .trash 隔离目录是否整体不存在（计数归零判据）；任何错误按「未知」
+/// 处理返回 false——归零漏判只延迟到用户完整清理后的下一次恢复。
+fn trash_dir_absent(library: &CapDir) -> bool {
+    let assets = match assets_root(library) {
+        Ok(a) => a,
+        Err(_) => return false,
+    };
+    matches!(open_trash_dir(&assets), Ok(None))
 }
 
 /// 本次恢复所依据的索引视图的权威性（issue #389）：
@@ -257,13 +362,13 @@ fn recover_entry(
     entry: &JournalEntry,
     recovery: &mut Recovery,
     current: &mut Vec<JournalEntry>,
-    changed: &mut bool,
+    conv: &mut Convergence,
 ) -> Result<(), LibraryError> {
     let re_adjudicated;
     let entry = if !entry.index_uncertain {
         entry
     } else if view.authority == Authority::Intact {
-        re_adjudicated = release_uncertain_latch(current, entry, changed);
+        re_adjudicated = release_uncertain_latch(current, entry, &mut conv.changed);
         &re_adjudicated
     } else {
         let why = match view.authority {
@@ -289,12 +394,19 @@ fn recover_entry(
     // 共享引用须以身份复核为准（评审修复）：relPath 字符串相等但占用者
     // 身份不符时，替换文件不得被当作共享引用方放行——继续走证据分支
     if refs.other_same_rel && original_binds_expected(assets, entry)? {
-        return recover_shared_file(trash, entry, recovery, current, changed);
+        return recover_shared_file(trash, entry, recovery, current, conv);
     }
     if refs.index_has {
-        return recover_index_still_references(assets, entry, trash, recovery, current, changed);
+        return recover_index_still_references(
+            assets,
+            entry,
+            trash,
+            recovery,
+            current,
+            &mut conv.changed,
+        );
     }
-    recover_index_committed(library, assets, entry, trash, recovery, current, changed)
+    recover_index_committed(library, assets, entry, trash, recovery, current, conv)
 }
 
 /// 索引已恢复为可解析权威视图（issue #389）：复位 indexUncertain 闩锁并
@@ -315,25 +427,29 @@ fn release_uncertain_latch(
 }
 
 /// 其他条目引用同一文件位置：不得移动/删除其当前目录项；隔离项存在时仅
-/// 按身份绑定能力清理，能力不足保留 cleanupPending；隔离项不存在清除日志。
+/// 按身份绑定能力清理——清理成功/隔离项缺失清除日志，身份已核验但原语
+/// 不可用则折叠退役（issue #359），身份不符保留证据；隔离项不存在清除日志。
 fn recover_shared_file(
     trash: Option<CapDir>,
     entry: &JournalEntry,
     recovery: &mut Recovery,
     current: &mut Vec<JournalEntry>,
-    changed: &mut bool,
+    conv: &mut Convergence,
 ) -> Result<(), LibraryError> {
     match trash {
         Some(trash) => {
-            if try_bound_cleanup(&trash, entry, recovery)? {
-                retire_entry(current, entry);
-                *changed = true;
+            match try_bound_cleanup(&trash, entry, recovery)? {
+                BoundCleanup::Retired => {
+                    retire_entry(current, entry);
+                    conv.changed = true;
+                }
+                BoundCleanup::Folded => record_fold(conv, entry),
+                BoundCleanup::RetainedEvidence => {} // 证据条目保留在 current
             }
-            // 清理失败：条目保留在 current（已在步骤①落盘，无需改动）
         }
         None => {
             retire_entry(current, entry);
-            *changed = true;
+            conv.changed = true;
         }
     }
     Ok(())
@@ -440,9 +556,11 @@ fn recover_index_still_references(
     }
 }
 
-/// 索引已无 assetId：隔离项存在则仅尝试身份绑定清理（能力不足保留
-/// cleanupPending）；隔离项已不存在且原路径不再绑定预期身份 → 清理完成；
-/// 原路径仍绑定预期身份 → 重新执行身份核验隔离，绝不按原名删除。
+/// 索引已无 assetId：隔离项存在则仅尝试身份绑定清理——成功清除日志，
+/// 身份已核验但原语不可用则折叠退役并计入归档（issue #359：不再逐条
+/// 驻留日志，恢复成本与响应大小不随历史删除总数增长）；隔离项已不存在
+/// 且原路径不再绑定预期身份 → 清理完成；原路径仍绑定预期身份 → 重新
+/// 执行身份核验隔离，绝不按原名删除。
 fn recover_index_committed(
     library: &CapDir,
     assets: &CapDir,
@@ -450,7 +568,7 @@ fn recover_index_committed(
     trash: Option<CapDir>,
     recovery: &mut Recovery,
     current: &mut Vec<JournalEntry>,
-    changed: &mut bool,
+    conv: &mut Convergence,
 ) -> Result<(), LibraryError> {
     let verdict = match &trash {
         Some(trash) => Some(verify_trash_identity(trash, entry)?),
@@ -461,15 +579,13 @@ fn recover_index_committed(
             Ok(()) => {
                 fsync_dir(trash.as_ref().expect("trash"))?;
                 retire_entry(current, entry);
-                *changed = true;
+                conv.changed = true;
             }
             Err(_) => {
-                recovery
-                    .cleanup_pending
-                    .push(CleanupPendingItem::routine(format!(
-                        "隔离项保留（身份绑定清理不可用）：{} / {}",
-                        entry.asset_id, entry.trash_name
-                    )));
+                // 索引已提交且隔离项身份核验一致：唯一剩余步骤（④）无原语
+                // 可执行——折叠退役（延迟到收尾单次写盘），证据（隔离项
+                // 字节）原样保留
+                record_fold(conv, entry);
             }
         },
         // 身份不符/被占用：保留现场与日志（不得静默清除证据）
@@ -493,11 +609,11 @@ fn recover_index_committed(
                 None => false,
             };
             if original_bound {
-                re_quarantine(library, assets, entry, recovery, current)?;
+                re_quarantine(library, assets, entry, recovery, current, conv)?;
             } else {
                 retire_entry(current, entry);
             }
-            *changed = true;
+            conv.changed = true;
         }
     }
     Ok(())
@@ -513,6 +629,7 @@ fn re_quarantine(
     entry: &JournalEntry,
     recovery: &mut Recovery,
     current: &mut Vec<JournalEntry>,
+    conv: &mut Convergence,
 ) -> Result<(), LibraryError> {
     let (parent, last) = match original_parent(assets, &entry.rel_path)? {
         Some(p) => p,
@@ -536,9 +653,18 @@ fn re_quarantine(
     fsync_dir(&trash)?;
     fsync_dir(&parent)?;
     // 清理函数已按能力缺失或身份冲突报告唯一诊断；重隔离不再重复分类。
-    if try_bound_cleanup(&trash, &updated, recovery)? {
-        retire_entry(current, &updated);
-        write_journal(library, current)?;
+    // 折叠条目经 record_fold 延迟到收尾单次写盘统一退役（评审
+    // 5346397307/5346509928）：此处立即落盘会让「退役已持久化、后续
+    // 失败中断恢复」把该笔折叠的归档计数一并丢失；清理成功（Retired）
+    // 的退役无计数义务，按既有收敛结果即时记入 current。
+    let outcome = try_bound_cleanup(&trash, &updated, recovery)?;
+    match outcome {
+        BoundCleanup::Retired => {
+            retire_entry(current, &updated);
+            conv.changed = true;
+        }
+        BoundCleanup::Folded => record_fold(conv, &updated),
+        BoundCleanup::RetainedEvidence => {}
     }
     Ok(())
 }
