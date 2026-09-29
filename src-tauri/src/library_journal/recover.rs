@@ -121,11 +121,22 @@ fn index_refs(index: &Value, entry: &JournalEntry) -> IndexRefs {
 
 /// 单次恢复的日志收敛状态：`changed` 标记日志需要落盘的退役/闩锁复位，
 /// `folded` 累计「身份核验一致但清理原语不可用」的折叠笔数（收尾时并入
-/// 归档计数，issue #359）。
+/// 归档计数，issue #359）；`folded_ids` 为本趟已折叠、**延迟到收尾单次
+/// 写盘**统一退役的条目（评审 5346509928：中途的重隔离预 rename 中间写
+/// 不得把先前折叠的退役持久化——后续失败会让「条目已退役、计数未归档」
+/// 跨条目复现；收尾写失败时这些条目仍在磁盘，下次恢复重新折叠）。
 #[derive(Default)]
 struct Convergence {
     changed: bool,
     folded: u64,
+    folded_ids: Vec<String>,
+}
+
+/// 记录一笔折叠：条目保留在 `current` 中，退役延迟到收尾单次写盘。
+fn record_fold(conv: &mut Convergence, entry: &JournalEntry) {
+    conv.changed = true;
+    conv.folded += 1;
+    conv.folded_ids.push(entry.id.clone());
 }
 
 /// 身份绑定清理的三态结局（issue #359）：清理成功或隔离项缺失 → 日志条目
@@ -228,8 +239,14 @@ pub(crate) fn recover(library: &CapDir) -> Result<Recovery, LibraryError> {
             &mut conv,
         )?;
     }
-    // 退役先落日志、后落归档计数（issue #359）：崩溃窗口只会少计不重复计
+    // 折叠退役只发生在收尾单次写盘（评审 5346397307/5346509928）：整趟
+    // 期间折叠条目保留在 current——同趟后续条目的重隔离预 rename 中间写
+    // 不得把先前折叠的退役持久化（那会让后续失败留下「条目已退役、计数
+    // 未归档」的不可恢复窗口）；收尾写失败时全部折叠条目仍在磁盘，下次
+    // 恢复重新折叠。退役先落日志、后落归档计数（issue #359）：崩溃窗口
+    // 只会少计、不会重复计
     if conv.changed {
+        current.retain(|e| !conv.folded_ids.contains(&e.id));
         write_journal(library, &current)?;
     }
     finalize_cleanup_summary(library, conv.folded, &mut archive_count, &mut recovery);
@@ -424,11 +441,7 @@ fn recover_shared_file(
                     retire_entry(current, entry);
                     conv.changed = true;
                 }
-                BoundCleanup::Folded => {
-                    retire_entry(current, entry);
-                    conv.changed = true;
-                    conv.folded += 1;
-                }
+                BoundCleanup::Folded => record_fold(conv, entry),
                 BoundCleanup::RetainedEvidence => {} // 证据条目保留在 current
             }
         }
@@ -568,10 +581,9 @@ fn recover_index_committed(
             }
             Err(_) => {
                 // 索引已提交且隔离项身份核验一致：唯一剩余步骤（④）无原语
-                // 可执行——折叠退役，证据（隔离项字节）原样保留
-                retire_entry(current, entry);
-                conv.changed = true;
-                conv.folded += 1;
+                // 可执行——折叠退役（延迟到收尾单次写盘），证据（隔离项
+                // 字节）原样保留
+                record_fold(conv, entry);
             }
         },
         // 身份不符/被占用：保留现场与日志（不得静默清除证据）
@@ -639,17 +651,18 @@ fn re_quarantine(
     fsync_dir(&trash)?;
     fsync_dir(&parent)?;
     // 清理函数已按能力缺失或身份冲突报告唯一诊断；重隔离不再重复分类。
-    // 条目退役交由 recover() 的收尾单次落盘（评审 5346397307）：此处再
-    // 立即落盘会让「退役已持久化、收尾写失败中断恢复」把该笔折叠的归档
-    // 计数一并丢失——保留项从此不可见；推迟到收尾写则失败时条目仍在
-    // 磁盘（①已持久化新映射），下次恢复重新折叠，计数不丢。
+    // 折叠条目经 record_fold 延迟到收尾单次写盘统一退役（评审
+    // 5346397307/5346509928）：此处立即落盘会让「退役已持久化、后续
+    // 失败中断恢复」把该笔折叠的归档计数一并丢失；清理成功（Retired）
+    // 的退役无计数义务，按既有收敛结果即时记入 current。
     let outcome = try_bound_cleanup(&trash, &updated, recovery)?;
-    if !matches!(outcome, BoundCleanup::RetainedEvidence) {
-        retire_entry(current, &updated);
-        conv.changed = true;
-        if matches!(outcome, BoundCleanup::Folded) {
-            conv.folded += 1;
+    match outcome {
+        BoundCleanup::Retired => {
+            retire_entry(current, &updated);
+            conv.changed = true;
         }
+        BoundCleanup::Folded => record_fold(conv, &updated),
+        BoundCleanup::RetainedEvidence => {}
     }
     Ok(())
 }

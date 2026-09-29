@@ -340,6 +340,89 @@ fn requarantine_fold_writes_journal_once_after_retirement() {
     cleanup(&root);
 }
 
+/// 同趟恢复中「先折叠、后重隔离失败」的跨条目窗口（评审 5346509928）：
+/// A 折叠后，B 的重隔离预 rename 映射写不得把 A 的退役持久化——B 的
+/// rename 失败中断恢复后，A 仍须留在日志中供下次恢复重新折叠，计数不丢。
+/// 以只读子目录让 B 的 rename 自然失败（日志中间写在 library/ 下不受影响，
+/// 精确落在本评审描述的窗口）。
+#[cfg(unix)]
+#[test]
+fn earlier_fold_survives_later_requarantine_failure() {
+    use std::os::unix::fs::PermissionsExt;
+    let (library, root) = temp_fixture();
+    fs::create_dir_all(library.join("assets").join("sub")).expect("建子目录");
+    // A：媒体在原位（committed + 隔离项缺失 → 重隔离 → 折叠）
+    fs::write(library.join("assets").join("la-a.png"), b"A").expect("写 A 媒体");
+    // B：媒体在原位但父目录将被去写权限（重隔离的 rename 失败）
+    fs::write(library.join("assets").join("sub").join("la-b.png"), b"B").expect("写 B 媒体");
+    write_index_raw(
+        &library,
+        &json!({ "assets": by_id([]), "groups": by_id([]) }),
+    );
+    let (adev, aino) = file_identity(&library.join("assets").join("la-a.png"));
+    let (bdev, bino) = file_identity(&library.join("assets").join("sub").join("la-b.png"));
+    write_journal_raw(
+        &library,
+        json!([
+            journal_entry_json(
+                "t-a",
+                "la-a",
+                "assets/la-a.png",
+                "assets/.trash/t-a",
+                adev,
+                aino
+            ),
+            journal_entry_json(
+                "t-b",
+                "la-b",
+                "assets/sub/la-b.png",
+                "assets/.trash/t-b",
+                bdev,
+                bino
+            ),
+        ]),
+    );
+    fs::set_permissions(
+        library.join("assets").join("sub"),
+        fs::Permissions::from_mode(0o500),
+    )
+    .expect("子目录去写权限");
+    let err = recover(&cap(&library)).expect_err("B 的重隔离 rename 应失败");
+    assert!(err.to_string().contains("重隔离失败"), "意外诊断：{err}");
+    // 关键判别：A 的条目不得被 B 的中间写从日志冲掉
+    let mid = read_journal_raw(&library);
+    assert!(
+        mid.to_string().contains("la-a"),
+        "先前折叠条目的退役不得被中途写持久化：{mid}"
+    );
+    // 恢复写权限后重试：两笔都折叠收敛，隔离项与计数都不丢
+    fs::set_permissions(
+        library.join("assets").join("sub"),
+        fs::Permissions::from_mode(0o755),
+    )
+    .expect("恢复子目录写权限");
+    let recovery = recover(&cap(&library)).expect("重试恢复应成功");
+    assert_eq!(read_journal_raw(&library), json!([]), "两笔均应折叠退场");
+    assert_eq!(
+        read_archive_raw(&library)["retainedCleanupCount"],
+        json!(2),
+        "两笔折叠计数都不丢"
+    );
+    assert_eq!(recovery.cleanup_pending.len(), 1);
+    assert_eq!(
+        recovery.cleanup_pending[0].count,
+        Some(2),
+        "摘要结构化计数应为 2：{:?}",
+        recovery.cleanup_pending
+    );
+    let trash_files: Vec<_> = fs::read_dir(library.join("assets").join(".trash"))
+        .expect("读隔离目录")
+        .map(|e| e.expect("目录项"))
+        .collect();
+    assert_eq!(trash_files.len(), 2, "A 与 B 的隔离项都应保留");
+    cleanup(&root);
+}
+
 /// 连续删除不积累日志：每次删除入口先恢复（折叠上一笔已完成条目），
 /// 守卫读到的投影恒为个位数——真实可达删除次数内不会触达写拒绝或
 /// 只读告警态（issue #359 验收：硬墙仅对崩溃窗口积压与证据条目保留）。
