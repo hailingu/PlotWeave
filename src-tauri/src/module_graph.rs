@@ -50,21 +50,19 @@ struct FileScan {
 }
 
 /// 一条 use 语句：inline 栈与花括号作用域快照（块开括号的 token 下标
-/// 序列，词法包含 = 前缀关系）+ 全文件内递增的语句序号。
+/// 序列，词法包含 = 前缀关系）。
 struct UseStmt {
     inline_stack: Vec<String>,
     tokens: Vec<String>,
     scope: Vec<usize>,
-    seq: usize,
 }
 
-/// 一条 `as` 重命名绑定：本地名 → 路径段，附声明处作用域与序号（评审
+/// 一条 `as` 重命名绑定：本地名 → 路径段，附声明处作用域（评审
 /// 5352172371：平行作用域复用同一别名名时须按词法可见性绑定）。
 struct AliasBinding {
     name: String,
     segs: Vec<String>,
     scope: Vec<usize>,
-    seq: usize,
 }
 
 /// 一条 mod 声明：inline_path = 声明位置的外层 inline 模块栈（文件模块
@@ -339,7 +337,6 @@ struct ScanState {
     depth: usize,
     cfg_test: bool,
     pending_path: bool,
-    seq: usize,
 }
 
 fn scan_tokens(tokens: &[&str]) -> FileScan {
@@ -352,7 +349,6 @@ fn scan_tokens(tokens: &[&str]) -> FileScan {
         depth: 0,
         cfg_test: false,
         pending_path: false,
-        seq: 0,
     };
     let mut i = 0;
     while i < tokens.len() {
@@ -476,8 +472,6 @@ fn scan_use_stmt(tokens: &[&str], i: usize, st: &mut ScanState) -> usize {
         panic!("use 语句缺少分号（token 残缺）");
     }
     if !st.cfg_test {
-        let seq = st.seq;
-        st.seq += 1;
         let stack = st.inline.iter().map(|(n, _)| n.clone()).collect();
         let scope = st.scope.clone();
         let path = tokens[i + 1..j]
@@ -489,14 +483,12 @@ fn scan_use_stmt(tokens: &[&str], i: usize, st: &mut ScanState) -> usize {
                 name,
                 segs,
                 scope: scope.clone(),
-                seq,
             });
         }
         st.uses.push(UseStmt {
             inline_stack: stack,
             tokens: path,
             scope,
-            seq,
         });
     }
     j + 1
@@ -618,18 +610,18 @@ fn expand_segments(
     if first_is_child {
         return segs;
     }
-    // 词法可见绑定（评审 5352172371）：同名别名按「声明序在先且作用域
-    // 是使用处作用域的前缀」过滤，取最近声明的一个（遮蔽语义）；链式
+    // 词法可见绑定（评审 5352172371/5353024715）：use 引入的名字在整个
+    // 包围作用域可见（含声明之前，声明序不作过滤）；取作用域最深的
+    // 可见绑定（内层遮蔽外层——同作用域同名 use 非法，无并列）；链式
     // 别名极罕见，单层展开（登记）
     let visible = scan
         .renames
         .iter()
         .filter(|b| {
             Some(b.name.as_str()) == segs.first().map(String::as_str)
-                && b.seq < u.seq
                 && is_scope_prefix(&b.scope, &u.scope)
         })
-        .max_by_key(|b| b.seq);
+        .max_by_key(|b| b.scope.len());
     match visible {
         Some(bound) => {
             let mut expanded = bound.segs.clone();

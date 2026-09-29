@@ -110,6 +110,12 @@ fn parse_use_tree(prefix: &[String], tokens: &[String], i: &mut usize, tree: &mu
 /// 解析花括号分组内的元素序列（逗号分隔，允许尾逗号）。
 fn parse_use_group(prefix: &[String], tokens: &[String], i: &mut usize, tree: &mut UseTree) {
     loop {
+        // 空组（评审 5353024715）：`use crate::a::{};` / `use {};` 的首
+        // token 即闭合括号，直接消费返回，不要求路径段
+        if tokens.get(*i).map(String::as_str) == Some("}") {
+            *i += 1;
+            return;
+        }
         parse_use_tree(prefix, tokens, i, tree);
         match tokens.get(*i).map(String::as_str) {
             Some(",") => {

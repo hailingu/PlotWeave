@@ -656,6 +656,36 @@ fn path_attribute_mods_fail_closed() {
 }
 
 #[test]
+fn alias_visibility_spans_the_whole_scope() {
+    // 评审 5353024715：use 引入的名字在整个包围作用域可见（含声明
+    // 之前）——声明序过滤会把「先引用后声明」的合法形态错当外部，
+    // a::child 边丢失、真环隐形
+    let found = cycles(&[
+        ("lib.rs", "mod host;\nmod a;\n"),
+        ("a/mod.rs", "mod child;\n"),
+        ("a/child.rs", "use crate::host::H;\n"),
+        (
+            "host.rs",
+            "fn f() { use dep::child::X; use crate::a as dep; }\n",
+        ),
+    ]);
+    assert_eq!(found.len(), 1, "先引用后声明的别名应正确绑定：{found:?}");
+}
+
+#[test]
+fn empty_use_groups_are_accepted() {
+    // 评审 5353024715：use crate::b::{}; 与 use {}; 是合法空组，
+    // 不得 fail-closed panic，也不产生边
+    let graph = edges(&[
+        ("lib.rs", "mod a;\nmod b;\n"),
+        ("a.rs", "use crate::b::{};\nuse {};\nuse crate::b::B;\n"),
+        ("b.rs", "pub struct B;\n"),
+    ]);
+    assert!(graph["a.rs"].contains("b.rs"));
+    assert_eq!(graph["a.rs"].len(), 1, "空组不产生边：{:?}", graph["a.rs"]);
+}
+
+#[test]
 #[should_panic(expected = "找不到对应文件")]
 fn missing_mod_file_fails_closed() {
     cycles(&[("lib.rs", "mod ghost;\n")]);
