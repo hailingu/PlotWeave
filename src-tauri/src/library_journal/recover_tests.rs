@@ -626,8 +626,9 @@ fn recover_cleans_hard_link_residue_same_identity() {
 /// issue #229 契约：cleanupPending 条目序列化为结构化 `{ kind, message }`——
 /// 前端按机器码 kind 分类（routine 才可给 .trash 清理指引），不经中文文案
 /// 前缀推导；展示措辞/本地化调整不改变分类。折叠摘要（issue #359）额外
-/// 携带可选 `count`（该条目代表的累计保留数），普通/证据条目不序列化该
-/// 字段——旧前端忽略 count 仍按单条展示，形状向后兼容。
+/// 携带可选 `count`（该条目代表的累计保留数）与可选 `bytes`（issue #427：
+/// 隔离区合计字节量级，量级未知时缺省），普通/证据条目不序列化这两个
+/// 字段——旧前端忽略新增字段仍按单条展示，形状向后兼容。
 #[test]
 fn cleanup_pending_serializes_machine_kind_alongside_message() {
     let recovery = Recovery {
@@ -635,7 +636,8 @@ fn cleanup_pending_serializes_machine_kind_alongside_message() {
             CleanupPendingItem::routine("媒体已隔离待清理：assets/la-1.png"),
             CleanupPendingItem::routine_counted(
                 500,
-                "隔离区累计保留 500 个已核验清理项（可人工清理 assets/.trash；整体移除后计数自动归零）",
+                Some(62_914_560),
+                "隔离区累计保留 500 个已核验清理项，合计 60.0 MiB（可人工清理 assets/.trash；整体移除后计数自动归零）",
             ),
             CleanupPendingItem::evidence("隔离项保留（身份不符或被占用）：la-4 / t-y"),
         ],
@@ -645,7 +647,7 @@ fn cleanup_pending_serializes_machine_kind_alongside_message() {
         serde_json::to_value(&recovery.cleanup_pending).expect("序列化"),
         json!([
             { "kind": "routine", "message": "媒体已隔离待清理：assets/la-1.png" },
-            { "kind": "routine", "message": "隔离区累计保留 500 个已核验清理项（可人工清理 assets/.trash；整体移除后计数自动归零）", "count": 500 },
+            { "kind": "routine", "message": "隔离区累计保留 500 个已核验清理项，合计 60.0 MiB（可人工清理 assets/.trash；整体移除后计数自动归零）", "count": 500, "bytes": 62914560 },
             { "kind": "evidence", "message": "隔离项保留（身份不符或被占用）：la-4 / t-y" }
         ])
     );

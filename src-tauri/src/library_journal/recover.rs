@@ -18,7 +18,7 @@ use super::fsync::fsync_dir;
 use super::journal_io::{read_journal, write_journal, JournalEntry};
 use super::trash::{
     ensure_trash_dir, identity_bound_unlink, open_trash_dir, path_identity, restore_from_trash,
-    verify_trash_identity, PathIdentity, TrashVerdict, TRASH_DIR,
+    trash_total_bytes, verify_trash_identity, PathIdentity, TrashVerdict, TRASH_DIR,
 };
 
 /// cleanupPending 条目的机器可读分类（issue #229）：前端按 kind 决定
@@ -37,13 +37,17 @@ pub(crate) enum CleanupKind {
 /// cleanupPending 条目（issue #229）：程序可判定的 kind + 展示文案；
 /// 折叠摘要额外携带可选结构化 `count`（issue #359：该条目代表的累计
 /// 保留数，前端待清理计数取各条目 count 之和、缺省按 1——不经文案推导，
-/// 旧前端忽略该字段仍按单条展示）。
+/// 旧前端忽略该字段仍按单条展示）与可选结构化 `bytes`（issue #427：
+/// 隔离区顶层普通文件合计字节——折叠移除日志闸门的间接背压后，这是
+/// 隔离区无界增长的唯一咨询性量级信号；量级未知时缺省，不猜数）。
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub(crate) struct CleanupPendingItem {
     pub(crate) kind: CleanupKind,
     pub(crate) message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) bytes: Option<u64>,
 }
 
 impl CleanupPendingItem {
@@ -52,15 +56,22 @@ impl CleanupPendingItem {
             kind: CleanupKind::Routine,
             message: message.into(),
             count: None,
+            bytes: None,
         }
     }
     /// 折叠摘要条目（issue #359）：kind 仍为 routine（可给清理指引），
-    /// `count` 为该摘要代表的已核验保留项累计数。
-    pub(crate) fn routine_counted(count: u64, message: impl Into<String>) -> Self {
+    /// `count` 为该摘要代表的已核验保留项累计数；`bytes`（issue #427）
+    /// 为隔离区合计字节量级，读取失败按 None（未知）携带。
+    pub(crate) fn routine_counted(
+        count: u64,
+        bytes: Option<u64>,
+        message: impl Into<String>,
+    ) -> Self {
         Self {
             kind: CleanupKind::Routine,
             message: message.into(),
             count: Some(count),
+            bytes,
         }
     }
     pub(crate) fn evidence(message: impl Into<String>) -> Self {
@@ -68,6 +79,7 @@ impl CleanupPendingItem {
             kind: CleanupKind::Evidence,
             message: message.into(),
             count: None,
+            bytes: None,
         }
     }
 }
@@ -259,6 +271,8 @@ pub(crate) fn recover(library: &CapDir) -> Result<Recovery, LibraryError> {
 /// 整体不存在（用户已按指引清理 assets/.trash）即归零，仍 > 0 则折叠为
 /// 单条 routine 摘要——cleanupPending 响应大小与历史删除总数无关。
 /// 目录打开失败按「未知」处理并保留计数（fail-soft，计数为咨询性指标）。
+/// 摘要同时携带隔离区字节量级（issue #427）：折叠移除日志闸门的间接
+/// 背压后，量级是 `.trash` 无界增长的唯一可见信号，见 folded_summary_message。
 fn finalize_cleanup_summary(
     library: &CapDir,
     folded: u64,
@@ -287,13 +301,49 @@ fn finalize_cleanup_summary(
         }
     }
     if *count > 0 {
-        recovery.cleanup_pending.push(CleanupPendingItem::routine_counted(
-            *count,
-            format!(
-                "隔离区累计保留 {} 个已核验清理项（可人工清理 assets/.trash；整体移除后计数自动归零）",
-                *count
-            ),
-        ));
+        let bytes = assets_root(library)
+            .ok()
+            .and_then(|a| trash_total_bytes(&a));
+        recovery
+            .cleanup_pending
+            .push(CleanupPendingItem::routine_counted(
+                *count,
+                bytes,
+                folded_summary_message(*count, bytes),
+            ));
+    }
+}
+
+/// 折叠摘要的展示文案（issue #427）：在累计保留数之外携带隔离区字节
+/// 量级（诊断可读，用户可在卷被填满前处置）；量级未知时明示「未知」
+/// 而非静默缺省——读取失败不得伪装成确定值，也不得告警（告警会误停
+/// 前端目录级清理指引）。
+fn folded_summary_message(count: u64, bytes: Option<u64>) -> String {
+    let magnitude = match bytes {
+        Some(b) => format!("合计 {}", format_byte_magnitude(b)),
+        None => "合计大小未知".to_string(),
+    };
+    format!(
+        "隔离区累计保留 {count} 个已核验清理项，{magnitude}（可人工清理 assets/.trash；\
+         整体移除后计数自动归零）"
+    )
+}
+
+/// 咨询性字节量级的人类可读格式（issue #427）：二进制单位、一位小数；
+/// 精确值由结构化 `bytes` 字段承载，message 只需量级可读。
+fn format_byte_magnitude(bytes: u64) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = KIB * 1024.0;
+    const GIB: f64 = MIB * 1024.0;
+    let size = bytes as f64;
+    if size >= GIB {
+        format!("{:.1} GiB", size / GIB)
+    } else if size >= MIB {
+        format!("{:.1} MiB", size / MIB)
+    } else if size >= KIB {
+        format!("{:.1} KiB", size / KIB)
+    } else {
+        format!("{bytes} 字节")
     }
 }
 
