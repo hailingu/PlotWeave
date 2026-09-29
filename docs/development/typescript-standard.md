@@ -4,7 +4,7 @@
 (`src/**` and root frontend manifests). Like the root `AGENTS.md`, this file is
 written in English for agent interoperability.
 
-**Last reviewed**: 2026-09-28
+**Last reviewed**: 2026-09-29
 
 ## Required Reading
 
@@ -175,6 +175,37 @@ splitting a support
 module out of a test facility can no longer escape classification, and a
 facility absorbed back into product code can no longer stay excluded from
 product statistics.
+
+### Coverage Floor And Baseline
+
+(Issue [#393](https://github.com/hailingu/PlotWeave/issues/393), implemented.)
+The frontend coverage floor is versioned and failable. `vite.config.ts` sets
+vitest `coverage.thresholds` to **80% overall line coverage** (global, not
+per-file), so `npm run test:coverage` exits non-zero the moment coverage
+drops below the floor — before any Sonar analysis runs. The value
+deliberately matches the local SonarQube server's Quality Gate coverage
+condition (80%, owner decision 2026-09-29) instead of tracking the measured
+baseline: the server-side condition is not version-controlled, and this
+floor is its repo-side equivalent. `scripts/sonar-quality-gate.sh` re-checks
+both LCOV reports (frontend and Rust) against the same 80% floor on the same
+`DA` line-hit basis the scanner imports and the gate ledger records
+(`frontendLineCoveragePercent`); exactly 80.00% passes, mirroring the
+server's "below the condition fails" semantics.
+
+Measured baseline, recorded for reference (2026-09-29): **98.1% line
+coverage** — vitest v8 metric 98.12%, and the gate ledger's LCOV `DA` metric
+98.13 for the same tree. The gap to the floor is headroom, not a commitment
+to maintain the baseline value; per-run values stay visible in
+`docs/development/gate-history.jsonl`.
+
+Boundaries: only **line** coverage has a floor — branch metrics have none on
+either side of the stack (the Rust report has no branch metric on the pinned
+stable toolchain; see
+[rust-standard.md](rust-standard.md) "Test Coverage" for the Rust baseline,
+the 80% floor shared by both reports, and that boundary). The floor must not
+be met by widening `coverage.exclude`: `scripts/sonar-test-scope.test.ts`
+guards the exclusion list bidirectionally and pins the threshold value, so
+removing the floor or changing its value without review fails `npm test`.
 
 ## TypeScript Engineering Practices
 

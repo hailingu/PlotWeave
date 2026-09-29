@@ -3,7 +3,7 @@
 **Applies to**: any Rust crate in this repository (`src-tauri/**`). Like the
 root `AGENTS.md`, this file is written in English for agent interoperability.
 
-**Last reviewed**: 2026-09-03
+**Last reviewed**: 2026-09-29
 
 ## Required Reading
 
@@ -63,9 +63,23 @@ from unmeasured files. Metric and scope:
   import).
 - **基线（2026-09-19，含 media_format_leaf）**：5619/6803 lines = 82.6%
   line coverage over 41 source files, established with
-  `cargo-llvm-cov 0.9.0` on the pinned stable toolchain. Coverage thresholds/conditions on the Quality Gate are
-  a separate project decision and are intentionally not configured by the
-  introduction change.
+  `cargo-llvm-cov 0.9.0` on the pinned stable toolchain.
+- **下限（issue #393）**：overall line coverage has a versioned, failable
+  floor of **80%**, deliberately matched to the local SonarQube server's
+  Quality Gate coverage condition rather than the 82.6% baseline — the gap
+  is headroom, not a commitment to maintain the baseline (per-run values:
+  `docs/development/gate-history.jsonl`, `rustLineCoveragePercent`).
+  `scripts/sonar-quality-gate.sh` checks the Rust LCOV — and the frontend
+  LCOV — against this floor on the same `DA` line-hit basis before every
+  analysis; the frontend additionally enforces it through vitest
+  `coverage.thresholds` in `vite.config.ts` (see
+  [typescript-standard.md](typescript-standard.md) "Coverage Floor And
+  Baseline" for the frontend floor and baseline). Exactly 80.00% passes.
+  Compliance must not be reached by widening any exclusion list
+  (`scripts/sonar-test-scope.test.ts` guards the frontend list
+  bidirectionally; this Rust report excludes no source file). This
+  supersedes the introduction change's "thresholds intentionally not
+  configured" position.
 - **工具链**：`llvm-tools` is pinned in `rust-toolchain.toml` (provides
   `llvm-profdata`/`llvm-cov`); developers additionally need
   `cargo install cargo-llvm-cov`.

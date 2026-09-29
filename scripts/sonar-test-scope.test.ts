@@ -275,3 +275,18 @@ describe('vite 覆盖率排除与设施清单同源（issue #343）', () => {
     ).toEqual([])
   })
 })
+
+describe('vite 覆盖率下限契约（issue #393）', () => {
+  it('整体行覆盖率下限为 80，与本机 SonarQube 服务端条件对齐且不得静默放宽', () => {
+    // 契约出处：issue #393——仓库必须存在可失败的覆盖率下限（vitest
+    // thresholds），跌破即 npm run test:coverage 非零退出。数值 80 由仓库
+    // 所有者决定（2026-09-29）：与本机 SonarQube 服务端 Quality Gate 的
+    // 80% 行覆盖率条件一致，不追踪实测基线（98.13%，台账
+    // frontendLineCoveragePercent），差额留作余量。口径为行覆盖率（与
+    // sonar-quality-gate.sh 复核、门禁台账同一 LCOV DA 口径）；分支等
+    // 其余口径不设下限（Rust 侧无分支口径，见 rust-standard.md
+    // 「测试覆盖率」）。脚本侧同一 80% 下限的行为由
+    // sonar-quality-gate.test.ts 的 belowFloor/atFloor 形态核验。
+    expect(config.test?.coverage?.thresholds?.lines).toBe(80)
+  })
+})

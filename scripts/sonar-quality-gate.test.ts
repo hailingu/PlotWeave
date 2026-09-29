@@ -16,7 +16,14 @@ const temporaryDirectories: string[] = []
 
 type GateOptions = {
   coverageMode?:
-    'empty' | 'malformed' | 'missing' | 'partial' | 'uncovered' | 'valid'
+    | 'atFloor'
+    | 'belowFloor'
+    | 'empty'
+    | 'malformed'
+    | 'missing'
+    | 'partial'
+    | 'uncovered'
+    | 'valid'
   formatExit?: number
   lintExit?: number
   lockOccupied?: boolean
@@ -25,7 +32,14 @@ type GateOptions = {
   pendingSeed?: string
   plotweaveSonarToken?: string
   rustCoverageMode?:
-    'empty' | 'malformed' | 'missing' | 'partial' | 'uncovered' | 'valid'
+    | 'atFloor'
+    | 'belowFloor'
+    | 'empty'
+    | 'malformed'
+    | 'missing'
+    | 'partial'
+    | 'uncovered'
+    | 'valid'
   scannerExit?: number
   strictIndexExit?: number
   qualityGateStatus?: string
@@ -110,9 +124,21 @@ case "$PLOTWEAVE_TEST_COVERAGE_MODE" in
     mkdir -p "$(dirname "$PLOTWEAVE_COVERAGE_REPORT_PATH")"
     printf '%s\n' 'TN:' 'SF:src/example.ts' 'DA:1,1' 'end_of_record' > "$PLOTWEAVE_COVERAGE_REPORT_PATH"
     ;;
+  # partial（9/10 = 90.00%）与 atFloor（4/5 = 80.00%）均高于/恰在下限：
+  # partial 供台账非整数值断言，atFloor 供「等于下限通过」边界断言
+  #（issue #393）；belowFloor（1/2 = 50.00%）通过非空与已覆盖校验、
+  # 只跌破产线复核。
   partial)
     mkdir -p "$(dirname "$PLOTWEAVE_COVERAGE_REPORT_PATH")"
-    printf '%s\n' 'TN:' 'SF:src/example.ts' 'DA:1,1' 'DA:2,0' 'DA:3,1' 'end_of_record' > "$PLOTWEAVE_COVERAGE_REPORT_PATH"
+    printf '%s\n' 'TN:' 'SF:src/example.ts' 'DA:1,1' 'DA:2,1' 'DA:3,1' 'DA:4,1' 'DA:5,1' 'DA:6,1' 'DA:7,1' 'DA:8,1' 'DA:9,1' 'DA:10,0' 'end_of_record' > "$PLOTWEAVE_COVERAGE_REPORT_PATH"
+    ;;
+  atFloor)
+    mkdir -p "$(dirname "$PLOTWEAVE_COVERAGE_REPORT_PATH")"
+    printf '%s\n' 'TN:' 'SF:src/example.ts' 'DA:1,1' 'DA:2,1' 'DA:3,1' 'DA:4,1' 'DA:5,0' 'end_of_record' > "$PLOTWEAVE_COVERAGE_REPORT_PATH"
+    ;;
+  belowFloor)
+    mkdir -p "$(dirname "$PLOTWEAVE_COVERAGE_REPORT_PATH")"
+    printf '%s\n' 'TN:' 'SF:src/example.ts' 'DA:1,1' 'DA:2,0' 'end_of_record' > "$PLOTWEAVE_COVERAGE_REPORT_PATH"
     ;;
   empty)
     mkdir -p "$(dirname "$PLOTWEAVE_COVERAGE_REPORT_PATH")"
@@ -142,7 +168,13 @@ case "$PLOTWEAVE_TEST_RUST_COVERAGE_MODE" in
     printf '%s\n' 'TN:' 'SF:src-tauri/src/example.rs' 'DA:1,1' 'end_of_record' > "$PLOTWEAVE_RUST_COVERAGE_REPORT_PATH"
     ;;
   partial)
-    printf '%s\n' 'TN:' 'SF:src-tauri/src/example.rs' 'DA:1,1' 'DA:2,0' 'DA:3,1' 'end_of_record' > "$PLOTWEAVE_RUST_COVERAGE_REPORT_PATH"
+    printf '%s\n' 'TN:' 'SF:src-tauri/src/example.rs' 'DA:1,1' 'DA:2,1' 'DA:3,1' 'DA:4,1' 'DA:5,1' 'DA:6,1' 'DA:7,1' 'DA:8,1' 'DA:9,1' 'DA:10,0' 'end_of_record' > "$PLOTWEAVE_RUST_COVERAGE_REPORT_PATH"
+    ;;
+  atFloor)
+    printf '%s\n' 'TN:' 'SF:src-tauri/src/example.rs' 'DA:1,1' 'DA:2,1' 'DA:3,1' 'DA:4,1' 'DA:5,0' 'end_of_record' > "$PLOTWEAVE_RUST_COVERAGE_REPORT_PATH"
+    ;;
+  belowFloor)
+    printf '%s\n' 'TN:' 'SF:src-tauri/src/example.rs' 'DA:1,1' 'DA:2,0' 'end_of_record' > "$PLOTWEAVE_RUST_COVERAGE_REPORT_PATH"
     ;;
   empty)
     : > "$PLOTWEAVE_RUST_COVERAGE_REPORT_PATH"
@@ -384,6 +416,42 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
     }
   })
 
+  it('前端行覆盖率跌破仓库下限 80% 时停止，不生成 Rust 覆盖率也不扫描（issue #393）', () => {
+    const result = runGate('scripts/sonar-quality-gate.sh', {
+      coverageMode: 'belowFloor',
+    })
+
+    expect(result.status).not.toBe(0)
+    expect(result.log).toContain('npm run test:coverage')
+    expect(result.log).not.toContain('cargo-llvm-cov')
+    expect(result.log).not.toContain('sonar-scanner')
+    expect(`${result.stdout}${result.stderr}`).toContain('低于仓库下限')
+  })
+
+  it('Rust 行覆盖率跌破仓库下限 80% 时停止，不启动扫描（issue #393）', () => {
+    const result = runGate('scripts/sonar-quality-gate.sh', {
+      rustCoverageMode: 'belowFloor',
+    })
+
+    expect(result.status).not.toBe(0)
+    expect(result.log).toContain('cargo-llvm-cov')
+    expect(result.log).not.toContain('sonar-scanner')
+    expect(`${result.stdout}${result.stderr}`).toContain('低于仓库下限')
+  })
+
+  it('两侧行覆盖率恰好等于下限 80% 时通过——下限为 ≥，与服务端「低于才失败」语义一致（issue #393）', () => {
+    const result = runGate('scripts/sonar-quality-gate.sh', {
+      coverageMode: 'atFloor',
+      rustCoverageMode: 'atFloor',
+    })
+
+    expect(result.status).toBe(0)
+    const [line] = result.pending.split('\n').filter(Boolean)
+    const record = JSON.parse(line ?? '')
+    expect(record.frontendLineCoveragePercent).toBe(80)
+    expect(record.rustLineCoveragePercent).toBe(80)
+  })
+
   it('格式检查失败时阻止操作，不生成覆盖率也不扫描（issue #227）', () => {
     const result = runGate('scripts/sonar-quality-gate.sh', { formatExit: 1 })
 
@@ -565,7 +633,7 @@ describe(
       expect(result.history).toBe('')
     })
 
-    it('行覆盖率按本次 LCOV 的 DA 命中统计（2/3 覆盖 → 66.67）', () => {
+    it('行覆盖率按本次 LCOV 的 DA 命中统计（9/10 覆盖 → 90，高于下限不阻断）', () => {
       const result = runGate('scripts/sonar-quality-gate.sh', {
         coverageMode: 'partial',
         rustCoverageMode: 'partial',
@@ -574,8 +642,8 @@ describe(
       expect(result.status).toBe(0)
       const [line] = result.pending.split('\n').filter(Boolean)
       const record = JSON.parse(line ?? '')
-      expect(record.frontendLineCoveragePercent).toBe(66.67)
-      expect(record.rustLineCoveragePercent).toBe(66.67)
+      expect(record.frontendLineCoveragePercent).toBe(90)
+      expect(record.rustLineCoveragePercent).toBe(90)
     })
 
     it('门禁任一环节失败时不追加记录——记录只描述完整通过的运行', () => {
