@@ -189,8 +189,11 @@ baseline: the server-side condition is not version-controlled, and this
 floor is its repo-side equivalent. `scripts/sonar-quality-gate.sh` re-checks
 both LCOV reports (frontend and Rust) against the same 80% floor on the same
 `DA` line-hit basis the scanner imports and the gate ledger records
-(`frontendLineCoveragePercent`); exactly 80.00% passes, mirroring the
-server's "below the condition fails" semantics.
+(`frontendLineCoveragePercent`); exactly 80% passes — the floor comparison
+uses unrounded hit counts (`covered × 100 ≥ total × floor`), so a true ratio
+just below the floor that would round to a displayed `80.00%` is still
+rejected, and rounded percentages remain display- and ledger-only —
+mirroring the server's "below the condition fails" semantics.
 
 Measured baseline, recorded for reference (2026-09-29): **98.1% line
 coverage** — vitest v8 metric 98.12%, and the gate ledger's LCOV `DA` metric

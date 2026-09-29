@@ -38,6 +38,7 @@ type GateOptions = {
     | 'malformed'
     | 'missing'
     | 'partial'
+    | 'roundsToFloor'
     | 'uncovered'
     | 'valid'
   scannerExit?: number
@@ -184,6 +185,14 @@ case "$PLOTWEAVE_TEST_RUST_COVERAGE_MODE" in
     ;;
   uncovered)
     printf '%s\n' 'TN:' 'SF:src-tauri/src/example.rs' 'DA:1,0' 'end_of_record' > "$PLOTWEAVE_RUST_COVERAGE_REPORT_PATH"
+    ;;
+  # roundsToFloor：79998/100000 = 79.998% < 80，但 %.2f 取整后显示 80.00%
+  #——下限比较必须用未取整的命中/总数，取整到下限边界的形态也要阻断
+  #（PR #422 评审 5347340194，Rust 无前端侧 Vitest 阈值的独立第二层）。
+  roundsToFloor)
+    { printf '%s\n' 'TN:' 'SF:src-tauri/src/example.rs'
+      awk 'BEGIN { for (i = 1; i <= 100000; i++) printf "DA:%d,%d\n", i, (i <= 79998) }'
+      printf '%s\n' 'end_of_record'; } > "$PLOTWEAVE_RUST_COVERAGE_REPORT_PATH"
     ;;
 esac`,
   )
@@ -431,6 +440,17 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
   it('Rust 行覆盖率跌破仓库下限 80% 时停止，不启动扫描（issue #393）', () => {
     const result = runGate('scripts/sonar-quality-gate.sh', {
       rustCoverageMode: 'belowFloor',
+    })
+
+    expect(result.status).not.toBe(0)
+    expect(result.log).toContain('cargo-llvm-cov')
+    expect(result.log).not.toContain('sonar-scanner')
+    expect(`${result.stdout}${result.stderr}`).toContain('低于仓库下限')
+  })
+
+  it('真值低于下限但 %.2f 取整为 80.00% 的 Rust 报告仍被阻断（PR #422 评审 5347340194）', () => {
+    const result = runGate('scripts/sonar-quality-gate.sh', {
+      rustCoverageMode: 'roundsToFloor',
     })
 
     expect(result.status).not.toBe(0)

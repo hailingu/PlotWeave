@@ -74,7 +74,10 @@ from unmeasured files. Metric and scope:
   analysis; the frontend additionally enforces it through vitest
   `coverage.thresholds` in `vite.config.ts` (see
   [typescript-standard.md](typescript-standard.md) "Coverage Floor And
-  Baseline" for the frontend floor and baseline). Exactly 80.00% passes.
+  Baseline" for the frontend floor and baseline). Exactly 80% passes — the
+  comparison uses unrounded hit counts, so a true ratio that merely rounds
+  to a displayed 80.00% is still rejected (rounded percentages are display-
+  and ledger-only).
   Compliance must not be reached by widening any exclusion list
   (`scripts/sonar-test-scope.test.ts` guards the frontend list
   bidirectionally; this Rust report excludes no source file). This

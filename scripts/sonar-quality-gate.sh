@@ -66,10 +66,32 @@ lcov_line_coverage_percent() {
 #（vite.config.ts）在 npm run test:coverage 内先行失败。
 coverage_floor_percent=80
 enforce_line_coverage_floor() {
-  percent=$(lcov_line_coverage_percent "$2")
-  awk -v percent="$percent" -v floor="$coverage_floor_percent" \
-    'BEGIN { exit !(percent + 0 >= floor + 0) }' ||
-    fail "$1行覆盖率 ${percent}% 低于仓库下限 ${coverage_floor_percent}%（issue #393）"
+  # 比较用未取整的命中/总数整数交叉相乘（covered×100 ≥ total×floor）：
+  # 79.998% 类真值若先经 %.2f 取整成 80.00 再比较会被误放行，而 Rust 无
+  # 前端侧 Vitest 阈值的独立第二层（PR #422 评审 5347340194）。取整
+  # 百分比只出现在失败消息与台账（后者由 lcov_line_coverage_percent
+  # 独立计算，语义不变）。
+  verdict=$(awk -F, -v floor="$coverage_floor_percent" '
+    BEGIN { covered = 0; total = 0 }
+    /^DA:/ { total += 1; if ($2 + 0 > 0) covered += 1 }
+    END {
+      if (total > 0 && covered * 100 >= total * floor) {
+        print "pass"
+      } else {
+        printf "fail %d/%d（取整 %.2f%%）\n", covered, total, \
+          (total > 0 ? 100 * covered / total : 0)
+      }
+    }
+  ' "$2" 2>/dev/null) || verdict=''
+  case $verdict in
+    pass) return 0 ;;
+    fail\ *)
+      fail "$1行覆盖率 ${verdict#fail } 低于仓库下限 ${coverage_floor_percent}%（issue #393）"
+      ;;
+    *)
+      fail "无法复核 $1行覆盖率下限：$2"
+      ;;
+  esac
 }
 
 # 门禁结论摘要记录（issue #355）：完整通过后把关键结论——UTC 时间、被检
