@@ -30,9 +30,11 @@ use std::path::Path;
 
 mod cycles;
 mod lexer;
+mod tree;
 mod use_tree;
 use cycles::cycles_of;
 use lexer::{strip_comments_and_literals, tokenize};
+use tree::ModuleTree;
 use use_tree::{strip_raw_ident, use_tree_of};
 
 /// 图节点键 = 相对 src 根的 posix 路径（失败信息可读，与前端守卫口径一致）。
@@ -43,10 +45,26 @@ type ModuleKey = String;
 /// 文件在 outer 对应子目录）与 use（栈快照 + 路径 token）。
 struct FileScan {
     mods: Vec<ModDecl>,
-    uses: Vec<(Vec<String>, Vec<String>)>,
-    /// `as` 重命名绑定（本地名 → 路径段；文件级近似，块级别名作用域
-    /// 不细分——过度展开只会多检，方向安全）。
-    renames: Vec<(String, Vec<String>)>,
+    uses: Vec<UseStmt>,
+    renames: Vec<AliasBinding>,
+}
+
+/// 一条 use 语句：inline 栈与花括号作用域快照（块开括号的 token 下标
+/// 序列，词法包含 = 前缀关系）+ 全文件内递增的语句序号。
+struct UseStmt {
+    inline_stack: Vec<String>,
+    tokens: Vec<String>,
+    scope: Vec<usize>,
+    seq: usize,
+}
+
+/// 一条 `as` 重命名绑定：本地名 → 路径段，附声明处作用域与序号（评审
+/// 5352172371：平行作用域复用同一别名名时须按词法可见性绑定）。
+struct AliasBinding {
+    name: String,
+    segs: Vec<String>,
+    scope: Vec<usize>,
+    seq: usize,
 }
 
 /// 一条 mod 声明：inline_path = 声明位置的外层 inline 模块栈（文件模块
@@ -63,19 +81,19 @@ struct ModDecl {
 /// `all(test, …)`；`any(test, feature)` 不蕴含，按并集保守计入。评审
 /// 5347759049：此前只认深度 1 裸 test，`all(test, unix)` 被漏判）。组内
 /// 字符串已在清洗层抹除，不产生假 token。
-fn parse_attr(tokens: &[&str], i: usize) -> (usize, bool, bool) {
+fn parse_attr(tokens: &[&str], i: usize) -> AttrInfo {
     let mut j = i + 1;
-    let mut is_inner = false;
+    let mut info = AttrInfo::default();
     if tokens.get(j) == Some(&"!") {
-        is_inner = true;
+        info.is_inner = true;
         j += 1;
     }
     if tokens.get(j) != Some(&"[") {
-        return (j, false, is_inner);
+        info.next = j;
+        return info;
     }
     j += 1;
     let mut depth = 1usize;
-    let mut is_test = false;
     while j < tokens.len() && depth > 0 {
         match tokens[j] {
             "[" | "(" => depth += 1,
@@ -83,15 +101,29 @@ fn parse_attr(tokens: &[&str], i: usize) -> (usize, bool, bool) {
             "cfg" if depth == 1 && tokens.get(j + 1) == Some(&"(") => {
                 if let Some(close) = find_group_close(tokens, j + 2) {
                     if cfg_implies_test(&tokens[j + 2..close]) {
-                        is_test = true;
+                        info.is_test = true;
                     }
                 }
             }
+            // 属性括号内任意深度出现 `path =`（含 cfg_attr 包装）即视为
+            // path 属性——清洗层已抹除字面量值，调用方对生产 mod fail-closed
+            "path" if tokens.get(j + 1) == Some(&"=") => info.has_path = true,
             _ => {}
         }
         j += 1;
     }
-    (j, is_test, is_inner)
+    info.next = j;
+    info
+}
+
+/// 属性解析结论：next = 消费后下标；is_test = cfg 蕴含 test；is_inner =
+/// `#!` 内属性；has_path = 属性内出现 `path =`（评审 5352172371）。
+#[derive(Default)]
+struct AttrInfo {
+    next: usize,
+    is_test: bool,
+    is_inner: bool,
+    has_path: bool,
 }
 
 /// 自开括号下标起找配对闭括号（含嵌套）；未闭合返回 None。
@@ -293,25 +325,45 @@ fn skip_test_item(tokens: &[&str], mut k: usize) -> usize {
     k
 }
 
-/// 扫描单文件 token：产出非 cfg(test) 的 mod 声明与 use 路径；inline 模块入栈供 `super::` 解析，门控项与宏体跳过。
+/// 扫描单文件 token：产出非 cfg(test) 的 mod 声明与 use 路径；inline
+/// 模块入栈供 `super::` 解析，花括号作用域快照供词法可见性判定（评审
+/// 5352172371），门控项与宏体跳过，`#[path]` 模块 fail-closed 拒绝
+///（评审 5352172371：清洗层不保留字面量内容，无法解析 path 值——
+/// 响亮失败优于静默扫错位置）。
+struct ScanState {
+    mods: Vec<ModDecl>,
+    uses: Vec<UseStmt>,
+    renames: Vec<AliasBinding>,
+    inline: Vec<(String, usize)>,
+    scope: Vec<usize>,
+    depth: usize,
+    cfg_test: bool,
+    pending_path: bool,
+    seq: usize,
+}
+
 fn scan_tokens(tokens: &[&str]) -> FileScan {
-    let mut mods = Vec::new();
-    let mut uses = Vec::new();
-    let mut renames: Vec<(String, Vec<String>)> = Vec::new();
-    let mut cfg_test = false;
-    let mut inline: Vec<(String, usize)> = Vec::new();
-    let mut depth = 0usize;
+    let mut st = ScanState {
+        mods: Vec::new(),
+        uses: Vec::new(),
+        renames: Vec::new(),
+        inline: Vec::new(),
+        scope: Vec::new(),
+        depth: 0,
+        cfg_test: false,
+        pending_path: false,
+        seq: 0,
+    };
     let mut i = 0;
     while i < tokens.len() {
         match tokens[i] {
             "#" => {
-                let (next, is_test, is_inner) = parse_attr(tokens, i);
-                // 内属性作用于整个外层模块（评审 5350627153）：只挂起会给
-                // 首项消费后泄漏，其余测试声明误入生产图（假环方向）。
-                // 文件级（无 inline 栈且不在块内）→ 整文件视为测试代码；
-                // inline 模块体内 → 跳至该模块闭合
-                if is_inner && is_test {
-                    match inner_test_gate(tokens, next, depth, &inline) {
+                let attr = parse_attr(tokens, i);
+                // 内属性作用于整个外层模块（评审 5350627153）：文件级 →
+                // 整文件测试代码；模块体顶层 → 门控整个模块；块内 → 只
+                // 门控当前块
+                if attr.is_inner && attr.is_test {
+                    match inner_test_gate(tokens, attr.next, st.depth, &st.inline) {
                         Some(resumed) => i = resumed,
                         None => {
                             return FileScan {
@@ -323,63 +375,67 @@ fn scan_tokens(tokens: &[&str]) -> FileScan {
                     }
                     continue;
                 }
-                cfg_test |= is_test;
-                i = next;
+                st.cfg_test |= attr.is_test;
+                st.pending_path |= attr.has_path;
+                i = attr.next;
             }
             "{" => {
-                depth += 1;
+                st.scope.push(i);
+                st.depth += 1;
                 i += 1;
             }
             "}" => {
-                pop_inline(&mut inline, depth);
-                depth = depth.saturating_sub(1);
+                pop_inline(&mut st.inline, st.depth);
+                st.scope.pop();
+                st.depth = st.depth.saturating_sub(1);
                 i += 1;
             }
             "mod" => {
-                i = scan_mod_decl(tokens, i, cfg_test, &mut mods, &mut inline, &mut depth);
-                cfg_test = false;
+                i = scan_mod_decl(tokens, i, &mut st);
+                st.cfg_test = false;
+                st.pending_path = false;
             }
             "use" => {
-                i = scan_use_stmt(tokens, i, cfg_test, &inline, &mut uses, &mut renames);
-                cfg_test = false;
+                i = scan_use_stmt(tokens, i, &mut st);
+                st.cfg_test = false;
             }
             "macro_rules" if tokens.get(i + 1) == Some(&"!") => {
-                // 跳过宏体（{、[、( 三种合法定界符，评审 5351210423）的
-                // 同时消费挂起的 cfg(test)：宏之后的项是另一项，不得继承
-                // 门控（评审 5349783070：泄漏会漏采其后的生产声明）
+                // 跳过宏体（{、[、( 三种定界符）并消费挂起标志（评审
+                // 5349783070：泄漏会漏采其后的生产声明）
                 i = skip_macro_body(tokens, i + 2);
-                cfg_test = false;
+                st.cfg_test = false;
+                st.pending_path = false;
             }
-            t if cfg_test && item_keyword(t) => {
+            t if st.cfg_test && item_keyword(t) => {
                 i = skip_test_item(tokens, i + 1);
-                cfg_test = false;
+                st.cfg_test = false;
+                st.pending_path = false;
             }
             _ => i += 1,
         }
     }
     FileScan {
-        mods,
-        uses,
-        renames,
+        mods: st.mods,
+        uses: st.uses,
+        renames: st.renames,
     }
 }
 
 /// mod 声明分派（scan_tokens 的 mod 臂）：外部（`;`）或 inline（`{`）；
 /// cfg(test) 门控时整体跳过。返回消费后的下标。
-fn scan_mod_decl(
-    tokens: &[&str],
-    i: usize,
-    cfg_test: bool,
-    mods: &mut Vec<ModDecl>,
-    inline: &mut Vec<(String, usize)>,
-    depth: &mut usize,
-) -> usize {
+fn scan_mod_decl(tokens: &[&str], i: usize, st: &mut ScanState) -> usize {
     let name = strip_raw_ident(tokens.get(i + 1).copied().unwrap_or(""));
-    let stack: Vec<String> = inline.iter().map(|(n, _)| n.clone()).collect();
+    let stack: Vec<String> = st.inline.iter().map(|(n, _)| n.clone()).collect();
+    // #[path] 改变模块文件位置，清洗层不保留字面量内容无法解析——
+    // 生产代码 fail-closed 拒绝（登记边界）；cfg(test) 门控的整体跳过
+    // 优先（本仓唯一 #[path] 即此形态）
+    if st.pending_path && !st.cfg_test {
+        panic!("mod {name} 携带 #[path]，issue #399 守卫不支持（请用标准文件布局）");
+    }
     match tokens.get(i + 2) {
         Some(&";") => {
-            if !cfg_test && !name.is_empty() {
-                mods.push(ModDecl {
+            if !st.cfg_test && !name.is_empty() {
+                st.mods.push(ModDecl {
                     inline_path: stack,
                     name: name.to_string(),
                     file_backed: true,
@@ -388,15 +444,16 @@ fn scan_mod_decl(
             i + 3
         }
         Some(&"{") => {
-            if cfg_test {
+            if st.cfg_test {
                 return skip_braced(tokens, i + 2);
             }
             if name.is_empty() {
                 panic!("mod 声明缺少名字");
             }
-            *depth += 1;
-            inline.push((name.to_string(), *depth));
-            mods.push(ModDecl {
+            st.depth += 1;
+            st.scope.push(i + 2);
+            st.inline.push((name.to_string(), st.depth));
+            st.mods.push(ModDecl {
                 inline_path: stack,
                 name: name.to_string(),
                 file_backed: false,
@@ -410,14 +467,7 @@ fn scan_mod_decl(
 
 /// use 语句采集（scan_tokens 的 use 臂）：推进到分号，非门控时记录
 /// inline 栈快照与路径 token。返回消费后的下标。
-fn scan_use_stmt(
-    tokens: &[&str],
-    i: usize,
-    cfg_test: bool,
-    inline: &[(String, usize)],
-    uses: &mut Vec<(Vec<String>, Vec<String>)>,
-    renames: &mut Vec<(String, Vec<String>)>,
-) -> usize {
+fn scan_use_stmt(tokens: &[&str], i: usize, st: &mut ScanState) -> usize {
     let mut j = i + 1;
     while j < tokens.len() && tokens[j] != ";" {
         j += 1;
@@ -425,145 +475,31 @@ fn scan_use_stmt(
     if j >= tokens.len() {
         panic!("use 语句缺少分号（token 残缺）");
     }
-    if !cfg_test {
-        let stack = inline.iter().map(|(n, _)| n.clone()).collect();
+    if !st.cfg_test {
+        let seq = st.seq;
+        st.seq += 1;
+        let stack = st.inline.iter().map(|(n, _)| n.clone()).collect();
+        let scope = st.scope.clone();
         let path = tokens[i + 1..j]
             .iter()
             .map(|s| s.to_string())
             .collect::<Vec<_>>();
-        renames.extend(use_tree_of(&path).renames);
-        uses.push((stack, path));
+        for (name, segs) in use_tree_of(&path).renames {
+            st.renames.push(AliasBinding {
+                name,
+                segs,
+                scope: scope.clone(),
+                seq,
+            });
+        }
+        st.uses.push(UseStmt {
+            inline_stack: stack,
+            tokens: path,
+            scope,
+            seq,
+        });
     }
     j + 1
-}
-
-/// 模块树：模块路径段（crate 根为空）→ 文件键，与各模块的子模块名集。
-struct ModuleTree {
-    /// 逻辑模块路径 → 文件所有者集（评审 5350339687：平台混合变体——
-    /// `#[cfg(unix)] mod platform {…}` 与 `#[cfg(windows)] mod platform;`
-    /// ——并集口径保留双方）。
-    file_of: BTreeMap<Vec<String>, BTreeSet<ModuleKey>>,
-    children: BTreeMap<Vec<String>, BTreeSet<String>>,
-    /// 规范迭代源：每个物理文件恰一次，配其规范包含路径——inline 别名
-    /// 只用于解析目标（评审 5350339687：别名路径重扫会虚构错误边）。
-    canonical: BTreeSet<(Vec<String>, ModuleKey)>,
-}
-
-/// 声明文件的子模块目录（不带尾斜杠；根为空）：`lib.rs`/`mod.rs` 的子模块
-/// 在同级目录，`NAME.rs` 的在 `NAME/` 子目录（与 rustc 的路径规则一致）。
-fn child_dir_of(file_key: &str) -> String {
-    let file = file_key.rsplit('/').next().unwrap_or(file_key);
-    let dir = match file_key.rfind('/') {
-        Some(p) => &file_key[..p],
-        None => "",
-    };
-    if file == "lib.rs" || file == "mod.rs" {
-        dir.to_string()
-    } else {
-        let stem = file.strip_suffix(".rs").unwrap_or(file);
-        if dir.is_empty() {
-            stem.to_string()
-        } else {
-            format!("{dir}/{stem}")
-        }
-    }
-}
-
-/// 声明文件子目录 + inline 栈各段 → 子模块文件所在目录（根为空）。
-fn sub_dir(dir: &str, inline_path: &[String]) -> String {
-    let mut parts: Vec<&str> = Vec::new();
-    if !dir.is_empty() {
-        parts.push(dir);
-    }
-    parts.extend(inline_path.iter().map(String::as_str));
-    parts.join("/")
-}
-
-/// 子模块声明的文件键：`NAME.rs` 与 `NAME/mod.rs` 恰存在其一，缺失或并存
-/// 均失败（并存本就是非法 Rust，fail-closed 而非任选）。
-fn child_file_key(files: &BTreeMap<ModuleKey, String>, dir: &str, name: &str) -> ModuleKey {
-    let sibling = if dir.is_empty() {
-        format!("{name}.rs")
-    } else {
-        format!("{dir}/{name}.rs")
-    };
-    let nested = if dir.is_empty() {
-        format!("{name}/mod.rs")
-    } else {
-        format!("{dir}/{name}/mod.rs")
-    };
-    match (files.contains_key(&sibling), files.contains_key(&nested)) {
-        (true, false) => sibling,
-        (false, true) => nested,
-        (true, true) => panic!("mod {name} 同时存在 {sibling} 与 {nested}（非法 Rust）"),
-        (false, false) => panic!("mod {name} 找不到对应文件（{sibling} / {nested} 均缺失）"),
-    }
-}
-
-impl ModuleTree {
-    /// 自 lib.rs 沿非 cfg(test) mod 声明构建可达模块树并缓存扫描产物。
-    fn build(
-        files: &BTreeMap<ModuleKey, String>,
-        scans: &mut BTreeMap<ModuleKey, FileScan>,
-    ) -> ModuleTree {
-        let mut tree = ModuleTree {
-            file_of: BTreeMap::new(),
-            children: BTreeMap::new(),
-            canonical: BTreeSet::new(),
-        };
-        let root = ModuleKey::from("lib.rs");
-        assert!(files.contains_key(&root), "src 根缺少 lib.rs");
-        tree.file_of
-            .entry(Vec::new())
-            .or_default()
-            .insert(root.clone());
-        tree.canonical.insert((Vec::new(), root.clone()));
-        let mut queue = vec![(Vec::<String>::new(), root)];
-        while let Some((path, key)) = queue.pop() {
-            if !scans.contains_key(&key) {
-                let source = &files[&key];
-                let scan = scan_tokens(&tokenize(&strip_comments_and_literals(source)));
-                scans.insert(key.clone(), scan);
-            }
-            let scan = &scans[&key];
-            let dir = child_dir_of(&key);
-            for decl in &scan.mods {
-                let mut mod_path = path.clone();
-                mod_path.extend(decl.inline_path.iter().cloned());
-                tree.children
-                    .entry(mod_path.clone())
-                    .or_default()
-                    .insert(decl.name.clone());
-                // inline 模块的「文件」= 声明文件（评审 5350168645：use
-                // 目标是 inline 模块时须解析回所在文件，否则该边漏采、
-                // 真环隐形）；不入队——该文件本就按自身路径扫描
-                if !decl.file_backed {
-                    mod_path.push(decl.name.clone());
-                    tree.file_of
-                        .entry(mod_path)
-                        .or_default()
-                        .insert(key.clone());
-                    continue;
-                }
-                // 外部文件子模块的目录 = 声明文件子目录 + inline 栈各段
-                //（与 rustc 的目录归属规则一致）
-                let child_dir = sub_dir(&dir, &decl.inline_path);
-                let child_key = child_file_key(files, &child_dir, &decl.name);
-                let mut child_path = mod_path;
-                child_path.push(decl.name.clone());
-                // 同路径的多个目标专属所有者都登记（评审 5350168645/
-                // 5350339687）；文件只在首次声明时入队与进规范迭代源
-                let owners = tree.file_of.entry(child_path.clone()).or_default();
-                let first = owners.insert(child_key.clone());
-                if first {
-                    tree.canonical
-                        .insert((child_path.clone(), child_key.clone()));
-                    queue.push((child_path, child_key));
-                }
-            }
-        }
-        tree
-    }
 }
 
 /// 解析单条 use 完整路径 → 目标文件所有者集：`crate::` 重定到根、`super::`
@@ -650,10 +586,10 @@ fn use_targets_of(
 ) -> Vec<ModuleKey> {
     let scan = &scans[key];
     let mut targets = Vec::new();
-    for (inline, use_toks) in &scan.uses {
-        for segs in use_tree_of(use_toks).paths {
-            let segs = expand_segments(tree, scan, path, inline, segs);
-            for target in resolve_use(tree, path, inline, &segs) {
+    for u in &scan.uses {
+        for segs in use_tree_of(&u.tokens).paths {
+            let segs = expand_segments(tree, scan, path, u, segs);
+            for target in resolve_use(tree, path, &u.inline_stack, &segs) {
                 if &target != key {
                     targets.push(target);
                 }
@@ -671,29 +607,42 @@ fn expand_segments(
     tree: &ModuleTree,
     scan: &FileScan,
     path: &[String],
-    inline: &[String],
+    u: &UseStmt,
     segs: Vec<String>,
 ) -> Vec<String> {
     let first_is_child = segs.first().is_some_and(|f| {
         let mut ctx = path.to_vec();
-        ctx.extend(inline.iter().cloned());
+        ctx.extend(u.inline_stack.iter().cloned());
         tree.children.get(&ctx).is_some_and(|c| c.contains(f))
     });
     if first_is_child {
         return segs;
     }
-    match scan
+    // 词法可见绑定（评审 5352172371）：同名别名按「声明序在先且作用域
+    // 是使用处作用域的前缀」过滤，取最近声明的一个（遮蔽语义）；链式
+    // 别名极罕见，单层展开（登记）
+    let visible = scan
         .renames
         .iter()
-        .find(|(n, _)| Some(n.as_str()) == segs.first().map(String::as_str))
-    {
-        Some((_, bound)) => {
-            let mut expanded = bound.clone();
+        .filter(|b| {
+            Some(b.name.as_str()) == segs.first().map(String::as_str)
+                && b.seq < u.seq
+                && is_scope_prefix(&b.scope, &u.scope)
+        })
+        .max_by_key(|b| b.seq);
+    match visible {
+        Some(bound) => {
+            let mut expanded = bound.segs.clone();
             expanded.extend(segs[1..].iter().cloned());
             expanded
         }
         None => segs,
     }
+}
+
+/// 词法包含判定：a 是否为 b 的前缀（a 的块都是 b 的祖先块）。
+fn is_scope_prefix(a: &[usize], b: &[usize]) -> bool {
+    a.len() <= b.len() && a.iter().zip(b).all(|(x, y)| x == y)
 }
 
 /// 递归读取 dir 下全部 .rs 文件（键 = 相对 posix 路径）。main.rs 与测试

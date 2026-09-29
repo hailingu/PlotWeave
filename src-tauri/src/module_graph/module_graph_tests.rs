@@ -75,6 +75,7 @@ fn legal_layering_super_edges_and_brace_groups_pass() {
             concat!(
                 "pub(crate) mod diagnostics;\npub(crate) mod error;\npub(crate) mod group_commands;\n",
                 "#[cfg(test)]\nmod helper;\n",
+                "#[cfg(test)]\n#[path = \"anywhere.rs\"]\nmod pathed;\n",
                 "#[cfg(all(test, unix))]\nmod unix_only_tests;\n",
                 "#[cfg(any(test, feature = \"diag\"))]\nmod diag_extras;\n",
                 "#[cfg(test)]\nmod tests {\n    use super::*;\n    use crate::store::persist::P;\n}\n",
@@ -614,6 +615,44 @@ fn block_scoped_aliases_do_not_shadow_module_children() {
         "块内别名+块内使用按原能力展开：{:?}",
         graph["user.rs"]
     );
+}
+
+#[test]
+fn alias_resolution_respects_lexical_scope() {
+    // 评审 5352172371：两个作用域复用同一别名名，文件级首匹配会把
+    // fn g 的 dep 错绑到 fn f 的 crate::a——b::child 边丢失、真环隐形；
+    // 按词法可见性（作用域前缀 + 声明序在前）取最近声明的绑定
+    let found = cycles(&[
+        ("lib.rs", "mod host;\nmod a;\nmod b;\n"),
+        ("a/mod.rs", "mod child;\n"),
+        ("a/child.rs", "pub struct X;\n"),
+        ("b/mod.rs", "mod child;\n"),
+        ("b/child.rs", "use crate::host::H;\n"),
+        (
+            "host.rs",
+            concat!(
+                "fn f() { use crate::a as dep; let _ = dep::child::X; }\n",
+                "fn g() { use crate::b as dep; use dep::child::X; }\n",
+            ),
+        ),
+    ]);
+    assert_eq!(
+        found.len(),
+        1,
+        "fn g 的 dep 应绑定到 crate::b，与 b/child 的反向依赖成环：{found:?}"
+    );
+}
+
+#[test]
+#[should_panic(expected = "#[path]")]
+fn path_attribute_mods_fail_closed() {
+    // 评审 5352172371：#[path = "…"] 改变模块文件位置，清洗层不保留
+    // 字面量值无法解析——生产 mod fail-closed 拒绝并给出明确诊断，
+    // 优于静默探默认位置（误报或扫错文件）
+    cycles(&[
+        ("lib.rs", "#[path = \"alternate.rs\"]\nmod imp;\n"),
+        ("alternate.rs", "pub struct I;\n"),
+    ]);
 }
 
 #[test]
