@@ -35,9 +35,13 @@ Every gated command runs the same complete sequence:
 
 1. `scripts/check-static.sh` — Prettier format check, ESLint with zero
    warnings, `typecheck:strict`. Fail-fast, ahead of all coverage work.
-2. `npm run test:coverage` — the full frontend suite, serialized to LCOV.
+2. `npm run test:coverage` — the full frontend suite, serialized to LCOV and
+   threshold-checked against the versioned 80% overall line-coverage floor
+   (issue #393).
 3. `scripts/rust-coverage.sh` — `cargo-llvm-cov` over the library and the
-   `media_format_leaf` test target.
+   `media_format_leaf` test target, after which the same 80% floor is
+   re-checked on both LCOV reports (frontend and Rust) before any analysis is
+   published (issue #393).
 4. `sonar-scanner` publishing the analysis, then waiting for the Quality Gate,
    then a separate check that new-code unresolved issues are zero.
 5. Since issue #355, a fully passing run appends one summary record to a
@@ -135,6 +139,14 @@ Two records live in this file and must not be conflated (评审 4120364296):
   cost are unchanged: exactly one gate run of the same complete sequence. The
   extension only strengthens coverage; it introduces no weaker variant, skip,
   or fast path.
+- The **issue #393 extension (2026-09-29) also deliberately changes gate
+  behavior**: it adds a versioned, failable 80% overall line-coverage floor —
+  vitest `thresholds` inside `npm run test:coverage`, plus a re-check of both
+  LCOV reports in `scripts/sonar-quality-gate.sh` before the analysis is
+  published. The floor matches the local SonarQube server's Quality Gate
+  coverage condition, so the gate no longer depends on that unversioned
+  server-side condition for its coverage conclusion. It introduces no
+  cheaper variant, skip, or fast path, and relaxes nothing.
 
 The following remain in force exactly as written in `AGENTS.md`, and nothing
 in this file is an exception to them:

@@ -84,14 +84,14 @@ npm run tauri dev  # 启动 Tauri 开发调试（Vite 前端 + Rust 壳）
 仓库使用同一套 `pre-commit` / `pre-merge-commit` / `prepare-commit-msg` / `pre-push` 门禁（issue #404：合并非快进合并、`git revert`、`git cherry-pick` 与 rebase 重放等自动提交路径同样过检）。启用 hooks 后，每次产生提交的操作与推送都会依次：
 
 1. 运行 `scripts/check-static.sh`（`npm run check:static`）：Prettier 格式检查 + ESLint 零警告（`--max-warnings=0`），失败即阻止（fail-fast 在覆盖率与扫描之前）。
-2. 运行 `npm run test:coverage`，生成最新的 `coverage/lcov.info`，并确认报告非空、包含源文件和实际命中行。
-3. 运行 `scripts/rust-coverage.sh`（cargo-llvm-cov），生成最新的 `src-tauri/target/coverage/lcov-rust.info`（Rust 语句覆盖率），并确认报告非空、包含源文件和实际命中行。
+2. 运行 `npm run test:coverage`，生成最新的 `coverage/lcov.info`，并确认报告非空、包含源文件和实际命中行；整体行覆盖率跌破仓库下限 80% 时同样非零退出（vitest `thresholds`，issue #393）。
+3. 运行 `scripts/rust-coverage.sh`（cargo-llvm-cov），生成最新的 `src-tauri/target/coverage/lcov-rust.info`（Rust 语句覆盖率），并确认报告非空、包含源文件和实际命中行；随后按同一 LCOV 口径复核前端与 Rust 两份报告的行覆盖率均不低于 80%（issue #393，与本机 SonarQube 服务端 Quality Gate 的 80% 条件对齐的仓库侧可失败下限，恰等于下限通过；基线与边界见 `docs/development/rust-standard.md` 与 `docs/development/typescript-standard.md`）。
 4. 运行 `sonar-scanner` 并等待 SonarQube Quality Gate 完成。
 5. 确认 Quality Gate 为 `OK`，且**新增代码**的未解决问题为 `0`（增量清零：按 SonarQube New Code 周期过滤，即 `sinceLeakPeriod`；存量历史问题另行治理，不阻塞提交）。
 
 本机需安装 `sonar-scanner` 与 `cargo-llvm-cov`（`cargo install cargo-llvm-cov`；`llvm-tools` 组件由 rust-toolchain.toml 自动提供），并在执行 Git 操作的终端环境中显式设置 `SONAR_HOST_URL`；这样可以避免新版扫描器在地址缺失时误连 SonarQube Cloud。服务需要认证时，通过本机环境变量 `SONAR_TOKEN` 提供令牌；未设置 `SONAR_TOKEN` 时回退读取 `PLOTWEAVE_SONAR_TOKEN`（可导出在 `~/.zshrc` 中，Git 钩子继承调用方终端的环境）。地址按本机环境配置，令牌禁止写入仓库。也可以用 `npm run sonar:gate` 手动执行完整门禁。
 
-测试失败、覆盖率报告无效、扫描失败、Quality Gate 未通过、服务不可用或新增代码仍有未解决问题时，Git 操作会被阻止。同一工作树只允许一个门禁运行，以免并发扫描覆盖共享产物。同一提交操作内经 `scripts/gate-tree-marker.sh`（单次消费的树标记）去重：普通 `git commit` 与合并仍各恰一次完整门禁，`--no-verify` 跳过 `pre-commit` 时由 `prepare-commit-msg` 兜底（标记不可跨操作复用；推送侧 `--no-verify` 仍被禁止）。应逐项修复新增问题并重复执行门禁，直到新增问题数归零。
+测试失败、覆盖率跌破下限、覆盖率报告无效、扫描失败、Quality Gate 未通过、服务不可用或新增代码仍有未解决问题时，Git 操作会被阻止。同一工作树只允许一个门禁运行，以免并发扫描覆盖共享产物。同一提交操作内经 `scripts/gate-tree-marker.sh`（单次消费的树标记）去重：普通 `git commit` 与合并仍各恰一次完整门禁，`--no-verify` 跳过 `pre-commit` 时由 `prepare-commit-msg` 兜底（标记不可跨操作复用；推送侧 `--no-verify` 仍被禁止）。应逐项修复新增问题并重复执行门禁，直到新增问题数归零。
 
 ### PR 持续集成（issue #228）
 

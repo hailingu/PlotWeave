@@ -56,6 +56,44 @@ lcov_line_coverage_percent() {
   ' "$1" 2>/dev/null || printf '0'
 }
 
+# 覆盖率下限（issue #393）：整体行覆盖率 ≥ 80%——与本机 SonarQube 服务端
+# Quality Gate 的 80% 条件对齐的仓库侧可失败下限，不依赖服务端条件存在
+# 或未被改动；按与门禁台账相同的 LCOV DA 口径在扫描前复核两份报告。
+# 数值不追踪实测基线（Rust 82.6%/前端 98.13%，见 rust-standard.md 与
+# typescript-standard.md），差额留作余量。恰等于下限通过（与服务端
+# 「低于才失败」语义一致）；达标不得靠扩充排除清单（scripts/
+# sonar-test-scope.test.ts 双向核验）。前端另有 vitest thresholds
+#（vite.config.ts）在 npm run test:coverage 内先行失败。
+coverage_floor_percent=80
+enforce_line_coverage_floor() {
+  # 比较用未取整的命中/总数整数交叉相乘（covered×100 ≥ total×floor）：
+  # 79.998% 类真值若先经 %.2f 取整成 80.00 再比较会被误放行，而 Rust 无
+  # 前端侧 Vitest 阈值的独立第二层（PR #422 评审 5347340194）。取整
+  # 百分比只出现在失败消息与台账（后者由 lcov_line_coverage_percent
+  # 独立计算，语义不变）。
+  verdict=$(awk -F, -v floor="$coverage_floor_percent" '
+    BEGIN { covered = 0; total = 0 }
+    /^DA:/ { total += 1; if ($2 + 0 > 0) covered += 1 }
+    END {
+      if (total > 0 && covered * 100 >= total * floor) {
+        print "pass"
+      } else {
+        printf "fail %d/%d（取整 %.2f%%）\n", covered, total, \
+          (total > 0 ? 100 * covered / total : 0)
+      }
+    }
+  ' "$2" 2>/dev/null) || verdict=''
+  case $verdict in
+    pass) return 0 ;;
+    fail\ *)
+      fail "$1行覆盖率 ${verdict#fail } 低于仓库下限 ${coverage_floor_percent}%（issue #393）"
+      ;;
+    *)
+      fail "无法复核 $1行覆盖率下限：$2"
+      ;;
+  esac
+}
+
 # 门禁结论摘要记录（issue #355）：完整通过后把关键结论——UTC 时间、被检
 # 索引树（与 gate-tree-marker 同键）、运行时 HEAD、Quality Gate 状态、新
 # 增代码未解决问题数、前端与 Rust 行覆盖率——追加为 .git 内待物化文件的
@@ -139,11 +177,17 @@ grep -q '^SF:' "$coverage_report_path" ||
 grep -Eq '^DA:[0-9]+,[1-9][0-9]*' "$coverage_report_path" ||
   fail "覆盖率报告没有任何已覆盖代码行：$coverage_report_path"
 
+# 前端行覆盖率下限（issue #393）：fail-fast 在 Rust 覆盖率生成与扫描之前
+enforce_line_coverage_floor '前端' "$coverage_report_path"
+
 # Rust 覆盖率（issue #169）：经 rust-coverage.sh 生成并校验（非空、有
 # 源文件记录、有已覆盖行），与前端 LCOV 一并导入质量报告——「存在 Rust
 # 测试」不等于「已度量覆盖率」，未度量与未覆盖由此可区分。
 printf '%s\n' '[SonarQube] 生成最新 Rust 覆盖率……'
 "$script_directory/rust-coverage.sh"
+
+# Rust 行覆盖率下限（issue #393）：与前端同一口径，扫描发布前复核
+enforce_line_coverage_floor 'Rust' "$rust_coverage_report_path"
 
 printf '%s\n' '[SonarQube] 扫描并等待 Quality Gate……'
 "$scanner_bin" \
