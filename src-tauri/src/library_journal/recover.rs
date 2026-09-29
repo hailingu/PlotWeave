@@ -248,7 +248,10 @@ fn finalize_cleanup_summary(
     recovery: &mut Recovery,
 ) {
     if folded > 0 {
-        *count += folded;
+        // 饱和累加（评审 5346397307）：读取侧已把脏计数截到合理上限，
+        // 本笔折叠又受日志条数约束，正常不可达饱和点——防御性算术保证
+        // 咨询性计数永不 panic（debug）或回绕隐藏保留项（release）
+        *count = count.saturating_add(folded);
         if let Err(e) = write_archive(library, *count) {
             recovery
                 .warnings
@@ -636,17 +639,17 @@ fn re_quarantine(
     fsync_dir(&trash)?;
     fsync_dir(&parent)?;
     // 清理函数已按能力缺失或身份冲突报告唯一诊断；重隔离不再重复分类。
-    match try_bound_cleanup(&trash, &updated, recovery)? {
-        BoundCleanup::Retired => {
-            retire_entry(current, &updated);
-            write_journal(library, current)?;
-        }
-        BoundCleanup::Folded => {
-            retire_entry(current, &updated);
-            write_journal(library, current)?;
+    // 条目退役交由 recover() 的收尾单次落盘（评审 5346397307）：此处再
+    // 立即落盘会让「退役已持久化、收尾写失败中断恢复」把该笔折叠的归档
+    // 计数一并丢失——保留项从此不可见；推迟到收尾写则失败时条目仍在
+    // 磁盘（①已持久化新映射），下次恢复重新折叠，计数不丢。
+    let outcome = try_bound_cleanup(&trash, &updated, recovery)?;
+    if !matches!(outcome, BoundCleanup::RetainedEvidence) {
+        retire_entry(current, &updated);
+        conv.changed = true;
+        if matches!(outcome, BoundCleanup::Folded) {
             conv.folded += 1;
         }
-        BoundCleanup::RetainedEvidence => {}
     }
     Ok(())
 }

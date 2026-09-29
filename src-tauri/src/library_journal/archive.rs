@@ -27,9 +27,15 @@ pub(crate) const ARCHIVE_FILE_NAME: &str = "asset-delete-archive.json";
 /// 超限即异型——受限读取截断后解析失败，不物化超大文件。
 const ARCHIVE_MAX_BYTES: usize = 128;
 
+/// 计数合理上限（评审 5346397307）：每笔折叠对应隔离区中一个真实文件，
+/// 超过物理不可达文件计数上界（`u32::MAX`）的值只可能来自手工投毒的
+/// 脏归档——按异型处置（告警并按 0 重计），防止与折叠累加时 u64 溢出
+/// panic（debug）或回绕清零隐藏全部保留项（release）。
+const ARCHIVE_COUNT_MAX: u64 = u32::MAX as u64;
+
 /// 读取累计折叠计数：缺失回退 0；符号链接/非普通文件/超限/异型 JSON/
-/// 非法形状（非对象、字段缺失或非 u64）→ 告警并按 0 继续；本轮折叠发生
-/// 时 write_archive 覆写修复。
+/// 非法形状（非对象、字段缺失或非 u64）或超过合理上限（评审 5346397307）
+/// → 告警并按 0 继续；本轮折叠发生时 write_archive 覆写修复。
 pub(super) fn read_archive(library: &CapDir, warnings: &mut Vec<String>) -> u64 {
     let blocked = |warnings: &mut Vec<String>, why: &str| {
         warnings.push(format!(
@@ -67,7 +73,8 @@ pub(super) fn read_archive(library: &CapDir, warnings: &mut Vec<String>) -> u64 
     };
     match serde_json::from_str::<serde_json::Value>(&text) {
         Ok(v) => match v.get("retainedCleanupCount").and_then(|n| n.as_u64()) {
-            Some(count) => count,
+            Some(count) if count <= ARCHIVE_COUNT_MAX => count,
+            Some(_) => blocked(warnings, "超过合理上限"),
             None => blocked(warnings, "异型"),
         },
         Err(_) => blocked(warnings, "异型"),

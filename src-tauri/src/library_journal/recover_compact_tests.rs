@@ -250,6 +250,96 @@ fn unwritable_archive_keeps_fold_fail_soft() {
     cleanup(&root);
 }
 
+/// 归档计数脏值（u64::MAX）：累加不得 panic（debug 溢出）或回绕清零隐藏
+/// 保留项——超过合理上限的计数按异型告警、按 0 重计，本轮折叠照常发生
+/// 并覆写修复（评审 5346397307）。
+#[test]
+fn absurd_archive_count_is_rejected_not_overflowed() {
+    let (library, root) = temp_fixture();
+    write_index_raw(
+        &library,
+        &json!({ "assets": by_id([]), "groups": by_id([]) }),
+    );
+    foldable_journal(&library, 1);
+    fs::write(
+        library.join(ARCHIVE_FILE_NAME),
+        br#"{"retainedCleanupCount":18446744073709551615}"#,
+    )
+    .expect("写脏归档");
+    let recovery = recover(&cap(&library)).expect("恢复应成功");
+    assert!(!recovery.read_only, "脏计数不得阻断库写入");
+    assert!(
+        recovery.warnings.iter().any(|w| w.contains("清理归档计数")),
+        "应携带归档告警：{:?}",
+        recovery.warnings
+    );
+    assert_eq!(read_journal_raw(&library), json!([]), "折叠照常完成");
+    assert_eq!(
+        read_archive_raw(&library)["retainedCleanupCount"],
+        json!(1),
+        "本轮折叠应覆写修复脏计数（0 + 1，不回绕）"
+    );
+    assert_eq!(
+        recovery.cleanup_pending.len(),
+        1,
+        "摘要按重计后的 1 报告：{:?}",
+        recovery.cleanup_pending
+    );
+    assert!(
+        recovery.cleanup_pending[0].message.contains("1 个"),
+        "摘要计数不得回绕：{}",
+        recovery.cleanup_pending[0].message
+    );
+    cleanup(&root);
+}
+
+/// 重隔离折叠路径的写盘序（评审 5346397307）：①预 rename 映射落盘、
+/// 收尾单次退役落盘、归档计数落盘——条目退役之后不得再存在重复的易
+/// 失败写（第二次写失败会中断恢复，使已退役条目的折叠计数永不归档，
+/// 保留项从此不可见）。以记录式故障注入统计 Rename 阶段数钉住该结构：
+/// 本夹具恰为 3 次（映射 + 退役 + 归档）。
+#[cfg(unix)]
+#[test]
+fn requarantine_fold_writes_journal_once_after_retirement() {
+    let (library, root) = temp_fixture();
+    fs::write(library.join("assets").join("la-1.png"), b"PNG").expect("写媒体");
+    write_index_raw(
+        &library,
+        &json!({ "assets": by_id([]), "groups": by_id([]) }),
+    );
+    let (dev, ino) = file_identity(&library.join("assets").join("la-1.png"));
+    write_journal_raw(
+        &library,
+        json!([journal_entry_json(
+            "t-1",
+            "la-1",
+            "assets/la-1.png",
+            "assets/.trash/t-x",
+            dev,
+            ino
+        )]),
+    );
+    let injection = crate::store::atomic_write_faults::Injection::new(None, None);
+    let recovery = recover(&cap(&library)).expect("恢复应成功");
+    let renames = injection
+        .stages()
+        .into_iter()
+        .filter(|s| matches!(s, crate::store::atomic_write_faults::Stage::Rename))
+        .count();
+    drop(injection);
+    assert_eq!(
+        recovery.cleanup_pending.len(),
+        1,
+        "折叠应照常报告摘要：{:?}",
+        recovery.cleanup_pending
+    );
+    assert_eq!(
+        renames, 3,
+        "重隔离折叠路径应为 3 次原子写 rename：预 rename 映射 + 收尾退役 + 归档"
+    );
+    cleanup(&root);
+}
+
 /// 连续删除不积累日志：每次删除入口先恢复（折叠上一笔已完成条目），
 /// 守卫读到的投影恒为个位数——真实可达删除次数内不会触达写拒绝或
 /// 只读告警态（issue #359 验收：硬墙仅对崩溃窗口积压与证据条目保留）。
