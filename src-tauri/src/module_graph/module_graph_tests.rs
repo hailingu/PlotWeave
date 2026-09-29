@@ -164,6 +164,7 @@ fn raw_identifiers_do_not_swallow_following_uses() {
             "a.rs",
             concat!(
                 "fn f() { let r#type = 1; }\n",
+                "let r#use = 1;\n",
                 "use crate::b::B;\n",
                 "let s = r#\"mod ghost; use crate::ghost::G;\"#;\n",
             ),
@@ -180,6 +181,45 @@ fn raw_identifiers_do_not_swallow_following_uses() {
         1,
         "raw string 内容中的 mod/use 文本不得产生边：{:?}",
         graph["a.rs"]
+    );
+}
+
+#[test]
+fn cfg_test_macro_does_not_leak_gating_to_following_items() {
+    // 评审 5349783070：#[cfg(test)] macro_rules! 后的生产 use 不得继承
+    // 门控（泄漏会静默漏采，真环对守卫隐形）
+    let graph = edges(&[
+        ("lib.rs", "mod a;\nmod b;\n"),
+        (
+            "a.rs",
+            "#[cfg(test)]\nmacro_rules! probe { () => {} }\nuse crate::b::B;\n",
+        ),
+        ("b.rs", "pub struct B;\n"),
+    ]);
+    assert!(
+        graph["a.rs"].contains("b.rs"),
+        "宏后的生产 use 必须照常入图：{:?}",
+        graph["a.rs"]
+    );
+}
+
+#[test]
+fn file_mod_inside_inline_module_resolves_nested_directory() {
+    // 评审 5349783070：`mod outer { mod child; }` 的 child 文件在
+    // outer 对应的嵌套子目录（foo/outer/child.rs），且挂在 outer 路径下
+    let graph = edges(&[
+        ("lib.rs", "mod foo;\nuse crate::foo::outer::child::C;\n"),
+        ("foo.rs", "mod outer { pub mod child; }\n"),
+        ("foo/outer/child.rs", "pub struct C;\n"),
+    ]);
+    assert!(
+        graph["lib.rs"].contains("foo/outer/child.rs"),
+        "inline 模块内的文件子模块应解析到嵌套目录：{:?}",
+        graph["lib.rs"]
+    );
+    assert!(
+        graph.contains_key("foo/outer/child.rs"),
+        "嵌套子模块文件应在图中作为节点"
     );
 }
 

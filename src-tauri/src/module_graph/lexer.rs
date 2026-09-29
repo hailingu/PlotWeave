@@ -180,6 +180,26 @@ pub(super) fn tokenize(cleaned: &str) -> Vec<&str> {
     tokens
 }
 
+/// `r#ident` 裸标识符的终点（None = 非该形态）：r 后恰一个 `#` 再跟
+/// 标识符起始。清洗层已抹除 raw string（`r#\"` 序列不复存在），分词层
+/// 见到的 `r#` + 字母必为裸标识符，须整体成单 token——拆散会把 `r#use`
+/// 里的 use 误读为导入并对后续 token fail-closed（评审 5349783070）。
+fn raw_ident_end(cleaned: &str, i: usize) -> Option<usize> {
+    let bytes = cleaned.as_bytes();
+    if bytes.get(i) != Some(&b'r') || bytes.get(i + 1) != Some(&b'#') {
+        return None;
+    }
+    let head = *bytes.get(i + 2)?;
+    if !(head.is_ascii_alphabetic() || head == b'_') {
+        return None;
+    }
+    let mut j = i + 3;
+    while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
+        j += 1;
+    }
+    Some(j)
+}
+
 /// 单步分词（tokenize 的循环体）：返回下一个待处理下标。
 fn token_step<'a>(
     cleaned: &'a str,
@@ -187,6 +207,10 @@ fn token_step<'a>(
     start: &mut Option<usize>,
     i: usize,
 ) -> usize {
+    if let Some(end) = raw_ident_end(cleaned, i) {
+        tokens.push(&cleaned[i..end]);
+        return end;
+    }
     let byte = cleaned.as_bytes()[i];
     if byte.is_ascii_alphanumeric() || byte == b'_' {
         if start.is_none() {

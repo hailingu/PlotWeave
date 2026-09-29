@@ -37,10 +37,20 @@ use lexer::{strip_comments_and_literals, tokenize};
 /// 图节点键 = 相对 src 根的 posix 路径（失败信息可读，与前端守卫口径一致）。
 type ModuleKey = String;
 
-/// 单文件扫描产物：非 cfg(test) mod 声明（名 + inline 与否）与 use（栈快照 + 路径 token）。
+/// 单文件扫描产物：非 cfg(test) mod 声明（含声明位置的 inline 栈，评审
+/// 5349783070：`mod outer { mod child; }` 的 child 须挂在 outer 下、其
+/// 文件在 outer 对应子目录）与 use（栈快照 + 路径 token）。
 struct FileScan {
-    mods: Vec<(String, bool)>,
+    mods: Vec<ModDecl>,
     uses: Vec<(Vec<String>, Vec<String>)>,
+}
+
+/// 一条 mod 声明：inline_path = 声明位置的外层 inline 模块栈（文件模块
+/// 路径之后的段）；file_backed = 外部文件声明（`mod x;`），否则 inline 块。
+struct ModDecl {
+    inline_path: Vec<String>,
+    name: String,
+    file_backed: bool,
 }
 
 /// 解析自 tokens[i] == "#" 起的属性（含 `#!` 形态），返回消费后下标与
@@ -232,7 +242,11 @@ fn scan_tokens(tokens: &[&str]) -> FileScan {
                 cfg_test = false;
             }
             "macro_rules" if tokens.get(i + 1) == Some(&"!") && tokens.get(i + 3) == Some(&"{") => {
+                // 跳过宏体的同时消费挂起的 cfg(test)：宏之后的项是另一项，
+                // 不得继承门控（评审 5349783070：泄漏会把后续生产 use/mod
+                // 误判为测试代码而漏采，真环对守卫隐形）
                 i = skip_braced(tokens, i + 3);
+                cfg_test = false;
             }
             t if cfg_test && item_keyword(t) => {
                 i = skip_test_item(tokens, i + 1);
@@ -250,15 +264,20 @@ fn scan_mod_decl(
     tokens: &[&str],
     i: usize,
     cfg_test: bool,
-    mods: &mut Vec<(String, bool)>,
+    mods: &mut Vec<ModDecl>,
     inline: &mut Vec<(String, usize)>,
     depth: &mut usize,
 ) -> usize {
     let name = tokens.get(i + 1).copied().unwrap_or("");
+    let stack: Vec<String> = inline.iter().map(|(n, _)| n.clone()).collect();
     match tokens.get(i + 2) {
         Some(&";") => {
             if !cfg_test && !name.is_empty() {
-                mods.push((name.to_string(), false));
+                mods.push(ModDecl {
+                    inline_path: stack,
+                    name: name.to_string(),
+                    file_backed: true,
+                });
             }
             i + 3
         }
@@ -271,7 +290,11 @@ fn scan_mod_decl(
             }
             *depth += 1;
             inline.push((name.to_string(), *depth));
-            mods.push((name.to_string(), true));
+            mods.push(ModDecl {
+                inline_path: stack,
+                name: name.to_string(),
+                file_backed: false,
+            });
             i + 3
         }
         // mod 名后既非 ; 也非 {：非法 Rust，fail-closed
@@ -427,6 +450,16 @@ fn child_dir_of(file_key: &str) -> String {
     }
 }
 
+/// 声明文件子目录 + inline 栈各段 → 子模块文件所在目录（根为空）。
+fn sub_dir(dir: &str, inline_path: &[String]) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    if !dir.is_empty() {
+        parts.push(dir);
+    }
+    parts.extend(inline_path.iter().map(String::as_str));
+    parts.join("/")
+}
+
 /// 子模块声明的文件键：`NAME.rs` 与 `NAME/mod.rs` 恰存在其一，缺失或并存
 /// 均失败（并存本就是非法 Rust，fail-closed 而非任选）。
 fn child_file_key(files: &BTreeMap<ModuleKey, String>, dir: &str, name: &str) -> ModuleKey {
@@ -470,17 +503,22 @@ impl ModuleTree {
             }
             let scan = &scans[&key];
             let dir = child_dir_of(&key);
-            for (name, inline) in &scan.mods {
+            for decl in &scan.mods {
+                let mut mod_path = path.clone();
+                mod_path.extend(decl.inline_path.iter().cloned());
                 tree.children
-                    .entry(path.clone())
+                    .entry(mod_path.clone())
                     .or_default()
-                    .insert(name.clone());
-                if *inline {
+                    .insert(decl.name.clone());
+                if !decl.file_backed {
                     continue;
                 }
-                let child_key = child_file_key(files, &dir, name);
-                let mut child_path = path.clone();
-                child_path.push(name.clone());
+                // 外部文件子模块的目录 = 声明文件子目录 + inline 栈各段
+                //（与 rustc 的目录归属规则一致）
+                let child_dir = sub_dir(&dir, &decl.inline_path);
+                let child_key = child_file_key(files, &child_dir, &decl.name);
+                let mut child_path = mod_path;
+                child_path.push(decl.name.clone());
                 if tree
                     .file_of
                     .insert(child_path.clone(), child_key.clone())
