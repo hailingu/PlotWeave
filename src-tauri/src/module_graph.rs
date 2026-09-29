@@ -315,7 +315,9 @@ fn skip_test_item(tokens: &[&str], mut k: usize) -> usize {
                 }
                 return k;
             }
-            ";" => return k + 1,
+            // 逗号终止的带属性元素（struct/enum 字段、元组元素，评审
+            // 5353260028）：不经 {/; 走到下一个元素会把它一并吞掉（漏检）
+            ";" | "," => return k + 1,
             _ => {}
         }
         k += 1;
@@ -457,7 +459,7 @@ fn scan_mod_decl(tokens: &[&str], i: usize, st: &mut ScanState) -> usize {
             i + 3
         }
         // mod 名后既非 ; 也非 {：非法 Rust，fail-closed
-        _ => panic!("mod 声明形态异常：mod {name}"),
+        _ => panic!("mod 声明形态异常（mod 声明缺少名字或位置非法）：mod {name}"),
     }
 }
 
@@ -503,6 +505,7 @@ fn resolve_use(
     inline: &[String],
     segs: &[String],
 ) -> Vec<ModuleKey> {
+    eprintln!("RU-IN segs={:?}", segs);
     let mut ctx: Vec<String> = file_path.to_vec();
     ctx.extend(inline.iter().cloned());
     let mut it = 0;
@@ -521,14 +524,26 @@ fn resolve_use(
             }
         }
         _ => {
-            // uniform paths（2018+）：裸首段可解析为当前模块的直接子模块
-            //（评审 5351210423：library_journal/store 的 facade→child 边
-            // 此前被当外部 crate 丢弃）；未命中才视为外部
+            // uniform paths（2018+）：裸首段优先按当前模块的直接子模块
+            // 解析（评审 5351210423）；未命中时仍须继续下钻——路径可能来自
+            // 别名展开的绝对模块路径（评审 5353260028），此时首段是 crate
+            // 根的子模块而非当前模块的子模块（位置解析已由调用方完成）。
+            // 仅当路径既非当前子模块也非根下可达模块时才视为外部返回空
             let first = segs.first().map(String::as_str);
-            let is_child =
+            let is_local_child =
                 first.is_some_and(|f| tree.children.get(&ctx).is_some_and(|c| c.contains(f)));
-            if !is_child {
-                return Vec::new();
+            if !is_local_child {
+                // 非当前子模块：若是根模块的子模块则从根下钻（别名展开的
+                // 绝对路径；评审 5353260028），否则视为外部返回空
+                let is_root_module = first.is_some_and(|f| {
+                    tree.children
+                        .get(&Vec::new())
+                        .is_some_and(|c| c.contains(f))
+                });
+                if !is_root_module {
+                    return Vec::new();
+                }
+                ctx.clear();
             }
         }
     }
@@ -540,12 +555,15 @@ fn resolve_use(
         ctx.push(seg.clone());
         it += 1;
     }
-    tree.file_of
+    let out: Vec<ModuleKey> = tree
+        .file_of
         .get(&ctx)
         .cloned()
         .unwrap_or_default()
         .into_iter()
-        .collect()
+        .collect();
+    eprintln!("RU-OUT segs={:?} ctx={:?} out={:?}", segs, ctx, out);
+    out
 }
 
 /// 全图构建：模块树 + use 边（自环剔除、BTreeSet 去重排序），
@@ -580,10 +598,12 @@ fn use_targets_of(
     let mut targets = Vec::new();
     for u in &scan.uses {
         for segs in use_tree_of(&u.tokens).paths {
-            let segs = expand_segments(tree, scan, path, u, segs);
-            for target in resolve_use(tree, path, &u.inline_stack, &segs) {
-                if &target != key {
-                    targets.push(target);
+            for cand in expand_segments(tree, scan, path, u, segs) {
+                for target in resolve_use(tree, path, &u.inline_stack, &cand) {
+                    if &target != key {
+                        eprintln!("DBG-TARGET key={:?} target={:?}", key, target);
+                        targets.push(target);
+                    }
                 }
             }
         }
@@ -595,41 +615,103 @@ fn use_targets_of(
 /// 别名（评审 5351722665：块内 use … as child 的遮蔽不得替换掉更早的
 /// use child::X 的正确解析——别名是替换不是叠加，误展开会让真环隐形）；
 /// 未命中子模块才按本地别名展开（单层；链式别名极罕见，登记不展开）。
+/// 一条 use 路径的裸首段处置（use_targets_of 的内层），返回**并行**
+/// 候选集（原子路径始终保留）：别名展开是近似启发（不能区分绑定目标
+/// 是模块还是 fn/struct），展开错误的路径会漏掉本应存在的边——故展开
+/// 只作附加候选，不替换原子路径（评审 5353260028：裸绑定目标解析为空
+/// 时展开会把边从真实目标吞噬）。子模块优先（评审 5351722665 遮蔽
+/// 防护）只抑制展开候选的产生，不影响原子路径的解析。
+/// 一条 use 路径的裸首段处置（use_targets_of 的内层），返回**并行**
+/// 候选集（原子路径始终保留——展开是近似启发，展开错误会吞噬边）。
+/// 仅当词法可见绑定（最深作用域；评审 5352172371/5353024715 整作用域
+/// 可见、遮蔽取内层）的目标**本身是模块路径**时才产生展开候选：
+/// 绑定路径截到模块前缀再拼接尾部（绑定到 fn/struct 等非模块叶子的
+/// 裸绑定不展开，评审 5353260028：use crate::a::dep 的 dep 是 fn，
+/// 完整绑定路径会在 dep 处停滞）。子模块优先（评审 5351722665 遮蔽
+/// 防护）抑制展开候选的产生，不影响原子路径的解析。
 fn expand_segments(
     tree: &ModuleTree,
     scan: &FileScan,
     path: &[String],
     u: &UseStmt,
     segs: Vec<String>,
-) -> Vec<String> {
-    let first_is_child = segs.first().is_some_and(|f| {
-        let mut ctx = path.to_vec();
-        ctx.extend(u.inline_stack.iter().cloned());
-        tree.children.get(&ctx).is_some_and(|c| c.contains(f))
-    });
-    if first_is_child {
-        return segs;
-    }
-    // 词法可见绑定（评审 5352172371/5353024715）：use 引入的名字在整个
-    // 包围作用域可见（含声明之前，声明序不作过滤）；取作用域最深的
-    // 可见绑定（内层遮蔽外层——同作用域同名 use 非法，无并列）；链式
-    // 别名极罕见，单层展开（登记）
+) -> Vec<Vec<String>> {
+    let mut candidates = vec![segs.clone()];
+    let first = segs.first().cloned();
+    let mut ctx = path.to_vec();
+    ctx.extend(u.inline_stack.iter().cloned());
+    let first_is_child = first
+        .as_deref()
+        .is_some_and(|f| tree.children.get(&ctx).is_some_and(|c| c.contains(f)));
     let visible = scan
         .renames
         .iter()
         .filter(|b| {
-            Some(b.name.as_str()) == segs.first().map(String::as_str)
-                && is_scope_prefix(&b.scope, &u.scope)
+            Some(b.name.as_str()) == first.as_deref() && is_scope_prefix(&b.scope, &u.scope)
         })
         .max_by_key(|b| b.scope.len());
-    match visible {
-        Some(bound) => {
-            let mut expanded = bound.segs.clone();
-            expanded.extend(segs[1..].iter().cloned());
-            expanded
-        }
-        None => segs,
+    let Some(bound) = visible else {
+        return candidates;
+    };
+    if first_is_child {
+        return candidates;
     }
+    // 绑定目标解析基准：crate/self/super 前缀自带位置，裸路径按当前
+    // 模块（位置 path + inline 栈）
+    let first = bound.segs.first().map(String::as_str);
+    let position: Vec<String> = match first {
+        Some("crate") => Vec::new(),
+        Some("self") => ctx.clone(),
+        Some("super") => {
+            let mut c = ctx.clone();
+            for seg in &bound.segs {
+                if seg == "super" {
+                    if c.pop().is_none() {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            }
+            c
+        }
+        _ => ctx.clone(),
+    };
+    let skip = match first {
+        Some("crate" | "self") => 1,
+        Some("super") => bound
+            .segs
+            .iter()
+            .take_while(|s| s.as_str() == "super")
+            .count(),
+        _ => 0,
+    };
+    let mut absolute = position;
+    absolute.extend(bound.segs[skip..].iter().cloned());
+    let bound_module = module_prefix_of(tree, &absolute);
+    if bound_module.is_empty() {
+        return candidates;
+    }
+    let mut expanded = bound_module;
+    expanded.extend(segs[1..].iter().cloned());
+    candidates.push(expanded);
+    candidates
+}
+
+/// 绑定路径逐段回退到首个存在的模块路径（剔除 fn/struct 等 item 叶子）。
+fn module_prefix_of(tree: &ModuleTree, segs: &[String]) -> Vec<String> {
+    let mut prefix = segs.to_vec();
+    while !prefix.is_empty() {
+        if tree
+            .file_of
+            .keys()
+            .any(|k| k.as_slice() == prefix.as_slice())
+        {
+            return prefix;
+        }
+        prefix.pop();
+    }
+    prefix
 }
 
 /// 词法包含判定：a 是否为 b 的前缀（a 的块都是 b 的祖先块）。

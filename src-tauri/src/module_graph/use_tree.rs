@@ -50,13 +50,28 @@ pub(super) fn strip_raw_ident(tok: &str) -> &str {
     tok.strip_prefix("r#").unwrap_or(tok)
 }
 
+/// 叶子路径终点：登记无 as 的裸绑定（叶子名剥 r# 前缀，评审
+/// 5353260028）并收进路径集。通配与组内元素同样经此。
+fn push_path(tree: &mut UseTree, tokens: &[String], i: &mut usize, path: Vec<String>) {
+    if tokens.get(*i).map(String::as_str) != Some("as") {
+        if let Some(name) = path.last() {
+            tree.renames
+                .push((strip_raw_ident(name).to_string(), path.clone()));
+        }
+    }
+    tree.paths.push(path);
+}
+
 /// 叶子段后的 as 重命名：登记（本地名 → 当前路径）并跳过 as 与新名。
 fn consume_as(tree: &mut UseTree, tokens: &[String], i: &mut usize, path: &[String]) {
     if tokens.get(*i).map(String::as_str) != Some("as") {
         return;
     }
     if let Some(name) = tokens.get(*i + 1) {
-        tree.renames.push((name.clone(), path.to_vec()));
+        // 名字剥 r# 前缀（评审 5353260028：as r#type 须按裸名归一化，
+        // 否则与已归一化的路径段永不匹配）
+        tree.renames
+            .push((strip_raw_ident(name).to_string(), path.to_vec()));
     }
     *i += 2;
 }
@@ -100,7 +115,7 @@ fn parse_use_tree(prefix: &[String], tokens: &[String], i: &mut usize, tree: &mu
                 }
             }
             _ => {
-                tree.paths.push(path);
+                push_path(tree, tokens, i, path);
                 return;
             }
         }

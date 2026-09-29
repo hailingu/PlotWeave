@@ -686,6 +686,69 @@ fn empty_use_groups_are_accepted() {
 }
 
 #[test]
+fn cfg_test_field_does_not_swallow_following_code() {
+    // 评审 5353260028：#[cfg(test)] 修饰的逗号终止元素（struct 字段、
+    // enum 变体、元组元素、顶层 static）只跳过到其逗号/分号——不识别
+    // 会把字段后的生产 use 吞掉（漏检方向，真环隐形）
+    let graph = edges(&[
+        ("lib.rs", "mod a;\nmod b;\n"),
+        (
+            "a.rs",
+            concat!(
+                "struct S {\n",
+                "    #[cfg(test)]\n",
+                "    probe: u8,\n",
+                "}\n",
+                "use crate::b::B;\n",
+                "#[cfg(test)]\n",
+                "static FIX: u8 = 1,;\n",
+                "use crate::b::C;\n",
+            ),
+        ),
+        ("b.rs", "pub struct B;\npub struct C;\n"),
+    ]);
+    assert!(
+        graph["a.rs"].contains("b.rs") && graph["a.rs"].len() == 1,
+        "字段/静态后的生产 use 照常入图且各折叠为一条边：{:?}",
+        graph["a.rs"]
+    );
+}
+
+#[test]
+fn leaf_bindings_without_as_resolve() {
+    // 评审 5353260028：use crate::a::dep 不带 as 也把 dep 引入作用域，
+    // 后续 use dep::child::X 须解析到 a/child.rs——不登记裸绑定会漏边，
+    // 反向依赖构成的环隐形
+    let found = cycles(&[
+        ("lib.rs", "mod host;\nmod a;\n"),
+        ("a/mod.rs", "mod child;\n"),
+        ("a/child.rs", "use crate::host::H;\n"),
+        ("host.rs", "use crate::a::dep;\nuse dep::child::X;\n"),
+    ]);
+    assert_eq!(
+        found.len(),
+        1,
+        "裸叶子绑定的后续引用应成边构成环：{found:?}"
+    );
+}
+
+#[test]
+fn raw_identifier_alias_names_normalize() {
+    // 评审 5353260028：use crate::a as r#type 的别名名与 use r#type::x
+    // 的路径段都按裸名 type 归一化，两边才能命中
+    let graph = edges(&[
+        ("lib.rs", "mod a;\nmod user;\n"),
+        ("a.rs", "pub struct T;\n"),
+        ("user.rs", "use crate::a as r#type;\nuse r#type::T;\n"),
+    ]);
+    assert!(
+        graph["user.rs"].contains("a.rs"),
+        "裸标识符别名应归一化命中：{:?}",
+        graph["user.rs"]
+    );
+}
+
+#[test]
 #[should_panic(expected = "找不到对应文件")]
 fn missing_mod_file_fails_closed() {
     cycles(&[("lib.rs", "mod ghost;\n")]);
