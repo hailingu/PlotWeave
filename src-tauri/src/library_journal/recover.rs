@@ -37,13 +37,17 @@ pub(crate) enum CleanupKind {
 /// cleanupPending 条目（issue #229）：程序可判定的 kind + 展示文案；
 /// 折叠摘要额外携带可选结构化 `count`（issue #359：该条目代表的累计
 /// 保留数，前端待清理计数取各条目 count 之和、缺省按 1——不经文案推导，
-/// 旧前端忽略该字段仍按单条展示）。
+/// 旧前端忽略该字段仍按单条展示）与可选结构化 `bytes`（issue #427：
+/// 隔离区顶层普通文件合计字节——折叠移除日志闸门的间接背压后，这是
+/// 隔离区无界增长的唯一咨询性量级信号；量级未知时缺省，不猜数）。
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub(crate) struct CleanupPendingItem {
     pub(crate) kind: CleanupKind,
     pub(crate) message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) bytes: Option<u64>,
 }
 
 impl CleanupPendingItem {
@@ -52,15 +56,22 @@ impl CleanupPendingItem {
             kind: CleanupKind::Routine,
             message: message.into(),
             count: None,
+            bytes: None,
         }
     }
     /// 折叠摘要条目（issue #359）：kind 仍为 routine（可给清理指引），
-    /// `count` 为该摘要代表的已核验保留项累计数。
-    pub(crate) fn routine_counted(count: u64, message: impl Into<String>) -> Self {
+    /// `count` 为该摘要代表的已核验保留项累计数；`bytes`（issue #427）
+    /// 为隔离区合计字节量级，读取失败按 None（未知）携带。
+    pub(crate) fn routine_counted(
+        count: u64,
+        bytes: Option<u64>,
+        message: impl Into<String>,
+    ) -> Self {
         Self {
             kind: CleanupKind::Routine,
             message: message.into(),
             count: Some(count),
+            bytes,
         }
     }
     pub(crate) fn evidence(message: impl Into<String>) -> Self {
@@ -68,6 +79,7 @@ impl CleanupPendingItem {
             kind: CleanupKind::Evidence,
             message: message.into(),
             count: None,
+            bytes: None,
         }
     }
 }
@@ -121,32 +133,43 @@ fn index_refs(index: &Value, entry: &JournalEntry) -> IndexRefs {
 }
 
 /// 单次恢复的日志收敛状态：`changed` 标记日志需要落盘的退役/闩锁复位，
-/// `folded` 累计「身份核验一致但清理原语不可用」的折叠笔数（收尾时并入
-/// 归档计数，issue #359）；`folded_ids` 为本趟已折叠、**延迟到收尾单次
-/// 写盘**统一退役的条目（评审 5346509928：中途的重隔离预 rename 中间写
-/// 不得把先前折叠的退役持久化——后续失败会让「条目已退役、计数未归档」
-/// 跨条目复现；收尾写失败时这些条目仍在磁盘，下次恢复重新折叠）。
+/// `folded` 累计「身份核验一致但清理原语不可用」的折叠笔数、`folded_bytes`
+/// 累计其隔离项文件大小（issue #427：折叠时自已核验句柄 fstat，收尾时与
+/// 计数一并并入归档）；`folded_ids` 为本趟已折叠、**延迟到收尾单次写盘**
+/// 统一退役的条目（评审 5346509928：中途的重隔离预 rename 中间写不得把
+/// 先前折叠的退役持久化——后续失败会让「条目已退役、计数未归档」跨条目
+/// 复现；收尾写失败时这些条目仍在磁盘，下次恢复重新折叠）。
 #[derive(Default)]
 struct Convergence {
     changed: bool,
     folded: u64,
+    folded_bytes: u64,
     folded_ids: Vec<String>,
 }
 
-/// 记录一笔折叠：条目保留在 `current` 中，退役延迟到收尾单次写盘。
-fn record_fold(conv: &mut Convergence, entry: &JournalEntry) {
+/// 记录一笔折叠：条目保留在 `current` 中，退役延迟到收尾单次写盘；
+/// `len` 为该隔离项的字节大小（已核验句柄的 fstat，饱和累计）。
+fn record_fold(conv: &mut Convergence, entry: &JournalEntry, len: u64) {
     conv.changed = true;
     conv.folded += 1;
+    conv.folded_bytes = conv.folded_bytes.saturating_add(len);
     conv.folded_ids.push(entry.id.clone());
 }
 
 /// 身份绑定清理的三态结局（issue #359）：清理成功或隔离项缺失 → 日志条目
-/// 退场；原语不可用但隔离项身份已核验 → 折叠退场（计入归档计数，不再
-/// 逐条驻留日志/响应）；身份不符/被占用 → 保留现场与日志并记录证据项。
+/// 退场；原语不可用但隔离项身份已核验 → 折叠退场（计入归档计数，携带该
+/// 隔离项的字节大小，issue #427；不再逐条驻留日志/响应）；身份不符/被
+/// 占用 → 保留现场与日志并记录证据项。
 enum BoundCleanup {
     Retired,
-    Folded,
+    Folded(u64),
     RetainedEvidence,
+}
+
+/// 已核验隔离项句柄的字节大小：fstat 自打开句柄，零路径解析；失败按 0
+/// 计入（保守少计，咨询性量级不得放大为恢复失败）。
+fn verified_file_len(file: &cap_std::fs::File) -> u64 {
+    file.metadata().map(|m| m.len()).unwrap_or(0)
 }
 
 /// 隔离项按身份绑定能力清理，返回三态结局（见 [`BoundCleanup`]）。
@@ -161,8 +184,9 @@ fn try_bound_cleanup(
                 fsync_dir(trash)?;
                 Ok(BoundCleanup::Retired)
             }
-            // 唯一剩余步骤（§7.2 ④）无原语可执行且身份已核验：折叠退场
-            Err(_) => Ok(BoundCleanup::Folded),
+            // 唯一剩余步骤（§7.2 ④）无原语可执行且身份已核验：折叠退场，
+            // 大小取自该已核验句柄
+            Err(_) => Ok(BoundCleanup::Folded(verified_file_len(&f))),
         },
         TrashVerdict::Missing => Ok(BoundCleanup::Retired), // 隔离项不存在：日志条目可清除
         TrashVerdict::Mismatch => {
@@ -211,10 +235,16 @@ pub(crate) fn recover(library: &CapDir) -> Result<Recovery, LibraryError> {
         crate::library_fs::write_index(library, &index)?;
     }
     // 折叠计数为咨询性旁路（issue #359）：读取异型只告警并按 0 继续
-    let mut archive_count = read_archive(library, &mut recovery.warnings);
+    let (mut archive_count, mut archive_bytes) = read_archive(library, &mut recovery.warnings);
     let mut conv = Convergence::default();
     if entries.is_empty() {
-        finalize_cleanup_summary(library, conv.folded, &mut archive_count, &mut recovery);
+        finalize_cleanup_summary(
+            library,
+            &conv,
+            &mut archive_count,
+            &mut archive_bytes,
+            &mut recovery,
+        );
         return Ok(recovery);
     }
     let assets = assets_root(library)?;
@@ -250,7 +280,13 @@ pub(crate) fn recover(library: &CapDir) -> Result<Recovery, LibraryError> {
         current.retain(|e| !conv.folded_ids.contains(&e.id));
         write_journal(library, &current)?;
     }
-    finalize_cleanup_summary(library, conv.folded, &mut archive_count, &mut recovery);
+    finalize_cleanup_summary(
+        library,
+        &conv,
+        &mut archive_count,
+        &mut archive_bytes,
+        &mut recovery,
+    );
     Ok(recovery)
 }
 
@@ -259,20 +295,38 @@ pub(crate) fn recover(library: &CapDir) -> Result<Recovery, LibraryError> {
 /// 整体不存在（用户已按指引清理 assets/.trash）即归零，仍 > 0 则折叠为
 /// 单条 routine 摘要——cleanupPending 响应大小与历史删除总数无关。
 /// 目录打开失败按「未知」处理并保留计数（fail-soft，计数为咨询性指标）。
+/// 摘要同时携带隔离区字节量级（issue #427）：折叠移除日志闸门的间接
+/// 背压后，量级是 `.trash` 无界增长的唯一可见信号。量级与计数同源——
+/// 折叠时自已核验句柄累计并随计数持久进归档，恢复路径**不做任何隔离区
+/// 目录遍历**：媒体 URL 解析与打开同样逐请求在库锁内恢复（评审
+/// 5355629881），遍历会使恢复成本重新随历史删除数线性增长。
 fn finalize_cleanup_summary(
     library: &CapDir,
-    folded: u64,
+    conv: &Convergence,
     count: &mut u64,
+    bytes: &mut Option<u64>,
     recovery: &mut Recovery,
 ) {
-    if folded > 0 {
+    if conv.folded > 0 {
         // 饱和累加并收敛进读取上限（评审 5346397307/5346909203）：读取侧
         // 已把脏计数截到合理上限、本笔折叠又受日志条数约束，正常不可达
         // 饱和点；防御性算术保证咨询性计数永不 panic（debug）或回绕隐藏
         // 保留项（release），且写入侧不得产出自己下次读取会判异型的值
         // ——上限处的合法折叠把计数钉在上限持续报告，而非归零失联
-        *count = count.saturating_add(folded).min(ARCHIVE_COUNT_MAX);
-        if let Err(e) = write_archive(library, *count) {
+        let prior_count = *count;
+        *count = count.saturating_add(conv.folded).min(ARCHIVE_COUNT_MAX);
+        // 字节同款饱和累加（issue #427），但未知（None）不得被折叠改写为
+        // 已知（评审 5355849137）：旧格式/异型归档的历史份额不可测，把
+        // 数 GB 的未知总量悄悄替换为仅新增的几 MB 会伪报增长已缓解——
+        // 未知保持到用户整体清理（归零写入 Some(0)）后才重新可知。仅当
+        // 折叠前计数为 0（全新或已归零，历史份额为空）或字节已知时，
+        // 折叠才产生已知字节。
+        *bytes = match (*bytes, prior_count == 0) {
+            (Some(b), _) => Some(b.saturating_add(conv.folded_bytes)),
+            (None, true) => Some(conv.folded_bytes),
+            (None, false) => None,
+        };
+        if let Err(e) = write_archive(library, *count, *bytes) {
             recovery
                 .warnings
                 .push(format!("清理归档计数落盘失败（下次恢复按旧计数继续）：{e}"));
@@ -280,20 +334,54 @@ fn finalize_cleanup_summary(
     }
     if *count > 0 && trash_dir_absent(library) {
         *count = 0;
-        if let Err(e) = write_archive(library, 0) {
+        *bytes = Some(0);
+        if let Err(e) = write_archive(library, 0, Some(0)) {
             recovery
                 .warnings
                 .push(format!("清理归档计数归零落盘失败（下次恢复重试归零）：{e}"));
         }
     }
     if *count > 0 {
-        recovery.cleanup_pending.push(CleanupPendingItem::routine_counted(
-            *count,
-            format!(
-                "隔离区累计保留 {} 个已核验清理项（可人工清理 assets/.trash；整体移除后计数自动归零）",
-                *count
-            ),
-        ));
+        recovery
+            .cleanup_pending
+            .push(CleanupPendingItem::routine_counted(
+                *count,
+                *bytes,
+                folded_summary_message(*count, *bytes),
+            ));
+    }
+}
+
+/// 折叠摘要的展示文案（issue #427）：在累计保留数之外携带隔离区字节
+/// 量级（诊断可读，用户可在卷被填满前处置）；量级未知（旧格式归档缺
+/// `trashBytes`、字段异型按未知重计）时明示「未知」而非静默缺省——
+/// 不得猜数，也不得告警（告警会误停前端目录级清理指引）。
+fn folded_summary_message(count: u64, bytes: Option<u64>) -> String {
+    let magnitude = match bytes {
+        Some(b) => format!("合计 {}", format_byte_magnitude(b)),
+        None => "合计大小未知".to_string(),
+    };
+    format!(
+        "隔离区累计保留 {count} 个已核验清理项，{magnitude}（可人工清理 assets/.trash；\
+         整体移除后计数自动归零）"
+    )
+}
+
+/// 咨询性字节量级的人类可读格式（issue #427）：二进制单位、一位小数；
+/// 精确值由结构化 `bytes` 字段承载，message 只需量级可读。
+fn format_byte_magnitude(bytes: u64) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = KIB * 1024.0;
+    const GIB: f64 = MIB * 1024.0;
+    let size = bytes as f64;
+    if size >= GIB {
+        format!("{:.1} GiB", size / GIB)
+    } else if size >= MIB {
+        format!("{:.1} MiB", size / MIB)
+    } else if size >= KIB {
+        format!("{:.1} KiB", size / KIB)
+    } else {
+        format!("{bytes} 字节")
     }
 }
 
@@ -444,7 +532,7 @@ fn recover_shared_file(
                     retire_entry(current, entry);
                     conv.changed = true;
                 }
-                BoundCleanup::Folded => record_fold(conv, entry),
+                BoundCleanup::Folded(len) => record_fold(conv, entry, len),
                 BoundCleanup::RetainedEvidence => {} // 证据条目保留在 current
             }
         }
@@ -585,8 +673,8 @@ fn recover_index_committed(
             Err(_) => {
                 // 索引已提交且隔离项身份核验一致：唯一剩余步骤（④）无原语
                 // 可执行——折叠退役（延迟到收尾单次写盘），证据（隔离项
-                // 字节）原样保留
-                record_fold(conv, entry);
+                // 字节）原样保留，大小取自已核验句柄并入量级（issue #427）
+                record_fold(conv, entry, verified_file_len(&f));
             }
         },
         // 身份不符/被占用：保留现场与日志（不得静默清除证据）
@@ -664,7 +752,7 @@ fn re_quarantine(
             retire_entry(current, &updated);
             conv.changed = true;
         }
-        BoundCleanup::Folded => record_fold(conv, &updated),
+        BoundCleanup::Folded(len) => record_fold(conv, &updated, len),
         BoundCleanup::RetainedEvidence => {}
     }
     Ok(())
