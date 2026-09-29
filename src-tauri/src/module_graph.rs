@@ -30,8 +30,10 @@ use std::path::Path;
 
 mod cycles;
 mod lexer;
+mod use_tree;
 use cycles::cycles_of;
 use lexer::{strip_comments_and_literals, tokenize};
+use use_tree::{strip_raw_ident, use_tree_of};
 
 /// 图节点键 = 相对 src 根的 posix 路径（失败信息可读，与前端守卫口径一致）。
 type ModuleKey = String;
@@ -42,6 +44,9 @@ type ModuleKey = String;
 struct FileScan {
     mods: Vec<ModDecl>,
     uses: Vec<(Vec<String>, Vec<String>)>,
+    /// `as` 重命名绑定（本地名 → 路径段；文件级近似，块级别名作用域
+    /// 不细分——过度展开只会多检，方向安全）。
+    renames: Vec<(String, Vec<String>)>,
 }
 
 /// 一条 mod 声明：inline_path = 声明位置的外层 inline 模块栈（文件模块
@@ -191,13 +196,14 @@ fn inner_test_gate(
     depth: usize,
     inline: &[(String, usize)],
 ) -> Option<usize> {
-    if let Some(entry) = inline.last().map(|(_, d)| *d) {
-        return Some(skip_to_module_close(tokens, next, depth, entry));
-    }
-    if depth == 0 {
-        None
-    } else {
-        Some(next)
+    match inline.last().map(|(_, d)| *d) {
+        // 直接处于 inline 模块体顶层 → 门控整个模块，跳至其闭合
+        Some(entry) if depth == entry => Some(skip_to_module_close(tokens, next, depth, entry)),
+        // 文件顶层 → 整文件视为测试代码
+        None if depth == 0 => None,
+        // 嵌套块内（如 fn 体，评审 5351437161）→ 只门控当前块：此前按
+        // 栈顶模块跳闭合会从更深的深度起算，吞掉其后全部生产代码（漏检）
+        _ => Some(skip_to_module_close(tokens, next, depth, depth)),
     }
 }
 
@@ -291,6 +297,7 @@ fn skip_test_item(tokens: &[&str], mut k: usize) -> usize {
 fn scan_tokens(tokens: &[&str]) -> FileScan {
     let mut mods = Vec::new();
     let mut uses = Vec::new();
+    let mut renames: Vec<(String, Vec<String>)> = Vec::new();
     let mut cfg_test = false;
     let mut inline: Vec<(String, usize)> = Vec::new();
     let mut depth = 0usize;
@@ -310,6 +317,7 @@ fn scan_tokens(tokens: &[&str]) -> FileScan {
                             return FileScan {
                                 mods: Vec::new(),
                                 uses: Vec::new(),
+                                renames: Vec::new(),
                             }
                         }
                     }
@@ -332,7 +340,7 @@ fn scan_tokens(tokens: &[&str]) -> FileScan {
                 cfg_test = false;
             }
             "use" => {
-                i = scan_use_stmt(tokens, i, cfg_test, &inline, &mut uses);
+                i = scan_use_stmt(tokens, i, cfg_test, &inline, &mut uses, &mut renames);
                 cfg_test = false;
             }
             "macro_rules" if tokens.get(i + 1) == Some(&"!") => {
@@ -349,7 +357,11 @@ fn scan_tokens(tokens: &[&str]) -> FileScan {
             _ => i += 1,
         }
     }
-    FileScan { mods, uses }
+    FileScan {
+        mods,
+        uses,
+        renames,
+    }
 }
 
 /// mod 声明分派（scan_tokens 的 mod 臂）：外部（`;`）或 inline（`{`）；
@@ -404,6 +416,7 @@ fn scan_use_stmt(
     cfg_test: bool,
     inline: &[(String, usize)],
     uses: &mut Vec<(Vec<String>, Vec<String>)>,
+    renames: &mut Vec<(String, Vec<String>)>,
 ) -> usize {
     let mut j = i + 1;
     while j < tokens.len() && tokens[j] != ";" {
@@ -414,122 +427,14 @@ fn scan_use_stmt(
     }
     if !cfg_test {
         let stack = inline.iter().map(|(n, _)| n.clone()).collect();
-        let path = tokens[i + 1..j].iter().map(|s| s.to_string()).collect();
+        let path = tokens[i + 1..j]
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>();
+        renames.extend(use_tree_of(&path).renames);
         uses.push((stack, path));
     }
     j + 1
-}
-
-/// use 树元素是否为路径段（标识符/关键字；`as` 与标点不是）。
-fn is_path_seg(tok: &str) -> bool {
-    let mut chars = strip_raw_ident(tok).chars();
-    match chars.next() {
-        Some(c) if c.is_ascii_alphabetic() || c == '_' => {
-            chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
-        }
-        _ => false,
-    }
-}
-
-/// 剥掉裸标识符的 `r#` 前缀：`mod r#type;` 的文件是 `type.rs`，use 路径
-/// 段与声明统一按裸名参与模块树匹配（评审 5349970852：拒绝 `#` 会让
-/// `use crate::r#type::Thing` 对合法 Rust fail-closed panic）。
-fn strip_raw_ident(tok: &str) -> &str {
-    tok.strip_prefix("r#").unwrap_or(tok)
-}
-
-/// 解析一个 use 树元素追加到 paths：组内 `self` 指前缀模块、`as` 剥除、`*` 按前缀计。
-fn parse_use_tree(
-    prefix: &[String],
-    tokens: &[String],
-    i: &mut usize,
-    paths: &mut Vec<Vec<String>>,
-) {
-    let mut path = prefix.to_vec();
-    loop {
-        match tokens.get(*i) {
-            Some(t) if is_path_seg(t) => {
-                let bare_self = t == "self"
-                    && path.len() == prefix.len()
-                    && tokens.get(*i + 1).map(String::as_str) != Some("::");
-                if !bare_self {
-                    path.push(strip_raw_ident(t).to_string());
-                }
-                *i += 1;
-            }
-            _ => panic!(
-                "use 路径形态异常（期望段，得 {:?}）：{tokens:?}",
-                tokens.get(*i)
-            ),
-        }
-        if tokens.get(*i).map(String::as_str) == Some("as") {
-            *i += 2;
-        }
-        match tokens.get(*i).map(String::as_str) {
-            Some("::") => {
-                *i += 1;
-                match tokens.get(*i).map(String::as_str) {
-                    Some("{") => {
-                        *i += 1;
-                        parse_use_group(&path, tokens, i, paths);
-                        return;
-                    }
-                    Some("*") => {
-                        *i += 1;
-                        paths.push(path);
-                        return;
-                    }
-                    Some(_) => {}
-                    None => panic!("use 路径意外截断：{tokens:?}"),
-                }
-            }
-            _ => {
-                paths.push(path);
-                return;
-            }
-        }
-    }
-}
-
-/// 解析花括号分组内的元素序列（逗号分隔，允许尾逗号）。
-fn parse_use_group(
-    prefix: &[String],
-    tokens: &[String],
-    i: &mut usize,
-    paths: &mut Vec<Vec<String>>,
-) {
-    loop {
-        parse_use_tree(prefix, tokens, i, paths);
-        match tokens.get(*i).map(String::as_str) {
-            Some(",") => {
-                *i += 1;
-                if tokens.get(*i).map(String::as_str) == Some("}") {
-                    *i += 1;
-                    return;
-                }
-            }
-            Some("}") => {
-                *i += 1;
-                return;
-            }
-            _ => panic!("use 花括号分组残缺：{tokens:?}"),
-        }
-    }
-}
-
-/// use 语句 token → 完整路径段列表集（花括号分组递归展开）。
-fn use_tree_paths(tokens: &[String]) -> Vec<Vec<String>> {
-    let mut paths = Vec::new();
-    let mut i = 0;
-    // 根级花括号（`use {crate::a::A, crate::b::B};`）同样是合法 use 树
-    //（评审 5350627153）：入口先判组再要求路径段
-    if tokens.first().map(String::as_str) == Some("{") {
-        i = 1;
-        parse_use_group(&[], tokens, &mut i, &mut paths);
-        return paths;
-    }
-    parse_use_tree(&[], tokens, &mut i, &mut paths);
-    paths
 }
 
 /// 模块树：模块路径段（crate 根为空）→ 文件键，与各模块的子模块名集。
@@ -743,9 +648,24 @@ fn use_targets_of(
     path: &[String],
     key: &ModuleKey,
 ) -> Vec<ModuleKey> {
+    let scan = &scans[key];
     let mut targets = Vec::new();
-    for (inline, use_toks) in &scans[key].uses {
-        for segs in use_tree_paths(use_toks) {
+    for (inline, use_toks) in &scan.uses {
+        for segs in use_tree_of(use_toks).paths {
+            // 裸首段命中本地别名 → 以别名目标路径展开（单层；链式别名
+            // 极罕见，登记不展开）
+            let segs = match scan
+                .renames
+                .iter()
+                .find(|(n, _)| Some(n.as_str()) == segs.first().map(String::as_str))
+            {
+                Some((_, bound)) => {
+                    let mut expanded = bound.clone();
+                    expanded.extend(segs[1..].iter().cloned());
+                    expanded
+                }
+                None => segs,
+            };
             for target in resolve_use(tree, path, inline, &segs) {
                 if &target != key {
                     targets.push(target);

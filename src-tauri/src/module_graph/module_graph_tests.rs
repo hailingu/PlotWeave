@@ -514,6 +514,71 @@ fn macro_rules_bracket_and_paren_bodies_are_skipped() {
 }
 
 #[test]
+fn inner_attribute_in_nested_block_gates_only_that_block() {
+    // 评审 5351437161：fn 体内的 #![cfg(test)] 只门控该块——此前按栈顶
+    // inline 模块跳闭合会从更深的深度起算，吞掉其后全部生产代码（漏检）
+    let graph = edges(&[
+        ("lib.rs", "mod a;\nmod b;\nmod c;\n"),
+        (
+            "a.rs",
+            concat!(
+                "mod outer {\n",
+                "    fn probe() {\n",
+                "        #![cfg(test)]\n",
+                "        use crate::c::H;\n",
+                "    }\n",
+                "    use crate::b::B;\n",
+                "}\n",
+                "use crate::b::C;\n",
+            ),
+        ),
+        ("b.rs", "pub struct B;\n"),
+        ("c.rs", "pub struct H;\n"),
+    ]);
+    assert!(
+        graph["a.rs"].contains("b.rs"),
+        "块外（inline 模块体与文件级）的生产 use 必须照常入图：{:?}",
+        graph["a.rs"]
+    );
+    assert!(
+        !graph["a.rs"].contains("c.rs"),
+        "块内 cfg(test) 的 use 不得入图：{:?}",
+        graph["a.rs"]
+    );
+}
+
+#[test]
+fn leading_colon_external_imports_are_ignored() {
+    // 评审 5351437161：use ::std::io; 前导冒号是合法绝对外部路径，
+    // 不得 fail-closed panic，也不得入图
+    let graph = edges(&[
+        ("lib.rs", "mod a;\nmod b;\n"),
+        ("a.rs", "use ::std::io;\nuse crate::b::B;\n"),
+        ("b.rs", "pub struct B;\n"),
+    ]);
+    assert_eq!(
+        graph["a.rs"].len(),
+        1,
+        "外部 ::std 不入图、本地边照常：{:?}",
+        graph["a.rs"]
+    );
+    assert!(graph["a.rs"].contains("b.rs"));
+}
+
+#[test]
+fn bare_imports_through_local_aliases_resolve() {
+    // 评审 5351437161：use crate::a as alias 后 use alias::child::X 应
+    // 解析到 a/child.rs——别名裸路径被当外部丢弃会漏边，环隐形
+    let found = cycles(&[
+        ("lib.rs", "mod a;\nmod user;\n"),
+        ("a/mod.rs", "mod child;\n"),
+        ("a/child.rs", "use crate::user::U;\n"),
+        ("user.rs", "use crate::a as alias;\nuse alias::child::X;\n"),
+    ]);
+    assert_eq!(found.len(), 1, "经别名的子模块导入应成边构成环：{found:?}");
+}
+
+#[test]
 #[should_panic(expected = "找不到对应文件")]
 fn missing_mod_file_fails_closed() {
     cycles(&[("lib.rs", "mod ghost;\n")]);
