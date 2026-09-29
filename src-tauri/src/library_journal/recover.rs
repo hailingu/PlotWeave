@@ -13,7 +13,7 @@ use crate::library::error::LibraryError;
 use crate::library_fs::{assets_root, open_parent_dir};
 use crate::store::new_id;
 
-use super::archive::{read_archive, write_archive};
+use super::archive::{read_archive, write_archive, ARCHIVE_COUNT_MAX};
 use super::journal_io::{read_journal, write_journal, JournalEntry};
 use super::trash::{
     ensure_trash_dir, fsync_dir, identity_bound_unlink, open_trash_dir, path_identity,
@@ -265,10 +265,12 @@ fn finalize_cleanup_summary(
     recovery: &mut Recovery,
 ) {
     if folded > 0 {
-        // 饱和累加（评审 5346397307）：读取侧已把脏计数截到合理上限，
-        // 本笔折叠又受日志条数约束，正常不可达饱和点——防御性算术保证
-        // 咨询性计数永不 panic（debug）或回绕隐藏保留项（release）
-        *count = count.saturating_add(folded);
+        // 饱和累加并收敛进读取上限（评审 5346397307/5346909203）：读取侧
+        // 已把脏计数截到合理上限、本笔折叠又受日志条数约束，正常不可达
+        // 饱和点；防御性算术保证咨询性计数永不 panic（debug）或回绕隐藏
+        // 保留项（release），且写入侧不得产出自己下次读取会判异型的值
+        // ——上限处的合法折叠把计数钉在上限持续报告，而非归零失联
+        *count = count.saturating_add(folded).min(ARCHIVE_COUNT_MAX);
         if let Err(e) = write_archive(library, *count) {
             recovery
                 .warnings

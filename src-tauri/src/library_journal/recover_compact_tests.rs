@@ -183,6 +183,52 @@ fn recover_resets_archive_count_after_trash_cleared() {
     cleanup(&root);
 }
 
+/// 边界值自洽（评审 5346909203）：读取上限（u32::MAX）处的合法计数加
+/// 一笔折叠，不得产出下次读取会判异型的值——累加结果钉在上限持续
+/// 报告，而非归零使保留项失联。
+#[test]
+fn archive_count_at_bound_stays_reportable_after_further_fold() {
+    let (library, root) = temp_fixture();
+    write_index_raw(
+        &library,
+        &json!({ "assets": by_id([]), "groups": by_id([]) }),
+    );
+    foldable_journal(&library, 1);
+    fs::write(
+        library.join(ARCHIVE_FILE_NAME),
+        br#"{"retainedCleanupCount":4294967295}"#,
+    )
+    .expect("写读取上限处的合法计数");
+    let first = recover(&cap(&library)).expect("恢复应成功");
+    assert_eq!(read_journal_raw(&library), json!([]), "折叠照常完成");
+    assert_eq!(
+        read_archive_raw(&library)["retainedCleanupCount"],
+        json!(4294967295u64),
+        "写入侧不得越出读取上限（自产值不得被自己判异型）"
+    );
+    assert_eq!(
+        first.cleanup_pending[0].count,
+        Some(4294967295),
+        "摘要报告钉在上限的计数：{:?}",
+        first.cleanup_pending
+    );
+    let second = recover(&cap(&library)).expect("再次恢复应成功");
+    assert!(
+        second
+            .cleanup_pending
+            .iter()
+            .any(|p| p.kind == CleanupKind::Routine),
+        "上限处的保留项不得在下次恢复归零失联：{:?}",
+        second.cleanup_pending
+    );
+    assert!(
+        !second.warnings.iter().any(|w| w.contains("清理归档计数")),
+        "自产计数不得触发归档告警：{:?}",
+        second.warnings
+    );
+    cleanup(&root);
+}
+
 /// 归档异型是咨询性脏数据：告警并按 0 继续（不放大为全局只读，威胁
 /// 模型），本轮折叠照常发生并覆写修复归档。
 #[test]
