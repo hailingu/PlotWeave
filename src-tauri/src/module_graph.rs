@@ -221,6 +221,37 @@ fn skip_to_module_close(tokens: &[&str], mut k: usize, depth: usize, entry: usiz
     k
 }
 
+/// 跳过 macro_rules 定义的宏体：自名字位置起按其后的组定界符
+///（`{`、`[`、`(` 三种合法形态）跳过整组，返回组后的下标。
+fn skip_macro_body(tokens: &[&str], name_at: usize) -> usize {
+    match tokens.get(name_at + 1).copied() {
+        Some("{") => skip_delimited(tokens, name_at + 1, "{", "}"),
+        Some("[") => skip_delimited(tokens, name_at + 1, "[", "]"),
+        Some("(") => skip_delimited(tokens, name_at + 1, "(", ")"),
+        // 畸形（非法 Rust）：无害推进，fail-closed 由下游解析兜底
+        _ => name_at + 1,
+    }
+}
+
+/// 自 tokens[open]（为 open_tok）起跳过整组（同种定界符嵌套平衡），
+/// 返回闭合 token 之后的下标。
+fn skip_delimited(tokens: &[&str], open: usize, open_tok: &str, close_tok: &str) -> usize {
+    let mut depth = 0usize;
+    let mut k = open;
+    while k < tokens.len() {
+        if tokens[k] == open_tok {
+            depth += 1;
+        } else if tokens[k] == close_tok {
+            depth -= 1;
+            if depth == 0 {
+                return k + 1;
+            }
+        }
+        k += 1;
+    }
+    k
+}
+
 /// 带属性项的开头判定（消费挂起 cfg(test) 并整条跳过）。
 fn item_keyword(tok: &str) -> bool {
     // pub/unsafe/async 是修饰符而非项首——不消费，等真项关键字到来
@@ -304,11 +335,11 @@ fn scan_tokens(tokens: &[&str]) -> FileScan {
                 i = scan_use_stmt(tokens, i, cfg_test, &inline, &mut uses);
                 cfg_test = false;
             }
-            "macro_rules" if tokens.get(i + 1) == Some(&"!") && tokens.get(i + 3) == Some(&"{") => {
-                // 跳过宏体的同时消费挂起的 cfg(test)：宏之后的项是另一项，
-                // 不得继承门控（评审 5349783070：泄漏会把后续生产 use/mod
-                // 误判为测试代码而漏采，真环对守卫隐形）
-                i = skip_braced(tokens, i + 3);
+            "macro_rules" if tokens.get(i + 1) == Some(&"!") => {
+                // 跳过宏体（{、[、( 三种合法定界符，评审 5351210423）的
+                // 同时消费挂起的 cfg(test)：宏之后的项是另一项，不得继承
+                // 门控（评审 5349783070：泄漏会漏采其后的生产声明）
+                i = skip_macro_body(tokens, i + 2);
                 cfg_test = false;
             }
             t if cfg_test && item_keyword(t) => {
@@ -656,7 +687,17 @@ fn resolve_use(
                 it += 1;
             }
         }
-        _ => return Vec::new(),
+        _ => {
+            // uniform paths（2018+）：裸首段可解析为当前模块的直接子模块
+            //（评审 5351210423：library_journal/store 的 facade→child 边
+            // 此前被当外部 crate 丢弃）；未命中才视为外部
+            let first = segs.first().map(String::as_str);
+            let is_child =
+                first.is_some_and(|f| tree.children.get(&ctx).is_some_and(|c| c.contains(f)));
+            if !is_child {
+                return Vec::new();
+            }
+        }
     }
     while let Some(seg) = segs.get(it) {
         let known = tree.children.get(&ctx).is_some_and(|c| c.contains(seg));

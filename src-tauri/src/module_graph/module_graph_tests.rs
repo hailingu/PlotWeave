@@ -472,6 +472,48 @@ fn brace_rooted_use_trees_expand() {
 }
 
 #[test]
+fn bare_imports_of_child_modules_resolve() {
+    // 评审 5351210423：2018+ uniform paths——裸首段先按当前模块的直接
+    // 子模块解析（library_journal.rs / store/mod.rs 的 facade→child 边
+    // 即此形态），未命中才视为外部 crate；此前一律当外部丢弃会漏边，
+    // 经该边闭合的环对守卫隐形
+    let found = cycles(&[
+        ("lib.rs", "mod parent;\n"),
+        ("parent/mod.rs", "mod child;\nuse child::C;\n"),
+        ("parent/child.rs", "use super::P;\n"),
+    ]);
+    assert_eq!(found.len(), 1, "裸路径子模块导入应成边构成环：{found:?}");
+    let graph = edges(&[("lib.rs", "mod a;\n"), ("a.rs", "use serde_json::Value;\n")]);
+    assert!(
+        graph["a.rs"].is_empty(),
+        "未命中子模块的裸路径仍是外部 crate，不入图：{:?}",
+        graph["a.rs"]
+    );
+}
+
+#[test]
+fn macro_rules_bracket_and_paren_bodies_are_skipped() {
+    // 评审 5351210423：macro_rules 的 [ … ] 与 ( … ) 定界形态同样合法，
+    // 宏体内的 use 不得记为真实生产依赖（假环方向）
+    let graph = edges(&[
+        ("lib.rs", "mod a;\nmod b;\n"),
+        (
+            "a.rs",
+            concat!(
+                "macro_rules! probe [ ($o:expr) => { use crate::b::B; $o } ];\n",
+                "macro_rules! probe2 ( ($o:expr) => { use crate::b::B2; $o } );\n",
+            ),
+        ),
+        ("b.rs", "pub struct B;\n"),
+    ]);
+    assert!(
+        graph["a.rs"].is_empty(),
+        "三种定界符的宏体内的 use 都不得入图：{:?}",
+        graph["a.rs"]
+    );
+}
+
+#[test]
 #[should_panic(expected = "找不到对应文件")]
 fn missing_mod_file_fails_closed() {
     cycles(&[("lib.rs", "mod ghost;\n")]);

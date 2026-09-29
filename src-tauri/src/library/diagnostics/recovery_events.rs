@@ -5,7 +5,7 @@ use cap_std::fs::Dir;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
-use super::{reserve_revision, LAST_REVISION};
+use super::revision::{reserve_revision, LAST_REVISION};
 use crate::library::error::LibraryError;
 use crate::library_journal::{library_file_lock, library_op_lock, CleanupPendingItem, Recovery};
 
