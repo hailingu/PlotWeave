@@ -215,11 +215,21 @@ fn download_target_static_checks_reject_nonpublic_literals() {
         "file:///etc/passwd",
     ] {
         let url: Url = s.parse().expect(s);
-        assert!(static_target_violation(&url).is_some(), "{s} 应被静态拒绝");
+        assert!(
+            static_target_violation_with(&url, is_public_ip).is_some(),
+            "{s} 应被静态拒绝"
+        );
     }
     // 公网 IP 字面量与域名（域名走解析复验，不在静态层拒绝）
-    assert!(static_target_violation(&"https://8.8.8.8/a.png".parse().unwrap()).is_none());
-    assert!(static_target_violation(&"http://cdn.example.test/a.png".parse().unwrap()).is_none());
+    assert!(
+        static_target_violation_with(&"https://8.8.8.8/a.png".parse().unwrap(), is_public_ip)
+            .is_none()
+    );
+    assert!(static_target_violation_with(
+        &"http://cdn.example.test/a.png".parse().unwrap(),
+        is_public_ip
+    )
+    .is_none());
 }
 
 #[test]
@@ -479,8 +489,12 @@ fn dns_resolver_busy_fails_fast_at_inflight_cap_and_recovers() {
 fn dns_budget_gate_precedes_resolver() {
     let deadline = std::time::Instant::now() - std::time::Duration::from_secs(1);
     let url: Url = "http://cdn.example.test/a.png".parse().expect("合法 url");
-    let err = tauri::async_runtime::block_on(ensure_public_download_target(&url, deadline))
-        .expect_err("预算耗尽应拒绝");
+    let err = tauri::async_runtime::block_on(ensure_public_download_target_with(
+        &url,
+        deadline,
+        is_public_ip,
+    ))
+    .expect_err("预算耗尽应拒绝");
     assert!(
         matches!(
             err,
@@ -589,6 +603,10 @@ fn generate_exit_send_timeout_keeps_plain_url_shape() {
     );
     assert!(text.contains("127.0.0.1"), "主机可行动信息保留：{text}");
 }
+
+/// 下载链重定向与限读的本机服务器行为测试（issue #398），见
+/// tests/download.rs。
+mod download;
 
 /// 生图产物落盘的阻塞调度测试（issue #310），见 tests/persist.rs。
 mod persist;

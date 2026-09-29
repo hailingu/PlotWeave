@@ -388,10 +388,18 @@ fn is_public_ip(ip: IpAddr) -> bool {
     }
 }
 
+/// 公网 IP 分类器注入点（issue #398）：生产恒为真实分类 [`is_public_ip`]；
+/// 测试注入「环回放行」形态（tests/download.rs），使下载链的重定向循环
+/// 与限读可由本机服务器驱动。注入只替换分类真值来源——静态校验、协议
+/// 门与逐跳复验结构不变，生产判定不因测试便利放宽。
+type PublicIpClassifier = fn(IpAddr) -> bool;
+
 /// 下载目标的静态校验（可单测的纯部分）：scheme 仅 http(s)——data:/file:
 /// 等协议不经网络边界；主机为 IP 字面量时立即按公网分类。返回
-/// Some(原因) 即拒绝；域名主机交由解析复验（见 ensure_public_download_target）。
-fn static_target_violation(url: &Url) -> Option<String> {
+/// Some(原因) 即拒绝；域名主机交由解析复验（见
+/// ensure_public_download_target_with）。分类器经参数注入（issue #398），
+/// 见 [`PublicIpClassifier`]。
+fn static_target_violation_with(url: &Url, is_public: PublicIpClassifier) -> Option<String> {
     if !matches!(url.scheme(), "http" | "https") {
         return Some("图像 url 协议非法（仅支持 http/https）".into());
     }
@@ -402,7 +410,7 @@ fn static_target_violation(url: &Url) -> Option<String> {
         .and_then(|h| h.strip_suffix(']'))
         .unwrap_or(host);
     if let Ok(ip) = literal.parse::<IpAddr>() {
-        if !is_public_ip(ip) {
+        if !is_public(ip) {
             return Some(format!("图像 url 主机 {host} 非公网地址，已拒绝下载"));
         }
     }
@@ -420,11 +428,12 @@ fn static_target_violation(url: &Url) -> Option<String> {
 /// 侧经异步通道由 `timeout_at(绝对截止时间)` 约束（第五轮评审——
 /// 阻塞池排队不会把等待拖过 deadline），额度随解析线程返回归还
 /// （可恢复）。
-async fn ensure_public_download_target(
+async fn ensure_public_download_target_with(
     url: &Url,
     deadline: std::time::Instant,
+    is_public: PublicIpClassifier,
 ) -> Result<(), ProxyError> {
-    if let Some(reason) = static_target_violation(url) {
+    if let Some(reason) = static_target_violation_with(url, is_public) {
         return Err(ProxyError::DownloadRefused { detail: reason });
     }
     let refused = |detail: String| ProxyError::DownloadRefused { detail };
@@ -445,7 +454,7 @@ async fn ensure_public_download_target(
     let list = resolve_host_bounded(target, host, deadline).await?;
     if list.is_empty() {
         Err(refused(format!("图像主机 {host} 未解析到地址")))
-    } else if list.iter().any(|a| !is_public_ip(a.ip())) {
+    } else if list.iter().any(|a| !is_public(a.ip())) {
         Err(refused(format!(
             "图像主机 {host} 解析到非公网地址，已拒绝下载"
         )))
@@ -461,7 +470,11 @@ async fn ensure_public_download_target(
 /// 读取的等待上界均为作业剩余预算（`deadline`，由命令在作业开始时
 /// 起算传入），预算耗尽按阶段给出诊断并放弃——各请求的
 /// IMAGE_DOWNLOAD_TIMEOUT_SECS 仍作单跳兜底。
-async fn fetch_image_url(url: &str, deadline: std::time::Instant) -> Result<Vec<u8>, ProxyError> {
+async fn fetch_image_url_with(
+    url: &str,
+    deadline: std::time::Instant,
+    is_public: PublicIpClassifier,
+) -> Result<Vec<u8>, ProxyError> {
     let refused = |detail: String| ProxyError::DownloadRefused { detail };
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(IMAGE_DOWNLOAD_TIMEOUT_SECS))
@@ -473,7 +486,7 @@ async fn fetch_image_url(url: &str, deadline: std::time::Instant) -> Result<Vec<
         })?;
     let mut current: Url = url.parse().map_err(|_| refused("图像 url 非法".into()))?;
     for _ in 0..=DOWNLOAD_REDIRECT_LIMIT {
-        ensure_public_download_target(&current, deadline).await?;
+        ensure_public_download_target_with(&current, deadline, is_public).await?;
         let response = with_stage_budget(deadline, "下载图像", async {
             client
                 .get(current.clone())
@@ -511,6 +524,11 @@ async fn fetch_image_url(url: &str, deadline: std::time::Instant) -> Result<Vec<
     Err(refused(format!(
         "图像下载重定向超过 {DOWNLOAD_REDIRECT_LIMIT} 跳上限"
     )))
+}
+
+/// 生产入口：真实公网分类（issue #398 注入点的默认形态）。
+async fn fetch_image_url(url: &str, deadline: std::time::Instant) -> Result<Vec<u8>, ProxyError> {
+    fetch_image_url_with(url, deadline, is_public_ip).await
 }
 
 /// 生成请求参数（前端单对象传入：provider 配置 + 生成输入 + job 标识）。
