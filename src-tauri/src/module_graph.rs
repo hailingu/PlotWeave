@@ -8,25 +8,22 @@
 //!
 //! 构图口径：
 //! - 节点 = 自 `lib.rs` 沿**非 `#[cfg(test)]`** 的 `mod` 声明可达的文件
-//!   （`NAME.rs` 与 `NAME/mod.rs` 两种形态都支持）。仅测试构建参与的文件
-//!   （`conf.rs`、`testhttp.rs`、`*_tests.rs`、`testutil.rs` 等）经此口径
-//!   天然不进入图；二进制入口 `main.rs` 只调用 `plotweave_lib::run()`，
-//!   无库内依赖，同样不在图内。`#[cfg(target_os)]` 等平台门控按并集计入
-//!   （守卫覆盖目标平台全集，不只当前编译目标）。
+//!   （`NAME.rs`/`NAME/mod.rs` 双形态）。仅测试构建参与的文件（`*_tests.rs`、
+//!   `testutil.rs` 等）经此口径天然不进图；二进制入口 `main.rs` 无库内
+//!   依赖同样不在图内。`#[cfg(target_os)]` 等平台门控按并集计入（覆盖
+//!   目标平台全集，不只当前编译目标）。
 //! - 边 = `use crate::…` / `use super::…` / `use self::…` 解析出的目标
-//!   模块文件（花括号分组递归展开、`as` 重命名剥除、`*` 通配按前缀路径
-//!   计、组内 `self` 指前缀模块自身；`pub use` 同采，函数体内的局部
-//!   `use` 也是文件依赖）。外部 crate 与 2018+ 裸路径（`use serde…`）
-//!   不参与；不经 `use` 的全限定调用不采集——与前端守卫只采
-//!   import/export 边同口径。同文件 inline 模块内的引用解析回自身文件，
-//!   不构成文件粒度的环，不计自环边。
+//!   模块文件（花括号分组展开、`as` 剥除、`*` 按前缀计、组内 `self` 指
+//!   前缀模块；`pub use` 同采，函数体内局部 `use` 也是文件依赖；平台
+//!   混合变体的路径可有多个所有者文件）。外部 crate 与裸路径不参与；
+//!   不经 `use` 的全限定调用不采集——与前端守卫只采 import/export 边
+//!   同口径。同文件 inline 引用解析回自身，不计自环边。
 //! - fail-closed：`mod` 声明找不到对应文件（`NAME.rs` 与 `NAME/mod.rs`
 //!   均缺失或并存）、`super::` 越过 crate 根、use 语句缺分号或花括号分组
 //!   残缺，均直接判失败——构图不健全比漏检更危险（与前端
 //!   `resolveEdgeKeys` 的失败语义一致）。
-//! - 已知盲区（登记而非静默）：`macro_rules!` 体整块跳过（现存唯一生产宏
-//!   `store/persist.rs` 的 `atomic_io` 体内无 `use`）；非 ASCII 标识符
-//!   会被分词层拆散（本仓无此形态）。
+//! - 已知盲区（登记而非静默）：`macro_rules!` 体整块跳过（现存唯一生产
+//!   宏 `atomic_io` 体内无 `use`）；非 ASCII 标识符会被分词层拆散（本仓无）。
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -55,10 +52,9 @@ struct ModDecl {
 
 /// 解析自 tokens[i] == "#" 起的属性（含 `#!` 形态），返回消费后下标与
 /// 是否 cfg(test) 门控：cfg(…) 组**蕴含** test 才门控（裸 `test` 或
-/// `all(test, …)` 等；`any(test, feature)` 不蕴含——其余条件成立时仍进入
-/// 生产构建，按平台并集口径保守计入。评审 5347759049：此前只认深度 1
-/// 的裸 test，`all(test, unix)` 被漏判、prefs/read_boundary_tests 误入图）。
-/// 组内字符串已在清洗层抹除，不产生假 token。
+/// `all(test, …)`；`any(test, feature)` 不蕴含，按并集保守计入。评审
+/// 5347759049：此前只认深度 1 裸 test，`all(test, unix)` 被漏判）。组内
+/// 字符串已在清洗层抹除，不产生假 token。
 fn parse_attr(tokens: &[&str], i: usize) -> (usize, bool) {
     let mut j = i + 1;
     if tokens.get(j) == Some(&"!") {
@@ -108,10 +104,9 @@ fn find_group_close(tokens: &[&str], open: usize) -> Option<usize> {
     None
 }
 
-/// cfg(…) 组是否蕴含 test（即绝不出现在生产构建）：裸 `test`；`all(…)`
-/// 的某个合取项蕴含；`any(…)` 的全部析取项都蕴含。其他谓词（feature、
-/// target_os、not(test) 等）不蕴含——判不蕴含时保守计入生产图，宁可
-/// 多检（可能误报环）也不漏检（漏环比误报危险）。
+/// cfg(…) 组是否蕴含 test（绝不出现在生产构建）：裸 `test`；`all(…)`
+/// 的某个合取项蕴含；`any(…)` 的全部析取项都蕴含。其余谓词不蕴含——
+/// 保守计入生产图：宁可误报环也不漏检（漏检更危险）。
 fn cfg_implies_test(tokens: &[&str]) -> bool {
     if tokens == ["test"] {
         return true;
@@ -185,9 +180,9 @@ fn item_keyword(tok: &str) -> bool {
     !matches!(tok, "pub" | "unsafe" | "async")
 }
 
-/// 跳过 cfg(test) 项/语句的完整剩余部分：签名或条件表达式推进到首个
-/// "{"（跳过其块）或 ";"；块后若还有 else/else if 复合臂或结尾分号，
-/// 一并消费（评审 5350168645：只跳首个块会把 else 臂当生产代码误采）。
+/// 跳过 cfg(test) 项/语句的完整剩余部分：推进到首个 "{"（跳块）或 ";"；
+/// 其后的 else/else if 复合臂与结尾分号一并消费（评审 5350168645：只跳
+/// 首个块会把 else 臂当生产代码误采）。
 fn skip_test_item(tokens: &[&str], mut k: usize) -> usize {
     while k < tokens.len() {
         match tokens[k] {
@@ -436,8 +431,14 @@ fn use_tree_paths(tokens: &[String]) -> Vec<Vec<String>> {
 
 /// 模块树：模块路径段（crate 根为空）→ 文件键，与各模块的子模块名集。
 struct ModuleTree {
-    file_of: BTreeMap<Vec<String>, ModuleKey>,
+    /// 逻辑模块路径 → 文件所有者集（评审 5350339687：平台混合变体——
+    /// `#[cfg(unix)] mod platform {…}` 与 `#[cfg(windows)] mod platform;`
+    /// ——并集口径保留双方）。
+    file_of: BTreeMap<Vec<String>, BTreeSet<ModuleKey>>,
     children: BTreeMap<Vec<String>, BTreeSet<String>>,
+    /// 规范迭代源：每个物理文件恰一次，配其规范包含路径——inline 别名
+    /// 只用于解析目标（评审 5350339687：别名路径重扫会虚构错误边）。
+    canonical: BTreeSet<(Vec<String>, ModuleKey)>,
 }
 
 /// 声明文件的子模块目录（不带尾斜杠；根为空）：`lib.rs`/`mod.rs` 的子模块
@@ -500,10 +501,15 @@ impl ModuleTree {
         let mut tree = ModuleTree {
             file_of: BTreeMap::new(),
             children: BTreeMap::new(),
+            canonical: BTreeSet::new(),
         };
         let root = ModuleKey::from("lib.rs");
         assert!(files.contains_key(&root), "src 根缺少 lib.rs");
-        tree.file_of.insert(Vec::new(), root.clone());
+        tree.file_of
+            .entry(Vec::new())
+            .or_default()
+            .insert(root.clone());
+        tree.canonical.insert((Vec::new(), root.clone()));
         let mut queue = vec![(Vec::<String>::new(), root)];
         while let Some((path, key)) = queue.pop() {
             if !scans.contains_key(&key) {
@@ -525,7 +531,10 @@ impl ModuleTree {
                 // 真环隐形）；不入队——该文件本就按自身路径扫描
                 if !decl.file_backed {
                     mod_path.push(decl.name.clone());
-                    tree.file_of.insert(mod_path, key.clone());
+                    tree.file_of
+                        .entry(mod_path)
+                        .or_default()
+                        .insert(key.clone());
                     continue;
                 }
                 // 外部文件子模块的目录 = 声明文件子目录 + inline 栈各段
@@ -534,32 +543,30 @@ impl ModuleTree {
                 let child_key = child_file_key(files, &child_dir, &decl.name);
                 let mut child_path = mod_path;
                 child_path.push(decl.name.clone());
-                if let Some(existing) = tree.file_of.get(&child_path) {
-                    // 平台并集下互斥 cfg 的同名声明指向同一文件 → 合并
-                    //（评审 5350168645：判重复会拒合法跨平台代码）；
-                    // 首次声明已入队，不必重复
-                    if existing != &child_key {
-                        panic!("模块路径重复声明：{}", child_path.join("::"));
-                    }
-                    continue;
+                // 同路径的多个目标专属所有者都登记（评审 5350168645/
+                // 5350339687）；文件只在首次声明时入队与进规范迭代源
+                let owners = tree.file_of.entry(child_path.clone()).or_default();
+                let first = owners.insert(child_key.clone());
+                if first {
+                    tree.canonical
+                        .insert((child_path.clone(), child_key.clone()));
+                    queue.push((child_path, child_key));
                 }
-                tree.file_of.insert(child_path.clone(), child_key.clone());
-                queue.push((child_path, child_key));
             }
         }
         tree
     }
 }
 
-/// 解析单条 use 完整路径 → 目标文件键：`crate::` 重定到根、`super::` 逐个弹出
-/// （越过根即失败）、`self::` 就地；未命中子模块的段视为 item 停在最近模块。
-/// 外部 crate/裸路径返回 None。
+/// 解析单条 use 完整路径 → 目标文件所有者集：`crate::` 重定到根、`super::`
+/// 逐个弹出（越过根即失败）、`self::` 就地；未命中子模块的段视为 item 停在
+/// 最近模块。外部路径返回空集；平台混合变体返回多个所有者。
 fn resolve_use(
     tree: &ModuleTree,
     file_path: &[String],
     inline: &[String],
     segs: &[String],
-) -> Option<ModuleKey> {
+) -> Vec<ModuleKey> {
     let mut ctx: Vec<String> = file_path.to_vec();
     ctx.extend(inline.iter().cloned());
     let mut it = 0;
@@ -577,7 +584,7 @@ fn resolve_use(
                 it += 1;
             }
         }
-        _ => return None,
+        _ => return Vec::new(),
     }
     while let Some(seg) = segs.get(it) {
         let known = tree.children.get(&ctx).is_some_and(|c| c.contains(seg));
@@ -587,7 +594,12 @@ fn resolve_use(
         ctx.push(seg.clone());
         it += 1;
     }
-    tree.file_of.get(&ctx).cloned()
+    tree.file_of
+        .get(&ctx)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .collect()
 }
 
 /// 全图构建：模块树 + use 边（自环剔除、BTreeSet 去重排序），
@@ -596,10 +608,10 @@ fn build_graph(files: &BTreeMap<ModuleKey, String>) -> BTreeMap<ModuleKey, BTree
     let mut scans: BTreeMap<ModuleKey, FileScan> = BTreeMap::new();
     let tree = ModuleTree::build(files, &mut scans);
     let mut edges: BTreeMap<ModuleKey, BTreeSet<ModuleKey>> = BTreeMap::new();
-    for key in tree.file_of.values() {
+    for (_, key) in &tree.canonical {
         edges.entry(key.clone()).or_default();
     }
-    for (path, key) in &tree.file_of {
+    for (path, key) in &tree.canonical {
         for target in use_targets_of(&tree, &scans, path, key) {
             edges
                 .get_mut(key)
@@ -610,8 +622,8 @@ fn build_graph(files: &BTreeMap<ModuleKey, String>) -> BTreeMap<ModuleKey, BTree
     edges
 }
 
-/// 单文件的 use 边收集（build_graph 的内层）：展开花括号分组逐条解析
-/// 目标模块文件，剔除自环（同文件 inline 模块引用不成环）。
+/// 单文件的 use 边收集（build_graph 的内层）：展开分组逐条解析目标，
+/// 剔除自环（同文件 inline 模块引用不成环）。
 fn use_targets_of(
     tree: &ModuleTree,
     scans: &BTreeMap<ModuleKey, FileScan>,
@@ -621,7 +633,7 @@ fn use_targets_of(
     let mut targets = Vec::new();
     for (inline, use_toks) in &scans[key].uses {
         for segs in use_tree_paths(use_toks) {
-            if let Some(target) = resolve_use(tree, path, inline, &segs) {
+            for target in resolve_use(tree, path, inline, &segs) {
                 if &target != key {
                     targets.push(target);
                 }
@@ -631,7 +643,6 @@ fn use_targets_of(
     targets
 }
 
-/// Tarjan 强连通分量（递归；图仅数十节点无栈风险）：仅产出非平凡 SCC。
 /// Tarjan 状态机（strong_components 的载体，模块级定义——嵌套函数的
 /// 复杂度会计入外层）。
 struct Tarjan<'a> {

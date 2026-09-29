@@ -332,6 +332,79 @@ fn mutually_exclusive_platform_declarations_coalesce() {
 }
 
 #[test]
+fn inline_alias_paths_do_not_rescan_containing_file() {
+    // 评审 5350339687：inline 别名只用于解析目标，不得以别名路径重扫
+    // 所在文件——use 的栈快照叠加到已抬高的路径会虚构错误边：此处
+    // outer 别名扫描会把 use super::sibling 解析到 outer 内同名的
+    // foo/outer/sibling.rs（rustc 实图是 foo/sibling.rs），与该文件对
+    // crate::foo 的正常依赖组合成 rustc 图中不存在的假环
+    let found = cycles(&[
+        ("lib.rs", "mod foo;\n"),
+        (
+            "foo.rs",
+            concat!(
+                "mod sibling;\n",
+                "mod outer {\n",
+                "    mod sibling;\n",
+                "    use super::sibling::X;\n",
+                "}\n",
+            ),
+        ),
+        ("foo/sibling.rs", "pub struct X;\n"),
+        ("foo/outer/sibling.rs", "use crate::foo::T;\n"),
+    ]);
+    assert!(
+        found.is_empty(),
+        "别名路径重扫虚构的边不得成环（真实目标为 foo/sibling.rs）：{found:?}"
+    );
+    let graph = edges(&[
+        ("lib.rs", "mod foo;\n"),
+        (
+            "foo.rs",
+            concat!(
+                "mod sibling;\n",
+                "mod outer {\n",
+                "    mod sibling;\n",
+                "    use super::sibling::X;\n",
+                "}\n",
+            ),
+        ),
+        ("foo/sibling.rs", "pub struct X;\n"),
+        ("foo/outer/sibling.rs", "use crate::foo::T;\n"),
+    ]);
+    assert!(
+        graph["foo.rs"].contains("foo/sibling.rs"),
+        "规范扫描应把 use super::sibling 解析到 foo/sibling.rs：{:?}",
+        graph["foo.rs"]
+    );
+}
+
+#[test]
+fn mixed_inline_and_file_backed_platform_variants_coexist() {
+    // 评审 5350339687：#[cfg(unix)] mod platform {…} 与
+    // #[cfg(windows)] mod platform; 是合法互斥变体——逻辑路径保留双
+    // 所有者（平台并集口径），不得 panic 或静默覆盖掉文件变体
+    let graph = edges(&[
+        (
+            "lib.rs",
+            "#[cfg(unix)]\nmod platform { pub struct P; }\n#[cfg(windows)]\nmod platform;\nmod user;\n",
+        ),
+        ("platform.rs", "pub struct P;\n"),
+        ("user.rs", "use crate::platform::P;\n"),
+    ]);
+    assert!(
+        graph["user.rs"].contains("platform.rs"),
+        "文件变体所有者不得被 inline 变体覆盖：{:?}",
+        graph["user.rs"]
+    );
+    assert!(
+        graph["lib.rs"].is_empty(),
+        "inline 变体的载体就是声明文件，不产生额外边：{:?}",
+        graph["lib.rs"]
+    );
+}
+
+#[test]
 #[should_panic(expected = "找不到对应文件")]
 fn missing_mod_file_fails_closed() {
     cycles(&[("lib.rs", "mod ghost;\n")]);
