@@ -10,7 +10,7 @@ fn cycles(files: &[(&str, &str)]) -> Vec<String> {
 }
 
 /// 夹具图 → 边集（解析完整性断言用）。
-fn edges(files: &[(&str, &str)]) -> BTreeMap<ModuleKey, BTreeSet<ModuleKey>> {
+pub(super) fn edges(files: &[(&str, &str)]) -> BTreeMap<ModuleKey, BTreeSet<ModuleKey>> {
     build_graph(&to_map(files))
 }
 

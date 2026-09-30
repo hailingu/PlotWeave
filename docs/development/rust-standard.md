@@ -3,7 +3,7 @@
 **Applies to**: any Rust crate in this repository (`src-tauri/**`). Like the
 root `AGENTS.md`, this file is written in English for agent interoperability.
 
-**Last reviewed**: 2026-09-29
+**Last reviewed**: 2026-09-30
 
 ## Required Reading
 
@@ -143,6 +143,15 @@ from unmeasured files. Metric and scope:
   must be reported) so it proves its own detection. One registered blind
   spot: `macro_rules!` bodies are skipped wholesale, so a `use` that exists
   only inside a macro definition is not collected.
+- Test-only items are skipped with balanced generic/type and parameter
+  delimiters; nested commas, array semicolons and generic const blocks do
+  not end the item early. Expression comparisons remain distinct from type
+  delimiters. Lexical aliases are visible throughout their enclosing scope:
+  expansion includes all bindings in the deepest visible scope, preserving
+  the target-platform union while excluding shadowed outer scopes and
+  test-only bindings. Original paths and child-module precedence remain
+  intact. [Issue #424](https://github.com/hailingu/PlotWeave/issues/424) is
+  covered by the matrix and graph-builder fixtures below.
 - This is the Rust counterpart of the frontend guard
   (`src/moduleGraph.test.ts`, issue #106); together they form the
   cross-language acyclic invariant, and `media_format_leaf.rs` (issue #146)
@@ -154,6 +163,29 @@ from unmeasured files. Metric and scope:
   leaf, `journal_entry_value` moved to its shape owner `journal_io`, and
   sibling modules import each other directly instead of through the parent's
   re-export hub.
+
+### Issue #424 State And Invariant Matrix
+
+The scanner owns test-item exclusion (`scan_tokens` / `skip_test_item`);
+use-edge resolution owns alias visibility (`scan_use_stmt` /
+`use_targets_of`). [Issue #424](https://github.com/hailingu/PlotWeave/issues/424)
+repairs two previously registered boundaries. Fixtures in
+`src/module_graph/issue_424_tests.rs` exercise the complete graph builder.
+
+| State / precondition | Action / ordering | Observable outcome | Invariant | Verification |
+| --- | --- | --- | --- | --- |
+| Test-only generic fn / impl, including nested bounds | Scan item, then production use | Only the production target remains; no false cycle | Test-only item bodies never contribute production edges | `generic_test_items_do_not_create_production_cycles` |
+| Test-only generic field, type alias or grouped header | Skip nested type/parameter delimiters, resume at the next element/item | Following production edge survives | Skipping one test item does not consume adjacent production code | `generic_test_fields_resume_at_the_next_field`, `grouped_test_item_headers_are_skipped_in_full` |
+| Test-only comparison statement / initializer, including typed closures and labelled loops | Scan `<` comparison, then production use | Test edges excluded, following edge retained | Expression operators do not hold type delimiters open | `test_comparisons_do_not_swallow_following_production_uses` |
+| Same-scope platform aliases share a name | Reference before declarations; reverse their order | Both platform child edges and cycles detected | Every equally deep visible binding contributes to the target union | `platform_alias_union_is_independent_of_declaration_order` |
+| Nested platform aliases shadow outer aliases | Resolve inner reference before inner declarations | Both inner targets; no outer child targets | Only the deepest visible scope contributes alias expansion | `inner_alias_union_shadows_all_outer_candidates`; existing sibling-scope and child-precedence fixtures |
+| One platform alias implies test | Collect aliases then resolve production reference | Only production-capable target remains | Test-only bindings never contaminate the platform union | `test_only_platform_aliases_do_not_join_production_union` |
+
+The scan is synchronous and stateless per fixture; retries, persistence and
+completion races are not applicable. Existing fail-closed malformed-use and
+missing-module fixtures retain failure coverage. Macro-body imports,
+non-ASCII identifiers and recursive alias-chain inference remain outside this
+text scanner's supported boundary; this repair adds no parser dependency.
 
 ## Before Writing Code
 

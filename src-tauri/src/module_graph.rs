@@ -28,10 +28,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+mod aliases;
 mod cycles;
 mod lexer;
 mod tree;
 mod use_tree;
+use aliases::expand_segments;
 use cycles::cycles_of;
 use lexer::{strip_comments_and_literals, tokenize};
 use tree::ModuleTree;
@@ -298,12 +300,47 @@ fn item_keyword(tok: &str) -> bool {
     !matches!(tok, "pub" | "unsafe" | "async")
 }
 
-/// 跳过 cfg(test) 项/语句的完整剩余部分：推进到首个 "{"（跳块）或 ";"；
-/// 其后的 else/else if 复合臂与结尾分号一并消费（评审 5350168645：只跳
-/// 首个块会把 else 臂当生产代码误采）。
+/// 跳过 cfg(test) 项/元素：组内逗号与分号不终止项，泛型里的常量块
+/// 也不视为项体。角括号仅在类型头或 turbofish 中平衡，避免把表达式
+/// 比较误当泛型；箭头的 > 不闭合泛型。else 链与结尾分号一并消费。
 fn skip_test_item(tokens: &[&str], mut k: usize) -> usize {
+    let mut angles = 0usize;
+    let mut type_header = false;
+    let mut initializer = false;
+    let mut type_alias = false;
+    let labelled = tokens.get(k) == Some(&"\'");
     while k < tokens.len() {
         match tokens[k] {
+            "type" if !initializer => {
+                type_alias = true;
+                type_header = true;
+            }
+            "fn" | "struct" | "enum" | "trait" | "impl" if !initializer => {
+                type_header = true;
+            }
+            ":" if !initializer && !labelled => type_header = true,
+            "=" if angles == 0 && !type_alias => {
+                initializer = true;
+                type_header = false;
+            }
+            "(" => {
+                k = skip_delimited(tokens, k, "(", ")");
+                continue;
+            }
+            "[" => {
+                k = skip_delimited(tokens, k, "[", "]");
+                continue;
+            }
+            "<" if type_header || angles > 0 || tokens.get(k.wrapping_sub(1)) == Some(&"::") => {
+                angles += 1;
+            }
+            ">" if tokens.get(k.wrapping_sub(1)) != Some(&"-") => {
+                angles = angles.saturating_sub(1);
+            }
+            "{" if angles > 0 => {
+                k = skip_braced(tokens, k);
+                continue;
+            }
             "{" => {
                 k = skip_braced(tokens, k);
                 if tokens.get(k) == Some(&"else") {
@@ -315,9 +352,7 @@ fn skip_test_item(tokens: &[&str], mut k: usize) -> usize {
                 }
                 return k;
             }
-            // 逗号终止的带属性元素（struct/enum 字段、元组元素，评审
-            // 5353260028）：不经 {/; 走到下一个元素会把它一并吞掉（漏检）
-            ";" | "," => return k + 1,
+            ";" | "," if angles == 0 => return k + 1,
             _ => {}
         }
         k += 1;
@@ -405,7 +440,7 @@ fn scan_tokens(tokens: &[&str]) -> FileScan {
                 st.pending_path = false;
             }
             t if st.cfg_test && item_keyword(t) => {
-                i = skip_test_item(tokens, i + 1);
+                i = skip_test_item(tokens, i);
                 st.cfg_test = false;
                 st.pending_path = false;
             }
@@ -611,114 +646,6 @@ fn use_targets_of(
     targets
 }
 
-/// 一条 use 路径的裸首段处置（use_targets_of 的内层）：子模块优先于
-/// 别名（评审 5351722665：块内 use … as child 的遮蔽不得替换掉更早的
-/// use child::X 的正确解析——别名是替换不是叠加，误展开会让真环隐形）；
-/// 未命中子模块才按本地别名展开（单层；链式别名极罕见，登记不展开）。
-/// 一条 use 路径的裸首段处置（use_targets_of 的内层），返回**并行**
-/// 候选集（原子路径始终保留）：别名展开是近似启发（不能区分绑定目标
-/// 是模块还是 fn/struct），展开错误的路径会漏掉本应存在的边——故展开
-/// 只作附加候选，不替换原子路径（评审 5353260028：裸绑定目标解析为空
-/// 时展开会把边从真实目标吞噬）。子模块优先（评审 5351722665 遮蔽
-/// 防护）只抑制展开候选的产生，不影响原子路径的解析。
-/// 一条 use 路径的裸首段处置（use_targets_of 的内层），返回**并行**
-/// 候选集（原子路径始终保留——展开是近似启发，展开错误会吞噬边）。
-/// 仅当词法可见绑定（最深作用域；评审 5352172371/5353024715 整作用域
-/// 可见、遮蔽取内层）的目标**本身是模块路径**时才产生展开候选：
-/// 绑定路径截到模块前缀再拼接尾部（绑定到 fn/struct 等非模块叶子的
-/// 裸绑定不展开，评审 5353260028：use crate::a::dep 的 dep 是 fn，
-/// 完整绑定路径会在 dep 处停滞）。子模块优先（评审 5351722665 遮蔽
-/// 防护）抑制展开候选的产生，不影响原子路径的解析。
-fn expand_segments(
-    tree: &ModuleTree,
-    scan: &FileScan,
-    path: &[String],
-    u: &UseStmt,
-    segs: Vec<String>,
-) -> Vec<Vec<String>> {
-    let mut candidates = vec![segs.clone()];
-    let first = segs.first().cloned();
-    let mut ctx = path.to_vec();
-    ctx.extend(u.inline_stack.iter().cloned());
-    let first_is_child = first
-        .as_deref()
-        .is_some_and(|f| tree.children.get(&ctx).is_some_and(|c| c.contains(f)));
-    let visible = scan
-        .renames
-        .iter()
-        .filter(|b| {
-            Some(b.name.as_str()) == first.as_deref() && is_scope_prefix(&b.scope, &u.scope)
-        })
-        .max_by_key(|b| b.scope.len());
-    let Some(bound) = visible else {
-        return candidates;
-    };
-    if first_is_child {
-        return candidates;
-    }
-    // 绑定目标解析基准：crate/self/super 前缀自带位置，裸路径按当前
-    // 模块（位置 path + inline 栈）
-    let first = bound.segs.first().map(String::as_str);
-    let position: Vec<String> = match first {
-        Some("crate") => Vec::new(),
-        Some("self") => ctx.clone(),
-        Some("super") => {
-            let mut c = ctx.clone();
-            for seg in &bound.segs {
-                if seg == "super" {
-                    if c.pop().is_none() {
-                        break;
-                    }
-                } else {
-                    break;
-                }
-            }
-            c
-        }
-        _ => ctx.clone(),
-    };
-    let skip = match first {
-        Some("crate" | "self") => 1,
-        Some("super") => bound
-            .segs
-            .iter()
-            .take_while(|s| s.as_str() == "super")
-            .count(),
-        _ => 0,
-    };
-    let mut absolute = position;
-    absolute.extend(bound.segs[skip..].iter().cloned());
-    let bound_module = module_prefix_of(tree, &absolute);
-    if bound_module.is_empty() {
-        return candidates;
-    }
-    let mut expanded = bound_module;
-    expanded.extend(segs[1..].iter().cloned());
-    candidates.push(expanded);
-    candidates
-}
-
-/// 绑定路径逐段回退到首个存在的模块路径（剔除 fn/struct 等 item 叶子）。
-fn module_prefix_of(tree: &ModuleTree, segs: &[String]) -> Vec<String> {
-    let mut prefix = segs.to_vec();
-    while !prefix.is_empty() {
-        if tree
-            .file_of
-            .keys()
-            .any(|k| k.as_slice() == prefix.as_slice())
-        {
-            return prefix;
-        }
-        prefix.pop();
-    }
-    prefix
-}
-
-/// 词法包含判定：a 是否为 b 的前缀（a 的块都是 b 的祖先块）。
-fn is_scope_prefix(a: &[usize], b: &[usize]) -> bool {
-    a.len() <= b.len() && a.iter().zip(b).all(|(x, y)| x == y)
-}
-
 /// 递归读取 dir 下全部 .rs 文件（键 = 相对 posix 路径）。main.rs 与测试
 /// 文件经「不可达即不入图」口径自然出局，不做显式排除。
 fn load_sources(dir: &Path, out: &mut BTreeMap<ModuleKey, String>, prefix: &str) {
@@ -748,3 +675,7 @@ fn load_sources(dir: &Path, out: &mut BTreeMap<ModuleKey, String>, prefix: &str)
 /// 反例夹具与真实仓库断言（issue #399；仅测试构建参与编译）。
 #[cfg(test)]
 mod module_graph_tests;
+
+/// issue #424 的泛型项与平台别名并集回归夹具。
+#[cfg(test)]
+mod issue_424_tests;
