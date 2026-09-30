@@ -36,7 +36,7 @@ mod tree;
 mod use_tree;
 use aliases::expand_segments;
 use cycles::cycles_of;
-use fields::field_contexts;
+use fields::{field_contexts, is_union_declaration};
 use lexer::{strip_comments_and_literals, tokenize};
 use tree::ModuleTree;
 use use_tree::{strip_raw_ident, use_tree_of};
@@ -302,14 +302,35 @@ fn item_keyword(tok: &str) -> bool {
     !matches!(tok, "pub" | "unsafe" | "async")
 }
 
-/// 仅识别项首的裸闭包或 move 闭包，跳过整个参数列表并返回其后下标。
-/// 参数里的类型、模式或常量组整体跨过，组内 | 不充当闭包定界符；
-/// async 修饰符已由项扫描入口消费。其余项返回 None，不改变扫描边界。
-fn skip_closure_parameters(tokens: &[&str], start: usize) -> Option<usize> {
-    let open = start + usize::from(tokens.get(start) == Some(&"move"));
-    if tokens.get(open) != Some(&"|") {
-        return None;
+/// 只沿项首的稳定表达式前缀定位闭包参数；未到达 | 时不改变扫描状态。
+/// break 标签、借用/解引用及 async/move 可组合；字段指针或引用类型
+/// 会停在类型 token，不会被当作表达式闭包。yield/const 闭包不在稳定语法内。
+fn closure_parameter_open(tokens: &[&str], mut open: usize) -> Option<usize> {
+    while open < tokens.len() {
+        match tokens[open] {
+            "|" => return Some(open),
+            "return" | "async" | "move" | "*" => open += 1,
+            "&" => {
+                open += 1;
+                open += usize::from(tokens.get(open) == Some(&"mut"));
+            }
+            "break" => {
+                open += 1;
+                if tokens.get(open) == Some(&"'") {
+                    open += 2;
+                }
+            }
+            _ => return None,
+        }
     }
+    None
+}
+
+/// 识别项首表达式前缀之后的闭包，跳过整个参数列表并返回其后下标。
+/// 参数里的类型、模式或常量组整体跨过，组内 | 不充当闭包定界符；
+/// 前缀未指向闭包时返回 None，不改变类型头或表达式的扫描边界。
+fn skip_closure_parameters(tokens: &[&str], start: usize) -> Option<usize> {
+    let open = closure_parameter_open(tokens, start)?;
     let mut k = open + 1;
     while k < tokens.len() {
         k = match tokens[k] {
@@ -323,19 +344,32 @@ fn skip_closure_parameters(tokens: &[&str], start: usize) -> Option<usize> {
     Some(k)
 }
 
-/// 跳过 cfg(test) 项/元素：组内逗号与分号不终止项，泛型里的常量块
-/// 也不视为项体。角括号仅在类型头或 turbofish 中平衡，避免把表达式
-/// 比较误当泛型；字段入口由调用方初始化类型状态并限定列表边界。
-/// 箭头的 > 不闭合泛型。else 链与结尾分号一并消费。
-fn skip_test_item(tokens: &[&str], mut k: usize, mut type_header: bool) -> usize {
-    let mut angles = 0usize;
+/// 跳过连续的项首闭包参数，返回正文入口、返回类型态和表达式态。
+/// 没有闭包时保留调用方的字段类型上下文；显式箭头终止连续参数扫描。
+fn skip_closure_headers(
+    tokens: &[&str],
+    mut k: usize,
+    mut type_header: bool,
+) -> (usize, bool, bool) {
     let mut initializer = false;
-    let mut type_alias = false;
-    if let Some(body) = skip_closure_parameters(tokens, k) {
+    while let Some(body) = skip_closure_parameters(tokens, k) {
         k = body;
         type_header = tokens.get(k) == Some(&"-") && tokens.get(k + 1) == Some(&">");
         initializer = !type_header;
     }
+    (k, type_header, initializer)
+}
+
+/// 跳过 cfg(test) 项/元素：组内逗号与分号不终止项，泛型里的常量块
+/// 也不视为项体。角括号仅在类型头或 turbofish 中平衡，避免把表达式
+/// 比较误当泛型；字段入口由调用方初始化类型状态并限定列表边界。
+/// where 约束的同层逗号仍属于声明头；箭头的 > 不闭合泛型。
+/// else 链与结尾分号一并消费。
+fn skip_test_item(tokens: &[&str], k: usize, type_header: bool) -> usize {
+    let (mut k, mut type_header, mut initializer) = skip_closure_headers(tokens, k, type_header);
+    let mut angles = 0usize;
+    let mut type_alias = false;
+    let mut where_clause = false;
     let labelled = tokens.get(k) == Some(&"\'");
     while k < tokens.len() {
         match tokens[k] {
@@ -346,6 +380,8 @@ fn skip_test_item(tokens: &[&str], mut k: usize, mut type_header: bool) -> usize
             "fn" | "struct" | "enum" | "trait" | "impl" if !initializer => {
                 type_header = true;
             }
+            "union" if !initializer && is_union_declaration(tokens, k) => type_header = true,
+            "where" if type_header => where_clause = true,
             ":" if !initializer && !labelled => type_header = true,
             "=" if angles == 0 && !type_alias => {
                 initializer = true;
@@ -380,7 +416,8 @@ fn skip_test_item(tokens: &[&str], mut k: usize, mut type_header: bool) -> usize
                 }
                 return k;
             }
-            ";" | "," if angles == 0 => return k + 1,
+            ";" if angles == 0 => return k + 1,
+            "," if angles == 0 && !where_clause => return k + 1,
             _ => {}
         }
         k += 1;

@@ -1,4 +1,4 @@
-//! struct / enum 的直接字段与变体门控上下文（PR #445 评审 5363739640）。
+//! struct / enum / union 的直接字段与变体门控上下文（PR #445 评审 5363739640）。
 //!
 //! 只给直接元素的属性入口登记类型状态与列表闭合边界；类型内常量块的
 //! 属性仍由普通表达式扫描处理。这里识别声明头和字段列表，不解析通用
@@ -6,7 +6,18 @@
 
 use std::collections::BTreeMap;
 
-use super::{item_keyword, parse_attr, skip_delimited};
+use super::{item_keyword, parse_attr, skip_delimited, strip_raw_ident};
+
+/// Rust 2021 的 strict / reserved keywords：普通声明名不得占用这些词。
+/// gen 自 2024 edition 才保留，本仓 2021 grammar 允许该名字；union 等弱关键字
+/// 也可作名字。来源：https://doc.rust-lang.org/reference/keywords.html。
+const RESERVED_DECLARATION_NAMES: &[&str] = &[
+    "_", "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum",
+    "extern", "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move",
+    "mut", "pub", "ref", "return", "self", "Self", "static", "struct", "super", "trait", "true",
+    "type", "unsafe", "use", "where", "while", "abstract", "become", "box", "do", "final", "macro",
+    "override", "priv", "try", "typeof", "unsized", "virtual", "yield",
+];
 
 /// 带属性直接元素的扫描边界：字段从类型状态开始，enum 变体仅限定终点。
 #[derive(Clone, Copy)]
@@ -17,17 +28,47 @@ pub(super) struct FieldContext {
     pub(super) type_header: bool,
 }
 
-/// 按主扫描器消费挂起属性的项首下标，登记 struct / enum 的直接元素上下文。
+/// union 仅在 `union NAME` 后接泛型、where 或字段体时作为声明关键字。
+/// NAME 遵循本仓 Rust 2021 的 ASCII / raw identifier 口径，避免将弱关键字
+/// 比较、as 转型或 in 迭代误判为类型头；来源：Rust Reference §Identifiers。
+pub(super) fn is_union_declaration(tokens: &[&str], at: usize) -> bool {
+    tokens.get(at) == Some(&"union")
+        && tokens
+            .get(at + 1)
+            .is_some_and(|name| declaration_name(name))
+        && matches!(tokens.get(at + 2).copied(), Some("<" | "{" | "where"))
+}
+
+/// 声明名采用已有 ASCII 分词边界；raw 名允许保留词，但排除语言禁止的五个名。
+/// 2021 identifier grammar：https://doc.rust-lang.org/reference/identifiers.html。
+fn declaration_name(token: &str) -> bool {
+    let name = strip_raw_ident(token);
+    let mut chars = name.chars();
+    let identifier = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if !identifier {
+        return false;
+    }
+    if token.starts_with("r#") {
+        return !matches!(name, "_" | "crate" | "self" | "Self" | "super");
+    }
+    !RESERVED_DECLARATION_NAMES.contains(&name)
+}
+
+/// 按主扫描器消费挂起属性的项首下标，登记 struct / enum / union 的直接元素上下文。
 /// 可见性 pub 后的 `(` 是实际扫描入口；嵌套类型/常量组不登记为外层字段。
 pub(super) fn field_contexts(tokens: &[&str]) -> BTreeMap<usize, FieldContext> {
     let mut contexts = BTreeMap::new();
     for (i, token) in tokens.iter().enumerate() {
-        let variant_list = match *token {
-            "struct" => false,
-            "enum" => true,
+        let (variant_list, allow_tuple) = match *token {
+            "struct" => (false, true),
+            "enum" => (true, false),
+            "union" if is_union_declaration(tokens, i) => (false, false),
             _ => continue,
         };
-        if let Some((open, close)) = declaration_fields(tokens, i + 2, variant_list) {
+        if let Some((open, close)) = declaration_fields(tokens, i + 2, allow_tuple) {
             collect_elements(tokens, open, close, variant_list, &mut contexts);
         }
     }
@@ -35,7 +76,7 @@ pub(super) fn field_contexts(tokens: &[&str]) -> BTreeMap<usize, FieldContext> {
 }
 
 /// 跨过泛型与 where 约束，定位声明自己的字段列表；Fn() 不充当 tuple 头。
-fn declaration_fields(tokens: &[&str], mut i: usize, variant_list: bool) -> Option<(usize, usize)> {
+fn declaration_fields(tokens: &[&str], mut i: usize, allow_tuple: bool) -> Option<(usize, usize)> {
     let mut where_clause = false;
     while i < tokens.len() {
         match tokens[i] {
@@ -45,7 +86,7 @@ fn declaration_fields(tokens: &[&str], mut i: usize, variant_list: bool) -> Opti
                 i = skip_type_arguments(tokens, i, tokens.len());
                 continue;
             }
-            "(" if !variant_list && !where_clause => {
+            "(" if allow_tuple && !where_clause => {
                 return group_close(tokens, i, "(", ")").map(|close| (i, close));
             }
             "{" => return group_close(tokens, i, "{", "}").map(|close| (i, close)),

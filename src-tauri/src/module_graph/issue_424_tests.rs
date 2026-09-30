@@ -24,6 +24,155 @@ fn generic_test_items_do_not_create_production_cycles() {
 }
 
 #[test]
+fn test_only_unions_do_not_create_production_cycles() {
+    // union 泛型列表中的逗号不得泄漏测试体依赖。
+    for item in [
+        "#[cfg(test)] union U<T: Copy, V: Copy> { probe: [u8; { use crate::b::B; 1 }], t: T, v: V }",
+        "#[cfg(test)] union U<T, V> where T: Copy, V: Copy { probe: [u8; { use crate::b::B; 1 }], t: T, v: V }",
+        "#[cfg(test)] pub(crate) union U<T: Copy, V: Copy> { probe: [u8; { use crate::b::B; 1 }], t: T, v: V }",
+        "#[cfg(all(test, unix))] union U<T: Copy, const N: usize = { use crate::b::B; 1 }> { t: T, probe: [u8; N] }",
+        "#[cfg(test)] union gen<T: Copy, V: Copy> { probe: [u8; { use crate::b::B; 1 }], t: T, v: V }",
+        "#[cfg(test)] union r#union<T: Copy, V: Copy> { probe: [u8; { use crate::b::B; 1 }], t: T, v: V }",
+        "#[cfg(test)] union U<T> where T: Copy + Fn() -> Result<u8, u16> { t: T, probe: [u8; { use crate::b::B; 1 }] }",
+        "#[cfg(test)] union U { probe: [u8; { use crate::b::B; 1 }] }",
+    ] {
+        let graph = edges(&[
+            ("lib.rs", "mod a; mod b; mod c;"),
+            ("a.rs", &format!("{item} use crate::c::C;")),
+            ("b.rs", "use crate::a::A;"),
+            ("c.rs", "pub struct C;"),
+        ]);
+        assert_eq!(graph["a.rs"], BTreeSet::from(["c.rs".into()]), "{item}");
+        assert!(cycles_of(&graph).is_empty(), "测试 union 不得制造生产环：{item}");
+    }
+}
+
+#[test]
+fn generic_test_where_clauses_exclude_body_dependencies() {
+    // where 约束的同层逗号仍属于声明头，不能恢复生产扫描。
+    for item in [
+        "#[cfg(test)] fn helper<T, U>() where T: Into<U>, U: Copy { use crate::b::B; }",
+        "#[cfg(test)] impl<T, U> Pair<T, U> where T: Copy, U: Copy { fn helper() { use crate::b::B; } }",
+        "#[cfg(test)] struct Pair<T, U> where T: Copy, U: Copy { probe: [u8; { use crate::b::B; 1 }], t: T, u: U }",
+        "#[cfg(test)] enum E<T, U> where T: Copy, U: Copy { Probe([u8; { use crate::b::B; 1 }]), Value(T, U) }",
+        "#[cfg(test)] trait Helper<T, U> where T: Copy, U: Copy { fn helper() { use crate::b::B; } }",
+        "#[cfg(test)] type Alias<T, U> where T: Copy, U: Copy = Pair<T, [u8; { use crate::b::B; 1 }]>;",
+    ] {
+        let graph = edges(&[
+            ("lib.rs", "mod a; mod b; mod c;"),
+            ("a.rs", &format!("{item} use crate::c::C;")),
+            ("b.rs", "use crate::a::A;"),
+            ("c.rs", "pub struct C;"),
+        ]);
+        assert_eq!(graph["a.rs"], BTreeSet::from(["c.rs".into()]), "{item}");
+        assert!(cycles_of(&graph).is_empty(), "{item}");
+    }
+}
+
+#[test]
+fn union_test_fields_preserve_following_production_cycles() {
+    // union 与其他记录类型共享字段闭合边界，末尾无逗号不得吞生产项。
+    for item in [
+        "union U { marker: u8, #[cfg(test)] probe: [u8; { use crate::b::B; 1 }] }",
+        "union U { #[cfg(test)] probe: Pair<(u8, u8), [u8; { use crate::b::B; 1 }]>, production: [u8; { use crate::c::C; 1 }] }",
+        "union U { marker: u8, #[cfg(test)] union: Pair<u8, [u8; { use crate::b::B; 1 }]> }",
+        "union U { marker: u8, #[cfg(test)] pub(crate) probe: [u8; { use crate::b::B; 1 }] }",
+        "union U<T> where T: Copy + Fn() -> Result<u8, u16> { marker: T, #[cfg(test)] probe: [u8; { use crate::b::B; 1 }] }",
+        "union U { marker: u8, #[cfg(test)] probe: fn() -> Pair<u8, [u8; { use crate::b::B; 1 }]> }",
+    ] {
+        let graph = edges(&[
+            ("lib.rs", "mod a; mod b; mod c;"),
+            ("a.rs", &format!("{item} use crate::c::C;")),
+            ("b.rs", "pub struct B;"),
+            ("c.rs", "use crate::a::A;"),
+        ]);
+        assert_eq!(graph["a.rs"], BTreeSet::from(["c.rs".into()]), "{item}");
+        assert_eq!(cycles_of(&graph).len(), 1, "后续生产真环必须检出：{item}");
+    }
+}
+
+#[test]
+fn union_identifiers_preserve_production_scanning() {
+    // weak keyword 的普通值、路径和名字不能开启 union 声明上下文。
+    for item in [
+        "#[cfg(test)] union < limit;",
+        "#[cfg(test)] return union < limit;",
+        "#[cfg(test)] let less = union < limit;",
+        "#[cfg(test)] union::make::<u8, u16>();",
+        "#[cfg(test)] union();",
+        "#[cfg(test)] fn union<T, U>() { use crate::b::B; }",
+        "#[cfg(test)] fn r#union<T, U>() { use crate::b::B; }",
+        "#[cfg(test)] type union<T, U> = Pair<T, [u8; { use crate::b::B; 1 }]>;",
+        "#[cfg(test)] struct union<T, U> { probe: [u8; { use crate::b::B; 1 }], t: T, u: U }",
+        "struct S { #[cfg(test)] union: [u8; { use crate::b::B; 1 }], production: [u8; { use crate::c::C; 1 }] }",
+    ] {
+        let graph = edges(&[
+            ("lib.rs", "mod a; mod b; mod c;"),
+            ("a.rs", &format!("fn f() {{ {item} use crate::c::C; }}")),
+            ("b.rs", "pub struct B;"),
+            ("c.rs", "use crate::a::A;"),
+        ]);
+        assert_eq!(graph["a.rs"], BTreeSet::from(["c.rs".into()]), "{item}");
+        assert_eq!(cycles_of(&graph).len(), 1, "{item}");
+    }
+}
+
+#[test]
+fn union_bindings_do_not_create_field_contexts() {
+    // 保留词 as/in/if/where 不能被当作 union 声明名，伪造字段上下文。
+    for item in [
+        "fn f() { for union in <Iter as Trait>::items() { #[cfg(test)] value < limit; use crate::c::C; } }",
+        "fn f() { match value { union if <T as Trait>::predicate() => { #[cfg(test)] value < limit; use crate::c::C; }, _ => () } }",
+        "fn f<T>() -> union where <T as Trait>::Assoc: Bound { #[cfg(test)] value < limit; use crate::c::C; 0 }",
+    ] {
+        let graph = edges(&[
+            ("lib.rs", "mod a; mod b; mod c;"),
+            ("a.rs", item),
+            ("b.rs", "pub struct B;"),
+            ("c.rs", "use crate::a::A;"),
+        ]);
+        assert_eq!(graph["a.rs"], BTreeSet::from(["c.rs".into()]), "{item}");
+        assert_eq!(cycles_of(&graph).len(), 1, "{item}");
+    }
+}
+
+#[test]
+fn prefixed_test_closures_preserve_following_production_cycles() {
+    // 前缀和连续闭包参数不得把表达式比较/泛型逗号变成项结束边界。
+    for item in [
+        "#[cfg(test)] return |x: u32| x < limit;",
+        "#[cfg(test)] return move |x: u32| x < limit;",
+        "#[cfg(test)] break |x: u32| x < limit;",
+        "#[cfg(test)] break 'label move |x: u32| x < limit;",
+        "#[cfg(test)] return &|x: u32| x < limit;",
+        "#[cfg(test)] return &mut |x: u32| x < limit;",
+        "#[cfg(test)] return &&|x: u32| x < limit;",
+        "#[cfg(test)] return *&move |x: u32| x < limit;",
+        "#[cfg(test)] break 'label &mut |x: u32| x < limit;",
+        "#[cfg(test)] return async move |x: u32| x < limit;",
+        "#[cfg(test)] return |x: u32| -> Result<u32, ()> { use crate::b::B; Ok(x) };",
+        "#[cfg(test)] break 'label move |x: u32| -> Result<u32, ()> { use crate::b::B; Ok(x) };",
+        "#[cfg(test)] &|x: u32| -> Result<u32, ()> { use crate::b::B; Ok(x) };",
+        "#[cfg(test)] return || |x: u32| x < limit;",
+        "#[cfg(test)] return || |x: Result<u8, u16>| { use crate::b::B; x };",
+        "#[cfg(test)] return || return move |x: Result<u8, u16>| { use crate::b::B; x };",
+        "#[cfg(test)] break 'label || |x: u32| x < limit;",
+    ] {
+        let graph = edges(&[
+            ("lib.rs", "mod a; mod b; mod c;"),
+            (
+                "a.rs",
+                &format!("fn f() {{ loop {{ {item} use crate::c::C; }} }}"),
+            ),
+            ("b.rs", "pub struct B;"),
+            ("c.rs", "use crate::a::A;"),
+        ]);
+        assert_eq!(graph["a.rs"], BTreeSet::from(["c.rs".into()]), "{item}");
+        assert_eq!(cycles_of(&graph).len(), 1, "后续生产真环必须检出：{item}");
+    }
+}
+
+#[test]
 fn generic_test_fields_resume_at_the_next_field() {
     let graph = edges(&[
         ("lib.rs", "mod a; mod b; mod c;"),
