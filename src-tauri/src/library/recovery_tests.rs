@@ -215,7 +215,7 @@ fn unknown_delete_transaction_converges_after_index_repair_keeping_media_bytes()
     assert!(!warnings.is_empty());
     assert_eq!(fs::read(&path).unwrap(), b"keep");
     let saved: Value = serde_json::from_slice(&fs::read(&journal).unwrap()).unwrap();
-    assert_eq!(saved[0]["indexUncertain"], true);
+    assert_eq!(saved["entries"][0]["indexUncertain"], true);
     // 索引经任一写入修复（备份损坏原件 + 保存修复视图）
     update_meta_with(&fixture.dir, "a", &json!({"name": "新名称"}), &mut |_| {}).unwrap();
     // 修复后的图库操作：闩锁复位并按「删除已生效」收敛——媒体重隔离进
@@ -231,7 +231,11 @@ fn unknown_delete_transaction_converges_after_index_repair_keeping_media_bytes()
     );
     assert!(!path.exists(), "权威索引已去项的媒体应离开活动路径");
     let saved: Value = serde_json::from_slice(&fs::read(&journal).unwrap()).unwrap();
-    assert_eq!(saved, json!([]), "已核验的重隔离项应折叠退场（issue #359）");
+    assert_eq!(
+        saved["entries"],
+        json!([]),
+        "已核验的重隔离项应折叠退场（issue #359）"
+    );
     let quarantined: Vec<_> = fs::read_dir(fixture.path.join("assets/.trash"))
         .unwrap()
         .map(|e| e.unwrap().path())

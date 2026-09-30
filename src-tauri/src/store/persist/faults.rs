@@ -13,6 +13,9 @@ pub(crate) enum Stage {
     Rename,
     #[cfg(unix)]
     DirectorySync,
+    /// 库日志 atomic_write 内置同步之后的追加目录屏障（issue #421）。
+    #[cfg(unix)]
+    LibraryDirectorySync,
     #[cfg(unix)]
     EntrySync,
     #[cfg(unix)]

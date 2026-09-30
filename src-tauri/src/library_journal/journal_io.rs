@@ -10,9 +10,21 @@ use crate::library::error::LibraryError;
 use crate::library_fs::INDEX_MAX_BYTES;
 use crate::store::{atomic_write, is_valid_asset_rel_path};
 
+use super::archive::{parse_totals, read_archive, ARCHIVE_FILE_NAME};
 use super::fsync::fsync_dir;
 
+/// 删除事务与清理累计指标的单一原子快照文件。
 pub(crate) const JOURNAL_FILE_NAME: &str = "asset-delete-journal.json";
+
+/// 完整日志快照（issue #421）：任何写入口都携带既有累计指标，折叠退役
+/// 与指标增量不可分离；needs_write 标记旧格式迁移或咨询性字段修复。
+#[derive(Clone, Default)]
+pub(super) struct Journal {
+    pub(super) entries: Vec<JournalEntry>,
+    pub(super) cleanup_count: u64,
+    pub(super) trash_bytes: Option<u64>,
+    pub(super) needs_write: bool,
+}
 
 /// 单条删除事务：assetId、原 relPath（固定 assets/ 基准）、预期文件身份
 /// (dev, ino) 与未公开的 `assets/.trash/<随机名>`。
@@ -84,63 +96,76 @@ fn parse_entry(v: &Value, seen: &mut Vec<String>) -> Option<JournalEntry> {
     })
 }
 
-/// 读取日志：缺失回退空表。no-follow 归类（拒符号链接，要求普通文件——
-/// FIFO/目录等异型在打开前拒绝，不阻塞命令）+ 大小上限内受限读取；根非
-/// 数组/条目异型/重复 id/越界路径 → 只读态（评审修复）。
-pub(super) fn read_journal(
-    library: &CapDir,
-    warnings: &mut Vec<String>,
-) -> (Vec<JournalEntry>, bool) {
-    let blocked = |warnings: &mut Vec<String>, why: &str| {
-        warnings.push(format!("删除日志{why}，库写入已暂停（只读告警态）"));
-        (Vec::new(), true)
-    };
+/// 在已锚定目录内受限读取日志；缺失与读取失败分开，异型不打开。
+fn read_journal_text(library: &CapDir) -> Result<Option<String>, &'static str> {
     let md = match library.symlink_metadata(JOURNAL_FILE_NAME) {
         Ok(md) => md,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return (Vec::new(), false),
-        Err(_) => return blocked(warnings, "读取失败"),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err("读取失败"),
     };
     if md.file_type().is_symlink() || !md.is_file() {
-        return blocked(warnings, "是符号链接或非普通文件");
+        return Err("是符号链接或非普通文件");
     }
-    let text = {
-        let f = match library.open(JOURNAL_FILE_NAME) {
-            Ok(f) => f,
-            Err(_) => return blocked(warnings, "读取失败"),
-        };
-        let mut buf = Vec::new();
-        if f.take((INDEX_MAX_BYTES + 1) as u64)
-            .read_to_end(&mut buf)
-            .is_err()
-        {
-            return blocked(warnings, "读取失败");
-        }
-        if buf.len() > INDEX_MAX_BYTES {
-            return blocked(warnings, "超过大小上限");
-        }
-        match String::from_utf8(buf) {
-            Ok(t) => t,
-            Err(_) => return blocked(warnings, "不是合法 UTF-8"),
-        }
+    let f = library.open(JOURNAL_FILE_NAME).map_err(|_| "读取失败")?;
+    let mut buf = Vec::new();
+    f.take((INDEX_MAX_BYTES + 1) as u64)
+        .read_to_end(&mut buf)
+        .map_err(|_| "读取失败")?;
+    if buf.len() > INDEX_MAX_BYTES {
+        return Err("超过大小上限");
+    }
+    String::from_utf8(buf)
+        .map(Some)
+        .map_err(|_| "不是合法 UTF-8")
+}
+
+/// 旧数组/缺失日志仅在迁移前读取旁路；新对象永不消费陈旧归档。
+fn parse_journal(library: &CapDir, value: Value, warnings: &mut Vec<String>) -> Option<Journal> {
+    let legacy = value.is_array();
+    let items = if legacy {
+        value.as_array()?
+    } else {
+        value.as_object()?.get("entries")?.as_array()?
     };
-    match serde_json::from_str::<Value>(&text) {
-        Ok(Value::Array(arr)) => {
-            let mut seen = Vec::new();
-            let mut entries = Vec::new();
-            for item in &arr {
-                match parse_entry(item, &mut seen) {
-                    Some(e) => entries.push(e),
-                    None => {
-                        warnings.push("删除日志异型，库写入已暂停（只读告警态）".into());
-                        return (Vec::new(), true);
-                    }
-                }
+    let mut seen = Vec::new();
+    let mut entries = Vec::new();
+    for item in items {
+        entries.push(parse_entry(item, &mut seen)?);
+    }
+    let prior_warnings = warnings.len();
+    let (cleanup_count, trash_bytes) = if legacy {
+        read_archive(library, warnings)
+    } else {
+        parse_totals(&value, warnings)
+    };
+    Some(Journal {
+        entries,
+        cleanup_count,
+        trash_bytes,
+        needs_write: legacy || warnings.len() > prior_warnings,
+    })
+}
+
+/// no-follow 归类与受限读取后解析完整状态。旧数组兼容迁移；事务形状
+/// 异型仍只读，咨询性指标异型告警重计而不阻断库操作。
+pub(super) fn read_journal(library: &CapDir, warnings: &mut Vec<String>) -> (Journal, bool) {
+    let result = read_journal_text(library).and_then(|text| {
+        let value = match text {
+            Some(text) => serde_json::from_str(&text).map_err(|_| "异型")?,
+            None if matches!(library.symlink_metadata(ARCHIVE_FILE_NAME),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound) =>
+            {
+                return Ok(Journal::default());
             }
-            (entries, false)
-        }
-        _ => {
-            warnings.push("删除日志异型，库写入已暂停（只读告警态）".into());
-            (Vec::new(), true)
+            None => json!([]),
+        };
+        parse_journal(library, value, warnings).ok_or("异型")
+    });
+    match result {
+        Ok(journal) => (journal, false),
+        Err(why) => {
+            warnings.push(format!("删除日志{why}，库写入已暂停（只读告警态）"));
+            (Journal::default(), true)
         }
     }
 }
@@ -162,14 +187,20 @@ pub(super) fn journal_entry_value(e: &JournalEntry) -> Value {
     value
 }
 
-/// 日志原子落盘（library/ 句柄相对）并 fsync 所在目录。
-pub(super) fn write_journal(
-    library: &CapDir,
-    entries: &[JournalEntry],
-) -> Result<(), LibraryError> {
-    let items: Vec<Value> = entries.iter().map(journal_entry_value).collect();
-    let text = serde_json::to_string(&json!(items))
-        .map_err(|e| LibraryError::serialize("序列化日志失败", e))?;
+/// 完整对象根的唯一序列化入口，写入与删除投影上限使用同一口径。
+pub(super) fn serialize_journal(journal: &Journal) -> Result<String, LibraryError> {
+    let items: Vec<Value> = journal.entries.iter().map(journal_entry_value).collect();
+    let mut value = json!({"entries":items,"retainedCleanupCount":journal.cleanup_count});
+    if let Some(bytes) = journal.trash_bytes {
+        value["trashBytes"] = json!(bytes);
+    }
+    serde_json::to_string(&value).map_err(|e| LibraryError::serialize("序列化日志失败", e))
+}
+
+/// 将事务与累计指标同次原子落盘并同步目录，任何屏障失败均传播原错误；
+/// 重试只可能读取完整旧态或完整新态，不能丢失已退役条目的指标。
+pub(super) fn write_journal(library: &CapDir, journal: &Journal) -> Result<(), LibraryError> {
+    let text = serialize_journal(journal)?;
     if text.len() > INDEX_MAX_BYTES {
         return Err(LibraryError::Limit {
             detail: "删除日志更新超过大小上限，拒绝写入".into(),

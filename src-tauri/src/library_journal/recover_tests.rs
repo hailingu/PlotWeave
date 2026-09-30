@@ -66,6 +66,43 @@ pub(crate) fn write_journal_raw(library: &Path, entries: Value) {
     .expect("写日志");
 }
 
+/// 替换测试事务条目，同时保留对象日志内已迁移的累计计数/字节量级。
+pub(crate) fn replace_journal_entries(library: &Path, entries: Value) {
+    let mut journal = match fs::read_to_string(library.join(JOURNAL_FILE_NAME)) {
+        Ok(text) => serde_json::from_str::<Value>(&text).expect("日志 JSON"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => json!([]),
+        Err(error) => panic!("读日志失败：{error}"),
+    };
+    if journal.is_object() {
+        journal["entries"] = entries;
+    } else {
+        journal = entries;
+    }
+    write_journal_raw(library, journal);
+}
+
+/// 构造 n 条「索引已去项 + 隔离项身份一致」的已完成条目：每个条目在
+/// .trash 有真实文件，身份与磁盘一致（issue #359 验收构造；上限 500 条）。
+pub(crate) fn foldable_journal(library: &Path, n: usize) {
+    fs::create_dir_all(library.join("assets").join(".trash")).expect("建隔离目录");
+    let entries: Vec<Value> = (0..n)
+        .map(|i| {
+            let name = format!("assets/.trash/x-{i}");
+            fs::write(library.join(&name), b"X").expect("写隔离项");
+            let (dev, ino) = file_identity(&library.join(&name));
+            journal_entry_json(
+                &format!("x-{i}"),
+                &format!("la-gone-{i}"),
+                &format!("assets/la-{i}.png"),
+                &name,
+                dev,
+                ino,
+            )
+        })
+        .collect();
+    replace_journal_entries(library, json!(entries));
+}
+
 pub(crate) fn file_identity(p: &Path) -> (u64, u64) {
     #[cfg(unix)]
     {
@@ -97,9 +134,13 @@ pub(crate) fn journal_entry_json(
     })
 }
 
+/// 读取对象或旧数组日志中的事务条目，供恢复结果的条目语义断言复用。
 pub(crate) fn read_journal_raw(library: &Path) -> Value {
-    serde_json::from_str(&fs::read_to_string(library.join(JOURNAL_FILE_NAME)).expect("读回日志"))
-        .expect("日志 JSON")
+    let journal: Value = serde_json::from_str(
+        &fs::read_to_string(library.join(JOURNAL_FILE_NAME)).expect("读回日志"),
+    )
+    .expect("日志 JSON");
+    journal.get("entries").cloned().unwrap_or(journal)
 }
 
 /// 中断恢复①：日志已写、隔离未发生（媒体仍在原位且身份一致）→ 清除

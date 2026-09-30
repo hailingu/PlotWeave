@@ -6,7 +6,7 @@ use cap_std::fs::Dir as CapDir;
 use serde_json::{json, Value};
 
 use super::fsync::fsync_dir;
-use super::journal_io::{journal_entry_value, read_journal, write_journal, JournalEntry};
+use super::journal_io::{read_journal, serialize_journal, write_journal, Journal, JournalEntry};
 use super::recover::{recover, CleanupPendingItem, Recovery};
 use super::trash::{
     ensure_trash_dir, identity_bound_unlink, verify_trash_identity, TrashVerdict, TRASH_DIR,
@@ -159,20 +159,15 @@ fn check_same_fs(trash: &CapDir, identity: (u64, u64)) -> Result<(), LibraryErro
     Ok(())
 }
 
-/// 删除入口守卫：读取磁盘日志并检查追加投影大小（先于 recover，避免
-/// 积压条目随恢复重复推入响应）。在半上限处拒绝新事务，隔离区须人工清理。
+/// 删除入口守卫：读取磁盘日志并检查完整状态投影大小（先于 recover，避免
+/// 积压条目随恢复重复推入响应）；包含同文件累计值，在半上限处拒绝新事务。
 fn guard_journal_headroom(library: &CapDir) -> Result<(), LibraryError> {
     let mut warnings = Vec::new();
-    let (entries, malformed) = read_journal(library, &mut warnings);
+    let (journal, malformed) = read_journal(library, &mut warnings);
     if malformed {
         return Err(LibraryError::refused("删除日志异常，库写入/删除已暂停"));
     }
-    let projected = serde_json::to_string(&json!(entries
-        .iter()
-        .map(journal_entry_value)
-        .collect::<Vec<_>>()))
-    .map_err(|e| LibraryError::serialize("序列化日志失败", e))?
-    .len();
+    let projected = serialize_journal(&journal)?.len();
     if projected > INDEX_MAX_BYTES / 2 {
         return Err(LibraryError::Limit {
             detail: "删除日志接近上限（隔离项待清理累积）：请人工清理 assets/.trash 并同步编辑 asset-delete-journal.json 后重试"
@@ -182,7 +177,8 @@ fn guard_journal_headroom(library: &CapDir) -> Result<(), LibraryError> {
     Ok(())
 }
 
-/// 步骤①日志耐久记录（先于任何移动）：追加事务并原子落盘 + 目录 fsync。
+/// 步骤①日志耐久记录（先于任何移动）：追加事务并原子落盘 + 目录 fsync，
+/// 完整保留日志内累计清理计数/字节量级（issue #421）。
 #[cfg(unix)]
 fn record_delete_journal(
     library: &CapDir,
@@ -190,7 +186,7 @@ fn record_delete_journal(
     rel: &str,
     identity: (u64, u64),
     warnings: &mut Vec<String>,
-) -> Result<(JournalEntry, Vec<JournalEntry>), LibraryError> {
+) -> Result<(JournalEntry, Journal), LibraryError> {
     let txn = format!("t-{}", new_id());
     let entry = JournalEntry {
         id: txn.clone(),
@@ -201,28 +197,23 @@ fn record_delete_journal(
         trash_name: format!("{TRASH_DIR}/{txn}"),
         index_uncertain: false,
     };
-    let (mut entries, malformed) = read_journal(library, warnings);
+    let (mut journal, malformed) = read_journal(library, warnings);
     if malformed {
         return Err(LibraryError::refused("删除日志异常，库写入/删除已暂停"));
     }
-    entries.push(entry.clone());
+    journal.entries.push(entry.clone());
     // 追加上限守卫（评审修复）：身份绑定清理原语不可用使每笔删除都保留
     // 日志条目，无界追加会越过读取上限、把全部库写入/删除推入不可自动
     // 收缩的只读态——在半上限处显式拒绝新事务，隔离区须人工清理
-    let projected = serde_json::to_string(&json!(entries
-        .iter()
-        .map(journal_entry_value)
-        .collect::<Vec<_>>()))
-    .map_err(|e| LibraryError::serialize("序列化日志失败", e))?
-    .len();
+    let projected = serialize_journal(&journal)?.len();
     if projected > INDEX_MAX_BYTES / 2 {
         return Err(LibraryError::Limit {
             detail: "删除日志接近上限（隔离项待清理累积）：请人工清理 assets/.trash 并同步编辑 asset-delete-journal.json 后重试"
                 .into(),
         });
     }
-    write_journal(library, &entries)?;
-    Ok((entry, entries))
+    write_journal(library, &journal)?;
+    Ok((entry, journal))
 }
 
 /// 隔离事务主体：①身份捕获 + 日志耐久记录 ②原子隔离 + 身份复核
@@ -242,7 +233,7 @@ fn commit_quarantined_delete(
     let (parent, last, _file, identity) = capture_original(assets, rel)?;
     let trash = ensure_trash_dir(assets)?;
     check_same_fs(&trash, identity)?;
-    let (entry, mut entries) = record_delete_journal(library, id, rel, identity, &mut warnings)?;
+    let (entry, mut journal) = record_delete_journal(library, id, rel, identity, &mut warnings)?;
     // ② 原子隔离 + 双侧目录 fsync + 身份复核
     let txn = entry.id.clone();
     parent
@@ -268,8 +259,8 @@ fn commit_quarantined_delete(
         TrashVerdict::IdentityOk(f) => {
             if identity_bound_unlink(&f).is_ok() {
                 fsync_dir(&trash)?;
-                entries.retain(|e| e.id != txn);
-                write_journal(library, &entries)?;
+                journal.entries.retain(|e| e.id != txn);
+                write_journal(library, &journal)?;
             } else {
                 cleanup_pending.push(CleanupPendingItem::routine(format!(
                     "媒体已隔离待清理：{rel}"
