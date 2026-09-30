@@ -325,6 +325,13 @@ coverage, and remote Sonar commands use the existing controlled substitutes.
 | Clean original HEAD has a replacement ref → push | Original tree remains eligible for the fast path | Clean HEAD replacement-ref test |
 | Untracked nested test, imported fixture, or document → push | Slow path excludes the local input; local file remains intact and worktree is cleaned | Parameterized untracked-input tests |
 | Slow-path gate fails → push | Push is blocked, remote ref is absent, and temporary worktree is removed | Existing slow-path failure test |
+| Outer slow-path gate exports its root → nested test sandbox runs hooks | Each sandbox analyzes and records its own tree; outer gate root cannot leak into it | Root-isolation regressions in pre-push-refs and gate-tree-marker suites |
+
+The first real slow-path push of this review fix exposed root-override
+inheritance in those two test fixtures: four tests failed, so the hook
+blocked the push. Their scenario environments must explicitly bind the
+gate root to their own sandbox; production slow-path subprocesses continue
+to override it with the actual pushed commit's temporary worktree.
 
 Annotated tags use the same disabled-replacement resolution and retain the
 existing branch-plus-tag regression. Separate tag-, tree-, and blob-object

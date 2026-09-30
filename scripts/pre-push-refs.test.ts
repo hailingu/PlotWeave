@@ -10,7 +10,7 @@ import {
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const repositoryRoot = resolve(import.meta.dirname, '..')
 const temporaryDirectories: string[] = []
@@ -195,6 +195,8 @@ function scenarioEnvironment(
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
+    // 外层慢路径导出的根属于被推树；本场景的门禁只能读取自己的沙箱。
+    PLOTWEAVE_GATE_REPOSITORY_ROOT: sandbox,
     PLOTWEAVE_CARGO_LLVM_COV_BIN: resolve(bin, 'cargo-llvm-cov'),
     PLOTWEAVE_CURL_BIN: resolve(bin, 'curl'),
     PLOTWEAVE_COVERAGE_REPORT_PATH: resolve(sandbox, 'coverage', 'lcov.info'),
@@ -318,6 +320,7 @@ function preparePushScenario(options?: {
 }
 
 afterEach(() => {
+  vi.unstubAllEnvs()
   for (const directory of temporaryDirectories.splice(0)) {
     rmSync(directory, { recursive: true, force: true })
   }
@@ -365,6 +368,23 @@ function expectOriginalTree(scenario: PushScenario, commit: string): void {
 // 并发负载下常超 vitest 默认 5s——与 gate-tree-marker.test.ts 同款放宽
 // describe 级超时上限，不放宽断言。套件按矩阵维度分组：单个 describe
 // 回调保持在新函数 80 计行上限内（AGENTS.md 尺寸上限）。
+describe(
+  'pre-push 测试沙箱根隔离（issue #405 慢路径门禁）',
+  { timeout: 30_000 },
+  () => {
+    it('继承外层门禁根覆盖时，沙箱快路径仍扫描和记录自己的提交', () => {
+      vi.stubEnv('PLOTWEAVE_GATE_REPOSITORY_ROOT', repositoryRoot)
+      const scenario = preparePushScenario()
+
+      const push = scenario.git(['push', 'origin', 'main'])
+
+      expect(push.status).toBe(0)
+      expect(scenario.installRuns()).toBe(0)
+      expectOriginalTree(scenario, scenario.headSha())
+    })
+  },
+)
+
 describe(
   'pre-push 替换对象：分析原始被推提交（PR #442 评审 5361127076）',
   { timeout: 30_000 },
