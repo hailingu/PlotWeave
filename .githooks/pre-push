@@ -1,11 +1,164 @@
 #!/bin/sh
-# 每次推送前再次执行仓库统一的 SonarQube 零问题门禁，防止漏检提交离开
-# 本机；门禁通过后把累积的门禁结论摘要物化进版本化 gate-history.jsonl
-#（issue #355；PR #415 评审 5338815626：提交创建路径只写 .git 内待物化
-# 文件、不弄脏被跟踪文件，重放/检出/合并不被打断）。
+# 推送前按 stdin 的待推送 ref 分派仓库统一的 SonarQube 零问题门禁
+#（issue #405）：推哪个 ref，就在该 ref 的提交状态上分析哪个 ref，而非
+# 恒扫当前工作树。快路径：待推提交即当前 HEAD、索引与工作树对 HEAD 均
+# 无内容差异、且门禁读取的树（src、src-tauri、scripts、.githooks）与
+# 仓库根层没有未忽略的未跟踪文件时，当前工作树就是被推状态，直接在
+# 当前工作树执行完整门禁（与原行为同成本）；其他目录的未跟踪内容不
+# 参与编译、测试与扫描，只会被 Prettier 扫到而过严，不构成降级条件。
+# 慢路径：其余情形（非检出分支、脏工作树、多 ref）在临时 worktree 检出
+# 被推提交、按该树锁文件安装依赖后，用当前门禁脚本
+#（PLOTWEAVE_GATE_REPOSITORY_ROOT 指向临时 worktree）完整分析——以被
+# 推送 ref 为准。同一提交被多个 ref 引用（分支 + 标签）只分析一次；
+# 删除 ref（本地 sha 全零）不导出代码，跳过。所有 ref 的门禁通过后把
+# 累积的门禁结论物化进版本化 gate-history.jsonl（issue #355；PR #415
+# 评审 5338815626：提交创建路径只写 .git 内待物化文件、不弄脏被跟踪
+# 文件，重放/检出/合并不被打断）。
 
 set -eu
 
 hook_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-"$hook_directory/../scripts/sonar-quality-gate.sh"
-"$hook_directory/../scripts/gate-history.sh" materialize
+main_root=$(CDPATH= cd -- "$hook_directory/.." && pwd)
+npm_bin=${PLOTWEAVE_NPM_BIN:-npm}
+zero_sha=0000000000000000000000000000000000000000
+
+# 待物化路径与互斥锁与主工作树对齐（issue #405）：慢路径门禁写在临时
+# worktree，但记录必须进入主工作树的同一条待物化队列，并与快路径、
+# materialize 共用同一把锁串行（PR #415 评审 5339243902 的并入原子性）。
+# git-path 输出相对当前目录时按主工作树根补全——慢路径门禁会在别处 cd。
+pending_path=${PLOTWEAVE_GATE_PENDING_PATH:-}
+if [ -z "$pending_path" ]; then
+  pending_path=$(git rev-parse --git-path plotweave-gate-history.pending 2>/dev/null ||
+    printf '%s' "$main_root/.git/plotweave-gate-history.pending")
+  case $pending_path in
+    /*) ;;
+    *) pending_path=$main_root/$pending_path ;;
+  esac
+fi
+lock_directory=${PLOTWEAVE_SONAR_LOCK_DIRECTORY:-$main_root/.sonar-gate.lock}
+
+# 慢路径临时 worktree 与 ref 清单临时文件的登记与清理：退出路径（含
+# set -e 失败与信号）尽力移除；残留只浪费磁盘、不影响门禁结论（可用
+# git worktree prune 兜底）。
+temp_root=
+temp_worktree=
+manifest_path=
+# 剥离 git 向提交类钩子导出的工作树定位变量（GIT_INDEX_FILE / GIT_PREFIX
+# 等按 cwd 相对解析：临时 worktree 里 .git 是文件，.git/index 不是合法
+# 路径，worktree add / remove / 门禁会误失败）。真实暴露路径是提交门禁
+# 内运行本仓库测试套件——套件继承钩子环境后在其沙箱里真实 git push
+# 触发本钩子（issue #405）。
+unset_git_localization() {
+  unset GIT_INDEX_FILE GIT_PREFIX GIT_WORK_TREE GIT_DIR ||
+    : # unset 为内建，仅防御性兜底
+}
+cleanup_temporary_artifacts() {
+  if [ -n "$temp_worktree" ]; then
+    ( unset_git_localization
+      git worktree remove --force "$temp_worktree" ) 2>/dev/null ||
+      printf 'pre-push 警告：无法移除临时 worktree %s；可用 git worktree prune 清理。\n' \
+        "$temp_worktree" >&2
+  fi
+  [ -z "$temp_root" ] || rm -rf "$temp_root" 2>/dev/null || true
+  [ -z "$manifest_path" ] || rm -f "$manifest_path" 2>/dev/null || true
+}
+trap cleanup_temporary_artifacts 0 1 2 15
+
+fail() {
+  printf 'pre-push 失败：%s\n' "$1" >&2
+  exit 1
+}
+
+# 快路径前提（issue #405）：工作树内容与 HEAD 一致（含索引，保证台账
+# tree 键与被推提交同源），且没有落在门禁读取范围（src / src-tauri /
+# scripts / .githooks）或仓库根层的未忽略未跟踪文件——根层配置文件
+#（如 vitest.config.ts）与被编译/被测代码同样会改写门禁结论，须与被推
+# 提交同源。已知残余（记录于 quality-gate-cost.md）：被忽略文件与
+# skip-worktree/assume-unchanged 隐藏的差异对 git 不可见，快路径无法
+# 证明其不存在；慢路径的全新检出不受影响。
+working_tree_represents_head() {
+  git diff --quiet HEAD -- &&
+  git diff --cached --quiet HEAD -- &&
+  ! git ls-files --others --exclude-standard |
+    grep -Eq '^(src/|src-tauri/|scripts/|\.githooks/)|^[^/]+$'
+}
+
+# 解析待推本地 sha 为其指向的提交：注释标签 peel 到提交，非提交对象
+#（树 / 斑点）失败——fail-closed，不猜测分析对象。stderr 静默：诊断以
+# 调用方的失败消息为准（--quiet 不抑制对象类型不匹配的 error 输出）。
+resolve_pushed_commit() {
+  case $1 in
+    *[!0-9a-fA-F]* | '') return 1 ;;
+  esac
+  git rev-parse --verify --quiet "$1^{commit}" 2>/dev/null
+}
+
+# 慢路径：临时 worktree 检出被推提交，按该树锁文件安装依赖，再以当前
+# 门禁脚本在该树上执行完整门禁（分析对象 = 被推提交，门禁定义 = 当前
+# 工作树版本）。
+gate_commit_in_temp_worktree() {
+  commit=$1
+  short=$(git rev-parse --short "$commit")
+  temp_root=$(mktemp -d "${TMPDIR:-/tmp}/plotweave-pre-push.XXXXXXXX")
+  temp_worktree=$temp_root/worktree
+  ( unset_git_localization
+    git worktree add --quiet --detach "$temp_worktree" "$commit" ) ||
+    fail "无法在临时 worktree 检出被推提交 $short"
+  ( cd "$temp_worktree" && unset_git_localization && "$npm_bin" ci ) </dev/null ||
+    fail "被推树 $short 的依赖安装失败（npm ci；树内缺 package-lock.json 亦会走到这里）"
+  ( unset_git_localization
+    PLOTWEAVE_GATE_REPOSITORY_ROOT=$temp_worktree \
+    PLOTWEAVE_GATE_PENDING_PATH=$pending_path \
+    PLOTWEAVE_SONAR_LOCK_DIRECTORY=$lock_directory \
+      "$main_root/scripts/sonar-quality-gate.sh" ) </dev/null
+  if ( unset_git_localization
+    git worktree remove --force "$temp_worktree" ) 2>/dev/null &&
+    rm -rf "$temp_root" 2>/dev/null; then
+    temp_worktree=
+    temp_root=
+  else
+    printf 'pre-push 警告：无法清理临时 worktree %s；可用 git worktree prune 清理。\n' \
+      "$temp_worktree" >&2
+    temp_worktree=
+    temp_root=
+  fi
+}
+
+# 一次读尽 stdin（git 每行给出 <本地ref> <本地sha> <远端ref> <远端sha>），
+# 落到临时清单后逐行分派：循环体内的长命令一律改读 /dev/null，不再消费
+# 钩子的输入；清单经文件传递，规避子壳变量与引号展开两类陷阱。
+manifest_path=$(mktemp "${TMPDIR:-/tmp}/plotweave-pre-push-refs.XXXXXX")
+cat > "$manifest_path"
+analyzed_commits=
+while read -r local_ref local_sha remote_ref remote_sha extra; do
+  if [ -z "$local_ref" ]; then
+    continue
+  fi
+  if [ -n "$extra" ]; then
+    fail "待推送 ref 行字段数异常（预期 <本地ref> <本地sha> <远端ref> <远端sha>）：$local_ref $local_sha $remote_ref $remote_sha $extra"
+  fi
+  # 删除 ref：本地 sha 全零，没有代码离机，无需分析
+  if [ "$local_sha" = "$zero_sha" ]; then
+    continue
+  fi
+  commit=$(resolve_pushed_commit "$local_sha") ||
+    fail "无法把待推送对象 $local_sha 解析为提交：$local_ref"
+  # 同一提交被多个 ref 引用只分析一次
+  case ",$analyzed_commits," in
+    *",$commit,"*) continue ;;
+  esac
+  analyzed_commits="$analyzed_commits,$commit"
+  short=$(git rev-parse --short "$commit")
+  if [ "$commit" = "$(git rev-parse --verify --quiet HEAD 2>/dev/null || printf x)" ] &&
+    working_tree_represents_head; then
+    printf '[pre-push] 门禁对象：%s（%s，当前工作树）\n' "$local_ref" "$short"
+    "$main_root/scripts/sonar-quality-gate.sh" </dev/null
+  else
+    printf '[pre-push] 门禁对象：%s（%s，临时 worktree）\n' "$local_ref" "$short"
+    gate_commit_in_temp_worktree "$commit"
+  fi
+done < "$manifest_path"
+rm -f "$manifest_path"
+manifest_path=
+
+"$main_root/scripts/gate-history.sh" materialize

@@ -617,18 +617,18 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
   })
 })
 
-describe.each(['.githooks/pre-commit', '.githooks/pre-push'])(
-  '%s',
-  (hookPath) => {
-    it('执行同一个增量清零门禁并透传失败状态', () => {
-      const result = runGate(hookPath, { unresolvedIssues: 1 })
+// pre-push 的门禁分派与按 ref 行为见 scripts/pre-push-refs.test.ts（issue
+// #405：钩子读取 stdin，空 stdin 不再触发门禁）；此处只覆盖 pre-commit
+// 的接线与失败透传。
+describe('.githooks/pre-commit', () => {
+  it('执行同一个增量清零门禁并透传失败状态', () => {
+    const result = runGate('.githooks/pre-commit', { unresolvedIssues: 1 })
 
-      expect(result.status).not.toBe(0)
-      expect(result.log).toContain('npm run test:coverage')
-      expect(`${result.stdout}${result.stderr}`).toContain('1')
-    })
-  },
-)
+    expect(result.status).not.toBe(0)
+    expect(result.log).toContain('npm run test:coverage')
+    expect(`${result.stdout}${result.stderr}`).toContain('1')
+  })
+})
 
 describe(
   '门禁结论摘要记录（issue #355：完整通过后写入待物化文件，推送时并入版本化凭据）',
@@ -724,14 +724,8 @@ describe(
       expect(result.history).toBe('')
     })
 
-    it('pre-push 完整通过后把待物化行物化进版本化文件并清空待物化文件', () => {
-      const result = runGate('.githooks/pre-push')
-
-      expect(result.status).toBe(0)
-      const lines = result.history.split('\n').filter(Boolean)
-      expect(lines).toHaveLength(1)
-      expect(JSON.parse(lines[0] ?? '').qualityGate).toBe('OK')
-      expect(result.pending).toBe('')
-    })
+    // pre-push 侧「门禁通过后物化」由 scripts/gate-tree-marker.test.ts 的
+    // 真实推送 e2e 与 scripts/pre-push-refs.test.ts 的快路径用例覆盖（issue
+    // #405 起 pre-push 读取 stdin，空 stdin 不触发门禁）
   },
 )

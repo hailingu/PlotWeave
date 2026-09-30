@@ -8,7 +8,10 @@
 set -eu
 
 script_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-repository_root=$(CDPATH= cd -- "$script_directory/.." && pwd)
+# 门禁根覆盖（issue #405）：与 sonar-quality-gate.sh 同源的注入点——
+# pre-push 慢路径经 PLOTWEAVE_GATE_REPOSITORY_ROOT 让本入口（当前副本）
+# 在被推提交的临时检出树上执行。
+repository_root=${PLOTWEAVE_GATE_REPOSITORY_ROOT:-$(CDPATH= cd -- "$script_directory/.." && pwd)}
 
 npm_bin=${PLOTWEAVE_NPM_BIN:-npm}
 

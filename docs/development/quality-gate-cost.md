@@ -22,7 +22,13 @@ refreshed 2026-09-30 on the pinned Node toolchain, measuring the complete
 gate as extended — that refresh fired the first distribution
 reconsideration trigger, and the revisit it requires is recorded with the
 alternatives (see [Measured Baseline](#measured-baseline) and
-[Status Of The Alternatives](#status-of-the-alternatives)).
+[Status Of The Alternatives](#status-of-the-alternatives)); and extended
+2026-09-30 by the issue #405 push-path per-ref gating — a deliberate
+gate-strength change authorized by that issue: `pre-push` now reads the refs
+Git hands it on stdin and analyzes every pushed commit at its own state,
+with a measured slow-path cost recorded alongside the baseline (see
+[Push-Path Per-Ref Gating](#push-path-per-ref-gating-issue-405) and
+[Push-Path Slow-Path Cost](#push-path-slow-path-cost-2026-09-30-issue-405)).
 
 ## Required Reading
 
@@ -174,6 +180,16 @@ Two records live in this file and must not be conflated (评审 4120364296):
   coverage condition, so the gate no longer depends on that unversioned
   server-side condition for its coverage conclusion. It introduces no
   cheaper variant, skip, or fast path, and relaxes nothing.
+- The **issue #405 extension (2026-09-30) also deliberately changes gate
+  behavior**: the push path no longer scans whatever happens to be checked
+  out. `pre-push` reads the refs Git hands it on stdin and runs the complete
+  gate once per unique pushed commit, at that commit's own state — see
+  [Push-Path Per-Ref Gating](#push-path-per-ref-gating-issue-405). It
+  introduces no cheaper variant of the sequence: the fast path is the same
+  complete sequence in the current working tree, taken only when that tree
+  is provably identical to the pushed commit, and the slow path is the same
+  complete sequence in a temporary worktree checked out at the pushed
+  commit.
 
 The following remain in force exactly as written in `AGENTS.md`, and nothing
 in this file is an exception to them:
@@ -217,9 +233,93 @@ test-only injection, explicit evasion to use it that way.
 also belong to the test-only injection class: they redirect only where the
 evidence record is written, so they cannot skip any check, but pointing them
 elsewhere does remove the in-repository evidence for that run.
+`PLOTWEAVE_GATE_REPOSITORY_ROOT` (`scripts/sonar-quality-gate.sh`,
+`scripts/check-static.sh`, `scripts/rust-coverage.sh`, issue #405) belongs
+to the same injection class but is stronger than the path overrides above:
+it redirects **which tree the gate analyzes**, and the `pre-push` slow path
+uses it to point the current gate scripts at the pushed commit's temporary
+worktree. A shell that exports it can therefore analyze an arbitrary
+directory instead of the state a Git operation is about to record or push —
+the same class of explicit evasion as `--no-verify`, prohibited by
+`AGENTS.md`.
 
 Anyone reading a faster local workflow elsewhere in this repository should
 treat it as a defect in that workflow, not as sanctioned by this decision.
+
+## Push-Path Per-Ref Gating (issue #405)
+
+Before issue #405, `.githooks/pre-push` read no input and always scanned the
+checked-out working tree, so pushing a non-checked-out ref, several refs at
+once, or the checked-out branch with a dirty tree let states reach the
+remote that the gate had never analyzed (the founding record of that finding
+is retained below in
+[Known Finding: Push Scans The Checked-Out Tree, Not The Pushed
+Ref](#known-finding-push-scans-the-checked-out-tree-not-the-pushed-ref)).
+The issue #405 fix, wired 2026-09-30, closes it:
+
+- **Read stdin.** The hook consumes every line Git hands it
+  (`<local ref> <local sha> <remote ref> <remote sha>`) before dispatching,
+  so no child process can consume the hook's input, and the ref list cannot
+  be influenced by gate execution.
+- **Fast path — current working tree.** Taken only when the pushed commit
+  (the local sha peeled to a commit, so annotated tags analyze the commit
+  they point at) equals `HEAD` **and** the tree is provably identical to it:
+  `git diff --quiet HEAD` (no unstaged or staged tracked differences),
+  `git diff --cached --quiet HEAD` (index equality, so the record's
+  `write-tree` key matches the pushed tree), and no untracked non-ignored
+  file in the trees the gate reads (`src/`, `src-tauri/`, `scripts/`,
+  `.githooks/`) or at the repository root (root-level config files such as
+  an untracked `vitest.config.ts` can rewrite gate conclusions, so they must
+  share the pushed tree's provenance; untracked content in other directories
+  cannot weaken the gate — Prettier may over-block on it, never under-block).
+  The complete gate then runs exactly as before, at the same cost.
+- **Slow path — temporary worktree.** Every other case (a non-checked-out
+  ref, a dirty worktree, multiple distinct commits) is checked out with
+  `git worktree add --detach` into a `mktemp` directory, dependencies are
+  installed from that tree's lockfiles (`npm ci`), and the **current**
+  gate scripts run the complete sequence with
+  `PLOTWEAVE_GATE_REPOSITORY_ROOT` pointing at that worktree. The user's
+  working tree is never touched; the temporary worktree is removed after the
+  run (best-effort `git worktree remove --force` on every exit path;
+  residue is disk waste only, `git worktree prune` recovers it).
+- **Dedup and deletions.** Refs pointing at the same commit (a branch and
+  its tag) are analyzed once; a ref deletion (all-zero local sha) exports no
+  code and is skipped; a malformed ref line or a local sha that does not
+  peel to a commit fails closed. Every ref line is analyzed or rejected —
+  none is silently ignored.
+- **Evidence and serialization.** Slow-path runs write their gate-history
+  record through the main worktree's pending file and take the main
+  worktree's gate lock, so fast path, slow path, and `materialize` stay
+  serialized on one mutex and the record's `tree`/`head` are the pushed
+  commit's (issue #355 semantics unchanged). All refs must pass before
+  `materialize` runs; a failure blocks the push with earlier passing records
+  left pending for the next successful push.
+
+**Known boundaries.** The fast path's equality proof is bounded by what git
+can see: ignored files (e.g., a file hidden by `.git/info/exclude` inside
+`src/`) and tracked differences masked by `skip-worktree` or
+`assume-unchanged` are invisible to `git diff` / `git status` and can still
+make the analyzed content differ from the pushed commit — the pre-#405
+residuals, now narrowed from "always possible" to "fast path only". The slow
+path's pristine checkout closes both. The slow-path subprocesses also strip
+the worktree-localization variables git exports to commit-creating hooks
+(`GIT_INDEX_FILE`, `GIT_PREFIX`, …): they resolve relative to the invoking
+worktree and are invalid inside a temporary worktree — without the strip,
+a gate run nested inside a commit hook (which is exactly how this
+repository's own script tests execute under `npm run test:coverage`) would
+break the slow path. Both paths analyze with the gate
+definition of the current working tree (uniform-gate rule), so a pushed tree
+older than the tooling itself fails closed if it lacks `package-lock.json`
+(`npm ci`) or the files the gate needs; pushing such an ancient tree requires
+checking it out first. Using `--no-verify` on the push remains prohibited and
+is unaffected by this wiring.
+
+The measured cost of both paths is recorded in
+[Measured Baseline](#measured-baseline): the fast path is the unchanged
+complete-gate cost (the refreshed baseline measures it); the slow path adds
+dependency installation and cold caches and was measured once on landing —
+see
+[Push-Path Slow-Path Cost](#push-path-slow-path-cost-2026-09-30-issue-405).
 
 ## Gate Run Evidence Record (issue #355)
 
@@ -328,6 +428,17 @@ measurements — the wired hooks now make the automatic merge / revert /
 cherry-pick / rebase-replay / commit-side `--no-verify` paths reach the
 gate.
 
+Since the issue #405 fix (2026-09-30), every push-side mismatch this
+inventory records — a pushed ref whose state differs from the checked-out
+tree — is closed: `pre-push` reads stdin and analyzes each pushed ref at
+that ref's own commit (fast path in the checked-out tree only under the
+provable-equality preconditions, otherwise a temporary-worktree checkout;
+see
+[Push-Path Per-Ref Gating](#push-path-per-ref-gating-issue-405)). The
+per-row `#405` mentions below are retained as the pre-fix measurement of
+which commands could produce such a mismatch; they identify the push-side
+exposure those rows had before the fix, not a live gap.
+
 | Command that creates a commit | Observed hooks (shared callbacks also described below) | Gate analyzes this commit? |
 | --- | --- | :---: |
 | `git commit` (without `--amend`) | `post-index-change` on index writes; `pre-commit`, `prepare-commit-msg`, `commit-msg`, `post-commit` | yes |
@@ -379,12 +490,14 @@ gate.
 \* These rows produce commits under refs that are **pushable by explicit
 refspec** — `git push <remote> refs/stash:refs/heads/…`, `refs/notes/*`,
 `refs/replace/*`, `refs/heads/<branch>` from the subtree split, or the branch
-`update-ref` just created — so each carries the same
+`update-ref` just created — so each carried the same
 remote-facing gap tracked in
 [Known Finding: Push Scans The Checked-Out Tree, Not The Pushed
 Ref](#known-finding-push-scans-the-checked-out-tree-not-the-pushed-ref):
-`pre-push` analyzes the checked-out tree, not the pushed ref (评审
-4115165662, 4115165667). The `commit-tree` and `hash-object` rows
+before the issue #405 fix, `pre-push` analyzed the checked-out tree, not the
+pushed ref (评审 4115165662, 4115165667). Since that fix (2026-09-30) the
+gap is closed — each pushed ref is analyzed at its own commit. The
+`commit-tree` and `hash-object` rows
 additionally have a direct-OID push variant that causes no local
 `reference-transaction` — `update-ref` is optional for both, and the
 returned OID can be pushed as-is; `pre-push` still receives the OID and can
@@ -806,9 +919,12 @@ index alone would therefore not close this boundary.
 
 So the accurate statement of the invariant is:
 
-> The gate always analyzes the **working tree**. It runs on `git commit` and
-> on `git push` of the checked-out branch, and — since the issue #404 wiring —
-> also on every commit-creating porcelain with a wireable pre-creation hook:
+> The gate always analyzes the **working tree**. It runs on `git commit`,
+> and — since the issue #405 wiring — on `git push` for every pushed ref at
+> that ref's commit state: in the checked-out working tree only under the
+> provable-equality preconditions, otherwise in a temporary worktree checked
+> out at the pushed commit. It also runs — since the issue #404 wiring —
+> on every commit-creating porcelain with a wireable pre-creation hook:
 > automatic conflict-free `git merge` and `git pull` (default merge mode)
 > through `pre-merge-commit`, automatic conflict-free `git revert` and
 > `git cherry-pick`, every replayed `git rebase` commit (including
@@ -823,11 +939,16 @@ So the accurate statement of the invariant is:
 > original index alone is insufficient: this excludes staged changes omitted
 > by `--only` or a pathspec, unstaged tracked changes (including ones hidden
 > by `skip-worktree` or `assume-unchanged`), and additional untracked or
-> ignored inputs the gate reads. At push time, the pushed ref is the checked-out
-> branch **and the analyzed working-tree contents actually match the pushed
-> commit** — no tracked differences, including ones hidden by index flags,
-> and no additional untracked or ignored inputs the gate reads. A clean
-> `git status` does not prove that equality.
+> ignored inputs the gate reads. At push time (issue #405), the fast path
+> takes the current working tree only when the pushed commit is `HEAD`, the
+> index and working tree have no tracked differences from it, and no
+> untracked non-ignored files sit in the trees the gate reads or the
+> repository root — this is checked, not assumed. Ignored inputs and
+> differences hidden by `skip-worktree` / `assume-unchanged` remain outside
+> what git can prove (fast-path residuals recorded in
+> [Push-Path Per-Ref Gating](#push-path-per-ref-gating-issue-405)); every
+> other push is analyzed in a pristine temporary worktree of the pushed
+> commit, which closes both.
 > For automatic, conflict-free operations, it does **not** analyze:
 > `git am`, `git stash` in any entry-creating form
 > (`push`, shorthand, `save`, `-u`/`--all`; entry commits under
@@ -957,16 +1078,15 @@ that state, for example after one of the uncovered creation paths. The
 prohibition in `AGENTS.md` covers this push-time bypass regardless of any
 earlier analysis.
 
-Push-time analysis is a *partial* safety net, and only in a narrow case:
-when the pushed ref is the checked-out branch **and the analyzed working-tree
-contents actually match the pushed commit**, the `pre-push` gate analyzes
-the state being pushed. This excludes tracked differences hidden by
-`skip-worktree` or `assume-unchanged`, as well as extra untracked or ignored
-inputs the gate reads; clean status alone is insufficient (评审 4115241706,
-4115510915). For a different ref or differing inputs, that correspondence
-is not established — see
-[Known Finding: Push Scans The Checked-Out Tree, Not The Pushed
-Ref](#known-finding-push-scans-the-checked-out-tree-not-the-pushed-ref).
+Push-time analysis since the issue #405 fix (2026-09-30) covers every
+pushed ref at that ref's own commit — a pristine temporary-worktree checkout
+unless the current tree is provably identical to the pushed commit (see
+[Push-Path Per-Ref Gating](#push-path-per-ref-gating-issue-405)). The
+pre-fix wording is retained below as the record of what the narrow case
+used to be: the fast path's residuals (tracked differences hidden by
+`skip-worktree` or `assume-unchanged`, extra ignored inputs) are exactly
+the parts of that wording git still cannot prove (评审 4115241706,
+4115510915), and the slow path closes them.
 Whether to wire `pre-merge-commit` was a governance decision with a real cost
 attached (every merge became a gate run); it was out of scope for #356 and
 has since been decided and implemented by
@@ -975,6 +1095,19 @@ wired `pre-merge-commit` and `prepare-commit-msg` with tree-marker dedup so
 each commit-creating operation pays exactly one complete gate run.
 
 ## Known Finding: Push Scans The Checked-Out Tree, Not The Pushed Ref
+
+**Update 2026-09-30 (issue #405 fix)**: this finding is closed. `.githooks/
+pre-push` now reads the refs Git hands it on stdin and gates every pushed
+ref at that ref's commit state — in the current working tree only when it is
+provably identical to the pushed commit, otherwise in a temporary worktree
+checked out at that commit (see
+[Push-Path Per-Ref Gating](#push-path-per-ref-gating-issue-405)). The
+equality proof covers tracked differences (staged and unstaged) and
+untracked non-ignored files in the trees the gate reads plus the repository
+root; ignored inputs and differences hidden by `skip-worktree` /
+`assume-unchanged` remain outside what git can prove and are recorded as
+fast-path residuals there — the slow path's pristine checkout closes both.
+The founding text below is retained as the pre-fix measurement.
 
 `.githooks/pre-push` reads no input. Git hands the hook the refs about to be
 pushed on standard input; the hook ignores it and runs
@@ -1274,6 +1407,39 @@ context only.
    used Node 22 while this one uses the pinned Node 24. Compare ratios and
    per-phase shares across the two baselines, not wall-clock deltas.
 
+### Push-Path Slow-Path Cost (2026-09-30, issue #405)
+
+Measured once on landing the issue #405 fix (task branch
+`fix/issue-405-pre-push-stdin-refs`, hook at the fix state), on the same
+machine, Node version, and warm-toolchain caches as the refreshed baseline.
+**Command** (per the re-measure recipe below): push a non-checked-out
+commit (`44891fe`, the `dev` tip before PR #441) to a disposable local bare
+remote, timing the whole push — worktree checkout, `npm ci`, and the
+complete gate all sit inside it.
+
+| Measurement | Value |
+| --- | ---: |
+| Wall clock, complete slow-path push (single sample) | **179.63s** |
+| User CPU / System CPU | 348.59s / 47.08s |
+| Fast-path comparison (refreshed baseline median, same machine) | 135.49s |
+
+**Result**: exit 0 — `[pre-push] 门禁对象：44891fe（…，临时 worktree）`,
+`Quality Gate 已通过，新增代码未解决问题为 0`, the remote received exactly
+the pushed commit, the temporary worktree was removed, and the push's own
+`materialize` folded the run's record (`head` `44891fe…`, `tree`
+`a8651cd…` — equal to `git rev-parse 44891fe^{tree}`) into the versioned
+`gate-history.jsonl`. That record equality is the acceptance probe for the
+issue: the analyzed object is the pushed ref's commit, not the checked-out
+tree.
+
+Caveats: a single sample on one day; the first slow-path run on the machine
+paid cold `src-tauri/target` and `node_modules` construction inside the
+temporary worktree (the ~44s delta over the warm fast-path median understates
+a fully cold machine and overstates a repeat slow path against a recently
+built tree); dependencies resolved from the shared local npm/cargo caches.
+The fast path is unaffected — it is the same complete-gate run the refreshed
+baseline measures, with only the equality preconditions added ahead of it.
+
 ## Reconsideration Triggers
 
 Revisit this decision — and re-measure before drawing conclusions — when any of
@@ -1330,6 +1496,13 @@ these becomes true:
   no tracked differences, including index-hidden ones, and no extra
   untracked or ignored inputs the gate reads. Git-clean status alone does
   not establish this equality (评审 4115477929, 4115510915).
+  Status: fired and resolved 2026-09-30 by the issue #405 fix — the gate
+  decision it demanded is [#405](https://github.com/hailingu/PlotWeave/issues/405),
+  implemented as the per-ref push gating this file now records (see
+  [Push-Path Per-Ref Gating](#push-path-per-ref-gating-issue-405)): stdin is
+  read, every pushed commit is analyzed at its own state, and the
+  dirty-worktree mismatch falls to the slow-path temporary worktree rather
+  than being assumed away.
 - The gate starts analyzing the prospective commit tree selected by Git for
   that invocation, respecting pathspecs and content-selection flags, instead
   of the working tree. Scanning the original index alone is insufficient for
@@ -1358,6 +1531,19 @@ time sh scripts/check-static.sh
 time npm run test:coverage
 time sh scripts/rust-coverage.sh
 ```
+
+For the push-path slow path (issue #405), push a non-checked-out commit to a
+disposable local bare remote and time the whole push — the hook's worktree
+checkout, `npm ci`, and complete gate all sit inside it:
+
+```sh
+git init --bare -q "$(mktemp -d)/origin.git"   # 把输出路径用于下行
+/usr/bin/time -p git push <那个路径>/origin.git <旧提交>:refs/heads/probe-side
+```
+
+Expect the first slow-path run on a machine to pay cold dependency caches
+(the sample below did); a repeat slow path against a recently built tree is
+faster.
 
 Record the commit under measurement and the environment table above alongside
 the result, so two measurements stay comparable.

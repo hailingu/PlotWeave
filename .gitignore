@@ -41,5 +41,10 @@ Thumbs.db
 *.log
 tmp/
 
+# --- 并行任务 worktree ---
+# 工具（feat-auto 等）创建的临时 worktree 目录（issue #405：pre-push 快路径
+# 的未跟踪检查不因这些目录降级到临时 worktree 慢路径）
+.worktrees/
+
 # --- 头脑风暴视觉伴侣原型 ---
 .superpowers/
