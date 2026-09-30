@@ -7,7 +7,10 @@
 set -eu
 
 script_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-repository_root=$(CDPATH= cd -- "$script_directory/.." && pwd)
+# 门禁根覆盖（issue #405）：与 sonar-quality-gate.sh 同源的注入点——
+# pre-push 慢路径经 PLOTWEAVE_GATE_REPOSITORY_ROOT 在被推提交的临时
+# 检出树上生成覆盖率。
+repository_root=${PLOTWEAVE_GATE_REPOSITORY_ROOT:-$(CDPATH= cd -- "$script_directory/.." && pwd)}
 
 llvm_cov_bin=${PLOTWEAVE_CARGO_LLVM_COV_BIN:-cargo-llvm-cov}
 rust_coverage_report_path=${PLOTWEAVE_RUST_COVERAGE_REPORT_PATH:-$repository_root/src-tauri/target/coverage/lcov-rust.info}
@@ -21,7 +24,9 @@ fail() {
 }
 
 command -v "$llvm_cov_bin" >/dev/null 2>&1 ||
-  fail "缺少命令：$llvm_cov_bin（安装：cargo install cargo-llvm-cov）"
+  # $var 后不得紧跟多字节字符（macOS /bin/sh 即 bash 3.2 会并入变量名判
+  # unbound），故变量置于消息末尾
+  fail "缺少命令（安装：cargo install cargo-llvm-cov）：$llvm_cov_bin"
 
 printf '%s\n' '[coverage] 生成 Rust 语句覆盖率（LCOV，lib + media_format_leaf 目标，稳定版工具链无分支口径）……'
 # llvm-cov 不创建报告父目录：先建（首次运行 target/coverage 不存在）

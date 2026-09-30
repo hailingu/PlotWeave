@@ -12,7 +12,7 @@ import {
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const repositoryRoot = resolve(import.meta.dirname, '..')
 const temporaryDirectories: string[] = []
@@ -161,6 +161,8 @@ function scenarioEnvironment(
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
+    // 外层慢路径导出的根属于被推树；本场景的门禁只能读取自己的沙箱。
+    PLOTWEAVE_GATE_REPOSITORY_ROOT: sandbox,
     PLOTWEAVE_CARGO_LLVM_COV_BIN: resolve(bin, 'cargo-llvm-cov'),
     PLOTWEAVE_CURL_BIN: resolve(bin, 'curl'),
     PLOTWEAVE_COVERAGE_REPORT_PATH: resolve(sandbox, 'coverage', 'lcov.info'),
@@ -226,6 +228,7 @@ function prepareHookScenario(qualityGateStatus = 'OK'): HookScenario {
 }
 
 afterEach(() => {
+  vi.unstubAllEnvs()
   for (const directory of temporaryDirectories.splice(0)) {
     rmSync(directory, { recursive: true, force: true })
   }
@@ -308,6 +311,27 @@ describe(
       const blockedPath = resolve(root, 'marker-as-directory')
       mkdirSync(blockedPath)
       expect(run('write', { markerPath: blockedPath }).status).toBe(0)
+    })
+  },
+)
+
+describe(
+  '提交钩子测试沙箱根隔离（issue #405 慢路径门禁）',
+  { timeout: 30_000 },
+  () => {
+    it('继承外层门禁根覆盖时，提交记录仍对应沙箱索引树', () => {
+      vi.stubEnv('PLOTWEAVE_GATE_REPOSITORY_ROOT', repositoryRoot)
+      const scenario = prepareHookScenario()
+
+      const commit = scenario.git(['commit', '--allow-empty', '-m', 'x'])
+
+      expect(commit.status).toBe(0)
+      const record = JSON.parse(
+        readFileSync(resolve(scenario.root, 'gate-pending.jsonl'), 'utf8'),
+      )
+      expect(record.tree).toBe(
+        scenario.git(['rev-parse', 'HEAD^{tree}']).stdout.trim(),
+      )
     })
   },
 )

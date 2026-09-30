@@ -6,7 +6,11 @@
 set -eu
 
 script_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-repository_root=$(CDPATH= cd -- "$script_directory/.." && pwd)
+# 门禁根覆盖（issue #405）：pre-push 慢路径把根指向临时 worktree——执行的
+# 仍是当前工作树的脚本副本，分析对象换成被推提交的检出树（依赖安装、
+# 覆盖率与扫描都在该树下进行）。属测试/钩子注入点，与 PLOTWEAVE_*_BIN
+# 同类（见 docs/development/quality-gate-cost.md）。
+repository_root=${PLOTWEAVE_GATE_REPOSITORY_ROOT:-$(CDPATH= cd -- "$script_directory/.." && pwd)}
 
 npm_bin=${PLOTWEAVE_NPM_BIN:-npm}
 scanner_bin=${PLOTWEAVE_SONAR_SCANNER_BIN:-sonar-scanner}
