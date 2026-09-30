@@ -184,9 +184,22 @@ from unmeasured files. Metric and scope:
   Direct control-flow statements end after their final body before an independent
   unary statement; let/return/break value wrappers retain binary continuation.
   Else-chain helpers preserve that original statement/value ownership.
-  Standalone const/block expressions without semicolons, explicit return-type
-  closure bodies and type elements retain their own ending rules
+  Standalone const/block expressions without an attached postfix, explicit
+  return-type closure bodies without a postfix and type elements retain their
+  own ending rules
   ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5366897147)).
+  Member/tuple/await and try postfixes remain attached to their block values.
+  Calls and indices continue value expressions, but preserve independent grouped
+  or array statements after a direct control-flow/block statement. Explicit-return
+  closure postfixes restore value state before an enclosing body's later comparison;
+  pending body counts remain intact. Gated blocks, including empty blocks, consume
+  their attribute at the opening brace through the existing test-item path.
+  Expression-position qualified paths reuse the balanced type-group parser only
+  for paired `<…>` groups followed by `::`; nested commas/const groups/function
+  arrows are contained without placing subsequent comparisons in type state
+  ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5367627498),
+  [statement ambiguity](https://doc.rust-lang.org/reference/statements.html#expression-statements),
+  [qualified paths](https://doc.rust-lang.org/reference/paths.html#qualified-paths)).
   Lexical aliases are visible throughout their enclosing scope:
   expansion first selects all bindings in the deepest visible scope, then
   appends suffixes only to bindings whose complete target is a known module.
@@ -210,7 +223,7 @@ from unmeasured files. Metric and scope:
 ### Issue #424 State And Invariant Matrix
 
 The scanner owns test-item exclusion (`scan_tokens` / `skip_test_item` /
-`field_contexts` / `ClosureHeaders::step_after_body`);
+`field_contexts` / `qualified_path_end` / `ClosureHeaders::step_after_body`);
 use-edge resolution owns alias visibility (`scan_use_stmt` /
 `use_targets_of`). [Issue #424](https://github.com/hailingu/PlotWeave/issues/424)
 repairs two previously registered boundaries. Fixtures in
@@ -218,7 +231,8 @@ repairs two previously registered boundaries. Fixtures in
 `src/module_graph/issue_424_alias_tests.rs` and
 `src/module_graph/issue_424_function_pointer_tests.rs` and
 `src/module_graph/issue_424_generic_parameter_tests.rs` and
-`src/module_graph/issue_424_operand_tests.rs` exercise the complete graph builder
+`src/module_graph/issue_424_operand_tests.rs` and
+`src/module_graph/issue_424_expression_tests.rs` exercise the complete graph builder
 and the owned-context parser boundary.
 
 | State / precondition | Action / ordering | Observable outcome | Invariant | Verification |
@@ -246,8 +260,13 @@ and the owned-context parser boundary.
 | Bare or prefixed test closure body contains multiple const/operator operand blocks | Keep expression operands in the gated statement until its statement/list boundary | Test dependencies excluded; no false cycle | Operand groups cannot end a gated expression while another operand remains | `bare_closure_operands_do_not_create_production_cycles` ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5366897147)) |
 | Expression closure starts with an ordinary block followed by a binary operator, including match/if-let/while-let nesting | Finish that block's existing body-count transition before continuing the binary expression | All gated operands excluded; enclosing body and following production edge retained | An operand continuation cannot leave a stale body count that consumes a later production block | `bare_closure_operands_do_not_create_production_cycles`, `closure_operand_statements_preserve_production_cycles` |
 | Multi-operand gated closure/value initializer precedes a production use or separate block | Consume gated operands, then resume at the production statement | Production dependency and true cycle retained | Operand continuation never consumes adjacent production statements | `closure_operand_statements_preserve_production_cycles` |
-| Test-only standalone const/block expression without a semicolon, or explicit-return closure/type element | Apply operand continuation only in an active initializer or pending control flow; keep type/list boundaries | Subsequent production block/field remains visible | Expression operand rules do not turn independent blocks or type elements into more test code | `operand_continuation_preserves_nonclosure_and_type_boundaries` |
+| Test-only standalone const/block expression without a semicolon or attached postfix, or explicit-return closure/type element without a postfix | Apply binary-operand continuation only in an active initializer or pending control flow; keep type/list boundaries | Subsequent production block/field remains visible | Expression operand rules do not turn independent blocks or type elements into more test code | `operand_continuation_preserves_nonclosure_and_type_boundaries` |
 | Gated match/if-let/while-let statement ends before an independent unary expression; match also appears inside let/return/break values | Finish the entry control-flow statement, but continue binary operands inside a value wrapper | Independent production edge and true cycle retained; wrapped test operands excluded | Finishing a statement cannot transfer its gate to the next unary statement | `completed_control_flow_preserves_unary_production_statements` |
+| Gated closure or value block has member/call/index/try postfixes, including chains and explicit-return closures | Consume attached postfixes, groups and subsequent operands before the statement boundary; restore value state even while an enclosing body remains pending | Test imports excluded; no false cycle | A braced value cannot end its gate while a postfix remains | `test_postfix_expressions_exclude_operand_dependencies`, `postfix_expressions_preserve_following_production_cycles`, `explicit_return_postfixes_restore_enclosing_expression_context` ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5367627498)) |
+| Direct control-flow/standalone block statement precedes a grouped/array/unary/range statement, while member/try postfixes remain attached; a gated block may be empty | `scan_tokens` consumes block attributes at the opening brace; preserve statement ambiguity rules and original statement/value ownership through postfix scanning | Independent production edges and true cycles retained; attached test operands excluded | Call/index continuation of a value cannot reclassify independent production statements | `postfix_scanning_preserves_statement_and_item_boundaries` |
+| Gated initializer/discriminant/closure contains a qualified path with nested generic types, const groups or function arrows | Reuse balanced type-group parsing only for a paired `<…>` followed by `::` | Type-local test imports excluded; subsequent production edge and true cycle retained | Expression qualified paths cannot expose internal commas or change later comparison state | `test_qualified_initializers_exclude_type_dependencies`, `qualified_expressions_preserve_following_production_cycles` ([Rust qualified-path grammar](https://doc.rust-lang.org/reference/paths.html#qualified-paths)) |
+| Ordinary comparison or unmatched/non-qualified angle candidate appears in a gated expression | Reject qualified-path recognition and retain ordinary expression boundaries | Following production dependency and true cycle remain visible | Recognizing a qualified type group cannot turn comparisons into generic delimiters | `qualified_path_recognition_preserves_comparison_boundaries`, `qualified_path_candidates_require_a_closed_type_group_and_separator` |
+| Postfix or qualified-path attribute also permits production | Apply the existing cfg implication before expression skipping | Production operand/type imports and true cycles remain visible | Expression grammar never strengthens test-only cfg exclusion | `production_capable_expression_attributes_preserve_edges` |
 | Closure attribute permits production | Apply existing cfg implication before expression continuation | Every operand dependency remains; true cycle retained | Operand classification never strengthens cfg test exclusion | `production_capable_closure_operands_preserve_edges` |
 | Test-only match / if-let / while-let closure with empty or nonempty const-block body / operand | Skip the const operand, then enclosing body and following production code | Test dependencies excluded; following production edge and true cycle retained | A const operand group never consumes the enclosing control-flow body | `const_test_closure_bodies_do_not_create_production_cycles`, `const_test_closures_preserve_following_production_blocks` ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5365530615)) |
 | Same-scope function and module aliases share a spelling, in either declaration order | Select deepest lexical bindings, then append a qualified suffix only to exact module targets | Real item-owner and module-child edges remain; no invented function-owner child or false cycle | Non-module symbol tails never become module prefixes for qualified alias expansion | `namespace_disjoint_aliases_exclude_false_child_edges`, `namespace_disjoint_aliases_preserve_module_cycles`; `relative_namespace_aliases_resolve_exact_modules` |

@@ -3,6 +3,7 @@
 //! 只给直接元素的属性入口登记类型状态与列表闭合边界；类型内常量块的
 //! 属性仍由普通表达式扫描处理。这里识别声明头和字段/参数列表，不解析通用
 //! Rust AST；未闭合列表不登记上下文，已有模块/use 扫描继续负责其契约。
+//! 值位置限定路径复用同一类型组平衡器，只接受组后紧接 :: 的候选。
 
 use std::collections::BTreeMap;
 
@@ -194,6 +195,13 @@ fn skip_type_arguments(tokens: &[&str], open: usize, end: usize) -> Option<usize
         i += 1;
     }
     None
+}
+
+/// 值位置的 <…>:: 限定路径：复用类型组平衡，未配对或缺少 :: 返回 None。
+/// 调用方提供 < 的下标；组内逗号/常量及箭头不影响路径类型边界。
+/// 语法契约：https://doc.rust-lang.org/reference/paths.html#qualified-paths。
+pub(super) fn qualified_path_end(tokens: &[&str], open: usize) -> Option<usize> {
+    skip_type_arguments(tokens, open, tokens.len()).filter(|&end| tokens.get(end) == Some(&"::"))
 }
 
 /// 每次只检查列表的直接元素前缀；跳过整条类型或判别式后才检查下一个。

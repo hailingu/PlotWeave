@@ -18,6 +18,8 @@ pub(super) struct ClosureHeaders {
     blocks: usize,
     /// 直接控制流语句的最终正文结束即交还扫描；值包装仍可接二元操作数。
     statement_control_flow: bool,
+    /// 当前门控表达式已识别闭包头；显式返回类型后的后缀属于闭包值。
+    has_closure: bool,
 }
 
 /// 消费一个正文组后，继续同一测试表达式或交还生产扫描。
@@ -120,8 +122,10 @@ pub(super) fn skip_closure_headers(
         matches: 0,
         blocks: 0,
         statement_control_flow: matches!(tokens.get(start), Some(&"match" | &"if" | &"while")),
+        has_closure: false,
     };
     while let Some((body, matches, blocks)) = parameter_end(tokens, headers.next) {
+        headers.has_closure = true;
         headers.next = body;
         headers.type_header = tokens.get(body) == Some(&"-") && tokens.get(body + 1) == Some(&">");
         headers.initializer = !headers.type_header;
@@ -182,8 +186,37 @@ fn is_expression_operator(token: Option<&str>) -> bool {
 }
 
 impl ClosureHeaders {
+    /// 后缀点/问号附着于值；调用/索引只在值上下文延续，不能吞独立语句。
+    /// 显式返回类型的正文结束后可对闭包值应用后缀；点点范围只在值态延续。
+    /// 语句歧义契约：https://doc.rust-lang.org/reference/statements.html#expression-statements。
+    fn body_continues(
+        &self,
+        tokens: &[&str],
+        end: usize,
+        type_header: bool,
+        initializer: bool,
+    ) -> bool {
+        let token = tokens.get(end).copied();
+        let value = initializer || self.has_closure;
+        let postfix = match token {
+            Some(".") => tokens.get(end + 1) != Some(&"."),
+            Some("?") => true,
+            Some("(" | "[") => {
+                value && (!self.statement_control_flow || self.matches + self.blocks > 0)
+            }
+            _ => false,
+        };
+        if postfix {
+            return !type_header || self.has_closure;
+        }
+        !type_header
+            && value
+            && !self.statement_control_flow
+            && (is_expression_operator(token) || token == Some("."))
+    }
+
     /// 操作数先整体跨过；普通正文先更新计数，再决定是否沿二元表达式继续。
-    /// 入口控制流语句在最终正文后结束；值包装允许继续，else 不改变入口所有权。
+    /// 入口控制流保留独立语句边界；已附着后缀在正文计数归零后交还值态。
     pub(super) fn step_after_body(
         &mut self,
         tokens: &[&str],
@@ -200,6 +233,7 @@ impl ClosureHeaders {
         if tokens.get(end) == Some(&"else") {
             let following = skip_closure_headers(tokens, end + 1, type_header);
             if following.next != end + 1 {
+                self.has_closure |= following.has_closure;
                 self.matches += following.matches;
                 self.blocks += following.blocks.saturating_sub(1);
                 return BodyStep::Continue(
@@ -215,12 +249,9 @@ impl ClosureHeaders {
         } else {
             self.blocks = self.blocks.saturating_sub(1);
         }
-        if self.matches + self.blocks > 0
-            || (initializer
-                && !type_header
-                && !self.statement_control_flow
-                && is_expression_operator(tokens.get(end).copied()))
-        {
+        if self.body_continues(tokens, end, type_header, initializer) {
+            BodyStep::Continue(end, false, true)
+        } else if self.matches + self.blocks > 0 {
             BodyStep::Continue(end, type_header, initializer)
         } else {
             BodyStep::End(end + usize::from(tokens.get(end) == Some(&";")))

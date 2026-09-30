@@ -38,7 +38,7 @@ mod use_tree;
 use aliases::expand_segments;
 use closures::{skip_closure_headers, BodyStep};
 use cycles::cycles_of;
-use fields::{field_contexts, is_union_declaration, FieldContext};
+use fields::{field_contexts, is_union_declaration, qualified_path_end, FieldContext};
 use lexer::{strip_comments_and_literals, tokenize};
 use tree::ModuleTree;
 use use_tree::{strip_raw_ident, use_tree_of};
@@ -345,6 +345,12 @@ fn skip_test_item(tokens: &[&str], k: usize, context: Option<&FieldContext>) -> 
             "<" if type_header || angles > 0 || tokens.get(k.wrapping_sub(1)) == Some(&"::") => {
                 angles += 1;
             }
+            "<" => {
+                if let Some(end) = qualified_path_end(tokens, k) {
+                    k = end;
+                    continue;
+                }
+            }
             ">" if tokens.get(k.wrapping_sub(1)) != Some(&"-") => {
                 angles = angles.saturating_sub(1);
             }
@@ -421,7 +427,8 @@ fn scan_tokens(tokens: &[&str]) -> FileScan {
                 st.pending_path |= attr.has_path;
                 i = attr.next;
             }
-            "{" => {
+            // 门控块交给下面的整项跳过入口，空块也在开花括号消费属性。
+            "{" if !st.cfg_test => {
                 st.scope.push(i);
                 st.depth += 1;
                 i += 1;
@@ -706,3 +713,7 @@ mod issue_424_generic_parameter_tests;
 /// 门控闭包操作数连续扫描和独立生产边界回归（issue #424）。
 #[cfg(test)]
 mod issue_424_operand_tests;
+
+/// 门控后缀表达式、限定路径与生产恢复边界回归（issue #424）。
+#[cfg(test)]
+mod issue_424_expression_tests;
