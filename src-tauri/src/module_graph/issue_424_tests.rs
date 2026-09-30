@@ -525,3 +525,53 @@ fn test_only_platform_aliases_do_not_join_production_union() {
         BTreeSet::from(["b/mod.rs".into(), "b/child.rs".into()])
     );
 }
+
+/// 空/非空 const 闭包操作数不能消耗外围正文，测试依赖不得制造生产环。
+#[test]
+fn const_test_closure_bodies_do_not_create_production_cycles() {
+    for item in [
+        "#[cfg(test)] match |_: ()| const {} { _ => { use crate::b::B; } };",
+        "#[cfg(test)] match |_: ()| const { use crate::b::B; () } { _ => { use crate::b::B; } };",
+        "#[cfg(test)] if let _ = |_: ()| const {} { use crate::b::B; };",
+        "#[cfg(test)] while let _ = |_: ()| const {} { use crate::b::B; break; };",
+        "#[cfg(test)] if let _ = |_: ()| const { use crate::b::B; () } { use crate::b::B; };",
+        "#[cfg(test)] while let _ = |_: ()| const { use crate::b::B; () } { use crate::b::B; break; };",
+        "#[cfg(test)] match |_: ()| return const {} { _ => { use crate::b::B; } };",
+        "#[cfg(test)] match |_: ()| &const {} { _ => { use crate::b::B; } };",
+        "#[cfg(test)] match |_: ()| 1 + const { use crate::b::B; 1 } { _ => { use crate::b::B; } };",
+        "#[cfg(test)] match |_: ()| const { use crate::b::B; 1 } + const { use crate::b::B; 1 } { _ => { use crate::b::B; } };",
+        "#[cfg(test)] match |_: ()| return const { 1 } + const { 1 } { _ => { use crate::b::B; } };",
+        "#[cfg(test)] match |_: ()| -> () { const {} } { _ => { use crate::b::B; } };",
+        "#[cfg(test)] match |_: ()| const {} == const {} { _ => { use crate::b::B; } };",
+    ] {
+        let graph = edges(&[
+            ("lib.rs", "mod a; mod b; mod c;"),
+            ("a.rs", &format!("fn f() {{ {item} use crate::c::C; }}")),
+            ("b.rs", "use crate::a::A;"),
+            ("c.rs", "pub struct C;"),
+        ]);
+        assert_eq!(graph["a.rs"], BTreeSet::from(["c.rs".into()]), "{item}");
+        assert!(cycles_of(&graph).is_empty(), "const 操作数不得制造测试假环：{item}");
+    }
+}
+
+/// const 操作数与测试控制流结束后，独立生产块的真实环必须继续可见。
+#[test]
+fn const_test_closures_preserve_following_production_blocks() {
+    for item in [
+        "#[cfg(test)] match |_: ()| const {} { _ => { use crate::b::B; } } { use crate::c::C; }",
+        "#[cfg(test)] match |_: ()| 1 + const { use crate::b::B; 1 } { _ => { use crate::b::B; } } { use crate::c::C; }",
+        "#[cfg(test)] if let _ = |_: ()| const {} { use crate::b::B; } { use crate::c::C; }",
+        "#[cfg(test)] while let _ = |_: ()| const {} { use crate::b::B; break; } { use crate::c::C; }",
+        "#[cfg(test)] if let _ = |_: ()| const { use crate::b::B; () } { use crate::b::B; } else { use crate::b::B; } { use crate::c::C; }",
+    ] {
+        let graph = edges(&[
+            ("lib.rs", "mod a; mod b; mod c;"),
+            ("a.rs", &format!("fn f() {{ {item} }}")),
+            ("b.rs", "pub struct B;"),
+            ("c.rs", "use crate::a::A;"),
+        ]);
+        assert_eq!(graph["a.rs"], BTreeSet::from(["c.rs".into()]), "{item}");
+        assert_eq!(cycles_of(&graph).len(), 1, "const 后生产块的真环必须检出：{item}");
+    }
+}

@@ -160,14 +160,29 @@ fn is_match_arms(tokens: &[&str], open: usize) -> bool {
     false
 }
 
-/// 值前缀/运算符后的块是操作数，不是待消费的条件正文或 match arms。
+/// 值前缀、运算符或 const 后的块是操作数，不消耗外围控制流正文。
 fn is_operand_block(tokens: &[&str], open: usize, body: usize, type_header: bool) -> bool {
     if type_header || open == body {
         return false;
     }
     matches!(
         open.checked_sub(1).and_then(|at| tokens.get(at)).copied(),
-        Some("return" | "+" | "-" | "*" | "/" | "%" | "&" | "|" | "^" | "!" | "<" | ">" | "=")
+        Some(
+            "const"
+                | "return"
+                | "+"
+                | "-"
+                | "*"
+                | "/"
+                | "%"
+                | "&"
+                | "|"
+                | "^"
+                | "!"
+                | "<"
+                | ">"
+                | "="
+        )
     )
 }
 
