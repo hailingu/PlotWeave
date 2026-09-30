@@ -30,11 +30,13 @@ use std::path::Path;
 
 mod aliases;
 mod cycles;
+mod fields;
 mod lexer;
 mod tree;
 mod use_tree;
 use aliases::expand_segments;
 use cycles::cycles_of;
+use fields::field_contexts;
 use lexer::{strip_comments_and_literals, tokenize};
 use tree::ModuleTree;
 use use_tree::{strip_raw_ident, use_tree_of};
@@ -323,10 +325,10 @@ fn skip_closure_parameters(tokens: &[&str], start: usize) -> Option<usize> {
 
 /// 跳过 cfg(test) 项/元素：组内逗号与分号不终止项，泛型里的常量块
 /// 也不视为项体。角括号仅在类型头或 turbofish 中平衡，避免把表达式
-/// 比较误当泛型；箭头的 > 不闭合泛型。else 链与结尾分号一并消费。
-fn skip_test_item(tokens: &[&str], mut k: usize) -> usize {
+/// 比较误当泛型；字段入口由调用方初始化类型状态并限定列表边界。
+/// 箭头的 > 不闭合泛型。else 链与结尾分号一并消费。
+fn skip_test_item(tokens: &[&str], mut k: usize, mut type_header: bool) -> usize {
     let mut angles = 0usize;
-    let mut type_header = false;
     let mut initializer = false;
     let mut type_alias = false;
     if let Some(body) = skip_closure_parameters(tokens, k) {
@@ -403,6 +405,7 @@ struct ScanState {
 }
 
 fn scan_tokens(tokens: &[&str]) -> FileScan {
+    let field_contexts = field_contexts(tokens);
     let mut st = ScanState {
         mods: Vec::new(),
         uses: Vec::new(),
@@ -466,7 +469,9 @@ fn scan_tokens(tokens: &[&str]) -> FileScan {
                 st.pending_path = false;
             }
             t if st.cfg_test && item_keyword(t) => {
-                i = skip_test_item(tokens, i);
+                let context = field_contexts.get(&i);
+                let end = context.map_or(tokens.len(), |c| c.close);
+                i = skip_test_item(&tokens[..end], i, context.is_some_and(|c| c.type_header));
                 st.cfg_test = false;
                 st.pending_path = false;
             }

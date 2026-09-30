@@ -146,7 +146,12 @@ from unmeasured files. Metric and scope:
 - Test-only items are skipped with balanced generic/type and parameter
   delimiters; nested commas, array semicolons and generic const blocks do
   not end the item early. Expression comparisons remain distinct from type
-  delimiters. Bare closure parameter lists are skipped as complete groups,
+  delimiters. Direct struct fields and enum variant fields start in type
+  context, including tuple fields without a colon; their list boundary also
+  preserves production scanning after a final test-only field or variant
+  without a trailing comma. Nested const expressions retain expression
+  context ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5363739640)).
+  Bare closure parameter lists are skipped as complete groups,
   followed by expression-body scanning or an explicit return-type header
   ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5363378084)).
   Lexical aliases are visible throughout their enclosing scope:
@@ -169,7 +174,7 @@ from unmeasured files. Metric and scope:
 
 ### Issue #424 State And Invariant Matrix
 
-The scanner owns test-item exclusion (`scan_tokens` / `skip_test_item`);
+The scanner owns test-item exclusion (`scan_tokens` / `skip_test_item` / `field_contexts`);
 use-edge resolution owns alias visibility (`scan_use_stmt` /
 `use_targets_of`). [Issue #424](https://github.com/hailingu/PlotWeave/issues/424)
 repairs two previously registered boundaries. Fixtures in
@@ -179,7 +184,9 @@ repairs two previously registered boundaries. Fixtures in
 | --- | --- | --- | --- | --- |
 | Test-only generic fn / impl, including nested bounds | Scan item, then production use | Only the production target remains; no false cycle | Test-only item bodies never contribute production edges | `generic_test_items_do_not_create_production_cycles` |
 | Test-only generic field, type alias or grouped header | Skip nested type/parameter delimiters, resume at the next element/item | Following production edge survives | Skipping one test item does not consume adjacent production code | `generic_test_fields_resume_at_the_next_field`, `grouped_test_item_headers_are_skipped_in_full` |
+| Test-only struct / enum field or final enum variant, including tuple/generic/grouped types and visibility | Apply direct-element context, skip to the list boundary, then scan the next production field/item | Test dependencies excluded; production dependencies and real cycles retained | Field delimiters cannot leak test dependencies or consume adjacent production code | `tuple_test_fields_exclude_generic_dependencies`, `last_test_fields_preserve_following_production_cycles` ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5363739640)) |
 | Test-only comparison statement / initializer, including typed closures and labelled loops | Scan `<` comparison, then production use | Test edges excluded, following edge retained | Expression operators do not hold type delimiters open | `test_comparisons_do_not_swallow_following_production_uses` |
+| Test statement inside a field-type const block | Skip the local test expression, then collect production use in the same block | Following production edge and cycle retained | Nested expressions never inherit field type context | `test_field_const_expressions_preserve_production_uses` |
 | Test-only bare / move / async closure with typed, grouped or empty parameters and optional generic return type | Skip the complete closure header and body, then collect production use | Test-only target excluded; following production cycle detected | Closure parameter colons and expression operators cannot change production scanning boundaries | `bare_test_closures_preserve_following_production_cycles` ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5363378084)) |
 | Same-scope platform aliases share a name | Reference before declarations; reverse their order | Both platform child edges and cycles detected | Every equally deep visible binding contributes to the target union | `platform_alias_union_is_independent_of_declaration_order` |
 | Nested platform aliases shadow outer aliases | Resolve inner reference before inner declarations | Both inner targets; no outer child targets | Only the deepest visible scope contributes alias expansion | `inner_alias_union_shadows_all_outer_candidates`; existing sibling-scope and child-precedence fixtures |

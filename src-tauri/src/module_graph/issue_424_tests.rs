@@ -41,6 +41,96 @@ fn generic_test_fields_resume_at_the_next_field() {
 }
 
 #[test]
+fn tuple_test_fields_exclude_generic_dependencies() {
+    // 丢失字段类型上下文会让测试常量里的 use 制造假环。
+    let ty = "Pair<u8, [u8; { use crate::c::C; 1 }]>";
+    let gated = format!("#[cfg(test)] {ty}");
+    let named = format!("#[cfg(test)] probe: {ty}");
+    let production = "[u8; { use crate::b::B; 1 }]";
+    for item in [
+        format!("struct S({gated}, {production});"),
+        format!("struct S({gated}, {production},);"),
+        format!("struct S(#[allow(dead_code)] {gated}, {production});"),
+        format!("struct S(#[cfg(test)] pub {ty}, {production});"),
+        format!("struct S(#[cfg(test)] pub(crate) {ty}, {production});"),
+        format!("struct S(#[cfg(test)] pub(in crate::a) {ty}, {production});"),
+        format!("struct S(#[cfg(test)] ({ty},), {production});"),
+        format!("struct S(#[cfg(test)] [{ty}; 1], {production});"),
+        format!("struct S(#[cfg(test)] &'static {ty}, {production});"),
+        format!("struct S<T>({gated}, T, {production}) where T: Fn() -> Result<u8, u16>;"),
+        format!("enum E {{ V({gated}, {production}), Unit }}"),
+        format!("enum E {{ V({gated}, {production}) }}"),
+        format!("enum E<T> where T: Fn() -> Result<u8, u16> {{ V({gated}, T, {production}) }}"),
+        format!("enum E {{ V {{ {named}, production: {production} }} }}"),
+        format!("struct S<T> where T: Fn() -> Result<u8, u16> {{ {named}, marker: T, production: {production} }}"),
+    ] {
+        let graph = edges(&[
+            ("lib.rs", "mod a; mod b; mod c;"),
+            ("a.rs", &item),
+            ("b.rs", "pub struct B;"),
+            ("c.rs", "use crate::a::A;"),
+        ]);
+        assert_eq!(graph["a.rs"], BTreeSet::from(["b.rs".into()]), "{item}");
+        assert!(cycles_of(&graph).is_empty(), "测试字段不得制造生产假环：{item}");
+    }
+}
+
+#[test]
+fn last_test_fields_preserve_following_production_cycles() {
+    // 最后一个测试字段/变体无尾逗号时仍必须恢复在列表闭合处。
+    for item in [
+        "struct S(#[cfg(test)] Pair<u8, [u8; { use crate::c::C; 1 }]>);",
+        "struct S(#[cfg(test)] pub(crate) Pair<u8, [u8; { use crate::c::C; 1 }]>);",
+        "struct S(#[cfg(test)] (Pair<u8, [u8; { use crate::c::C; 1 }]>));",
+        "struct S(#[cfg(test)] [u8; { use crate::c::C; 1 }]);",
+        "struct S { #[cfg(test)] probe: Pair<u8, [u8; { use crate::c::C; 1 }]> }",
+        "enum E { V(#[cfg(test)] Pair<u8, [u8; { use crate::c::C; 1 }]>) }",
+        "enum E { V { #[cfg(test)] probe: Pair<u8, [u8; { use crate::c::C; 1 }]> } }",
+        "enum E { #[cfg(test)] V(Pair<u8, [u8; { use crate::c::C; 1 }]>) }",
+        "enum E { #[cfg(test)] V { probe: [u8; { use crate::c::C; 1 }] } }",
+        "enum E { #[cfg(test)] Unit }",
+    ] {
+        let graph = edges(&[
+            ("lib.rs", "mod a; mod b; mod c;"),
+            ("a.rs", &format!("{item} use crate::b::B;")),
+            ("b.rs", "use crate::a::A;"),
+            ("c.rs", "pub struct C;"),
+        ]);
+        assert_eq!(graph["a.rs"], BTreeSet::from(["b.rs".into()]), "{item}");
+        assert_eq!(cycles_of(&graph).len(), 1, "后续生产真环必须检出：{item}");
+    }
+}
+
+#[test]
+fn test_field_const_expressions_preserve_production_uses() {
+    // 字段常量块里的测试语句是表达式，不能继承外层字段类型状态。
+    for expression in [
+        "#[cfg(test)] value < limit;",
+        "#[cfg(test)] |x: u32| x < limit;",
+        "#[cfg(test)] let less = value < limit;",
+        "#[cfg(test)] 'label: loop { use crate::c::C; break 'label; }",
+    ] {
+        for declaration in [
+            format!("struct S([u8; {{ {expression} use crate::b::B; 1 }}]);"),
+            format!("enum E {{ V([u8; {{ {expression} use crate::b::B; 1 }}]) }}"),
+        ] {
+            let graph = edges(&[
+                ("lib.rs", "mod a; mod b; mod c;"),
+                ("a.rs", &declaration),
+                ("b.rs", "use crate::a::A;"),
+                ("c.rs", "pub struct C;"),
+            ]);
+            assert_eq!(
+                graph["a.rs"],
+                BTreeSet::from(["b.rs".into()]),
+                "{declaration}"
+            );
+            assert_eq!(cycles_of(&graph).len(), 1, "{declaration}");
+        }
+    }
+}
+
+#[test]
 fn grouped_test_item_headers_are_skipped_in_full() {
     for item in [
         "#[cfg(test)] fn helper(pair: (u8, u8), arr: [u8; 2]) { use crate::b::B; }",
