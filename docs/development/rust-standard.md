@@ -149,7 +149,13 @@ from unmeasured files. Metric and scope:
   delimiters. Direct struct/union fields and enum variant fields start in type
   context, including tuple fields without a colon; their list boundary also
   preserves production scanning after a final test-only field or variant
-  without a trailing comma. Nested const expressions retain expression
+  without a trailing comma. Function-pointer and named function/method
+  parameters use the same direct-element type context and their own closing
+  parenthesis, including qualified/nested pointers and generic declarations.
+  Return types and production bodies remain visible after the list; nested
+  header/parameter/body const expressions keep local expression context
+  ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5365933962)).
+  Nested const expressions retain expression
   context ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5363739640)).
   Union declarations enter type context only when followed by a valid name
   and declaration header; ordinary uses of the weak keyword retain their
@@ -190,7 +196,8 @@ use-edge resolution owns alias visibility (`scan_use_stmt` /
 `use_targets_of`). [Issue #424](https://github.com/hailingu/PlotWeave/issues/424)
 repairs two previously registered boundaries. Fixtures in
 `src/module_graph/issue_424_tests.rs` and
-`src/module_graph/issue_424_alias_tests.rs` exercise the complete graph builder.
+`src/module_graph/issue_424_alias_tests.rs` and
+`src/module_graph/issue_424_function_pointer_tests.rs` exercise the complete graph builder.
 
 | State / precondition | Action / ordering | Observable outcome | Invariant | Verification |
 | --- | --- | --- | --- | --- |
@@ -199,6 +206,10 @@ repairs two previously registered boundaries. Fixtures in
 | `union` used as a value, path or existing item name | Scan gated expression or item, then production use | Following production edge survives | The weak keyword enters declaration context only in union declaration syntax | `union_identifiers_preserve_production_scanning`, `union_bindings_do_not_create_field_contexts` |
 | Test-only generic field, type alias or grouped header | Skip nested type/parameter delimiters, resume at the next element/item | Following production edge survives | Skipping one test item does not consume adjacent production code | `generic_test_fields_resume_at_the_next_field`, `grouped_test_item_headers_are_skipped_in_full` |
 | Test-only struct / enum field or final enum variant, including tuple/generic/grouped types and visibility | Apply direct-element context, skip to the list boundary, then scan the next production field/item | Test dependencies excluded; production dependencies and real cycles retained | Field delimiters cannot leak test dependencies or consume adjacent production code | `tuple_test_fields_exclude_generic_dependencies`, `last_test_fields_preserve_following_production_cycles` ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5363739640)) |
+| Test-only anonymous or named function-pointer parameter, including generic/grouped types and qualified or nested pointers | Start direct parameter in type context, stop at the owned parameter-list close, then resume production scanning | Test dependency excluded; following parameter/return/item edge and real cycle retained | A gated pointer parameter cannot leak dependencies or consume adjacent production code | `test_function_pointer_parameters_do_not_create_production_cycles`, `last_test_pointer_parameters_preserve_production_types` ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5365933962)) |
+| Final gated named function/method parameter, with no trailing comma and an optional generic declaration head | Bound parameter at its own closing parenthesis, then scan the body | Only production body dependencies remain; real cycle retained | Every fn parameter-list entry point preserves the following production body | `last_test_function_parameters_preserve_production_bodies` |
+| Local test statement in fn parameter/return/header const expression or ordinary body | Skip the local expression and scan its next production use | Production edge and cycle retained | Parameter context never propagates into nested expression attributes | `parameter_const_attributes_preserve_expression_scanning` |
+| Function parameter attribute permits production (`any(test, unix)` or platform-only) | Apply existing cfg implication before using list context | Production dependency retained | Type-element registration never strengthens cfg test exclusion | `production_capable_parameter_attributes_preserve_edges` |
 | Test-only comparison statement / initializer, including typed closures and labelled loops | Scan `<` comparison, then production use | Test edges excluded, following edge retained | Expression operators do not hold type delimiters open | `test_comparisons_do_not_swallow_following_production_uses` |
 | Test statement inside a field-type const block | Skip the local test expression, then collect production use in the same block | Following production edge and cycle retained | Nested expressions never inherit field type context | `test_field_const_expressions_preserve_production_uses` |
 | Test-only bare / move / async closure with typed, grouped or empty parameters and optional generic return type | Skip the complete closure header and body, then collect production use | Test-only target excluded; following production cycle detected | Closure parameter colons and expression operators cannot change production scanning boundaries | `bare_test_closures_preserve_following_production_cycles` ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5363378084)) |

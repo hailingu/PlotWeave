@@ -1,7 +1,7 @@
-//! struct / enum / union 的直接字段与变体门控上下文（PR #445 评审 5363739640）。
+//! struct / enum / union 元素与 fn 参数的门控类型上下文（issue #424）。
 //!
 //! 只给直接元素的属性入口登记类型状态与列表闭合边界；类型内常量块的
-//! 属性仍由普通表达式扫描处理。这里识别声明头和字段列表，不解析通用
+//! 属性仍由普通表达式扫描处理。这里识别声明头和字段/参数列表，不解析通用
 //! Rust AST；未闭合列表不登记上下文，已有模块/use 扫描继续负责其契约。
 
 use std::collections::BTreeMap;
@@ -19,12 +19,12 @@ const RESERVED_DECLARATION_NAMES: &[&str] = &[
     "override", "priv", "try", "typeof", "unsized", "virtual", "yield",
 ];
 
-/// 带属性直接元素的扫描边界：字段从类型状态开始，enum 变体仅限定终点。
+/// 带属性直接元素的扫描边界：字段/参数从类型状态开始，变体仅限定终点。
 #[derive(Clone, Copy)]
 pub(super) struct FieldContext {
-    /// 所属字段/变体列表的闭合 token 下标；留给主扫描循环消费。
+    /// 所属字段/变体/参数列表的闭合 token 下标；留给主扫描循环消费。
     pub(super) close: usize,
-    /// 只有字段是类型入口，变体判别式保留表达式比较语义。
+    /// 字段和参数是类型入口，变体判别式保留表达式比较语义。
     pub(super) type_header: bool,
 }
 
@@ -57,11 +57,17 @@ fn declaration_name(token: &str) -> bool {
     !RESERVED_DECLARATION_NAMES.contains(&name)
 }
 
-/// 按主扫描器消费挂起属性的项首下标，登记 struct / enum / union 的直接元素上下文。
+/// 按主扫描器的属性项首下标，登记记录元素与 fn 参数的类型态和列表边界。
 /// 可见性 pub 后的 `(` 是实际扫描入口；嵌套类型/常量组不登记为外层字段。
 pub(super) fn field_contexts(tokens: &[&str]) -> BTreeMap<usize, FieldContext> {
     let mut contexts = BTreeMap::new();
     for (i, token) in tokens.iter().enumerate() {
+        if *token == "fn" {
+            if let Some((open, close)) = function_parameters(tokens, i) {
+                collect_elements(tokens, open, close, false, &mut contexts);
+            }
+            continue;
+        }
         let (variant_list, allow_tuple) = match *token {
             "struct" => (false, true),
             "enum" => (true, false),
@@ -73,6 +79,19 @@ pub(super) fn field_contexts(tokens: &[&str]) -> BTreeMap<usize, FieldContext> {
         }
     }
     contexts
+}
+
+/// 函数指针直接以 fn( 开启参数；普通函数名及泛型头沿已有声明解析定位。
+/// 仅接受圆括号候选，不能把返回类型或正文当成参数列表。
+fn function_parameters(tokens: &[&str], at: usize) -> Option<(usize, usize)> {
+    let next = at + 1;
+    if tokens.get(next) == Some(&"(") {
+        return group_close(tokens, next, "(", ")").map(|close| (next, close));
+    }
+    if !tokens.get(next).is_some_and(|name| declaration_name(name)) {
+        return None;
+    }
+    declaration_fields(tokens, at + 2, true).filter(|(open, _)| tokens.get(*open) == Some(&"("))
 }
 
 /// 跨过泛型与 where 约束，定位声明自己的字段列表；Fn() 不充当 tuple 头。

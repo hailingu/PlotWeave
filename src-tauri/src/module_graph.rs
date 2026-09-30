@@ -693,3 +693,7 @@ mod issue_424_tests;
 /// issue #424 的同名非模块符号与模块别名展开回归夹具。
 #[cfg(test)]
 mod issue_424_alias_tests;
+
+/// issue #424 的函数指针类型参数门控与扫描恢复回归夹具。
+#[cfg(test)]
+mod issue_424_function_pointer_tests;
