@@ -10,9 +10,15 @@ use crate::library::error::LibraryError;
 /// 目录持久性屏障（Unix）。
 #[cfg(unix)]
 pub(super) fn fsync_dir(dir: &CapDir) -> Result<(), LibraryError> {
-    dir.open_dir(".")
-        .and_then(|d| d.into_std_file().sync_all())
-        .map_err(|e| LibraryError::io("同步目录失败（持久性屏障缺失）", e))
+    let sync = || dir.open_dir(".").and_then(|d| d.into_std_file().sync_all());
+    #[cfg(test)]
+    let result = crate::store::atomic_write_faults::run(
+        crate::store::atomic_write_faults::Stage::LibraryDirectorySync,
+        sync,
+    );
+    #[cfg(not(test))]
+    let result = sync();
+    result.map_err(|e| LibraryError::io("同步目录失败（持久性屏障缺失）", e))
 }
 
 #[cfg(not(unix))]

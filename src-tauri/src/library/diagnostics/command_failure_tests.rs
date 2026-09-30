@@ -44,7 +44,9 @@ fn conflict_fixture() -> (Fixture, Value, PathBuf, PathBuf) {
     let journal: Value =
         serde_json::from_slice(&fs::read(fixture.0.join("asset-delete-journal.json")).unwrap())
             .unwrap();
-    let trash = fixture.0.join(journal[0]["trashName"].as_str().unwrap());
+    let trash = fixture
+        .0
+        .join(journal["entries"][0]["trashName"].as_str().unwrap());
     let original = fixture.0.join(asset["relPath"].as_str().unwrap());
     fs::write(fixture.0.join("library.json"), index).unwrap();
     fs::write(&original, b"occupant").unwrap();
@@ -121,7 +123,7 @@ fn failed_commands_publish_completed_cleanup_without_reviving_old_pending() {
         let journal: Value =
             serde_json::from_slice(&fs::read(fixture.0.join("asset-delete-journal.json")).unwrap())
                 .unwrap();
-        assert_eq!(journal, json!([]));
+        assert_eq!(journal["entries"], json!([]));
     }
 }
 

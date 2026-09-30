@@ -10,7 +10,7 @@
 //!
 //! 域拆分（issue #39）：op_lock（操作互斥锁）、journal_io（日志解析与
 //! 读写）、trash（隔离区与身份原语）、recover（恢复分支）、transaction
-//! （删除事务步骤）、archive（已完成清理项的折叠计数归档，issue #359）、
+//! （删除事务步骤）、archive（旧归档迁移及累计指标校验，issue #421）、
 //! fsync（目录持久性屏障叶子，issue #399 解环拆出）。对外契约保持
 //! `crate::library_journal::{…}` 不变；子模块间依赖单向（transaction →
 //! recover → trash → journal_io → fsync，模块图无环守卫见
@@ -26,7 +26,7 @@ mod trash;
 // 日志文件名对 library_fs 的孤儿临时文件清扫（issue #148 目标白名单）
 // 与测试可见；单一事实源仍在 journal_io
 pub(crate) use journal_io::JOURNAL_FILE_NAME;
-// 折叠归档文件名同款白名单可见性（issue #359）
+// 旧归档文件名保留历史临时文件清扫白名单兼容（issue #421）
 pub(crate) use archive::ARCHIVE_FILE_NAME;
 pub(crate) use op_lock::{library_file_lock, library_op_lock};
 pub(crate) use recover::{recover, CleanupPendingItem, Recovery};
@@ -36,6 +36,8 @@ pub(crate) use transaction::{delete_asset_transacted, ensure_importable};
 
 #[cfg(test)]
 mod recover_compact_tests;
+#[cfg(test)]
+mod recover_durability_tests;
 #[cfg(test)]
 mod recover_index_tests;
 #[cfg(test)]

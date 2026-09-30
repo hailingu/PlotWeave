@@ -2,7 +2,8 @@
 //! 入口逐条消费日志，按「共享引用 → 索引仍引用 → 索引已去项」分支收敛——
 //! 回迁/清理只动媒体与日志，不改 library.json 的权威索引状态。
 //! 「索引已去项 + 隔离项身份核验一致 + 清理原语不可用」的终态条目在恢复
-//! 时折叠退役并计入归档（issue #359）：隔离项与字节原样保留，日志条目
+//! 时折叠退役并计入日志内累计值（issue #359、#421）：隔离项与字节原样
+//! 保留，日志条目
 //! 退场，cleanupPending 折叠为单条摘要——恢复成本与响应大小不随历史
 //! 删除总数线性增长；证据类条目与非权威视图期间不折叠（保守方向不变）。
 
@@ -13,9 +14,9 @@ use crate::library::error::LibraryError;
 use crate::library_fs::{assets_root, open_parent_dir};
 use crate::store::new_id;
 
-use super::archive::{read_archive, write_archive, ARCHIVE_COUNT_MAX};
+use super::archive::ARCHIVE_COUNT_MAX;
 use super::fsync::fsync_dir;
-use super::journal_io::{read_journal, write_journal, JournalEntry};
+use super::journal_io::{read_journal, write_journal, Journal, JournalEntry};
 use super::trash::{
     ensure_trash_dir, identity_bound_unlink, open_trash_dir, path_identity, restore_from_trash,
     verify_trash_identity, PathIdentity, TrashVerdict, TRASH_DIR,
@@ -135,10 +136,10 @@ fn index_refs(index: &Value, entry: &JournalEntry) -> IndexRefs {
 /// 单次恢复的日志收敛状态：`changed` 标记日志需要落盘的退役/闩锁复位，
 /// `folded` 累计「身份核验一致但清理原语不可用」的折叠笔数、`folded_bytes`
 /// 累计其隔离项文件大小（issue #427：折叠时自已核验句柄 fstat，收尾时与
-/// 计数一并并入归档）；`folded_ids` 为本趟已折叠、**延迟到收尾单次写盘**
+/// 计数一并并入日志）；`folded_ids` 为本趟已折叠、**延迟到收尾单次写盘**
 /// 统一退役的条目（评审 5346509928：中途的重隔离预 rename 中间写不得把
-/// 先前折叠的退役持久化——后续失败会让「条目已退役、计数未归档」跨条目
-/// 复现；收尾写失败时这些条目仍在磁盘，下次恢复重新折叠）。
+/// 先前折叠的退役持久化；退役与累计值在同一原子写中提交（issue #421），
+/// rename 前失败保留旧条目，rename 后失败保留已退役条目对应的累计值）。
 #[derive(Default)]
 struct Convergence {
     changed: bool,
@@ -217,7 +218,7 @@ pub(crate) fn recover(library: &CapDir) -> Result<Recovery, LibraryError> {
     let index_warnings = normalized.warnings;
     let migrated = normalized.migrated;
     let mut recovery = Recovery::default();
-    let (mut entries, malformed) = read_journal(library, &mut recovery.warnings);
+    let (mut journal, malformed) = read_journal(library, &mut recovery.warnings);
     if malformed {
         recovery.read_only = true;
         // 只读态诊断与实际行为一致（评审修复，PR #33 第十三轮）：journal 异型
@@ -228,27 +229,19 @@ pub(crate) fn recover(library: &CapDir) -> Result<Recovery, LibraryError> {
     }
     recovery.warnings.extend(index_warnings);
     if normalized.damaged {
-        hold_uncertain_deletions(library, &index, &mut entries)?;
+        hold_uncertain_deletions(library, &index, &mut journal)?;
     }
     // 日志非异型：此刻才允许把索引迁移/修复原子落盘（重发 id 跨读稳定）
     if migrated {
         crate::library_fs::write_index(library, &index)?;
     }
-    // 折叠计数为咨询性旁路（issue #359）：读取异型只告警并按 0 继续
-    let (mut archive_count, mut archive_bytes) = read_archive(library, &mut recovery.warnings);
     let mut conv = Convergence::default();
-    if entries.is_empty() {
-        finalize_cleanup_summary(
-            library,
-            &conv,
-            &mut archive_count,
-            &mut archive_bytes,
-            &mut recovery,
-        );
+    if journal.entries.is_empty() {
+        finalize_cleanup_summary(library, &mut journal, &conv, &mut recovery)?;
         return Ok(recovery);
     }
     let assets = assets_root(library)?;
-    let mut current = entries.clone();
+    let entries = journal.entries.clone();
     let view = IndexView {
         value: &index,
         authority: if normalized.damaged {
@@ -266,90 +259,68 @@ pub(crate) fn recover(library: &CapDir) -> Result<Recovery, LibraryError> {
             &view,
             entry,
             &mut recovery,
-            &mut current,
+            &mut journal,
             &mut conv,
         )?;
     }
-    // 折叠退役只发生在收尾单次写盘（评审 5346397307/5346509928）：整趟
-    // 期间折叠条目保留在 current——同趟后续条目的重隔离预 rename 中间写
-    // 不得把先前折叠的退役持久化（那会让后续失败留下「条目已退役、计数
-    // 未归档」的不可恢复窗口）；收尾写失败时全部折叠条目仍在磁盘，下次
-    // 恢复重新折叠。退役先落日志、后落归档计数（issue #359）：崩溃窗口
-    // 只会少计、不会重复计
-    if conv.changed {
-        current.retain(|e| !conv.folded_ids.contains(&e.id));
-        write_journal(library, &current)?;
-    }
-    finalize_cleanup_summary(
-        library,
-        &conv,
-        &mut archive_count,
-        &mut archive_bytes,
-        &mut recovery,
-    );
+    // 中间重隔离写仍保留全部待折叠条目；收尾把退役与计数/字节增量在
+    // 同一原子写中提交（issue #421），同步失败后重试也不会少计或重复计。
+    finalize_cleanup_summary(library, &mut journal, &conv, &mut recovery)?;
     Ok(recovery)
 }
 
-/// 折叠归档收尾（issue #359）：先持久化累计计数（fail-soft——日志退役已
-/// 落盘，归档失败只告警、不回滚恢复结果）；计数 > 0 时复查隔离目录，
-/// 整体不存在（用户已按指引清理 assets/.trash）即归零，仍 > 0 则折叠为
-/// 单条 routine 摘要——cleanupPending 响应大小与历史删除总数无关。
-/// 目录打开失败按「未知」处理并保留计数（fail-soft，计数为咨询性指标）。
-/// 摘要同时携带隔离区字节量级（issue #427）：折叠移除日志闸门的间接
-/// 背压后，量级是 `.trash` 无界增长的唯一可见信号。量级与计数同源——
-/// 折叠时自已核验句柄累计并随计数持久进归档，恢复路径**不做任何隔离区
-/// 目录遍历**：媒体 URL 解析与打开同样逐请求在库锁内恢复（评审
-/// 5355629881），遍历会使恢复成本重新随历史删除数线性增长。
+/// 折叠收尾（issue #421）：退役条目与累计计数/字节量级同文件原子提交，
+/// 任一写入或同步失败均保留原错误；旧日志迁移和整体清理归零也在此落盘。
+/// 目录打开失败按未知保留累计值；摘要保持单条，不遍历历史隔离项。
 fn finalize_cleanup_summary(
     library: &CapDir,
+    journal: &mut Journal,
     conv: &Convergence,
-    count: &mut u64,
-    bytes: &mut Option<u64>,
     recovery: &mut Recovery,
-) {
+) -> Result<(), LibraryError> {
+    let mut changed = conv.changed || journal.needs_write;
     if conv.folded > 0 {
         // 饱和累加并收敛进读取上限（评审 5346397307/5346909203）：读取侧
         // 已把脏计数截到合理上限、本笔折叠又受日志条数约束，正常不可达
         // 饱和点；防御性算术保证咨询性计数永不 panic（debug）或回绕隐藏
         // 保留项（release），且写入侧不得产出自己下次读取会判异型的值
         // ——上限处的合法折叠把计数钉在上限持续报告，而非归零失联
-        let prior_count = *count;
-        *count = count.saturating_add(conv.folded).min(ARCHIVE_COUNT_MAX);
+        let prior_count = journal.cleanup_count;
+        journal.cleanup_count = prior_count
+            .saturating_add(conv.folded)
+            .min(ARCHIVE_COUNT_MAX);
         // 字节同款饱和累加（issue #427），但未知（None）不得被折叠改写为
         // 已知（评审 5355849137）：旧格式/异型归档的历史份额不可测，把
         // 数 GB 的未知总量悄悄替换为仅新增的几 MB 会伪报增长已缓解——
         // 未知保持到用户整体清理（归零写入 Some(0)）后才重新可知。仅当
         // 折叠前计数为 0（全新或已归零，历史份额为空）或字节已知时，
         // 折叠才产生已知字节。
-        *bytes = match (*bytes, prior_count == 0) {
+        journal.trash_bytes = match (journal.trash_bytes, prior_count == 0) {
             (Some(b), _) => Some(b.saturating_add(conv.folded_bytes)),
             (None, true) => Some(conv.folded_bytes),
             (None, false) => None,
         };
-        if let Err(e) = write_archive(library, *count, *bytes) {
-            recovery
-                .warnings
-                .push(format!("清理归档计数落盘失败（下次恢复按旧计数继续）：{e}"));
-        }
+        journal.entries.retain(|e| !conv.folded_ids.contains(&e.id));
     }
-    if *count > 0 && trash_dir_absent(library) {
-        *count = 0;
-        *bytes = Some(0);
-        if let Err(e) = write_archive(library, 0, Some(0)) {
-            recovery
-                .warnings
-                .push(format!("清理归档计数归零落盘失败（下次恢复重试归零）：{e}"));
-        }
+    if journal.cleanup_count > 0 && trash_dir_absent(library) {
+        journal.cleanup_count = 0;
+        journal.trash_bytes = Some(0);
+        changed = true;
     }
-    if *count > 0 {
+    if changed {
+        write_journal(library, journal)?;
+        journal.needs_write = false;
+    }
+    if journal.cleanup_count > 0 {
         recovery
             .cleanup_pending
             .push(CleanupPendingItem::routine_counted(
-                *count,
-                *bytes,
-                folded_summary_message(*count, *bytes),
+                journal.cleanup_count,
+                journal.trash_bytes,
+                folded_summary_message(journal.cleanup_count, journal.trash_bytes),
             ));
     }
+    Ok(())
 }
 
 /// 折叠摘要的展示文案（issue #427）：在累计保留数之外携带隔离区字节
@@ -419,24 +390,25 @@ struct IndexView<'a> {
 fn hold_uncertain_deletions(
     library: &CapDir,
     index: &Value,
-    entries: &mut [JournalEntry],
+    journal: &mut Journal,
 ) -> Result<(), LibraryError> {
     let mut changed = false;
-    for entry in entries.iter_mut() {
+    for entry in journal.entries.iter_mut() {
         if index["assets"]["byId"].get(&entry.asset_id).is_none() && !entry.index_uncertain {
             entry.index_uncertain = true;
             changed = true;
         }
     }
     if changed {
-        write_journal(library, entries)?;
+        write_journal(library, journal)?;
+        journal.needs_write = false;
     }
     Ok(())
 }
 
 /// 从当前日志状态移除事务条目（清理完成/未开始/回迁一致）。
-fn retire_entry(current: &mut Vec<JournalEntry>, entry: &JournalEntry) {
-    current.retain(|e| e.id != entry.id);
+fn retire_entry(current: &mut Journal, entry: &JournalEntry) {
+    current.entries.retain(|e| e.id != entry.id);
 }
 
 /// 单条日志恢复。分支次序对齐 §7.2：共享引用 → 索引仍引用 → 索引已去项。
@@ -450,7 +422,7 @@ fn recover_entry(
     view: &IndexView<'_>,
     entry: &JournalEntry,
     recovery: &mut Recovery,
-    current: &mut Vec<JournalEntry>,
+    current: &mut Journal,
     conv: &mut Convergence,
 ) -> Result<(), LibraryError> {
     let re_adjudicated;
@@ -502,13 +474,13 @@ fn recover_entry(
 /// 返回复位后的条目供分支使用（重隔离的新映射不得携带旧闩锁）。复位随
 /// 本条目的分支变更一并落盘；中断后下次恢复按当前索引重新判定，不丢证据。
 fn release_uncertain_latch(
-    current: &mut [JournalEntry],
+    current: &mut Journal,
     entry: &JournalEntry,
     changed: &mut bool,
 ) -> JournalEntry {
     let mut released = entry.clone();
     released.index_uncertain = false;
-    if let Some(e) = current.iter_mut().find(|e| e.id == entry.id) {
+    if let Some(e) = current.entries.iter_mut().find(|e| e.id == entry.id) {
         e.index_uncertain = false;
     }
     *changed = true;
@@ -522,7 +494,7 @@ fn recover_shared_file(
     trash: Option<CapDir>,
     entry: &JournalEntry,
     recovery: &mut Recovery,
-    current: &mut Vec<JournalEntry>,
+    current: &mut Journal,
     conv: &mut Convergence,
 ) -> Result<(), LibraryError> {
     match trash {
@@ -570,7 +542,7 @@ fn recover_restore_if_vacant(
     entry: &JournalEntry,
     trash: &CapDir,
     recovery: &mut Recovery,
-    current: &mut Vec<JournalEntry>,
+    current: &mut Journal,
     changed: &mut bool,
 ) -> Result<(), LibraryError> {
     let (parent, last) = match original_parent(assets, &entry.rel_path)? {
@@ -614,7 +586,7 @@ fn recover_index_still_references(
     entry: &JournalEntry,
     trash: Option<CapDir>,
     recovery: &mut Recovery,
-    current: &mut Vec<JournalEntry>,
+    current: &mut Journal,
     changed: &mut bool,
 ) -> Result<(), LibraryError> {
     // 隔离项 Missing（目录缺失/条目缺失/rename 失败未生成）与无隔离目录
@@ -656,7 +628,7 @@ fn recover_index_committed(
     entry: &JournalEntry,
     trash: Option<CapDir>,
     recovery: &mut Recovery,
-    current: &mut Vec<JournalEntry>,
+    current: &mut Journal,
     conv: &mut Convergence,
 ) -> Result<(), LibraryError> {
     let verdict = match &trash {
@@ -717,7 +689,7 @@ fn re_quarantine(
     assets: &CapDir,
     entry: &JournalEntry,
     recovery: &mut Recovery,
-    current: &mut Vec<JournalEntry>,
+    current: &mut Journal,
     conv: &mut Convergence,
 ) -> Result<(), LibraryError> {
     let (parent, last) = match original_parent(assets, &entry.rel_path)? {
@@ -734,7 +706,7 @@ fn re_quarantine(
     let mut updated = entry.clone();
     updated.trash_name = format!("{TRASH_DIR}/{txn}");
     retire_entry(current, entry);
-    current.push(updated.clone());
+    current.entries.push(updated.clone());
     write_journal(library, current)?;
     parent
         .rename(&last, &trash, &txn)

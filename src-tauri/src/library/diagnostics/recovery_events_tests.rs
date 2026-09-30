@@ -69,7 +69,7 @@ impl Fixture {
         .unwrap();
         self.root
             .join("library")
-            .join(journal[0]["trashName"].as_str().unwrap())
+            .join(journal["entries"][0]["trashName"].as_str().unwrap())
     }
 }
 
@@ -141,7 +141,7 @@ fn alternate_recovery_retires_missing_quarantine_and_supersedes_old_list() {
             &fs::read(f.root.join("library/asset-delete-journal.json")).unwrap(),
         )
         .unwrap();
-        assert_eq!(journal, json!([]));
+        assert_eq!(journal["entries"], json!([]));
     }
 }
 

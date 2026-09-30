@@ -1,9 +1,6 @@
-//! 删除日志已完成条目折叠归档回归测试（issue #359）：「索引已去项 +
-//! 隔离项身份核验一致 + 平台无身份绑定删除原语」的终态条目在恢复时折叠
-//! 退场——恢复的逐条核验成本与 `cleanupPending` 响应大小不再随历史删除
-//! 总数线性增长；折叠计数持久进旁路归档 `asset-delete-archive.json`，
-//! 用户整体清理 `assets/.trash/` 后计数归零；证据类条目与非权威视图
-//! 期间不折叠。共享 helper 经 `use super::recover_tests::*` 复用。
+//! 删除日志折叠回归（issue #359、#421）：终态条目退役与计数/字节量级
+//! 同文件提交，响应及恢复成本有界；整体清理归零，证据和非权威态不折叠。
+//! 共享 helper 经 `use super::recover_tests::*` 复用。
 
 use super::recover::CleanupKind;
 use super::recover_tests::*;
@@ -12,37 +9,14 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
 
-/// 构造 n 条「索引已去项 + 隔离项身份一致」的已完成条目：每个条目在
-/// .trash 有真实文件，身份与磁盘一致（issue #359 验收构造；上限 500 条）。
-fn foldable_journal(library: &Path, n: usize) {
-    fs::create_dir_all(library.join("assets").join(".trash")).expect("建隔离目录");
-    let entries: Vec<Value> = (0..n)
-        .map(|i| {
-            let name = format!("assets/.trash/x-{i}");
-            fs::write(library.join(&name), b"X").expect("写隔离项");
-            let (dev, ino) = file_identity(&library.join(&name));
-            journal_entry_json(
-                &format!("x-{i}"),
-                &format!("la-gone-{i}"),
-                &format!("assets/la-{i}.png"),
-                &name,
-                dev,
-                ino,
-            )
-        })
-        .collect();
-    write_journal_raw(library, json!(entries));
+/// 读取对象日志内累计值，验证条目退役与计数/字节量级同文件提交。
+fn read_totals_raw(library: &Path) -> Value {
+    serde_json::from_str(&fs::read_to_string(library.join(JOURNAL_FILE_NAME)).expect("读日志"))
+        .expect("日志 JSON")
 }
 
-fn read_archive_raw(library: &Path) -> Value {
-    serde_json::from_str(&fs::read_to_string(library.join(ARCHIVE_FILE_NAME)).expect("读归档"))
-        .expect("归档 JSON")
-}
-
-/// issue #359 主证：500 条已完成条目一次恢复全部折叠退场——日志清空
-/// （此后每次恢复的逐条核验成本与历史删除总量解耦），`cleanupPending`
-/// 折叠为单条 routine 摘要（响应大小有界），隔离项文件全部原样保留
-/// （折叠只退役日志条目，绝不按名删除隔离项）。
+/// issue #359 主证：500 条事务折叠成单条摘要、日志条目清空；
+/// 隔离项原样保留，恢复及响应成本与历史删除数解耦。
 #[test]
 fn recover_folds_bulk_verified_completed_entries() {
     let (library, root) = temp_fixture();
@@ -82,9 +56,9 @@ fn recover_folds_bulk_verified_completed_entries() {
         "摘要应携带结构化计数（前端标题按 count 之和展示，评审 5342513010）"
     );
     assert_eq!(
-        read_archive_raw(&library)["retainedCleanupCount"],
+        read_totals_raw(&library)["retainedCleanupCount"],
         json!(500),
-        "折叠计数应持久进归档"
+        "折叠计数应与日志条目同文件持久化"
     );
     for i in 0..500 {
         assert!(
@@ -176,16 +150,14 @@ fn recover_resets_archive_count_after_trash_cleared() {
         after.cleanup_pending
     );
     assert_eq!(
-        read_archive_raw(&library)["retainedCleanupCount"],
+        read_totals_raw(&library)["retainedCleanupCount"],
         json!(0),
         "计数应归零落盘"
     );
     cleanup(&root);
 }
 
-/// 边界值自洽（评审 5346909203）：读取上限（u32::MAX）处的合法计数加
-/// 一笔折叠，不得产出下次读取会判异型的值——累加结果钉在上限持续
-/// 报告，而非归零使保留项失联。
+/// 评审 5346909203：上限计数再折叠后仍可读取并持续报告，不回绕归零。
 #[test]
 fn archive_count_at_bound_stays_reportable_after_further_fold() {
     let (library, root) = temp_fixture();
@@ -202,7 +174,7 @@ fn archive_count_at_bound_stays_reportable_after_further_fold() {
     let first = recover(&cap(&library)).expect("恢复应成功");
     assert_eq!(read_journal_raw(&library), json!([]), "折叠照常完成");
     assert_eq!(
-        read_archive_raw(&library)["retainedCleanupCount"],
+        read_totals_raw(&library)["retainedCleanupCount"],
         json!(4294967295u64),
         "写入侧不得越出读取上限（自产值不得被自己判异型）"
     );
@@ -229,8 +201,7 @@ fn archive_count_at_bound_stays_reportable_after_further_fold() {
     cleanup(&root);
 }
 
-/// 归档异型是咨询性脏数据：告警并按 0 继续（不放大为全局只读，威胁
-/// 模型），本轮折叠照常发生并覆写修复归档。
+/// 旧归档异型只告警并按 0 继续；本轮折叠将修复值迁移进新日志。
 #[test]
 fn malformed_archive_is_advisory_and_repaired_by_next_fold() {
     let (library, root) = temp_fixture();
@@ -255,17 +226,16 @@ fn malformed_archive_is_advisory_and_repaired_by_next_fold() {
         recovery.cleanup_pending
     );
     assert_eq!(
-        read_archive_raw(&library)["retainedCleanupCount"],
+        read_totals_raw(&library)["retainedCleanupCount"],
         json!(1),
-        "折叠覆写应修复异型归档"
+        "新日志应持久化修复后的旧归档计数"
     );
     cleanup(&root);
 }
 
-/// 归档不可写（目录占位）时折叠仍完成：日志退役不因咨询性计数回滚，
-/// 落盘失败只告警（fail-soft，不粉饰）。
+/// 旧归档目录异型只作咨询性告警；迁移仍把折叠计数写入新日志。
 #[test]
-fn unwritable_archive_keeps_fold_fail_soft() {
+fn malformed_legacy_archive_does_not_block_journal_migration() {
     let (library, root) = temp_fixture();
     write_index_raw(
         &library,
@@ -274,31 +244,34 @@ fn unwritable_archive_keeps_fold_fail_soft() {
     foldable_journal(&library, 1);
     fs::create_dir_all(library.join(ARCHIVE_FILE_NAME)).expect("目录占位归档路径");
     let recovery = recover(&cap(&library)).expect("恢复应成功");
+    assert!(!recovery.read_only, "咨询性旧归档异型不得进入日志只读态");
     assert_eq!(
         read_journal_raw(&library),
         json!([]),
-        "日志退役不得因归档失败回滚"
+        "旧归档目录异型不得阻断日志退役"
     );
     assert!(
         recovery
             .warnings
             .iter()
-            .any(|w| w.contains("清理归档计数落盘失败")),
-        "应携带落盘失败告警：{:?}",
+            .any(|w| w.contains("清理归档计数是符号链接或非普通文件")),
+        "应携带旧归档异型告警：{:?}",
         recovery.warnings
     );
     assert_eq!(
         recovery.cleanup_pending.len(),
         1,
-        "本轮摘要按内存计数报告：{:?}",
+        "本轮摘要按新日志计数报告：{:?}",
         recovery.cleanup_pending
     );
+    assert_eq!(read_totals_raw(&library)["retainedCleanupCount"], json!(1));
+    let repeated = recover(&cap(&library)).expect("再次恢复应成功");
+    assert!(repeated.warnings.is_empty(), "迁移后不再消费旧归档");
+    assert_eq!(repeated.cleanup_pending[0].count, Some(1));
     cleanup(&root);
 }
 
-/// 归档计数脏值（u64::MAX）：累加不得 panic（debug 溢出）或回绕清零隐藏
-/// 保留项——超过合理上限的计数按异型告警、按 0 重计，本轮折叠照常发生
-/// 并覆写修复（评审 5346397307）。
+/// 评审 5346397307：超限旧计数告警后按 0 重计，不溢出或回绕隐藏保留项。
 #[test]
 fn absurd_archive_count_is_rejected_not_overflowed() {
     let (library, root) = temp_fixture();
@@ -321,7 +294,7 @@ fn absurd_archive_count_is_rejected_not_overflowed() {
     );
     assert_eq!(read_journal_raw(&library), json!([]), "折叠照常完成");
     assert_eq!(
-        read_archive_raw(&library)["retainedCleanupCount"],
+        read_totals_raw(&library)["retainedCleanupCount"],
         json!(1),
         "本轮折叠应覆写修复脏计数（0 + 1，不回绕）"
     );
@@ -339,11 +312,8 @@ fn absurd_archive_count_is_rejected_not_overflowed() {
     cleanup(&root);
 }
 
-/// 重隔离折叠路径的写盘序（评审 5346397307）：①预 rename 映射落盘、
-/// 收尾单次退役落盘、归档计数落盘——条目退役之后不得再存在重复的易
-/// 失败写（第二次写失败会中断恢复，使已退役条目的折叠计数永不归档，
-/// 保留项从此不可见）。以记录式故障注入统计 Rename 阶段数钉住该结构：
-/// 本夹具恰为 3 次（映射 + 退役 + 归档）。
+/// 重隔离写盘序（issue #421）：预 rename 映射与联合收尾共两次原子写；
+/// 退役和计数不得分别落盘。记录实际 Rename 阶段验证该协议。
 #[cfg(unix)]
 #[test]
 fn requarantine_fold_writes_journal_once_after_retirement() {
@@ -380,17 +350,14 @@ fn requarantine_fold_writes_journal_once_after_retirement() {
         recovery.cleanup_pending
     );
     assert_eq!(
-        renames, 3,
-        "重隔离折叠路径应为 3 次原子写 rename：预 rename 映射 + 收尾退役 + 归档"
+        renames, 2,
+        "重隔离折叠路径应为 2 次原子写 rename：预 rename 映射 + 退役/计数联合收尾"
     );
     cleanup(&root);
 }
 
-/// 同趟恢复中「先折叠、后重隔离失败」的跨条目窗口（评审 5346509928）：
-/// A 折叠后，B 的重隔离预 rename 映射写不得把 A 的退役持久化——B 的
-/// rename 失败中断恢复后，A 仍须留在日志中供下次恢复重新折叠，计数不丢。
-/// 以只读子目录让 B 的 rename 自然失败（日志中间写在 library/ 下不受影响，
-/// 精确落在本评审描述的窗口）。
+/// 评审 5346509928：后条目的重隔离 rename 失败，先折叠条目仍驻留日志。
+/// 只读子目录只阻止媒体 rename，重试必须完整累计两条并保留隔离媒体。
 #[cfg(unix)]
 #[test]
 fn earlier_fold_survives_later_requarantine_failure() {
@@ -450,7 +417,7 @@ fn earlier_fold_survives_later_requarantine_failure() {
     let recovery = recover(&cap(&library)).expect("重试恢复应成功");
     assert_eq!(read_journal_raw(&library), json!([]), "两笔均应折叠退场");
     assert_eq!(
-        read_archive_raw(&library)["retainedCleanupCount"],
+        read_totals_raw(&library)["retainedCleanupCount"],
         json!(2),
         "两笔折叠计数都不丢"
     );
@@ -469,10 +436,8 @@ fn earlier_fold_survives_later_requarantine_failure() {
     cleanup(&root);
 }
 
-/// issue #427 主证：折叠摘要携带隔离区**字节量级**——折叠归档移除日志
-/// 闸门的间接背压后（issue #427 回归），`.trash` 合计大小以结构化 `bytes`
-/// 与 message 量级同时进入诊断，隔离区无界增长在卷被填满前可见；统计是
-/// 只读旁路，跨恢复稳定。
+/// issue #427 主证：摘要在结构化 bytes 与消息中报告字节量级；
+/// 计数和量级同源持久进日志，跨恢复稳定且不改动隔离媒体。
 #[test]
 fn folded_summary_carries_trash_byte_magnitude() {
     let (library, root) = temp_fixture();
@@ -514,13 +479,13 @@ fn folded_summary_carries_trash_byte_magnitude() {
         recovery.cleanup_pending[0].message
     );
     assert_eq!(
-        read_archive_raw(&library)["trashBytes"],
+        read_totals_raw(&library)["trashBytes"],
         json!(400),
-        "字节量级应与计数同源持久进归档（不做目录遍历，评审 5355629881）"
+        "字节量级应与计数同源持久进日志（不做目录遍历，评审 5355629881）"
     );
     assert!(
         recovery.warnings.is_empty(),
-        "字节统计是咨询性旁路，不得告警：{:?}",
+        "合法咨询性字节数不得告警：{:?}",
         recovery.warnings
     );
     // 累计零副作用：隔离项原样保留（不按名删除、不动字节）
@@ -540,10 +505,8 @@ fn folded_summary_carries_trash_byte_magnitude() {
     cleanup(&root);
 }
 
-/// 字节量级的累计口径（issue #427，评审 5355629881）：量级在折叠时从
-/// 已核验的打开句柄累计并持久进归档，**不做任何目录遍历**——外来文件
-/// （符号链接/子目录等非折叠项）从不计入，即使指向大文件也不膨胀量级；
-/// 恢复成本不随历史删除数线性增长。
+/// issue #427、评审 5355629881：只累计已核验句柄字节，不遍历隔离区；
+/// 外来符号链接/子目录不膨胀量级，恢复成本不随历史删除数增长。
 #[cfg(unix)]
 #[test]
 fn foreign_trash_entries_do_not_inflate_byte_magnitude() {
@@ -589,10 +552,8 @@ fn foreign_trash_entries_do_not_inflate_byte_magnitude() {
     cleanup(&root);
 }
 
-/// 旧格式归档缺 `trashBytes` 的兼容呈现（issue #427，评审 5355629881）：
-/// 字节量级持久化落地前写入的归档只有计数——按「未知」呈现（不猜数、
-/// 不为补数恢复目录遍历），不告警（告警会误停前端目录级清理指引）、
-/// 不归零计数、不阻断恢复；下一次折叠覆写迁移并补全量级。
+/// issue #427、评审 5355629881：旧归档缺字节数时保持未知、不告警；
+/// 迁移不能遍历补数、归零历史计数或阻断恢复。
 #[test]
 fn legacy_archive_without_bytes_reports_unknown_magnitude() {
     let (library, root) = temp_fixture();
@@ -633,8 +594,7 @@ fn legacy_archive_without_bytes_reports_unknown_magnitude() {
     cleanup(&root);
 }
 
-/// 归档 `trashBytes` 字段异型是咨询性脏数据：告警并按未知继续（不放大
-/// 为全局只读，威胁模型），本轮折叠照常发生并覆写修复。
+/// 旧归档字节字段异型只告警、保持未知；折叠把修复值迁移进新日志。
 #[test]
 fn invalid_trash_bytes_field_is_advisory() {
     let (library, root) = temp_fixture();
@@ -662,10 +622,10 @@ fn invalid_trash_bytes_field_is_advisory() {
     // 评审 5355849137：计数 2 的历史份额不可知，折叠不得把总量重新标注为
     // 仅新增字节——脏值按未知重计并跨折叠保持，覆写后字段缺省（非脏值）
     assert_eq!(
-        read_archive_raw(&library).get("trashBytes"),
+        read_totals_raw(&library).get("trashBytes"),
         None,
         "覆写应清除异型字节数（按未知缺省，而非伪已知）：{}",
-        read_archive_raw(&library)
+        read_totals_raw(&library)
     );
     assert_eq!(
         recovery.cleanup_pending[0].count,
@@ -685,10 +645,8 @@ fn invalid_trash_bytes_field_is_advisory() {
     cleanup(&root);
 }
 
-/// 旧格式归档的未知量级跨折叠保持（评审 5355849137）：已有累计计数的
-/// 历史份额（落地前删除的字节）不可测——折叠不得把数 GB 的未知总量悄悄
-/// 改写为仅新增的几 MB「已知」值；未知保持到用户整体清理（归零）后，
-/// 后续折叠才从零重新可知。计数本身照常累计不受影响。
+/// 评审 5355849137：历史字节未知跨迁移、折叠保持，不伪报为仅新增字节；
+/// 整体清理归零后重新可知，计数始终照常累计。
 #[test]
 fn legacy_archive_keeps_unknown_bytes_until_trash_cleared() {
     let (library, root) = temp_fixture();
@@ -710,7 +668,7 @@ fn legacy_archive_keeps_unknown_bytes_until_trash_cleared() {
         "未知的历史份额不得被仅新增字节改写为已知"
     );
     assert!(folded.cleanup_pending[0].message.contains("大小未知"));
-    let archived = read_archive_raw(&library);
+    let archived = read_totals_raw(&library);
     assert_eq!(archived["retainedCleanupCount"], json!(2501));
     assert_eq!(
         archived.get("trashBytes"),
@@ -727,7 +685,7 @@ fn legacy_archive_keeps_unknown_bytes_until_trash_cleared() {
     let zeroed = recover(&cap(&library)).expect("归零恢复应成功");
     assert!(zeroed.cleanup_pending.is_empty(), "计数归零、摘要消失");
     assert_eq!(
-        read_archive_raw(&library)["trashBytes"],
+        read_totals_raw(&library)["trashBytes"],
         json!(0),
         "归零把量级重置为已知 0"
     );
@@ -742,9 +700,8 @@ fn legacy_archive_keeps_unknown_bytes_until_trash_cleared() {
     cleanup(&root);
 }
 
-/// 字节量级与计数同源累计（issue #427）：每轮折叠把已核验隔离项的文件
-/// 大小并入持久化量级，跨恢复累计、消息随现场增长更新——不依赖目录
-/// 遍历（评审 5355629881）。
+/// issue #427、评审 5355629881：两轮折叠同源累计计数与字节，
+/// 消息随量级增长更新，不遍历历史隔离项。
 #[test]
 fn fold_accumulates_byte_magnitude_across_recoveries() {
     let (library, root) = temp_fixture();
@@ -771,13 +728,13 @@ fn fold_accumulates_byte_magnitude_across_recoveries() {
                 )
             })
             .collect();
-        write_journal_raw(&library, json!(entries));
+        replace_journal_entries(&library, json!(entries));
     };
     round(&[(0, 100), (1, 50)]);
     let first = recover(&cap(&library)).expect("第一轮恢复应成功");
     assert_eq!(first.cleanup_pending[0].count, Some(2));
     assert_eq!(first.cleanup_pending[0].bytes, Some(150));
-    assert_eq!(read_archive_raw(&library)["trashBytes"], json!(150));
+    assert_eq!(read_totals_raw(&library)["trashBytes"], json!(150));
     // 第二轮：新增一个 250 字节已完成条目
     round(&[(2, 250)]);
     let second = recover(&cap(&library)).expect("第二轮恢复应成功");
@@ -788,7 +745,7 @@ fn fold_accumulates_byte_magnitude_across_recoveries() {
         "量级应跨恢复累计（150 + 250）：{:?}",
         second.cleanup_pending[0]
     );
-    assert_eq!(read_archive_raw(&library)["trashBytes"], json!(400));
+    assert_eq!(read_totals_raw(&library)["trashBytes"], json!(400));
     assert!(
         second.cleanup_pending[0].message.contains("400 字节"),
         "消息随累计量级更新：{}",
@@ -797,9 +754,8 @@ fn fold_accumulates_byte_magnitude_across_recoveries() {
     cleanup(&root);
 }
 
-/// 连续删除不积累日志：每次删除入口先恢复（折叠上一笔已完成条目），
-/// 守卫读到的投影恒为个位数——真实可达删除次数内不会触达写拒绝或
-/// 只读告警态（issue #359 验收：硬墙仅对崩溃窗口积压与证据条目保留）。
+/// issue #359：连续删除先恢复上一笔，条目投影有界、计数持续累计；
+/// 大小守卫仅对崩溃积压与证据条目保留。
 #[test]
 fn repeated_deletes_keep_journal_bounded() {
     let (library, root) = temp_fixture();
@@ -822,7 +778,7 @@ fn repeated_deletes_keep_journal_bounded() {
         "删除序列完成后日志应回到空"
     );
     assert_eq!(
-        read_archive_raw(&library)["retainedCleanupCount"],
+        read_totals_raw(&library)["retainedCleanupCount"],
         json!(3),
         "三笔折叠计数累计"
     );

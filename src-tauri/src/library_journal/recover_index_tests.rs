@@ -96,9 +96,13 @@ fn journal_entry_json(
     })
 }
 
+/// 读取对象或旧数组日志中的事务条目，保持索引恢复断言的条目语义。
 fn read_journal_raw(library: &Path) -> Value {
-    serde_json::from_str(&fs::read_to_string(library.join(JOURNAL_FILE_NAME)).expect("读回日志"))
-        .expect("日志 JSON")
+    let journal: Value = serde_json::from_str(
+        &fs::read_to_string(library.join(JOURNAL_FILE_NAME)).expect("读回日志"),
+    )
+    .expect("日志 JSON");
+    journal.get("entries").cloned().unwrap_or(journal)
 }
 
 /// 中断恢复③（冲突期）：索引仍含条目、隔离项身份一致、但原路径被后来
