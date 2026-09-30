@@ -487,6 +487,13 @@ per-row `#405` mentions below are retained as the pre-fix measurement of
 which commands could produce such a mismatch; they identify the push-side
 exposure those rows had before the fix, not a live gap.
 
+The subtree narratives below were synchronized with both implemented hook
+extensions on 2026-09-30 for
+[issue #412](https://github.com/hailingu/PlotWeave/issues/412); the measured
+split-generation and `--squash` commit-creation boundaries are unchanged.
+The subtree entries in the table describe creation-time coverage; the
+push-time gate separately analyzes any split tip actually pushed.
+
 | Command that creates a commit | Observed hooks (shared callbacks also described below) | Gate analyzes this commit? |
 | --- | --- | :---: |
 | `git commit` (without `--amend`) | `post-index-change` on index writes; `pre-commit`, `prepare-commit-msg`, `commit-msg`, `post-commit` | yes |
@@ -821,16 +828,20 @@ commit on the checked-out branch. With divergent application and subtree
 histories, Git 2.48.1 fixtures confirmed two-parent merge commits; each fired
 `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `post-merge`, shared
 index callbacks, and `reference-transaction`, but neither fired `pre-commit`.
-`pull` also fetched the source before the merge. The unwired
-`pre-merge-commit` and the branch ref transaction are #404 closure candidates;
-these commands do not themselves push a ref. If a conflicting merge is
-continued with `git merge --continue`, that continuation follows the
-`pre-commit` path documented above. With `--squash`, both commands
+`pull` also fetched the source before the merge. Since issue #404, the wired
+`pre-merge-commit` gates these non-squash automatic merge commits, with
+`prepare-commit-msg` consuming the same-operation tree marker; the complete
+gate runs once per merge. These commands do not themselves push a ref. If a
+conflicting merge is continued with `git merge --continue`, that
+continuation follows the `pre-commit` path documented above. With
+`--squash`, both commands
 additionally create a ref-less synthetic squash commit before the merge
 (评审 4117872586): `git subtree -h` documents `--squash` for `merge` and
 `pull` as well, and the synthetic commit already exists before the branch
 transaction, so `reference-transaction` cannot close its creation; its
-push-side exposure is the same #405 remedy.
+push-side exposure is the same #405 remedy. The measured `--squash` paths
+fire only shared index/ref callbacks, so neither the synthetic commit nor
+the resulting merge is gated at creation, as recorded in the table.
 
 `git subtree split --rejoin --prefix=<prefix>` combines a ref-less split with
 a merge back into the current branch. In the automatic, conflict-free path of
@@ -838,11 +849,12 @@ a Git 2.48.1 fixture with subtree history and a new subtree change, it created
 split commits and a two-parent rejoin merge; the split generation fired no
 commit-creation hook, while the rejoin fired `pre-merge-commit`,
 `prepare-commit-msg`, `commit-msg`, `post-merge`, and `reference-transaction`,
-but not `pre-commit`. The branch
-transaction is a #404 candidate for preventing the rejoin from entering local
-history, while `pre-merge-commit` could gate the merge if wired. It does not
-make the generated split tree the gate's input; if the split tip is pushed
-directly, the #405 pushed-ref mismatch applies. With `--squash`, the command
+but not `pre-commit`. Since issue #404, the wired `pre-merge-commit` gates
+the rejoin merge, with same-operation tree-marker dedup in
+`prepare-commit-msg`. This does not gate the generated split commits at
+creation. Before issue #405, directly pushing the split tip caused the
+pushed-ref mismatch; the implemented push hook now analyzes that tip at its
+own commit state. With `--squash`, the command
 additionally creates a ref-less synthetic squash commit before the rejoin
 (评审 4117843430): measured on git 2.48.1, `git subtree split --rejoin
 --squash --prefix=<prefix>` produced both a `Squashed '<prefix>/' content`
@@ -861,9 +873,10 @@ branch ref update. `pre-push` received the split tip OID while `HEAD` remained
 the different full-project commit; the push installed the split tip on the
 bare remote. The local `reference-transaction` callback observed in that probe
 was for `refs/remotes/origin/<refspec>` after the remote accepted the push, so
-it cannot block that outbound update. The command bypasses the commit gate and
-the current push hook analyzes the wrong tree. The ordinary form has no
-pre-push local ref transaction that can close #404 before the split is pushed;
+it cannot block that outbound update. Split generation bypasses the commit
+gate; before issue #405, the push hook also analyzed the wrong tree. The
+ordinary form has no pre-push local ref transaction that can close #404
+before the split is pushed;
 analyzing the pushed split tip is the #405 disposition.
 
 `git subtree push --prefix=<prefix> --branch <branch> <repository> <refspec>`
@@ -872,8 +885,9 @@ pushing. Measured on git 2.48.1, the command created `refs/heads/<branch>`
 with `reference-transaction` (`prepared` and `committed`) before `pre-push`
 ran (评审 4117947441). That local ref update is a #404 closure candidate —
 `reference-transaction` can reject the branch creation — while the push
-itself still scans the checked-out tree, so #405 remains for the pushed
-content.
+itself scanned the checked-out tree before issue #405. The implemented
+per-ref push gate now analyzes the generated split tip at its own commit
+state.
 
 `git subtree push --rejoin --prefix=<prefix> <repository> <refspec>` is a
 different path. When the subtree has new commits, `--rejoin` merges the
@@ -883,15 +897,19 @@ resulting two-parent merge fired `pre-merge-commit`, `prepare-commit-msg`,
 `commit-msg`, `post-merge`, and `reference-transaction` for the checked-out
 branch; `pre-push` then received the generated split-tip OID, not the new
 rejoin `HEAD`. The Git 2.43 probe reported by review 4115812068 observed the
-same key hooks. This makes the rejoin branch update a #404 hook-design
-candidate (`reference-transaction` can reject the branch update, and a wired
-`pre-merge-commit` could gate the merge). The split commit itself is still not
-analyzed by the current gate, and `pre-push` still scans the rejoin working
-tree rather than the pushed split tip, so #405 remains. With `--squash`, the
-rejoin additionally creates a ref-less synthetic squash commit before the
+same key hooks. Since issue #404, the wired `pre-merge-commit` gates this
+non-squash rejoin merge, with same-operation tree-marker dedup in
+`prepare-commit-msg`; generated split commits still have no creation hook.
+Before issue #405, `pre-push` scanned the rejoin working tree rather than
+the pushed split tip. The implemented push hook now analyzes the split tip
+at its own commit state, using the temporary-worktree path when it differs
+from `HEAD`. With `--squash`, the rejoin additionally creates a ref-less
+synthetic squash commit before the
 merge (评审 4117872586): the synthetic commit already exists before the
 branch transaction, so `reference-transaction` cannot close its creation;
-its push-side exposure is the same #405 remedy.
+the measured rejoin path also lacks commit-creation hooks. Neither commit
+is gated at creation; the pushed split tip is subject to the same #405
+per-ref gate.
 
 `git subtree add --prefix=<prefix> <commit>` is another distinct operation:
 it installs a merge commit on the checked-out branch. In a Git 2.48.1 fixture
@@ -976,7 +994,7 @@ So the accurate statement of the invariant is:
 > automatic conflict-free `git merge` and `git pull` (default merge mode)
 > through `pre-merge-commit`, automatic conflict-free `git revert` and
 > `git cherry-pick`, every replayed `git rebase` commit (including
-> conflict-resolved `git rebase --continue`), the automatic rejoin/merge
+> conflict-resolved `git rebase --continue`), the non-squash automatic rejoin/merge
 > commits of `git subtree merge` / `pull` / `split --rejoin` /
 > `push --rejoin`, and commit-side `--no-verify` on `git commit` /
 > `git merge` (whose `prepare-commit-msg` still fires), all through
@@ -1018,8 +1036,9 @@ So the accurate statement of the invariant is:
 > split commit publishable by direct-OID push), the generated
 > split commits of `subtree split --rejoin` / `push` / `push --rejoin` and
 > the `git subtree add` merge commit, or the `--squash` variants' synthetic
-> commits. For both `subtree push` forms, `pre-push` runs but scans the
-> checked-out tree instead of the generated split tip. The
+> commits at creation. For both `subtree push` forms, `pre-push` now gates
+> the generated split tip at that commit's state (issue #405); the earlier
+> checked-out-tree scan is retained below as historical evidence. The
 > `--squash` variants of `subtree add`, `merge`, `pull`, `split --rejoin`,
 > and `push --rejoin` additionally create a ref-less synthetic squash commit
 > that no local hook can gate. With `rebase --update-refs`, the replayed
@@ -1066,7 +1085,7 @@ records its outcome.
 **Update 2026-09-28 (issue #404 wiring)**: conflict-free `git merge`,
 `git pull` (default merge mode), `git revert`, `git cherry-pick`, replayed
 `git rebase` commits (including conflict-resolved `--continue`), the
-automatic subtree merge/rejoin commits, and commit-side `--no-verify` are
+non-squash automatic subtree merge/rejoin commits, and commit-side `--no-verify` are
 **no longer uncovered** — they are gated through the wired
 `pre-merge-commit` / `prepare-commit-msg` hooks with tree-marker dedup (see
 [What The Gate Actually Enforces](#what-the-gate-actually-enforces)). The
@@ -1094,16 +1113,17 @@ analyzing the resulting commit (评审
 `split --rejoin`, and `push --rejoin` additionally create a ref-less
 synthetic squash commit that no local hook can gate (评审 4117804224,
 4117843430, 4117872586).
-`git subtree push` does run `pre-push`, but that hook
-scans the checked-out tree rather than its generated split tip. With
-`--rejoin`, the generated split is also merged into the checked-out branch;
+`git subtree push` does run `pre-push`, which since issue #405 analyzes
+the generated split tip at its own commit state. With `--rejoin` and without
+`--squash`, the generated split is also merged into the checked-out branch;
 that merge is now gated by the wired `pre-merge-commit` (issue #404), while
-the #405 pushed-tip mismatch stays intact. `git subtree add` is a
-separate unchecked merge path with a `reference-transaction` callback, as
-measured above (评审 4115748226). For
+the generated split commits remain ungated at creation. The earlier
+#405 pushed-tip mismatch is closed by the per-ref push gate. `git subtree
+add` is a separate unchecked merge path with a `reference-transaction`
+callback, as measured above (评审 4115748226). For
 `split --rejoin`, only the rejoin merge updates the checked-out branch; in the
-automatic conflict-free path, split commits are generated without commit
-hooks while the rejoin is now gated. If the
+non-squash automatic conflict-free path, split commits are generated without
+commit hooks while the rejoin is now gated. If the
 rejoin conflicts and is continued through `git merge --continue`, `pre-commit`
 runs for that merge while split generation remains ungated (评审 4115865920).
 `git stash push` is not counted here because its commits stay under
@@ -1216,10 +1236,13 @@ identity. In a Git 2.48.1 fixture with new subtree content, `git subtree push
 --rejoin` created a two-parent merge on the checked-out branch; its
 `reference-transaction` callback covered `refs/heads/main` before the push,
 and `pre-merge-commit` fired. Then `pre-push` received the generated split-tip
-OID while `HEAD` was the different rejoin merge commit. The merge therefore
-has a possible local #404 closure, but the current gate does not wire either
-hook, and the #405 wrong-tree scan still applies to the pushed split commit
-(评审 4115812068).
+OID while `HEAD` was the different rejoin merge commit (评审 4115812068).
+Since issue #404, the wired `pre-merge-commit` gates the non-squash rejoin
+merge, with same-operation tree-marker dedup in `prepare-commit-msg`;
+`reference-transaction` remains unwired and split generation has no
+commit-creation hook. The #405 wrong-tree scan described here is the
+pre-fix measurement: the implemented per-ref push gate now analyzes the
+pushed split tip at its own commit state.
 
 Verified on 2026-09-27 with a local bare remote and a hook that logs both the
 stdin refs and `HEAD`:
