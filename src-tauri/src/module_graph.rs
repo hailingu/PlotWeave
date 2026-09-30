@@ -300,6 +300,27 @@ fn item_keyword(tok: &str) -> bool {
     !matches!(tok, "pub" | "unsafe" | "async")
 }
 
+/// 仅识别项首的裸闭包或 move 闭包，跳过整个参数列表并返回其后下标。
+/// 参数里的类型、模式或常量组整体跨过，组内 | 不充当闭包定界符；
+/// async 修饰符已由项扫描入口消费。其余项返回 None，不改变扫描边界。
+fn skip_closure_parameters(tokens: &[&str], start: usize) -> Option<usize> {
+    let open = start + usize::from(tokens.get(start) == Some(&"move"));
+    if tokens.get(open) != Some(&"|") {
+        return None;
+    }
+    let mut k = open + 1;
+    while k < tokens.len() {
+        k = match tokens[k] {
+            "|" => return Some(k + 1),
+            "(" => skip_delimited(tokens, k, "(", ")"),
+            "[" => skip_delimited(tokens, k, "[", "]"),
+            "{" => skip_delimited(tokens, k, "{", "}"),
+            _ => k + 1,
+        };
+    }
+    Some(k)
+}
+
 /// 跳过 cfg(test) 项/元素：组内逗号与分号不终止项，泛型里的常量块
 /// 也不视为项体。角括号仅在类型头或 turbofish 中平衡，避免把表达式
 /// 比较误当泛型；箭头的 > 不闭合泛型。else 链与结尾分号一并消费。
@@ -308,6 +329,11 @@ fn skip_test_item(tokens: &[&str], mut k: usize) -> usize {
     let mut type_header = false;
     let mut initializer = false;
     let mut type_alias = false;
+    if let Some(body) = skip_closure_parameters(tokens, k) {
+        k = body;
+        type_header = tokens.get(k) == Some(&"-") && tokens.get(k + 1) == Some(&">");
+        initializer = !type_header;
+    }
     let labelled = tokens.get(k) == Some(&"\'");
     while k < tokens.len() {
         match tokens[k] {

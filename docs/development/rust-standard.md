@@ -146,7 +146,10 @@ from unmeasured files. Metric and scope:
 - Test-only items are skipped with balanced generic/type and parameter
   delimiters; nested commas, array semicolons and generic const blocks do
   not end the item early. Expression comparisons remain distinct from type
-  delimiters. Lexical aliases are visible throughout their enclosing scope:
+  delimiters. Bare closure parameter lists are skipped as complete groups,
+  followed by expression-body scanning or an explicit return-type header
+  ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5363378084)).
+  Lexical aliases are visible throughout their enclosing scope:
   expansion includes all bindings in the deepest visible scope, preserving
   the target-platform union while excluding shadowed outer scopes and
   test-only bindings. Original paths and child-module precedence remain
@@ -177,6 +180,7 @@ repairs two previously registered boundaries. Fixtures in
 | Test-only generic fn / impl, including nested bounds | Scan item, then production use | Only the production target remains; no false cycle | Test-only item bodies never contribute production edges | `generic_test_items_do_not_create_production_cycles` |
 | Test-only generic field, type alias or grouped header | Skip nested type/parameter delimiters, resume at the next element/item | Following production edge survives | Skipping one test item does not consume adjacent production code | `generic_test_fields_resume_at_the_next_field`, `grouped_test_item_headers_are_skipped_in_full` |
 | Test-only comparison statement / initializer, including typed closures and labelled loops | Scan `<` comparison, then production use | Test edges excluded, following edge retained | Expression operators do not hold type delimiters open | `test_comparisons_do_not_swallow_following_production_uses` |
+| Test-only bare / move / async closure with typed, grouped or empty parameters and optional generic return type | Skip the complete closure header and body, then collect production use | Test-only target excluded; following production cycle detected | Closure parameter colons and expression operators cannot change production scanning boundaries | `bare_test_closures_preserve_following_production_cycles` ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5363378084)) |
 | Same-scope platform aliases share a name | Reference before declarations; reverse their order | Both platform child edges and cycles detected | Every equally deep visible binding contributes to the target union | `platform_alias_union_is_independent_of_declaration_order` |
 | Nested platform aliases shadow outer aliases | Resolve inner reference before inner declarations | Both inner targets; no outer child targets | Only the deepest visible scope contributes alias expansion | `inner_alias_union_shadows_all_outer_candidates`; existing sibling-scope and child-precedence fixtures |
 | One platform alias implies test | Collect aliases then resolve production reference | Only production-capable target remains | Test-only bindings never contaminate the platform union | `test_only_platform_aliases_do_not_join_production_union` |

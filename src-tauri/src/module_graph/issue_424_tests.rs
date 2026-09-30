@@ -80,6 +80,41 @@ fn test_comparisons_do_not_swallow_following_production_uses() {
 }
 
 #[test]
+fn bare_test_closures_preserve_following_production_cycles() {
+    // 闭包参数和返回类型内的分隔符不得泄漏测试边，也不得吞掉后续真环。
+    for item in [
+        "#[cfg(test)] |x: u32| x < limit;",
+        "#[cfg(test)] move |x: u32| x < limit;",
+        "#[cfg(test)] async |x: u32| x < limit;",
+        "#[cfg(test)] async move |x: u32| x < limit;",
+        "#[cfg(test)] |x, y| { use crate::b::B; x + y };",
+        "#[cfg(test)] || { use crate::b::B; };",
+        "#[cfg(test)] move || { use crate::b::B; };",
+        "#[cfg(test)] |x: Result<u32, ()>, y: (u8, u8)| { use crate::b::B; };",
+        "#[cfg(test)] |x: [u8; { use crate::b::B; 1 | 2 }]| { use crate::b::B; };",
+        "#[cfg(test)] |x: u32| -> Result<u32, ()> { use crate::b::B; Ok(x) };",
+        "#[cfg(test)] |x: u32| -> [u8; { use crate::b::B; 2 }] { use crate::b::B; [0; 2] };",
+        "#[cfg(test)] |(Ok(x) | Err(x)): Result<u32, u32>| { use crate::b::B; };",
+        "#[cfg(test)] |x: u32| x < limit || x > limit;",
+        "#[cfg(test)] |x: u32| x | limit;",
+        "#[cfg(test)] |x: u32| make::<u8, u16>(x);",
+    ] {
+        let graph = edges(&[
+            ("lib.rs", "mod a; mod b; mod c;"),
+            ("a.rs", &format!("fn f() {{ {item} use crate::c::C; }}")),
+            ("b.rs", "pub struct B;"),
+            ("c.rs", "use crate::a::A;"),
+        ]);
+        assert_eq!(graph["a.rs"], BTreeSet::from(["c.rs".into()]), "{item}");
+        assert_eq!(
+            cycles_of(&graph).len(),
+            1,
+            "闭包之后的生产真环必须检出：{item}"
+        );
+    }
+}
+
+#[test]
 fn platform_alias_union_is_independent_of_declaration_order() {
     let a = "#[cfg(unix)] use crate::a as dep;";
     let b = "#[cfg(windows)] use crate::b as dep;";
