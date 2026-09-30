@@ -7,7 +7,7 @@ dedup marker helper `scripts/gate-tree-marker.sh` (issue #404). Like the root
 `AGENTS.md` and the other standards under `docs/development/`, this file is
 written in English for agent interoperability.
 
-**Last reviewed**: 2026-09-28
+**Last reviewed**: 2026-09-30
 
 **Status**: Active — accepted decision. Recorded 2026-09-27, resolving
 [issue #356](https://github.com/hailingu/PlotWeave/issues/356); extended
@@ -17,7 +17,12 @@ more commands routed through it — see
 the issue #355 evidence record (one summary line per fully passing run,
 written to a pending file inside `.git` and materialized into the versioned
 file after a passing push — see
-[Gate Run Evidence Record](#gate-run-evidence-record-issue-355)).
+[Gate Run Evidence Record](#gate-run-evidence-record-issue-355)); baseline
+refreshed 2026-09-30 on the pinned Node toolchain, measuring the complete
+gate as extended — that refresh fired the first distribution
+reconsideration trigger, and the revisit it requires is recorded with the
+alternatives (see [Measured Baseline](#measured-baseline) and
+[Status Of The Alternatives](#status-of-the-alternatives)).
 
 ## Required Reading
 
@@ -96,6 +101,20 @@ here as **considered and declined**, not as pending work.
 | B | Tier the check set between pre-commit and pre-push | **58.5s per commit** (80% of the pre-commit phase) | The largest lever by a wide margin, and a governance change rather than an optimization: it decides *when* checks run, and leaves an interval in which a commit exists locally without SonarQube having run. The uniform gate was judged worth that cost. |
 | C | Accept the cost, record the decision and a baseline | none (by design) | Adopted. |
 
+The upside figures in this table are the founding baseline's (2026-09-27).
+The [2026-09-30 refresh](#refreshed-baseline-2026-09-30) changed the
+distribution materially: the Rust coverage phase is now the largest single
+phase (~48.3s, ~36% of a run), so option A's bounded upside grows to
+~48.3s per run — still short of the ~40% single-phase mark at which option
+A would deserve a real design — and A's `cargo-llvm-cov`
+report-semantics risk is unchanged. The "no single hotspot" wording above
+describes the founding measurement and is retained as history. Losing the
+even split fires the first distribution
+[Reconsideration Trigger](#reconsideration-triggers); the revisit that
+trigger requires is this change itself — re-measured as a three-run median
+and re-assessed here — and the decline stands on the refreshed numbers
+(PR #441 评审 5360118900).
+
 ### What option B would actually mean
 
 B is only coherent in one variant that preserves the "Sonar runs on the push
@@ -121,6 +140,14 @@ the gate actually covers (see
 [What The Gate Actually Enforces](#what-the-gate-actually-enforces)), what option
 B changes is that a commit can be created locally before the coverage and
 scanner phases have run for it.
+
+The cycle figures in this subsection use the founding baseline. At the
+[refreshed 2026-09-30 baseline](#refreshed-baseline-2026-09-30) the same
+reading gives: complete gate 135.5s, static-only pre-commit 12.8s, so the
+saving would be 135.5 − 12.8 ≈ 122.7s per commit — roughly 53 minutes per
+day at ~26 eligible commits/day, a ~45% reduction in total gate time. The
+governance assessment, and the decline, are unchanged; only the arithmetic
+moved.
 
 Declining A and B is a statement about today's numbers, not a permanent
 refusal. See [Reconsideration Triggers](#reconsideration-triggers).
@@ -1040,7 +1067,19 @@ boundary of this inventory.
 
 ## Measured Baseline
 
-Taken **2026-09-27** at commit `ba151ce` on `dev`, immediately after the
+Two measurements live here. The **founding baseline (2026-09-27)** is what
+the decision above was taken against, as delivered by PR #403. The
+**refreshed baseline (2026-09-30)** measures the complete gate as it exists
+after the issue #404 commit-creation wiring, the issue #393 coverage floor,
+and the issue #355 evidence record were added to it, and it runs on the Node
+version pinned by `.nvmrc` (the founding run did not — see its caveats).
+Compare future measurements against the refreshed baseline; the founding one
+is retained because the decision and the alternatives analysis above were
+argued on its numbers.
+
+### Founding Baseline (2026-09-27)
+
+Taken at commit `ba151ce` on `dev`, immediately after the
 issue #363 merge, with warm build caches.
 
 **Command** (run from the repository root `/Users/guhailin/Git/PlotWeave`):
@@ -1057,7 +1096,7 @@ issue #363 merge, with warm build caches.
 | User CPU | 157.20s |
 | System CPU | 22.64s |
 
-### Per-phase breakdown
+#### Per-phase breakdown
 
 Measured in the same working tree and environment, by timing each stage the
 gate script runs in order.
@@ -1079,7 +1118,7 @@ dominates; the four are near-evenly split between 14s and 26s. Any proposal to
 cut total cost has to address more than one phase, which is why option A alone
 is bounded at 23%.
 
-### Commit frequency context
+#### Commit frequency context
 
 The repository has 1120 commits spanning 2026-08-21 to 2026-09-27 — 37 days.
 That count includes 196 merge commits, of which 194 are GitHub PR merges
@@ -1102,7 +1141,7 @@ per day. Treat all of these as order-of-magnitude context only — a real
 comparison requires measuring hook invocations, not inferring them from
 history.
 
-### Environment
+#### Environment
 
 | Component | Version |
 | --- | --- |
@@ -1114,9 +1153,12 @@ history.
 | `sonar-scanner` CLI | 7.3.0.5189 |
 | SonarQube server | 26.8.0.126808 |
 
-### Caveats On This Baseline
+#### Caveats On This Baseline
 
-Read these before comparing any future measurement against 72.87s.
+Read these before comparing any measurement against the founding 72.87s
+figure; comparisons against the gate as it exists today should use the
+[refreshed baseline](#refreshed-baseline-2026-09-30) and its caveats
+instead.
 
 1. **Warm caches.** `src-tauri/target/` and the vitest cache were already
    populated, so the Rust compile and test phases are at their incremental
@@ -1135,14 +1177,122 @@ Read these before comparing any future measurement against 72.87s.
 4. **Machine-local.** Absolute seconds do not transfer between machines. Compare
    ratios and per-phase shares, not the total.
 
+### Refreshed Baseline (2026-09-30)
+
+Taken **2026-09-30** at commit `44891fe` (the `dev` tip; measured on task
+branch `docs/issue-356-refresh-gate-baseline` before any file was edited),
+with warm build caches, using the Node version pinned by `.nvmrc`
+(v24.18.0, resolving founding caveat 2 for this measurement). Three
+complete runs were taken plus one run per phase.
+
+**Command** (unchanged, run from the repository root
+`/Users/guhailin/Git/PlotWeave`):
+
+```sh
+/usr/bin/time -p sh scripts/sonar-quality-gate.sh
+```
+
+**Result**: all three runs exit 0 — `Quality Gate 已通过，新增代码未解决问题为 0`.
+
+| Measurement | Value |
+| --- | ---: |
+| Wall clock, complete gate — runs of 134.41s / 135.49s / 136.62s | **135.49s (median)** |
+| User CPU / System CPU (median run) | 255.86s / 25.29s |
+
+#### Per-phase breakdown
+
+Timed separately after the three complete runs, in the order the gate script
+runs them.
+
+| Phase | Wall clock | Share |
+| --- | ---: | ---: |
+| `scripts/check-static.sh` (format + lint + `typecheck:strict`) | 12.8s | 9% |
+| `npm run test:coverage` (169 files / 2536 tests) | 41.8s | 31% |
+| `scripts/rust-coverage.sh` (`cargo-llvm-cov`; 527 tests across two targets) | 48.3s | 36% |
+| `sonar-scanner` + Quality Gate wait (remainder; the scanner's own total was 27.2–28.4s across runs) | ~32.7s | 24% |
+| **Total (median of three complete runs)** | **~135.5s** | **100%** |
+
+**The even split is gone — that is the finding that matters here.** The
+founding baseline's near-even four-way split no longer holds: the two
+coverage phases together are ~67% of a run, and the Rust coverage phase is
+the largest single phase at ~36% — approaching, but not passing, the ~40%
+single-phase mark at which that phase becomes the optimization target.
+Losing the even split is itself a fired
+[Reconsideration Trigger](#reconsideration-triggers), and the revisit it
+required is recorded in
+[Status Of The Alternatives](#status-of-the-alternatives) (PR #441 评审
+5360118900). Between the two measurements the
+frontend coverage phase went 15.8s → 41.8s and the Rust coverage phase
+16.6s → 48.3s, while the static phase got slightly faster (14.4s → 12.8s).
+Frontend suite growth alone (2478 → 2536 tests, +2.3%) does not account for
+the coverage-phase growth; this record does not attribute the remainder —
+the two baselines differ in more than code (Node major 22 → 24 among them),
+so compare shares, not deltas.
+
+#### Commit frequency context
+
+The repository now has 1246 commits spanning 2026-08-21 to 2026-09-30 — 40
+days. That count includes 215 merge commits, of which 213 are GitHub PR
+merges made remotely and 2 local — the former never invoked the local
+`pre-commit` gate at all. The same uncertainty as the founding paragraph
+applies: retained history cannot bound actual hook invocations in either
+direction, so these remain **estimates from retained history, uncertain in
+both directions**. Pre-commit alone is roughly 58 minutes per day at the
+retained ~26 eligible commits/day (213 remote PR merges excluded). Under
+the same one-`pre-push`-per-eligible-commit assumption (batching lowers it,
+retries raise it), the total is roughly 117 minutes per day, and under
+option B about 64 minutes per day. Treat all of these as order-of-magnitude
+context only.
+
+#### Environment
+
+| Component | Version |
+| --- | --- |
+| OS | macOS 26.6.2 (arm64), 16 cores / 64 GiB (same machine as the founding run) |
+| Node.js | **v24.18.0** — matches the `.nvmrc` / `engines` pin |
+| npm | 11.16.0 |
+| rustc | 1.95.0 (`59807616e`, pinned by `rust-toolchain.toml`) |
+| `cargo-llvm-cov` | 0.9.0 |
+| `sonar-scanner` CLI | 7.3.0.5189 |
+| SonarQube server | 26.8.0.126808 |
+
+#### Caveats On This Refresh
+
+1. **Warm caches, consistent runs.** Same-machine warm caches as the
+   founding run; the three complete runs sit within 2.2s of each other, so
+   135.5s is the *typical repeated* cost, not a worst case. A cold
+   `src-tauri/target/` would be materially slower.
+2. **Node pin matches — for this measurement only.** Founding caveat 2 is
+   resolved here by measuring on v24.18.0; the underlying finding that
+   `engines` is advisory and nothing enforces the pin remains true, stays
+   recorded there, and is not fixed by this change.
+3. **Three samples on one day.** Better than the founding single sample,
+   still not a distribution across days. Compare medians; do not treat
+   sub-second differences as signal.
+4. **Machine-local, and a Node-major gap versus the founding baseline.**
+   Absolute seconds do not transfer between machines, and the founding run
+   used Node 22 while this one uses the pinned Node 24. Compare ratios and
+   per-phase shares across the two baselines, not wall-clock deltas.
+
 ## Reconsideration Triggers
 
 Revisit this decision — and re-measure before drawing conclusions — when any of
 these becomes true:
 
-- A phase's share stops being evenly split. If one phase grows past roughly 40%
-  of the total, that phase becomes the thing to optimize, and option A (or an
-  equivalent) deserves a real design.
+- A phase's share stops being evenly split. This bullet carries two
+  escalating levels (made explicit by PR #441 评审 5360118900): when the
+  split stops being even, re-measure and revisit this decision against the
+  fresh numbers, recording the outcome; when one phase additionally grows
+  past roughly 40% of the total, that phase becomes the thing to optimize,
+  and option A (or an equivalent) deserves a real design. Status as of the
+  2026-09-30 refresh: the even split is gone — the Rust coverage phase is
+  ~36% and the two coverage phases are ~67% combined — so the first level
+  has fired and its revisit was performed in the same change (three-run
+  median; outcome recorded in
+  [Status Of The Alternatives](#status-of-the-alternatives): the decline
+  stands). No single phase has passed the ~40% mark, so the option-A
+  design level has not fired. It is near; re-measure before drawing any
+  conclusion from a share crossing it.
 - The commit rate rises materially above the ~25/day this baseline assumes, or
   the gate is reported as a recurring source of blocked or abandoned work. The
   argument for accepting a fixed cost weakens with frequency. Because option B
@@ -1190,11 +1340,15 @@ these becomes true:
 ## How To Re-measure
 
 Run from the repository root with `SONAR_HOST_URL` set and a token available as
-`SONAR_TOKEN` or `PLOTWEAVE_SONAR_TOKEN`:
+`SONAR_TOKEN` or `PLOTWEAVE_SONAR_TOKEN`, on the Node version pinned by
+`.nvmrc` (the founding baseline's Node-drift caveat is the reason):
 
 ```sh
 /usr/bin/time -p sh scripts/sonar-quality-gate.sh
 ```
+
+Take at least three complete runs and compare medians — a single run is not
+a distribution (the founding caveat 3 / refresh caveat 3).
 
 For the per-phase split, time the three non-scanner stages individually in the
 order the gate script runs them, and take the remainder as the scanner phase:
