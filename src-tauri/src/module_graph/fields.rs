@@ -1,4 +1,4 @@
-//! struct / enum / union 元素与 fn 参数的门控类型上下文（issue #424）。
+//! 声明的泛型参数、struct / enum / union 元素与 fn 参数门控上下文（issue #424）。
 //!
 //! 只给直接元素的属性入口登记类型状态与列表闭合边界；类型内常量块的
 //! 属性仍由普通表达式扫描处理。这里识别声明头和字段/参数列表，不解析通用
@@ -19,13 +19,23 @@ const RESERVED_DECLARATION_NAMES: &[&str] = &[
     "override", "priv", "try", "typeof", "unsized", "virtual", "yield",
 ];
 
-/// 带属性直接元素的扫描边界：字段/参数从类型状态开始，变体仅限定终点。
+/// 直接元素的语法决定类型入口、变体判别式与泛型默认类型的处理。
+#[derive(Clone, Copy)]
+enum ElementKind {
+    Type,
+    Variant,
+    Generic,
+}
+
+/// 带属性直接元素的扫描边界：类型元素从类型态开始，变体仅限定终点。
 #[derive(Clone, Copy)]
 pub(super) struct FieldContext {
-    /// 所属字段/变体/参数列表的闭合 token 下标；留给主扫描循环消费。
+    /// 所属字段/变体/函数或泛型参数列表的闭合 token；留给主循环消费。
     pub(super) close: usize,
     /// 字段和参数是类型入口，变体判别式保留表达式比较语义。
     pub(super) type_header: bool,
+    /// 仅泛型类型参数的等号 RHS 是类型；const 参数仍进入值表达式。
+    pub(super) type_default: bool,
 }
 
 /// union 仅在 `union NAME` 后接泛型、where 或字段体时作为声明关键字。
@@ -57,28 +67,54 @@ fn declaration_name(token: &str) -> bool {
     !RESERVED_DECLARATION_NAMES.contains(&name)
 }
 
-/// 按主扫描器的属性项首下标，登记记录元素与 fn 参数的类型态和列表边界。
+/// 按主扫描器的属性项首下标，登记泛型/记录/fn 参数的类型态与列表边界。
 /// 可见性 pub 后的 `(` 是实际扫描入口；嵌套类型/常量组不登记为外层字段。
 pub(super) fn field_contexts(tokens: &[&str]) -> BTreeMap<usize, FieldContext> {
     let mut contexts = BTreeMap::new();
     for (i, token) in tokens.iter().enumerate() {
+        if let Some((open, close)) = generic_parameters(tokens, i) {
+            collect_elements(tokens, open, close, ElementKind::Generic, &mut contexts);
+        }
         if *token == "fn" {
             if let Some((open, close)) = function_parameters(tokens, i) {
-                collect_elements(tokens, open, close, false, &mut contexts);
+                collect_elements(tokens, open, close, ElementKind::Type, &mut contexts);
             }
             continue;
         }
-        let (variant_list, allow_tuple) = match *token {
-            "struct" => (false, true),
-            "enum" => (true, false),
-            "union" if is_union_declaration(tokens, i) => (false, false),
+        let (kind, allow_tuple) = match *token {
+            "struct" => (ElementKind::Type, true),
+            "enum" => (ElementKind::Variant, false),
+            "union" if is_union_declaration(tokens, i) => (ElementKind::Type, false),
             _ => continue,
         };
         if let Some((open, close)) = declaration_fields(tokens, i + 2, allow_tuple) {
-            collect_elements(tokens, open, close, variant_list, &mut contexts);
+            collect_elements(tokens, open, close, kind, &mut contexts);
         }
     }
     contexts
+}
+
+/// 只登记声明直接泛型列表；impl 没有名字，其余声明验证名字后检查 <。
+/// 返回类型、where/HRTB 与类型实参不属于该列表；未闭合列表不登记。
+fn generic_parameters(tokens: &[&str], at: usize) -> Option<(usize, usize)> {
+    let open = match tokens.get(at).copied()? {
+        "impl" => at + 1,
+        "fn" | "struct" | "enum" | "trait" | "type" => {
+            if !tokens
+                .get(at + 1)
+                .is_some_and(|name| declaration_name(name))
+            {
+                return None;
+            }
+            at + 2
+        }
+        "union" if is_union_declaration(tokens, at) => at + 2,
+        _ => return None,
+    };
+    if tokens.get(open) != Some(&"<") {
+        return None;
+    }
+    Some((open, skip_type_arguments(tokens, open, tokens.len())? - 1))
 }
 
 /// 函数指针直接以 fn( 开启参数；普通函数名及泛型头沿已有声明解析定位。
@@ -102,7 +138,7 @@ fn declaration_fields(tokens: &[&str], mut i: usize, allow_tuple: bool) -> Optio
             ";" => return None,
             "where" => where_clause = true,
             "<" => {
-                i = skip_type_arguments(tokens, i, tokens.len());
+                i = skip_type_arguments(tokens, i, tokens.len())?;
                 continue;
             }
             "(" if allow_tuple && !where_clause => {
@@ -136,8 +172,8 @@ fn skip_group(tokens: &[&str], open: usize) -> usize {
     }
 }
 
-/// 类型参数中的组整体跨过；函数返回箭头的 > 不闭合泛型。
-fn skip_type_arguments(tokens: &[&str], open: usize, end: usize) -> usize {
+/// 类型参数中的组整体跨过；箭头的 > 不闭合泛型，缺少列表终点返回 None。
+fn skip_type_arguments(tokens: &[&str], open: usize, end: usize) -> Option<usize> {
     let mut angles = 1usize;
     let mut i = open + 1;
     while i < end {
@@ -150,14 +186,14 @@ fn skip_type_arguments(tokens: &[&str], open: usize, end: usize) -> usize {
             ">" if tokens.get(i.wrapping_sub(1)) != Some(&"-") => {
                 angles -= 1;
                 if angles == 0 {
-                    return i + 1;
+                    return Some(i + 1);
                 }
             }
             _ => {}
         }
         i += 1;
     }
-    i
+    None
 }
 
 /// 每次只检查列表的直接元素前缀；跳过整条类型或判别式后才检查下一个。
@@ -165,9 +201,10 @@ fn collect_elements(
     tokens: &[&str],
     open: usize,
     close: usize,
-    variant_list: bool,
+    kind: ElementKind,
     contexts: &mut BTreeMap<usize, FieldContext>,
 ) {
+    let variant_list = matches!(kind, ElementKind::Variant);
     let mut i = open + 1;
     while i < close {
         let mut attributed = false;
@@ -182,6 +219,8 @@ fn collect_elements(
                 FieldContext {
                     close,
                     type_header: !variant_list,
+                    type_default: matches!(kind, ElementKind::Generic)
+                        && !matches!(tokens[item], "const" | "'"),
                 },
             );
         }
@@ -206,7 +245,7 @@ fn collect_variant_fields(
         _ => return,
     };
     if let Some(close) = group_close(tokens, open, delimiter.0, delimiter.1).filter(|c| *c <= end) {
-        collect_elements(tokens, open, close, false, contexts);
+        collect_elements(tokens, open, close, ElementKind::Type, contexts);
     }
 }
 
@@ -220,7 +259,7 @@ fn element_end(tokens: &[&str], mut i: usize, close: usize, variant_list: bool) 
                 continue;
             }
             "<" if !variant_list || tokens.get(i.wrapping_sub(1)) == Some(&"::") => {
-                i = skip_type_arguments(tokens, i, close);
+                i = skip_type_arguments(tokens, i, close).unwrap_or(close);
                 continue;
             }
             _ => {}

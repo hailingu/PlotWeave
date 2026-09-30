@@ -155,6 +155,14 @@ from unmeasured files. Metric and scope:
   Return types and production bodies remain visible after the list; nested
   header/parameter/body const expressions keep local expression context
   ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5365933962)).
+  Direct generic parameters in fn/struct/enum/union/trait/type/impl declarations
+  have their own paired closing angle. Type-parameter defaults retain type
+  context through `=`, while const defaults remain value expressions and
+  lifetimes have no defaults. Final parameters preserve the following fields,
+  bounds, return types and body. Unrelated type arguments, where/HRTB groups
+  and nested const statements do not acquire parameter context; unclosed
+  declaration lists register no artificial boundary
+  ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5366421069)).
   Nested const expressions retain expression
   context ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5363739640)).
   Union declarations enter type context only when followed by a valid name
@@ -197,7 +205,9 @@ use-edge resolution owns alias visibility (`scan_use_stmt` /
 repairs two previously registered boundaries. Fixtures in
 `src/module_graph/issue_424_tests.rs` and
 `src/module_graph/issue_424_alias_tests.rs` and
-`src/module_graph/issue_424_function_pointer_tests.rs` exercise the complete graph builder.
+`src/module_graph/issue_424_function_pointer_tests.rs` and
+`src/module_graph/issue_424_generic_parameter_tests.rs` exercise the complete graph builder
+and the owned-context parser boundary.
 
 | State / precondition | Action / ordering | Observable outcome | Invariant | Verification |
 | --- | --- | --- | --- | --- |
@@ -210,6 +220,12 @@ repairs two previously registered boundaries. Fixtures in
 | Final gated named function/method parameter, with no trailing comma and an optional generic declaration head | Bound parameter at its own closing parenthesis, then scan the body | Only production body dependencies remain; real cycle retained | Every fn parameter-list entry point preserves the following production body | `last_test_function_parameters_preserve_production_bodies` |
 | Local test statement in fn parameter/return/header const expression or ordinary body | Skip the local expression and scan its next production use | Production edge and cycle retained | Parameter context never propagates into nested expression attributes | `parameter_const_attributes_preserve_expression_scanning` |
 | Function parameter attribute permits production (`any(test, unix)` or platform-only) | Apply existing cfg implication before using list context | Production dependency retained | Type-element registration never strengthens cfg test exclusion | `production_capable_parameter_attributes_preserve_edges` |
+| Attributed generic type parameter in fn/struct/enum/union/trait/type/impl declarations, with a bound or an allowed default, including nested types and type-level const blocks | Preserve type context through the default equals sign; stop at its own parameter comma or generic-list close | Test dependency excluded; no false cycle | Test-only generic defaults never enter the production dependency graph | `test_generic_type_defaults_do_not_create_production_cycles` ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5366421069)) |
+| Final gated generic parameter followed by fields, where bounds, return types or a function/trait body | Leave the owned closing angle for the main scanner and resume production scanning | Production edge and real cycle retained | Skipping one generic parameter never consumes adjacent production code | `last_test_generic_parameters_preserve_production_scanning` |
+| Gated const or lifetime generic parameter in the same declaration list | Keep const defaults in expression context; bound every parameter at the owned close | Test dependency excluded; following production edge retained | Type defaults and value defaults retain distinct scanning semantics | `test_const_and_lifetime_parameters_preserve_production_scanning` |
+| Local test statement inside a production generic bound/default const expression | Skip local expression and collect subsequent production use in the same block | Production edge and real cycle retained | Generic parameter context never propagates into nested expression attributes | `generic_default_const_attributes_preserve_expression_scanning` |
+| Missing closing angle, or angle groups belonging to alias RHS, impl type arguments, return types and where/HRTB bounds | Recognize only a directly owned, paired declaration list | No artificial element context is registered | Invalid or unrelated groups never create a new skip boundary | `generic_contexts_require_owned_closed_declarations`; rustc owns full malformed-source rejection |
+| Generic parameter attribute permits production | Apply existing cfg implication before generic context | Production dependency retained | Generic registration never strengthens cfg test exclusion | `production_capable_generic_parameters_preserve_edges` |
 | Test-only comparison statement / initializer, including typed closures and labelled loops | Scan `<` comparison, then production use | Test edges excluded, following edge retained | Expression operators do not hold type delimiters open | `test_comparisons_do_not_swallow_following_production_uses` |
 | Test statement inside a field-type const block | Skip the local test expression, then collect production use in the same block | Following production edge and cycle retained | Nested expressions never inherit field type context | `test_field_const_expressions_preserve_production_uses` |
 | Test-only bare / move / async closure with typed, grouped or empty parameters and optional generic return type | Skip the complete closure header and body, then collect production use | Test-only target excluded; following production cycle detected | Closure parameter colons and expression operators cannot change production scanning boundaries | `bare_test_closures_preserve_following_production_cycles` ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5363378084)) |

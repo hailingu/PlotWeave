@@ -38,7 +38,7 @@ mod use_tree;
 use aliases::expand_segments;
 use closures::{skip_closure_headers, BodyStep};
 use cycles::cycles_of;
-use fields::{field_contexts, is_union_declaration};
+use fields::{field_contexts, is_union_declaration, FieldContext};
 use lexer::{strip_comments_and_literals, tokenize};
 use tree::ModuleTree;
 use use_tree::{strip_raw_ident, use_tree_of};
@@ -306,21 +306,22 @@ fn item_keyword(tok: &str) -> bool {
 
 /// 跳过 cfg(test) 项/元素：组内逗号与分号不终止项，泛型里的常量块
 /// 也不视为项体。角括号仅在类型头或 turbofish 中平衡，避免把表达式
-/// 比较误当泛型；字段入口由调用方初始化类型状态并限定列表边界。
+/// 比较误当泛型；直接元素由调用方初始化类型态、默认值语法和列表边界。
 /// where 约束的同层逗号仍属于声明头；箭头的 > 不闭合泛型。
 /// else 链与结尾分号一并消费。
-fn skip_test_item(tokens: &[&str], k: usize, type_header: bool) -> usize {
+fn skip_test_item(tokens: &[&str], k: usize, context: Option<&FieldContext>) -> usize {
+    let type_header = context.is_some_and(|c| c.type_header);
     let mut closures = skip_closure_headers(tokens, k, type_header);
     let mut k = closures.next;
     let (mut type_header, mut initializer) = (closures.type_header, closures.initializer);
     let mut angles = 0usize;
-    let mut type_alias = false;
+    let mut type_default = context.is_some_and(|c| c.type_default);
     let mut where_clause = false;
     let labelled = tokens.get(k) == Some(&"\'");
     while k < tokens.len() {
         match tokens[k] {
             "type" if !initializer => {
-                type_alias = true;
+                type_default = true;
                 type_header = true;
             }
             "fn" | "struct" | "enum" | "trait" | "impl" if !initializer => {
@@ -329,7 +330,7 @@ fn skip_test_item(tokens: &[&str], k: usize, type_header: bool) -> usize {
             "union" if !initializer && is_union_declaration(tokens, k) => type_header = true,
             "where" if type_header => where_clause = true,
             ":" if !initializer && !labelled => type_header = true,
-            "=" if angles == 0 && !type_alias => {
+            "=" if angles == 0 && !type_default => {
                 initializer = true;
                 type_header = false;
             }
@@ -450,7 +451,7 @@ fn scan_tokens(tokens: &[&str]) -> FileScan {
             t if st.cfg_test && item_keyword(t) => {
                 let context = field_contexts.get(&i);
                 let end = context.map_or(tokens.len(), |c| c.close);
-                i = skip_test_item(&tokens[..end], i, context.is_some_and(|c| c.type_header));
+                i = skip_test_item(&tokens[..end], i, context);
                 st.cfg_test = false;
                 st.pending_path = false;
             }
@@ -697,3 +698,7 @@ mod issue_424_alias_tests;
 /// issue #424 的函数指针类型参数门控与扫描恢复回归夹具。
 #[cfg(test)]
 mod issue_424_function_pointer_tests;
+
+/// 泛型参数默认类型排除及列表闭合恢复回归（issue #424）。
+#[cfg(test)]
+mod issue_424_generic_parameter_tests;
