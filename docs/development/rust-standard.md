@@ -177,6 +177,16 @@ from unmeasured files. Metric and scope:
   control-flow body
   ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5364837705),
   [const operand repair](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5365530615)).
+  Bare/prefixed closure bodies and value initializers keep scanning const and
+  operator operands even without pending control flow. An initial ordinary
+  block updates its existing body count before following a binary operator;
+  this preserves later match/if-let/while-let bodies and production statements.
+  Direct control-flow statements end after their final body before an independent
+  unary statement; let/return/break value wrappers retain binary continuation.
+  Else-chain helpers preserve that original statement/value ownership.
+  Standalone const/block expressions without semicolons, explicit return-type
+  closure bodies and type elements retain their own ending rules
+  ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5366897147)).
   Lexical aliases are visible throughout their enclosing scope:
   expansion first selects all bindings in the deepest visible scope, then
   appends suffixes only to bindings whose complete target is a known module.
@@ -199,14 +209,16 @@ from unmeasured files. Metric and scope:
 
 ### Issue #424 State And Invariant Matrix
 
-The scanner owns test-item exclusion (`scan_tokens` / `skip_test_item` / `field_contexts`);
+The scanner owns test-item exclusion (`scan_tokens` / `skip_test_item` /
+`field_contexts` / `ClosureHeaders::step_after_body`);
 use-edge resolution owns alias visibility (`scan_use_stmt` /
 `use_targets_of`). [Issue #424](https://github.com/hailingu/PlotWeave/issues/424)
 repairs two previously registered boundaries. Fixtures in
 `src/module_graph/issue_424_tests.rs` and
 `src/module_graph/issue_424_alias_tests.rs` and
 `src/module_graph/issue_424_function_pointer_tests.rs` and
-`src/module_graph/issue_424_generic_parameter_tests.rs` exercise the complete graph builder
+`src/module_graph/issue_424_generic_parameter_tests.rs` and
+`src/module_graph/issue_424_operand_tests.rs` exercise the complete graph builder
 and the owned-context parser boundary.
 
 | State / precondition | Action / ordering | Observable outcome | Invariant | Verification |
@@ -231,6 +243,12 @@ and the owned-context parser boundary.
 | Test-only bare / move / async closure with typed, grouped or empty parameters and optional generic return type | Skip the complete closure header and body, then collect production use | Test-only target excluded; following production cycle detected | Closure parameter colons and expression operators cannot change production scanning boundaries | `bare_test_closures_preserve_following_production_cycles` ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5363378084)) |
 | Test-only typed closure after return, break/label, reference or async/move prefixes, including consecutive closure heads | Skip expression prefixes and consecutive closure parameters, then body and production use | Test target excluded; following production cycle detected | Expression prefixes cannot change closure exclusion or production scanning boundaries | `prefixed_test_closures_preserve_following_production_cycles` ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5364166565)) |
 | Test-only typed closure in let initializer or match / if-let / while-let scrutinee, including value-prefix/arithmetic/comparison operand blocks, explicit return bodies and empty nested match arms | Consume closure header, body and enclosing control-flow body before resuming | Test dependencies excluded; next production edge and true cycle retained | A closure body cannot end the enclosing gated control-flow statement | `control_flow_test_closures_preserve_production_cycles`, `let_condition_test_closures_preserve_production_cycles`, `control_flow_closures_resume_at_following_blocks` ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5364837705)) |
+| Bare or prefixed test closure body contains multiple const/operator operand blocks | Keep expression operands in the gated statement until its statement/list boundary | Test dependencies excluded; no false cycle | Operand groups cannot end a gated expression while another operand remains | `bare_closure_operands_do_not_create_production_cycles` ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5366897147)) |
+| Expression closure starts with an ordinary block followed by a binary operator, including match/if-let/while-let nesting | Finish that block's existing body-count transition before continuing the binary expression | All gated operands excluded; enclosing body and following production edge retained | An operand continuation cannot leave a stale body count that consumes a later production block | `bare_closure_operands_do_not_create_production_cycles`, `closure_operand_statements_preserve_production_cycles` |
+| Multi-operand gated closure/value initializer precedes a production use or separate block | Consume gated operands, then resume at the production statement | Production dependency and true cycle retained | Operand continuation never consumes adjacent production statements | `closure_operand_statements_preserve_production_cycles` |
+| Test-only standalone const/block expression without a semicolon, or explicit-return closure/type element | Apply operand continuation only in an active initializer or pending control flow; keep type/list boundaries | Subsequent production block/field remains visible | Expression operand rules do not turn independent blocks or type elements into more test code | `operand_continuation_preserves_nonclosure_and_type_boundaries` |
+| Gated match/if-let/while-let statement ends before an independent unary expression; match also appears inside let/return/break values | Finish the entry control-flow statement, but continue binary operands inside a value wrapper | Independent production edge and true cycle retained; wrapped test operands excluded | Finishing a statement cannot transfer its gate to the next unary statement | `completed_control_flow_preserves_unary_production_statements` |
+| Closure attribute permits production | Apply existing cfg implication before expression continuation | Every operand dependency remains; true cycle retained | Operand classification never strengthens cfg test exclusion | `production_capable_closure_operands_preserve_edges` |
 | Test-only match / if-let / while-let closure with empty or nonempty const-block body / operand | Skip the const operand, then enclosing body and following production code | Test dependencies excluded; following production edge and true cycle retained | A const operand group never consumes the enclosing control-flow body | `const_test_closure_bodies_do_not_create_production_cycles`, `const_test_closures_preserve_following_production_blocks` ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5365530615)) |
 | Same-scope function and module aliases share a spelling, in either declaration order | Select deepest lexical bindings, then append a qualified suffix only to exact module targets | Real item-owner and module-child edges remain; no invented function-owner child or false cycle | Non-module symbol tails never become module prefixes for qualified alias expansion | `namespace_disjoint_aliases_exclude_false_child_edges`, `namespace_disjoint_aliases_preserve_module_cycles`; `relative_namespace_aliases_resolve_exact_modules` |
 | Same-scope platform aliases share a name | Reference before declarations; reverse their order | Both platform child edges and cycles detected | Every equally deep visible module binding contributes to the target union | `platform_alias_union_is_independent_of_declaration_order` |

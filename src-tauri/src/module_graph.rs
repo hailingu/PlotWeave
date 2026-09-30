@@ -702,3 +702,7 @@ mod issue_424_function_pointer_tests;
 /// 泛型参数默认类型排除及列表闭合恢复回归（issue #424）。
 #[cfg(test)]
 mod issue_424_generic_parameter_tests;
+
+/// 门控闭包操作数连续扫描和独立生产边界回归（issue #424）。
+#[cfg(test)]
+mod issue_424_operand_tests;

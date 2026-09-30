@@ -16,6 +16,8 @@ pub(super) struct ClosureHeaders {
     pub(super) initializer: bool,
     matches: usize,
     blocks: usize,
+    /// 直接控制流语句的最终正文结束即交还扫描；值包装仍可接二元操作数。
+    statement_control_flow: bool,
 }
 
 /// 消费一个正文组后，继续同一测试表达式或交还生产扫描。
@@ -117,6 +119,7 @@ pub(super) fn skip_closure_headers(
         initializer: false,
         matches: 0,
         blocks: 0,
+        statement_control_flow: matches!(tokens.get(start), Some(&"match" | &"if" | &"while")),
     };
     while let Some((body, matches, blocks)) = parameter_end(tokens, headers.next) {
         headers.next = body;
@@ -165,29 +168,22 @@ fn is_operand_block(tokens: &[&str], open: usize, body: usize, type_header: bool
     if type_header || open == body {
         return false;
     }
+    let previous = open.checked_sub(1).and_then(|at| tokens.get(at)).copied();
+    matches!(previous, Some("const" | "return")) || is_expression_operator(previous)
+}
+
+/// 既有操作数字符口径：同时识别块前运算符和块后继续表达式的二元运算符。
+/// 多字符运算符由分词器拆成字符，例如 != 的首字符是 !。
+fn is_expression_operator(token: Option<&str>) -> bool {
     matches!(
-        open.checked_sub(1).and_then(|at| tokens.get(at)).copied(),
-        Some(
-            "const"
-                | "return"
-                | "+"
-                | "-"
-                | "*"
-                | "/"
-                | "%"
-                | "&"
-                | "|"
-                | "^"
-                | "!"
-                | "<"
-                | ">"
-                | "="
-        )
+        token,
+        Some("+" | "-" | "*" | "/" | "%" | "&" | "|" | "^" | "!" | "<" | ">" | "=")
     )
 }
 
 impl ClosureHeaders {
-    /// 跨过一个闭包/控制流正文组；else 链整体结束后才交还生产扫描。
+    /// 操作数先整体跨过；普通正文先更新计数，再决定是否沿二元表达式继续。
+    /// 入口控制流语句在最终正文后结束；值包装允许继续，else 不改变入口所有权。
     pub(super) fn step_after_body(
         &mut self,
         tokens: &[&str],
@@ -196,7 +192,8 @@ impl ClosureHeaders {
         initializer: bool,
     ) -> BodyStep {
         let end = skip_braced(tokens, open);
-        if self.matches + self.blocks > 0 && is_operand_block(tokens, open, self.next, type_header)
+        if (self.matches + self.blocks > 0 || initializer)
+            && is_operand_block(tokens, open, self.next, type_header)
         {
             return BodyStep::Continue(end, type_header, initializer);
         }
@@ -218,7 +215,12 @@ impl ClosureHeaders {
         } else {
             self.blocks = self.blocks.saturating_sub(1);
         }
-        if self.matches + self.blocks > 0 {
+        if self.matches + self.blocks > 0
+            || (initializer
+                && !type_header
+                && !self.statement_control_flow
+                && is_expression_operator(tokens.get(end).copied()))
+        {
             BodyStep::Continue(end, type_header, initializer)
         } else {
             BodyStep::End(end + usize::from(tokens.get(end) == Some(&";")))
