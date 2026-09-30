@@ -273,15 +273,23 @@ The issue #405 fix, wired 2026-09-30, closes it:
   share the pushed tree's provenance; untracked content in other directories
   cannot weaken the gate — Prettier may over-block on it, never under-block).
   The complete gate then runs exactly as before, at the same cost.
-- **Slow path — temporary worktree.** Every other case (a non-checked-out
-  ref, a dirty worktree, multiple distinct commits) is checked out with
+- **Slow path — temporary worktree.** Every other commit — a non-checked-out
+  ref, a dirty worktree, or an additional distinct commit in a multi-ref
+  push — is checked out with
   `git worktree add --detach` into a `mktemp` directory, dependencies are
   installed from that tree's lockfiles (`npm ci`), and the **current**
   gate scripts run the complete sequence with
   `PLOTWEAVE_GATE_REPOSITORY_ROOT` pointing at that worktree. The user's
-  working tree is never touched; the temporary worktree is removed after the
+  working tree is never touched by the slow path; the temporary worktree is
+  removed after the
   run (best-effort `git worktree remove --force` on every exit path;
-  residue is disk waste only, `git worktree prune` recovers it).
+  residue is disk waste only, `git worktree prune` recovers it). The
+  fast/slow choice is made **per unique pushed commit**, not per
+  invocation: a multi-ref push that includes `HEAD` still gates `HEAD` in
+  the current working tree — writing the same gitignored coverage, scanner,
+  and Cargo artifacts every commit gate writes — and gates every other
+  commit in its own temporary worktree; the mixed-dispatch case is pinned
+  by the `pre-push-refs` multi-ref test.
 - **Dedup and deletions.** Refs pointing at the same commit (a branch and
   its tag) are analyzed once; a ref deletion (all-zero local sha) exports no
   code and is skipped; a malformed ref line or a local sha that does not

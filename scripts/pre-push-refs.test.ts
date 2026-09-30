@@ -218,6 +218,20 @@ function scenarioEnvironment(
   return env
 }
 
+/** 在沙箱内创建裸远端并登记为 origin（真实 git push 的推送目标）。 */
+function addBareRemote(sandbox: string): void {
+  const remote = resolve(sandbox, 'origin.git')
+  const init = spawnSync('git', ['init', '--bare', '-q', remote], {
+    cwd: sandbox,
+  })
+  const add = spawnSync('git', ['remote', 'add', 'origin', remote], {
+    cwd: sandbox,
+  })
+  if (init.status !== 0 || add.status !== 0) {
+    throw new Error('创建裸远端失败')
+  }
+}
+
 /** 安装真实 pre-push 钩子与门禁脚本（沙箱内为被跟踪副本）并接线替身；
  * 默认创建裸远端 origin（真实 git push 触发钩子）。gitHookLocalization
  * 模拟 git 向提交类钩子导出的工作树定位环境（GIT_INDEX_FILE 等按 cwd
@@ -254,16 +268,7 @@ function preparePushScenario(options?: {
     throw new Error('接线 core.hooksPath 失败')
   }
   if (options?.withRemote !== false) {
-    const remote = resolve(sandbox, 'origin.git')
-    const init = spawnSync('git', ['init', '--bare', '-q', remote], {
-      cwd: sandbox,
-    })
-    const add = spawnSync('git', ['remote', 'add', 'origin', remote], {
-      cwd: sandbox,
-    })
-    if (init.status !== 0 || add.status !== 0) {
-      throw new Error('创建裸远端失败')
-    }
+    addBareRemote(sandbox)
   }
 
   const git = (args: string[]) =>
@@ -338,10 +343,13 @@ function expectRecordedCommit(
 
 // 用例逐个真实 git push / 直启真实钩子（多级 shell/git 替身），全量套件
 // 并发负载下常超 vitest 默认 5s——与 gate-tree-marker.test.ts 同款放宽
-// describe 级超时上限，不放宽断言。
+// describe 级超时上限，不放宽断言。套件按矩阵维度分组：单个 describe
+// 回调保持在新函数 80 计行上限内（AGENTS.md 尺寸上限）。
 describe(
-  'pre-push 按 stdin 待推 ref 分派门禁（issue #405：推哪个 ref 就分析哪个 ref）',
-  { timeout: 30_000 },
+  'pre-push 快路径：被推提交即 HEAD 且可证等价（issue #405）',
+  {
+    timeout: 30_000,
+  },
   () => {
     it('待推 ref 即 HEAD 且工作树可证等价：当前工作树直接执行完整门禁（无依赖安装）', () => {
       const scenario = preparePushScenario()
@@ -365,7 +373,13 @@ describe(
         scenario.git(['ls-remote', 'origin', 'refs/heads/main']).stdout.trim(),
       ).toBe('')
     })
+  },
+)
 
+describe(
+  'pre-push 慢路径分派：被推提交非当前工作树可证等价的状态（issue #405）',
+  { timeout: 30_000 },
+  () => {
     it('推送非检出分支：临时 worktree 检出被推提交执行门禁，分析对象即被推提交（探针自动化）', () => {
       const scenario = preparePushScenario()
       const push = scenario.git(['push', 'origin', 'side'])
@@ -407,7 +421,44 @@ describe(
       expect(scenario.installRuns()).toBe(1)
       expectRecordedCommit(scenario, scenario.headSha())
     })
+  },
+)
 
+describe(
+  'pre-push 慢路径健壮性：失败清理与钩子环境隔离（issue #405）',
+  {
+    timeout: 30_000,
+  },
+  () => {
+    it('慢路径门禁失败阻止推送并清理临时 worktree', () => {
+      const scenario = preparePushScenario({ qualityGateStatus: 'ERROR' })
+      const push = scenario.git(['push', 'origin', 'side'])
+
+      expect(push.status).not.toBe(0)
+      expect(scenario.scannerRuns()).toBe(1)
+      expect(scenario.installRuns()).toBe(1)
+      expect(scenario.worktreeCount()).toBe(1)
+      expect(
+        scenario.git(['ls-remote', 'origin', 'refs/heads/side']).stdout.trim(),
+      ).toBe('')
+    })
+
+    it('提交类钩子导出的 git 定位环境（GIT_INDEX_FILE 等相对 .git/index）不破坏慢路径', () => {
+      const scenario = preparePushScenario({ gitHookLocalization: true })
+      const push = scenario.git(['push', 'origin', 'side'])
+
+      expect(push.status).toBe(0)
+      expect(scenario.installRuns()).toBe(1)
+      expect(scenario.worktreeCount()).toBe(1)
+      expectRecordedCommit(scenario, scenario.sideSha())
+    })
+  },
+)
+
+describe(
+  'pre-push 多 ref 分派：按唯一提交去重，快慢路径可并存（issue #405）',
+  { timeout: 30_000 },
+  () => {
     it('一次推多个不同 ref：每个唯一提交各一次完整门禁，快慢路径并存', () => {
       const scenario = preparePushScenario()
       const push = scenario.git(['push', 'origin', 'main', 'side'])
@@ -433,20 +484,15 @@ describe(
       expect(scenario.installRuns()).toBe(1)
       expectRecordedCommit(scenario, scenario.sideSha())
     })
+  },
+)
 
-    it('慢路径门禁失败阻止推送并清理临时 worktree', () => {
-      const scenario = preparePushScenario({ qualityGateStatus: 'ERROR' })
-      const push = scenario.git(['push', 'origin', 'side'])
-
-      expect(push.status).not.toBe(0)
-      expect(scenario.scannerRuns()).toBe(1)
-      expect(scenario.installRuns()).toBe(1)
-      expect(scenario.worktreeCount()).toBe(1)
-      expect(
-        scenario.git(['ls-remote', 'origin', 'refs/heads/side']).stdout.trim(),
-      ).toBe('')
-    })
-
+describe(
+  'pre-push 删除 ref 与空输入：不导出代码即不分析（issue #405）',
+  {
+    timeout: 30_000,
+  },
+  () => {
     it('真实删除推送不产生门禁调用：删除不导出代码', () => {
       const scenario = preparePushScenario()
       expect(scenario.git(['push', 'origin', 'side']).status).toBe(0)
@@ -487,23 +533,21 @@ describe(
       expect(scenario.scannerRuns()).toBe(0)
       expect(scenario.installRuns()).toBe(0)
     })
+  },
+)
 
+describe(
+  'pre-push 解析失败 fail-closed：不猜测分析对象（issue #405）',
+  {
+    timeout: 30_000,
+  },
+  () => {
     it('畸形 ref 行 fail-closed：非零退出并说明原因', () => {
       const scenario = preparePushScenario({ withRemote: false })
       const result = scenario.runHookWithStdin('not-a-ref-line\n')
 
       expect(result.status).not.toBe(0)
       expect(`${result.stdout}${result.stderr}`).toContain('待推送')
-    })
-
-    it('提交类钩子导出的 git 定位环境（GIT_INDEX_FILE 等相对 .git/index）不破坏慢路径', () => {
-      const scenario = preparePushScenario({ gitHookLocalization: true })
-      const push = scenario.git(['push', 'origin', 'side'])
-
-      expect(push.status).toBe(0)
-      expect(scenario.installRuns()).toBe(1)
-      expect(scenario.worktreeCount()).toBe(1)
-      expectRecordedCommit(scenario, scenario.sideSha())
     })
 
     it('待推对象无法解析为提交（如树对象）fail-closed：非零退出', () => {
