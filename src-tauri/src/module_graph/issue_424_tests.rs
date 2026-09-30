@@ -173,6 +173,92 @@ fn prefixed_test_closures_preserve_following_production_cycles() {
 }
 
 #[test]
+fn control_flow_test_closures_preserve_production_cycles() {
+    // match 条件闭包的冒号/比较不得吞后续 use；闭包体不是 enclosing arms 的终点。
+    for item in [
+        "#[cfg(test)] match |x: u32| x < limit { _ => () };",
+        "#[cfg(test)] match move |x: u32| x < limit { _ => { use crate::b::B; } };",
+        "#[cfg(test)] match &mut |x: u32| x < limit { _ => { use crate::b::B; } };",
+        "#[cfg(test)] match |x: u32, y: u8| x < limit { _ => { use crate::b::B; } };",
+        "#[cfg(test)] match |x: u32| { use crate::b::B; x < limit } { _ => { use crate::b::B; } };",
+        "#[cfg(test)] match |x: u32| -> Result<u32, ()> { use crate::b::B; Ok(x) } { _ => { use crate::b::B; } };",
+        "#[cfg(test)] match match |x: u32| x < limit { f => f } { _ => { use crate::b::B; } };",
+        "#[cfg(test)] match |x: u32| if x < limit { use crate::b::B; true } else { use crate::b::B; false } { _ => { use crate::b::B; } };",
+        "#[cfg(test)] match |x: u32| match x { _ => { use crate::b::B; false } } { _ => { use crate::b::B; } };",
+        "#[cfg(test)] match |x: [u8; { use crate::b::B; 1 }]| x[0] < limit { _ => { use crate::b::B; } };",
+        "#[cfg(test)] return match |x: u32| x < limit { _ => { use crate::b::B; } };",
+        "#[cfg(test)] match || |x: Result<u8, u16>| { use crate::b::B; x } { _ => { use crate::b::B; } };",
+    ] {
+        let graph = edges(&[
+            ("lib.rs", "mod a; mod b; mod c;"),
+            ("a.rs", &format!("fn f() {{ {item} use crate::c::C; }}")),
+            ("b.rs", "pub struct B;"),
+            ("c.rs", "use crate::a::A;"),
+        ]);
+        assert_eq!(graph["a.rs"], BTreeSet::from(["c.rs".into()]), "{item}");
+        assert_eq!(cycles_of(&graph).len(), 1, "后续生产真环必须检出：{item}");
+    }
+}
+
+#[test]
+fn let_condition_test_closures_preserve_production_cycles() {
+    // let 初始化和条件里的双参数闭包共享参数边界，不能在泛型/参数逗号处退出。
+    for item in [
+        "#[cfg(test)] if let f = |x: u32| return { use crate::b::B; x < limit } { use crate::b::B; }",
+        "#[cfg(test)] if let f = |x: u32| !{ use crate::b::B; x < limit } { use crate::b::B; }",
+        "#[cfg(test)] if let f = |x: u32| return *&{ use crate::b::B; x < limit } { use crate::b::B; }",
+        "#[cfg(test)] if let f = |x: u32| x + { use crate::b::B; 1 } { use crate::b::B; }",
+        "#[cfg(test)] if let f = |x: u32| x == { use crate::b::B; 1 } { use crate::b::B; }",
+        "#[cfg(test)] if let f = |x: u32| x != { use crate::b::B; 1 } { use crate::b::B; }",
+        "#[cfg(test)] if let f = |x: u32| x <= { use crate::b::B; 1 } { use crate::b::B; }",
+        "#[cfg(test)] if let f = |x: u32| x >= { use crate::b::B; 1 } { use crate::b::B; }",
+        "#[cfg(test)] if let f = |x: u32| return if x < limit { use crate::b::B; true } else { use crate::b::B; false } { use crate::b::B; }",
+        "#[cfg(test)] let f = |x: u32, y: u8| { use crate::b::B; x < limit };",
+        "#[cfg(test)] let f = |x: u32| -> Result<u32, ()> { use crate::b::B; Ok(x) };",
+        "#[cfg(test)] if let f = |x: u32, y: u8| x < limit { use crate::b::B; }",
+        "#[cfg(test)] while let f = |x: u32, y: u8| x < limit { use crate::b::B; break; }",
+        "#[cfg(test)] if let f = |x: u32| { use crate::b::B; x < limit } { use crate::b::B; }",
+        "#[cfg(test)] while let f = |x: u32| -> Result<u32, ()> { use crate::b::B; Ok(x) } { use crate::b::B; break; }",
+        "#[cfg(test)] if let f = || |x: Result<u8, u16>| { use crate::b::B; x } { use crate::b::B; }",
+        "#[cfg(test)] if let f = |x: u32| if x < limit { use crate::b::B; true } else { use crate::b::B; false } { use crate::b::B; } else { use crate::b::B; }",
+        "#[cfg(test)] if let f = |x: u32| x < limit { use crate::b::B; } else if let g = |x: u32, y: u8| -> Result<u32, ()> { use crate::b::B; Ok(x) } { use crate::b::B; }",
+        "#[cfg(test)] if let Some(f) = Some(|x: u32, y: u8| { use crate::b::B; x < limit }) { use crate::b::B; }",
+    ] {
+        let graph = edges(&[
+            ("lib.rs", "mod a; mod b; mod c;"),
+            ("a.rs", &format!("fn f() {{ {item} use crate::c::C; }}")),
+            ("b.rs", "pub struct B;"),
+            ("c.rs", "use crate::a::A;"),
+        ]);
+        assert_eq!(graph["a.rs"], BTreeSet::from(["c.rs".into()]), "{item}");
+        assert_eq!(cycles_of(&graph).len(), 1, "后续生产真环必须检出：{item}");
+    }
+}
+
+#[test]
+fn control_flow_closures_resume_at_following_blocks() {
+    // match/if 的 arms/then 已结束后，独立生产块不是另一个测试正文。
+    for item in [
+        "#[cfg(test)] match |x: u32| match n {} { _ => () } { use crate::c::C; }",
+        "#[cfg(test)] match || {} { _ => () } { use crate::c::C; }",
+        "#[cfg(test)] match |x: u32| x < limit { _ => { use crate::b::B; } } { use crate::c::C; }",
+        "#[cfg(test)] match |x: u32| { use crate::b::B; x < limit } { _ => { use crate::b::B; } } { use crate::c::C; }",
+        "#[cfg(test)] if let f = |x: u32| x < limit { use crate::b::B; } { use crate::c::C; }",
+        "#[cfg(test)] if let f = |x: u32| { use crate::b::B; x < limit } { use crate::b::B; } { use crate::c::C; }",
+        "#[cfg(test)] if let Some(f) = Some(|x: u32| x < limit) { use crate::b::B; } { use crate::c::C; }",
+    ] {
+        let graph = edges(&[
+            ("lib.rs", "mod a; mod b; mod c;"),
+            ("a.rs", &format!("fn f() {{ {item} }}")),
+            ("b.rs", "pub struct B;"),
+            ("c.rs", "use crate::a::A;"),
+        ]);
+        assert_eq!(graph["a.rs"], BTreeSet::from(["c.rs".into()]), "{item}");
+        assert_eq!(cycles_of(&graph).len(), 1, "独立生产块的真环必须检出：{item}");
+    }
+}
+
+#[test]
 fn generic_test_fields_resume_at_the_next_field() {
     let graph = edges(&[
         ("lib.rs", "mod a; mod b; mod c;"),

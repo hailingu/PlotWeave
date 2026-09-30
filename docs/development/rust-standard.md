@@ -154,15 +154,19 @@ from unmeasured files. Metric and scope:
   Union declarations enter type context only when followed by a valid name
   and declaration header; ordinary uses of the weak keyword retain their
   context. Closure parameters after stable expression prefixes (return,
-  break/label, references, async/move) and consecutive leading closures are
-  skipped as complete groups,
-  followed by expression-body scanning or an explicit return-type header
-  ([PR #445 reviews](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5364166565)).
+  break/label, references, async/move, match and direct let initializers)
+  and consecutive leading closures are skipped as complete groups, followed
+  by expression-body scanning or an explicit return-type header. Match arms
+  and if-let/while-let bodies remain part of the gated statement; an
+  independent production block after it stays visible
+  ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5364837705)).
   Lexical aliases are visible throughout their enclosing scope:
-  expansion includes all bindings in the deepest visible scope, preserving
-  the target-platform union while excluding shadowed outer scopes and
-  test-only bindings. Original paths and child-module precedence remain
-  intact. [Issue #424](https://github.com/hailingu/PlotWeave/issues/424) is
+  expansion first selects all bindings in the deepest visible scope, then
+  appends suffixes only to bindings whose complete target is a known module.
+  This preserves the target-platform union while excluding shadowed outer
+  scopes, test-only bindings and non-module symbol tails. Original imports
+  still contribute their item-owner edges, and child-module precedence
+  remains intact. [Issue #424](https://github.com/hailingu/PlotWeave/issues/424) is
   covered by the matrix and graph-builder fixtures below.
 - This is the Rust counterpart of the frontend guard
   (`src/moduleGraph.test.ts`, issue #106); together they form the
@@ -182,7 +186,8 @@ The scanner owns test-item exclusion (`scan_tokens` / `skip_test_item` / `field_
 use-edge resolution owns alias visibility (`scan_use_stmt` /
 `use_targets_of`). [Issue #424](https://github.com/hailingu/PlotWeave/issues/424)
 repairs two previously registered boundaries. Fixtures in
-`src/module_graph/issue_424_tests.rs` exercise the complete graph builder.
+`src/module_graph/issue_424_tests.rs` and
+`src/module_graph/issue_424_alias_tests.rs` exercise the complete graph builder.
 
 | State / precondition | Action / ordering | Observable outcome | Invariant | Verification |
 | --- | --- | --- | --- | --- |
@@ -195,7 +200,10 @@ repairs two previously registered boundaries. Fixtures in
 | Test statement inside a field-type const block | Skip the local test expression, then collect production use in the same block | Following production edge and cycle retained | Nested expressions never inherit field type context | `test_field_const_expressions_preserve_production_uses` |
 | Test-only bare / move / async closure with typed, grouped or empty parameters and optional generic return type | Skip the complete closure header and body, then collect production use | Test-only target excluded; following production cycle detected | Closure parameter colons and expression operators cannot change production scanning boundaries | `bare_test_closures_preserve_following_production_cycles` ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5363378084)) |
 | Test-only typed closure after return, break/label, reference or async/move prefixes, including consecutive closure heads | Skip expression prefixes and consecutive closure parameters, then body and production use | Test target excluded; following production cycle detected | Expression prefixes cannot change closure exclusion or production scanning boundaries | `prefixed_test_closures_preserve_following_production_cycles` ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5364166565)) |
-| Same-scope platform aliases share a name | Reference before declarations; reverse their order | Both platform child edges and cycles detected | Every equally deep visible binding contributes to the target union | `platform_alias_union_is_independent_of_declaration_order` |
+| Test-only typed closure in let initializer or match / if-let / while-let scrutinee, including value-prefix/arithmetic/comparison operand blocks, explicit return bodies and empty nested match arms | Consume closure header, body and enclosing control-flow body before resuming | Test dependencies excluded; next production edge and true cycle retained | A closure body cannot end the enclosing gated control-flow statement | `control_flow_test_closures_preserve_production_cycles`, `let_condition_test_closures_preserve_production_cycles`, `control_flow_closures_resume_at_following_blocks` ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5364837705)) |
+| Same-scope function and module aliases share a spelling, in either declaration order | Select deepest lexical bindings, then append a qualified suffix only to exact module targets | Real item-owner and module-child edges remain; no invented function-owner child or false cycle | Non-module symbol tails never become module prefixes for qualified alias expansion | `namespace_disjoint_aliases_exclude_false_child_edges`, `namespace_disjoint_aliases_preserve_module_cycles`; `relative_namespace_aliases_resolve_exact_modules` |
+| Same-scope platform aliases share a name | Reference before declarations; reverse their order | Both platform child edges and cycles detected | Every equally deep visible module binding contributes to the target union | `platform_alias_union_is_independent_of_declaration_order` |
+| Inner non-module type alias shadows an outer module alias | Select deepest lexical bindings before checking exact module eligibility | Outer module child stays excluded; original item-owner edge remains | Eligibility filtering cannot restore an outer binding shadowed by a deeper scope | `inner_type_aliases_do_not_restore_outer_module_candidates` |
 | Nested platform aliases shadow outer aliases | Resolve inner reference before inner declarations | Both inner targets; no outer child targets | Only the deepest visible scope contributes alias expansion | `inner_alias_union_shadows_all_outer_candidates`; existing sibling-scope and child-precedence fixtures |
 | One platform alias implies test | Collect aliases then resolve production reference | Only production-capable target remains | Test-only bindings never contaminate the platform union | `test_only_platform_aliases_do_not_join_production_union` |
 
@@ -204,6 +212,11 @@ completion races are not applicable. Existing fail-closed malformed-use and
 missing-module fixtures retain failure coverage. Macro-body imports,
 non-ASCII identifiers and recursive alias-chain inference remain outside this
 text scanner's supported boundary; this repair adds no parser dependency.
+The existing deepest-lexical-scope rule does not implement full Rust
+namespace lookup across scopes: an inner function alias can still prevent
+expansion through an outer module alias. Exact-module qualification leaves
+that pre-existing resolution gap unchanged; expanding namespace modeling is
+separate work, not a risk-acceptance disposition in this repair.
 
 ## Before Writing Code
 

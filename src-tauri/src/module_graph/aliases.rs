@@ -1,7 +1,7 @@
 //! module_graph 守卫的词法别名解析层（issue #424；仅测试构建参与编译）：
 //! 原始路径始终保留，当前模块子模块优先；别名按最深可见作用域取全部
-//! 绑定，保留互斥平台声明的目标并集。绑定目标按既有模块前缀规则单层
-//! 展开；无法定位模块时不追加候选，链式别名推断仍属已登记边界。
+//! 绑定，保留互斥平台声明的目标并集。仅完整绑定目标命中模块时追加单层
+//! 展开候选，符号尾段不得截断为祖先模块；链式别名推断仍属已登记边界。
 
 use super::tree::ModuleTree;
 use super::{AliasBinding, FileScan, UseStmt};
@@ -47,7 +47,7 @@ fn visible_aliases<'a>(scan: &'a FileScan, u: &UseStmt, name: &str) -> Vec<&'a A
     visible
 }
 
-/// 绑定目标按 crate/self/super 或当前模块位置绝对化，再截到已知模块前缀。
+/// 绑定目标按 crate/self/super 或当前模块位置绝对化，仅完整模块路径可展开。
 fn module_of_binding(tree: &ModuleTree, bound: &AliasBinding, ctx: &[String]) -> Vec<String> {
     let first = bound.segs.first().map(String::as_str);
     let position = match first {
@@ -79,19 +79,11 @@ fn module_of_binding(tree: &ModuleTree, bound: &AliasBinding, ctx: &[String]) ->
     };
     let mut absolute = position;
     absolute.extend(bound.segs[skip..].iter().cloned());
-    module_prefix_of(tree, &absolute)
-}
-
-/// 绑定路径逐段回退到首个存在的模块路径（剔除 fn/struct 等 item 叶子）。
-fn module_prefix_of(tree: &ModuleTree, segs: &[String]) -> Vec<String> {
-    let mut prefix = segs.to_vec();
-    while !prefix.is_empty() {
-        if tree.file_of.contains_key(&prefix) {
-            return prefix;
-        }
-        prefix.pop();
+    if tree.file_of.contains_key(&absolute) {
+        absolute
+    } else {
+        Vec::new()
     }
-    prefix
 }
 
 /// 词法包含判定：a 是否为 b 的前缀（a 的块都是 b 的祖先块）。
