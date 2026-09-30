@@ -3,7 +3,7 @@
 **Applies to**: any Rust crate in this repository (`src-tauri/**`). Like the
 root `AGENTS.md`, this file is written in English for agent interoperability.
 
-**Last reviewed**: 2026-09-29
+**Last reviewed**: 2026-09-30
 
 ## Required Reading
 
@@ -143,6 +143,71 @@ from unmeasured files. Metric and scope:
   must be reported) so it proves its own detection. One registered blind
   spot: `macro_rules!` bodies are skipped wholesale, so a `use` that exists
   only inside a macro definition is not collected.
+- Test-only items are skipped with balanced generic/type and parameter
+  delimiters; nested commas, where-clause commas, array semicolons and generic const blocks do
+  not end the item early. Expression comparisons remain distinct from type
+  delimiters. Direct struct/union fields and enum variant fields start in type
+  context, including tuple fields without a colon; their list boundary also
+  preserves production scanning after a final test-only field or variant
+  without a trailing comma. Function-pointer and named function/method
+  parameters use the same direct-element type context and their own closing
+  parenthesis, including qualified/nested pointers and generic declarations.
+  Return types and production bodies remain visible after the list; nested
+  header/parameter/body const expressions keep local expression context
+  ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5365933962)).
+  Direct generic parameters in fn/struct/enum/union/trait/type/impl declarations
+  have their own paired closing angle. Type-parameter defaults retain type
+  context through `=`, while const defaults remain value expressions and
+  lifetimes have no defaults. Final parameters preserve the following fields,
+  bounds, return types and body. Unrelated type arguments, where/HRTB groups
+  and nested const statements do not acquire parameter context; unclosed
+  declaration lists register no artificial boundary
+  ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5366421069)).
+  Nested const expressions retain expression
+  context ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5363739640)).
+  Union declarations enter type context only when followed by a valid name
+  and declaration header; ordinary uses of the weak keyword retain their
+  context. Closure parameters after stable expression prefixes (return,
+  break/label, references, async/move, match and direct let initializers)
+  and consecutive leading closures are skipped as complete groups, followed
+  by expression-body scanning or an explicit return-type header. Match arms
+  and if-let/while-let bodies remain part of the gated statement; an
+  independent production block after it stays visible. Const-prefixed
+  groups are operands, including empty groups, and never consume a pending
+  control-flow body
+  ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5364837705),
+  [const operand repair](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5365530615)).
+  Bare/prefixed closure bodies and value initializers keep scanning const and
+  operator operands even without pending control flow. An initial ordinary
+  block updates its existing body count before following a binary operator;
+  this preserves later match/if-let/while-let bodies and production statements.
+  Direct control-flow statements end after their final body before an independent
+  unary statement; let/return/break value wrappers retain binary continuation.
+  Else-chain helpers preserve that original statement/value ownership.
+  Standalone const/block expressions without an attached postfix, explicit
+  return-type closure bodies without a postfix and type elements retain their
+  own ending rules
+  ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5366897147)).
+  Member/tuple/await and try postfixes remain attached to their block values.
+  Calls and indices continue value expressions, but preserve independent grouped
+  or array statements after a direct control-flow/block statement. Explicit-return
+  closure postfixes restore value state before an enclosing body's later comparison;
+  pending body counts remain intact. Gated blocks, including empty blocks, consume
+  their attribute at the opening brace through the existing test-item path.
+  Expression-position qualified paths reuse the balanced type-group parser only
+  for paired `<…>` groups followed by `::`; nested commas/const groups/function
+  arrows are contained without placing subsequent comparisons in type state
+  ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5367627498),
+  [statement ambiguity](https://doc.rust-lang.org/reference/statements.html#expression-statements),
+  [qualified paths](https://doc.rust-lang.org/reference/paths.html#qualified-paths)).
+  Lexical aliases are visible throughout their enclosing scope:
+  expansion first selects all bindings in the deepest visible scope, then
+  appends suffixes only to bindings whose complete target is a known module.
+  This preserves the target-platform union while excluding shadowed outer
+  scopes, test-only bindings and non-module symbol tails. Original imports
+  still contribute their item-owner edges, and child-module precedence
+  remains intact. [Issue #424](https://github.com/hailingu/PlotWeave/issues/424) is
+  covered by the matrix and graph-builder fixtures below.
 - This is the Rust counterpart of the frontend guard
   (`src/moduleGraph.test.ts`, issue #106); together they form the
   cross-language acyclic invariant, and `media_format_leaf.rs` (issue #146)
@@ -154,6 +219,72 @@ from unmeasured files. Metric and scope:
   leaf, `journal_entry_value` moved to its shape owner `journal_io`, and
   sibling modules import each other directly instead of through the parent's
   re-export hub.
+
+### Issue #424 State And Invariant Matrix
+
+The scanner owns test-item exclusion (`scan_tokens` / `skip_test_item` /
+`field_contexts` / `qualified_path_end` / `ClosureHeaders::step_after_body`);
+use-edge resolution owns alias visibility (`scan_use_stmt` /
+`use_targets_of`). [Issue #424](https://github.com/hailingu/PlotWeave/issues/424)
+repairs two previously registered boundaries. Fixtures in
+`src/module_graph/issue_424_tests.rs` and
+`src/module_graph/issue_424_alias_tests.rs` and
+`src/module_graph/issue_424_function_pointer_tests.rs` and
+`src/module_graph/issue_424_generic_parameter_tests.rs` and
+`src/module_graph/issue_424_operand_tests.rs` and
+`src/module_graph/issue_424_expression_tests.rs` exercise the complete graph builder
+and the owned-context parser boundary.
+
+| State / precondition | Action / ordering | Observable outcome | Invariant | Verification |
+| --- | --- | --- | --- | --- |
+| Test-only generic fn / impl and type declarations, including nested bounds and where clauses | Scan item, then production use | Only the production target remains; no false cycle | Test-only item bodies never contribute production edges | `generic_test_items_do_not_create_production_cycles`, `generic_test_where_clauses_exclude_body_dependencies` |
+| Test-only generic union declaration and gated union field | Balance union header and bound the field at its list close, then scan production use | Test dependencies excluded; following production edge and real cycle retained | Union test bodies never enter the production graph | `test_only_unions_do_not_create_production_cycles`, `union_test_fields_preserve_following_production_cycles` ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5364166565)) |
+| `union` used as a value, path or existing item name | Scan gated expression or item, then production use | Following production edge survives | The weak keyword enters declaration context only in union declaration syntax | `union_identifiers_preserve_production_scanning`, `union_bindings_do_not_create_field_contexts` |
+| Test-only generic field, type alias or grouped header | Skip nested type/parameter delimiters, resume at the next element/item | Following production edge survives | Skipping one test item does not consume adjacent production code | `generic_test_fields_resume_at_the_next_field`, `grouped_test_item_headers_are_skipped_in_full` |
+| Test-only struct / enum field or final enum variant, including tuple/generic/grouped types and visibility | Apply direct-element context, skip to the list boundary, then scan the next production field/item | Test dependencies excluded; production dependencies and real cycles retained | Field delimiters cannot leak test dependencies or consume adjacent production code | `tuple_test_fields_exclude_generic_dependencies`, `last_test_fields_preserve_following_production_cycles` ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5363739640)) |
+| Test-only anonymous or named function-pointer parameter, including generic/grouped types and qualified or nested pointers | Start direct parameter in type context, stop at the owned parameter-list close, then resume production scanning | Test dependency excluded; following parameter/return/item edge and real cycle retained | A gated pointer parameter cannot leak dependencies or consume adjacent production code | `test_function_pointer_parameters_do_not_create_production_cycles`, `last_test_pointer_parameters_preserve_production_types` ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5365933962)) |
+| Final gated named function/method parameter, with no trailing comma and an optional generic declaration head | Bound parameter at its own closing parenthesis, then scan the body | Only production body dependencies remain; real cycle retained | Every fn parameter-list entry point preserves the following production body | `last_test_function_parameters_preserve_production_bodies` |
+| Local test statement in fn parameter/return/header const expression or ordinary body | Skip the local expression and scan its next production use | Production edge and cycle retained | Parameter context never propagates into nested expression attributes | `parameter_const_attributes_preserve_expression_scanning` |
+| Function parameter attribute permits production (`any(test, unix)` or platform-only) | Apply existing cfg implication before using list context | Production dependency retained | Type-element registration never strengthens cfg test exclusion | `production_capable_parameter_attributes_preserve_edges` |
+| Attributed generic type parameter in fn/struct/enum/union/trait/type/impl declarations, with a bound or an allowed default, including nested types and type-level const blocks | Preserve type context through the default equals sign; stop at its own parameter comma or generic-list close | Test dependency excluded; no false cycle | Test-only generic defaults never enter the production dependency graph | `test_generic_type_defaults_do_not_create_production_cycles` ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5366421069)) |
+| Final gated generic parameter followed by fields, where bounds, return types or a function/trait body | Leave the owned closing angle for the main scanner and resume production scanning | Production edge and real cycle retained | Skipping one generic parameter never consumes adjacent production code | `last_test_generic_parameters_preserve_production_scanning` |
+| Gated const or lifetime generic parameter in the same declaration list | Keep const defaults in expression context; bound every parameter at the owned close | Test dependency excluded; following production edge retained | Type defaults and value defaults retain distinct scanning semantics | `test_const_and_lifetime_parameters_preserve_production_scanning` |
+| Local test statement inside a production generic bound/default const expression | Skip local expression and collect subsequent production use in the same block | Production edge and real cycle retained | Generic parameter context never propagates into nested expression attributes | `generic_default_const_attributes_preserve_expression_scanning` |
+| Missing closing angle, or angle groups belonging to alias RHS, impl type arguments, return types and where/HRTB bounds | Recognize only a directly owned, paired declaration list | No artificial element context is registered | Invalid or unrelated groups never create a new skip boundary | `generic_contexts_require_owned_closed_declarations`; rustc owns full malformed-source rejection |
+| Generic parameter attribute permits production | Apply existing cfg implication before generic context | Production dependency retained | Generic registration never strengthens cfg test exclusion | `production_capable_generic_parameters_preserve_edges` |
+| Test-only comparison statement / initializer, including typed closures and labelled loops | Scan `<` comparison, then production use | Test edges excluded, following edge retained | Expression operators do not hold type delimiters open | `test_comparisons_do_not_swallow_following_production_uses` |
+| Test statement inside a field-type const block | Skip the local test expression, then collect production use in the same block | Following production edge and cycle retained | Nested expressions never inherit field type context | `test_field_const_expressions_preserve_production_uses` |
+| Test-only bare / move / async closure with typed, grouped or empty parameters and optional generic return type | Skip the complete closure header and body, then collect production use | Test-only target excluded; following production cycle detected | Closure parameter colons and expression operators cannot change production scanning boundaries | `bare_test_closures_preserve_following_production_cycles` ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5363378084)) |
+| Test-only typed closure after return, break/label, reference or async/move prefixes, including consecutive closure heads | Skip expression prefixes and consecutive closure parameters, then body and production use | Test target excluded; following production cycle detected | Expression prefixes cannot change closure exclusion or production scanning boundaries | `prefixed_test_closures_preserve_following_production_cycles` ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5364166565)) |
+| Test-only typed closure in let initializer or match / if-let / while-let scrutinee, including value-prefix/arithmetic/comparison operand blocks, explicit return bodies and empty nested match arms | Consume closure header, body and enclosing control-flow body before resuming | Test dependencies excluded; next production edge and true cycle retained | A closure body cannot end the enclosing gated control-flow statement | `control_flow_test_closures_preserve_production_cycles`, `let_condition_test_closures_preserve_production_cycles`, `control_flow_closures_resume_at_following_blocks` ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5364837705)) |
+| Bare or prefixed test closure body contains multiple const/operator operand blocks | Keep expression operands in the gated statement until its statement/list boundary | Test dependencies excluded; no false cycle | Operand groups cannot end a gated expression while another operand remains | `bare_closure_operands_do_not_create_production_cycles` ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5366897147)) |
+| Expression closure starts with an ordinary block followed by a binary operator, including match/if-let/while-let nesting | Finish that block's existing body-count transition before continuing the binary expression | All gated operands excluded; enclosing body and following production edge retained | An operand continuation cannot leave a stale body count that consumes a later production block | `bare_closure_operands_do_not_create_production_cycles`, `closure_operand_statements_preserve_production_cycles` |
+| Multi-operand gated closure/value initializer precedes a production use or separate block | Consume gated operands, then resume at the production statement | Production dependency and true cycle retained | Operand continuation never consumes adjacent production statements | `closure_operand_statements_preserve_production_cycles` |
+| Test-only standalone const/block expression without a semicolon or attached postfix, or explicit-return closure/type element without a postfix | Apply binary-operand continuation only in an active initializer or pending control flow; keep type/list boundaries | Subsequent production block/field remains visible | Expression operand rules do not turn independent blocks or type elements into more test code | `operand_continuation_preserves_nonclosure_and_type_boundaries` |
+| Gated match/if-let/while-let statement ends before an independent unary expression; match also appears inside let/return/break values | Finish the entry control-flow statement, but continue binary operands inside a value wrapper | Independent production edge and true cycle retained; wrapped test operands excluded | Finishing a statement cannot transfer its gate to the next unary statement | `completed_control_flow_preserves_unary_production_statements` |
+| Gated closure or value block has member/call/index/try postfixes, including chains and explicit-return closures | Consume attached postfixes, groups and subsequent operands before the statement boundary; restore value state even while an enclosing body remains pending | Test imports excluded; no false cycle | A braced value cannot end its gate while a postfix remains | `test_postfix_expressions_exclude_operand_dependencies`, `postfix_expressions_preserve_following_production_cycles`, `explicit_return_postfixes_restore_enclosing_expression_context` ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5367627498)) |
+| Direct control-flow/standalone block statement precedes a grouped/array/unary/range statement, while member/try postfixes remain attached; a gated block may be empty | `scan_tokens` consumes block attributes at the opening brace; preserve statement ambiguity rules and original statement/value ownership through postfix scanning | Independent production edges and true cycles retained; attached test operands excluded | Call/index continuation of a value cannot reclassify independent production statements | `postfix_scanning_preserves_statement_and_item_boundaries` |
+| Gated initializer/discriminant/closure contains a qualified path with nested generic types, const groups or function arrows | Reuse balanced type-group parsing only for a paired `<…>` followed by `::` | Type-local test imports excluded; subsequent production edge and true cycle retained | Expression qualified paths cannot expose internal commas or change later comparison state | `test_qualified_initializers_exclude_type_dependencies`, `qualified_expressions_preserve_following_production_cycles` ([Rust qualified-path grammar](https://doc.rust-lang.org/reference/paths.html#qualified-paths)) |
+| Ordinary comparison or unmatched/non-qualified angle candidate appears in a gated expression | Reject qualified-path recognition and retain ordinary expression boundaries | Following production dependency and true cycle remain visible | Recognizing a qualified type group cannot turn comparisons into generic delimiters | `qualified_path_recognition_preserves_comparison_boundaries`, `qualified_path_candidates_require_a_closed_type_group_and_separator` |
+| Postfix or qualified-path attribute also permits production | Apply the existing cfg implication before expression skipping | Production operand/type imports and true cycles remain visible | Expression grammar never strengthens test-only cfg exclusion | `production_capable_expression_attributes_preserve_edges` |
+| Closure attribute permits production | Apply existing cfg implication before expression continuation | Every operand dependency remains; true cycle retained | Operand classification never strengthens cfg test exclusion | `production_capable_closure_operands_preserve_edges` |
+| Test-only match / if-let / while-let closure with empty or nonempty const-block body / operand | Skip the const operand, then enclosing body and following production code | Test dependencies excluded; following production edge and true cycle retained | A const operand group never consumes the enclosing control-flow body | `const_test_closure_bodies_do_not_create_production_cycles`, `const_test_closures_preserve_following_production_blocks` ([PR #445 review](https://github.com/hailingu/PlotWeave/pull/445#pullrequestreview-5365530615)) |
+| Same-scope function and module aliases share a spelling, in either declaration order | Select deepest lexical bindings, then append a qualified suffix only to exact module targets | Real item-owner and module-child edges remain; no invented function-owner child or false cycle | Non-module symbol tails never become module prefixes for qualified alias expansion | `namespace_disjoint_aliases_exclude_false_child_edges`, `namespace_disjoint_aliases_preserve_module_cycles`; `relative_namespace_aliases_resolve_exact_modules` |
+| Same-scope platform aliases share a name | Reference before declarations; reverse their order | Both platform child edges and cycles detected | Every equally deep visible module binding contributes to the target union | `platform_alias_union_is_independent_of_declaration_order` |
+| Inner non-module type alias shadows an outer module alias | Select deepest lexical bindings before checking exact module eligibility | Outer module child stays excluded; original item-owner edge remains | Eligibility filtering cannot restore an outer binding shadowed by a deeper scope | `inner_type_aliases_do_not_restore_outer_module_candidates` |
+| Nested platform aliases shadow outer aliases | Resolve inner reference before inner declarations | Both inner targets; no outer child targets | Only the deepest visible scope contributes alias expansion | `inner_alias_union_shadows_all_outer_candidates`; existing sibling-scope and child-precedence fixtures |
+| One platform alias implies test | Collect aliases then resolve production reference | Only production-capable target remains | Test-only bindings never contaminate the platform union | `test_only_platform_aliases_do_not_join_production_union` |
+
+The scan is synchronous and stateless per fixture; retries, persistence and
+completion races are not applicable. Existing fail-closed malformed-use and
+missing-module fixtures retain failure coverage. Macro-body imports,
+non-ASCII identifiers and recursive alias-chain inference remain outside this
+text scanner's supported boundary; this repair adds no parser dependency.
+The existing deepest-lexical-scope rule does not implement full Rust
+namespace lookup across scopes: an inner function alias can still prevent
+expansion through an outer module alias. Exact-module qualification leaves
+that pre-existing resolution gap unchanged; expanding namespace modeling is
+separate work, not a risk-acceptance disposition in this repair.
 
 ## Before Writing Code
 

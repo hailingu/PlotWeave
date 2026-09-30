@@ -10,7 +10,7 @@ fn cycles(files: &[(&str, &str)]) -> Vec<String> {
 }
 
 /// 夹具图 → 边集（解析完整性断言用）。
-fn edges(files: &[(&str, &str)]) -> BTreeMap<ModuleKey, BTreeSet<ModuleKey>> {
+pub(super) fn edges(files: &[(&str, &str)]) -> BTreeMap<ModuleKey, BTreeSet<ModuleKey>> {
     build_graph(&to_map(files))
 }
 
@@ -717,12 +717,13 @@ fn cfg_test_field_does_not_swallow_following_code() {
 #[test]
 fn leaf_bindings_without_as_resolve() {
     // 评审 5353260028：use crate::a::dep 不带 as 也把 dep 引入作用域，
-    // 后续 use dep::child::X 须解析到 a/child.rs——不登记裸绑定会漏边，
+    // 后续 use dep::child::X 须解析到 a/dep/child.rs——不登记裸绑定会漏边，
     // 反向依赖构成的环隐形
     let found = cycles(&[
         ("lib.rs", "mod host;\nmod a;\n"),
-        ("a/mod.rs", "mod child;\n"),
-        ("a/child.rs", "use crate::host::H;\n"),
+        ("a/mod.rs", "pub mod dep;\n"),
+        ("a/dep/mod.rs", "pub mod child;\n"),
+        ("a/dep/child.rs", "pub struct X; use crate::host;\n"),
         ("host.rs", "use crate::a::dep;\nuse dep::child::X;\n"),
     ]);
     assert_eq!(
