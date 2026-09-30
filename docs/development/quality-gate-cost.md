@@ -1035,8 +1035,12 @@ So the accurate statement of the invariant is:
 > the requested branch), `git subtree split` without `--branch` (a ref-less
 > split commit publishable by direct-OID push), the generated
 > split commits of `subtree split --rejoin` / `push` / `push --rejoin` and
-> the `git subtree add` merge commit, or the `--squash` variants' synthetic
-> commits at creation. For both `subtree push` forms, `pre-push` now gates
+> the `git subtree add` merge commit, the `--squash` variants' synthetic
+> commits, and the resulting branch merge/rejoin commits of
+> `git subtree merge --squash`, `git subtree pull --squash`,
+> `git subtree split --rejoin --squash`, and
+> `git subtree push --rejoin --squash`, at creation. For both `subtree push`
+> forms, `pre-push` now gates
 > the generated split tip at that commit's state (issue #405); the earlier
 > checked-out-tree scan is retained below as historical evidence. The
 > `--squash` variants of `subtree add`, `merge`, `pull`, `split --rejoin`,
@@ -1113,6 +1117,8 @@ analyzing the resulting commit (评审
 `split --rejoin`, and `push --rejoin` additionally create a ref-less
 synthetic squash commit that no local hook can gate (评审 4117804224,
 4117843430, 4117872586).
+These measured `--squash` paths also leave the resulting branch merge/rejoin
+commits ungated at creation, as recorded in the table.
 `git subtree push` does run `pre-push`, which since issue #405 analyzes
 the generated split tip at its own commit state. With `--rejoin` and without
 `--squash`, the generated split is also merged into the checked-out branch;
@@ -1549,7 +1555,7 @@ these becomes true:
   `filter-repo` / `git-annex`), or `subtree add/split/push`
   workflow (including `split --rejoin` and `push --rejoin`) path changes to
   route through `git commit` or gains a wired hook. (`merge`, `revert`,
-  `cherry-pick`, `rebase` replays, and the subtree merge/rejoin commits were
+  `cherry-pick`, `rebase` replays, and the non-squash subtree merge/rejoin commits were
   closed by the issue #404 wiring on 2026-09-28.) Either way,
   update
   [What The Gate Actually Enforces](#what-the-gate-actually-enforces) in the same
