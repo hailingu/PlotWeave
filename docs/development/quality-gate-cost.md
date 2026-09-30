@@ -267,11 +267,12 @@ The issue #405 fix, wired 2026-09-30, closes it:
   `git diff --quiet HEAD` (no unstaged or staged tracked differences),
   `git diff --cached --quiet HEAD` (index equality, so the record's
   `write-tree` key matches the pushed tree), and no untracked non-ignored
-  file in the trees the gate reads (`src/`, `src-tauri/`, `scripts/`,
-  `.githooks/`) or at the repository root (root-level config files such as
-  an untracked `vitest.config.ts` can rewrite gate conclusions, so they must
-  share the pushed tree's provenance; untracked content in other directories
-  cannot weaken the gate — Prettier may over-block on it, never under-block).
+  file anywhere in the repository. Vitest can discover tests outside the
+  maintained source trees, and their imports can read helpers or fixtures
+  with any extension; a directory or test-suffix allowlist cannot establish
+  input equality (PR #442 review 5361127076). Untracked documentation also
+  triggers isolation; ignored generated artifacts retain the existing fast
+  path behavior.
   The complete gate then runs exactly as before, at the same cost.
 - **Slow path — temporary worktree.** Every other commit — a non-checked-out
   ref, a dirty worktree, or an additional distinct commit in a multi-ref
@@ -302,6 +303,38 @@ The issue #405 fix, wired 2026-09-30, closes it:
   commit's (issue #355 semantics unchanged). All refs must pass before
   `materialize` runs; a failure blocks the push with earlier passing records
   left pending for the next successful push.
+- **Original object identity.** The hook exports `GIT_NO_REPLACE_OBJECTS=1`
+  before any Git command. Resolution (including annotated-tag peeling),
+  fast-path comparisons, temporary checkout, and descendant gate records
+  all read the original objects that push transfers. Local replacement refs
+  remain installed; a working tree already materialized from a replacement
+  fails the raw-object equality check and takes the slow path. This follows
+  [Git's replacement-object semantics](https://git-scm.com/docs/git-replace)
+  and closes the new trigger in
+  [PR #442 review 5361127076](https://github.com/hailingu/PlotWeave/pull/442#pullrequestreview-5361127076).
+
+**Review regression matrix (PR #442 review 5361127076).** `pre-push` owns
+object resolution and dispatch; the gate owns the recorded tree and HEAD.
+The tests run real Git, worktrees, hooks, and ledger writes; dependency,
+coverage, and remote Sonar commands use the existing controlled substitutes.
+
+| State and transition | Observable result and invariant | Verification in `scripts/pre-push-refs.test.ts` |
+| --- | --- | --- |
+| Non-HEAD pushed commit has a replacement → push | Scanner tree and ledger equal the original tree; remote receives the original SHA | Replacement-object non-checked-out test |
+| HEAD's replacement content is already checked out → push | Slow path analyzes the original tree; local replacement content is preserved | Replacement-content HEAD test |
+| Clean original HEAD has a replacement ref → push | Original tree remains eligible for the fast path | Clean HEAD replacement-ref test |
+| Untracked nested test, imported fixture, or document → push | Slow path excludes the local input; local file remains intact and worktree is cleaned | Parameterized untracked-input tests |
+| Slow-path gate fails → push | Push is blocked, remote ref is absent, and temporary worktree is removed | Existing slow-path failure test |
+
+Annotated tags use the same disabled-replacement resolution and retain the
+existing branch-plus-tag regression. Separate tag-, tree-, and blob-object
+replacement fixtures remain unverified: they share the process-wide Git
+switch rather than a distinct dispatch branch. Concurrency and retry
+ordering are unchanged; existing gate-history tests cover the shared lock.
+The standalone Vitest `list --filesOnly` probe also confirmed that the
+repository's actual configuration discovers `tests/boost.test.ts`; the
+isolation tests verify scanner inputs rather than a coverage-inflation
+percentage. No live Sonar scan is asserted by this regression suite.
 
 **Known boundaries.** The fast path's equality proof is bounded by what git
 can see: ignored files (e.g., a file hidden by `.git/info/exclude` inside
@@ -950,8 +983,8 @@ So the accurate statement of the invariant is:
 > ignored inputs the gate reads. At push time (issue #405), the fast path
 > takes the current working tree only when the pushed commit is `HEAD`, the
 > index and working tree have no tracked differences from it, and no
-> untracked non-ignored files sit in the trees the gate reads or the
-> repository root — this is checked, not assumed. Ignored inputs and
+> untracked non-ignored files exist anywhere in the repository — this is
+> checked, not assumed. Ignored inputs and
 > differences hidden by `skip-worktree` / `assume-unchanged` remain outside
 > what git can prove (fast-path residuals recorded in
 > [Push-Path Per-Ref Gating](#push-path-per-ref-gating-issue-405)); every
@@ -1111,8 +1144,8 @@ provably identical to the pushed commit, otherwise in a temporary worktree
 checked out at that commit (see
 [Push-Path Per-Ref Gating](#push-path-per-ref-gating-issue-405)). The
 equality proof covers tracked differences (staged and unstaged) and
-untracked non-ignored files in the trees the gate reads plus the repository
-root; ignored inputs and differences hidden by `skip-worktree` /
+untracked non-ignored files anywhere in the repository; ignored inputs and
+differences hidden by `skip-worktree` /
 `assume-unchanged` remain outside what git can prove and are recorded as
 fast-path residuals there — the slow path's pristine checkout closes both.
 The founding text below is retained as the pre-fix measurement.

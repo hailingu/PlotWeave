@@ -125,6 +125,11 @@ function commitScenarioTooling(sandbox: string): void {
       'gate-pending.jsonl',
       'gate-tree.marker',
       'gate-history.jsonl',
+      '/bin/',
+      '/coverage/',
+      '/rust-coverage/',
+      '/.scannerwork/',
+      '/origin.git/',
       '',
     ].join('\n'),
   )
@@ -159,6 +164,8 @@ printf '%s\n' 'TN:' 'SF:src-tauri/src/example.rs' 'DA:1,1' 'end_of_record' > "$P
   writeExecutable(
     resolve(bin, 'sonar-scanner'),
     String.raw`printf 'sonar-scanner\n' >> "$PLOTWEAVE_TEST_LOG"
+printf 'analyzed-tree %s\n' "$(git write-tree)" >> "$PLOTWEAVE_TEST_LOG"
+printf 'untracked-input %s\n' "$(git ls-files --others --exclude-standard tests fixtures docs)" >> "$PLOTWEAVE_TEST_LOG"
 mkdir -p "$(dirname "$PLOTWEAVE_SONAR_REPORT_PATH")"
 printf '%s\n' 'projectKey=PlotWeave' 'serverUrl=http://sonar.test' > "$PLOTWEAVE_SONAR_REPORT_PATH"`,
   )
@@ -215,6 +222,8 @@ function scenarioEnvironment(
   }
   delete env.SONAR_TOKEN
   delete env.PLOTWEAVE_SONAR_TOKEN
+  // 推送门禁内运行本套件时亦须能安装并观察替换对象，触发条件不继承禁用。
+  delete env.GIT_NO_REPLACE_OBJECTS
   return env
 }
 
@@ -341,10 +350,99 @@ function expectRecordedCommit(
   return match[0] as Record<string, unknown>
 }
 
+/** 对照真实扫描工作目录的索引树与台账，验证分析内容来自原始被推树。 */
+function expectOriginalTree(scenario: PushScenario, commit: string): void {
+  const originalTree = scenario
+    .git(['--no-replace-objects', 'rev-parse', `${commit}^{tree}`])
+    .stdout.trim()
+  expect(expectRecordedCommit(scenario, commit).tree).toBe(originalTree)
+  expect(readFileSync(resolve(scenario.root, 'calls.log'), 'utf8')).toContain(
+    `analyzed-tree ${originalTree}\n`,
+  )
+}
+
 // 用例逐个真实 git push / 直启真实钩子（多级 shell/git 替身），全量套件
 // 并发负载下常超 vitest 默认 5s——与 gate-tree-marker.test.ts 同款放宽
 // describe 级超时上限，不放宽断言。套件按矩阵维度分组：单个 describe
 // 回调保持在新函数 80 计行上限内（AGENTS.md 尺寸上限）。
+describe(
+  'pre-push 替换对象：分析原始被推提交（PR #442 评审 5361127076）',
+  { timeout: 30_000 },
+  () => {
+    it('非检出提交存在替换引用：扫描与台账保持原始树，远端收到原始 SHA', () => {
+      const scenario = preparePushScenario()
+      const original = scenario.sideSha()
+      expect(scenario.git(['replace', original, 'HEAD']).status).toBe(0)
+
+      const push = scenario.git(['push', 'origin', 'side'])
+
+      expect(push.status).toBe(0)
+      expectOriginalTree(scenario, original)
+      expect(scenario.worktreeCount()).toBe(1)
+      expect(
+        scenario.git(['ls-remote', 'origin', 'refs/heads/side']).stdout,
+      ).toContain(original)
+    })
+
+    it('HEAD 已检出替换内容：降级慢路径并保留本地替换内容', () => {
+      const scenario = preparePushScenario()
+      const original = scenario.headSha()
+      expect(scenario.git(['replace', original, 'side']).status).toBe(0)
+      expect(scenario.git(['read-tree', '--reset', '-u', 'HEAD']).status).toBe(
+        0,
+      )
+
+      const push = scenario.git(['push', 'origin', 'main'])
+
+      expect(push.status).toBe(0)
+      expect(scenario.installRuns()).toBe(1)
+      expectOriginalTree(scenario, original)
+      expect(readFileSync(resolve(scenario.root, 'g.txt'), 'utf8')).toBe(
+        'sidec\n',
+      )
+    })
+
+    it('干净 HEAD 仅有替换引用：仍在原始树执行快路径', () => {
+      const scenario = preparePushScenario()
+      const original = scenario.headSha()
+      expect(scenario.git(['replace', original, 'side']).status).toBe(0)
+
+      const push = scenario.git(['push', 'origin', 'main'])
+
+      expect(push.status).toBe(0)
+      expect(scenario.installRuns()).toBe(0)
+      expectOriginalTree(scenario, original)
+    })
+  },
+)
+
+describe(
+  'pre-push 未跟踪输入：任意目录均隔离（PR #442 评审 5361127076）',
+  { timeout: 30_000 },
+  () => {
+    it.each(['tests/boost.test.ts', 'fixtures/boost.json', 'docs/local.md'])(
+      '未跟踪 %s 不参与被推树的门禁且保留本地内容',
+      (path) => {
+        const scenario = preparePushScenario()
+        const file = resolve(scenario.root, path)
+        mkdirSync(resolve(file, '..'), { recursive: true })
+        writeFileSync(file, 'local input\n')
+
+        const push = scenario.git(['push', 'origin', 'main'])
+
+        expect(push.status).toBe(0)
+        expect(scenario.installRuns()).toBe(1)
+        expectOriginalTree(scenario, scenario.headSha())
+        expect(readFileSync(file, 'utf8')).toBe('local input\n')
+        expect(
+          readFileSync(resolve(scenario.root, 'calls.log'), 'utf8'),
+        ).not.toContain(path)
+        expect(scenario.worktreeCount()).toBe(1)
+      },
+    )
+  },
+)
+
 describe(
   'pre-push 快路径：被推提交即 HEAD 且可证等价（issue #405）',
   {

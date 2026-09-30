@@ -2,10 +2,9 @@
 # 推送前按 stdin 的待推送 ref 分派仓库统一的 SonarQube 零问题门禁
 #（issue #405）：推哪个 ref，就在该 ref 的提交状态上分析哪个 ref，而非
 # 恒扫当前工作树。快路径：待推提交即当前 HEAD、索引与工作树对 HEAD 均
-# 无内容差异、且门禁读取的树（src、src-tauri、scripts、.githooks）与
-# 仓库根层没有未忽略的未跟踪文件时，当前工作树就是被推状态，直接在
-# 当前工作树执行完整门禁（与原行为同成本）；其他目录的未跟踪内容不
-# 参与编译、测试与扫描，只会被 Prettier 扫到而过严，不构成降级条件。
+# 无内容差异、且整个仓库没有未忽略的未跟踪文件时，当前工作树就是
+# 被推状态，直接执行完整门禁（与原行为同成本）。测试及其导入的辅助
+# 文件、夹具可在任意目录参与覆盖率，未跟踪输入统一触发慢路径隔离。
 # 慢路径：其余情形——被推提交非当前工作树可证等价的状态（非检出分支、
 # 脏工作树、一次推送中与 HEAD 可证等价之外的其他提交）——在临时
 # worktree 检出被推提交、按该树锁文件安装依赖后，用当前门禁脚本
@@ -19,6 +18,11 @@
 # 合并不被打断）。
 
 set -eu
+
+# 禁用本地替换对象（PR #442 评审 5361127076）：push 传输原始对象，
+# 解析、等价检查、worktree 检出和子进程台账也必须读取原始被推对象。
+# 环境变量只作用于本钩子及其后代，不修改调用方环境或 refs/replace。
+export GIT_NO_REPLACE_OBJECTS=1
 
 hook_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 main_root=$(CDPATH= cd -- "$hook_directory/.." && pwd)
@@ -73,17 +77,17 @@ fail() {
 }
 
 # 快路径前提（issue #405）：工作树内容与 HEAD 一致（含索引，保证台账
-# tree 键与被推提交同源），且没有落在门禁读取范围（src / src-tauri /
-# scripts / .githooks）或仓库根层的未忽略未跟踪文件——根层配置文件
-#（如 vitest.config.ts）与被编译/被测代码同样会改写门禁结论，须与被推
-# 提交同源。已知残余（记录于 quality-gate-cost.md）：被忽略文件与
+# tree 键与被推提交同源），且整个仓库没有未忽略未跟踪文件：Vitest
+# 可发现任意目录内的测试，测试导入的辅助文件和夹具也可能改写覆盖率，
+# 不能按固定目录或测试后缀证明输入等价。已知残余（记录于
+# quality-gate-cost.md）：被忽略文件与
 # skip-worktree/assume-unchanged 隐藏的差异对 git 不可见，快路径无法
 # 证明其不存在；慢路径的全新检出不受影响。
 working_tree_represents_head() {
   git diff --quiet HEAD -- &&
-  git diff --cached --quiet HEAD -- &&
-  ! git ls-files --others --exclude-standard |
-    grep -Eq '^(src/|src-tauri/|scripts/|\.githooks/)|^[^/]+$'
+    git diff --cached --quiet HEAD -- || return 1
+  untracked_files=$(git ls-files --others --exclude-standard) || return 1
+  [ -z "$untracked_files" ]
 }
 
 # 解析待推本地 sha 为其指向的提交：注释标签 peel 到提交，非提交对象
