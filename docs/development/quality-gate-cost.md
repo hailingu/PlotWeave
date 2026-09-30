@@ -19,8 +19,10 @@ written to a pending file inside `.git` and materialized into the versioned
 file after a passing push — see
 [Gate Run Evidence Record](#gate-run-evidence-record-issue-355)); baseline
 refreshed 2026-09-30 on the pinned Node toolchain, measuring the complete
-gate as extended (see
-[Measured Baseline](#measured-baseline)).
+gate as extended — that refresh fired the first distribution
+reconsideration trigger, and the revisit it requires is recorded with the
+alternatives (see [Measured Baseline](#measured-baseline) and
+[Status Of The Alternatives](#status-of-the-alternatives)).
 
 ## Required Reading
 
@@ -103,12 +105,15 @@ The upside figures in this table are the founding baseline's (2026-09-27).
 The [2026-09-30 refresh](#refreshed-baseline-2026-09-30) changed the
 distribution materially: the Rust coverage phase is now the largest single
 phase (~48.3s, ~36% of a run), so option A's bounded upside grows to
-~48.3s per run — still short of the ~40% single-phase reconsideration
-trigger, and A's `cargo-llvm-cov` report-semantics risk is unchanged. The
-"no single hotspot" wording above describes the founding measurement and is
-retained as history; recording the refreshed numbers does not by itself
-reopen the decision. Reopening follows
-[Reconsideration Triggers](#reconsideration-triggers).
+~48.3s per run — still short of the ~40% single-phase mark at which option
+A would deserve a real design — and A's `cargo-llvm-cov`
+report-semantics risk is unchanged. The "no single hotspot" wording above
+describes the founding measurement and is retained as history. Losing the
+even split fires the first distribution
+[Reconsideration Trigger](#reconsideration-triggers); the revisit that
+trigger requires is this change itself — re-measured as a three-run median
+and re-assessed here — and the decline stands on the refreshed numbers
+(PR #441 评审 5360118900).
 
 ### What option B would actually mean
 
@@ -1211,7 +1216,12 @@ runs them.
 founding baseline's near-even four-way split no longer holds: the two
 coverage phases together are ~67% of a run, and the Rust coverage phase is
 the largest single phase at ~36% — approaching, but not passing, the ~40%
-single-phase reconsideration trigger. Between the two measurements the
+single-phase mark at which that phase becomes the optimization target.
+Losing the even split is itself a fired
+[Reconsideration Trigger](#reconsideration-triggers), and the revisit it
+required is recorded in
+[Status Of The Alternatives](#status-of-the-alternatives) (PR #441 评审
+5360118900). Between the two measurements the
 frontend coverage phase went 15.8s → 41.8s and the Rust coverage phase
 16.6s → 48.3s, while the static phase got slightly faster (14.4s → 12.8s).
 Frontend suite growth alone (2478 → 2536 tests, +2.3%) does not account for
@@ -1269,13 +1279,20 @@ context only.
 Revisit this decision — and re-measure before drawing conclusions — when any of
 these becomes true:
 
-- A phase's share stops being evenly split. If one phase grows past roughly 40%
-  of the total, that phase becomes the thing to optimize, and option A (or an
-  equivalent) deserves a real design. Status as of the 2026-09-30 refresh:
-  the even split is already gone — the Rust coverage phase is ~36% and the
-  two coverage phases are ~67% combined — but no single phase has passed the
-  ~40% mark, so the optimization clause has not fired. It is near; re-measure
-  before drawing any conclusion from a share crossing it.
+- A phase's share stops being evenly split. This bullet carries two
+  escalating levels (made explicit by PR #441 评审 5360118900): when the
+  split stops being even, re-measure and revisit this decision against the
+  fresh numbers, recording the outcome; when one phase additionally grows
+  past roughly 40% of the total, that phase becomes the thing to optimize,
+  and option A (or an equivalent) deserves a real design. Status as of the
+  2026-09-30 refresh: the even split is gone — the Rust coverage phase is
+  ~36% and the two coverage phases are ~67% combined — so the first level
+  has fired and its revisit was performed in the same change (three-run
+  median; outcome recorded in
+  [Status Of The Alternatives](#status-of-the-alternatives): the decline
+  stands). No single phase has passed the ~40% mark, so the option-A
+  design level has not fired. It is near; re-measure before drawing any
+  conclusion from a share crossing it.
 - The commit rate rises materially above the ~25/day this baseline assumes, or
   the gate is reported as a recurring source of blocked or abandoned work. The
   argument for accepting a fixed cost weakens with frequency. Because option B
