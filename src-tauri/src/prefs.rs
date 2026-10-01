@@ -18,6 +18,9 @@
 //!   数据目录的创建（读取与保存入口）经 `store::create_dir_all_durable`
 //!   先同步新目录条目的各级宿主（Unix），首启读取与首次保存创建的
 //!   条目均与内容同为持久。
+//! - Unix 凭据文件权限（issue #436）：保存与旧密文迁移的临时文件从创建
+//!   起为 0600，rename 后目标沿用；损坏备份同款私有创建，复用旧备份
+//!   通过已验证句柄收权后同步。非 Unix 保持既有平台权限行为。
 //! - API key 不入钥匙串：经 `seal` 模块 AES-256-GCM 加密（绑定本机），
 //!   密文随 provider 配置落 `settings.json`（`keyEnc` 字段）；
 //!   明文只在加密/请求的进程内存中出现，不落盘、不回显。
@@ -209,6 +212,7 @@ pub async fn save_prefs(app: AppHandle, prefs: serde_json::Value) -> Result<(), 
 /// 本次保存（fail-closed）。成功加载之后的编辑会话期间文件被外部破坏是
 /// 本保护的残余窗口（加载期由 issue #120 的 ready 门控承接）。
 const SETTINGS_BACKUP: crate::store::DamagedFileBackup = crate::store::DamagedFileBackup {
+    permissions: crate::store::FilePermissions::OwnerOnly,
     file_name: SETTINGS_FILE_NAME,
     backup_prefix: "settings-corrupt-",
     max_bytes: PREFS_MAX_BYTES,
@@ -241,7 +245,7 @@ fn save_prefs_in(dir: &Path, prefs: serde_json::Value) -> Result<(), String> {
     let _guard = settings_write_guard();
     crate::store::backup_damaged_file(&root, &SETTINGS_BACKUP)
         .map_err(|e| format!("备份损坏设置原件失败：{e}。{}", prefs_recovery_hint(dir)))?;
-    crate::store::atomic_write(&root, SETTINGS_FILE_NAME, &text)
+    crate::store::atomic_write_private(&root, SETTINGS_FILE_NAME, &text)
         .map_err(|e| format!("保存设置失败：{e}"))
 }
 

@@ -60,7 +60,7 @@ fn try_migrate(
     if out.len() > super::PREFS_MAX_BYTES {
         return Err("迁移后设置内容过大，跳过迁移".into());
     }
-    crate::store::atomic_write(root, super::SETTINGS_FILE_NAME, &out)
+    crate::store::atomic_write_private(root, super::SETTINGS_FILE_NAME, &out)
         .map_err(|e| format!("写回设置失败：{e}"))
 }
 

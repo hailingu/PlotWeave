@@ -79,6 +79,113 @@ impl Drop for PrefsBackupDir {
     }
 }
 
+/// #436：备份创建若未选私有权限，即使设置已私有，损坏字节仍被公开。
+#[cfg(unix)]
+#[test]
+fn private_settings_backup_preserves_bytes_with_owner_only_mode() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = PrefsBackupDir::new();
+    let damaged = b"{ broken keyEnc";
+    fs::write(dir.settings_path(), damaged).unwrap();
+    save_prefs_in(&dir.0, json!({"defaultChat": "new"})).unwrap();
+    let backup = dir.only_backup_path();
+    assert_eq!(fs::read(&backup).unwrap(), damaged);
+    assert_eq!(
+        fs::metadata(&backup).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert_eq!(dir.read(), json!({"defaultChat": "new"}));
+}
+
+/// #436：备份临时文件从创建起私有，避免写完再收权留下暴露窗口。
+#[cfg(unix)]
+#[test]
+fn private_settings_backup_temp_is_owner_only_before_write() {
+    use crate::store::atomic_write_faults::{Injection, Stage};
+    use std::os::unix::fs::PermissionsExt;
+    let dir = PrefsBackupDir::new();
+    fs::write(dir.settings_path(), b"{ broken keyEnc").unwrap();
+    let inspect = dir.0.clone();
+    let injection = Injection::with_probe(Stage::Write, move || {
+        let paths: Vec<_> = fs::read_dir(&inspect)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.extension().is_some_and(|ext| ext == "tmp"))
+            .collect();
+        assert_eq!(paths.len(), 1);
+        assert_eq!(
+            fs::metadata(&paths[0]).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert!(fs::read(&paths[0]).unwrap().is_empty());
+    });
+    save_prefs_in(&dir.0, json!({"defaultChat": "new"})).unwrap();
+    assert!(injection.stages().contains(&Stage::Write));
+    assert_eq!(
+        fs::read(dir.only_backup_path()).unwrap(),
+        b"{ broken keyEnc"
+    );
+}
+
+/// #436：复用旧宽权限备份时必须收紧原 inode，保留取证字节与身份。
+#[cfg(unix)]
+#[test]
+fn private_settings_backup_reuse_tightens_existing_file() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let dir = PrefsBackupDir::new();
+    let damaged = b"{ broken keyEnc";
+    fs::write(dir.settings_path(), damaged).unwrap();
+    let backup = dir.0.join(format!(
+        "settings-corrupt-{:x}.bak",
+        Sha256::digest(damaged)
+    ));
+    fs::write(&backup, damaged).unwrap();
+    fs::set_permissions(&backup, fs::Permissions::from_mode(0o644)).unwrap();
+    let before = fs::metadata(&backup).unwrap();
+    save_prefs_in(&dir.0, json!({"defaultChat": "new"})).unwrap();
+    let after = fs::metadata(&backup).unwrap();
+    assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
+    assert_eq!(after.permissions().mode() & 0o777, 0o600);
+    assert_eq!(fs::read(&backup).unwrap(), damaged);
+    assert_eq!(dir.backups().len(), 1);
+    assert_eq!(dir.read(), json!({"defaultChat": "new"}));
+}
+
+/// #436：权限收紧失败须阻止覆盖；遗漏失败传播将丢失受保护原件。
+#[cfg(unix)]
+#[test]
+fn private_settings_backup_permission_failure_blocks_save_then_recovers() {
+    use crate::store::atomic_write_faults::{Injection, Stage};
+    use std::os::unix::fs::PermissionsExt;
+    let dir = PrefsBackupDir::new();
+    let damaged = b"{ broken keyEnc";
+    fs::write(dir.settings_path(), damaged).unwrap();
+    let backup = dir.0.join(format!(
+        "settings-corrupt-{:x}.bak",
+        Sha256::digest(damaged)
+    ));
+    fs::write(&backup, damaged).unwrap();
+    fs::set_permissions(&backup, fs::Permissions::from_mode(0o644)).unwrap();
+    let injection = Injection::new(Some(Stage::SetPermissions), None);
+    let error = save_prefs_in(&dir.0, json!({"defaultChat": "new"})).unwrap_err();
+    assert!(error.contains("备份损坏设置原件失败"), "{error}");
+    assert_eq!(fs::read(dir.settings_path()).unwrap(), damaged);
+    assert_eq!(fs::read(&backup).unwrap(), damaged);
+    assert_eq!(
+        fs::metadata(&backup).unwrap().permissions().mode() & 0o777,
+        0o644
+    );
+    assert!(!injection.stages().contains(&Stage::Rename));
+    drop(injection);
+    save_prefs_in(&dir.0, json!({"defaultChat": "new"})).unwrap();
+    assert_eq!(dir.read(), json!({"defaultChat": "new"}));
+    assert_eq!(
+        fs::metadata(&backup).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert_eq!(dir.backups().len(), 1);
+}
+
 #[test]
 fn externally_corrupted_settings_backed_up_byte_exact_before_overwrite() {
     let dir = PrefsBackupDir::new();
