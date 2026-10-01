@@ -22,6 +22,7 @@ const read = (path: string): string =>
  * TSX/TS/SVG 显示色扫描（issue #362：守卫范围从 CSS 扩展到组件与种子
  * 源码）。以 TypeScript AST 抽取生产源码中显示色承载点的字符串字面量
  * ——JSX 显示色属性与显示色对象键（含 gradient，覆盖持久化种子数据）；
+ * 模块级 const 按使用点符号绑定展开（issue #438），定义不独立计数；
  * SVG 无 AST，按 fill/stroke/stop-color 属性文本扫描。注释与无关字符串
  * （issue 编号引用等）不进 AST 字面量位点，天然不可见。扫描键集不包含
  * 用户内容数组（如头像渐变色板），维持 #262 的既有范围区别。
@@ -80,23 +81,75 @@ function unwrapExpression(node: ts.Expression): ts.Expression {
 }
 
 /**
+ * 单文件符号绑定（issue #438）：复用 TypeScript 的词法作用域判定，不加载
+ * 依赖或标准库；只为当前源码的模块常量解析提供绑定，不执行源码。
+ */
+function sourceChecker(source: ts.SourceFile): ts.TypeChecker {
+  const options: ts.CompilerOptions = { noLib: true, noResolve: true }
+  const host = ts.createCompilerHost(options)
+  host.getSourceFile = (file) => (file === source.fileName ? source : undefined)
+  return ts.createProgram([source.fileName], options, host).getTypeChecker()
+}
+
+/**
+ * 只返回使用点实际绑定的模块级 const（issue #438）；参数、局部/可变
+ * 声明、导入和解构绑定不展开。对象简写须取值符号，不能取属性符号。
+ */
+function moduleConstantDeclaration(
+  node: ts.Identifier,
+  checker: ts.TypeChecker,
+): ts.VariableDeclaration | undefined {
+  const symbol = ts.isShorthandPropertyAssignment(node.parent)
+    ? checker.getShorthandAssignmentValueSymbol(node.parent)
+    : checker.getSymbolAtLocation(node)
+  const declaration = symbol?.valueDeclaration
+  if (!declaration || !ts.isVariableDeclaration(declaration)) return undefined
+  const list = declaration.parent
+  if (
+    !ts.isIdentifier(declaration.name) ||
+    !ts.isVariableDeclarationList(list) ||
+    (list.flags & ts.NodeFlags.Const) === 0 ||
+    !ts.isVariableStatement(list.parent) ||
+    !ts.isSourceFile(list.parent.parent)
+  ) {
+    return undefined
+  }
+  return declaration
+}
+
+/**
  * 静态字符串值递归抽取（评审 4113886895）：字符串/无替换模板字面量、
  * JSX 表达式容器（评审 4113927266）、包装表达式（as const/尖括号断言/
  * 括号/非空断言/satisfies）解包、`??`/`||`/`&&` 两侧与三元分支的静态
  * 字面都进入登记口径——等价静态入口不得因节点形态绕过（尖括号断言仅
- * .ts 合法，评审 4114274468）；动态表达式不产生静态文本。包装判定与
- * 赋值目标解包共用 isWrapperExpression/unwrapExpression（issue #396）。
+ * .ts 合法，评审 4114274468）；模块级 const 按实际绑定递归展开，路径内
+ * 声明集合防环且不影响相邻分支/消费点（issue #438）。动态表达式不产生
+ * 静态文本。包装判定与赋值目标解包共用
+ * isWrapperExpression/unwrapExpression（issue #396）。
  */
-function staticTextsOf(node: ts.Expression | undefined): string[] {
+function staticTextsOf(
+  node: ts.Expression | undefined,
+  checker: ts.TypeChecker,
+  seen: ReadonlySet<ts.VariableDeclaration> = new Set(),
+): string[] {
   if (node === undefined) return []
   if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
     return [node.text]
   }
   if (ts.isJsxExpression(node)) {
-    return staticTextsOf(node.expression)
+    return staticTextsOf(node.expression, checker, seen)
   }
   if (isWrapperExpression(node)) {
-    return staticTextsOf(node.expression)
+    return staticTextsOf(node.expression, checker, seen)
+  }
+  if (ts.isIdentifier(node)) {
+    const declaration = moduleConstantDeclaration(node, checker)
+    if (!declaration || seen.has(declaration)) return []
+    return staticTextsOf(
+      declaration.initializer,
+      checker,
+      new Set([...seen, declaration]),
+    )
   }
   if (
     ts.isBinaryExpression(node) &&
@@ -104,17 +157,26 @@ function staticTextsOf(node: ts.Expression | undefined): string[] {
       node.operatorToken.kind === ts.SyntaxKind.BarBarToken ||
       node.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken)
   ) {
-    return [...staticTextsOf(node.left), ...staticTextsOf(node.right)]
+    return [
+      ...staticTextsOf(node.left, checker, seen),
+      ...staticTextsOf(node.right, checker, seen),
+    ]
   }
   if (ts.isConditionalExpression(node)) {
-    return [...staticTextsOf(node.whenTrue), ...staticTextsOf(node.whenFalse)]
+    return [
+      ...staticTextsOf(node.whenTrue, checker, seen),
+      ...staticTextsOf(node.whenFalse, checker, seen),
+    ]
   }
   return []
 }
 
 /** 静态属性名候选：标识符/字符串名/数字名直取；计算属性名递归抽取
  * 静态文本（`{ ['color']: … }`，评审 4113886895）。 */
-function staticPropertyNameTexts(name: ts.PropertyName): string[] {
+function staticPropertyNameTexts(
+  name: ts.PropertyName,
+  checker: ts.TypeChecker,
+): string[] {
   if (
     ts.isIdentifier(name) ||
     ts.isStringLiteral(name) ||
@@ -122,7 +184,9 @@ function staticPropertyNameTexts(name: ts.PropertyName): string[] {
   ) {
     return [name.text]
   }
-  if (ts.isComputedPropertyName(name)) return staticTextsOf(name.expression)
+  if (ts.isComputedPropertyName(name)) {
+    return staticTextsOf(name.expression, checker)
+  }
   return []
 }
 
@@ -162,10 +226,18 @@ function discoverTsSvgSources(): { path: string; content: string }[] {
 function objectLiteralOccurrences(
   file: string,
   obj: ts.ObjectLiteralExpression,
+  checker: ts.TypeChecker,
 ): JsxColorOccurrence[] {
-  const pairs = obj.properties.filter(ts.isPropertyAssignment).flatMap((p) => {
-    const texts = staticTextsOf(p.initializer)
-    return staticPropertyNameTexts(p.name).map((name) => ({ name, texts }))
+  const pairs = obj.properties.flatMap((p) => {
+    if (ts.isShorthandPropertyAssignment(p)) {
+      return [{ name: p.name.text, texts: staticTextsOf(p.name, checker) }]
+    }
+    if (!ts.isPropertyAssignment(p)) return []
+    const texts = staticTextsOf(p.initializer, checker)
+    return staticPropertyNameTexts(p.name, checker).map((name) => ({
+      name,
+      texts,
+    }))
   })
   const directRefs = new Set(
     pairs
@@ -227,6 +299,7 @@ const WRITING_ASSIGNMENT_OPS = new Set([
 function assignmentOccurrences(
   file: string,
   node: ts.BinaryExpression,
+  checker: ts.TypeChecker,
 ): JsxColorOccurrence[] {
   if (!WRITING_ASSIGNMENT_OPS.has(node.operatorToken.kind)) return []
   // 左值先解包（issue #396）：括号/断言包装改变节点形态，解包后与直
@@ -237,7 +310,7 @@ function assignmentOccurrences(
   let names: string[]
   if (ts.isPropertyAccessExpression(target)) names = [target.name.text]
   else if (ts.isElementAccessExpression(target)) {
-    names = staticTextsOf(target.argumentExpression)
+    names = staticTextsOf(target.argumentExpression, checker)
   } else {
     names = []
   }
@@ -245,7 +318,7 @@ function assignmentOccurrences(
   for (const name of names) {
     const key = displayColorKeyOf(name)
     if (key === null) continue
-    for (const value of staticTextsOf(node.right)) {
+    for (const value of staticTextsOf(node.right, checker)) {
       if (hasColorLiteral(value)) {
         out.push({ file, context: key, value })
       }
@@ -267,10 +340,11 @@ function colorOccurrencesOfSource(
     true,
     file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
   )
+  const checker = sourceChecker(sf)
   const visit = (node: ts.Node): void => {
     if (ts.isJsxAttribute(node)) {
       const key = displayColorKeyOf(node.name.getText(sf))
-      for (const value of staticTextsOf(node.initializer)) {
+      for (const value of staticTextsOf(node.initializer, checker)) {
         // key 非显示键只抑制发射，不抑制下探——style 对象的内层属性
         // （backgroundImage 等）仍须被访问
         if (key !== null && hasColorLiteral(value)) {
@@ -279,10 +353,10 @@ function colorOccurrencesOfSource(
       }
     } else if (ts.isObjectLiteralExpression(node)) {
       // 对象属性统一在对象层级处理（含内联自定义属性别名分析）
-      out.push(...objectLiteralOccurrences(file, node))
+      out.push(...objectLiteralOccurrences(file, node, checker))
     } else if (ts.isBinaryExpression(node)) {
       // 赋值类二元表达式（普通等号与逻辑赋值）由助手按运算符过滤
-      out.push(...assignmentOccurrences(file, node))
+      out.push(...assignmentOccurrences(file, node, checker))
     }
     ts.forEachChild(node, visit)
   }
@@ -565,6 +639,128 @@ describe('TSX/SVG 内联别名与多跳追踪（issue #362，评审补强）', (
     expect(cyclic).toEqual([
       { file: 'fixture.tsx', context: '--a', value: '#fff' },
     ])
+  })
+})
+
+describe('模块常量显示色消费入口（issue #438）', () => {
+  it.each([
+    ['对象值', 'export const view = { color: ACCENT };', 'color'],
+    ['JSX 属性', 'export const view = <circle fill={ACCENT} />;', 'fill'],
+    ['增量赋值', 'style.backgroundColor = ACCENT;', 'background-color'],
+    ['逻辑赋值', 'style.color ??= ACCENT;', 'color'],
+  ])('%s 与直接显示色字面量同样被捕获', (_name, usage, context) => {
+    expect(
+      colorOccurrencesOfSource(
+        'fixture.tsx',
+        "const ACCENT = '#ff0000';\n" + usage,
+      ),
+    ).toEqual([{ file: 'fixture.tsx', context, value: '#ff0000' }])
+  })
+
+  it('对象简写使用模块常量也构成一个显示色消费点', () => {
+    expect(
+      colorOccurrencesOfSource(
+        'fixture.ts',
+        "const color = '#ff0000'; export const style = { color };",
+      ),
+    ).toEqual([{ file: 'fixture.ts', context: 'color', value: '#ff0000' }])
+  })
+})
+
+describe('模块常量静态候选与别名（issue #438）', () => {
+  it('包装、分支和多跳常量在每个消费点独立计数', () => {
+    expect(
+      colorOccurrencesOfSource(
+        'fixture.tsx',
+        "const BASE = '#fff' as const;\n" +
+          "const TONE = flag ? (BASE satisfies string) : '#000';\n" +
+          'const ALIAS = TONE;\n' +
+          'export const a = <circle fill={ALIAS} />;\n' +
+          'export const b = { color: missing ?? ALIAS };',
+      ),
+    ).toEqual([
+      { file: 'fixture.tsx', context: 'fill', value: '#fff' },
+      { file: 'fixture.tsx', context: 'fill', value: '#000' },
+      { file: 'fixture.tsx', context: 'color', value: '#fff' },
+      { file: 'fixture.tsx', context: 'color', value: '#000' },
+    ])
+  })
+
+  it('合法令牌常量不误报，但可达内联自定义属性常量仍被捕获', () => {
+    expect(
+      colorOccurrencesOfSource(
+        'fixture.tsx',
+        "const TOKEN = 'var(--label-primary)';\n" +
+          "const TONE = '#fff'; const REF = 'var(--tone)';\n" +
+          'export const a = <circle fill={TOKEN} />;\n' +
+          "export const b = { '--tone': TONE, '--alias': REF, color: 'var(--alias)' };\n" +
+          "export const c = { '--tone': TONE };\n" +
+          "const UNUSED = '#f00';",
+      ),
+    ).toEqual([{ file: 'fixture.tsx', context: '--tone', value: '#fff' }])
+  })
+
+  it('循环常量链停止展开且保留可解析的回退分支', () => {
+    expect(
+      colorOccurrencesOfSource(
+        'fixture.ts',
+        "const A = B; const B = A || '#fff';\n" +
+          'export const a = { color: A };\n' +
+          "const C = D; const D = C; export const b = { fill: C ?? '#000' };",
+      ),
+    ).toEqual([
+      { file: 'fixture.ts', context: 'color', value: '#fff' },
+      { file: 'fixture.ts', context: 'fill', value: '#000' },
+    ])
+  })
+
+  it('导出、多声明、无替换模板与常量计算键复用同一静态口径', () => {
+    expect(
+      colorOccurrencesOfSource(
+        'fixture.ts',
+        'export const TONE = `#fff`, KEY = "color";\n' +
+          'export const a = { [KEY]: TONE };\n' +
+          'style[KEY] = TONE;\n' +
+          "export const b = { fill: LATER }; const LATER = '#000';",
+      ),
+    ).toEqual([
+      { file: 'fixture.ts', context: 'color', value: '#fff' },
+      { file: 'fixture.ts', context: 'color', value: '#fff' },
+      { file: 'fixture.ts', context: 'fill', value: '#000' },
+    ])
+  })
+})
+
+describe('模块常量的词法绑定边界（issue #438）', () => {
+  it.each([
+    ['参数', 'function f(TONE: string) { return { color: TONE }; }'],
+    ['块级声明', "{ const TONE = 'var(--local)'; const a = { color: TONE }; }"],
+    ['解构绑定', 'function f({ TONE }: Props) { return { color: TONE }; }'],
+    ['后置局部声明', 'function f() { const a = { color: TONE }; let TONE; }'],
+  ])('%s 不得错误消费同名模块常量', (_name, usage) => {
+    expect(
+      colorOccurrencesOfSource('fixture.ts', "const TONE = '#fff';\n" + usage),
+    ).toEqual([])
+  })
+
+  it('对象简写按实际值绑定解析，不消费同名模块常量', () => {
+    expect(
+      colorOccurrencesOfSource(
+        'fixture.ts',
+        "const color = '#fff'; function f(color: string) { return { color }; }",
+      ),
+    ).toEqual([])
+  })
+
+  it('未绑定、可变及局部常量维持既有静态模型边界', () => {
+    expect(
+      colorOccurrencesOfSource(
+        'fixture.ts',
+        "let MUTABLE = '#fff'; var LEGACY = '#000';\n" +
+          'export const a = { color: MUTABLE, fill: LEGACY, stroke: UNKNOWN };\n' +
+          "function f() { const LOCAL = '#f00'; return { color: LOCAL }; }",
+      ),
+    ).toEqual([])
   })
 })
 
