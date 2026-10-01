@@ -10,6 +10,9 @@ pub(crate) enum Stage {
     Create,
     Write,
     FileSync,
+    /// Unix 私有备份复用时，已打开文件句柄上的权限收紧。
+    #[cfg(unix)]
+    SetPermissions,
     Rename,
     #[cfg(unix)]
     DirectorySync,

@@ -488,6 +488,7 @@ fn backup_damaged_index(library: &CapDir) -> Result<(), LibraryError> {
 /// 进制>.bak`（清扫白名单 `is_corrupt_backup_temp_target` 同步覆盖其
 /// 原子写临时文件）。
 const INDEX_BACKUP: crate::store::DamagedFileBackup = crate::store::DamagedFileBackup {
+    permissions: crate::store::FilePermissions::Default,
     file_name: INDEX_FILE_NAME,
     backup_prefix: "library-corrupt-",
     max_bytes: INDEX_MAX_BYTES,

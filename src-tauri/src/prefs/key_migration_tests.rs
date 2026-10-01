@@ -53,6 +53,19 @@ fn legacy_envelope_is_resealed_in_place_as_pw2() {
     assert_eq!(crate::seal::open_for("openai", enc).unwrap(), secret);
     assert_eq!(v["defaultChat"], "openai:gpt-4o", "无关字段不得改动");
     assert_eq!(v["providers"][0]["label"], "OpenAI 兼容");
+    // #436：迁移是设置的另一写入入口，同样不能重新产生宽权限文件。
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(dir.join("settings.json"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
     // 幂等：v2 密文的读取不触发迁移，密文保持稳定（同一 envelope 原样）
     let after = fs::read_to_string(dir.join("settings.json")).unwrap();
     let outcome2 = open_key_from_text(&root, &after, "openai");

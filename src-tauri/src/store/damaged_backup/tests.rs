@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 /// 测试规格：小上限（64 字节）让超限用例无需巨型夹具。
 const TEST_BACKUP: DamagedFileBackup = DamagedFileBackup {
+    permissions: FilePermissions::Default,
     file_name: "control.json",
     backup_prefix: "control-corrupt-",
     max_bytes: 64,

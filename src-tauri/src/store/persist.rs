@@ -8,6 +8,7 @@ use cap_std::{ambient_authority, fs::Dir as CapDir};
 use tauri::{AppHandle, Manager};
 
 use crate::store::error::StoreError;
+use crate::store::file_permissions::FilePermissions;
 use crate::store::types::{new_id, validate_id};
 
 #[cfg(test)]
@@ -229,6 +230,26 @@ pub(crate) fn read_verified_file(root: &CapDir, name: &str) -> Result<String, St
 /// file_name 须为单段文件名（不含路径分量）：归类、创建与
 /// rename 之外的越界形态在此拒绝，不得相对句柄逃出 projects/。
 pub(crate) fn atomic_write(root: &CapDir, file_name: &str, text: &str) -> Result<(), StoreError> {
+    atomic_write_with_permissions(root, file_name, text, FilePermissions::Default)
+}
+
+/// 凭据控制文件原子写：Unix 临时 inode 从创建起为 0600，rename 后目标
+/// 沿用该权限；与普通控制文件共用排他创建、目标复核和持久性屏障。
+pub(crate) fn atomic_write_private(
+    root: &CapDir,
+    file_name: &str,
+    text: &str,
+) -> Result<(), StoreError> {
+    atomic_write_with_permissions(root, file_name, text, FilePermissions::OwnerOnly)
+}
+
+/// 同一原子写协议的权限参数化内核；域入口负责选择创建权限，不改变 I/O 顺序。
+fn atomic_write_with_permissions(
+    root: &CapDir,
+    file_name: &str,
+    text: &str,
+    permissions: FilePermissions,
+) -> Result<(), StoreError> {
     use std::io::Write;
     if std::path::Path::new(file_name).components().count() != 1 {
         return Err(StoreError::refused(format!(
@@ -256,10 +277,7 @@ pub(crate) fn atomic_write(root: &CapDir, file_name: &str, text: &str) -> Result
     // 排他创建失败直接返回；只有取得临时文件所有权后才进入失败清理区。
     let file = atomic_io!(
         Create,
-        root.open_with(
-            &tmp_name,
-            cap_std::fs::OpenOptions::new().write(true).create_new(true),
-        )
+        root.open_with(&tmp_name, &permissions.new_file_options())
     )
     .map_err(|e| StoreError::io("创建临时文件失败", e))?;
     let result = (|| -> Result<(), StoreError> {

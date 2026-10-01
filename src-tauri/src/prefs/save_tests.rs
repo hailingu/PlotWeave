@@ -35,6 +35,68 @@ impl Drop for PrefsDir {
     }
 }
 
+/// #436：移除创建权限策略后，首次保存会重新产生组／其他用户可读的文件。
+#[cfg(unix)]
+#[test]
+fn private_settings_save_creates_owner_only_file() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = PrefsDir::new();
+    let prefs = json!({"providers": [{"id": "example", "keyEnc": "test-envelope"}]});
+    save_prefs_in(&dir.0, prefs.clone()).unwrap();
+    assert_eq!(dir.read(), prefs);
+    assert_eq!(
+        fs::metadata(dir.0.join(SETTINGS_FILE_NAME))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+    assert_eq!(dir.entries(), [SETTINGS_FILE_NAME]);
+}
+
+/// #436：替换旧的宽权限文件须从私有临时 inode 落位，不继承旧 mode。
+#[cfg(unix)]
+#[test]
+fn private_settings_save_replaces_world_readable_file() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = PrefsDir::new();
+    let path = dir.0.join(SETTINGS_FILE_NAME);
+    fs::write(&path, b"{}").unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+    save_prefs_in(&dir.0, json!({"defaultChat": "new"})).unwrap();
+    assert_eq!(dir.read(), json!({"defaultChat": "new"}));
+    assert_eq!(
+        fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+}
+
+/// #436：仅在 rename 后 chmod 会留下可读临时文件，本探针必须捕获该窗口。
+#[cfg(unix)]
+#[test]
+fn private_settings_temp_is_owner_only_before_write() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = PrefsDir::new();
+    let inspect = dir.0.clone();
+    let injection = Injection::with_probe(Stage::Write, move || {
+        let paths: Vec<_> = fs::read_dir(&inspect)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        assert_eq!(paths.len(), 1);
+        assert_eq!(
+            fs::metadata(&paths[0]).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert!(fs::read(&paths[0]).unwrap().is_empty());
+    });
+    save_prefs_in(&dir.0, json!({"defaultChat": "new"})).unwrap();
+    assert!(injection.stages().contains(&Stage::Write));
+    assert_eq!(dir.read(), json!({"defaultChat": "new"}));
+    assert_eq!(dir.entries(), [SETTINGS_FILE_NAME]);
+}
+
 #[test]
 fn save_creates_then_replaces_complete_settings() {
     let dir = PrefsDir::new();

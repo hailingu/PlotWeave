@@ -23,7 +23,9 @@
 //!
 //! 调用方持有的目录操作锁负责进程内与清扫串行（`library/` 由库操作锁
 //! 覆盖，设置根由 `settings_write_guard` 覆盖）；跨进程并发写不在锁范围
-//! （§10.2 单写者模型记录边界）。备份临时文件遵循 `.{备份名}.{id}.tmp`
+//! （§10.2 单写者模型记录边界）。设置域的临时备份与最终备份在 Unix 从
+//! 创建起为 0600；复用旧备份先绑定身份并核对字节，再通过句柄收权后同步。
+//! 备份临时文件遵循 `.{备份名}.{id}.tmp`
 //! 命名；是否清扫该目录的遗留临时文件由各目录既有清扫策略决定（应用
 //! 数据根暂不清扫，见 docs/data-model/persistence.md §10.2 记录边界）。
 
@@ -33,11 +35,14 @@ use cap_std::fs::Dir as CapDir;
 use sha2::{Digest, Sha256};
 
 use crate::store::error::StoreError;
+use crate::store::file_permissions::FilePermissions;
 use crate::store::persist::atomic_io;
 use crate::store::types::new_id;
 
 /// 备份规格：由各控制文件域声明自己的名字、上限与诊断实体名。
 pub(crate) struct DamagedFileBackup {
+    /// 域权限策略：新建临时副本与复用既有备份采用同一私有性要求。
+    pub(crate) permissions: FilePermissions,
     /// 被覆盖保护的控制文件名（单段，不含路径分量）。
     pub(crate) file_name: &'static str,
     /// 备份名前缀，完整备份名为 `{前缀}{sha256 小写十六进制 64 字符}.bak`。
@@ -175,6 +180,7 @@ fn reuse_durable_backup(
             spec.backup_label
         )));
     }
+    tighten_backup_permissions(&file, spec)?;
     file.sync_all()
         .map_err(|e| StoreError::io(format!("同步{}备份失败", spec.backup_label), e))?;
     #[cfg(unix)]
@@ -182,6 +188,26 @@ fn reuse_durable_backup(
         .and_then(|d| d.into_std_file().sync_all())
         .map_err(|e| StoreError::io(format!("同步{}备份目录失败", spec.backup_label), e))?;
     Ok(true)
+}
+
+/// 只在普通文件身份与完整字节已核对后，通过打开句柄收紧凭据备份权限。
+/// 收权先于文件同步；失败经既有备份错误出口阻止原件覆盖。
+fn tighten_backup_permissions(
+    file: &cap_std::fs::File,
+    spec: &DamagedFileBackup,
+) -> Result<(), StoreError> {
+    #[cfg(unix)]
+    if spec.permissions == FilePermissions::OwnerOnly {
+        use cap_std::fs::PermissionsExt;
+        atomic_io!(
+            SetPermissions,
+            file.set_permissions(cap_std::fs::Permissions::from_mode(0o600))
+        )
+        .map_err(|e| StoreError::io(format!("收紧{}备份权限失败", spec.backup_label), e))?;
+    }
+    #[cfg(not(unix))]
+    let _ = (file, spec);
+    Ok(())
 }
 
 /// 新建耐久备份（目标必须不存在，绝不覆盖既有备份）：排他临时文件 +
@@ -229,10 +255,7 @@ fn write_backup_tmp_and_rename(
     use std::io::Write;
     let mut dst = atomic_io!(
         Create,
-        dir.open_with(
-            tmp_name,
-            cap_std::fs::OpenOptions::new().write(true).create_new(true),
-        )
+        dir.open_with(tmp_name, &spec.permissions.new_file_options())
     )
     .map_err(|e| StoreError::io(format!("创建{}备份临时文件失败", spec.backup_label), e))?;
     atomic_io!(Write, dst.write_all(bytes))

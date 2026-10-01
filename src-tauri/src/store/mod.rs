@@ -23,6 +23,7 @@ mod commands;
 mod copy;
 mod damaged_backup;
 pub(crate) mod error;
+mod file_permissions;
 mod list;
 mod persist;
 mod types;
@@ -37,6 +38,7 @@ pub use commands::{
 pub use copy::copy_project_assets;
 // 损坏控制文件覆盖前的耐久备份共用内核（#137 图库先例，#390 接入 prefs）
 pub(crate) use damaged_backup::{backup_damaged_file, DamagedFileBackup};
+pub(crate) use file_permissions::FilePermissions;
 pub use list::list_projects;
 // 展示边界转换（issue #144 store 分片）：store 内核返回类型化的
 // store::error::StoreError，跨域调用方与 Tauri 命令出口经 to_ipc_text
@@ -54,8 +56,8 @@ pub(crate) use persist::asset_identity;
 #[cfg(test)]
 pub(crate) use persist::faults as atomic_write_faults;
 pub(crate) use persist::{
-    asset_stat, atomic_write, create_dir_all_durable, open_dir_bound, projects_dir,
-    projects_op_lock, sweep_orphan_temp_files, sync_new_child_dir_host,
+    asset_stat, atomic_write, atomic_write_private, create_dir_all_durable, open_dir_bound,
+    projects_dir, projects_op_lock, sweep_orphan_temp_files, sync_new_child_dir_host,
 };
 pub(crate) use validate::{
     is_canonical_mime, is_valid_active_asset_rel_path, is_valid_asset_rel_path,
