@@ -13,11 +13,11 @@ written in English for agent interoperability.
 [issue #356](https://github.com/hailingu/PlotWeave/issues/356); extended
 2026-09-28 by the issue #404 commit-creation wiring (same complete gate,
 more commands routed through it — see
-[What The Gate Actually Enforces](#what-the-gate-actually-enforces)) and by
+[What The Gate Actually Enforces](quality-gate-enforcement.md#what-the-gate-actually-enforces)) and by
 the issue #355 evidence record (one summary line per fully passing run,
 written to a pending file inside `.git` and materialized into the versioned
 file after a passing push — see
-[Gate Run Evidence Record](#gate-run-evidence-record-issue-355)); baseline
+[Gate Run Evidence Record](quality-gate-evidence.md#gate-run-evidence-record-issue-355)); baseline
 refreshed 2026-09-30 on the pinned Node toolchain, measuring the complete
 gate as extended — that refresh fired the first distribution
 reconsideration trigger, and the revisit it requires is recorded with the
@@ -27,7 +27,7 @@ alternatives (see [Measured Baseline](#measured-baseline) and
 gate-strength change authorized by that issue: `pre-push` now reads the refs
 Git hands it on stdin and analyzes every pushed commit at its own state,
 with a measured slow-path cost recorded alongside the baseline (see
-[Push-Path Per-Ref Gating](#push-path-per-ref-gating-issue-405) and
+[Push-Path Per-Ref Gating](quality-gate-push.md#push-path-per-ref-gating-issue-405) and
 [Push-Path Slow-Path Cost](#push-path-slow-path-cost-2026-09-30-issue-405));
 extended 2026-10-01 by the
 [issue #429](https://github.com/hailingu/PlotWeave/issues/429) marker identity
@@ -35,7 +35,7 @@ fix, preventing reuse of aborted operations' residue by later Git processes;
 clarified 2026-10-01 for
 [issue #431](https://github.com/hailingu/PlotWeave/issues/431): the gate ledger
 preserves self-reported conclusions with partial coverage, without independent
-proof of execution (see [Gate Run Evidence Record](#gate-run-evidence-record-issue-355)).
+proof of execution (see [Gate Run Evidence Record](quality-gate-evidence.md#gate-run-evidence-record-issue-355)).
 
 ## Required Reading
 
@@ -44,6 +44,30 @@ proof of execution (see [Gate Run Evidence Record](#gate-run-evidence-record-iss
   gate; it never relaxes it.
 - [Software Engineering Standard](software-engineering-standard.md) — the
   repository-wide baseline for change design and documented exceptions.
+
+## 文档组织约定（issue #472）
+
+本记录采用[issue #472](https://github.com/hailingu/PlotWeave/issues/472)的选项 A：
+决策与证据分离。正文只维护决策、替代方案及门禁强度影响、实测成本基线、
+重新评估触发条件、复测方法和导航；状态矩阵、命令清单、诊断契约与历史探针
+按下表归属维护。此组织约定不改变任何门禁步骤、覆盖率要求或保留边界。
+
+| 内容 | 唯一维护位置 |
+| --- | --- |
+| 成本决策、两次基线、慢路径成本、触发条件及复测方法 | 本文对应既有章节 |
+| 标记归属与去重、测试隔离、共享锁恢复、测试注入边界 | [门禁生命周期](quality-gate-lifecycle.md) |
+| 逐 ref 分派、回归矩阵、残余边界、推送对象错配的历史证据 | [推送门禁](quality-gate-push.md) |
+| 台账字段、可信度边界、记录物化、可复现的查询方法 | [门禁运行证据](quality-gate-evidence.md) |
+| 完整命令覆盖清单、逐命令实测说明、未覆盖提交创建路径 | [门禁覆盖边界](quality-gate-enforcement.md) |
+
+新增 issue 应更新对应主题的既有章节；不得在决策正文按 issue 追加矩阵、
+逐命令探针或证据清单。成本决策、门禁强度说明、基线或重新评估结论发生变化时，
+才更新正文的对应章节，并链接支持证据。主题需要继续拆分时，须同步索引与
+跨文档引用，让每条事实保有一个维护位置，不能复制出第二份清单。
+
+正文中已迁出章节的原标题保留为兼容锚点，其内容只提供导航。
+新引用直接链接事实所属文档；迁出内容保留原有事实、日期、版本、测量限制及
+未验证项。本次仅整理文档，未重新测量成本或改变已有结论。
 
 ## Decision
 
@@ -69,127 +93,32 @@ Every gated command runs the same complete sequence:
    pending file inside `.git`, and the `pre-push` hook materializes pending
    lines into the versioned `docs/development/gate-history.jsonl` after its
    gate passes (see
-   [Gate Run Evidence Record](#gate-run-evidence-record-issue-355)). This step
+   [Gate Run Evidence Record](quality-gate-evidence.md#gate-run-evidence-record-issue-355)). This step
    observes and records; it checks nothing and adds no variant of the gate.
 
-Since the issue #404 wiring, the gated commands are `git commit` and
-`git push` as before, plus every other commit-creating porcelain that has a
-wireable pre-creation hook: non-fast-forward merges (`pre-merge-commit`), and
-`git revert` / `git cherry-pick` / rebase replays
-(`prepare-commit-msg`). Only `pre-commit` and `pre-merge-commit` record the
-just-gated index tree through `scripts/gate-tree-marker.sh` — its sole
-same-operation consumer is the `prepare-commit-msg` that follows them — and
-`prepare-commit-msg` skips a run only when that exact tree was gated within
-the same operation moments earlier: an ordinary `git commit` still pays
-exactly one gate run, and a merge pays exactly one (`pre-merge-commit` gates,
-`prepare-commit-msg` deduplicates). A fallback gate run in
-`prepare-commit-msg` (revert / cherry-pick / rebase replay / `--no-verify`)
-writes **no** marker: nothing downstream in that operation could consume it,
-so writing it would only enable reuse by a later operation (评审 4120239723).
-Commands with no wireable hook (see the table) remain
-ungated. The marker is **single-use** (评审 4120128545): a successful
-`check` consumes it, so a later operation — including a same-tree
-`--no-verify` commit — cannot reuse it. Since issue #429, the marker also
-records the calling Git process identity: both hooks pass their parent PID,
-and the helper obtains its start time with `LC_ALL=C ps -p <pid> -o lstart=`.
-Reuse requires an exact match of identity, index tree, and bounded age. A
-no-staged-change abort before `prepare-commit-msg`, or a signal interruption,
-can leave a file on disk; that residue cannot authorize a later Git process.
-An editor abort occurs after `prepare-commit-msg` has already consumed the
-marker. A missing/invalid process identity or failed lookup disables reuse;
-legacy two-field markers are also rejected. The marker remains a dedup hint,
-not a trust boundary: any mismatch, expiry, or corruption runs the full gate.
-This process lookup is verified on macOS, the repository's supported/tested
-platform; an unavailable lookup elsewhere safely adds a gate run. Start time
-has `ps lstart`'s second precision: same-PID reuse within the same second is
-an unverified extreme boundary, outside normal commit lifecycle assumptions.
-
-There is no cheaper or faster variant of that sequence, and no configuration
-that selects one. Which commit-producing commands actually reach it — and which
-currently do not — is recorded precisely in
-[What The Gate Actually Enforces](#what-the-gate-actually-enforces).
-
-### Commit Marker State And Invariant Matrix (Issue #429)
-
-The marker helper owns same-operation reuse. Its `write` entry points are
-`pre-commit` and `pre-merge-commit`; `prepare-commit-msg` is its only `check`
-consumer. The fix binds reuse to the calling Git process (PID and start time)
-as well as the index tree and age. A marker left on disk after an abort must
-never authorize reuse by another process, even when its tree and age match.
-
-| Precondition / state | Action / ordering | Observable outcome | Invariant | Verification |
-| --- | --- | --- | --- | --- |
-| Ordinary commit or automatic non-fast-forward merge | Pre-hook passes → writes → same Git process prepares message | One complete gate; marker consumed | Only the operation that passed can deduplicate | Existing real-Git commit and merge scenarios |
-| No staged changes | Pre-hook passes → Git aborts before message preparation → same-tree `--no-verify` commit | First command creates no commit; second executes a new complete gate | An aborted operation cannot gate a later operation | New real-Git issue #429 regression |
-| Editor rejects message | Gate passes → message hook consumes marker → editor aborts → next same-tree commit | Abort creates no commit; next command executes its own gate | Commit success is not required to invalidate reuse outside its operation | Real-Git editor-abort regression |
-| Interrupted operation or stale marker, including PID reuse | Next operation checks a different PID or start time | Check misses; complete gate required | Tree and TTL alone never establish same-operation ownership | Helper identity-mismatch cases; abrupt signal timing remains unverified, using the same identity rejection path |
-| Identity missing, invalid, or process lookup unavailable | Write or check tries to resolve owner | No reusable marker written; check misses | Uncertain identity cannot suppress a gate | Helper invalid/missing PID and failed `ps` scenarios |
-| Tree changed, expired/future/corrupt marker, or legacy two-field marker | Check validates all keys before consuming | Check misses | Every reuse needs matching tree, bounded age, and process identity | Helper boundary scenarios |
-| Gate fails, fallback-only commit, or replay | Failed pre-hook stops; fallback passes without writing | No unauthorized commit; each fallback/replay gates independently | Fallback never produces reusable state | Existing failure, `--no-verify`, revert, cherry-pick, and rebase scenarios |
-
-Concurrent writers can replace the hint and cause an additional complete gate;
-they cannot establish matching process ownership for another Git operation.
-This change adds no persistence or application-data transition. The tests run
-real Git, hooks, and gate scripts, with only external coverage/scanner/network
-commands replaced. Full real coverage and SonarQube remain required at commit
-and push. Verification results are recorded in the resolving pull request.
+提交创建路径及同次操作去重见[标记归属与复用](quality-gate-lifecycle.md#commit-marker-ownership-and-reuse)。
+未覆盖路径与逐命令差异以[门禁覆盖清单](quality-gate-enforcement.md#what-the-gate-actually-enforces)为唯一事实源。
 
 This is option C of issue #356. The issue did not argue for lower quality
 requirements; it argued that the "cost tier" question deserved one explicit
 decision and a recorded baseline. Both now exist.
 
+There is no cheaper or faster variant of that sequence, and no configuration
+that selects one. Which commit-producing commands actually reach it — and which
+currently do not — is recorded precisely in
+[What The Gate Actually Enforces](quality-gate-enforcement.md#what-the-gate-actually-enforces).
+
+### Commit Marker State And Invariant Matrix (Issue #429)
+
+[标记状态与不变量矩阵](quality-gate-lifecycle.md#commit-marker-state-and-invariant-matrix-issue-429)的兼容入口；详细内容只在目标文档维护。
+
 ### 门禁测试标记隔离（Issue #428）
 
-本节记录 [issue #428](https://github.com/hailingu/PlotWeave/issues/428)
-的测试隔离修复。`scripts/sonar-quality-gate.test.ts` 的 `runGate` 拥有每次
-调用的沙箱及清理责任；`gateEnvironment` 必须将 `PLOTWEAVE_GATE_MARKER_PATH`
-指向该沙箱，覆盖继承的宿主路径。真实 hook 和标记助手继续执行，外部覆盖率、
-扫描器与网络命令沿用已有替身。
-
-| 前置状态 | 动作 / 顺序 | 可观察结果 | 不变量及所有者 | 验证 |
-| --- | --- | --- | --- | --- |
-| 宿主已有标记，门禁通过 | `runGate` 执行 `pre-commit` 或 `pre-merge-commit` → 写标记 | 本次沙箱内存在带树、时间和进程身份的标记；宿主标记原样保留 | `gateEnvironment` 隔离两条写入口；测试不得修改宿主门禁状态 | 两个成功路径回归用例，执行真实 hook 与标记助手 |
-| 宿主已有标记，新增问题非零 | hook 执行门禁 → 失败退出 | 非零退出；沙箱内无标记；宿主标记原样保留 | 门禁失败不能留下可复用标记；环境隔离不改变失败透传 | 两个失败路径回归用例 |
-| 未导出宿主标记覆盖项 | 执行 `npm test -- scripts` | 工作仓库标记的存在性及内容保持不变 | `runGate` 每次分配独立路径，避免回退到工作仓库 `.git` | 路由命令前后核对工作仓库标记状态 |
-| 真实提交、自动合并或回退提交 | 真实 Git 执行原有 hook 顺序 | 同一次操作去重；后续操作及 `--no-verify` 路径仍运行完整门禁 | 标记助手保有 #429 的进程身份约束 | 既有 `gate-tree-marker.test.ts` 真实 Git 场景 |
-
-本修复不改生产 hook、标记格式或门禁契约；#429 已拒绝其他 Git 进程复用
-测试遗留标记，但不替代测试自身的状态隔离。每次运行使用 `mkdtemp` 分配的
-独立沙箱，正常成功或失败后均由 `afterEach` 清理。强制终止测试进程后的临时
-目录清理未验证：目录仍在系统临时区，不能成为工作仓库默认标记。本变更不涉及
-应用数据、持久化协议或异步完成顺序；验证结果随修复 PR 记录。
+[测试标记隔离](quality-gate-lifecycle.md#门禁测试标记隔离issue-428)的兼容入口。
 
 ### 门禁锁的人工恢复（Issue #430）
 
-本节记录 [issue #430](https://github.com/hailingu/PlotWeave/issues/430)
-的恢复指引修复。`sonar-quality-gate.sh` 和 `gate-history.sh materialize`
-共用目录互斥锁；正常退出会释放锁，SIGKILL 或断电可能留下目录。
-门禁仍以原子 `mkdir` 获取锁，获取失败即停止，不检测锁年龄或进程所有者，
-也不自动删除或接管锁。
-
-锁获取失败的诊断包含实际锁路径，以及两个稳定诊断代码：
-`[SONAR_GATE_LOCK_UNAVAILABLE]` 标识获取失败；
-`[SONAR_GATE_LOCK_RECOVERY_COMMAND]` 后跟可在 POSIX shell 中执行的
-`rmdir -- '<锁路径>'` 命令，路径中的单引号会被转义。
-先等待正在运行的门禁和记录物化结束，确认没有相关进程且目录确为残留锁后，
-才可执行该命令，再重新执行原 Git 操作的完整门禁。`rmdir` 只移除空目录；
-非空目录、权限问题或缺失父目录仍需人工检查，不能按残留锁直接清理。
-
-不变量由 `sonar-quality-gate.sh` 的锁获取与退出清理持有；入口是四个 Git
-hook，记录物化是共享该锁的另一个入口，其有界等待和 pending 保留语义沿用。
-
-| 前置状态 | 动作 / 顺序 | 可观察结果 | 不变量 | 验证 |
-| --- | --- | --- | --- | --- |
-| 空闲锁 | 门禁获取锁 → 成功或扫描失败退出 | 完整成功或原失败透传；锁释放 | 只有持锁者可执行检查，正常退出释放本次锁 | 成功与扫描失败的锁清理回归 |
-| 另一个门禁持锁 | 后一个门禁尝试获取同一路径 | 非零退出、无检查或扫描、原锁保留；包含恢复指引 | 获取失败不得删除他人的锁或并发进入门禁 | 持锁期间第二次运行的行为回归 |
-| 测试门禁持锁后被 SIGKILL | 终止测试专属进程组 → 再运行门禁 | 残留锁保留；非零退出并给出路径和清理命令 | 无法确认锁的所有者时仍拒绝执行 | 隔离沙箱中的真实门禁强杀回归 |
-| 已确认持锁者结束 | 执行诊断中的命令 → 重试门禁 | 仅删除目标空目录；重试执行完整检查并通过 | 恢复指引不能跳过任何门禁步骤 | 强杀后的清理与成功重试 |
-| 锁路径含空格、单引号或 shell 替换符 | 获取失败 → 执行输出的命令 | 正确移除目标，替换符不执行，旁侧文件保留 | 恢复命令必须把路径作为一个字面参数 | 特殊路径命令执行回归 |
-
-验证边界：断电未实测，依赖与 SIGKILL 相同的退出清理不执行路径；人工确认
-无持锁进程不是自动检测功能，若清理期间又启动其他门禁，仍需使用者协调。
-记录物化的强杀未新增独立用例，它共享同一个目录锁和正常退出清理方式；
-已有等待、超时及 pending 保留回归继续验证该入口。本变更不涉及应用数据。
+[锁恢复指引与诊断命令契约](quality-gate-lifecycle.md#门禁锁的人工恢复issue-430)的兼容入口。
 
 ## Status Of The Alternatives
 
@@ -238,7 +167,7 @@ the corrected one. Note that option B would *not* weaken the gate's coverage —
 `check-static.sh` still runs on every `git commit`, and SonarQube analysis plus
 the Quality Gate still run before anything reaches the remote. Within the scope
 the gate actually covers (see
-[What The Gate Actually Enforces](#what-the-gate-actually-enforces)), what option
+[What The Gate Actually Enforces](quality-gate-enforcement.md#what-the-gate-actually-enforces)), what option
 B changes is that a commit can be created locally before the coverage and
 scanner phases have run for it.
 
@@ -255,7 +184,7 @@ refusal. See [Reconsideration Triggers](#reconsideration-triggers).
 
 ## Impact On Gate Strength
 
-Two records live in this file and must not be conflated (评审 4120364296):
+The following decisions must not be conflated (评审 4120364296):
 
 - The original **#356 decision (2026-09-27) changed no gate behavior at
   all** — it was a documentation and measurement change only.
@@ -279,7 +208,7 @@ Two records live in this file and must not be conflated (评审 4120364296):
   behavior**: the push path no longer scans whatever happens to be checked
   out. `pre-push` reads the refs Git hands it on stdin and runs the complete
   gate once per unique pushed commit, at that commit's own state — see
-  [Push-Path Per-Ref Gating](#push-path-per-ref-gating-issue-405). It
+  [Push-Path Per-Ref Gating](quality-gate-push.md#push-path-per-ref-gating-issue-405). It
   introduces no cheaper variant of the sequence: the fast path is the same
   complete sequence in the current working tree, taken only when that tree
   is provably identical to the pushed commit, and the slow path is the same
@@ -303,1215 +232,30 @@ in this file is an exception to them:
   issues must be zero, while historical issues on overall code stay triaged
   separately.
 
-The "no environment variable reduces the check set" claim above has one
-documented boundary: the gate scripts intentionally expose
-`PLOTWEAVE_NPM_BIN`, `PLOTWEAVE_SONAR_SCANNER_BIN`,
-`PLOTWEAVE_CARGO_LLVM_COV_BIN`, `PLOTWEAVE_CURL_BIN`, `PLOTWEAVE_NODE_BIN`,
-and the report-path overrides
-(`PLOTWEAVE_COVERAGE_REPORT_PATH`, `PLOTWEAVE_RUST_COVERAGE_REPORT_PATH`,
-`PLOTWEAVE_SONAR_REPORT_PATH`) as **test-only injection points**, and the
-hooks invoke the gate script with the environment inherited so those
-variables are passed through (评审
-4115318775). A shell that exports them can point the gate at substitute
-executables or pre-written reports and thereby skip real checks. These
-overrides exist for the gate's own test suite; using them to bypass the
-gate is the same class of explicit evasion as `--no-verify`, which
-`AGENTS.md` prohibits. Closing the injection points in hook invocations is
-a hardening change to gate behavior and out of scope for this record.
-`PLOTWEAVE_GATE_MARKER_PATH` and `PLOTWEAVE_GATE_MARKER_TTL`
-(`scripts/gate-tree-marker.sh`, issue #404) belong to the same class: they
-steer the dedup marker and its expiry, so exporting a pre-written matching
-marker can suppress the `prepare-commit-msg` gate run. Same disposition —
-test-only injection, explicit evasion to use it that way.
-`PLOTWEAVE_GATE_HISTORY_PATH` and `PLOTWEAVE_GATE_PENDING_PATH`
-(`scripts/sonar-quality-gate.sh` / `scripts/gate-history.sh`, issue #355)
-also belong to the test-only injection class: they redirect only where the
-evidence record is written, so they cannot skip any check, but pointing them
-elsewhere does remove the in-repository self-report for that run.
-`PLOTWEAVE_GATE_REPOSITORY_ROOT` (`scripts/sonar-quality-gate.sh`,
-`scripts/check-static.sh`, `scripts/rust-coverage.sh`, issue #405) belongs
-to the same injection class but is stronger than the path overrides above:
-it redirects **which tree the gate analyzes**, and the `pre-push` slow path
-uses it to point the current gate scripts at the pushed commit's temporary
-worktree. A shell that exports it can therefore analyze an arbitrary
-directory instead of the state a Git operation is about to record or push —
-the same class of explicit evasion as `--no-verify`, prohibited by
-`AGENTS.md`.
+测试专用注入项与其保留边界统一记录在[测试注入边界](quality-gate-lifecycle.md#test-injection-boundary)；这些入口不授权绕过门禁。
 
 Anyone reading a faster local workflow elsewhere in this repository should
 treat it as a defect in that workflow, not as sanctioned by this decision.
 
 ## Push-Path Per-Ref Gating (issue #405)
 
-Before issue #405, `.githooks/pre-push` read no input and always scanned the
-checked-out working tree, so pushing a non-checked-out ref, several refs at
-once, or the checked-out branch with a dirty tree let states reach the
-remote that the gate had never analyzed (the founding record of that finding
-is retained below in
-[Known Finding: Push Scans The Checked-Out Tree, Not The Pushed
-Ref](#known-finding-push-scans-the-checked-out-tree-not-the-pushed-ref)).
-The issue #405 fix, wired 2026-09-30, closes it:
-
-- **Read stdin.** The hook consumes every line Git hands it
-  (`<local ref> <local sha> <remote ref> <remote sha>`) before dispatching,
-  so no child process can consume the hook's input, and the ref list cannot
-  be influenced by gate execution.
-- **Fast path — current working tree.** Taken only when the pushed commit
-  (the local sha peeled to a commit, so annotated tags analyze the commit
-  they point at) equals `HEAD` **and** the tree is provably identical to it:
-  `git diff --quiet HEAD` (no unstaged or staged tracked differences),
-  `git diff --cached --quiet HEAD` (index equality, so the record's
-  `write-tree` key matches the pushed tree), and no untracked non-ignored
-  file anywhere in the repository. Vitest can discover tests outside the
-  maintained source trees, and their imports can read helpers or fixtures
-  with any extension; a directory or test-suffix allowlist cannot establish
-  input equality (PR #442 review 5361127076). Untracked documentation also
-  triggers isolation; ignored generated artifacts retain the existing fast
-  path behavior.
-  The complete gate then runs exactly as before, at the same cost.
-- **Slow path — temporary worktree.** Every other commit — a non-checked-out
-  ref, a dirty worktree, or an additional distinct commit in a multi-ref
-  push — is checked out with
-  `git worktree add --detach` into a `mktemp` directory, dependencies are
-  installed from that tree's lockfiles (`npm ci`), and the **current**
-  gate scripts run the complete sequence with
-  `PLOTWEAVE_GATE_REPOSITORY_ROOT` pointing at that worktree. The user's
-  working tree is never touched by the slow path; the temporary worktree is
-  removed after the
-  run (best-effort `git worktree remove --force` on every exit path;
-  residue is disk waste only, `git worktree prune` recovers it). The
-  fast/slow choice is made **per unique pushed commit**, not per
-  invocation: a multi-ref push that includes `HEAD` still gates `HEAD` in
-  the current working tree — writing the same gitignored coverage, scanner,
-  and Cargo artifacts every commit gate writes — and gates every other
-  commit in its own temporary worktree; the mixed-dispatch case is pinned
-  by the `pre-push-refs` multi-ref test.
-- **Dedup and deletions.** Refs pointing at the same commit (a branch and
-  its tag) are analyzed once; a ref deletion (all-zero local sha) exports no
-  code and is skipped; a malformed ref line or a local sha that does not
-  peel to a commit fails closed. Every ref line is analyzed or rejected —
-  none is silently ignored.
-- **Evidence and serialization.** Slow-path runs write their gate-history
-  record through the main worktree's pending file and take the main
-  worktree's gate lock, so fast path, slow path, and `materialize` stay
-  serialized on one mutex and the record's `tree`/`head` are the pushed
-  commit's (issue #355 semantics unchanged). All refs must pass before
-  `materialize` runs; a failure blocks the push with earlier passing records
-  left pending for the next successful push.
-- **Original object identity.** The hook exports `GIT_NO_REPLACE_OBJECTS=1`
-  before any Git command. Resolution (including annotated-tag peeling),
-  fast-path comparisons, temporary checkout, and descendant gate records
-  all read the original objects that push transfers. Local replacement refs
-  remain installed; a working tree already materialized from a replacement
-  fails the raw-object equality check and takes the slow path. This follows
-  [Git's replacement-object semantics](https://git-scm.com/docs/git-replace)
-  and closes the new trigger in
-  [PR #442 review 5361127076](https://github.com/hailingu/PlotWeave/pull/442#pullrequestreview-5361127076).
-
-**Review regression matrix (PR #442 review 5361127076).** `pre-push` owns
-object resolution and dispatch; the gate owns the recorded tree and HEAD.
-The tests run real Git, worktrees, hooks, and ledger writes; dependency,
-coverage, and remote Sonar commands use the existing controlled substitutes.
-
-| State and transition | Observable result and invariant | Verification in `scripts/pre-push-refs.test.ts` |
-| --- | --- | --- |
-| Non-HEAD pushed commit has a replacement → push | Scanner tree and ledger equal the original tree; remote receives the original SHA | Replacement-object non-checked-out test |
-| HEAD's replacement content is already checked out → push | Slow path analyzes the original tree; local replacement content is preserved | Replacement-content HEAD test |
-| Clean original HEAD has a replacement ref → push | Original tree remains eligible for the fast path | Clean HEAD replacement-ref test |
-| Untracked nested test, imported fixture, or document → push | Slow path excludes the local input; local file remains intact and worktree is cleaned | Parameterized untracked-input tests |
-| Slow-path gate fails → push | Push is blocked, remote ref is absent, and temporary worktree is removed | Existing slow-path failure test |
-| Outer slow-path gate exports its root → nested test sandbox runs hooks | Each sandbox analyzes and records its own tree; outer gate root cannot leak into it | Root-isolation regressions in pre-push-refs and gate-tree-marker suites |
-
-The first real slow-path push of this review fix exposed root-override
-inheritance in those two test fixtures: four tests failed, so the hook
-blocked the push. Their scenario environments must explicitly bind the
-gate root to their own sandbox; production slow-path subprocesses continue
-to override it with the actual pushed commit's temporary worktree.
-
-Annotated tags use the same disabled-replacement resolution and retain the
-existing branch-plus-tag regression. Separate tag-, tree-, and blob-object
-replacement fixtures remain unverified: they share the process-wide Git
-switch rather than a distinct dispatch branch. Concurrency and retry
-ordering are unchanged; existing gate-history tests cover the shared lock.
-The standalone Vitest `list --filesOnly` probe also confirmed that the
-repository's actual configuration discovers `tests/boost.test.ts`; the
-isolation tests verify scanner inputs rather than a coverage-inflation
-percentage. No live Sonar scan is asserted by this regression suite.
-
-**Known boundaries.** The fast path's equality proof is bounded by what git
-can see: ignored files (e.g., a file hidden by `.git/info/exclude` inside
-`src/`) and tracked differences masked by `skip-worktree` or
-`assume-unchanged` are invisible to `git diff` / `git status` and can still
-make the analyzed content differ from the pushed commit — the pre-#405
-residuals, now narrowed from "always possible" to "fast path only". The slow
-path's pristine checkout closes both. The slow-path subprocesses also strip
-the worktree-localization variables git exports to commit-creating hooks
-(`GIT_INDEX_FILE`, `GIT_PREFIX`, …): they resolve relative to the invoking
-worktree and are invalid inside a temporary worktree — without the strip,
-a gate run nested inside a commit hook (which is exactly how this
-repository's own script tests execute under `npm run test:coverage`) would
-break the slow path. Both paths analyze with the gate
-definition of the current working tree (uniform-gate rule), so a pushed tree
-older than the tooling itself fails closed if it lacks `package-lock.json`
-(`npm ci`) or the files the gate needs; pushing such an ancient tree requires
-checking it out first. Using `--no-verify` on the push remains prohibited and
-is unaffected by this wiring.
-
-The measured cost of both paths is recorded in
-[Measured Baseline](#measured-baseline): the fast path is the unchanged
-complete-gate cost (the refreshed baseline measures it); the slow path adds
-dependency installation and cold caches and was measured once on landing —
-see
-[Push-Path Slow-Path Cost](#push-path-slow-path-cost-2026-09-30-issue-405).
+[逐 ref 推送门禁](quality-gate-push.md#push-path-per-ref-gating-issue-405)的兼容入口；分派、回归矩阵及已知边界只在目标文档维护。
 
 ## Gate Run Evidence Record (issue #355)
 
-Before issue #355, every artifact behind a passing gate conclusion —
-`coverage/`, `.scannerwork/`, `src-tauri/target/` — was local-only and
-gitignored, and `.github/workflows/ci.yml` deliberately does not run Sonar.
-Issue #355 adopted **option A** (a versioned summary record) to retain the
-executor's reported conclusions alongside Git tree identities. Hosted CI
-cannot reach the local SonarQube server, so option B's artifacts would cover
-only the checks it can run. Option A provides a durable self-report; it did
-not close the gap in independently verifiable proof of local gate execution.
-
-**Trust boundary (issue #431).** The JSONL ledger has no signature, hash chain,
-or independently authenticated link to a scanner run. Anyone who can write
-it can append or alter a format-valid success claim for an existing Git tree
-without running the gate. A tree hash identifies content; even checking that
-the tree object exists cannot authenticate the claimed execution, timestamp,
-Quality Gate result, issue count, or coverage. Versioning preserves the claim
-and its edit history, while trust still depends on the executor and the
-record's provenance. A matching row must not be used as independent proof
-that a gate ran or passed, or as authorization to skip the required gate.
-This is the retained P3 evidence-credibility boundary from
-[issue #431](https://github.com/hailingu/PlotWeave/issues/431); no authenticity
-anchor or new enforcement mechanism is introduced.
-
-**What is recorded.** After a run passes the *complete* sequence — static
-checks, both coverage reports, the scanner, Quality Gate `OK`, and zero
-new-code unresolved issues — `scripts/sonar-quality-gate.sh` appends exactly
-one JSON line to a pending file inside `.git`
-(`plotweave-gate-history.pending`), never to the tracked file mid-operation
-(PR #415 评审 5338815626: a commit-side write to the tracked file leaves an
-unstaged change that aborts the next rebase replay, checkout, or merge
-updating that file). After the `pre-push` gate passes, the hook runs
-`scripts/gate-history.sh materialize`, which folds the pending lines into the
-versioned `docs/development/gate-history.jsonl` and clears the pending file.
-Each record line:
-
-| Field | Meaning |
-| --- | --- |
-| `timestamp` | UTC ISO-8601 time of the record append, second precision. |
-| `tree` | The gated **index tree** (`git write-tree`) — the same key the dedup marker uses, and the value a reader compares against `git rev-parse <commit>^{tree}` to find a success claim for that content. Matching does not authenticate the claim. |
-| `head` | The commit `HEAD` pointed at during the run — the parent of the commit being created on pre-commit-style paths, the tip being pushed on `pre-push`. Provenance context, not the content-matching key; it does not authenticate execution. |
-| `qualityGate` | The Quality Gate status for this run's analysis (`OK`; only fully passing runs are recorded). |
-| `newCodeUnresolvedIssues` | Unresolved issue count on new code for this run (`0`; only fully passing runs are recorded). |
-| `frontendLineCoveragePercent` / `rustLineCoveragePercent` | Line coverage computed from the same LCOV reports this run submitted (`DA` records with execution count > 0 count as covered). |
-
-**Reproducible claim lookup and coverage check.** From the repository root,
-run the following with the pinned Node version. Replace the argument `HEAD`
-with the commit to inspect. It reads the ledger without changing it and uses
-original Git objects (`GIT_NO_REPLACE_OBJECTS=1`, matching the push gate).
-Malformed JSON or an unavailable target commit makes the command fail rather
-than produce a success conclusion.
-
-```sh
-node --input-type=module - HEAD <<'NODE'
-import { readFileSync } from 'node:fs';
-import { execFileSync, spawnSync } from 'node:child_process';
-
-const options = {
-  encoding: 'utf8',
-  env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1' },
-};
-const git = (...args) => execFileSync('git', args, options).trim();
-const commit = git('rev-parse', '--verify', `${process.argv[2]}^{commit}`);
-const tree = git('rev-parse', '--verify', `${commit}^{tree}`);
-const records = readFileSync('docs/development/gate-history.jsonl', 'utf8')
-  .split('\n').filter((line) => line.trim()).map((line) => JSON.parse(line));
-const successClaims = records.filter((record) =>
-  record.qualityGate === 'OK' && record.newCodeUnresolvedIssues === 0);
-const claimedTrees = new Set(successClaims.map((record) => record.tree));
-const commitTrees = git('log', '--format=%T', 'HEAD').split('\n');
-const headTrees = new Map(records.map((record) => [record.head, null]));
-for (const head of headTrees.keys()) {
-  const result = spawnSync('git', ['rev-parse', '--verify', `${head}^{tree}`], options);
-  headTrees.set(head, result.status === 0 ? result.stdout.trim() : null);
-}
-const matchingSuccessClaims = successClaims.filter((record) => record.tree === tree).length;
-console.log(JSON.stringify({
-  commit, tree, matchingSuccessClaims,
-  conclusion: matchingSuccessClaims ? 'RECORDED_CLAIM_UNAUTHENTICATED' : 'NO_RECORDED_CLAIM',
-  records: records.length,
-  uniqueSuccessClaimTrees: claimedTrees.size,
-  commitsReachableFromHEAD: commitTrees.length,
-  commitsWithMatchingClaim: commitTrees.filter((value) => claimedTrees.has(value)).length,
-  recordsWithHeadTreeMismatch: records.filter((record) =>
-    headTrees.get(record.head) !== null && headTrees.get(record.head) !== record.tree).length,
-  recordsWithUnavailableHead: records.filter((record) => headTrees.get(record.head) === null).length,
-}, null, 2));
-NODE
-```
-
-- `RECORDED_CLAIM_UNAUTHENTICATED` means only that a success claim with the
-  same tree exists. A manually appended format-valid row produces the same
-  outcome; this recipe cannot distinguish it from a tooling-generated row.
-  `NO_RECORDED_CLAIM` means no matching success claim was found, not that the
-  gate failed or never ran.
-- `head` is not the lookup key. On commit-creating paths the recorded `head`
-  is the pre-creation HEAD, normally the parent; staged content becomes the
-  new commit's tree. When that tree differs from the parent's tree,
-  `git rev-parse <record.head>^{tree}` will not equal `record.tree`. An
-  unchanged-tree commit can match by coincidence. On push paths, since
-  issue #405, `head` is the pushed commit and its tree matches the record.
-  Legacy push records can instead reflect the earlier checked-out-tree
-  behavior described in the known finding below. A head mismatch alone
-  establishes neither a failed gate nor a forged record.
-- The coverage counts use commits reachable from the current `HEAD`, not
-  every ref in the repository. Multiple runs can claim the same tree, and
-  multiple commits can share a tree; neither record count nor unique tree
-  count is a count of commits independently shown to have been gated.
-  The versioned ledger at `86469b8` contains 71 successful records for 34
-  distinct trees, and 1,239 commits are reachable from that snapshot. These
-  counts use the tracked historical input, not a current coverage guarantee;
-  the command above recomputes the current snapshot. Reproduce the historical
-  counts independently with:
-
-  ```sh
-  node --input-type=module <<'NODE'
-  import { execFileSync } from 'node:child_process';
-  const git = (...args) => execFileSync('git', ['--no-replace-objects', ...args], { encoding: 'utf8' });
-  const records = git('show', '86469b8:docs/development/gate-history.jsonl')
-    .split('\n').filter((line) => line.trim()).map((line) => JSON.parse(line));
-  const successClaims = records.filter((record) =>
-    record.qualityGate === 'OK' && record.newCodeUnresolvedIssues === 0);
-  console.log(JSON.stringify({
-    successfulRecords: successClaims.length,
-    uniqueSuccessClaimTrees: new Set(successClaims.map((record) => record.tree)).size,
-    commitsReachableFromSnapshot: Number(git('rev-list', '--count', '86469b8')),
-  }, null, 2));
-  NODE
-  ```
-
-  Missing rows can reflect pre-ledger history, uncovered creation paths,
-  best-effort write failures, or pending/not-yet-versioned records. Their
-  presence or absence cannot establish repository-wide gate compliance.
-
-**Deliberate properties and boundaries.**
-
-- *Success-only tooling writes.* The gate script appends only after all
-  checks pass; failed or blocked runs append nothing. This describes the
-  script's behavior, not a guarantee that every ledger row came from it.
-  Aborted commit operations can also leave records of successful gate runs.
-  The ledger reports successes, without an exhaustive execution history or
-  independently authenticated outcomes.
-- *Best-effort writes, drain under the gate lock.* A pending-append failure
-  (permissions, disk) prints a warning to stderr and does not block the
-  already-passing gate — the same philosophy as the tree marker.
-  `materialize` waits for the **same mutex the gate holds** (second-granularity
-  polling of the `.sonar-gate.lock` directory) and drains
-  pending → versioned while holding it: record appends happen only under
-  that lock, so a concurrently passing gate cannot have its record truncated
-  away in the drain window (PR #415 评审 5339243902). A lock-wait timeout —
-  or a malformed timeout configuration — warns and leaves the lines pending
-  for the next push; materialize never blocks or fails the push. If the
-  append into the versioned file succeeds but the pending-file truncation
-  fails, the next materialize can duplicate lines — benign under log
-  semantics — and a materialize killed with SIGKILL can leave a stale lock.
-  Gates do not detect or reclaim stale locks; a failed acquisition provides
-  the [manual recovery instructions](#门禁锁的人工恢复issue-430), to use only
-  after confirming that no gate or materialization process is running.
-  Evidence must not become a
-  new way to fail a clean gate or push.
-- *Materialize-at-push, one-commit lag.* Commit-creating paths write only to
-  the pending file inside `.git`, so they never dirty the tracked file and
-  never interfere with subsequent Git steps; the versioned file is touched
-  only after a passing `pre-push`, at which no further tree operation is
-  pending in that command. Because the evidence file must itself pass the
-  gate, materialized lines are unstaged until the next commit stages them —
-  stage them together with the next change; committing the file alone burns
-  a full gate run on a record-only commit. Records for commit-side runs of
-  commits that are never pushed stay in the local pending file: nothing
-  leaves the machine, so there is no external claim to verify.
-- *Working tree vs. index key.* The gate analyzes the working tree (see
-  [Known Finding: Push Scans The Checked-Out Tree, Not The Pushed
-  Ref](#known-finding-push-scans-the-checked-out-tree-not-the-pushed-ref)),
-  while `tree` records the index tree, matching the marker's key. With
-  unstaged or untracked differences the run validated more (or different)
-  content than the key identifies; the caveats of that known finding apply
-  to records unchanged. The file-size checker additionally validates source
-  blobs and their bounded baseline in the effective index (issue #432,
-  PR #452 reviews 5374354494 / 5374500480), without allowing an indexed
-  allowance to weaken the current gate's policy;
-  this closes its size-policy mismatch without changing the other stages.
-- *Append-only growth.* One line per fully passing run, no rotation; the
-  file is a log of runs, not a derived state that can be rebuilt.
-- *No secrets.* Records carry hashes, counts, and percentages only. Tokens
-  never reach the record path (the gate passes them via stdin/environment
-  exclusively), and raw scan artifacts stay unversioned — the issue #355
-  acceptance criteria require both.
+[门禁运行台账](quality-gate-evidence.md#gate-run-evidence-record-issue-355)的兼容入口；字段、可信度边界与复现命令只在目标文档维护。
 
 ## What The Gate Actually Enforces
 
-The bullets above describe intent. This section records the verified
-*enforcement* boundary, so that no reader overstates the guarantee. It was
-measured on 2026-09-27 against git 2.48.1 with isolated logging hooks selected
-through `core.hooksPath`. The table records command-related observations in
-the tested modes; shared index-write and ref-update callbacks are explained
-below, rather than claiming an exhaustive trace for every command variant.
-
-Since the issue #404 wiring this repository wires four hooks:
-`.githooks/pre-commit`, `.githooks/pre-merge-commit`,
-`.githooks/prepare-commit-msg`, and `.githooks/pre-push`, plus the shared
-dedup helper `scripts/gate-tree-marker.sh`. There is no `commit-msg`,
-`post-commit`, `post-merge`, `pre-rebase`, `post-rewrite`,
-`pre-applypatch`, `applypatch-msg`, `reference-transaction`, or
-`post-index-change`. The table below was measured on 2026-09-27 against
-git 2.48.1 with only `pre-commit` and `pre-push` wired; the "Gate analyzes
-this commit?" column has been updated for the new wiring where the measured
-hook set determines it. The subtree squash/rejoin rows were rechecked on
-2026-09-30 against the same git 2.48.1 after review 4141186822 contradicted
-their original measurements; the remaining hook lists retain the original
-measurements. The wired hooks now make the automatic merge / revert /
-cherry-pick / rebase-replay / commit-side `--no-verify` paths reach the
-gate.
-
-Since the issue #405 fix (2026-09-30), every push-side mismatch this
-inventory records — a pushed ref whose state differs from the checked-out
-tree — is closed: `pre-push` reads stdin and analyzes each pushed ref at
-that ref's own commit (fast path in the checked-out tree only under the
-provable-equality preconditions, otherwise a temporary-worktree checkout;
-see
-[Push-Path Per-Ref Gating](#push-path-per-ref-gating-issue-405)). The
-per-row `#405` mentions below are retained as the pre-fix measurement of
-which commands could produce such a mismatch; they identify the push-side
-exposure those rows had before the fix, not a live gap.
-
-The subtree narratives below were synchronized with both implemented hook
-extensions on 2026-09-30 for
-[issue #412](https://github.com/hailingu/PlotWeave/issues/412). Split generation
-and synthetic squash commits remain ungated at creation. A resulting branch
-merge/rejoin routed through `git merge --no-ff` is gated, including with
-`--squash`; a first rejoin without prior subtree add/rejoin metadata instead
-uses the ungated `subtree add` plumbing path. The recheck below distinguishes
-these states rather than treating every `--squash` branch commit as ungated.
-The subtree entries in the table describe creation-time coverage; the
-push-time gate separately analyzes any split tip actually pushed.
-
-| Command that creates a commit | Observed hooks (shared callbacks also described below) | Gate analyzes this commit? |
-| --- | --- | :---: |
-| `git commit` (without `--amend`) | `post-index-change` on index writes; `pre-commit`, `prepare-commit-msg`, `commit-msg`, `post-commit` | yes |
-| `git commit --amend` | `post-index-change` on index writes; `pre-commit`, `prepare-commit-msg`, `commit-msg`, `post-commit`, then `post-rewrite amend` unless `--no-post-rewrite` | yes |
-| `git merge` (automatic, conflict-free non-fast-forward merge commit) | `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `post-merge` | **yes** (issue #404: wired `pre-merge-commit`) |
-| `git merge --autostash` (dirty tracked worktree) | merge hooks above; autostash creates ref-less stash commits with no hook | **yes** for the merge commit; the autostash objects stay ungated |
-| `git pull` (default merge mode, diverged upstream) | `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `post-merge`; `reference-transaction` on fetch | **yes** (issue #404: wired `pre-merge-commit`) |
-| `git pull --autostash` (default merge mode, dirty tracked worktree) | pull merge hooks above; autostash creates ref-less stash commits with no hook | **yes** for the merge commit; the autostash objects stay ungated |
-| `git merge --continue` after resolving conflicts | `post-index-change`; `pre-commit`, `prepare-commit-msg`, `commit-msg`, `post-commit` | yes |
-| `git revert` (automatic, conflict-free commit) | `prepare-commit-msg` + `post-commit` | **yes** (issue #404: wired `prepare-commit-msg`) |
-| `git revert --continue` after resolving conflicts | `post-index-change`; `pre-commit`, `prepare-commit-msg`, `commit-msg`, `post-commit` | yes |
-| `git cherry-pick` (automatic, conflict-free commit) | `prepare-commit-msg` + `post-commit` | **yes** (issue #404: wired `prepare-commit-msg`) |
-| `git cherry-pick --continue` after resolving conflicts | `post-index-change`; `pre-commit`, `prepare-commit-msg`, `commit-msg`, `post-commit` | yes |
-| `git rebase` replaying commits onto a new base | `pre-rebase` once, then `prepare-commit-msg` + `post-commit` per replayed commit, `post-rewrite` once at the end | **yes** (issue #404: wired `prepare-commit-msg`, one full gate per replayed commit) |
-| `git rebase --autostash` (dirty tracked worktree) | rebase hooks above; autostash creates ref-less stash commits with no hook | **yes** for replayed commits; the autostash objects stay ungated |
-| `git rebase --update-refs` (other branches in the rebased range) | rebase hooks above; secondary branches move via `reference-transaction` only — no gate for their new tips | **yes** for replayed commits; secondary tips **no** * |
-| `git rebase --continue` after resolving a conflict | `post-index-change`, `prepare-commit-msg`, `post-commit`, `post-rewrite`; no `pre-commit` | **yes** (issue #404: wired `prepare-commit-msg`) |
-| `git am` applying a patch series | `applypatch-msg`, `pre-applypatch`, `post-applypatch` — none wired | **no** |
-| `git stash push` / `git stash` / `git stash save` (tracked changes) | `reference-transaction`; no commit-creation hooks | **no** * |
-| `git stash push -u` / `--all` | `reference-transaction`; no commit-creation hooks; additionally creates an ungated third "untracked files" parent commit | **no** * |
-| `git stash create [<message>]` (tracked changes) | `post-index-change` on index writes; no commit-creation or ref-update hooks | **no** |
-| `git notes add` / `append` / `edit` / `copy` / `remove` / `merge` / `prune` | `reference-transaction`; no commit-creation hooks | **no** * |
-| `git commit-tree` + `git update-ref` (plumbing) | `reference-transaction`; no commit-creation hooks | **no** * |
-| `git hash-object -t commit -w --stdin` + `git update-ref` (plumbing) | `reference-transaction` on ref update only; `hash-object` itself fires no hook | **no** * |
-| `git replace [-f] <object> <replacement>` / `git replace --graft <commit> [<parent>…]` / `git replace --edit <commit>` / `git replace --convert-graft-file` | `reference-transaction`; no commit-creation hooks | **no** * |
-| `git fast-import` (`commit <ref>` stream) | `reference-transaction`; no commit-creation hooks | **no** * |
-| `git quiltimport` (applies a quilt patchset to the current branch) | `post-index-change`; `reference-transaction`; no commit-creation hooks | **no** |
-| `git filter-branch` (history rewrite) | none measured here (see note) | **no** * |
-| `git lfs migrate import` / `export` / `import --no-rewrite` (extension) | reviewer probe only (git-lfs 3.4.1): shared index/ref/checkout callbacks, no commit-creation hooks; not measured here (git-lfs absent) | **no** * |
-| `git subtree split --prefix=<dir> --branch <branch>` | `reference-transaction`; no commit-creation hooks | **no** * |
-| `git subtree split --prefix=<dir> [<commit>]` (no `--branch`) | none measured here; no ref updated | **no** ** |
-| `git subtree merge --prefix=<prefix> <commit>` (automatic non-fast-forward merge) | `post-index-change`; `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `post-merge`; shared `reference-transaction` | **yes** (issue #404: wired `pre-merge-commit`) |
-| `git subtree merge --prefix=<prefix> --squash <commit>` (new subtree content after an earlier add/rejoin) | synthetic squash commit has no creation hook; branch merge fires `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `post-merge`; shared index/ref callbacks | **yes** for the branch merge (issue #404); synthetic squash commit **no** |
-| `git subtree pull --prefix=<prefix> <repository> <ref>` (automatic non-fast-forward merge) | `reference-transaction` on fetch; then the subtree merge hooks above | **yes** (issue #404: wired `pre-merge-commit`) |
-| `git subtree pull --prefix=<prefix> <repository> <ref> --squash` (new subtree content after an earlier add/rejoin) | `reference-transaction` on fetch; then the subtree merge `--squash` hooks above | **yes** for the branch merge (issue #404); synthetic squash commit **no** |
-| `git subtree split --rejoin --prefix=<prefix>` (new subtree content after an earlier add/rejoin) | split commits have no commit hook; automatic rejoin merge fires `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `post-merge`; shared index/ref callbacks | **yes** for the rejoin merge (issue #404: wired `pre-merge-commit`); split commits **no** |
-| `git subtree split --rejoin --squash --prefix=<prefix>` (new subtree content after an earlier add/rejoin) | split and synthetic squash commits have no creation hook; rejoin merge fires `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `post-merge`; shared index/ref callbacks | **yes** for the rejoin merge (issue #404); split and synthetic squash commits **no** |
-| `git subtree split --rejoin [--squash] --prefix=<prefix>` (first rejoin of a plain directory, no prior add/rejoin metadata) | `subtree add` plumbing creates the rejoin; shared index/ref callbacks only; `--squash` also creates a ref-less synthetic squash commit | **no** for rejoin, generated split, or synthetic squash commits |
-| `git subtree push --prefix=<prefix> <repository> <refspec>` | `pre-push` receives split tip; `reference-transaction` may update `refs/remotes/origin/*` after the push; no commit-creation or checked-out-branch ref-update hook | **no** (for generated split commits) |
-| `git subtree push --prefix=<prefix> --branch <branch> <repository> <refspec>` | `reference-transaction` on the new local branch; then `pre-push` receives split tip | **no** (for generated split commits; branch creation is a #404 closure candidate) |
-| `git subtree push --rejoin --prefix=<prefix> <repository> <refspec>` (automatic conflict-free rejoin after an earlier add/rejoin) | rejoin merge: `post-index-change`, `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `reference-transaction` on the checked-out branch, `post-merge`; then `pre-push` receives split tip | **yes** for the rejoin merge (issue #404: wired `pre-merge-commit`); generated split commits **no** |
-| `git subtree push --rejoin --squash --prefix=<prefix> <repository> <refspec>` (new subtree content after an earlier add/rejoin) | rejoin merge with `--squash` hooks above; synthetic squash commit has no creation hook; then `pre-push` receives split tip | **yes** for rejoin merge (issue #404); synthetic squash and generated split commits **no** |
-| `git subtree push --rejoin [--squash] --prefix=<prefix> <repository> <refspec>` (first rejoin of a plain directory, no prior add/rejoin metadata) | `subtree add` plumbing creates the rejoin with shared index/ref callbacks only; then `pre-push` receives split tip | **no** at creation for rejoin, generated split, or synthetic squash commits; pushed split tip is gated by #405 |
-| `git subtree add --prefix=<prefix> <commit>` | `post-index-change` on index writes; `reference-transaction`; no commit-creation hooks | **no** |
-| `git subtree add --prefix=<prefix> --squash <commit>` | `post-index-change` on index writes; `reference-transaction`; no commit-creation hooks; additionally creates a ref-less synthetic squash commit | **no** |
-| `git merge --squash` / `--no-commit` followed by `git commit` | `pre-commit`, … | yes |
-| `git commit --no-verify` (without `--amend`) | `post-index-change` on index writes; `prepare-commit-msg`, `post-commit` | **yes** (issue #404: `--no-verify` skips `pre-commit` but not `prepare-commit-msg`) |
-| `git merge --no-verify` | `prepare-commit-msg`, `post-merge` | **yes** (issue #404: wired `prepare-commit-msg` still fires) |
-| `git commit --amend --no-verify` | `post-index-change` on index writes; `prepare-commit-msg`, `post-commit`, then `post-rewrite amend` unless `--no-post-rewrite` | **yes** (issue #404: wired `prepare-commit-msg` still fires) |
-
-\* These rows produce commits under refs that are **pushable by explicit
-refspec** — `git push <remote> refs/stash:refs/heads/…`, `refs/notes/*`,
-`refs/replace/*`, `refs/heads/<branch>` from the subtree split, or the branch
-`update-ref` just created — so each carried the same
-remote-facing gap tracked in
-[Known Finding: Push Scans The Checked-Out Tree, Not The Pushed
-Ref](#known-finding-push-scans-the-checked-out-tree-not-the-pushed-ref):
-before the issue #405 fix, `pre-push` analyzed the checked-out tree, not the
-pushed ref (评审 4115165662, 4115165667). Since that fix (2026-09-30) the
-gap is closed — each pushed ref is analyzed at its own commit. The
-`commit-tree` and `hash-object` rows
-additionally have a direct-OID push variant that causes no local
-`reference-transaction` — `update-ref` is optional for both, and the
-returned OID can be pushed as-is; `pre-push` still receives the OID and can
-block the push. See the commit-tree paragraph below.
-
-\*\* This row produces a commit object without updating any ref, so no local
-`reference-transaction` fires for it. The commit can be published in two
-ways: installed on a local branch first (`git update-ref refs/heads/…
-<oid>`), which fires `reference-transaction` and is a #404 closure
-candidate, then pushed normally; or pushed directly by OID (`git push
-<remote> <oid>:refs/heads/…`), which is the #405 push-side gap.
-
-`post-index-change` is a shared index-write callback, as specified by its
-[Git contract](https://git-scm.com/docs/githooks#_post_index_change), rather
-than a commit-creation gate (评审 4115577716). Any command that reaches that
-index-writing path can invoke it; its occurrence and count depend on the
-index writes performed. Git 2.48.1 probes of ordinary commit, amend, both
-corresponding `--no-verify` forms, and `commit --only A` all invoked it.
-When `pre-commit` was enabled, the observed index callbacks preceded it;
-`--only A` produced two index callbacks rather than one. All five commands
-committed the expected tree and exited 0 with `post-index-change` configured
-to exit 1, so it cannot supply a blocking gate. Other rows do not enumerate
-every shared index callback; their index-write traces were not remeasured
-here, and omission from a row does not mean the callback cannot fire.
-This repository does not wire it, so the Gate column remains unchanged.
-
-Every command in this table also fires `reference-transaction` on the ref
-updates it performs — measured on git 2.48.1 for `git commit`
-(`refs/heads/*`), `git merge`, `git cherry-pick`, and `git stash push`
-(`refs/stash`) — and the per-row hook lists omit it because it is not
-commit-creation-specific (评审 4114992022). The `git filter-branch` row is
-the exception: its entry here is unverified because our Git 2.48.1
-measurement fired no hook at all while a Git 2.43 run reported it (评审
-4115347192), so do not treat `reference-transaction` as a verified closure
-for that path. This repository does not wire it,
-so the Gate column is unaffected. Note that a nonzero exit in its `prepared`
-state aborts the ref update, which makes it the one hook type that could in
-principle gate these paths; whether to do so is a #404 hook-design question,
-not part of this decision.
-
-`git commit --amend` also calls `post-rewrite` with argument `amend` after
-`post-commit`, as the [post-rewrite contract](https://git-scm.com/docs/githooks#_post_rewrite)
-specifies (评审 4115510916). Measured on Git 2.48.1: both ordinary amend and
-amend with `--no-verify` invoked it with the old/new commit OIDs on stdin;
-both completed and changed `HEAD` even when that hook exited 1. It therefore
-cannot block the rewrite. `--no-verify` skips `pre-commit` and `commit-msg`,
-not `post-rewrite`; the separate `--no-post-rewrite` option suppresses the
-latter, also confirmed by the probe. Ordinary amend reaches the existing
-`pre-commit` gate; since the issue #404 wiring, amend with `--no-verify` is
-still gated, because `--no-verify` does not skip `prepare-commit-msg`, which
-finds no reusable marker and runs the complete gate.
-
-`git revert` and `git cherry-pick` do not accept `--no-verify` at all
-(`git revert -h` / `git cherry-pick -h` list no such option), so they are
-absent from the bypass rows rather than bypassable through them. Their automatic
-commits run `prepare-commit-msg` and `post-commit` — **not** `commit-msg`, which
-`githooks(5)` documents as applying to `git commit` and `git merge`
-(评审 4114854376). Like the rebase row, `post-commit` fires only once the commit
-exists and git ignores its exit status, so it cannot implement a blocking gate
-either. `post-merge` on the merge rows is likewise after the fact: it fires
-after the merge has completed and cannot block it.
-
-`git pull` in its default merge mode is the same automatic merge commit as
-`git merge` plus a fetch: measured on git 2.48.1 with a diverged upstream, it
-fired `reference-transaction` on the fetch, then `pre-merge-commit`,
-`prepare-commit-msg`, `commit-msg`, and `post-merge` — no `pre-commit`
-(评审 4117872584). Since the issue #404 wiring the wired `pre-merge-commit`
-gates that merge commit like `git merge` itself. Its `--rebase` modes enter
-the rebase path, whose replayed commits are gated per pick through
-`prepare-commit-msg`. `git pull` is the commonest entry point for merges, so
-it is listed separately rather than folded into the `git merge` row.
-
-`--autostash` on `merge`, `pull`, or `rebase` adds another ref-less path:
-the option stashes dirty tracked changes before the operation and pops them
-after, creating stash commit objects without any commit-creation hook or
-`reference-transaction` for those objects (评审 4117983619). Measured on git
-2.48.1, `git merge --autostash` printed the temporary stash OID and created
-both the stash and index-parent commits with no hook firing for them; the
-printed OID remains directly pushable, giving these variants the same
-ref-less #404/#405 boundary already documented for `stash create`.
-
-The conflict path is different for merge, revert, and cherry-pick. In Git
-2.48.1 fixtures, each automatic command stopped on a content conflict; after
-resolving and staging the file, its documented `--continue` command invoked
-`pre-commit` before creating the resulting commit. That runs this repository's
-gate, subject to the working-tree-versus-commit-tree boundary above. These
-continuations are therefore covered by `pre-commit` (评审 4115865924); since
-the issue #404 wiring, their automatic conflict-free commit paths are covered
-as well — merges through `pre-merge-commit`, revert and cherry-pick through
-`prepare-commit-msg` — so both paths of these commands are now gated. A
-conflict-resolved
-`git rebase --continue` was also measured: it ran `prepare-commit-msg`,
-`post-commit`, and `post-rewrite`, but not `pre-commit`; since the issue #404
-wiring, `prepare-commit-msg` runs the gate, so the continuation is covered
-like every other replayed rebase commit.
-
-`git rebase` and `git am` were measured on 2026-09-27 (git 2.48.1, isolated
-hook log, two commits replayed / one patch applied) with this repository's
-wiring absent, so the rows above record which hooks *would* fire: a
-commit-producing rebase runs `pre-rebase` once and then `prepare-commit-msg`
-and `post-commit` per replayed commit — **`pre-commit` and `commit-msg` never
-fire** — and `post-rewrite` once after the replay, whose exit status git
-ignores, so it cannot implement a blocking gate either (评审 4114827177);
-the command-specific hooks for `git am` are the applypatch family, none of
-which this repository wires. Shared index/ref callbacks are covered above.
-Since the issue #404 wiring these two paths diverge: the wired
-`prepare-commit-msg` gates each replayed rebase commit, while `git am`
-remains the ungated path — none of the applypatch family is wired. With
-`--update-refs`,
-rebase additionally moves other local branches that point into the rebased
-range: measured on git 2.48.1, `git rebase --update-refs --onto <newbase>
-HEAD~2` moved a secondary branch to the replayed intermediate commit via
-`reference-transaction` only (评审 4119009208). That branch's tree can
-differ from the checked-out rebased tip, so pushing it makes `pre-push`
-scan the checked-out tree rather than the branch being published — the same
-#405 pushed-ref mismatch, marked `*` in the table.
-
-`git stash push` with tracked changes creates its entry commits under
-`refs/stash` — the stash commit plus its index parent — without running any
-commit-creation hook (评审 4114895001); the `git-stash` documentation likewise
-describes a stash entry as a commit. The bare `git stash` shorthand and the
-legacy `git stash save` form behave identically — measured on git 2.48.1,
-each created the stash and index-parent commits with only shared index/ref
-callbacks firing (评审 4118565852). With `-u` / `--all`, the stash commit
-gains a third "untracked files" parent commit that is likewise created
-ungated. Stashed work normally re-enters the tree
-through `git stash pop` / `apply`, which create no commits, and becomes
-commits only through the paths this table already records. Its ref-update hook is
-`reference-transaction` on the `refs/stash` update, and aborting that update
-in the `prepared` state does prevent the entry — measured: with such a hook
-`git stash push` fails with exit 128 ("ref updates aborted by hook") and
-`refs/stash` keeps its previous value — though the entry's objects are
-already written by then (评审 4114992022). Stash therefore remains within
-#404's hook-design scope rather than being excluded as unwireable.
-
-`git stash create [<message>]` is a separate, ref-less path. With modified
-tracked content, it returns the new stash commit's OID without changing
-`HEAD`, `refs/stash`, or another local ref. A Git 2.48.1 probe recorded only
-shared `post-index-change` callbacks (four index writes); no commit-creation
-hook or `reference-transaction` fired. That callback cannot block the object
-creation. If the returned OID is pushed directly, `pre-push` receives that
-OID while the gate scans the checked-out tree. In the probe, an untracked
-source file remained in the working tree but was absent from the stash commit
-tree, demonstrating the #405 mismatch. A local `reference-transaction` hook
-cannot close the creation path unless the object is first installed in a ref, so that
-limitation belongs in #404's hook-design inventory as well.
-
-The stash commits are also pushable: an explicit refspec such as
-`git push <remote> refs/stash:refs/heads/…`, or `--mirror`, copies the stash
-commit to the remote while `pre-push` analyzes the unrelated checked-out
-tree (评审 4115165662) — measured on git 2.48.1, `git push <remote>
-refs/stash:refs/heads/stashed` created a new remote branch holding the exact
-stash commit. So stash does not, after all, stay purely local; its push-side
-exposure is the push finding below, tracked there rather than re-counted
-here.
-
-`git notes add` / `append` / `edit` / `copy` / `remove` / `merge` / `prune`
-likewise create commits under `refs/notes/*` (by default `refs/notes/commits`)
-without any commit-creation hook — measured on git 2.48.1, only
-`reference-transaction` fires (评审 4115135524, 4117675234, 4117735042).
-Notes refs are pushable (`git push origin refs/notes/*`), so this row is
-remote-facing in the same sense the push finding is; it is recorded here as
-a boundary and its closure — `reference-transaction` in `prepared` state —
-is the same #404 option noted for stash, not a separate remedy.
-
-`git replace [-f] <object> <replacement>` points the target at an existing
-replacement object, creating `refs/replace/<target-oid>` without any
-commit-creation hook — measured on git 2.48.1, only `reference-transaction`
-fired (评审 4118343207). The ordinary form shares the same ref-backed
-exposure and #404/#405 disposition as the specialized forms below.
-
-`git replace --graft <commit> [<parent>…]` creates a replacement commit with
-the target commit's tree and the supplied parent list, then stores it under
-`refs/replace/<target-oid>`. Git commands use that replacement by default, so
-it can change the effective history seen by local commands without moving a
-branch ref. Measured on git 2.48.1 with a two-commit fixture, grafting the
-child to have no parent preserved its tree, created a distinct replacement
-commit, and fired only `reference-transaction` (in `prepared` and `committed`
-states); no commit-creation hook fired. An explicit push of that individual
-`refs/replace/<target-oid>` ref installed the replacement ref on a local bare
-remote. The local closure is therefore the same #404
-`reference-transaction` design question as the other ref-backed paths, and
-the explicit-push exposure belongs to #405.
-
-`git replace --edit <commit>` creates the same kind of replacement ref after
-editing the commit object in the configured editor. Measured on git 2.48.1
-with an isolated commit fixture, changing its message created a distinct
-replacement commit under `refs/replace/<target-oid>` and fired only
-`reference-transaction` (`prepared` and `committed`); no commit-creation hook
-fired. Explicitly pushing that ref to a local bare remote succeeded. Its local
-and push-side dispositions are therefore the same #404 and #405 paths as
-`--graft`. `git replace --convert-graft-file` converts legacy
-`.git/info/grafts` entries into `refs/replace/*` refs; measured on git
-2.48.1 with a valid graft, it created the replacement commit and fired only
-`reference-transaction` (`prepared` and `committed`), no commit-creation
-hook (评审 4117675234). Its local and push-side dispositions are the same
-#404 and #405 paths as `--graft` and `--edit`.
-
-The plumbing path is uncovered too: `git commit-tree <tree>` creates a
-commit object directly, and `git update-ref refs/heads/<branch> <commit>`
-places it on branch history, without any commit-creation hook — measured on
-git 2.48.1, only `reference-transaction` fired during the ref update
-(评审 4115165667). One level lower, `git hash-object -t commit -w --stdin`
-writes the commit object itself; measured on git 2.48.1, piping a valid
-commit payload created the object with an empty hook log (评审 4117675224).
-The resulting OID can then be installed with `update-ref` or pushed
-directly, so `commit-tree` is not the lowest-level route after all. Like
-the other off-hook paths their local ref-update closure is the same #404
-`reference-transaction` question. `git fast-import` reaches the same
-place from a stream: its `commit <ref>` command creates the commit and
-updates the branch in one step — measured on git 2.48.1, importing one
-commit into `refs/heads/imported` fired only `reference-transaction`
-(prepared + committed, twice) and no commit-creation hook (评审 4115220196).
-Because this repository does not wire that hook, such an import bypasses the
-gate on the commit side entirely. `git quiltimport` is the user-facing
-counterpart: it applies a quilt patchset onto the current branch, creating
-each commit via the same `commit-tree` + `update-ref` plumbing — measured on
-git 2.48.1 with a one-patch series, it landed the commit on branch history
-with only `post-index-change` and `reference-transaction` firing, no
-commit-creation hook (评审 4118728971). `git filter-branch` produced an empty
-hook log in our measurement — no commit-creation hook and no
-`reference-transaction` (git 2.48.1, `--env-filter` forcing a real rewrite).
-The reviewer reports `reference-transaction` firing on Git 2.43 (评审
-4115347192); we could not reproduce that here, so we record our measured
-result and note the discrepancy rather than assert either way. This
-repository does not wire `reference-transaction` regardless, so the gate
-does not run for filter-branch; whether the hook is available as a closure
-is a #404 question the two measurements leave open.
-
-`git lfs migrate` is the first **extension** path in this inventory rather
-than a git built-in. Reviewer probes on Git 2.43 with git-lfs 3.4.1 report
-that `import` / `export` (which "rewrite your Git history" per
-`git lfs migrate --help`) and `import --no-rewrite` (which creates a new
-commit) all changed `HEAD` while firing only shared
-index/ref/checkout callbacks — never `pre-commit` (评审 4118866986).
-git-lfs is not installed in this measurement environment, so the row
-records the reviewer's probe rather than a local measurement. The reviewer's
-probe covered the HEAD-only default; the documented multi-ref modes —
-`--everything` (migrate commits reachable from all refs) and
-`--include-ref` selections — can additionally rewrite **non-checked-out**
-branches and tags (评审 4118919110). Those rewritten refs are pushable while
-`pre-push` scans only the checked-out tree, so the multi-ref modes carry the
-same pushed-ref mismatch as multi-ref `filter-branch`: the #405 push-side
-gap, marked `*` in the table. The same
-class boundary extends to other third-party history rewriters —
-`git filter-repo`, `git-annex` — which operate below the porcelain commit
-path like the built-in rewriters above; they have not been probed here
-either, so verify a given tool's hook behavior before relying on this
-class statement.
-
-`git subtree split --prefix=<dir> --branch <branch>` creates a rewritten
-commit chain for the selected subtree and places its tip on the requested
-branch. Measured on git 2.48.1 with a two-commit fixture, the split produced
-two commits and fired only `reference-transaction` (`prepared` and
-`committed`); no commit-creation hook fired. Explicitly pushing the resulting
-branch to a local bare remote succeeded. The local ref-update closure is a
-#404 `reference-transaction` design question, and pushing that branch while
-the hook scans the checked-out tree is the #405 push-side gap.
-
-`git subtree split --prefix=<dir> [<commit>]` without `--branch` is the
-ref-less variant: it creates the same rewritten commit chain but prints only
-its tip OID without updating any ref, and fires no hook at all (评审
-4115953696). Measured on git 2.48.1, an isolated probe returned a new OID
-with an empty hook log and `for-each-ref` unchanged. That OID is then
-publishable by direct-OID push (`git push <remote> <oid>:refs/heads/…`),
-which likewise runs no local hook against the pushed content; the push-side
-gap is the same #405 remedy, and no local `reference-transaction` can
-intercept the creation before that push.
-
-`git subtree merge --prefix=<prefix> <commit>` and
-`git subtree pull --prefix=<prefix> <repository> <ref>` both create a merge
-commit on the checked-out branch. With divergent application and subtree
-histories, Git 2.48.1 fixtures confirmed two-parent merge commits; each fired
-`pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `post-merge`, shared
-index callbacks, and `reference-transaction`, but neither fired `pre-commit`.
-`pull` also fetched the source before the merge. Since issue #404, the wired
-`pre-merge-commit` gates these automatic branch merge commits, with
-`prepare-commit-msg` consuming the same-operation tree marker; the complete
-gate runs once per merge. These commands do not themselves push a ref. If a
-conflicting merge is continued with `git merge --continue`, that
-continuation follows the `pre-commit` path documented above. With
-`--squash`, both commands
-additionally create a ref-less synthetic squash commit before the merge
-(评审 4117872586): `git subtree -h` documents `--squash` for `merge` and
-`pull` as well, and the synthetic commit already exists before the branch
-transaction, so `reference-transaction` cannot close its creation; its
-push-side exposure is the same #405 remedy. The 2026-09-30 recheck on git
-2.48.1 corrected the earlier no-creation-hook measurement: with new subtree
-content after a squash add, both `merge --squash` and `pull --squash` fire
-`pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, and `post-merge` for
-the resulting two-parent branch merge. The hook index tree equals that
-merge's tree. A separate rejection probe made `pre-merge-commit` exit 1;
-`subtree merge --squash` failed without moving `HEAD`. The synthetic commit
-is created through `commit-tree`, while the branch merge uses
-`git merge --no-ff`; only the synthetic commit remains ungated at creation.
-
-`git subtree split --rejoin --prefix=<prefix>` combines a ref-less split with
-a merge back into the current branch. In the automatic, conflict-free path of
-a Git 2.48.1 fixture with earlier add/rejoin metadata and a new subtree
-change, it created split commits and a two-parent rejoin merge; the split generation fired no
-commit-creation hook, while the rejoin fired `pre-merge-commit`,
-`prepare-commit-msg`, `commit-msg`, `post-merge`, and `reference-transaction`,
-but not `pre-commit`. Since issue #404, the wired `pre-merge-commit` gates
-the rejoin merge, with same-operation tree-marker dedup in
-`prepare-commit-msg`. This does not gate the generated split commits at
-creation. Before issue #405, directly pushing the split tip caused the
-pushed-ref mismatch; the implemented push hook now analyzes that tip at its
-own commit state. With `--squash`, the command
-additionally creates a ref-less synthetic squash commit before the rejoin
-(评审 4117843430). The 2026-09-30 git 2.48.1 recheck distinguishes two
-states: a plain directory with no prior subtree add/rejoin metadata uses
-`cmd_add`, creating the initial rejoin through `commit-tree` and `reset`
-without commit-creation hooks; after a squash add or an earlier squash
-rejoin, new subtree content uses `cmd_merge` and fires `pre-merge-commit`,
-`prepare-commit-msg`, `commit-msg`, and `post-merge` for the rejoin. Its
-hook index tree equals the resulting two-parent branch merge tree. The
-installed `cmd_split` selects `cmd_add` or `cmd_merge` using
-`find_latest_squash`; two non-squash probes confirmed the same state
-boundary: no creation hook on a plain directory's first rejoin, then the
-three creation hooks on a later rejoin after new subtree content.
-The earlier blanket no-hook squash measurement represented only the first
-state. Generated split and synthetic squash commits remain ungated at
-creation in both states; the #405 per-ref gate covers any such tip pushed.
-
-`git subtree push --prefix=<prefix> <repository> <refspec>` also creates a
-rewritten split chain, but pushes its tip directly without leaving a local
-split branch. Measured on git 2.48.1 with a two-commit fixture, it created a
-two-commit split history and fired no commit-creation hook or checked-out
-branch ref update. `pre-push` received the split tip OID while `HEAD` remained
-the different full-project commit; the push installed the split tip on the
-bare remote. The local `reference-transaction` callback observed in that probe
-was for `refs/remotes/origin/<refspec>` after the remote accepted the push, so
-it cannot block that outbound update. Split generation bypasses the commit
-gate; before issue #405, the push hook also analyzed the wrong tree. The
-ordinary form has no pre-push local ref transaction that can close #404
-before the split is pushed;
-analyzing the pushed split tip is the #405 disposition.
-
-`git subtree push --prefix=<prefix> --branch <branch> <repository> <refspec>`
-differs: it installs the generated split tip on a local branch before
-pushing. Measured on git 2.48.1, the command created `refs/heads/<branch>`
-with `reference-transaction` (`prepared` and `committed`) before `pre-push`
-ran (评审 4117947441). That local ref update is a #404 closure candidate —
-`reference-transaction` can reject the branch creation — while the push
-itself scanned the checked-out tree before issue #405. The implemented
-per-ref push gate now analyzes the generated split tip at its own commit
-state.
-
-`git subtree push --rejoin --prefix=<prefix> <repository> <refspec>` is a
-different path. When the subtree has new commits, `--rejoin` merges the
-generated split tip back into the checked-out branch before pushing. In a
-Git 2.48.1 fixture with a new subtree commit after an earlier rejoin, the
-resulting two-parent merge fired `pre-merge-commit`, `prepare-commit-msg`,
-`commit-msg`, `post-merge`, and `reference-transaction` for the checked-out
-branch; `pre-push` then received the generated split-tip OID, not the new
-rejoin `HEAD`. The Git 2.43 probe reported by review 4115812068 observed the
-same key hooks. Since issue #404, the wired `pre-merge-commit` gates this
-rejoin merge routed through `git merge --no-ff`, with same-operation
-tree-marker dedup in `prepare-commit-msg`; generated split commits still
-have no creation hook.
-Before issue #405, `pre-push` scanned the rejoin working tree rather than
-the pushed split tip. The implemented push hook now analyzes the split tip
-at its own commit state, using the temporary-worktree path when it differs
-from `HEAD`. With `--squash`, the rejoin additionally creates a ref-less
-synthetic squash commit before the
-merge (评审 4117872586): the synthetic commit already exists before the
-branch transaction, so `reference-transaction` cannot close its creation.
-The 2026-09-30 git 2.48.1 recheck of `push --rejoin --squash` confirms
-the same state boundary as `split --rejoin`: the first rejoin of a plain
-directory without add/rejoin metadata uses ungated `cmd_add`; after a squash
-add or an earlier squash rejoin, the branch merge fires
-`pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, and `post-merge`.
-In all three fixtures, `pre-push` receives the generated split tip, distinct
-from the rejoin `HEAD`; that tip is subject to the #405 per-ref gate.
-
-`git subtree add --prefix=<prefix> <commit>` is another distinct operation:
-it installs a merge commit on the checked-out branch. In a Git 2.48.1 fixture
-with diverged source and target commits, the command created a two-parent
-merge commit containing the prefixed tree. The measured hooks were shared
-`post-index-change` and `reference-transaction` callbacks; neither
-`pre-commit` nor `pre-merge-commit` ran. This branch-history path belongs in
-#404's hook-design inventory; unlike `stash create` and ordinary `subtree
-push`, it updates the checked-out branch, so `reference-transaction` is a
-possible closure to evaluate there. With `--squash`, the command additionally
-creates a ref-less synthetic squash commit before the merge (评审 4117804224):
-measured on git 2.48.1, `git subtree add --prefix=<prefix> --squash <commit>`
-produced both a `Squashed '<prefix>/' content` commit and the merge commit,
-with only `post-index-change` and `reference-transaction` firing. The
-synthetic commit already exists before the branch transaction and can be
-pushed directly by OID, so `reference-transaction` cannot close the squash
-commit itself; its push-side exposure is the same #405 remedy.
-
-`reference-transaction` does **not** close every `commit-tree` path,
-though: `update-ref` is optional. A commit object can be pushed directly by
-OID — `git push <remote> <oid>:refs/heads/…` — while no local ref ever
-points at it, so no local `reference-transaction` fires; `pre-push` runs
-but analyzes the unrelated checked-out tree (评审 4115241708). Measured on
-git 2.48.1: such a push installed the object on the remote
-(`refs/heads/direct`) while the local hook log shows only `pre-push`
-reading the pushed OID from stdin and no `reference-transaction` entry. The
-absence of that ref-update hook does not prevent `pre-push` from blocking
-the operation: a separate Git 2.48.1 probe with `pre-push` exiting 1 rejected
-the direct-OID push and left the remote ref absent; with exit 0 the remote
-ref received the exact OID. This matches the
-[documented pre-push contract](https://git-scm.com/docs/githooks#_pre_push)
-(评审 4115477917). The plumbing path therefore splits: the local-ref variant is a #404
-`reference-transaction` question; the direct-OID variant is a push-side gap
-that only the #405 remedy (analyze the pushed ref) can close.
-
-One qualification applies to the `git commit` rows themselves: formatting,
-lint, type checks, coverage and Sonar scan the working tree, while Git records
-the tree selected for that invocation. Ordinary index-based commits use the
-staged contents; pathspecs
-and content-selection flags can select a different tree. For an ordinary
-index-based commit, working-tree state beyond the index is analyzed but not
-committed. With partially staged changes — state A staged, further state B
-left unstaged — `pre-commit` runs the checks against A+B and the commit
-records A alone (评审 4114992019); the same holds for any untracked file,
-whether or not git lists it — untracked files are absent from the index yet
-still scanned by the gate, because Prettier, ESLint, and the TypeScript
-compiler all read the working tree, and compiler inclusion is independent
-of git's ignore rules. An untracked file excluded through `.git/info/exclude`
-leaves `git status` clean apart from the staged entry, yet this repository's
-`tsconfig.json` includes all of `src`, so `typecheck:strict` sees that
-ignored definition (评审 4115165665) (评审 4115036983).
-Measured on git 2.48.1: a `pre-commit` hook observed an unstaged definition
-and, in a second run, an untracked one that the resulting commit did not
-contain; a third run confirmed an ignored (`info/exclude`) file is likewise
-invisible to `git status` yet visible to the hook. That state can, for example, supply a definition A depends on,
-letting the gate pass while the commit alone does not build. This is the
-commit-side analog of the push-path finding below — same root cause, the
-gate scans the working tree — recorded here as a boundary rather than fixed.
-
-Matching the original index is insufficient for path-limited commits
-(评审 4115548805). With both A and B modified and staged, `git commit
---only A` and the implicit pathspec form `git commit A` record new A plus
-old B, while the gate reads new A plus new B. In Git 2.48.1 isolated probes,
-the working tree matched the original index before both commands, and that
-index retained both staged versions afterward. `git commit --amend --only`
-without paths likewise omitted the staged changes and retained the previous
-tree; ordinary `git commit` and `git commit --include A` recorded both
-staged versions in the same fixture. These results match Git's
-[content-selection contract](https://git-scm.com/docs/git-commit#Documentation/git-commit.txt--o).
-In all five cases, the effective index exposed to `pre-commit` through Git's
-environment matched the resulting commit tree, but the gate's checks read
-working-tree files independently of that index. An analysis of the original
-index alone would therefore not close this boundary.
-
-So the accurate statement of the invariant is:
-
-> The gate analyzes the **working tree**; the file-size stage additionally
-> checks source blobs and their bounded baseline in the effective commit index
-> (issue #432,
-> [File Size Guard](file-size-guard.md)). It runs on `git commit`,
-> and — since the issue #405 wiring — on `git push` for every pushed ref at
-> that ref's commit state: in the checked-out working tree only under the
-> provable-equality preconditions, otherwise in a temporary worktree checked
-> out at the pushed commit. It also runs — since the issue #404 wiring —
-> on every commit-creating porcelain with a wireable pre-creation hook:
-> automatic conflict-free `git merge` and `git pull` (default merge mode)
-> through `pre-merge-commit`, automatic conflict-free `git revert` and
-> `git cherry-pick`, every replayed `git rebase` commit (including
-> conflict-resolved `git rebase --continue`), the automatic branch merges
-> of `git subtree merge` / `pull` (including `--squash`) and the
-> `split --rejoin` / `push --rejoin` merges (with or without `--squash`)
-> routed through `git merge --no-ff` after prior add/rejoin metadata, and
-> commit-side `--no-verify` on `git commit` /
-> `git merge` (whose `prepare-commit-msg` still fires), all through
-> `prepare-commit-msg`. The tree it passes is the tree
-> actually recorded only when the analyzed contents match that tree: at
-> commit time, they must match the **actual tree selected for that invocation**,
-> after pathspecs and content-selection flags are applied. Matching the
-> original index alone is insufficient: this excludes staged changes omitted
-> by `--only` or a pathspec, unstaged tracked changes (including ones hidden
-> by `skip-worktree` or `assume-unchanged`), and additional untracked or
-> ignored inputs the gate reads. At push time (issue #405), the fast path
-> takes the current working tree only when the pushed commit is `HEAD`, the
-> index and working tree have no tracked differences from it, and no
-> untracked non-ignored files exist anywhere in the repository — this is
-> checked, not assumed. Ignored inputs and
-> differences hidden by `skip-worktree` / `assume-unchanged` remain outside
-> what git can prove (fast-path residuals recorded in
-> [Push-Path Per-Ref Gating](#push-path-per-ref-gating-issue-405)); every
-> other push is analyzed in a pristine temporary worktree of the pushed
-> commit, which closes both.
-> For automatic, conflict-free operations, it does **not** analyze:
-> `git am`, `git stash` in any entry-creating form
-> (`push`, shorthand, `save`, `-u`/`--all`; entry commits under
-> `refs/stash`), `git stash create` (a ref-less stash commit object),
-> `--autostash` on `merge`/`pull`/`rebase` (ref-less temporary stash
-> commits; the merge/rebase commits they wrap are gated),
-> `git notes` mutations (commits under `refs/notes/*`),
-> `git commit-tree` (commit objects placed on history via `update-ref`),
-> `git hash-object -t commit -w` (commit objects written directly, then
-> installed via `update-ref` or pushed by OID),
-> `git replace` in any form (ordinary `[-f] <object> <replacement>`,
-> `--graft`, `--edit`, `--convert-graft-file`; replacement
-> commits under `refs/replace/*`),
-> `git fast-import` (`commit <ref>` stream commands), `git quiltimport`
-> (quilt patchset commits), `git filter-branch`
-> (rewritten history), `git lfs migrate` (extension history rewrite /
-> no-rewrite commit; reviewer probe, see note), `git subtree split --branch` (rewritten commits under
-> the requested branch), `git subtree split` without `--branch` (a ref-less
-> split commit publishable by direct-OID push), the generated
-> split commits of `subtree split --rejoin` / `push` / `push --rejoin` and
-> the `git subtree add` merge commit, the initial rejoin branch commit of
-> `split --rejoin` / `push --rejoin` (with or without `--squash`) when no
-> prior add/rejoin metadata is found, and the `--squash` variants' synthetic
-> commits, at creation. The later branch merge/rejoin commits reached
-> through `git merge --no-ff` are gated, as distinguished above. For both
-> `subtree push` forms, `pre-push` now gates
-> the generated split tip at that commit's state (issue #405); the earlier
-> checked-out-tree scan is retained below as historical evidence. The
-> `--squash` variants of `subtree add`, `merge`, `pull`, `split --rejoin`,
-> and `push --rejoin` additionally create a ref-less synthetic squash commit
-> that no local hook can gate. With `rebase --update-refs`, the replayed
-> tips of other local branches move by `reference-transaction` alone and are
-> not gated. `git push --no-verify` still bypasses the push-time
-> `pre-push` rerun entirely (`git push -h` documents it as "bypass pre-push
-> hook"); commit-side `--no-verify` runs the gate through the wired
-> `prepare-commit-msg` since issue #404 (single-use marker; the editor-abort
-> residue noted in the Decision section bounds the claim).
-
-An earlier revision of this file claimed that no commit is ever created without
-the full gate having run, and that the only shared hook for `revert` and
-`cherry-pick` was `prepare-commit-msg` *and* `commit-msg`. Both claims were
-false; review on PR #403 caught them. `commit-msg` never fires for those two
-commands, which also means the `commit-msg`-based remedy that revision proposed
-would not have closed the gap at all — see below.
-
-Automatic conflict-free `revert` and `cherry-pick` commits have no
-pre-commit-equivalent hook, and no `commit-msg` either. `prepare-commit-msg` is
-their pre-creation message hook; the shared index-write callback above cannot
-block the operation. The issue #404 wiring nevertheless selects
-`prepare-commit-msg` as the gate point for exactly these paths: a measured
-probe (git 2.48.1) confirmed its non-zero exit aborts `git revert` and
-`git cherry-pick` before the commit exists, and the automated probe in
-`scripts/gate-tree-marker.test.ts` pins that behavior. Because
-`prepare-commit-msg` also fires for ordinary `git commit` and merge commits —
-where `pre-commit` / `pre-merge-commit` have already gated the same index tree
-— the tree marker (`scripts/gate-tree-marker.sh`) deduplicates: an ordinary
-commit or merge still pays exactly one complete gate run, while
-revert / cherry-pick / rebase replays (and `--no-verify` commits) find no
-fresh matching marker and run the complete gate. The marker is consumed on a
-successful check (评审 4120128545), so it serves exactly the operation that
-wrote it and cannot be reused by a later same-tree operation; the fallback
-gate run itself writes no marker (评审 4120239723) — two consecutive
-same-tree `--no-verify` commits therefore each pay the complete gate. The earlier
-record declined
-to propose this remedy because closing the gaps "would change gate behavior",
-which the #356 decision explicitly did not do; issue #404 is precisely the
-follow-up decision that authorizes the behavior change, and this section now
-records its outcome.
+[命令覆盖清单与实测说明](quality-gate-enforcement.md#what-the-gate-actually-enforces)的兼容入口。
 
 ## Known Finding: Uncovered Commit-Creation Paths
 
-**Update 2026-09-28 (issue #404 wiring)**: conflict-free `git merge`,
-`git pull` (default merge mode), `git revert`, `git cherry-pick`, replayed
-`git rebase` commits (including conflict-resolved `--continue`), the
-automatic subtree merge/rejoin commits routed through `git merge --no-ff`,
-and commit-side `--no-verify` are
-**no longer uncovered** — they are gated through the wired
-`pre-merge-commit` / `prepare-commit-msg` hooks with tree-marker dedup (see
-[What The Gate Actually Enforces](#what-the-gate-actually-enforces)). The
-original finding text below is retained for the paths that remain uncovered.
-
-The uncovered automatic commit-producing paths and replacement-object paths —
-`git am`,
-`git commit-tree` plus `git update-ref`, `git hash-object -t commit -w`
-plus `git update-ref` or direct-OID push, `git fast-import`,
-`git quiltimport`, `git filter-branch`, `git lfs migrate` (extension;
-reviewer probe, not measured here),
-`git subtree split --branch`, `git subtree split` without `--branch` (a
-ref-less split commit publishable by direct-OID push), the generated
-split commits of `git subtree split --rejoin` and `git subtree push`
-(with or without `--rejoin`), `git subtree add`,
-`git stash create`, `--autostash` on `merge`/`pull`/`rebase` (the wrapped
-merge/rebase commits are gated; the temporary stash objects are not), with
-`rebase --update-refs` the replayed tips of other local branches, and
-`git replace` in any form (ordinary, `--graft`, `--edit`,
-`--convert-graft-file`) — can produce or replace commits without the gate
-analyzing the resulting commit (评审
-4115477920, 4115606416, 4115639629, 4115682292, 4115710587, 4115748220,
-4115748226, 4115812068, 4115865920, 4115865924, 4117675224, 4117675234,
-4117872584, 4117983619). The `--squash` variants of `subtree add`, `merge`, `pull`,
-`split --rejoin`, and `push --rejoin` additionally create a ref-less
-synthetic squash commit that no local hook can gate (评审 4117804224,
-4117843430, 4117872586).
-For `split --rejoin` / `push --rejoin`, only the initial branch commit
-without prior add/rejoin metadata shares the ungated `subtree add` path;
-later merge/rejoin commits are gated even with `--squash`, as recorded in
-the corrected table.
-`git subtree push` does run `pre-push`, which since issue #405 analyzes
-the generated split tip at its own commit state. With `--rejoin`, the
-generated split is also merged into the checked-out branch; after prior
-add/rejoin metadata, that merge is gated by the wired `pre-merge-commit`
-(issue #404), including with `--squash`, while
-the generated split commits remain ungated at creation. The earlier
-#405 pushed-tip mismatch is closed by the per-ref push gate. `git subtree
-add` is a separate unchecked merge path with a `reference-transaction`
-callback, as measured above (评审 4115748226). For
-`split --rejoin`, only the rejoin merge updates the checked-out branch; in the
-automatic conflict-free path after prior add/rejoin metadata, split commits
-are generated without commit hooks while the rejoin is gated. Without that
-metadata, the initial rejoin remains ungated at creation, regardless of
-`--squash`. If the
-rejoin conflicts and is continued through `git merge --continue`, `pre-commit`
-runs for that merge while split generation remains ungated (评审 4115865920).
-`git stash push` is not counted here because its commits stay under
-`refs/stash`; `git stash create` is included because it produces a ref-less
-object. The `reference-transaction` options for stash push and notes are
-deliberately **not wired** by the issue #404 fix: that hook fires on every
-ref update — including fetch, push remote-tracking updates, branch
-create/delete, reset, and tag — so gating it with the complete gate would
-tax routine non-committing ref operations, and aborting `prepared` states
-can break ordinary workflows; the remote-facing exposure of stash/notes
-objects is the [#405](https://github.com/hailingu/PlotWeave/issues/405)
-push-side gap (push scans the checked-out tree). Revisit as an owner
-decision if those paths see real use. Separately, `git push --no-verify`
-bypasses the push-time `pre-push` rerun entirely (评审 4115110181,
-4115477925). It does not undo an earlier `pre-commit` gate run: if the
-commit was created through ordinary `git commit`, that gate already ran,
-subject to the commit-tree/working-tree mismatch described above. A push with no
-analysis of the pushed state is possible when no earlier gate analyzed
-that state, for example after one of the uncovered creation paths. The
-prohibition in `AGENTS.md` covers this push-time bypass regardless of any
-earlier analysis.
-
-Push-time analysis since the issue #405 fix (2026-09-30) covers every
-pushed ref at that ref's own commit — a pristine temporary-worktree checkout
-unless the current tree is provably identical to the pushed commit (see
-[Push-Path Per-Ref Gating](#push-path-per-ref-gating-issue-405)). The
-pre-fix wording is retained below as the record of what the narrow case
-used to be: the fast path's residuals (tracked differences hidden by
-`skip-worktree` or `assume-unchanged`, extra ignored inputs) are exactly
-the parts of that wording git still cannot prove (评审 4115241706,
-4115510915), and the slow path closes them.
-Whether to wire `pre-merge-commit` was a governance decision with a real cost
-attached (every merge became a gate run); it was out of scope for #356 and
-has since been decided and implemented by
-[#404](https://github.com/hailingu/PlotWeave/issues/404) (2026-09-28), which
-wired `pre-merge-commit` and `prepare-commit-msg` with tree-marker dedup so
-each commit-creating operation pays exactly one complete gate run.
+[未覆盖的提交创建路径](quality-gate-enforcement.md#known-finding-uncovered-commit-creation-paths)的兼容入口；完整清单只在目标文档维护。
 
 ## Known Finding: Push Scans The Checked-Out Tree, Not The Pushed Ref
 
-**Update 2026-09-30 (issue #405 fix)**: this finding is closed. `.githooks/
-pre-push` now reads the refs Git hands it on stdin and gates every pushed
-ref at that ref's commit state — in the current working tree only when it is
-provably identical to the pushed commit, otherwise in a temporary worktree
-checked out at that commit (see
-[Push-Path Per-Ref Gating](#push-path-per-ref-gating-issue-405)). The
-equality proof covers tracked differences (staged and unstaged) and
-untracked non-ignored files anywhere in the repository; ignored inputs and
-differences hidden by `skip-worktree` /
-`assume-unchanged` remain outside what git can prove and are recorded as
-fast-path residuals there — the slow path's pristine checkout closes both.
-The founding text below is retained as the pre-fix measurement.
-
-`.githooks/pre-push` reads no input. Git hands the hook the refs about to be
-pushed on standard input; the hook ignores it and runs
-`sonar-quality-gate.sh` against the current working tree. So when a developer
-pushes a ref other than the checked-out branch — `git push origin other-branch`,
-several refs at once, or `--all` — the gate analyzes and passes on the
-**checked-out** tree, and the commit actually pushed may never have been
-analyzed at all.
-
-Branch identity is not sufficient either. The hook scans the **working tree**,
-not the pushed commit, so a push can pass on state the pushed commit does
-not contain. The first variant is uncommitted work: after committing state A
-on the checked-out branch, an uncommitted change B means `git push` sends A
-while the gate's tests and scanner inspect B, so the gate can pass on B and
-A reaches the remote never analyzed. The second is ignored files: "clean"
-does not exclude them, because `.git/info/exclude` (or any ignore rule)
-hides a file from `git status` yet not from the gate. With `src/local.ts`
-excluded and this repository's `tsconfig.json` including all of `src`, a
-push of HEAD state A leaves `git status` clean while `pre-push` analyzes A
-plus the ignored file B (评审 4115241706). Measured on git 2.48.1:
-`git status --porcelain` was empty, the push sent only A, and the hook read
-the ignored `src/local.ts`. So even a push that matches the checked-out
-branch with no reported changes can analyze a tree the pushed commit does
-not contain.
-
-Tracked changes can also be invisible to `git status`: in isolated Git
-2.48.1 probes, marking `src/local.ts` with `skip-worktree` or
-`assume-unchanged` and then changing its contents left `git status
---porcelain` empty while the file differed from `HEAD` (评审 4115510915).
-The working-tree version passed TypeScript checking while the committed
-version failed it, with no ignored input involved. These flags have
-[different documented purposes](https://git-scm.com/docs/git-update-index#_skip_worktree_bit);
-neither makes clean status proof that the analyzed contents match the
-pushed commit. The same hidden tracked difference can affect the
-comparison with the selected commit tree at commit time.
-
-The plumbing path also has a push-side variant with no local ref update:
-`git push <remote> <oid>:refs/heads/…` sends a commit object that no local
-ref points at, so no local `reference-transaction` fires and `pre-push`
-again analyzes the unrelated checked-out tree (评审 4115241708). Measured on
-git 2.48.1: such a push installed the object on the remote
-(`refs/heads/direct`) while the local hook log shows only `pre-push` reading
-the pushed OID from stdin and no `reference-transaction` entry. Only the
-pushed-ref remedy below can close this one.
-
-`git subtree push --prefix=<prefix> <repository> <refspec>` has the same
-push-side mismatch, while also creating the commits it pushes. In a Git
-2.48.1 two-commit fixture, the command created a rewritten split chain and
-pushed its tip directly without updating the checked-out branch. `pre-push`
-received the split-tip OID while `HEAD` remained the distinct full-project
-commit scanned by the gate. A `reference-transaction` callback updated the
-local remote-tracking ref only after the bare remote accepted the push, too
-late to block it. The push-side mismatch is tracked in #405 and requires
-analyzing the pushed split tip.
-
-Adding `--rejoin` changes the local history transition but not the pushed-tip
-identity. In a Git 2.48.1 fixture with new subtree content, `git subtree push
---rejoin` created a two-parent merge on the checked-out branch; its
-`reference-transaction` callback covered `refs/heads/main` before the push,
-and `pre-merge-commit` fired. Then `pre-push` received the generated split-tip
-OID while `HEAD` was the different rejoin merge commit (评审 4115812068).
-Since issue #404, the wired `pre-merge-commit` gates that rejoin merge after
-the earlier rejoin supplied subtree metadata, with same-operation tree-marker
-dedup in `prepare-commit-msg`; the recheck above confirms this also holds
-with `--squash` when that metadata is present.
-`reference-transaction` remains unwired and split generation has no
-commit-creation hook. The #405 wrong-tree scan described here is the
-pre-fix measurement: the implemented per-ref push gate now analyzes the
-pushed split tip at its own commit state.
-
-Verified on 2026-09-27 with a local bare remote and a hook that logs both the
-stdin refs and `HEAD`:
-
-```
-stdin (ref actually pushed): refs/heads/other 384b7636aea2…
-HEAD (what the gate scans):  7db139eda9f2… (main)
-```
-
-Because CI does not run SonarQube (see the Scope Routing row for `.github/**`),
-the push-time gate is the only SonarQube path on the push side; the same
-script also runs on `git commit`, so the covered creation path has an earlier
-analysis, subject to the commit-tree/working-tree mismatch described above. If no
-earlier gate analyzed the pushed state, pushing a different ref can let it
-reach the remote without any SonarQube pass for that state. Using
-`--no-verify` likewise skips the push-time gate; it does not erase any
-earlier analysis. This is a separate problem from the commit-creation gaps
-above, with a different
-trigger and a different remedy, so it is tracked separately rather than folded
-into #404: [#405](https://github.com/hailingu/PlotWeave/issues/405).
-The commit-side counterpart — a commit analyzed on working-tree state it
-does not contain (omitted staged changes, unstaged tracked changes, or
-untracked/ignored inputs) — is recorded in
-[What The Gate Actually Enforces](#what-the-gate-actually-enforces) as a
-boundary of this inventory.
+[推送对象错配的历史证据](quality-gate-push.md#known-finding-push-scans-the-checked-out-tree-not-the-pushed-ref)的兼容入口；已实施的修复与残余边界见同一目标文档。
 
 ## Measured Baseline
 
@@ -1797,13 +541,13 @@ these becomes true:
   through `git merge --no-ff` were closed by the issue #404 wiring on
   2026-09-28; initial rejoins using `subtree add` remain uncovered.) Either way,
   update
-  [What The Gate Actually Enforces](#what-the-gate-actually-enforces) in the same
+  [What The Gate Actually Enforces](quality-gate-enforcement.md#what-the-gate-actually-enforces) in the same
   change — that table is a measurement, and a stale one is worse than none.
 - `pre-push` starts reading its stdin **and the gate analyzes the pushed
   commit** (for example by checking out the pushed ref into a temporary
   worktree for the scan) instead of the current working tree. Reading stdin
   alone identifies the pushed ref but does not close the dirty-worktree
-  mismatch recorded above — with uncommitted change B on the checked-out
+  mismatch recorded in the [historical push finding](quality-gate-push.md#known-finding-push-scans-the-checked-out-tree-not-the-pushed-ref) — with uncommitted change B on the checked-out
   branch, the scanner would still inspect B while A is what was pushed. That
   is a gate-strength change, not a cost change, and needs its own decision —
   but until it happens, every enforcement statement in this file is
@@ -1815,7 +559,7 @@ these becomes true:
   Status: fired and resolved 2026-09-30 by the issue #405 fix — the gate
   decision it demanded is [#405](https://github.com/hailingu/PlotWeave/issues/405),
   implemented as the per-ref push gating this file now records (see
-  [Push-Path Per-Ref Gating](#push-path-per-ref-gating-issue-405)): stdin is
+  [Push-Path Per-Ref Gating](quality-gate-push.md#push-path-per-ref-gating-issue-405)): stdin is
   read, every pushed commit is analyzed at its own state, and the
   dirty-worktree mismatch falls to the slow-path temporary worktree rather
   than being assumed away.
@@ -1858,7 +602,7 @@ git init --bare -q "$(mktemp -d)/origin.git"   # 把输出路径用于下行
 ```
 
 Expect the first slow-path run on a machine to pay cold dependency caches
-(the sample below did); a repeat slow path against a recently built tree is
+(the slow-path sample above did); a repeat slow path against a recently built tree is
 faster.
 
 Record the commit under measurement and the environment table above alongside
