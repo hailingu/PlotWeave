@@ -118,7 +118,7 @@ synchronous; concurrent working-tree or index edits during a run are not a
 supported snapshot guarantee. Other static checks, coverage and Sonar still
 analyze working-tree contents; this change closes the size-check mismatch
 only, not the broader commit-tree analysis boundary recorded in
-[Quality Gate Cost](quality-gate-cost.md#what-the-gate-actually-enforces).
+[Gate Enforcement](quality-gate-enforcement.md#what-the-gate-actually-enforces).
 Function/closure measurement remains the explicit verification gap of option B.
 
 ## Initial Verification (2026-10-01)
