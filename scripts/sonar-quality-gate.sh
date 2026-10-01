@@ -142,6 +142,22 @@ release_lock() {
   rmdir "$lock_directory" 2>/dev/null || true
 }
 
+# 获取失败不能判断锁是否陈旧：保留锁并给出人工核查与空目录恢复指引。
+# 稳定诊断代码与命令契约见 quality-gate-cost.md「门禁锁的人工恢复」。
+fail_lock_acquisition() {
+  printf 'SonarQube 门禁失败：[SONAR_GATE_LOCK_UNAVAILABLE] 无法获取门禁锁：%s\n' \
+    "$lock_directory" >&2
+  printf '%s\n' \
+    '另一个门禁或 gate-history.sh materialize 可能正在运行，也可能是异常退出遗留的锁。' \
+    '先等待相关操作结束；确认没有门禁或记录物化进程正在运行，且此目录确为残留锁后，执行下列命令。' >&2
+  # 单引号闭合、转义再重开，路径中的空格与 shell 替换符均保持字面量。
+  quoted_lock_path=$(printf '%s' "$lock_directory" | sed "s/'/'\\\\''/g")
+  printf "[SONAR_GATE_LOCK_RECOVERY_COMMAND] rmdir -- '%s'\n" "$quoted_lock_path" >&2
+  printf '%s\n' \
+    'rmdir 仅删除空目录；非空目录、权限问题或父目录缺失请人工检查。清理后重新执行原 Git 操作，仍须通过完整门禁。' >&2
+  exit 1
+}
+
 [ -n "$sonar_host_url" ] ||
   fail '必须显式设置 SONAR_HOST_URL，避免扫描器误连 SonarQube Cloud'
 
@@ -162,8 +178,7 @@ require_command "$curl_bin"
 require_command "$node_bin"
 require_command "$llvm_cov_bin"
 
-mkdir "$lock_directory" 2>/dev/null ||
-  fail '另一个 SonarQube 门禁正在运行；为保护共享覆盖率与扫描目录，本次操作已停止'
+mkdir "$lock_directory" 2>/dev/null || fail_lock_acquisition
 trap release_lock 0 1 2 15
 
 printf '%s\n' '[SonarQube] 生成最新前端覆盖率……'

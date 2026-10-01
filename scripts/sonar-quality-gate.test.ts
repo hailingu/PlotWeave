@@ -1,5 +1,6 @@
 import {
   chmodSync,
+  existsSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -8,7 +9,8 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, resolve } from 'node:path'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
+import { once } from 'node:events'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const repositoryRoot = resolve(import.meta.dirname, '..')
@@ -26,6 +28,7 @@ type GateOptions = {
     | 'valid'
   formatExit?: number
   lintExit?: number
+  lockName?: string
   lockOccupied?: boolean
   npmExit?: number
   pendingBlocked?: boolean
@@ -53,6 +56,7 @@ type GateRun = {
   curlStdin: string
   history: string
   log: string
+  lockExists: boolean
   marker: string
   pending: string
   scannerToken: string
@@ -301,8 +305,8 @@ function gateEnvironment(
   return environment
 }
 
-/** 在隔离的外部依赖边界下执行真实门禁脚本或 Git hook。 */
-function runGate(target: string, options: GateOptions = {}): GateRun {
+/** 为同步运行与强杀恢复场景分配同一个隔离门禁沙箱。 */
+function prepareGatePaths(options: GateOptions = {}): GateStubPaths {
   const sandbox = mkdtempSync(resolve(tmpdir(), 'plotweave-sonar-gate-'))
   temporaryDirectories.push(sandbox)
 
@@ -315,7 +319,7 @@ function runGate(target: string, options: GateOptions = {}): GateRun {
     historyPath: resolve(sandbox, 'gate-history.jsonl'),
     pendingPath: resolve(sandbox, 'gate-pending.jsonl'),
     markerPath: resolve(sandbox, 'gate-tree.marker'),
-    lockPath: resolve(sandbox, 'sonar-gate.lock'),
+    lockPath: resolve(sandbox, options.lockName ?? 'sonar-gate.lock'),
     reportPath: resolve(sandbox, '.scannerwork', 'report-task.txt'),
     npmPath: resolve(sandbox, 'bin', 'npm'),
     scannerPath: resolve(sandbox, 'bin', 'sonar-scanner'),
@@ -339,6 +343,15 @@ function runGate(target: string, options: GateOptions = {}): GateRun {
     }
   }
 
+  return paths
+}
+
+/** 使用指定沙箱执行真实门禁，可在清理残留锁后重试同一路径。 */
+function runPreparedGate(
+  target: string,
+  paths: GateStubPaths,
+  options: GateOptions = {},
+): GateRun {
   const result = spawnSync('sh', [resolve(repositoryRoot, target)], {
     cwd: repositoryRoot,
     encoding: 'utf8',
@@ -352,6 +365,7 @@ function runGate(target: string, options: GateOptions = {}): GateRun {
     }),
     history: readFileSync(paths.historyPath, { encoding: 'utf8' }),
     log: readFileSync(paths.logPath, { encoding: 'utf8', flag: 'a+' }),
+    lockExists: existsSync(paths.lockPath),
     marker: readTextFileBestEffort(paths.markerPath),
     pending: readTextFileBestEffort(paths.pendingPath),
     scannerToken: readFileSync(paths.scannerTokenPath, {
@@ -362,6 +376,56 @@ function runGate(target: string, options: GateOptions = {}): GateRun {
     stderr: result.stderr,
     stdout: result.stdout,
   }
+}
+
+/** 在隔离的外部依赖边界下执行真实门禁脚本或 Git hook。 */
+function runGate(target: string, options: GateOptions = {}): GateRun {
+  return runPreparedGate(target, prepareGatePaths(options), options)
+}
+
+/** 等待测试门禁在持锁后的首个检查命令中暂停，超时或提前退出均报错。 */
+function waitForHeldGate(child: ChildProcess): Promise<void> {
+  return new Promise((resolveReady, reject) => {
+    const timeout = setTimeout(
+      () => reject(new Error('测试门禁未在持锁后就绪')),
+      10_000,
+    )
+    let output = ''
+    child.once('error', (error) => {
+      clearTimeout(timeout)
+      reject(error)
+    })
+    child.once('exit', () => {
+      clearTimeout(timeout)
+      reject(new Error('测试门禁在持锁就绪前退出'))
+    })
+    child.stdout?.on('data', (data: Buffer) => {
+      output += data.toString()
+      if (output.includes('TEST_GATE_LOCK_HELD')) {
+        clearTimeout(timeout)
+        resolveReady()
+      }
+    })
+  })
+}
+
+/** 只终止测试新建的进程组，等待退出以避免检查命令遗留在后台。 */
+async function killTestGateGroup(child: ChildProcess): Promise<void> {
+  if (!child.pid || child.exitCode !== null || child.signalCode !== null) return
+  const exited = once(child, 'exit')
+  process.kill(-child.pid, 'SIGKILL')
+  await exited
+}
+
+/** 从文档定义的稳定诊断代码读取恢复命令，缺失指引应直接使回归失败。 */
+function recoveryCommand(result: GateRun): string {
+  // 命令契约：quality-gate-cost.md「门禁锁的人工恢复（Issue #430）」。
+  expect(result.stderr).toContain('[SONAR_GATE_LOCK_UNAVAILABLE]')
+  const command = result.stderr.match(
+    /^\[SONAR_GATE_LOCK_RECOVERY_COMMAND\] (.+)$/m,
+  )?.[1]
+  expect(command).toBeDefined()
+  return command ?? ''
 }
 
 afterEach(() => {
@@ -620,6 +684,102 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
 
     expect(result.status).not.toBe(0)
     expect(`${result.stdout}${result.stderr}`).toContain('不支持的字符')
+  })
+})
+
+describe('门禁锁恢复命令（issue #430）', { timeout: 30_000 }, () => {
+  it.each(['sonar-gate.lock', "sonar lock's $(touch injected).lock"])(
+    '锁 %s 被占用时保留原锁，恢复命令只删除该空目录',
+    (lockName) => {
+      const paths = prepareGatePaths({ lockName, lockOccupied: true })
+      const sentinel = resolve(dirname(paths.lockPath), 'keep.txt')
+      writeFileSync(sentinel, 'keep')
+      const result = runPreparedGate('scripts/sonar-quality-gate.sh', paths)
+
+      expect(result.status).not.toBe(0)
+      expect(result.lockExists).toBe(true)
+      expect(result.log).toBe('')
+      expect(result.pending).toBe('')
+      expect(existsSync(paths.coveragePath)).toBe(false)
+      expect(result.stderr).toContain(paths.lockPath)
+      const cleared = spawnSync('sh', ['-c', recoveryCommand(result)], {
+        cwd: dirname(paths.lockPath),
+        encoding: 'utf8',
+      })
+      expect(cleared.status, cleared.stderr).toBe(0)
+      expect(existsSync(paths.lockPath)).toBe(false)
+      expect(existsSync(resolve(dirname(paths.lockPath), 'injected'))).toBe(
+        false,
+      )
+      expect(readFileSync(sentinel, 'utf8')).toBe('keep')
+    },
+  )
+
+  it.each([0, 2])('扫描退出码 %i 时释放本次门禁锁', (scannerExit) => {
+    const result = runGate('scripts/sonar-quality-gate.sh', { scannerExit })
+    expect(result.status).toBe(scannerExit)
+    expect(result.lockExists).toBe(false)
+  })
+})
+
+describe('强杀门禁后的人工恢复（issue #430）', { timeout: 30_000 }, () => {
+  it('活跃门禁与强杀残留锁均拒绝第二次进入，清理后重试完整门禁', async () => {
+    const paths = prepareGatePaths()
+    writeExecutable(
+      paths.npmPath,
+      "printf 'TEST_GATE_LOCK_HELD\\n'; while :; do sleep 1; done",
+    )
+    const child = spawn(
+      'sh',
+      [resolve(repositoryRoot, 'scripts/sonar-quality-gate.sh')],
+      {
+        cwd: repositoryRoot,
+        detached: true,
+        env: gateEnvironment(paths, {}),
+      },
+    )
+    try {
+      await waitForHeldGate(child)
+      expect(existsSync(paths.lockPath)).toBe(true)
+      const active = runPreparedGate('scripts/sonar-quality-gate.sh', paths)
+      expect(active.status).not.toBe(0)
+      expect(active.log).toBe('')
+      expect(active.lockExists).toBe(true)
+      await killTestGateGroup(child)
+      expect(child.signalCode).toBe('SIGKILL')
+
+      const stale = runPreparedGate('scripts/sonar-quality-gate.sh', paths)
+      expect(stale.status).not.toBe(0)
+      expect(stale.log).toBe('')
+      expect(stale.lockExists).toBe(true)
+      const cleared = spawnSync('sh', ['-c', recoveryCommand(stale)], {
+        cwd: repositoryRoot,
+      })
+      expect(cleared.status).toBe(0)
+      expect(existsSync(paths.lockPath)).toBe(false)
+      writeNpmStub(paths)
+      const retried = runPreparedGate('scripts/sonar-quality-gate.sh', paths)
+      expect(retried.status).toBe(0)
+      expect(retried.lockExists).toBe(false)
+      expect(
+        retried.log
+          .split('\n')
+          .filter(Boolean)
+          .map((line) => line.split(' ')[0]),
+      ).toEqual([
+        'npm',
+        'npm',
+        'npm',
+        'npm',
+        'cargo-llvm-cov',
+        'sonar-scanner',
+        'curl',
+        'curl',
+      ])
+      expect(JSON.parse(retried.pending).qualityGate).toBe('OK')
+    } finally {
+      await killTestGateGroup(child)
+    }
   })
 })
 

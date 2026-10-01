@@ -155,6 +155,38 @@ decision and a recorded baseline. Both now exist.
 目录清理未验证：目录仍在系统临时区，不能成为工作仓库默认标记。本变更不涉及
 应用数据、持久化协议或异步完成顺序；验证结果随修复 PR 记录。
 
+### 门禁锁的人工恢复（Issue #430）
+
+本节记录 [issue #430](https://github.com/hailingu/PlotWeave/issues/430)
+的恢复指引修复。`sonar-quality-gate.sh` 和 `gate-history.sh materialize`
+共用目录互斥锁；正常退出会释放锁，SIGKILL 或断电可能留下目录。
+门禁仍以原子 `mkdir` 获取锁，获取失败即停止，不检测锁年龄或进程所有者，
+也不自动删除或接管锁。
+
+锁获取失败的诊断包含实际锁路径，以及两个稳定诊断代码：
+`[SONAR_GATE_LOCK_UNAVAILABLE]` 标识获取失败；
+`[SONAR_GATE_LOCK_RECOVERY_COMMAND]` 后跟可在 POSIX shell 中执行的
+`rmdir -- '<锁路径>'` 命令，路径中的单引号会被转义。
+先等待正在运行的门禁和记录物化结束，确认没有相关进程且目录确为残留锁后，
+才可执行该命令，再重新执行原 Git 操作的完整门禁。`rmdir` 只移除空目录；
+非空目录、权限问题或缺失父目录仍需人工检查，不能按残留锁直接清理。
+
+不变量由 `sonar-quality-gate.sh` 的锁获取与退出清理持有；入口是四个 Git
+hook，记录物化是共享该锁的另一个入口，其有界等待和 pending 保留语义沿用。
+
+| 前置状态 | 动作 / 顺序 | 可观察结果 | 不变量 | 验证 |
+| --- | --- | --- | --- | --- |
+| 空闲锁 | 门禁获取锁 → 成功或扫描失败退出 | 完整成功或原失败透传；锁释放 | 只有持锁者可执行检查，正常退出释放本次锁 | 成功与扫描失败的锁清理回归 |
+| 另一个门禁持锁 | 后一个门禁尝试获取同一路径 | 非零退出、无检查或扫描、原锁保留；包含恢复指引 | 获取失败不得删除他人的锁或并发进入门禁 | 持锁期间第二次运行的行为回归 |
+| 测试门禁持锁后被 SIGKILL | 终止测试专属进程组 → 再运行门禁 | 残留锁保留；非零退出并给出路径和清理命令 | 无法确认锁的所有者时仍拒绝执行 | 隔离沙箱中的真实门禁强杀回归 |
+| 已确认持锁者结束 | 执行诊断中的命令 → 重试门禁 | 仅删除目标空目录；重试执行完整检查并通过 | 恢复指引不能跳过任何门禁步骤 | 强杀后的清理与成功重试 |
+| 锁路径含空格、单引号或 shell 替换符 | 获取失败 → 执行输出的命令 | 正确移除目标，替换符不执行，旁侧文件保留 | 恢复命令必须把路径作为一个字面参数 | 特殊路径命令执行回归 |
+
+验证边界：断电未实测，依赖与 SIGKILL 相同的退出清理不执行路径；人工确认
+无持锁进程不是自动检测功能，若清理期间又启动其他门禁，仍需使用者协调。
+记录物化的强杀未新增独立用例，它共享同一个目录锁和正常退出清理方式；
+已有等待、超时及 pending 保留回归继续验证该入口。本变更不涉及应用数据。
+
 ## Status Of The Alternatives
 
 Options A and B were evaluated against the measurement below and are recorded
@@ -485,8 +517,11 @@ unlike pre-#355 practice, the claim no longer depends on the executor's word.
   for the next push; materialize never blocks or fails the push. If the
   append into the versioned file succeeds but the pending-file truncation
   fails, the next materialize can duplicate lines — benign under log
-  semantics — and a materialize killed with SIGKILL can leave the stale lock
-  that gates already treat as requiring cleanup. Evidence must not become a
+  semantics — and a materialize killed with SIGKILL can leave a stale lock.
+  Gates do not detect or reclaim stale locks; a failed acquisition provides
+  the [manual recovery instructions](#门禁锁的人工恢复issue-430), to use only
+  after confirming that no gate or materialization process is running.
+  Evidence must not become a
   new way to fail a clean gate or push.
 - *Materialize-at-push, one-commit lag.* Commit-creating paths write only to
   the pending file inside `.git`, so they never dirty the tracked file and
