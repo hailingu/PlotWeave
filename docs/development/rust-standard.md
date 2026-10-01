@@ -135,10 +135,10 @@ from unmeasured files. Metric and scope:
   `mod` declarations and `use` paths (`crate::`/`super::`/`self::` prefixes,
   brace groups expanded; Rust 2018 bare paths such as `use child::…` resolve
   to a direct child of the current module, then to a root module, and only
-  otherwise count as an external crate — issue #426, whose regression
-  fixtures in `src/module_graph/issue_426_tests.rs` also rebuild the historical
-  `library/diagnostics.rs` ↔ `recovery_events.rs` cycle on the real sources
-  and require the guard to report it) of every production module reachable from `lib.rs`
+  otherwise count as an external crate — issue #426, whose self-contained
+  fixtures in `src/module_graph/issue_426_tests.rs` require bare-path
+  parent→child edges, including facade re-exports and inline-module scopes,
+  to close parent↔child cycles) of every production module reachable from `lib.rs`
   through non-`#[cfg(test)]` declarations (a cfg group gates as test-only
   when it *implies* `test` — bare `test` or `all(test, …)`; `any(test,
   feature = …)` stays in as production-capable), and asserts the resulting

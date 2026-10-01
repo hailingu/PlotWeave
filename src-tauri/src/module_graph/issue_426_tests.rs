@@ -1,4 +1,4 @@
-//! issue #426：Rust 2018 裸路径 `use <子模块>::…` 必须成边，真实图无环断言对该类边不得空过。
+//! issue #426：Rust 2018 裸路径 `use <子模块>::…` 必须成边，经该类边闭合的环必须被检出。
 
 use super::module_graph_tests::edges;
 use super::*;
@@ -40,50 +40,41 @@ fn bare_child_imports_close_parent_child_cycles() {
     }
 }
 
-/// 加载真实 `src-tauri/src` 生产源码（键 = 相对 posix 路径）。
-fn real_sources() -> BTreeMap<ModuleKey, String> {
-    let mut files = BTreeMap::new();
-    load_sources(
-        &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
-        &mut files,
-        "",
-    );
-    files
-}
-
-/// 真实仓库中以裸路径书写的 facade → 子模块依赖必须出现在图中。
+/// `NAME/mod.rs` facade 以裸路径再导出多个子模块（含 `as` 重命名与分组）时，每个被引用的子模块都成边；
+/// 未被引用的子模块与外部 crate 不成边。
 #[test]
-fn real_repository_bare_child_imports_are_edges() {
-    let graph = build_graph(&real_sources());
-    for (from, to) in [
+fn bare_facade_reexports_reach_every_imported_child() {
+    let graph = edges(&[
+        ("lib.rs", "mod store;"),
         (
-            "library/diagnostics.rs",
-            "library/diagnostics/recovery_events.rs",
+            "store/mod.rs",
+            "mod commands;\nmod persist;\nmod types;\n\
+             pub use commands::{create_project, delete_project};\n\
+             pub(crate) use persist::faults as atomic_write_faults;\n\
+             pub(crate) use persist::{asset_identity, write_atomic};\n\
+             use serde_json::Value;\n",
         ),
-        ("store/mod.rs", "store/commands.rs"),
-        ("store/mod.rs", "store/persist.rs"),
-    ] {
-        assert!(
-            graph.get(from).is_some_and(|t| t.contains(to)),
-            "{from} → {to} 的裸路径边缺失（扫描器漏采？）"
-        );
-    }
+        ("store/commands.rs", "pub fn create_project() {}\n"),
+        ("store/persist.rs", "pub fn write_atomic() {}\n"),
+        ("store/types.rs", "pub struct Project;\n"),
+    ]);
+    assert_eq!(
+        graph["store/mod.rs"],
+        BTreeSet::from(["store/commands.rs".into(), "store/persist.rs".into()])
+    );
 }
 
-/// 在真实源码上重建历史回指边，真实图的无环断言必须转为报环（证明其不对裸路径边空过）。
+/// inline 模块内以裸路径引用其文件子模块，同样成边并闭合经 `super::super::` 回指的环。
 #[test]
-fn real_repository_reintroduced_bare_path_cycle_is_reported() {
-    let mut files = real_sources();
-    files
-        .get_mut("library/diagnostics/recovery_events.rs")
-        .expect("recovery_events.rs 应存在")
-        .push_str("\nuse super::LAST_REVISION;\n");
-    let found = cycles_of(&build_graph(&files));
-    assert!(
-        found
-            .iter()
-            .any(|c| c.contains("library/diagnostics/recovery_events.rs")
-                && c.contains("library/diagnostics.rs")),
-        "重建的 diagnostics ↔ recovery_events 环未被检出：{found:?}"
-    );
+fn bare_imports_inside_inline_modules_close_cycles() {
+    let graph = edges(&[
+        ("lib.rs", "mod a;"),
+        (
+            "a.rs",
+            "mod outer {\n    mod child;\n    use child::C;\n}\npub struct A;\n",
+        ),
+        ("a/outer/child.rs", "use super::super::A;\npub struct C;\n"),
+    ]);
+    assert_eq!(graph["a.rs"], BTreeSet::from(["a/outer/child.rs".into()]));
+    assert_eq!(cycles_of(&graph).len(), 1, "inline 作用域裸路径边须闭合环");
 }
