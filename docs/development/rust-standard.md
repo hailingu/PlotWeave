@@ -140,7 +140,10 @@ from unmeasured files. Metric and scope:
   brings the prefix module's direct child module names into scope; glob and
   alias bindings are visible only inside their declaring module, because
   inline child modules do not inherit a parent's imports — issue #469, PR
-  review 5379907393), and only otherwise count as an external
+  review 5379907393; a glob exports only child modules visible at the use
+  site — private or restricted (`pub(super)`/`pub(in …)`) children never
+  join glob expansion, `src/module_graph/visibility.rs` — PR review
+  5380401098), and only otherwise count as an external
   crate — issue #426, whose self-contained fixtures in
   `src/module_graph/issue_426_tests.rs` require bare-path parent→child edges,
   including facade re-exports and inline-module scopes, to close
@@ -341,7 +344,15 @@ through earlier visible globs so the deep target forms its edge, and
 glob/alias bindings are visible only inside their declaring module — a bare
 name in an inline child module that collides with the parent's glob/alias
 target stays external instead of fabricating an internal edge and a false
-cycle. The existing deepest-lexical-scope rule does not
+cycle. A second round
+([PR #479 review 5380401098](https://github.com/hailingu/PlotWeave/pull/479#pullrequestreview-5380401098))
+adds visibility fidelity: glob expansion accepts only child modules visible
+at the use site — private and restricted (`pub(super)`/`pub(in …)`)
+children are recorded as visibility subtrees at tree build and never join
+glob expansion outside their subtree, so a bare name that collides with a
+private child of the glob target resolves externally instead of fabricating
+an internal edge and a false cycle; inside the declaring subtree the glob
+still imports them. The existing deepest-lexical-scope rule does not
 implement full Rust namespace lookup across scopes: an inner function alias
 can still prevent expansion through an outer module alias. Exact-module
 qualification leaves that pre-existing resolution gap unchanged; expanding

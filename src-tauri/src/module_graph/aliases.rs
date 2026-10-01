@@ -5,8 +5,9 @@
 //! 静默丢边）；glob 引入（`use <前缀>::*`）把前缀模块的直接子模块名
 //! 带入裸路径解析。绑定与 glob 仅在其**声明模块**内可见——inline 子
 //! 模块不继承父模块的引入（评审 5379907393），跨模块泄漏会把外部
-//! crate 引用解析成内部边、误报环。仅完整绑定目标命中模块时追加展开
-//! 候选，符号尾段不得截断为祖先模块。
+//! crate 引用解析成内部边、误报环；glob 只带走**对使用处可见**的子模块
+//! 名（私有/受限子模块不参与，评审 5380401098）。仅完整绑定目标命中
+//! 模块时追加展开候选，符号尾段不得截断为祖先模块。
 
 use super::tree::ModuleTree;
 use super::{AliasBinding, FileScan, GlobBinding, UseStmt};
@@ -56,6 +57,7 @@ pub(super) fn expand_segments(
                 .children
                 .get(&prefix)
                 .is_some_and(|c| c.contains(first))
+                && glob_importable(tree, &prefix, first, &ctx)
             {
                 let mut cand = prefix;
                 cand.extend(segs.iter().cloned());
@@ -64,6 +66,20 @@ pub(super) fn expand_segments(
         }
     }
     candidates
+}
+
+/// glob 候选子模块名对使用处是否可见（评审 5380401098）：私有/受限
+///（pub(super)/pub(in …)）子模块的名字不参与 glob 展开——真实 Rust 的
+/// glob 只带走对使用处可见的项，同名裸路径在子树外解析到外部 crate，
+/// 虚构内部边会误报环。可见性以树登记的「可见子树根是使用处模块路径
+/// 的前缀」判定；无登记即 pub/pub(crate) 的 crate 内任意可见。
+fn glob_importable(tree: &ModuleTree, prefix: &[String], child: &str, use_site: &[String]) -> bool {
+    match tree.child_vis.get(&(prefix.to_vec(), child.to_string())) {
+        None => true,
+        Some(root) => {
+            root.len() <= use_site.len() && root.iter().zip(use_site).all(|(r, u)| r == u)
+        }
+    }
 }
 
 /// 绑定在使用处（声明模块 inline 栈 + 块作用域定位）是否可见：须与
@@ -230,6 +246,8 @@ fn glob_positions(
     scope: &[usize],
     depth: usize,
 ) -> Vec<Vec<String>> {
+    let mut use_site = path.to_vec();
+    use_site.extend(inline.iter().cloned());
     let mut positions = Vec::new();
     for glob in globs_visible_at(scan, inline, scope) {
         for prefix in absolute_module_paths(
@@ -241,7 +259,9 @@ fn glob_positions(
             &glob.scope,
             depth - 1,
         ) {
-            if tree.children.get(&prefix).is_some_and(|c| c.contains(name)) {
+            if tree.children.get(&prefix).is_some_and(|c| c.contains(name))
+                && glob_importable(tree, &prefix, name, &use_site)
+            {
                 let mut position = prefix;
                 position.push(name.to_string());
                 positions.push(position);

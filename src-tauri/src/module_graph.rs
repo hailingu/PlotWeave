@@ -20,8 +20,9 @@
 //!   绝对路径），再经可见别名链与链式 glob 前缀逐层递归展开（issue
 //!   #469：≥3 级链与 glob 链此前静默丢边）、经可见 glob 引入（`use
 //!   <前缀>::*` 把前缀模块的直接子模块名带入作用域；绑定仅在声明模块
-//!   内可见，inline 子模块不继承父模块引入——评审 5379907393），均未
-//!   命中才视为外部 crate 不入图
+//!   内可见，inline 子模块不继承父模块引入——评审 5379907393；且只带走
+//!   **对使用处可见**的子模块名——私有/受限子模块不参与，评审
+//!   5380401098），均未命中才视为外部 crate 不入图
 //!   （issue #426）；不经 `use` 的全限定调用不采集——与前端守卫只采
 //!   import/export 边同口径。同文件 inline 引用解析回自身，不计自环边。
 //! - 采集完整性（issue #469）：`build_graph` 建边前经审计层对每条展开
@@ -50,6 +51,7 @@ mod fields;
 mod lexer;
 mod tree;
 mod use_tree;
+mod visibility;
 use aliases::expand_segments;
 use closures::{skip_closure_headers, BodyStep};
 use cycles::cycles_of;
@@ -100,11 +102,14 @@ struct GlobBinding {
 }
 
 /// 一条 mod 声明：inline_path = 声明位置的外层 inline 模块栈（文件模块
-/// 路径之后的段）；file_backed = 外部文件声明（`mod x;`），否则 inline 块。
+/// 路径之后的段）；file_backed = 外部文件声明（`mod x;`），否则 inline
+/// 块；vis = 声明处可见性（评审 5380401098：glob 引入只带走对使用处
+/// 可见的子模块）。
 struct ModDecl {
     inline_path: Vec<String>,
     name: String,
     file_backed: bool,
+    vis: visibility::ModVis,
 }
 
 /// 解析自 tokens[i] == "#" 起的属性（`#!` 为内属性，另行返回标志），返回
@@ -524,6 +529,7 @@ fn scan_mod_decl(tokens: &[&str], i: usize, st: &mut ScanState) -> usize {
                     inline_path: stack,
                     name: name.to_string(),
                     file_backed: true,
+                    vis: visibility::parse_mod_vis(tokens, i),
                 });
             }
             i + 3
@@ -542,6 +548,7 @@ fn scan_mod_decl(tokens: &[&str], i: usize, st: &mut ScanState) -> usize {
                 inline_path: stack,
                 name: name.to_string(),
                 file_backed: false,
+                vis: visibility::parse_mod_vis(tokens, i),
             });
             i + 3
         }

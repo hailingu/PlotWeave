@@ -183,6 +183,83 @@ fn glob_and_alias_bindings_do_not_leak_into_inline_children() {
     }
 }
 
+/// 评审 5380401098：glob 目标的**私有**子模块名不得经 glob 进入作用域
+/// ——Rust 的 glob 只带走对使用处可见的项，私有子模块名在真实代码中
+/// 解析到外部 crate（rustc + 同名外部 crate 验证编译通过），守卫不得
+/// 虚构内部边与假环。
+#[test]
+fn glob_expansion_skips_private_children() {
+    let files = [
+        ("lib.rs", "mod p;\nmod user;\n"),
+        ("p/mod.rs", "mod hidden;\n"),
+        ("p/hidden.rs", "use crate::user::U;\npub struct Thing;\n"),
+        ("user.rs", "use crate::p::*;\nuse hidden::Thing;\n"),
+    ];
+    let graph = edges(&files);
+    assert!(
+        !graph["user.rs"].contains("p/hidden.rs"),
+        "私有子模块不得经 glob 成边：{:?}",
+        graph["user.rs"]
+    );
+    assert!(
+        cycles_of(&graph).is_empty(),
+        "私有子模块经 glob 虚构的环不得存在：{:?}",
+        cycles_of(&graph)
+    );
+}
+
+/// 私有子模块对声明模块**子树内**的 glob 使用处可见（`use super::*` 在
+/// 后代模块中带走私有兄弟，rustc 验证合法）——可见性过滤不得误伤。
+#[test]
+fn glob_expansion_keeps_private_children_inside_subtree() {
+    let files = [
+        ("lib.rs", "mod p;\n"),
+        ("p/mod.rs", "mod hidden;\npub mod inner;\n"),
+        ("p/hidden.rs", "use super::inner::I;\npub struct Deep;\n"),
+        (
+            "p/inner.rs",
+            "use super::*;\nuse hidden::Deep;\npub struct I;\n",
+        ),
+    ];
+    let graph = edges(&files);
+    assert!(
+        graph["p/inner.rs"].contains("p/hidden.rs"),
+        "子树内 glob 应带走私有兄弟：{:?}",
+        graph["p/inner.rs"]
+    );
+    assert_eq!(
+        cycles_of(&graph).len(),
+        1,
+        "私有兄弟经子树内 glob 成边须闭合环：{:?}",
+        cycles_of(&graph)
+    );
+}
+
+/// `pub(super)` 子模块经 glob 只对限定子树内的使用处可见（子树内成边、
+/// 子树外按外部处置——rustc 验证子树内编译通过、子树外 E0432）。
+#[test]
+fn glob_expansion_respects_pub_super_scope() {
+    let files = [
+        ("lib.rs", "mod p;\nmod user;\n"),
+        ("p/mod.rs", "pub mod mid;\npub mod sibling;\n"),
+        ("p/mid/mod.rs", "pub(super) mod limited;\n"),
+        ("p/mid/limited.rs", "pub struct T;\n"),
+        ("p/sibling.rs", "use crate::p::mid::*;\nuse limited::T;\n"),
+        ("user.rs", "use crate::p::mid::*;\nuse limited::T;\n"),
+    ];
+    let graph = edges(&files);
+    assert!(
+        graph["p/sibling.rs"].contains("p/mid/limited.rs"),
+        "pub(super) 子树内的 glob 使用处应成边：{:?}",
+        graph["p/sibling.rs"]
+    );
+    assert!(
+        !graph["user.rs"].contains("p/mid/limited.rs"),
+        "pub(super) 子树外的 glob 使用处不得成边：{:?}",
+        graph["user.rs"]
+    );
+}
+
 /// 夹具文件列表 → 采集审计结论。
 fn audit(files: &[(&str, &str)]) -> audit::UseAudit {
     let map: BTreeMap<ModuleKey, String> = files

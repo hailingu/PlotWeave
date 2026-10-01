@@ -37,7 +37,7 @@ pub(super) fn use_tree_of(tokens: &[String]) -> UseTree {
 }
 
 /// use 树元素是否为路径段（标识符/关键字；`as` 与标点不是）。
-fn is_path_seg(tok: &str) -> bool {
+pub(super) fn is_path_seg(tok: &str) -> bool {
     let mut chars = strip_raw_ident(tok).chars();
     match chars.next() {
         Some(c) if c.is_ascii_alphabetic() || c == '_' => {
