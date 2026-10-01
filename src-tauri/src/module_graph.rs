@@ -15,7 +15,9 @@
 //! - 边 = `use crate::…` / `use super::…` / `use self::…` 解析出的目标
 //!   模块文件（花括号分组展开、`as` 剥除、`*` 按前缀计、组内 `self` 指
 //!   前缀模块；`pub use` 同采，函数体内局部 `use` 也是文件依赖；平台
-//!   混合变体的路径可有多个所有者文件）。外部 crate 与裸路径不参与；
+//!   混合变体的路径可有多个所有者文件）。Rust 2018 裸路径 `use x::…`
+//!   的首段先按当前模块的直接子模块解析、再按根模块解析（别名展开的
+//!   绝对路径），均未命中才视为外部 crate 不入图（issue #426）；
 //!   不经 `use` 的全限定调用不采集——与前端守卫只采 import/export 边
 //!   同口径。同文件 inline 引用解析回自身，不计自环边。
 //! - fail-closed：`mod` 声明找不到对应文件（`NAME.rs` 与 `NAME/mod.rs`
@@ -560,7 +562,6 @@ fn resolve_use(
     inline: &[String],
     segs: &[String],
 ) -> Vec<ModuleKey> {
-    eprintln!("RU-IN segs={:?}", segs);
     let mut ctx: Vec<String> = file_path.to_vec();
     ctx.extend(inline.iter().cloned());
     let mut it = 0;
@@ -610,15 +611,12 @@ fn resolve_use(
         ctx.push(seg.clone());
         it += 1;
     }
-    let out: Vec<ModuleKey> = tree
-        .file_of
+    tree.file_of
         .get(&ctx)
         .cloned()
         .unwrap_or_default()
         .into_iter()
-        .collect();
-    eprintln!("RU-OUT segs={:?} ctx={:?} out={:?}", segs, ctx, out);
-    out
+        .collect()
 }
 
 /// 全图构建：模块树 + use 边（自环剔除、BTreeSet 去重排序），
@@ -656,7 +654,6 @@ fn use_targets_of(
             for cand in expand_segments(tree, scan, path, u, segs) {
                 for target in resolve_use(tree, path, &u.inline_stack, &cand) {
                     if &target != key {
-                        eprintln!("DBG-TARGET key={:?} target={:?}", key, target);
                         targets.push(target);
                     }
                 }
@@ -727,3 +724,7 @@ mod issue_446_tests;
 /// 门控闭包 as 转型续接回归（issue #447）。
 #[cfg(test)]
 mod issue_447_tests;
+
+/// 裸路径子模块导入成边与真实图报环回归（issue #426）。
+#[cfg(test)]
+mod issue_426_tests;
