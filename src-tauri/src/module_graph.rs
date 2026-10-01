@@ -17,20 +17,31 @@
 //!   前缀模块；`pub use` 同采，函数体内局部 `use` 也是文件依赖；平台
 //!   混合变体的路径可有多个所有者文件）。Rust 2018 裸路径 `use x::…`
 //!   的首段先按当前模块的直接子模块解析、再按根模块解析（别名展开的
-//!   绝对路径），均未命中才视为外部 crate 不入图（issue #426）；
-//!   不经 `use` 的全限定调用不采集——与前端守卫只采 import/export 边
-//!   同口径。同文件 inline 引用解析回自身，不计自环边。
+//!   绝对路径），再经可见别名链逐层递归展开（issue #469：≥3 级链此前
+//!   静默丢边）、经可见 glob 引入（`use <前缀>::*` 把前缀模块的直接
+//!   子模块名带入作用域，issue #469），均未命中才视为外部 crate 不入图
+//!   （issue #426）；不经 `use` 的全限定调用不采集——与前端守卫只采
+//!   import/export 边同口径。同文件 inline 引用解析回自身，不计自环边。
+//! - 采集完整性（issue #469）：`build_graph` 建边前经审计层对每条展开
+//!   路径分类——首段命中内部模块名（当前模块子模块、根模块，或
+//!   crate/self/super 前缀的结构性命中）却零目标所有者即 fail-closed；
+//!   未命中者按外部 crate 分类计数（resolved/external，供真实仓库断言
+//!   与诊断），防 #426 式「静默丢边 → 假无环」复发。
 //! - fail-closed：`mod` 声明找不到对应文件（`NAME.rs` 与 `NAME/mod.rs`
 //!   均缺失或并存）、`super::` 越过 crate 根、use 语句缺分号或花括号分组
 //!   残缺，均直接判失败——构图不健全比漏检更危险（与前端
 //!   `resolveEdgeKeys` 的失败语义一致）。
 //! - 已知盲区（登记而非静默）：`macro_rules!` 体整块跳过（现存唯一生产
-//!   宏 `atomic_io` 体内无 `use`）；非 ASCII 标识符会被分词层拆散（本仓无）。
+//!   宏 `atomic_io` 体内无 `use`）；非 ASCII 标识符会被分词层拆散（本仓无）；
+//!   glob 只解析前缀模块的**直接**子模块——经 `pub use` 再导出进入 glob
+//!   目标的名字不解析（本仓生产代码无文件级 glob 引入）；别名链递归
+//!   超过 8 层按不可解析处置（真实链长 2~3）。
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 mod aliases;
+mod audit;
 mod closures;
 mod cycles;
 mod fields;
@@ -55,6 +66,7 @@ struct FileScan {
     mods: Vec<ModDecl>,
     uses: Vec<UseStmt>,
     renames: Vec<AliasBinding>,
+    globs: Vec<GlobBinding>,
 }
 
 /// 一条 use 语句：inline 栈与花括号作用域快照（块开括号的 token 下标
@@ -70,6 +82,15 @@ struct UseStmt {
 struct AliasBinding {
     name: String,
     segs: Vec<String>,
+    scope: Vec<usize>,
+}
+
+/// 一条 glob 引入绑定：`use <前缀>::*` 的前缀段，附声明处 inline 栈与
+/// 花括号作用域快照（issue #469：前缀模块的直接子模块名经 glob 进入
+/// 作用域，后续裸路径首段可指向它们）。
+struct GlobBinding {
+    segs: Vec<String>,
+    inline_stack: Vec<String>,
     scope: Vec<usize>,
 }
 
@@ -387,6 +408,7 @@ struct ScanState {
     mods: Vec<ModDecl>,
     uses: Vec<UseStmt>,
     renames: Vec<AliasBinding>,
+    globs: Vec<GlobBinding>,
     inline: Vec<(String, usize)>,
     scope: Vec<usize>,
     depth: usize,
@@ -400,6 +422,7 @@ fn scan_tokens(tokens: &[&str]) -> FileScan {
         mods: Vec::new(),
         uses: Vec::new(),
         renames: Vec::new(),
+        globs: Vec::new(),
         inline: Vec::new(),
         scope: Vec::new(),
         depth: 0,
@@ -422,6 +445,7 @@ fn scan_tokens(tokens: &[&str]) -> FileScan {
                                 mods: Vec::new(),
                                 uses: Vec::new(),
                                 renames: Vec::new(),
+                                globs: Vec::new(),
                             }
                         }
                     }
@@ -473,6 +497,7 @@ fn scan_tokens(tokens: &[&str]) -> FileScan {
         mods: st.mods,
         uses: st.uses,
         renames: st.renames,
+        globs: st.globs,
     }
 }
 
@@ -531,16 +556,24 @@ fn scan_use_stmt(tokens: &[&str], i: usize, st: &mut ScanState) -> usize {
         panic!("use 语句缺少分号（token 残缺）");
     }
     if !st.cfg_test {
-        let stack = st.inline.iter().map(|(n, _)| n.clone()).collect();
+        let stack: Vec<String> = st.inline.iter().map(|(n, _)| n.clone()).collect();
         let scope = st.scope.clone();
         let path = tokens[i + 1..j]
             .iter()
             .map(|s| s.to_string())
             .collect::<Vec<_>>();
-        for (name, segs) in use_tree_of(&path).renames {
+        let parsed = use_tree_of(&path);
+        for (name, segs) in parsed.renames {
             st.renames.push(AliasBinding {
                 name,
                 segs,
+                scope: scope.clone(),
+            });
+        }
+        for segs in parsed.globs {
+            st.globs.push(GlobBinding {
+                segs,
+                inline_stack: stack.clone(),
                 scope: scope.clone(),
             });
         }
@@ -619,11 +652,20 @@ fn resolve_use(
         .collect()
 }
 
-/// 全图构建：模块树 + use 边（自环剔除、BTreeSet 去重排序），
-/// 节点集 = 全部生产模块文件。
+/// 全图构建：模块树 + 采集完整性审计（issue #469，缺口 fail-closed）
+/// + use 边（自环剔除、BTreeSet 去重排序），节点集 = 全部生产模块文件。
 fn build_graph(files: &BTreeMap<ModuleKey, String>) -> BTreeMap<ModuleKey, BTreeSet<ModuleKey>> {
     let mut scans: BTreeMap<ModuleKey, FileScan> = BTreeMap::new();
     let tree = ModuleTree::build(files, &mut scans);
+    // 采集完整性（issue #469）：首段命中内部模块名的 use 必须解析出目标
+    // 所有者——静默丢边会让经该边闭合的真环对守卫隐形（#426 的成因）
+    let audit = audit::audit_collection(&tree, &scans);
+    if !audit.unresolved_internal.is_empty() {
+        panic!(
+            "use 采集完整性缺口（issue #469）：首段命中内部模块却零目标：{:?}",
+            audit.unresolved_internal
+        );
+    }
     let mut edges: BTreeMap<ModuleKey, BTreeSet<ModuleKey>> = BTreeMap::new();
     for (_, key) in &tree.canonical {
         edges.entry(key.clone()).or_default();
@@ -728,3 +770,7 @@ mod issue_447_tests;
 /// 裸路径子模块导入成边与真实图报环回归（issue #426）。
 #[cfg(test)]
 mod issue_426_tests;
+
+/// 采集完整性：glob 引入与别名链成边、审计分类与真实仓库零缺口（issue #469）。
+#[cfg(test)]
+mod issue_469_tests;

@@ -1,14 +1,17 @@
 //! module_graph 守卫的 use 树解析层（issue #399；仅测试构建参与编译）：
 //! use 语句 token → 完整路径段集合。花括号分组递归展开（含根级分组与前导
 //! `::` 两种合法入口）、`as` 重命名剥除并另行登记（供裸路径别名解析）、
-//! `*` 通配按前缀计、组内 `self` 指前缀模块自身。
+//! `*` 通配按前缀计并另行登记 glob 前缀（issue #469：供后续裸路径按 glob
+//! 引入的模块名解析）、组内 `self` 指前缀模块自身。
 
 /// use 树解析产物：paths = 展开后的完整路径集；renames = `as` 绑定
 ///（本地名 → 被重命名路径的段，评审 5351437161：后续裸路径经别名引用
-/// 子模块时按此展开）。
+/// 子模块时按此展开）；globs = `*` 通配的前缀段（issue #469：前缀模块的
+/// 直接子模块名经 glob 进入作用域，供裸路径首段解析）。
 pub(super) struct UseTree {
     pub(super) paths: Vec<Vec<String>>,
     pub(super) renames: Vec<(String, Vec<String>)>,
+    pub(super) globs: Vec<Vec<String>>,
 }
 
 /// use 语句 token → 解析产物。前导 `::` 是合法的绝对路径入口（评审
@@ -18,6 +21,7 @@ pub(super) fn use_tree_of(tokens: &[String]) -> UseTree {
     let mut tree = UseTree {
         paths: Vec::new(),
         renames: Vec::new(),
+        globs: Vec::new(),
     };
     let mut i = 0;
     if tokens.first().map(String::as_str) == Some("{") {
@@ -107,7 +111,8 @@ fn parse_use_tree(prefix: &[String], tokens: &[String], i: &mut usize, tree: &mu
                     }
                     Some("*") => {
                         *i += 1;
-                        tree.paths.push(path);
+                        tree.paths.push(path.clone());
+                        tree.globs.push(path);
                         return;
                     }
                     Some(_) => {}

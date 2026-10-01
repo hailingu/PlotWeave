@@ -134,24 +134,40 @@ from unmeasured files. Metric and scope:
   (`src/module_graph.rs`, `#[cfg(test)]`-gated, issue #399): it text-scans the
   `mod` declarations and `use` paths (`crate::`/`super::`/`self::` prefixes,
   brace groups expanded; Rust 2018 bare paths such as `use child::…` resolve
-  to a direct child of the current module, then to a root module, and only
-  otherwise count as an external crate — issue #426, whose self-contained
-  fixtures in `src/module_graph/issue_426_tests.rs` require bare-path
-  parent→child edges, including facade re-exports and inline-module scopes,
-  to close parent↔child cycles) of every production module reachable from `lib.rs`
+  to a direct child of the current module, then to a root module, then through
+  visible alias chains (recursively, bounded depth — issue #469) and glob
+  imports (`use <prefix>::*` brings the prefix module's direct child module
+  names into scope — issue #469), and only otherwise count as an external
+  crate — issue #426, whose self-contained fixtures in
+  `src/module_graph/issue_426_tests.rs` require bare-path parent→child edges,
+  including facade re-exports and inline-module scopes, to close
+  parent↔child cycles) of every production module reachable from `lib.rs`
   through non-`#[cfg(test)]` declarations (a cfg group gates as test-only
   when it *implies* `test` — bare `test` or `all(test, …)`; `any(test,
   feature = …)` stays in as production-capable), and asserts the resulting
-  dependency graph is acyclic. `NAME.rs` and `NAME/mod.rs` forms are both
+  dependency graph is acyclic. Before building edges the guard also runs the
+  collection-completeness audit (issue #469, `src/module_graph/audit.rs`):
+  every expanded `use` path whose first segment names an internal module (a
+  child of the current module, a root module, or a structural
+  `crate`/`self`/`super` prefix) must resolve to at least one target owner —
+  self-file owners count as resolved and only the self-loop edge is dropped —
+  otherwise the guard fails closed, and paths whose first segment names no
+  internal module are classified and counted as external crates; the real
+  repository asserts the internal-miss count is zero
+  (`src/module_graph/issue_469_tests.rs`), so a #426-style silent edge drop
+  cannot recur unnoticed. `NAME.rs` and `NAME/mod.rs` forms are both
   supported; test-only files (`tests.rs`, `*_tests.rs`, `testutil.rs`, `conf`,
   `testhttp`) and the binary entry `main.rs` stay out of the graph by
   reachability; platform-gated modules count as a union over targets. The
   guard fails closed — a `mod` declaration without a matching file, a
   `super::` past the crate root, or a malformed `use` tree fails the test —
   and carries counterexample fixtures (an issue #146-shaped mutual dependency
-  must be reported) so it proves its own detection. One registered blind
-  spot: `macro_rules!` bodies are skipped wholesale, so a `use` that exists
-  only inside a macro definition is not collected.
+  must be reported) so it proves its own detection. Registered blind spots:
+  `macro_rules!` bodies are skipped wholesale, so a `use` that exists only
+  inside a macro definition is not collected; glob imports resolve only the
+  prefix module's *direct* children (names re-exported into the glob target
+  via `pub use` are not resolved); alias chains deeper than the bounded depth
+  are treated as unresolvable.
 - Test-only items are skipped with balanced generic/type and parameter
   delimiters; nested commas, where-clause commas, array semicolons and generic const blocks do
   not end the item early. Expression comparisons remain distinct from type
@@ -211,7 +227,12 @@ from unmeasured files. Metric and scope:
   [qualified paths](https://doc.rust-lang.org/reference/paths.html#qualified-paths)).
   Lexical aliases are visible throughout their enclosing scope:
   expansion first selects all bindings in the deepest visible scope, then
-  appends suffixes only to bindings whose complete target is a known module.
+  appends suffixes only to bindings whose complete target is a known module;
+  binding targets whose first segment is itself an alias resolve through the
+  alias chain recursively (bounded depth, union over same-name bindings at
+  every hop), and glob imports contribute the prefix module's direct child
+  module names as bare-path candidates ([Issue #469](https://github.com/hailingu/PlotWeave/issues/469),
+  `src/module_graph/issue_469_tests.rs`).
   This preserves the target-platform union while excluding shadowed outer
   scopes, test-only bindings and non-module symbol tails. Original imports
   still contribute their item-owner edges, and child-module precedence
@@ -300,13 +321,22 @@ casts after gated closure bodies, including explicit-return closures
 The scan is synchronous and stateless per fixture; retries, persistence and
 completion races are not applicable. Existing fail-closed malformed-use and
 missing-module fixtures retain failure coverage. Macro-body imports,
-non-ASCII identifiers and recursive alias-chain inference remain outside this
-text scanner's supported boundary; this repair adds no parser dependency.
-The existing deepest-lexical-scope rule does not implement full Rust
-namespace lookup across scopes: an inner function alias can still prevent
-expansion through an outer module alias. Exact-module qualification leaves
-that pre-existing resolution gap unchanged; expanding namespace modeling is
-separate work, not a risk-acceptance disposition in this repair.
+non-ASCII identifiers, glob imports that reach names re-exported into the
+glob target via `pub use` (only the prefix module's direct children
+resolve), and alias chains beyond the bounded recursion depth remain outside
+this text scanner's supported boundary; this repair adds no parser dependency.
+[Issue #469](https://github.com/hailingu/PlotWeave/issues/469) extends the
+same matrix to collection completeness: glob-introduced module names and
+chained aliases must form edges (closing sibling/deep-module cycles), chains
+through external crates stay external, and the audit layer fails closed when
+a first segment that names an internal module yields zero target owners —
+with the real repository asserting a zero internal-miss count plus a sampled
+bare-path facade edge. The existing deepest-lexical-scope rule does not
+implement full Rust namespace lookup across scopes: an inner function alias
+can still prevent expansion through an outer module alias. Exact-module
+qualification leaves that pre-existing resolution gap unchanged; expanding
+namespace modeling is separate work, not a risk-acceptance disposition in
+this repair.
 
 ## Before Writing Code
 
