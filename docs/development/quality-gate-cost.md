@@ -134,6 +134,27 @@ This is option C of issue #356. The issue did not argue for lower quality
 requirements; it argued that the "cost tier" question deserved one explicit
 decision and a recorded baseline. Both now exist.
 
+### 门禁测试标记隔离（Issue #428）
+
+本节记录 [issue #428](https://github.com/hailingu/PlotWeave/issues/428)
+的测试隔离修复。`scripts/sonar-quality-gate.test.ts` 的 `runGate` 拥有每次
+调用的沙箱及清理责任；`gateEnvironment` 必须将 `PLOTWEAVE_GATE_MARKER_PATH`
+指向该沙箱，覆盖继承的宿主路径。真实 hook 和标记助手继续执行，外部覆盖率、
+扫描器与网络命令沿用已有替身。
+
+| 前置状态 | 动作 / 顺序 | 可观察结果 | 不变量及所有者 | 验证 |
+| --- | --- | --- | --- | --- |
+| 宿主已有标记，门禁通过 | `runGate` 执行 `pre-commit` 或 `pre-merge-commit` → 写标记 | 本次沙箱内存在带树、时间和进程身份的标记；宿主标记原样保留 | `gateEnvironment` 隔离两条写入口；测试不得修改宿主门禁状态 | 两个成功路径回归用例，执行真实 hook 与标记助手 |
+| 宿主已有标记，新增问题非零 | hook 执行门禁 → 失败退出 | 非零退出；沙箱内无标记；宿主标记原样保留 | 门禁失败不能留下可复用标记；环境隔离不改变失败透传 | 两个失败路径回归用例 |
+| 未导出宿主标记覆盖项 | 执行 `npm test -- scripts` | 工作仓库标记的存在性及内容保持不变 | `runGate` 每次分配独立路径，避免回退到工作仓库 `.git` | 路由命令前后核对工作仓库标记状态 |
+| 真实提交、自动合并或回退提交 | 真实 Git 执行原有 hook 顺序 | 同一次操作去重；后续操作及 `--no-verify` 路径仍运行完整门禁 | 标记助手保有 #429 的进程身份约束 | 既有 `gate-tree-marker.test.ts` 真实 Git 场景 |
+
+本修复不改生产 hook、标记格式或门禁契约；#429 已拒绝其他 Git 进程复用
+测试遗留标记，但不替代测试自身的状态隔离。每次运行使用 `mkdtemp` 分配的
+独立沙箱，正常成功或失败后均由 `afterEach` 清理。强制终止测试进程后的临时
+目录清理未验证：目录仍在系统临时区，不能成为工作仓库默认标记。本变更不涉及
+应用数据、持久化协议或异步完成顺序；验证结果随修复 PR 记录。
+
 ## Status Of The Alternatives
 
 Options A and B were evaluated against the measurement below and are recorded
