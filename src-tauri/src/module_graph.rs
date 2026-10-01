@@ -22,7 +22,8 @@
 //!   <前缀>::*` 把前缀模块的直接子模块名带入作用域；绑定仅在声明模块
 //!   内可见，inline 子模块不继承父模块引入——评审 5379907393；且只带走
 //!   **对使用处可见**的子模块名——私有/受限子模块不参与，评审
-//!   5380401098），均未命中才视为外部 crate 不入图
+//!   5380401098）；显式位置前缀之后的首段也在指定模块的模块级
+//!   命名空间查别名/glob（评审 5381066396），均未命中才视为外部 crate 不入图
 //!   （issue #426）；不经 `use` 的全限定调用不采集——与前端守卫只采
 //!   import/export 边同口径。同文件 inline 引用解析回自身，不计自环边。
 //! - 采集完整性（issue #469）：`build_graph` 建边前经审计层对每条展开
@@ -52,7 +53,7 @@ mod lexer;
 mod tree;
 mod use_tree;
 mod visibility;
-use aliases::expand_segments;
+use aliases::{expand_segments, AliasBinding, GlobBinding};
 use closures::{skip_closure_headers, BodyStep};
 use cycles::cycles_of;
 use fields::{field_contexts, is_union_declaration, qualified_path_end, FieldContext};
@@ -78,26 +79,6 @@ struct FileScan {
 struct UseStmt {
     inline_stack: Vec<String>,
     tokens: Vec<String>,
-    scope: Vec<usize>,
-}
-
-/// 一条 `as` 重命名绑定：本地名 → 路径段，附声明处 inline 模块栈与
-/// 花括号作用域（评审 5352172371：平行作用域复用同一别名名时须按词法
-/// 可见性绑定；评审 5379907393：inline 子模块不继承父模块引入，可见性
-/// 须限定在同一声明模块内的块嵌套）。
-struct AliasBinding {
-    name: String,
-    segs: Vec<String>,
-    inline_stack: Vec<String>,
-    scope: Vec<usize>,
-}
-
-/// 一条 glob 引入绑定：`use <前缀>::*` 的前缀段，附声明处 inline 栈与
-/// 花括号作用域快照（issue #469：前缀模块的直接子模块名经 glob 进入
-/// 作用域，后续裸路径首段可指向它们）。
-struct GlobBinding {
-    segs: Vec<String>,
-    inline_stack: Vec<String>,
     scope: Vec<usize>,
 }
 
@@ -581,6 +562,7 @@ fn scan_use_stmt(tokens: &[&str], i: usize, st: &mut ScanState) -> usize {
                 segs,
                 inline_stack: stack.clone(),
                 scope: scope.clone(),
+                module_level: st.depth == st.inline.last().map_or(0, |(_, depth)| *depth),
             });
         }
         for segs in parsed.globs {
@@ -588,6 +570,7 @@ fn scan_use_stmt(tokens: &[&str], i: usize, st: &mut ScanState) -> usize {
                 segs,
                 inline_stack: stack.clone(),
                 scope: scope.clone(),
+                module_level: st.depth == st.inline.last().map_or(0, |(_, depth)| *depth),
             });
         }
         st.uses.push(UseStmt {
@@ -706,7 +689,7 @@ fn use_targets_of(
     let mut targets = Vec::new();
     for u in &scan.uses {
         for segs in use_tree_of(&u.tokens).paths {
-            for cand in expand_segments(tree, scan, path, u, segs) {
+            for cand in expand_segments(tree, scans, scan, path, u, segs) {
                 for target in resolve_use(tree, path, &u.inline_stack, &cand) {
                     if &target != key {
                         targets.push(target);
@@ -787,3 +770,7 @@ mod issue_426_tests;
 /// 采集完整性：glob 引入与别名链成边、审计分类与真实仓库零缺口（issue #469）。
 #[cfg(test)]
 mod issue_469_tests;
+
+/// 评审 5381066396 的位置限定别名与 glob 命名空间回归。
+#[cfg(test)]
+mod qualified_tests;

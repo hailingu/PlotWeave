@@ -60,7 +60,7 @@ pub(super) fn audit_collection(
         let scan = &scans[key];
         for u in &scan.uses {
             for segs in use_tree_of(&u.tokens).paths {
-                classify_use_path(tree, scan, path, key, u, &segs, &mut audit);
+                classify_use_path(tree, scans, path, key, u, &segs, &mut audit);
             }
         }
     }
@@ -71,15 +71,16 @@ pub(super) fn audit_collection(
 /// 即 resolved；否则按首段是否命中内部模块名二分（issue #469）。
 fn classify_use_path(
     tree: &ModuleTree,
-    scan: &FileScan,
+    scans: &BTreeMap<ModuleKey, FileScan>,
     path: &[String],
     key: &ModuleKey,
     u: &super::UseStmt,
     segs: &[String],
     audit: &mut UseAudit,
 ) {
+    let scan = &scans[key];
     let mut resolved = false;
-    for cand in expand_segments(tree, scan, path, u, segs.to_vec()) {
+    for cand in expand_segments(tree, scans, scan, path, u, segs.to_vec()) {
         if !resolve_use(tree, path, &u.inline_stack, &cand).is_empty() {
             resolved = true;
             break;

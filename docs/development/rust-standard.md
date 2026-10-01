@@ -236,7 +236,12 @@ from unmeasured files. Metric and scope:
   appends suffixes only to bindings whose complete target is a known module;
   binding targets whose first segment is itself an alias resolve through the
   alias chain recursively (bounded depth, union over same-name bindings at
-  every hop), and glob imports contribute the prefix module's direct child
+  every hop). After explicit `self` / `crate` / repeated `super` prefixes,
+  the next segment resolves through module-level aliases/globs in the
+  designated namespace, including bindings owned by another file or a
+  parent inline module (PR #479 review 5381066396); block-local imports do
+  not shadow these qualified names. Glob imports contribute the prefix
+  module's direct child
   module names as bare-path candidates ([Issue #469](https://github.com/hailingu/PlotWeave/issues/469),
   `src/module_graph/issue_469_tests.rs`).
   This preserves the target-platform union while excluding shadowed outer
@@ -323,6 +328,11 @@ casts after gated closure bodies, including explicit-return closures
 | Inner non-module type alias shadows an outer module alias | Select deepest lexical bindings before checking exact module eligibility | Outer module child stays excluded; original item-owner edge remains | Eligibility filtering cannot restore an outer binding shadowed by a deeper scope | `inner_type_aliases_do_not_restore_outer_module_candidates` |
 | Nested platform aliases shadow outer aliases | Resolve inner reference before inner declarations | Both inner targets; no outer child targets | Only the deepest visible scope contributes alias expansion | `inner_alias_union_shadows_all_outer_candidates`; existing sibling-scope and child-precedence fixtures |
 | One platform alias implies test | Collect aliases then resolve production reference | Only production-capable target remains | Test-only bindings never contaminate the platform union | `test_only_platform_aliases_do_not_join_production_union` |
+| Module-level alias qualified by `self` in a chained import | Consume the prefix, resolve its next segment through the specified namespace, then append the suffix | Deep module edge and real cycle retained | Explicit prefixes cannot bypass alias resolution | `qualified_self_aliases_preserve_cycles` |
+| Root/parent alias owned by another file, or parent inline module | Resolve `crate` / repeated `super` at the target module's declaration scope | Target file edge and real cycle retained | Qualified lookup uses the designated module's bindings, not the importing file's bindings | `qualified_root_and_parent_aliases_preserve_cycles`, `qualified_parent_inline_aliases_use_the_declaring_namespace` |
+| Glob-introduced module name follows `self` / `crate` / `super` | Resolve the qualified glob prefix, then expand the later use | Deep target edge and real cycle retained | Position prefixes do not break visible glob chains | `qualified_glob_prefixes_preserve_cycles` |
+| Local block alias shadows a module-level alias with the same name | Compare qualified module lookup with lexical block lookup | Qualified edge uses the module alias; no false block-target edge | Explicit namespace qualification ignores block-local bindings | `qualified_self_ignores_block_alias_shadowing` |
+| Same-name platform aliases / external alias after a position prefix | Preserve target union and exact-module qualification | Both internal targets retained; no invented external child edge | Qualification does not narrow the platform union or turn external symbols into internal modules | `qualified_aliases_keep_platform_union_and_external_boundaries` |
 
 The scan is synchronous and stateless per fixture; retries, persistence and
 completion races are not applicable. Existing fail-closed malformed-use and
@@ -357,12 +367,37 @@ still imports them. A third round
 resolves leading `super` segments in `pub(in super…)` by walking up the
 declaring module, and lets any public variant among cfg-exclusive
 declarations of the same child permanently widen the merged visibility
-regardless of declaration order. The existing deepest-lexical-scope rule does not
+regardless of declaration order. A fourth round
+([PR #479 review 5381066396](https://github.com/hailingu/PlotWeave/pull/479#pullrequestreview-5381066396))
+resolves aliases and visible globs after explicit position prefixes. The
+scanner records whether each binding belongs to its module namespace;
+qualified lookup selects the designated module's canonical file owners
+(platform union) and inline stack before applying the existing bounded
+chain resolver. This preserves real deep-module cycles without letting
+block-local imports fabricate qualified edges. Six regression tests first
+failed for missing target edges, then passed; seven disposable rustc
+fixtures confirmed the representative import shapes are legal Rust 2021.
+The new matrix rows above cover prefix, namespace, glob, shadowing, platform
+and external-boundary transitions. No persistent state or asynchronous
+transition is introduced. The existing deepest-lexical-scope rule does not
 implement full Rust namespace lookup across scopes: an inner function alias
 can still prevent expansion through an outer module alias. Exact-module
 qualification leaves that pre-existing resolution gap unchanged; expanding
 namespace modeling is separate work, not a risk-acceptance disposition in
 this repair.
+
+Verification for this revision: all 114 module-graph tests pass; the Rust
+Scope Routing command passes (`check:size`, `cargo fmt --check`, Clippy
+with warnings denied, and all 628 library tests plus integration targets).
+The documentation review checked matrix coverage, retained boundaries and
+links against the implementation; no automated prose check is configured.
+Decomposition review keeps binding records in their owning alias module,
+reducing `module_graph.rs` from 789 to 776 lines. `aliases.rs` is 383 lines
+and the new regression module is 146 lines. The 65-line `expand_segments`
+remains one candidate-priority operation; qualified namespace resolution
+is delegated, while splitting its remaining branches would scatter the
+original-path, child-module, alias and glob precedence. Changed executable
+units stay below 80 code lines and within four nesting levels.
 
 ## Before Writing Code
 
