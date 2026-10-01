@@ -717,3 +717,7 @@ mod issue_424_operand_tests;
 /// 门控后缀表达式、限定路径与生产恢复边界回归（issue #424）。
 #[cfg(test)]
 mod issue_424_expression_tests;
+
+/// return/break 块值续接门控回归（issue #446）。
+#[cfg(test)]
+mod issue_446_tests;

@@ -12,7 +12,7 @@ pub(super) struct ClosureHeaders {
     pub(super) next: usize,
     /// 当前入口是否处于显式返回类型或调用方字段类型中。
     pub(super) type_header: bool,
-    /// 已识别的闭包正文是否使用表达式态。
+    /// 闭包正文或 return/break 操作数是否使用表达式态（issue #446）。
     pub(super) initializer: bool,
     matches: usize,
     blocks: usize,
@@ -118,7 +118,7 @@ pub(super) fn skip_closure_headers(
     let mut headers = ClosureHeaders {
         next: start,
         type_header,
-        initializer: false,
+        initializer: matches!(tokens.get(start), Some(&"return" | &"break")),
         matches: 0,
         blocks: 0,
         statement_control_flow: matches!(tokens.get(start), Some(&"match" | &"if" | &"while")),
