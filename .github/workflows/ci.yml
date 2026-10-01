@@ -36,6 +36,8 @@ jobs:
         run: npm run lint -- --max-warnings=0
       - name: 严格索引类型检查（src 行，issues #230/#231；与本地门禁同口径）
         run: npm run typecheck:strict
+      - name: 维护源码文件规模（issue #432；含 Rust 与 scripts）
+        run: npm run check:size
       - name: build（src 行）
         run: npm run build
       - name: test（src 行）

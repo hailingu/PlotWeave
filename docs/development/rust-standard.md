@@ -22,9 +22,13 @@ root `AGENTS.md`, this file is written in English for agent interoperability.
   `rust-toolchain.toml` at the repository root (currently `1.95.0`; issue
   #167). rustup resolves it from any repository directory, so routed checks
   are reproducible on a clean machine. Upgrades are a dedicated change to
-  that file: record the routed-command verification (`cargo fmt --check &&
-  cargo clippy --all-targets -- -D warnings && cargo test`) in the upgrade
+  that file: record the complete routed-command verification below in the upgrade
   PR, and do not add platform targets without a project decision.
+- Verification: from `src-tauri/`, run
+  `npm --prefix .. run check:size && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test`.
+  The npm prefix selects the repository-root size guard before Cargo checks,
+  including for Rust-only changes (issue #432). Use the Node version pinned by
+  `.nvmrc`; CI runs the repository-wide guard, including Rust, in its frontend job.
 - Format with `cargo fmt`; do not hand-format around it.
 - Lint with `cargo clippy`; treat new warnings as defects to fix or explicitly
   and narrowly suppress with a comment explaining why.

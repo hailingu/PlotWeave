@@ -45,7 +45,10 @@ with a measured slow-path cost recorded alongside the baseline (see
 Every gated command runs the same complete sequence:
 
 1. `scripts/check-static.sh` — Prettier format check, ESLint with zero
-   warnings, `typecheck:strict`. Fail-fast, ahead of all coverage work.
+   warnings, `check:size` file caps (issue #432), `typecheck:strict`.
+   Fail-fast, ahead of all coverage work. The file-cap contract and its
+   retained function-level verification gap are recorded in
+   [File Size Guard](file-size-guard.md).
 2. `npm run test:coverage` — the full frontend suite, serialized to LCOV and
    threshold-checked against the versioned 80% overall line-coverage floor
    (issue #393).
@@ -445,7 +448,11 @@ unlike pre-#355 practice, the claim no longer depends on the executor's word.
   while `tree` records the index tree, matching the marker's key. With
   unstaged or untracked differences the run validated more (or different)
   content than the key identifies; the caveats of that known finding apply
-  to records unchanged.
+  to records unchanged. The file-size checker additionally validates source
+  blobs and their bounded baseline in the effective index (issue #432,
+  PR #452 reviews 5374354494 / 5374500480), without allowing an indexed
+  allowance to weaken the current gate's policy;
+  this closes its size-policy mismatch without changing the other stages.
 - *Append-only growth.* One line per fully passing run, no rotation; the
   file is a log of runs, not a derived state that can be rebuilt.
 - *No secrets.* Records carry hashes, counts, and percentages only. Tokens
@@ -970,9 +977,10 @@ ref received the exact OID. This matches the
 `reference-transaction` question; the direct-OID variant is a push-side gap
 that only the #405 remedy (analyze the pushed ref) can close.
 
-One qualification applies to the `git commit` rows themselves: the gate
-script scans the working tree, while Git records the tree selected for that
-invocation. Ordinary index-based commits use the staged contents; pathspecs
+One qualification applies to the `git commit` rows themselves: formatting,
+lint, type checks, coverage and Sonar scan the working tree, while Git records
+the tree selected for that invocation. Ordinary index-based commits use the
+staged contents; pathspecs
 and content-selection flags can select a different tree. For an ordinary
 index-based commit, working-tree state beyond the index is analyzed but not
 committed. With partially staged changes — state A staged, further state B
@@ -1010,7 +1018,10 @@ index alone would therefore not close this boundary.
 
 So the accurate statement of the invariant is:
 
-> The gate always analyzes the **working tree**. It runs on `git commit`,
+> The gate analyzes the **working tree**; the file-size stage additionally
+> checks source blobs and their bounded baseline in the effective commit index
+> (issue #432,
+> [File Size Guard](file-size-guard.md)). It runs on `git commit`,
 > and — since the issue #405 wiring — on `git push` for every pushed ref at
 > that ref's commit state: in the checked-out working tree only under the
 > provable-equality preconditions, otherwise in a temporary worktree checked
