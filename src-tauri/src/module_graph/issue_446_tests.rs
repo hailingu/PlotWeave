@@ -20,6 +20,10 @@ fn jump_block_value_continuations_exclude_test_dependencies() {
         "#[cfg(test)] break 'outer { 1u8 } * { use crate::b::B; 1 };",
         "#[cfg(test)] return if true { 1u8 } else { 2u8 } + { use crate::b::B; 1 };",
         "#[cfg(test)] break 'outer match 1u8 { _ => [1u8] }[{ use crate::b::B; 0 }];",
+        "#[cfg(test)] break 'outer { p } as *const Ty<{ use crate::b::B; 1 }>;",
+        "#[cfg(test)] break { 1u8 } as u16 + { use crate::b::B; 1 };",
+        "#[cfg(test)] break 'outer { 1u8 } as [u8; { use crate::b::B; 1 }];",
+        "#[cfg(test)] return match 1u8 { _ => 1u8 } as u16 * { use crate::b::B; 1 };",
     ] {
         let graph = edges(&[
             ("lib.rs", "mod a; mod b; mod c;"),
@@ -41,6 +45,7 @@ fn jump_block_values_preserve_following_production_cycles() {
     for item in [
         "#[cfg(test)] return { |x: u8| x }({ use crate::b::B; 1 }); { use crate::c::C; }",
         "#[cfg(test)] break 'outer { 1u8 } + { use crate::b::B; 1 }; [{ use crate::c::C; 1 }];",
+        "#[cfg(test)] break 'outer { p } as *const u8; { use crate::c::C; }",
         "#[cfg(test)] break { [1u8] }[{ use crate::b::B; 0 }]; ({ use crate::c::C; 1 });",
         "#[cfg(test)] return; ({ use crate::c::C; 1 });",
         "#[cfg(test)] break; [{ use crate::c::C; 1 }];",
@@ -68,6 +73,7 @@ fn production_jump_block_values_preserve_edges() {
     for item in [
         "return { |x: u8| x }({ use crate::c::C; 1 });",
         "break 'outer { 1u8 } + { use crate::c::C; 1 };",
+        "break 'outer { p } as *const Ty<{ use crate::c::C; 1 }>;",
         "#[cfg(unix)] return { [1u8] }[{ use crate::c::C; 0 }];",
         "#[cfg(any(test, unix))] break { |x: u8| x }({ use crate::c::C; 1 });",
     ] {
