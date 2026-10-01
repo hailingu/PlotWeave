@@ -572,9 +572,28 @@ NODE
   every ref in the repository. Multiple runs can claim the same tree, and
   multiple commits can share a tree; neither record count nor unique tree
   count is a count of commits independently shown to have been gated.
-  The issue #431 audit at `86469b8` found 73 records for about 26 distinct
-  trees alongside 1,200+ commits. These are historical audit figures, not a
-  current coverage guarantee; the command recomputes the current snapshot.
+  The versioned ledger at `86469b8` contains 71 successful records for 34
+  distinct trees, and 1,239 commits are reachable from that snapshot. These
+  counts use the tracked historical input, not a current coverage guarantee;
+  the command above recomputes the current snapshot. Reproduce the historical
+  counts independently with:
+
+  ```sh
+  node --input-type=module <<'NODE'
+  import { execFileSync } from 'node:child_process';
+  const git = (...args) => execFileSync('git', ['--no-replace-objects', ...args], { encoding: 'utf8' });
+  const records = git('show', '86469b8:docs/development/gate-history.jsonl')
+    .split('\n').filter((line) => line.trim()).map((line) => JSON.parse(line));
+  const successClaims = records.filter((record) =>
+    record.qualityGate === 'OK' && record.newCodeUnresolvedIssues === 0);
+  console.log(JSON.stringify({
+    successfulRecords: successClaims.length,
+    uniqueSuccessClaimTrees: new Set(successClaims.map((record) => record.tree)).size,
+    commitsReachableFromSnapshot: Number(git('rev-list', '--count', '86469b8')),
+  }, null, 2));
+  NODE
+  ```
+
   Missing rows can reflect pre-ledger history, uncovered creation paths,
   best-effort write failures, or pending/not-yet-versioned records. Their
   presence or absence cannot establish repository-wide gate compliance.
