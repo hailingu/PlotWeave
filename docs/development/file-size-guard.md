@@ -52,8 +52,32 @@ including Rust test modules and compile-time `*.test-d.ts` probes.
 `scripts/file-size-baseline.json` records grandfathered paths and their
 maximum counts, never a blanket exclusion: a retained over-limit file is
 reported as `SIZE_GRANDFATHERED`, and growth past its recorded maximum fails
-with `SIZE_LIMIT_EXCEEDED`. Invalid/missing baseline data, Git enumeration
-failures and unreadable or non-regular source inputs fail with
+with `SIZE_LIMIT_EXCEEDED`. Every entry — in the current gate's policy file
+and in the effective index's policy — must stay anchored to a measurable
+over-limit fact (issue #467): the path must exist as regular staged source
+in the effective index, its measured maximum must still exceed the normal
+cap, and the recorded count must equal that maximum. An entry whose path has
+no indexed content (a never-committed path, a worktree-only file, or a
+staged deletion) fails with `SIZE_BASELINE_STALE`, reason `unindexed`; an
+entry whose measured maximum no longer exceeds the normal cap fails with
+`SIZE_BASELINE_STALE`, reason `within-cap`; an entry recording a larger
+count than any measured content fails with `SIZE_BASELINE_DRIFT` carrying
+`count` and `measured`. Baseline findings identify the governing policy copy
+with `scope: "worktree"` (current gate file) or `scope: "index"` (effective
+index policy) and are reported before size diagnostics. Anchoring uses each
+scope's own measured fact — the indexed content for indexed policy, the
+maximum across both trees for the current policy — so unstaged
+worktree-only shrinks do not invalidate an entry; a repair and its entry
+update must reach the same staged change. An entry lower than measured
+content produces no separate finding: the content itself fails
+`SIZE_LIMIT_EXCEEDED`. A new over-limit file staged together with a
+matching new entry is mechanically self-consistent and passes; that
+residual is governed by the review requirement below and by the suite's
+published-baseline test, which reads the versioned
+`scripts/file-size-baseline.json` and validates every entry against the
+real repository index (presence, exact count, over-cap). Invalid/missing
+baseline data, Git enumeration failures and unreadable or non-regular
+source inputs fail with
 `SIZE_INPUT_ERROR`; unresolved source index stages also fail. Regular index
 modes `100644` and `100755` are supported. Size diagnostics identify their
 content source with `tree: "worktree"` or `tree: "index"`; the completion
@@ -127,6 +151,13 @@ they do not assert line counts of versioned production files or prose.
 | Rust-only change checked from `src-tauri/` | Run the local route; grow a Rust file past 800 LF, then repair and restage | Reject oversized working/indexed content; pass after both copies comply | Every local source route checks file caps before completion | Disposable npm-prefix Rust fixture and complete Rust route passed; see Rust Local Route Follow-up |
 | Under-tree path with a registered non-source suffix (`png` `icns` `ico` `xml` `json` `toml` `lock`), tracked, untracked or index-only, possibly non-UTF-8 | Enumerate and classify | Not measured; counted in the completion record's `excluded`; run passes | An intentional exclusion is registry-bounded and observable, and classification precedes encoding validation | Exclusion-registry fixtures |
 | Under-tree path with an unregistered suffix or no suffix, in the worktree or only in the effective index, possibly non-UTF-8 | Enumerate and classify | `SIZE_UNCLASSIFIED_FILE` naming the path (hex form for non-UTF-8); exit 1; removal, rename or registration restores success | No Git-enumerated maintained-scope path is silently skipped; unknown categories fail closed | Fail-closed fixtures (worktree, index-only, raw-byte) |
+| Baseline entry whose path has no staged content in the effective index (nonexistent, worktree-only, or staged deletion) | Run checker, then remove the entry | `SIZE_BASELINE_STALE` reason `unindexed`; exit 1; pass after removal | An allowance requires an indexed over-limit fact; nonexistent or untracked paths cannot be pre-authorized (#467) | Issue paths (a)/(b) and staged-deletion fixtures |
+| Over-limit source staged together with an entry equal to its measured maximum | Run checker | Pass with `SIZE_GRANDFATHERED` | A fact-anchored allowance is honored; adding entries remains review-governed (residual boundary) | Staged-consistency guard fixture |
+| Indexed content repaired within the normal cap while its entry remains | Run checker; remove the entry in the same staged change; rerun | `SIZE_BASELINE_STALE` reason `within-cap`; pass after removal | Repairs ratchet the baseline down in the same staged change (#467) | Within-cap phase of the ratchet fixture |
+| Indexed content shrunk but still over cap while the entry keeps the old maximum | Run checker; lower the entry to the measured maximum; rerun | `SIZE_BASELINE_DRIFT` with `count`/`measured`; pass after lowering | A recorded allowance equals the current measured maximum; no unbounded quota (#467) | Drift phase of the ratchet fixture |
+| Worktree copy shrunk below cap while the index still holds the over-limit content | Run checker | Pass; the entry stays anchored to the indexed fact | Unstaged intermediate states do not invalidate entries (#467) | Worktree-only shrink guard fixture |
+| Effective-index policy holds an entry whose indexed content is within cap | Check through a `GIT_INDEX_FILE` selected index | `SIZE_BASELINE_STALE` with `scope: "index"` | Indexed policy is anchored independently of the current gate's copy (#467) | Selected-index policy fixture |
+| Published baseline gains or changes an entry | Run the script suite | Published-baseline test validates each entry against the real repository index (stage-0 regular blob, count equals LF count, over cap) | The versioned policy file is an automated checked input, not a blind spot (#467) | Published-baseline fixture |
 
 No application/persistence contract changes. The checker is read-only and
 synchronous; concurrent working-tree or index edits during a run are not a
@@ -293,3 +324,41 @@ checks (Prettier, zero-warning ESLint, `typecheck:strict`) passed. The
 their time of writing; this tree now measures 490 source paths and 57
 excluded paths. Documentation changes received a structured review; no
 automated prose check is configured.
+
+## Baseline Anchoring Follow-up (Issue #467)
+
+Issue [#467](https://github.com/hailingu/PlotWeave/issues/467) identified
+that the grandfather registry had no upper bound, no staleness detection,
+and no automation reading the versioned baseline: one JSON line could
+authorize an arbitrarily large new file, pre-authorize a path that did not
+yet exist, and entries for deleted or repaired files were never reported.
+Both reproduction paths from the issue now fail closed. Every entry — in
+the current gate's policy file and in the effective index's policy — must
+be anchored to a measurable fact: the path exists as regular staged source
+in the effective index, its measured maximum still exceeds the normal cap,
+and the recorded count equals that maximum. Violations are reported as
+`SIZE_BASELINE_STALE` (`unindexed` / `within-cap`) or `SIZE_BASELINE_DRIFT`
+with `count` and `measured`, before size diagnostics, each with the
+governing `scope`. The ratchet works in both directions: shrinking a
+grandfathered file requires lowering its entry in the same staged change,
+and repairing it within the cap requires removing the entry. Unstaged
+worktree-only shrinks remain valid intermediate states because anchoring
+follows the indexed fact. A published-baseline test now reads the versioned
+`scripts/file-size-baseline.json` and validates every entry against the
+real repository index, so the file is no longer an automation blind spot;
+it is empty today, so that test passes trivially while still reading it.
+
+Seven regression cases first passed incorrectly against the old checker —
+the issue's paths (a) and (b), staged deletion, indexed-policy staleness,
+and the drift and within-cap phases of the ratchet — while the
+published-baseline and worktree-only-shrink cases are consistency guards
+that cannot fail while the baseline is empty. Residual boundary, recorded:
+a new over-limit file staged together with a matching new entry is
+mechanically self-consistent and passes; the review requirement above
+remains the control. Verification: the focused suite passed all 75 cases in
+`scripts/check-file-size.test.ts` (5 red before implementation), `npm run
+check:size` reported `{checked: 490, excluded: 57, passed: true}`, and
+`npm test -- scripts` passed all 198 script-suite cases; Prettier,
+zero-warning ESLint on the changed scripts, and `typecheck:strict` passed.
+The contract and matrix above received a structured review; no automated
+prose check is configured.

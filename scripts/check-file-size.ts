@@ -313,6 +313,91 @@ function indexedBaseline(
     : parseBaseline(indexedBlob(blobs, file.object).toString('utf8'))
 }
 
+/** 基线登记核对的范围：当前政策文件或有效索引中的提交政策。 */
+type BaselineScope = 'worktree' | 'index'
+
+/** 登记脱离事实锚定的稳定诊断：失效（越界事实不复存在）或额度漂移（超出实测）。 */
+type BaselineFinding =
+  | {
+      code: 'SIZE_BASELINE_STALE'
+      path: string
+      scope: BaselineScope
+      reason: 'unindexed' | 'within-cap'
+    }
+  | {
+      code: 'SIZE_BASELINE_DRIFT'
+      path: string
+      scope: BaselineScope
+      count: number
+      measured: number
+    }
+
+/** 基线锚定用的事实汇总：索引行数与两棵树每路径的最大行数。 */
+type MeasurementAnchors = {
+  indexedLines: Map<string, number>
+  maxLines: Map<string, number>
+}
+
+/** 汇总两份测量，得到每条登记锚定判断所需的既存事实。 */
+function measurementAnchors(
+  measurements: SourceMeasurement[],
+): MeasurementAnchors {
+  const anchors: MeasurementAnchors = {
+    indexedLines: new Map(),
+    maxLines: new Map(),
+  }
+  for (const { path, lines, tree } of measurements) {
+    if (lines === undefined) continue
+    anchors.maxLines.set(path, Math.max(anchors.maxLines.get(path) ?? 0, lines))
+    if (tree === 'index') anchors.indexedLines.set(path, lines)
+  }
+  return anchors
+}
+
+/** 逐条核对一份基线：登记必须锚定索引中既存的越界事实，且额度与实测最大值一致（#467）。 */
+function baselineFindings(
+  baseline: Map<string, number>,
+  anchors: MeasurementAnchors,
+  scope: BaselineScope,
+): BaselineFinding[] {
+  const findings: BaselineFinding[] = []
+  for (const [path, count] of baseline) {
+    const indexed = anchors.indexedLines.get(path)
+    if (indexed === undefined) {
+      findings.push({
+        code: 'SIZE_BASELINE_STALE',
+        path,
+        scope,
+        reason: 'unindexed',
+      })
+      continue
+    }
+    const classified = classifyPath(path)
+    if (classified.kind !== 'source') continue
+    const measured =
+      scope === 'worktree' ? (anchors.maxLines.get(path) ?? indexed) : indexed
+    if (measured <= classified.limit) {
+      findings.push({
+        code: 'SIZE_BASELINE_STALE',
+        path,
+        scope,
+        reason: 'within-cap',
+      })
+    } else if (count > measured) {
+      findings.push({
+        code: 'SIZE_BASELINE_DRIFT',
+        path,
+        scope,
+        count,
+        measured,
+      })
+    }
+  }
+  return findings.sort(
+    (a, b) => a.path.localeCompare(b.path) || a.scope.localeCompare(b.scope),
+  )
+}
+
 /** 工作树发现新文件；索引保证暂存版本不能被未暂存修复或删除掩盖。 */
 function* sourceMeasurements(
   working: WorkingDiscovery,
@@ -328,22 +413,25 @@ function* sourceMeasurements(
   }
 }
 
-/** 对两份源码执行只读检查，逐项报告来源；违规、未分类或读取失败均为失败。 */
+/** 对两份源码执行只读检查，逐项报告来源；违规、未分类、登记失效或读取失败均为失败。 */
 function main(): void {
   const baseline = readBaseline()
   const index = indexedFiles()
   const blobs = indexedBlobs(index.files)
   const committedBaseline = indexedBaseline(index.files, blobs)
   const working = workingPaths()
+  const measurements = [...sourceMeasurements(working, index, blobs)]
+  const anchors = measurementAnchors(measurements)
+  const findings = [
+    ...baselineFindings(baseline, anchors, 'worktree'),
+    ...baselineFindings(committedBaseline, anchors, 'index'),
+  ]
+  for (const finding of findings) console.error(JSON.stringify(finding))
   const excluded = new Set([...working.excluded, ...index.excluded])
   const unclassified = new Set([...working.unclassified, ...index.unclassified])
-  let failed = false
+  let failed = findings.length > 0
   const checked = new Set<string>()
-  for (const { path, lines, tree } of sourceMeasurements(
-    working,
-    index,
-    blobs,
-  )) {
+  for (const { path, lines, tree } of measurements) {
     const classified = classifyPath(path)
     if (lines === undefined || classified.kind !== 'source') continue
     checked.add(path)
