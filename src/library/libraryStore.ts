@@ -10,6 +10,7 @@
 import { uid } from '../uid'
 import { IPC_COMMANDS } from '../ipc/commands'
 import { ipcInvoke } from '../ipc/invoke'
+import { isTauriRuntime } from '../ipc/runtime'
 import { reportLibraryDiagnostics } from './libraryDiagnosticTransport'
 
 /** 资产库分类（§7）：索引条目的 kind 域；中文标签/图标见 LIBRARY_KINDS。 */
@@ -114,7 +115,7 @@ function normalizeAsset(raw: RawAsset | null): LibraryAsset | null {
   }
 }
 
-const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+const isTauri = isTauriRuntime()
 
 /** 内存回退：blob + object URL，会话内有效。 */
 const memoryAssets = new Map<string, { asset: LibraryAsset; blob: Blob }>()

@@ -558,6 +558,8 @@ macOS 惯例 ⌘, 打开设置。当前实现为同一主窗口内切换的设�
 | 交互行为层 | 无头组件库 Radix Primitives（备选 React Aria、Base UI） | 承载弹层碰撞定位、焦点陷阱、Esc/外点关闭、右键菜单、键盘导航——手写最容易出错的部分。零样式自带，不与令牌体系冲突；弹层 portal 到 body，天然避开 React Flow 画布 zoom/transform 的坐标系问题（锚定在节点内部的弹层需 floating-ui 的 transform 处理）。不采用 shadcn/ui——需连带引入 Tailwind，与现有按视图组织的纯 CSS 冲突。 |
 | 视觉层 | 扩展 §2 设计令牌 | 材质（半透明 + `backdrop-filter`，WKWebView 支持）、阴影梯度、圆角、字阶、系统强调色沉淀进 `styles/tokens.css`；动效规格沿用 §9。 |
 
+已实现的运行环境分派（[issue #473](https://github.com/hailingu/PlotWeave/issues/473)）：`src/ipc/runtime.ts` 的 `isTauriRuntime()` 统一判定 Tauri IPC 桥是否存在，入口据此为桌面根元素添加 `is-tauri`，保留 Overlay 标题栏安全区；浏览器预览不添加该类、不加载原生 SDK，也不注册原生关闭屏障。存储门面保留模块加载时的环境快照，图库诊断、退出冲刷和图像生成保留原检查时机；不依赖可选的 `__TAURI__` 全局变量。
+
 ### 12.3 落地顺序（立项时执行）
 
 1. `windowEffects` + 透明背景：改动最小，整体观感先达标；

@@ -12,6 +12,7 @@
 import type { ProjectContent } from './model/content'
 import { IPC_COMMANDS } from './ipc/commands'
 import { ipcInvoke } from './ipc/invoke'
+import { isTauriRuntime } from './ipc/runtime'
 import {
   memoryCreate,
   memoryDelete,
@@ -38,7 +39,7 @@ import type { AiSession } from './ai/session'
 
 export type { ProjectContent }
 
-const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+const isTauri = isTauriRuntime()
 
 /** 复制命名（§7.3）：新名 = `{源名} 副本`，与现存项目名冲突则递增序号
  * （` 副本 2`、` 副本 3`…）；拼接结果按字符数超 64（§9.3 校验口径）时先

@@ -18,6 +18,7 @@ beforeEach(() => {
   vi.resetModules()
   listen.mockReset().mockResolvedValue(() => {})
   renderApp.mockReset()
+  document.documentElement.classList.remove('is-tauri')
   Object.defineProperty(window, '__TAURI_INTERNALS__', {
     configurable: true,
     value: {},
@@ -29,6 +30,7 @@ beforeEach(() => {
 afterEach(() => {
   window.dispatchEvent(new Event('pagehide'))
   Reflect.deleteProperty(window, '__TAURI_INTERNALS__')
+  document.documentElement.classList.remove('is-tauri')
   vi.restoreAllMocks()
 })
 
@@ -40,6 +42,7 @@ it('原生监听注册完成前不渲染会发起媒体请求的应用', async (
     }),
   )
   await import('./main')
+  expect(document.documentElement.classList.contains('is-tauri')).toBe(true)
   expect(renderApp).not.toHaveBeenCalled()
   await vi.waitFor(() => expect(listen).toHaveBeenCalledOnce())
   expect(listen.mock.calls[0][0]).toBe('library-diagnostics')
@@ -105,4 +108,5 @@ it('浏览器预览直接渲染，不注册原生事件', async () => {
   await import('./main')
   await vi.waitFor(() => expect(renderApp).toHaveBeenCalledOnce())
   expect(listen).not.toHaveBeenCalled()
+  expect(document.documentElement.classList.contains('is-tauri')).toBe(false)
 })
