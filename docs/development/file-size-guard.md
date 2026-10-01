@@ -19,6 +19,14 @@ commit hooks). Tracked files remain checked even if an ignore rule matches
 them. A working-tree deletion skips only that working copy: an indexed source
 remains checked until its deletion is staged. Unstaged repairs therefore
 cannot hide an oversized version that the commit would retain.
+For indexed source, its effective index must also authorize every legacy
+allowance in `scripts/file-size-baseline.json`: an absent indexed baseline
+provides no allowances; an invalid, non-regular or unmerged one fails the run.
+The checker applies the stricter of the current gate's baseline and the indexed
+baseline. This binds committed source to its own policy while retaining #405's
+requirement that the current gate govern historical pushed trees. Staging a
+policy change is not approval to add an allowance; the review requirement below
+still applies.
 
 The measurement is the number of LF bytes (`wc -l`), including blank and
 comment lines; CRLF counts once, and an unterminated last line does not add
@@ -36,6 +44,12 @@ content source with `tree: "worktree"` or `tree: "index"`; the completion
 record's `checked` counts distinct paths rather than content copies.
 Diagnostics are JSON lines; success exits 0, failures 1.
 The checker never updates its baseline or source inputs automatically.
+Indexed source and policy are enumerated together; deduplicated blob objects
+are read with Git's batch protocol. The reader validates blob types, lengths
+and byte framing before measuring content, including binary bytes and embedded
+newlines. The batch buffer is sized from the object lengths rather than a new
+aggregate content ceiling; this reduces subprocess overhead without skipping
+source, weakening policy, or removing any complete-gate stage.
 
 The initial baseline is empty. At rule adoption, commit
 `0633f92315942aae4230d039112b7aa0c25f7077`, four source files were over limit:
@@ -77,6 +91,12 @@ they do not assert line counts of versioned production files or prose.
 | Compliant indexed source; oversized working copy | Check, then repair working copy | Reject working copy, then pass | Both indexed and working source satisfy the same bounded policy | Two-tree fixtures |
 | Git supplies an alternate effective index (`GIT_INDEX_FILE`) | Check default and selected index with the same working copy | Only the oversized selected index fails | Commit content selection, not the default index pathname, owns indexed inputs | Effective-index fixture |
 | Indexed source is non-regular or has unresolved stages | Check despite a compliant regular working copy | `SIZE_INPUT_ERROR`, nonzero exit | Unsupported indexed source cannot silently pass | Index-input failure fixtures |
+| Working baseline adds/increases an allowance absent or lower in effective index | Check oversized indexed source, then stage the baseline | Reject until both policies authorize the size | An unstaged policy edit cannot authorize committed source | Indexed-baseline regression and recovery fixtures |
+| Alternate effective index has a different baseline | Check default and selected index | Enforce the selected baseline | Source and its committed policy use the same effective index | Selected-baseline fixture |
+| Current gate policy is stricter than selected tree's baseline | Check selected source | Reject using the stricter bound | Pushes cannot weaken the current gate via historical policy | Current-policy fixture |
+| Indexed baseline is malformed, non-regular, or unmerged | Repair working copy only, check again | `SIZE_INPUT_ERROR` | A working repair cannot hide invalid committed policy | Indexed-baseline failure fixtures |
+| Many indexed blobs, repeated objects, binary bytes and framing-like text | Batch-read unchanged content, measure LF | Same per-path results; no extra aggregate byte ceiling | Batching changes transport cost, not source/policy semantics | Binary, duplicate and aggregate-size fixtures; CLI timing and CI |
+| Indexed object is missing or is not a blob | Read batch metadata | `SIZE_INPUT_ERROR` | Incomplete object input cannot be measured as empty source | Missing/non-blob object fixtures |
 
 No application/persistence contract changes. The checker is read-only and
 synchronous; concurrent working-tree or index edits during a run are not a
@@ -129,3 +149,28 @@ The contract and gate-boundary documents received a structured review;
 there is no configured automated prose check. All selected matrix cases
 are covered; concurrent mutation and function/closure measurement retain
 the limitations stated above.
+
+## Indexed Policy And CI Follow-up (Review 5374500480)
+
+The [indexed-policy review](https://github.com/hailingu/PlotWeave/pull/452#discussion_r4151449927)
+identified an unstaged permissive baseline authorizing a staged oversized
+source. Eight regression cases first passed incorrectly; they now bind the
+source allowance to the effective index, reject invalid indexed policy, and
+recover only after the intended baseline is staged. A stricter current gate
+still limits historical or selected trees.
+
+[CI run 36808970251](https://github.com/hailingu/PlotWeave/actions/runs/36808970251)
+passed Rust but exceeded the default five-second limit of the existing
+pre-commit wiring test (6.006 seconds). Each fixture gate scanned the real
+repository index with one Git process per distinct blob. Batched object reads
+retain the complete scan and the original test assertions/timeouts.
+On the same local source tree, `time -p npm run check:size` decreased from
+2.08 seconds to 0.19 seconds after batching. These are point-in-time cost
+measurements, not a portable timing contract; CI supplies the runner check.
+Verification: all 52 focused cases and 144 script-suite tests passed;
+`check:size` checked 482 paths, and zero-warning ESLint, formatting and diff
+checks passed. The existing pre-commit wiring test passed with its unchanged
+assertions and five-second timeout. All selected matrix rows passed;
+concurrent mutation and function/closure measurement remain the stated gaps.
+The policy and gate-boundary documents received a structured review, with
+no configured automated prose check.

@@ -449,7 +449,9 @@ unlike pre-#355 practice, the claim no longer depends on the executor's word.
   unstaged or untracked differences the run validated more (or different)
   content than the key identifies; the caveats of that known finding apply
   to records unchanged. The file-size checker additionally validates source
-  blobs in the effective index (issue #432, PR #452 review 5374354494);
+  blobs and their bounded baseline in the effective index (issue #432,
+  PR #452 reviews 5374354494 / 5374500480), without allowing an indexed
+  allowance to weaken the current gate's policy;
   this closes its size-policy mismatch without changing the other stages.
 - *Append-only growth.* One line per fully passing run, no rotation; the
   file is a log of runs, not a derived state that can be rebuilt.
@@ -1017,7 +1019,8 @@ index alone would therefore not close this boundary.
 So the accurate statement of the invariant is:
 
 > The gate analyzes the **working tree**; the file-size stage additionally
-> checks source blobs in the effective commit index (issue #432,
+> checks source blobs and their bounded baseline in the effective commit index
+> (issue #432,
 > [File Size Guard](file-size-guard.md)). It runs on `git commit`,
 > and — since the issue #405 wiring — on `git push` for every pushed ref at
 > that ref's commit state: in the checked-out working tree only under the

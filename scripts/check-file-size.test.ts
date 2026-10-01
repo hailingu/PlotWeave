@@ -313,6 +313,7 @@ it('合规索引不掩盖超限工作树，检查不改变已暂存的对象', (
 
 it('索引测量沿用测试文件上限与有界祖父条款', () => {
   const root = checkerFixture({ 'src/legacy.ts': 900 })
+  git(root, ['add', '--', 'scripts/file-size-baseline.json'])
   for (const lines of [900, 901]) {
     write(root, 'src/legacy.ts', '\n'.repeat(lines))
     git(root, ['add', '--', 'src/legacy.ts'])
@@ -344,6 +345,180 @@ it('索引测量沿用测试文件上限与有界祖父条款', () => {
     limit: 1800,
   })
 })
+
+it.each(['empty', 'absent', 'lower'] as const)(
+  '未暂存的宽松基线不能放行索引源码：原索引基线 %s；暂存政策后恢复',
+  (state) => {
+    const root = checkerFixture()
+    const baseline = 'scripts/file-size-baseline.json'
+    if (state !== 'absent') {
+      write(
+        root,
+        baseline,
+        JSON.stringify({
+          version: 1,
+          files: state === 'lower' ? { 'src/legacy.ts': 850 } : {},
+        }),
+      )
+      git(root, ['add', '--', baseline])
+    }
+    write(root, 'src/legacy.ts', '\n'.repeat(900))
+    git(root, ['add', '--', 'src/legacy.ts'])
+    write(
+      root,
+      baseline,
+      JSON.stringify({ version: 1, files: { 'src/legacy.ts': 900 } }),
+    )
+    const result = runChecker(root)
+    expect(result.status).toBe(1)
+    expect(JSON.parse(result.stderr.trim())).toMatchObject({
+      code: 'SIZE_LIMIT_EXCEEDED',
+      tree: 'index',
+      limit: state === 'lower' ? 850 : 800,
+    })
+    git(root, ['add', '--', baseline])
+    expect(runChecker(root).status).toBe(0)
+  },
+)
+
+it('基线与源码从同一个有效提交索引读取', () => {
+  const root = checkerFixture({ 'src/legacy.ts': 900 })
+  const baseline = 'scripts/file-size-baseline.json'
+  write(root, 'src/legacy.ts', '\n'.repeat(900))
+  git(root, ['add', '--', baseline, 'src/legacy.ts'])
+  const env = { GIT_INDEX_FILE: resolve(root, '.git', 'selected-index') }
+  copyFileSync(resolve(root, '.git', 'index'), env.GIT_INDEX_FILE)
+  write(root, baseline, JSON.stringify({ version: 1, files: {} }))
+  git(root, ['add', '--', baseline], env)
+  write(
+    root,
+    baseline,
+    JSON.stringify({ version: 1, files: { 'src/legacy.ts': 900 } }),
+  )
+  expect(runChecker(root).status).toBe(0)
+  const result = runChecker(root, env)
+  expect(result.status).toBe(1)
+  expect(JSON.parse(result.stderr.trim())).toMatchObject({
+    tree: 'index',
+    limit: 800,
+  })
+})
+
+it('有效索引的宽松基线不能削弱当前门禁政策', () => {
+  const root = checkerFixture({ 'src/legacy.ts': 900 })
+  write(root, 'src/legacy.ts', '\n'.repeat(900))
+  git(root, ['add', '--', 'scripts/file-size-baseline.json', 'src/legacy.ts'])
+  write(root, 'src/legacy.ts', '\n'.repeat(800))
+  write(
+    root,
+    'scripts/file-size-baseline.json',
+    JSON.stringify({ version: 1, files: { 'src/legacy.ts': 850 } }),
+  )
+  const result = runChecker(root)
+  expect(result.status).toBe(1)
+  expect(JSON.parse(result.stderr.trim())).toMatchObject({
+    tree: 'index',
+    limit: 850,
+  })
+})
+
+it.each(['json', 'schema', 'symlink', 'unmerged'] as const)(
+  '索引基线 %s 时不接受工作树中已经修复的政策文件',
+  (state) => {
+    const root = checkerFixture({ 'src/legacy.ts': 900 })
+    const path = 'scripts/file-size-baseline.json'
+    const target = resolve(root, path)
+    const valid = readFileSync(target)
+    if (state === 'unmerged') {
+      const object = git(root, ['hash-object', '-w', '--', path]).trim()
+      execFileSync('git', ['update-index', '--index-info'], {
+        cwd: root,
+        env: environment(),
+        input: `100644 ${object} 1\t${path}\n`,
+      })
+    } else {
+      if (state === 'symlink') {
+        rmSync(target)
+        symlinkSync('missing.json', target)
+      } else {
+        writeFileSync(
+          target,
+          state === 'json' ? '{' : '{"version":2,"files":{}}',
+        )
+      }
+      git(root, ['add', '--', path])
+      rmSync(target)
+      writeFileSync(target, valid)
+    }
+    write(root, 'src/legacy.ts', '\n'.repeat(900))
+    git(root, ['add', '--', 'src/legacy.ts'])
+    const result = runChecker(root)
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain('SIZE_INPUT_ERROR')
+  },
+)
+
+it('批量 blob 的内容分帧不把二进制字节或头部样式文本当成协议行', () => {
+  const root = checkerFixture()
+  const paths = ['src/framing.ts', 'src/repeated blob.ts']
+  const content = Buffer.concat([
+    Buffer.from('fake blob 7\n雪\0\r\n' + '\n'.repeat(798)),
+    Buffer.from([255, 0]),
+  ])
+  for (const path of paths) writeFileSync(write(root, path, ''), content)
+  git(root, ['add', '--', ...paths])
+  expect(runChecker(root).status).toBe(0)
+  for (const path of paths) {
+    writeFileSync(
+      resolve(root, path),
+      Buffer.concat([content, Buffer.from('\n')]),
+    )
+  }
+  git(root, ['add', '--', ...paths])
+  for (const path of paths) writeFileSync(resolve(root, path), content)
+  const result = runChecker(root)
+  expect(result.status).toBe(1)
+  const diagnostics = result.stderr
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line))
+  expect(diagnostics).toHaveLength(2)
+  for (const path of paths) {
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: 'SIZE_LIMIT_EXCEEDED',
+        path,
+        tree: 'index',
+        lines: 801,
+      }),
+    )
+  }
+})
+
+it('批量读取不引入比逐文件读取更小的总字节限制', () => {
+  const root = checkerFixture()
+  for (const name of ['a', 'b']) {
+    write(root, `src/${name}.ts`, name.repeat(6 * 1024 * 1024) + '\n')
+  }
+  git(root, ['add', '--', 'src'])
+  const result = runChecker(root)
+  expect(result.status, result.stderr).toBe(0)
+})
+
+it.each(['missing', 'tree'] as const)(
+  '索引引用 %s 对象时阻止不完整的批量检查',
+  (kind) => {
+    const root = checkerFixture()
+    const path = 'src/invalid.ts'
+    write(root, path, '\n')
+    const object =
+      kind === 'tree' ? git(root, ['write-tree']).trim() : '1'.repeat(40)
+    git(root, ['update-index', '--add', '--cacheinfo', '100644', object, path])
+    const result = runChecker(root)
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain('SIZE_INPUT_ERROR')
+  },
+)
 
 it('遵循 Git 暴露的有效提交索引，默认索引合规不能掩盖所选索引超限', () => {
   const root = checkerFixture()
