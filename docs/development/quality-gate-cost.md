@@ -31,7 +31,11 @@ with a measured slow-path cost recorded alongside the baseline (see
 [Push-Path Slow-Path Cost](#push-path-slow-path-cost-2026-09-30-issue-405));
 extended 2026-10-01 by the
 [issue #429](https://github.com/hailingu/PlotWeave/issues/429) marker identity
-fix, preventing reuse of aborted operations' residue by later Git processes.
+fix, preventing reuse of aborted operations' residue by later Git processes;
+clarified 2026-10-01 for
+[issue #431](https://github.com/hailingu/PlotWeave/issues/431): the gate ledger
+preserves self-reported conclusions with partial coverage, without independent
+proof of execution (see [Gate Run Evidence Record](#gate-run-evidence-record-issue-355)).
 
 ## Required Reading
 
@@ -323,7 +327,7 @@ test-only injection, explicit evasion to use it that way.
 (`scripts/sonar-quality-gate.sh` / `scripts/gate-history.sh`, issue #355)
 also belong to the test-only injection class: they redirect only where the
 evidence record is written, so they cannot skip any check, but pointing them
-elsewhere does remove the in-repository evidence for that run.
+elsewhere does remove the in-repository self-report for that run.
 `PLOTWEAVE_GATE_REPOSITORY_ROOT` (`scripts/sonar-quality-gate.sh`,
 `scripts/check-static.sh`, `scripts/rust-coverage.sh`, issue #405) belongs
 to the same injection class but is stronger than the path overrides above:
@@ -465,13 +469,24 @@ see
 Before issue #355, every artifact behind a passing gate conclusion —
 `coverage/`, `.scannerwork/`, `src-tauri/target/` — was local-only and
 gitignored, and `.github/workflows/ci.yml` deliberately does not run Sonar.
-The repository therefore held no durable, third-party-verifiable credential
-that any given commit had passed the Quality Gate with zero new-code
-unresolved issues. Issue #355 offered three drafts; this repository adopted
-**option A** (a versioned summary record). Option B cannot work for the core
-claim because hosted CI cannot reach the local SonarQube server, so its
-artifacts would only ever prove the reachable subset; option C would register
-the gap without closing it.
+Issue #355 adopted **option A** (a versioned summary record) to retain the
+executor's reported conclusions alongside Git tree identities. Hosted CI
+cannot reach the local SonarQube server, so option B's artifacts would cover
+only the checks it can run. Option A provides a durable self-report; it did
+not close the gap in independently verifiable proof of local gate execution.
+
+**Trust boundary (issue #431).** The JSONL ledger has no signature, hash chain,
+or independently authenticated link to a scanner run. Anyone who can write
+it can append or alter a format-valid success claim for an existing Git tree
+without running the gate. A tree hash identifies content; even checking that
+the tree object exists cannot authenticate the claimed execution, timestamp,
+Quality Gate result, issue count, or coverage. Versioning preserves the claim
+and its edit history, while trust still depends on the executor and the
+record's provenance. A matching row must not be used as independent proof
+that a gate ran or passed, or as authorization to skip the required gate.
+This is the retained P3 evidence-credibility boundary from
+[issue #431](https://github.com/hailingu/PlotWeave/issues/431); no authenticity
+anchor or new enforcement mechanism is introduced.
 
 **What is recorded.** After a run passes the *complete* sequence — static
 checks, both coverage reports, the scanner, Quality Gate `OK`, and zero
@@ -488,23 +503,90 @@ Each record line:
 | Field | Meaning |
 | --- | --- |
 | `timestamp` | UTC ISO-8601 time of the record append, second precision. |
-| `tree` | The gated **index tree** (`git write-tree`) — the same key the dedup marker uses, and the value a reader compares against `git rev-parse <commit>^{tree}` to verify that a commit's content passed a complete gate run. |
-| `head` | The commit `HEAD` pointed at during the run — the parent of the commit being created on pre-commit-style paths, the tip being pushed on `pre-push`. Provenance context, not the verification key. |
+| `tree` | The gated **index tree** (`git write-tree`) — the same key the dedup marker uses, and the value a reader compares against `git rev-parse <commit>^{tree}` to find a success claim for that content. Matching does not authenticate the claim. |
+| `head` | The commit `HEAD` pointed at during the run — the parent of the commit being created on pre-commit-style paths, the tip being pushed on `pre-push`. Provenance context, not the content-matching key; it does not authenticate execution. |
 | `qualityGate` | The Quality Gate status for this run's analysis (`OK`; only fully passing runs are recorded). |
 | `newCodeUnresolvedIssues` | Unresolved issue count on new code for this run (`0`; only fully passing runs are recorded). |
 | `frontendLineCoveragePercent` / `rustLineCoveragePercent` | Line coverage computed from the same LCOV reports this run submitted (`DA` records with execution count > 0 count as covered). |
 
-**Verification recipe.** To check that commit `C` passed a complete gate run,
-compute `git rev-parse C^{tree}` and find a record whose `tree` equals it with
-`qualityGate` `OK` and `newCodeUnresolvedIssues` `0`. The record is a durable
-claim made by the gate tooling itself at gate time, versioned in git history;
-unlike pre-#355 practice, the claim no longer depends on the executor's word.
+**Reproducible claim lookup and coverage check.** From the repository root,
+run the following with the pinned Node version. Replace the argument `HEAD`
+with the commit to inspect. It reads the ledger without changing it and uses
+original Git objects (`GIT_NO_REPLACE_OBJECTS=1`, matching the push gate).
+Malformed JSON or an unavailable target commit makes the command fail rather
+than produce a success conclusion.
+
+```sh
+node --input-type=module - HEAD <<'NODE'
+import { readFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+
+const options = {
+  encoding: 'utf8',
+  env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1' },
+};
+const git = (...args) => execFileSync('git', args, options).trim();
+const commit = git('rev-parse', '--verify', `${process.argv[2]}^{commit}`);
+const tree = git('rev-parse', '--verify', `${commit}^{tree}`);
+const records = readFileSync('docs/development/gate-history.jsonl', 'utf8')
+  .split('\n').filter((line) => line.trim()).map((line) => JSON.parse(line));
+const successClaims = records.filter((record) =>
+  record.qualityGate === 'OK' && record.newCodeUnresolvedIssues === 0);
+const claimedTrees = new Set(successClaims.map((record) => record.tree));
+const commitTrees = git('log', '--format=%T', 'HEAD').split('\n');
+const headTrees = new Map(records.map((record) => [record.head, null]));
+for (const head of headTrees.keys()) {
+  const result = spawnSync('git', ['rev-parse', '--verify', `${head}^{tree}`], options);
+  headTrees.set(head, result.status === 0 ? result.stdout.trim() : null);
+}
+const matchingSuccessClaims = successClaims.filter((record) => record.tree === tree).length;
+console.log(JSON.stringify({
+  commit, tree, matchingSuccessClaims,
+  conclusion: matchingSuccessClaims ? 'RECORDED_CLAIM_UNAUTHENTICATED' : 'NO_RECORDED_CLAIM',
+  records: records.length,
+  uniqueSuccessClaimTrees: claimedTrees.size,
+  commitsReachableFromHEAD: commitTrees.length,
+  commitsWithMatchingClaim: commitTrees.filter((value) => claimedTrees.has(value)).length,
+  recordsWithHeadTreeMismatch: records.filter((record) =>
+    headTrees.get(record.head) !== null && headTrees.get(record.head) !== record.tree).length,
+  recordsWithUnavailableHead: records.filter((record) => headTrees.get(record.head) === null).length,
+}, null, 2));
+NODE
+```
+
+- `RECORDED_CLAIM_UNAUTHENTICATED` means only that a success claim with the
+  same tree exists. A manually appended format-valid row produces the same
+  outcome; this recipe cannot distinguish it from a tooling-generated row.
+  `NO_RECORDED_CLAIM` means no matching success claim was found, not that the
+  gate failed or never ran.
+- `head` is not the lookup key. On commit-creating paths the recorded `head`
+  is the pre-creation HEAD, normally the parent; staged content becomes the
+  new commit's tree. When that tree differs from the parent's tree,
+  `git rev-parse <record.head>^{tree}` will not equal `record.tree`. An
+  unchanged-tree commit can match by coincidence. On push paths, since
+  issue #405, `head` is the pushed commit and its tree matches the record.
+  Legacy push records can instead reflect the earlier checked-out-tree
+  behavior described in the known finding below. A head mismatch alone
+  establishes neither a failed gate nor a forged record.
+- The coverage counts use commits reachable from the current `HEAD`, not
+  every ref in the repository. Multiple runs can claim the same tree, and
+  multiple commits can share a tree; neither record count nor unique tree
+  count is a count of commits independently shown to have been gated.
+  The issue #431 audit at `86469b8` found 73 records for about 26 distinct
+  trees alongside 1,200+ commits. These are historical audit figures, not a
+  current coverage guarantee; the command recomputes the current snapshot.
+  Missing rows can reflect pre-ledger history, uncovered creation paths,
+  best-effort write failures, or pending/not-yet-versioned records. Their
+  presence or absence cannot establish repository-wide gate compliance.
 
 **Deliberate properties and boundaries.**
 
-- *Success-only.* Failed or blocked runs append nothing: no Git operation
-  results from them, so there is nothing to justify later. The log therefore
-  proves "this tree passed", never "this tree was the only thing examined".
+- *Success-only tooling writes.* The gate script appends only after all
+  checks pass; failed or blocked runs append nothing. This describes the
+  script's behavior, not a guarantee that every ledger row came from it.
+  Aborted commit operations can also leave records of successful gate runs.
+  The ledger reports successes, without an exhaustive execution history or
+  independently authenticated outcomes.
 - *Best-effort writes, drain under the gate lock.* A pending-append failure
   (permissions, disk) prints a warning to stderr and does not block the
   already-passing gate — the same philosophy as the tree marker.
