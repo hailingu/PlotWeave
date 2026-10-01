@@ -17,9 +17,11 @@
 //!   前缀模块；`pub use` 同采，函数体内局部 `use` 也是文件依赖；平台
 //!   混合变体的路径可有多个所有者文件）。Rust 2018 裸路径 `use x::…`
 //!   的首段先按当前模块的直接子模块解析、再按根模块解析（别名展开的
-//!   绝对路径），再经可见别名链逐层递归展开（issue #469：≥3 级链此前
-//!   静默丢边）、经可见 glob 引入（`use <前缀>::*` 把前缀模块的直接
-//!   子模块名带入作用域，issue #469），均未命中才视为外部 crate 不入图
+//!   绝对路径），再经可见别名链与链式 glob 前缀逐层递归展开（issue
+//!   #469：≥3 级链与 glob 链此前静默丢边）、经可见 glob 引入（`use
+//!   <前缀>::*` 把前缀模块的直接子模块名带入作用域；绑定仅在声明模块
+//!   内可见，inline 子模块不继承父模块引入——评审 5379907393），均未
+//!   命中才视为外部 crate 不入图
 //!   （issue #426）；不经 `use` 的全限定调用不采集——与前端守卫只采
 //!   import/export 边同口径。同文件 inline 引用解析回自身，不计自环边。
 //! - 采集完整性（issue #469）：`build_graph` 建边前经审计层对每条展开
@@ -34,8 +36,8 @@
 //! - 已知盲区（登记而非静默）：`macro_rules!` 体整块跳过（现存唯一生产
 //!   宏 `atomic_io` 体内无 `use`）；非 ASCII 标识符会被分词层拆散（本仓无）；
 //!   glob 只解析前缀模块的**直接**子模块——经 `pub use` 再导出进入 glob
-//!   目标的名字不解析（本仓生产代码无文件级 glob 引入）；别名链递归
-//!   超过 8 层按不可解析处置（真实链长 2~3）。
+//!   目标的名字不解析（本仓生产代码无文件级 glob 引入）；别名/glob
+//!   解析链超过 8 层按不可解析处置（真实链长 2~3）。
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -77,11 +79,14 @@ struct UseStmt {
     scope: Vec<usize>,
 }
 
-/// 一条 `as` 重命名绑定：本地名 → 路径段，附声明处作用域（评审
-/// 5352172371：平行作用域复用同一别名名时须按词法可见性绑定）。
+/// 一条 `as` 重命名绑定：本地名 → 路径段，附声明处 inline 模块栈与
+/// 花括号作用域（评审 5352172371：平行作用域复用同一别名名时须按词法
+/// 可见性绑定；评审 5379907393：inline 子模块不继承父模块引入，可见性
+/// 须限定在同一声明模块内的块嵌套）。
 struct AliasBinding {
     name: String,
     segs: Vec<String>,
+    inline_stack: Vec<String>,
     scope: Vec<usize>,
 }
 
@@ -567,6 +572,7 @@ fn scan_use_stmt(tokens: &[&str], i: usize, st: &mut ScanState) -> usize {
             st.renames.push(AliasBinding {
                 name,
                 segs,
+                inline_stack: stack.clone(),
                 scope: scope.clone(),
             });
         }

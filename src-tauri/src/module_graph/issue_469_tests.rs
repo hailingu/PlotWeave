@@ -128,6 +128,61 @@ fn chained_aliases_through_external_crates_stay_external() {
     );
 }
 
+/// 评审 5379907393：链式 glob 前缀——`use crate::p::*; use a::*; use b::X;`
+/// 中第二个 glob 的前缀 `a` 经第一个 glob 引入（rustc 验证为合法 Rust），
+/// 前缀解析须经可见 glob 递归展开，否则 p/a/b 边静默丢失、审计不报缺口。
+#[test]
+fn chained_glob_prefixes_resolve_deep_module_edges() {
+    let files = [
+        ("lib.rs", "mod p;\nmod user;\n"),
+        ("p/mod.rs", "pub mod a;\n"),
+        ("p/a/mod.rs", "pub mod b;\n"),
+        ("p/a/b.rs", "use crate::user::U;\n"),
+        ("user.rs", "use crate::p::*;\nuse a::*;\nuse b::X;\n"),
+    ];
+    let graph = edges(&files);
+    assert!(
+        graph["user.rs"].contains("p/a/b.rs"),
+        "链式 glob 引入的 b 边丢失（静默丢边）：{:?}",
+        graph["user.rs"]
+    );
+    assert_eq!(
+        cycles_of(&graph).len(),
+        1,
+        "链式 glob 解析出的深模块边须闭合环：{:?}",
+        cycles_of(&graph)
+    );
+}
+
+/// 评审 5379907393：父 inline 模块声明的 glob/别名不得泄漏进子模块的
+/// 裸路径解析——Rust 子模块不继承父模块引入（rustc E0433 验证），泄漏
+/// 会把子模块的外部 crate 引用解析成内部边、误报不存在的环。
+#[test]
+fn glob_and_alias_bindings_do_not_leak_into_inline_children() {
+    for leaked in [
+        "use crate::q::*;\nmod inner {\n    use child::Z;\n    pub fn g() {}\n}\n",
+        "use crate::q as ext;\nmod inner {\n    use ext::child::Z;\n    pub fn g() {}\n}\n",
+    ] {
+        let files = [
+            ("lib.rs", "mod q;\nmod outer;\n"),
+            ("q/mod.rs", "pub mod child;\n"),
+            ("q/child.rs", "use crate::outer::O;\npub struct Z;\n"),
+            ("outer.rs", &format!("pub struct O;\n{leaked}")),
+        ];
+        let graph = edges(&files);
+        assert!(
+            !graph["outer.rs"].contains("q/child.rs"),
+            "父模块引入泄漏进子模块（{leaked}）虚构内部边：{:?}",
+            graph["outer.rs"]
+        );
+        assert!(
+            cycles_of(&graph).is_empty(),
+            "泄漏的引入不得虚构环（{leaked}）：{:?}",
+            cycles_of(&graph)
+        );
+    }
+}
+
 /// 夹具文件列表 → 采集审计结论。
 fn audit(files: &[(&str, &str)]) -> audit::UseAudit {
     let map: BTreeMap<ModuleKey, String> = files

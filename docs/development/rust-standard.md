@@ -135,9 +135,12 @@ from unmeasured files. Metric and scope:
   `mod` declarations and `use` paths (`crate::`/`super::`/`self::` prefixes,
   brace groups expanded; Rust 2018 bare paths such as `use child::…` resolve
   to a direct child of the current module, then to a root module, then through
-  visible alias chains (recursively, bounded depth — issue #469) and glob
-  imports (`use <prefix>::*` brings the prefix module's direct child module
-  names into scope — issue #469), and only otherwise count as an external
+  visible alias chains and chained glob prefixes (recursively, bounded depth —
+  issue #469, PR review 5379907393) and glob imports (`use <prefix>::*`
+  brings the prefix module's direct child module names into scope; glob and
+  alias bindings are visible only inside their declaring module, because
+  inline child modules do not inherit a parent's imports — issue #469, PR
+  review 5379907393), and only otherwise count as an external
   crate — issue #426, whose self-contained fixtures in
   `src/module_graph/issue_426_tests.rs` require bare-path parent→child edges,
   including facade re-exports and inline-module scopes, to close
@@ -331,7 +334,14 @@ chained aliases must form edges (closing sibling/deep-module cycles), chains
 through external crates stay external, and the audit layer fails closed when
 a first segment that names an internal module yields zero target owners —
 with the real repository asserting a zero internal-miss count plus a sampled
-bare-path facade edge. The existing deepest-lexical-scope rule does not
+bare-path facade edge. Its review round
+([PR #479 review 5379907393](https://github.com/hailingu/PlotWeave/pull/479#pullrequestreview-5379907393))
+adds two rows: chained glob prefixes (`use crate::p::*; use a::*;`) resolve
+through earlier visible globs so the deep target forms its edge, and
+glob/alias bindings are visible only inside their declaring module — a bare
+name in an inline child module that collides with the parent's glob/alias
+target stays external instead of fabricating an internal edge and a false
+cycle. The existing deepest-lexical-scope rule does not
 implement full Rust namespace lookup across scopes: an inner function alias
 can still prevent expansion through an outer module alias. Exact-module
 qualification leaves that pre-existing resolution gap unchanged; expanding
