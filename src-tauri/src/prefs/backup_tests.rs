@@ -224,3 +224,71 @@ fn mismatched_existing_backup_blocks_save() {
         b"tampered evidence"
     );
 }
+
+/// #435：诊断缺少人工恢复步骤时失败；合法 JSON 前缀不能放行超限原件。
+#[test]
+fn oversize_save_reports_recovery_steps_without_overwriting_then_recovers() {
+    let dir = PrefsBackupDir::new();
+    let old = json!({"defaultChat": "old"});
+    save_prefs_in(&dir.0, old.clone()).unwrap();
+    assert_eq!(dir.read(), old);
+    let mut oversized = br#"{"providers":[{"keyEnc":"preserved-envelope"}]}"#.to_vec();
+    oversized.resize(PREFS_MAX_BYTES + 1, b' ');
+    fs::write(dir.settings_path(), &oversized).unwrap();
+
+    for _ in 0..2 {
+        let error = save_prefs_in(&dir.0, json!({"defaultChat": "new"})).unwrap_err();
+        assert!(error.contains("超过 1 MiB"), "实际错误：{error}");
+        assert_recovery_guidance(&error, &dir.settings_path());
+        assert_eq!(fs::read(dir.settings_path()).unwrap(), oversized);
+        assert_eq!(dir.entry_names(), ["settings.json"]);
+    }
+
+    let retained = dir.0.join("settings-retained.json");
+    fs::rename(dir.settings_path(), &retained).unwrap();
+    assert_eq!(dir.read(), json!({}));
+    save_prefs_in(&dir.0, json!({"defaultChat": "new"})).unwrap();
+    assert_eq!(dir.read(), json!({"defaultChat": "new"}));
+    assert_eq!(fs::read(retained).unwrap(), oversized);
+    assert!(dir.backups().is_empty());
+}
+
+/// #435：加载期拒绝超限原件时，也必须显示可操作的恢复说明。
+#[test]
+fn oversize_load_reports_recovery_steps_without_defaulting() {
+    let dir = PrefsBackupDir::new();
+    let oversized = vec![b'x'; PREFS_MAX_BYTES + 1];
+    fs::write(dir.settings_path(), &oversized).unwrap();
+    let error = read_prefs_in(&dir.0).unwrap_err();
+    assert_recovery_guidance(&error, &dir.settings_path());
+    assert_eq!(fs::read(dir.settings_path()).unwrap(), oversized);
+    assert_eq!(dir.entry_names(), ["settings.json"]);
+}
+
+/// 只检查 #435 的运行时诊断所需信息，不读取源码或绑定完整句子。
+fn assert_recovery_guidance(error: &str, path: &Path) {
+    assert!(error.contains(path.to_str().unwrap()), "缺少路径：{error}");
+    for step in [
+        "退出应用",
+        "自行备份",
+        "确认",
+        "移走或删除",
+        "默认设置",
+        "API key",
+    ] {
+        assert!(error.contains(step), "缺少恢复信息 {step}：{error}");
+    }
+}
+
+/// 上限本身仍可保存，诊断不能将边界误判为超限。
+#[test]
+fn at_limit_settings_save_remains_allowed() {
+    let dir = PrefsBackupDir::new();
+    let mut bytes = b"{}".to_vec();
+    bytes.resize(PREFS_MAX_BYTES, b' ');
+    fs::write(dir.settings_path(), bytes).unwrap();
+    assert_eq!(dir.read(), json!({}));
+    save_prefs_in(&dir.0, json!({"defaultChat": "new"})).unwrap();
+    assert_eq!(dir.read(), json!({"defaultChat": "new"}));
+    assert!(dir.backups().is_empty());
+}
