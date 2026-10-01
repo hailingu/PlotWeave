@@ -387,6 +387,39 @@ describe(
   },
 )
 
+it(
+  '当前非空基线不阻止推送不含登记路径的历史分支（评审 5379198759）',
+  { timeout: 30_000 },
+  () => {
+    // 真实 pre-push 慢路径必须应用当前额度，而非把当前登记当成历史树清单。
+    const scenario = preparePushScenario()
+    mkdirSync(resolve(scenario.root, 'src'))
+    writeFileSync(resolve(scenario.root, 'src/legacy.ts'), '\n'.repeat(900))
+    writeFileSync(
+      resolve(scenario.root, 'scripts/file-size-baseline.json'),
+      JSON.stringify({
+        version: 1,
+        files: { 'src/legacy.ts': 900 },
+      }),
+    )
+    expect(
+      scenario.git([
+        'add',
+        '--',
+        'src/legacy.ts',
+        'scripts/file-size-baseline.json',
+      ]).status,
+    ).toBe(0)
+    const pushed = scenario.sideSha()
+    const result = scenario.git(['push', 'origin', 'side'])
+    expect(result.status, result.stderr).toBe(0)
+    expect(scenario.installRuns()).toBe(1)
+    expect(scenario.scannerRuns()).toBe(1)
+    expectOriginalTree(scenario, pushed)
+    expect(scenario.worktreeCount()).toBe(1)
+  },
+)
+
 describe(
   'pre-push 替换对象：分析原始被推提交（PR #442 评审 5361127076）',
   { timeout: 30_000 },

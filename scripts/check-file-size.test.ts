@@ -187,6 +187,103 @@ function runChecker(root: string, env: NodeJS.ProcessEnv = {}) {
   )
 }
 
+/** 用当前脚本和政策检查另一棵 Git 树；只隔离格式、lint 与类型工具的成本。 */
+function runSelectedTree(policyRoot: string, selectedRoot: string) {
+  const script = 'scripts/check-static.sh'
+  copyFileSync(resolve(repositoryRoot, script), resolve(policyRoot, script))
+  const npm = write(policyRoot, 'bin/npm', '#!/bin/sh\nexit 0\n')
+  chmodSync(npm, 0o755)
+  return spawnSync('sh', [resolve(policyRoot, script)], {
+    cwd: selectedRoot,
+    encoding: 'utf8',
+    env: {
+      ...environment(),
+      PLOTWEAVE_GATE_REPOSITORY_ROOT: selectedRoot,
+      PLOTWEAVE_NPM_BIN: npm,
+    },
+  })
+}
+
+it.each([
+  ['absent', 0, undefined],
+  ['within-cap', 800, undefined],
+  ['smaller-legacy', 850, 850],
+] as const)(
+  '当前登记不能使历史树 %s 失效（评审 5379198759）',
+  (_, lines, count) => {
+    // 回归触发：把当前政策的精确锚定要求施加到历史树，会误报 stale/drift。
+    const current = checkerFixture({ 'src/legacy.ts': 900 })
+    write(current, 'src/legacy.ts', '\n'.repeat(900))
+    git(current, [
+      'add',
+      '--',
+      'src/legacy.ts',
+      'scripts/file-size-baseline.json',
+    ])
+    const historical = checkerFixture(
+      count === undefined ? {} : { 'src/legacy.ts': count },
+    )
+    if (lines > 0) write(historical, 'src/legacy.ts', '\n'.repeat(lines))
+    git(historical, ['add', '--', 'scripts'])
+    if (lines > 0) git(historical, ['add', '--', 'src/legacy.ts'])
+    const result = runSelectedTree(current, historical)
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.stdout).toContain('SIZE_CHECK_COMPLETE')
+  },
+)
+
+it('历史树自己的失效登记仍被拒绝，移除后恢复（评审 5379198759）', () => {
+  // 不得因跨树应用当前政策而跳过历史树自己的登记锚定。
+  const current = checkerFixture({ 'src/current.ts': 900 })
+  write(current, 'src/current.ts', '\n'.repeat(900))
+  git(current, ['add', '--', 'src', 'scripts'])
+  const historical = checkerFixture({ 'src/deleted.ts': 900 })
+  git(historical, ['add', '--', 'scripts'])
+  const rejected = runSelectedTree(current, historical)
+  expect(rejected.status).toBe(1)
+  const findings = rejected.stderr
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line))
+  expect(findings).toContainEqual({
+    code: 'SIZE_BASELINE_STALE',
+    path: 'src/deleted.ts',
+    scope: 'index',
+    reason: 'unindexed',
+  })
+  write(
+    historical,
+    'scripts/file-size-baseline.json',
+    JSON.stringify({ version: 1, files: {} }),
+  )
+  git(historical, ['add', '--', 'scripts/file-size-baseline.json'])
+  expect(runSelectedTree(current, historical).status).toBe(0)
+})
+
+it('历史树仍受当前与索引政策的较严额度约束（评审 5379198759）', () => {
+  // 回归触发：忽略当前登记的锚定时，也误把其额度上限忽略。
+  const current = checkerFixture({ 'src/legacy.ts': 850 })
+  write(current, 'src/legacy.ts', '\n'.repeat(850))
+  git(current, ['add', '--', 'src', 'scripts'])
+  const historical = checkerFixture({ 'src/legacy.ts': 900 })
+  write(historical, 'src/legacy.ts', '\n'.repeat(900))
+  git(historical, ['add', '--', 'src', 'scripts'])
+  const rejected = runSelectedTree(current, historical)
+  expect(rejected.status).toBe(1)
+  const findings = rejected.stderr
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line))
+  expect(findings).toContainEqual(
+    expect.objectContaining({
+      code: 'SIZE_LIMIT_EXCEEDED',
+      path: 'src/legacy.ts',
+      tree: 'index',
+      limit: 850,
+    }),
+  )
+})
+
 it.each([
   ['src/example.ts', 800],
   ['src/view.tsx', 800],
@@ -226,18 +323,42 @@ it('计数遵从 wc -l：CRLF、注释、空行计入，末尾无 LF 的片段�
   expect(runChecker(root).status).toBe(1)
 })
 
-it('祖父条款允许保持或缩减既有超限文件，但不能增长或惠及新路径', () => {
+it('祖父条款锚定索引事实：相等放行、缩减须同步下调、修复须移除登记（#467）', () => {
+  const baseline = 'scripts/file-size-baseline.json'
   const root = checkerFixture({ 'src/legacy.ts': 900 })
-  for (const lines of [900, 850]) {
-    write(root, 'src/legacy.ts', '\n'.repeat(lines))
-    const allowed = runChecker(root)
-    expect(allowed.status).toBe(0)
-    expect(allowed.stdout).toContain('SIZE_GRANDFATHERED')
-  }
-  write(root, 'src/legacy.ts', '\n'.repeat(901))
+  git(root, ['add', '--', baseline])
+  write(root, 'src/legacy.ts', '\n'.repeat(900))
+  git(root, ['add', '--', 'src/legacy.ts'])
+  const anchored = runChecker(root)
+  expect(anchored.status).toBe(0)
+  expect(anchored.stdout).toContain('SIZE_GRANDFATHERED')
+  // 缩减后仍越界：登记额度必须随实测下调，不能保留旧的更宽上限。
+  write(root, 'src/legacy.ts', '\n'.repeat(850))
+  git(root, ['add', '--', 'src/legacy.ts'])
+  const drifted = runChecker(root)
+  expect(drifted.status).toBe(1)
+  expect(drifted.stderr).toContain('SIZE_BASELINE_DRIFT')
+  write(
+    root,
+    baseline,
+    JSON.stringify({ version: 1, files: { 'src/legacy.ts': 850 } }),
+  )
+  git(root, ['add', '--', baseline])
+  expect(runChecker(root).status).toBe(0)
+  // 增长越过登记额度仍然拒绝。
+  write(root, 'src/legacy.ts', '\n'.repeat(851))
+  git(root, ['add', '--', 'src/legacy.ts'])
   expect(runChecker(root).status).toBe(1)
+  // 修复到上限内：登记失效，必须在同一暂存变更中移除。
   write(root, 'src/legacy.ts', '\n'.repeat(800))
-  expect(runChecker(root).stdout).not.toContain('SIZE_GRANDFATHERED')
+  git(root, ['add', '--', 'src/legacy.ts'])
+  const repaired = runChecker(root)
+  expect(repaired.status).toBe(1)
+  expect(repaired.stderr).toContain('SIZE_BASELINE_STALE')
+  write(root, baseline, JSON.stringify({ version: 1, files: {} }))
+  git(root, ['add', '--', baseline])
+  expect(runChecker(root).status).toBe(0)
+  // 登记不能惠及新路径。
   write(root, 'src/new.ts', '\n'.repeat(801))
   expect(runChecker(root).status).toBe(1)
 })
@@ -524,11 +645,19 @@ it('索引测量沿用测试文件上限与有界祖父条款', () => {
   write(root, 'src/partial.test.ts', '\n'.repeat(1800))
   const result = runChecker(root)
   expect(result.status).toBe(1)
-  expect(JSON.parse(result.stderr.trim())).toMatchObject({
-    tree: 'index',
-    lines: 1801,
-    limit: 1800,
-  })
+  // 基线登记此时已随修复失效并先行报告；诊断逐行 JSON，仍须含超限记录。
+  const diagnostics = result.stderr
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line))
+  expect(diagnostics).toContainEqual(
+    expect.objectContaining({
+      code: 'SIZE_LIMIT_EXCEEDED',
+      tree: 'index',
+      lines: 1801,
+      limit: 1800,
+    }),
+  )
 })
 
 it.each(['empty', 'absent', 'lower'] as const)(
@@ -850,3 +979,106 @@ it.each(['baseline', 'git', 'source'] as const)(
     expect(result.stderr).toContain('SIZE_INPUT_ERROR')
   },
 )
+
+it('未跟踪的越界文件不能凭新增登记获得豁免额度（#467 路径 a）', () => {
+  const root = checkerFixture({ 'src/probe-c.ts': 5000 })
+  write(root, 'src/probe-c.ts', '\n'.repeat(5000))
+  const rejected = runChecker(root)
+  expect(rejected.status).toBe(1)
+  expect(rejected.stderr).toContain('SIZE_BASELINE_STALE')
+  // 已暂存且与事实一致时机械放行；新增登记本身仍由评审规则把关
+  //（docs/development/file-size-guard.md 的残余边界）。
+  git(root, ['add', '--', 'scripts/file-size-baseline.json', 'src/probe-c.ts'])
+  const consistent = runChecker(root)
+  expect(consistent.status).toBe(0)
+  expect(consistent.stdout).toContain('SIZE_GRANDFATHERED')
+})
+
+it('为尚不存在的路径预先登记额度被拒绝，补建文件后仍被拒绝（#467 路径 b）', () => {
+  const root = checkerFixture({ 'src/probe-c2.ts': 9000 })
+  const absent = runChecker(root)
+  expect(absent.status).toBe(1)
+  expect(absent.stderr).toContain('SIZE_BASELINE_STALE')
+  write(root, 'src/probe-c2.ts', '\n'.repeat(9000))
+  const created = runChecker(root)
+  expect(created.status).toBe(1)
+  expect(created.stderr).toContain('SIZE_BASELINE_STALE')
+})
+
+it('暂存删除已登记文件后登记失效，移除登记并暂存删除才通过（#467）', () => {
+  const baseline = 'scripts/file-size-baseline.json'
+  const root = checkerFixture({ 'src/legacy.ts': 900 })
+  write(root, 'src/legacy.ts', '\n'.repeat(900))
+  git(root, ['add', '--', baseline, 'src/legacy.ts'])
+  expect(runChecker(root).status).toBe(0)
+  git(root, ['rm', '-q', '-f', '--', 'src/legacy.ts'])
+  const rejected = runChecker(root)
+  expect(rejected.status).toBe(1)
+  expect(rejected.stderr).toContain('SIZE_BASELINE_STALE')
+  write(root, baseline, JSON.stringify({ version: 1, files: {} }))
+  git(root, ['add', '--', baseline])
+  expect(runChecker(root).status).toBe(0)
+})
+
+it('仅工作树缩减而索引仍越界时，中间状态不使登记失效（#467）', () => {
+  const root = checkerFixture({ 'src/legacy.ts': 900 })
+  write(root, 'src/legacy.ts', '\n'.repeat(900))
+  git(root, ['add', '--', 'scripts/file-size-baseline.json', 'src/legacy.ts'])
+  write(root, 'src/legacy.ts', '\n'.repeat(800))
+  const interim = runChecker(root)
+  expect(interim.status).toBe(0)
+  expect(interim.stdout).toContain('SIZE_GRANDFATHERED')
+})
+
+it('有效索引中的登记政策独立接受锚定核对（#467）', () => {
+  const root = checkerFixture({ 'src/legacy.ts': 900 })
+  write(root, 'src/legacy.ts', '\n'.repeat(900))
+  git(root, ['add', '--', 'scripts/file-size-baseline.json', 'src/legacy.ts'])
+  const env = { GIT_INDEX_FILE: resolve(root, '.git', 'selected-index') }
+  copyFileSync(resolve(root, '.git/index'), env.GIT_INDEX_FILE)
+  write(root, 'src/legacy.ts', '\n'.repeat(800))
+  git(root, ['add', '--', 'src/legacy.ts'], env)
+  const rejected = runChecker(root, env)
+  expect(rejected.status).toBe(1)
+  expect(rejected.stderr).toContain('SIZE_BASELINE_STALE')
+  expect(rejected.stderr).toContain('"scope":"index"')
+})
+
+it('随仓库发布的基线被机械读取并逐条核对索引锚定（#467）', () => {
+  // 基线是机器可读的政策契约；空基线时循环体为空，测试仍读取该文件，
+  // 使任何新增登记都必须保持与真实仓库索引的事实锚定。
+  const published: unknown = JSON.parse(
+    readFileSync(
+      resolve(repositoryRoot, 'scripts/file-size-baseline.json'),
+      'utf8',
+    ),
+  )
+  expect(published).toMatchObject({ version: 1 })
+  const files = (published as { files?: Record<string, unknown> }).files
+  expect(files).toBeTypeOf('object')
+  for (const [path, count] of Object.entries(files ?? {})) {
+    expect(Number.isSafeInteger(count), path).toBe(true)
+    const record = execFileSync(
+      'git',
+      ['ls-files', '--stage', '-z', '--', path],
+      { cwd: repositoryRoot, encoding: 'latin1', env: environment() },
+    )
+      .split('\0')
+      .find(Boolean)
+    expect(record, path).toBeDefined()
+    const separator = record?.indexOf('\t') ?? -1
+    const [mode, object, stage] = record?.slice(0, separator).split(' ') ?? []
+    expect(stage, path).toBe('0')
+    expect(mode === '100644' || mode === '100755', path).toBe(true)
+    const content = execFileSync('git', ['cat-file', 'blob', object ?? ''], {
+      cwd: repositoryRoot,
+      encoding: 'latin1',
+      env: environment(),
+    })
+    const lines = content.split('\n').length - 1
+    // 上限契约：*.test.ts(x) 为 1800，其余维护源码 800（file-size-guard.md）。
+    const cap = /\.test\.tsx?$/.test(path) ? 1800 : 800
+    expect(lines, path).toBeGreaterThan(cap)
+    expect(count, path).toBe(lines)
+  }
+})
