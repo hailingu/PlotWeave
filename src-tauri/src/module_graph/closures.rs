@@ -12,7 +12,7 @@ pub(super) struct ClosureHeaders {
     pub(super) next: usize,
     /// 当前入口是否处于显式返回类型或调用方字段类型中。
     pub(super) type_header: bool,
-    /// 已识别的闭包正文是否使用表达式态。
+    /// 闭包正文或 return/break 操作数是否使用表达式态（issue #446）。
     pub(super) initializer: bool,
     matches: usize,
     blocks: usize,
@@ -118,7 +118,7 @@ pub(super) fn skip_closure_headers(
     let mut headers = ClosureHeaders {
         next: start,
         type_header,
-        initializer: false,
+        initializer: matches!(tokens.get(start), Some(&"return" | &"break")),
         matches: 0,
         blocks: 0,
         statement_control_flow: matches!(tokens.get(start), Some(&"match" | &"if" | &"while")),
@@ -187,7 +187,7 @@ fn is_expression_operator(token: Option<&str>) -> bool {
 
 impl ClosureHeaders {
     /// 后缀点/问号附着于值；调用/索引只在值上下文延续，不能吞独立语句。
-    /// 显式返回类型的正文结束后可对闭包值应用后缀；点点范围只在值态延续。
+    /// 显式返回类型的正文结束后可对闭包值应用后缀；点点范围与 as 转型只在值态延续。
     /// 语句歧义契约：https://doc.rust-lang.org/reference/statements.html#expression-statements。
     fn body_continues(
         &self,
@@ -212,7 +212,7 @@ impl ClosureHeaders {
         !type_header
             && value
             && !self.statement_control_flow
-            && (is_expression_operator(token) || token == Some("."))
+            && (is_expression_operator(token) || matches!(token, Some("." | "as")))
     }
 
     /// 操作数先整体跨过；普通正文先更新计数，再决定是否沿二元表达式继续。

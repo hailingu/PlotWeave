@@ -367,6 +367,8 @@ fn skip_test_item(tokens: &[&str], k: usize, context: Option<&FieldContext>) -> 
             },
             ";" if angles == 0 => return k + 1,
             "," if angles == 0 && !where_clause => return k + 1,
+            // 自有块均整体跨过，此处 } 只能是外围块闭合：尾表达式在此结束
+            "}" => return k,
             _ => {}
         }
         k += 1;
@@ -717,3 +719,7 @@ mod issue_424_operand_tests;
 /// 门控后缀表达式、限定路径与生产恢复边界回归（issue #424）。
 #[cfg(test)]
 mod issue_424_expression_tests;
+
+/// return/break 块值续接门控回归（issue #446）。
+#[cfg(test)]
+mod issue_446_tests;
