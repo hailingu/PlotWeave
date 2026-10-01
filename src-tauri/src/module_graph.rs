@@ -723,3 +723,7 @@ mod issue_424_expression_tests;
 /// return/break 块值续接门控回归（issue #446）。
 #[cfg(test)]
 mod issue_446_tests;
+
+/// 门控闭包 as 转型续接回归（issue #447）。
+#[cfg(test)]
+mod issue_447_tests;
