@@ -1,0 +1,226 @@
+/** 行数静态检查器的行为契约：只使用临时 Git 仓库与生成夹具（issue #432）。 */
+import { spawnSync } from 'node:child_process'
+import {
+  chmodSync,
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, resolve } from 'node:path'
+import { afterEach, expect, it } from 'vitest'
+
+const repositoryRoot = resolve(import.meta.dirname, '..')
+const directories: string[] = []
+
+/** Git 钩子会向子进程传播定位变量；临时仓库必须独立于被测主工作树。 */
+function environment(): NodeJS.ProcessEnv {
+  const env = { ...process.env }
+  for (const key of [
+    'GIT_DIR',
+    'GIT_WORK_TREE',
+    'GIT_INDEX_FILE',
+    'GIT_PREFIX',
+  ]) {
+    delete env[key]
+  }
+  return env
+}
+
+/** 构造有真实 Git 枚举行为的隔离根目录，测试后删除。 */
+function fixture(): string {
+  const root = mkdtempSync(resolve(tmpdir(), 'plotweave-file-size-'))
+  directories.push(root)
+  const result = spawnSync('git', ['init', '-q', root], { env: environment() })
+  if (result.status !== 0) throw new Error('临时 Git 仓库初始化失败')
+  return root
+}
+
+/** 在临时仓库写入受控输入，返回绝对路径。 */
+function write(root: string, path: string, content: string): string {
+  const target = resolve(root, path)
+  mkdirSync(dirname(target), { recursive: true })
+  writeFileSync(target, content)
+  return target
+}
+
+afterEach(() => {
+  for (const directory of directories.splice(0)) {
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+it('共享静态入口拒绝选定根目录中的新增超限文件（#432 / #405）', () => {
+  // 若共享入口遗漏规模检查，三个外部 npm 子项成功后就会错误放行。
+  const root = fixture()
+  write(root, 'src/oversized.ts', '\n'.repeat(801))
+  const npm = write(root, 'bin/npm', '#!/bin/sh\nexit 0\n')
+  chmodSync(npm, 0o755)
+  const result = spawnSync(
+    'sh',
+    [resolve(repositoryRoot, 'scripts/check-static.sh')],
+    {
+      cwd: root,
+      encoding: 'utf8',
+      env: {
+        ...environment(),
+        PLOTWEAVE_GATE_REPOSITORY_ROOT: root,
+        PLOTWEAVE_NPM_BIN: npm,
+      },
+    },
+  )
+  expect(result.status).toBe(1)
+  // 稳定诊断码契约见 docs/development/file-size-guard.md。
+  expect(result.stderr).toContain('SIZE_LIMIT_EXCEEDED')
+})
+
+/** 将真实检查器复制进沙箱；基线是夹具输入，不改动仓库政策文件。 */
+function checkerFixture(files: Record<string, number> = {}): string {
+  const root = fixture()
+  write(
+    root,
+    'scripts/file-size-baseline.json',
+    JSON.stringify({ version: 1, files }),
+  )
+  copyFileSync(
+    resolve(repositoryRoot, 'scripts/check-file-size.ts'),
+    resolve(root, 'scripts/check-file-size.ts'),
+  )
+  return root
+}
+
+/** 执行 CLI 并保留退出状态和 JSON 诊断，断言针对命令契约。 */
+function runChecker(root: string) {
+  return spawnSync(
+    process.execPath,
+    [resolve(root, 'scripts/check-file-size.ts')],
+    {
+      cwd: root,
+      encoding: 'utf8',
+      env: environment(),
+    },
+  )
+}
+
+it.each([
+  ['src/example.ts', 800],
+  ['src/view.tsx', 800],
+  ['src/styles/example.css', 800],
+  ['src-tauri/src/example.rs', 800],
+  ['scripts/example.sh', 800],
+  ['scripts/example.js', 800],
+  ['scripts/example.mjs', 800],
+  ['scripts/example.cjs', 800],
+  ['src/example.test-d.ts', 800],
+  ['src/example.test.ts', 1800],
+  ['scripts/example.test.tsx', 1800],
+] as const)('按文件类别拦截 %s 超限，修复后重新通过', (path, cap) => {
+  // 少比较一次、错误分类测试后缀、缓存上次结果都会违反本行为。
+  const root = checkerFixture()
+  write(root, path, '\n'.repeat(cap))
+  expect(runChecker(root).status).toBe(0)
+  const content = '\n'.repeat(cap + 1)
+  const target = write(root, path, content)
+  const rejected = runChecker(root)
+  expect(rejected.status).toBe(1)
+  expect(rejected.stderr).toContain('SIZE_LIMIT_EXCEEDED')
+  expect(readFileSync(target, 'utf8')).toBe(content)
+  write(root, path, '\n'.repeat(cap))
+  expect(runChecker(root).status).toBe(0)
+})
+
+it('计数遵从 wc -l：CRLF、注释、空行计入，末尾无 LF 的片段不额外计数', () => {
+  const root = checkerFixture()
+  write(
+    root,
+    'src/example.ts',
+    '// comment\r\n'.repeat(400) + '\n'.repeat(400) + 'tail',
+  )
+  expect(runChecker(root).status).toBe(0)
+  write(root, 'src/example.ts', '// comment\r\n'.repeat(400) + '\n'.repeat(401))
+  expect(runChecker(root).status).toBe(1)
+})
+
+it('祖父条款允许保持或缩减既有超限文件，但不能增长或惠及新路径', () => {
+  const root = checkerFixture({ 'src/legacy.ts': 900 })
+  for (const lines of [900, 850]) {
+    write(root, 'src/legacy.ts', '\n'.repeat(lines))
+    const allowed = runChecker(root)
+    expect(allowed.status).toBe(0)
+    expect(allowed.stdout).toContain('SIZE_GRANDFATHERED')
+  }
+  write(root, 'src/legacy.ts', '\n'.repeat(901))
+  expect(runChecker(root).status).toBe(1)
+  write(root, 'src/legacy.ts', '\n'.repeat(800))
+  expect(runChecker(root).stdout).not.toContain('SIZE_GRANDFATHERED')
+  write(root, 'src/new.ts', '\n'.repeat(801))
+  expect(runChecker(root).status).toBe(1)
+})
+
+it('Git 枚举覆盖带空格或换行的路径、暂存新增和被 ignore 匹配的跟踪文件', () => {
+  const root = checkerFixture()
+  const path = 'src/a space\nand newline.ts'
+  write(root, path, '\n'.repeat(801))
+  expect(runChecker(root).status).toBe(1)
+  const staged = spawnSync('git', ['add', '--', path], {
+    cwd: root,
+    env: environment(),
+  })
+  expect(staged.status).toBe(0)
+  write(root, '.gitignore', 'src/\n')
+  expect(runChecker(root).status).toBe(1)
+  rmSync(resolve(root, path))
+  expect(runChecker(root).status).toBe(0)
+})
+
+it('不将忽略的构建产物、锁文件、图片及根目录外文件当作维护源码', () => {
+  const root = checkerFixture()
+  write(root, '.gitignore', 'src-tauri/target/\n')
+  for (const path of [
+    'src-tauri/target/generated.rs',
+    'src-tauri/Cargo.lock',
+    'src/icon.png',
+    'docs/example.ts',
+  ]) {
+    write(root, path, '\n'.repeat(2000))
+  }
+  expect(runChecker(root).status).toBe(0)
+})
+
+it.each([
+  '{',
+  '{}',
+  '{"version":2,"files":{}}',
+  '{"version":1,"files":{"src/a.ts":800}}',
+  '{"version":1,"files":{"src/a.ts":900.5}}',
+  '{"version":1,"files":{"src/../a.ts":900}}',
+  '{"version":1,"files":{"src/a.png":900}}',
+  '{"version":1,"files":[]}',
+])('基线无效时拒绝不完整检查：%s', (baseline) => {
+  const root = checkerFixture()
+  write(root, 'scripts/file-size-baseline.json', baseline)
+  const result = runChecker(root)
+  expect(result.status).toBe(1)
+  expect(result.stderr).toContain('SIZE_INPUT_ERROR')
+})
+
+it.each(['baseline', 'git', 'source'] as const)(
+  '缺失或不安全输入不静默通过：%s',
+  (input) => {
+    const root = checkerFixture()
+    if (input === 'baseline')
+      rmSync(resolve(root, 'scripts/file-size-baseline.json'))
+    if (input === 'git') rmSync(resolve(root, '.git'), { recursive: true })
+    if (input === 'source') {
+      mkdirSync(resolve(root, 'src'))
+      symlinkSync('../missing.ts', resolve(root, 'src/link.ts'))
+    }
+    const result = runChecker(root)
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain('SIZE_INPUT_ERROR')
+  },
+)

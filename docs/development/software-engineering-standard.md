@@ -37,6 +37,13 @@ attention.
 | Cyclomatic complexity, when measured by configured tooling | More than 10 | N/A — record and decompose |
 | Executable nesting depth | More than 4 levels | 6 levels |
 
+File caps are enforced by `npm run check:size`, the shared static gate, and
+CI (issue [#432](https://github.com/hailingu/PlotWeave/issues/432)). The
+[File Size Guard](file-size-guard.md) defines source discovery, the bounded
+grandfather baseline, diagnostics, and verification matrix. Executable-unit
+caps, including closures, remain mandatory manual-review checks; option B
+does not implement function parsing or narrow that rule.
+
 Apply the guardrails as follows:
 
 - Count a file's complete physical span, including comments and documentation,

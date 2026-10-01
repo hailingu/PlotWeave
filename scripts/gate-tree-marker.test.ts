@@ -89,6 +89,8 @@ function copyScenarioFiles(sandbox: string): string {
   mkdirSync(resolve(sandbox, '.githooks'), { recursive: true })
   for (const script of [
     'check-static.sh',
+    'check-file-size.ts',
+    'file-size-baseline.json',
     'gate-history.sh',
     'gate-tree-marker.sh',
     'rust-coverage.sh',

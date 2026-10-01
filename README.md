@@ -84,7 +84,7 @@ npm run tauri dev  # 启动 Tauri 开发调试（Vite 前端 + Rust 壳）
 
 仓库使用同一套 `pre-commit` / `pre-merge-commit` / `prepare-commit-msg` / `pre-push` 门禁（issue #404：合并非快进合并、`git revert`、`git cherry-pick` 与 rebase 重放等自动提交路径同样过检）。启用 hooks 后，每次产生提交的操作与推送都会依次：
 
-1. 运行 `scripts/check-static.sh`（`npm run check:static`）：Prettier 格式检查 + ESLint 零警告（`--max-warnings=0`），失败即阻止（fail-fast 在覆盖率与扫描之前）。
+1. 运行 `scripts/check-static.sh`（`npm run check:static`）：Prettier 格式检查 + ESLint 零警告（`--max-warnings=0`）+ 文件规模检查（`npm run check:size`，issue #432）+ 严格类型检查（`typecheck:strict`），失败即阻止（fail-fast 在覆盖率与扫描之前）。
 2. 运行 `npm run test:coverage`，生成最新的 `coverage/lcov.info`，并确认报告非空、包含源文件和实际命中行；整体行覆盖率跌破仓库下限 80% 时同样非零退出（vitest `thresholds`，issue #393）。
 3. 运行 `scripts/rust-coverage.sh`（cargo-llvm-cov），生成最新的 `src-tauri/target/coverage/lcov-rust.info`（Rust 语句覆盖率），并确认报告非空、包含源文件和实际命中行；随后按同一 LCOV 口径复核前端与 Rust 两份报告的行覆盖率均不低于 80%（issue #393，与本机 SonarQube 服务端 Quality Gate 的 80% 条件对齐的仓库侧可失败下限，恰等于下限通过；基线与边界见 `docs/development/rust-standard.md` 与 `docs/development/typescript-standard.md`）。
 4. 运行 `sonar-scanner` 并等待 SonarQube Quality Gate 完成。

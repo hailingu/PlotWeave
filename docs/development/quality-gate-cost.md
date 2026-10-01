@@ -45,7 +45,10 @@ with a measured slow-path cost recorded alongside the baseline (see
 Every gated command runs the same complete sequence:
 
 1. `scripts/check-static.sh` — Prettier format check, ESLint with zero
-   warnings, `typecheck:strict`. Fail-fast, ahead of all coverage work.
+   warnings, `check:size` file caps (issue #432), `typecheck:strict`.
+   Fail-fast, ahead of all coverage work. The file-cap contract and its
+   retained function-level verification gap are recorded in
+   [File Size Guard](file-size-guard.md).
 2. `npm run test:coverage` — the full frontend suite, serialized to LCOV and
    threshold-checked against the versioned 80% overall line-coverage floor
    (issue #393).
