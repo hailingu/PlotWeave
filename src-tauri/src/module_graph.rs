@@ -367,6 +367,8 @@ fn skip_test_item(tokens: &[&str], k: usize, context: Option<&FieldContext>) -> 
             },
             ";" if angles == 0 => return k + 1,
             "," if angles == 0 && !where_clause => return k + 1,
+            // 自有块均整体跨过，此处 } 只能是外围块闭合：尾表达式在此结束
+            "}" => return k,
             _ => {}
         }
         k += 1;

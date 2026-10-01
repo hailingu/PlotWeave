@@ -67,6 +67,29 @@ fn jump_block_values_preserve_following_production_cycles() {
     }
 }
 
+/// 无分号的尾位置跳转在外围块闭合处结束，不能吞掉其后的生产项。
+#[test]
+fn tail_jump_values_end_at_the_enclosing_block() {
+    for source in [
+        "fn f() { #[cfg(test)] return { use crate::b::B; } } use crate::c::C;",
+        "fn f() { loop { #[cfg(test)] break { use crate::b::B; } } } use crate::c::C;",
+        "fn f() { 'outer: loop { #[cfg(test)] break 'outer { 1u8 } + { use crate::b::B; 1 } } } use crate::c::C;",
+        "fn f() -> u16 { #[cfg(test)] return { 1u8 } as u16 } use crate::c::C;",
+        "fn f() { #[cfg(test)] return { |x: u8| x }({ use crate::b::B; 1 }) } use crate::c::C;",
+        "fn f() { #[cfg(test)] return } use crate::c::C;",
+        "fn f() { #[cfg(test)] return { use crate::b::B; } } fn g() { use crate::c::C; }",
+    ] {
+        let graph = edges(&[
+            ("lib.rs", "mod a; mod b; mod c;"),
+            ("a.rs", source),
+            ("b.rs", "pub struct B;"),
+            ("c.rs", "use crate::a::A;"),
+        ]);
+        assert_eq!(graph["a.rs"], BTreeSet::from(["c.rs".into()]), "{source}");
+        assert_eq!(cycles_of(&graph).len(), 1, "生产真环必须保留：{source}");
+    }
+}
+
 /// 生产可达或未门控的跳转块值续接继续贡献依赖与真实环。
 #[test]
 fn production_jump_block_values_preserve_edges() {
