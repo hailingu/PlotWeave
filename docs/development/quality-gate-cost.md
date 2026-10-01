@@ -7,7 +7,7 @@ dedup marker helper `scripts/gate-tree-marker.sh` (issue #404). Like the root
 `AGENTS.md` and the other standards under `docs/development/`, this file is
 written in English for agent interoperability.
 
-**Last reviewed**: 2026-09-30
+**Last reviewed**: 2026-10-01
 
 **Status**: Active — accepted decision. Recorded 2026-09-27, resolving
 [issue #356](https://github.com/hailingu/PlotWeave/issues/356); extended
@@ -28,7 +28,10 @@ gate-strength change authorized by that issue: `pre-push` now reads the refs
 Git hands it on stdin and analyzes every pushed commit at its own state,
 with a measured slow-path cost recorded alongside the baseline (see
 [Push-Path Per-Ref Gating](#push-path-per-ref-gating-issue-405) and
-[Push-Path Slow-Path Cost](#push-path-slow-path-cost-2026-09-30-issue-405)).
+[Push-Path Slow-Path Cost](#push-path-slow-path-cost-2026-09-30-issue-405));
+extended 2026-10-01 by the
+[issue #429](https://github.com/hailingu/PlotWeave/issues/429) marker identity
+fix, preventing reuse of aborted operations' residue by later Git processes.
 
 ## Required Reading
 
@@ -82,18 +85,50 @@ so writing it would only enable reuse by a later operation (评审 4120239723).
 Commands with no wireable hook (see the table) remain
 ungated. The marker is **single-use** (评审 4120128545): a successful
 `check` consumes it, so a later operation — including a same-tree
-`--no-verify` commit — cannot reuse it. The marker is a dedup hint, not a
-trust boundary: any mismatch, expiry, or corruption resolves to running the
-gate. One narrow residue remains: a gate pass whose commit never reaches
-`prepare-commit-msg` (for example an editor abort) leaves an unconsumed
-marker that one later same-tree operation within the TTL could consume;
-closing it fully would require an operation identity shared across the two
-hooks, which Git does not provide.
+`--no-verify` commit — cannot reuse it. Since issue #429, the marker also
+records the calling Git process identity: both hooks pass their parent PID,
+and the helper obtains its start time with `LC_ALL=C ps -p <pid> -o lstart=`.
+Reuse requires an exact match of identity, index tree, and bounded age. A
+no-staged-change abort before `prepare-commit-msg`, or a signal interruption,
+can leave a file on disk; that residue cannot authorize a later Git process.
+An editor abort occurs after `prepare-commit-msg` has already consumed the
+marker. A missing/invalid process identity or failed lookup disables reuse;
+legacy two-field markers are also rejected. The marker remains a dedup hint,
+not a trust boundary: any mismatch, expiry, or corruption runs the full gate.
+This process lookup is verified on macOS, the repository's supported/tested
+platform; an unavailable lookup elsewhere safely adds a gate run. Start time
+has `ps lstart`'s second precision: same-PID reuse within the same second is
+an unverified extreme boundary, outside normal commit lifecycle assumptions.
 
 There is no cheaper or faster variant of that sequence, and no configuration
 that selects one. Which commit-producing commands actually reach it — and which
 currently do not — is recorded precisely in
 [What The Gate Actually Enforces](#what-the-gate-actually-enforces).
+
+### Commit Marker State And Invariant Matrix (Issue #429)
+
+The marker helper owns same-operation reuse. Its `write` entry points are
+`pre-commit` and `pre-merge-commit`; `prepare-commit-msg` is its only `check`
+consumer. The fix binds reuse to the calling Git process (PID and start time)
+as well as the index tree and age. A marker left on disk after an abort must
+never authorize reuse by another process, even when its tree and age match.
+
+| Precondition / state | Action / ordering | Observable outcome | Invariant | Verification |
+| --- | --- | --- | --- | --- |
+| Ordinary commit or automatic non-fast-forward merge | Pre-hook passes → writes → same Git process prepares message | One complete gate; marker consumed | Only the operation that passed can deduplicate | Existing real-Git commit and merge scenarios |
+| No staged changes | Pre-hook passes → Git aborts before message preparation → same-tree `--no-verify` commit | First command creates no commit; second executes a new complete gate | An aborted operation cannot gate a later operation | New real-Git issue #429 regression |
+| Editor rejects message | Gate passes → message hook consumes marker → editor aborts → next same-tree commit | Abort creates no commit; next command executes its own gate | Commit success is not required to invalidate reuse outside its operation | Real-Git editor-abort regression |
+| Interrupted operation or stale marker, including PID reuse | Next operation checks a different PID or start time | Check misses; complete gate required | Tree and TTL alone never establish same-operation ownership | Helper identity-mismatch cases; abrupt signal timing remains unverified, using the same identity rejection path |
+| Identity missing, invalid, or process lookup unavailable | Write or check tries to resolve owner | No reusable marker written; check misses | Uncertain identity cannot suppress a gate | Helper invalid/missing PID and failed `ps` scenarios |
+| Tree changed, expired/future/corrupt marker, or legacy two-field marker | Check validates all keys before consuming | Check misses | Every reuse needs matching tree, bounded age, and process identity | Helper boundary scenarios |
+| Gate fails, fallback-only commit, or replay | Failed pre-hook stops; fallback passes without writing | No unauthorized commit; each fallback/replay gates independently | Fallback never produces reusable state | Existing failure, `--no-verify`, revert, cherry-pick, and rebase scenarios |
+
+Concurrent writers can replace the hint and cause an additional complete gate;
+they cannot establish matching process ownership for another Git operation.
+This change adds no persistence or application-data transition. The tests run
+real Git, hooks, and gate scripts, with only external coverage/scanner/network
+commands replaced. Full real coverage and SonarQube remain required at commit
+and push. Verification results are recorded in the resolving pull request.
 
 This is option C of issue #356. The issue did not argue for lower quality
 requirements; it argued that the "cost tier" question deserved one explicit
