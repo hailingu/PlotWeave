@@ -12,9 +12,13 @@ functions/closures is a separate follow-up, not part of this implementation.
 `.js`, `.mjs`, `.cjs`, `.css`, `.rs`, and `.sh`. New languages must extend
 this inventory together with their Scope Routing row. Assets, lockfiles,
 configuration and generated ignored output are not maintained source code.
-Git supplies tracked and non-ignored untracked paths, including staged additions;
-the checker reads their working-tree contents. Tracked files remain checked
-even if an ignore rule matches them. Deleted files are skipped.
+Git supplies tracked and non-ignored untracked paths, including staged additions.
+The checker measures both their working-tree contents and every maintained
+source blob in Git's effective index (including `GIT_INDEX_FILE` supplied by
+commit hooks). Tracked files remain checked even if an ignore rule matches
+them. A working-tree deletion skips only that working copy: an indexed source
+remains checked until its deletion is staged. Unstaged repairs therefore
+cannot hide an oversized version that the commit would retain.
 
 The measurement is the number of LF bytes (`wc -l`), including blank and
 comment lines; CRLF counts once, and an unterminated last line does not add
@@ -26,7 +30,11 @@ maximum counts, never a blanket exclusion: a retained over-limit file is
 reported as `SIZE_GRANDFATHERED`, and growth past its recorded maximum fails
 with `SIZE_LIMIT_EXCEEDED`. Invalid/missing baseline data, Git enumeration
 failures and unreadable or non-regular source inputs fail with
-`SIZE_INPUT_ERROR`. Diagnostics are JSON lines; success exits 0, failures 1.
+`SIZE_INPUT_ERROR`; unresolved source index stages also fail. Regular index
+modes `100644` and `100755` are supported. Size diagnostics identify their
+content source with `tree: "worktree"` or `tree: "index"`; the completion
+record's `checked` counts distinct paths rather than content copies.
+Diagnostics are JSON lines; success exits 0, failures 1.
 The checker never updates its baseline or source inputs automatically.
 
 The initial baseline is empty. At rule adoption, commit
@@ -58,18 +66,25 @@ they do not assert line counts of versioned production files or prose.
 | --- | --- | --- | --- | --- |
 | New source / TS test file at cap | Check, append one LF, check again | Pass, then `SIZE_LIMIT_EXCEEDED` | No new file exceeds its applicable cap | CLI boundary fixtures |
 | Source with spaces / newline in path, tracked or untracked | Enumerate and check | Same cap applies | File names and Git state cannot hide source | Enumeration fixtures |
-| Legacy file exceeds normal cap | Keep, shrink, grow past recorded count | Report allowance for first two; reject growth | Grandfathering is bounded and visible | Baseline fixtures |
+| Legacy file exceeds normal cap in either tree | Keep, shrink, grow past recorded count | Report allowance for first two; reject growth | Grandfathering is bounded and visible | Working-tree and indexed baseline fixtures |
 | Over-limit source | Reject, shrink to cap, re-run | Failure then success; input untouched | Rechecking observes repairs without mutating source or baseline | Recovery fixture |
-| Deleted source / ignored build output / non-source asset | Check remaining inputs | Pass | Only maintained source participates | Scope fixtures |
+| Staged source deletion / ignored build output / non-source asset | Check remaining inputs | Pass | Only maintained source participates | Scope fixtures |
 | Invalid/missing baseline, invalid Git root, non-regular source | Run checker | `SIZE_INPUT_ERROR`, nonzero exit | Incomplete analysis cannot pass | Failure fixtures |
-| Alternate root selected for a push gate | Run shared static script | Reject oversized file in that root | Gate measures selected tree using current policy | Shared-entry fixture |
+| Alternate root selected for a push gate | Run shared static script | Reject oversized working or indexed source in that root | Gate measures selected tree using current policy | Shared-entry fixtures |
 | Explicit Node path with spaces; no `node` alias on PATH | Check compliant / oversized source through shared entry | Pass / `SIZE_LIMIT_EXCEEDED` | The configured runtime owns execution; default PATH is unnecessary | Runtime-selection fixtures |
 | Configured runtime fails or is absent; default Node exists | Run shared entry | Propagate failure; do not fall back | A configured runtime failure cannot silently select another binary | Runtime-failure fixtures |
+| Oversized source staged, then working copy shrunk or removed | Check, then restage the repair or stage the deletion | Reject indexed violation until repair/deletion reaches index | Working-tree edits cannot hide source in the selected commit tree | Partial-staging regression fixtures |
+| Compliant indexed source; oversized working copy | Check, then repair working copy | Reject working copy, then pass | Both indexed and working source satisfy the same bounded policy | Two-tree fixtures |
+| Git supplies an alternate effective index (`GIT_INDEX_FILE`) | Check default and selected index with the same working copy | Only the oversized selected index fails | Commit content selection, not the default index pathname, owns indexed inputs | Effective-index fixture |
+| Indexed source is non-regular or has unresolved stages | Check despite a compliant regular working copy | `SIZE_INPUT_ERROR`, nonzero exit | Unsupported indexed source cannot silently pass | Index-input failure fixtures |
 
 No application/persistence contract changes. The checker is read-only and
-synchronous; concurrent edits during a run are not a supported snapshot
-guarantee, matching the other working-tree static checks. Function/closure
-measurement remains the explicit verification gap of option B.
+synchronous; concurrent working-tree or index edits during a run are not a
+supported snapshot guarantee. Other static checks, coverage and Sonar still
+analyze working-tree contents; this change closes the size-check mismatch
+only, not the broader commit-tree analysis boundary recorded in
+[Quality Gate Cost](quality-gate-cost.md#what-the-gate-actually-enforces).
+Function/closure measurement remains the explicit verification gap of option B.
 
 ## Initial Verification (2026-10-01)
 
@@ -95,3 +110,22 @@ and preserves shell failure propagation. The original default-runtime and
 selected-root cases continue to cover the adjacent entry paths.
 Verification: all 31 focused cases and all 123 script-suite tests passed;
 `check:size`, shell syntax, changed-test formatting and diff checks passed.
+
+## Indexed Content Follow-up (Review 5374354494)
+
+The [partial-staging review](https://github.com/hailingu/PlotWeave/pull/452#discussion_r4151326413)
+regression first reproduced a false pass: an 801-line
+indexed source was hidden by an 800-line or deleted working copy. The checker
+now enumerates the effective index with NUL-delimited Git records and reads
+the indexed blob objects directly, reusing the same caps and baseline.
+It preserves both the index and working tree. Restaging the repair or deletion
+restores success; a compliant index cannot hide an oversized working copy.
+The selected-index fixture covers the content-selection entry point used by
+Git commit hooks; unsupported indexed inputs fail rather than disappear.
+Verification: all 39 focused cases and 131 script-suite tests passed;
+`npm run check:size` checked 482 distinct source paths across both trees.
+Changed-script ESLint (zero warnings), formatting and diff checks passed.
+The contract and gate-boundary documents received a structured review;
+there is no configured automated prose check. All selected matrix cases
+are covered; concurrent mutation and function/closure measurement retain
+the limitations stated above.
