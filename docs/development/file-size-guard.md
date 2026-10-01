@@ -13,6 +13,12 @@ functions/closures is a separate follow-up, not part of this implementation.
 this inventory together with their Scope Routing row. Assets, lockfiles,
 configuration and generated ignored output are not maintained source code.
 Git supplies tracked and non-ignored untracked paths, including staged additions.
+NUL-delimited Git records retain their original path bytes until maintained-source
+classification. Maintained paths must round-trip through UTF-8 without replacement;
+otherwise the checker fails with `SIZE_INPUT_ERROR` before filesystem lookup or
+path deduplication. It does not successfully measure arbitrary non-UTF-8 filenames.
+Valid Unicode paths, including a literal replacement character, remain supported;
+non-source paths are excluded before the encoding validation.
 The checker measures both their working-tree contents and every maintained
 source blob in Git's effective index (including `GIT_INDEX_FILE` supplied by
 commit hooks). Tracked files remain checked even if an ignore rule matches
@@ -86,6 +92,8 @@ they do not assert line counts of versioned production files or prose.
 | --- | --- | --- | --- | --- |
 | New source / TS test file at cap | Check, append one LF, check again | Pass, then `SIZE_LIMIT_EXCEEDED` | No new file exceeds its applicable cap | CLI boundary fixtures |
 | Source with spaces / newline in path, tracked or untracked | Enumerate and check | Same cap applies | File names and Git state cannot hide source | Enumeration fixtures |
+| Maintained Git path contains bytes that cannot round-trip through UTF-8 | Enumerate working or effective-index paths, then repair selected index | `SIZE_INPUT_ERROR`; success only after repair | An unrepresentable source path cannot become a missing replacement path or alias another input | Raw-byte index, injected working-enumeration and selected-index recovery fixtures passed |
+| Valid Unicode path, or excluded non-source path with arbitrary bytes | Check source, then exceed its cap; enumerate excluded input | Unicode source obeys its cap and exact baseline; non-source remains excluded | Encoding validation neither rejects representable source nor expands maintained-source scope | Unicode recovery/baseline and non-source fixtures passed |
 | Legacy file exceeds normal cap in either tree | Keep, shrink, grow past recorded count | Report allowance for first two; reject growth | Grandfathering is bounded and visible | Working-tree and indexed baseline fixtures |
 | Over-limit source | Reject, shrink to cap, re-run | Failure then success; input untouched | Rechecking observes repairs without mutating source or baseline | Recovery fixture |
 | Staged source deletion / ignored build output / non-source asset | Check remaining inputs | Pass | Only maintained source participates | Scope fixtures |
@@ -204,3 +212,37 @@ The new matrix row passed; the earlier concurrency and executable-unit gaps
 remain unchanged. The documentation received a structured review of command
 directories, tool prerequisites, guard ownership and cross-references; there
 is no configured automated prose check. Formatting and diff checks passed.
+
+## Path Encoding Follow-up (Review 5375043654)
+
+The [path-byte review](https://github.com/hailingu/PlotWeave/pull/452#discussion_r4151900880)
+identified lossy decoding before working-tree lookup: a non-UTF-8 source name
+could become a missing replacement path or alias compliant content. The checker
+now retains each Git record byte through a reversible latin1 representation,
+classifies the ASCII source suffix, and validates a lossless UTF-8 round trip
+before using the maintained path. Both discovery entry points share the check.
+Unsupported source names stop with the existing `SIZE_INPUT_ERROR` diagnostic;
+they cannot establish a successful scan. Full byte-filename measurement is not
+implemented, and excluded assets do not acquire a new encoding restriction.
+
+The smallest real Git index fixture first returned success under the old checker
+and now rejects its unrepresentable path without changing the index. Additional
+fixtures cover invalid, overlong and truncated UTF-8 sequences in working/index
+enumeration, selected-index recovery, Unicode names with tabs/newlines and a
+literal replacement character, exact Unicode baseline binding, and excluded
+non-source names. All 63 focused cases passed. The new matrix rows passed;
+concurrent mutation and executable-unit measurement retain the existing gaps.
+
+On this Darwin filesystem, creating the review's `src/bad-<0xff>.ts` filename with a literal
+`0xff` byte failed with errno 92 (`Illegal byte sequence`). Raw index names use
+Git's actual NUL-delimited `--index-info` protocol; working enumeration injects
+that protocol into the real CLI while other Git operations use the temporary
+repository. No native untracked non-UTF-8 filename reproduction is claimed on
+this filesystem. The fixtures verify failure before lookup, not successful
+handling of such files on another platform.
+Verification: `npm run check:size && npm test -- scripts` passed (482 source paths,
+155 script-suite cases); changed-script ESLint with zero warnings, formatting
+and diff checks passed. Changed functions and fixture builders remain below
+80 code lines. Documentation received a structured review of the encoding
+contract, both discovery entry points, matrix outcomes and the filesystem gap;
+no automated prose check is configured.

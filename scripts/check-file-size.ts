@@ -30,6 +30,16 @@ function sourceLimit(path: string): number | undefined {
   return /\.test\.tsx?$/.test(path) ? 1800 : 800
 }
 
+/** Git 路径先用 latin1 保留每个字节；源码必须无损转为现有 UTF-8 路径契约。 */
+function decodeGitPath(encoded: string): string {
+  const bytes = Buffer.from(encoded, 'latin1')
+  const path = bytes.toString('utf8')
+  if (!bytes.equals(Buffer.from(path))) {
+    throw new Error(`源码路径不是有效 UTF-8：${bytes.toString('hex')}`)
+  }
+  return path
+}
+
 /** JSON 基线必须是对象，不能让数组或 null 被视为有效政策。 */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -86,11 +96,14 @@ function sourcePaths(): string[] {
       'src-tauri',
       'scripts',
     ],
-    { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 },
+    { encoding: 'latin1', maxBuffer: 10 * 1024 * 1024 },
   )
   return [
     ...new Set(
-      output.split('\0').filter((path) => sourceLimit(path) !== undefined),
+      output
+        .split('\0')
+        .filter((path) => sourceLimit(path) !== undefined)
+        .map(decodeGitPath),
     ),
   ].sort()
 }
@@ -123,14 +136,15 @@ function indexedFiles(): IndexedFile[] {
   const output = execFileSync(
     'git',
     ['ls-files', '--stage', '-z', '--', 'src', 'src-tauri', 'scripts'],
-    { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 },
+    { encoding: 'latin1', maxBuffer: 10 * 1024 * 1024 },
   )
   const files: IndexedFile[] = []
   for (const record of output.split('\0').filter(Boolean)) {
     const separator = record.indexOf('\t')
     if (separator < 0) throw new Error('无法解析 Git 索引记录')
-    const path = record.slice(separator + 1)
-    if (path !== baselinePath && sourceLimit(path) === undefined) continue
+    const encoded = record.slice(separator + 1)
+    if (encoded !== baselinePath && sourceLimit(encoded) === undefined) continue
+    const path = decodeGitPath(encoded)
     const [mode, object, stage] = record.slice(0, separator).split(' ')
     if (
       stage !== '0' ||

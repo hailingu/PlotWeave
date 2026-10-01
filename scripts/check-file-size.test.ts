@@ -270,6 +270,191 @@ function git(root: string, args: string[], env: NodeJS.ProcessEnv = {}) {
   })
 }
 
+/** 真实 Git 索引可保存字节路径；夹具不依赖宿主文件系统能否创建该名称。 */
+function indexBytePath(
+  root: string,
+  path: Buffer,
+  env: NodeJS.ProcessEnv = {},
+): void {
+  const object = git(root, ['hash-object', '-w', '--stdin'], env).trim()
+  // Git 的 -z --index-info 字节协议是夹具契约；不要求宿主能创建该文件名。
+  execFileSync('git', ['update-index', '-z', '--index-info'], {
+    cwd: root,
+    env: { ...environment(), ...env },
+    input: Buffer.concat([
+      Buffer.from(`100644 ${object} 0\t`),
+      path,
+      Buffer.from([0]),
+    ]),
+  })
+}
+
+it.each([
+  ['src/bad-', 'ff', '.ts'],
+  ['src-tauri/src/bad-', 'c0af', '.rs'],
+  ['scripts/bad-', 'e2', '.test.ts'],
+])('有效索引的非 UTF-8 源码路径不能静默放行：%s%s%s', (prefix, hex, suffix) => {
+  const root = checkerFixture()
+  indexBytePath(
+    root,
+    Buffer.concat([
+      Buffer.from(prefix),
+      Buffer.from(hex, 'hex'),
+      Buffer.from(suffix),
+    ]),
+  )
+  const before = readFileSync(resolve(root, '.git/index'))
+  const result = runChecker(root)
+  expect(result.status).toBe(1)
+  // SIZE_INPUT_ERROR 契约：无法完整表示的源码输入必须阻止检查。
+  expect(JSON.parse(result.stderr.trim())).toMatchObject({
+    code: 'SIZE_INPUT_ERROR',
+  })
+  expect(readFileSync(resolve(root, '.git/index'))).toEqual(before)
+})
+
+/** 注入工作树枚举的原始 NUL 协议，其他 Git 操作仍读写真实临时仓库。 */
+function workingPathBytes(root: string, path: Buffer): NodeJS.ProcessEnv {
+  const args = [
+    'ls-files',
+    '-z',
+    '--cached',
+    '--others',
+    '--exclude-standard',
+    '--',
+    'src',
+    'src-tauri',
+    'scripts',
+  ]
+  const original = execFileSync('git', args, { cwd: root, env: environment() })
+  const wire = write(root, 'path-output.bin', '')
+  writeFileSync(wire, Buffer.concat([original, path, Buffer.from([0])]))
+  const script = write(
+    root,
+    'bin/git.cjs',
+    `
+// 只替换工作树路径枚举的协议输入，其他命令保留真实 Git 行为。
+const { readFileSync } = require('node:fs')
+const { spawnSync } = require('node:child_process')
+const args = process.argv.slice(2)
+if (args[0] === 'ls-files' && args.includes('--others')) {
+  process.stdout.write(readFileSync(process.env.PLOTWEAVE_PATH_BYTES))
+} else {
+  const result = spawnSync(process.env.PLOTWEAVE_PATH_GIT, args, { stdio: 'inherit' })
+  process.exit(result.status ?? 1)
+}
+`,
+  )
+  const launcher = write(
+    root,
+    'bin/git',
+    '#!/bin/sh\nexec "$PLOTWEAVE_PATH_NODE" "$PLOTWEAVE_PATH_SCRIPT" "$@"\n',
+  )
+  chmodSync(launcher, 0o755)
+  return {
+    PATH: `${resolve(root, 'bin')}:${process.env.PATH ?? ''}`,
+    PLOTWEAVE_PATH_NODE: process.execPath,
+    PLOTWEAVE_PATH_SCRIPT: script,
+    PLOTWEAVE_PATH_BYTES: wire,
+    PLOTWEAVE_PATH_GIT: execFileSync('which', ['git'], {
+      encoding: 'utf8',
+    }).trim(),
+  }
+}
+
+it.each(['ff', 'c0af', 'e2'])(
+  '工作树枚举不能把非 UTF-8 字节 %s 的源码路径当成删除或替代路径',
+  (hex) => {
+    const root = checkerFixture()
+    // 放置合法的替代字符路径，避免错误解码后借另一份合规内容通过。
+    write(root, 'src/bad-�.ts', '\n'.repeat(800))
+    const path = Buffer.concat([
+      Buffer.from('src/bad-'),
+      Buffer.from(hex, 'hex'),
+      Buffer.from('.ts'),
+    ])
+    const result = runChecker(root, workingPathBytes(root, path))
+    expect(result.status).toBe(1)
+    expect(JSON.parse(result.stderr.trim())).toMatchObject({
+      code: 'SIZE_INPUT_ERROR',
+    })
+  },
+)
+
+it('所选有效索引拒绝无法表示的路径，修复索引后恢复', () => {
+  const root = checkerFixture()
+  write(root, 'src/regular.ts', '\n')
+  git(root, ['add', '--', 'src/regular.ts'])
+  const env = { GIT_INDEX_FILE: resolve(root, '.git/selected-index') }
+  copyFileSync(resolve(root, '.git/index'), env.GIT_INDEX_FILE)
+  indexBytePath(root, Buffer.from('src/bad-\xff.ts', 'latin1'), env)
+  expect(runChecker(root).status).toBe(0)
+  const rejected = runChecker(root, env)
+  expect(rejected.status).toBe(1)
+  expect(JSON.parse(rejected.stderr.trim())).toMatchObject({
+    code: 'SIZE_INPUT_ERROR',
+  })
+  copyFileSync(resolve(root, '.git/index'), env.GIT_INDEX_FILE)
+  expect(runChecker(root, env).status).toBe(0)
+})
+
+it.each(['working', 'index'] as const)(
+  '非 UTF-8 的非源码 %s 路径仍在规模检查范围外',
+  (tree) => {
+    const root = checkerFixture()
+    const path = Buffer.from('src/icon-\xff.png', 'latin1')
+    const env = tree === 'working' ? workingPathBytes(root, path) : {}
+    if (tree === 'index') indexBytePath(root, path)
+    expect(runChecker(root, env).status).toBe(0)
+  },
+)
+
+it('合法 Unicode、替代字符和分隔符路径仍检查两份源码并在修复后通过', () => {
+  const root = checkerFixture()
+  const path = 'src/中文-é-😀-�\t名称\n.ts'
+  write(root, path, '\n'.repeat(800))
+  git(root, ['add', '--', path])
+  expect(runChecker(root).status).toBe(0)
+  write(root, path, '\n'.repeat(801))
+  git(root, ['add', '--', path])
+  write(root, path, '\n'.repeat(800))
+  const result = runChecker(root)
+  expect(result.status).toBe(1)
+  expect(JSON.parse(result.stderr.trim())).toMatchObject({
+    code: 'SIZE_LIMIT_EXCEEDED',
+    path,
+    tree: 'index',
+    lines: 801,
+  })
+  git(root, ['add', '--', path])
+  expect(runChecker(root).status).toBe(0)
+})
+
+it('合法 Unicode 路径仍与工作和索引祖父基线精确绑定', () => {
+  const path = 'src/中文-é-😀.ts'
+  const root = checkerFixture({ [path]: 900 })
+  write(root, path, '\n'.repeat(900))
+  git(root, ['add', '--', path, 'scripts/file-size-baseline.json'])
+  const allowed = runChecker(root)
+  expect(allowed.status).toBe(0)
+  const records = allowed.stdout
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line))
+  for (const tree of ['worktree', 'index']) {
+    expect(records).toContainEqual(
+      expect.objectContaining({
+        code: 'SIZE_GRANDFATHERED',
+        path,
+        tree,
+        limit: 900,
+      }),
+    )
+  }
+  write(root, path, '\n'.repeat(901))
+  expect(runChecker(root).status).toBe(1)
+})
+
 it.each(['shrink', 'remove'] as const)(
   '暂存超限源码后仅在工作树 %s，仍拒绝索引；暂存修复后通过',
   (repair) => {
