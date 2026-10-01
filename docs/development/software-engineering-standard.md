@@ -155,6 +155,13 @@ Apply the guardrails as follows:
 - Cross-module calls must use the owning module's public API. Do not import its
   internal persistence models, framework objects, mutable state, or private
   helpers.
+- Tauri runtime detection has one frontend source of truth:
+  `isTauriRuntime()` in `src/ipc/runtime.ts` (issue [#473](https://github.com/hailingu/PlotWeave/issues/473)).
+  This SDK-free leaf checks IPC bridge property presence and safely returns
+  false without `window`; consumers retain their existing snapshot or call-time
+  checks. `src/ipc/runtimeBoundary.test.ts` parses maintained modules with the
+  TypeScript AST and rejects sentinel identifiers or literals outside that leaf,
+  excluding comments and test fixtures.
 - Translate external request, response, database, and provider types at the
   boundary. Do not let them become the repository-wide domain model by
   convenience.

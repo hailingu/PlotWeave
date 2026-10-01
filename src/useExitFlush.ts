@@ -17,6 +17,7 @@ import {
 } from './projectStore/saveChain'
 import { IPC_COMMANDS } from './ipc/commands'
 import { ipcInvoke } from './ipc/invoke'
+import { isTauriRuntime } from './ipc/runtime'
 
 /** 仍有任一未落盘数据源（画布防抖、项目保存链、AI 会话）。 */
 function hasPendingSaves(): boolean {
@@ -43,8 +44,7 @@ function blockedMessage(
 export function useExitFlush(): string | null {
   const [blocked, setBlocked] = useState<string | null>(null)
   useEffect(() => {
-    if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window))
-      return
+    if (!isTauriRuntime()) return
     let disposed = false
     const unlistens: Array<() => void> = []
     void (async () => {

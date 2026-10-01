@@ -7,8 +7,9 @@
 import { defaultSettings, normalizeSettings, type AppSettings } from './types'
 import { IPC_COMMANDS } from '../ipc/commands'
 import { ipcInvoke } from '../ipc/invoke'
+import { isTauriRuntime } from '../ipc/runtime'
 
-const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+const isTauri = isTauriRuntime()
 
 /** 浏览器回退的内存设置。 */
 let memorySettings: AppSettings | null = null

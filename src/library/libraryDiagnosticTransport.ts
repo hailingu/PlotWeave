@@ -1,4 +1,5 @@
 /** 图库响应与恢复事件共用的 IPC 诊断边界；数据模型 §7.2 定义信封与序号。 */
+import { isTauriRuntime } from '../ipc/runtime'
 import {
   publishCleanupPending,
   publishLibraryWarnings,
@@ -30,7 +31,7 @@ export function reportLibraryDiagnostics(input: unknown): void {
 export async function initializeLibraryDiagnostics(): Promise<
   (() => void) | undefined
 > {
-  if (!('__TAURI_INTERNALS__' in window)) return
+  if (!isTauriRuntime()) return
   try {
     const { listen } = await import('@tauri-apps/api/event')
     return await listen<unknown>('library-diagnostics', ({ payload }) => {

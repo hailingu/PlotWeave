@@ -18,6 +18,7 @@ import {
 } from 'react'
 import type { AssetRef } from '../../model/document'
 import { IPC_COMMANDS } from '../../ipc/commands'
+import { isTauriRuntime } from '../../ipc/runtime'
 import { settingsStore } from '../../settings/settingsStore'
 import type { AppSettings } from '../../settings/types'
 import { uid } from '../../uid'
@@ -58,10 +59,6 @@ export interface ImageJobsDeps {
 /** 错误对象的用户可见文案：字符串原样、其余 toString 兜底。 */
 function errorText(err: unknown): string {
   return typeof err === 'string' ? err : String(err)
-}
-
-function isDesktopTauri(): boolean {
-  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 }
 
 /** Rust 生成命令的执行（§9.3 预检已在命令内完成，前端单次 IPC 直收
@@ -202,7 +199,7 @@ async function runStart(
   nodeId: string,
   jobId: string,
 ): Promise<void> {
-  if (!isDesktopTauri()) {
+  if (!isTauriRuntime()) {
     deps.setJobError(nodeId, PREVIEW_UNSUPPORTED)
     return
   }

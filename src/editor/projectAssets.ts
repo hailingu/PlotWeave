@@ -15,9 +15,10 @@ import type { AssetRef } from '../model/document'
 import { libraryStore } from '../library/libraryStore'
 import { IPC_COMMANDS, type IpcCommandName } from '../ipc/commands'
 import { ipcInvoke } from '../ipc/invoke'
+import { isTauriRuntime } from '../ipc/runtime'
 import { uid } from '../uid'
 
-const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+const isTauri = isTauriRuntime()
 
 /** 内存回退：项目资产 id → 导入时建立的独立 object URL（URL store 钉住
  * 源 blob，脱离库内条目存活；会话内有效，重载即失效）。 */
