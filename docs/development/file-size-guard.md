@@ -42,11 +42,16 @@ new violations cannot establish a new baseline.
 and CI runs `npm run check:size`. The shared script invokes its own checker
 and baseline against the selected repository root, so the pre-push temporary
 worktree path applies the current gate to the pushed tree as required by #405.
+The shared entry honors `PLOTWEAVE_NODE_BIN`, defaulting to `node` when
+unset or empty, just like the Sonar gate. An explicit executable is invoked
+as one quoted path; its failure is propagated without trying a different
+runtime (PR #452, review 5374202683).
 
 ## Key State And Invariant Matrix
 
-Owner: `scripts/check-file-size.ts`. Entry points: `check:size`, shared static
-checks, and CI. Tests use disposable Git repositories and generated fixtures;
+Owners: `scripts/check-file-size.ts` owns size policy; `scripts/check-static.sh`
+owns runtime selection. Entry points: `check:size`, shared static checks,
+and CI. Tests use disposable Git repositories and generated fixtures;
 they do not assert line counts of versioned production files or prose.
 
 | State / precondition | Action / transition | Observable outcome | Invariant | Verification |
@@ -58,6 +63,8 @@ they do not assert line counts of versioned production files or prose.
 | Deleted source / ignored build output / non-source asset | Check remaining inputs | Pass | Only maintained source participates | Scope fixtures |
 | Invalid/missing baseline, invalid Git root, non-regular source | Run checker | `SIZE_INPUT_ERROR`, nonzero exit | Incomplete analysis cannot pass | Failure fixtures |
 | Alternate root selected for a push gate | Run shared static script | Reject oversized file in that root | Gate measures selected tree using current policy | Shared-entry fixture |
+| Explicit Node path with spaces; no `node` alias on PATH | Check compliant / oversized source through shared entry | Pass / `SIZE_LIMIT_EXCEEDED` | The configured runtime owns execution; default PATH is unnecessary | Runtime-selection fixtures |
+| Configured runtime fails or is absent; default Node exists | Run shared entry | Propagate failure; do not fall back | A configured runtime failure cannot silently select another binary | Runtime-failure fixtures |
 
 No application/persistence contract changes. The checker is read-only and
 synchronous; concurrent edits during a run are not a supported snapshot
@@ -76,3 +83,15 @@ syntax checks passed. The first sandboxed suite could not write the Git
 index tree required by the existing gate-ledger test; the suites passed when
 rerun with Git write access. Documentation received a structured review
 (scope, grandfathering, diagnostics, links); no automated prose check exists.
+
+## Runtime Selection Follow-up (Review 5374202683)
+
+Four additional regression cases exercise the actual shared shell entry:
+explicit Node with no default alias checks both compliant and oversized files;
+an explicit failing or missing runtime rejects the run even when a default
+Node is available. All four first failed against the literal `node` call.
+The change reuses the Sonar gate's `${PLOTWEAVE_NODE_BIN:-node}` convention
+and preserves shell failure propagation. The original default-runtime and
+selected-root cases continue to cover the adjacent entry paths.
+Verification: all 31 focused cases and all 123 script-suite tests passed;
+`check:size`, shell syntax, changed-test formatting and diff checks passed.

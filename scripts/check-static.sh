@@ -14,6 +14,7 @@ script_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repository_root=${PLOTWEAVE_GATE_REPOSITORY_ROOT:-$(CDPATH= cd -- "$script_directory/.." && pwd)}
 
 npm_bin=${PLOTWEAVE_NPM_BIN:-npm}
+node_bin=${PLOTWEAVE_NODE_BIN:-node}
 
 cd "$repository_root"
 
@@ -24,7 +25,7 @@ printf '%s\n' '[check-static] ESLint 零警告检查……'
 "$npm_bin" run lint -- --max-warnings=0
 
 printf '%s\n' '[check-static] 维护源码文件规模检查……'
-node "$script_directory/check-file-size.ts"
+"$node_bin" "$script_directory/check-file-size.ts"
 
 printf '%s\n' '[check-static] 严格类型检查（索引访问 + 可选字段存在性）……'
 "$npm_bin" run typecheck:strict

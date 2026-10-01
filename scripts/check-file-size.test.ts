@@ -1,5 +1,5 @@
 /** 行数静态检查器的行为契约：只使用临时 Git 仓库与生成夹具（issue #432）。 */
-import { spawnSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import {
   chmodSync,
   copyFileSync,
@@ -25,6 +25,7 @@ function environment(): NodeJS.ProcessEnv {
     'GIT_WORK_TREE',
     'GIT_INDEX_FILE',
     'GIT_PREFIX',
+    'PLOTWEAVE_NODE_BIN',
   ]) {
     delete env[key]
   }
@@ -77,6 +78,79 @@ it('共享静态入口拒绝选定根目录中的新增超限文件（#432 / #40
   // 稳定诊断码契约见 docs/development/file-size-guard.md。
   expect(result.stderr).toContain('SIZE_LIMIT_EXCEEDED')
 })
+
+/** 隔离 PATH，只保留真实 Git 与 dirname；Node 路径包含空格且没有默认别名。 */
+function isolatedRuntime(root: string): { bin: string; node: string } {
+  const bin = resolve(root, 'bin')
+  mkdirSync(bin)
+  for (const command of ['git', 'dirname']) {
+    const executable = execFileSync('which', [command], {
+      encoding: 'utf8',
+    }).trim()
+    symlinkSync(executable, resolve(bin, command))
+  }
+  const node = resolve(bin, 'selected node')
+  symlinkSync(process.execPath, node)
+  return { bin, node }
+}
+
+/** 运行真实共享入口；格式与类型工具已在路由检查覆盖，此处只隔离 npm 成本。 */
+function runStaticWithRuntime(root: string, bin: string, node: string) {
+  const npm = write(root, 'npm', '#!/bin/sh\nexit 0\n')
+  chmodSync(npm, 0o755)
+  return spawnSync(
+    '/bin/sh',
+    [resolve(repositoryRoot, 'scripts/check-static.sh')],
+    {
+      cwd: root,
+      encoding: 'utf8',
+      env: {
+        ...environment(),
+        PATH: bin,
+        PLOTWEAVE_GATE_REPOSITORY_ROOT: root,
+        PLOTWEAVE_NPM_BIN: npm,
+        PLOTWEAVE_NODE_BIN: node,
+      },
+    },
+  )
+}
+
+it.each([
+  [800, 0],
+  [801, 1],
+])('无默认 Node 时用指定运行时检查 %i 行源码', (lines, status) => {
+  // 回归触发：硬编码 node 或未引用含空格的覆盖路径，均会错误退出 127。
+  const root = fixture()
+  const { bin, node } = isolatedRuntime(root)
+  write(root, 'src/example.ts', '\n'.repeat(lines))
+  const result = runStaticWithRuntime(root, bin, node)
+  expect(result.status).toBe(status)
+  expect(result[status === 0 ? 'stdout' : 'stderr']).toContain(
+    status === 0 ? 'SIZE_CHECK_COMPLETE' : 'SIZE_LIMIT_EXCEEDED',
+  )
+})
+
+it.each(['failure', 'missing'] as const)(
+  '指定运行时 %s 时透传失败，即使默认 Node 可用也不回退',
+  (mode) => {
+    const root = fixture()
+    const { bin } = isolatedRuntime(root)
+    symlinkSync(process.execPath, resolve(bin, 'node'))
+    const node = resolve(bin, 'configured node')
+    if (mode === 'failure') {
+      writeFileSync(node, '#!/bin/sh\nexit 23\n')
+      chmodSync(node, 0o755)
+    }
+    const result = runStaticWithRuntime(root, bin, node)
+    if (mode === 'failure') {
+      expect(result.status, result.stderr).toBe(23)
+    } else {
+      // 缺失程序的退出码由宿主 shell 决定；契约是不回退、不放行。
+      expect(result.status, result.stderr).not.toBe(0)
+      expect(result.stderr).toContain(node)
+    }
+  },
+)
 
 /** 将真实检查器复制进沙箱；基线是夹具输入，不改动仓库政策文件。 */
 function checkerFixture(files: Record<string, number> = {}): string {
