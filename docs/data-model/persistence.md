@@ -63,6 +63,8 @@
 
 [issue #390](https://github.com/hailingu/PlotWeave/issues/390) 已实现（覆盖前损坏备份）：残余窗口是成功加载之后 `settings.json` 被应用外部破坏（加载期保护由 issue #120 的 ready 门控承接），任意一次防抖落盘或关闭冲刷会不可逆覆盖损坏原件、`keyEnc` 密文随之消失。该覆盖路径现接入 `store::damaged_backup` 共用内核（自图库 #137 处置提取，图库侧同改走该内核、语义不变）：相对锚定句柄对既有 `settings.json` 做 no-follow 归类 + cap+1 限读——条目缺失视为无原件可保护（不备份），符号链接/非普通文件/超限按备份异常拒绝；字节解析为 JSON **对象**即健康直接放行，其余（非法 JSON、合法但非对象、非法 UTF-8）按**原字节**在同目录耐久备份为 `settings-corrupt-<SHA-256 摘要>.bak`。同摘要有既有备份时，校验普通文件身份（Unix 按 (dev, ino) 绑定）与完整字节并重新同步后才复用——失败重试不累计相同副本，原件变化保留独立备份；备份创建、读取或同步失败（或同名备份类型/内容不符）阻止本次保存并上抛「备份损坏设置原件失败：…」类可诊断错误，不执行覆盖；备份成功后才照旧执行 §10.2 原子覆盖。备份临时文件命名沿用 `.{备份名}.{id}.tmp` 协议；应用数据根暂不清扫遗留临时文件（含备份临时文件，见上文记录边界）。跨进程并发写同目录不在设置写互斥范围（§10.2 单写者模型记录边界）。
 
+[issue #435](https://github.com/hailingu/PlotWeave/issues/435) 已实现（超限后的人工恢复指引）：`load_prefs` 发现磁盘文件超过 1 MiB，以及 `save_prefs` 的覆盖前备份失败时，诊断保留原失败原因并显示实际 `settings.json` 路径。条件式重建指引要求先退出应用、自行备份原件，确认不再使用原配置后才移走或删除该文件；重新打开应用时，文件缺失才由前端补默认设置，原 provider 配置与 API key 需重新填写并保存。备份失败出口统一附加该指引，不依赖错误文案猜测失败类别；权限或备份证据异常仍需按原原因处理，重建说明不保证修复目录权限等环境问题。超限原件继续经 cap+1 限读拒绝，不部分解析、自动备份、覆盖或删除；未增加应用内重置命令。默认设置只在缺失读取后进入内存，用户重新配置并保存时才写入新文件。
+
 | 前置状态 | 动作／时序 | 预期可观察结果 | 跨转换不变量及所有者 | 验证结果（`prefs::save_tests`、`prefs::backup_tests`） |
 | --- | --- | --- | --- | --- |
 | 首次保存或已有设置 | 保存合法 JSON，再读取 | 完整新设置可读，正常结束无临时文件 | 设置层：读写采用相同 1 MiB 字节上限；原子写层：目标不会成为半份 JSON | `save_creates_then_replaces_complete_settings`、`save_enforces_serialized_byte_limit_before_touching_files` 通过 |
@@ -76,8 +78,11 @@
 | 文件缺失（首启）或健康设置 | 保存 | 保存成功，无备份条目产生 | 覆盖层：备份仅针对已存在的损坏原件，不干扰正常路径（issue #390） | `backup_tests::healthy_settings_save_creates_no_backup`、`backup_tests::first_save_without_existing_file_creates_no_backup` 通过 |
 | 损坏原件 + 备份写入失败（如目录只读） | 保存，恢复后重试 | Err「备份损坏设置原件失败：…」；损坏原件保持原状、目录无新增条目；重试完成备份 + 覆盖 | 覆盖层：备份异常阻止覆盖（fail-closed），失败不扩大损伤窗口（issue #390） | `backup_tests::backup_failure_blocks_overwrite_and_retry_recovers` 通过（Unix 权限注入） |
 | 同摘装备份已存在（相同损坏内容再次覆盖／既有副本） | 保存 | 校验既有备份身份与完整字节后复用，不产生第二份；不同损坏内容获得独立备份；既有备份内容不符则拒绝保存 | 覆盖层：失败重试不累计相同副本；证据备份不被覆盖或绕过（issue #390） | `backup_tests::resave_same_corruption_reuses_single_backup`、`backup_tests::resave_changed_corruption_keeps_distinct_backups`、`backup_tests::mismatched_existing_backup_blocks_save` 通过 |
+| 健康设置加载后被外部增长到 >1 MiB，开头仍为完整合法对象（#435） | 两次保存重试 → 人工保留并移走原件 → 缺失读取 → 重新配置保存 | 每次失败含路径与恢复指引；失败期间无覆盖或备份；移走后空对象可读，新设置保存成功，保留原件字节不变 | 设置与备份层：超限不部分解析；未备份原件不得被覆盖；重试不能绕过保护 | `backup_tests::oversize_save_reports_recovery_steps_without_overwriting_then_recovers` 先红后绿 |
+| 设置文件在加载前已超限（#435） | 读取 | Err + 文件路径与恢复指引，原件不变，不降级为默认配置 | 设置读取层：只有文件缺失才能进入默认值恢复；上限拒绝不变 | `backup_tests::oversize_load_reports_recovery_steps_without_defaulting` 先红后绿 |
+| 健康对象加空白达到恰好 1 MiB（#435） | 读取后保存新设置 | 正常读取与保存，无损坏备份 | 设置与备份层：仅严格超过上限才拒绝 | `backup_tests::at_limit_settings_save_remains_allowed` |
 
-验证边界：在隔离临时目录运行真实文件 I/O；同步故障以测试专用注入覆盖错误传播与文件可恢复状态，不等同真实断电实验。非 Unix 沿用共享内核不执行父目录／条目宿主 fsync 的平台边界，本仓库未验证 Windows；不新增同用户恶意换树防御。
+验证边界：在隔离临时目录运行真实文件 I/O；同步故障以测试专用注入覆盖错误传播与文件可恢复状态，不等同真实断电实验。非 Unix 沿用共享内核不执行父目录／条目宿主 fsync 的平台边界，本仓库未验证 Windows；不新增同用户恶意换树防御。#435 只组合失败诊断，不改变设置写互斥或保存排序；并发与旧密文迁移仍由既有回归守护。人工恢复链以真实临时目录 I/O 验证，未执行 GUI 人工操作或真实断电实验。
 
 验证记录（2026-09-18）：在 `src-tauri` 执行 `cargo test --lib prefs::save_tests`，11 项通过；`cargo fmt --check && cargo clippy -- -D warnings && cargo test` 的各项检查通过，Rust 单元测试 312 项、原生退出集成夹具通过。首次全量测试因沙箱禁止绑定环回端口，9 个既有 HTTP 测试失败；允许本地端口后全量重跑通过。测试编译仍有 `library_index/fixup_tests.rs` 的未使用 `Value` 导入和 `library_index/normalize_tests.rs` 的未使用 `warnings` 变量两条既有警告，本次未改动。构建产物使用独立临时目录并在完成前清理；未触碰真实设置或调用真实供应商。两个设计文档无配置的自动检查，按保存入口、状态矩阵、失败语义、平台边界与交叉引用作结构化复核。圈复杂度 `N/A — no configured complexity tool`；人工检查本次新增／修改函数均未超过 80 代码行，受影响源文件均少于 800 行。
 
@@ -92,6 +97,8 @@
 验证记录（2026-09-18，[PR #201](https://github.com/hailingu/PlotWeave/pull/201) 第五轮评审修复）：第四轮的 fail-closed 回归测试此前只走正常路径（`leaf` 缺失、`tmp` 父目录正常，旧 `is_ok` 吞错实现同样通过），未真正覆盖所声称分支。现经 `faults::fail_at(Stage::AnchorProbe)`（仅判定注入、不进入协议序记录）在探测站点注入非 NotFound 失败，`persist::tests::entry_sync_plan_fail_closed_on_transient_metadata_error` 在接入注入前红、接入后绿，断言错误上抛且无任何创建／清理副作用。
 
 验证记录（2026-09-29，[issue #390](https://github.com/hailingu/PlotWeave/issues/390)）：覆盖前损坏备份接入 `store::damaged_backup` 共用内核。内核行为由 `store::damaged_backup::tests` 15 项覆盖（损坏判定、字节精确备份、失败重试复用、内容不符/异型/超限/符号链接 fail-closed、写入故障与 rename 前占位复核）；设置侧由 `prefs::backup_tests` 9 项覆盖，核心回归 `externally_corrupted_settings_backed_up_byte_exact_before_overwrite` 先红后绿（红相：损坏原件被静默覆盖、无备份）。图库侧 #137 `recovery_tests` 全套**未改动**通过——共用内核提取不改变图库语义。在 `src-tauri` 执行 `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` 全部通过（466 项 Rust 单元测试）。未验证平台：非 Unix 无 (dev, ino) 身份比对的复用校验与目录 fsync 屏障维持共享内核现状（Windows 本仓库无构建/测试覆盖，记录边界）。
+
+验证记录（2026-10-01，[issue #435](https://github.com/hailingu/PlotWeave/issues/435)）：两项超限诊断回归先红后绿（红相：加载与保存错误均缺少文件路径）；`cargo test --lib prefs::backup_tests` 12 项通过，包括保存失败重试、人工移走后的缺失读取／重建保存和恰好 1 MiB 边界。`prefs.rs` 既有内联测试移到 `prefs/tests.rs`，仅缩进与文件说明变化，模块路径保持 `prefs::tests`；生产文件从 800 行降至 473 行。Node 使用 `.nvmrc` 的 24.18.0，在 `src-tauri` 执行 `npm --prefix .. run check:size && cargo fmt --check && cargo clippy --all-targets -- -D warnings` 通过；初次沙箱内完整测试的 29 项 HTTP 夹具因禁止绑定环回端口失败，允许本地端口后 `cargo test` 全部通过（597 项单元测试及集成目标）。设计文档无配置的自动行为检查，按恢复前提、路径展示、备份与缺失读取语义、矩阵及交叉引用作结构化复核。新增／修改函数人工核对均低于 80 代码行，受影响 Rust 文件低于 800 行；圈复杂度 `N/A — no configured complexity tool`。GUI 与非 Unix 验证缺口见上文边界。
 
 #### 设置读取边界状态与不变量（issue #391）
 
