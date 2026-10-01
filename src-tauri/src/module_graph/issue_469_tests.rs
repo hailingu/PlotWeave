@@ -260,6 +260,54 @@ fn glob_expansion_respects_pub_super_scope() {
     );
 }
 
+/// 评审 5380788578：`pub(in super)` 的前导 `super` 须沿声明模块上溯，
+/// 限定子树与 `pub(super)` 相同（子树内成边、子树外按外部）。
+#[test]
+fn glob_expansion_resolves_super_in_restricted_paths() {
+    let files = [
+        ("lib.rs", "mod p;\nmod user;\n"),
+        ("p/mod.rs", "pub mod mid;\npub mod sibling;\n"),
+        ("p/mid/mod.rs", "pub(in super) mod limited;\n"),
+        ("p/mid/limited.rs", "pub struct T;\n"),
+        ("p/sibling.rs", "use crate::p::mid::*;\nuse limited::T;\n"),
+        ("user.rs", "use crate::p::mid::*;\nuse limited::T;\n"),
+    ];
+    let graph = edges(&files);
+    assert!(
+        graph["p/sibling.rs"].contains("p/mid/limited.rs"),
+        "pub(in super) 子树内的 glob 使用处应成边：{:?}",
+        graph["p/sibling.rs"]
+    );
+    assert!(
+        !graph["user.rs"].contains("p/mid/limited.rs"),
+        "pub(in super) 子树外的 glob 使用处不得成边：{:?}",
+        graph["user.rs"]
+    );
+}
+
+/// 评审 5380788578：平台互斥声明混合私有与 pub 时，pub 变体须永久放宽
+/// 合并可见性（与声明次序无关），否则 pub 平台上合法的 glob 边丢失。
+#[test]
+fn glob_expansion_keeps_public_platform_variants() {
+    for decls in [
+        "#[cfg(unix)]\nmod shared;\n#[cfg(windows)]\npub mod shared;\n",
+        "#[cfg(windows)]\npub mod shared;\n#[cfg(unix)]\nmod shared;\n",
+    ] {
+        let files = [
+            ("lib.rs", "mod p;\nmod user;\n"),
+            ("p/mod.rs", decls),
+            ("p/shared.rs", "pub struct T;\n"),
+            ("user.rs", "use crate::p::*;\nuse shared::T;\n"),
+        ];
+        let graph = edges(&files);
+        assert!(
+            graph["user.rs"].contains("p/shared.rs"),
+            "pub 平台变体的 glob 边丢失（{decls}）：{:?}",
+            graph["user.rs"]
+        );
+    }
+}
+
 /// 夹具文件列表 → 采集审计结论。
 fn audit(files: &[(&str, &str)]) -> audit::UseAudit {
     let map: BTreeMap<ModuleKey, String> = files

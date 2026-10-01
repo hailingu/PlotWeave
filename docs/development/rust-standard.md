@@ -352,7 +352,12 @@ children are recorded as visibility subtrees at tree build and never join
 glob expansion outside their subtree, so a bare name that collides with a
 private child of the glob target resolves externally instead of fabricating
 an internal edge and a false cycle; inside the declaring subtree the glob
-still imports them. The existing deepest-lexical-scope rule does not
+still imports them. A third round
+([PR #479 review 5380788578](https://github.com/hailingu/PlotWeave/pull/479#pullrequestreview-5380788578))
+resolves leading `super` segments in `pub(in super…)` by walking up the
+declaring module, and lets any public variant among cfg-exclusive
+declarations of the same child permanently widen the merged visibility
+regardless of declaration order. The existing deepest-lexical-scope rule does not
 implement full Rust namespace lookup across scopes: an inner function alias
 can still prevent expansion through an outer module alias. Exact-module
 qualification leaves that pre-existing resolution gap unchanged; expanding

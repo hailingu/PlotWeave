@@ -14,10 +14,12 @@ pub(super) enum ModVis {
     /// `pub(super)`：声明模块的父模块子树（根由声明位置在树构建期解析）。
     ParentOfDeclaring,
     /// `pub(in <路径>)`：限定子树——`crate`/前导 `::` 绝对定位，`self`
-    /// 相对声明模块（segs 为去定界后的路径段）。
+    /// 相对声明模块，前导 `super` 计入 up 沿声明模块上溯（评审
+    /// 5380788578；segs 为去定界后的路径段）。
     InPath {
         segs: Vec<String>,
         from_crate_root: bool,
+        up: usize,
     },
     /// 无可见性修饰：仅声明模块及其后代可见。
     Private,
@@ -86,9 +88,11 @@ fn in_path_of(group: &[&str]) -> Option<ModVis> {
         _ => {}
     }
     let mut segs = Vec::new();
+    let mut up = 0usize;
     for tok in rest {
         match *tok {
             "::" => {}
+            "super" if !from_crate_root && segs.is_empty() => up += 1,
             t if is_path_seg(t) => segs.push(strip_raw_ident(t).to_string()),
             _ => return None,
         }
@@ -96,6 +100,7 @@ fn in_path_of(group: &[&str]) -> Option<ModVis> {
     Some(ModVis::InPath {
         segs,
         from_crate_root,
+        up,
     })
 }
 
@@ -120,14 +125,20 @@ pub(super) fn subtree_root(vis: &ModVis, declaring: &[String]) -> Option<Vec<Str
         ModVis::InPath {
             segs,
             from_crate_root,
+            up,
         } => {
             if *from_crate_root {
-                Some(segs.clone())
-            } else {
-                let mut root = declaring.to_vec();
-                root.extend(segs.iter().cloned());
-                Some(root)
+                return Some(segs.clone());
             }
+            let Some(keep) = declaring.len().checked_sub(*up) else {
+                panic!(
+                    "pub(in super…) 越过 crate 根（非法 Rust）：{}",
+                    declaring.join("::")
+                );
+            };
+            let mut root = declaring[..keep].to_vec();
+            root.extend(segs.iter().cloned());
+            Some(root)
         }
     }
 }

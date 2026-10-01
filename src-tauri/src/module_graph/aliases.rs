@@ -75,8 +75,8 @@ pub(super) fn expand_segments(
 /// 的前缀」判定；无登记即 pub/pub(crate) 的 crate 内任意可见。
 fn glob_importable(tree: &ModuleTree, prefix: &[String], child: &str, use_site: &[String]) -> bool {
     match tree.child_vis.get(&(prefix.to_vec(), child.to_string())) {
-        None => true,
-        Some(root) => {
+        None | Some(None) => true,
+        Some(Some(root)) => {
             root.len() <= use_site.len() && root.iter().zip(use_site).all(|(r, u)| r == u)
         }
     }
