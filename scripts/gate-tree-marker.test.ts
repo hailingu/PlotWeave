@@ -243,7 +243,7 @@ function prepareMarkerUnit(): {
   root: string
   run: (
     argument: string,
-    options?: { markerPath?: string; ttl?: string },
+    options?: { markerPath?: string; ttl?: string; operationPid?: string },
   ) => { status: number | null }
 } {
   const sandbox = mkdtempSync(resolve(tmpdir(), 'plotweave-gate-marker-'))
@@ -253,18 +253,22 @@ function prepareMarkerUnit(): {
   const helper = resolve(repositoryRoot, 'scripts', 'gate-tree-marker.sh')
   const run = (
     argument: string,
-    options?: { markerPath?: string; ttl?: string },
+    options?: { markerPath?: string; ttl?: string; operationPid?: string },
   ) =>
-    spawnSync('sh', [helper, argument], {
-      cwd: sandbox,
-      env: {
-        ...process.env,
-        PLOTWEAVE_GATE_MARKER_PATH: options?.markerPath ?? markerPath,
-        ...(options?.ttl === undefined
-          ? {}
-          : { PLOTWEAVE_GATE_MARKER_TTL: options.ttl }),
+    spawnSync(
+      'sh',
+      [helper, argument, options?.operationPid ?? String(process.pid)],
+      {
+        cwd: sandbox,
+        env: {
+          ...process.env,
+          PLOTWEAVE_GATE_MARKER_PATH: options?.markerPath ?? markerPath,
+          ...(options?.ttl === undefined
+            ? {}
+            : { PLOTWEAVE_GATE_MARKER_TTL: options.ttl }),
+        },
       },
-    })
+    )
   return { markerPath, root: sandbox, run }
 }
 
@@ -283,39 +287,95 @@ describe(
       // 判为需门禁
       expect(run('check').status).toBe(1)
 
-      writeFileSync(resolve(root, 'f.txt'), 'changed\n')
-      spawnSync('git', ['add', '.'], { cwd: root })
-      expect(run('check').status).toBe(1)
-    })
-
-    it('标记缺失、过期、未来时间戳或内容损坏时 check 失败（执行门禁）', () => {
-      const { markerPath, run } = prepareMarkerUnit()
-      expect(run('check').status).toBe(1)
       expect(run('write').status).toBe(0)
-      // 回拨标记时间戳至 epoch 1：超出默认时效（600s）即过期，需重新门禁
-      const [tree] = readFileSync(markerPath, 'utf8').split('\n')
-      writeFileSync(markerPath, `${tree}\n1\n`)
+      writeFileSync(resolve(root, 'f.txt'), 'changed\n')
+      spawnSync('git', ['add', 'f.txt'], { cwd: root })
       expect(run('check').status).toBe(1)
-
-      // 未来时间戳（时钟回拨后遗留）是异常态：负年龄不得判为新鲜
-      // （评审 4120428509），否则整个回拨区间内标记都可被消费
-      const future = String(Math.floor(Date.now() / 1000) + 3600)
-      writeFileSync(markerPath, `${tree}\n${future}\n`)
-      expect(run('check').status).toBe(1)
-
-      writeFileSync(markerPath, 'not-a-tree\nnot-a-number\n')
-      expect(run('check').status).toBe(1)
-    })
-
-    it('标记路径不可写时 write 静默失败，不阻塞门禁已通过的操作（评审 4120128565）', () => {
-      const { root, run } = prepareMarkerUnit()
-      // 路径被目录占据：标记重定向必然失败，write 仍须以 0 退出
-      const blockedPath = resolve(root, 'marker-as-directory')
-      mkdirSync(blockedPath)
-      expect(run('write', { markerPath: blockedPath }).status).toBe(0)
     })
   },
 )
+
+describe(
+  '标记进程身份（issue #429：不确定身份禁止去重）',
+  { timeout: 30_000 },
+  () => {
+    it('同树标记不属于当前进程或启动时间不匹配时不能复用（issue #429）', () => {
+      const { markerPath, run } = prepareMarkerUnit()
+      expect(run('write').status).toBe(0)
+      expect(run('check', { operationPid: String(process.ppid) }).status).toBe(
+        1,
+      )
+
+      const [tree, time, owner] = readFileSync(markerPath, 'utf8').split('\n')
+      writeFileSync(markerPath, `${tree}\n${time}\n${owner}:different-start\n`)
+      expect(run('check').status).toBe(1)
+    })
+
+    it.each(['', 'invalid', '0', '999999999'])(
+      '进程身份 %j 不可解析时不写可复用标记（issue #429）',
+      (operationPid) => {
+        const { markerPath, run } = prepareMarkerUnit()
+        expect(run('write', { operationPid }).status).toBe(0)
+        expect(existsSync(markerPath)).toBe(false)
+        expect(run('write').status).toBe(0)
+        expect(run('check', { operationPid }).status).toBe(1)
+      },
+    )
+
+    it('ps 失败时不能写入或复用标记，恢复后同操作仍可消费（issue #429）', () => {
+      const { root, markerPath, run } = prepareMarkerUnit()
+      const bin = resolve(root, 'bin')
+      mkdirSync(bin)
+      writeExecutable(resolve(bin, 'ps'), 'exit 1')
+      vi.stubEnv('PATH', `${bin}:${process.env.PATH}`)
+      expect(run('write').status).toBe(0)
+      expect(existsSync(markerPath)).toBe(false)
+      vi.unstubAllEnvs()
+      expect(run('write').status).toBe(0)
+      vi.stubEnv('PATH', `${bin}:${process.env.PATH}`)
+      expect(run('check').status).toBe(1)
+      vi.unstubAllEnvs()
+      expect(run('check').status).toBe(0)
+    })
+
+    it('没有进程身份的旧版同树标记不能复用（issue #429）', () => {
+      const { markerPath, run } = prepareMarkerUnit()
+      expect(run('write').status).toBe(0)
+      const [tree, time] = readFileSync(markerPath, 'utf8').split('\n')
+      writeFileSync(markerPath, `${tree}\n${time}\n`)
+      expect(run('check').status).toBe(1)
+    })
+  },
+)
+
+describe('标记时间、内容与写入边界', { timeout: 30_000 }, () => {
+  it('标记缺失、过期、未来时间戳或内容损坏时 check 失败（执行门禁）', () => {
+    const { markerPath, run } = prepareMarkerUnit()
+    expect(run('check').status).toBe(1)
+    expect(run('write').status).toBe(0)
+    // 回拨标记时间戳至 epoch 1：超出默认时效（600s）即过期，需重新门禁
+    const [tree, , owner] = readFileSync(markerPath, 'utf8').split('\n')
+    writeFileSync(markerPath, `${tree}\n1\n${owner}\n`)
+    expect(run('check').status).toBe(1)
+
+    // 未来时间戳（时钟回拨后遗留）是异常态：负年龄不得判为新鲜
+    // （评审 4120428509），否则整个回拨区间内标记都可被消费
+    const future = String(Math.floor(Date.now() / 1000) + 3600)
+    writeFileSync(markerPath, `${tree}\n${future}\n${owner}\n`)
+    expect(run('check').status).toBe(1)
+
+    writeFileSync(markerPath, `${tree}\nnot-a-number\n${owner}\n`)
+    expect(run('check').status).toBe(1)
+  })
+
+  it('标记路径不可写时 write 静默失败，不阻塞门禁已通过的操作（评审 4120128565）', () => {
+    const { root, run } = prepareMarkerUnit()
+    // 路径被目录占据：标记重定向必然失败，write 仍须以 0 退出
+    const blockedPath = resolve(root, 'marker-as-directory')
+    mkdirSync(blockedPath)
+    expect(run('write', { markerPath: blockedPath }).status).toBe(0)
+  })
+})
 
 describe(
   '提交钩子测试沙箱根隔离（issue #405 慢路径门禁）',
@@ -377,104 +437,138 @@ describe(
       expect(result.status).toBe(0)
       expect(scenario.scannerRuns()).toBe(1)
     })
-
-    it('门禁通过的提交在待物化记录中留下可他验条目：记录树等于提交树，且不物化、不弄脏版本化文件（issue #355）', () => {
-      const scenario = prepareHookScenario()
-      const result = scenario.git(['commit', '--allow-empty', '-m', 'x'])
-      expect(result.status).toBe(0)
-
-      const lines = readFileSync(
-        resolve(scenario.root, 'gate-pending.jsonl'),
-        'utf8',
-      )
-        .split('\n')
-        .filter(Boolean)
-      expect(lines).toHaveLength(1)
-      const record = JSON.parse(lines[0] ?? '')
-      // 核验路径：读者用 git rev-parse <commit>^{tree} 对照记录的 tree 即可
-      // 复核「该提交内容通过过完整门禁」；记录行在推送物化后进入版本化文件
-      const commitTree = scenario
-        .git(['rev-parse', 'HEAD^{tree}'])
-        .stdout.trim()
-      expect(record.tree).toBe(commitTree)
-      expect(record.head).toMatch(/^[0-9a-f]{40}$/)
-      expect(record.qualityGate).toBe('OK')
-      expect(record.newCodeUnresolvedIssues).toBe(0)
-      // 提交创建路径绝不触碰版本化文件（PR #415 评审 5338815626）
-      expect(existsSync(resolve(scenario.root, 'gate-history.jsonl'))).toBe(
-        false,
-      )
-    })
-
-    it('推送门禁通过后物化待物化行到版本化文件并清空（issue #355）', () => {
-      const scenario = prepareHookScenario()
-      expect(scenario.git(['commit', '--allow-empty', '-m', 'x']).status).toBe(
-        0,
-      )
-      // 裸远端触发 pre-push：门禁后再物化
-      const remote = resolve(scenario.root, 'origin.git')
-      expect(scenario.git(['init', '--bare', '-q', remote]).status).toBe(0)
-      expect(scenario.git(['remote', 'add', 'origin', remote]).status).toBe(0)
-
-      const push = scenario.git(['push', '-u', 'origin', 'main'])
-      expect(push.status).toBe(0)
-      // 提交一次 + 推送一次，各恰一次完整门禁
-      expect(scenario.scannerRuns()).toBe(2)
-      const history = readFileSync(
-        resolve(scenario.root, 'gate-history.jsonl'),
-        'utf8',
-      )
-        .split('\n')
-        .filter(Boolean)
-      expect(history).toHaveLength(2)
-      for (const line of history) {
-        expect(JSON.parse(line).qualityGate).toBe('OK')
-      }
-      expect(
-        readFileSync(resolve(scenario.root, 'gate-pending.jsonl'), 'utf8'),
-      ).toBe('')
-    })
-
-    it('携带记录行的相邻提交可整体重放：重放不给版本化文件留未暂存改动（PR #415 评审 5338815626）', () => {
-      const scenario = prepareHookScenario()
-      // 版本化记录文件指进仓库内成为被跟踪文件，模拟机制的常态路径：
-      // 后一笔提交携带前一笔的记录行入库
-      const trackedHistory = resolve(scenario.root, 'tracked-history.jsonl')
-      const git = (args: string[]) =>
-        spawnSync('git', args, {
-          cwd: scenario.root,
-          encoding: 'utf8',
-          env: {
-            ...scenario.env,
-            PLOTWEAVE_GATE_HISTORY_PATH: trackedHistory,
-          },
-        })
-      writeFileSync(trackedHistory, '{"seed":1}\n')
-      expect(git(['add', 'tracked-history.jsonl']).status).toBe(0)
-      expect(git(['commit', '-m', 'c1']).status).toBe(0)
-      appendFileSync(trackedHistory, '{"seed":2}\n')
-      expect(git(['add', 'tracked-history.jsonl']).status).toBe(0)
-      expect(git(['commit', '-m', 'c2']).status).toBe(0)
-
-      // 重放两笔（--force-rebase 强制重建提交以触发提交创建钩子；onto
-      // 为原父提交时 git 会快进复用原提交、不经钩子）：每笔各一次完整
-      // 门禁；记录只进待物化文件，重放不得因版本化文件的未暂存改动中止
-      const rebase = git(['rebase', '--force-rebase', 'HEAD~2'])
-      expect(rebase.status).toBe(0)
-      expect(rebase.stderr).not.toContain('would be overwritten')
-      expect(scenario.scannerRuns()).toBe(4)
-      expect(
-        git(['status', '--porcelain', '--', 'tracked-history.jsonl']).stdout,
-      ).toBe('')
-      expect(
-        readFileSync(trackedHistory, 'utf8').split('\n').filter(Boolean),
-      ).toEqual(['{"seed":1}', '{"seed":2}'])
-    })
   },
 )
 
+describe('提交与推送的门禁结论记录（issue #355）', { timeout: 30_000 }, () => {
+  it('门禁通过的提交在待物化记录中留下可他验条目：记录树等于提交树，且不物化、不弄脏版本化文件（issue #355）', () => {
+    const scenario = prepareHookScenario()
+    const result = scenario.git(['commit', '--allow-empty', '-m', 'x'])
+    expect(result.status).toBe(0)
+
+    const lines = readFileSync(
+      resolve(scenario.root, 'gate-pending.jsonl'),
+      'utf8',
+    )
+      .split('\n')
+      .filter(Boolean)
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0] ?? '')
+    // 核验路径：读者用 git rev-parse <commit>^{tree} 对照记录的 tree 即可
+    // 复核「该提交内容通过过完整门禁」；记录行在推送物化后进入版本化文件
+    const commitTree = scenario.git(['rev-parse', 'HEAD^{tree}']).stdout.trim()
+    expect(record.tree).toBe(commitTree)
+    expect(record.head).toMatch(/^[0-9a-f]{40}$/)
+    expect(record.qualityGate).toBe('OK')
+    expect(record.newCodeUnresolvedIssues).toBe(0)
+    // 提交创建路径绝不触碰版本化文件（PR #415 评审 5338815626）
+    expect(existsSync(resolve(scenario.root, 'gate-history.jsonl'))).toBe(false)
+  })
+
+  it('推送门禁通过后物化待物化行到版本化文件并清空（issue #355）', () => {
+    const scenario = prepareHookScenario()
+    expect(scenario.git(['commit', '--allow-empty', '-m', 'x']).status).toBe(0)
+    // 裸远端触发 pre-push：门禁后再物化
+    const remote = resolve(scenario.root, 'origin.git')
+    expect(scenario.git(['init', '--bare', '-q', remote]).status).toBe(0)
+    expect(scenario.git(['remote', 'add', 'origin', remote]).status).toBe(0)
+
+    const push = scenario.git(['push', '-u', 'origin', 'main'])
+    expect(push.status).toBe(0)
+    // 提交一次 + 推送一次，各恰一次完整门禁
+    expect(scenario.scannerRuns()).toBe(2)
+    const history = readFileSync(
+      resolve(scenario.root, 'gate-history.jsonl'),
+      'utf8',
+    )
+      .split('\n')
+      .filter(Boolean)
+    expect(history).toHaveLength(2)
+    for (const line of history) {
+      expect(JSON.parse(line).qualityGate).toBe('OK')
+    }
+    expect(
+      readFileSync(resolve(scenario.root, 'gate-pending.jsonl'), 'utf8'),
+    ).toBe('')
+  })
+})
+
+describe('门禁结论记录在重放时的隔离（PR #415）', { timeout: 30_000 }, () => {
+  it('携带记录行的相邻提交可整体重放：重放不给版本化文件留未暂存改动（PR #415 评审 5338815626）', () => {
+    const scenario = prepareHookScenario()
+    // 版本化记录文件指进仓库内成为被跟踪文件，模拟机制的常态路径：
+    // 后一笔提交携带前一笔的记录行入库
+    const trackedHistory = resolve(scenario.root, 'tracked-history.jsonl')
+    const git = (args: string[]) =>
+      spawnSync('git', args, {
+        cwd: scenario.root,
+        encoding: 'utf8',
+        env: {
+          ...scenario.env,
+          PLOTWEAVE_GATE_HISTORY_PATH: trackedHistory,
+        },
+      })
+    writeFileSync(trackedHistory, '{"seed":1}\n')
+    expect(git(['add', 'tracked-history.jsonl']).status).toBe(0)
+    expect(git(['commit', '-m', 'c1']).status).toBe(0)
+    appendFileSync(trackedHistory, '{"seed":2}\n')
+    expect(git(['add', 'tracked-history.jsonl']).status).toBe(0)
+    expect(git(['commit', '-m', 'c2']).status).toBe(0)
+
+    // 重放两笔（--force-rebase 强制重建提交以触发提交创建钩子；onto
+    // 为原父提交时 git 会快进复用原提交、不经钩子）：每笔各一次完整
+    // 门禁；记录只进待物化文件，重放不得因版本化文件的未暂存改动中止
+    const rebase = git(['rebase', '--force-rebase', 'HEAD~2'])
+    expect(rebase.status).toBe(0)
+    expect(rebase.stderr).not.toContain('would be overwritten')
+    expect(scenario.scannerRuns()).toBe(4)
+    expect(
+      git(['status', '--porcelain', '--', 'tracked-history.jsonl']).stdout,
+    ).toBe('')
+    expect(
+      readFileSync(trackedHistory, 'utf8').split('\n').filter(Boolean),
+    ).toEqual(['{"seed":1}', '{"seed":2}'])
+  })
+})
+
+describe('提交中止后的操作隔离（issue #429）', { timeout: 30_000 }, () => {
+  it('无暂存内容中止后，同树 --no-verify 提交仍执行完整门禁（issue #429）', () => {
+    const scenario = prepareHookScenario()
+    const before = scenario.git(['rev-parse', 'HEAD']).stdout.trim()
+    const aborted = scenario.git(['commit', '-m', 'nothing staged'])
+    expect(aborted.status).not.toBe(0)
+    expect(scenario.git(['rev-parse', 'HEAD']).stdout.trim()).toBe(before)
+    expect(scenario.scannerRuns()).toBe(1)
+
+    const next = scenario.git([
+      'commit',
+      '--allow-empty',
+      '--no-verify',
+      '-m',
+      'next operation',
+    ])
+    expect(next.status).toBe(0)
+    expect(scenario.scannerRuns()).toBe(2)
+  })
+
+  it('编辑器中止后，同树后续提交各自执行一次完整门禁（issue #429）', () => {
+    const scenario = prepareHookScenario()
+    scenario.env.GIT_EDITOR = 'false'
+    const before = scenario.git(['rev-parse', 'HEAD']).stdout.trim()
+    expect(scenario.git(['commit', '--allow-empty']).status).not.toBe(0)
+    expect(scenario.git(['rev-parse', 'HEAD']).stdout.trim()).toBe(before)
+    expect(scenario.scannerRuns()).toBe(1)
+    expect(existsSync(resolve(scenario.root, 'gate-tree.marker'))).toBe(false)
+
+    expect(scenario.git(['commit', '--allow-empty', '-m', 'next']).status).toBe(
+      0,
+    )
+    expect(scenario.scannerRuns()).toBe(2)
+  })
+})
+
 describe(
-  '门禁绕过与失败路径（--no-verify、标记消费、失败阻止、rebase）',
+  '门禁绕过防护（--no-verify 与单次标记消费）',
   { timeout: 30_000 },
   () => {
     it('git commit --no-verify：pre-commit 被跳过但 prepare-commit-msg 仍执行门禁（1 次）', () => {
@@ -529,21 +623,23 @@ describe(
       expect(second.status).toBe(0)
       expect(scenario.scannerRuns()).toBe(2)
     })
-
-    it('门禁失败（Quality Gate 非 OK）时 revert 被阻止且不产生提交', () => {
-      const scenario = prepareHookScenario('ERROR')
-      const before = scenario.git(['rev-list', '--count', 'HEAD'])
-      const result = scenario.git(['revert', '--no-edit', 'HEAD'])
-      expect(result.status).not.toBe(0)
-      const after = scenario.git(['rev-list', '--count', 'HEAD'])
-      expect(after.stdout.trim()).toBe(before.stdout.trim())
-    })
-
-    it('git rebase 重放两个提交：每个重放提交各一次完整门禁（合计 2 次）', () => {
-      const scenario = prepareHookScenario()
-      const result = scenario.git(['rebase', 'main', 'topic'])
-      expect(result.status).toBe(0)
-      expect(scenario.scannerRuns()).toBe(2)
-    })
   },
 )
+
+describe('门禁失败阻止与 rebase 回退路径', { timeout: 30_000 }, () => {
+  it('门禁失败（Quality Gate 非 OK）时 revert 被阻止且不产生提交', () => {
+    const scenario = prepareHookScenario('ERROR')
+    const before = scenario.git(['rev-list', '--count', 'HEAD'])
+    const result = scenario.git(['revert', '--no-edit', 'HEAD'])
+    expect(result.status).not.toBe(0)
+    const after = scenario.git(['rev-list', '--count', 'HEAD'])
+    expect(after.stdout.trim()).toBe(before.stdout.trim())
+  })
+
+  it('git rebase 重放两个提交：每个重放提交各一次完整门禁（合计 2 次）', () => {
+    const scenario = prepareHookScenario()
+    const result = scenario.git(['rebase', 'main', 'topic'])
+    expect(result.status).toBe(0)
+    expect(scenario.scannerRuns()).toBe(2)
+  })
+})

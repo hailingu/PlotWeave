@@ -1,10 +1,10 @@
 #!/bin/sh
 # 非快进自动合并提交不触发 pre-commit（issue #404）：在 pre-merge-commit
 # 执行仓库统一的 SonarQube 零问题门禁，通过后记录树标记，供同一次操作
-# 中后触发的 prepare-commit-msg 去重（合并仍恰一次完整门禁）。
+# 中同一 Git 进程后触发的 prepare-commit-msg 去重（issues #404/#429）。
 
 set -eu
 
 hook_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 "$hook_directory/../scripts/sonar-quality-gate.sh"
-"$hook_directory/../scripts/gate-tree-marker.sh" write
+"$hook_directory/../scripts/gate-tree-marker.sh" write "${PPID:-}"

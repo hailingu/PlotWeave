@@ -3,7 +3,7 @@
 # commit-msg（issue #404）：在其唯一的前置钩子 prepare-commit-msg 补上
 # 仓库统一的 SonarQube 零问题门禁。同一次提交操作内 pre-commit /
 # pre-merge-commit 刚过检的树经 gate-tree-marker 去重——普通 git commit
-# 与合并不重复跑门禁；无新鲜同树标记即执行完整门禁（--no-verify 跳过
+# 与合并不重复跑门禁；无新鲜同树、同 Git 进程标记即执行完整门禁（#429；--no-verify 跳过
 # pre-commit 时由此兜底，提交侧不再能绕过）。本钩子只消费标记、回退
 # 门禁通过后不写标记：同操作内没有下游消费者，写了只会让后续操作
 # （如又一次同树 --no-verify 提交）复用（评审 4120239723）。
@@ -11,7 +11,7 @@
 set -eu
 
 hook_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-if "$hook_directory/../scripts/gate-tree-marker.sh" check; then
+if "$hook_directory/../scripts/gate-tree-marker.sh" check "${PPID:-}"; then
   exit 0
 fi
 "$hook_directory/../scripts/sonar-quality-gate.sh"

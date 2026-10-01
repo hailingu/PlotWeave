@@ -1,9 +1,9 @@
 #!/bin/sh
 # 每次创建提交前执行仓库统一的 SonarQube 零问题门禁；通过后记录树标记，
-# 供同一次提交操作中后触发的 prepare-commit-msg 去重（issue #404）。
+# 供同一 Git 进程后触发的 prepare-commit-msg 去重（issues #404/#429）。
 
 set -eu
 
 hook_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 "$hook_directory/../scripts/sonar-quality-gate.sh"
-"$hook_directory/../scripts/gate-tree-marker.sh" write
+"$hook_directory/../scripts/gate-tree-marker.sh" write "${PPID:-}"
