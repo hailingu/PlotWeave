@@ -762,6 +762,62 @@ it('不将忽略的构建产物、锁文件、图片及根目录外文件当作�
 })
 
 it.each([
+  'scripts/probe-tool',
+  'src/probe.snap',
+  'src-tauri/probe.html',
+] as const)(
+  '未登记后缀或无后缀的 %s 不能被静默跳过，移除后恢复（#466）',
+  (path) => {
+    const root = checkerFixture()
+    write(root, path, '\n'.repeat(3000))
+    const rejected = runChecker(root)
+    expect(rejected.status).toBe(1)
+    // SIZE_UNCLASSIFIED_FILE 契约：诊断必须点名路径而非静默放行。
+    expect(rejected.stderr).toContain('SIZE_UNCLASSIFIED_FILE')
+    expect(rejected.stderr).toContain(path)
+    rmSync(resolve(root, path))
+    expect(runChecker(root).status).toBe(0)
+  },
+)
+
+it('仅存在于有效索引的未分类文件同样 fail-closed（#466）', () => {
+  const root = checkerFixture()
+  write(root, 'scripts/probe-tool', 'x\n')
+  git(root, ['add', '--', 'scripts/probe-tool'])
+  rmSync(resolve(root, 'scripts/probe-tool'))
+  const rejected = runChecker(root)
+  expect(rejected.status).toBe(1)
+  expect(rejected.stderr).toContain('SIZE_UNCLASSIFIED_FILE')
+  expect(rejected.stderr).toContain('scripts/probe-tool')
+})
+
+it('登记的排除类别不计行数，但在完成记录的 excluded 计数中可见（#466）', () => {
+  const root = checkerFixture()
+  write(root, 'src/icon.png', '\n'.repeat(2000))
+  const result = runChecker(root)
+  expect(result.status).toBe(0)
+  const records = result.stdout
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line))
+  expect(records).toContainEqual(
+    expect.objectContaining({
+      code: 'SIZE_CHECK_COMPLETE',
+      excluded: 2,
+      passed: true,
+    }),
+  )
+})
+
+it('非 UTF-8 的未分类路径以十六进制诊断并 fail-closed（#466）', () => {
+  const root = checkerFixture()
+  indexBytePath(root, Buffer.from('src/tool-\xff', 'latin1'))
+  const rejected = runChecker(root)
+  expect(rejected.status).toBe(1)
+  expect(rejected.stderr).toContain('SIZE_UNCLASSIFIED_FILE')
+})
+
+it.each([
   '{',
   '{}',
   '{"version":2,"files":{}}',

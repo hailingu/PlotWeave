@@ -7,11 +7,21 @@ functions/closures is a separate follow-up, not part of this implementation.
 
 ## Contract
 
-`npm run check:size` checks maintained source files under `src/`,
-`src-tauri/`, and `scripts/`. Supported source suffixes are `.ts`, `.tsx`,
-`.js`, `.mjs`, `.cjs`, `.css`, `.rs`, and `.sh`. New languages must extend
-this inventory together with their Scope Routing row. Assets, lockfiles,
-configuration and generated ignored output are not maintained source code.
+`npm run check:size` classifies every Git-enumerated path under `src/`,
+`src-tauri/`, and `scripts/` (issue #466). A maintained source suffix —
+`.ts`, `.tsx`, `.js`, `.mjs`, `.cjs`, `.css`, `.rs`, `.sh` — is measured
+against its cap; new languages must extend this inventory together with
+their Scope Routing row. A suffix explicitly registered in the checker's
+exclusion inventory — `.png`, `.icns`, `.ico`, `.xml`, `.json`, `.toml`,
+`.lock` (image/icon assets, platform manifests and policy configuration
+including the guard's own baseline, lockfiles) — is not measured but is
+counted in the completion record's `excluded`. Every other suffix,
+including no suffix at all, fails closed with one `SIZE_UNCLASSIFIED_FILE`
+diagnostic per path (a path whose bytes cannot round-trip through UTF-8 is
+shown in hex); removing, renaming, or registering the path restores success.
+"Not checked" is therefore always either a registered, counted exclusion or
+a failing diagnostic. Generated ignored output remains outside enumeration
+through Git's ignore rules.
 Git supplies tracked and non-ignored untracked paths, including staged additions.
 NUL-delimited Git records retain their original path bytes until maintained-source
 classification. Maintained paths must round-trip through UTF-8 without replacement;
@@ -47,7 +57,10 @@ failures and unreadable or non-regular source inputs fail with
 `SIZE_INPUT_ERROR`; unresolved source index stages also fail. Regular index
 modes `100644` and `100755` are supported. Size diagnostics identify their
 content source with `tree: "worktree"` or `tree: "index"`; the completion
-record's `checked` counts distinct paths rather than content copies.
+record's `checked` counts distinct measured source paths rather than
+content copies, and its `excluded` counts distinct registered non-source
+paths across both trees. Unclassified paths are reported as
+`SIZE_UNCLASSIFIED_FILE` and are never counted as checked.
 Diagnostics are JSON lines; success exits 0, failures 1.
 The checker never updates its baseline or source inputs automatically.
 Indexed source and policy are enumerated together; deduplicated blob objects
@@ -112,6 +125,8 @@ they do not assert line counts of versioned production files or prose.
 | Many indexed blobs, repeated objects, binary bytes and framing-like text | Batch-read unchanged content, measure LF | Same per-path results; no extra aggregate byte ceiling | Batching changes transport cost, not source/policy semantics | Binary, duplicate and aggregate-size fixtures; CLI timing and CI |
 | Indexed object is missing or is not a blob | Read batch metadata | `SIZE_INPUT_ERROR` | Incomplete object input cannot be measured as empty source | Missing/non-blob object fixtures |
 | Rust-only change checked from `src-tauri/` | Run the local route; grow a Rust file past 800 LF, then repair and restage | Reject oversized working/indexed content; pass after both copies comply | Every local source route checks file caps before completion | Disposable npm-prefix Rust fixture and complete Rust route passed; see Rust Local Route Follow-up |
+| Under-tree path with a registered non-source suffix (`png` `icns` `ico` `xml` `json` `toml` `lock`), tracked, untracked or index-only, possibly non-UTF-8 | Enumerate and classify | Not measured; counted in the completion record's `excluded`; run passes | An intentional exclusion is registry-bounded and observable, and classification precedes encoding validation | Exclusion-registry fixtures |
+| Under-tree path with an unregistered suffix or no suffix, in the worktree or only in the effective index, possibly non-UTF-8 | Enumerate and classify | `SIZE_UNCLASSIFIED_FILE` naming the path (hex form for non-UTF-8); exit 1; removal, rename or registration restores success | No Git-enumerated maintained-scope path is silently skipped; unknown categories fail closed | Fail-closed fixtures (worktree, index-only, raw-byte) |
 
 No application/persistence contract changes. The checker is read-only and
 synchronous; concurrent working-tree or index edits during a run are not a
@@ -246,3 +261,35 @@ and diff checks passed. Changed functions and fixture builders remain below
 80 code lines. Documentation received a structured review of the encoding
 contract, both discovery entry points, matrix outcomes and the filesystem gap;
 no automated prose check is configured.
+
+## Suffix Registry Follow-up (Issue #466)
+
+Issue [#466](https://github.com/hailingu/PlotWeave/issues/466) identified
+that discovery filtered enumeration through a closed suffix whitelist
+narrower than the rule text: any other suffix — and any suffix-less
+`scripts/` tool — was silently skipped, and the completion record offered no
+signal about what had not been examined. Discovery now three-way classifies
+every enumerated path in both trees: known source suffixes are measured,
+registered non-source suffixes (`png` `icns` `ico` `xml` `json` `toml`
+`lock`) are skipped but counted in the completion record's `excluded`, and
+anything else fails closed with `SIZE_UNCLASSIFIED_FILE` naming the path
+(hex form when the bytes cannot round-trip through UTF-8). The exclusion
+inventory is deliberately minimal — exactly the categories present in the
+tree — so introducing a new non-source category means extending the registry
+in the same change; the guard's own baseline
+`scripts/file-size-baseline.json` is counted as excluded policy.
+
+Six regression cases first passed incorrectly against the old checker and
+now hold: suffix-less and unknown-suffix probes fail closed in the worktree
+and pass again after removal, an index-only unclassified entry fails closed,
+registered exclusions pass while remaining visible in `excluded`, and a
+raw-byte unclassified index name is diagnosed in hex. Baseline validation
+still accepts only measured source paths. Verification: `npm run check:size`
+reported `{checked: 490, excluded: 57, passed: true}` on this tree; the
+focused suite passed all 69 cases in `scripts/check-file-size.test.ts` and
+`npm test -- scripts` passed all 192 script-suite cases; the shared static
+checks (Prettier, zero-warning ESLint, `typecheck:strict`) passed. The
+482-path counts recorded in the earlier follow-up sections were correct at
+their time of writing; this tree now measures 490 source paths and 57
+excluded paths. Documentation changes received a structured review; no
+automated prose check is configured.
