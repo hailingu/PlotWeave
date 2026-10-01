@@ -187,7 +187,8 @@ fn is_expression_operator(token: Option<&str>) -> bool {
 
 impl ClosureHeaders {
     /// 后缀点/问号附着于值；调用/索引只在值上下文延续，不能吞独立语句。
-    /// 显式返回类型的正文结束后可对闭包值应用后缀；点点范围与 as 转型只在值态延续。
+    /// 显式返回类型的正文结束后可对闭包值应用后缀、二元运算与 as 转型；
+    /// 点点范围与 as 转型只在值态延续。
     /// 语句歧义契约：https://doc.rust-lang.org/reference/statements.html#expression-statements。
     fn body_continues(
         &self,
@@ -206,11 +207,14 @@ impl ClosureHeaders {
             }
             _ => false,
         };
-        if postfix {
-            return !type_header || self.has_closure;
+        // 门控项内带类型头的闭包正文只来自显式返回类型，其后是闭包值（issue #447）。
+        if type_header && !self.has_closure {
+            return false;
         }
-        !type_header
-            && value
+        if postfix {
+            return true;
+        }
+        value
             && !self.statement_control_flow
             && (is_expression_operator(token) || matches!(token, Some("." | "as")))
     }
