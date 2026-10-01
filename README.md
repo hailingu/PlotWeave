@@ -78,7 +78,7 @@ npm run tauri dev  # 启动 Tauri 开发调试（Vite 前端 + Rust 壳）
 常用校验命令：
 
 - 前端：仓库根目录执行 `npm run format:check && npm run lint && npm run build`（`npm run format` 应用 Prettier 格式化）
-- 后端：`src-tauri/` 目录执行 `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test`（`--all-targets` 同时覆盖测试目标）
+- 后端：`src-tauri/` 目录执行 `npm --prefix .. run check:size && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test`（先使用 `.nvmrc` 钉版 Node 检查仓库源码规模；`--all-targets` 同时覆盖测试目标）
 
 ### 提交与推送门禁
 
@@ -96,7 +96,7 @@ npm run tauri dev  # 启动 Tauri 开发调试（Vite 前端 + Rust 壳）
 
 ### PR 持续集成（issue #228）
 
-推送到 `dev` 与面向 `dev` 的 PR 会自动运行 `.github/workflows/ci.yml`（macOS runner，与本机目标平台一致）：frontend（Prettier 格式、ESLint 零警告、构建、前端测试、scripts/.githooks 行测试）与 rust（fmt、clippy `-D warnings`、测试）两个 job 对应 AGENTS.md Scope Routing 各行——每个 PR 都有绑定提交 SHA 的检查记录与失败日志。SonarQube 扫描与覆盖率生成保留在本机门禁（服务在本机，托管 runner 不可达；本地门禁日志即证据保留），CI 不重复也不削弱它。分支保护是否要求这些检查由仓库设置另行决定。
+推送到 `dev` 与面向 `dev` 的 PR 会自动运行 `.github/workflows/ci.yml`（macOS runner，与本机目标平台一致）：frontend（Prettier 格式、ESLint 零警告、严格类型检查、仓库源码规模检查〔包含 Rust〕、构建、前端测试、scripts/.githooks 行测试）与 rust（fmt、clippy `-D warnings`、测试）两个 job 共同执行 AGENTS.md Scope Routing 的检查——每个 PR 都有绑定提交 SHA 的检查记录与失败日志。SonarQube 扫描与覆盖率生成保留在本机门禁（服务在本机，托管 runner 不可达；本地门禁日志即证据保留），CI 不重复也不削弱它。分支保护是否要求这些检查由仓库设置另行决定。
 
 ## 文档与协作
 

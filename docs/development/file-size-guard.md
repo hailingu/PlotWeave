@@ -60,8 +60,13 @@ or removed; no legacy allowance needs retaining. Adding or increasing a
 baseline entry requires review against the original grandfathering rule;
 new violations cannot establish a new baseline.
 
-`scripts/check-static.sh` runs the checker before coverage and Sonar analysis,
-and CI runs `npm run check:size`. The shared script invokes its own checker
+The Rust Scope Routing command starts with `npm --prefix .. run check:size`
+from `src-tauri/`, selecting the repository-root checker before Cargo checks.
+Rust-only changes therefore run the guard during local path verification;
+use the Node version pinned by `.nvmrc`. CI's frontend job runs the repository-wide
+`npm run check:size`, including Rust source, alongside the Rust job's Cargo checks.
+`scripts/check-static.sh` also runs the checker before coverage and Sonar analysis.
+The shared script invokes its own checker
 and baseline against the selected repository root, so the pre-push temporary
 worktree path applies the current gate to the pushed tree as required by #405.
 The shared entry honors `PLOTWEAVE_NODE_BIN`, defaulting to `node` when
@@ -72,7 +77,8 @@ runtime (PR #452, review 5374202683).
 ## Key State And Invariant Matrix
 
 Owners: `scripts/check-file-size.ts` owns size policy; `scripts/check-static.sh`
-owns runtime selection. Entry points: `check:size`, shared static checks,
+owns runtime selection; `AGENTS.md` Scope Routing owns local verification commands.
+Entry points: `check:size`, the Rust local route, shared static checks,
 and CI. Tests use disposable Git repositories and generated fixtures;
 they do not assert line counts of versioned production files or prose.
 
@@ -97,6 +103,7 @@ they do not assert line counts of versioned production files or prose.
 | Indexed baseline is malformed, non-regular, or unmerged | Repair working copy only, check again | `SIZE_INPUT_ERROR` | A working repair cannot hide invalid committed policy | Indexed-baseline failure fixtures |
 | Many indexed blobs, repeated objects, binary bytes and framing-like text | Batch-read unchanged content, measure LF | Same per-path results; no extra aggregate byte ceiling | Batching changes transport cost, not source/policy semantics | Binary, duplicate and aggregate-size fixtures; CLI timing and CI |
 | Indexed object is missing or is not a blob | Read batch metadata | `SIZE_INPUT_ERROR` | Incomplete object input cannot be measured as empty source | Missing/non-blob object fixtures |
+| Rust-only change checked from `src-tauri/` | Run the local route; grow a Rust file past 800 LF, then repair and restage | Reject oversized working/indexed content; pass after both copies comply | Every local source route checks file caps before completion | Disposable npm-prefix Rust fixture and complete Rust route passed; see Rust Local Route Follow-up |
 
 No application/persistence contract changes. The checker is read-only and
 synchronous; concurrent working-tree or index edits during a run are not a
@@ -174,3 +181,26 @@ assertions and five-second timeout. All selected matrix rows passed;
 concurrent mutation and function/closure measurement remain the stated gaps.
 The policy and gate-boundary documents received a structured review, with
 no configured automated prose check.
+
+## Rust Local Route Follow-up (Review 5374723419)
+
+The [Rust route review](https://github.com/hailingu/PlotWeave/pull/452#discussion_r4151631059)
+identified a documentation gap: the Rust-only local verification route omitted
+the existing size guard. `AGENTS.md`, the README and the Rust standard now start
+that route with `npm --prefix .. run check:size` from `src-tauri/`, before Cargo
+formatting, linting and tests. CI already checks every Rust source through the
+frontend job's repository-wide guard; the documentation makes that ownership
+explicit. No checker or workflow implementation changed.
+
+Verification: a disposable Git fixture invoked the npm-prefix command from
+`src-tauri/`; 800 LF passed, 801 LF failed, an unstaged repair still rejected
+the oversized indexed copy, and restaging the repair restored success.
+The complete command
+`npm --prefix .. run check:size && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test`
+passed on the repository (482 source paths, 594 library tests plus integration
+and native probes). The first sandboxed Cargo run could not bind loopback ports;
+the same command passed when local test ports were permitted.
+The new matrix row passed; the earlier concurrency and executable-unit gaps
+remain unchanged. The documentation received a structured review of command
+directories, tool prerequisites, guard ownership and cross-references; there
+is no configured automated prose check. Formatting and diff checks passed.
