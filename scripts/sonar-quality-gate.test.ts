@@ -9,7 +9,7 @@ import {
 import { tmpdir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const repositoryRoot = resolve(import.meta.dirname, '..')
 const temporaryDirectories: string[] = []
@@ -53,6 +53,7 @@ type GateRun = {
   curlStdin: string
   history: string
   log: string
+  marker: string
   pending: string
   scannerToken: string
   status: number | null
@@ -77,7 +78,6 @@ function readTextFileBestEffort(path: string): string {
   }
 }
 
-/** 在隔离的外部依赖边界下执行真实门禁脚本或 Git hook。 */
 /** runGate 的命令替身路径集（sandbox 内固定布局）。 */
 interface GateStubPaths {
   readonly logPath: string
@@ -87,6 +87,7 @@ interface GateStubPaths {
   readonly rustCoveragePath: string
   readonly historyPath: string
   readonly pendingPath: string
+  readonly markerPath: string
   readonly lockPath: string
   readonly reportPath: string
   readonly npmPath: string
@@ -263,6 +264,7 @@ function gateEnvironment(
     PLOTWEAVE_CURL_BIN: paths.curlPath,
     PLOTWEAVE_COVERAGE_REPORT_PATH: paths.coveragePath,
     PLOTWEAVE_GATE_HISTORY_PATH: paths.historyPath,
+    PLOTWEAVE_GATE_MARKER_PATH: paths.markerPath,
     PLOTWEAVE_GATE_PENDING_PATH: paths.pendingPath,
     PLOTWEAVE_RUST_COVERAGE_REPORT_PATH: paths.rustCoveragePath,
     PLOTWEAVE_SONAR_LOCK_DIRECTORY: paths.lockPath,
@@ -299,6 +301,7 @@ function gateEnvironment(
   return environment
 }
 
+/** 在隔离的外部依赖边界下执行真实门禁脚本或 Git hook。 */
 function runGate(target: string, options: GateOptions = {}): GateRun {
   const sandbox = mkdtempSync(resolve(tmpdir(), 'plotweave-sonar-gate-'))
   temporaryDirectories.push(sandbox)
@@ -311,6 +314,7 @@ function runGate(target: string, options: GateOptions = {}): GateRun {
     rustCoveragePath: resolve(sandbox, 'rust-coverage', 'lcov-rust.info'),
     historyPath: resolve(sandbox, 'gate-history.jsonl'),
     pendingPath: resolve(sandbox, 'gate-pending.jsonl'),
+    markerPath: resolve(sandbox, 'gate-tree.marker'),
     lockPath: resolve(sandbox, 'sonar-gate.lock'),
     reportPath: resolve(sandbox, '.scannerwork', 'report-task.txt'),
     npmPath: resolve(sandbox, 'bin', 'npm'),
@@ -348,6 +352,7 @@ function runGate(target: string, options: GateOptions = {}): GateRun {
     }),
     history: readFileSync(paths.historyPath, { encoding: 'utf8' }),
     log: readFileSync(paths.logPath, { encoding: 'utf8', flag: 'a+' }),
+    marker: readTextFileBestEffort(paths.markerPath),
     pending: readTextFileBestEffort(paths.pendingPath),
     scannerToken: readFileSync(paths.scannerTokenPath, {
       encoding: 'utf8',
@@ -360,6 +365,7 @@ function runGate(target: string, options: GateOptions = {}): GateRun {
 }
 
 afterEach(() => {
+  vi.unstubAllEnvs()
   for (const directory of temporaryDirectories.splice(0)) {
     rmSync(directory, { recursive: true, force: true })
   }
@@ -628,6 +634,35 @@ describe('.githooks/pre-commit', () => {
     expect(result.log).toContain('npm run test:coverage')
     expect(`${result.stdout}${result.stderr}`).toContain('1')
   })
+})
+
+describe('门禁测试标记隔离（issue #428）', { timeout: 30_000 }, () => {
+  it.each([
+    ['pre-commit', 0],
+    ['pre-merge-commit', 0],
+    ['pre-commit', 1],
+    ['pre-merge-commit', 1],
+  ] as const)(
+    '%s 在新增未解决问题数为 %i 时只使用本次沙箱的标记路径',
+    (hook, unresolvedIssues) => {
+      const host = mkdtempSync(resolve(tmpdir(), 'plotweave-host-marker-'))
+      temporaryDirectories.push(host)
+      const hostMarker = resolve(host, 'gate-tree.marker')
+      writeFileSync(hostMarker, 'existing host marker\n')
+      vi.stubEnv('PLOTWEAVE_GATE_MARKER_PATH', hostMarker)
+
+      const result = runGate(`.githooks/${hook}`, { unresolvedIssues })
+
+      expect(readFileSync(hostMarker, 'utf8')).toBe('existing host marker\n')
+      if (unresolvedIssues === 0) {
+        expect(result.status).toBe(0)
+        expect(result.marker).toMatch(/^[0-9a-f]{40}\n\d+\n\d+:.+\n$/)
+      } else {
+        expect(result.status).not.toBe(0)
+        expect(result.marker).toBe('')
+      }
+    },
+  )
 })
 
 describe(
