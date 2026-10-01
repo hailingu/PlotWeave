@@ -107,8 +107,9 @@ truth for the key set), with a comment.
 implemented.) ESLint parses production source with full type information
 (`parserOptions.projectService` bound to `tsconfig.json`) and enforces
 `@typescript-eslint/no-floating-promises` and
-`@typescript-eslint/no-misused-promises` — the fire-and-forget convention
-below is executed by the linter instead of review alone. `npm run lint` and
+`@typescript-eslint/no-misused-promises` at `error` severity — the
+fire-and-forget convention below is executed by the linter instead of review
+alone. `npm run lint` and
 `scripts/check-static.sh` run it with zero-warning semantics, so the local
 Git gate, the Sonar gate, and CI all reject violations.
 
@@ -127,6 +128,18 @@ Git gate, the Sonar gate, and CI all reject violations.
   above; enabling there is a separate batch, issue #357).
 - The wider type-aware families (`recommendedTypeChecked`, `no-unsafe-*`)
   stay un-enabled pending a zero-warning evaluation (issue #357).
+
+The permanent configuration guard
+[`scripts/eslint-type-aware.test.ts`](../../scripts/eslint-type-aware.test.ts)
+(issue [#437](https://github.com/hailingu/PlotWeave/issues/437), implemented)
+uses ESLint's `calculateConfigForFile` API to inspect the effective merged
+configuration for root and nested production TS/TSX paths. It requires
+`projectService` to be enabled and both Promise rules to remain at `error`
+severity, and verifies that test files, contract probes, and tools outside
+`src/` retain the non-type-aware baseline. These path probes require no
+temporary source files. Removing or downgrading the block, disabling the
+type service, or changing these scope boundaries makes `npm test` fail;
+the guard does not assert configuration source text or documentation prose.
 
 ### Quality Report Classification
 
