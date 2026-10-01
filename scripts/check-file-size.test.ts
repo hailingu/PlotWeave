@@ -187,6 +187,103 @@ function runChecker(root: string, env: NodeJS.ProcessEnv = {}) {
   )
 }
 
+/** 用当前脚本和政策检查另一棵 Git 树；只隔离格式、lint 与类型工具的成本。 */
+function runSelectedTree(policyRoot: string, selectedRoot: string) {
+  const script = 'scripts/check-static.sh'
+  copyFileSync(resolve(repositoryRoot, script), resolve(policyRoot, script))
+  const npm = write(policyRoot, 'bin/npm', '#!/bin/sh\nexit 0\n')
+  chmodSync(npm, 0o755)
+  return spawnSync('sh', [resolve(policyRoot, script)], {
+    cwd: selectedRoot,
+    encoding: 'utf8',
+    env: {
+      ...environment(),
+      PLOTWEAVE_GATE_REPOSITORY_ROOT: selectedRoot,
+      PLOTWEAVE_NPM_BIN: npm,
+    },
+  })
+}
+
+it.each([
+  ['absent', 0, undefined],
+  ['within-cap', 800, undefined],
+  ['smaller-legacy', 850, 850],
+] as const)(
+  '当前登记不能使历史树 %s 失效（评审 5379198759）',
+  (_, lines, count) => {
+    // 回归触发：把当前政策的精确锚定要求施加到历史树，会误报 stale/drift。
+    const current = checkerFixture({ 'src/legacy.ts': 900 })
+    write(current, 'src/legacy.ts', '\n'.repeat(900))
+    git(current, [
+      'add',
+      '--',
+      'src/legacy.ts',
+      'scripts/file-size-baseline.json',
+    ])
+    const historical = checkerFixture(
+      count === undefined ? {} : { 'src/legacy.ts': count },
+    )
+    if (lines > 0) write(historical, 'src/legacy.ts', '\n'.repeat(lines))
+    git(historical, ['add', '--', 'scripts'])
+    if (lines > 0) git(historical, ['add', '--', 'src/legacy.ts'])
+    const result = runSelectedTree(current, historical)
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.stdout).toContain('SIZE_CHECK_COMPLETE')
+  },
+)
+
+it('历史树自己的失效登记仍被拒绝，移除后恢复（评审 5379198759）', () => {
+  // 不得因跨树应用当前政策而跳过历史树自己的登记锚定。
+  const current = checkerFixture({ 'src/current.ts': 900 })
+  write(current, 'src/current.ts', '\n'.repeat(900))
+  git(current, ['add', '--', 'src', 'scripts'])
+  const historical = checkerFixture({ 'src/deleted.ts': 900 })
+  git(historical, ['add', '--', 'scripts'])
+  const rejected = runSelectedTree(current, historical)
+  expect(rejected.status).toBe(1)
+  const findings = rejected.stderr
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line))
+  expect(findings).toContainEqual({
+    code: 'SIZE_BASELINE_STALE',
+    path: 'src/deleted.ts',
+    scope: 'index',
+    reason: 'unindexed',
+  })
+  write(
+    historical,
+    'scripts/file-size-baseline.json',
+    JSON.stringify({ version: 1, files: {} }),
+  )
+  git(historical, ['add', '--', 'scripts/file-size-baseline.json'])
+  expect(runSelectedTree(current, historical).status).toBe(0)
+})
+
+it('历史树仍受当前与索引政策的较严额度约束（评审 5379198759）', () => {
+  // 回归触发：忽略当前登记的锚定时，也误把其额度上限忽略。
+  const current = checkerFixture({ 'src/legacy.ts': 850 })
+  write(current, 'src/legacy.ts', '\n'.repeat(850))
+  git(current, ['add', '--', 'src', 'scripts'])
+  const historical = checkerFixture({ 'src/legacy.ts': 900 })
+  write(historical, 'src/legacy.ts', '\n'.repeat(900))
+  git(historical, ['add', '--', 'src', 'scripts'])
+  const rejected = runSelectedTree(current, historical)
+  expect(rejected.status).toBe(1)
+  const findings = rejected.stderr
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line))
+  expect(findings).toContainEqual(
+    expect.objectContaining({
+      code: 'SIZE_LIMIT_EXCEEDED',
+      path: 'src/legacy.ts',
+      tree: 'index',
+      limit: 850,
+    }),
+  )
+})
+
 it.each([
   ['src/example.ts', 800],
   ['src/view.tsx', 800],

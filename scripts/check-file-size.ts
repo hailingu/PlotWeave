@@ -1,7 +1,7 @@
 /** 静态执行维护源码的文件行数上限与有界祖父条款（issue #432，方案 B）。 */
 import { execFileSync } from 'node:child_process'
 import { Buffer } from 'node:buffer'
-import { lstatSync, readFileSync } from 'node:fs'
+import { lstatSync, readFileSync, realpathSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 /** 每个路径分别保留工作树与索引测量，避免一份内容替另一份放行。 */
@@ -398,6 +398,17 @@ function baselineFindings(
   )
 }
 
+/** 当前登记只在其所属工作树精确锚定；跨树应用时仅作为额度上限（评审 5379198759）。 */
+function currentBaselineFindings(
+  baseline: Map<string, number>,
+  anchors: MeasurementAnchors,
+): BaselineFinding[] {
+  const policyRoot = realpathSync(resolve(import.meta.dirname, '..'))
+  return realpathSync(process.cwd()) === policyRoot
+    ? baselineFindings(baseline, anchors, 'worktree')
+    : []
+}
+
 /** 工作树发现新文件；索引保证暂存版本不能被未暂存修复或删除掩盖。 */
 function* sourceMeasurements(
   working: WorkingDiscovery,
@@ -423,7 +434,7 @@ function main(): void {
   const measurements = [...sourceMeasurements(working, index, blobs)]
   const anchors = measurementAnchors(measurements)
   const findings = [
-    ...baselineFindings(baseline, anchors, 'worktree'),
+    ...currentBaselineFindings(baseline, anchors),
     ...baselineFindings(committedBaseline, anchors, 'index'),
   ]
   for (const finding of findings) console.error(JSON.stringify(finding))
