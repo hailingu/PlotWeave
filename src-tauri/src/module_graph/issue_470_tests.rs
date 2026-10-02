@@ -11,12 +11,18 @@ use super::*;
 /// a.rs 裸 `use std::collections::HashMap;`（rustc 解析到**外部** std），
 /// std.rs 以 `crate::` 指回 a——修复前守卫把 a→std 误判内部边并报出
 /// rustc 不存在的环；修复后 a.rs 零出边、全图零环、std→a 真边保留。
+/// 夹具内容以 `rustc --edition 2021 --crate-type lib` 验证可编译且零
+/// 警告（评审 5390260279：A 须真实定义，否则前置条件「rustc-clean」
+/// 不成立，用例便证明不了假环对可编译代码同样为假）。
 #[test]
 fn root_named_bare_path_stays_external_no_false_cycle() {
     let graph = edges(&[
-        ("lib.rs", "mod std;\nmod a;\n"),
-        ("std.rs", "use crate::a::A;\n"),
-        ("a.rs", "use std::collections::HashMap;\n"),
+        ("lib.rs", "pub mod std;\npub mod a;\n"),
+        ("std.rs", "pub use crate::a::A;\n"),
+        (
+            "a.rs",
+            "use std::collections::HashMap;\npub struct A { pub sizes: HashMap<u8, u8> }\n",
+        ),
     ]);
     assert!(
         graph["a.rs"].is_empty(),
