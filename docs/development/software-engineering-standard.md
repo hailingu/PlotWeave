@@ -5,7 +5,7 @@ repository. Read this file together with every matching language standard.
 Like the root `AGENTS.md`, this file is written in English for agent
 interoperability.
 
-**Last reviewed**: 2026-09-03
+**Last reviewed**: 2026-10-02
 
 ## Purpose And Precedence
 
@@ -22,18 +22,21 @@ choosing one rule over another.
 ## Size And Complexity Guardrails
 
 Size is a review signal, not a substitute for judging cohesion. Crossing a
-review threshold requires an explicit decomposition review. The repository's
+review threshold requires an explicit decomposition review. The file-level
 hard caps in the root [`AGENTS.md`](../../AGENTS.md) (800 physical lines for
-maintained source files, 1800 for test files, 80 code lines for executable
-units — comments excluded) remain
-mandatory; the review thresholds below trigger earlier, discussion-only
-attention.
+maintained source files, 1800 for test files) remain mandatory and are
+automatically enforced. The 80-code-line executable-unit cap — comments
+excluded — is a non-mandatory, review-enforced standard (issue
+[#468](https://github.com/hailingu/PlotWeave/issues/468) owner decision):
+no automated check measures it, none will be created, and a review finding
+over it requires a fix. The review thresholds below trigger earlier,
+discussion-only attention.
 
-| Unit | Decomposition-review threshold | Hard limit (per AGENTS.md) |
+| Unit | Decomposition-review threshold | Cap (per AGENTS.md) |
 | --- | --- | --- |
-| Maintained production source file | More than 600 physical lines | 800 physical lines |
-| Maintained test source file | More than 1,000 physical lines | 1,800 physical lines |
-| Function, method, closure, hook, component, or equivalent executable unit | More than 60 code lines | 80 code lines (comments excluded) |
+| Maintained production source file | More than 600 physical lines | 800 physical lines (automated) |
+| Maintained test source file | More than 1,000 physical lines | 1,800 physical lines (automated) |
+| Function, method, closure, hook, component, or equivalent executable unit | More than 60 code lines | 80 code lines (comments excluded; review-enforced, not automated) |
 | Cyclomatic complexity, when measured by configured tooling | More than 10 | N/A — record and decompose |
 | Executable nesting depth | More than 4 levels | 6 levels |
 
@@ -41,8 +44,14 @@ File caps are enforced by `npm run check:size`, the shared static gate, and
 CI (issue [#432](https://github.com/hailingu/PlotWeave/issues/432)). The
 [File Size Guard](file-size-guard.md) defines source discovery, the bounded
 grandfather baseline, diagnostics, and verification matrix. Executable-unit
-caps, including closures, remain mandatory manual-review checks; option B
-does not implement function parsing or narrow that rule.
+caps, including closures, are non-mandatory, review-enforced standards
+(issue [#468](https://github.com/hailingu/PlotWeave/issues/468) owner
+decision, 2026-10-02): no automated check measures them and no dedicated
+detection tool will be created. When review identifies an executable unit
+above 80 code lines, the finding requires a fix in that change — extract
+helpers, subcomponents, or fixtures until the unit complies — and cannot be
+discharged by an engineering-exception entry under
+[Incremental Adoption And Exceptions](#incremental-adoption-and-exceptions).
 
 Apply the guardrails as follows:
 
@@ -271,9 +280,13 @@ threshold unless the approved scope includes that refactor; record the observed
 debt, its affected path or symbol, and the reason it remains out of scope in
 the pull request that touched the unit.
 
-The hard limits in the root `AGENTS.md` (800/1800/80, with grandfathering at
-the recorded count) cannot be waived here. For any other guardrail in this
-standard, an engineering exception must be recorded in the pull request that
+The file-level hard limits in the root `AGENTS.md` (800/1800, with
+grandfathering at the recorded count) cannot be waived here. The 80-code-line
+executable-unit cap is governed by issue
+[#468](https://github.com/hailingu/PlotWeave/issues/468): it is
+review-enforced, so a review finding over it requires a fix, not an exception
+record. For any other guardrail in this standard, an engineering exception
+must be recorded in the pull request that
 introduces or retains the exceptional unit, with: the exact rule and affected
 path or symbol; the measured value or structural condition; why the unit
 remains cohesive or why compliance is unsafe now; the risks of retaining it;

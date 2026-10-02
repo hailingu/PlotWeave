@@ -2,8 +2,11 @@
 
 Issue [#432](https://github.com/hailingu/PlotWeave/issues/432), option B:
 enforce file caps through a static checker. The 80-code-line executable-unit
-rule remains mandatory and manually reviewed; parsing TypeScript and Rust
-functions/closures is a separate follow-up, not part of this implementation.
+rule is outside this checker's scope by decision, not by omission: per issue
+[#468](https://github.com/hailingu/PlotWeave/issues/468) (owner decision,
+2026-10-02) it is a non-mandatory, review-enforced standard — review findings
+over it require fixes — and no dedicated unit-measurement tool for TypeScript
+or Rust functions/closures will be added.
 
 ## Contract
 
@@ -174,7 +177,8 @@ supported snapshot guarantee. Other static checks, coverage and Sonar still
 analyze working-tree contents; this change closes the size-check mismatch
 only, not the broader commit-tree analysis boundary recorded in
 [Gate Enforcement](quality-gate-enforcement.md#what-the-gate-actually-enforces).
-Function/closure measurement remains the explicit verification gap of option B.
+Function/closure measurement is excluded by the issue #468 owner decision
+recorded above, not an open verification gap awaiting tooling.
 
 ## Initial Verification (2026-10-01)
 
@@ -402,3 +406,26 @@ would introduce a shared test surface for these six closely related checks.
 All changed executable units remain below the 80-code-line cap. No configured
 complexity tool measures cyclomatic complexity; line spans and nesting were
 reviewed instead.
+
+## Executable-Unit Cap Decision Follow-up (Issue #468)
+
+Issue [#468](https://github.com/hailingu/PlotWeave/issues/468) observed that
+option B left the 80-code-line executable-unit cap without an enforcement
+mechanism: an AST audit counted 86 over-limit test callbacks before the guard
+landed and the same 86 after, so the drift that motivated issue #432 was
+unmoved. The owner decision (2026-10-02) adopts none of the draft options —
+neither adding unit measurement to this checker (A/B) nor narrowing the rule's
+scope (C). Instead the cap becomes a non-mandatory, review-enforced standard
+in `AGENTS.md` and
+[software-engineering-standard.md](software-engineering-standard.md): code
+review is its sole enforcement point, a review finding that identifies an
+executable unit above 80 code lines must be fixed in that change, and no
+dedicated detection tool is created for it. This checker therefore remains
+file-level by decision rather than by omission; the earlier follow-up
+sections' "executable-unit measurement" gap language described the pre-#468
+state. No exclusion list or blanket waiver hides the existing over-limit
+units — they are not bulk-migrated and are addressed when review flags them
+or when a substantive change touches them. No checker, baseline, workflow, or
+test code changed in this follow-up; it is a documentation-only governance
+change, and it received a structured review because no automated prose check
+is configured.
