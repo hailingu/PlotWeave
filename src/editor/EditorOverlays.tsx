@@ -63,7 +63,7 @@ function useExportModels(
     assets,
     episodeTitles,
     aiRevision,
-    viewportRef,
+    viewport,
   } = doc
   return useMemo(
     () =>
@@ -75,7 +75,7 @@ function useExportModels(
             assets,
             episodeTitles,
             aiRevision,
-            viewport: viewportRef.current,
+            viewport,
           })
         : null,
     [
@@ -87,7 +87,7 @@ function useExportModels(
       assets,
       episodeTitles,
       aiRevision,
-      viewportRef,
+      viewport,
     ],
   )
 }
@@ -97,7 +97,7 @@ export function EditorOverlays(props: EditorOverlaysProps) {
   const { project, doc, panels, graph } = props
   // 剧本导出模型按内容依赖缓存（issue #158，语义收口为「实时预览」）：
   // 打开期间无关渲染复用同一模型——预览/复制/下载本就共读一份；
-  // 节点/连线/设定/资产/集标题/项目名任一变化才重建，内容不冻结。
+  // 节点/连线/设定/资产/集标题/项目元数据/完成视口变化才重建，内容不冻结。
   // 资产取响应式 doc.assets 而非 assetsRef 镜像：ref 读取不进依赖，
   // 模型变化不会触发重建
   const exportModel = useExportModels(project, doc, panels.exportOpen)

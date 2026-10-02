@@ -22,13 +22,14 @@ const PROJECT: EditorProjectContent = {
   settings: { characters: [], locations: [] },
 }
 
+/** 装配真实文档与保存调度，保留卸载入口以验证终帧冲刷。 */
 function setup() {
   const onSave = vi.fn<(doc: ProjectContent) => void | Promise<void>>()
-  const { result } = renderHook(() => {
+  const { result, unmount } = renderHook(() => {
     const doc = useEditorDocument(PROJECT)
     return { doc, persistence: useEditorPersistence(PROJECT, doc, onSave) }
   })
-  return { result, onSave }
+  return { result, onSave, unmount }
 }
 
 /** 推进防抖窗口并让在途保存的 Promise 结算。 */
@@ -43,7 +44,7 @@ describe('useEditorPersistence（§3/§10.2 装配：视口与诊断横幅）', 
   beforeEach(() => vi.useFakeTimers())
   afterEach(() => vi.useRealTimers())
 
-  it('onMoveEnd 更新视口 ref，并按最新视口构建文档落盘', async () => {
+  it('onMoveEnd 更新响应式视口与 ref，并按最新视口构建文档落盘', async () => {
     const { result, onSave } = setup()
     act(() =>
       result.current.persistence.onMoveEnd(null, { x: 5, y: 6, zoom: 2 }),
@@ -53,6 +54,7 @@ describe('useEditorPersistence（§3/§10.2 装配：视口与诊断横幅）', 
       y: 6,
       zoom: 2,
     })
+    expect(result.current.doc.viewport).toEqual({ x: 5, y: 6, zoom: 2 })
 
     await flush()
     expect(onSave).toHaveBeenCalled()
@@ -75,6 +77,61 @@ describe('useEditorPersistence（§3/§10.2 装配：视口与诊断横幅）', 
 
     await flush()
     expect(result.current.persistence.saveError).toBeNull()
+  })
+})
+
+describe('useEditorPersistence（视口完成与恢复，PR #489）', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it('保存失败后连续完成视口，重试只保存最新值且不回退响应式值', async () => {
+    const { result, onSave } = setup()
+    onSave.mockRejectedValueOnce(new Error('磁盘已满'))
+    act(() => {
+      result.current.persistence.onMoveEnd(null, { x: 1, y: 2, zoom: 1 })
+    })
+    await flush()
+    expect(result.current.persistence.saveError).toBe('磁盘已满')
+    const final = { x: 50, y: 60, zoom: 2 }
+    act(() => {
+      result.current.persistence.onMoveEnd(null, { x: 10, y: 20, zoom: 1.5 })
+      result.current.persistence.onMoveEnd(null, final)
+      expect(result.current.doc.viewportRef.current).toEqual(final)
+    })
+    expect(result.current.doc.viewport).toEqual(final)
+    await flush()
+    expect(result.current.persistence.saveError).toBeNull()
+    expect(onSave.mock.calls.map(([content]) => content.viewport)).toEqual([
+      { x: 1, y: 2, zoom: 1 },
+      final,
+    ])
+    expect(result.current.doc.viewport).toEqual(final)
+  })
+
+  it('完成视口后同批卸载仍冲刷终帧，响应式更新不延迟保存输入', async () => {
+    const { result, onSave, unmount } = setup()
+    const final = { x: -20, y: 40, zoom: 0.5 }
+    await act(async () => {
+      result.current.persistence.onMoveEnd(null, final)
+      unmount()
+    })
+    expect(onSave.mock.calls.map(([content]) => content.viewport)).toEqual([
+      final,
+    ])
+  })
+
+  it('相同坐标的重复完成事件保留响应式引用，不使相同导出快照失效', () => {
+    const { result } = setup()
+    act(() => {
+      result.current.persistence.onMoveEnd(null, { x: 1, y: 2, zoom: 1 })
+    })
+    const viewport = result.current.doc.viewport
+    expect(viewport).toEqual({ x: 1, y: 2, zoom: 1 })
+    act(() => {
+      result.current.persistence.onMoveEnd(null, { x: 1, y: 2, zoom: 1 })
+    })
+    expect(result.current.doc.viewport).toBe(viewport)
+    expect(result.current.doc.viewportRef.current).toBe(viewport)
   })
 })
 

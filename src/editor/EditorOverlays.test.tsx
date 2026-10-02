@@ -48,7 +48,7 @@ const DOC = {
   settings: { characters: [], locations: [] },
   assets: undefined,
   episodeTitles: {},
-  viewportRef: { current: undefined },
+  viewport: undefined,
   aiRevision: 0,
 } as unknown as EditorDocument
 
@@ -180,7 +180,7 @@ function structuredExportInput() {
         },
       },
     },
-    viewportRef: { current: { x: 12, y: 34, zoom: 1.5 } },
+    viewport: { x: 12, y: 34, zoom: 1.5 },
   } as EditorDocument
   return { project, doc }
 }
