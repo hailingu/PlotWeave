@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::scan_tokens;
 use super::strip_comments_and_literals;
 use super::tokenize;
+use super::visibility;
 use super::{FileScan, ModuleKey};
 
 /// 模块树：模块路径段（crate 根为空）→ 文件键，与各模块的子模块名集。
@@ -16,6 +17,11 @@ pub(super) struct ModuleTree {
     /// ——并集口径保留双方）。
     pub(super) file_of: BTreeMap<Vec<String>, BTreeSet<ModuleKey>>,
     pub(super) children: BTreeMap<Vec<String>, BTreeSet<String>>,
+    /// (声明模块路径, 子模块名) → 可见子树根（评审 5380401098：glob 引入
+    /// 只带走对使用处可见的子模块）；无条目或 None = pub/pub(crate) 的
+    /// crate 内任意可见。平台并集下同名多声明保留更宽松的根，任一 pub
+    /// 变体永久置 None（评审 5380788578）。
+    pub(super) child_vis: BTreeMap<(Vec<String>, String), Option<Vec<String>>>,
     /// 规范迭代源：每个物理文件恰一次，配其规范包含路径——inline 别名
     /// 只用于解析目标（评审 5350339687：别名路径重扫会虚构错误边）。
     pub(super) canonical: BTreeSet<(Vec<String>, ModuleKey)>,
@@ -72,6 +78,25 @@ fn child_file_key(files: &BTreeMap<ModuleKey, String>, dir: &str, name: &str) ->
     }
 }
 
+/// 登记子模块的可见子树根（评审 5380401098）：平台并集下同名多声明
+/// 保留更短（更宽松）的根；pub/pub(crate) 变体永久置 None，与声明次序
+/// 无关（评审 5380788578）。
+fn register_child_vis(
+    tree: &mut ModuleTree,
+    mod_path: &[String],
+    name: &str,
+    vis: &visibility::ModVis,
+) {
+    let root = visibility::subtree_root(vis, mod_path);
+    let key = (mod_path.to_vec(), name.to_string());
+    let entry = tree.child_vis.entry(key).or_insert_with(|| root.clone());
+    match (entry.as_ref(), root) {
+        (Some(_), None) => *entry = None,
+        (Some(cur), Some(new)) if new.len() < cur.len() => *entry = Some(new),
+        _ => {}
+    }
+}
+
 impl ModuleTree {
     /// 自 lib.rs 沿非 cfg(test) mod 声明构建可达模块树并缓存扫描产物。
     pub(super) fn build(
@@ -81,6 +106,7 @@ impl ModuleTree {
         let mut tree = ModuleTree {
             file_of: BTreeMap::new(),
             children: BTreeMap::new(),
+            child_vis: BTreeMap::new(),
             canonical: BTreeSet::new(),
         };
         let root = ModuleKey::from("lib.rs");
@@ -106,6 +132,7 @@ impl ModuleTree {
                     .entry(mod_path.clone())
                     .or_default()
                     .insert(decl.name.clone());
+                register_child_vis(&mut tree, &mod_path, &decl.name, &decl.vis);
                 // inline 模块的「文件」= 声明文件（评审 5350168645：use
                 // 目标是 inline 模块时须解析回所在文件，否则该边漏采、
                 // 真环隐形）；不入队——该文件本就按自身路径扫描
