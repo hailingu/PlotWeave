@@ -54,7 +54,11 @@
 //!   解析链超过 8 层按不可解析处置（真实链长 2~3）；类型命名空间遮蔽
 //!   只在绑定目标**直接**声明为类型项的一跳生效，不沿再导出别名链
 //!   传播，外部 crate 目标不可分类——两者一律按不遮蔽保守放行 glob
-//!   （issue #480 登记边界）。
+//!   （issue #480 登记边界）；非 test cfg 门控（含 cfg_attr 嵌套）的
+//!   绑定与类型项声明按**条件存在**登记，不参与无条件遮蔽——门控不
+//!   成立的配置里同名 glob 模块是真实解析目标（评审 5391647570/
+//!   5392007894）；门控继承由 inline 模块栈承载，模块级分号项消费
+//!   自身挂起门控（fn 体等普通块内不清理，该过度近似方向保守）。
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -132,8 +136,8 @@ fn skip_braced(tokens: &[&str], open: usize) -> usize {
 }
 
 /// 深度回落到栈顶 entry 时弹出该 inline 模块（scan_tokens 的 } 臂）。
-fn pop_inline(inline: &mut Vec<(String, usize)>, depth: usize) {
-    if inline.last().is_some_and(|(_, d)| *d == depth) {
+fn pop_inline(inline: &mut Vec<InlineModule>, depth: usize) {
+    if inline.last().is_some_and(|m| m.depth == depth) {
         inline.pop();
     }
 }
@@ -145,9 +149,9 @@ fn inner_test_gate(
     tokens: &[&str],
     next: usize,
     depth: usize,
-    inline: &[(String, usize)],
+    inline: &[InlineModule],
 ) -> Option<usize> {
-    match inline.last().map(|(_, d)| *d) {
+    match inline.last().map(|m| m.depth) {
         // 直接处于 inline 模块体顶层 → 门控整个模块，跳至其闭合
         Some(entry) if depth == entry => Some(skip_to_module_close(tokens, next, depth, entry)),
         // 文件顶层 → 整文件视为测试代码
@@ -291,6 +295,15 @@ fn skip_test_item(tokens: &[&str], k: usize, context: Option<&FieldContext>) -> 
     k
 }
 
+/// inline 模块栈条目：名字、进入深度与门控继承（评审 5392007894）——
+/// gated 表示该模块在非 test cfg 门控下进入，体内引入按条件登记；
+/// 继承编码在栈上，不随体内分号项的自身门控清理终结。
+struct InlineModule {
+    name: String,
+    depth: usize,
+    gated: bool,
+}
+
 /// 扫描单文件 token：产出非 cfg(test) 的 mod 声明与 use 路径；inline
 /// 模块入栈供 `super::` 解析，花括号作用域快照供词法可见性判定（评审
 /// 5352172371），门控项与宏体跳过，`#[path]` 模块 fail-closed 拒绝
@@ -303,7 +316,7 @@ struct ScanState {
     renames: Vec<AliasBinding>,
     globs: Vec<GlobBinding>,
     type_items: Vec<type_items::TypeItemDecl>,
-    inline: Vec<(String, usize)>,
+    inline: Vec<InlineModule>,
     scope: Vec<usize>,
     depth: usize,
     cfg_test: bool,
@@ -321,13 +334,22 @@ impl ScanState {
     /// 采集的 module_level 同判定——fn/trait/impl 体等普通块内声明的项不
     /// 进入模块命名空间，不参与类型遮蔽判定。
     fn at_module_level(&self) -> bool {
-        self.depth == self.inline.last().map_or(0, |(_, depth)| *depth)
+        self.depth == self.inline.last().map_or(0, |m| m.depth)
+    }
+
+    /// 当前位置是否存在生效的非 test cfg 门控：自身挂起（直接属性，含
+    /// cfg_attr 嵌套）或任一外层 inline 模块按门控进入（继承）。条件
+    /// 存在的引入与声明不参与无条件类型遮蔽（评审 5391647570/5392007894）。
+    fn conditionally_gated(&self) -> bool {
+        self.cfg_cond || self.inline.iter().any(|m| m.gated)
     }
 
     /// 模块级终结挂起的非 test cfg 门控：项自身或其闭合已消费门控，其后
-    /// 的模块级引入回归无条件（评审 5391647570）。非模块级（块内）不清
-    /// ——外层项的门控对同块后续引入持续有效（该过度近似只把无条件引入
-    /// 高估为条件，方向上保守：顶多少遮蔽、多保留边，不漏检）。
+    /// 的模块级引入回归无条件（评审 5391647570/5392007894）。外层门控
+    /// inline 模块的**继承**由栈条目承载，不受本清理影响；非模块级
+    ///（fn 体等普通块内）不清——外层项的门控对同块后续引入持续有效
+    ///（该过度近似只把无条件引入高估为条件，方向保守：顶多少遮蔽、
+    /// 多保留边，不漏检）。
     fn clear_conditional_at_module_level(&mut self) {
         if self.at_module_level() {
             self.cfg_cond = false;
@@ -366,6 +388,7 @@ fn scan_tokens(tokens: &[&str]) -> FileScan {
             "use" => {
                 i = scan_use_stmt(tokens, i, &mut st);
                 st.cfg_test = false;
+                st.clear_conditional_at_module_level();
             }
             "macro_rules" if tokens.get(i + 1) == Some(&"!") => {
                 // 跳过宏体（{、[、( 三种定界符）并消费挂起标志（评审
@@ -373,6 +396,7 @@ fn scan_tokens(tokens: &[&str]) -> FileScan {
                 i = skip_macro_body(tokens, i + 2);
                 st.cfg_test = false;
                 st.pending_path = false;
+                st.clear_conditional_at_module_level();
             }
             t if st.cfg_test && item_keyword(t) => {
                 let context = field_contexts.get(&i);
@@ -380,6 +404,14 @@ fn scan_tokens(tokens: &[&str]) -> FileScan {
                 i = skip_test_item(&tokens[..end], i, context);
                 st.cfg_test = false;
                 st.pending_path = false;
+                st.clear_conditional_at_module_level();
+            }
+            // 模块级分号终结的项消费自身挂起门控——继承由 inline 模块栈
+            // 承载，不受影响（评审 5392007894：条件 use 后的无条件类型
+            // 导入不得被泄漏的门控误判为条件而保留假环方向的 glob 边）
+            ";" if st.at_module_level() => {
+                st.cfg_cond = false;
+                i += 1;
             }
             // 定界组深度供类型项采集排除宏 token 树（评审 5391647570）；
             // 属性括号与被整块跳过的组不经过主循环，不干扰计数
@@ -448,7 +480,7 @@ fn scan_attribute(tokens: &[&str], i: usize, st: &mut ScanState) -> ScanStep {
 /// cfg(test) 门控时整体跳过。返回消费后的下标。
 fn scan_mod_decl(tokens: &[&str], i: usize, st: &mut ScanState) -> usize {
     let name = strip_raw_ident(tokens.get(i + 1).copied().unwrap_or(""));
-    let stack: Vec<String> = st.inline.iter().map(|(n, _)| n.clone()).collect();
+    let stack: Vec<String> = st.inline.iter().map(|m| m.name.clone()).collect();
     // #[path] 改变模块文件位置，清洗层不保留字面量内容无法解析——
     // 生产代码 fail-closed 拒绝（登记边界）；cfg(test) 门控的整体跳过
     // 优先（本仓唯一 #[path] 即此形态）
@@ -465,10 +497,14 @@ fn scan_mod_decl(tokens: &[&str], i: usize, st: &mut ScanState) -> usize {
                     vis: visibility::parse_mod_vis(tokens, i),
                 });
             }
+            // 文件承载声明（含其分号）消费自身挂起门控——非模块级时保留
+            // 外层项的门控（评审 5392007894）
+            st.clear_conditional_at_module_level();
             i + 3
         }
         Some(&"{") => {
             if st.cfg_test {
+                st.clear_conditional_at_module_level();
                 return skip_braced(tokens, i + 2);
             }
             if name.is_empty() {
@@ -476,7 +512,14 @@ fn scan_mod_decl(tokens: &[&str], i: usize, st: &mut ScanState) -> usize {
             }
             st.depth += 1;
             st.scope.push(i + 2);
-            st.inline.push((name.to_string(), st.depth));
+            // 门控进入的 inline 模块：继承编码进栈条目，自身挂起清零——
+            // 体内分号项清理不再终结继承（评审 5392007894）
+            st.inline.push(InlineModule {
+                name: name.to_string(),
+                depth: st.depth,
+                gated: st.cfg_cond,
+            });
+            st.cfg_cond = false;
             st.mods.push(ModDecl {
                 inline_path: stack,
                 name: name.to_string(),
@@ -501,8 +544,9 @@ fn scan_use_stmt(tokens: &[&str], i: usize, st: &mut ScanState) -> usize {
         panic!("use 语句缺少分号（token 残缺）");
     }
     if !st.cfg_test {
-        let stack: Vec<String> = st.inline.iter().map(|(n, _)| n.clone()).collect();
+        let stack: Vec<String> = st.inline.iter().map(|m| m.name.clone()).collect();
         let scope = st.scope.clone();
+        let unconditional = !st.conditionally_gated();
         let path = tokens[i + 1..j]
             .iter()
             .map(|s| s.to_string())
@@ -516,9 +560,7 @@ fn scan_use_stmt(tokens: &[&str], i: usize, st: &mut ScanState) -> usize {
                 inline_stack: stack.clone(),
                 scope: scope.clone(),
                 module_level,
-                // 非 test cfg 门控下条件存在（评审 5391647570）：该绑定
-                // 不参与无条件类型遮蔽判定
-                unconditional: !st.cfg_cond,
+                unconditional,
             });
         }
         for segs in parsed.globs {

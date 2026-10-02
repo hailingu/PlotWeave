@@ -322,3 +322,194 @@ fn cfg_gated_function_body_binding_inherits_gating() {
         cycles_of(&graph)
     );
 }
+
+/// 评审 5392007894（PR #488）P2：cfg_attr 包装的嵌套 cfg 不得漏判条件
+/// 存在——`#[cfg_attr(gate, cfg(typed))]` 在 gate∧¬typed 配置里引入
+/// 缺席、同名 glob 模块是真实目标，边漏采即漏检（解析器此前只识别
+/// 深度 1 的直接 cfg）。嵌套 cfg 一律按条件登记（含嵌套 cfg(test)：
+/// 谓词不成立时它是生产代码，不得按 test 门控跳过）。夹具以 rustc
+/// （gate, typed 双特性声明）在 (gate off) 与 (gate on ∧ typed off)
+/// 两种配置验证可编译零警告。
+#[test]
+fn cfg_attr_nested_cfg_marks_binding_conditional() {
+    let graph = edges(&[
+        (
+            "lib.rs",
+            "pub mod values;\npub mod a;\npub mod m;\npub mod user;\n",
+        ),
+        ("values.rs", "pub struct Thing;\n"),
+        ("a/mod.rs", "pub mod p;\n\npub fn aux() {}\n"),
+        (
+            "a/p.rs",
+            "use crate::user::User;\n\npub fn take(u: User) {\n    let _ = u;\n}\n",
+        ),
+        (
+            "m.rs",
+            concat!(
+                "#[cfg_attr(feature = \"gate\", cfg(feature = \"typed\"))]\n",
+                "pub use crate::values::Thing as p;\n",
+                "pub use crate::a::*;\n",
+                "\n",
+                "pub fn run() {\n",
+                "    aux();\n",
+                "}\n",
+            ),
+        ),
+        ("user.rs", "pub use crate::m::p;\n\npub struct User;\n"),
+    ]);
+    assert!(
+        graph["user.rs"].contains("a/p.rs"),
+        "cfg_attr 嵌套 cfg 的绑定按条件登记，gate∧¬typed 配置的 glob 模块边须保守保留：{:?}",
+        graph["user.rs"]
+    );
+    assert_eq!(
+        cycles_of(&graph).len(),
+        1,
+        "gate∧¬typed 配置下 user→a/p→user 的真环须可检出：{:?}",
+        cycles_of(&graph)
+    );
+}
+
+/// 评审 5392007894（PR #488）P2：模块级分号终结的项须消费自身挂起的
+/// 门控——条件 use 之后的无条件类型导入被泄漏的 cfg_cond 误判为条件，
+/// 其类型占位失效、glob 边保留，与反向依赖组合成**误报环**、阻断合法
+/// 代码（issue #480 同类危害）。门控继承改由 inline 模块栈承载后，
+/// 分号清理不破坏继承（见下一用例）。夹具以 rustc 双配置验证零警告。
+#[test]
+fn module_level_semicolon_items_consume_pending_gating() {
+    let graph = edges(&[
+        (
+            "lib.rs",
+            "pub mod values;\npub mod a;\npub mod m;\npub mod user;\n",
+        ),
+        (
+            "values.rs",
+            "pub struct Thing;\n\npub fn helper() -> u8 {\n    0\n}\n",
+        ),
+        ("a/mod.rs", "pub mod q;\n\npub fn aux() {}\n"),
+        (
+            "a/q.rs",
+            "use crate::user::User;\n\npub fn take(u: User) {\n    let _ = u;\n}\n",
+        ),
+        (
+            "m.rs",
+            concat!(
+                "#[cfg(feature = \"old\")]\n",
+                "pub use crate::values::helper as p;\n",
+                "pub use crate::values::Thing as q;\n",
+                "pub use crate::a::*;\n",
+                "\n",
+                "pub fn run() {\n",
+                "    aux();\n",
+                "}\n",
+            ),
+        ),
+        (
+            "user.rs",
+            "use crate::m::q;\n\npub struct User;\n\npub fn make() -> q {\n    q\n}\n",
+        ),
+    ]);
+    assert!(
+        !graph["user.rs"].contains("a/q.rs"),
+        "无条件类型导入 q 的遮蔽须生效，不得因前置条件 use 的门控泄漏保留 glob 边：{:?}",
+        graph["user.rs"]
+    );
+    assert!(
+        cycles_of(&graph).is_empty(),
+        "门控泄漏造成的 user→a/q→user 误报环不得存在：{:?}",
+        cycles_of(&graph)
+    );
+}
+
+/// 评审 5392007894（PR #488）P2 的继承护栏：门控 inline 模块**体内**的
+/// 分号项清理自身泄漏，不得终结模块声明的门控继承——体内后续引入仍按
+/// 条件登记、glob 边保守保留（清理点若错误地按裸布尔泄漏实现，本用例
+/// 与上一用例无法同时成立）。夹具以 rustc 双配置验证零警告。
+#[test]
+fn gated_inline_module_keeps_inheritance_across_semicolon_items() {
+    let graph = edges(&[
+        ("lib.rs", "pub mod values;\npub mod a;\npub mod host;\n"),
+        ("values.rs", "pub enum E {\n    V,\n}\n"),
+        ("a/mod.rs", "pub mod p;\n\npub fn aux() {}\n"),
+        (
+            "a/p.rs",
+            "use crate::host::H;\n\npub fn take(h: H) {\n    let _ = h;\n}\n",
+        ),
+        (
+            "host.rs",
+            concat!(
+                "pub struct H;\n",
+                "#[cfg(feature = \"gated\")]\n",
+                "pub mod zone {\n",
+                "    static WARM: u8 = 0;\n",
+                "    pub fn warm() -> u8 {\n",
+                "        WARM\n",
+                "    }\n",
+                "    pub use crate::values::E as p;\n",
+                "    pub use crate::a::*;\n",
+                "    use p::V;\n",
+                "    pub fn v() -> p {\n",
+                "        V\n",
+                "    }\n",
+                "    pub fn go() {\n",
+                "        aux();\n",
+                "    }\n",
+                "}\n",
+            ),
+        ),
+    ]);
+    assert!(
+        graph["host.rs"].contains("a/p.rs"),
+        "门控 inline 模块体内的类型别名经分号项后仍按条件登记，glob 边须保守保留：{:?}",
+        graph["host.rs"]
+    );
+    assert_eq!(
+        cycles_of(&graph).len(),
+        1,
+        "保守并集下 host→a/p→host 的环须按可检出处置：{:?}",
+        cycles_of(&graph)
+    );
+}
+
+/// 评审 5392007894（PR #488）P2：类型项声明自身携带条件性——cfg 互斥的
+/// `struct Thing` / `static Thing` 让**无条件**再导出在禁用配置指向值项，
+/// 类型命名空间实际未被占据、glob 模块是真实目标；无条件登记该类型项
+/// 会移除真实边（漏检）。所有平台所有者的声明均无条件为类型项才参与
+/// 遮蔽。夹具以 rustc 双配置验证可编译零警告。
+#[test]
+fn conditional_type_declarations_do_not_occupy_unconditionally() {
+    let graph = edges(&[
+        ("lib.rs", "pub mod values;\npub mod a;\npub mod m;\npub mod user;\n"),
+        (
+            "values.rs",
+            concat!(
+                "#[cfg(feature = \"typed\")]\n",
+                "pub struct Thing;\n",
+                "#[cfg(not(feature = \"typed\"))]\n",
+                "#[allow(non_upper_case_globals)]\n",
+                "pub static Thing: u8 = 0;\n",
+            ),
+        ),
+        ("a/mod.rs", "pub mod p;\n\npub fn aux() {}\n"),
+        ("a/p.rs", "use crate::user::User;\n\npub fn take(u: User) {\n    let _ = u;\n}\n"),
+        (
+            "m.rs",
+            "pub use crate::values::Thing as p;\npub use crate::a::*;\n\npub fn run() {\n    aux();\n}\n",
+        ),
+        (
+            "user.rs",
+            "use crate::m::p;\n\npub struct User;\n\npub fn touch() {\n    let _ = p;\n}\n",
+        ),
+    ]);
+    assert!(
+        graph["user.rs"].contains("a/p.rs"),
+        "条件声明的类型项不构成无条件类型占位，禁用配置的 glob 模块边须保留：{:?}",
+        graph["user.rs"]
+    );
+    assert_eq!(
+        cycles_of(&graph).len(),
+        1,
+        "禁用配置下 user→a/p→user 的真环须可检出：{:?}",
+        cycles_of(&graph)
+    );
+}

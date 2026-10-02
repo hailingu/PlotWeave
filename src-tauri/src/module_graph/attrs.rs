@@ -7,10 +7,11 @@
 
 /// 解析自 tokens[i] == "#" 起的属性（`#!` 为内属性，另行返回标志），返回
 /// 消费后下标、是否 cfg(test) 门控与是否内属性。门控语义：cfg(…) 组
-/// 是否 cfg(test) 门控：cfg(…) 组**蕴含** test 才门控（裸 `test` 或
-/// `all(test, …)`；`any(test, feature)` 不蕴含，按并集保守计入。评审
-/// 5347759049：此前只认深度 1 裸 test，`all(test, unix)` 被漏判）。组内
-/// 字符串已在清洗层抹除，不产生假 token。
+/// 是否 cfg(test) 门控：深度 1 的 cfg(…) 组**蕴含** test 才门控（裸
+/// `test` 或 `all(test, …)`；`any(test, feature)` 不蕴含，按并集保守计入。
+/// 评审 5347759049：此前只认深度 1 裸 test，`all(test, unix)` 被漏判）；
+/// 其余形态（不蕴含 test 的 cfg 与 cfg_attr 包装的嵌套 cfg）一律按条件
+/// 存在登记。组内字符串已在清洗层抹除，不产生假 token。
 pub(super) fn parse_attr(tokens: &[&str], i: usize) -> AttrInfo {
     let mut j = i + 1;
     let mut info = AttrInfo::default();
@@ -28,14 +29,17 @@ pub(super) fn parse_attr(tokens: &[&str], i: usize) -> AttrInfo {
         match tokens[j] {
             "[" | "(" => depth += 1,
             "]" | ")" => depth -= 1,
-            "cfg" if depth == 1 && tokens.get(j + 1) == Some(&"(") => {
+            "cfg" if tokens.get(j + 1) == Some(&"(") => {
                 if let Some(close) = find_group_close(tokens, j + 2) {
-                    if cfg_implies_test(&tokens[j + 2..close]) {
+                    if depth == 1 && cfg_implies_test(&tokens[j + 2..close]) {
                         info.is_test = true;
                     } else {
-                        // 非 test 蕴含的 cfg（feature/平台门控）：项保留进图
-                        //（并集保守），但按条件存在登记（评审 5391647570：
-                        // 条件类型绑定不得按无条件遮蔽 glob 模块处置）
+                        // 非 test 蕴含的 cfg（feature/平台门控）与任意深度的
+                        // cfg_attr 包装嵌套 cfg（含嵌套 cfg(test)：谓词不
+                        // 成立时它是生产代码，不得按 test 门控跳过）：项保留
+                        // 进图（并集保守），但按条件存在登记（评审
+                        // 5391647570/5392007894：条件类型绑定不得按无条件
+                        // 遮蔽 glob 模块处置）
                         info.is_conditional = true;
                     }
                 }
