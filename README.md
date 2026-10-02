@@ -45,17 +45,17 @@ PlotWeave/
 
 ## 分支模型
 
-`dev` 为**开发基线**，也是当前唯一实际使用的集成线；`main` 是受保护的集成 / 发布**占位分支，尚未启用**（issue #354：`main` 自初始提交以来从未接收集成提交，文档按实际做法对齐）：
+`dev` 为**开发基线**，`main` 为**集成 / 发布分支**。仓库所有者于 2026-10-02 明确要求「PR #489 已经合并，将 dev 合并进 main，并新增一个合适的 release 版本」，该决策先于首次面向 `main` 的 PR，按原有启用条件启动首发。首发为 [v0.2.0](docs/releases/v0.2.0.md)。
 
 - 任务分支一律从当前本地 `dev` 拉出，使用 `feature/`、`fix/`、`docs/`、`chore/` 前缀。
-- 任务 PR 一律以 `dev` 为目标；`main` 启用前不接收任何 PR，启用后仅允许来自 `dev` 的集成 / 发布 PR（启用方式见下一条）。
-- `main` 的启用条件：首次正式发版（打版本 tag 或产出分发包）时，仓库所有者**在创建任何面向 `main` 的 PR 之前**作出并记录发布决策——该决策即启用动作，先于启用 PR 存在，不与前一条冲突；据此从 `dev` 创建单个集成 PR 合入 `main`（`main` 接收的第一个 PR），并在同一变更中同步更新本节与 `AGENTS.md` 的分支策略，使发布模型与 `git` 历史重新一致；此后按版本节点经 `dev → main` 集成 PR 发布。
-- 禁止直接向 `main` 或 `dev` 提交、推送；两者的保护设置不因本描述调整而放宽。
+- 任务 PR 一律以 `dev` 为目标；`main` 仅接收来自 `dev` 的集成 / 发布 PR。
+- 按版本节点经 `dev → main` 集成 PR 发布；合并前检查 PR CI，合并后等待 `main` push CI 通过，再将版本 tag 与 GitHub Release 指向该合并提交。
+- 禁止直接向 `main` 或 `dev` 提交、推送。这是仓库协作规则；2026-10-02 发布前 API 检查显示两者 `protected: false` 且 rulesets 为空，不能把文档规则当作已配置的服务端保护。本次发布不改变仓库权限或保护设置。
 
 ```
-main ──●─────────────────── 集成 / 发布（受保护，尚未启用）
-         \
-dev ────●───●───●───●───── 开发基线 / 当前集成线（受保护）
+main ──●────────────────●── 集成 / 发布（仅 PR ← dev）
+         \             /
+dev ────●───●───●───●───── 开发基线（仅任务 PR）
           \       /
 feature/  ●───●  ●──●      任务分支（PR → dev）
 ```
@@ -96,7 +96,13 @@ npm run tauri dev  # 启动 Tauri 开发调试（Vite 前端 + Rust 壳）
 
 ### PR 持续集成（issue #228）
 
-推送到 `dev` 与面向 `dev` 的 PR 会自动运行 `.github/workflows/ci.yml`（macOS runner，与本机目标平台一致）：frontend（Prettier 格式、ESLint 零警告、严格类型检查、仓库源码规模检查〔包含 Rust〕、构建、前端测试、scripts/.githooks 行测试）与 rust（fmt、clippy `-D warnings`、测试）两个 job 共同执行 AGENTS.md Scope Routing 的检查——每个 PR 都有绑定提交 SHA 的检查记录与失败日志。SonarQube 扫描与覆盖率生成保留在本机门禁（服务在本机，托管 runner 不可达；本地门禁日志即证据保留），CI 不重复也不削弱它。分支保护是否要求这些检查由仓库设置另行决定。
+推送到 `dev` / `main` 与面向这两个分支的 PR 会自动运行 `.github/workflows/ci.yml`（macOS runner，与本机目标平台一致）：frontend（Prettier 格式、ESLint 零警告、严格类型检查、仓库源码规模检查〔包含 Rust〕、构建、前端测试、scripts/.githooks 行测试）与 rust（fmt、clippy `-D warnings`、测试）两个 job 共同执行 AGENTS.md Scope Routing 的检查——每个 PR 都有绑定提交 SHA 的检查记录与失败日志。SonarQube 扫描与覆盖率生成保留在本机门禁（服务在本机，托管 runner 不可达；本地门禁日志即证据保留），CI 不重复也不削弱它。分支保护是否要求这些检查由仓库设置另行决定。
+
+### 版本与交付
+
+首个 GitHub Release 使用现有前端、Rust 和 Tauri 配置一致的 **0.2.0**，不宣称达到 1.0 的稳定性承诺。此次交付为源码版本，发布说明列出功能、验证证据及已知边界；不附安装包，也不声称完成 Developer ID 签名、公证或安装验收。前端/Rust CI 通过不等价于桌面分发验收。
+
+后续发布先在任务 PR 中同步 `package.json`、`package-lock.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 与 `src-tauri/tauri.conf.json` 的应用版本及发布说明，再合入 `dev`。需要附桌面产物时，另需完成目标平台打包、签名/公证（适用时）、安装启动与原生关键流程验收，并在 Release 中明确平台、架构及校验和；不得将未验证产物描述为可用安装包。
 
 ## 文档与协作
 
