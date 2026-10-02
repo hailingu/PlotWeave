@@ -932,3 +932,42 @@ describe(
     })
   },
 )
+
+describe(
+  'pre-push 清单末行无尾随换行：fail-closed 不静默放行（issue #464）',
+  { timeout: 30_000 },
+  () => {
+    it('单行无尾随换行：非零退出、诊断指明被跳过 ref、不执行门禁', () => {
+      const scenario = preparePushScenario({ withRemote: false })
+      const result = scenario.runHookWithStdin(
+        `refs/heads/main ${scenario.headSha()} refs/heads/main ${zeroSha}`,
+      )
+
+      expect(result.status).not.toBe(0)
+      expect(`${result.stdout}${result.stderr}`).toContain('待推送')
+      expect(`${result.stdout}${result.stderr}`).toContain('refs/heads/main')
+      expect(scenario.scannerRuns()).toBe(0)
+      expect(scenario.installRuns()).toBe(0)
+    })
+
+    it('前置正常换行行后仍有未终止末行：整清单拒绝，不因前面行成功而放宽', () => {
+      const scenario = preparePushScenario({ withRemote: false })
+      const result = scenario.runHookWithStdin(
+        `(delete) ${zeroSha} refs/heads/side ${scenario.sideSha()}\n` +
+          `refs/heads/main ${scenario.headSha()} refs/heads/main ${zeroSha}`,
+      )
+
+      expect(result.status).not.toBe(0)
+      expect(`${result.stdout}${result.stderr}`).toContain('refs/heads/main')
+      expect(scenario.scannerRuns()).toBe(0)
+    })
+
+    it('残留末行不含字段（仅空白）：与空白行同口径跳过，不视为待推 ref', () => {
+      const scenario = preparePushScenario({ withRemote: false })
+      const result = scenario.runHookWithStdin('   ')
+
+      expect(result.status).toBe(0)
+      expect(scenario.scannerRuns()).toBe(0)
+    })
+  },
+)
