@@ -11,6 +11,9 @@
 #（PLOTWEAVE_GATE_REPOSITORY_ROOT 指向临时 worktree）完整分析：以被
 # 推送 ref 为准，且不触碰本地工作树。快/慢按唯一提交逐个判定，与同次
 # 推送还包含哪些 ref 无关（推分支 + 同提交标签仍是一次快路径门禁）。
+# 慢路径启动前输出首个不成立的快路径前提（issue #463 稳定诊断代码，
+# 见 docs/development/quality-gate-push.md），使慢路径成本来源当场可见；
+# 该输出只作诊断，不参与快/慢判定。
 # 同一提交被多个 ref 引用（分支 + 标签）只分析一次；删除 ref（本地
 # sha 全零）不导出代码，跳过。所有 ref 的门禁通过后把累积的门禁结论
 # 物化进版本化 gate-history.jsonl（issue #355；PR #415 评审 5338815626：
@@ -51,6 +54,10 @@ lock_directory=${PLOTWEAVE_SONAR_LOCK_DIRECTORY:-$main_root/.sonar-gate.lock}
 temp_root=
 temp_worktree=
 manifest_path=
+# 快路径失败前提记录（issue #463）：working_tree_represents_head 返回非零
+# 时填充，供慢路径分派输出触发原因；空初值仅为 set -u 安全。
+fast_path_block_code=
+fast_path_block_detail=
 # 剥离 git 向提交类钩子导出的工作树定位变量（GIT_INDEX_FILE / GIT_PREFIX
 # 等按 cwd 相对解析：临时 worktree 里 .git 是文件，.git/index 不是合法
 # 路径，worktree add / remove / 门禁会误失败）。真实暴露路径是提交门禁
@@ -83,12 +90,32 @@ fail() {
 # 不能按固定目录或测试后缀证明输入等价。已知残余（记录于
 # quality-gate-cost.md）：被忽略文件与
 # skip-worktree/assume-unchanged 隐藏的差异对 git 不可见，快路径无法
-# 证明其不存在；慢路径的全新检出不受影响。
+# 证明其不存在；慢路径的全新检出不受影响。前提不成立时把首个失败项记入
+# fast_path_block_code / fast_path_block_detail（issue #463），供分派处
+# 输出慢路径触发原因；代码契约见 quality-gate-push.md。
 working_tree_represents_head() {
-  git diff --quiet HEAD -- &&
-    git diff --cached --quiet HEAD -- || return 1
-  untracked_files=$(git ls-files --others --exclude-standard) || return 1
-  [ -z "$untracked_files" ]
+  fast_path_block_code=
+  fast_path_block_detail=
+  if ! git diff --quiet HEAD --; then
+    fast_path_block_code=PRE_PUSH_SLOW_TRACKED_DIRTY
+    fast_path_block_detail='工作树被跟踪内容与 HEAD 有差异'
+    return 1
+  fi
+  if ! git diff --cached --quiet HEAD --; then
+    fast_path_block_code=PRE_PUSH_SLOW_INDEX_DIRTY
+    fast_path_block_detail='索引内容与 HEAD 有差异'
+    return 1
+  fi
+  if ! untracked_files=$(git ls-files --others --exclude-standard); then
+    fast_path_block_code=PRE_PUSH_SLOW_UNTRACKED_ENUM_FAILED
+    fast_path_block_detail='无法枚举未跟踪文件'
+    return 1
+  fi
+  if [ -n "$untracked_files" ]; then
+    fast_path_block_code=PRE_PUSH_SLOW_UNTRACKED_INPUT
+    fast_path_block_detail='仓库内存在未忽略的未跟踪文件'
+    return 1
+  fi
 }
 
 # 解析待推本地 sha 为其指向的提交：注释标签 peel 到提交，非提交对象
@@ -159,11 +186,22 @@ while read -r local_ref local_sha remote_ref remote_sha extra; do
   esac
   analyzed_commits="$analyzed_commits,$commit"
   short=$(git rev-parse --short "$commit")
-  if [ "$commit" = "$(git rev-parse --verify --quiet HEAD 2>/dev/null || printf x)" ] &&
-    working_tree_represents_head; then
+  head_commit=$(git rev-parse --verify --quiet HEAD 2>/dev/null || printf x)
+  # 慢路径触发原因（issue #463）：被推提交非 HEAD 用缺省值；被推提交即
+  # HEAD 但不可证等价时取 working_tree_represents_head 记录的首个失败
+  # 前提。原因只用于诊断输出，不参与快/慢判定本身。
+  slow_code=PRE_PUSH_SLOW_NOT_HEAD
+  slow_detail='被推提交不是当前 HEAD'
+  if [ "$commit" = "$head_commit" ] && working_tree_represents_head; then
     printf '[pre-push] 门禁对象：%s（%s，当前工作树）\n' "$local_ref" "$short"
     "$main_root/scripts/sonar-quality-gate.sh" </dev/null
   else
+    if [ "$commit" = "$head_commit" ]; then
+      slow_code=$fast_path_block_code
+      slow_detail=$fast_path_block_detail
+    fi
+    printf '[pre-push] 快路径不可达（%s）：%s——改用临时 worktree 分析被推提交\n' \
+      "$slow_code" "$slow_detail"
     printf '[pre-push] 门禁对象：%s（%s，临时 worktree）\n' "$local_ref" "$short"
     gate_commit_in_temp_worktree "$commit"
   fi
