@@ -153,8 +153,9 @@ function commitScenarioTooling(sandbox: string): void {
   mkdirSync(resolve(sandbox, 'scripts'), { recursive: true })
   mkdirSync(resolve(sandbox, '.githooks'), { recursive: true })
   for (const script of [
-    'check-static.sh',
     'check-file-size.ts',
+    'check-rust-module-graph-guard.sh',
+    'check-static.sh',
     'file-size-baseline.json',
     'gate-history.sh',
     'gate-tree-marker.sh',
@@ -223,6 +224,18 @@ fi`,
     String.raw`printf 'cargo-llvm-cov %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
 printf '%s\n' 'TN:' 'SF:src-tauri/src/example.rs' 'DA:1,1' 'end_of_record' > "$PLOTWEAVE_RUST_COVERAGE_REPORT_PATH"`,
   )
+  // cargo 替身（issue #471 元守卫）：门禁的 check-rust-module-graph-guard.sh
+  // 经 PLOTWEAVE_CARGO_BIN 调用 cargo 枚举——输出高于存活下限 90 的受控
+  // module_graph:: 用例清单。
+  writeExecutable(
+    resolve(bin, 'cargo'),
+    String.raw`printf 'cargo %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
+i=0
+while [ "$i" -lt 95 ]; do
+  printf 'module_graph::case_%s: test\n' "$i"
+  i=$((i + 1))
+done`,
+  )
   writeExecutable(
     resolve(bin, 'sonar-scanner'),
     String.raw`printf 'sonar-scanner\n' >> "$PLOTWEAVE_TEST_LOG"
@@ -259,6 +272,7 @@ function scenarioEnvironment(
     ...process.env,
     // 外层慢路径导出的根属于被推树；本场景的门禁只能读取自己的沙箱。
     PLOTWEAVE_GATE_REPOSITORY_ROOT: sandbox,
+    PLOTWEAVE_CARGO_BIN: resolve(bin, 'cargo'),
     PLOTWEAVE_CARGO_LLVM_COV_BIN: resolve(bin, 'cargo-llvm-cov'),
     PLOTWEAVE_CURL_BIN: resolve(bin, 'curl'),
     PLOTWEAVE_COVERAGE_REPORT_PATH: resolve(sandbox, 'coverage', 'lcov.info'),

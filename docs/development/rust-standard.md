@@ -277,6 +277,29 @@ from unmeasured files. Metric and scope:
   leaf, `journal_entry_value` moved to its shape owner `journal_io`, and
   sibling modules import each other directly instead of through the parent's
   re-export hub.
+- The module-graph guard is itself meta-guarded (issue #471): its only mount
+  point is the `#[cfg(test)] mod module_graph;` declaration in `lib.rs`, so
+  deleting that line — or equivalently emptying the module's tests — would
+  silently drop every guard case while `cargo test` stays green.
+  `scripts/check-rust-module-graph-guard.sh` closes that gap with a semantic
+  check: it runs `cargo test --lib --manifest-path src-tauri/Cargo.toml --
+  --list` and requires that the count of enumerated test names carrying the
+  exact `module_graph::` prefix stays at or above a liveness floor of 90
+  (the count when the meta-guard landed was 122). It reads the toolchain's
+  own test enumeration instead of matching text occurrences in `lib.rs`, and
+  fails closed when cargo is unavailable or the listing fails. The check is
+  wired into the gate's serial Rust phase
+  (`scripts/sonar-quality-gate.sh`, after the Rust coverage floor) and into
+  the CI rust job right after `cargo test`, where the lib test target is
+  already built; its behavior contract (floor breach, zero-count shape,
+  fail-closed, prefix precision, gate-root override) is pinned by
+  `scripts/rust-module-graph-guard.test.ts` with a controlled cargo stub. It
+  must stay out of the parallel vitest suite: a cold cargo build saturating
+  all cores starved sibling subprocess-spawning tests there (8 timeouts
+  observed when this was first attempted at commit `0e80937`). The floor is
+  a liveness floor, not a tracker of the exact count: a legitimate reduction
+  below it must update the floor constant and this section together, as one
+  conscious reviewed change.
 
 ### Issue #424 State And Invariant Matrix
 
