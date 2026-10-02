@@ -475,11 +475,16 @@ describe('无障碍审计（编辑器与导出弹窗）', () => {
     const { container } = render(
       <ExportDialog
         projectName="审计项目"
+        json='{"schemaVersion":1}'
         model={exportModel}
         onClose={vi.fn()}
       />,
     )
     await audit(container, '导出弹窗')
+    fireEvent.change(screen.getByRole('combobox', { name: '导出格式' }), {
+      target: { value: 'json' },
+    })
+    await audit(container, 'JSON 导出弹窗')
   })
 })
 

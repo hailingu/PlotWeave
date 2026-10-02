@@ -10,8 +10,13 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { EditorOverlays, type EditorOverlaysProps } from './EditorOverlays'
 import type { EditorDocument, EditorProjectContent } from './useEditorDocument'
+import { mkContent, NOW } from '../model/convertFixtures'
+import { parseProject } from '../model/convert'
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  vi.useRealTimers()
+})
 
 /** buildScriptExport 调用计数间谍（issue #158）：包装真实实现守护
  * 「无关渲染不重建」的缓存语义，行为断言仍走真实导出。 */
@@ -43,6 +48,8 @@ const DOC = {
   settings: { characters: [], locations: [] },
   assets: undefined,
   episodeTitles: {},
+  viewport: undefined,
+  aiRevision: 0,
 } as unknown as EditorDocument
 
 /** 以真实消费域装配浮层输入；浮层开关与动作间谍按用例注入。 */
@@ -116,6 +123,10 @@ describe('EditorOverlays 输入边界（issue #104）', () => {
     // 无关布局重渲染（props 不变的重演）：模型复用，不得逐渲染重建
     view.rerender(<EditorOverlays {...props} />)
     expect(buildSpy).toHaveBeenCalledTimes(1)
+    view.rerender(
+      <EditorOverlays {...props} doc={{ ...props.doc, focusedEpisode: 2 }} />,
+    )
+    expect(buildSpy).toHaveBeenCalledTimes(1)
 
     // 内容变化（新增场景 → nodes 引用更换）：实时预览语义下重建，
     // 预览与下载继续共读同一模型
@@ -132,5 +143,131 @@ describe('EditorOverlays 输入边界（issue #104）', () => {
     } as EditorDocument
     view.rerender(<EditorOverlays {...props} doc={withScene} />)
     expect(buildSpy).toHaveBeenCalledTimes(2)
+  })
+})
+
+/** 从真实浮层中的 JSON 预览读取结构化数据，避免用序列化器计算期望值。 */
+function jsonPreview() {
+  fireEvent.change(screen.getByRole('combobox', { name: '导出格式' }), {
+    target: { value: 'json' },
+  })
+  return JSON.parse(document.querySelector('.pw-export-pre')!.textContent!)
+}
+
+/** 含未保存内容、项目扩展与当前视口的会话，复用现有模型夹具。 */
+function structuredExportInput() {
+  const content = mkContent()
+  const project = {
+    ...PROJECT,
+    description: '剧本简介',
+    createdAt: '2026-08-01T00:00:00.000Z',
+    graphExtensions: { custom: { retained: true } },
+    settingsExtensions: { custom: ['设定扩展'] },
+    assetsExtensions: { custom: '资产扩展' },
+  }
+  const doc = {
+    ...DOC,
+    ...content,
+    aiRevision: 3,
+    assets: {
+      byId: {
+        image1: {
+          id: 'image1',
+          relPath: 'assets/image1.png',
+          mime: 'image/png',
+          source: 'upload',
+          createdAt: '2026-08-01T00:00:00.000Z',
+        },
+      },
+    },
+    viewport: { x: 12, y: 34, zoom: 1.5 },
+  } as EditorDocument
+  return { project, doc }
+}
+
+describe('EditorOverlays JSON 图契约', () => {
+  // 若用 project 旧图代替 doc 会话图，未保存修改和分支路径会消失。
+  it('保留当前图语义，按现有 ProjectDocument 契约完整读回', () => {
+    const { view, props } = setup({ exportOpen: true })
+    const { project, doc } = structuredExportInput()
+    const original = structuredClone(doc)
+    view.rerender(<EditorOverlays {...props} project={project} doc={doc} />)
+    const exported = jsonPreview()
+    expect(
+      exported.graph.nodes.find((node: { id: string }) => node.id === 'br1')
+        .data.spec.options,
+    ).toEqual([
+      { id: 'opt-1', label: '坦白' },
+      { id: 'opt-2', label: '隐瞒' },
+    ])
+    expect(exported.graph.edges).toEqual([
+      { id: 'e1', source: 's1', target: 'd1', data: { kind: 'sequence' } },
+      {
+        id: 'e2',
+        source: 'br1',
+        target: 'd1',
+        sourceHandle: 'option-opt-2',
+        data: { kind: 'branch' },
+      },
+      {
+        id: 'e3',
+        source: 's1',
+        target: 'sh1',
+        sourceHandle: 'shots',
+        data: { kind: 'attach' },
+      },
+    ])
+    const restored = parseProject(exported)
+    expect(restored.warnings).toEqual([])
+    expect(restored.content.nodes.map((node) => node.id)).toEqual([
+      's1',
+      'b1',
+      'd1',
+      'br1',
+      'sh1',
+    ])
+    expect(restored.content.episodeTitles).toEqual({ 2: '摊牌' })
+    expect(restored.content.settings.characters[0]?.name).toBe('林晚')
+    expect(exported.graph.nodes[0].selected).toBeUndefined()
+    expect(exported.graph.nodes[0].className).toBeUndefined()
+    expect(exported.graph.nodes[0].ui.selected).toBe(false)
+    expect(doc).toEqual(original)
+  })
+})
+
+describe('EditorOverlays JSON 元数据与实时预览', () => {
+  it('保留项目与扩展元数据、当前资产和视口，并使用显式导出时刻', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(NOW)
+    const { view, props } = setup({ exportOpen: true })
+    const { project, doc } = structuredExportInput()
+    view.rerender(<EditorOverlays {...props} project={project} doc={doc} />)
+    const exported = jsonPreview()
+    expect(exported.project).toEqual({
+      id: 'p1',
+      name: '浮层边界',
+      description: '剧本简介',
+      createdAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-28T12:00:00.000Z',
+    })
+    expect(exported.graph.viewport).toEqual({ x: 12, y: 34, zoom: 1.5 })
+    expect(exported.graph.aiRevision).toBe(3)
+    const restored = parseProject(exported).content
+    expect(restored.assets?.byId.image1?.relPath).toBe('assets/image1.png')
+    expect(restored.graphExtensions).toEqual({ custom: { retained: true } })
+    expect(restored.settingsExtensions).toEqual({ custom: ['设定扩展'] })
+    expect(restored.assetsExtensions).toEqual({ custom: '资产扩展' })
+  })
+
+  it('空图有效，实时内容变更替换 JSON，无关重渲染保持文本', () => {
+    const { view, props } = setup({ exportOpen: true })
+    expect(jsonPreview().graph.nodes).toEqual([])
+    expect(jsonPreview().assets.byId).toEqual({})
+    const doc = { ...DOC, ...mkContent() } as EditorDocument
+    view.rerender(<EditorOverlays {...props} doc={doc} />)
+    const changed = jsonPreview()
+    expect(changed.graph.nodes[0].data.spec.synopsis).toBe('摊牌')
+    view.rerender(<EditorOverlays {...props} doc={doc} />)
+    expect(jsonPreview()).toEqual(changed)
   })
 })

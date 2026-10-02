@@ -1,11 +1,12 @@
 /**
  * 编辑器文档状态（EditorView 拆出的状态域）：节点/连线/设定集/集标题/资产
  * 索引/集聚焦六个会话状态，外加命令栈与拖放读取「当前值」所需的镜像 ref
- * 与视口 ref（数据模型 §3 视口随文档持久化）。镜像在渲染期赋值：undo/redo
+ * 与已完成视口（数据模型 §3 视口随文档持久化）。内容镜像在渲染期赋值：undo/redo
  * 闭包必须在 setState updater 之外读到最新状态（StrictMode 下 updater 双调）。
  * 返回对象按字段 memo：状态不变时保持引用稳定，下游 useMemo/useCallback 有效。
  */
 import {
+  useCallback,
   useMemo,
   useRef,
   useState,
@@ -60,7 +61,12 @@ export interface EditorDocument {
   settingsRef: MutableRefObject<ProjectSettings>
   assetsRef: MutableRefObject<ProjectContent['assets']>
   episodeTitlesRef: MutableRefObject<Record<number, string>>
-  viewportRef: MutableRefObject<Viewport | undefined>
+  /** 最近完成的视口：导出实时预览订阅该值，不订阅动画过程帧。 */
+  viewport: Viewport | undefined
+  /** 发布完成视口并同步更新保存镜像，相同坐标保持引用稳定。 */
+  updateViewport: (viewport: Viewport) => void
+  /** 保存读取同步镜像；写入统一经过 updateViewport，避免预览与保存分离。 */
+  viewportRef: Readonly<MutableRefObject<Viewport | undefined>>
 }
 
 /** 节点会话态键（issue #157）：position/selected/dragging/measured 等
@@ -132,7 +138,28 @@ function useDocumentMirrorRefs(
   return { nodesRef, edgesRef, settingsRef, assetsRef, episodeTitlesRef }
 }
 
-/** 从项目会话内容初始化文档状态，并建立镜像 ref 与视口 ref。 */
+/** 已完成视口的单一写入口：同步镜像保证同批卸载冲刷，状态驱动导出刷新。 */
+function useDocumentViewport(initialViewport: Viewport | undefined) {
+  const [viewport, setViewport] = useState(initialViewport)
+  const viewportRef = useRef(initialViewport)
+  const updateViewport = useCallback((next: Viewport) => {
+    const current = viewportRef.current
+    if (
+      current?.x === next.x &&
+      current.y === next.y &&
+      current.zoom === next.zoom
+    )
+      return
+    viewportRef.current = next
+    setViewport(next)
+  }, [])
+  return useMemo(
+    () => ({ viewport, viewportRef, updateViewport }),
+    [viewport, updateViewport],
+  )
+}
+
+/** 从项目会话内容初始化文档状态，建立内容镜像与已完成视口。 */
 export function useEditorDocument(
   project: EditorProjectContent,
 ): EditorDocument {
@@ -156,10 +183,7 @@ export function useEditorDocument(
     useDocumentMirrorRefs(nodes, edges, settings, assets, episodeTitles)
   const contentNodes = useContentNodes(nodes)
 
-  // 视口随文档持久化（数据模型 §3）：本身无重渲染，onMoveEnd 更新 ref 后
-  // 经 markDirty 显式标脏并换入最新文档——纯平移/缩放也会防抖落盘，
-  // 卸载冲刷与后续内容保存拿到的都是最新视口（不落 stale 值）。
-  const viewportRef = useRef<Viewport | undefined>(project.viewport)
+  const viewportState = useDocumentViewport(project.viewport)
 
   return useMemo(
     () => ({
@@ -185,7 +209,7 @@ export function useEditorDocument(
       settingsRef,
       assetsRef,
       episodeTitlesRef,
-      viewportRef,
+      ...viewportState,
     }),
     [
       nodes,
@@ -211,6 +235,7 @@ export function useEditorDocument(
       settingsRef,
       assetsRef,
       episodeTitlesRef,
+      viewportState,
     ],
   )
 }

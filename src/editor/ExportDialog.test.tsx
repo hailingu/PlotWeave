@@ -56,6 +56,7 @@ function setup(
   const view = render(
     <ExportDialog
       projectName="雨夜"
+      json='{"schemaVersion":1}'
       model={props.model ?? model()}
       onClose={onClose}
     />,
@@ -149,6 +150,7 @@ describe('ExportDialog（内容可用性变化，review #81）', () => {
     rerender(
       <ExportDialog
         projectName="雨夜"
+        json='{"schemaVersion":1}'
         model={generatedModel(['beat'])}
         onClose={onClose}
       />,
@@ -158,6 +160,7 @@ describe('ExportDialog（内容可用性变化，review #81）', () => {
     rerender(
       <ExportDialog
         projectName="雨夜"
+        json='{"schemaVersion":1}'
         model={generatedModel([])}
         onClose={onClose}
       />,
@@ -167,6 +170,7 @@ describe('ExportDialog（内容可用性变化，review #81）', () => {
     rerender(
       <ExportDialog
         projectName="雨夜"
+        json='{"schemaVersion":1}'
         model={generatedModel(['scene'])}
         onClose={onClose}
       />,
@@ -291,6 +295,7 @@ describe('ExportDialog（复制与文本生命周期，review #81）', () => {
     rerender(
       <ExportDialog
         projectName="雨夜"
+        json='{"schemaVersion":1}'
         model={model({ plain: '# 新正文' })}
         onClose={onClose}
       />,
@@ -311,6 +316,7 @@ describe('ExportDialog（复制与文本生命周期，review #81）', () => {
     rerender(
       <ExportDialog
         projectName="雨夜"
+        json='{"schemaVersion":1}'
         model={model({ plain: '# 新正文' })}
         onClose={onClose}
       />,
