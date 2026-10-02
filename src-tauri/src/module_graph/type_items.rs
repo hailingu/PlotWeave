@@ -5,8 +5,12 @@
 //! 若丢失该占位信息，会从 glob 补入通往子模块文件的虚假边、误报
 //! rustc 不存在的环。值命名空间项（fn/const/static）与 enum 变体不
 //! 登记：它们不占据类型命名空间，与同名模块合法共存，glob 模块候选
-//! 必须保留（宁可误报环也不漏检）。外部 crate 的目标声明不可见，按
-//! 不遮蔽保守处置（登记边界，见 module_graph.rs 模块文档）。
+//! 必须保留（宁可误报环也不漏检）。宏调用 token 树（括号/方括号定界）
+//! 内的关键字是宏 DSL 文本，不登记（评审 5391647570）。cfg 门控的
+//! 条件声明照常登记：引用它的 use 必须同样门控（否则禁用配置无法
+//! 编译），遮蔽让位由绑定侧的 unconditional 判定保守处置。外部 crate
+//! 的目标声明不可见，按不遮蔽保守处置（登记边界，见 module_graph.rs
+//! 模块文档）。
 
 use std::collections::BTreeMap;
 
@@ -21,23 +25,17 @@ pub(super) struct TypeItemDecl {
     pub(super) inline_stack: Vec<String>,
 }
 
-/// 当前 token 是否处于模块级（文件顶层或 inline 模块体顶层）：与 use
-/// 采集的 module_level 同判定——fn/trait/impl 体等普通块内声明的项不
-/// 进入模块命名空间，不参与类型遮蔽判定。
-fn at_module_level(st: &ScanState) -> bool {
-    st.depth == st.inline.last().map_or(0, |(_, depth)| *depth)
-}
-
 /// 采集模块级类型命名空间项声明（scan_tokens 的 struct/enum/trait/
 /// type/union 臂）：名字取关键字后的 token（可见性与属性在关键字之前，
 /// 已由主循环消费），inline 栈定位声明模块，返回消费后的下标。union
-/// 是上下文关键字，需经声明形态判定；非模块级或名字形态异常时仅推进
-/// 不登记、不 fail-closed——本层服务于保守遮蔽判定，不是构图健全性
-/// 的一部分。
+/// 是上下文关键字，需经声明形态判定；非模块级、定界组内（宏 token
+/// 树，评审 5391647570）或名字形态异常时仅推进不登记、不 fail-closed
+/// ——本层服务于保守遮蔽判定，不是构图健全性的一部分。
 pub(super) fn scan_type_decl(tokens: &[&str], i: usize, st: &mut ScanState) -> usize {
     let is_union = tokens[i] == "union";
     let name = tokens.get(i + 1).copied().unwrap_or("");
-    if at_module_level(st)
+    if st.at_module_level()
+        && st.parens == 0
         && (!is_union || fields::is_union_declaration(tokens, i))
         && is_path_seg(name)
     {

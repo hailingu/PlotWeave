@@ -187,3 +187,138 @@ fn trait_type_alias_and_inline_declared_types_shadow_glob() {
         cycles_of(&graph)
     );
 }
+
+/// 评审 5391647570（PR #488）P2：cfg 门控（非 test）的类型别名绑定不得
+/// 按无条件遮蔽处置——门控不成立的配置里该绑定不存在，`m::p` 实际解析
+/// 到 glob 模块，边漏采会让经该边闭合的真环对守卫隐形（漏检方向）。
+/// 门控绑定不贡献类型占位，glob 候选保守保留（宁可误报环也不漏检）。
+/// 夹具以 rustc 带/不带 `--cfg feature="typed"` 两种配置验证可编译零警告。
+#[test]
+fn cfg_gated_type_binding_keeps_glob_module_edge() {
+    let graph = edges(&[
+        (
+            "lib.rs",
+            "pub mod values;\npub mod a;\npub mod m;\npub mod user;\n",
+        ),
+        ("values.rs", "pub struct Thing;\n"),
+        ("a/mod.rs", "pub mod p;\n\npub fn aux() {}\n"),
+        (
+            "a/p.rs",
+            "use crate::user::User;\n\npub fn take(u: User) {\n    let _ = u;\n}\n",
+        ),
+        (
+            "m.rs",
+            concat!(
+                "#[cfg(feature = \"typed\")]\n",
+                "pub use crate::values::Thing as p;\n",
+                "pub use crate::a::*;\n",
+                "\n",
+                "pub fn run() {\n",
+                "    aux();\n",
+                "}\n",
+            ),
+        ),
+        ("user.rs", "pub use crate::m::p;\n\npub struct User;\n"),
+    ]);
+    assert!(
+        graph["user.rs"].contains("a/p.rs"),
+        "cfg 门控的类型绑定在禁用配置不成立，glob 模块边须保守保留：{:?}",
+        graph["user.rs"]
+    );
+    assert_eq!(
+        cycles_of(&graph).len(),
+        1,
+        "禁用配置下 user→a/p→user 的真环须可检出：{:?}",
+        cycles_of(&graph)
+    );
+}
+
+/// 评审 5391647570（PR #488）P2：宏调用 token 树（括号/方括号定界）里
+/// 的 `struct` 文本是宏 DSL 而非模块命名空间声明——误登记会把同名值
+/// 别名（fn）的目标错判为类型项、移除真实 glob 模块边（漏检方向）。
+/// 类型项采集排除定界组内的关键字。夹具经 rustc 验证零警告（宏展开
+/// 为空，不引入名字冲突）。
+#[test]
+fn macro_token_tree_types_do_not_shadow() {
+    let graph = edges(&[
+        ("lib.rs", "pub mod values;\npub mod a;\npub mod m;\npub mod user;\n"),
+        (
+            "values.rs",
+            concat!(
+                "macro_rules! swallow {\n",
+                "    ($($t:tt)*) => {}\n",
+                "}\n",
+                "swallow!(struct helper);\n",
+                "swallow![struct helper];\n",
+                "pub fn helper() -> u8 {\n",
+                "    0\n",
+                "}\n",
+            ),
+        ),
+        ("a/mod.rs", "pub mod p;\n\npub fn aux() {}\n"),
+        ("a/p.rs", "use crate::user::User;\n\npub fn take(u: User) {\n    let _ = u;\n}\n"),
+        (
+            "m.rs",
+            "pub use crate::values::helper as p;\npub use crate::a::*;\n\npub fn run() {\n    aux();\n}\n",
+        ),
+        (
+            "user.rs",
+            "use crate::m::p;\n\npub struct User;\n\npub fn call() -> u8 {\n    p()\n}\n",
+        ),
+    ]);
+    assert!(
+        graph["user.rs"].contains("a/p.rs"),
+        "宏 token 树里的 struct 文本不得登记为类型项，值别名与 glob 模块的共存边须保留：{:?}",
+        graph["user.rs"]
+    );
+    assert_eq!(
+        cycles_of(&graph).len(),
+        1,
+        "值共存形态下 a/p→user 反向依赖须闭合可检出的环：{:?}",
+        cycles_of(&graph)
+    );
+}
+
+/// 评审 5391647570（PR #488）P2 的门控继承形态：cfg 门控**函数体内**的
+/// 类型别名引入同样按条件登记（外层项的门控对体内引入持续有效，模块级
+/// `}` 才终结）——被误判为无条件时其类型占位会移除 glob 模块候选
+///（漏检方向）。守卫不建模配置相关性，边按保守并集保留。夹具以
+/// rustc 带/不带 `--cfg feature="gated"` 两种配置验证可编译零警告
+///（门控函数体在禁用配置整体缺席）。
+#[test]
+fn cfg_gated_function_body_binding_inherits_gating() {
+    let graph = edges(&[
+        ("lib.rs", "pub mod values;\npub mod a;\npub mod host;\n"),
+        ("values.rs", "pub enum E {\n    V,\n}\n"),
+        ("a/mod.rs", "pub mod p;\n\npub fn aux() {}\n"),
+        (
+            "a/p.rs",
+            "use crate::host::H;\n\npub fn take(h: H) {\n    let _ = h;\n}\n",
+        ),
+        (
+            "host.rs",
+            concat!(
+                "pub struct H;\n",
+                "#[cfg(feature = \"gated\")]\n",
+                "pub fn gated() {\n",
+                "    use crate::values::E as p;\n",
+                "    use crate::a::*;\n",
+                "    use p::V;\n",
+                "    let _ = V;\n",
+                "    aux();\n",
+                "}\n",
+            ),
+        ),
+    ]);
+    assert!(
+        graph["host.rs"].contains("a/p.rs"),
+        "门控函数体内的类型别名按条件登记，glob 模块边须保守保留：{:?}",
+        graph["host.rs"]
+    );
+    assert_eq!(
+        cycles_of(&graph).len(),
+        1,
+        "保守并集下 host→a/p→host 的环须按可检出处置（不因条件绑定移除边）：{:?}",
+        cycles_of(&graph)
+    );
+}

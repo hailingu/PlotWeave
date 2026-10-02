@@ -32,6 +32,11 @@ pub(super) fn parse_attr(tokens: &[&str], i: usize) -> AttrInfo {
                 if let Some(close) = find_group_close(tokens, j + 2) {
                     if cfg_implies_test(&tokens[j + 2..close]) {
                         info.is_test = true;
+                    } else {
+                        // 非 test 蕴含的 cfg（feature/平台门控）：项保留进图
+                        //（并集保守），但按条件存在登记（评审 5391647570：
+                        // 条件类型绑定不得按无条件遮蔽 glob 模块处置）
+                        info.is_conditional = true;
                     }
                 }
             }
@@ -47,13 +52,16 @@ pub(super) fn parse_attr(tokens: &[&str], i: usize) -> AttrInfo {
 }
 
 /// 属性解析结论：next = 消费后下标；is_test = cfg 蕴含 test；is_inner =
-/// `#!` 内属性；has_path = 属性内出现 `path =`（评审 5352172371）。
+/// `#!` 内属性；has_path = 属性内出现 `path =`（评审 5352172371）；
+/// is_conditional = 存在不蕴含 test 的 cfg 组（feature/平台门控，评审
+/// 5391647570：条件存在的项仍入图，但其引入不参与无条件遮蔽判定）。
 #[derive(Default)]
 pub(super) struct AttrInfo {
     pub(super) next: usize,
     pub(super) is_test: bool,
     pub(super) is_inner: bool,
     pub(super) has_path: bool,
+    pub(super) is_conditional: bool,
 }
 
 /// 自开括号下标起找配对闭括号（含嵌套）；未闭合返回 None。

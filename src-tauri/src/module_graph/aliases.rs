@@ -13,7 +13,9 @@
 //! 新模块中解析（评审 4157263363）；普通块局部引入不属于该命名空间。
 //! 显式类型导入占据类型命名空间（issue #480）：可见绑定的目标全部为
 //! 类型命名空间项（扫描层 type_items）且无模块目标时，同名 glob 候选
-//! 让位——值项与未知/外部目标不遮蔽，模块目标仍走保守并集口径。
+//! 让位——值项与未知/外部目标不遮蔽，模块目标仍走保守并集口径；
+//! cfg 门控的条件绑定一律不遮蔽（评审 5391647570：门控不成立的配置里
+//! 绑定缺席、glob 模块是真实解析目标，移除边属漏检方向）。
 
 use super::tree::ModuleTree;
 use super::type_items;
@@ -22,13 +24,17 @@ use std::collections::BTreeMap;
 use super::{FileScan, ModuleKey, UseStmt};
 
 /// 词法重命名：本地名与原始目标路径，绑定于声明模块和普通块作用域。
-/// 显式位置前缀只能访问模块级引入（评审 5381066396）。
+/// 显式位置前缀只能访问模块级引入（评审 5381066396）。unconditional =
+///无非 test cfg 门控（评审 5391647570）：条件存在的绑定不参与无条件
+/// 类型遮蔽——门控不成立的配置里绑定缺席，同名 glob 模块是真实解析
+/// 目标，边不得移除（漏检方向）。
 pub(super) struct AliasBinding {
     pub(super) name: String,
     pub(super) segs: Vec<String>,
     pub(super) inline_stack: Vec<String>,
     pub(super) scope: Vec<usize>,
     pub(super) module_level: bool,
+    pub(super) unconditional: bool,
 }
 
 /// glob 前缀及其声明位置；模块级标志区分限定名字查找与块词法查找。
@@ -214,11 +220,12 @@ struct AliasTargets {
 }
 
 /// 逐绑定解析完整目标并归类（issue #480）：模块目标进 positions（模块
-/// 目标出现即不遮蔽——模块别名与 glob 走既有保守并集口径）；类型项
-/// 维持 type_occupying；值/未知目标（fn/const/static、enum 变体等项内
-/// 路径、外部 crate 目标）解除遮蔽——它们不占据类型命名空间，同名
-/// glob 模块候选必须保留。递归查找回到绑定自身声明位置（文件模块
-/// 路径 + 绑定的 inline 栈），保持深度上限与同名平台并集口径。
+/// 目标出现即不遮蔽——模块别名与 glob 走既有保守并集口径）；无条件
+/// 绑定的类型项维持 type_occupying；值/未知目标（fn/const/static、enum
+/// 变体等项内路径、外部 crate 目标）与 cfg 门控的条件绑定（评审
+/// 5391647570：门控不成立的配置里绑定缺席、glob 模块是真实目标）解除
+/// 遮蔽——同名 glob 模块候选必须保留。递归查找回到绑定自身声明位置
+///（文件模块路径 + 绑定的 inline 栈），保持深度上限与同名平台并集口径。
 fn resolve_alias_bindings(
     tree: &ModuleTree,
     scans: &BTreeMap<ModuleKey, FileScan>,
@@ -250,8 +257,8 @@ fn resolve_alias_bindings(
                     targets.positions.push(full);
                     targets.type_occupying = false;
                 }
-                FullPathKind::TypeItem => {}
-                FullPathKind::ValueOrUnknown => targets.type_occupying = false,
+                FullPathKind::TypeItem if bound.unconditional => {}
+                _ => targets.type_occupying = false,
             }
         }
     }

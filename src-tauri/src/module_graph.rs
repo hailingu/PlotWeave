@@ -296,6 +296,7 @@ fn skip_test_item(tokens: &[&str], k: usize, context: Option<&FieldContext>) -> 
 /// 5352172371），门控项与宏体跳过，`#[path]` 模块 fail-closed 拒绝
 ///（评审 5352172371：清洗层不保留字面量内容，无法解析 path 值——
 /// 响亮失败优于静默扫错位置）。
+#[derive(Default)]
 struct ScanState {
     mods: Vec<ModDecl>,
     uses: Vec<UseStmt>,
@@ -307,49 +308,43 @@ struct ScanState {
     depth: usize,
     cfg_test: bool,
     pending_path: bool,
+    /// 挂起的非 test cfg 门控（feature/平台，评审 5391647570）：条件存在
+    /// 的项仍入图（并集保守），其引入按条件登记、不参与无条件类型遮蔽。
+    cfg_cond: bool,
+    /// 定界组（括号/方括号）深度：宏调用 token 树里的关键字是宏 DSL
+    /// 文本，不是模块命名空间声明（评审 5391647570）。
+    parens: usize,
+}
+
+impl ScanState {
+    /// 当前 token 是否处于模块级（文件顶层或 inline 模块体顶层）：与 use
+    /// 采集的 module_level 同判定——fn/trait/impl 体等普通块内声明的项不
+    /// 进入模块命名空间，不参与类型遮蔽判定。
+    fn at_module_level(&self) -> bool {
+        self.depth == self.inline.last().map_or(0, |(_, depth)| *depth)
+    }
+
+    /// 模块级终结挂起的非 test cfg 门控：项自身或其闭合已消费门控，其后
+    /// 的模块级引入回归无条件（评审 5391647570）。非模块级（块内）不清
+    /// ——外层项的门控对同块后续引入持续有效（该过度近似只把无条件引入
+    /// 高估为条件，方向上保守：顶多少遮蔽、多保留边，不漏检）。
+    fn clear_conditional_at_module_level(&mut self) {
+        if self.at_module_level() {
+            self.cfg_cond = false;
+        }
+    }
 }
 
 fn scan_tokens(tokens: &[&str]) -> FileScan {
     let field_contexts = field_contexts(tokens);
-    let mut st = ScanState {
-        mods: Vec::new(),
-        uses: Vec::new(),
-        renames: Vec::new(),
-        globs: Vec::new(),
-        type_items: Vec::new(),
-        inline: Vec::new(),
-        scope: Vec::new(),
-        depth: 0,
-        cfg_test: false,
-        pending_path: false,
-    };
+    let mut st = ScanState::default();
     let mut i = 0;
     while i < tokens.len() {
         match tokens[i] {
-            "#" => {
-                let attr = parse_attr(tokens, i);
-                // 内属性作用于整个外层模块（评审 5350627153）：文件级 →
-                // 整文件测试代码；模块体顶层 → 门控整个模块；块内 → 只
-                // 门控当前块
-                if attr.is_inner && attr.is_test {
-                    match inner_test_gate(tokens, attr.next, st.depth, &st.inline) {
-                        Some(resumed) => i = resumed,
-                        None => {
-                            return FileScan {
-                                mods: Vec::new(),
-                                uses: Vec::new(),
-                                renames: Vec::new(),
-                                globs: Vec::new(),
-                                type_items: Vec::new(),
-                            }
-                        }
-                    }
-                    continue;
-                }
-                st.cfg_test |= attr.is_test;
-                st.pending_path |= attr.has_path;
-                i = attr.next;
-            }
+            "#" => match scan_attribute(tokens, i, &mut st) {
+                ScanStep::Advance(next) => i = next,
+                ScanStep::SkipFile => return empty_scan(),
+            },
             // 门控块交给下面的整项跳过入口，空块也在开花括号消费属性。
             "{" if !st.cfg_test => {
                 st.scope.push(i);
@@ -360,6 +355,7 @@ fn scan_tokens(tokens: &[&str]) -> FileScan {
                 pop_inline(&mut st.inline, st.depth);
                 st.scope.pop();
                 st.depth = st.depth.saturating_sub(1);
+                st.clear_conditional_at_module_level();
                 i += 1;
             }
             "mod" => {
@@ -385,6 +381,16 @@ fn scan_tokens(tokens: &[&str]) -> FileScan {
                 st.cfg_test = false;
                 st.pending_path = false;
             }
+            // 定界组深度供类型项采集排除宏 token 树（评审 5391647570）；
+            // 属性括号与被整块跳过的组不经过主循环，不干扰计数
+            "(" | "[" => {
+                st.parens += 1;
+                i += 1;
+            }
+            ")" | "]" => {
+                st.parens = st.parens.saturating_sub(1);
+                i += 1;
+            }
             // 模块级类型命名空间项声明（issue #480）：门控项已被上一臂
             // 整条跳过，这里只采集生产声明的名字供遮蔽判定
             "struct" | "enum" | "trait" | "type" | "union" => {
@@ -400,6 +406,42 @@ fn scan_tokens(tokens: &[&str]) -> FileScan {
         globs: st.globs,
         type_items: st.type_items,
     }
+}
+
+/// 空扫描产物：文件级 `#![cfg(test)]` 内属性把整文件按测试代码处置。
+fn empty_scan() -> FileScan {
+    FileScan {
+        mods: Vec::new(),
+        uses: Vec::new(),
+        renames: Vec::new(),
+        globs: Vec::new(),
+        type_items: Vec::new(),
+    }
+}
+
+/// 属性分派结论（scan_tokens 的 # 臂）：推进到消费后下标，或整个文件按
+/// 测试代码处置（文件级 `#![cfg(test)]` 内属性）。
+enum ScanStep {
+    Advance(usize),
+    SkipFile,
+}
+
+/// 属性分派（scan_tokens 的 # 臂）：内属性蕴含 test 时按位置门控——
+/// 文件级返回 SkipFile（整文件测试代码；模块体顶层跳至模块闭合，块内
+/// 只门控当前块，见 inner_test_gate）；否则合并挂起标志（cfg(test) 门控、
+/// `#[path]`、非 test cfg 的条件存在）并推进到属性之后。
+fn scan_attribute(tokens: &[&str], i: usize, st: &mut ScanState) -> ScanStep {
+    let attr = parse_attr(tokens, i);
+    if attr.is_inner && attr.is_test {
+        return match inner_test_gate(tokens, attr.next, st.depth, &st.inline) {
+            Some(resumed) => ScanStep::Advance(resumed),
+            None => ScanStep::SkipFile,
+        };
+    }
+    st.cfg_test |= attr.is_test;
+    st.pending_path |= attr.has_path;
+    st.cfg_cond |= attr.is_conditional;
+    ScanStep::Advance(attr.next)
 }
 
 /// mod 声明分派（scan_tokens 的 mod 臂）：外部（`;`）或 inline（`{`）；
@@ -466,13 +508,17 @@ fn scan_use_stmt(tokens: &[&str], i: usize, st: &mut ScanState) -> usize {
             .map(|s| s.to_string())
             .collect::<Vec<_>>();
         let parsed = use_tree_of(&path);
+        let module_level = st.at_module_level();
         for (name, segs) in parsed.renames {
             st.renames.push(AliasBinding {
                 name,
                 segs,
                 inline_stack: stack.clone(),
                 scope: scope.clone(),
-                module_level: st.depth == st.inline.last().map_or(0, |(_, depth)| *depth),
+                module_level,
+                // 非 test cfg 门控下条件存在（评审 5391647570）：该绑定
+                // 不参与无条件类型遮蔽判定
+                unconditional: !st.cfg_cond,
             });
         }
         for segs in parsed.globs {
@@ -480,7 +526,7 @@ fn scan_use_stmt(tokens: &[&str], i: usize, st: &mut ScanState) -> usize {
                 segs,
                 inline_stack: stack.clone(),
                 scope: scope.clone(),
-                module_level: st.depth == st.inline.last().map_or(0, |(_, depth)| *depth),
+                module_level,
             });
         }
         st.uses.push(UseStmt {
