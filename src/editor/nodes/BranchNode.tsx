@@ -1,0 +1,55 @@
+import { Handle, Position, type NodeProps } from '@xyflow/react'
+import { useNodeEdit } from '../nodeEdit'
+import { branchOptionHandle } from '../graphRules'
+import { NodeSettingsPanel, EditableName } from './settings/NodeSettingsPanel'
+import { NodeSettingsGear } from './settings/NodeSettingsGear'
+import type { BranchFlowNode } from './types'
+
+/**
+ * 分支节点 = 岔路路标（docs/ui-design.md §4.2，剧本族）。
+ * 虚线外框 = 「此处未定」；问句即名称（双击内联编辑）；每个选项条右缘带
+ * 独立出口端口（handle id 为 option-<选项 id>，供 branch 边连线，绑稳定 id）；
+ * 「＋ 添加选项」由 ⚙️ 设置面板承载（§4.3）。外观跟随画布：
+ * 浅色画布为纸面变体，深色画布为虚线暗框。
+ */
+export function BranchNode({ id, data, selected }: NodeProps<BranchFlowNode>) {
+  const { openSettingsId, toggleSettings, patchNode } = useNodeEdit()
+  const settingsOpen = openSettingsId === id
+
+  return (
+    <div className={`pw-branch${selected ? ' pw-on' : ''}`}>
+      <div className="pw-branch-q">
+        <span aria-hidden>🔀</span>
+        <EditableName
+          value={data.prompt}
+          ariaLabel="分支问句"
+          onChange={(prompt) =>
+            patchNode(id, { nodeType: 'branch', patch: { prompt } })
+          }
+        />
+        <span className="pw-sp" />
+        <NodeSettingsGear
+          ariaLabel="分支设置"
+          open={settingsOpen}
+          onToggle={() => toggleSettings(id)}
+          light
+        />
+      </div>
+      {data.options.map((option) => (
+        <div key={option.id} className="pw-branch-opt">
+          {option.label}
+          <Handle
+            id={branchOptionHandle(option.id)}
+            type="source"
+            position={Position.Right}
+            className="pw-port pw-branch-port"
+          />
+        </div>
+      ))}
+      {settingsOpen && (
+        <NodeSettingsPanel node={{ id, type: 'branch', data }} />
+      )}
+      <Handle type="target" position={Position.Left} className="pw-port" />
+    </div>
+  )
+}

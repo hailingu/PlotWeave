@@ -1,1 +1,115 @@
 # PlotWeave
+
+**PlotWeave** 是一个面向短剧创作的可视化画布工具：将剧本、场景、角色与剧情分支组织为可编辑的节点图，在画布上完成从剧本构思到分集叙事的"编织"。产品形态对标 LibTV 这类短剧制作网站。
+
+## 核心概念
+
+- **剧本画布**：以节点表示场景、桥段、对白等叙事单元，以连线表示剧情流向。
+- **分支叙事**：短剧常见的多线、反转、多结局结构，通过画布上的分支连线直观编排。
+- **设定管理**：角色、道具、场景等设定与画布节点关联，保持剧情一致性。
+
+## 功能规划
+
+- [x] 画布编辑器：节点增删改、连线、缩放与导航
+- [x] 剧本节点：场景 / 桥段 / 对白节点的结构化编辑
+- [x] 分支与多结局编排
+- [x] 角色与设定管理面板
+- [x] 剧本导出（Markdown 纯文本，含分镜附录）
+- [x] 画布对齐与吸附（多选六方向对齐、22 单位网格吸附开关，支持撤销重做）
+- [x] 剧本导出：结构化格式（JSON，包含完整节点、分支、设定与资产引用）
+- [x] 画布内 AI 图像生成（文生图首版）：图片节点生成角色垫图 / 场景底图 / 分镜关键帧，产物落项目资产（媒体节点 + 输入签名守护 + 协作式取消，详见[数据模型 §13](docs/data-model/overview.md#十三后续演进预留)；图生图引用边、视频节点与 job 落盘恢复随演进）
+- [ ] macOS 原生界面质感：窗口级毛玻璃（Tauri `windowEffects`）+ 无头组件（Radix）承载弹层交互 + 设计令牌扩展，实现路径详见 `docs/ui-design.md` §12
+
+## 技术栈
+
+| 层 | 技术 |
+| --- | --- |
+| 前端 | Tauri + React + React Flow（`@xyflow/react`）+ TypeScript：画布交互、文档模型编辑与剧本导出生成 |
+| 后端 | Rust（Tauri 进程内 commands：项目 / AI 会话持久化、偏好设置、素材库、媒体协议、AI 图像生成桥接） |
+
+桌面端由 Tauri 打包。前端承载画布交互与文档模型，剧本导出支持 Markdown（纯文本，含分镜附录）和 JSON（当前会话的 `ProjectDocument v1`），经 WebView 下载 / 剪贴板交付——Markdown 生成器为 `src/editor/exportScript.ts`（大纲附录在 `src/editor/exportOutline.ts`），JSON 入口为 `src/editor/exportScriptJson.ts`，复用项目序列化规则。JSON 保留资产引用但不打包媒体文件，也不包含 AI 会话。设计见 [UI 规格 §五](docs/ui-design.md#五全局联动设定集--节点--成片)及 [JSON 数据格式](docs/data-model/project-document.md#31-结构化剧本导出json)；Rust 侧负责持久化与原生桥接（文件读写、退出屏障、媒体协议），当前不参与剧本导出。
+
+## 仓库结构
+
+```
+PlotWeave/
+├── .githooks/      # 版本化的提交 / 推送质量门禁
+├── scripts/        # SonarQube 门禁及其行为测试
+├── src/            # React + React Flow 前端（画布编辑、剧本导出生成）
+├── src-tauri/      # Rust 后端与 Tauri 壳（commands、持久化、原生桥接）
+├── docs/           # 项目文档（数据模型设计等）
+├── AGENTS.md       # AI 代理协作规范
+├── README.md
+└── LICENSE
+```
+
+## 分支模型
+
+`dev` 为**开发基线**，`main` 为**集成 / 发布分支**。仓库所有者于 2026-10-02 明确要求「PR #489 已经合并，将 dev 合并进 main，并新增一个合适的 release 版本」，该决策先于首次面向 `main` 的 PR，按原有启用条件启动首发。首发为 [v0.2.0](docs/releases/v0.2.0.md)。
+
+- 任务分支一律从当前本地 `dev` 拉出，使用 `feature/`、`fix/`、`docs/`、`chore/` 前缀。
+- 任务 PR 一律以 `dev` 为目标；`main` 仅接收来自 `dev` 的集成 / 发布 PR。
+- 按版本节点经 `dev → main` 集成 PR 发布；合并前检查 PR CI，合并后等待 `main` push CI 通过，再将版本 tag 与 GitHub Release 指向该合并提交。
+- 禁止直接向 `main` 或 `dev` 提交、推送。这是仓库协作规则；2026-10-02 发布前 API 检查显示两者 `protected: false` 且 rulesets 为空，不能把文档规则当作已配置的服务端保护。本次发布不改变仓库权限或保护设置。
+
+```
+main ──●────────────────●── 集成 / 发布（仅 PR ← dev）
+         \             /
+dev ────●───●───●───●───── 开发基线（仅任务 PR）
+          \       /
+feature/  ●───●  ●──●      任务分支（PR → dev）
+```
+
+## 快速开始
+
+```bash
+nvm use            # 切换到 .nvmrc 指定的 Node 版本（24.18.0）
+# Rust 工具链无需手动切换：rust-toolchain.toml 固定 1.95.0（含 rustfmt/clippy/
+# llvm-tools——llvm-profdata/llvm-cov 供覆盖率生成），rustup 代理在仓库任意
+# 目录自动解析，缺失时自动安装
+npm install        # 安装前端依赖
+cargo install cargo-llvm-cov  # Rust 语句覆盖率生成（pre-commit/push 门禁必需）
+export SONAR_HOST_URL=http://localhost:9000 # 指向本机实际使用的 SonarQube
+export SONAR_TOKEN=your-local-token         # 服务要求认证时设置，替换为本机令牌；也可用 PLOTWEAVE_SONAR_TOKEN（如写入 ~/.zshrc）
+npm run hooks:install # 启用版本化的 pre-commit / pre-merge-commit / prepare-commit-msg / pre-push hooks
+npm run tauri dev  # 启动 Tauri 开发调试（Vite 前端 + Rust 壳）
+```
+
+常用校验命令：
+
+- 前端：仓库根目录执行 `npm run format:check && npm run lint && npm run build`（`npm run format` 应用 Prettier 格式化）
+- 后端：`src-tauri/` 目录执行 `npm --prefix .. run check:size && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test`（先使用 `.nvmrc` 钉版 Node 检查仓库源码规模；`--all-targets` 同时覆盖测试目标）
+
+### 提交与推送门禁
+
+仓库使用同一套 `pre-commit` / `pre-merge-commit` / `prepare-commit-msg` / `pre-push` 门禁（issue #404：合并非快进合并、`git revert`、`git cherry-pick` 与 rebase 重放等自动提交路径同样过检）。启用 hooks 后，每次产生提交的操作与推送都会依次：
+
+1. 运行 `scripts/check-static.sh`（`npm run check:static`）：Prettier 格式检查 + ESLint 零警告（`--max-warnings=0`）+ 文件规模检查（`npm run check:size`，issue #432）+ 严格类型检查（`typecheck:strict`），失败即阻止（fail-fast 在覆盖率与扫描之前）。
+2. 运行 `npm run test:coverage`，生成最新的 `coverage/lcov.info`，并确认报告非空、包含源文件和实际命中行；整体行覆盖率跌破仓库下限 80% 时同样非零退出（vitest `thresholds`，issue #393）。
+3. 运行 `scripts/rust-coverage.sh`（cargo-llvm-cov），生成最新的 `src-tauri/target/coverage/lcov-rust.info`（Rust 语句覆盖率），并确认报告非空、包含源文件和实际命中行；随后按同一 LCOV 口径复核前端与 Rust 两份报告的行覆盖率均不低于 80%（issue #393，与本机 SonarQube 服务端 Quality Gate 的 80% 条件对齐的仓库侧可失败下限，恰等于下限通过；基线与边界见 `docs/development/rust-standard.md` 与 `docs/development/typescript-standard.md`）。
+4. 运行 `sonar-scanner` 并等待 SonarQube Quality Gate 完成。
+5. 确认 Quality Gate 为 `OK`，且**新增代码**的未解决问题为 `0`（增量清零：按 SonarQube New Code 周期过滤，即 `sinceLeakPeriod`；存量历史问题另行治理，不阻塞提交）。
+
+本机需安装 `sonar-scanner` 与 `cargo-llvm-cov`（`cargo install cargo-llvm-cov`；`llvm-tools` 组件由 rust-toolchain.toml 自动提供），并在执行 Git 操作的终端环境中显式设置 `SONAR_HOST_URL`；这样可以避免新版扫描器在地址缺失时误连 SonarQube Cloud。服务需要认证时，通过本机环境变量 `SONAR_TOKEN` 提供令牌；未设置 `SONAR_TOKEN` 时回退读取 `PLOTWEAVE_SONAR_TOKEN`（可导出在 `~/.zshrc` 中，Git 钩子继承调用方终端的环境）。地址按本机环境配置，令牌禁止写入仓库。也可以用 `npm run sonar:gate` 手动执行完整门禁。
+
+测试失败、覆盖率跌破下限、覆盖率报告无效、扫描失败、Quality Gate 未通过、服务不可用或新增代码仍有未解决问题时，Git 操作会被阻止。同一工作树只允许一个门禁运行，以免并发扫描覆盖共享产物。同一提交操作内经 `scripts/gate-tree-marker.sh`（单次消费的树标记）去重：普通 `git commit` 与合并仍各恰一次完整门禁，`--no-verify` 跳过 `pre-commit` 时由 `prepare-commit-msg` 兜底（标记不可跨操作复用；推送侧 `--no-verify` 仍被禁止）。推送侧按 stdin 的待推送 ref 逐个分析（issue #405）：被推提交即 HEAD 且索引与工作树可证等价（整个仓库没有未忽略的未跟踪文件）时，在当前工作树执行完整门禁；否则（非检出分支、脏工作树，或一次推送中与 HEAD 可证等价之外的其他提交）在临时 worktree 检出被推提交、按该树锁文件安装依赖后以当前门禁脚本分析，不触碰本地工作树——快慢按唯一提交逐个判定，推哪个 ref 就分析哪个 ref，同一提交只分析一次，删除 ref 跳过。推送钩子及其子进程以 `GIT_NO_REPLACE_OBJECTS=1` 禁用本地替换对象，解析、检出与台账均对照原始被推提交；未跟踪检查覆盖所有目录，避免任意目录的测试及其辅助文件、夹具影响覆盖率（[PR #442 评审](https://github.com/hailingu/PlotWeave/pull/442#pullrequestreview-5361127076)）。应逐项修复新增问题并重复执行门禁，直到新增问题数归零。
+
+### PR 持续集成（issue #228）
+
+推送到 `dev` / `main` 与面向这两个分支的 PR 会自动运行 `.github/workflows/ci.yml`（macOS runner，与本机目标平台一致）：frontend（Prettier 格式、ESLint 零警告、严格类型检查、仓库源码规模检查〔包含 Rust〕、构建、前端测试、scripts/.githooks 行测试）与 rust（fmt、clippy `-D warnings`、测试）两个 job 共同执行 AGENTS.md Scope Routing 的检查——每个 PR 都有绑定提交 SHA 的检查记录与失败日志。SonarQube 扫描与覆盖率生成保留在本机门禁（服务在本机，托管 runner 不可达；本地门禁日志即证据保留），CI 不重复也不削弱它。分支保护是否要求这些检查由仓库设置另行决定。
+
+### 版本与交付
+
+首个 GitHub Release 使用现有前端、Rust 和 Tauri 配置一致的 **0.2.0**，不宣称达到 1.0 的稳定性承诺。此次交付为源码版本，发布说明列出功能、验证证据及已知边界；不附安装包，也不声称完成 Developer ID 签名、公证或安装验收。前端/Rust CI 通过不等价于桌面分发验收。
+
+后续发布先在任务 PR 中同步 `package.json`、`package-lock.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 与 `src-tauri/tauri.conf.json` 的应用版本及发布说明，再合入 `dev`。需要附桌面产物时，另需完成目标平台打包、签名/公证（适用时）、安装启动与原生关键流程验收，并在 Release 中明确平台、架构及校验和；不得将未验证产物描述为可用安装包。
+
+## 文档与协作
+
+- AI 代理（ZCode / Codex 等）开始任何工作前，先阅读 [AGENTS.md](AGENTS.md)。
+- 项目文档使用中文。
+- 设计文档：[数据模型主题索引](docs/data-model/README.md)、[UI 规格](docs/ui-design.md)；旧章节与链接见[数据模型迁移对照](docs/data-model.md)，已关闭 issue 的落地结论与保留边界见[设计同步记录](docs/design-sync.md)。
+
+## 许可证
+
+[MIT](LICENSE)

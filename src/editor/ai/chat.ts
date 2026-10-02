@@ -1,0 +1,57 @@
+/**
+ * LLM 对话通道（docs/ui-design.md §6、数据模型 §12.2 tool-calling 循环）。
+ * 请求由 Rust 端 `llm_chat` 代理——API key 以 `provider.keyEnc` 密文随设置
+ * 落盘，Rust 解密使用（历史钥匙串仅只读回退），明文只在 Rust 进程内存中
+ * 出现，不出后端（§8.2/§10.4）；浏览器预览无 IPC，调用抛错由界面显示引导。
+ * 非流式；tools 为 OpenAI 兼容工具定义（可缺省），返回 assistant message
+ * 原文（content + 可选 tool_calls），写调用映射为预览卡命令、读调用就地回喂。
+ */
+import type { ProviderConfig } from '../../settings/types'
+import { IPC_COMMANDS } from '../../ipc/commands'
+import { ipcInvoke } from '../../ipc/invoke'
+import type { ToolSpec } from './tools'
+
+/** OpenAI 兼容对话消息（模块头：经 Rust llm_chat 代理的非流式通道）：
+ * 覆盖 system/user/assistant/tool 四种角色，tool 回喂与 tool_calls 透传
+ * 字段按 tool-calling 循环需要保留。 */
+export interface ChatMessage {
+  role: 'system' | 'user' | 'assistant' | 'tool'
+  content: string
+  /** role = 'tool' 时回喂对应的 tool_call id。 */
+  tool_call_id?: string
+  /** assistant 原始消息（含 tool_calls）在循环内透传时挂载。 */
+  tool_calls?: unknown
+}
+
+/** llmChat 的返回形态：assistant 原文（content 可空 + 可选 tool_calls），
+ * 写调用映射与读调用回喂都由上层循环消费。 */
+export interface AssistantMessage {
+  role: 'assistant'
+  content: string | null
+  tool_calls?: Array<{
+    id: string
+    type: 'function'
+    function: { name: string; arguments: string }
+  }>
+}
+
+/** 发送一轮对话，返回 assistant message（含可选 tool_calls）。 */
+export async function llmChat(
+  provider: ProviderConfig,
+  model: string,
+  messages: ChatMessage[],
+  tools?: ToolSpec[],
+): Promise<AssistantMessage> {
+  return ipcInvoke<AssistantMessage>(IPC_COMMANDS.llmChat, {
+    providerId: provider.id,
+    baseUrl: provider.baseUrl,
+    model,
+    messages: messages.map(({ role, content, tool_call_id, tool_calls }) => ({
+      role,
+      content,
+      ...(tool_call_id !== undefined ? { tool_call_id } : {}),
+      ...(tool_calls !== undefined ? { tool_calls } : {}),
+    })),
+    tools: tools ?? null,
+  })
+}

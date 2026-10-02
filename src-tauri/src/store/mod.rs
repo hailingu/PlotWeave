@@ -1,0 +1,105 @@
+//! 项目持久化（docs/data-model.md v1 §10/§11）：
+//! 每个项目一个 JSON 文件，存于应用数据目录 `projects/` 下，文件名即项目 id。
+//! 落盘格式为 ProjectDocument 信封（schemaVersion + project 元信息 + graph +
+//! settings + episodeTitles + assets）。graph/settings/assets 以 `serde_json::Value`
+//! 透传，但保存边界（§10.5）执行完整信封校验：版本、容器形状、时间戳、
+//! 集标题键、AssetRef 形状——只验证不修复，异型值整次拒绝；updatedAt 由 Rust
+//! 端盖戳，id 以受信路径参数覆盖。落盘走原子写（§10.2）。
+//! 旧扁平格式在 load 时按第 0 步信封判型：形状特征匹配旧扁平格式才包装为
+//! v0 信封交付前端（显式 schemaVersion 0 同论），丢失版本号或版本字段为无法
+//! 表达受支持/未来版本的异型值（null/布尔/容器/非规范数字串，issue #338）
+//! 但保持 v1 信封特征的文档按 v1 交付；非法数值、规范整数字符串、显式版本
+//! 号与信封形状两族矛盾的文档拒绝加载并保留原文件。v1 信封的 project 元信息
+//! 逐字段宽容提取，字段级损坏不阻断加载，
+//! 修复与警告归前端归一化层。节点级迁移与归一化由前端模型层（§11）完成。
+//!
+//! 模块组织（issue #14 拆分）：types（信封类型与 id/名称工具）、
+//! validate（保存边界校验与实路径复验）、persist（受信句柄与原子写
+//! 原语）、list（列表与多版本封套解析）、commands（生命周期命令）、
+//! copy（跨项目资产复制）、error（领域错误类型，issue #144 store 分片）；
+//! 对外 store:: 符号路径经 re-export 保持不变。
+
+mod commands;
+mod copy;
+mod damaged_backup;
+pub(crate) mod error;
+mod file_permissions;
+mod list;
+mod persist;
+mod types;
+mod validate;
+
+#[cfg(test)]
+mod testutil;
+
+pub use commands::{
+    create_project, delete_project, load_ai_session, load_project, save_ai_session, save_project,
+};
+pub use copy::copy_project_assets;
+// 损坏控制文件覆盖前的耐久备份共用内核（#137 图库先例，#390 接入 prefs）
+pub(crate) use damaged_backup::{backup_damaged_file, DamagedFileBackup};
+pub(crate) use file_permissions::FilePermissions;
+pub use list::list_projects;
+// 展示边界转换（issue #144 store 分片）：store 内核返回类型化的
+// store::error::StoreError，跨域调用方与 Tauri 命令出口经 to_ipc_text
+// 按既有中文文案上浮（领域错误类型本体经 crate::store::error 路径引用）
+pub(crate) use error::to_ipc_text;
+// 项目文档读取内核供 pwmedia 项目 scope 媒体解析复用（issue #31，store 外
+// 唯一消费方为 assets::resolve_project_media_entry）
+pub(crate) use commands::load_project_file;
+pub(crate) use types::new_id_with_prefix;
+pub use types::{new_id, validate_id};
+pub use validate::verify_project_assets;
+
+#[cfg(unix)]
+pub(crate) use persist::asset_identity;
+#[cfg(test)]
+pub(crate) use persist::faults as atomic_write_faults;
+pub(crate) use persist::{
+    asset_stat, atomic_write, atomic_write_private, create_dir_all_durable, open_dir_bound,
+    projects_dir, projects_op_lock, sweep_orphan_temp_files, sync_new_child_dir_host,
+};
+pub(crate) use validate::{
+    is_canonical_mime, is_valid_active_asset_rel_path, is_valid_asset_rel_path,
+    verify_asset_real_path,
+};
+
+// #[tauri::command] 的隐藏包装项（__cmd__* / __tauri_command_name_*）留在
+// 定义模块：一并 re-export，lib.rs 的 generate_handler!(store::…) 注册
+// 路径保持不变
+#[doc(hidden)]
+pub use commands::__cmd__create_project;
+#[doc(hidden)]
+pub use commands::__cmd__delete_project;
+#[doc(hidden)]
+pub use commands::__cmd__load_ai_session;
+#[doc(hidden)]
+pub use commands::__cmd__load_project;
+#[doc(hidden)]
+pub use commands::__cmd__save_ai_session;
+#[doc(hidden)]
+pub use commands::__cmd__save_project;
+#[doc(hidden)]
+pub use commands::__tauri_command_name_create_project;
+#[doc(hidden)]
+pub use commands::__tauri_command_name_delete_project;
+#[doc(hidden)]
+pub use commands::__tauri_command_name_load_ai_session;
+#[doc(hidden)]
+pub use commands::__tauri_command_name_load_project;
+#[doc(hidden)]
+pub use commands::__tauri_command_name_save_ai_session;
+#[doc(hidden)]
+pub use commands::__tauri_command_name_save_project;
+#[doc(hidden)]
+pub use copy::__cmd__copy_project_assets;
+#[doc(hidden)]
+pub use copy::__tauri_command_name_copy_project_assets;
+#[doc(hidden)]
+pub use list::__cmd__list_projects;
+#[doc(hidden)]
+pub use list::__tauri_command_name_list_projects;
+#[doc(hidden)]
+pub use validate::__cmd__verify_project_assets;
+#[doc(hidden)]
+pub use validate::__tauri_command_name_verify_project_assets;

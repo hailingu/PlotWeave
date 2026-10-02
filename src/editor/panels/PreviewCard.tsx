@@ -1,0 +1,160 @@
+import { batchIssueText, type BatchValidation } from '../ai/commands'
+
+const ITEM_ICONS: Record<BatchValidation['items'][number]['kind'], string> = {
+  create: '＋',
+  update: '✎',
+  connect: '⟶',
+  disconnect: '⤫',
+  delete: '🗑',
+  // 设定实体条目（issue 44）：与节点创建/修改同列，标签自明种类
+  create_entity: '＋',
+  update_entity: '✎',
+}
+
+/** 执行按钮文案：含删除时按武装态分两步（S3358 独立成函数）。 */
+function executeLabel(v: BatchValidation, armed: boolean): string {
+  if (!v.hasDeletes) return '✓ 执行改动'
+  if (armed) return '再点一次确认执行删除'
+  return `执行（含 ${v.items.filter((i) => i.danger).length} 项删除）`
+}
+
+/** 卡片操作区（PreviewCard 拆分，issue #99）：已执行回执，或忽略 +
+ * 两步确认执行（含删除时先武装再执行）。忽略只受 busy 并发约束——校验
+ * 失败卡不可执行，但用户可逐张忽略其处置（issue #151，状态随会话
+ * 落盘并回喂模型，ui-design §6）；执行仍要求批次通过校验。已执行提示
+ * 只陈述「曾执行成功」：撤销不回写卡片，撤销/重做或后续编辑都会改变
+ * 撤销栈顶，提示不承诺 ⌘Z 当前可撤销本批次（issue #347）。 */
+function PreviewCardActions({
+  v,
+  status,
+  historical,
+  armed,
+  busy,
+  onArm,
+  onExecute,
+  onDismiss,
+}: Pick<
+  PreviewCardProps,
+  | 'v'
+  | 'status'
+  | 'historical'
+  | 'armed'
+  | 'busy'
+  | 'onArm'
+  | 'onExecute'
+  | 'onDismiss'
+>) {
+  return (
+    <div className="pw-ai-actions">
+      {status === 'executed' ? (
+        <span className="pw-ai-note">
+          {historical ? '✓ 已执行（历史改动）' : '✓ 已执行'}
+        </span>
+      ) : (
+        <>
+          <button
+            type="button"
+            className="pw-ai-btn"
+            disabled={busy}
+            onClick={onDismiss}
+          >
+            忽略
+          </button>
+          <button
+            type="button"
+            className={`pw-ai-btn primary${v.hasDeletes ? ' danger' : ''}`}
+            disabled={!v.ok || busy}
+            onClick={() => {
+              if (!v.hasDeletes || armed) onExecute()
+              else onArm()
+            }}
+          >
+            {executeLabel(v, armed)}
+          </button>
+        </>
+      )}
+    </div>
+  )
+}
+
+/**
+ * 改动预览卡（§6）：整卡 = 一个 batch 命令。删除项 danger 置顶
+ * （校验器已排序）；含删除时执行需两步确认，不提供自动执行开关。
+ * 会话条目的挂载与执行回执在 AiThread.tsx（issue #39 拆分）。
+ */
+interface PreviewCardProps {
+  readonly v: BatchValidation
+  readonly status: 'pending' | 'executed' | 'dismissed'
+  /** 跨会话恢复的历史执行卡（issue #231）：撤销栈已重建，显示「历史改动」
+   * 区分于当前会话回执。可显式 undefined = 非历史卡；两类已执行卡都不
+   * 承诺 ⌘Z 当前可整批撤销——会话内撤销/重做或后续编辑同样使该宣称
+   * 失真，撤销不回写卡片（issue #347）。 */
+  readonly historical?: boolean | undefined
+  readonly armed: boolean
+  readonly busy: boolean
+  readonly onArm: () => void
+  readonly onExecute: () => void
+  readonly onDismiss: () => void
+}
+
+/** AI 改动预览卡（§6）：整批条目的图标化清单 + 确认/忽略动作；
+ * 删除类置顶与「执行须先确认」的武装语义由父级状态驱动。 */
+export function PreviewCard({
+  v,
+  status,
+  historical,
+  armed,
+  busy,
+  onArm,
+  onExecute,
+  onDismiss,
+}: PreviewCardProps) {
+  if (status === 'dismissed') return null
+  return (
+    // 原生 section 地标承载分组语义（S6819）
+    <section
+      className={`pw-ai-card${v.hasDeletes ? ' danger' : ''}`}
+      aria-label="AI 改动预览"
+    >
+      <div className="pw-ai-card-head">✦ 改动预览 · {v.commands.length} 项</div>
+      {!v.ok && (
+        <ul className="pw-ai-issues">
+          {v.issues.map((iss) => (
+            <li key={iss.index} className="pw-ai-issue">
+              {/* 批次级整体错误不编序号（issue #150，与 agentLoop 回喂同口径） */}
+              {batchIssueText(iss)}
+            </li>
+          ))}
+        </ul>
+      )}
+      {v.ok && (
+        <ul className="pw-ai-items">
+          {v.items.map((item) => (
+            <li
+              key={item.key}
+              className={`pw-ai-item${item.danger ? ' danger' : ''}`}
+            >
+              <span className="pw-ai-item-icon" aria-hidden>
+                {ITEM_ICONS[item.kind]}
+              </span>
+              {item.label}
+            </li>
+          ))}
+        </ul>
+      )}
+      <PreviewCardActions
+        v={v}
+        status={status}
+        historical={historical}
+        armed={armed}
+        busy={busy}
+        onArm={onArm}
+        onExecute={onExecute}
+        onDismiss={onDismiss}
+      />
+      {!v.ok && (
+        <div className="pw-ai-note">批次未通过校验，画布未发生任何变化。</div>
+      )}
+    </section>
+  )
+}

@@ -1,0 +1,302 @@
+// @vitest-environment happy-dom
+/**
+ * 防抖落盘装配 hook（从 EditorWindow 搬迁，§3/§10.2）：视口标脏落盘与保存
+ * 失败横幅上浮/重试成功后清除。防抖节律本身由 useDebouncedSave 单测覆盖，
+ * 这里只守护装配语义（视口 ref、文档构建与诊断通道）。
+ */
+import { act, renderHook } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  useEditorDocument,
+  type EditorProjectContent,
+} from './useEditorDocument'
+import { useEditorPersistence } from './useEditorPersistence'
+import { notifyRetryPersisted } from '../projectStore/saveChain'
+import type { ProjectContent } from '../model/content'
+
+const PROJECT: EditorProjectContent = {
+  id: 'p1',
+  name: '测试项目',
+  nodes: [],
+  edges: [],
+  settings: { characters: [], locations: [] },
+}
+
+/** 装配真实文档与保存调度，保留卸载入口以验证终帧冲刷。 */
+function setup() {
+  const onSave = vi.fn<(doc: ProjectContent) => void | Promise<void>>()
+  const { result, unmount } = renderHook(() => {
+    const doc = useEditorDocument(PROJECT)
+    return { doc, persistence: useEditorPersistence(PROJECT, doc, onSave) }
+  })
+  return { result, onSave, unmount }
+}
+
+/** 推进防抖窗口并让在途保存的 Promise 结算。 */
+const flush = async () => {
+  await act(async () => {
+    vi.advanceTimersByTime(700)
+    await Promise.resolve()
+  })
+}
+
+describe('useEditorPersistence（§3/§10.2 装配：视口与诊断横幅）', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it('onMoveEnd 更新响应式视口与 ref，并按最新视口构建文档落盘', async () => {
+    const { result, onSave } = setup()
+    act(() =>
+      result.current.persistence.onMoveEnd(null, { x: 5, y: 6, zoom: 2 }),
+    )
+    expect(result.current.doc.viewportRef.current).toEqual({
+      x: 5,
+      y: 6,
+      zoom: 2,
+    })
+    expect(result.current.doc.viewport).toEqual({ x: 5, y: 6, zoom: 2 })
+
+    await flush()
+    expect(onSave).toHaveBeenCalled()
+    const saved = onSave.mock.calls[onSave.mock.calls.length - 1][0]
+    expect(saved).toMatchObject({
+      name: '测试项目',
+      viewport: { x: 5, y: 6, zoom: 2 },
+    })
+  })
+
+  it('保存失败上浮横幅文案，自动重试成功后清除', async () => {
+    const { result, onSave } = setup()
+    onSave.mockRejectedValueOnce(new Error('磁盘已满'))
+    act(() =>
+      result.current.persistence.onMoveEnd(null, { x: 0, y: 0, zoom: 1 }),
+    )
+
+    await flush()
+    expect(result.current.persistence.saveError).toBe('磁盘已满')
+
+    await flush()
+    expect(result.current.persistence.saveError).toBeNull()
+  })
+})
+
+describe('useEditorPersistence（视口完成与恢复，PR #489）', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it('保存失败后连续完成视口，重试只保存最新值且不回退响应式值', async () => {
+    const { result, onSave } = setup()
+    onSave.mockRejectedValueOnce(new Error('磁盘已满'))
+    act(() => {
+      result.current.persistence.onMoveEnd(null, { x: 1, y: 2, zoom: 1 })
+    })
+    await flush()
+    expect(result.current.persistence.saveError).toBe('磁盘已满')
+    const final = { x: 50, y: 60, zoom: 2 }
+    act(() => {
+      result.current.persistence.onMoveEnd(null, { x: 10, y: 20, zoom: 1.5 })
+      result.current.persistence.onMoveEnd(null, final)
+      expect(result.current.doc.viewportRef.current).toEqual(final)
+    })
+    expect(result.current.doc.viewport).toEqual(final)
+    await flush()
+    expect(result.current.persistence.saveError).toBeNull()
+    expect(onSave.mock.calls.map(([content]) => content.viewport)).toEqual([
+      { x: 1, y: 2, zoom: 1 },
+      final,
+    ])
+    expect(result.current.doc.viewport).toEqual(final)
+  })
+
+  it('完成视口后同批卸载仍冲刷终帧，响应式更新不延迟保存输入', async () => {
+    const { result, onSave, unmount } = setup()
+    const final = { x: -20, y: 40, zoom: 0.5 }
+    await act(async () => {
+      result.current.persistence.onMoveEnd(null, final)
+      unmount()
+    })
+    expect(onSave.mock.calls.map(([content]) => content.viewport)).toEqual([
+      final,
+    ])
+  })
+
+  it('相同坐标的重复完成事件保留响应式引用，不使相同导出快照失效', () => {
+    const { result } = setup()
+    act(() => {
+      result.current.persistence.onMoveEnd(null, { x: 1, y: 2, zoom: 1 })
+    })
+    const viewport = result.current.doc.viewport
+    expect(viewport).toEqual({ x: 1, y: 2, zoom: 1 })
+    act(() => {
+      result.current.persistence.onMoveEnd(null, { x: 1, y: 2, zoom: 1 })
+    })
+    expect(result.current.doc.viewport).toBe(viewport)
+    expect(result.current.doc.viewportRef.current).toBe(viewport)
+  })
+})
+
+describe('useEditorPersistence（保存失败横幅的非 Error 拒绝原因，issue #270）', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it('拒绝原因为对象时横幅给出可读 JSON，错误字段不丢失', async () => {
+    const { result, onSave } = setup()
+    onSave.mockRejectedValueOnce({ code: 'EACCES', path: '/tmp/p1.json' })
+    act(() =>
+      result.current.persistence.onMoveEnd(null, { x: 0, y: 0, zoom: 1 }),
+    )
+    await flush()
+    const banner = result.current.persistence.saveError
+    expect(typeof banner).toBe('string')
+    expect(banner).toContain('EACCES')
+    expect(banner).toContain('/tmp/p1.json')
+  })
+
+  it('拒绝原因不可序列化（BigInt/循环引用）时横幅落到非空兜底，不二次抛出', async () => {
+    const circular: Record<string, unknown> = {}
+    circular.self = circular
+    for (const bad of [{ bytes: 2n }, circular]) {
+      const { result, onSave } = setup()
+      onSave.mockRejectedValueOnce(bad)
+      act(() =>
+        result.current.persistence.onMoveEnd(null, { x: 0, y: 0, zoom: 1 }),
+      )
+      await flush()
+      const banner = result.current.persistence.saveError
+      expect(typeof banner).toBe('string')
+      expect(banner?.trim().length, '兜底横幅必须非空').toBeGreaterThan(0)
+    }
+  })
+})
+
+describe('useEditorPersistence（whenCanvasCommitted 持久化闸门）', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it('whenCanvasCommitted 只由注册之后开始的保存兑现：在途旧保存不算数', async () => {
+    const { result, onSave } = setup()
+    let releaseFirst!: () => void
+    onSave.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseFirst = resolve
+        }),
+    )
+    act(() =>
+      result.current.persistence.onMoveEnd(null, { x: 1, y: 1, zoom: 1 }),
+    )
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(700)
+    })
+    expect(onSave).toHaveBeenCalledTimes(1)
+
+    // 保存仍在途时登记等待者：旧文档落定不得兑现（它早于本次改动）
+    let committed = false
+    const waiter = result.current.persistence.whenCanvasCommitted().then(() => {
+      committed = true
+    })
+    await act(async () => {
+      releaseFirst()
+      await Promise.resolve()
+    })
+    expect(committed).toBe(false)
+
+    // 注册之后开始的保存成功落定才兑现
+    act(() =>
+      result.current.persistence.onMoveEnd(null, { x: 2, y: 2, zoom: 1 }),
+    )
+    await flush()
+    await act(async () => {
+      await waiter
+    })
+    expect(committed).toBe(true)
+  })
+
+  it('whenCanvasCommitted 在保存失败时保持等待，由防抖重试成功兑现', async () => {
+    const { result, onSave } = setup()
+    onSave.mockRejectedValueOnce(new Error('磁盘已满'))
+    let committed = false
+    const waiter = result.current.persistence.whenCanvasCommitted().then(() => {
+      committed = true
+    })
+    act(() =>
+      result.current.persistence.onMoveEnd(null, { x: 1, y: 1, zoom: 1 }),
+    )
+
+    await flush()
+    expect(result.current.persistence.saveError).toBe('磁盘已满')
+    expect(committed).toBe(false)
+
+    await flush()
+    await act(async () => {
+      await waiter
+    })
+    expect(committed).toBe(true)
+  })
+})
+
+describe('useEditorPersistence（链上重存成功对齐完成语义，PR #174 评审）', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it('链上重存成功同一登记文档：兑现等待者并清除失败横幅（PR #174 评审）', async () => {
+    const { result, onSave } = setup()
+    onSave.mockRejectedValue(new Error('磁盘已满'))
+    let committed = false
+    const waiter = result.current.persistence.whenCanvasCommitted().then(() => {
+      committed = true
+    })
+    act(() =>
+      result.current.persistence.onMoveEnd(null, { x: 1, y: 1, zoom: 1 }),
+    )
+
+    await flush()
+    expect(result.current.persistence.saveError).toBe('磁盘已满')
+    expect(committed).toBe(false)
+
+    // 保存链对同一登记文档重存成功（携带同一文档对象）：完成语义与常规
+    // 保存成功对齐——兑现 AI 执行回执等待者、清除失败横幅
+    act(() => {
+      notifyRetryPersisted(onSave.mock.calls[0][0] as ProjectContent)
+    })
+    await act(async () => {
+      await waiter
+    })
+    expect(committed).toBe(true)
+    expect(result.current.persistence.saveError).toBeNull()
+  })
+
+  it('链上重存成功前已有更新编辑 B：B 的等待者不被 A 的完成兑现（PR #174 评审）', async () => {
+    const { result, onSave } = setup()
+    onSave.mockRejectedValue(new Error('磁盘已满'))
+    // A 冲刷失败并登记
+    act(() =>
+      result.current.persistence.onMoveEnd(null, { x: 1, y: 1, zoom: 1 }),
+    )
+    await flush()
+    expect(result.current.persistence.saveError).toBe('磁盘已满')
+    // A 的重试在途期间用户编辑出 B，并登记 AI 执行回执等待者
+    act(() =>
+      result.current.persistence.onMoveEnd(null, { x: 2, y: 2, zoom: 1 }),
+    )
+    let committed = false
+    const waiter = result.current.persistence.whenCanvasCommitted().then(() => {
+      committed = true
+    })
+    // A 的重存完成通知：B 尚未落盘，其等待者不得被兑现
+    act(() => {
+      notifyRetryPersisted(onSave.mock.calls[0][0] as ProjectContent)
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(committed).toBe(false)
+    // B 由防抖节律真实保存成功后才兑现
+    onSave.mockResolvedValue(undefined)
+    await flush()
+    await act(async () => {
+      await waiter
+    })
+    expect(committed).toBe(true)
+  })
+})

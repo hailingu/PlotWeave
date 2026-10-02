@@ -1,0 +1,457 @@
+// @vitest-environment happy-dom
+/**
+ * 编辑器左栏组件测试：大纲分段的集分组/行标签/节拍兑现徽标、
+ * 行点击定位与集聚焦、集标题行内改名、大纲拖拽落点（行/组）、
+ * 设定集分段的增删改与实体拖拽负载、资产分段挂载。
+ */
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import {
+  cleanup,
+  createEvent,
+  fireEvent,
+  render,
+  screen,
+} from '@testing-library/react'
+import { LeftPanel } from './LeftPanel'
+import type { SettingsActions } from './settingsActions'
+import { PW_ENTITY_MIME, type EntityDragPayload } from '../dragDrop'
+import type { CanvasNode } from '../nodes/types'
+
+afterEach(cleanup)
+
+beforeAll(() => {
+  // happy-dom 未实现 scrollIntoView（反向联动 effect 用）
+  Element.prototype.scrollIntoView = vi.fn()
+})
+
+const OUTLINE_MIME = 'application/x-pw-outline'
+
+const nodes: CanvasNode[] = [
+  {
+    id: 's1',
+    type: 'scene',
+    position: { x: 100, y: 0 },
+    data: {
+      name: '场一',
+      sceneNo: 1,
+      interior: true,
+      time: '🌙 夜',
+      synopsis: '',
+      characterIds: [],
+      episodeNo: 1,
+    },
+  } as CanvasNode,
+  {
+    id: 'b1',
+    type: 'beat',
+    position: { x: 0, y: 0 },
+    data: { name: '节拍一', tone: '紧张', episodeNo: 1 },
+  } as CanvasNode,
+  {
+    id: 'd1',
+    type: 'dialogue',
+    position: { x: 200, y: 0 },
+    data: { name: '对白一', lines: [] },
+  } as CanvasNode,
+]
+
+function setup(over: Partial<Parameters<typeof LeftPanel>[0]> = {}) {
+  const settingsActions: SettingsActions = {
+    addCharacter: vi.fn(),
+    renameCharacter: vi.fn(),
+    deleteCharacter: vi.fn(),
+    updateCharacter: vi.fn(),
+    addLocation: vi.fn(),
+    renameLocation: vi.fn(),
+    deleteLocation: vi.fn(),
+    updateLocation: vi.fn(),
+    addDocument: vi.fn(),
+    updateDocument: vi.fn(),
+    deleteDocument: vi.fn(),
+  }
+  const spies = {
+    onResize: vi.fn(),
+    onLocate: vi.fn(),
+    onFocusEpisode: vi.fn(),
+    onRenameEpisode: vi.fn(),
+    onOutlineDrop: vi.fn(),
+    settingsActions,
+  }
+  render(
+    <LeftPanel
+      open
+      width={280}
+      nodes={nodes}
+      contentNodes={nodes}
+      edges={[]}
+      settings={{
+        characters: [{ id: 'c1', name: '林晚', gradient: 'g1' }],
+        locations: [{ id: 'l1', name: '天台' }],
+      }}
+      episodeTitles={{ 1: '开局' }}
+      focusedEpisode={null}
+      docDialog={{ editingDocId: null, open: vi.fn(), close: vi.fn() }}
+      {...spies}
+      {...over}
+    />,
+  )
+  return spies
+}
+
+/** 大纲行查询：行是 button，文本含 label。 */
+const row = (label: string) =>
+  screen
+    .getAllByRole('button')
+    .find(
+      (b) =>
+        b.classList.contains('pw-outline-row') &&
+        b.textContent?.includes(label),
+    )!
+
+/** dataTransfer 桩：happy-dom 的 DragEvent 不带数据通道。 */
+function dt(init: Record<string, string> = {}) {
+  const store = { ...init }
+  return {
+    store,
+    getData: (k: string) => store[k as keyof typeof store] ?? '',
+    setData: (k: string, v: string) => {
+      store[k as keyof typeof store] = v as never
+    },
+    get types() {
+      return Object.keys(store)
+    },
+    dropEffect: '',
+    effectAllowed: '',
+  }
+}
+
+describe('LeftPanel 大纲分段', () => {
+  it('按集分组渲染：集行标题/计数、行标签格式、未分集组、节拍待兑现徽标', () => {
+    setup()
+    expect(screen.getByRole('button', { name: '第 1 集' })).toBeTruthy()
+    expect(screen.getByText('开局')).toBeTruthy()
+    expect(screen.getByText('2 行')).toBeTruthy()
+    expect(row('场 01 · 场一')).toBeTruthy()
+    expect(row('节拍 · 节拍一')).toBeTruthy()
+    expect(screen.getByText('待兑现')).toBeTruthy() // 无 sequence 邻接场景
+    expect(screen.getByText('未分集')).toBeTruthy()
+    expect(row('对白 · 对白一')).toBeTruthy()
+  })
+
+  it('点击行定位画布节点；点击集行聚焦该集', () => {
+    const spies = setup()
+    fireEvent.click(row('场 01 · 场一'))
+    expect(spies.onLocate).toHaveBeenCalledWith('s1')
+    fireEvent.click(screen.getByRole('button', { name: '第 1 集' }))
+    expect(spies.onFocusEpisode).toHaveBeenCalledWith(1)
+  })
+
+  it('集标题行内改名（编辑即命令）', () => {
+    const spies = setup()
+    fireEvent.doubleClick(screen.getByRole('button', { name: '开局' }))
+    const input = screen.getByRole('textbox', { name: '第 1 集标题' })
+    fireEvent.change(input, { target: { value: '新标题' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    fireEvent.blur(input)
+    expect(spies.onRenameEpisode).toHaveBeenCalledWith(1, '新标题')
+  })
+
+  it('selectedId 反向高亮大纲行', () => {
+    setup({ selectedId: 's1' })
+    expect(row('场 01 · 场一').className).toContain('pw-outline-on')
+    expect(row('节拍 · 节拍一').className).not.toContain('pw-outline-on')
+  })
+})
+
+describe('LeftPanel 大纲拖拽', () => {
+  it('行拖拽负载写 OUTLINE_MIME；落到行触发 row 落点（默认 after）', () => {
+    const spies = setup()
+    const d = dt()
+    fireEvent.dragStart(row('节拍 · 节拍一'), { dataTransfer: d })
+    expect(d.store[OUTLINE_MIME]).toBe('b1')
+
+    fireEvent.drop(row('场 01 · 场一'), {
+      dataTransfer: dt({ [OUTLINE_MIME]: 'b1' }),
+    })
+    expect(spies.onOutlineDrop).toHaveBeenCalledWith('b1', {
+      kind: 'row',
+      anchorId: 's1',
+      position: 'after',
+    })
+  })
+
+  it('拖到「未分集」组头触发 groupEnd 落点', () => {
+    const spies = setup()
+    fireEvent.drop(screen.getByText('未分集'), {
+      dataTransfer: dt({ [OUTLINE_MIME]: 's1' }),
+    })
+    expect(spies.onOutlineDrop).toHaveBeenCalledWith('s1', {
+      kind: 'groupEnd',
+      episode: null,
+    })
+  })
+
+  it('拖拽源与目标相同则不派发', () => {
+    const spies = setup()
+    fireEvent.drop(row('场 01 · 场一'), {
+      dataTransfer: dt({ [OUTLINE_MIME]: 's1' }),
+    })
+    expect(spies.onOutlineDrop).not.toHaveBeenCalled()
+  })
+
+  it('行 dragOver：上半 before / 下半 after 插入线提示；dragLeave 清除', () => {
+    setup()
+    const target = row('场 01 · 场一')
+    // happy-dom 的 getBoundingClientRect 全零：clientY < 0 = 上半；
+    // 且其 DragEvent 忽略 init 里的 clientY，须建事件后显式覆写
+    const dragOverAt = (clientY: number) => {
+      const ev = createEvent.dragOver(target, {
+        dataTransfer: dt({ [OUTLINE_MIME]: 'b1' }),
+      })
+      Object.defineProperty(ev, 'clientY', { value: clientY })
+      fireEvent(target, ev)
+    }
+    dragOverAt(-1)
+    expect(target.className).toContain('pw-drop-above')
+
+    dragOverAt(10)
+    expect(target.className).toContain('pw-drop-below')
+
+    fireEvent.dragLeave(target)
+    expect(target.className).not.toContain('pw-drop-below')
+  })
+
+  it('dragOver 非大纲 MIME 不出提示；分镜行（level ≥ 3）不接收排序悬停', () => {
+    setup()
+    const target = row('场 01 · 场一')
+    fireEvent.dragOver(target, {
+      dataTransfer: dt({ 'text/plain': 'x' }),
+      clientY: -1,
+    })
+    expect(target.className).not.toContain('pw-drop-above')
+  })
+
+  it('编号集组头：dragOver 出整组落点提示、drop 派发该集 groupEnd、dragLeave 清除', () => {
+    const spies = setup()
+    const head = screen.getByText('第 1 集').closest('.pw-outline-ep')!
+    fireEvent.dragOver(head, { dataTransfer: dt({ [OUTLINE_MIME]: 'd1' }) })
+    expect(head.className).toContain('pw-drop-into')
+
+    fireEvent.drop(head, { dataTransfer: dt({ [OUTLINE_MIME]: 'd1' }) })
+    expect(spies.onOutlineDrop).toHaveBeenCalledWith('d1', {
+      kind: 'groupEnd',
+      episode: 1,
+    })
+    expect(head.className).not.toContain('pw-drop-into')
+  })
+
+  it('「未分集」组头：dragOver 出提示，dragLeave 清除', () => {
+    setup()
+    const head = screen.getByText('未分集')
+    fireEvent.dragOver(head, { dataTransfer: dt({ [OUTLINE_MIME]: 'd1' }) })
+    expect(head.className).toContain('pw-drop-into')
+    fireEvent.dragLeave(head)
+    expect(head.className).not.toContain('pw-drop-into')
+  })
+})
+
+describe('LeftPanel 设定集分段', () => {
+  const toSettingsTab = () => {
+    fireEvent.click(screen.getByRole('button', { name: '设定集' }))
+  }
+
+  it('新增/删除角色与地点透传动作', () => {
+    const spies = setup()
+    toSettingsTab()
+    fireEvent.click(screen.getByRole('button', { name: '＋ 新增角色' }))
+    expect(spies.settingsActions.addCharacter).toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: '删除角色 林晚' }))
+    expect(spies.settingsActions.deleteCharacter).toHaveBeenCalledWith('c1')
+    fireEvent.click(screen.getByRole('button', { name: '＋ 新增地点' }))
+    expect(spies.settingsActions.addLocation).toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: '删除地点 天台' }))
+    expect(spies.settingsActions.deleteLocation).toHaveBeenCalledWith('l1')
+  })
+
+  it('角色行内改名透传 renameCharacter', () => {
+    const spies = setup()
+    toSettingsTab()
+    fireEvent.doubleClick(screen.getByRole('button', { name: '林晚' }))
+    const input = screen.getByRole('textbox', { name: '角色名 林晚' })
+    fireEvent.change(input, { target: { value: '林晚晴' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    fireEvent.blur(input)
+    expect(spies.settingsActions.renameCharacter).toHaveBeenCalledWith(
+      'c1',
+      '林晚晴',
+    )
+  })
+
+  it('实体拖拽负载为 PW_ENTITY_MIME JSON', () => {
+    setup()
+    toSettingsTab()
+    const d = dt()
+    fireEvent.dragStart(screen.getByTitle(/拖到画布节点建立引用/), {
+      dataTransfer: d,
+    })
+    const payload = JSON.parse(d.store[PW_ENTITY_MIME]) as EntityDragPayload
+    expect(payload).toEqual({ kind: 'character', id: 'c1', name: '林晚' })
+  })
+
+  it('地点行内改名透传 renameLocation；地点拖拽负载为 location 实体', () => {
+    const spies = setup()
+    toSettingsTab()
+    fireEvent.doubleClick(screen.getByRole('button', { name: '天台' }))
+    const input = screen.getByRole('textbox', { name: '地点名 天台' })
+    fireEvent.change(input, { target: { value: '旧天台' } })
+    fireEvent.blur(input)
+    expect(spies.settingsActions.renameLocation).toHaveBeenCalledWith(
+      'l1',
+      '旧天台',
+    )
+
+    const d = dt()
+    fireEvent.dragStart(screen.getByTitle(/拖到索引卡设置地点/), {
+      dataTransfer: d,
+    })
+    const payload = JSON.parse(d.store[PW_ENTITY_MIME]) as EntityDragPayload
+    expect(payload).toEqual({ kind: 'location', id: 'l1', name: '天台' })
+  })
+})
+
+describe('LeftPanel 外壳', () => {
+  it('折叠时 aria-hidden 且无调宽手柄；切到资产分段挂载 AssetsPanel', async () => {
+    const spies = setup({ open: false })
+    const aside = document.querySelector('.pw-panel-left')!
+    expect(aside.getAttribute('aria-hidden')).toBe('true')
+    expect(document.querySelector('.pw-panel-resizer')).toBeNull()
+    void spies
+
+    cleanup()
+    setup()
+    fireEvent.click(screen.getByRole('button', { name: '资产' }))
+    expect(await screen.findByText('个人资产库 · 跨项目')).toBeTruthy()
+  })
+})
+
+/** 全部大纲行文本（按 DOM 序）——行序即真实 x 序的投影（issue #157 评审
+ * 用例的文件级 fixture：describe 闭包同样受 80 行上限约束）。 */
+const rowTexts = () =>
+  [...document.querySelectorAll('.pw-outline-row')].map(
+    (r) => r.textContent ?? '',
+  )
+
+const beat = (id: string, name: string, x: number): CanvasNode =>
+  ({
+    id,
+    type: 'beat',
+    position: { x, y: 0 },
+    data: { name, tone: '', episodeNo: 1 },
+  }) as unknown as CanvasNode
+
+const mkProps = (nodes: CanvasNode[], contentNodes: CanvasNode[]) =>
+  ({
+    open: true,
+    width: 280,
+    nodes,
+    contentNodes,
+    edges: [],
+    settings: { characters: [], locations: [] },
+    episodeTitles: {},
+    focusedEpisode: null,
+    docDialog: { editingDocId: null, open: vi.fn(), close: vi.fn() },
+    onResize: vi.fn(),
+    onLocate: vi.fn(),
+    onFocusEpisode: vi.fn(),
+    onRenameEpisode: vi.fn(),
+    onOutlineDrop: vi.fn(),
+    settingsActions: {
+      addCharacter: vi.fn(),
+      renameCharacter: vi.fn(),
+      deleteCharacter: vi.fn(),
+      updateCharacter: vi.fn(),
+      addLocation: vi.fn(),
+      renameLocation: vi.fn(),
+      deleteLocation: vi.fn(),
+      updateLocation: vi.fn(),
+      addDocument: vi.fn(),
+      updateDocument: vi.fn(),
+      deleteDocument: vi.fn(),
+    },
+  }) as Parameters<typeof LeftPanel>[0]
+
+describe('大纲行序的拖拽跟随（issue #157 评审 4027623775）', () => {
+  it('同 x 相等帧切换 id 决胜；越过 A 后行序翻转为真实 x 序', () => {
+    const A = beat('n-a', '节拍A', 100) // id 字典序小于 n-b
+    const B = beat('n-b', '节拍B', 0)
+    // contentNodes 引用恒定（位置帧不换内容引用——与运行时投影语义一致）
+    const contentNodes = [B, A]
+    const { rerender } = render(
+      <LeftPanel {...mkProps([B, A], contentNodes)} />,
+    )
+    expect(rowTexts()[0]).toContain('节拍B') // B.x 更小，行序 B 在前
+
+    // 相等帧：B 拖到与 A 相同 x——剧情流回退序按 id 决胜（A 在前），
+    // 面板必须与导出正文同序（issue #340 评审三轮：x-only 缓存键会让
+    // 相等帧滞留数组序，与导出分歧）
+    rerender(
+      <LeftPanel
+        {...mkProps([{ ...B, position: { x: 100, y: 0 } }, A], contentNodes)}
+      />,
+    )
+    expect(rowTexts()[0]).toContain('节拍A')
+
+    // 越过 A：真实 x 序仍为 A 在前——行序保持
+    rerender(
+      <LeftPanel
+        {...mkProps([{ ...B, position: { x: 200, y: 0 } }, A], contentNodes)}
+      />,
+    )
+    expect(rowTexts()[0]).toContain('节拍A')
+  })
+
+  it('x 相等落点且原 x 序与 id 序相反：缓存键切换 id 决胜，面板跟随导出序（issue #340 评审三轮）', () => {
+    // 初始 x 序 [B(100), A(200)] 与 id 序相反；两节点落到相等 x 后
+    // 剧情流回退序切换为 id 决胜 [A, B]——x-only 稳定键仍读数组序 [B, A]
+    // 不失效缓存，面板滞留旧序而导出已是新序
+    const A = beat('n-a', '节拍A', 200)
+    const B = beat('n-b', '节拍B', 100)
+    const contentNodes = [B, A]
+    const { rerender } = render(
+      <LeftPanel {...mkProps([B, A], contentNodes)} />,
+    )
+    expect(rowTexts()[0]).toContain('节拍B')
+
+    rerender(
+      <LeftPanel
+        {...mkProps(
+          [
+            { ...B, position: { x: 100, y: 0 } },
+            { ...A, position: { x: 100, y: 0 } },
+          ],
+          contentNodes,
+        )}
+      />,
+    )
+    expect(rowTexts()[0]).toContain('节拍A')
+  })
+
+  it('分隔符歧义 id（a 与 a|a，脏档合法形态）：越序仍正确翻转（PR #194 评审 4027732274）', () => {
+    // id 契约仅要求非空唯一：'a' 与 'a|a' 可共存；join('|') 对两种顺序
+    // 都产生 'a|a|a'——编码歧义会让越序不失效缓存
+    const A = beat('a|a', '节拍A', 100)
+    const B = beat('a', '节拍B', 0)
+    const contentNodes = [B, A]
+    const { rerender } = render(
+      <LeftPanel {...mkProps([B, A], contentNodes)} />,
+    )
+    expect(rowTexts()[0]).toContain('节拍B')
+
+    rerender(
+      <LeftPanel
+        {...mkProps([{ ...B, position: { x: 200, y: 0 } }, A], contentNodes)}
+      />,
+    )
+    expect(rowTexts()[0]).toContain('节拍A')
+  })
+})

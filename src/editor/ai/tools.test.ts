@@ -1,0 +1,398 @@
+import { describe, expect, it } from 'vitest'
+import {
+  AI_TOOLS,
+  READ_TOOL_NAMES,
+  WRITE_TOOL_NAMES,
+  toolCallsShapeDiagnostic,
+  toolCallsToCommands,
+  type ToolCall,
+} from './tools'
+import { nodeFieldTableText } from './nodeFields'
+import { documentFieldTableText, entityFieldTableText } from './entityFields'
+
+const call = (name: string, args: unknown): ToolCall => ({
+  id: `call-${name}`,
+  type: 'function',
+  function: { name, arguments: JSON.stringify(args) },
+})
+
+describe('toolCallsToCommands（§12.2 tool_calls → 预览卡命令）', () => {
+  it('五个写工具映射为对应命令；reason 透传', () => {
+    const { commands, errors } = toolCallsToCommands([
+      call('create_node', {
+        nodeType: 'scene',
+        ref: 'a',
+        data: { name: '天台' },
+      }),
+      call('update_node_spec', {
+        nodeId: 'a',
+        patch: { time: '🌙 夜' },
+        reason: '夜戏',
+      }),
+      call('delete_node', { nodeId: 'x' }),
+      call('connect_edge', {
+        sourceId: 'a',
+        targetId: 'b',
+        edgeKind: 'branch',
+        optionIndex: 1,
+      }),
+      call('disconnect_edge', { sourceId: 'b', targetId: 'c' }),
+    ])
+    expect(errors).toEqual([])
+    expect(commands.map((c) => c.op)).toEqual([
+      'create_node',
+      'update_node',
+      'delete_node',
+      'connect_edge',
+      'disconnect_edge',
+    ])
+    expect(commands[0]).toMatchObject({ nodeType: 'scene', ref: 'a' })
+    expect(commands[1]).toMatchObject({ reason: '夜戏' })
+    expect(commands[3]).toMatchObject({ edgeKind: 'branch', optionIndex: 1 })
+  })
+
+  it('batch 工具的 commands 原样并入（保持顺序）', () => {
+    const inner = [
+      { op: 'create_node', nodeType: 'beat', ref: 'b' },
+      { op: 'connect_edge', sourceId: 'b', targetId: 's1' },
+    ]
+    const { commands, errors } = toolCallsToCommands([
+      call('batch', { commands: inner }),
+    ])
+    expect(errors).toEqual([])
+    expect(commands).toEqual(inner)
+  })
+
+  it('batch 内的工具名 op 归一为命令词表（update_node_spec → update_node）', () => {
+    const { commands, errors } = toolCallsToCommands([
+      call('batch', {
+        commands: [
+          {
+            op: 'update_node_spec',
+            nodeId: 'n1',
+            patch: { options: ['坦白', '隐瞒', '沉默'] },
+          },
+          { op: 'update_node', nodeId: 'n2', patch: { tone: '爆发' } },
+        ],
+      }),
+    ])
+    expect(errors).toEqual([])
+    expect(commands).toEqual([
+      {
+        op: 'update_node',
+        nodeId: 'n1',
+        patch: { options: ['坦白', '隐瞒', '沉默'] },
+      },
+      { op: 'update_node', nodeId: 'n2', patch: { tone: '爆发' } },
+    ])
+  })
+
+  it('读工具进入 readRequests，不产生命令', () => {
+    const { commands, readRequests } = toolCallsToCommands([
+      call('get_graph_snapshot', {}),
+      call('get_node', { nodeId: 'n1' }),
+    ])
+    expect(commands).toEqual([])
+    expect(readRequests.map((r) => r.name)).toEqual([
+      'get_graph_snapshot',
+      'get_node',
+    ])
+    expect(readRequests[1].args).toEqual({ nodeId: 'n1' })
+    expect(readRequests[0].id).toBe('call-get_graph_snapshot')
+  })
+
+  it('坏参数与未知工具进 errors，不中断其余解析', () => {
+    const bad: ToolCall = {
+      id: 'call-bad',
+      type: 'function',
+      function: { name: 'create_node', arguments: '{not-json' },
+    }
+    const { commands, errors } = toolCallsToCommands([
+      bad,
+      call('fly_to_moon', {}),
+      call('delete_node', { nodeId: 'keep' }),
+    ])
+    expect(commands).toEqual([{ op: 'delete_node', nodeId: 'keep' }])
+    expect(errors).toHaveLength(2)
+    expect(errors[0]).toContain('call-bad')
+  })
+
+  it('id/nodeType 参数为对象或数组时归空，而非 [object Object]（S6551）', () => {
+    const { commands, errors } = toolCallsToCommands([
+      call('create_node', { nodeType: { scene: true } }),
+      call('delete_node', { nodeId: ['n1', 'n2'] }),
+    ])
+    expect(errors).toEqual([])
+    expect(commands[0]).toMatchObject({ op: 'create_node', nodeType: '' })
+    expect(commands[1]).toMatchObject({ op: 'delete_node', nodeId: '' })
+  })
+})
+
+describe('issue 44 通道映射：upsert_* 写工具与 get_settings_snapshot 读工具', () => {
+  it('batch 内的 upsert op 原样保留（不在映射层重释为命令词表）', () => {
+    const inner = [
+      { op: 'upsert_character', ref: 'hero', fields: { name: '林一' } },
+      { op: 'connect_edge', sourceId: 'b', targetId: 's1' },
+    ]
+    const { commands, errors } = toolCallsToCommands([
+      call('batch', {
+        commands: [
+          { op: 'update_node_spec', nodeId: 'n1', patch: { tone: '爆发' } },
+          ...inner,
+        ],
+      }),
+    ])
+    expect(errors).toEqual([])
+    expect(commands).toEqual([
+      { op: 'update_node', nodeId: 'n1', patch: { tone: '爆发' } },
+      ...inner,
+    ])
+  })
+
+  it('get_settings_snapshot 进入 readRequests（读工具，不产生命令）', () => {
+    const { commands, readRequests } = toolCallsToCommands([
+      call('get_settings_snapshot', {}),
+    ])
+    expect(commands).toEqual([])
+    expect(readRequests.map((r) => r.name)).toEqual(['get_settings_snapshot'])
+    expect(readRequests[0].id).toBe('call-get_settings_snapshot')
+  })
+
+  it('get_document 进入 readRequests（issue 56：按需读取文档全文）', () => {
+    const { commands, readRequests, errors } = toolCallsToCommands([
+      call('get_document', { documentId: 'doc-1' }),
+    ])
+    expect(errors).toEqual([])
+    expect(commands).toEqual([])
+    expect(readRequests.map((r) => r.name)).toEqual(['get_document'])
+  })
+
+  it('upsert_document 映射为对应命令（issue 56）：fields 归对象、entityId 原样透传', () => {
+    const { commands, errors } = toolCallsToCommands([
+      call('upsert_document', {
+        fields: { title: '世界观', body: '大陆纪元' },
+        reason: '开篇设定',
+      }),
+      call('upsert_document', { entityId: 'doc-1', fields: { body: '改写' } }),
+      call('upsert_document', { entityId: 7, fields: { title: ['坏'] } }),
+    ])
+    expect(errors).toEqual([])
+    expect(commands[0]).toEqual({
+      op: 'upsert_document',
+      fields: { title: '世界观', body: '大陆纪元' },
+      reason: '开篇设定',
+    })
+    expect(commands[1]).toEqual({
+      op: 'upsert_document',
+      entityId: 'doc-1',
+      fields: { body: '改写' },
+    })
+    expect(commands[2]).toMatchObject({
+      op: 'upsert_document',
+      entityId: 7,
+      fields: {},
+    })
+  })
+
+  it('upsert_character / upsert_location 映射为对应命令（issue 44）：fields 归对象、entityId 原样透传', () => {
+    const { commands, errors } = toolCallsToCommands([
+      call('upsert_character', {
+        ref: 'hero',
+        fields: { name: '林一', bio: '侦探' },
+        reason: '主角',
+      }),
+      call('upsert_location', { entityId: 'loc-1', fields: { note: '雨夜' } }),
+      call('upsert_character', { entityId: 9, fields: { name: ['坏'] } }),
+    ])
+    expect(errors).toEqual([])
+    expect(commands[0]).toEqual({
+      op: 'upsert_character',
+      ref: 'hero',
+      fields: { name: '林一', bio: '侦探' },
+      reason: '主角',
+    })
+    expect(commands[1]).toEqual({
+      op: 'upsert_location',
+      entityId: 'loc-1',
+      fields: { note: '雨夜' },
+    })
+    // 非字符串 entityId 原样透传（映射层不吞不转），由折叠层整批拒绝——
+    // 畸形的修改意图不得在映射层被重释；非对象 fields 回退空对象由校验器点名
+    expect(commands[2]).toMatchObject({
+      op: 'upsert_character',
+      entityId: 9,
+      fields: {},
+    })
+  })
+})
+
+describe('工具表定义', () => {
+  it('find_nodes 暴露单节点连线续页的 cursor 参数（PR #294 评审）', () => {
+    const tool = AI_TOOLS.find((t) => t.function.name === 'find_nodes')
+    const properties = tool?.function.parameters.properties as
+      Record<string, unknown> | undefined
+    expect(properties?.cursor).toMatchObject({ type: 'string' })
+  })
+
+  it('包含数据模型 §12.2 的读三写八工具（issue 44 增设定集通道），参数均为对象 schema', () => {
+    const names = AI_TOOLS.map((t) => t.function.name)
+    for (const expected of [
+      'get_graph_snapshot',
+      'get_node',
+      'find_nodes',
+      'get_settings_snapshot',
+      'create_node',
+      'delete_node',
+      'update_node_spec',
+      'connect_edge',
+      'disconnect_edge',
+      'upsert_character',
+      'upsert_location',
+      'batch',
+    ]) {
+      expect(names).toContain(expected)
+    }
+    for (const t of AI_TOOLS) {
+      expect(t.type).toBe('function')
+      expect(t.function.parameters.type).toBe('object')
+    }
+    expect(WRITE_TOOL_NAMES.has('batch')).toBe(true)
+    expect(WRITE_TOOL_NAMES.has('upsert_character')).toBe(true)
+    expect(WRITE_TOOL_NAMES.has('get_node')).toBe(false)
+    expect(WRITE_TOOL_NAMES.has('get_settings_snapshot')).toBe(false)
+    expect(READ_TOOL_NAMES.has('find_nodes')).toBe(true)
+    expect(WRITE_TOOL_NAMES.has('find_nodes')).toBe(false)
+  })
+
+  it('issue 56 增补文档通道：get_document 读 + upsert_document 写，读写真名分域', () => {
+    const names = AI_TOOLS.map((t) => t.function.name)
+    expect(names).toContain('get_document')
+    expect(names).toContain('upsert_document')
+    expect(READ_TOOL_NAMES.has('get_document')).toBe(true)
+    expect(WRITE_TOOL_NAMES.has('upsert_document')).toBe(true)
+    expect(READ_TOOL_NAMES.has('upsert_document')).toBe(false)
+    expect(WRITE_TOOL_NAMES.has('get_document')).toBe(false)
+  })
+
+  it('data/patch/批次通道嵌入共享字段表（issue 41：协议与校验器同源）', () => {
+    const paramOf = (tool: string, key: string): unknown => {
+      const props = AI_TOOLS.find((t) => t.function.name === tool)!.function
+        .parameters.properties as Record<string, { description?: unknown }>
+      return props[key]?.description
+    }
+    // 模型产 data/patch 的三个入口都拿到同一份字段协议文本
+    expect(paramOf('create_node', 'data')).toContain(nodeFieldTableText())
+    expect(paramOf('update_node_spec', 'patch')).toContain(nodeFieldTableText())
+    expect(paramOf('batch', 'commands')).toContain(nodeFieldTableText())
+  })
+
+  it('upsert 工具 fields 嵌入实体字段表（issue 44：与校验白名单同源）', () => {
+    const paramOf = (tool: string, key: string): unknown => {
+      const props = AI_TOOLS.find((t) => t.function.name === tool)!.function
+        .parameters.properties as Record<string, { description?: unknown }>
+      return props[key]?.description
+    }
+    expect(paramOf('upsert_character', 'fields')).toContain(
+      entityFieldTableText(),
+    )
+    expect(paramOf('upsert_location', 'fields')).toContain(
+      entityFieldTableText(),
+    )
+    expect(paramOf('batch', 'commands')).toContain(entityFieldTableText())
+  })
+
+  it('upsert_document fields 嵌入文档字段表（issue 56：与校验白名单同源）', () => {
+    const paramOf = (tool: string, key: string): unknown => {
+      const props = AI_TOOLS.find((t) => t.function.name === tool)!.function
+        .parameters.properties as Record<string, { description?: unknown }>
+      return props[key]?.description
+    }
+    expect(paramOf('upsert_document', 'fields')).toContain(
+      documentFieldTableText(),
+    )
+    expect(paramOf('batch', 'commands')).toContain(documentFieldTableText())
+  })
+})
+
+describe('toolCallsShapeDiagnostic（provider 回复的信任边界形状守卫，#127）', () => {
+  it('合法形态返回 null：undefined/数组/完整成员/arguments 缺省或空串', () => {
+    expect(toolCallsShapeDiagnostic(undefined)).toBeNull()
+    expect(toolCallsShapeDiagnostic(null)).toBeNull()
+    expect(
+      toolCallsShapeDiagnostic([
+        {
+          id: 'a',
+          type: 'function',
+          function: { name: 'get_node', arguments: '{"nodeId":"n1"}' },
+        },
+        {
+          id: 'b',
+          type: 'function',
+          function: { name: 'batch', arguments: '' },
+        },
+      ]),
+    ).toBeNull()
+    expect(
+      toolCallsShapeDiagnostic([
+        { id: 'c', type: 'function', function: { name: 'get_graph_snapshot' } },
+      ]),
+    ).toBeNull()
+  })
+
+  it('issue #127 复现三形态均给出可读形状诊断', () => {
+    expect(toolCallsShapeDiagnostic({ id: 'c' })).toMatch(/不是数组/)
+    expect(toolCallsShapeDiagnostic([{ id: 'c', type: 'function' }])).toMatch(
+      /第 1 项缺 function/,
+    )
+    expect(
+      toolCallsShapeDiagnostic([
+        {
+          id: 'c',
+          type: 'function',
+          function: { name: 'batch', arguments: '{}' },
+        },
+        { id: 'd', type: 'function', function: null },
+      ]),
+    ).toMatch(/第 2 项缺 function/)
+  })
+
+  it('name/id 非字符串、arguments 非字符串均为形状错误（协议外壳）', () => {
+    expect(
+      toolCallsShapeDiagnostic([
+        { id: 'c', type: 'function', function: { name: 7, arguments: '{}' } },
+      ]),
+    ).toMatch(/name/)
+    expect(
+      toolCallsShapeDiagnostic([
+        {
+          id: 9,
+          type: 'function',
+          function: { name: 'batch', arguments: '{}' },
+        },
+      ]),
+    ).toMatch(/id/)
+    expect(
+      toolCallsShapeDiagnostic([
+        {
+          id: 'c',
+          type: 'function',
+          function: { name: 'batch', arguments: { commands: [] } },
+        },
+      ]),
+    ).toMatch(/arguments/)
+  })
+})
+
+describe('工具名注册表自有键白名单（issue #258）', () => {
+  it.each(Object.getOwnPropertyNames(Object.prototype))(
+    '工具名 %s 按未知工具进 errors：不抛异常、命令零产出',
+    (name) => {
+      const { commands, readRequests, errors } = toolCallsToCommands([
+        call(name, {}),
+      ])
+      expect(commands).toEqual([])
+      expect(readRequests).toEqual([])
+      expect(errors).toEqual([expect.stringContaining('未知工具')])
+    },
+  )
+})

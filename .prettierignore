@@ -1,0 +1,13 @@
+# 构建与依赖产物
+node_modules
+dist
+coverage
+package-lock.json
+
+# Rust 后端由 cargo fmt 负责（见 src-tauri 路由）
+src-tauri
+
+# 静态资源与文档不在首批格式化范围内，避免夹带整库重排
+assets
+public
+**/*.md

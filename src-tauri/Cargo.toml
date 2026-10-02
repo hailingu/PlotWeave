@@ -1,0 +1,41 @@
+[package]
+name = "plotweave"
+version = "0.2.0"
+description = "PlotWeave —— 面向短剧创作的可视化画布工具"
+edition = "2021"
+
+[lib]
+# Tauri 移动端需要 staticlib/cdylib；rlib 供集成测试链接。
+name = "plotweave_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+libc = "0.2"
+keyring = "4.1.6"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+serde = { version = "1.0.229", features = ["derive"] }
+aes-gcm = "0.10"
+base64 = "0.22"
+sha2 = "0.10"
+# issue #392：keyEnc envelope v2 的密钥派生改用 PBKDF2-HMAC-SHA256
+#（迭代拉伸替代单次 SHA-256）；与既有 sha2 0.10 同 RustCrypto 家族。
+pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
+serde_json = "1.0.151"
+# protocol-asset feature 已随 issue #31 停用 assetProtocol 一并移除：
+# 库/项目媒体均走 pwmedia 自定义协议（数据模型 §7.1）
+tauri = { version = "2", features = [] }
+cap-std = "4.0.3"
+# issue #141 作业总预算：tokio::time::timeout（tauri/reqwest 已引入同一
+# tokio 并启用 time——本依赖仅使其可直接引用，不新增编译产物）
+tokio = { version = "1", default-features = false, features = ["time"] }
+
+[[test]]
+name = "native_quit"
+harness = false
+
+[[test]]
+name = "invoke_responsiveness"
+harness = false

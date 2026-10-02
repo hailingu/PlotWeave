@@ -1,0 +1,109 @@
+/* 设定文档样式（issue 56：左栏文档列表 + 文档编辑器弹窗）。
+ * 从 panels.css 拆出——该文件已接近规模上限，文档 UI 独立成域。 */
+
+/* ---- 左栏文档列表 ---- */
+.pw-doc-open {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: none;
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.pw-doc-open:hover {
+  background: var(--fill-quaternary);
+}
+
+.pw-doc-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- 文档编辑器弹窗（pw-dialog 变体）：长文阅读优先 ---- */
+.pw-doc-editor {
+  width: min(760px, calc(100vw - 96px));
+}
+
+.pw-doc-editor-body {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 14px 16px;
+  overflow: auto;
+  min-height: 0;
+}
+
+.pw-doc-editor-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.pw-doc-title-input {
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-md);
+  background: var(--fill-quaternary);
+  padding: 7px 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  outline: none;
+}
+
+.pw-doc-title-input:focus {
+  border-color: var(--accent-alt);
+}
+
+.pw-doc-body {
+  width: 100%;
+  min-height: 44vh;
+  resize: vertical;
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-md);
+  background: var(--fill-quaternary);
+  padding: 10px 12px;
+  font-size: 12.5px;
+  line-height: 1.8;
+  color: var(--text-primary);
+  outline: none;
+}
+
+.pw-doc-body:focus {
+  border-color: var(--accent-alt);
+}
+
+.pw-doc-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.pw-doc-chip {
+  border: 1px solid var(--border-hairline);
+  border-radius: 999px;
+  background: none;
+  padding: 3px 11px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.pw-doc-chip:hover {
+  color: var(--text-primary);
+  border-color: var(--accent-alt);
+}
+
+.pw-doc-chip[aria-pressed='true'] {
+  background: var(--fill-quaternary);
+  border-color: var(--accent-alt);
+  color: var(--text-primary);
+}

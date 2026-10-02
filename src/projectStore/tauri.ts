@@ -1,0 +1,335 @@
+/**
+ * 项目持久化的 Tauri 命令域（issue #39 自 projectStore.ts 拆出）：列表/新建/
+ * 加载走 Rust 命令（JSON 文件落盘于应用数据目录）。加载为「单循环三段」
+ * ——链静止 → 失败登记复验 → 磁盘读取（链身份守卫），保证「读到即最新」；
+ * 空库播种与已知示例的旧格式升级回写也在此域。
+ */
+import { parseProject } from '../model/convert'
+import type { ProjectContent } from '../model/content'
+import { IPC_COMMANDS } from '../ipc/commands'
+import { ipcInvoke } from '../ipc/invoke'
+import { ipcErrorCode } from '../ipcError'
+import { memoryNormalize } from './memory'
+import {
+  enqueueSave,
+  pendingRetryDocOf,
+  replacePendingRetryDoc,
+  saveChainTokenOf,
+  waitForSaveChainIdle,
+} from './saveChain'
+import { seedProjects } from './seeds'
+import type { ProjectSummary } from '../home/projects'
+
+/** Rust ProjectMeta → 首页 ProjectSummary；updated_at 为 ISO 字符串。
+ * 非法时间戳（空串/坏格式）回退 epoch，绝不让 new Date 抛错清空首页列表。
+ * 带 diagnostic 的条目是损坏占位（issue #123）：名称换占位文案、诊断随
+ * error 下发，统计/时间不具语义（卡片损坏变体不展示）。占位名携带受信
+ * id（PR #196 评审）：多个坏项目占位名相同会让卡片、删除确认与打开
+ * 失败横幅不可区分，用户可能删错坏文件；id 即 projects/ 下文件名主干，
+ * 入名后各展示面与搜索过滤都能按 id 定位。 */
+function toSummary(m: {
+  id: string
+  name: string
+  updated_at: string
+  scene_count: number
+  ending_count: number
+  diagnostic?: string
+}): ProjectSummary {
+  const t = Date.parse(m.updated_at)
+  return {
+    id: m.id,
+    name: m.diagnostic !== undefined ? `无法读取的项目（${m.id}）` : m.name,
+    sceneCount: m.scene_count,
+    ...(m.ending_count > 1 ? { endingCount: m.ending_count } : {}),
+    updatedAt: new Date(Number.isFinite(t) ? t : 0).toISOString(),
+    ...(m.diagnostic !== undefined ? { error: m.diagnostic } : {}),
+  }
+}
+
+/** 首次启动（无任何项目文件）时写入种子示例。损坏/不可读项目自
+ * issue #123 起以占位摘要进入列表（metas 为空即目录确无项目文件），
+ * 但占位与探测之间存在时序窗口（文件在列表后、探测前损坏/不可读）：
+ * 播种仍为 no-replace 语义——仅当 load_project 确证「项目不存在」才写
+ * 种子（issue #229：按 `[project_not_found]` 机器码判定，不经中文文案，
+ * 展示措辞/本地化调整不改变播种行为），文件存在（含不可读）一律跳过并
+ * 留痕，不用硬编码种子原子覆盖可能可恢复的用户文件。种子写经保存链
+ * （issue #134）：与普通保存统一排序与失败登记，删除墓碑期被吸收——
+ * 探测窗口内被删除的示例不被种子复活；探测先等该 id 在途保存落定（在途
+ * 链落定不改身份，守卫看不见，等落定后保存所建文件经「项目已存在」自然
+ * 跳过）；目标存在待重试的失败保存（登记比磁盘/空目录新）或探测窗口内
+ * 排入新写入（链身份变化，探测结果已过时）同样跳过（PR #198 评审）——
+ * 成功的种子写会清除该登记，用户最新内容被永久丢弃。返回是否写入了任一
+ * 种子。 */
+async function seedFirstRun(): Promise<boolean> {
+  let seeded = false
+  for (const seed of seedProjects()) {
+    // 先等该 id 在途保存落定再探测（PR #198 评审）：预先存在的在途链
+    // 落定不改链身份、守卫看不见；等落定后探测，保存已建文件即走
+    // 「项目已存在」自然跳过，种子不会排在其后覆盖用户写入
+    await waitForSaveChainIdle(seed.meta.id)
+    const chainBefore = saveChainTokenOf(seed.meta.id)
+    try {
+      await ipcInvoke<unknown>(IPC_COMMANDS.loadProject, { id: seed.meta.id })
+      console.warn('[projectStore] 播种跳过：项目已存在', seed.meta.id)
+    } catch (err) {
+      if (ipcErrorCode(err) !== 'project_not_found') {
+        console.warn(
+          '[projectStore] 播种跳过：项目文件不可读，不覆盖可能可恢复的内容',
+          seed.meta.id,
+          err,
+        )
+        continue
+      }
+      if (
+        pendingRetryDocOf(seed.meta.id) !== undefined ||
+        saveChainTokenOf(seed.meta.id) !== chainBefore
+      ) {
+        console.warn(
+          '[projectStore] 播种跳过：存在待重试的更新保存或窗口内有新写入，不以种子覆盖',
+          seed.meta.id,
+        )
+        continue
+      }
+      await enqueueSave(seed.meta.id, seed.doc)
+      seeded = true
+    }
+  }
+  return seeded
+}
+
+/** 已知示例的旧格式（schemaVersion 0）迁移与 v1 修复型归一化回写：写回
+ * **迁移/修复后的用户内容**——示例可能已被编辑（改名/加场景/资产），用
+ * 硬编码种子覆盖会在升级后首次打开首页时静默摧毁这些编辑；演示内容刷新
+ * 只经由空库播种路径发生。与 tauriLoad 同款加载侧资产复验（§7.1/§10.5）：
+ * 索引资产文件缺失/被换链接时先隔离再回写，回写不被保存边界拒收。
+ * 回写经保存链且守卫异步窗口（issue #134，守卫细节见 tryUpgradeSample）。
+ * 单例隔离：该示例升级检查失败只跳过该例并留痕，摘要原样保留，版本错误
+ * 延迟到该项目被打开时呈现。返回是否发生回写。 */
+async function upgradeKnownSamples(metas: { id: string }[]): Promise<boolean> {
+  let repairedAny = false
+  for (const meta of metas) {
+    if (!meta.id.startsWith('sample-')) continue
+    if (!seedProjects().some((s) => s.meta.id === meta.id)) continue
+    if (await tryUpgradeSample(meta.id)) repairedAny = true
+  }
+  return repairedAny
+}
+
+/** 单个已知示例的升级检查与回写（upgradeKnownSamples 内核拆分，
+ * S3776）：读盘前先等链静止；链上存在保存失败的重试登记（最新未落盘
+ * 内容比磁盘新，PR #198 评审）即跳过——以旧盘内容成功回写会按「成功
+ * 保存清除登记」契约丢弃该登记，最新编辑被永久丢失，留待链重试交付。
+ * 读盘/复验窗口内该示例排入新保存或删除（链身份变化）即跳过本次
+ * 回写——迟到修复不得覆盖较新内容或复活已删对象，下次列表/打开重查；
+ * 回写失败由链登记重试。任何步骤失败按单例隔离（只留痕不中止列表）。
+ * 归一化警告逐条留痕，与 tauriLoad 同款（issue #338 评审二轮）。
+ * 返回是否实际回写。 */
+async function tryUpgradeSample(id: string): Promise<boolean> {
+  try {
+    await waitForSaveChainIdle(id)
+    if (pendingRetryDocOf(id) !== undefined) {
+      console.warn(
+        '[projectStore] 示例存在待重试的更新保存，跳过本次升级回写',
+        id,
+      )
+      return false
+    }
+    const chainBefore = saveChainTokenOf(id)
+    const file = await ipcInvoke<unknown>(IPC_COMMANDS.loadProject, { id })
+    const invalidAssetKeys = await ipcInvoke<string[]>(
+      IPC_COMMANDS.verifyProjectAssets,
+      {
+        id,
+        assets: (file as { assets?: unknown }).assets ?? {},
+      },
+    )
+    const { content, migrated, repaired, warnings } = parseProject(file, {
+      projectId: id,
+      invalidAssetKeys,
+    })
+    // 归一化/判型警告逐条留痕（与 tauriLoad 同款）：形状判型等修复型回写
+    // 不得静默改写版本号等内容（issue #338 评审二轮）
+    for (const w of warnings) console.warn(`[projectStore] ${w}`)
+    if (!(migrated || repaired)) return false
+    if (saveChainTokenOf(id) !== chainBefore) {
+      console.warn(
+        '[projectStore] 示例升级窗口内出现新的保存/删除排队，跳过本次回写（下次列表/打开重查）',
+        id,
+      )
+      return false
+    }
+    try {
+      await enqueueSave(id, content)
+      return true
+    } catch (err) {
+      console.error(
+        '[projectStore] 示例迁移/修复回写失败（已登记保存链重试）',
+        id,
+        err,
+      )
+      return false
+    }
+  } catch (err) {
+    console.warn('[projectStore] 示例升级检查失败，保留该示例现状', id, err)
+    return false
+  }
+}
+
+/** 项目列表门面：空库先播种、已知示例先升级回写（回写后重列以返回
+ * 净本摘要）；损坏条目以占位摘要进列表（toSummary）。 */
+export async function tauriList(): Promise<ProjectSummary[]> {
+  // 回写改写了名称/统计并盖戳 updatedAt：metas 是写前快照，直接返回会让
+  // 首页滞留旧名旧序——重列直到无回写（回写后的净本不再触发写，循环有界）
+  for (;;) {
+    const metas = await ipcInvoke<
+      {
+        id: string
+        name: string
+        updated_at: string
+        scene_count: number
+        ending_count: number
+        diagnostic?: string
+      }[]
+    >(IPC_COMMANDS.listProjects)
+    if (metas.length === 0) {
+      if (!(await seedFirstRun())) return metas.map(toSummary)
+      continue
+    }
+    if (await upgradeKnownSamples(metas)) continue
+    return metas.map(toSummary)
+  }
+}
+
+/** 新建项目门面：委托 Rust create_project（空文档落盘）并返回摘要。 */
+export async function tauriCreate(name: string): Promise<ProjectSummary> {
+  return toSummary(
+    await ipcInvoke<{
+      id: string
+      name: string
+      updated_at: string
+      scene_count: number
+      ending_count: number
+    }>(IPC_COMMANDS.createProject, { name }),
+  )
+}
+
+/** 登记段内核（tauriLoad 拆出，S3776）：链静止后复验并交付失败登记的
+ * 最新文档（复验/替换语义详见 tauriLoad 登记段注释）。返回净载荷；
+ * 'restart' = 复验期间登记被取代，须按当前保存状态整体重来；
+ * null = 无登记，落磁盘段。 */
+async function verifiedPendingRetryDoc(
+  id: string,
+): Promise<ProjectContent | 'restart' | null> {
+  const pending = pendingRetryDocOf(id)
+  if (pending === undefined) return null
+  const invalid = await ipcInvoke<string[]>(IPC_COMMANDS.verifyProjectAssets, {
+    id,
+    assets: pending.assets ?? {},
+  })
+  // 归一化前先复查登记身份（PR #207 评审）：复验 await 期间登记可能被
+  // 更新保存清除/取代（重试成功、新失败），已作废的登记文档可能是不可
+  // 序列化的脏会话形状——对其归一化会抛错，较新的有效保存明明已落盘
+  // 却让加载失败
+  if (pendingRetryDocOf(id) !== pending) return 'restart'
+  const verified = memoryNormalize(pending, id, invalid)
+  // 替换仍走条件写回：只有当前登记仍是观察到的那份才替换，不复活已被
+  // 取代的旧文档
+  if (!replacePendingRetryDoc(id, pending, verified)) return 'restart'
+  return verified
+}
+
+/** 项目加载门面：「读到即最新」——单循环三段（链静止 → 失败登记复验
+ * 优先交付 → 磁盘读取带链身份守卫），段内窗口期出现新写入即回到循环顶；
+ * 迁移/修复写回走保存链，失败由重试登记接管（详见循环上方分段注释）。 */
+export async function tauriLoad(id: string): Promise<ProjectContent> {
+  // 单循环三段：链静止 → 失败登记复验（优先）→ 磁盘读取（链身份守卫）。
+  // 任何段的重启都回到循环顶——尤其磁盘段读取期间排队的保存若失败，其
+  // 失败登记（比磁盘新）必须在下一轮的登记复验段被优先交付，不得只在
+  // 磁盘段内重读旧盘。
+  //
+  // 登记段：链静止后优先交付链上失败登记的最新文档（冲刷失败待重试，比
+  // 磁盘新）：经保存同款归一化（剥离运行态）交付，否则用户看到丢编辑的
+  // 旧版本，且随后编辑与重试登记竞态。登记文档同样过加载侧资产实路径
+  // 复验——保存失败的常见原因正是资产文件缺失/被换符号链接，不复验就把
+  // 带坏资产的文档交付会话、重试登记也原样持有，此后每次重试与后续编辑
+  // 都注定失败；隔离后的修复内容同时替换重试登记（后台重试改持净载荷）。
+  // 复验的 await 期间登记可能被更新保存清除/替换（重试成功、新失败）：
+  // 只有仍是观察到的那份才替换——无条件写回会把已被取代的旧文档复活
+  // 进登记与交付，编辑即覆盖新保存；否则按当前保存状态整体重来。
+  //
+  // 磁盘段：load_project/复验的 await 期间可能又有保存排队（如编辑器卸载
+  // 冲刷）——读到的会是写前旧文件；不重验就继续会把旧内容交付会话，且
+  // 随后的修复回写若晚于新保存落盘，会把新内容反向覆盖。链身份变化即
+  // 重启到循环顶（等待新链落定；失败登记由登记段接管），保证「读到即最新」
+  for (;;) {
+    await waitForSaveChainIdle(id)
+    const pending = await verifiedPendingRetryDoc(id)
+    if (pending === 'restart') continue
+    if (pending !== null) return pending
+    const chainBefore = saveChainTokenOf(id)
+    const file = await ipcInvoke<unknown>(IPC_COMMANDS.loadProject, { id })
+    // §7.1/§10.5 加载侧资产实路径复验：Rust 以受信资产根 no-follow 验证
+    // （前端无法访问文件系统），不可验证键交归一化层隔离、引用位标记悬空
+    // ——否则下一次保存会被保存边界拒收而防抖吞错，用户编辑永不落盘
+    const invalidAssetKeys = await ipcInvoke<string[]>(
+      IPC_COMMANDS.verifyProjectAssets,
+      {
+        id,
+        assets: (file as { assets?: unknown }).assets ?? {},
+      },
+    )
+    if (saveChainTokenOf(id) !== chainBefore) continue
+    // §11 归一化管线：迁移 + 孤儿边隔离 + 悬空引用标记；
+    // projectId 为路径给定的受信 id，供 §11.1 元数据修复覆盖 project.id
+    const { content, migrated, repaired, warnings, reissuedAssetAliases } =
+      parseProject(file, { projectId: id, invalidAssetKeys })
+    for (const w of warnings) console.warn(`[projectStore] ${w}`)
+    await registerAssetAliases(id, reissuedAssetAliases)
+    // 别名登记的异步 IPC 期间可能又有新保存排队（如编辑器卸载冲刷）：
+    // 顶部链身份检查已失效，此刻修复回写会把旧内容排在较新保存之后反向
+    // 覆盖用户编辑——链身份变化即重启到循环顶（评审修复 P2-6，与读盘
+    // 段守卫同款语义；别名登记幂等，重来无副作用）
+    if (saveChainTokenOf(id) !== chainBefore) continue
+    // 迁移或修复发生则写回磁盘（下次打开不再迁移/重复修复）。v1 的可修复
+    // 脏数据（空白/重复 id 等）只修在内存时，用户只开不编辑（防抖保存跳过
+    // 首帧）会让脏文件长留磁盘，每次打开都重新生成不同的"稳定" id——修复
+    // 必须落定。回写走保存链且完成前不返回（此刻链静止、身份未变，同步段
+    // 内入队不会被插队）：与读取后排队的新保存保持全序，迟到的旧内容不得
+    // 覆盖新保存；失败只诊断不阻断（显式 catch，不留未处理拒绝），由链的
+    // 重试登记接管——内存已交付修复结果，磁盘保持旧内容，下次打开会重新修复
+    if (migrated || repaired) {
+      await enqueueSave(id, content).catch((err: unknown) => {
+        console.error(
+          '[projectStore] 迁移/修复回写失败，已登记后台重试（下次打开将重新修复）',
+          err,
+        )
+      })
+    }
+    return content
+  }
+}
+
+/** 登记加载归一化的资产空白键重发别名（issue #31 评审修复 P2-3）：修复
+ * 回写按防抖节律才落盘，期间重发 id 的媒体经盘上条目解析；单条登记失败
+ * 只诊断不阻断加载（下次打开重新归一化重新登记）。 */
+async function registerAssetAliases(
+  id: string,
+  aliases: [string, string][],
+): Promise<void> {
+  if (aliases.length === 0) return
+  for (const [blankKey, freshId] of aliases) {
+    try {
+      await ipcInvoke(IPC_COMMANDS.registerProjectAssetAlias, {
+        id,
+        blankKey,
+        freshId,
+      })
+    } catch (err) {
+      console.warn(
+        '[projectStore] 资产别名登记失败（媒体在修复回写落盘前暂不可见）',
+        freshId,
+        err,
+      )
+    }
+  }
+}

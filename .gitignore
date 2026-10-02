@@ -1,0 +1,50 @@
+# --- Node / 前端 ---
+node_modules/
+dist/
+dist-ssr/
+*.local
+.vite/
+coverage/
+.scannerwork/
+.sonar-gate.lock/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# 注意：Tauri 应用为二进制交付，src-tauri/Cargo.lock 应当提交，不忽略
+
+# --- Rust / Tauri ---
+src-tauri/target/
+src-tauri/gen/schemas/
+**/*.rs.bk
+
+# --- 环境变量 ---
+.env
+.env.*
+!.env.example
+
+# --- 编辑器 / IDE ---
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.suo
+*.njsproj
+*.sln
+*.sw?
+
+# --- 操作系统 ---
+.DS_Store
+Thumbs.db
+
+# --- 日志与临时文件 ---
+*.log
+tmp/
+
+# --- 并行任务 worktree ---
+# 工具（feat-auto 等）创建的临时 worktree 目录（issue #405：pre-push 快路径
+# 的未跟踪检查不因这些目录降级到临时 worktree 慢路径）
+.worktrees/
+
+# --- 头脑风暴视觉伴侣原型 ---
+.superpowers/

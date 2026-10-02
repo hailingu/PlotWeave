@@ -1,0 +1,311 @@
+#!/bin/sh
+# 推送前按 stdin 的待推送 ref 分派仓库统一的 SonarQube 零问题门禁
+#（issue #405）：推哪个 ref，就在该 ref 的提交状态上分析哪个 ref，而非
+# 恒扫当前工作树。快路径：待推提交即当前 HEAD、索引与工作树对 HEAD 均
+# 无内容差异、且整个仓库没有未忽略的未跟踪文件时，当前工作树就是
+# 被推状态，直接执行完整门禁（与原行为同成本）。测试及其导入的辅助
+# 文件、夹具可在任意目录参与覆盖率，未跟踪输入统一触发慢路径隔离。
+# 慢路径：其余情形——被推提交非当前工作树可证等价的状态（非检出分支、
+# 脏工作树、一次推送中与 HEAD 可证等价之外的其他提交）——在临时
+# worktree 检出被推提交、按该树锁文件安装依赖后，用当前门禁脚本
+#（PLOTWEAVE_GATE_REPOSITORY_ROOT 指向临时 worktree）完整分析：以被
+# 推送 ref 为准，且不触碰本地工作树。快/慢按唯一提交逐个判定，与同次
+# 推送还包含哪些 ref 无关（推分支 + 同提交标签仍是一次快路径门禁）。
+# 慢路径启动前输出首个不成立的快路径前提（issue #463 稳定诊断代码，
+# 见 docs/development/quality-gate-push.md），使慢路径成本来源当场可见；
+# 该输出只作诊断，不参与快/慢判定。
+# 同一提交被多个 ref 引用（分支 + 标签）只分析一次；删除 ref（本地
+# sha 全零）不导出代码，跳过。末行缺尾随换行的清单按字段残留检测并
+# fail-closed（issue #464）：真实 git 每行都以换行结束，只有手工或包装
+# 调用可产生该形态，不可静默放行。所有 ref 的门禁通过后把累积的门禁结论
+# 物化进版本化 gate-history.jsonl（issue #355；PR #415 评审 5338815626：
+# 提交创建路径只写 .git 内待物化文件、不弄脏被跟踪文件，重放/检出/
+# 合并不被打断）。
+# 安装执行器与门禁脚本这两类分钟级子进程经 supervise_child_process 后台
+# 作业 + wait 受监督运行，INT/HUP/TERM 先整组终止子进程再走退出清理，
+# 临时 worktree 不再因前台子进程推迟 trap 而滞留数分钟；清理警告只在
+# 目录确实留存时出现（issue #465，代码契约见 quality-gate-push.md）。
+
+set -eu
+
+# 禁用本地替换对象（PR #442 评审 5361127076）：push 传输原始对象，
+# 解析、等价检查、worktree 检出和子进程台账也必须读取原始被推对象。
+# 环境变量只作用于本钩子及其后代，不修改调用方环境或 refs/replace。
+export GIT_NO_REPLACE_OBJECTS=1
+
+hook_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+main_root=$(CDPATH= cd -- "$hook_directory/.." && pwd)
+npm_bin=${PLOTWEAVE_NPM_BIN:-npm}
+node_bin=${PLOTWEAVE_NODE_BIN:-node}
+zero_sha=0000000000000000000000000000000000000000
+
+# 待物化路径与互斥锁与主工作树对齐（issue #405）：慢路径门禁写在临时
+# worktree，但记录必须进入主工作树的同一条待物化队列，并与快路径、
+# materialize 共用同一把锁串行（PR #415 评审 5339243902 的并入原子性）。
+# git-path 输出相对当前目录时按主工作树根补全——慢路径门禁会在别处 cd。
+pending_path=${PLOTWEAVE_GATE_PENDING_PATH:-}
+if [ -z "$pending_path" ]; then
+  pending_path=$(git rev-parse --git-path plotweave-gate-history.pending 2>/dev/null ||
+    printf '%s' "$main_root/.git/plotweave-gate-history.pending")
+  case $pending_path in
+    /*) ;;
+    *) pending_path=$main_root/$pending_path ;;
+  esac
+fi
+lock_directory=${PLOTWEAVE_SONAR_LOCK_DIRECTORY:-$main_root/.sonar-gate.lock}
+
+# 慢路径临时 worktree 与 ref 清单临时文件的登记与清理：退出路径（含
+# set -e 失败与信号）尽力移除；残留只浪费磁盘、不影响门禁结论（可用
+# git worktree prune 兜底）。
+temp_root=
+temp_worktree=
+manifest_path=
+# 受监督子进程组（issue #465）：非空表示有分钟级子进程（安装或门禁）
+# 正以后台作业运行，其进程组号即本值，供信号路径整组终止。
+supervised_group_pid=
+# 快路径失败前提记录（issue #463）：working_tree_represents_head 返回非零
+# 时填充，供慢路径分派输出触发原因；空初值仅为 set -u 安全。
+fast_path_block_code=
+fast_path_block_detail=
+# 剥离 git 向提交类钩子导出的工作树定位变量（GIT_INDEX_FILE / GIT_PREFIX
+# 等按 cwd 相对解析：临时 worktree 里 .git 是文件，.git/index 不是合法
+# 路径，worktree add / remove / 门禁会误失败）。真实暴露路径是提交门禁
+# 内运行本仓库测试套件——套件继承钩子环境后在其沙箱里真实 git push
+# 触发本钩子（issue #405）。
+unset_git_localization() {
+  unset GIT_INDEX_FILE GIT_PREFIX GIT_WORK_TREE GIT_DIR ||
+    : # unset 为内建，仅防御性兜底
+}
+# 移除登记的临时 worktree 与其临时根并置空登记，使重复清理（信号 trap
+# 之后的退出 trap）幂等：目标已不存在同样视为成功——残留警告只在目录
+# 确实留存时出现（issue #465：信号路径曾对已清理干净的目标重试 remove
+# 并误报「无法清理」）。移除失败时保留现场供 git worktree prune 恢复。
+remove_temporary_worktree() {
+  target_worktree=$temp_worktree
+  target_root=$temp_root
+  temp_worktree=
+  temp_root=
+  [ -n "$target_worktree" ] || return 0
+  if ( unset_git_localization
+    git worktree remove --force "$target_worktree" ) 2>/dev/null ||
+    [ ! -e "$target_worktree" ]; then
+    rm -rf "$target_root" 2>/dev/null || :
+  else
+    printf 'pre-push 警告：[PRE_PUSH_WORKTREE_RESIDUE] 无法清理临时 worktree %s；可用 git worktree prune 清理。\n' \
+      "$target_worktree" >&2
+  fi
+}
+cleanup_temporary_artifacts() {
+  remove_temporary_worktree
+  if [ -n "$manifest_path" ]; then
+    rm -f "$manifest_path" 2>/dev/null || :
+    manifest_path=
+  fi
+}
+# 信号路径（issue #465；PR #484 评审 5389125859）：POSIX 语义下前台子进程
+# 运行期间的信号 trap 会被推迟到该子进程返回（专项审计实测单独向钩子发
+# SIGINT 后 18 分钟 npm ci 仍在运行）；改为后台作业 + 可被信号打断的 wait
+# 后，这里能及时执行。先向受监督进程组发 TERM，随后等待组长（安装执行器
+# 或门禁脚本，锁的持有者）自行退出——组长存活期间绝不升级 KILL：那会在
+# 门禁的 release_lock trap 运行前杀死它、泄漏锁目录。门禁脚本的长步骤
+# 以可中断 wait 运行、信号先释放锁再退出，安装执行器有既有的限期自清理，
+# 均应秒级退出。组长退出后清扫仍存活的组员；宽限期（10 秒）后组长仍存活
+# 时保留其运行并如实提示，锁由其退出时释放。以 128+信号 码退出，Git 按
+# 钩子失败处理本次操作（推送中止，门禁结论不产出）。
+handle_termination_signal() {
+  signal_exit_code=$1
+  if [ -n "$supervised_group_pid" ]; then
+    leader_pid=$supervised_group_pid
+    kill -TERM -- "-$leader_pid" 2>/dev/null ||
+      kill -TERM "$leader_pid" 2>/dev/null || :
+    grace_attempts=0
+    while [ "$grace_attempts" -lt 10 ] &&
+      kill -0 "$leader_pid" 2>/dev/null; do
+      sleep 1
+      grace_attempts=$((grace_attempts + 1))
+    done
+    if kill -0 "$leader_pid" 2>/dev/null; then
+      printf '[PRE_PUSH_LEFTOVER_GROUP] 受监督子进程（组 %s）未在宽限期内退出，已停止强制终止以免在锁释放前杀死门禁；其退出前门禁锁 %s 保持占用。\n' \
+        "$leader_pid" "$lock_directory" >&2
+    else
+      kill -KILL -- "-$leader_pid" 2>/dev/null || :
+    fi
+    supervised_group_pid=
+  fi
+  printf '[PRE_PUSH_INTERRUPTED] 收到终止信号，已终止门禁子进程；正在清理临时资源。\n' >&2
+  exit "$signal_exit_code"
+}
+trap cleanup_temporary_artifacts 0
+trap 'handle_termination_signal 129' 1
+trap 'handle_termination_signal 130' 2
+trap 'handle_termination_signal 143' 15
+
+fail() {
+  printf 'pre-push 失败：%s\n' "$1" >&2
+  exit 1
+}
+
+# 受监督运行（issue #465）：分钟级子进程（安装执行器与门禁脚本）以后台
+# 作业 + wait 运行——wait 可被信号打断，钩子的信号 trap 得以及时执行
+# （前台子进程会把 trap 推迟到其返回）。启用作业控制仅为让该后台作业
+# 获得独立进程组，信号路径得以向整组（含后代）发 TERM/KILL；真实
+# Ctrl-C 场景下终端信号仍直达钩子本身，分工不变。wait 的 stderr 重定向
+# 吸收 shell 对被杀作业的状态通告。参数为要异步执行的函数名。
+supervise_child_process() {
+  set -m
+  "$@" </dev/null &
+  supervised_group_pid=$!
+  set +m
+  if wait "$supervised_group_pid" 2>/dev/null; then
+    supervised_group_pid=
+    return 0
+  fi
+  supervised_group_pid=
+  return 1
+}
+
+# 快路径前提（issue #405）：工作树内容与 HEAD 一致（含索引，保证台账
+# tree 键与被推提交同源），且整个仓库没有未忽略未跟踪文件：Vitest
+# 可发现任意目录内的测试，测试导入的辅助文件和夹具也可能改写覆盖率，
+# 不能按固定目录或测试后缀证明输入等价。已知残余（记录于
+# quality-gate-cost.md）：被忽略文件与
+# skip-worktree/assume-unchanged 隐藏的差异对 git 不可见，快路径无法
+# 证明其不存在；慢路径的全新检出不受影响。前提不成立时把首个失败项记入
+# fast_path_block_code / fast_path_block_detail（issue #463），供分派处
+# 输出慢路径触发原因；代码契约见 quality-gate-push.md。
+working_tree_represents_head() {
+  fast_path_block_code=
+  fast_path_block_detail=
+  if ! git diff --quiet HEAD --; then
+    fast_path_block_code=PRE_PUSH_SLOW_TRACKED_DIRTY
+    fast_path_block_detail='工作树被跟踪内容与 HEAD 有差异'
+    return 1
+  fi
+  if ! git diff --cached --quiet HEAD --; then
+    fast_path_block_code=PRE_PUSH_SLOW_INDEX_DIRTY
+    fast_path_block_detail='索引内容与 HEAD 有差异'
+    return 1
+  fi
+  if ! untracked_files=$(git ls-files --others --exclude-standard); then
+    fast_path_block_code=PRE_PUSH_SLOW_UNTRACKED_ENUM_FAILED
+    fast_path_block_detail='无法枚举未跟踪文件'
+    return 1
+  fi
+  if [ -n "$untracked_files" ]; then
+    fast_path_block_code=PRE_PUSH_SLOW_UNTRACKED_INPUT
+    fast_path_block_detail='仓库内存在未忽略的未跟踪文件'
+    return 1
+  fi
+}
+
+# 解析待推本地 sha 为其指向的提交：注释标签 peel 到提交，非提交对象
+#（树 / 斑点）失败——fail-closed，不猜测分析对象。stderr 静默：诊断以
+# 调用方的失败消息为准（--quiet 不抑制对象类型不匹配的 error 输出）。
+resolve_pushed_commit() {
+  case $1 in
+    *[!0-9a-fA-F]* | '') return 1 ;;
+  esac
+  git rev-parse --verify --quiet "$1^{commit}" 2>/dev/null
+}
+
+# 慢路径：临时 worktree 检出被推提交，按该树锁文件安装依赖，再以当前
+# 门禁脚本在该树上执行完整门禁（分析对象 = 被推提交，门禁定义 = 当前
+# 工作树版本）。安装与门禁均经 supervise_child_process 受监督运行，
+# 中断信号能及时终止它们并清理临时树（issue #465）。
+gate_commit_in_temp_worktree() {
+  commit=$1
+  short=$(git rev-parse --short "$commit")
+  temp_root=$(mktemp -d "${TMPDIR:-/tmp}/plotweave-pre-push.XXXXXXXX")
+  temp_worktree=$temp_root/worktree
+  ( unset_git_localization
+    git worktree add --quiet --detach "$temp_worktree" "$commit" ) ||
+    fail "无法在临时 worktree 检出被推提交 $short"
+  supervise_child_process run_install_for_pushed_tree ||
+    fail "被推树 $short 的依赖安装失败（npm ci；树内缺 package-lock.json 亦会走到这里）"
+  supervise_child_process run_gate_for_pushed_tree
+  remove_temporary_worktree
+}
+
+# 慢路径安装入口（异步子壳内执行，exec 使受监督 pid 即执行器本身）：
+# 当前执行器清理两个 Sonar 令牌变量，并以期限监督 npm 及 lifecycle 子
+# 进程组（issue #462）。
+run_install_for_pushed_tree() {
+  cd "$temp_worktree" && unset_git_localization &&
+    PLOTWEAVE_NPM_BIN=$npm_bin \
+      exec "$node_bin" "$main_root/scripts/pre-push-install.mjs"
+}
+
+# 慢路径门禁入口（异步子壳内执行）：当前工作树版本的门禁脚本分析被推
+# 提交的临时检出树；台账与锁仍指向主工作树（issues #405/#355）。
+run_gate_for_pushed_tree() {
+  unset_git_localization
+  PLOTWEAVE_GATE_REPOSITORY_ROOT=$temp_worktree \
+  PLOTWEAVE_GATE_PENDING_PATH=$pending_path \
+  PLOTWEAVE_SONAR_LOCK_DIRECTORY=$lock_directory \
+    exec "$main_root/scripts/sonar-quality-gate.sh"
+}
+
+# 快路径门禁入口（异步子壳内执行）：被推提交即当前工作树可证等价的
+# 状态，在当前工作树直接执行完整门禁。
+run_gate_for_current_tree() {
+  exec "$main_root/scripts/sonar-quality-gate.sh"
+}
+
+# 一次读尽 stdin（git 每行给出 <本地ref> <本地sha> <远端ref> <远端sha>），
+# 落到临时清单后逐行分派：循环体内的长命令一律改读 /dev/null，不再消费
+# 钩子的输入；清单经文件传递，规避子壳变量与引号展开两类陷阱。
+manifest_path=$(mktemp "${TMPDIR:-/tmp}/plotweave-pre-push-refs.XXXXXX")
+cat > "$manifest_path"
+analyzed_commits=
+while read -r local_ref local_sha remote_ref remote_sha extra; do
+  if [ -z "$local_ref" ]; then
+    continue
+  fi
+  if [ -n "$extra" ]; then
+    fail "待推送 ref 行字段数异常（预期 <本地ref> <本地sha> <远端ref> <远端sha>）：$local_ref $local_sha $remote_ref $remote_sha $extra"
+  fi
+  # 删除 ref：本地 sha 全零，没有代码离机，无需分析
+  if [ "$local_sha" = "$zero_sha" ]; then
+    continue
+  fi
+  commit=$(resolve_pushed_commit "$local_sha") ||
+    fail "无法把待推送对象 $local_sha 解析为提交：$local_ref"
+  # 同一提交被多个 ref 引用只分析一次
+  case ",$analyzed_commits," in
+    *",$commit,"*) continue ;;
+  esac
+  analyzed_commits="$analyzed_commits,$commit"
+  short=$(git rev-parse --short "$commit")
+  head_commit=$(git rev-parse --verify --quiet HEAD 2>/dev/null || printf x)
+  # 慢路径触发原因（issue #463）：被推提交非 HEAD 用缺省值；被推提交即
+  # HEAD 但不可证等价时取 working_tree_represents_head 记录的首个失败
+  # 前提。原因只用于诊断输出，不参与快/慢判定本身。
+  slow_code=PRE_PUSH_SLOW_NOT_HEAD
+  slow_detail='被推提交不是当前 HEAD'
+  if [ "$commit" = "$head_commit" ] && working_tree_represents_head; then
+    printf '[pre-push] 门禁对象：%s（%s，当前工作树）\n' "$local_ref" "$short"
+    supervise_child_process run_gate_for_current_tree
+  else
+    if [ "$commit" = "$head_commit" ]; then
+      slow_code=$fast_path_block_code
+      slow_detail=$fast_path_block_detail
+    fi
+    printf '[pre-push] 快路径不可达（%s）：%s——改用临时 worktree 分析被推提交\n' \
+      "$slow_code" "$slow_detail"
+    printf '[pre-push] 门禁对象：%s（%s，临时 worktree）\n' "$local_ref" "$short"
+    gate_commit_in_temp_worktree "$commit"
+  fi
+done < "$manifest_path"
+# 循环末次 read 在「EOF 且末行无尾随换行」时返回非零、循环体不为该行
+# 执行，但字段变量已持有该行内容（EOF 无内容时则被清空）：据此发现被
+# 静默跳过的待推 ref 行（sh / bash / dash 实测一致）。残留仅空白、解析
+# 不出字段时与已终止空白行同口径跳过——无字段的行不携带 ref 记录。
+# 与字段数异常同样 fail-closed（issue #464），兑现「每行要么被分析、
+# 要么被拒绝」的门禁承诺（docs/development/quality-gate-push.md）。
+if [ -n "${local_ref:-}" ]; then
+  fail "待推送 ref 清单末行缺少尾随换行，该行未被分析：$local_ref $local_sha $remote_ref $remote_sha${extra:+ $extra}"
+fi
+rm -f "$manifest_path"
+manifest_path=
+
+"$main_root/scripts/gate-history.sh" materialize
