@@ -18,6 +18,7 @@ import { useNodeCreation, type NodeCreationActions } from './useNodeCreation'
 import { useNodeDeletion } from './useNodeDeletion'
 import { useNodeDragHistory } from './useNodeDragHistory'
 import { useAutoLayout } from './useAutoLayout'
+import { useCanvasAlignment } from './useCanvasAlignment'
 import { useNodePatch, type NodePatchActions } from './useNodePatch'
 import { useOutlineDrop } from './useOutlineDrop'
 import { useSettingsActions } from './useSettingsActions'
@@ -60,6 +61,8 @@ export interface EditorGraphActions {
   drag: ReturnType<typeof useNodeDragHistory>
   /** 自动排布（issue #94）：整图位置整理为一次撤销单元。 */
   layout: ReturnType<typeof useAutoLayout>
+  /** 选中节点的六方向对齐，共用位置历史与文档保存通道。 */
+  alignment: ReturnType<typeof useCanvasAlignment>
   drop: ReturnType<typeof useCanvasDrop>
 }
 
@@ -85,6 +88,27 @@ function useGraphDeletion(
   return { deleteNodesByIds, deleteEdgesByIds }
 }
 
+/** 位置动作共用同一文档与历史入口：拖动、自动排布与选中对齐。 */
+function usePositionActions(deps: EditorGraphActionsDeps) {
+  const { doc, pushHistory, fitView, onError } = deps
+  const drag = useNodeDragHistory({ setNodes: doc.setNodes, pushHistory })
+  const layout = useAutoLayout({
+    nodesRef: doc.nodesRef,
+    edgesRef: doc.edgesRef,
+    setNodes: doc.setNodes,
+    pushHistory,
+    fitView,
+    onError,
+  })
+  const alignment = useCanvasAlignment({
+    nodesRef: doc.nodesRef,
+    setNodes: doc.setNodes,
+    pushHistory,
+    onError,
+  })
+  return { drag, layout, alignment }
+}
+
 /** 组装画布写动作族（不含持久化、AI 桥与快捷键）。 */
 export function useEditorGraphActions(
   deps: EditorGraphActionsDeps,
@@ -96,7 +120,6 @@ export function useEditorGraphActions(
     pushHistory,
     screenToFlowPosition,
     canvasRef,
-    fitView,
     onError,
   } = deps
   const assets = useAssetIndex(doc.setAssets)
@@ -126,15 +149,7 @@ export function useEditorGraphActions(
     setEdges: doc.setEdges,
     pushHistory,
   })
-  const drag = useNodeDragHistory({ setNodes: doc.setNodes, pushHistory })
-  const layout = useAutoLayout({
-    nodesRef: doc.nodesRef,
-    edgesRef: doc.edgesRef,
-    setNodes: doc.setNodes,
-    pushHistory,
-    fitView,
-    onError,
-  })
+  const { drag, layout, alignment } = usePositionActions(deps)
   const drop = useCanvasDrop({
     projectId,
     nodesRef: doc.nodesRef,
@@ -161,6 +176,7 @@ export function useEditorGraphActions(
     outlineDrop,
     drag,
     layout,
+    alignment,
     drop,
   }
 }

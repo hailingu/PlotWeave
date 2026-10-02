@@ -15,8 +15,8 @@
 - [x] 分支与多结局编排
 - [x] 角色与设定管理面板
 - [x] 剧本导出（Markdown 纯文本，含分镜附录）
-- [ ] 画布对齐与吸附
-- [ ] 剧本导出：结构化格式（JSON）
+- [x] 画布对齐与吸附（多选六方向对齐、22 单位网格吸附开关，支持撤销重做）
+- [x] 剧本导出：结构化格式（JSON，包含完整节点、分支、设定与资产引用）
 - [x] 画布内 AI 图像生成（文生图首版）：图片节点生成角色垫图 / 场景底图 / 分镜关键帧，产物落项目资产（媒体节点 + 输入签名守护 + 协作式取消，详见[数据模型 §13](docs/data-model/overview.md#十三后续演进预留)；图生图引用边、视频节点与 job 落盘恢复随演进）
 - [ ] macOS 原生界面质感：窗口级毛玻璃（Tauri `windowEffects`）+ 无头组件（Radix）承载弹层交互 + 设计令牌扩展，实现路径详见 `docs/ui-design.md` §12
 
@@ -27,7 +27,7 @@
 | 前端 | Tauri + React + React Flow（`@xyflow/react`）+ TypeScript：画布交互、文档模型编辑与剧本导出生成 |
 | 后端 | Rust（Tauri 进程内 commands：项目 / AI 会话持久化、偏好设置、素材库、媒体协议、AI 图像生成桥接） |
 
-桌面端由 Tauri 打包。前端承载画布交互与文档模型，剧本导出（Markdown 纯文本，含分镜附录）由前端生成并经 WebView 下载 / 剪贴板交付——生成器为 `src/editor/exportScript.ts`（大纲附录在 `src/editor/exportOutline.ts`），设计见 [UI 规格 §五](docs/ui-design.md#五全局联动设定集--节点--成片)；Rust 侧负责持久化与原生桥接（文件读写、退出屏障、媒体协议），当前不参与剧本导出。
+桌面端由 Tauri 打包。前端承载画布交互与文档模型，剧本导出支持 Markdown（纯文本，含分镜附录）和 JSON（当前会话的 `ProjectDocument v1`），经 WebView 下载 / 剪贴板交付——Markdown 生成器为 `src/editor/exportScript.ts`（大纲附录在 `src/editor/exportOutline.ts`），JSON 入口为 `src/editor/exportScriptJson.ts`，复用项目序列化规则。JSON 保留资产引用但不打包媒体文件，也不包含 AI 会话。设计见 [UI 规格 §五](docs/ui-design.md#五全局联动设定集--节点--成片)及 [JSON 数据格式](docs/data-model/project-document.md#31-结构化剧本导出json)；Rust 侧负责持久化与原生桥接（文件读写、退出屏障、媒体协议），当前不参与剧本导出。
 
 ## 仓库结构
 

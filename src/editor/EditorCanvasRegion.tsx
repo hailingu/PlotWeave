@@ -1,12 +1,12 @@
 /**
  * 画布区域（EditorLayout 三栏的中区）：ReactFlow 画布本体、节点/连线类型
- * 注册与背景控件。交互回调与视口持久化全部来自装配层，本组件不持状态。
+ * 注册与背景控件。文档交互与持久化来自装配层，仅持有会话内网格吸附开关。
  * 渲染隔离（issue #103）：输入按真实消费字段收窄为 EditorCanvasRegionProps
  * 并以 memo 包裹——面板状态（边栏开合/＋菜单/右栏切页/对话框）变化时，
  * 布局层下传的这些成员引用保持稳定，整个 ReactFlow 子树跳过执行；节点/
  * 连线/选中变化仍经 doc 与 displayNodes 正常触发改区。
  */
-import { memo, type RefObject } from 'react'
+import { memo, useState, type RefObject } from 'react'
 import {
   Background,
   BackgroundVariant,
@@ -22,6 +22,8 @@ import { BranchNode } from './nodes/BranchNode'
 import { ShotNode } from './nodes/ShotNode'
 import { ImageNode } from './nodes/ImageNode'
 import { BranchEdge } from './edges/BranchEdge'
+import { CanvasAlignmentControls } from './CanvasAlignmentControls'
+import { CANVAS_GRID_SIZE } from './canvasAlignment'
 import type { EditorGraphActions } from './useEditorGraphActions'
 import type { EditorPersistence } from './useEditorPersistence'
 import type { CanvasView } from './useCanvasView'
@@ -42,8 +44,8 @@ const edgeTypes: EdgeTypes = {
   branch: BranchEdge,
 }
 
-/** 背景点阵间距（像素），与画布网格视觉密度一致。 */
-const CANVAS_DOT_GAP = 22
+/** 横纵轴吸附间距与背景点阵共用画布单位，缩放时保持同一网格。 */
+const CANVAS_SNAP_GRID: [number, number] = [CANVAS_GRID_SIZE, CANVAS_GRID_SIZE]
 
 /**
  * 画布区域的收窄输入（issue #103 渲染隔离）：只声明本区域真实消费的字段，
@@ -76,51 +78,40 @@ export interface EditorCanvasRegionProps {
   readonly onPaneContextMenu: EditorGraphActions['menu']['onPaneContextMenu']
   /** 自动排布（issue #94，useAutoLayout）：整图位置整理入命令栈。 */
   readonly onAutoLayout: EditorGraphActions['layout']['onAutoLayout']
+  /** 选中节点对齐：只改位置，整批一次撤销。 */
+  readonly onAlignNodes: EditorGraphActions['alignment']['onAlignNodes']
   /** 视口落定持久化（useEditorPersistence，§3 视口随文档落盘）。 */
   readonly onMoveEnd: EditorPersistence['onMoveEnd']
 }
 
 /** 画布容器与 ReactFlow 装配；文档变化经 doc/displayNodes 穿透 memo 边界。 */
 function EditorCanvasRegionImpl(props: EditorCanvasRegionProps) {
-  const {
-    project,
-    canvasRef,
-    doc,
-    displayNodes,
-    onCanvasDragOver,
-    onCanvasDrop,
-    isValidConnection,
-    onConnect,
-    onNodeDragStart,
-    onNodeDragStop,
-    onNodeContextMenu,
-    onEdgeContextMenu,
-    onPaneContextMenu,
-    onAutoLayout,
-    onMoveEnd,
-  } = props
+  const { project, doc } = props
+  const [snapToGrid, setSnapToGrid] = useState(true)
   return (
     <div
       className="canvas-root"
-      ref={canvasRef}
-      onDragOver={onCanvasDragOver}
-      onDrop={onCanvasDrop}
+      ref={props.canvasRef}
+      onDragOver={props.onCanvasDragOver}
+      onDrop={props.onCanvasDrop}
     >
       <ReactFlow
-        nodes={displayNodes}
+        nodes={props.displayNodes}
+        snapToGrid={snapToGrid}
+        snapGrid={CANVAS_SNAP_GRID}
         edges={doc.edges}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         proOptions={{ hideAttribution: true }}
         onNodesChange={doc.onNodesChange}
         onEdgesChange={doc.onEdgesChange}
-        onConnect={onConnect}
-        onNodeDragStart={onNodeDragStart}
-        onNodeDragStop={onNodeDragStop}
-        onNodeContextMenu={onNodeContextMenu}
-        onEdgeContextMenu={onEdgeContextMenu}
-        onPaneContextMenu={onPaneContextMenu}
-        isValidConnection={isValidConnection}
+        onConnect={props.onConnect}
+        onNodeDragStart={props.onNodeDragStart}
+        onNodeDragStop={props.onNodeDragStop}
+        onNodeContextMenu={props.onNodeContextMenu}
+        onEdgeContextMenu={props.onEdgeContextMenu}
+        onPaneContextMenu={props.onPaneContextMenu}
+        isValidConnection={props.isValidConnection}
         /* 删除统一走命令栈（含连线清理），禁用内置 Delete 行为 */
         deleteKeyCode={null}
         /* 有持久化视口则恢复，否则首开 fitView（§3 视口随文档持久化） */
@@ -128,28 +119,24 @@ function EditorCanvasRegionImpl(props: EditorCanvasRegionProps) {
           defaultViewport: project.viewport,
         })}
         fitView={!project.viewport}
-        onMoveEnd={onMoveEnd}
+        onMoveEnd={props.onMoveEnd}
       >
         <Background
           variant={BackgroundVariant.Dots}
-          gap={CANVAS_DOT_GAP}
+          gap={CANVAS_GRID_SIZE}
           size={1}
           color="var(--canvas-dot)"
         />
-        <Controls>
-          {/* 自动排布（issue #94）：复用控件按钮样式保证暗/浅色可辨认；
-              空画布禁用。整图位置整理入命令栈，动作语义在 useAutoLayout。 */}
-          <button
-            type="button"
-            className="react-flow__controls-button"
-            title="自动排布"
-            aria-label="自动排布"
-            disabled={doc.nodes.length === 0}
-            onClick={onAutoLayout}
-          >
-            <AutoLayoutIcon />
-          </button>
-        </Controls>
+        <CanvasAlignmentControls
+          selectedCount={doc.nodes.filter((node) => node.selected).length}
+          onAlignNodes={props.onAlignNodes}
+        />
+        <CanvasLayoutControl
+          disabled={doc.nodes.length === 0}
+          onAutoLayout={props.onAutoLayout}
+          snapToGrid={snapToGrid}
+          onToggleSnap={() => setSnapToGrid((enabled) => !enabled)}
+        />
       </ReactFlow>
     </div>
   )
@@ -159,6 +146,54 @@ function EditorCanvasRegionImpl(props: EditorCanvasRegionProps) {
  * 命名导出（issue #164）：内部实现与导出名分离，消费方仍按
  * EditorCanvasRegion 引用。 */
 export const EditorCanvasRegion = memo(EditorCanvasRegionImpl)
+
+/** 自动排布入口独立于对齐工具条；空画布禁用。 */
+function CanvasLayoutControl({
+  disabled,
+  onAutoLayout,
+  snapToGrid,
+  onToggleSnap,
+}: {
+  readonly disabled: boolean
+  readonly onAutoLayout: () => void
+  readonly snapToGrid: boolean
+  readonly onToggleSnap: () => void
+}) {
+  return (
+    <Controls>
+      <button
+        type="button"
+        className="react-flow__controls-button"
+        title="网格吸附"
+        aria-label="网格吸附"
+        aria-pressed={snapToGrid}
+        onClick={onToggleSnap}
+      >
+        <svg
+          viewBox="0 0 24 24"
+          width="16"
+          height="16"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          aria-hidden="true"
+        >
+          <path d="M8 3v18M16 3v18M3 8h18M3 16h18" />
+        </svg>
+      </button>
+      <button
+        type="button"
+        className="react-flow__controls-button"
+        title="自动排布"
+        aria-label="自动排布"
+        disabled={disabled}
+        onClick={onAutoLayout}
+      >
+        <AutoLayoutIcon />
+      </button>
+    </Controls>
+  )
+}
 
 /** 自动排布按钮图标：三卡对齐 + 归位箭头，表达「整理布局」。 */
 function AutoLayoutIcon() {

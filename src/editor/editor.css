@@ -263,6 +263,20 @@
   color: var(--text-secondary);
 }
 
+.pw-export-foot {
+  flex-wrap: wrap;
+}
+
+.pw-export-foot .pw-dialog-hint {
+  flex-basis: 100%;
+  order: 1;
+}
+
+.pw-export-foot .pw-dialog-btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 /* 导出范围概要：标题栏内的次要信息（本次导出覆盖的内容计数） */
 .pw-dialog-scope {
   font-size: 11px;

@@ -182,7 +182,7 @@ export function EditorTitlebar({
         className="editor-tbtn"
         onClick={onOpenExport}
         aria-label="导出剧本"
-        title="导出剧本（场景 + 对白，分镜附录）"
+        title="导出剧本（Markdown / JSON）"
       >
         ⤓ 导出
       </button>

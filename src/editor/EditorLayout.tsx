@@ -65,6 +65,7 @@ function toCanvasRegionProps(
     onEdgeContextMenu: props.graph.menu.onEdgeContextMenu,
     onPaneContextMenu: props.graph.menu.onPaneContextMenu,
     onAutoLayout: props.graph.layout.onAutoLayout,
+    onAlignNodes: props.graph.alignment.onAlignNodes,
     onMoveEnd: props.persistence.onMoveEnd,
   }
 }

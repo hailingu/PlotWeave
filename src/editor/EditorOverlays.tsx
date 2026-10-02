@@ -8,6 +8,8 @@ import { useMemo } from 'react'
 import { CanvasContextMenu } from './CanvasContextMenu'
 import { ExportDialog } from './ExportDialog'
 import { buildScriptExport } from './exportScript'
+import { buildScriptJson } from './exportScriptJson'
+import type { SessionDocPart } from './sessionDoc'
 import type { EditorGraphActions } from './useEditorGraphActions'
 import type { EditorPanels } from './useEditorPanels'
 import type { EditorDocument, EditorProjectContent } from './useEditorDocument'
@@ -31,6 +33,65 @@ export interface EditorOverlaysProps {
   >
 }
 
+/** 当前会话同时生成两类交付文本，统一时钟与内容快照；JSON 沿用保存契约。 */
+function buildExportModels(project: EditorProjectContent, doc: SessionDocPart) {
+  const now = new Date()
+  return {
+    markdown: buildScriptExport({
+      projectName: project.name,
+      nodes: doc.nodes,
+      edges: doc.edges,
+      settings: doc.settings,
+      assets: doc.assets,
+      episodeTitles: doc.episodeTitles ?? {},
+      exportedAt: now.toLocaleDateString('zh-CN'),
+    }),
+    json: buildScriptJson(project, doc, now),
+  }
+}
+
+/** 只按实际导出内容缓存；聚焦集或其他布局状态不重建文本、不刷新复制回执。 */
+function useExportModels(
+  project: EditorProjectContent,
+  doc: EditorDocument,
+  open: boolean,
+) {
+  const {
+    nodes,
+    edges,
+    settings,
+    assets,
+    episodeTitles,
+    aiRevision,
+    viewportRef,
+  } = doc
+  return useMemo(
+    () =>
+      open
+        ? buildExportModels(project, {
+            nodes,
+            edges,
+            settings,
+            assets,
+            episodeTitles,
+            aiRevision,
+            viewport: viewportRef.current,
+          })
+        : null,
+    [
+      open,
+      project,
+      nodes,
+      edges,
+      settings,
+      assets,
+      episodeTitles,
+      aiRevision,
+      viewportRef,
+    ],
+  )
+}
+
 /** 右键菜单：节点 = 设置/复制/删除；空白 = 五类新增（§4.3）。 */
 export function EditorOverlays(props: EditorOverlaysProps) {
   const { project, doc, panels, graph } = props
@@ -39,32 +100,7 @@ export function EditorOverlays(props: EditorOverlaysProps) {
   // 节点/连线/设定/资产/集标题/项目名任一变化才重建，内容不冻结。
   // 资产取响应式 doc.assets 而非 assetsRef 镜像：ref 读取不进依赖，
   // 模型变化不会触发重建
-  const exportModel = useMemo(
-    () =>
-      panels.exportOpen
-        ? buildScriptExport({
-            projectName: project.name,
-            nodes: doc.nodes,
-            edges: doc.edges,
-            settings: doc.settings,
-            assets: doc.assets,
-            episodeTitles: doc.episodeTitles,
-            // 导出日期为显式入参（issue #360）：生成器不读系统时钟，日期在
-            // 模型重建时取当天——与既有缓存语义一致（打开期间内容不变则
-            // 模型与日期均冻结，内容变化重建时更新）
-            exportedAt: new Date().toLocaleDateString('zh-CN'),
-          })
-        : null,
-    [
-      panels.exportOpen,
-      project.name,
-      doc.nodes,
-      doc.edges,
-      doc.settings,
-      doc.assets,
-      doc.episodeTitles,
-    ],
-  )
+  const exportModel = useExportModels(project, doc, panels.exportOpen)
   return (
     <>
       {panels.ctxMenu && (
@@ -85,7 +121,8 @@ export function EditorOverlays(props: EditorOverlaysProps) {
       {panels.exportOpen && exportModel !== null && (
         <ExportDialog
           projectName={project.name}
-          model={exportModel}
+          model={exportModel.markdown}
+          json={exportModel.json}
           onClose={() => panels.setExportOpen(false)}
         />
       )}
