@@ -3,8 +3,9 @@
 //! 采集完整性——对每条入图 use 路径分类：解析到 ≥1 目标所有者（含指向
 //! 当前文件的自环所有者，自环边由建边层剔除）计 resolved；首段未命中
 //! 任何内部模块名者按外部 crate 计数（external）；首段命中内部模块名
-//!（当前模块子模块、根模块，或 crate/self/super 前缀的结构性命中）却
-//! 零目标者记为缺口——build_graph 建边前对非空缺口 fail-closed，防
+//!（当前模块子模块，或 crate/self/super 前缀的结构性命中——裸首段不按
+//! 根模块判定，issue #470，与 resolve_use 口径一致）却零目标者记为
+//! 缺口——build_graph 建边前对非空缺口 fail-closed，防
 //! issue #426 式「静默丢边 → 假无环」复发。真实仓库断言见
 //! issue_469_tests。
 
@@ -97,8 +98,8 @@ fn classify_use_path(
 }
 
 /// 首段是否命中内部模块名：crate/self/super 前缀结构性命中（其后必有
-/// 模块所有者）；裸首段按当前位置子模块或根模块子模块判定——与
-/// resolve_use 的裸路径口径一致（issue #426）。
+/// 模块所有者）；裸首段仅按当前模块的直接子模块判定——与 resolve_use
+/// 的裸路径口径一致（issue #426；不按根模块判定，issue #470）。
 fn first_segment_hits_internal(
     tree: &ModuleTree,
     path: &[String],
@@ -114,8 +115,4 @@ fn first_segment_hits_internal(
     let mut ctx = path.to_vec();
     ctx.extend(inline.iter().cloned());
     tree.children.get(&ctx).is_some_and(|c| c.contains(first))
-        || tree
-            .children
-            .get(&Vec::<String>::new())
-            .is_some_and(|c| c.contains(first))
 }

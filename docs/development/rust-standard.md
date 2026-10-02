@@ -134,7 +134,7 @@ from unmeasured files. Metric and scope:
   (`src/module_graph.rs`, `#[cfg(test)]`-gated, issue #399): it text-scans the
   `mod` declarations and `use` paths (`crate::`/`super::`/`self::` prefixes,
   brace groups expanded; Rust 2018 bare paths such as `use child::…` resolve
-  to a direct child of the current module, then to a root module, then through
+  to a direct child of the current module, then through
   visible alias chains and chained glob prefixes (recursively, bounded depth —
   issue #469, PR review 5379907393) and glob imports (`use <prefix>::*`
   brings the prefix module's direct child module names into scope; glob and
@@ -147,15 +147,25 @@ from unmeasured files. Metric and scope:
   crate — issue #426, whose self-contained fixtures in
   `src/module_graph/issue_426_tests.rs` require bare-path parent→child edges,
   including facade re-exports and inline-module scopes, to close
-  parent↔child cycles) of every production module reachable from `lib.rs`
+  parent↔child cycles; a bare first segment never drills down from the crate
+  root — rustc resolves a bare name that hits the extern prelude to the
+  external crate (a root-level `mod std;` does not capture a sibling's
+  `use std::…`) and reports `E0432` for module names that are out of scope,
+  so a root-module fallback would fabricate internal edges and report cycles
+  rustc-clean code does not have — issue #470, whose fixtures in
+  `src/module_graph/issue_470_tests.rs` pin the external classification, the
+  audit agreement, and the `crate::`-prefixed alias-expansion anchoring that
+  replaced the fallback) of every production module reachable from `lib.rs`
   through non-`#[cfg(test)]` declarations (a cfg group gates as test-only
   when it *implies* `test` — bare `test` or `all(test, …)`; `any(test,
   feature = …)` stays in as production-capable), and asserts the resulting
   dependency graph is acyclic. Before building edges the guard also runs the
   collection-completeness audit (issue #469, `src/module_graph/audit.rs`):
   every expanded `use` path whose first segment names an internal module (a
-  child of the current module, a root module, or a structural
-  `crate`/`self`/`super` prefix) must resolve to at least one target owner —
+  child of the current module or a structural
+  `crate`/`self`/`super` prefix — bare first segments are never judged
+  against root-module children, keeping the audit in agreement with
+  `resolve_use`, issue #470) must resolve to at least one target owner —
   self-file owners count as resolved and only the self-loop edge is dropped —
   otherwise the guard fails closed, and paths whose first segment names no
   internal module are classified and counted as external crates; the real
@@ -170,7 +180,14 @@ from unmeasured files. Metric and scope:
   and carries counterexample fixtures (an issue #146-shaped mutual dependency
   must be reported) so it proves its own detection. Registered blind spots:
   `macro_rules!` bodies are skipped wholesale, so a `use` that exists only
-  inside a macro definition is not collected; glob imports resolve only the
+  inside a macro definition is not collected; a bare first segment that names
+  a root-level module (not a direct child of the current module) is always
+  classified as an external crate — rustc resolves a bare name that hits the
+  extern prelude to the external crate and reports `E0432` for out-of-scope
+  module names, so the guard does not model a root-module
+  fallback and never fabricates internal edges or false cycles from a
+  root-module name colliding with an external crate (issue #470);
+  glob imports resolve only the
   prefix module's *direct* children (names re-exported into the glob target
   via `pub use` are not resolved); alias chains deeper than the bounded depth
   are treated as unresolvable.
