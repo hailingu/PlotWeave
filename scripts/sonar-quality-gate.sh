@@ -25,6 +25,8 @@ quality_gate_timeout=${SONAR_QUALITY_GATE_TIMEOUT:-300}
 sonar_host_url=${SONAR_HOST_URL:-}
 # 认证令牌：SONAR_TOKEN 优先；未设时回退到 PLOTWEAVE_SONAR_TOKEN
 #（可在 ~/.zshrc 等 shell 配置里导出，Git 钩子继承调用方环境）。
+# 先移除同名环境变量及其导出属性，避免重新赋值后凭据仍被子进程继承。
+unset sonar_token
 sonar_token=${SONAR_TOKEN:-${PLOTWEAVE_SONAR_TOKEN:-}}
 
 cd "$repository_root"
@@ -161,16 +163,15 @@ fail_lock_acquisition() {
 [ -n "$sonar_host_url" ] ||
   fail '必须显式设置 SONAR_HOST_URL，避免扫描器误连 SonarQube Cloud'
 
-# 令牌校验与下发：字符集限制先于任何使用；扫描器只认 SONAR_TOKEN /
-# sonar.token 属性，在此把解析结果（含 PLOTWEAVE_SONAR_TOKEN 回退）统一
-# 导出为环境变量——令牌不进命令行参数、不进进程列表与日志。
+# 令牌校验先于任何使用；保留在当前 shell 的非导出变量中（issue #462），
+# 不向静态检查、前端测试或 Rust 构建下发。只在扫描器调用时设置 SONAR_TOKEN；
+# API 仍通过 curl 标准输入认证。调用方环境不受此脚本的 unset 影响。
 if [ -n "$sonar_token" ]; then
   case "$sonar_token" in
     *[!A-Za-z0-9._~-]*) fail 'SONAR_TOKEN/PLOTWEAVE_SONAR_TOKEN 含有不支持的字符' ;;
   esac
-  SONAR_TOKEN=$sonar_token
-  export SONAR_TOKEN
 fi
+unset SONAR_TOKEN PLOTWEAVE_SONAR_TOKEN
 
 require_command "$npm_bin"
 require_command "$scanner_bin"
@@ -209,7 +210,7 @@ printf '%s\n' '[SonarQube] 生成最新 Rust 覆盖率……'
 enforce_line_coverage_floor 'Rust' "$rust_coverage_report_path"
 
 printf '%s\n' '[SonarQube] 扫描并等待 Quality Gate……'
-"$scanner_bin" \
+SONAR_TOKEN=$sonar_token "$scanner_bin" \
   "-Dsonar.host.url=$sonar_host_url" \
   "-Dsonar.javascript.lcov.reportPaths=$coverage_report_path" \
   "-Dsonar.rust.lcov.reportPaths=$rust_coverage_report_path" \

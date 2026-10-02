@@ -27,6 +27,7 @@ export GIT_NO_REPLACE_OBJECTS=1
 hook_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 main_root=$(CDPATH= cd -- "$hook_directory/.." && pwd)
 npm_bin=${PLOTWEAVE_NPM_BIN:-npm}
+node_bin=${PLOTWEAVE_NODE_BIN:-node}
 zero_sha=0000000000000000000000000000000000000000
 
 # 待物化路径与互斥锁与主工作树对齐（issue #405）：慢路径门禁写在临时
@@ -111,7 +112,9 @@ gate_commit_in_temp_worktree() {
   ( unset_git_localization
     git worktree add --quiet --detach "$temp_worktree" "$commit" ) ||
     fail "无法在临时 worktree 检出被推提交 $short"
-  ( cd "$temp_worktree" && unset_git_localization && "$npm_bin" ci ) </dev/null ||
+  # 当前执行器清理两个 Sonar 令牌变量，并以期限监督 npm 及 lifecycle 子进程组。
+  ( cd "$temp_worktree" && unset_git_localization &&
+    PLOTWEAVE_NPM_BIN=$npm_bin "$node_bin" "$main_root/scripts/pre-push-install.mjs" ) </dev/null ||
     fail "被推树 $short 的依赖安装失败（npm ci；树内缺 package-lock.json 亦会走到这里）"
   ( unset_git_localization
     PLOTWEAVE_GATE_REPOSITORY_ROOT=$temp_worktree \
