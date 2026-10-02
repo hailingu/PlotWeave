@@ -1,16 +1,16 @@
 /** 执行被推树的 npm ci：隔离 Sonar 环境变量，并有界终止安装进程组（issue #462）。 */
 import { spawn } from 'node:child_process'
 
-/** 向安装进程组发信号；组已结束视为成功，其他错误返回失败。 */
+/** 区分信号已发送、组已不存在和发送失败，避免向已释放的组号继续发信号。 */
 function signalInstallation(child, signal) {
-  if (!child.pid) return true
+  if (!child.pid) return 'absent'
   try {
     process.kill(-child.pid, signal)
-    return true
+    return 'signaled'
   } catch (error) {
-    if (error.code === 'ESRCH') return true
+    if (error.code === 'ESRCH') return 'absent'
     console.error(`[PRE_PUSH_INSTALL_CLEANUP_FAILED] ${error.code}`)
-    return false
+    return 'failed'
   }
 }
 
@@ -23,7 +23,7 @@ function runInstallation(timeoutSeconds) {
     let child
     let stopping = false
     let closed = false
-    let forced = false
+    let cleanupSettled = false
     let resultCode = 1
     let escalation
     const finish = (code) => {
@@ -43,10 +43,15 @@ function runInstallation(timeoutSeconds) {
       stopping = true
       resultCode = code
       clearTimeout(deadline)
-      if (!signalInstallation(child, 'SIGTERM')) resultCode = 1
+      const termination = signalInstallation(child, 'SIGTERM')
+      if (termination === 'absent') {
+        cleanupSettled = true
+        return
+      }
+      if (termination === 'failed') resultCode = 1
       escalation = setTimeout(() => {
-        forced = true
-        if (!signalInstallation(child, 'SIGKILL')) resultCode = 1
+        cleanupSettled = true
+        if (signalInstallation(child, 'SIGKILL') === 'failed') resultCode = 1
         if (closed) finish(resultCode)
       }, 1000)
     }
@@ -74,7 +79,7 @@ function runInstallation(timeoutSeconds) {
         console.error(`[PRE_PUSH_INSTALL_FAILED] npm ci 退出码 ${code}`)
       }
       stop(undefined, code ?? 1)
-      if (forced) finish(resultCode)
+      if (cleanupSettled) finish(resultCode)
     })
   })
 }

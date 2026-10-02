@@ -33,6 +33,54 @@ descendant.unref()`,
   )
 }
 
+/** 在真实 ESRCH 后把后续组信号映射到测试哨兵，模拟组号复用的危害。 */
+function writeReusedGroupProbe(
+  root: string,
+  sentinelPid: number,
+  closeDelay: number,
+  interruptBeforeClose: boolean,
+): string {
+  const preload = resolve(root, 'reuse-absent-group.mjs')
+  writeFileSync(
+    preload,
+    `import childProcess from 'node:child_process'
+import { syncBuiltinESMExports } from 'node:module'
+import { writeFileSync } from 'node:fs'
+const realKill = process.kill.bind(process)
+let absentGroup
+process.kill = (pid, signal) => {
+  if (pid === absentGroup) return realKill(-${sentinelPid}, signal)
+  try {
+    return realKill(pid, signal)
+  } catch (error) {
+    if (pid < 0 && error.code === 'ESRCH') {
+      absentGroup = pid
+      writeFileSync('group.absent', 'observed')
+    }
+    throw error
+  }
+}
+const realSpawn = childProcess.spawn
+childProcess.spawn = (...args) => {
+  const child = realSpawn(...args)
+  const realEmit = child.emit.bind(child)
+  child.emit = (event, ...values) => {
+    if (event === 'close' && ${closeDelay} > 0) {
+      setTimeout(() => realEmit(event, ...values), ${closeDelay})
+      return true
+    }
+    return realEmit(event, ...values)
+  }
+  if (${interruptBeforeClose}) {
+    child.once('exit', () => process.kill(process.pid, 'SIGHUP'))
+  }
+  return child
+}
+syncBuiltinESMExports()`,
+  )
+  return preload
+}
+
 /** 失败的回归也只清理自己创建的安装组，防止后台夹具泄漏。 */
 function killInstallFixture(root: string): void {
   const pidPath = resolve(root, 'install.pid')
@@ -271,6 +319,81 @@ process.kill = (pid, signal) => {
         .toBe(deniedSignal === 'SIGKILL')
     } finally {
       killInstallFixture(root)
+    }
+  },
+)
+
+it.each([
+  {
+    scenario: '正常退出',
+    exitCode: 0,
+    closeDelay: 0,
+    interrupted: false,
+    expected: 0,
+  },
+  {
+    scenario: '安装失败',
+    exitCode: 7,
+    closeDelay: 0,
+    interrupted: false,
+    expected: 7,
+  },
+  {
+    scenario: 'close 前中断',
+    exitCode: 0,
+    closeDelay: 200,
+    interrupted: true,
+    expected: 1,
+  },
+  {
+    scenario: 'close 前超时',
+    exitCode: 0,
+    closeDelay: 1200,
+    interrupted: false,
+    expected: 1,
+  },
+])(
+  '组已不存在后 $scenario 不得终止复用组号的进程（评审 4162983542）',
+  async (state) => {
+    const { root, env } = prepareInstallEnvironment()
+    writeFileSync(resolve(root, 'ci'), `process.exit(${state.exitCode})`)
+    if (state.scenario === 'close 前超时')
+      env.PLOTWEAVE_NPM_INSTALL_TIMEOUT = '1'
+    const sentinel = spawn(
+      process.execPath,
+      ['-e', "process.send('ready'); setTimeout(() => {}, 10000)"],
+      {
+        detached: true,
+        stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+      },
+    )
+    const sentinelCompletion = once(sentinel, 'close')
+    try {
+      await once(sentinel, 'message', { signal: AbortSignal.timeout(5000) })
+      if (!sentinel.pid) throw new Error('测试哨兵没有 PID')
+      const preload = writeReusedGroupProbe(
+        root,
+        sentinel.pid,
+        state.closeDelay,
+        state.interrupted,
+      )
+      const child = spawn(process.execPath, ['--import', preload, runner], {
+        cwd: root,
+        env,
+      })
+      let stderr = ''
+      child.stderr.on('data', (data: Buffer) => {
+        stderr += data.toString()
+      })
+      const [code] = await once(child, 'close')
+      expect(code).toBe(state.expected)
+      expect(existsSync(resolve(root, 'group.absent'))).toBe(true)
+      // Stable diagnostic contract: quality-gate-push.md, issue #462.
+      expect(stderr).not.toContain('[PRE_PUSH_INSTALL_CLEANUP_FAILED]')
+      expect(signalFixtureProcess(sentinel.pid, 0)).toBe(true)
+    } finally {
+      sentinel.kill('SIGKILL')
+      await sentinelCompletion
     }
   },
 )
