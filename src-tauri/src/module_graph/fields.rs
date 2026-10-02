@@ -7,7 +7,8 @@
 
 use std::collections::BTreeMap;
 
-use super::{item_keyword, parse_attr, skip_delimited, strip_raw_ident};
+use super::attrs::parse_attr;
+use super::{item_keyword, skip_delimited, strip_raw_ident};
 
 /// Rust 2021 的 strict / reserved keywords：普通声明名不得占用这些词。
 /// gen 自 2024 edition 才保留，本仓 2021 grammar 允许该名字；union 等弱关键字

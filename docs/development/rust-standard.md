@@ -468,6 +468,43 @@ namespace binding lookup keeps their distinct precedence rules local; no
 new unit crosses a decomposition-review threshold. The retained scanner
 boundaries above remain unchanged.
 
+### Issue #480 Production-Configuration Shadowing
+
+[PR #488 review 5393324118](https://github.com/hailingu/PlotWeave/pull/488#pullrequestreview-5393324118)
+corrects the classification of bindings and type declarations guarded by
+`cfg(not(test))`: the graph represents production configurations, so this
+condition is unconditional for type-namespace shadowing. `attrs::parse_attr`
+owns the classification; `production_cfg_value` evaluates `all` / `any` / `not`
+with `test = false` and leaves feature/platform predicates unknown. Only a
+proven true predicate permits unconditional occupancy. A `cfg_attr` whose
+predicate is proven false applies nothing; otherwise its applied attributes
+are checked recursively. Metadata such as `doc(cfg(...))` has no existence
+effect. Existing `cfg_implies_test` exclusion remains unchanged.
+
+`scan_attribute` accumulates conditions, `ScanState` carries inline inheritance,
+and the import/type-declaration collectors feed the alias resolver. The tests
+in `src/module_graph/issue_480_cfg_tests.rs` exercise these entry points through
+the complete graph builder, checking bare `p::V` and qualified `crate::m::p`
+paths, original owner edges, and cycles closed by reverse dependencies.
+
+| State / precondition | Action / ordering | Observable outcome | Invariant | Verification |
+| --- | --- | --- | --- | --- |
+| Explicit type import or declaration has `cfg(not(test))` or a production-true compound predicate | Classify attribute, collect occupancy, resolve bare and qualified uses | No false glob edge or cycle; owner edges remain | Production-true conditions cannot disable type shadowing | `production_true_cfg_bindings_and_declarations_shadow_globs` |
+| Inline module has a production-true condition | Inherit condition while collecting its type declaration | Shadowing remains effective | Inheritance cannot make a production-true condition unknown | `production_true_inline_cfg_preserves_type_shadowing` |
+| Nested `cfg_attr` applies only production-true cfg, or its predicate is production-false | Classify applied attributes recursively | No false glob edge or cycle | An attribute that cannot remove a production item cannot disable occupancy | `production_true_cfg_attr_preserves_type_shadowing` |
+| Unknown feature predicate appears in a conjunction, negation, nested cfg_attr, or before/after a production-true attribute | Accumulate conditions, then resolve uses | Glob edges and real cycles remain | A known true attribute cannot clear an independent unknown condition | `production_unknown_cfg_keeps_glob_cycles` |
+| Unconditional import points to cfg-exclusive enum/static declarations, including inline-module variants | Classify declaration and inherited conditions | Glob edges and real cycles remain | Declaration-side uncertainty cannot become unconditional type occupancy | `production_unknown_type_and_inline_cfg_keep_glob_cycles` |
+
+The three production-true regression tests failed for false glob edges before
+the fix and pass afterward; the two unknown-condition controls pass throughout.
+Existing test-only and metadata fixtures cover the unchanged exclusion boundary.
+The scan is synchronous and stateless: retries, persistence and completion races
+do not apply. Unknown-predicate correlations (for example, a feature OR its
+negation), chained type re-exports and external-crate classification remain
+outside this repair; no new parser dependency or product data/UI contract is
+introduced. Documentation is reviewed structurally; no automated prose check
+is configured.
+
 ## Before Writing Code
 
 Read this file, then inspect the target crate for existing state/config
