@@ -5,8 +5,10 @@ enforce file caps through a static checker. The 80-code-line executable-unit
 rule is outside this checker's scope by decision, not by omission: per issue
 [#468](https://github.com/hailingu/PlotWeave/issues/468) (owner decision,
 2026-10-02) it is a non-mandatory, review-enforced standard — review findings
-over it require fixes — and no dedicated unit-measurement tool for TypeScript
-or Rust functions/closures will be added.
+over units the reviewed change introduces or materially changes require
+fixes, with unrelated pre-existing over-limit units recorded as debt — and no
+dedicated unit-measurement tool for TypeScript or Rust functions/closures
+will be added.
 
 ## Contract
 
@@ -448,3 +450,15 @@ the cap; it is now qualified to the mandatory guardrails (the automated file
 caps), with the executable-unit cap following its SHOULD/review-enforced
 semantics. Documentation-only again; the structured cross-reference review
 was rerun after the change, and no automated prose check is configured.
+
+## Summary-Scope Follow-up (Review 5389768857)
+
+The [follow-up review](https://github.com/hailingu/PlotWeave/pull/485#pullrequestreview-5389768857)
+found the scoping above was applied only to the detailed rule statements:
+this document's introduction and the standard's guardrail summary still said
+unconditionally that a review finding over the cap requires a fix, which
+would mandate an out-of-scope refactor for an unrelated pre-existing
+over-limit unit. Both summaries now carry the same scope — units the
+reviewed change introduces or materially changes — with unrelated
+observations recorded as debt. Documentation-only; the structured
+cross-reference review was rerun, and no automated prose check is configured.

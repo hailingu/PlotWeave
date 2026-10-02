@@ -29,8 +29,9 @@ automatically enforced. The 80-code-line executable-unit cap — comments
 excluded — is a non-mandatory, review-enforced standard (issue
 [#468](https://github.com/hailingu/PlotWeave/issues/468) owner decision):
 no automated check measures it, none will be created, and a review finding
-over it requires a fix. The review thresholds below trigger earlier,
-discussion-only attention.
+over it requires a fix, scoped to units the reviewed change introduces or
+materially changes as specified below. The review thresholds below trigger
+earlier, discussion-only attention.
 
 | Unit | Decomposition-review threshold | Cap (per AGENTS.md) |
 | --- | --- | --- |
