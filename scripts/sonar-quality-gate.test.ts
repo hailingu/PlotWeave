@@ -108,7 +108,7 @@ function writeNpmStub(paths: GateStubPaths): void {
   writeExecutable(
     paths.npmPath,
     String.raw`printf 'npm %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
-[ -z "$SONAR_TOKEN$PLOTWEAVE_SONAR_TOKEN" ] || printf 'npm-token-present\n' >> "$PLOTWEAVE_TEST_LOG"
+[ -z "$SONAR_TOKEN$PLOTWEAVE_SONAR_TOKEN$sonar_token" ] || printf 'npm-token-present\n' >> "$PLOTWEAVE_TEST_LOG"
 # 静态检查子命令（issue #227）：格式/lint 可独立注入失败；覆盖率只在
 # test:coverage 生成（避免格式调用顺带写出报告，掩盖失败路径）
 if [ "$*" = "run format:check" ]; then
@@ -170,7 +170,7 @@ function writeRustCoverageStub(paths: GateStubPaths): void {
   writeExecutable(
     paths.llvmCovPath,
     String.raw`printf 'cargo-llvm-cov %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
-[ -z "$SONAR_TOKEN$PLOTWEAVE_SONAR_TOKEN" ] || printf 'rust-token-present\n' >> "$PLOTWEAVE_TEST_LOG"
+[ -z "$SONAR_TOKEN$PLOTWEAVE_SONAR_TOKEN$sonar_token" ] || printf 'rust-token-present\n' >> "$PLOTWEAVE_TEST_LOG"
 case "$PLOTWEAVE_TEST_RUST_COVERAGE_MODE" in
   valid)
     printf '%s\n' 'TN:' 'SF:src-tauri/src/example.rs' 'DA:1,1' 'end_of_record' > "$PLOTWEAVE_RUST_COVERAGE_REPORT_PATH"
@@ -700,6 +700,24 @@ it('统一门禁执行检查与覆盖率时不向被分析代码下发 Sonar 令
   expect(result.scannerToken).toBe('test_primary')
   expect(result.curlStdin).toContain('Authorization: Bearer test_primary')
 })
+
+it.each(['primary', 'fallback'] as const)(
+  '继承已导出的 sonar_token 时仍隔离 %s 凭据（评审 4162846722）',
+  (selection) => {
+    vi.stubEnv('sonar_token', 'test_inherited_export')
+    const result = runGate('scripts/sonar-quality-gate.sh', {
+      ...(selection === 'primary' ? { sonarToken: 'test_primary' } : {}),
+      plotweaveSonarToken: 'test_fallback',
+    })
+    const expectedToken =
+      selection === 'primary' ? 'test_primary' : 'test_fallback'
+    expect(result.status).toBe(0)
+    expect(result.log).not.toContain('npm-token-present')
+    expect(result.log).not.toContain('rust-token-present')
+    expect(result.scannerToken).toBe(expectedToken)
+    expect(result.curlStdin).toContain(`Authorization: Bearer ${expectedToken}`)
+  },
+)
 
 describe('门禁锁恢复命令（issue #430）', { timeout: 30_000 }, () => {
   it.each(['sonar-gate.lock', "sonar lock's $(touch injected).lock"])(

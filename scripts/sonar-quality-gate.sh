@@ -25,6 +25,8 @@ quality_gate_timeout=${SONAR_QUALITY_GATE_TIMEOUT:-300}
 sonar_host_url=${SONAR_HOST_URL:-}
 # 认证令牌：SONAR_TOKEN 优先；未设时回退到 PLOTWEAVE_SONAR_TOKEN
 #（可在 ~/.zshrc 等 shell 配置里导出，Git 钩子继承调用方环境）。
+# 先移除同名环境变量及其导出属性，避免重新赋值后凭据仍被子进程继承。
+unset sonar_token
 sonar_token=${SONAR_TOKEN:-${PLOTWEAVE_SONAR_TOKEN:-}}
 
 cd "$repository_root"

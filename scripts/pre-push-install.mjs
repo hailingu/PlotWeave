@@ -1,15 +1,16 @@
 /** 执行被推树的 npm ci：隔离 Sonar 环境变量，并有界终止安装进程组（issue #462）。 */
 import { spawn } from 'node:child_process'
 
-/** 向安装进程组发信号；已经结束的进程组无需再次清理。 */
+/** 向安装进程组发信号；组已结束视为成功，其他错误返回失败。 */
 function signalInstallation(child, signal) {
-  if (!child.pid) return
+  if (!child.pid) return true
   try {
     process.kill(-child.pid, signal)
+    return true
   } catch (error) {
-    if (error.code !== 'ESRCH') {
-      console.error(`[PRE_PUSH_INSTALL_CLEANUP_FAILED] ${error.code}`)
-    }
+    if (error.code === 'ESRCH') return true
+    console.error(`[PRE_PUSH_INSTALL_CLEANUP_FAILED] ${error.code}`)
+    return false
   }
 }
 
@@ -42,10 +43,10 @@ function runInstallation(timeoutSeconds) {
       stopping = true
       resultCode = code
       clearTimeout(deadline)
-      signalInstallation(child, 'SIGTERM')
+      if (!signalInstallation(child, 'SIGTERM')) resultCode = 1
       escalation = setTimeout(() => {
         forced = true
-        signalInstallation(child, 'SIGKILL')
+        if (!signalInstallation(child, 'SIGKILL')) resultCode = 1
         if (closed) finish(resultCode)
       }, 1000)
     }

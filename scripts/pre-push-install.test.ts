@@ -235,3 +235,42 @@ it('正常完成的后代清理期间收到中断仍返回失败（评审 416262
     await completion
   }
 })
+
+it.each(['SIGTERM', 'SIGKILL'] as const)(
+  '成功安装清理时 %s 返回 EPERM 必须阻止成功（评审 4162846730）',
+  async (deniedSignal) => {
+    const { root, env } = prepareInstallEnvironment()
+    writeSurvivingDescendant(root, 0)
+    const preload = resolve(root, 'deny-group-signal.mjs')
+    writeFileSync(
+      preload,
+      `const realKill = process.kill.bind(process)
+process.kill = (pid, signal) => {
+  if (pid < 0 && signal === '${deniedSignal}') {
+    throw Object.assign(new Error('injected permission failure'), { code: 'EPERM' })
+  }
+  return realKill(pid, signal)
+}`,
+    )
+    const child = spawn(process.execPath, ['--import', preload, runner], {
+      cwd: root,
+      env,
+    })
+    let stderr = ''
+    child.stderr.on('data', (data: Buffer) => {
+      stderr += data.toString()
+    })
+    try {
+      const [code] = await once(child, 'exit')
+      expect(code).toBe(1)
+      // Stable diagnostic contract: quality-gate-push.md, issue #462.
+      expect(stderr).toContain('[PRE_PUSH_INSTALL_CLEANUP_FAILED] EPERM')
+      const pid = Number(readFileSync(resolve(root, 'descendant.pid'), 'utf8'))
+      await expect
+        .poll(() => signalFixtureProcess(pid, 0))
+        .toBe(deniedSignal === 'SIGKILL')
+    } finally {
+      killInstallFixture(root)
+    }
+  },
+)
