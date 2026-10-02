@@ -16,6 +16,63 @@ const repositoryRoot = resolve(import.meta.dirname, '..')
 const temporaryDirectories: string[] = []
 const zeroSha = '0000000000000000000000000000000000000000'
 
+/** 在被推分支安装零依赖 lifecycle 探针；只记录令牌是否存在，不记录值。 */
+function commitInstallProbe(scenario: PushScenario, body: string): string {
+  const probePath = resolve(scenario.root, 'bin', 'install-probe.json')
+  scenario.env.PLOTWEAVE_TEST_INSTALL_PROBE = probePath
+  scenario.env.PLOTWEAVE_TEST_NPM_CLI = resolve(
+    process.execPath,
+    '../../lib/node_modules/npm/bin/npm-cli.js',
+  )
+  expect(scenario.git(['checkout', '-q', 'side']).status).toBe(0)
+  const manifest = {
+    name: 'install-probe',
+    version: '1.0.0',
+    scripts: { prepare: 'node lifecycle.cjs' },
+  }
+  writeFileSync(
+    resolve(scenario.root, 'package.json'),
+    JSON.stringify(manifest),
+  )
+  writeFileSync(
+    resolve(scenario.root, 'package-lock.json'),
+    JSON.stringify({
+      name: 'install-probe',
+      version: '1.0.0',
+      lockfileVersion: 3,
+      packages: { '': { name: 'install-probe', version: '1.0.0' } },
+    }),
+  )
+  writeFileSync(
+    resolve(scenario.root, '.npmrc'),
+    'audit=false\nfund=false\nregistry=https://registry.invalid\n',
+  )
+  writeFileSync(resolve(scenario.root, 'lifecycle.cjs'), body)
+  expect(
+    scenario.git([
+      'add',
+      '--',
+      'package.json',
+      'package-lock.json',
+      '.npmrc',
+      'lifecycle.cjs',
+    ]).status,
+  ).toBe(0)
+  expect(scenario.git(['commit', '-q', '-m', 'install probe']).status).toBe(0)
+  expect(scenario.git(['checkout', '-q', 'main']).status).toBe(0)
+  const npmPath = resolve(scenario.root, 'bin', 'npm')
+  const original = readFileSync(npmPath, 'utf8')
+  writeExecutable(
+    npmPath,
+    String.raw`if [ "$*" = ci ]; then
+  exec "$PLOTWEAVE_NODE_BIN" "$PLOTWEAVE_TEST_NPM_CLI" ci
+fi
+${original}`,
+  )
+  writeFileSync(resolve(scenario.root, 'calls.log'), '')
+  return probePath
+}
+
 /** 创建一个仅记录调用并返回受控结果的外部命令替身。 */
 function writeExecutable(path: string, body: string): void {
   writeFileSync(path, `#!/bin/sh\n${body}\n`)
@@ -99,6 +156,7 @@ function commitScenarioTooling(sandbox: string): void {
     'file-size-baseline.json',
     'gate-history.sh',
     'gate-tree-marker.sh',
+    'pre-push-install.mjs',
     'rust-coverage.sh',
     'sonar-quality-gate.sh',
   ]) {
@@ -370,6 +428,92 @@ function expectOriginalTree(scenario: PushScenario, commit: string): void {
 // 并发负载下常超 vitest 默认 5s——与 gate-tree-marker.test.ts 同款放宽
 // describe 级超时上限，不放宽断言。套件按矩阵维度分组：单个 describe
 // 回调保持在新函数 80 计行上限内（AGENTS.md 尺寸上限）。
+describe(
+  'pre-push 真实安装环境与超时（issue #462）',
+  { timeout: 30_000 },
+  () => {
+    it('真实 npm ci prepare 无 Sonar 令牌，推送仍完整认证并绑定原始树', () => {
+      const scenario = preparePushScenario()
+      const probe = commitInstallProbe(
+        scenario,
+        String.raw`
+const fs = require('node:fs')
+fs.writeFileSync(process.env.PLOTWEAVE_TEST_INSTALL_PROBE, JSON.stringify({
+  primary: 'SONAR_TOKEN' in process.env,
+  fallback: 'PLOTWEAVE_SONAR_TOKEN' in process.env,
+}))`,
+      )
+      scenario.env.SONAR_TOKEN = 'test_primary'
+      scenario.env.PLOTWEAVE_SONAR_TOKEN = 'test_fallback'
+      const push = scenario.git(['push', 'origin', 'side'])
+      expect(push.status, push.stderr).toBe(0)
+      expect(JSON.parse(readFileSync(probe, 'utf8'))).toEqual({
+        primary: false,
+        fallback: false,
+      })
+      expectOriginalTree(scenario, scenario.sideSha())
+      expect(scenario.worktreeCount()).toBe(1)
+    })
+
+    it('真实 npm ci 超时阻止推送并终止忽略 TERM 的 lifecycle 子进程', () => {
+      const scenario = preparePushScenario()
+      const probe = commitInstallProbe(
+        scenario,
+        String.raw`
+const { spawn } = require('node:child_process')
+process.on('SIGTERM', () => {})
+spawn(process.execPath, ['-e', \`
+  require('node:fs').writeFileSync(process.env.PLOTWEAVE_TEST_INSTALL_PROBE, String(process.pid))
+  process.on('SIGTERM', () => {})
+  setTimeout(() => process.exit(0), 5000)
+\`], { stdio: 'inherit' })
+setTimeout(() => process.exit(0), 6000)`.replaceAll('\\`', '`'),
+      )
+      scenario.env.PLOTWEAVE_NPM_INSTALL_TIMEOUT = '1'
+      const push = scenario.git(['push', 'origin', 'side'])
+      expect(push.status).not.toBe(0)
+      // Stable diagnostic contract: quality-gate-push.md, issue #462.
+      expect(push.stderr).toContain('[PRE_PUSH_INSTALL_TIMEOUT]')
+      const pid = Number(readFileSync(probe, 'utf8'))
+      expect(() => process.kill(pid, 0)).toThrow()
+      expect(scenario.scannerRuns()).toBe(0)
+      expect(scenario.worktreeCount()).toBe(1)
+      expect(
+        scenario.git(['ls-remote', 'origin', 'refs/heads/side']).stdout.trim(),
+      ).toBe('')
+    })
+  },
+)
+
+describe('pre-push 安装失败封闭（issue #462）', { timeout: 30_000 }, () => {
+  it('安装失败阻止扫描和推送并清理临时树', () => {
+    const scenario = preparePushScenario()
+    writeExecutable(resolve(scenario.root, 'bin', 'npm'), 'exit 23')
+    const push = scenario.git(['push', 'origin', 'side'])
+    expect(push.status).not.toBe(0)
+    expect(scenario.scannerRuns()).toBe(0)
+    expect(scenario.worktreeCount()).toBe(1)
+    expect(
+      scenario.git(['ls-remote', 'origin', 'refs/heads/side']).stdout.trim(),
+    ).toBe('')
+  })
+
+  it.each(['0', '-1', 'abc', '2147484'])(
+    '无效安装期限 %s 拒绝启动安装',
+    (timeout) => {
+      const scenario = preparePushScenario()
+      scenario.env.PLOTWEAVE_NPM_INSTALL_TIMEOUT = timeout
+      const push = scenario.git(['push', 'origin', 'side'])
+      expect(push.status).not.toBe(0)
+      // Stable diagnostic contract: quality-gate-push.md, issue #462.
+      expect(push.stderr).toContain('[PRE_PUSH_INSTALL_TIMEOUT_INVALID]')
+      expect(scenario.installRuns()).toBe(0)
+      expect(scenario.scannerRuns()).toBe(0)
+      expect(scenario.worktreeCount()).toBe(1)
+    },
+  )
+})
+
 describe(
   'pre-push 测试沙箱根隔离（issue #405 慢路径门禁）',
   { timeout: 30_000 },

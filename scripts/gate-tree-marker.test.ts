@@ -93,6 +93,7 @@ function copyScenarioFiles(sandbox: string): string {
     'file-size-baseline.json',
     'gate-history.sh',
     'gate-tree-marker.sh',
+    'pre-push-install.mjs',
     'rust-coverage.sh',
     'sonar-quality-gate.sh',
   ]) {

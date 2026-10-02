@@ -215,6 +215,12 @@ The following decisions must not be conflated (评审 4120364296):
   complete sequence in a temporary worktree checked out at the pushed
   commit.
 
+  [issue #462](https://github.com/hailingu/PlotWeave/issues/462) 为慢路径依赖安装
+  增加期限，并将 Sonar 环境变量与安装、检查、覆盖率执行分离；仍执行 lifecycle，
+  被推树的 `.npmrc` 仍生效。完整的执行、凭据及进程清理边界见
+  [安装执行与认证边界](quality-gate-push.md#安装执行与认证边界)。这些失败防护不缩减门禁步骤；
+  下方成本数据仍是修复前的历史测量，未因本次变更重新测量。
+
 The following remain in force exactly as written in `AGENTS.md`, and nothing
 in this file is an exception to them:
 

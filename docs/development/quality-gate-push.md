@@ -130,6 +130,72 @@ dependency installation and cold caches and was measured once on landing —
 see
 [Push-Path Slow-Path Cost](quality-gate-cost.md#push-path-slow-path-cost-2026-09-30-issue-405).
 
+## 安装与凭据状态矩阵（issue #462）
+
+[issue #462](https://github.com/hailingu/PlotWeave/issues/462) 的实现：
+`pre-push` 负责安装的期限、失败分派及临时树清理；安装执行器负责子进程组
+及安装环境；`sonar-quality-gate.sh` 负责认证令牌的使用阶段。安装仍执行
+真实 `npm ci`，不通过跳过 lifecycle 脚本改变依赖构建行为。
+
+| 前置状态与动作（含顺序） | 预期可观察结果 | 跨转换不变量及责任入口 | 对应验证 |
+| --- | --- | --- | --- |
+| 调用者同时设置两个令牌 → 非检出 ref 安装 → 检查 → 扫描 | 真实 prepare 读不到两个变量；扫描器和 API 仍可认证 | 安装执行器及统一门禁：被分析代码的执行环境不含两个 Sonar 令牌；扫描对象保持被推提交 | pre-push 真实零依赖 npm ci 探针；统一门禁环境探针；既有认证优先级测试 |
+| 安装正常结束 → 完整门禁 → 推送 | 远端收到该 SHA，台账绑定该树，临时树移除 | pre-push：安装成功不代替任何门禁步骤，也不修改用户工作树 | 真实 npm ci 成功探针及既有逐 ref 套件 |
+| npm 安装非零退出 → 阻止推送 | 保留安装错误，扫描未执行，远端 ref 不存在，临时树移除 | pre-push：未完成安装不得进入门禁或推送 | 安装失败回归 |
+| npm 无法启动，或执行器收到 INT/TERM → 安装结束 | 区分启动失败与中断；中断时进程组结束并返回失败 | 安装执行器：中断不得报告成功，不遗留受监督安装进程 | pre-push-install 启动失败与真实信号回归 |
+| 安装超过期限（lifecycle 与其子进程忽略 TERM）→ 强制终止 → 阻止推送 | 超时诊断；进程组结束；扫描未执行；临时树移除 | 安装执行器与 pre-push：失败路径有界终止并清理资源 | 真实 npm ci 超时及子进程存活探针 |
+| 超时配置无效 → 请求慢路径安装 | 配置诊断，安装和扫描均未启动 | 安装执行器：无效期限不得退化为无期限执行 | 参数化无效配置回归 |
+| 干净 HEAD、混合 refs、标签、删除 ref → 推送 | 原有快慢分派与去重语义保持 | pre-push：逐唯一被推提交执行完整门禁 | 既有快慢路径、多 ref、标签、删除及替换对象套件 |
+
+并发安装不由此修复引入；原有门禁锁仍串行化分析和台账写入。没有自动安装
+重试，失败后用户重新执行推送会创建新的临时树。网络 registry 挂起与
+lifecycle 挂起共用同一安装期限；测试使用离线零依赖包，不连接外部 registry。
+真实 Sonar 门禁由提交和推送验证，测试沙箱不访问真实服务。
+
+2026-10-02 验证：修复前观察到真实 prepare 的两个令牌均可见、超时设置不
+阻止推送及统一门禁向检查/覆盖率暴露令牌；修复后新增 11 项回归通过，原有
+逐 ref 与门禁脚本套件通过。默认沙箱禁止 `ps` 与主仓库 `.git` 写入时，既有
+进程身份/台账测试失败；在允许这些本地验证操作的环境中重跑通过，未放宽门禁。
+网络挂起未连接真实 registry 注入（与 lifecycle 共用期限），Windows 和主动
+脱离进程组的后代未验证；前者明确拒绝，后者保留为清理边界。
+
+### 安装执行与认证边界
+
+慢路径仍以调用者身份执行被推树的 `npm ci`，包括根包和依赖包的 lifecycle
+脚本；该树的 `.npmrc` 可以改变 registry 等项目级 npm 配置。
+`scripts/pre-push-install.mjs` 在子进程环境中删除 `SONAR_TOKEN` 与
+`PLOTWEAVE_SONAR_TOKEN`，统一门禁也在静态检查、前端覆盖率和 Rust 构建之前
+删除两个变量。认证值只保留在门禁 shell 的非导出变量中，扫描器调用局部设置
+`SONAR_TOKEN`，API 认证经 curl 标准输入传入；优先级与认证行为保持原有契约。
+
+这只是两个 Sonar 环境变量的隔离，不是针对恶意提交的操作系统沙箱：执行代码
+仍具有当前用户的文件、网络访问权限和其他继承环境，可能读取用户 npm 配置
+或其他凭据。推送他人或来源不可信的提交前仍应审查其安装、测试与构建代码。
+保留 lifecycle 是为了维持 esbuild 等依赖的安装构建语义，本修复未启用
+`--ignore-scripts`，也未覆盖被推树的 npm 配置。
+
+安装期限默认 **300 秒**，可通过 `PLOTWEAVE_NPM_INSTALL_TIMEOUT` 设置
+**1..2147483 的整数秒**（上限使 Node 定时器不会溢出而退化）。从启动 npm
+到安装结束共享同一期限，网络和 lifecycle 均计入；到期先向安装进程组发
+TERM，**1 秒**后发 KILL，并等待 npm 结束，再以失败返回。中断也执行同样
+的进程组清理。普通安装失败、超时或无效配置均阻止后续门禁和推送，钩子的
+退出清理移除临时 worktree。此监督依赖 Unix 进程组，Windows 明确失败，
+没有新增 Windows 支持；主动脱离进程组的后代不在清理保证之内。
+此期限仅约束安装，不是整个门禁的总期限；扫描器仍使用既有的
+`SONAR_QUALITY_GATE_TIMEOUT`，检查和覆盖率没有新增超时或步骤缩减。
+
+以下是安装执行器的稳定诊断代码契约，中文解释可调整：
+
+| 代码 | 条件 |
+| --- | --- |
+| `PRE_PUSH_INSTALL_TIMEOUT` | 安装超过配置期限 |
+| `PRE_PUSH_INSTALL_TIMEOUT_INVALID` | 安装期限非合法整数或超出范围 |
+| `PRE_PUSH_INSTALL_FAILED` | npm 非零退出或被信号终止 |
+| `PRE_PUSH_INSTALL_START_FAILED` | npm 无法启动 |
+| `PRE_PUSH_INSTALL_INTERRUPTED` | 执行器收到 INT 或 TERM |
+| `PRE_PUSH_INSTALL_CLEANUP_FAILED` | 进程组信号发送失败，除已不存在的组 |
+| `PRE_PUSH_INSTALL_PLATFORM_UNSUPPORTED` | 平台不支持当前 Unix 清理实现 |
+
 ## Known Finding: Push Scans The Checked-Out Tree, Not The Pushed Ref
 
 **Update 2026-09-30 (issue #405 fix)**: this finding is closed. `.githooks/
