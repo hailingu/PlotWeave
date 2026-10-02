@@ -48,10 +48,13 @@ caps, including closures, are non-mandatory, review-enforced standards
 (issue [#468](https://github.com/hailingu/PlotWeave/issues/468) owner
 decision, 2026-10-02): no automated check measures them and no dedicated
 detection tool will be created. When review identifies an executable unit
-above 80 code lines, the finding requires a fix in that change — extract
-helpers, subcomponents, or fixtures until the unit complies — and cannot be
+above 80 code lines in code the reviewed change introduces or materially
+changes, the finding requires a fix in that change — extract helpers,
+subcomponents, or fixtures until the unit complies — and cannot be
 discharged by an engineering-exception entry under
-[Incremental Adoption And Exceptions](#incremental-adoption-and-exceptions).
+[Incremental Adoption And Exceptions](#incremental-adoption-and-exceptions);
+an over-limit unit outside the change's scope follows that section's
+debt-recording rule instead of an out-of-scope refactor.
 
 Apply the guardrails as follows:
 
@@ -274,18 +277,23 @@ the stated problem and forces, not by matching a class diagram mechanically.
 
 ## Incremental Adoption And Exceptions
 
-New code must comply immediately. Existing code is assessed when it is
-materially changed. Do not expand an unrelated task solely to remediate an old
-threshold unless the approved scope includes that refactor; record the observed
-debt, its affected path or symbol, and the reason it remains out of scope in
-the pull request that touched the unit.
+New code must comply immediately with the mandatory guardrails — the automated
+file caps. The executable-unit cap instead follows its review-enforced SHOULD
+semantics stated above: a new unit should comply from creation, and a review
+finding on it requires a fix in that change. Existing code is assessed when it
+is materially changed. Do not expand an unrelated task solely to remediate an
+old threshold unless the approved scope includes that refactor; record the
+observed debt, its affected path or symbol, and the reason it remains out of
+scope in the pull request that touched the unit.
 
 The file-level hard limits in the root `AGENTS.md` (800/1800, with
 grandfathering at the recorded count) cannot be waived here. The 80-code-line
 executable-unit cap is governed by issue
 [#468](https://github.com/hailingu/PlotWeave/issues/468): it is
-review-enforced, so a review finding over it requires a fix, not an exception
-record. For any other guardrail in this standard, an engineering exception
+review-enforced, so a review finding over it — on a unit the change
+introduces or materially changes — requires a fix, not an exception record;
+an unrelated pre-existing over-limit unit is recorded debt under the
+paragraph above, not an exception. For any other guardrail in this standard, an engineering exception
 must be recorded in the pull request that
 introduces or retains the exceptional unit, with: the exact rule and affected
 path or symbol; the measured value or structural condition; why the unit

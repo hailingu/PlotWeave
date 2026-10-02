@@ -419,13 +419,32 @@ scope (C). Instead the cap becomes a non-mandatory, review-enforced standard
 in `AGENTS.md` and
 [software-engineering-standard.md](software-engineering-standard.md): code
 review is its sole enforcement point, a review finding that identifies an
-executable unit above 80 code lines must be fixed in that change, and no
-dedicated detection tool is created for it. This checker therefore remains
+over-limit unit in code the reviewed change introduces or materially changes
+must be fixed in that change, and no dedicated detection tool is created for
+it. This checker therefore remains
 file-level by decision rather than by omission; the earlier follow-up
 sections' "executable-unit measurement" gap language described the pre-#468
 state. No exclusion list or blanket waiver hides the existing over-limit
-units — they are not bulk-migrated and are addressed when review flags them
-or when a substantive change touches them. No checker, baseline, workflow, or
+units — they are not bulk-migrated: a substantive change that touches one
+addresses it, and a review observation on an untouched unit is recorded as
+debt rather than forced into the change. No checker, baseline, workflow, or
 test code changed in this follow-up; it is a documentation-only governance
 change, and it received a structured review because no automated prose check
 is configured.
+
+## Review-Enforcement Scope Follow-up (Review 5389669825)
+
+The [review](https://github.com/hailingu/PlotWeave/pull/485#pullrequestreview-5389669825)
+of PR #485 found two consistency defects in the initial wording, both fixed.
+First, the mandatory review-fix obligation was unscoped: combined with
+permission to flag any over-limit unit, it would force an unrelated refactor
+into the current change, conflicting with the narrow-change rule and the
+standard's incremental-adoption paragraph. The obligation now covers only
+executable units the reviewed change introduces or materially changes; an
+unrelated pre-existing over-limit unit is recorded as debt — a tracked issue
+or the pull request's recorded-debt note — instead. Second, the standard's
+"new code must comply immediately" opening retained mandatory semantics for
+the cap; it is now qualified to the mandatory guardrails (the automated file
+caps), with the executable-unit cap following its SHOULD/review-enforced
+semantics. Documentation-only again; the structured cross-reference review
+was rerun after the change, and no automated prose check is configured.
