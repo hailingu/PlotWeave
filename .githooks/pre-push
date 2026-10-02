@@ -15,7 +15,9 @@
 # 见 docs/development/quality-gate-push.md），使慢路径成本来源当场可见；
 # 该输出只作诊断，不参与快/慢判定。
 # 同一提交被多个 ref 引用（分支 + 标签）只分析一次；删除 ref（本地
-# sha 全零）不导出代码，跳过。所有 ref 的门禁通过后把累积的门禁结论
+# sha 全零）不导出代码，跳过。末行缺尾随换行的清单按字段残留检测并
+# fail-closed（issue #464）：真实 git 每行都以换行结束，只有手工或包装
+# 调用可产生该形态，不可静默放行。所有 ref 的门禁通过后把累积的门禁结论
 # 物化进版本化 gate-history.jsonl（issue #355；PR #415 评审 5338815626：
 # 提交创建路径只写 .git 内待物化文件、不弄脏被跟踪文件，重放/检出/
 # 合并不被打断）。
@@ -206,6 +208,15 @@ while read -r local_ref local_sha remote_ref remote_sha extra; do
     gate_commit_in_temp_worktree "$commit"
   fi
 done < "$manifest_path"
+# 循环末次 read 在「EOF 且末行无尾随换行」时返回非零、循环体不为该行
+# 执行，但字段变量已持有该行内容（EOF 无内容时则被清空）：据此发现被
+# 静默跳过的待推 ref 行（sh / bash / dash 实测一致）。残留仅空白、解析
+# 不出字段时与已终止空白行同口径跳过——无字段的行不携带 ref 记录。
+# 与字段数异常同样 fail-closed（issue #464），兑现「每行要么被分析、
+# 要么被拒绝」的门禁承诺（docs/development/quality-gate-push.md）。
+if [ -n "${local_ref:-}" ]; then
+  fail "待推送 ref 清单末行缺少尾随换行，该行未被分析：$local_ref $local_sha $remote_ref $remote_sha${extra:+ $extra}"
+fi
 rm -f "$manifest_path"
 manifest_path=
 

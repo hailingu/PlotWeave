@@ -55,8 +55,15 @@ The issue #405 fix, wired 2026-09-30, closes it:
 - **Dedup and deletions.** Refs pointing at the same commit (a branch and
   its tag) are analyzed once; a ref deletion (all-zero local sha) exports no
   code and is skipped; a malformed ref line or a local sha that does not
-  peel to a commit fails closed. Every ref line is analyzed or rejected —
-  none is silently ignored.
+  peel to a commit fails closed. A final stdin line missing its terminating
+  newline also fails closed (issue #464): the dispatch loop's last `read`
+  returns non-zero without running the body yet leaves the line's fields in
+  the variables, so the residue is detected after the loop and rejected with
+  a diagnostic naming the skipped ref. Real Git terminates every line, so
+  this only fires for manual or wrapped invocations; a residue with no
+  fields (whitespace only) is skipped with the same treatment as a blank
+  terminated line, because a field-less line carries no ref record. Every
+  ref line is analyzed or rejected — none is silently ignored.
 - **Evidence and serialization.** Slow-path runs write their gate-history
   record through the main worktree's pending file and take the main
   worktree's gate lock, so fast path, slow path, and `materialize` stay
