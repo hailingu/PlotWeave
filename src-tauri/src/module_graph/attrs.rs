@@ -10,8 +10,9 @@
 /// 是否 cfg(test) 门控：深度 1 的 cfg(…) 组**蕴含** test 才门控（裸
 /// `test` 或 `all(test, …)`；`any(test, feature)` 不蕴含，按并集保守计入。
 /// 评审 5347759049：此前只认深度 1 裸 test，`all(test, unix)` 被漏判）；
-/// 其余形态（不蕴含 test 的 cfg 与 cfg_attr 包装的嵌套 cfg）一律按条件
-/// 存在登记。组内字符串已在清洗层抹除，不产生假 token。
+/// 不蕴含 test 的 cfg 与 **由 cfg_attr 施加**的 cfg 按条件存在登记
+///（doc(cfg(…)) 等元数据参数里的 cfg 不改变存在条件，评审 5392529793）。
+/// 组内字符串已在清洗层抹除，不产生假 token。
 pub(super) fn parse_attr(tokens: &[&str], i: usize) -> AttrInfo {
     let mut j = i + 1;
     let mut info = AttrInfo::default();
@@ -29,20 +30,8 @@ pub(super) fn parse_attr(tokens: &[&str], i: usize) -> AttrInfo {
         match tokens[j] {
             "[" | "(" => depth += 1,
             "]" | ")" => depth -= 1,
-            "cfg" if tokens.get(j + 1) == Some(&"(") => {
-                if let Some(close) = find_group_close(tokens, j + 2) {
-                    if depth == 1 && cfg_implies_test(&tokens[j + 2..close]) {
-                        info.is_test = true;
-                    } else {
-                        // 非 test 蕴含的 cfg（feature/平台门控）与任意深度的
-                        // cfg_attr 包装嵌套 cfg（含嵌套 cfg(test)：谓词不
-                        // 成立时它是生产代码，不得按 test 门控跳过）：项保留
-                        // 进图（并集保守），但按条件存在登记（评审
-                        // 5391647570/5392007894：条件类型绑定不得按无条件
-                        // 遮蔽 glob 模块处置）
-                        info.is_conditional = true;
-                    }
-                }
+            "cfg" | "cfg_attr" if depth == 1 && tokens.get(j + 1) == Some(&"(") => {
+                classify_cfg_group(tokens, j, &mut info);
             }
             // 属性括号内任意深度出现 `path =`（含 cfg_attr 包装）即视为
             // path 属性——清洗层已抹除字面量值，调用方对生产 mod fail-closed
@@ -113,6 +102,50 @@ fn cfg_implies_test(tokens: &[&str]) -> bool {
     } else {
         implied.iter().all(|b| *b)
     }
+}
+
+/// 深度 1 的 cfg / cfg_attr 组的门控归类（parse_attr 的臂体）：深度 1
+/// 的 cfg 蕴含 test 才按 test 门控；不蕴含 test 的 cfg 与 **由 cfg_attr
+/// 施加**的 cfg（doc(cfg(…)) 等元数据参数不算；嵌套 cfg(test) 谓词不
+/// 成立时是生产代码，不得按 test 跳过）按条件存在登记——项保留进图
+///（并集保守），其引入不参与无条件类型遮蔽（评审 5391647570/5392529793）。
+fn classify_cfg_group(tokens: &[&str], j: usize, info: &mut AttrInfo) {
+    let Some(close) = find_group_close(tokens, j + 2) else {
+        return;
+    };
+    let group = &tokens[j + 2..close];
+    if tokens[j] == "cfg_attr" {
+        for part in split_top_level_commas(group).iter().skip(1).copied() {
+            if attr_part_gates_cfg(part) {
+                info.is_conditional = true;
+            }
+        }
+        return;
+    }
+    if cfg_implies_test(group) {
+        info.is_test = true;
+    } else {
+        info.is_conditional = true;
+    }
+}
+
+/// cfg_attr 的一个施加属性是否为改变存在条件的 cfg（评审 5392529793）：
+/// 直接 `cfg(…)`，或经嵌套 cfg_attr 再施加 cfg。`doc(cfg(…))` 等元数据
+/// 包装不算——文档参数不改变项的存在条件。
+fn attr_part_gates_cfg(part: &[&str]) -> bool {
+    if part.first() == Some(&"cfg") && part.get(1) == Some(&"(") {
+        return true;
+    }
+    if part.first() == Some(&"cfg_attr") && part.get(1) == Some(&"(") {
+        if let Some(close) = find_group_close(part, 2) {
+            return split_top_level_commas(&part[2..close])
+                .iter()
+                .skip(1)
+                .copied()
+                .any(attr_part_gates_cfg);
+        }
+    }
+    false
 }
 
 /// 顶层（括号深度 0）逗号切分；尾逗号产生的空段被忽略。

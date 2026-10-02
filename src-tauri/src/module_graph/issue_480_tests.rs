@@ -513,3 +513,50 @@ fn conditional_type_declarations_do_not_occupy_unconditionally() {
         cycles_of(&graph)
     );
 }
+
+/// 评审 5392529793（PR #488）P2：嵌套 cfg 只在**由 cfg_attr 施加**时才算
+/// 条件门控——`doc(cfg(feature))` 是文档元数据，不改变项的存在条件；
+/// 误判条件会禁用无条件类型占位、保留 Rust 实际遮蔽的 glob 边，与反向
+/// 依赖组合成**误报环**（与 issue #480 同类危害）。夹具经 rustc 验证
+///（docsrs 双配置）零警告。
+#[test]
+fn doc_wrapped_cfg_does_not_mark_item_conditional() {
+    let graph = edges(&[
+        (
+            "lib.rs",
+            "pub mod values;\npub mod a;\npub mod m;\npub mod user;\n",
+        ),
+        ("values.rs", "pub struct Thing;\n"),
+        ("a/mod.rs", "pub mod p;\n\npub fn aux() {}\n"),
+        (
+            "a/p.rs",
+            "use crate::user::User;\n\npub fn take(u: User) {\n    let _ = u;\n}\n",
+        ),
+        (
+            "m.rs",
+            concat!(
+                "#[cfg_attr(docsrs, doc(cfg(feature = \"typed\")))]\n",
+                "pub use crate::values::Thing as p;\n",
+                "pub use crate::a::*;\n",
+                "\n",
+                "pub fn run() {\n",
+                "    aux();\n",
+                "}\n",
+            ),
+        ),
+        (
+            "user.rs",
+            "use crate::m::p;\n\npub struct User;\n\npub fn make() -> p {\n    p\n}\n",
+        ),
+    ]);
+    assert!(
+        !graph["user.rs"].contains("a/p.rs"),
+        "doc 元数据不改变存在条件，无条件类型导入的遮蔽须生效、无虚假 glob 边：{:?}",
+        graph["user.rs"]
+    );
+    assert!(
+        cycles_of(&graph).is_empty(),
+        "doc 包裹 cfg 误判造成的 user→a/p→user 误报环不得存在：{:?}",
+        cycles_of(&graph)
+    );
+}
