@@ -129,6 +129,58 @@ complete-gate cost (the refreshed baseline measures it); the slow path adds
 dependency installation and cold caches and was measured once on landing —
 see
 [Push-Path Slow-Path Cost](quality-gate-cost.md#push-path-slow-path-cost-2026-09-30-issue-405).
+Whether the fast path is reachable in daily workflow — and how to restore
+it — is recorded in
+[快路径可达性与恢复条件](#快路径可达性与恢复条件issue-463) below.
+
+## 快路径可达性与恢复条件（issue #463）
+
+[issue #463](https://github.com/hailingu/PlotWeave/issues/463) 记录了一项
+已知交互：快路径的合取前提在日常推送工作流下几乎必然不成立，慢路径因此
+成为实际默认，而[决策正文](quality-gate-cost.md#push-path-slow-path-cost-2026-09-30-issue-405)
+的快/慢成本对比此前没有说明这一可达性前提。这不是任一特性的实现缺陷，
+分派严格性也不因此放宽——它对覆盖率的正确性是必需的（Vitest 可发现任意
+目录内的测试与夹具，未跟踪输入必须隔离）。此处记录因果、恢复条件，并让
+慢路径启动时输出触发原因。
+
+快路径要求同时满足三个前提：
+
+1. 被推提交（本地 sha peel 到的提交）就是当前 `HEAD`；
+2. `git diff --quiet HEAD --` 与 `git diff --cached --quiet HEAD --` 均
+   无差异——被跟踪内容的工作树与索引都与 `HEAD` 一致（保证台账
+   `tree` 键与被推提交同源）；
+3. 整个仓库没有未忽略的未跟踪文件。
+
+两条独立的失效来源使该前提在日常工作中很少同时成立：
+
+- **推送自身弄脏被跟踪台账（必然因果，非偶发）。** 每次含代码的推送在
+  所有 ref 门禁通过后，`pre-push` 末尾执行 `gate-history.sh materialize`，
+  把 `.git` 内的待物化记录并入被跟踪的 `docs/development/gate-history.jsonl`
+  并清空待物化文件——因此每次成功推送之后工作树必然带有未提交的被跟踪
+  差异（排水尽力而为：等锁超时会保留待物化行到下次推送，届时同样物化）。
+  `AGENTS.md` 的台账策略已知此点并要求物化行随下一次改动一起提交、不
+  单独提交台账文件，但没有把该事实与快路径可达性联系起来：除非在两次
+  推送之间把物化行随下一个提交带入，下一次推送必然降级慢路径。
+- **未跟踪的普通文件（独立失效）。** 草稿、新文档、临时笔记等任何未忽略
+  的未跟踪文件都会独立取消快路径资格，与被跟踪差异无关；这是输入等价性
+  证明的要求，不能按目录或后缀放宽。
+
+恢复快路径的操作条件：把物化后的 `gate-history.jsonl` 连同下一次改动一起
+提交（遵循 `AGENTS.md`：不要单独提交台账文件），并使仓库内没有长期滞留的
+未忽略未跟踪文件（提交、加入忽略规则或移除）；此后推送 `HEAD` 即恢复当前
+工作树快路径。门禁强度与快/慢判定不因此变化——本节只记录可达性与诊断。
+
+慢路径启动前输出首个不成立的快路径前提，使慢路径成本来源当场可见（仅推
+送包含非删除 ref 时；纯删除推送不触发门禁与该输出）。以下是分派原因的
+稳定诊断代码契约（中文解释可调整）：
+
+| 代码 | 条件 |
+| --- | --- |
+| `PRE_PUSH_SLOW_NOT_HEAD` | 被推提交不是当前 `HEAD` |
+| `PRE_PUSH_SLOW_TRACKED_DIRTY` | 工作树被跟踪内容与 `HEAD` 有差异 |
+| `PRE_PUSH_SLOW_INDEX_DIRTY` | 索引内容与 `HEAD` 有差异 |
+| `PRE_PUSH_SLOW_UNTRACKED_INPUT` | 仓库内存在未忽略的未跟踪文件 |
+| `PRE_PUSH_SLOW_UNTRACKED_ENUM_FAILED` | 无法枚举未跟踪文件（fail-closed 慢路径） |
 
 ## 安装与凭据状态矩阵（issue #462）
 

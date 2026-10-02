@@ -7,7 +7,7 @@ dedup marker helper `scripts/gate-tree-marker.sh` (issue #404). Like the root
 `AGENTS.md` and the other standards under `docs/development/`, this file is
 written in English for agent interoperability.
 
-**Last reviewed**: 2026-10-01
+**Last reviewed**: 2026-10-02
 
 **Status**: Active — accepted decision. Recorded 2026-09-27, resolving
 [issue #356](https://github.com/hailingu/PlotWeave/issues/356); extended
@@ -35,7 +35,14 @@ fix, preventing reuse of aborted operations' residue by later Git processes;
 clarified 2026-10-01 for
 [issue #431](https://github.com/hailingu/PlotWeave/issues/431): the gate ledger
 preserves self-reported conclusions with partial coverage, without independent
-proof of execution (see [Gate Run Evidence Record](quality-gate-evidence.md#gate-run-evidence-record-issue-355)).
+proof of execution (see [Gate Run Evidence Record](quality-gate-evidence.md#gate-run-evidence-record-issue-355));
+clarified 2026-10-02 for
+[issue #463](https://github.com/hailingu/PlotWeave/issues/463): the push-path
+cost comparison now carries the fast path's reachability caveat — the
+post-push ledger materialization and ordinary untracked files make the slow
+path the practical default — with preconditions, causality, and recovery
+conditions maintained in the push-gating topic doc (see
+[快路径可达性与恢复条件](quality-gate-push.md#快路径可达性与恢复条件issue-463)).
 
 ## Required Reading
 
@@ -504,6 +511,20 @@ a fully cold machine and overstates a repeat slow path against a recently
 built tree); dependencies resolved from the shared local npm/cargo caches.
 The fast path is unaffected — it is the same complete-gate run the refreshed
 baseline measures, with only the equality preconditions added ahead of it.
+
+**Reachability caveat (issue #463).** The fast/slow comparison above is
+conditional on the fast path being *reachable*, and in daily workflow it
+usually is not: besides the pushed commit being `HEAD`, the fast path also
+requires the tracked worktree and index to be identical to `HEAD` and no
+untracked non-ignored file anywhere in the repository — and two routine
+facts defeat that. The push's own trailing `materialize` dirties the tracked
+`docs/development/gate-history.jsonl` after every successful code-bearing
+push, and any untracked ordinary file (drafts, new documents, scratch notes)
+independently forces isolation. Treat the slow path as the practical default
+when estimating routine push cost; the ~44s delta therefore understates
+everyday push cost relative to the fast-path median. The preconditions, the
+causality, and the recovery conditions are maintained in
+[快路径可达性与恢复条件](quality-gate-push.md#快路径可达性与恢复条件issue-463).
 
 ## Reconsideration Triggers
 
