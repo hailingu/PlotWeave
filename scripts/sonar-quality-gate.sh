@@ -144,14 +144,27 @@ release_lock() {
   rmdir "$lock_directory" 2>/dev/null || true
 }
 
-# 获取失败不能判断锁是否陈旧：保留锁并给出人工核查与空目录恢复指引。
+# 信号路径（issue #465；PR #484 评审 5389125859）：长步骤经 run_step 以
+# 可中断 wait 运行，信号到达时 trap 即时执行——先释放锁再以 128+信号 码
+# 退出，不被忽略 TERM 的前台子进程推迟到其返回；推送钩子的中断升级因此
+# 不会在锁释放前杀死本进程而泄漏锁目录。提交/合并路径的信号同样受益。
+handle_gate_signal() {
+  release_lock
+  exit "$1"
+}
+
+# 获取失败不能判断锁是否陈旧：保留锁并区分两种可能——运行中的门禁
+#（推送门禁尤其慢路径可持有该锁数分钟，issue #465：期间提交会被拒绝，
+# 等待其结束即可）与异常退出遗留的锁（给出人工核查与空目录恢复指引）。
 # 稳定诊断代码与命令契约见 quality-gate-cost.md「门禁锁的人工恢复」。
 fail_lock_acquisition() {
   printf 'SonarQube 门禁失败：[SONAR_GATE_LOCK_UNAVAILABLE] 无法获取门禁锁：%s\n' \
     "$lock_directory" >&2
   printf '%s\n' \
-    '另一个门禁或 gate-history.sh materialize 可能正在运行，也可能是异常退出遗留的锁。' \
-    '先等待相关操作结束；确认没有门禁或记录物化进程正在运行，且此目录确为残留锁后，执行下列命令。' >&2
+    '[SONAR_GATE_LOCK_WAIT_FOR_RUNNING_GATE] 门禁可能正在运行：推送门禁（慢路径含被推树依赖安装与完整检查）可持有该锁数分钟，' \
+    '期间提交、合并与推送都会被拒绝；等待其结束后重新执行本 Git 操作即可，完整门禁仍会执行，不要清理仍被持有的锁。' >&2
+  printf '%s\n' \
+    '也可能是异常退出遗留的锁。确认没有门禁或记录物化进程正在运行，且此目录确为残留锁后，执行下列命令。' >&2
   # 单引号闭合、转义再重开，路径中的空格与 shell 替换符均保持字面量。
   quoted_lock_path=$(printf '%s' "$lock_directory" | sed "s/'/'\\\\''/g")
   printf "[SONAR_GATE_LOCK_RECOVERY_COMMAND] rmdir -- '%s'\n" "$quoted_lock_path" >&2
@@ -180,15 +193,38 @@ require_command "$node_bin"
 require_command "$llvm_cov_bin"
 
 mkdir "$lock_directory" 2>/dev/null || fail_lock_acquisition
-trap release_lock 0 1 2 15
+trap release_lock 0
+trap 'handle_gate_signal 129' 1
+trap 'handle_gate_signal 130' 2
+trap 'handle_gate_signal 143' 15
+
+# 长步骤以可中断方式运行（issue #465；PR #484 评审 5389125859）：后台
+# 作业 + wait，信号 trap 在 wait 期间即时执行而非等待前台子进程返回；
+# 步骤失败仍按 set -e 立即中止门禁（与原前台执行同语义）。stdin 固定
+# /dev/null，不消费调用方输入。参数为要异步执行的命令或函数名。
+run_step() {
+  "$@" </dev/null &
+  wait $!
+}
+
+# 扫描器步骤入口（run_step 的异步目标）：令牌仅经环境前缀进入该子进程
+#（不进 argv、不向调用方环境重新导出），维持 issue #462 的凭据边界。
+run_scanner() {
+  SONAR_TOKEN=$sonar_token "$scanner_bin" \
+    "-Dsonar.host.url=$sonar_host_url" \
+    "-Dsonar.javascript.lcov.reportPaths=$coverage_report_path" \
+    "-Dsonar.rust.lcov.reportPaths=$rust_coverage_report_path" \
+    -Dsonar.qualitygate.wait=true \
+    "-Dsonar.qualitygate.timeout=$quality_gate_timeout"
+}
 
 printf '%s\n' '[SonarQube] 生成最新前端覆盖率……'
 # 静态检查先行（issue #227）：格式 + lint 零警告——fail-fast 在覆盖率与
 # 扫描之前；与手动检查同一入口（scripts/check-static.sh），不分叉
 printf '%s\n' '[SonarQube] 静态检查（格式 + lint 零警告）……'
-"$script_directory/check-static.sh"
+run_step "$script_directory/check-static.sh"
 
-"$npm_bin" run test:coverage
+run_step "$npm_bin" run test:coverage
 
 [ -s "$coverage_report_path" ] ||
   fail "覆盖率报告缺失或为空：$coverage_report_path"
@@ -204,18 +240,13 @@ enforce_line_coverage_floor '前端' "$coverage_report_path"
 # 源文件记录、有已覆盖行），与前端 LCOV 一并导入质量报告——「存在 Rust
 # 测试」不等于「已度量覆盖率」，未度量与未覆盖由此可区分。
 printf '%s\n' '[SonarQube] 生成最新 Rust 覆盖率……'
-"$script_directory/rust-coverage.sh"
+run_step "$script_directory/rust-coverage.sh"
 
 # Rust 行覆盖率下限（issue #393）：与前端同一口径，扫描发布前复核
 enforce_line_coverage_floor 'Rust' "$rust_coverage_report_path"
 
 printf '%s\n' '[SonarQube] 扫描并等待 Quality Gate……'
-SONAR_TOKEN=$sonar_token "$scanner_bin" \
-  "-Dsonar.host.url=$sonar_host_url" \
-  "-Dsonar.javascript.lcov.reportPaths=$coverage_report_path" \
-  "-Dsonar.rust.lcov.reportPaths=$rust_coverage_report_path" \
-  -Dsonar.qualitygate.wait=true \
-  "-Dsonar.qualitygate.timeout=$quality_gate_timeout"
+run_step run_scanner
 
 [ -f "$report_path" ] || fail "扫描完成后未生成 $report_path"
 

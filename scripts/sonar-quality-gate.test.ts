@@ -747,6 +747,16 @@ describe('门禁锁恢复命令（issue #430）', { timeout: 30_000 }, () => {
     },
   )
 
+  it('锁被占用时说明运行中的推送门禁会持有锁数分钟并建议等待（issue #465）', () => {
+    const result = runGate('scripts/sonar-quality-gate.sh', {
+      lockOccupied: true,
+    })
+
+    expect(result.status).not.toBe(0)
+    // Stable diagnostic contract: quality-gate-lifecycle.md（issue #465）.
+    expect(result.stderr).toContain('[SONAR_GATE_LOCK_WAIT_FOR_RUNNING_GATE]')
+  })
+
   it.each([0, 2])('扫描退出码 %i 时释放本次门禁锁', (scannerExit) => {
     const result = runGate('scripts/sonar-quality-gate.sh', { scannerExit })
     expect(result.status).toBe(scannerExit)
@@ -814,6 +824,45 @@ describe('强杀门禁后的人工恢复（issue #430）', { timeout: 30_000 }, 
     }
   })
 })
+
+describe(
+  '门禁信号清理（issue #465 / PR #484 评审 5389125859）',
+  { timeout: 30_000 },
+  () => {
+    it('收到 TERM 时先释放锁再退出，不被忽略 TERM 的前台子进程推迟', async () => {
+      const paths = prepareGatePaths()
+      writeExecutable(
+        paths.npmPath,
+        String.raw`printf 'TEST_GATE_LOCK_HELD\n'
+trap '' TERM
+while :; do sleep 1; done`,
+      )
+      const child = spawn(
+        'sh',
+        [resolve(repositoryRoot, 'scripts/sonar-quality-gate.sh')],
+        {
+          cwd: repositoryRoot,
+          detached: true,
+          env: gateEnvironment(paths, {}),
+        },
+      )
+      try {
+        await waitForHeldGate(child)
+        expect(existsSync(paths.lockPath)).toBe(true)
+        child.kill('SIGTERM')
+        // 悬挂的桩子进程继承 stdout 管道，close 会等管道关闭；exit 只等
+        // 门禁进程本身退出，正对应「锁释放后进程及时退出」的断言目标。
+        const [code] = (await once(child, 'exit', {
+          signal: AbortSignal.timeout(10_000),
+        })) as [number | null]
+        expect(code).toBe(143)
+        await expect.poll(() => existsSync(paths.lockPath)).toBe(false)
+      } finally {
+        await killTestGateGroup(child)
+      }
+    })
+  },
+)
 
 // pre-push 的门禁分派与按 ref 行为见 scripts/pre-push-refs.test.ts（issue
 // #405：钩子读取 stdin，空 stdin 不再触发门禁）；此处只覆盖 pre-commit
