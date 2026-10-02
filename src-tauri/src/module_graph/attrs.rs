@@ -10,8 +10,9 @@
 /// 是否 cfg(test) 门控：深度 1 的 cfg(…) 组**蕴含** test 才门控（裸
 /// `test` 或 `all(test, …)`；`any(test, feature)` 不蕴含，按并集保守计入。
 /// 评审 5347759049：此前只认深度 1 裸 test，`all(test, unix)` 被漏判）；
-/// 不蕴含 test 的 cfg 与 **由 cfg_attr 施加**的 cfg 按条件存在登记
-///（doc(cfg(…)) 等元数据参数里的 cfg 不改变存在条件，评审 5392529793）。
+/// 其余 cfg 仅在 test=false 下无法证明恒真时按条件存在登记；cfg_attr
+/// 同样只登记可能改变生产存在性的施加属性（评审 5393324118）。
+/// doc(cfg(…)) 等元数据参数不改变存在条件（评审 5392529793）。
 /// 组内字符串已在清洗层抹除，不产生假 token。
 pub(super) fn parse_attr(tokens: &[&str], i: usize) -> AttrInfo {
     let mut j = i + 1;
@@ -46,8 +47,8 @@ pub(super) fn parse_attr(tokens: &[&str], i: usize) -> AttrInfo {
 
 /// 属性解析结论：next = 消费后下标；is_test = cfg 蕴含 test；is_inner =
 /// `#!` 内属性；has_path = 属性内出现 `path =`（评审 5352172371）；
-/// is_conditional = 存在不蕴含 test 的 cfg 组（feature/平台门控，评审
-/// 5391647570：条件存在的项仍入图，但其引入不参与无条件遮蔽判定）。
+/// is_conditional = 生产存在性仍受配置影响（feature/平台门控，评审
+/// 5391647570）；生产恒真如 not(test) 不设置该位（评审 5393324118）。
 #[derive(Default)]
 pub(super) struct AttrInfo {
     pub(super) next: usize,
@@ -104,45 +105,78 @@ fn cfg_implies_test(tokens: &[&str]) -> bool {
     }
 }
 
-/// 深度 1 的 cfg / cfg_attr 组的门控归类（parse_attr 的臂体）：深度 1
-/// 的 cfg 蕴含 test 才按 test 门控；不蕴含 test 的 cfg 与 **由 cfg_attr
-/// 施加**的 cfg（doc(cfg(…)) 等元数据参数不算；嵌套 cfg(test) 谓词不
-/// 成立时是生产代码，不得按 test 跳过）按条件存在登记——项保留进图
-///（并集保守），其引入不参与无条件类型遮蔽（评审 5391647570/5392529793）。
+/// 在生产图的 test=false 前提下求值：未知 feature/平台返回 None，
+/// all/any/not 仅组合确定值，不猜测未知谓词间的相关性。本结果只用于
+/// 无条件类型占位，既有 cfg_implies_test 的排除边界保持不变。
+fn production_cfg_value(tokens: &[&str]) -> Option<bool> {
+    if tokens == ["test"] {
+        return Some(false);
+    }
+    let operator = *tokens.first()?;
+    if !matches!(operator, "all" | "any" | "not") || tokens.get(1) != Some(&"(") {
+        return None;
+    }
+    let close = find_group_close(tokens, 2)?;
+    if close + 1 != tokens.len() {
+        return None;
+    }
+    let parts = split_top_level_commas(&tokens[2..close]);
+    if operator == "not" {
+        return match parts.as_slice() {
+            [part] => production_cfg_value(part).map(|value| !value),
+            _ => None,
+        };
+    }
+    let values: Vec<_> = parts
+        .iter()
+        .map(|part| production_cfg_value(part))
+        .collect();
+    let decisive = operator == "any";
+    if values.contains(&Some(decisive)) {
+        Some(decisive)
+    } else if values.iter().all(|value| *value == Some(!decisive)) {
+        Some(!decisive)
+    } else {
+        None
+    }
+}
+
+/// 深度 1 的 cfg / cfg_attr 门控归类：沿用 test 专属排除；生产恒真
+/// 不影响类型占位，其他可能缺席的项按条件保守入图（评审 5393324118）。
+/// 嵌套 cfg(test) 不升级为 test 排除，保留既有 cfg_attr 并集边界。
 fn classify_cfg_group(tokens: &[&str], j: usize, info: &mut AttrInfo) {
     let Some(close) = find_group_close(tokens, j + 2) else {
         return;
     };
     let group = &tokens[j + 2..close];
     if tokens[j] == "cfg_attr" {
-        for part in split_top_level_commas(group).iter().skip(1).copied() {
-            if attr_part_gates_cfg(part) {
-                info.is_conditional = true;
-            }
-        }
+        info.is_conditional |= attr_part_gates_cfg(&tokens[j..=close]);
         return;
     }
     if cfg_implies_test(group) {
         info.is_test = true;
-    } else {
+    } else if production_cfg_value(group) != Some(true) {
         info.is_conditional = true;
     }
 }
 
-/// cfg_attr 的一个施加属性是否为改变存在条件的 cfg（评审 5392529793）：
-/// 直接 `cfg(…)`，或经嵌套 cfg_attr 再施加 cfg。`doc(cfg(…))` 等元数据
-/// 包装不算——文档参数不改变项的存在条件。
+/// 属性是否可能改变生产存在性：生产恒真的 cfg、生产恒假谓词下的
+/// cfg_attr 与 doc(cfg(…)) 元数据均无影响；其他施加属性递归判断。
 fn attr_part_gates_cfg(part: &[&str]) -> bool {
     if part.first() == Some(&"cfg") && part.get(1) == Some(&"(") {
-        return true;
+        return find_group_close(part, 2)
+            .is_none_or(|close| production_cfg_value(&part[2..close]) != Some(true));
     }
     if part.first() == Some(&"cfg_attr") && part.get(1) == Some(&"(") {
         if let Some(close) = find_group_close(part, 2) {
-            return split_top_level_commas(&part[2..close])
-                .iter()
-                .skip(1)
-                .copied()
-                .any(attr_part_gates_cfg);
+            let parts = split_top_level_commas(&part[2..close]);
+            if parts
+                .first()
+                .is_some_and(|p| production_cfg_value(p) == Some(false))
+            {
+                return false;
+            }
+            return parts.iter().skip(1).copied().any(attr_part_gates_cfg);
         }
     }
     false
