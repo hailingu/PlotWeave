@@ -26,7 +26,10 @@
 //!   <前缀>::*` 把前缀模块的直接子模块名带入作用域；绑定仅在声明模块
 //!   内可见，inline 子模块不继承父模块引入——评审 5379907393；且只带走
 //!   **对使用处可见**的子模块名——私有/受限子模块不参与，评审
-//!   5380401098）；显式位置前缀之后的首段也在指定模块的模块级
+//!   5380401098；显式类型导入占据类型命名空间——目标为类型命名空间项
+//!   （struct/enum/union/trait/type 别名）时同名 glob 子模块候选让位，
+//!   不虚构边与假环，issue #480；值项与未知目标不遮蔽）；显式位置前缀
+//!   之后的首段也在指定模块的模块级
 //!   命名空间查别名/glob（评审 5381066396），均未命中才视为外部 crate 不入图
 //!   （issue #426）；不经 `use` 的全限定调用不采集——与前端守卫只采
 //!   import/export 边同口径。同文件 inline 引用解析回自身，不计自环边。
@@ -48,21 +51,27 @@
 //!   （issue #470；别名展开产物经 crate 臂保持根锚定，不受影响）；
 //!   glob 只解析前缀模块的**直接**子模块——经 `pub use` 再导出进入 glob
 //!   目标的名字不解析（本仓生产代码无文件级 glob 引入）；别名/glob
-//!   解析链超过 8 层按不可解析处置（真实链长 2~3）。
+//!   解析链超过 8 层按不可解析处置（真实链长 2~3）；类型命名空间遮蔽
+//!   只在绑定目标**直接**声明为类型项的一跳生效，不沿再导出别名链
+//!   传播，外部 crate 目标不可分类——两者一律按不遮蔽保守放行 glob
+//!   （issue #480 登记边界）。
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 mod aliases;
+mod attrs;
 mod audit;
 mod closures;
 mod cycles;
 mod fields;
 mod lexer;
 mod tree;
+mod type_items;
 mod use_tree;
 mod visibility;
 use aliases::{expand_segments, AliasBinding, GlobBinding};
+use attrs::parse_attr;
 use closures::{skip_closure_headers, BodyStep};
 use cycles::cycles_of;
 use fields::{field_contexts, is_union_declaration, qualified_path_end, FieldContext};
@@ -75,12 +84,14 @@ type ModuleKey = String;
 
 /// 单文件扫描产物：非 cfg(test) mod 声明（含声明位置的 inline 栈，评审
 /// 5349783070：`mod outer { mod child; }` 的 child 须挂在 outer 下、其
-/// 文件在 outer 对应子目录）与 use（栈快照 + 路径 token）。
+/// 文件在 outer 对应子目录）、use（栈快照 + 路径 token）与模块级类型
+/// 命名空间项声明（issue #480，供显式类型导入的遮蔽判定）。
 struct FileScan {
     mods: Vec<ModDecl>,
     uses: Vec<UseStmt>,
     renames: Vec<AliasBinding>,
     globs: Vec<GlobBinding>,
+    type_items: Vec<type_items::TypeItemDecl>,
 }
 
 /// 一条 use 语句：inline 栈与花括号作用域快照（块开括号的 token 下标
@@ -100,125 +111,6 @@ struct ModDecl {
     name: String,
     file_backed: bool,
     vis: visibility::ModVis,
-}
-
-/// 解析自 tokens[i] == "#" 起的属性（`#!` 为内属性，另行返回标志），返回
-/// 消费后下标、是否 cfg(test) 门控与是否内属性。门控语义：cfg(…) 组
-/// 是否 cfg(test) 门控：cfg(…) 组**蕴含** test 才门控（裸 `test` 或
-/// `all(test, …)`；`any(test, feature)` 不蕴含，按并集保守计入。评审
-/// 5347759049：此前只认深度 1 裸 test，`all(test, unix)` 被漏判）。组内
-/// 字符串已在清洗层抹除，不产生假 token。
-fn parse_attr(tokens: &[&str], i: usize) -> AttrInfo {
-    let mut j = i + 1;
-    let mut info = AttrInfo::default();
-    if tokens.get(j) == Some(&"!") {
-        info.is_inner = true;
-        j += 1;
-    }
-    if tokens.get(j) != Some(&"[") {
-        info.next = j;
-        return info;
-    }
-    j += 1;
-    let mut depth = 1usize;
-    while j < tokens.len() && depth > 0 {
-        match tokens[j] {
-            "[" | "(" => depth += 1,
-            "]" | ")" => depth -= 1,
-            "cfg" if depth == 1 && tokens.get(j + 1) == Some(&"(") => {
-                if let Some(close) = find_group_close(tokens, j + 2) {
-                    if cfg_implies_test(&tokens[j + 2..close]) {
-                        info.is_test = true;
-                    }
-                }
-            }
-            // 属性括号内任意深度出现 `path =`（含 cfg_attr 包装）即视为
-            // path 属性——清洗层已抹除字面量值，调用方对生产 mod fail-closed
-            "path" if tokens.get(j + 1) == Some(&"=") => info.has_path = true,
-            _ => {}
-        }
-        j += 1;
-    }
-    info.next = j;
-    info
-}
-
-/// 属性解析结论：next = 消费后下标；is_test = cfg 蕴含 test；is_inner =
-/// `#!` 内属性；has_path = 属性内出现 `path =`（评审 5352172371）。
-#[derive(Default)]
-struct AttrInfo {
-    next: usize,
-    is_test: bool,
-    is_inner: bool,
-    has_path: bool,
-}
-
-/// 自开括号下标起找配对闭括号（含嵌套）；未闭合返回 None。
-fn find_group_close(tokens: &[&str], open: usize) -> Option<usize> {
-    let mut depth = 1usize;
-    let mut k = open;
-    while k < tokens.len() {
-        match tokens[k] {
-            "(" => depth += 1,
-            ")" => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(k);
-                }
-            }
-            _ => {}
-        }
-        k += 1;
-    }
-    None
-}
-
-/// cfg(…) 组是否蕴含 test（绝不出现在生产构建）：裸 `test`；`all(…)`
-/// 的某个合取项蕴含；`any(…)` 的全部析取项都蕴含。其余谓词不蕴含——
-/// 保守计入生产图：宁可误报环也不漏检（漏检更危险）。
-fn cfg_implies_test(tokens: &[&str]) -> bool {
-    if tokens == ["test"] {
-        return true;
-    }
-    let is_all = tokens.first() == Some(&"all");
-    let is_any = tokens.first() == Some(&"any");
-    if !(is_all || is_any) || tokens.get(1) != Some(&"(") {
-        return false;
-    }
-    let Some(close) = find_group_close(tokens, 2) else {
-        return false;
-    };
-    let parts = split_top_level_commas(&tokens[2..close]);
-    if parts.is_empty() {
-        return false;
-    }
-    let implied: Vec<bool> = parts.iter().map(|p| cfg_implies_test(p)).collect();
-    if is_all {
-        implied.iter().any(|b| *b)
-    } else {
-        implied.iter().all(|b| *b)
-    }
-}
-
-/// 顶层（括号深度 0）逗号切分；尾逗号产生的空段被忽略。
-fn split_top_level_commas<'a>(tokens: &'a [&'a str]) -> Vec<&'a [&'a str]> {
-    let mut parts = Vec::new();
-    let mut depth = 0usize;
-    let mut start = 0usize;
-    for (k, tok) in tokens.iter().enumerate() {
-        match *tok {
-            "(" | "[" => depth += 1,
-            ")" | "]" => depth = depth.saturating_sub(1),
-            "," if depth == 0 => {
-                parts.push(&tokens[start..k]);
-                start = k + 1;
-            }
-            _ => {}
-        }
-    }
-    parts.push(&tokens[start..]);
-    parts.retain(|p| !p.is_empty());
-    parts
 }
 
 /// 自 tokens[open] == "{" 起跳过整块（含嵌套），返回闭合 "}" 之后的下标。
@@ -409,6 +301,7 @@ struct ScanState {
     uses: Vec<UseStmt>,
     renames: Vec<AliasBinding>,
     globs: Vec<GlobBinding>,
+    type_items: Vec<type_items::TypeItemDecl>,
     inline: Vec<(String, usize)>,
     scope: Vec<usize>,
     depth: usize,
@@ -423,6 +316,7 @@ fn scan_tokens(tokens: &[&str]) -> FileScan {
         uses: Vec::new(),
         renames: Vec::new(),
         globs: Vec::new(),
+        type_items: Vec::new(),
         inline: Vec::new(),
         scope: Vec::new(),
         depth: 0,
@@ -446,6 +340,7 @@ fn scan_tokens(tokens: &[&str]) -> FileScan {
                                 uses: Vec::new(),
                                 renames: Vec::new(),
                                 globs: Vec::new(),
+                                type_items: Vec::new(),
                             }
                         }
                     }
@@ -490,6 +385,11 @@ fn scan_tokens(tokens: &[&str]) -> FileScan {
                 st.cfg_test = false;
                 st.pending_path = false;
             }
+            // 模块级类型命名空间项声明（issue #480）：门控项已被上一臂
+            // 整条跳过，这里只采集生产声明的名字供遮蔽判定
+            "struct" | "enum" | "trait" | "type" | "union" => {
+                i = type_items::scan_type_decl(tokens, i, &mut st);
+            }
             _ => i += 1,
         }
     }
@@ -498,6 +398,7 @@ fn scan_tokens(tokens: &[&str]) -> FileScan {
         uses: st.uses,
         renames: st.renames,
         globs: st.globs,
+        type_items: st.type_items,
     }
 }
 
@@ -777,6 +678,10 @@ mod issue_469_tests;
 /// 裸首段命中根模块名按外部处置、不虚构内部边与假环的回归（issue #470）。
 #[cfg(test)]
 mod issue_470_tests;
+
+/// 显式类型导入遮蔽同名 glob 模块、不虚构边与假环的回归（issue #480）。
+#[cfg(test)]
+mod issue_480_tests;
 
 /// 评审 5381066396 的位置限定别名与 glob 命名空间回归。
 #[cfg(test)]
