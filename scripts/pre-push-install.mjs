@@ -13,20 +13,17 @@ function signalInstallation(child, signal) {
   }
 }
 
-/** 监督安装及其后代，超时或中断后先 TERM，1 秒后 KILL，再报告失败。 */
+/** 监督安装及其后代；所有完成路径先清理进程组，中断始终报告失败。 */
 function runInstallation(timeoutSeconds) {
   const environment = { ...process.env }
   delete environment.SONAR_TOKEN
   delete environment.PLOTWEAVE_SONAR_TOKEN
   return new Promise((resolve) => {
-    const child = spawn(process.env.PLOTWEAVE_NPM_BIN ?? 'npm', ['ci'], {
-      env: environment,
-      detached: true,
-      stdio: ['ignore', 'inherit', 'inherit'],
-    })
+    let child
     let stopping = false
     let closed = false
     let forced = false
+    let resultCode = 1
     let escalation
     const finish = (code) => {
       clearTimeout(deadline)
@@ -36,15 +33,20 @@ function runInstallation(timeoutSeconds) {
       process.removeListener('SIGHUP', interrupt)
       resolve(code)
     }
-    const stop = (diagnostic) => {
+    const stop = (diagnostic, code = 1) => {
+      if (diagnostic) {
+        resultCode = 1
+        console.error(diagnostic)
+      }
       if (stopping) return
       stopping = true
-      console.error(diagnostic)
+      resultCode = code
+      clearTimeout(deadline)
       signalInstallation(child, 'SIGTERM')
       escalation = setTimeout(() => {
         forced = true
         signalInstallation(child, 'SIGKILL')
-        if (closed) finish(1)
+        if (closed) finish(resultCode)
       }, 1000)
     }
     const interrupt = () => stop('[PRE_PUSH_INSTALL_INTERRUPTED] 安装被中断')
@@ -54,17 +56,24 @@ function runInstallation(timeoutSeconds) {
     process.on('SIGINT', interrupt)
     process.on('SIGTERM', interrupt)
     process.on('SIGHUP', interrupt)
+    child = spawn(process.env.PLOTWEAVE_NPM_BIN ?? 'npm', ['ci'], {
+      env: environment,
+      detached: true,
+      stdio: ['ignore', 'inherit', 'inherit'],
+    })
     child.once('error', (error) => {
       console.error(`[PRE_PUSH_INSTALL_START_FAILED] ${error.code}`)
+      closed = true
       finish(1)
     })
     child.once('close', (code) => {
+      if (closed) return
       closed = true
-      if (stopping && !forced) return
       if (code !== 0 && !stopping) {
         console.error(`[PRE_PUSH_INSTALL_FAILED] npm ci 退出码 ${code}`)
       }
-      finish(stopping ? 1 : (code ?? 1))
+      stop(undefined, code ?? 1)
+      if (forced) finish(resultCode)
     })
   })
 }

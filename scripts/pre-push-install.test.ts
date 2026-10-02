@@ -15,6 +15,32 @@ import { afterEach, expect, it } from 'vitest'
 const runner = resolve(import.meta.dirname, 'pre-push-install.mjs')
 const temporaryDirectories: string[] = []
 
+/** 创建 npm 已结束而同组后代仍活着的真实进程夹具。 */
+function writeSurvivingDescendant(root: string, exitCode: number): void {
+  writeFileSync(
+    resolve(root, 'ci'),
+    String.raw`
+require('node:fs').writeFileSync('install.pid', String(process.pid))
+const descendant = require('node:child_process').spawn(process.execPath, ['-e', [
+  "process.on('SIGTERM', () => require('node:fs').writeFileSync('cleanup.started', 'ready'))",
+  "require('node:fs').writeFileSync('descendant.pid', String(process.pid))",
+  "process.send('ready')",
+  "process.disconnect()",
+  "setTimeout(() => process.exit(0), 10000)",
+].join('\n')], { stdio: ['ignore', 'inherit', 'ignore', 'ipc'] })
+descendant.once('message', () => process.exit(${exitCode}))
+descendant.unref()`,
+  )
+}
+
+/** 失败的回归也只清理自己创建的安装组，防止后台夹具泄漏。 */
+function killInstallFixture(root: string): void {
+  const pidPath = resolve(root, 'install.pid')
+  if (existsSync(pidPath)) {
+    signalFixtureProcess(-Number(readFileSync(pidPath, 'utf8')), 'SIGKILL')
+  }
+}
+
 /** 创建当前执行器的独立安装目录，避免继承外层推送期限与 npm 替身。 */
 function prepareInstallEnvironment(): {
   root: string
@@ -112,11 +138,100 @@ it('npm 无法启动时立即失败且不伪装为安装超时（issue #462）',
     cwd: root,
     env,
     encoding: 'utf8',
-    timeout: 5000,
+    timeout: 1000,
   })
   expect(result.status).toBe(1)
   expect(result.error).toBeUndefined()
   // Stable diagnostic contract: quality-gate-push.md, issue #462.
   expect(result.stderr).toContain('[PRE_PUSH_INSTALL_START_FAILED] ENOENT')
   expect(result.stderr).not.toContain('[PRE_PUSH_INSTALL_TIMEOUT]')
+})
+
+it.each([0, 7])(
+  'npm 退出码 %s 必须在同组后台后代结束后才返回（评审 4162621737）',
+  { timeout: 15_000 },
+  async (exitCode) => {
+    const { root, env } = prepareInstallEnvironment()
+    writeSurvivingDescendant(root, exitCode)
+    const child = spawn(process.execPath, [runner], {
+      cwd: root,
+      env,
+      stdio: 'ignore',
+    })
+    try {
+      const [code] = await once(child, 'close')
+      expect(code).toBe(exitCode)
+      const pid = Number(readFileSync(resolve(root, 'descendant.pid'), 'utf8'))
+      await expect.poll(() => signalFixtureProcess(pid, 0)).toBe(false)
+    } finally {
+      killInstallFixture(root)
+    }
+  },
+)
+
+it.each(['SIGINT', 'SIGTERM', 'SIGHUP'] as const)(
+  'spawn 尚未返回时收到 %s 仍清理安装组并返回失败（评审 4162621740）',
+  async (signal) => {
+    const { root, env } = prepareInstallEnvironment()
+    writeFileSync(resolve(root, 'ci'), 'setTimeout(() => {}, 10000)')
+    const preload = resolve(root, 'signal-during-spawn.mjs')
+    writeFileSync(
+      preload,
+      `import childProcess from 'node:child_process'
+import { syncBuiltinESMExports } from 'node:module'
+import { writeFileSync } from 'node:fs'
+const realSpawn = childProcess.spawn
+childProcess.spawn = (...args) => {
+  const child = realSpawn(...args)
+  writeFileSync('install.pid', String(child.pid))
+  process.kill(process.pid, '${signal}')
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200)
+  return child
+}
+syncBuiltinESMExports()`,
+    )
+    const child = spawn(process.execPath, ['--import', preload, runner], {
+      cwd: root,
+      env,
+      stdio: ['ignore', 'ignore', 'pipe'],
+    })
+    let stderr = ''
+    child.stderr.on('data', (data: Buffer) => {
+      stderr += data.toString()
+    })
+    try {
+      const [code] = await once(child, 'exit')
+      expect(code).toBe(1)
+      // Stable diagnostic contract: quality-gate-push.md, issue #462.
+      expect(stderr).toContain('[PRE_PUSH_INSTALL_INTERRUPTED]')
+      const pid = Number(readFileSync(resolve(root, 'install.pid'), 'utf8'))
+      expect(signalFixtureProcess(pid, 0)).toBe(false)
+    } finally {
+      killInstallFixture(root)
+    }
+  },
+)
+
+it('正常完成的后代清理期间收到中断仍返回失败（评审 4162621737）', async () => {
+  const { root, env } = prepareInstallEnvironment()
+  writeSurvivingDescendant(root, 0)
+  const child = spawn(process.execPath, [runner], {
+    cwd: root,
+    env,
+    stdio: 'ignore',
+  })
+  const completion = once(child, 'close')
+  try {
+    await expect
+      .poll(() => existsSync(resolve(root, 'cleanup.started')))
+      .toBe(true)
+    child.kill('SIGHUP')
+    const [code] = await completion
+    expect(code).toBe(1)
+    const pid = Number(readFileSync(resolve(root, 'descendant.pid'), 'utf8'))
+    await expect.poll(() => signalFixtureProcess(pid, 0)).toBe(false)
+  } finally {
+    killInstallFixture(root)
+    await completion
+  }
 })
