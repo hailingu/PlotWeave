@@ -560,3 +560,57 @@ fn doc_wrapped_cfg_does_not_mark_item_conditional() {
         cycles_of(&graph)
     );
 }
+
+/// 评审 5392908916（PR #488）P2：同一作用域经**命名空间不相交**的同名
+/// 导入合法共存（E0252 按命名空间判重——enum 仅占类型命名空间，fn 仅
+/// 占值命名空间）：显式类型仍遮蔽 glob 提供的同名模块，值绑定不得解除
+/// 该占位。「全部绑定都是类型」的 AND 语义会错误恢复 glob 候选、与
+/// 反向依赖闭合成**误报环**（issue #480 同类危害）；类型占位改为
+/// 「存在无条件类型绑定」语义。夹具经 rustc 验证零警告。
+#[test]
+fn value_binding_does_not_release_type_namespace_occupancy() {
+    let graph = edges(&[
+        ("lib.rs", "pub mod values;\npub mod a;\npub mod host;\n"),
+        (
+            "values.rs",
+            "pub enum E {\n    W,\n}\n\npub fn f() -> u8 {\n    0\n}\n",
+        ),
+        ("a/mod.rs", "pub mod p;\n\npub fn aux() {}\n"),
+        (
+            "a/p.rs",
+            "use crate::host::H;\n\npub fn take(h: H) {\n    let _ = h;\n}\n",
+        ),
+        (
+            "host.rs",
+            concat!(
+                "use crate::values::E as p;\n",
+                "use crate::values::f as p;\n",
+                "use crate::a::*;\n",
+                "use p::W;\n",
+                "pub struct H;\n",
+                "pub fn use_type(x: p) {\n",
+                "    let _ = x;\n",
+                "}\n",
+                "pub fn go() {\n",
+                "    aux();\n",
+                "}\n",
+                "pub fn use_value() -> u8 {\n",
+                "    p()\n",
+                "}\n",
+                "pub fn use_variant() -> p {\n",
+                "    W\n",
+                "}\n",
+            ),
+        ),
+    ]);
+    assert!(
+        !graph["host.rs"].contains("a/p.rs"),
+        "值绑定不解除类型命名空间占位，显式 enum 遮蔽 glob 模块、无虚假边：{:?}",
+        graph["host.rs"]
+    );
+    assert!(
+        cycles_of(&graph).is_empty(),
+        "host→a/p→host 误报环不得存在：{:?}",
+        cycles_of(&graph)
+    );
+}

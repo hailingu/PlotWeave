@@ -11,9 +11,11 @@
 //! 的名字在指定模块的命名空间查别名/glob，不按字面子模块拼接
 //!（评审 5381066396）；经过字面子模块或已展开别名后，尾段继续在
 //! 新模块中解析（评审 4157263363）；普通块局部引入不属于该命名空间。
-//! 显式类型导入占据类型命名空间（issue #480）：可见绑定的目标全部为
-//! 类型命名空间项（扫描层 type_items）且无模块目标时，同名 glob 候选
-//! 让位——值项与未知/外部目标不遮蔽，模块目标仍走保守并集口径；
+//! 显式类型导入占据类型命名空间（issue #480）：可见绑定中**存在**
+//! 无条件、全部解析为类型命名空间项（扫描层 type_items）的绑定且无
+//! 模块目标时，同名 glob 候选让位——值项与未知/外部目标不建立占位
+//! 也不解除其他绑定建立的占位（命名空间不相交同名共存，评审
+//! 5392908916），模块目标仍走保守并集口径；
 //! cfg 门控的条件绑定一律不遮蔽（评审 5391647570：门控不成立的配置里
 //! 绑定缺席、glob 模块是真实解析目标，移除边属漏检方向）。
 
@@ -212,8 +214,10 @@ fn globs_visible_at<'a>(scan: &'a FileScan, at: Lookup<'_>) -> Vec<&'a GlobBindi
 }
 
 /// 一组同名显式绑定的解析结论：positions = 精确命中的模块目标；
-/// type_occupying = 绑定存在且全部解析都落在类型命名空间项上——显式
-/// 类型导入占据了该名字的类型命名空间（issue #480）。
+/// type_occupying = **存在**无条件且全部解析都落在类型命名空间项上的
+/// 绑定——该名字的类型命名空间被显式导入占据（issue #480）。存在语义
+/// 按绑定独立判定：命名空间不相交的同名共存（enum+fn）中值绑定不解除
+/// 类型绑定建立的占位（评审 5392908916）。
 struct AliasTargets {
     positions: Vec<Vec<String>>,
     type_occupying: bool,
@@ -236,9 +240,14 @@ fn resolve_alias_bindings(
 ) -> AliasTargets {
     let mut targets = AliasTargets {
         positions: Vec::new(),
-        type_occupying: !bindings.is_empty(),
+        type_occupying: false,
     };
     for bound in bindings {
+        // 逐绑定独立判定类型占位：门控绑定（禁用配置缺席，评审
+        // 5391647570）与值/未知解析不建立占位；值绑定也不解除其他绑定
+        // 建立的占位——E0252 按命名空间判重，enum+fn 等不相交同名导入
+        // 合法共存，显式类型仍遮蔽 glob 模块（评审 5392908916）
+        let mut binding_type = bound.unconditional;
         for full in absolute_item_paths(
             tree,
             scans,
@@ -255,12 +264,13 @@ fn resolve_alias_bindings(
             match full_path_kind(tree, scans, &full) {
                 FullPathKind::Module => {
                     targets.positions.push(full);
-                    targets.type_occupying = false;
+                    binding_type = false;
                 }
-                FullPathKind::TypeItem if bound.unconditional => {}
-                _ => targets.type_occupying = false,
+                FullPathKind::TypeItem => {}
+                FullPathKind::ValueOrUnknown => binding_type = false,
             }
         }
+        targets.type_occupying |= binding_type;
     }
     targets
 }
