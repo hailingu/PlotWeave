@@ -16,8 +16,12 @@
 //!   模块文件（花括号分组展开、`as` 剥除、`*` 按前缀计、组内 `self` 指
 //!   前缀模块；`pub use` 同采，函数体内局部 `use` 也是文件依赖；平台
 //!   混合变体的路径可有多个所有者文件）。Rust 2018 裸路径 `use x::…`
-//!   的首段先按当前模块的直接子模块解析、再按根模块解析（别名展开的
-//!   绝对路径），再经可见别名链与链式 glob 前缀逐层递归展开（issue
+//!   的首段仅按当前模块的直接子模块解析，不按 crate 根下钻——rustc 把
+//!   命中 extern-prelude 的裸首段判为外部 crate（`mod std;` 不捕获兄弟
+//!   模块的 `use std::…`）、对不在作用域的模块名报 E0432，根模块回退会
+//!   在「根模块名 == 外部 crate 名」时虚构内部边与假环（issue #470）；
+//!   别名展开的中间产物以 `crate::` 前缀经 crate 臂从根下钻；再经可见
+//!   别名链与链式 glob 前缀逐层递归展开（issue
 //!   #469：≥3 级链与 glob 链此前静默丢边）、经可见 glob 引入（`use
 //!   <前缀>::*` 把前缀模块的直接子模块名带入作用域；绑定仅在声明模块
 //!   内可见，inline 子模块不继承父模块引入——评审 5379907393；且只带走
@@ -27,8 +31,9 @@
 //!   （issue #426）；不经 `use` 的全限定调用不采集——与前端守卫只采
 //!   import/export 边同口径。同文件 inline 引用解析回自身，不计自环边。
 //! - 采集完整性（issue #469）：`build_graph` 建边前经审计层对每条展开
-//!   路径分类——首段命中内部模块名（当前模块子模块、根模块，或
-//!   crate/self/super 前缀的结构性命中）却零目标所有者即 fail-closed；
+//!   路径分类——首段命中内部模块名（当前模块子模块，或 crate/self/super
+//!   前缀的结构性命中；裸首段不按根模块判定，issue #470——与
+//!   resolve_use 口径一致）却零目标所有者即 fail-closed；
 //!   未命中者按外部 crate 分类计数（resolved/external，供真实仓库断言
 //!   与诊断），防 #426 式「静默丢边 → 假无环」复发。
 //! - fail-closed：`mod` 声明找不到对应文件（`NAME.rs` 与 `NAME/mod.rs`
@@ -37,6 +42,10 @@
 //!   `resolveEdgeKeys` 的失败语义一致）。
 //! - 已知盲区（登记而非静默）：`macro_rules!` 体整块跳过（现存唯一生产
 //!   宏 `atomic_io` 体内无 `use`）；非 ASCII 标识符会被分词层拆散（本仓无）；
+//!   裸首段命中根模块名（非当前模块子模块）一律按外部 crate 处置——
+//!   rustc 把命中 extern-prelude 的裸名字判为外部、对不在作用域的模块
+//!   名报 E0432，守卫不建模根模块回退以免假环
+//!   （issue #470；别名展开产物经 crate 臂保持根锚定，不受影响）；
 //!   glob 只解析前缀模块的**直接**子模块——经 `pub use` 再导出进入 glob
 //!   目标的名字不解析（本仓生产代码无文件级 glob 引入）；别名/glob
 //!   解析链超过 8 层按不可解析处置（真实链长 2~3）。
@@ -609,26 +618,20 @@ fn resolve_use(
             }
         }
         _ => {
-            // uniform paths（2018+）：裸首段优先按当前模块的直接子模块
-            // 解析（评审 5351210423）；未命中时仍须继续下钻——路径可能来自
-            // 别名展开的绝对模块路径（评审 5353260028），此时首段是 crate
-            // 根的子模块而非当前模块的子模块（位置解析已由调用方完成）。
-            // 仅当路径既非当前子模块也非根下可达模块时才视为外部返回空
+            // uniform paths（2018+）：裸首段仅按当前模块的直接子模块解析
+            //（评审 5351210423、issue #426）。不按 crate 根下钻：rustc 把
+            // 命中 extern-prelude 的裸首段判为外部 crate（`mod std;` 不捕获
+            // 兄弟模块的 `use std::…`，issue #470 复现），对不在作用域的裸
+            // 模块名报 E0432——根模块回退会把「根模块名 == 外部 crate 名」
+            // 的外部引用误判为内部边、产出 rustc 不存在的假环（issue #470）。
+            // 别名展开的中间产物以 `crate::` 前缀进入（aliases.rs 的
+            // expand_segments），经 crate 臂从根下钻，评审 5353260028 的
+            // 根锚定需求由该路径承接，不依赖本分支。
             let first = segs.first().map(String::as_str);
             let is_local_child =
                 first.is_some_and(|f| tree.children.get(&ctx).is_some_and(|c| c.contains(f)));
             if !is_local_child {
-                // 非当前子模块：若是根模块的子模块则从根下钻（别名展开的
-                // 绝对路径；评审 5353260028），否则视为外部返回空
-                let is_root_module = first.is_some_and(|f| {
-                    tree.children
-                        .get(&Vec::new())
-                        .is_some_and(|c| c.contains(f))
-                });
-                if !is_root_module {
-                    return Vec::new();
-                }
-                ctx.clear();
+                return Vec::new();
             }
         }
     }
@@ -770,6 +773,10 @@ mod issue_426_tests;
 /// 采集完整性：glob 引入与别名链成边、审计分类与真实仓库零缺口（issue #469）。
 #[cfg(test)]
 mod issue_469_tests;
+
+/// 裸首段命中根模块名按外部处置、不虚构内部边与假环的回归（issue #470）。
+#[cfg(test)]
+mod issue_470_tests;
 
 /// 评审 5381066396 的位置限定别名与 glob 命名空间回归。
 #[cfg(test)]
