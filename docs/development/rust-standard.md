@@ -233,16 +233,16 @@ from unmeasured files. Metric and scope:
   [qualified paths](https://doc.rust-lang.org/reference/paths.html#qualified-paths)).
   Lexical aliases are visible throughout their enclosing scope:
   expansion first selects all bindings in the deepest visible scope, then
-  appends suffixes only to bindings whose complete target is a known module;
+  traverses suffixes only from bindings whose complete target is a known module;
   binding targets whose first segment is itself an alias resolve through the
   alias chain recursively (bounded depth, union over same-name bindings at
   every hop). After explicit `self` / `crate` / repeated `super` prefixes,
-  the next segment resolves through module-level aliases/globs in the
-  designated namespace, including bindings owned by another file or a
-  parent inline module (PR #479 review 5381066396); block-local imports do
-  not shadow these qualified names. Glob imports contribute the prefix
-  module's direct child
-  module names as bare-path candidates ([Issue #469](https://github.com/hailingu/PlotWeave/issues/469),
+  each segment resolves through the module namespace just reached, including
+  aliases/globs after ordinary child modules or earlier alias expansions
+  ([PR #479 follow-up](https://github.com/hailingu/PlotWeave/pull/479#discussion_r4157263363)).
+  Bindings may belong to another file or a parent inline module; block-local
+  imports do not shadow these qualified names. Glob imports contribute the
+  prefix module's direct child module names as bare-path candidates ([Issue #469](https://github.com/hailingu/PlotWeave/issues/469),
   `src/module_graph/issue_469_tests.rs`).
   This preserves the target-platform union while excluding shadowed outer
   scopes, test-only bindings and non-module symbol tails. Original imports
@@ -328,11 +328,15 @@ casts after gated closure bodies, including explicit-return closures
 | Inner non-module type alias shadows an outer module alias | Select deepest lexical bindings before checking exact module eligibility | Outer module child stays excluded; original item-owner edge remains | Eligibility filtering cannot restore an outer binding shadowed by a deeper scope | `inner_type_aliases_do_not_restore_outer_module_candidates` |
 | Nested platform aliases shadow outer aliases | Resolve inner reference before inner declarations | Both inner targets; no outer child targets | Only the deepest visible scope contributes alias expansion | `inner_alias_union_shadows_all_outer_candidates`; existing sibling-scope and child-precedence fixtures |
 | One platform alias implies test | Collect aliases then resolve production reference | Only production-capable target remains | Test-only bindings never contaminate the platform union | `test_only_platform_aliases_do_not_join_production_union` |
-| Module-level alias qualified by `self` in a chained import | Consume the prefix, resolve its next segment through the specified namespace, then append the suffix | Deep module edge and real cycle retained | Explicit prefixes cannot bypass alias resolution | `qualified_self_aliases_preserve_cycles` |
+| Module-level alias qualified by `self` in a chained import | Consume the prefix, resolve its next segment through the specified namespace, then traverse the suffix | Deep module edge and real cycle retained | Explicit prefixes cannot bypass alias resolution | `qualified_self_aliases_preserve_cycles` |
 | Root/parent alias owned by another file, or parent inline module | Resolve `crate` / repeated `super` at the target module's declaration scope | Target file edge and real cycle retained | Qualified lookup uses the designated module's bindings, not the importing file's bindings | `qualified_root_and_parent_aliases_preserve_cycles`, `qualified_parent_inline_aliases_use_the_declaring_namespace` |
 | Glob-introduced module name follows `self` / `crate` / `super` | Resolve the qualified glob prefix, then expand the later use | Deep target edge and real cycle retained | Position prefixes do not break visible glob chains | `qualified_glob_prefixes_preserve_cycles` |
 | Local block alias shadows a module-level alias with the same name | Compare qualified module lookup with lexical block lookup | Qualified edge uses the module alias; no false block-target edge | Explicit namespace qualification ignores block-local bindings | `qualified_self_ignores_block_alias_shadowing` |
 | Same-name platform aliases / external alias after a position prefix | Preserve target union and exact-module qualification | Both internal targets retained; no invented external child edge | Qualification does not narrow the platform union or turn external symbols into internal modules | `qualified_aliases_keep_platform_union_and_external_boundaries` |
+| Literal modules precede an alias or glob-introduced module name | Walk each real child module, then resolve the remaining name in that namespace | Deep owner edge and true cycle retained for item imports and later alias bindings | Finding an intermediate owner never substitutes for the final module dependency | `qualified_literals_then_aliases_preserve_cycles`, `qualified_literals_then_globs_preserve_cycles` |
+| A resolved alias is followed by more literal modules and another alias | Continue suffix traversal at each expanded module target, including a bare alias entry | Final module edge and cycle retained | Every hop uses the namespace just reached | `qualified_alias_suffixes_cross_more_namespaces` |
+| Same-name platform/module and function bindings after a literal module | Expand only exact module targets while keeping every platform candidate | Both module edges; no invented function-owner child edge | Symbol tails never become module prefixes | `qualified_literal_aliases_keep_platform_union_and_symbol_boundaries` |
+| More than eight literal segments precede one alias | Consume literal segments without charging alias recursion depth | Short alias chain still resolves | Alias recursion budget does not limit ordinary module path length | `qualified_literal_depth_does_not_spend_alias_budget` |
 
 The scan is synchronous and stateless per fixture; retries, persistence and
 completion races are not applicable. Existing fail-closed malformed-use and
@@ -386,7 +390,7 @@ qualification leaves that pre-existing resolution gap unchanged; expanding
 namespace modeling is separate work, not a risk-acceptance disposition in
 this repair.
 
-Verification for this revision: all 114 module-graph tests pass; the Rust
+Verification for commit `e4da619`: all 114 module-graph tests pass; the Rust
 Scope Routing command passes (`check:size`, `cargo fmt --check`, Clippy
 with warnings denied, and all 628 library tests plus integration targets).
 The documentation review checked matrix coverage, retained boundaries and
@@ -398,6 +402,31 @@ remains one candidate-priority operation; qualified namespace resolution
 is delegated, while splitting its remaining branches would scatter the
 original-path, child-module, alias and glob precedence. Changed executable
 units stay below 80 code lines and within four nesting levels.
+
+A further finding
+([PR #479 comment 4157263363](https://github.com/hailingu/PlotWeave/pull/479#discussion_r4157263363))
+shows that a literal child module before an alias still stopped expansion:
+`crate::m::p::b::X` reached `m` but lost the `a/b` owner introduced by `p`.
+`namespace_paths` now consumes each literal child and resumes alias/glob
+lookup at the namespace just reached; it also traverses suffixes following
+an already expanded alias. Literal segments shrink the remaining path
+without consuming alias recursion depth. Unknown item tails remain intact,
+and binding targets must still match complete modules before contributing
+a suffix expansion. Bare entry names retain their original lexical and
+child-module precedence; resolved candidates carry an explicit crate root.
+The four additional matrix rows cover these transitions, platform/symbol
+boundaries and long literal paths. Five regression tests failed for missing
+target edges before the fix; all 119 module-graph tests now pass. Nine
+disposable Rust 2021 fixtures compile with rustc on the native Unix target.
+The complete Rust Scope Routing command passes, including 633 library tests
+and all integration targets. Documentation was reviewed against the new
+traversal, matrix and retained boundaries; no prose test was added.
+`aliases.rs` is 445 lines and the regression module is 277 lines; the
+largest changed function (`bare_paths`) is 53 code lines, within four
+nesting levels. Separating bare entry selection, suffix traversal and
+namespace binding lookup keeps their distinct precedence rules local; no
+new unit crosses a decomposition-review threshold. The retained scanner
+boundaries above remain unchanged.
 
 ## Before Writing Code
 

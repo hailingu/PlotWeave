@@ -9,7 +9,8 @@
 //! 名（私有/受限子模块不参与，评审 5380401098）。仅完整绑定目标命中
 //! 模块时追加展开候选，符号尾段不得截断为祖先模块。显式位置前缀后
 //! 的名字在指定模块的命名空间查别名/glob，不按字面子模块拼接
-//!（评审 5381066396）；普通块的局部引入不属于该命名空间。
+//!（评审 5381066396）；经过字面子模块或已展开别名后，尾段继续在
+//! 新模块中解析（评审 4157263363）；普通块局部引入不属于该命名空间。
 
 use super::tree::ModuleTree;
 use std::collections::BTreeMap;
@@ -71,23 +72,46 @@ pub(super) fn expand_segments(
         scope: &u.scope,
         namespace: false,
     };
-    if matches!(first.as_str(), "crate" | "self" | "super") {
-        for target in qualified_paths(tree, scans, &segs, at, CHAIN_DEPTH) {
-            let mut absolute = vec!["crate".to_string()];
-            absolute.extend(target);
-            candidates.push(absolute);
-        }
-        return candidates;
+    let targets = if matches!(first.as_str(), "crate" | "self" | "super") {
+        qualified_paths(tree, scans, &segs, at, CHAIN_DEPTH)
+    } else {
+        bare_paths(tree, scans, scan, &segs, at)
+    };
+    for target in targets {
+        let mut absolute = vec!["crate".to_string()];
+        absolute.extend(target);
+        candidates.push(absolute);
     }
-    let mut ctx = path.to_vec();
-    ctx.extend(u.inline_stack.iter().cloned());
+    candidates
+}
+
+/// 裸路径首段先按原来的子模块优先/块词法规则选目标，再从该模块
+/// 逐段遍历尾部；初始别名与 glob 候选仍取保守并集，不恢复遮蔽的绑定。
+fn bare_paths(
+    tree: &ModuleTree,
+    scans: &BTreeMap<ModuleKey, FileScan>,
+    scan: &FileScan,
+    segs: &[String],
+    at: Lookup<'_>,
+) -> Vec<Vec<String>> {
+    let Some(first) = segs.first() else {
+        return Vec::new();
+    };
+    let mut ctx = at.path.to_vec();
+    ctx.extend(at.inline.iter().cloned());
     if tree.children.get(&ctx).is_some_and(|c| c.contains(first)) {
-        return candidates;
+        return namespace_paths(tree, scans, ctx, segs, CHAIN_DEPTH);
     }
+    let mut positions = Vec::new();
     for bound in aliases_visible_at(scan, at, first) {
-        for mut target in module_of_binding(tree, scans, scan, bound, path) {
-            target.extend(segs[1..].iter().cloned());
-            candidates.push(target);
+        for target in module_of_binding(tree, scans, scan, bound, at.path) {
+            positions.extend(namespace_paths(
+                tree,
+                scans,
+                target,
+                &segs[1..],
+                CHAIN_DEPTH,
+            ));
         }
     }
     for glob in globs_visible_at(scan, at) {
@@ -97,7 +121,7 @@ pub(super) fn expand_segments(
             scan,
             &glob.segs,
             Lookup {
-                path,
+                path: at.path,
                 inline: &glob.inline_stack,
                 scope: &glob.scope,
                 namespace: false,
@@ -110,13 +134,11 @@ pub(super) fn expand_segments(
                 .is_some_and(|c| c.contains(first))
                 && glob_importable(tree, &prefix, first, &ctx)
             {
-                let mut cand = prefix;
-                cand.extend(segs.iter().cloned());
-                candidates.push(cand);
+                positions.extend(namespace_paths(tree, scans, prefix, segs, CHAIN_DEPTH));
             }
         }
     }
-    candidates
+    positions
 }
 
 /// glob 候选子模块名对使用处是否可见（评审 5380401098）：私有/受限
@@ -218,20 +240,25 @@ fn absolute_module_paths(
     }
     let mut ctx = at.path.to_vec();
     ctx.extend(at.inline.iter().cloned());
-    let mut expanded = Vec::new();
-    if depth > 0 && !tree.children.get(&ctx).is_some_and(|c| c.contains(first)) {
-        expanded = introduced_positions(tree, scans, scan, first, at, depth);
-    }
-    let skip = usize::from(!expanded.is_empty());
-    if expanded.is_empty() {
-        expanded.push(ctx);
-    }
-    expanded
+    let direct_child = tree.children.get(&ctx).is_some_and(|c| c.contains(first));
+    let expanded = if depth > 0 && !direct_child {
+        introduced_positions(tree, scans, scan, first, at, depth)
+    } else {
+        Vec::new()
+    };
+    let candidates = if direct_child {
+        namespace_paths(tree, scans, ctx, segs, depth)
+    } else if expanded.is_empty() {
+        ctx.extend(segs.iter().cloned());
+        vec![ctx]
+    } else {
+        expanded
+            .into_iter()
+            .flat_map(|target| namespace_paths(tree, scans, target, &segs[1..], depth - 1))
+            .collect()
+    };
+    candidates
         .into_iter()
-        .map(|mut p| {
-            p.extend(segs[skip..].iter().cloned());
-            p
-        })
         .filter(|p| tree.file_of.contains_key(p))
         .collect()
 }
@@ -259,9 +286,8 @@ fn qualified_context(segs: &[String], at: Lookup<'_>) -> (Vec<String>, usize) {
     }
 }
 
-/// 指定模块的全部平台文件所有者分别贡献其模块级绑定；inline 模块
-/// 通过规范文件路径定位同一文件中的声明栈。返回绝对路径（可含 item
-/// 后缀），绑定目标资格由 absolute_module_paths 的精确过滤维护。
+/// 位置前缀指定起始命名空间，后续所有段共享逐段遍历；不能在
+/// 遇到第一个字面模块后把余下别名一次性拼接（评审 4157263363）。
 fn qualified_paths(
     tree: &ModuleTree,
     scans: &BTreeMap<ModuleKey, FileScan>,
@@ -270,24 +296,56 @@ fn qualified_paths(
     depth: usize,
 ) -> Vec<Vec<String>> {
     let (ctx, skip) = qualified_context(segs, at);
-    let rest = &segs[skip..];
+    namespace_paths(tree, scans, ctx, &segs[skip..], depth)
+}
+
+/// 从已知模块逐段消费尾部：字面子模块仅缩短剩余路径，别名/glob
+/// 展开消耗递归预算后继续；未知符号尾部保留完整字面后缀，最终绑定
+/// 仍须精确命中模块，不能截断 item 路径来虚构可追加的模块前缀。
+fn namespace_paths(
+    tree: &ModuleTree,
+    scans: &BTreeMap<ModuleKey, FileScan>,
+    mut ctx: Vec<String>,
+    rest: &[String],
+    depth: usize,
+) -> Vec<Vec<String>> {
     let Some(first) = rest.first() else {
         return vec![ctx];
     };
     if tree.children.get(&ctx).is_some_and(|c| c.contains(first)) {
-        let mut target = ctx;
-        target.extend(rest.iter().cloned());
-        return vec![target];
+        ctx.push(first.clone());
+        return namespace_paths(tree, scans, ctx, &rest[1..], depth);
     }
-    if depth == 0 {
-        return Vec::new();
+    let positions = if depth > 0 {
+        namespace_positions(tree, scans, &ctx, first, depth)
+    } else {
+        Vec::new()
+    };
+    if positions.is_empty() {
+        ctx.extend(rest.iter().cloned());
+        return vec![ctx];
     }
+    positions
+        .into_iter()
+        .flat_map(|target| namespace_paths(tree, scans, target, &rest[1..], depth - 1))
+        .collect()
+}
+
+/// 指定模块的全部平台文件所有者贡献模块级绑定；inline 模块通过
+/// 规范文件路径定位声明栈，每次尾段进入的新模块都重新选择该命名空间。
+fn namespace_positions(
+    tree: &ModuleTree,
+    scans: &BTreeMap<ModuleKey, FileScan>,
+    ctx: &[String],
+    name: &str,
+    depth: usize,
+) -> Vec<Vec<String>> {
     let mut positions = Vec::new();
     for (path, key) in &tree.canonical {
         if !ctx.starts_with(path)
             || !tree
                 .file_of
-                .get(&ctx)
+                .get(ctx)
                 .is_some_and(|owners| owners.contains(key))
         {
             continue;
@@ -298,10 +356,14 @@ fn qualified_paths(
             scope: &[],
             namespace: true,
         };
-        for mut target in introduced_positions(tree, scans, &scans[key], first, lookup, depth) {
-            target.extend(rest[1..].iter().cloned());
-            positions.push(target);
-        }
+        positions.extend(introduced_positions(
+            tree,
+            scans,
+            &scans[key],
+            name,
+            lookup,
+            depth,
+        ));
     }
     positions
 }

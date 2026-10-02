@@ -1,5 +1,6 @@
 //! 评审 5381066396：显式位置前缀之后的别名/glob 仍须展开，且名字查找
 //! 必须发生在指定模块的命名空间，而非使用点所在的普通块作用域。
+//! 评审 4157263363：字面模块/已展开别名之后的尾段也必须逐段解析。
 
 use super::module_graph_tests::edges;
 use super::*;
@@ -143,4 +144,134 @@ fn qualified_aliases_keep_platform_union_and_external_boundaries() {
         ]),
         "平台目标都保留，外部限定别名不引入虚边"
     );
+}
+
+/// 评审 4157263363：真实文件/inline 子模块之后的别名不能止于中间所有者。
+#[test]
+fn qualified_literals_then_aliases_preserve_cycles() {
+    for prefix in ["crate", "super", "self"] {
+        for suffix in ["p::b::X;", "p::b as q; use q::X;"] {
+            let nested = if prefix == "self" {
+                "mod m { pub(crate) use crate::a as p; }"
+            } else {
+                ""
+            };
+            let user = format!("pub struct U; {nested} use {prefix}::m::{suffix}");
+            let lib = if prefix == "self" {
+                "mod a; mod user;"
+            } else {
+                "mod a; mod m; mod user;"
+            };
+            let graph = edges(&[
+                ("lib.rs", lib),
+                ("a/mod.rs", "pub mod b;"),
+                ("a/b.rs", "pub struct X; use crate::user::U;"),
+                ("m.rs", "pub(crate) use crate::a as p;"),
+                ("user.rs", &user),
+            ]);
+            assert!(
+                graph["user.rs"].contains("a/b.rs"),
+                "{prefix}::{suffix} 丢失目标边"
+            );
+            assert_eq!(cycles_of(&graph).len(), 1, "字面模块后的别名必须闭合真实环");
+        }
+    }
+}
+
+/// 指定模块命名空间中的 glob 在字面段之后仍可引入子模块。
+#[test]
+fn qualified_literals_then_globs_preserve_cycles() {
+    let graph = edges(&[
+        ("lib.rs", "mod a; mod m; mod user;"),
+        ("a/mod.rs", "pub mod b;"),
+        ("a/b.rs", "pub struct X; use crate::user::U;"),
+        ("m.rs", "pub(crate) use crate::a::*;"),
+        ("user.rs", "pub struct U; use crate::m::b::X;"),
+    ]);
+    assert!(
+        graph["user.rs"].contains("a/b.rs"),
+        "字面模块后的 glob 不能丢边"
+    );
+    assert_eq!(
+        cycles_of(&graph).len(),
+        1,
+        "字面模块后的 glob 必须闭合真实环"
+    );
+}
+
+/// 裸别名/限定入口的尾段都须跨过更多字面模块，逐次切换命名空间。
+#[test]
+fn qualified_alias_suffixes_cross_more_namespaces() {
+    for imports in [
+        "use crate::m::p::b::r::c::X;",
+        "use crate::m as outer; use outer::p::b::r::c::X;",
+    ] {
+        let user = format!("pub struct U; {imports}");
+        let graph = edges(&[
+            ("lib.rs", "mod a; mod m; mod other; mod user;"),
+            ("a/mod.rs", "pub mod b;"),
+            ("a/b.rs", "pub(crate) use crate::other as r;"),
+            ("m.rs", "pub(crate) use crate::a as p;"),
+            ("other/mod.rs", "pub mod c;"),
+            ("other/c.rs", "pub struct X; use crate::user::U;"),
+            ("user.rs", &user),
+        ]);
+        assert!(
+            graph["user.rs"].contains("other/c.rs"),
+            "跨命名空间别名尾段丢边"
+        );
+        assert_eq!(
+            cycles_of(&graph).len(),
+            1,
+            "每次切换命名空间都必须保留真实环"
+        );
+    }
+}
+
+/// 中途别名保持平台并集；同名函数绑定不可虚构模块后缀。
+#[test]
+fn qualified_literal_aliases_keep_platform_union_and_symbol_boundaries() {
+    let graph = edges(&[
+        ("lib.rs", "mod a; mod m; mod other; mod values; mod user;"),
+        ("a/mod.rs", "pub mod b;"),
+        ("a/b.rs", "pub struct X;"),
+        ("other/mod.rs", "pub mod b;"),
+        ("other/b.rs", "pub struct X;"),
+        ("values/mod.rs", "pub fn make() {} pub mod b;"),
+        ("values/b.rs", "pub struct X;"),
+        ("m.rs", "#[cfg(unix)] pub(crate) use crate::a as p; #[cfg(windows)] pub(crate) use crate::other as p; pub(crate) use crate::values::make as p;"),
+        ("user.rs", "use crate::m::p::b as q; use q::X;"),
+    ]);
+    assert_eq!(
+        graph["user.rs"],
+        BTreeSet::from(["m.rs".into(), "a/b.rs".into(), "other/b.rs".into(),]),
+        "中途别名保留两个精确模块目标，不扩展函数所有者的子模块"
+    );
+}
+
+/// 字面段只缩短剩余路径，不消耗别名绑定递归预算。
+#[test]
+fn qualified_literal_depth_does_not_spend_alias_budget() {
+    let names: Vec<_> = (0..9).map(|i| format!("n{i}")).collect();
+    let m = format!(
+        "{} pub(crate) use crate::a as p; {}",
+        names
+            .iter()
+            .map(|n| format!("pub(crate) mod {n} {{ "))
+            .collect::<String>(),
+        "}".repeat(names.len())
+    );
+    let user = format!("pub struct U; use crate::m::{}::p::b::X;", names.join("::"));
+    let graph = edges(&[
+        ("lib.rs", "mod a; mod m; mod user;"),
+        ("a/mod.rs", "pub mod b;"),
+        ("a/b.rs", "pub struct X; use crate::user::U;"),
+        ("m.rs", &m),
+        ("user.rs", &user),
+    ]);
+    assert!(
+        graph["user.rs"].contains("a/b.rs"),
+        "深字面路径仍应展开短别名链"
+    );
+    assert_eq!(cycles_of(&graph).len(), 1, "字面段不能提前耗尽别名预算");
 }
