@@ -94,9 +94,19 @@ Every gated command runs the same complete sequence:
    `media_format_leaf` test target, after which the same 80% floor is
    re-checked on both LCOV reports (frontend and Rust) before any analysis is
    published (issue #393).
-4. `sonar-scanner` publishing the analysis, then waiting for the Quality Gate,
+4. `scripts/check-rust-module-graph-guard.sh` — a semantic liveness check on
+   the Rust module-graph guard itself (issue #471): it reads
+   `cargo test --lib -- --list` output and requires at least 90 enumerated
+   `module_graph::` tests, so deleting the guard's only mount point in
+   `lib.rs` (or emptying the module) fails the gate instead of silently
+   dropping every guard case. Runs serially after the Rust coverage phase —
+   deliberately outside the parallel vitest suite, where a cold cargo build
+   starved sibling subprocess tests (8 timeouts observed at commit
+   `0e80937`); CI enforces the same check in its rust job after
+   `cargo test`.
+5. `sonar-scanner` publishing the analysis, then waiting for the Quality Gate,
    then a separate check that new-code unresolved issues are zero.
-5. Since issue #355, a fully passing run appends one summary record to a
+6. Since issue #355, a fully passing run appends one summary record to a
    pending file inside `.git`, and the `pre-push` hook materializes pending
    lines into the versioned `docs/development/gate-history.jsonl` after its
    gate passes (see

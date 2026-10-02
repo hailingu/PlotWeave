@@ -68,3 +68,9 @@ jobs:
       - name: cargo test
         working-directory: src-tauri
         run: cargo test
+      # 模块图守卫元检查（issue #471）：cargo test 之后 lib 测试目标构建已
+      # 热，列举为增量秒级；删除 lib.rs 唯一挂载点（或清空守卫模块）时失败。
+      # 串行挂在本任务，不进 frontend 任务的并行 vitest 套件（冷 cargo 构建
+      # 会饿死兄弟子进程测试）。
+      - name: 模块图守卫元检查（issue #471）
+        run: sh scripts/check-rust-module-graph-guard.sh
