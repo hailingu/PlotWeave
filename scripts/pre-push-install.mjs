@@ -33,6 +33,7 @@ function runInstallation(timeoutSeconds) {
       clearTimeout(escalation)
       process.removeListener('SIGINT', interrupt)
       process.removeListener('SIGTERM', interrupt)
+      process.removeListener('SIGHUP', interrupt)
       resolve(code)
     }
     const stop = (diagnostic) => {
@@ -52,6 +53,7 @@ function runInstallation(timeoutSeconds) {
     }, timeoutSeconds * 1000)
     process.on('SIGINT', interrupt)
     process.on('SIGTERM', interrupt)
+    process.on('SIGHUP', interrupt)
     child.once('error', (error) => {
       console.error(`[PRE_PUSH_INSTALL_START_FAILED] ${error.code}`)
       finish(1)
