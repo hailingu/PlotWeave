@@ -144,14 +144,18 @@ release_lock() {
   rmdir "$lock_directory" 2>/dev/null || true
 }
 
-# 获取失败不能判断锁是否陈旧：保留锁并给出人工核查与空目录恢复指引。
+# 获取失败不能判断锁是否陈旧：保留锁并区分两种可能——运行中的门禁
+#（推送门禁尤其慢路径可持有该锁数分钟，issue #465：期间提交会被拒绝，
+# 等待其结束即可）与异常退出遗留的锁（给出人工核查与空目录恢复指引）。
 # 稳定诊断代码与命令契约见 quality-gate-cost.md「门禁锁的人工恢复」。
 fail_lock_acquisition() {
   printf 'SonarQube 门禁失败：[SONAR_GATE_LOCK_UNAVAILABLE] 无法获取门禁锁：%s\n' \
     "$lock_directory" >&2
   printf '%s\n' \
-    '另一个门禁或 gate-history.sh materialize 可能正在运行，也可能是异常退出遗留的锁。' \
-    '先等待相关操作结束；确认没有门禁或记录物化进程正在运行，且此目录确为残留锁后，执行下列命令。' >&2
+    '[SONAR_GATE_LOCK_WAIT_FOR_RUNNING_GATE] 门禁可能正在运行：推送门禁（慢路径含被推树依赖安装与完整检查）可持有该锁数分钟，' \
+    '期间提交、合并与推送都会被拒绝；等待其结束后重新执行本 Git 操作即可，完整门禁仍会执行，不要清理仍被持有的锁。' >&2
+  printf '%s\n' \
+    '也可能是异常退出遗留的锁。确认没有门禁或记录物化进程正在运行，且此目录确为残留锁后，执行下列命令。' >&2
   # 单引号闭合、转义再重开，路径中的空格与 shell 替换符均保持字面量。
   quoted_lock_path=$(printf '%s' "$lock_directory" | sed "s/'/'\\\\''/g")
   printf "[SONAR_GATE_LOCK_RECOVERY_COMMAND] rmdir -- '%s'\n" "$quoted_lock_path" >&2

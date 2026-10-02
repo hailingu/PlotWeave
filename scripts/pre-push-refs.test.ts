@@ -1,6 +1,7 @@
 import {
   chmodSync,
   copyFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -9,7 +10,8 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
+import { once } from 'node:events'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const repositoryRoot = resolve(import.meta.dirname, '..')
@@ -971,3 +973,225 @@ describe(
     })
   },
 )
+
+/** 读取场景调用日志全文（文件尚未创建时为空串）。 */
+function readScenarioLog(scenario: PushScenario): string {
+  try {
+    return readFileSync(resolve(scenario.root, 'calls.log'), 'utf8')
+  } catch {
+    return ''
+  }
+}
+
+/** 读取悬挂扫描器记录的忽略 TERM 后代 pid（未就绪时为 NaN）。 */
+function scannerDescendantPid(scenario: PushScenario): number {
+  const entry = readScenarioLog(scenario)
+    .split('\n')
+    .find((line) => line.startsWith('scanner-descendant '))
+  return entry ? Number(entry.split(' ')[1]) : Number.NaN
+}
+
+/** 探测进程是否仍存活；已退出返回 false，其余信号错误仍抛出。 */
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ESRCH') {
+      return false
+    }
+    throw error
+  }
+}
+
+/** 安装悬挂的扫描器替身：登记一个忽略 TERM 的后代后与门禁一起悬挂。 */
+function writeHangingScanner(scenario: PushScenario): void {
+  writeExecutable(
+    resolve(scenario.root, 'bin', 'sonar-scanner'),
+    String.raw`printf 'sonar-scanner\n' >> "$PLOTWEAVE_TEST_LOG"
+mkdir -p "$(dirname "$PLOTWEAVE_SONAR_REPORT_PATH")"
+printf '%s\n' 'projectKey=PlotWeave' 'serverUrl=http://sonar.test' > "$PLOTWEAVE_SONAR_REPORT_PATH"
+sh -c 'trap "" TERM; printf "scanner-descendant %s\n" $$ >> "$PLOTWEAVE_TEST_LOG"; exec sleep 45' &
+exec sleep 45`,
+  )
+}
+
+/** 悬挂钩子被单独中断后的观测结果。 */
+interface InterruptOutcome {
+  readonly code: number | null
+  readonly stderr: string
+  readonly descendantPid: number
+  readonly tempWorktreePath: string | undefined
+}
+
+/** 运行真实钩子至悬挂扫描器的后代就绪，随后只向钩子进程本身发信号。 */
+async function runHookUntilScannerAndInterrupt(
+  scenario: PushScenario,
+  stdin: string,
+  signal: 'SIGINT' | 'SIGTERM',
+): Promise<InterruptOutcome> {
+  const child = spawn('sh', [resolve(scenario.root, '.githooks', 'pre-push')], {
+    cwd: scenario.root,
+    env: scenario.env,
+  })
+  let stderr = ''
+  let descendantPid = Number.NaN
+  child.stderr.on('data', (data: Buffer) => {
+    stderr += data.toString()
+  })
+  child.stdin.write(stdin)
+  child.stdin.end()
+  const completion = once(child, 'close', {
+    signal: AbortSignal.timeout(20_000),
+  })
+  try {
+    await expect
+      .poll(() => scannerDescendantPid(scenario), { timeout: 20_000 })
+      .toBeGreaterThan(0)
+    descendantPid = scannerDescendantPid(scenario)
+    const tempWorktreePath = scenario
+      .git(['worktree', 'list', '--porcelain'])
+      .stdout.split('\n')
+      .filter((line) => line.startsWith('worktree '))
+      .map((line) => line.slice('worktree '.length))
+      .find((path) => path.includes('plotweave-pre-push.'))
+    child.kill(signal)
+    const [code] = (await completion) as [number | null]
+    return { code, stderr, descendantPid, tempWorktreePath }
+  } finally {
+    child.kill('SIGKILL')
+    if (Number.isFinite(descendantPid) && processAlive(descendantPid)) {
+      process.kill(descendantPid, 'SIGKILL')
+    }
+    await completion.catch(() => {})
+  }
+}
+
+/** 断言中断后的公共收敛：子进程组结束、锁释放、无残留误报。 */
+async function expectInterruptConverged(
+  scenario: PushScenario,
+  outcome: InterruptOutcome,
+  expectedCode: number,
+): Promise<void> {
+  expect(outcome.code).toBe(expectedCode)
+  // Stable diagnostic contract: quality-gate-push.md, issue #465.
+  expect(outcome.stderr).toContain('[PRE_PUSH_INTERRUPTED]')
+  expect(outcome.stderr).not.toContain('[PRE_PUSH_WORKTREE_RESIDUE]')
+  expect(scenario.worktreeCount()).toBe(1)
+  await expect
+    .poll(() => processAlive(outcome.descendantPid), { timeout: 10_000 })
+    .toBe(false)
+  await expect
+    .poll(() => existsSync(String(scenario.env.PLOTWEAVE_SONAR_LOCK_DIRECTORY)))
+    .toBe(false)
+}
+
+describe(
+  'pre-push 中断清理：信号及时终止门禁子进程组（issue #465）',
+  { timeout: 60_000 },
+  () => {
+    it('慢路径悬挂时仅向钩子发 SIGINT：秒级退出并移除临时 worktree', async () => {
+      const scenario = preparePushScenario({ withRemote: false })
+      writeHangingScanner(scenario)
+
+      const outcome = await runHookUntilScannerAndInterrupt(
+        scenario,
+        `refs/heads/side ${scenario.sideSha()} refs/heads/side ${zeroSha}\n`,
+        'SIGINT',
+      )
+
+      expect(outcome.tempWorktreePath).toBeDefined()
+      expect(existsSync(outcome.tempWorktreePath ?? '')).toBe(false)
+      await expectInterruptConverged(scenario, outcome, 130)
+    })
+
+    it('快路径悬挂时仅向钩子发 SIGTERM：秒级退出，无临时树维度', async () => {
+      const scenario = preparePushScenario({ withRemote: false })
+      writeHangingScanner(scenario)
+
+      const outcome = await runHookUntilScannerAndInterrupt(
+        scenario,
+        `refs/heads/main ${scenario.headSha()} refs/heads/main ${zeroSha}\n`,
+        'SIGTERM',
+      )
+
+      expect(outcome.tempWorktreePath).toBeUndefined()
+      await expectInterruptConverged(scenario, outcome, 143)
+    })
+  },
+)
+
+/** 在沙箱 bin 首位安装 git 包装器：其余命令透传真实 git；仅
+ * `worktree remove` 受控——实际移除后谎报失败，或直接失败不动目录。 */
+function wrapScenarioGit(
+  scenario: PushScenario,
+  removeBehavior: 'removeThenLie' | 'fail',
+): void {
+  const realGit = spawnSync('sh', ['-c', 'command -v git'], {
+    encoding: 'utf8',
+  }).stdout.trim()
+  scenario.env.PATH = `${resolve(scenario.root, 'bin')}:${scenario.env.PATH}`
+  const controlledRemoval =
+    removeBehavior === 'removeThenLie'
+      ? `"${realGit}" "$@"\n    exit 1`
+      : 'exit 1'
+  writeExecutable(
+    resolve(scenario.root, 'bin', 'git'),
+    String.raw`case "$1 $2" in
+  'worktree remove')
+    ${controlledRemoval}
+    ;;
+esac
+exec "${realGit}" "$@"`,
+  )
+}
+
+/** 找到并删除慢路径残留在系统临时区的临时根，再修剪 worktree 登记。 */
+function pruneLeftoverTempWorktree(scenario: PushScenario): void {
+  const tempPath = scenario
+    .git(['worktree', 'list', '--porcelain'])
+    .stdout.split('\n')
+    .filter((line) => line.startsWith('worktree '))
+    .map((line) => line.slice('worktree '.length))
+    .find((path) => path.includes('plotweave-pre-push.'))
+  if (tempPath?.includes('plotweave-pre-push.')) {
+    rmSync(resolve(tempPath, '..'), { recursive: true, force: true })
+  }
+  scenario.git(['worktree', 'prune'])
+}
+
+describe('pre-push 清理警告的真实性（issue #465）', { timeout: 30_000 }, () => {
+  it('临时 worktree 实际已移除而 remove 报告失败：不输出残留警告', () => {
+    const scenario = preparePushScenario({ withRemote: false })
+    wrapScenarioGit(scenario, 'removeThenLie')
+
+    const result = scenario.runHookWithStdin(
+      `refs/heads/side ${scenario.sideSha()} refs/heads/side ${zeroSha}\n`,
+    )
+
+    expect(result.status, result.stderr).toBe(0)
+    // Stable diagnostic contract: quality-gate-push.md, issue #465.
+    expect(result.stderr).not.toContain('[PRE_PUSH_WORKTREE_RESIDUE]')
+    expect(scenario.worktreeCount()).toBe(1)
+  })
+
+  it('临时 worktree 确实无法移除：输出一次残留警告代码并保留目录', () => {
+    const scenario = preparePushScenario({ withRemote: false })
+    wrapScenarioGit(scenario, 'fail')
+    try {
+      const result = scenario.runHookWithStdin(
+        `refs/heads/side ${scenario.sideSha()} refs/heads/side ${zeroSha}\n`,
+      )
+
+      expect(result.status, result.stderr).toBe(0)
+      // Stable diagnostic contract: quality-gate-push.md, issue #465.
+      expect(result.stderr).toContain('[PRE_PUSH_WORKTREE_RESIDUE]')
+      expect(
+        result.stderr.split('[PRE_PUSH_WORKTREE_RESIDUE]').length - 1,
+      ).toBe(1)
+      expect(scenario.worktreeCount()).toBe(2)
+    } finally {
+      pruneLeftoverTempWorktree(scenario)
+    }
+  })
+})

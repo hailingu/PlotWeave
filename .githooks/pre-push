@@ -21,6 +21,10 @@
 # 物化进版本化 gate-history.jsonl（issue #355；PR #415 评审 5338815626：
 # 提交创建路径只写 .git 内待物化文件、不弄脏被跟踪文件，重放/检出/
 # 合并不被打断）。
+# 安装执行器与门禁脚本这两类分钟级子进程经 supervise_child_process 后台
+# 作业 + wait 受监督运行，INT/HUP/TERM 先整组终止子进程再走退出清理，
+# 临时 worktree 不再因前台子进程推迟 trap 而滞留数分钟；清理警告只在
+# 目录确实留存时出现（issue #465，代码契约见 quality-gate-push.md）。
 
 set -eu
 
@@ -56,6 +60,9 @@ lock_directory=${PLOTWEAVE_SONAR_LOCK_DIRECTORY:-$main_root/.sonar-gate.lock}
 temp_root=
 temp_worktree=
 manifest_path=
+# 受监督子进程组（issue #465）：非空表示有分钟级子进程（安装或门禁）
+# 正以后台作业运行，其进程组号即本值，供信号路径整组终止。
+supervised_group_pid=
 # 快路径失败前提记录（issue #463）：working_tree_represents_head 返回非零
 # 时填充，供慢路径分派输出触发原因；空初值仅为 set -u 安全。
 fast_path_block_code=
@@ -69,21 +76,82 @@ unset_git_localization() {
   unset GIT_INDEX_FILE GIT_PREFIX GIT_WORK_TREE GIT_DIR ||
     : # unset 为内建，仅防御性兜底
 }
-cleanup_temporary_artifacts() {
-  if [ -n "$temp_worktree" ]; then
-    ( unset_git_localization
-      git worktree remove --force "$temp_worktree" ) 2>/dev/null ||
-      printf 'pre-push 警告：无法移除临时 worktree %s；可用 git worktree prune 清理。\n' \
-        "$temp_worktree" >&2
+# 移除登记的临时 worktree 与其临时根并置空登记，使重复清理（信号 trap
+# 之后的退出 trap）幂等：目标已不存在同样视为成功——残留警告只在目录
+# 确实留存时出现（issue #465：信号路径曾对已清理干净的目标重试 remove
+# 并误报「无法清理」）。移除失败时保留现场供 git worktree prune 恢复。
+remove_temporary_worktree() {
+  target_worktree=$temp_worktree
+  target_root=$temp_root
+  temp_worktree=
+  temp_root=
+  [ -n "$target_worktree" ] || return 0
+  if ( unset_git_localization
+    git worktree remove --force "$target_worktree" ) 2>/dev/null ||
+    [ ! -e "$target_worktree" ]; then
+    rm -rf "$target_root" 2>/dev/null || :
+  else
+    printf 'pre-push 警告：[PRE_PUSH_WORKTREE_RESIDUE] 无法清理临时 worktree %s；可用 git worktree prune 清理。\n' \
+      "$target_worktree" >&2
   fi
-  [ -z "$temp_root" ] || rm -rf "$temp_root" 2>/dev/null || true
-  [ -z "$manifest_path" ] || rm -f "$manifest_path" 2>/dev/null || true
 }
-trap cleanup_temporary_artifacts 0 1 2 15
+cleanup_temporary_artifacts() {
+  remove_temporary_worktree
+  if [ -n "$manifest_path" ]; then
+    rm -f "$manifest_path" 2>/dev/null || :
+    manifest_path=
+  fi
+}
+# 信号路径（issue #465）：POSIX 语义下前台子进程运行期间的信号 trap 会被
+# 推迟到该子进程返回（专项审计实测单独向钩子发 SIGINT 后 18 分钟 npm ci
+# 仍在运行）；改为后台作业 + 可被信号打断的 wait 后，这里能及时执行。
+# 先向受监督进程组发 TERM、有界宽限后对仍存活组员 KILL（与安装执行器的
+# 升级策略一致），退出触发 EXIT trap 清理临时资源；以 128+信号 码退出，
+# Git 按钩子失败处理本次操作（推送中止，门禁结论不产出）。
+handle_termination_signal() {
+  signal_exit_code=$1
+  if [ -n "$supervised_group_pid" ]; then
+    kill -TERM -- "-$supervised_group_pid" 2>/dev/null ||
+      kill -TERM "$supervised_group_pid" 2>/dev/null || :
+    grace_attempts=0
+    while [ "$grace_attempts" -lt 3 ] &&
+      kill -0 -- "-$supervised_group_pid" 2>/dev/null; do
+      sleep 1
+      grace_attempts=$((grace_attempts + 1))
+    done
+    kill -KILL -- "-$supervised_group_pid" 2>/dev/null || :
+    supervised_group_pid=
+  fi
+  printf '[PRE_PUSH_INTERRUPTED] 收到终止信号，已终止门禁子进程；正在清理临时资源。\n' >&2
+  exit "$signal_exit_code"
+}
+trap cleanup_temporary_artifacts 0
+trap 'handle_termination_signal 129' 1
+trap 'handle_termination_signal 130' 2
+trap 'handle_termination_signal 143' 15
 
 fail() {
   printf 'pre-push 失败：%s\n' "$1" >&2
   exit 1
+}
+
+# 受监督运行（issue #465）：分钟级子进程（安装执行器与门禁脚本）以后台
+# 作业 + wait 运行——wait 可被信号打断，钩子的信号 trap 得以及时执行
+# （前台子进程会把 trap 推迟到其返回）。启用作业控制仅为让该后台作业
+# 获得独立进程组，信号路径得以向整组（含后代）发 TERM/KILL；真实
+# Ctrl-C 场景下终端信号仍直达钩子本身，分工不变。wait 的 stderr 重定向
+# 吸收 shell 对被杀作业的状态通告。参数为要异步执行的函数名。
+supervise_child_process() {
+  set -m
+  "$@" </dev/null &
+  supervised_group_pid=$!
+  set +m
+  if wait "$supervised_group_pid" 2>/dev/null; then
+    supervised_group_pid=
+    return 0
+  fi
+  supervised_group_pid=
+  return 1
 }
 
 # 快路径前提（issue #405）：工作树内容与 HEAD 一致（含索引，保证台账
@@ -132,7 +200,8 @@ resolve_pushed_commit() {
 
 # 慢路径：临时 worktree 检出被推提交，按该树锁文件安装依赖，再以当前
 # 门禁脚本在该树上执行完整门禁（分析对象 = 被推提交，门禁定义 = 当前
-# 工作树版本）。
+# 工作树版本）。安装与门禁均经 supervise_child_process 受监督运行，
+# 中断信号能及时终止它们并清理临时树（issue #465）。
 gate_commit_in_temp_worktree() {
   commit=$1
   short=$(git rev-parse --short "$commit")
@@ -141,26 +210,35 @@ gate_commit_in_temp_worktree() {
   ( unset_git_localization
     git worktree add --quiet --detach "$temp_worktree" "$commit" ) ||
     fail "无法在临时 worktree 检出被推提交 $short"
-  # 当前执行器清理两个 Sonar 令牌变量，并以期限监督 npm 及 lifecycle 子进程组。
-  ( cd "$temp_worktree" && unset_git_localization &&
-    PLOTWEAVE_NPM_BIN=$npm_bin "$node_bin" "$main_root/scripts/pre-push-install.mjs" ) </dev/null ||
+  supervise_child_process run_install_for_pushed_tree ||
     fail "被推树 $short 的依赖安装失败（npm ci；树内缺 package-lock.json 亦会走到这里）"
-  ( unset_git_localization
-    PLOTWEAVE_GATE_REPOSITORY_ROOT=$temp_worktree \
-    PLOTWEAVE_GATE_PENDING_PATH=$pending_path \
-    PLOTWEAVE_SONAR_LOCK_DIRECTORY=$lock_directory \
-      "$main_root/scripts/sonar-quality-gate.sh" ) </dev/null
-  if ( unset_git_localization
-    git worktree remove --force "$temp_worktree" ) 2>/dev/null &&
-    rm -rf "$temp_root" 2>/dev/null; then
-    temp_worktree=
-    temp_root=
-  else
-    printf 'pre-push 警告：无法清理临时 worktree %s；可用 git worktree prune 清理。\n' \
-      "$temp_worktree" >&2
-    temp_worktree=
-    temp_root=
-  fi
+  supervise_child_process run_gate_for_pushed_tree
+  remove_temporary_worktree
+}
+
+# 慢路径安装入口（异步子壳内执行，exec 使受监督 pid 即执行器本身）：
+# 当前执行器清理两个 Sonar 令牌变量，并以期限监督 npm 及 lifecycle 子
+# 进程组（issue #462）。
+run_install_for_pushed_tree() {
+  cd "$temp_worktree" && unset_git_localization &&
+    PLOTWEAVE_NPM_BIN=$npm_bin \
+      exec "$node_bin" "$main_root/scripts/pre-push-install.mjs"
+}
+
+# 慢路径门禁入口（异步子壳内执行）：当前工作树版本的门禁脚本分析被推
+# 提交的临时检出树；台账与锁仍指向主工作树（issues #405/#355）。
+run_gate_for_pushed_tree() {
+  unset_git_localization
+  PLOTWEAVE_GATE_REPOSITORY_ROOT=$temp_worktree \
+  PLOTWEAVE_GATE_PENDING_PATH=$pending_path \
+  PLOTWEAVE_SONAR_LOCK_DIRECTORY=$lock_directory \
+    exec "$main_root/scripts/sonar-quality-gate.sh"
+}
+
+# 快路径门禁入口（异步子壳内执行）：被推提交即当前工作树可证等价的
+# 状态，在当前工作树直接执行完整门禁。
+run_gate_for_current_tree() {
+  exec "$main_root/scripts/sonar-quality-gate.sh"
 }
 
 # 一次读尽 stdin（git 每行给出 <本地ref> <本地sha> <远端ref> <远端sha>），
@@ -196,7 +274,7 @@ while read -r local_ref local_sha remote_ref remote_sha extra; do
   slow_detail='被推提交不是当前 HEAD'
   if [ "$commit" = "$head_commit" ] && working_tree_represents_head; then
     printf '[pre-push] 门禁对象：%s（%s，当前工作树）\n' "$local_ref" "$short"
-    "$main_root/scripts/sonar-quality-gate.sh" </dev/null
+    supervise_child_process run_gate_for_current_tree
   else
     if [ "$commit" = "$head_commit" ]; then
       slow_code=$fast_path_block_code

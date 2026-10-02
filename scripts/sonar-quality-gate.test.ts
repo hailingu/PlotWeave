@@ -747,6 +747,16 @@ describe('门禁锁恢复命令（issue #430）', { timeout: 30_000 }, () => {
     },
   )
 
+  it('锁被占用时说明运行中的推送门禁会持有锁数分钟并建议等待（issue #465）', () => {
+    const result = runGate('scripts/sonar-quality-gate.sh', {
+      lockOccupied: true,
+    })
+
+    expect(result.status).not.toBe(0)
+    // Stable diagnostic contract: quality-gate-lifecycle.md（issue #465）.
+    expect(result.stderr).toContain('[SONAR_GATE_LOCK_WAIT_FOR_RUNNING_GATE]')
+  })
+
   it.each([0, 2])('扫描退出码 %i 时释放本次门禁锁', (scannerExit) => {
     const result = runGate('scripts/sonar-quality-gate.sh', { scannerExit })
     expect(result.status).toBe(scannerExit)
