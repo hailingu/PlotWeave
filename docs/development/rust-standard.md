@@ -3,7 +3,7 @@
 **Applies to**: any Rust crate in this repository (`src-tauri/**`). Like the
 root `AGENTS.md`, this file is written in English for agent interoperability.
 
-**Last reviewed**: 2026-09-30
+**Last reviewed**: 2026-10-03
 
 ## Required Reading
 
@@ -180,25 +180,35 @@ and [issue #504](https://github.com/hailingu/PlotWeave/issues/504).
   when it *implies* `test` — bare `test` or `all(test, …)`; `any(test,
   feature = …)` stays in as production-capable), and asserts the resulting
   dependency graph is acyclic. Before building edges the guard also runs the
-  collection-completeness audit (issue #469, `src/module_graph/audit.rs`):
-  every expanded `use` path whose first segment names an internal module (a
-  child of the current module or a structural
-  `crate`/`self`/`super` prefix — bare first segments are never judged
-  against root-module children, keeping the audit in agreement with
-  `resolve_use`, issue #470) must resolve to at least one target owner —
-  self-file owners count as resolved and only the self-loop edge is dropped —
-  otherwise the guard fails closed, and paths whose first segment names no
-  internal module are classified and counted as external crates; the real
-  repository asserts the internal-miss count is zero
-  (`src/module_graph/issue_469_tests.rs`), so a #426-style silent edge drop
-  cannot recur unnoticed. `NAME.rs` and `NAME/mod.rs` forms are both
+  collection audit (`src/module_graph/audit.rs`, issues #469 and
+  [#494](https://github.com/hailingu/PlotWeave/issues/494)). The finite
+  witness layer (`src/module_graph/audit_witness.rs`) derives required file
+  owners from the module tree and raw scan metadata without calling the
+  edge collector's `expand_segments` or `resolve_use`. It covers literal
+  module paths, structural `crate`/`self`/`super` prefixes, direct structural
+  module aliases and visible direct-child glob imports within the boundaries
+  in the #494 matrix below. The audit compares these required owners with
+  the collector's actual owner set: any missing owner fails closed and is
+  named in the diagnostic, even if an ancestor or another platform owner
+  was collected. Self-file owners remain required; only the eventual
+  self-loop edge is dropped. Paths with no collected owner and no supported
+  witness are counted as external or unwitnessed, not proven external.
+  Bare names never fall back to root-module children (issue #470).
+  The real repository assertion
+  (`real_repository_use_collection_is_complete` in
+  `src/module_graph/issue_469_tests.rs`) checks zero witnessed-owner gaps and
+  also checks an explicitly identified alias/glob grammar canary. The
+  canary checks those grammar shapes when production sources contain no
+  corresponding consumption; it is not evidence of production samples.
+  This catches the selected collector regressions, not every possible
+  scanner or resolver omission. `NAME.rs` and `NAME/mod.rs` forms are both
   supported; test-only files (`tests.rs`, `*_tests.rs`, `testutil.rs`, `conf`,
   `testhttp`) and the binary entry `main.rs` stay out of the graph by
   reachability; platform-gated modules count as a union over targets. The
   guard fails closed — a `mod` declaration without a matching file, a
   `super::` past the crate root, or a malformed `use` tree fails the test —
   and carries counterexample fixtures (an issue #146-shaped mutual dependency
-  must be reported) so it proves its own detection. Registered blind spots:
+  must be reported) that exercise cycle detection. Registered blind spots:
   `macro_rules!` bodies are skipped wholesale, so a `use` that exists only
   inside a macro definition is not collected; a bare first segment that names
   a root-level module (not a direct child of the current module) is always
@@ -406,12 +416,17 @@ glob target via `pub use` (only the prefix module's direct children
 resolve), and alias chains beyond the bounded recursion depth remain outside
 this text scanner's supported boundary; this repair adds no parser dependency.
 [Issue #469](https://github.com/hailingu/PlotWeave/issues/469) extends the
-same matrix to collection completeness: glob-introduced module names and
+same matrix to collection auditing: glob-introduced module names and
 chained aliases must form edges (closing sibling/deep-module cycles), chains
-through external crates stay external, and the audit layer fails closed when
-a first segment that names an internal module yields zero target owners —
-with the real repository asserting a zero internal-miss count plus a sampled
-bare-path facade edge. Its review round
+through external crates stay external. Its initial audit rejected zero-target
+results when the first segment named an internal module, and the real
+repository asserted a zero internal-miss count plus a sampled bare-path
+facade edge. That shared-resolver and first-segment check did not detect
+every dropped alias/glob edge or a missing child owner hidden by a nonempty
+ancestor result. Issue #494 replaces that audit contract with the finite
+independent owner witnesses documented below; the parser fixtures and
+historical verification records in this section remain point-in-time
+evidence. Issue #469's review round
 ([PR #479 review 5379907393](https://github.com/hailingu/PlotWeave/pull/479#pullrequestreview-5379907393))
 adds two rows: chained glob prefixes (`use crate::p::*; use a::*;`) resolve
 through earlier visible globs so the deep target forms its edge, and
@@ -524,6 +539,64 @@ negation), chained type re-exports and external-crate classification remain
 outside this repair; no new parser dependency or product data/UI contract is
 introduced. Documentation is reviewed structurally; no automated prose check
 is configured.
+
+### Issue #494 State And Invariant Matrix
+
+[Issue #494](https://github.com/hailingu/PlotWeave/issues/494) separates the
+audit's required-owner witnesses from the actual edge collector. The
+`audit_witness` module owns witness derivation from `ModuleTree` and raw
+`FileScan` metadata; `audit::audit_collection` owns comparison with
+`expand_segments` / `resolve_use` results before `build_graph` creates edges.
+`audit_collection_with` lets regression fixtures supply incomplete actual
+owner sets while retaining the real scan and tree. The real repository
+entry point, `real_repository_use_collection_is_complete`, also invokes
+`assert_import_canaries` to check absent production grammar using a separate,
+explicitly identified alias/glob topology. A failure after deleting bare
+alias/glob expansion is a canary result when no such use exists in the
+production tree; it does not establish a missing production edge.
+
+| State / precondition | Action / ordering | Observable outcome | Invariant | Verification |
+| --- | --- | --- | --- | --- |
+| Literal direct-child path or structural `crate` / `self` / `super` path reaches a file owner | Derive required owners before comparing a controlled incomplete collection | Missing owner is named; a nonempty ancestor result still fails | Every witnessed owner must remain in the collected set across path traversal | `ancestor_owner_does_not_mask_a_missing_child_owner` |
+| Direct module alias or glob-introduced direct child is consumed by a bare path | Keep real scan metadata but omit alias/glob expansion from the actual collector | Missing target produces an audit gap rather than an external classification | Required-owner derivation does not depend on the collector being checked | `missing_bare_alias_and_glob_targets_are_audit_failures` |
+| Supported alias/glob topology is collected normally | Derive witnesses and collect all target owners | No witnessed-owner gap | The comparison accepts a complete collection of the same supported use shapes | `complete_alias_and_glob_collection_satisfies_witnesses` |
+| A witnessed owner is the source file itself, or one of several platform owners | Compare full required-owner set before removing graph self-loops | A missing self owner or platform owner remains a gap | Self-loop filtering and platform union cannot weaken collection requirements | `missing_self_owner_is_an_audit_failure`, `partial_platform_owner_union_is_an_audit_failure` |
+| Inline module, lexical scope or restricted visibility excludes an alias/glob candidate | Apply raw scope and visibility metadata when deriving witnesses | No invented owner or false gap | Witnesses cannot widen module scope, visibility or bare-name root lookup | `scope_and_visibility_boundaries_do_not_invent_witnesses`; issue #470 external-boundary fixtures |
+| A deepest visible explicit import binding, including an imported type, shares the glob-introduced name | Conservatively withhold the independent glob witness | Existing resolver semantics remain responsible for the collected result | Audit conservatism cannot fabricate a required glob edge through explicit import shadowing | `explicit_type_binding_does_not_create_a_glob_witness`; existing issue #480 cfg/type fixtures |
+| Real production tree has no bare alias/glob consumption | Run the separately identified grammar canary, then audit production collection | Canary observes alias/glob expansion omissions; production count describes only production witnesses | An absent production sample cannot become completeness evidence through a zero count | `real_repository_use_collection_is_complete` and `assert_import_canaries`; collector mutation verification |
+| Alias/glob suffix stops at a name with a same-name module-level alias or any module-level glob in the reached namespace | Withhold the introduced-path witness rather than requiring a literal ancestor owner | No false gap when the collector legitimately reaches another owner | Ambiguous introduced suffixes cannot fabricate a required ancestor owner | `introduced_suffixes_remain_outside_independent_witnesses` |
+| Complex alias/glob chain or alias after a qualified namespace segment exceeds independent witness support | Retain the collector's result without claiming an independent final owner | No general collection proof is asserted | Guarantee strength remains bounded by the witness grammar | Existing chain/qualified-namespace graph-builder fixtures; independent witness gap retained |
+| Malformed `use`, `super` past the root, or a missing module file | Apply existing scan/tree/resolution failure paths before graph completion | Guard still fails closed | Audit comparison cannot swallow a parser or tree failure | Existing malformed-use and missing-module fixtures |
+
+The witness is a finite oracle, not a second Rust parser or a proof that all
+production dependencies were scanned. It shares module-tree construction,
+token scanning, cfg exclusion and use-tree parsing with the collector; an
+omission in those shared inputs can escape both. Independent support covers
+literal module traversal and directly identifiable structural alias/glob
+targets. Complex chains, qualified namespace aliases and the scanner blind
+spots listed above retain graph-builder fixture coverage without an
+independent completeness guarantee. In particular, the witness withholds a
+glob candidate when a deepest explicit same-name import binding exists,
+including conditional bindings, rather than duplicating the resolver's
+cfg-sensitive type-namespace decision. This rule does not independently
+classify local type declarations. Existing issue #480 fixtures verify the
+resolver's declaration and import decisions. For introduced alias/glob paths,
+an unresolved suffix name with a same-name module-level alias or any
+module-level glob in the reached namespace withholds the witness; the
+collector may legitimately reach another owner. An original literal path
+still witnesses its deepest literal module owner, without independently
+proving the final target of a qualified namespace alias.
+Paths counted as external without an owner witness may therefore include
+unsupported internal forms; the external count is a diagnostic category.
+
+The scan remains synchronous and stateless; retries, persistence, recovery and
+completion races do not apply. No product data or UI contract changes. The
+two incomplete-collection regressions above first failed with the old audit
+for the expected missing-gap behavior. Passing focused/routed checks and
+collector mutation outcomes must be recorded for the completed revision in
+the resolving PR. This document records the selected cases and boundaries;
+documentation review checks them against the implementation, and no automated
+prose check is configured.
 
 ## Before Writing Code
 

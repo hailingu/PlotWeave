@@ -1,5 +1,5 @@
 //! issue #469：模块图守卫的采集完整性——glob 引入与别名链两类合法
-//! use 形态不得静默丢边，真实仓库「首段命中内部模块名却零边」计数为 0。
+//! use 形态不得静默丢边；#494 的有限独立见证补足原分类计数的能力边界。
 
 use super::module_graph_tests::edges;
 use super::*;
@@ -375,11 +375,12 @@ fn internal_miss_requires_internal_hit_without_targets() {
     ));
 }
 
-/// 真实仓库采集完整性（issue #469）：首段命中内部模块名的 use 路径解析
-/// 缺口恒为 0；同时恢复真实图上的裸路径 facade 边采样（#426 修复后仅剩
+/// 真实仓库有限见证零缺口（issue #494），另运行明确的 alias/glob 语法 canary
+/// 覆盖生产图暂无的形态；同时恢复真实图上的裸路径 facade 边采样（#426 修复后仅剩
 /// 自包含夹具，df650db 移除了真实源码采样——本用例补回语义级采样）。
 #[test]
 fn real_repository_use_collection_is_complete() {
+    super::issue_494_tests::assert_import_canaries();
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut files: BTreeMap<ModuleKey, String> = BTreeMap::new();
     load_sources(&dir, &mut files, "");
