@@ -12,10 +12,33 @@ import {
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
+import {
+  gitFixtureEnvironment,
+  gitScenarioFixture,
+} from './git-scenario-fixture'
+import { writeGateRoutingProbe } from './gate-routing-probe'
 
 const repositoryRoot = resolve(import.meta.dirname, '..')
 const temporaryDirectories: string[] = []
+/** 操作 / 标记矩阵观察真实 Git 调用；记录与失败透传用例仍经过完整流水线。 */
+function repositoryFixture(fullGate: boolean) {
+  return gitScenarioFixture((root) => {
+    initScratchRepository(root)
+    seedHistory(root)
+    copyScenarioFiles(root)
+    if (!fullGate) {
+      writeGateRoutingProbe(resolve(root, 'scripts/sonar-quality-gate.sh'))
+    }
+  })
+}
+const repositories = repositoryFixture(false)
+const fullRepositories = repositoryFixture(true)
+
+afterAll(() => {
+  repositories.dispose()
+  fullRepositories.dispose()
+})
 
 /** 创建一个仅记录调用并返回受控结果的外部命令替身。 */
 function writeExecutable(path: string, body: string): void {
@@ -26,24 +49,29 @@ function writeExecutable(path: string, body: string): void {
 /** 在沙箱内初始化一个 git 仓库并返回其根目录。 */
 function initScratchRepository(sandbox: string): void {
   const git = (args: string[]): void => {
-    const result = spawnSync('git', args, { cwd: sandbox, encoding: 'utf8' })
+    const result = spawnSync('git', args, {
+      cwd: sandbox,
+      encoding: 'utf8',
+      env: gitFixtureEnvironment(),
+    })
     if (result.status !== 0) {
       throw new Error(`git ${args.join(' ')} 失败：${result.stderr}`)
     }
   }
   git(['init', '-q', '-b', 'main'])
+  git(['config', 'core.hooksPath', '/dev/null'])
   git(['config', 'user.email', 'gate@test'])
   git(['config', 'user.name', 'gate-test'])
 }
 
-/** e2e 场景沙箱：真实钩子 + 真实门禁脚本 + 记录并受控返回的替身命令。
- * 门禁调用次数以 sonar-scanner 替身的日志行计（每次完整门禁恰一次）。
+/** e2e 场景沙箱：真实钩子调用门禁探针或完整门禁脚本。
+ * 调用次数以探针或 sonar-scanner 替身的日志行计（每次调用恰一次）。
  * env 暴露给个别用例按需覆盖（如把版本化记录文件指进仓库内）。 */
 interface HookScenario {
   readonly env: NodeJS.ProcessEnv
   readonly git: (args: string[]) => { status: number | null; stderr: string }
   readonly root: string
-  readonly scannerRuns: () => number
+  readonly gateRuns: () => number
 }
 
 /** 播种基线历史（钩子未接线，不产生门禁调用）：main 两笔提交，side
@@ -56,7 +84,10 @@ function seedHistory(sandbox: string): void {
       ['add', '.'],
       ['commit', '-q', '-m', message],
     ] as const) {
-      const result = spawnSync('git', [...args], { cwd: sandbox })
+      const result = spawnSync('git', [...args], {
+        cwd: sandbox,
+        env: gitFixtureEnvironment(),
+      })
       if (result.status !== 0) {
         throw new Error(`播种提交失败：${message}`)
       }
@@ -67,6 +98,7 @@ function seedHistory(sandbox: string): void {
   const branch = (name: string): void => {
     const result = spawnSync('git', ['checkout', '-q', '-b', name, 'HEAD~1'], {
       cwd: sandbox,
+      env: gitFixtureEnvironment(),
     })
     if (result.status !== 0) {
       throw new Error(`播种分支失败：${name}`)
@@ -74,11 +106,17 @@ function seedHistory(sandbox: string): void {
   }
   branch('side')
   seed('g.txt', 'sidec', 'sidec')
-  spawnSync('git', ['checkout', '-q', 'main'], { cwd: sandbox })
+  spawnSync('git', ['checkout', '-q', 'main'], {
+    cwd: sandbox,
+    env: gitFixtureEnvironment(),
+  })
   branch('topic')
   seed('t1.txt', '1', 't1')
   seed('t2.txt', '2', 't2')
-  spawnSync('git', ['checkout', '-q', 'main'], { cwd: sandbox })
+  spawnSync('git', ['checkout', '-q', 'main'], {
+    cwd: sandbox,
+    env: gitFixtureEnvironment(),
+  })
 }
 
 /** 复制真实钩子与门禁脚本进沙箱（门禁在沙箱根运行），返回替身目录。 */
@@ -118,13 +156,12 @@ function copyScenarioFiles(sandbox: string): string {
 }
 
 /** 安装记录并受控返回的外部命令替身（npm / cargo-llvm-cov / 扫描器 /
- * curl），门禁调用次数以 sonar-scanner 替身日志行计。 */
+ * curl）；完整流水线以 sonar-scanner 替身日志行计数。 */
 function writeScenarioStubs(bin: string): void {
   writeExecutable(
     resolve(bin, 'npm'),
     String.raw`printf 'npm %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
 if [ "$*" = "run test:coverage" ]; then
-  mkdir -p "$(dirname "$PLOTWEAVE_COVERAGE_REPORT_PATH")"
   printf '%s\n' 'TN:' 'SF:src/example.ts' 'DA:1,1' 'end_of_record' > "$PLOTWEAVE_COVERAGE_REPORT_PATH"
 fi`,
   )
@@ -148,7 +185,6 @@ done`,
   writeExecutable(
     resolve(bin, 'sonar-scanner'),
     String.raw`printf 'sonar-scanner\n' >> "$PLOTWEAVE_TEST_LOG"
-mkdir -p "$(dirname "$PLOTWEAVE_SONAR_REPORT_PATH")"
 printf '%s\n' 'projectKey=PlotWeave' 'serverUrl=http://sonar.test' > "$PLOTWEAVE_SONAR_REPORT_PATH"`,
   )
   writeExecutable(
@@ -176,7 +212,7 @@ function scenarioEnvironment(
   qualityGateStatus: string,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
-    ...process.env,
+    ...gitFixtureEnvironment(),
     // 外层慢路径导出的根属于被推树；本场景的门禁只能读取自己的沙箱。
     PLOTWEAVE_GATE_REPOSITORY_ROOT: sandbox,
     PLOTWEAVE_CARGO_BIN: resolve(bin, 'cargo'),
@@ -210,21 +246,24 @@ function scenarioEnvironment(
 }
 
 /** 安装真实钩子与门禁脚本（复制进沙箱，门禁在沙箱根运行）并接线替身。 */
-function prepareHookScenario(qualityGateStatus = 'OK'): HookScenario {
-  const sandbox = mkdtempSync(resolve(tmpdir(), 'plotweave-gate-hooks-'))
+function prepareHookScenario(
+  qualityGateStatus = 'OK',
+  fullGate = false,
+): HookScenario {
+  const sandbox = (fullGate ? fullRepositories : repositories).create()
   temporaryDirectories.push(sandbox)
-  initScratchRepository(sandbox)
-  seedHistory(sandbox)
 
   const logPath = resolve(sandbox, 'calls.log')
-  const bin = copyScenarioFiles(sandbox)
+  const bin = resolve(sandbox, 'bin')
+  mkdirSync(resolve(sandbox, 'coverage'))
+  mkdirSync(resolve(sandbox, '.scannerwork'))
   writeScenarioStubs(bin)
   const env = scenarioEnvironment(sandbox, bin, logPath, qualityGateStatus)
 
   const wire = spawnSync(
     'git',
     ['config', 'core.hooksPath', resolve(sandbox, '.githooks')],
-    { cwd: sandbox },
+    { cwd: sandbox, env: gitFixtureEnvironment() },
   )
   if (wire.status !== 0) {
     throw new Error('接线 core.hooksPath 失败')
@@ -232,16 +271,17 @@ function prepareHookScenario(qualityGateStatus = 'OK'): HookScenario {
 
   const git = (args: string[]) =>
     spawnSync('git', args, { cwd: sandbox, encoding: 'utf8', env })
-  const scannerRuns = (): number => {
+  const gateRuns = (): number => {
     try {
       return readFileSync(logPath, { encoding: 'utf8' })
         .split('\n')
-        .filter((line) => line === 'sonar-scanner').length
+        .filter((line) => line === 'sonar-scanner' || line === 'gate-probe')
+        .length
     } catch {
       return 0
     }
   }
-  return { env, git, root: sandbox, scannerRuns }
+  return { env, git, root: sandbox, gateRuns }
 }
 
 afterEach(() => {
@@ -276,7 +316,7 @@ function prepareMarkerUnit(): {
       {
         cwd: sandbox,
         env: {
-          ...process.env,
+          ...gitFixtureEnvironment(),
           PLOTWEAVE_GATE_MARKER_PATH: options?.markerPath ?? markerPath,
           ...(options?.ttl === undefined
             ? {}
@@ -398,7 +438,7 @@ describe(
   () => {
     it('继承外层门禁根覆盖时，提交记录仍对应沙箱索引树', () => {
       vi.stubEnv('PLOTWEAVE_GATE_REPOSITORY_ROOT', repositoryRoot)
-      const scenario = prepareHookScenario()
+      const scenario = prepareHookScenario('OK', true)
 
       const commit = scenario.git(['commit', '--allow-empty', '-m', 'x'])
 
@@ -414,35 +454,35 @@ describe(
 )
 
 describe(
-  '产生提交的命令与门禁钩子（issue #404 探针自动化：每次操作恰一次完整门禁）',
+  '产生提交的命令与门禁钩子（issue #404 探针自动化：每次操作恰一次门禁调用）',
   { timeout: 30_000 },
   () => {
     it('git commit：pre-commit 执行门禁，prepare-commit-msg 经标记去重（合计 1 次）', () => {
       const scenario = prepareHookScenario()
       const result = scenario.git(['commit', '--allow-empty', '-m', 'x'])
       expect(result.status).toBe(0)
-      expect(scenario.scannerRuns()).toBe(1)
+      expect(scenario.gateRuns()).toBe(1)
     })
 
-    it('git revert：无前置门禁钩子，prepare-commit-msg 执行完整门禁（1 次）', () => {
+    it('git revert：无前置门禁钩子，prepare-commit-msg 执行门禁调用（1 次）', () => {
       const scenario = prepareHookScenario()
       const result = scenario.git(['revert', '--no-edit', 'HEAD'])
       expect(result.status).toBe(0)
-      expect(scenario.scannerRuns()).toBe(1)
+      expect(scenario.gateRuns()).toBe(1)
     })
 
-    it('git cherry-pick：prepare-commit-msg 执行完整门禁（1 次）', () => {
+    it('git cherry-pick：prepare-commit-msg 执行门禁调用（1 次）', () => {
       const scenario = prepareHookScenario()
       const result = scenario.git(['cherry-pick', 'side'])
       expect(result.status).toBe(0)
-      expect(scenario.scannerRuns()).toBe(1)
+      expect(scenario.gateRuns()).toBe(1)
     })
 
     it('git merge --no-ff：pre-merge-commit 执行门禁，prepare-commit-msg 去重（合计 1 次）', () => {
       const scenario = prepareHookScenario()
       const result = scenario.git(['merge', '--no-ff', 'side', '-m', 'm'])
       expect(result.status).toBe(0)
-      expect(scenario.scannerRuns()).toBe(1)
+      expect(scenario.gateRuns()).toBe(1)
     })
 
     it('git merge --squash + git commit：仅 pre-commit 一次门禁', () => {
@@ -450,14 +490,14 @@ describe(
       expect(scenario.git(['merge', '--squash', 'side']).status).toBe(0)
       const result = scenario.git(['commit', '-m', 'squashed'])
       expect(result.status).toBe(0)
-      expect(scenario.scannerRuns()).toBe(1)
+      expect(scenario.gateRuns()).toBe(1)
     })
   },
 )
 
 describe('提交与推送的门禁结论记录（issue #355）', { timeout: 30_000 }, () => {
   it('门禁通过的提交在待物化记录中留下可他验条目：记录树等于提交树，且不物化、不弄脏版本化文件（issue #355）', () => {
-    const scenario = prepareHookScenario()
+    const scenario = prepareHookScenario('OK', true)
     const result = scenario.git(['commit', '--allow-empty', '-m', 'x'])
     expect(result.status).toBe(0)
 
@@ -470,7 +510,7 @@ describe('提交与推送的门禁结论记录（issue #355）', { timeout: 30_0
     expect(lines).toHaveLength(1)
     const record = JSON.parse(lines[0] ?? '')
     // 核验路径：读者用 git rev-parse <commit>^{tree} 对照记录的 tree 即可
-    // 复核「该提交内容通过过完整门禁」；记录行在推送物化后进入版本化文件
+    // 复核「该提交内容通过过门禁调用」；记录行在推送物化后进入版本化文件
     const commitTree = scenario.git(['rev-parse', 'HEAD^{tree}']).stdout.trim()
     expect(record.tree).toBe(commitTree)
     expect(record.head).toMatch(/^[0-9a-f]{40}$/)
@@ -481,7 +521,7 @@ describe('提交与推送的门禁结论记录（issue #355）', { timeout: 30_0
   })
 
   it('推送门禁通过后物化待物化行到版本化文件并清空（issue #355）', () => {
-    const scenario = prepareHookScenario()
+    const scenario = prepareHookScenario('OK', true)
     expect(scenario.git(['commit', '--allow-empty', '-m', 'x']).status).toBe(0)
     // 裸远端触发 pre-push：门禁后再物化
     const remote = resolve(scenario.root, 'origin.git')
@@ -490,8 +530,8 @@ describe('提交与推送的门禁结论记录（issue #355）', { timeout: 30_0
 
     const push = scenario.git(['push', '-u', 'origin', 'main'])
     expect(push.status).toBe(0)
-    // 提交一次 + 推送一次，各恰一次完整门禁
-    expect(scenario.scannerRuns()).toBe(2)
+    // 提交一次 + 推送一次，各恰一次门禁调用
+    expect(scenario.gateRuns()).toBe(2)
     const history = readFileSync(
       resolve(scenario.root, 'gate-history.jsonl'),
       'utf8',
@@ -536,7 +576,7 @@ describe('门禁结论记录在重放时的隔离（PR #415）', { timeout: 30_0
     const rebase = git(['rebase', '--force-rebase', 'HEAD~2'])
     expect(rebase.status).toBe(0)
     expect(rebase.stderr).not.toContain('would be overwritten')
-    expect(scenario.scannerRuns()).toBe(4)
+    expect(scenario.gateRuns()).toBe(4)
     expect(
       git(['status', '--porcelain', '--', 'tracked-history.jsonl']).stdout,
     ).toBe('')
@@ -547,13 +587,13 @@ describe('门禁结论记录在重放时的隔离（PR #415）', { timeout: 30_0
 })
 
 describe('提交中止后的操作隔离（issue #429）', { timeout: 30_000 }, () => {
-  it('无暂存内容中止后，同树 --no-verify 提交仍执行完整门禁（issue #429）', () => {
+  it('无暂存内容中止后，同树 --no-verify 提交仍执行门禁调用（issue #429）', () => {
     const scenario = prepareHookScenario()
     const before = scenario.git(['rev-parse', 'HEAD']).stdout.trim()
     const aborted = scenario.git(['commit', '-m', 'nothing staged'])
     expect(aborted.status).not.toBe(0)
     expect(scenario.git(['rev-parse', 'HEAD']).stdout.trim()).toBe(before)
-    expect(scenario.scannerRuns()).toBe(1)
+    expect(scenario.gateRuns()).toBe(1)
 
     const next = scenario.git([
       'commit',
@@ -563,22 +603,22 @@ describe('提交中止后的操作隔离（issue #429）', { timeout: 30_000 }, 
       'next operation',
     ])
     expect(next.status).toBe(0)
-    expect(scenario.scannerRuns()).toBe(2)
+    expect(scenario.gateRuns()).toBe(2)
   })
 
-  it('编辑器中止后，同树后续提交各自执行一次完整门禁（issue #429）', () => {
+  it('编辑器中止后，同树后续提交各自执行一次门禁调用（issue #429）', () => {
     const scenario = prepareHookScenario()
     scenario.env.GIT_EDITOR = 'false'
     const before = scenario.git(['rev-parse', 'HEAD']).stdout.trim()
     expect(scenario.git(['commit', '--allow-empty']).status).not.toBe(0)
     expect(scenario.git(['rev-parse', 'HEAD']).stdout.trim()).toBe(before)
-    expect(scenario.scannerRuns()).toBe(1)
+    expect(scenario.gateRuns()).toBe(1)
     expect(existsSync(resolve(scenario.root, 'gate-tree.marker'))).toBe(false)
 
     expect(scenario.git(['commit', '--allow-empty', '-m', 'next']).status).toBe(
       0,
     )
-    expect(scenario.scannerRuns()).toBe(2)
+    expect(scenario.gateRuns()).toBe(2)
   })
 })
 
@@ -596,7 +636,7 @@ describe(
         'x',
       ])
       expect(result.status).toBe(0)
-      expect(scenario.scannerRuns()).toBe(1)
+      expect(scenario.gateRuns()).toBe(1)
     })
 
     it('标记单次消费：过检提交后的同树 --no-verify 提交不得复用标记（评审 4120128545）', () => {
@@ -604,7 +644,7 @@ describe(
       const first = scenario.git(['commit', '--allow-empty', '-m', 'x'])
       expect(first.status).toBe(0)
       // 首笔提交消费了自己写入的标记：紧随的同树（空提交）--no-verify
-      // 提交找不到可复用标记，prepare-commit-msg 执行完整门禁
+      // 提交找不到可复用标记，prepare-commit-msg 执行门禁调用
       const second = scenario.git([
         'commit',
         '--allow-empty',
@@ -613,7 +653,7 @@ describe(
         'y',
       ])
       expect(second.status).toBe(0)
-      expect(scenario.scannerRuns()).toBe(2)
+      expect(scenario.gateRuns()).toBe(2)
     })
 
     it('回退门禁后不写标记：连续两次同树 --no-verify 提交各执行门禁（评审 4120239723）', () => {
@@ -636,14 +676,14 @@ describe(
         'y',
       ])
       expect(second.status).toBe(0)
-      expect(scenario.scannerRuns()).toBe(2)
+      expect(scenario.gateRuns()).toBe(2)
     })
   },
 )
 
 describe('门禁失败阻止与 rebase 回退路径', { timeout: 30_000 }, () => {
   it('门禁失败（Quality Gate 非 OK）时 revert 被阻止且不产生提交', () => {
-    const scenario = prepareHookScenario('ERROR')
+    const scenario = prepareHookScenario('ERROR', true)
     const before = scenario.git(['rev-list', '--count', 'HEAD'])
     const result = scenario.git(['revert', '--no-edit', 'HEAD'])
     expect(result.status).not.toBe(0)
@@ -651,10 +691,10 @@ describe('门禁失败阻止与 rebase 回退路径', { timeout: 30_000 }, () =>
     expect(after.stdout.trim()).toBe(before.stdout.trim())
   })
 
-  it('git rebase 重放两个提交：每个重放提交各一次完整门禁（合计 2 次）', () => {
+  it('git rebase 重放两个提交：每个重放提交各一次门禁调用（合计 2 次）', () => {
     const scenario = prepareHookScenario()
     const result = scenario.git(['rebase', 'main', 'topic'])
     expect(result.status).toBe(0)
-    expect(scenario.scannerRuns()).toBe(2)
+    expect(scenario.gateRuns()).toBe(2)
   })
 })

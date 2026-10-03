@@ -7,7 +7,7 @@ dedup marker helper `scripts/gate-tree-marker.sh` (issue #404). Like the root
 `AGENTS.md` and the other standards under `docs/development/`, this file is
 written in English for agent interoperability.
 
-**Last reviewed**: 2026-10-02
+**Last reviewed**: 2026-10-03
 
 **Status**: Active — accepted decision. Recorded 2026-09-27, resolving
 [issue #356](https://github.com/hailingu/PlotWeave/issues/356); extended
@@ -138,6 +138,15 @@ currently do not — is recorded precisely in
 [锁恢复指引与诊断命令契约](quality-gate-lifecycle.md#门禁锁的人工恢复issue-430)的兼容入口。
 
 ## Status Of The Alternatives
+
+Issue [#498](https://github.com/hailingu/PlotWeave/issues/498) addresses the
+test workload inside the coverage phase without changing this gate decision.
+Git routing and marker tests use a gate boundary probe where repeating the
+whole pipeline does not verify an additional invariant. Dedicated pipeline
+tests and selected real Git integration cases still execute the full gate;
+the production hooks, coverage entry, thresholds, and test parallelism remain
+unchanged. Measurements, scenario choices, and preserved integration coverage
+are recorded in [门禁测试负载与夹具成本](test-workload.md).
 
 Options A and B were evaluated against the measurement below and are recorded
 here as **considered and declined**, not as pending work.

@@ -1,5 +1,6 @@
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   mkdtempSync,
   mkdirSync,
@@ -11,10 +12,43 @@ import { tmpdir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
+import {
+  gitFixtureEnvironment,
+  gitScenarioFixture,
+} from './git-scenario-fixture'
 
 const repositoryRoot = resolve(import.meta.dirname, '..')
 const temporaryDirectories: string[] = []
+const repositories = gitScenarioFixture((root) => {
+  const commands = [
+    ['init', '-q', '-b', 'main'],
+    [
+      '-c',
+      'core.hooksPath=/dev/null',
+      '-c',
+      'user.name=gate-test',
+      '-c',
+      'user.email=gate@test',
+      'commit',
+      '-q',
+      '--allow-empty',
+      '-m',
+      'seed',
+    ],
+  ]
+  for (const args of commands) {
+    const result = spawnSync('git', args, {
+      cwd: root,
+      encoding: 'utf8',
+      env: gitFixtureEnvironment(),
+    })
+    if (result.status !== 0)
+      throw new Error(`门禁测试仓库初始化失败：${result.stderr}`)
+  }
+})
+
+afterAll(() => repositories.dispose())
 
 type GateOptions = {
   coverageMode?:
@@ -88,6 +122,7 @@ function readTextFileBestEffort(path: string): string {
 
 /** runGate 的命令替身路径集（sandbox 内固定布局）。 */
 interface GateStubPaths {
+  readonly root: string
   readonly logPath: string
   readonly curlStdinPath: string
   readonly scannerTokenPath: string
@@ -133,7 +168,6 @@ if [ "$*" != "run test:coverage" ]; then
 fi
 case "$PLOTWEAVE_TEST_COVERAGE_MODE" in
   valid)
-    mkdir -p "$(dirname "$PLOTWEAVE_COVERAGE_REPORT_PATH")"
     printf '%s\n' 'TN:' 'SF:src/example.ts' 'DA:1,1' 'end_of_record' > "$PLOTWEAVE_COVERAGE_REPORT_PATH"
     ;;
   # partial（9/10 = 90.00%）与 atFloor（4/5 = 80.00%）均高于/恰在下限：
@@ -141,27 +175,21 @@ case "$PLOTWEAVE_TEST_COVERAGE_MODE" in
   #（issue #393）；belowFloor（1/2 = 50.00%）通过非空与已覆盖校验、
   # 只跌破产线复核。
   partial)
-    mkdir -p "$(dirname "$PLOTWEAVE_COVERAGE_REPORT_PATH")"
     printf '%s\n' 'TN:' 'SF:src/example.ts' 'DA:1,1' 'DA:2,1' 'DA:3,1' 'DA:4,1' 'DA:5,1' 'DA:6,1' 'DA:7,1' 'DA:8,1' 'DA:9,1' 'DA:10,0' 'end_of_record' > "$PLOTWEAVE_COVERAGE_REPORT_PATH"
     ;;
   atFloor)
-    mkdir -p "$(dirname "$PLOTWEAVE_COVERAGE_REPORT_PATH")"
     printf '%s\n' 'TN:' 'SF:src/example.ts' 'DA:1,1' 'DA:2,1' 'DA:3,1' 'DA:4,1' 'DA:5,0' 'end_of_record' > "$PLOTWEAVE_COVERAGE_REPORT_PATH"
     ;;
   belowFloor)
-    mkdir -p "$(dirname "$PLOTWEAVE_COVERAGE_REPORT_PATH")"
     printf '%s\n' 'TN:' 'SF:src/example.ts' 'DA:1,1' 'DA:2,0' 'end_of_record' > "$PLOTWEAVE_COVERAGE_REPORT_PATH"
     ;;
   empty)
-    mkdir -p "$(dirname "$PLOTWEAVE_COVERAGE_REPORT_PATH")"
     : > "$PLOTWEAVE_COVERAGE_REPORT_PATH"
     ;;
   malformed)
-    mkdir -p "$(dirname "$PLOTWEAVE_COVERAGE_REPORT_PATH")"
     printf '%s\n' 'TN:' 'end_of_record' > "$PLOTWEAVE_COVERAGE_REPORT_PATH"
     ;;
   uncovered)
-    mkdir -p "$(dirname "$PLOTWEAVE_COVERAGE_REPORT_PATH")"
     printf '%s\n' 'TN:' 'SF:src/example.ts' 'DA:1,0' 'end_of_record' > "$PLOTWEAVE_COVERAGE_REPORT_PATH"
     ;;
 esac`,
@@ -211,16 +239,16 @@ esac`,
 }
 
 /** sonar-scanner 替身（writeCommandStubs 拆分）：记录调用与令牌接收形
- * 态，受控退出，并写出 report-task.txt 供门禁读取。 */
-function writeScannerStub(paths: GateStubPaths): void {
+ * 态，受控退出，并写出 report-task.txt；默认根用例另记录实际工作目录。 */
+function writeScannerStub(paths: GateStubPaths, recordRoot = false): void {
   writeExecutable(
     paths.scannerPath,
     String.raw`printf 'sonar-scanner %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
+${recordRoot ? String.raw`printf 'scanner-root %s\n' "$PWD" >> "$PLOTWEAVE_TEST_LOG"` : ''}
 printf '%s' "$SONAR_TOKEN" > "$PLOTWEAVE_TEST_SCANNER_TOKEN"
 if [ "$PLOTWEAVE_TEST_SCANNER_EXIT" -ne 0 ]; then
   exit "$PLOTWEAVE_TEST_SCANNER_EXIT"
 fi
-mkdir -p "$(dirname "$PLOTWEAVE_SONAR_REPORT_PATH")"
 printf '%s\n' \
   'projectKey=PlotWeave' \
   'serverUrl=http://sonar.test' \
@@ -293,7 +321,8 @@ function gateEnvironment(
   options: GateOptions,
 ): NodeJS.ProcessEnv {
   const environment: NodeJS.ProcessEnv = {
-    ...process.env,
+    ...gitFixtureEnvironment(),
+    PLOTWEAVE_GATE_REPOSITORY_ROOT: paths.root,
     PLOTWEAVE_CARGO_LLVM_COV_BIN: paths.llvmCovPath,
     PLOTWEAVE_CARGO_BIN: paths.cargoPath,
     PLOTWEAVE_CURL_BIN: paths.curlPath,
@@ -340,10 +369,11 @@ function gateEnvironment(
 
 /** 为同步运行与强杀恢复场景分配同一个隔离门禁沙箱。 */
 function prepareGatePaths(options: GateOptions = {}): GateStubPaths {
-  const sandbox = mkdtempSync(resolve(tmpdir(), 'plotweave-sonar-gate-'))
+  const sandbox = repositories.create()
   temporaryDirectories.push(sandbox)
 
   const paths: GateStubPaths = {
+    root: sandbox,
     logPath: resolve(sandbox, 'calls.log'),
     curlStdinPath: resolve(sandbox, 'curl-stdin.txt'),
     scannerTokenPath: resolve(sandbox, 'scanner-token.txt'),
@@ -361,6 +391,8 @@ function prepareGatePaths(options: GateOptions = {}): GateStubPaths {
     cargoPath: resolve(sandbox, 'bin', 'cargo'),
   }
 
+  mkdirSync(dirname(paths.coveragePath))
+  mkdirSync(dirname(paths.reportPath))
   writeCommandStubs(paths, options)
 
   // 版本化与待物化文件预置：待物化默认为空（失败路径不追加时读到空
@@ -387,7 +419,7 @@ function runPreparedGate(
   options: GateOptions = {},
 ): GateRun {
   const result = spawnSync('sh', [resolve(repositoryRoot, target)], {
-    cwd: repositoryRoot,
+    cwd: paths.root,
     encoding: 'utf8',
     env: gateEnvironment(paths, options),
   })
@@ -415,6 +447,26 @@ function runPreparedGate(
 /** 在隔离的外部依赖边界下执行真实门禁脚本或 Git hook。 */
 function runGate(target: string, options: GateOptions = {}): GateRun {
   return runPreparedGate(target, prepareGatePaths(options), options)
+}
+
+/** 默认根回归使用夹具内的真实脚本链，避免根覆盖变量掩盖脚本目录推导。 */
+function copyFixtureGateScripts(root: string): string {
+  const scripts = resolve(root, 'scripts')
+  mkdirSync(scripts)
+  for (const file of [
+    'check-file-size.ts',
+    'check-rust-module-graph-guard.sh',
+    'check-static.sh',
+    'file-size-baseline.json',
+    'rust-coverage.sh',
+    'sonar-quality-gate.sh',
+  ]) {
+    copyFileSync(
+      resolve(repositoryRoot, 'scripts', file),
+      resolve(scripts, file),
+    )
+  }
+  return resolve(scripts, 'sonar-quality-gate.sh')
 }
 
 /** 等待测试门禁在持锁后的首个检查命令中暂停，超时或提前退出均报错。 */
@@ -762,6 +814,94 @@ it('统一门禁执行检查与覆盖率时不向被分析代码下发 Sonar 令
   expect(result.scannerToken).toBe('test_primary')
   expect(result.curlStdin).toContain('Authorization: Bearer test_primary')
 })
+
+it('门禁检查与记录绑定最小测试仓库，不扫描完整工作区（issue #498）', () => {
+  vi.stubEnv('PLOTWEAVE_GATE_REPOSITORY_ROOT', repositoryRoot)
+  const paths = prepareGatePaths()
+  const root = paths.root
+  vi.stubEnv('GIT_DIR', resolve(root, 'absent-git-dir'))
+  vi.stubEnv('GIT_INDEX_FILE', resolve(root, 'absent-index'))
+  const git = (args: string[]) => {
+    const result = spawnSync('git', args, {
+      cwd: root,
+      encoding: 'utf8',
+      env: gitFixtureEnvironment(),
+    })
+    expect(result.status, result.stderr).toBe(0)
+    return result.stdout.trim()
+  }
+  const result = runPreparedGate('scripts/sonar-quality-gate.sh', paths)
+  expect(result.status, result.stderr).toBe(0)
+  const record = JSON.parse(result.pending)
+  expect(record.head).toBe(git(['rev-parse', 'HEAD']))
+  expect(record.tree).toBe(git(['write-tree']))
+  mkdirSync(resolve(root, 'src'))
+  writeFileSync(resolve(root, 'src/oversized.ts'), '\n'.repeat(801))
+  writeFileSync(paths.logPath, '')
+  const blocked = runPreparedGate('scripts/sonar-quality-gate.sh', paths)
+  expect(blocked.status).toBe(1)
+  // 稳定诊断代码契约：docs/development/file-size-guard.md。
+  expect(blocked.stderr).toContain('SIZE_LIMIT_EXCEEDED')
+  expect(blocked.log).not.toContain('test:coverage')
+  expect(blocked.log).not.toContain('sonar-scanner')
+  expect(blocked.pending).toBe(result.pending)
+})
+
+it.each(['OK', 'ERROR'])(
+  '不覆盖根变量时，夹具内完整门禁从脚本目录推导根并处理 %s（PR #513）',
+  (qualityGateStatus) => {
+    const options = { qualityGateStatus }
+    const paths = prepareGatePaths(options)
+    const script = copyFixtureGateScripts(paths.root)
+    writeScannerStub(paths, true)
+    const caller = repositories.create()
+    mkdirSync(resolve(caller, 'src'))
+    writeFileSync(resolve(caller, 'src/oversized.ts'), '\n'.repeat(801))
+    const git = (args: string[]) => {
+      const output = spawnSync('git', args, {
+        cwd: paths.root,
+        encoding: 'utf8',
+        env: gitFixtureEnvironment(),
+      })
+      expect(output.status, output.stderr).toBe(0)
+      return output.stdout.trim()
+    }
+    writeFileSync(resolve(paths.root, 'story.txt'), 'script-local root')
+    git(['add', 'story.txt'])
+    const env = gateEnvironment(paths, options)
+    delete env.PLOTWEAVE_GATE_REPOSITORY_ROOT
+
+    const result = spawnSync('sh', [script], {
+      cwd: caller,
+      encoding: 'utf8',
+      env,
+    })
+    expect(result.status, result.stderr).toBe(
+      qualityGateStatus === 'OK' ? 0 : 1,
+    )
+    const log = readTextFileBestEffort(paths.logPath)
+    expect(log).toContain('npm run test:coverage')
+    expect(log).toContain('cargo-llvm-cov llvm-cov')
+    expect(log).toContain('sonar-scanner')
+    expect(log).toContain(`scanner-root ${paths.root}\n`)
+    // 稳定诊断代码契约：docs/development/file-size-guard.md。
+    expect(result.stdout).toContain('SIZE_CHECK_COMPLETE')
+    expect(result.stderr).not.toContain('SIZE_LIMIT_EXCEEDED')
+    if (qualityGateStatus === 'OK') {
+      expect(
+        JSON.parse(readTextFileBestEffort(paths.pendingPath)),
+      ).toMatchObject({
+        tree: git(['write-tree']),
+        head: git(['rev-parse', 'HEAD']),
+        qualityGate: 'OK',
+      })
+    } else {
+      expect(readTextFileBestEffort(paths.pendingPath)).toBe('')
+    }
+    expect(existsSync(paths.lockPath)).toBe(false)
+  },
+  30_000,
+)
 
 it.each(['primary', 'fallback'] as const)(
   '继承已导出的 sonar_token 时仍隔离 %s 凭据（评审 4162846722）',
