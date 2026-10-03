@@ -8,17 +8,18 @@ import {
 
 /**
  * 把当前会话转换为 ProjectDocument JSON。与保存共用字段透传和语义序列化，
- * 时间由调用方显式注入；相同输入稳定输出，不修改会话或触发保存。
+ * 文档时间由调用方经 project 元数据显式注入，不读取导出时钟。保留加载时的
+ * 修改时间；兼容输入缺省时取创建时间，再回退 epoch，保证同一会话跨日稳定。
+ * 不修改会话或触发保存；保存时的更新时间盖戳仍归 serializeProject 所有。
  */
 export function buildScriptJson(
   project: EditorProject,
   current: SessionDocPart,
-  exportedAt: Date,
 ): string {
   const document = serializeProject(
     sessionDoc(project, current),
     project.id,
-    exportedAt,
+    new Date(project.updatedAt ?? project.createdAt ?? 0),
   )
   return `${JSON.stringify(document, null, 2)}\n`
 }

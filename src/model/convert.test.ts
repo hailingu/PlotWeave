@@ -156,6 +156,22 @@ describe('serializeProject（会话文档 → ProjectDocument 落盘格式）', 
   })
 })
 
+describe('项目修改时间的加载与保存（#501）', () => {
+  // 加载若丢掉文档修改时间，JSON 导出只能重新盖戳，无法语义往返。
+  it('修改时间透传进会话；再次保存仍以保存时刻盖戳（#501）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    doc.project.updatedAt = '2026-08-27T12:00:00.000Z'
+    const restored = parseProject(doc)
+    expect(restored.warnings).toEqual([])
+    expect(restored.content).toHaveProperty(
+      'updatedAt',
+      '2026-08-27T12:00:00.000Z',
+    )
+    const saved = serializeProject(restored.content, 'p-1', NOW)
+    expect(saved.project.updatedAt).toBe('2026-08-28T12:00:00.000Z')
+  })
+})
+
 describe('parseProject（ProjectDocument → 会话文档，§11 归一化）', () => {
   it('往返一致：节点/边/设定集/视口/集标题还原；branch 边胶囊文案按 sourceHandle 派生', () => {
     const content = mkContent()
