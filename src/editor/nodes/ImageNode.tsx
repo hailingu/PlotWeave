@@ -1,8 +1,7 @@
-import { useEffect, useState } from 'react'
 import { type NodeProps } from '@xyflow/react'
 import { useNodeEdit } from '../nodeEdit'
 import { useImageJobs } from '../imagegen/context'
-import { projectAssets } from '../projectAssets'
+import { useAssetMedia } from './useAssetMedia'
 import { NodeSettingsPanel } from './settings/NodeSettingsPanel'
 import { NodeSettingsGear } from './settings/NodeSettingsGear'
 import type { AssetRef } from '../../model/document'
@@ -22,25 +21,7 @@ function OutputImage({
   readonly projectId: string
   readonly asset: AssetRef
 }) {
-  const [url, setUrl] = useState<string | null>(null)
-  const [failed, setFailed] = useState(false)
-  const assetId = asset.id
-  useEffect(() => {
-    let alive = true
-    setUrl(null)
-    setFailed(false)
-    projectAssets
-      .mediaUrl(projectId, assetId)
-      .then((u) => {
-        if (alive) setUrl(u)
-      })
-      .catch(() => {
-        if (alive) setFailed(true)
-      })
-    return () => {
-      alive = false
-    }
-  }, [projectId, assetId])
+  const { url, failed, reportFailure } = useAssetMedia(projectId, asset.id)
   if (failed)
     return (
       <span className="pw-image-empty">
@@ -53,7 +34,7 @@ function OutputImage({
       className="pw-image-out-img"
       src={url}
       alt={asset.relPath}
-      onError={() => setFailed(true)}
+      onError={reportFailure}
     />
   )
 }
