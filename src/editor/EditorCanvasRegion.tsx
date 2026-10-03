@@ -69,6 +69,8 @@ export interface EditorCanvasRegionProps {
   /** 连线实时校验与落线（useConnectionRules）。 */
   readonly isValidConnection: EditorGraphActions['connection']['isValidConnection']
   readonly onConnect: EditorGraphActions['connection']['onConnect']
+  /** 框架节点变更统一经过位置历史入口，键盘移动每批一步。 */
+  readonly onNodesChange: EditorGraphActions['drag']['onNodesChange']
   /** 节点拖拽历史（useNodeDragHistory）：整段拖拽记一步撤销。 */
   readonly onNodeDragStart: EditorGraphActions['drag']['onNodeDragStart']
   readonly onNodeDragStop: EditorGraphActions['drag']['onNodeDragStop']
@@ -103,7 +105,7 @@ function EditorCanvasRegionImpl(props: EditorCanvasRegionProps) {
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         proOptions={{ hideAttribution: true }}
-        onNodesChange={doc.onNodesChange}
+        onNodesChange={props.onNodesChange}
         onEdgesChange={doc.onEdgesChange}
         onConnect={props.onConnect}
         onNodeDragStart={props.onNodeDragStart}

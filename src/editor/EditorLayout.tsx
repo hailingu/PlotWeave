@@ -59,6 +59,7 @@ function toCanvasRegionProps(
     onCanvasDrop: props.graph.drop.onCanvasDrop,
     isValidConnection: props.graph.connection.isValidConnection,
     onConnect: props.graph.connection.onConnect,
+    onNodesChange: props.graph.drag.onNodesChange,
     onNodeDragStart: props.graph.drag.onNodeDragStart,
     onNodeDragStop: props.graph.drag.onNodeDragStop,
     onNodeContextMenu: props.graph.menu.onNodeContextMenu,
