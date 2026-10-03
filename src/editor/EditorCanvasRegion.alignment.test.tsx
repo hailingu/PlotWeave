@@ -1,6 +1,13 @@
 // @vitest-environment happy-dom
 /** 对齐与吸附经真实编辑器和 React Flow 生效；可见位置、历史与保存互相一致。 */
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { EditorView } from './EditorView'
 import type { EditorProjectContent } from './useEditorDocument'
@@ -124,6 +131,25 @@ async function dragElement(element: HTMLElement, delta: number): Promise<void> {
   })
 }
 
+describe('对齐控件语义（issue #500）', () => {
+  it('六个对齐按钮属于有可访问名称的分组', () => {
+    mount()
+    const group = screen.getByRole('group', { name: '选中节点对齐' })
+    expect(
+      within(group)
+        .getAllByRole('button')
+        .map((button) => button.getAttribute('aria-label')),
+    ).toEqual([
+      '左对齐',
+      '水平居中',
+      '右对齐',
+      '顶部对齐',
+      '垂直居中',
+      '底部对齐',
+    ])
+  })
+})
+
 describe('选中节点对齐', () => {
   it.each([
     ['左对齐', [-20, 10], [-20, 210]],
@@ -202,6 +228,22 @@ describe('选中节点对齐', () => {
 })
 
 describe('网格吸附', () => {
+  it('开启、关闭与再次开启时名称、悬停提示和按下状态同步', () => {
+    mount()
+    const toggle = screen.getByRole('button', { name: /^网格吸附/ })
+    expect(screen.getByRole('button', { name: '网格吸附：开' })).toBe(toggle)
+    expect(toggle.getAttribute('title')).toBe('网格吸附：开')
+    expect(toggle.getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(toggle)
+    expect(screen.getByRole('button', { name: '网格吸附：关' })).toBe(toggle)
+    expect(toggle.getAttribute('title')).toBe('网格吸附：关')
+    expect(toggle.getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(toggle)
+    expect(screen.getByRole('button', { name: '网格吸附：开' })).toBe(toggle)
+    expect(toggle.getAttribute('title')).toBe('网格吸附：开')
+    expect(toggle.getAttribute('aria-pressed')).toBe('true')
+  })
+
   it('默认吸附到点阵，关闭后自由拖动；每段拖动可一步撤销重做', async () => {
     vi.useFakeTimers()
     const initial = project()
@@ -213,7 +255,7 @@ describe('网格吸附', () => {
     expect(position(container, 'a')).toBe('translate(0px,0px)')
     fireEvent.click(screen.getByRole('button', { name: '重做' }))
     expect(position(container, 'a')).toBe('translate(44px,44px)')
-    const toggle = screen.getByRole('button', { name: '网格吸附' })
+    const toggle = screen.getByRole('button', { name: '网格吸附：开' })
     expect(toggle.getAttribute('aria-pressed')).toBe('true')
     fireEvent.click(toggle)
     expect(toggle.getAttribute('aria-pressed')).toBe('false')

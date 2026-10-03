@@ -1,5 +1,5 @@
-/** 选中节点对齐工具条；使用 React Flow 控件的键盘、主题与位置容器。 */
-import { Controls } from '@xyflow/react'
+/** 选中节点对齐分组；保留 React Flow 控件主题与位置容器。 */
+import { Panel } from '@xyflow/react'
 import type { CanvasAlignment } from './canvasAlignment'
 
 /** 对齐命令与中文可访问名称的固定映射。 */
@@ -45,12 +45,10 @@ export function CanvasAlignmentControls({
   readonly onAlignNodes: (alignment: CanvasAlignment) => void
 }) {
   return (
-    <Controls
+    <Panel
       position="top-center"
-      orientation="horizontal"
-      showZoom={false}
-      showFitView={false}
-      showInteractive={false}
+      className="react-flow__controls horizontal"
+      role="group"
       aria-label="选中节点对齐"
     >
       {ACTIONS.map(({ alignment, label, path }) => (
@@ -76,6 +74,6 @@ export function CanvasAlignmentControls({
           </svg>
         </button>
       ))}
-    </Controls>
+    </Panel>
   )
 }
