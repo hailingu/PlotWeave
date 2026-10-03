@@ -161,13 +161,15 @@ function CanvasLayoutControl({
   readonly snapToGrid: boolean
   readonly onToggleSnap: () => void
 }) {
+  const snapLabel = `网格吸附：${snapToGrid ? '开' : '关'}`
   return (
-    <Controls>
+    /* Controls 不转发 role；清空其无 role 容器的默认标签，保留各按钮名称。 */
+    <Controls aria-label="">
       <button
         type="button"
         className="react-flow__controls-button"
-        title="网格吸附"
-        aria-label="网格吸附"
+        title={snapLabel}
+        aria-label={snapLabel}
         aria-pressed={snapToGrid}
         onClick={onToggleSnap}
       >

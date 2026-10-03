@@ -172,7 +172,7 @@ describe('键盘移动历史（issue #496）', () => {
       mount()
       selectNode()
       if (!snap)
-        fireEvent.click(screen.getByRole('button', { name: '网格吸附' }))
+        fireEvent.click(screen.getByRole('button', { name: '网格吸附：开' }))
       fireEvent.keyDown(node(), { key, shiftKey })
       expect(node().style.transform).toBe(expected)
       fireEvent.click(screen.getByRole('button', { name: '撤销' }))
