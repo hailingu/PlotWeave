@@ -200,9 +200,13 @@ PlotWeave 当前支持 **macOS**，**不支持 Windows**；范围包括应用运
 提交/推送门禁与发行，而非仅某个安装脚本的限制。构建与 CI 只在 macOS 上验证；
 Linux 无本仓库构建与测试覆盖，Unix 进程组能力本身不构成平台支持承诺。
 
-Windows 上任何触发慢路径的推送都会在安装监督器处以
+安装期限配置有效时，Windows 上触发慢路径的推送会在安装监督器处以
 `PRE_PUSH_INSTALL_PLATFORM_UNSUPPORTED` 非零退出，阻止后续门禁及推送，
-由钩子清理临时 worktree。干净 HEAD 等条件仍按原判定允许快路径分派，
+由钩子清理临时 worktree。安装期限校验先于平台检查：若
+`PLOTWEAVE_NPM_INSTALL_TIMEOUT` 无效，则先以
+`PRE_PUSH_INSTALL_TIMEOUT_INVALID` 非零退出，不再报告平台诊断；同样不启动
+安装，阻止后续门禁与推送，并由钩子清理临时 worktree。
+干净 HEAD 等条件仍按原判定允许快路径分派，
 但未触发监督器不代表 Windows 获得支持，也不保证其完整门禁可运行。
 贡献者须换到受支持的 macOS 环境执行完整门禁并推送，不得绕过钩子。
 Windows 没有构建或行为验证路径；未来若改变支持范围，须另行获得所有者
