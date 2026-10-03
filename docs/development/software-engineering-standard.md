@@ -186,6 +186,9 @@ Apply the guardrails as follows:
 - Start with the simplest direct design that preserves the required boundary.
   Introduce an abstraction only for demonstrated variation, independent
   lifecycle, external I/O, reusable policy, or a necessary test seam.
+- Follow the [duplication policy and measured baseline](duplication-policy.md)
+  (issue #504) when adding or extracting repeated implementations; distinguish
+  source CPD metrics from approximate test-scaffolding similarity.
 - Interfaces, protocols, and traits belong at the boundary that consumes the
   behavior. Do not create one interface per concrete type or a factory for a
   single direct construction path without an identified variation.
