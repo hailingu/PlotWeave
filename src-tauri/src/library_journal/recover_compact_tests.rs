@@ -1,10 +1,11 @@
 //! 删除日志折叠回归（issue #359、#421）：终态条目退役与计数/字节量级
 //! 同文件提交，响应及恢复成本有界；整体清理归零，证据和非权威态不折叠。
-//! 共享 helper 经 `use super::recover_tests::*` 复用。
+//! 折叠场景复用 recover_tests，原始磁盘输入复用 crate::library_fixture。
 
 use super::recover::CleanupKind;
 use super::recover_tests::*;
 use super::*;
+use crate::library_fixture::*;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;

@@ -45,6 +45,10 @@ mod store;
 #[cfg(test)]
 mod conf;
 
+/// 图库、恢复与媒体协议共享磁盘夹具（issue #504；仅测试构建）。
+#[cfg(test)]
+mod library_fixture;
+
 /// Rust 模块依赖图无环守卫（issue #399；仅测试构建参与编译，见模块文档）。
 #[cfg(test)]
 mod module_graph;

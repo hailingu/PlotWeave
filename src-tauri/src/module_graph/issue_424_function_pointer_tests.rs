@@ -1,5 +1,6 @@
 //! issue #424 的 fn 参数类型门控、列表闭合与生产扫描恢复回归。
 
+use super::dependency_fixture::assert_production_cycle;
 use super::module_graph_tests::edges;
 use super::*;
 
@@ -71,14 +72,7 @@ fn last_test_function_parameters_preserve_production_bodies() {
         "fn f<T: Trait<{ use crate::c::C; 1 }>>(#[cfg(test)] probe: [u8; { use crate::b::B; 1 }]) { #[cfg(test)] let less = 1 < 2; use crate::c::C; }",
         "fn r#fn(#[cfg(test)] probe: [u8; { use crate::b::B; 1 }]) { use crate::c::C; }",
     ] {
-        let graph = edges(&[
-            ("lib.rs", "mod a; mod b; mod c;"),
-            ("a.rs", item),
-            ("b.rs", "pub struct B;"),
-            ("c.rs", "use crate::a::A;"),
-        ]);
-        assert_eq!(graph["a.rs"], BTreeSet::from(["c.rs".into()]), "{item}");
-        assert_eq!(cycles_of(&graph).len(), 1, "函数参数之后的生产真环必须检出：{item}");
+        assert_production_cycle(item, item);
     }
 }
 

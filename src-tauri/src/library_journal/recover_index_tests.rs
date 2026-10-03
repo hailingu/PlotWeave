@@ -1,109 +1,12 @@
 //! 库删除恢复回归测试（issue #25）索引/Record 适配部分：冲突标记、
 //! 冲突期导入/媒体字节复核、共享引用、指向保留目录的条目净化。
-//! helper 为 recover_tests.rs 的本地副本（Rust 测试模块惯例）。
+//! 原始磁盘夹具复用 crate::library_fixture；恢复断言仍由本模块拥有。
 
 use super::*;
+use crate::library_fixture::*;
 
-use crate::store::new_id;
-use cap_std::ambient_authority;
-use cap_std::fs::Dir as CapDir;
-use serde_json::{json, Map, Value};
+use serde_json::{json, Map};
 use std::fs;
-use std::path::{Path, PathBuf};
-
-fn cap(p: &Path) -> CapDir {
-    CapDir::open_ambient_dir(p, ambient_authority()).expect("打开测试根句柄")
-}
-
-fn temp_fixture() -> (PathBuf, PathBuf) {
-    let root = std::env::temp_dir().join(format!("pw-journal-test-{}", new_id()));
-    fs::create_dir_all(root.join("library").join("assets")).expect("创建临时库目录");
-    (root.join("library"), root)
-}
-
-fn cleanup(root: &Path) {
-    let _ = fs::remove_dir_all(root);
-}
-
-/// 最小合法索引条目（目标 Record 形状，含 §7.2 必填 source/ISO createdAt；
-/// relPath 按需投毒）。
-fn entry(id: &str, rel: &str) -> Value {
-    json!({
-        "id": id,
-        "name": "x",
-        "kind": "other",
-        "mime": "image/png",
-        "relPath": rel,
-        "source": "upload",
-        "createdAt": "2026-01-01T00:00:00.000Z",
-        "tags": [],
-    })
-}
-
-/// 把最小条目数组包装为目标 Record 形状（`{"byId": {id: entry}}`）。
-fn by_id(entries: impl IntoIterator<Item = Value>) -> Value {
-    let mut m = serde_json::Map::new();
-    for e in entries {
-        m.insert(e["id"].as_str().unwrap().to_string(), e);
-    }
-    json!({ "byId": m })
-}
-
-fn write_index_raw(library: &Path, index: &Value) {
-    fs::write(
-        library.join("library.json"),
-        serde_json::to_string(index).expect("序列化"),
-    )
-    .expect("写索引");
-}
-
-fn write_journal_raw(library: &Path, entries: Value) {
-    fs::write(
-        library.join(JOURNAL_FILE_NAME),
-        serde_json::to_string(&entries).expect("序列化"),
-    )
-    .expect("写日志");
-}
-
-fn file_identity(p: &Path) -> (u64, u64) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        let m = fs::metadata(p).expect("读文件元数据");
-        (m.dev(), m.ino())
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = p;
-        (0, 0)
-    }
-}
-
-fn journal_entry_json(
-    id: &str,
-    asset_id: &str,
-    rel: &str,
-    trash: &str,
-    dev: u64,
-    ino: u64,
-) -> Value {
-    json!({
-        "id": id,
-        "assetId": asset_id,
-        "relPath": rel,
-        "identity": { "dev": dev, "ino": ino },
-        "trashName": trash,
-    })
-}
-
-/// 读取对象或旧数组日志中的事务条目，保持索引恢复断言的条目语义。
-fn read_journal_raw(library: &Path) -> Value {
-    let journal: Value = serde_json::from_str(
-        &fs::read_to_string(library.join(JOURNAL_FILE_NAME)).expect("读回日志"),
-    )
-    .expect("日志 JSON");
-    journal.get("entries").cloned().unwrap_or(journal)
-}
 
 /// 中断恢复③（冲突期）：索引仍含条目、隔离项身份一致、但原路径被后来
 /// 文件占用 → 保留日志与隔离项，条目标记冲突不可用；后来文件不受影响。

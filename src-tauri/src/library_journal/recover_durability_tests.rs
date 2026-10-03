@@ -1,8 +1,8 @@
 //! issue #421：折叠退役与累计指标在写入故障及重试之间保持一致；故障只
 //! 替换指定系统调用，其余日志落盘、文件身份与恢复均使用真实文件系统。
 
-use super::recover_tests::*;
 use super::*;
+use crate::library_fixture::*;
 use crate::store::atomic_write_faults::{Injection, Stage};
 use serde_json::{json, Value};
 use std::fs;

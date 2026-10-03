@@ -1,5 +1,6 @@
 //! issue #424 的泛型参数默认类型、值默认表达式与生产扫描恢复回归。
 
+use super::dependency_fixture::{assert_production_cycle, assert_test_exclusion};
 use super::module_graph_tests::edges;
 use super::*;
 
@@ -22,14 +23,7 @@ fn test_generic_type_defaults_do_not_create_production_cycles() {
         "struct S<U, #[allow(dead_code)] #[cfg(all(test, unix))] T = Wrapper<Pair<u8, [u8; { use crate::b::B; 1 }]>>>(U, #[cfg(test)] T);",
         "#[cfg(not(test))] type T = (); type Alias<U, #[cfg(test)] T = Pair<u8, [u8; { use crate::b::B; 1 }]>> = (U, T);",
     ] {
-        let graph = edges(&[
-            ("lib.rs", "mod a; mod b; mod c;"),
-            ("a.rs", &format!("{item} use crate::c::C;")),
-            ("b.rs", "use crate::a::A;"),
-            ("c.rs", "pub struct C;"),
-        ]);
-        assert_eq!(graph["a.rs"], BTreeSet::from(["c.rs".into()]), "{item}");
-        assert!(cycles_of(&graph).is_empty(), "泛型默认类型不得制造假环：{item}");
+        assert_test_exclusion(&format!("{item} use crate::c::C;"), item);
     }
 }
 
@@ -49,14 +43,7 @@ fn last_test_generic_parameters_preserve_production_scanning() {
         "fn f<#[cfg(test)] T: Fn() -> Pair<u8, [u8; { use crate::b::B; 1 }]>>() { use crate::c::C; }",
         "fn f<#[cfg(test)] T: Trait<[u8; { use crate::b::B; 1 }]>>() -> [u8; { use crate::c::C; 1 }] { [] }",
     ] {
-        let graph = edges(&[
-            ("lib.rs", "mod a; mod b; mod c;"),
-            ("a.rs", item),
-            ("b.rs", "pub struct B;"),
-            ("c.rs", "use crate::a::A;"),
-        ]);
-        assert_eq!(graph["a.rs"], BTreeSet::from(["c.rs".into()]), "{item}");
-        assert_eq!(cycles_of(&graph).len(), 1, "参数之后的生产真环必须检出：{item}");
+        assert_production_cycle(item, item);
     }
 }
 
@@ -74,14 +61,7 @@ fn test_const_and_lifetime_parameters_preserve_production_scanning() {
         "trait Trait<U, #[cfg(test)] const N: usize = { use crate::b::B; 1 }> { fn production() { use crate::c::C; } }",
         "struct S<U, #[cfg(test)] const FLAG: bool = { let less = 1 < 2; use crate::b::B; less }>(U); use crate::c::C;",
     ] {
-        let graph = edges(&[
-            ("lib.rs", "mod a; mod b; mod c;"),
-            ("a.rs", item),
-            ("b.rs", "pub struct B;"),
-            ("c.rs", "use crate::a::A;"),
-        ]);
-        assert_eq!(graph["a.rs"], BTreeSet::from(["c.rs".into()]), "{item}");
-        assert_eq!(cycles_of(&graph).len(), 1, "const/lifetime 之后真环必须检出：{item}");
+        assert_production_cycle(item, item);
     }
 }
 

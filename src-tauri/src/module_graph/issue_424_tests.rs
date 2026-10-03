@@ -1,5 +1,6 @@
 //! issue #424 的泛型测试项排除、生产扫描恢复与平台别名并集回归。
 
+use super::dependency_fixture::{assert_production_cycle, assert_test_exclusion};
 use super::module_graph_tests::edges;
 use super::*;
 
@@ -12,14 +13,7 @@ fn generic_test_items_do_not_create_production_cycles() {
         "#[cfg(test)] pub(crate) fn helper<T, U>() { use crate::b::B; }",
         "#[cfg(test)] impl<T, U> Pair<T, U> { fn helper() { use crate::b::B; } }",
     ] {
-        let graph = edges(&[
-            ("lib.rs", "mod a; mod b; mod c;"),
-            ("a.rs", &format!("{item} use crate::c::C;")),
-            ("b.rs", "use crate::a::A;"),
-            ("c.rs", "pub struct C;"),
-        ]);
-        assert_eq!(graph["a.rs"], BTreeSet::from(["c.rs".into()]));
-        assert!(cycles_of(&graph).is_empty(), "测试依赖不得制造生产环");
+        assert_test_exclusion(&format!("{item} use crate::c::C;"), item);
     }
 }
 
@@ -36,14 +30,7 @@ fn test_only_unions_do_not_create_production_cycles() {
         "#[cfg(test)] union U<T> where T: Copy + Fn() -> Result<u8, u16> { t: T, probe: [u8; { use crate::b::B; 1 }] }",
         "#[cfg(test)] union U { probe: [u8; { use crate::b::B; 1 }] }",
     ] {
-        let graph = edges(&[
-            ("lib.rs", "mod a; mod b; mod c;"),
-            ("a.rs", &format!("{item} use crate::c::C;")),
-            ("b.rs", "use crate::a::A;"),
-            ("c.rs", "pub struct C;"),
-        ]);
-        assert_eq!(graph["a.rs"], BTreeSet::from(["c.rs".into()]), "{item}");
-        assert!(cycles_of(&graph).is_empty(), "测试 union 不得制造生产环：{item}");
+        assert_test_exclusion(&format!("{item} use crate::c::C;"), item);
     }
 }
 
@@ -58,14 +45,7 @@ fn generic_test_where_clauses_exclude_body_dependencies() {
         "#[cfg(test)] trait Helper<T, U> where T: Copy, U: Copy { fn helper() { use crate::b::B; } }",
         "#[cfg(test)] type Alias<T, U> where T: Copy, U: Copy = Pair<T, [u8; { use crate::b::B; 1 }]>;",
     ] {
-        let graph = edges(&[
-            ("lib.rs", "mod a; mod b; mod c;"),
-            ("a.rs", &format!("{item} use crate::c::C;")),
-            ("b.rs", "use crate::a::A;"),
-            ("c.rs", "pub struct C;"),
-        ]);
-        assert_eq!(graph["a.rs"], BTreeSet::from(["c.rs".into()]), "{item}");
-        assert!(cycles_of(&graph).is_empty(), "{item}");
+        assert_test_exclusion(&format!("{item} use crate::c::C;"), item);
     }
 }
 
@@ -80,14 +60,7 @@ fn union_test_fields_preserve_following_production_cycles() {
         "union U<T> where T: Copy + Fn() -> Result<u8, u16> { marker: T, #[cfg(test)] probe: [u8; { use crate::b::B; 1 }] }",
         "union U { marker: u8, #[cfg(test)] probe: fn() -> Pair<u8, [u8; { use crate::b::B; 1 }]> }",
     ] {
-        let graph = edges(&[
-            ("lib.rs", "mod a; mod b; mod c;"),
-            ("a.rs", &format!("{item} use crate::c::C;")),
-            ("b.rs", "pub struct B;"),
-            ("c.rs", "use crate::a::A;"),
-        ]);
-        assert_eq!(graph["a.rs"], BTreeSet::from(["c.rs".into()]), "{item}");
-        assert_eq!(cycles_of(&graph).len(), 1, "后续生产真环必须检出：{item}");
+        assert_production_cycle(&format!("{item} use crate::c::C;"), item);
     }
 }
 
@@ -106,14 +79,7 @@ fn union_identifiers_preserve_production_scanning() {
         "#[cfg(test)] struct union<T, U> { probe: [u8; { use crate::b::B; 1 }], t: T, u: U }",
         "struct S { #[cfg(test)] union: [u8; { use crate::b::B; 1 }], production: [u8; { use crate::c::C; 1 }] }",
     ] {
-        let graph = edges(&[
-            ("lib.rs", "mod a; mod b; mod c;"),
-            ("a.rs", &format!("fn f() {{ {item} use crate::c::C; }}")),
-            ("b.rs", "pub struct B;"),
-            ("c.rs", "use crate::a::A;"),
-        ]);
-        assert_eq!(graph["a.rs"], BTreeSet::from(["c.rs".into()]), "{item}");
-        assert_eq!(cycles_of(&graph).len(), 1, "{item}");
+        assert_production_cycle(&format!("fn f() {{ {item} use crate::c::C; }}"), item);
     }
 }
 
@@ -125,14 +91,7 @@ fn union_bindings_do_not_create_field_contexts() {
         "fn f() { match value { union if <T as Trait>::predicate() => { #[cfg(test)] value < limit; use crate::c::C; }, _ => () } }",
         "fn f<T>() -> union where <T as Trait>::Assoc: Bound { #[cfg(test)] value < limit; use crate::c::C; 0 }",
     ] {
-        let graph = edges(&[
-            ("lib.rs", "mod a; mod b; mod c;"),
-            ("a.rs", item),
-            ("b.rs", "pub struct B;"),
-            ("c.rs", "use crate::a::A;"),
-        ]);
-        assert_eq!(graph["a.rs"], BTreeSet::from(["c.rs".into()]), "{item}");
-        assert_eq!(cycles_of(&graph).len(), 1, "{item}");
+        assert_production_cycle(item, item);
     }
 }
 
@@ -158,17 +117,10 @@ fn prefixed_test_closures_preserve_following_production_cycles() {
         "#[cfg(test)] return || return move |x: Result<u8, u16>| { use crate::b::B; x };",
         "#[cfg(test)] break 'label || |x: u32| x < limit;",
     ] {
-        let graph = edges(&[
-            ("lib.rs", "mod a; mod b; mod c;"),
-            (
-                "a.rs",
-                &format!("fn f() {{ loop {{ {item} use crate::c::C; }} }}"),
-            ),
-            ("b.rs", "pub struct B;"),
-            ("c.rs", "use crate::a::A;"),
-        ]);
-        assert_eq!(graph["a.rs"], BTreeSet::from(["c.rs".into()]), "{item}");
-        assert_eq!(cycles_of(&graph).len(), 1, "后续生产真环必须检出：{item}");
+        assert_production_cycle(
+            &format!("fn f() {{ loop {{ {item} use crate::c::C; }} }}"),
+            item,
+        );
     }
 }
 
@@ -189,14 +141,7 @@ fn control_flow_test_closures_preserve_production_cycles() {
         "#[cfg(test)] return match |x: u32| x < limit { _ => { use crate::b::B; } };",
         "#[cfg(test)] match || |x: Result<u8, u16>| { use crate::b::B; x } { _ => { use crate::b::B; } };",
     ] {
-        let graph = edges(&[
-            ("lib.rs", "mod a; mod b; mod c;"),
-            ("a.rs", &format!("fn f() {{ {item} use crate::c::C; }}")),
-            ("b.rs", "pub struct B;"),
-            ("c.rs", "use crate::a::A;"),
-        ]);
-        assert_eq!(graph["a.rs"], BTreeSet::from(["c.rs".into()]), "{item}");
-        assert_eq!(cycles_of(&graph).len(), 1, "后续生产真环必须检出：{item}");
+        assert_production_cycle(&format!("fn f() {{ {item} use crate::c::C; }}"), item);
     }
 }
 
@@ -224,14 +169,7 @@ fn let_condition_test_closures_preserve_production_cycles() {
         "#[cfg(test)] if let f = |x: u32| x < limit { use crate::b::B; } else if let g = |x: u32, y: u8| -> Result<u32, ()> { use crate::b::B; Ok(x) } { use crate::b::B; }",
         "#[cfg(test)] if let Some(f) = Some(|x: u32, y: u8| { use crate::b::B; x < limit }) { use crate::b::B; }",
     ] {
-        let graph = edges(&[
-            ("lib.rs", "mod a; mod b; mod c;"),
-            ("a.rs", &format!("fn f() {{ {item} use crate::c::C; }}")),
-            ("b.rs", "pub struct B;"),
-            ("c.rs", "use crate::a::A;"),
-        ]);
-        assert_eq!(graph["a.rs"], BTreeSet::from(["c.rs".into()]), "{item}");
-        assert_eq!(cycles_of(&graph).len(), 1, "后续生产真环必须检出：{item}");
+        assert_production_cycle(&format!("fn f() {{ {item} use crate::c::C; }}"), item);
     }
 }
 
@@ -247,14 +185,7 @@ fn control_flow_closures_resume_at_following_blocks() {
         "#[cfg(test)] if let f = |x: u32| { use crate::b::B; x < limit } { use crate::b::B; } { use crate::c::C; }",
         "#[cfg(test)] if let Some(f) = Some(|x: u32| x < limit) { use crate::b::B; } { use crate::c::C; }",
     ] {
-        let graph = edges(&[
-            ("lib.rs", "mod a; mod b; mod c;"),
-            ("a.rs", &format!("fn f() {{ {item} }}")),
-            ("b.rs", "pub struct B;"),
-            ("c.rs", "use crate::a::A;"),
-        ]);
-        assert_eq!(graph["a.rs"], BTreeSet::from(["c.rs".into()]), "{item}");
-        assert_eq!(cycles_of(&graph).len(), 1, "独立生产块的真环必须检出：{item}");
+        assert_production_cycle(&format!("fn f() {{ {item} }}"), item);
     }
 }
 
@@ -565,13 +496,6 @@ fn const_test_closures_preserve_following_production_blocks() {
         "#[cfg(test)] while let _ = |_: ()| const {} { use crate::b::B; break; } { use crate::c::C; }",
         "#[cfg(test)] if let _ = |_: ()| const { use crate::b::B; () } { use crate::b::B; } else { use crate::b::B; } { use crate::c::C; }",
     ] {
-        let graph = edges(&[
-            ("lib.rs", "mod a; mod b; mod c;"),
-            ("a.rs", &format!("fn f() {{ {item} }}")),
-            ("b.rs", "pub struct B;"),
-            ("c.rs", "use crate::a::A;"),
-        ]);
-        assert_eq!(graph["a.rs"], BTreeSet::from(["c.rs".into()]), "{item}");
-        assert_eq!(cycles_of(&graph).len(), 1, "const 后生产块的真环必须检出：{item}");
+        assert_production_cycle(&format!("fn f() {{ {item} }}"), item);
     }
 }

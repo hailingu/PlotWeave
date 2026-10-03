@@ -5,66 +5,10 @@
 use super::recover::CleanupKind;
 use super::*;
 use crate::library::put_asset_with;
-use crate::store::new_id;
-use cap_std::ambient_authority;
-use cap_std::fs::Dir as CapDir;
+use crate::library_fixture::*;
 use serde_json::{json, Value};
 use std::fs;
-use std::path::{Path, PathBuf};
-
-pub(crate) fn cap(p: &Path) -> CapDir {
-    CapDir::open_ambient_dir(p, ambient_authority()).expect("打开测试根句柄")
-}
-
-pub(crate) fn temp_fixture() -> (PathBuf, PathBuf) {
-    let root = std::env::temp_dir().join(format!("pw-journal-test-{}", new_id()));
-    fs::create_dir_all(root.join("library").join("assets")).expect("创建临时库目录");
-    (root.join("library"), root)
-}
-
-pub(crate) fn cleanup(root: &Path) {
-    let _ = fs::remove_dir_all(root);
-}
-
-/// 最小合法索引条目（目标 Record 形状，含 §7.2 必填 source/ISO createdAt；
-/// relPath 按需投毒）。
-pub(crate) fn entry(id: &str, rel: &str) -> Value {
-    json!({
-        "id": id,
-        "name": "x",
-        "kind": "other",
-        "mime": "image/png",
-        "relPath": rel,
-        "source": "upload",
-        "createdAt": "2026-01-01T00:00:00.000Z",
-        "tags": [],
-    })
-}
-
-/// 把最小条目数组包装为目标 Record 形状（`{"byId": {id: entry}}`）。
-pub(crate) fn by_id(entries: impl IntoIterator<Item = Value>) -> Value {
-    let mut m = serde_json::Map::new();
-    for e in entries {
-        m.insert(e["id"].as_str().unwrap().to_string(), e);
-    }
-    json!({ "byId": m })
-}
-
-pub(crate) fn write_index_raw(library: &Path, index: &Value) {
-    fs::write(
-        library.join("library.json"),
-        serde_json::to_string(index).expect("序列化"),
-    )
-    .expect("写索引");
-}
-
-pub(crate) fn write_journal_raw(library: &Path, entries: Value) {
-    fs::write(
-        library.join(JOURNAL_FILE_NAME),
-        serde_json::to_string(&entries).expect("序列化"),
-    )
-    .expect("写日志");
-}
+use std::path::Path;
 
 /// 替换测试事务条目，同时保留对象日志内已迁移的累计计数/字节量级。
 pub(crate) fn replace_journal_entries(library: &Path, entries: Value) {
@@ -101,46 +45,6 @@ pub(crate) fn foldable_journal(library: &Path, n: usize) {
         })
         .collect();
     replace_journal_entries(library, json!(entries));
-}
-
-pub(crate) fn file_identity(p: &Path) -> (u64, u64) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        let m = fs::metadata(p).expect("读文件元数据");
-        (m.dev(), m.ino())
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = p;
-        (0, 0)
-    }
-}
-
-pub(crate) fn journal_entry_json(
-    id: &str,
-    asset_id: &str,
-    rel: &str,
-    trash: &str,
-    dev: u64,
-    ino: u64,
-) -> Value {
-    json!({
-        "id": id,
-        "assetId": asset_id,
-        "relPath": rel,
-        "identity": { "dev": dev, "ino": ino },
-        "trashName": trash,
-    })
-}
-
-/// 读取对象或旧数组日志中的事务条目，供恢复结果的条目语义断言复用。
-pub(crate) fn read_journal_raw(library: &Path) -> Value {
-    let journal: Value = serde_json::from_str(
-        &fs::read_to_string(library.join(JOURNAL_FILE_NAME)).expect("读回日志"),
-    )
-    .expect("日志 JSON");
-    journal.get("entries").cloned().unwrap_or(journal)
 }
 
 /// 中断恢复①：日志已写、隔离未发生（媒体仍在原位且身份一致）→ 清除

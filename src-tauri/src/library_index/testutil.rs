@@ -1,32 +1,22 @@
 //! library_index 迁移/归一化测试共享的索引形状构造 helper（仅测试编译，
 //! 供 tests 与 normalize_tests 共用）。
 
+use crate::library_fixture::asset_entry;
+pub(crate) use crate::library_fixture::by_id;
 use serde_json::{json, Value};
 
-/// 合法的最小资产条目（目标形状，按需改字段）。
+/// 归一化测试的合法 character 条目；复用共享字段但保持该模块的默认值。
 pub(crate) fn asset(id: &str) -> Value {
-    json!({
-        "id": id,
-        "name": "x",
-        "kind": "character",
-        "mime": "image/png",
-        "relPath": format!("assets/{id}.png"),
-        "source": "upload",
-        "createdAt": "2026-01-01T00:00:00.000Z",
-        "tags": [],
-    })
+    asset_entry(
+        id,
+        "x",
+        "character",
+        "image/png",
+        &format!("assets/{id}.png"),
+    )
 }
 
 /// 合法的最小组条目。
 pub(crate) fn group(id: &str, kind: &str) -> Value {
     json!({ "id": id, "name": "g", "kind": kind })
-}
-
-/// 目标 Record 形状的资产桶。
-pub(crate) fn by_id(entries: Vec<Value>) -> Value {
-    let mut m = serde_json::Map::new();
-    for e in entries {
-        m.insert(e["id"].as_str().unwrap().to_string(), e);
-    }
-    json!({ "byId": m })
 }
