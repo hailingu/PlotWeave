@@ -234,6 +234,47 @@ Windows 没有构建或行为验证路径；未来若改变支持范围，须另
 `npm ci`、凭据隔离、超时及逐 ref 分派。本处选择 issue 允许的显式依赖
 契约，不新增真实依赖遗留服务的兼容性夹具，也不声称已验证该兼容性。
 
+## 独立安装期限（issue #497）
+
+[issue #497](https://github.com/hailingu/PlotWeave/issues/497) 的修复将安装期限
+交给独立进程组中的 watchdog。安装 launcher 与 watchdog 是监督器的两个
+子进程，npm 及 lifecycle 只在 watchdog 就绪后启动，并继承 launcher 的
+进程组。因此 lifecycle 挂起其祖先监督器不会冻结 watchdog 的计时器，
+watchdog 也不依赖监督器回调来获得安装组号。
+
+期限到达时，watchdog 输出 `PRE_PUSH_INSTALL_TIMEOUT`，直接对安装组发送
+TERM，1 秒后升级 KILL，并终止监督器，使钩子的 wait 非零返回。正常完成、
+失败或中断仍由监督器执行既有组清理；进入清理时将安装期限切换为 2 秒的
+清理兜底，完成后撤销 watchdog 并等待其退出，才返回安装结果。
+启动失败或 watchdog 提前异常退出以 `PRE_PUSH_INSTALL_WATCHDOG_FAILED`
+阻止安装成功。监督器确认组不存在后会通知 watchdog 撤销该组的后续信号，
+监督器自身的限期退出仍保留。
+
+| 前置状态与动作（含顺序） | 预期可观察结果 | 跨转换不变量及责任入口 | 对应验证 |
+| --- | --- | --- | --- |
+| launcher 创建 → watchdog 就绪 → npm 启动 | 安装开始前已有独立期限与安装组标识 | 监督器启动入口：未建立外部监督不得执行 lifecycle | watchdog 启动失败与既有启动窗口信号回归 |
+| lifecycle 及后代就绪 → SIGSTOP 监督器 → 安装期限到达 | 超时诊断、安装组和监督器结束、推送失败、无扫描或远端 ref、临时树移除 | watchdog 期限入口及 pre-push：监督器挂起不解除期限与资源清理 | 独立监督器 SIGSTOP 回归；真实 npm ci 推送回归 |
+| npm 正常或非零退出 → TERM/KILL 后代清理 → 撤销 watchdog | 保留原退出结果，watchdog 退出后才完成 | 监督器 close/finish：所有完成路径清理后代；撤销后不得向旧组号继续发信号 | 既有 0/7 后代清理、ESRCH 与延迟 close 回归 |
+| 监督器确认安装组 ESRCH → 通知 watchdog → close 延迟跨过清理期限 | 不再向旧组号发信号；监督器仍限期失败退出 | 两个清理入口：共享已不存在状态，不因外部兜底重启组清理 | watchdog 真实 IPC 与组号复用哨兵回归 |
+| INT/TERM/HUP 或期限与 close 交错 → 清理 | 中断或超时保持失败，清理收敛；门禁锁保护不变 | 监督器 stop/interrupt、watchdog 与钩子信号入口：失败不得被成功覆盖 | 既有三个信号、清理期间中断及门禁组长存活回归 |
+| 无效期限、npm 启动失败或 watchdog 不可用 → 请求安装 | 非零退出，不进入门禁；已创建的安装组被清理 | 监督器启动/错误入口：监督缺失不得退化为无限期安装 | 无效配置、npm/watchdog 启动失败回归 |
+
+同一用户身份的 lifecycle 仍可主动寻找并挂起或杀死 watchdog、钩子等其他
+进程；这不是操作系统级隔离。独立期限保证以 watchdog 继续获得调度为前提，
+覆盖本 issue 的祖先监督器被挂起路径。主动脱离安装组的后代仍是既有清理
+边界。未新增自动重试、并发安装或 Windows 支持；网络与 lifecycle 共用
+该期限，离线测试不连接真实 registry。`.npmrc`、lifecycle 与 Sonar 令牌
+清理契约保持原行为。
+
+2026-10-04 验证：2 秒期限下，修复前真实 SIGSTOP 令监督器在 5 秒后仍未
+结束；修复后独立安装回归及真实 npm ci 推送用例均通过。后者在 prepare
+中挂起祖先监督器，验证超时诊断、安装组和监督器结束、无扫描或远端 ref、
+临时树移除。组号复用探针验证 absent 在清理兜底前、TERM 后、释放及失联
+入口均生效；真实监督器连线测试暂时移除通知时哨兵被终止，恢复后通过。
+该探针在真实 ESRCH 后映射旧组号的信号目标，不声称迫使内核实际复用组号。
+未单独注入安装开始后 watchdog 异常退出，也未穷举释放、期限和中断的全部
+排列；启动失败与既有停止入口覆盖共用的失败关闭、幂等清理和失败结果保护。
+
 ## 安装与凭据状态矩阵（issue #462）
 
 [issue #462](https://github.com/hailingu/PlotWeave/issues/462) 的实现：
@@ -253,7 +294,7 @@ Windows 没有构建或行为验证路径；未来若改变支持范围，须另
 | npm 成功退出 → 清理后台后代期间收到中断 | 仍完成清理，但最终返回失败 | 安装执行器 interrupt/close 入口：成功不得覆盖已收到的中断 | pre-push-install 完成清理期间中断回归 |
 | npm 成功退出 → TERM 或 KILL 发送出现非 ESRCH 错误 | 保留清理错误诊断并返回失败；TERM 失败仍尝试 KILL | 安装执行器：任何清理错误均阻止成功，后续信号成功不得覆盖失败状态 | pre-push-install TERM/KILL 错误注入回归 |
 | npm 以 0 或非零退出且进程组已不存在 → TERM 收到 ESRCH | 保留原退出结果，不再安排 KILL，不影响复用组号的其他进程 | 安装执行器 close/stop 入口：确认组不存在后不得继续向该组号发信号 | pre-push-install 真实 ESRCH 与组号复用边界回归；既有真实 npm ci 成功探针 |
-| npm 已退出但 close 尚未回调 → 中断或超时 → TERM 收到 ESRCH → close | 不再安排 KILL，等待 close 后仍返回失败 | 安装执行器 interrupt/deadline/close 入口：组消失不能覆盖失败结果，也不能重新启动清理 | pre-push-install 延迟 close 的中断/超时回归 |
+| npm 已退出但 close 尚未回调 → 中断或超时 → TERM 收到 ESRCH → close | 不再安排组 KILL，在清理兜底期限内等待 close 后返回失败，未收敛则终止监督器（#497） | 安装执行器 interrupt/deadline/close 入口：组消失不能覆盖失败结果，也不能重新启动组清理 | pre-push-install 延迟 close 的中断/超时回归；#497 真实通知连线回归 |
 | 安装及后代已就绪 → 执行器收到 INT/TERM/HUP（含终端断开）→ 有界清理 | 报告中断；先 TERM、1 秒后 KILL，进程组结束并返回失败 | 安装执行器：各中断入口均保留有界清理，不因 supervisor 退出而遗留受监督安装进程 | pre-push-install 真实 INT/TERM/HUP 信号回归与后代存活探针 |
 | 安装超过期限（lifecycle 与其子进程忽略 TERM）→ 强制终止 → 阻止推送 | 超时诊断；进程组结束；扫描未执行；临时树移除 | 安装执行器与 pre-push：失败路径有界终止并清理资源 | 真实 npm ci 超时及子进程存活探针 |
 | 超时配置无效 → 请求慢路径安装 | 配置诊断，安装和扫描均未启动 | 安装执行器：无效期限不得退化为无期限执行 | 参数化无效配置回归 |
@@ -261,7 +302,8 @@ Windows 没有构建或行为验证路径；未来若改变支持范围，须另
 
 并发安装不由此修复引入；原有门禁锁仍串行化分析和台账写入。没有自动安装
 重试，失败后用户重新执行推送会创建新的临时树。网络 registry 挂起与
-lifecycle 挂起共用同一安装期限；测试使用离线零依赖包，不连接外部 registry。
+lifecycle 挂起共用同一安装期限（独立 watchdog 的调度前提见 issue #497）；
+测试使用离线零依赖包，不连接外部 registry。
 真实 Sonar 门禁由提交和推送验证，测试沙箱不访问真实服务。
 
 2026-10-02 验证：修复前观察到真实 prepare 的两个令牌均可见、超时设置不
@@ -315,6 +357,8 @@ lifecycle 挂起共用同一安装期限；测试使用离线零依赖包，不�
 不再安排一秒后的 KILL；npm 的 close 已到达时保留退出码，尚未到达时等待
 close，并保留中断或超时造成的失败。TERM 发送成功或遇到非 ESRCH 错误时，
 仍沿用已有升级清理及失败规则。
+issue #497 在此基础上增加独立清理兜底：仅在该期限内等待尚未到达的 close，
+未收敛则失败终止监督器；已确认消失的安装组不再参与外部升级信号。
 
 四项回归覆盖正常退出、非零退出，以及 close 前中断/超时：真实 npm 替身
 退出后观察真实 ESRCH，再把针对旧组号的后续信号映射到独立测试进程组，
@@ -365,11 +409,12 @@ TERM 或 KILL 发送出现非 ESRCH 错误也使结果失败，后续发送成�
 
 | 代码 | 条件 |
 | --- | --- |
-| `PRE_PUSH_INSTALL_TIMEOUT` | 安装超过配置期限 |
+| `PRE_PUSH_INSTALL_TIMEOUT` | 安装超过配置期限，或正常收尾未在清理兜底期限内结束 |
 | `PRE_PUSH_INSTALL_TIMEOUT_INVALID` | 安装期限非合法整数或超出范围 |
 | `PRE_PUSH_INSTALL_FAILED` | npm 非零退出或被信号终止 |
 | `PRE_PUSH_INSTALL_START_FAILED` | npm 无法启动 |
-| `PRE_PUSH_INSTALL_INTERRUPTED` | 执行器收到 INT 或 TERM |
+| `PRE_PUSH_INSTALL_INTERRUPTED` | 执行器收到 INT、TERM 或 HUP |
+| `PRE_PUSH_INSTALL_WATCHDOG_FAILED` | 独立期限进程启动、IPC 或退出异常；安装失败关闭 |
 | `PRE_PUSH_INSTALL_CLEANUP_FAILED` | 进程组信号发送失败，除已不存在的组；阻止安装报告成功 |
 | `PRE_PUSH_INSTALL_PLATFORM_UNSUPPORTED` | 平台不支持当前 Unix 清理实现 |
 

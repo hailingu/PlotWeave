@@ -235,6 +235,8 @@ function commitScenarioTooling(sandbox: string, fullGate: boolean): void {
     'gate-history.sh',
     'gate-tree-marker.sh',
     'pre-push-install.mjs',
+    'pre-push-install-launcher.mjs',
+    'pre-push-install-watchdog.mjs',
     'rust-coverage.sh',
     'rust-module-graph-guard-baseline.json',
     'sonar-quality-gate.sh',
@@ -627,6 +629,94 @@ describe('pre-push 安装失败封闭（issue #462）', { timeout: 30_000 }, () 
     },
   )
 })
+
+/** 真实 lifecycle 只挂起自己的祖先监督器；记录安装组用于失败用例的兜底清理。 */
+function commitStoppedSupervisorProbe(scenario: PushScenario): string {
+  return commitInstallProbe(
+    scenario,
+    String.raw`
+const { execFileSync, spawn } = require('node:child_process')
+const fs = require('node:fs')
+let ancestor = process.ppid
+let supervisor
+let group
+while (ancestor > 1) {
+  const row = execFileSync('ps', ['-o', 'ppid=,command=', '-p', String(ancestor)], { encoding: 'utf8' }).trim()
+  if (row.includes('/pre-push-install-launcher.mjs')) group = ancestor
+  if (row.includes('/pre-push-install.mjs')) { supervisor = ancestor; break }
+  ancestor = Number(row.split(/\s+/)[0])
+}
+if (!supervisor || !group) throw new Error('未找到真实安装监督进程')
+process.on('SIGTERM', () => {})
+const descendant = spawn(process.execPath, ['-e', \`
+  process.on('SIGTERM', () => {})
+  process.send(process.pid)
+  setInterval(() => {}, 1000)
+\`], { stdio: ['ignore', 'inherit', 'inherit', 'ipc'] })
+descendant.once('message', (pid) => {
+  fs.writeFileSync(process.env.PLOTWEAVE_TEST_INSTALL_PROBE, JSON.stringify({ supervisor, group, descendant: pid }))
+  process.kill(supervisor, 'SIGSTOP')
+})
+setInterval(() => {}, 1000)`.replaceAll('\\`', '`'),
+  )
+}
+
+/** 清理自己创建的组与监督器；已结束无需处理，其他信号错误仍显式报告。 */
+function killStoppedInstallProbe(probe: string): void {
+  if (!existsSync(probe)) return
+  const pids = JSON.parse(readFileSync(probe, 'utf8')) as {
+    supervisor: number
+    group: number
+  }
+  for (const pid of [pids.supervisor, -pids.group]) {
+    try {
+      process.kill(pid, 'SIGKILL')
+    } catch (error) {
+      if (!(
+        error instanceof Error &&
+        'code' in error &&
+        error.code === 'ESRCH'
+      ))
+        throw error
+    }
+  }
+}
+
+it(
+  '真实 npm ci 挂起监督器后仍限期阻止推送并清理（issue #497）',
+  { timeout: 20_000 },
+  () => {
+    const scenario = preparePushScenario({ fullGate: true })
+    const probe = commitStoppedSupervisorProbe(scenario)
+    scenario.env.PLOTWEAVE_NPM_INSTALL_TIMEOUT = '3'
+    try {
+      const push = spawnSync('git', ['push', 'origin', 'side'], {
+        cwd: scenario.root,
+        env: scenario.env,
+        encoding: 'utf8',
+        timeout: 10_000,
+      })
+      expect(push.error, push.stderr).toBeUndefined()
+      expect(push.status).not.toBe(0)
+      // Stable diagnostic contract: quality-gate-push.md, issue #497.
+      expect(push.stderr).toContain('[PRE_PUSH_INSTALL_TIMEOUT]')
+      const pids = JSON.parse(readFileSync(probe, 'utf8')) as {
+        supervisor: number
+        group: number
+        descendant: number
+      }
+      for (const pid of Object.values(pids))
+        expect(() => process.kill(pid, 0)).toThrow()
+      expect(scenario.gateRuns()).toBe(0)
+      expect(scenario.worktreeCount()).toBe(1)
+      expect(
+        scenario.git(['ls-remote', 'origin', 'refs/heads/side']).stdout.trim(),
+      ).toBe('')
+    } finally {
+      killStoppedInstallProbe(probe)
+    }
+  },
+)
 
 describe(
   'pre-push 测试沙箱根隔离（issue #405 慢路径门禁）',
