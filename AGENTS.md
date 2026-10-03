@@ -244,7 +244,8 @@ structure per issue kind.
 
 | Concern | Authoritative path or discovery command |
 | --- | --- |
-| Product vision, stack overview, and branch model | `README.md` |
+| Product vision and released user-facing capabilities | `README.md` |
+| Development setup, stack overview, repository layout, branch / PR model, CI, gates, and release workflow | `docs/development/workflow.md` |
 | Data-model topics and legacy chapter mapping | `docs/data-model/README.md` and `docs/data-model.md` |
 | Engineering standards: size/complexity, boundaries, patterns, testing | `docs/development/software-engineering-standard.md` (+ language standards alongside) |
 | Issue tracker conventions: severity, titles, labels, body structure | `docs/development/issue-standard.md` |
