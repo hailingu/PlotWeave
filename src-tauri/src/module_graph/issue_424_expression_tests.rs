@@ -1,6 +1,6 @@
 //! issue #424 的闭包后缀与值位置限定路径门控回归。
 
-use super::module_graph_tests::edges;
+use super::dependency_fixture::{assert_production_cycle, assert_test_exclusion};
 use super::*;
 
 /// 闭包/值块后缀的参数及后续操作数仍属测试表达式，不能制造假环。
@@ -24,14 +24,7 @@ fn test_postfix_expressions_exclude_operand_dependencies() {
         "#[cfg(test)] || { 1u8 }..{ use crate::b::B; 2 }; { use crate::c::C; }",
         "#[cfg(test)] || { s }.method::<[u8; { use crate::b::B; 1 }]>({ use crate::b::B; 1 }); { use crate::c::C; }",
     ] {
-        let graph = edges(&[
-            ("lib.rs", "mod a; mod b; mod c;"),
-            ("a.rs", &format!("fn f() {{ 'outer: loop {{ {item} break; }} }}")),
-            ("b.rs", "use crate::a::A;"),
-            ("c.rs", "pub struct C;"),
-        ]);
-        assert_eq!(graph["a.rs"], BTreeSet::from(["c.rs".into()]), "{item}");
-        assert!(cycles_of(&graph).is_empty(), "测试依赖不得制造假环：{item}");
+        assert_test_exclusion(&format!("fn f() {{ 'outer: loop {{ {item} break; }} }}"), item);
     }
 }
 
@@ -48,17 +41,7 @@ fn postfix_expressions_preserve_following_production_cycles() {
         "#[cfg(test)] match || 1u8 { _ => Some(1u8) }?.checked_add({ use crate::b::B; 1 }); { use crate::c::C; }",
         "#[cfg(test)] let n = match || 1u8 { _ => [1u8] }[{ use crate::b::B; 0 }]; { use crate::c::C; }",
     ] {
-        let graph = edges(&[
-            ("lib.rs", "mod a; mod b; mod c;"),
-            (
-                "a.rs",
-                &format!("fn f() {{ 'outer: loop {{ {item} break; }} }}"),
-            ),
-            ("b.rs", "pub struct B;"),
-            ("c.rs", "use crate::a::A;"),
-        ]);
-        assert_eq!(graph["a.rs"], BTreeSet::from(["c.rs".into()]), "{item}");
-        assert_eq!(cycles_of(&graph).len(), 1, "生产真环必须保留：{item}");
+        assert_production_cycle(&format!("fn f() {{ 'outer: loop {{ {item} break; }} }}"), item);
     }
 }
 
@@ -79,17 +62,10 @@ fn postfix_scanning_preserves_statement_and_item_boundaries() {
         "#[cfg(test)] || -> u8 { 1u8 }; ({ use crate::c::C; 1 });",
         "#[cfg(test)] { [1u8] }.len(); [{ use crate::c::C; 1 }];",
     ] {
-        let graph = edges(&[
-            ("lib.rs", "mod a; mod b; mod c;"),
-            (
-                "a.rs",
-                &format!("fn f() {{ 'outer: loop {{ {item} break; }} }}"),
-            ),
-            ("b.rs", "pub struct B;"),
-            ("c.rs", "use crate::a::A;"),
-        ]);
-        assert_eq!(graph["a.rs"], BTreeSet::from(["c.rs".into()]), "{item}");
-        assert_eq!(cycles_of(&graph).len(), 1, "生产真环必须保留：{item}");
+        assert_production_cycle(
+            &format!("fn f() {{ 'outer: loop {{ {item} break; }} }}"),
+            item,
+        );
     }
 }
 
@@ -116,14 +92,7 @@ fn test_qualified_initializers_exclude_type_dependencies() {
         "#[cfg(test)] let n = <[u8; { use crate::b::B; 1 }] as Trait>::VALUE; { use crate::c::C; }",
         "#[cfg(test)] let n = <Pair<u8, [u8; { use crate::b::B; 1 }]> as Trait>::method::<[u8; { use crate::b::B; 1 }]>() + { use crate::b::B; 1 }; { use crate::c::C; }",
     ] {
-        let graph = edges(&[
-            ("lib.rs", "mod a; mod b; mod c;"),
-            ("a.rs", &format!("fn f() {{ 'outer: loop {{ {item} break; }} }}")),
-            ("b.rs", "use crate::a::A;"),
-            ("c.rs", "pub struct C;"),
-        ]);
-        assert_eq!(graph["a.rs"], BTreeSet::from(["c.rs".into()]), "{item}");
-        assert!(cycles_of(&graph).is_empty(), "测试依赖不得制造假环：{item}");
+        assert_test_exclusion(&format!("fn f() {{ 'outer: loop {{ {item} break; }} }}"), item);
     }
 }
 
@@ -140,14 +109,7 @@ fn qualified_expressions_preserve_following_production_cycles() {
         "#[cfg(test)] match || <Pair<u8, [u8; { use crate::b::B; 1 }]> as Trait>::VALUE { _ => () } { use crate::c::C; }",
         "#[cfg(test)] let n = 1 + <Pair<u8, [u8; { use crate::b::B; 1 }]> as Trait>::VALUE + { use crate::b::B; 1 }; { use crate::c::C; }",
     ] {
-        let graph = edges(&[
-            ("lib.rs", "mod a; mod b; mod c;"),
-            ("a.rs", &format!("fn f() {{ 'outer: loop {{ {item} break; }} }}")),
-            ("b.rs", "pub struct B;"),
-            ("c.rs", "use crate::a::A;"),
-        ]);
-        assert_eq!(graph["a.rs"], BTreeSet::from(["c.rs".into()]), "{item}");
-        assert_eq!(cycles_of(&graph).len(), 1, "生产真环必须保留：{item}");
+        assert_production_cycle(&format!("fn f() {{ 'outer: loop {{ {item} break; }} }}"), item);
     }
 }
 
@@ -166,14 +128,7 @@ fn qualified_path_recognition_preserves_comparison_boundaries() {
         "#[cfg(test)] let small = 1 < 2; const N: usize = <Pair<u8, [u8; { use crate::c::C; 1 }]> as Trait>::VALUE;",
         "#[cfg(test)] let small = 1 < 2; fn g<T: Trait<{ use crate::c::C; 1 }>>() {}",
     ] {
-        let graph = edges(&[
-            ("lib.rs", "mod a; mod b; mod c;"),
-            ("a.rs", &format!("fn f() {{ 'outer: loop {{ {item} break; }} }}")),
-            ("b.rs", "pub struct B;"),
-            ("c.rs", "use crate::a::A;"),
-        ]);
-        assert_eq!(graph["a.rs"], BTreeSet::from(["c.rs".into()]), "{item}");
-        assert_eq!(cycles_of(&graph).len(), 1, "生产真环必须保留：{item}");
+        assert_production_cycle(&format!("fn f() {{ 'outer: loop {{ {item} break; }} }}"), item);
     }
 }
 
@@ -186,17 +141,10 @@ fn production_capable_expression_attributes_preserve_edges() {
         "#[cfg(any(test, unix))] let n = <Pair<u8, [u8; { use crate::c::C; 1 }]> as Trait>::VALUE;",
         "#[cfg(unix)] const N: usize = <[u8; { use crate::c::C; 1 }] as Trait>::VALUE;",
     ] {
-        let graph = edges(&[
-            ("lib.rs", "mod a; mod b; mod c;"),
-            (
-                "a.rs",
-                &format!("fn f() {{ 'outer: loop {{ {item} break; }} }}"),
-            ),
-            ("b.rs", "pub struct B;"),
-            ("c.rs", "use crate::a::A;"),
-        ]);
-        assert_eq!(graph["a.rs"], BTreeSet::from(["c.rs".into()]), "{item}");
-        assert_eq!(cycles_of(&graph).len(), 1, "生产真环必须保留：{item}");
+        assert_production_cycle(
+            &format!("fn f() {{ 'outer: loop {{ {item} break; }} }}"),
+            item,
+        );
     }
 }
 
@@ -209,14 +157,7 @@ fn explicit_return_postfixes_restore_enclosing_expression_context() {
         "#[cfg(test)] while let n = || -> u8 { 1u8 }() < { use crate::b::B; 2 } { let _ = n; break; } { use crate::c::C; }",
         "#[cfg(test)] let n = match || -> u8 { 1u8 }() < { use crate::b::B; 2 } { _ => 1 }; { use crate::c::C; }",
     ] {
-        let graph = edges(&[
-            ("lib.rs", "mod a; mod b; mod c;"),
-            ("a.rs", &format!("fn f() {{ {item} }}")),
-            ("b.rs", "pub struct B;"),
-            ("c.rs", "use crate::a::A;"),
-        ]);
-        assert_eq!(graph["a.rs"], BTreeSet::from(["c.rs".into()]), "{item}");
-        assert_eq!(cycles_of(&graph).len(), 1, "后缀恢复值态后生产真环必须保留：{item}");
+        assert_production_cycle(&format!("fn f() {{ {item} }}"), item);
     }
 }
 

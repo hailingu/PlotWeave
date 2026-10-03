@@ -133,24 +133,41 @@ fn download_follows_relative_and_absolute_locations_to_success() {
     expect_hop(&received, "GET /final.png HTTP/1.1");
 }
 
+/// 执行真实下载并验证拒绝类型、诊断和已发送跳数；各用例仍拥有原始响应。
+fn assert_refused_download(
+    local: &str,
+    received: &Receiver<String>,
+    diagnostic: &str,
+    expected_requests: usize,
+) {
+    let err = tauri::async_runtime::block_on(fetch_image_url_with(
+        &format!("{local}/start.png"),
+        test_deadline(),
+        allow_loopback,
+    ))
+    .expect_err("下载应被拒绝");
+    assert!(
+        matches!(err, ProxyError::DownloadRefused { .. }),
+        "期望诊断 {diagnostic}，实际错误：{err:?}"
+    );
+    assert!(
+        err.to_string().contains(diagnostic),
+        "期望 {diagnostic}，实际诊断：{err}"
+    );
+    assert_eq!(
+        received.try_iter().count(),
+        expected_requests,
+        "拒绝前的实际请求跳数"
+    );
+}
+
 /// 验收：重定向响应缺少 LOCATION 头即拒绝，且不发起第二跳请求。
 #[test]
 fn download_rejects_redirect_without_location_header() {
     let (local, received) = local_server(|_| {
         vec![b"HTTP/1.1 302 Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec()]
     });
-    let err = tauri::async_runtime::block_on(fetch_image_url_with(
-        &format!("{local}/start.png"),
-        test_deadline(),
-        allow_loopback,
-    ))
-    .expect_err("缺 Location 的重定向应拒绝");
-    assert!(
-        matches!(err, ProxyError::DownloadRefused { .. }),
-        "实际错误：{err:?}"
-    );
-    assert!(err.to_string().contains("缺少 Location"), "实际诊断：{err}");
-    assert_eq!(received.try_iter().count(), 1, "不得发起第二跳");
+    assert_refused_download(&local, &received, "缺少 Location", 1);
 }
 
 /// 验收：LOCATION 头值含非 UTF-8 原始字节——`to_str` 解码失败并入
@@ -162,18 +179,7 @@ fn download_rejects_non_utf8_location_header() {
             b"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:\xFF\xFE/hop2\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
         ]
     });
-    let err = tauri::async_runtime::block_on(fetch_image_url_with(
-        &format!("{local}/start.png"),
-        test_deadline(),
-        allow_loopback,
-    ))
-    .expect_err("非 UTF-8 Location 应拒绝");
-    assert!(
-        matches!(err, ProxyError::DownloadRefused { .. }),
-        "实际错误：{err:?}"
-    );
-    assert!(err.to_string().contains("缺少 Location"), "实际诊断：{err}");
-    assert_eq!(received.try_iter().count(), 1, "不得发起第二跳");
+    assert_refused_download(&local, &received, "缺少 Location", 1);
 }
 
 /// 验收：LOCATION 为不可解析的绝对 URL（`http://` 空主机）——`Url::join`
@@ -181,18 +187,7 @@ fn download_rejects_non_utf8_location_header() {
 #[test]
 fn download_rejects_unparsable_absolute_location() {
     let (local, received) = local_server(|_| vec![redirect("302 Found", "http://")]);
-    let err = tauri::async_runtime::block_on(fetch_image_url_with(
-        &format!("{local}/start.png"),
-        test_deadline(),
-        allow_loopback,
-    ))
-    .expect_err("不可解析 Location 应拒绝");
-    assert!(
-        matches!(err, ProxyError::DownloadRefused { .. }),
-        "实际错误：{err:?}"
-    );
-    assert!(err.to_string().contains("Location 非法"), "实际诊断：{err}");
-    assert_eq!(received.try_iter().count(), 1, "不得发起第二跳");
+    assert_refused_download(&local, &received, "Location 非法", 1);
 }
 
 /// 验收：重定向链恰在 `DOWNLOAD_REDIRECT_LIMIT + 1` 次请求后终止
@@ -201,25 +196,11 @@ fn download_rejects_unparsable_absolute_location() {
 fn download_redirect_chain_is_bounded_by_hop_limit() {
     let (local, received) =
         local_server(|_| vec![redirect("302 Found", "/again"); DOWNLOAD_REDIRECT_LIMIT + 1]);
-    let err = tauri::async_runtime::block_on(fetch_image_url_with(
-        &format!("{local}/start.png"),
-        test_deadline(),
-        allow_loopback,
-    ))
-    .expect_err("超跳数上限应拒绝");
-    assert!(
-        matches!(err, ProxyError::DownloadRefused { .. }),
-        "实际错误：{err:?}"
-    );
-    let shown = err.to_string();
-    assert!(
-        shown.contains(&format!("重定向超过 {DOWNLOAD_REDIRECT_LIMIT} 跳")),
-        "实际诊断：{shown}"
-    );
-    assert_eq!(
-        received.try_iter().count(),
+    assert_refused_download(
+        &local,
+        &received,
+        &format!("重定向超过 {DOWNLOAD_REDIRECT_LIMIT} 跳"),
         DOWNLOAD_REDIRECT_LIMIT + 1,
-        "恰 6 次请求后终止"
     );
 }
 
@@ -228,36 +209,14 @@ fn download_redirect_chain_is_bounded_by_hop_limit() {
 #[test]
 fn download_revalidates_each_hop_against_public_boundary() {
     let (local, received) = local_server(|_| vec![redirect("302 Found", "http://10.0.0.1/x.png")]);
-    let err = tauri::async_runtime::block_on(fetch_image_url_with(
-        &format!("{local}/start.png"),
-        test_deadline(),
-        allow_loopback,
-    ))
-    .expect_err("重定向到非公网目标应拒绝");
-    assert!(
-        matches!(err, ProxyError::DownloadRefused { .. }),
-        "实际错误：{err:?}"
-    );
-    assert!(err.to_string().contains("非公网"), "实际诊断：{err}");
-    assert_eq!(received.try_iter().count(), 1, "拒绝发生在第二跳请求之前");
+    assert_refused_download(&local, &received, "非公网", 1);
 }
 
 /// 验收：重定向到非 http(s) 协议（ftp——即便主机是公网 IP）逐跳拒绝。
 #[test]
 fn download_rejects_non_http_scheme_redirect() {
     let (local, received) = local_server(|_| vec![redirect("302 Found", "ftp://8.8.8.8/x.png")]);
-    let err = tauri::async_runtime::block_on(fetch_image_url_with(
-        &format!("{local}/start.png"),
-        test_deadline(),
-        allow_loopback,
-    ))
-    .expect_err("非 http(s) 重定向应拒绝");
-    assert!(
-        matches!(err, ProxyError::DownloadRefused { .. }),
-        "实际错误：{err:?}"
-    );
-    assert!(err.to_string().contains("协议非法"), "实际诊断：{err}");
-    assert_eq!(received.try_iter().count(), 1, "不得发起第二跳");
+    assert_refused_download(&local, &received, "协议非法", 1);
 }
 
 /// 验收：非成功状态码（小响应体）返回 [`ProxyError::DownloadStatus`]，

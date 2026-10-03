@@ -780,3 +780,11 @@ mod issue_480_cfg_tests;
 /// 评审 5381066396 的位置限定别名与 glob 命名空间回归。
 #[cfg(test)]
 mod qualified_tests;
+
+/// #504 共享测试夹具的声明所有权守卫。
+#[cfg(test)]
+mod fixture_ownership_tests;
+
+/// #504 模块图回归的共享拓扑与语义断言。
+#[cfg(test)]
+mod dependency_fixture;

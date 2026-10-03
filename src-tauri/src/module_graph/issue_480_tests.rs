@@ -6,6 +6,7 @@
 //! 别名）上时 glob 候选让位；值命名空间项（fn 等）与未知/外部目标仍
 //! 放行 glob，保持值/模块同名共存与「宁可误报环也不漏检」的既有口径。
 
+use super::dependency_fixture::{host_glob_graph, user_glob_graph};
 use super::module_graph_tests::edges;
 use super::*;
 
@@ -18,20 +19,11 @@ use super::*;
 /// `rustc --edition 2021 --crate-type lib` 验证可编译且零警告。
 #[test]
 fn explicit_type_import_shadows_glob_module_no_false_cycle() {
-    let graph = edges(&[
-        ("lib.rs", "pub mod values;\npub mod a;\npub mod m;\npub mod user;\n"),
-        ("values.rs", "pub struct Thing;\n"),
-        ("a/mod.rs", "pub mod p;\n\npub fn aux() {}\n"),
-        ("a/p.rs", "use crate::user::User;\n\npub fn take(u: User) {\n    let _ = u;\n}\n"),
-        (
-            "m.rs",
-            "pub use crate::values::Thing as p;\npub use crate::a::*;\n\npub fn run() {\n    aux();\n}\n",
-        ),
-        (
-            "user.rs",
-            "use crate::m::p;\n\npub struct User;\n\npub fn make() -> p {\n    p\n}\n",
-        ),
-    ]);
+    let graph = user_glob_graph(
+        "pub struct Thing;\n",
+        "pub use crate::values::Thing as p;\npub use crate::a::*;\n\npub fn run() {\n    aux();\n}\n",
+        "use crate::m::p;\n\npub struct User;\n\npub fn make() -> p {\n    p\n}\n",
+    );
     assert!(
         !graph["user.rs"].contains("a/p.rs"),
         "显式类型导入遮蔽同名 glob 模块，不得虚构 user→a/p 边：{:?}",
@@ -56,20 +48,11 @@ fn explicit_type_import_shadows_glob_module_no_false_cycle() {
 /// 夹具同样经 `rustc --edition 2021 --crate-type lib` 验证零警告。
 #[test]
 fn value_alias_and_glob_module_coexist_edge_stays() {
-    let graph = edges(&[
-        ("lib.rs", "pub mod values;\npub mod a;\npub mod m;\npub mod user;\n"),
-        ("values.rs", "pub fn helper() -> u8 {\n    0\n}\n"),
-        ("a/mod.rs", "pub mod p;\n\npub fn aux() {}\n"),
-        ("a/p.rs", "use crate::user::User;\n\npub fn take(u: User) {\n    let _ = u;\n}\n"),
-        (
-            "m.rs",
-            "pub use crate::values::helper as p;\npub use crate::a::*;\n\npub fn run() {\n    aux();\n}\n",
-        ),
-        (
-            "user.rs",
-            "use crate::m::p;\n\npub struct User;\n\npub fn call() -> u8 {\n    p()\n}\n",
-        ),
-    ]);
+    let graph = user_glob_graph(
+        "pub fn helper() -> u8 {\n    0\n}\n",
+        "pub use crate::values::helper as p;\npub use crate::a::*;\n\npub fn run() {\n    aux();\n}\n",
+        "use crate::m::p;\n\npub struct User;\n\npub fn call() -> u8 {\n    p()\n}\n",
+    );
     assert!(
         graph["user.rs"].contains("a/p.rs"),
         "值命名空间别名不遮蔽同名 glob 模块，user→a/p 边应保留：{:?}",
@@ -89,26 +72,17 @@ fn value_alias_and_glob_module_coexist_edge_stays() {
 /// a/p→host 反向依赖误报环。夹具经 rustc 验证零警告。
 #[test]
 fn enum_variant_through_type_alias_shadows_glob_bare_path() {
-    let graph = edges(&[
-        ("lib.rs", "pub mod values;\npub mod a;\npub mod host;\n"),
-        ("values.rs", "pub enum E {\n    V,\n}\n"),
-        ("a/mod.rs", "pub mod p;\n\npub fn aux() {}\n"),
-        (
-            "a/p.rs",
-            "use crate::host::H;\n\npub fn take(h: H) {\n    let _ = h;\n}\n",
+    let graph = host_glob_graph(
+        "pub enum E {\n    V,\n}\n",
+        concat!(
+            "pub use crate::values::E as p;\n",
+            "pub use crate::a::*;\n",
+            "pub fn go() {\n    aux();\n}\n",
+            "use p::V;\n",
+            "pub struct H;\n",
+            "pub fn v() -> p {\n    V\n}\n",
         ),
-        (
-            "host.rs",
-            concat!(
-                "pub use crate::values::E as p;\n",
-                "pub use crate::a::*;\n",
-                "pub fn go() {\n    aux();\n}\n",
-                "use p::V;\n",
-                "pub struct H;\n",
-                "pub fn v() -> p {\n    V\n}\n",
-            ),
-        ),
-    ]);
+    );
     assert!(
         !graph["host.rs"].contains("a/p.rs"),
         "enum 别名占据类型命名空间，裸路径 glob 候选不得虚构 host→a/p 边：{:?}",
@@ -135,22 +109,13 @@ fn trait_type_alias_and_inline_declared_types_shadow_glob() {
         ("pub trait Seal {}", "Seal", "pub fn sealed<T: p>() {}"),
         ("pub type Num = u8;", "Num", "pub fn take(x: p) {}"),
     ] {
-        let graph = edges(&[
-            ("lib.rs", "pub mod values;\npub mod a;\npub mod m;\npub mod user;\n"),
-            ("values.rs", &format!("{decl}\n")),
-            ("a/mod.rs", "pub mod p;\n\npub fn aux() {}\n"),
-            ("a/p.rs", "use crate::user::User;\n\npub fn take(u: User) {\n    let _ = u;\n}\n"),
-            (
-                "m.rs",
-                &format!(
+        let graph = user_glob_graph(
+            &format!("{decl}\n"),
+            &format!(
                 "pub use crate::values::{item} as p;\npub use crate::a::*;\n\npub fn run() {{\n    aux();\n}}\n"
             ),
-            ),
-            (
-                "user.rs",
-                &format!("use crate::m::p;\n\npub struct User;\n\n{ty_use}\n"),
-            ),
-        ]);
+            &format!("use crate::m::p;\n\npub struct User;\n\n{ty_use}\n"),
+        );
         assert!(
             !graph["user.rs"].contains("a/p.rs"),
             "{decl} 目标应遮蔽同名 glob 模块，不得虚构 user→a/p 边：{:?}",
@@ -162,20 +127,11 @@ fn trait_type_alias_and_inline_declared_types_shadow_glob() {
             cycles_of(&graph)
         );
     }
-    let graph = edges(&[
-        ("lib.rs", "pub mod values;\npub mod a;\npub mod m;\npub mod user;\n"),
-        ("values.rs", "pub mod inner {\n    pub struct Thing;\n}\n"),
-        ("a/mod.rs", "pub mod p;\n\npub fn aux() {}\n"),
-        ("a/p.rs", "use crate::user::User;\n\npub fn take(u: User) {\n    let _ = u;\n}\n"),
-        (
-            "m.rs",
-            "pub use crate::values::inner::Thing as p;\npub use crate::a::*;\n\npub fn run() {\n    aux();\n}\n",
-        ),
-        (
-            "user.rs",
-            "use crate::m::p;\n\npub struct User;\n\npub fn make() -> p {\n    p\n}\n",
-        ),
-    ]);
+    let graph = user_glob_graph(
+        "pub mod inner {\n    pub struct Thing;\n}\n",
+        "pub use crate::values::inner::Thing as p;\npub use crate::a::*;\n\npub fn run() {\n    aux();\n}\n",
+        "use crate::m::p;\n\npub struct User;\n\npub fn make() -> p {\n    p\n}\n",
+    );
     assert!(
         !graph["user.rs"].contains("a/p.rs"),
         "inline 模块内声明的类型项同样遮蔽同名 glob 模块：{:?}",
@@ -195,31 +151,19 @@ fn trait_type_alias_and_inline_declared_types_shadow_glob() {
 /// 夹具以 rustc 带/不带 `--cfg feature="typed"` 两种配置验证可编译零警告。
 #[test]
 fn cfg_gated_type_binding_keeps_glob_module_edge() {
-    let graph = edges(&[
-        (
-            "lib.rs",
-            "pub mod values;\npub mod a;\npub mod m;\npub mod user;\n",
+    let graph = user_glob_graph(
+        "pub struct Thing;\n",
+        concat!(
+            "#[cfg(feature = \"typed\")]\n",
+            "pub use crate::values::Thing as p;\n",
+            "pub use crate::a::*;\n",
+            "\n",
+            "pub fn run() {\n",
+            "    aux();\n",
+            "}\n",
         ),
-        ("values.rs", "pub struct Thing;\n"),
-        ("a/mod.rs", "pub mod p;\n\npub fn aux() {}\n"),
-        (
-            "a/p.rs",
-            "use crate::user::User;\n\npub fn take(u: User) {\n    let _ = u;\n}\n",
-        ),
-        (
-            "m.rs",
-            concat!(
-                "#[cfg(feature = \"typed\")]\n",
-                "pub use crate::values::Thing as p;\n",
-                "pub use crate::a::*;\n",
-                "\n",
-                "pub fn run() {\n",
-                "    aux();\n",
-                "}\n",
-            ),
-        ),
-        ("user.rs", "pub use crate::m::p;\n\npub struct User;\n"),
-    ]);
+        "pub use crate::m::p;\n\npub struct User;\n",
+    );
     assert!(
         graph["user.rs"].contains("a/p.rs"),
         "cfg 门控的类型绑定在禁用配置不成立，glob 模块边须保守保留：{:?}",
@@ -240,11 +184,8 @@ fn cfg_gated_type_binding_keeps_glob_module_edge() {
 /// 为空，不引入名字冲突）。
 #[test]
 fn macro_token_tree_types_do_not_shadow() {
-    let graph = edges(&[
-        ("lib.rs", "pub mod values;\npub mod a;\npub mod m;\npub mod user;\n"),
-        (
-            "values.rs",
-            concat!(
+    let graph = user_glob_graph(
+        concat!(
                 "macro_rules! swallow {\n",
                 "    ($($t:tt)*) => {}\n",
                 "}\n",
@@ -254,18 +195,9 @@ fn macro_token_tree_types_do_not_shadow() {
                 "    0\n",
                 "}\n",
             ),
-        ),
-        ("a/mod.rs", "pub mod p;\n\npub fn aux() {}\n"),
-        ("a/p.rs", "use crate::user::User;\n\npub fn take(u: User) {\n    let _ = u;\n}\n"),
-        (
-            "m.rs",
-            "pub use crate::values::helper as p;\npub use crate::a::*;\n\npub fn run() {\n    aux();\n}\n",
-        ),
-        (
-            "user.rs",
-            "use crate::m::p;\n\npub struct User;\n\npub fn call() -> u8 {\n    p()\n}\n",
-        ),
-    ]);
+        "pub use crate::values::helper as p;\npub use crate::a::*;\n\npub fn run() {\n    aux();\n}\n",
+        "use crate::m::p;\n\npub struct User;\n\npub fn call() -> u8 {\n    p()\n}\n",
+    );
     assert!(
         graph["user.rs"].contains("a/p.rs"),
         "宏 token 树里的 struct 文本不得登记为类型项，值别名与 glob 模块的共存边须保留：{:?}",
@@ -287,29 +219,20 @@ fn macro_token_tree_types_do_not_shadow() {
 ///（门控函数体在禁用配置整体缺席）。
 #[test]
 fn cfg_gated_function_body_binding_inherits_gating() {
-    let graph = edges(&[
-        ("lib.rs", "pub mod values;\npub mod a;\npub mod host;\n"),
-        ("values.rs", "pub enum E {\n    V,\n}\n"),
-        ("a/mod.rs", "pub mod p;\n\npub fn aux() {}\n"),
-        (
-            "a/p.rs",
-            "use crate::host::H;\n\npub fn take(h: H) {\n    let _ = h;\n}\n",
+    let graph = host_glob_graph(
+        "pub enum E {\n    V,\n}\n",
+        concat!(
+            "pub struct H;\n",
+            "#[cfg(feature = \"gated\")]\n",
+            "pub fn gated() {\n",
+            "    use crate::values::E as p;\n",
+            "    use crate::a::*;\n",
+            "    use p::V;\n",
+            "    let _ = V;\n",
+            "    aux();\n",
+            "}\n",
         ),
-        (
-            "host.rs",
-            concat!(
-                "pub struct H;\n",
-                "#[cfg(feature = \"gated\")]\n",
-                "pub fn gated() {\n",
-                "    use crate::values::E as p;\n",
-                "    use crate::a::*;\n",
-                "    use p::V;\n",
-                "    let _ = V;\n",
-                "    aux();\n",
-                "}\n",
-            ),
-        ),
-    ]);
+    );
     assert!(
         graph["host.rs"].contains("a/p.rs"),
         "门控函数体内的类型别名按条件登记，glob 模块边须保守保留：{:?}",
@@ -332,31 +255,19 @@ fn cfg_gated_function_body_binding_inherits_gating() {
 /// 两种配置验证可编译零警告。
 #[test]
 fn cfg_attr_nested_cfg_marks_binding_conditional() {
-    let graph = edges(&[
-        (
-            "lib.rs",
-            "pub mod values;\npub mod a;\npub mod m;\npub mod user;\n",
+    let graph = user_glob_graph(
+        "pub struct Thing;\n",
+        concat!(
+            "#[cfg_attr(feature = \"gate\", cfg(feature = \"typed\"))]\n",
+            "pub use crate::values::Thing as p;\n",
+            "pub use crate::a::*;\n",
+            "\n",
+            "pub fn run() {\n",
+            "    aux();\n",
+            "}\n",
         ),
-        ("values.rs", "pub struct Thing;\n"),
-        ("a/mod.rs", "pub mod p;\n\npub fn aux() {}\n"),
-        (
-            "a/p.rs",
-            "use crate::user::User;\n\npub fn take(u: User) {\n    let _ = u;\n}\n",
-        ),
-        (
-            "m.rs",
-            concat!(
-                "#[cfg_attr(feature = \"gate\", cfg(feature = \"typed\"))]\n",
-                "pub use crate::values::Thing as p;\n",
-                "pub use crate::a::*;\n",
-                "\n",
-                "pub fn run() {\n",
-                "    aux();\n",
-                "}\n",
-            ),
-        ),
-        ("user.rs", "pub use crate::m::p;\n\npub struct User;\n"),
-    ]);
+        "pub use crate::m::p;\n\npub struct User;\n",
+    );
     assert!(
         graph["user.rs"].contains("a/p.rs"),
         "cfg_attr 嵌套 cfg 的绑定按条件登记，gate∧¬typed 配置的 glob 模块边须保守保留：{:?}",
@@ -427,37 +338,28 @@ fn module_level_semicolon_items_consume_pending_gating() {
 /// 与上一用例无法同时成立）。夹具以 rustc 双配置验证零警告。
 #[test]
 fn gated_inline_module_keeps_inheritance_across_semicolon_items() {
-    let graph = edges(&[
-        ("lib.rs", "pub mod values;\npub mod a;\npub mod host;\n"),
-        ("values.rs", "pub enum E {\n    V,\n}\n"),
-        ("a/mod.rs", "pub mod p;\n\npub fn aux() {}\n"),
-        (
-            "a/p.rs",
-            "use crate::host::H;\n\npub fn take(h: H) {\n    let _ = h;\n}\n",
+    let graph = host_glob_graph(
+        "pub enum E {\n    V,\n}\n",
+        concat!(
+            "pub struct H;\n",
+            "#[cfg(feature = \"gated\")]\n",
+            "pub mod zone {\n",
+            "    static WARM: u8 = 0;\n",
+            "    pub fn warm() -> u8 {\n",
+            "        WARM\n",
+            "    }\n",
+            "    pub use crate::values::E as p;\n",
+            "    pub use crate::a::*;\n",
+            "    use p::V;\n",
+            "    pub fn v() -> p {\n",
+            "        V\n",
+            "    }\n",
+            "    pub fn go() {\n",
+            "        aux();\n",
+            "    }\n",
+            "}\n",
         ),
-        (
-            "host.rs",
-            concat!(
-                "pub struct H;\n",
-                "#[cfg(feature = \"gated\")]\n",
-                "pub mod zone {\n",
-                "    static WARM: u8 = 0;\n",
-                "    pub fn warm() -> u8 {\n",
-                "        WARM\n",
-                "    }\n",
-                "    pub use crate::values::E as p;\n",
-                "    pub use crate::a::*;\n",
-                "    use p::V;\n",
-                "    pub fn v() -> p {\n",
-                "        V\n",
-                "    }\n",
-                "    pub fn go() {\n",
-                "        aux();\n",
-                "    }\n",
-                "}\n",
-            ),
-        ),
-    ]);
+    );
     assert!(
         graph["host.rs"].contains("a/p.rs"),
         "门控 inline 模块体内的类型别名经分号项后仍按条件登记，glob 边须保守保留：{:?}",
@@ -478,29 +380,17 @@ fn gated_inline_module_keeps_inheritance_across_semicolon_items() {
 /// 遮蔽。夹具以 rustc 双配置验证可编译零警告。
 #[test]
 fn conditional_type_declarations_do_not_occupy_unconditionally() {
-    let graph = edges(&[
-        ("lib.rs", "pub mod values;\npub mod a;\npub mod m;\npub mod user;\n"),
-        (
-            "values.rs",
-            concat!(
+    let graph = user_glob_graph(
+        concat!(
                 "#[cfg(feature = \"typed\")]\n",
                 "pub struct Thing;\n",
                 "#[cfg(not(feature = \"typed\"))]\n",
                 "#[allow(non_upper_case_globals)]\n",
                 "pub static Thing: u8 = 0;\n",
             ),
-        ),
-        ("a/mod.rs", "pub mod p;\n\npub fn aux() {}\n"),
-        ("a/p.rs", "use crate::user::User;\n\npub fn take(u: User) {\n    let _ = u;\n}\n"),
-        (
-            "m.rs",
-            "pub use crate::values::Thing as p;\npub use crate::a::*;\n\npub fn run() {\n    aux();\n}\n",
-        ),
-        (
-            "user.rs",
-            "use crate::m::p;\n\npub struct User;\n\npub fn touch() {\n    let _ = p;\n}\n",
-        ),
-    ]);
+        "pub use crate::values::Thing as p;\npub use crate::a::*;\n\npub fn run() {\n    aux();\n}\n",
+        "use crate::m::p;\n\npub struct User;\n\npub fn touch() {\n    let _ = p;\n}\n",
+    );
     assert!(
         graph["user.rs"].contains("a/p.rs"),
         "条件声明的类型项不构成无条件类型占位，禁用配置的 glob 模块边须保留：{:?}",
@@ -521,34 +411,19 @@ fn conditional_type_declarations_do_not_occupy_unconditionally() {
 ///（docsrs 双配置）零警告。
 #[test]
 fn doc_wrapped_cfg_does_not_mark_item_conditional() {
-    let graph = edges(&[
-        (
-            "lib.rs",
-            "pub mod values;\npub mod a;\npub mod m;\npub mod user;\n",
+    let graph = user_glob_graph(
+        "pub struct Thing;\n",
+        concat!(
+            "#[cfg_attr(docsrs, doc(cfg(feature = \"typed\")))]\n",
+            "pub use crate::values::Thing as p;\n",
+            "pub use crate::a::*;\n",
+            "\n",
+            "pub fn run() {\n",
+            "    aux();\n",
+            "}\n",
         ),
-        ("values.rs", "pub struct Thing;\n"),
-        ("a/mod.rs", "pub mod p;\n\npub fn aux() {}\n"),
-        (
-            "a/p.rs",
-            "use crate::user::User;\n\npub fn take(u: User) {\n    let _ = u;\n}\n",
-        ),
-        (
-            "m.rs",
-            concat!(
-                "#[cfg_attr(docsrs, doc(cfg(feature = \"typed\")))]\n",
-                "pub use crate::values::Thing as p;\n",
-                "pub use crate::a::*;\n",
-                "\n",
-                "pub fn run() {\n",
-                "    aux();\n",
-                "}\n",
-            ),
-        ),
-        (
-            "user.rs",
-            "use crate::m::p;\n\npub struct User;\n\npub fn make() -> p {\n    p\n}\n",
-        ),
-    ]);
+        "use crate::m::p;\n\npub struct User;\n\npub fn make() -> p {\n    p\n}\n",
+    );
     assert!(
         !graph["user.rs"].contains("a/p.rs"),
         "doc 元数据不改变存在条件，无条件类型导入的遮蔽须生效、无虚假 glob 边：{:?}",
@@ -569,40 +444,28 @@ fn doc_wrapped_cfg_does_not_mark_item_conditional() {
 /// 「存在无条件类型绑定」语义。夹具经 rustc 验证零警告。
 #[test]
 fn value_binding_does_not_release_type_namespace_occupancy() {
-    let graph = edges(&[
-        ("lib.rs", "pub mod values;\npub mod a;\npub mod host;\n"),
-        (
-            "values.rs",
-            "pub enum E {\n    W,\n}\n\npub fn f() -> u8 {\n    0\n}\n",
+    let graph = host_glob_graph(
+        "pub enum E {\n    W,\n}\n\npub fn f() -> u8 {\n    0\n}\n",
+        concat!(
+            "use crate::values::E as p;\n",
+            "use crate::values::f as p;\n",
+            "use crate::a::*;\n",
+            "use p::W;\n",
+            "pub struct H;\n",
+            "pub fn use_type(x: p) {\n",
+            "    let _ = x;\n",
+            "}\n",
+            "pub fn go() {\n",
+            "    aux();\n",
+            "}\n",
+            "pub fn use_value() -> u8 {\n",
+            "    p()\n",
+            "}\n",
+            "pub fn use_variant() -> p {\n",
+            "    W\n",
+            "}\n",
         ),
-        ("a/mod.rs", "pub mod p;\n\npub fn aux() {}\n"),
-        (
-            "a/p.rs",
-            "use crate::host::H;\n\npub fn take(h: H) {\n    let _ = h;\n}\n",
-        ),
-        (
-            "host.rs",
-            concat!(
-                "use crate::values::E as p;\n",
-                "use crate::values::f as p;\n",
-                "use crate::a::*;\n",
-                "use p::W;\n",
-                "pub struct H;\n",
-                "pub fn use_type(x: p) {\n",
-                "    let _ = x;\n",
-                "}\n",
-                "pub fn go() {\n",
-                "    aux();\n",
-                "}\n",
-                "pub fn use_value() -> u8 {\n",
-                "    p()\n",
-                "}\n",
-                "pub fn use_variant() -> p {\n",
-                "    W\n",
-                "}\n",
-            ),
-        ),
-    ]);
+    );
     assert!(
         !graph["host.rs"].contains("a/p.rs"),
         "值绑定不解除类型命名空间占位，显式 enum 遮蔽 glob 模块、无虚假边：{:?}",

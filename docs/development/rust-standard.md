@@ -128,6 +128,26 @@ from unmeasured files. Metric and scope:
   sources when adding context and avoid a single unstructured error variant for
   unrelated failure classes.
 
+## Shared Test Fixtures (issue #504)
+
+The test-only `crate::library_fixture` owns raw library index/journal writes,
+asset record fields, temporary library/project roots, capability handles and
+real file identities for library, journal, normalization and media tests.
+Domain wrappers retain their explicit defaults and corrupt byte inputs; the
+fixture does not call production normalization. The parser-based ownership
+guard in `module_graph/fixture_ownership_tests.rs` checks the designated helper
+declarations after stripping comments and literals. It detects duplicate
+declarations under those names; renamed copies still require CPD and review.
+
+Module-graph tests reuse `module_graph/dependency_fixture.rs` for identical
+topologies and edge/cycle assertions. Existing test entry points, grammar
+inputs and cfg/glob/type-namespace expectations remain distinct. Download
+rejection tests share the real-client result assertion while retaining each
+raw response and expected request count. No test classification or exclusion
+changes accompany these extractions. Measurements, the state/invariant matrix
+and retained boundaries are recorded in [duplication policy](duplication-policy.md#rust-测试重复度续修issue-504)
+and [issue #504](https://github.com/hailingu/PlotWeave/issues/504).
+
 ## Module Boundary Guards
 
 - `cargo test` enforces the file-granularity module-graph acyclicity guard

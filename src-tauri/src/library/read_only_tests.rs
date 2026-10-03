@@ -5,61 +5,9 @@
 
 use super::group_commands::{delete_group_with, upsert_group_with};
 use super::*;
-use crate::store::new_id;
-use cap_std::ambient_authority;
-use cap_std::fs::Dir as CapDir;
+use crate::library_fixture::*;
 use serde_json::json;
 use std::fs;
-use std::io::Write as _;
-use std::path::{Path, PathBuf};
-
-/// 测试内核的受信句柄：对临时目录做环境打开（等价生产端锚定句柄）。
-fn cap(p: &Path) -> CapDir {
-    CapDir::open_ambient_dir(p, ambient_authority()).expect("打开测试根句柄")
-}
-
-/// 唯一临时根：`{tmp}/pw-library-test-{new_id}/` 下含 `library/assets/`；
-/// 返回 (library, root)——root 供库外受害者文件与清理。
-fn temp_fixture() -> (PathBuf, PathBuf) {
-    let root = std::env::temp_dir().join(format!("pw-library-test-{}", new_id()));
-    fs::create_dir_all(root.join("library").join("assets")).expect("创建临时库目录");
-    (root.join("library"), root)
-}
-
-fn cleanup(root: &Path) {
-    let _ = fs::remove_dir_all(root);
-}
-
-/// 直接按字节写脏索引（绕过写入内核，模拟手工修改/损坏的 library.json）。
-fn write_index_raw(library: &Path, index: &Value) {
-    let mut f = fs::File::create(library.join("library.json")).expect("创建索引文件");
-    f.write_all(serde_json::to_string(index).expect("序列化").as_bytes())
-        .expect("写入索引");
-}
-
-/// 最小合法索引条目（目标 Record 形状，含 §7.2 必填 source/ISO createdAt；
-/// relPath 按需投毒）。
-fn entry(id: &str, rel: &str) -> Value {
-    json!({
-        "id": id,
-        "name": "x",
-        "kind": "other",
-        "mime": "image/png",
-        "relPath": rel,
-        "source": "upload",
-        "createdAt": "2026-01-01T00:00:00.000Z",
-        "tags": [],
-    })
-}
-
-/// 把最小条目数组包装为目标 Record 形状（`{"byId": {id: entry}}`）。
-fn by_id(entries: impl IntoIterator<Item = Value>) -> Value {
-    let mut m = serde_json::Map::new();
-    for e in entries {
-        m.insert(e["id"].as_str().unwrap().to_string(), e);
-    }
-    json!({ "byId": m })
-}
 
 // ---- 变更命令的净化诊断可见性（评审修复）----
 

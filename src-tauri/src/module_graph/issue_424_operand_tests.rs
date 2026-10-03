@@ -1,5 +1,6 @@
 //! issue #424 的门控闭包操作数连续扫描与生产边界恢复回归。
 
+use super::dependency_fixture::{assert_production_cycle, assert_test_exclusion};
 use super::module_graph_tests::edges;
 use super::*;
 
@@ -24,14 +25,7 @@ fn bare_closure_operands_do_not_create_production_cycles() {
         "#[cfg(test)] || |_: ()| const { use crate::b::B; 1 } + { use crate::b::B; 1 };",
         "#[cfg(all(test, unix))] |_: ()| -const { use crate::b::B; 1 } + -{ use crate::b::B; 1 };",
     ] {
-        let graph = edges(&[
-            ("lib.rs", "mod a; mod b; mod c;"),
-            ("a.rs", &format!("fn f() {{ 'outer: loop {{ {item} use crate::c::C; break; }} }}")),
-            ("b.rs", "use crate::a::A;"),
-            ("c.rs", "pub struct C;"),
-        ]);
-        assert_eq!(graph["a.rs"], BTreeSet::from(["c.rs".into()]), "{item}");
-        assert!(cycles_of(&graph).is_empty(), "测试操作数不得制造假环：{item}");
+        assert_test_exclusion(&format!("fn f() {{ 'outer: loop {{ {item} use crate::c::C; break; }} }}"), item);
     }
 }
 
@@ -52,14 +46,7 @@ fn closure_operand_statements_preserve_production_cycles() {
         "#[cfg(test)] match |_: ()| { use crate::b::B; 1 } + { use crate::b::B; 1 } { _ => { use crate::b::B; } } { use crate::c::C; }",
         "#[cfg(test)] while let f = |_: ()| { use crate::b::B; 1 } + { use crate::b::B; 1 } { use crate::b::B; break; } { use crate::c::C; }",
     ] {
-        let graph = edges(&[
-            ("lib.rs", "mod a; mod b; mod c;"),
-            ("a.rs", &format!("fn f() {{ {item} }}")),
-            ("b.rs", "pub struct B;"),
-            ("c.rs", "use crate::a::A;"),
-        ]);
-        assert_eq!(graph["a.rs"], BTreeSet::from(["c.rs".into()]), "{item}");
-        assert_eq!(cycles_of(&graph).len(), 1, "操作数之后生产真环必须检出：{item}");
+        assert_production_cycle(&format!("fn f() {{ {item} }}"), item);
     }
 }
 
@@ -78,14 +65,7 @@ fn operand_continuation_preserves_nonclosure_and_type_boundaries() {
         "#[cfg(test)] fn g() { use crate::b::B; } { use crate::c::C; }",
         "#[cfg(test)] struct S { field: [u8; { use crate::b::B; 1 }] } { use crate::c::C; }",
     ] {
-        let graph = edges(&[
-            ("lib.rs", "mod a; mod b; mod c;"),
-            ("a.rs", &format!("fn f() {{ {item} }}")),
-            ("b.rs", "pub struct B;"),
-            ("c.rs", "use crate::a::A;"),
-        ]);
-        assert_eq!(graph["a.rs"], BTreeSet::from(["c.rs".into()]), "{item}");
-        assert_eq!(cycles_of(&graph).len(), 1, "独立生产边界真环必须检出：{item}");
+        assert_production_cycle(&format!("fn f() {{ {item} }}"), item);
     }
 }
 
@@ -119,13 +99,6 @@ fn completed_control_flow_preserves_unary_production_statements() {
         "#[cfg(test)] return match |_: ()| { use crate::b::B; 1 } + { use crate::b::B; 1 } { _ => 1 } + { use crate::b::B; 1 }; -{ use crate::c::C; 1 };",
         "#[cfg(test)] break 'outer match |_: ()| { use crate::b::B; 1 } + { use crate::b::B; 1 } { _ => 1 } + { use crate::b::B; 1 }; -{ use crate::c::C; 1 };",
     ] {
-        let graph = edges(&[
-            ("lib.rs", "mod a; mod b; mod c;"),
-            ("a.rs", &format!("fn f() {{ 'outer: loop {{ {item} break; }} }}")),
-            ("b.rs", "pub struct B;"),
-            ("c.rs", "use crate::a::A;"),
-        ]);
-        assert_eq!(graph["a.rs"], BTreeSet::from(["c.rs".into()]), "{item}");
-        assert_eq!(cycles_of(&graph).len(), 1, "语句结束后独立一元表达式真环必须检出：{item}");
+        assert_production_cycle(&format!("fn f() {{ 'outer: loop {{ {item} break; }} }}"), item);
     }
 }
