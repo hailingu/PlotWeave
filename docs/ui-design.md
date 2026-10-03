@@ -2,7 +2,7 @@
 
 > 状态：草案 v1（整体待评审），含已实现与规划内容；2026-09-09 按已关闭 issue 核对，逐项依据见[设计同步记录](design-sync.md)。未标记完成的规划不因本次同步而视为已实现。
 > 适用范围：应用外壳、画布编辑器、设定集与资产库面板、AI 对话、设置页、设计令牌与动效规范、macOS 原生质感实现路径（§12，规划中）。
-> 设计基准：Apple Human Interface Guidelines（HIG），macOS 优先；Windows 通过设计令牌分层预留适配。
+> 设计基准：Apple Human Interface Guidelines（HIG），当前仅支持 macOS；不支持 Windows，历史适配设想见 §11。
 > 配套文档：[数据模型主题索引](data-model/README.md)。本文档引用的数据模型 §x.y 章节号沿用原编号，可经[迁移对照](data-model.md)定位到对应主题正文。
 
 ## 一、设计目标与原则
@@ -15,7 +15,7 @@ PlotWeave 是画布式短剧创作工具。UI 设计从 HIG 推出五条硬约�
 4. **形态即语义，不以色别物**。节点类型靠图标与结构形态区分（HIG 包容性：避免仅靠颜色传达信息）；颜色只表达状态（选中/悬停/失效/AI 改动）。
 5. **动效即物理**。一切手势驱动的动画可中断、从当前值起步、继承速度；默认临界阻尼弹簧，仅动量交互允许回弹。
 
-跨平台策略：**设计令牌三层结构**（原始色板 → 语义令牌 → 组件令牌）。首版只交付 macOS 外观；Windows 适配 = 替换原始层与材质实现（亚克力/Mica）、字体栈接 Segoe UI，不动组件结构。
+设计令牌采用**三层结构**（原始色板 → 语义令牌 → 组件令牌），当前服务于 macOS 外观。Windows 的色板、材质与字体适配设想仅作为历史记录保留，不属于实现或交付计划（§11）。
 
 ## 二、设计令牌体系
 
@@ -84,7 +84,7 @@ gray-900 #131316  →  surface.canvas        →  canvas.background
 
 ### 2.4 字体
 
-- 栈：`-apple-system` / `PingFang SC` / `"Segoe UI"`（Windows 段预留）/ `sans-serif`。
+- 栈：`-apple-system` / `PingFang SC` / `"Segoe UI"`（备用字体，不代表 Windows 支持）/ `sans-serif`。
 - 阶梯：说明 11 · 辅助 12 · 正文 13（macOS 基准）· 区块标题 17 semibold · 大标题 24 bold。
 - 字距随字号：大字负字距（24pt 约 `-0.02em`），正文近 0，小字微正。行高随字号反向变化。
 - 间距单位用 rem，尊重用户文本大小设置。
@@ -571,12 +571,13 @@ macOS 惯例 ⌘, 打开设置。当前实现为同一主窗口内切换的设�
 | §4 节点 `meta` | 无集归属 | ✅ 已增补 `episodeNo?: number`（大纲分组的唯一依据；不建「集」实体表，标题存 `episodeTitles`） |
 | §7 设定集条目 | 仅结构化字段 + 资产引用 | ✅ 已增补「文档」条目类型 `SettingsDocument`，持久化于 `settings.documents`（§6/§3） |
 
-## 十一、Windows 适配预留
+## 十一、Windows 历史适配设想（不支持、不排期）
 
-- 设计令牌三层结构：Windows 版替换原始层（Fluent 色板）与材质实现（Mica/亚克力替代 `backdrop-filter` 材质）。
-- 字体栈已含 `"Segoe UI"` 段。
-- 窗口 chrome 差异（红绿灯 → 右上角最小化/最大化/关闭）集中在应用外壳一处。
-- 组件结构与交互规范（弹簧参数、手势规则）跨平台不变。
+按所有者在 [issue #503](https://github.com/hailingu/PlotWeave/issues/503) 的处置决定，当前仅支持 macOS，明确不支持 Windows。以下记录早期设计设想，未实施、不排期，也不构成 Windows 支持承诺；以后启动适配须另行立项并补齐平台验证。
+
+- 早期设想通过替换原始色板与材质实现适配 Fluent/Mica，同时复用语义令牌与组件结构。
+- 字体栈已有 `"Segoe UI"` 备用段，仅为字体回退，不代表应用经过 Windows 验证。
+- Windows 窗口 chrome、材质、交互及原生流程均没有本仓库的构建与测试覆盖。
 
 ## 十二、macOS 原生质感实现路径（规划）
 

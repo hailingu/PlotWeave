@@ -22,6 +22,14 @@ Discover exact dependency versions and commands from `package.json`, `package-lo
 
 ## Local Setup
 
+### 支持平台
+
+当前支持平台为 **macOS**；**不支持 Windows**，应用运行、开发工具链、提交/推送门禁及发行均不承诺 Windows 兼容性。仓库构建与 CI 只在 macOS 上验证，Linux 也没有本仓库的构建与测试覆盖；使用 Unix 进程组不代表支持所有 Unix 平台。
+
+按所有者在 [issue #503](https://github.com/hailingu/PlotWeave/issues/503) 的处置决定，Windows 慢路径推送会被安装监督器拒绝。快路径即使未触发该拒绝，也不属于受支持的 Windows 工作流；贡献者须在 macOS 上执行完整门禁并推送。具体后果与依赖 lifecycle 的进程约束见[平台支持范围与依赖进程契约](quality-gate-push.md#平台支持范围与依赖进程契约issue-503)。
+
+### 开发环境
+
 ```bash
 nvm use
 npm install

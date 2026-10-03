@@ -27,6 +27,8 @@
 
 ## 从源码运行
 
+当前支持平台为 **macOS**；**不支持 Windows**，不提供 Windows 构建、测试或发行支持。
+
 需要 macOS、[Node.js 24.18.0](.nvmrc) 以及 [Rust 1.95.0](rust-toolchain.toml)。
 
 ```bash
