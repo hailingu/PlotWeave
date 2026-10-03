@@ -307,29 +307,82 @@ and [issue #504](https://github.com/hailingu/PlotWeave/issues/504).
   leaf, `journal_entry_value` moved to its shape owner `journal_io`, and
   sibling modules import each other directly instead of through the parent's
   re-export hub.
-- The module-graph guard is itself meta-guarded (issue #471): its only mount
+- The module-graph guard is itself meta-guarded (issues #471 and
+  [#495](https://github.com/hailingu/PlotWeave/issues/495)): its only mount
   point is the `#[cfg(test)] mod module_graph;` declaration in `lib.rs`, so
   deleting that line — or equivalently emptying the module's tests — would
   silently drop every guard case while `cargo test` stays green.
   `scripts/check-rust-module-graph-guard.sh` closes that gap with a semantic
   check: it runs `cargo test --lib --manifest-path src-tauri/Cargo.toml --
-  --list` and requires that the count of enumerated test names carrying the
-  exact `module_graph::` prefix stays at or above a liveness floor of 90
-  (the count when the meta-guard landed was 122). It reads the toolchain's
-  own test enumeration instead of matching text occurrences in `lib.rs`, and
-  fails closed when cargo is unavailable or the listing fails. The check is
-  wired into the gate's serial Rust phase
+  --list` and compares the exact `module_graph::` names with the versioned
+  `scripts/rust-module-graph-guard-baseline.json`. The baseline records all
+  **149** cases present at the #495 fix, including the #494 regressions and
+  #504 fixture-ownership test added since the issue's 140-case observation.
+  Its JSON schema is `{ "version": 1, "tests": [...] }`, with a nonempty
+  array of unique, nonempty, fully qualified `module_graph::` libtest names.
+  Comparison uses name sets; array order has no semantic meaning. Adding,
+  removing or renaming a case fails until
+  the baseline is explicitly regenerated from successful toolchain
+  enumeration of that changed tree, its diff reviewed, and both changes
+  committed together. New cases therefore raise the tracked count instead
+  of leaving the former fixed floor of 90 behind. The checker never rewrites
+  the baseline automatically.
+  Registration count or name-set mismatches emit the stable diagnostic code
+  `[RUST_MODULE_GRAPH_LIST_MISMATCH]` before any guard execution or scan.
+  It then runs `cargo test --lib --manifest-path src-tauri/Cargo.toml --
+  module_graph:: --format pretty --color never --test-threads=1` and requires
+  that the exact set of `module_graph::` cases reported as `ok` (including
+  libtest's `- should panic` annotation) matches the
+  baseline, with one successful summary, no failed or ignored cases, and a
+  passed count at least as large as the baseline. Libtest's substring filter
+  can select an unrelated qualified name containing `module_graph::`; that
+  name cannot replace a required case in either set comparison. An ignored
+  case still appears in `--list` but cannot satisfy the execution check.
+  The script reads toolchain enumeration and results instead of matching
+  text occurrences in `lib.rs`, and fails closed on a missing or malformed
+  baseline, unavailable cargo, failed listing or execution, or malformed
+  execution results. The check is wired into the gate's serial Rust phase
   (`scripts/sonar-quality-gate.sh`, after the Rust coverage floor) and into
   the CI rust job right after `cargo test`, where the lib test target is
-  already built; its behavior contract (floor breach, zero-count shape,
-  fail-closed, prefix precision, gate-root override) is pinned by
+  already built; its behavior contract (registered and executed sets,
+  ignored cases, growth, fail-closed and gate-root override) is pinned by
   `scripts/rust-module-graph-guard.test.ts` with a controlled cargo stub. It
   must stay out of the parallel vitest suite: a cold cargo build saturating
   all cores starved sibling subprocess-spawning tests there (8 timeouts
-  observed when this was first attempted at commit `0e80937`). The floor is
-  a liveness floor, not a tracker of the exact count: a legitimate reduction
-  below it must update the floor constant and this section together, as one
-  conscious reviewed change.
+  observed when this was first attempted at commit `0e80937`). This checks
+  case identity and actual successful execution; replacing a test body with
+  an empty body under the same name remains a semantic code-review concern,
+  not something test enumeration or result parsing can prove absent.
+
+### Issue #495 State And Invariant Matrix
+
+The meta-guard script owns registration/execution consistency. Direct script
+invocation, the serial Sonar gate stage and the CI rust job all enter through
+that same checker. The versioned baseline belongs to the checked repository
+root, including a pushed commit's temporary checkout via
+`PLOTWEAVE_GATE_REPOSITORY_ROOT`.
+
+| Precondition / state | Action / ordering | Expected observable outcome | Invariant | Test / verification |
+| --- | --- | --- | --- | --- |
+| Baseline and registered names agree; all guard cases run | Enumerate, compare registration, execute, compare results | Successful check reports the tracked and passed guard counts | Every required case is both registered and successfully executed | Controlled cargo success, expected-panic regression, real meta-check: 149 passed, 0 ignored |
+| All or one required case is `#[ignore]` | Listing succeeds; execution reports ignored cases | Nonzero exit even though cargo itself returns success | Registration cannot substitute for execution | All-ignored and partial-ignore regressions; real all-ignored mutation: cargo 0 passed / 149 ignored, meta-check exit 1 |
+| The `lib.rs` mount point is removed, or guard cases are emptied | Listing contains no guard cases | Nonzero exit before execution | The required set cannot silently disappear | Zero-count regression; real mount-removal and empty-module mutations: both meta-check exit 1 |
+| A case is deleted or renamed, including replacement with a different-name stub at the same count | Compare registered names with the unchanged baseline | Nonzero exit identifying the set mismatch | Equal counts cannot conceal a missing case identity | Missing-name and same-count replacement regressions |
+| A new guard case is registered | Check before and after explicitly updating the baseline | Stale baseline fails; reviewed updated baseline passes and tracks the larger set | Growth must raise the required set | Growth and synchronized-baseline regressions |
+| Cargo is missing, or listing / execution fails | Stop at the failing command; retain diagnostic tail | Nonzero exit with the command failure visible | Toolchain failure cannot produce a passing meta-check | Missing-command, listing-failure and execution-failure regressions |
+| Execution omits a required result, or lacks a valid successful summary | Compare reported `ok` names and validate the summary | Nonzero exit | Every required successful execution needs an observable result | Missing-result, malformed-summary and count-mismatch regressions |
+| Unrelated names contain the filter substring or resemble the prefix | Enumerate and parse only names anchored at `module_graph::` | Decoys cannot replace required guard cases | Registration and success sets share the same exact namespace boundary | Prefix-decoy and execution-decoy regressions |
+| Baseline is missing, malformed, duplicated or has an unsupported version; another checkout is being gated | Load and validate the baseline from the checked root before enumeration | Invalid baseline fails; valid override checks that checkout's baseline and manifest | Required identities belong to the tree being checked | Baseline-validation and gate-root override regressions |
+
+The checker is synchronous, with no persistence writes, retry state or
+out-of-order completion. Case-set changes require a reviewed baseline update;
+test-body meaning remains subject to Rust regression assertions and code review.
+The all-ignored mutation validates the real libtest distinction between
+registration and execution; controlled stubs exercise malformed output without
+starting cold cargo builds in parallel Vitest workers.
+The real-toolchain results above were observed on 2026-10-03 in disposable
+copies of the current 149-case tree; mutation sources were never written into
+the working checkout. The resolving PR records reproducible mutation commands.
 
 ### Issue #424 State And Invariant Matrix
 

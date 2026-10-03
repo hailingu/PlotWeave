@@ -134,6 +134,7 @@ function copyScenarioFiles(sandbox: string): string {
     'gate-tree-marker.sh',
     'pre-push-install.mjs',
     'rust-coverage.sh',
+    'rust-module-graph-guard-baseline.json',
     'sonar-quality-gate.sh',
   ]) {
     copyFileSync(
@@ -170,18 +171,7 @@ fi`,
     String.raw`printf 'cargo-llvm-cov %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
 printf '%s\n' 'TN:' 'SF:src-tauri/src/example.rs' 'DA:1,1' 'end_of_record' > "$PLOTWEAVE_RUST_COVERAGE_REPORT_PATH"`,
   )
-  // cargo 替身（issue #471 元守卫）：门禁的 check-rust-module-graph-guard.sh
-  // 经 PLOTWEAVE_CARGO_BIN 调用 cargo 枚举——输出高于存活下限 90 的受控
-  // module_graph:: 用例清单。
-  writeExecutable(
-    resolve(bin, 'cargo'),
-    String.raw`printf 'cargo %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
-i=0
-while [ "$i" -lt 95 ]; do
-  printf 'module_graph::case_%s: test\n' "$i"
-  i=$((i + 1))
-done`,
-  )
+  writeScenarioCargoStub(bin)
   writeExecutable(
     resolve(bin, 'sonar-scanner'),
     String.raw`printf 'sonar-scanner\n' >> "$PLOTWEAVE_TEST_LOG"
@@ -201,6 +191,30 @@ case "$*" in
     exit 64
     ;;
 esac`,
+  )
+}
+
+/** 为真实完整门禁返回基线守卫的枚举与逐例成功执行结果（issue #495）。 */
+function writeScenarioCargoStub(bin: string): void {
+  writeExecutable(
+    resolve(bin, 'cargo'),
+    String.raw`printf 'cargo %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
+case "$*" in
+  'test --lib --manifest-path src-tauri/Cargo.toml -- --list') mode=list ;;
+  'test --lib --manifest-path src-tauri/Cargo.toml -- module_graph:: --format pretty --color never --test-threads=1') mode=run ;;
+  *) printf '%s\n' 'unexpected cargo arguments' >&2; exit 64 ;;
+esac
+"$PLOTWEAVE_NODE_BIN" --input-type=module -e '
+import { readFileSync } from "node:fs";
+const tests = JSON.parse(readFileSync("scripts/rust-module-graph-guard-baseline.json", "utf8")).tests;
+if (process.argv[1] === "list") {
+  for (const name of tests) console.log(name + ": test");
+  console.log(tests.length + " tests, 0 benchmarks");
+} else {
+  for (const name of tests) console.log("test " + name + " ... ok");
+  console.log("test result: ok. " + tests.length + " passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s");
+}
+' "$mode"`,
   )
 }
 
@@ -522,6 +536,11 @@ describe('提交与推送的门禁结论记录（issue #355）', { timeout: 30_0
 
   it('推送门禁通过后物化待物化行到版本化文件并清空（issue #355）', () => {
     const scenario = prepareHookScenario('OK', true)
+    // issue #495：慢路径必须在被推提交中读取版本化守卫基线。
+    expect(
+      scenario.git(['add', 'scripts/rust-module-graph-guard-baseline.json'])
+        .status,
+    ).toBe(0)
     expect(scenario.git(['commit', '--allow-empty', '-m', 'x']).status).toBe(0)
     // 裸远端触发 pre-push：门禁后再物化
     const remote = resolve(scenario.root, 'origin.git')
@@ -529,7 +548,7 @@ describe('提交与推送的门禁结论记录（issue #355）', { timeout: 30_0
     expect(scenario.git(['remote', 'add', 'origin', remote]).status).toBe(0)
 
     const push = scenario.git(['push', '-u', 'origin', 'main'])
-    expect(push.status).toBe(0)
+    expect(push.status, push.stderr).toBe(0)
     // 提交一次 + 推送一次，各恰一次门禁调用
     expect(scenario.gateRuns()).toBe(2)
     const history = readFileSync(

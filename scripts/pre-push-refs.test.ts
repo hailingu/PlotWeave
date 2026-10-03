@@ -236,6 +236,7 @@ function commitScenarioTooling(sandbox: string, fullGate: boolean): void {
     'gate-tree-marker.sh',
     'pre-push-install.mjs',
     'rust-coverage.sh',
+    'rust-module-graph-guard-baseline.json',
     'sonar-quality-gate.sh',
   ]) {
     copyFileSync(
@@ -305,18 +306,7 @@ fi`,
     String.raw`printf 'cargo-llvm-cov %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
 printf '%s\n' 'TN:' 'SF:src-tauri/src/example.rs' 'DA:1,1' 'end_of_record' > "$PLOTWEAVE_RUST_COVERAGE_REPORT_PATH"`,
   )
-  // cargo 替身（issue #471 元守卫）：门禁的 check-rust-module-graph-guard.sh
-  // 经 PLOTWEAVE_CARGO_BIN 调用 cargo 枚举——输出高于存活下限 90 的受控
-  // module_graph:: 用例清单。
-  writeExecutable(
-    resolve(bin, 'cargo'),
-    String.raw`printf 'cargo %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
-i=0
-while [ "$i" -lt 95 ]; do
-  printf 'module_graph::case_%s: test\n' "$i"
-  i=$((i + 1))
-done`,
-  )
+  writeScenarioCargoStub(bin)
   writeExecutable(
     resolve(bin, 'sonar-scanner'),
     String.raw`printf 'sonar-scanner\n' >> "$PLOTWEAVE_TEST_LOG"
@@ -338,6 +328,30 @@ case "$*" in
     exit 64
     ;;
 esac`,
+  )
+}
+
+/** 在当前被推树读取基线，模拟 cargo 枚举与逐例成功执行（issue #495）。 */
+function writeScenarioCargoStub(bin: string): void {
+  writeExecutable(
+    resolve(bin, 'cargo'),
+    String.raw`printf 'cargo %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
+case "$*" in
+  'test --lib --manifest-path src-tauri/Cargo.toml -- --list') mode=list ;;
+  'test --lib --manifest-path src-tauri/Cargo.toml -- module_graph:: --format pretty --color never --test-threads=1') mode=run ;;
+  *) printf '%s\n' 'unexpected cargo arguments' >&2; exit 64 ;;
+esac
+"$PLOTWEAVE_NODE_BIN" --input-type=module -e '
+import { readFileSync } from "node:fs";
+const tests = JSON.parse(readFileSync("scripts/rust-module-graph-guard-baseline.json", "utf8")).tests;
+if (process.argv[1] === "list") {
+  for (const name of tests) console.log(name + ": test");
+  console.log(tests.length + " tests, 0 benchmarks");
+} else {
+  for (const name of tests) console.log("test " + name + " ... ok");
+  console.log("test result: ok. " + tests.length + " passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s");
+}
+' "$mode"`,
   )
 }
 

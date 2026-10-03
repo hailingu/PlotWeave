@@ -51,6 +51,10 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      # 元守卫使用 Node 校验版本化 JSON 基线，复用仓库钉版工具链。
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
       # rustup 按 rust-toolchain.toml 自动解析并安装钉版工具链（1.95.0 +
       # rustfmt/clippy/llvm-tools 组件）——单一事实源在 rust-toolchain.toml，
       # 不在此重复（macos-15 runner 预装 rustup）
@@ -68,8 +72,8 @@ jobs:
       - name: cargo test
         working-directory: src-tauri
         run: cargo test
-      # 模块图守卫元检查（issue #471）：cargo test 之后 lib 测试目标构建已
-      # 热，列举为增量秒级；删除 lib.rs 唯一挂载点（或清空守卫模块）时失败。
+      # 模块图守卫元检查（issues #471/#495）：cargo test 后 lib 目标已热；
+      # 核对版本化注册名称与实际通过结果，拒绝挂载丢失及 ignored 用例。
       # 串行挂在本任务，不进 frontend 任务的并行 vitest 套件（冷 cargo 构建
       # 会饿死兄弟子进程测试）。
       - name: 模块图守卫元检查（issue #471）
