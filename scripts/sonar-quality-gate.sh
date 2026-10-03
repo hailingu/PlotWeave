@@ -245,9 +245,9 @@ run_step "$script_directory/rust-coverage.sh"
 # Rust 行覆盖率下限（issue #393）：与前端同一口径，扫描发布前复核
 enforce_line_coverage_floor 'Rust' "$rust_coverage_report_path"
 
-# 模块图守卫元守卫（issue #471）：Rust 模块图守卫的唯一挂载点被删（或
-# 用例被清空）时 cargo test 依旧全绿——扫描发布前以工具链测试枚举复核
-# 存活下限，防整建制静默消失。串行 Rust 阶段末位执行；绝不挪进并行
+# 模块图守卫元守卫（issues #471/#495）：扫描前核对版本化注册名称基线
+# 与实际通过结果，拒绝挂载点丢失、用例消失或被 ignored。
+# 串行 Rust 阶段末位执行；绝不挪进并行
 # vitest 套件（冷 cargo 构建会饿死 spawn 子进程的兄弟测试）。
 printf '%s\n' '[SonarQube] 模块图守卫元检查（issue #471）……'
 run_step "$script_directory/check-rust-module-graph-guard.sh"

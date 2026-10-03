@@ -66,7 +66,9 @@ type GateOptions = {
   lockOccupied?: boolean
   /** 模块图守卫元检查（issue #471）：cargo 替身退出码，非零模拟列举失败。 */
   metaGuardExit?: number
-  /** 模块图守卫元检查（issue #471）：替身输出的 module_graph:: 用例行数。 */
+  /** 保留完整枚举，但在实际执行时跳过一个守卫（issue #495）。 */
+  metaGuardIgnored?: boolean
+  /** 从版本化基线取前 N 个用例，模拟枚举缺失（issue #495）。 */
   metaGuardTests?: number
   npmExit?: number
   pendingBlocked?: boolean
@@ -278,11 +280,7 @@ esac`,
   )
 }
 
-/** cargo 替身（issue #471 元守卫）：记录调用并按环境选项输出受控数量的
- * module_graph:: 用例行——门禁经 PLOTWEAVE_CARGO_BIN 调用
- * scripts/check-rust-module-graph-guard.sh，本替身即其 cargo 枚举语义的
- * 受控源（默认 95 例，高于存活下限 90；形态见
- * PLOTWEAVE_TEST_META_GUARD_* 注入）。 */
+/** cargo 替身：以版本化基线模拟完整枚举、逐例执行和 ignored 注入。 */
 function writeCargoStub(paths: GateStubPaths): void {
   writeExecutable(
     paths.cargoPath,
@@ -291,12 +289,27 @@ if [ "$PLOTWEAVE_TEST_META_GUARD_EXIT" -ne 0 ]; then
   printf '%s\n' 'error: injected cargo failure (boom-diagnostic)' >&2
   exit "$PLOTWEAVE_TEST_META_GUARD_EXIT"
 fi
-i=0
-while [ "$i" -lt "$PLOTWEAVE_TEST_META_GUARD_TESTS" ]; do
-  printf 'module_graph::case_%s: test\n' "$i"
-  i=$((i + 1))
-done
-printf '%s tests, 0 benchmarks\n' "$PLOTWEAVE_TEST_META_GUARD_TESTS"`,
+case "$*" in
+  'test --lib --manifest-path src-tauri/Cargo.toml -- --list') mode=list ;;
+  'test --lib --manifest-path src-tauri/Cargo.toml -- module_graph:: --format pretty --color never --test-threads=1') mode=run ;;
+  *) printf '%s\n' 'unexpected cargo arguments' >&2; exit 64 ;;
+esac
+"$PLOTWEAVE_NODE_BIN" --input-type=module -e '
+import { readFileSync } from "node:fs";
+const baseline = JSON.parse(readFileSync("scripts/rust-module-graph-guard-baseline.json", "utf8"));
+const limit = process.env.PLOTWEAVE_TEST_META_GUARD_TESTS;
+const tests = limit ? baseline.tests.slice(0, Number(limit)) : baseline.tests;
+if (process.argv[1] === "list") {
+  for (const name of tests) console.log(name + ": test");
+  console.log(tests.length + " tests, 0 benchmarks");
+} else {
+  const ignored = process.env.PLOTWEAVE_TEST_META_GUARD_IGNORED === "1" ? 1 : 0;
+  for (const [index, name] of tests.entries()) {
+    console.log("test " + name + " ... " + (index < ignored ? "ignored" : "ok"));
+  }
+  console.log("test result: ok. " + (tests.length - ignored) + " passed; 0 failed; " + ignored + " ignored; 0 measured; 0 filtered out; finished in 0.00s");
+}
+' "$mode"`,
   )
 }
 
@@ -343,7 +356,8 @@ function gateEnvironment(
     PLOTWEAVE_TEST_FORMAT_EXIT: String(options.formatExit ?? 0),
     PLOTWEAVE_TEST_LINT_EXIT: String(options.lintExit ?? 0),
     PLOTWEAVE_TEST_META_GUARD_EXIT: String(options.metaGuardExit ?? 0),
-    PLOTWEAVE_TEST_META_GUARD_TESTS: String(options.metaGuardTests ?? 95),
+    PLOTWEAVE_TEST_META_GUARD_IGNORED: options.metaGuardIgnored ? '1' : '0',
+    PLOTWEAVE_TEST_META_GUARD_TESTS: String(options.metaGuardTests ?? ''),
     PLOTWEAVE_TEST_RUST_COVERAGE_MODE: options.rustCoverageMode ?? 'valid',
     PLOTWEAVE_TEST_NPM_EXIT: String(options.npmExit ?? 0),
     PLOTWEAVE_TEST_QUALITY_GATE_STATUS: options.qualityGateStatus ?? 'OK',
@@ -393,6 +407,11 @@ function prepareGatePaths(options: GateOptions = {}): GateStubPaths {
 
   mkdirSync(dirname(paths.coveragePath))
   mkdirSync(dirname(paths.reportPath))
+  mkdirSync(resolve(sandbox, 'scripts'))
+  copyFileSync(
+    resolve(repositoryRoot, 'scripts/rust-module-graph-guard-baseline.json'),
+    resolve(sandbox, 'scripts/rust-module-graph-guard-baseline.json'),
+  )
   writeCommandStubs(paths, options)
 
   // 版本化与待物化文件预置：待物化默认为空（失败路径不追加时读到空
@@ -452,12 +471,13 @@ function runGate(target: string, options: GateOptions = {}): GateRun {
 /** 默认根回归使用夹具内的真实脚本链，避免根覆盖变量掩盖脚本目录推导。 */
 function copyFixtureGateScripts(root: string): string {
   const scripts = resolve(root, 'scripts')
-  mkdirSync(scripts)
+  mkdirSync(scripts, { recursive: true })
   for (const file of [
     'check-file-size.ts',
     'check-rust-module-graph-guard.sh',
     'check-static.sh',
     'file-size-baseline.json',
+    'rust-module-graph-guard-baseline.json',
     'rust-coverage.sh',
     'sonar-quality-gate.sh',
   ]) {
@@ -524,7 +544,7 @@ afterEach(() => {
 // 用例逐个 spawnSync 真实门禁脚本（多级 shell 替身），全量套件并发负载下
 // 单用例常超 vitest 默认 5s（实测 3.4–4.9s 贴边抖动，钩子内必超）——放宽
 // describe 级超时上限，不放宽断言。
-describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
+describe('SonarQube 完整提交流水线', { timeout: 30_000 }, () => {
   it('先生成前端与 Rust 覆盖率，再等待 Quality Gate，并确认新增代码未解决问题为零', () => {
     const result = runGate('scripts/sonar-quality-gate.sh')
 
@@ -541,6 +561,7 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
       'npm',
       'cargo-llvm-cov',
       'cargo',
+      'cargo',
       'sonar-scanner',
       'curl',
       'curl',
@@ -552,10 +573,12 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
     expect(result.log).toContain(
       'cargo-llvm-cov llvm-cov --lib --test media_format_leaf --lcov',
     )
-    // 模块图守卫元检查（issue #471）：串行 Rust 阶段末位、扫描之前，
-    // 以 cargo 实际枚举复核守卫存活下限
+    // 版本化守卫必须在扫描前枚举完整，并逐例执行（issue #495）。
     expect(result.log).toContain(
       'cargo test --lib --manifest-path src-tauri/Cargo.toml -- --list',
+    )
+    expect(result.log).toContain(
+      'cargo test --lib --manifest-path src-tauri/Cargo.toml -- module_graph:: --format pretty --color never --test-threads=1',
     )
     expect(result.log).toContain('-Dsonar.qualitygate.wait=true')
     expect(result.log).toContain('-Dsonar.host.url=http://sonar.test')
@@ -567,17 +590,17 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
     // 增量清零：issues 查询按 sinceLeakPeriod（New Code 周期）过滤
     expect(result.log).toContain('sinceLeakPeriod=true')
   })
+})
 
-  it('守卫用例跌破存活下限：门禁在扫描前失败（issue #471）', () => {
+describe('Rust 模块图守卫执行门禁', { timeout: 30_000 }, () => {
+  it('守卫枚举缺少基线用例时，门禁在扫描前失败（issue #495）', () => {
     const result = runGate('scripts/sonar-quality-gate.sh', {
       metaGuardTests: 3,
     })
 
     expect(result.status).toBe(1)
-    expect(result.stderr).toContain('守卫用例数 3 跌破存活下限 90')
-    expect(result.stderr).toContain('#[cfg(test)] mod module_graph 被移除')
-    // 挂载点被删（归零）是同一断言路径的极端形态，行为契约由
-    // scripts/rust-module-graph-guard.test.ts 的归零用例覆盖。
+    // 稳定诊断代码契约：rust-standard.md「Module Boundary Guards」。
+    expect(result.stderr).toContain('[RUST_MODULE_GRAPH_LIST_MISMATCH]')
     expect(result.log).not.toContain('sonar-scanner')
   })
 
@@ -592,6 +615,24 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
     expect(result.log).not.toContain('sonar-scanner')
   })
 
+  it('枚举完整但守卫被 ignored 时，门禁在扫描前失败（issue #495）', () => {
+    const result = runGate('scripts/sonar-quality-gate.sh', {
+      metaGuardIgnored: true,
+    })
+
+    expect(result.log, result.stderr).toContain(
+      'cargo test --lib --manifest-path src-tauri/Cargo.toml -- --list',
+    )
+    expect(result.log, result.stderr).toContain(
+      'cargo test --lib --manifest-path src-tauri/Cargo.toml -- module_graph:: --format pretty --color never --test-threads=1',
+    )
+    expect(result.status, result.stderr).toBe(1)
+    expect(result.log).not.toContain('sonar-scanner')
+    expect(result.pending).toBe('')
+  })
+})
+
+describe('Rust 覆盖率报告与两侧覆盖率下限', { timeout: 30_000 }, () => {
   it('Rust 覆盖率生成缺失或没有任何已覆盖行时停止，不启动扫描（issue #169）', () => {
     for (const rustCoverageMode of [
       'missing',
@@ -657,7 +698,9 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
     expect(record.frontendLineCoveragePercent).toBe(80)
     expect(record.rustLineCoveragePercent).toBe(80)
   })
+})
 
+describe('静态检查失败时阻断门禁', { timeout: 30_000 }, () => {
   it('格式检查失败时阻止操作，不生成覆盖率也不扫描（issue #227）', () => {
     const result = runGate('scripts/sonar-quality-gate.sh', { formatExit: 1 })
 
@@ -685,7 +728,9 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
     expect(result.log).not.toContain('test:coverage')
     expect(result.log).not.toContain('sonar-scanner')
   })
+})
 
+describe('Sonar 地址与前端覆盖率报告边界', { timeout: 30_000 }, () => {
   it('未显式配置 SonarQube 地址时阻止操作，避免误扫 SonarQube Cloud', () => {
     const result = runGate('scripts/sonar-quality-gate.sh', {
       sonarHostUrl: null,
@@ -715,7 +760,9 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
       expect(`${result.stdout}${result.stderr}`).toContain('覆盖率报告')
     },
   )
+})
 
+describe('扫描与服务门禁失败时阻断提交', { timeout: 30_000 }, () => {
   it('另一个门禁正在运行时停止，避免共享扫描目录互相覆盖', () => {
     const result = runGate('scripts/sonar-quality-gate.sh', {
       lockOccupied: true,
@@ -751,7 +798,9 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
     expect(result.status).not.toBe(0)
     expect(`${result.stdout}${result.stderr}`).toContain('3')
   })
+})
 
+describe('Sonar 凭据传递与优先级', { timeout: 30_000 }, () => {
   it('SONAR_TOKEN 经 curl 标准输入传 Authorization 头并以环境变量供扫描器，不进入命令参数或调用日志', () => {
     const result = runGate('scripts/sonar-quality-gate.sh', {
       sonarToken: 'sqp_token-a.1',
@@ -1016,6 +1065,7 @@ describe('强杀门禁后的人工恢复（issue #430）', { timeout: 30_000 }, 
         'npm',
         'npm',
         'cargo-llvm-cov',
+        'cargo',
         'cargo',
         'sonar-scanner',
         'curl',
