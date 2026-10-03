@@ -83,6 +83,7 @@ A failed or unavailable required check blocks the Git operation. Do not use `--n
 - [Gate Lifecycle And Recovery](quality-gate-lifecycle.md)
 - [Gate Run Evidence](quality-gate-evidence.md)
 - [Quality Gate Cost Decision](quality-gate-cost.md)
+- [门禁测试负载与夹具成本（issue #498）](test-workload.md)
 
 ## Versioning And Delivery
 
