@@ -1287,7 +1287,13 @@ describe(
       expect(outcome.tempWorktreePath).toBeUndefined()
       await expectInterruptConverged(scenario, outcome, 143)
     })
+  },
+)
 
+describe(
+  'pre-push 中断清理：宽限处理与门禁锁归属（issue #465）',
+  { timeout: 60_000 },
+  () => {
     it('门禁前台步骤忽略 TERM 超过宽限：门禁仍先释放锁退出，锁不泄漏（PR #484 评审 5389125859）', async () => {
       const scenario = preparePushScenario({
         withRemote: false,

@@ -1,5 +1,6 @@
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   mkdtempSync,
   mkdirSync,
@@ -238,11 +239,12 @@ esac`,
 }
 
 /** sonar-scanner 替身（writeCommandStubs 拆分）：记录调用与令牌接收形
- * 态，受控退出，并写出 report-task.txt 供门禁读取。 */
-function writeScannerStub(paths: GateStubPaths): void {
+ * 态，受控退出，并写出 report-task.txt；默认根用例另记录实际工作目录。 */
+function writeScannerStub(paths: GateStubPaths, recordRoot = false): void {
   writeExecutable(
     paths.scannerPath,
     String.raw`printf 'sonar-scanner %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
+${recordRoot ? String.raw`printf 'scanner-root %s\n' "$PWD" >> "$PLOTWEAVE_TEST_LOG"` : ''}
 printf '%s' "$SONAR_TOKEN" > "$PLOTWEAVE_TEST_SCANNER_TOKEN"
 if [ "$PLOTWEAVE_TEST_SCANNER_EXIT" -ne 0 ]; then
   exit "$PLOTWEAVE_TEST_SCANNER_EXIT"
@@ -445,6 +447,26 @@ function runPreparedGate(
 /** 在隔离的外部依赖边界下执行真实门禁脚本或 Git hook。 */
 function runGate(target: string, options: GateOptions = {}): GateRun {
   return runPreparedGate(target, prepareGatePaths(options), options)
+}
+
+/** 默认根回归使用夹具内的真实脚本链，避免根覆盖变量掩盖脚本目录推导。 */
+function copyFixtureGateScripts(root: string): string {
+  const scripts = resolve(root, 'scripts')
+  mkdirSync(scripts)
+  for (const file of [
+    'check-file-size.ts',
+    'check-rust-module-graph-guard.sh',
+    'check-static.sh',
+    'file-size-baseline.json',
+    'rust-coverage.sh',
+    'sonar-quality-gate.sh',
+  ]) {
+    copyFileSync(
+      resolve(repositoryRoot, 'scripts', file),
+      resolve(scripts, file),
+    )
+  }
+  return resolve(scripts, 'sonar-quality-gate.sh')
 }
 
 /** 等待测试门禁在持锁后的首个检查命令中暂停，超时或提前退出均报错。 */
@@ -824,6 +846,62 @@ it('门禁检查与记录绑定最小测试仓库，不扫描完整工作区（i
   expect(blocked.log).not.toContain('sonar-scanner')
   expect(blocked.pending).toBe(result.pending)
 })
+
+it.each(['OK', 'ERROR'])(
+  '不覆盖根变量时，夹具内完整门禁从脚本目录推导根并处理 %s（PR #513）',
+  (qualityGateStatus) => {
+    const options = { qualityGateStatus }
+    const paths = prepareGatePaths(options)
+    const script = copyFixtureGateScripts(paths.root)
+    writeScannerStub(paths, true)
+    const caller = repositories.create()
+    mkdirSync(resolve(caller, 'src'))
+    writeFileSync(resolve(caller, 'src/oversized.ts'), '\n'.repeat(801))
+    const git = (args: string[]) => {
+      const output = spawnSync('git', args, {
+        cwd: paths.root,
+        encoding: 'utf8',
+        env: gitFixtureEnvironment(),
+      })
+      expect(output.status, output.stderr).toBe(0)
+      return output.stdout.trim()
+    }
+    writeFileSync(resolve(paths.root, 'story.txt'), 'script-local root')
+    git(['add', 'story.txt'])
+    const env = gateEnvironment(paths, options)
+    delete env.PLOTWEAVE_GATE_REPOSITORY_ROOT
+
+    const result = spawnSync('sh', [script], {
+      cwd: caller,
+      encoding: 'utf8',
+      env,
+    })
+    expect(result.status, result.stderr).toBe(
+      qualityGateStatus === 'OK' ? 0 : 1,
+    )
+    const log = readTextFileBestEffort(paths.logPath)
+    expect(log).toContain('npm run test:coverage')
+    expect(log).toContain('cargo-llvm-cov llvm-cov')
+    expect(log).toContain('sonar-scanner')
+    expect(log).toContain(`scanner-root ${paths.root}\n`)
+    // 稳定诊断代码契约：docs/development/file-size-guard.md。
+    expect(result.stdout).toContain('SIZE_CHECK_COMPLETE')
+    expect(result.stderr).not.toContain('SIZE_LIMIT_EXCEEDED')
+    if (qualityGateStatus === 'OK') {
+      expect(
+        JSON.parse(readTextFileBestEffort(paths.pendingPath)),
+      ).toMatchObject({
+        tree: git(['write-tree']),
+        head: git(['rev-parse', 'HEAD']),
+        qualityGate: 'OK',
+      })
+    } else {
+      expect(readTextFileBestEffort(paths.pendingPath)).toBe('')
+    }
+    expect(existsSync(paths.lockPath)).toBe(false)
+  },
+  30_000,
+)
 
 it.each(['primary', 'fallback'] as const)(
   '继承已导出的 sonar_token 时仍隔离 %s 凭据（评审 4162846722）',
