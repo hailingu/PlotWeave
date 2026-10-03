@@ -33,12 +33,11 @@
 //!   命名空间查别名/glob（评审 5381066396），均未命中才视为外部 crate 不入图
 //!   （issue #426）；不经 `use` 的全限定调用不采集——与前端守卫只采
 //!   import/export 边同口径。同文件 inline 引用解析回自身，不计自环边。
-//! - 采集完整性（issue #469）：`build_graph` 建边前经审计层对每条展开
-//!   路径分类——首段命中内部模块名（当前模块子模块，或 crate/self/super
-//!   前缀的结构性命中；裸首段不按根模块判定，issue #470——与
-//!   resolve_use 口径一致）却零目标所有者即 fail-closed；
-//!   未命中者按外部 crate 分类计数（resolved/external，供真实仓库断言
-//!   与诊断），防 #426 式「静默丢边 → 假无环」复发。
+//! - 目标采集审计（issue #494）：独立有限见证推导字面模块及直接模块
+//!   别名/glob 的必需文件 owner；实际采集缺少任一 owner 即 fail-closed，
+//!   祖先回退不能替代具体目标。分类计数仅指示解析结果；复杂链、同名显式
+//!   绑定的 glob 及共享扫描边界不受独立证明，零缺口不证明全图采集完整。
+//!   真实仓库断言同时运行明确的别名/glob 语法 canary，覆盖生产图暂无的形态。
 //! - fail-closed：`mod` 声明找不到对应文件（`NAME.rs` 与 `NAME/mod.rs`
 //!   均缺失或并存）、`super::` 越过 crate 根、use 语句缺分号或花括号分组
 //!   残缺，均直接判失败——构图不健全比漏检更危险（与前端
@@ -68,6 +67,7 @@ use std::path::Path;
 mod aliases;
 mod attrs;
 mod audit;
+mod audit_witness;
 mod closures;
 mod cycles;
 mod fields;
@@ -642,17 +642,16 @@ fn resolve_use(
         .collect()
 }
 
-/// 全图构建：模块树 + 采集完整性审计（issue #469，缺口 fail-closed）
+/// 全图构建：模块树 + 有限独立目标审计（issue #494，缺口 fail-closed）
 /// + use 边（自环剔除、BTreeSet 去重排序），节点集 = 全部生产模块文件。
 fn build_graph(files: &BTreeMap<ModuleKey, String>) -> BTreeMap<ModuleKey, BTreeSet<ModuleKey>> {
     let mut scans: BTreeMap<ModuleKey, FileScan> = BTreeMap::new();
     let tree = ModuleTree::build(files, &mut scans);
-    // 采集完整性（issue #469）：首段命中内部模块名的 use 必须解析出目标
-    // 所有者——静默丢边会让经该边闭合的真环对守卫隐形（#426 的成因）
+    // 有限独立见证要求的每个 owner 必须被采集，非空祖先回退不能掩盖缺口。
     let audit = audit::audit_collection(&tree, &scans);
     if !audit.unresolved_internal.is_empty() {
         panic!(
-            "use 采集完整性缺口（issue #469）：首段命中内部模块却零目标：{:?}",
+            "use 目标采集缺口（issue #494）：独立见证 owner 未采集：{:?}",
             audit.unresolved_internal
         );
     }
@@ -788,3 +787,7 @@ mod fixture_ownership_tests;
 /// #504 模块图回归的共享拓扑与语义断言。
 #[cfg(test)]
 mod dependency_fixture;
+
+/// #494 独立目标见证与实际采集缺口回归。
+#[cfg(test)]
+mod issue_494_tests;
