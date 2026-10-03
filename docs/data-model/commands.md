@@ -20,7 +20,7 @@
 
 | 类别 | 命令 | 说明 | 当前实现入口（等价语义，§9 就地实施状态） |
 | --- | --- | --- | --- |
-| 节点 | `create_node` / `delete_node` / `move_node` / `resize_node` | delete 连带删除关联边，inverse 一并恢复 | `useNodeCreation`；`useNodeDeletion`（节点+连线+产物回收同一撤销单元）；`move_node` = `useNodeDragHistory`（拖拽整段一步，过程帧不入栈）与 `useAutoLayout.onAutoLayout`（整图位置 before/after 快照为一步撤销，issue #94）；`resize_node` 为目标设计，画布未交付 |
+| 节点 | `create_node` / `delete_node` / `move_node` / `resize_node` | delete 连带删除关联边，inverse 一并恢复 | `useNodeCreation`；`useNodeDeletion`（节点+连线+产物回收同一撤销单元）；`move_node` = `useNodeDragHistory`（拖拽整段一步，过程帧不入栈；键盘移动每次 keydown 一步，[issue #496](https://github.com/hailingu/PlotWeave/issues/496)）、`useCanvasAlignment.onAlignNodes`（选中节点六方向对齐一步）与 `useAutoLayout.onAutoLayout`（整图位置 before/after 快照为一步撤销，issue #94）；`resize_node` 为目标设计，画布未交付 |
 | 节点数据 | `update_node_spec` / `update_node_meta` / `update_node_ui` | | `useNodePatch.patchNode`（编辑即命令、同键合并撤销；分支选项级联内置同一撤销单元）；`ui` 态为运行态不经命令通道 |
 | 连接 | `connect_edge` / `disconnect_edge` | | `useConnectionRules`（实时校验 + 落线入栈，与 AI 校验共用 `graphRules`）；`useEdgeDeletion` |
 | 设定 | `upsert_character` / `delete_character`（地点、道具同构） | | `useSettingsActions`（角色/地点整桶 before/after 可撤销）；道具（props）CRUD 为目标设计，当前仅透传保真（§6 契约桶） |
@@ -256,6 +256,7 @@ type GraphCommandOf<K extends CommandType> = Extract<GraphCommand, { type: K }>
 ### 9.4 撤销规则
 
 - 撤销/重做栈仅存于会话，不持久化；目标 `GraphStore` 规格的 50 条与当前 `CommandStack` 默认 200 条存在差异，当前实现还在 800ms 内合并同键补丁。本次仅记录实现差异，不调整容量。
+- **键盘位置历史（#496，已实现）**：React Flow 的非拖拽位置变更经 `useNodeDragHistory.onNodesChange` 捕获原坐标与最终坐标，单次 keydown 的全部移动节点是一个撤销单元，连续按键（含 repeat）各自成条；拖拽期间仍由起止回调统一记一步，避免终帧重复入栈。仅回放实际移动节点的位置，保留内容、连线、未参与节点和会话态；零位移不入栈。原始移动和历史回放均进入现有文档状态与防抖保存通道，位置载荷一致，不新增持久化命令或变更 schema。
 - **资产重做前复验（#10，已实现）**：库导入与生成产物命令通过可选 `redoGuard` 调用 `projectAssets.revalidate`，在资产重新进入索引前异步复验；失败时画布不变、命令保留在重做栈并显示错误，文件恢复后可重试。校验期间新编辑、撤销（含空栈意向）或再次重做都会推进栈版本，使旧校验的成功或迟到失败失效；普通无 guard 命令保持同步重做。删除撤销恢复资产的同构路径仍未增加复验，是 #10 明确保留的边界。
 - 拖拽中发 `move_node { transient: true }`（过程帧只更新内存文档，不置脏不落盘、不进栈），松手时补发一条正式命令进撤销栈。**正式命令的 inverse 不得按默认规则从 docBefore 捕获**——transient 帧已把文档推进到最后一帧拖拽位置，从 docBefore 捕获会让 undo 只回到最后一个拖拽帧（常与终点相同）而非拖拽起点；dispatcher 必须在手势开始时捕获并持有各被拖节点的原坐标，松手提交正式 `move_node`/`resize_node` 时以该原坐标显式填充 inverse，或把整个手势（transient 帧 + 正式命令）作为同一手势事务合并捕获一次 inverse。缩放（resize）手势同款。
 - `update_node_ui`（选中、展开折叠）与 `update_viewport` 不进撤销栈，但二者语义不同：`update_node_ui` 只改 §4.1 的 `ui` 会话态（`selected`/`expanded`，§3 明确不持久化、加载时重置），**不置脏、不落盘**——纯选择操作不得触发防抖保存，否则会让 Rust 重新生成 `updatedAt`、错误改变首页最近项目排序；若未来出现真正需要持久化的 UI 字段，须为其定义独立命令，不得搭 update_node_ui 的便车。`update_viewport` 则必须最终落盘——`graph.viewport` 随项目持久化（§3），平移/缩放的过程帧发 `update_viewport { transient: true }`（只更新内存、不置脏不落盘），交互结束时补发一条非 transient 的 `update_viewport` 终帧：置脏并随 §10.5 防抖保存落盘，但按本条仍不进撤销栈。若全部视口变更都停留在 transient 帧，关闭项目时视口修改不会产生可保存的脏状态，重开只能得到旧视口或 fitView。

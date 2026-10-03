@@ -88,10 +88,15 @@ function useGraphDeletion(
   return { deleteNodesByIds, deleteEdgesByIds }
 }
 
-/** 位置动作共用同一文档与历史入口：拖动、自动排布与选中对齐。 */
+/** 位置动作共用同一文档与历史入口：键盘移动、拖动、自动排布与选中对齐。 */
 function usePositionActions(deps: EditorGraphActionsDeps) {
   const { doc, pushHistory, fitView, onError } = deps
-  const drag = useNodeDragHistory({ setNodes: doc.setNodes, pushHistory })
+  const drag = useNodeDragHistory({
+    nodesRef: doc.nodesRef,
+    onNodesChange: doc.onNodesChange,
+    setNodes: doc.setNodes,
+    pushHistory,
+  })
   const layout = useAutoLayout({
     nodesRef: doc.nodesRef,
     edgesRef: doc.edgesRef,
