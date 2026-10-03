@@ -367,6 +367,7 @@ export function fromDocument(
     name: doc.project.name,
     description: doc.project.description,
     createdAt: doc.project.createdAt || undefined,
+    updatedAt: doc.project.updatedAt,
     nodes: nodes.map(fromStoryNode),
     edges: edges.map(fromStoryEdge),
     settings: fromDocSettings({ characters, locations, props, documents }),

@@ -67,6 +67,7 @@ export function memoryCreate(name: string): ProjectSummary {
     doc: {
       name,
       createdAt: new Date(now).toISOString(),
+      updatedAt: new Date(now).toISOString(),
       nodes: [],
       edges: [],
       settings: { characters: [], locations: [] },

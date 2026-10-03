@@ -1,7 +1,8 @@
 /**
  * 编辑器会话文档构建（EditorView 防抖落盘与视口标脏共用）。
- * project 元信息（name/description/createdAt）是编辑器不编辑的透传字段，
- * 每次构建都必须原样携带，漏带即保存丢数据（§3/§7.1）；资产索引是
+ * project 元信息（name/description/createdAt/updatedAt）是编辑器不编辑的透传字段，
+ * 每次构建都原样携带（§3/§7.1）；updatedAt 供导出保留加载基线，保存重新盖戳。
+ * 其余元信息漏带即保存丢数据；资产索引是
  * 会话态（§7.3 库资产拖上画布在会话内新增），从 part 取编辑器当前状态。
  */
 import type { Edge, Viewport } from '@xyflow/react'
@@ -17,6 +18,8 @@ export interface EditorProject {
    * 剥离，issue #231）。 */
   description?: string | undefined
   createdAt?: string | undefined
+  /** 已加载文档的修改时间透传；保存入口自行盖戳，导出不改写。 */
+  updatedAt?: string | undefined
   assets?: { byId: Record<string, AssetRef> } | undefined
   /** 同版本文档的容器级扩展字段透传（issue #100 字段演进策略，§11）：
    * 与 name/description 同为编辑器不编辑的透传字段，每次构建必须原样
@@ -46,6 +49,7 @@ export function sessionDoc(project: EditorProject, part: SessionDocPart) {
   return {
     name: project.name,
     createdAt: project.createdAt,
+    updatedAt: project.updatedAt,
     description: project.description,
     nodes: part.nodes,
     edges: part.edges,
