@@ -133,6 +133,8 @@ function copyScenarioFiles(sandbox: string): string {
     'gate-history.sh',
     'gate-tree-marker.sh',
     'pre-push-install.mjs',
+    'pre-push-install-launcher.mjs',
+    'pre-push-install-watchdog.mjs',
     'rust-coverage.sh',
     'rust-module-graph-guard-baseline.json',
     'sonar-quality-gate.sh',
