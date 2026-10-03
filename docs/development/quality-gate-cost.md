@@ -235,7 +235,11 @@ The following decisions must not be conflated (评审 4120364296):
   [issue #462](https://github.com/hailingu/PlotWeave/issues/462) 为慢路径依赖安装
   增加期限，并将 Sonar 环境变量与安装、检查、覆盖率执行分离；仍执行 lifecycle，
   被推树的 `.npmrc` 仍生效。完整的执行、凭据及进程清理边界见
-  [安装执行与认证边界](quality-gate-push.md#安装执行与认证边界)。这些失败防护不缩减门禁步骤；
+  [安装执行与认证边界](quality-gate-push.md#安装执行与认证边界)。这里的分离限于直接继承环境：
+  macOS（本项目目标平台）上的同用户代码仍可经 `ps -Eww` 读取携带令牌的祖先进程环境，
+  该能力已由 [issue #499](https://github.com/hailingu/PlotWeave/issues/499) 的实测及最小复核确认。
+  此项保持为[已披露的凭据隔离残余](quality-gate-push.md#不可实现的边界同用户代码与调用者凭据隔离)，
+  不要求以局部环境清理实现同用户代码的完全隔离。这些失败防护不缩减门禁步骤；
   下方成本数据仍是修复前的历史测量，未因本次变更重新测量。
 
 The following remain in force exactly as written in `AGENTS.md`, and nothing
