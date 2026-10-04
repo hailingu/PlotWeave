@@ -2,23 +2,114 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { expect, it } from 'vitest'
-import { gitScenarioFixture } from './git-scenario-fixture'
+import { expect, it, vi } from 'vitest'
+import {
+  gitFixtureEnvironment,
+  gitScenarioFixture,
+} from './git-scenario-fixture'
+
+it.each([
+  { label: '无运行时配置', count: undefined, parameters: undefined },
+  { label: 'COUNT 配置', count: '1', parameters: undefined },
+  {
+    label: '-c 参数与 COUNT 配置',
+    count: '1',
+    parameters: "'maintenance.auto=true' 'fixture.parameter=preserved'",
+  },
+])(
+  '夹具保留继承配置并禁用提交后的自动维护：$label',
+  ({ count, parameters }) => {
+    vi.stubEnv('GIT_CONFIG_COUNT', count)
+    vi.stubEnv('GIT_CONFIG_PARAMETERS', parameters)
+    vi.stubEnv('GIT_CONFIG_KEY_0', 'fixture.inherited')
+    vi.stubEnv('GIT_CONFIG_VALUE_0', 'preserved')
+    const fixture = gitScenarioFixture((root) => {
+      git(root, ['init', '-q', '-b', 'main'])
+      git(root, ['config', 'maintenance.auto', 'true'])
+    })
+    try {
+      const root = fixture.create()
+      expect(git(root, ['config', '--get', 'maintenance.auto'])).toBe('false')
+      if (count === '1') {
+        expect(git(root, ['config', '--get', 'fixture.inherited'])).toBe(
+          'preserved',
+        )
+      }
+      if (parameters !== undefined) {
+        expect(git(root, ['config', '--get', 'fixture.parameter'])).toBe(
+          'preserved',
+        )
+      }
+      expect(process.env.GIT_CONFIG_COUNT).toBe(count)
+      expect(process.env.GIT_CONFIG_PARAMETERS).toBe(parameters)
+    } finally {
+      fixture.dispose()
+      vi.unstubAllEnvs()
+    }
+  },
+)
+
+it('达到维护阈值的真实提交不启动异步维护，仓库可立即复制', () => {
+  const fixture = gitScenarioFixture((root) => {
+    git(root, ['init', '-q', '-b', 'main'])
+    git(root, ['config', 'maintenance.auto', 'true'])
+    const tracePath = resolve(root, 'trace.jsonl')
+    execFileSync(
+      'git',
+      [
+        '-c',
+        'core.hooksPath=/dev/null',
+        '-c',
+        'user.name=fixture-test',
+        '-c',
+        'user.email=fixture@test',
+        '-c',
+        'maintenance.loose-objects.enabled=true',
+        '-c',
+        'maintenance.loose-objects.auto=1',
+        'commit',
+        '-q',
+        '--allow-empty',
+        '-m',
+        'seed',
+      ],
+      {
+        cwd: root,
+        env: { ...gitFixtureEnvironment(), GIT_TRACE2_EVENT: tracePath },
+      },
+    )
+    // Git Trace2 JSON 协议记录真实子进程；maintenance 是 Git 命令名。
+    const events = readFileSync(tracePath, 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+    expect(
+      events.filter(
+        (event) =>
+          event.event === 'child_start' && event.argv.includes('maintenance'),
+      ),
+    ).toEqual([])
+    expect(existsSync(resolve(root, '.git/objects/maintenance.lock'))).toBe(
+      false,
+    )
+  })
+  try {
+    const first = fixture.create()
+    const second = fixture.create()
+    expect(git(first, ['rev-parse', 'HEAD'])).toBe(
+      git(second, ['rev-parse', 'HEAD']),
+    )
+    expect(git(second, ['fsck', '--no-dangling'])).toBe('')
+  } finally {
+    fixture.dispose()
+  }
+})
 
 /** 只在测试创建的仓库运行 Git，不继承宿主钩子的定位变量。 */
 function git(root: string, args: string[], input?: string): string {
-  const env = { ...process.env }
-  for (const key of [
-    'GIT_DIR',
-    'GIT_WORK_TREE',
-    'GIT_INDEX_FILE',
-    'GIT_PREFIX',
-  ]) {
-    delete env[key]
-  }
   return execFileSync('git', args, {
     cwd: root,
-    env,
+    env: gitFixtureEnvironment(),
     input,
     encoding: 'utf8',
   }).trim()

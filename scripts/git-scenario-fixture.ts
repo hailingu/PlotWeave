@@ -9,7 +9,7 @@ export interface GitScenarioFixture {
   dispose: () => void
 }
 
-/** 临时仓库不继承外层 Git 操作的索引、工作树或对象目录定位。 */
+/** 隔离宿主仓库定位并关闭自动维护，使提交返回后的模板可稳定复制。 */
 export function gitFixtureEnvironment(): NodeJS.ProcessEnv {
   const env = { ...process.env }
   for (const key of [
@@ -23,6 +23,12 @@ export function gitFixtureEnvironment(): NodeJS.ProcessEnv {
   ]) {
     delete env[key]
   }
+  // Git -c 的子进程配置协议优先于 COUNT；追加固定字面量并保留继承项。
+  // 避免提交返回后，后台维护删除 objects/maintenance.lock 干扰模板复制。
+  const parameters = env.GIT_CONFIG_PARAMETERS
+  env.GIT_CONFIG_PARAMETERS = parameters
+    ? `${parameters} 'maintenance.auto=false'`
+    : "'maintenance.auto=false'"
   return env
 }
 
